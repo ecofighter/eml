@@ -7,16 +7,17 @@ use std::marker::PhantomData;
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault};
 use eml_rt::{
-    Ctx, Form, Handle, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write, WriteMode,
+    Ctx, Form, Handle, MaskItem, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write,
+    WriteMode,
 };
 
-use crate::RunCounts;
 use crate::apply;
-use crate::code::CodeBase;
+use crate::code::{CodeBase, ForkTable};
 use crate::data;
 use crate::error::VmFault;
-use crate::op::{APPLY_REST, FINISH, Op, Pc, Slot};
-use crate::sched::{Policy, Scheduler};
+use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
+use crate::sched::{JoinId, JoinNode, MAIN, Outcome, Policy, Scheduler, TaskId, TaskState};
+use crate::{RunCounts, RuntimeError};
 
 /// VM の繰り返しの1つの写しを決める型。モード `M` と方針 `P` を束ねる。`step` から呼ぶ補助の関数をこの型で総称に
 /// するので、補助の関数の実体は写しごとにできて呼び手が1つになり、inline の判断が写しごとに決まる
@@ -52,6 +53,15 @@ pub struct Task {
     pub(crate) keep_result: bool,
     /// `exit` の終了コード。立っていれば、中断が `Finish` まで届く (docs/spec/vm.md の「extern の中断」)。
     pub(crate) exit: Option<i64>,
+    /// 動いていない間に退避した `evv`。タスクが参照を1つ持つ。動いている間は `()` で、`Ctx` が持つ。
+    pub(crate) evv: Word,
+    /// ヒープの論理的な worker ID。右の子は fork でもらった ID で動き、左の子は親の ID で動く。
+    pub(crate) worker: u32,
+    /// fork のときの親の深さ。右の子の深さはここから数える。入口のタスクは 0 である。
+    pub(crate) depth_offset: usize,
+    /// 開いている子の境目の join。内側が最後に来る。右の子の先頭は、自分が右の子である join である。
+    pub(crate) boundaries: Vec<JoinId>,
+    pub(crate) state: TaskState,
 }
 
 /// 誤りと、それが起きた命令の位置。
@@ -63,6 +73,8 @@ pub(crate) struct Failure {
 // いちばん下に置く空のフレーム。入口の関数の結果を受けるスロットを1つ持つ
 const ROOT_BASE: usize = 2;
 const ROOT_SIZE: usize = 1;
+// 子の境目のフレーム。slot 0 が子の結果、slot 1 が join の番号である
+const BOUNDARY_SIZE: usize = 2;
 
 impl Task {
     pub(crate) fn new<M: Mode>(code: &CodeBase<M>, index: u32, max_depth: usize) -> Task {
@@ -82,6 +94,47 @@ impl Task {
             entry: index,
             keep_result: false,
             exit: None,
+            evv: Word::UNIT,
+            worker: 0,
+            depth_offset: 0,
+            boundaries: Vec::new(),
+            state: TaskState::Running,
+        }
+    }
+
+    /// まだ始まっていない右の子。いちばん下のフレームが子の境目のフレームで、始めるときに閉包 `g` をその上で呼ぶ。
+    /// 境目のフレームの戻り先は `Finish` だが、`ChildDone` がフレームを外さずにタスクを捨てるので、戻ることはない
+    /// (docs/spec/vm.md の「`par` の fork と join」)。
+    fn right_child(
+        entry: u32,
+        worker: u32,
+        evv: Word,
+        depth_offset: usize,
+        max_depth: usize,
+        j: JoinId,
+        g: Word,
+    ) -> Task {
+        let base = ROOT_BASE + ROOT_SIZE + 2;
+        let mut stack = vec![Word::UNIT; base + BOUNDARY_SIZE];
+        stack[base - 2] = header(FINISH, 0, ROOT_SIZE);
+        stack[base - 1] = Word::from_bits(ROOT_BASE);
+        stack[base + 1] = Word::from_bits(j);
+        Task {
+            stack,
+            pc: FINISH,
+            base,
+            frame_size: BOUNDARY_SIZE,
+            last_ret: FINISH,
+            scratch: Vec::new(),
+            stack_limit: stack_limit(max_depth.saturating_sub(depth_offset)),
+            entry,
+            keep_result: false,
+            exit: None,
+            evv,
+            worker,
+            depth_offset,
+            boundaries: vec![j],
+            state: TaskState::Unstarted(g),
         }
     }
 
@@ -111,8 +164,15 @@ impl Task {
         self.set(slot, Word::from_bits(x.to_bits() as usize));
     }
 
-    /// 使っている語の数。安全点の深さである (docs/spec/object-model.md の「実行の制御」)。
+    /// 深さ。右の子は fork のときの親の深さから数えるので、`par` を通る再帰も `(f (), g ())` と同じく深さの上限で
+    /// 止まる (docs/spec/vm.md の「`par` の fork と join」)。
     pub(crate) fn depth(&self) -> usize {
+        self.depth_offset + self.stack_depth()
+    }
+
+    /// このタスクのスタックで使っている語の数。安全点はこれを `Ctx::poll` に渡す。深さの起点は `switch_task` が
+    /// `Ctx` の上限から引いてあるので、安全点で足さない (docs/spec/object-model.md の「タスクの切り替え」)。
+    fn stack_depth(&self) -> usize {
         self.base + self.frame_size
     }
 
@@ -205,31 +265,54 @@ fn read_header(w: Word) -> (Pc, Slot, usize) {
 /// なければ横取りを試みる。yield の途中の状態は `Ctx` が1つだけ持つので、そこでは切り替えない。
 #[inline(always)]
 fn safepoint<R: Exec>(
+    code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
-) -> Result<(), Stop> {
-    ctx.poll(task.depth())?;
+) -> Result<(), VmFault> {
+    ctx.poll(task.stack_depth())?;
     if sched.policy.tick() && ctx.yielding() == 0 {
-        sched.preempt();
+        preempt::<R>(code, ctx, task, sched)?;
     }
     Ok(())
 }
 
+/// タスクを実行する。`task` は入口のタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときは入口の
+/// タスクに戻っている (`Finish` が確かめる)。誤りで戻る前に、ヒープの worker と `Ctx` の深さの上限を入口のタスクのものに戻す。返る語は失敗した
+/// タスクの `evv` で、手放さずに捨てる。誤りの後のヒープは回復で置き換えるか、`Ctx` ごと落とすので、捨てた語は漏れに
+/// 数えない (docs/spec/vm.md の「`par` の fork と join」)。
 pub(crate) fn run<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     counts: &mut RunCounts,
-) -> Result<(), Failure> {
+) -> Result<(), RuntimeError> {
+    let result = run_tasks::<R>(code, ctx, task, sched, counts);
+    if result.is_err() {
+        // 検査モードの前提は `wf` と `()` だけで、誤りの後でも成り立つ
+        let _abandoned = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
+    }
+    result
+}
+
+fn run_tasks<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    counts: &mut RunCounts,
+) -> Result<(), RuntimeError> {
     loop {
         let pc = task.pc;
         match step::<R>(code, ctx, task, sched, counts, pc) {
             Ok(true) => {}
             Ok(false) => return Ok(()),
-            Err(fault) => step_failed::<R>(code, ctx, task, pc, fault)
-                .map_err(|fault| Failure { fault, pc })?,
+            Err(fault) => {
+                if let Err(fault) = step_failed::<R>(code, ctx, task, pc, fault) {
+                    task_failed::<R>(code, ctx, task, sched, Failure { fault, pc })?;
+                }
+            }
         }
     }
 }
@@ -259,28 +342,33 @@ fn step<R: Exec>(
             let value = task.get(src);
             task.last_ret = pc;
             task.return_value(value);
-            safepoint::<R>(ctx, task, sched)?;
+            safepoint::<R>(code, ctx, task, sched)?;
         }
         Op::Call { dst, at } => {
             call::<R>(code, task, dst, at);
-            safepoint::<R>(ctx, task, sched)?;
+            safepoint::<R>(code, ctx, task, sched)?;
         }
         Op::TailCall { at } => {
             let o = ops(at);
             task.load_scratch(slots(&o[2..2 + o[1] as usize]));
             task.enter_in_place::<R>(code, o[0]);
-            safepoint::<R>(ctx, task, sched)?;
+            safepoint::<R>(code, ctx, task, sched)?;
         }
         Op::CallN { at } => call_many::<R>(code, ctx, task, sched, at)?,
         Op::RetN { at } => return_many::<R>(code, ctx, task, sched, pc, at)?,
         Op::Finish => {
-            finish::<R>(code, ctx, task)?;
+            finish::<R>(code, ctx, task, sched)?;
             return Ok(false);
         }
         Op::ApplyRest => {
             apply::apply_rest::<R>(code, ctx, task)?;
-            safepoint::<R>(ctx, task, sched)?;
+            safepoint::<R>(code, ctx, task, sched)?;
         }
+        Op::ChildDone => {
+            let value = task.get(0);
+            child_done::<R>(code, ctx, task, sched, Outcome::Value(value))?;
+        }
+        Op::Par { dst, at } => par::<R>(code, ctx, task, sched, dst, at)?,
         Op::Closure { dst, at } => {
             let o = ops(at);
             let (f, lin, n) = (o[0], o[1] != 0, o[2] as usize);
@@ -305,7 +393,7 @@ fn step<R: Exec>(
             task.store_scratch();
             task.pc = o[0];
             // バイトコードに後ろ向きの辺ができるので、ここも安全点にする (docs/spec/vm.md の「呼び出しと戻り」)
-            safepoint::<R>(ctx, task, sched)?;
+            safepoint::<R>(code, ctx, task, sched)?;
         }
         // 誤りは `run` が `Panic` に届ける (`step_failed`)
         Op::IntAdd { dst, a, b } => task.set_raw(dst, externs::int_add(task.raw(a), task.raw(b))?),
@@ -567,11 +655,7 @@ fn step<R: Exec>(
             let w = unsafe { ctx.root_get(root) }?;
             task.set(dst, w);
         }
-        Op::ChildAbort { .. } => {
-            return Err(VmFault::Internal(
-                "a child abort ran, but the VM does not run a par yet",
-            ));
-        }
+        Op::ChildAbort { ev, f, t } => child_abort::<R>(code, ctx, task, sched, counts, ev, f, t)?,
         Op::RootSet { dst, at } => {
             let o = ops(at);
             unsafe { ctx.root_set(o[0], task.get(o[1] as Slot)) }?;
@@ -602,7 +686,7 @@ fn apply_call<R: Exec>(
     task.load_scratch(slots(&o[2..2 + o[1] as usize]));
     let callee = task.get(o[0] as Slot);
     apply::apply::<R>(code, ctx, task, callee, target)?;
-    safepoint::<R>(ctx, task, sched)?;
+    safepoint::<R>(code, ctx, task, sched)?;
     Ok(())
 }
 
@@ -619,7 +703,7 @@ fn clause_call<R: Exec>(
     task.load_scratch(slots(&o[2..2 + o[1] as usize]));
     let callee = task.get(o[0] as Slot);
     apply::apply_clause::<R>(code, ctx, task, callee, target)?;
-    safepoint::<R>(ctx, task, sched)?;
+    safepoint::<R>(code, ctx, task, sched)?;
     Ok(())
 }
 
@@ -651,7 +735,7 @@ fn call_many<R: Exec>(
     at: u32,
 ) -> Result<(), VmFault> {
     call::<R>(code, task, 0, at);
-    safepoint::<R>(ctx, task, sched)?;
+    safepoint::<R>(code, ctx, task, sched)?;
     Ok(())
 }
 
@@ -667,7 +751,7 @@ fn return_many<R: Exec>(
 ) -> Result<(), VmFault> {
     ret_many::<R>(code, task, at)?;
     task.last_ret = pc;
-    safepoint::<R>(ctx, task, sched)?;
+    safepoint::<R>(code, ctx, task, sched)?;
     Ok(())
 }
 
@@ -735,6 +819,14 @@ fn unwind<R: Exec>(
         match task.pc {
             FINISH if task.exit.is_some() => return Ok(()),
             FINISH => return Err(VmFault::Internal("an abort reached the bottom of the task")),
+            // 子の中の handler は子の中に着地するので、子の境目に着くのは `child_abort` の巻き戻しだけである。宛先は
+            // 不死のダミーで、どの着地の印とも合わない
+            CHILD_DONE if task.exit.is_none() && target == ctx.heap().dummy() => return Ok(()),
+            CHILD_DONE => {
+                return Err(VmFault::Internal(
+                    "an abort reached the boundary of a par child",
+                ));
+            }
             APPLY_REST => {
                 // 余った引数はまだ渡していないこの枠の参照である
                 for slot in apply::rest_arguments(task) {
@@ -788,8 +880,524 @@ fn unwind<R: Exec>(
     }
 }
 
+// `par` の fork と join は呼び出しや戻りに比べてまれなので、`step` に展開しない。値が1つの呼び出しと戻りの速い道の
+// 命令の列を変えないためである (docs/spec/vm.md の「`par` の fork と join」)
+
+/// join が見つけた子の誤りを `Scheduler::failed` に置いたことを、実行の繰り返しに伝える印。外には出ない。
+const CHILD_FAILED: VmFault = VmFault::Internal("a child failure is waiting in the scheduler");
+
+/// `par` の fork。親の文脈で、右の子に ID を出して閉包と子の `evv` に印を付け、右の子をまだ始めずに列に入れ、左の子を
+/// 親のスタックの上で始める。mask は evidence passing の包みがすでに当てている。
+#[inline(never)]
+fn par<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    dst: Slot,
+    at: u32,
+) -> Result<(), VmFault> {
+    let o = &code.operands[at as usize..];
+    // 2つの閉包は `par` が消費する、VM の持つ参照である
+    let (f, g) = (task.get(o[0] as Slot), task.get(o[1] as Slot));
+    // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
+    // 触れない
+    let child = unsafe { ctx.heap_mut() }.fork_worker();
+    unsafe { ctx.heap_mut().share(g, child) }?;
+    // 親の `evv` を取り出して、その参照を join の節点に移す。RC に触れずに読めるようにするためである
+    let parent_evv = unsafe { ctx.switch_task(Word::UNIT, task.worker, task.depth_offset) };
+    let fork_evv = fork_evv::<R>(code, ctx, parent_evv)?;
+    // 2つの子が1つずつ参照を持つ。左の子は `Ctx` に入れ、右の子はタスクに退避する
+    unsafe {
+        ctx.heap_mut().dup(fork_evv)?;
+        ctx.heap_mut().share(fork_evv, child)?;
+        ctx.switch_task(fork_evv, task.worker, task.depth_offset);
+    }
+    let ret = task.pc;
+    let j = sched.add_join(JoinNode {
+        parent: sched.current,
+        right: MAIN,
+        right_worker: child,
+        parent_evv,
+        left: None,
+        right_outcome: None,
+        ret,
+        dst,
+    });
+    let right = Task::right_child(
+        task.entry,
+        child,
+        fork_evv,
+        task.depth(),
+        sched.max_depth,
+        j,
+        g,
+    );
+    let right = sched.add_task(right);
+    sched.join(j).right = right;
+    let base = task.push_frame(ret, dst, BOUNDARY_SIZE);
+    task.stack[base + 1] = Word::from_bits(j);
+    task.boundaries.push(j);
+    task.scratch.clear();
+    task.scratch.push(Word::UNIT);
+    let target = apply::Target::Frame {
+        ret: CHILD_DONE,
+        dst: 0,
+    };
+    apply::apply::<R>(code, ctx, task, f, target)?;
+    sched.ready.push_back(right);
+    safepoint::<R>(code, ctx, task, sched)
+}
+
+/// 右の子の `evv`。mask を当てた後の親の `evv` を頭からたどり、`Panic` を除く never-only のエフェクトの evidence ごとに、
+/// そのエフェクトの evidence のうち何番目かを状態の欄に持つ fork evidence と節点を作り、凍結した末尾につなぐ。子の列が
+/// 親の列と同じ形になるので、子の中の `mask` は親の中と同じだけ evidence を飛ばす。該当する evidence がなければ、末尾
+/// そのものを返して確保しない (docs/spec/vm.md の「`par` の fork と join」)。
+fn fork_evv<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    parent: Word,
+) -> Result<Word, VmFault> {
+    let forks = &code.forks;
+    let mut mirrored: Vec<(u16, Word, u32)> = Vec::new();
+    let mut ranks: Vec<(u16, u32)> = Vec::new();
+    let heap = ctx.heap();
+    let mut node = parent;
+    // `parent` は VM が参照を持つ `evv` のリストで、節点も evidence も生きている
+    while node.is_ptr() {
+        let effect = unsafe { heap.meta(node) }?
+            .tag()
+            .checked_sub(1)
+            .ok_or(VmFault::Internal("an evv node has tag 0"))?;
+        if Some(effect) != forks.panic {
+            match forks.tables.get(usize::from(effect)) {
+                Some(ForkTable::Resumable) => {}
+                Some(&ForkTable::Table(table)) => {
+                    let depth = match ranks.iter_mut().find(|(e, _)| *e == effect) {
+                        Some((_, rank)) => {
+                            *rank += 1;
+                            *rank
+                        }
+                        None => {
+                            ranks.push((effect, 0));
+                            0
+                        }
+                    };
+                    mirrored.push((effect, table, depth));
+                }
+                _ => {
+                    return Err(VmFault::Internal(
+                        "a never-only evidence of a par parent has no fork table",
+                    ));
+                }
+            }
+        }
+        node = unsafe { heap.scanned(node, 1) }?;
+    }
+    // 作る物体だけに書き、`Ctx` の持つ語には触れない。表と末尾は凍結した塊の物体なので、参照を数えない
+    let heap = unsafe { ctx.heap_mut() };
+    let mut next = forks.tail;
+    for &(effect, table, depth) in mirrored.iter().rev() {
+        let ev = heap.alloc_data(effect + 1, 3, 0, false);
+        let node = heap.alloc_data(effect + 1, 2, 0, false);
+        unsafe {
+            heap.set_field(ev, 0, table)?;
+            heap.set_field(ev, 1, Word::imm(i64::from(depth)))?;
+            heap.set_field(node, 0, ev)?;
+            heap.set_field(node, 1, next)?;
+        }
+        next = node;
+    }
+    Ok(next)
+}
+
+/// 子の本体が値で戻ったか (`ChildDone`)、中断した (`child_abort`)。`task.base` は子の境目のフレームである。
+#[inline(never)]
+fn child_done<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    outcome: Outcome,
+) -> Result<(), VmFault> {
+    // 子は親の handler に yield できないので、yield の途中で終わる子はない
+    if ctx.yielding() != 0 {
+        return Err(VmFault::Internal(
+            "a par child ends in the middle of a yield",
+        ));
+    }
+    let j = task.get(1).bits();
+    let open = task.boundaries.pop();
+    debug_assert_eq!(open, Some(j), "the innermost boundary is the one that ends");
+    if sched.current == sched.join(j).right {
+        let join = sched.join(j);
+        join.right_outcome = Some(outcome);
+        let right_worker = join.right_worker;
+        // 子の残りの `evv` を、子の ID のまま手放す
+        let rest = unsafe { ctx.switch_task(Word::UNIT, right_worker, task.depth_offset) };
+        unsafe { ctx.heap_mut().decref(rest) }?;
+        wake_parent(sched, j);
+        return switch_away::<R>(code, ctx, task, sched, None);
+    }
+    let join = sched.join(j);
+    join.left = Some(outcome);
+    let parent_evv = std::mem::replace(&mut join.parent_evv, Word::UNIT);
+    let right_done = join.right_outcome.is_some();
+    // 境目のフレームを外す。組か起こし直しの結果は join が `par` の結果のスロットに書く
+    let (ret, _, size) = read_header(task.stack[task.base - 2]);
+    task.base = task.stack[task.base - 1].bits();
+    task.frame_size = size;
+    task.pc = ret;
+    let rest = unsafe { ctx.switch_task(parent_evv, task.worker, task.depth_offset) };
+    unsafe { ctx.heap_mut().decref(rest) }?;
+    if right_done {
+        complete_join::<R>(code, ctx, task, sched, j)
+    } else {
+        switch_away::<R>(code, ctx, task, sched, Some(TaskState::Waiting(j)))
+    }
+}
+
+/// 右の子が終わった join の親が、その join を待っていれば起こす。
+fn wake_parent<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
+    let parent = sched.join(j).parent;
+    if let Some(task) = &sched.tasks[parent]
+        && matches!(task.state, TaskState::Waiting(w) if w == j)
+    {
+        sched.policy.wake(&mut sched.ready, parent);
+    }
+}
+
+/// 方針が選ぶ次のタスクに切り替える。`keep` が `None` なら、今のタスクは終わったので捨てる。
+fn switch_away<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    keep: Option<TaskState>,
+) -> Result<(), VmFault> {
+    let next = sched
+        .policy
+        .pick(&mut sched.ready)
+        .ok_or(VmFault::Internal("no task is ready to run"))?;
+    resume::<R>(code, ctx, task, sched, next, keep)
+}
+
+/// タスク `next` に切り替える。`evv` と worker は `Ctx::switch_task` の1回で替え、RC に触れない
+/// (docs/spec/object-model.md の「タスクの切り替え」)。まだ始まっていない右の子は、その ID に替えた後で閉包を呼ぶ。
+/// 閉包を手放すと、子の ID の物体を解放しうるためである。待っていた親は join を完了する。
+fn resume<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    next: TaskId,
+    keep: Option<TaskState>,
+) -> Result<(), VmFault> {
+    let mut incoming = sched.tasks[next].take().ok_or(VmFault::Internal(
+        "a task to resume is not in the scheduler",
+    ))?;
+    let evv = std::mem::replace(&mut incoming.evv, Word::UNIT);
+    let saved = unsafe { ctx.switch_task(evv, incoming.worker, incoming.depth_offset) };
+    let mut prev = std::mem::replace(task, incoming);
+    let prev_id = std::mem::replace(&mut sched.current, next);
+    sched.note_depth(&prev);
+    match keep {
+        Some(state) => {
+            prev.evv = saved;
+            prev.state = state;
+            sched.tasks[prev_id] = Some(prev);
+        }
+        None => sched.free_task(prev_id),
+    }
+    match std::mem::replace(&mut task.state, TaskState::Running) {
+        TaskState::Unstarted(g) => {
+            task.scratch.clear();
+            task.scratch.push(Word::UNIT);
+            let target = apply::Target::Frame {
+                ret: CHILD_DONE,
+                dst: 0,
+            };
+            apply::apply::<R>(code, ctx, task, g, target)
+        }
+        TaskState::Waiting(j) => complete_join::<R>(code, ctx, task, sched, j),
+        TaskState::Ready | TaskState::Running => Ok(()),
+    }
+}
+
+/// 方針が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す。
+#[cold]
+#[inline(never)]
+fn preempt<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+) -> Result<(), VmFault> {
+    let next = sched.policy.pick(&mut sched.ready);
+    sched.policy.reload();
+    let Some(next) = next else {
+        return Ok(());
+    };
+    let current = sched.current;
+    sched.policy.wake(&mut sched.ready, current);
+    sched.count_preemption();
+    resume::<R>(code, ctx, task, sched, next, Some(TaskState::Ready))
+}
+
+/// 両方の子が終わった join を、親の文脈と ID で完了する。誤りには `par` の命令の位置を付けるので、どのスケジュールで
+/// 親が join に着いても同じ文言になる。
+fn complete_join<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    j: JoinId,
+) -> Result<(), VmFault> {
+    let join = sched.take_join(j);
+    let at = join.ret - 1;
+    match join_outcomes::<R>(code, ctx, task, sched, join) {
+        Err(fault) if sched.failed.is_none() => {
+            sched.failed = Some(code.error(Failure { fault, pc: at }, task));
+            Err(CHILD_FAILED)
+        }
+        result => result,
+    }
+}
+
+/// join の解決の順 (docs/spec/vm.md の「`par` の fork と join」)。誤りは左、右の順に報告し、中断でも値でも救わない。
+/// 右の側の語はすべて親の局所に戻してから右の子の ID を退かせ、その後で捨てる語を手放す。ヒープの誤りはそこで実行を
+/// 止めるので、退かせも手放しもしない。
+fn join_outcomes<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    join: JoinNode,
+) -> Result<(), VmFault> {
+    let (Some(left), Some(right)) = (join.left, join.right_outcome) else {
+        return Err(VmFault::Internal(
+            "a join completes before both children end",
+        ));
+    };
+    let (left, right) = match (left, right) {
+        (Outcome::Error(error), _) | (_, Outcome::Error(error)) => {
+            sched.failed = Some(error);
+            return Err(CHILD_FAILED);
+        }
+        outcomes => outcomes,
+    };
+    // 右の側の語は右の子が残した参照で、親だけが持つ
+    let heap = unsafe { ctx.heap_mut() };
+    for w in right.words() {
+        unsafe { heap.transfer_back(w, join.right_worker) }?;
+    }
+    heap.retire_worker(join.right_worker)?;
+    let (abort, dropped) = match (left, right) {
+        (Outcome::Value(l), Outcome::Value(r)) => {
+            let Op::Par { at, .. } = code.code[join.ret as usize - 1] else {
+                return Err(VmFault::Internal(
+                    "a join returns after something other than a par",
+                ));
+            };
+            let tag = code.operands[at as usize + 2] as u16;
+            let pair = heap.alloc_data(tag, 2, 0, false);
+            // 組は今作った局所の物体で、2つの語の参照は組に移る
+            unsafe {
+                heap.set_field(pair, 0, l)?;
+                heap.set_field(pair, 1, r)?;
+            }
+            task.set(join.dst, pair);
+            return safepoint::<R>(code, ctx, task, sched);
+        }
+        (Outcome::Error(_), _) | (_, Outcome::Error(_)) => {
+            return Err(VmFault::Internal(
+                "a join raises an error after reporting it",
+            ));
+        }
+        // いちばん左の中断を起こし直し、中断しなかった側の値は捨てる
+        (abort @ Outcome::Abort { .. }, other) | (other @ Outcome::Value(_), abort) => {
+            (abort, other)
+        }
+    };
+    for w in dropped.words() {
+        unsafe { heap.decref(w) }?;
+    }
+    let Outcome::Abort {
+        effect,
+        depth,
+        reperform,
+        tuple,
+    } = abort
+    else {
+        return Err(VmFault::Internal(
+            "a join raises again something other than an abort",
+        ));
+    };
+    // 子が見た `depth` 番目の evidence に届くように、親の `evv` を mask する。`reperform$` は今の `evv` の最初の
+    // evidence で perform して戻らないので、mask した `evv` は handler の `prompt$` が手放す
+    // (docs/spec/core-ir.md の「`par` の子の中断」)
+    if depth > 0 {
+        unsafe {
+            let w = ctx.evv_get()?;
+            let item = MaskItem {
+                effect,
+                keep: 0,
+                skip: depth,
+            };
+            let m = ctx.evv_mask(&[item], w)?;
+            ctx.heap_mut().decref(w)?;
+            ctx.evv_set(m)?;
+        }
+    }
+    task.scratch.clear();
+    task.scratch.push(tuple);
+    let target = apply::Target::Frame {
+        ret: join.ret,
+        dst: join.dst,
+    };
+    apply::apply::<R>(code, ctx, task, reperform, target)?;
+    safepoint::<R>(code, ctx, task, sched)
+}
+
+/// `prim child_abort(ev, f, t)`。fork evidence `ev` からエフェクトと深さを読み、子の境目まで巻き戻す。`ev` は借りる。
+#[inline(never)]
+#[expect(clippy::too_many_arguments, reason = "the operands of child_abort")]
+fn child_abort<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    counts: &mut RunCounts,
+    ev: Slot,
+    f: Slot,
+    t: Slot,
+) -> Result<(), VmFault> {
+    if task.boundaries.is_empty() {
+        return Err(VmFault::Internal("a child abort outside a par child"));
+    }
+    let ev = task.get(ev);
+    // `ev` は節の入口が持つ fork evidence で、状態の欄は深さの即値である
+    let heap = ctx.heap();
+    let effect = unsafe { heap.meta(ev) }?
+        .tag()
+        .checked_sub(1)
+        .ok_or(VmFault::Internal(
+            "a child abort gets something other than evidence",
+        ))?;
+    let depth = unsafe { heap.scanned(ev, 1) }?;
+    let depth = u32::try_from(depth.imm_value())
+        .ok()
+        .filter(|_| depth.is_imm())
+        .ok_or(VmFault::Internal(
+            "a child abort gets evidence without a depth",
+        ))?;
+    let (reperform, tuple) = (task.get(f), task.get(t));
+    let dummy = ctx.heap().dummy();
+    unwind::<R>(code, ctx, task, counts, dummy)?;
+    let outcome = Outcome::Abort {
+        effect,
+        depth,
+        reperform,
+        tuple,
+    };
+    child_done::<R>(code, ctx, task, sched, outcome)
+}
+
+/// 実行時エラーの後。すぐに実行を止める誤りと、入口のタスクの誤り (左の子の誤りを含む) は実行の誤りにする。右の子の
+/// 誤りは join に記録し、右のタスクはスタックを巻き戻さずに捨てて、ほかのタスクに切り替える。止めたスタックは
+/// 巻き戻しの表のない位置で止まっていて解放できない。記録した誤りは join が必ず報告するので、実行は誤りで終わる
+/// (docs/spec/vm.md の「`par` の fork と join」)。
+#[cold]
+#[inline(never)]
+fn task_failed<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    mut failure: Failure,
+) -> Result<(), RuntimeError> {
+    loop {
+        let error = match sched.failed.take() {
+            Some(error) => error,
+            None => code.error(failure, task),
+        };
+        if sched.current == MAIN || stops_the_run(&error) {
+            return Err(error);
+        }
+        let boundaries = std::mem::take(&mut task.boundaries);
+        // 右の子が開いていた入れ子の `par` の子は、結果を受ける親がもういないので、走らせずに捨てる
+        for &inner in &boundaries[1..] {
+            cancel(sched, inner);
+        }
+        let j = boundaries[0];
+        sched.join(j).right_outcome = Some(Outcome::Error(error));
+        wake_parent(sched, j);
+        match switch_away::<R>(code, ctx, task, sched, None) {
+            Ok(()) => return Ok(()),
+            Err(fault) => failure = Failure { fault, pc: task.pc },
+        }
+    }
+}
+
+/// 子の誤りのうち、評価だけでなく実行そのものを止めるもの (docs/spec/vm.md の「`par` の fork と join」)。
+fn stops_the_run(error: &RuntimeError) -> bool {
+    matches!(
+        error,
+        RuntimeError::Fault {
+            fault: VmFault::Stopped(Stop::Interrupted | Stop::MemoryLimit)
+                | VmFault::Extern(eml_rt::Fault::Heap(_))
+                | VmFault::Internal(_),
+            ..
+        } | RuntimeError::Leak(_)
+            | RuntimeError::Unrecovered { .. }
+    )
+}
+
+/// 親が誤りで止まった join の右の子を、その子孫ごと表と列から外す。持つ語は触れずに捨てる。
+fn cancel<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
+    let join = sched.take_join(j);
+    if join.right_outcome.is_some() {
+        return;
+    }
+    let right = join.right;
+    sched.ready.retain(|&id| id != right);
+    if let Some(task) = sched.tasks[right].take() {
+        sched.free_task(right);
+        for &inner in &task.boundaries[1..] {
+            cancel(sched, inner);
+        }
+        if let TaskState::Waiting(waited) = task.state {
+            cancel(sched, waited);
+        }
+    }
+}
+
+impl Outcome {
+    /// 子が残した語。値か、起こし直す関数と詰めた値である。
+    fn words(&self) -> Vec<Word> {
+        match *self {
+            Outcome::Value(w) => vec![w],
+            Outcome::Abort {
+                reperform, tuple, ..
+            } => vec![reperform, tuple],
+            Outcome::Error(_) => Vec::new(),
+        }
+    }
+}
+
 /// 入口の関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。
-fn finish<R: Exec>(code: &CodeBase<R::M>, ctx: &mut Ctx<R::M>, task: &Task) -> Result<(), VmFault> {
+fn finish<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &Task,
+    sched: &Scheduler<R::P>,
+) -> Result<(), VmFault> {
+    if sched.current != MAIN || sched.has_children() {
+        return Err(VmFault::Internal("a task is left at the end"));
+    }
+    if task.exit.is_some() && !task.boundaries.is_empty() {
+        return Err(VmFault::Internal("an exit ends a run with an open par"));
+    }
     if task.exit.is_some() {
         // 途中のフレームは巻き戻しで片付けてある。入口の結果はダミーなので手放さない。中断の途中の `evv` には
         // 意味がないので、空に戻す (docs/spec/vm.md の「extern の中断」)
@@ -1469,6 +2077,11 @@ mod tests {
             entry: 0,
             keep_result: false,
             exit: None,
+            evv: Word::UNIT,
+            worker: 0,
+            depth_offset: 0,
+            boundaries: Vec::new(),
+            state: TaskState::Running,
         }
     }
 

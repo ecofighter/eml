@@ -598,8 +598,31 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.apply_operands(call);
                 self.out.push(Op::Apply { dst, at });
             }
-            // translate はまだ `par` を作らないので、VM に届かない
-            Rhs::Call(Call::Par { .. }) => unreachable!("the VM does not run a par yet"),
+            Rhs::Call(Call::Par {
+                left,
+                right,
+                pair,
+                at,
+            }) => {
+                // 組は2つの `tobj` の欄だけを持つので、join は欄の位置を引かずに 0 と 1 に書く
+                debug_assert!(
+                    {
+                        let shape = self.layout_ctor(*pair).shape();
+                        (shape.scanned, shape.raw) == (2, 0)
+                    },
+                    "the pair of a par has two tobj fields (docs/spec/lir.md)"
+                );
+                let left = self.atom(*left, Repr::TObj);
+                let right = self.atom(*right, Repr::TObj);
+                let operands = self
+                    .out
+                    .operands([u32::from(left), u32::from(right), pair.tag]);
+                let pc = self.out.push(Op::Par { dst, at: operands });
+                if let Some(loc) = at {
+                    let file = self.links.files[loc.file as usize];
+                    self.out.locations.push((pc, Loc { file, ..*loc }));
+                }
+            }
             Rhs::Prim(prim, args) => {
                 let row = prim.row();
                 let slots: Vec<Slot> = args
@@ -700,8 +723,6 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.out.operands([*root, u32::from(a[0])]);
                 Op::RootSet { dst, at }
             }
-            // `root_get` を含むプログラムも fork の関数を持ち、ロードはすべての関数を変換するので、`par` を走らせない
-            // プログラムでもここに届く (docs/spec/core-ir.md の「`par` の子の中断」)
             Prim::ChildAbort => Op::ChildAbort {
                 ev: a[0],
                 f: a[1],

@@ -291,11 +291,19 @@ impl<M: Mode> Machine<M> {
             task.keep_result = true;
         }
         let mut counts = RunCounts::default();
+        let max_depth = self.max_depth;
         let (result, scheduled) = match self.sched {
-            Sched::Sequential => run_scheduled(code, ctx, &mut task, Sequential, &mut counts),
-            Sched::Seeded(seed) => {
-                run_scheduled(code, ctx, &mut task, Seeded::new(seed), &mut counts)
+            Sched::Sequential => {
+                run_scheduled(code, ctx, &mut task, Sequential, max_depth, &mut counts)
             }
+            Sched::Seeded(seed) => run_scheduled(
+                code,
+                ctx,
+                &mut task,
+                Seeded::new(seed),
+                max_depth,
+                &mut counts,
+            ),
         };
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
@@ -308,7 +316,7 @@ impl<M: Mode> Machine<M> {
         };
         // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
         let flushed = ctx.flush();
-        result.map_err(|failure| code.error(failure, &task))?;
+        result?;
         let text = copied.transpose().map_err(|fault| {
             code.error(
                 vm::Failure {
@@ -392,9 +400,12 @@ fn run_scheduled<M: Mode, P: Policy>(
     ctx: &mut Ctx<M>,
     task: &mut Task,
     policy: P,
+    max_depth: usize,
     counts: &mut RunCounts,
-) -> (Result<(), vm::Failure>, Scheduled) {
-    let mut sched = Scheduler::new(policy);
+) -> (Result<(), RuntimeError>, Scheduled) {
+    let main_worker = ctx.heap().worker();
+    task.worker = main_worker;
+    let mut sched = Scheduler::new(policy, main_worker, max_depth);
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     let scheduled = Scheduled {
         preemptions: sched.preemptions(),
@@ -518,6 +529,10 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         CompileError::MultiValueEntry { function } => {
             ("an entry function returns more than one value", function)
         }
+        CompileError::MissingFork { function } => (
+            "a program that may run a par lacks a fork function",
+            function,
+        ),
     };
     RuntimeError::Fault {
         fault: VmFault::Internal(what),

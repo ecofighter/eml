@@ -3,21 +3,23 @@
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
 //! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、`apply` と生の語の捕獲、複数の値の戻りと構造体と箱の間の
-//! 変換、両方のモード。
+//! 変換、`par` のタスクの切り替え、両方のモード。
 
-use eml_vm::{AnyMachine, RunConfig, capture_host, execute};
+use eml_vm::{AnyMachine, RunConfig, Sched, capture_host, execute};
 
 fn run_both(text: &str) -> String {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-    run_program(&program)
+    run_program(&program, Sched::Sequential)
 }
 
-fn run_program(program: &eml_lir::Program) -> String {
+fn run_program(program: &eml_lir::Program, sched: Sched) -> String {
     let mut outputs = Vec::new();
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
-        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let config = RunConfig::default()
+            .with_debug_heap(debug_heap)
+            .with_sched(sched);
         execute(program, &config, host).unwrap_or_else(|error| panic!("{error}"));
         outputs.push(out.contents());
     }
@@ -324,7 +326,10 @@ fn take(p.0: {named}) -> float {{
     let mut program = eml_lir::parse(&text).unwrap_or_else(|error| panic!("{error}"));
     eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(run_program(&program), "multi value\n1.5\n");
+    assert_eq!(
+        run_program(&program, Sched::Sequential),
+        "multi value\n1.5\n"
+    );
 }
 
 /// 共有の箱から、`tobj` の欄に入ったスカラーの葉と文字列の葉を2回取り出す (docs/spec/vm.md の「データとクロージャ」)。
@@ -363,5 +368,64 @@ fn third(p.0: {t}) -> obj {{
     let mut program = eml_lir::parse(&text).unwrap_or_else(|error| panic!("{error}"));
     eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(run_program(&program), "4611686018427387904\nhello\n");
+    assert_eq!(
+        run_program(&program, Sched::Sequential),
+        "4611686018427387904\nhello\n"
+    );
+}
+
+/// `par` のタスクの切り替え。`Task` と join の節点は切り替えをまたいでヒープの語を持ち、VM は検証していないコードから
+/// `share`、`transfer_back`、`Ctx::switch_task` を呼ぶ。2つの子は確保した値を返す。横取りと join の両方で切り替わる
+/// よう、seed の方針で流す。Miri の時間を抑えるため、`par.rs` の前置きは使わず、要る fork の関数だけを書く。子の
+/// 中断は `par.rs` が確かめる。
+#[test]
+fn par_switches_between_tasks() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Prelude.Panic { never panicked(obj) -> never }
+fn main() -> unit {
+  let t.0: obj = par (,) #0(&spin_one, &spin_two)
+  let (a.1: tobj, b.2: tobj) = unbox t.0 (,)
+  let m.3: int = unbox a.1
+  let n.4: int = unbox b.2
+  decref t.0
+  let s.5: obj = extern \"Prelude.Show Int.show\"(m.3)
+  let u.6: unit = extern Prelude.println(s.5)
+  let s.7: obj = extern \"Prelude.Show Int.show\"(n.4)
+  let u.8: unit = extern Prelude.println(s.7)
+  return u.8
+}
+clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
+  let u.2: unit = prim child_abort(ev.0, &reperform$Prelude.Panic.panicked, a.1)
+  decref ev.0
+  let d.3: obj poly = prim dummy()
+  return d.3
+}
+fn reperform$Prelude.Panic.panicked(t.0: obj poly) -> tobj poly {
+  let r.1: tobj poly = extern Prelude.panic(t.0)
+  return r.1
+}
+fn spin(n.0: int) -> unit {
+  switch n.0 { 0 -> b1, _ -> b2 }
+b1:
+  return ()
+b2:
+  let m.1: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  let u.2: unit = call spin(m.1)
+  return u.2
+}
+fn spin_one(p.0: unit) -> tobj {
+  let u.1: unit = call spin(8)
+  let n.2: tobj = box 1
+  return n.2
+}
+fn spin_two(p.0: unit) -> tobj {
+  let u.1: unit = call spin(8)
+  let n.2: tobj = box 2
+  return n.2
+}
+";
+    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run_program(&program, Sched::Seeded(1)), "1\n2\n");
 }

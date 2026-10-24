@@ -1033,7 +1033,7 @@ b_fast:
 - `reperform$E.op` は詰めた値 `t` を1つ受ける。`t` の Repr は、k = 0 なら `unit`、k = 1 なら `a_1` の Repr の一様な形、k ≥ 2 なら `obj` である。印は `poly` だが、k = 1 で `a_1` が箱を要するスカラー (`int`、`float`、`enum`) なら `a_1` の印 (`unr`) にする。開いた後に Perceus が箱を `decref` し、V1 は `unr` の値だけを `decref` させるためである ([LIR](lir.md) の「Kind の印の検査」)。戻り値は `tobj` (`poly`) である。`fork$` が値として参照し、実行系がその値を呼ぶので、引数と結果は一様である。値として参照する関数の規則 ([LIR](lir.md) の「verifier」) をそのまま満たすので、box の挿入は版 `<f>$uniform` を作らない
   - 本体は、k ≥ 2 なら `t` を `unpack` で開き、`ev_lookup[E]`、`ev_clause[E.op]`、`clause` で操作を起こす。普通の `perform` と同じく、今の `evv` の最初の `E` の evidence で起こす
   - `Prelude.Panic` は `extern Prelude.panic(t)` で起こし直す。位置は持たない。`try_panic` がなければ、`panic` と同じく実行時エラーになる
-- 実行系は、親の文脈で `reperform$E.op` を呼ぶ前に、子の操作が届いた handler の evidence が `evv` の最初の `E` の evidence になるように `evv` を整える。`reperform$` は深さを受け取らず、整えた `evv` の最初の `E` の evidence で起こす。fork と join の手順と、子の evidence の作り方は VM の側が決める ([VM](vm.md))
+- 実行系は、親の文脈で `reperform$E.op` を呼ぶ前に、子の操作が届いた handler の evidence が `evv` の最初の `E` の evidence になるように `evv` を整える。`reperform$` は深さを受け取らず、整えた `evv` の最初の `E` の evidence で起こす。fork と join の手順と、子の evidence の作り方は VM の側が決める ([VM](vm.md) の「`par` の fork と join」)
 
 ## Core IR から LIR への変換
 

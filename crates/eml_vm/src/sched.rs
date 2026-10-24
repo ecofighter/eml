@@ -121,43 +121,161 @@ impl Policy for Seeded {
     }
 }
 
-/// 1回の実行のタスクを方針 `P` で切り替える。`Machine` が実行ごとに作り、実行が終わると捨てる。
+/// join の節点の番号。境目のフレームの slot 1 に生の語で置く。
+pub type JoinId = usize;
+
+/// 入口のタスクの番号。
+pub(crate) const MAIN: TaskId = 0;
+
+/// タスクの状態。動いているタスクは VM の繰り返しが持つ。
+pub(crate) enum TaskState {
+    Running,
+    /// 走れるタスクの列にいる。
+    Ready,
+    /// 左の子を終えて、右の子を待つ親。起こされたら join を完了する。
+    Waiting(JoinId),
+    /// まだ始まっていない右の子。語は `()` を適用する閉包で、タスクがその参照を持つ。
+    Unstarted(eml_rt::Word),
+}
+
+/// 子の終わり方 (docs/spec/vm.md の「`par` の fork と join」)。語はどれも、節点が持つ数えた参照である。
+pub(crate) enum Outcome {
+    Value(eml_rt::Word),
+    /// `never` の操作で中断した。`effect` は実行時のエフェクトの番号、`depth` は子の中でのそのエフェクトの evidence
+    /// の順位で、`reperform` に `tuple` を適用して親で起こし直す。
+    Abort {
+        effect: u16,
+        depth: u32,
+        reperform: eml_rt::Word,
+        tuple: eml_rt::Word,
+    },
+    /// 右の子の実行時エラー。左の子の誤りは記録せず、すぐに評価を止める。
+    Error(crate::RuntimeError),
+}
+
+/// 1つの `par` の fork から join までの記録。ヒープの物体にせず、`Drop` もヒープに触れない。
+pub(crate) struct JoinNode {
+    pub(crate) parent: TaskId,
+    pub(crate) right: TaskId,
+    pub(crate) right_worker: u32,
+    /// fork のときの親の `evv`。左の子が終わったら `Ctx` に戻す。
+    pub(crate) parent_evv: eml_rt::Word,
+    pub(crate) left: Option<Outcome>,
+    pub(crate) right_outcome: Option<Outcome>,
+    /// `par` の命令の次の位置と、組を書くスロット。
+    pub(crate) ret: crate::op::Pc,
+    pub(crate) dst: crate::op::Slot,
+}
+
+/// 1回の実行のタスクを方針 `P` で切り替える。`Machine` が実行ごとに作り、実行が終わると捨てる。`Scheduler`、`Task`、
+/// `JoinNode` の持つ語は数えた参照で、VM のコードが1回入れて1回出す。誤りで止まった実行では、触れずに捨てる
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
 pub struct Scheduler<P: Policy> {
     pub(crate) policy: P,
+    /// タスクの表。動いているタスクの欄は空で、そのタスクは VM の繰り返しが持つ。
+    pub(crate) tasks: Vec<Option<Task>>,
+    free_tasks: Vec<TaskId>,
+    /// 動いているタスクの番号。
+    pub(crate) current: TaskId,
     /// 走れるタスク。
-    ready: VecDeque<TaskId>,
+    pub(crate) ready: VecDeque<TaskId>,
+    pub(crate) joins: Vec<Option<JoinNode>>,
+    free_joins: Vec<JoinId>,
     /// 方針が安全点で始めた切り替えの数。
     preemptions: u64,
-    /// 終わったタスクと動いていないタスクが使った語の数の最大。
+    /// 動いていないタスクと終わったタスクが使った語の数の最大。
     peak_depth: usize,
+    /// 実行を始めたときのヒープの worker。誤りで止まるときに戻す。
+    pub(crate) main_worker: u32,
+    /// 深さの上限。右の子のスタックの上限を、fork のときの親の深さから作る。
+    pub(crate) max_depth: usize,
+    /// join が見つけた右の子の誤り。`step` は `VmFault` しか返せないので、ここに置いて実行の繰り返しに渡す。
+    pub(crate) failed: Option<crate::RuntimeError>,
 }
 
 impl<P: Policy> Scheduler<P> {
-    pub(crate) fn new(policy: P) -> Scheduler<P> {
+    pub(crate) fn new(policy: P, main_worker: u32, max_depth: usize) -> Scheduler<P> {
         Scheduler {
             policy,
+            tasks: vec![None],
+            free_tasks: Vec::new(),
+            current: MAIN,
             ready: VecDeque::new(),
+            joins: Vec::new(),
+            free_joins: Vec::new(),
             preemptions: 0,
             peak_depth: 0,
+            main_worker,
+            max_depth,
+            failed: None,
         }
     }
 
-    /// 方針が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す。
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn preempt(&mut self) {
-        let next = self.policy.pick(&mut self.ready);
-        debug_assert!(next.is_none(), "only the main task runs");
-        self.policy.reload();
+    pub(crate) fn add_task(&mut self, task: Task) -> TaskId {
+        match self.free_tasks.pop() {
+            Some(id) => {
+                self.tasks[id] = Some(task);
+                id
+            }
+            None => {
+                self.tasks.push(Some(task));
+                self.tasks.len() - 1
+            }
+        }
+    }
+
+    /// 表から外したタスクの欄を空ける。
+    pub(crate) fn free_task(&mut self, id: TaskId) {
+        self.tasks[id] = None;
+        self.free_tasks.push(id);
+    }
+
+    pub(crate) fn add_join(&mut self, join: JoinNode) -> JoinId {
+        match self.free_joins.pop() {
+            Some(id) => {
+                self.joins[id] = Some(join);
+                id
+            }
+            None => {
+                self.joins.push(Some(join));
+                self.joins.len() - 1
+            }
+        }
+    }
+
+    pub(crate) fn join(&mut self, j: JoinId) -> &mut JoinNode {
+        self.joins[j].as_mut().expect("a join id names a live join")
+    }
+
+    pub(crate) fn take_join(&mut self, j: JoinId) -> JoinNode {
+        let join = self.joins[j].take().expect("a join id names a live join");
+        self.free_joins.push(j);
+        join
+    }
+
+    /// 入口のタスクのほかにタスクか join が残っているか。
+    pub(crate) fn has_children(&self) -> bool {
+        self.tasks.iter().any(Option::is_some) || self.joins.iter().any(Option::is_some)
+    }
+
+    pub(crate) fn count_preemption(&mut self) {
+        self.preemptions += 1;
     }
 
     pub(crate) fn preemptions(&self) -> u64 {
         self.preemptions
     }
 
-    /// タスクのスタックで同時に使った語の数の最大 (docs/spec/vm.md の「`RunStats`」の `peak_stack`)。`current` は
-    /// 最後に動いていたタスクである。スタックの長さは縮めないので、タスクの長さがそのままそのタスクの最大である。
+    /// 動くのをやめるタスクが使った語の数を覚える。スタックの長さは縮めないので、タスクの長さがそのままそのタスクの
+    /// 最大である。
+    pub(crate) fn note_depth(&mut self, task: &Task) {
+        self.peak_depth = self.peak_depth.max(task.depth_offset + task.stack.len());
+    }
+
+    /// タスクのスタックで同時に使った語の数の最大 (docs/spec/vm.md の「`RunStats`」の `peak_stack`)。右の子の語は、
+    /// fork のときの親の深さに足して数える。`current` は最後に動いていたタスクである。
     pub(crate) fn peak_stack(&self, current: &Task) -> u64 {
-        self.peak_depth.max(current.stack.len()) as u64
+        self.peak_depth
+            .max(current.depth_offset + current.stack.len()) as u64
     }
 }

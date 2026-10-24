@@ -187,6 +187,11 @@ impl<'a> View<'a> {
             }
             Op::Finish => "finish".to_string(),
             Op::ApplyRest => "apply_rest".to_string(),
+            Op::ChildDone => "child_done".to_string(),
+            Op::Par { dst, at } => {
+                let o = ops(at);
+                format!("par s{dst} = #{}(s{}, s{})", o[2], o[0], o[1])
+            }
             Op::CallN { at } => {
                 let o = ops(at);
                 let n = o[1] as usize;
