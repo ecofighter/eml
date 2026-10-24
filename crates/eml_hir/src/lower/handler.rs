@@ -525,8 +525,9 @@ impl BodyLowering<'_> {
                 self.diagnostics.push(Diagnostic::error(
                     codes::DROP_ARITY,
                     format!(
-                        "`drop` takes one value, but {} given",
-                        format!("{} {}", count(args.len(), "argument"), was(args.len()))
+                        "`drop` takes one value, but {} {} given",
+                        count(args.len(), "argument"),
+                        was(args.len())
                     ),
                     Label::new(self.file, drop.keyword_range(), "this `drop`"),
                 ));

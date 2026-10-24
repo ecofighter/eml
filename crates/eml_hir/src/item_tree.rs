@@ -313,15 +313,28 @@ impl Definitions {
 /// item でないので、その後ろになる。item がなければ本文の終わりを返す。`let` の束縛、式、問い合わせの REPL の入力は
 /// import を書けないので `None` である (docs/spec/modules.md の「名前の解決」)。
 pub fn first_item_start(parse: &Parse) -> Option<TextSize> {
-    let root = parse.syntax();
-    let first = match root.kind() {
-        SyntaxKind::SOURCE_FILE => parse.tree().items().next(),
-        _ => match parse.repl_input() {
-            ast::ReplInput::ReplItems(items) => items.items().next(),
-            _ => return None,
-        },
+    let first = parse.items()?.next();
+    Some(first.map_or(parse.syntax().text_range().end(), |item| {
+        item.range().start()
+    }))
+}
+
+/// REPL の `let` の束縛、式、問い合わせの入力。`let` の文や式がなければ、パーサが報告済みなので `None` である。
+fn input_item(parse: &Parse) -> Option<InputItem> {
+    let range = parse.syntax().text_range();
+    let kind = match parse.repl_input() {
+        ast::ReplInput::ReplItems(_) => return None,
+        ast::ReplInput::ReplLet(input) => {
+            let stmt = input.stmt()?;
+            InputItemKind::Let {
+                name: let_name(&stmt),
+                ptr: AstPtr::new(&stmt),
+            }
+        }
+        ast::ReplInput::ReplQuery(input) => InputItemKind::Query(AstPtr::new(&input.expr()?)),
+        ast::ReplInput::ReplExpr(input) => InputItemKind::Expr(AstPtr::new(&input.expr()?)),
     };
-    Some(first.map_or(root.text_range().end(), |item| item.range().start()))
+    Some(InputItem { kind, range })
 }
 
 /// トップレベルの宣言を集める。E1003 (シグネチャと型引数の重複)、E1004、E1018、E1019 と、`type` の E0004 を出す。
@@ -331,39 +344,11 @@ pub fn first_item_start(parse: &Parse) -> Option<TextSize> {
 pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     // REPL の入力の木は、item の並びか、`let` の束縛か式を1つ持つ。問い合わせの木は式を1つ持つ
-    let (items, input): (Vec<ast::Item>, Option<InputItem>) = match parse.syntax().kind() {
-        SyntaxKind::SOURCE_FILE => (parse.tree().items().collect(), None),
-        _ => {
-            let range = parse.syntax().text_range();
-            // `let` の文や式がなければ、パーサが報告済み
-            match parse.repl_input() {
-                ast::ReplInput::ReplItems(items) => (items.items().collect(), None),
-                ast::ReplInput::ReplLet(input) => {
-                    let input = input.stmt().map(|stmt| {
-                        let kind = InputItemKind::Let {
-                            name: let_name(&stmt),
-                            ptr: AstPtr::new(&stmt),
-                        };
-                        InputItem { kind, range }
-                    });
-                    (Vec::new(), input)
-                }
-                ast::ReplInput::ReplQuery(input) => {
-                    let input = input.expr().map(|expr| InputItem {
-                        kind: InputItemKind::Query(AstPtr::new(&expr)),
-                        range,
-                    });
-                    (Vec::new(), input)
-                }
-                ast::ReplInput::ReplExpr(input) => {
-                    let input = input.expr().map(|expr| InputItem {
-                        kind: InputItemKind::Expr(AstPtr::new(&expr)),
-                        range,
-                    });
-                    (Vec::new(), input)
-                }
-            }
-        }
+    let items: Vec<ast::Item> = parse.items().map_or_else(Vec::new, Iterator::collect);
+    let input = if parse.items().is_some() {
+        None
+    } else {
+        input_item(parse)
     };
     let mut definitions = Definitions::default();
     let mut data = Vec::new();

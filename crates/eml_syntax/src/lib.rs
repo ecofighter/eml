@@ -11,7 +11,7 @@ mod token_set;
 
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles};
 use rowan::GreenNode;
-use rowan::ast::AstNode;
+use rowan::ast::{AstChildren, AstNode, support};
 
 pub use debug_dump::debug_tree;
 pub use lexer::{Token, lex};
@@ -59,6 +59,15 @@ impl Parse {
     pub fn repl_input(&self) -> ast::ReplInput {
         ast::ReplInput::cast(self.syntax())
             .expect("the root of `parse_input` and `parse_query` is a REPL input")
+    }
+
+    /// 根が item の並び (ファイルか、item の REPL の入力) なら、その item。`let` の束縛、式、問い合わせの根は `None`。
+    pub fn items(&self) -> Option<AstChildren<ast::Item>> {
+        let root = self.syntax();
+        match root.kind() {
+            SyntaxKind::SOURCE_FILE | SyntaxKind::REPL_ITEMS => Some(support::children(&root)),
+            _ => None,
+        }
     }
 }
 
