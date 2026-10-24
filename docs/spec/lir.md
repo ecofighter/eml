@@ -738,6 +738,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 - `par` の検査は次のとおりである。Core IR の2つの段と、LIR の5つの段のすべてで走る
   - `pair` は、`tobj` のフィールドをちょうど2つ持つ構築子である。VM は子の一様な結果を2つ並べて組を作るためである (``the pair of a par is `Box` #0, which does not have two tobj fields``)。表にない配置とタグの範囲は R8 と同じ文言で、主語を ``the pair of a par`` にする
   - LIR の `tail par` は、入口の段のほかの段で拒む (``a par is a tail call, but the join needs the parent's frame``)。縮約は `par` を `tail` にしないので、この形はパスの誤りである
+  - `extern Std.Par.par` は、どの段でも拒む (`` `Std.Par.par` is not an extern instruction ``)。`Extern::Par` の行は std の宣言を型検査に結ぶためだけにあり、translate は呼び出しを `par` にする ([Core IR](core-ir.md) の「`par` の呼び出し」)
   - `ev_set_clause[E.op]` に渡す値が `&g` か、同じ関数の中の `closure g(..)` なら、g の `clause` の印が op に合い、同じ関数の中で evidence を定義した `ev_new[E]` の E にも合う
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける
 - fork の関数の検査は次のとおりである。5つの段のすべてで、関数ごとの検査より前に走る

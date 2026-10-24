@@ -810,6 +810,10 @@ impl<'a> Context<'a> {
     /// Repr のままである (docs/spec/lir.md の「extern の行」)。
     pub fn check_extern(&self, var: VarId, ext: Extern, args: &[Atom]) -> Result<(), String> {
         let row = ext.row();
+        // `par` の行は std の宣言を型検査に結ぶだけで、呼び出しは `par` の命令になる (docs/spec/lir.md の「verifier」)
+        if ext == Extern::Par {
+            return Err(format!("`{}` is not an extern instruction", row.name));
+        }
         if args.len() != row.params.len() {
             return Err(format!(
                 "`{}` takes {} arguments but is given {}",

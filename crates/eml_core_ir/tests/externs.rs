@@ -7,7 +7,7 @@ use eml_extern::{Extern, ExternType, Linearity, OpRet, Purity};
 use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
 use eml_lir::{FALSE, TRUE, TUPLE};
 use eml_test_support::Checked;
-use eml_types::{Lin, Substitution, TypeId, TypeKind, TypeStore};
+use eml_types::{Lin, RowTail, Substitution, TypeId, TypeKind, TypeStore};
 
 /// 型の行ごとに、その型の値をそのまま返す関数を置く。型検査がその型に与える型を、関数の引数の型から読む。標準
 /// ライブラリは使うモジュールだけを読み込むので、すべてのモジュールを import する (`probes`)。
@@ -313,7 +313,8 @@ fn faulting_rows_carry_panic() {
     // 行の `purity` は、std の型の最後の外側の矢印の row と合う。`Panics` は `Panic` を起こし `IO` を起こさない。
     // `Effectful` は `IO` を起こし、`Std.Env.arg` のように `Panic` も起こしうる。`Pure` は何も起こさない。ただし
     // instance の `extern` で結んだ `Pure` の行は、クラスのメソッドの型が書く `Panic` だけを持ってよい (`Num Float`)
-    // (docs/spec/effects.md の「組み込みの `Panic`」)
+    // (docs/spec/effects.md の「組み込みの `Panic`」)。外側の矢印の row が開いてよいのは、末尾が関数型の引数の row の
+    // 末尾でもあるときだけである。コールバックのエフェクトを呼んだ側へ通す高階の extern (`Std.Par.par`) の形である
     let checked = checked();
     let program = &checked.program;
     let (io, panic) = (program.io(), program.panic());
@@ -321,6 +322,7 @@ fn faulting_rows_carry_panic() {
     for &e in Extern::ALL {
         let row = e.row();
         let mut ty = row_type(&checked, &mut store, e);
+        let callback_tails = callback_tails(&store, ty, row.params.len());
         let mut labels = Vec::new();
         for _ in row.params {
             let TypeKind::Fn {
@@ -329,7 +331,12 @@ fn faulting_rows_carry_panic() {
             else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
-            assert_eq!(*tail, None, "{}", row.name);
+            assert!(
+                tail.as_ref()
+                    .is_none_or(|tail| callback_tails.contains(tail)),
+                "{}",
+                row.name
+            );
             labels = effects.iter().map(|label| label.id).collect();
             ty = *ret;
         }
@@ -350,6 +357,23 @@ fn faulting_rows_carry_panic() {
     assert_eq!(function.name, "panic");
     assert_eq!(Extern::Panic.row().purity, Purity::Panics);
     assert_eq!(Extern::Panic.row().ret, OpRet::Never);
+}
+
+/// 一番外側の `arity` 個の矢印の引数のうち、関数型のものの矢印の row の末尾。
+fn callback_tails(types: &TypeStore, mut ty: TypeId, arity: usize) -> Vec<RowTail> {
+    let mut tails = Vec::new();
+    for _ in 0..arity {
+        let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
+            break;
+        };
+        let mut arrow = *param;
+        while let TypeKind::Fn { tail, ret, .. } = types.kind(arrow) {
+            tails.extend(tail.clone());
+            arrow = *ret;
+        }
+        ty = *ret;
+    }
+    tails
 }
 
 #[test]
@@ -384,7 +408,8 @@ fn every_extern_function_row_has_the_kinds_of_its_std_signature() {
     }
 }
 
-/// 型変数に依存する型 (`Poly`) は、extern のスキームが引数の型変数を `Unr` に固定するので `Unr` の行と合う。結果
+/// 宣言に対して相対的な型 (`Poly`) は `Unr` の行と合う。関数でない引数の型変数は、extern のスキームが `Unr` に
+/// 固定する。関数型の引数 (`Std.Par.par` の子) の矢印の Kind は固定しないので、どの印の閉包も渡せる。結果
 /// だけに現れる型変数は固定しないが、結果がその型変数に依存する行 (`MutArray.empty` の `MutArray a`) は `Lin` である
 /// (docs/spec/declarations.md の「`extern`」)。
 fn kind_of(lin: Lin) -> Linearity {

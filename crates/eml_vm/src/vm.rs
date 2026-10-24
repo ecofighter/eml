@@ -2114,6 +2114,11 @@ fn run_extern<R: Exec>(
                     "a dedicated-instruction extern reached the generic extern instruction",
                 ));
             }
+            Extern::Par => {
+                return Err(VmFault::Internal(
+                    "`Std.Par.par` is not an extern instruction",
+                ));
+            }
         }
     }
     Ok(())

@@ -219,7 +219,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 
 ### 変換の規則
 
-- extern の関数の引数のそろった呼び出しは、`extern` 命令 (`Rhs::Extern`) にする。extern は、その場で実行して値を返す1階の命令で、eml のコードを呼び返さず、継続のフレームも積まない。ただし、`try_io` が捕まえる種類の誤りで失敗すると VM が `io_failed` の節の入口を呼び、`Panic` を起こす誤りで失敗するか `panic` を呼ぶと `panicked` の節の入口を呼び、`exit` は中断を始める ([VM](vm.md) の「extern の中断」)。`mask` は持たない。引数の所有権は、コンストラクタの呼び出しと同じく命令に移る。どの extern があり、引数と結果の Repr が何で、純粋かどうかは処理系の表 (`eml_extern`) が決める。
+- extern の関数の引数のそろった呼び出しは、`extern` 命令 (`Rhs::Extern`) にする。extern は、その場で実行して値を返す1階の命令で、eml のコードを呼び返さず、継続のフレームも積まない。ただし、`try_io` が捕まえる種類の誤りで失敗すると VM が `io_failed` の節の入口を呼び、`Panic` を起こす誤りで失敗するか `panic` を呼ぶと `panicked` の節の入口を呼び、`exit` は中断を始める ([VM](vm.md) の「extern の中断」)。`mask` は持たない。引数の所有権は、コンストラクタの呼び出しと同じく命令に移る。どの extern があり、引数と結果の Repr が何で、純粋かどうかは処理系の表 (`eml_extern`) が決める。`Std.Par.par` だけは `extern` 命令にせず、`par` の呼び出しにする (下の「`par` の呼び出し」)。
 - 文字のリテラルは、式では `Int` の定数 (`Atom::Int`)、パターンでは `Int` の case (`CasePattern::Int`) にする。値はスカラー値のコードポイントで、`Char` は `Int` と同じ `int` の Repr を持つので ([LIR](lir.md) の「値の表現」)、リテラルの `switch` も `Int` と同じになる。`Byte` のリテラルも、値 (0 から 255) を `Int` の定数と case にする。元の型は instance の名前に残る。
 - 表面の構文には `perform` はない。HIR から Core IR への変換で、操作の呼び出しを `perform` 命令に変える。
 - クロージャは「関数 + すでに渡された先頭の引数の並び」で表す。ラムダは、捕まえた変数を先頭の引数に持つ関数に持ち上げる。ラムダの捕獲と部分適用は、どちらもこの形のクロージャになる。
@@ -270,7 +270,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 - `handle`、`perform`、`resume` は、translate の出力では呼び出しの一種である。表面の構文に `resume` はなく、`resume` は変換が作る Core IR の内部の命令 (`Call::Resume`) である。EP がどれも基本操作と普通の呼び出しに置き換える (下の「evidence passing」)。
 - 呼び出し (`Rhs::Call` の `Call::Direct`、`Call::Apply`、`Call::Resume`、`Call::Par`) は `mask` を持つ ([エフェクトと handler](effects.md) の「handler の意味」)。`mask` は、呼び出しの間に飛ばす handler を表す項目の並びである。項目 (`eml_lir::MaskItem`) は、エフェクトの番号と、残す数 n と、飛ばす数 m を持つ。m は 1 以上である。項目はエフェクトの番号の真に昇順に並ぶので、同じエフェクトの項目は2つない。空なら `mask` なしである。extern のエフェクトは入れない。`Call::Handle` と `Call::Perform` は `mask` を持たない。LIR の呼び出しは `mask` を持たない。`handle` の本体の中の呼び出しは、持ち上げた本体の関数の中の呼び出しとして `mask` を持つ。
 - 変換は、型検査が呼び出しの矢印ごとに記録した `mask` の項目 ([型と Kind](types.md) の「推論」) を、エフェクトの番号に写して昇順に並べ、Core IR の呼び出しに付ける。型検査の項目は、エフェクトが rest に初めて現れた順に並ぶ。
-  - 引数がそろう既知の関数の呼び出し (`Call::Direct`) は、最後の矢印の `mask` を使う。前の矢印は部分適用で、エフェクトを起こさないためである。同じ理由で、引数が足りずにクロージャを作るときは `mask` を付けない。extern、操作、コンストラクタの呼び出しには、型検査が `mask` を記録しない。
+  - 引数がそろう既知の関数の呼び出し (`Call::Direct`) は、最後の矢印の `mask` を使う。前の矢印は部分適用で、エフェクトを起こさないためである。同じ理由で、引数が足りずにクロージャを作るときは `mask` を付けない。extern、操作、コンストラクタの呼び出しには、型検査が `mask` を記録しない。ただし `Std.Par.par` は結果の row が開いているので、型検査が最後の矢印に `mask` を記録する (下の「`par` の呼び出し」)。
   - 余った引数を `Call::Apply` で渡すときは、矢印ごとの `mask` が変わる境目で `apply` を分ける。`mask` は1つの Core IR の呼び出し全体に効くので、違う `mask` の矢印を1つの `apply` にまとめると、片方の矢印に余計な `mask` が効くためである。yield しうる矢印の後でも分ける (下の「`apply` の印と分け方」)。
   - `mask` が効くのは呼び出しそのものだけで、引数の評価には効かない。Core IR の呼び出しの引数は値 (アトム) なので、引数は呼び出しより前の文で評価し終えている。そのため、これは形から決まる。
 - `mask` は translate の出力にだけある。EP が `evv_mask` の包みに置き換える (下の「`mask` の包み」)。包みは戻りで `evv` を戻すので、`mask` 付きの末尾の位置の呼び出しは末尾呼び出しにならない。
@@ -286,6 +286,14 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 - 包んだ `k` を `drop` するとクロージャが解放され、それが継続を解放する。
 - パラメータ付き handler は脱糖しない。Core IR では、すべての handler を状態のある handler として扱い、状態のない handler は状態を `()` にする。`handle` はつねに状態の初期値を、`resume` はつねに次の状態を持つ。状態のない handler の `k v` は、直接の形なら `resume k(v, ())` に変換し、包む形なら `$cont$` を通って `resume k(v, ())` になる。この `()` は Core IR の中の決まりで、表面の構文では状態のない `k` は1引数の関数である ([エフェクトと handler](effects.md) の「パラメータ付き handler」)。節のクロージャはつねに状態を最後の引数で受け、`return` の節はつねに本体の値と状態を受ける。呼び出しの規約を1つにして、EP で状態の有無を場合分けしないためである。`return` の節はつねにある。省略した handler は、HIR が `| return x -> x` の節 (状態のある handler では、状態を `_` で捨てる `| return x _ -> x`) を合成するので、本体の値をそのまま返し、状態の引数は Perceus が捨てる (RC の対象の状態だけ decref する)。省略した節は状態を `_` で捨てるので、状態の型は `Unr` である ([式](expressions.md) の「パラメータ付き handler」)。
 - メモリ管理は Perceus 方式の参照カウントである。`Lin` の値は2回以上消費されず、`dup` も受けない ([LIR](lir.md) の「値の表現」)。
+
+#### `par` の呼び出し
+
+- `Std.Par.par` の引数のそろった呼び出しは、`extern` 命令でなく `par` の呼び出し (`Rhs::Call { call: Call::Par { left, right, pair, at }, mask }`) にする。extern は eml のコードを呼び返さないが、`par` は2つの子の閉包を呼ぶためである。呼び出しの一種にするので、`mask` と巻き戻しの表をほかの呼び出しと同じ仕組みで扱える。`eml_extern` の `Extern::Par` の行は std の宣言を型検査に結ぶためだけにあり、`Rhs::Extern` にならない。verifier は `extern Std.Par.par` をどの段でも拒む ([LIR](lir.md) の「verifier」)
+- `left` と `right` は2つの引数、`pair` は `tuple_layout(2)` の `TUPLE` の構築子、`at` は `par` の名前の位置である。結果は組の型の変数 (`obj` か構造体) にそのまま束ねる。構造体なら、box の挿入が `obj` からの `unbox` を足す ([LIR](lir.md) の「box の挿入」)。タプルの配置の欄はどれも `tobj` なので (上の「translate の配置」)、構造体の箱は VM が作る組と同じ形である
+- `mask` は、型検査が最後の矢印 (2つ目の引数の矢印) に記録したものである。`par` の結果の row は開いた `<e>` なので、`foo : (Unit -> <never e> Int) -> <Fail String | e> (Int, Int)` の本体の `Par.par h h` は `mask [Std.Fail.Fail] par (,) #0(h.0, h.0)` になる。`h` が起こす `Fail` は、`foo` の `Fail` を飛ばして呼んだ側の handler に届く
+- 部分適用 (`Par.par f`) と値として使う `Par.par` は、ほかの extern と同じく `$externN` で包む (上の「変換の規則」)。包む関数の本体も同じ `par` の呼び出しを、同じ関数 (`ProgramBuilder::extern_call`) で作る。本体は最後の矢印の呼び出しでないので `mask` を持たず、`mask` は包む関数を呼ぶ `apply` が持つ。結果は組で関数でないので、`par` に余る引数はない
+- 最適化は `par` をほかの文と同じく扱う。yield の地点でなく、handler に触れず (下の「handler への特殊化」)、到達の解析は2つの子をたどる。never だけのエフェクトの handler は最適化で消えないので、子の中断を起こし直すとき、親はいつもその evidence を持つ。handle を消すのは handler への特殊化だけで、それは操作がどれも `never` のエフェクトを断り、展開は `handle` を持つ関数を断るためである
 
 ### ローカル関数の持ち上げ
 

@@ -443,6 +443,7 @@ pub enum Extern {
     MutArrayWrite,
     MutArrayFreeze,
     CheckIndex,
+    Par,
 }
 
 pub struct FunctionRow {
@@ -667,6 +668,7 @@ impl Extern {
         Extern::MutArrayWrite,
         Extern::MutArrayFreeze,
         Extern::CheckIndex,
+        Extern::Par,
     ];
 
     pub fn row(self) -> FunctionRow {
@@ -1408,6 +1410,16 @@ impl Extern {
             // `var` の配列の変数の添字を、使う所で確かめる。節の中で `Panic` を起こさないためである
             // (docs/spec/core-ir.md の「`var` の変換」)
             Extern::CheckIndex => row("Prelude.check_index", &[Int, Int], Unit, Purity::Panics),
+            // std の宣言を型検査に結ぶためだけの行である。translate は呼び出しを `par` の命令にするので、
+            // `Rhs::Extern` にならない (docs/spec/core-ir.md の「`par` の呼び出し」)
+            Extern::Par => kinded(
+                "Std.Par.par",
+                &[TObj, TObj],
+                &[Unr, Unr],
+                Obj,
+                Unr,
+                Purity::Pure,
+            ),
         }
     }
 

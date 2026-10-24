@@ -25,13 +25,14 @@
 - 位置つきの `mask`: 型検査が呼び出しごとに決め、エフェクトごとに内側の n 個の handler を残して続く m 個を飛ばす。`Yield Int` を受けて `Yield String` を出すような、型を変換する handler を書ける ([エフェクトと handler](../spec/effects.md) の「handler の意味」、[型と Kind](../spec/types.md) の「推論」)
 - `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`Char`、`Byte`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `FileIn` の `open`、`read_all`、`close` などが起こし、`FileIn.FileIn` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)。extern のエフェクトの多重度は表の行が決め、`IO` は `Once`、`Panic` は `Never` である ([エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」)
 - IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」)
-- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import したものだけを読み込む。`import FileIn` か `import Std.FileIn` を書いたモジュールで、`FileIn.open` のように修飾付きで使う。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
+- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`、`Par.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import したものだけを読み込む。`import FileIn` か `import Std.FileIn` を書いたモジュールで、`FileIn.open` のように修飾付きで使う。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
 - std のエフェクトと `Iter`: エフェクトのモジュール `Yield` (`for_each`、`fold`、`collect`)、`Fail` (`to_result`、`to_option`)、`State` (`run`、`eval`、`exec`) と、`once` の継続で作る引いて使うジェネレータ `Iter` とその変換。`FileIn` から1行ずつ読む `FileIn.read_line` ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」と「`FileIn`」)。`tests/ui/run/scripts/` の `grep`、`logstat`、`csv2jsonl` は std のエフェクトを使い、`csv2jsonl` の CSV の読み取りは `let … and …` の組で書く
 - 標準入出力とファイルのハンドル: 線形な型 `Stdin`、`Stdout`、`Stderr`、`FileIn.FileIn`、`FileOut.FileOut`。読むハンドルは文字列とバイト列を、全部、1行ずつ、塊ごとに読み、書くハンドルは文字列とバイト列と行を書く。`FileOut` は自分の buffer を持ち、閉じずに手放しても書き出す。標準のストリームごとに、生きているハンドルは高々1つである ([標準ライブラリ](../spec/stdlib.md) の「ハンドル」)
 - 子のプロセス: `Std.Proc` が、`Cmd` をシェルを介さずに起動する。起動の形は、標準入出力を受け継ぐ `run`、標準出力を取る `output` と `capture`、pipe でやりとりする線形な `Child` を返す `spawn` の3つである。作業ディレクトリ、環境変数、引数の追加、標準エラーの向き (`2>&1`、`2>/dev/null`) を `Cmd` に設定できる ([標準ライブラリ](../spec/stdlib.md) の「`Proc`」)
 - `Float` (IEEE 754 の倍精度) のリテラル、算術、比較と、Python の `repr` の形の表示。変換と数学の関数は `Std.Float` にある ([宣言](../spec/declarations.md) の「Prelude のクラス」、[標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」)
 - 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)
 - 連想配列と集合: キーの順の `Map k v` (`Std.Map`) と `Set a` (`Std.Set`)。どちらも釣り合いを取った木で、キーと要素は `Unr` に限る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」)
+- 2つの計算の組: `Std.Par` の `par` は2つの子を動かして両方を待ち、子の `never` の操作を親で起こし直す。子の row の上限は `never` で、`IO` や `var` を使う子は E2020 になる。`both` は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Par`」)
 - ブロックの中の `var` と代入 `x <- e`、添字の読み `x[i]` と書き込み `x[i] <- e`、Prelude の `for` と `while` ([式](../spec/expressions.md) の「`var`」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」)
 - 線形性、持ち越し規則、網羅性の検査。`fail` や `exit` のような戻らない呼び出しで終わる経路では、消費しない `Lin` の値を手放さなくてよい ([線形性](../spec/linearity.md) の「暗黙の後始末」)
 - 型クラス: `class` (上位クラス、既定のメソッド、メソッド自身の型変数と制約)、`instance` (文脈、標準ライブラリの中の `extern`)、シグネチャの制約 `Eq a =>`、`deriving (Eq, Ord, Show)`、Prelude のクラス `Eq`、`Ord`、`Show` と `Ordering`、タプルと `Unit` の構造的な instance。証拠は単相化で決め、実行時の辞書は持たない ([宣言](../spec/declarations.md) の「クラスと instance」、[型と Kind](../spec/types.md) の「制約」)
@@ -126,6 +127,12 @@
 - 演算子のメソッドの等式で、被演算子に括弧のないコンストラクタのパターンを書くと (`Box x == Box y = …`)、等式として読まれない。演算子の等式の先読み (`grammar/items.rs` の `at_operator_equation`) が、演算子の前に単純なパターン (`patterns::apat_len`) を1つしか認めないため。パーサは「expected a method equation」(E0011) を出す。そのメソッドに既定のメソッドがなければ、等式がないことの E1036 も続く。`(Box x) == (Box y) = …` と括弧に入れて書く。手で書く instance ではこの形がよく現れる
 - 導出した instance のフィールドの E2006 は、instance ごとに最初のフィールドの1つだけを報告する。ほかのフィールドの誤りは、最初の誤りを直した後に出る
 - instance のメソッドの関数と生成した関数の名前は、クラスと型を診断と同じ表示で書く。そのため、別のモジュールが同じ名前の型を足すと、Core IR の関数の名前が変わることがある
+
+### `par`
+
+- `par` の2つの子は1つの worker の上で切り替えて動くので、`par` で計算は速くならない。子を別のスレッドで動かすのは worker のスレッドを入れてからである ([ロードマップ](../future/roadmap.md) の `worker-threads` と `par-steal`)
+- 捕まえられなかった子の `Panic` の実行時エラーは、``panicked: <message> in `reperform$Prelude.Panic.panicked` `` の文言で、ソースの位置を持たない。子の `panic` を親で起こし直す関数の中で報告するためである ([VM](../spec/vm.md) の「子の誤り」)
+- 共有にした `poly` の入れ物を入れ子の `par` でもう一度送ると、その `lin` の部分の下にある rc > 1 の局所の物体は前の持ち主のまま残る。受け手がその物体に触れると、検査モードは `WrongOwner` を返す。速いモードでは worker が1つなので害はない。扱いは worker のスレッドを入れるときに決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」、[ロードマップ](../future/roadmap.md) の `worker-threads`)
 
 ### 子のプロセス
 

@@ -1174,7 +1174,8 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::MutArrayRead
         | Extern::MutArrayWrite
         | Extern::MutArrayFreeze
-        | Extern::CheckIndex => return None,
+        | Extern::CheckIndex
+        | Extern::Par => return None,
     })
 }
 
