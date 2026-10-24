@@ -58,8 +58,15 @@ darwin=false
 measure_once() {
   local binary="$1" mode="$2" file="$3" report
   if $darwin; then
-    report="$( { /usr/bin/time -l "$binary" "$mode" "$file" >/dev/null; } 2>&1 )"
-    awk '/instructions retired/ { n = $1 } / real / { cpu = $3 + $5 } END { print n, cpu }' <<<"$report"
+    # `/usr/bin/time -l` の user と sys は 10 ms 単位、bash の `time` も 1 ms 単位で、数 ms で終わる `eml check` の差を見分けられない。
+    # CPU 時間は getrusage の子の分 (マイクロ秒単位) を Python で読む
+    report="$(python3 -I -c '
+import resource, subprocess, sys
+p = subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+r = resource.getrusage(resource.RUSAGE_CHILDREN)
+sys.stdout.write(p.stderr)
+print("cpu", r.ru_utime, r.ru_stime)' /usr/bin/time -l "$binary" "$mode" "$file")"
+    awk '/instructions retired/ { n = $1 } /^cpu / { cpu = $2 + $3 } END { print n, cpu }' <<<"$report"
   else
     report="$( { TIMEFORMAT='%U %S'; time "$binary" "$mode" "$file" >/dev/null; } 2>&1 )"
     awk '{ print 0, $1 + $2 }' <<<"$report"
@@ -106,10 +113,10 @@ for mode in check run; do
       n="$(median "$work/n-$v")"
       t="$(median "$work/t-$v")"
       if [[ "$v" == fx ]]; then
-        row="$row $($darwin && echo "$n" || echo -) | $(awk -v t="$t" 'BEGIN { printf "%.1f", t * 1000 }') |"
+        row="$row $($darwin && echo "$n" || echo -) | $(awk -v t="$t" 'BEGIN { printf "%.2f", t * 1000 }') |"
       else
         rel_n="$($darwin && awk -v a="$n" -v b="$base_n" 'BEGIN { printf "%+.2f%%", 100 * (a / b - 1) }' || echo -)"
-        rel_t="$(awk -v a="$t" -v b="$base_t" 'BEGIN { printf "%.1f (%+.1f%%)", a * 1000, 100 * (a / b - 1) }')"
+        rel_t="$(awk -v a="$t" -v b="$base_t" 'BEGIN { printf "%.2f (%+.1f%%)", a * 1000, 100 * (a / b - 1) }')"
         row="$row $rel_n | $rel_t |"
       fi
     done
