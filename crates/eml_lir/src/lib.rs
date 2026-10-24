@@ -112,7 +112,7 @@ impl LirFn {
     /// `release` を選び、reuse と verifier は `release` の印を合わせる
     /// (docs/spec/lir.md の「ダミーの値」)。変数は1回だけ
     /// 定義されるので (R5)、関数に1つの表にする。表にない番号の変数は、verifier が別に誤りとして報告する。
-    pub fn struct_boxes(&self) -> Vec<bool> {
+    pub(crate) fn struct_boxes(&self) -> Vec<bool> {
         let mut boxes = vec![false; self.vars.len()];
         for stmt in self.blocks.iter().flat_map(|block| &block.stmts) {
             if let Stmt::UnboxStruct { value, .. } = stmt
@@ -234,7 +234,7 @@ impl Stmt {
     }
 
     /// 値の使いのうち、基本操作と extern の借用の引数 (`Rhs::for_each_lent`)。
-    pub fn for_each_lent(&self, f: impl FnMut(Atom)) {
+    pub(crate) fn for_each_lent(&self, f: impl FnMut(Atom)) {
         if let Stmt::Let { var: _, rhs } = self {
             rhs.for_each_lent(f);
         }
@@ -434,7 +434,7 @@ impl Rhs {
 
     /// 値の使いのうち、基本操作と extern の借用の引数。読むだけなので `for_each_consumed` には入らない。同じ変数が
     /// 同じ命令の消費の位置にもあれば、その命令の前に参照が2つ要る (docs/spec/lir.md の「extern の借用」)。
-    pub fn for_each_lent(&self, mut f: impl FnMut(Atom)) {
+    pub(crate) fn for_each_lent(&self, mut f: impl FnMut(Atom)) {
         let (args, borrowed) = match self {
             Rhs::Prim(prim, args) => (args, prim.row().borrowed),
             Rhs::Extern { ext, args, at: _ } => (args, ext.row().borrowed),
@@ -720,7 +720,7 @@ impl Structs {
 
     /// 印が `unr` でない、RC の対象の葉を持つか。「RC の対象」で後始末を決めている所は、この述語が真の構造体も含める
     /// (docs/spec/lir.md の「構造体の形」)。
-    pub fn has_non_unr_rc_leaf(&self, id: StructId) -> bool {
+    pub(crate) fn has_non_unr_rc_leaf(&self, id: StructId) -> bool {
         self.leaves(id)
             .iter()
             .any(|&(repr, mark)| repr.is_rc() && mark != Mark::Unr)
@@ -868,7 +868,7 @@ impl Mark {
     }
 
     /// 2つの印の小さいほう。順序は `Unr` < `Poly` < `Lin`。
-    pub fn meet(self, other: Mark) -> Mark {
+    pub(crate) fn meet(self, other: Mark) -> Mark {
         if self.at_least(other) { other } else { self }
     }
 
