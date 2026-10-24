@@ -1,17 +1,18 @@
+use std::collections::HashMap;
+use std::fmt;
 use std::ops::Range;
 
-use ariadne::{Config, IndexType, Label as AriadneLabel, Report, ReportKind};
+use ariadne::{Cache, Config, IndexType, Label as AriadneLabel, Report, ReportKind, Source};
 
-use crate::{Diagnostic, Label, Severity, SourceFiles};
+use crate::{Diagnostic, FileId, Label, Severity, SourceFiles};
 
 /// UI テストのスナップショットにも使うので、色を付けない。
 pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
     let mut out = Vec::new();
-    let mut sources = ariadne::sources(
-        files
-            .iter()
-            .map(|(path, text)| (path.to_string(), text.to_string())),
-    );
+    let mut sources = Sources {
+        files,
+        loaded: HashMap::new(),
+    };
     for diagnostic in diagnostics {
         let kind = match diagnostic.severity {
             Severity::Error => ReportKind::Error,
@@ -43,16 +44,40 @@ pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
     String::from_utf8(out).expect("ariadne writes UTF-8")
 }
 
-fn span(label: &Label, files: &SourceFiles) -> (String, Range<usize>) {
+/// ariadne の読み口。ariadne はファイルごとに行の表を作るので、診断が指すファイルの表だけを、最初に指したときに作る。
+/// 読み込んだファイルをすべて写すと、診断が1件でも標準ライブラリのすべての表を作るためである。
+struct Sources<'a> {
+    files: &'a SourceFiles,
+    loaded: HashMap<FileId, Source<&'a str>>,
+}
+
+impl<'a> Cache<FileId> for Sources<'a> {
+    type Storage = &'a str;
+
+    fn fetch(&mut self, id: &FileId) -> Result<&Source<&'a str>, impl fmt::Debug> {
+        let files = self.files;
+        Ok::<_, ()>(
+            self.loaded
+                .entry(*id)
+                .or_insert_with(|| Source::from(files.text(*id))),
+        )
+    }
+
+    fn display<'b>(&self, id: &'b FileId) -> Option<impl fmt::Display + 'b> {
+        Some(self.files.path(*id).to_string())
+    }
+}
+
+fn span(label: &Label, files: &SourceFiles) -> (FileId, Range<usize>) {
     // ariadne は主でない側のファイルの見出しの位置を、バイト指定でも文字の番号として読むので、文字の番号で渡す
     let chars = |offset| files.char_index(label.file, offset);
     (
-        files.path(label.file).to_string(),
+        label.file,
         chars(label.range.start())..chars(label.range.end()),
     )
 }
 
-fn label(label: &Label, files: &SourceFiles) -> AriadneLabel<(String, Range<usize>)> {
+fn label(label: &Label, files: &SourceFiles) -> AriadneLabel<(FileId, Range<usize>)> {
     let result = AriadneLabel::new(span(label, files));
     if label.message.is_empty() {
         result
