@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
+use eml_diagnostics::{
+    Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize, count,
+};
 use eml_hir::{
     Body, ConstructorId, EffectId, ExprId, ExprKind, FunctionKind, OperationId, PatId, Program,
     Res, RowRef, Signature, TypeRefKind,
@@ -663,14 +665,6 @@ pub(super) fn callee_subject(program: &Program, body: &Body, callee: ExprId) -> 
         _ => return "this expression".to_string(),
     };
     format!("`{name}`")
-}
-
-pub(super) fn count(n: usize, word: &str) -> String {
-    if n == 1 {
-        format!("1 {word}")
-    } else {
-        format!("{n} {word}s")
-    }
 }
 
 const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once";

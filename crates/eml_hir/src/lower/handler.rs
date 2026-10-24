@@ -1,7 +1,7 @@
 //! handler と `drop` の変換と検査 (docs/spec/expressions.md の「handler」)。1つの handler は1つのエフェクトを
 //! 扱い、そのすべての操作に節を書く (docs/spec/effects.md の「handler の意味」)。
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange, count, was};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 
 use super::expr::BodyLowering;
@@ -227,7 +227,7 @@ impl BodyLowering<'_> {
                     codes::CLAUSE_ARITY,
                     format!(
                         "{clause_name} for `{text}` takes {}, but this one has {}",
-                        parameters(expected),
+                        count(expected, "parameter"),
                         params.len()
                     ),
                     Label::new(self.file, name_range, "this clause"),
@@ -439,7 +439,7 @@ impl BodyLowering<'_> {
                 codes::CLAUSE_ARITY,
                 format!(
                     "the `return` clause takes {}, but this one has {}",
-                    parameters(expected),
+                    count(expected, "parameter"),
                     params.len()
                 ),
                 Label::new(self.file, range, "this clause"),
@@ -526,7 +526,7 @@ impl BodyLowering<'_> {
                     codes::DROP_ARITY,
                     format!(
                         "`drop` takes one value, but {} given",
-                        arguments(args.len())
+                        format!("{} {}", count(args.len(), "argument"), was(args.len()))
                     ),
                     Label::new(self.file, drop.keyword_range(), "this `drop`"),
                 ));
@@ -607,20 +607,4 @@ fn clause_example(operation: &Operation, qualifier: Option<&str>) -> String {
         example.push_str(" k");
     }
     example + " -> ..."
-}
-
-fn parameters(n: usize) -> String {
-    if n == 1 {
-        "1 parameter".to_string()
-    } else {
-        format!("{n} parameters")
-    }
-}
-
-fn arguments(n: usize) -> String {
-    if n == 1 {
-        "1 argument was".to_string()
-    } else {
-        format!("{n} arguments were")
-    }
 }

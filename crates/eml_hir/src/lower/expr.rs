@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, count, was};
 use eml_extern::{ExternType, FloatBits};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
@@ -225,7 +225,7 @@ impl<'a> BodyLowering<'a> {
                         Label::new(
                             self.file,
                             *name_range,
-                            format!("expected {}", arguments(arity)),
+                            format!("expected {}", count(arity, "argument")),
                         ),
                     )
                     .with_secondary(Label::new(
@@ -1141,21 +1141,18 @@ impl<'a> BodyLowering<'a> {
         };
         let expected = self.constructor(ctor).fields.len();
         if args.len() != expected {
-            let given = match args.len() {
-                1 => "1 was given".to_string(),
-                n => format!("{n} were given"),
-            };
+            let given = format!("{} {} given", args.len(), was(args.len()));
             self.diagnostics.push(Diagnostic::error(
                 codes::CONSTRUCTOR_ARITY,
                 format!(
                     "`{}` takes {}, but {given}",
                     at.written(),
-                    arguments(expected)
+                    count(expected, "argument")
                 ),
                 Label::new(
                     self.file,
                     range,
-                    format!("expected {}", arguments(expected)),
+                    format!("expected {}", count(expected, "argument")),
                 ),
             ));
             return PatKind::Missing;
@@ -1399,14 +1396,6 @@ impl<'a> BodyLowering<'a> {
 
     pub(super) fn alloc(&mut self, kind: ExprKind, range: TextRange) -> ExprId {
         self.exprs.alloc(Expr { kind, range })
-    }
-}
-
-fn arguments(n: usize) -> String {
-    if n == 1 {
-        "1 argument".to_string()
-    } else {
-        format!("{n} arguments")
     }
 }
 
