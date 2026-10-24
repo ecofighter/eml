@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::check::{
-    self, BlockShape, Context, Dominators, FnSummary, Tables, TermShape, boxed_scalars,
+    self, BlockShape, Context, Dominators, FnSummary, Site, Tables, TermShape, boxed_scalars,
     clause_function, field_count, shape,
 };
 use crate::liveness;
@@ -34,8 +34,8 @@ use crate::reuse;
 use crate::syntax::{layout_text, operation_text, prim_text, repr_text, rets_text};
 use crate::unwind::{self, UnwindPoint};
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Layout, LirFn, Mark, OpRet, Prim,
-    Program, Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
+    Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, LirFn, Mark, OpRet, Prim, Program, Repr,
+    Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
 };
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
@@ -308,25 +308,19 @@ fn rets(program: &Program, function: &LirFn, level: Level, clause: bool) -> Resu
 }
 
 fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
-    // 配置の Repr はコンストラクタをすべてたどって決まるので、命令ごとでなく表ごとに1回だけ求める
-    let layout_reprs: Vec<Repr> = program.layouts.iter().map(Layout::repr).collect();
-    let functions: Vec<FnSummary> = program
-        .functions
-        .iter()
-        .map(|function| FnSummary {
-            name: &function.name,
-            clause: function.clause,
-        })
-        .collect();
-    let tables = Tables {
-        layouts: &program.layouts,
-        layout_reprs: &layout_reprs,
-        structs: &program.structs,
-        effects: &program.effects,
-        strings: &program.strings,
-        functions: &functions,
-    };
-    f(tables)
+    let summaries = program.functions.iter().map(|function| FnSummary {
+        name: &function.name,
+        clause: function.clause,
+        params: function.params().len(),
+    });
+    check::with_tables(
+        &program.layouts,
+        &program.structs,
+        &program.effects,
+        &program.strings,
+        summaries,
+        f,
+    )
 }
 
 /// 辺の規則の検査 (`shape`) に渡す、ブロックの形。
@@ -367,13 +361,6 @@ struct Origin {
     slot: usize,
 }
 
-/// 定義と使用の位置。`index` はブロックの中の文の番号で、ブロックの引数と case のフィールドは -1、終端は文の数である。
-#[derive(Clone, Copy)]
-struct Site {
-    block: u32,
-    index: i64,
-}
-
 /// RC の対象の変数ごとの、所有している参照の数。0 になった変数は除く。所有の段では、経路でまだ使っていない token も
 /// 1 として持つ。token も経路ごとにちょうど1回使うので、所有と同じ写し方で `switch` の行き先へ渡せる
 /// (docs/spec/object-model.md の「reuse」)。
@@ -389,11 +376,8 @@ struct Checker<'a> {
     program: &'a Program,
     function: &'a LirFn,
     level: Level,
-    dominators: Dominators,
     /// 所有にも命令の型にも関わらない検査の状態。
     cx: Context<'a>,
-    defs: Vec<Option<Site>>,
-    at: Site,
     /// 着地の印の検査が使う入口の生存集合。印がなければ求めない。
     live_in: std::cell::OnceCell<Vec<Vec<VarId>>>,
     /// まだ着いていないブロックの入口の所有。`switch` の行き先は1本の辺から、合流するブロックは最初の `jump` から
@@ -436,14 +420,8 @@ impl<'a> Checker<'a> {
             program,
             function,
             level,
-            dominators,
             // 境界の検査は、box の挿入の後の段 (範囲の段と所有の段) だけで行う
-            cx: Context::new(tables, &function.vars, level >= Level::Scopes),
-            defs: vec![None; function.vars.len()],
-            at: Site {
-                block: 0,
-                index: -1,
-            },
+            cx: Context::new(tables, &function.vars, level >= Level::Scopes, dominators),
             live_in: std::cell::OnceCell::new(),
             pending: HashMap::new(),
             known: Known::new(),
@@ -469,77 +447,52 @@ impl<'a> Checker<'a> {
                     .expect("R3 and R4 give every block an edge from an earlier block")
             };
             self.known = self.pending_known.remove(&index).unwrap_or_default();
-            self.at = Site {
-                block: index,
-                index: -1,
-            };
+            self.cx.at = Site::entry(index);
             for &param in &block.params {
-                self.define(&mut owned, param, self.at)?;
+                self.define(&mut owned, param, self.cx.at)?;
             }
             self.check_block(index, block, owned)?;
         }
         Ok(self.unwind.map(|recorder| recorder.points))
     }
 
-    /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
-    /// 関数は操作の ABI で呼ばれ、`apply` の一様な規約に合わないためである
-    /// (docs/spec/lir.md の「入口の関数の印」)。変数は1回だけ
-    /// 定義されるので (R5)、先に `closure` をすべて集めてから使いを見る。
+    /// `clause` の印の関数の値の使いを確かめる (`Context::clause_values`)。
     fn clause_values(&self) -> Result<(), String> {
         let blocks = &self.function.blocks;
-        let closures: HashMap<VarId, FnIdx> = blocks
+        let closures = blocks
             .iter()
             .flat_map(|block| &block.stmts)
             .filter_map(|stmt| match stmt {
                 Stmt::Let {
                     var,
                     rhs: Rhs::MakeClosure(target, _),
-                } if self.cx.clause_of(*target).is_some() => Some((*var, *target)),
+                } => Some((*var, *target)),
                 _ => None,
-            })
-            .collect();
-        let mut result = Ok(());
-        let mut check = |atom: Atom| {
-            let target = match atom {
-                Atom::Fn(target) => target,
-                Atom::Var(var) => match closures.get(&var) {
-                    Some(&target) => target,
-                    None => return,
-                },
-                Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => return,
-            };
-            if result.is_ok()
-                && let Some(clause) = self.cx.clause_of(target)
-            {
-                result = Err(format!(
-                    "`{}` is a clause of `{clause}`, but it is used as a function value",
-                    self.program.functions[target.0 as usize].name
-                ));
-            }
-        };
-        for block in blocks {
-            for stmt in &block.stmts {
-                match stmt {
-                    Stmt::Let {
-                        var: _,
-                        rhs: Rhs::Prim(Prim::EvSetClause { .. }, args),
-                    } => args
-                        .iter()
-                        .enumerate()
-                        .filter(|&(index, _)| index != 1)
-                        .for_each(|(_, &atom)| check(atom)),
-                    _ => stmt.for_each_atom(&mut check),
+            });
+        self.cx.clause_values(closures, |check| {
+            for block in blocks {
+                for stmt in &block.stmts {
+                    match stmt {
+                        Stmt::Let {
+                            var: _,
+                            rhs: Rhs::Prim(Prim::EvSetClause { .. }, args),
+                        } => args
+                            .iter()
+                            .enumerate()
+                            .filter(|&(index, _)| index != 1)
+                            .for_each(|(_, &atom)| check(atom)),
+                        _ => stmt.for_each_atom(&mut *check),
+                    }
                 }
+                block.term.for_each_atom(&mut *check);
             }
-            block.term.for_each_atom(&mut check);
-        }
-        result
+        })
     }
 
     fn check_block(&mut self, index: u32, block: &Block, mut owned: Owned) -> Result<(), String> {
         let function = self.function;
         for (at, stmt) in block.stmts.iter().enumerate() {
-            self.at = Site {
+            self.cx.at = Site {
                 block: index,
                 index: at as i64,
             };
@@ -562,7 +515,7 @@ impl<'a> Checker<'a> {
                 });
             }
         }
-        self.at = Site {
+        self.cx.at = Site {
             block: index,
             index: block.stmts.len() as i64,
         };
@@ -611,7 +564,7 @@ impl<'a> Checker<'a> {
                     | Rhs::Box(_)
                     | Rhs::Unbox(_) => {}
                 }
-                self.define(owned, *var, self.at)
+                self.define(owned, *var, self.cx.at)
             }
             Stmt::LetMany { vars, call } => {
                 if self.level < Level::Flattened {
@@ -630,7 +583,7 @@ impl<'a> Checker<'a> {
                     })?;
                 }
                 for &var in vars {
-                    self.define(owned, var, self.at)?;
+                    self.define(owned, var, self.cx.at)?;
                 }
                 Ok(())
             }
@@ -647,7 +600,7 @@ impl<'a> Checker<'a> {
                     *value,
                     *ctor,
                     fields.iter().copied().enumerate(),
-                    self.at,
+                    self.cx.at,
                 )
             }
             Stmt::UnboxStruct {
@@ -669,7 +622,7 @@ impl<'a> Checker<'a> {
                     .iter()
                     .enumerate()
                     .filter_map(|(slot, field)| field.map(|field| (slot, field)));
-                self.bind_fields(owned, *value, *ctor, fields, self.at)
+                self.bind_fields(owned, *value, *ctor, fields, self.cx.at)
             }
             Stmt::Dup(var) => {
                 self.rc_allowed(*var, "duplicated")?;
@@ -772,7 +725,7 @@ impl<'a> Checker<'a> {
                 self.function.repr(token).name()
             ));
         }
-        self.define_once(token, self.at)?;
+        self.cx.define(token, self.cx.at)?;
         owned.insert(token, 1);
         self.token_sources[token.0 as usize] = Some((value, ctor));
         Ok(())
@@ -780,7 +733,7 @@ impl<'a> Checker<'a> {
 
     /// token を使う。経路でまだ使っていない token に限る。
     fn use_token(&self, owned: &mut Owned, token: VarId) -> Result<(), String> {
-        self.visible(token)?;
+        self.cx.visible(token)?;
         if !self.is_token(token) {
             return Err(format!(
                 "`{}` ({}) is used as a token",
@@ -930,7 +883,7 @@ impl<'a> Checker<'a> {
             Term::Jump { target, args } => {
                 let params = &self.function.block(*target).params;
                 for (&arg, &param) in args.iter().zip(params) {
-                    self.check_passed(*target, arg, param)?;
+                    self.cx.check_passed(*target, arg, param)?;
                 }
                 for &arg in args {
                     self.consume(&mut owned, arg)?;
@@ -944,17 +897,7 @@ impl<'a> Checker<'a> {
                 cases,
                 default,
             } => {
-                if cases.is_empty() && default.is_none() {
-                    return Err("a switch has no targets".to_string());
-                }
-                self.cx.switch_scrutinee(*scrutinee)?;
-                self.cx.switch_cases(cases)?;
-                self.cx.literal_default(cases, *default)?;
-                if cases.iter().any(|case| !case.fields.is_empty()) {
-                    self.cx.fields_allowed(*scrutinee)?;
-                }
-                self.cx
-                    .switch_layout(*scrutinee, *layout, cases, *default)?;
+                self.cx.check_switch(*scrutinee, *layout, cases, *default)?;
                 // `switch` は scrutinee を読むだけなので、どの行き先も scrutinee の所有を引き継ぐ
                 match *scrutinee {
                     Atom::Var(var) => self.read(&owned, var, "switched on")?,
@@ -963,10 +906,7 @@ impl<'a> Checker<'a> {
                 // 行き先は辺を1本しか持たないので (R3)、ここで入口の状態を決める。フィールドは行き先の先頭で定義する
                 for case in cases {
                     let mut entry = owned.clone();
-                    let site = Site {
-                        block: case.target.0,
-                        index: -1,
-                    };
+                    let site = Site::entry(case.target.0);
                     // 配置とタグは `switch_layout` が確かめた
                     let mut known = self.known.clone();
                     if let (Atom::Var(value), Some(layout), CasePattern::Tag(tag)) =
@@ -1055,20 +995,7 @@ impl<'a> Checker<'a> {
             ));
         }
         for (&atom, &(repr, mark)) in atoms.iter().zip(rets) {
-            if !self.cx.passes(atom, repr) {
-                return Err(format!(
-                    "{} is returned from a function that returns {}",
-                    self.cx.typed_atom_text(atom),
-                    self.cx.repr_text(repr)
-                ));
-            }
-            if !self.cx.mark_passes(atom, mark) {
-                return Err(format!(
-                    "{} is returned from a function that returns {}",
-                    self.cx.marked_atom_text(atom),
-                    mark.name()
-                ));
-            }
+            self.cx.check_returned(atom, repr, mark)?;
         }
         Ok(())
     }
@@ -1101,41 +1028,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `jump` の実引数は、行き先の引数と Repr が互換で (R7)、印も互換である (V2)。
-    fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
-        let expected = self.function.repr(param);
-        if self.cx.passes(arg, expected) {
-            let mark = self.function.mark(param);
-            if self.cx.mark_passes(arg, mark) {
-                return Ok(());
-            }
-            return Err(format!(
-                "a jump to b{} passes {} to `{}` ({})",
-                target.0,
-                self.cx.marked_atom_text(arg),
-                self.cx.name(param),
-                mark.name()
-            ));
-        }
-        Err(match arg {
-            Atom::Var(var) => format!(
-                "a jump to b{} passes `{}` ({}) to `{}` ({})",
-                target.0,
-                self.cx.name(var),
-                self.cx.repr_text(self.function.repr(var)),
-                self.cx.name(param),
-                self.cx.repr_text(expected)
-            ),
-            _ => format!(
-                "a jump to b{} passes {} to `{}` ({})",
-                target.0,
-                self.cx.atom_text(arg),
-                self.cx.name(param),
-                self.cx.repr_text(expected)
-            ),
-        })
-    }
-
     /// 変数を多くとも1回定義し (R5)、RC の対象なら所有を1つ持つ。token は token を定義する `release` でだけ定義する
     /// (`define_token`)。
     fn define(&mut self, owned: &mut Owned, var: VarId, site: Site) -> Result<(), String> {
@@ -1145,34 +1037,9 @@ impl<'a> Checker<'a> {
                 self.cx.name(var)
             ));
         }
-        self.define_once(var, site)?;
+        self.cx.define(var, site)?;
         if self.level == Level::Ownership && self.function.repr(var).is_rc() {
             owned.insert(var, 1);
-        }
-        Ok(())
-    }
-
-    /// 変数を多くとも1回定義する (R5)。
-    fn define_once(&mut self, var: VarId, site: Site) -> Result<(), String> {
-        let slot = &mut self.defs[var.0 as usize];
-        if slot.is_some() {
-            return Err(format!("`{}` is defined twice", self.cx.name(var)));
-        }
-        *slot = Some(site);
-        Ok(())
-    }
-
-    /// 定義の位置が今の位置を支配する (R6)。
-    fn visible(&self, var: VarId) -> Result<(), String> {
-        let dominated = self.defs[var.0 as usize].is_some_and(|site| {
-            if site.block == self.at.block {
-                site.index < self.at.index
-            } else {
-                self.dominators.dominates(site.block, self.at.block)
-            }
-        });
-        if !dominated {
-            return Err(format!("`{}` is used outside its scope", self.cx.name(var)));
         }
         Ok(())
     }
@@ -1185,7 +1052,7 @@ impl<'a> Checker<'a> {
         var: VarId,
         what: &str,
     ) -> Result<&'s mut u32, String> {
-        self.visible(var)?;
+        self.cx.visible(var)?;
         if !self.function.repr(var).is_rc() {
             return Err(format!(
                 "`{}` is {what} but is not reference counted",
@@ -1209,7 +1076,7 @@ impl<'a> Checker<'a> {
     /// 有効でなければならない。つまり、自分か持ち主が所有を持つ。所有を持つ経路は実際の参照を持つので物体は生きていて、
     /// data は書き換わらないので、そこからたどれる物体もすべて生きている (docs/spec/lir.md の「verifier」)。
     fn read(&self, owned: &Owned, var: VarId, what: &str) -> Result<(), String> {
-        self.visible(var)?;
+        self.cx.visible(var)?;
         if self.level != Level::Ownership
             || !self.function.repr(var).is_rc()
             || owned.contains_key(&var)
@@ -1310,7 +1177,7 @@ impl<'a> Checker<'a> {
         }
         for (slot, field) in fields.iter().enumerate() {
             let Some(field) = *field else { continue };
-            self.visible(field)?;
+            self.cx.visible(field)?;
             if !self.function.repr(field).is_rc() {
                 return Err(format!(
                     "`{}` is kept but is not reference counted",
@@ -1412,18 +1279,13 @@ impl<'a> Checker<'a> {
     fn consume(&self, owned: &mut Owned, atom: Atom) -> Result<(), String> {
         let var = match atom {
             Atom::Var(var) => var,
-            Atom::Fn(target) if target.0 as usize >= self.program.functions.len() => {
-                return Err(format!(
-                    "a function value refers to the unknown function #{}",
-                    target.0
-                ));
-            }
-            Atom::Fn(_) | Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => {
+            Atom::Fn(target) => return self.cx.function_value(target),
+            Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => {
                 return Ok(());
             }
         };
         if self.level != Level::Ownership || !self.function.repr(var).is_rc() {
-            return self.visible(var);
+            return self.cx.visible(var);
         }
         self.give_up(owned, var, "used")
     }
@@ -1448,21 +1310,8 @@ impl<'a> Checker<'a> {
                 return self.check_call(owned, call, Receiver::Bound(var));
             }
             Rhs::MakeClosure(index, args) => {
+                self.cx.closure_arity(*index, args.len())?;
                 let target = self.function_at(*index)?;
-                if args.is_empty() {
-                    return Err(format!(
-                        "a closure of `{0}` has no arguments; use `&{0}`",
-                        target.name
-                    ));
-                }
-                let params = target.params().len();
-                if args.len() >= params {
-                    return Err(format!(
-                        "a closure of `{}` has {} arguments, but it must have fewer than {params}",
-                        target.name,
-                        args.len()
-                    ));
-                }
                 if self.cx.boundaries {
                     for (index, (&arg, &param)) in args.iter().zip(target.params()).enumerate() {
                         let expected = target.repr(param);
@@ -1507,13 +1356,7 @@ impl<'a> Checker<'a> {
                 self.read_borrowed(owned, args, prim.row().borrowed, &lent)?;
                 self.lent_apart_from_consumed(owned, args, prim.row().borrowed, &lent)?;
             }
-            Rhs::ConstString(index) => {
-                if *index as usize >= self.program.strings.len() {
-                    return Err(format!(
-                        "a constant refers to string {index}, which does not exist"
-                    ));
-                }
-            }
+            Rhs::ConstString(index) => self.cx.const_string(*index)?,
             Rhs::Con { ctor, args, reuse } => {
                 self.cx.check_con(var, *ctor, args)?;
                 if let Some(reuse) = reuse {
@@ -1612,22 +1455,8 @@ impl<'a> Checker<'a> {
         }
         let result = match call {
             Call::Direct(target, args) => {
-                if let Some(clause) = self.cx.clause_of(*target) {
-                    return Err(format!(
-                        "`{}` is a clause of `{clause}`, but it is called directly",
-                        self.program.functions[target.0 as usize].name
-                    ));
-                }
-                let target = self.function_at(*target)?;
-                let params = target.params().len();
-                if args.len() != params {
-                    return Err(format!(
-                        "a direct call to `{}` passes {} arguments, but it takes {params}",
-                        target.name,
-                        args.len()
-                    ));
-                }
-                Some(target.rets.clone())
+                self.cx.direct_call(*target, args.len())?;
+                Some(self.function_at(*target)?.rets.clone())
             }
             Call::Clause {
                 effect,
@@ -1679,7 +1508,7 @@ impl<'a> Checker<'a> {
     /// 呼び出しの直後にも所有していなければならない (docs/spec/lir.md の「着地の印」)。
     fn check_prompt(&self, owned: &Owned, call: &Call, marker: VarId) -> Result<(), String> {
         let what = self.call_text(call, false);
-        self.visible(marker)?;
+        self.cx.visible(marker)?;
         if self.function.repr(marker) != Repr::Obj {
             return Err(format!(
                 "`{}` is the prompt marker of {what}, but it is {}, not obj",
@@ -1706,12 +1535,12 @@ impl<'a> Checker<'a> {
     fn used_after(&self, var: VarId) -> bool {
         let function = self.function;
         let live_in = self.live_in.get_or_init(|| liveness::live_in(function));
-        let block = &function.blocks[self.at.block as usize];
+        let block = &function.blocks[self.cx.at.block as usize];
         let mut live = liveness::live_after_term(function, &block.term, live_in);
         block
             .term
             .for_each_atom(|atom| liveness::insert_var(&mut live, atom));
-        let first = (self.at.index + 1) as usize;
+        let first = (self.cx.at.index + 1) as usize;
         for stmt in block.stmts[first..].iter().rev() {
             liveness::step_back(stmt, &mut live);
         }

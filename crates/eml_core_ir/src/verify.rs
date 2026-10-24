@@ -19,16 +19,15 @@
 //! 前向きなので、ブロックに着いたときには入る辺がすべて出そろっている。支配木は辺1本につき深さの対数の手間で
 //! 育つ (docs/spec/core-ir.md の「verifier」)。
 
-use std::collections::HashMap;
-
 use crate::liveness;
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::check::{BlockShape, Context, Dominators, FnSummary, Tables, TermShape, shape};
+use eml_lir::check::{
+    BlockShape, Context, Dominators, FnSummary, Site, Tables, TermShape, shape, with_tables,
+};
 use eml_lir::syntax::{effect_text, operation_text, prim_text};
 use eml_lir::{
-    Atom, BlockId, CasePattern, EffectInfo, FnIdx, Layout, MaskItem, OpRet, Prim, Repr, VarId,
-    VerifyError, operation,
+    Atom, CasePattern, EffectInfo, MaskItem, OpRet, Prim, Repr, VarId, VerifyError, operation,
 };
 
 /// EP の後の IR を確かめる。変換の段と同じ形と範囲を確かめ、`handle`、`perform`、`resume`、`mask` が残っていない
@@ -51,24 +50,6 @@ enum Level {
 }
 
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
-    // 配置の Repr はコンストラクタをすべてたどって決まるので、命令ごとでなく表ごとに1回だけ求める
-    let layout_reprs: Vec<Repr> = program.layouts.iter().map(Layout::repr).collect();
-    let functions: Vec<FnSummary> = program
-        .functions
-        .iter()
-        .map(|function| FnSummary {
-            name: &function.name,
-            clause: function.clause,
-        })
-        .collect();
-    let tables = Tables {
-        layouts: &program.layouts,
-        layout_reprs: &layout_reprs,
-        structs: &program.structs,
-        effects: &program.effects,
-        strings: &program.strings,
-        functions: &functions,
-    };
     // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
     for function in &program.functions {
         clause_function(program, function, level)
@@ -78,15 +59,31 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                 message,
             })?;
     }
-    for function in &program.functions {
-        shape(&block_shapes(function))
-            .and_then(|dominators| Checker::new(program, tables, function, level, dominators).run())
-            .map_err(|message| VerifyError {
-                function: function.name.clone(),
-                message,
-            })?;
-    }
-    Ok(())
+    let summaries = program.functions.iter().map(|function| FnSummary {
+        name: &function.name,
+        clause: function.clause,
+        params: function.params().len(),
+    });
+    with_tables(
+        &program.layouts,
+        &program.structs,
+        &program.effects,
+        &program.strings,
+        summaries,
+        |tables| {
+            for function in &program.functions {
+                shape(&block_shapes(function))
+                    .and_then(|dominators| {
+                        Checker::new(program, tables, function, level, dominators).run()
+                    })
+                    .map_err(|message| VerifyError {
+                        function: function.name.clone(),
+                        message,
+                    })?;
+            }
+            Ok(())
+        },
+    )
 }
 
 /// EP より前に `clause` の印はない。印の関数の ABI は `eml_lir::check::clause_function` が確かめる。
@@ -134,22 +131,12 @@ fn block_shapes(function: &CoreFn) -> Vec<BlockShape> {
         .collect()
 }
 
-/// 定義と使用の位置。`index` はブロックの中の文の番号で、ブロックの引数と case のフィールドは -1、終端は文の数である。
-#[derive(Clone, Copy)]
-struct Site {
-    block: u32,
-    index: i64,
-}
-
 struct Checker<'a> {
     program: &'a Program,
     function: &'a CoreFn,
     level: Level,
-    dominators: Dominators,
     /// 命令の型に関わらない検査の状態。
     cx: Context<'a>,
-    defs: Vec<Option<Site>>,
-    at: Site,
     /// 着地の印の検査が使う入口の生存集合。印がなければ求めない。
     live_in: std::cell::OnceCell<Vec<Vec<VarId>>>,
 }
@@ -166,13 +153,7 @@ impl<'a> Checker<'a> {
             program,
             function,
             level,
-            dominators,
-            cx: Context::new(tables, &function.vars, false),
-            defs: vec![None; function.vars.len()],
-            at: Site {
-                block: 0,
-                index: -1,
-            },
+            cx: Context::new(tables, &function.vars, false, dominators),
             live_in: std::cell::OnceCell::new(),
         }
     }
@@ -182,82 +163,57 @@ impl<'a> Checker<'a> {
         self.clause_values()?;
         for (index, block) in function.blocks.iter().enumerate() {
             let index = index as u32;
-            self.at = Site {
-                block: index,
-                index: -1,
-            };
+            self.cx.at = Site::entry(index);
             for &param in &block.params {
-                self.define(param, self.at)?;
+                self.cx.define(param, self.cx.at)?;
             }
             self.check_block(index, block)?;
         }
         Ok(())
     }
 
-    /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
-    /// 関数は操作の ABI で呼ばれ、`apply` の一様な規約に合わないためである
-    /// (docs/spec/lir.md の「入口の関数の印」)。変数は1回だけ
-    /// 定義されるので (R5)、先に `closure` をすべて集めてから使いを見る。
+    /// `clause` の印の関数の値の使いを確かめる (`Context::clause_values`)。
     fn clause_values(&self) -> Result<(), String> {
         let blocks = &self.function.blocks;
-        let closures: HashMap<VarId, FnIdx> = blocks
+        let closures = blocks
             .iter()
             .flat_map(|block| &block.stmts)
             .filter_map(|stmt| match stmt {
                 Stmt::Let {
                     var,
                     rhs: Rhs::MakeClosure(target, _),
-                } if self.cx.clause_of(*target).is_some() => Some((*var, *target)),
+                } => Some((*var, *target)),
                 _ => None,
-            })
-            .collect();
-        let mut result = Ok(());
-        let mut check = |atom: Atom| {
-            let target = match atom {
-                Atom::Fn(target) => target,
-                Atom::Var(var) => match closures.get(&var) {
-                    Some(&target) => target,
-                    None => return,
-                },
-                Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => return,
-            };
-            if result.is_ok()
-                && let Some(clause) = self.cx.clause_of(target)
-            {
-                result = Err(format!(
-                    "`{}` is a clause of `{clause}`, but it is used as a function value",
-                    self.program.functions[target.0 as usize].name
-                ));
-            }
-        };
-        for block in blocks {
-            for stmt in &block.stmts {
-                match stmt {
-                    Stmt::Let {
-                        var: _,
-                        rhs: Rhs::Prim(Prim::EvSetClause { .. }, args),
-                    } => args
-                        .iter()
-                        .enumerate()
-                        .filter(|&(index, _)| index != 1)
-                        .for_each(|(_, &atom)| check(atom)),
-                    _ => stmt.for_each_atom(&mut check),
+            });
+        self.cx.clause_values(closures, |check| {
+            for block in blocks {
+                for stmt in &block.stmts {
+                    match stmt {
+                        Stmt::Let {
+                            var: _,
+                            rhs: Rhs::Prim(Prim::EvSetClause { .. }, args),
+                        } => args
+                            .iter()
+                            .enumerate()
+                            .filter(|&(index, _)| index != 1)
+                            .for_each(|(_, &atom)| check(atom)),
+                        _ => stmt.for_each_atom(&mut *check),
+                    }
                 }
+                block.term.for_each_atom(&mut *check);
             }
-            block.term.for_each_atom(&mut check);
-        }
-        result
+        })
     }
 
     fn check_block(&mut self, index: u32, block: &Block) -> Result<(), String> {
         for (at, stmt) in block.stmts.iter().enumerate() {
-            self.at = Site {
+            self.cx.at = Site {
                 block: index,
                 index: at as i64,
             };
             self.check_stmt(stmt)?;
         }
-        self.at = Site {
+        self.cx.at = Site {
             block: index,
             index: block.stmts.len() as i64,
         };
@@ -291,7 +247,7 @@ impl<'a> Checker<'a> {
                     | Rhs::Con { ctor: _, args: _ }
                     | Rhs::Drop(_) => {}
                 }
-                self.define(*var, self.at)
+                self.cx.define(*var, self.cx.at)
             }
             Stmt::Unpack {
                 value,
@@ -299,8 +255,8 @@ impl<'a> Checker<'a> {
                 fields,
             } => {
                 self.cx.check_unpack(*value, *ctor, fields)?;
-                self.visible(*value)?;
-                self.define_all(fields, self.at)
+                self.cx.visible(*value)?;
+                self.define_all(fields, self.cx.at)
             }
         }
     }
@@ -309,26 +265,13 @@ impl<'a> Checker<'a> {
         match term {
             Term::Return(atom) => {
                 self.use_atom(*atom)?;
-                if !self.cx.passes(*atom, self.function.ret) {
-                    return Err(format!(
-                        "{} is returned from a function that returns {}",
-                        self.cx.typed_atom_text(*atom),
-                        self.cx.repr_text(self.function.ret)
-                    ));
-                }
-                if !self.cx.mark_passes(*atom, self.function.ret_mark) {
-                    return Err(format!(
-                        "{} is returned from a function that returns {}",
-                        self.cx.marked_atom_text(*atom),
-                        self.function.ret_mark.name()
-                    ));
-                }
-                Ok(())
+                self.cx
+                    .check_returned(*atom, self.function.ret, self.function.ret_mark)
             }
             Term::Jump { target, args } => {
                 let params = &self.function.block(*target).params;
                 for (&arg, &param) in args.iter().zip(params) {
-                    self.check_passed(*target, arg, param)?;
+                    self.cx.check_passed(*target, arg, param)?;
                 }
                 for &arg in args {
                     self.use_atom(arg)?;
@@ -341,24 +284,11 @@ impl<'a> Checker<'a> {
                 cases,
                 default,
             } => {
-                if cases.is_empty() && default.is_none() {
-                    return Err("a switch has no targets".to_string());
-                }
-                self.cx.switch_scrutinee(*scrutinee)?;
-                self.cx.switch_cases(cases)?;
-                self.cx.literal_default(cases, *default)?;
-                if cases.iter().any(|case| !case.fields.is_empty()) {
-                    self.cx.fields_allowed(*scrutinee)?;
-                }
-                self.cx
-                    .switch_layout(*scrutinee, *layout, cases, *default)?;
+                self.cx.check_switch(*scrutinee, *layout, cases, *default)?;
                 self.use_atom(*scrutinee)?;
                 // 行き先は辺を1本しか持たないので (R3)、フィールドはここで行き先の先頭に定義する
                 for case in cases {
-                    let site = Site {
-                        block: case.target.0,
-                        index: -1,
-                    };
+                    let site = Site::entry(case.target.0);
                     // 配置とタグは `switch_layout` が確かめた
                     if let (Atom::Var(_), Some(_), CasePattern::Tag(_)) =
                         (*scrutinee, *layout, case.pattern)
@@ -371,70 +301,9 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `jump` の実引数は、行き先の引数と Repr が互換で (R7)、印も互換である (V2)。Core IR の段では、印を比べるのは
-    /// `jump` と `return` だけである (docs/spec/lir.md の「Kind の印の検査」)。
-    fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
-        let expected = self.function.repr(param);
-        if self.cx.passes(arg, expected) {
-            let mark = self.function.mark(param);
-            if self.cx.mark_passes(arg, mark) {
-                return Ok(());
-            }
-            return Err(format!(
-                "a jump to b{} passes {} to `{}` ({})",
-                target.0,
-                self.cx.marked_atom_text(arg),
-                self.cx.name(param),
-                mark.name()
-            ));
-        }
-        Err(match arg {
-            Atom::Var(var) => format!(
-                "a jump to b{} passes `{}` ({}) to `{}` ({})",
-                target.0,
-                self.cx.name(var),
-                self.cx.repr_text(self.function.repr(var)),
-                self.cx.name(param),
-                self.cx.repr_text(expected)
-            ),
-            _ => format!(
-                "a jump to b{} passes {} to `{}` ({})",
-                target.0,
-                self.cx.atom_text(arg),
-                self.cx.name(param),
-                self.cx.repr_text(expected)
-            ),
-        })
-    }
-
-    /// 変数を多くとも1回定義する (R5)。
-    fn define(&mut self, var: VarId, site: Site) -> Result<(), String> {
-        let slot = &mut self.defs[var.0 as usize];
-        if slot.is_some() {
-            return Err(format!("`{}` is defined twice", self.cx.name(var)));
-        }
-        *slot = Some(site);
-        Ok(())
-    }
-
     fn define_all(&mut self, vars: &[VarId], site: Site) -> Result<(), String> {
         for &var in vars {
-            self.define(var, site)?;
-        }
-        Ok(())
-    }
-
-    /// 定義の位置が今の位置を支配する (R6)。
-    fn visible(&self, var: VarId) -> Result<(), String> {
-        let dominated = self.defs[var.0 as usize].is_some_and(|site| {
-            if site.block == self.at.block {
-                site.index < self.at.index
-            } else {
-                self.dominators.dominates(site.block, self.at.block)
-            }
-        });
-        if !dominated {
-            return Err(format!("`{}` is used outside its scope", self.cx.name(var)));
+            self.cx.define(var, site)?;
         }
         Ok(())
     }
@@ -442,12 +311,9 @@ impl<'a> Checker<'a> {
     /// 値を使う。変数は見えていて、関数の値は表にある関数を指す。
     fn use_atom(&self, atom: Atom) -> Result<(), String> {
         match atom {
-            Atom::Var(var) => self.visible(var),
-            Atom::Fn(target) if target.0 as usize >= self.program.functions.len() => Err(format!(
-                "a function value refers to the unknown function #{}",
-                target.0
-            )),
-            Atom::Fn(_) | Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => Ok(()),
+            Atom::Var(var) => self.cx.visible(var),
+            Atom::Fn(target) => self.cx.function_value(target),
+            Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => Ok(()),
         }
     }
 
@@ -469,21 +335,8 @@ impl<'a> Checker<'a> {
                 return self.check_prompt(call);
             }
             Rhs::MakeClosure(index, args) => {
-                let target = self.function_at(*index)?;
-                if args.is_empty() {
-                    return Err(format!(
-                        "a closure of `{0}` has no arguments; use `&{0}`",
-                        target.name
-                    ));
-                }
-                let params = target.params().len();
-                if args.len() >= params {
-                    return Err(format!(
-                        "a closure of `{}` has {} arguments, but it must have fewer than {params}",
-                        target.name,
-                        args.len()
-                    ));
-                }
+                self.cx.closure_arity(*index, args.len())?;
+                let target = self.cx.function(*index)?;
                 self.cx.check_built(
                     var,
                     args,
@@ -507,13 +360,7 @@ impl<'a> Checker<'a> {
                 }
                 self.cx.check_prim(var, prim, args)?
             }
-            Rhs::ConstString(index) => {
-                if *index as usize >= self.program.strings.len() {
-                    return Err(format!(
-                        "a constant refers to string {index}, which does not exist"
-                    ));
-                }
-            }
+            Rhs::ConstString(index) => self.cx.const_string(*index)?,
             Rhs::Con { ctor, args } => self.cx.check_con(var, *ctor, args)?,
             Rhs::Drop(_) => {}
         }
@@ -536,23 +383,7 @@ impl<'a> Checker<'a> {
             }
         }
         match call {
-            Call::Direct(target, args) => {
-                if let Some(clause) = self.cx.clause_of(*target) {
-                    return Err(format!(
-                        "`{}` is a clause of `{clause}`, but it is called directly",
-                        self.program.functions[target.0 as usize].name
-                    ));
-                }
-                let target = self.function_at(*target)?;
-                let params = target.params().len();
-                if args.len() != params {
-                    return Err(format!(
-                        "a direct call to `{}` passes {} arguments, but it takes {params}",
-                        target.name,
-                        args.len()
-                    ));
-                }
-            }
+            Call::Direct(target, args) => self.cx.direct_call(*target, args.len())?,
             Call::Handle {
                 effect,
                 init: _,
@@ -572,7 +403,7 @@ impl<'a> Checker<'a> {
                 // 節の引数の数は範囲の外の `closure` からも数えられるので、先に節が見えることを確かめる
                 for &atom in clauses.iter().chain([ret]) {
                     if let Atom::Var(var) = atom {
-                        self.visible(var)?;
+                        self.cx.visible(var)?;
                     }
                 }
                 self.check_clause_arities(info, clauses, *ret)?;
@@ -649,9 +480,9 @@ impl<'a> Checker<'a> {
         if self.level == Level::Translated {
             return Err("a prompt marker appears before the evidence pass".to_string());
         }
-        self.visible(marker)?;
-        let block = &self.function.blocks[self.at.block as usize];
-        if tail_position_call(block).is_some_and(|(at, _)| at as i64 == self.at.index) {
+        self.cx.visible(marker)?;
+        let block = &self.function.blocks[self.cx.at.block as usize];
+        if tail_position_call(block).is_some_and(|(at, _)| at as i64 == self.cx.at.index) {
             return Err(format!(
                 "an apply with the prompt marker `{}` is in a tail position, which leaves no frame to land on",
                 self.cx.name(marker)
@@ -678,9 +509,9 @@ impl<'a> Checker<'a> {
     fn used_after(&self, var: VarId) -> bool {
         let function = self.function;
         let live_in = self.live_in.get_or_init(|| liveness::live_in(function));
-        let block = &function.blocks[self.at.block as usize];
+        let block = &function.blocks[self.cx.at.block as usize];
         let mut live = liveness::live_before_term(function, block, live_in);
-        let first = (self.at.index + 1) as usize;
+        let first = (self.cx.at.index + 1) as usize;
         for stmt in block.stmts[first..].iter().rev() {
             liveness::step_back(stmt, &mut live);
         }
@@ -797,19 +628,7 @@ impl<'a> Checker<'a> {
             Atom::Var(var) => self.cx.closure(var)?,
             Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => return None,
         };
-        let params = self
-            .program
-            .functions
-            .get(function.0 as usize)?
-            .params()
-            .len();
+        let params = self.cx.function(function).ok()?.params;
         Some(params.saturating_sub(passed))
-    }
-
-    fn function_at(&self, target: FnIdx) -> Result<&'a CoreFn, String> {
-        self.program
-            .functions
-            .get(target.0 as usize)
-            .ok_or_else(|| format!("a call refers to the unknown function #{}", target.0))
     }
 }
