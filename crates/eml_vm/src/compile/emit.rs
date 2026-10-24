@@ -964,7 +964,8 @@ pub(crate) fn effect_number(e: u32) -> u16 {
         .expect("effect numbers are below 65535 (docs/spec/object-model.md)")
 }
 
-/// 算術と比較の extern の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。
+/// 算術と比較の extern の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。ほかの extern は `None` で、
+/// `Op::Extern` になる。新しい extern は VM の `run_extern` の網羅の `match` が腕を求めるので、ここに列挙しない。
 fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
     match (ext, args) {
         (Extern::IntNeg, [a]) => return Some(Op::IntNeg { dst, a: *a }),
@@ -1003,148 +1004,7 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         Extern::FloatGe => Op::FloatGe { dst, a, b },
         Extern::BoolEq => Op::BoolEq { dst, a, b },
         Extern::BoolNe => Op::BoolNe { dst, a, b },
-        Extern::Println
-        | Extern::Open
-        | Extern::ReadAll
-        | Extern::ReadLine
-        | Extern::ReadChunk
-        | Extern::ReadAllBytes
-        | Extern::ReadLineBytes
-        | Extern::Close
-        | Extern::IntShow
-        | Extern::IntNeg
-        | Extern::CharToInt
-        | Extern::CharOfInt
-        | Extern::CharOfByte
-        | Extern::CharShow
-        | Extern::CharDisplay
-        | Extern::ByteNeg
-        | Extern::ByteAdd
-        | Extern::ByteSub
-        | Extern::ByteMul
-        | Extern::ByteDisplay
-        | Extern::ByteToInt
-        | Extern::ByteOfInt
-        | Extern::ByteWrap
-        | Extern::IntAnd
-        | Extern::IntOr
-        | Extern::IntXor
-        | Extern::IntComplement
-        | Extern::IntShl
-        | Extern::IntShr
-        | Extern::ByteAnd
-        | Extern::ByteOr
-        | Extern::ByteXor
-        | Extern::ByteComplement
-        | Extern::ByteShl
-        | Extern::ByteShr
-        | Extern::FloatNeg
-        | Extern::FloatCompare
-        | Extern::FloatShow
-        | Extern::FloatShowsMinus
-        | Extern::FloatOfInt
-        | Extern::FloatTruncate
-        | Extern::FloatFloor
-        | Extern::FloatCeil
-        | Extern::FloatRound
-        | Extern::FloatSqrt
-        | Extern::FloatAbs
-        | Extern::FloatSin
-        | Extern::FloatCos
-        | Extern::FloatExp
-        | Extern::FloatLog
-        | Extern::FloatPow
-        | Extern::FloatInfinity
-        | Extern::FloatNan
-        | Extern::FloatToFixed
-        | Extern::FloatCanParse
-        | Extern::FloatParseRaw
-        | Extern::StrConcat
-        | Extern::StrEq
-        | Extern::StrNe
-        | Extern::StrCompare
-        | Extern::StrShow
-        | Extern::Eprintln
-        | Extern::StrCharAt
-        | Extern::StrSlice
-        | Extern::StrPush
-        | Extern::StrFindFrom
-        | Extern::BytesEmpty
-        | Extern::BytesAppend
-        | Extern::BytesAppendSlice
-        | Extern::BytesSlice
-        | Extern::BytesTruncate
-        | Extern::BytesOfString
-        | Extern::BytesEq
-        | Extern::BytesNe
-        | Extern::BytesCompare
-        | Extern::BytesFindFrom
-        | Extern::BytesMake
-        | Extern::BytesSet
-        | Extern::BytesPush
-        | Extern::BytesFindByte
-        | Extern::StringDecode
-        | Extern::EnvArgCount
-        | Extern::EnvArg
-        | Extern::EnvHas
-        | Extern::EnvLookup
-        | Extern::StdinOpen
-        | Extern::StdinClose
-        | Extern::StdinReadChunk
-        | Extern::StdinReadAllBytes
-        | Extern::StdinReadAll
-        | Extern::StdinReadLineBytes
-        | Extern::StdinReadLine
-        | Extern::StdoutOpen
-        | Extern::StdoutClose
-        | Extern::StdoutWriteBytes
-        | Extern::StdoutWrite
-        | Extern::StdoutWriteLine
-        | Extern::StdoutFlush
-        | Extern::StderrOpen
-        | Extern::StderrClose
-        | Extern::StderrWriteBytes
-        | Extern::StderrWrite
-        | Extern::StderrWriteLine
-        | Extern::FileOutCreate
-        | Extern::FileOutAppend
-        | Extern::FileOutWrite
-        | Extern::FileOutWriteBytes
-        | Extern::FileOutWriteLine
-        | Extern::FileOutFlush
-        | Extern::FileOutCloseRaw
-        | Extern::ProcSpawn
-        | Extern::ProcWait
-        | Extern::ProcExited
-        | Extern::ProcCloseStdin
-        | Extern::ProcWrite
-        | Extern::ProcWriteBytes
-        | Extern::ProcWriteLine
-        | Extern::ProcReadChunk
-        | Extern::ProcReadAllBytes
-        | Extern::ProcReadAll
-        | Extern::ProcReadLineBytes
-        | Extern::ProcReadLine
-        | Extern::Exit
-        | Extern::Panic
-        | Extern::ArrayMake
-        | Extern::StrByteLength
-        | Extern::StrByteAt
-        | Extern::BytesLength
-        | Extern::BytesGet
-        | Extern::ShowBytesLength
-        | Extern::ShowBytesGet
-        | Extern::ArrayLength
-        | Extern::ArrayGet
-        | Extern::ArraySet
-        | Extern::ArrayThaw
-        | Extern::MutArrayMake
-        | Extern::MutArrayEmpty
-        | Extern::MutArrayLength
-        | Extern::MutArrayRead
-        | Extern::MutArrayWrite
-        | Extern::MutArrayFreeze
-        | Extern::CheckIndex => return None,
+        _ => return None,
     })
 }
 
