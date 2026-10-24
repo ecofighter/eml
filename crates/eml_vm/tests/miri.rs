@@ -14,17 +14,24 @@ fn run_both(text: &str) -> String {
 }
 
 fn run_program(program: &eml_lir::Program, sched: Sched) -> String {
+    run_counting_preemptions(program, sched).0
+}
+
+/// 両方のモードで流し、出力と、検査モードの横取りの数を返す。
+fn run_counting_preemptions(program: &eml_lir::Program, sched: Sched) -> (String, u64) {
     let mut outputs = Vec::new();
+    let mut preemptions = Vec::new();
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default()
             .with_debug_heap(debug_heap)
             .with_sched(sched);
-        execute(program, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        let finished = execute(program, &config, host).unwrap_or_else(|error| panic!("{error}"));
         outputs.push(out.contents());
+        preemptions.push(finished.preemptions);
     }
     assert_eq!(outputs[0], outputs[1]);
-    outputs.remove(0)
+    (outputs.remove(0), preemptions[0])
 }
 
 #[test]
@@ -472,5 +479,8 @@ fn spin_one(p.0: unit) -> tobj {
 ";
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(run_program(&program, Sched::Seeded(1)), "1\n6\n5\n5\n");
+    let (out, preemptions) = run_counting_preemptions(&program, Sched::Seeded(1));
+    assert_eq!(out, "1\n6\n5\n5\n");
+    // スケジュールがずれて横取りが起きなくなると、横取りの切り替えを Miri で通らなくなる
+    assert!(preemptions > 0, "Seeded(1) preempted {preemptions} times");
 }

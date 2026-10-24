@@ -1057,8 +1057,9 @@ fn child_done<R: Exec>(
     let rest = unsafe { ctx.switch_task(parent_evv, task.worker, task.depth_offset) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     if right_done {
-        complete_join::<R>(code, ctx, task, sched, j)?;
-        safepoint::<R>(code, ctx, task, sched)
+        let at = complete_join::<R>(code, ctx, task, sched, j)?;
+        let result = safepoint::<R>(code, ctx, task, sched);
+        at_par(code, task, sched, at, result)
     } else {
         switch_away::<R>(code, ctx, task, sched, Some(TaskState::Waiting(j)))
     }
@@ -1087,16 +1088,19 @@ fn switch_away<R: Exec>(
         .policy
         .pick(&mut sched.ready)
         .ok_or(VmFault::Internal("no task is ready to run"))?;
-    if resume::<R>(code, ctx, task, sched, next, keep)? {
-        safepoint::<R>(code, ctx, task, sched)?;
+    match resume::<R>(code, ctx, task, sched, next, keep)? {
+        Some(at) => {
+            let result = safepoint::<R>(code, ctx, task, sched);
+            at_par(code, task, sched, at, result)
+        }
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// タスク `next` に切り替える。`evv` と worker は `Ctx::switch_task` の1回で替え、RC に触れない
 /// (docs/spec/object-model.md の「タスクの切り替え」)。まだ始まっていない右の子は、その ID に替えた後で閉包を呼ぶ。
-/// 閉包を手放すと、子の ID の物体を解放しうるためである。待っていた親は join を完了し、そのときは `true` を返す。
-/// `par` の後の安全点は呼ぶ側が行う。ここで安全点に進むと、横取りが `preempt` と `resume` を Rust の再帰で重ねる
+/// 閉包を手放すと、子の ID の物体を解放しうるためである。待っていた親は join を完了し、そのときは `par` の命令の
+/// 位置を返す。`par` の後の安全点は呼ぶ側が行い、その誤りにもこの位置を付ける (`at_par`)。ここで安全点に進むと、横取りが `preempt` と `resume` を Rust の再帰で重ねる
 /// ためである (docs/spec/vm.md の「並列化への備え」)。
 fn resume<R: Exec>(
     code: &CodeBase<R::M>,
@@ -1105,7 +1109,7 @@ fn resume<R: Exec>(
     sched: &mut Scheduler<R::P>,
     next: TaskId,
     keep: Option<TaskState>,
-) -> Result<bool, VmFault> {
+) -> Result<Option<Pc>, VmFault> {
     let mut incoming = sched.tasks[next].take().ok_or(VmFault::Internal(
         "a task to resume is not in the scheduler",
     ))?;
@@ -1130,23 +1134,14 @@ fn resume<R: Exec>(
                 ret: CHILD_DONE,
                 dst: 0,
             };
-            match apply::apply::<R>(code, ctx, task, g, target) {
-                Ok(()) => Ok(false),
-                // 始めたばかりの子はまだ命令を実行していないので、誤りには fork した `par` の命令の位置を付ける。
-                // 横取りされたタスクの位置を付けると、文言がスケジュールで変わる
-                Err(fault) if sched.failed.is_none() => {
-                    let at = sched.join(task.boundaries[0]).ret - 1;
-                    sched.failed = Some(code.error(Failure { fault, pc: at }, task));
-                    Err(CHILD_FAILED)
-                }
-                Err(fault) => Err(fault),
-            }
+            // 始めたばかりの子はまだ命令を実行していないので、誤りには fork した `par` の命令の位置を付ける。
+            // 横取りされたタスクの位置を付けると、文言がスケジュールで変わる
+            let at = sched.join(task.boundaries[0]).ret - 1;
+            let result = apply::apply::<R>(code, ctx, task, g, target);
+            at_par(code, task, sched, at, result).map(|()| None)
         }
-        TaskState::Waiting(j) => {
-            complete_join::<R>(code, ctx, task, sched, j)?;
-            Ok(true)
-        }
-        TaskState::Ready | TaskState::Running => Ok(false),
+        TaskState::Waiting(j) => complete_join::<R>(code, ctx, task, sched, j).map(Some),
+        TaskState::Ready | TaskState::Running => Ok(None),
     }
 }
 
@@ -1170,10 +1165,11 @@ fn preempt<R: Exec>(
         let current = sched.current;
         sched.policy.wake(&mut sched.ready, current);
         sched.count_preemption();
-        if !resume::<R>(code, ctx, task, sched, next, Some(TaskState::Ready))? {
+        let Some(at) = resume::<R>(code, ctx, task, sched, next, Some(TaskState::Ready))? else {
             return Ok(());
-        }
-        ctx.poll(task.stack_depth())?;
+        };
+        let polled = ctx.poll(task.stack_depth()).map_err(VmFault::from);
+        at_par(code, task, sched, at, polled)?;
         if !(sched.policy.tick() && ctx.yielding() == 0) {
             return Ok(());
         }
@@ -1181,17 +1177,31 @@ fn preempt<R: Exec>(
 }
 
 /// 両方の子が終わった join を、親の文脈と ID で完了する。誤りには `par` の命令の位置を付けるので、どのスケジュールで
-/// 親が join に着いても同じ文言になる。`par` の後の安全点は呼ぶ側が行う。
+/// 親が join に着いても同じ文言になる。`par` の後の安全点は呼ぶ側が行うので、`par` の命令の位置を返す。
 fn complete_join<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     j: JoinId,
-) -> Result<(), VmFault> {
+) -> Result<Pc, VmFault> {
     let join = sched.take_join(j);
     let at = join.ret - 1;
-    match join_outcomes::<R>(code, ctx, task, sched, join) {
+    let result = join_outcomes::<R>(code, ctx, task, sched, join);
+    at_par(code, task, sched, at, result).map(|()| at)
+}
+
+/// join の完了、その後の安全点、右の子の始まりで起きた誤りに、`par` の命令 `at` の関数と位置を付ける。どれも
+/// 切り替えの後で起きるので、`run` が持つ命令の位置は別のタスクのものでありうる。`par` の位置を付ければ、どの
+/// スケジュールでも同じ文言になる (docs/spec/vm.md の「子の終わりと join」)。すでに記録した誤りはそのまま渡す。
+fn at_par<M: Mode, P: Policy>(
+    code: &CodeBase<M>,
+    task: &Task,
+    sched: &mut Scheduler<P>,
+    at: Pc,
+    result: Result<(), VmFault>,
+) -> Result<(), VmFault> {
+    match result {
         Err(fault) if sched.failed.is_none() => {
             sched.failed = Some(code.error(Failure { fault, pc: at }, task));
             Err(CHILD_FAILED)
