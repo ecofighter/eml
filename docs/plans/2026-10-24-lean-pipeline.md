@@ -20,7 +20,7 @@
 
 - 含むもの: 3章の作業 A から E
 - 含まないもの
-  - `eml_rt`。Verus の検証と Miri の門があり、この段の作業の環境では Verus を流せないためである。`eml_vm` が `eml_rt` の物体の形の知識を写している所 (クロージャの語の配置、数の語の規則) は、`eml_rt` に口を足す別の段に回す
+  - `eml_rt`。Verus の検証と Miri の門があり、この段の作業の環境では Verus を流せないためである。`eml_vm` が `eml_rt` のヘッダの規則を写している数の語 (`count_word`) は、`eml_rt` に口を足す別の段に回し、roadmap の「その後の項目」に書く。クロージャの語の配置は LIR の情報で決まるので、この段で `eml_lir` に置く (D-7)
   - IR の出力を変える最適化と、バイトコードの形を変える変更 (`switch_int` の二分探索など)
   - salsa への載せ替えと、REPL の入力を検査し直す費用 (セッションのモデルが決めている)
   - 新しい外部 crate (FxHash など)
@@ -44,13 +44,13 @@
 
 ### B. `eml_types`
 
-- B-1 Tarjan の強連結成分の3つの写し (`scc.rs`、`kind/solve.rs`、`uniform.rs`) を、成分の中の順を保つ1つの関数にする
+- B-1 Tarjan の強連結成分の3つの写し (`scc.rs`、`kind/solve.rs`、`uniform.rs`) を、成分の中の順を保つ1つの関数にする。この関数は `eml_hir` に依存しない場所に置く。verification.md が `kind/` を葉の crate に移す方針で、強連結成分もそれと一緒に移るためである
 - B-2 `check_body` と `check_input` の `BodyCheck` の組み立てと後始末を1つにする
 - B-3 `check_module` と `typed_program` の余分な集合と複写 (`checked`、`Shape` の複写) を除く
 - B-4 `Own` と `OwnVars` を1つにする
 - B-5 `data_kinds` の不動点を1回の検査で1回だけ求める
 - B-6 持ち越しのパスで、呼び出しごとに1回で済む row の展開を、生きている値ごとに繰り返さない
-- B-7 `Provenance` の由来を `Arc` で共有し、制約ごとの深い複写をやめる
+- B-7 `Provenance` の由来を `Arc` で共有し、制約ごとの深い複写をやめる。B-4、B-8 と合わせて、解く部分のデータが宣言と由来を番号で持つ形に寄せられる所は寄せる
 - B-8 Kind の解の線形の探索 (`bound_sources`、`own_bounds`) を索引で引く
 - B-9 単一化と `resolve_row` の余分な複写を減らす
 - B-10 `TypeStore` の型を1回だけ持ち、1回だけハッシュする。型ごとの印を1つの並びにまとめる
@@ -74,13 +74,13 @@
 
 ### D. `eml_lir` (C の部品を除く)、`eml_vm`、`eml_extern`
 
-- D-1 巻き戻しの表を、`CodeBase::load` で新しく足す関数についてだけ作る。debug ビルドでは今までどおり全関数を確かめる
+- D-1 巻き戻しの表を、`CodeBase::load` で新しく足す関数についてだけ作る。`may_abort` はプログラム全体で求め、地点は関数ごとに求める口を `eml_lir::unwind` に置く。debug ビルドでは今までどおり全関数を確かめる
 - D-2 `CodeBase`、コード生成の `Out`、逆アセンブラの `View` が重ねて持つ5つの表を1つの構造体にする
-- D-3 extern の表 (`Extern`、`Extern::ALL`、`row`) を1つの並びから生成し、`row` が静的な行を返す
+- D-3 extern の表 (`Extern`、`Extern::ALL`、`row`) を1つの並びから生成し、`row` が静的な行を返す。生成は行ごとにマクロを呼び返す形にし、native.md の「extern の入口」の列 (`faults`、記号の名前) を後で同じ並びに足せるようにする。`ExternType` と `ExternEffect` も同じ形にする
 - D-4 `emit::arithmetic` の算術でない extern の列挙を既定の腕にする
 - D-5 VM のフレームの出入りとスクラッチの写しの重なりを補助にまとめる。`apply_call` と `clause_call` を1つにする
 - D-6 `run_entry` の実行時エラーの組み立ての重なりを除き、`CodeBase::function_name` を消す
-- D-7 コード生成のオペランドの組み立ての重なり (`field_operands`、数の語、スロットの並び) を補助にする
+- D-7 コード生成のオペランドの組み立ての重なり (`field_operands`、数の語、スロットの並び) を補助にする。クロージャの物体の形を `eml_lir` の1つの関数で決め、コード生成と `apply.rs` の2か所がそれを使う
 - D-8 `eml_lir` の重なった補助 (`is_uniform`、`uniform_beyond`、`Stmt` の可変の visitor、`Atom::var`) を1つにする
 - D-9 `Structs::leaves` を登録のときに求めて借りて返す
 - D-10 `pipeline.rs` のパスの列を表にする
@@ -117,4 +117,8 @@
 ## 6. 閉じる作業
 
 - roadmap の「進め方」の手順に従う。`implementation/architecture.md` の各 crate の内部の記述を、改名と移動に合わせて直す。`status.md` の範囲は変わらない
+- `docs/future/` を次のように直す
+  - native.md の「IR の層」の重なりの一覧と、キャッシュの鍵を、`eml_lir::Tables` と共有した部品に合わせて書き直す。「呼び出し規約と入口」に、捕まえた値を `eml_lir` のクロージャの形で読むことを書く。巻き戻しの地点の出どころを `eml_lir::unwind` (地点は関数ごと、`may_abort` はプログラム全体) と書く
+  - verification.md の Kind 推論の「できる理由」と「進め方」を、B の結果 (強連結成分の置き場所、解く部分が持つデータ) に合わせて直す
+  - roadmap の「その後の項目」の「処理系」に、数の語の口を `eml_rt` に足す項目を、後に回した理由と見直す条件を添えて足す
 - 計測は、macOS の環境で `Measure lean-pipeline` として後で行う
