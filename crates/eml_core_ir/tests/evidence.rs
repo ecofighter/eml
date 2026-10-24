@@ -1390,10 +1390,10 @@ main () =
 }
 
 /// `mask` のある `par` は、ほかの呼び出しと同じく `evv` から項目が飛ばす evidence を除いてから呼び、戻ったら元の
-/// `evv` に戻す。`par` は yield の地点でないが、`yields` の関数では `mask` が地点にする
-/// (docs/spec/core-ir.md の「`mask` の包み」)。
+/// `evv` に戻す。子は親へ yield しないので、`yields` の関数の中でも yield の地点にしない
+/// (docs/spec/core-ir.md の「yield の地点」と「`mask` の包み」)。
 #[test]
-fn a_masked_par_is_wrapped_like_any_masked_call() {
+fn a_masked_par_is_wrapped_but_is_not_a_yield_point() {
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 effect Ask { ask(unit) -> int }
@@ -1413,16 +1413,6 @@ fn g(a.0: tobj, b.1: tobj) -> obj {
       let w.4: tobj = prim evv_mask[Ask](w.3)
       let u.5: unit = prim evv_set(w.4)
       let t.2: obj = par (,) #0(a.0, b.1)
-      let y.7: int = prim yielding()
-      switch y.7 { 0 -> b2, _ -> b1 }
-    b1:
-      let k.8: tobj poly = prim yield_cont_take()
-      let k.9: tobj poly = closure \"mask$[Ask]\"(k.8)
-      let k.10: tobj poly = closure compose$(k.9, &f$k0)
-      let u.11: unit = prim yield_cont_set(k.10)
-      let d.12: obj poly = prim dummy()
-      return d.12
-    b2:
       let u.6: unit = prim evv_set(w.3)
       return t.2
     }

@@ -229,7 +229,7 @@ impl Parser<'_> {
                 .iter()
                 .any(|w| self.reader.at_word(w))
         {
-            return Err(error(line, "a mask is only on call, apply and resume"));
+            return Err(error(line, "a mask is only on call, apply, resume and par"));
         }
         Ok((mask, self.call(state)?))
     }

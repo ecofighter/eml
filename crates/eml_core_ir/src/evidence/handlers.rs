@@ -713,7 +713,8 @@ impl Out<'_> {
             vec![Atom::Var(outer)],
         );
         self.prim("u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(masked)]);
-        if yields {
+        // 子は親へ yield しないので、`par` は `mask` があっても地点にしない (docs/spec/core-ir.md の「yield の地点」)
+        if yields && !matches!(target, Call::Par { .. }) {
             let at = (block, self.stmts.len());
             annotations.masked.insert(at, mask);
             annotations.forced.insert(at);

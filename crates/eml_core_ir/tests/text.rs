@@ -301,19 +301,28 @@ fn a_mask_on_handle_perform_or_a_non_call_is_an_error() {
         "effect Ask { ask(tobj) -> tobj }\nfn f(b.0: tobj, a.1: tobj, r.2: tobj) -> int {\n  let t.3: int = mask [Ask] handle Ask((), b.0) { ask: a.1 } return r.2\n  return t.3\n}\n",
     );
     assert_eq!(error.line, 3);
-    assert_eq!(error.message, "a mask is only on call, apply and resume");
+    assert_eq!(
+        error.message,
+        "a mask is only on call, apply, resume and par"
+    );
 
     let error = parse_error(
         "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  let t.0: int = mask [Ask] perform Ask.ask(1)\n  return t.0\n}\n",
     );
     assert_eq!(error.line, 3);
-    assert_eq!(error.message, "a mask is only on call, apply and resume");
+    assert_eq!(
+        error.message,
+        "a mask is only on call, apply, resume and par"
+    );
 
     let error = parse_error(
         "effect Ask { ask(tobj) -> tobj }\nfn f() -> obj {\n  let s.0: obj = mask [Ask] const \"a\"\n  return s.0\n}\n",
     );
     assert_eq!(error.line, 3);
-    assert_eq!(error.message, "a mask is only on call, apply and resume");
+    assert_eq!(
+        error.message,
+        "a mask is only on call, apply, resume and par"
+    );
 }
 
 /// `pretty` は空の `mask` を書かないので、読み直した表示が元と変わる形は読まない。
@@ -442,7 +451,7 @@ fn a_clause_call_takes_no_mask() {
             "effect State { get(unit) -> tobj }\nfn f(c.0: tobj, e.1: obj) -> tobj {\n  let t.2: tobj = mask [State] clause State.get c.0(e.1, ())\n  return t.2\n}\n"
         )
         .to_string(),
-        "line 3: a mask is only on call, apply and resume"
+        "line 3: a mask is only on call, apply, resume and par"
     );
 }
 
