@@ -567,6 +567,11 @@ fn step<R: Exec>(
             let w = unsafe { ctx.root_get(root) }?;
             task.set(dst, w);
         }
+        Op::ChildAbort { .. } => {
+            return Err(VmFault::Internal(
+                "a child abort ran, but the VM does not run a par yet",
+            ));
+        }
         Op::RootSet { dst, at } => {
             let o = ops(at);
             unsafe { ctx.root_set(o[0], task.get(o[1] as Slot)) }?;

@@ -598,7 +598,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.apply_operands(call);
                 self.out.push(Op::Apply { dst, at });
             }
-            // translate も EP もまだ `par` と `child_abort` を作らないので、VM に届かない
+            // translate はまだ `par` を作らないので、VM に届かない
             Rhs::Call(Call::Par { .. }) => unreachable!("the VM does not run a par yet"),
             Rhs::Prim(prim, args) => {
                 let row = prim.row();
@@ -700,7 +700,13 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.out.operands([*root, u32::from(a[0])]);
                 Op::RootSet { dst, at }
             }
-            Prim::ChildAbort => unreachable!("the VM does not run a par yet"),
+            // `root_get` を含むプログラムも fork の関数を持ち、ロードはすべての関数を変換するので、`par` を走らせない
+            // プログラムでもここに届く (docs/spec/core-ir.md の「`par` の子の中断」)
+            Prim::ChildAbort => Op::ChildAbort {
+                ev: a[0],
+                f: a[1],
+                t: a[2],
+            },
         }
     }
 

@@ -3,6 +3,7 @@
 //! 関数は `helpers.rs`、handle、`perform`、`resume`、`mask` の変換は `handlers.rs`、yield の地点での分け方は
 //! `split.rs` にある。
 
+mod forks;
 mod handlers;
 mod helpers;
 mod split;
@@ -34,6 +35,7 @@ pub fn evidence(program: &mut Program) {
             split(program, function, &annotations, &mut helpers);
         }
     }
+    forks::forks(program);
 }
 
 /// EP が作る補助の関数。使うときに1つずつ作り、プログラムの末尾に足す

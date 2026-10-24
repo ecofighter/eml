@@ -762,7 +762,7 @@ struct Copies<'a> {
     pending: Vec<(FnIdx, FnIdx, Shape)>,
     /// エフェクトごとの、H に触れる関数 (`touch::touching`)。状態を渡す形の handler のエフェクトの分がある。
     touching: &'a HashMap<u32, Vec<bool>>,
-    /// 状態を渡す形の複製が使うタプルの配置 (`passing::tuple_layout`)。
+    /// 状態を渡す形の複製が使うタプルの配置 (`Program::tuple_layout`)。
     tuples: &'a Tuples,
     /// 作っている末尾の経路の形の複製の一族。
     family: Vec<FnIdx>,

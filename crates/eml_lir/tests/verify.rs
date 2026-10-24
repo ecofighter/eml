@@ -3685,3 +3685,72 @@ fn child_abort_takes_an_obj_evidence_a_function_and_a_value() {
         )
     );
 }
+
+/// `par` を走らせうるプログラムの、fork の関数を持つエフェクト `Fail` とその fork の関数。`main` の本体と、fork の
+/// 関数のうち書くものを選ぶ。`reperform$` を書かないとき、`fork$` は代わりに `main` を渡す。
+fn forking(main: &str, fork: bool, clause: bool, reperform: bool) -> String {
+    let mut text = format!(
+        "{PAIR}effect Fail {{ never fail(tobj poly) -> never }}\nfn main(a.0: tobj, b.1: tobj) -> obj {{\n{main}}}\n"
+    );
+    if fork {
+        let clause = if clause { "clause Fail.fail " } else { "" };
+        let target = if reperform {
+            "reperform$Fail.fail"
+        } else {
+            "main"
+        };
+        text.push_str(&format!(
+            "{clause}fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {{
+  let u.2: unit = prim child_abort(ev.0, &{target}, a.1)
+  decref ev.0
+  let d.3: obj poly = prim dummy()
+  return d.3
+}}
+"
+        ));
+    }
+    if reperform {
+        text.push_str(
+            "fn reperform$Fail.fail(t.0: tobj poly) -> tobj poly {
+  let ev.1: obj = prim ev_lookup[Fail]()
+  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
+  tail clause Fail.fail c.2(ev.1, t.0)
+}
+",
+        );
+    }
+    text
+}
+
+/// `par` か `root_get` を含むプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を
+/// 持つ `fork$` と、`reperform$` を持つ (docs/spec/lir.md の「verifier」)。どちらも含まないプログラムには求めない。
+#[test]
+fn a_program_that_may_run_par_has_every_fork_entry() {
+    const PAR: &str = "  let t.2: obj = par (,) #0(a.0, b.1)\n  return t.2\n";
+    const ROOT: &str = "  decref a.0\n  decref b.1\n  let r.2: tobj = prim root_get[0]()\n  decref r.2\n  let d.3: obj = prim dummy()\n  return d.3\n";
+    const NEITHER: &str =
+        "  decref a.0\n  decref b.1\n  let d.2: obj = prim dummy()\n  return d.2\n";
+    assert_eq!(check(&forking(PAR, true, true, true)), Ok(()));
+    assert_eq!(check(&forking(NEITHER, false, false, false)), Ok(()));
+    let missing = "`Fail.fail` has no fork entry, but the program may run par in `fork$Fail.fail`";
+    for main in [PAR, ROOT] {
+        for program in [
+            forking(main, false, false, true),
+            forking(main, false, false, false),
+        ] {
+            assert_eq!(check(&program), Err(missing.to_string()));
+            assert_eq!(check_lowered(&program), Err(missing.to_string()));
+        }
+    }
+    assert_eq!(
+        check(&forking(PAR, true, false, true)),
+        Err("the fork entry is not a clause of `Fail.fail` in `fork$Fail.fail`".to_string())
+    );
+    assert_eq!(
+        check(&forking(ROOT, true, true, false)),
+        Err(
+            "`Fail.fail` has no reperform entry, but the program may run par in `reperform$Fail.fail`"
+                .to_string()
+        )
+    );
+}

@@ -365,6 +365,7 @@ impl<'a> View<'a> {
             Op::YieldFinish { dst } => format!("yield_finish s{dst}"),
             Op::Dummy { dst } => format!("dummy s{dst}"),
             Op::RootGet { dst, root } => format!("root_get s{dst}, r{root}"),
+            Op::ChildAbort { ev, f, t } => format!("child_abort s{ev}, s{f}, s{t}"),
             Op::RootSet { dst, at } => {
                 let o = ops(at);
                 format!("root_set s{dst}, r{}, s{}", o[0], o[1])

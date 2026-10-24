@@ -106,6 +106,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     if level >= Level::Flattened {
         no_struct_layouts(program)?;
     }
+    forks(program)?;
     with_tables(program, |tables| {
         // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
         for function in &program.functions {
@@ -161,6 +162,52 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         }
         Ok(())
     })
+}
+
+/// `par` を走らせうるプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を持つ
+/// `fork$E.op` と `reperform$E.op` を持つ。VM は子の evidence をこの名前で作るためである
+/// (docs/spec/core-ir.md の「`par` の子の中断」)。関数の形は、ほかの関数と同じく本体の検査が確かめる。
+fn forks(program: &Program) -> Result<(), VerifyError> {
+    if !program.may_run_par() {
+        return Ok(());
+    }
+    let find = |name: &str| {
+        program
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+    };
+    for effect in crate::fork_effects(&program.effects) {
+        let info = &program.effects[effect as usize];
+        for op in 0..info.operations.len() as u32 {
+            let missing = |kind: &str, name: String| VerifyError {
+                function: name,
+                message: format!(
+                    "`{}` has no {kind} entry, but the program may run par",
+                    operation_text(&program.effects, effect, op)
+                ),
+            };
+            let fork = crate::fork_name(&program.effects, effect, op);
+            match find(&fork) {
+                None => return Err(missing("fork", fork)),
+                Some(function) if function.clause != Some((effect, op)) => {
+                    return Err(VerifyError {
+                        function: fork,
+                        message: format!(
+                            "the fork entry is not a clause of `{}`",
+                            operation_text(&program.effects, effect, op)
+                        ),
+                    });
+                }
+                Some(_) => {}
+            }
+            let reperform = crate::reperform_name(&program.effects, effect, op);
+            if find(&reperform).is_none() {
+                return Err(missing("reperform", reperform));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 一様な位置で値を受ける Repr (`obj`、`tobj`、`unit`) か。
