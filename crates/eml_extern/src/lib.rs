@@ -7,6 +7,38 @@
 //! 形である。どの行も、`std/` の extern の宣言か instance の `extern` のちょうど1つから指されることは、`eml_hir` の
 //! 結合テストが確かめる。行の Repr が std の宣言の型の Repr と同じであることは、`eml_core_ir` の結合テストが確かめる。
 
+/// 表を1つの並びから作る。行は宣言の順に並び、`ALL` の添字と `self as usize` と静的な行の表の添字が同じになる。
+/// 変種、`ALL`、行を別々に書くと、順と数を手で揃えることになるためである。行の式は定数として評価し、`row` は静的な
+/// 行を返す。`use` の木は行の式のためだけに、行の表の中で読む。
+macro_rules! table {
+    (
+        $(#[$attr:meta])*
+        pub enum $name:ident: $row:ty $(, use $uses:tt)? {
+            $($variant:ident => $value:expr,)*
+        }
+    ) => {
+        $(#[$attr])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum $name {
+            $($variant,)*
+        }
+
+        impl $name {
+            pub const ALL: &[$name] = &[$($name::$variant,)*];
+
+            pub const fn row(self) -> &'static $row {
+                $(use $uses;)?
+                const ROWS: &[$row] = &[$($value,)*];
+                &ROWS[self as usize]
+            }
+
+            pub fn from_name(name: &str) -> Option<$name> {
+                Self::ALL.iter().copied().find(|item| item.row().name == name)
+            }
+        }
+    };
+}
+
 /// 型の Kind。型引数のない extern の型は `Unr` か `Lin` で決まる。型引数を持つ型 (`TypeRow::params > 0`) の `Unr` は
 /// 「引数の Kind の join」を表し、`Lin` は引数によらず常に `Lin` である (docs/spec/types.md)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -132,23 +164,25 @@ pub enum OpRet {
     Never,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ExternType {
-    Int,
-    Float,
-    Char,
-    Byte,
-    String,
-    Bytes,
-    Unit,
-    FileIn,
-    FileOut,
-    Stdin,
-    Stdout,
-    Stderr,
-    Child,
-    Array,
-    MutArray,
+table! {
+    /// extern の型。
+    pub enum ExternType: TypeRow, use {Linearity::{Lin, Unr}} {
+        Int => type_row("Prelude.Int", Unr, Repr::Int),
+        Float => type_row("Prelude.Float", Unr, Repr::Float),
+        Char => type_row("Prelude.Char", Unr, Repr::Int),
+        Byte => type_row("Prelude.Byte", Unr, Repr::Int),
+        String => type_row("Prelude.String", Unr, Repr::Obj),
+        Bytes => type_row("Prelude.Bytes", Unr, Repr::Obj),
+        Unit => type_row("Prelude.Unit", Unr, Repr::Unit),
+        FileIn => type_row("Std.FileIn.FileIn", Lin, Repr::Obj),
+        FileOut => type_row("Std.FileOut.FileOut", Lin, Repr::Obj),
+        Stdin => type_row("Std.Stdin.Stdin", Lin, Repr::Obj),
+        Stdout => type_row("Std.Stdout.Stdout", Lin, Repr::Obj),
+        Stderr => type_row("Std.Stderr.Stderr", Lin, Repr::Obj),
+        Child => type_row("Std.Proc.Child", Lin, Repr::Obj),
+        Array => generic_type_row("Prelude.Array", Unr),
+        MutArray => generic_type_row("Prelude.MutArray", Lin),
+    }
 }
 
 pub struct TypeRow {
@@ -161,67 +195,37 @@ pub struct TypeRow {
     pub repr: Repr,
 }
 
-impl ExternType {
-    pub const ALL: &[ExternType] = &[
-        ExternType::Int,
-        ExternType::Float,
-        ExternType::Char,
-        ExternType::Byte,
-        ExternType::String,
-        ExternType::Bytes,
-        ExternType::Unit,
-        ExternType::FileIn,
-        ExternType::FileOut,
-        ExternType::Stdin,
-        ExternType::Stdout,
-        ExternType::Stderr,
-        ExternType::Child,
-        ExternType::Array,
-        ExternType::MutArray,
-    ];
-
-    pub fn row(self) -> TypeRow {
-        let row = |name, linearity, repr| TypeRow {
-            name,
-            linearity,
-            params: 0,
-            repr,
-        };
-        let generic = |name, linearity| TypeRow {
-            params: 1,
-            ..row(name, linearity, Repr::Obj)
-        };
-        match self {
-            ExternType::Int => row("Prelude.Int", Linearity::Unr, Repr::Int),
-            ExternType::Float => row("Prelude.Float", Linearity::Unr, Repr::Float),
-            ExternType::Char => row("Prelude.Char", Linearity::Unr, Repr::Int),
-            ExternType::Byte => row("Prelude.Byte", Linearity::Unr, Repr::Int),
-            ExternType::String => row("Prelude.String", Linearity::Unr, Repr::Obj),
-            ExternType::Bytes => row("Prelude.Bytes", Linearity::Unr, Repr::Obj),
-            ExternType::Unit => row("Prelude.Unit", Linearity::Unr, Repr::Unit),
-            ExternType::FileIn => row("Std.FileIn.FileIn", Linearity::Lin, Repr::Obj),
-            ExternType::FileOut => row("Std.FileOut.FileOut", Linearity::Lin, Repr::Obj),
-            ExternType::Stdin => row("Std.Stdin.Stdin", Linearity::Lin, Repr::Obj),
-            ExternType::Stdout => row("Std.Stdout.Stdout", Linearity::Lin, Repr::Obj),
-            ExternType::Stderr => row("Std.Stderr.Stderr", Linearity::Lin, Repr::Obj),
-            ExternType::Child => row("Std.Proc.Child", Linearity::Lin, Repr::Obj),
-            ExternType::Array => generic("Prelude.Array", Linearity::Unr),
-            ExternType::MutArray => generic("Prelude.MutArray", Linearity::Lin),
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<ExternType> {
-        Self::ALL.iter().copied().find(|ty| ty.row().name == name)
+const fn type_row(name: &'static str, linearity: Linearity, repr: Repr) -> TypeRow {
+    TypeRow {
+        name,
+        linearity,
+        params: 0,
+        repr,
     }
 }
 
-/// extern のエフェクト。`IO` は `Effectful` の extern の関数が起こし、`Panic` は `Panics` の行と `Std.Env.arg` が起こす。
-/// どちらも隠れた `never` の操作 (`io_failed`、`panicked`) を Prelude の宣言が持ち、Prelude の `try_io`、`try_panic`
-/// だけが handle する。表の行は名前と多重度を持つ (docs/spec/effects.md の「組み込みの `IO`」「組み込みの `Panic`」)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ExternEffect {
-    Io,
-    Panic,
+/// 型引数を1つ持つ型。値はいつも物体である。
+const fn generic_type_row(name: &'static str, linearity: Linearity) -> TypeRow {
+    TypeRow {
+        params: 1,
+        ..type_row(name, linearity, Repr::Obj)
+    }
+}
+
+table! {
+    /// extern のエフェクト。`IO` は `Effectful` の extern の関数が起こし、`Panic` は `Panics` の行と `Std.Env.arg` が起こす。
+    /// どちらも隠れた `never` の操作 (`io_failed`、`panicked`) を Prelude の宣言が持ち、Prelude の `try_io`、`try_panic`
+    /// だけが handle する。表の行は名前と多重度を持つ (docs/spec/effects.md の「組み込みの `IO`」「組み込みの `Panic`」)。
+    pub enum ExternEffect: EffectRow {
+        Io => EffectRow {
+            name: "Prelude.IO",
+            multiplicity: EffectMultiplicity::Once,
+        },
+        Panic => EffectRow {
+            name: "Prelude.Panic",
+            multiplicity: EffectMultiplicity::Never,
+        },
+    }
 }
 
 /// extern のエフェクトの多重度。`Never` は起こすと呼び出し元へ戻らず、外の世界に何も残さないエフェクト、`Once` は
@@ -237,212 +241,702 @@ pub struct EffectRow {
     pub multiplicity: EffectMultiplicity,
 }
 
-impl ExternEffect {
-    pub const ALL: &[ExternEffect] = &[ExternEffect::Io, ExternEffect::Panic];
-
-    pub fn row(self) -> EffectRow {
-        match self {
-            ExternEffect::Io => EffectRow {
-                name: "Prelude.IO",
-                multiplicity: EffectMultiplicity::Once,
+table! {
+    /// extern の関数。表の行は宣言の順に並び、`Extern::ALL` の添字は `*self as usize` と同じである。VM のコード生成は
+    /// これを行の番号に使う。
+    pub enum Extern: FunctionRow, use {Linearity::{Lin, Unr}, Repr::{Enum, Float, Int, Obj, TObj, Unit}} {
+        Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
+        Open => kinded(
+            "Std.FileIn.open",
+            &[Obj],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        ReadAll => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.FileIn.read_all",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
             },
-            ExternEffect::Panic => EffectRow {
-                name: "Prelude.Panic",
-                multiplicity: EffectMultiplicity::Never,
+        ),
+        ReadLine => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.FileIn.read_line_raw",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
             },
-        }
+        ),
+        ReadChunk => borrowing(
+            &[false, true],
+            FunctionRow {
+                with_arg: Some(1),
+                ..kinded(
+                    "Std.FileIn.read_chunk",
+                    &[Obj, Obj],
+                    &[Unr, Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ReadAllBytes => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.FileIn.read_all_bytes",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ReadLineBytes => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.FileIn.read_line_bytes_raw",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        Close => kinded(
+            "Std.FileIn.close",
+            &[Obj],
+            &[Lin],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        IntShow => row("Prelude.Show Int.show", &[Int], Obj, Purity::Pure),
+        IntNeg => row("Prelude.Num Int.negate", &[Int], Int, Purity::Panics),
+        IntAdd => row("Prelude.Num Int.+", &[Int, Int], Int, Purity::Panics),
+        IntSub => row("Prelude.Num Int.-", &[Int, Int], Int, Purity::Panics),
+        IntMul => row("Prelude.Num Int.*", &[Int, Int], Int, Purity::Panics),
+        IntDiv => row("Prelude.Div Int./", &[Int, Int], Int, Purity::Panics),
+        IntMod => row("Prelude.Div Int.%", &[Int, Int], Int, Purity::Panics),
+        IntEq => row("Prelude.Eq Int.==", &[Int, Int], Enum, Purity::Pure),
+        IntNe => row("Prelude.Eq Int.!=", &[Int, Int], Enum, Purity::Pure),
+        IntCompare => row("Prelude.Ord Int.compare", &[Int, Int], Enum, Purity::Pure),
+        IntLt => row("Prelude.Ord Int.<", &[Int, Int], Enum, Purity::Pure),
+        IntLe => row("Prelude.Ord Int.<=", &[Int, Int], Enum, Purity::Pure),
+        IntGt => row("Prelude.Ord Int.>", &[Int, Int], Enum, Purity::Pure),
+        IntGe => row("Prelude.Ord Int.>=", &[Int, Int], Enum, Purity::Pure),
+        CharEq => row("Prelude.Eq Char.==", &[Int, Int], Enum, Purity::Pure),
+        CharNe => row("Prelude.Eq Char.!=", &[Int, Int], Enum, Purity::Pure),
+        CharCompare => row("Prelude.Ord Char.compare", &[Int, Int], Enum, Purity::Pure),
+        CharLt => row("Prelude.Ord Char.<", &[Int, Int], Enum, Purity::Pure),
+        CharLe => row("Prelude.Ord Char.<=", &[Int, Int], Enum, Purity::Pure),
+        CharGt => row("Prelude.Ord Char.>", &[Int, Int], Enum, Purity::Pure),
+        CharGe => row("Prelude.Ord Char.>=", &[Int, Int], Enum, Purity::Pure),
+        CharToInt => row("Std.Char.to_int", &[Int], Int, Purity::Pure),
+        // スカラー値でない `Int` は `Panic` である
+        CharOfInt => row("Std.Char.of_int", &[Int], Int, Purity::Panics),
+        // Latin-1。0 から 255 はどれもスカラー値なので失敗しない
+        CharOfByte => row("Std.Char.of_byte", &[Int], Int, Purity::Pure),
+        CharShow => row("Prelude.Show Char.show", &[Int], Obj, Purity::Pure),
+        CharDisplay => row("Prelude.Show Char.display", &[Int], Obj, Purity::Pure),
+        ByteEq => row("Prelude.Eq Byte.==", &[Int, Int], Enum, Purity::Pure),
+        ByteNe => row("Prelude.Eq Byte.!=", &[Int, Int], Enum, Purity::Pure),
+        ByteCompare => row("Prelude.Ord Byte.compare", &[Int, Int], Enum, Purity::Pure),
+        ByteLt => row("Prelude.Ord Byte.<", &[Int, Int], Enum, Purity::Pure),
+        ByteLe => row("Prelude.Ord Byte.<=", &[Int, Int], Enum, Purity::Pure),
+        ByteGt => row("Prelude.Ord Byte.>", &[Int, Int], Enum, Purity::Pure),
+        ByteGe => row("Prelude.Ord Byte.>=", &[Int, Int], Enum, Purity::Pure),
+        ByteNeg => row("Prelude.Num Byte.negate", &[Int], Int, Purity::Panics),
+        ByteAdd => row("Prelude.Num Byte.+", &[Int, Int], Int, Purity::Panics),
+        ByteSub => row("Prelude.Num Byte.-", &[Int, Int], Int, Purity::Panics),
+        ByteMul => row("Prelude.Num Byte.*", &[Int, Int], Int, Purity::Panics),
+        ByteDiv => row("Prelude.Div Byte./", &[Int, Int], Int, Purity::Panics),
+        ByteMod => row("Prelude.Div Byte.%", &[Int, Int], Int, Purity::Panics),
+        ByteDisplay => row("Prelude.Show Byte.display", &[Int], Obj, Purity::Pure),
+        ByteToInt => row("Std.Byte.to_int", &[Int], Int, Purity::Pure),
+        // 0..=255 の外の `Int` は `Panic` である
+        ByteOfInt => row("Std.Byte.of_int", &[Int], Int, Purity::Panics),
+        ByteWrap => row("Std.Byte.wrap", &[Int], Int, Purity::Pure),
+        IntAnd => row("Prelude.Bits Int.&&&", &[Int, Int], Int, Purity::Pure),
+        IntOr => row("Prelude.Bits Int.|||", &[Int, Int], Int, Purity::Pure),
+        IntXor => row("Prelude.Bits Int.^^^", &[Int, Int], Int, Purity::Pure),
+        IntComplement => row("Prelude.Bits Int.complement", &[Int], Int, Purity::Pure),
+        IntShl => row("Prelude.Bits Int.<<<", &[Int, Int], Int, Purity::Pure),
+        IntShr => row("Prelude.Bits Int.>>>", &[Int, Int], Int, Purity::Pure),
+        ByteAnd => row("Prelude.Bits Byte.&&&", &[Int, Int], Int, Purity::Pure),
+        ByteOr => row("Prelude.Bits Byte.|||", &[Int, Int], Int, Purity::Pure),
+        ByteXor => row("Prelude.Bits Byte.^^^", &[Int, Int], Int, Purity::Pure),
+        ByteComplement => {
+            row("Prelude.Bits Byte.complement", &[Int], Int, Purity::Pure)
+        },
+        ByteShl => row("Prelude.Bits Byte.<<<", &[Int, Int], Int, Purity::Pure),
+        ByteShr => row("Prelude.Bits Byte.>>>", &[Int, Int], Int, Purity::Pure),
+        // `Float` の算術は `Panic` を起こさない。メソッドの型はクラスで1つなので `<Panic>` を持つが、行は `Pure` である
+        // (docs/spec/declarations.md の「Prelude のクラス」)
+        FloatNeg => row("Prelude.Num Float.negate", &[Float], Float, Purity::Pure),
+        FloatAdd => row("Prelude.Num Float.+", &[Float, Float], Float, Purity::Pure),
+        FloatSub => row("Prelude.Num Float.-", &[Float, Float], Float, Purity::Pure),
+        FloatMul => row("Prelude.Num Float.*", &[Float, Float], Float, Purity::Pure),
+        FloatDiv => row("Prelude.Div Float./", &[Float, Float], Float, Purity::Pure),
+        FloatMod => row("Prelude.Div Float.%", &[Float, Float], Float, Purity::Pure),
+        FloatEq => row("Prelude.Eq Float.==", &[Float, Float], Enum, Purity::Pure),
+        FloatNe => row("Prelude.Eq Float.!=", &[Float, Float], Enum, Purity::Pure),
+        FloatCompare => row(
+            "Prelude.Ord Float.compare",
+            &[Float, Float],
+            Enum,
+            Purity::Pure,
+        ),
+        FloatLt => row("Prelude.Ord Float.<", &[Float, Float], Enum, Purity::Pure),
+        FloatLe => row("Prelude.Ord Float.<=", &[Float, Float], Enum, Purity::Pure),
+        FloatGt => row("Prelude.Ord Float.>", &[Float, Float], Enum, Purity::Pure),
+        FloatGe => row("Prelude.Ord Float.>=", &[Float, Float], Enum, Purity::Pure),
+        FloatShow => row("Prelude.Show Float.show", &[Float], Obj, Purity::Pure),
+        FloatShowsMinus => row("Prelude.shows_minus", &[Float], Enum, Purity::Pure),
+        FloatOfInt => row("Std.Float.of_int", &[Int], Float, Purity::Pure),
+        // `Int` に収まらない値は `Panic` である
+        FloatTruncate => row("Std.Float.truncate", &[Float], Int, Purity::Panics),
+        FloatFloor => row("Std.Float.floor", &[Float], Int, Purity::Panics),
+        FloatCeil => row("Std.Float.ceil", &[Float], Int, Purity::Panics),
+        FloatRound => row("Std.Float.round", &[Float], Int, Purity::Panics),
+        FloatSqrt => row("Std.Float.sqrt", &[Float], Float, Purity::Pure),
+        FloatAbs => row("Std.Float.abs", &[Float], Float, Purity::Pure),
+        FloatSin => row("Std.Float.sin", &[Float], Float, Purity::Pure),
+        FloatCos => row("Std.Float.cos", &[Float], Float, Purity::Pure),
+        FloatExp => row("Std.Float.exp", &[Float], Float, Purity::Pure),
+        FloatLog => row("Std.Float.log", &[Float], Float, Purity::Pure),
+        FloatPow => row("Std.Float.pow", &[Float, Float], Float, Purity::Pure),
+        FloatInfinity => row("Std.Float.infinity_value", &[Unit], Float, Purity::Pure),
+        FloatNan => row("Std.Float.nan_value", &[Unit], Float, Purity::Pure),
+        FloatToFixed => row("Std.Float.to_fixed", &[Int, Float], Obj, Purity::Panics),
+        FloatCanParse => borrowing(
+            &[true],
+            row("Std.Float.can_parse", &[Obj], Enum, Purity::Pure),
+        ),
+        FloatParseRaw => borrowing(
+            &[true],
+            row("Std.Float.parse_raw", &[Obj], Float, Purity::Pure),
+        ),
+        StrConcat => row("Prelude.++", &[Obj, Obj], Obj, Purity::Pure),
+        StrEq => borrowing(
+            &[true, true],
+            row("Prelude.Eq String.==", &[Obj, Obj], Enum, Purity::Pure),
+        ),
+        StrNe => borrowing(
+            &[true, true],
+            row("Prelude.Eq String.!=", &[Obj, Obj], Enum, Purity::Pure),
+        ),
+        StrCompare => borrowing(
+            &[true, true],
+            row(
+                "Prelude.Ord String.compare",
+                &[Obj, Obj],
+                Enum,
+                Purity::Pure,
+            ),
+        ),
+        StrShow => borrowing(
+            &[true],
+            row("Prelude.Show String.show", &[Obj], Obj, Purity::Pure),
+        ),
+        BoolEq => row("Prelude.Eq Bool.==", &[Enum, Enum], Enum, Purity::Pure),
+        BoolNe => row("Prelude.Eq Bool.!=", &[Enum, Enum], Enum, Purity::Pure),
+        Eprintln => row("Prelude.eprintln", &[Obj], Unit, Purity::Effectful),
+        StrByteLength => borrowing(
+            &[true],
+            row("Std.String.byte_length", &[Obj], Int, Purity::Pure),
+        ),
+        StrByteAt => borrowing(
+            &[false, true],
+            row("Std.String.byte_at", &[Int, Obj], Int, Purity::Panics),
+        ),
+        StrCharAt => borrowing(
+            &[false, true],
+            row("Std.String.char_at", &[Int, Obj], Int, Purity::Panics),
+        ),
+        StrSlice => borrowing(
+            &[false, false, true],
+            row("Std.String.slice", &[Int, Int, Obj], Obj, Purity::Panics),
+        ),
+        StrPush => row("Std.String.push", &[Int, Obj], Obj, Purity::Pure),
+        StrFindFrom => borrowing(
+            &[true, false, true],
+            row(
+                "Std.String.find_from",
+                &[Obj, Int, Obj],
+                Int,
+                Purity::Panics,
+            ),
+        ),
+        BytesEmpty => row("Std.Bytes.empty", &[Unit], Obj, Purity::Pure),
+        BytesLength => {
+            borrowing(&[true], row("Std.Bytes.length", &[Obj], Int, Purity::Pure))
+        },
+        BytesAppend => row("Std.Bytes.append", &[Obj, Obj], Obj, Purity::Pure),
+        // `src` を借りて `dst` を消費する。同じ変数なら Perceus が `dup` を入れる
+        // (docs/spec/lir.md の「extern の借用」)
+        BytesAppendSlice => borrowing(
+            &[false, false, true, false],
+            row(
+                "Std.Bytes.append_slice",
+                &[Int, Int, Obj, Obj],
+                Obj,
+                Purity::Panics,
+            ),
+        ),
+        BytesSlice => borrowing(
+            &[false, false, true],
+            row("Std.Bytes.slice", &[Int, Int, Obj], Obj, Purity::Panics),
+        ),
+        BytesTruncate => row("Std.Bytes.truncate", &[Int, Obj], Obj, Purity::Panics),
+        BytesOfString => row("Std.Bytes.of_string", &[Obj], Obj, Purity::Pure),
+        BytesEq => borrowing(
+            &[true, true],
+            row("Prelude.Eq Bytes.==", &[Obj, Obj], Enum, Purity::Pure),
+        ),
+        BytesNe => borrowing(
+            &[true, true],
+            row("Prelude.Eq Bytes.!=", &[Obj, Obj], Enum, Purity::Pure),
+        ),
+        BytesCompare => borrowing(
+            &[true, true],
+            row("Prelude.Ord Bytes.compare", &[Obj, Obj], Enum, Purity::Pure),
+        ),
+        BytesFindFrom => borrowing(
+            &[true, false, true],
+            row("Std.Bytes.find_from", &[Obj, Int, Obj], Int, Purity::Panics),
+        ),
+        BytesMake => row("Std.Bytes.make", &[Int, Int], Obj, Purity::Panics),
+        BytesGet => borrowing(
+            &[false, true],
+            row("Std.Bytes.get", &[Int, Obj], Int, Purity::Panics),
+        ),
+        BytesSet => row("Std.Bytes.set", &[Int, Int, Obj], Obj, Purity::Panics),
+        BytesPush => row("Std.Bytes.push", &[Int, Obj], Obj, Purity::Pure),
+        BytesFindByte => borrowing(
+            &[false, false, true],
+            row(
+                "Std.Bytes.find_byte_from",
+                &[Int, Int, Obj],
+                Int,
+                Purity::Panics,
+            ),
+        ),
+        // `Show Bytes` は Prelude にあり、`Std.Bytes` を import できないので、読む行を Prelude にも持つ
+        // (docs/spec/stdlib.md の「`Bytes`」)
+        ShowBytesLength => borrowing(
+            &[true],
+            row("Prelude.bytes_length", &[Obj], Int, Purity::Pure),
+        ),
+        ShowBytesGet => borrowing(
+            &[false, true],
+            row("Prelude.bytes_get", &[Int, Obj], Int, Purity::Panics),
+        ),
+        StringDecode => row("Std.String.decode", &[Obj], Obj, Purity::Panics),
+        EnvArgCount => row("Std.Env.arg_count", &[Unit], Int, Purity::Effectful),
+        EnvArg => row("Std.Env.arg", &[Int], Obj, Purity::Effectful),
+        EnvHas => row("Std.Env.has", &[Obj], Enum, Purity::Effectful),
+        EnvLookup => row("Std.Env.lookup", &[Obj], Obj, Purity::Effectful),
+        StdinOpen => kinded(
+            "Std.Stdin.open",
+            &[Unit],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        StdinClose => kinded(
+            "Std.Stdin.close",
+            &[Obj],
+            &[Lin],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        StdinReadChunk => borrowing(
+            &[false, true],
+            FunctionRow {
+                with_arg: Some(1),
+                ..kinded(
+                    "Std.Stdin.read_chunk",
+                    &[Obj, Obj],
+                    &[Unr, Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        StdinReadAllBytes => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Stdin.read_all_bytes",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        StdinReadAll => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Stdin.read_all",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        StdinReadLineBytes => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Stdin.read_line_bytes_raw",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        StdinReadLine => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Stdin.read_line_raw",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        StdoutOpen => kinded(
+            "Std.Stdout.open",
+            &[Unit],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        StdoutClose => kinded(
+            "Std.Stdout.close",
+            &[Obj],
+            &[Lin],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        StdoutWriteBytes => writing("Std.Stdout.write_bytes"),
+        StdoutWrite => writing("Std.Stdout.write"),
+        StdoutWriteLine => writing("Std.Stdout.write_line"),
+        StdoutFlush => kinded(
+            "Std.Stdout.flush",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        StderrOpen => kinded(
+            "Std.Stderr.open",
+            &[Unit],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        StderrClose => kinded(
+            "Std.Stderr.close",
+            &[Obj],
+            &[Lin],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        StderrWriteBytes => writing("Std.Stderr.write_bytes"),
+        StderrWrite => writing("Std.Stderr.write"),
+        StderrWriteLine => writing("Std.Stderr.write_line"),
+        FileOutCreate => kinded(
+            "Std.FileOut.create",
+            &[Obj],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        FileOutAppend => kinded(
+            "Std.FileOut.append",
+            &[Obj],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        FileOutWrite => writing("Std.FileOut.write"),
+        FileOutWriteBytes => writing("Std.FileOut.write_bytes"),
+        FileOutWriteLine => writing("Std.FileOut.write_line"),
+        FileOutFlush => kinded(
+            "Std.FileOut.flush",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        FileOutCloseRaw => kinded(
+            "Std.FileOut.close_raw",
+            &[Obj],
+            &[Lin],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        // 引数は、プログラム、引数の列、環境の列、作業ディレクトリ、標準入力、標準出力、標準エラーの向きである
+        // (docs/spec/stdlib.md の「`Proc`」)
+        ProcSpawn => kinded(
+            "Std.Proc.spawn_raw",
+            &[Obj, Obj, Obj, Obj, Int, Int, Int],
+            &[Unr; 7],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        ProcWait => {
+            kinded("Std.Proc.wait", &[Obj], &[Lin], Int, Unr, Purity::Effectful)
+        },
+        // いつも `IO` の失敗で終わる。`exit` と同じく戻らない行である
+        ProcExited => FunctionRow {
+            name: "Std.Proc.exited",
+            params: &[Repr::Obj, Repr::Int],
+            ret: OpRet::Never,
+            param_kinds: &[Linearity::Unr, Linearity::Unr],
+            ret_kind: Linearity::Unr,
+            purity: Purity::Effectful,
+            borrowed: &[false, false],
+            with_arg: None,
+        },
+        ProcCloseStdin => kinded(
+            "Std.Proc.close_stdin",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        ProcWrite => writing("Std.Proc.write"),
+        ProcWriteBytes => writing("Std.Proc.write_bytes"),
+        ProcWriteLine => writing("Std.Proc.write_line"),
+        ProcReadChunk => borrowing(
+            &[false, true],
+            FunctionRow {
+                with_arg: Some(1),
+                ..kinded(
+                    "Std.Proc.read_chunk",
+                    &[Obj, Obj],
+                    &[Unr, Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ProcReadAllBytes => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Proc.read_all_bytes",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ProcReadAll => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Proc.read_all",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ProcReadLineBytes => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Proc.read_line_bytes_raw",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ProcReadLine => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Proc.read_line_raw",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        // 戻らない extern。VM が実行の底まで中断する (docs/spec/vm.md の「extern の中断」)
+        Exit => FunctionRow {
+            name: "Prelude.exit",
+            params: &[Repr::Int],
+            ret: OpRet::Never,
+            param_kinds: &[Linearity::Unr],
+            ret_kind: Linearity::Unr,
+            purity: Purity::Effectful,
+            borrowed: &[false],
+            with_arg: None,
+        },
+        // `exit` と同じく VM が自分で実行し、文字列を `Panic` の `panicked` の節に渡す
+        // (docs/spec/vm.md の「extern の中断」)
+        Panic => FunctionRow {
+            name: "Prelude.panic",
+            params: &[Repr::Obj],
+            ret: OpRet::Never,
+            param_kinds: &[Linearity::Unr],
+            ret_kind: Linearity::Unr,
+            purity: Purity::Panics,
+            borrowed: &[false],
+            with_arg: None,
+        },
+        // 配列の要素は型変数の位置なので `tobj` である。型変数は `Unr` に固定するので、`Array` の Kind も `Unr` に
+        // なる。`MutArray` はいつも `Lin` である (docs/spec/stdlib.md の「`Std.Array`」)
+        ArrayMake => row("Std.Array.make", &[Int, TObj], Obj, Purity::Panics),
+        ArrayLength => borrowing(
+            &[true],
+            kinded("Std.Array.length", &[Obj], &[Unr], Int, Unr, Purity::Pure),
+        ),
+        ArrayGet => borrowing(
+            &[true, false],
+            kinded(
+                "Std.Array.get",
+                &[Obj, Int],
+                &[Unr, Unr],
+                TObj,
+                Unr,
+                Purity::Panics,
+            ),
+        ),
+        ArraySet => row("Std.Array.set", &[Obj, Int, TObj], Obj, Purity::Panics),
+        ArrayThaw => kinded("Std.Array.thaw", &[Obj], &[Unr], Obj, Lin, Purity::Pure),
+        MutArrayMake => kinded(
+            "Std.MutArray.make",
+            &[Int, TObj],
+            &[Unr, Unr],
+            Obj,
+            Lin,
+            Purity::Panics,
+        ),
+        MutArrayEmpty => kinded(
+            "Std.MutArray.empty",
+            &[Unit],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Pure,
+        ),
+        MutArrayLength => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.MutArray.length",
+                    &[Obj],
+                    &[Lin],
+                    Int,
+                    Unr,
+                    Purity::Pure,
+                )
+            },
+        ),
+        MutArrayRead => borrowing(
+            &[true, false],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.MutArray.read",
+                    &[Obj, Int],
+                    &[Lin, Unr],
+                    TObj,
+                    Unr,
+                    Purity::Panics,
+                )
+            },
+        ),
+        MutArrayWrite => kinded(
+            "Std.MutArray.write",
+            &[Obj, Int, TObj],
+            &[Lin, Unr, Unr],
+            Obj,
+            Lin,
+            Purity::Panics,
+        ),
+        MutArrayFreeze => kinded(
+            "Std.MutArray.freeze",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Unr,
+            Purity::Pure,
+        ),
+        // `var` の配列の変数の添字を、使う所で確かめる。節の中で `Panic` を起こさないためである
+        // (docs/spec/core-ir.md の「`var` の変換」)
+        CheckIndex => row("Prelude.check_index", &[Int, Int], Unit, Purity::Panics),
     }
-
-    pub fn from_name(name: &str) -> Option<ExternEffect> {
-        Self::ALL.iter().copied().find(|e| e.row().name == name)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Extern {
-    Println,
-    Open,
-    ReadAll,
-    ReadLine,
-    ReadChunk,
-    ReadAllBytes,
-    ReadLineBytes,
-    Close,
-    IntShow,
-    IntNeg,
-    IntAdd,
-    IntSub,
-    IntMul,
-    IntDiv,
-    IntMod,
-    IntEq,
-    IntNe,
-    IntCompare,
-    IntLt,
-    IntLe,
-    IntGt,
-    IntGe,
-    CharEq,
-    CharNe,
-    CharCompare,
-    CharLt,
-    CharLe,
-    CharGt,
-    CharGe,
-    CharToInt,
-    CharOfInt,
-    CharOfByte,
-    CharShow,
-    CharDisplay,
-    ByteEq,
-    ByteNe,
-    ByteCompare,
-    ByteLt,
-    ByteLe,
-    ByteGt,
-    ByteGe,
-    ByteNeg,
-    ByteAdd,
-    ByteSub,
-    ByteMul,
-    ByteDiv,
-    ByteMod,
-    ByteDisplay,
-    ByteToInt,
-    ByteOfInt,
-    ByteWrap,
-    IntAnd,
-    IntOr,
-    IntXor,
-    IntComplement,
-    IntShl,
-    IntShr,
-    ByteAnd,
-    ByteOr,
-    ByteXor,
-    ByteComplement,
-    ByteShl,
-    ByteShr,
-    FloatNeg,
-    FloatAdd,
-    FloatSub,
-    FloatMul,
-    FloatDiv,
-    FloatMod,
-    FloatEq,
-    FloatNe,
-    FloatCompare,
-    FloatLt,
-    FloatLe,
-    FloatGt,
-    FloatGe,
-    FloatShow,
-    FloatShowsMinus,
-    FloatOfInt,
-    FloatTruncate,
-    FloatFloor,
-    FloatCeil,
-    FloatRound,
-    FloatSqrt,
-    FloatAbs,
-    FloatSin,
-    FloatCos,
-    FloatExp,
-    FloatLog,
-    FloatPow,
-    FloatInfinity,
-    FloatNan,
-    FloatToFixed,
-    FloatCanParse,
-    FloatParseRaw,
-    StrConcat,
-    StrEq,
-    StrNe,
-    StrCompare,
-    StrShow,
-    BoolEq,
-    BoolNe,
-    Eprintln,
-    StrByteLength,
-    StrByteAt,
-    StrCharAt,
-    StrSlice,
-    StrPush,
-    StrFindFrom,
-    BytesEmpty,
-    BytesLength,
-    BytesAppend,
-    BytesAppendSlice,
-    BytesSlice,
-    BytesTruncate,
-    BytesOfString,
-    BytesEq,
-    BytesNe,
-    BytesCompare,
-    BytesFindFrom,
-    BytesMake,
-    BytesGet,
-    BytesSet,
-    BytesPush,
-    BytesFindByte,
-    ShowBytesLength,
-    ShowBytesGet,
-    StringDecode,
-    EnvArgCount,
-    EnvArg,
-    EnvHas,
-    EnvLookup,
-    StdinOpen,
-    StdinClose,
-    StdinReadChunk,
-    StdinReadAllBytes,
-    StdinReadAll,
-    StdinReadLineBytes,
-    StdinReadLine,
-    StdoutOpen,
-    StdoutClose,
-    StdoutWriteBytes,
-    StdoutWrite,
-    StdoutWriteLine,
-    StdoutFlush,
-    StderrOpen,
-    StderrClose,
-    StderrWriteBytes,
-    StderrWrite,
-    StderrWriteLine,
-    FileOutCreate,
-    FileOutAppend,
-    FileOutWrite,
-    FileOutWriteBytes,
-    FileOutWriteLine,
-    FileOutFlush,
-    FileOutCloseRaw,
-    ProcSpawn,
-    ProcWait,
-    ProcExited,
-    ProcCloseStdin,
-    ProcWrite,
-    ProcWriteBytes,
-    ProcWriteLine,
-    ProcReadChunk,
-    ProcReadAllBytes,
-    ProcReadAll,
-    ProcReadLineBytes,
-    ProcReadLine,
-    Exit,
-    Panic,
-    ArrayMake,
-    ArrayLength,
-    ArrayGet,
-    ArraySet,
-    ArrayThaw,
-    MutArrayMake,
-    MutArrayEmpty,
-    MutArrayLength,
-    MutArrayRead,
-    MutArrayWrite,
-    MutArrayFreeze,
-    CheckIndex,
 }
 
 pub struct FunctionRow {
@@ -482,936 +976,67 @@ impl FunctionRow {
     }
 }
 
-impl Extern {
-    pub const ALL: &[Extern] = &[
-        Extern::Println,
-        Extern::Open,
-        Extern::ReadAll,
-        Extern::ReadLine,
-        Extern::ReadChunk,
-        Extern::ReadAllBytes,
-        Extern::ReadLineBytes,
-        Extern::Close,
-        Extern::IntShow,
-        Extern::IntNeg,
-        Extern::IntAdd,
-        Extern::IntSub,
-        Extern::IntMul,
-        Extern::IntDiv,
-        Extern::IntMod,
-        Extern::IntEq,
-        Extern::IntNe,
-        Extern::IntCompare,
-        Extern::IntLt,
-        Extern::IntLe,
-        Extern::IntGt,
-        Extern::IntGe,
-        Extern::CharEq,
-        Extern::CharNe,
-        Extern::CharCompare,
-        Extern::CharLt,
-        Extern::CharLe,
-        Extern::CharGt,
-        Extern::CharGe,
-        Extern::CharToInt,
-        Extern::CharOfInt,
-        Extern::CharOfByte,
-        Extern::CharShow,
-        Extern::CharDisplay,
-        Extern::ByteEq,
-        Extern::ByteNe,
-        Extern::ByteCompare,
-        Extern::ByteLt,
-        Extern::ByteLe,
-        Extern::ByteGt,
-        Extern::ByteGe,
-        Extern::ByteNeg,
-        Extern::ByteAdd,
-        Extern::ByteSub,
-        Extern::ByteMul,
-        Extern::ByteDiv,
-        Extern::ByteMod,
-        Extern::ByteDisplay,
-        Extern::ByteToInt,
-        Extern::ByteOfInt,
-        Extern::ByteWrap,
-        Extern::IntAnd,
-        Extern::IntOr,
-        Extern::IntXor,
-        Extern::IntComplement,
-        Extern::IntShl,
-        Extern::IntShr,
-        Extern::ByteAnd,
-        Extern::ByteOr,
-        Extern::ByteXor,
-        Extern::ByteComplement,
-        Extern::ByteShl,
-        Extern::ByteShr,
-        Extern::FloatNeg,
-        Extern::FloatAdd,
-        Extern::FloatSub,
-        Extern::FloatMul,
-        Extern::FloatDiv,
-        Extern::FloatMod,
-        Extern::FloatEq,
-        Extern::FloatNe,
-        Extern::FloatCompare,
-        Extern::FloatLt,
-        Extern::FloatLe,
-        Extern::FloatGt,
-        Extern::FloatGe,
-        Extern::FloatShow,
-        Extern::FloatShowsMinus,
-        Extern::FloatOfInt,
-        Extern::FloatTruncate,
-        Extern::FloatFloor,
-        Extern::FloatCeil,
-        Extern::FloatRound,
-        Extern::FloatSqrt,
-        Extern::FloatAbs,
-        Extern::FloatSin,
-        Extern::FloatCos,
-        Extern::FloatExp,
-        Extern::FloatLog,
-        Extern::FloatPow,
-        Extern::FloatInfinity,
-        Extern::FloatNan,
-        Extern::FloatToFixed,
-        Extern::FloatCanParse,
-        Extern::FloatParseRaw,
-        Extern::StrConcat,
-        Extern::StrEq,
-        Extern::StrNe,
-        Extern::StrCompare,
-        Extern::StrShow,
-        Extern::BoolEq,
-        Extern::BoolNe,
-        Extern::Eprintln,
-        Extern::StrByteLength,
-        Extern::StrByteAt,
-        Extern::StrCharAt,
-        Extern::StrSlice,
-        Extern::StrPush,
-        Extern::StrFindFrom,
-        Extern::BytesEmpty,
-        Extern::BytesLength,
-        Extern::BytesAppend,
-        Extern::BytesAppendSlice,
-        Extern::BytesSlice,
-        Extern::BytesTruncate,
-        Extern::BytesOfString,
-        Extern::BytesEq,
-        Extern::BytesNe,
-        Extern::BytesCompare,
-        Extern::BytesFindFrom,
-        Extern::BytesMake,
-        Extern::BytesGet,
-        Extern::BytesSet,
-        Extern::BytesPush,
-        Extern::BytesFindByte,
-        Extern::ShowBytesLength,
-        Extern::ShowBytesGet,
-        Extern::StringDecode,
-        Extern::EnvArgCount,
-        Extern::EnvArg,
-        Extern::EnvHas,
-        Extern::EnvLookup,
-        Extern::StdinOpen,
-        Extern::StdinClose,
-        Extern::StdinReadChunk,
-        Extern::StdinReadAllBytes,
-        Extern::StdinReadAll,
-        Extern::StdinReadLineBytes,
-        Extern::StdinReadLine,
-        Extern::StdoutOpen,
-        Extern::StdoutClose,
-        Extern::StdoutWriteBytes,
-        Extern::StdoutWrite,
-        Extern::StdoutWriteLine,
-        Extern::StdoutFlush,
-        Extern::StderrOpen,
-        Extern::StderrClose,
-        Extern::StderrWriteBytes,
-        Extern::StderrWrite,
-        Extern::StderrWriteLine,
-        Extern::FileOutCreate,
-        Extern::FileOutAppend,
-        Extern::FileOutWrite,
-        Extern::FileOutWriteBytes,
-        Extern::FileOutWriteLine,
-        Extern::FileOutFlush,
-        Extern::FileOutCloseRaw,
-        Extern::ProcSpawn,
-        Extern::ProcWait,
-        Extern::ProcExited,
-        Extern::ProcCloseStdin,
-        Extern::ProcWrite,
-        Extern::ProcWriteBytes,
-        Extern::ProcWriteLine,
-        Extern::ProcReadChunk,
-        Extern::ProcReadAllBytes,
-        Extern::ProcReadAll,
-        Extern::ProcReadLineBytes,
-        Extern::ProcReadLine,
-        Extern::Exit,
-        Extern::Panic,
-        Extern::ArrayMake,
-        Extern::ArrayLength,
-        Extern::ArrayGet,
-        Extern::ArraySet,
-        Extern::ArrayThaw,
-        Extern::MutArrayMake,
-        Extern::MutArrayEmpty,
-        Extern::MutArrayLength,
-        Extern::MutArrayRead,
-        Extern::MutArrayWrite,
-        Extern::MutArrayFreeze,
-        Extern::CheckIndex,
-    ];
-
-    pub fn row(self) -> FunctionRow {
-        use Linearity::{Lin, Unr};
-        use Repr::{Enum, Float, Int, Obj, TObj, Unit};
-        // 引数の Repr と Kind を同じ長さの配列で受け、`params` と `param_kinds` の長さを型で揃える
-        fn kinded<const N: usize>(
-            name: &'static str,
-            params: &'static [Repr; N],
-            param_kinds: &'static [Linearity; N],
-            ret: Repr,
-            ret_kind: Linearity,
-            purity: Purity,
-        ) -> FunctionRow {
-            FunctionRow {
-                name,
-                params,
-                ret: OpRet::Repr(ret),
-                param_kinds,
-                ret_kind,
-                purity,
-                borrowed: const { &[false; N] },
-                with_arg: None,
-            }
-        }
-        // 印の立つ引数を借りる行。長さは引数の数と同じである (docs/spec/lir.md の「extern の借用」)
-        fn borrowing<const N: usize>(mask: &'static [bool; N], row: FunctionRow) -> FunctionRow {
-            assert_eq!(row.params.len(), N, "{}", row.name);
-            FunctionRow {
-                borrowed: mask,
-                ..row
-            }
-        }
-        // ハンドルに書く行。データを借り、ハンドルを消費して返す (docs/spec/stdlib.md の「ハンドル」)
-        fn writing(name: &'static str) -> FunctionRow {
-            borrowing(
-                &[true, false],
-                kinded(name, &[Obj, Obj], &[Unr, Lin], Obj, Lin, Purity::Effectful),
-            )
-        }
-        // 線形な値を扱わない行は、すべて `Unr` にする
-        fn row<const N: usize>(
-            name: &'static str,
-            params: &'static [Repr; N],
-            ret: Repr,
-            purity: Purity,
-        ) -> FunctionRow {
-            kinded(name, params, const { &[Unr; N] }, ret, Unr, purity)
-        }
-        match self {
-            Extern::Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
-            Extern::Open => kinded(
-                "Std.FileIn.open",
-                &[Obj],
-                &[Unr],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::ReadAll => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.FileIn.read_all",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::ReadLine => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.FileIn.read_line_raw",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::ReadChunk => borrowing(
-                &[false, true],
-                FunctionRow {
-                    with_arg: Some(1),
-                    ..kinded(
-                        "Std.FileIn.read_chunk",
-                        &[Obj, Obj],
-                        &[Unr, Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::ReadAllBytes => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.FileIn.read_all_bytes",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::ReadLineBytes => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.FileIn.read_line_bytes_raw",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::Close => kinded(
-                "Std.FileIn.close",
-                &[Obj],
-                &[Lin],
-                Unit,
-                Unr,
-                Purity::Effectful,
-            ),
-            Extern::IntShow => row("Prelude.Show Int.show", &[Int], Obj, Purity::Pure),
-            Extern::IntNeg => row("Prelude.Num Int.negate", &[Int], Int, Purity::Panics),
-            Extern::IntAdd => row("Prelude.Num Int.+", &[Int, Int], Int, Purity::Panics),
-            Extern::IntSub => row("Prelude.Num Int.-", &[Int, Int], Int, Purity::Panics),
-            Extern::IntMul => row("Prelude.Num Int.*", &[Int, Int], Int, Purity::Panics),
-            Extern::IntDiv => row("Prelude.Div Int./", &[Int, Int], Int, Purity::Panics),
-            Extern::IntMod => row("Prelude.Div Int.%", &[Int, Int], Int, Purity::Panics),
-            Extern::IntEq => row("Prelude.Eq Int.==", &[Int, Int], Enum, Purity::Pure),
-            Extern::IntNe => row("Prelude.Eq Int.!=", &[Int, Int], Enum, Purity::Pure),
-            Extern::IntCompare => row("Prelude.Ord Int.compare", &[Int, Int], Enum, Purity::Pure),
-            Extern::IntLt => row("Prelude.Ord Int.<", &[Int, Int], Enum, Purity::Pure),
-            Extern::IntLe => row("Prelude.Ord Int.<=", &[Int, Int], Enum, Purity::Pure),
-            Extern::IntGt => row("Prelude.Ord Int.>", &[Int, Int], Enum, Purity::Pure),
-            Extern::IntGe => row("Prelude.Ord Int.>=", &[Int, Int], Enum, Purity::Pure),
-            Extern::CharEq => row("Prelude.Eq Char.==", &[Int, Int], Enum, Purity::Pure),
-            Extern::CharNe => row("Prelude.Eq Char.!=", &[Int, Int], Enum, Purity::Pure),
-            Extern::CharCompare => row("Prelude.Ord Char.compare", &[Int, Int], Enum, Purity::Pure),
-            Extern::CharLt => row("Prelude.Ord Char.<", &[Int, Int], Enum, Purity::Pure),
-            Extern::CharLe => row("Prelude.Ord Char.<=", &[Int, Int], Enum, Purity::Pure),
-            Extern::CharGt => row("Prelude.Ord Char.>", &[Int, Int], Enum, Purity::Pure),
-            Extern::CharGe => row("Prelude.Ord Char.>=", &[Int, Int], Enum, Purity::Pure),
-            Extern::CharToInt => row("Std.Char.to_int", &[Int], Int, Purity::Pure),
-            // スカラー値でない `Int` は `Panic` である
-            Extern::CharOfInt => row("Std.Char.of_int", &[Int], Int, Purity::Panics),
-            // Latin-1。0 から 255 はどれもスカラー値なので失敗しない
-            Extern::CharOfByte => row("Std.Char.of_byte", &[Int], Int, Purity::Pure),
-            Extern::CharShow => row("Prelude.Show Char.show", &[Int], Obj, Purity::Pure),
-            Extern::CharDisplay => row("Prelude.Show Char.display", &[Int], Obj, Purity::Pure),
-            Extern::ByteEq => row("Prelude.Eq Byte.==", &[Int, Int], Enum, Purity::Pure),
-            Extern::ByteNe => row("Prelude.Eq Byte.!=", &[Int, Int], Enum, Purity::Pure),
-            Extern::ByteCompare => row("Prelude.Ord Byte.compare", &[Int, Int], Enum, Purity::Pure),
-            Extern::ByteLt => row("Prelude.Ord Byte.<", &[Int, Int], Enum, Purity::Pure),
-            Extern::ByteLe => row("Prelude.Ord Byte.<=", &[Int, Int], Enum, Purity::Pure),
-            Extern::ByteGt => row("Prelude.Ord Byte.>", &[Int, Int], Enum, Purity::Pure),
-            Extern::ByteGe => row("Prelude.Ord Byte.>=", &[Int, Int], Enum, Purity::Pure),
-            Extern::ByteNeg => row("Prelude.Num Byte.negate", &[Int], Int, Purity::Panics),
-            Extern::ByteAdd => row("Prelude.Num Byte.+", &[Int, Int], Int, Purity::Panics),
-            Extern::ByteSub => row("Prelude.Num Byte.-", &[Int, Int], Int, Purity::Panics),
-            Extern::ByteMul => row("Prelude.Num Byte.*", &[Int, Int], Int, Purity::Panics),
-            Extern::ByteDiv => row("Prelude.Div Byte./", &[Int, Int], Int, Purity::Panics),
-            Extern::ByteMod => row("Prelude.Div Byte.%", &[Int, Int], Int, Purity::Panics),
-            Extern::ByteDisplay => row("Prelude.Show Byte.display", &[Int], Obj, Purity::Pure),
-            Extern::ByteToInt => row("Std.Byte.to_int", &[Int], Int, Purity::Pure),
-            // 0..=255 の外の `Int` は `Panic` である
-            Extern::ByteOfInt => row("Std.Byte.of_int", &[Int], Int, Purity::Panics),
-            Extern::ByteWrap => row("Std.Byte.wrap", &[Int], Int, Purity::Pure),
-            Extern::IntAnd => row("Prelude.Bits Int.&&&", &[Int, Int], Int, Purity::Pure),
-            Extern::IntOr => row("Prelude.Bits Int.|||", &[Int, Int], Int, Purity::Pure),
-            Extern::IntXor => row("Prelude.Bits Int.^^^", &[Int, Int], Int, Purity::Pure),
-            Extern::IntComplement => row("Prelude.Bits Int.complement", &[Int], Int, Purity::Pure),
-            Extern::IntShl => row("Prelude.Bits Int.<<<", &[Int, Int], Int, Purity::Pure),
-            Extern::IntShr => row("Prelude.Bits Int.>>>", &[Int, Int], Int, Purity::Pure),
-            Extern::ByteAnd => row("Prelude.Bits Byte.&&&", &[Int, Int], Int, Purity::Pure),
-            Extern::ByteOr => row("Prelude.Bits Byte.|||", &[Int, Int], Int, Purity::Pure),
-            Extern::ByteXor => row("Prelude.Bits Byte.^^^", &[Int, Int], Int, Purity::Pure),
-            Extern::ByteComplement => {
-                row("Prelude.Bits Byte.complement", &[Int], Int, Purity::Pure)
-            }
-            Extern::ByteShl => row("Prelude.Bits Byte.<<<", &[Int, Int], Int, Purity::Pure),
-            Extern::ByteShr => row("Prelude.Bits Byte.>>>", &[Int, Int], Int, Purity::Pure),
-            // `Float` の算術は `Panic` を起こさない。メソッドの型はクラスで1つなので `<Panic>` を持つが、行は `Pure` である
-            // (docs/spec/declarations.md の「Prelude のクラス」)
-            Extern::FloatNeg => row("Prelude.Num Float.negate", &[Float], Float, Purity::Pure),
-            Extern::FloatAdd => row("Prelude.Num Float.+", &[Float, Float], Float, Purity::Pure),
-            Extern::FloatSub => row("Prelude.Num Float.-", &[Float, Float], Float, Purity::Pure),
-            Extern::FloatMul => row("Prelude.Num Float.*", &[Float, Float], Float, Purity::Pure),
-            Extern::FloatDiv => row("Prelude.Div Float./", &[Float, Float], Float, Purity::Pure),
-            Extern::FloatMod => row("Prelude.Div Float.%", &[Float, Float], Float, Purity::Pure),
-            Extern::FloatEq => row("Prelude.Eq Float.==", &[Float, Float], Enum, Purity::Pure),
-            Extern::FloatNe => row("Prelude.Eq Float.!=", &[Float, Float], Enum, Purity::Pure),
-            Extern::FloatCompare => row(
-                "Prelude.Ord Float.compare",
-                &[Float, Float],
-                Enum,
-                Purity::Pure,
-            ),
-            Extern::FloatLt => row("Prelude.Ord Float.<", &[Float, Float], Enum, Purity::Pure),
-            Extern::FloatLe => row("Prelude.Ord Float.<=", &[Float, Float], Enum, Purity::Pure),
-            Extern::FloatGt => row("Prelude.Ord Float.>", &[Float, Float], Enum, Purity::Pure),
-            Extern::FloatGe => row("Prelude.Ord Float.>=", &[Float, Float], Enum, Purity::Pure),
-            Extern::FloatShow => row("Prelude.Show Float.show", &[Float], Obj, Purity::Pure),
-            Extern::FloatShowsMinus => row("Prelude.shows_minus", &[Float], Enum, Purity::Pure),
-            Extern::FloatOfInt => row("Std.Float.of_int", &[Int], Float, Purity::Pure),
-            // `Int` に収まらない値は `Panic` である
-            Extern::FloatTruncate => row("Std.Float.truncate", &[Float], Int, Purity::Panics),
-            Extern::FloatFloor => row("Std.Float.floor", &[Float], Int, Purity::Panics),
-            Extern::FloatCeil => row("Std.Float.ceil", &[Float], Int, Purity::Panics),
-            Extern::FloatRound => row("Std.Float.round", &[Float], Int, Purity::Panics),
-            Extern::FloatSqrt => row("Std.Float.sqrt", &[Float], Float, Purity::Pure),
-            Extern::FloatAbs => row("Std.Float.abs", &[Float], Float, Purity::Pure),
-            Extern::FloatSin => row("Std.Float.sin", &[Float], Float, Purity::Pure),
-            Extern::FloatCos => row("Std.Float.cos", &[Float], Float, Purity::Pure),
-            Extern::FloatExp => row("Std.Float.exp", &[Float], Float, Purity::Pure),
-            Extern::FloatLog => row("Std.Float.log", &[Float], Float, Purity::Pure),
-            Extern::FloatPow => row("Std.Float.pow", &[Float, Float], Float, Purity::Pure),
-            Extern::FloatInfinity => row("Std.Float.infinity_value", &[Unit], Float, Purity::Pure),
-            Extern::FloatNan => row("Std.Float.nan_value", &[Unit], Float, Purity::Pure),
-            Extern::FloatToFixed => row("Std.Float.to_fixed", &[Int, Float], Obj, Purity::Panics),
-            Extern::FloatCanParse => borrowing(
-                &[true],
-                row("Std.Float.can_parse", &[Obj], Enum, Purity::Pure),
-            ),
-            Extern::FloatParseRaw => borrowing(
-                &[true],
-                row("Std.Float.parse_raw", &[Obj], Float, Purity::Pure),
-            ),
-            Extern::StrConcat => row("Prelude.++", &[Obj, Obj], Obj, Purity::Pure),
-            Extern::StrEq => borrowing(
-                &[true, true],
-                row("Prelude.Eq String.==", &[Obj, Obj], Enum, Purity::Pure),
-            ),
-            Extern::StrNe => borrowing(
-                &[true, true],
-                row("Prelude.Eq String.!=", &[Obj, Obj], Enum, Purity::Pure),
-            ),
-            Extern::StrCompare => borrowing(
-                &[true, true],
-                row(
-                    "Prelude.Ord String.compare",
-                    &[Obj, Obj],
-                    Enum,
-                    Purity::Pure,
-                ),
-            ),
-            Extern::StrShow => borrowing(
-                &[true],
-                row("Prelude.Show String.show", &[Obj], Obj, Purity::Pure),
-            ),
-            Extern::BoolEq => row("Prelude.Eq Bool.==", &[Enum, Enum], Enum, Purity::Pure),
-            Extern::BoolNe => row("Prelude.Eq Bool.!=", &[Enum, Enum], Enum, Purity::Pure),
-            Extern::Eprintln => row("Prelude.eprintln", &[Obj], Unit, Purity::Effectful),
-            Extern::StrByteLength => borrowing(
-                &[true],
-                row("Std.String.byte_length", &[Obj], Int, Purity::Pure),
-            ),
-            Extern::StrByteAt => borrowing(
-                &[false, true],
-                row("Std.String.byte_at", &[Int, Obj], Int, Purity::Panics),
-            ),
-            Extern::StrCharAt => borrowing(
-                &[false, true],
-                row("Std.String.char_at", &[Int, Obj], Int, Purity::Panics),
-            ),
-            Extern::StrSlice => borrowing(
-                &[false, false, true],
-                row("Std.String.slice", &[Int, Int, Obj], Obj, Purity::Panics),
-            ),
-            Extern::StrPush => row("Std.String.push", &[Int, Obj], Obj, Purity::Pure),
-            Extern::StrFindFrom => borrowing(
-                &[true, false, true],
-                row(
-                    "Std.String.find_from",
-                    &[Obj, Int, Obj],
-                    Int,
-                    Purity::Panics,
-                ),
-            ),
-            Extern::BytesEmpty => row("Std.Bytes.empty", &[Unit], Obj, Purity::Pure),
-            Extern::BytesLength => {
-                borrowing(&[true], row("Std.Bytes.length", &[Obj], Int, Purity::Pure))
-            }
-            Extern::BytesAppend => row("Std.Bytes.append", &[Obj, Obj], Obj, Purity::Pure),
-            // `src` を借りて `dst` を消費する。同じ変数なら Perceus が `dup` を入れる
-            // (docs/spec/lir.md の「extern の借用」)
-            Extern::BytesAppendSlice => borrowing(
-                &[false, false, true, false],
-                row(
-                    "Std.Bytes.append_slice",
-                    &[Int, Int, Obj, Obj],
-                    Obj,
-                    Purity::Panics,
-                ),
-            ),
-            Extern::BytesSlice => borrowing(
-                &[false, false, true],
-                row("Std.Bytes.slice", &[Int, Int, Obj], Obj, Purity::Panics),
-            ),
-            Extern::BytesTruncate => row("Std.Bytes.truncate", &[Int, Obj], Obj, Purity::Panics),
-            Extern::BytesOfString => row("Std.Bytes.of_string", &[Obj], Obj, Purity::Pure),
-            Extern::BytesEq => borrowing(
-                &[true, true],
-                row("Prelude.Eq Bytes.==", &[Obj, Obj], Enum, Purity::Pure),
-            ),
-            Extern::BytesNe => borrowing(
-                &[true, true],
-                row("Prelude.Eq Bytes.!=", &[Obj, Obj], Enum, Purity::Pure),
-            ),
-            Extern::BytesCompare => borrowing(
-                &[true, true],
-                row("Prelude.Ord Bytes.compare", &[Obj, Obj], Enum, Purity::Pure),
-            ),
-            Extern::BytesFindFrom => borrowing(
-                &[true, false, true],
-                row("Std.Bytes.find_from", &[Obj, Int, Obj], Int, Purity::Panics),
-            ),
-            Extern::BytesMake => row("Std.Bytes.make", &[Int, Int], Obj, Purity::Panics),
-            Extern::BytesGet => borrowing(
-                &[false, true],
-                row("Std.Bytes.get", &[Int, Obj], Int, Purity::Panics),
-            ),
-            Extern::BytesSet => row("Std.Bytes.set", &[Int, Int, Obj], Obj, Purity::Panics),
-            Extern::BytesPush => row("Std.Bytes.push", &[Int, Obj], Obj, Purity::Pure),
-            Extern::BytesFindByte => borrowing(
-                &[false, false, true],
-                row(
-                    "Std.Bytes.find_byte_from",
-                    &[Int, Int, Obj],
-                    Int,
-                    Purity::Panics,
-                ),
-            ),
-            // `Show Bytes` は Prelude にあり、`Std.Bytes` を import できないので、読む行を Prelude にも持つ
-            // (docs/spec/stdlib.md の「`Bytes`」)
-            Extern::ShowBytesLength => borrowing(
-                &[true],
-                row("Prelude.bytes_length", &[Obj], Int, Purity::Pure),
-            ),
-            Extern::ShowBytesGet => borrowing(
-                &[false, true],
-                row("Prelude.bytes_get", &[Int, Obj], Int, Purity::Panics),
-            ),
-            Extern::StringDecode => row("Std.String.decode", &[Obj], Obj, Purity::Panics),
-            Extern::EnvArgCount => row("Std.Env.arg_count", &[Unit], Int, Purity::Effectful),
-            Extern::EnvArg => row("Std.Env.arg", &[Int], Obj, Purity::Effectful),
-            Extern::EnvHas => row("Std.Env.has", &[Obj], Enum, Purity::Effectful),
-            Extern::EnvLookup => row("Std.Env.lookup", &[Obj], Obj, Purity::Effectful),
-            Extern::StdinOpen => kinded(
-                "Std.Stdin.open",
-                &[Unit],
-                &[Unr],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::StdinClose => kinded(
-                "Std.Stdin.close",
-                &[Obj],
-                &[Lin],
-                Unit,
-                Unr,
-                Purity::Effectful,
-            ),
-            Extern::StdinReadChunk => borrowing(
-                &[false, true],
-                FunctionRow {
-                    with_arg: Some(1),
-                    ..kinded(
-                        "Std.Stdin.read_chunk",
-                        &[Obj, Obj],
-                        &[Unr, Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::StdinReadAllBytes => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.Stdin.read_all_bytes",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::StdinReadAll => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.Stdin.read_all",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::StdinReadLineBytes => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.Stdin.read_line_bytes_raw",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::StdinReadLine => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.Stdin.read_line_raw",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::StdoutOpen => kinded(
-                "Std.Stdout.open",
-                &[Unit],
-                &[Unr],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::StdoutClose => kinded(
-                "Std.Stdout.close",
-                &[Obj],
-                &[Lin],
-                Unit,
-                Unr,
-                Purity::Effectful,
-            ),
-            Extern::StdoutWriteBytes => writing("Std.Stdout.write_bytes"),
-            Extern::StdoutWrite => writing("Std.Stdout.write"),
-            Extern::StdoutWriteLine => writing("Std.Stdout.write_line"),
-            Extern::StdoutFlush => kinded(
-                "Std.Stdout.flush",
-                &[Obj],
-                &[Lin],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::StderrOpen => kinded(
-                "Std.Stderr.open",
-                &[Unit],
-                &[Unr],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::StderrClose => kinded(
-                "Std.Stderr.close",
-                &[Obj],
-                &[Lin],
-                Unit,
-                Unr,
-                Purity::Effectful,
-            ),
-            Extern::StderrWriteBytes => writing("Std.Stderr.write_bytes"),
-            Extern::StderrWrite => writing("Std.Stderr.write"),
-            Extern::StderrWriteLine => writing("Std.Stderr.write_line"),
-            Extern::FileOutCreate => kinded(
-                "Std.FileOut.create",
-                &[Obj],
-                &[Unr],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::FileOutAppend => kinded(
-                "Std.FileOut.append",
-                &[Obj],
-                &[Unr],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::FileOutWrite => writing("Std.FileOut.write"),
-            Extern::FileOutWriteBytes => writing("Std.FileOut.write_bytes"),
-            Extern::FileOutWriteLine => writing("Std.FileOut.write_line"),
-            Extern::FileOutFlush => kinded(
-                "Std.FileOut.flush",
-                &[Obj],
-                &[Lin],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::FileOutCloseRaw => kinded(
-                "Std.FileOut.close_raw",
-                &[Obj],
-                &[Lin],
-                Unit,
-                Unr,
-                Purity::Effectful,
-            ),
-            // 引数は、プログラム、引数の列、環境の列、作業ディレクトリ、標準入力、標準出力、標準エラーの向きである
-            // (docs/spec/stdlib.md の「`Proc`」)
-            Extern::ProcSpawn => kinded(
-                "Std.Proc.spawn_raw",
-                &[Obj, Obj, Obj, Obj, Int, Int, Int],
-                &[Unr; 7],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::ProcWait => {
-                kinded("Std.Proc.wait", &[Obj], &[Lin], Int, Unr, Purity::Effectful)
-            }
-            // いつも `IO` の失敗で終わる。`exit` と同じく戻らない行である
-            Extern::ProcExited => FunctionRow {
-                name: "Std.Proc.exited",
-                params: &[Repr::Obj, Repr::Int],
-                ret: OpRet::Never,
-                param_kinds: &[Linearity::Unr, Linearity::Unr],
-                ret_kind: Linearity::Unr,
-                purity: Purity::Effectful,
-                borrowed: &[false, false],
-                with_arg: None,
-            },
-            Extern::ProcCloseStdin => kinded(
-                "Std.Proc.close_stdin",
-                &[Obj],
-                &[Lin],
-                Obj,
-                Lin,
-                Purity::Effectful,
-            ),
-            Extern::ProcWrite => writing("Std.Proc.write"),
-            Extern::ProcWriteBytes => writing("Std.Proc.write_bytes"),
-            Extern::ProcWriteLine => writing("Std.Proc.write_line"),
-            Extern::ProcReadChunk => borrowing(
-                &[false, true],
-                FunctionRow {
-                    with_arg: Some(1),
-                    ..kinded(
-                        "Std.Proc.read_chunk",
-                        &[Obj, Obj],
-                        &[Unr, Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::ProcReadAllBytes => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.Proc.read_all_bytes",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::ProcReadAll => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.Proc.read_all",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::ProcReadLineBytes => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.Proc.read_line_bytes_raw",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            Extern::ProcReadLine => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.Proc.read_line_raw",
-                        &[Obj],
-                        &[Lin],
-                        Obj,
-                        Unr,
-                        Purity::Effectful,
-                    )
-                },
-            ),
-            // 戻らない extern。VM が実行の底まで中断する (docs/spec/vm.md の「extern の中断」)
-            Extern::Exit => FunctionRow {
-                name: "Prelude.exit",
-                params: &[Repr::Int],
-                ret: OpRet::Never,
-                param_kinds: &[Linearity::Unr],
-                ret_kind: Linearity::Unr,
-                purity: Purity::Effectful,
-                borrowed: &[false],
-                with_arg: None,
-            },
-            // `exit` と同じく VM が自分で実行し、文字列を `Panic` の `panicked` の節に渡す
-            // (docs/spec/vm.md の「extern の中断」)
-            Extern::Panic => FunctionRow {
-                name: "Prelude.panic",
-                params: &[Repr::Obj],
-                ret: OpRet::Never,
-                param_kinds: &[Linearity::Unr],
-                ret_kind: Linearity::Unr,
-                purity: Purity::Panics,
-                borrowed: &[false],
-                with_arg: None,
-            },
-            // 配列の要素は型変数の位置なので `tobj` である。型変数は `Unr` に固定するので、`Array` の Kind も `Unr` に
-            // なる。`MutArray` はいつも `Lin` である (docs/spec/stdlib.md の「`Std.Array`」)
-            Extern::ArrayMake => row("Std.Array.make", &[Int, TObj], Obj, Purity::Panics),
-            Extern::ArrayLength => borrowing(
-                &[true],
-                kinded("Std.Array.length", &[Obj], &[Unr], Int, Unr, Purity::Pure),
-            ),
-            Extern::ArrayGet => borrowing(
-                &[true, false],
-                kinded(
-                    "Std.Array.get",
-                    &[Obj, Int],
-                    &[Unr, Unr],
-                    TObj,
-                    Unr,
-                    Purity::Panics,
-                ),
-            ),
-            Extern::ArraySet => row("Std.Array.set", &[Obj, Int, TObj], Obj, Purity::Panics),
-            Extern::ArrayThaw => kinded("Std.Array.thaw", &[Obj], &[Unr], Obj, Lin, Purity::Pure),
-            Extern::MutArrayMake => kinded(
-                "Std.MutArray.make",
-                &[Int, TObj],
-                &[Unr, Unr],
-                Obj,
-                Lin,
-                Purity::Panics,
-            ),
-            Extern::MutArrayEmpty => kinded(
-                "Std.MutArray.empty",
-                &[Unit],
-                &[Unr],
-                Obj,
-                Lin,
-                Purity::Pure,
-            ),
-            Extern::MutArrayLength => borrowing(
-                &[true],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.MutArray.length",
-                        &[Obj],
-                        &[Lin],
-                        Int,
-                        Unr,
-                        Purity::Pure,
-                    )
-                },
-            ),
-            Extern::MutArrayRead => borrowing(
-                &[true, false],
-                FunctionRow {
-                    with_arg: Some(0),
-                    ..kinded(
-                        "Std.MutArray.read",
-                        &[Obj, Int],
-                        &[Lin, Unr],
-                        TObj,
-                        Unr,
-                        Purity::Panics,
-                    )
-                },
-            ),
-            Extern::MutArrayWrite => kinded(
-                "Std.MutArray.write",
-                &[Obj, Int, TObj],
-                &[Lin, Unr, Unr],
-                Obj,
-                Lin,
-                Purity::Panics,
-            ),
-            Extern::MutArrayFreeze => kinded(
-                "Std.MutArray.freeze",
-                &[Obj],
-                &[Lin],
-                Obj,
-                Unr,
-                Purity::Pure,
-            ),
-            // `var` の配列の変数の添字を、使う所で確かめる。節の中で `Panic` を起こさないためである
-            // (docs/spec/core-ir.md の「`var` の変換」)
-            Extern::CheckIndex => row("Prelude.check_index", &[Int, Int], Unit, Purity::Panics),
-        }
+/// 引数の Repr と Kind を同じ長さの配列で受け、`params` と `param_kinds` の長さを型で揃える。
+const fn kinded<const N: usize>(
+    name: &'static str,
+    params: &'static [Repr; N],
+    param_kinds: &'static [Linearity; N],
+    ret: Repr,
+    ret_kind: Linearity,
+    purity: Purity,
+) -> FunctionRow {
+    FunctionRow {
+        name,
+        params,
+        ret: OpRet::Repr(ret),
+        param_kinds,
+        ret_kind,
+        purity,
+        borrowed: const { &[false; N] },
+        with_arg: None,
     }
+}
 
-    pub fn from_name(name: &str) -> Option<Extern> {
-        Self::ALL.iter().copied().find(|e| e.row().name == name)
+/// 印の立つ引数を借りる行。長さは引数の数と同じである (docs/spec/lir.md の「extern の借用」)。
+const fn borrowing<const N: usize>(mask: &'static [bool; N], row: FunctionRow) -> FunctionRow {
+    assert!(
+        row.params.len() == N,
+        "a borrow mask has one mark per parameter"
+    );
+    FunctionRow {
+        borrowed: mask,
+        ..row
     }
+}
+
+/// ハンドルに書く行。データを借り、ハンドルを消費して返す (docs/spec/stdlib.md の「ハンドル」)。
+const fn writing(name: &'static str) -> FunctionRow {
+    borrowing(
+        &[true, false],
+        kinded(
+            name,
+            &[Repr::Obj, Repr::Obj],
+            &[Linearity::Unr, Linearity::Lin],
+            Repr::Obj,
+            Linearity::Lin,
+            Purity::Effectful,
+        ),
+    )
+}
+
+/// 線形な値を扱わない行は、すべて `Unr` にする。
+const fn row<const N: usize>(
+    name: &'static str,
+    params: &'static [Repr; N],
+    ret: Repr,
+    purity: Purity,
+) -> FunctionRow {
+    kinded(
+        name,
+        params,
+        const { &[Linearity::Unr; N] },
+        ret,
+        Linearity::Unr,
+        purity,
+    )
 }
