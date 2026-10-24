@@ -406,7 +406,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 1. 左の閉包 `f` と右の閉包 `g` を読む。どちらも `par` が消費する参照である
 2. `heap.fork_worker()` で右の子の ID を出す
-3. `heap.share(g, child)` で、右の閉包から届く物体に印を付ける。右の子が閉包を手放すと子の ID の物体を解放しうるので、印付けは右の子が始まる前に送り手の ID で行う ([マルチコア対応の設計](../future/multicore.md) の「印付けの表」)
+3. セッションの根の語 `r` ごとに `heap.share(r, child)` を呼び、続けて `heap.share(g, child)` で、右の閉包から届く物体に印を付ける。根に印を付けるのは、右の子が `root_get` で REPL の束縛を読むためである ([オブジェクトモデル](object-model.md) の「セッションの根」)。右の子が閉包を手放すと子の ID の物体を解放しうるので、印付けは右の子が始まる前に送り手の ID で行う ([マルチコア対応の設計](../future/multicore.md) の「印付けの表」)
 4. `ctx.switch_task((), 親の ID, 親の depth_offset)` で親の `evv` を取り出し、その参照を join の節点に移す。RC に触れずに親の列を読むためである。取り出した列から子の `evv` を作り (上の「子の `evv`」)、`dup` してから `share(子の evv, child)` で印を付ける。2つの子が1つずつ参照を持ち、左の子の分は `ctx.switch_task(子の evv, 親の ID, 親の depth_offset)` で `Ctx` に入れる。左の子は親の ID で動く
 5. 右の子のタスクを作る。worker は `child`、`evv` は子の `evv`、深さの起点 `depth_offset` は fork のときの親の深さ、状態は始まっていない (`Unstarted(g)`)、`boundaries` は今の join だけである
 6. join の節点を作る。節点は、親と右の子のタスクの番号、右の子の ID、親の `evv`、2つの子の結果の欄、`par` の次の位置と `dst` を持つ。節点は Rust の構造で、ヒープの物体にしない

@@ -903,6 +903,12 @@ fn par<R: Exec>(
     // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
     // 触れない
     let child = unsafe { ctx.heap_mut() }.fork_worker();
+    // 右の子は REPL の束縛を `root_get` で読むので、根にも印を付ける。根の語は `heap_mut` の前提にある `Ctx` の持つ語に
+    // 入らない (docs/spec/object-model.md の「セッションの根」)。根のないプログラムでは、集めても確保しない
+    let roots: Vec<Word> = ctx.roots().flatten().copied().collect();
+    for r in roots {
+        unsafe { ctx.heap_mut().share(r, child) }?;
+    }
     unsafe { ctx.heap_mut().share(g, child) }?;
     // 親の `evv` を取り出して、その参照を join の節点に移す。RC に触れずに読めるようにするためである
     let parent_evv = unsafe { ctx.switch_task(Word::UNIT, task.worker, task.depth_offset) };

@@ -2,9 +2,9 @@
 //! 手放すので、検査モードのリークの検査も通る。
 
 use eml_rt::{Fault, HeapError};
-use eml_vm::{RuntimeError, VmFault};
+use eml_vm::{AnyMachine, RunConfig, RuntimeError, Sched, VmFault, capture_host};
 
-use crate::common::{disasm, run_lir};
+use crate::common::{disasm, parse, run_lir};
 
 /// 根に置いた文字列と整数を読み直して表示する。整数は `tobj` に box して置き、文字列はそのまま `obj` で読む。
 #[test]
@@ -66,4 +66,123 @@ fn main() -> unit {
          6  decref s1
          7  ret s0
     ");
+}
+
+/// 組の構築子。宣言はプログラムの先頭に要る。
+const LAYOUT: &str = "layout (,) { (,)(tobj, tobj) }\n";
+
+/// 根 0 の組を読む関数。入口は最初の関数なので、入力の後に置く。どの入力も、同じ名前の関数を同じコードで持つ。
+const READERS: &str = "\
+fn first(p.0: unit) -> tobj {
+  let a.1: obj = prim root_get[0]()
+  let (x.2: tobj, y.3: tobj) = unbox a.1 (,)
+  dup x.2
+  decref a.1
+  return x.2
+}
+fn show_pair(t.0: tobj) -> unit {
+  let (a.1: tobj, b.2: tobj) = unbox t.0 (,)
+  let m.3: int = unbox a.1
+  let n.4: int = unbox b.2
+  decref t.0
+  let s.5: obj = extern \"Prelude.Show Int.show\"(m.3)
+  let u.6: unit = extern Prelude.println(s.5)
+  let s.7: obj = extern \"Prelude.Show Int.show\"(n.4)
+  let u.8: unit = extern Prelude.println(s.7)
+  return u.8
+}
+";
+
+/// REPL の `let` のように、組を根 0 に置く入力。組はヒープの物体で、main の ID が持つ。
+const KEEP: &str = "\
+fn keep() -> unit {
+  let a.0: obj = con (,) #0(#5, #6)
+  let u.1: unit = prim root_set[0](a.0)
+  return u.1
+}
+";
+
+/// 両方の子が根 0 を読む入力。右の子は子の ID で読む。
+const READ: &str = "\
+fn read() -> unit {
+  let t.0: obj = par (,) #0(&first, &first)
+  tail call show_pair(t.0)
+}
+";
+
+/// 右の子が根 0 を読んでから、0 で割って止まる入力。
+const FAIL: &str = "\
+fn fail() -> unit {
+  let t.0: obj = par (,) #0(&first, &divide)
+  tail call show_pair(t.0)
+}
+fn divide(p.0: unit) -> tobj {
+  let x.1: tobj = call first(())
+  let n.2: int = unbox x.1
+  decref x.1
+  let m.3: int = extern \"Prelude.Div Int./\"(n.2, 0)
+  let b.4: tobj = box m.3
+  return b.4
+}
+";
+
+/// 入力を1つの `Machine` に順に読み込んで実行し、出力と、入力ごとの結果 (誤りは文言) を返す。2つのモードと、逐次と
+/// seed の方針で流し、どれも同じになることを確かめる。最後の `close` が漏れを報告しないことも確かめる。
+fn run_inputs(inputs: &[&str]) -> (String, Vec<Result<(), String>>) {
+    let mut runs = Vec::new();
+    for debug_heap in [true, false] {
+        for sched in [Sched::Sequential, Sched::Seeded(1)] {
+            let (host, out) = capture_host(Default::default());
+            let config = RunConfig::default()
+                .with_debug_heap(debug_heap)
+                .with_sched(sched);
+            let mut machine = AnyMachine::new(&config, host);
+            let mut results = Vec::new();
+            for input in inputs {
+                let program = parse(&format!("{LAYOUT}{input}{READERS}"));
+                eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+                let loaded = machine
+                    .load(&program)
+                    .unwrap_or_else(|error| panic!("{error:?}"));
+                results.push(machine.run(loaded.entry).map(|_| ()).map_err(|error| {
+                    assert!(!error.is_broken(), "{error}");
+                    error.to_string()
+                }));
+            }
+            machine.close().unwrap_or_else(|error| panic!("{error}"));
+            runs.push(((debug_heap, sched), (out.contents(), results)));
+        }
+    }
+    let (_, first) = runs.remove(0);
+    for (run, other) in runs {
+        assert_eq!(other, first, "{run:?}");
+    }
+    first
+}
+
+/// 前の入力が根に置いた組を、`par` の右の子が読める。fork が根に共有の印を付けるので、検査モードは子の ID での
+/// 読み込みを `WrongOwner` で断らない。
+#[test]
+fn a_right_child_reads_a_root() {
+    assert_eq!(
+        run_inputs(&[KEEP, READ]),
+        ("5\n5\n".to_string(), vec![Ok(()), Ok(())])
+    );
+}
+
+/// 子の誤りの後の回復は、共有の印の付いた根を main の ID の局所の物体として写す。次の入力の fork がまた印を付ける
+/// ので、同じ `Machine` の `par` の子がまた根を読める。
+#[test]
+fn a_par_after_a_child_error_reads_the_roots_again() {
+    assert_eq!(
+        run_inputs(&[KEEP, FAIL, READ]),
+        (
+            "5\n5\n".to_string(),
+            vec![
+                Ok(()),
+                Err("division by zero in `divide`".to_string()),
+                Ok(())
+            ]
+        )
+    );
 }

@@ -60,6 +60,12 @@ impl<M: Mode> Ctx<M> {
         }
     }
 
+    /// 根の表を番号の順に読む。空の根は `None` である。参照の数には触れない。VM が `par` の fork で根に共有の印を付ける
+    /// のに使う (docs/spec/object-model.md の「セッションの根」)。
+    pub fn roots(&self) -> std::slice::Iter<'_, Option<Word>> {
+        self.roots.as_slice().iter()
+    }
+
     /// 根 `index` を `dup` して返す。空の根と表の外の根は、どちらのモードでも `RootMisuse` にする。正しいプログラムでは
     /// 起きないが、確かめは比較1回で済み、速いモードで表の外を読まないためである。
     ///

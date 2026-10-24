@@ -69,9 +69,30 @@ fn a_root_is_set_once<M: Mode>() {
     assert_eq!(super::mortal(ctx.heap()), 0);
 }
 
+/// `roots` は根の表を番号の順に読むだけで、参照の数を変えない。
+fn roots_reads_the_table_in_order<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    assert_eq!(ctx.roots().count(), 0);
+    unsafe {
+        let s = ctx.heap_mut().alloc_string("kept");
+        ctx.root_set(2, s).unwrap();
+        ctx.root_set(0, Word::imm(7)).unwrap();
+        assert_eq!(
+            ctx.roots().copied().collect::<Vec<_>>(),
+            vec![Some(Word::imm(7)), None, Some(s)]
+        );
+        assert_eq!(ctx.heap().is_unique(s), Ok(true));
+        for w in ctx.take_roots().into_iter().flatten() {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
 both_modes!(
     a_root_keeps_its_value_until_taken,
     the_table_grows_to_the_index,
     an_empty_root_is_misuse,
     a_root_is_set_once,
+    roots_reads_the_table_in_order,
 );
