@@ -171,20 +171,15 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     })
 }
 
-/// 一様な位置で値を受ける Repr (`obj`、`tobj`、`unit`) か。
-fn is_uniform(repr: Repr) -> bool {
-    matches!(repr, Repr::Obj | Repr::TObj | Repr::Unit)
-}
-
 /// 捕獲を `captured` 個受けた後の引数と、結果がどれも一様か。
 fn uniform_beyond(function: &LirFn, captured: usize) -> bool {
     function.rets.len() == 1
-        && is_uniform(function.rets[0].0)
+        && function.rets[0].0.is_uniform()
         && function
             .params()
             .iter()
             .skip(captured)
-            .all(|&param| is_uniform(function.repr(param)))
+            .all(|&param| function.repr(param).is_uniform())
 }
 
 /// `<f>$uniform` という名前の関数は版で、`<f>` があるときだけ存在し、すべて一様な ABI を持つ

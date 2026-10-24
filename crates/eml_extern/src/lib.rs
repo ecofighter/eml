@@ -127,6 +127,11 @@ impl Repr {
         matches!(self, Repr::Int | Repr::Float | Repr::Enum | Repr::Struct(_))
     }
 
+    /// 一様な位置で値を受ける Repr (`obj`、`tobj`、`unit`) か (docs/spec/lir.md の「関数の ABI」)。
+    pub fn is_uniform(self) -> bool {
+        matches!(self, Repr::Obj | Repr::TObj | Repr::Unit)
+    }
+
     /// 互換の位置で、命令なしで値を渡せる2つの Repr。同じ Repr、参照どうし、`unit` と `tobj` である。推移的でない
     /// (`unit` と `obj` は互換でない) ので、どの検査も実際の2つの位置を比べる (docs/spec/lir.md の「値の表現」)。
     /// 構造体どうしは番号が等しいときだけ互換とする。形を見ないので、印だけが違う形は互換にならない。形の表を

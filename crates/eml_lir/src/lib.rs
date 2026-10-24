@@ -219,6 +219,20 @@ impl Stmt {
         }
     }
 
+    /// `let` の右辺と複数の値の呼び出しの値。`unpack` の値は変数なので、定数に書き換える所ではない。
+    pub fn for_each_atom_mut(&mut self, f: impl FnMut(&mut Atom)) {
+        match self {
+            Stmt::Let { var: _, rhs } => rhs.for_each_atom_mut(f),
+            Stmt::LetMany { vars: _, call } => call.for_each_atom_mut(f),
+            Stmt::Unpack { .. }
+            | Stmt::UnboxStruct { .. }
+            | Stmt::Dup(_)
+            | Stmt::Decref(_)
+            | Stmt::Release { .. }
+            | Stmt::DropToken(_) => {}
+        }
+    }
+
     /// 値の使いのうち、基本操作と extern の借用の引数 (`Rhs::for_each_lent`)。
     pub fn for_each_lent(&self, f: impl FnMut(Atom)) {
         if let Stmt::Let { var: _, rhs } = self {
