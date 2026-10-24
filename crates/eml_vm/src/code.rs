@@ -50,22 +50,93 @@ pub(crate) fn builtins() -> Vec<Op> {
 /// (docs/spec/vm.md の「追記」)。
 pub struct CodeBase<M: Mode> {
     pub(crate) functions: Vec<FnEntry>,
-    pub(crate) code: Vec<Op>,
-    pub(crate) operands: Vec<u32>,
-    /// `EvvMask` が参照する、mask の項目の並び。
-    pub(crate) mask_lists: Vec<MaskItem>,
+    pub(crate) tables: Tables,
     pub(crate) constants: Vec<Word>,
     /// 定数を置いた凍結した塊の鎖の先頭。定数の物体をまだ作っていなければ `None`。
     pub(crate) region: Option<Arc<Frozen<M>>>,
-    /// 命令の位置の昇順。
-    pub(crate) locations: Vec<(Pc, Loc)>,
-    /// 巻き戻しの表。地点の命令の次の位置の昇順。
-    pub(crate) unwinds: Vec<(Pc, Unwind)>,
     pub(crate) files: Vec<String>,
     /// 追記で番号を引き直す表。
     pub(crate) index: Index,
     /// 定数の塊のページを数える `Control`。実行のヒープと同じものである。
     pub(crate) control: Arc<Control>,
+}
+
+/// 命令と、命令の位置で引く表。コード生成は関数をまたいで1つの `Tables` の末尾に書き、逆アセンブラも同じ形を読む。
+pub(crate) struct Tables {
+    pub(crate) code: Vec<Op>,
+    pub(crate) operands: Vec<u32>,
+    /// `EvvMask` が参照する、mask の項目の並び。
+    pub(crate) mask_lists: Vec<MaskItem>,
+    /// 命令の位置の昇順。
+    pub(crate) locations: Vec<(Pc, Loc)>,
+    /// 巻き戻しの表。地点の命令の次の位置の昇順。
+    pub(crate) unwinds: Vec<(Pc, Unwind)>,
+}
+
+impl Tables {
+    /// 組み込みの命令だけを持つ表。
+    pub(crate) fn new() -> Tables {
+        Tables {
+            code: builtins(),
+            operands: Vec::new(),
+            mask_lists: Vec::new(),
+            locations: Vec::new(),
+            unwinds: Vec::new(),
+        }
+    }
+
+    pub(crate) fn pc(&self) -> Pc {
+        Pc::try_from(self.code.len()).expect("the code fits in u32 positions")
+    }
+
+    pub(crate) fn push(&mut self, op: Op) -> Pc {
+        let pc = self.pc();
+        self.code.push(op);
+        pc
+    }
+
+    /// オペランドの並びを足し、その先頭の添字を返す。
+    pub(crate) fn operands(&mut self, items: impl IntoIterator<Item = u32>) -> u32 {
+        let at = u32::try_from(self.operands.len()).expect("the operands fit in u32 positions");
+        self.operands.extend(items);
+        at
+    }
+
+    /// 書いた長さ。一致の確かめで書いた写しを消すために覚える。
+    pub(crate) fn lengths(&self) -> [usize; 5] {
+        [
+            self.code.len(),
+            self.operands.len(),
+            self.mask_lists.len(),
+            self.locations.len(),
+            self.unwinds.len(),
+        ]
+    }
+
+    pub(crate) fn truncate(
+        &mut self,
+        [code, operands, mask_lists, locations, unwinds]: [usize; 5],
+    ) {
+        self.code.truncate(code);
+        self.operands.truncate(operands);
+        self.mask_lists.truncate(mask_lists);
+        self.locations.truncate(locations);
+        self.unwinds.truncate(unwinds);
+    }
+
+    pub(crate) fn location(&self, pc: Pc) -> Option<Loc> {
+        let index = self
+            .locations
+            .binary_search_by_key(&pc, |&(at, _)| at)
+            .ok()?;
+        Some(self.locations[index].1)
+    }
+
+    /// 地点の命令の次の位置 `pc` の巻き戻しの表の行。
+    pub(crate) fn unwind_at(&self, pc: Pc) -> Option<&Unwind> {
+        let index = self.unwinds.binary_search_by_key(&pc, |&(at, _)| at).ok()?;
+        Some(&self.unwinds[index].1)
+    }
 }
 
 /// 名前と中身から `CodeBase` の番号を引く表 (docs/spec/vm.md の「追記」)。
@@ -117,20 +188,6 @@ impl<M: Mode> CodeBase<M> {
             .filter(|f| pc < f.end)
     }
 
-    pub(crate) fn location(&self, pc: Pc) -> Option<Loc> {
-        let index = self
-            .locations
-            .binary_search_by_key(&pc, |&(at, _)| at)
-            .ok()?;
-        Some(self.locations[index].1)
-    }
-
-    /// 地点の命令の次の位置 `pc` の巻き戻しの表の行。
-    pub(crate) fn unwind_at(&self, pc: Pc) -> Option<&Unwind> {
-        let index = self.unwinds.binary_search_by_key(&pc, |&(at, _)| at).ok()?;
-        Some(&self.unwinds[index].1)
-    }
-
     /// 命令の位置の関数の名前。どの関数にも属さない位置には、タスクの入口の関数の名前を返す。
     pub(crate) fn function_name(&self, pc: Pc, task: &Task) -> String {
         self.function_at(pc)
@@ -148,7 +205,7 @@ impl<M: Mode> CodeBase<M> {
             .unwrap_or(&self.functions[task.entry as usize])
             .name
             .clone();
-        let at = self.location(pc).map(|loc| SourceLocation {
+        let at = self.tables.location(pc).map(|loc| SourceLocation {
             path: self.files[loc.file as usize].clone(),
             line: loc.line,
             column: loc.column,

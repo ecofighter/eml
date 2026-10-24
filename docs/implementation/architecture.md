@@ -308,7 +308,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 縮約 (`eml_lir` の `contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換なときだけ `tail` にする ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出しの書き換えは、translate が組み立てるときに行う。組み立てた後に別のパスで書き換えると、書き換えのたびに枝の部分木を置き換えるので、長い `else if` の連鎖で2乗の時間がかかるためである
 - `eml_vm` は、コード生成 (`compile/`) と実行に分かれる。`compile/` では、`slots.rs` が文の単位の生存から干渉グラフを作ってスロットを塗り、`moves.rs` がブロック引数への並列な代入を `Move` の列に直し、`emit.rs` が関数ごとに命令を出し、`constants.rs` が定数を作業用のヒープに作って凍結する ([VM](../spec/vm.md) の「スロットの割り当て」と「`CodeBase` と `FnEntry`」)。実行は `vm.rs` の、命令を `match` で分ける1つのループである。関数の値の適用とクロージャは `apply.rs`、`CodeBase` と `FnEntry` と組み込みの命令は `code.rs`、データの命令は `data.rs` にあり、基本操作の命令も `vm.rs` の `match` の腕で `Ctx` のメソッドを呼ぶ。命令の型は `op.rs`、実行時エラーの型と表示の文言は `error.rs`、`eml run` と REPL とテストが使う Host は `hosts.rs` にある。逆アセンブラは `disasm.rs` である
 - VM は状態を `Ctx` と `Task` だけに置き、Rust の再帰を使わない。呼び出しのスタックは `Task` のデータである ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約5)
-- 位置を持つ `extern` 命令から作った命令にだけ、`CodeBase::locations` で源の位置 (`SourceLocation`) を付ける ([LIR](../spec/lir.md) の「実行時エラー」)
+- 位置を持つ `extern` 命令から作った命令にだけ、`Tables::locations` で源の位置 (`SourceLocation`) を付ける ([LIR](../spec/lir.md) の「実行時エラー」)
 - `RunStats` の回数は、`Ctx` の `CtxStats` とヒープの `Stats` が検査モードで数える。`boxes`、`unboxes`、`reuses`、`unwound_frames` は VM が数え、`peak_stack` は実行の終わりのスタックの長さである ([VM](../spec/vm.md) の「`RunStats`」)
 
 ### translate の組み立て

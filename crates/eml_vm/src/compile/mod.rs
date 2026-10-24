@@ -5,65 +5,15 @@ mod emit;
 mod moves;
 mod slots;
 
-use std::mem;
 use std::sync::Arc;
 
 use eml_lir::unwind::UnwindPoint;
-use eml_lir::{FnIdx, Loc, Program};
-use eml_rt::{Control, MaskItem, Mode};
+use eml_lir::{FnIdx, Program};
+use eml_rt::{Control, Mode};
 
-use crate::code::{CodeBase, CompileError, FnEntry, Index, Unwind, builtins};
+use crate::code::{CodeBase, CompileError, FnEntry, Index, Tables};
 use crate::disasm;
-use crate::op::{Op, Pc};
 use constants::Constants;
-
-/// 命令とオペランドを書く先。関数をまたいで1つにする。`load` の間だけ `CodeBase` の列を借りて末尾に書く。
-#[derive(Default)]
-pub(crate) struct Out {
-    pub(crate) code: Vec<Op>,
-    pub(crate) operands: Vec<u32>,
-    pub(crate) mask_lists: Vec<MaskItem>,
-    pub(crate) locations: Vec<(Pc, Loc)>,
-    pub(crate) unwinds: Vec<(Pc, Unwind)>,
-}
-
-impl Out {
-    pub(crate) fn pc(&self) -> Pc {
-        Pc::try_from(self.code.len()).expect("the code fits in u32 positions")
-    }
-
-    pub(crate) fn push(&mut self, op: Op) -> Pc {
-        let pc = self.pc();
-        self.code.push(op);
-        pc
-    }
-
-    /// オペランドの並びを足し、その先頭の添字を返す。
-    pub(crate) fn operands(&mut self, items: impl IntoIterator<Item = u32>) -> u32 {
-        let at = u32::try_from(self.operands.len()).expect("the operands fit in u32 positions");
-        self.operands.extend(items);
-        at
-    }
-
-    /// 書いた長さ。一致の確かめで書いた写しを消すために覚える。
-    fn lengths(&self) -> [usize; 5] {
-        [
-            self.code.len(),
-            self.operands.len(),
-            self.mask_lists.len(),
-            self.locations.len(),
-            self.unwinds.len(),
-        ]
-    }
-
-    fn truncate(&mut self, [code, operands, mask_lists, locations, unwinds]: [usize; 5]) {
-        self.code.truncate(code);
-        self.operands.truncate(operands);
-        self.mask_lists.truncate(mask_lists);
-        self.locations.truncate(locations);
-        self.unwinds.truncate(unwinds);
-    }
-}
 
 /// プログラムの番号から `CodeBase` の番号への写し (docs/spec/vm.md の「追記」)。添字はプログラムの番号である。
 pub(crate) struct Links {
@@ -88,13 +38,9 @@ impl<M: Mode> CodeBase<M> {
     pub fn new(control: Arc<Control>) -> CodeBase<M> {
         CodeBase {
             functions: Vec::new(),
-            code: builtins(),
-            operands: Vec::new(),
-            mask_lists: Vec::new(),
+            tables: Tables::new(),
             constants: Vec::new(),
             region: None,
-            locations: Vec::new(),
-            unwinds: Vec::new(),
             files: Vec::new(),
             index: Index::default(),
             control,
@@ -115,24 +61,13 @@ impl<M: Mode> CodeBase<M> {
         let links = self.links(program);
         let CodeBase {
             functions,
-            code,
-            operands,
-            mask_lists,
+            tables: out,
             constants,
             region,
-            locations,
-            unwinds,
             files,
             index,
             control,
         } = self;
-        let mut out = Out {
-            code: mem::take(code),
-            operands: mem::take(operands),
-            mask_lists: mem::take(mask_lists),
-            locations: mem::take(locations),
-            unwinds: mem::take(unwinds),
-        };
         let mut pool = Constants::new(constants, index, region, control);
         let strings = &program.strings;
         let strings: Vec<u32> = strings.iter().map(|text| pool.string(text)).collect();
@@ -154,7 +89,7 @@ impl<M: Mode> CodeBase<M> {
                     &points[i],
                     &links,
                     &mut pool,
-                    &mut out,
+                    out,
                 ) {
                     Ok(entry) => functions.push(entry),
                     Err(error) => {
@@ -166,15 +101,10 @@ impl<M: Mode> CodeBase<M> {
         }
         if result.is_ok() && cfg!(debug_assertions) {
             result = check_known(
-                program, &points, &links, functions, known, files, &mut pool, &mut out,
+                program, &points, &links, functions, known, files, &mut pool, out,
             );
         }
         let frozen = pool.freeze();
-        *code = out.code;
-        *operands = out.operands;
-        *mask_lists = out.mask_lists;
-        *locations = out.locations;
-        *unwinds = out.unwinds;
         result?;
         if let Some(chunk) = frozen? {
             *region = Some(chunk);
@@ -250,7 +180,7 @@ fn check_known<M: Mode>(
     known: usize,
     files: &[String],
     pool: &mut Constants<'_, M>,
-    out: &mut Out,
+    out: &mut Tables,
 ) -> Result<(), CompileError> {
     for (i, function) in program.functions.iter().enumerate() {
         let index = links.functions[i] as usize;
@@ -270,11 +200,7 @@ fn check_known<M: Mode>(
         let old = &functions[index];
         let view = |entry: &FnEntry| {
             disasm::View {
-                code: &out.code,
-                operands: &out.operands,
-                mask_lists: &out.mask_lists,
-                locations: &out.locations,
-                unwinds: &out.unwinds,
+                tables: out,
                 functions,
                 files,
             }

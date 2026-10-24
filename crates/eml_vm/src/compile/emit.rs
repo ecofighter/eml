@@ -8,10 +8,10 @@ use eml_lir::{
 };
 use eml_rt::{MaskItem, Mode};
 
+use super::Links;
 use super::constants::Constants;
 use super::slots::{Slots, allocate};
-use super::{Links, Out};
-use crate::code::{CompileError, FnEntry, Unwind};
+use crate::code::{CompileError, FnEntry, Tables, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP, Slot};
 
 pub(crate) fn function<M: Mode>(
@@ -21,7 +21,7 @@ pub(crate) fn function<M: Mode>(
     points: &[UnwindPoint],
     links: &Links,
     constants: &mut Constants<'_, M>,
-    out: &mut Out,
+    out: &mut Tables,
 ) -> Result<FnEntry, CompileError> {
     let slots = allocate(function)?;
     let start = out.pc();
@@ -143,7 +143,7 @@ pub(crate) struct Emitter<'a, 'c, M: Mode> {
     /// これで引き直す (docs/spec/vm.md の「追記」)。
     pub(crate) links: &'a Links,
     pub(crate) constants: &'a mut Constants<'c, M>,
-    pub(crate) out: &'a mut Out,
+    pub(crate) out: &'a mut Tables,
     pub(crate) slots: Slots,
     /// 今の命令が使った一時のスロットの数。命令ごとに 0 に戻す。
     pub(crate) temps: u16,
