@@ -3,6 +3,8 @@
 //! 段1が集める問題とスキームは `problem` に、段2が SCC ごとに解く処理は `solve` に、解いたスキームの上の評価は `eval` に、
 //! 本体の型を書き出すときの変数の値は `summary` にある。
 
+use std::sync::Arc;
+
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{DisplayNames, EffectId, OperationId, VarId};
 
@@ -12,6 +14,7 @@ use crate::ty::{Linearity, Multiplicity};
 
 pub(crate) mod entail;
 pub(crate) mod eval;
+pub(crate) mod graph;
 pub(crate) mod problem;
 pub(crate) mod solve;
 pub(crate) mod summary;
@@ -74,8 +77,8 @@ pub(crate) struct KindOrigin {
 /// Kind の制約の由来の種類。由来を付け忘れた制約の違反を、黙って捨てずに見つけるため、由来を省けない形にする。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Provenance {
-    /// 報告する由来。
-    At(KindOrigin),
+    /// 報告する由来。制約ごとに持ち、参照ごとにスキームの制約へ複写するので、文字列を含む由来を共有する。
+    At(Arc<KindOrigin>),
     /// 誤りの跡がある本体 (`usage::reliable` が偽) の、使用回数と持ち越しの制約。正しく数えられないので、違反しても
     /// 報告しない (docs/spec/diagnostics.md)。
     Suppressed,
@@ -95,6 +98,10 @@ pub(crate) enum Provenance {
 }
 
 impl Provenance {
+    pub fn at(origin: KindOrigin) -> Provenance {
+        Provenance::At(Arc::new(origin))
+    }
+
     pub fn origin(&self) -> Option<&KindOrigin> {
         match self {
             Provenance::At(origin) => Some(origin),
@@ -564,10 +571,17 @@ impl CarriedValue {
 }
 
 /// 値がまたぐもの。持ち越しのパスが多重度の成分を作るのに使う。操作の直接の呼び出しでは、その操作の多重度だけを見る。
-#[derive(Debug, Clone)]
-pub(crate) enum Across {
-    Row(Row),
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Across<'a> {
+    Row(&'a Row),
     Operation(OperationId),
+}
+
+/// 値がまたぐものの多重度の成分と、報告が指す `multi` の操作。持ち越しのパスが、またぐ式ごとに1回だけ求める。
+/// 成分が空なら制約を出さない。
+pub(crate) struct Crossing {
+    pub mults: Vec<Bound<Multiplicity>>,
+    pub multi: Option<OperationId>,
 }
 
 /// 値がまたぐ式の種類。E3006 の primary の言い方を決める。
@@ -660,7 +674,7 @@ mod tests {
     #[test]
     fn reasons_have_a_fixed_order() {
         let program = crate::test_program("import Std.FileIn");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let reasons = distinct_reasons(&program, &mut types);
         let key = |reason: &KindReason| reason.order_key(&types, &program.names);
         let used = KindReason::UsedMoreThanOnce {

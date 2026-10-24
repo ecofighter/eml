@@ -2,12 +2,11 @@
 //! パスに通して実行する。`apply` の引数と結果の構造体は一様な箱で渡り、型どおりの関数の値は一様な版を通る。ダミーを
 //! 受ける命令は、パスの後の形の LIR を手で書いて確かめる。
 
-use std::sync::Arc;
+use eml_vm::CompileError;
 
-use eml_rt::{Control, Fast, Limits};
-use eml_vm::{CompileError, compile};
-
-use crate::common::{disasm_lowered, parse, run_lir_stats, run_lowered_stats, run_unverified};
+use crate::common::{
+    compile, disasm_lowered, parse, run_lir_stats, run_lowered_stats, run_unverified,
+};
 
 const V: &str = "Vec3{float, float, float}";
 
@@ -392,8 +391,7 @@ fn main() -> (float, float) {
   return (1.0, 2.0)
 }
 ";
-    let control = Arc::new(Control::new(Limits::default()));
-    let error = compile::<Fast>(&parse(text), control).err();
+    let error = compile(&parse(text)).err();
     assert_eq!(
         error,
         Some(CompileError::MultiValueEntry {

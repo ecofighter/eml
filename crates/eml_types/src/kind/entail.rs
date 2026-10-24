@@ -4,7 +4,7 @@
 //!
 //! 導き方は健全だが完全ではない。前提の制約を辺としてたどった先の定数と、変数どうしの到達だけを見る。
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::problem::KindScheme;
 use super::{Bound, KindVar, Level};
@@ -33,7 +33,7 @@ pub(crate) fn unentailed(assumed: &KindScheme, scheme: &KindScheme) -> Vec<Unent
             out.push(Unentailed::Multiplicity(lower, upper));
         }
     }
-    let assumed_carries: HashSet<(Bound<Linearity>, Bound<Multiplicity>)> = assumed
+    let assumed_carries: FxHashSet<(Bound<Linearity>, Bound<Multiplicity>)> = assumed
         .carries
         .iter()
         .map(|carry| (carry.lin, carry.mult))
@@ -52,20 +52,20 @@ pub(crate) fn unentailed(assumed: &KindScheme, scheme: &KindScheme) -> Vec<Unent
 
 /// 1つの束の前提。制約 `l ≤ u` を辺 `l → u` とし、変数に直接付いた定数の境界を持つ。
 struct Lattice<T> {
-    upward: HashMap<KindVar, Vec<KindVar>>,
-    downward: HashMap<KindVar, Vec<KindVar>>,
+    upward: FxHashMap<KindVar, Vec<KindVar>>,
+    downward: FxHashMap<KindVar, Vec<KindVar>>,
     /// 変数に直接付いた定数の上限の最小と、下限の最大。
-    upper: HashMap<KindVar, T>,
-    lower: HashMap<KindVar, T>,
+    upper: FxHashMap<KindVar, T>,
+    lower: FxHashMap<KindVar, T>,
 }
 
 impl<T: Level> Lattice<T> {
     fn new(constraints: &[(Bound<T>, Bound<T>)]) -> Lattice<T> {
         let mut lattice = Lattice {
-            upward: HashMap::new(),
-            downward: HashMap::new(),
-            upper: HashMap::new(),
-            lower: HashMap::new(),
+            upward: FxHashMap::default(),
+            downward: FxHashMap::default(),
+            upper: FxHashMap::default(),
+            lower: FxHashMap::default(),
         };
         for &(lower, upper) in constraints {
             match (lower, upper) {
@@ -126,9 +126,9 @@ impl<T: Level> Lattice<T> {
     }
 
     /// `start` (自身を含む) から、`up` なら辺の向きに、そうでなければ逆向きに届く変数。作業の列でたどる。
-    fn reachable(&self, start: KindVar, up: bool) -> HashSet<KindVar> {
+    fn reachable(&self, start: KindVar, up: bool) -> FxHashSet<KindVar> {
         let edges = if up { &self.upward } else { &self.downward };
-        let mut seen = HashSet::from([start]);
+        let mut seen = FxHashSet::from_iter([start]);
         let mut work = vec![start];
         while let Some(var) = work.pop() {
             for &next in edges.get(&var).into_iter().flatten() {

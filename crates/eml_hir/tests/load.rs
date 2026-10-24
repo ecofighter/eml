@@ -7,10 +7,10 @@ use std::sync::LazyLock;
 
 use eml_diagnostics::sort_diagnostics;
 use eml_hir::{
-    DefMap, ImportTarget, Loaded, ModuleId, ModuleOrigin, ModulePath, ModuleSource, NameRef,
-    Program, ReadError, Resolved, ValueItem,
+    DefMap, ImportTarget, Loaded, MemorySource, ModuleId, ModuleOrigin, ModulePath, ModuleSource,
+    NameRef, Program, ReadError, Resolved, ValueItem,
 };
-use eml_test_support::{ENTRY_PATH, MemorySource, full, std_module};
+use eml_test_support::{ENTRY_PATH, full, std_module};
 
 /// 読み込みの段を流し、診断を `パス 行:列 番号 メッセージ` の行にする。依存先のファイルを指す診断を読み分けるため。
 fn load_at(entry_path: &str, entry: &str, modules: &[(&str, &str)]) -> (Loaded, Vec<String>) {
@@ -549,7 +549,7 @@ fn a_std_module_without_an_import_is_an_unknown_qualifier_with_an_import_fix() {
     // fix は shebang と先頭の注釈の後ろ、最初の item の前に import を挿入する。同じ修飾子の診断はどれも同じ fix を持つ
     // (docs/spec/modules.md の「名前の解決」)
     let entry = "#!/usr/bin/env eml\n-- head\n\nf : Unit -> Int\nf () = String.byte_length \"a\"\n\ng : Int\ng = String.byte_length \"b\"";
-    let lowered = eml_test_support::lower_files(entry, &[]);
+    let lowered = eml_test_support::lower(eml_test_support::with_modules(entry, &[]));
     insta::assert_snapshot!(full(lowered.files(), &lowered.diagnostics), @"
     E1031 5:8 unknown module qualifier `String`
       5:8 no import gives this qualifier
@@ -604,7 +604,8 @@ fn an_import_prefers_the_user_module_of_the_same_name() {
 fn a_user_module_hiding_a_std_module_suggests_the_canonical_import() {
     // help は、隠れた標準ライブラリのモジュールがその名前を定義しているときだけ付ける
     let entry = "import FileIn\n\nf : String -> <IO> FileIn.FileIn\nf p = FileIn.open p\n\ng : Int\ng = FileIn.nope";
-    let lowered = eml_test_support::lower_files(entry, &[("FileIn.em", "")]);
+    let lowered =
+        eml_test_support::lower(eml_test_support::with_modules(entry, &[("FileIn.em", "")]));
     insta::assert_snapshot!(full(lowered.files(), &lowered.diagnostics), @"
     E1002 3:20 cannot find type `FileIn` in module `FileIn`
       3:20 not found in this module

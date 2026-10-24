@@ -7,7 +7,7 @@ use la_arena::Arena;
 use super::ItemLowering;
 use super::types::{TypeLowering, Vars};
 use crate::codes;
-use crate::def_map::Resolved;
+use crate::def_map::{Resolved, item_id};
 use crate::hir::{
     Constructor, FieldName, Generics, ItemId, ParamSort, RowVarDecl, TypeDef, TypeDefKind,
     TypeVarDecl, ValueItem,
@@ -68,7 +68,7 @@ impl ItemLowering<'_> {
                     lin,
                 }),
             );
-            debug_assert_eq!(id, self.def_map.type_id(self.module, k));
+            debug_assert_eq!(id, item_id(self.module, k));
         }
     }
 
@@ -112,8 +112,8 @@ impl ItemLowering<'_> {
         constructors: &mut Arena<Constructor>,
     ) {
         for (k, item) in items.iter().enumerate() {
-            let ty = self.def_map.type_id(self.module, k);
-            for (j, constructor) in item.constructors.iter().enumerate() {
+            let ty = item_id(self.module, k);
+            for constructor in &item.constructors {
                 // `::` は Prelude のリストだけの名前である。2つのモジュールが定義すると、修飾した演算子の構文が
                 // ないので、診断にも書けない形になる (docs/spec/declarations.md の
                 // 「`data` と `type`」)。宣言はそのまま置き、そのモジュールの使用には誤りを重ねない
@@ -185,7 +185,7 @@ impl ItemLowering<'_> {
                 else {
                     unreachable!("`declare_data` makes data types")
                 };
-                let id = self.def_map.constructor_id(self.module, k, j);
+                let id = item_id(self.module, constructors.len());
                 let fixity = constructor.infix.then(|| {
                     self.resolver
                         .fixity_of(&Resolved::Found(ValueItem::Constructor(id)))

@@ -2,11 +2,10 @@
 //! `ItemTree` から、item の ID、名前の表、定義に付く fixity、lang item、extern の索引を作る。名前を解決しなくても
 //! 決まるものだけを読むので、item の変換より先に作れる。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange, TextSize};
 use eml_extern::{ExternEffect, ExternType};
 use la_arena::{Idx, RawIdx};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::codes;
 use crate::hir::{ExternIndex, LangItems, ParamSort};
@@ -14,8 +13,8 @@ use crate::item_tree::{Fixity, ImportName, InputItemKind, ItemTree, duplicate, f
 use crate::load::{ImportTarget, Loaded, LoadedModule, STD_ROOT};
 use crate::names::{Definer, DisplayNames};
 use crate::program::{
-    BindingId, ClassId, ConstructorId, EffectId, FunctionId, ItemId, MethodId, ModuleId,
-    ModuleOrigin, OperationId, TypeDefId, TypeItem, ValueItem,
+    BindingId, ClassId, ConstructorId, EffectId, FunctionId, ItemId, ModuleId, ModuleOrigin,
+    OperationId, TypeDefId, TypeItem, ValueItem,
 };
 
 /// 名前の参照。修飾子は1つのセグメントとは限らない (2つ以上は E1031)。
@@ -80,8 +79,8 @@ struct Qualifier {
 struct Imports {
     /// import の順に並べる。合流した修飾子のモジュールを、診断で決まった順に示すため。
     qualifiers: Vec<Qualifier>,
-    values: HashMap<String, Vec<Source<ValueItem>>>,
-    types: HashMap<String, Vec<Source<TypeItem>>>,
+    values: FxHashMap<String, Vec<Source<ValueItem>>>,
+    types: FxHashMap<String, Vec<Source<TypeItem>>>,
     /// 部品の分からない `T(..)` か `E(..)` が並びにある。壊れた import の部品と、並びで報告した型の部品は名前が
     /// 分からないので、見つからない値の名前をどれも「不明」として扱う
     /// (docs/implementation/architecture.md の「名前解決の回復」)。
@@ -90,8 +89,8 @@ struct Imports {
 
 /// 値と型の名前空間を同じ手順で引くための口。
 trait Namespace: Copy {
-    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<Self>>>;
-    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<Self>>>;
+    fn definitions(scope: &ModuleScope) -> &FxHashMap<String, Vec<Definition<Self>>>;
+    fn imported(imports: &Imports) -> &FxHashMap<String, Vec<Source<Self>>>;
     /// どこにも見つからない名前を、診断を出さずに誤りにするか。
     fn unknown(imports: &Imports) -> bool;
     /// REPL の `let` の束縛か。束縛は、束縛した入力のモジュールからは引かない。右辺の同じ名前は前の版を指すため
@@ -102,11 +101,11 @@ trait Namespace: Copy {
 }
 
 impl Namespace for ValueItem {
-    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<ValueItem>>> {
+    fn definitions(scope: &ModuleScope) -> &FxHashMap<String, Vec<Definition<ValueItem>>> {
         &scope.values
     }
 
-    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<ValueItem>>> {
+    fn imported(imports: &Imports) -> &FxHashMap<String, Vec<Source<ValueItem>>> {
         &imports.values
     }
 
@@ -120,11 +119,11 @@ impl Namespace for ValueItem {
 }
 
 impl Namespace for TypeItem {
-    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<TypeItem>>> {
+    fn definitions(scope: &ModuleScope) -> &FxHashMap<String, Vec<Definition<TypeItem>>> {
         &scope.types
     }
 
-    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<TypeItem>>> {
+    fn imported(imports: &Imports) -> &FxHashMap<String, Vec<Source<TypeItem>>> {
         &imports.types
     }
 
@@ -140,31 +139,24 @@ struct ModuleScope {
     /// E1029 の secondary が定義を指すのに使う。
     file: FileId,
     /// 名前ごとの定義。ソースの位置の順で、使える定義の最初が名前の定義である (規則1)。
-    values: HashMap<String, Vec<Definition<ValueItem>>>,
-    types: HashMap<String, Vec<Definition<TypeItem>>>,
+    values: FxHashMap<String, Vec<Definition<ValueItem>>>,
+    types: FxHashMap<String, Vec<Definition<TypeItem>>>,
     /// 型引数の種類の並び (E1015、E1048)。重複した型引数は除いてある。
-    type_params: HashMap<TypeDefId, Vec<ParamSort>>,
+    type_params: FxHashMap<TypeDefId, Vec<ParamSort>>,
     /// `type_params` の各型引数を宣言に書いた位置。E1048 の secondary が指す。
-    type_param_ranges: HashMap<TypeDefId, Vec<TextRange>>,
-    effect_params: HashMap<EffectId, usize>,
+    type_param_ranges: FxHashMap<TypeDefId, Vec<TextRange>>,
+    effect_params: FxHashMap<EffectId, usize>,
     /// 定義に付いた fixity、宣言が `pub` か、宣言の演算子の位置。
-    fixities: HashMap<ValueItem, (Fixity, bool, TextRange)>,
-    functions: Vec<FunctionId>,
+    fixities: FxHashMap<ValueItem, (Fixity, bool, TextRange)>,
     /// `extern` のシグネチャを持つ関数。handler の節の先頭を extern の関数から引き直すのに使う (E1009)。
-    extern_functions: HashSet<FunctionId>,
-    type_ids: Vec<TypeDefId>,
-    constructors: Vec<Vec<ConstructorId>>,
-    effects: Vec<EffectId>,
-    operations: Vec<Vec<OperationId>>,
-    class_ids: Vec<ClassId>,
-    method_ids: Vec<Vec<MethodId>>,
+    extern_functions: FxHashSet<FunctionId>,
     /// REPL の `let` の束縛か式の入力を実行する関数 `input$N`。`ItemTree` の関数の後ろに置く。
     input_function: Option<FunctionId>,
     /// REPL の `let` の束縛。
     binding: Option<BindingId>,
     /// `T(..)`、`E(..)`、`C(..)` が取り込む部品。型にはコンストラクタ、エフェクトには操作、クラスにはメソッドを、
     /// 宣言の順に並べる。
-    parts: HashMap<TypeItem, Vec<(String, ValueItem)>>,
+    parts: FxHashMap<TypeItem, Vec<(String, ValueItem)>>,
     imports: Imports,
     /// E1031 の fix が import を挿入する位置 (`first_item_start`)。import を書けない入力では `None` である。
     import_at: Option<TextSize>,
@@ -178,23 +170,23 @@ pub struct DefMap {
     entry: ModuleId,
     /// 読み込んだ標準ライブラリのモジュールの、短い名前 (`Fs`) からの表。Prelude は除く。ユーザーのモジュールが
     /// 標準ライブラリのモジュールを隠したことを示す help が引く。
-    loaded_std: HashMap<String, ModuleId>,
+    loaded_std: FxHashMap<String, ModuleId>,
     /// 埋め込んだ標準ライブラリのモジュールの短い名前すべて (`Loaded::std_names`)。
-    std_names: HashSet<String>,
+    std_names: FxHashSet<String>,
     lang: LangItems,
     externs: ExternIndex,
     names: DisplayNames,
 }
 
-/// モジュール 0 を Prelude として読む。入口は、セッションでは最後のセッションのモジュール (今の入力)、ファイルでは 1 である
-/// (`Loaded::modules`)。値と型の名前空間の重複 (E1003)、fixity の重複 (E1021)、このモジュールにない演算子の fixity
-/// (E1022)、import の並びの名前 (E1001、E1002、E1029)、import の循環 (E1027) を出す。
+/// モジュール 0 を Prelude として読む。入口は `Loaded::entry` のファイルのモジュールである。値と型の名前空間の重複
+/// (E1003)、fixity の重複 (E1021)、このモジュールにない演算子の fixity (E1022)、import の並びの名前 (E1001、E1002、
+/// E1029)、import の循環 (E1027) を出す。
 pub fn def_map(loaded: &Loaded) -> (DefMap, Vec<Diagnostic>) {
     let modules = &loaded.modules;
     let entry = modules
         .iter()
-        .rposition(|module| module.origin.session().is_some())
-        .unwrap_or(1);
+        .position(|module| module.tree.file == loaded.entry)
+        .expect("the entry file is a loaded module");
     let mut diagnostics = Vec::new();
     let mut scopes: Vec<ModuleScope> = modules
         .iter()
@@ -321,7 +313,9 @@ pub(crate) fn module_id(index: usize) -> ModuleId {
     ModuleId::from_raw(RawIdx::from(index as u32))
 }
 
-fn item_id<T>(module: ModuleId, local: usize) -> ItemId<T> {
+/// モジュールの中の局所の番号の item の ID。関数、型、エフェクト、クラスは `ItemTree` の順の番号で、部品は宣言の順の
+/// 通し番号である。`lower` も同じ順にアリーナへ置く。
+pub(crate) fn item_id<T>(module: ModuleId, local: usize) -> ItemId<T> {
     ItemId::new(module, Idx::from_raw(RawIdx::from(local as u32)))
 }
 
@@ -330,60 +324,6 @@ impl ModuleScope {
     /// する。`lower` も同じ順にアリーナへ置く。
     fn new(module: ModuleId, loaded: &LoadedModule) -> ModuleScope {
         let tree = &loaded.tree;
-        let functions = (0..tree.functions.len())
-            .map(|k| item_id(module, k))
-            .collect();
-        let type_ids: Vec<TypeDefId> = (0..tree.data.len()).map(|k| item_id(module, k)).collect();
-        let mut next = 0;
-        let constructors = tree
-            .data
-            .iter()
-            .map(|data| {
-                data.constructors
-                    .iter()
-                    .map(|_| {
-                        next += 1;
-                        item_id(module, next - 1)
-                    })
-                    .collect()
-            })
-            .collect();
-        let effects: Vec<EffectId> = (0..tree.effects.len())
-            .map(|k| item_id(module, k))
-            .collect();
-        let mut next = 0;
-        let operations = tree
-            .effects
-            .iter()
-            .map(|effect| {
-                effect
-                    .operations
-                    .iter()
-                    .map(|_| {
-                        next += 1;
-                        item_id(module, next - 1)
-                    })
-                    .collect()
-            })
-            .collect();
-        let class_ids: Vec<ClassId> = (0..tree.classes.len())
-            .map(|k| item_id(module, k))
-            .collect();
-        let mut next = 0;
-        let method_ids = tree
-            .classes
-            .iter()
-            .map(|class| {
-                class
-                    .methods
-                    .iter()
-                    .map(|_| {
-                        next += 1;
-                        item_id(module, next - 1)
-                    })
-                    .collect()
-            })
-            .collect();
         let input_function = tree
             .input
             .as_ref()
@@ -398,33 +338,26 @@ impl ModuleScope {
             name: loaded.name.clone(),
             origin: loaded.origin,
             file: tree.file,
-            values: HashMap::new(),
-            types: HashMap::new(),
-            type_params: HashMap::new(),
-            type_param_ranges: HashMap::new(),
-            effect_params: HashMap::new(),
-            fixities: HashMap::new(),
-            functions,
-            extern_functions: HashSet::new(),
-            type_ids,
-            constructors,
-            effects,
-            operations,
-            class_ids,
-            method_ids,
+            values: FxHashMap::default(),
+            types: FxHashMap::default(),
+            type_params: FxHashMap::default(),
+            type_param_ranges: FxHashMap::default(),
+            effect_params: FxHashMap::default(),
+            fixities: FxHashMap::default(),
+            extern_functions: FxHashSet::default(),
             input_function,
             binding,
-            parts: HashMap::new(),
+            parts: FxHashMap::default(),
             imports: Imports::default(),
             import_at: first_item_start(&loaded.parse),
         };
-        scope.declare(tree);
+        scope.declare(module, tree);
         scope
     }
 
-    fn declare(&mut self, tree: &ItemTree) {
+    fn declare(&mut self, module: ModuleId, tree: &ItemTree) {
         for (k, data) in tree.data.iter().enumerate() {
-            let id = self.type_ids[k];
+            let id = item_id(module, k);
             push(
                 &mut self.types,
                 &data.name,
@@ -439,7 +372,7 @@ impl ModuleScope {
                 .insert(id, data.params.iter().map(|&(_, range, _)| range).collect());
         }
         for (k, effect) in tree.effects.iter().enumerate() {
-            let id = self.effects[k];
+            let id = item_id(module, k);
             push(
                 &mut self.types,
                 &effect.name,
@@ -454,7 +387,7 @@ impl ModuleScope {
             push(
                 &mut self.types,
                 &class.name,
-                TypeItem::Class(self.class_ids[k]),
+                TypeItem::Class(item_id(module, k)),
                 class.name_range,
                 class.public,
                 true,
@@ -464,13 +397,13 @@ impl ModuleScope {
             names.sort_by_key(|definition| definition.range.start());
         }
         // 重複した宣言 (名前の2つ目以降の定義) の部品は使えない (規則2)
-        let duplicates: HashSet<TypeItem> = self
+        let duplicates: FxHashSet<TypeItem> = self
             .types
             .values()
             .flat_map(|names| names.iter().skip(1).map(|definition| definition.item))
             .collect();
         for (k, function) in tree.functions.iter().enumerate() {
-            let id = self.functions[k];
+            let id = item_id(module, k);
             if function
                 .signature
                 .as_ref()
@@ -487,67 +420,62 @@ impl ModuleScope {
                 true,
             );
         }
+        // 部品の局所の番号は、モジュールの中の宣言の順の通し番号である。`lower` も同じ順にアリーナへ置く
+        let mut next = 0..;
         for (k, data) in tree.data.iter().enumerate() {
-            let usable = !duplicates.contains(&TypeItem::Type(self.type_ids[k]));
-            for (j, constructor) in data.constructors.iter().enumerate() {
-                let id = self.constructors[k][j];
-                push(
-                    &mut self.values,
+            let owner = TypeItem::Type(item_id(module, k));
+            let usable = !duplicates.contains(&owner);
+            for constructor in &data.constructors {
+                let id = item_id(module, next.next().unwrap());
+                self.declare_part(
+                    owner,
                     &constructor.name,
                     ValueItem::Constructor(id),
                     constructor.name_range,
                     data.public,
                     usable,
                 );
-                self.parts
-                    .entry(TypeItem::Type(self.type_ids[k]))
-                    .or_default()
-                    .push((constructor.name.clone(), ValueItem::Constructor(id)));
             }
         }
+        let mut next = 0..;
         for (k, effect) in tree.effects.iter().enumerate() {
-            let usable = !duplicates.contains(&TypeItem::Effect(self.effects[k]));
+            let owner = TypeItem::Effect(item_id(module, k));
+            let usable = !duplicates.contains(&owner);
             // extern のエフェクトの操作 (Prelude の `io_failed`) は、宣言したモジュールの外から見せない
             // (docs/spec/modules.md の「標準ライブラリ」)
             let public = effect.public && effect.extern_keyword.is_none();
-            for (j, operation) in effect.operations.iter().enumerate() {
-                let id = self.operations[k][j];
-                push(
-                    &mut self.values,
+            for operation in &effect.operations {
+                let id = item_id(module, next.next().unwrap());
+                self.declare_part(
+                    owner,
                     &operation.name,
                     ValueItem::Operation(id),
                     operation.name_range,
                     public,
                     usable,
                 );
-                self.parts
-                    .entry(TypeItem::Effect(self.effects[k]))
-                    .or_default()
-                    .push((operation.name.clone(), ValueItem::Operation(id)));
             }
         }
         // `pub class` はメソッドもまとめて公開する
         // (docs/spec/declarations.md の「`pub`」)
+        let mut next = 0..;
         for (k, class) in tree.classes.iter().enumerate() {
-            let usable = !duplicates.contains(&TypeItem::Class(self.class_ids[k]));
-            for (j, method) in class.methods.iter().enumerate() {
-                let id = self.method_ids[k][j];
+            let owner = TypeItem::Class(item_id(module, k));
+            let usable = !duplicates.contains(&owner);
+            for method in &class.methods {
+                let id = item_id(module, next.next().unwrap());
                 let range = method
                     .signature
                     .as_ref()
                     .map_or(method.first_range, |signature| signature.name_range);
-                push(
-                    &mut self.values,
+                self.declare_part(
+                    owner,
                     &method.name,
                     ValueItem::Method(id),
                     range,
                     class.public,
                     usable,
                 );
-                self.parts
-                    .entry(TypeItem::Class(self.class_ids[k]))
-                    .or_default()
-                    .push((method.name.clone(), ValueItem::Method(id)));
             }
         }
         if let (Some(binding), Some(input)) = (self.binding, &tree.input)
@@ -568,6 +496,23 @@ impl ModuleScope {
         for names in self.values.values_mut() {
             names.sort_by_key(|definition| definition.range.start());
         }
+    }
+
+    /// 型、エフェクト、クラスの部品 (コンストラクタ、操作、メソッド) を、名前の表と `T(..)` が取り込む並びに入れる。
+    fn declare_part(
+        &mut self,
+        owner: TypeItem,
+        name: &str,
+        item: ValueItem,
+        range: TextRange,
+        public: bool,
+        usable: bool,
+    ) {
+        push(&mut self.values, name, item, range, public, usable);
+        self.parts
+            .entry(owner)
+            .or_default()
+            .push((name.to_string(), item));
     }
 
     /// 名前空間ごとに、使える定義の2つ目以降を E1003 にする (規則1)。
@@ -834,7 +779,7 @@ impl Imports {
 }
 
 fn push_source<T>(
-    table: &mut HashMap<String, Vec<Source<T>>>,
+    table: &mut FxHashMap<String, Vec<Source<T>>>,
     name: &str,
     item: Option<T>,
     import: TextRange,
@@ -873,7 +818,7 @@ fn index(module: ModuleId) -> usize {
 }
 
 fn push<T>(
-    table: &mut HashMap<String, Vec<Definition<T>>>,
+    table: &mut FxHashMap<String, Vec<Definition<T>>>,
     name: &str,
     item: T,
     range: TextRange,
@@ -999,7 +944,7 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
     fn find<T: Copy, I>(
         scopes: &[ModuleScope],
         canonical: &str,
-        table: impl Fn(&ModuleScope) -> &HashMap<String, Vec<Definition<T>>>,
+        table: impl Fn(&ModuleScope) -> &FxHashMap<String, Vec<Definition<T>>>,
         item: impl Fn(T) -> Option<I>,
     ) -> Option<I> {
         scopes
@@ -1128,35 +1073,6 @@ impl DefMap {
             def_map: self,
             module,
         }
-    }
-
-    /// `ItemTree` の k 番目の関数の ID。`lower` が番号の一致を確かめるのに使う。
-    pub fn function_id(&self, module: ModuleId, k: usize) -> FunctionId {
-        self.scope(module).functions[k]
-    }
-
-    pub fn type_id(&self, module: ModuleId, k: usize) -> TypeDefId {
-        self.scope(module).type_ids[k]
-    }
-
-    pub fn constructor_id(&self, module: ModuleId, data: usize, k: usize) -> ConstructorId {
-        self.scope(module).constructors[data][k]
-    }
-
-    pub fn effect_id(&self, module: ModuleId, k: usize) -> EffectId {
-        self.scope(module).effects[k]
-    }
-
-    pub fn operation_id(&self, module: ModuleId, effect: usize, k: usize) -> OperationId {
-        self.scope(module).operations[effect][k]
-    }
-
-    pub fn class_id(&self, module: ModuleId, k: usize) -> ClassId {
-        self.scope(module).class_ids[k]
-    }
-
-    pub fn method_id(&self, module: ModuleId, class: usize, k: usize) -> MethodId {
-        self.scope(module).method_ids[class][k]
     }
 
     /// REPL の入力を実行する関数 `input$N` の ID。

@@ -1,7 +1,7 @@
-//! 巻き戻しの点 (`eml_lir::unwind::points_all`)。入力は所有の段の verifier を通る、Perceus の後の LIR のテキストである
+//! 巻き戻しの点 (`eml_lir::unwind::points`)。入力は所有の段の verifier を通る、Perceus の後の LIR のテキストである
 //! (docs/spec/vm.md の「巻き戻しの表」)。
 
-use eml_lir::unwind::{UnwindPoint, may_abort, points_all};
+use eml_lir::unwind::{UnwindPoint, may_abort, points};
 use eml_lir::{BlockId, VarId, parse, verify};
 
 /// `name` の関数の巻き戻しの点。入力が所有の段の verifier を通ることも確かめる。
@@ -15,8 +15,9 @@ fn points_of(text: &str, name: &str) -> Vec<UnwindPoint> {
         .iter()
         .position(|function| function.name == name)
         .unwrap_or_else(|| panic!("no `{name}`"));
-    points_all(&program)
+    points(&program, |_| true)
         .swap_remove(index)
+        .expect("every function is wanted")
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
@@ -193,7 +194,10 @@ fn f(c.0: tobj, e.1: obj, k.2: obj) -> obj {
 fn unverified_lir_has_no_points() {
     let program = parse("fn f(a.0: obj) -> unit {\n  return ()\n}\n")
         .unwrap_or_else(|error| panic!("{error}"));
-    let error = points_all(&program).swap_remove(0).unwrap_err();
+    let error = points(&program, |_| true)
+        .swap_remove(0)
+        .expect("every function is wanted")
+        .unwrap_err();
     assert_eq!(
         error.to_string(),
         "`a.0` is still owned at the end of the function in `f`"

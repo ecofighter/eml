@@ -1,8 +1,7 @@
 //! `:type` の問い合わせの型を書く (docs/spec/types.md の「REPL の入力」)。
 
-use std::collections::HashSet;
-
 use eml_hir::{ClassId, Program};
+use rustc_hash::FxHashSet;
 
 use crate::store::TypeStore;
 use crate::table::{Exporter, Row, RowVar, Table, Tail, Ty, TyShape, VarNames};
@@ -100,7 +99,7 @@ fn walk_row(
 }
 
 /// 書く型に現れる型変数の代表。問い合わせの残りの制約を、文脈と `Unit` に分けるのに使う。
-pub(super) fn shown_vars(table: &Table<'_>, ty: Ty) -> HashSet<Ty> {
+pub(super) fn shown_vars(table: &Table<'_>, ty: Ty) -> FxHashSet<Ty> {
     occurrences(table, ty).types.into_iter().collect()
 }
 
@@ -137,7 +136,7 @@ pub(super) fn render(
     for (index, row) in found.rows.iter().filter(|row| row.named()).enumerate() {
         names.rows.insert(row.var, row_var_name(index));
     }
-    let mut types = TypeStore::new(program);
+    let mut types = TypeStore::new(program, table.data_kinds().clone());
     let id = Exporter::named(table, &mut types, &names).export(ty);
     let shown = types.display(id, &program.names).to_string();
     let constraints = context_text(program, table, &found.types, &names, context);

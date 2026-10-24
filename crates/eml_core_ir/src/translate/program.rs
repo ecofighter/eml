@@ -1,7 +1,5 @@
 //! 変換の途中で関数を足していく表と、extern の関数、操作、コンストラクタ、継続を包む関数、入口の関数、エフェクトの表。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_extern::{Extern, ExternType};
 use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, Items, ModuleId, ModuleOrigin,
@@ -9,6 +7,7 @@ use eml_hir::{
     ValueItem,
 };
 use eml_types::{TypeId, TypeKind, TypeStore, TypedProgram, VarClass, VarType};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
@@ -19,13 +18,13 @@ use eml_lir::{
 use crate::builder::FnBuilder;
 
 use super::display::BUDGET;
-use super::types::{Composite, StructTypes, boxed_repr, declared_mark, mark, named, split_arrows};
+use super::types::{Composite, StructTypes, boxed_repr, declared_mark, mark, split_arrows};
 
 /// 文字列リテラルと表示用のパスの表。同じ文字列には同じ番号を返す。
 #[derive(Default)]
 pub(super) struct Interner {
     pub(super) values: Vec<String>,
-    ids: HashMap<String, u32>,
+    ids: FxHashMap<String, u32>,
 }
 
 impl Interner {
@@ -59,9 +58,10 @@ impl FnBuilder {
     }
 
     fn bind_string(&mut self, rhs: Rhs) -> Atom {
-        let var = self.var(named("s", ExternType::String.row().repr, Mark::Unr));
-        self.emit(Stmt::Let { var, rhs });
-        Atom::Var(var)
+        Atom::Var(self.bind(
+            VarInfo::new("s", ExternType::String.row().repr, Mark::Unr),
+            rhs,
+        ))
     }
 }
 
@@ -81,17 +81,17 @@ pub(super) struct ProgramBuilder {
     pub(super) files: Interner,
     /// IR が名指す data の型とタプルの配置 (`Program.layouts`)。最初に使った順に番号を振る。
     pub(super) layouts: Vec<Layout>,
-    layout_ids: HashMap<LayoutKey, LayoutId>,
+    layout_ids: FxHashMap<LayoutKey, LayoutId>,
     /// コンストラクタのスキームの型。data の型の配置のフィールドの Repr を決める。
-    constructor_types: HashMap<ConstructorId, TypeId>,
+    constructor_types: FxHashMap<ConstructorId, TypeId>,
     /// 型ごとの包む関数 (`$op$`、`$con$`、`$cont$`、`$cont$state`) を名前で引く表。名前は型引数を含むので、同じ名前なら
     /// 同じコードである。
-    wrappers: HashMap<String, FnIdx>,
+    wrappers: FxHashMap<String, FnIdx>,
     struct_types: StructTypes,
     /// IR が名指す構造体の形 (`Program.structs`)。
     pub(super) structs: Structs,
     /// 型ごとに決めた Repr。構造体の判定は型をたどるので、同じ型を何度も読む変換のために覚えておく。
-    reprs: HashMap<TypeId, Repr>,
+    reprs: FxHashMap<TypeId, Repr>,
 }
 
 impl ProgramBuilder {
@@ -102,7 +102,7 @@ impl ProgramBuilder {
             strings: Interner::default(),
             files: Interner::default(),
             layouts: Vec::new(),
-            layout_ids: HashMap::new(),
+            layout_ids: FxHashMap::default(),
             constructor_types: typed
                 .decls
                 .iter()
@@ -111,10 +111,10 @@ impl ProgramBuilder {
                     _ => None,
                 })
                 .collect(),
-            wrappers: HashMap::new(),
+            wrappers: FxHashMap::default(),
             struct_types,
             structs: Structs::default(),
-            reprs: HashMap::new(),
+            reprs: FxHashMap::default(),
         }
     }
 
@@ -186,7 +186,7 @@ impl ProgramBuilder {
         types: &TypeStore,
         ty: TypeId,
     ) -> VarInfo {
-        named(name, self.repr(hir, types, ty), mark(types, ty, hir))
+        VarInfo::new(name, self.repr(hir, types, ty), mark(types, ty, hir))
     }
 
     /// 「RC の対象」で後始末を決める所の述語。`unr` でない RC の葉を持つ構造体も含める
@@ -327,7 +327,7 @@ impl ProgramBuilder {
             return function;
         }
         // 生の継続は `once` の操作なら `Lin`、`multi` なら `Unr` で、`k` の値の型からは決まらないので `poly` にする
-        let mut infos = vec![named("k", Repr::TObj, Mark::Poly)];
+        let mut infos = vec![VarInfo::new("k", Repr::TObj, Mark::Poly)];
         infos.extend(
             params
                 .iter()
@@ -346,10 +346,7 @@ impl ProgramBuilder {
                 let arg = args.next().expect("v");
                 // 状態のない handler の状態は `()` である
                 let state = args.next().unwrap_or(Atom::Unit);
-                Rhs::Call {
-                    call: Call::Resume { k, arg, state },
-                    mask: Vec::new(),
-                }
+                Rhs::call(Call::Resume { k, arg, state })
             },
             result,
         );
@@ -380,10 +377,7 @@ impl ProgramBuilder {
             name.clone(),
             true,
             params,
-            |args| Rhs::Call {
-                call: perform_call(hir, op, args),
-                mask: Vec::new(),
-            },
+            |args| Rhs::call(perform_call(hir, op, args)),
             result,
         );
         self.wrappers.insert(name, function);
@@ -479,7 +473,7 @@ impl ProgramBuilder {
     ) -> Atom {
         if ext.row().with_arg.is_none() {
             let info = self.var_info("t", hir, types, ty);
-            return bind(builder, info, Rhs::Extern { ext, args, at });
+            return Atom::Var(builder.bind(info, Rhs::Extern { ext, args, at }));
         }
         let TypeKind::Tuple(elements) = types.kind(ty) else {
             unreachable!("an extern with `with_arg` returns a pair")
@@ -501,19 +495,18 @@ impl ProgramBuilder {
     ) -> Atom {
         let k = ext.row().with_arg.expect("a lending row returns a pair");
         let lent = args[k];
-        let value = bind(builder, value, Rhs::Extern { ext, args, at });
+        let value = Atom::Var(builder.bind(value, Rhs::Extern { ext, args, at }));
         let ctor = Ctor {
             layout: self.tuple_layout(2),
             tag: TUPLE,
         };
-        bind(
-            builder,
+        Atom::Var(builder.bind(
             pair,
             Rhs::Con {
                 ctor,
                 args: vec![value, lent],
             },
-        )
+        ))
     }
 
     /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。等式に引数のない
@@ -545,7 +538,7 @@ impl ProgramBuilder {
             let value = builder.var(info);
             builder.emit(Stmt::Let {
                 var: value,
-                rhs: plain_call(Call::Direct(target, Vec::new())),
+                rhs: Rhs::call(Call::Direct(target, Vec::new())),
             });
             Call::Apply {
                 callee: Atom::Var(value),
@@ -560,7 +553,7 @@ impl ProgramBuilder {
         let result = builder.var(info);
         builder.emit(Stmt::Let {
             var: result,
-            rhs: plain_call(call),
+            rhs: Rhs::call(call),
         });
         let value = Atom::Var(result);
         let (returned, ret, ret_mark) = match after {
@@ -572,7 +565,10 @@ impl ProgramBuilder {
                 mark(types, result_type, hir),
             ),
             EntryAfter::Store(root) => {
-                let stored = unit_var(&mut builder, Rhs::Prim(Prim::RootSet(root), vec![value]));
+                let stored = Atom::Var(builder.bind(
+                    VarInfo::new("u", Repr::Unit, Mark::Unr),
+                    Rhs::Prim(Prim::RootSet(root), vec![value]),
+                ));
                 (stored, Repr::Unit, Mark::Unr)
             }
             EntryAfter::Shown(shown) => {
@@ -597,14 +593,14 @@ impl ProgramBuilder {
     /// 0 から始める。
     fn display(&mut self, builder: &mut FnBuilder, display: FnIdx, value: Atom) -> Atom {
         let empty = builder.string(&mut self.strings, "");
-        let pair = builder.var(named("r", Repr::Obj, Mark::Unr));
+        let pair = builder.var(VarInfo::new("r", Repr::Obj, Mark::Unr));
         let args = vec![empty, Atom::Int(BUDGET), Atom::Int(0), Atom::Int(0), value];
         builder.emit(Stmt::Let {
             var: pair,
-            rhs: plain_call(Call::Direct(display, args)),
+            rhs: Rhs::call(Call::Direct(display, args)),
         });
-        let text = builder.var(named("s", Repr::Obj, Mark::Unr));
-        let budget = builder.var(named("n", Repr::Int, Mark::Unr));
+        let text = builder.var(VarInfo::new("s", Repr::Obj, Mark::Unr));
+        let budget = builder.var(VarInfo::new("n", Repr::Int, Mark::Unr));
         builder.emit(Stmt::Unpack {
             value: pair,
             ctor: Ctor {
@@ -625,15 +621,15 @@ impl ProgramBuilder {
                 at: None,
             },
             ShowTarget::Function(target) if self.arity(target) == 1 => {
-                plain_call(Call::Direct(target, vec![value]))
+                Rhs::call(Call::Direct(target, vec![value]))
             }
             ShowTarget::Function(target) => {
-                let function = builder.var(named("f", Repr::TObj, Mark::Unr));
+                let function = builder.var(VarInfo::new("f", Repr::TObj, Mark::Unr));
                 builder.emit(Stmt::Let {
                     var: function,
-                    rhs: plain_call(Call::Direct(target, Vec::new())),
+                    rhs: Rhs::call(Call::Direct(target, Vec::new())),
                 });
-                plain_call(Call::Apply {
+                Rhs::call(Call::Apply {
                     callee: Atom::Var(function),
                     args: vec![value],
                     yields: false,
@@ -677,33 +673,12 @@ pub(super) enum ShowTarget {
 }
 
 /// `rhs` の結果を新しい変数 `info` に束縛する。
-pub(super) fn bind(builder: &mut FnBuilder, info: VarInfo, rhs: Rhs) -> Atom {
-    let var = builder.var(info);
-    builder.emit(Stmt::Let { var, rhs });
-    Atom::Var(var)
-}
-
-/// `rhs` の結果を `unit` の新しい変数に束縛する。
-fn unit_var(builder: &mut FnBuilder, rhs: Rhs) -> Atom {
-    let var = builder.var(named("u", Repr::Unit, Mark::Unr));
-    builder.emit(Stmt::Let { var, rhs });
-    Atom::Var(var)
-}
-
-/// `mask` のない呼び出し。
-pub(super) fn plain_call(call: Call) -> Rhs {
-    Rhs::Call {
-        call,
-        mask: Vec::new(),
-    }
-}
-
 /// 再帰の組に入る型の宣言。宣言のフィールドの型の注釈が、型引数や関数型の中を含めてどこかで名指す型の宣言へ辺を引き、
 /// 自分へ戻れる宣言を集める。自分を直接か、ほかの宣言のフィールドを通して含む型は、構造体にしない。`Iter` は
 /// `Option (a, Iter e a)` を通して自分を含む
 /// (docs/spec/core-ir.md の「構造体にする型」)。構造体にしうるのはコンストラクタが
 /// 1つの宣言だけなので、それらからだけたどる。プログラムに1回だけ求める。
-pub(super) fn recursive_types(hir: &HirProgram) -> HashSet<TypeDefId> {
+pub(super) fn recursive_types(hir: &HirProgram) -> FxHashSet<TypeDefId> {
     let mentions = |id: TypeDefId| {
         hir[id]
             .types
@@ -715,10 +690,10 @@ pub(super) fn recursive_types(hir: &HirProgram) -> HashSet<TypeDefId> {
             .collect::<Vec<_>>()
     };
     let single = |id: TypeDefId| matches!(&hir[id].kind, TypeDefKind::Data { constructors } if constructors.len() == 1);
-    let mut edges: HashMap<TypeDefId, Vec<TypeDefId>> = HashMap::new();
-    let mut recursive = HashSet::new();
+    let mut edges: FxHashMap<TypeDefId, Vec<TypeDefId>> = FxHashMap::default();
+    let mut recursive = FxHashSet::default();
     for (start, _) in hir.types().filter(|&(id, _)| single(id)) {
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         let mut work = vec![start];
         while let Some(id) = work.pop() {
             for &next in edges.entry(id).or_insert_with(|| mentions(id)).iter() {

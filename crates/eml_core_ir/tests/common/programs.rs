@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// 1つのプログラム。`modules` は入口のディレクトリからの相対パスと本文の組で、
-/// `eml_test_support::core_until_files` にそのまま渡す。
+/// `eml_test_support::with_modules` にそのまま渡す。
 pub struct UiProgram {
     /// `run/basics/hello.em`、`run/names/import_cycle`、`bench/fib` の形の名前。
     pub name: String,

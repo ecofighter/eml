@@ -3,27 +3,29 @@
 //! 地点の後の続きを継続の関数 `f$kN` のクロージャにして κ に足す。`f$kN` の本体は地点の直後からの区間の写しで、
 //! 次の地点では `f$kq` を呼び、合流のブロック J への `jump` では合流のブロックの関数 `f$jJ` を呼んで止まる。
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 use std::mem;
 use std::ops::Range;
 
-use crate::liveness::{insert_var, live_after_term, live_in, step_back};
+use rustc_hash::{FxHashMap, FxHashSet};
+
+use crate::liveness::{join_live, live_before_term, live_in, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo, operation};
 
-use super::{Helpers, captured_mark, direct, dummy, named, reserve, yield_switch};
+use super::{Helpers, captured_mark, direct, dummy, reserve, yield_switch};
 
 /// 変換の後の関数で、yield の地点の扱いを変える所。handle と `mask` の変換が作る。位置はブロックと文の添字である。
 #[derive(Default)]
 pub(crate) struct Annotations {
     /// handle の本体の `apply`。yield したかは `prompt$` が見る。
-    pub(crate) not_yield_points: HashSet<(BlockId, usize)>,
+    pub(crate) not_yield_points: FxHashSet<(BlockId, usize)>,
     /// 直後に `evv_set(w0)` が続く `mask` の呼び出しと、その `mask` の項目。遅い道は κ を `mask$` で包み、続きは
     /// `evv_set(w0)` の後から始まる (docs/spec/core-ir.md の「`mask` の包み」)。
-    pub(crate) masked: HashMap<(BlockId, usize), Vec<MaskItem>>,
+    pub(crate) masked: FxHashMap<(BlockId, usize), Vec<MaskItem>>,
     /// `mask` の呼び出し。呼ぶ相手が `yields` でなくても地点にする。
-    pub(crate) forced: HashSet<(BlockId, usize)>,
+    pub(crate) forced: FxHashSet<(BlockId, usize)>,
 }
 
 /// yield の地点 `let x = <呼び出し>`。
@@ -46,12 +48,14 @@ pub(crate) fn split(
     annotations: &Annotations,
     helpers: &mut Helpers,
 ) {
-    let source = program.function(function).clone();
-    let live_in = live_in(&source);
-    let points = yield_points(program, &source, &live_in, annotations);
+    // yield の地点のない関数は多いので、地点を見つけてから写す
+    let original = program.function(function);
+    let live_in = live_in(original);
+    let points = yield_points(program, original, &live_in, annotations);
     if points.is_empty() {
         return;
     }
+    let source = original.clone();
     let continuations = (0..points.len())
         .map(|n| reserve(program, &format!("{}$k{n}", source.name)))
         .collect();
@@ -68,7 +72,7 @@ pub(crate) fn split(
         points,
         by_block,
         continuations,
-        joins: HashMap::new(),
+        joins: FxHashMap::default(),
         pending: Vec::new(),
     };
 
@@ -182,8 +186,7 @@ fn yield_points(
 /// 1つのブロックの地点ごとに、続きの始めで生きている変数を決める。ブロックを後ろから1回だけたどる。地点ごとに
 /// ブロックの末尾からたどると、yield する呼び出しが並ぶブロックでは文の数の2乗の手間になるためである。
 fn fill_live(function: &CoreFn, block: &Block, live_in: &[Vec<VarId>], points: &mut [Point]) {
-    let mut live = live_after_term(function, &block.term, live_in);
-    block.term.for_each_atom(|atom| insert_var(&mut live, atom));
+    let mut live = live_before_term(function, block, live_in);
     let mut end = block.stmts.len();
     for point in points.iter_mut().rev() {
         for stmt in block.stmts[point.resume..end].iter().rev() {
@@ -222,7 +225,7 @@ struct Splitter<'a> {
     /// 地点ごとの `f$kN`。
     continuations: Vec<FnIdx>,
     /// 区間から届いた合流のブロックの `f$jJ`。
-    joins: HashMap<BlockId, FnIdx>,
+    joins: FxHashMap<BlockId, FnIdx>,
     /// 番号を取ったが、中身をまだ作っていない `f$jJ` の合流のブロック。
     pending: Vec<BlockId>,
 }
@@ -271,12 +274,7 @@ impl<'a> Splitter<'a> {
 
     /// 合流のブロック J の入口で生きている変数から、J の引数を除いたもの。番号の順に並ぶ。
     fn join_live(&self, join: BlockId) -> Vec<VarId> {
-        let params = &self.source.block(join).params;
-        self.live_in[join.0 as usize]
-            .iter()
-            .copied()
-            .filter(|var| !params.contains(var))
-            .collect()
+        join_live(self.source, &self.live_in, join, None).collect()
     }
 
     fn join(&mut self, program: &mut Program, block: BlockId) -> FnIdx {
@@ -321,7 +319,7 @@ impl<'a> Splitter<'a> {
         params: Vec<VarId>,
         mode: Mode,
     ) -> Out<'a> {
-        let mut starts = HashMap::new();
+        let mut starts = FxHashMap::default();
         let mut next = 0;
         for segment in segments {
             starts.insert(segment.block, BlockId(next));
@@ -415,7 +413,7 @@ impl<'a> Splitter<'a> {
 struct Out<'a> {
     mode: Mode,
     /// 写す元のブロックごとの、最初の部分の新しい番号。
-    starts: HashMap<BlockId, BlockId>,
+    starts: FxHashMap<BlockId, BlockId>,
     /// 元の関数の変数の表。関数ごとに写さず、番号の前の部分として読む。
     source: &'a [VarInfo],
     /// 新しく足した変数。番号は `source` の後ろに続く。
@@ -466,7 +464,7 @@ impl Out<'_> {
         rhs: Rhs,
     ) -> VarId {
         let var = VarId((self.source.len() + self.added.len()) as u32);
-        self.added.push(named(name, repr, mark));
+        self.added.push(VarInfo::new(name, repr, mark));
         stmts.push(Stmt::Let { var, rhs });
         var
     }

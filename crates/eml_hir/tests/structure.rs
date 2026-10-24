@@ -7,7 +7,7 @@ use eml_hir::{
 
 /// 診断がないことを確かめて HIR を返す。
 fn module(text: &str) -> Program {
-    eml_test_support::lower_clean(text).program
+    eml_test_support::lower_clean(text).into_stage().program
 }
 
 fn function_id(program: &Program, name: &str) -> FunctionId {
@@ -157,10 +157,12 @@ fn prelude_functions_with_equations_are_not_extern() {
         "{}\npub twice : Int -> Int\ntwice x = x + x\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let lowered =
-        eml_test_support::lower_with_std(&[("Prelude.em", &prelude), eml_hir::STD[1]], "");
+    let lowered = eml_test_support::lower(eml_test_support::with_std(
+        &[("Prelude.em", &prelude), eml_hir::STD[1]],
+        "",
+    ));
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
-    let program = lowered.program;
+    let program = lowered.into_stage().program;
     let twice = function_id(&program, "twice");
     assert_eq!(program[twice].kind, FunctionKind::Defined);
     assert!(program.body(twice).is_some());
@@ -229,10 +231,10 @@ fn the_prelude_and_the_entry_are_separate_modules() {
 
 #[test]
 fn imported_modules_follow_the_entry() {
-    let lowered = eml_test_support::lower_files(
+    let lowered = eml_test_support::lower(eml_test_support::with_modules(
         "import Report.Csv\n\nf : Int\nf = 1",
         &[("Report/Csv.em", "pub g : Int\ng = 2")],
-    );
+    ));
     assert!(
         lowered.diagnostics.is_empty(),
         "{}",
@@ -278,10 +280,12 @@ fn a_main_in_the_prelude_is_not_the_entry_function() {
         "{}\nmain : Unit -> <IO> Unit\nmain () = ()\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let lowered =
-        eml_test_support::lower_with_std(&[("Prelude.em", &prelude), eml_hir::STD[1]], "");
+    let lowered = eml_test_support::lower(eml_test_support::with_std(
+        &[("Prelude.em", &prelude), eml_hir::STD[1]],
+        "",
+    ));
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
-    let program = lowered.program;
+    let program = lowered.into_stage().program;
     assert!(
         program
             .functions()

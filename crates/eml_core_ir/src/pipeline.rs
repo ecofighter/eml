@@ -8,6 +8,21 @@ use eml_types::TypedProgram;
 use crate::{Program, evidence, optimize, to_lir, translate, verify_evidence, verify_translated};
 use eml_lir::VerifyError;
 
+/// Core IR を作る入口の入力。どの入口も同じ4つを受け取るので、1つにまとめて渡す。
+///
+/// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
+/// (docs/implementation/architecture.md)。`files` は、extern の呼び出しの位置 (`Loc`) を行と列にするのに使う。
+///
+/// `entry` は本体を持つ関数 (extern ではない) で、型が `Unit -> ...` か、引数がなく `Unit -> ...` の関数を返すものでなければならない。
+/// `main` は型検査器が E2004 で保証するが、ほかの呼び出し元 (REPL の入力の関数など) は自分で保証する。
+#[derive(Clone, Copy)]
+pub struct Input<'a> {
+    pub hir: &'a HirProgram,
+    pub typed: &'a TypedProgram,
+    pub entry: FunctionId,
+    pub files: &'a SourceFiles,
+}
+
 /// `core_until` で止める位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pass {
@@ -27,20 +42,8 @@ impl Pass {
 }
 
 /// `last` の直後の Core IR で止める。止めたパスまでの検査は、debug ビルドでかける。
-///
-/// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
-/// (docs/implementation/architecture.md)。`files` は、extern の呼び出しの位置 (`Loc`) を行と列にするのに使う。
-///
-/// `entry` は本体を持つ関数 (extern ではない) で、型が `Unit -> ...` か、引数がなく `Unit -> ...` の関数を返すものでなければならない。
-/// `main` は型検査器が E2004 で保証するが、ほかの呼び出し元 (将来の REPL など) は自分で保証する。
-pub fn core_until(
-    hir: &HirProgram,
-    typed: &TypedProgram,
-    entry: FunctionId,
-    files: &SourceFiles,
-    last: Pass,
-) -> Program {
-    let mut program = translate::translate(hir, typed, entry, files);
+pub fn core_until(input: Input, last: Pass) -> Program {
+    let mut program = translate::translate(input.hir, input.typed, input.entry, input.files);
     check(&program, Pass::Translate);
     if last == Pass::Translate {
         return program;
@@ -55,25 +58,14 @@ pub fn core_until(
     program
 }
 
-/// 入力の条件は `core_until` と同じである。
-pub fn lower(
-    hir: &HirProgram,
-    typed: &TypedProgram,
-    entry: FunctionId,
-    files: &SourceFiles,
-) -> eml_lir::Program {
-    lower_until(hir, typed, entry, files, eml_lir::Pass::Reuse)
+/// reuse までのすべてのパスをかけた LIR。
+pub fn lower(input: Input) -> eml_lir::Program {
+    lower_until(input, eml_lir::Pass::Reuse)
 }
 
-/// EP の後の Core IR を LIR に写し、`last` までの LIR のパスをかける。入力の条件は `core_until` と同じである。
-pub fn lower_until(
-    hir: &HirProgram,
-    typed: &TypedProgram,
-    entry: FunctionId,
-    files: &SourceFiles,
-    last: eml_lir::Pass,
-) -> eml_lir::Program {
-    let mut program = to_lir(core_until(hir, typed, entry, files, Pass::Evidence));
+/// EP の後の Core IR を LIR に写し、`last` までの LIR のパスをかける。
+pub fn lower_until(input: Input, last: eml_lir::Pass) -> eml_lir::Program {
+    let mut program = to_lir(core_until(input, Pass::Evidence));
     eml_lir::passes_until(&mut program, last);
     program
 }

@@ -1,10 +1,10 @@
 //! 実行するコードの表 `CodeBase` と関数表 `FnEntry` (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use eml_lir::{FloatBits, Loc, Repr};
 use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
+use rustc_hash::FxHashMap;
 
 use crate::error::{RuntimeError, SourceLocation};
 use crate::op::{BUILTINS, Op, Pc, Slot};
@@ -50,17 +50,10 @@ pub(crate) fn builtins() -> Vec<Op> {
 /// (docs/spec/vm.md の「追記」)。
 pub struct CodeBase<M: Mode> {
     pub(crate) functions: Vec<FnEntry>,
-    pub(crate) code: Vec<Op>,
-    pub(crate) operands: Vec<u32>,
-    /// `EvvMask` が参照する、mask の項目の並び。
-    pub(crate) mask_lists: Vec<MaskItem>,
+    pub(crate) tables: Tables,
     pub(crate) constants: Vec<Word>,
     /// 定数を置いた凍結した塊の鎖の先頭。定数の物体をまだ作っていなければ `None`。
     pub(crate) region: Option<Arc<Frozen<M>>>,
-    /// 命令の位置の昇順。
-    pub(crate) locations: Vec<(Pc, Loc)>,
-    /// 巻き戻しの表。地点の命令の次の位置の昇順。
-    pub(crate) unwinds: Vec<(Pc, Unwind)>,
     pub(crate) files: Vec<String>,
     /// 追記で番号を引き直す表。
     pub(crate) index: Index,
@@ -68,21 +61,108 @@ pub struct CodeBase<M: Mode> {
     pub(crate) control: Arc<Control>,
 }
 
+/// 命令と、命令の位置で引く表。コード生成は関数をまたいで1つの `Tables` の末尾に書き、逆アセンブラも同じ形を読む。
+pub(crate) struct Tables {
+    pub(crate) code: Vec<Op>,
+    pub(crate) operands: Vec<u32>,
+    /// `EvvMask` が参照する、mask の項目の並び。
+    pub(crate) mask_lists: Vec<MaskItem>,
+    /// 命令の位置の昇順。
+    pub(crate) locations: Vec<(Pc, Loc)>,
+    /// 巻き戻しの表。地点の命令の次の位置の昇順。
+    pub(crate) unwinds: Vec<(Pc, Unwind)>,
+}
+
+impl Tables {
+    /// 組み込みの命令だけを持つ表。
+    pub(crate) fn new() -> Tables {
+        Tables {
+            code: builtins(),
+            operands: Vec::new(),
+            mask_lists: Vec::new(),
+            locations: Vec::new(),
+            unwinds: Vec::new(),
+        }
+    }
+
+    pub(crate) fn pc(&self) -> Pc {
+        Pc::try_from(self.code.len()).expect("the code fits in u32 positions")
+    }
+
+    pub(crate) fn push(&mut self, op: Op) -> Pc {
+        let pc = self.pc();
+        self.code.push(op);
+        pc
+    }
+
+    /// オペランドの並びを足し、その先頭の添字を返す。
+    pub(crate) fn operands(&mut self, items: impl IntoIterator<Item = u32>) -> u32 {
+        let at = u32::try_from(self.operands.len()).expect("the operands fit in u32 positions");
+        self.operands.extend(items);
+        at
+    }
+
+    /// [頭…, スロットの数, スロット…] のオペランドを足し、その先頭の添字を返す。
+    pub(crate) fn slot_list(&mut self, head: impl IntoIterator<Item = u32>, slots: &[Slot]) -> u32 {
+        let at = self.operands(head);
+        self.operands.push(slots.len() as u32);
+        self.operands
+            .extend(slots.iter().map(|&slot| u32::from(slot)));
+        at
+    }
+
+    /// 書いた長さ。一致の確かめで書いた写しを消すために覚える。
+    pub(crate) fn lengths(&self) -> [usize; 5] {
+        [
+            self.code.len(),
+            self.operands.len(),
+            self.mask_lists.len(),
+            self.locations.len(),
+            self.unwinds.len(),
+        ]
+    }
+
+    pub(crate) fn truncate(
+        &mut self,
+        [code, operands, mask_lists, locations, unwinds]: [usize; 5],
+    ) {
+        self.code.truncate(code);
+        self.operands.truncate(operands);
+        self.mask_lists.truncate(mask_lists);
+        self.locations.truncate(locations);
+        self.unwinds.truncate(unwinds);
+    }
+
+    pub(crate) fn location(&self, pc: Pc) -> Option<Loc> {
+        let index = self
+            .locations
+            .binary_search_by_key(&pc, |&(at, _)| at)
+            .ok()?;
+        Some(self.locations[index].1)
+    }
+
+    /// 地点の命令の次の位置 `pc` の巻き戻しの表の行。
+    pub(crate) fn unwind_at(&self, pc: Pc) -> Option<&Unwind> {
+        let index = self.unwinds.binary_search_by_key(&pc, |&(at, _)| at).ok()?;
+        Some(&self.unwinds[index].1)
+    }
+}
+
 /// 名前と中身から `CodeBase` の番号を引く表 (docs/spec/vm.md の「追記」)。
 #[derive(Default)]
 pub(crate) struct Index {
-    pub(crate) functions: HashMap<String, u32>,
+    pub(crate) functions: FxHashMap<String, u32>,
     /// エフェクトの名前から実行時の番号。番号は読み込んだ順に振る。
-    pub(crate) effects: HashMap<String, u16>,
-    pub(crate) files: HashMap<String, u32>,
+    pub(crate) effects: FxHashMap<String, u16>,
+    pub(crate) files: FxHashMap<String, u32>,
     /// 文字列の中身から定数の番号。
-    pub(crate) strings: HashMap<String, u32>,
+    pub(crate) strings: FxHashMap<String, u32>,
     /// 生の整数の値から定数の番号。
-    pub(crate) raws: HashMap<i64, u32>,
+    pub(crate) raws: FxHashMap<i64, u32>,
     /// `tobj` の `Int` の値から定数の番号。
-    pub(crate) boxed: HashMap<i64, u32>,
+    pub(crate) boxed: FxHashMap<i64, u32>,
     /// `tobj` の `Float` のビット列から定数の番号。
-    pub(crate) boxed_floats: HashMap<FloatBits, u32>,
+    pub(crate) boxed_floats: FxHashMap<FloatBits, u32>,
     /// 不死の空の `MutArray` の定数の番号。最初に使うときに作る。
     pub(crate) empty_mut_array: Option<u32>,
 }
@@ -117,20 +197,6 @@ impl<M: Mode> CodeBase<M> {
             .filter(|f| pc < f.end)
     }
 
-    pub(crate) fn location(&self, pc: Pc) -> Option<Loc> {
-        let index = self
-            .locations
-            .binary_search_by_key(&pc, |&(at, _)| at)
-            .ok()?;
-        Some(self.locations[index].1)
-    }
-
-    /// 地点の命令の次の位置 `pc` の巻き戻しの表の行。
-    pub(crate) fn unwind_at(&self, pc: Pc) -> Option<&Unwind> {
-        let index = self.unwinds.binary_search_by_key(&pc, |&(at, _)| at).ok()?;
-        Some(&self.unwinds[index].1)
-    }
-
     /// 命令の位置の関数の名前。どの関数にも属さない位置には、タスクの入口の関数の名前を返す。
     pub(crate) fn function_name(&self, pc: Pc, task: &Task) -> String {
         self.function_at(pc)
@@ -148,7 +214,7 @@ impl<M: Mode> CodeBase<M> {
             .unwrap_or(&self.functions[task.entry as usize])
             .name
             .clone();
-        let at = self.location(pc).map(|loc| SourceLocation {
+        let at = self.tables.location(pc).map(|loc| SourceLocation {
             path: self.files[loc.file as usize].clone(),
             line: loc.line,
             column: loc.column,

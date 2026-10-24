@@ -9,6 +9,7 @@ use super::ItemLowering;
 use super::class::ContextScope;
 use super::types::{TypeLowering, Vars, mentions, reject_once_declaration};
 use crate::codes;
+use crate::def_map::item_id;
 use crate::hir::{
     EffectDef, EffectId, EffectKind, Generics, ItemId, OpMultiplicity, Operation, RowRef,
     Signature, TypeRefKind, TypeVarDecl,
@@ -42,7 +43,7 @@ impl ItemLowering<'_> {
                     kind,
                 }),
             );
-            debug_assert_eq!(id, self.def_map.effect_id(self.module, k));
+            debug_assert_eq!(id, item_id(self.module, k));
         }
     }
 
@@ -54,8 +55,8 @@ impl ItemLowering<'_> {
             ..
         } = module_items;
         for (k, item) in items.iter().enumerate() {
-            let effect = self.def_map.effect_id(self.module, k);
-            for (j, decl) in item.operations.iter().enumerate() {
+            let effect = item_id(self.module, k);
+            for decl in &item.operations {
                 let operation = self.lower_operation(
                     decl,
                     effect,
@@ -70,7 +71,6 @@ impl ItemLowering<'_> {
                     .iter()
                     .any(|&op| operations[op.local].name == name);
                 let id = ItemId::new(self.module, operations.alloc(operation));
-                debug_assert_eq!(id, self.def_map.operation_id(self.module, k, j));
                 if !repeated {
                     effects[effect.local].operations.push(id);
                 }

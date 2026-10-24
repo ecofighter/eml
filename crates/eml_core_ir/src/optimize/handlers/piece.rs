@@ -4,14 +4,16 @@
 //! 定数になった `switch` を合う行き先へのジャンプにする (`blocks::constant_target`)。`k` を値として使う節は、`k` に継続の関数の閉包を受ける写し
 //! `<g>{k}` にし (`clause_with_k`)、それを `perform` の地点の継続について複製する (`clause_with_continuation`)。展開で辺の入らなくなったブロックは、最後に落とす (`blocks::prune`)。
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, VarId, VarInfo, push_var};
 
-use super::super::blocks::constant_target;
-use super::super::known::{Callee, KnownClosure, apply_rewritable_to, fresh};
+use super::super::blocks::{Renamer, constant_target};
+use super::super::known::{Callee, KnownClosure, apply_rewritable_to};
 
 /// ブロックごとの、合流のブロックか。合流のブロックは、入る辺が2本以上か、引数を持つブロックである。引数を持つ
 /// ブロックには、引数を渡す `jump` で入る (docs/spec/lir.md の「構造の規則」の R3 と R4)。`switch` の行き先は入る辺が
@@ -63,7 +65,7 @@ pub(crate) fn region(
             follow(&function.block(target).term, &mut pending);
         }
     }
-    let renumber: HashMap<BlockId, BlockId> = seen
+    let renumber: FxHashMap<BlockId, BlockId> = seen
         .iter()
         .enumerate()
         .map(|(position, &index)| (index, BlockId(position as u32 + 1)))
@@ -87,10 +89,7 @@ pub(crate) fn region(
                 });
                 block.stmts.push(Stmt::Let {
                     var,
-                    rhs: Rhs::Call {
-                        call,
-                        mask: Vec::new(),
-                    },
+                    rhs: Rhs::call(call),
                 });
                 block.term = Term::Return(Atom::Var(var));
             }
@@ -156,7 +155,7 @@ pub(crate) fn inline_clause(
         state,
         base,
         |vars, value, state| {
-            let var = fresh(vars, returned.clone());
+            let var = push_var(vars, returned.clone());
             (
                 vec![Stmt::Let {
                     var,
@@ -193,22 +192,14 @@ pub(crate) fn clause_blocks(
 ) -> Vec<Block> {
     let params = clause.params();
     let count = params.len();
-    let k = params[count - 2];
     // 捕獲の引数は複製の引数そのもので、展開した本体と、続きに渡す値の両方に現れうる。2か所で使ってよいのは、操作の
-    // 節の捕獲が `Unr` に限られるためである (E3001、docs/spec/linearity.md)。呼ぶ側が確かめる
-    let mut substitution: HashMap<VarId, Atom> = params[..count - 2]
-        .iter()
-        .copied()
-        .zip(args.iter().copied())
-        .collect();
-    substitution.insert(params[count - 1], state);
-    let mut copy = Copy {
-        vars,
-        source: &clause.vars,
-        substitution,
-        k,
-    };
-
+    // 節の捕獲が `Unr` に限られるためである (E3001、docs/spec/linearity.md)。呼ぶ側が確かめる。`k` (`count - 2` 番目)
+    // は置き換えないので、末尾の `resume` のほかで使えば `Renamer::atom` が止まる
+    let mut copy = Renamer::new(vars, &clause.vars);
+    for (&param, &arg) in params[..count - 2].iter().zip(args) {
+        copy.substitute(param, arg);
+    }
+    copy.substitute(params[count - 1], state);
     // 入口のブロックには辺が入らないので、行き先になるのは 1 番目から後ろのブロックだけである
     let block_of = |block: BlockId| {
         debug_assert_ne!(block, BlockId::ENTRY, "no edge enters the entry block");
@@ -216,15 +207,7 @@ pub(crate) fn clause_blocks(
     };
     let mut copied = Vec::with_capacity(clause.blocks.len());
     for (index, block) in clause.blocks.iter().enumerate() {
-        let params = if index == 0 {
-            Vec::new()
-        } else {
-            block
-                .params
-                .iter()
-                .map(|&param| copy.define(param))
-                .collect()
-        };
+        let params = copy.params(index, block);
         let resumed = match block.term {
             Term::Return(_) => tail_position_call(block).map(|(at, _)| at),
             _ => None,
@@ -255,7 +238,17 @@ pub(crate) fn clause_blocks(
             }
             stmts.push(copy.stmt(stmt));
         }
-        let term = term.unwrap_or_else(|| copy.term(&block.term, block_of));
+        let term = term.unwrap_or_else(|| {
+            let term = copy.term(&block.term, block_of);
+            // 飛ばした case のブロックは辺が入らなくなり、`prune` が落とす
+            match constant_target(&term) {
+                Some(target) => Term::Jump {
+                    target,
+                    args: Vec::new(),
+                },
+                None => term,
+            }
+        });
         copied.push(Block {
             params,
             stmts,
@@ -263,85 +256,6 @@ pub(crate) fn clause_blocks(
         });
     }
     copied
-}
-
-/// 節の本体を写すときの変数の対応。
-struct Copy<'a> {
-    vars: &'a mut Vec<VarInfo>,
-    source: &'a [VarInfo],
-    substitution: HashMap<VarId, Atom>,
-    k: VarId,
-}
-
-impl Copy<'_> {
-    fn define(&mut self, var: VarId) -> VarId {
-        let copy = fresh(self.vars, self.source[var.0 as usize].clone());
-        self.substitution.insert(var, Atom::Var(copy));
-        copy
-    }
-
-    fn atom(&self, atom: Atom) -> Atom {
-        match atom {
-            Atom::Var(var) => {
-                debug_assert_ne!(var, self.k, "`k` is used only by the final `resume`");
-                self.substitution[&var]
-            }
-            atom => atom,
-        }
-    }
-
-    /// `unpack` の値は `obj` で、`obj` に収まる定数はないので (`Atom::fits`)、`performs_fit` を通った引数は変数である。
-    fn var(&self, var: VarId) -> VarId {
-        match self.atom(Atom::Var(var)) {
-            Atom::Var(var) => var,
-            atom => panic!("a variable is replaced by the constant {atom:?}"),
-        }
-    }
-
-    fn stmt(&mut self, stmt: &Stmt) -> Stmt {
-        match stmt {
-            Stmt::Let { var, rhs } => {
-                let mut rhs = rhs.clone();
-                rhs.for_each_atom_mut(|atom| *atom = self.atom(*atom));
-                Stmt::Let {
-                    var: self.define(*var),
-                    rhs,
-                }
-            }
-            Stmt::Unpack {
-                value,
-                ctor,
-                fields,
-            } => Stmt::Unpack {
-                value: self.var(*value),
-                ctor: *ctor,
-                fields: fields.iter().map(|&field| self.define(field)).collect(),
-            },
-        }
-    }
-
-    fn term(&mut self, term: &Term, block_of: impl Fn(BlockId) -> BlockId) -> Term {
-        let mut term = term.clone();
-        term.for_each_atom_mut(|atom| *atom = self.atom(*atom));
-        term.for_each_successor_mut(|target| *target = block_of(*target));
-        // 飛ばした case のブロックも写すので、そのフィールドも先に定義する。ブロックは辺が入らなくなり、`prune` が落とす
-        if let Term::Switch { cases, .. } = &mut term {
-            for case in cases {
-                case.fields = case
-                    .fields
-                    .iter()
-                    .map(|&field| self.define(field))
-                    .collect();
-            }
-        }
-        match constant_target(&term) {
-            Some(target) => Term::Jump {
-                target,
-                args: Vec::new(),
-            },
-            None => term,
-        }
-    }
 }
 
 /// `k` を値として受ける節の写し `<g>{k}`。`k` には、生の継続でなく、継続の関数の閉包が来る
@@ -365,7 +279,7 @@ pub(crate) fn clause_with_k(
     copy.split = None;
     let k = copy.params()[copy.params().len() - 2];
     copy.vars[k.0 as usize].repr = Repr::TObj;
-    let mut wrapped = HashSet::new();
+    let mut wrapped = FxHashSet::default();
     for block in &mut copy.blocks {
         block.stmts.retain(|stmt| match stmt {
             Stmt::Let {
@@ -443,7 +357,7 @@ pub(crate) fn clause_with_continuation(
             } else {
                 param.mark
             };
-            fresh(
+            push_var(
                 &mut copy.vars,
                 VarInfo {
                     name: param.name.clone(),
@@ -469,7 +383,7 @@ pub(crate) fn clause_with_continuation(
         if captures.is_empty() {
             return Atom::Fn(continuation);
         }
-        let var = fresh(vars, info.clone());
+        let var = push_var(vars, info.clone());
         out.push(Stmt::Let {
             var,
             rhs: Rhs::MakeClosure(continuation, closure.captures.clone()),
@@ -477,7 +391,7 @@ pub(crate) fn clause_with_continuation(
         Atom::Var(var)
     };
     // 捕獲がどれも `unr` の `drop k` は文ごと消え、その結果の `()` の変数は `()` に置き換える
-    let mut dropped = HashSet::new();
+    let mut dropped = FxHashSet::default();
     for block in 0..copy.blocks.len() {
         let stmts = std::mem::take(&mut copy.blocks[block].stmts);
         let mut out = Vec::with_capacity(stmts.len());
@@ -524,7 +438,7 @@ pub(crate) fn clause_with_continuation(
                         }
                     }
                     for capture in vars {
-                        let unit = fresh(
+                        let unit = push_var(
                             &mut copy.vars,
                             VarInfo {
                                 name: "u".to_string(),

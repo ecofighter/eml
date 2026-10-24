@@ -13,7 +13,7 @@ use eml_lir::{Atom, BlockId, Ctor, FnIdx, Mark, Repr, TUPLE, VarId, VarInfo};
 
 use super::derive::{Constructor, Shape, ShapeOf, call_target, shape};
 use super::instances::{DisplayForm, DisplayInstance, Part};
-use super::program::{ProgramBuilder, plain_call};
+use super::program::ProgramBuilder;
 use crate::builder::FnBuilder;
 
 /// 値全体で書く節点の数 (docs/spec/repl.md の「上限」)。
@@ -24,7 +24,7 @@ pub(super) const MAX_DEPTH: u32 = 100;
 pub(super) const MAX_DISPLAYS: usize = 1000;
 
 fn named(name: &str, repr: Repr) -> VarInfo {
-    super::types::named(name, repr, Mark::Unr)
+    VarInfo::new(name, repr, Mark::Unr)
 }
 
 /// 書いている途中の結果。書いた文字列と残りの予算である。
@@ -141,7 +141,7 @@ impl Display<'_> {
             Atom::Int(prec.unwrap_or(0)),
             x,
         ];
-        let pair = self.bind("r", Repr::Obj, plain_call(Call::Direct(target, args)));
+        let pair = self.bind("r", Repr::Obj, Rhs::call(Call::Direct(target, args)));
         self.unpair(pair)
     }
 
@@ -388,7 +388,7 @@ impl Display<'_> {
         self.builder.reopen(has_budget);
         let at = self.part(at, element, Atom::Var(*head), None);
         let args = vec![at.acc, at.budget, self.child, Atom::Var(*tail)];
-        let pair = self.bind("r", Repr::Obj, plain_call(Call::Direct(rest, args)));
+        let pair = self.bind("r", Repr::Obj, Rhs::call(Call::Direct(rest, args)));
         self.builder.terminate(Term::Return(pair));
     }
 

@@ -1,8 +1,7 @@
 //! 型の表の型で instance を引く (docs/spec/types.md の「制約の解決」)。
 
-use std::collections::HashSet;
-
 use eml_hir::{ClassId, InstanceId, Program};
+use rustc_hash::FxHashSet;
 
 use crate::check::structural;
 use crate::store::{TypeId, TypeKind, TypeStore};
@@ -51,7 +50,7 @@ pub fn resolve(program: &Program, types: &TypeStore, class: ClassId, ty: TypeId)
 /// 調べる。
 pub fn satisfies(program: &Program, types: &TypeStore, class: ClassId, ty: TypeId) -> bool {
     let mut work = vec![(class, ty)];
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     while let Some((class, ty)) = work.pop() {
         if !seen.insert((class, ty)) {
             continue;

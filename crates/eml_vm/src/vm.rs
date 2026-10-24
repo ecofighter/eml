@@ -117,16 +117,11 @@ impl Task {
         }
     }
 
-    /// scratch の語を今の base のスロット 0.. に書き、scratch を空にする。
-    pub(crate) fn store_scratch(&mut self) {
-        let Task {
-            stack,
-            scratch,
-            base,
-            ..
-        } = self;
+    /// scratch の語をスタックの `at..` に書き、scratch を空にする。
+    pub(crate) fn store_scratch_at(&mut self, at: usize) {
+        let Task { stack, scratch, .. } = self;
         for (i, w) in scratch.drain(..).enumerate() {
-            stack[*base + i] = w;
+            stack[at + i] = w;
         }
     }
 
@@ -134,7 +129,7 @@ impl Task {
     pub(crate) fn enter_in_place<M: Mode>(&mut self, code: &CodeBase<M>, f: u32) {
         let entry = &code.functions[f as usize];
         self.reserve(self.base + usize::from(entry.frame_size));
-        self.store_scratch();
+        self.store_scratch_at(self.base);
         self.frame_size = usize::from(entry.frame_size);
         self.pc = entry.start;
     }
@@ -152,11 +147,18 @@ impl Task {
 
     /// 今のフレームを捨てて、呼び出し元の結果のスロットに `value` を書く。
     pub(crate) fn return_value(&mut self, value: Word) {
+        let dst = self.pop_frame();
+        self.set(dst, value);
+    }
+
+    /// 今のフレームを捨てて見出しの呼び出し元に戻り、見出しの結果のスロットを返す。
+    #[inline(always)]
+    pub(crate) fn pop_frame(&mut self) -> Slot {
         let (pc, dst, size) = read_header(self.stack[self.base - 2]);
         self.base = self.stack[self.base - 1].bits();
         self.frame_size = size;
         self.pc = pc;
-        self.set(dst, value);
+        dst
     }
 }
 
@@ -211,8 +213,8 @@ fn step<M: Mode>(
     pc: Pc,
 ) -> Result<bool, VmFault> {
     task.pc = pc + 1;
-    let ops = |at: u32| &code.operands[at as usize..];
-    match code.code[pc as usize] {
+    let ops = |at: u32| &code.tables.operands[at as usize..];
+    match code.tables.code[pc as usize] {
         Op::Move { dst, src } => task.set(dst, task.get(src)),
         Op::LoadRaw { dst, value } => task.set_raw(dst, value.into()),
         Op::LoadImm { dst, value } => task.set(dst, Word::imm(value.into())),
@@ -265,7 +267,7 @@ fn step<M: Mode>(
         Op::TailSelf { at } => {
             let o = ops(at);
             task.load_scratch(slots(&o[2..2 + o[1] as usize]));
-            task.store_scratch();
+            task.store_scratch_at(task.base);
             task.pc = o[0];
             // バイトコードに後ろ向きの辺ができるので、ここも安全点にする (docs/spec/vm.md の「呼び出しと戻り」)
             ctx.poll(task.depth())?;
@@ -418,7 +420,7 @@ fn step<M: Mode>(
             task.set_raw(dst, n);
         }
         Op::ArraySet { dst, at } => {
-            let o = &code.operands[at as usize..];
+            let o = &code.tables.operands[at as usize..];
             let (a, i, x) = (
                 task.get(o[0] as Slot),
                 task.raw(o[1] as Slot),
@@ -445,7 +447,7 @@ fn step<M: Mode>(
         }
         Op::EvvMask { dst, at } => {
             let o = ops(at);
-            let items = &code.mask_lists[o[0] as usize..(o[0] + o[1]) as usize];
+            let items = &code.tables.mask_lists[o[0] as usize..(o[0] + o[1]) as usize];
             let w = unsafe { ctx.evv_mask(items, task.get(o[2] as Slot)) }?;
             task.set(dst, w);
         }
@@ -553,9 +555,7 @@ fn apply_call<M: Mode>(
     at: u32,
     target: apply::Target,
 ) -> Result<(), VmFault> {
-    let o = &code.operands[at as usize..];
-    task.load_scratch(slots(&o[2..2 + o[1] as usize]));
-    let callee = task.get(o[0] as Slot);
+    let callee = load_call(code, task, at);
     apply::apply(code, ctx, task, callee, target)?;
     ctx.poll(task.depth())?;
     Ok(())
@@ -569,19 +569,25 @@ fn clause_call<M: Mode>(
     at: u32,
     target: apply::Target,
 ) -> Result<(), VmFault> {
-    let o = &code.operands[at as usize..];
-    task.load_scratch(slots(&o[2..2 + o[1] as usize]));
-    let callee = task.get(o[0] as Slot);
+    let callee = load_call(code, task, at);
     apply::apply_clause(code, ctx, task, callee, target)?;
     ctx.poll(task.depth())?;
     Ok(())
+}
+
+/// 関数の値を呼ぶ命令のオペランド [呼ばれる値, n, 引数…] の引数を scratch に読み、呼ばれる値を返す。
+#[inline(always)]
+fn load_call<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Word {
+    let o = &code.tables.operands[at as usize..];
+    task.load_scratch(slots(&o[2..2 + o[1] as usize]));
+    task.get(o[0] as Slot)
 }
 
 /// 呼ぶ側の上に呼ばれる側のフレームを作り、引数を写して先頭へ進む。呼ぶ側のスロットはスタックに残る。`CallN` からも
 /// 呼ぶので、`Call` の速い道に展開し続けるように `inline(always)` にする。
 #[inline(always)]
 fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let n = ops[1] as usize;
     let entry = &code.functions[ops[0] as usize];
     let caller = task.base;
@@ -629,17 +635,15 @@ fn return_many<M: Mode>(
 /// 呼び出し元のフレームへ写すので、読む所と書く所は重ならない。
 #[inline]
 fn ret_many<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Result<(), VmFault> {
-    let o = &code.operands[at as usize..];
+    let o = &code.tables.operands[at as usize..];
     let n = o[0] as usize;
-    let (ret, _, size) = read_header(task.stack[task.base - 2]);
+    let (ret, _, _) = read_header(task.stack[task.base - 2]);
     let dsts = receivers::<M>(code, ret, n)?;
-    let caller = task.stack[task.base - 1].bits();
+    let callee = task.base;
+    task.pop_frame();
     for (&src, &dst) in o[1..1 + n].iter().zip(dsts) {
-        task.stack[caller + dst as usize] = task.stack[task.base + src as usize];
+        task.stack[task.base + dst as usize] = task.stack[callee + src as usize];
     }
-    task.base = caller;
-    task.frame_size = size;
-    task.pc = ret;
     Ok(())
 }
 
@@ -647,8 +651,8 @@ fn ret_many<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Result<(),
 /// 戻らないので、ほかの命令の後への戻りは内部の誤りである。検査モードは値の数も比べる。
 #[inline]
 fn receivers<M: Mode>(code: &CodeBase<M>, ret: Pc, n: usize) -> Result<&[u32], VmFault> {
-    let o = |at: u32| &code.operands[at as usize..];
-    let dsts = match ret.checked_sub(1).map(|pc| code.code[pc as usize]) {
+    let o = |at: u32| &code.tables.operands[at as usize..];
+    let dsts = match ret.checked_sub(1).map(|pc| code.tables.code[pc as usize]) {
         Some(Op::CallN { at }) => {
             let o = o(at);
             let count = 2 + o[1] as usize;
@@ -695,6 +699,7 @@ fn unwind<M: Mode>(
             }
             pc => {
                 let entry = code
+                    .tables
                     .unwind_at(pc)
                     .ok_or(VmFault::Internal("a frame stops outside an unwind point"))?;
                 if let Some(landing) = entry.landing {
@@ -729,11 +734,7 @@ fn unwind<M: Mode>(
                 }
             }
         }
-        let (ret, slot, size) = read_header(task.stack[task.base - 2]);
-        task.base = task.stack[task.base - 1].bits();
-        task.frame_size = size;
-        task.pc = ret;
-        dst = Some(slot);
+        dst = Some(task.pop_frame());
         if M::CHECKED {
             counts.unwound_frames += 1;
         }
@@ -775,7 +776,7 @@ fn step_failed<M: Mode>(
     pc: Pc,
     fault: VmFault,
 ) -> Result<(), VmFault> {
-    let (dst, purity) = match code.code[pc as usize] {
+    let (dst, purity) = match code.tables.code[pc as usize] {
         Op::IntAdd { dst, .. }
         | Op::IntSub { dst, .. }
         | Op::IntMul { dst, .. }
@@ -809,7 +810,7 @@ fn extern_call<M: Mode>(
 ) -> Result<(), VmFault> {
     match run_extern(code, ctx, task, counts, dst, at) {
         Err(VmFault::Extern(fault)) => {
-            let ext = Extern::ALL[code.operands[at as usize] as usize];
+            let ext = Extern::ALL[code.tables.operands[at as usize] as usize];
             failed(code, ctx, task, dst, fault, ext.row().purity)
         }
         other => other,
@@ -893,7 +894,7 @@ fn run_extern<M: Mode>(
     dst: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let arg = |i: usize| ops[2 + i] as Slot;
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、extern がそれを消費する
     let ext = Extern::ALL[ops[0] as usize];

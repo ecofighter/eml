@@ -4,18 +4,17 @@
 //! 呼び出しにし、次の状態を結果の値の並び (`Returned`) で受ける。H に触れない関数の呼び出しはそのまま残す。継続の
 //! 関数と合流のブロックの関数は作らない。
 
-use std::collections::{HashMap, HashSet};
-
 use super::super::blocks;
-use super::super::known::fresh;
 use super::{Copies, KnownFn, Shape, Table, piece, targeted};
 use crate::tail::tail_position_call;
 use crate::translate::tuple_struct;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_lir::push_var;
 use eml_lir::{
     Atom, BlockId, Ctor, FnIdx, Layout, LayoutCtor, LayoutId, Mark, Repr, Structs, TUPLE, VarId,
     VarInfo,
 };
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// 複製 `f{H}` が返す値の並び。複製の元の名前と handler で決まるので、名前が同じ複製はいつも同じ形の結果を返す
 /// (docs/spec/core-ir.md の「handler の複製」)。元が基の関数なら、並びは f の結果 (Repr が `unit` でなければ) で、元が
@@ -74,19 +73,19 @@ pub(super) fn returned(
 /// 状態を渡す形の複製が開くか返すタプル。回の初めに、複製が借りる前の `program` に配置と形を足しておく。
 pub(super) struct Tuples {
     /// 大きさごとの配置。
-    layouts: HashMap<usize, LayoutId>,
+    layouts: FxHashMap<usize, LayoutId>,
     /// 値の並びごとのタプルの Repr。値の Repr と印から作る形の構造体で、6 語を超える並びは `obj` である
     /// (docs/spec/core-ir.md の「handler の複製」)。並びは複製の元の名前と
     /// handler で決まるので、名前が同じ複製はいつも同じ形を返す。
-    reprs: HashMap<Vec<(Repr, Mark)>, Repr>,
+    reprs: FxHashMap<Vec<(Repr, Mark)>, Repr>,
 }
 
 impl Tuples {
     /// 値の並び `lists` のうち2つ以上の値を持つものの、配置と Repr を決める。
     pub(super) fn new(program: &mut Program, lists: Vec<Vec<(Repr, Mark)>>) -> Tuples {
         let mut tuples = Tuples {
-            layouts: HashMap::new(),
-            reprs: HashMap::new(),
+            layouts: FxHashMap::default(),
+            reprs: FxHashMap::default(),
         };
         for values in lists {
             if values.len() < 2 || tuples.reprs.contains_key(&values) {
@@ -172,7 +171,7 @@ pub(super) fn receive(
     };
     let count = base.values.len();
     if count == 0 {
-        let next = fresh(vars, state.clone());
+        let next = push_var(vars, state.clone());
         return (
             vec![Stmt::Let {
                 var: next,
@@ -184,14 +183,14 @@ pub(super) fn receive(
     }
     let mut values = base.values.clone();
     values.push((state.repr, state.mark));
-    let received = fresh(vars, Returned { values }.info(tuples));
+    let received = push_var(vars, Returned { values }.info(tuples));
     let mut stmts = vec![Stmt::Let {
         var: received,
         rhs: call,
     }];
     if count == 1 {
         let value = value(vars);
-        let next = fresh(vars, state.clone());
+        let next = push_var(vars, state.clone());
         stmts.push(Stmt::Unpack {
             value: received,
             ctor: tuples.ctor(2),
@@ -203,7 +202,7 @@ pub(super) fn receive(
         .values
         .iter()
         .map(|&(repr, mark)| {
-            fresh(
+            push_var(
                 vars,
                 VarInfo {
                     name: "t".to_string(),
@@ -213,7 +212,7 @@ pub(super) fn receive(
             )
         })
         .collect();
-    let next = fresh(vars, state.clone());
+    let next = push_var(vars, state.clone());
     let mut unpacked = fields.clone();
     unpacked.push(next);
     stmts.push(Stmt::Unpack {
@@ -338,7 +337,10 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
             clause.params()[..count]
                 .iter()
                 .map(|&param| {
-                    Atom::Var(fresh(&mut code.vars, clause.vars[param.0 as usize].clone()))
+                    Atom::Var(push_var(
+                        &mut code.vars,
+                        clause.vars[param.0 as usize].clone(),
+                    ))
                 })
                 .collect()
         })
@@ -352,7 +354,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
             .all(|atom| matches!(atom, Atom::Var(var) if code.mark(*var) == Mark::Unr)),
         "an operation clause captures only `unr` values"
     );
-    let initial = state.clone().map(|info| fresh(&mut code.vars, info));
+    let initial = state.clone().map(|info| push_var(&mut code.vars, info));
 
     let performs: Vec<(BlockId, usize)> = targeted(source, shape.effect).collect();
     let clause_of = |op: u32| program.function(operations[op as usize].0);
@@ -386,7 +388,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
     }
 
     // 並びが空の複製の結果の値は `()` なので、受けた変数の使いを `()` にする。使う所は定義より後ろにある
-    let mut units: HashSet<VarId> = HashSet::new();
+    let mut units: FxHashSet<VarId> = FxHashSet::default();
     let mut entered: Vec<Option<VarId>> = vec![None; source.blocks.len()];
     let mut blocks: Vec<Block> = Vec::with_capacity(next as usize);
     let mut extra: Vec<Block> = Vec::new();
@@ -401,7 +403,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
             params.extend(initial);
             initial
         } else if jumped[number] {
-            let param = state.clone().map(|info| fresh(&mut code.vars, info));
+            let param = state.clone().map(|info| push_var(&mut code.vars, info));
             params.extend(param);
             param
         } else {
@@ -460,7 +462,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
                     blocks.push(current);
                     blocks.extend(copied);
                     debug_assert_eq!(BlockId(blocks.len() as u32), rest);
-                    current_state = state.clone().map(|info| fresh(&mut code.vars, info));
+                    current_state = state.clone().map(|info| push_var(&mut code.vars, info));
                     let mut params = vec![var];
                     params.extend(current_state);
                     current = Block {
@@ -479,15 +481,12 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
                     let mut args = args.clone();
                     args.extend(all_captures.iter().copied());
                     args.extend(current_state.map(Atom::Var));
-                    let call = |args| Rhs::Call {
-                        call: Call::Direct(copy, args),
-                        mask: Vec::new(),
-                    };
+                    let call = |args| Rhs::call(Call::Direct(copy, args));
                     // 状態のない handler の複製は元の結果をそのまま返す。状態つきでは、並びが違う末尾の呼び出しを
                     // 末尾でない呼び出しとして受け直し、下の `return` で f の並びにする。タプルの形は値の Repr と印で
                     // 決まるので、大きさが同じでも並びが違えば結果の形が違う
                     if tail == Some(at) && (!shape.stateful || callee.values == base.values) {
-                        let returned = fresh(&mut code.vars, result.clone());
+                        let returned = push_var(&mut code.vars, result.clone());
                         current.stmts.push(Stmt::Let {
                             var: returned,
                             rhs: call(args),
@@ -551,7 +550,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
     copies.place(index, code);
 }
 
-fn unit(units: &HashSet<VarId>, atom: &mut Atom) {
+fn unit(units: &FxHashSet<VarId>, atom: &mut Atom) {
     if let Atom::Var(var) = atom
         && units.contains(var)
     {
@@ -591,7 +590,7 @@ fn finish(
     let args = match base.values.len() {
         0 => {
             if mark(code, value) != Mark::Unr {
-                let dropped = fresh(
+                let dropped = push_var(
                     &mut code.vars,
                     VarInfo {
                         name: "u".to_string(),
@@ -620,9 +619,9 @@ fn finish(
                     repr,
                     mark: mark(code, value),
                 };
-                let param = fresh(&mut code.vars, info);
+                let param = push_var(&mut code.vars, info);
                 let state_info = code.vars[state.0 as usize].clone();
-                let next = fresh(&mut code.vars, state_info);
+                let next = push_var(&mut code.vars, state_info);
                 let mut built = Block {
                     params: vec![param, next],
                     stmts: Vec::new(),
@@ -645,7 +644,7 @@ fn finish(
                 .values
                 .iter()
                 .map(|&(repr, mark)| {
-                    fresh(
+                    push_var(
                         &mut code.vars,
                         VarInfo {
                             name: "t".to_string(),
@@ -681,7 +680,7 @@ fn build_tuple(
             _ => Mark::Unr,
         })
     });
-    let built = fresh(
+    let built = push_var(
         &mut code.vars,
         VarInfo {
             name: "d".to_string(),

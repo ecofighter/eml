@@ -64,7 +64,7 @@ fn body<'m>(program: &'m Program, name: &str) -> &'m Body {
 #[test]
 fn match_arms_bind_their_pattern_variables_only_in_the_arm() {
     let text = "data Option a = | None | Some a\n\nf : Option Int -> Int -> Int\nf o k = (fn u -> match o with | Some x -> x + k | None -> u) 0";
-    let module = eml_test_support::lower_clean(text).program;
+    let module = eml_test_support::lower_clean(text).into_stage().program;
     let body = body(&module, "f");
     let names = |locals: Vec<eml_hir::LocalId>| -> Vec<String> {
         locals

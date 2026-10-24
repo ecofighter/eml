@@ -11,7 +11,7 @@ use eml_lir::{
 mod builder;
 mod evidence;
 mod fnv;
-pub(crate) mod liveness;
+mod liveness;
 mod lowering;
 mod optimize;
 mod pipeline;
@@ -24,7 +24,7 @@ mod verify;
 pub use evidence::evidence;
 pub use lowering::to_lir;
 pub use optimize::optimize;
-pub use pipeline::{Pass, core_until, lower, lower_until};
+pub use pipeline::{Input, Pass, core_until, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::parse;
 pub use translate::boxed_repr;
@@ -96,6 +96,60 @@ impl CoreFn {
         Some((first + added - opened.len()) as u32)
     }
 
+    /// 本体が参照する関数を訪れる。直接の呼び出しの相手は `FnRef::Direct`、`closure` の関数と関数の値 `&f` は
+    /// `FnRef::Value` で渡す。関数の表を書き換えるパス (到達の除去、融合の順、`yields` と `split` の見直し) が、
+    /// どれも同じ3つの形を見るようにする。
+    pub(crate) fn for_each_fn_ref(&self, mut f: impl FnMut(FnIdx, FnRef)) {
+        fn atom(atom: Atom, f: &mut impl FnMut(FnIdx, FnRef)) {
+            if let Atom::Fn(target) = atom {
+                f(target, FnRef::Value);
+            }
+        }
+        for block in &self.blocks {
+            for stmt in &block.stmts {
+                let Stmt::Let { var: _, rhs } = stmt else {
+                    continue;
+                };
+                match rhs {
+                    Rhs::Call {
+                        call: Call::Direct(target, _),
+                        mask: _,
+                    } => f(*target, FnRef::Direct),
+                    Rhs::MakeClosure(target, _) => f(*target, FnRef::Value),
+                    _ => {}
+                }
+                rhs.for_each_atom(|a| atom(a, &mut f));
+            }
+            block.term.for_each_atom(|a| atom(a, &mut f));
+        }
+    }
+
+    /// `for_each_fn_ref` と同じ参照を、種類を区別せずに書き換える。
+    pub(crate) fn for_each_fn_ref_mut(&mut self, mut f: impl FnMut(&mut FnIdx)) {
+        fn atom(atom: &mut Atom, f: &mut impl FnMut(&mut FnIdx)) {
+            if let Atom::Fn(target) = atom {
+                f(target);
+            }
+        }
+        for block in &mut self.blocks {
+            for stmt in &mut block.stmts {
+                let Stmt::Let { var: _, rhs } = stmt else {
+                    continue;
+                };
+                if let Rhs::MakeClosure(target, _)
+                | Rhs::Call {
+                    call: Call::Direct(target, _),
+                    mask: _,
+                } = rhs
+                {
+                    f(target);
+                }
+                rhs.for_each_atom_mut(|a| atom(a, &mut f));
+            }
+            block.term.for_each_atom_mut(|a| atom(a, &mut f));
+        }
+    }
+
     pub fn params(&self) -> &[VarId] {
         &self.blocks[BlockId::ENTRY.0 as usize].params
     }
@@ -111,6 +165,15 @@ impl CoreFn {
     pub fn mark(&self, var: VarId) -> Mark {
         self.vars[var.0 as usize].mark
     }
+}
+
+/// 関数への参照の種類 (`CoreFn::for_each_fn_ref`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FnRef {
+    /// 直接の呼び出しの相手。
+    Direct,
+    /// 値として使う関数。`closure` の関数と関数の値 `&f` である。
+    Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,6 +383,14 @@ pub enum Rhs {
 }
 
 impl Rhs {
+    /// `mask` のない呼び出し。
+    pub fn call(call: Call) -> Rhs {
+        Rhs::Call {
+            call,
+            mask: Vec::new(),
+        }
+    }
+
     /// 右辺が使う値。関数、extern、`perform` の引数は、どれも所有権を受け取る。基本操作の引数を消費するか借りるかは
     /// 基本操作の表が決め、Perceus から後でだけ意味を持つ (docs/spec/lir.md の「基本操作」)。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {

@@ -1,16 +1,17 @@
+use rustc_hash::FxHashSet;
+
 use super::*;
-use std::collections::HashSet;
 
 /// 1回の単一化の中で、単一化を終えた複合の型 (型構成子、タプル、関数型) の代表の組。表は部分を共有するので、
 /// 覚えないと同じ組を何度もたどり、型の深さの指数の時間がかかる。もう一度たどっても同じ Kind の制約を同じ由来で
 /// 出すだけなので、飛ばしても結果は変わらない。表は occurs の検査で輪を持たないので、単一化の途中の組をもう一度
 /// 訪れることはない。
-pub(super) type Unified = HashSet<(Ty, Ty)>;
+pub(super) type Unified = FxHashSet<(Ty, Ty)>;
 
 impl Table<'_> {
     pub fn unify(&mut self, a: Ty, b: Ty) -> Result<(), UnifyError> {
-        // `HashSet::new` は領域を確保しない。記録の領域は、複合の型の組を初めて覚えるときに作られる
-        self.unify_in(a, b, &mut Unified::new())
+        // `FxHashSet::new` は領域を確保しない。記録の領域は、複合の型の組を初めて覚えるときに作られる
+        self.unify_in(a, b, &mut Unified::default())
     }
 
     pub(super) fn unify_in(&mut self, a: Ty, b: Ty, done: &mut Unified) -> Result<(), UnifyError> {
@@ -18,16 +19,20 @@ impl Table<'_> {
         if a == b || done.contains(&(a, b)) {
             return Ok(());
         }
+        // 子を持たない形は借りたまま決める。複合の型だけを、子を単一化する間に表を変えられるよう複写する
+        match (&self.shapes[a.0 as usize], &self.shapes[b.0 as usize]) {
+            // 変数を先に束縛する。`Error` と単一化した変数も `Error` に束縛し、後の制約で診断を出させない
+            (&TyShape::Var(var), _) => return self.bind_var(var, b),
+            (_, &TyShape::Var(var)) => return self.bind_var(var, a),
+            // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
+            (TyShape::Error, _) | (_, TyShape::Error) => return Ok(()),
+            (TyShape::Rigid(x), TyShape::Rigid(y)) if x == y => return Ok(()),
+            _ => {}
+        }
         match (
             self.shapes[a.0 as usize].clone(),
             self.shapes[b.0 as usize].clone(),
         ) {
-            // 変数を先に束縛する。`Error` と単一化した変数も `Error` に束縛し、後の制約で診断を出させない
-            (TyShape::Var(var), _) => self.bind_var(var, b),
-            (_, TyShape::Var(var)) => self.bind_var(var, a),
-            // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
-            (TyShape::Error, _) | (_, TyShape::Error) => Ok(()),
-            (TyShape::Rigid(x), TyShape::Rigid(y)) if x == y => Ok(()),
             (TyShape::Con(x, xs, x_rows), TyShape::Con(y, ys, y_rows))
                 if x == y && xs.len() == ys.len() && x_rows.len() == y_rows.len() =>
             {
@@ -102,9 +107,7 @@ impl Table<'_> {
         shape.any_child(|child| match child {
             Child::Ty(child) => self.occurs_in(var, child),
             Child::Row(row) => self
-                .resolve_row(row)
-                .labels
-                .iter()
+                .resolved_labels(row)
                 .any(|label| label.args.iter().any(|&arg| self.occurs_in(var, arg))),
         })
     }

@@ -1,9 +1,8 @@
 //! 呼び出しの row の包含を、本体の検査の後でまとめて解く (docs/spec/types.md の「推論」)。呼び出し先の row の末尾が
 //! row 変数の呼び出しは、末尾を今の row と単一化せずに包含として積んでおき、ここで最小の解を求める。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_hir::{EffectId, ExprId};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::kind::KindReason;
 use crate::table::{Row, RowVar, Tail, Ty};
@@ -39,13 +38,13 @@ impl BodyCheck<'_, '_> {
     /// 決まり、`:type fn f xs -> List.map (fn x -> f x) xs` の row が消えるためである。ただし、今の row と共有する末尾で、
     /// 今の row が呼び出し先より多くラベルを持つものは残さない。開いたままでは 4 の単一化が必ず誤りにし、閉じる解しか
     /// ないためである (自分の handler の中で自分を呼ぶローカル関数を問い合わせる形。docs/spec/types.md の「REPL の入力」)。
-    fn kept_open(&self, inclusions: &[Inclusion], query: &[Ty]) -> HashSet<RowVar> {
+    fn kept_open(&self, inclusions: &[Inclusion], query: &[Ty]) -> FxHashSet<RowVar> {
         let (_, roots) = self.table.unsolved(query.iter().copied());
         if roots.is_empty() {
-            return HashSet::new();
+            return FxHashSet::default();
         }
-        let mut closing: HashSet<RowVar> = HashSet::new();
-        let mut outward: HashMap<RowVar, Vec<RowVar>> = HashMap::new();
+        let mut closing: FxHashSet<RowVar> = FxHashSet::default();
+        let mut outward: FxHashMap<RowVar, Vec<RowVar>> = FxHashMap::default();
         for inclusion in inclusions {
             let (Tail::Var(callee), Tail::Var(ambient)) = (
                 self.table.resolve_row(&inclusion.callee).tail,
@@ -64,7 +63,7 @@ impl BodyCheck<'_, '_> {
                 outward.entry(callee).or_default().push(ambient);
             }
         }
-        let mut keep: HashSet<RowVar> = HashSet::new();
+        let mut keep: FxHashSet<RowVar> = FxHashSet::default();
         let mut work: Vec<RowVar> = roots;
         while let Some(var) = work.pop() {
             if closing.contains(&var) || !keep.insert(var) {
@@ -85,8 +84,8 @@ impl BodyCheck<'_, '_> {
         // 足さない。足すたびに呼び出し先も伸びるためで、呼び出し先の自由な末尾を使わないことと同じである
         // 本体の包含の数に比例する時間で数えるため、ラベルのない row は飛ばし (どの上限にも 0 を足す)、同じ row を
         // ハッシュで1回にまとめる
-        let mut rows: HashSet<Row> = HashSet::new();
-        let mut limits: HashMap<EffectId, usize> = HashMap::new();
+        let mut rows: FxHashSet<Row> = FxHashSet::default();
+        let mut limits: FxHashMap<EffectId, usize> = FxHashMap::default();
         for inclusion in inclusions {
             for row in [&inclusion.callee, &inclusion.ambient] {
                 let row = self.table.resolve_row(row);
@@ -151,7 +150,7 @@ impl BodyCheck<'_, '_> {
     /// 共有する末尾も閉じる。閉じた呼び出し先のラベルは今の row の最も内側のラベルと対になり、節の継続 `k` を同じ
     /// エフェクトの handler の中で呼ぶ形でも、rigid な末尾の `mask` と同じ handler に届く (docs/spec/types.md の
     /// 「呼び出しの包含を解く」)。
-    fn close_unused_tails(&mut self, inclusions: &[Inclusion], keep: &HashSet<RowVar>) {
+    fn close_unused_tails(&mut self, inclusions: &[Inclusion], keep: &FxHashSet<RowVar>) {
         for inclusion in inclusions {
             // 共有する末尾は、今の row の末尾にも現れる。それだけでは閉じない理由にならないので、今の row はラベルの中だけを
             // 見る
@@ -204,8 +203,8 @@ impl BodyCheck<'_, '_> {
         self.with_kind_origin(range, KindReason::Unified, change)
     }
 
-    fn label_counts(&self, row: &Row) -> HashMap<EffectId, usize> {
-        let mut counts = HashMap::new();
+    fn label_counts(&self, row: &Row) -> FxHashMap<EffectId, usize> {
+        let mut counts = FxHashMap::default();
         for label in self.table.resolve_row(row).labels {
             *counts.entry(label.effect).or_default() += 1;
         }

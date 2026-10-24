@@ -1,8 +1,9 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 
 use eml_diagnostics::{TextRange, TextSize};
 use eml_extern::{Extern, ExternEffect, ExternType, FloatBits};
 use la_arena::{Arena, ArenaMap, Idx};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::item_tree::Fixity;
 
@@ -220,7 +221,7 @@ pub struct LangItems {
 /// 持つ。型は、読み込んだモジュールが宣言するものだけを持つ (docs/spec/modules.md の「標準ライブラリ」)。
 #[derive(Debug, Clone)]
 pub struct ExternIndex {
-    pub(crate) types: HashMap<ExternType, TypeDefId>,
+    pub(crate) types: FxHashMap<ExternType, TypeDefId>,
     /// `main` の型と REPL の入力の row の検査が引く。
     pub io: EffectId,
     /// `IO` と同じく、`main` の型と REPL の入力の row の検査が引く (docs/spec/modules.md の「モジュール」)。
@@ -441,10 +442,10 @@ pub struct Body {
     /// `use` が残りの文を包むために組んだラムダ。型検査は、呼び出しの引数のラムダを後に回すが、これは後に回さない。
     /// 後に回すと、`use` のブロックの型の誤りが、書いていないラムダの中の誤りとして報告されるため
     /// (docs/spec/types.md の「引数のラムダを後で検査する」)。
-    pub use_lambdas: HashSet<ExprId>,
+    pub use_lambdas: FxHashSet<ExprId>,
     /// コマンドリテラルの穴を包んだ型の明示。型検査は、この `Annot` の E2001 を、書いていない型の明示としてではなく
     /// 穴の誤りとして報告する (docs/implementation/diagnostics.md の E2001)。
-    pub command_holes: HashSet<ExprId>,
+    pub command_holes: FxHashSet<ExprId>,
     /// 関数の形の `let` が定義するローカル関数の、名前の局所変数からラムダへの対応。呼び出しの引数の数を、名前だけから
     /// 引くために使う (docs/spec/expressions.md の「ローカル関数」)。
     pub local_functions: ArenaMap<LocalId, ExprId>,
@@ -636,7 +637,7 @@ impl Body {
     /// 入れ子のラムダや節が捕まえる変数は外側も捕まえる。式の木は作業リストでたどる。
     fn captures(&self, root: ExprId, bound: &[PatId]) -> Vec<LocalId> {
         let mut used = BTreeSet::new();
-        let mut bound: HashSet<LocalId> = bound
+        let mut bound: FxHashSet<LocalId> = bound
             .iter()
             .flat_map(|&pat| self.pat_bindings(pat))
             .collect();

@@ -16,7 +16,7 @@ mod yields;
 use crate::Program;
 
 pub(crate) use reach::retain_reachable;
-pub(crate) use yields::{kept_marks, recompute_yields};
+pub(crate) use yields::recompute_yields;
 
 pub fn optimize(program: &mut Program) {
     let lifted = direct::lifted(program);
@@ -27,14 +27,11 @@ pub fn optimize(program: &mut Program) {
         .iter()
         .map(|function| function.yields)
         .collect();
-    let keep = kept_marks(program);
-    recompute_yields(program, &keep);
+    recompute_yields(program);
     let continued = handlers::handlers(program, &mut translated);
-    let keep = kept_marks(program);
-    recompute_yields(program, &keep);
+    recompute_yields(program);
     fuse::fuse(program);
-    let keep = kept_marks(program);
-    recompute_yields(program, &keep);
+    recompute_yields(program);
     direct::type_direct_only(program, &lifted, &continued);
     retain_reachable(program);
 }

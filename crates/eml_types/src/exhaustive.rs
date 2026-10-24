@@ -3,7 +3,7 @@
 
 use std::iter;
 
-use eml_diagnostics::{Diagnostic, FileId, Label, Severity, TextRange, TextSize};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 use eml_hir::{
     Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, MatchArm, MatchSource,
     PatId, PatKind, Program, Stmt, TypeDefId, TypeDefKind,
@@ -190,9 +190,8 @@ impl<'a> Exhaustive<'a> {
     }
 
     fn unreachable_equation(&mut self, pat: PatId) {
-        self.diagnostics.push(Diagnostic::new(
+        self.diagnostics.push(Diagnostic::warning(
             codes::UNREACHABLE_EQUATION,
-            Severity::Warning,
             "unreachable equation",
             Label::new(
                 self.file,
@@ -281,9 +280,8 @@ impl<'a> Exhaustive<'a> {
         };
         for pat in unreachable {
             let range = self.body.pats[pat].range;
-            self.diagnostics.push(Diagnostic::new(
+            self.diagnostics.push(Diagnostic::warning(
                 codes::UNREACHABLE_ARM,
-                Severity::Warning,
                 "unreachable `match` arm",
                 Label::new(
                     self.file,

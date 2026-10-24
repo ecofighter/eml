@@ -1,9 +1,8 @@
 //! 段2: SCC ごとに Kind の問題をまとめて解き、違反を集め、各宣言のスキームに残す制約を求める
 //! (docs/spec/types.md の「推論」)。推論の表は使わず、番号の上の束だけを扱う。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_hir::ValueItem;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::problem::{Bounds, KindProblem, KindScheme, OwnVars};
 use super::{
@@ -36,7 +35,7 @@ pub(crate) struct LinSolution {
 /// `members` は1つの SCC の宣言とその問題、`schemes` は前の SCC と本体のない宣言のスキームである。
 pub(crate) fn solve_scc(
     members: &[(ValueItem, &KindProblem)],
-    schemes: &HashMap<ValueItem, KindScheme>,
+    schemes: &FxHashMap<ValueItem, KindScheme>,
 ) -> Solution {
     let merged = merge(members, schemes);
     let (lin, lin_violated, lin_causes) = solve_with_causes(&merged.lin);
@@ -130,7 +129,7 @@ fn broken_bounds(
 /// ビルドでは、違反のあるプログラムを通さないよう関数を指す E3001 にする。
 fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
     match provenance {
-        Provenance::At(origin) => Some(origin.clone()),
+        Provenance::At(origin) => Some(KindOrigin::clone(origin)),
         Provenance::Suppressed | Provenance::Given | Provenance::Bound(_) => None,
         Provenance::Declaration => {
             unreachable!("a constraint from a declaration alone is never violated")
@@ -157,13 +156,11 @@ fn with_cause<T: Level>(
         return origin;
     };
     if let Some(cause) = causes[lower.index()]
-        && let Provenance::At(KindOrigin {
-            span,
-            reason: KindReason::CapturedByLambda,
-        }) = &bounds.origins[cause]
-        && span.file == origin.span.file
+        && let Provenance::At(found) = &bounds.origins[cause]
+        && found.reason == KindReason::CapturedByLambda
+        && found.span.file == origin.span.file
     {
-        *lambda = Some(span.range);
+        *lambda = Some(found.span.range);
     }
     origin
 }
@@ -206,17 +203,16 @@ fn with_bound_cause(
 /// 使う。
 fn bound_origin(origin: &Provenance, source: BoundSource) -> Provenance {
     match origin {
-        Provenance::At(KindOrigin {
-            span,
-            reason: KindReason::Passed(name),
-        }) => Provenance::At(KindOrigin {
-            span: *span,
-            reason: KindReason::RowBound {
-                name: name.clone(),
-                source,
-                cause: None,
-            },
-        }),
+        Provenance::At(at) if let KindReason::Passed(name) = &at.reason => {
+            Provenance::at(KindOrigin {
+                span: at.span,
+                reason: KindReason::RowBound {
+                    name: name.clone(),
+                    source,
+                    cause: None,
+                },
+            })
+        }
         other => other.clone(),
     }
 }
@@ -224,7 +220,7 @@ fn bound_origin(origin: &Provenance, source: BoundSource) -> Provenance {
 /// 推論した上限の出どころを引くための、SCC の多重度の制約の索引。番号はまとめた後のものである。
 struct SourceIndex {
     /// 変数ごとの、シグネチャに書いた上限 (`Provenance::Bound`) の位置。
-    written: HashMap<usize, Span>,
+    written: FxHashMap<usize, Span>,
     /// 参照に複写した上限 (由来が `RowBound`) の、参照の位置と参照した宣言の名前の組。位置と名前の小さい順に並べる。
     candidates: Vec<(Span, String)>,
     /// 上限の値ごとの、成分から上向きにたどって届く成分 (自分を含む) にある候補の最小の番号。
@@ -233,20 +229,18 @@ struct SourceIndex {
 
 impl SourceIndex {
     fn new(bounds: &Bounds<Multiplicity>, graph: &Graph<Multiplicity>) -> Self {
-        let mut written = HashMap::new();
+        let mut written = FxHashMap::default();
         let mut copied = Vec::new();
         for (&constraint, origin) in bounds.constraints.iter().zip(&bounds.origins) {
             match (constraint, origin) {
                 ((Bound::Var(var), Bound::Const(_)), Provenance::Bound(span)) => {
                     written.entry(var.index()).or_insert(*span);
                 }
-                (
-                    (Bound::Var(var), Bound::Const(upper)),
-                    Provenance::At(KindOrigin {
-                        span,
-                        reason: KindReason::RowBound { name, .. },
-                    }),
-                ) => copied.push((var.index(), upper, *span, name.clone())),
+                ((Bound::Var(var), Bound::Const(upper)), Provenance::At(at))
+                    if let KindReason::RowBound { name, .. } = &at.reason =>
+                {
+                    copied.push((var.index(), upper, at.span, name.clone()))
+                }
                 _ => {}
             }
         }
@@ -364,7 +358,7 @@ struct Merged {
 
 fn merge(
     members: &[(ValueItem, &KindProblem)],
-    schemes: &HashMap<ValueItem, KindScheme>,
+    schemes: &FxHashMap<ValueItem, KindScheme>,
 ) -> Merged {
     let mut offsets = Vec::new();
     let (mut lin_vars, mut mult_vars) = (0, 0);
@@ -373,7 +367,7 @@ fn merge(
         lin_vars += problem.lin.vars;
         mult_vars += problem.mult.vars;
     }
-    let position: HashMap<ValueItem, usize> = members
+    let position: FxHashMap<ValueItem, usize> = members
         .iter()
         .enumerate()
         .map(|(index, (decl, _))| (*decl, index))
@@ -496,20 +490,19 @@ impl Merged {
         for &(lower, upper) in &scheme.mult {
             let origin = match (lower, upper) {
                 (Bound::Var(v), Bound::Const(_)) => {
-                    let source = scheme
-                        .bound_sources
-                        .iter()
-                        .find(|(var, _)| *var == v)
+                    // `bound_sources` は残した制約の正規形と同じく変数の順に並ぶので、二分探索で引く
+                    let sources = &scheme.bound_sources;
+                    let at = sources.partition_point(|(var, _)| var.index() < v.index());
+                    let source = sources
+                        .get(at)
+                        .filter(|(var, _)| *var == v)
                         .map_or(BoundSource::Unknown, |(_, source)| source.clone());
                     // 残した上限はどれも、書いた上限か本体の中の参照の複写から来るので、出どころが見つかるはずである
                     debug_assert!(
                         !(source == BoundSource::Unknown
                             && matches!(
                                 origin,
-                                Provenance::At(KindOrigin {
-                                    reason: KindReason::Passed(_),
-                                    ..
-                                })
+                                Provenance::At(at) if matches!(at.reason, KindReason::Passed(_))
                             )),
                         "a bound copied to a reference has no source"
                     );
@@ -522,16 +515,15 @@ impl Merged {
         }
         for carry in &scheme.carries {
             let origin = match origin {
-                Provenance::At(KindOrigin {
-                    span,
-                    reason: KindReason::Passed(name),
-                }) => Provenance::At(KindOrigin {
-                    span: *span,
-                    reason: KindReason::CarriedThrough {
-                        name: name.clone(),
-                        inner: carry.origin.origin().map(CarriedInner::of),
-                    },
-                }),
+                Provenance::At(at) if let KindReason::Passed(name) = &at.reason => {
+                    Provenance::at(KindOrigin {
+                        span: at.span,
+                        reason: KindReason::CarriedThrough {
+                            name: name.clone(),
+                            inner: carry.origin.origin().map(CarriedInner::of),
+                        },
+                    })
+                }
                 other => other.clone(),
             };
             self.carries.push(Carry {
@@ -803,7 +795,7 @@ impl<T: Level> Graph<T> {
                 edges[a.index()].push(b.index());
             }
         }
-        let (component, count) = components(&edges);
+        let (component, count) = super::graph::component_ids(&edges);
         let mut upward = vec![Vec::new(); count];
         let mut downward = vec![Vec::new(); count];
         for (a, targets) in edges.iter().enumerate() {
@@ -873,7 +865,7 @@ impl<T: Level> Graph<T> {
     fn reach(
         &self,
         start: usize,
-        kept: &HashMap<usize, Vec<usize>>,
+        kept: &FxHashMap<usize, Vec<usize>>,
         up: bool,
     ) -> (Vec<usize>, Option<T>) {
         let (edges, bounds, shortcut) = if up {
@@ -888,7 +880,7 @@ impl<T: Level> Graph<T> {
         kept_inert.sort_unstable();
         let mut found = Vec::new();
         let mut constant = bounds[start];
-        let mut seen = HashSet::from([start]);
+        let mut seen = FxHashSet::from_iter([start]);
         let mut work = vec![start];
         while let Some(component) = work.pop() {
             // 何もない隣と何もない残す成分の少ないほうから探す。多くの宣言の残す成分に辺が出る成分でも、宣言ごとに
@@ -940,66 +932,9 @@ fn upward_closure<U: Copy>(upward: &Edges, seed: Vec<U>, join: impl Fn(U, U) -> 
     out
 }
 
-/// Tarjan の方法で強連結成分の番号を振る。変数が多くても Rust のスタックを使わないよう、明示的なスタックでたどる
-/// (`scc.rs` と同じ形)。
-fn components(edges: &[Vec<usize>]) -> (Vec<usize>, usize) {
-    let unvisited = usize::MAX;
-    let n = edges.len();
-    let mut index = vec![unvisited; n];
-    let mut low = vec![0; n];
-    let mut on_stack = vec![false; n];
-    let mut component = vec![unvisited; n];
-    let mut stack = Vec::new();
-    let mut next = 0;
-    let mut count = 0;
-    for root in 0..n {
-        if index[root] != unvisited {
-            continue;
-        }
-        let mut work = vec![(root, 0)];
-        index[root] = next;
-        low[root] = next;
-        next += 1;
-        stack.push(root);
-        on_stack[root] = true;
-        while let Some(&(v, edge)) = work.last() {
-            if let Some(&w) = edges[v].get(edge) {
-                work.last_mut().unwrap().1 += 1;
-                if index[w] == unvisited {
-                    index[w] = next;
-                    low[w] = next;
-                    next += 1;
-                    stack.push(w);
-                    on_stack[w] = true;
-                    work.push((w, 0));
-                } else if on_stack[w] {
-                    low[v] = low[v].min(index[w]);
-                }
-                continue;
-            }
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[v]);
-            }
-            if low[v] == index[v] {
-                loop {
-                    let w = stack.pop().unwrap();
-                    on_stack[w] = false;
-                    component[w] = count;
-                    if w == v {
-                        break;
-                    }
-                }
-                count += 1;
-            }
-        }
-    }
-    (component, count)
-}
-
 /// 宣言 `member` の自分の変数を含む成分と、その中の自分の変数の `Shape` の番号 (小さい順)。
-pub(super) fn kept_components<T>(graph: &Graph<T>, member: usize) -> HashMap<usize, Vec<usize>> {
-    let mut kept: HashMap<usize, Vec<usize>> = HashMap::new();
+pub(super) fn kept_components<T>(graph: &Graph<T>, member: usize) -> FxHashMap<usize, Vec<usize>> {
+    let mut kept: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
     for (index, var) in graph.own[member].iter().enumerate() {
         kept.entry(graph.component[var.index()])
             .or_default()
@@ -1075,14 +1010,15 @@ fn carry_residual(
     // 持ち越しの制約が求めるのは row の側が `Once` 以下であることなので、上限が `Once` 以下の自分の変数を row の側に
     // 持つ組は、スキームに残る上限から導ける。残すと、上限を超える row を入れた1つの呼び出しが E2020 と E3006 の
     // 両方になる (docs/spec/types.md の「推論」)
-    let entailed: HashSet<usize> = mult_kept
+    let entailed: FxHashSet<usize> = mult_kept
         .iter()
         .filter(|&(&component, _)| {
             mult_graph.closed_upper[component].is_some_and(|upper| upper <= Multiplicity::Once)
         })
         .flat_map(|(_, shapes)| shapes.iter().copied())
         .collect();
-    let mut best: HashMap<(Bound<Linearity>, Bound<Multiplicity>), &Provenance> = HashMap::new();
+    let mut best: FxHashMap<(Bound<Linearity>, Bound<Multiplicity>), &Provenance> =
+        FxHashMap::default();
     for carry in carries {
         let lins = lowers(lin_graph, &lin_kept, carry.lin, Linearity::Lin);
         let mut mults = lowers(mult_graph, &mult_kept, carry.mult, Multiplicity::Multi);
@@ -1120,7 +1056,7 @@ fn carry_residual(
 /// 定数は持ち越しの制約を破らないので残さない。
 fn lowers<T: Level>(
     graph: &Graph<T>,
-    kept: &HashMap<usize, Vec<usize>>,
+    kept: &FxHashMap<usize, Vec<usize>>,
     bound: Bound<T>,
     top: T,
 ) -> Vec<Bound<T>> {
@@ -1377,7 +1313,7 @@ mod tests {
             )],
             ..KindScheme::default()
         };
-        let schemes = HashMap::from([(function(1), scheme)]);
+        let schemes = FxHashMap::from_iter([(function(1), scheme)]);
         let merged = merge(&[(function(0), &problem)], &schemes);
         let values = solve(&merged.lin).0;
         assert_eq!(values[copy.index()], Linearity::Lin);
@@ -1502,7 +1438,10 @@ mod tests {
             Provenance::Declaration,
         );
         g.own.lin = vec![b];
-        let solution = solve_scc(&[(function(0), &f), (function(1), &g)], &HashMap::new());
+        let solution = solve_scc(
+            &[(function(0), &f), (function(1), &g)],
+            &FxHashMap::default(),
+        );
         let unr = vec![(
             Bound::Var(KindVar::from_index(0)),
             Bound::Const(Linearity::Unr),
@@ -1534,7 +1473,7 @@ mod tests {
             carries: vec![Carry {
                 lin: Bound::Var(KindVar::from_index(0)),
                 mult: Bound::Const(Multiplicity::Multi),
-                origin: Provenance::At(inner),
+                origin: Provenance::at(inner),
             }],
             bound_sources: Vec::new(),
         };
@@ -1548,12 +1487,12 @@ mod tests {
             decl: function(9),
             lin: vec![passed],
             mult: vec![],
-            origin: Provenance::At(KindOrigin {
+            origin: Provenance::at(KindOrigin {
                 span: at(5, 9),
                 reason: KindReason::Passed("keep".to_string()),
             }),
         });
-        let schemes = HashMap::from([(function(9), keep)]);
+        let schemes = FxHashMap::from_iter([(function(9), keep)]);
         let solution = solve_scc(&[(function(0), &f)], &schemes);
         assert_eq!(
             solution.schemes[0],
@@ -1566,7 +1505,7 @@ mod tests {
                 carries: vec![Carry {
                     lin: Bound::Var(KindVar::from_index(0)),
                     mult: Bound::Const(Multiplicity::Multi),
-                    origin: Provenance::At(KindOrigin {
+                    origin: Provenance::at(KindOrigin {
                         span: at(5, 9),
                         reason: KindReason::CarriedThrough {
                             name: "keep".to_string(),
@@ -1596,7 +1535,7 @@ mod tests {
             Bound::Const(Linearity::Unr),
             Provenance::Suppressed,
         );
-        let solution = solve_scc(&[(function(0), &problem)], &HashMap::new());
+        let solution = solve_scc(&[(function(0), &problem)], &FxHashMap::default());
         assert!(solution.violated.is_empty());
     }
 
@@ -1617,7 +1556,7 @@ mod tests {
             Bound::Const(Linearity::Unr),
             Provenance::Unattributed(span),
         );
-        solve_scc(&[(function(0), &problem)], &HashMap::new());
+        solve_scc(&[(function(0), &problem)], &FxHashMap::default());
     }
 
     #[test]
@@ -1638,7 +1577,7 @@ mod tests {
         let mut multiplicity = lattice::<Multiplicity>();
         let e = multiplicity.fresh();
         let origin = |start, end| {
-            Provenance::At(KindOrigin {
+            Provenance::at(KindOrigin {
                 span: at(start, end),
                 reason: KindReason::Unified,
             })

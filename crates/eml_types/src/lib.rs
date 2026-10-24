@@ -17,14 +17,13 @@ mod ty;
 mod uniform;
 mod usage;
 
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange, TextSize};
 use eml_hir::{
     ConstructorId, EffectId, ExprId, Function, FunctionId, ItemMap, LocalId, PatId, Program,
     ValueItem, VarId,
 };
 use la_arena::ArenaMap;
+use rustc_hash::FxHashMap;
 
 use crate::kind::eval;
 use crate::kind::problem::KindScheme;
@@ -83,7 +82,7 @@ pub struct TypedProgram {
     /// 宣言と本体の型がすべて指す、プログラムに1つの型の表。
     pub types: TypeStore,
     /// シグネチャのある関数、クラスのメソッド、操作、コンストラクタの型。
-    pub decls: HashMap<ValueItem, DeclType>,
+    pub decls: FxHashMap<ValueItem, DeclType>,
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ItemMap<Function, BodyTypes>,
     /// 単相化で一様にする型変数の位置。
@@ -161,6 +160,36 @@ impl TypedProgram {
         values
     }
 
+    /// 宣言 `decl` を型引数 `args` (`Instantiation::args` の順) で具体化する代入 (docs/spec/core-ir.md の「変換の規則」)。
+    /// 型変数の名前は宣言の形から取るので、名前と型引数の順は食い違わない。`args` は閉じた型でなければならない
+    /// (`kind_values`)。
+    pub fn substitution(
+        &self,
+        decl: ValueItem,
+        args: &[TypeId],
+        store: &TypeStore,
+    ) -> Substitution {
+        Substitution::new(
+            self.rigid_names(decl, args),
+            self.kind_values(decl, args, store),
+        )
+    }
+
+    /// Kind 変数を残す `substitution`。型引数が宣言に対して相対的で、Kind の値を求められないときに使う。
+    pub fn partial_substitution(&self, decl: ValueItem, args: &[TypeId]) -> Substitution {
+        Substitution::partial(self.rigid_names(decl, args))
+    }
+
+    fn rigid_names(&self, decl: ValueItem, args: &[TypeId]) -> Vec<(String, TypeId)> {
+        let rigids = &self.decls[&decl].shape.rigids;
+        debug_assert_eq!(args.len(), rigids.len(), "type arguments of {decl:?}");
+        rigids
+            .iter()
+            .map(|(name, _)| name.clone())
+            .zip(args.iter().copied())
+            .collect()
+    }
+
     /// 関数の一様な位置 `position` の型変数の Kind。一様な位置の鍵は `Int` の呼び出し元にも `FileIn` の呼び出し元にも
     /// 使われるので、スキームで `Unr` に固定されていなければ `Poly` にする
     /// (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」)。
@@ -212,7 +241,7 @@ pub struct BodyTypes {
     pub instantiations: ArenaMap<ExprId, Instantiation>,
     /// 呼び出しの矢印ごとの `mask` (docs/spec/types.md の「推論」)。キーは呼び出しの式と矢印の番号である。項目は
     /// エフェクトが rest に初めて現れた順に並ぶ。Core IR が、エフェクトの番号の順に並べ直して呼び出しに付ける。
-    pub masks: HashMap<(ExprId, usize), Vec<MaskItem>>,
+    pub masks: FxHashMap<(ExprId, usize), Vec<MaskItem>>,
     /// 射影 (`ExprKind::Field`) が指すフィールド。型検査が射影の時点の型から引いた結果である
     /// (docs/spec/types.md の「フィールドの解決」)。
     pub fields: ArenaMap<ExprId, FieldTarget>,
@@ -230,11 +259,11 @@ pub struct BodyTypes {
     /// ラムダの本体が動く row (ラムダで最後にたどった矢印の row) の分類。キーはラムダの式である。
     pub lambda_yields: ArenaMap<ExprId, RowYield>,
     /// 呼び出しの矢印の row の分類。キーは `masks` と同じく、呼び出しの式と矢印の番号である。
-    pub arrow_yields: HashMap<(ExprId, usize), RowYield>,
+    pub arrow_yields: FxHashMap<(ExprId, usize), RowYield>,
     /// 戻らない呼び出しの前で暗黙に手放す変数。キーは記録の対象の戻らない呼び出しの式、値はその経路のどこでも消費
     /// しない局所変数で、番号の順に並ぶ。型や HIR の誤りがある本体では記録しない
     /// (docs/spec/linearity.md の「線形性の検査パス」)。
-    pub implicit_drops: HashMap<ExprId, Vec<LocalId>>,
+    pub implicit_drops: FxHashMap<ExprId, Vec<LocalId>>,
     /// `var` の変数の型と分類。型は宣言の本体の中の型で、instance の型引数で写す前のものである
     /// (docs/spec/types.md の「`var` の変数」)。
     pub vars: ArenaMap<VarId, VarType>,
@@ -362,7 +391,7 @@ pub(crate) fn test_program(text: &str) -> eml_hir::Program {
 /// `test_program` と、そのソース。診断を作るテストが使う。
 #[cfg(test)]
 pub(crate) fn test_program_with_files(text: &str) -> (eml_hir::Program, SourceFiles) {
-    let (loaded, _) = eml_hir::load("test.em", text, &NoModules);
+    let (loaded, _) = eml_hir::load("test.em", text, &eml_hir::MemorySource(&[]));
     let (def_map, _) = eml_hir::def_map(&loaded);
     let program = eml_hir::lower(&def_map, &loaded.modules).0;
     (program, loaded.files)
@@ -383,9 +412,8 @@ pub(crate) fn test_session(inputs: &[&str]) -> (eml_hir::Program, SourceFiles) {
     let (loaded, _, _) = eml_hir::load_session(
         eml_hir::STD,
         &inputs,
-        "",
-        "",
-        &NoModules,
+        None,
+        &eml_hir::MemorySource(&[]),
         &eml_hir::ImportCache::default(),
     );
     let (def_map, _) = eml_hir::def_map(&loaded);
@@ -414,23 +442,11 @@ pub(crate) fn test_query(inputs: &[&str], query: &str) -> (eml_hir::Program, Sou
     let (loaded, _, _) = eml_hir::load_session(
         eml_hir::STD,
         &session,
-        "",
-        "",
-        &NoModules,
+        None,
+        &eml_hir::MemorySource(&[]),
         &eml_hir::ImportCache::default(),
     );
     let (def_map, _) = eml_hir::def_map(&loaded);
     let program = eml_hir::lower(&def_map, &loaded.modules).0;
     (program, loaded.files)
-}
-
-/// 単体テストの入口は import を書かないので、依存先を読む手段は要らない。
-#[cfg(test)]
-struct NoModules;
-
-#[cfg(test)]
-impl eml_hir::ModuleSource for NoModules {
-    fn read(&self, _: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
-        Err(eml_hir::ReadError::NotFound)
-    }
 }

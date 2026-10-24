@@ -16,16 +16,16 @@ fn std_program() -> Program {
         .filter(|&name| name != "Prelude")
         .map(|name| format!("import Std.{}\n", name.replace('/', ".")))
         .collect();
-    let lowered = eml_test_support::lower_with_std(
+    let lowered = eml_test_support::lower(eml_test_support::with_std(
         eml_hir::STD,
         &format!("{imports}\nmain : Unit -> <IO> Unit\nmain () = println \"x\""),
-    );
+    ));
     assert!(
         lowered.diagnostics.is_empty(),
         "{}",
         eml_test_support::short_text(lowered.files(), &lowered.diagnostics)
     );
-    lowered.program
+    lowered.into_stage().program
 }
 
 fn canonical(program: &Program, module: eml_hir::ModuleId, name: &str) -> String {
@@ -286,8 +286,10 @@ fn a_signature_without_equation_is_missing_one_in_std_too() {
         "{}\nhelper : Int -> Int\ndata Empty\n",
         eml_hir::PRELUDE_SOURCE
     );
-    let lowered =
-        eml_test_support::lower_with_std(&[("Prelude.em", &prelude), eml_hir::STD[1]], "");
+    let lowered = eml_test_support::lower(eml_test_support::with_std(
+        &[("Prelude.em", &prelude), eml_hir::STD[1]],
+        "",
+    ));
     let codes: Vec<String> = lowered
         .diagnostics
         .iter()

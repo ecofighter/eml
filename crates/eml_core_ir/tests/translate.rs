@@ -917,13 +917,7 @@ fn the_entry_function_is_chosen_by_the_caller() {
         .find(|(_, function)| function.name == "alt")
         .map(|(id, _)| id)
         .expect("alt");
-    let program = eml_core_ir::core_until(
-        &checked.program,
-        &checked.typed,
-        alt,
-        checked.files(),
-        Pass::Translate,
-    );
+    let program = eml_core_ir::core_until(checked.input(alt), Pass::Translate);
     insta::assert_snapshot!(eml_core_ir::pretty(&program), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Prelude.Panic { never panicked(obj) -> never }
@@ -1685,7 +1679,7 @@ fn a_user_function_hides_the_prelude_function_of_the_same_name() {
 #[test]
 fn the_prelude_bool_tags_match_the_core_ir_constants() {
     // Core IR は `Bool` を定数のタグで表す。タグは Prelude の宣言の順で決まる (docs/spec/core-ir.md)
-    let program = eml_test_support::lower_clean("").program;
+    let program = eml_test_support::lower_clean("").into_stage().program;
     assert_eq!(program[program.lang.false_ctor].tag, eml_lir::FALSE);
     assert_eq!(program[program.lang.true_ctor].tag, eml_lir::TRUE);
 }

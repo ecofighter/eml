@@ -6,10 +6,9 @@
 //! ここで取り出して持つ。型やパターンの変換のように resolver の要るものだけを `AstPtr` で指し、`lower` がモジュールの
 //! 構文木の根から解決する。ノードを持たないので、`ItemTree` はスレッドをまたげる。
 
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 use eml_syntax::{AstPtr, Parse, SyntaxKind, SyntaxToken, ast};
+use rustc_hash::FxHashMap;
 
 use crate::codes;
 use crate::hir::ParamSort;
@@ -221,6 +220,22 @@ impl Fixity {
         precedence: 9,
         assoc: Assoc::Left,
     };
+
+    /// `self` の演算子 (直前に組んだ演算子か、囲む演算子) の後に `next` が並べられないか。同じ優先順位で結合の向きが
+    /// 違うか、結合しない演算子のときに真である (E1006)。
+    pub(crate) fn conflicts_with(self, next: Fixity) -> bool {
+        self.precedence == next.precedence
+            && (self.assoc != next.assoc || next.assoc == Assoc::None)
+    }
+
+    /// 優先順位の上昇法で、この演算子の右の被演算子が受ける最小の優先順位。
+    pub(crate) fn right_min(self) -> u8 {
+        if self.assoc == Assoc::Right {
+            self.precedence
+        } else {
+            self.precedence + 1
+        }
+    }
 }
 
 /// 関数を組み立てる途中の形。シグネチャと等式の item の番号は、並び方の検査だけに使う。
@@ -239,7 +254,7 @@ struct Definition {
 #[derive(Default)]
 struct Definitions {
     list: Vec<Definition>,
-    by_name: HashMap<String, usize>,
+    by_name: FxHashMap<String, usize>,
 }
 
 impl Definitions {
@@ -312,16 +327,29 @@ impl Definitions {
 /// 最初の item (import を含む) の始まり。E1031 の fix が足りない import を挿入する位置である。shebang と先頭の注釈は
 /// item でないので、その後ろになる。item がなければ本文の終わりを返す。`let` の束縛、式、問い合わせの REPL の入力は
 /// import を書けないので `None` である (docs/spec/modules.md の「名前の解決」)。
-pub fn first_item_start(parse: &Parse) -> Option<TextSize> {
-    let root = parse.syntax();
-    let first = match root.kind() {
-        SyntaxKind::SOURCE_FILE => parse.tree().items().next(),
-        _ => match parse.repl_input() {
-            ast::ReplInput::ReplItems(items) => items.items().next(),
-            _ => return None,
-        },
+pub(crate) fn first_item_start(parse: &Parse) -> Option<TextSize> {
+    let first = parse.items()?.next();
+    Some(first.map_or(parse.syntax().text_range().end(), |item| {
+        item.range().start()
+    }))
+}
+
+/// REPL の `let` の束縛、式、問い合わせの入力。`let` の文や式がなければ、パーサが報告済みなので `None` である。
+fn input_item(parse: &Parse) -> Option<InputItem> {
+    let range = parse.syntax().text_range();
+    let kind = match parse.repl_input() {
+        ast::ReplInput::ReplItems(_) => return None,
+        ast::ReplInput::ReplLet(input) => {
+            let stmt = input.stmt()?;
+            InputItemKind::Let {
+                name: let_name(&stmt),
+                ptr: AstPtr::new(&stmt),
+            }
+        }
+        ast::ReplInput::ReplQuery(input) => InputItemKind::Query(AstPtr::new(&input.expr()?)),
+        ast::ReplInput::ReplExpr(input) => InputItemKind::Expr(AstPtr::new(&input.expr()?)),
     };
-    Some(first.map_or(root.text_range().end(), |item| item.range().start()))
+    Some(InputItem { kind, range })
 }
 
 /// トップレベルの宣言を集める。E1003 (シグネチャと型引数の重複)、E1004、E1018、E1019 と、`type` の E0004 を出す。
@@ -331,39 +359,11 @@ pub fn first_item_start(parse: &Parse) -> Option<TextSize> {
 pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
     // REPL の入力の木は、item の並びか、`let` の束縛か式を1つ持つ。問い合わせの木は式を1つ持つ
-    let (items, input): (Vec<ast::Item>, Option<InputItem>) = match parse.syntax().kind() {
-        SyntaxKind::SOURCE_FILE => (parse.tree().items().collect(), None),
-        _ => {
-            let range = parse.syntax().text_range();
-            // `let` の文や式がなければ、パーサが報告済み
-            match parse.repl_input() {
-                ast::ReplInput::ReplItems(items) => (items.items().collect(), None),
-                ast::ReplInput::ReplLet(input) => {
-                    let input = input.stmt().map(|stmt| {
-                        let kind = InputItemKind::Let {
-                            name: let_name(&stmt),
-                            ptr: AstPtr::new(&stmt),
-                        };
-                        InputItem { kind, range }
-                    });
-                    (Vec::new(), input)
-                }
-                ast::ReplInput::ReplQuery(input) => {
-                    let input = input.expr().map(|expr| InputItem {
-                        kind: InputItemKind::Query(AstPtr::new(&expr)),
-                        range,
-                    });
-                    (Vec::new(), input)
-                }
-                ast::ReplInput::ReplExpr(input) => {
-                    let input = input.expr().map(|expr| InputItem {
-                        kind: InputItemKind::Expr(AstPtr::new(&expr)),
-                        range,
-                    });
-                    (Vec::new(), input)
-                }
-            }
-        }
+    let items: Vec<ast::Item> = parse.items().map_or_else(Vec::new, Iterator::collect);
+    let input = if parse.items().is_some() {
+        None
+    } else {
+        input_item(parse)
     };
     let mut definitions = Definitions::default();
     let mut data = Vec::new();

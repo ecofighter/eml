@@ -2,7 +2,7 @@
 //! ならないことを見る。手で書いた LIR を入力にするテストは、`eml_lir` の tests/unwind.rs にある
 //! (docs/spec/lir.md の「巻き戻しの地点」)。
 
-use eml_lir::unwind::{may_abort, points_all};
+use eml_lir::unwind::{may_abort, points};
 use eml_lir::{Call, Rhs, Stmt};
 
 /// 中断しない無名関数で特殊化した `List.map` の写しは中断しないので、`main` からの呼び出しは地点にならない。
@@ -21,7 +21,10 @@ main () =
 ";
     let program = eml_test_support::lir(text);
     let aborts = may_abort(&program);
-    let points = points_all(&program);
+    let points: Vec<_> = points(&program, |_| true)
+        .into_iter()
+        .map(|points| points.expect("every function is wanted"))
+        .collect();
     let mut calls = 0;
     for (index, function) in program.functions.iter().enumerate() {
         let points = points[index]

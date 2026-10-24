@@ -29,8 +29,10 @@ fn every_program_lowers_to_the_same_text() {
 }
 
 fn lowers_to_the_same_text(program: &UiProgram) {
-    let core =
-        eml_test_support::core_until_files(&program.entry, &program.module_refs(), Pass::Evidence);
+    let core = eml_test_support::core_until(
+        eml_test_support::with_modules(&program.entry, &program.module_refs()),
+        Pass::Evidence,
+    );
     let shown = pretty_with_positions(&core);
     let lir = to_lir(core);
     assert_eq!(

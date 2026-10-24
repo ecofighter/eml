@@ -28,6 +28,18 @@ impl Pass {
     }
 }
 
+type Run = fn(&mut Program);
+type Check = fn(&Program) -> Result<(), VerifyError>;
+
+/// パスの順番。パスごとに、その後に debug ビルドでかける verifier を持つ。
+const PASSES: [(Pass, Run, Check); 5] = [
+    (Pass::Boxing, boxing, verify_scopes),
+    (Pass::Flatten, flatten, verify_flattened),
+    (Pass::Contract, contract, verify_flattened),
+    (Pass::Perceus, perceus, verify),
+    (Pass::Reuse, reuse, verify),
+];
+
 /// 変換の直後の LIR に、box の挿入から `last` までをかける。入力の約束 (`tail`、`box`、`unbox`、RC の命令が
 /// ないこと) を入口で確かめるので、手で書いた LIR を渡すテストもこの検査を通る
 /// (docs/spec/lir.md の「パスの順番」)。検査は debug ビルドでかける。
@@ -37,46 +49,15 @@ pub fn passes_until(program: &mut Program, last: Pass) {
     {
         panic!("internal error: invalid LIR before boxing: {error}");
     }
-    boxing(program);
-    check(program, Pass::Boxing);
-    if last == Pass::Boxing {
-        return;
+    for (pass, run, check) in PASSES {
+        run(program);
+        if cfg!(debug_assertions)
+            && let Err(error) = check(program)
+        {
+            panic!("internal error: invalid LIR after {}: {error}", pass.name());
+        }
+        if pass == last {
+            return;
+        }
     }
-    flatten(program);
-    check(program, Pass::Flatten);
-    if last == Pass::Flatten {
-        return;
-    }
-    contract(program);
-    check(program, Pass::Contract);
-    if last == Pass::Contract {
-        return;
-    }
-    perceus(program);
-    check(program, Pass::Perceus);
-    if last == Pass::Perceus {
-        return;
-    }
-    reuse(program);
-    check(program, Pass::Reuse);
-}
-
-/// 誤りを、それを作ったパスの名前で報告する。
-fn check(program: &Program, pass: Pass) {
-    if !cfg!(debug_assertions) {
-        return;
-    }
-    let result = match pass {
-        Pass::Boxing => verify_scopes(program),
-        Pass::Flatten => verify_flattened(program),
-        Pass::Contract => verify_flattened(program),
-        Pass::Perceus | Pass::Reuse => verify(program),
-    };
-    if let Err(error) = result {
-        fail(pass, error);
-    }
-}
-
-fn fail(pass: Pass, error: VerifyError) -> ! {
-    panic!("internal error: invalid LIR after {}: {error}", pass.name());
 }

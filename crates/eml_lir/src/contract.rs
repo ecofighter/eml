@@ -73,9 +73,10 @@ fn tail_call(
     {
         return;
     }
-    let results = match call {
-        Call::Direct(target, _) => Some(callee_rets[target.0 as usize].clone()),
-        Call::Apply { .. } => Some(vec![(Repr::TObj, Mark::Poly)]),
+    let single;
+    let results: Option<&[(Repr, Mark)]> = match call {
+        Call::Direct(target, _) => Some(&callee_rets[target.0 as usize]),
+        Call::Apply { .. } => Some(&[(Repr::TObj, Mark::Poly)]),
         Call::Clause {
             effect,
             op,
@@ -84,7 +85,10 @@ fn tail_call(
         } => {
             let operation = operation(effects, *effect, *op);
             match operation.ret {
-                OpRet::Repr(repr) => Some(vec![(repr, operation.ret_mark)]),
+                OpRet::Repr(repr) => {
+                    single = [(repr, operation.ret_mark)];
+                    Some(&single)
+                }
                 OpRet::Never => None,
             }
         }

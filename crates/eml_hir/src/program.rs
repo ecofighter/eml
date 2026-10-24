@@ -2,13 +2,14 @@
 //! (docs/implementation/architecture.md の「`eml_hir` の内部」)。
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::{Index, IndexMut};
 
 use eml_diagnostics::FileId;
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
+use rustc_hash::FxHashMap;
 
 use eml_extern::ExternType;
 
@@ -192,6 +193,18 @@ impl<T, V> ItemMap<T, V> {
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.iter().map(|(_, value)| value)
     }
+
+    /// `iter` と同じ順に、値を取り出してたどる。
+    pub fn into_entries(self) -> impl Iterator<Item = (ItemId<T>, V)> {
+        self.modules
+            .into_iter()
+            .enumerate()
+            .flat_map(|(module, map)| {
+                let module = ModuleId::from_raw(RawIdx::from(module as u32));
+                map.into_iter()
+                    .map(move |(local, value)| (ItemId::new(module, local), value))
+            })
+    }
 }
 
 fn module_index(module: ModuleId) -> usize {
@@ -241,7 +254,7 @@ pub struct Program {
     pub names: DisplayNames,
     /// (クラス, 頭の型) から instance への索引。一貫性があるので、1つの組に instance は高々1つである
     /// (docs/spec/modules.md の「instance の一貫性」)。
-    pub instance_index: HashMap<(ClassId, TypeDefId), InstanceId>,
+    pub instance_index: FxHashMap<(ClassId, TypeDefId), InstanceId>,
 }
 
 /// HIR のノードは `SyntaxNodePtr` ではなく範囲を持つ。演算子の列を組み直した部分式のように、対応する構文ノードの
