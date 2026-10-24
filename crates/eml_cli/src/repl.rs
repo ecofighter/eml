@@ -205,7 +205,8 @@ impl Repl {
         // 前の入力で立った止める理由のビットを下ろす。確保量の上限で止まると `MEMORY` のビットが残り、後の入力が
         // すべて止まるため (docs/spec/object-model.md の「実行の制御」)
         self.control.clear();
-        if only_trivia(text) {
+        // 入力の番号を進めずに何もしないので、読み込みの前に調べる
+        if eml_syntax::only_trivia(text) {
             return Evaluated::without_files(Outcome::Empty);
         }
         if self.broken {
@@ -424,13 +425,6 @@ fn broken_session() -> RuntimeError {
         function: "<repl>".to_string(),
         at: None,
     }
-}
-
-/// 空白とコメントだけの入力か。入力の番号を進めずに何もしないので、読み込みの前に調べる。
-fn only_trivia(text: &str) -> bool {
-    let file = SourceFiles::new().add("<input>", text);
-    let (tokens, _) = eml_syntax::lex(file, text);
-    tokens.iter().all(|token| token.kind.is_trivia())
 }
 
 /// 入力をまたいで同じ item を指す鍵。HIR の番号は `eval` ごとに振り直すので、モジュールの名前とモジュールの中の番号で

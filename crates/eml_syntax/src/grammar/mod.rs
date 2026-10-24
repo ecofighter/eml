@@ -44,37 +44,33 @@ pub(crate) fn repl_query(p: &mut Parser) {
     if !expressions::expr(p) {
         expected(p, "an expression");
     }
-    while p.at_sep() || p.at(LAYOUT_CLOSE) {
-        p.bump_any();
-    }
-    if !p.at_eof() {
-        p.error(
-            codes::SYNTAX_ERROR,
-            "':type' takes one expression",
-            "the expression ends before this",
-        );
-        let rest = p.start();
-        while !p.at_eof() {
-            p.bump_any();
-        }
-        rest.complete(p, ERROR);
-    }
+    rest_as_error(
+        p,
+        "':type' takes one expression",
+        "the expression ends before this",
+    );
     m.complete(p, REPL_QUERY);
 }
 
 /// `let` の束縛と式の入力は1つの項目だけを持つ。2つ目の項目を、1件の診断とともに `ERROR` にする。
 fn only_one_item(p: &mut Parser) {
+    rest_as_error(
+        p,
+        "an input holds only one `let` or expression",
+        "start a new input here",
+    );
+}
+
+/// 1つだけを読む入力の、読み終えた後の残り。区切りとブロックの終わりを読み飛ばし、何か残っていれば1件の診断とともに
+/// 終わりまでを `ERROR` にする。
+fn rest_as_error(p: &mut Parser, message: &str, label: &str) {
     while p.at_sep() || p.at(LAYOUT_CLOSE) {
         p.bump_any();
     }
     if p.at_eof() {
         return;
     }
-    p.error(
-        codes::SYNTAX_ERROR,
-        "an input holds only one `let` or expression",
-        "start a new input here",
-    );
+    p.error(codes::SYNTAX_ERROR, message, label);
     let m = p.start();
     while !p.at_eof() {
         p.bump_any();

@@ -737,6 +737,32 @@ pub enum StringPart {
     Hole(Option<Expr>),
 }
 
+/// `StringLit::parts` が部分を組み立てる。`text` は次の穴までの本文で、穴と終わりで空でなければ `Text` にする。
+#[derive(Default)]
+struct PartsBuilder {
+    parts: Vec<StringPart>,
+    text: String,
+}
+
+impl PartsBuilder {
+    fn flush(&mut self) {
+        if !self.text.is_empty() {
+            self.parts
+                .push(StringPart::Text(std::mem::take(&mut self.text)));
+        }
+    }
+
+    fn push_hole(&mut self, interp: Interp) {
+        self.flush();
+        self.parts.push(StringPart::Hole(interp.expr()));
+    }
+
+    fn finish(mut self) -> Vec<StringPart> {
+        self.flush();
+        self.parts
+    }
+}
+
 impl StringLit {
     /// 閉じていない文字列、不正なエスケープを含む文字列、形の誤り (E0014) のある複数行の文字列は `None` を返す。
     /// どれも lexer が報告済みである。隣り合う本文とエスケープは1つの `Text` にまとめ、空の `Text` は返さない。
@@ -755,31 +781,24 @@ impl StringLit {
             let layout = crate::literal::multiline_layout(&text[body]).ok()?;
             return self.multiline_parts(layout, body_start);
         }
-        let mut parts = Vec::new();
-        let mut text = String::new();
+        let mut parts = PartsBuilder::default();
         for element in self.syntax.children_with_tokens() {
             match element {
                 NodeOrToken::Token(token) if token.kind() == SyntaxKind::STRING_TEXT => {
-                    text.push_str(token.text());
+                    parts.text.push_str(token.text());
                 }
                 NodeOrToken::Token(token) if token.kind() == SyntaxKind::ESCAPE => {
-                    text.push(crate::literal::escape_value(token.text())?);
+                    parts.text.push(crate::literal::escape_value(token.text())?);
                 }
                 NodeOrToken::Node(node) => {
                     if let Some(interp) = Interp::cast(node) {
-                        if !text.is_empty() {
-                            parts.push(StringPart::Text(std::mem::take(&mut text)));
-                        }
-                        parts.push(StringPart::Hole(interp.expr()));
+                        parts.push_hole(interp);
                     }
                 }
                 NodeOrToken::Token(_) => {}
             }
         }
-        if !text.is_empty() {
-            parts.push(StringPart::Text(text));
-        }
-        Some(parts)
+        Some(parts.finish())
     }
 
     /// `content` の外の本文 (開きの行と閉じの行) は値に入れない。行頭では `indent` 個までの空白を落とす。エスケープと
@@ -794,8 +813,7 @@ impl StringLit {
             body_start + TextSize::new(layout.content.start as u32),
             body_start + TextSize::new(layout.content.end as u32),
         );
-        let mut parts = Vec::new();
-        let mut text = String::new();
+        let mut parts = PartsBuilder::default();
         let (mut at_line_start, mut stripped) = (true, 0);
         for element in self.syntax.children_with_tokens() {
             // `intersect` は接するだけの範囲にも空の範囲を返すので、空のものを除く
@@ -821,29 +839,23 @@ impl StringLit {
                         }
                         at_line_start = c == '\n';
                         stripped = 0;
-                        text.push(c);
+                        parts.text.push(c);
                     }
                 }
                 NodeOrToken::Token(token) if token.kind() == SyntaxKind::ESCAPE => {
                     at_line_start = false;
-                    text.push(crate::literal::escape_value(token.text())?);
+                    parts.text.push(crate::literal::escape_value(token.text())?);
                 }
                 NodeOrToken::Node(node) => {
                     if let Some(interp) = Interp::cast(node) {
                         at_line_start = false;
-                        if !text.is_empty() {
-                            parts.push(StringPart::Text(std::mem::take(&mut text)));
-                        }
-                        parts.push(StringPart::Hole(interp.expr()));
+                        parts.push_hole(interp);
                     }
                 }
                 NodeOrToken::Token(_) => {}
             }
         }
-        if !text.is_empty() {
-            parts.push(StringPart::Text(text));
-        }
-        Some(parts)
+        Some(parts.finish())
     }
 }
 

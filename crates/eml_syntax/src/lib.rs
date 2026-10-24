@@ -98,6 +98,17 @@ fn parse_with(file: FileId, text: &str, rule: fn(&mut parser::Parser)) -> (Parse
     (Parse { green }, diagnostics)
 }
 
+/// 空白とコメントだけのテキストか。REPL は、そういう入力を入力として数えずに読み飛ばす。
+pub fn only_trivia(text: &str) -> bool {
+    let (tokens, _) = lex(scratch_file(), text);
+    tokens.iter().all(|token| token.kind.is_trivia())
+}
+
+/// 診断を捨てる読み方に渡すファイル。ファイルの番号は、字句解析と構文解析に渡す印にすぎない。
+fn scratch_file() -> FileId {
+    SourceFiles::new().add("<input>", "")
+}
+
 /// REPL の入力が終わったか。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputStatus {
@@ -108,8 +119,7 @@ pub enum InputStatus {
 /// 端末が行を読むたびに、それまでの行を改行でつないだテキストを渡す。字句とレイアウト段の状態と、`parse_input` と
 /// 同じ入力の種類の判定だけを見る (docs/spec/layout.md の「REPL の入力の終わり」)。
 pub fn input_status(text: &str) -> InputStatus {
-    // 診断は捨てるので、ファイルの番号は字句解析と構文解析に渡す印にすぎない
-    let file = SourceFiles::new().add("<input>", "");
+    let file = scratch_file();
     let (tokens, _, open_literal) = lexer::lex_to_end(file, text);
     let (_, _, end) = layout::layout_to_end(file, text, &tokens);
     // 規則 1
