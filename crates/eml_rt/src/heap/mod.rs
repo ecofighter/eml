@@ -548,6 +548,28 @@ impl<M: Mode> Heap<M> {
         &&& self.region == old.region
     }
 
+    /// 物体とその中身、rc、持ち主と仕事の回数が `old` と同じである。違ってよいのは worker と、検査モードの ID の
+    /// 割り当ての欄 (証明の対象にしない) だけである。
+    pub closed spec fn same_contents(&self, old: Heap<M>) -> bool {
+        &&& self.core == old.core
+        &&& self.dummy == old.dummy
+        &&& self.region == old.region
+        &&& self.stats == old.stats
+    }
+
+    /// 中身が同じヒープは、worker によらない述語も同じである。
+    pub(crate) proof fn lemma_same_contents(&self, old: Heap<M>)
+        requires
+            self.same_contents(old),
+        ensures
+            self.consistent() == old.consistent(),
+            self.settleable() == old.settleable(),
+            self.safe_settleable() == old.safe_settleable(),
+            self.words_kept(old),
+            forall|w: Word| #[trigger] self.readable(w) == old.readable(w),
+    {
+    }
+
     pub closed spec fn readable(&self, w: Word) -> bool {
         self.core.readable(w)
     }
@@ -862,6 +884,7 @@ impl<M: Mode> Heap<M> {
             old(self).settled() ==> final(self).settled(),
             old(self).consistent() ==> final(self).consistent(),
             final(self).same_objects(*old(self)),
+            final(self).same_contents(*old(self)),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         self.admit_worker(worker);

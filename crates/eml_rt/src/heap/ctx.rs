@@ -878,6 +878,12 @@ impl<M: Mode> Ctx<M> {
         listed(self.heap, w, self.max_evv)
     }
 
+    /// `switch_task(l, worker)` の後の文脈。`evv` を `l` にし、ヒープの worker を `worker` にする。検査モードの ID の
+    /// 割り当ての欄は、証明の対象でないので写さない。
+    pub closed spec fn switched(&self, l: Word, worker: u32) -> Ctx<M> {
+        Ctx { heap: Heap { worker, ..self.heap }, evv: l, ..*self }
+    }
+
     /// 今の `evv` で、エフェクト `effect` の最初の evidence。tag はエフェクトの番号 + 1 なので、65535 は見つからない。
     pub closed spec fn lookup(&self, effect: u16) -> Option<Word> {
         find(self.evv_seq(self.evv), effect_tag(effect))
@@ -1034,8 +1040,8 @@ impl<M: Mode> Ctx<M> {
 
     /// # Safety
     /// ヒープを入れ替えない。`Ctx` が持つ語 (`evv` と yield の状態) を手放したり書き換えたりせず、それらの語からたどれる
-    /// 物体 (`evv` の節点、evidence、入口の表) も書き換えない。`set_worker` を呼ばず、それらの物体を `share` しない。
-    /// 基本操作が頼る、物体の持ち主と rc の符号が変わるためである。`Ctx` のメソッドを次に呼ぶ前に、作っている物体を
+    /// 物体 (`evv` の節点、evidence、入口の表) も書き換えない。`set_worker` を呼ばず (worker は `switch_task` で替える)、
+    /// それらの物体を `share` しない。基本操作が頼る、物体の持ち主と rc の符号が変わるためである。`Ctx` のメソッドを次に呼ぶ前に、作っている物体を
     /// 書き終える。
     pub unsafe fn heap_mut(&mut self) -> &mut Heap<M> {
         &mut self.heap
@@ -1535,52 +1541,49 @@ impl<M: Mode> Ctx<M> {
         r
     }
 
-    /// `evv` を `l` に替え、元の `evv` を返す。`l` の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、
-    /// RC には触れない。タスクの切り替えが `RunStats` をスケジュールに依存させないための操作である
+    /// タスクを切り替える。`evv` を次のタスクの `l` に替え、ヒープの worker を `worker` にし (`Heap::set_worker`)、
+    /// 前のタスクの `evv` を返す。`l` の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、RC に触れない。
+    /// タスクの切り替えが `RunStats` をスケジュールに依存させないための操作である
     /// (docs/spec/object-model.md の「タスクの切り替え」)。
     ///
     /// # Safety
-    /// `heap_mut` の前提を守っている。`l` は即値か、このヒープか付けた塊の生きている物体を指す `evv` のリストで、
-    /// 呼ぶ側がその参照を1つ持つ。どちらのモードでも確かめない。
+    /// `heap_mut` の前提を守っている。`l` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
+    /// 1つ持つ。速いモードでは、切り替えた後の文脈 (`switched(l, worker)`) で `held_ok` が成り立つ。どちらのモードでも
+    /// 確かめない。
     #[verifier::spinoff_prover]
-    pub unsafe fn evv_swap(&mut self, l: Word) -> (r: Word)
+    pub unsafe fn switch_task(&mut self, l: Word, worker: u32) -> (r: Word)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(l),
-            old(self).evv_wf(l),
-            old(self).holds(l),
+            !M::CHECKED ==> old(self).switched(l, worker).held_ok(),
         ensures
             final(self).wf(),
             r == old(self).evv_spec(),
             final(self).evv_spec() == l,
             final(self).yield_spec() == old(self).yield_spec(),
-            final(self).heap_spec() == old(self).heap_spec(),
-            final(self).holds(r),
-            old(self).held_ok() ==> final(self).held_ok() && final(self).evv_wf(r),
+            final(self).heap_spec().worker_spec() == worker,
+            final(self).heap_spec().same_contents(old(self).heap_spec()),
+            old(self).switched(l, worker).held_ok() ==> final(self).held_ok(),
+            old(self).held_ok() ==> old(self).evv_wf(r),
     {
         let r = self.evv;
         self.evv = l;
+        self.heap.set_worker(worker);
         proof {
             let s0 = *old(self);
-            let ws0 = seq![l];
-            let ws1 = seq![r];
-            assert(held_word(s0.heap, ws0[0]));
-            assert forall|b: usize| #[trigger] self.need(ws1, b) == s0.need(ws0, b) by {
-                lemma_points_in(ws0, b);
-                lemma_points_in(ws1, b);
-            }
-            assert forall|b: usize| #[trigger] self.need(seq![], b) <= s0.need(ws0, b) by {
-                lemma_points_in(ws0, b);
-                lemma_points_in(seq![], b);
-            }
-            assert(self.holds_args(ws1)) by {
-                assert forall|i: int| 0 <= i < ws1.len() implies held_word(
-                    self.heap,
-                    #[trigger] ws1[i],
-                ) by {}
-            }
-            if s0.held_ok() || !M::CHECKED {
-                assert(self.holds_args(seq![]));
+            let s = s0.switched(l, worker);
+            self.heap.lemma_same_contents(s0.heap);
+            assert(self.heap.same_contents(s.heap));
+            self.heap.lemma_same_contents(s.heap);
+            if s.held_ok() {
+                let d = |b: usize| 0int;
+                assert(moved(self.heap, s.heap, d, Set::empty()));
+                assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s.need(
+                    seq![],
+                    b,
+                ) + d(b) >= self.need(seq![], b) by {}
+                self.lemma_holds_moved(s, seq![], seq![], d, Set::empty());
+                lemma_listed_kept(self.heap, s.heap, d, Set::empty(), l, s.max_evv);
             }
         }
         r

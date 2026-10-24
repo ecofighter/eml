@@ -200,31 +200,45 @@ fn evv_get_and_set_swap_the_list<M: Mode>() {
     assert!(ctx.check_finished());
 }
 
-/// `evv_swap` は参照を `Ctx` と呼ぶ側で入れ替えるだけで、どちらの物体の rc も変えず、RC の仕事を数えない。
-fn evv_swap_exchanges_lists_without_rc_work<M: Mode>() {
+/// `switch_task` は evv の参照を `Ctx` と呼ぶ側で入れ替えて worker を替えるだけで、どの物体の rc も変えず、RC の仕事を
+/// 数えない。子の worker の局所の evv を、その worker に切り替えるときに入れられる。
+fn switch_task_exchanges_lists_and_workers_without_rc_work<M: Mode>() {
+    const CHILD: u32 = 3;
     let mut ctx = ctx::<M>();
     let e0 = push(&mut ctx, 0, 1);
+    let start = ctx.heap().stats();
     unsafe {
-        let a = ctx.evv_swap(UNIT);
+        // 親から、空の evv で始める子へ
+        let a = ctx.switch_task(UNIT, CHILD);
+        assert_eq!(ctx.heap().worker(), CHILD);
         assert!(ctx.check_finished());
+        assert_eq!(ctx.heap().stats(), start);
+        // 子が自分の handler を設けると、子の worker の局所の節点ができる
         let e1 = push(&mut ctx, 1, 1);
-        let b = ctx.evv_swap(a);
+        let before = ctx.heap().stats();
+        let b = ctx.switch_task(a, 0);
+        assert_eq!(ctx.heap().worker(), 0);
         assert_eq!(ctx.heap().field(a, 0), Ok(e0));
         assert_eq!(ctx.heap().field(b, 0), Ok(e1));
+        if M::CHECKED {
+            assert_eq!(super::raw::prefix_first(a), 0);
+            assert_eq!(super::raw::prefix_first(b), CHILD);
+        }
         let rcs = (super::raw::rc(a), super::raw::rc(b));
         assert_eq!(rcs, (1, 1));
-        let stats = ctx.heap().stats();
-        // 切り替えて戻すと、Ctx は元の a を、呼ぶ側は b を持つ
-        assert_eq!(ctx.evv_swap(b), a);
-        assert_eq!(ctx.evv_swap(a), b);
-        let after = ctx.heap().stats();
-        assert_eq!(after.rc_increments, stats.rc_increments);
-        assert_eq!(after.rc_decrements, stats.rc_decrements);
+        // 子へ戻して、また親へ戻す
+        assert_eq!(ctx.switch_task(b, CHILD), a);
+        assert_eq!(ctx.heap().worker(), CHILD);
+        assert_eq!(ctx.switch_task(a, 0), b);
+        assert_eq!(ctx.heap().worker(), 0);
+        assert_eq!(ctx.heap().stats(), before);
         assert_eq!((super::raw::rc(a), super::raw::rc(b)), rcs);
-        ctx.heap_mut().decref(b).unwrap();
-        for e in [e0, e1] {
-            ctx.heap_mut().decref(e).unwrap();
-        }
+        // 子の物体は子の worker で、親の物体は親の worker で手放す
+        assert_eq!(ctx.switch_task(b, CHILD), a);
+        clear(&mut ctx);
+        ctx.heap_mut().decref(e1).unwrap();
+        assert_eq!(ctx.switch_task(a, 0), UNIT);
+        ctx.heap_mut().decref(e0).unwrap();
     }
     clear(&mut ctx);
     assert!(ctx.check_finished());
@@ -775,7 +789,7 @@ both_modes!(
     yield_abort_leaves_no_continuation,
     misused_yields_are_reported_in_checked_mode,
     evv_get_and_set_swap_the_list,
-    evv_swap_exchanges_lists_without_rc_work,
+    switch_task_exchanges_lists_and_workers_without_rc_work,
     dropping_a_ctx_mid_yield,
     lookup_finds_the_innermost_evidence,
     find_returns_the_innermost_evidence_or_none,
