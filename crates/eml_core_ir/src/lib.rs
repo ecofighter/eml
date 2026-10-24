@@ -24,7 +24,7 @@ mod verify;
 pub use evidence::evidence;
 pub use lowering::to_lir;
 pub use optimize::optimize;
-pub use pipeline::{Pass, core_until, lower, lower_until};
+pub use pipeline::{Input, Pass, core_until, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::parse;
 pub use translate::boxed_repr;

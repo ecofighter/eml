@@ -1,7 +1,7 @@
 //! クラス、メソッド、instance の HIR (docs/spec/declarations.md の「クラスと instance」)。
 
 use eml_hir::{FunctionKind, InstanceOrigin, MethodImpl};
-use eml_test_support::{full, lower, lower_files, short};
+use eml_test_support::{full, lower, short, with_modules};
 
 const COLOR: &str = "data Color =\n  | Red\n  | Green\n\n";
 
@@ -73,10 +73,10 @@ fn classes_share_the_type_namespace_and_methods_the_value_namespace() {
 fn class_parts_are_imported_with_dot_dot() {
     let module = "pub class Size a where\n  size : a -> Int\n";
     let entry = "import M (Size(..))\n\nf : Size a => a -> Int\nf x = size x";
-    let lowered = lower_files(entry, &[("M.em", module)]);
+    let lowered = lower(with_modules(entry, &[("M.em", module)]));
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
     let entry = "import M (Size)\n\nf : Size a => a -> Int\nf x = size x\n\ng : Size a => a -> Int\ng x = M.size x";
-    let lowered = lower_files(entry, &[("M.em", module)]);
+    let lowered = lower(with_modules(entry, &[("M.em", module)]));
     assert_eq!(
         short(lowered.files(), &lowered.diagnostics),
         ["E1001 4:7 cannot find value `size`"]
@@ -88,7 +88,7 @@ fn an_operator_method_keeps_its_fixity_in_another_module() {
     // 結合しない演算子を2つ並べると E1006 になる。fixity がメソッドに付いて、別のモジュールでも効くことを確かめる
     let module = "pub infix 4 ===\n\npub class Same a where\n  (===) : a -> a -> Bool\n";
     let entry = "import M (Same(..))\n\nf : Same a => a -> Bool\nf x = x === x === x";
-    let lowered = lower_files(entry, &[("M.em", module)]);
+    let lowered = lower(with_modules(entry, &[("M.em", module)]));
     let lines = short(lowered.files(), &lowered.diagnostics);
     assert!(
         lines.iter().any(|line| line.starts_with("E1006")),
@@ -139,12 +139,12 @@ fn an_instance_must_be_in_the_module_of_its_class_or_type() {
     let ty = "pub data Color = | Red\n";
     let entry =
         "import C (Size(..))\nimport T (Color(..))\n\ninstance Size Color where\n  size _ = 1";
-    let lowered = lower_files(entry, &[("C.em", class), ("T.em", ty)]);
+    let lowered = lower(with_modules(entry, &[("C.em", class), ("T.em", ty)]));
     insta::assert_snapshot!(short(lowered.files(), &lowered.diagnostics).join("\n"), @"E1034 4:15 an instance of `Size` for `Color` must be in the module of `Size` or of `Color`");
     // 型のモジュールに書いた instance は、クラスが別のモジュールでも書ける
     let ty = "import C (Size(..))\n\npub data Color = | Red\n\ninstance Size Color where\n  size _ = 1\n";
     let entry = "import T (Color(..))\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    let lowered = lower_files(entry, &[("C.em", class), ("T.em", ty)]);
+    let lowered = lower(with_modules(entry, &[("C.em", class), ("T.em", ty)]));
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
 }
 

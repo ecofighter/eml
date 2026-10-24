@@ -34,7 +34,10 @@ fn is_thin(variant: &LirFn, base: &str, functions: &[LirFn]) -> bool {
 fn census() {
     let mut total = Census::default();
     for program in ui_programs() {
-        let lir = eml_test_support::lir_files(&program.entry, &program.module_refs());
+        let lir = eml_test_support::lir(eml_test_support::with_modules(
+            &program.entry,
+            &program.module_refs(),
+        ));
         let mut census = Census::default();
         for function in &lir.functions {
             census.functions += 1;

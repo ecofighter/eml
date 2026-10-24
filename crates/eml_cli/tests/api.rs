@@ -58,18 +58,24 @@ fn load_with_std_reads_the_given_standard_library() {
 const TWICE: &str = "twice : String -> String\ntwice s =\n  let _ = \"unused\"\n  s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"x\")";
 
 #[test]
-fn compile_core_until_stops_after_the_named_pass() {
+fn compile_with_core_until_stops_after_the_named_pass() {
     // translate の直後の Core IR には、contract が消す前の `"unused"` が残る
     let session = single(TWICE);
-    let shown = |last| eml_core_ir::pretty(&session.compile_core_until(last).program.unwrap());
+    let shown = |last| {
+        let compiled = session.compile_with(|input| eml_core_ir::core_until(input, last));
+        eml_core_ir::pretty(&compiled.program.unwrap())
+    };
     assert!(shown(eml_core_ir::Pass::Translate).contains("\"unused\""));
 }
 
 #[test]
-fn compile_until_stops_after_the_named_pass() {
+fn compile_with_lower_until_stops_after_the_named_pass() {
     // contract が使われない `"unused"` を消す。`s` を2回使うので、Perceus の後にだけ `dup` が入る
     let session = single(TWICE);
-    let shown = |last| eml_lir::pretty(&session.compile_until(last).program.unwrap());
+    let shown = |last| {
+        let compiled = session.compile_with(|input| eml_core_ir::lower_until(input, last));
+        eml_lir::pretty(&compiled.program.unwrap())
+    };
     assert!(!shown(eml_lir::Pass::Contract).contains("\"unused\""));
     assert!(!shown(eml_lir::Pass::Contract).contains("dup"));
     assert!(shown(eml_lir::Pass::Perceus).contains("dup"));

@@ -515,8 +515,8 @@ REPL の入力から作る関数 `input$N` (N は入力の番号) は、`()` を
 | evidence passing (`evidence`) | `optimize` の出力 | `handle`、`perform`、`resume`、`mask` のない Core IR。基本操作、`clause`、EP が作る関数を含む |
 | LIR への変換 (`to_lir`) | EP の後の Core IR | 変換の直後の LIR (下の「Core IR から LIR への変換」) |
 
-- `eml_core_ir::Pass` は `Translate`、`Optimize`、`Evidence` の3つである。`core_until(hir, typed, entry, files, Pass)` は、指定したパスの直後の Core IR で止める。テストは各パスの直後の IR を見られる
-- 全体の入口は `lower(hir, typed, entry, files)` と `lower_until(hir, typed, entry, files, eml_lir::Pass)` で、どちらも LIR を返す。translate、`optimize`、EP、`to_lir`、`eml_lir::passes_until` の順に呼び、`lower` は reuse まで進む。2つの層をつなぐ順番を知るのは、この2つの関数だけである
+- `eml_core_ir::Pass` は `Translate`、`Optimize`、`Evidence` の3つである。`core_until(input, Pass)` は、指定したパスの直後の Core IR で止める。`input` は `Input { hir, typed, entry, files }` で、どの入口も同じものを受け取る。テストは各パスの直後の IR を見られる
+- 全体の入口は `lower(input)` と `lower_until(input, eml_lir::Pass)` で、どちらも LIR を返す。translate、`optimize`、EP、`to_lir`、`eml_lir::passes_until` の順に呼び、`lower` は reuse まで進む。2つの層をつなぐ順番を知るのは、この2つの関数だけである
 - verifier はデバッグビルドだけでかけ、誤りはパスの名前を付けて報告する。translate と `optimize` の後は変換の段を、EP の後は EP の段をかけ (下の「verifier」)、誤りを `internal error: invalid Core IR after {pass}: {error}` と報告する。`to_lir` の直後には別の検査を置かない。`to_lir` の出力は EP の段の検査を通った IR を写しただけで、`passes_until` の入口の検査がすぐに同じことを確かめるためである
 - どのパスの後でも、ブロックの列は構造の規則を満たす。パスの間で古くなる索引やキャッシュは IR に持たせない
 - 後のパスの置き場所: 呼び出しを作るか行き先を変えるパス (インライン化、evidence passing など) は、Core IR の上で translate と box の挿入の間に置く。Core IR は `tail`、`box`、`unbox` を持たないので、こうしたパスはそれらを出さない。box の挿入がプログラム全体の ABI と変換を1か所で決め、縮約が末尾呼び出しを作るためである

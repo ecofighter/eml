@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eml_test_support::{lir, lir_files, run_stats, run_stats_with_args};
+use eml_test_support::{capture, lir, run_stats, run_stats_on, with_modules};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
@@ -79,7 +79,10 @@ fn stats_with_args(name: &str, args: &[&str], expected: &str) -> RunStats {
     let path = bench_dir().join(format!("{name}.em"));
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    let (out, result) = run_stats_with_args(&text, args);
+    let (out, result) = run_stats_on(
+        &text,
+        capture().with_args(args.iter().map(std::ffi::OsString::from).collect()),
+    );
     assert_eq!(out, expected, "{result:?}");
     result.unwrap_or_else(|error| panic!("{error}"))
 }
@@ -1131,7 +1134,7 @@ fn unwind_points() {
         let text = std::fs::read_to_string(scripts.join(name).join("main.em")).unwrap();
         lines.push(format!(
             "scripts/{name}: {}",
-            unwind_point_count(&lir_files(&text, &[]))
+            unwind_point_count(&lir(with_modules(&text, &[])))
         ));
     }
     insta::assert_snapshot!(lines.join("\n"), @"

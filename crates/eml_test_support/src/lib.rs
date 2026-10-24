@@ -13,7 +13,7 @@ use std::fmt::Write;
 use eml_cli::Session;
 use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles, sort_diagnostics};
 #[cfg(feature = "run")]
-use eml_vm::{RunConfig, RunStats, RuntimeError};
+use eml_vm::{CaptureHost, RunConfig, RunStats, RuntimeError};
 
 pub struct Parsed {
     pub files: SourceFiles,
@@ -22,17 +22,16 @@ pub struct Parsed {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// `SourceFiles` は Clone できないので、ファイルは `Session` ごと持ち、メソッドで出す。
+/// 段階の結果に、それを作った `Session` を添えたもの。`SourceFiles` は Clone できないので、ファイルは `Session` ごと
+/// 持ち、メソッドで出す。段階の結果の欄は `Deref` で読む。
 #[cfg(feature = "hir")]
-pub struct Lowered {
+pub struct WithSession<T> {
     session: Session,
-    pub program: eml_hir::Program,
-    /// 読み込み、構文、def_map、HIR の診断を、表示と同じ順 (`sort_diagnostics`) に並べたもの。
-    pub diagnostics: Vec<Diagnostic>,
+    stage: T,
 }
 
 #[cfg(feature = "hir")]
-impl Lowered {
+impl<T> WithSession<T> {
     pub fn files(&self) -> &SourceFiles {
         self.session.files()
     }
@@ -40,27 +39,42 @@ impl Lowered {
     pub fn file(&self) -> FileId {
         self.session.entry()
     }
-}
 
-#[cfg(feature = "types")]
-pub struct Checked {
-    session: Session,
-    pub program: eml_hir::Program,
-    pub typed: eml_types::TypedProgram,
-    /// 読み込み、構文、HIR、型の診断を、表示と同じ順 (`sort_diagnostics`) に並べたもの。
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-#[cfg(feature = "types")]
-impl Checked {
-    pub fn files(&self) -> &SourceFiles {
-        self.session.files()
-    }
-
-    pub fn file(&self) -> FileId {
-        self.session.entry()
+    /// 段階の結果の欄を手放して使うテストのため。
+    pub fn into_stage(self) -> T {
+        self.stage
     }
 }
+
+#[cfg(feature = "hir")]
+impl<T> std::ops::Deref for WithSession<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.stage
+    }
+}
+
+/// `entry` を入口にして IR を作る入力。`main` でない関数を入口にするテストのため。
+#[cfg(feature = "core")]
+impl WithSession<eml_cli::Checked> {
+    pub fn input(&self, entry: eml_hir::FunctionId) -> eml_core_ir::Input<'_> {
+        eml_core_ir::Input {
+            hir: &self.program,
+            typed: &self.typed,
+            entry,
+            files: self.files(),
+        }
+    }
+}
+
+/// HIR と、読み込み、構文、def_map、HIR の診断を、表示と同じ順 (`sort_diagnostics`) に並べたもの。
+#[cfg(feature = "hir")]
+pub type Lowered = WithSession<eml_cli::Lowered>;
+
+/// HIR、型検査の結果と、読み込みから型までの診断を、表示と同じ順に並べたもの。
+#[cfg(feature = "types")]
+pub type Checked = WithSession<eml_cli::Checked>;
 
 /// UI テスト以外のテストで登録する、入口のファイルの表示のパス。
 pub const ENTRY_PATH: &str = "test.em";
@@ -77,6 +91,64 @@ impl eml_hir::ModuleSource for MemorySource<'_> {
             .find(|(file, _)| *file == wanted)
             .map(|(_, text)| text.to_string())
             .ok_or(eml_hir::ReadError::NotFound)
+    }
+}
+
+/// パイプラインに通すソースの集まり。入口の本文だけ (`&str` から作る)、依存先のモジュールを足したもの (`with_modules`)、
+/// 標準ライブラリを差し替えたもの (`with_std`) の3つがある。段階の関数はどれもこれを受け取るので、ソースの組み方と
+/// 止める段階を別々に選べる。
+#[cfg(feature = "hir")]
+#[derive(Clone, Copy)]
+pub struct Sources<'a> {
+    std: Option<&'a [(&'a str, &'a str)]>,
+    entry: &'a str,
+    modules: &'a [(&'a str, &'a str)],
+}
+
+#[cfg(feature = "hir")]
+impl<'a> From<&'a str> for Sources<'a> {
+    fn from(entry: &'a str) -> Sources<'a> {
+        with_modules(entry, &[])
+    }
+}
+
+#[cfg(feature = "hir")]
+impl<'a> From<&'a String> for Sources<'a> {
+    fn from(entry: &'a String) -> Sources<'a> {
+        with_modules(entry, &[])
+    }
+}
+
+/// 入口の本文と、依存先のモジュール。`modules` は根からの相対パス (`"Report/Csv.em"`) と本文の組である。
+#[cfg(feature = "hir")]
+pub fn with_modules<'a>(entry: &'a str, modules: &'a [(&'a str, &'a str)]) -> Sources<'a> {
+    Sources {
+        std: None,
+        entry,
+        modules,
+    }
+}
+
+/// 標準ライブラリを `(ファイル名, 本文)` の並びに差し替える。標準ライブラリの中の item の扱いを確かめるテストのため。
+/// 並びは `Prelude.em` と、本物の `Fs.em` (または同じ extern の宣言を持つもの) を含める。extern の索引が両方を引くので、
+/// 足りないと panic する。
+#[cfg(feature = "hir")]
+pub fn with_std<'a>(std: &'a [(&'a str, &'a str)], entry: &'a str) -> Sources<'a> {
+    Sources {
+        std: Some(std),
+        entry,
+        modules: &[],
+    }
+}
+
+#[cfg(feature = "hir")]
+impl Sources<'_> {
+    pub fn session(self) -> Session {
+        let source = MemorySource(self.modules);
+        match self.std {
+            Some(std) => Session::load_with_std(std, ENTRY_PATH, self.entry, &source),
+            None => Session::load(ENTRY_PATH, self.entry, &source),
+        }
     }
 }
 
@@ -105,29 +177,12 @@ pub fn parse(text: &str) -> Parsed {
     }
 }
 
-/// `modules` は根からの相対パス (`"Report/Csv.em"`) と本文の組である。
-#[cfg(feature = "hir")]
-fn load(entry: &str, modules: &[(&str, &str)]) -> Session {
-    Session::load(ENTRY_PATH, entry, &MemorySource(modules))
-}
-
-/// 標準ライブラリを `(ファイル名, 本文)` の並びに差し替える。標準ライブラリの中の item の扱いを確かめるテストのため。
-/// 並びは `Prelude.em` と、本物の `Fs.em` (または同じ extern の宣言を持つもの) を含める。extern の索引が両方を引くので、
-/// 足りないと panic する。
-#[cfg(feature = "hir")]
-fn load_with_std(std: &[(&str, &str)], entry: &str) -> Session {
-    Session::load_with_std(std, ENTRY_PATH, entry, &MemorySource(&[]))
-}
-
-#[cfg(feature = "hir")]
-pub fn lower(text: &str) -> Lowered {
-    lower_files(text, &[])
-}
-
 /// 診断には読み込みの段のものも入る。
 #[cfg(feature = "hir")]
-pub fn lower_files(entry: &str, modules: &[(&str, &str)]) -> Lowered {
-    lower_session(load(entry, modules))
+pub fn lower<'a>(sources: impl Into<Sources<'a>>) -> Lowered {
+    let session = sources.into().session();
+    let stage = session.lower();
+    WithSession { session, stage }
 }
 
 /// 埋め込んだ標準ライブラリの `name` (`"String.em"` など) の組。差し替えた木に本物のモジュールを足すのに使う。
@@ -139,33 +194,10 @@ pub fn std_module(name: &str) -> (&'static str, &'static str) {
         .expect("an embedded std module")
 }
 
-#[cfg(feature = "hir")]
-pub fn lower_with_std(std: &[(&str, &str)], entry: &str) -> Lowered {
-    lower_session(load_with_std(std, entry))
-}
-
-#[cfg(feature = "hir")]
-fn lower_session(session: Session) -> Lowered {
-    let eml_cli::Lowered {
-        program,
-        diagnostics,
-    } = session.lower();
-    Lowered {
-        session,
-        program,
-        diagnostics,
-    }
-}
-
-#[cfg(feature = "hir")]
-pub fn def_map(text: &str) -> (eml_hir::DefMap, Vec<String>) {
-    def_map_files(text, &[])
-}
-
 /// 診断は、読み込みの段と def_map の段のものである。
 #[cfg(feature = "hir")]
-pub fn def_map_files(entry: &str, modules: &[(&str, &str)]) -> (eml_hir::DefMap, Vec<String>) {
-    let session = load(entry, modules);
+pub fn def_map<'a>(sources: impl Into<Sources<'a>>) -> (eml_hir::DefMap, Vec<String>) {
+    let session = sources.into().session();
     let eml_cli::DefMapped {
         def_map,
         diagnostics,
@@ -196,74 +228,57 @@ fn assert_clean(files: &SourceFiles, diagnostics: &[Diagnostic]) {
 }
 
 #[cfg(feature = "types")]
-pub fn check(text: &str) -> Checked {
-    check_files(text, &[])
+pub fn check<'a>(sources: impl Into<Sources<'a>>) -> Checked {
+    checked_session(sources.into().session())
+}
+
+/// REPL のセッションの入力を読み、型検査までを通す。入力の関数を入口にした Core IR を見るテストのため。
+#[cfg(feature = "types")]
+pub fn check_inputs(inputs: &[eml_hir::SessionInput]) -> Checked {
+    let (session, _) = Session::load_session(
+        inputs,
+        "",
+        "",
+        &MemorySource(&[]),
+        &eml_hir::ImportCache::default(),
+    );
+    checked_session(session)
 }
 
 #[cfg(feature = "types")]
-pub fn check_files(entry: &str, modules: &[(&str, &str)]) -> Checked {
-    check_session(load(entry, modules))
-}
-
-/// 標準ライブラリを差し替えて型検査をする。並びの条件は `lower_with_std` と同じである。
-#[cfg(feature = "types")]
-pub fn check_with_std(std: &[(&str, &str)], entry: &str) -> Checked {
-    check_session(load_with_std(std, entry))
-}
-
-#[cfg(feature = "types")]
-fn check_session(session: Session) -> Checked {
-    let eml_cli::Checked {
-        program,
-        typed,
-        diagnostics,
-    } = session.check();
-    Checked {
-        session,
-        program,
-        typed,
-        diagnostics,
-    }
+fn checked_session(session: Session) -> Checked {
+    let stage = session.check();
+    WithSession { session, stage }
 }
 
 #[cfg(feature = "core")]
-pub fn lir(text: &str) -> eml_lir::Program {
-    lir_files(text, &[])
-}
-
-#[cfg(feature = "core")]
-pub fn lir_files(entry: &str, modules: &[(&str, &str)]) -> eml_lir::Program {
-    compiled(load(entry, modules).compile())
+pub fn lir<'a>(sources: impl Into<Sources<'a>>) -> eml_lir::Program {
+    compiled(sources.into().session().compile())
 }
 
 /// 確かめたいパスの直後の LIR を見るテストのため (docs/implementation/testing.md)。
 #[cfg(feature = "core")]
-pub fn lir_until(text: &str, last: eml_lir::Pass) -> eml_lir::Program {
-    lir_until_files(text, &[], last)
-}
-
-#[cfg(feature = "core")]
-pub fn lir_until_files(
-    entry: &str,
-    modules: &[(&str, &str)],
-    last: eml_lir::Pass,
-) -> eml_lir::Program {
-    compiled(load(entry, modules).compile_until(last))
+pub fn lir_until<'a>(sources: impl Into<Sources<'a>>, last: eml_lir::Pass) -> eml_lir::Program {
+    compiled(
+        sources
+            .into()
+            .session()
+            .compile_with(|input| eml_core_ir::lower_until(input, last)),
+    )
 }
 
 /// 確かめたいパスの直後の Core IR を見るテストのため (docs/implementation/testing.md)。
 #[cfg(feature = "core")]
-pub fn core_until(text: &str, last: eml_core_ir::Pass) -> eml_core_ir::Program {
-    core_until_files(text, &[], last)
-}
-
-#[cfg(feature = "core")]
-pub fn core_until_files(
-    entry: &str,
-    modules: &[(&str, &str)],
+pub fn core_until<'a>(
+    sources: impl Into<Sources<'a>>,
     last: eml_core_ir::Pass,
 ) -> eml_core_ir::Program {
-    compiled(load(entry, modules).compile_core_until(last))
+    compiled(
+        sources
+            .into()
+            .session()
+            .compile_with(|input| eml_core_ir::core_until(input, last)),
+    )
 }
 
 /// `eml run` と同じく、エラーがあれば IR を作らない。`main` がないこともエラーである。
@@ -276,43 +291,26 @@ fn compiled<P>(compiled: eml_cli::Compiled<P>) -> P {
 
 /// 実行のテストは、つねに検査モードで流す (docs/implementation/testing.md)。
 #[cfg(feature = "run")]
-pub fn run(text: &str) -> (String, Result<(), RuntimeError>) {
-    run_files(text, &[])
-}
-
-#[cfg(feature = "run")]
-pub fn run_files(entry: &str, modules: &[(&str, &str)]) -> (String, Result<(), RuntimeError>) {
-    let (out, result) = execute(&lir_files(entry, modules), &checked());
+pub fn run<'a>(sources: impl Into<Sources<'a>>) -> (String, Result<(), RuntimeError>) {
+    let (out, result) = run_stats(sources);
     (out, result.map(|_| ()))
 }
 
 /// `RunStats` (仕事の回数と、ヒープの物体とスタックの語の数の最大) も返す。数を比べるテスト (`eml_vm` の
 /// `scaling.rs` と `bench.rs`) のため。
 #[cfg(feature = "run")]
-pub fn run_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
-    execute(&lir(text), &checked())
+pub fn run_stats<'a>(sources: impl Into<Sources<'a>>) -> (String, Result<RunStats, RuntimeError>) {
+    run_stats_on(sources, capture())
 }
 
-/// `run_stats` と同じく流し、スクリプトに引数 `args` を渡す (`Env.args`)。大きさを引数で受ける基準のプログラムを、
-/// 大きさを変えて数えるテストのため。
+/// `run_stats` と同じく流し、Host を呼び出し側が作る。スクリプトの引数 (`Env.args`) や標準入力を、大きさを変えて
+/// 与えるテストのため。
 #[cfg(feature = "run")]
-pub fn run_stats_with_args(text: &str, args: &[&str]) -> (String, Result<RunStats, RuntimeError>) {
-    let host = eml_cli::CaptureHost::new(std::path::PathBuf::new())
-        .with_args(args.iter().map(std::ffi::OsString::from).collect());
-    let out = host.output();
-    let result =
-        eml_cli::execute(&lir(text), &checked(), host.into_ref()).map(|finished| finished.stats);
-    (out.contents(), result)
-}
-
-/// `run_stats` と同じく流し、標準入力に `input` を与える。標準入力を読むループを、入力の大きさを変えて数えるテストのため。
-#[cfg(feature = "run")]
-pub fn run_stats_with_stdin(text: &str, input: &[u8]) -> (String, Result<RunStats, RuntimeError>) {
-    let host = eml_cli::CaptureHost::new(std::path::PathBuf::new()).with_stdin(input.to_vec());
-    let out = host.output();
-    let result =
-        eml_cli::execute(&lir(text), &checked(), host.into_ref()).map(|finished| finished.stats);
-    (out.contents(), result)
+pub fn run_stats_on<'a>(
+    sources: impl Into<Sources<'a>>,
+    host: CaptureHost,
+) -> (String, Result<RunStats, RuntimeError>) {
+    execute_on(&lir(sources), &checked(), host)
 }
 
 /// 上限のない新しい `Control` を持つ、検査モードの設定。止める理由のビットは `Control::clear` でしか下りないので、
@@ -322,15 +320,30 @@ fn checked() -> RunConfig {
     RunConfig::default().with_debug_heap(true)
 }
 
-/// LIR を実行する。出力はメモリの Host に捕まえ、相対パスはカレントディレクトリを基準にする。上限の値に頼るテストは、
-/// `RunConfig` を自分で作って渡す。
+/// 出力をメモリに捕まえ、相対パスをカレントディレクトリを基準にする Host。
+#[cfg(feature = "run")]
+pub fn capture() -> CaptureHost {
+    CaptureHost::new(std::path::PathBuf::new())
+}
+
+/// LIR を `capture()` の Host で実行する。上限の値に頼るテストは、`RunConfig` を自分で作って渡す。
 #[cfg(feature = "run")]
 pub fn execute(
     program: &eml_lir::Program,
     config: &RunConfig,
 ) -> (String, Result<RunStats, RuntimeError>) {
-    let (host, out) = eml_cli::capture_host(std::path::PathBuf::new());
-    let result = eml_cli::execute(program, config, host).map(|finished| finished.stats);
+    execute_on(program, config, capture())
+}
+
+/// LIR を `host` で実行し、捕まえた標準出力を返す。
+#[cfg(feature = "run")]
+pub fn execute_on(
+    program: &eml_lir::Program,
+    config: &RunConfig,
+    host: CaptureHost,
+) -> (String, Result<RunStats, RuntimeError>) {
+    let out = host.output();
+    let result = eml_vm::execute(program, config, host.into_ref()).map(|finished| finished.stats);
     (out.contents(), result)
 }
 
