@@ -716,52 +716,17 @@ fn vars_in(
         return found.clone();
     }
     let mut found = vec![false; names.len()];
-    let mut merge = |child: Vec<bool>| {
-        for (slot, child) in found.iter_mut().zip(child) {
+    let kind = types.kind(ty);
+    if let TypeKind::Rigid(name) = kind
+        && let Some(position) = names.iter().position(|n| n == name)
+    {
+        found[position] = true;
+    }
+    kind.for_each_child(|child| {
+        for (slot, child) in found.iter_mut().zip(vars_in(types, child, names, memo)) {
             *slot |= child;
         }
-    };
-    match types.kind(ty) {
-        TypeKind::Rigid(name) => {
-            if let Some(position) = names.iter().position(|n| n == name) {
-                merge({
-                    let mut one = vec![false; names.len()];
-                    one[position] = true;
-                    one
-                });
-            }
-        }
-        TypeKind::Con { id: _, args, rows } => {
-            for &arg in args {
-                merge(vars_in(types, arg, names, memo));
-            }
-            for label in rows.iter().flat_map(|row| &row.effects) {
-                for &arg in &label.args {
-                    merge(vars_in(types, arg, names, memo));
-                }
-            }
-        }
-        TypeKind::Tuple(elements) => {
-            for &element in elements {
-                merge(vars_in(types, element, names, memo));
-            }
-        }
-        TypeKind::Fn {
-            param,
-            effects,
-            ret,
-            ..
-        } => {
-            merge(vars_in(types, *param, names, memo));
-            for label in effects {
-                for &arg in &label.args {
-                    merge(vars_in(types, arg, names, memo));
-                }
-            }
-            merge(vars_in(types, *ret, names, memo));
-        }
-        TypeKind::OpVar(_, _) | TypeKind::Flexible(_) | TypeKind::Error => {}
-    }
+    });
     memo.insert(ty, found.clone());
     found
 }

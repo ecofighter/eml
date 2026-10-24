@@ -150,7 +150,7 @@ impl TypeKind {
     /// 直接の子の型を、引数、row のラベルの型引数、戻り値の順に `f` に渡す。型構成子では、型の型引数の後に row の
     /// 型引数のラベルの型引数を渡す。row の末尾は型ではないので渡さない。欄を足したときに直し忘れないよう、
     /// `..` を使わずにすべての欄を名前で受ける。
-    fn for_each_child(&self, mut f: impl FnMut(TypeId)) {
+    pub(crate) fn for_each_child(&self, mut f: impl FnMut(TypeId)) {
         match self {
             TypeKind::Con { id: _, args, rows } => {
                 args.iter().copied().for_each(&mut f);
