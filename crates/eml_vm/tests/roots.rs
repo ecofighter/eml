@@ -71,10 +71,18 @@ fn main() -> unit {
 /// 組の構築子。宣言はプログラムの先頭に要る。
 const LAYOUT: &str = "layout (,) { (,)(tobj, tobj) }\n";
 
-/// 根 0 の組を読む関数。入口は最初の関数なので、入力の後に置く。どの入力も、同じ名前の関数を同じコードで持つ。
+/// 根 0 と根 2 の組を読む関数。入口は最初の関数なので、入力の後に置く。どの入力も、同じ名前の関数を同じコードで
+/// 持つ。
 const READERS: &str = "\
 fn first(p.0: unit) -> tobj {
   let a.1: obj = prim root_get[0]()
+  let (x.2: tobj, y.3: tobj) = unbox a.1 (,)
+  dup x.2
+  decref a.1
+  return x.2
+}
+fn third(p.0: unit) -> tobj {
+  let a.1: obj = prim root_get[2]()
   let (x.2: tobj, y.3: tobj) = unbox a.1 (,)
   dup x.2
   decref a.1
@@ -99,6 +107,38 @@ fn keep() -> unit {
   let a.0: obj = con (,) #0(#5, #6)
   let u.1: unit = prim root_set[0](a.0)
   return u.1
+}
+";
+
+/// 根 2 に組を置く入力。根 0 より先に置く。
+const KEEP_LATER_ROOT: &str = "\
+fn keep_later() -> unit {
+  let a.0: obj = con (,) #0(#7, #8)
+  let u.1: unit = prim root_set[2](a.0)
+  return u.1
+}
+";
+
+/// 両方の子が根 2 を読む入力。
+const READ_LATER_ROOT: &str = "\
+fn read_later() -> unit {
+  let t.0: obj = par (,) #0(&third, &third)
+  tail call show_pair(t.0)
+}
+";
+
+/// 右の子がもう一度 fork し、その2つの子が根 0 を読む入力。内側の右の子は、右の子の ID から出した ID で読む。
+const NESTED: &str = "\
+fn nested() -> unit {
+  let t.0: obj = par (,) #0(&first, &inner)
+  let (a.1: tobj, b.2: tobj) = unbox t.0 (,)
+  dup b.2
+  decref t.0
+  tail call show_pair(b.2)
+}
+fn inner(p.0: unit) -> tobj {
+  let t.1: obj = par (,) #0(&first, &first)
+  return t.1
 }
 ";
 
@@ -183,6 +223,36 @@ fn a_par_after_a_child_error_reads_the_roots_again() {
                 Err("division by zero in `divide`".to_string()),
                 Ok(())
             ]
+        )
+    );
+}
+
+/// 印の付いた根は、次の入力の fork でも共有のままである。印を付け直さなくても、右の子が読める。
+#[test]
+fn a_root_shared_by_an_earlier_fork_is_read_again() {
+    assert_eq!(
+        run_inputs(&[KEEP, READ, READ]),
+        ("5\n5\n5\n5\n".to_string(), vec![Ok(()), Ok(()), Ok(())])
+    );
+}
+
+/// 右の子の中の fork でも、根は共有のままなので、内側の右の子が読める。
+#[test]
+fn a_nested_right_child_reads_a_root() {
+    assert_eq!(
+        run_inputs(&[KEEP, NESTED]),
+        ("5\n5\n".to_string(), vec![Ok(()), Ok(())])
+    );
+}
+
+/// 印を付け終えた根より前の番号に後から置いた根にも、次の fork が印を付ける。
+#[test]
+fn a_root_set_below_the_shared_ones_is_shared_at_the_next_fork() {
+    assert_eq!(
+        run_inputs(&[KEEP_LATER_ROOT, READ_LATER_ROOT, KEEP, READ]),
+        (
+            "7\n7\n5\n5\n".to_string(),
+            vec![Ok(()), Ok(()), Ok(()), Ok(())]
         )
     );
 }

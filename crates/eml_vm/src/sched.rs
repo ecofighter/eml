@@ -191,6 +191,8 @@ pub struct Scheduler<P: Policy> {
     pub(crate) max_depth: usize,
     /// join が見つけた右の子の誤り。`step` は `VmFault` しか返せないので、ここに置いて実行の繰り返しに渡す。
     pub(crate) failed: Option<crate::RuntimeError>,
+    /// 根の表のうち、この番号より前の根はどれも印が付いている。`Machine` が実行をまたいで持つ値を受け取って返す。
+    pub(crate) shared_roots: usize,
 }
 
 impl<P: Policy> Scheduler<P> {
@@ -208,6 +210,7 @@ impl<P: Policy> Scheduler<P> {
             main_worker,
             max_depth,
             failed: None,
+            shared_roots: 0,
         }
     }
 

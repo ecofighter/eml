@@ -659,6 +659,8 @@ fn step<R: Exec>(
         Op::RootSet { dst, at } => {
             let o = ops(at);
             unsafe { ctx.root_set(o[0], task.get(o[1] as Slot)) }?;
+            // 印を付け終えた根より前に置いた根は、次の fork で印を付ける
+            sched.shared_roots = sched.shared_roots.min(o[0] as usize);
             task.set(dst, Word::UNIT);
         }
     }
@@ -903,11 +905,20 @@ fn par<R: Exec>(
     // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
     // 触れない
     let child = unsafe { ctx.heap_mut() }.fork_worker();
-    // 右の子は REPL の束縛を `root_get` で読むので、根にも印を付ける。根の語は `heap_mut` の前提にある `Ctx` の持つ語に
-    // 入らない (docs/spec/object-model.md の「セッションの根」)。根のないプログラムでは、集めても確保しない
-    let roots: Vec<Word> = ctx.roots().flatten().copied().collect();
-    for r in roots {
-        unsafe { ctx.heap_mut().share(r, child) }?;
+    // 右の子は REPL の束縛を `root_get` で読むので、根にも印を付ける。印は回復まで残るので、まだ印のない根にだけ
+    // 付ける。根の物体を `share` しても `heap_mut` の前提は崩れない (docs/spec/object-model.md の「セッションの根」)
+    let roots = ctx.roots().len();
+    if sched.shared_roots < roots {
+        let fresh: Vec<Word> = ctx
+            .roots()
+            .skip(sched.shared_roots)
+            .flatten()
+            .copied()
+            .collect();
+        for r in fresh {
+            unsafe { ctx.heap_mut().share(r, child) }?;
+        }
+        sched.shared_roots = roots;
     }
     unsafe { ctx.heap_mut().share(g, child) }?;
     // 親の `evv` を取り出して、その参照を join の節点に移す。RC に触れずに読めるようにするためである

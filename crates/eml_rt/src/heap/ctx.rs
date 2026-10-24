@@ -1067,9 +1067,12 @@ impl<M: Mode> Ctx<M> {
 
     /// # Safety
     /// ヒープを入れ替えない。`Ctx` が持つ語 (`evv` と yield の状態) を手放したり書き換えたりせず、それらの語からたどれる
-    /// 物体 (`evv` の節点、evidence、入口の表) も書き換えない。`set_worker` を呼ばず (worker は `switch_task` で
-    /// 替える)、それらの物体を `share` しない。基本操作が頼る、物体の持ち主と rc の符号が変わるためである。`Ctx` の
-    /// メソッドを次に呼ぶ前に、作っている物体を書き終える。
+    /// 物体の欄も書き換えない。`set_worker` を呼ばない (worker は `switch_task` で替える)。それらの語から届く物体の
+    /// うち、前提で rc が正であることを求める物体 (`ev_take_state` と `ev_set_state` の evidence、`ev_set_clause` の
+    /// 入口の表) は、使い終わるまで `share` しない。そのほかの物体は `share` してよい。`share` が変えるのは `lin` で
+    /// ない局所の物体の rc の符号と、受け手に移す物体の持ち主だけで (速いモードの受け手は今の worker である)、
+    /// `held_ok` は共有の `lin` でない物体を許すためである (docs/spec/object-model.md の「欄」)。`Ctx` のメソッドを
+    /// 次に呼ぶ前に、作っている物体を書き終える。
     pub unsafe fn heap_mut(&mut self) -> &mut Heap<M> {
         &mut self.heap
     }
