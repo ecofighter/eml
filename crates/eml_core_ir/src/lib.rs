@@ -320,6 +320,14 @@ pub enum Rhs {
 }
 
 impl Rhs {
+    /// `mask` のない呼び出し。
+    pub fn call(call: Call) -> Rhs {
+        Rhs::Call {
+            call,
+            mask: Vec::new(),
+        }
+    }
+
     /// 右辺が使う値。関数、extern、`perform` の引数は、どれも所有権を受け取る。基本操作の引数を消費するか借りるかは
     /// 基本操作の表が決め、Perceus から後でだけ意味を持つ (docs/spec/lir.md の「基本操作」)。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {

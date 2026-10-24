@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{Lin, TypeId, TypeKind, TypeStore, TypedProgram};
 
-use eml_lir::{LayoutId, Mark, Repr, StructShape, Structs, VarInfo, data_repr};
+use eml_lir::{LayoutId, Mark, Repr, StructShape, Structs, data_repr};
 
 use super::instances::constructor_fields;
 
@@ -108,14 +108,6 @@ pub(super) fn mark_of(lin: Lin) -> Mark {
         Lin::Lin => Mark::Lin,
         Lin::Poly => Mark::Poly,
         Lin::Var(_) => unreachable!("the store gives a Kind variable's type the value `Poly`"),
-    }
-}
-
-pub(super) fn named(name: &str, repr: Repr, mark: Mark) -> VarInfo {
-    VarInfo {
-        name: name.to_string(),
-        repr,
-        mark,
     }
 }
 

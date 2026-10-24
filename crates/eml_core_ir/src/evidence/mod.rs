@@ -146,14 +146,6 @@ fn fill(program: &mut Program, idx: FnIdx, function: CoreFn) {
     program.functions[idx.0 as usize] = function;
 }
 
-fn named(name: &str, repr: Repr, mark: Mark) -> VarInfo {
-    VarInfo {
-        name: name.to_string(),
-        repr,
-        mark,
-    }
-}
-
 /// EP が作るクロージャの印。捕まえた値の印の結びで、定数は `unr` である。`FileIn` を捕まえた続きが `lin` になるので、
 /// 決め打ちの `poly` より正確である (docs/spec/core-ir.md の「EP が足す変数の印」)。
 fn captured_mark(mark: impl Fn(VarId) -> Mark, captures: &[Atom]) -> Mark {
@@ -189,7 +181,7 @@ fn yield_switch(yielding: VarId, fast: BlockId, slow: BlockId) -> Term {
 fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     match ret {
         Repr::Obj | Repr::TObj | Repr::Struct(_) => Atom::Var(bind(
-            named(
+            VarInfo::new(
                 "d",
                 if ret == Repr::TObj { Repr::Obj } else { ret },
                 Prim::Dummy.row().ret_mark,
@@ -204,14 +196,6 @@ fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     }
 }
 
-/// `mask` のない呼び出し。
-fn call(call: Call) -> Rhs {
-    Rhs::Call {
-        call,
-        mask: Vec::new(),
-    }
-}
-
 fn direct(target: FnIdx, args: Vec<Atom>) -> Rhs {
-    call(Call::Direct(target, args))
+    Rhs::call(Call::Direct(target, args))
 }

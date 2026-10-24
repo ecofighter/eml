@@ -12,7 +12,7 @@ use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo, operation};
 
-use super::{Helpers, captured_mark, direct, dummy, named, reserve, yield_switch};
+use super::{Helpers, captured_mark, direct, dummy, reserve, yield_switch};
 
 /// 変換の後の関数で、yield の地点の扱いを変える所。handle と `mask` の変換が作る。位置はブロックと文の添字である。
 #[derive(Default)]
@@ -466,7 +466,7 @@ impl Out<'_> {
         rhs: Rhs,
     ) -> VarId {
         let var = VarId((self.source.len() + self.added.len()) as u32);
-        self.added.push(named(name, repr, mark));
+        self.added.push(VarInfo::new(name, repr, mark));
         stmts.push(Stmt::Let { var, rhs });
         var
     }

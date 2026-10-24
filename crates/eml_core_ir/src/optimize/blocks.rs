@@ -1,35 +1,46 @@
 //! ブロックの並びを整える部品。handler への特殊化 (`handlers`) と融合 (`fuse`) が共有する。どれも構造の規則
 //! (docs/spec/lir.md の「構造の規則」) を保ったまま、定数で分ける `switch`、辺の入らないブロック、1本の `jump` だけが
-//! 入るブロックを片付ける。
-
-use std::collections::{HashMap, HashSet};
+//! 入るブロックを片付ける。本体を写すときの変数の付け替え (`Renamer`) もここに置く。
 
 use crate::{Block, CoreFn, Stmt, Term};
-use eml_lir::{Atom, BlockId, CasePattern, VarId};
+use eml_lir::{Atom, BlockId, CasePattern, VarId, VarInfo, push_var};
 
 /// 入口から届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。展開や `switch` の畳み込みで
-/// 切り離したブロックは辺が入らなくなるので、残すと構造の規則に反する (docs/spec/lir.md の「構造の規則」)。
+/// 切り離したブロックは辺が入らなくなるので、残すと構造の規則に反する (docs/spec/lir.md の「構造の規則」)。融合の
+/// 書き換えのたびに呼ぶので、印と番号の表はブロックの数の配列にする。
 pub(crate) fn prune(function: &mut CoreFn) {
-    let mut kept = vec![BlockId::ENTRY];
-    kept.extend(reachable(&function.blocks, &function.blocks[0].term));
-    if kept.len() == function.blocks.len() {
+    let count = function.blocks.len();
+    let mut reached = vec![false; count];
+    reached[BlockId::ENTRY.0 as usize] = true;
+    let mut pending = vec![BlockId::ENTRY];
+    let mut kept = 1;
+    while let Some(block) = pending.pop() {
+        for next in function.blocks[block.0 as usize].term.successors() {
+            if !reached[next.0 as usize] {
+                reached[next.0 as usize] = true;
+                kept += 1;
+                pending.push(next);
+            }
+        }
+    }
+    if kept == count {
         return;
     }
-    let renumber: HashMap<BlockId, BlockId> = kept
-        .iter()
-        .enumerate()
-        .map(|(position, &index)| (index, BlockId(position as u32)))
-        .collect();
-    let mut blocks: Vec<Block> = kept
-        .iter()
-        .map(|&index| std::mem::replace(&mut function.blocks[index.0 as usize], empty()))
-        .collect();
-    for block in &mut blocks {
+    let mut renumber = vec![BlockId::ENTRY; count];
+    let mut next = 0;
+    for (index, &reached) in reached.iter().enumerate() {
+        if reached {
+            renumber[index] = BlockId(next);
+            next += 1;
+        }
+    }
+    let mut reached = reached.into_iter();
+    function.blocks.retain(|_| reached.next() == Some(true));
+    for block in &mut function.blocks {
         block
             .term
-            .for_each_successor_mut(|target| *target = renumber[target]);
+            .for_each_successor_mut(|target| *target = renumber[target.0 as usize]);
     }
-    function.blocks = blocks;
 }
 
 fn empty() -> Block {
@@ -38,20 +49,6 @@ fn empty() -> Block {
         stmts: Vec::new(),
         term: Term::Return(Atom::Unit),
     }
-}
-
-/// `term` の行き先から届くブロックを、番号の昇順に返す。届く部分だけをたどるので、関数の残りの大きさに依らない。
-fn reachable(blocks: &[Block], term: &Term) -> Vec<BlockId> {
-    let mut seen = HashSet::new();
-    let mut pending: Vec<BlockId> = term.successors().collect();
-    while let Some(block) = pending.pop() {
-        if seen.insert(block) {
-            pending.extend(blocks[block.0 as usize].term.successors());
-        }
-    }
-    let mut reached: Vec<BlockId> = seen.into_iter().collect();
-    reached.sort_unstable_by_key(|block| block.0);
-    reached
 }
 
 /// 引数を置き換えて定数になった `switch` の行き先。展開した節や関数の引数が定数 (`True`、引数のないコンストラクタ、
@@ -231,4 +228,102 @@ fn substitute(block: &mut Block, substitution: &[Option<Atom>]) {
         }
     }
     block.term.for_each_atom_mut(atom);
+}
+
+/// 関数の本体を別の関数へ写すときの変数の付け替え。展開 (`fuse`) と節の写し (`handlers`) が使う。写した先の変数は
+/// `vars` に足し、`map` は写す元の変数ごとの写した先の値である。
+pub(crate) struct Renamer<'a> {
+    pub(crate) vars: &'a mut Vec<VarInfo>,
+    source: &'a [VarInfo],
+    map: Vec<Option<Atom>>,
+}
+
+impl<'a> Renamer<'a> {
+    pub(crate) fn new(vars: &'a mut Vec<VarInfo>, source: &'a [VarInfo]) -> Self {
+        Renamer {
+            vars,
+            source,
+            map: vec![None; source.len()],
+        }
+    }
+
+    /// 写す元の変数 `var` を、定義を写さずに値 `atom` に置き換える。引数を実引数にするのに使う。
+    pub(crate) fn substitute(&mut self, var: VarId, atom: Atom) {
+        self.map[var.0 as usize] = Some(atom);
+    }
+
+    fn define(&mut self, var: VarId) -> VarId {
+        let copy = push_var(self.vars, self.source[var.0 as usize].clone());
+        self.map[var.0 as usize] = Some(Atom::Var(copy));
+        copy
+    }
+
+    /// 定義は使いを支配し、ブロックは番号の順に写すので、使いを写すときには定義が写してある。
+    pub(crate) fn atom(&self, atom: Atom) -> Atom {
+        match atom {
+            Atom::Var(var) => {
+                self.map[var.0 as usize].expect("a definition is copied before its uses")
+            }
+            atom => atom,
+        }
+    }
+
+    /// `unpack` の値は `obj` で、`obj` に収まる定数はないので (`Atom::fits`)、`fits` を通った実引数は変数である。
+    fn var(&self, var: VarId) -> VarId {
+        match self.atom(Atom::Var(var)) {
+            Atom::Var(var) => var,
+            atom => panic!("a variable is replaced by the constant {atom:?}"),
+        }
+    }
+
+    /// `index` 番目のブロックの引数を写す。入口のブロックの引数は実引数に置き換えるので、写さない。
+    pub(crate) fn params(&mut self, index: usize, block: &Block) -> Vec<VarId> {
+        if index == 0 {
+            return Vec::new();
+        }
+        block
+            .params
+            .iter()
+            .map(|&param| self.define(param))
+            .collect()
+    }
+
+    pub(crate) fn stmt(&mut self, stmt: &Stmt) -> Stmt {
+        match stmt {
+            Stmt::Let { var, rhs } => {
+                let mut rhs = rhs.clone();
+                rhs.for_each_atom_mut(|atom| *atom = self.atom(*atom));
+                Stmt::Let {
+                    var: self.define(*var),
+                    rhs,
+                }
+            }
+            Stmt::Unpack {
+                value,
+                ctor,
+                fields,
+            } => Stmt::Unpack {
+                value: self.var(*value),
+                ctor: *ctor,
+                fields: fields.iter().map(|&field| self.define(field)).collect(),
+            },
+        }
+    }
+
+    /// 終端を写す。辺が入らなくなる case のブロックも写すので、そのフィールドも定義する。
+    pub(crate) fn term(&mut self, term: &Term, block_of: impl Fn(BlockId) -> BlockId) -> Term {
+        let mut term = term.clone();
+        term.for_each_atom_mut(|atom| *atom = self.atom(*atom));
+        term.for_each_successor_mut(|target| *target = block_of(*target));
+        if let Term::Switch { cases, .. } = &mut term {
+            for case in cases {
+                case.fields = case
+                    .fields
+                    .iter()
+                    .map(|&field| self.define(field))
+                    .collect();
+            }
+        }
+        term
+    }
 }

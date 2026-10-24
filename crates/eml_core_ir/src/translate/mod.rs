@@ -26,7 +26,7 @@ use eml_types::{
 use la_arena::ArenaMap;
 
 use crate::{CoreFn, Program, Rhs, Term};
-use eml_lir::{Atom, Case, CasePattern, FALSE, FnIdx, Loc, Mark, Repr, TRUE, VarId};
+use eml_lir::{Atom, FALSE, FnIdx, Loc, Mark, Repr, TRUE, VarId, VarInfo};
 
 use crate::builder::{FnBuilder, Label};
 use expr::extern_row;
@@ -34,7 +34,7 @@ use instances::{InstanceKind, Part, Target, wrapper_name};
 use names::NameTable;
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
 use program::{EntryAfter, ProgramBuilder, ShowTarget, Shown, effect_table, recursive_types};
-use types::{StructTypes, mark, named, split_arrows};
+use types::{StructTypes, mark, split_arrows};
 
 // extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate の箱の位置の Repr の規則で型の Repr を決める。
 // extern の行に構造体は現れないので、構造体にする型も箱の位置の `obj` として読む
@@ -692,7 +692,7 @@ impl<'a> FnLowering<'a> {
         for &(local, repr, mark) in captured {
             let var = self
                 .builder
-                .param(named(&body.locals[local].name, repr, mark));
+                .param(VarInfo::new(&body.locals[local].name, repr, mark));
             self.locals.insert(local, Atom::Var(var));
         }
         let mut wrapped = Vec::new();
@@ -704,7 +704,7 @@ impl<'a> FnLowering<'a> {
                 .filter(|_| pattern.is_none())
                 .and_then(|pat| body.pat_bindings(pat).first().copied());
             let name = local.map_or("p", |local| body.locals[local].name.as_str());
-            let var = self.builder.param(named(name, repr, mark));
+            let var = self.builder.param(VarInfo::new(name, repr, mark));
             if let Some(local) = local {
                 self.locals.insert(local, Atom::Var(var));
                 if self.ctx.continuation_forms.get(local) == Some(&ContinuationForm::Wrapped) {
@@ -956,27 +956,11 @@ impl<'a> FnLowering<'a> {
     /// 真偽値で分かれる `switch`。行き先は新しいブロックで、それぞれ枝のラベルへ向かう。枝のラベルに2本以上が
     /// 向かえば、行き先のブロックは `jump` だけを持つ辺のブロックになる (docs/spec/core-ir.md の R3)。
     fn switch_bool(&mut self, scrutinee: Atom, on_true: Label, on_false: Label) {
-        let targets = [(FALSE, on_false), (TRUE, on_true)].map(|(tag, label)| {
-            let block = self.builder.new_block();
-            (tag, label, block)
-        });
         let layout = self
             .program
             .data_layout(self.ctx.hir, self.ctx.store, self.ctx.hir.lang.bool);
-        self.builder.terminate(Term::Switch {
-            scrutinee,
-            layout: Some(layout),
-            cases: targets
-                .iter()
-                .map(|&(tag, _, target)| Case {
-                    pattern: CasePattern::Tag(tag),
-                    fields: Vec::new(),
-                    target,
-                })
-                .collect(),
-            default: None,
-        });
-        for (_, label, block) in targets {
+        let (false_block, true_block) = self.builder.branch_bool(scrutinee, layout);
+        for (block, label) in [(false_block, on_false), (true_block, on_true)] {
             self.builder.reopen(block);
             self.builder.jump(label, Vec::new());
         }

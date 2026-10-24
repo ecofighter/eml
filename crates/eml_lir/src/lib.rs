@@ -887,6 +887,22 @@ pub struct VarInfo {
     pub mark: Mark,
 }
 
+impl VarInfo {
+    pub fn new(name: &str, repr: Repr, mark: Mark) -> VarInfo {
+        VarInfo {
+            name: name.to_string(),
+            repr,
+            mark,
+        }
+    }
+}
+
+/// 関数の変数の表に変数を足し、その番号を返す。
+pub fn push_var(vars: &mut Vec<VarInfo>, info: VarInfo) -> VarId {
+    vars.push(info);
+    VarId(vars.len() as u32 - 1)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockId(pub u32);
 

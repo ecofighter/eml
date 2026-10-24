@@ -7,7 +7,7 @@ use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, Structs, VarId, VarInfo};
 
-use crate::optimize::known::fresh;
+use crate::optimize::blocks::Renamer;
 
 /// 展開する関数の文の数の上限。ブロックの終端も1つの文と数える。文を持たないブロックが多い関数 (定数を返す枝の
 /// 多い `match`) も、展開すれば終端の数だけコードが増えるためである。
@@ -346,36 +346,23 @@ fn copy_body(
     first: u32,
     rest: Option<BlockId>,
 ) -> Vec<Block> {
-    let mut map = vec![None; callee.vars.len()];
+    let mut copy = Renamer::new(vars, &callee.vars);
     for (&param, &arg) in callee.params().iter().zip(args) {
-        map[param.0 as usize] = Some(arg);
+        copy.substitute(param, arg);
     }
-    let mut copy = Copy {
-        vars,
-        source: &callee.vars,
-        map,
-    };
     callee
         .blocks
         .iter()
         .enumerate()
         .map(|(position, block)| {
-            let params = if position == 0 {
-                Vec::new()
-            } else {
-                block
-                    .params
-                    .iter()
-                    .map(|&param| copy.define(param))
-                    .collect()
-            };
+            let params = copy.params(position, block);
             let stmts = block.stmts.iter().map(|stmt| copy.stmt(stmt)).collect();
-            let term = match (block.term.clone(), rest) {
-                (Term::Return(returned), Some(rest)) => Term::Jump {
+            let term = match (&block.term, rest) {
+                (&Term::Return(returned), Some(rest)) => Term::Jump {
                     target: rest,
                     args: vec![copy.atom(returned)],
                 },
-                (term, _) => copy.term(&term, |id| BlockId(first + id.0)),
+                (term, _) => copy.term(term, |id| BlockId(first + id.0)),
             };
             Block {
                 params,
@@ -384,87 +371,4 @@ fn copy_body(
             }
         })
         .collect()
-}
-
-/// 本体を写すときの変数の対応。`map` は呼び出し先の変数ごとの、呼ぶ側の値である。
-struct Copy<'a> {
-    vars: &'a mut Vec<VarInfo>,
-    source: &'a [VarInfo],
-    map: Vec<Option<Atom>>,
-}
-
-impl Copy<'_> {
-    fn define(&mut self, var: VarId) -> VarId {
-        let copy = fresh(self.vars, self.source[var.0 as usize].clone());
-        self.map[var.0 as usize] = Some(Atom::Var(copy));
-        copy
-    }
-
-    /// 定義は使いを支配し、ブロックは番号の順に写すので、使いを写すときには定義が写してある。
-    fn atom(&self, atom: Atom) -> Atom {
-        match atom {
-            Atom::Var(var) => {
-                self.map[var.0 as usize].expect("a definition is copied before its uses")
-            }
-            atom => atom,
-        }
-    }
-
-    /// `unpack` の値と着地の印は `obj` で、`obj` に収まる定数はないので (`Atom::fits`)、`fits` を通った実引数は
-    /// 変数である。
-    fn var(&self, var: VarId) -> VarId {
-        match self.atom(Atom::Var(var)) {
-            Atom::Var(var) => var,
-            atom => panic!("a variable is replaced by the constant {atom:?}"),
-        }
-    }
-
-    fn stmt(&mut self, stmt: &Stmt) -> Stmt {
-        match stmt {
-            Stmt::Let { var, rhs } => {
-                let mut rhs = rhs.clone();
-                rhs.for_each_atom_mut(|atom| *atom = self.atom(*atom));
-                if let Rhs::Call {
-                    call:
-                        Call::Apply {
-                            prompt: Some(marker),
-                            ..
-                        },
-                    mask: _,
-                } = &mut rhs
-                {
-                    *marker = self.var(*marker);
-                }
-                Stmt::Let {
-                    var: self.define(*var),
-                    rhs,
-                }
-            }
-            Stmt::Unpack {
-                value,
-                ctor,
-                fields,
-            } => Stmt::Unpack {
-                value: self.var(*value),
-                ctor: *ctor,
-                fields: fields.iter().map(|&field| self.define(field)).collect(),
-            },
-        }
-    }
-
-    fn term(&mut self, term: &Term, block_of: impl Fn(BlockId) -> BlockId) -> Term {
-        let mut term = term.clone();
-        term.for_each_atom_mut(|atom| *atom = self.atom(*atom));
-        term.for_each_successor_mut(|target| *target = block_of(*target));
-        if let Term::Switch { cases, .. } = &mut term {
-            for case in cases {
-                case.fields = case
-                    .fields
-                    .iter()
-                    .map(|&field| self.define(field))
-                    .collect();
-            }
-        }
-        term
-    }
 }

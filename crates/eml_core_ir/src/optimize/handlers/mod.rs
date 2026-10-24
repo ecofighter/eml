@@ -20,13 +20,13 @@ mod touch;
 use std::collections::{BTreeSet, HashMap};
 
 use super::blocks;
-use super::known::{Callee, Wrapper, fresh, known_closures, wrapper};
+use super::known::{Callee, Wrapper, known_closures, wrapper};
 use super::specialize::limited;
 use super::{kept_marks, recompute_yields};
 use crate::liveness::{insert_var, live_after_term, step_back};
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo, push_var};
 
 use passing::{Returned, Tuples};
 use touch::touching;
@@ -391,10 +391,7 @@ fn site_stmts(
         .expect("a handler has a return clause");
     let mut args = handler.body.captures.clone();
     args.push(Atom::Unit);
-    let call = |function, args| Rhs::Call {
-        call: Call::Direct(function, args),
-        mask: Vec::new(),
-    };
+    let call = |function, args| Rhs::call(Call::Direct(function, args));
     if handler.form == Form::Tail {
         args.extend(handler.clauses.iter().flat_map(|clause| &clause.captures));
         if handler.stateful() {
@@ -423,7 +420,7 @@ fn site_stmts(
         vars,
         call(copy, args),
         &base,
-        |vars| fresh(vars, body_result),
+        |vars| push_var(vars, body_result),
         state.as_ref(),
         tuples,
     );
@@ -905,14 +902,17 @@ impl Copies<'_> {
             let vars = clause.params()[..count]
                 .iter()
                 .map(|&param| {
-                    Atom::Var(fresh(&mut code.vars, clause.vars[param.0 as usize].clone()))
+                    Atom::Var(push_var(
+                        &mut code.vars,
+                        clause.vars[param.0 as usize].clone(),
+                    ))
                 })
                 .collect();
             captures.push(vars);
         }
         let state = shape.stateful.then(|| {
             let param = ret.params()[ret.params().len() - 1];
-            fresh(&mut code.vars, ret.vars[param.0 as usize].clone())
+            push_var(&mut code.vars, ret.vars[param.0 as usize].clone())
         });
         let all_captures: Vec<Atom> = captures.iter().flatten().copied().collect();
         let params = &mut code.blocks[0].params;
@@ -938,7 +938,7 @@ impl Copies<'_> {
                 }
                 _ => None,
             };
-            let var = fresh(&mut code.vars, returned.clone());
+            let var = push_var(&mut code.vars, returned.clone());
             let rhs = match tail {
                 Some((at, target, mut args)) => {
                     code.blocks[block].stmts.truncate(at);
@@ -955,10 +955,7 @@ impl Copies<'_> {
             let block = &mut code.blocks[block];
             block.stmts.push(Stmt::Let {
                 var,
-                rhs: Rhs::Call {
-                    call: rhs,
-                    mask: Vec::new(),
-                },
+                rhs: Rhs::call(rhs),
             });
             block.term = Term::Return(Atom::Var(var));
         }
@@ -1109,7 +1106,7 @@ impl Copies<'_> {
                     None => {
                         // 捕獲のない閉包は関数の値で書く (docs/spec/core-ir.md)
                         let closure = (!live.is_empty()).then(|| {
-                            let var = fresh(
+                            let var = push_var(
                                 &mut copy.code.vars,
                                 VarInfo {
                                     name: "k".to_string(),
@@ -1166,10 +1163,7 @@ impl Copies<'_> {
                 if stateful {
                     args.push(state);
                 }
-                Rhs::Call {
-                    call: Call::Direct(continuation, args),
-                    mask: Vec::new(),
-                }
+                Rhs::call(Call::Direct(continuation, args))
             },
         );
         // 足したブロックは合流のブロックにしない。この `perform` の地点からだけ届くので1つの続きにしか入らず、節が
@@ -1278,12 +1272,12 @@ fn end(
     let mut stmts = Vec::new();
     for var in released {
         stmts.push(Stmt::Let {
-            var: fresh(&mut code.vars, unit.clone()),
+            var: push_var(&mut code.vars, unit.clone()),
             rhs: Rhs::Drop(Atom::Var(var)),
         });
     }
     stmts.extend(closure.map(|(var, rhs)| Stmt::Let { var, rhs }));
-    let var = fresh(
+    let var = push_var(
         &mut code.vars,
         VarInfo {
             name: "t".to_string(),
@@ -1293,10 +1287,7 @@ fn end(
     );
     stmts.push(Stmt::Let {
         var,
-        rhs: Rhs::Call {
-            call,
-            mask: Vec::new(),
-        },
+        rhs: Rhs::call(call),
     });
     let host = &mut code.blocks[block.0 as usize];
     host.stmts.truncate(stmt);

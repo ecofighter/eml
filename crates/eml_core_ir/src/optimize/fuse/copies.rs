@@ -11,12 +11,12 @@ use std::collections::{HashMap, HashSet};
 
 use super::known_con::{known_cons, uses};
 use super::{Fuser, Status};
-use crate::optimize::known::{Callee, KnownClosure, fresh, known_closures};
+use crate::optimize::known::{Callee, KnownClosure, known_closures};
 use crate::optimize::specialize::{
     ArgShape, ClosureShape, FieldShape, Key, MAX_KEY_DEPTH, copy_name, key_depth,
 };
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, CasePattern, Ctor, FnIdx, Mark, Repr, VarId, VarInfo};
+use eml_lir::{Atom, CasePattern, Ctor, FnIdx, Mark, Repr, VarId, VarInfo, push_var};
 
 /// 鍵の位置ごとの形と、その位置の値の代わりに複製へ渡す実引数。
 type Plan = Vec<(usize, ArgShape, Vec<Atom>)>;
@@ -463,7 +463,7 @@ impl Fuser<'_> {
                             .iter()
                             .zip(names)
                             .map(|(&(repr, mark), name)| {
-                                let var = fresh(
+                                let var = push_var(
                                     &mut function.vars,
                                     VarInfo {
                                         name: name.name.clone(),
@@ -479,7 +479,7 @@ impl Fuser<'_> {
                             atoms.push(Atom::Fn(shape.function));
                             continue;
                         }
-                        let closure = fresh(
+                        let closure = push_var(
                             &mut function.vars,
                             VarInfo {
                                 name: "c".to_string(),
@@ -494,7 +494,7 @@ impl Fuser<'_> {
                         atoms.push(Atom::Var(closure));
                     }
                     &FieldShape::Value(repr, mark) => {
-                        let var = fresh(
+                        let var = push_var(
                             &mut function.vars,
                             VarInfo {
                                 name: info.name.clone(),
