@@ -255,6 +255,16 @@ impl<M: Mode> Machine<M> {
     ) -> Result<(Finished, Option<String>), RuntimeError> {
         let (code, ctx) = (&self.code, &mut self.ctx);
         let mut task = Task::new(code, entry, self.max_depth);
+        // 実行の後の誤りは、最後に戻った関数の名前を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)
+        let after = |fault: VmFault, task: &Task| {
+            code.error(
+                vm::Failure {
+                    fault,
+                    pc: task.last_ret,
+                },
+                task,
+            )
+        };
         if shown.is_some() {
             if !code.functions[entry as usize].ret_rc {
                 return Err(code.error(
@@ -281,30 +291,13 @@ impl<M: Mode> Machine<M> {
         // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
         let flushed = ctx.flush();
         result.map_err(|failure| code.error(failure, &task))?;
-        let text = copied.transpose().map_err(|fault| {
-            code.error(
-                vm::Failure {
-                    fault: fault.into(),
-                    pc: task.last_ret,
-                },
-                &task,
-            )
-        })?;
-        flushed.map_err(|fault| {
-            code.error(
-                vm::Failure {
-                    fault: fault.into(),
-                    pc: task.last_ret,
-                },
-                &task,
-            )
-        })?;
+        let text = copied
+            .transpose()
+            .map_err(|fault| after(fault.into(), &task))?;
+        flushed.map_err(|fault| after(fault.into(), &task))?;
         if !ctx.check_finished() {
-            return Err(code.error(
-                vm::Failure {
-                    fault: VmFault::Internal("the evidence list or a yield is left at the end"),
-                    pc: task.last_ret,
-                },
+            return Err(after(
+                VmFault::Internal("the evidence list or a yield is left at the end"),
                 &task,
             ));
         }

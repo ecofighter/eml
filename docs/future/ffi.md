@@ -73,7 +73,7 @@ matmul n a b =
 
 - C の呼び出しは `pure` でなければ `<IO>` を持つ。新しいエフェクトは作らない
 - `pure` の行は `Pure` で、使わなければ消せる。`par` の子からも呼べる。BLAS の計算はこの形で宣言する
-- 利用者の C の行は純粋さの分類では `Effectful` だが、失敗を返さない。表の行は失敗を返しうるかを表す `faults: bool` を持ち、利用者の C の行では false である。`may_abort` と `points_all` はこの行を巻き戻しの地点に数えないので、呼び出しの位置には失敗の確かめも後始末のブロックもない ([ネイティブ化の設計](native.md) の「extern の入口」)
+- 利用者の C の行は純粋さの分類では `Effectful` だが、失敗を返さない。表の行は失敗を返しうるかを表す `faults: bool` を持ち、利用者の C の行では false である。`may_abort` と `points` はこの行を巻き戻しの地点に数えないので、呼び出しの位置には失敗の確かめも後始末のブロックもない ([ネイティブ化の設計](native.md) の「extern の入口」)
 - 別名は問題にならない。`FloatArray` は `Unr` で書き換えず、`Mut*Array` は `Lin` で `with_arg` の形で渡すためである。`removable()` は `Lin` の引数を消費する行を除くので、`MutFloatArray` を書く `pure` の行は消されない
 
 ## 長く走る呼び出し

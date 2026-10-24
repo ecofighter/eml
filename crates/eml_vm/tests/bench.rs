@@ -1115,9 +1115,9 @@ fn specialization_matches_hand_written_rc() {
 
 /// 巻き戻しの地点の総数。値に依存する実行時エラーを `Panic` に移すと、地点の数が動く。
 fn unwind_point_count(program: &eml_lir::Program) -> usize {
-    eml_lir::unwind::points_all(program)
+    eml_lir::unwind::points(program, |_| true)
         .iter()
-        .filter_map(|points| points.as_ref().ok())
+        .filter_map(|points| points.as_ref()?.as_ref().ok())
         .map(Vec::len)
         .sum()
 }

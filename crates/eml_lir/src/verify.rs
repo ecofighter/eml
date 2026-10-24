@@ -73,16 +73,23 @@ enum Level {
     Ownership,
 }
 
-/// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points_all`)。
-/// 表と「中断しうる」の不動点は、プログラムに1回だけ求める。
-pub(crate) fn unwind_points(program: &Program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>> {
+/// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points`)。
+/// 表と「中断しうる」の不動点は、プログラムに1回だけ求める。`wanted` でない関数はたどらずに `None` にする。
+pub(crate) fn unwind_points(
+    program: &Program,
+    wanted: impl Fn(FnIdx) -> bool,
+) -> Vec<Option<Result<Vec<UnwindPoint>, VerifyError>>> {
     let aborts = unwind::may_abort(program);
     with_tables(program, |tables| {
         program
             .functions
             .iter()
-            .map(|function| {
-                shape(&block_shapes(function))
+            .enumerate()
+            .map(|(index, function)| {
+                if !wanted(FnIdx(index as u32)) {
+                    return None;
+                }
+                let points = shape(&block_shapes(function))
                     .and_then(|dominators| {
                         let mut checker =
                             Checker::new(program, tables, function, Level::Ownership, dominators);
@@ -96,7 +103,8 @@ pub(crate) fn unwind_points(program: &Program) -> Vec<Result<Vec<UnwindPoint>, V
                     .map_err(|message| VerifyError {
                         function: function.name.clone(),
                         message,
-                    })
+                    });
+                Some(points)
             })
             .collect()
     })
@@ -163,20 +171,15 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     })
 }
 
-/// 一様な位置で値を受ける Repr (`obj`、`tobj`、`unit`) か。
-fn is_uniform(repr: Repr) -> bool {
-    matches!(repr, Repr::Obj | Repr::TObj | Repr::Unit)
-}
-
 /// 捕獲を `captured` 個受けた後の引数と、結果がどれも一様か。
 fn uniform_beyond(function: &LirFn, captured: usize) -> bool {
     function.rets.len() == 1
-        && is_uniform(function.rets[0].0)
+        && function.rets[0].0.is_uniform()
         && function
             .params()
             .iter()
             .skip(captured)
-            .all(|&param| is_uniform(function.repr(param)))
+            .all(|&param| function.repr(param).is_uniform())
 }
 
 /// `<f>$uniform` という名前の関数は版で、`<f>` があるときだけ存在し、すべて一様な ABI を持つ

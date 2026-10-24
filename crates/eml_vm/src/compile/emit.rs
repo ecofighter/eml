@@ -8,10 +8,10 @@ use eml_lir::{
 };
 use eml_rt::{MaskItem, Mode};
 
+use super::Links;
 use super::constants::Constants;
 use super::slots::{Slots, allocate};
-use super::{Links, Out};
-use crate::code::{CompileError, FnEntry, Unwind};
+use crate::code::{CompileError, FnEntry, Tables, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP, Slot};
 
 pub(crate) fn function<M: Mode>(
@@ -21,7 +21,7 @@ pub(crate) fn function<M: Mode>(
     points: &[UnwindPoint],
     links: &Links,
     constants: &mut Constants<'_, M>,
-    out: &mut Out,
+    out: &mut Tables,
 ) -> Result<FnEntry, CompileError> {
     let slots = allocate(function)?;
     let start = out.pc();
@@ -134,41 +134,41 @@ fn elided_decrefs(function: &LirFn) -> Vec<Option<VarId>> {
     elided
 }
 
-pub(crate) struct Emitter<'a, 'c, M: Mode> {
-    pub(crate) program: &'a Program,
-    pub(crate) function: &'a LirFn,
+struct Emitter<'a, 'c, M: Mode> {
+    program: &'a Program,
+    function: &'a LirFn,
     /// 今の関数の番号。自己末尾呼び出しを見分ける。
-    pub(crate) index: FnIdx,
+    index: FnIdx,
     /// プログラムの番号から `CodeBase` の番号への写し。関数、文字列、エフェクト、ファイルの番号は、命令に書く前に
     /// これで引き直す (docs/spec/vm.md の「追記」)。
-    pub(crate) links: &'a Links,
-    pub(crate) constants: &'a mut Constants<'c, M>,
-    pub(crate) out: &'a mut Out,
-    pub(crate) slots: Slots,
+    links: &'a Links,
+    constants: &'a mut Constants<'c, M>,
+    out: &'a mut Tables,
+    slots: Slots,
     /// 今の命令が使った一時のスロットの数。命令ごとに 0 に戻す。
-    pub(crate) temps: u16,
-    pub(crate) max_temps: u16,
-    pub(crate) block_pcs: Vec<Pc>,
+    temps: u16,
+    max_temps: u16,
+    block_pcs: Vec<Pc>,
     /// 行き先のブロックを後で書く `Goto` の位置。
-    pub(crate) goto_patches: Vec<(Pc, BlockId)>,
+    goto_patches: Vec<(Pc, BlockId)>,
     /// 行き先のブロックを後で書くオペランドの位置。
-    pub(crate) operand_patches: Vec<(usize, BlockId)>,
+    operand_patches: Vec<(usize, BlockId)>,
     /// 自己末尾呼び出しのオペランドの位置。先頭の関数の番号を、関数を書き終えた後で入口の命令の位置に書き換える。
-    pub(crate) self_tail_patches: Vec<usize>,
+    self_tail_patches: Vec<usize>,
     /// どこかで使う変数 (`used_vars`)。
-    pub(crate) used: Vec<bool>,
+    used: Vec<bool>,
     /// ブロックごとの、`decref` を出さない scrutinee (`elided_decrefs`)。
-    pub(crate) elided: Vec<Option<VarId>>,
+    elided: Vec<Option<VarId>>,
     /// まだ書いていない巻き戻しの地点。ブロックの順、文の順に並ぶ。
-    pub(crate) points: std::iter::Peekable<std::slice::Iter<'a, UnwindPoint>>,
+    points: std::iter::Peekable<std::slice::Iter<'a, UnwindPoint>>,
 }
 
 impl<'a, M: Mode> Emitter<'a, '_, M> {
-    pub(crate) fn slot(&self, var: VarId) -> Slot {
+    fn slot(&self, var: VarId) -> Slot {
         self.slots.of[var.0 as usize]
     }
 
-    pub(crate) fn repr(&self, var: VarId) -> Repr {
+    fn repr(&self, var: VarId) -> Repr {
         self.function.repr(var)
     }
 
@@ -184,7 +184,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
     }
 
     /// 一時のスロットを1つ取る。変数のスロットの後に置き、命令ごとに使い回す。
-    pub(crate) fn temp(&mut self) -> Slot {
+    fn temp(&mut self) -> Slot {
         let slot = self.slots.colors + self.temps;
         self.temps += 1;
         self.max_temps = self.max_temps.max(self.temps);
@@ -193,7 +193,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
 
     /// 値をスロットに置く。変数はそのスロットで、定数は一時のスロットに読み込む。`repr` は値を受ける位置の Repr で、
     /// `#N` の書き方 (生の値か即値か) を決める。
-    pub(crate) fn atom(&mut self, atom: Atom, repr: Repr) -> Slot {
+    fn atom(&mut self, atom: Atom, repr: Repr) -> Slot {
         match atom {
             Atom::Var(var) => self.slot(var),
             constant => {
@@ -205,7 +205,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
     }
 
     /// 定数を `dst` に書く命令を出す。`#N` は、`enum` の位置では生の値、`tobj` の位置では即値である。
-    pub(crate) fn load(&mut self, dst: Slot, constant: Atom, repr: Repr) {
+    fn load(&mut self, dst: Slot, constant: Atom, repr: Repr) {
         let small = |n: u32| i32::try_from(n).expect("a tag or function index fits in i32");
         let op = match constant {
             Atom::Unit => Op::LoadImm { dst, value: 0 },
@@ -272,7 +272,8 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             } => {
                 let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
-                let bound = self.field_operands(layout_ctor, &shape, fields);
+                let bound =
+                    self.field_operands(layout_ctor, &shape, fields.iter().copied().map(Some));
                 let at = self.out.operands(
                     [ctor.tag, shape.scanned, (bound.len() / 2) as u32]
                         .into_iter()
@@ -316,9 +317,8 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                         )
                     }
                 };
-                let dsts: Vec<u32> = vars.iter().map(|&var| u32::from(self.slot(var))).collect();
-                self.out
-                    .operands([dsts.len() as u32].into_iter().chain(dsts));
+                let dsts: Vec<Slot> = vars.iter().map(|&var| self.slot(var)).collect();
+                self.out.slot_list([], &dsts);
                 self.out.push(Op::CallN { at });
             }
             Stmt::UnboxStruct {
@@ -328,19 +328,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             } => {
                 let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
-                let offset = crate::data::count_word(shape.scanned);
-                let mut items = Vec::new();
-                for ((field, &position), &repr) in
-                    fields.iter().zip(&shape.positions).zip(&layout_ctor.fields)
-                {
-                    if let Some(field) = field
-                        && self.used[field.0 as usize]
-                    {
-                        let raw = if repr.is_rc() { 0 } else { RAW };
-                        items.push((position + offset) | raw);
-                        items.push(u32::from(self.slot(*field)));
-                    }
-                }
+                let items = self.field_operands(layout_ctor, &shape, fields.iter().copied());
                 let at = self.out.operands(
                     [ctor.tag, shape.scanned, (items.len() / 2) as u32]
                         .into_iter()
@@ -370,14 +358,13 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
     fn release_entries(&self, ctor: Ctor, fields: &[Option<VarId>]) -> Vec<u32> {
         let layout_ctor = self.layout_ctor(ctor);
         let shape = layout_ctor.shape();
-        let offset = crate::data::count_word(shape.scanned);
         let entries: Vec<u32> = fields
             .iter()
             .zip(&shape.positions)
             .zip(&layout_ctor.fields)
             .filter(|(_, repr)| repr.is_rc())
-            .map(|((field, &position), _)| {
-                (position + offset) | if field.is_some() { KEEP } else { 0 }
+            .map(|((field, &position), &repr)| {
+                field_word(&shape, position, repr) | if field.is_some() { KEEP } else { 0 }
             })
             .collect();
         [ctor.tag, shape.scanned, entries.len() as u32]
@@ -407,21 +394,23 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         &self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize]
     }
 
-    /// 使うフィールドの [位置 | RAW, スロット] の並び。死んでいるフィールドは読まない。
+    /// 使うフィールドの [位置 | RAW, スロット] の並び。受けないフィールド (`None`) と死んでいるフィールドは読まない。
     fn field_operands(
         &self,
         layout_ctor: &LayoutCtor,
         shape: &Shape,
-        fields: &[VarId],
+        fields: impl IntoIterator<Item = Option<VarId>>,
     ) -> Vec<u32> {
-        let offset = crate::data::count_word(shape.scanned);
         let mut items = Vec::new();
-        for ((&field, &position), &repr) in
-            fields.iter().zip(&shape.positions).zip(&layout_ctor.fields)
+        for ((field, &position), &repr) in fields
+            .into_iter()
+            .zip(&shape.positions)
+            .zip(&layout_ctor.fields)
         {
-            if self.used[field.0 as usize] {
-                let raw = if repr.is_rc() { 0 } else { RAW };
-                items.push((position + offset) | raw);
+            if let Some(field) = field
+                && self.used[field.0 as usize]
+            {
+                items.push(field_word(shape, position, repr));
                 items.push(u32::from(self.slot(field)));
             }
         }
@@ -464,11 +453,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     if let Some(op) = self.array_op(*ext, dst, &slots) {
                         return op;
                     }
-                    let at = self.out.operands(
-                        [*ext as u32, slots.len() as u32]
-                            .into_iter()
-                            .chain(slots.iter().map(|&s| u32::from(s))),
-                    );
+                    let at = self.out.slot_list([*ext as u32], &slots);
                     Op::Extern { dst, at }
                 });
                 let pc = self.out.push(op);
@@ -484,7 +469,6 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             Rhs::Con { ctor, args, reuse } => {
                 let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
-                let offset = crate::data::count_word(shape.scanned);
                 let lin = self.function.mark(var) == eml_lir::Mark::Lin;
                 let head = [ctor.tag, shape.scanned, shape.raw, u32::from(lin)];
                 let mut items = match reuse {
@@ -509,12 +493,11 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     .enumerate()
                 {
                     let slot = self.atom(arg, repr);
-                    let raw = if repr.is_rc() { 0 } else { RAW };
                     let skip = match reuse {
                         Some(reuse) if reuse.skip[i] => SKIP,
                         _ => 0,
                     };
-                    items.push((position + offset) | raw | skip);
+                    items.push(field_word(&shape, position, repr) | skip);
                     items.push(u32::from(slot));
                 }
                 let at = self.out.operands(items);
@@ -579,15 +562,9 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     .map(|(&arg, &param)| self.atom(arg, callee.repr(param)))
                     .collect();
                 let lin = self.function.mark(var) == eml_lir::Mark::Lin;
-                let at = self.out.operands(
-                    [
-                        self.links.functions[f.0 as usize],
-                        u32::from(lin),
-                        slots.len() as u32,
-                    ]
-                    .into_iter()
-                    .chain(slots.iter().map(|&s| u32::from(s))),
-                );
+                let at = self
+                    .out
+                    .slot_list([self.links.functions[f.0 as usize], u32::from(lin)], &slots);
                 self.out.push(Op::Closure { dst, at });
             }
             Rhs::Call(call @ Call::Clause { .. }) => {
@@ -721,11 +698,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             .zip(reprs)
             .map(|(&arg, repr)| self.atom(arg, repr))
             .collect();
-        self.out.operands(
-            [u32::from(callee), slots.len() as u32]
-                .into_iter()
-                .chain(slots.iter().map(|&s| u32::from(s))),
-        )
+        self.out.slot_list([u32::from(callee)], &slots)
     }
 
     /// `apply` のオペランド [呼ばれる値, n, 引数…]。verifier を通った IR では引数はどれも一様な語である
@@ -739,26 +712,19 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             .iter()
             .map(|&arg| self.atom(arg, self.atom_repr(arg)))
             .collect();
-        self.out.operands(
-            [u32::from(callee), slots.len() as u32]
-                .into_iter()
-                .chain(slots.iter().map(|&s| u32::from(s))),
-        )
+        self.out.slot_list([u32::from(callee)], &slots)
     }
 
     /// 直接の呼び出しのオペランド [関数の番号, 引数の数, 引数のスロット…]。
-    pub(crate) fn call_operands(&mut self, f: eml_lir::FnIdx, args: &[Atom]) -> u32 {
+    fn call_operands(&mut self, f: eml_lir::FnIdx, args: &[Atom]) -> u32 {
         let callee = self.program.function(f);
         let slots: Vec<Slot> = args
             .iter()
             .zip(callee.params())
             .map(|(&arg, &param)| self.atom(arg, callee.repr(param)))
             .collect();
-        self.out.operands(
-            [self.links.functions[f.0 as usize], slots.len() as u32]
-                .into_iter()
-                .chain(slots.iter().map(|&s| u32::from(s))),
-        )
+        self.out
+            .slot_list([self.links.functions[f.0 as usize]], &slots)
     }
 
     fn term(&mut self, block: BlockId, term: &Term) -> Result<(), CompileError> {
@@ -809,7 +775,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
 
     /// ブロック引数への並列な代入と、行き先への `Goto`。変数の代入を先に並べ、定数はその後に書く。定数の書き込み先が、
     /// ほかの代入がまだ読む値のスロットでありうるためである。次のブロックへ進むだけなら `Goto` を出さない。
-    pub(crate) fn jump(&mut self, from: BlockId, target: BlockId, args: &[Atom]) {
+    fn jump(&mut self, from: BlockId, target: BlockId, args: &[Atom]) {
         let function = self.function;
         let params = &function.block(target).params;
         let mut moves = Vec::new();
@@ -903,7 +869,11 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     } else {
                         let layout_ctor = &ctors[tag as usize];
                         let shape = layout_ctor.shape();
-                        let fields = self.field_operands(layout_ctor, &shape, &case.fields);
+                        let fields = self.field_operands(
+                            layout_ctor,
+                            &shape,
+                            case.fields.iter().copied().map(Some),
+                        );
                         (shape.scanned, fields)
                     };
                     items[2 + tag as usize] = items.len() as u32;
@@ -935,7 +905,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         self.links.effects[e as usize]
     }
 
-    pub(crate) fn goto(&mut self, from: BlockId, target: BlockId) {
+    fn goto(&mut self, from: BlockId, target: BlockId) {
         if target.0 != from.0 + 1 {
             let pc = self.out.push(Op::Goto { target: 0 });
             self.goto_patches.push((pc, target));
@@ -964,7 +934,15 @@ pub(crate) fn effect_number(e: u32) -> u16 {
         .expect("effect numbers are below 65535 (docs/spec/object-model.md)")
 }
 
-/// 算術と比較の extern の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。
+/// フィールドの位置のオペランド。走査する語が多い形は数の語の分だけ後ろにずれ、生の語には `RAW` を立てる
+/// (docs/spec/vm.md の「データとクロージャ」)。
+fn field_word(shape: &Shape, position: u32, repr: Repr) -> u32 {
+    let raw = if repr.is_rc() { 0 } else { RAW };
+    (position + crate::data::count_word(shape.scanned)) | raw
+}
+
+/// 算術と比較の extern の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。ほかの extern は `None` で、
+/// `Op::Extern` になる。新しい extern は VM の `run_extern` の網羅の `match` が腕を求めるので、ここに列挙しない。
 fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
     match (ext, args) {
         (Extern::IntNeg, [a]) => return Some(Op::IntNeg { dst, a: *a }),
@@ -1003,148 +981,7 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         Extern::FloatGe => Op::FloatGe { dst, a, b },
         Extern::BoolEq => Op::BoolEq { dst, a, b },
         Extern::BoolNe => Op::BoolNe { dst, a, b },
-        Extern::Println
-        | Extern::Open
-        | Extern::ReadAll
-        | Extern::ReadLine
-        | Extern::ReadChunk
-        | Extern::ReadAllBytes
-        | Extern::ReadLineBytes
-        | Extern::Close
-        | Extern::IntShow
-        | Extern::IntNeg
-        | Extern::CharToInt
-        | Extern::CharOfInt
-        | Extern::CharOfByte
-        | Extern::CharShow
-        | Extern::CharDisplay
-        | Extern::ByteNeg
-        | Extern::ByteAdd
-        | Extern::ByteSub
-        | Extern::ByteMul
-        | Extern::ByteDisplay
-        | Extern::ByteToInt
-        | Extern::ByteOfInt
-        | Extern::ByteWrap
-        | Extern::IntAnd
-        | Extern::IntOr
-        | Extern::IntXor
-        | Extern::IntComplement
-        | Extern::IntShl
-        | Extern::IntShr
-        | Extern::ByteAnd
-        | Extern::ByteOr
-        | Extern::ByteXor
-        | Extern::ByteComplement
-        | Extern::ByteShl
-        | Extern::ByteShr
-        | Extern::FloatNeg
-        | Extern::FloatCompare
-        | Extern::FloatShow
-        | Extern::FloatShowsMinus
-        | Extern::FloatOfInt
-        | Extern::FloatTruncate
-        | Extern::FloatFloor
-        | Extern::FloatCeil
-        | Extern::FloatRound
-        | Extern::FloatSqrt
-        | Extern::FloatAbs
-        | Extern::FloatSin
-        | Extern::FloatCos
-        | Extern::FloatExp
-        | Extern::FloatLog
-        | Extern::FloatPow
-        | Extern::FloatInfinity
-        | Extern::FloatNan
-        | Extern::FloatToFixed
-        | Extern::FloatCanParse
-        | Extern::FloatParseRaw
-        | Extern::StrConcat
-        | Extern::StrEq
-        | Extern::StrNe
-        | Extern::StrCompare
-        | Extern::StrShow
-        | Extern::Eprintln
-        | Extern::StrCharAt
-        | Extern::StrSlice
-        | Extern::StrPush
-        | Extern::StrFindFrom
-        | Extern::BytesEmpty
-        | Extern::BytesAppend
-        | Extern::BytesAppendSlice
-        | Extern::BytesSlice
-        | Extern::BytesTruncate
-        | Extern::BytesOfString
-        | Extern::BytesEq
-        | Extern::BytesNe
-        | Extern::BytesCompare
-        | Extern::BytesFindFrom
-        | Extern::BytesMake
-        | Extern::BytesSet
-        | Extern::BytesPush
-        | Extern::BytesFindByte
-        | Extern::StringDecode
-        | Extern::EnvArgCount
-        | Extern::EnvArg
-        | Extern::EnvHas
-        | Extern::EnvLookup
-        | Extern::StdinOpen
-        | Extern::StdinClose
-        | Extern::StdinReadChunk
-        | Extern::StdinReadAllBytes
-        | Extern::StdinReadAll
-        | Extern::StdinReadLineBytes
-        | Extern::StdinReadLine
-        | Extern::StdoutOpen
-        | Extern::StdoutClose
-        | Extern::StdoutWriteBytes
-        | Extern::StdoutWrite
-        | Extern::StdoutWriteLine
-        | Extern::StdoutFlush
-        | Extern::StderrOpen
-        | Extern::StderrClose
-        | Extern::StderrWriteBytes
-        | Extern::StderrWrite
-        | Extern::StderrWriteLine
-        | Extern::FileOutCreate
-        | Extern::FileOutAppend
-        | Extern::FileOutWrite
-        | Extern::FileOutWriteBytes
-        | Extern::FileOutWriteLine
-        | Extern::FileOutFlush
-        | Extern::FileOutCloseRaw
-        | Extern::ProcSpawn
-        | Extern::ProcWait
-        | Extern::ProcExited
-        | Extern::ProcCloseStdin
-        | Extern::ProcWrite
-        | Extern::ProcWriteBytes
-        | Extern::ProcWriteLine
-        | Extern::ProcReadChunk
-        | Extern::ProcReadAllBytes
-        | Extern::ProcReadAll
-        | Extern::ProcReadLineBytes
-        | Extern::ProcReadLine
-        | Extern::Exit
-        | Extern::Panic
-        | Extern::ArrayMake
-        | Extern::StrByteLength
-        | Extern::StrByteAt
-        | Extern::BytesLength
-        | Extern::BytesGet
-        | Extern::ShowBytesLength
-        | Extern::ShowBytesGet
-        | Extern::ArrayLength
-        | Extern::ArrayGet
-        | Extern::ArraySet
-        | Extern::ArrayThaw
-        | Extern::MutArrayMake
-        | Extern::MutArrayEmpty
-        | Extern::MutArrayLength
-        | Extern::MutArrayRead
-        | Extern::MutArrayWrite
-        | Extern::MutArrayFreeze
-        | Extern::CheckIndex => return None,
+        _ => return None,
     })
 }
 

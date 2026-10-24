@@ -1056,7 +1056,7 @@ impl<'a> Context<'a> {
             ));
         }
         if !self.boundaries {
-            return self.check_extern_exact(var, &row, args);
+            return self.check_extern_exact(var, row, args);
         }
         for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
             if !self.passes(arg, expected) {

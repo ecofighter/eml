@@ -652,7 +652,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 末尾呼び出しの印は、呼び出しの検査の最初に拒む (``a tail apply has a prompt marker, but a tail call leaves no frame to land on``)。入口の段は `tail` そのものを拒むので、この文言は入口の段のほかで出る
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数 v が見えること、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
-- `eml_lir::unwind::points_all` は、所有の段の走査に、巻き戻しの地点ごとの所有を書き留めさせる。VM のコード生成が、これで巻き戻しの表を作る ([VM](vm.md) の「巻き戻し」)。所有を求める走査を、verifier と巻き戻しの表で2つ持たないためである
+- `eml_lir::unwind::points` は、所有の段の走査に、巻き戻しの地点ごとの所有を書き留めさせる。VM のコード生成が、これで巻き戻しの表を作る ([VM](vm.md) の「巻き戻し」)。所有を求める走査を、verifier と巻き戻しの表で2つ持たないためである
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)
 - 境界の検査は、R7 と R8 の検査のうち、`jump`、`return`、`box`、`unbox` を除くものである。直接の呼び出しの引数と結果、`closure` の引数、`apply` の呼ばれる値と引数と結果 (`tobj` と比べる)、`clause` と `prim` のオペランドと結果、`clause` の印の関数の引数と `ret` が操作の表と互換であること、宣言した Repr が `tobj` のフィールドである。`tail` の結果は、呼び出し元の `rets` と Repr と印を比べる。translate と EP の出力は、box の挿入より前には境界に合わないので、Core IR の verifier と LIR の入口の段は境界を見ない
 - 所有は、どの経路でも、関数の入口と束縛で得た参照と、`dup` と `release` で増やした参照が、消費と `decref` と `release` でちょうど使い切られることを確かめる。経路ごとに持つのは、RC の対象の変数ごとの所有の数だけである。`return` と `tail` の時点では、所有が残らない
@@ -804,7 +804,7 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
   - `prim yield_abort`
 - 「中断しうる」は最小の不動点で求める。中断する文を持たない相互再帰は中断しない。求め方は、上の直接の呼び出し以外の文を持つ関数から始めて、直接の呼び出しの辺を呼ぶ側へたどり、印を広げる。時間は関数と命令の数に比例する
 - 巻き戻しの地点は、上の文のうち末尾でないものである。つまり、中断しうる関数の末尾でない直接の呼び出し、末尾でない `apply` と `clause`、`Pure` でない extern、`prim yield_abort` である。中断は地点の命令の中か、その呼ばれる側で始まる。中断しない関数の中では始まらないので、中断が通るフレームはいつも地点の命令の直後で止まっている
-- `points_all` は、`may_abort` をプログラムに1回だけ求め、所有の段の走査に渡す (上の「verifier」、[VM](vm.md) の「巻き戻しの表」)
+- `points` は、`may_abort` をプログラムに1回だけ求め、所有の段の走査に渡す (上の「verifier」、[VM](vm.md) の「巻き戻しの表」)
 - 名前が同じ関数の地点は、REPL のどの入力で作っても同じになる。入力の LIR が持つのはその入力の入口から届く instance だけだが、関数が中断しうるかは、その関数から直接の呼び出しでたどれる関数だけで決まる。たどれる関数はいつも同じプログラムにあり、名前が同じ関数は同じコードなので ([VM](vm.md) の「追記」)、たどれる関数とその印も同じになる
 
 ## 実行時エラー

@@ -112,7 +112,7 @@ impl LirFn {
     /// `release` を選び、reuse と verifier は `release` の印を合わせる
     /// (docs/spec/lir.md の「ダミーの値」)。変数は1回だけ
     /// 定義されるので (R5)、関数に1つの表にする。表にない番号の変数は、verifier が別に誤りとして報告する。
-    pub fn struct_boxes(&self) -> Vec<bool> {
+    pub(crate) fn struct_boxes(&self) -> Vec<bool> {
         let mut boxes = vec![false; self.vars.len()];
         for stmt in self.blocks.iter().flat_map(|block| &block.stmts) {
             if let Stmt::UnboxStruct { value, .. } = stmt
@@ -219,8 +219,22 @@ impl Stmt {
         }
     }
 
+    /// `let` の右辺と複数の値の呼び出しの値。`unpack` の値は変数なので、定数に書き換える所ではない。
+    pub fn for_each_atom_mut(&mut self, f: impl FnMut(&mut Atom)) {
+        match self {
+            Stmt::Let { var: _, rhs } => rhs.for_each_atom_mut(f),
+            Stmt::LetMany { vars: _, call } => call.for_each_atom_mut(f),
+            Stmt::Unpack { .. }
+            | Stmt::UnboxStruct { .. }
+            | Stmt::Dup(_)
+            | Stmt::Decref(_)
+            | Stmt::Release { .. }
+            | Stmt::DropToken(_) => {}
+        }
+    }
+
     /// 値の使いのうち、基本操作と extern の借用の引数 (`Rhs::for_each_lent`)。
-    pub fn for_each_lent(&self, f: impl FnMut(Atom)) {
+    pub(crate) fn for_each_lent(&self, f: impl FnMut(Atom)) {
         if let Stmt::Let { var: _, rhs } = self {
             rhs.for_each_lent(f);
         }
@@ -420,7 +434,7 @@ impl Rhs {
 
     /// 値の使いのうち、基本操作と extern の借用の引数。読むだけなので `for_each_consumed` には入らない。同じ変数が
     /// 同じ命令の消費の位置にもあれば、その命令の前に参照が2つ要る (docs/spec/lir.md の「extern の借用」)。
-    pub fn for_each_lent(&self, mut f: impl FnMut(Atom)) {
+    pub(crate) fn for_each_lent(&self, mut f: impl FnMut(Atom)) {
         let (args, borrowed) = match self {
             Rhs::Prim(prim, args) => (args, prim.row().borrowed),
             Rhs::Extern { ext, args, at: _ } => (args, ext.row().borrowed),
@@ -652,6 +666,9 @@ pub struct StructShape {
 pub struct Structs {
     shapes: Vec<StructShape>,
     ids: HashMap<StructShape, StructId>,
+    /// 形ごとの葉 (`leaves`)。入れ子の形は外の形より先に登録するので、登録するときに求めておける。開くパスと
+    /// translate が変数ごとに引くので、引くたびに並びを作らないためである。
+    leaves: Vec<Vec<(Repr, Mark)>>,
 }
 
 impl Structs {
@@ -660,6 +677,18 @@ impl Structs {
             return id;
         }
         let id = StructId(self.shapes.len() as u32);
+        let mut leaves = Vec::new();
+        for &(repr, mark) in &shape.fields {
+            match repr {
+                Repr::Struct(inner) => leaves.extend(
+                    self.leaves(inner)
+                        .iter()
+                        .map(|&(leaf, inner_mark)| (leaf, inner_mark.meet(mark))),
+                ),
+                _ => leaves.push((repr, mark)),
+            }
+        }
+        self.leaves.push(leaves);
         self.shapes.push(shape.clone());
         self.ids.insert(shape, id);
         id
@@ -677,21 +706,8 @@ impl Structs {
     /// 形の葉を深さ優先にフィールドの順で並べる。`unit` の葉も位置を保つために含める。入れ子の構造体の葉の印は、
     /// 葉の印とフィールドの印の小さいほうにする。構造体の変数を開くときの葉の印の規則を、入れ子のフィールドにも
     /// 当てたものである (docs/spec/lir.md の「構造体の形」)。
-    /// 再帰は形の深さだけである。
-    pub fn leaves(&self, id: StructId) -> Vec<(Repr, Mark)> {
-        let mut leaves = Vec::new();
-        self.push_leaves(id, Mark::Lin, &mut leaves);
-        leaves
-    }
-
-    fn push_leaves(&self, id: StructId, bound: Mark, leaves: &mut Vec<(Repr, Mark)>) {
-        for &(repr, mark) in &self.shape(id).fields {
-            let mark = mark.meet(bound);
-            match repr {
-                Repr::Struct(inner) => self.push_leaves(inner, mark, leaves),
-                _ => leaves.push((repr, mark)),
-            }
-        }
+    pub fn leaves(&self, id: StructId) -> &[(Repr, Mark)] {
+        &self.leaves[id.0 as usize]
     }
 
     /// 開いた後の葉の語の数。`unit` の葉は語を持たないので数えない。
@@ -704,7 +720,7 @@ impl Structs {
 
     /// 印が `unr` でない、RC の対象の葉を持つか。「RC の対象」で後始末を決めている所は、この述語が真の構造体も含める
     /// (docs/spec/lir.md の「構造体の形」)。
-    pub fn has_non_unr_rc_leaf(&self, id: StructId) -> bool {
+    pub(crate) fn has_non_unr_rc_leaf(&self, id: StructId) -> bool {
         self.leaves(id)
             .iter()
             .any(|&(repr, mark)| repr.is_rc() && mark != Mark::Unr)
@@ -852,7 +868,7 @@ impl Mark {
     }
 
     /// 2つの印の小さいほう。順序は `Unr` < `Poly` < `Lin`。
-    pub fn meet(self, other: Mark) -> Mark {
+    pub(crate) fn meet(self, other: Mark) -> Mark {
         if self.at_least(other) { other } else { self }
     }
 

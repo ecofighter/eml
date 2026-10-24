@@ -86,7 +86,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 - 段階の連なりに `eml_rt` は入らず、`eml_vm` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
 - `eml_lir` は `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
-- `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである
+- `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである。表 (`Extern`、`ExternType`、`ExternEffect`) は `table!` が1つの並びから変種、`ALL`、静的な行を作り、`row` は行への参照を返す。VM のコード生成は `self as usize` を行の番号に使い、VM は `ALL` で引き戻すので、並びが1つなら2つの順は食い違わない
 - `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れて物理メモリを読む `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` で、バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
 - `eml_test_support` は開発専用の crate で、パイプラインに入らない。各 crate の結合テストが dev-dependency として使う。パイプラインは `eml_cli::Session` で組み、段階を feature (`hir` < `types` < `core` < `run`) で選ぶ。各 feature は、`eml_cli` の同じ段階までの feature を有効にする。各 crate は自分の段階までを有効にする。破壊的な変更の途中で下流の crate がまだ組み立たなくても、変更している段階のテストを流せるようにするため ([テスト戦略](testing.md))
 
@@ -308,7 +308,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 縮約 (`eml_lir` の `contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換なときだけ `tail` にする ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出しの書き換えは、translate が組み立てるときに行う。組み立てた後に別のパスで書き換えると、書き換えのたびに枝の部分木を置き換えるので、長い `else if` の連鎖で2乗の時間がかかるためである
 - `eml_vm` は、コード生成 (`compile/`) と実行に分かれる。`compile/` では、`slots.rs` が文の単位の生存から干渉グラフを作ってスロットを塗り、`moves.rs` がブロック引数への並列な代入を `Move` の列に直し、`emit.rs` が関数ごとに命令を出し、`constants.rs` が定数を作業用のヒープに作って凍結する ([VM](../spec/vm.md) の「スロットの割り当て」と「`CodeBase` と `FnEntry`」)。実行は `vm.rs` の、命令を `match` で分ける1つのループである。関数の値の適用とクロージャは `apply.rs`、`CodeBase` と `FnEntry` と組み込みの命令は `code.rs`、データの命令は `data.rs` にあり、基本操作の命令も `vm.rs` の `match` の腕で `Ctx` のメソッドを呼ぶ。命令の型は `op.rs`、実行時エラーの型と表示の文言は `error.rs`、`eml run` と REPL とテストが使う Host は `hosts.rs` にある。逆アセンブラは `disasm.rs` である
 - VM は状態を `Ctx` と `Task` だけに置き、Rust の再帰を使わない。呼び出しのスタックは `Task` のデータである ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約5)
-- 位置を持つ `extern` 命令から作った命令にだけ、`CodeBase::locations` で源の位置 (`SourceLocation`) を付ける ([LIR](../spec/lir.md) の「実行時エラー」)
+- 位置を持つ `extern` 命令から作った命令にだけ、`Tables::locations` で源の位置 (`SourceLocation`) を付ける ([LIR](../spec/lir.md) の「実行時エラー」)
 - `RunStats` の回数は、`Ctx` の `CtxStats` とヒープの `Stats` が検査モードで数える。`boxes`、`unboxes`、`reuses`、`unwound_frames` は VM が数え、`peak_stack` は実行の終わりのスタックの長さである ([VM](../spec/vm.md) の「`RunStats`」)
 
 ### translate の組み立て
@@ -340,7 +340,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `prim dummy()` は、ヒープごとに1つ確保する不死の物体 (値 0 の `BigInt`) を指す語である。`dup`、`decref`、`drop` は何もせず、`unbox` は 0 を読む ([オブジェクトモデル](../spec/object-model.md) の「ダミーの値」)
 - 正しく終わった実行では、`Ctx::check_finished` で `evv` が空で yield の状態がなしであることを確かめてから、検査モードのリークを数える。残った evidence がリークに見えないように、この検査はモードによらず行う
 - `drop k` は、継続のクロージャを解放する。物体は捕まえた値だけを所有するので、子をたどる解放が、捕まっていた値を1回ずつ解放する。捕まっていた `FileIn` は `Foreign` の物体で、この解放で読み出し口が捨てられて閉じる ([オブジェクトモデル](../spec/object-model.md) の「読み手」)
-- 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`exit`) は継続を組み立てず、VM がタスクのスタックを巻き戻す。外すフレームの値と生きている token は、コード生成が LIR の所有の走査 (`eml_lir::unwind::points_all`) から作った巻き戻しの表で手放し、着地の印 (`apply … prompt ev`) の evidence が宛先と同じフレームで止まる ([VM](../spec/vm.md) の「巻き戻し」)
+- 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`exit`) は継続を組み立てず、VM がタスクのスタックを巻き戻す。外すフレームの値と生きている token は、コード生成が LIR の所有の走査 (`eml_lir::unwind::points`) から作った巻き戻しの表で手放し、着地の印 (`apply … prompt ev`) の evidence が宛先と同じフレームで止まる ([VM](../spec/vm.md) の「巻き戻し」)
 - `extern` 命令は、フレームを積まずにその場で実行して値を返す。extern は eml のコードを呼び返さないので、継続を組み立てる必要がないためである。ただし、IO の extern が `try_io` の捕まえる種類の誤りで失敗すると、VM が最も近い `IO` の evidence (`Ctx::ev_find`) の `io_failed` の節の入口を呼んで、失敗を届ける。入口は中断を始め、巻き戻しが `try_io` の handle のフレームまでスタックを戻す
 - `exit` は、`Ctx::exit_abort` で宛先を不死のダミーの物体にした中断を始め、`Finish` まで巻き戻す。途中のフレームが持っていた値は、巻き戻しの表で後始末される ([VM](../spec/vm.md) の「extern の中断」)
 

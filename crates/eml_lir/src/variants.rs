@@ -8,11 +8,6 @@ use std::collections::HashMap;
 use crate::boxing::{conform, tail_position_call, uniform_repr};
 use crate::{Atom, Block, Call, FnIdx, LirFn, Program, Repr, Rhs, Stmt, Term, VarId};
 
-/// 一様な位置で値を受ける Repr (`obj`、`tobj`、`unit`) か。
-fn is_uniform(repr: Repr) -> bool {
-    uniform_repr(repr) == repr
-}
-
 /// 関数の ABI。手順 1 でそろえた後の引数と結果の Repr である。
 struct Abi {
     params: Vec<Repr>,
@@ -35,10 +30,10 @@ impl Abi {
 
     /// 捕獲を `captured` 個受けた後の引数と結果が一様か。値として参照してよい関数の条件である。
     fn uniform_beyond(&self, captured: usize) -> bool {
-        is_uniform(self.ret)
+        self.ret.is_uniform()
             && self.params[captured.min(self.params.len())..]
                 .iter()
-                .all(|&repr| is_uniform(repr))
+                .all(|&repr| repr.is_uniform())
     }
 }
 
@@ -105,7 +100,7 @@ impl Maker {
     /// 値として参照するときも、写しの形がその関数の本体を読めるようにするためである。
     fn redirect(&mut self, program: &mut Program, index: FnIdx) {
         let function = program.function(index);
-        let tails = is_uniform(function.rets[0].0) && !self.thin[index.0 as usize];
+        let tails = function.rets[0].0.is_uniform() && !self.thin[index.0 as usize];
         let mut sources = Vec::new();
         for block in &function.blocks {
             for stmt in &block.stmts {
@@ -150,7 +145,7 @@ impl Maker {
                 {
                     *target = self.value(*target, args.len());
                 }
-                stmt_atoms_mut(stmt, |atom| {
+                stmt.for_each_atom_mut(|atom| {
                     if let Atom::Fn(target) = atom {
                         *target = self.value(*target, 0);
                     }
@@ -194,7 +189,7 @@ impl Maker {
     /// ブロックの末尾の位置の呼び出しが、結果が型どおりの関数の直接の呼び出しなら、その関数。
     fn typed_tail(&self, block: &Block) -> Option<FnIdx> {
         match tail_position_call(block)? {
-            (_, Call::Direct(target, _)) if !is_uniform(self.abis[target.0 as usize].ret) => {
+            (_, Call::Direct(target, _)) if !self.abis[target.0 as usize].ret.is_uniform() => {
                 Some(*target)
             }
             _ => None,
@@ -247,7 +242,7 @@ impl Maker {
                     copy = true;
                     break 'walk;
                 }
-                if !is_uniform(callee) && !std::mem::replace(&mut seen[target.0 as usize], true) {
+                if !callee.is_uniform() && !std::mem::replace(&mut seen[target.0 as usize], true) {
                     stack.push(target);
                 }
             }
@@ -365,19 +360,5 @@ fn placeholder() -> LirFn {
             stmts: Vec::new(),
             term: Term::Return(Atom::Unit),
         }],
-    }
-}
-
-/// 文が使う値を書き換える。`MakeClosure` の関数は値でないので、ここでは見せない。
-fn stmt_atoms_mut(stmt: &mut Stmt, f: impl FnMut(&mut Atom)) {
-    match stmt {
-        Stmt::Let { var: _, rhs } => rhs.for_each_atom_mut(f),
-        Stmt::LetMany { vars: _, call } => call.for_each_atom_mut(f),
-        Stmt::Unpack { .. }
-        | Stmt::UnboxStruct { .. }
-        | Stmt::Dup(_)
-        | Stmt::Decref(_)
-        | Stmt::Release { .. }
-        | Stmt::DropToken(_) => {}
     }
 }
