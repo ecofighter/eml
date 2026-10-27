@@ -1,23 +1,22 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-assertion_line: 380
 expression: rendered
 input_file: tests/ui/check-fail/types/async_in_par_child.em
 ---
-[E2020] Error: the row passed to `par` may perform `IO`, but `par` allows only `never` operations
-   ╭─[ check-fail/types/async_in_par_child.em:9:18 ]
-   │
- 9 │     let (a, b) = Par.par (fn () -> Async.yield_now ()) (fn () -> 1)
-   │                  ───┬───           ─────────┬────────  
-   │                     ╰────────────────────────────────── `par` is used here
-   │                                             │          
-   │                                             ╰────────── `IO` is performed here
-   │
-   ├─[ <std>/Par.em:6:28 ]
-   │
- 6 │ pub extern par : (Unit -> <never e> a) -> (Unit -> <never e> b) -> <e> (a, b)
-   │                            ──┬──  
-   │                              ╰──── `par` bounds this row variable by `never`
-   │ 
-   │ Note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
-───╯
+[E2020] Error: the row passed to `par` may perform `Async`, but `par` allows only `never` operations
+    ╭─[ check-fail/types/async_in_par_child.em:12:18 ]
+    │
+ 12 │     let (a, b) = Par.par child (fn () -> 1)
+    │                  ───┬─── ──┬──  
+    │                     ╰─────────── `par` is used here
+    │                            │    
+    │                            ╰──── `Async` is performed here
+    │
+    ├─[ <std>/Par.em:6:28 ]
+    │
+  6 │ pub extern par : (Unit -> <never e> a) -> (Unit -> <never e> b) -> <e> (a, b)
+    │                            ──┬──  
+    │                              ╰──── `par` bounds this row variable by `never`
+    │ 
+    │ Note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+────╯
