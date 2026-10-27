@@ -2,6 +2,7 @@
 
 - 作成: 2026-10-27。改訂: 2026-10-27 (T-9 で止まり、設計し直した。下の段落)
 - 基準: `claude/trusting-hawking-hvvx32` @ `9747404` (T-8 までを入れた状態。T-9a から後の task の file:line の参照はこの状態を指す)。「3. 背景」は計画を作った `main` @ `3bfa56d` の状態を書き、T-1〜T-8 が変えた所はそれぞれの task にある。ただし、extern の規則の項目と試作の項目は `9747404` で確かめ直した
+- 行番号の注意: T-9b 以降の挿入で、この計画が引く docs/spec の行番号はずれている。行番号でなく、引いた文と節の名前で探す
 - 状態: 承認済み (2026-10-27)。D-4 と D-5 で docs/future/multicore.md の設計を変えること (worker 0 の語に書く側が直接書く、終わりの欄の「正常な終わり」と「致命的な誤り」を async-threads に回す) と、UI テストの速いモードを `normal` で流すことも承認を受けた。設計し直した D-1、D-11、D-12、D-19 と T-9a〜T-9d も、抽象型をこの段に入れる形で承認を受けた (2026-10-27)。未決の項目は「10. 危険と未決の項目」にあり、どれも既定の扱いがある
 - 進み具合: T-1〜T-8 は済み。T-1 `47ed9ff`、T-2 `5139c15`、T-3 `605e0eb`、T-4 `06f4481` と `5bfdd0f`、T-5 `910babe` と `68ca75b`、T-6 `8c1353f` と `3c68efe`、T-7 `28abd4f`、T-8 `45fbec5` と `9747404`。実行は T-9a から再開する
 - 付録: `docs/plans/2026-10-27-async-tasks/Async.em` (std/Async.em の下書き)、`docs/plans/2026-10-27-async-tasks/ui-tests.md` (UI テストのプログラム)
@@ -877,6 +878,7 @@ main () =
   - (c) 本体が `a`、`b` を出力する2つの子を始めて両方を待つ → 逐次で `main\na\nb\n`
   - (d) (c) を `Sched::Seeded(1)` と `Seeded(2026)` で流す → stdout が同じで、`schedule_independent` の統計が等しい
   - (e) `cells.rs` に `use crate::` の行がない (ファイルを読んで確かめる)
+- 文書 (T-9b が残した文): docs/implementation/status.md の「まだないもの」の `Std.Async` を呼ぶと内部の誤りで止まるという項目を消し、docs/spec/stdlib.md の「`Std.Async`」の「VM の extern の命令はこれらの行を実行しない」の文と、extern の行のコメントを `Op::Async` の説明に替える
 - 文書: docs/spec/vm.md の新しい節「`Async` のタスク」(状態、入口の `Task`、セル、登録表、受け箱、run の終わり、D-2 の2種類の待ち、D-3 の核と実行系の分け方)、「命令」の一覧に `Async`、「タスクとスケジュール」に `Async` の仕事は FIFO で積むこと、「追記」に `MissingEntry`
 - 実装者に任せること: (b) と (c) のプログラムの細部 (期待する stdout を変えない範囲)
 - 条件: いつも
