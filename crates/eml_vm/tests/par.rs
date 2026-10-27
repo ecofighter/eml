@@ -1,7 +1,7 @@
 //! `par` の fork と join を、evidence passing の出力の形の手書きの LIR で確かめる (docs/spec/vm.md の
 //! 「`par` の fork と join」)。fork の関数 (`fork$E.op` と `reperform$E.op`) は evidence passing が作る形で書く
 //! (docs/spec/core-ir.md の「`par` の子の中断」)。各プログラムは検査モードで逐次と2つの seed で流して結果を比べ、
-//! 通れば速いモードの逐次でも流す。
+//! 通れば速いモードの逐次でも流す。子の誤りの規則は、ソースから作ったコードでも確かめる (`source`)。
 
 use std::sync::Arc;
 
@@ -215,9 +215,17 @@ fn spin_two(p.0: unit) -> tobj {
 fn run_par_lir(text: &str, max_depth: usize) -> (String, Result<Finished, RuntimeError>) {
     let program = parse(text);
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}\n{text}"));
-    let (out, result) = run_in(&program, true, Sched::Sequential, max_depth);
+    run_par_program(&program, max_depth)
+}
+
+/// `run_par_lir` の、読んで確かめた後の部分。
+fn run_par_program(
+    program: &eml_lir::Program,
+    max_depth: usize,
+) -> (String, Result<Finished, RuntimeError>) {
+    let (out, result) = run_in(program, true, Sched::Sequential, max_depth);
     for seed in [1, 2026] {
-        let (seeded_out, seeded) = run_in(&program, true, Sched::Seeded(seed), max_depth);
+        let (seeded_out, seeded) = run_in(program, true, Sched::Seeded(seed), max_depth);
         assert_eq!(seeded_out, out, "the output under seed {seed}");
         assert_eq!(
             summary(&seeded),
@@ -226,7 +234,7 @@ fn run_par_lir(text: &str, max_depth: usize) -> (String, Result<Finished, Runtim
         );
     }
     if result.is_ok() {
-        let (fast_out, fast) = run_in(&program, false, Sched::Sequential, max_depth);
+        let (fast_out, fast) = run_in(program, false, Sched::Sequential, max_depth);
         assert_eq!(fast.map(|_| ()), Ok(()), "the fast mode failed");
         assert_eq!(fast_out, out, "the fast mode printed something else");
     }
@@ -906,6 +914,68 @@ fn the_run_stats_do_not_depend_on_the_schedule() {
             eml_test_support::schedule_independent(seeded),
             eml_test_support::schedule_independent(sequential),
             "seed {seed}"
+        );
+    }
+}
+
+/// 子の誤りの規則を、ソースから作った `fork$` と `reperform$` のコードで確かめる。上の手書きの LIR の版は VM の
+/// 順序を、こちらは利用者の見る規則を確かめる (docs/implementation/testing.md の「重複させない」)。誤りは
+/// 小さい深さの上限で起こす。既定の上限の `DepthLimit` は UI テストで起こすには大きすぎるためである。
+mod source {
+    use super::{Finished, RuntimeError, Sched, error_text, run_in, run_par_program};
+
+    const DEEP: &str = "\
+import Std.Par
+import Fail (Fail(..))
+
+deep_left : Int -> <Panic> Int
+deep_left n = 1 + deep_left (n + 1)
+
+deep_right : Int -> <Panic> Int
+deep_right n = 1 + deep_right (n + 1)
+";
+
+    /// `run_par_program` は誤りで終わった run を速いモードで流さないので、ここで流して同じ文言を確かめる。深さの
+    /// 上限は両方のモードが同じ文言で報告する。
+    fn run(main: &str) -> (String, Result<Finished, RuntimeError>) {
+        let text = format!(
+            "{DEEP}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  println \"before\"\n{main}"
+        );
+        let program = eml_test_support::lir(&text);
+        let (out, result) = run_par_program(&program, 1000);
+        let (fast_out, fast) = run_in(&program, false, Sched::Sequential, 1000);
+        assert_eq!(fast_out, out, "the fast mode printed something else");
+        assert_eq!(
+            fast.map(|_| ()).map_err(|error| error.to_string()),
+            result.as_ref().map(|_| ()).map_err(ToString::to_string),
+            "the fast mode ended otherwise"
+        );
+        (out, result)
+    }
+
+    /// 左の子の中断は、右の子の誤りを救わない。
+    #[test]
+    fn a_left_abort_does_not_rescue_a_right_error() {
+        let (out, result) = run(
+            "  let r = Fail.to_result (fn () -> Par.par (fn () -> (Fail.fail \"l\" : Int)) (fn () -> deep_right 0))\n  println (show r)\n",
+        );
+        assert_eq!(out, "before\n");
+        assert_eq!(
+            error_text(result),
+            "the call depth limit is exceeded in `deep_right`"
+        );
+    }
+
+    /// 両方の子が誤りで止まれば、左の誤りを報告する。
+    #[test]
+    fn the_left_error_wins() {
+        let (out, result) = run(
+            "  let (a, b) = Par.par (fn () -> deep_left 0) (fn () -> deep_right 0)\n  println (show (a + b))\n",
+        );
+        assert_eq!(out, "before\n");
+        assert_eq!(
+            error_text(result),
+            "the call depth limit is exceeded in `deep_left`"
         );
     }
 }

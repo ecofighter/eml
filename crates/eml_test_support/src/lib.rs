@@ -293,8 +293,9 @@ pub fn run_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
     execute(&lir(text), &checked())
 }
 
-/// `RunStats` のうち、スケジュールの方針で変わりうる欄を 0 にする。方針を変えた実行どうしは、残りの欄で比べる
-/// (docs/implementation/testing.md の「`eml_vm` のテスト」)。欄ごとの理由は次のとおりである。
+/// `RunStats` のうち、スケジュールの方針で変わりうる欄を 0 にする。方針を変えた実行どうしは、残りの欄で比べる。
+/// 0 にする欄とその理由は次のとおりで、比べる欄がスケジュールによらない理由は
+/// docs/implementation/testing.md の「seed で流す」にある。
 /// - `peak_objects`: 同時に生きている物体の数は、子の実行が交互に進む順で変わる
 #[cfg(feature = "run")]
 pub fn schedule_independent(mut stats: RunStats) -> RunStats {

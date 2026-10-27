@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/pair_of_values.em
+---
+--- stdout ---
+3.0
+2
+'z'
+par
+P { name = "a", age = 3 }
+[1, 2, 3]
+(True, ())
+--- stderr ---

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/par/uncaught_child_panic.em
+---
+--- stdout ---
+before
+--- stderr ---
+--- runtime error ---
+panicked: division by zero in `reperform$Prelude.Panic.panicked`

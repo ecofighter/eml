@@ -3,9 +3,9 @@
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
 //! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、`apply` と生の語の捕獲、複数の値の戻りと構造体と箱の間の
-//! 変換、`par` のタスクの切り替え、両方のモード。
+//! 変換、`par` のタスクの切り替えと子の中断、両方のモード。
 
-use eml_vm::{AnyMachine, RunConfig, Sched, capture_host, execute};
+use eml_vm::{AnyMachine, RunConfig, RuntimeError, Sched, VmFault, capture_host, execute};
 
 fn run_both(text: &str) -> String {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
@@ -386,7 +386,7 @@ fn third(p.0: {t}) -> obj {{
 /// 捕まえるので、fork はそれに共有の印を付ける。右の子は新しい組を確保して返し、join がそれを親の局所に戻す。`Fail`
 /// の evidence の下で fork するので、子の `evv` には鏡の fork evidence を作って印を付ける。横取りと join の両方で
 /// 切り替わるよう、seed の方針で流す。Miri の時間を抑えるため、`par.rs` の前置きは使わず、要る関数だけを書く。子の
-/// 中断は `par.rs` が確かめる。
+/// 中断は下の `a_child_abort_is_raised_again_after_the_join` が通す。
 #[test]
 fn par_switches_between_tasks() {
     let text = "\
@@ -482,4 +482,60 @@ fn spin_one(p.0: unit) -> tobj {
     assert_eq!(out, "1\n6\n5\n5\n");
     // スケジュールがずれて横取りが起きなくなると、横取りの切り替えを Miri で通らなくなる
     assert!(preemptions > 0, "Seeded(1) preempted {preemptions} times");
+}
+
+/// 右の子の `Panic` の中断。VM は `child_abort` で起こし直しの閉包を join の節点に記録し、子の ID の閉包を
+/// `transfer_back` で親に戻してから、親の文脈で適用する。閉包はヒープの文字列を捕まえるので、移し戻しと
+/// 適用がその物体を正しく扱うことを Miri で確かめる。捕まえる `try_panic` はないので、run は親で起こし直した
+/// `panic` の誤りで終わる。
+#[test]
+fn a_child_abort_is_raised_again_after_the_join() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Prelude.Panic { never panicked(obj) -> never }
+fn main() -> unit {
+  let t.0: obj = par (,) #0(&one, &boom)
+  decref t.0
+  return ()
+}
+fn one(p.0: unit) -> tobj {
+  let n.1: tobj = box 1
+  return n.1
+}
+fn boom(p.0: unit) -> tobj {
+  let m.1: obj = extern \"Prelude.Show Int.show\"(42)
+  let r.2: tobj = extern Prelude.panic(m.1)
+  return r.2
+}
+clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
+  let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
+  decref ev.0
+  let d.4: obj poly = prim dummy()
+  return d.4
+}
+uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj poly {
+  let r.2: tobj poly = extern Prelude.panic(a.0)
+  return r.2
+}
+";
+    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    for debug_heap in [true, false] {
+        let (host, out) = capture_host(Default::default());
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let error = execute(&program, &config, host).expect_err("the panic is not caught");
+        assert_eq!(out.contents(), "", "debug_heap: {debug_heap}");
+        // 文言は `par.rs` が固定するので、ここでは起こし直した `panic` で終わったことだけを見る
+        assert!(
+            matches!(
+                error,
+                RuntimeError::Fault {
+                    fault: VmFault::Panicked(_),
+                    ..
+                }
+            ),
+            "debug_heap: {debug_heap}: {error}"
+        );
+    }
 }

@@ -43,7 +43,7 @@ windows-sys = { workspace = true, optional = true, features = ["Win32_System_Sys
 
 [dev-dependencies]
 eml_rt.workspace = true
-eml_test_support = { workspace = true, features = ["hir"] }
+eml_test_support = { workspace = true, features = ["run"] }
 insta.workspace = true
 
 [[test]]

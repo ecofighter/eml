@@ -51,6 +51,8 @@
 - `ui.rs` と `repl.rs` の、ファイルの分け方の自己テストの組。UI のディレクトリには同じ拡張子のモジュールがあり、トランスクリプトは深い所の `.repl` を断るので、規則が違う
 - `eml_vm` の `structs.rs` の逆アセンブラのテストは、`dup s` と `(boxes, unboxes)` を確かめる。`miri.rs` の同じプログラムは、この事実を持たない
 - `eml_cli` の `api.rs` の `Outcome::Rejected` のテストは、トランスクリプトに出ない結果を固定する
+- `RunStats` がスケジュールによらないことは3か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムで生成したコードを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
+- `par` の子の誤りの規則は、`par.rs` の手書きの LIR のテストと `par::source` の組で確かめる。右の子の誤りを左の子が終わった後で報告する順序は、左の子が出力する LIR の版 (`noisy`) だけが確かめる。ソースの子は出力できないので、ソースでは順序が見えない。`par::source` は、生成した `fork$` と `reperform$` を通っても、左の中断で右の誤りを救わないことと、左の誤りが先であることを確かめる
 
 ### crate の中の置き方
 
@@ -178,7 +180,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - Miri の予算はコマンド全体の CPU 時間 (`/usr/bin/time -p` の `user`) で決める。ビルド済みの作業ツリーで測り、Miri のビルドの時間は数えない。`eml_rt` の `trusted::` は Stacked Borrows で 60 秒以内、Tree Borrows で 120 秒以内、`eml_vm` の `miri::` はどちらの規則でも 60 秒以内にする。1つのテストは、それを足したときにコマンドの `user` が増える分で測り、両方のモードの合計で、Tree Borrows の下で `trusted` が 5 秒以内、`miri.rs` が 10 秒以内に収める。そのテストだけを絞り込んで流した時間では測らない。絞り込んだ実行は、全体の実行で1回だけ払う費用を含み、小さいテストでも 14 秒ほどかかるためである。`miri.rs` の上限が緩いのは、LIR のテキストを Miri の下で読むためである。予算は測った時間の約3倍にしてある。2倍の退行では落ちず、数分かかるような大きさの誤りは落ちる。テストごとにプロセスを起こす `cargo miri nextest run` は使わない。1件あたり約 2.3 秒の起動の費用がかかり、CPU 時間が約10倍になるのに、壁時計はほとんど縮まないためである
 - 大きい物体の長さは `trusted.rs` の `LARGE_BODY` (`MAX_SMALL_WORDS * 8` バイト。両方のモードで大きい物体になる、語に揃った長さ) と、それに語に揃わない小さい残りを足した長さ (`LARGE_BODY + 3` など) にする。大きい物体のページは物体の大きさちょうどなので、この長さでページの末尾まで届く。64 KiB を超える長さは、確かめるコードに 64 KiB の単位がある所 (小さいページ、Host の `READ_CHUNK` と `BUFFER_BYTES`、`Control` のページの数え方) だけで使う。大きい入力の期待値はデータと一緒に書くか解析で出し、素朴な1要素ずつの比べを大きい本体に走らせない
 - ほかの crate は、次の `eml_vm` を除いて Miri で流さない
-- `eml_vm` は、検証していないコードから `eml_rt` の `unsafe fn` を呼ぶ。そのため、`crates/eml_vm/tests/miri.rs` (module `miri`) の小さい実行のテストを、`eml_rt` と同じ2つの設定で流す (`cargo miri test -p eml_vm --test integration miri::`)。直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用 (即値の関数からとクロージャから) と余った引数、evidence を作って引く基本操作、ヒープの文字列の extern、文字列を返す入口の結果を写すこと (`run_shown`)、`par` のタスクの切り替え (seed の方針の横取りと join) を、両方のモードで通す。確かめるのは VM が核の操作の前提を守っていることで、信頼の一覧を確かめる `trusted` とは目的が違う。テストはメモリの Host (`capture_host`) だけを使い、実際のファイルを開かない。UI テストは Miri で流さない。`miri.rs` のテストは `cargo test` でも流れるので、同じプログラムと同じ確かめを `calls.rs` などに重ねて置かない
+- `eml_vm` は、検証していないコードから `eml_rt` の `unsafe fn` を呼ぶ。そのため、`crates/eml_vm/tests/miri.rs` (module `miri`) の小さい実行のテストを、`eml_rt` と同じ2つの設定で流す (`cargo miri test -p eml_vm --test integration miri::`)。直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用 (即値の関数からとクロージャから) と余った引数、evidence を作って引く基本操作、ヒープの文字列の extern、文字列を返す入口の結果を写すこと (`run_shown`)、`par` のタスクの切り替え (seed の方針の横取りと join) と、右の子の中断を join の後に親で起こし直すこと (ヒープの物体を捕まえた起こし直しの閉包の移し戻しと適用) を、両方のモードで通す。確かめるのは VM が核の操作の前提を守っていることで、信頼の一覧を確かめる `trusted` とは目的が違う。テストはメモリの Host (`capture_host`) だけを使い、実際のファイルを開かない。UI テストは Miri で流さない。`miri.rs` のテストは `cargo test` でも流れるので、同じプログラムと同じ確かめを `calls.rs` などに重ねて置かない
 
 ## `eml_vm` のテスト
 
@@ -195,7 +197,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `roots.rs` は、セッションの根を読み書きする基本操作を確かめる。根に置いた値は実行の終わりに VM が手放すので、検査モードのリークの検査も通る ([LIR](../spec/lir.md) の「基本操作」)
 - `structs.rs` は、複数の値の呼び出しと戻り、構造体を箱で渡す `apply` を確かめる。構造体を持つ手書きの LIR をパスに通して実行し、ダミーを受ける命令はパスの後の形の LIR を手で書いて確かめる ([VM](../spec/vm.md) の「呼び出しと戻り」と「データとクロージャ」)
 - `bench.rs` は、基準のプログラムの VM の `RunStats` を固定する。`scaling.rs` は、仕事の回数と物体とスタックの語の数を上限と比べる (どちらも下の「性能のテスト」)
-- `par.rs` は、`par` の fork と join を手書きの LIR で確かめる ([VM](../spec/vm.md) の「`par` の fork と join」)。fork の関数と起こし直しの関数は、evidence passing の後の形で手で書く。両方の子の値、左と右の中断といちばん左の中断、mask の深さ、子の中と親の `try_panic`、捕まえられなかった子の `Panic` の文言、入れ子の `par`、子の誤りの規則 (止めかたの種類、左が先、中断で救わないこと)、子へ移した `MutArray` と `lin` の値の移し戻し、子の漏れの `TransferLeak`、方針ごとの横取りを確かめる。実行は検査モードの逐次と seed 1 と 2026 で流して出力、結果、スケジュールによらない `RunStats` を比べ、速いモードの逐次でも流す
+- `par.rs` は、`par` の fork と join を手書きの LIR で確かめる ([VM](../spec/vm.md) の「`par` の fork と join」)。fork の関数と起こし直しの関数は、evidence passing の後の形で手で書く。両方の子の値、左と右の中断といちばん左の中断、mask の深さ、子の中と親の `try_panic`、捕まえられなかった子の `Panic` の文言、入れ子の `par`、子の誤りの規則 (止めかたの種類、左が先、中断で救わないこと)、子へ移した `MutArray` と `lin` の値の移し戻し、子の漏れの `TransferLeak`、方針ごとの横取りを確かめる。実行は検査モードの逐次と seed 1 と 2026 で流して出力、結果、スケジュールによらない `RunStats` を比べ、速いモードの逐次でも流す。子の誤りの規則のうち、左の中断で救わないことと左の誤りが先であることは、ソースから作ったコードでも確かめる (`par::source`)。既定の深さの上限の `DepthLimit` は UI テストで起こすには大きすぎるので、`max_depth` を 1000 にして流す
 - `miri.rs` は、Miri で流す小さい実行のテストである (上の「Miri」)
 - `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 を確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
 
@@ -315,7 +317,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `strings/`: 文字列の表示、補間、複数行、生の文字列、パターン
   - `unwind/`: 中断と巻き戻し。`exit` と `abort` がハンドラやファイルを抜けるときの後始末
   - `var/`: `var` の変数。配列の添字、スコープ、中断との組み合わせ
-  - `par/`: `Std.Par.par` の fork と join。子と handler の組み合わせ
+  - `par/`: `Std.Par.par` の fork と join。子と handler の組み合わせ。逐次のほかに2つの seed でも流す (下の「seed で流す」)
   - `scripts/`: 5本のスクリプト (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`)。どれもディレクトリのテストで、入力は `main.args`、`main.stdin` と隣のファイルで与える。1回の起動で主な経路を通す。`deploy` のほかは、同じ処理を Python で書いた版 (`bench/scripts/<名前>.py`) と標準出力と終了コードが一致することを `bench/scripts/compare.sh --fixture <名前>` で確かめてから、スナップショットを受け入れる。UI テストで固定しない経路 (ほかのフラグ、空の入力、誤りの経路) も、`bench/scripts/compare.sh <名前> 引数…` で Python の版と比べて確かめる ([計測の基準](benchmarks.md) の「スクリプトの計測」)
   - `runtime/`: 実装の性質を確かめるテスト。メモリの解放、スタックの深さ、合流のブロック (`join_points.em`)、末尾呼び出し、部分を共有する型 (`shared_types_*.em`。木として書き下すと列の長さの指数の大きさになる型を、長さ40の列で作る)
 - 部分を共有する型の扱いが指数の時間に戻ると、`runtime/shared_types_*.em` は、終わらないかメモリを使い尽くす形で現れ、テストの失敗としては報告されない。`ui::run` は `run/` のファイルをすべて1つのテストで流すので、1つのファイルが終わらないとテスト全体が止まる。そのファイルの名前は、ハーネスが 10 秒を超えたところで標準エラーに出す (上の UI テストの項目)。nextest は 60 秒でテストを止めて失敗にし、その標準エラーを見せる (「性能のテスト」)
@@ -332,8 +334,25 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - `run` と `run-fail` のテストは、まず VM の検査モード (`debug_heap`) で、`Control::new(default_limits())` を持つ新しい `RunConfig` で実行する。`default_limits()` は `eml run` と同じ既定の上限である。標準出力と誤りの文言は、スナップショットと比べる。`run` のテストは、実行が成功することも確かめる。`file_root` はテストのディレクトリである
 - その後で、新しい `Control` を持つ別の `RunConfig` で、速いモードでも実行する。標準出力と、標準エラーと、書いたファイルと、終わり方 (成功か、誤りの文言) が検査モードと同じことを確かめる。速いモードを後に流すのは、速いモードは前提を確かめないので、VM の誤りがあると未定義の動作になり、1つのテストの失敗が同じプロセスで流すほかのファイルのテストまで壊しうるためである
 - `run-fail` のテストは、検査モードの誤りが `fast_mode_reports` を満たすときだけ、速いモードで流す。満たさないのは、リーク、VM の内部の誤り (`VmFault::Internal`)、extern のヒープの誤り (`VmFault::Extern(Fault::Heap(_))`) である。どれも検査モードだけが見つけるので、VM 自身の誤りを意味し、速いモードで流すとメモリを壊すことがある。それ以外の誤り (算術、出力、入出力、UTF-8) は両方のモードが同じ文言で報告する
+- seed の方針の run は検査モードだけで流す (下の「seed で流す」)
 - 実行ごとに新しい `RunConfig` を作るのは、止める理由のビットが `Control::clear` でしか下りないためである。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる ([VM](../spec/vm.md) の「上限と割り込み」)
 - 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動する。`sh`、`sort`、`cat` を起動するテストは、それらのある環境で流し、Windows では印を付けて流さない (下の「OS ごとのテスト」)
+
+### seed で流す
+
+- `run/par/` と `run-fail/par/` のファイルは、逐次の検査モードの run とスナップショット、速いモードとの比べの後で、seed 1 と 2026 の方針 (`Sched::Seeded`) でも検査モードで流す ([VM](../spec/vm.md) の「タスクとスケジュール」)。`ui::run` と `ui::run_fail` の中で流し、ファイルを集めるテストは増やさない。ほかの分類は seed で流さない。`par` のないプログラムはタスクを切り替えないためである。対象を決める規則は `seeded_runs_cover_only_par` が確かめる
+- 比べるのは、標準出力、標準エラー、書いたファイル、終わり方 (終了コードか誤りの文言) である。`run/par/` では、スケジュールによらない `RunStats` (`eml_test_support::schedule_independent` を通したもの) も比べる。食い違えば、`` `eml run --debug-heap --sched seeded:N` `` を含む文言で落ちる (`a_seeded_mismatch_names_the_seed`)。スケジュールは seed とプログラムと入力だけで決まるので、このコマンドで同じ run を再現できる
+- 速いモードでは seed で流さない。スケジューラの誤りが速いモードで未定義の動作になると、同じプロセスで流すほかのファイルのテストを壊すためである
+- 逐次の run が VM の誤り (`fast_mode_reports` を満たさない誤り) で終われば、seed では流さない。誤りの文言は worker ID を含みうるが、ID はタスクが fork と join をする順で変わるためである。誤りはスナップショットがすでに記録している
+- `run/par/` の各ファイルは、seed ごとに少なくとも1回横取りされなければならない (`Finished.preemptions > 0`)。横取りがなければ、逐次と同じ順で流しただけになるためである。安全点は [VM](../spec/vm.md) の「呼び出しと戻り」の一覧のとおりである。seed の方針の予算は 1 から 16 の安全点で、予算が尽きても yield の途中なら切り替えず、次の安全点でまた試す ([VM](../spec/vm.md) の「タスクとスケジュール」)。そのため、どれかの `par` の左の子が yield の途中でない安全点を 16 以上通れば、どの seed でも横取りが起きる。最適化が小さい関数を inline しないよう、各ファイルは再帰する補助の関数 `spin` を持ち、少なくとも1つの左の子で `spin 40` を走らせる。短いファイルを例外にする印は作らない。`run-fail/par/` は成功した run を持たないので、横取りを確かめない
+- `schedule_independent` は `RunStats` の欄のうち、スケジュールで変わる欄だけを 0 にする。欄ごとの扱いと理由は次のとおりである ([VM](../spec/vm.md) の「`RunStats`」)
+  - `peak_objects` は 0 にして比べない。同時に生きている物体の数は、子が交互に進む順で変わる
+  - `peak_stack` は比べる。タスクごとの `depth_offset` とスタックの長さの和の最大で、右の子の起点は fork のときに決まり、各タスクのスタックの伸び縮みはスケジュールによらない
+  - `allocations`、`boxes`、`unboxes`、`string_bytes_copied` は比べる。各タスクが実行する命令の列は、スケジュールで変わらない
+  - `reuses` は比べる。局所の物体の rc を変えられるのは持ち主のタスクだけで、共有の印を付けた物体はどの順でも join の移し戻しまで reuse しない
+  - `rc_increments` と `rc_decrements` は比べる。切り替えは RC に触れず (`Ctx::switch_task`)、fork と join の RC の仕事は親の `evv` と子の値だけで決まる。共有の物体を最後に手放すタスクは順で変わるが、手放す回数は変わらない
+  - `evidence_steps`、`yields`、`yield_frames`、`unwound_frames` は比べる。yield の途中では切り替えず、子の中断はどの順でも両方の子が終わった後で同じ親の handler に起こし直すためである
+- 欄がスケジュールで変わると分かったら、その欄の定義を直すか、理由を書いてこの一覧と `schedule_independent` に足す。食い違う欄を一律に外すことはしない
 
 ## REPL のトランスクリプト
 
@@ -490,6 +509,8 @@ cargo nextest run -j 1                               # ふだんの実行の条�
 cargo nextest run -p eml_syntax --test integration parser::empty_file    # 1つのテスト
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'          # UI テスト
 EML_UI_FILTER=basics/hello.em cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # 1つの UI テストだけ流す
+EML_UI_FILTER=/par/ cargo nextest run -p eml_cli --test integration -E 'test(=ui::run) | test(=ui::run_fail)'   # par の UI テスト (逐次と2つの seed。seed で流す)
+cargo run -p eml_cli -- run --debug-heap --sched seeded:2026 tests/ui/run/par/nested.em   # seed の run の食い違いを再現する
 cargo insta review                                   # スナップショットの承認
 cargo insta test --test-runner nextest --accept      # テストを流し、スナップショットを受け入れる
 cargo clippy --all-targets -- -D warnings && cargo fmt
