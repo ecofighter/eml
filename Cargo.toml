@@ -25,8 +25,8 @@ insta = "1.49"
 la-arena = "0.3"
 libc = "0.2"
 logos = "0.16"
-rustyline = { version = "18.0.1", default-features = false, features = ["buffer-redux"] }
-rowan = "0.16"
+rustyline = { version = "19.0.0", default-features = false, features = ["buffer-redux"] }
+rowan = "0.17"
 rustc-hash = "2.1"
 text-size = "1.1"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Threading"] }
