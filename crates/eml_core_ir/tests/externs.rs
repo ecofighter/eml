@@ -410,8 +410,9 @@ fn every_extern_function_row_has_the_kinds_of_its_std_signature() {
 
 /// 宣言に対して相対的な型 (`Poly`) は `Unr` の行と合う。関数でない引数の型変数は、extern のスキームが `Unr` に
 /// 固定する。関数型の引数 (`Std.Par.par` の子) の矢印の Kind は固定しないので、どの印の閉包も渡せる。結果
-/// だけに現れる型変数は固定しないが、結果がその型変数に依存する行 (`MutArray.empty` の `MutArray a`) は `Lin` である
-/// (docs/spec/declarations.md の「`extern`」)。
+/// だけに現れる型変数は固定しないが、結果がその型変数に依存する行 (`MutArray.empty` の `MutArray a`) は `Lin` である。
+/// `Std.Par.par` の結果の組の型変数も、子の最後の結果にだけ現れるので固定しないが、`par` の行は型検査に結ぶためだけに
+/// あり、`Poly` を通して `Unr` と比べる (docs/spec/declarations.md の「`extern`」)。
 fn kind_of(lin: Lin) -> Linearity {
     match lin {
         Lin::Unr | Lin::Poly => Linearity::Unr,

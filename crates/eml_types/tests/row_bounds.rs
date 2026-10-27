@@ -367,3 +367,11 @@ fn a_par_child_that_performs_a_once_operation_exceeds_the_bound() {
         ]
     );
 }
+
+/// コールバックの最後の結果は extern が受け取る値で、`par` は組に1回だけ入れるか、落とす。そのため、結果に
+/// `Lin` の値を返す子も受け付ける (docs/spec/declarations.md の「`extern`」)。
+#[test]
+fn a_par_child_may_return_a_lin_value() {
+    let text = "import Std.Par\nimport Std.MutArray\nimport Std.Array\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (m, n) = Par.par (fn () -> MutArray.make 3 4) (fn () -> 3)\n  let (x, m) = MutArray.read m 0\n  println (show (x + n + Array.length (MutArray.freeze m)))";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
