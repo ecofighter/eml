@@ -811,7 +811,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 終わりの欄は `exit` だけを持ち、実行系の型によらない。手順は次の4つで、VM もネイティブも同じである
   1. 開く: host は worker を始める前に `Control::begin_run()` を呼ぶ。`begin_run` は `end` を 0 にし、`PREEMPT` を下ろす。止めるビットは下ろさない。REPL は入力ごとに `clear` も呼ぶ
   2. 書く: `exit n` の巻き戻しがタスクの底に着くと、底は `Control::exit(n)` を呼ぶ。`end` を 0 から 1 に替えるのに勝った最初の書き手だけが `code` を書いて真を返し、後の書き手は何も変えず偽を返す
-  3. 出る: 底は、ほかのタスクを動かさずに worker の入口へ戻る。VM は `Err(Stop::Ended)` を返し、ネイティブは入口へ longjmp する。後始末はしない
+  3. 出る: `main` の底は普通に戻る。実行系は、`main` が値を返したときと同じく、書き出しと終わりの検査を続ける。ほかのタスクの底は、ほかのタスクを動かさずに worker の入口へ戻る。VM は `Err(Stop::Ended)` を返し、ネイティブは入口へ longjmp する。こちらは後始末をしない ([VM](vm.md) の「`exit`」と「`Async` のタスク」)
   4. 読む: worker が戻った後で、host は `Control::exit_code() -> Option<i64>` を読む。終了コードの出どころはこれだけである。worker が `Ended` で戻ったときは run を捨てたので、host は終わりの検査をせず、ヒープを入れ替えて報告する
 - 止める語、worker の止める語、`end` が伝えるのは「止めよ」と「終わった」の印だけで、ほかのメモリへの書き込みを公開する役はない。`code` は `end` に勝った者が書き、host が worker の戻りの後で読むので、順序の約束を要らない。そのため、どの読み書きも Relaxed で行い、`SeqCst` と `fence` は使わない
 - `poll`、`interrupt`、`preempt`、`take_preempt`、`worker_bits`、`exit`、`exit_code`、`begin_run`、`clear` と確保量の加減と `over_budget` は、`verus!` の外の安全なコードで、値について何も約束しない。確保器が確保量を加減する関数と、`make` が確保の前に上限と比べる関数は、信頼の一覧の T1 に入る (下の「`unsafe` の核」)
