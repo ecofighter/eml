@@ -348,12 +348,13 @@ spin n = spin (n + 1)
 
 main : Unit -> <IO, Panic> Unit
 main () =
-  eprintln \"started\"
+  let (x, y) = Par.par (fn () -> 1) (fn () -> 2)
+  eprintln (show (x + y))
   let (a, b) = Par.par (fn () -> spin 0) (fn () -> spin 0)
   println (show (a + b))
 ";
 
-/// 既定の方針 (`normal`) では、回り続ける `par` の子が2つ目のタスクの追加で監視のスレッドを始める。その run も
+/// 既定の方針 (`normal`) では、最初の `par` の右の子の追加で監視のスレッドが始まる。合図の行はその後に書くので、回り続ける `par` の run も
 /// 1回目の SIGINT で次の安全点に止まり、終了コード 130 で終わる (docs/spec/vm.md の「上限と割り込み」)。
 #[cfg(unix)]
 #[test]
