@@ -47,28 +47,31 @@ bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ a
 bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input, compare.sh --paths EML PY ARGS... < input)
 ```
 
-In Claude Code cloud sessions, `.claude/hooks/session-start.sh` fetches the flake's `github:` inputs over git so `nix develop` works, and the environment's setup script must be the one below. It caches the devShell and installs the yomiyasu and ecoskills plugins, which cloud sessions do not take from `.claude/settings.json`. The reference copy and the reasons are in docs/implementation/testing.md の「クラウドのセッション」; keep this copy and the one in `README.md` identical to it.
+In Claude Code cloud sessions, the proxy refuses GitHub archive downloads, so the environment's setup script must be the one below: it installs Nix, runs `nix/prefetch-inputs.sh` (fetches the flake's `github:` inputs over git) and builds the devShell into the environment cache, and installs the yomiyasu and ecoskills plugins, which cloud sessions do not take from `.claude/settings.json`. If `flake.lock` changed since the cache was built, run `nix/prefetch-inputs.sh` before `nix develop`. The reference copy and the reasons are in docs/implementation/testing.md の「クラウドのセッション」; keep this copy and the one in `README.md` identical to it.
 
 ```sh
 #!/bin/bash
 set -euo pipefail
 
-# setup script はログインシェルで動くとは限らないので、Nix を PATH に入れる
-if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
-  . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+# コンテナには systemd がないので、daemon を使わず root だけが使う Nix を入れる
+if [ ! -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+  curl --proto '=https' --tlsv1.2 -sSfL https://artifacts.nixos.org/nix-installer |
+    sh -s -- install linux --init none --enable-flakes --no-confirm
 fi
+. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+
+# main の flake の input を git で取り、devShell を組んで環境のキャッシュに入れる
+eml=$(mktemp -d)
+git clone --depth 1 https://github.com/ecofighter/eml "$eml"
+"$eml/nix/prefetch-inputs.sh" "$eml"
+nix develop "path:$eml" -c true
+rm -rf "$eml"
 
 # クラウドのセッションはリポジトリの enabledPlugins を読まないので、プラグインを user の scope に入れる
 claude plugin marketplace add nanaism/yomiyasu
 claude plugin marketplace add ecofighter/ecoskills
 claude plugin install yomiyasu@yomiyasu --scope user
 claude plugin install ecoskills@ecoskills --scope user
-
-# flake の input と devShell を環境のキャッシュに入れる
-if [ -x /home/user/eml/.claude/hooks/session-start.sh ]; then
-  CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR=/home/user/eml \
-    /home/user/eml/.claude/hooks/session-start.sh
-fi
 ```
 
 The dev profile (and so `cargo nextest run` and `cargo test`) is opt-level 1 with debug assertions on; `--release` is only for `bench/*.sh` and the `#[ignore]` timing tests. For a debugger, build once with `CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...`.
