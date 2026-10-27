@@ -66,7 +66,7 @@ import の循環は E1027 にする。型検査は item と SCC の単位で動�
 
 ## 標準ライブラリ
 
-標準ライブラリは、リポジトリの `std/` ツリーのモジュールで、処理系のバイナリに埋め込まれている。`std/` は `Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Map.em`、`Set.em`、`Par.em` からなる。各モジュールの関数は [標準ライブラリ](stdlib.md) にある。標準ライブラリのモジュールだけが `extern` を書ける ([宣言](declarations.md) の「`extern`」)。
+標準ライブラリは、リポジトリの `std/` ツリーのモジュールで、処理系のバイナリに埋め込まれている。`std/` は `Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Map.em`、`Set.em`、`Par.em`、`Async.em` からなる。各モジュールの関数は [標準ライブラリ](stdlib.md) にある。標準ライブラリのモジュールだけが `extern` を書ける ([宣言](declarations.md) の「`extern`」)。
 
 - 標準ライブラリのモジュールの正式な名前は、予約した根 `Std` の下に置く (`Std.Fs`)。`Prelude` だけは `Prelude` のままである。診断に出すパスは `<std>/Prelude.em`、`<std>/Fs.em` のように書き、手元の相対パスと区別する
 - Prelude はいつも読み込み、どのモジュールからも使える。ほかの標準ライブラリのモジュール `X` は、`X` を import したモジュールからだけ修飾子として使える (`import X`、`import Std.X`、`import Std.X as A`、`import X (…)`)。import しないモジュールでは、`X.f` も `Std.X.f` も E1031 である (下の「名前の解決」)。修飾子の指す先が import だけで決まるようにするためである。REPL も同じ規則である (下の「REPL のセッション」)

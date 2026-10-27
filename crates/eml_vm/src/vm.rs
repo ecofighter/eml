@@ -2161,6 +2161,18 @@ fn run_extern<R: Exec>(
                     "`Std.Par.par` is not an extern instruction",
                 ));
             }
+            Extern::AsyncStartRaw
+            | Extern::AsyncRunRaw
+            | Extern::AsyncPark
+            | Extern::AsyncReady
+            | Extern::AsyncFinishOk
+            | Extern::AsyncFinishIo
+            | Extern::AsyncFinishPanic
+            | Extern::AsyncTaskCell
+            | Extern::AsyncTakeResult
+            | Extern::AsyncRunResult => {
+                return Err(VmFault::Internal("Async externs run through Op::Async"));
+            }
         }
     }
     Ok(())

@@ -29,6 +29,8 @@ eml run --sched seeded:7 wc.em -l input.txt
 
 extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
+extern の行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md) の「`extern`」)。預かる行は `Std.Async` の `start_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result` の8行で、`task_cell` だけは借りて預かる。利用者の extern (将来の `extern "C"`) は表の印を書けないので、型変数は `Unr` に固定されたままである。
+
 文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
 ## `Prelude`
@@ -897,6 +899,63 @@ main () =
 - `par` は Prelude から出さない。`import Std.Par` と書いて `Par.par` で呼ぶか、`import Par (par, both)` で修飾せずに使う
 - `both f g` は、呼んだ側の文脈で `f ()`、`g ()` の順に呼び、結果の組を返す。row に上限がないので、`IO` を起こす計算も渡せる。`par` と同じ組を逐次に作る版である
 - 引数をそろえた `par` の呼び出しは、extern の命令でなく `par` の命令になる。部分適用 (`Par.par f`) と値として使う `Par.par` は、同じ命令を本体に持つ包む関数 `$externN` になる ([Core IR](core-ir.md) の「`par` の呼び出し」)
+
+## `Std.Async`
+
+`Std.Async` は1つの worker の上でタスクを動かすモジュールである。`Async` のエフェクト、ランタイムが名前で呼ぶ入口、extern の行は、eml とランタイムの間の ABI である。形を変えるときはランタイムも合わせて変える。
+
+```haskell
+pub data Wake =
+  | Woke
+  | Cancelled
+
+pub effect Async where
+  await_cell : Cell -> Wake
+  reschedule : Unit -> Wake
+
+pub extern data Cell
+pub extern data Task a
+
+pub data Failure =
+  | IOFailed IOError
+  | Panicked String
+  deriving (Show)
+```
+
+- `Async` は普通の eml のエフェクトで、extern のエフェクトではない。生の操作は2つで、どちらも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る
+- `Wake` は、ランタイムが待たせたタスクを再開するときに渡す値である。ランタイムは配置の表を見ずに、宣言の順のタグ (`Woke` = 0、`Cancelled` = 1。`eml_lir::WAKE_WOKE`、`WAKE_CANCELLED`) で作る。タグと宣言の順が合うことはテストで確かめる
+- `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
+- ランタイムが名前で呼ぶ入口は、std の2つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どちらも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。2つの入口が単相の std の関数であることもテストで確かめる
+- タスクの底 (`bottom`) は、`try_all` で本体の失敗を捕まえ、成功した結果を `finish_ok` に、IO の失敗を種類と文言のまま `finish_io` に、`Panic` を文言のまま `finish_panic` に渡す
+- extern の行は次の10行である。どれも `pub` でない。VM の extern の命令はこれらの行を実行しない ([実装の現在地](../implementation/status.md) の「まだないもの」)
+
+| 行 | 型 | 預かる引数 |
+|---|---|---|
+| `start_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
+| `run_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
+| `park` | `Cell -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
+| `ready` | `(once Wake -> <IO> Unit) -> <IO> Unit` | 継続 |
+| `finish_ok` | `a -> <IO> Unit` | 結果の値 |
+| `finish_io` | `IOErrorKind -> String -> <IO> Unit` | なし |
+| `finish_panic` | `String -> <IO> Unit` | なし |
+| `task_cell` | `Task a -> (Cell, Task a)` | ハンドル (借りて預かる) |
+| `take_result` | `Task a -> <IO, Panic> a` | ハンドル |
+| `run_result` | `Task a -> <IO, Panic> a` | ハンドル |
+
+- タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
+- `take_result` と `run_result` が返す値の型が、`finish_ok` に預けた値の型と合うことは、処理系は確かめない。生の行を `pub` にせず、`start`、`run`、`await` のシグネチャだけが本体の結果の型 `a` とハンドルの `Task a` を結ぶことで、標準ライブラリが保つ
+- 預かる引数の矢印 (`start_raw` と `run_raw` の閉包、`park` と `ready` の継続) には、閉じた row を書く。ランタイムはそれを呼ばず、入口の `start_task` と `resume_task` が呼ぶので、row は入口の型が決める
+- `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
+
+### `Failure` と `try_all`
+
+```haskell
+pub try_all : (Unit -> <IO, Panic | e> a) -> <IO | e> Result Failure a
+```
+
+- `try_all action` は、`action ()` の IO の失敗と `Panic` を両方捕まえて `Failure` の値にする。IO の失敗は `IOFailed` に `IOError` のまま入れ、`Panic` は `Panicked` に文言を入れる。成功すれば `Ok` で結果を返す
+- `try_io` の中で `try_panic` を呼ぶ形で書く。`action` の `Panic` は内側の `try_panic` が、IO の失敗は外側の `try_io` が捕まえる (上の「`try_io`」と「`try_panic`」)
+- タスクの底は `try_all` でタスクの失敗を捕まえる。接続ごとの分離のように、タスクの中で失敗を受け止めるときにも使う
 
 ## 実行時エラー
 

@@ -768,7 +768,11 @@ fn declaration_schemes(
                 // 引数に現れる型変数は `Unr` である。本体がないので、extern が引数をどう使うかを Kind に推論できない。
                 // 結果だけに現れる型変数 (`exit`、`MutArray.empty`) と、関数型の引数の最後の結果にだけ現れる型変数は縛らない
                 // (docs/spec/declarations.md の「`extern`」)
-                for var in param_type_vars(signature, arity) {
+                let held = match function.kind {
+                    FunctionKind::Extern(Some(e)) => e.row().held,
+                    _ => &[],
+                };
+                for var in param_type_vars(signature, arity, held) {
                     table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
                 }
             });
@@ -843,14 +847,19 @@ fn declaration_schemes(
 }
 
 /// シグネチャの一番外側の `arity` 個の矢印の引数の型に現れる型変数。row の型引数も含む。関数型の引数については、
-/// 最後の結果にだけ現れる型変数を除く。
-fn param_type_vars(signature: &Signature, arity: usize) -> Vec<TypeVarId> {
+/// 最後の結果にだけ現れる型変数を除く。`held` は表の預かる印で、印の立つ引数の型変数は集めない。
+fn param_type_vars(signature: &Signature, arity: usize, held: &[bool]) -> Vec<TypeVarId> {
     let mut vars = Vec::new();
     let mut spine = signature.ty;
-    for _ in 0..arity {
+    for index in 0..arity {
         let TypeRefKind::Fn { param, ret, .. } = &signature.types[spine].kind else {
             break;
         };
+        // 預かる引数の値を処理系は写さず、高々1回返すか落とすだけである (docs/spec/declarations.md の「`extern`」)
+        if held.get(index).copied().unwrap_or(false) {
+            spine = *ret;
+            continue;
+        }
         let mut collect = |var| {
             if !vars.contains(&var) {
                 vars.push(var);
@@ -1196,5 +1205,24 @@ mod tests {
         );
         let files: Vec<_> = reported.iter().map(|d| d.primary.file).collect();
         assert_eq!(files, vec![prelude, entry]);
+    }
+
+    #[test]
+    fn a_held_parameter_leaves_its_type_variables_free() {
+        // `Std.MutArray.read : MutArray a -> Int -> <Panic> (a, MutArray a)` の `a` は1つ目の引数にだけ現れる
+        let program = crate::test_program("import MutArray\n");
+        let signature = program
+            .functions()
+            .find(|(_, function)| {
+                function.kind
+                    == eml_hir::FunctionKind::Extern(Some(eml_extern::Extern::MutArrayRead))
+            })
+            .and_then(|(_, function)| function.signature.as_ref())
+            .expect("the std declares `read`");
+        assert!(super::param_type_vars(signature, 2, &[true, false]).is_empty());
+        assert_eq!(
+            super::param_type_vars(signature, 2, &[false, false]).len(),
+            1
+        );
     }
 }

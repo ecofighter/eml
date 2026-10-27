@@ -105,7 +105,7 @@ worker のループは、ほかに仕事がなくなるまで次の順に見る�
 
 - 実行待ちは再開を待つタスクの継続の列である。項目は `{ タスクのセル, 継続 k, 渡す値 }` で、渡す値は `Wake` のような即値か数えた参照の語である
 - VM は実行待ちの継続から新しい VM の `Task` (スタックは使い回しの集まりから取る) を作り、入口 `resume_task` で `k` に値を渡す。受け箱で届いた新しいタスクは入口 `start_task` で始める。ネイティブのコードは同じ2つの関数をネイティブの入口から呼ぶ
-- `start_task : (Unit -> <IO, Panic, Async> a) -> <IO> Unit` と `resume_task : (once a -> <IO> Unit) -> a -> <IO> Unit` は名前で ABI が決まる std の関数である。`start_task` はタスクごとの handler をかぶせ、その節は `k` をランタイムに預けて (`rt_wait` で待ちに入れるか、実行待ちに戻す) そのまま戻る。タスクの本体が値を返すと `rt_done` が結果を記録する ([非同期の設計](async.md) の「`Async` のエフェクト」)
+- `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` は、名前で ABI が決まる単相の std の関数である。`start_task` はタスクごとの handler をかぶせ、その節は `k` をランタイムに預けて (待ちに入れるか、実行待ちに戻す) そのまま戻る。`start_task` が受け取る閉包は、std がタスクの本体にかぶせた底である。底は `Panic` と IO の失敗を捕まえ、本体の結果を値のまま、引数を預かる extern (`finish_ok`) に渡す。ランタイムはその値を写さず中身を見ず、待つ側に1回返す ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」、[非同期の設計](async.md) の「`Async` のエフェクト」)
 - タスクはループに戻るとき、入口の関数から普通に戻る。VM のタスクが切り替わるのは yield の状態がなしの安全点だけで、そのとき `evv` を `Task` に退避する
 
 ### `par` の子
