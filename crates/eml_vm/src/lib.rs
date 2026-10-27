@@ -401,7 +401,7 @@ impl<M: Mode> Machine<M> {
         Ok(Ran::Done(finished, text))
     }
 
-    /// `Machine` を作ってからの積算の `RunStats`。`peak_stack` と `Async` の欄だけがこの実行の値である。
+    /// `Machine` を作ってからの積算の `RunStats`。`peak_stack` と、登録表が数える `tasks`、`parks`、`dropped_failures` だけがこの実行の値である (docs/spec/vm.md の「追記」)。
     fn run_stats(&self, counts: &RunCounts, scheduled: &Scheduled) -> RunStats {
         let c = self.ctx.stats();
         let h = self.heap_work();
