@@ -116,7 +116,7 @@
 
 並行の手順 (共有の側の2つの境目の並行の議論と、公開の順序) は証明しない (信頼の一覧の T0)。並行の証明の計画は [マルチコア対応の設計](../future/multicore.md) の「テスト」にある。vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは、Verus では確かめられない。順序は、文書の議論 ([オブジェクトモデル](../spec/object-model.md) の「上限」と「共有の側」) と Miri に任せる。
 
-`cargo verus verify -p eml_rt` は、0 errors のほかに警告も trigger の注記も出さない。読み手の信頼の関数 (`host.rs` の `fill`、`consume`、`read_text`) と、それを呼ぶ `heap/ctx/io.rs` の関数は、`verus!` の外の trait `Source` を型の境界に使う。そのため `host.rs` が `Source` を `#[verifier::external_trait_specification]` の `ExSource` で Verus に知らせる (信頼の一覧の T11)。量化子の trigger は、Verus が自信を持って選べないものには `#[trigger]` か `#![trigger ...]` で書く。自動で選んだ trigger は、周りの文脈が変わると Z3 の探索を変えうるので、選び方を書いて固める。
+`cargo verus verify -p eml_rt` は 0 errors のほかに警告も trigger の注記も出さない。読み手の信頼の関数 (`host.rs` の `fill`、`consume`、`read_text`) と、それを呼ぶ `heap/ctx/io.rs` の関数は、`verus!` の外の trait `Source` を型の境界に使う。そのため `host.rs` が `Source` を `#[verifier::external_trait_specification]` の `ExSource` で Verus に知らせる (信頼の一覧の T11)。量化子の trigger は、Verus が自信を持って選べないものには `#[trigger]` か `#![trigger ...]` で書く。Verus が自動で選んだ trigger は、周りの文脈が変わると Z3 の探索を変えうるので、選び方を書いて固める。
 
 Verus (0.2026.10.04.426d8b0) は、ふだんの devShell が `verus` と `cargo-verus` を入れる。flake は、release の zip を系ごとの input (`verus-aarch64-darwin`、`verus-x86_64-linux`) にし、`nix/verus.nix` が要る部品 (`libvstd.rlib` と `vstd.vir` を含む) だけを展開する。Verus の起動の部分は rustup で toolchain を探すが、devShell の `verus` は rustup を使わない (`VERUS_USE_RUSTUP=0`)。代わりに、Verus が求める版の fenix の `rustc` の `lib` を、rust_verify が読むライブラリの道 (macOS は `DYLD_FALLBACK_LIBRARY_PATH`、Linux は autoPatchelf と `LD_LIBRARY_PATH`) に足す。rust_verify は公式の版の librustc_driver に繋がるので、source から組む nixpkgs の rustc では動かないためである。Verus の版を上げるときは、2つの input の URL、`rust-toolchain.toml` の `channel` と `flake.nix` の `stable` の `sha256`、`eml_rt` の vstd の版 (cargo-verus の toolchain の表が指す版) を揃えて変え、`cargo verus verify --check-toolchain` で確かめる。`sha256` が古いままだと、評価が hash の食い違いで止まる。
 
@@ -503,7 +503,7 @@ CI が見るのは合否だけである。テストの時間の条件 (「性能
 
 Claude Code のクラウドのセッションでは、外への通信が proxy を通る。proxy は GitHub の archive の取得を断るが、git の clone は通す。flake の `github:` の input は archive で取るので、そのままでは `nix develop` が input の取得で止まる。
 
-`.claude/hooks/session-start.sh` が、SessionStart のフックでこれを補う。フックが動くのはクラウドのセッション (`CLAUDE_CODE_REMOTE=true`) だけである。`flake.lock` の `github:` の input を、同じ rev のまま `git+https` で `nix flake prefetch` して store に置く。input の store の道は中身の narHash で決まる。そのため、置いた後の `nix develop` は archive を取りに行かず、この文書のコマンドがそのまま動く。取った中身の hash が `flake.lock` の `narHash` と違えば、フックは誤りで止まる。最後に devShell を1回組み、コンテナのキャッシュに残す。
+`.claude/hooks/session-start.sh` が SessionStart のフックでこれを補う。フックが動くのはクラウドのセッション (`CLAUDE_CODE_REMOTE=true`) だけである。`flake.lock` の `github:` の input を、同じ rev のまま `git+https` で `nix flake prefetch` して store に置く。input の store の道は中身の narHash で決まる。そのため、置いた後の `nix develop` は archive を取りに行かず、この文書のコマンドがそのまま動く。取った中身の hash が `flake.lock` の `narHash` と違えば、フックは誤りで止まる。最後に devShell を1回組み、コンテナのキャッシュに残す。
 
 ## よく使うコマンド
 

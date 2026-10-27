@@ -1,7 +1,7 @@
 #!/bin/bash
 # クラウドのセッションで `nix develop` を使えるようにする SessionStart フック。
 # クラウドの proxy は GitHub の archive の取得を断るが、git の clone は通す。flake.lock の `github:` の input は
-# archive で取るので、同じ rev を git で取って store に置く。input は narHash で store の道が決まるので、
+# archive で取るので、同じ rev を git で取って store に置く。input の store の道は narHash で決まるので、
 # 置いた後の `nix develop` は archive を取りに行かない (docs/implementation/testing.md の「クラウドのセッション」)。
 set -euo pipefail
 

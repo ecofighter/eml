@@ -229,7 +229,7 @@ pub(crate) struct StdinHandle {
     flags: Arc<OpenFlags>,
 }
 
-/// `verus!` の外の trait `Source` を、Verus に知らせる。これで `fill` や `Ctx` の読みのような総称の関数の境界に使える。
+/// `verus!` の外の trait `Source` を Verus に知らせる。これで `fill` や `Ctx` の読みのような総称の関数が、`Source` を境界に使える。
 /// メソッドは載せないので、Verus は実装について何も仮定しない。Verus のためだけの宣言なので、ふつうのビルドには入れない。
 #[cfg(verus_only)]
 #[verifier::external_trait_specification]
