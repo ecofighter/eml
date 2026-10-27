@@ -343,11 +343,11 @@ fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<bool, 
 | T-6 | `eml_rt`: `Fault::Raised` と `Stats::shared` | D-14、D-15 | - | 可 | 済み (`8c1353f`、`3c68efe`) |
 | T-7 | `fail_io`、新しい種類、`Proc.exited` | D-7、D-15 | T-6 | 可 | 済み (`28abd4f`) |
 | T-8 | `Either` | D-7 | - | 可 | 済み (`45fbec5`、`9747404`) |
-| T-9a | 印の列を `Mark` にする | D-1 | - | 不可 | |
-| T-9b | extern の預かる引数、`Async` の ABI の表、`std/Async.em` | D-1、D-7 | T-9a | 不可 | |
-| T-9c | `abstract` (言語) | D-19 | T-9b | T-10、T-11 と並行可 | |
-| T-9d | std の抽象エフェクトと抽象型 | D-19、D-1 | T-9c | T-10、T-11 と並行可 | |
-| T-10 | ランタイムの入口を根にする | D-1 | T-9b | T-9c、T-9d と並行可 | |
+| T-9a | 印の列を `Mark` にする | D-1 | - | 不可 | 済み (`43fc958`) |
+| T-9b | extern の預かる引数、`Async` の ABI の表、`std/Async.em` | D-1、D-7 | T-9a | 不可 | 済み (`b08e47b`、`6dda225`) |
+| T-9c | `abstract` (言語) | D-19 | T-9b | T-10、T-11 と並行可 | 済み (`b7d5fe5`、`2da0643`) |
+| T-9d | std の抽象エフェクトと抽象型 | D-19、D-1 | T-9c | T-10、T-11 と並行可 | 済み (`3f3834e`、`88c6bc7`) |
+| T-10 | ランタイムの入口を根にする | D-1 | T-9b | T-9c、T-9d と並行可 | 済み (`67002b9`) |
 | T-11 | VM のタスク (1): 構造、入口、始めと終わり、`Async.run` | D-2、D-3、D-10〜D-13 | T-4、T-6、T-10 | T-9c、T-9d と並行可 | |
 | T-12 | VM のタスク (2): 待ち、`await`、失敗、ハンドル | D-10〜D-13 | T-11、T-9d | 不可 | |
 | T-13 | `RunStats` の4つの欄 | D-14 | T-12 | 不可 | |
