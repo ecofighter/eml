@@ -55,11 +55,12 @@ eml_cli        Session::run が実行系を組み立てる (worker の数、実�
 eml_vm         Exec を実装する (VM)                eml_native   Exec を実装する (ネイティブ)
 eml_sched      スレッド、受け箱、タスクのセル、監視のスレッド、プール、deque、待ちと起こし、Exec の trait
 eml_io         IoDriver を実装する
-eml_rt         語の単位の操作 (share、移し戻し、fork / join の節点、範囲のプリミティブ)、Host、Sched、IoDriver の trait
+eml_rt         語の単位の操作 (share、移し戻し、範囲のプリミティブ)、Host、Sched、IoDriver の trait
 型システム:     row の Kind による制限 + Lin による移動
 ```
 
 - 依存の順は `eml_rt` ← `eml_sched` ← `eml_vm` である。`eml_sched` は worker のループが呼ぶ `Exec` の trait を持ち、`eml_vm` がそれを実装する。`eml_io` は `eml_rt` に依存して `IoDriver` を実装する ([非同期の設計](async.md) の「I/O の driver」)。`eml_native` は `eml_rt`、`eml_lir`、`eml_sched`、Cranelift に依存する。`eml_cli` はすべてに依存する
+- `eml_sched` はまだない。worker が1つの今は、ほかの crate と共有するものがないので、スケジューラは `eml_vm` の `sched.rs` に置いている ([VM](../spec/vm.md) の「タスクとスケジュール」)
 - `Session::run` が実行系を組み立てるので、`Session` は今と同じく唯一のパイプラインの駆動役である。`Host`、`Sched`、`IoDriver` の trait は `eml_rt` に置き、`Ctx` を通して届く
 - `eml_rt` は vstd だけに依存したまま Verus で証明する。スケジューラ (`eml_sched`) は Verus の外に置き、Miri と TSan で確かめる (下の「テスト」)
 - スケジューラをエフェクトのライブラリとして書く形は採らない。救済、監視、スレッドをまたぐ起こし、根の登録は、語の外の Rust の構造を要るためである。ライブラリとして書いた協調的なスケジューラ `tests/ui/run/kinds/scheduler.em` は、継続を扱う言語のテストとして残す
@@ -109,7 +110,7 @@ worker のループは、ほかに仕事がなくなるまで次の順に見る�
 
 ### `par` の子
 
-- `par` の fork / join の節点は `eml_rt` にある。fork はまだ始まっていない右の子を自分の deque に積み、左の子を自分で動かす。空いた worker は deque の上から盗む
+- `par` の fork と join は実行系 (VM ではタスクと join の節点を持つ `eml_vm`) が行い、印付けと移し戻しは `eml_rt` の `share` と `transfer_back` を呼ぶ ([VM](../spec/vm.md) の「`par` の fork と join」)。fork はまだ始まっていない右の子を自分の deque に積み、左の子を自分で動かす。空いた worker は deque の上から盗む
 - VM では、join で待つ親の `Task` は join の節点で待ち、worker のループはほかの仕事 (先に `par` の子、次に `Async` のタスク) を動かす。待つ `Task` はデータなので、待つ費用はない。子が終わると、親は横取りした VM のタスクのキューに戻る
 - ネイティブのコードはスタックを切り替えられないので、join で待つ worker は待たずに手伝う。手伝えるのは、待つ join より深い fork の子だけで、ほかに手伝えるものがなければ join の節点で待つ ([ネイティブ化の設計](native.md) の「並列の実行」)。これで待ちが輪になることはない。まだ始まっていない子のうち最も浅いものを深さ d の c とすると、c を fork した親は動いているか、深さ d - 1 の自分の join で待っていて c を取れる。盗まれた子を待つ worker は動いている worker を待っている。`par` の子は有限である
 - 専用の worker は盗まず、自分の join だけを手伝う
@@ -500,7 +501,7 @@ VM を並列にする費用は小さいと見積もっている。evidence passi
 | 1 | VM の状態は `Ctx` と `Task` (呼び出しのスタックとレジスタの枠) に置き、スレッドに局所的な大域変数を持たない |
 | 2 | `CodeBase` は追記だけにし、実行中は読むだけにする (`Sync`)。不死の定数は凍結した塊 `Frozen` に置くので、`CodeBase` の `Sync` は `Frozen` の `Sync` に頼る ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」) |
 | 3 | 共有の経路は、`par` の fork と join で必ず通す (上の「`par` の印付け」) |
-| 4 | `par` は `eml_rt` の fork / join の節点として実装し、逐次の版も1つの実装として持つ |
+| 4 | `par` の fork と join は VM が持ち、印付けと移し戻しは `eml_rt` の `share` と `transfer_back` を通す。逐次の版も1つの実装として持つ |
 | 5 | VM の呼び出しのスタックは、Rust の再帰でなく、タスクが持つデータにする。extern が閉包を呼び戻す入れ子の中では、タスクを切り替えない |
 | 6 | join と `Async.run` で待つ VM の `Task` は、worker のループを入れ子にせず、worker を手放して待つ |
 | 7 | タスクを切り替えるのは、yield の状態がなしの安全点だけにする。切り替えで退避する実行の文脈は `evv` だけである |
@@ -519,8 +520,8 @@ VM は実行の状態をワーカーごとの `Ctx` と、タスクごとの `Ta
 
 - `par` の右の子をタスクにし、左の子は親のタスクがそのまま実行する。右の子は新しい論理的な worker ID で動く
 - スケジュールの方針は4つある
-  - 普通の方針: `eml run` の既定である。監視のスレッドの `PREEMPT` で、刻みごとに切り替える
-  - 逐次 (`--sched sequential`): タスクが待つときだけ切り替え、横取りしない。`par` では左の子を終えてから右の子を動かす。`RunStats` を固定するテストとベンチの既定である
+  - 普通の方針: 監視のスレッドの `PREEMPT` で、刻みごとに切り替える。監視のスレッドがまだないので、この方針もまだない
+  - 逐次 (`--sched sequential`): タスクが待つときだけ切り替え、横取りしない。`par` では左の子を終えてから右の子を動かす。`eml run` と、`RunStats` を固定するテストとベンチの既定である
   - seed で決まる方針 (`--sched seeded:<n>`): seed で決めた安全点の数で切り替え、実行待ちから次のタスクを seed で選ぶ。テストに使い、失敗したときは seed を表示して再現できるようにする
   - 救済を強いる方針 (`--sched rescue-always`): N が 2 以上で使う。監視の判定によらず、起こしたタスクをいつも別の worker が救済する。同じタスクを待つたびに救済し直すことがあり、そのたびに印を付ける。救済の道の検査に使うテストのための方針である
 - タスクは、yield の状態がなしの安全点でだけ切り替える。そのため、切り替えで退避する実行の文脈は `evv` だけである。`evv` と論理的な worker ID は `Ctx::switch_task` で一緒に替える ([オブジェクトモデル](../spec/object-model.md) の「タスクの切り替え」)。`par` の子は、fork のときに作る fork evidence の列 (親の `evv` の never-only のエフェクトの evidence を写した鏡) を `evv` にして始め、親の evidence は子をまたがない

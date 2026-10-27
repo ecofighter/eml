@@ -114,7 +114,7 @@ internal yields clause Choose.choose fn main$handle1$choose$entry(e.0: obj, p.1:
   return 0
 }
 yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
-  let w.3: tobj = prim ev_evv(ev.0)
+  let w.3: tobj = prim ev_take_evv(ev.0)
   let u.4: unit = prim evv_set(w.3)
   let s.5: int = prim yield_status(ev.0)
   switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
