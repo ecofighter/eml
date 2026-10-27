@@ -23,3 +23,4 @@ main () =
   println "before"
   Async.run body
   FileIn.close g
+  println "unreachable"
