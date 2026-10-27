@@ -355,24 +355,25 @@ with_log path action =
 
 ## 並行処理
 
-並行処理のための構文は追加しない。`par` / `Async.start` / `Async.run` ([マルチコア対応の設計](../future/multicore.md)、[非同期の設計](../future/async.md)) は、ラムダと `use` で書ける。非同期の処理は、row に `Async` を持つ普通の関数として直接の形で書け、`async` / `await` も関数の色分けも要らない。
+並行処理のための構文は追加しない。`par`、`Async.start`、`Async.run` は、ラムダと `use` で書ける ([標準ライブラリ](stdlib.md) の「`Std.Par`」と「`Std.Async`」)。非同期の処理は、row に `Async` を持つ普通の関数として直接の形で書け、`async` / `await` も関数の色分けも要らない。
 
 ```haskell
-greeting_size : String -> <IO, Panic, Async> Int
-greeting_size host =
-  let conn = Net.connect host 7
-  let (chunk, conn) = Net.read_chunk (Bytes.empty ()) conn
-  Net.close conn
-  Bytes.length chunk
+import Async (Async)
+import Fs
+import List
+import String
 
-greeting_sizes : List String -> <IO, Panic> List Int
-greeting_sizes hosts =
+line_count : String -> <IO, Panic, Async> Int
+line_count path = List.length (String.lines (Fs.read_text path))
+
+line_counts : List String -> <IO, Panic> List Int
+line_counts paths =
   use Async.run
-  let tasks = List.map (fn host -> Async.start (fn () -> greeting_size host)) hosts
+  let tasks = List.map (fn path -> Async.start (fn () -> line_count path)) paths
   List.map Async.await tasks
 ```
 
-並行処理は実装していない ([マルチコア対応の設計](../future/multicore.md)、[非同期の設計](../future/async.md))。例の `Net` と `Async` の API は、[非同期の設計](../future/async.md) の「スコープとタスク」と「ネットワークとシグナル」にある。
+`use Async.run` は、ブロックの残りを本体のラムダとして `Async.run` に渡す (上の「`use`」)。`line_counts` はファイルごとにタスクを1つ始め、始めた順に結果を待つ。タスクは1つの worker の上で切り替えて動く ([VM](vm.md) の「`Async` のタスク」)。
 
 ## 型の明示
 

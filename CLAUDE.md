@@ -84,7 +84,7 @@ A batch pipeline whose dependencies flow strictly top to bottom (docs/implementa
 
 ```
 eml_cli          check / run / repl; the only pipeline driver (`Session`); stage features types < core < run
-eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `Machine` appends programs by name (the REPL)
+eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `par` and `Async` tasks on one worker; `Machine` appends programs by name (the REPL)
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
 eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> Perceus -> reuse, verifier
@@ -122,6 +122,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | Translate, instance names, optimize | docs/spec/core-ir.md の「変換の規則」, docs/spec/core-ir.md の「最適化」 |
 | Evidence passing | docs/spec/core-ir.md の「evidence passing」 |
 | Reprs, marks, the LIR passes, verifiers | docs/spec/lir.md の「値の表現」, docs/spec/lir.md の「Kind の印」, docs/spec/lir.md の「パスの順番」, docs/spec/lir.md の「verifier」 |
+| `Std.Async` tasks | docs/spec/stdlib.md の「`Std.Async`」, docs/spec/vm.md の「`Async` のタスク」, docs/spec/declarations.md の「`extern`」 (held arguments) |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
 | The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |
@@ -136,7 +137,7 @@ The rules are in docs/implementation/testing.md; the facts below are the ones ev
 - Every test in the ordinary run (`cargo nextest run`, no flags) finishes within 1 s when run alone (`cargo nextest run -j 1`), and its outcome does not depend on machine speed; nextest marks a test `SLOW` after 2 s. The five tests that run a directory of files in parallel get 1 s per file and 5 s in all; anything else gets `#[ignore = "<reason>"]` (docs/implementation/testing.md の「性能のテスト」).
 - Pick where a new test goes from docs/implementation/testing.md の「テストの置き場所」, and check each fact in one place only.
 - Each crate's integration tests build into one binary, `integration` (`autotests = false`; `tests/main.rs` declares every file as a module). A file not declared there does not run.
-- UI tests live in `tests/ui/{run,run-fail,check-fail}/<category>/`, as `<name>.em` or `<name>/main.em` with the modules it imports; the top-level directory decides the expected outcome, and `run` / `run-fail` tests run in checked and then fast mode (docs/implementation/testing.md の「UI テスト」), and the `par/` ones also in checked mode under two seeds (docs/implementation/testing.md の「seed で流す」); a UI test or transcript that cannot run on Windows carries the first-line mark (docs/implementation/testing.md の「OS ごとのテスト」). REPL transcripts live in `crates/eml_cli/tests/repl/` (docs/implementation/testing.md の「REPL のトランスクリプト」).
+- UI tests live in `tests/ui/{run,run-fail,check-fail}/<category>/`, as `<name>.em` or `<name>/main.em` with the modules it imports; the top-level directory decides the expected outcome, and `run` / `run-fail` tests run in checked and then fast mode (docs/implementation/testing.md の「UI テスト」), and the `par/` and `async/` ones also in checked mode under two seeds (docs/implementation/testing.md の「seed で流す」); a UI test or transcript that cannot run on Windows carries the first-line mark (docs/implementation/testing.md の「OS ごとのテスト」). REPL transcripts live in `crates/eml_cli/tests/repl/` (docs/implementation/testing.md の「REPL のトランスクリプト」).
 - `eml_test_support` (dev-only) wraps `eml_cli::Session` for integration tests. Use it only from `tests/`, never from `#[cfg(test)]` in `src/`: the crate under test would be linked twice. Stages are features (`hir` < `types` < `core` < `run`); each crate enables only up to its own stage, so its tests still build while downstream crates are broken mid-refactor.
 - Core IR and LIR tests are written as IR text read by `eml_core_ir::parse` / `eml_lir::parse`; hand-written LIR tests live in `crates/eml_lir/tests` (docs/implementation/testing.md の「LIR のテキストの形」).
 - The `bench/` programs have their `RunStats` pinned by inline snapshots in `crates/eml_vm/tests/bench.rs`, so a change in work counts is an expected-value change. When a stage that touched `eml_vm`, `eml_rt`, `eml_lir`, `eml_core_ir`, `std/` or `bench/` closes, replace the three tables in docs/implementation/benchmarks.md の「今の数値」 with fresh `bench/run.sh`, `bench/rt.sh` and `bench/scripts.sh` output measured on a clean tree; the stage-by-stage history is the file's git log.
