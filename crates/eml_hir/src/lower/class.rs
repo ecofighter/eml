@@ -1,18 +1,17 @@
 //! クラス、メソッド、文脈の変換 (docs/spec/declarations.md の「クラスと instance」)。
 //! クラスは型の名前空間に、メソッドは値の名前空間に置く。
 
-use std::collections::HashSet;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
+use rustc_hash::FxHashSet;
 
 use super::types::{
     TypeLowering, Vars, has_error, mentions, private_in_public, reject_once_declaration,
 };
 use super::{BodyOwner, ItemLowering, NameKind, PendingBody, path_name, unresolved};
 use crate::codes;
-use crate::def_map::{DefMap, Resolved};
+use crate::def_map::{DefMap, Resolved, item_id};
 use crate::hir::{
     ClassDef, ClassId, Constraint, Function, FunctionKind, Generics, ItemId, Method, Signature,
     TypeVarDecl, TypeVarId,
@@ -198,7 +197,7 @@ impl ItemLowering<'_> {
         pending: &mut Vec<PendingBody>,
     ) {
         for (k, item) in classes.iter().enumerate() {
-            let id = self.def_map.class_id(self.module, k);
+            let id = item_id(self.module, k);
             let node = item.ptr.to_node(self.root);
             let (var, _) = &item.var;
             let mut class_generics = Generics::default();
@@ -224,7 +223,7 @@ impl ItemLowering<'_> {
                 methods: Vec::new(),
             });
             debug_assert_eq!(ItemId::new(self.module, local), id);
-            for (j, method) in item.methods.iter().enumerate() {
+            for method in &item.methods {
                 let signature_item = method
                     .signature
                     .as_ref()
@@ -306,7 +305,6 @@ impl ItemLowering<'_> {
                         default: None,
                     }),
                 );
-                debug_assert_eq!(method_id, self.def_map.method_id(self.module, k, j));
                 if let Some((signature, equations)) = default {
                     let function = ItemId::new(
                         self.module,
@@ -378,8 +376,8 @@ pub(super) fn check_superclass_cycles(
         })
         .collect();
     let names = def_map.display_names();
-    let mut visited: HashSet<ClassId> = HashSet::new();
-    let mut open: HashSet<ClassId> = HashSet::new();
+    let mut visited: FxHashSet<ClassId> = FxHashSet::default();
+    let mut open: FxHashSet<ClassId> = FxHashSet::default();
     let mut cut = Vec::new();
     for &start in &classes {
         if !visited.insert(start) {

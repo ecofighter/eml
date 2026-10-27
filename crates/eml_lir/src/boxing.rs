@@ -11,8 +11,6 @@
 //! 構造体は1つの変数のまま扱い、葉に開くのは次の開くパス (flatten) である。
 //! パスはブロックと文のループだけで、IR の大きさに比例して再帰しない。
 
-use std::collections::HashMap;
-
 use crate::check::shape;
 use crate::contract::pure;
 use crate::syntax::repr_text;
@@ -20,8 +18,9 @@ use crate::variants;
 use crate::verify::block_shapes;
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, EffectInfo, Layout, LirFn, Mark, OpRet, OperationInfo,
-    Program, Repr, Rhs, Stmt, Structs, Term, VarId, VarInfo, operation,
+    Program, Repr, Rhs, Stmt, Structs, Term, VarId, VarInfo, operation, push_var,
 };
+use rustc_hash::FxHashMap;
 
 pub fn boxing(program: &mut Program) {
     // 手順 1: 値として生まれる関数と入口の関数を、その場でそろえる
@@ -47,8 +46,8 @@ pub fn boxing(program: &mut Program) {
             layouts: &program.layouts,
             structs: &program.structs,
             effects: &program.effects,
-            unboxed_from: HashMap::new(),
-            boxed_from: HashMap::new(),
+            unboxed_from: FxHashMap::default(),
+            boxed_from: FxHashMap::default(),
             never,
         }
         .run();
@@ -262,9 +261,9 @@ struct Converter<'a> {
     structs: &'a Structs,
     effects: &'a [EffectInfo],
     /// `let v = unbox w` の v から w。v を `tobj` の位置へ渡すときは、`box` を作らずに w を渡す。
-    unboxed_from: HashMap<VarId, VarId>,
+    unboxed_from: FxHashMap<VarId, VarId>,
     /// `let v = box w` の v から w。v を w と同じ Repr のスカラーの位置へ渡すときは、`unbox` を作らずに w を渡す。
-    boxed_from: HashMap<VarId, VarId>,
+    boxed_from: FxHashMap<VarId, VarId>,
     /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛か、戻らない extern の束縛かどうか。束縛の使いには
     /// 制御が届かないので、変換しない。
     never: Vec<bool>,
@@ -304,7 +303,7 @@ impl Converter<'_> {
         let dominators = shape(&block_shapes(self.function))
             .expect("the input of the boxing pass keeps the edge rules (R1-R4)");
         let count = self.function.blocks.len();
-        let mut sites: HashMap<VarId, Option<u32>> = fields
+        let mut sites: FxHashMap<VarId, Option<u32>> = fields
             .iter()
             .map(|(_, stmt)| (defined(stmt), None))
             .collect();
@@ -355,8 +354,7 @@ impl Converter<'_> {
 
     /// 足す変数の印は `converted_mark` が決める。
     fn fresh(&mut self, name: String, repr: Repr, mark: Mark) -> VarId {
-        self.function.vars.push(VarInfo { name, repr, mark });
-        VarId(self.function.vars.len() as u32 - 1)
+        push_var(&mut self.function.vars, VarInfo { name, repr, mark })
     }
 
     fn name(&self, var: VarId) -> String {

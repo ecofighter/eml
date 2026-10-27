@@ -23,7 +23,7 @@ fn check_with_std_extras(prelude_extra: &str, file_in_extra: &str, text: &str) -
         eml_test_support::std_module("FileIn.em").1
     );
     // 本物の `FileIn` は `String` と `Bytes` を import し、`String` は `List` を import する
-    let checked = eml_test_support::check_with_std(
+    let checked = eml_test_support::check(eml_test_support::with_std(
         &[
             ("Prelude.em", &prelude),
             ("FileIn.em", &file_in),
@@ -36,7 +36,7 @@ fn check_with_std_extras(prelude_extra: &str, file_in_extra: &str, text: &str) -
             eml_test_support::std_module("Yield.em"),
         ],
         text,
-    );
+    ));
     let files = checked.files();
     let mut out = String::new();
     for d in &checked.diagnostics {
@@ -102,7 +102,7 @@ fn a_carry_over_through_a_composition_points_into_the_prelude() {
 
 /// 入口と依存先のモジュールを検査し、推論結果と診断を並べる。
 fn check_modules(entry: &str, modules: &[(&str, &str)]) -> String {
-    let checked = eml_test_support::check_files(entry, modules);
+    let checked = eml_test_support::check(eml_test_support::with_modules(entry, modules));
     eml_test_support::with_diagnostics(
         eml_types::dump(&checked.program, &checked.typed),
         &eml_test_support::full(checked.files(), &checked.diagnostics),
@@ -193,7 +193,8 @@ fn each_module_reads_its_own_syntax() {
     // 2行目のシグネチャは、どちらのファイルでもバイト 9 から 27 にある
     let entry = "import A\npub h : Int -> <Panic> Int\nh x = x + 1\n";
     let module = "-- 34567\npub k : a   ->   a\nk x = x\n";
-    let checked = eml_test_support::check_files(entry, &[("A.em", module)]);
+    let checked =
+        eml_test_support::check(eml_test_support::with_modules(entry, &[("A.em", module)]));
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
 }
 

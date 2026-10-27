@@ -14,12 +14,12 @@ mod repl;
 use eml_diagnostics::has_errors;
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles, sort_diagnostics};
 
-pub use eml_hir::{ModulePath, ModuleSource, ReadError};
+pub use eml_hir::{MemorySource, ModulePath, ModuleSource, ReadError};
 pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{
     Capture, CaptureHost, Control, Finished, HostRef, Limits, RunConfig, RunStats, RuntimeError,
-    Sched, SourceLocation, Stop, VmFault, Written, capture_host, script_host, stdio_host,
+    Sched, SourceLocation, Stop, VmFault, Written, capture_host, execute, script_host, stdio_host,
 };
 pub use fs_provider::FsProvider;
 #[cfg(feature = "run")]
@@ -87,13 +87,12 @@ impl Session {
     /// 返す `ImportCache` は、この読み込みで新しく読んだモジュールで、`Repl` が入力を受け付けたときにだけ足す。
     pub fn load_session(
         inputs: &[eml_hir::SessionInput],
-        root: &str,
-        entry_file: &str,
+        file: Option<&str>,
         source: &dyn ModuleSource,
         cache: &eml_hir::ImportCache,
     ) -> (Session, eml_hir::ImportCache) {
         let (loaded, diagnostics, read) =
-            eml_hir::load_session(eml_hir::STD, inputs, root, entry_file, source, cache);
+            eml_hir::load_session(eml_hir::STD, inputs, file, source, cache);
         (Session::new((loaded, diagnostics)), read)
     }
 
@@ -185,40 +184,16 @@ impl Session {
         }
     }
 
+    /// reuse の後の LIR を作る。
     #[cfg(feature = "core")]
     pub fn compile(&self) -> Compiled<eml_lir::Program> {
         self.compile_with(eml_core_ir::lower)
     }
 
-    /// `last` のパスの直後で LIR を止める。確かめたいパスの直後の IR を見るテストのための口である
-    /// (`eml_core_ir::lower_until`)。
+    /// 検査が通れば、`lower` で IR を作る。パスの順番は `eml_core_ir` と `eml_lir` だけが知るので、IR を作る関数を
+    /// 受け取る。テストは `eml_core_ir::lower_until` や `core_until` を渡して、確かめたいパスの直後で止める。
     #[cfg(feature = "core")]
-    pub fn compile_until(&self, last: eml_lir::Pass) -> Compiled<eml_lir::Program> {
-        self.compile_with(|hir, typed, main, files| {
-            eml_core_ir::lower_until(hir, typed, main, files, last)
-        })
-    }
-
-    /// `last` のパスの直後の Core IR で止める。確かめたいパスの直後の IR を見るテストのための口である
-    /// (`eml_core_ir::core_until`)。
-    #[cfg(feature = "core")]
-    pub fn compile_core_until(&self, last: eml_core_ir::Pass) -> Compiled<eml_core_ir::Program> {
-        self.compile_with(|hir, typed, main, files| {
-            eml_core_ir::core_until(hir, typed, main, files, last)
-        })
-    }
-
-    /// パスの順番は `eml_core_ir` と `eml_lir` だけが知るので、IR を作る関数を受け取る。
-    #[cfg(feature = "core")]
-    fn compile_with<P>(
-        &self,
-        lower: impl FnOnce(
-            &eml_hir::Program,
-            &eml_types::TypedProgram,
-            eml_hir::FunctionId,
-            &SourceFiles,
-        ) -> P,
-    ) -> Compiled<P> {
+    pub fn compile_with<P>(&self, lower: impl FnOnce(eml_core_ir::Input) -> P) -> Compiled<P> {
         let Checked {
             program,
             typed,
@@ -232,9 +207,12 @@ impl Session {
         sort_diagnostics(&mut diagnostics);
         // Core IR は誤りのないプログラムだけを受け取る (docs/implementation/architecture.md)
         let program = match main {
-            Some(main) if !has_errors(&diagnostics) => {
-                Some(lower(&program, &typed, main, self.files()))
-            }
+            Some(entry) if !has_errors(&diagnostics) => Some(lower(eml_core_ir::Input {
+                hir: &program,
+                typed: &typed,
+                entry,
+                files: self.files(),
+            })),
             _ => None,
         };
         Compiled {
@@ -242,16 +220,6 @@ impl Session {
             program,
         }
     }
-}
-
-/// 結果の終了コードは CLI が使い、仕事の回数 (`RunStats`) はテストが比べるためのもので、CLI は使わない。
-#[cfg(feature = "run")]
-pub fn execute(
-    program: &eml_lir::Program,
-    config: &RunConfig,
-    host: HostRef,
-) -> Result<Finished, RuntimeError> {
-    eml_vm::execute(program, config, host)
 }
 
 /// `eml run` の既定の上限。深さは 2^27 語 (1 GiB 分のスタック) で、OCaml 5 のスタックの既定の上限と同じ量である。

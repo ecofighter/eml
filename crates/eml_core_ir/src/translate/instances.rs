@@ -2,7 +2,7 @@
 //! row のビット) の組と生成する関数をすべて集め、番号の順を決める。変換はこの表を読むだけで、変換の途中で instance
 //! を足さない。
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 
 use eml_extern::Extern;
 use eml_hir::{
@@ -10,10 +10,11 @@ use eml_hir::{
     MethodImpl, ModuleOrigin, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
 use eml_types::{
-    BodyTypes, InputDisplay, InstanceNode, Instantiation, Lin, Resolution, RowYield, Substitution,
-    TypeId, TypeKind, TypeNames, TypeStore, TypedProgram, Update,
+    BodyTypes, InputDisplay, InstanceNode, Instantiation, Lin, Resolution, RowYield, TypeId,
+    TypeKind, TypeNames, TypeStore, TypedProgram, Update,
 };
 use la_arena::ArenaMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::display::{MAX_DEPTH, MAX_DISPLAYS};
 use super::names::{NameTable, args_hash};
@@ -225,10 +226,10 @@ struct Collector<'a> {
     typed: &'a TypedProgram,
     store: TypeStore,
     found: Vec<Found>,
-    keys: HashMap<(FunctionId, Vec<TypeId>, Vec<bool>), usize>,
-    generated_keys: HashMap<Generated, usize>,
+    keys: FxHashMap<(FunctionId, Vec<TypeId>, Vec<bool>), usize>,
+    generated_keys: FxHashMap<Generated, usize>,
     /// 表示関数を作った型から、`found` の位置。型の表は hash-consing なので、同じ型は同じ `TypeId` である。
-    display_keys: HashMap<TypeId, usize>,
+    display_keys: FxHashMap<TypeId, usize>,
     queue: VecDeque<usize>,
 }
 
@@ -388,20 +389,12 @@ impl Collector<'_> {
             .bodies
             .get(function)
             .expect("every reached body is type-checked");
-        let names = type_vars(hir, function);
-        debug_assert_eq!(
-            names.len(),
-            found.args.len(),
-            "an instance key must supply one type argument per type variable of the signature"
-        );
         debug_assert_eq!(
             row_vars(hir, function).len(),
             bits.len(),
             "an instance key must supply one row bit per row variable of the signature"
         );
-        let kinds = typed.kind_values(ValueItem::Function(function), &found.args, &self.store);
-        let mut subst =
-            Substitution::new(names.iter().cloned().zip(found.args.iter().copied()), kinds);
+        let mut subst = typed.substitution(ValueItem::Function(function), &found.args, &self.store);
         let decl = typed.decls[&ValueItem::Function(function)].ty;
         let signature = self.store.substitute(decl, &mut subst);
         let mut targets = ArenaMap::default();
@@ -754,15 +747,7 @@ impl Collector<'_> {
                 let ValueItem::Operation(op) = instantiation.decl else {
                     continue;
                 };
-                let names = hir[op]
-                    .signature
-                    .generics
-                    .type_vars
-                    .iter()
-                    .map(|(_, var)| var.name.clone());
-                let kinds = typed.kind_values(instantiation.decl, &instantiation.args, store);
-                let mut subst =
-                    Substitution::new(names.zip(instantiation.args.iter().copied()), kinds);
+                let mut subst = typed.substitution(instantiation.decl, &instantiation.args, store);
                 let declared = store.substitute(typed.decls[&instantiation.decl].ty, &mut subst);
                 assert!(
                     store.lin_compatible_inner(types.exprs[expr], declared),
@@ -828,9 +813,9 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
         typed,
         store: typed.types.clone(),
         found: Vec::new(),
-        keys: HashMap::new(),
-        generated_keys: HashMap::new(),
-        display_keys: HashMap::new(),
+        keys: FxHashMap::default(),
+        generated_keys: FxHashMap::default(),
+        display_keys: FxHashMap::default(),
         queue: VecDeque::new(),
     };
     // 入口は呼び出し側が選ぶので、型変数を持つ関数なら、どの型でも動く一様な instance にする
@@ -1051,7 +1036,7 @@ fn order(
     display: Option<FoundPart>,
     store: TypeStore,
 ) -> Instances {
-    let position: HashMap<FunctionId, usize> = hir
+    let position: FxHashMap<FunctionId, usize> = hir
         .functions()
         .enumerate()
         .map(|(position, (id, _))| (id, position))
@@ -1148,7 +1133,7 @@ fn order(
     // 名前は関数を照らす鍵なので、重なれば別の関数が同じコードとして扱われる (docs/spec/core-ir.md の「変換の規則」)
     debug_assert!(
         {
-            let mut seen = HashSet::new();
+            let mut seen = FxHashSet::default();
             list.iter()
                 .all(|instance| seen.insert(instance.name.as_str()))
         },
@@ -1192,22 +1177,15 @@ pub(super) fn constructor_fields(
     let TypeDefKind::Data { constructors } = &hir[ty].kind else {
         unreachable!("only data types have constructors")
     };
-    let names: Vec<String> = hir[ty]
-        .generics
-        .type_vars
-        .values()
-        .map(|var| var.name.clone())
-        .collect();
-    let vars = || names.iter().cloned().zip(args.iter().copied());
     let relative = args.iter().any(|&arg| store.is_relative(arg));
     constructors
         .iter()
         .map(|&constructor| {
             let item = ValueItem::Constructor(constructor);
             let mut subst = if relative {
-                Substitution::partial(vars())
+                typed.partial_substitution(item, args)
             } else {
-                Substitution::new(vars(), typed.kind_values(item, args, store))
+                typed.substitution(item, args, store)
             };
             let declared = typed.decls[&item].ty;
             let ty = store.substitute(declared, &mut subst);

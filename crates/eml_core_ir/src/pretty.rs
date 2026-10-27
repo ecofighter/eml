@@ -5,10 +5,7 @@
 use std::fmt::Write;
 
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::syntax::{
-    FnHeader, Writer, effect_text, function_name, mask_text, operation_name, operation_text,
-    prim_text,
-};
+use eml_lir::syntax::{FnHeader, Writer, effect_text, mask_text, operation_name, operation_text};
 use eml_lir::{BlockId, MaskItem};
 
 /// 位置を出さない表示。translate のテストの多くは位置を見ないので、既定では出さない。
@@ -107,14 +104,7 @@ impl<'p> Printer<'p> {
                 layout,
                 cases,
                 default,
-            } => {
-                let layout = layout.map_or_else(String::new, |id| format!(" {}", w.layout(id)));
-                format!(
-                    "switch {}{layout} {}",
-                    w.atom(vars, scrutinee),
-                    w.cases(vars, cases, *default)
-                )
-            }
+            } => w.switch(vars, scrutinee, *layout, cases, *default),
         };
         writeln!(out, "  {text}").unwrap();
     }
@@ -126,25 +116,14 @@ impl<'p> Printer<'p> {
             Rhs::Call { call, mask } => {
                 format!("{}{}", self.mask(mask), self.call(function, call))
             }
-            Rhs::MakeClosure(target, args) => {
-                format!("closure {}({})", w.callee(*target), w.atoms(vars, args))
-            }
-            Rhs::Extern { ext, args, at } => format!(
-                "extern {}({}){}",
-                function_name(ext.row().name),
-                w.atoms(vars, args),
-                w.position(*at)
-            ),
+            Rhs::MakeClosure(target, args) => w.closure(vars, *target, args),
+            Rhs::Extern { ext, args, at } => w.extern_call(vars, *ext, args, *at),
             Rhs::ConstString(index) => format!("const {}", w.string(*index)),
             Rhs::Con { ctor, args } => {
                 format!("con {}({})", w.ctor(*ctor), w.atoms(vars, args))
             }
             Rhs::Drop(a) => format!("drop {}", w.atom(vars, a)),
-            Rhs::Prim(prim, args) => format!(
-                "prim {}({})",
-                prim_text(&self.program.effects, prim),
-                w.atoms(vars, args)
-            ),
+            Rhs::Prim(prim, args) => w.prim_call(vars, prim, args),
         }
     }
 

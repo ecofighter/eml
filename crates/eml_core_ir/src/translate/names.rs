@@ -2,9 +2,8 @@
 //! 名前は、同じ名前の関数がいつも同じコードになるように、型引数と item だけで決める。診断の表示名 (`DisplayNames`) は
 //! 名前が重なるときだけ修飾するので、後の入力が同じ名前を定義すると表示が変わり、ここには使えない。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_hir::{ClassId, EffectId, ModuleId, ModuleOrigin, Program as HirProgram, TypeDefId};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::program::versioned;
 use crate::fnv::Fnv;
@@ -14,16 +13,16 @@ use eml_types::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeNames, TypeStor
 /// 型、エフェクト、クラスと同じ名前のものはモジュール名で修飾する。ほかのモジュールの item は、いつもモジュール名で
 /// 修飾する。Prelude は固定なので、どの名前が重なるかは入力で変わらない。
 pub(super) struct NameTable {
-    types: HashMap<TypeDefId, String>,
-    effects: HashMap<EffectId, String>,
-    classes: HashMap<ClassId, String>,
+    types: FxHashMap<TypeDefId, String>,
+    effects: FxHashMap<EffectId, String>,
+    classes: FxHashMap<ClassId, String>,
     unit: String,
 }
 
 impl NameTable {
     pub(super) fn new(hir: &HirProgram) -> NameTable {
         // 型、エフェクト、クラスは同じ名前空間にあるので合わせて数える (docs/spec/modules.md の「名前空間」)
-        let prelude: HashSet<&str> = hir
+        let prelude: FxHashSet<&str> = hir
             .types()
             .map(|(id, def)| (id.module, def.name.as_str()))
             .chain(
@@ -82,7 +81,7 @@ impl TypeNames for NameTable {
 /// REPL のセッションのモジュールは、入口と同じく修飾せず、版を付けた中段の名前で書く。Prelude の名前と重なれば
 /// `Main.` で修飾する。セッションのモジュールの名前 (`<input N>`) は入力の番号を含むので、修飾には使わない
 /// (docs/spec/core-ir.md の「REPL の入力」)。
-fn qualified(hir: &HirProgram, prelude: &HashSet<&str>, module: ModuleId, name: &str) -> String {
+fn qualified(hir: &HirProgram, prelude: &FxHashSet<&str>, module: ModuleId, name: &str) -> String {
     if module == hir.prelude {
         return name.to_string();
     }
@@ -105,7 +104,7 @@ pub(super) fn args_hash(store: &TypeStore, names: &NameTable, args: &[TypeId]) -
     let mut hasher = Hasher {
         store,
         names,
-        memo: HashMap::new(),
+        memo: FxHashMap::default(),
     };
     let mut state = Fnv::new();
     state.number(args.len() as u64);
@@ -119,7 +118,7 @@ pub(super) fn args_hash(store: &TypeStore, names: &NameTable, args: &[TypeId]) -
 struct Hasher<'a> {
     store: &'a TypeStore,
     names: &'a NameTable,
-    memo: HashMap<TypeId, u64>,
+    memo: FxHashMap<TypeId, u64>,
 }
 
 impl Hasher<'_> {

@@ -12,12 +12,11 @@
 //! をさらに分解した変数は含む) を使う文と、yield しうる呼び出しである。止まった文より後ろの、まだ token を受けていない
 //! 同じ語の数の `con` のうち、いちばん前のものの直前へ上げて組にする (docs/spec/lir.md の「組の選び方」)。
 
-use std::collections::HashMap;
-
 use crate::{
     Atom, BlockId, Call, CasePattern, Ctor, LirFn, Mark, Program, Repr, Reuse, Rhs, Shape, Stmt,
     Term, VarId, VarInfo, operation,
 };
+use rustc_hash::FxHashMap;
 
 /// `function` の中の呼び出し `call` が yield しうるか。token はこの呼び出しをまたいで生きない。継続を2回再開すると、
 /// 同じ箱を2つの `con` が使ってしまうためである。どの呼び出しを数えるかは、EP の yield の地点に合わせる
@@ -80,7 +79,7 @@ struct Pairing {
 /// 事実は消えない。`tokens` は使える token の番号で、定義の順 (昇順) に並ぶ。
 #[derive(Clone, Default)]
 struct Path {
-    known: HashMap<VarId, Ctor>,
+    known: FxHashMap<VarId, Ctor>,
     tokens: Vec<usize>,
 }
 
@@ -96,7 +95,7 @@ struct Planner<'a> {
     unboxed: Vec<bool>,
     tokens: Vec<Token>,
     /// token を受ける `con` の位置と、その受け方。
-    pairings: HashMap<At, Pairing>,
+    pairings: FxHashMap<At, Pairing>,
     /// ブロックごとの、入口で使える token と、そのブロックで `con` が使った token。
     available: Vec<Vec<usize>>,
     used: Vec<Vec<usize>>,
@@ -150,7 +149,7 @@ impl<'a> Planner<'a> {
             origins,
             unboxed: function.struct_boxes(),
             tokens: Vec::new(),
-            pairings: HashMap::new(),
+            pairings: FxHashMap::default(),
             available: vec![Vec::new(); blocks],
             used: vec![Vec::new(); blocks],
             unpaired: Vec::new(),
@@ -165,7 +164,7 @@ impl<'a> Planner<'a> {
         let function = self.function;
         // `switch` の行き先には、その `switch` の辺1本だけが入る (R3)。合流するブロックへは、入るすべての道で分かって
         // いる構築子だけを渡し、token は渡さない (docs/spec/lir.md の「reuse」)
-        let mut entries: HashMap<usize, Path> = HashMap::new();
+        let mut entries: FxHashMap<usize, Path> = FxHashMap::default();
         for (index, block) in function.blocks.iter().enumerate() {
             let mut path = entries.remove(&index).unwrap_or_default();
             self.available[index] = path.tokens.clone();
@@ -536,7 +535,7 @@ fn for_each_case_ctor(term: &Term, mut f: impl FnMut(VarId, Ctor, &[VarId], Bloc
 struct Plan {
     tokens: Vec<Token>,
     kept: Vec<bool>,
-    pairings: HashMap<At, Pairing>,
+    pairings: FxHashMap<At, Pairing>,
     /// ブロックごとの、入口で手放す token。
     drops: Vec<Vec<usize>>,
 }
@@ -587,7 +586,7 @@ impl Plan {
                 other => unreachable!("a token goes to a con, not {other:?}"),
             }
         }
-        let mut moves: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+        let mut moves: FxHashMap<usize, Vec<(usize, usize)>> = FxHashMap::default();
         for token in &self.tokens {
             if let Some(target) = token.moved_to {
                 moves
@@ -597,7 +596,7 @@ impl Plan {
             }
         }
         for (block, moves) in moves {
-            let targets: HashMap<usize, usize> = moves.iter().copied().collect();
+            let targets: FxHashMap<usize, usize> = moves.iter().copied().collect();
             let mut old: Vec<Option<Stmt>> = std::mem::take(&mut function.blocks[block].stmts)
                 .into_iter()
                 .map(Some)

@@ -1,10 +1,9 @@
 //! 結合テストの入力 (translate の出力の形) からは作れないものを確かめる。handle と perform の変換が使う補助の関数と、
 //! その変換が付ける `Annotations` と、節の呼び出しの地点である。
 
-use std::collections::{HashMap, HashSet};
-
 use crate::{Program, parse, pretty, verify_evidence};
 use eml_lir::{BlockId, FnIdx, MaskItem};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::Helpers;
 use super::split::{Annotations, split};
@@ -177,9 +176,9 @@ yields fn f(a.0: int, h.1: tobj) -> int {
     );
     let at = (BlockId(0), 3);
     let annotations = Annotations {
-        not_yield_points: HashSet::from([(BlockId(0), 5)]),
-        masked: HashMap::from([(at, vec![item(0, 0, 1)])]),
-        forced: HashSet::from([at]),
+        not_yield_points: FxHashSet::from_iter([(BlockId(0), 5)]),
+        masked: FxHashMap::from_iter([(at, vec![item(0, 0, 1)])]),
+        forced: FxHashSet::from_iter([at]),
     };
     split_named(&mut program, "f", &annotations);
     insta::assert_snapshot!(shown(&program), @r#"

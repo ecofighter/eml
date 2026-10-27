@@ -106,7 +106,6 @@ fn empty_session(config: &RunConfig, host: &HostRef, width: usize) -> Repl {
     let mut repl = Repl::new(
         config,
         Box::new(FsProvider::new(Path::new(""))),
-        "",
         host.clone(),
     );
     repl.set_width(width);

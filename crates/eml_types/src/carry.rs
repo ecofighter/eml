@@ -3,18 +3,19 @@
 //! 評価の順に沿った生存の計算を別に持つ。呼び出しの評価の順は `eml_hir::call_steps` に従う。Core IR の変換も同じ手順を
 //! 読む (docs/spec/expressions.md の「関数適用」)。
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use eml_diagnostics::FileId;
 use eml_hir::{
     Body, EvalStep, ExprId, ExprKind, IndexBase, LocalId, OpMultiplicity, OperationId, PatId,
     Program, Res, Segment, Stmt,
 };
+use rustc_hash::FxHashMap;
 
 use crate::VarClass;
 use crate::check::{BodyTyping, CallRows};
 use crate::kind::{
-    Across, Bound, CallKind, CarriedValue, KindOrigin, KindReason, Provenance, Span,
+    Across, Bound, CallKind, CarriedValue, Crossing, KindOrigin, KindReason, Provenance, Span,
 };
 use crate::table::{Table, Ty};
 use crate::ty::Multiplicity;
@@ -36,7 +37,7 @@ pub(crate) fn constrain(
     typing: &BodyTyping,
     table: &mut Table<'_>,
     reliable: bool,
-    implicit_drops: &HashMap<ExprId, Vec<LocalId>>,
+    implicit_drops: &FxHashMap<ExprId, Vec<LocalId>>,
 ) {
     let mut carrying = Carrying {
         program,
@@ -58,7 +59,7 @@ struct Carrying<'a, 'c> {
     table: &'a mut Table<'c>,
     reliable: bool,
     /// 戻らない呼び出しの前で暗黙に手放す変数 (`BodyTypes::implicit_drops`)。
-    implicit_drops: &'a HashMap<ExprId, Vec<LocalId>>,
+    implicit_drops: &'a FxHashMap<ExprId, Vec<LocalId>>,
 }
 
 impl Carrying<'_, '_> {
@@ -112,9 +113,10 @@ impl Carrying<'_, '_> {
                             {
                                 let across = match performs {
                                     Some((at, op)) if at == index => Across::Operation(op),
-                                    _ => Across::Row(row.clone()),
+                                    _ => Across::Row(row),
                                 };
-                                self.carry(id, &live, &across, &CallKind::Call);
+                                let crossing = self.crossing(across);
+                                self.carry(id, &live, &crossing, &CallKind::Call);
                             }
                             if index == 0 {
                                 live.insert(self.evaluated(*callee));
@@ -201,7 +203,7 @@ impl Carrying<'_, '_> {
                     outer,
                 }) = typing.calls.get(id)
                 {
-                    let outer = Across::Row(outer.clone());
+                    let outer = self.crossing(Across::Row(outer));
                     self.carry(id, after, &outer, &CallKind::Handle);
                     // 状態は本体の実行中、evidence にある。扱うエフェクトの操作が起きると状態は節に渡り、捕まえた
                     // 区間に入らないので、外側の row だけをまたぐ (docs/spec/effects.md の「パラメータ付き handler」)
@@ -213,7 +215,7 @@ impl Carrying<'_, '_> {
                         };
                         self.carry_value(id, ty, value, &outer, &CallKind::Handle);
                     }
-                    let across = Across::Row(body_row.clone());
+                    let across = self.crossing(Across::Row(body_row));
                     for local in body.closure_captures(&ret.closure) {
                         let Some(&ty) = typing.locals.get(local) else {
                             continue;
@@ -287,7 +289,7 @@ impl Carrying<'_, '_> {
                 ..
             } => {
                 if let Some(CallRows::Handle { outer, .. }) = typing.calls.get(id) {
-                    let outer = Across::Row(outer.clone());
+                    let outer = self.crossing(Across::Row(outer));
                     self.carry(id, after, &outer, &CallKind::Var);
                     if typing.var_classes.get(*var) == Some(&VarClass::Array)
                         && let Some(state) = typing.vars.get(*var)
@@ -359,11 +361,38 @@ impl Carrying<'_, '_> {
         }
     }
 
-    /// 式 `at` をまたいで `held` を持つ。値ごとに、型の Kind と `across` の多重度の組で持ち越しの制約を出す。
-    fn carry(&mut self, at: ExprId, held: &Live, across: &Across, call: &CallKind) {
+    /// `across` の多重度の成分と、報告が指す `multi` の操作。持っている値によらないので、値ごとでなく、またぐ式
+    /// ごとに1回だけ求める。どの成分も `Never` か `Once` に決まっていれば、制約は破れないので成分を空にする。
+    fn crossing(&self, across: Across<'_>) -> Crossing {
+        let mults = match across {
+            Across::Row(row) => self.table.row_multiplicities(row),
+            Across::Operation(op) => vec![Bound::Const(self.table.operation_multiplicity(op))],
+        };
+        if mults
+            .iter()
+            .all(|mult| matches!(mult, Bound::Const(Multiplicity::Never | Multiplicity::Once)))
+        {
+            return Crossing {
+                mults: Vec::new(),
+                multi: None,
+            };
+        }
+        let multi = if self.reliable {
+            self.multi_operation(across)
+        } else {
+            None
+        };
+        Crossing { mults, multi }
+    }
+
+    /// 式 `at` をまたいで `held` を持つ。値ごとに、型の Kind と `crossing` の多重度の組で持ち越しの制約を出す。
+    fn carry(&mut self, at: ExprId, held: &Live, crossing: &Crossing, call: &CallKind) {
+        if crossing.mults.is_empty() {
+            return;
+        }
         for &value in held {
             if let Some((ty, carried)) = self.held(value) {
-                self.carry_value(at, ty, carried, across, call);
+                self.carry_value(at, ty, carried, crossing, call);
             }
         }
     }
@@ -373,28 +402,21 @@ impl Carrying<'_, '_> {
         at: ExprId,
         ty: Ty,
         value: CarriedValue,
-        across: &Across,
+        crossing: &Crossing,
         call: &CallKind,
     ) {
-        let mults = match across {
-            Across::Row(row) => self.table.row_multiplicities(row),
-            Across::Operation(op) => vec![Bound::Const(self.table.operation_multiplicity(*op))],
-        };
-        if mults
-            .iter()
-            .all(|mult| matches!(mult, Bound::Const(Multiplicity::Never | Multiplicity::Once)))
-        {
+        if crossing.mults.is_empty() {
             return;
         }
         let origin = if self.reliable {
-            Provenance::At(KindOrigin {
+            Provenance::at(KindOrigin {
                 span: Span {
                     file: self.file,
                     range: self.body.exprs[at].range,
                 },
                 reason: KindReason::CarriedAcross {
                     value,
-                    multi: self.multi_operation(across),
+                    multi: crossing.multi,
                     call: call.clone(),
                 },
             })
@@ -402,18 +424,18 @@ impl Carrying<'_, '_> {
             Provenance::Suppressed
         };
         let previous = self.table.set_kind_origin(origin);
-        self.table.carry(ty, &mults);
+        self.table.carry(ty, &crossing.mults);
         self.table.set_kind_origin(previous);
     }
 
     /// 報告が指す `multi` の操作。row を解き、`multi` の操作を持つ最初のラベルのエフェクトから、宣言の順で最初の `multi`
     /// の操作を選ぶ。row を束縛するのはこの本体の検査だけで、このパスはその後に動くので、報告のときに解いても同じ結果に
     /// なる。
-    fn multi_operation(&self, across: &Across) -> Option<OperationId> {
+    fn multi_operation(&self, across: Across<'_>) -> Option<OperationId> {
         let program = self.program;
         match across {
-            Across::Operation(op) => Some(*op),
-            Across::Row(row) => self.table.resolve_row(row).labels.iter().find_map(|label| {
+            Across::Operation(op) => Some(op),
+            Across::Row(row) => self.table.resolved_labels(row).find_map(|label| {
                 program[label.effect]
                     .operations
                     .iter()

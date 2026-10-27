@@ -1,16 +1,16 @@
-use std::collections::HashSet;
-
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, count, was};
 use eml_extern::{ExternType, FloatBits};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
+use rustc_hash::FxHashSet;
 
+use super::ops::non_associative;
 use super::types::{TypeLowering, Vars};
 use super::{NameKind, NameUse, PathName, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{NameRef, Resolved, Resolver};
 use crate::hir::*;
-use crate::item_tree::{Assoc, Fixity};
+use crate::item_tree::Fixity;
 use crate::program::Module;
 
 pub(super) struct BodyLowering<'a> {
@@ -32,8 +32,8 @@ pub(super) struct BodyLowering<'a> {
     locals: Arena<Local>,
     pub(super) continuations: ArenaMap<LocalId, usize>,
     pub(super) omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>,
-    use_lambdas: HashSet<ExprId>,
-    command_holes: HashSet<ExprId>,
+    use_lambdas: FxHashSet<ExprId>,
+    command_holes: FxHashSet<ExprId>,
     local_functions: ArenaMap<LocalId, ExprId>,
     defining: ArenaMap<ExprId, LocalId>,
     groups: Vec<Vec<LocalId>>,
@@ -97,8 +97,8 @@ impl<'a> BodyLowering<'a> {
             locals: Arena::new(),
             continuations: ArenaMap::default(),
             omitted_fields: ArenaMap::default(),
-            use_lambdas: HashSet::new(),
-            command_holes: HashSet::new(),
+            use_lambdas: FxHashSet::default(),
+            command_holes: FxHashSet::default(),
             local_functions: ArenaMap::default(),
             defining: ArenaMap::default(),
             groups: Vec::new(),
@@ -225,7 +225,7 @@ impl<'a> BodyLowering<'a> {
                         Label::new(
                             self.file,
                             *name_range,
-                            format!("expected {}", arguments(arity)),
+                            format!("expected {}", count(arity, "argument")),
                         ),
                     )
                     .with_secondary(Label::new(
@@ -1062,6 +1062,7 @@ impl<'a> BodyLowering<'a> {
 
     /// 式の `climb` と同じ優先順位の上昇法である。`fixities` は `operators` と添字が揃っている。ユーザーは `:` で始まる演算子に fixity を宣言できるので、
     /// 同じ優先順位で結合の向きが違う並びも起きる。その場合は式と同じく E1006 を報告し、パターンを `Missing` にする。
+    /// `previous` は直前に組んだ演算子、または囲む演算子の添字である。
     fn climb_pat(
         &mut self,
         operands: &[PatId],
@@ -1069,56 +1070,43 @@ impl<'a> BodyLowering<'a> {
         fixities: &[Fixity],
         position: &mut usize,
         min_precedence: u8,
-        mut previous: Option<(String, u8, Assoc)>,
+        mut previous: Option<usize>,
     ) -> PatId {
         let mut lhs = operands[*position];
         while let Some(operator) = operators.get(*position) {
-            let text = operator.text().to_string();
-            let Fixity { precedence, assoc } = fixities[*position];
-            if precedence < min_precedence {
+            let fixity = fixities[*position];
+            if fixity.precedence < min_precedence {
                 break;
             }
+            let at = *position;
             *position += 1;
-            let conflict = previous
-                .as_ref()
-                .is_some_and(|(_, p, a)| *p == precedence && (*a != assoc || assoc == Assoc::None));
-            let next_min = if assoc == Assoc::Right {
-                precedence
-            } else {
-                precedence + 1
-            };
             let rhs = self.climb_pat(
                 operands,
                 operators,
                 fixities,
                 position,
-                next_min,
-                Some((text.clone(), precedence, assoc)),
+                fixity.right_min(),
+                Some(at),
             );
             let whole = self.pats[lhs].range.cover(self.pats[rhs].range);
-            let kind = if conflict {
-                let (previous_text, _, _) = previous.as_ref().unwrap();
-                self.diagnostics.push(Diagnostic::error(
-                    codes::NON_ASSOCIATIVE_OPERATORS,
-                    format!(
-                        "`{previous_text}` and `{text}` cannot be combined without parentheses"
-                    ),
-                    Label::new(
+            let kind = match previous {
+                Some(before) if fixities[before].conflicts_with(fixity) => {
+                    self.diagnostics.push(non_associative(
                         self.file,
+                        operators[before].text(),
+                        operator.text(),
                         operator.text_range(),
-                        "use parentheses to group the operators",
-                    ),
-                ));
-                PatKind::Missing
-            } else {
-                self.constructor_pat(
+                    ));
+                    PatKind::Missing
+                }
+                _ => self.constructor_pat(
                     &NameUse::plain(operator.text(), operator.text_range()),
                     vec![lhs, rhs],
                     whole,
-                )
+                ),
             };
             lhs = self.pats.alloc(Pat { kind, range: whole });
-            previous = Some((text, precedence, assoc));
+            previous = Some(at);
         }
         lhs
     }
@@ -1141,21 +1129,18 @@ impl<'a> BodyLowering<'a> {
         };
         let expected = self.constructor(ctor).fields.len();
         if args.len() != expected {
-            let given = match args.len() {
-                1 => "1 was given".to_string(),
-                n => format!("{n} were given"),
-            };
+            let given = format!("{} {} given", args.len(), was(args.len()));
             self.diagnostics.push(Diagnostic::error(
                 codes::CONSTRUCTOR_ARITY,
                 format!(
                     "`{}` takes {}, but {given}",
                     at.written(),
-                    arguments(expected)
+                    count(expected, "argument")
                 ),
                 Label::new(
                     self.file,
                     range,
-                    format!("expected {}", arguments(expected)),
+                    format!("expected {}", count(expected, "argument")),
                 ),
             ));
             return PatKind::Missing;
@@ -1399,14 +1384,6 @@ impl<'a> BodyLowering<'a> {
 
     pub(super) fn alloc(&mut self, kind: ExprKind, range: TextRange) -> ExprId {
         self.exprs.alloc(Expr { kind, range })
-    }
-}
-
-fn arguments(n: usize) -> String {
-    if n == 1 {
-        "1 argument".to_string()
-    } else {
-        format!("{n} arguments")
     }
 }
 

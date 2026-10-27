@@ -1,9 +1,8 @@
 //! 直接だけ呼ばれる、値として生まれた関数を型どおりの ABI に戻す (docs/spec/core-ir.md の「直接だけ呼ばれる持ち上げた関数」)。
 
-use std::collections::HashMap;
-
-use crate::{Program, Rhs, Stmt};
-use eml_lir::{Atom, FnIdx};
+use crate::{FnRef, Program};
+use eml_lir::FnIdx;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// translate が持ち上げた値として生まれる関数と、その持ち主の番号。持ち主は、名前の `$` の前の部分を名前に持つ、
 /// 内部でない関数のうち最も長いものである。translate は持ち上げた関数を `<根>$…` と名付け、根の instance と一緒に
@@ -11,7 +10,7 @@ use eml_lir::{Atom, FnIdx};
 /// どこからでも参照されるので、名前を `$` で始めて持ち主に当たらないようにしてある (docs/spec/core-ir.md の
 /// 「直接だけ呼ばれる持ち上げた関数」)。optimize の前の、translate の出力に使う。
 pub(crate) fn lifted(program: &Program) -> Vec<(FnIdx, FnIdx)> {
-    let roots: HashMap<&str, FnIdx> = program
+    let roots: FxHashMap<&str, FnIdx> = program
         .functions
         .iter()
         .enumerate()
@@ -50,7 +49,7 @@ pub(crate) fn type_direct_only(
     lifted: &[(FnIdx, FnIdx)],
     continued: &[Vec<FnIdx>],
 ) {
-    let mut families: HashMap<FnIdx, Vec<FnIdx>> = HashMap::new();
+    let mut families: FxHashMap<FnIdx, Vec<FnIdx>> = FxHashMap::default();
     for &(function, root) in lifted {
         families
             .entry(root)
@@ -70,40 +69,22 @@ pub(crate) fn type_direct_only(
         }));
     let mut typed: Vec<FnIdx> = Vec::new();
     for (candidates, members) in families {
-        let mut referenced = vec![false; program.functions.len()];
+        // 族ごとに関数の数の表を作ると、族の数と関数の数の積の手間になるので、参照だけを集める
+        let mut referenced = FxHashSet::default();
         for &member in &members {
-            for_each_value_reference(program, member, |target| {
-                referenced[target.0 as usize] = true;
+            program.functions[member.0 as usize].for_each_fn_ref(|target, kind| {
+                if kind == FnRef::Value {
+                    referenced.insert(target);
+                }
             });
         }
         typed.extend(
             candidates
                 .into_iter()
-                .filter(|candidate| !referenced[candidate.0 as usize]),
+                .filter(|candidate| !referenced.contains(candidate)),
         );
     }
     for function in typed {
         program.functions[function.0 as usize].split = None;
-    }
-}
-
-/// 関数のコードが値として参照する関数。直接の呼び出しの相手は値の参照ではない。
-fn for_each_value_reference(program: &Program, function: FnIdx, mut f: impl FnMut(FnIdx)) {
-    let mut atom = |atom: Atom| {
-        if let Atom::Fn(target) = atom {
-            f(target);
-        }
-    };
-    for block in &program.functions[function.0 as usize].blocks {
-        for stmt in &block.stmts {
-            let Stmt::Let { var: _, rhs } = stmt else {
-                continue;
-            };
-            if let Rhs::MakeClosure(target, _) = rhs {
-                atom(Atom::Fn(*target));
-            }
-            rhs.for_each_atom(&mut atom);
-        }
-        block.term.for_each_atom(&mut atom);
     }
 }

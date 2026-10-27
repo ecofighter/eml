@@ -42,8 +42,9 @@ Verus が向いているのは、(b) のうち小さく安定した純粋なデ�
 ### できる理由
 
 - `kind/problem.rs` の Kind の問題とスキームは、推論の表を指さず、変数を番号だけで表す純粋なデータである。`solve`、`eval`、`summary`、`entail` は、`Vec<Vec<usize>>` の辺、ワークリスト、強連結成分の分解だけで書かれている
-- `eml_hir` に依存するのは、診断のための制約の由来 (`Provenance`) だけである。`solve` は、違反と原因を制約の番号で返している。由来は番号で引けるので、検証する側の外に置ける
-- `kind/` は `eml_types` の中で小さく閉じた部分である。検証する計算は、`mod.rs` (大半が由来の型) を除く `entail.rs`、`eval.rs`、`problem.rs`、`solve.rs`、`summary.rs` にある
+- `eml_hir` に依存するのは、診断のための部分である。制約の由来 (`Provenance`) と位置 (`Span`)、問題が指す宣言 (`KindProblem::decl` の `ValueItem`) と、SCC のメンバーとスキームを宣言で引く表がそれに当たる。`solve` は、違反と原因を制約の番号で返している。どれも番号で引けるので、葉の crate に移すときに、宣言と由来を番号で渡して検証する側の外に置ける
+- 強連結成分の分解は `kind/graph.rs` の1つの関数で、`eml_hir` に依存しない。`scc.rs` と `uniform.rs` も、辺を番号の並びに写してこれを呼ぶ
+- `kind/` は `eml_types` の中で小さく閉じた部分である。検証する計算は、`mod.rs` (大半が由来の型) を除く `entail.rs`、`eval.rs`、`graph.rs`、`problem.rs`、`solve.rs`、`summary.rs` にある
 
 ### 証明する定理
 
@@ -61,7 +62,7 @@ Verus が向いているのは、(b) のうち小さく安定した純粋なデ�
 ### 進め方
 
 - `eml_rt` と同じく、vstd だけに依存する葉の crate に移し、`verus!` の中に書く。`eml_types` はその crate を呼び、由来を制約の番号で受け渡す。純粋な関数のままなので、各段階をクエリに載せ替える方針 ([ロードマップ](roadmap.md) の「処理系」) とも合う
-- `verus!` の中では使える Rust が限られるので、`la-arena`、`HashMap`、iterator のアダプタ、`impl Fn` の引数 (`eval::values` の `base`) を書き換える
+- `verus!` の中では使える Rust が限られるので、`la-arena`、`HashMap`、iterator のアダプタ、`impl Fn` の引数 (`eval::values` の `base`) を書き換える。`kind/graph.rs` の強連結成分も葉の crate に移し、`scc.rs` と `uniform.rs` はそれを呼ぶ
 - 今の単体テスト (`kind/` と `table/tests.rs`) は残す
 
 ### 論点

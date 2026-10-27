@@ -17,16 +17,18 @@ mod passing;
 mod piece;
 mod touch;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+
+use rustc_hash::FxHashMap;
 
 use super::blocks;
-use super::known::{Callee, Wrapper, fresh, known_closures, wrapper};
+use super::known::{Callee, Wrapper, known_closures, wrapper};
+use super::recompute_yields;
 use super::specialize::limited;
-use super::{kept_marks, recompute_yields};
-use crate::liveness::{insert_var, live_after_term, step_back};
+use crate::liveness::{join_live, live_before_term, step_back};
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo, push_var};
 
 use passing::{Returned, Tuples};
 use touch::touching;
@@ -240,8 +242,7 @@ pub(crate) fn handlers(program: &mut Program, translated: &mut Vec<bool>) -> Vec
             .collect();
         translated.extend(inherited);
         debug_assert_eq!(translated.len(), program.functions.len());
-        let keep = kept_marks(program);
-        recompute_yields(program, &keep);
+        recompute_yields(program);
     }
     table.families
 }
@@ -251,14 +252,14 @@ pub(crate) fn handlers(program: &mut Program, translated: &mut Vec<bool>) -> Vec
 #[derive(Default)]
 struct Table {
     /// 経路の関数と `return` の節の関数ごとの複製 `f{H}`。
-    copies: HashMap<(FnIdx, FnIdx), FnIdx>,
+    copies: FxHashMap<(FnIdx, FnIdx), FnIdx>,
     /// 節の関数ごとの、`k` を閉包で受ける写し `<g>{k}`。
-    clause_copies: HashMap<FnIdx, FnIdx>,
+    clause_copies: FxHashMap<FnIdx, FnIdx>,
     /// この回に作った関数ごとの、もとの関数。番号を取った順に並ぶ。`f{H}`、`$hN`、`$hjJ` は f から、`<g>{k}` は g
     /// から作る。
     sources: Vec<FnIdx>,
     /// 状態を渡す形の複製ごとの、返す値の並び。後の回の複製の並びは、元の複製の並びから決まる。
-    returns: HashMap<FnIdx, Returned>,
+    returns: FxHashMap<FnIdx, Returned>,
     /// 末尾の経路の形の複製ごとの一族。複製 `f{H}` と、それを作るときに作った継続の関数 `f{H}$hN`、合流のブロックの
     /// 関数 `f{H}$hjJ`、節の写しの複製 `<g>{k}{…}` である。どれも `f{H}` の名前で決まるので、一族も名前で決まる。
     /// `k` として渡す継続の関数の値の参照は、この一族の中にしか生まれない (`direct::type_direct_only`)。
@@ -269,7 +270,7 @@ struct Table {
 fn round(program: &mut Program, translated: &[bool], table: &mut Table) -> bool {
     let count = program.functions.len();
     // エフェクトごとの、H に触れる関数。その回の初めのコードで決める
-    let mut touch: HashMap<u32, Vec<bool>> = HashMap::new();
+    let mut touch: FxHashMap<u32, Vec<bool>> = FxHashMap::default();
     let handlers: Vec<Handler> = (0..count)
         .flat_map(|owner| sites(program, FnIdx(owner as u32)))
         .filter_map(|site| eligible(program, translated, site, &mut touch))
@@ -391,10 +392,7 @@ fn site_stmts(
         .expect("a handler has a return clause");
     let mut args = handler.body.captures.clone();
     args.push(Atom::Unit);
-    let call = |function, args| Rhs::Call {
-        call: Call::Direct(function, args),
-        mask: Vec::new(),
-    };
+    let call = |function, args| Rhs::call(Call::Direct(function, args));
     if handler.form == Form::Tail {
         args.extend(handler.clauses.iter().flat_map(|clause| &clause.captures));
         if handler.stateful() {
@@ -423,7 +421,7 @@ fn site_stmts(
         vars,
         call(copy, args),
         &base,
-        |vars| fresh(vars, body_result),
+        |vars| push_var(vars, body_result),
         state.as_ref(),
         tuples,
     );
@@ -473,7 +471,7 @@ fn eligible(
     program: &Program,
     translated: &[bool],
     site: Site,
-    touch: &mut HashMap<u32, Vec<bool>>,
+    touch: &mut FxHashMap<u32, Vec<bool>>,
 ) -> Option<Handler> {
     let owner = program.function(site.owner);
     let Stmt::Let {
@@ -498,7 +496,7 @@ fn eligible(
         return None;
     }
     let known = known_closures(owner);
-    let mut uses: HashMap<VarId, usize> = HashMap::new();
+    let mut uses: FxHashMap<VarId, usize> = FxHashMap::default();
     for block in &owner.blocks {
         let mut count = |atom: Atom| {
             if let Atom::Var(var) = atom {
@@ -761,7 +759,7 @@ struct Copies<'a> {
     created: Vec<Option<CoreFn>>,
     pending: Vec<(FnIdx, FnIdx, Shape)>,
     /// エフェクトごとの、H に触れる関数 (`touch::touching`)。状態を渡す形の handler のエフェクトの分がある。
-    touching: &'a HashMap<u32, Vec<bool>>,
+    touching: &'a FxHashMap<u32, Vec<bool>>,
     /// 状態を渡す形の複製が使うタプルの配置 (`Program::tuple_layout`)。
     tuples: &'a Tuples,
     /// 作っている末尾の経路の形の複製の一族。
@@ -908,14 +906,17 @@ impl Copies<'_> {
             let vars = clause.params()[..count]
                 .iter()
                 .map(|&param| {
-                    Atom::Var(fresh(&mut code.vars, clause.vars[param.0 as usize].clone()))
+                    Atom::Var(push_var(
+                        &mut code.vars,
+                        clause.vars[param.0 as usize].clone(),
+                    ))
                 })
                 .collect();
             captures.push(vars);
         }
         let state = shape.stateful.then(|| {
             let param = ret.params()[ret.params().len() - 1];
-            fresh(&mut code.vars, ret.vars[param.0 as usize].clone())
+            push_var(&mut code.vars, ret.vars[param.0 as usize].clone())
         });
         let all_captures: Vec<Atom> = captures.iter().flatten().copied().collect();
         let params = &mut code.blocks[0].params;
@@ -941,7 +942,7 @@ impl Copies<'_> {
                 }
                 _ => None,
             };
-            let var = fresh(&mut code.vars, returned.clone());
+            let var = push_var(&mut code.vars, returned.clone());
             let rhs = match tail {
                 Some((at, target, mut args)) => {
                     code.blocks[block].stmts.truncate(at);
@@ -958,10 +959,7 @@ impl Copies<'_> {
             let block = &mut code.blocks[block];
             block.stmts.push(Stmt::Let {
                 var,
-                rhs: Rhs::Call {
-                    call: rhs,
-                    mask: Vec::new(),
-                },
+                rhs: Rhs::call(rhs),
             });
             block.term = Term::Return(Atom::Var(var));
         }
@@ -974,7 +972,7 @@ impl Copies<'_> {
             captures,
             all_captures,
             state,
-            join_functions: HashMap::new(),
+            join_functions: FxHashMap::default(),
             pending: Vec::new(),
         };
         let mut next = performs.len();
@@ -1112,7 +1110,7 @@ impl Copies<'_> {
                     None => {
                         // 捕獲のない閉包は関数の値で書く (docs/spec/core-ir.md)
                         let closure = (!live.is_empty()).then(|| {
-                            let var = fresh(
+                            let var = push_var(
                                 &mut copy.code.vars,
                                 VarInfo {
                                     name: "k".to_string(),
@@ -1169,10 +1167,7 @@ impl Copies<'_> {
                 if stateful {
                     args.push(state);
                 }
-                Rhs::Call {
-                    call: Call::Direct(continuation, args),
-                    mask: Vec::new(),
-                }
+                Rhs::call(Call::Direct(continuation, args))
             },
         );
         // 足したブロックは合流のブロックにしない。この `perform` の地点からだけ届くので1つの続きにしか入らず、節が
@@ -1230,7 +1225,7 @@ struct Rewrite {
     /// ブロックごとの入口の生存集合。後ろのブロックから、書き換えた後のコードで求める。
     live_in: Vec<Vec<VarId>>,
     /// 番号を取った合流のブロックの関数 `f{H}$hjJ`。
-    join_functions: HashMap<BlockId, FnIdx>,
+    join_functions: FxHashMap<BlockId, FnIdx>,
     /// 番号を取ったが、中身をまだ作っていない合流のブロック。
     pending: Vec<BlockId>,
 }
@@ -1238,29 +1233,12 @@ struct Rewrite {
 impl Rewrite {
     /// ブロックの終端の前で生きている変数。
     fn live_out(&self, block: BlockId) -> BTreeSet<VarId> {
-        let term = &self.code.block(block).term;
-        let mut live = live_after_term(&self.code, term, &self.live_in);
-        term.for_each_atom(|atom| insert_var(&mut live, atom));
-        live
+        live_before_term(&self.code, self.code.block(block), &self.live_in)
     }
 
     fn join_live(&self, join: BlockId) -> impl Iterator<Item = VarId> + '_ {
         join_live(&self.code, &self.live_in, join, self.state)
     }
-}
-
-/// 合流のブロック J の入口で生きている変数から、J の引数と状態を除いたもの。番号の昇順に並ぶ。
-fn join_live<'a>(
-    code: &'a CoreFn,
-    live_in: &'a [Vec<VarId>],
-    join: BlockId,
-    state: Option<VarId>,
-) -> impl Iterator<Item = VarId> + 'a {
-    let params = &code.block(join).params;
-    live_in[join.0 as usize]
-        .iter()
-        .copied()
-        .filter(move |var| !params.contains(var) && Some(*var) != state)
 }
 
 /// `perform` の地点で複製を終える。ブロックの `perform` から後ろを捨て、`released` を `drop` し、`closure` を作って
@@ -1281,12 +1259,12 @@ fn end(
     let mut stmts = Vec::new();
     for var in released {
         stmts.push(Stmt::Let {
-            var: fresh(&mut code.vars, unit.clone()),
+            var: push_var(&mut code.vars, unit.clone()),
             rhs: Rhs::Drop(Atom::Var(var)),
         });
     }
     stmts.extend(closure.map(|(var, rhs)| Stmt::Let { var, rhs }));
-    let var = fresh(
+    let var = push_var(
         &mut code.vars,
         VarInfo {
             name: "t".to_string(),
@@ -1296,10 +1274,7 @@ fn end(
     );
     stmts.push(Stmt::Let {
         var,
-        rhs: Rhs::Call {
-            call,
-            mask: Vec::new(),
-        },
+        rhs: Rhs::call(call),
     });
     let host = &mut code.blocks[block.0 as usize];
     host.stmts.truncate(stmt);

@@ -11,7 +11,9 @@
 //! ブロックを番号の順に1回たどる。各ブロックでは、後ろからたどって各文で死ぬ変数を求め、前から所有の集合を持って
 //! 命令を足す。
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::{
@@ -40,7 +42,7 @@ fn insert_rc(function: &mut LirFn, layouts: &[Layout]) {
     };
     // `switch` の行き先には、その `switch` の辺1本だけが入る (R3)。行き先は `switch` のブロックを前からたどり終えた
     // 所有を引き継ぐので、行き先に着くまでここに置く
-    let mut switch_entries: HashMap<BlockId, State> = HashMap::new();
+    let mut switch_entries: FxHashMap<BlockId, State> = FxHashMap::default();
     for index in 0..function.blocks.len() {
         let id = BlockId(index as u32);
         let after_term = live_after_term(function, &function.blocks[index].term, &live_in);
@@ -53,7 +55,7 @@ fn insert_rc(function: &mut LirFn, layouts: &[Layout]) {
                 .copied()
                 .filter(|&var| fields.rc(var))
                 .collect(),
-            lent: HashMap::new(),
+            lent: FxHashMap::default(),
         });
         let deaths = deaths(block, &after_term, &live_in[index]);
         let mut live: BTreeSet<VarId> = live_in[index].iter().copied().collect();
@@ -80,7 +82,7 @@ struct State {
     /// 持ち主ごとの、それに属する生きている変数。空になった持ち主は除く。属する変数を生存集合から探すと、命令ごとの
     /// 手間が生存集合の大きさに比例し、全体で2乗になるので、持ち主から引けるようにする
     /// (docs/spec/lir.md の「Perceus の時間」)。
-    lent: HashMap<VarId, BTreeSet<VarId>>,
+    lent: FxHashMap<VarId, BTreeSet<VarId>>,
 }
 
 /// 各文で死ぬ変数 (使って、その後で生きていない変数) と、定義して後で使う変数。前からたどるときに、これで生存集合を
@@ -507,8 +509,8 @@ impl Fields<'_> {
         let owned = &mut state.owned;
         // 必要な変数から親をたどり、`owner` までの道にある変数を親ごとに集める。たどり済みの変数で止めるので、
         // 時間は道の変数の数に比例する
-        let mut children: HashMap<VarId, Vec<VarId>> = HashMap::new();
-        let mut on_path: HashSet<VarId> = HashSet::new();
+        let mut children: FxHashMap<VarId, Vec<VarId>> = FxHashMap::default();
+        let mut on_path: FxHashSet<VarId> = FxHashSet::default();
         for &var in &needed {
             let mut at = var;
             while at != owner && on_path.insert(at) {
@@ -520,8 +522,8 @@ impl Fields<'_> {
         // スロットごとの代表は、番号のいちばん小さい変数である。親の `release` のコンストラクタは、その親の子のうち
         // 番号のいちばん小さい変数のものにする。親をこれと別のコンストラクタで分解した変数 (到達しない行き先にしか
         // 現れない) は、1つの `release` に書けないので代表にしない
-        let mut ctors: HashMap<VarId, Ctor> = HashMap::new();
-        let mut reps: HashMap<(VarId, usize), VarId> = HashMap::new();
+        let mut ctors: FxHashMap<VarId, Ctor> = FxHashMap::default();
+        let mut reps: FxHashMap<(VarId, usize), VarId> = FxHashMap::default();
         for (&parent, kids) in &mut children {
             kids.sort_unstable();
             let ctor = self.parent(kids[0]).ctor;
@@ -540,7 +542,7 @@ impl Fields<'_> {
         // 道の途中に必要な変数か所有している変数があれば、`release` でその変数から受け取れない。道に代表でない変数が
         // あれば、名前を書けない。どちらも、`owner` がまだ所有されている間に `dup` する
         let mut dupped = Vec::new();
-        let mut carried: HashSet<VarId> = HashSet::new();
+        let mut carried: FxHashSet<VarId> = FxHashSet::default();
         for &var in &needed {
             let mut at = var;
             let mut dup = false;

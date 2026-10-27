@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use super::*;
 use crate::kind::summary::BodyKinds;
@@ -17,7 +17,7 @@ use crate::kind::summary::BodyKinds;
 pub(crate) struct Exporter<'t, 'c, 's, 'k> {
     table: &'t Table<'c>,
     types: &'s mut TypeStore,
-    done: HashMap<Ty, TypeId>,
+    done: FxHashMap<Ty, TypeId>,
     /// `None` は診断のための書き出しである。
     kinds: Option<BodyKinds<'k>>,
     /// `:type` の問い合わせの型を書くときだけ持つ。
@@ -28,8 +28,8 @@ pub(crate) struct Exporter<'t, 'c, 's, 'k> {
 /// 名前のない row 変数は、閉じた row として書く。
 #[derive(Debug, Default)]
 pub(crate) struct VarNames {
-    pub types: HashMap<Ty, String>,
-    pub rows: HashMap<RowVar, String>,
+    pub types: FxHashMap<Ty, String>,
+    pub rows: FxHashMap<RowVar, String>,
 }
 
 impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
@@ -37,7 +37,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
         Exporter {
             table,
             types,
-            done: HashMap::new(),
+            done: FxHashMap::default(),
             kinds: None,
             names: None,
         }
@@ -51,7 +51,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
         Exporter {
             table,
             types,
-            done: HashMap::new(),
+            done: FxHashMap::default(),
             kinds: Some(kinds),
             names: None,
         }
@@ -67,7 +67,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
         Exporter {
             table,
             types,
-            done: HashMap::new(),
+            done: FxHashMap::default(),
             kinds: None,
             names: Some(names),
         }
@@ -192,7 +192,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
 impl Table<'_> {
     /// 単体テストが確かめる型の表示。テストごとに使い捨ての型の表に書き出す。
     pub fn show(&self, ty: Ty, program: &eml_hir::Program) -> String {
-        let mut types = TypeStore::new(program);
+        let mut types = TypeStore::for_program(program);
         let id = Exporter::diagnostic(self, &mut types).export(ty);
         types.display(id, &program.names).to_string()
     }

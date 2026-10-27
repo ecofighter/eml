@@ -422,11 +422,7 @@ fn a_seeded_mismatch_names_the_seed() {
 #[should_panic(expected = "never preempted under `--sched seeded:")]
 fn a_par_file_that_is_never_preempted_fails() {
     let source = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = Par.par (fn () -> 1) (fn () -> 2)\n  println (show (a + b))\n";
-    let session = Session::load(
-        "run/par/short.em",
-        source,
-        &eml_test_support::MemorySource(&[]),
-    );
+    let session = Session::load("run/par/short.em", source, &eml_cli::MemorySource(&[]));
     let program = session.compile().program.expect("the program compiles");
     let root = ui_root().join("run/par");
     let path = root.join("short.em");
@@ -454,11 +450,7 @@ fn a_module_without_main_fails() {
 
 #[test]
 fn a_single_file_test_may_use_the_standard_library() {
-    let session = Session::load(
-        "run/basics/hello.em",
-        "",
-        &eml_test_support::MemorySource(&[]),
-    );
+    let session = Session::load("run/basics/hello.em", "", &eml_cli::MemorySource(&[]));
     assert!(session.module_names().count() > session.user_module_names().count());
     assert_single_file(&session, "basics/hello.em");
 }
@@ -466,7 +458,7 @@ fn a_single_file_test_may_use_the_standard_library() {
 #[test]
 #[should_panic(expected = "basics/imports.em imports Util")]
 fn a_single_file_test_that_imports_a_module_fails() {
-    let source = eml_test_support::MemorySource(&[("Util.em", "")]);
+    let source = eml_cli::MemorySource(&[("Util.em", "")]);
     let session = Session::load("run/basics/imports.em", "import Util\n", &source);
     assert_single_file(&session, "basics/imports.em");
 }

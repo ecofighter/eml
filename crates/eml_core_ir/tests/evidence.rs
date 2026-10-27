@@ -1001,7 +1001,7 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
     let text = format!("{HIDE}{text}");
     let text = text.as_str();
     let program = eml_test_support::core_until(text, Pass::Evidence);
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = rustc_hash::FxHashSet::default();
     for function in &program.functions {
         for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
             let eml_core_ir::Stmt::Let { var, rhs } = stmt else {
@@ -1649,8 +1649,9 @@ fn a_fork_entry_owns_its_evidence_and_child_abort_borrows_it() {
         .iter()
         .position(|function| function.name == "fork$Two.two")
         .expect("the fork entry is in the program");
-    let points = eml_lir::unwind::points_all(&lir)
+    let points = eml_lir::unwind::points(&lir, |function| function.0 as usize == index)
         .swap_remove(index)
+        .expect("the fork entry is wanted")
         .unwrap_or_else(|error| panic!("{error}"));
     // 地点は `child_abort` (b0 の文 1) の1つだけで、持つのは `ev.0` だけである。閉包の `c.3` は `child_abort` が消費する
     let owned: Vec<_> = points

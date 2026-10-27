@@ -1,10 +1,11 @@
-use std::collections::HashSet;
-
-use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
+use eml_diagnostics::{
+    Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize, count,
+};
 use eml_hir::{
     Body, ConstructorId, EffectId, ExprId, ExprKind, FunctionKind, OperationId, PatId, Program,
     Res, RowRef, Signature, TypeRefKind,
 };
+use rustc_hash::FxHashSet;
 
 use crate::codes;
 use crate::kind::{
@@ -215,7 +216,7 @@ impl BodyCheck<'_, '_> {
             // 同じエフェクトのラベルが足りないことは、名前を1回書けば伝わる。有限の解のない呼び出しの輪では、固定点が
             // 上限まで足したラベルが並ぶので、名前を重ねると読みにくい (docs/spec/types.md の「呼び出しの包含を解く」)
             Err(UnifyError::MissingEffects(mut effects)) => {
-                let mut seen = HashSet::new();
+                let mut seen = FxHashSet::default();
                 effects.retain(|effect| seen.insert(*effect));
                 // 範囲の外で `var` のラベルが足りないのは、変数を使う関数が範囲の外へ出たためである。その誤りは同じ
                 // 本体がその変数の E2019 として報告するので、この E2002 は取っておき、E2019 が出なかったときにだけ出す
@@ -663,14 +664,6 @@ pub(super) fn callee_subject(program: &Program, body: &Body, callee: ExprId) -> 
         _ => return "this expression".to_string(),
     };
     format!("`{name}`")
-}
-
-pub(super) fn count(n: usize, word: &str) -> String {
-    if n == 1 {
-        format!("1 {word}")
-    } else {
-        format!("{n} {word}s")
-    }
 }
 
 const LINEAR_NOTE: &str = "linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once";

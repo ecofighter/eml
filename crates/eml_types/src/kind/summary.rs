@@ -2,8 +2,9 @@
 //! (docs/spec/types.md の「書き出すときの規則」と docs/implementation/architecture.md の「`eml_types` の内部」)。
 //! 値は、SCC で合わせた制約のグラフの成分の上で、メンバーの宣言自身の変数で止まりながら下にたどって決める。
 
-use std::collections::HashMap;
 use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
 
 use super::KindVar;
 use super::eval::{SchemeFacts, scheme_facts};
@@ -30,16 +31,16 @@ pub(crate) struct BodyKinds<'s> {
     offset: usize,
     lin_vars: usize,
     /// 宣言自身の変数を含む成分と、その中の変数の `Shape` の番号 (小さい順)。
-    kept: HashMap<usize, Vec<usize>>,
+    kept: FxHashMap<usize, Vec<usize>>,
     /// `kept` のうち、下向きに何もない成分。
     kept_inert: Vec<usize>,
     /// `kept` の成分の番号の最大。
     last_kept: usize,
     facts: SchemeFacts,
     /// 成分ごとの覚え。止まる所がメンバーごとに違うので、メンバーごとに作り直す。
-    below: HashMap<usize, Below>,
+    below: FxHashMap<usize, Below>,
     joins: Vec<Vec<u32>>,
-    numbers: HashMap<Rc<[u32]>, u32>,
+    numbers: FxHashMap<Rc<[u32]>, u32>,
 }
 
 impl<'s> BodyKinds<'s> {
@@ -66,9 +67,9 @@ impl<'s> BodyKinds<'s> {
             kept_inert,
             last_kept,
             facts: scheme_facts(scheme, lin_vars),
-            below: HashMap::new(),
+            below: FxHashMap::default(),
             joins: Vec::new(),
-            numbers: HashMap::new(),
+            numbers: FxHashMap::default(),
         }
     }
 

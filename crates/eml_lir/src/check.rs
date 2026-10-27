@@ -1,12 +1,12 @@
 //! Core IR の verifier と LIR の verifier が共有する部品 (docs/spec/lir.md の「verifier」)。ブロックの列の形
-//! (R1〜R4) と支配木、R7 と R8 の検査、印の検査 (V2 と作る所の検査)、基本操作と `clause` の検査を、2つの IR が
-//! 共有する型の上で書く。IR ごとに違うもの (ブロックの終端、関数の型) は、呼ぶ側が形を写して渡す。命令の列を
-//! たどる部分と所有の検査は、IR ごとの verifier が持つ。
+//! (R1〜R4) と支配木、定義と範囲 (R5、R6)、R7 と R8 の検査、印の検査 (V2 と作る所の検査)、基本操作と `clause` の
+//! 検査を、2つの IR が共有する型の上で書く。IR ごとに違うもの (ブロックの終端、関数の型) は、呼ぶ側が形を写して
+//! 渡す。命令の列をたどる部分と所有の検査は、IR ごとの verifier が持つ。
 
-use std::collections::{HashMap, HashSet};
 use std::mem::discriminant;
 
 use eml_extern::{Extern, FunctionRow};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::syntax::{REPRS, effect_text, layout_text, operation_text, prim_text, repr_text};
 use crate::{
@@ -336,6 +336,8 @@ impl GrowingTree {
 pub struct FnSummary<'a> {
     pub name: &'a str,
     pub clause: Option<(u32, u32)>,
+    /// 引数の数。
+    pub params: usize,
 }
 
 /// verifier を始めるときに1回だけ求める、プログラム全体の表。
@@ -349,6 +351,42 @@ pub struct Tables<'a> {
     pub strings: &'a [String],
     /// プログラムの関数と同じ順の、関数の要約。
     pub functions: &'a [FnSummary<'a>],
+}
+
+/// プログラム全体の表を作り、`f` に渡す。配置の Repr はコンストラクタをすべてたどって決まるので、命令ごとでなく
+/// 表ごとに1回だけ求める。
+pub fn with_tables<'p, R>(
+    layouts: &'p [Layout],
+    structs: &'p Structs,
+    effects: &'p [EffectInfo],
+    strings: &'p [String],
+    functions: impl Iterator<Item = FnSummary<'p>>,
+    f: impl FnOnce(Tables<'_>) -> R,
+) -> R {
+    let layout_reprs: Vec<Repr> = layouts.iter().map(Layout::repr).collect();
+    let functions: Vec<FnSummary> = functions.collect();
+    f(Tables {
+        layouts,
+        layout_reprs: &layout_reprs,
+        structs,
+        effects,
+        strings,
+        functions: &functions,
+    })
+}
+
+/// 定義と使用の位置。`index` はブロックの中の文の番号で、ブロックの引数と case のフィールドは -1、終端は文の数である。
+#[derive(Clone, Copy)]
+pub struct Site {
+    pub block: u32,
+    pub index: i64,
+}
+
+impl Site {
+    /// ブロックの入口。ブロックの引数と case のフィールドを定義する位置である。
+    pub fn entry(block: u32) -> Site {
+        Site { block, index: -1 }
+    }
 }
 
 /// 1つの関数を検査する間の、所有にも IR の命令の型にも関わらない状態。IR ごとの verifier が、命令の列をたどりながら
@@ -365,22 +403,234 @@ pub struct Context<'a> {
     never: Vec<bool>,
     /// `closure` で束縛した変数の関数と、捕獲した値の数。`ev_set_clause` の入口の関数と、Core IR の `handle` の節の
     /// 引数の数を確かめるのに使う。
-    closures: HashMap<VarId, (FnIdx, usize)>,
+    closures: FxHashMap<VarId, (FnIdx, usize)>,
     /// `ev_new[E]` で束縛した変数の、エフェクトの番号。`ev_set_clause` の入口がその evidence のエフェクトの操作で
     /// あることを確かめるのに使う。
-    evidences: HashMap<VarId, u32>,
+    evidences: FxHashMap<VarId, u32>,
+    dominators: Dominators,
+    /// 変数ごとの定義の位置 (R5)。
+    defs: Vec<Option<Site>>,
+    /// 今検査している位置。IR ごとの verifier が、命令の列をたどりながら進める。
+    pub at: Site,
 }
 
 impl<'a> Context<'a> {
-    pub fn new(tables: Tables<'a>, vars: &'a [VarInfo], boundaries: bool) -> Self {
+    pub fn new(
+        tables: Tables<'a>,
+        vars: &'a [VarInfo],
+        boundaries: bool,
+        dominators: Dominators,
+    ) -> Self {
         Context {
             tables,
             vars,
             boundaries,
             never: vec![false; vars.len()],
-            closures: HashMap::new(),
-            evidences: HashMap::new(),
+            closures: FxHashMap::default(),
+            evidences: FxHashMap::default(),
+            dominators,
+            defs: vec![None; vars.len()],
+            at: Site::entry(0),
         }
+    }
+
+    /// 変数を多くとも1回定義する (R5)。
+    pub fn define(&mut self, var: VarId, site: Site) -> Result<(), String> {
+        let slot = &mut self.defs[var.0 as usize];
+        if slot.is_some() {
+            return Err(format!("`{}` is defined twice", self.name(var)));
+        }
+        *slot = Some(site);
+        Ok(())
+    }
+
+    /// 定義の位置が今の位置を支配する (R6)。
+    pub fn visible(&self, var: VarId) -> Result<(), String> {
+        let dominated = self.defs[var.0 as usize].is_some_and(|site| {
+            if site.block == self.at.block {
+                site.index < self.at.index
+            } else {
+                self.dominators.dominates(site.block, self.at.block)
+            }
+        });
+        if !dominated {
+            return Err(format!("`{}` is used outside its scope", self.name(var)));
+        }
+        Ok(())
+    }
+
+    /// 関数の値は表にある関数を指す。
+    pub fn function_value(&self, target: FnIdx) -> Result<(), String> {
+        if target.0 as usize >= self.tables.functions.len() {
+            return Err(format!(
+                "a function value refers to the unknown function #{}",
+                target.0
+            ));
+        }
+        Ok(())
+    }
+
+    /// 呼び出しと `closure` の相手は表にある関数である。
+    pub fn function(&self, target: FnIdx) -> Result<&'a FnSummary<'a>, String> {
+        self.tables
+            .functions
+            .get(target.0 as usize)
+            .ok_or_else(|| format!("a call refers to the unknown function #{}", target.0))
+    }
+
+    /// `closure` は1つ以上で、関数の引数の数より少ない値を捕まえる。捕まえる値がなければ `&f` と書く。
+    pub fn closure_arity(&self, target: FnIdx, captured: usize) -> Result<(), String> {
+        let target = self.function(target)?;
+        if captured == 0 {
+            return Err(format!(
+                "a closure of `{0}` has no arguments; use `&{0}`",
+                target.name
+            ));
+        }
+        if captured >= target.params {
+            return Err(format!(
+                "a closure of `{}` has {captured} arguments, but it must have fewer than {}",
+                target.name, target.params
+            ));
+        }
+        Ok(())
+    }
+
+    /// 直接の呼び出しは、`clause` の印のない関数に、引数の数をそろえて渡す。
+    pub fn direct_call(&self, target: FnIdx, passed: usize) -> Result<(), String> {
+        if let Some(clause) = self.clause_of(target) {
+            return Err(format!(
+                "`{}` is a clause of `{clause}`, but it is called directly",
+                self.tables.functions[target.0 as usize].name
+            ));
+        }
+        let target = self.function(target)?;
+        if passed != target.params {
+            return Err(format!(
+                "a direct call to `{}` passes {passed} arguments, but it takes {}",
+                target.name, target.params
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn const_string(&self, index: u32) -> Result<(), String> {
+        if index as usize >= self.tables.strings.len() {
+            return Err(format!(
+                "a constant refers to string {index}, which does not exist"
+            ));
+        }
+        Ok(())
+    }
+
+    /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
+    /// 関数は操作の ABI で呼ばれ、`apply` の一様な規約に合わないためである
+    /// (docs/spec/lir.md の「入口の関数の印」)。変数は1回だけ定義されるので (R5)、呼ぶ側は先に `closure` をすべて
+    /// `closures` に渡し、`uses` で `ev_set_clause` の2つ目の引数を除いた使いをすべて渡す。
+    pub fn clause_values(
+        &self,
+        closures: impl Iterator<Item = (VarId, FnIdx)>,
+        uses: impl FnOnce(&mut dyn FnMut(Atom)),
+    ) -> Result<(), String> {
+        let closures: FxHashMap<VarId, FnIdx> = closures
+            .filter(|&(_, target)| self.clause_of(target).is_some())
+            .collect();
+        let mut result = Ok(());
+        uses(&mut |atom: Atom| {
+            let target = match atom {
+                Atom::Fn(target) => target,
+                Atom::Var(var) => match closures.get(&var) {
+                    Some(&target) => target,
+                    None => return,
+                },
+                Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => return,
+            };
+            if result.is_ok()
+                && let Some(clause) = self.clause_of(target)
+            {
+                result = Err(format!(
+                    "`{}` is a clause of `{clause}`, but it is used as a function value",
+                    self.tables.functions[target.0 as usize].name
+                ));
+            }
+        });
+        result
+    }
+
+    /// `jump` の実引数は、行き先の引数と Repr が互換で (R7)、印も互換である (V2)。Core IR の段では、印を比べるのは
+    /// `jump` と `return` だけである (docs/spec/lir.md の「Kind の印の検査」)。
+    pub fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
+        let expected = self.repr(param);
+        if self.passes(arg, expected) {
+            let mark = self.mark(param);
+            if self.mark_passes(arg, mark) {
+                return Ok(());
+            }
+            return Err(format!(
+                "a jump to b{} passes {} to `{}` ({})",
+                target.0,
+                self.marked_atom_text(arg),
+                self.name(param),
+                mark.name()
+            ));
+        }
+        Err(match arg {
+            Atom::Var(var) => format!(
+                "a jump to b{} passes `{}` ({}) to `{}` ({})",
+                target.0,
+                self.name(var),
+                self.repr_text(self.repr(var)),
+                self.name(param),
+                self.repr_text(expected)
+            ),
+            _ => format!(
+                "a jump to b{} passes {} to `{}` ({})",
+                target.0,
+                self.atom_text(arg),
+                self.name(param),
+                self.repr_text(expected)
+            ),
+        })
+    }
+
+    /// `return` の値は、関数の結果と Repr が互換で、印も互換である。
+    pub fn check_returned(&self, atom: Atom, repr: Repr, mark: Mark) -> Result<(), String> {
+        if !self.passes(atom, repr) {
+            return Err(format!(
+                "{} is returned from a function that returns {}",
+                self.typed_atom_text(atom),
+                self.repr_text(repr)
+            ));
+        }
+        if !self.mark_passes(atom, mark) {
+            return Err(format!(
+                "{} is returned from a function that returns {}",
+                self.marked_atom_text(atom),
+                mark.name()
+            ));
+        }
+        Ok(())
+    }
+
+    /// `switch` の頭の検査。行き先があり、scrutinee と case と `default` の形が合い、フィールドを束縛する case は
+    /// フィールドを持てる値を分け、配置が合う (R8)。
+    pub fn check_switch(
+        &self,
+        scrutinee: Atom,
+        layout: Option<LayoutId>,
+        cases: &[Case],
+        default: Option<BlockId>,
+    ) -> Result<(), String> {
+        if cases.is_empty() && default.is_none() {
+            return Err("a switch has no targets".to_string());
+        }
+        self.switch_scrutinee(scrutinee)?;
+        self.switch_cases(cases)?;
+        self.literal_default(cases, default)?;
+        if cases.iter().any(|case| !case.fields.is_empty()) {
+            self.fields_allowed(scrutinee)?;
+        }
+        self.switch_layout(scrutinee, layout, cases, default)
     }
 
     fn repr(&self, var: VarId) -> Repr {
@@ -749,14 +999,14 @@ impl<'a> Context<'a> {
     /// 1つの `switch` の case の種類がそろい、同じ case が2回なく、リテラルの case はフィールドを持たず、文字列の case
     /// は定数の表にあること。
     pub fn switch_cases(&self, cases: &[Case]) -> Result<(), String> {
-        let kinds: HashSet<_> = cases
+        let kinds: FxHashSet<_> = cases
             .iter()
             .map(|case| discriminant(&case.pattern))
             .collect();
         if kinds.len() > 1 {
             return Err("a switch mixes kinds of cases".to_string());
         }
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         for case in cases {
             let literal = !matches!(case.pattern, CasePattern::Tag(_));
             if literal && !case.fields.is_empty() {
@@ -823,7 +1073,7 @@ impl<'a> Context<'a> {
             ));
         }
         if !self.boundaries {
-            return self.check_extern_exact(var, &row, args);
+            return self.check_extern_exact(var, row, args);
         }
         for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
             if !self.passes(arg, expected) {

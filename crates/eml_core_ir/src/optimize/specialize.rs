@@ -3,12 +3,11 @@
 //! 複製は鍵だけで名前を決め、呼び出し先の translate の出力から作る。そのため、どの関数をどの順に書き換えても、同じ
 //! 名前の複製は同じコードになる (docs/spec/vm.md の「追記」)。
 
-use std::collections::HashMap;
-
 use super::known::{self, Callee, KnownClosure};
 use crate::fnv::Fnv;
 use crate::{Call, CoreFn, Program, Rhs, Stmt};
-use eml_lir::{Atom, Ctor, FnIdx, Layout, Mark, Repr, VarId, VarInfo};
+use eml_lir::{Atom, Ctor, FnIdx, Layout, Mark, Repr, VarId, VarInfo, push_var};
+use rustc_hash::FxHashMap;
 
 /// 鍵の入れ子の深さの上限。特殊化で生まれた閉包をまた鍵にする連鎖 (CPS 風に閉包が育つ形) を、ここで打ち切る。
 pub(crate) const MAX_KEY_DEPTH: usize = 4;
@@ -93,16 +92,16 @@ pub(crate) struct Specializer {
     passed: Vec<Vec<bool>>,
     /// 関数ごとの鍵の入れ子の深さ。translate の関数は 0 である。
     depths: Vec<usize>,
-    copies: HashMap<Key, FnIdx>,
+    copies: FxHashMap<Key, FnIdx>,
     /// 作ったがまだプログラムに足していない複製と、その中で閉包の捕獲に開いた引数の組。
-    created: Vec<(CoreFn, HashMap<VarId, KnownClosure>)>,
+    created: Vec<(CoreFn, FxHashMap<VarId, KnownClosure>)>,
 }
 
 /// 作業リストで関数を1つずつ書き換える。translate の関数を順に書き換え、その途中で作った複製を後ろに足して、
 /// 同じ規則で書き換える。複製は鍵ごとに1つなので、作業リストは止まる。
 pub(crate) fn specialize(program: &mut Program) {
     let mut cx = Specializer::new(program);
-    let mut opened = vec![HashMap::new(); program.functions.len()];
+    let mut opened = vec![FxHashMap::default(); program.functions.len()];
     let mut index = 0;
     while index < program.functions.len() {
         let owner =
@@ -131,7 +130,7 @@ impl Specializer {
             depths: vec![0; callees.len()],
             callees,
             passed,
-            copies: HashMap::new(),
+            copies: FxHashMap::default(),
             created: Vec::new(),
         }
     }
@@ -184,7 +183,7 @@ impl Specializer {
         // `return` の節) の複製は内部の関数で、ほかの関数の複製は内部の関数でない (docs/spec/core-ir.md の「鍵と名前」)
         let mut widths = Vec::new();
         let mut params = Vec::new();
-        let mut opened = HashMap::new();
+        let mut opened = FxHashMap::default();
         for (position, param) in function.params().to_vec().into_iter().enumerate() {
             let Some((_, shape)) = key.args.iter().find(|(at, _)| *at == position) else {
                 params.push(param);
@@ -207,7 +206,7 @@ impl Specializer {
                         repr,
                         mark,
                     };
-                    let var = known::fresh(&mut function.vars, info);
+                    let var = push_var(&mut function.vars, info);
                     params.push(var);
                     Atom::Var(var)
                 })

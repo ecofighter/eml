@@ -9,16 +9,13 @@
 //! 行き先のブロックの使いも許す。その使いは、`switch` を解くと届かなくなって消えるためである (`scrutinee_skipped`)。
 //! どの規則も関数自身のコードだけを読むので、書き換えた後のコードは名前で決まる (docs/spec/vm.md の「追記」)。
 
-use std::collections::{HashMap, HashSet};
-
-use crate::optimize::known::{
-    Callee, KnownClosure, apply_rewritable, fresh, known_closures, replace,
-};
+use crate::optimize::known::{Callee, KnownClosure, apply_rewritable, known_closures, replace};
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, Case, CasePattern, Ctor, Mark, Structs, VarId};
+use eml_lir::{Atom, BlockId, Case, CasePattern, Ctor, Mark, Structs, VarId, push_var};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// `con` が束縛した変数と、そのコンストラクタと引数。
-pub(super) fn known_cons(function: &CoreFn) -> HashMap<VarId, (Ctor, Vec<Atom>)> {
+pub(super) fn known_cons(function: &CoreFn) -> FxHashMap<VarId, (Ctor, Vec<Atom>)> {
     function
         .blocks
         .iter()
@@ -53,7 +50,7 @@ pub(super) fn uses(function: &CoreFn) -> Vec<usize> {
 
 /// 唯一の使いが開く所である、既知の `con` の変数。
 fn single_con<'a>(
-    known: &'a HashMap<VarId, (Ctor, Vec<Atom>)>,
+    known: &'a FxHashMap<VarId, (Ctor, Vec<Atom>)>,
     uses: &[usize],
     atom: Atom,
 ) -> Option<(VarId, &'a (Ctor, Vec<Atom>))> {
@@ -130,7 +127,7 @@ pub(super) fn resolve_known(function: &mut CoreFn, structs: &Structs) -> bool {
         return false;
     }
     let uses = uses(function);
-    let mut opened = HashSet::new();
+    let mut opened = FxHashSet::default();
     for index in 0..function.blocks.len() {
         let Term::Switch {
             scrutinee,
@@ -254,7 +251,7 @@ fn split_at_unpacks(function: &mut CoreFn, splits: Vec<Vec<(usize, Vec<Atom>)>>)
 }
 
 /// 開いた `con` の `let` を消す。唯一の使いが開く所だったので、値はもう使われない。
-fn drop_cons(function: &mut CoreFn, opened: &HashSet<VarId>) {
+fn drop_cons(function: &mut CoreFn, opened: &FxHashSet<VarId>) {
     for block in &mut function.blocks {
         block.stmts.retain(
             |stmt| !matches!(stmt, Stmt::Let { var, rhs: Rhs::Con { .. } } if opened.contains(var)),
@@ -319,7 +316,7 @@ pub(super) fn thread_jumps(function: &mut CoreFn, structs: &Structs) -> bool {
     let mut uses = uses(function);
     let count = function.blocks.len();
     let mut added: Vec<(usize, Block)> = Vec::new();
-    let mut opened = HashSet::new();
+    let mut opened = FxHashSet::default();
     let mut changed = false;
     for index in 0..count {
         let Term::Jump { target, args } = &function.blocks[index].term else {
@@ -359,7 +356,7 @@ fn thread_switch(
     function: &mut CoreFn,
     structs: &Structs,
     uses: &mut Vec<usize>,
-    known: &HashMap<VarId, (Ctor, Vec<Atom>)>,
+    known: &FxHashMap<VarId, (Ctor, Vec<Atom>)>,
     added: &mut Vec<(usize, Block)>,
     target: usize,
     args: &[Atom],
@@ -412,7 +409,7 @@ fn thread_switch(
     ) = (&block.stmts[..], &block.term)
         && used_only_in(uses, block, &fields)
     {
-        let substitution: HashMap<VarId, Atom> =
+        let substitution: FxHashMap<VarId, Atom> =
             fields.iter().copied().zip(values.iter().copied()).collect();
         return forward(
             function,
@@ -520,7 +517,7 @@ fn thread_unpack(
     function: &mut CoreFn,
     structs: &Structs,
     uses: &mut Vec<usize>,
-    known: &HashMap<VarId, (Ctor, Vec<Atom>)>,
+    known: &FxHashMap<VarId, (Ctor, Vec<Atom>)>,
     added: &mut Vec<(usize, Block)>,
     target: usize,
     args: &[Atom],
@@ -549,7 +546,7 @@ fn thread_unpack(
         && used_only_in(uses, block, fields)
         && used_only_in(uses, block, &block.params)
     {
-        let substitution: HashMap<VarId, Atom> = block
+        let substitution: FxHashMap<VarId, Atom> = block
             .params
             .iter()
             .copied()
@@ -651,7 +648,7 @@ fn forward(
     added: &[(usize, Block)],
     next: BlockId,
     forwarded: &[Atom],
-    substitution: &HashMap<VarId, Atom>,
+    substitution: &FxHashMap<VarId, Atom>,
     values: &[Atom],
     con: Option<VarId>,
 ) -> Option<(Term, Option<VarId>)> {
@@ -691,7 +688,7 @@ fn used_only_in(uses: &[usize], block: &Block, vars: &[VarId]) -> bool {
 /// `var` と同じ名前、Repr、印の新しい変数で、分けた C か M の `jump` で1回だけ使うもの。
 fn jump_arg(function: &mut CoreFn, uses: &mut Vec<usize>, var: VarId) -> VarId {
     let info = function.vars[var.0 as usize].clone();
-    let copy = fresh(&mut function.vars, info);
+    let copy = push_var(&mut function.vars, info);
     debug_assert_eq!(uses.len(), copy.0 as usize);
     uses.push(1);
     copy
@@ -711,7 +708,7 @@ fn retally(uses: &mut [usize], old: &Term, new: &Term) {
     });
 }
 
-fn substituted(atoms: &[Atom], substitution: &HashMap<VarId, Atom>) -> Vec<Atom> {
+fn substituted(atoms: &[Atom], substitution: &FxHashMap<VarId, Atom>) -> Vec<Atom> {
     atoms
         .iter()
         .map(|&atom| match atom {
@@ -767,8 +764,8 @@ fn insert_after(function: &mut CoreFn, added: Vec<(usize, Block)>) {
 /// 書き換えで生まれた直接の呼び出しの結果の変数を返す。生まれた呼び出しは、呼ぶ側がインライン化の候補にする。
 pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> (bool, Vec<VarId>) {
     let closures = known_closures(function);
-    let mut total: HashMap<VarId, usize> = HashMap::new();
-    let mut applied: HashMap<VarId, Vec<bool>> = HashMap::new();
+    let mut total: FxHashMap<VarId, usize> = FxHashMap::default();
+    let mut applied: FxHashMap<VarId, Vec<bool>> = FxHashMap::default();
     for block in &function.blocks {
         for stmt in &block.stmts {
             stmt.for_each_atom(|atom| {
@@ -802,7 +799,7 @@ pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> 
             }
         });
     }
-    let known: HashMap<VarId, KnownClosure> = closures
+    let known: FxHashMap<VarId, KnownClosure> = closures
         .into_iter()
         .filter(|(var, _)| {
             let Some(applies) = applied.get(var) else {
@@ -851,7 +848,7 @@ pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> 
 }
 
 /// 既知の閉包か関数の値への `apply` か。
-fn applies_known(stmt: &Stmt, known: &HashMap<VarId, KnownClosure>) -> bool {
+fn applies_known(stmt: &Stmt, known: &FxHashMap<VarId, KnownClosure>) -> bool {
     match stmt {
         Stmt::Let {
             var: _,

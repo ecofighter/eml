@@ -4,8 +4,6 @@
 //! ブロックも文も平らに並ぶので、プログラムの大きさに比例して再帰しない (docs/spec/lir.md)。
 //! 字句解析と、2つの IR に共通する形の読み方は `syntax` の部品を使い、ここは命令の列だけを読む。
 
-use eml_extern::Extern;
-
 use crate::syntax::{self, FnState, Reader, error};
 use crate::{Atom, Block, Call, Ctor, LirFn, ParseError, Program, Reuse, Rhs, Stmt, Term, VarId};
 
@@ -91,9 +89,7 @@ impl Parser<'_> {
                     }
                 }
                 "unpack" => {
-                    let value = self.reader.var(state)?;
-                    let ctor = self.reader.ctor()?;
-                    let fields = self.reader.list('(', ')', |p| p.binder(state))?;
+                    let (value, ctor, fields) = self.reader.unpack(state)?;
                     stmts.push(Stmt::Unpack {
                         value,
                         ctor,
@@ -115,18 +111,11 @@ impl Parser<'_> {
                 "return" => break Term::Return(self.reader.atom(state)?),
                 "tail" => break Term::TailCall(self.call(state)?),
                 "jump" => {
-                    let target = self.reader.target(state)?;
-                    let args = self.reader.list('(', ')', |p| p.atom(state))?;
+                    let (target, args) = self.reader.jump(state)?;
                     break Term::Jump { target, args };
                 }
                 "switch" => {
-                    let scrutinee = self.reader.atom(state)?;
-                    let layout = if self.reader.at_punct('{') {
-                        None
-                    } else {
-                        Some(self.reader.layout_ref()?)
-                    };
-                    let (cases, default) = self.reader.cases(state)?;
+                    let (scrutinee, layout, cases, default) = self.reader.switch(state)?;
                     break Term::Switch {
                         scrutinee,
                         layout,
@@ -263,24 +252,16 @@ impl Parser<'_> {
         self.reader.bump();
         let rhs = match keyword {
             "closure" => {
-                let target = self.reader.function_name()?;
-                Rhs::MakeClosure(target, self.reader.list('(', ')', |p| p.atom(state))?)
+                let (target, args) = self.reader.closure(state)?;
+                Rhs::MakeClosure(target, args)
             }
-            // 引数はいくつでも読む。誤りを含む IR も読み戻して verifier に報告させるため、引数の数は verifier が表の値と
-            // 比べる
             "extern" => {
-                let line = self.reader.line();
-                let name = self.reader.name()?;
-                let ext = Extern::from_name(&name)
-                    .ok_or_else(|| error(line, format!("unknown extern `{name}`")))?;
-                let args = self.reader.list('(', ')', |p| p.atom(state))?;
-                let at = self.reader.position()?;
+                let (ext, args, at) = self.reader.extern_call(state)?;
                 Rhs::Extern { ext, args, at }
             }
-            // 引数の数は extern と同じく verifier が確かめる
             "prim" => {
-                let prim = self.reader.prim()?;
-                Rhs::Prim(prim, self.reader.list('(', ')', |p| p.atom(state))?)
+                let (prim, args) = self.reader.prim_call(state)?;
+                Rhs::Prim(prim, args)
             }
             "const" => Rhs::ConstString(self.reader.const_string()?),
             "con" => self.con(state)?,

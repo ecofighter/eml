@@ -13,6 +13,7 @@ doctest = false
 eml_extern.workspace = true
 eml_lir.workspace = true
 eml_rt.workspace = true
+rustc-hash.workspace = true
 
 [dev-dependencies]
 eml_test_support = { workspace = true, features = ["run"] }

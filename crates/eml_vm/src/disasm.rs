@@ -4,10 +4,9 @@
 use std::fmt::Write as _;
 
 use eml_extern::Extern;
-use eml_lir::Loc;
 use eml_rt::{MaskItem, Mode};
 
-use crate::code::{CodeBase, FnEntry, Unwind};
+use crate::code::{CodeBase, FnEntry, Tables};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP};
 
 pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
@@ -29,11 +28,7 @@ pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
 
 /// 命令を読むための `CodeBase` の列。追記の途中で `CodeBase` から借りた列も読む。
 pub(crate) struct View<'a> {
-    pub(crate) code: &'a [Op],
-    pub(crate) operands: &'a [u32],
-    pub(crate) mask_lists: &'a [MaskItem],
-    pub(crate) locations: &'a [(Pc, Loc)],
-    pub(crate) unwinds: &'a [(Pc, Unwind)],
+    pub(crate) tables: &'a Tables,
     pub(crate) functions: &'a [FnEntry],
     pub(crate) files: &'a [String],
 }
@@ -87,11 +82,7 @@ fn fields(items: &[u32]) -> String {
 impl<'a> View<'a> {
     fn of<M: Mode>(code: &'a CodeBase<M>) -> View<'a> {
         View {
-            code: &code.code,
-            operands: &code.operands,
-            mask_lists: &code.mask_lists,
-            locations: &code.locations,
-            unwinds: &code.unwinds,
+            tables: &code.tables,
             functions: &code.functions,
             files: &code.files,
         }
@@ -103,26 +94,9 @@ impl<'a> View<'a> {
         (f.start..f.end).map(|pc| self.line(pc, f.start)).collect()
     }
 
-    fn location(&self, pc: Pc) -> Option<Loc> {
-        let index = self
-            .locations
-            .binary_search_by_key(&pc, |&(at, _)| at)
-            .ok()?;
-        Some(self.locations[index].1)
-    }
-
-    /// 命令 `pc` の後の巻き戻しの表の行。表は命令の次の位置で引く。
-    fn unwind(&self, pc: Pc) -> Option<&Unwind> {
-        let index = self
-            .unwinds
-            .binary_search_by_key(&(pc + 1), |&(at, _)| at)
-            .ok()?;
-        Some(&self.unwinds[index].1)
-    }
-
     /// タグの switch の飛び先の表を、case のあるタグだけ並べる。
     fn tag_cases(&self, at: u32, origin: Pc) -> String {
-        let o = &self.operands[at as usize..];
+        let o = &self.tables.operands[at as usize..];
         let (m, default) = (o[0] as usize, o[1]);
         let mut parts = Vec::new();
         for tag in 0..m {
@@ -141,7 +115,7 @@ impl<'a> View<'a> {
     }
 
     fn key_cases(&self, at: u32, origin: Pc) -> String {
-        let o = &self.operands[at as usize..];
+        let o = &self.tables.operands[at as usize..];
         let (n, default) = (o[0] as usize, o[1]);
         let mut parts: Vec<String> = (0..n)
             .map(|case| {
@@ -164,7 +138,7 @@ impl<'a> View<'a> {
 
     /// 命令のテキスト。命令の位置 (飛び先と、自己末尾呼び出しの入口) は `origin` からの位置で書く。
     fn line(&self, pc: Pc, origin: Pc) -> String {
-        let ops = |at: u32| &self.operands[at as usize..];
+        let ops = |at: u32| &self.tables.operands[at as usize..];
         let args = |at: u32, skip: usize| {
             let o = ops(at);
             let n = o[skip - 1] as usize;
@@ -172,7 +146,7 @@ impl<'a> View<'a> {
         };
         let name = |f: u32| self.functions[f as usize].name.as_str();
         let bin = |name: &str, dst: u16, a: u16, b: u16| format!("{name} s{dst}, s{a}, s{b}");
-        let mut text = match self.code[pc as usize] {
+        let mut text = match self.tables.code[pc as usize] {
             Op::Move { dst, src } => format!("move s{dst}, s{src}"),
             Op::LoadRaw { dst, value } => format!("load_raw s{dst}, {value}"),
             Op::LoadImm { dst, value } => format!("load_imm s{dst}, {value}"),
@@ -335,7 +309,8 @@ impl<'a> View<'a> {
             Op::EvvPush { dst, l, e } => bin("evv_push", dst, l, e),
             Op::EvvMask { dst, at } => {
                 let o = ops(at);
-                let items: Vec<String> = self.mask_lists[o[0] as usize..(o[0] + o[1]) as usize]
+                let items: Vec<String> = self.tables.mask_lists
+                    [o[0] as usize..(o[0] + o[1]) as usize]
                     .iter()
                     .map(mask_item)
                     .collect();
@@ -390,7 +365,7 @@ impl<'a> View<'a> {
             ),
         };
         // 手放すものも token も着地もない行は書かない。どの命令に行があるかは命令の種類で決まるので、書かなくても失うものはない
-        if let Some(entry) = self.unwind(pc)
+        if let Some(entry) = self.tables.unwind_at(pc + 1)
             && (!entry.slots.is_empty() || !entry.tokens.is_empty() || entry.landing.is_some())
         {
             let slots: Vec<String> = entry
@@ -410,7 +385,7 @@ impl<'a> View<'a> {
                 write!(text, " land s{slot}").unwrap();
             }
         }
-        if let Some(loc) = self.location(pc) {
+        if let Some(loc) = self.tables.location(pc) {
             write!(
                 text,
                 " @{}:{}:{}",

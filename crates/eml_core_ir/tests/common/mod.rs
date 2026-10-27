@@ -7,9 +7,12 @@ pub fn core_text(text: &str, last: Pass) -> String {
     core_text_files(text, &[], last)
 }
 
-/// `modules` は根からの相対パスと本文の組である (`eml_test_support::core_until_files`)。
+/// `modules` は根からの相対パスと本文の組である (`eml_test_support::with_modules`)。
 pub fn core_text_files(entry: &str, modules: &[(&str, &str)], last: Pass) -> String {
-    let shown = pretty(&eml_test_support::core_until_files(entry, modules, last));
+    let shown = pretty(&eml_test_support::core_until(
+        eml_test_support::with_modules(entry, modules),
+        last,
+    ));
     read_back(&shown, last, pretty);
     shown
 }
@@ -40,9 +43,12 @@ pub fn lir_text(text: &str, last: eml_lir::Pass) -> String {
     lir_text_files(text, &[], last)
 }
 
-/// `modules` は根からの相対パスと本文の組である (`eml_test_support::lir_until_files`)。
+/// `modules` は根からの相対パスと本文の組である (`eml_test_support::with_modules`)。
 pub fn lir_text_files(entry: &str, modules: &[(&str, &str)], last: eml_lir::Pass) -> String {
-    let shown = eml_lir::pretty(&eml_test_support::lir_until_files(entry, modules, last));
+    let shown = eml_lir::pretty(&eml_test_support::lir_until(
+        eml_test_support::with_modules(entry, modules),
+        last,
+    ));
     lir_read_back(&shown, last);
     shown
 }
@@ -85,35 +91,21 @@ pub fn function(shown: &str, name: &str) -> String {
 /// REPL のセッションの入力を入力 1, 2, … として読み、最後の入力を入口にして、`last` のパスの直後の Core IR にして
 /// 表示する。
 pub fn session_core_text(inputs: &[&str], last: Pass) -> String {
-    let (program, typed, files) = session(inputs);
-    let entry = program
-        .input()
-        .expect("the last input is an input function");
-    let shown = pretty(&eml_core_ir::core_until(
-        &program, &typed, entry, &files, last,
-    ));
+    let checked = session(inputs);
+    let shown = pretty(&eml_core_ir::core_until(input(&checked), last));
     read_back(&shown, last, pretty);
     shown
 }
 
 /// `session_core_text` の、Perceus の後の LIR の形。
 pub fn session_lir_text(inputs: &[&str]) -> String {
-    let (program, typed, files) = session(inputs);
-    let entry = program
-        .input()
-        .expect("the last input is an input function");
-    let shown = eml_lir::pretty(&eml_core_ir::lower(&program, &typed, entry, &files));
+    let checked = session(inputs);
+    let shown = eml_lir::pretty(&eml_core_ir::lower(input(&checked)));
     lir_read_back(&shown, eml_lir::Pass::Reuse);
     shown
 }
 
-fn session(
-    inputs: &[&str],
-) -> (
-    eml_hir::Program,
-    eml_types::TypedProgram,
-    eml_diagnostics::SourceFiles,
-) {
+fn session(inputs: &[&str]) -> eml_test_support::Checked {
     let inputs: Vec<eml_hir::SessionInput> = inputs
         .iter()
         .zip(1..)
@@ -123,43 +115,31 @@ fn session(
             form: eml_hir::InputForm::Typed,
         })
         .collect();
-    let (loaded, mut diagnostics, _) = eml_hir::load_session(
-        eml_hir::STD,
-        &inputs,
-        "",
-        "",
-        &NoModules,
-        &eml_hir::ImportCache::default(),
-    );
-    let (def_map, found) = eml_hir::def_map(&loaded);
-    diagnostics.extend(found);
-    let (program, found) = eml_hir::lower(&def_map, &loaded.modules);
-    diagnostics.extend(found);
-    let (typed, found) = eml_types::check(&program, &loaded.files);
-    diagnostics.extend(found);
-    let errors: Vec<String> = diagnostics
+    let checked = eml_test_support::check_inputs(&inputs);
+    let errors: Vec<String> = checked
+        .diagnostics
         .iter()
         .filter(|d| d.is_error())
         .map(|d| format!("{} {}", d.code, d.message))
         .collect();
     assert!(errors.is_empty(), "the session has errors: {errors:?}");
-    (program, typed, loaded.files)
+    checked
 }
 
-/// セッションのテストは import を書かない。
-struct NoModules;
-
-impl eml_hir::ModuleSource for NoModules {
-    fn read(&self, _: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
-        Err(eml_hir::ReadError::NotFound)
-    }
+/// 最後の入力の関数を入口にする。
+fn input(checked: &eml_test_support::Checked) -> eml_core_ir::Input<'_> {
+    let entry = checked
+        .program
+        .input()
+        .expect("the last input is an input function");
+    checked.input(entry)
 }
 
 /// 関数の `switch` のうち、EP が yield の地点の後に置く確認 (`prim yielding()` の結果での `switch`) を除いた数。
 /// IO の extern も yield の地点なので、文の `if` が作る `switch` だけを数えるときに使う
 /// (docs/spec/core-ir.md の「IO の extern」)。
 pub fn if_switches(function: &eml_lir::LirFn) -> usize {
-    let checks: std::collections::HashSet<eml_lir::VarId> = function
+    let checks: rustc_hash::FxHashSet<eml_lir::VarId> = function
         .blocks
         .iter()
         .flat_map(|block| &block.stmts)

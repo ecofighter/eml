@@ -20,6 +20,21 @@ pub(crate) enum Target {
     Tail,
 }
 
+impl Target {
+    /// 大きさ `size` の呼ばれる側のフレームを用意し、その base を返す。末尾の位置では今のフレームを使い回す。
+    #[inline(always)]
+    fn frame(self, task: &mut Task, size: usize) -> usize {
+        match self {
+            Target::Frame { ret, dst } => task.push_frame(ret, dst, size),
+            Target::Tail => {
+                task.reserve(task.base + size);
+                task.frame_size = size;
+                task.base
+            }
+        }
+    }
+}
+
 /// 呼ばれる値がヒープのクロージャのときの、その語と走査する語の数。
 #[derive(Clone, Copy)]
 struct Closure {
@@ -82,14 +97,7 @@ fn apply_other<R: Exec>(
         return Err(VmFault::Internal("too many arguments are left over"));
     }
     // 余った引数は結果を受けて適用する `ApplyRest` のフレームに預ける
-    let base = match target {
-        Target::Frame { ret, dst } => task.push_frame(ret, dst, size),
-        Target::Tail => {
-            task.frame_size = size;
-            task.reserve(task.base + size);
-            task.base
-        }
-    };
+    let base = target.frame(task, size);
     task.stack[base + 1] = Word::from_bits(rest);
     for (i, w) in task.scratch.drain(arity..).enumerate() {
         task.stack[base + 2 + i] = w;
@@ -194,14 +202,7 @@ fn enter<R: Exec>(
 ) -> Result<(), VmFault> {
     let entry = &code.functions[f];
     let size = usize::from(entry.frame_size);
-    let base = match target {
-        Target::Frame { ret, dst } => task.push_frame(ret, dst, size),
-        Target::Tail => {
-            task.reserve(task.base + size);
-            task.frame_size = size;
-            task.base
-        }
-    };
+    let base = target.frame(task, size);
     if let Some(closure) = closure {
         take_captures::<R>(
             ctx,
@@ -210,10 +211,7 @@ fn enter<R: Exec>(
             &mut task.stack[base..base + k],
         )?;
     }
-    let Task { stack, scratch, .. } = task;
-    for (i, w) in scratch.drain(..).enumerate() {
-        stack[base + k + i] = w;
-    }
+    task.store_scratch_at(base + k);
     task.pc = entry.start;
     Ok(())
 }

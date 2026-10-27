@@ -14,7 +14,7 @@ use eml_lir::{
 };
 
 use super::instances::{GeneratedInstance, GeneratedMethod, Target};
-use super::program::{ProgramBuilder, plain_call};
+use super::program::ProgramBuilder;
 use super::types::{Composite, type_def_repr};
 use crate::builder::FnBuilder;
 
@@ -22,7 +22,7 @@ use crate::builder::FnBuilder;
 /// 「`Unr` のクラス」)。生成器の鍵の `Flexible(Poly)` から決めると、`tag$` の `decref x` を V1 が拒む
 /// (docs/spec/core-ir.md の「translate が決める印」)。
 fn named(name: &str, repr: Repr) -> VarInfo {
-    super::types::named(name, repr, Mark::Unr)
+    VarInfo::new(name, repr, Mark::Unr)
 }
 
 /// 値のコンストラクタ1つ。タプルは、コンストラクタが1つの配置として同じ規則を通る。
@@ -563,33 +563,8 @@ impl FnBuilder {
             .collect()
     }
 
-    /// 真偽値 `value` で分かれる `switch`。`layout` は `Bool` の配置である。(`False` の行き先, `True` の行き先)。
-    pub(super) fn branch_bool(&mut self, value: Atom, layout: LayoutId) -> (BlockId, BlockId) {
-        let (on_false, on_true) = (self.new_block(), self.new_block());
-        self.terminate(Term::Switch {
-            scrutinee: value,
-            layout: Some(layout),
-            cases: vec![
-                Case {
-                    pattern: CasePattern::Tag(FALSE),
-                    fields: Vec::new(),
-                    target: on_false,
-                },
-                Case {
-                    pattern: CasePattern::Tag(TRUE),
-                    fields: Vec::new(),
-                    target: on_true,
-                },
-            ],
-            default: None,
-        });
-        (on_false, on_true)
-    }
-
     pub(super) fn bind_unr(&mut self, name: &str, repr: Repr, rhs: Rhs) -> Atom {
-        let var = self.var(named(name, repr));
-        self.emit(Stmt::Let { var, rhs });
-        Atom::Var(var)
+        Atom::Var(self.bind(named(name, repr), rhs))
     }
 }
 
@@ -619,13 +594,13 @@ pub(super) fn call_target(
             debug_assert!(arity <= args.len(), "a method takes all its arguments");
             let rest = args.split_off(arity);
             if rest.is_empty() {
-                return builder.bind_unr("t", ret, plain_call(Call::Direct(function, args)));
+                return builder.bind_unr("t", ret, Rhs::call(Call::Direct(function, args)));
             }
-            let value = builder.bind_unr("t", Repr::TObj, plain_call(Call::Direct(function, args)));
+            let value = builder.bind_unr("t", Repr::TObj, Rhs::call(Call::Direct(function, args)));
             builder.bind_unr(
                 "t",
                 ret,
-                plain_call(Call::Apply {
+                Rhs::call(Call::Apply {
                     callee: value,
                     args: rest,
                     yields: false,

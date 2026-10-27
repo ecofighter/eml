@@ -7,14 +7,16 @@
 use crate::builder::FnBuilder;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::syntax::mask_text;
-use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Mark, MaskItem, Prim, Repr, VarId};
+use eml_lir::{
+    Atom, BlockId, Case, CasePattern, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
+};
 
-use super::{call, captured_mark, direct, dummy, named, yield_switch};
+use super::{captured_mark, direct, dummy, yield_switch};
 
 /// `x` をそのまま返す。yield を始めるときの κ である。
 pub(super) fn id() -> CoreFn {
     let mut b = FnBuilder::new();
-    let x = b.param(named("x", Repr::TObj, Mark::Poly));
+    let x = b.param(VarInfo::new("x", Repr::TObj, Mark::Poly));
     b.terminate(Term::Return(Atom::Var(x)));
     b.finish("id$".to_string(), false, true, Repr::TObj, Mark::Poly)
 }
@@ -22,9 +24,9 @@ pub(super) fn id() -> CoreFn {
 /// `compose$(κ, c, x)`。κ を先に呼び、その結果で c を呼ぶ。κ が yield したら、取り出した κ' と c で作り直す。
 pub(super) fn compose(compose: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();
-    let k = b.param(named("k", Repr::TObj, Mark::Poly));
-    let c = b.param(named("c", Repr::TObj, Mark::Poly));
-    let x = b.param(named("x", Repr::TObj, Mark::Poly));
+    let k = b.param(VarInfo::new("k", Repr::TObj, Mark::Poly));
+    let c = b.param(VarInfo::new("c", Repr::TObj, Mark::Poly));
+    let x = b.param(VarInfo::new("x", Repr::TObj, Mark::Poly));
     let r = apply(&mut b, "r", k, vec![Atom::Var(x)]);
     let (slow, fast) = check(&mut b);
     b.reopen(slow);
@@ -47,9 +49,9 @@ pub(super) fn compose(compose: FnIdx) -> CoreFn {
 /// (docs/spec/core-ir.md の「EP の明示の `drop`」)。
 pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();
-    let ev = b.param(named("ev", Repr::Obj, Mark::Unr));
-    let ret = b.param(named("ret", Repr::TObj, Mark::Poly));
-    let x = b.param(named("x", Repr::TObj, Mark::Poly));
+    let ev = b.param(VarInfo::new("ev", Repr::Obj, Mark::Unr));
+    let ret = b.param(VarInfo::new("ret", Repr::TObj, Mark::Poly));
+    let x = b.param(VarInfo::new("x", Repr::TObj, Mark::Poly));
     let w = prim(
         &mut b,
         "w",
@@ -137,11 +139,11 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
 /// `prompt$` に渡す (docs/spec/core-ir.md の「再開と状態」)。
 pub(super) fn resume(prompt: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();
-    let ev = b.param(named("ev", Repr::Obj, Mark::Unr));
-    let ret = b.param(named("ret", Repr::TObj, Mark::Poly));
-    let k = b.param(named("k", Repr::TObj, Mark::Poly));
-    let v = b.param(named("v", Repr::TObj, Mark::Poly));
-    let s = b.param(named("s", Repr::TObj, Mark::Poly));
+    let ev = b.param(VarInfo::new("ev", Repr::Obj, Mark::Unr));
+    let ret = b.param(VarInfo::new("ret", Repr::TObj, Mark::Poly));
+    let k = b.param(VarInfo::new("k", Repr::TObj, Mark::Poly));
+    let v = b.param(VarInfo::new("v", Repr::TObj, Mark::Poly));
+    let s = b.param(VarInfo::new("s", Repr::TObj, Mark::Poly));
     let renewed = prim(
         &mut b,
         "e",
@@ -183,11 +185,11 @@ pub(super) fn resume(prompt: FnIdx) -> CoreFn {
 /// `resume$` を呼ぶ。
 pub(super) fn rewind(resume: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();
-    let ev = b.param(named("ev", Repr::Obj, Mark::Unr));
-    let ret = b.param(named("ret", Repr::TObj, Mark::Poly));
-    let s = b.param(named("s", Repr::TObj, Mark::Poly));
-    let k = b.param(named("k", Repr::TObj, Mark::Poly));
-    let v = b.param(named("v", Repr::TObj, Mark::Poly));
+    let ev = b.param(VarInfo::new("ev", Repr::Obj, Mark::Unr));
+    let ret = b.param(VarInfo::new("ret", Repr::TObj, Mark::Poly));
+    let s = b.param(VarInfo::new("s", Repr::TObj, Mark::Poly));
+    let k = b.param(VarInfo::new("k", Repr::TObj, Mark::Poly));
+    let v = b.param(VarInfo::new("v", Repr::TObj, Mark::Poly));
     let r = bind(
         &mut b,
         "r",
@@ -211,8 +213,8 @@ pub(super) fn mask_name(program: &Program, items: &[MaskItem]) -> String {
 /// κ が yield したら、もう一度包む (docs/spec/core-ir.md の「`mask` の包み」)。
 pub(super) fn mask(mask: FnIdx, name: String, items: &[MaskItem]) -> CoreFn {
     let mut b = FnBuilder::new();
-    let k = b.param(named("k", Repr::TObj, Mark::Poly));
-    let v = b.param(named("v", Repr::TObj, Mark::Poly));
+    let k = b.param(VarInfo::new("k", Repr::TObj, Mark::Poly));
+    let v = b.param(VarInfo::new("v", Repr::TObj, Mark::Poly));
     let w = prim(&mut b, "w", Repr::TObj, Prim::EvvGet, Vec::new());
     let masked = prim(
         &mut b,
@@ -243,9 +245,7 @@ pub(super) fn mask(mask: FnIdx, name: String, items: &[MaskItem]) -> CoreFn {
 }
 
 fn bind(b: &mut FnBuilder, name: &str, repr: Repr, mark: Mark, rhs: Rhs) -> VarId {
-    let var = b.var(named(name, repr, mark));
-    b.emit(Stmt::Let { var, rhs });
-    var
+    b.bind(VarInfo::new(name, repr, mark), rhs)
 }
 
 /// 結果の印は基本操作の表の印である。表は EP が自分の変数に付ける印と同じに作ってある。
@@ -277,7 +277,7 @@ fn apply_marked(
     args: Vec<Atom>,
     prompt: Option<VarId>,
 ) -> VarId {
-    let rhs = call(Call::Apply {
+    let rhs = Rhs::call(Call::Apply {
         callee: Atom::Var(callee),
         args,
         yields: true,

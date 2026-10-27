@@ -10,12 +10,11 @@ mod split;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
-
 use crate::{Call, CoreFn, Program, Rhs, Term};
 use eml_lir::{
     Atom, BlockId, Case, CasePattern, FloatBits, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
 };
+use rustc_hash::FxHashMap;
 
 use split::split;
 
@@ -47,63 +46,71 @@ pub(crate) struct Helpers {
     prompt: Option<FnIdx>,
     resume: Option<FnIdx>,
     rewind: Option<FnIdx>,
-    masks: HashMap<Vec<MaskItem>, FnIdx>,
+    masks: FxHashMap<Vec<MaskItem>, FnIdx>,
 }
 
 impl Helpers {
-    pub(crate) fn id(&mut self, program: &mut Program) -> FnIdx {
-        if let Some(id) = self.id {
-            return id;
+    /// `slot` の関数を返す。まだなければ番号を取って記録してから、`build` で中身を作る。`prompt$`、`resume$`、
+    /// `rewind$` は互いを参照するので、記録が中身より先にある必要がある。
+    fn get_or_build(
+        &mut self,
+        program: &mut Program,
+        slot: fn(&mut Helpers) -> &mut Option<FnIdx>,
+        name: &str,
+        build: impl FnOnce(&mut Helpers, &mut Program, FnIdx) -> CoreFn,
+    ) -> FnIdx {
+        if let Some(function) = *slot(self) {
+            return function;
         }
-        let id = reserve(program, "id$");
-        self.id = Some(id);
-        fill(program, id, helpers::id());
-        id
+        let function = reserve(program, name);
+        *slot(self) = Some(function);
+        let body = build(self, program, function);
+        fill(program, function, body);
+        function
+    }
+
+    pub(crate) fn id(&mut self, program: &mut Program) -> FnIdx {
+        self.get_or_build(program, |h| &mut h.id, "id$", |_, _, _| helpers::id())
     }
 
     pub(crate) fn compose(&mut self, program: &mut Program) -> FnIdx {
-        if let Some(compose) = self.compose {
-            return compose;
-        }
-        let compose = reserve(program, "compose$");
-        self.compose = Some(compose);
-        fill(program, compose, helpers::compose(compose));
-        compose
+        self.get_or_build(
+            program,
+            |h| &mut h.compose,
+            "compose$",
+            |_, _, compose| helpers::compose(compose),
+        )
     }
 
-    // `prompt$`、`resume$`、`rewind$` は互いを参照するので、どれも番号を先に取って記録してから中身を作る
     pub(crate) fn prompt(&mut self, program: &mut Program) -> FnIdx {
-        if let Some(prompt) = self.prompt {
-            return prompt;
-        }
-        let prompt = reserve(program, "prompt$");
-        self.prompt = Some(prompt);
-        let resume = self.resume(program);
-        let rewind = self.rewind(program);
-        fill(program, prompt, helpers::prompt(resume, rewind));
-        prompt
+        self.get_or_build(
+            program,
+            |h| &mut h.prompt,
+            "prompt$",
+            |h, program, _| {
+                let resume = h.resume(program);
+                let rewind = h.rewind(program);
+                helpers::prompt(resume, rewind)
+            },
+        )
     }
 
     pub(crate) fn resume(&mut self, program: &mut Program) -> FnIdx {
-        if let Some(resume) = self.resume {
-            return resume;
-        }
-        let resume = reserve(program, "resume$");
-        self.resume = Some(resume);
-        let prompt = self.prompt(program);
-        fill(program, resume, helpers::resume(prompt));
-        resume
+        self.get_or_build(
+            program,
+            |h| &mut h.resume,
+            "resume$",
+            |h, program, _| helpers::resume(h.prompt(program)),
+        )
     }
 
     pub(crate) fn rewind(&mut self, program: &mut Program) -> FnIdx {
-        if let Some(rewind) = self.rewind {
-            return rewind;
-        }
-        let rewind = reserve(program, "rewind$");
-        self.rewind = Some(rewind);
-        let resume = self.resume(program);
-        fill(program, rewind, helpers::rewind(resume));
-        rewind
+        self.get_or_build(
+            program,
+            |h| &mut h.rewind,
+            "rewind$",
+            |h, program, _| helpers::rewind(h.resume(program)),
+        )
     }
 
     /// `items` は飛ばす項目で、エフェクトの番号の真に昇順に並び、どれも 1 つ以上の handler を飛ばす。
@@ -148,14 +155,6 @@ fn fill(program: &mut Program, idx: FnIdx, function: CoreFn) {
     program.functions[idx.0 as usize] = function;
 }
 
-fn named(name: &str, repr: Repr, mark: Mark) -> VarInfo {
-    VarInfo {
-        name: name.to_string(),
-        repr,
-        mark,
-    }
-}
-
 /// EP が作るクロージャの印。捕まえた値の印の結びで、定数は `unr` である。`FileIn` を捕まえた続きが `lin` になるので、
 /// 決め打ちの `poly` より正確である (docs/spec/core-ir.md の「EP が足す変数の印」)。
 fn captured_mark(mark: impl Fn(VarId) -> Mark, captures: &[Atom]) -> Mark {
@@ -191,7 +190,7 @@ fn yield_switch(yielding: VarId, fast: BlockId, slow: BlockId) -> Term {
 fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     match ret {
         Repr::Obj | Repr::TObj | Repr::Struct(_) => Atom::Var(bind(
-            named(
+            VarInfo::new(
                 "d",
                 if ret == Repr::TObj { Repr::Obj } else { ret },
                 Prim::Dummy.row().ret_mark,
@@ -206,14 +205,6 @@ fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     }
 }
 
-/// `mask` のない呼び出し。
-fn call(call: Call) -> Rhs {
-    Rhs::Call {
-        call,
-        mask: Vec::new(),
-    }
-}
-
 fn direct(target: FnIdx, args: Vec<Atom>) -> Rhs {
-    call(Call::Direct(target, args))
+    Rhs::call(Call::Direct(target, args))
 }

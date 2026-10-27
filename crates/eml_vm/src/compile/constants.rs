@@ -2,20 +2,20 @@
 //! 検査モードでも参照を数えないので、VM は定数の語を写すだけで使える。定数は中身で引き、前に読み込んだ定数は同じ番号を
 //! 使う。新しい物体があるときだけ、今の先頭の塊を親にした新しい塊を作る (docs/spec/vm.md の「追記」)。
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use eml_lir::FloatBits;
 use eml_rt::{Control, Frozen, Heap, Kind, Meta, Mode, Word};
+use rustc_hash::FxHashMap;
 
 use crate::code::{CompileError, Index};
 
 pub(crate) struct Constants<'c, M: Mode> {
     words: &'c mut Vec<Word>,
-    strings: &'c mut HashMap<String, u32>,
-    raws: &'c mut HashMap<i64, u32>,
-    boxed: &'c mut HashMap<i64, u32>,
-    boxed_floats: &'c mut HashMap<FloatBits, u32>,
+    strings: &'c mut FxHashMap<String, u32>,
+    raws: &'c mut FxHashMap<i64, u32>,
+    boxed: &'c mut FxHashMap<i64, u32>,
+    boxed_floats: &'c mut FxHashMap<FloatBits, u32>,
     empty_mut_array: &'c mut Option<u32>,
     region: &'c Option<Arc<Frozen<M>>>,
     control: &'c Arc<Control>,

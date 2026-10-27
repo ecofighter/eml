@@ -1,4 +1,4 @@
-use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange, count, was};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
@@ -500,17 +500,17 @@ pub(super) fn arity_error(
     given: usize,
     range: TextRange,
 ) -> Diagnostic {
-    let given = match given {
-        1 => "1 was given".to_string(),
-        n => format!("{n} were given"),
-    };
+    let given = format!("{given} {} given", was(given));
     Diagnostic::error(
         codes::TYPE_ARGUMENT_COUNT,
-        format!("`{name}` takes {}, but {given}", type_arguments(expected)),
+        format!(
+            "`{name}` takes {}, but {given}",
+            count(expected, "type argument")
+        ),
         Label::new(
             file,
             range,
-            format!("expected {}", type_arguments(expected)),
+            format!("expected {}", count(expected, "type argument")),
         ),
     )
 }
@@ -550,14 +550,6 @@ pub(super) fn class_as_type(file: FileId, name: &str, range: TextRange) -> Diagn
         format!("`{name}` is a class, not a type"),
         Label::new(file, range, "a class cannot be used as a type"),
     )
-}
-
-fn type_arguments(n: usize) -> String {
-    if n == 1 {
-        "1 type argument".to_string()
-    } else {
-        format!("{n} type arguments")
-    }
 }
 
 /// 宣言の型の一番外側の矢印に書いた `once` を E1050 にして外す。宣言した関数そのものは何度でも呼べるので `once` に

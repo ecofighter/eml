@@ -2,10 +2,9 @@
 //! 制約を、本体の単一化が終わってから解く。証拠は記録しない。translate と一様な位置の計算が、参照ごとの型引数から
 //! instance を引き直す。
 
-use std::collections::HashSet;
-
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::{ClassId, ExprId, FunctionKind, Program, TypeVarId, ValueItem};
+use rustc_hash::FxHashSet;
 
 use crate::codes;
 use crate::kind::{Bound, KindReason};
@@ -123,7 +122,7 @@ impl BodyCheck<'_, '_> {
     pub(super) fn split_residuals(
         &mut self,
         residuals: Vec<Residual>,
-        shown: &HashSet<Ty>,
+        shown: &FxHashSet<Ty>,
     ) -> Vec<Wanted> {
         let mut context = Vec::new();
         let mut found = Vec::new();
@@ -330,7 +329,7 @@ pub(super) fn solve(
 ) -> Result<Solved, Failure> {
     let root = wanted;
     let (class, ty) = wanted;
-    let mut seen = HashSet::from([(class, table.resolve(ty))]);
+    let mut seen = FxHashSet::from_iter([(class, table.resolve(ty))]);
     let mut work = vec![root];
     let mut next = 0;
     let mut resolved = Vec::new();

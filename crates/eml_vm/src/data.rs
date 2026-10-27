@@ -71,7 +71,7 @@ pub(crate) fn con<R: Exec>(
     dst: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, raw, lin, n) = (ops[0], ops[1], ops[2], ops[3] != 0, ops[4] as usize);
     // ヒープに触れるのは作る物体だけで、`Ctx` の持つ語には触れない
     let heap = unsafe { ctx.heap_mut() };
@@ -120,7 +120,7 @@ pub(crate) fn switch_tag<R: Exec>(
     tag: i64,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let (m, default) = (ops[0] as usize, ops[1]);
     // タグは配置のタグなので、飛び先の表を1回引けば case が決まる
     let record = usize::try_from(tag)
@@ -162,7 +162,7 @@ pub(crate) fn switch_int<R: Exec>(
     n: i64,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let (cases, default) = (ops[0] as usize, ops[1]);
     for case in 0..cases {
         let i = 2 + 3 * case;
@@ -183,7 +183,7 @@ pub(crate) fn switch_string<R: Exec>(
     w: Word,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let (cases, default) = (ops[0] as usize, ops[1]);
     let heap = ctx.heap();
     // scrutinee も定数も借りて読み、手放さない
@@ -207,7 +207,7 @@ pub(crate) fn unpack<R: Exec>(
     src: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
     let w = task.get(src);
     check_data::<R>(
@@ -230,7 +230,7 @@ pub(crate) fn release<R: Exec>(
     src: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
     let w = task.get(src);
     check_data::<R>(
@@ -301,7 +301,7 @@ pub(crate) fn release_reuse<R: Exec>(
     src: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let (tok, tag, scanned, n) = (ops[0] as Slot, ops[1], ops[2], ops[3] as usize);
     let entries = &ops[4..4 + n];
     let w = task.get(src);
@@ -354,7 +354,7 @@ pub(crate) fn con_reuse<R: Exec>(
     dst: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let (tok, tag, scanned, raw) = (ops[0] as Slot, ops[1], ops[2], ops[3]);
     let (lin, in_place, n) = (ops[4] != 0, ops[5] != 0, ops[6] as usize);
     // token は verifier を通った IR の token で、このヒープのまだ使っていないものである
@@ -471,7 +471,7 @@ pub(crate) fn unbox_struct<R: Exec>(
     src: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let ops = &code.operands[at as usize..];
+    let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
     let fields = &ops[3..3 + 2 * n];
     let w = task.get(src);
@@ -507,7 +507,7 @@ pub(crate) fn release_unboxed<R: Exec>(
     src: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let tok = code.operands[at as usize];
+    let tok = code.tables.operands[at as usize];
     if is_dummy::<R>(ctx, task.get(src))? {
         if tok != NONE {
             task.set(tok as Slot, Word::EMPTY);

@@ -11,7 +11,10 @@ fn instances_of(text: &str, name: &str) -> Vec<String> {
 
 /// `instances_of` の、import するモジュールを持つ形。`modules` は根からの相対パスと本文の組である。
 fn instances_of_files(text: &str, modules: &[(&str, &str)], name: &str) -> Vec<String> {
-    let program = eml_test_support::core_until_files(text, modules, Pass::Translate);
+    let program = eml_test_support::core_until(
+        eml_test_support::with_modules(text, modules),
+        Pass::Translate,
+    );
     let prefix = format!("{name}@");
     program
         .functions
@@ -359,13 +362,7 @@ fn a_polymorphic_entry_is_uniform() {
         .functions()
         .find(|(_, function)| function.name == "first")
         .unwrap();
-    let program = eml_core_ir::core_until(
-        &checked.program,
-        &checked.typed,
-        entry,
-        checked.files(),
-        Pass::Translate,
-    );
+    let program = eml_core_ir::core_until(checked.input(entry), Pass::Translate);
     let names: Vec<&str> = program
         .functions
         .iter()
@@ -383,10 +380,7 @@ fn core_text_with_entry(text: &str, name: &str) -> String {
         .find(|(_, function)| function.name == name)
         .unwrap();
     eml_core_ir::pretty(&eml_core_ir::core_until(
-        &checked.program,
-        &checked.typed,
-        entry,
-        checked.files(),
+        checked.input(entry),
         Pass::Translate,
     ))
 }
@@ -482,7 +476,7 @@ fn lower_time(text: &str) -> std::time::Duration {
     (0..3)
         .map(|_| {
             let start = std::time::Instant::now();
-            let _ = eml_core_ir::lower(&checked.program, &checked.typed, entry, checked.files());
+            let _ = eml_core_ir::lower(checked.input(entry));
             start.elapsed()
         })
         .min()

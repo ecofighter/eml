@@ -146,17 +146,6 @@ fn main() -> unit {
     assert_eq!(fast.map(|_| ()), Ok(()));
 }
 
-/// コード生成は `*ext as u32` を行の番号に使い、VM は `Extern::ALL[row]` で引くので、2つの順が同じでなければならない。
-#[test]
-fn extern_all_follows_the_declaration_order() {
-    assert!(
-        eml_extern::Extern::ALL
-            .iter()
-            .enumerate()
-            .all(|(i, &e)| e as usize == i)
-    );
-}
-
 #[test]
 fn an_unused_call_result_does_not_overwrite_a_live_value() {
     let text = "\

@@ -94,12 +94,6 @@ impl SourceFiles {
             column: u32::try_from(column + 1).expect("line too long"),
         }
     }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.files
-            .iter()
-            .map(|file| (file.path.as_str(), file.text.as_str()))
-    }
 }
 
 impl SourceFile {

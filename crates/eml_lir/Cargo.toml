@@ -12,6 +12,7 @@ doctest = false
 
 [dependencies]
 eml_extern.workspace = true
+rustc-hash.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

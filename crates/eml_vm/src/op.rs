@@ -1,9 +1,9 @@
-//! VM の命令 (docs/spec/vm.md の「命令の形」)。命令は 8 バイトで、長さの変わるオペランドは `CodeBase::operands` に
+//! VM の命令 (docs/spec/vm.md の「命令の形」)。命令は 8 バイトで、長さの変わるオペランドは `Tables::operands` に
 //! 置いて添字で指す。
 
 /// フレームの中のスロットの番号。
 pub type Slot = u16;
-/// `CodeBase::code` の中の命令の位置。
+/// `Tables::code` の中の命令の位置。
 pub type Pc = u32;
 
 /// いちばん下のフレームの戻り先。

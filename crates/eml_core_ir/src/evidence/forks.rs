@@ -8,7 +8,7 @@ use crate::{Call, Program, Rhs, Stmt, Term};
 use eml_extern::{Extern, ExternEffect};
 use eml_lir::{Atom, FnIdx, Mark, Prim, Repr, VarId, VarInfo};
 
-use super::{call, captured_mark, dummy, named};
+use super::{captured_mark, dummy};
 
 pub(super) fn forks(program: &mut Program) {
     if !may_run_par(program) {
@@ -54,25 +54,23 @@ fn may_run_par(program: &Program) -> bool {
 fn fork(program: &Program, effect: u32, op: u32, reperform: FnIdx) -> crate::CoreFn {
     let operation = eml_lir::operation(&program.effects, effect, op).clone();
     let mut b = FnBuilder::new();
-    let ev = b.param(named("ev", Repr::Obj, Mark::Unr));
+    let ev = b.param(VarInfo::new("ev", Repr::Obj, Mark::Unr));
     let args: Vec<Atom> = operation
         .params
         .iter()
         .zip(&operation.param_marks)
-        .map(|(&repr, &mark)| Atom::Var(b.param(named("a", repr, mark))))
+        .map(|(&repr, &mark)| Atom::Var(b.param(VarInfo::new("a", repr, mark))))
         .collect();
     let mark = captured_mark(|var| b.mark(var), &args);
-    let clause = bind(
-        &mut b,
-        named("c", Repr::TObj, mark),
+    let clause = b.bind(
+        VarInfo::new("c", Repr::TObj, mark),
         Rhs::MakeClosure(reperform, args),
     );
-    bind(
-        &mut b,
-        named("u", Repr::Unit, Prim::ChildAbort.row().ret_mark),
+    b.bind(
+        VarInfo::new("u", Repr::Unit, Prim::ChildAbort.row().ret_mark),
         Rhs::Prim(Prim::ChildAbort, vec![Atom::Var(ev), Atom::Var(clause)]),
     );
-    let value = dummy(Repr::Obj, |info, rhs| bind(&mut b, info, rhs));
+    let value = dummy(Repr::Obj, |info, rhs| b.bind(info, rhs));
     b.terminate(Term::Return(value));
     let mut function = b.finish(
         eml_lir::fork_name(&program.effects, effect, op),
@@ -95,10 +93,10 @@ fn reperform_fn(program: &Program, effect: u32, op: u32) -> crate::CoreFn {
         .params
         .iter()
         .zip(&operation.param_marks)
-        .map(|(&repr, &mark)| Atom::Var(b.param(named("a", repr, mark))))
+        .map(|(&repr, &mark)| Atom::Var(b.param(VarInfo::new("a", repr, mark))))
         .collect();
-    b.param(named("u", Repr::Unit, Mark::Unr));
-    let result = named("r", Repr::TObj, Mark::Poly);
+    b.param(VarInfo::new("u", Repr::Unit, Mark::Unr));
+    let result = VarInfo::new("r", Repr::TObj, Mark::Poly);
     let rhs = match ExternEffect::from_name(&program.effects[effect as usize].name) {
         // extern のエフェクトの evidence は `try_panic` だけが置き、ないときは VM が実行時エラーにする。`panic` は
         // その探し方を持つので、`Panic` は `panic` で起こし直す。位置は子の中にあり、親の側にはない
@@ -119,7 +117,7 @@ fn reperform_fn(program: &Program, effect: u32, op: u32) -> crate::CoreFn {
             );
             let mut clause_args = vec![Atom::Var(evidence)];
             clause_args.extend(args);
-            call(Call::Clause {
+            Rhs::call(Call::Clause {
                 effect,
                 op,
                 callee: Atom::Var(entry),
@@ -127,7 +125,7 @@ fn reperform_fn(program: &Program, effect: u32, op: u32) -> crate::CoreFn {
             })
         }
     };
-    let result = bind(&mut b, result, rhs);
+    let result = b.bind(result, rhs);
     b.terminate(Term::Return(Atom::Var(result)));
     let mut function = b.finish(
         eml_lir::reperform_name(&program.effects, effect, op),
@@ -140,13 +138,7 @@ fn reperform_fn(program: &Program, effect: u32, op: u32) -> crate::CoreFn {
     function
 }
 
-fn bind(b: &mut FnBuilder, info: VarInfo, rhs: Rhs) -> VarId {
-    let var = b.var(info);
-    b.emit(Stmt::Let { var, rhs });
-    var
-}
-
 fn prim(b: &mut FnBuilder, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) -> VarId {
     let mark = prim.row().ret_mark;
-    bind(b, named(name, repr, mark), Rhs::Prim(prim, args))
+    b.bind(VarInfo::new(name, repr, mark), Rhs::Prim(prim, args))
 }

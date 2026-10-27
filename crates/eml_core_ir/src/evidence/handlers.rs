@@ -3,8 +3,9 @@
 //! 「`perform` と節の3つの形」「`mask` の包み」)。入口を先にすべて決めてから、関数ごとに命令を置き換える。handle の場所は
 //! 入口の関数を `ev_set_clause` に入れるので、どの節がどの形になるかを先に知る必要があるためである。
 
-use std::collections::{HashMap, HashSet};
 use std::mem;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::builder::FnBuilder;
 use crate::tail::tail_position_call;
@@ -12,11 +13,11 @@ use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_extern::Purity;
 use eml_lir::{
     Atom, BlockId, FnIdx, Mark, MaskItem, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo,
-    operation,
+    operation, push_var,
 };
 
 use super::split::Annotations;
-use super::{Helpers, call, captured_mark, direct, dummy, named};
+use super::{Helpers, captured_mark, direct, dummy};
 
 /// translate の節の関数 g ごとの in-place の入口。すぐに再開する節では g 自身を書き換えて入口にし、ほかの節では
 /// yield を始める入口 `g$entry` を足す。返す表は g から入口への対応である。
@@ -24,7 +25,7 @@ pub(super) fn entries(
     program: &mut Program,
     count: usize,
     helpers: &mut Helpers,
-) -> HashMap<FnIdx, FnIdx> {
+) -> FxHashMap<FnIdx, FnIdx> {
     let mut clauses = Vec::new();
     for function in &program.functions[..count] {
         for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
@@ -35,7 +36,7 @@ pub(super) fn entries(
             }
         }
     }
-    let mut entries = HashMap::new();
+    let mut entries = FxHashMap::default();
     for (clause, effect, op) in clauses {
         // 同じ g を2回書き換えると、入口の引数と状態の取り出しが重なる。translate は節ごとに別の g を作る
         debug_assert!(
@@ -61,7 +62,7 @@ pub(super) fn entries(
 pub(super) fn lower(
     program: &mut Program,
     index: FnIdx,
-    entries: &HashMap<FnIdx, FnIdx>,
+    entries: &FxHashMap<FnIdx, FnIdx>,
     helpers: &mut Helpers,
 ) -> Annotations {
     let mut annotations = Annotations::default();
@@ -82,7 +83,7 @@ pub(super) fn lower(
     let mut function = source.clone();
     let prompt = handles.then(|| helpers.prompt(program));
     // 節の値のクロージャは handle のためだけに作られるので、作る関数を入口に替える
-    let clause_closures: HashSet<VarId> = function
+    let clause_closures: FxHashSet<VarId> = function
         .blocks
         .iter()
         .flat_map(|block| &block.stmts)
@@ -514,19 +515,18 @@ fn yielding_entry(
     for &param in &params[..captures] {
         args.push(Atom::Var(b.param(function.vars[param.0 as usize].clone())));
     }
-    let evidence = b.param(named("e", Repr::Obj, Mark::Unr));
+    let evidence = b.param(VarInfo::new("e", Repr::Obj, Mark::Unr));
     for (&param, &repr) in params[captures..].iter().zip(&operation.params) {
         let VarInfo { name, mark, .. } = &function.vars[param.0 as usize];
-        args.push(Atom::Var(b.param(named(name, repr, *mark))));
+        args.push(Atom::Var(b.param(VarInfo::new(name, repr, *mark))));
     }
     // `closure` は引数を1つ以上とるので、捕獲も操作の引数もなければ関数の値にする
     let body = if args.is_empty() {
         Atom::Fn(clause)
     } else {
         let mark = captured_mark(|var| b.mark(var), &args);
-        Atom::Var(builder_bind(
-            &mut b,
-            named("c", Repr::TObj, mark),
+        Atom::Var(b.bind(
+            VarInfo::new("c", Repr::TObj, mark),
             Rhs::MakeClosure(clause, args),
         ))
     };
@@ -537,16 +537,15 @@ fn yielding_entry(
     } else {
         (Prim::YieldAbort, vec![Atom::Var(evidence), body])
     };
-    builder_bind(
-        &mut b,
-        named("u", Repr::Unit, start.row().ret_mark),
+    b.bind(
+        VarInfo::new("u", Repr::Unit, start.row().ret_mark),
         Rhs::Prim(start, args),
     );
     let ret = match operation.ret {
         OpRet::Repr(repr) => repr,
         OpRet::Never => Repr::Obj,
     };
-    let value = dummy(ret, |info, rhs| builder_bind(&mut b, info, rhs));
+    let value = dummy(ret, |info, rhs| b.bind(info, rhs));
     b.terminate(Term::Return(value));
     // `yield_to` の入口はいつも yield を始めるので、g の印によらず `yields` を立てる。`never` の入口は中断を始めるだけで、
     // 中断は継続を作らずに巻き戻すので立てない (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
@@ -562,15 +561,8 @@ fn yielding_entry(
     entry
 }
 
-fn builder_bind(b: &mut FnBuilder, info: VarInfo, rhs: Rhs) -> VarId {
-    let var = b.var(info);
-    b.emit(Stmt::Let { var, rhs });
-    var
-}
-
 fn fresh(vars: &mut Vec<VarInfo>, name: &str, repr: Repr, mark: Mark) -> VarId {
-    vars.push(named(name, repr, mark));
-    VarId(vars.len() as u32 - 1)
+    push_var(vars, VarInfo::new(name, repr, mark))
 }
 
 /// 定数がそのまま収まる Repr。
@@ -651,7 +643,7 @@ impl Out<'_> {
             "x",
             Repr::TObj,
             Mark::Poly,
-            call(Call::Apply {
+            Rhs::call(Call::Apply {
                 callee: body,
                 args: vec![Atom::Unit],
                 yields: true,
@@ -677,7 +669,7 @@ impl Out<'_> {
         clause_args.extend(args);
         self.stmts.push(Stmt::Let {
             var: result,
-            rhs: call(Call::Clause {
+            rhs: Rhs::call(Call::Clause {
                 effect,
                 op,
                 callee: Atom::Var(entry),
@@ -701,7 +693,7 @@ impl Out<'_> {
         if mask.is_empty() {
             self.stmts.push(Stmt::Let {
                 var: result,
-                rhs: call(target),
+                rhs: Rhs::call(target),
             });
             return;
         }
@@ -721,7 +713,7 @@ impl Out<'_> {
         }
         self.stmts.push(Stmt::Let {
             var: result,
-            rhs: call(target),
+            rhs: Rhs::call(target),
         });
         self.prim("u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(outer)]);
     }

@@ -27,10 +27,14 @@ pub struct UnwindPoint {
 /// 関数 (`may_abort`) の末尾でない呼び出し、末尾でない `apply` と `clause`、`Pure` でない extern (誤りが `try_io` か
 /// `try_panic` まで巻き戻す)、`prim yield_abort` である。所有の段の verifier が拒む関数は、地点の代わりにその
 /// 誤りを返す。VM は verifier を通さない IR も読み込むので (VM 自身の見張りを確かめるテスト)、panic せず、拒まれた
-/// 関数を表のない関数として扱えるようにする。プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り直さない
-/// ためである。
-pub fn points_all(program: &Program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>> {
-    verify::unwind_points(program)
+/// 関数を表のない関数として扱えるようにする。`wanted` でない関数は求めずに `None` にする。VM の追記は新しい関数の
+/// 表だけを要るので、すでにある関数の走査を省く。プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り
+/// 直さないためである。
+pub fn points(
+    program: &Program,
+    wanted: impl Fn(FnIdx) -> bool,
+) -> Vec<Option<Result<Vec<UnwindPoint>, VerifyError>>> {
+    verify::unwind_points(program, wanted)
 }
 
 /// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。複数の値を返す呼び出しは、葉をすべて束縛する
