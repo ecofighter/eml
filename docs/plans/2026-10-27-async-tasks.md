@@ -240,11 +240,11 @@ FailIo => FunctionRow {
 // いつも誤りを返すので、宛先には書かない。届け先は `failed` が決める (docs/spec/vm.md の「extern の中断」)
 Extern::FailIo => {
     let message = ctx.copy_string(task.get(arg(1)), usize::MAX)?;
-    return Err(VmFault::Extern(Fault::Raised(Box::new(RaisedFault { kind: task.raw(arg(0)), message: message.into_boxed_str() }))));
+    return Err(VmFault::Extern(Fault::Raised(Box::new(Raised { kind: task.raw(arg(0)), message: message.into_boxed_str() }))));
 }
 ```
 
-- `Fault::Raised(Box<RaisedFault>)` で、`RaisedFault { kind: i64, message: Box<str> }` である (欄を直に持つと `Fault` が 32 バイトになるので、`Exited(Box<Exited>)` と同じく箱に入れる)。`io_error_kind() == Some(kind)`、`panics() == false`、表示は `message` である。`Fault` の大きさは 24 バイトのまま (`faults_stay_small` が確かめる)
+- `Fault::Raised(Box<Raised>)` で、`Raised { kind: i64, message: Box<str> }` である (欄を直に持つと `Fault` が 32 バイトになるので、`Exited(Box<Exited>)` と同じく箱に入れる)。`io_error_kind() == Some(kind)`、`panics() == false`、表示は `message` である。`Fault` の大きさは 24 バイトのまま (`faults_stay_small` が確かめる)
 - 新しい種類のための `IO_*` の定数と `IoReason` の変更は足さない。タグは `fail_io` がそのまま渡す
 
 #### D-16: 監視のスレッド
@@ -427,7 +427,7 @@ pub enum Stop { Interrupted, DepthLimit, MemoryLimit, Ended, Preempt }   // veru
 
 - 目的: D-15 の `Fault::Raised` と D-14 の `shared_objects` の数え先を入れる
 - 対象: `crates/eml_rt/src/externs.rs` (`Fault`)、`crates/eml_rt/src/heap/share.rs`、`crates/eml_rt/src/heap/mod.rs` (`Stats`)、`heap/tests/`
-- 作業: `Fault::Raised(Box<RaisedFault>)` (`RaisedFault { kind: i64, message: Box<str> }`) を足す (`io_error_kind() == Some(kind)`、`panics() == false`、表示は `message`)。`share` が rc を負にする所で `Stats::shared` を1つ増やす (検査モードだけ。`Stats` の他の欄と同じく証明する不変条件の外。heap/mod.rs:100-101)
+- 作業: `Fault::Raised(Box<Raised>)` (`Raised { kind: i64, message: Box<str> }`) を足す (`io_error_kind() == Some(kind)`、`panics() == false`、表示は `message`)。`share` が rc を負にする所で `Stats::shared` を1つ増やす (検査モードだけ。`Stats` の他の欄と同じく証明する不変条件の外。heap/mod.rs:100-101)
 - テスト: `Raised` の表示と分類の単体テスト、`share` が数える単体テスト
 - 文書: docs/spec/object-model.md の `Fault` の表に `Raised` の行、「仕事の回数」に `shared`
 - 実装者に任せること: なし
@@ -568,7 +568,7 @@ main () = ()
 
 - 目的: `park`、`ready`、`task_cell`、`take_result` と `run_result` の失敗の道、`TaskHandle` の `Drop` と受け箱の処理、`StaleTask`、D-11 の不変条件の `debug_assert!`
 - 対象: `cells.rs`、`vm.rs`、`tasks.rs`、REPL のトランスクリプト
-- 作業: 5.2 のとおり。`take_result` の `Raise::Panic(m)` は `Extern::Panic` の道 (`abort_to(Panic, PANICKED, [fresh_string(m)])`、なければ `VmFault::Panicked(m)`)、`Raise::Io { kind, m }` は `failed(Fault::Raised(Box::new(RaisedFault { kind, message })))` (vm.rs:1533-1558)
+- 作業: 5.2 のとおり。`take_result` の `Raise::Panic(m)` は `Extern::Panic` の道 (`abort_to(Panic, PANICKED, [fresh_string(m)])`、なければ `VmFault::Panicked(m)`)、`Raise::Io { kind, m }` は `failed(Fault::Raised(Box::new(Raised { kind, message })))` (vm.rs:1533-1558)
 - テスト (`tasks.rs`、2つのモード):
   - (f) 相手が終わる前と後に待つ → どちらも `x\n`
   - (g) 3つのタスクが `yield_now` を2回ずつ → `a1\nb1\nc1\na2\nb2\nc2\n`

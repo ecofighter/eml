@@ -680,7 +680,6 @@ fn a_failed_wait_is_shown_as_waiting() {
     assert!(!unwaited.panics());
 }
 
-/// 算術の誤りは2つのレジスタで返り、`Fault` は 24 バイトに収まる。
 /// `Raised` は起こし直された `IO` の誤りで、種類のタグと文言をそのまま持つ。`try_io` が捕まえ、`try_panic` は捕まえない。
 #[test]
 fn raised_is_shown_and_caught_as_io() {
@@ -694,6 +693,7 @@ fn raised_is_shown_and_caught_as_io() {
     assert!(!raised.panics());
 }
 
+/// 算術の誤りは2つのレジスタで返り、`Fault` は 24 バイトに収まる。
 #[test]
 fn faults_stay_small() {
     assert_eq!(std::mem::size_of::<Result<i64, ArithFault>>(), 16);
