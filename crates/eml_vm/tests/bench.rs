@@ -148,6 +148,7 @@ fn byte_loop() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -173,6 +174,7 @@ fn char_loop() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -198,6 +200,7 @@ fn bytes_loop() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -223,6 +226,7 @@ fn apply_float() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -248,6 +252,7 @@ fn apply_int() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -273,6 +278,7 @@ fn ep_float() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -300,6 +306,7 @@ fn records_wide() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     "
@@ -326,6 +333,7 @@ fn empty() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -351,6 +359,7 @@ fn fib() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -376,6 +385,7 @@ fn fold_state() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -401,6 +411,7 @@ fn list() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -426,6 +437,7 @@ fn loop_() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -451,6 +463,7 @@ fn state() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -476,6 +489,7 @@ fn state_loop() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -501,6 +515,7 @@ fn state_loop_by_hand() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -526,6 +541,7 @@ fn state_nested() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -551,6 +567,7 @@ fn tree() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -576,6 +593,7 @@ fn iter_generate() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -646,6 +664,7 @@ fn iter_pipeline() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -671,6 +690,7 @@ fn iter_pipeline_by_hand() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -696,6 +716,7 @@ fn orders() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -721,6 +742,7 @@ fn orders_by_hand() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -746,6 +768,7 @@ fn push_fold() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -771,6 +794,7 @@ fn push_fold_by_hand() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -796,6 +820,7 @@ fn sum_loop() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -821,6 +846,7 @@ fn tree_by_hand() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -846,6 +872,7 @@ fn upsert() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -871,6 +898,7 @@ fn upsert_by_hand() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -896,6 +924,7 @@ fn records() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -921,6 +950,7 @@ fn rbtree() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -946,6 +976,7 @@ fn tree_map() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -971,6 +1002,7 @@ fn std_list() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -996,6 +1028,7 @@ fn std_map() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -1021,6 +1054,7 @@ fn mandelbrot() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -1046,6 +1080,7 @@ fn nbody() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -1071,6 +1106,7 @@ fn spectral_norm() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -1096,6 +1132,7 @@ fn sieve_var() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -1121,6 +1158,7 @@ fn sieve_by_hand() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -1146,6 +1184,7 @@ fn fannkuch_var() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -1171,6 +1210,7 @@ fn fannkuch_by_hand() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");
@@ -1214,6 +1254,7 @@ fn par_tree() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 3851,
     }
     ");
@@ -1417,6 +1458,7 @@ fn trade_offs() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     "
@@ -1441,6 +1483,7 @@ fn trade_offs() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     "
@@ -1469,6 +1512,7 @@ fn trade_offs() {
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
+        cancels: 0,
         shared_objects: 0,
     }
     ");

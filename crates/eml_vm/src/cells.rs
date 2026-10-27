@@ -217,6 +217,8 @@ pub(crate) struct TaskStats {
     pub(crate) parks: u64,
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
+    /// 取り消しが届いた回数。
+    pub(crate) cancels: u64,
 }
 
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。

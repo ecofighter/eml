@@ -57,6 +57,8 @@ pub struct RunStats {
     pub parks: u64,
     /// スコープの最初の失敗より後の、タスクの失敗の数。
     pub dropped_failures: u64,
+    /// 取り消しが届いた回数。
+    pub cancels: u64,
     /// `share` が rc を負にした物体の数。
     pub shared_objects: u64,
 }
@@ -425,6 +427,11 @@ impl<M: Mode> Machine<M> {
             parks: if M::CHECKED { scheduled.tasks.parks } else { 0 },
             dropped_failures: if M::CHECKED {
                 scheduled.tasks.dropped_failures
+            } else {
+                0
+            },
+            cancels: if M::CHECKED {
+                scheduled.tasks.cancels
             } else {
                 0
             },

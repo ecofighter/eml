@@ -344,7 +344,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 ### seed で流す
 
 - `par/` と `async/` の分類 (`run/` と `run-fail/` の両方) のファイルは、逐次の検査モードの run とスナップショット、速いモードとの比べの後で、seed 1 と 2026 の方針 (`Sched::Seeded`) でも検査モードで流す ([VM](../spec/vm.md) の「タスクとスケジュール」)。`ui::run` と `ui::run_fail` の中で流し、ファイルを集めるテストは増やさない。ほかの分類は seed で流さない。`par` も `Async` のタスクもないプログラムはタスクを切り替えないためである。対象を決める規則は `seeded_runs_cover_par_and_async` が確かめる
-- 比べるのは、標準出力、標準エラー、書いたファイル、終わり方 (終了コードか誤りの文言) である。`run/par/` と `run/async/` では、スケジュールによらない `RunStats` (`eml_test_support::schedule_independent` を通したもの) も比べる。ただし `run/async/` の run が `exit` で終わったときは `RunStats` を比べない。タスクの `exit` はほかのタスクをスケジュールで決まる位置で捨て、`Finished.stats` はその時点の数だからである。`run/par/` は `exit` で終わっても比べる。`run-fail/` の run は `RunStats` を返さないので、出力と終わり方だけを比べる。食い違えば、`` `eml run --debug-heap --sched seeded:N` `` を含む文言で落ちる (`a_seeded_mismatch_names_the_seed`)。スケジュールは seed とプログラムと入力だけで決まるので、このコマンドで同じ run を再現できる
+- 比べるのは、標準出力、標準エラー、書いたファイル、終わり方 (終了コードか誤りの文言) である。`run/par/` と `run/async/` では、スケジュールによらない `RunStats` (`eml_test_support::schedule_independent` を通したもの) も比べる。ただし `run/async/` の run が `exit` で終わったときは `RunStats` を比べない。タスクの `exit` はほかのタスクをスケジュールで決まる位置で捨て、`Finished.stats` はその時点の数だからである。`run/par/` は `exit` で終わっても比べる。`run/async/` で、逐次か seed のどちらかの run の `cancels` が 0 でなければ、`RunStats` を比べない。取り消しが届くと、届いた時点からそのタスクの仕事が変わるためである。`run-fail/` の run は `RunStats` を返さないので、出力と終わり方だけを比べる。食い違えば、`` `eml run --debug-heap --sched seeded:N` `` を含む文言で落ちる (`a_seeded_mismatch_names_the_seed`)。スケジュールは seed とプログラムと入力だけで決まるので、このコマンドで同じ run を再現できる
 - 速いモードでは seed で流さない。スケジューラの誤りが速いモードで未定義の動作になると、同じプロセスで流すほかのファイルのテストを壊すためである
 - 逐次の run が VM の誤り (`fast_mode_reports` を満たさない誤り) で終われば、seed では流さない。誤りの文言は worker ID を含みうるが、ID はタスクが fork と join をする順で変わるためである。誤りはスナップショットがすでに記録している
 - `run/par/` と `run/async/` の各ファイルは、`exit` で終わる run も含めて、seed ごとに少なくとも1回横取りされなければならない (`Finished.preemptions > 0`)。横取りがなければ、逐次と同じ順で流しただけになるためである。安全点は [VM](../spec/vm.md) の「呼び出しと戻り」の一覧のとおりである。seed の方針の予算は 1 から 16 の安全点で、予算が尽きても yield の途中なら切り替えず、次の安全点でまた試す ([VM](../spec/vm.md) の「タスクとスケジュール」)。そのため、どれかの `par` の左の子が yield の途中でない安全点を 16 以上通れば、どの seed でも横取りが起きる。最適化が小さい関数を inline しないよう、各ファイルは再帰する補助の関数 `spin` を持ち、少なくとも1つの左の子で `spin 40` を走らせる。短いファイルを例外にする印は作らない。`run-fail/par/` の run は誤りで終わって `Finished` を持たないので、横取りを確かめられない。そのため、`run-fail/par/` のファイルは作りで横取りを起こす。少なくとも1つの左の子で `spin 40` を走らせ、右の子より長く動かす
@@ -357,6 +357,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `reuses` は比べる。局所の物体の rc を変えられるのは持ち主のタスクだけで、共有の印を付けた物体はどの順でも join の移し戻しまで reuse しない
   - `rc_increments` と `rc_decrements` は比べる。切り替えは RC に触れず (`Ctx::switch_task`)、fork と join の RC の仕事は親の `evv` と子の値だけで決まる。共有の物体を最後に手放すタスクは順で変わるが、手放す回数は変わらない
   - `evidence_steps`、`yields`、`yield_frames`、`unwound_frames` は比べる。yield の途中では切り替えず、子の中断はどの順でも両方の子が終わった後で同じ親の handler に起こし直すためである
+  - `cancels` は 0 にして比べない。どの run も `cancels` が 0 のときに限って、ほかの欄を比べる
   - `tasks`、`parks`、`dropped_failures`、`shared_objects` は比べる。`tasks` と `parks` は `start` と `await` と `yield_now` の呼び出しの数で、順によらない。`dropped_failures` は、スコープで失敗したタスクの数から最初の1つを引いた数で、どれが最初かによらない。`shared_objects` は、始めるときと fork のときに印を付ける物体の数で、始める順で変わらない
 - 欄がスケジュールで変わると分かったら、その欄の定義を直すか、理由を書いてこの一覧と `schedule_independent` に足す。食い違う欄を一律に外すことはしない
 

@@ -291,9 +291,11 @@ pub fn run_stats<'a>(sources: impl Into<Sources<'a>>) -> (String, Result<RunStat
 /// 0 にする欄とその理由は次のとおりで、比べる欄がスケジュールによらない理由は
 /// docs/implementation/testing.md の「seed で流す」にある。
 /// - `peak_objects`: 同時に生きている物体の数は、子の実行が交互に進む順で変わる
+/// - `cancels`: 取り消しが届くと、届いた時点からそのタスクの仕事が変わる
 #[cfg(feature = "run")]
 pub fn schedule_independent(mut stats: RunStats) -> RunStats {
     stats.peak_objects = 0;
+    stats.cancels = 0;
     stats
 }
 
