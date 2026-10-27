@@ -264,8 +264,39 @@ fn read_header(w: Word) -> (Pc, Slot, usize) {
     ((bits >> 32) as Pc, (bits >> 16) as Slot, bits & 0xFFFF)
 }
 
-/// 安全点 (docs/spec/vm.md の「タスクとスケジュール」)。止める理由と深さを確かめた後で、方針が求め、yield の途中で
-/// なければ横取りを試みる。yield の途中の状態は `Ctx` が1つだけ持つので、そこでは切り替えない。
+/// `Ctx::poll` の VM での呼び方。切り替えたいなら `true` を返す。速い道は `Ok(())` の分岐だけで、残りは
+/// `polled_stop` に置く (docs/spec/vm.md の「タスクとスケジュール」)。
+#[inline(always)]
+fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize) -> Result<bool, VmFault> {
+    match ctx.poll(depth) {
+        Ok(()) => Ok(false),
+        Err(stop) => polled_stop(ctx, depth, stop),
+    }
+}
+
+/// `poll` が止める理由を返したときの扱い。`Preempt` 以外は誤りとして返す。`Preempt` は、yield の途中でなければ
+/// ビットを下ろしてからもう一度 `poll` する。間に命令がないので、深さの上限は正確で、同時に立った止めるビットは
+/// 切り替えより先に勝つ。
+#[cold]
+#[inline(never)]
+fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<bool, VmFault> {
+    if stop != Stop::Preempt {
+        return Err(stop.into());
+    }
+    // yield の途中では切り替えない。ビットは立てたままにして、次の yield のない安全点で拾う
+    if ctx.yielding() != 0 {
+        return Ok(false);
+    }
+    ctx.heap().control().take_preempt();
+    match ctx.poll(depth) {
+        Ok(()) | Err(Stop::Preempt) => Ok(true),
+        Err(stop) => Err(stop.into()),
+    }
+}
+
+/// 安全点 (docs/spec/vm.md の「タスクとスケジュール」)。止める理由と深さを確かめた後で、`PREEMPT` が立っていたか
+/// 方針が求め、yield の途中でなければ横取りを試みる。yield の途中の状態は `Ctx` が1つだけ持つので、そこでは
+/// 切り替えない。`tick` は予算を数える方針があるので、`PREEMPT` の有無によらず毎回呼ぶ。
 #[inline(always)]
 fn safepoint<R: Exec>(
     code: &CodeBase<R::M>,
@@ -273,8 +304,9 @@ fn safepoint<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    ctx.poll(task.stack_depth())?;
-    if sched.policy.tick() && ctx.yielding() == 0 {
+    let wants = poll(ctx, task.stack_depth())?;
+    let tick = sched.policy.tick();
+    if (wants || tick) && ctx.yielding() == 0 {
         preempt::<R>(code, ctx, task, sched)?;
     }
     Ok(())
@@ -1165,7 +1197,8 @@ fn resume<R: Exec>(
     }
 }
 
-/// 方針が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す。切り替えた先が join を
+/// 方針か `PREEMPT` が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す (`PREEMPT` は
+/// 安全点の `poll` がもう下ろしている)。切り替えた先が join を
 /// 完了したら、`par` の後の安全点をここで繰り返す。Rust の再帰を使わないためである
 /// (docs/spec/vm.md の「並列化への備え」)。
 #[cold]
@@ -1188,9 +1221,12 @@ fn preempt<R: Exec>(
         let Some(at) = resume::<R>(code, ctx, task, sched, next, Some(TaskState::Ready))? else {
             return Ok(());
         };
-        let polled = ctx.poll(task.stack_depth()).map_err(VmFault::from);
-        at_par(code, task, sched, at, polled)?;
-        if !(sched.policy.tick() && ctx.yielding() == 0) {
+        let wants = match poll(ctx, task.stack_depth()) {
+            Ok(wants) => wants,
+            Err(fault) => return at_par(code, task, sched, at, Err(fault)),
+        };
+        let tick = sched.policy.tick();
+        if !((wants || tick) && ctx.yielding() == 0) {
             return Ok(());
         }
     }

@@ -13,6 +13,7 @@ mod evidence;
 mod machine;
 mod miri;
 mod par;
+mod preempt;
 mod reuse;
 mod roots;
 mod run;
