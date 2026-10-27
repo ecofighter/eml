@@ -366,6 +366,23 @@ fn fill_zero(
     }
 }
 
+/// `()` を書いた範囲は、その範囲の語を変えなければ残る。
+#[verifier::spinoff_prover]
+proof fn lemma_unit_filled_frame(before: BlockPerm, after: BlockPerm, lo: int, hi: int)
+    requires
+        unit_filled(before, lo, hi),
+        forall|j: int| lo <= j < hi ==> #[trigger] after.slots[j] == before.slots[j],
+        forall|j: int| lo <= j < hi ==> #[trigger] after.slots.contains_key(j),
+    ensures
+        unit_filled(after, lo, hi),
+{
+    assert forall|j: int| #![trigger p_init(after, j)] lo <= j < hi implies p_init(after, j)
+        && p_word(after, j).bits_spec() == 1 by {
+        assert(after.slots[j] == before.slots[j]);
+        assert(p_init(before, j));
+    }
+}
+
 /// `()` を書いた範囲は、次の語に `()` を書くと1語伸びる。
 #[verifier::spinoff_prover]
 proof fn lemma_unit_filled_extend(before: BlockPerm, after: BlockPerm, lo: int, hi: int)
@@ -1450,17 +1467,7 @@ impl<M: Mode> Heap<M> {
         let ghost scanned_perm = perm;
         fill_zero(h, Tracked(&mut perm), first + scanned, cap_words, Ghost(cap), Ghost(M::CHECKED));
         proof {
-            assert(unit_filled(perm, first as int, first + scanned)) by {
-                assert forall|j: int|
-                    #![trigger p_init(perm, j)]
-                    first <= j < first + scanned implies p_init(perm, j) && p_word(
-                    perm,
-                    j,
-                ).bits_spec() == 1 by {
-                    assert(perm.slots[j] == scanned_perm.slots[j]);
-                    assert(p_init(scanned_perm, j));
-                }
-            }
+            lemma_unit_filled_frame(scanned_perm, perm, first as int, first + scanned);
             if extended {
                 assert(perm.slots[0] == scanned_perm.slots[0]);
             }
