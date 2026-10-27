@@ -806,14 +806,14 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 深さは、VM のタスクが持つスタックの語の数で数える。`poll` に渡す深さはタスクの深さの起点を含まず、起点は上限の側で引いてある。フレームの数で数えないのは、スタックの大きさを抑えるのが目的だからである
 - 確保量は、確保器がページを取るときと返すときに数え (上の「確保と解放」)、上限を超えたら `MEMORY` を立てる。worker ごとのヒープの数を足し合わせた、セッション全体の量になる。凍結した塊のページも、塊が生きている間は数に入る。ページを `Frozen` に移しても数はそのまま残り、塊を落とすときに減る
 - 確保器に `Control` を渡すため、ヒープの確保器が `Arc<Control>` を持つ。`Heap::with_control(control)` は共有の `Control` でヒープを作り、`Heap::new()` は上限のない新しい `Control` で作る。`Heap::control()` がそれを返す。`Ctx::new(control, host)` は `with_control` でヒープを作る
-- 書く側は、止める語と worker の止める語の両方に直接書く。`Control::interrupt()` は両方に `INTERRUPT` を立て、確保器は確保量が上限を超えたとき両方に `MEMORY` を立てる。`Control::preempt()` は worker の止める語にだけ `PREEMPT` を立て、`Control::take_preempt()` はそれを下ろす。worker の語に写す仲介のスレッドは置かず、止まる時点は書いた時点で決まる。`PREEMPT` を止める語に置かないのは、host の読み手 (`stop_bits()` を読む入出力の中断、書き出し、ファイナライザ、回復) の振る舞いを変えないためである
+- 書く側は止める語と worker の止める語の両方に直接書く。`Control::interrupt()` は両方に `INTERRUPT` を立て、確保器は確保量が上限を超えたとき両方に `MEMORY` を立てる。`Control::preempt()` は worker の止める語にだけ `PREEMPT` を立て、`Control::take_preempt()` はそれを下ろす。worker の語に写す仲介のスレッドは置かず、止まる時点は書いた時点で決まる。`PREEMPT` を止める語に置かないのは、host の読み手 (`stop_bits()` を読む入出力の中断、書き出し、ファイナライザ、回復) の振る舞いを変えないためである
 - `Control::clear()` は止める語、worker の止める語、終わりの欄のすべてを下ろす。確保量が上限を下回ってもビットは下りないので、ビットを下ろすのは `clear` と、`PREEMPT` だけを下ろす `take_preempt` と `begin_run` である。REPL (`eml_cli::Repl`) は、入力の始めに `clear` を呼ぶ。確保量の上限で止まった後も、`MEMORY` のビットで次の入力が止まらないようにするためである。`clear` は確保量を減らさない。確保量を戻すのは、続けられる誤りの後の回復である。回復は古いヒープのページをすべて `Control` に戻すので、上限で止まった後の入力も、新しいヒープの分から数える (上の「回復」)。回復は写す間に古いヒープと写しを同時に持つので、写すことで上限を超えることがある。そのとき立つ `MEMORY` のビットは、次の入力の始めの `clear` が下ろす
 - 終わりの欄は `exit` だけを持ち、実行系の型によらない。手順は次の4つで、VM もネイティブも同じである
   1. 開く: host は worker を始める前に `Control::begin_run()` を呼ぶ。`begin_run` は `end` を 0 にし、`PREEMPT` を下ろす。止めるビットは下ろさない。REPL は入力ごとに `clear` も呼ぶ
   2. 書く: `exit n` の巻き戻しがタスクの底に着くと、底は `Control::exit(n)` を呼ぶ。`end` を 0 から 1 に替えるのに勝った最初の書き手だけが `code` を書いて真を返し、後の書き手は何も変えず偽を返す
   3. 出る: `main` の底は普通に戻る。実行系は、`main` が値を返したときと同じく、書き出しと終わりの検査を続ける。ほかのタスクの底は、ほかのタスクを動かさずに worker の入口へ戻る。VM は `Err(Stop::Ended)` を返し、ネイティブは入口へ longjmp する。こちらは後始末をしない ([VM](vm.md) の「`exit`」と「`Async` のタスク」)
   4. 読む: worker が戻った後で、host は `Control::exit_code() -> Option<i64>` を読む。終了コードの出どころはこれだけである。worker が `Ended` で戻ったときは run を捨てたので、host は終わりの検査をせず、ヒープを入れ替えて報告する
-- 止める語、worker の止める語、`end` が伝えるのは「止めよ」と「終わった」の印だけで、ほかのメモリへの書き込みを公開する役はない。`code` は `end` に勝った者が書き、host が worker の戻りの後で読むので、順序の約束を要らない。そのため、どの読み書きも Relaxed で行い、`SeqCst` と `fence` は使わない
+- 止める語、worker の止める語、`end` が伝えるのは「止めよ」と「終わった」の印だけで、ほかのメモリへの書き込みを公開する役はない。`code` は `end` に勝った者が書き、host が worker の戻りの後で読むので、順序の約束は要らない。そのため、どの読み書きも Relaxed で行い、`SeqCst` と `fence` は使わない
 - `poll`、`interrupt`、`preempt`、`take_preempt`、`worker_bits`、`exit`、`exit_code`、`begin_run`、`clear` と確保量の加減と `over_budget` は、`verus!` の外の安全なコードで、値について何も約束しない。確保器が確保量を加減する関数と、`make` が確保の前に上限と比べる関数は、信頼の一覧の T1 に入る (下の「`unsafe` の核」)
 - `eml_rt` は止める語だけを持ち、Ctrl-C の受け口を持たない。vstd だけに依存したままにするためである。受け口 (unix では SIGINT のハンドラ、Windows ではコンソールの handler) は `eml_cli` が入れ、`Control::interrupt()` を呼ぶ ([VM](vm.md) の「上限と割り込み」)
 - `eml run` の上限の既定の値は、`eml_cli::default_limits()` が決める ([VM](vm.md) の「上限と割り込み」)。上の表の既定の値 (`usize::MAX`) は `Limits::default()` のもので、`RunConfig::default()` とテストが使う
@@ -957,7 +957,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `InUse(StdStream)` | 標準のストリーム (`Stdin`、`Stdout`、`Stderr`) のハンドルが生きている間の、2つ目の `open` | `the standard input is already open`、`the standard output is already open`、`the standard error is already open` |
 | `Raised(Box<Raised>)` | `fail_io` が起こした `IO` の誤りと、起こし直された `IO` の誤り。`Raised { kind, message }` は `IOErrorKind` のタグ (`i64`) と元の誤りの文言 (`Box<str>`) を持つ。`Ctx` のメソッドは作らず、VM が作る | `{message}` |
 
-`Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`、`Raised`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す。([標準ライブラリ](stdlib.md) の「`try_io`」)。`Raised` のタグは持っている `kind` で、`IO_OTHER` より大きいタグ (`fail_io` だけが渡せる) もありうる。
+`Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`、`Raised`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す ([標準ライブラリ](stdlib.md) の「`try_io`」)。`Raised` のタグは持っている `kind` で、`IO_OTHER` より大きいタグ (`fail_io` だけが渡せる) もありうる。
 
 `Fault::panics` は、`try_panic` が捕まえる誤り (`Arith`、`Utf8`、`Index`、`InUse`) で真を返し、ほかでは偽を返す ([標準ライブラリ](stdlib.md) の「`try_panic`」)。値と入力で決まる誤りと、プログラムの順で決まる2つ目の `open` だけを `Panic` にし、どの呼び出しでも起きうるか起きた位置が決まらない誤り (`Heap`、`Output`、`Stopped`) は型に出さない。`io_error_kind` が `Some` を返す誤りとは重ならない。VM はこの2つで、誤りを `Panic` に届けるか、`IO` に届けるか、実行時エラーにするかを決める ([VM](vm.md) の「`IO` と `Panic` への中断」)。
 

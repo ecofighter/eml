@@ -2,7 +2,7 @@
 
 位置づけ: 将来の設計。
 
-std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の driver、タスクの間の channel、ネットワークとシグナルをまとめる。1つの worker の上のタスク、暗黙のスコープ、`await`、`try_all` は実装してあり、規則は [標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」と [VM](../spec/vm.md) の「`Async` のタスク」にある。この文書は、その上に足す取り消し、名前付きのスコープ、時間、I/O などの設計を書く。worker は [マルチコア対応の設計](multicore.md) の「スレッドと worker」に、スケジューラは [マルチコア対応の設計](multicore.md) の「スケジューラ」に、スレッドをまたぐ RC は [マルチコア対応の設計](multicore.md) の「スレッドをまたぐ RC」にあり、この文書はその上で利用者から見える意味と、std とランタイムの境目を書く。C の関数をタスクの中で待つ形は [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」に、ネイティブのコードでタスクが切り替わる所は [ネイティブ化の設計](native.md) の「並列の実行」にある。
+std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の driver、タスクの間の channel、ネットワークとシグナルをまとめる。1つの worker の上のタスク、暗黙のスコープ、`await`、`try_all` は実装してあり、規則は [標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」と [VM](../spec/vm.md) の「`Async` のタスク」にある。この文書はその上に足す取り消し、名前付きのスコープ、時間、I/O などの設計を書く。worker は [マルチコア対応の設計](multicore.md) の「スレッドと worker」に、スケジューラは [マルチコア対応の設計](multicore.md) の「スケジューラ」に、スレッドをまたぐ RC は [マルチコア対応の設計](multicore.md) の「スレッドをまたぐ RC」にあり、この文書はその上で利用者から見える意味と、std とランタイムの境目を書く。C の関数をタスクの中で待つ形は [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」に、ネイティブのコードでタスクが切り替わる所は [ネイティブ化の設計](native.md) の「並列の実行」にある。
 
 ## 目的と範囲
 
@@ -54,7 +54,7 @@ pub data Wake = | Woke | Cancelled
 ```
 
 - `Async` は extern のエフェクトにしない。extern のエフェクトは yield しうるラベルでなく ([型と Kind](../spec/types.md) の「row の具体化の記録」)、`Async` の操作は継続を取り出して待つためである
-- 生の操作は eml とランタイムの間の ABI である。`Async` は抽象エフェクトで、名前は見えるが操作は見えない。ランタイムの ABI として文書に書く。利用者は下の節の包みの関数を呼ぶ。`Cell` は登録表の添字を持つ `Unr` の即値 (`Repr::Int`) で、`OpId` と `ChanWait` はランタイムの token の `Foreign` である。どれも std の中で使う。`OpId` は `Lin` で、待つ間はランタイムが預かり、再開するときに `Wake` と組にして返す
+- 生の操作は eml とランタイムの間の ABI である。`Async` は抽象エフェクトで、名前は見えるが操作は見えない。操作はランタイムの ABI として文書に書く。利用者は下の節の包みの関数を呼ぶ。`Cell` は登録表の添字を持つ `Unr` の即値 (`Repr::Int`) で、`OpId` と `ChanWait` はランタイムの token の `Foreign` である。どれも std の中で使う。`OpId` は `Lin` で、待つ間はランタイムが預かり、再開するときに `Wake` と組にして返す
 - ランタイムが名前で呼ぶ入口は、単相の `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である。単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` は、生の操作ごとに節を1つ持つ handler をタスクの本体にかぶせる。節は継続 `k` をランタイムに預けて (待ちに入れるか、実行待ちに戻す) そのまま戻る。ランタイムは後で `resume_task` で `k` に `Wake` の値を渡し、タスクを再開する ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。タスクの本体は std の底の関数で包む。底は `Panic` と IO の失敗を捕まえ、結果を値のまま、引数を預かる extern (`finish_ok`) に渡す。`await` と `run` は預けた値を `take_result` と `run_result` で1回受け取る。`Lin` の結果も thunk に包まずに渡せる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
 - 生の操作の結果はどれも `Wake` を持つ (`Wake` そのものか、`Wake` と預けた token の組)。そのため、ランタイムはどの待ちのタスクにも即値の `Cancelled` (`await_io` と `await_io_until` では預かった token との組) を渡して再開でき、型が合う。これは std の約束で、テストで確かめる
 - 待ちうる包みの関数はどれも取り消しの地点である。取り消しはここで届く (下の「取り消し」)
@@ -430,7 +430,7 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - 本物のソケットのテストは `tests/ui/run/net/` に少しだけ置く。ループバックでポート 0 に bind して `local_port` で読み、期限を使わない (期限は仮想の時計の上だけで試す)。接続は一度に1つにするか、順によらない出力にする。N = 1 で流し、複数の worker の組 (N が 2 と 8) では順によらないものだけを流す。Windows の CI は同じ組を IOCP の上で流す
 - 意味のテスト: 取り消したタスクの `FileIn` と `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`timeout` の下の入れ子のスコープが親のない子を残さないこと、`shield` の中の別れの `send` が取り消しの下でも終わること、続く取り消しが2つ目の取り消しの地点で投げること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、取り消した待ち合わせの `send` の値が後始末されて受け手が起きないこと、操作の予算が速い道の 128 回で切り替えること、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
 - 救済を強いるスケジュール (`--sched rescue-always`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
-- `RunStats` に `cancels`、`channel_ops`、`completions` を足す。スナップショットは、実装した欄と同じく逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
+- `RunStats` に `cancels`、`channel_ops`、`completions` を足す。スナップショットは実装した欄と同じく逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
 
 ## 未決の論点と将来の拡張
 

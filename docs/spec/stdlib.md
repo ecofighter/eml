@@ -137,7 +137,7 @@ pub extern fail_io : IOErrorKind -> String -> <IO> a
 - `try_io` は、種類と文言をそのまま `IOError` の欄に入れて受け取る。`try_io` は `Io` などの extern の誤りと同じ道で捕まえる
 - `try_panic` は捕まえない。`IO` の失敗は `Panic` ではないためである
 - 捕まえなければ、`fail_io` を呼んだ位置の実行時エラーになる。表示は `message` で、終了コードは 1 である。実行時エラーの扱いは `try_io` の失敗と同じである
-- `kind` のタグは宣言の順の数で、`fail_io` は書かれたまま渡す。`Cancelled` などの新しい5つの種類を `fail_io` に渡しても、型検査の外で作る特別な扱いはない
+- `kind` のタグは宣言の順の数で、`fail_io` は書かれたまま渡す。`Cancelled` から `ResourceLimit` までの5つの種類を `fail_io` に渡しても、型検査の外で作る特別な扱いはない
 
 ## `exit`
 
@@ -958,7 +958,7 @@ pub data Failure =
   deriving (Show)
 ```
 
-- `Async` は抽象エフェクト (`pub abstract effect`) で、extern のエフェクトではない。生の操作は、`Std.Async` の外では perform できず、handler の節にも書けない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。生の操作は2つで、どちらも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る
+- `Async` は抽象エフェクト (`pub abstract effect`) で、extern のエフェクトではない。生の操作は `Std.Async` の外では perform できず、handler の節にも書けない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。生の操作は2つで、どちらも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る
 - `Wake` は、ランタイムが待たせたタスクを再開するときに渡す値である。ランタイムは配置の表を見ずに、宣言の順のタグ (`Woke` = 0、`Cancelled` = 1。`eml_lir::WAKE_WOKE`、`WAKE_CANCELLED`) で作る。タグと宣言の順が合うことはテストで確かめる
 - `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
 - ランタイムが名前で呼ぶ入口は、std の2つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どちらも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。2つの入口が単相の std の関数であることもテストで確かめる
