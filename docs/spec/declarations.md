@@ -72,7 +72,7 @@ data Shape =
 - `extern data` に書けるのは型変数の型引数だけで、row の型引数も Kind の宣言も書けない。extern の型の Kind は処理系の表が決める
 - `type` は型の別名の構文として予約する。型の別名は実装しておらず、`type` の宣言は HIR が E0004 にする ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - `extern` でない `data` に `=` がないものは、値を作れない型になるので E1025 とする。どのモジュールでも同じである
-- `Int`、`String`、`Unit` は `Prelude` の、`FileIn` は標準ライブラリのモジュール `FileIn` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)。`List`、`Option`、`Result` も `Prelude` の `data` である (下の「Prelude のクラス」)。コマンドリテラルの値の `Cmd` と、その欄の型 `StderrMode` も `Prelude` の `data` である ([式](expressions.md) の「コマンドリテラル」)
+- `Int`、`String`、`Unit` は `Prelude` の、`FileIn` は標準ライブラリのモジュール `FileIn` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)。`List`、`Option`、`Result`、`Either` も `Prelude` の `data` である (下の「Prelude のクラス」)。コマンドリテラルの値の `Cmd` と、その欄の型 `StderrMode` も `Prelude` の `data` である ([式](expressions.md) の「コマンドリテラル」)
 
 ## `effect`
 
@@ -340,7 +340,7 @@ pub class Show a where
 - `Eq`、`Ord`、`Show` のメソッドの型は row を持たない。そのため、instance の本体で `Panic` を起こしうる計算をすると E2002 になる。要るときは、本体の中で `try_panic` を使う。導出した instance は `Panic` を起こさない。利用者が宣言するクラスのメソッドの row は、宣言に書いたとおりである
 - `display` はクラスの普通のメソッドなので、ユーザーが呼ぶことも、instance で上書きすることもできる。導出した instance、タプルと `Unit` の instance、`List` の手書きの instance は既定の `display` を使う。そのため `display (Some "x")` は `Some "x"` で、引用符が付かないのは値そのものが `String` のときだけである
 
-Prelude は、標準のデータ型 `List`、`Option`、`Result` も宣言する。
+Prelude は、標準のデータ型 `List`、`Option`、`Result`、`Either` も宣言する。
 
 ```haskell
 pub infixr 5 ::
@@ -359,12 +359,18 @@ pub data Result e a =
   | Err e
   | Ok a
   deriving (Eq, Ord, Show)
+
+pub data Either a b =
+  | Left a
+  | Right b
+  deriving (Eq, Ord, Show)
 ```
 
 - `::` の fixity は、`++` と同じく `infixr 5` で、Haskell の `:` と同じである
 - `Result` の型引数は `Result e a` の順で、Haskell の `Either e a` と同じである。`Err`、`Ok` の順に宣言するので、導出した `Ord` では `Err _ < Ok _` になる
+- `Either a b` は Haskell の `Either` と同じ型で、`Left`、`Right` の順に宣言するので、導出した `Ord` では `Left _ < Right _` になる。`Result` と違って、どちらの側も失敗を表さない。2つの結果のどちらかを持つ値に使う
 - `List` の導出した `Ord` は `Nil < _ :: _` と要素ごとの辞書順で、Haskell のリストの順と同じである
-- `List` の `Show` は手で書いた instance で、`[1, 2]` の形で表示する。空のリストは `[]` である。要素は `show` で表示し、`, ` で区切る。`show_prec` は既定のままにする。角括弧で閉じているので、引数の位置でも括弧が要らないためである。表示は左辺の文字列を一意なまま伸ばして作るので、リストの長さに比例する時間で済む ([オブジェクトモデル](object-model.md) の「文字列の操作」)。`Option` と `Result` の導出した `Show` は、`Some [1]`、`Some (-1)`、`Ok "a"` のように表示する
+- `List` の `Show` は手で書いた instance で、`[1, 2]` の形で表示する。空のリストは `[]` である。要素は `show` で表示し、`, ` で区切る。`show_prec` は既定のままにする。角括弧で閉じているので、引数の位置でも括弧が要らないためである。表示は左辺の文字列を一意なまま伸ばして作るので、リストの長さに比例する時間で済む ([オブジェクトモデル](object-model.md) の「文字列の操作」)。`Option`、`Result`、`Either` の導出した `Show` は、`Some [1]`、`Some (-1)`、`Ok "a"`、`Left 1` のように表示する
 - リストを扱う関数は Prelude になく、`List` のモジュールにある ([標準ライブラリ](stdlib.md) の「`List`」)
 
 Prelude の instance は次のとおりである。
@@ -397,6 +403,7 @@ Prelude の instance は次のとおりである。
 | `Show (List a)` | Prelude に eml で書いた instance (上の `List` の `Show`) |
 | `Eq (Option a)`、`Ord (Option a)`、`Show (Option a)` | `deriving (Eq, Ord, Show)` |
 | `Eq (Result e a)`、`Ord (Result e a)`、`Show (Result e a)` | `deriving (Eq, Ord, Show)` |
+| `Eq (Either a b)`、`Ord (Either a b)`、`Show (Either a b)` | `deriving (Eq, Ord, Show)` |
 | `Eq IOErrorKind`、`Show IOErrorKind`、`Show IOError` | `IOErrorKind` は `deriving (Eq, Show)`。`Show IOError` は Prelude に書いた instance |
 | タプルと `Unit` の `Eq`、`Ord`、`Show` | 処理系の構造的な instance (上の「`deriving`」) |
 

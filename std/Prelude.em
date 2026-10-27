@@ -196,6 +196,11 @@ pub data Result e a =
   | Ok a
   deriving (Eq, Ord, Show)
 
+pub data Either a b =
+  | Left a
+  | Right b
+  deriving (Eq, Ord, Show)
+
 -- `try_io` が捕まえる IO の失敗の種類。VM は宣言の順のタグで渡す (docs/spec/stdlib.md の「`try_io`」)
 pub data IOErrorKind =
   | NotFound

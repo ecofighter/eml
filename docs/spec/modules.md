@@ -11,7 +11,7 @@
 - モジュール名は根からのパスで決まり、大文字小文字まで完全に一致させる。`import Report.Csv` は `<根>/Report/Csv.em` を読む
 - 入口のモジュールの名前は、ファイル名によらず `Main` である。入口のモジュールは、どの名前でも import できない
 - `Prelude`、`Main`、`Std` は予約したモジュール名である。根に `Prelude.em`、`Main.em`、`Std.em` があっても import できない
-- `Prelude` (`Bool`、`List`、`Option`、`Result`、`println` など) を暗黙に取り込む (下の「Prelude」)
+- `Prelude` (`Bool`、`List`、`Option`、`Result`、`Either`、`println` など) を暗黙に取り込む (下の「Prelude」)
 - エントリポイントは、入口のモジュールの `main` とする。型は `Unit -> <…> Unit` で、row のラベルは `IO` と `Panic` だけ (順は問わず、どちらも省ける) で、row 変数の末尾を持たない。`Unit -> Unit`、`Unit -> <IO> Unit`、`Unit -> <Panic> Unit`、`Unit -> <IO, Panic> Unit` のどれでもよい。ほかの型は E2004 にする。終了コードは標準ライブラリの `exit` で扱う ([標準ライブラリ](stdlib.md) の「`exit`」)
 - 公開するものには `pub` を付ける ([宣言](declarations.md) の「`pub`」と、下の「公開の範囲」)
 
@@ -61,7 +61,7 @@ import の循環は E1027 にする。型検査は item と SCC の単位で動�
   2. リテラルを持つ型の宣言と、その `Eq`、`Ord`、`Show` の instance。コマンドリテラルの `Cmd` と、その欄の型 `StderrMode` もここに入る
   3. 標準の演算子とその fixity ([宣言](declarations.md) の「fixity」)、そのクラス (`Num`、`Div`、`Bits`) と、リテラルを持つ型へのその instance
   4. どのプログラムでも要る入出力と制御 (Prelude の `pub` の関数) と、その型に出る型 (`Result`、`IOError` とその欄の `IOErrorKind`)
-  5. 標準ライブラリのいくつものモジュールがシグネチャで共有する型 (`Option`、`Bytes`、`Array`、`MutArray`) と、その instance。型を `Std.Bytes` のような自分のモジュールに置くと、その型を返すほかのモジュールの関数 (`Stdin.read_all_bytes`) を呼ぶだけのモジュールも、型の名前を書くたびにそのモジュールを import することになるためである
+  5. どのプログラムでも使う汎用の型 (`Option`、`Either`) と、標準ライブラリのいくつものモジュールがシグネチャで共有する型 (`Bytes`、`Array`、`MutArray`)、およびその instance。型を `Std.Bytes` のような自分のモジュールに置くと、その型を返すほかのモジュールの関数 (`Stdin.read_all_bytes`) を呼ぶだけのモジュールも、型の名前を書くたびにそのモジュールを import することになるためである
 - 型 `T` を扱う関数の集まりは `Std.T` に置く。lang item の脱糖が呼ぶ補助の関数は `pub` にしない。lang item は `pub` によらずに引くので、`pub` でない Prelude の item は利用者から見えないまま脱糖に使える
 
 ## 標準ライブラリ
