@@ -51,7 +51,7 @@
 - `ui.rs` と `repl.rs` の、ファイルの分け方の自己テストの組。UI のディレクトリには同じ拡張子のモジュールがあり、トランスクリプトは深い所の `.repl` を断るので、規則が違う
 - `eml_vm` の `structs.rs` の逆アセンブラのテストは、`dup s` と `(boxes, unboxes)` を確かめる。`miri.rs` の同じプログラムは、この事実を持たない
 - `eml_cli` の `api.rs` の `Outcome::Rejected` のテストは、トランスクリプトに出ない結果を固定する
-- `RunStats` がスケジュールによらないことは3か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムで生成したコードを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
+- `RunStats` がスケジュールによらないことは3か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` と `run/async/` のすべてのプログラムで生成したコードを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
 - `par` の子の誤りの規則は、`par.rs` の手書きの LIR のテストと `par::source` の組で確かめる。右の子の誤りを左の子が終わった後で報告する順序は、左の子が出力する LIR の版 (`noisy`) だけが確かめる。ソースの子は出力できないので、ソースでは順序が見えない。`par::source` は、生成した `fork$` と `reperform$` を通っても、左の中断で右の誤りを救わないことと、左の誤りが先であることを確かめる
 
 ### crate の中の置き方
@@ -318,6 +318,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `unwind/`: 中断と巻き戻し。`exit` と `abort` がハンドラやファイルを抜けるときの後始末
   - `var/`: `var` の変数。配列の添字、スコープ、中断との組み合わせ
   - `par/`: `Std.Par.par` の fork と join。子と handler の組み合わせ。逐次のほかに2つの seed でも流す (下の「seed で流す」)
+  - `async/`: `Std.Async` のタスク。始めること、待つこと、スコープの終わり、失敗の起こし直し、`Lin` の結果。逐次のほかに2つの seed でも流す (下の「seed で流す」)
   - `scripts/`: 5本のスクリプト (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`)。どれもディレクトリのテストで、入力は `main.args`、`main.stdin` と隣のファイルで与える。1回の起動で主な経路を通す。`deploy` のほかは、同じ処理を Python で書いた版 (`bench/scripts/<名前>.py`) と標準出力と終了コードが一致することを `bench/scripts/compare.sh --fixture <名前>` で確かめてから、スナップショットを受け入れる。UI テストで固定しない経路 (ほかのフラグ、空の入力、誤りの経路) も、`bench/scripts/compare.sh <名前> 引数…` で Python の版と比べて確かめる ([計測の基準](benchmarks.md) の「スクリプトの計測」)
   - `runtime/`: 実装の性質を確かめるテスト。メモリの解放、スタックの深さ、合流のブロック (`join_points.em`)、末尾呼び出し、部分を共有する型 (`shared_types_*.em`。木として書き下すと列の長さの指数の大きさになる型を、長さ40の列で作る)
 - 部分を共有する型の扱いが指数の時間に戻ると、`runtime/shared_types_*.em` は、終わらないかメモリを使い尽くす形で現れ、テストの失敗としては報告されない。`ui::run` は `run/` のファイルをすべて1つのテストで流すので、1つのファイルが終わらないとテスト全体が止まる。そのファイルの名前は、ハーネスが 10 秒を超えたところで標準エラーに出す (上の UI テストの項目)。nextest は 60 秒でテストを止めて失敗にし、その標準エラーを見せる (「性能のテスト」)
@@ -340,11 +341,13 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 ### seed で流す
 
-- `run/par/` と `run-fail/par/` のファイルは、逐次の検査モードの run とスナップショット、速いモードとの比べの後で、seed 1 と 2026 の方針 (`Sched::Seeded`) でも検査モードで流す ([VM](../spec/vm.md) の「タスクとスケジュール」)。`ui::run` と `ui::run_fail` の中で流し、ファイルを集めるテストは増やさない。ほかの分類は seed で流さない。`par` のないプログラムはタスクを切り替えないためである。対象を決める規則は `seeded_runs_cover_only_par` が確かめる
-- 比べるのは、標準出力、標準エラー、書いたファイル、終わり方 (終了コードか誤りの文言) である。`run/par/` では、スケジュールによらない `RunStats` (`eml_test_support::schedule_independent` を通したもの) も比べる。`run-fail/par/` の run は `RunStats` を返さないので、出力と終わり方だけを比べる。食い違えば、`` `eml run --debug-heap --sched seeded:N` `` を含む文言で落ちる (`a_seeded_mismatch_names_the_seed`)。スケジュールは seed とプログラムと入力だけで決まるので、このコマンドで同じ run を再現できる
+- `par/` と `async/` の分類 (`run/` と `run-fail/` の両方) のファイルは、逐次の検査モードの run とスナップショット、速いモードとの比べの後で、seed 1 と 2026 の方針 (`Sched::Seeded`) でも検査モードで流す ([VM](../spec/vm.md) の「タスクとスケジュール」)。`ui::run` と `ui::run_fail` の中で流し、ファイルを集めるテストは増やさない。ほかの分類は seed で流さない。`par` も `Async` のタスクもないプログラムはタスクを切り替えないためである。対象を決める規則は `seeded_runs_cover_par_and_async` が確かめる
+- 比べるのは、標準出力、標準エラー、書いたファイル、終わり方 (終了コードか誤りの文言) である。`run/par/` と `run/async/` では、スケジュールによらない `RunStats` (`eml_test_support::schedule_independent` を通したもの) も比べる。ただし `run/async/` の run が `exit` で終わったときは `RunStats` を比べない。タスクの `exit` はほかのタスクをスケジュールで決まる位置で捨て、`Finished.stats` はその時点の数だからである。`run/par/` は `exit` で終わっても比べる。`run-fail/` の run は `RunStats` を返さないので、出力と終わり方だけを比べる。食い違えば、`` `eml run --debug-heap --sched seeded:N` `` を含む文言で落ちる (`a_seeded_mismatch_names_the_seed`)。スケジュールは seed とプログラムと入力だけで決まるので、このコマンドで同じ run を再現できる
 - 速いモードでは seed で流さない。スケジューラの誤りが速いモードで未定義の動作になると、同じプロセスで流すほかのファイルのテストを壊すためである
 - 逐次の run が VM の誤り (`fast_mode_reports` を満たさない誤り) で終われば、seed では流さない。誤りの文言は worker ID を含みうるが、ID はタスクが fork と join をする順で変わるためである。誤りはスナップショットがすでに記録している
-- `run/par/` の各ファイルは、seed ごとに少なくとも1回横取りされなければならない (`Finished.preemptions > 0`)。横取りがなければ、逐次と同じ順で流しただけになるためである。安全点は [VM](../spec/vm.md) の「呼び出しと戻り」の一覧のとおりである。seed の方針の予算は 1 から 16 の安全点で、予算が尽きても yield の途中なら切り替えず、次の安全点でまた試す ([VM](../spec/vm.md) の「タスクとスケジュール」)。そのため、どれかの `par` の左の子が yield の途中でない安全点を 16 以上通れば、どの seed でも横取りが起きる。最適化が小さい関数を inline しないよう、各ファイルは再帰する補助の関数 `spin` を持ち、少なくとも1つの左の子で `spin 40` を走らせる。短いファイルを例外にする印は作らない。`run-fail/par/` の run は誤りで終わって `Finished` を持たないので、横取りを確かめられない。そのため、`run-fail/par/` のファイルは作りで横取りを起こす。少なくとも1つの左の子で `spin 40` を走らせ、右の子より長く動かす
+- `run/par/` と `run/async/` の各ファイルは、`exit` で終わる run も含めて、seed ごとに少なくとも1回横取りされなければならない (`Finished.preemptions > 0`)。横取りがなければ、逐次と同じ順で流しただけになるためである。安全点は [VM](../spec/vm.md) の「呼び出しと戻り」の一覧のとおりである。seed の方針の予算は 1 から 16 の安全点で、予算が尽きても yield の途中なら切り替えず、次の安全点でまた試す ([VM](../spec/vm.md) の「タスクとスケジュール」)。そのため、どれかの `par` の左の子が yield の途中でない安全点を 16 以上通れば、どの seed でも横取りが起きる。最適化が小さい関数を inline しないよう、各ファイルは再帰する補助の関数 `spin` を持ち、少なくとも1つの左の子で `spin 40` を走らせる。短いファイルを例外にする印は作らない。`run-fail/par/` の run は誤りで終わって `Finished` を持たないので、横取りを確かめられない。そのため、`run-fail/par/` のファイルは作りで横取りを起こす。少なくとも1つの左の子で `spin 40` を走らせ、右の子より長く動かす
+- `async/` のファイルも同じ `spin` を持ち、`Async.start` か `Async.spawn` の直後に、始めた側が次の `Async` の操作の前に `spin 40` を呼ぶ。始めたタスクが実行待ちの列にいる間に seed の予算が尽きるので、どの seed でも横取りが起きる。`await` と `yield_now` による切り替えは横取りに数えない。横取りがなければ、ハーネスは「par の左の子か、ほかのタスクが実行待ちの間の Async のタスクに、16 以上の安全点を通らせる」という意味の文言で落ちる。`run-fail/async/` のファイルも、同じ作りで横取りを起こす
+- `async/` のファイルは、出力の順がスケジュールで変わらないように書く。一度に出力するタスクは1つだけにし、出力の順は `await` か `run` が戻る順で決める。失敗する run の失敗の文言は1つだけにする (どの失敗が最初になるかを順に頼らない)。ファイルはテストのディレクトリからの相対パスで開く。これらはハーネスでは確かめず、レビューで確かめる
 - `schedule_independent` は `RunStats` の欄のうち、スケジュールで変わる欄だけを 0 にする。欄ごとの扱いと理由は次のとおりである ([VM](../spec/vm.md) の「`RunStats`」)
   - `peak_objects` は 0 にして比べない。同時に生きている物体の数は、子が交互に進む順で変わる
   - `peak_stack` は比べる。タスクごとの `depth_offset` とスタックの長さの和の最大で、右の子の起点は fork のときに決まり、各タスクのスタックの伸び縮みはスケジュールによらない

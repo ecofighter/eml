@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 352
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/async/await_rethrows_panic.em
+---
+--- stdout ---
+before
+--- stderr ---
+--- runtime error ---
+panicked: boom
+  at <std>/Async.em:54:9

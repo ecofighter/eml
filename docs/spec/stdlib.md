@@ -902,7 +902,41 @@ main () =
 
 ## `Std.Async`
 
-`Std.Async` は1つの worker の上でタスクを動かすモジュールである。`Async` のエフェクト、ランタイムが名前で呼ぶ入口、extern の行は、eml とランタイムの間の ABI である。形を変えるときはランタイムも合わせて変える。
+`Std.Async` は1つの worker の上でタスクを動かすモジュールである。
+
+```haskell
+import Async (Async)
+
+body : Unit -> <IO, Panic, Async> Int
+body () =
+  let a = Async.start (fn () -> 1)
+  let b = Async.start (fn () -> 2)
+  Async.await a + Async.await b
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (Async.run body))
+```
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `run` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic> a` | eml |
+| `start` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
+| `spawn` | `(Unit -> <IO, Panic, Async> Unit) -> <IO, Async> Unit` | eml |
+| `await` | `Task a -> <IO, Panic, Async> a` | eml |
+| `yield_now` | `Unit -> <IO, Async> Unit` | eml |
+| `try_all` | `(Unit -> <IO, Panic \| e> a) -> <IO \| e> Result Failure a` | eml |
+| `Failure` | `IOFailed IOError` と `Panicked String` を持つ型 | eml (`deriving (Show)`) |
+
+- `Async.run f` は根のスコープを開き、`f ()` をその中の最初のタスクとして動かす。`start` と `spawn` は新しいタスクを、呼んだタスクのスコープに加える。スコープは、呼び出しを動的に囲むいちばん内側の `run` の根である。孫も同じ根に入る。タスクの中で `run` を入れ子に呼ぶと、その `run` は自分の根を開く
+- `run` は、根のスコープのすべてのタスクが終わってから戻る。待ったタスクかどうかによらない。失敗がなければ本体の値を返す。失敗があれば、終わった順で最初の失敗を起こし直し、本体の値は捨てる。IO の失敗は種類と文言を保ち、Panic は文言を保つ。後の失敗は報告せず、1つずつ `RunStats.dropped_failures` に数える ([VM](vm.md) の「`RunStats`」)。失敗したタスクを待ち、起こし直された失敗を捕まえなかったタスクも、失敗したタスクとして数える
+- `Task a` は `Lin` で、`await t` が消費する。`await` はタスクの値を返すか、タスクの失敗を起こし直す。その失敗はスコープの失敗のままなので、`await` の周りで捕まえても `run` は起こし直す。失敗をスコープから分けるには、タスクの中で `try_all` を使う
+- `drop t` はハンドルを放すだけで、タスクを取り消さない。タスクは最後まで動き、`run` はそれも待つ。タスクの値は終わったときに放し、失敗はスコープの失敗になる
+- ハンドルは、1つのプログラムの実行の中なら、作った `run` の外へ出してよい。そのときタスクは終わっているので、`await` はすぐ値を返すか失敗を起こし直す。`Task` は線形なので、REPL の入力をまたいで持つことはできない ([モジュールと名前解決](modules.md) の「REPL のセッション」)
+- `yield_now ()` は、呼んだタスクを実行待ちの列の後ろへ回す
+- タスクは閉じた row `<IO, Panic, Async>` で始まる。始めた側の handler と `var` はタスクから見えない。`var` を捕まえた閉包を `start` や `spawn` に渡すと型の誤り (E2002) になる
+- `Async` は抽象エフェクトで、操作 `await_cell` と `reschedule` は `Std.Async` の外から perform も handle もできない (E1058。[エフェクトと handler](effects.md) の「抽象エフェクト」)。利用者は `await`、`yield_now` などの包む関数を呼ぶ
+
+`Async` のエフェクト、ランタイムが名前で呼ぶ入口、extern の行は、eml とランタイムの間の ABI である。形を変えるときはランタイムも合わせて変える。
 
 ```haskell
 pub data Wake =
@@ -959,7 +993,7 @@ pub try_all : (Unit -> <IO, Panic | e> a) -> <IO | e> Result Failure a
 
 ## 実行時エラー
 
-標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
+標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。
 
 I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
