@@ -229,6 +229,14 @@ pub(crate) struct StdinHandle {
     flags: Arc<OpenFlags>,
 }
 
+/// `verus!` の外の trait `Source` を、Verus に知らせる。これで `fill` や `Ctx` の読みのような総称の関数の境界に使える。
+/// メソッドは載せないので、Verus は実装について何も仮定しない。Verus のためだけの宣言なので、ふつうのビルドには入れない。
+#[cfg(verus_only)]
+#[verifier::external_trait_specification]
+pub(crate) trait ExSource {
+    type ExternalTraitSpecificationFor: Source;
+}
+
 /// `src` の読み手の buffer に残ったバイトを返す。空なら1回補充してから返し、終わりなら空の slice を返す
 /// (`Reader::fill_buf`)。`host` があれば、補充の前にその Host の出力を書き出させる (標準入力の読み)。誤りは `src` の
 /// 名前を付けた `Fault` にする (`fault`)。検証した `Ctx` のコードは、`foreign_unique` で借りたハンドルのままこれを

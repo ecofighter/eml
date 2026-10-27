@@ -116,7 +116,7 @@
 
 並行の手順 (共有の側の2つの境目の並行の議論と、公開の順序) は証明しない (信頼の一覧の T0)。並行の証明の計画は [マルチコア対応の設計](../future/multicore.md) の「テスト」にある。vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは、Verus では確かめられない。順序は、文書の議論 ([オブジェクトモデル](../spec/object-model.md) の「上限」と「共有の側」) と Miri に任せる。
 
-`cargo verus verify -p eml_rt` は、0 errors のほかに7つの警告を出す。読み手の信頼の関数 (`host.rs` の `fill`、`consume`、`read_text`) と、それを呼ぶ `heap/ctx/io.rs` の4つの関数が、`verus!` の外の trait `Source` を型の境界に使うためである。Verus はこれを今の版では警告にし、後の版で誤りにすると告げている。誤りになったら、`Source` を `#[verifier::external_trait_specification]` で宣言して直す。
+`cargo verus verify -p eml_rt` は、0 errors のほかに警告も trigger の注記も出さない。読み手の信頼の関数 (`host.rs` の `fill`、`consume`、`read_text`) と、それを呼ぶ `heap/ctx/io.rs` の関数は、`verus!` の外の trait `Source` を型の境界に使う。そのため `host.rs` が `Source` を `#[verifier::external_trait_specification]` の `ExSource` で Verus に知らせる (信頼の一覧の T11)。量化子の trigger は、Verus が自信を持って選べないものには `#[trigger]` か `#![trigger ...]` で書く。自動で選んだ trigger は、周りの文脈が変わると Z3 の探索を変えうるので、選び方を書いて固める。
 
 Verus (0.2026.10.04.426d8b0) は、ふだんの devShell が `verus` と `cargo-verus` を入れる。flake は、release の zip を系ごとの input (`verus-aarch64-darwin`、`verus-x86_64-linux`) にし、`nix/verus.nix` が要る部品 (`libvstd.rlib` と `vstd.vir` を含む) だけを展開する。Verus の起動の部分は rustup で toolchain を探すが、devShell の `verus` は rustup を使わない (`VERUS_USE_RUSTUP=0`)。代わりに、Verus が求める版の fenix の `rustc` の `lib` を、rust_verify が読むライブラリの道 (macOS は `DYLD_FALLBACK_LIBRARY_PATH`、Linux は autoPatchelf と `LD_LIBRARY_PATH`) に足す。rust_verify は公式の版の librustc_driver に繋がるので、source から組む nixpkgs の rustc では動かないためである。Verus の版を上げるときは、2つの input の URL、`rust-toolchain.toml` の `channel` と `flake.nix` の `stable` の `sha256`、`eml_rt` の vstd の版 (cargo-verus の toolchain の表が指す版) を揃えて変え、`cargo verus verify --check-toolchain` で確かめる。`sha256` が古いままだと、評価が hash の食い違いで止まる。
 

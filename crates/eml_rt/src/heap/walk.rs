@@ -255,7 +255,9 @@ impl<M: Mode> Heap<M> {
                     && self.live_block(r@[i].bits_spec()),
             forall|h: usize|
                 #![trigger self.live_block(h)]
-                self.live_block(h) ==> exists|i: int| 0 <= i < r@.len() && r@[i].bits_spec() == h,
+                self.live_block(h) ==> exists|i: int|
+                    #![trigger r@[i]]
+                    0 <= i < r@.len() && r@[i].bits_spec() == h,
     {
         let blocks = self.core.pages.blocks();
         let mut live: Vec<Word> = Vec::new();
@@ -274,6 +276,7 @@ impl<M: Mode> Heap<M> {
                     ) && self.live_block(live@[i].bits_spec()),
                 forall|j: int|
                     0 <= j < k && self.live_block(#[trigger] blocks@[j]@.addr) ==> exists|i: int|
+                        #![trigger live@[i]]
                         0 <= i < live@.len() && live@[i].bits_spec() == blocks@[j]@.addr,
             decreases blocks.len() - k,
         {
@@ -291,11 +294,13 @@ impl<M: Mode> Heap<M> {
                         0 <= j < k + 1 && self.live_block(
                             #[trigger] blocks@[j]@.addr,
                         ) implies exists|i: int|
+                        #![trigger live@[i]]
                         0 <= i < live@.len() && live@[i].bits_spec() == blocks@[j]@.addr by {
                         if j == k {
                             assert(live@[before.len() as int] == w);
                         } else {
                             let i = choose|i: int|
+                                #![trigger before[i]]
                                 0 <= i < before.len() && before[i].bits_spec() == blocks@[j]@.addr;
                             assert(live@[i] == before[i]);
                         }
@@ -308,9 +313,12 @@ impl<M: Mode> Heap<M> {
             assert forall|h: usize|
                 #![trigger self.live_block(h)]
                 self.live_block(h) implies exists|i: int|
+                #![trigger live@[i]]
                 0 <= i < live@.len() && live@[i].bits_spec() == h by {
                 self.core.pages.lemma_in_use_carved(h);
-                let j = choose|j: int| 0 <= j < blocks@.len() && blocks@[j]@.addr == h;
+                let j = choose|j: int|
+                    #![trigger blocks@[j]]
+                    0 <= j < blocks@.len() && blocks@[j]@.addr == h;
                 assert(self.live_block(blocks@[j]@.addr));
             }
         }
@@ -600,7 +608,9 @@ impl<M: Mode> Heap<M> {
                     i,
                 ) implies self.child_ok(b, i) by {
                 self.core.pages.lemma_in_use_carved(b);
-                let j = choose|j: int| 0 <= j < blocks@.len() && blocks@[j]@.addr == b;
+                let j = choose|j: int|
+                    #![trigger blocks@[j]]
+                    0 <= j < blocks@.len() && blocks@[j]@.addr == b;
                 assert(self.core.scanned(blocks@[j]@.addr, i));
             }
         }
