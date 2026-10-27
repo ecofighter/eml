@@ -590,7 +590,13 @@ fn the_io_error_kind_tags_match_the_prelude_declaration() {
             ("PermissionDenied", eml_lir::IO_PERMISSION_DENIED),
             ("NotAvailable", eml_lir::IO_NOT_AVAILABLE),
             ("NotUtf8", eml_lir::IO_NOT_UTF8),
-            ("Other", eml_lir::IO_OTHER)
+            ("Other", eml_lir::IO_OTHER),
+            // 次の5つには Rust の定数がない。Rust の側は作らず、`fail_io` がタグをそのまま渡す
+            ("Cancelled", 5),
+            ("TimedOut", 6),
+            ("ConnectionReset", 7),
+            ("AddrInUse", 8),
+            ("ResourceLimit", 9)
         ]
     );
 }

@@ -154,15 +154,6 @@ pub enum Utf8Source {
     Child(Box<str>),
 }
 
-/// 0 でない終了コードで終わった子 (`Proc.capture`)。
-#[derive(Debug, PartialEq, Eq)]
-pub struct Exited {
-    /// ほかの名前と違って `Box<str>` にしないのは、これを作る `proc_exited` が検証したコードで、Verus が
-    /// `String::into_boxed_str` を扱わないためである。
-    pub program: String,
-    pub code: i64,
-}
-
 /// 範囲の外の位置。
 #[derive(Debug, PartialEq, Eq)]
 pub enum IndexFault {
@@ -217,8 +208,6 @@ pub enum Fault {
     Stopped(Stop),
     /// 標準のストリームのハンドルが、すでに開いている。
     InUse(StdStream),
-    /// 子が 0 でない終了コードで終わった。`try_io` が捕まえ、`kind` は `Other` である。
-    Exited(Box<Exited>),
     /// タスクの失敗として起こし直された `IO` の誤り。`kind` は `IOErrorKind` のタグで、`message` は元の誤りの文言である。
     Raised(Box<Raised>),
 }
@@ -231,7 +220,6 @@ impl Fault {
             Fault::Io { op: _, name: _, reason } => Some(reason_kind(*reason)),
             Fault::Stdin(reason) => Some(reason_kind(*reason)),
             Fault::NotUtf8(_) => Some(IO_NOT_UTF8),
-            Fault::Exited(_) => Some(IO_OTHER),
             Fault::Raised(r) => Some(r.kind),
             Fault::Heap(_)
             | Fault::Arith(_)
@@ -256,7 +244,6 @@ impl Fault {
             | Fault::Stdin(_)
             | Fault::NotUtf8(_)
             | Fault::Stopped(_)
-            | Fault::Exited(_)
             | Fault::Raised(_) => false,
         }
     }
@@ -1347,7 +1334,6 @@ impl fmt::Display for Fault {
             },
             Fault::Stopped(s) => write!(f, "{s}"),
             Fault::Raised(r) => write!(f, "{}", r.message),
-            Fault::Exited(e) => write!(f, "command `{}` exited with code {}", e.program, e.code),
             Fault::InUse(stream) => write!(
                 f,
                 "the standard {} is already open",

@@ -251,7 +251,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
 #### 戻らない extern
 
-- 表の行の `ret` が `Never` の extern (`exit`、`panic`、`Std.Proc.exited`) は値を返さない。結果の束縛は位置でなく、Repr と Kind の印は translate が具体化した結果の型から決める。`never` の操作の `clause` の束縛と同じ扱いで、box の挿入は受け直さず、使う所にも変換を入れない。verifier は結果を行と比べず (R7 の結果の項と、Kind の印の比較)、互換の位置での束縛の使いも比べない
+- 表の行の `ret` が `Never` の extern (`exit`、`panic`、`fail_io`) は値を返さない。結果の束縛は位置でなく、Repr と Kind の印は translate が具体化した結果の型から決める。`never` の操作の `clause` の束縛と同じ扱いで、box の挿入は受け直さず、使う所にも変換を入れない。verifier は結果を行と比べず (R7 の結果の項と、Kind の印の比較)、互換の位置での束縛の使いも比べない
 - 行の `ret` と `OpRet` は、操作の表と同じ型 (`eml_extern::OpRet`) である
 
 #### extern の行

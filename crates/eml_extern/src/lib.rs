@@ -743,17 +743,6 @@ table! {
         ProcWait => {
             kinded("Std.Proc.wait", &[Obj], &[Lin], Int, Unr, Purity::Effectful)
         },
-        // いつも `IO` の失敗で終わる。`exit` と同じく戻らない行である
-        ProcExited => FunctionRow {
-            name: "Std.Proc.exited",
-            params: &[Repr::Obj, Repr::Int],
-            ret: OpRet::Never,
-            param_kinds: &[Linearity::Unr, Linearity::Unr],
-            ret_kind: Linearity::Unr,
-            purity: Purity::Effectful,
-            borrowed: &[false, false],
-            with_arg: None,
-        },
         ProcCloseStdin => kinded(
             "Std.Proc.close_stdin",
             &[Obj],
@@ -844,6 +833,18 @@ table! {
             ret_kind: Linearity::Unr,
             purity: Purity::Effectful,
             borrowed: &[false],
+            with_arg: None,
+        },
+        // いつも `IO` の失敗で終わる戻らない行。宛先には書かず、届け先は VM の `failed` が決める
+        // (docs/spec/vm.md の「extern の中断」)
+        FailIo => FunctionRow {
+            name: "Prelude.fail_io",
+            params: &[Repr::Enum, Repr::Obj],
+            ret: OpRet::Never,
+            param_kinds: &[Linearity::Unr, Linearity::Unr],
+            ret_kind: Linearity::Unr,
+            purity: Purity::Effectful,
+            borrowed: &[false, false],
             with_arg: None,
         },
         // `exit` と同じく VM が自分で実行し、文字列を `Panic` の `panicked` の節に渡す

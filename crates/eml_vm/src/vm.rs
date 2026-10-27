@@ -5,7 +5,7 @@
 use std::marker::PhantomData;
 
 use eml_extern::{Extern, ExternEffect, Purity};
-use eml_rt::externs::{self, Fault};
+use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::{
     Ctx, Form, Handle, MaskItem, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write,
     WriteMode,
@@ -1941,9 +1941,13 @@ fn run_extern<R: Exec>(
                 let w = ctx.proc_close_stdin(task.get(arg(0)))?;
                 task.set(dst, w);
             }
-            // いつも誤りを返すので、宛先には書かない
-            Extern::ProcExited => {
-                ctx.proc_exited(task.get(arg(0)), task.raw(arg(1)))?;
+            // いつも誤りを返すので、宛先には書かない。届け先は `failed` が決める (docs/spec/vm.md の「extern の中断」)
+            Extern::FailIo => {
+                let message = ctx.copy_string(task.get(arg(1)), usize::MAX)?;
+                return Err(VmFault::Extern(Fault::Raised(Box::new(Raised {
+                    kind: task.raw(arg(0)),
+                    message: message.into_boxed_str(),
+                }))));
             }
             Extern::FloatCompare => task.set_raw(
                 dst,
