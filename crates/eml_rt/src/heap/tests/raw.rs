@@ -38,3 +38,10 @@ pub(super) unsafe fn prefix_first(w: Word) -> u32 {
     let p = h.cast::<u32>().with_addr(h.addr() - 8);
     unsafe { AtomicU32::from_ptr(p) }.load(Ordering::Relaxed)
 }
+
+/// 検査モードの前置きの `first` の欄を書き換える。ID ごとの数と食い違う持ち主を作るのに使う。
+pub(super) unsafe fn set_prefix_first<M: Mode>(_heap: &mut Heap<M>, w: Word, v: u32) {
+    let h = w.as_ptr();
+    let p = h.cast::<u32>().with_addr(h.addr() - 8);
+    unsafe { AtomicU32::from_ptr(p) }.store(v, Ordering::Relaxed)
+}

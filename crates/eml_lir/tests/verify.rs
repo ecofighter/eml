@@ -3568,3 +3568,190 @@ fn f(w.0: obj) -> obj {{
         Err("`w.0` is released as unboxed, but it is not unboxed as a struct in `f`".to_string())
     );
 }
+
+// `par` と `child_abort`
+
+/// `a` と `b` を子にする `par` の結果を返す `f`。`call` は `par` の文で、`after` はその後の文である。
+fn par(params: &str, call: &str, after: &str) -> String {
+    format!("{PAIR}{BOX}fn f({params}) -> obj {{\n  {call}\n{after}}}\n")
+}
+
+#[test]
+fn a_par_binds_its_pair_as_obj() {
+    let text = par(
+        "a.0: tobj, b.1: tobj",
+        "let t.2: obj = par (,) #0(a.0, b.1)",
+        "  return t.2\n",
+    );
+    assert_eq!(check_lowered(&text), Ok(()));
+    assert_eq!(check_scopes(&text), Ok(()));
+    assert_eq!(check(&text), Ok(()));
+}
+
+#[test]
+fn a_par_is_never_a_tail_call() {
+    let text = par("a.0: tobj, b.1: tobj", "tail par (,) #0(a.0, b.1)", "");
+    assert_eq!(
+        rejected_at_both_levels(&text),
+        "a par is a tail call, but the join needs the parent's frame in `f`"
+    );
+    assert_eq!(
+        check_lowered(&text),
+        Err("a tail par is formed before contract in `f`".to_string())
+    );
+}
+
+#[test]
+fn the_pair_of_a_par_has_two_tobj_fields() {
+    let text = par(
+        "a.0: tobj, b.1: tobj",
+        "let t.2: obj = par Box #0(a.0, b.1)",
+        "  return t.2\n",
+    );
+    let message = "the pair of a par is `Box` #0, which does not have two tobj fields in `f`";
+    assert_eq!(rejected_at_both_levels(&text), message);
+    assert_eq!(check_lowered(&text), Err(message.to_string()));
+}
+
+#[test]
+fn the_children_of_a_par_are_uniform() {
+    let text = par(
+        "n.0: int, b.1: tobj",
+        "let t.2: obj = par (,) #0(n.0, b.1)",
+        "  return t.2\n",
+    );
+    assert_eq!(
+        rejected_at_both_levels(&text),
+        "argument 0 of a par is `n.0` (int), but a par takes tobj in `f`"
+    );
+    // 入口の段は境界を比べない
+    assert_eq!(check_lowered(&text), Ok(()));
+    let result = format!(
+        "{PAIR}fn f(a.0: tobj, b.1: tobj) -> int {{\n  let t.2: int = par (,) #0(a.0, b.1)\n  return t.2\n}}\n"
+    );
+    assert_eq!(
+        rejected_at_both_levels(&result),
+        "`t.2` (int) is bound to a par, which returns obj in `f`"
+    );
+}
+
+/// `par` の子は `apply` の呼ぶ値と同じく `poly` の受け手で、`lin` の閉包も渡せる。`par` は子を消費するので、
+/// 後でまた使う `lin` の閉包は、複製すれば V1 が、複製しなければ所有の検査が断る。結果の印は `poly` なので、`lin`
+/// の変数にも束ねられる (docs/spec/lir.md の「Kind の印の検査」)。
+#[test]
+fn a_lin_child_of_a_par_is_consumed_once() {
+    let once = format!(
+        "{PAIR}fn f(c.0: tobj lin, b.1: tobj) -> obj lin {{\n  let t.2: obj lin = par (,) #0(c.0, b.1)\n  return t.2\n}}\n"
+    );
+    assert_eq!(check(&once), Ok(()));
+    let again = |dup: &str| {
+        format!(
+            "{PAIR}fn f(c.0: tobj lin, b.1: tobj) -> tobj lin {{\n{dup}  let t.2: obj = par (,) #0(c.0, b.1)\n  decref t.2\n  return c.0\n}}\n"
+        )
+    };
+    assert_eq!(
+        check(&again("  dup c.0\n")),
+        Err("`c.0` (lin) is duplicated, but only unr can be in `f`".to_string())
+    );
+    assert_eq!(
+        check(&again("")),
+        Err("`c.0` is used after it was moved in `f`".to_string())
+    );
+}
+
+/// 起こし直す閉包を親に渡し、evidence は借りる。
+const CHILD_ABORT: &str = "fn g(e.0: obj, c.1: tobj poly) -> obj poly {\n  let u.2: unit = prim child_abort(e.0, c.1)\n  decref e.0\n  let d.3: obj poly = prim dummy()\n  return d.3\n}\n";
+
+#[test]
+fn child_abort_borrows_the_evidence() {
+    assert_eq!(check(CHILD_ABORT), Ok(()));
+}
+
+#[test]
+fn child_abort_takes_an_obj_evidence_and_a_closure() {
+    let arity = CHILD_ABORT.replace("(e.0, c.1)", "(e.0)");
+    assert_eq!(
+        check(&arity),
+        Err("`prim child_abort` takes 2 arguments but is given 1 in `g`".to_string())
+    );
+    let evidence = CHILD_ABORT
+        .replace("e.0: obj", "e.0: int")
+        .replace("  decref e.0\n", "");
+    assert_eq!(
+        check(&evidence),
+        Err(
+            "argument 0 of `prim child_abort` is `e.0` (int), but the primitive takes obj in `g`"
+                .to_string()
+        )
+    );
+}
+
+/// `par` を走らせうるプログラムの、fork の関数を持つエフェクト `Fail` とその fork の関数。`main` の本体と、fork の
+/// 関数のうち書くものを選ぶ。`reperform$` を書かないとき、`fork$` は代わりに `main` を渡す。
+fn forking(main: &str, fork: bool, clause: bool, reperform: bool) -> String {
+    let mut text = format!(
+        "{PAIR}effect Fail {{ never fail(tobj poly) -> never }}\nfn main(a.0: tobj, b.1: tobj) -> obj {{\n{main}}}\n"
+    );
+    if fork {
+        let clause = if clause { "clause Fail.fail " } else { "" };
+        let target = if reperform {
+            "reperform$Fail.fail"
+        } else {
+            "main"
+        };
+        text.push_str(&format!(
+            "{clause}fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {{
+  let c.2: tobj poly = closure {target}(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
+  decref ev.0
+  let d.4: obj poly = prim dummy()
+  return d.4
+}}
+"
+        ));
+    }
+    if reperform {
+        text.push_str(
+            "uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
+  let ev.2: obj = prim ev_lookup[Fail]()
+  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
+  tail clause Fail.fail c.3(ev.2, a.0)
+}
+",
+        );
+    }
+    text
+}
+
+/// `par` か `root_get` を含むプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を
+/// 持つ `fork$` と、`reperform$` を持つ (docs/spec/lir.md の「verifier」)。どちらも含まないプログラムには求めない。
+#[test]
+fn a_program_that_may_run_par_has_every_fork_entry() {
+    const PAR: &str = "  let t.2: obj = par (,) #0(a.0, b.1)\n  return t.2\n";
+    const ROOT: &str = "  decref a.0\n  decref b.1\n  let r.2: tobj = prim root_get[0]()\n  decref r.2\n  let d.3: obj = prim dummy()\n  return d.3\n";
+    const NEITHER: &str =
+        "  decref a.0\n  decref b.1\n  let d.2: obj = prim dummy()\n  return d.2\n";
+    assert_eq!(check(&forking(PAR, true, true, true)), Ok(()));
+    assert_eq!(check(&forking(NEITHER, false, false, false)), Ok(()));
+    let missing = "`Fail.fail` has no fork entry, but the program may run par in `fork$Fail.fail`";
+    for main in [PAR, ROOT] {
+        for program in [
+            forking(main, false, false, true),
+            forking(main, false, false, false),
+        ] {
+            assert_eq!(check(&program), Err(missing.to_string()));
+            assert_eq!(check_lowered(&program), Err(missing.to_string()));
+        }
+    }
+    assert_eq!(
+        check(&forking(PAR, true, false, true)),
+        Err("the fork entry is not a clause of `Fail.fail` in `fork$Fail.fail`".to_string())
+    );
+    assert_eq!(
+        check(&forking(ROOT, true, true, false)),
+        Err(
+            "`Fail.fail` has no reperform entry, but the program may run par in `reperform$Fail.fail`"
+                .to_string()
+        )
+    );
+}

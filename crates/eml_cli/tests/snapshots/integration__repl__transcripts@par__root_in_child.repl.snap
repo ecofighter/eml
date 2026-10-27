@@ -1,0 +1,24 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/par/root_in_child.repl
+---
+> import Std.Par (par)
+> upto : Int -> List Int -> <Panic> List Int
+. upto n acc = if n == 0 then acc else upto (n - 1) (n :: acc)
+.
+> let xs = upto 100 []
+> total : List Int -> <Panic> Int
+. total ys = match ys with
+.   | [] -> 0
+.   | y :: rest -> y + total rest
+.
+> par (fn () -> total xs) (fn () -> total xs * 2)
+(5050, 10100)
+> let p = par (fn () -> upto 3 []) (fn () -> total xs)
+> p
+([1, 2, 3], 5050)
+> total xs
+5050
+--- close ---
+no leaks

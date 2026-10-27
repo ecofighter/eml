@@ -240,6 +240,18 @@ impl<'p> Printer<'p> {
                 w.atom(vars, callee),
                 w.atoms(vars, args)
             ),
+            Call::Par {
+                left,
+                right,
+                pair,
+                at,
+            } => format!(
+                "par {}({}, {}){}",
+                w.ctor(*pair),
+                w.atom(vars, left),
+                w.atom(vars, right),
+                w.position(*at)
+            ),
         }
     }
 }

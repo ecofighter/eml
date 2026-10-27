@@ -11,6 +11,7 @@ pub(crate) mod check;
 mod core;
 mod ctx;
 mod field;
+mod graph;
 mod handover;
 pub(crate) mod inv;
 mod model;
@@ -22,6 +23,7 @@ mod safe;
 pub(crate) mod share;
 mod states;
 mod string;
+mod transfer;
 mod walk;
 
 #[cfg(test)]
@@ -49,6 +51,7 @@ use crate::rc::{self, DecrefStep, DupStep};
 #[cfg(verus_only)]
 use crate::rc::{Obj, decref_next};
 use crate::word::Word;
+use vstd::hash_set::HashSetWithView;
 use vstd::prelude::*;
 use vstd::raw_ptr::ptr_mut_write;
 #[cfg(verus_keep_ghost)]
@@ -153,16 +156,29 @@ pub struct Heap<M: Mode> {
     // なったためである (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     region: ManuallyDrop<Option<Arc<Frozen<M>>>>,
     worker: u32,
+    // この3つの欄は検査モードだけで使う。速いモードでも欄の大きさは持つが、表は空のまま触れない
+    /// 検査モードで、`fork_worker` がまだ出していない最小の ID。0 は基の ID なので 1 から始める。
+    next_worker: u32,
+    /// 検査モードで、退いて使い回せる ID。最後に退いたものが末尾にある。
+    free_ids: Vec<u32>,
+    /// 検査モードの ID ごとの、rc が正の生きている物体の数 (docs/spec/object-model.md の「論理的な worker ID」)。
+    /// 表の外の ID は 0 と読む。
+    // 証明の対象にせず、`check_invariants` が数え直して確かめる。数の誤りは診断の誤りで、メモリの安全には
+    // 関わらないので、モデルを広げる費用に見合わないためである
+    owned: Vec<u64>,
     /// 検査モードの構築中の物体のブロックの番地。なければ 0 で、速いモードではいつも 0 である。
     // 検査モードの前置きの状態は構築中と生存を分けないので、`set_field` と `set_raw` が、構築中でない rc 0 以下の物体
     // (不死の物体と共有の物体) を断るのに使う (docs/spec/object-model.md の「核の操作」)
     building: usize,
     /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
     work: Vec<Word>,
-    /// `share` のたどりのスタック。使い回す。
-    share_stack: Vec<*mut Header>,
-    /// 検査モードの `share` が訪れた `lin` の物体。
-    visited_lin: Vec<*mut Header>,
+    /// `share` のたどりの印付け、移し替え、所有者だけのスタック。使い回す。`transfer_back` は、印付けのスタックを
+    /// 裏返しのスタックに、所有者だけのスタックをそのまま使う。
+    mark_stack: Vec<*mut Header>,
+    move_stack: Vec<*mut Header>,
+    own_stack: Vec<*mut Header>,
+    /// 検査モードの `share` と `transfer_back` が訪れた物体の番地。最初に使うときに作り、その後は使い回す。
+    seen: Option<HashSetWithView<usize>>,
     /// 検査モードの token の表。項目は箱と、`into_token` のときの世代の番号である。
     tokens: Vec<Option<(*mut Header, u32)>>,
     dummy: Word,
@@ -195,6 +211,81 @@ fn object_words(payload_words: usize) -> (r: usize)
         Some(n) => n,
         None => too_large(),
     }
+}
+
+/// 検査モードの ID ごとの数 (`Heap` の `owned`) の `id` 番目を1つ増やすか減らす。表の外の ID は数えない。
+// 数は証明の対象にしないので (`Heap` の `owned` の注釈)、桁あふれで panic する道を作らないように wrapping で数える。
+// 表を伸ばすのは ID を受け取る所 (`admit_owned`) だけにする。壊れた前置きの所有者を読んでも大きな表を確保せず、
+// 数え直しがその物体を表の外の ID の `OwnedMiscount` として報告する
+pub(crate) fn count_owned(owned: &mut Vec<u64>, id: u32, up: bool) {
+    let i = id as usize;
+    if i < owned.len() {
+        let n = owned[i];
+        owned.set(
+            i,
+            if up {
+                n.wrapping_add(1)
+            } else {
+                n.wrapping_sub(1)
+            },
+        );
+    }
+}
+
+/// 検査モードの ID ごとの数の表を、`id` まで伸ばす。
+fn admit_owned(owned: &mut Vec<u64>, id: u32) {
+    let i = id as usize;
+    while owned.len() <= i
+        invariant
+            i == id as usize,
+        decreases i + 1 - owned.len(),
+    {
+        owned.push(0);
+    }
+}
+
+/// 検査モードの ID ごとの数を、`from` から `to` へ1つ移す。rc が正の物体の持ち主を書き換えたときに呼ぶ。
+pub(crate) fn move_owned(owned: &mut Vec<u64>, from: u32, to: u32) {
+    if from != to {
+        count_owned(owned, from, false);
+        count_owned(owned, to, true);
+    }
+}
+
+/// `ids` の中の `id` の位置。
+fn find_id(ids: &[u32], id: u32) -> (r: Option<usize>)
+    ensures
+        r matches Some(i) ==> i < ids@.len(),
+{
+    let mut i: usize = 0;
+    while i < ids.len()
+        invariant
+            i <= ids@.len(),
+        decreases ids@.len() - i,
+    {
+        if ids[i] == id {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+// 出していない ID や退いた ID をまた退かせると、`free_ids` に同じ ID が2つ入り、2つの子が同じ ID で動いて、子の間の
+// 所有者の検査が効かなくなる。呼ぶ側 (VM) の誤りなので、新しい誤りの種類を足さずに止める (信頼の一覧の T5)。
+// 状態を変える前に呼ぶ (T7)
+#[verifier::external_body]
+#[cold]
+fn bad_retire(id: u32) -> ! {
+    panic!("retire_worker({id}) on an ID that is the base ID, not handed out, or already retired")
+}
+
+// ID の数が `u32` の上限に届くのは、退かせずに 2^32 - 1 回 fork したときだけで、正しいプログラムでは起きないので、
+// 新しい誤りの種類を足さずに止める (信頼の一覧の T5)。状態を変える前に呼ぶ (T7)
+#[verifier::external_body]
+#[cold]
+fn too_many_workers() -> ! {
+    panic!("2^32 - 1 logical workers are live at once")
 }
 
 /// 解放の連鎖が子について返しうる誤り。モデルは不死の物体の外の参照の数、共有の物体の `lin` ビット、子の持ち主を
@@ -457,6 +548,28 @@ impl<M: Mode> Heap<M> {
         &&& self.region == old.region
     }
 
+    /// 物体とその中身、rc、持ち主と仕事の回数が `old` と同じである。違ってよいのは worker と、検査モードの ID の
+    /// 割り当ての欄 (証明の対象にしない) だけである。
+    pub closed spec fn same_contents(&self, old: Heap<M>) -> bool {
+        &&& self.core == old.core
+        &&& self.dummy == old.dummy
+        &&& self.region == old.region
+        &&& self.stats == old.stats
+    }
+
+    /// 中身が同じヒープは、worker によらない述語も同じである。
+    pub(crate) proof fn lemma_same_contents(&self, old: Heap<M>)
+        requires
+            self.same_contents(old),
+        ensures
+            self.consistent() == old.consistent(),
+            self.settleable() == old.settleable(),
+            self.safe_settleable() == old.safe_settleable(),
+            self.words_kept(old),
+            forall|w: Word| #[trigger] self.readable(w) == old.readable(w),
+    {
+    }
+
     pub closed spec fn readable(&self, w: Word) -> bool {
         self.core.readable(w)
     }
@@ -585,14 +698,23 @@ impl<M: Mode> Heap<M> {
             r.worker_spec() == 0,
             r.unused(),
     {
+        let mut owned = Vec::new();
+        if M::CHECKED {
+            admit_owned(&mut owned, 0);
+        }
         let mut heap = Heap {
             core: Self::empty_core(control),
             region: ManuallyDrop::new(None),
             worker: 0,
+            next_worker: 1,
+            free_ids: Vec::new(),
+            owned,
             building: 0,
             work: Vec::new(),
-            share_stack: Vec::new(),
-            visited_lin: Vec::new(),
+            mark_stack: Vec::new(),
+            move_stack: Vec::new(),
+            own_stack: Vec::new(),
+            seen: None,
             tokens: Vec::new(),
             dummy: Word::EMPTY,
             quarantined: 0,
@@ -762,12 +884,122 @@ impl<M: Mode> Heap<M> {
             old(self).settled() ==> final(self).settled(),
             old(self).consistent() ==> final(self).consistent(),
             final(self).same_objects(*old(self)),
+            final(self).same_contents(*old(self)),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
+        self.admit_worker(worker);
         self.worker = worker;
         proof {
             self.core.lemma_recounted_refl();
         }
+    }
+
+    /// 検査モードで、`id` を使っている ID にする。`set_worker` と `share` の受け手が呼ぶ。
+    fn admit_worker(&mut self, id: u32)
+        ensures
+            *final(self) == (Heap {
+                next_worker: final(self).next_worker,
+                free_ids: final(self).free_ids,
+                owned: final(self).owned,
+                ..*old(self)
+            }),
+    {
+        if M::CHECKED {
+            // テストが選んだ ID を `fork_worker` が出さないように、まだ出していない ID と退いた ID の両方から外す
+            if id >= self.next_worker {
+                self.next_worker = if id == u32::MAX {
+                    u32::MAX
+                } else {
+                    id + 1
+                };
+            }
+            if let Some(i) = find_id(self.free_ids.as_slice(), id) {
+                self.free_ids.remove(i);
+            }
+            admit_owned(&mut self.owned, id);
+        }
+    }
+
+    /// `par` の子のための論理的な worker ID を出す。検査モードでは最後に退いた ID を使い回し、なければ新しい ID を
+    /// 出す。速いモードでは ID は何の働きもしないので、0 を返して何もしない (docs/spec/object-model.md の
+    /// 「論理的な worker ID」)。
+    pub fn fork_worker(&mut self) -> (r: u32)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            !M::CHECKED ==> r == 0,
+            final(self).worker_spec() == old(self).worker_spec(),
+            final(self).region_spec() == old(self).region_spec(),
+            old(self).unused() ==> final(self).unused(),
+            old(self).settled() ==> final(self).settled(),
+            old(self).consistent() ==> final(self).consistent(),
+            final(self).same_objects(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        proof {
+            self.core.lemma_recounted_refl();
+        }
+        if !M::CHECKED {
+            return 0;
+        }
+        if let Some(id) = self.free_ids.pop() {
+            return id;
+        }
+        if self.next_worker == u32::MAX {
+            too_many_workers();
+        }
+        let id = self.next_worker;
+        self.next_worker = id + 1;
+        admit_owned(&mut self.owned, id);
+        id
+    }
+
+    /// `par` の子の ID を退かせる。join で右の子の値をすべて移し戻した後に呼ぶ。検査モードでは、その ID の rc が正の
+    /// 物体が残っていれば移し戻しの漏れとして `TransferLeak` を返し、ID を使い回さない。残っていなければ ID を
+    /// 使い回せるようにする。速いモードでは何もしない。
+    ///
+    /// `id` は `fork_worker` が出した ID で、0 でなく、まだ退いていない。検査モードはこれを確かめ、破れば panic する。
+    pub fn retire_worker(&mut self, id: u32) -> (r: Result<(), HeapError>)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            !M::CHECKED ==> r is Ok,
+            r is Err ==> r matches Err(HeapError::TransferLeak { .. }),
+            final(self).worker_spec() == old(self).worker_spec(),
+            final(self).region_spec() == old(self).region_spec(),
+            old(self).unused() ==> final(self).unused(),
+            old(self).settled() ==> final(self).settled(),
+            old(self).consistent() ==> final(self).consistent(),
+            final(self).same_objects(*old(self)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        proof {
+            self.core.lemma_recounted_refl();
+        }
+        if !M::CHECKED {
+            return Ok(());
+        }
+        if id == 0 || id >= self.next_worker || find_id(self.free_ids.as_slice(), id).is_some() {
+            bad_retire(id);
+        }
+        let i = id as usize;
+        let live = if i < self.owned.len() {
+            self.owned[i]
+        } else {
+            0
+        };
+        if live > 0 {
+            let live = if live > u32::MAX as u64 {
+                u32::MAX
+            } else {
+                live as u32
+            };
+            return Err(HeapError::TransferLeak { worker: id, live });
+        }
+        self.free_ids.push(id);
+        Ok(())
     }
 
     pub fn stats(&self) -> Stats {
@@ -904,6 +1136,9 @@ impl<M: Mode> Heap<M> {
             );
             proof {
                 perm.prefix = Some(pre);
+            }
+            if rc > 0 {
+                count_owned(&mut self.owned, self.worker, true);
             }
             self.stats.allocations = self.stats.allocations.wrapping_add(1);
             self.stats.live = self.stats.live.wrapping_add(1);
@@ -2891,6 +3126,13 @@ impl<M: Mode> Heap<M> {
                 s0.lemma_at(h@.addr);
                 reveal(Core::refs_wf);
                 assert(s0.counted_wf(h@.addr));
+            }
+        }
+        if M::CHECKED {
+            // 局所の物体の最後の `decref` は rc を 1 のまま残す。共有の物体は数から外してあるので、rc が 0 か負で届く
+            if self.core.rc_get(h) > 0 {
+                let owner = self.core.prefix_first_get(h);
+                count_owned(&mut self.owned, owner, false);
             }
         }
         let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);

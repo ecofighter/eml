@@ -511,6 +511,19 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// `par` の組の構築子は、`tobj` のフィールドをちょうど2つ持つ。VM は子の一様な結果を2つ並べて組を作るためである
+    /// (docs/spec/lir.md の「verifier」)。
+    pub fn check_par_pair(&self, pair: Ctor) -> Result<(), String> {
+        let (layout, _, constructor) = self.ctor(pair, "the pair of a par")?;
+        if constructor.fields != [Repr::TObj, Repr::TObj] {
+            return Err(format!(
+                "the pair of a par is `{}` #{}, which does not have two tobj fields",
+                layout.name, pair.tag
+            ));
+        }
+        Ok(())
+    }
+
     /// `unpack` の値は、配置の Repr が `obj` でコンストラクタが1つの値か、構造体である。配置のフィールドは R8 で、
     /// 構造体のフィールドは形と比べる (docs/spec/lir.md の「構造の規則」の R7 と R8)。
     pub fn check_unpack(&self, value: VarId, ctor: Ctor, fields: &[VarId]) -> Result<(), String> {
@@ -797,6 +810,10 @@ impl<'a> Context<'a> {
     /// Repr のままである (docs/spec/lir.md の「extern の行」)。
     pub fn check_extern(&self, var: VarId, ext: Extern, args: &[Atom]) -> Result<(), String> {
         let row = ext.row();
+        // `par` の行は std の宣言を型検査に結ぶだけで、呼び出しは `par` の命令になる (docs/spec/lir.md の「verifier」)
+        if ext == Extern::Par {
+            return Err(format!("`{}` is not an extern instruction", row.name));
+        }
         if args.len() != row.params.len() {
             return Err(format!(
                 "`{}` takes {} arguments but is given {}",

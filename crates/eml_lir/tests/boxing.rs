@@ -665,3 +665,34 @@ fn main() -> unit {
     }
     ");
 }
+
+#[test]
+fn a_struct_bound_to_a_par_is_unboxed_from_its_obj_pair() {
+    // `par` の組は VM が作る `obj` の箱なので、構造体の束縛は受け直しの `unbox` が取り出す。`obj` の束縛は変換しない
+    // (docs/spec/lir.md の「box の挿入」)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+fn f(a.0: tobj, b.1: tobj) -> float {
+  let t.2: (,){float, int} = par (,) #0(a.0, b.1)
+  unpack t.2 (,) #0(x.3: float, y.4: int)
+  return x.3
+}
+fn g(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = par (,) #0(a.0, b.1)
+  return t.2
+}
+";
+    insta::assert_snapshot!(boxing_text(text), @"
+    layout (,) { (,)(tobj, tobj) }
+    fn f(a.0: tobj, b.1: tobj) -> float {
+      let t.5: obj = par (,) #0(a.0, b.1)
+      let t.2: (,){float, int} = unbox t.5
+      unpack t.2 (,) #0(x.3: float, y.4: int)
+      return x.3
+    }
+    fn g(a.0: tobj, b.1: tobj) -> obj {
+      let t.2: obj = par (,) #0(a.0, b.1)
+      return t.2
+    }
+    ");
+}

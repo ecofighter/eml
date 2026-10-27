@@ -10,7 +10,7 @@ use eml_lir::Atom;
 /// あり、その後の文がすべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わない
 /// ので縮約が消し、そこで末尾呼び出しになる (docs/spec/lir.md の「末尾の位置の呼び出し」)。形で決めるので、`never` の操作の
 /// 節の呼び出しも含む。EP は、この呼び出しを yield の地点にしない
-/// (docs/spec/core-ir.md の「yield の地点」)。
+/// (docs/spec/core-ir.md の「yield の地点」)。`par` は join に親のフレームが要るので含まない。
 pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return None;
@@ -21,7 +21,9 @@ pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
         };
         if *var == returned {
             return match rhs {
-                Rhs::Call { call, mask: _ } => Some((index, call)),
+                Rhs::Call { call, mask: _ } if !matches!(call, Call::Par { .. }) => {
+                    Some((index, call))
+                }
                 _ => None,
             };
         }

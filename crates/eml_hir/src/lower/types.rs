@@ -426,7 +426,12 @@ pub fn visit_type_vars(types: &Arena<TypeRef>, id: TypeRefId, visit: &mut impl F
     }
 }
 
-fn visit_row_type_vars(types: &Arena<TypeRef>, row: &RowRef, visit: &mut impl FnMut(TypeVarId)) {
+/// row に書いたエフェクトの型引数に現れる型変数を `visit` に渡す。
+pub fn visit_row_type_vars(
+    types: &Arena<TypeRef>,
+    row: &RowRef,
+    visit: &mut impl FnMut(TypeVarId),
+) {
     if let RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } = row {
         for effect in effects {
             for &arg in &effect.args {

@@ -103,6 +103,26 @@ fn poll_reports_each_stop<M: Mode>() {
     assert_eq!(ctx.poll(0), Ok(()));
 }
 
+/// `switch_task` は次のタスクの深さの起点を上限から引く。`poll` は起点を含まない深さを受け、起点と合わせて
+/// `max_depth` を超えたら止める。起点が上限を超えるタスクは、最初の安全点で止まる。
+fn switch_task_rebases_the_depth_limit<M: Mode>() {
+    let control = Arc::new(Control::new(Limits {
+        max_depth: 100,
+        ..Limits::default()
+    }));
+    let mut ctx = Ctx::<M>::new(control, host(&Arc::default()));
+    unsafe {
+        assert_eq!(ctx.switch_task(UNIT, 0, 30), UNIT);
+        assert_eq!(ctx.poll(70), Ok(()));
+        assert_eq!(ctx.poll(71), Err(Stop::DepthLimit));
+        assert_eq!(ctx.switch_task(UNIT, 0, 101), UNIT);
+        assert_eq!(ctx.poll(1), Err(Stop::DepthLimit));
+        assert_eq!(ctx.switch_task(UNIT, 0, 0), UNIT);
+    }
+    assert_eq!(ctx.poll(100), Ok(()));
+    assert_eq!(ctx.poll(101), Err(Stop::DepthLimit));
+}
+
 /// yield して、継続を2回組み立て直し、終える。最初の κ は関数の値 (`Word::imm(1)`) で、関数 0 の値は `()` と同じ語に
 /// なるので使わない。
 fn yields_and_continuation_frames_are_counted<M: Mode>() {
@@ -198,6 +218,51 @@ fn evv_get_and_set_swap_the_list<M: Mode>() {
         ctx.evv_set(UNIT).unwrap();
     }
     assert!(ctx.check_finished());
+}
+
+/// `switch_task` は evv の参照を `Ctx` と呼ぶ側で入れ替えて worker を替えるだけで、どの物体の rc も変えず、RC の仕事を
+/// 数えない。子の worker の局所の evv を、その worker に切り替えるときに入れられる。
+fn switch_task_exchanges_lists_and_workers_without_rc_work<M: Mode>() {
+    const CHILD: u32 = 3;
+    let mut ctx = ctx::<M>();
+    let e0 = push(&mut ctx, 0, 1);
+    let start = (ctx.heap().stats(), ctx.stats());
+    unsafe {
+        // 親から、空の evv で始める子へ
+        let a = ctx.switch_task(UNIT, CHILD, 0);
+        assert_eq!(ctx.heap().worker(), CHILD);
+        assert!(ctx.check_finished());
+        assert_eq!((ctx.heap().stats(), ctx.stats()), start);
+        // 子が自分の handler を設けると、子の worker の局所の節点ができる
+        let e1 = push(&mut ctx, 1, 1);
+        let before = (ctx.heap().stats(), ctx.stats());
+        let b = ctx.switch_task(a, 0, 0);
+        assert_eq!(ctx.heap().worker(), 0);
+        assert_eq!(ctx.heap().field(a, 0), Ok(e0));
+        assert_eq!(ctx.heap().field(b, 0), Ok(e1));
+        if M::CHECKED {
+            assert_eq!(super::raw::prefix_first(a), 0);
+            assert_eq!(super::raw::prefix_first(b), CHILD);
+        }
+        let rcs = (super::raw::rc(a), super::raw::rc(b));
+        assert_eq!(rcs, (1, 1));
+        // 子へ戻して、また親へ戻す
+        assert_eq!(ctx.switch_task(b, CHILD, 0), a);
+        assert_eq!(ctx.heap().worker(), CHILD);
+        assert_eq!(ctx.switch_task(a, 0, 0), b);
+        assert_eq!(ctx.heap().worker(), 0);
+        assert_eq!((ctx.heap().stats(), ctx.stats()), before);
+        assert_eq!((super::raw::rc(a), super::raw::rc(b)), rcs);
+        // 子の物体は子の worker で、親の物体は親の worker で手放す
+        assert_eq!(ctx.switch_task(b, CHILD, 0), a);
+        clear(&mut ctx);
+        ctx.heap_mut().decref(e1).unwrap();
+        assert_eq!(ctx.switch_task(a, 0, 0), UNIT);
+        ctx.heap_mut().decref(e0).unwrap();
+    }
+    clear(&mut ctx);
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
 }
 
 fn dropping_a_ctx_mid_yield<M: Mode>() {
@@ -320,8 +385,9 @@ fn entry_tables_with_a_count_word<M: Mode>() {
     assert_eq!(super::mortal(ctx.heap()), 0);
 }
 
-/// 状態の欄を通る輪 (docs/spec/lir.md の「evidence」): 状態が ev を指す物体を持っていても、ev を呼ぶ側が
-/// 持っている限り、元の状態を手放しても ev は生き残る。
+/// 状態が ev 自身に届く場合 (EP が出すコードでは起きないが、契約はそれに頼らない。docs/spec/object-model.md の
+/// 「基本操作の契約」): 状態が ev を指す物体を持っていても、ev を呼ぶ側が持っている限り、元の状態を手放しても
+/// ev は生き残る。
 fn replacing_a_state_that_reaches_its_evidence<M: Mode>() {
     let mut ctx = ctx::<M>();
     let ev = push(&mut ctx, 0, 1);
@@ -736,14 +802,82 @@ fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
     }
 }
 
+/// `ev_take_evv` は外側の evv の参照を呼ぶ側へ移し、欄を `()` にする。入口の表と状態はそのままで、evidence の形も
+/// 保たれる (docs/spec/object-model.md の「evidence の3つの物体」)。
+fn taking_the_outer_list_leaves_a_retired_evidence<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let e0 = push(&mut ctx, 0, 1);
+    let outer = ctx.evv_word();
+    let ev = push(&mut ctx, 1, 1);
+    unsafe {
+        let clause = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.ev_set_clause(ev, 0, clause).unwrap();
+        ctx.ev_set_state(ev, Word::imm(5)).unwrap();
+        let taken = ctx.ev_take_evv(ev).unwrap();
+        assert_eq!(taken, outer);
+        assert_eq!(ctx.heap().field(ev, 2), Ok(UNIT));
+        assert_eq!(ctx.ev_take_evv(ev).unwrap(), UNIT);
+        // 検査モードでは、ここから先の操作が evidence の形を確かめる
+        assert_eq!(ctx.ev_evv(ev).unwrap(), UNIT);
+        let got = ctx.ev_clause(ev, 0).unwrap();
+        assert_eq!(got, clause);
+        assert_eq!(ctx.ev_take_state(ev).unwrap(), Word::imm(5));
+        clear(&mut ctx);
+        for w in [got, taken, ev, e0] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// 共有にした evidence の外側の欄は書けない。欄は元の値のままで、物体も増減しない。
+fn the_outer_list_of_a_shared_evidence_is_not_writable<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    push(&mut ctx, 0, 1);
+    let outer = ctx.evv_word();
+    let ev = push(&mut ctx, 1, 1);
+    unsafe {
+        ctx.heap_mut().share(ev, 1).unwrap();
+        let before = super::mortal(ctx.heap());
+        assert_eq!(ctx.ev_take_evv(ev).unwrap_err(), HeapError::NotWritable);
+        assert_eq!(ctx.heap().field(ev, 2), Ok(outer));
+        assert_eq!(super::mortal(ctx.heap()), before);
+    }
+}
+
+/// `evv_word` は今の evv の語を返すだけで、参照は `Ctx` に残り、RC の仕事を数えない。
+fn evv_word_reads_the_list_without_rc_work<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    assert_eq!(ctx.evv_word(), UNIT);
+    let ev = push(&mut ctx, 0, 1);
+    unsafe {
+        let list = ctx.evv_get().unwrap();
+        ctx.evv_set(list).unwrap();
+        let start = (ctx.heap().stats(), ctx.stats());
+        assert_eq!(ctx.evv_word(), list);
+        assert_eq!(ctx.evv_word(), list);
+        assert_eq!((ctx.heap().stats(), ctx.stats()), start);
+        clear(&mut ctx);
+        ctx.heap_mut().decref(ev).unwrap();
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
 both_modes!(
     a_new_ctx_is_finished,
     poll_reports_each_stop,
+    switch_task_rebases_the_depth_limit,
     yields_and_continuation_frames_are_counted,
     yield_status_tells_targets_apart,
     yield_abort_leaves_no_continuation,
     misused_yields_are_reported_in_checked_mode,
     evv_get_and_set_swap_the_list,
+    switch_task_exchanges_lists_and_workers_without_rc_work,
     dropping_a_ctx_mid_yield,
     lookup_finds_the_innermost_evidence,
     find_returns_the_innermost_evidence_or_none,
@@ -766,4 +900,7 @@ both_modes!(
     a_refused_yield_operation_keeps_the_state,
     a_refused_push_keeps_its_arguments,
     the_state_of_a_shared_evidence_is_not_writable,
+    taking_the_outer_list_leaves_a_retired_evidence,
+    the_outer_list_of_a_shared_evidence_is_not_writable,
+    evv_word_reads_the_list_without_rc_work,
 );

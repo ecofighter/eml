@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use super::raw;
-use super::{LONG, list, mortal, probe};
+use super::{LONG, cons, list, mortal, probe};
 use crate::{Checked, Heap, HeapError, Kind, Meta, Mode, Word};
 
 fn rc<M: Mode>(_heap: &Heap<M>, w: Word) -> i32 {
@@ -74,7 +74,7 @@ fn share_walks_a_cycle_once<M: Mode>() {
     assert_eq!(mortal(&heap), 0);
 }
 
-fn a_lin_object_moves_to_the_receiver_and_its_children_are_shared<M: Mode>() {
+fn a_lin_object_moves_to_the_receiver_and_its_unique_children_move_with_it<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let child = list(&mut heap, 1);
     let lin = heap.alloc_data(0, 1, 0, true);
@@ -82,10 +82,11 @@ fn a_lin_object_moves_to_the_receiver_and_its_children_are_shared<M: Mode>() {
         heap.set_field(lin, 0, child).unwrap();
         heap.share(lin, 7).unwrap();
         assert_eq!(rc(&heap, lin), 1);
-        assert_eq!(rc(&heap, child), -1);
+        assert_eq!(rc(&heap, child), 1);
         if M::CHECKED {
             let owner = raw::prefix_first(lin);
             assert_eq!(owner, 7);
+            assert_eq!(raw::prefix_first(child), 7);
         }
         heap.set_worker(7);
         heap.decref(lin).unwrap();
@@ -193,17 +194,159 @@ fn the_expanded_release_matches_the_general_one<M: Mode>() {
     }
 }
 
+/// 検査モードの持ち主。速いモードには持ち主がないので確かめない。
+fn assert_owner<M: Mode>(w: Word, owner: u32) {
+    if M::CHECKED {
+        assert_eq!(unsafe { raw::prefix_first(w) }, owner);
+    }
+}
+
+fn unique_descendants_of_a_lin_root_move<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let l = list(&mut heap, 3);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    unsafe {
+        heap.set_field(lin, 0, l).unwrap();
+        heap.share(lin, 7).unwrap();
+        assert_eq!(rc(&heap, lin), 1);
+        assert_owner::<M>(lin, 7);
+        heap.set_worker(7);
+        let mut cell = l;
+        while cell.is_ptr() {
+            assert_eq!(rc(&heap, cell), 1);
+            assert_owner::<M>(cell, 7);
+            cell = heap.field(cell, 1).unwrap();
+        }
+        assert!(heap.is_unique(l).unwrap());
+        heap.decref(lin).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+fn a_shared_node_under_a_lin_root_is_marked_with_its_unique_child<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let below = list(&mut heap, 1);
+    let kept = cons(&mut heap, Word::imm(0), below);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    unsafe {
+        // kept はほかの所からも参照されている
+        heap.dup(kept).unwrap();
+        heap.set_field(lin, 0, kept).unwrap();
+        heap.share(lin, 7).unwrap();
+        assert_eq!(
+            (rc(&heap, lin), rc(&heap, kept), rc(&heap, below)),
+            (1, -2, -1)
+        );
+        assert_owner::<M>(lin, 7);
+        heap.decref(kept).unwrap();
+        heap.set_worker(7);
+        heap.decref(lin).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+fn a_lin_object_under_a_marked_parent_moves_its_unique_descendants<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let l = list(&mut heap, 2);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    let parent = heap.alloc_data(0, 1, 0, false);
+    unsafe {
+        heap.set_field(lin, 0, l).unwrap();
+        heap.set_field(parent, 0, lin).unwrap();
+        heap.share(parent, 7).unwrap();
+        assert_eq!(
+            (rc(&heap, parent), rc(&heap, lin), rc(&heap, l)),
+            (-1, 1, 1)
+        );
+        assert_owner::<M>(lin, 7);
+        assert_owner::<M>(l, 7);
+        heap.set_worker(7);
+        heap.decref(parent).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+/// `poly` の組 (`(a, FileIn)` の形) を、共有にした後でもう一度送る。`lin` の部分とその下の rc 1 の物体は、検査モードで
+/// 2つ目の受け手の持ち物になる。rc はどちらのモードでも同じである
+fn resending_a_shared_pair_passes_its_lin_part_to_the_second_receiver<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let a = list(&mut heap, 1);
+    let l = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    let pair = heap.alloc_data(0, 2, 0, false);
+    unsafe {
+        heap.set_field(lin, 0, l).unwrap();
+        heap.set_field(pair, 0, a).unwrap();
+        heap.set_field(pair, 1, lin).unwrap();
+        heap.share(pair, 1).unwrap();
+        assert_owner::<M>(lin, 1);
+        assert_owner::<M>(l, 1);
+        heap.set_worker(1);
+        heap.share(pair, 2).unwrap();
+        assert_eq!(
+            (rc(&heap, pair), rc(&heap, a), rc(&heap, lin), rc(&heap, l)),
+            (-1, -1, 1, 1)
+        );
+        assert_owner::<M>(lin, 2);
+        assert_owner::<M>(l, 2);
+        heap.set_worker(2);
+        heap.decref(pair).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+fn a_long_unique_list_under_a_lin_root_moves_without_recursion<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let l = list(&mut heap, LONG);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    unsafe {
+        heap.set_field(lin, 0, l).unwrap();
+        heap.share(lin, 7).unwrap();
+        heap.set_worker(7);
+        assert!(heap.is_unique(l).unwrap());
+        heap.decref(lin).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+/// 受け手が今の worker なら、`Unr` の値には印を付けるだけで、`lin` の物体は局所のまま持ち主も変わらない。
+fn sharing_with_the_own_worker_marks_only_unr_values<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let l = list(&mut heap, 2);
+    let below = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    unsafe {
+        heap.set_field(lin, 0, below).unwrap();
+        heap.share(l, 0).unwrap();
+        heap.share(lin, 0).unwrap();
+        assert_eq!(rc(&heap, l), -1);
+        assert_eq!((rc(&heap, lin), rc(&heap, below)), (1, 1));
+        assert_owner::<M>(lin, 0);
+        assert_owner::<M>(below, 0);
+        assert!(heap.is_unique(below).unwrap());
+        heap.decref(l).unwrap();
+        heap.decref(lin).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 both_modes!(
     sharing_a_list_marks_every_cell,
     shared_counts_go_through_the_atomic_path,
     share_stops_at_immortal_objects,
     share_walks_a_cycle_once,
-    a_lin_object_moves_to_the_receiver_and_its_children_are_shared,
+    a_lin_object_moves_to_the_receiver_and_its_unique_children_move_with_it,
     releasing_a_shared_parent_takes_its_lin_child_without_dup,
     a_deep_list_is_shared_without_recursion,
     releasing_a_unique_object_hands_over_the_kept_fields,
     releasing_a_shared_object_dups_the_kept_fields,
     the_expanded_release_matches_the_general_one,
+    unique_descendants_of_a_lin_root_move,
+    a_shared_node_under_a_lin_root_is_marked_with_its_unique_child,
+    a_lin_object_under_a_marked_parent_moves_its_unique_descendants,
+    resending_a_shared_pair_passes_its_lin_part_to_the_second_receiver,
+    a_long_unique_list_under_a_lin_root_moves_without_recursion,
+    sharing_with_the_own_worker_marks_only_unr_values,
 );
 
 type H = Heap<Checked>;
@@ -358,4 +501,110 @@ fn a_shared_lin_object_reached_by_share_is_an_error() {
     }
     // share が状態を変えた後の Err なので、ヒープは落とすだけにする (docs/spec/object-model.md の「検査モードの約束」)
     drop(heap);
+}
+
+/// 送り直した `lin` の物体の下の rc > 1 の局所の物体は、送り手の持ち物のまま残る。受け手が触れると `WrongOwner` に
+/// なる (docs/spec/object-model.md の「`share`」の制限)
+#[test]
+fn an_rc2_object_under_a_resent_lin_object_keeps_the_senders_owner() {
+    let mut heap = H::new();
+    let a = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    let pair = heap.alloc_data(0, 2, 0, false);
+    unsafe {
+        heap.set_field(pair, 0, a).unwrap();
+        heap.set_field(pair, 1, lin).unwrap();
+        heap.share(pair, 1).unwrap();
+        heap.set_worker(1);
+        // 1つ目の受け手が、受け取った lin の物体に、参照が2つある自分の物体を入れる
+        let kept = list(&mut heap, 1);
+        heap.dup(kept).unwrap();
+        heap.set_field(lin, 0, kept).unwrap();
+        heap.share(pair, 2).unwrap();
+        assert_eq!(raw::prefix_first(lin), 2);
+        assert_eq!((rc(&heap, kept), raw::prefix_first(kept)), (2, 1));
+        heap.set_worker(2);
+        assert_eq!(
+            heap.dup(kept),
+            Err(HeapError::WrongOwner {
+                owner: 1,
+                worker: 2
+            })
+        );
+    }
+    drop(heap);
+}
+
+/// 印を付けた物体は持ち主の数から外れ、所有を移した物体は受け手の数に移る。
+#[test]
+fn counts_move_with_the_walk() {
+    let mut heap = H::new();
+    let l = list(&mut heap, 2);
+    let kept = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 2, 0, true);
+    unsafe {
+        heap.dup(kept).unwrap();
+        heap.set_field(lin, 0, l).unwrap();
+        heap.set_field(lin, 1, kept).unwrap();
+        assert_eq!(heap.owned_by(0), 4);
+        heap.share(lin, 7).unwrap();
+        assert_eq!((heap.owned_by(0), heap.owned_by(7)), (0, 3));
+        assert_eq!(heap.check_invariants(), Ok(()));
+        heap.decref(kept).unwrap();
+        heap.set_worker(7);
+        heap.decref(lin).unwrap();
+    }
+    assert_eq!((heap.owned_by(0), heap.owned_by(7)), (0, 0));
+    assert_eq!(heap.check_invariants(), Ok(()));
+}
+
+/// fork で印を付けた閉包から届く物体には、子が触れてよい。印を付けなければ、子の所有者の検査が必ず落ちる
+/// (docs/future/multicore.md の「論理的な worker ID」)
+#[test]
+fn fork_marking_lets_the_child_touch_what_the_closure_reaches() {
+    // クロージャの形の物体 (`Data`、tag 0、走査する語に [`&f`, 捕獲]) が3つのセルのリストを捕まえ、参照が2つある
+    let closure = |heap: &mut H| {
+        let l = list(heap, 3);
+        let c = heap.alloc_data(0, 2, 0, false);
+        unsafe {
+            heap.set_field(c, 0, Word::imm(1 << 32)).unwrap();
+            heap.set_field(c, 1, l).unwrap();
+            heap.dup(c).unwrap();
+        }
+        (c, l)
+    };
+
+    let mut heap = H::new();
+    let (c, _) = closure(&mut heap);
+    let child = heap.fork_worker();
+    heap.set_worker(child);
+    assert_eq!(
+        unsafe { heap.dup(c) },
+        Err(HeapError::WrongOwner {
+            owner: 0,
+            worker: child
+        })
+    );
+    drop(heap);
+
+    let mut heap = H::new();
+    let (c, l) = closure(&mut heap);
+    let child = heap.fork_worker();
+    unsafe {
+        heap.share(c, child).unwrap();
+        heap.set_worker(child);
+        heap.dup(c).unwrap();
+        let mut cell = l;
+        while cell.is_ptr() {
+            heap.dup(cell).unwrap();
+            heap.decref(cell).unwrap();
+            cell = heap.field(cell, 1).unwrap();
+        }
+        heap.decref(c).unwrap();
+        heap.set_worker(0);
+        heap.retire_worker(child).unwrap();
+        heap.decref(c).unwrap();
+        heap.decref(c).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
 }

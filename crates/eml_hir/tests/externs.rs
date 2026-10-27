@@ -112,9 +112,14 @@ fn every_extern_function_is_declared_once_in_std() {
         assert_eq!(signature.arity(), row.params.len(), "{}", row.name);
         // `Pure` でない行だけが、最後の外側の矢印に extern のエフェクトを書く。ほかの矢印の row はどれも空である。
         // ただし、instance の `extern` で結んだ `Pure` の行は、クラスのメソッドの型が書く `Panic` を持ってよい
-        // (`Num Float` の `+` は `Panic` を起こさないが、`Num` の `+` の型は `<Panic>` を持つ)
+        // (`Num Float` の `+` は `Panic` を起こさないが、`Num` の `+` の型は `<Panic>` を持つ)。また、高階の
+        // extern の `Pure` の行は、コールバックの引数と結果が共有するラベルのない開いた row を持ってよい
+        // (`Std.Par.par` の `<never e>` と `<e>`)
         let method_bound = functions.is_empty();
         let last = last_outer_arrow(signature);
+        let shared_tail = (row.purity == Purity::Pure && !method_bound)
+            .then(|| shared_callback_tail(signature, last?))
+            .flatten();
         for (id, ty) in signature.types.iter() {
             let TypeRefKind::Fn { row: effects, .. } = &ty.kind else {
                 continue;
@@ -144,12 +149,45 @@ fn every_extern_function_is_declared_once_in_std() {
                 let empty = match effects {
                     RowRef::Omitted => true,
                     RowRef::Closed { effects, .. } => effects.is_empty(),
-                    RowRef::Open { .. } | RowRef::Error => false,
+                    RowRef::Open { effects, tail, .. } => {
+                        effects.is_empty() && Some(*tail) == shared_tail
+                    }
+                    RowRef::Error => false,
                 };
                 assert!(empty, "{} has an effect on an inner arrow", row.name);
             }
         }
     }
+}
+
+/// 最後の外側の矢印 `last` の row がラベルのない開いた row で、その変数がどれかの引数の矢印の row の末尾でもあるとき
+/// の変数。コールバックが起こすエフェクトを呼んだ側へ通す高階の extern の形である。
+fn shared_callback_tail(
+    signature: &Signature,
+    last: eml_hir::TypeRefId,
+) -> Option<eml_hir::RowVarId> {
+    let TypeRefKind::Fn {
+        row: RowRef::Open { effects, tail, .. },
+        ..
+    } = &signature.types[last].kind
+    else {
+        return None;
+    };
+    if !effects.is_empty() {
+        return None;
+    }
+    let mut spine = signature.ty;
+    while let TypeRefKind::Fn { param, ret, .. } = &signature.types[spine].kind {
+        let mut arrow = *param;
+        while let TypeRefKind::Fn { row, ret, .. } = &signature.types[arrow].kind {
+            if matches!(row, RowRef::Open { tail: t, .. } if t == tail) {
+                return Some(*tail);
+            }
+            arrow = *ret;
+        }
+        spine = *ret;
+    }
+    None
 }
 
 /// シグネチャの型を右へたどった最後の矢印。

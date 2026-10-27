@@ -154,6 +154,7 @@ impl Parser<'_> {
                 | "perform"
                 | "resume"
                 | "clause"
+                | "par"
         ) {
             let (mask, call) = self.masked_call(state)?;
             return Ok(Rhs::Call { call, mask });
@@ -219,16 +220,16 @@ impl Parser<'_> {
         Ok(mask)
     }
 
-    /// `mask` を前に付けてよい呼び出し。`mask` は call、apply、resume にだけ付く (docs/spec/core-ir.md)。
+    /// `mask` を前に付けてよい呼び出し。`mask` は call、apply、resume、par にだけ付く (docs/spec/core-ir.md)。
     fn masked_call(&mut self, state: &mut FnState) -> Result<(Vec<MaskItem>, Call), ParseError> {
         let line = self.reader.line();
         let mask = self.mask()?;
         if !mask.is_empty()
-            && !["call", "yields", "apply", "resume"]
+            && !["call", "yields", "apply", "resume", "par"]
                 .iter()
                 .any(|w| self.reader.at_word(w))
         {
-            return Err(error(line, "a mask is only on call, apply and resume"));
+            return Err(error(line, "a mask is only on call, apply, resume and par"));
         }
         Ok((mask, self.call(state)?))
     }
@@ -293,6 +294,21 @@ impl Parser<'_> {
                     op,
                     callee,
                     args,
+                })
+            }
+            "par" => {
+                let pair = self.reader.ctor()?;
+                self.reader.expect_punct('(')?;
+                let left = self.reader.atom(state)?;
+                self.reader.expect_punct(',')?;
+                let right = self.reader.atom(state)?;
+                self.reader.expect_punct(')')?;
+                let at = self.reader.position()?;
+                Ok(Call::Par {
+                    left,
+                    right,
+                    pair,
+                    at,
                 })
             }
             _ => Err(error(line, format!("expected a call, found `{word}`"))),

@@ -106,6 +106,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     if level >= Level::Flattened {
         no_struct_layouts(program)?;
     }
+    forks(program)?;
     with_tables(program, |tables| {
         // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
         for function in &program.functions {
@@ -161,6 +162,52 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         }
         Ok(())
     })
+}
+
+/// `par` を走らせうるプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を持つ
+/// `fork$E.op` と `reperform$E.op` を持つ。VM は子の evidence をこの名前で作るためである
+/// (docs/spec/core-ir.md の「`par` の子の中断」)。関数の形は、ほかの関数と同じく本体の検査が確かめる。
+fn forks(program: &Program) -> Result<(), VerifyError> {
+    if !program.may_run_par() {
+        return Ok(());
+    }
+    let find = |name: &str| {
+        program
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+    };
+    for effect in crate::fork_effects(&program.effects) {
+        let info = &program.effects[effect as usize];
+        for op in 0..info.operations.len() as u32 {
+            let missing = |kind: &str, name: String| VerifyError {
+                function: name,
+                message: format!(
+                    "`{}` has no {kind} entry, but the program may run par",
+                    operation_text(&program.effects, effect, op)
+                ),
+            };
+            let fork = crate::fork_name(&program.effects, effect, op);
+            match find(&fork) {
+                None => return Err(missing("fork", fork)),
+                Some(function) if function.clause != Some((effect, op)) => {
+                    return Err(VerifyError {
+                        function: fork,
+                        message: format!(
+                            "the fork entry is not a clause of `{}`",
+                            operation_text(&program.effects, effect, op)
+                        ),
+                    });
+                }
+                Some(_) => {}
+            }
+            let reperform = crate::reperform_name(&program.effects, effect, op);
+            if find(&reperform).is_none() {
+                return Err(missing("reperform", reperform));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 一様な位置で値を受ける Repr (`obj`、`tobj`、`unit`) か。
@@ -1661,6 +1708,17 @@ impl<'a> Checker<'a> {
             // `apply` の結果は一様な `tobj` である。関数の値は型変数の位置なので、結果の印はいつも `poly` で、どの受け手
             // とも合う (docs/spec/lir.md の「関数の ABI」)
             Call::Apply { .. } => Some(vec![(Repr::TObj, Mark::Poly)]),
+            // 組は VM が子の一様な結果を2つの `tobj` のフィールドに入れて作るので、結果は `obj` である。子の値の型は
+            // 型変数の位置なので、印は `apply` と同じく `poly` である (docs/spec/lir.md の「LIR の命令」)
+            Call::Par { pair, .. } => {
+                if matches!(receiver, Receiver::Tail) {
+                    return Err(
+                        "a par is a tail call, but the join needs the parent's frame".to_string(),
+                    );
+                }
+                self.cx.check_par_pair(*pair)?;
+                Some(vec![(Repr::Obj, Mark::Poly)])
+            }
         };
         if self.cx.boundaries {
             self.check_operands(call)?;
@@ -1773,6 +1831,18 @@ impl<'a> Checker<'a> {
                     uniform(&|| format!("argument {index}"), arg)?;
                 }
             }
+            // 子は `()` を適用する関数の値なので、`apply` の呼ぶ値と同じく `tobj` と比べ、印は比べない
+            // (docs/spec/lir.md の「Kind の印の検査」)
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                let uniform = operands("a par");
+                uniform(&|| "argument 0".to_string(), *left)?;
+                uniform(&|| "argument 1".to_string(), *right)?;
+            }
             // 節の呼び出しは操作の ABI で呼ぶので、先頭の evidence は `obj`、残りは操作の表の Repr と比べる
             Call::Clause {
                 effect,
@@ -1835,7 +1905,7 @@ impl<'a> Checker<'a> {
             Call::Clause { effect, op, .. } => {
                 operation(&self.program.effects, *effect, *op).ret == OpRet::Never
             }
-            Call::Direct(_, _) | Call::Apply { .. } => false,
+            Call::Direct(_, _) | Call::Apply { .. } | Call::Par { .. } => false,
         }
     }
 
@@ -1948,6 +2018,7 @@ impl<'a> Checker<'a> {
                 };
             }
             Call::Apply { .. } => ("an", "apply".to_string()),
+            Call::Par { .. } => ("a", "par".to_string()),
             Call::Clause {
                 effect,
                 op,
@@ -1996,6 +2067,7 @@ fn tail_text(call: &Call) -> &'static str {
         Call::Direct(_, _) => "a tail call",
         Call::Apply { .. } => "a tail apply",
         Call::Clause { .. } => "a tail clause",
+        Call::Par { .. } => "a tail par",
     }
 }
 

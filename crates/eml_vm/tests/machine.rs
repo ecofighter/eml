@@ -290,6 +290,41 @@ fn second() -> unit {
     assert_eq!(run_two(first, second), "kept\n");
 }
 
+/// 根を読む入力は fork の関数を持つ (docs/spec/core-ir.md の「`par` の子の中断」)。ロードは呼ばれない `fork$` も
+/// 変換するので、`child_abort` を含むプログラムも読み込めて、`par` を走らせなければそのまま動く。
+#[test]
+fn a_root_reading_input_with_fork_entries_loads_and_runs() {
+    let first = "\
+fn main() -> unit {
+  let s.0: obj = const \"kept\"
+  let u.1: unit = prim root_set[1](s.0)
+  return u.1
+}
+";
+    let second = "\
+effect Fail { never fail(tobj poly) -> never }
+fn second() -> unit {
+  let t.0: obj = prim root_get[1]()
+  let u.1: unit = extern Prelude.println(t.0)
+  return u.1
+}
+clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {
+  let c.2: tobj poly = closure reperform$Fail.fail(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
+  decref ev.0
+  let d.4: obj poly = prim dummy()
+  return d.4
+}
+uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
+  let ev.2: obj = prim ev_lookup[Fail]()
+  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
+  tail clause Fail.fail c.3(ev.2, a.0)
+}
+";
+    assert!(parse(second).may_run_par());
+    assert_eq!(run_two(first, second), "kept\n");
+}
+
 /// 続けられる誤りの後は、根から届く物体を新しいヒープに写して古いヒープを捨てる。evv と yield の状態は空に戻るので、
 /// 次の実行は終わりの確かめを通り、スタックと evv に残った物体も消えるので、閉じるときのリークの検査も通る
 /// (docs/spec/object-model.md の「回復」)。

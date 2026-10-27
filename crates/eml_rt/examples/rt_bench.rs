@@ -219,7 +219,8 @@ fn handle() {
     let mut ctx = ctx();
     for _ in 0..HANDLERS {
         // SAFETY: ev は ev_new が返した参照と、dup した参照の2つを持つ。1つは evv_push が節点に移し、もう1つは
-        // 最後に手放す。evv_get と ev_evv が返したリストの参照は、evv_push と evv_set に渡す。
+        // 最後に手放す。evv_get と ev_take_evv が返したリストの参照は、evv_push と evv_set に渡す。コンパイラの
+        // `prompt$` と同じく、外側の evv は dup せずに evidence から取り出す。
         unsafe {
             let outer = ctx.evv_get().unwrap();
             let ev = ctx.ev_new(0, 1, UNIT, outer).unwrap();
@@ -228,7 +229,7 @@ fn handle() {
             let list = ctx.evv_get().unwrap();
             let list = ctx.evv_push(list, ev).unwrap();
             ctx.evv_set(list).unwrap();
-            let outer = ctx.ev_evv(black_box(ev)).unwrap();
+            let outer = ctx.ev_take_evv(black_box(ev)).unwrap();
             ctx.evv_set(outer).unwrap();
             ctx.heap_mut().decref(ev).unwrap();
         }

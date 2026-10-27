@@ -164,15 +164,10 @@ fn recovery_empties_the_evv_and_the_yield_state<M: Mode>() {
 
 /// 写せない物体に根が届けば、回復は `Unrecoverable` を返し、根とヒープの物体を変えない。
 fn recovery_refuses_what_it_cannot_copy<M: Mode>() {
-    let cases: [fn(&mut Heap<M>) -> Word; 4] = [
+    let cases: [fn(&mut Heap<M>) -> Word; 3] = [
         |heap| heap.alloc_foreign(5u64, false),
         |heap| heap.alloc_data(0, 0, 1, true),
         |heap| unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false)) },
-        |heap| {
-            let x = cons(heap, Word::imm(0), Word::imm(0));
-            unsafe { heap.share(x, 1) }.unwrap();
-            x
-        },
     ];
     for make in cases {
         let mut ctx = ctx::<M>();
@@ -188,6 +183,117 @@ fn recovery_refuses_what_it_cannot_copy<M: Mode>() {
         assert_eq!(mortal(ctx.heap()), before);
         assert_eq!(root(&mut ctx, 0), w);
     }
+}
+
+/// 共有の物体 (rc が負) も、回復は局所の物体として写す。すべてのタスクを捨てるので、写しを持つのは根と写した親だけで
+/// あり、2つ目からの使い手は `dup` する (docs/spec/object-model.md の「回復」)。
+fn recovery_copies_shared_objects_as_local<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let heap = ctx.heap_mut();
+        let x = cons(heap, Word::imm(7), Word::imm(8));
+        heap.share(x, 1).unwrap();
+        heap.dup(x).unwrap();
+        assert_eq!(rc(x), -2);
+        let both = cons(heap, x, x);
+        let y = list(heap, 2);
+        heap.share(y, 1).unwrap();
+        let holder = cons(heap, both, y);
+        ctx.root_set(0, holder).unwrap();
+        ctx.recover().unwrap();
+    }
+    // holder、both、x の写し、y の2つのセルだけが残る
+    assert_eq!(mortal(ctx.heap()), 5);
+    let holder = root(&mut ctx, 0);
+    unsafe {
+        let heap = ctx.heap_mut();
+        let both = heap.field(holder, 0).unwrap();
+        let y = heap.field(holder, 1).unwrap();
+        let x = heap.field(both, 0).unwrap();
+        assert_eq!(heap.field(both, 1), Ok(x));
+        assert_eq!(rc(x), 2);
+        assert_eq!(heap.is_unique(x), Ok(false));
+        assert_eq!(heap.field(x, 0), Ok(Word::imm(7)));
+        assert_eq!(heap.field(x, 1), Ok(Word::imm(8)));
+        let tail = heap.field(y, 1).unwrap();
+        for (cell, head) in [(y, 1), (tail, 0)] {
+            assert!(rc(cell) > 0);
+            assert_eq!(heap.is_unique(cell), Ok(true));
+            assert_eq!(heap.field(cell, 0), Ok(Word::imm(head)));
+        }
+        assert_eq!(heap.field(tail, 1), Ok(Word::imm(0)));
+        for w in [holder, both] {
+            assert_eq!(heap.is_unique(w), Ok(true));
+        }
+    }
+    unsafe { ctx.heap_mut().decref(holder) }.unwrap();
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 別の worker が確保して共有にした文字列とバイト列を根に持つ ctx を回復し、写しを確かめて返す。共有の物体の前置きの
+/// 持ち主は意味を持たないので、今の worker と違っても写す。写しは今の worker の局所の物体である。
+fn recover_shared_text_of_another_worker<M: Mode>() -> Ctx<M> {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let heap = ctx.heap_mut();
+        let child = heap.fork_worker();
+        heap.set_worker(child);
+        let s = heap.alloc_string("shared text");
+        let b = heap.alloc_bytes(&[1, 2, 3, 255]);
+        heap.share(s, 0).unwrap();
+        heap.share(b, 0).unwrap();
+        heap.set_worker(0);
+        let holder = cons(heap, s, b);
+        ctx.root_set(0, holder).unwrap();
+        ctx.recover().unwrap();
+    }
+    let holder = root(&mut ctx, 0);
+    unsafe {
+        let heap = ctx.heap();
+        let s = heap.field(holder, 0).unwrap();
+        let b = heap.field(holder, 1).unwrap();
+        assert_eq!(&*heap.string(s).unwrap(), "shared text");
+        assert_eq!(&*heap.bytes(b).unwrap(), &[1, 2, 3, 255]);
+        for w in [s, b] {
+            assert_eq!(rc(w), 1);
+            assert_eq!(heap.is_unique(w), Ok(true));
+            if M::CHECKED {
+                assert_eq!(super::raw::prefix_first(w), heap.worker());
+            }
+        }
+    }
+    ctx
+}
+
+fn recovery_copies_shared_strings_and_bytes_of_another_worker<M: Mode>() {
+    let mut ctx = recover_shared_text_of_another_worker::<M>();
+    let holder = root(&mut ctx, 0);
+    unsafe { ctx.heap_mut().decref(holder) }.unwrap();
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+#[test]
+fn checked_recovery_counts_shared_strings_of_another_worker_as_its_own() {
+    let ctx = recover_shared_text_of_another_worker::<Checked>();
+    assert_eq!(ctx.heap().owned_by(0), 3);
+    assert_eq!(ctx.heap().check_invariants(), Ok(()));
+}
+
+/// 共有の印がある `lin` の物体は、rc が負でも写せない。
+fn recovery_still_refuses_a_lin_object_at_a_negative_rc<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let w = unsafe {
+        let heap = ctx.heap_mut();
+        let w = heap.alloc_data(0, 0, 1, true);
+        super::raw::set_rc(heap, w, -1);
+        let holder = cons(heap, w, Word::imm(0));
+        ctx.root_set(0, holder).unwrap();
+        holder
+    };
+    let before = mortal(ctx.heap());
+    assert_eq!(unsafe { ctx.recover() }, Err(HeapError::Unrecoverable));
+    assert_eq!(mortal(ctx.heap()), before);
+    assert_eq!(root(&mut ctx, 0), w);
 }
 
 /// 回復が一時に使うメモリは、根から届く物体の数で決まり、古いヒープの大きさによらない。回復は確保量の上限で止まった
@@ -259,8 +365,38 @@ both_modes!(
     recovery_empties_the_evv_and_the_yield_state,
     recovery_copies_floats,
     recovery_refuses_what_it_cannot_copy,
+    recovery_copies_shared_objects_as_local,
+    recovery_copies_shared_strings_and_bytes_of_another_worker,
+    recovery_still_refuses_a_lin_object_at_a_negative_rc,
     recovery_needs_no_memory_in_proportion_to_the_old_heap,
 );
+
+/// 写した先のヒープは空の数の表で始まり、写しを確保の道で数える。共有の物体の写しも局所の物体として数える。
+#[test]
+fn checked_recovery_counts_its_copies() {
+    let mut ctx = ctx::<Checked>();
+    unsafe {
+        let heap = ctx.heap_mut();
+        let x = cons(heap, Word::imm(7), Word::imm(8));
+        heap.share(x, 1).unwrap();
+        heap.dup(x).unwrap();
+        let both = cons(heap, x, x);
+        let y = list(heap, 2);
+        heap.share(y, 1).unwrap();
+        let holder = cons(heap, both, y);
+        let _garbage = list(heap, 10);
+        ctx.root_set(0, holder).unwrap();
+        assert_eq!(ctx.heap().owned_by(0), 12);
+        ctx.recover().unwrap();
+    }
+    // holder、both、x の写し、y の2つのセル
+    assert_eq!(ctx.heap().owned_by(0), 5);
+    assert_eq!(ctx.heap().check_invariants(), Ok(()));
+    let holder = root(&mut ctx, 0);
+    unsafe { ctx.heap_mut().decref(holder) }.unwrap();
+    assert_eq!(ctx.heap().owned_by(0), 0);
+    assert_eq!(ctx.heap().check_invariants(), Ok(()));
+}
 
 /// 検査モードでは、空けた物体と token の箱に届く根も断る。速いモードでは、根が生きていない物体を指すこと自体が
 /// 前提に反する。

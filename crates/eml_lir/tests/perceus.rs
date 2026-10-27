@@ -1480,3 +1480,26 @@ b2:
     }
     "#);
 }
+
+#[test]
+fn a_par_consumes_its_children() {
+    // `par` は子を2つとも消費する。後でまた使う `unr` の子は `dup` し、`lin` の子には何もしない
+    // (docs/spec/lir.md の「Kind の印の検査」)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+fn f(c.0: tobj, l.1: tobj lin) -> obj {
+  let t.2: obj = par (,) #0(c.0, l.1)
+  let u.3: obj = con (,) #0(t.2, c.0)
+  return u.3
+}
+";
+    insta::assert_snapshot!(perceus_text(text), @"
+    layout (,) { (,)(tobj, tobj) }
+    fn f(c.0: tobj, l.1: tobj lin) -> obj {
+      dup c.0
+      let t.2: obj = par (,) #0(c.0, l.1)
+      let u.3: obj = con (,) #0(t.2, c.0)
+      return u.3
+    }
+    ");
+}

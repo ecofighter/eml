@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eml_cli::{
-    CaptureHost, Control, FsProvider, RunConfig, RuntimeError, Session, VmFault, default_limits,
-    execute,
+    CaptureHost, Control, Finished, FsProvider, RunConfig, RuntimeError, Sched, Session, VmFault,
+    default_limits, execute,
 };
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
@@ -126,12 +126,14 @@ fn compile(path: &Path, suffix: &str) -> (eml_lir::Program, PathBuf, String) {
 
 /// 実行の結果。`stderr` はプログラムと子のプロセスが標準エラーに書いたものである。`written` は `FileOut` (と、その上に
 /// 書いた `Fs.write_text`) が書いたファイルを、スナップショットに足す形に並べたものである。UTF-8 でない中身は `escape_ascii` で書き、
-/// 見出しに `(not UTF-8)` を付ける。`result` の `Ok` は `exit` の終了コードである。
+/// 見出しに `(not UTF-8)` を付ける。`result` の `Ok` は `exit` の終了コードである。`finished` は成功した実行の
+/// `RunStats` と横取りの数で、seed の run と比べるために持つ。
 struct Ran {
     stdout: String,
     stderr: String,
     written: String,
     result: Result<Option<i64>, RuntimeError>,
+    finished: Option<Finished>,
 }
 
 /// テストの入力のファイル `<名前>.em` の隣にある付属のファイルから、テストの Host を作る。`.args` は1行に1つの引数、
@@ -168,13 +170,22 @@ fn host_for(path: &Path, root: &Path) -> CaptureHost {
 
 /// `eml run` と同じ既定の上限で流す。止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい
 /// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。
-fn execute_in(program: &eml_lir::Program, path: &Path, root: &Path, debug_heap: bool) -> Ran {
+fn execute_in(
+    program: &eml_lir::Program,
+    path: &Path,
+    root: &Path,
+    debug_heap: bool,
+    sched: Sched,
+) -> Ran {
     let host = host_for(path, root);
     let (out, err, files) = (host.output(), host.errors(), host.written());
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
-        .with_control(Arc::new(Control::new(default_limits())));
-    let result = execute(program, &config, host.into_ref()).map(|finished| finished.exit);
+        .with_control(Arc::new(Control::new(default_limits())))
+        .with_sched(sched);
+    let outcome = execute(program, &config, host.into_ref());
+    let finished = outcome.as_ref().ok().copied();
+    let result = outcome.map(|finished| finished.exit);
     let written = files
         .files()
         .into_iter()
@@ -191,10 +202,48 @@ fn execute_in(program: &eml_lir::Program, path: &Path, root: &Path, debug_heap: 
         stderr: err.contents(),
         written,
         result,
+        finished,
     }
 }
 
-/// 検査モードの結果をスナップショットと比べた後で、速いモードでも流し、同じ出力と同じ結果になることを確かめる。
+/// 検査モードの結果をスナップショットと比べた後で、同じプログラムを別の設定で流した結果 `other` が、同じ出力、
+/// 同じ標準エラー、同じファイル、同じ終わり方になることを確かめる。`label` は別の設定の名前で、食い違ったときの文言に
+/// 入る。`compare_stats` なら、スケジュールによらない `RunStats` も比べる。速いモードは仕事の回数を数えないので比べない。
+fn assert_agrees(suffix: &str, label: &str, other: &Ran, checked: &Ran, compare_stats: bool) {
+    assert_eq!(
+        other.stdout, checked.stdout,
+        "{suffix}: {label} printed something else"
+    );
+    assert_eq!(
+        other.stderr, checked.stderr,
+        "{suffix}: {label} wrote another standard error"
+    );
+    assert_eq!(
+        other.written, checked.written,
+        "{suffix}: {label} wrote other files"
+    );
+    assert_eq!(
+        other.result.as_ref().copied().map_err(ToString::to_string),
+        checked
+            .result
+            .as_ref()
+            .copied()
+            .map_err(ToString::to_string),
+        "{suffix}: {label} ended otherwise"
+    );
+    if compare_stats {
+        let stats = |ran: &Ran| {
+            ran.finished
+                .map(|finished| eml_test_support::schedule_independent(finished.stats))
+        };
+        assert_eq!(
+            stats(other),
+            stats(checked),
+            "{suffix}: {label} did other work"
+        );
+    }
+}
+
 /// 速いモードは前提を確かめないので、VM の誤りが未定義の動作になって同じプロセスのほかのファイルのテストを
 /// 壊しうる。そのため検査モードの後に流し、検査モードが VM の誤りを見つけたときは流さない (`fast_mode_reports`。
 /// docs/implementation/testing.md の「2つのモードで流す」)。
@@ -205,28 +254,44 @@ fn assert_fast_mode_agrees(
     root: &Path,
     checked: &Ran,
 ) {
-    let fast = execute_in(program, path, root, false);
-    assert_eq!(
-        fast.stdout, checked.stdout,
-        "{suffix}: the fast mode printed something else"
-    );
-    assert_eq!(
-        fast.stderr, checked.stderr,
-        "{suffix}: the fast mode wrote another standard error"
-    );
-    assert_eq!(
-        fast.written, checked.written,
-        "{suffix}: the fast mode wrote other files"
-    );
-    assert_eq!(
-        fast.result.map_err(|error| error.to_string()),
-        checked
-            .result
-            .as_ref()
-            .copied()
-            .map_err(ToString::to_string),
-        "{suffix}: the fast mode ended otherwise"
-    );
+    let fast = execute_in(program, path, root, false, Sched::Sequential);
+    assert_agrees(suffix, "the fast mode", &fast, checked, false);
+}
+
+/// seed の方針で流すテストの seed (docs/implementation/testing.md の「seed で流す」)。
+const SEEDS: [u64; 2] = [1, 2026];
+
+/// seed の方針でも流すのは `par/` の分類だけである。`par` のないプログラムはタスクを切り替えないので、流しても
+/// 確かめることがない。
+fn seeded(suffix: &str) -> bool {
+    suffix.starts_with("par/")
+}
+
+/// 食い違ったときの文言に、同じ実行を再現するコマンドを書く。スケジュールは seed とプログラムと入力だけで決まる。
+fn seeded_label(seed: u64) -> String {
+    format!("`eml run --debug-heap --sched seeded:{seed}`")
+}
+
+/// 逐次の検査モードの結果を、seed ごとの検査モードの run と比べる。成功した run は、スケジュールによらない
+/// `RunStats` も比べ、少なくとも1回横取りしたことを確かめる。横取りがなければ、逐次と同じ順で流しただけになる。
+/// 速いモードでは流さない。スケジューラの誤りが速いモードで未定義の動作になると、同じプロセスのほかのテストを壊す。
+fn assert_seeds_agree(
+    suffix: &str,
+    program: &eml_lir::Program,
+    path: &Path,
+    root: &Path,
+    checked: &Ran,
+) {
+    for seed in SEEDS {
+        let ran = execute_in(program, path, root, true, Sched::Seeded(seed));
+        assert_agrees(suffix, &seeded_label(seed), &ran, checked, true);
+        if let Some(finished) = ran.finished {
+            assert!(
+                finished.preemptions > 0,
+                "{suffix}: never preempted under `--sched seeded:{seed}`; give one par a left child of 16 or more safepoints (docs/implementation/testing.md の「seed で流す」)"
+            );
+        }
+    }
 }
 
 /// 速いモードも同じ誤りを報告するか。漏れ、内部の誤り、ヒープの誤りは検査モードだけが見つける。これらは VM 自身の
@@ -249,7 +314,7 @@ fn run() {
             return;
         };
         let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, true);
+        let ran = execute_in(&program, path, &root, true, Sched::Sequential);
         assert!(ran.result.is_ok(), "{:?}\n{diagnostics}", ran.result);
         let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
         let exit = match ran.result {
@@ -262,6 +327,9 @@ fn run() {
             ));
         });
         assert_fast_mode_agrees(&suffix, &program, path, &root, &ran);
+        if seeded(&suffix) {
+            assert_seeds_agree(&suffix, &program, path, &root, &ran);
+        }
     });
 }
 
@@ -272,7 +340,7 @@ fn run_fail() {
             return;
         };
         let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, true);
+        let ran = execute_in(&program, path, &root, true, Sched::Sequential);
         let Err(error) = &ran.result else {
             panic!("expected a runtime error");
         };
@@ -282,8 +350,12 @@ fn run_fail() {
                 "--- stdout ---\n{stdout}--- stderr ---\n{diagnostics}{stderr}--- runtime error ---\n{error}\n{written}"
             ));
         });
+        // VM の誤りの文言は worker ID を含みうる。ID はスケジュールで変わるので、seed の run とも比べない
         if fast_mode_reports(error) {
             assert_fast_mode_agrees(&suffix, &program, path, &root, &ran);
+            if seeded(&suffix) {
+                assert_seeds_agree(&suffix, &program, path, &root, &ran);
+            }
         }
     });
 }
@@ -322,6 +394,44 @@ fn the_layout_decides_what_each_file_is() {
         classify(&root.join("run/modules/qualified/Report/Csv.em"), "run"),
         Entry::Module
     );
+}
+
+#[test]
+fn seeded_runs_cover_only_par() {
+    assert!(seeded("par/x.em"));
+    assert!(seeded("par/dir"));
+    assert!(!seeded("panic/x.em"));
+    assert!(!seeded("parse/x.em"));
+}
+
+#[test]
+#[should_panic(expected = "--sched seeded:7")]
+fn a_seeded_mismatch_names_the_seed() {
+    let ran = |stdout: &str| Ran {
+        stdout: stdout.to_string(),
+        stderr: String::new(),
+        written: String::new(),
+        result: Ok(None),
+        finished: None,
+    };
+    assert_agrees("par/x.em", &seeded_label(7), &ran("1\n"), &ran("2\n"), true);
+}
+
+/// 左の子が短い `par` は seed で横取りされず、ハーネスがそのファイルを落とす。
+#[test]
+#[should_panic(expected = "never preempted under `--sched seeded:")]
+fn a_par_file_that_is_never_preempted_fails() {
+    let source = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = Par.par (fn () -> 1) (fn () -> 2)\n  println (show (a + b))\n";
+    let session = Session::load(
+        "run/par/short.em",
+        source,
+        &eml_test_support::MemorySource(&[]),
+    );
+    let program = session.compile().program.expect("the program compiles");
+    let root = ui_root().join("run/par");
+    let path = root.join("short.em");
+    let checked = execute_in(&program, &path, &root, true, Sched::Sequential);
+    assert_seeds_agree("par/short.em", &program, &path, &root, &checked);
 }
 
 #[test]

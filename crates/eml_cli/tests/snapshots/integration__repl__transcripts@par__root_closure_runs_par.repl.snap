@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/par/root_closure_runs_par.repl
+---
+> import Std.Par
+> let f : (Unit -> <Panic> Int) -> <Panic> (Int, Int) = fn h -> Par.par h h
+> effect Stop where
+.   never stop : Unit -> a
+.
+> handle f (fn () -> 1) with
+.   | ctl stop () -> (0, 0)
+.
+(1, 1)
+--- close ---
+no leaks

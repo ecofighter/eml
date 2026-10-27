@@ -6,6 +6,8 @@ use std::sync::Arc;
 use eml_lir::Program;
 use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, Mode, Stats};
 
+use crate::vm::ExecWith;
+
 mod apply;
 mod code;
 mod compile;
@@ -14,6 +16,7 @@ mod disasm;
 mod error;
 mod hosts;
 mod op;
+mod sched;
 mod vm;
 
 pub use code::{CodeBase, CompileError, FnEntry};
@@ -22,6 +25,7 @@ pub use disasm::disassemble;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
+pub use sched::{Policy, Sched, Scheduler, Seeded, Sequential};
 pub use vm::Task;
 
 /// 実行の仕事の回数と、同時に生きていたヒープの物体の数とスタックの語の数の最大。検査モードだけで数える。
@@ -52,6 +56,8 @@ pub struct RunStats {
 pub struct Finished {
     pub stats: RunStats,
     pub exit: Option<i64>,
+    /// 方針が安全点で始めたタスクの切り替えの数 (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub preemptions: u64,
 }
 
 /// VM だけが知る仕事の回数。検査モードだけで数える。
@@ -72,6 +78,8 @@ pub struct RunConfig {
     /// 止める理由のビットは `Control::clear` でしか下りないので、1つの `Control` は1回の実行にだけ使う。`clone` した
     /// 設定は同じ `Control` を指す。
     pub control: Arc<Control>,
+    /// タスクを切り替える方針。既定は横取りしない `Sched::Sequential` である。
+    pub sched: Sched,
 }
 
 // `Control` は `Default` を持たないので、手で書く
@@ -80,6 +88,7 @@ impl Default for RunConfig {
         RunConfig {
             debug_heap: false,
             control: Arc::new(Control::new(Limits::default())),
+            sched: Sched::Sequential,
         }
     }
 }
@@ -92,6 +101,11 @@ impl RunConfig {
 
     pub fn with_control(mut self, control: Arc<Control>) -> RunConfig {
         self.control = control;
+        self
+    }
+
+    pub fn with_sched(mut self, sched: Sched) -> RunConfig {
+        self.sched = sched;
         self
     }
 }
@@ -125,6 +139,7 @@ pub struct Machine<M: Mode> {
     code: CodeBase<M>,
     ctx: Ctx<M>,
     max_depth: usize,
+    sched: Sched,
     /// 実行と回復の後の確かめ。検査モードではヒープの不変条件を確かめる。
     check_heap: fn(&Ctx<M>) -> Result<(), HeapError>,
     /// 閉じるときの確かめ。検査モードでは残った物体をリークとして返す。
@@ -133,6 +148,9 @@ pub struct Machine<M: Mode> {
     earlier: HeapWork,
     /// 今のヒープが回復で写すためにした仕事。`RunStats` は実行の仕事だけを数えるので引く。
     copying: HeapWork,
+    /// 根の表のうち、印を付け終えた先頭の根の数。実行をまたいで持ち、回復で 0 に戻す
+    /// (docs/spec/object-model.md の「セッションの根」)。
+    shared_roots: usize,
 }
 
 impl Machine<Fast> {
@@ -163,11 +181,19 @@ impl<M: Mode> Machine<M> {
             code: CodeBase::new(Arc::clone(&control)),
             max_depth: control.limits().max_depth,
             ctx: Ctx::new(control, host),
+            sched: Sched::Sequential,
             check_heap,
             at_close,
             earlier: HeapWork::default(),
             copying: HeapWork::default(),
+            shared_roots: 0,
         }
+    }
+
+    /// 実行ごとに作るスケジューラの方針を選ぶ。既定は `Sched::Sequential` である。
+    pub fn with_sched(mut self, sched: Sched) -> Machine<M> {
+        self.sched = sched;
+        self
     }
 
     pub fn code(&self) -> &CodeBase<M> {
@@ -231,6 +257,8 @@ impl<M: Mode> Machine<M> {
         let old = self.heap_work();
         // 根の語は根が持つ参照で、根から届く物体は失敗した実行が書き換えないので、`recover` の前提を守る
         unsafe { self.ctx.recover() }?;
+        // 回復は共有の根を局所の物体として写すので、次の fork はどの根にも印を付け直す
+        self.shared_roots = 0;
         self.earlier = old;
         self.copying = HeapWork::of(self.ctx.heap().stats());
         (self.check_heap)(&self.ctx)
@@ -269,7 +297,19 @@ impl<M: Mode> Machine<M> {
             task.keep_result = true;
         }
         let mut counts = RunCounts::default();
-        let result = vm::run(code, ctx, &mut task, &mut counts);
+        let start = Start {
+            max_depth: self.max_depth,
+            shared_roots: self.shared_roots,
+        };
+        let (result, scheduled) = match self.sched {
+            Sched::Sequential => {
+                run_scheduled(code, ctx, &mut task, Sequential, start, &mut counts)
+            }
+            Sched::Seeded(seed) => {
+                run_scheduled(code, ctx, &mut task, Seeded::new(seed), start, &mut counts)
+            }
+        };
+        self.shared_roots = scheduled.shared_roots;
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
         // `exit` で終わった実行の入口の結果はダミーなので写さない
@@ -281,7 +321,7 @@ impl<M: Mode> Machine<M> {
         };
         // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
         let flushed = ctx.flush();
-        result.map_err(|failure| code.error(failure, &task))?;
+        result?;
         let text = copied.transpose().map_err(|fault| {
             code.error(
                 vm::Failure {
@@ -326,17 +366,14 @@ impl<M: Mode> Machine<M> {
             allocations: h.allocations,
             reuses: counts.reuses,
             peak_objects: h.peak_objects,
-            // スタックの長さは縮めないので、長さがそのまま使った語の数の最大である。統計は検査モードだけで数える
-            peak_stack: if M::CHECKED {
-                task.stack.len() as u64
-            } else {
-                0
-            },
+            // 統計は検査モードだけで数える
+            peak_stack: if M::CHECKED { scheduled.peak_stack } else { 0 },
         };
         Ok((
             Finished {
                 stats,
                 exit: task.exit,
+                preemptions: scheduled.preemptions,
             },
             text,
         ))
@@ -353,6 +390,43 @@ impl<M: Mode> Machine<M> {
         (self.check_heap)(&self.ctx).map_err(close_error)?;
         (self.at_close)(&self.ctx)
     }
+}
+
+/// 実行が終わった後に、捨てるスケジューラから読むもの。
+struct Scheduled {
+    preemptions: u64,
+    peak_stack: u64,
+    shared_roots: usize,
+}
+
+/// スケジューラを作るときに `Machine` から渡すもの。
+#[derive(Clone, Copy)]
+struct Start {
+    max_depth: usize,
+    shared_roots: usize,
+}
+
+/// 方針 `P` のスケジューラを作って `task` から実行する。方針を型の引数にして、方針ごとに VM の繰り返しを作る
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
+fn run_scheduled<M: Mode, P: Policy>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    policy: P,
+    start: Start,
+    counts: &mut RunCounts,
+) -> (Result<(), RuntimeError>, Scheduled) {
+    let main_worker = ctx.heap().worker();
+    task.worker = main_worker;
+    let mut sched = Scheduler::new(policy, main_worker, start.max_depth);
+    sched.shared_roots = start.shared_roots;
+    let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
+    let scheduled = Scheduled {
+        preemptions: sched.preemptions(),
+        peak_stack: sched.peak_stack(task),
+        shared_roots: sched.shared_roots,
+    };
+    (result, scheduled)
 }
 
 /// `RunStats` に入るヒープの仕事の数 (docs/spec/vm.md の「`RunStats`」)。
@@ -385,9 +459,9 @@ impl AnyMachine {
     pub fn new(config: &RunConfig, host: HostRef) -> AnyMachine {
         let control = Arc::clone(&config.control);
         if config.debug_heap {
-            AnyMachine::Checked(Machine::<Checked>::new(control, host))
+            AnyMachine::Checked(Machine::<Checked>::new(control, host).with_sched(config.sched))
         } else {
-            AnyMachine::Fast(Machine::<Fast>::new(control, host))
+            AnyMachine::Fast(Machine::<Fast>::new(control, host).with_sched(config.sched))
         }
     }
 
@@ -470,6 +544,10 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         CompileError::MultiValueEntry { function } => {
             ("an entry function returns more than one value", function)
         }
+        CompileError::MissingFork { function } => (
+            "a program that may run a par lacks a fork function",
+            function,
+        ),
     };
     RuntimeError::Fault {
         fault: VmFault::Internal(what),

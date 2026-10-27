@@ -1038,7 +1038,7 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
         "evv_push",
         "ev_lookup",
         "ev_clause",
-        "ev_evv",
+        "ev_take_evv",
         "ev_renew",
         "evv_mask",
         "ev_take_state",
@@ -1387,4 +1387,327 @@ main () =
         Some(continuation.params().len() as u32 - 1),
         "{shown}"
     );
+}
+
+/// `mask` のある `par` は、ほかの呼び出しと同じく `evv` から項目が飛ばす evidence を除いてから呼び、戻ったら元の
+/// `evv` に戻す。子は親へ yield しないので、`yields` の関数の中でも yield の地点にしない
+/// (docs/spec/core-ir.md の「yield の地点」と「`mask` の包み」)。
+#[test]
+fn a_masked_par_is_wrapped_but_is_not_a_yield_point() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Ask { ask(unit) -> int }
+yields fn f(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = mask [Ask] par (,) #0(a.0, b.1)
+  return t.2
+}
+fn g(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = mask [Ask] par (,) #0(a.0, b.1)
+  return t.2
+}
+";
+    let shown = evidence_text(text);
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    yields fn f(a.0: tobj, b.1: tobj) -> obj {
+      let w.3: tobj = prim evv_get()
+      let w.4: tobj = prim evv_mask[Ask](w.3)
+      let u.5: unit = prim evv_set(w.4)
+      let t.2: obj = par (,) #0(a.0, b.1)
+      let u.6: unit = prim evv_set(w.3)
+      return t.2
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "g"), @"
+    fn g(a.0: tobj, b.1: tobj) -> obj {
+      let w.3: tobj = prim evv_get()
+      let w.4: tobj = prim evv_mask[Ask](w.3)
+      let u.5: unit = prim evv_set(w.4)
+      let t.2: obj = par (,) #0(a.0, b.1)
+      let u.6: unit = prim evv_set(w.3)
+      return t.2
+    }
+    ");
+}
+
+/// 子は `never` の操作しか起こさず、親は継続を作らずに起こし直すので、`mask` のない `par` は yield の地点にならない。
+/// 末尾の位置の呼び出しにもならない (docs/spec/core-ir.md の「Core IR の命令」)。
+#[test]
+fn an_unmasked_par_is_not_a_yield_point() {
+    let text = "layout (,) { (,)(tobj, tobj) }\nyields fn f(a.0: tobj, b.1: tobj) -> obj {\n  let t.2: obj = par (,) #0(a.0, b.1)\n  return t.2\n}\n";
+    assert_eq!(evidence_text(text), text);
+}
+
+/// その場で動く節の本体の `par` は、ほかの呼び出しと同じく under の形にする。子が起こし直す操作は handle の外の
+/// handler に届く (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
+#[test]
+fn a_par_in_an_immediate_clause_runs_it_under_the_handler() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Ask { ask(unit) -> obj }
+fn main(b.0: tobj, l.1: tobj, r.2: tobj) -> obj {
+  let c.3: tobj = closure h$ask(l.1, r.2)
+  let t.4: obj = handle Ask((), b.0) { ask: c.3 } return &h$return
+  return t.4
+}
+internal uniform from 2 fn h$ask(l.0: tobj, r.1: tobj, p.2: unit, k.3: tobj lin, p.4: unit) -> obj {
+  let t.5: obj = par (,) #0(l.0, r.1)
+  let t.6: obj = resume k.3(t.5, ())
+  return t.6
+}
+internal uniform from 0 fn h$return($r.0: obj, p.1: unit) -> obj {
+  return $r.0
+}
+";
+    let shown = evidence_text(text);
+    insta::assert_snapshot!(function(&shown, "h$ask$entry"), @"
+    internal clause Ask.ask fn h$ask$entry(l.0: tobj, r.1: tobj, e.7: obj, p.2: unit) -> obj {
+      let w.8: tobj = prim evv_get()
+      let o.9: tobj = prim ev_evv(e.7)
+      let u.12: unit = prim evv_set(o.9)
+      let p.4: unit = prim ev_take_state(e.7)
+      let t.5: obj = par (,) #0(l.0, r.1)
+      let u.10: unit = prim ev_set_state(e.7, ())
+      let u.11: unit = prim evv_set(w.8)
+      return t.5
+    }
+    ");
+}
+
+/// fork の関数を持つエフェクトを並べたプログラム。`IO` は `Once`、`Ask` は再開する操作を、`Mixed` は再開する操作も
+/// 持ち、`Empty` は操作を持たないので、fork の関数を持つのは `Prelude.Panic`、`One`、`Two` だけである
+/// (docs/spec/core-ir.md の「`par` の子の中断」)。
+const FORK_EFFECTS: &str = "\
+layout (,) { (,)(tobj, tobj) }
+effect Prelude.IO { never io_failed(enum, obj) -> never }
+effect Prelude.Panic { never panicked(obj) -> never }
+effect One { never one(tobj poly) -> never }
+effect Two { never two(int, obj lin) -> never }
+effect Ask { ask(unit) -> int }
+effect Mixed { never stop(unit) -> never, go(unit) -> unit }
+effect Empty { }
+";
+
+/// `prefix` で始まる関数の名前を、並びの順に集める。
+fn names_with_prefix(program: &eml_core_ir::Program, prefix: &str) -> Vec<String> {
+    program
+        .functions
+        .iter()
+        .filter(|function| function.name.starts_with(prefix))
+        .map(|function| function.name.clone())
+        .collect()
+}
+
+fn evidence_program(text: &str) -> eml_core_ir::Program {
+    let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    if let Err(error) = verify_translated(&program) {
+        panic!("the input must verify: {error}\n{text}");
+    }
+    evidence(&mut program);
+    if let Err(error) = verify_evidence(&program) {
+        panic!("the output must verify: {error}\n{}", pretty(&program));
+    }
+    program
+}
+
+/// `par` も `root_get` もないプログラムには fork の関数を作らない。fork の関数を持つエフェクトがあっても、EP の
+/// 出力は1バイトも変わらない。
+#[test]
+fn a_program_without_par_or_root_get_gets_no_forks() {
+    let text = format!(
+        "{FORK_EFFECTS}fn f(a.0: tobj, b.1: tobj) -> obj {{\n  let t.2: obj = con (,) #0(a.0, b.1)\n  return t.2\n}}\n"
+    );
+    assert_eq!(evidence_text(&text), pretty(&parse(&text).unwrap()));
+    // ソースから通したプログラムも、`never` の操作と `try_panic` を使うだけでは fork の関数を持たない
+    let source = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | ctl fail _ -> 0\n  match try_panic (fn () -> r / 0) with\n    | Ok n -> println (show n)\n    | Err e -> println e";
+    let shown = core_text(source, Pass::Evidence);
+    assert!(
+        !shown.contains("fork$") && !shown.contains("reperform$"),
+        "{shown}"
+    );
+}
+
+/// `par` を含むプログラムには、fork の関数を持つエフェクトの操作ごとに `fork$` と `reperform$` を作る。`fork$` は
+/// 操作の引数を捕まえた `reperform$` の閉包を運ぶ。`Panic` は `panic` で起こし直す。
+#[test]
+fn a_program_with_par_gets_a_fork_and_a_reperform_per_operation() {
+    let text = format!(
+        "{FORK_EFFECTS}fn main(a.0: tobj, b.1: tobj) -> obj {{\n  let t.2: obj = par (,) #0(a.0, b.1)\n  return t.2\n}}\n"
+    );
+    let program = evidence_program(&text);
+    assert_eq!(
+        names_with_prefix(&program, "fork$"),
+        [
+            "fork$Prelude.Panic.panicked",
+            "fork$One.one",
+            "fork$Two.two"
+        ]
+    );
+    assert_eq!(
+        names_with_prefix(&program, "reperform$"),
+        [
+            "reperform$Prelude.Panic.panicked",
+            "reperform$One.one",
+            "reperform$Two.two"
+        ]
+    );
+    let shown = pretty(&program);
+    insta::assert_snapshot!(function(&shown, "fork$Prelude.Panic.panicked"), @"
+    clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
+      let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
+      let u.3: unit = prim child_abort(ev.0, c.2)
+      let d.4: obj poly = prim dummy()
+      return d.4
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "reperform$Prelude.Panic.panicked"), @"
+    uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj poly {
+      let r.2: tobj poly = extern Prelude.panic(a.0)
+      return r.2
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "fork$One.one"), @"
+    clause One.one fn fork$One.one(ev.0: obj, a.1: tobj poly) -> obj poly {
+      let c.2: tobj poly = closure reperform$One.one(a.1)
+      let u.3: unit = prim child_abort(ev.0, c.2)
+      let d.4: obj poly = prim dummy()
+      return d.4
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "reperform$One.one"), @"
+    uniform from 1 fn reperform$One.one(a.0: tobj poly, u.1: unit) -> tobj poly {
+      let ev.2: obj = prim ev_lookup[One]()
+      let c.3: tobj = prim ev_clause[One.one](ev.2)
+      let r.4: tobj poly = clause One.one c.3(ev.2, a.0)
+      return r.4
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "fork$Two.two"), @"
+    clause Two.two fn fork$Two.two(ev.0: obj, a.1: int, a.2: obj lin) -> obj poly {
+      let c.3: tobj lin = closure reperform$Two.two(a.1, a.2)
+      let u.4: unit = prim child_abort(ev.0, c.3)
+      let d.5: obj poly = prim dummy()
+      return d.5
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "reperform$Two.two"), @"
+    uniform from 2 fn reperform$Two.two(a.0: int, a.1: obj lin, u.2: unit) -> tobj poly {
+      let ev.3: obj = prim ev_lookup[Two]()
+      let c.4: tobj = prim ev_clause[Two.two](ev.3)
+      let r.5: tobj poly = clause Two.two c.4(ev.3, a.0, a.1)
+      return r.5
+    }
+    ");
+}
+
+/// REPL の根は前の入力の `par` を走らせる閉包を持ちうるので、`root_get` を含むプログラムも fork の関数を持つ。
+#[test]
+fn a_program_with_root_get_gets_the_forks() {
+    let text = format!(
+        "{FORK_EFFECTS}fn main() -> tobj {{\n  let r.0: tobj = prim root_get[1]()\n  return r.0\n}}\n"
+    );
+    let program = evidence_program(&text);
+    assert_eq!(
+        names_with_prefix(&program, "fork$"),
+        [
+            "fork$Prelude.Panic.panicked",
+            "fork$One.one",
+            "fork$Two.two"
+        ]
+    );
+}
+
+/// fork の関数は LIR のパスをすべて通る。`ev` は節の入口の引数として入口が持ち、`child_abort` は借りるだけなので、
+/// Perceus は `ev` の `decref` を `child_abort` の後に置く。そこへは実行が届かず、`ev` は `child_abort` の巻き戻しの
+/// 地点が持つ値として、巻き戻しが手放す (docs/spec/core-ir.md の「`par` の子の中断」)。
+#[test]
+fn a_fork_entry_owns_its_evidence_and_child_abort_borrows_it() {
+    let text = format!(
+        "{FORK_EFFECTS}fn main(a.0: tobj, b.1: tobj) -> obj {{\n  let t.2: obj = par (,) #0(a.0, b.1)\n  return t.2\n}}\n"
+    );
+    let mut lir = eml_core_ir::to_lir(evidence_program(&text));
+    eml_lir::passes_until(&mut lir, eml_lir::Pass::Reuse);
+    eml_lir::verify(&lir).unwrap_or_else(|error| panic!("{error}"));
+    let shown = eml_lir::pretty(&lir);
+    insta::assert_snapshot!(function(&shown, "fork$Two.two"), @"
+    clause Two.two fn fork$Two.two(ev.0: obj, a.1: int, a.2: obj lin) -> obj poly {
+      let c.3: tobj lin = closure reperform$Two.two(a.1, a.2)
+      let u.4: unit = prim child_abort(ev.0, c.3)
+      decref ev.0
+      let d.5: obj poly = prim dummy()
+      return d.5
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "reperform$Two.two"), @"
+    uniform from 2 fn reperform$Two.two(a.0: int, a.1: obj lin, u.2: unit) -> tobj poly {
+      let ev.3: obj = prim ev_lookup[Two]()
+      let c.4: tobj = prim ev_clause[Two.two](ev.3)
+      tail clause Two.two c.4(ev.3, a.0, a.1)
+    }
+    ");
+    let index = lir
+        .functions
+        .iter()
+        .position(|function| function.name == "fork$Two.two")
+        .expect("the fork entry is in the program");
+    let points = eml_lir::unwind::points_all(&lir)
+        .swap_remove(index)
+        .unwrap_or_else(|error| panic!("{error}"));
+    // 地点は `child_abort` (b0 の文 1) の1つだけで、持つのは `ev.0` だけである。閉包の `c.3` は `child_abort` が消費する
+    let owned: Vec<_> = points
+        .iter()
+        .map(|point| (point.block.0, point.stmt, point.owned.clone()))
+        .collect();
+    assert_eq!(owned, [(0, 1, vec![(eml_lir::VarId(0), 1)])]);
+}
+
+/// 引数が1つで一様でない操作 (`Unit -> a` と `Int -> a`)。引数は `reperform$` の閉包の捕獲なので、`fork$` も
+/// `reperform$` も型どおりの Repr のまま扱い、箱に入れない。一様なのは `()` を受ける最後の引数と結果だけである
+/// (docs/spec/core-ir.md の「`par` の子の中断」)。
+#[test]
+fn a_non_uniform_argument_is_captured_without_a_box() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Stop { never stop(unit) -> never }
+effect Code { never code(int) -> never }
+fn main(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = par (,) #0(a.0, b.1)
+  return t.2
+}
+";
+    let mut lir = eml_core_ir::to_lir(evidence_program(text));
+    eml_lir::passes_until(&mut lir, eml_lir::Pass::Reuse);
+    eml_lir::verify(&lir).unwrap_or_else(|error| panic!("{error}"));
+    let shown = eml_lir::pretty(&lir);
+    insta::assert_snapshot!(function(&shown, "fork$Stop.stop"), @"
+    clause Stop.stop fn fork$Stop.stop(ev.0: obj, a.1: unit) -> obj poly {
+      let c.2: tobj = closure reperform$Stop.stop(a.1)
+      let u.3: unit = prim child_abort(ev.0, c.2)
+      decref ev.0
+      let d.4: obj poly = prim dummy()
+      return d.4
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "reperform$Stop.stop"), @"
+    uniform from 1 fn reperform$Stop.stop(a.0: unit, u.1: unit) -> tobj poly {
+      let ev.2: obj = prim ev_lookup[Stop]()
+      let c.3: tobj = prim ev_clause[Stop.stop](ev.2)
+      tail clause Stop.stop c.3(ev.2, a.0)
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "fork$Code.code"), @"
+    clause Code.code fn fork$Code.code(ev.0: obj, a.1: int) -> obj poly {
+      let c.2: tobj = closure reperform$Code.code(a.1)
+      let u.3: unit = prim child_abort(ev.0, c.2)
+      decref ev.0
+      let d.4: obj poly = prim dummy()
+      return d.4
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "reperform$Code.code"), @"
+    uniform from 1 fn reperform$Code.code(a.0: int, u.1: unit) -> tobj poly {
+      let ev.2: obj = prim ev_lookup[Code]()
+      let c.3: tobj = prim ev_clause[Code.code](ev.2)
+      tail clause Code.code c.3(ev.2, a.0)
+    }
+    ");
 }

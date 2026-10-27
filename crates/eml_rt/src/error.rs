@@ -1,6 +1,10 @@
 //! 検査モードが報告する誤り (docs/spec/object-model.md の「報告する誤り」)。速いモードが返すのは、`foreign` の
 //! `WrongKind`、空の token を受けた `reuse_in_place` の `StaleToken`、根の読み書きの `RootMisuse`、回復の
 //! `Unrecoverable` だけである (docs/spec/object-model.md の「核の操作」)。
+//!
+//! 腕の欄は `u32` までにして、`HeapError` を 12 バイトに保つ。語を返す操作の `Result<Word, HeapError>` を
+//! 16 バイトに収め、レジスタで返せるようにするためである。`u64` の欄を1つ足すだけで `HeapError` は 16 バイトに
+//! なるので、数は `u32` に切り詰めて持つ (`TransferLeak` の `live`)。
 
 use std::fmt;
 use vstd::prelude::*;
@@ -35,6 +39,8 @@ pub enum HeapError {
     NoHandler,
     RootMisuse,
     Unrecoverable,
+    TransferLeak { worker: u32, live: u32 },
+    OwnedMiscount { worker: u32 },
 }
 
 } // verus!
@@ -87,6 +93,12 @@ impl fmt::Display for HeapError {
             HeapError::Unrecoverable => f.write_str(
                 "a session root reaches an object that recovery cannot copy",
             ),
+            HeapError::TransferLeak { worker, live } => {
+                write!(f, "{live} objects of worker {worker} are left after its join")
+            }
+            HeapError::OwnedMiscount { worker } => {
+                write!(f, "the count of live objects of worker {worker} is wrong")
+            }
         }
     }
 }

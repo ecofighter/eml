@@ -144,6 +144,17 @@ fn call(call: Call) -> eml_lir::Call {
             callee,
             args,
         },
+        Call::Par {
+            left,
+            right,
+            pair,
+            at,
+        } => eml_lir::Call::Par {
+            left,
+            right,
+            pair,
+            at,
+        },
         Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => {
             panic!("internal error: an effect instruction reaches the lowering to LIR")
         }

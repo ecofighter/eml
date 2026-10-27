@@ -1158,3 +1158,39 @@ fn f(n.0: int, s.1: obj lin) -> (,){int, obj lin} {
         Ok(())
     );
 }
+
+/// `par` はどちらの段でも受け、`mask` は変換の段でだけ持てる。組の構築子の検査は LIR と同じ部品である
+/// (docs/spec/core-ir.md の「verifier」)。
+#[test]
+fn a_par_is_checked_at_both_stages() {
+    let text = |mask: &str, pair: &str| {
+        format!(
+            "layout (,) {{ (,)(tobj, tobj) }}\nlayout Box {{ Box(tobj) }}\n{ASK}fn f(a.0: tobj, b.1: tobj) -> obj {{\n  let t.2: obj = {mask}par {pair}(a.0, b.1)\n  return t.2\n}}\n"
+        )
+    };
+    assert_eq!(check_translated(&text("mask [Ask] ", "(,) #0")), Ok(()));
+    assert_eq!(check_evidence(&text("", "(,) #0")), Ok(()));
+    assert_eq!(
+        check_evidence(&text("mask [Ask] ", "(,) #0")),
+        Err("a mask remains after the evidence pass in `f`".to_string())
+    );
+    let message = "the pair of a par is `Box` #0, which does not have two tobj fields in `f`";
+    assert_eq!(
+        check_translated(&text("", "Box #0")),
+        Err(message.to_string())
+    );
+    assert_eq!(
+        check_evidence(&text("", "Box #0")),
+        Err(message.to_string())
+    );
+}
+
+/// `Std.Par.par` の行は型検査に結ぶだけで、translate は呼び出しを `par` にする。extern の命令としてはどの段でも断る
+/// (docs/spec/core-ir.md の「verifier」)。
+#[test]
+fn par_is_not_an_extern_instruction() {
+    let text = "fn f(a.0: tobj, b.1: tobj) -> obj {\n  let t.2: obj = extern Std.Par.par(a.0, b.1)\n  return t.2\n}\n";
+    let message = "`Std.Par.par` is not an extern instruction in `f`";
+    assert_eq!(check_translated(text), Err(message.to_string()));
+    assert_eq!(check_evidence(text), Err(message.to_string()));
+}

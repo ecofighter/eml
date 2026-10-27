@@ -12,6 +12,7 @@ mod data;
 mod evidence;
 mod machine;
 mod miri;
+mod par;
 mod reuse;
 mod roots;
 mod run;

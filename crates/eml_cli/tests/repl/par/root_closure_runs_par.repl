@@ -1,0 +1,11 @@
+# 前の入力の束縛が持つ閉包は `par` を走らせる。後の入力で定義した never だけのエフェクトの handler の中でその閉包を
+# 呼ぶプログラムは `Call::Par` を含まないが、`root_get` を含むので子の evidence の関数を持つ
+# (docs/spec/core-ir.md の「`par` の子の中断」)
+> import Std.Par
+> let f : (Unit -> <Panic> Int) -> <Panic> (Int, Int) = fn h -> Par.par h h
+> effect Stop where
+.   never stop : Unit -> a
+.
+> handle f (fn () -> 1) with
+.   | ctl stop () -> (0, 0)
+.

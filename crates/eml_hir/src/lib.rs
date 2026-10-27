@@ -15,7 +15,7 @@ pub use eval::{EvalStep, call_steps, known_arity};
 pub use hir::*;
 pub use item_tree::*;
 pub use load::*;
-pub use lower::{lower, visit_type_vars};
+pub use lower::{lower, visit_row_type_vars, visit_type_vars};
 pub use names::DisplayNames;
 pub use pretty::pretty;
 pub use program::*;
@@ -47,6 +47,7 @@ pub const STD: &[(&str, &str)] = &[
     ("MutArray.em", include_str!("../../../std/MutArray.em")),
     ("Map.em", include_str!("../../../std/Map.em")),
     ("Set.em", include_str!("../../../std/Set.em")),
+    ("Par.em", include_str!("../../../std/Par.em")),
 ];
 
 /// Prelude のソース。標準ライブラリの Prelude を差し替えるテストが、本文に宣言を足すのに使う。

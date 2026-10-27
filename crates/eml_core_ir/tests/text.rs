@@ -301,19 +301,28 @@ fn a_mask_on_handle_perform_or_a_non_call_is_an_error() {
         "effect Ask { ask(tobj) -> tobj }\nfn f(b.0: tobj, a.1: tobj, r.2: tobj) -> int {\n  let t.3: int = mask [Ask] handle Ask((), b.0) { ask: a.1 } return r.2\n  return t.3\n}\n",
     );
     assert_eq!(error.line, 3);
-    assert_eq!(error.message, "a mask is only on call, apply and resume");
+    assert_eq!(
+        error.message,
+        "a mask is only on call, apply, resume and par"
+    );
 
     let error = parse_error(
         "effect Ask { ask(tobj) -> tobj }\nfn f() -> int {\n  let t.0: int = mask [Ask] perform Ask.ask(1)\n  return t.0\n}\n",
     );
     assert_eq!(error.line, 3);
-    assert_eq!(error.message, "a mask is only on call, apply and resume");
+    assert_eq!(
+        error.message,
+        "a mask is only on call, apply, resume and par"
+    );
 
     let error = parse_error(
         "effect Ask { ask(tobj) -> tobj }\nfn f() -> obj {\n  let s.0: obj = mask [Ask] const \"a\"\n  return s.0\n}\n",
     );
     assert_eq!(error.line, 3);
-    assert_eq!(error.message, "a mask is only on call, apply and resume");
+    assert_eq!(
+        error.message,
+        "a mask is only on call, apply, resume and par"
+    );
 }
 
 /// `pretty` は空の `mask` を書かないので、読み直した表示が元と変わる形は読まない。
@@ -442,7 +451,7 @@ fn a_clause_call_takes_no_mask() {
             "effect State { get(unit) -> tobj }\nfn f(c.0: tobj, e.1: obj) -> tobj {\n  let t.2: tobj = mask [State] clause State.get c.0(e.1, ())\n  return t.2\n}\n"
         )
         .to_string(),
-        "line 3: a mask is only on call, apply and resume"
+        "line 3: a mask is only on call, apply, resume and par"
     );
 }
 
@@ -638,4 +647,45 @@ internal yields uniform from 1 fn f$k0(a.0: int, x.1: tobj) -> tobj {
     );
     let splits: Vec<Option<u32>> = program.functions.iter().map(|f| f.split).collect();
     assert_eq!(splits, [None, Some(0), Some(1), Some(0), Some(1), Some(1)]);
+}
+
+#[test]
+fn a_masked_par_round_trips() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Main.State { get(unit) -> tobj }
+fn f(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = mask [Main.State] par (,) #0(a.0, b.1) @\"main.em\":4:7
+  return t.2
+}
+";
+    let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(eml_core_ir::pretty_with_positions(&program), text);
+    round_trip(&text.replace(" @\"main.em\":4:7", ""));
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(2),
+            rhs: Rhs::Call {
+                call: Call::Par {
+                    left: v(0),
+                    right: v(1),
+                    pair: eml_lir::Ctor {
+                        layout: eml_lir::LayoutId(0),
+                        tag: 0,
+                    },
+                    at: Some(eml_lir::Loc {
+                        file: 0,
+                        line: 4,
+                        column: 7,
+                    }),
+                },
+                mask: vec![MaskItem {
+                    effect: 0,
+                    keep: 0,
+                    skip: 1,
+                }],
+            },
+        }
+    );
 }

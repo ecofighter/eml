@@ -4,8 +4,8 @@
 
 use eml_extern::Extern;
 use eml_lir::{
-    Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Mark, MaskItem, Prim,
-    Repr, Structs, VarId, VarInfo,
+    Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark,
+    MaskItem, Prim, Repr, Structs, VarId, VarInfo,
 };
 
 mod builder;
@@ -53,6 +53,23 @@ pub struct Program {
 impl Program {
     pub fn function(&self, idx: FnIdx) -> &CoreFn {
         &self.functions[idx.0 as usize]
+    }
+
+    /// `size` 個の要素のタプルの配置。translate がタプルに使う配置と同じ形 (フィールドはどれも `tobj`) で、配置の表に
+    /// なければ足す。
+    pub(crate) fn tuple_layout(&mut self, size: usize) -> LayoutId {
+        let name = format!("({})", ",".repeat(size - 1));
+        if let Some(index) = self.layouts.iter().position(|layout| layout.name == name) {
+            return LayoutId(index as u32);
+        }
+        self.layouts.push(Layout {
+            name: name.clone(),
+            constructors: vec![LayoutCtor {
+                name,
+                fields: vec![Repr::TObj; size],
+            }],
+        });
+        LayoutId(self.layouts.len() as u32 - 1)
     }
 }
 
@@ -404,6 +421,14 @@ pub enum Call {
         callee: Atom,
         args: Vec<Atom>,
     },
+    /// `par` の fork と join。`left` と `right` の関数値に `()` を適用する子を作り、両方の値を `pair` の構築子で組にして
+    /// 返す。`mask` を持てる呼び出しで、末尾の位置の呼び出しにはならない (docs/spec/core-ir.md の「Core IR の命令」)。
+    Par {
+        left: Atom,
+        right: Atom,
+        pair: Ctor,
+        at: Option<Loc>,
+    },
 }
 
 impl Call {
@@ -457,6 +482,15 @@ impl Call {
                 f(*arg);
                 f(*state);
             }
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                f(*left);
+                f(*right);
+            }
         }
     }
 
@@ -500,6 +534,15 @@ impl Call {
                 f(k);
                 f(arg);
                 f(state);
+            }
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                f(left);
+                f(right);
             }
         }
     }

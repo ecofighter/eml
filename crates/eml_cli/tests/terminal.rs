@@ -64,6 +64,19 @@ fn quit_ends_the_session() {
     }
 }
 
+/// `repl` は `--sched seeded:N` を受け付け、`par` は同じ出力を返す。`par` の出力はどのスケジュールでも同じなので、
+/// 標準出力からは seed が効いたかを見分けられない。パイプからの読みなので値だけが出る。
+#[test]
+fn repl_runs_par_under_a_seeded_schedule() {
+    let output = repl_with(
+        &["--sched", "seeded:3"],
+        b"import Std.Par (par)\npar (fn () -> 1 + 1) (fn () -> 2 * 3)\n",
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "(2, 6)\n");
+    assert_eq!(stderr(&output), "");
+}
+
 #[test]
 fn repl_ends_at_eof_after_the_last_line() {
     let output = repl("1 + 1");

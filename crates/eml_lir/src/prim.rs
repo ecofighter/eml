@@ -25,6 +25,7 @@ pub enum Prim {
         op: u32,
     },
     EvEvv,
+    EvTakeEvv,
     EvTakeState,
     EvSetState,
     Yielding,
@@ -39,6 +40,8 @@ pub enum Prim {
     RootSet(u32),
     /// 不死の空の `MutArray`。`var` の配列の変数を取り出した後の状態である (docs/spec/lir.md の「基本操作」)。
     EmptyMutArray,
+    /// `par` の子を中断し、親で起こし直す閉包を渡す。戻らない (docs/spec/lir.md の「基本操作」)。
+    ChildAbort,
 }
 
 /// 基本操作の引数と結果の Repr。引数と結果は、直接の呼び出しと同じく互換の位置である。
@@ -97,6 +100,7 @@ kinds! {
     Prim::EvLookup(_) => "ev_lookup", Prim::EvLookup(0);
     Prim::EvClause { .. } => "ev_clause", Prim::EvClause { effect: 0, op: 0 };
     Prim::EvEvv => "ev_evv", Prim::EvEvv;
+    Prim::EvTakeEvv => "ev_take_evv", Prim::EvTakeEvv;
     Prim::EvTakeState => "ev_take_state", Prim::EvTakeState;
     Prim::EvSetState => "ev_set_state", Prim::EvSetState;
     Prim::Yielding => "yielding", Prim::Yielding;
@@ -110,6 +114,7 @@ kinds! {
     Prim::RootGet(_) => "root_get", Prim::RootGet(0);
     Prim::RootSet(_) => "root_set", Prim::RootSet(0);
     Prim::EmptyMutArray => "empty_mut_array", Prim::EmptyMutArray;
+    Prim::ChildAbort => "child_abort", Prim::ChildAbort;
 }
 
 impl Prim {
@@ -134,6 +139,7 @@ impl Prim {
             | Prim::EvvPush
             | Prim::EvRenew
             | Prim::EvEvv
+            | Prim::EvTakeEvv
             | Prim::EvTakeState
             | Prim::EvSetState
             | Prim::Yielding
@@ -144,7 +150,8 @@ impl Prim {
             | Prim::YieldContSet
             | Prim::YieldFinish
             | Prim::Dummy
-            | Prim::EmptyMutArray => Immediates::None,
+            | Prim::EmptyMutArray
+            | Prim::ChildAbort => Immediates::None,
         }
     }
 
@@ -170,6 +177,7 @@ impl Prim {
             Prim::EvLookup(_) => (&[], NONE, Obj, NO_MARKS, Unr),
             Prim::EvClause { .. } => (&[Obj], &[true], TObj, &[Unr], Unr),
             Prim::EvEvv => (&[Obj], &[true], TObj, &[Unr], Unr),
+            Prim::EvTakeEvv => (&[Obj], &[true], TObj, &[Unr], Unr),
             Prim::EvTakeState => (&[Obj], &[true], TObj, &[Unr], Poly),
             Prim::EvSetState => (&[Obj, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
             Prim::Yielding => (&[], NONE, Int, NO_MARKS, Unr),
@@ -191,6 +199,8 @@ impl Prim {
             Prim::RootSet(_) => (&[TObj], &[false], Unit, &[Unr], Unr),
             // 結果は `MutArray` の値なので `lin` である
             Prim::EmptyMutArray => (&[], NONE, Obj, NO_MARKS, Lin),
+            // evidence は節の入口が持ち続けるので借りる。操作の引数を捕まえた起こし直しの閉包は親に渡る
+            Prim::ChildAbort => (&[Obj, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
         };
         PrimRow {
             params,
@@ -246,7 +256,7 @@ mod tests {
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
         use Mark::{Lin, Poly, Unr};
-        let table: [(&str, &[Mark], Mark); 23] = [
+        let table: [(&str, &[Mark], Mark); 25] = [
             ("evv_get", &[], Unr),
             ("evv_set", &[Unr], Unr),
             ("evv_push", &[Unr, Unr], Unr),
@@ -257,6 +267,7 @@ mod tests {
             ("ev_lookup", &[], Unr),
             ("ev_clause", &[Unr], Unr),
             ("ev_evv", &[Unr], Unr),
+            ("ev_take_evv", &[Unr], Unr),
             ("ev_take_state", &[Unr], Poly),
             ("ev_set_state", &[Unr, Poly], Unr),
             ("yielding", &[], Unr),
@@ -270,6 +281,7 @@ mod tests {
             ("root_get", &[], Unr),
             ("root_set", &[Unr], Unr),
             ("empty_mut_array", &[], Lin),
+            ("child_abort", &[Unr, Poly], Unr),
         ];
         assert_eq!(table.len(), KINDS.len());
         for (name, params, ret) in table {

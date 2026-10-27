@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/never_ops_with_arguments.em
+---
+--- stdout ---
+int 1
+unit ()
+two 2 b
+three 3 0.5 c
+array 2.5 3
+array 1.25 4
+--- stderr ---

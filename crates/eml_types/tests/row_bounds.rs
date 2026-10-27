@@ -300,3 +300,78 @@ fn a_bound_drops_the_carry_inside_its_group() {
         ]
     );
 }
+
+/// extern の宣言に書いた上限も、本体のある関数の上限と同じく呼び出しで確かめる。`exit` は `IO` を起こす。
+#[test]
+fn an_extern_signature_carries_its_never_bound() {
+    let text = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = Par.par (fn () -> exit 1) (fn () -> 3)\n  println (show (a + b))";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2020 5:16 the row passed to `par` may perform `IO`, but `par` allows only `never` operations"
+        ]
+    );
+}
+
+/// 上限はエフェクトの多重度と比べるので、`once` の操作を持つエフェクトは、子が `never` の操作だけを起こしても上限を
+/// 超える (docs/spec/types.md の「row 変数の多重度の上限」)。
+#[test]
+fn an_effect_with_a_once_operation_exceeds_a_never_bound_even_through_its_never_operation() {
+    let text = "import Std.Par\n\neffect Mixed where\n  never stop : Unit -> a\n  get : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (c, d) = handle Par.par (fn () -> stop ()) (fn () -> 3) with\n    | ctl stop () -> (0, 0)\n    | fn get () -> 1\n  println (show (c + d))";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2020 9:23 the row passed to `par` may perform `Mixed`, but `par` allows only `never` operations"
+        ]
+    );
+}
+
+/// 値として渡した `par` の型も上限を持つので、受け取った関数を通した呼び出しで上限を超える。
+#[test]
+fn a_value_use_of_par_keeps_the_bound() {
+    let text = format!(
+        "import Std.Par\n\n{}",
+        with_head(
+            "apply2 : ((Unit -> <e> Int) -> (Unit -> <e> Int) -> <e> (Int, Int)) -> (Unit -> <e> Int) -> <e> (Int, Int)\napply2 p f = p f f\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (c, d) = apply2 Par.par noisy\n  println (show (c + d))",
+        )
+    );
+    assert_eq!(
+        check_short(&text),
+        [
+            "E2020 16:23 the row passed to `par` may perform `IO`, but `par` allows only `never` operations"
+        ]
+    );
+}
+
+/// `var` の読み書きは `var` のエフェクトの操作なので、`var` を使う子も上限を超える
+/// (docs/spec/types.md の「`var` の変数」)。
+#[test]
+fn a_par_child_that_uses_a_var_exceeds_the_bound() {
+    let text = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  var x = 1\n  let (a, b) = Par.par (fn () -> x) (fn () -> 3)\n  println (show (a + b))";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2020 6:16 the row passed to `par` may perform `var x`, but `par` allows only `never` operations"
+        ]
+    );
+}
+
+/// 操作が `once` だけのエフェクトも上限を超える。
+#[test]
+fn a_par_child_that_performs_a_once_operation_exceeds_the_bound() {
+    let text = "import Std.Par\n\neffect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = handle Par.par (fn () -> ask ()) (fn () -> 3) with\n    | fn ask () -> 1\n  println (show (a + b))";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2020 8:23 the row passed to `par` may perform `Ask`, but `par` allows only `never` operations"
+        ]
+    );
+}
+
+/// コールバックの最後の結果は extern が受け取る値で、`par` は組に1回だけ入れるか、落とす。そのため、結果に
+/// `Lin` の値を返す子も受け付ける (docs/spec/declarations.md の「`extern`」)。
+#[test]
+fn a_par_child_may_return_a_lin_value() {
+    let text = "import Std.Par\nimport Std.MutArray\nimport Std.Array\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (m, n) = Par.par (fn () -> MutArray.make 3 4) (fn () -> 3)\n  let (x, m) = MutArray.read m 0\n  println (show (x + n + Array.length (MutArray.freeze m)))";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}

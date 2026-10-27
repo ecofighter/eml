@@ -39,8 +39,9 @@ pub(super) fn compose(compose: FnIdx) -> CoreFn {
     b.finish("compose$".to_string(), false, true, Repr::TObj, Mark::Poly)
 }
 
-/// `prompt$(ev, ret, x)`。`evv` を `ev` の外側に戻し、`yield_status(ev)` で4つに分ける
-/// (docs/spec/core-ir.md の「handle と `prompt$`」)。状態 1、2、3 の道では `x` はダミーで使われないので、道の先頭で
+/// `prompt$(ev, ret, x)`。`ev` の外側の `evv` を `ev_take_evv` で取り出して `evv` に戻し、`yield_status(ev)` で4つに
+/// 分ける (docs/spec/core-ir.md の「handle と `prompt$`」)。外側を `ev` に残さないのは、値から届く evidence を退いた
+/// ものだけにするためである (docs/spec/object-model.md の「evidence の3つの物体」)。状態 1、2、3 の道では `x` はダミーで使われないので、道の先頭で
 /// drop する。`x` は `poly` なので、Perceus の `decref` には任せない。ダミーの drop は何もしない。中断の道では `ret` も
 /// 使われないので drop する。捕まえたハンドルを閉じる本当の後始末はこれだけである
 /// (docs/spec/core-ir.md の「EP の明示の `drop`」)。
@@ -49,7 +50,13 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
     let ev = b.param(named("ev", Repr::Obj, Mark::Unr));
     let ret = b.param(named("ret", Repr::TObj, Mark::Poly));
     let x = b.param(named("x", Repr::TObj, Mark::Poly));
-    let w = prim(&mut b, "w", Repr::TObj, Prim::EvEvv, vec![Atom::Var(ev)]);
+    let w = prim(
+        &mut b,
+        "w",
+        Repr::TObj,
+        Prim::EvTakeEvv,
+        vec![Atom::Var(ev)],
+    );
     prim(&mut b, "u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(w)]);
     let status = prim(
         &mut b,

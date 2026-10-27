@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use eml_cli::lines::{Command, Lines, Step};
 use eml_cli::{
-    Control, Evaluated, FsProvider, HostRef, Outcome, Repl, RunConfig, repl_limits, stdio_host,
+    Control, Evaluated, FsProvider, HostRef, Outcome, Repl, RunConfig, Sched, repl_limits,
+    stdio_host,
 };
 use eml_diagnostics::render;
 use rustyline::error::ReadlineError;
@@ -25,11 +26,12 @@ Commands:
   :{             start an input of several lines, blank lines included; a line `:}` ends it
 A command may be shortened to any prefix of its name (`:q`, `:l`, `:r`, `:t`).";
 
-pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
+pub fn run(debug_heap: bool, sched: Sched, file: Option<PathBuf>) -> ExitCode {
     let control = Arc::new(Control::new(repl_limits()));
     crate::interrupt::install(Arc::clone(&control), crate::interrupt::Mode::Repl);
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
+        .with_sched(sched)
         .with_control(Arc::clone(&control));
     let file = match file {
         None => None,
