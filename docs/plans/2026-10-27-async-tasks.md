@@ -911,7 +911,7 @@ main () =
 - 目的: D-14 の欄を `RunStats` に足す。スナップショットの書き直しはこの1回だけにする
 - 対象: `crates/eml_vm/src/lib.rs` (`RunStats`、`run_entry`)、`RunStats` を固定するスナップショット
 - 作業: `tasks`、`parks`、`dropped_failures`、`shared_objects` を足す (`Registry.stats` と `Stats::shared` から写す)
-- テスト: (i) 失敗する子が2つ → `RunStats.dropped_failures == 1`。(m) `tasks.rs` の (c) を2つの seed で流し、4つの欄が seed の間で等しく、検査モードで `tasks == 3`、`parks == 2`、`shared_objects > 0` であること
+- テスト: (i) 失敗する子が2つ → `RunStats.dropped_failures == 1`。(m) 本体が2つの子を `start` で始めて両方を `await` するプログラム (T-11 の (c) は `spawn` だけで待たないので使わない。`tasks == 3`、`parks == 2` になる形にする) を2つの seed で流し、4つの欄が seed の間で等しく、検査モードで `tasks == 3`、`parks == 2`、`shared_objects > 0` であること
 - 文書: docs/spec/vm.md の「`RunStats`」(17欄と定義。`dropped_failures` の数え方)、docs/implementation/testing.md の「seed で流す」の理由の一覧
 - 実装者に任せること: なし
 - 条件: いつも。欄がスケジュールによって変わったら Q-3 の既定に従う
