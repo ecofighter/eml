@@ -245,6 +245,7 @@ table! {
         // 登録表の添字の即値と、タスクのハンドルを中身に持つ `Foreign` (docs/spec/stdlib.md の「`Std.Async`」)
         Cell => type_row("Std.Async.Cell", Unr, Repr::Int),
         Task => generic_type_row("Std.Async.Task", Lin),
+        Scope => type_row("Std.Async.Scope", Unr, Repr::Int),
     }
 }
 
@@ -1135,6 +1136,38 @@ table! {
             &[true],
             kinded("Std.Async.cancel_raw", &[Obj], &[Lin], Unit, Unr, Purity::Effectful),
         ),
+        AsyncStartInRaw => holding(
+            &[false, true],
+            kinded(
+                "Std.Async.start_in_raw",
+                &[Int, TObj],
+                &[Unr, Poly],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+        ),
+        AsyncOpenScope => row("Std.Async.open_scope", &[Unit], Int, Purity::Effectful),
+        AsyncCloseScope => row("Std.Async.close_scope", &[Int], Int, Purity::Effectful),
+        AsyncLeaveScope => row("Std.Async.leave_scope", &[Int], Unit, Purity::Effectful),
+        AsyncCancelScopeRaw => row(
+            "Std.Async.cancel_scope_raw",
+            &[Int],
+            Unit,
+            Purity::Effectful,
+        ),
+        AsyncFailScopeIo => row(
+            "Std.Async.fail_scope_io",
+            &[Int, Enum, Obj],
+            Unit,
+            Purity::Effectful,
+        ),
+        AsyncFailScopePanic => row(
+            "Std.Async.fail_scope_panic",
+            &[Int, Obj],
+            Unit,
+            Purity::Effectful,
+        ),
         AsyncShieldEnter => row("Std.Async.shield_enter", &[Unit], Unit, Purity::Effectful),
         AsyncShieldLeave => row("Std.Async.shield_leave", &[Unit], Unit, Purity::Effectful),
     }
@@ -1160,6 +1193,13 @@ impl Extern {
                 | Extern::AsyncCancelRaw
                 | Extern::AsyncShieldEnter
                 | Extern::AsyncShieldLeave
+                | Extern::AsyncStartInRaw
+                | Extern::AsyncOpenScope
+                | Extern::AsyncCloseScope
+                | Extern::AsyncLeaveScope
+                | Extern::AsyncCancelScopeRaw
+                | Extern::AsyncFailScopeIo
+                | Extern::AsyncFailScopePanic
         )
     }
 }

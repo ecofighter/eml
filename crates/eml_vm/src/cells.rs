@@ -7,9 +7,12 @@
 //!
 //! 不変条件: タスクのセルは `Finished` の後に `scope` を読まない。スコープの `members` と `nested` の項は、いつも
 //! 生きているセルを指す。`waiters` の項は古くてもよく、`wake` が `wait` で確かめる。`k.is_some()` と
-//! `wait == Some(Cell(_))` は同値である (`Ready` の継続は列に積んだ仕事が持つ)。入れ子の `run` の根の `opener` は
-//! 呼んだタスクで、根は放されるまで呼んだタスクの `run` が名指す。スコープのセルを放すのは、閉じた後の
-//! `release_scope` (`Take::Run` は根の待ちが `closed` で起きた後に呼ぶ) と、run の終わりの `sweep_all` だけである。
+//! `wait == Some(Cell(_))` は同値である (`Ready` の継続は列に積んだ仕事が持つ)。タスクの今のスコープ `current` から
+//! 親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
+//! `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed` の
+//! スコープは `closing` で、`members` が空である。スコープのセルを放すのは、閉じた後の `release_scope`
+//! (`Take::Run` は根の待ちが `closed` で起きた後に、`leave_scope` は今のスコープを親に戻した後に呼ぶ) と、run の終わりの
+//! `sweep_all` だけである。
 //! タスクのセルを放すのは、ハンドルを持つ側の `take`、自分のハンドルを落とした知らせの処理、`sweep_all` の3つだけで、
 //! 待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。
 //!
@@ -151,6 +154,7 @@ enum Wait {
 struct TaskCell {
     phase: Phase,
     outcome: Option<Outcome>,
+    /// 加わったスコープ。作るときに決まり、`members` の一覧と失敗の記録の先になる。
     scope: CellRef,
     /// タスクの論理的な worker ID。速いモードでは 0 である。
     worker: u32,
@@ -161,6 +165,8 @@ struct TaskCell {
     waiters: Vec<Waiter>,
     /// 待っている間の継続。セルが参照を1つ持つ。
     k: Option<Word>,
+    /// タスクが `scope` で開いたいちばん内側のスコープ。開いていなければ `scope` である。
+    current: CellRef,
     wait: Option<Wait>,
     cancel: bool,
     shield: u32,
@@ -173,6 +179,8 @@ struct ScopeCell {
     parent: Option<CellRef>,
     opener: Option<CellRef>,
     flag: bool,
+    /// 閉じる印。根は開くときから立つ。
+    closing: bool,
     /// 親の入れ子の一覧の中の位置。
     nested_at: u32,
     /// まだ終わっていないタスク。
@@ -257,15 +265,18 @@ pub(crate) struct TaskStats {
 pub(crate) struct Registry {
     slots: Vec<(u32, Option<CellKind>)>,
     free: Vec<u32>,
+    /// 新しい添字の最初の generation。前の run の `Scope` の値がこの run のセルを指さないようにする。
+    floor: u32,
     pub(crate) inbox: Arc<Inbox>,
     pub(crate) stats: TaskStats,
 }
 
-impl Default for Registry {
-    fn default() -> Registry {
+impl Registry {
+    pub(crate) fn new(floor: u32) -> Registry {
         Registry {
             slots: Vec::new(),
             free: Vec::new(),
+            floor,
             inbox: Arc::new(Inbox::default()),
             stats: TaskStats::default(),
         }
@@ -277,7 +288,7 @@ impl Registry {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
-                self.slots.push((0, None));
+                self.slots.push((self.floor, None));
                 u32::try_from(self.slots.len() - 1).expect("the cells fit in u32 positions")
             }
         };
@@ -328,9 +339,17 @@ impl Registry {
         Ok(self.task_mut(cell)?.worker)
     }
 
-    /// タスクが新しいタスクを加えるスコープ。
-    pub(crate) fn scope_of(&mut self, cell: CellRef) -> Result<CellRef, CellFault> {
-        Ok(self.task_mut(cell)?.scope)
+    /// 次の run の `floor`。この run が出したどの generation よりも大きい。`slots` は run の間に縮まない。
+    pub(crate) fn next_floor(&self) -> u32 {
+        self.slots
+            .iter()
+            .map(|(generation, _)| generation.wrapping_add(1))
+            .fold(self.floor, u32::max)
+    }
+
+    /// タスクが新しいタスクを加える今のスコープ。
+    pub(crate) fn current_of(&mut self, cell: CellRef) -> Result<CellRef, CellFault> {
+        Ok(self.task_mut(cell)?.current)
     }
 
     /// スコープが閉じているか。
@@ -338,11 +357,12 @@ impl Registry {
         Ok(self.scope_mut(scope)?.closed)
     }
 
-    /// 根のスコープを開く。
-    pub(crate) fn open_root(
+    /// スコープのセルを開く。旗は親の旗を写し、開くタスクのビットが立っていれば立てる。
+    fn new_scope(
         &mut self,
         parent: Option<CellRef>,
-        caller: Option<CellRef>,
+        opener: Option<CellRef>,
+        closing: bool,
     ) -> Result<CellRef, CellFault> {
         let (mut flag, nested_at) = match parent {
             Some(p) => {
@@ -351,13 +371,14 @@ impl Registry {
             }
             None => (false, 0),
         };
-        if let Some(c) = caller {
-            flag |= self.task_mut(c)?.cancel;
+        if let Some(o) = opener {
+            flag |= self.task_mut(o)?.cancel;
         }
         let s = self.alloc(CellKind::Scope(ScopeCell {
             parent,
-            opener: caller,
+            opener,
             flag,
+            closing,
             nested_at,
             members: Vec::new(),
             nested: Vec::new(),
@@ -368,6 +389,16 @@ impl Registry {
         if let Some(p) = parent {
             self.scope_mut(p)?.nested.push(s);
         }
+        Ok(s)
+    }
+
+    /// 根のスコープを開く。入れ子の `run` の根は呼んだタスク `caller` を開いたタスクとして持つ。
+    pub(crate) fn open_root(
+        &mut self,
+        parent: Option<CellRef>,
+        caller: Option<CellRef>,
+    ) -> Result<CellRef, CellFault> {
+        let s = self.new_scope(parent, caller, true)?;
         if let Some(c) = caller {
             self.task_mut(c)?.run = Some(s);
         }
@@ -384,10 +415,10 @@ impl Registry {
         spawner: u32,
         g: Word,
         roots: &[Word],
-    ) -> Result<(Word, Runnable), CellFault> {
+    ) -> Result<Option<(Word, Runnable)>, CellFault> {
         let s = self.scope_mut(scope)?;
         if s.closed {
-            return Err(CellFault::Internal("a task starts in a closed scope"));
+            return Ok(None);
         }
         let (flag, member_at) = (s.flag, s.members.len() as u32);
         // 印付けは送り手の ID のまま行い、`Ctx` の持つ語には触れない。値から届く evidence は退いたものだけである
@@ -407,6 +438,7 @@ impl Registry {
             member_at,
             waiters: Vec::new(),
             k: None,
+            current: scope,
             wait: None,
             cancel: flag,
             shield: 0,
@@ -423,7 +455,7 @@ impl Registry {
             },
             true,
         );
-        Ok((handle, Runnable::Start { cell, closure: g }))
+        Ok(Some((handle, Runnable::Start { cell, closure: g })))
     }
 
     /// 始める仕事を実行系が動かし始めた。始めたタスクの ID を返す。実行系は、その ID から閉包を `transfer_back` する。
@@ -461,8 +493,8 @@ impl Registry {
         if task.cancel {
             return Ok(true);
         }
-        let scope = task.scope;
-        Ok(self.scope_mut(scope)?.flag)
+        let current = task.current;
+        Ok(self.scope_mut(current)?.flag)
     }
 
     /// 借りたハンドル `handle` のセルの番号を `Std.Async.Cell` の即値で返す。
@@ -589,7 +621,7 @@ impl Registry {
             self.mark(Mark::Scope(scope))?;
         }
         let s = self.scope_mut(scope)?;
-        if s.members.is_empty() {
+        if s.closing && s.members.is_empty() {
             s.closed = true;
             for waiter in std::mem::take(&mut s.waiters) {
                 self.wake(waiter, scope, out)?;
@@ -765,6 +797,81 @@ impl Registry {
         Ok(())
     }
 
+    /// 生きているスコープのセル。閉じていても返す。離れたスコープと前の run のスコープは `None` である。
+    pub(crate) fn scope_cell(&mut self, s: i64) -> Option<CellRef> {
+        let cell = CellRef::decode(s);
+        match self.live(cell) {
+            Some(CellKind::Scope(_)) => Some(cell),
+            _ => None,
+        }
+    }
+
+    /// `scope` の本体のスコープを開いて、`me` の今のスコープにする。
+    pub(crate) fn open_scope(&mut self, me: CellRef) -> Result<i64, CellFault> {
+        let parent = self.task_mut(me)?.current;
+        let s = self.new_scope(Some(parent), Some(me), false)?;
+        self.task_mut(me)?.current = s;
+        Ok(s.encode())
+    }
+
+    /// 閉じる印を付け、待つセルの番号を返す。タスクが残っていなければすぐ閉じる。
+    pub(crate) fn close_scope(&mut self, s: i64) -> Result<i64, CellFault> {
+        let cell = self
+            .scope_cell(s)
+            .ok_or(CellFault::Internal("a scope closes after it is left"))?;
+        let scope = self.scope_mut(cell)?;
+        scope.closing = true;
+        if scope.members.is_empty() {
+            scope.closed = true;
+        }
+        Ok(s)
+    }
+
+    /// 閉じたスコープを離れ、今のスコープを親に戻す。最初の失敗を返す。
+    pub(crate) fn leave_scope(&mut self, s: i64, me: CellRef) -> Result<Option<Raise>, CellFault> {
+        let cell = self
+            .scope_cell(s)
+            .ok_or(CellFault::Internal("a scope is left twice"))?;
+        let scope = self.scope_mut(cell)?;
+        if !scope.closed {
+            return Err(CellFault::Internal("a scope is left before it closes"));
+        }
+        let (parent, failure) = (scope.parent, scope.first_failure.take());
+        let task = self.task_mut(me)?;
+        if task.current != cell {
+            return Err(CellFault::Internal("a task leaves a scope it is not in"));
+        }
+        task.current = parent.ok_or(CellFault::Internal("a named scope has no parent"))?;
+        self.release_scope(cell)?;
+        Ok(failure.map(raise))
+    }
+
+    /// `cancel_scope`。閉じたスコープには何もしない。
+    pub(crate) fn cancel_scope(&mut self, s: i64) -> Result<(), CellFault> {
+        if let Some(cell) = self.scope_cell(s)
+            && !self.scope_mut(cell)?.closed
+        {
+            self.mark(Mark::Scope(cell))?;
+        }
+        Ok(())
+    }
+
+    /// `scope` の本体の失敗を記録し、子をすべて取り消す。種類 `Cancelled` は記録しない。
+    pub(crate) fn fail_scope(&mut self, s: i64, failure: Outcome) -> Result<(), CellFault> {
+        let cell = self
+            .scope_cell(s)
+            .ok_or(CellFault::Internal("a scope fails after it is left"))?;
+        if let Some(failure) = failure.failure() {
+            let scope = self.scope_mut(cell)?;
+            if scope.first_failure.is_none() {
+                scope.first_failure = Some(failure);
+            } else {
+                self.stats.dropped_failures += 1;
+            }
+        }
+        self.mark(Mark::Scope(cell))
+    }
+
     /// 取り消しの印を付ける。ビットと旗を立てて知らせを積むだけで、待ちは外さない。作業の列でたどる。
     fn mark(&mut self, first: Mark) -> Result<(), CellFault> {
         let mut work = vec![first];
@@ -776,7 +883,16 @@ impl Registry {
                         continue;
                     }
                     task.cancel = true;
-                    if let Some(r) = task.run {
+                    // 開いているスコープは今のスコープから親へ、このタスクが開いたスコープが続く間である
+                    let (mut s, run, home) = (task.current, task.run, task.scope);
+                    while s != home {
+                        work.push(Mark::Scope(s));
+                        s = self
+                            .scope_mut(s)?
+                            .parent
+                            .ok_or(CellFault::Internal("a named scope has no parent"))?;
+                    }
+                    if let Some(r) = run {
                         work.push(Mark::Scope(r));
                     }
                     self.inbox.push(Notice::Cancel(t));
@@ -789,6 +905,12 @@ impl Registry {
                     scope.flag = true;
                     work.extend(scope.members.iter().map(|&m| Mark::Task(m)));
                     work.extend(scope.nested.iter().map(|&n| Mark::Scope(n)));
+                    // 本体のタスクにはビットを立てず、今のスコープがこのスコープなら届ける
+                    if let Some(o) = scope.opener
+                        && self.task_mut(o)?.current == s
+                    {
+                        self.inbox.push(Notice::Cancel(o));
+                    }
                 }
             }
         }

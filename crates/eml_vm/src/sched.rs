@@ -293,7 +293,12 @@ pub struct Scheduler<P: Policy> {
 }
 
 impl<P: Policy> Scheduler<P> {
-    pub(crate) fn new(policy: P, main_worker: u32, max_depth: usize) -> Scheduler<P> {
+    pub(crate) fn new(
+        policy: P,
+        main_worker: u32,
+        max_depth: usize,
+        generations: u32,
+    ) -> Scheduler<P> {
         Scheduler {
             policy,
             tasks: vec![None],
@@ -308,7 +313,7 @@ impl<P: Policy> Scheduler<P> {
             max_depth,
             failed: None,
             shared_roots: 0,
-            cells: Registry::default(),
+            cells: Registry::new(generations),
             stacks: Vec::new(),
         }
     }

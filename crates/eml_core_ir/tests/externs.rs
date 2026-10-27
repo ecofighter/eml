@@ -63,6 +63,9 @@ probe_cell c = c
 probe_task : Async.Task Int -> Async.Task Int
 probe_task t = t
 
+probe_scope : Async.Scope -> Async.Scope
+probe_scope s = s
+
 probe_panic : Unit -> <Panic> Int
 probe_panic () = panic \"x\"
 
@@ -93,6 +96,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::MutArray => "probe_mut_array",
         ExternType::Cell => "probe_cell",
         ExternType::Task => "probe_task",
+        ExternType::Scope => "probe_scope",
     }
 }
 
@@ -445,7 +449,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par` と `Std.Async` の10以外は、引数も結果も `Unr` である。
+/// `Std.Par.par` と `Std.Async` の11以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -507,6 +511,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Async.task_cell" => (&[Lin], Unr),
             "Std.Async.take_result" | "Std.Async.run_result" => (&[Lin], Poly),
             "Std.Async.detach" | "Std.Async.cancel_raw" => (&[Lin], Unr),
+            "Std.Async.start_in_raw" => (&[Unr, Poly], Lin),
             _ => {
                 assert!(
                     row.param_marks.iter().all(|&mark| mark == Unr),
@@ -521,7 +526,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     }
 }
 
-/// 表の値そのもの。引数を預かる行は `Std.Async` の10行だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
+/// 表の値そのもの。引数を預かる行は `Std.Async` の11行だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
 /// その印は `Unr` でない (docs/spec/declarations.md の「`extern`」)。
 #[test]
 fn only_the_async_rows_hold_an_argument() {
@@ -544,6 +549,7 @@ fn only_the_async_rows_hold_an_argument() {
             "Std.Async.run_result",
             "Std.Async.detach",
             "Std.Async.cancel_raw",
+            "Std.Async.start_in_raw",
         ]
     );
     for &e in Extern::ALL {

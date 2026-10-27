@@ -1667,19 +1667,21 @@ fn async_op<R: Exec>(
     match Extern::ALL[o[0] as usize] {
         Extern::AsyncStartRaw => {
             let cell = current_cell(task)?;
-            let scope = sched.cells.scope_of(cell)?;
-            let (handle, run) = start_task::<R>(ctx, task, sched, scope, task.get(arg(0)))?;
+            let scope = sched.cells.current_of(cell)?;
+            let (handle, run) = start_task::<R>(ctx, task, sched, scope, task.get(arg(0)))?
+                .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
             task.set(dst, handle);
             schedule(code, sched, entries, run)?;
         }
         Extern::AsyncRunRaw => {
             // 呼んだ `Task` はスタックを持ったまま、根のスコープが閉じるのを待つ
             let parent = match task.cell {
-                Some(cell) => Some(sched.cells.scope_of(cell)?),
+                Some(cell) => Some(sched.cells.current_of(cell)?),
                 None => None,
             };
             let root = sched.cells.open_root(parent, task.cell)?;
-            let (handle, run) = start_task::<R>(ctx, task, sched, root, task.get(arg(0)))?;
+            let (handle, run) = start_task::<R>(ctx, task, sched, root, task.get(arg(0)))?
+                .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
             sched.cells.wait(root, WaitToken(sched.current as u64))?;
             task.set(dst, handle);
             schedule(code, sched, entries, run)?;
@@ -1738,6 +1740,59 @@ fn async_op<R: Exec>(
             sched
                 .cells
                 .detach(ctx, task.get(arg(0)), cancel, task.depth_offset)?;
+            task.set(dst, Word::UNIT);
+        }
+        Extern::AsyncStartInRaw => {
+            current_cell(task)?;
+            let g = task.get(arg(1));
+            let started = match sched.cells.scope_cell(task.raw(arg(0))) {
+                Some(scope) => start_task::<R>(ctx, task, sched, scope, g)?,
+                None => None,
+            };
+            let Some((handle, run)) = started else {
+                // 預かった閉包は呼ばずに手放してから起こす
+                unsafe { ctx.heap_mut().decref(g) }?;
+                let raise = Raise::Panic("the scope is closed".to_string());
+                return raise_again::<R>(code, ctx, task, dst, raise, Extern::AsyncStartInRaw);
+            };
+            task.set(dst, handle);
+            schedule(code, sched, entries, run)?;
+        }
+        Extern::AsyncOpenScope => {
+            let me = current_cell(task)?;
+            let s = sched.cells.open_scope(me)?;
+            task.set_raw(dst, s);
+        }
+        Extern::AsyncCloseScope => {
+            let c = sched.cells.close_scope(task.raw(arg(0)))?;
+            task.set_raw(dst, c);
+        }
+        Extern::AsyncLeaveScope => {
+            let me = current_cell(task)?;
+            match sched.cells.leave_scope(task.raw(arg(0)), me)? {
+                None => task.set(dst, Word::UNIT),
+                Some(raise) => {
+                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::AsyncLeaveScope);
+                }
+            }
+        }
+        Extern::AsyncCancelScopeRaw => {
+            sched.cells.cancel_scope(task.raw(arg(0)))?;
+            task.set(dst, Word::UNIT);
+        }
+        Extern::AsyncFailScopeIo => {
+            let message = unsafe { ctx.copy_string(task.get(arg(2)), usize::MAX) }?;
+            let kind = task.raw(arg(1));
+            sched
+                .cells
+                .fail_scope(task.raw(arg(0)), cells::Outcome::Io { kind, message })?;
+            task.set(dst, Word::UNIT);
+        }
+        Extern::AsyncFailScopePanic => {
+            let message = unsafe { ctx.copy_string(task.get(arg(1)), usize::MAX) }?;
+            sched
+                .cells
+                .fail_scope(task.raw(arg(0)), cells::Outcome::Panic(message))?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncShieldEnter => {
@@ -1802,7 +1857,7 @@ fn start_task<R: Exec>(
     sched: &mut Scheduler<R::P>,
     scope: CellRef,
     g: Word,
-) -> Result<(Word, Runnable), VmFault> {
+) -> Result<Option<(Word, Runnable)>, VmFault> {
     let roots = unshared_roots(ctx, sched);
     Ok(sched.cells.start(ctx, scope, task.worker, g, &roots)?)
 }
@@ -2604,7 +2659,14 @@ fn run_extern<R: Exec>(
             | Extern::AsyncDetach
             | Extern::AsyncCancelRaw
             | Extern::AsyncShieldEnter
-            | Extern::AsyncShieldLeave => {
+            | Extern::AsyncShieldLeave
+            | Extern::AsyncStartInRaw
+            | Extern::AsyncOpenScope
+            | Extern::AsyncCloseScope
+            | Extern::AsyncLeaveScope
+            | Extern::AsyncCancelScopeRaw
+            | Extern::AsyncFailScopeIo
+            | Extern::AsyncFailScopePanic => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

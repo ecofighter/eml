@@ -164,6 +164,8 @@ pub struct Machine<M: Mode> {
     /// 根の表のうち、印を付け終えた先頭の根の数。実行をまたいで持ち、回復で 0 に戻す
     /// (docs/spec/object-model.md の「セッションの根」)。
     shared_roots: usize,
+    /// 次の run の登録表の最初の generation (docs/spec/vm.md の「`Async` のタスク」)。
+    generations: u32,
 }
 
 impl Machine<Fast> {
@@ -200,6 +202,7 @@ impl<M: Mode> Machine<M> {
             earlier: HeapWork::default(),
             copying: HeapWork::default(),
             shared_roots: 0,
+            generations: 0,
         }
     }
 
@@ -335,6 +338,7 @@ impl<M: Mode> Machine<M> {
         let start = Start {
             max_depth: self.max_depth,
             shared_roots: self.shared_roots,
+            generations: self.generations,
         };
         let (result, scheduled) = match self.sched {
             Sched::Normal => {
@@ -349,6 +353,7 @@ impl<M: Mode> Machine<M> {
             }
         };
         self.shared_roots = scheduled.shared_roots;
+        self.generations = scheduled.generations;
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
         // `exit` で終わった実行の入口の結果はダミーなので写さない
@@ -467,6 +472,7 @@ struct Scheduled {
     peak_stack: u64,
     shared_roots: usize,
     tasks: TaskStats,
+    generations: u32,
 }
 
 /// スケジューラを作るときに `Machine` から渡すもの。
@@ -474,6 +480,7 @@ struct Scheduled {
 struct Start {
     max_depth: usize,
     shared_roots: usize,
+    generations: u32,
 }
 
 /// 方針 `P` のスケジューラを作って `task` から実行する。方針を型の引数にして、方針ごとに VM の繰り返しを作る
@@ -488,7 +495,7 @@ fn run_scheduled<M: Mode, P: Policy>(
 ) -> (Result<(), RuntimeError>, Scheduled) {
     let main_worker = ctx.heap().worker();
     task.worker = main_worker;
-    let mut sched = Scheduler::new(policy, main_worker, start.max_depth);
+    let mut sched = Scheduler::new(policy, main_worker, start.max_depth, start.generations);
     sched.shared_roots = start.shared_roots;
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     let scheduled = Scheduled {
@@ -496,6 +503,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         peak_stack: sched.peak_stack(task),
         shared_roots: sched.shared_roots,
         tasks: sched.cells.stats,
+        generations: sched.cells.next_floor(),
     };
     (result, scheduled)
 }
