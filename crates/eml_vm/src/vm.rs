@@ -12,7 +12,7 @@ use eml_rt::{
 };
 
 use crate::apply;
-use crate::cells::{self, CellRef, Runnable, Take, WaitToken};
+use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
 use crate::error::VmFault;
@@ -1215,6 +1215,9 @@ fn switch_away<R: Exec>(
     sched: &mut Scheduler<R::P>,
     keep: Option<TaskState>,
 ) -> Result<(), VmFault> {
+    // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
+    // (docs/spec/vm.md の「`Async` のタスク」)
+    sched.cells.drain(ctx, task.depth_offset)?;
     let next = sched
         .policy
         .pick(&mut sched.ready)
@@ -1277,7 +1280,13 @@ fn resume<R: Exec>(
             function,
             args,
             argc,
-        } => enter::<R>(code, ctx, task, sched, function, args, argc).map(|()| None),
+        } => {
+            // 入口の `Task` はまだ命令を実行していないので、誤りには入口の関数の先頭の位置を付ける。`run` が持つ
+            // 位置は、切り替える前のタスクのものである
+            let at = code.functions[function as usize].start;
+            let result = enter::<R>(code, ctx, task, sched, function, args, argc);
+            at_par(code, task, sched, at, result).map(|()| None)
+        }
         // `Async.run` の待ちは、書いた `Async` の命令の次から続ける。起こすのは根のスコープが閉じたときだけである
         TaskState::WaitingCell(root) => {
             debug_assert!(
@@ -1302,6 +1311,7 @@ fn preempt<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
+    sched.cells.drain(ctx, task.depth_offset)?;
     loop {
         let next = sched.policy.pick(&mut sched.ready);
         sched.policy.reload();
@@ -1342,7 +1352,8 @@ fn complete_join<R: Exec>(
 
 /// join の完了、その後の安全点、右の子の始まりで起きた誤りに、`par` の命令 `at` の関数と位置を付ける。どれも
 /// 切り替えの後で起きるので、`run` が持つ命令の位置は別のタスクのものでありうる。`par` の位置を付ければ、どの
-/// スケジュールでも同じ文言になる (docs/spec/vm.md の「子の終わりと join」)。すでに記録した誤りはそのまま渡す。
+/// スケジュールでも同じ文言になる (docs/spec/vm.md の「子の終わりと join」)。`Async` の入口の `Task` の始まりの誤りも、
+/// 同じ理由で入口の関数の先頭の位置 `at` を付ける。すでに記録した誤りはそのまま渡す。
 fn at_par<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     task: &Task,
@@ -1628,9 +1639,7 @@ fn async_op<R: Exec>(
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、行がそれを預かる
     match Extern::ALL[o[0] as usize] {
         Extern::AsyncStartRaw => {
-            let cell = task
-                .cell
-                .ok_or(VmFault::Internal("an Async operation runs outside a task"))?;
+            let cell = current_cell(task)?;
             let scope = sched.cells.scope_of(cell)?;
             let (handle, run) = start_task::<R>(ctx, task, sched, scope, task.get(arg(0)))?;
             task.set(dst, handle);
@@ -1671,13 +1680,27 @@ fn async_op<R: Exec>(
             let handle = task.get(arg(0));
             match sched.cells.take(ctx, handle, kind, task.depth_offset)? {
                 Ok(value) => task.set(dst, value),
-                Err(_) => {
-                    return Err(VmFault::Internal("a task failure is not raised again"));
-                }
+                Err(raise) => return raise_again::<R>(code, ctx, task, dst, raise, ext),
             }
         }
-        Extern::AsyncPark | Extern::AsyncReady | Extern::AsyncTaskCell => {
-            return Err(VmFault::Internal("an Async task waits"));
+        Extern::AsyncPark => {
+            let me = current_cell(task)?;
+            let k = task.get(arg(1));
+            if let Some(run) = sched.cells.park(task.raw(arg(0)), me, k)? {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
+        Extern::AsyncReady => {
+            let me = current_cell(task)?;
+            let run = sched.cells.ready(me, task.get(arg(0)))?;
+            schedule(code, sched, entries, run)?;
+            task.set(dst, Word::UNIT);
+        }
+        Extern::AsyncTaskCell => {
+            // ハンドルは借りるだけで、組を作る後の `con` が消費する (docs/spec/core-ir.md の「組を返す extern」)
+            let c = sched.cells.cell_of(ctx, task.get(arg(0)))?;
+            task.set_raw(dst, c);
         }
         _ => {
             return Err(VmFault::Internal(
@@ -1686,6 +1709,42 @@ fn async_op<R: Exec>(
         }
     }
     Ok(())
+}
+
+/// 今の `Task` のタスクのセル。`main` と `par` の右の子は `Async` の操作を実行しない。
+fn current_cell(task: &Task) -> Result<CellRef, VmFault> {
+    task.cell
+        .ok_or(VmFault::Internal("an Async operation runs outside a task"))
+}
+
+/// `take_result` と `run_result` が受け取ったタスクの失敗を、今のタスクで起こし直す。`Panic` は `panic` の extern と
+/// 同じく `try_panic` に届け、なければ実行時エラーにする。IO の失敗は失敗した extern と同じく `failed` が届ける。
+/// 文言はセルが Rust の文字列で持っていたので、今の worker で新しい文字列を作る (docs/spec/vm.md の「`Async` のタスク」)。
+fn raise_again<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    dst: Slot,
+    raise: Raise,
+    ext: Extern,
+) -> Result<(), VmFault> {
+    match raise {
+        Raise::Panic(message) => {
+            if abort_to::<R, _>(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |ctx| {
+                [ctx.fresh_string(&message)]
+            })? {
+                return Ok(());
+            }
+            Err(VmFault::Panicked(message))
+        }
+        Raise::Io { kind, message } => {
+            let fault = Fault::Raised(Box::new(Raised {
+                kind,
+                message: message.into_boxed_str(),
+            }));
+            failed::<R>(code, ctx, task, dst, fault, ext.row().purity)
+        }
+    }
 }
 
 /// 今の `Task` から、スコープ `scope` に新しいタスクを置く。閉包 `g` とまだ印のない根に、新しいタスクの ID で印を付ける。
@@ -1774,6 +1833,8 @@ fn enter<R: Exec>(
         let spawner = sched.cells.started(cell)?;
         // 閉包は始めたタスクが印を付けて渡した参照で、このタスクだけが持つ
         unsafe { ctx.heap_mut().transfer_back(args[0], spawner) }?;
+    } else {
+        sched.cells.resumed(cell)?;
     }
     let argc = usize::from(argc);
     let base = task.base;

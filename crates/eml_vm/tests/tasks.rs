@@ -1,4 +1,4 @@
-//! `Std.Async` のタスクの始めと終わりと `Async.run` (docs/spec/vm.md の「`Async` のタスク」)。どのプログラムも検査モードの
+//! `Std.Async` のタスクの始めと終わり、待ち、失敗と `Async.run` (docs/spec/vm.md の「`Async` のタスク」)。どのプログラムも検査モードの
 //! 逐次と速いモードで流し、標準出力を比べる。
 
 use eml_test_support::{execute, lir, run, schedule_independent};
@@ -73,6 +73,117 @@ fn the_seeded_runs_agree_with_the_sequential_run() {
             "seed {seed}"
         );
     }
+}
+
+/// 相手が終わる前の `await` は継続だけになって待ち、終わった後の `await` もいつも継続を渡してから再開する。
+#[test]
+fn await_returns_the_value_before_and_after_the_task_ends() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let before = Async.start (fn () -> \"x\")
+    println (Async.await before)
+    let after = Async.start (fn () -> \"x\")
+    Async.yield_now ()
+    println (Async.await after))
+";
+    assert_eq!(run_both(src), "x\nx\n");
+}
+
+/// `yield_now` は実行待ちの列の後ろへ回るので、逐次の方針では3つのタスクが順に1行ずつ出力する。
+#[test]
+fn yield_now_takes_turns() {
+    let src = "\
+import Async (Async)
+import Async
+twice : String -> Unit -> <IO, Async> Unit
+twice name () =
+  println (name ++ \"1\")
+  Async.yield_now ()
+  println (name ++ \"2\")
+  Async.yield_now ()
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    Async.spawn (twice \"a\")
+    Async.spawn (twice \"b\")
+    Async.spawn (twice \"c\"))
+";
+    assert_eq!(run_both(src), "a1\nb1\nc1\na2\nb2\nc2\n");
+}
+
+/// 子の `panic` は `await` が文言のまま起こし直す。捕まえなければ `run` がもう一度起こし直して run の誤りになり、
+/// `await` を `try_panic` で囲めば捕まえられる。
+#[test]
+fn await_raises_the_panic_of_the_task_again() {
+    let uncaught = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start (fn () -> panic \"boom\")
+    let n : Int = Async.await t
+    println (show n))
+";
+    let (_, checked) = run(uncaught);
+    let checked = checked.expect_err("the checked run fails").to_string();
+    // 起こし直した失敗の位置は、`run` の中の std の呼び出しである (docs/spec/stdlib.md の「実行時エラー」)
+    assert!(
+        checked.starts_with("panicked: boom\n  at <std>/Async.em:"),
+        "{checked}"
+    );
+    let (_, fast) = execute(&lir(uncaught), &RunConfig::default());
+    assert_eq!(fast.expect_err("the fast run fails").to_string(), checked);
+    let caught = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  let r = try_panic (fn () ->
+    Async.run (fn () ->
+      let t = Async.start (fn () -> panic \"boom\")
+      match try_panic (fn () -> Async.await t) with
+        | Ok n -> println (show (n + 0))
+        | Err m -> println (\"Err \" ++ m)))
+  match r with
+    | Ok () -> ()
+    | Err _ -> ()
+";
+    assert_eq!(run_both(caught), "Err boom\n");
+}
+
+/// 待たないタスクの `MutArray` の結果は、ハンドルを落とした知らせでセルを放すときに落ちる。
+#[test]
+fn an_unawaited_lin_result_does_not_leak() {
+    let src = "\
+import Async
+import MutArray
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    drop (Async.start (fn () -> MutArray.make 3 \"a\"))
+    println \"started\")
+";
+    assert_eq!(run_both(src), "started\n");
+}
+
+/// `Lin` の結果は thunk に包まず、値のまま預かる行を通って `await` に届く。
+#[test]
+fn await_returns_a_lin_result() {
+    let src = "\
+import Async
+import MutArray
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start (fn () -> MutArray.empty ())
+    let m : MutArray String = Async.await t
+    let (n, m) = MutArray.length m
+    drop m
+    println (show n))
+";
+    assert_eq!(run_both(src), "0\n");
 }
 
 /// 意味の核はネイティブのコードからも呼べるように、`std` と `eml_rt` だけを import する。

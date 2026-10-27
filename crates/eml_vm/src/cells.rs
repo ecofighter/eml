@@ -24,6 +24,20 @@ pub(crate) struct CellRef {
     generation: u32,
 }
 
+impl CellRef {
+    /// `Std.Async.Cell` の即値 `(generation << 32) | index` (docs/spec/stdlib.md の「`Std.Async`」)。
+    fn encode(self) -> i64 {
+        (i64::from(self.generation) << 32) | i64::from(self.index)
+    }
+
+    fn decode(c: i64) -> CellRef {
+        CellRef {
+            index: c as u32,
+            generation: (c >> 32) as u32,
+        }
+    }
+}
+
 /// token で待つものの番号。実行系が自分の単位 (VM では `TaskId`) に写す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct WaitToken(pub u64);
@@ -41,7 +55,6 @@ pub(crate) enum Runnable {
 /// セルが終わるか閉じるのを待つもの。
 pub(crate) enum Waiter {
     /// 継続だけになって待つタスク。`task` は待った側のセルで、`k` はセルが参照を1つ持つ。
-    #[expect(dead_code, reason = "made by the park operation of the task waits")]
     Cont { task: CellRef, k: Word },
     /// スタックを持ったまま待つもの。`Async.run` を呼んだ VM の `Task` である。
     Token(WaitToken),
@@ -74,7 +87,6 @@ impl Outcome {
 }
 
 /// `take` が起こし直す失敗。
-#[expect(dead_code, reason = "read when a task failure is raised again")]
 pub(crate) enum Raise {
     Io { kind: i64, message: String },
     Panic(String),
@@ -113,6 +125,8 @@ enum Phase {
     /// 始める仕事を実行系に渡したが、まだ動いていない。
     Placed,
     Running,
+    /// 継続だけになって待つか、実行待ちの列の後ろへ回った。再開する仕事が `Running` に戻す。
+    Parked,
     Finished,
 }
 
@@ -144,7 +158,6 @@ enum CellKind {
 
 /// ハンドルの `Drop` が積み、核が受け箱の処理で読む知らせ。
 pub(crate) enum Notice {
-    #[expect(dead_code, reason = "pushed by the Drop of a task handle")]
     HandleDropped(CellRef),
 }
 
@@ -155,6 +168,13 @@ pub(crate) struct Inbox {
 }
 
 impl Inbox {
+    fn push(&self, notice: Notice) {
+        self.notices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(notice);
+    }
+
     fn take(&self) -> Vec<Notice> {
         std::mem::take(&mut *self.notices.lock().unwrap_or_else(PoisonError::into_inner))
     }
@@ -164,6 +184,18 @@ impl Inbox {
 pub(crate) struct TaskHandle {
     cell: CellRef,
     inbox: Arc<Inbox>,
+    /// `take` が受け取った。受け取ったハンドルはセルをもう指さないので、落ちても知らせない。
+    taken: bool,
+}
+
+impl Drop for TaskHandle {
+    // 破棄処理はヒープの `decref` の中で走るので、セルに触れずに知らせを積むだけにする。前の run のハンドルは、
+    // 自分の死んだ受け箱に積むので、生きている登録表には届かない (docs/spec/vm.md の「`Async` のタスク」)
+    fn drop(&mut self) {
+        if !self.taken {
+            self.inbox.push(Notice::HandleDropped(self.cell));
+        }
+    }
 }
 
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
@@ -290,6 +322,7 @@ impl Registry {
             TaskHandle {
                 cell,
                 inbox: Arc::clone(&self.inbox),
+                taken: false,
             },
             true,
         );
@@ -304,6 +337,82 @@ impl Registry {
         }
         task.phase = Phase::Running;
         Ok(task.spawner)
+    }
+
+    /// 再開する仕事を実行系が動かし始めた。
+    pub(crate) fn resumed(&mut self, cell: CellRef) -> Result<(), CellFault> {
+        let task = self.task_mut(cell)?;
+        if !matches!(task.phase, Phase::Parked) {
+            return Err(CellFault::Internal("a task resumes without waiting"));
+        }
+        task.phase = Phase::Running;
+        Ok(())
+    }
+
+    /// 借りたハンドル `handle` のセルの番号を `Std.Async.Cell` の即値で返す。
+    pub(crate) fn cell_of<M: Mode>(&self, ctx: &Ctx<M>, handle: Word) -> Result<i64, CellFault> {
+        Ok(self.handle_cell(ctx, handle)?.encode())
+    }
+
+    /// タスク `me` が、継続 `k` でセル `c` が終わるか閉じるのを待つ。もう終わっていれば、すぐ再開する仕事を返す。
+    /// どちらでも、`k` は継続の待ちか返す仕事に移る。終わったセルにも近道をせず、いつも継続を渡して再開する。
+    pub(crate) fn park(
+        &mut self,
+        c: i64,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        let target = CellRef::decode(c);
+        let done = match self.cell_mut(target)? {
+            CellKind::Task(task) => matches!(task.phase, Phase::Finished),
+            CellKind::Scope(scope) => scope.closed,
+        };
+        self.suspend(me)?;
+        if done {
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: WOKE,
+            }));
+        }
+        let waiters = match self.cell_mut(target)? {
+            CellKind::Task(task) => &mut task.waiters,
+            CellKind::Scope(scope) => &mut scope.waiters,
+        };
+        waiters.push(Waiter::Cont { task: me, k });
+        Ok(None)
+    }
+
+    /// タスク `me` が、継続 `k` で実行待ちの列の後ろへ回る。
+    pub(crate) fn ready(&mut self, me: CellRef, k: Word) -> Result<Runnable, CellFault> {
+        self.suspend(me)?;
+        Ok(Runnable::Resume {
+            cell: me,
+            k,
+            wake: WOKE,
+        })
+    }
+
+    fn suspend(&mut self, me: CellRef) -> Result<(), CellFault> {
+        let task = self.task_mut(me)?;
+        if !matches!(task.phase, Phase::Running) {
+            return Err(CellFault::Internal("a task waits without running"));
+        }
+        task.phase = Phase::Parked;
+        Ok(())
+    }
+
+    /// ハンドルのセル。ハンドルの受け箱が登録表の受け箱と違えば、前の run のハンドルである。添字は run ごとに
+    /// 使い回すので、generation では見分けられない。`Task a` は `Lin` で入力をまたいで残らないので、検査を通った
+    /// プログラムからは届かない (docs/spec/vm.md の「`Async` のタスク」)。
+    fn handle_cell<M: Mode>(&self, ctx: &Ctx<M>, handle: Word) -> Result<CellRef, CellFault> {
+        // ハンドルは `Task a` の `Foreign` で、呼ぶ側が持つ唯一の参照である (`Task a` は `Lin`)
+        let h = unsafe { ctx.heap().foreign_unique::<TaskHandle>(handle) }?;
+        let h = unsafe { &*h };
+        if !Arc::ptr_eq(&h.inbox, &self.inbox) {
+            return Err(CellFault::Internal("a task handle outlived its run"));
+        }
+        Ok(h.cell)
     }
 
     /// `cell` が終わるか閉じるまで、token で待つ。
@@ -334,9 +443,15 @@ impl Registry {
         }
         task.phase = Phase::Finished;
         task.outcome = Some(outcome);
+        // スコープはタスクが終わるまで閉じず、閉じる前には放さないので、この番号はまだ生きている (ファイルの頭の
+        // 不変条件)。`Finished` の後はこの欄を読まない
         let scope = task.scope;
         let dropped = task.handle_dropped;
         out.extend(std::mem::take(&mut task.waiters).into_iter().map(wake));
+        debug_assert_eq!(
+            self.slots[scope.index as usize].0, scope.generation,
+            "a task finishes in a freed scope"
+        );
         let scope = self.scope_mut(scope)?;
         if let Some(failure) = failure
             && scope.first_failure.is_none()
@@ -365,15 +480,7 @@ impl Registry {
         kind: Take,
         depth_offset: usize,
     ) -> Result<Result<Word, Raise>, CellFault> {
-        // ハンドルは `Task a` の `Foreign` で、呼ぶ側が持つ唯一の参照である (`Task a` は `Lin`)
-        let cell = {
-            let h = unsafe { ctx.heap().foreign_unique::<TaskHandle>(handle) }?;
-            let h = unsafe { &*h };
-            if !Arc::ptr_eq(&h.inbox, &self.inbox) {
-                return Err(CellFault::Internal("a task handle outlived its run"));
-            }
-            h.cell
-        };
+        let cell = self.handle_cell(ctx, handle)?;
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Finished) {
             return Err(CellFault::Internal("awaiting an unfinished task"));
@@ -406,8 +513,12 @@ impl Registry {
             }
             (None, failure) => Err(raise(failure)),
         };
-        // ハンドルの参照は呼ぶ側から移ってきたもので、ここで手放す
-        unsafe { ctx.heap_mut().decref(handle) }?;
+        // ハンドルの参照は呼ぶ側から移ってきたもので、ここで手放す。受け取った印を先に付けるので、破棄処理は
+        // 知らせを積まない
+        unsafe {
+            (*ctx.heap().foreign_unique::<TaskHandle>(handle)?).taken = true;
+            ctx.heap_mut().decref(handle)?;
+        }
         self.free_task(ctx, cell, depth_offset)?;
         Ok(result)
     }

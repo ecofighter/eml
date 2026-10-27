@@ -46,7 +46,6 @@
 - row の型引数を持つ型の instance と `deriving`。書くと E0004 を出す
 - Unicode の表が要る文字の操作 (ASCII でない大文字と小文字の変換、文字の分類)、置換付きの UTF-8 のデコード、`Lin` の要素の配列の API ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - コマンドの組み合わせ: パイプ (`.|`)、文字列からの標準入力、`Child` の標準エラーの pipe ([ロードマップ](../future/roadmap.md) の「段の列」)、ファイルへのリダイレクト、標準エラーを別の文字列に取ること、環境変数の削除 ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
-- `Std.Async` のタスクの待ちと失敗。VM は `Async.run`、`Async.start`、`Async.spawn` のタスクを動かすが、`Async.await` と `Async.yield_now` の待ちと、タスクの失敗を `Async.run` が起こし直すことは実行せず、内部の誤りで止まる ([VM](../spec/vm.md) の「`Async` のタスク」)
 - ユーザーが書く extern (FFI。[FFI と拡張の設計](../future/ffi.md))
 - 可変参照 `Ref`、再エクスポート (`pub import`)、抽象型、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、関数をまたぐ reuse、LSP、フォーマッタ ([ロードマップ](../future/roadmap.md) の「その後の項目」)
 - 借用パラメータ、ネイティブ化 ([ロードマップ](../future/roadmap.md) の「段の列」)
