@@ -1127,6 +1127,16 @@ table! {
                 Purity::Effectful,
             ),
         ),
+        AsyncDetach => holding(
+            &[true],
+            kinded("Std.Async.detach", &[Obj], &[Lin], Unit, Unr, Purity::Effectful),
+        ),
+        AsyncCancelRaw => holding(
+            &[true],
+            kinded("Std.Async.cancel_raw", &[Obj], &[Lin], Unit, Unr, Purity::Effectful),
+        ),
+        AsyncShieldEnter => row("Std.Async.shield_enter", &[Unit], Unit, Purity::Effectful),
+        AsyncShieldLeave => row("Std.Async.shield_leave", &[Unit], Unit, Purity::Effectful),
     }
 }
 
@@ -1146,6 +1156,10 @@ impl Extern {
                 | Extern::AsyncTaskCell
                 | Extern::AsyncTakeResult
                 | Extern::AsyncRunResult
+                | Extern::AsyncDetach
+                | Extern::AsyncCancelRaw
+                | Extern::AsyncShieldEnter
+                | Extern::AsyncShieldLeave
         )
     }
 }

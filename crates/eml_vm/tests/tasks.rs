@@ -264,3 +264,30 @@ fn the_task_cells_import_only_std_and_the_runtime() {
         );
     }
 }
+/// 落としたハンドルのタスクが継続で待っていれば、受け箱の処理が待ちを外して `Cancelled` で再開する。実行待ちの列に
+/// いる `yield_now` のタスクは、再開するときに `Cancelled` を受ける。逐次の方針の数を固定する。
+#[test]
+fn a_dropped_handle_cancels_a_parked_task() {
+    let src = "\
+import Async (Async)
+import Async
+forever : Unit -> <IO, Async> Int
+forever () =
+  Async.yield_now ()
+  forever ()
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start (fn () -> Async.await (Async.start forever))
+    Async.yield_now ()
+    drop t
+    println \"dropped\")
+";
+    assert_eq!(run_both(src), "dropped\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.expect("the checked run");
+    assert_eq!(
+        (s.tasks, s.parks, s.dropped_failures, s.cancels),
+        (3, 3, 0, 2)
+    );
+}

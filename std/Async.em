@@ -56,25 +56,57 @@ run f = run_result (run_raw (bottom f))
 pub start : (Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a
 start f = start_raw (bottom f)
 
+-- ハンドルを落とすと取り消しになるので、`drop` でなく `detach` で手放す
 pub spawn : (Unit -> <IO, Panic, Async> Unit) -> <IO, Async> Unit
-spawn f = drop (start_raw (bottom f))
+spawn f = detach (start_raw (bottom f))
 
 pub await : Task a -> <IO, Panic, Async> a
 await t =
   let (c, t) = task_cell t
-  let _ = await_cell c
-  take_result t
+  match await_cell c with
+    | Woke -> take_result t
+    | Cancelled ->
+      -- 待つ側が取り消されたので、待っていたタスクも取り消す。`Task a` は `Lin` で、ほかに待つ者はいない
+      drop t
+      raise_cancelled ()
+
+pub cancel : Task a -> <IO> Unit
+cancel t = cancel_raw t
 
 pub yield_now : Unit -> <IO, Async> Unit
 yield_now () =
   match reschedule () with
     | Woke -> ()
-    | Cancelled -> ()
+    | Cancelled -> raise_cancelled ()
+
+-- 中の取り消しの地点はビットも旗も見ない。立っているビットか旗は、抜けた後の最初の地点で投げる
+pub shield : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a
+shield f =
+  shield_enter ()
+  match try_all f with
+    | Ok x ->
+      shield_leave ()
+      x
+    | Err e ->
+      shield_leave ()
+      reraise e
+
+-- 取り消しを受けた包みが投げる IO の失敗。`Wake` の `Cancelled` と名前が重なるので、種類は修飾して書く
+-- (docs/spec/stdlib.md の「取り消し」)
+raise_cancelled : Unit -> <IO> a
+raise_cancelled () = fail_io Prelude.Cancelled "task was cancelled"
+
+-- `try_all` で分けた失敗を、種類と文言のまま起こし直す
+reraise : Failure -> <IO, Panic> a
+reraise e = match e with
+  | IOFailed (IOError { kind = k, message = m }) -> fail_io k m
+  | Panicked m -> panic m
 
 -- ランタイムの口。生の行を `pub` にせず、結果の型の `a` は `start`、`run`、`await` のシグネチャだけが結ぶ。処理系は
 -- この対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`run_raw`、`ready`、`finish_ok`、`take_result`、
--- `run_result` の引数、`park` の2つ目の引数、`task_cell` の引数 (`task_cell` だけは借りて預かる) である。預かる引数の
--- 型変数は `Unr` に固定せず、その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
+-- `run_result`、`detach`、`cancel_raw` の引数、`park` の2つ目の引数、`task_cell` の引数 (`task_cell` だけは借りて
+-- 預かる) である。預かる引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける
+-- (docs/spec/stdlib.md の「`Std.Async`」)
 extern start_raw    : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern run_raw      : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern park         : Cell -> (once Wake -> <IO> Unit) -> <IO> Unit
@@ -85,3 +117,7 @@ extern finish_panic : String -> <IO> Unit
 extern task_cell    : Task a -> (Cell, Task a)
 extern take_result  : Task a -> <IO, Panic> a
 extern run_result   : Task a -> <IO, Panic> a
+extern detach       : Task a -> <IO> Unit
+extern cancel_raw   : Task a -> <IO> Unit
+extern shield_enter : Unit -> <IO> Unit
+extern shield_leave : Unit -> <IO> Unit

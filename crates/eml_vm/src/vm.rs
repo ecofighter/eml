@@ -22,6 +22,8 @@ use crate::{RunCounts, RuntimeError};
 
 // 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
 const _: () = assert!(cells::WOKE == eml_lir::WAKE_WOKE as i64);
+const _: () = assert!(cells::CANCELLED == eml_lir::WAKE_CANCELLED as i64);
+const _: () = assert!(cells::IO_CANCELLED == eml_lir::IO_CANCELLED as i64);
 
 /// VM の繰り返しの1つの写しを決める型。モード `M` と方針 `P` を束ねる。`step` から呼ぶ補助の関数をこの型で総称に
 /// するので、補助の関数の実体は写しごとにできて呼び手が1つになり、inline の判断が写しごとに決まる
@@ -1217,7 +1219,7 @@ fn switch_away<R: Exec>(
 ) -> Result<(), VmFault> {
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)
-    sched.cells.drain(ctx, task.depth_offset)?;
+    drain::<R>(code, ctx, task.depth_offset, sched)?;
     let next = sched
         .policy
         .pick(&mut sched.ready)
@@ -1299,6 +1301,27 @@ fn resume<R: Exec>(
     }
 }
 
+/// 受け箱を処理し、取り消しで待ちを外したタスクを再開する仕事を列の後ろに積む。
+fn drain<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    depth_offset: usize,
+    sched: &mut Scheduler<R::P>,
+) -> Result<(), VmFault> {
+    let mut out = Vec::new();
+    sched.cells.drain(ctx, depth_offset, &mut out)?;
+    if out.is_empty() {
+        return Ok(());
+    }
+    let entries = code
+        .entries
+        .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
+    for run in out {
+        schedule(code, sched, entries, run)?;
+    }
+    Ok(())
+}
+
 /// 方針か `PREEMPT` が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す (`PREEMPT` は
 /// 安全点の `poll` がもう下ろしている)。切り替えた先が join を
 /// 完了したら、`par` の後の安全点をここで繰り返す。Rust の再帰を使わないためである
@@ -1311,7 +1334,7 @@ fn preempt<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    sched.cells.drain(ctx, task.depth_offset)?;
+    drain::<R>(code, ctx, task.depth_offset, sched)?;
     loop {
         let next = sched.policy.pick(&mut sched.ready);
         sched.policy.reload();
@@ -1589,7 +1612,11 @@ fn finish<R: Exec>(
     task: &Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    sched.cells.drain(ctx, task.depth_offset)?;
+    let mut out = Vec::new();
+    sched.cells.drain(ctx, task.depth_offset, &mut out)?;
+    if !out.is_empty() {
+        return Err(VmFault::Internal("a task is left at the end"));
+    }
     sched.cells.sweep_all(ctx, task.depth_offset)?;
     if sched.has_children() {
         return Err(VmFault::Internal("a task is left at the end"));
@@ -1651,7 +1678,7 @@ fn async_op<R: Exec>(
                 Some(cell) => Some(sched.cells.scope_of(cell)?),
                 None => None,
             };
-            let root = sched.cells.open_root(parent)?;
+            let root = sched.cells.open_root(parent, task.cell)?;
             let (handle, run) = start_task::<R>(ctx, task, sched, root, task.get(arg(0)))?;
             sched.cells.wait(root, WaitToken(sched.current as u64))?;
             task.set(dst, handle);
@@ -1705,6 +1732,23 @@ fn async_op<R: Exec>(
             // ハンドルは借りるだけで、組を作る後の `con` が消費する (docs/spec/core-ir.md の「組を返す extern」)
             let c = sched.cells.cell_of(ctx, task.get(arg(0)))?;
             task.set_raw(dst, c);
+        }
+        ext @ (Extern::AsyncDetach | Extern::AsyncCancelRaw) => {
+            let cancel = ext == Extern::AsyncCancelRaw;
+            sched
+                .cells
+                .detach(ctx, task.get(arg(0)), cancel, task.depth_offset)?;
+            task.set(dst, Word::UNIT);
+        }
+        Extern::AsyncShieldEnter => {
+            let me = current_cell(task)?;
+            sched.cells.shield_enter(me)?;
+            task.set(dst, Word::UNIT);
+        }
+        Extern::AsyncShieldLeave => {
+            let me = current_cell(task)?;
+            sched.cells.shield_leave(me)?;
+            task.set(dst, Word::UNIT);
         }
         _ => {
             return Err(VmFault::Internal(
@@ -1827,7 +1871,7 @@ fn enter<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     function: u32,
-    args: [Word; 2],
+    mut args: [Word; 2],
     argc: u8,
 ) -> Result<(), VmFault> {
     let cell = task
@@ -1838,7 +1882,8 @@ fn enter<R: Exec>(
         // 閉包は始めたタスクが印を付けて渡した参照で、このタスクだけが持つ
         unsafe { ctx.heap_mut().transfer_back(args[0], spawner) }?;
     } else {
-        sched.cells.resumed(cell)?;
+        let wake = sched.cells.resumed(cell, args[1].bits() as i64)?;
+        args[1] = Word::from_bits(wake as usize);
     }
     let argc = usize::from(argc);
     let base = task.base;
@@ -2555,7 +2600,11 @@ fn run_extern<R: Exec>(
             | Extern::AsyncFinishPanic
             | Extern::AsyncTaskCell
             | Extern::AsyncTakeResult
-            | Extern::AsyncRunResult => {
+            | Extern::AsyncRunResult
+            | Extern::AsyncDetach
+            | Extern::AsyncCancelRaw
+            | Extern::AsyncShieldEnter
+            | Extern::AsyncShieldLeave => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

@@ -1021,6 +1021,7 @@ pub const IO_PERMISSION_DENIED: u32 = 1;
 pub const IO_NOT_AVAILABLE: u32 = 2;
 pub const IO_NOT_UTF8: u32 = 3;
 pub const IO_OTHER: u32 = 4;
+pub const IO_CANCELLED: u32 = 5;
 
 /// `Std.Async` の `Wake` のタグ。ランタイムが待たせたタスクを再開するときに、配置の表を見ずに作る
 /// (docs/spec/stdlib.md の「`Std.Async`」。`eml_core_ir` の `tests/externs.rs` が宣言の順と照らし合わせる)。

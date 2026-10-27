@@ -57,7 +57,8 @@ pub struct RunStats {
     pub parks: u64,
     /// スコープの最初の失敗より後の、タスクの失敗の数。
     pub dropped_failures: u64,
-    /// 取り消しが届いた回数。
+    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、受け箱の処理が外した待ち、取り消しで再開する
+    /// `yield_now` を数える (docs/spec/vm.md の「取り消しの届け方」)。
     pub cancels: u64,
     /// `share` が rc を負にした物体の数。
     pub shared_objects: u64,
