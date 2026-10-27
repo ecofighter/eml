@@ -290,3 +290,49 @@ fn second() -> unit {
     assert_eq!(control.exit_code(), None);
     machine.close().unwrap();
 }
+
+/// 本体が `FileIn` を持ち、別のタスクが入れ子の `run` で待つ間に、タスク `t` が `exit 3` を呼ぶ。タスクの底の `exit` は
+/// ほかのタスクを動かさずに run を捨て、回復がヒープを入れ替えるので、`close` はリークを報告せず、同じ `Machine` の次の
+/// run も動く (docs/spec/vm.md の「誤り、止めること、終わり」)。
+#[test]
+fn an_exit_from_a_task_recovers_and_reports_the_code() {
+    let src = "\
+import Async
+import FileIn
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let f = FileIn.open \"a.txt\"
+    let t = Async.start (fn () ->
+      Async.yield_now ()
+      println \"exiting\"
+      (exit 3 : Unit))
+    let u = Async.start (fn () ->
+      Async.run (fn () ->
+        Async.yield_now ()
+        Async.yield_now ()
+        println \"never\"))
+    Async.await t
+    Async.await u
+    FileIn.close f)
+";
+    let quiet = "\
+fn second() -> unit {
+  return ()
+}
+";
+    let root = std::env::temp_dir().join(format!("eml-vm-task-exit-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.txt"), "abc").unwrap();
+    let (host, out) = eml_vm::capture_host(root.clone());
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut machine = Machine::<Checked>::new(Arc::clone(&control), host);
+    let first = machine.load(&eml_test_support::lir(src)).unwrap();
+    let second = machine.load(&parse(quiet)).unwrap();
+    let finished = machine.run(first.entry);
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(finished.unwrap().exit, Some(3));
+    assert_eq!(machine.run(second.entry).unwrap().exit, None);
+    machine.close().unwrap();
+    assert_eq!(out.contents(), "exiting\n");
+}

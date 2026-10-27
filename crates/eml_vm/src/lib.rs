@@ -254,7 +254,8 @@ impl<M: Mode> Machine<M> {
     ) -> Result<(Finished, Option<String>), RuntimeError> {
         match self.run_entry(entry, shown) {
             Ok(Ran::Done(finished, text)) => Ok((finished, text)),
-            // 捨てた run のヒープには片付けていないタスクの物体が残るので、誤りの後と同じく入れ替える
+            // 捨てた run のヒープには片付けていないタスクの物体が残るので、誤りの後と同じく入れ替える。`Scheduler` と
+            // 登録表は `run_scheduled` が返るときに捨ててあるので、古いヒープの語を持つものは回復の後に残らない
             // (docs/spec/vm.md の「追記」)
             Ok(Ran::Abandoned(finished, cause)) => match self.recover() {
                 Ok(()) => Ok((finished, None)),

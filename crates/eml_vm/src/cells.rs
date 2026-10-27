@@ -12,7 +12,7 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use eml_rt::{Ctx, Fault, HeapError, Mode, Word};
+use eml_rt::{Control, Ctx, Fault, HeapError, Mode, Word};
 
 /// 再開するタスクに渡す `Std.Async.Wake` の `Woke` のタグ (docs/spec/stdlib.md の「`Std.Async`」)。
 pub(crate) const WOKE: i64 = 0;
@@ -654,4 +654,11 @@ pub(crate) fn with_worker<M: Mode, T>(
     let result = f(ctx);
     let _unit = unsafe { ctx.switch_task(evv, prev, depth_offset) };
     result
+}
+
+/// タスクの底に着いた `exit n` を、終わりの欄に書く。`control.exit` を呼ぶのはここだけである。最初の書き手だけが
+/// 真を返す。実行系は、`main` の底なら普通に戻り、ほかのタスクの底ならほかのタスクを動かさずに worker の入口へ戻る
+/// (docs/spec/object-model.md の「実行の制御」)。
+pub(crate) fn end_with_exit(control: &Control, n: i64) -> bool {
+    control.exit(n)
 }

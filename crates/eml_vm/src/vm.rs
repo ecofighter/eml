@@ -1606,7 +1606,7 @@ fn finish<R: Exec>(
         }
         // 終了コードは終わりの欄だけが運ぶ。run の始めに開いた欄に先に書いた者はいないはずである
         // (docs/spec/vm.md の「`exit`」)
-        if !ctx.heap().control().exit(n) {
+        if !cells::end_with_exit(ctx.heap().control(), n) {
             return Err(VmFault::Internal("an exit after the end of the run"));
         }
         return Ok(());
@@ -1857,12 +1857,14 @@ fn entry_finish<R: Exec>(
         return Err(VmFault::Internal("a task is left at the end"));
     };
     if let Some(n) = task.exit {
-        // 途中のフレームは巻き戻しで片付けてある。ほかのタスクは動かさず、run ごと捨てる
+        // 途中のフレームは巻き戻しで片付けてある。セルにもスコープにも書かず、ほかのタスクも動かさずに run ごと
+        // 捨てる。先に書いた者がいても、その終了コードが勝つだけなので、結果は見ない
+        // (docs/spec/vm.md の「`Async` のタスク」)
         unsafe {
             ctx.yield_finish()?;
             ctx.evv_set(Word::UNIT)?;
         }
-        ctx.heap().control().exit(n);
+        cells::end_with_exit(ctx.heap().control(), n);
         return Err(VmFault::Stopped(Stop::Ended));
     }
     if ctx.yielding() != 0 || !task.boundaries.is_empty() {

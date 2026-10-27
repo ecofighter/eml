@@ -1,5 +1,5 @@
-//! `PREEMPT` の立つ安全点の扱いを、手書きの LIR で確かめる (docs/spec/vm.md の「タスクとスケジュール」)。どちらも
-//! 逐次の方針で流し、`write_line` が書くときに Host がビットを立てる。
+//! `PREEMPT` の立つ安全点の扱いを確かめる (docs/spec/vm.md の「タスクとスケジュール」)。どれも逐次の方針で流し、
+//! `write_line` が書くときに Host がビットを立てる。
 
 use std::ffi::OsString;
 use std::io;
@@ -13,15 +13,15 @@ use eml_vm::{CaptureHost, RunConfig, RuntimeError, Sched};
 
 use crate::common::parse;
 
-/// `write_line` の前に `raise` を呼ぶ Host。ほかは中の `CaptureHost` に任せる。
+/// `write_line` の前に、書く行を渡して `raise` を呼ぶ Host。ほかは中の `CaptureHost` に任せる。
 struct RaisingHost {
     inner: CaptureHost,
-    raise: Box<dyn Fn() + Send + Sync>,
+    raise: Box<dyn Fn(&str) + Send + Sync>,
 }
 
 impl Host for RaisingHost {
     fn write_line(&self, stream: Stream, line: &str) -> io::Result<()> {
-        (self.raise)();
+        (self.raise)(line);
         self.inner.write_line(stream, line)
     }
     fn write(&self, stream: Stream, bytes: &[u8]) -> io::Result<()> {
@@ -72,7 +72,7 @@ fn run_raising(
     let raiser = Arc::clone(&control);
     let host = RaisingHost {
         inner: CaptureHost::new(Default::default()),
-        raise: Box::new(move || raise(&raiser)),
+        raise: Box::new(move |_| raise(&raiser)),
     };
     let config = RunConfig::default()
         .with_debug_heap(true)
@@ -102,4 +102,45 @@ fn a_stop_raised_with_preempt_wins() {
         result.as_ref().is_err_and(RuntimeError::interrupted),
         "{result:?}"
     );
+}
+
+/// `Async.run` の本体がタスク `t` を始め、`"a"` を出力して回る。`"a"` を書くときに `PREEMPT` を立てると、次の安全点で
+/// 実行待ちの `t` に切り替わり、`"b"` が `"c"` より先に出る。切り替えは方針が始めたものなので、1回と数える
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
+#[test]
+fn a_preempt_request_switches_at_the_next_safepoint() {
+    let src = "\
+import Async
+spin : Int -> <Panic> Int
+spin n = if n == 0 then 0 else spin (n - 1)
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start (fn () -> println \"b\")
+    println \"a\"
+    let _ = spin 10
+    println \"c\"
+    Async.await t)
+";
+    let program = eml_test_support::lir(src);
+    let control = Arc::new(Control::new(Limits::default()));
+    let raiser = Arc::clone(&control);
+    let inner = CaptureHost::new(Default::default());
+    let out = inner.output();
+    let host = RaisingHost {
+        inner,
+        raise: Box::new(move |line| {
+            if line == "a" {
+                raiser.preempt();
+            }
+        }),
+    };
+    let config = RunConfig::default()
+        .with_debug_heap(true)
+        .with_control(control)
+        .with_sched(Sched::Sequential);
+    let finished = eml_vm::execute(&program, &config, HostRef::new(Arc::new(host)))
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "a\nb\nc\n");
+    assert_eq!(finished.preemptions, 1);
 }
