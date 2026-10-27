@@ -40,7 +40,7 @@ valid m lo hi =
     | RightHigh l k _ r -> node l k r (0 - 1)
 "##;
 
-const MAP_ENTRY: &str = r##"import List
+const MAP_DEFS: &str = r##"import List
 import Map
 
 -- 比べる相手の、昇順で重複のないリスト
@@ -71,7 +71,9 @@ run n seed m model bad =
 
 count_up : Int -> Int -> List Int -> <Panic> List Int
 count_up i n acc = if i == n then List.reverse acc else count_up (i + 1) n (i :: acc)
+"##;
 
+const MAP_MAIN_SEED_7: &str = r##"
 main : Unit -> <IO, Panic> Unit
 main () =
   run 1000 7 Map.empty Nil 0
@@ -83,6 +85,12 @@ main () =
   println "halved: \{Map.size halved} keys, height \{Map.valid halved 0 1000}"
 "##;
 
+/// 乱数の列だけを替える。種 7 の列が通らない釣り合いの枝 (`shrink_left` の二重の回転) を、この列が通る。
+const MAP_MAIN_SEED_8: &str = r##"
+main : Unit -> <IO, Panic> Unit
+main () = run 1000 8 Map.empty Nil 0
+"##;
+
 /// `Map` の木は、挿入と削除のどの順でも AVL 木の印と高さが合い、キーが昇順に並ぶ (docs/spec/stdlib.md の「`Std.Map`」)。
 #[test]
 fn the_map_avl_invariant_holds_through_the_api() {
@@ -90,7 +98,7 @@ fn the_map_avl_invariant_holds_through_the_api() {
         "Map.em",
         include_str!("../../../std/Map.em"),
         MAP_VALID,
-        MAP_ENTRY,
+        &format!("{MAP_DEFS}{MAP_MAIN_SEED_7}"),
     );
     assert_eq!(
         out,
@@ -99,6 +107,20 @@ fn the_map_avl_invariant_holds_through_the_api() {
          descending: 500 keys, height Some 9\n\
          halved: 250 keys, height Some 8\n"
     );
+}
+
+/// 上のテストと同じ性質を、別の乱数の列で確かめる。2つの列を合わせると、`grow_*` と `shrink_*` の釣り合いを直す枝を
+/// すべて通る。1つの長い列にしないのは、1つのテストを 1 s に収めるためである (docs/implementation/testing.md の
+/// 「性能のテスト」)。
+#[test]
+fn the_map_avl_invariant_holds_through_the_api_on_a_second_seed() {
+    let out = run_with_overlay(
+        "Map.em",
+        include_str!("../../../std/Map.em"),
+        MAP_VALID,
+        &format!("{MAP_DEFS}{MAP_MAIN_SEED_8}"),
+    );
+    assert_eq!(out, "random: 191 keys, 0 bad, height Some 9\n");
 }
 
 /// 印と高さが合い、要素が `lo` から `hi` の間で昇順なら高さを返す。`Std.Set` の中に足すので、コンストラクタが見える。
@@ -119,7 +141,7 @@ valid s lo hi =
     | RightHigh l x r -> node l x r (0 - 1)
 "##;
 
-const SET_ENTRY: &str = r##"import List
+const SET_DEFS: &str = r##"import List
 import Set
 
 -- 線形合同法の乱数で、0 から `range - 1` の数を `n` 個
@@ -161,7 +183,9 @@ check n m seed =
   let diff = same (Set.difference a b) (List.filter (fn x -> not (List.contains x mb)) ma)
   let removed = same (List.fold (fn s y -> Set.delete y s) a ys) (List.filter (fn x -> not (List.contains x mb)) ma)
   println "\{n} \{m}: union \{union}, intersection \{inter}, difference \{diff}, delete \{removed}"
+"##;
 
+const SET_MAIN: &str = r##"
 main : Unit -> <IO, Panic> Unit
 main () =
   check 1000 1000 1
@@ -178,7 +202,7 @@ fn the_set_avl_invariant_holds_through_the_api() {
         "Set.em",
         include_str!("../../../std/Set.em"),
         SET_VALID,
-        SET_ENTRY,
+        &format!("{SET_DEFS}{SET_MAIN}"),
     );
     assert_eq!(
         out,
