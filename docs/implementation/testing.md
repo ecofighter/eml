@@ -116,7 +116,7 @@
 
 並行の手順 (共有の側の2つの境目の並行の議論と、公開の順序) は証明しない (信頼の一覧の T0)。並行の証明の計画は [マルチコア対応の設計](../future/multicore.md) の「テスト」にある。vstd の atomic は SeqCst だけを扱うので、Relaxed と AcqRel の順序の正しさは、Verus では確かめられない。順序は、文書の議論 ([オブジェクトモデル](../spec/object-model.md) の「上限」と「共有の側」) と Miri に任せる。
 
-`cargo verus verify -p eml_rt` は、0 errors のほかに7つの警告を出す。読み手の信頼の関数 (`host.rs` の `fill`、`consume`、`read_text`) と、それを呼ぶ `heap/ctx/io.rs` の4つの関数が、`verus!` の外の trait `Source` を型の境界に使うためである。Verus はこれを今の版では警告にし、後の版で誤りにすると告げている。誤りになったら、`Source` を `#[verifier::external_trait_specification]` で宣言して直す。
+`cargo verus verify -p eml_rt` は 0 errors のほかに警告も trigger の注記も出さない。読み手の信頼の関数 (`host.rs` の `fill`、`consume`、`read_text`) と、それを呼ぶ `heap/ctx/io.rs` の関数は、`verus!` の外の trait `Source` を型の境界に使う。そのため `host.rs` が `Source` を `#[verifier::external_trait_specification]` の `ExSource` で Verus に知らせる (信頼の一覧の T11)。量化子の trigger は、Verus が自信を持って選べないものには `#[trigger]` か `#![trigger ...]` で書く。Verus が自動で選んだ trigger は、周りの文脈が変わると Z3 の探索を変えうるので、選び方を書いて固める。
 
 Verus (0.2026.10.04.426d8b0) は、ふだんの devShell が `verus` と `cargo-verus` を入れる。flake は、release の zip を系ごとの input (`verus-aarch64-darwin`、`verus-x86_64-linux`) にし、`nix/verus.nix` が要る部品 (`libvstd.rlib` と `vstd.vir` を含む) だけを展開する。Verus の起動の部分は rustup で toolchain を探すが、devShell の `verus` は rustup を使わない (`VERUS_USE_RUSTUP=0`)。代わりに、Verus が求める版の fenix の `rustc` の `lib` を、rust_verify が読むライブラリの道 (macOS は `DYLD_FALLBACK_LIBRARY_PATH`、Linux は autoPatchelf と `LD_LIBRARY_PATH`) に足す。rust_verify は公式の版の librustc_driver に繋がるので、source から組む nixpkgs の rustc では動かないためである。Verus の版を上げるときは、2つの input の URL、`rust-toolchain.toml` の `channel` と `flake.nix` の `stable` の `sha256`、`eml_rt` の vstd の版 (cargo-verus の toolchain の表が指す版) を揃えて変え、`cargo verus verify --check-toolchain` で確かめる。`sha256` が古いままだと、評価が hash の食い違いで止まる。
 
@@ -498,6 +498,41 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。nextest の CI 用の profile は作らず、落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
 
 アクションは commit の SHA で固定し、版の名前をコメントに書く。runner の image は名前で固定し、上げるのは手で行う。nix のストアはキャッシュしない。install-nix-action には `GITHUB_TOKEN` を渡し、`github:` の input の取得が率の制限に当たらないようにする。token は nix.conf に入ってジョブの中で動くものから読めるが、権限は `contents: read` だけで、ジョブとともに切れるので受け入れる。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
+
+## クラウドのセッション
+
+Claude Code のクラウドのセッションでは、外への通信が proxy を通る。proxy は GitHub の archive の取得を断るが、git の clone と release の download は通す。flake の `github:` の input は archive で取るので、そのままでは `nix develop` が input の取得で止まる。
+
+`nix/prefetch-inputs.sh` は、`flake.lock` の `github:` の input を、同じ rev のまま `git+https` で `nix flake prefetch` して store に置く。input の store の道は中身の narHash で決まる。そのため、置いた後の `nix develop` は archive を取りに行かず、この文書のコマンドがそのまま動く。取った中身の hash が `flake.lock` の `narHash` と違えば、スクリプトは誤りで止まる。
+
+クラウドの環境の setup script には次を書く。`README.md` と `CLAUDE.md` の写しはこれに合わせる。setup script は、Claude Code が起動する前に root で動く。5分ほどで終われば、setup script が書いたファイルは環境のキャッシュに残り、後のセッションに引き継がれる。setup script は Nix を入れ、main を clone して `nix/prefetch-inputs.sh` を走らせ、devShell を1回組む。コンテナには systemd がないので、Nix は daemon を使わず root だけが使う形で入れる。クラウドのセッションはリポジトリの `.claude/settings.json` の `enabledPlugins` を読まない。そのため、yomiyasu と ecoskills のプラグインもここで user の scope に入れる。yomiyasu は `CLAUDE.md` が求めるプラグインである。
+
+```sh
+#!/bin/bash
+set -euo pipefail
+
+# コンテナには systemd がないので、daemon を使わず root だけが使う Nix を入れる
+if [ ! -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+  curl --proto '=https' --tlsv1.2 -sSfL https://artifacts.nixos.org/nix-installer |
+    sh -s -- install linux --init none --enable-flakes --no-confirm
+fi
+. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+
+# main の flake の input を git で取り、devShell を組んで環境のキャッシュに入れる
+eml=$(mktemp -d)
+git clone --depth 1 https://github.com/ecofighter/eml "$eml"
+"$eml/nix/prefetch-inputs.sh" "$eml"
+nix develop "path:$eml" -c true
+rm -rf "$eml"
+
+# クラウドのセッションはリポジトリの enabledPlugins を読まないので、プラグインを user の scope に入れる
+claude plugin marketplace add nanaism/yomiyasu
+claude plugin marketplace add ecofighter/ecoskills
+claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin install ecoskills@ecoskills --scope user
+```
+
+環境のキャッシュは、setup script を変えたときと、7日ほどで期限が切れたときに作り直される。その間に main の `flake.lock` が変わると、新しい input はキャッシュにない。そのときはセッションの中で `nix/prefetch-inputs.sh` を走らせてから `nix develop` を使う。
 
 ## よく使うコマンド
 

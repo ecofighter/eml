@@ -146,6 +146,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("host.rs: external_body fill", "T11"),
     ("host.rs: external_body consume", "T11"),
     ("host.rs: external_body read_text", "T11"),
+    ("host.rs: external_trait_specification ExSource", "T11"),
     ("host.rs: external_body StdinHandle", "T11"),
     ("host.rs: external_body open_stdin", "T11"),
     ("host.rs: external_body open_stream", "T11"),

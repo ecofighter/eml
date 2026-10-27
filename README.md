@@ -79,6 +79,35 @@ cargo run -p eml_cli -- run <file.em>        # 実行する (--debug-heap でヒ
 nix build                                    # eml のバイナリをビルドする
 ```
 
+### Claude Code のクラウドのセッション
+
+Claude Code のクラウドのセッションで開発するときは、環境の setup script に次を書く。この setup script は Nix を入れ、flake の input と devShell を環境のキャッシュに置き、yomiyasu と ecoskills のプラグインを入れる。理由と仕組みは [docs/implementation/testing.md](docs/implementation/testing.md) の「クラウドのセッション」にある。
+
+```sh
+#!/bin/bash
+set -euo pipefail
+
+# コンテナには systemd がないので、daemon を使わず root だけが使う Nix を入れる
+if [ ! -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+  curl --proto '=https' --tlsv1.2 -sSfL https://artifacts.nixos.org/nix-installer |
+    sh -s -- install linux --init none --enable-flakes --no-confirm
+fi
+. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+
+# main の flake の input を git で取り、devShell を組んで環境のキャッシュに入れる
+eml=$(mktemp -d)
+git clone --depth 1 https://github.com/ecofighter/eml "$eml"
+"$eml/nix/prefetch-inputs.sh" "$eml"
+nix develop "path:$eml" -c true
+rm -rf "$eml"
+
+# クラウドのセッションはリポジトリの enabledPlugins を読まないので、プラグインを user の scope に入れる
+claude plugin marketplace add nanaism/yomiyasu
+claude plugin marketplace add ecofighter/ecoskills
+claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin install ecoskills@ecoskills --scope user
+```
+
 `eml` の終了コードは、成功で 0、診断または実行時エラーで 1、使い方の誤りで 2、Ctrl-C で止めたときは 130 である。
 
 ## リポジトリの構成

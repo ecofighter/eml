@@ -736,7 +736,7 @@ fn escape_char_into(c: u32, body: &mut [u8; 6]) -> (k: usize)
                 k <= 4,
                 i <= k,
                 tmp@.subrange(0, k as int) == encode_scalar(c),
-                forall|j: int| 0 <= j < i ==> body@[j] == tmp@[j],
+                forall|j: int| #![trigger tmp@[j]] 0 <= j < i ==> body@[j] == tmp@[j],
             decreases k - i,
         {
             body[i] = tmp[i];
@@ -779,7 +779,7 @@ fn escape_char_into(c: u32, body: &mut [u8; 6]) -> (k: usize)
                     i <= k,
                     esc@.subrange(0, k as int) == escape_byte(c as u8),
                     forall|j: int| 0 <= j < k ==> esc@[j] < 0x80,
-                    forall|j: int| 0 <= j < i ==> body@[j] == esc@[j],
+                    forall|j: int| #![trigger esc@[j]] 0 <= j < i ==> body@[j] == esc@[j],
                 decreases k - i,
             {
                 body[i] = esc[i];

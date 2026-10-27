@@ -71,7 +71,7 @@ pub(crate) open spec fn rounds_up(w: int, c: int) -> bool {
 /// ブロックの語の数から級を引く表。確保の速い道で級を探して回らないためである。
 exec const CLASS_OF: [u8; 129]
     ensures
-        forall|w: int| 0 <= w <= 128 ==> rounds_up(w, CLASS_OF[w] as int),
+        forall|w: int| #![trigger CLASS_OF[w]] 0 <= w <= 128 ==> rounds_up(w, CLASS_OF[w] as int),
 {
     let mut table: [u8; 129] = [0;129];
     let mut words: usize = 0;
@@ -81,7 +81,7 @@ exec const CLASS_OF: [u8; 129]
             words <= 129,
             class < 27,
             class == 0 || CLASS_WORDS[class - 1] < words,
-            forall|w: int| 0 <= w < words ==> rounds_up(w, table[w] as int),
+            forall|w: int| #![trigger table[w]] 0 <= w < words ==> rounds_up(w, table[w] as int),
         decreases 129 - words,
     {
         assert(CLASS_WORDS[26] == 128);
@@ -2766,7 +2766,9 @@ impl Pages {
                 0 <= i < r@.len() ==> self.carved_block(#[trigger] r@[i]@.addr) && r@[i]
                     == self.block_ptr(r@[i]@.addr),
             forall|h: usize| #[trigger]
-                self.carved_block(h) ==> exists|i: int| 0 <= i < r@.len() && r@[i]@.addr == h,
+                self.carved_block(h) ==> exists|i: int|
+                    #![trigger r@[i]]
+                    0 <= i < r@.len() && r@[i]@.addr == h,
     {
         self.blocks_in(0, self.list.len())
     }
@@ -2783,7 +2785,9 @@ impl Pages {
                 0 <= i < r@.len() ==> self.carved_block(#[trigger] r@[i]@.addr) && r@[i]
                     == self.block_ptr(r@[i]@.addr),
             lo == 0 && hi == self.page_count() ==> forall|h: usize| #[trigger]
-                self.carved_block(h) ==> exists|i: int| 0 <= i < r@.len() && r@[i]@.addr == h,
+                self.carved_block(h) ==> exists|i: int|
+                    #![trigger r@[i]]
+                    0 <= i < r@.len() && r@[i]@.addr == h,
     {
         proof {
             reveal(Pages::list_wf);
@@ -2978,6 +2982,7 @@ impl Pages {
             assert forall|h: usize|
                 #![trigger self.carved_block(h)]
                 lo == 0 && hi == self.list@.len() && self.carved_block(h) implies exists|i: int|
+                #![trigger out@[i]]
                 0 <= i < out@.len() && out@[i]@.addr == h by {
                 assert(self.located(h));
                 let a = page_base(h);
