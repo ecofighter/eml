@@ -9,9 +9,9 @@ pub extern data Child
 -- 引数は、プログラム、引数の列、環境の列、作業ディレクトリ (空なら設定なし) と、標準入力、標準出力、標準エラーの
 -- 向きである。列は各要素を「バイト長の十進、NUL、本文」の順に並べたものである。向きの値は `spawn_with` が決める
 extern spawn_raw : String -> String -> String -> String -> Int -> Int -> Int -> <IO> Child
--- いつも ``command `<program>` exited with code <code>`` の IO の失敗で終わる。eml から `io_failed` を呼べないので、
--- `capture` が失敗を起こす窓口である
-extern exited : String -> Int -> <IO> a
+-- 0 でない終了コードを、種類が `Other` の IO の失敗にする (docs/spec/stdlib.md の「`Proc`」)
+exited : String -> Int -> <IO> a
+exited program code = fail_io Other "command `\{program}` exited with code \{show code}"
 
 -- 作業ディレクトリ。相対パスは `FileIn.open` と同じ基準である
 pub cwd : String -> Cmd -> Cmd

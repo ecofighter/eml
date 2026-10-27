@@ -75,6 +75,9 @@ pub struct DataItem {
     pub name: String,
     pub name_range: TextRange,
     pub public: bool,
+    /// `abstract` を書いたか。`pub` と合わせて、コンストラクタとフィールドを宣言したモジュールの外から隠す
+    /// (docs/spec/modules.md の「公開の範囲」)。
+    pub abstract_ctors: bool,
     pub extern_keyword: Option<TextRange>,
     /// 型引数 (名前、位置、種類)。宣言の順である。名前は種類によらず重ねられないので、重複した名前 (E1003) は最初の
     /// 1つだけを残す (docs/spec/types.md の「row の型引数」)。
@@ -103,6 +106,9 @@ pub struct EffectItem {
     pub name: String,
     pub name_range: TextRange,
     pub public: bool,
+    /// `abstract` を書いたか。`pub` と合わせて、操作を宣言したモジュールの外から隠す
+    /// (docs/spec/effects.md の「抽象エフェクト」)。
+    pub abstract_ops: bool,
     pub extern_keyword: Option<TextRange>,
     /// 型引数 (名前、位置)。重複した名前 (E1003) は最初の1つだけを残す。
     pub params: Vec<(String, TextRange)>,
@@ -191,11 +197,11 @@ pub struct ImportItem {
 pub enum ImportName {
     /// 小文字の名前か `(op)`。
     Value { name: String, range: TextRange },
-    /// 大文字の名前。`T(..)` / `E(..)` なら `all` が真。
+    /// 大文字の名前。`T(..)` / `E(..)` なら、`all` が `(..)` の位置を持つ。
     Type {
         name: String,
         range: TextRange,
-        all: bool,
+        all: Option<TextRange>,
     },
 }
 
@@ -374,6 +380,7 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
     let mut instances = Vec::new();
     for (index, item) in items.into_iter().enumerate() {
         let public = item.pub_keyword().is_some();
+        let abstract_ = item.abstract_keyword().is_some();
         match item {
             ast::Item::Signature(signature) => {
                 definitions.signature(index, &signature, public, file, &mut diagnostics)
@@ -410,6 +417,7 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     name: name.text().to_string(),
                     name_range: name.text_range(),
                     public,
+                    abstract_ctors: abstract_,
                     extern_keyword: item.extern_keyword().map(|keyword| keyword.text_range()),
                     params: params(
                         file,
@@ -450,6 +458,7 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     name: name.text().to_string(),
                     name_range: name.text_range(),
                     public,
+                    abstract_ops: abstract_,
                     extern_keyword: item.extern_keyword().map(|keyword| keyword.text_range()),
                     params: params(file, item.params().map(|name| (name, ())), &mut diagnostics)
                         .into_iter()
@@ -796,7 +805,7 @@ fn import_name(name: &ast::ImportName) -> Option<ImportName> {
             SyntaxKind::UIDENT => ImportName::Type {
                 name: text,
                 range,
-                all: name.all_constructors(),
+                all: name.all_constructors_range(),
             },
             _ => ImportName::Value { name: text, range },
         });

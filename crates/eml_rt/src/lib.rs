@@ -28,7 +28,7 @@ mod word;
 pub use control::{Control, Limits, Stop};
 pub use error::HeapError;
 pub use externs::{
-    ArithFault, Exited, Fault, Form, Handle, IndexFault, IoOp, IoReason, Open, ReadAmount,
+    ArithFault, Fault, Form, Handle, IndexFault, IoOp, IoReason, Open, Raised, ReadAmount,
     StdStream, Utf8Source, Write,
 };
 pub use frozen::Frozen;

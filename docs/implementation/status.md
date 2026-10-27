@@ -12,7 +12,7 @@
 - ビット演算: Prelude のクラス `Bits` (`&&&`、`|||`、`^^^`、`complement`、`<<<`、`>>>`) と、`Int` と `Byte` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)
 - タプルと射影 `t.0`、型引数を持つ代数的データ型 (`data`)、`match` と入れ子のパターン、`Int`、`Byte`、`Char`、`String` のリテラルのパターン
 - 名前付きのレコード: `data` のコンストラクタの名前付きのフィールド、作る式 `Person { name = "a", age = 3 }` と省略形、射影 `p.name`、更新 `{ p | age = 31 }`、分解のパターン、フィールドのセクション `(.name)` と `(.0)`、導出した `Show` の `Person { … }` の表示 ([直積型とレコード](../spec/records.md))。呼び出しの引数のラムダは、ほかの引数の後に型を検査する ([型と Kind](../spec/types.md) の「引数のラムダを後で検査する」)
-- Prelude の `List`、`Option`、`Result` と、その `Eq`、`Ord`、`Show` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)。リストのリテラル `[…]` とパターン、コンストラクタ `::` (`infixr 5`。Prelude だけが宣言できる、E1044) ([式](../spec/expressions.md) の「リスト」)。リストの関数は `Std.List` にある (`map`、`filter`、`fold`、`length`、`take`、`zip`、`lookup`、安定な並べ替えの `sort` と `sort_by` など。[標準ライブラリ](../spec/stdlib.md) の「`List`」)
+- Prelude の `List`、`Option`、`Result`、`Either` と、その `Eq`、`Ord`、`Show` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)。リストのリテラル `[…]` とパターン、コンストラクタ `::` (`infixr 5`。Prelude だけが宣言できる、E1044) ([式](../spec/expressions.md) の「リスト」)。リストの関数は `Std.List` にある (`map`、`filter`、`fold`、`length`、`take`、`zip`、`lookup`、安定な並べ替えの `sort` と `sort_by` など。[標準ライブラリ](../spec/stdlib.md) の「`List`」)
 - 文字列: エスケープ、補間 `\{式}`、複数行の文字列 `"""`、raw 文字列 `r"…"` / `r#"…"#` ([字句](../spec/lexical.md) の「文字列」)。補間の穴は、Prelude の `Show` のメソッド `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。文字列の関数は標準ライブラリの `String` にある。位置は UTF-8 のバイトの位置で、文字は `char_at`、`fold`、`chars` で読み、`push` で足す ([標準ライブラリ](../spec/stdlib.md))
 - コマンドリテラル: 空白で区切った引数、引用 `'…'`、穴 `\{e}` (`e : String`)、spread の穴 `\{..xs}`。値は Prelude の `Cmd` で、HIR が Prelude の関数の呼び出しに脱糖する ([式](../spec/expressions.md) の「コマンドリテラル」)
 - トップレベルの関数 (シグネチャが必須)、複数の等式による定義、ローカルの `let` と `let ... in`、ローカルの再帰関数 (`let go acc xs = …`。引数を1つ以上持つ関数の形の `let` は自分自身を参照でき、単相で、lambda lifting する。`let … and …` で書いた組の関数は互いに呼び合える。[式](../spec/expressions.md) の「ローカル関数」)、`if` (then 節が `Unit` なら `else` を省略できる)、再帰、ラムダとクロージャ、部分適用、型の明示 `(e : T)`
@@ -24,19 +24,21 @@
 - エフェクトの宣言 (`never` / `once` / `multi`、型引数)、`handle` (deep)、`k` の呼び出しによる再開、`drop k`、パラメータ付き handler (`handle ... from ... with`)。操作の節は、`k` を受け取る `ctl` の節 (`| ctl op x k -> …`) と、本体の値ですぐに再開する `fn` の節 (`| fn op x -> …`) である ([式](../spec/expressions.md) の「handler」)
 - 位置つきの `mask`: 型検査が呼び出しごとに決め、エフェクトごとに内側の n 個の handler を残して続く m 個を飛ばす。`Yield Int` を受けて `Yield String` を出すような、型を変換する handler を書ける ([エフェクトと handler](../spec/effects.md) の「handler の意味」、[型と Kind](../spec/types.md) の「推論」)
 - `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`Char`、`Byte`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `FileIn` の `open`、`read_all`、`close` などが起こし、`FileIn.FileIn` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)。extern のエフェクトの多重度は表の行が決め、`IO` は `Once`、`Panic` は `Never` である ([エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」)
-- IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」)
-- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`、`Par.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import したものだけを読み込む。`import FileIn` か `import Std.FileIn` を書いたモジュールで、`FileIn.open` のように修飾付きで使う。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
+- IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`fail_io : IOErrorKind -> String -> <IO> a` は、種類と文言を指定して IO の失敗を起こす。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」、「`fail_io`」、「`exit`」)
+- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`、`Par.em`、`Async.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import したものだけを読み込む。`import FileIn` か `import Std.FileIn` を書いたモジュールで、`FileIn.open` のように修飾付きで使う。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
 - std のエフェクトと `Iter`: エフェクトのモジュール `Yield` (`for_each`、`fold`、`collect`)、`Fail` (`to_result`、`to_option`)、`State` (`run`、`eval`、`exec`) と、`once` の継続で作る引いて使うジェネレータ `Iter` とその変換。`FileIn` から1行ずつ読む `FileIn.read_line` ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」と「`FileIn`」)。`tests/ui/run/scripts/` の `grep`、`logstat`、`csv2jsonl` は std のエフェクトを使い、`csv2jsonl` の CSV の読み取りは `let … and …` の組で書く
 - 標準入出力とファイルのハンドル: 線形な型 `Stdin`、`Stdout`、`Stderr`、`FileIn.FileIn`、`FileOut.FileOut`。読むハンドルは文字列とバイト列を、全部、1行ずつ、塊ごとに読み、書くハンドルは文字列とバイト列と行を書く。`FileOut` は自分の buffer を持ち、閉じずに手放しても書き出す。標準のストリームごとに、生きているハンドルは高々1つである ([標準ライブラリ](../spec/stdlib.md) の「ハンドル」)
 - 子のプロセス: `Std.Proc` が、`Cmd` をシェルを介さずに起動する。起動の形は、標準入出力を受け継ぐ `run`、標準出力を取る `output` と `capture`、pipe でやりとりする線形な `Child` を返す `spawn` の3つである。作業ディレクトリ、環境変数、引数の追加、標準エラーの向き (`2>&1`、`2>/dev/null`) を `Cmd` に設定できる ([標準ライブラリ](../spec/stdlib.md) の「`Proc`」)
 - `Float` (IEEE 754 の倍精度) のリテラル、算術、比較と、Python の `repr` の形の表示。変換と数学の関数は `Std.Float` にある ([宣言](../spec/declarations.md) の「Prelude のクラス」、[標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」)
 - 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)
 - 連想配列と集合: キーの順の `Map k v` (`Std.Map`) と `Set a` (`Std.Set`)。どちらも釣り合いを取った木で、キーと要素は `Unr` に限る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」)
-- 2つの計算の組: `Std.Par` の `par` は2つの子を動かして両方を待ち、子の `never` の操作を親で起こし直す。子の row の上限は `never` で、`IO` や `var` を使う子は E2020 になる。`both` は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Par`」)。`eml run` と `eml repl` の `--sched` で、子を切り替える方針を逐次 (`sequential`。既定) と seed で決まる横取り (`seeded:N`) から選ぶ ([標準ライブラリ](../spec/stdlib.md) の「起動」)
+- 2つの計算の組: `Std.Par` の `par` は2つの子を動かして両方を待ち、子の `never` の操作を親で起こし直す。子の row の上限は `never` で、`IO` や `var` を使う子は E2020 になる。`both` は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Par`」)。`eml run` と `eml repl` の `--sched` で、子を切り替える方針を普通の方針 (`normal`。既定。監視のスレッドの刻みで横取りする)、逐次 (`sequential`)、seed で決まる横取り (`seeded:N`) から選ぶ ([標準ライブラリ](../spec/stdlib.md) の「起動」)
+- 非同期のタスク: `Std.Async` の `run` が根のスコープを開いて本体をタスクとして動かし、`start` と `spawn` が同じスコープにタスクを足し、`await` がタスクの値を受け取るか失敗を起こし直す。`run` はスコープのすべてのタスクを待ってから戻る。ほかに `yield_now`、`try_all`、`Failure` がある。タスクは `par` の子と同じく1つの worker の上で切り替えて動き、`--sched` の方針に従う ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」、[VM](../spec/vm.md) の「`Async` のタスク」)
 - ブロックの中の `var` と代入 `x <- e`、添字の読み `x[i]` と書き込み `x[i] <- e`、Prelude の `for` と `while` ([式](../spec/expressions.md) の「`var`」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」)
 - 線形性、持ち越し規則、網羅性の検査。`fail` や `exit` のような戻らない呼び出しで終わる経路では、消費しない `Lin` の値を手放さなくてよい ([線形性](../spec/linearity.md) の「暗黙の後始末」)
 - 型クラス: `class` (上位クラス、既定のメソッド、メソッド自身の型変数と制約)、`instance` (文脈、標準ライブラリの中の `extern`)、シグネチャの制約 `Eq a =>`、`deriving (Eq, Ord, Show)`、Prelude のクラス `Eq`、`Ord`、`Show` と `Ordering`、タプルと `Unit` の構造的な instance。証拠は単相化で決め、実行時の辞書は持たない ([宣言](../spec/declarations.md) の「クラスと instance」、[型と Kind](../spec/types.md) の「制約」)
 - モジュール: 入口のファイルのディレクトリを根にして import をたどる読み込み、`pub`、修飾した名前、別名、import の並び、`T(..)` と `E(..)`、修飾子の合流、モジュールとしての Prelude と `Prelude.` の修飾、import の循環の禁止 (E1027)、公開の範囲の検査 (E1032) ([モジュールと名前解決](../spec/modules.md))
+- 抽象型と抽象エフェクト (`pub abstract`): `pub abstract data` は型の名前だけを公開し、コンストラクタと名前付きのフィールドを宣言したモジュールの中に隠す。`pub abstract effect` はエフェクトの名前だけを公開し、操作を隠す。隠した部品を外で名指すと E1058、隠したフィールドの射影と更新は E2021 である。`Std.Map`、`Std.Set`、`Std.Iter` の型と `Std.Async` の `Async` は抽象である ([宣言](../spec/declarations.md) の「`pub`」、[モジュールと名前解決](../spec/modules.md) の「公開の範囲」、[エフェクトと handler](../spec/effects.md) の「抽象エフェクト」)
 - 同じ名前の別の型、エフェクト、コンストラクタは、名前を定義するモジュールが2つ以上あるとき、`Prelude.Bool` と `Main.Bool` のようにモジュール名で修飾して表示する
 - REPL (`eml repl`): 入力をまたいで定義と `let` の束縛を残すセッション、定義し直し、実行時エラーと割り込みの後の回復、`:load` / `:reload` / `:type`、型に従う結果の表示器 (予算と深さと長さの上限、幅に合わせた整形) ([REPL の端末](../spec/repl.md))
 
@@ -47,7 +49,7 @@
 - Unicode の表が要る文字の操作 (ASCII でない大文字と小文字の変換、文字の分類)、置換付きの UTF-8 のデコード、`Lin` の要素の配列の API ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - コマンドの組み合わせ: パイプ (`.|`)、文字列からの標準入力、`Child` の標準エラーの pipe ([ロードマップ](../future/roadmap.md) の「段の列」)、ファイルへのリダイレクト、標準エラーを別の文字列に取ること、環境変数の削除 ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - ユーザーが書く extern (FFI。[FFI と拡張の設計](../future/ffi.md))
-- 可変参照 `Ref`、再エクスポート (`pub import`)、抽象型、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、関数をまたぐ reuse、LSP、フォーマッタ ([ロードマップ](../future/roadmap.md) の「その後の項目」)
+- 可変参照 `Ref`、再エクスポート (`pub import`)、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、関数をまたぐ reuse、LSP、フォーマッタ ([ロードマップ](../future/roadmap.md) の「その後の項目」)
 - 借用パラメータ、ネイティブ化 ([ロードマップ](../future/roadmap.md) の「段の列」)
 
 ## 既知の制限
@@ -134,11 +136,19 @@
 - 捕まえられなかった子の `Panic` の実行時エラーは、``panicked: <message> in `reperform$Prelude.Panic.panicked` `` の文言で、ソースの位置を持たない。子の `panic` を親で起こし直す関数の中で報告するためである ([VM](../spec/vm.md) の「子の誤り」)
 - 共有にした `poly` の入れ物を入れ子の `par` でもう一度送ると、その `lin` の部分の下にある rc > 1 の局所の物体は前の持ち主のまま残る。受け手がその物体に触れると、検査モードは `WrongOwner` を返す。速いモードでは worker が1つなので害はない。扱いは worker のスレッドを入れるときに決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」、[ロードマップ](../future/roadmap.md) の `worker-threads`)
 
+### `Async`
+
+- タスクを取り消す方法はない。`drop` はハンドルを放すだけで、タスクは最後まで動く。失敗したタスクがあっても、同じスコープのほかのタスクは最後まで動く ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
+- 名前を付けたスコープ (`scope`、`spawn_in`、`start_in`)、時間 (`sleep_ms`、`timeout`)、channel、I/O の driver はない。タスクの中の読み書きはその場で動き、その間はほかのタスクも動かない ([ロードマップ](../future/roadmap.md) の「段の列」)
+- タスクの中で `Async.run` を入れ子に呼ぶと、中のスコープのタスクがすべて終わるまで、呼んだタスクはスタックを持ったまま待つ ([VM](../spec/vm.md) の「待ちの2種類」)
+- スコープの失敗は、終わった順で最初のものだけを `run` が起こし直す。2つ目からは報告せず、`RunStats.dropped_failures` に数えるだけである
+- `IOErrorKind` の `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit` を出すのは `fail_io` だけで、extern の誤りはこれらの種類を出さない ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」)
+
 ### 子のプロセス
 
 - `Child` は、1度に1本の pipe しか読み書きしない。読みながら書く子に pipe の buffer より多く書いてから読むと、両方が止まる。処理系はこの状態を検出せず、Ctrl-C で終える。守る順は [標準ライブラリ](../spec/stdlib.md) の「`Child`」にある
 - 手放した `Child` の破棄処理が kill するのは直接の子だけである。`sh -c` が起動した孫は残りうる
-- `Cmd` のコンストラクタとフィールドは公開されている。抽象型がないので、`Cmd { … }` の作る式とパターンを書かない決まりで守る ([標準ライブラリ](../spec/stdlib.md) の「`Cmd`」)
+- `Cmd` のコンストラクタとフィールドは公開されている。`Std.Proc` が別のモジュールから作って更新するので、抽象型にしていない。`Cmd { … }` の作る式とパターンを書かない決まりで守る ([標準ライブラリ](../spec/stdlib.md) の「`Cmd`」)
 
 ### Windows
 

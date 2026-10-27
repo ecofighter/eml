@@ -65,6 +65,7 @@ pub mod codes {
     pub const INPUT_CHANGES_UNIFORM: ErrorCode = ErrorCode(2018);
     pub const VAR_ESCAPES: ErrorCode = ErrorCode(2019);
     pub const ROW_BOUND_EXCEEDED: ErrorCode = ErrorCode(2020);
+    pub const PRIVATE_FIELD: ErrorCode = ErrorCode(2021);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);

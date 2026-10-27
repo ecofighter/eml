@@ -3486,7 +3486,7 @@ impl<M: Mode> Ctx<M> {
     /// `switch_task` が上限から引いてある。
     #[inline]
     pub fn poll(&self, depth: usize) -> Result<(), Stop> {
-        let bits = self.control.stop_bits();
+        let bits = self.control.worker_bits();
         if depth > self.depth_limit || bits != 0 {
             return Err(stop_reason(bits));
         }

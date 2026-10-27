@@ -1085,8 +1085,7 @@ impl<'a> Context<'a> {
                 ));
             }
         }
-        for (index, (&arg, &kind)) in args.iter().zip(row.param_kinds).enumerate() {
-            let expected = Mark::from(kind);
+        for (index, (&arg, &expected)) in args.iter().zip(row.param_marks).enumerate() {
             if !self.mark_passes(arg, expected) {
                 return Err(format!(
                     "argument {index} of `{}` is {}, but the extern takes {}",
@@ -1111,7 +1110,7 @@ impl<'a> Context<'a> {
                 ret.name()
             ));
         }
-        self.bound_mark(var, Mark::from(row.ret_kind), || format!("`{}`", row.name))
+        self.bound_mark(var, row.ret_mark, || format!("`{}`", row.name))
     }
 
     /// 入口の段では、行の Repr が `tobj` でない位置の引数と結果の Repr は行と同じである。`tobj` の位置は、型変数の

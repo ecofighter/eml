@@ -60,7 +60,7 @@ effect Fail where
 ## 組み込みの `IO`
 
 - `IO` は、Prelude が `pub extern effect IO where never io_failed : IOErrorKind -> String -> a` と宣言する extern のエフェクトである。操作 `io_failed` は Prelude の外から見えず、Prelude の `try_io` だけが handle する ([標準ライブラリ](stdlib.md) の「`try_io`」)。
-- `IO` を起こすのは、`IO` を row に持つ extern の関数 (`println` など) である。extern の関数は handler を通らず、その場で実行して値を返す。ただし、`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始める。`exit` はいつも中断を始める ([VM](vm.md) の「extern の中断」)。中断は継続を作らずに巻き戻しで進むので、`IO` を起こす extern の呼び出しは yield の地点でなく ([Core IR](core-ir.md) の「IO の extern」)、`IO` は yield しうるラベルでない ([型と Kind](types.md) の「row の具体化の記録」)。
+- `IO` を起こすのは、`IO` を row に持つ extern の関数 (`println` など) である。extern の関数は handler を通らず、その場で実行して値を返す。ただし、`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始める。`exit` と `fail_io` はいつも中断を始める ([VM](vm.md) の「extern の中断」)。中断は継続を作らずに巻き戻しで進むので、`IO` を起こす extern の呼び出しは yield の地点でなく ([Core IR](core-ir.md) の「IO の extern」)、`IO` は yield しうるラベルでない ([型と Kind](types.md) の「row の具体化の記録」)。
 - extern の関数の呼び出しは、操作の呼び出しと違って `perform` 命令にならない ([Core IR](core-ir.md))。多重度は `once` として扱う。
 - handler の節の先頭に、`IO` を起こす extern の関数の名前を書いたらエラーにする (E1009)。節の先頭の名前は、まず操作として引き、見つからないときだけ extern の関数を引く。extern のエフェクト (`IO` か `Panic`) を起こす extern の関数が見つかれば E1009 で、それ以外 (純粋な extern の関数) は E1001 である。ユーザーが定義した同名の関数は、`Prelude` の extern の関数を隠さない ([モジュールと名前解決](modules.md) の「名前の解決」)。
 
@@ -95,6 +95,10 @@ extern のエフェクトは、型検査では普通のエフェクトと次の�
 - `panic` は、`exit` と同じく戻らない extern の関数である。結果の型は量化した型変数なので、手前で `Lin` の値を手放さなくてよい ([線形性](linearity.md) の「暗黙の後始末」)
 - 型検査では、重なったラベルを1つにまとめ、`mask` に入れない点が `IO` と同じである。多重度は `Never` で、`never` の操作だけを含む row (`Row<Never>`) に入れられる。並列のタスクに渡す関数も `Panic` を起こせる ([マルチコア対応の設計](../future/multicore.md))。操作は `never` の `panicked` だけなので、`Panic` は yield しうるラベルでない ([型と Kind](types.md) の「row の具体化の記録」)。row に `Panic` を足しても、yield の確かめは増えない
 - トップレベルの値の本体と、`Eq`、`Ord`、`Show` のメソッドの row は空なので、そこでは `Panic` を起こせない ([宣言](declarations.md) の「シグネチャと等式」)。`main` の row と REPL の入力の row は `Panic` を許す ([モジュールと名前解決](modules.md) の「モジュール」、[型と Kind](types.md) の「REPL の入力」)
+
+## 抽象エフェクト
+
+`pub abstract effect E where …` は、エフェクトの名前を公開し、操作を宣言したモジュールの外から隠す。外のモジュールは row に `E` を書き、`E` を持つ関数を呼べるが、操作を perform できず、`handle` の節に書けず (どちらも E1058)、import の並びの `E(..)` でも取り込めない。extern のエフェクトはいつも隠す (上の「組み込みの `IO`」)。型検査、evidence passing、`mask` は普通のエフェクトと同じで、違いは名前解決だけである。`Std.Async` の `Async` は抽象エフェクトで、生の操作はランタイムとの ABI として [標準ライブラリ](stdlib.md) に書くが、利用者は包みの関数を呼ぶ ([モジュールと名前解決](modules.md) の「公開の範囲」)。
 
 ## handler の意味
 

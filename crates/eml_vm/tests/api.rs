@@ -1,12 +1,12 @@
 //! 公開の API の性質。後の並列 VM のための型の性質 (docs/future/multicore.md の「VM の並列化の備え」の制約1と2) と、
-//! 実行の設定 `RunConfig` と、スケジュールの方針 `Sched` と、実行時エラーの `interrupted` である。
+//! 実行の設定 `RunConfig` と、スケジュールの方針 `Sched` と、実行時エラーの `interrupted` と、`exit` が書く終わりの欄である。
 
 use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
-    AnyMachine, CodeBase, Control, Limits, Machine, RunConfig, RuntimeError, Sched, Scheduler,
-    Seeded, Sequential, Stop, Task, VmFault,
+    AnyMachine, CodeBase, Control, Limits, Machine, Normal, RunConfig, RuntimeError, Sched,
+    Scheduler, Seeded, Sequential, Stop, Task, VmFault,
 };
 
 use crate::common::parse;
@@ -28,6 +28,8 @@ fn a_code_base_is_shared_and_a_task_moves() {
 /// 「タスクとスケジュール」)。
 #[test]
 fn a_scheduler_moves_and_a_sched_is_shared() {
+    send::<Normal>();
+    send::<Scheduler<Normal>>();
     send::<Scheduler<Sequential>>();
     send::<Scheduler<Seeded>>();
     send::<Sched>();
@@ -79,6 +81,7 @@ fn the_default_sched_is_sequential() {
 /// CLI の `--sched` が読む綴り (docs/spec/stdlib.md の「起動」)。seed は `u64` の10進数である。
 #[test]
 fn a_sched_parses_and_rejects() {
+    assert_eq!("normal".parse(), Ok(Sched::Normal));
     assert_eq!("sequential".parse(), Ok(Sched::Sequential));
     assert_eq!("seeded:0".parse(), Ok(Sched::Seeded(0)));
     assert_eq!("seeded:2026".parse(), Ok(Sched::Seeded(2026)));
@@ -90,6 +93,7 @@ fn a_sched_parses_and_rejects() {
         "",
         "bogus",
         "Sequential",
+        "Normal",
         " sequential",
         "seeded",
         "seeded:",
@@ -103,7 +107,7 @@ fn a_sched_parses_and_rejects() {
         let error = text.parse::<Sched>().unwrap_err();
         assert_eq!(
             error,
-            format!("expected `sequential` or `seeded:<n>`, found `{text}`")
+            format!("expected `normal`, `sequential` or `seeded:<n>`, found `{text}`")
         );
     }
 }
@@ -242,4 +246,93 @@ fn only_an_interrupt_is_interrupted() {
     assert!(!fault(VmFault::Extern(eml_rt::ArithFault::DivisionByZero.into())).interrupted());
     assert!(!fault(VmFault::Internal("x")).interrupted());
     assert!(!RuntimeError::Leak(vec![("String".to_string(), 1)]).interrupted());
+}
+
+const EXIT: &str = "\
+fn main() -> unit {
+  let z.0: unit = extern Prelude.exit(3)
+  return z.0
+}
+";
+
+/// `main` の底は `exit` の終了コードを `Control` の終わりの欄に書き、`Finished.exit` はそこから来る
+/// (docs/spec/vm.md の「`exit`」)。
+#[test]
+fn an_exit_is_written_to_the_end_field() {
+    for debug_heap in [true, false] {
+        let control = Arc::new(Control::new(Limits::default()));
+        let config = RunConfig::default()
+            .with_debug_heap(debug_heap)
+            .with_control(Arc::clone(&control));
+        let (host, _) = eml_vm::capture_host(Default::default());
+        let finished = eml_vm::execute(&parse(EXIT), &config, host).unwrap();
+        assert_eq!(finished.exit, Some(3));
+        assert_eq!(control.exit_code(), Some(3));
+    }
+}
+
+/// 終わりの欄は run ごとに開くので、`exit` で終わった `Machine` の次の run は `exit` を報告しない
+/// (docs/spec/vm.md の「誤り、止めること、終わり」)。
+#[test]
+fn a_machine_runs_again_after_an_exit() {
+    let quiet = "\
+fn second() -> unit {
+  return ()
+}
+";
+    let (host, _) = eml_vm::capture_host(Default::default());
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut machine = Machine::<Checked>::new(Arc::clone(&control), host);
+    let first = machine.load(&parse(EXIT)).unwrap();
+    let second = machine.load(&parse(quiet)).unwrap();
+    assert_eq!(machine.run(first.entry).unwrap().exit, Some(3));
+    assert_eq!(machine.run(second.entry).unwrap().exit, None);
+    assert_eq!(control.exit_code(), None);
+    machine.close().unwrap();
+}
+
+/// 本体が `FileIn` を持ち、別のタスクが入れ子の `run` で待つ間に、タスク `t` が `exit 3` を呼ぶ。タスクの底の `exit` は
+/// ほかのタスクを動かさずに run を捨て、回復がヒープを入れ替えるので、`close` はリークを報告せず、同じ `Machine` の次の
+/// run も動く (docs/spec/vm.md の「誤り、止めること、終わり」)。
+#[test]
+fn an_exit_from_a_task_recovers_and_reports_the_code() {
+    let src = "\
+import Async
+import FileIn
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let f = FileIn.open \"a.txt\"
+    let t = Async.start (fn () ->
+      Async.yield_now ()
+      println \"exiting\"
+      (exit 3 : Unit))
+    let u = Async.start (fn () ->
+      Async.run (fn () ->
+        Async.yield_now ()
+        Async.yield_now ()
+        println \"never\"))
+    Async.await t
+    Async.await u
+    FileIn.close f)
+";
+    let quiet = "\
+fn second() -> unit {
+  return ()
+}
+";
+    let root = std::env::temp_dir().join(format!("eml-vm-task-exit-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.txt"), "abc").unwrap();
+    let (host, out) = eml_vm::capture_host(root.clone());
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut machine = Machine::<Checked>::new(Arc::clone(&control), host);
+    let first = machine.load(&eml_test_support::lir(src)).unwrap();
+    let second = machine.load(&parse(quiet)).unwrap();
+    let finished = machine.run(first.entry);
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(finished.unwrap().exit, Some(3));
+    assert_eq!(machine.run(second.entry).unwrap().exit, None);
+    machine.close().unwrap();
+    assert_eq!(out.contents(), "exiting\n");
 }

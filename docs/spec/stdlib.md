@@ -16,7 +16,7 @@ eml run --sched seeded:7 wc.em -l input.txt
 - 最初の引数が `-` で始まらず、サブコマンドの名前 (`check`、`run`、`repl`、`help`) でもなければ、`run` として扱う。`run` という名前のファイルを動かすときは `eml run run` と書く。`-` で始まる最初の引数はフラグとして読むので、`eml --verison` は使い方の誤り (終了コード 2) である
 - `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--sched`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--sched=seeded:7`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
 - ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap` と `--sched` はファイルより前にだけ書ける。`eml run main.em --sched bogus` は、スクリプトに `--sched` と `bogus` を渡す
-- `--sched <sequential|seeded:N>` は、タスクを切り替える方針を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。既定は `sequential` で、`seeded:N` は `u64` の seed `N` で横取りの位置を決める。ほかの値と、2回書いた `--sched` は使い方の誤り (終了コード 2) である。`run` と `repl` が持ち、`check` は持たない。環境変数では選べない
+- `--sched <normal|sequential|seeded:N>` は、タスクを切り替える方針を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。既定は `normal` で、監視のスレッドの刻みで横取りする。`sequential` は横取りしない。`seeded:N` は `u64` の seed `N` で横取りの位置を決める。ほかの値と、2回書いた `--sched` は使い方の誤り (終了コード 2) である。`run` と `repl` が持ち、`check` は持たない。環境変数では選べない
 - `Env.args ()` は、ファイルより後ろの引数を返す。`eml` とスクリプトのパスは含めない
 - shebang は `#!/usr/bin/env eml` と書く。Linux の `env` は `#!` の行の残りを1つの引数として渡すので、`#!/usr/bin/env eml run` は動かない
 - ファイルの相対パスと子のプロセスの作業ディレクトリは、プロセスの今のディレクトリである
@@ -28,6 +28,8 @@ eml run --sched seeded:7 wc.em -l input.txt
 例外は `Std.Par.par` である。`par` は閉包を2つ受け取って呼ぶが、extern は eml のコードを呼び返さない。そのため、`par` の行は std の宣言を型検査に結ぶためだけにあり、引数をそろえた呼び出しは extern の命令でなく `par` の命令になる ([Core IR](core-ir.md) の「`par` の呼び出し」)。
 
 extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
+
+extern の行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md) の「`extern`」)。預かる行は `Std.Async` の `start_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result` の8行で、`task_cell` だけは借りて預かる。利用者の extern (将来の `extern "C"`) は表の印を書けないので、型変数は `Unr` に固定されたままである。
 
 文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
@@ -49,6 +51,11 @@ pub data IOErrorKind =
   | NotAvailable
   | NotUtf8
   | Other
+  | Cancelled
+  | TimedOut
+  | ConnectionReset
+  | AddrInUse
+  | ResourceLimit
   deriving (Eq, Show)
 
 pub data IOError =
@@ -72,6 +79,8 @@ try_io action =
 - handler の節は handle の外側の `evv` で動く ([エフェクトと handler](effects.md) の「健全性」)。そのため、handle の本体の中にある `try_io` は、その handler の節の中で起きた IO の失敗を捕まえない。handle より外側の `try_io` が捕まえる
 - `try_io` は、`exit`、書き出しの失敗、`Panic` (算術の誤り、位置の範囲の誤り、`panic`)、割り込み、確保量と深さの上限、検査モードのヒープの誤りを捕まえない
 
+`IOErrorKind` の構築子は10個で、タグは宣言の順の 0 から 9 である。この実装の extern の誤りが出すのは、最初の5つ (`NotFound` から `Other`) だけである。残りの5つは `fail_io` が出し、`fail_io` は10個のどれでも出せる。`Cancelled` は、非同期の `Wake` の構築子 `Cancelled` と名前が重なる。修飾しない名前は自分のモジュールと import を Prelude より先に引くので ([モジュールと名前解決](modules.md) の「名前の解決」)、`Wake(..)` を import したモジュールでは、種類のほうを `Prelude.Cancelled` と書く。
+
 捕まえる失敗と `kind` は次のとおりである。`message` は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。
 
 | `Fault` | 起こす関数 | `kind` |
@@ -79,7 +88,7 @@ try_io action =
 | `Io { reason, .. }` | `FileIn.open`、`FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`FileIn.read_all_bytes`、`FileIn.read_line_bytes`、`FileIn.read_chunk`、`FileOut.create`、`FileOut.append`、`FileOut.write`、`FileOut.write_bytes`、`FileOut.write_line`、`FileOut.flush`、`FileOut.close`、`Fs.write_text`、`Proc` の起動 (`run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn`)、`Child` の読みと書き込み (`output` と `capture` の中の読みを含む) | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
 | `Stdin(reason)` | `Stdin.read_text` と、`Stdin` のハンドルの読み (`read_all`、`read_line`、`read_all_bytes`、`read_line_bytes`、`read_chunk`) | 同上 |
 | `NotUtf8(_)` | `FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`Stdin.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Proc.output`、`Proc.capture`、`Proc.read_all`、`Proc.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
-| `Exited` | `Proc.capture`、`Proc.capture_bytes` | `Other` |
+| `Raised { kind, .. }` | `fail_io` と、`Async.await` と `Async.run` がタスクの IO の失敗を起こし直すとき。`Proc.capture` と `Proc.capture_bytes` の 0 でない終了も `fail_io` で起こす | `kind` のタグが表す種類 (`Proc` の終了は `Other`) |
 
 書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、実行時エラーのままにする。
 
@@ -118,6 +127,18 @@ try_panic action =
 | `InUse(_)` | `Stdin.open`、`Stdout.open`、`Stderr.open` (同じストリームのハンドルが生きている間の2つ目の `open`) と、`Stdin.open` を使う `Stdin.read_text` (下の「ハンドル」) |
 | `Index(_)` | `String.byte_at`、`String.char_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
 
+## `fail_io`
+
+```haskell
+pub extern fail_io : IOErrorKind -> String -> <IO> a
+```
+
+- `fail_io kind message` は、種類 `kind` と文言 `message` の IO の失敗を起こす。`exit` と同じく戻らない
+- `try_io` は、種類と文言をそのまま `IOError` の欄に入れて受け取る。`try_io` は `Io` などの extern の誤りと同じ道で捕まえる
+- `try_panic` は捕まえない。`IO` の失敗は `Panic` ではないためである
+- 捕まえなければ、`fail_io` を呼んだ位置の実行時エラーになる。表示は `message` で、終了コードは 1 である。実行時エラーの扱いは `try_io` の失敗と同じである
+- `kind` のタグは宣言の順の数で、`fail_io` は書かれたまま渡す。`Cancelled` から `ResourceLimit` までの5つの種類を `fail_io` に渡しても、型検査の外で作る特別な扱いはない
+
 ## `exit`
 
 ```haskell
@@ -126,6 +147,7 @@ pub extern exit : Int -> <IO> a
 
 - `exit n` は、途中のフレームが持っていた値を後始末し、標準出力を書き出してから、終了コード `n & 255` で終わる。シェルが終了コードを 8 ビットで扱うのと同じである
 - `try_io` も、利用者の handler も、`exit` を捕まえない。どの handler の `return` の節も呼ばない
+- `Std.Async` のタスクの中の `exit n` も、プログラムを終了コード `n & 255` で終える。巻き戻すのは、`exit` を呼んだタスクのフレームだけである。ほかのタスクは巻き戻さず、その後は動かさない。ほかのタスクが持っていた値は、実行を捨てるときに古いヒープと一緒に後始末する。`FileIn` などの `Lin` の資源は、そのときに破棄処理が閉じる ([VM](vm.md) の「誤り、止めること、終わり」)。`try_all` も `try_panic` も `exit` を捕まえない
 - 書き出しが失敗したら、プログラムの終わりの書き出しの失敗と同じく、位置のない実行時エラー (終了コード 1) にする
 - `exit` は `<IO>` を持つので、型の上では `IO` の関数としてどこからでも呼べる。`<IO>` を持たせるのは、`par` の子から呼べないようにするためである。`par` の子の row は `IO` を含められない ([マルチコア対応の設計](../future/multicore.md) の「row の Kind」)
 - `exit 1`、`exit 2`、`exit 130` の終了コードは、CLI の実行時エラー (1)、使い方の誤り (2)、割り込み (130) と区別できない。スクリプトが選んだことなので、そのまま受け入れる
@@ -395,7 +417,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 キーの順に並べた写像である。AVL 木で、`Std.List` を import して書いてある。
 
 ```haskell
-pub data Map k v =
+pub abstract data Map k v =
   | Empty
   | LeftHigh (Map k v) k v (Map k v)
   | Even (Map k v) k v (Map k v)
@@ -424,15 +446,14 @@ pub data Map k v =
 - `size` は木を O(n) で数える。数えるのに `+` を使い、`Int` の桁あふれが `Panic` になりうるので、型に `Panic` を持つ
 - `size` のほかの関数は、型に `Panic` を持たない。トップレベルの値 (row は `<>` に限る) と `Show` の instance の本体でも使える
 - キーも値も `Unr` に限る。`Lin` の値は E3001 になる。釣り合いを直す関数の `_ -> t` の枝が、値を捨てるためである
-- コンストラクタは公開される。抽象型がまだなく、コンストラクタを隠せないためである。API は上の関数の表だけである。利用者が `Empty` などで直接作った木に、関数が何を返すかは決めない。そのような木でも、`size` 以外の関数は実行時エラーを起こさない
-- `import Map (Map(..))` と書くと、`Empty` が利用者のコンストラクタと重なりうる。そのため、使い方は `Map.empty` と関数に限る
+- コンストラクタは隠す (`pub abstract data`)。API は上の関数の表だけである
 
 ## `Std.Set`
 
 要素の順に並べた集合である。`Std.Map` と同じ形の AVL 木で、節は値を持たない。`Std.List` を import して書いてある。
 
 ```haskell
-pub data Set a =
+pub abstract data Set a =
   | Empty
   | LeftHigh (Set a) a (Set a)
   | Even (Set a) a (Set a)
@@ -461,8 +482,7 @@ pub data Set a =
 - 3つの演算は、低いほうの木をたどって高いほうの木に入れる。計算量の m は低いほうの木の大きさ、n は高いほうの木の大きさである。木の高さは、印の高いほうの子をたどって O(log n) で求め、`1 <<< 高さ` として数えるので、`Panic` は起きない
 - `size` は木を O(n) で数える。数えるのに `+` を使い、`Int` の桁あふれが `Panic` になりうるので、型に `Panic` を持つ。`size` のほかの関数は、型に `Panic` を持たない。トップレベルの値 (row は `<>` に限る) と `Show` の instance の本体でも使える
 - 要素は `Unr` に限る。`Lin` の値は E3001 になる。釣り合いを直す関数の `_ -> t` の枝が、値を捨てるためである
-- コンストラクタは公開される。抽象型がまだなく、コンストラクタを隠せないためである。API は上の関数の表だけである。利用者が `Empty` などで直接作った木に、関数が何を返すかは決めない。そのような木でも、`size` 以外の関数は実行時エラーを起こさない
-- `import Set (Set(..))` と書くと、`Empty` が利用者のコンストラクタや `Map` のものと重なりうる。そのため、使い方は `Set.empty` と関数に限る
+- コンストラクタは隠す (`pub abstract data`)。API は上の関数の表だけである
 
 ## `Env`
 
@@ -659,7 +679,7 @@ pub data Set a =
 - `Cmd` の値は、コマンドリテラルとこのモジュールの設定の関数で組む。プログラムを変数で与えるときは `` `\{prog} \{..args}` `` と書く
 - `Cmd` は `Eq` と `Show` の instance を持つ。`show` は全部のフィールドを `Cmd { program = "git", args = ["log"], … }` の形で表示し、`display` は人が読む1行で、プログラムと引数を空白でつなぐ。`display` は引用を戻さないので、コマンドリテラルには戻せない
 - フィールドの名前と数は処理系の都合で変わりうる。そのため、利用者のコードは `Cmd { … }` の作る式とパターンを書かない。読むだけの射影 (`cmd.program`、`cmd.args`) は書いてよい。`StderrMode` のコンストラクタも、設定の関数が書くので、利用者は書かない
-  - 見直す条件: 抽象型が入ったとき、`Cmd` と `StderrMode` のコンストラクタを隠す。そのときも `Cmd` は Prelude のレコードのまま型を抽象にし、`extern data` にはしない
+  - 見直す条件: `Cmd` の設定の関数を Prelude へ移すか、読めるフィールドの `pub` を入れたときに隠す
 - `Cmd` を `extern data` にしないのは、`Unr` の `Foreign` は REPL の回復で写せず ([オブジェクトモデル](object-model.md) の「種類」)、`` let c = `ls` `` の後の回復がどれも失敗するためである。`Lin` の `Foreign` にすると、同じ `Cmd` を2回起動できない
 - 設定の関数は対象の `Cmd` を最後に受ける。`` `make` |> Proc.cwd "build" |> Proc.merge_stderr |> Proc.capture `` のように `|>` でつなぐためである。`with_` の名前は、handler を呼ぶ関数の慣習 ([例](examples.md) の `with_env`) に取っておく
 - `cwd dir c` は作業ディレクトリを `dir` にする。相対パスは `FileIn.open` と同じく Host の `file_root` から解釈する。2回設定したら、後の設定が前の設定を置き換える。ないディレクトリは、起動の誤りの理由 `not found` (``cannot run `make`: not found``) になり、プログラムがないときと区別しない
@@ -700,7 +720,7 @@ std の中だけの extern は次の4つである。
   6. 標準出力の向き (標準入力と同じ)
   7. 標準エラーの向き (0 は受け継ぐ、1 は標準出力に合わせる、2 は捨てる)
 - 列は各要素を「バイト長の十進、NUL、本文」の順に並べた1つの文字列である。環境の列は名前と値を交互に置く。組み立ては `++` と `String.byte_length` だけで書くので、`Panic` を起こさない。NUL を含む要素は OS に渡せないので、起動の誤り (`I/O error`) にする。向きの値が範囲の外のときも同じである
-- `exited : String -> Int -> <IO> a` は、いつも ``command `<program>` exited with code <code>`` の IO の失敗で終わり、戻らない。eml のコードは `io_failed` を呼べないので、`capture` が失敗を起こす窓口がこの extern である
+- `exited : String -> Int -> <IO> a` は `Proc` の中だけの eml の関数で、`fail_io Other` で ``command `<program>` exited with code <code>`` の IO の失敗を起こす。戻らない。`capture` と `capture_bytes` が使う
 - `read_line_raw` と `read_line_bytes_raw` は、`Stdin` の同じ名前の extern と同じく、行の終わりを含む1行か、終わりなら空を返す
 
 ### `Child`
@@ -729,7 +749,7 @@ eml は1度に1本の pipe しか読み書きしない。pipe の buffer は OS 
 | 操作 | 失敗 | 届け方 |
 |---|---|---|
 | `run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn` | 起動できない (`Io { op: Run, name: program, .. }`。``cannot run `rsync`: not found``)。ない作業ディレクトリも `not found` である。NUL を含む引数と、空か `=` を含む環境変数の名前は `I/O error` | `IO` (`try_io`) |
-| `capture`、`capture_bytes` | 終了コードが 0 でない (`Exited`。``command `sh` exited with code 3``) | `IO` (`kind` は `Other`) |
+| `capture`、`capture_bytes` | 終了コードが 0 でない (``command `sh` exited with code 3``) | `IO` (`kind` は `Other`) |
 | `Child` の読み、`output`、`capture` | 読めない (`Io { op: ReadOutput, name: program, .. }`。``cannot read the output of `sort`: I/O error``)。文字列の読みは UTF-8 でない (``the output of `sort` is not valid UTF-8``) | `IO` (UTF-8 の誤りの `kind` は `NotUtf8`) |
 | `Child` の書き込み | 書けない (子が先に終わったときの EPIPE、`close_stdin` の後など)。`FileOut` と同じ `Io { op: Write, name: program, .. }` (``cannot write to `sort`: I/O error``) で、ハンドルを手放す | `IO` |
 | `wait`、`run`、`output`、`output_bytes`、`capture`、`capture_bytes` | 子を待てない (`Io { op: Wait, name: program, .. }`。``cannot wait for `sort`: I/O error``)。起動の誤りと違い、子は起動している | `IO` |
@@ -816,12 +836,13 @@ pub effect State s where
 ## `Iter`
 
 ```haskell
-pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
+pub abstract data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 ```
 
 | 関数 | 型 |
 |---|---|
 | `next` | `Iter <e> a -> <e> Option (a, Iter <e> a)` |
+| `from_fn` | `(once Unit -> <e> Option (a, Iter <e> a)) -> Iter <e> a` |
 | `generate` | `(Unit -> <Yield a \| e> Unit) -> Iter <e> a` |
 | `yield_all` | `Iter <e> a -> <Yield a \| e> Unit` |
 | `from_list` | `List a -> Iter <e> a` |
@@ -836,8 +857,9 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 | `to_list` | `Iter <e> a -> <e> List a` |
 
 - `Iter` は `once` の関数を持つので `Lin` である ([型と Kind](types.md) の「1回だけ呼べる関数の型」)。途中でやめるときは `drop` で捨てる。生産者が `FileIn` を持っていれば、そこで閉じる
-- コンストラクタ `Iter` も公開する。コンストラクタを隠す `pub data` (抽象型) がないためである
+- コンストラクタ `Iter` は隠す
 - `next it` は、次の要素と残りの `Iter` の組を返し、終わりなら `None` を返す
+- `from_fn pull` は、`next` で1回だけ `pull ()` を呼ぶ `Iter` である。隠したコンストラクタの代わりに、`Iter` を手で組むときに使う
 - `generate`、`from_list` と変換 (`map`、`filter`、`filter_map`、`take`、`zip`、`enumerate`) は、`next` を呼ぶまで何も動かさない。そのため、どれもエフェクトを起こさず、矢印に row が要らない。Python のジェネレータが `next` まで本体を動かさないのと同じである
 - `generate producer` は、生産者を `Yield` の handler で包む。名前を `from` にしないのは、`from` が `handle … from …` のキーワードだからである。`yield` の節は、受け取った値と、継続 `k` を包んだ次の `Iter` の組を返し、`return` の節は `None` を返す。`yield_all` は逆向きの変換で、`Iter` の要素を順に `yield` する
 - `take n it` は、n 個を渡した後の `next` で残りを `drop` して `None` を返す。n が 0 以下なら、最初の `next` で何も取り出さずに捨てる。`take` の `Iter` そのものを `drop` したときも、中の `Iter` は一緒に捨てられる。そのため、生産者の `FileIn` が閉じるのは、渡し終えた次の `next` か `drop` の時点である
@@ -879,9 +901,101 @@ main () =
 - `both f g` は、呼んだ側の文脈で `f ()`、`g ()` の順に呼び、結果の組を返す。row に上限がないので、`IO` を起こす計算も渡せる。`par` と同じ組を逐次に作る版である
 - 引数をそろえた `par` の呼び出しは、extern の命令でなく `par` の命令になる。部分適用 (`Par.par f`) と値として使う `Par.par` は、同じ命令を本体に持つ包む関数 `$externN` になる ([Core IR](core-ir.md) の「`par` の呼び出し」)
 
+## `Std.Async`
+
+`Std.Async` は1つの worker の上でタスクを動かすモジュールである。
+
+```haskell
+import Async (Async)
+
+body : Unit -> <IO, Panic, Async> Int
+body () =
+  let a = Async.start (fn () -> 1)
+  let b = Async.start (fn () -> 2)
+  Async.await a + Async.await b
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (Async.run body))
+```
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `run` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic> a` | eml |
+| `start` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
+| `spawn` | `(Unit -> <IO, Panic, Async> Unit) -> <IO, Async> Unit` | eml |
+| `await` | `Task a -> <IO, Panic, Async> a` | eml |
+| `yield_now` | `Unit -> <IO, Async> Unit` | eml |
+| `try_all` | `(Unit -> <IO, Panic \| e> a) -> <IO \| e> Result Failure a` | eml |
+| `Failure` | `IOFailed IOError` と `Panicked String` を持つ型 | eml (`deriving (Show)`) |
+
+- `Async.run f` は根のスコープを開き、`f ()` をその中の最初のタスクとして動かす。`start` と `spawn` は新しいタスクを、呼んだタスクのスコープに加える。スコープは、呼び出しを動的に囲むいちばん内側の `run` の根である。孫も同じ根に入る。タスクの中で `run` を入れ子に呼ぶと、その `run` は自分の根を開く
+- `run` は、根のスコープのすべてのタスクが終わってから戻る。待ったタスクかどうかによらない。失敗がなければ本体の値を返す。失敗があれば、終わった順で最初の失敗を起こし直し、本体の値は捨てる。IO の失敗は種類と文言を保ち、Panic は文言を保つ。後の失敗は報告せず、1つずつ `RunStats.dropped_failures` に数える ([VM](vm.md) の「`RunStats`」)。失敗したタスクを待ち、起こし直された失敗を捕まえなかったタスクも、失敗したタスクとして数える
+- `Task a` は `Lin` で、`await t` が消費する。`await` はタスクの値を返すか、タスクの失敗を起こし直す。その失敗はスコープの失敗のままなので、`await` の周りで捕まえても `run` は起こし直す。失敗をスコープから分けるには、タスクの中で `try_all` を使う
+- `drop t` はハンドルを放すだけで、タスクを取り消さない。タスクは最後まで動き、`run` はそれも待つ。タスクの値は終わったときに放し、失敗はスコープの失敗になる
+- ハンドルは、1つのプログラムの実行の中なら、作った `run` の外へ出してよい。そのときタスクは終わっているので、`await` はすぐ値を返すか失敗を起こし直す。`Task` は線形なので、REPL の入力をまたいで持つことはできない ([モジュールと名前解決](modules.md) の「REPL のセッション」)
+- どのタスクの `exit n` も、プログラムを終了コード `n & 255` で終える。ほかのタスクは巻き戻さない (上の「`exit`」)
+- `yield_now ()` は、呼んだタスクを実行待ちの列の後ろへ回す
+- タスクは閉じた row `<IO, Panic, Async>` で始まる。始めた側の handler と `var` はタスクから見えない。`var` を捕まえた閉包を `start` や `spawn` に渡すと型の誤り (E2002) になる
+- `Async` は抽象エフェクトで、操作 `await_cell` と `reschedule` は `Std.Async` の外から perform も handle もできない (E1058。[エフェクトと handler](effects.md) の「抽象エフェクト」)。利用者は `await`、`yield_now` などの包む関数を呼ぶ
+
+`Async` のエフェクト、ランタイムが名前で呼ぶ入口、extern の行は、eml とランタイムの間の ABI である。形を変えるときはランタイムも合わせて変える。
+
+```haskell
+pub data Wake =
+  | Woke
+  | Cancelled
+
+pub abstract effect Async where
+  await_cell : Cell -> Wake
+  reschedule : Unit -> Wake
+
+pub extern data Cell
+pub extern data Task a
+
+pub data Failure =
+  | IOFailed IOError
+  | Panicked String
+  deriving (Show)
+```
+
+- `Async` は抽象エフェクト (`pub abstract effect`) で、extern のエフェクトではない。生の操作は `Std.Async` の外では perform できず、handler の節にも書けない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。生の操作は2つで、どちらも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る
+- `Wake` は、ランタイムが待たせたタスクを再開するときに渡す値である。ランタイムは配置の表を見ずに、宣言の順のタグ (`Woke` = 0、`Cancelled` = 1。`eml_lir::WAKE_WOKE`、`WAKE_CANCELLED`) で作る。タグと宣言の順が合うことはテストで確かめる
+- `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
+- ランタイムが名前で呼ぶ入口は、std の2つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どちらも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。2つの入口が単相の std の関数であることもテストで確かめる
+- タスクの底 (`bottom`) は、`try_all` で本体の失敗を捕まえ、成功した結果を `finish_ok` に、IO の失敗を種類と文言のまま `finish_io` に、`Panic` を文言のまま `finish_panic` に渡す
+- extern の行は次の10行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+
+| 行 | 型 | 預かる引数 |
+|---|---|---|
+| `start_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
+| `run_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
+| `park` | `Cell -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
+| `ready` | `(once Wake -> <IO> Unit) -> <IO> Unit` | 継続 |
+| `finish_ok` | `a -> <IO> Unit` | 結果の値 |
+| `finish_io` | `IOErrorKind -> String -> <IO> Unit` | なし |
+| `finish_panic` | `String -> <IO> Unit` | なし |
+| `task_cell` | `Task a -> (Cell, Task a)` | ハンドル (借りて預かる) |
+| `take_result` | `Task a -> <IO, Panic> a` | ハンドル |
+| `run_result` | `Task a -> <IO, Panic> a` | ハンドル |
+
+- タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
+- `take_result` と `run_result` が返す値の型が、`finish_ok` に預けた値の型と合うことは、処理系は確かめない。生の行を `pub` にせず、`start`、`run`、`await` のシグネチャだけが本体の結果の型 `a` とハンドルの `Task a` を結ぶことで、標準ライブラリが保つ
+- 預かる引数の矢印 (`start_raw` と `run_raw` の閉包、`park` と `ready` の継続) には、閉じた row を書く。ランタイムはそれを呼ばず、入口の `start_task` と `resume_task` が呼ぶので、row は入口の型が決める
+- `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
+
+### `Failure` と `try_all`
+
+```haskell
+pub try_all : (Unit -> <IO, Panic | e> a) -> <IO | e> Result Failure a
+```
+
+- `try_all action` は、`action ()` の IO の失敗と `Panic` を両方捕まえて `Failure` の値にする。IO の失敗は `IOFailed` に `IOError` のまま入れ、`Panic` は `Panicked` に文言を入れる。成功すれば `Ok` で結果を返す
+- `try_io` の中で `try_panic` を呼ぶ形で書く。`action` の `Panic` は内側の `try_panic` が、IO の失敗は外側の `try_io` が捕まえる (上の「`try_io`」と「`try_panic`」)
+- タスクの底は `try_all` でタスクの失敗を捕まえる。接続ごとの分離のように、タスクの中で失敗を受け止めるときにも使う
+
 ## 実行時エラー
 
-標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
+標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。
 
 I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 

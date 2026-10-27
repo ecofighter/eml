@@ -254,17 +254,17 @@ fn assert_fast_mode_agrees(
     root: &Path,
     checked: &Ran,
 ) {
-    let fast = execute_in(program, path, root, false, Sched::Sequential);
+    let fast = execute_in(program, path, root, false, Sched::Normal);
     assert_agrees(suffix, "the fast mode", &fast, checked, false);
 }
 
 /// seed の方針で流すテストの seed (docs/implementation/testing.md の「seed で流す」)。
 const SEEDS: [u64; 2] = [1, 2026];
 
-/// seed の方針でも流すのは `par/` の分類だけである。`par` のないプログラムはタスクを切り替えないので、流しても
-/// 確かめることがない。
+/// seed の方針でも流すのは `par/` と `async/` の分類だけである。`par` も `Async` のタスクもないプログラムは
+/// 切り替えないので、流しても確かめることがない。
 fn seeded(suffix: &str) -> bool {
-    suffix.starts_with("par/")
+    suffix.starts_with("par/") || suffix.starts_with("async/")
 }
 
 /// 食い違ったときの文言に、同じ実行を再現するコマンドを書く。スケジュールは seed とプログラムと入力だけで決まる。
@@ -274,6 +274,8 @@ fn seeded_label(seed: u64) -> String {
 
 /// 逐次の検査モードの結果を、seed ごとの検査モードの run と比べる。成功した run は、スケジュールによらない
 /// `RunStats` も比べ、少なくとも1回横取りしたことを確かめる。横取りがなければ、逐次と同じ順で流しただけになる。
+/// `async/` の run が `exit` で終わったときは `RunStats` を比べない。タスクの `exit` はほかのタスクをスケジュールで
+/// 決まる位置で捨てるので、終わりの統計がその位置で変わる (docs/implementation/testing.md の「seed で流す」)。
 /// 速いモードでは流さない。スケジューラの誤りが速いモードで未定義の動作になると、同じプロセスのほかのテストを壊す。
 fn assert_seeds_agree(
     suffix: &str,
@@ -282,13 +284,14 @@ fn assert_seeds_agree(
     root: &Path,
     checked: &Ran,
 ) {
+    let compare_stats = !(suffix.starts_with("async/") && matches!(checked.result, Ok(Some(_))));
     for seed in SEEDS {
         let ran = execute_in(program, path, root, true, Sched::Seeded(seed));
-        assert_agrees(suffix, &seeded_label(seed), &ran, checked, true);
+        assert_agrees(suffix, &seeded_label(seed), &ran, checked, compare_stats);
         if let Some(finished) = ran.finished {
             assert!(
                 finished.preemptions > 0,
-                "{suffix}: never preempted under `--sched seeded:{seed}`; give one par a left child of 16 or more safepoints (docs/implementation/testing.md の「seed で流す」)"
+                "{suffix}: never preempted under `--sched seeded:{seed}`; give a par left child, or an Async task while another task is ready, 16 or more safepoints (docs/implementation/testing.md の「seed で流す」)"
             );
         }
     }
@@ -397,11 +400,14 @@ fn the_layout_decides_what_each_file_is() {
 }
 
 #[test]
-fn seeded_runs_cover_only_par() {
+fn seeded_runs_cover_par_and_async() {
     assert!(seeded("par/x.em"));
     assert!(seeded("par/dir"));
+    assert!(seeded("async/x.em"));
+    assert!(seeded("async/dir"));
     assert!(!seeded("panic/x.em"));
     assert!(!seeded("parse/x.em"));
+    assert!(!seeded("io/x.em"));
 }
 
 #[test]

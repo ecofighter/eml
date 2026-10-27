@@ -630,14 +630,10 @@ fn find_byte_under_find_bytes_matches_windows() {
     }
 }
 
-/// 子のプロセスの誤りの文言と、`try_io` と `try_panic` の扱い。0 でない終了コードは `try_io` が `Other` で捕まえる。
+/// 子のプロセスの誤りの文言と、`try_io` と `try_panic` の扱い。
 #[test]
 fn child_faults_are_shown_and_caught() {
-    use crate::externs::{Exited, Fault, IO_NOT_UTF8, IO_OTHER, IoOp, IoReason, Utf8Source};
-    let exited = Fault::Exited(Box::new(Exited {
-        program: "sh".into(),
-        code: 3,
-    }));
+    use crate::externs::{Fault, IO_NOT_UTF8, IO_OTHER, IoOp, IoReason, Utf8Source};
     let unread = Fault::Io {
         op: IoOp::ReadOutput,
         name: "sort".into(),
@@ -651,7 +647,6 @@ fn child_faults_are_shown_and_caught() {
     };
     assert_eq!(unwritten.to_string(), "cannot write to `sort`: I/O error");
     assert_eq!(unwritten.io_error_kind(), Some(IO_OTHER));
-    assert_eq!(exited.to_string(), "command `sh` exited with code 3");
     assert_eq!(
         unread.to_string(),
         "cannot read the output of `sort`: I/O error"
@@ -660,10 +655,9 @@ fn child_faults_are_shown_and_caught() {
         not_utf8.to_string(),
         "the output of `sort` is not valid UTF-8"
     );
-    assert_eq!(exited.io_error_kind(), Some(IO_OTHER));
     assert_eq!(unread.io_error_kind(), Some(IO_OTHER));
     assert_eq!(not_utf8.io_error_kind(), Some(IO_NOT_UTF8));
-    assert!(!exited.panics() && !unread.panics() && !not_utf8.panics());
+    assert!(!unread.panics() && !not_utf8.panics());
 }
 
 /// 子を待つことの誤りは、起動の誤りと別の文言で、`try_io` が捕まえる。
@@ -678,6 +672,19 @@ fn a_failed_wait_is_shown_as_waiting() {
     assert_eq!(unwaited.to_string(), "cannot wait for `sort`: I/O error");
     assert_eq!(unwaited.io_error_kind(), Some(IO_OTHER));
     assert!(!unwaited.panics());
+}
+
+/// `Raised` は起こし直された `IO` の誤りで、種類のタグと文言をそのまま持つ。`try_io` が捕まえ、`try_panic` は捕まえない。
+#[test]
+fn raised_is_shown_and_caught_as_io() {
+    use crate::externs::{Fault, IO_NOT_FOUND, Raised};
+    let raised = Fault::Raised(Box::new(Raised {
+        kind: IO_NOT_FOUND,
+        message: "no such file".into(),
+    }));
+    assert_eq!(raised.to_string(), "no such file");
+    assert_eq!(raised.io_error_kind(), Some(IO_NOT_FOUND));
+    assert!(!raised.panics());
 }
 
 /// 算術の誤りは2つのレジスタで返り、`Fault` は 24 バイトに収まる。

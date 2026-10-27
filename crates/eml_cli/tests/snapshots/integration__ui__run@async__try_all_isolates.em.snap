@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 328
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/try_all_isolates.em
+---
+--- stdout ---
+ok 1
+panicked: boom
+io failed: NotFound: cannot open `missing.txt`: not found
+io failed: TimedOut: too slow
+run finished
+--- stderr ---

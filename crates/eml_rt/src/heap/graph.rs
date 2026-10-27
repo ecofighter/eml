@@ -569,6 +569,9 @@ pub(crate) struct Objects<M> {
     /// 検査モードの ID ごとの数 (`Heap` の `owned`)。rc の符号か、rc が正の物体の持ち主が変わると数え直す。
     /// 速いモードでは空のまま触れない。
     pub(crate) owned: Vec<u64>,
+    /// たどりが rc を負にした物体の数 (`Stats` の `shared`)。検査モードだけで数え、速いモードでは 0 のまま触れない。
+    /// 証明する不変条件の外にある
+    pub(crate) shared: u64,
     /// 検査モードで訪れた節点の番地 (`Heap` の `seen`)。速いモードでは `None` のまま触れない。
     pub(crate) seen: Option<HashSetWithView<usize>>,
     /// たどりの間ヒープから預かる、付けた塊の権限の写し。塊の節点はここから読む。
@@ -701,6 +704,9 @@ impl<M: Mode> Graph for Objects<M> {
             let before = rc_load(rc_ptr(h), Tracked(&p.rc));
             let tracked q = p.prefix.tracked_borrow();
             let owner = u32_load(prefix_first_ptr(h), Tracked(&q.first));
+            if before > 0 && rc < 0 {
+                self.shared = self.shared.wrapping_add(1);
+            }
             if before > 0 && rc <= 0 {
                 count_owned(&mut self.owned, owner, false);
             } else if before <= 0 && rc > 0 {

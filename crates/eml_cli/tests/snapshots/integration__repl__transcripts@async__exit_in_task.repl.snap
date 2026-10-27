@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/async/exit_in_task.repl
+---
+> import Async
+> Async.run (fn () -> Async.spawn (fn () -> (exit 3 : Unit)))
+exited with code 3
+> println "next"
+next
+> 1 + 1
+2
+--- close ---
+no leaks

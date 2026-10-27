@@ -40,6 +40,9 @@ impl ItemLowering<'_> {
                     name: item.name.clone(),
                     generics,
                     operations: Vec::new(),
+                    abstract_ops: item.public
+                        && item.abstract_ops
+                        && matches!(kind, EffectKind::Defined),
                     kind,
                 }),
             );

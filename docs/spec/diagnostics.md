@@ -60,7 +60,7 @@ struct Fix {
 | E0008 | `INVALID_ESCAPE` | 不正なエスケープ (文字列と文字のリテラルの未知のエスケープ、不正な `\u{...}`、複数行の文字列の行末の `\`) |
 | E0009 | `EXPECTED_INDENTED_BLOCK` | 開始トークンの後に字下げしたブロックが必要 |
 | E0010 | `SPACE_AROUND_DOT` | `.` の前後の空白 |
-| E0011 | `SYNTAX_ERROR` | その他の構文エラー |
+| E0011 | `SYNTAX_ERROR` | その他の構文エラー。`abstract` の位置の誤りを含む ([文法](grammar.md) の「文法上の補足」) |
 | E0012 | `NEEDS_PARENS` | 括弧の要る形を括弧なしで書いた ([文法](grammar.md) の「文法上の補足」) |
 | E0013 | `NESTING_TOO_DEEP` | 式・パターン・型の入れ子が深すぎる (256 を超えた。[文法](grammar.md)) |
 | E0014 | `INVALID_MULTILINE_STRING` | 複数行の文字列の形の誤り (開きと閉じが同じ行にある、開きの行か閉じの前に文字がある、字下げが足りない) と、補間の穴の中の `"""` ([字句](lexical.md) の「複数行の文字列」) |
@@ -124,6 +124,7 @@ struct Fix {
 | E1055 | `SPREAD_NOT_AN_ARGUMENT` | コマンドリテラルの `\{..}` の穴が、プログラムの後の引数の全体でない ([式](expressions.md) の「コマンドリテラル」) |
 | E1056 | `COMMAND_WITHOUT_PROGRAM` | コマンドリテラルに引数が1つもなく、プログラムがない ([式](expressions.md) の「コマンドリテラル」) |
 | E1057 | `ROW_BOUND_NOT_DECLARED` | row 変数の上限 `never` を、シグネチャが付けていない変数の本体の型の明示か `data` のフィールドに書いた、または操作のシグネチャに書いた ([型と Kind](types.md) の「row 変数の多重度の上限」) |
+| E1058 | `ABSTRACT_MEMBER` | 抽象型 (`pub abstract data`) のコンストラクタか、抽象エフェクト (`pub abstract effect`) の操作を、宣言したモジュールの外で作る式、パターン、perform、handler の節、import の並び (`T(..)`、`E(..)`、操作の名前) に書いた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
@@ -142,6 +143,7 @@ struct Fix {
 | E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |
 | E2019 | `VAR_ESCAPES` | `var` の変数を使う関数が範囲の外へ出うる。ノードの値の型、ノードの場所の row、範囲の外の束縛の型のどれかに、変数のエフェクトが現れる ([型と Kind](types.md) の「範囲の外へ出る閉包」) |
 | E2020 | `ROW_BOUND_EXCEEDED` | 呼び出しが多重度の上限を持つ row 変数に、上限を超える row を入れた。上限はシグネチャに書いたものと、推論で付いたものの両方を含む ([型と Kind](types.md) の「row 変数の多重度の上限」)。同じ SCC の中では、上限を持つ宣言を呼ぶ別の呼び出しに出て、上限を超える row を入れた呼び出しには出ないことがある ([型と Kind](types.md) の「推論」) |
+| E2021 | `PRIVATE_FIELD` | 抽象型のフィールドを、宣言したモジュールの外で射影か更新した ([モジュールと名前解決](modules.md) の「公開の範囲」) |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、再帰するローカル関数の組の関数の捕獲、操作の型が節に求める制約) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った。配列の変数を、ある経路で2回以上取り出した場合を含む |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった。配列の変数を、ある経路で取り出さなかった場合を含む |

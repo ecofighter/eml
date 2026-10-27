@@ -1078,3 +1078,91 @@ fn a_bounded_row_parameter_stays_a_parameter() {
         ["E0011 1:9 a row parameter of `data` cannot have a bound"]
     );
 }
+
+const ABSTRACT_LIB: &str = "pub abstract data Handle a = | Handle Int\n\npub make : Int -> Handle a\nmake n = Handle n\n\npub get : Handle a -> Int\nget (Handle n) = n";
+
+#[test]
+fn an_abstract_constructor_is_hidden_outside_its_module() {
+    // 作る式とパターンの2か所。宣言したモジュールの中の `Handle` は誤りにならない
+    let entry = "import Lib\n\nf : Unit -> Int\nf () =\n  let Lib.Handle n = Lib.make 1\n  Lib.get (Lib.Handle n)";
+    insta::assert_snapshot!(module_report(entry, &[("Lib.em", ABSTRACT_LIB)]), @"
+    E1058 test.em 5:7 constructor `Handle` of the abstract type `Handle` is not visible outside `Lib`
+      test.em 5:7 hidden by `abstract`
+      Lib.em 1:32 declared here
+    E1058 test.em 6:12 constructor `Handle` of the abstract type `Handle` is not visible outside `Lib`
+      test.em 6:12 hidden by `abstract`
+      Lib.em 1:32 declared here
+    ");
+}
+
+#[test]
+fn an_abstract_import_takes_only_the_type() {
+    // `(..)` に1つだけ出し、型の名前は取り込む
+    let entry = "import Lib (Handle(..))\n\nf : Handle Int -> Int\nf h = Lib.get h";
+    insta::assert_snapshot!(module_report(entry, &[("Lib.em", ABSTRACT_LIB)]), @"
+    E1058 test.em 1:19 `Handle(..)` imports no constructor: `Handle` is abstract
+      test.em 1:19 hidden by `abstract`
+      help: write `Handle`
+    ");
+}
+
+#[test]
+fn an_abstract_operation_is_hidden_outside_its_module() {
+    let lib = "pub abstract effect Ping where\n  ping : Unit -> Int\n\npub twice : Unit -> <Ping> Int\ntwice () = ping () + ping ()\n\npub answer : (Unit -> <Ping> Int) -> Int\nanswer f =\n  handle f () with\n    | ctl ping () k -> k 21\n    | return x -> x";
+    let entry = "import Lib\n\nf : Unit -> Int\nf () =\n  let n = handle Lib.twice () with\n    | ctl Lib.ping () k -> k 0\n    | return x -> x\n  n + Lib.answer (fn () -> Lib.ping ())";
+    insta::assert_snapshot!(module_report(entry, &[("Lib.em", lib)]), @"
+    E1058 test.em 6:11 operation `ping` of the abstract effect `Ping` is not visible outside `Lib`
+      test.em 6:11 hidden by `abstract`
+      Lib.em 2:3 declared here
+    E1058 test.em 8:28 operation `ping` of the abstract effect `Ping` is not visible outside `Lib`
+      test.em 8:28 hidden by `abstract`
+      Lib.em 2:3 declared here
+    ");
+    // 同じモジュールでは誤りにならない
+    assert_eq!(
+        module_codes("import Lib\n\nf : Int\nf = 1", &[("Lib.em", lib)]),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_abstract_constructor_field_may_use_a_private_type() {
+    let text = "data Secret = | S\n\npub abstract data Sealed = | Sealed Secret\n\npub abstract data Pair = | Pair { left : Secret, right : Int }";
+    assert_eq!(diagnostics(text), Vec::<String>::new());
+}
+
+#[test]
+fn an_abstract_operation_named_in_an_import_list_is_hidden() {
+    let lib = "pub abstract effect Ping where\n  ping : Unit -> Int";
+    let entry = "import Lib (ping)\n\nf : Unit -> <Lib.Ping> Int\nf () = ping ()";
+    // 並びの位置に1つだけ出し、本体の `ping` には重ねない
+    insta::assert_snapshot!(module_report(entry, &[("Lib.em", lib)]), @"
+    E1058 test.em 1:13 operation `ping` of the abstract effect `Ping` is not visible outside `Lib`
+      test.em 1:13 hidden by `abstract`
+      Lib.em 2:3 declared here
+    ");
+    // 標準ライブラリの抽象エフェクトの操作も、「定義がない」とせず E1058 にする
+    let std = [
+        ("Prelude.em", eml_hir::PRELUDE_SOURCE),
+        eml_test_support::std_module("Fs.em"),
+        eml_test_support::std_module("FileIn.em"),
+        eml_test_support::std_module("FileOut.em"),
+        eml_test_support::std_module("String.em"),
+        eml_test_support::std_module("Bytes.em"),
+        eml_test_support::std_module("List.em"),
+        eml_test_support::std_module("Char.em"),
+        eml_test_support::std_module("Byte.em"),
+        eml_test_support::std_module("Iter.em"),
+        eml_test_support::std_module("Yield.em"),
+        ("Ping.em", lib),
+    ];
+    let lowered = eml_test_support::lower(eml_test_support::with_std(&std, "import Ping (ping)"));
+    insta::assert_snapshot!(
+        eml_test_support::full_with_paths(lowered.files(), &lowered.diagnostics),
+        @"
+    E1058 test.em 1:14 operation `ping` of the abstract effect `Ping` is not visible outside `Std.Ping`
+      test.em 1:14 hidden by `abstract`
+      <std>/Ping.em 2:3 declared here
+    "
+    );
+}

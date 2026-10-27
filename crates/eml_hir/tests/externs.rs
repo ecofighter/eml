@@ -114,8 +114,11 @@ fn every_extern_function_is_declared_once_in_std() {
         // ただし、instance の `extern` で結んだ `Pure` の行は、クラスのメソッドの型が書く `Panic` を持ってよい
         // (`Num Float` の `+` は `Panic` を起こさないが、`Num` の `+` の型は `<Panic>` を持つ)。また、高階の
         // extern の `Pure` の行は、コールバックの引数と結果が共有するラベルのない開いた row を持ってよい
-        // (`Std.Par.par` の `<never e>` と `<e>`)
+        // (`Std.Par.par` の `<never e>` と `<e>`)。預かる引数の型の中の矢印は、閉じた row を書いてよい。処理系は
+        // 預かった閉包や継続を呼ばないからである (docs/spec/declarations.md の「`extern`」)
         let method_bound = functions.is_empty();
+        assert_eq!(row.held.len(), row.params.len(), "{}", row.name);
+        let held_arrows = held_arrows(signature, row.held);
         let last = last_outer_arrow(signature);
         let shared_tail = (row.purity == Purity::Pure && !method_bound)
             .then(|| shared_callback_tail(signature, last?))
@@ -148,7 +151,9 @@ fn every_extern_function_is_declared_once_in_std() {
             } else {
                 let empty = match effects {
                     RowRef::Omitted => true,
-                    RowRef::Closed { effects, .. } => effects.is_empty(),
+                    RowRef::Closed { effects, .. } => {
+                        effects.is_empty() || held_arrows.contains(&id)
+                    }
                     RowRef::Open { effects, tail, .. } => {
                         effects.is_empty() && Some(*tail) == shared_tail
                     }
@@ -158,6 +163,37 @@ fn every_extern_function_is_declared_once_in_std() {
             }
         }
     }
+}
+
+/// 預かる引数の型の中の矢印。処理系は預かった閉包を呼ばず、名前で呼ぶ std の入口が後で呼ぶので、その row は入口の
+/// 型が決める (docs/spec/declarations.md の「`extern`」)。
+fn held_arrows(signature: &Signature, held: &[bool]) -> Vec<eml_hir::TypeRefId> {
+    fn arrows_in(signature: &Signature, ty: eml_hir::TypeRefId, out: &mut Vec<eml_hir::TypeRefId>) {
+        match &signature.types[ty].kind {
+            TypeRefKind::Fn { param, ret, .. } => {
+                out.push(ty);
+                arrows_in(signature, *param, out);
+                arrows_in(signature, *ret, out);
+            }
+            TypeRefKind::Con(_, args, _) => args.iter().for_each(|&a| arrows_in(signature, a, out)),
+            TypeRefKind::Tuple(elements) => {
+                elements.iter().for_each(|&a| arrows_in(signature, a, out))
+            }
+            TypeRefKind::Var(_) | TypeRefKind::Error => {}
+        }
+    }
+    let mut out = Vec::new();
+    let mut spine = signature.ty;
+    for &held in held {
+        let TypeRefKind::Fn { param, ret, .. } = &signature.types[spine].kind else {
+            break;
+        };
+        if held {
+            arrows_in(signature, *param, &mut out);
+        }
+        spine = *ret;
+    }
+    out
 }
 
 /// 最後の外側の矢印 `last` の row がラベルのない開いた row で、その変数がどれかの引数の矢印の row の末尾でもあるとき
@@ -220,6 +256,36 @@ fn every_extern_effect_is_declared_once_in_std() {
         };
         assert_eq!(indexed, id, "{}", row.name);
     }
+}
+
+/// `Std.Async` の `Async` の操作はランタイムとの ABI なので、抽象エフェクトとして外から隠す
+/// (docs/spec/effects.md の「抽象エフェクト」)。extern のエフェクトはいつも隠すので `abstract` を持たず、普通の
+/// `pub effect` は操作を公開する。
+#[test]
+fn the_async_effect_is_abstract() {
+    let program = std_program();
+    let effect = |name: &str| {
+        let found: Vec<_> = program
+            .effects()
+            .filter(|(id, def)| canonical(&program, id.module, &def.name) == name)
+            .map(|(_, def)| def)
+            .collect();
+        assert_eq!(found.len(), 1, "{name}");
+        found[0]
+    };
+    let async_ = effect("Std.Async.Async");
+    assert_eq!(async_.kind, EffectKind::Defined);
+    assert!(async_.abstract_ops);
+    for name in ["Prelude.IO", "Prelude.Panic"] {
+        assert!(
+            matches!(effect(name).kind, EffectKind::Extern(Some(_))),
+            "{name}"
+        );
+        assert!(!effect(name).abstract_ops, "{name}");
+    }
+    let state = effect("Std.State.State");
+    assert_eq!(state.kind, EffectKind::Defined);
+    assert!(!state.abstract_ops);
 }
 
 #[test]

@@ -3,7 +3,7 @@
 -- (docs/spec/lir.md の「reuse」)
 import List
 
-pub data Set a =
+pub abstract data Set a =
   | Empty
   | LeftHigh (Set a) a (Set a)
   | Even (Set a) a (Set a)

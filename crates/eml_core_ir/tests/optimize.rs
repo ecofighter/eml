@@ -1858,14 +1858,14 @@ double x = x * 2
 
 ping : (Int -> <e> Int) -> Iter <e> Int -> Iter <e> Int
 ping f it =
-  Iter (fn () ->
+  Iter.from_fn (fn () ->
     match Iter.next it with
       | None -> None
       | Some (x, rest) -> Some (f x, Iter.map f (pong f rest)))
 
 pong : (Int -> <e> Int) -> Iter <e> Int -> Iter <e> Int
 pong f it =
-  Iter (fn () ->
+  Iter.from_fn (fn () ->
     match Iter.next it with
       | None -> None
       | Some (x, rest) -> Some (f (f x), Iter.map f (ping f rest)))
@@ -1896,7 +1896,7 @@ fn shared_functions(a: &str, b: &str) -> Vec<String> {
 #[test]
 fn copies_in_cycles_do_not_depend_on_the_entry_into_the_cycle() {
     let a = format!(
-        "import Iter (Iter(..))
+        "import Iter (Iter)
 {NUMS}{CYCLES}
 main : Unit -> <IO, Panic> Unit
 main () =
@@ -1905,7 +1905,7 @@ main () =
 "
     );
     let b = format!(
-        "import Iter (Iter(..))
+        "import Iter (Iter)
 {NUMS}{CYCLES}
 main : Unit -> <IO, Panic> Unit
 main () =

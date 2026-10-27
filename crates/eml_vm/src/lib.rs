@@ -6,15 +6,18 @@ use std::sync::Arc;
 use eml_lir::Program;
 use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, Mode, Stats};
 
+use crate::cells::TaskStats;
 use crate::vm::ExecWith;
 
 mod apply;
+mod cells;
 mod code;
 mod compile;
 mod data;
 mod disasm;
 mod error;
 mod hosts;
+mod monitor;
 mod op;
 mod sched;
 mod vm;
@@ -24,7 +27,7 @@ pub use disasm::disassemble;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
-pub use sched::{Policy, Sched, Scheduler, Seeded, Sequential};
+pub use sched::{Normal, Policy, Sched, Scheduler, Seeded, Sequential};
 pub use vm::Task;
 
 /// 実行の仕事の回数と、同時に生きていたヒープの物体の数とスタックの語の数の最大。検査モードだけで数える。
@@ -48,6 +51,14 @@ pub struct RunStats {
     pub peak_objects: u64,
     /// タスクのスタックで同時に使った語の数の最大。
     pub peak_stack: u64,
+    /// `Async` が作ったタスクのセルの数。
+    pub tasks: u64,
+    /// `Async` の待ちと `yield_now` が、継続をランタイムに渡した数。
+    pub parks: u64,
+    /// スコープの最初の失敗より後の、タスクの失敗の数。
+    pub dropped_failures: u64,
+    /// `share` が rc を負にした物体の数。
+    pub shared_objects: u64,
 }
 
 /// 1回の実行の結果。`exit` で終わったら、その終了コードを持つ (docs/spec/vm.md の「`RunStats`」)。
@@ -74,8 +85,8 @@ pub(crate) struct RunCounts {
 #[non_exhaustive]
 pub struct RunConfig {
     pub debug_heap: bool,
-    /// 止める理由のビットは `Control::clear` でしか下りないので、1つの `Control` は1回の実行にだけ使う。`clone` した
-    /// 設定は同じ `Control` を指す。
+    /// 止める理由のビットは `Control::clear` でしか下りないので、1つの `Control` は1回の実行にだけ使う。終わりの欄は
+    /// 実行の始めに開くので、使い回しの妨げにならない。`clone` した設定は同じ `Control` を指す。
     pub control: Arc<Control>,
     /// タスクを切り替える方針。既定は横取りしない `Sched::Sequential` である。
     pub sched: Sched,
@@ -211,8 +222,9 @@ impl<M: Mode> Machine<M> {
     }
 
     /// 入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
-    /// 根は手放さず、次の実行に残す。続けられる誤りの後は、根から届く物体を新しいヒープに写して古いヒープを捨て、
-    /// 元の誤りを返す。回復が失敗したら `Unrecovered` を返す (docs/spec/vm.md の「追記」)。
+    /// 根は手放さず、次の実行に残す。続けられる誤りの後と `exit` が実行を捨てた後は、根から届く物体を新しいヒープに
+    /// 写して古いヒープを捨て、元の誤りか `exit` の `Finished` を返す。回復が失敗したら `Unrecovered` を返す
+    /// (docs/spec/vm.md の「追記」)。
     pub fn run(&mut self, entry: u32) -> Result<Finished, RuntimeError> {
         self.run_recovering(entry, None)
             .map(|(finished, _)| finished)
@@ -241,6 +253,17 @@ impl<M: Mode> Machine<M> {
         shown: Option<usize>,
     ) -> Result<(Finished, Option<String>), RuntimeError> {
         match self.run_entry(entry, shown) {
+            Ok(Ran::Done(finished, text)) => Ok((finished, text)),
+            // 捨てた run のヒープには片付けていないタスクの物体が残るので、誤りの後と同じく入れ替える。`Scheduler` と
+            // 登録表は `run_scheduled` が返るときに捨ててあるので、古いヒープの語を持つものは回復の後に残らない
+            // (docs/spec/vm.md の「追記」)
+            Ok(Ran::Abandoned(finished, cause)) => match self.recover() {
+                Ok(()) => Ok((finished, None)),
+                Err(reason) => Err(RuntimeError::Unrecovered {
+                    cause: Box::new(cause),
+                    reason,
+                }),
+            },
             Err(cause) if !cause.is_broken() => Err(match self.recover() {
                 Ok(()) => cause,
                 Err(reason) => RuntimeError::Unrecovered {
@@ -248,7 +271,7 @@ impl<M: Mode> Machine<M> {
                     reason,
                 },
             }),
-            result => result,
+            Err(cause) => Err(cause),
         }
     }
 
@@ -273,14 +296,14 @@ impl<M: Mode> Machine<M> {
                 - self.copying.rc_decrements,
             allocations: self.earlier.allocations + now.allocations - self.copying.allocations,
             peak_objects: self.earlier.peak_objects.max(now.peak_objects),
+            shared_objects: self.earlier.shared_objects + now.shared_objects
+                - self.copying.shared_objects,
         }
     }
 
-    fn run_entry(
-        &mut self,
-        entry: u32,
-        shown: Option<usize>,
-    ) -> Result<(Finished, Option<String>), RuntimeError> {
+    fn run_entry(&mut self, entry: u32, shown: Option<usize>) -> Result<Ran, RuntimeError> {
+        // 終わりの欄は run ごとに開く (docs/spec/vm.md の「誤り、止めること、終わり」)
+        self.ctx.heap().control().begin_run();
         let (code, ctx) = (&self.code, &mut self.ctx);
         let mut task = Task::new(code, entry, self.max_depth);
         // 実行の後の誤りは、最後に戻った関数の名前を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)
@@ -311,6 +334,10 @@ impl<M: Mode> Machine<M> {
             shared_roots: self.shared_roots,
         };
         let (result, scheduled) = match self.sched {
+            Sched::Normal => {
+                let policy = Normal::new(Arc::clone(ctx.heap().control()));
+                run_scheduled(code, ctx, &mut task, policy, start, &mut counts)
+            }
             Sched::Sequential => {
                 run_scheduled(code, ctx, &mut task, Sequential, start, &mut counts)
             }
@@ -322,7 +349,8 @@ impl<M: Mode> Machine<M> {
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
         // `exit` で終わった実行の入口の結果はダミーなので写さない
-        let copied = match (&result, shown, task.exit) {
+        let exit = ctx.heap().control().exit_code();
+        let copied = match (&result, shown, exit) {
             (Ok(()), Some(max_chars), None) => {
                 Some(unsafe { ctx.copy_string(task.get(0), max_chars) })
             }
@@ -330,6 +358,29 @@ impl<M: Mode> Machine<M> {
         };
         // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
         let flushed = ctx.flush();
+        if let Err(
+            cause @ RuntimeError::Fault {
+                fault: VmFault::Stopped(Stop::Ended),
+                ..
+            },
+        ) = result
+        {
+            // タスクの底の `exit` が run を捨てた。終わりの検査はせず、その時点の数で `exit` を報告する
+            // (docs/spec/vm.md の「誤り、止めること、終わり」)
+            flushed.map_err(|fault| after(fault.into(), &task))?;
+            let Some(code) = exit else {
+                return Err(after(
+                    VmFault::Internal("a run ended without an exit"),
+                    &task,
+                ));
+            };
+            let finished = Finished {
+                stats: self.run_stats(&counts, &scheduled),
+                exit: Some(code),
+                preemptions: scheduled.preemptions,
+            };
+            return Ok(Ran::Abandoned(finished, cause));
+        }
         result?;
         let text = copied
             .transpose()
@@ -343,9 +394,19 @@ impl<M: Mode> Machine<M> {
         }
         (self.check_heap)(ctx)
             .map_err(|error| heap_fault(error, code.function_name(task.last_ret, &task)))?;
-        let c = ctx.stats();
+        let finished = Finished {
+            stats: self.run_stats(&counts, &scheduled),
+            exit,
+            preemptions: scheduled.preemptions,
+        };
+        Ok(Ran::Done(finished, text))
+    }
+
+    /// `Machine` を作ってからの積算の `RunStats`。`peak_stack` と、登録表が数える `tasks`、`parks`、`dropped_failures` だけがこの実行の値である (docs/spec/vm.md の「追記」)。
+    fn run_stats(&self, counts: &RunCounts, scheduled: &Scheduled) -> RunStats {
+        let c = self.ctx.stats();
         let h = self.heap_work();
-        let stats = RunStats {
+        RunStats {
             evidence_steps: c.evidence_steps,
             yields: c.yields,
             yield_frames: c.yield_frames,
@@ -360,15 +421,15 @@ impl<M: Mode> Machine<M> {
             peak_objects: h.peak_objects,
             // 統計は検査モードだけで数える
             peak_stack: if M::CHECKED { scheduled.peak_stack } else { 0 },
-        };
-        Ok((
-            Finished {
-                stats,
-                exit: task.exit,
-                preemptions: scheduled.preemptions,
+            tasks: if M::CHECKED { scheduled.tasks.tasks } else { 0 },
+            parks: if M::CHECKED { scheduled.tasks.parks } else { 0 },
+            dropped_failures: if M::CHECKED {
+                scheduled.tasks.dropped_failures
+            } else {
+                0
             },
-            text,
-        ))
+            shared_objects: h.shared_objects,
+        }
     }
 
     /// 実行の状態を閉じる。根の参照は VM が持つので先に手放す。検査モードでは、その後にヒープの不変条件を確かめ、
@@ -384,11 +445,20 @@ impl<M: Mode> Machine<M> {
     }
 }
 
+/// `run_entry` の結果。
+enum Ran {
+    /// 入口の関数が戻った。`exit` で終わったときは、`main` の底が終わりの欄に書いてある。
+    Done(Finished, Option<String>),
+    /// `main` でないタスクの底の `exit` が run を捨てた。誤りは回復が失敗したときの `cause` に使う。
+    Abandoned(Finished, RuntimeError),
+}
+
 /// 実行が終わった後に、捨てるスケジューラから読むもの。
 struct Scheduled {
     preemptions: u64,
     peak_stack: u64,
     shared_roots: usize,
+    tasks: TaskStats,
 }
 
 /// スケジューラを作るときに `Machine` から渡すもの。
@@ -417,6 +487,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         preemptions: sched.preemptions(),
         peak_stack: sched.peak_stack(task),
         shared_roots: sched.shared_roots,
+        tasks: sched.cells.stats,
     };
     (result, scheduled)
 }
@@ -428,6 +499,7 @@ struct HeapWork {
     rc_decrements: u64,
     allocations: u64,
     peak_objects: u64,
+    shared_objects: u64,
 }
 
 impl HeapWork {
@@ -437,6 +509,7 @@ impl HeapWork {
             rc_decrements: stats.rc_decrements,
             allocations: stats.allocations,
             peak_objects: stats.peak_live,
+            shared_objects: stats.shared,
         }
     }
 }
@@ -538,6 +611,10 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         }
         CompileError::MissingFork { function } => (
             "a program that may run a par lacks a fork function",
+            function,
+        ),
+        CompileError::MissingEntry { function } => (
+            "a program that runs Async tasks lacks a runtime entry",
             function,
         ),
     };

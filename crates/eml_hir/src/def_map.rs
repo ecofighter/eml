@@ -35,8 +35,24 @@ pub enum Resolved<T> {
     Ambiguous(Vec<(FileId, TextRange)>),
     /// E1029。ユーザーのモジュールの `pub` でない定義 (ファイル、位置)。
     Private(FileId, TextRange),
+    /// E1058。別のモジュールの抽象型のコンストラクタか、抽象エフェクトの操作。
+    Abstract(Hidden),
     /// E1031。
     UnknownQualifier,
+}
+
+/// 抽象型か抽象エフェクトが隠した部品。E1058 の文言と secondary に使う (docs/spec/modules.md の「公開の範囲」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hidden {
+    /// 部品の定義のファイルと位置。
+    pub file: FileId,
+    pub range: TextRange,
+    /// 部品を持つ型かエフェクトの名前。
+    pub owner: String,
+    /// 型かエフェクトか。
+    pub effect: bool,
+    /// 宣言したモジュールの名前。標準ライブラリのモジュールも正式な名前 (`Std.Map`) で書く。
+    pub module: String,
 }
 
 /// 診断を出さずに誤りにする理由 (docs/implementation/architecture.md の「名前解決の回復」)。
@@ -48,11 +64,38 @@ pub enum Silence {
     Broken,
 }
 
+/// 名前を宣言したモジュールの外からの見え方 (docs/spec/modules.md の「公開の範囲」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Visibility {
+    Public,
+    Private,
+    /// 抽象型のコンストラクタと抽象エフェクトの操作。名前は修飾して引けるが、使うと E1058 になる。
+    Abstract,
+}
+
+impl Visibility {
+    fn of(public: bool) -> Visibility {
+        if public {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        }
+    }
+
+    /// `abstract` を書いた `pub` の型とエフェクトの部品の見え方。
+    fn of_part(public: bool, abstract_: bool) -> Visibility {
+        match (public, abstract_) {
+            (true, true) => Visibility::Abstract,
+            (public, _) => Visibility::of(public),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Definition<T> {
     item: T,
     range: TextRange,
-    public: bool,
+    visibility: Visibility,
     /// 重複した宣言の部品は使えない (規則2)。重複の判定に加えず、同じ名前の使える定義がないときだけ引かれる。
     usable: bool,
 }
@@ -98,6 +141,10 @@ trait Namespace: Copy {
     fn is_binding(self) -> bool {
         false
     }
+    /// 型、エフェクト、クラスの部品なら、その持ち主。
+    fn owner(self, _scope: &ModuleScope) -> Option<TypeItem> {
+        None
+    }
 }
 
 impl Namespace for ValueItem {
@@ -115,6 +162,14 @@ impl Namespace for ValueItem {
 
     fn is_binding(self) -> bool {
         matches!(self, ValueItem::Binding(_))
+    }
+
+    fn owner(self, scope: &ModuleScope) -> Option<TypeItem> {
+        scope
+            .parts
+            .iter()
+            .find(|(_, parts)| parts.iter().any(|&(_, part)| part == self))
+            .map(|(&owner, _)| owner)
     }
 }
 
@@ -363,7 +418,7 @@ impl ModuleScope {
                 &data.name,
                 TypeItem::Type(id),
                 data.name_range,
-                data.public,
+                Visibility::of(data.public),
                 true,
             );
             self.type_params
@@ -378,7 +433,7 @@ impl ModuleScope {
                 &effect.name,
                 TypeItem::Effect(id),
                 effect.name_range,
-                effect.public,
+                Visibility::of(effect.public),
                 true,
             );
             self.effect_params.insert(id, effect.params.len());
@@ -389,7 +444,7 @@ impl ModuleScope {
                 &class.name,
                 TypeItem::Class(item_id(module, k)),
                 class.name_range,
-                class.public,
+                Visibility::of(class.public),
                 true,
             );
         }
@@ -416,7 +471,7 @@ impl ModuleScope {
                 &function.name,
                 ValueItem::Function(id),
                 function.first_range,
-                function.public,
+                Visibility::of(function.public),
                 true,
             );
         }
@@ -425,6 +480,7 @@ impl ModuleScope {
         for (k, data) in tree.data.iter().enumerate() {
             let owner = TypeItem::Type(item_id(module, k));
             let usable = !duplicates.contains(&owner);
+            let visibility = Visibility::of_part(data.public, data.abstract_ctors);
             for constructor in &data.constructors {
                 let id = item_id(module, next.next().unwrap());
                 self.declare_part(
@@ -432,7 +488,7 @@ impl ModuleScope {
                     &constructor.name,
                     ValueItem::Constructor(id),
                     constructor.name_range,
-                    data.public,
+                    visibility,
                     usable,
                 );
             }
@@ -443,7 +499,10 @@ impl ModuleScope {
             let usable = !duplicates.contains(&owner);
             // extern のエフェクトの操作 (Prelude の `io_failed`) は、宣言したモジュールの外から見せない
             // (docs/spec/modules.md の「標準ライブラリ」)
-            let public = effect.public && effect.extern_keyword.is_none();
+            let visibility = match effect.extern_keyword {
+                Some(_) => Visibility::Private,
+                None => Visibility::of_part(effect.public, effect.abstract_ops),
+            };
             for operation in &effect.operations {
                 let id = item_id(module, next.next().unwrap());
                 self.declare_part(
@@ -451,7 +510,7 @@ impl ModuleScope {
                     &operation.name,
                     ValueItem::Operation(id),
                     operation.name_range,
-                    public,
+                    visibility,
                     usable,
                 );
             }
@@ -473,7 +532,7 @@ impl ModuleScope {
                     &method.name,
                     ValueItem::Method(id),
                     range,
-                    class.public,
+                    Visibility::of(class.public),
                     usable,
                 );
             }
@@ -489,7 +548,7 @@ impl ModuleScope {
                 name,
                 ValueItem::Binding(binding),
                 *range,
-                false,
+                Visibility::Private,
                 true,
             );
         }
@@ -505,10 +564,10 @@ impl ModuleScope {
         name: &str,
         item: ValueItem,
         range: TextRange,
-        public: bool,
+        visibility: Visibility,
         usable: bool,
     ) {
-        push(&mut self.values, name, item, range, public, usable);
+        push(&mut self.values, name, item, range, visibility, usable);
         self.parts
             .entry(owner)
             .or_default()
@@ -594,8 +653,10 @@ impl ModuleScope {
                     );
                     continue;
                 }
+                // 抽象型の中置のコンストラクタは外から使えないので、`pub` の fixity の宣言でも外へ出さない
+                let public = item.public && definition.visibility == Visibility::Public;
                 self.fixities
-                    .insert(definition.item, (fixity, item.public, *range));
+                    .insert(definition.item, (fixity, public, *range));
             }
         }
     }
@@ -615,8 +676,16 @@ impl ModuleScope {
                 unusable = true;
                 continue;
             }
-            if definition.public {
-                return Some(definition.item);
+            match definition.visibility {
+                Visibility::Public => return Some(definition.item),
+                // 抽象エフェクトの操作は、標準ライブラリのものも「定義がない」とせず E1058 にする
+                // (docs/spec/modules.md の「公開の範囲」)
+                Visibility::Abstract => {
+                    let hidden = self.hidden(definition);
+                    diagnostics.push(abstract_member(file, range, name, &hidden));
+                    return None;
+                }
+                Visibility::Private => {}
             }
             if self.origin == ModuleOrigin::Std {
                 break;
@@ -657,11 +726,13 @@ impl ModuleScope {
         (file, range): (FileId, TextRange),
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Option<(TypeItem, bool)> {
-        let Some(definition) = self
-            .types
-            .get(name)
-            .and_then(|names| names.first())
-            .filter(|definition| definition.public || !self.origin.is_std())
+        let Some(definition) =
+            self.types
+                .get(name)
+                .and_then(|names| names.first())
+                .filter(|definition| {
+                    definition.visibility == Visibility::Public || !self.origin.is_std()
+                })
         else {
             let diagnostic = not_in_module(
                 codes::UNDEFINED_TYPE,
@@ -680,7 +751,8 @@ impl ModuleScope {
             });
             return None;
         };
-        if !definition.public {
+        let public = definition.visibility == Visibility::Public;
+        if !public {
             diagnostics.push(private_name(
                 file,
                 range,
@@ -688,7 +760,27 @@ impl ModuleScope {
                 (self.file, definition.range),
             ));
         }
-        Some((definition.item, definition.public))
+        Some((definition.item, public))
+    }
+
+    /// 抽象型か抽象エフェクトの部品の定義から、E1058 に書く情報を作る。
+    fn hidden<V: Namespace>(&self, definition: &Definition<V>) -> Hidden {
+        let owner = definition.item.owner(self);
+        let name = owner.and_then(|owner| {
+            self.types.iter().find_map(|(name, definitions)| {
+                definitions
+                    .iter()
+                    .any(|definition| definition.item == owner)
+                    .then_some(name.clone())
+            })
+        });
+        Hidden {
+            file: self.file,
+            range: definition.range,
+            owner: name.unwrap_or_default(),
+            effect: matches!(owner, Some(TypeItem::Effect(_))),
+            module: self.name.clone(),
+        }
     }
 
     /// コンストラクタ `name` を持つ型の名前。
@@ -751,7 +843,7 @@ impl Imports {
                             Some((scope, scope.export_type(name, (file, *range), diagnostics)?))
                         }) else {
                             push_source(&mut imports.types, name, None, import.range);
-                            imports.unknown_parts |= *all;
+                            imports.unknown_parts |= all.is_some();
                             continue;
                         };
                         push_source(
@@ -760,14 +852,28 @@ impl Imports {
                             public.then_some(item),
                             import.range,
                         );
-                        if *all {
+                        if let Some(all) = all {
+                            let mut hidden = false;
                             for (part, value) in scope.parts.get(&item).into_iter().flatten() {
+                                // 抽象型と抽象エフェクトの部品は取り込まず、`(..)` で1回だけ報告する
+                                // (docs/spec/modules.md の「公開の範囲」)
+                                let abstract_ = public
+                                    && scope.values.get(part).into_iter().flatten().any(
+                                        |definition| {
+                                            definition.item == *value
+                                                && definition.visibility == Visibility::Abstract
+                                        },
+                                    );
+                                hidden |= abstract_;
                                 push_source(
                                     &mut imports.values,
                                     part,
-                                    public.then_some(*value),
+                                    (public && !abstract_).then_some(*value),
                                     import.range,
                                 );
+                            }
+                            if hidden {
+                                diagnostics.push(abstract_import(file, *all, name, item));
                             }
                         }
                     }
@@ -822,21 +928,23 @@ fn push<T>(
     name: &str,
     item: T,
     range: TextRange,
-    public: bool,
+    visibility: Visibility,
     usable: bool,
 ) {
     table.entry(name.to_string()).or_default().push(Definition {
         item,
         range,
-        public,
+        visibility,
         usable,
     });
 }
 
 fn defines_public<V: Namespace>(scope: &ModuleScope, name: &str) -> bool {
-    V::definitions(scope)
-        .get(name)
-        .is_some_and(|definitions| definitions.iter().any(|definition| definition.public))
+    V::definitions(scope).get(name).is_some_and(|definitions| {
+        definitions
+            .iter()
+            .any(|definition| definition.visibility == Visibility::Public)
+    })
 }
 
 /// 修飾か import の並びで引いた名前が、そのモジュールにない (E1001、E1002)。合流した修飾子では、すべてのモジュールを並べる
@@ -862,6 +970,44 @@ pub(crate) fn not_in_module(
         ),
         Label::new(file, range, label),
     )
+}
+
+/// 別のモジュールの抽象型のコンストラクタか抽象エフェクトの操作を、使う位置か import の並びに書いた (E1058)。名前は
+/// 見えるが、宣言したモジュールの外では使えない (docs/spec/modules.md の「公開の範囲」)。
+pub(crate) fn abstract_member(
+    file: FileId,
+    range: TextRange,
+    name: &str,
+    hidden: &Hidden,
+) -> Diagnostic {
+    let (part, owner) = if hidden.effect {
+        ("operation", "effect")
+    } else {
+        ("constructor", "type")
+    };
+    Diagnostic::error(
+        codes::ABSTRACT_MEMBER,
+        format!(
+            "{part} `{name}` of the abstract {owner} `{}` is not visible outside `{}`",
+            hidden.owner, hidden.module
+        ),
+        Label::new(file, range, "hidden by `abstract`"),
+    )
+    .with_secondary(Label::new(hidden.file, hidden.range, "declared here"))
+}
+
+/// 抽象型か抽象エフェクトの `T(..)` (E1058)。型の名前だけは取り込むので、`T` と書けば足りる。
+fn abstract_import(file: FileId, range: TextRange, name: &str, owner: TypeItem) -> Diagnostic {
+    let parts = match owner {
+        TypeItem::Effect(_) => "operation",
+        TypeItem::Type(_) | TypeItem::Class(_) => "constructor",
+    };
+    Diagnostic::error(
+        codes::ABSTRACT_MEMBER,
+        format!("`{name}(..)` imports no {parts}: `{name}` is abstract"),
+        Label::new(file, range, "hidden by `abstract`"),
+    )
+    .with_help(format!("write `{name}`"))
 }
 
 /// ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った (E1029)。
@@ -1007,13 +1153,14 @@ fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
             ModuleOrigin::Session(number) => Definer::Session(number),
             ModuleOrigin::Std | ModuleOrigin::User => Definer::Module(&scope.name),
         };
-        let definer = |public: bool| match scope.origin {
-            ModuleOrigin::Std if !public => Definer::Hidden(&scope.name),
+        // 抽象型のコンストラクタも名前は外から見える (E1058 が名指す) ので、`pub` の部品と同じに数える
+        let definer = |visibility: Visibility| match scope.origin {
+            ModuleOrigin::Std if visibility == Visibility::Private => Definer::Hidden(&scope.name),
             _ => module,
         };
         for (name, definitions) in &scope.types {
             for definition in definitions {
-                let module = definer(definition.public);
+                let module = definer(definition.visibility);
                 match definition.item {
                     TypeItem::Type(id) => types.push((id, module, name.as_str())),
                     TypeItem::Effect(id) => effects.push((id, module, name.as_str())),
@@ -1024,7 +1171,7 @@ fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
         for (name, definitions) in &scope.values {
             for definition in definitions {
                 if let ValueItem::Constructor(id) = definition.item {
-                    constructors.push((id, definer(definition.public), name.as_str()));
+                    constructors.push((id, definer(definition.visibility), name.as_str()));
                 }
             }
         }
@@ -1188,7 +1335,9 @@ impl<'a> Resolver<'a> {
         self.own().types.iter().find_map(|(name, definitions)| {
             definitions
                 .iter()
-                .find(|definition| definition.item == item && !definition.public)
+                .find(|definition| {
+                    definition.item == item && definition.visibility == Visibility::Private
+                })
                 .map(|definition| (name.as_str(), definition.range))
         })
     }
@@ -1230,6 +1379,7 @@ impl<'a> Resolver<'a> {
             Resolved::Silent(Silence::Unusable)
             | Resolved::NotFound
             | Resolved::Private(..)
+            | Resolved::Abstract(_)
             | Resolved::UnknownQualifier => return Some(Fixity::DEFAULT),
         };
         let module = item.module();
@@ -1390,7 +1540,9 @@ impl<'a> Resolver<'a> {
                 .get(name)
                 .into_iter()
                 .flatten()
-                .filter(|definition| definition.usable && definition.public)
+                .filter(|definition| {
+                    definition.usable && definition.visibility == Visibility::Public
+                })
                 .find_map(|definition| kind(definition.item))
         });
         match from_prelude {
@@ -1438,6 +1590,7 @@ impl<'a> Resolver<'a> {
         let mut found = Vec::new();
         let mut broken = false;
         let mut private = None;
+        let mut hidden = None;
         let mut unusable = false;
         for (target, import) in targets {
             let ImportTarget::Module(module) = target else {
@@ -1453,17 +1606,29 @@ impl<'a> Resolver<'a> {
                     unusable = true;
                     continue;
                 }
-                if definition.public {
-                    add(&mut found, item, import);
-                } else if scope.origin == ModuleOrigin::User {
+                match definition.visibility {
+                    Visibility::Public => add(&mut found, item, import),
+                    // 抽象型と抽象エフェクトの部品は、標準ライブラリのものも「定義がない」とせず E1058 にする
+                    // (docs/spec/modules.md の「公開の範囲」)
+                    Visibility::Abstract => {
+                        if hidden.is_none() {
+                            hidden = Some(scope.hidden(definition));
+                        }
+                    }
                     // 標準ライブラリの `pub` でない item は、定義がないものとして扱う (docs/spec/modules.md の「標準ライブラリ」)
-                    private.get_or_insert((scope.file, definition.range));
+                    Visibility::Private if scope.origin == ModuleOrigin::User => {
+                        private.get_or_insert((scope.file, definition.range));
+                    }
+                    Visibility::Private => {}
                 }
                 break;
             }
         }
         if let Some(resolved) = decide(found, broken) {
             return resolved;
+        }
+        if let Some(hidden) = hidden {
+            return Resolved::Abstract(hidden);
         }
         match private {
             Some((file, range)) => Resolved::Private(file, range),

@@ -1,0 +1,6 @@
+# タスクの `exit 3` は run を捨てて `exited with code 3` と出し、次の入力も動く。閉じるときに漏れがない
+# (docs/spec/stdlib.md の「`exit`」)
+> import Async
+> Async.run (fn () -> Async.spawn (fn () -> (exit 3 : Unit)))
+> println "next"
+> 1 + 1

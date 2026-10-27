@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 328
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/nested_run.em
+---
+--- stdout ---
+inner 20
+outer 21
+3
+--- stderr ---

@@ -1072,3 +1072,8 @@ fn a_backslash_at_the_end_of_a_line_in_a_quote_keeps_its_one_escape() {
         ]
     );
 }
+
+#[test]
+fn abstract_is_a_keyword() {
+    assert_eq!(kinds("abstract"), ["ABSTRACT_KW"]);
+}

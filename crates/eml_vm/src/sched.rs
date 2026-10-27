@@ -3,12 +3,20 @@
 
 use std::collections::VecDeque;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
+use eml_rt::Control;
+
+use crate::cells::{CellRef, Registry};
+use crate::monitor::Monitor;
 use crate::vm::Task;
 
 /// スケジュールの方針の選び方。CLI の `--sched` と `RunConfig::with_sched` で選ぶ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sched {
+    /// 監視のスレッドの `PREEMPT` で横取りする。
+    Normal,
     /// 横取りしない。
     #[default]
     Sequential,
@@ -19,17 +27,21 @@ pub enum Sched {
 impl FromStr for Sched {
     type Err = String;
 
-    /// `sequential` か `seeded:<n>` を読む。`n` は `u64` の10進数である。
+    /// `normal`、`sequential`、`seeded:<n>` のどれかを読む。`n` は `u64` の10進数である。
     fn from_str(text: &str) -> Result<Sched, String> {
-        if text == "sequential" {
-            return Ok(Sched::Sequential);
+        match text {
+            "normal" => return Ok(Sched::Normal),
+            "sequential" => return Ok(Sched::Sequential),
+            _ => {}
         }
         // `u64::from_str` は先頭の `+` も読むので、数字だけの綴りに限る
         text.strip_prefix("seeded:")
             .filter(|seed| seed.bytes().all(|b| b.is_ascii_digit()))
             .and_then(|seed| seed.parse().ok())
             .map(Sched::Seeded)
-            .ok_or_else(|| format!("expected `sequential` or `seeded:<n>`, found `{text}`"))
+            .ok_or_else(|| {
+                format!("expected `normal`, `sequential` or `seeded:<n>`, found `{text}`")
+            })
     }
 }
 
@@ -46,6 +58,67 @@ pub trait Policy: Send {
     fn pick(&mut self, ready: &mut VecDeque<TaskId>) -> Option<TaskId>;
     /// 起こしたタスクを、走れるタスクの列に入れる。
     fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId);
+    /// 2つ目の仕事が走れるようになりうるときに呼ぶ。
+    fn task_added(&mut self);
+    /// 動くタスクが替わったときに呼ぶ。
+    fn switched(&mut self);
+}
+
+/// 監視のスレッドの `PREEMPT` だけで横取りする方針。列は FIFO である。監視のスレッドは最初の `task_added` で始め、
+/// 方針を捨てるときに止める。2つ目の仕事を持たない run はスレッドを作らない (docs/spec/vm.md の「タスクとスケジュール」)。
+pub struct Normal {
+    /// 監視のスレッドに渡す `Control`。始めるときに取り出すので、始めるのは1回だけで、始められなかったときも
+    /// 試し直さない。
+    control: Option<Arc<Control>>,
+    pub(crate) monitor: Option<Monitor>,
+}
+
+impl Normal {
+    pub fn new(control: Arc<Control>) -> Normal {
+        Normal {
+            control: Some(control),
+            monitor: None,
+        }
+    }
+}
+
+impl Policy for Normal {
+    // 横取りは監視のスレッドの `PREEMPT` が求めるので、安全点に分岐を残さない
+    #[inline(always)]
+    fn tick(&mut self) -> bool {
+        false
+    }
+
+    fn reload(&mut self) {}
+
+    fn pick(&mut self, ready: &mut VecDeque<TaskId>) -> Option<TaskId> {
+        ready.pop_front()
+    }
+
+    fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId) {
+        ready.push_back(task);
+    }
+
+    fn task_added(&mut self) {
+        if let Some(control) = self.control.take() {
+            self.monitor = Monitor::start(control);
+        }
+    }
+
+    fn switched(&mut self) {
+        if let Some(monitor) = &self.monitor {
+            monitor.watch.switches.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for Normal {
+    // run の終わりに `Scheduler` を捨てるときに止める。成功でも誤りでも同じで、run の後にスレッドを残さない
+    fn drop(&mut self) {
+        if let Some(monitor) = self.monitor.take() {
+            monitor.stop();
+        }
+    }
 }
 
 /// 横取りしない方針。列の先頭から取り、起こしたタスクも先頭に入れる。
@@ -68,6 +141,12 @@ impl Policy for Sequential {
     fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId) {
         ready.push_front(task);
     }
+
+    #[inline(always)]
+    fn task_added(&mut self) {}
+
+    #[inline(always)]
+    fn switched(&mut self) {}
 }
 
 /// seed で決まる方針。擬似乱数は splitmix64 で、予算は 1 から 16 までの安全点である。
@@ -119,6 +198,12 @@ impl Policy for Seeded {
     fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId) {
         ready.push_back(task);
     }
+
+    #[inline(always)]
+    fn task_added(&mut self) {}
+
+    #[inline(always)]
+    fn switched(&mut self) {}
 }
 
 /// join の節点の番号。境目のフレームの slot 1 に生の語で置く。
@@ -136,6 +221,15 @@ pub(crate) enum TaskState {
     Waiting(JoinId),
     /// まだ始まっていない右の子。語は `()` を適用する閉包で、タスクがその参照を持つ。
     Unstarted(eml_rt::Word),
+    /// まだ動いていない `Async` の入口の `Task`。動き始めるときに、`args` の先頭 `argc` 個を入口 `function` の
+    /// フレームの slot 0.. に書く。語はタスクが参照を持つ (docs/spec/vm.md の「`Async` のタスク」)。
+    Entry {
+        function: u32,
+        args: [eml_rt::Word; 2],
+        argc: u8,
+    },
+    /// `Async.run` で、根のスコープが閉じるのをスタックを持ったまま待つ。起こされたら `Async` の命令の次から続ける。
+    WaitingCell(CellRef),
 }
 
 /// 子の終わり方 (docs/spec/vm.md の「`par` の fork と join」)。語はどれも、節点が持つ数えた参照である。
@@ -192,6 +286,10 @@ pub struct Scheduler<P: Policy> {
     pub(crate) failed: Option<crate::RuntimeError>,
     /// 根の表のうち、この番号より前の根はどれも印が付いている。`Machine` が実行をまたいで持つ値を受け取って返す。
     pub(crate) shared_roots: usize,
+    /// `Async` のタスクとスコープのセル。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
+    pub(crate) cells: Registry,
+    /// 終わった入口の `Task` のスタック。次の入口の `Task` が使い回す。
+    pub(crate) stacks: Vec<Vec<eml_rt::Word>>,
 }
 
 impl<P: Policy> Scheduler<P> {
@@ -210,10 +308,13 @@ impl<P: Policy> Scheduler<P> {
             max_depth,
             failed: None,
             shared_roots: 0,
+            cells: Registry::default(),
+            stacks: Vec::new(),
         }
     }
 
     pub(crate) fn add_task(&mut self, task: Task) -> TaskId {
+        self.policy.task_added();
         match self.free_tasks.pop() {
             Some(id) => {
                 self.tasks[id] = Some(task);
@@ -224,6 +325,12 @@ impl<P: Policy> Scheduler<P> {
                 self.tasks.len() - 1
             }
         }
+    }
+
+    /// 動いているタスクの番号を替える。`current` はここでだけ書き、方針に切り替えを伝える。
+    pub(crate) fn set_current(&mut self, id: TaskId) {
+        self.current = id;
+        self.policy.switched();
     }
 
     /// 表から外したタスクの欄を空ける。

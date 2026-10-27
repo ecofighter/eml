@@ -1462,6 +1462,10 @@ impl Item {
     pub fn pub_keyword(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SyntaxKind::PUB_KW)
     }
+
+    pub fn abstract_keyword(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SyntaxKind::ABSTRACT_KW)
+    }
 }
 
 impl ImportItem {
@@ -1492,6 +1496,14 @@ impl ImportName {
     /// `Style(..)` の形か。
     pub fn all_constructors(&self) -> bool {
         support::token(&self.syntax, SyntaxKind::DOT2).is_some()
+    }
+
+    /// `Style(..)` の `(..)` の位置。
+    pub fn all_constructors_range(&self) -> Option<TextRange> {
+        let open = support::token(&self.syntax, SyntaxKind::L_PAREN)?;
+        let close = support::token(&self.syntax, SyntaxKind::R_PAREN)?;
+        self.all_constructors()
+            .then(|| TextRange::new(open.text_range().start(), close.text_range().end()))
     }
 }
 

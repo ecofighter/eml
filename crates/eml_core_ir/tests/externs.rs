@@ -3,7 +3,7 @@
 //! extern が作る値のタグと、translate が作る配置も照らし合わせる。
 
 use eml_core_ir::boxed_repr;
-use eml_extern::{Extern, ExternType, Linearity, OpRet, Purity};
+use eml_extern::{Extern, ExternType, Mark, OpRet, Purity, Repr, RuntimeEntry};
 use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
 use eml_lir::{FALSE, TRUE, TUPLE};
 use eml_test_support::Checked;
@@ -57,6 +57,12 @@ probe_array a = a
 probe_mut_array : MutArray Int -> MutArray Int
 probe_mut_array a = a
 
+probe_cell : Async.Cell -> Async.Cell
+probe_cell c = c
+
+probe_task : Async.Task Int -> Async.Task Int
+probe_task t = t
+
 probe_panic : Unit -> <Panic> Int
 probe_panic () = panic \"x\"
 
@@ -85,6 +91,8 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Child => "probe_child",
         ExternType::Array => "probe_array",
         ExternType::MutArray => "probe_mut_array",
+        ExternType::Cell => "probe_cell",
+        ExternType::Task => "probe_task",
     }
 }
 
@@ -243,8 +251,8 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     }
 }
 
-/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と、`Std.FileIn`、
-/// `Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
+/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`
+/// と、`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
@@ -255,6 +263,7 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Std.Array.get" => (&[true, false], None),
             "Std.MutArray.length" => (&[true], Some(0)),
             "Std.MutArray.read" => (&[true, false], Some(0)),
+            "Std.Async.task_cell" => (&[true], Some(0)),
             "Std.FileIn.read_all"
             | "Std.FileIn.read_line_raw"
             | "Std.FileIn.read_all_bytes"
@@ -377,58 +386,72 @@ fn callback_tails(types: &TypeStore, mut ty: TypeId, arity: usize) -> Vec<RowTai
 }
 
 #[test]
-fn every_extern_function_row_has_the_kinds_of_its_std_signature() {
+fn every_extern_function_row_has_the_marks_of_its_std_signature() {
     let checked = checked();
     let mut store = checked.typed.types.clone();
     for &e in Extern::ALL {
         let row = e.row();
         let mut ty = row_type(&checked, &mut store, e);
         let types = &store;
-        assert_eq!(row.param_kinds.len(), row.params.len(), "{}", row.name);
+        assert_eq!(row.param_marks.len(), row.params.len(), "{}", row.name);
         let mut params = Vec::new();
         let mut param_types = Vec::new();
         for _ in row.params {
             let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
-            params.push(kind_of(types.linearity_or_poly(*param)));
+            params.push(mark_of(types.linearity_or_poly(*param)));
             param_types.push(*param);
             ty = *ret;
         }
-        assert_eq!(params, row.param_kinds, "{}", row.name);
+        for (index, (&declared, &mark)) in params.iter().zip(row.param_marks).enumerate() {
+            assert!(
+                mark_fits(declared, mark),
+                "{} parameter {index}: declared {declared:?}, row {mark:?}",
+                row.name
+            );
+        }
         if let OpRet::Repr(_) = row.ret {
             let result = row_result(types, row.name, row.with_arg, &param_types, ty);
-            assert_eq!(
-                kind_of(types.linearity_or_poly(result)),
-                row.ret_kind,
-                "{}",
-                row.name
+            let declared = mark_of(types.linearity_or_poly(result));
+            assert!(
+                mark_fits(declared, row.ret_mark),
+                "{} result: declared {declared:?}, row {:?}",
+                row.name,
+                row.ret_mark
             );
         }
     }
 }
 
-/// 宣言に対して相対的な型 (`Poly`) は `Unr` の行と合う。関数でない引数の型変数は、extern のスキームが `Unr` に
-/// 固定する。関数型の引数 (`Std.Par.par` の子) の矢印の Kind は固定しないので、どの印の閉包も渡せる。結果
-/// だけに現れる型変数は固定しないが、結果がその型変数に依存する行 (`MutArray.empty` の `MutArray a`) は `Lin` である。
-/// `Std.Par.par` の結果の組の型変数も、子の最後の結果にだけ現れるので固定しないが、`par` の行は型検査に結ぶためだけに
-/// あり、`Poly` を通して `Unr` と比べる (docs/spec/declarations.md の「`extern`」)。
-fn kind_of(lin: Lin) -> Linearity {
+/// 型の Kind を行の印に写す。関数でない引数の型変数は、extern のスキームが `Unr` に固定する。関数型の引数
+/// (`Std.Par.par` の子) の矢印の Kind は固定しないので、どの印の閉包も渡せる。結果だけに現れる型変数は固定しないが、
+/// 結果がその型変数に依存する行 (`MutArray.empty` の `MutArray a`) は `Lin` である。固定しない位置は `Poly` の行と
+/// 比べる (docs/spec/core-ir.md の「表の印の列」)。
+fn mark_of(lin: Lin) -> Mark {
     match lin {
-        Lin::Unr | Lin::Poly => Linearity::Unr,
-        Lin::Lin => Linearity::Lin,
+        Lin::Unr => Mark::Unr,
+        Lin::Lin => Mark::Lin,
+        Lin::Poly => Mark::Poly,
         Lin::Var(_) => panic!("an extern row has no kind variable"),
     }
 }
 
-/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11と `MutArray` を扱う7つ
-/// 以外は、引数も結果も `Unr` である。
+/// 宣言の型から読んだ印と行の印が合うか。型変数に依存する型は `Poly` と読めるが、スキームが `Unr` に固定する位置の
+/// 行は `Unr` で、固定しない位置の行は `Poly` なので、`Poly` はどちらの行とも合う。固定するかどうかは
+/// 宣言の型から読めないので、固定しない行は `only_the_listed_rows_carry_a_lin_or_poly_mark` が列挙する。
+fn mark_fits(declared: Mark, row: Mark) -> bool {
+    declared == row || (declared == Mark::Poly && row == Mark::Unr)
+}
+
+/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
+/// `Std.Par.par` と `Std.Async` の8つ以外は、引数も結果も `Unr` である。
 #[test]
-fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
-    use Linearity::{Lin, Unr};
+fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
+    use Mark::{Lin, Poly, Unr};
     for &e in Extern::ALL {
         let row = e.row();
-        let expected: (&[Linearity], Linearity) = match row.name {
+        let expected: (&[Mark], Mark) = match row.name {
             "Std.FileIn.open" => (&[Unr], Lin),
             "Std.FileIn.read_all" => (&[Lin], Unr),
             "Std.FileIn.read_line_raw" => (&[Lin], Unr),
@@ -476,17 +499,126 @@ fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
             "Std.MutArray.read" => (&[Lin, Unr], Unr),
             "Std.MutArray.write" => (&[Lin, Unr, Unr], Lin),
             "Std.MutArray.freeze" => (&[Lin], Unr),
+            "Std.Par.par" => (&[Poly, Poly], Poly),
+            "Std.Async.start_raw" | "Std.Async.run_raw" => (&[Poly], Lin),
+            "Std.Async.park" => (&[Unr, Lin], Unr),
+            "Std.Async.ready" => (&[Lin], Unr),
+            "Std.Async.finish_ok" => (&[Poly], Unr),
+            "Std.Async.task_cell" => (&[Lin], Unr),
+            "Std.Async.take_result" | "Std.Async.run_result" => (&[Lin], Poly),
             _ => {
                 assert!(
-                    row.param_kinds.iter().all(|&kind| kind == Unr),
+                    row.param_marks.iter().all(|&mark| mark == Unr),
                     "{}",
                     row.name
                 );
-                assert_eq!(row.ret_kind, Unr, "{}", row.name);
+                assert_eq!(row.ret_mark, Unr, "{}", row.name);
                 continue;
             }
         };
-        assert_eq!((row.param_kinds, row.ret_kind), expected, "{}", row.name);
+        assert_eq!((row.param_marks, row.ret_mark), expected, "{}", row.name);
+    }
+}
+
+/// 表の値そのもの。引数を預かる行は `Std.Async` の8つだけである。預かる引数は型変数を `Unr` に固定しない位置なので、
+/// その印は `Unr` でない (docs/spec/declarations.md の「`extern`」)。
+#[test]
+fn only_the_async_rows_hold_an_argument() {
+    let holding: Vec<&str> = Extern::ALL
+        .iter()
+        .map(|e| e.row())
+        .filter(|row| row.held.contains(&true))
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(
+        holding,
+        [
+            "Std.Async.start_raw",
+            "Std.Async.run_raw",
+            "Std.Async.park",
+            "Std.Async.ready",
+            "Std.Async.finish_ok",
+            "Std.Async.task_cell",
+            "Std.Async.take_result",
+            "Std.Async.run_result",
+        ]
+    );
+    for &e in Extern::ALL {
+        let row = e.row();
+        for (index, (&held, &mark)) in row.held.iter().zip(row.param_marks).enumerate() {
+            assert!(
+                !held || mark != Mark::Unr,
+                "{} parameter {index} is held but `Unr`",
+                row.name
+            );
+        }
+    }
+}
+
+/// ランタイムが名前で呼ぶ入口は、std の単相の関数である。単相なので instance の名前が正式な名前のままになり、
+/// 引数の Repr が宣言の型から決まる (docs/spec/stdlib.md の「`Std.Async`」)。
+#[test]
+fn every_runtime_entry_is_a_monomorphic_std_function() {
+    let checked = checked();
+    let program = &checked.program;
+    let types = &checked.typed.types;
+    for &entry in RuntimeEntry::ALL {
+        let (id, function) = program
+            .functions()
+            .find(|(id, function)| {
+                format!("{}.{}", program.modules[id.module].name, function.name) == entry.name()
+            })
+            .unwrap_or_else(|| panic!("the std defines `{}`", entry.name()));
+        assert_eq!(function.kind, FunctionKind::Defined, "{}", entry.name());
+        let signature = function.signature.as_ref().expect("a signature");
+        assert!(
+            signature.generics.type_vars.is_empty() && signature.generics.row_vars.is_empty(),
+            "{} is generic",
+            entry.name()
+        );
+        assert_eq!(program.arity(id), Some(entry.arity()), "{}", entry.name());
+        let mut ty = checked.typed.decls[&ValueItem::Function(id)].ty;
+        let mut params = Vec::new();
+        for _ in 0..entry.arity() {
+            let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
+                panic!("`{}` has an arrow per parameter", entry.name());
+            };
+            params.push(boxed_repr(types, *param, program));
+            ty = *ret;
+        }
+        assert_eq!(params, entry.params(), "{}", entry.name());
+        assert_eq!(
+            boxed_repr(types, ty, program),
+            Repr::Unit,
+            "{}",
+            entry.name()
+        );
+    }
+}
+
+/// ランタイムが名前で呼ぶ入口は、下ろした後も宣言の名前のまま、型どおりの ABI で残る (docs/spec/core-ir.md の
+/// 「変換の規則」)。
+#[test]
+fn the_runtime_entries_have_the_declared_abi() {
+    let core = eml_test_support::core_until(
+        "import Async\nmain : Unit -> Unit\nmain () = ()",
+        eml_core_ir::Pass::Evidence,
+    );
+    for &entry in RuntimeEntry::ALL {
+        let function = core
+            .functions
+            .iter()
+            .find(|function| function.name == entry.name())
+            .unwrap_or_else(|| panic!("`{}` is lowered", entry.name()));
+        let params: Vec<Repr> = function
+            .params()
+            .iter()
+            .map(|&param| function.repr(param))
+            .collect();
+        assert_eq!(params, entry.params(), "{}", entry.name());
+        assert_eq!(function.split, None, "{}", entry.name());
+        assert!(!function.internal, "{}", entry.name());
+        assert_eq!(function.ret, Repr::Unit, "{}", entry.name());
     }
 }
 
@@ -590,7 +722,39 @@ fn the_io_error_kind_tags_match_the_prelude_declaration() {
             ("PermissionDenied", eml_lir::IO_PERMISSION_DENIED),
             ("NotAvailable", eml_lir::IO_NOT_AVAILABLE),
             ("NotUtf8", eml_lir::IO_NOT_UTF8),
-            ("Other", eml_lir::IO_OTHER)
+            ("Other", eml_lir::IO_OTHER),
+            // 次の5つには Rust の定数がない。Rust の側は作らず、`fail_io` がタグをそのまま渡す
+            ("Cancelled", 5),
+            ("TimedOut", 6),
+            ("ConnectionReset", 7),
+            ("AddrInUse", 8),
+            ("ResourceLimit", 9)
+        ]
+    );
+}
+
+/// ランタイムは待たせたタスクを再開するときに、配置の表を見ずに `WAKE_WOKE` と `WAKE_CANCELLED` のタグで `Wake` を
+/// 作る。そのタグが `Std.Async` の宣言の順と一致することを確かめる (docs/spec/stdlib.md の「`Std.Async`」)。
+#[test]
+fn the_wake_tags_match_the_async_declaration() {
+    let lowered = eml_test_support::lower("import Async\n");
+    let program = &lowered.program;
+    let (_, wake) = program
+        .types()
+        .find(|(id, def)| program.modules[id.module].name == "Std.Async" && def.name == "Wake")
+        .expect("`Std.Async` declares `Wake`");
+    let eml_hir::TypeDefKind::Data { constructors } = &wake.kind else {
+        panic!("`Wake` is a data type");
+    };
+    let names: Vec<(&str, u32)> = constructors
+        .iter()
+        .map(|&c| (program[c].name.as_str(), program[c].tag))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("Woke", eml_lir::WAKE_WOKE),
+            ("Cancelled", eml_lir::WAKE_CANCELLED)
         ]
     );
 }

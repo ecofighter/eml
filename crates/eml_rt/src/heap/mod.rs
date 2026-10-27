@@ -95,6 +95,8 @@ pub struct Stats {
     /// 生きている箱 (token の箱を含む) の数。
     pub live: u64,
     pub peak_live: u64,
+    /// `share` が rc を負にした物体の数。すでに共有の物体は数えない。
+    pub shared: u64,
 }
 
 /// ヒープの証明の対象になる部分。不変条件はこの部分の上で書くので、`Heap` のほかの欄 (数の記録、作業リストなど) を
@@ -741,6 +743,7 @@ impl<M: Mode> Heap<M> {
                 allocations: 0,
                 live: 0,
                 peak_live: 0,
+                shared: 0,
             },
             _mode: PhantomData,
         };

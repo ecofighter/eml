@@ -8,11 +8,12 @@ mod slots;
 
 use std::sync::Arc;
 
+use eml_extern::RuntimeEntry;
 use eml_lir::unwind::UnwindPoint;
-use eml_lir::{FnIdx, Program};
+use eml_lir::{FnIdx, Program, Rhs, Stmt};
 use eml_rt::{Control, Mode};
 
-use crate::code::{CodeBase, CompileError, FnEntry, Forks, Index, Tables};
+use crate::code::{AsyncEntries, CodeBase, CompileError, FnEntry, Forks, Index, Tables};
 use crate::disasm;
 use constants::Constants;
 
@@ -40,6 +41,7 @@ impl<M: Mode> CodeBase<M> {
                 panic: None,
                 tail: eml_rt::Word::UNIT,
             },
+            entries: None,
         }
     }
 
@@ -64,6 +66,7 @@ impl<M: Mode> CodeBase<M> {
             index,
             control,
             forks,
+            entries,
         } = self;
         let mut pool = Constants::new(constants, index, region, control);
         let strings = &program.strings;
@@ -116,6 +119,9 @@ impl<M: Mode> CodeBase<M> {
                 .or_insert(links.functions[i]);
         }
         forks::extend(program, &links, index, forks, region, control)?;
+        if entries.is_none() {
+            *entries = async_entries(program, index)?;
+        }
         Ok(links.functions[program.entry.0 as usize])
     }
 
@@ -164,6 +170,42 @@ impl<M: Mode> CodeBase<M> {
             effects,
             files,
         }
+    }
+}
+
+/// ランタイムが名前で呼ぶ `Std.Async` の入口の番号。名前は前のロードの関数からも引く。`Std.Async` は import した
+/// ときだけ読み込むので、引けないロードもある。そのロードが `Async` の命令を持てば、コード生成の誤りにする
+/// (docs/spec/vm.md の「`Async` のタスク」)。
+fn async_entries(program: &Program, index: &Index) -> Result<Option<AsyncEntries>, CompileError> {
+    let find = |entry: RuntimeEntry| index.functions.get(entry.name()).copied();
+    if let (Some(start), Some(resume)) = (
+        find(RuntimeEntry::StartTask),
+        find(RuntimeEntry::ResumeTask),
+    ) {
+        return Ok(Some(AsyncEntries { start, resume }));
+    }
+    let runs_async = program
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.stmts)
+        .any(|stmt| {
+            matches!(
+                stmt,
+                Stmt::Let {
+                    rhs: Rhs::Extern { ext, .. },
+                    ..
+                } if ext.is_async()
+            )
+        });
+    match RuntimeEntry::ALL
+        .iter()
+        .find(|&&entry| find(entry).is_none())
+    {
+        Some(missing) if runs_async => Err(CompileError::MissingEntry {
+            function: missing.name().to_string(),
+        }),
+        _ => Ok(None),
     }
 }
 

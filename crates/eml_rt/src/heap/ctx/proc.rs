@@ -5,7 +5,7 @@
 #[cfg(verus_only)]
 use super::proof::*;
 use super::*;
-use crate::externs::{Exited, Fault};
+use crate::externs::Fault;
 use crate::host::{Child, child_close_stdin, child_wait, host_spawn};
 
 verus! {
@@ -443,42 +443,6 @@ impl<M: Mode> Ctx<M> {
                 Ok(h)
             },
             Err(e) => Err(Fault::Heap(e)),
-        }
-    }
-
-    /// `Proc.exited`。いつも `Exited` で失敗する。プログラムの名前 `program` の参照を受け取って手放す。`Proc.capture`
-    /// が、0 でない終了コード `code` を IO の失敗にするのに使う。
-    ///
-    /// # Safety
-    /// `copy_string` と同じである。
-    pub unsafe fn proc_exited(&mut self, program: Word, code: i64) -> (r: Result<Word, Fault>)
-        requires
-            old(self).wf(),
-            old(self).heap_spec().word_in(program),
-            !M::CHECKED ==> old(self).is_string(program) && old(self).holds(program),
-        ensures
-            final(self).wf(),
-            final(self).evv_spec() == old(self).evv_spec(),
-            final(self).yield_spec() == old(self).yield_spec(),
-            (r matches Err(Fault::Exited(_))) || (r matches Err(Fault::Heap(_))),
-            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
-                self,
-            ).heap_spec().settled_heap(),
-            !M::CHECKED ==> r matches Err(Fault::Exited(_)),
-            old(self).held_ok() && old(self).is_string(program) && old(self).holds(program) ==> (
-            r matches Err(Fault::Exited(_))) || (r matches Err(Fault::Heap(e)) && chain_err(
-                Err::<(), HeapError>(e),
-            )),
-            old(self).held_ok() && old(self).is_string(program) && old(self).holds(program) && (
-            r matches Err(Fault::Exited(_))) ==> {
-                &&& final(self).held_ok()
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(program, x), Set::empty())
-            },
-    {
-        // 文言に使う名前は全部を写す
-        match unsafe { self.copy_string(program, usize::MAX) } {
-            Ok(name) => Err(Fault::Exited(Box::new(Exited { program: name, code }))),
-            Err(e) => Err(e),
         }
     }
 

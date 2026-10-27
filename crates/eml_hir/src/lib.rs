@@ -48,6 +48,7 @@ pub const STD: &[(&str, &str)] = &[
     ("Map.em", include_str!("../../../std/Map.em")),
     ("Set.em", include_str!("../../../std/Set.em")),
     ("Par.em", include_str!("../../../std/Par.em")),
+    ("Async.em", include_str!("../../../std/Async.em")),
 ];
 
 /// Prelude のソース。標準ライブラリの Prelude を差し替えるテストが、本文に宣言を足すのに使う。
@@ -116,4 +117,5 @@ pub mod codes {
     pub const SPREAD_NOT_AN_ARGUMENT: ErrorCode = ErrorCode(1055);
     pub const COMMAND_WITHOUT_PROGRAM: ErrorCode = ErrorCode(1056);
     pub const ROW_BOUND_NOT_DECLARED: ErrorCode = ErrorCode(1057);
+    pub const ABSTRACT_MEMBER: ErrorCode = ErrorCode(1058);
 }

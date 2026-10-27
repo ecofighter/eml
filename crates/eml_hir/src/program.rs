@@ -352,6 +352,14 @@ impl Program {
         self.items(|items| &items.bindings)
     }
 
+    /// 2つのモジュールを同じモジュールとみなすか。`DefMap::same_scope` と同じ判定で、セッションのモジュールどうしは
+    /// 1つのモジュールとみなす (docs/spec/modules.md の「REPL のセッション」)。
+    pub fn same_scope(&self, a: ModuleId, b: ModuleId) -> bool {
+        a == b
+            || (self.modules[a].origin.session().is_some()
+                && self.modules[b].origin.session().is_some())
+    }
+
     pub fn instance(&self, class: ClassId, head: TypeDefId) -> Option<InstanceId> {
         self.instance_index.get(&(class, head)).copied()
     }
@@ -403,6 +411,22 @@ impl Program {
 
     pub fn body(&self, id: FunctionId) -> Option<&Body> {
         self.modules[id.module].bodies.get(id.local)
+    }
+
+    /// 標準ライブラリの関数を `モジュール名.関数名` で引く。Core IR の関数の名前 (`core_name`) と同じ綴りで、ランタイムが
+    /// 名前で呼ぶ入口を探すのに使う。そのモジュールを読み込んでいなければ `None` (docs/spec/core-ir.md の「変換の規則」)。
+    pub fn function_by_canonical_name(&self, name: &str) -> Option<FunctionId> {
+        let (module, function) = name.rsplit_once('.')?;
+        self.modules.iter().find_map(|(id, data)| {
+            if data.origin != ModuleOrigin::Std || data.name != module {
+                return None;
+            }
+            data.items
+                .functions
+                .iter()
+                .find(|(_, item)| item.name == function)
+                .map(|(local, _)| ItemId::new(id, local))
+        })
     }
 
     /// 引数がそろうまで本体が動かない引数の数。extern の関数はシグネチャの一番外側の `->` の数、ほかは等式の引数の

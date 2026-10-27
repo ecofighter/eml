@@ -47,6 +47,61 @@ pub enum Linearity {
     Lin,
 }
 
+/// 値が `Lin` を含みうるかを表す印 (docs/spec/lir.md の「Kind の印」)。extern の行の印の列も同じ3値である
+/// (docs/spec/core-ir.md の「表の印の列」)。
+/// 順序を持つ型にしないのは、結びの順 (`Lin` > `Poly` > `Unr`) と宣言の順を取り違えないため。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Mark {
+    /// 共有してよい。
+    Unr,
+    /// 共有してはならず、ちょうど1回消費する。
+    Lin,
+    /// 型変数の位置で、`Lin` かもしれない。
+    Poly,
+}
+
+impl Mark {
+    pub fn name(self) -> &'static str {
+        match self {
+            Mark::Unr => "unr",
+            Mark::Lin => "lin",
+            Mark::Poly => "poly",
+        }
+    }
+
+    pub fn join(self, other: Mark) -> Mark {
+        match (self, other) {
+            (Mark::Lin, _) | (_, Mark::Lin) => Mark::Lin,
+            (Mark::Poly, _) | (_, Mark::Poly) => Mark::Poly,
+            _ => Mark::Unr,
+        }
+    }
+
+    /// 送り手の値を受け手に渡せるか。`lin` ビットを落とす向き (`Lin` を `Unr` の受け手へ) だけが渡せない。
+    /// `Unr` を `Lin` の受け手へ渡すのは、ビットが立たないだけで安全な側である。`Poly` はどちらの向きも通す。
+    pub fn passes_to(sender: Mark, receiver: Mark) -> bool {
+        !matches!((sender, receiver), (Mark::Lin, Mark::Unr))
+    }
+
+    /// 2つの印の小さいほう。順序は `Unr` < `Poly` < `Lin`。
+    pub fn meet(self, other: Mark) -> Mark {
+        if self.at_least(other) { other } else { self }
+    }
+
+    /// `self` が `other` 以上か (`self >= other`)。順序は `Unr` < `Poly` < `Lin`。
+    pub fn at_least(self, other: Mark) -> bool {
+        self.rank() >= other.rank()
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Mark::Unr => 0,
+            Mark::Poly => 1,
+            Mark::Lin => 2,
+        }
+    }
+}
+
 /// 関数を呼んだときに起こりうること。縮約のパスは `Pure` の呼び出しだけを、使われなければ消す (docs/spec/lir.md の「縮約」)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Purity {
@@ -187,6 +242,9 @@ table! {
         Child => type_row("Std.Proc.Child", Lin, Repr::Obj),
         Array => generic_type_row("Prelude.Array", Unr),
         MutArray => generic_type_row("Prelude.MutArray", Lin),
+        // 登録表の添字の即値と、タスクのハンドルを中身に持つ `Foreign` (docs/spec/stdlib.md の「`Std.Async`」)
+        Cell => type_row("Std.Async.Cell", Unr, Repr::Int),
+        Task => generic_type_row("Std.Async.Task", Lin),
     }
 }
 
@@ -249,7 +307,7 @@ pub struct EffectRow {
 table! {
     /// extern の関数。表の行は宣言の順に並び、`Extern::ALL` の添字は `*self as usize` と同じである。VM のコード生成は
     /// これを行の番号に使う。
-    pub enum Extern: FunctionRow, use {Linearity::{Lin, Unr}, Repr::{Enum, Float, Int, Obj, TObj, Unit}} {
+    pub enum Extern: FunctionRow, use {Mark::{Lin, Poly, Unr}, Repr::{Enum, Float, Int, Obj, TObj, Unit}} {
         Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
         Open => kinded(
             "Std.FileIn.open",
@@ -743,17 +801,6 @@ table! {
         ProcWait => {
             kinded("Std.Proc.wait", &[Obj], &[Lin], Int, Unr, Purity::Effectful)
         },
-        // いつも `IO` の失敗で終わる。`exit` と同じく戻らない行である
-        ProcExited => FunctionRow {
-            name: "Std.Proc.exited",
-            params: &[Repr::Obj, Repr::Int],
-            ret: OpRet::Never,
-            param_kinds: &[Linearity::Unr, Linearity::Unr],
-            ret_kind: Linearity::Unr,
-            purity: Purity::Effectful,
-            borrowed: &[false, false],
-            with_arg: None,
-        },
         ProcCloseStdin => kinded(
             "Std.Proc.close_stdin",
             &[Obj],
@@ -840,11 +887,25 @@ table! {
             name: "Prelude.exit",
             params: &[Repr::Int],
             ret: OpRet::Never,
-            param_kinds: &[Linearity::Unr],
-            ret_kind: Linearity::Unr,
+            param_marks: &[Mark::Unr],
+            ret_mark: Mark::Unr,
             purity: Purity::Effectful,
             borrowed: &[false],
             with_arg: None,
+            held: &[false],
+        },
+        // いつも `IO` の失敗で終わる戻らない行。宛先には書かず、届け先は VM の `failed` が決める
+        // (docs/spec/vm.md の「extern の中断」)
+        FailIo => FunctionRow {
+            name: "Prelude.fail_io",
+            params: &[Repr::Enum, Repr::Obj],
+            ret: OpRet::Never,
+            param_marks: &[Mark::Unr, Mark::Unr],
+            ret_mark: Mark::Unr,
+            purity: Purity::Effectful,
+            borrowed: &[false, false],
+            with_arg: None,
+            held: &[false, false],
         },
         // `exit` と同じく VM が自分で実行し、文字列を `Panic` の `panicked` の節に渡す
         // (docs/spec/vm.md の「extern の中断」)
@@ -852,11 +913,12 @@ table! {
             name: "Prelude.panic",
             params: &[Repr::Obj],
             ret: OpRet::Never,
-            param_kinds: &[Linearity::Unr],
-            ret_kind: Linearity::Unr,
+            param_marks: &[Mark::Unr],
+            ret_mark: Mark::Unr,
             purity: Purity::Panics,
             borrowed: &[false],
             with_arg: None,
+            held: &[false],
         },
         // 配列の要素は型変数の位置なので `tobj` である。型変数は `Unr` に固定するので、`Array` の Kind も `Unr` に
         // なる。`MutArray` はいつも `Lin` である (docs/spec/stdlib.md の「`Std.Array`」)
@@ -946,11 +1008,178 @@ table! {
         Par => kinded(
             "Std.Par.par",
             &[TObj, TObj],
-            &[Unr, Unr],
+            &[Poly, Poly],
             Obj,
-            Unr,
+            Poly,
             Purity::Pure,
         ),
+        // `Std.Async` の行は VM の `Async` の命令が実行する (docs/spec/vm.md の「`Async` のタスク」)。預かる
+        // 引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
+        AsyncStartRaw => holding(
+            &[true],
+            kinded(
+                "Std.Async.start_raw",
+                &[TObj],
+                &[Poly],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+        ),
+        AsyncRunRaw => holding(
+            &[true],
+            kinded(
+                "Std.Async.run_raw",
+                &[TObj],
+                &[Poly],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+        ),
+        AsyncPark => holding(
+            &[false, true],
+            kinded(
+                "Std.Async.park",
+                &[Int, TObj],
+                &[Unr, Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
+        AsyncReady => holding(
+            &[true],
+            kinded(
+                "Std.Async.ready",
+                &[TObj],
+                &[Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
+        AsyncFinishOk => holding(
+            &[true],
+            kinded(
+                "Std.Async.finish_ok",
+                &[TObj],
+                &[Poly],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
+        AsyncFinishIo => kinded(
+            "Std.Async.finish_io",
+            &[Enum, Obj],
+            &[Unr, Unr],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        AsyncFinishPanic => kinded(
+            "Std.Async.finish_panic",
+            &[Obj],
+            &[Unr],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        // ハンドルを借りて預かり、宣言の型ではセルとハンドルの組を返す。借りないと、組を作る `con` とこの行の
+        // 両方がハンドルを消費する (docs/spec/core-ir.md の「組を返す extern」)
+        AsyncTaskCell => holding(
+            &[true],
+            borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Async.task_cell",
+                        &[Obj],
+                        &[Lin],
+                        Int,
+                        Unr,
+                        Purity::Pure,
+                    )
+                },
+            ),
+        ),
+        AsyncTakeResult => holding(
+            &[true],
+            kinded(
+                "Std.Async.take_result",
+                &[Obj],
+                &[Lin],
+                TObj,
+                Poly,
+                Purity::Effectful,
+            ),
+        ),
+        AsyncRunResult => holding(
+            &[true],
+            kinded(
+                "Std.Async.run_result",
+                &[Obj],
+                &[Lin],
+                TObj,
+                Poly,
+                Purity::Effectful,
+            ),
+        ),
+    }
+}
+
+impl Extern {
+    /// `Std.Async` の行。VM はこれらの行を汎用の extern の命令でなく `Async` の命令で実行する
+    /// (docs/spec/vm.md の「`Async` のタスク」)。
+    pub fn is_async(self) -> bool {
+        matches!(
+            self,
+            Extern::AsyncStartRaw
+                | Extern::AsyncRunRaw
+                | Extern::AsyncPark
+                | Extern::AsyncReady
+                | Extern::AsyncFinishOk
+                | Extern::AsyncFinishIo
+                | Extern::AsyncFinishPanic
+                | Extern::AsyncTaskCell
+                | Extern::AsyncTakeResult
+                | Extern::AsyncRunResult
+        )
+    }
+}
+
+/// ランタイムが名前で呼ぶ std の eml の関数。どれも単相なので、名前がそのまま instance の名前になり、引数の Repr が
+/// 名前で決まる (docs/spec/stdlib.md の「`Std.Async`」)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RuntimeEntry {
+    /// タスクを始める。引数はタスクの本体の閉包である。
+    StartTask,
+    /// 待たせたタスクを再開する。引数は預けた継続と、それに渡す `Wake` である。
+    ResumeTask,
+}
+
+impl RuntimeEntry {
+    pub const ALL: &[RuntimeEntry] = &[RuntimeEntry::StartTask, RuntimeEntry::ResumeTask];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            RuntimeEntry::StartTask => "Std.Async.start_task",
+            RuntimeEntry::ResumeTask => "Std.Async.resume_task",
+        }
+    }
+
+    pub fn arity(self) -> usize {
+        self.params().len()
+    }
+
+    /// 引数の Repr。結果はどれも `Unit` である。
+    pub fn params(self) -> &'static [Repr] {
+        match self {
+            RuntimeEntry::StartTask => &[Repr::TObj],
+            RuntimeEntry::ResumeTask => &[Repr::TObj, Repr::Enum],
+        }
     }
 }
 
@@ -958,23 +1187,27 @@ pub struct FunctionRow {
     pub name: &'static str,
     /// 引数の Repr。数はシグネチャの一番外側の `->` の数と等しい。
     pub params: &'static [Repr],
-    /// 結果の Repr。`Never` は戻らない extern で、`ret_kind` は読まない。データを返す行は、比べる extern、
+    /// 結果の Repr。`Never` は戻らない extern で、`ret_mark` は読まない。データを返す行は、比べる extern、
     /// `Std.Env.has`、`Prelude.shows_minus`、`Std.Float.can_parse` の `Bool` と、`compare` の `Ordering` である。
     /// タグは決まっているので、行は配置を持たない。組は extern が作らず、`with_arg` の行は translate が作る。`List`
     /// や `Option` も extern が作らず、標準ライブラリの eml が包む (docs/spec/core-ir.md の「translate の配置」)。
     pub ret: OpRet,
-    /// 引数ごとの Kind。長さは `params` と同じである。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる
-    /// (docs/spec/core-ir.md の「表の印の列」)。
-    pub param_kinds: &'static [Linearity],
-    pub ret_kind: Linearity,
+    /// 引数ごとの印。長さは `params` と同じである。LIR の印と同じ3値で、型変数の位置のうちスキームが `Unr` に固定しない
+    /// 位置は `Poly` である (docs/spec/core-ir.md の「表の印の列」)。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる。
+    pub param_marks: &'static [Mark],
+    pub ret_mark: Mark,
     pub purity: Purity,
     /// 引数ごとの借用の印。長さは `params` と同じである。印の立つ引数を extern は読むだけで消費せず、失敗したときも
     /// 呼んだ側が持ったままである (docs/spec/lir.md の「extern の借用」)。
     pub borrowed: &'static [bool],
-    /// `Some(k)` の行は、宣言の型では結果と引数 `k` の組を返す。行の結果 (`ret`、`ret_kind`) は組の最初の要素で、
+    /// `Some(k)` の行は、宣言の型では結果と引数 `k` の組を返す。行の結果 (`ret`、`ret_mark`) は組の最初の要素で、
     /// translate が呼び出しの後に `con` で組を作る。組を受けてすぐ開く所では、最適化の既知のコンストラクタで組が
     /// 消える (docs/spec/core-ir.md の「組を返す extern」)。
     pub with_arg: Option<usize>,
+    /// 引数ごとの預かる印。長さは `params` と同じで、借用の印とは独立である。印の立つ引数の型引数の値を、処理系は
+    /// 写さず中身を見ない。消費する引数なら持って後で高々1回返すか落とし、借りる引数なら読むだけで持たない。その型に
+    /// 現れる型変数は `Unr` に固定せず、矢印の row も問わない (docs/spec/declarations.md の「`extern`」)。
+    pub held: &'static [bool],
 }
 
 impl FunctionRow {
@@ -984,31 +1217,32 @@ impl FunctionRow {
     pub fn removable(&self) -> bool {
         self.purity == Purity::Pure
             && self
-                .param_kinds
+                .param_marks
                 .iter()
                 .zip(self.borrowed)
-                .all(|(&kind, &borrowed)| borrowed || kind == Linearity::Unr)
+                .all(|(&mark, &borrowed)| borrowed || mark == Mark::Unr)
     }
 }
 
-/// 引数の Repr と Kind を同じ長さの配列で受け、`params` と `param_kinds` の長さを型で揃える。
+/// 引数の Repr と印を同じ長さの配列で受け、`params` と `param_marks` の長さを型で揃える。
 const fn kinded<const N: usize>(
     name: &'static str,
     params: &'static [Repr; N],
-    param_kinds: &'static [Linearity; N],
+    param_marks: &'static [Mark; N],
     ret: Repr,
-    ret_kind: Linearity,
+    ret_mark: Mark,
     purity: Purity,
 ) -> FunctionRow {
     FunctionRow {
         name,
         params,
         ret: OpRet::Repr(ret),
-        param_kinds,
-        ret_kind,
+        param_marks,
+        ret_mark,
         purity,
         borrowed: const { &[false; N] },
         with_arg: None,
+        held: const { &[false; N] },
     }
 }
 
@@ -1024,6 +1258,15 @@ const fn borrowing<const N: usize>(mask: &'static [bool; N], row: FunctionRow) -
     }
 }
 
+/// 印の立つ引数を預かる行。長さは引数の数と同じである (docs/spec/declarations.md の「`extern`」)。
+const fn holding<const N: usize>(mask: &'static [bool; N], row: FunctionRow) -> FunctionRow {
+    assert!(
+        row.params.len() == N,
+        "a held mask has one mark per parameter"
+    );
+    FunctionRow { held: mask, ..row }
+}
+
 /// ハンドルに書く行。データを借り、ハンドルを消費して返す (docs/spec/stdlib.md の「ハンドル」)。
 const fn writing(name: &'static str) -> FunctionRow {
     borrowing(
@@ -1031,9 +1274,9 @@ const fn writing(name: &'static str) -> FunctionRow {
         kinded(
             name,
             &[Repr::Obj, Repr::Obj],
-            &[Linearity::Unr, Linearity::Lin],
+            &[Mark::Unr, Mark::Lin],
             Repr::Obj,
-            Linearity::Lin,
+            Mark::Lin,
             Purity::Effectful,
         ),
     )
@@ -1049,9 +1292,9 @@ const fn row<const N: usize>(
     kinded(
         name,
         params,
-        const { &[Linearity::Unr; N] },
+        const { &[Mark::Unr; N] },
         ret,
-        Linearity::Unr,
+        Mark::Unr,
         purity,
     )
 }

@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/declarations/abstract_in_session/main.repl
+---
+> pub abstract data Box = | Box Int
+> match Box 1 with
+.   | Box n -> n
+.
+1
+> import Lib
+> match Lib.make 1 with
+.   | Lib.Sealed n -> n
+.
+E1058 <input 4> 2:5 constructor `Sealed` of the abstract type `Sealed` is not visible outside `Lib`
+  <input 4> 2:5 hidden by `abstract`
+  Lib.em 1:30 declared here
+> Lib.peek (Lib.make 1)
+1
+--- close ---
+no leaks

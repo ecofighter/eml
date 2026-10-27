@@ -665,3 +665,88 @@ fn extern_data_cannot_declare_a_kind() {
         ["E0011 1:18 `extern data` cannot have `:`, `=` or `where`"]
     );
 }
+
+#[test]
+fn abstract_data_and_effect() {
+    insta::assert_snapshot!(shape(&lines(&[
+        "pub abstract data Handle a = | Handle Int",
+        "pub abstract effect Ping where\n  ping : Unit -> Int",
+    ])), @r#"
+    SOURCE_FILE
+      DATA_ITEM
+        PUB_KW "pub"
+        ABSTRACT_KW "abstract"
+        DATA_KW "data"
+        NAME
+          UIDENT "Handle"
+        NAME
+          LIDENT "a"
+        EQ "="
+        ALT
+          PIPE "|"
+          NAME
+            UIDENT "Handle"
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Int"
+      EFFECT_ITEM
+        PUB_KW "pub"
+        ABSTRACT_KW "abstract"
+        EFFECT_KW "effect"
+        NAME
+          UIDENT "Ping"
+        WHERE_KW "where"
+        OP_DECL
+          NAME
+            LIDENT "ping"
+          COLON ":"
+          FN_TYPE
+            PATH_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "Unit"
+            THIN_ARROW "->"
+            PATH_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "Int"
+    "#);
+}
+
+#[test]
+fn misplaced_abstract_is_one_error_at_abstract() {
+    let report: Vec<String> = [
+        "abstract data T = | T",
+        "pub abstract f : Int -> Int",
+        "pub abstract extern data U",
+        "abstract pub data V = | V",
+        "pub abstract type W = Int",
+        "pub abstract f x = x",
+        "pub abstract import M",
+        "pub abstract class C a",
+        "abstract",
+        "class C a where\n  abstract f : a -> Int",
+        "instance C Int where\n  abstract f x = x",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"abstract data T = | T\" => [\"E0011 1:1 `abstract` is only allowed on `pub data` and `pub effect`\"]",
+        "\"pub abstract f : Int -> Int\" => [\"E0011 1:5 `abstract` is only allowed on `pub data` and `pub effect`\"]",
+        "\"pub abstract extern data U\" => [\"E0011 1:5 `abstract` is only allowed on `pub data` and `pub effect`\"]",
+        "\"abstract pub data V = | V\" => [\"E0011 1:1 `abstract` cannot be written before `pub`\"]",
+        "\"pub abstract type W = Int\" => [\"E0011 1:5 `abstract` is only allowed on `pub data` and `pub effect`\"]",
+        "\"pub abstract f x = x\" => [\"E0011 1:1 `pub` cannot be written on an equation\", \"E0011 1:5 `abstract` is only allowed on `pub data` and `pub effect`\"]",
+        "\"pub abstract import M\" => [\"E0011 1:1 `pub` cannot be written on an import\", \"E0011 1:5 `abstract` is only allowed on `pub data` and `pub effect`\"]",
+        "\"pub abstract class C a\" => [\"E0011 1:5 `abstract` is only allowed on `pub data` and `pub effect`\"]",
+        "\"abstract\" => [\"E0003 1:9 expected an item\"]",
+        "\"class C a where\\n  abstract f : a -> Int\" => [\"E0011 2:3 `abstract` is only allowed on `pub data` and `pub effect`\"]",
+        "\"instance C Int where\\n  abstract f x = x\" => [\"E0011 2:3 `abstract` is only allowed on `pub data` and `pub effect`\"]",
+    ]
+    "#);
+    // `abstract pub` は `pub abstract` と読み直す
+    assert_eq!(item_kinds("abstract pub data V = | V"), ["DATA_ITEM"]);
+}

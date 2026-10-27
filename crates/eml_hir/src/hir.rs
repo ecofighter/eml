@@ -31,6 +31,9 @@ pub struct TypeDef {
     pub kind: TypeDefKind,
     /// `data T : Lin` と宣言したか。フィールドによらず `Lin` の型になる (docs/spec/types.md の「`Lin` の宣言」)。
     pub lin: bool,
+    /// `pub abstract data` か。コンストラクタとフィールドを宣言したモジュールの外から隠す
+    /// (docs/spec/modules.md の「公開の範囲」)。
+    pub abstract_ctors: bool,
 }
 
 /// `data` の型引数の種類。使い方からは推論せず、宣言の書き方で決まる (docs/spec/types.md の「row の型引数」)。
@@ -141,6 +144,8 @@ pub struct EffectDef {
     /// 宣言した順の操作。extern のエフェクトは Prelude の `IO` の `io_failed` のように操作を持てる。
     pub operations: Vec<OperationId>,
     pub kind: EffectKind,
+    /// `pub abstract effect` か。操作を宣言したモジュールの外から隠す (docs/spec/effects.md の「抽象エフェクト」)。
+    pub abstract_ops: bool,
 }
 
 /// エフェクトの種類。

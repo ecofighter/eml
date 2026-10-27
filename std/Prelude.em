@@ -44,6 +44,9 @@ pub extern eprintln : String -> <IO> Unit
 -- (docs/spec/stdlib.md の「`exit`」)
 pub extern exit : Int -> <IO> a
 
+-- IO の失敗を種類と文言で起こす。戻らない (docs/spec/stdlib.md の「`fail_io`」)
+pub extern fail_io : IOErrorKind -> String -> <IO> a
+
 -- 組み込みの `Panic`。値と入力で決まる実行時エラー (整数の桁あふれとゼロ除算、文字列の範囲外の添字) と `panic` が
 -- 起こす。`IO` と同じく、操作の `panicked` は Prelude の外から見えず、`try_panic` だけが handle する
 -- (docs/spec/effects.md の「組み込みの `Panic`」)
@@ -193,6 +196,11 @@ pub data Result e a =
   | Ok a
   deriving (Eq, Ord, Show)
 
+pub data Either a b =
+  | Left a
+  | Right b
+  deriving (Eq, Ord, Show)
+
 -- `try_io` が捕まえる IO の失敗の種類。VM は宣言の順のタグで渡す (docs/spec/stdlib.md の「`try_io`」)
 pub data IOErrorKind =
   | NotFound
@@ -200,6 +208,11 @@ pub data IOErrorKind =
   | NotAvailable
   | NotUtf8
   | Other
+  | Cancelled
+  | TimedOut
+  | ConnectionReset
+  | AddrInUse
+  | ResourceLimit
   deriving (Eq, Show)
 
 pub data IOError =

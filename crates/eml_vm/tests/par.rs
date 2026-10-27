@@ -209,8 +209,8 @@ fn spin_two(p.0: unit) -> tobj {
 }
 ";
 
-/// 手書きの LIR を verifier に通し、検査モードで逐次、`Seeded(1)`、`Seeded(2026)` の順に流す。どの方針でも出力、
-/// 誤りの文言、スケジュールによらない `RunStats` が同じでなければならない。逐次が通れば、速いモードの逐次でも流して
+/// 手書きの LIR を verifier に通し、検査モードで逐次、`Seeded(1)`、`Seeded(2026)`、`Normal` の順に流す。どの方針でも
+/// 出力、誤りの文言、スケジュールによらない `RunStats` が同じでなければならない。逐次が通れば、速いモードの逐次でも流して
 /// 出力を比べる。逐次の検査モードの出力と結果を返す。
 fn run_par_lir(text: &str, max_depth: usize) -> (String, Result<Finished, RuntimeError>) {
     let program = parse(text);
@@ -224,13 +224,13 @@ fn run_par_program(
     max_depth: usize,
 ) -> (String, Result<Finished, RuntimeError>) {
     let (out, result) = run_in(program, true, Sched::Sequential, max_depth);
-    for seed in [1, 2026] {
-        let (seeded_out, seeded) = run_in(program, true, Sched::Seeded(seed), max_depth);
-        assert_eq!(seeded_out, out, "the output under seed {seed}");
+    for sched in [Sched::Seeded(1), Sched::Seeded(2026), Sched::Normal] {
+        let (other_out, other) = run_in(program, true, sched, max_depth);
+        assert_eq!(other_out, out, "the output under {sched:?}");
         assert_eq!(
-            summary(&seeded),
+            summary(&other),
             summary(&result),
-            "the result under seed {seed}"
+            "the result under {sched:?}"
         );
     }
     if result.is_ok() {
@@ -916,6 +916,54 @@ fn the_run_stats_do_not_depend_on_the_schedule() {
             "seed {seed}"
         );
     }
+}
+
+/// 横取りしない限り左の子を終えるまで右の子が動かない、長く走る `par`。数える関数は自己末尾呼び出しで回るので、
+/// 回る間ずっと安全点を通る。
+const SPINNING: &str = "\
+fn main() -> unit {
+  let t.0: obj = par (,) #0(&count_one, &count_two)
+  tail call show_pair(t.0)
+}
+fn count_one(p.0: unit) -> tobj {
+  let u.1: unit = call count(20000000)
+  let n.2: tobj = box 1
+  return n.2
+}
+fn count_two(p.0: unit) -> tobj {
+  let u.1: unit = call count(20000000)
+  let n.2: tobj = box 2
+  return n.2
+}
+fn count(n.0: int) -> unit {
+  switch n.0 { 0 -> b1, _ -> b2 }
+b1:
+  return ()
+b2:
+  let m.1: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  tail call count(m.1)
+}
+";
+
+/// 普通の方針では、監視のスレッドが刻みの間に替わらなかったタスクを横取りさせる。刻みは 10 ms なので、200 ms 以上
+/// 動けば横取りが起きる。
+#[test]
+#[ignore = "監視のスレッドの 10 ms の刻みを数えるので、マシンの速さに依る"]
+fn the_monitor_preempts_a_long_par_child() {
+    let program = parse(&with_prelude(SPINNING));
+    let started = std::time::Instant::now();
+    let (out, result) = run_in(&program, false, Sched::Normal, usize::MAX);
+    let elapsed = started.elapsed();
+    assert_eq!(out, "1\n2\n");
+    assert!(
+        elapsed >= std::time::Duration::from_millis(200),
+        "the run took only {elapsed:?}; count further"
+    );
+    let preemptions = result.map(|finished| finished.preemptions);
+    assert!(
+        preemptions.as_ref().is_ok_and(|&n| n > 0),
+        "{preemptions:?}"
+    );
 }
 
 /// 子の誤りの規則を、ソースから作った `fork$` と `reperform$` のコードで確かめる。上の手書きの LIR の版は VM の

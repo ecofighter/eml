@@ -2,7 +2,7 @@
 
 位置づけ: 将来の設計。
 
-std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の driver、タスクの間の channel、ネットワークとシグナルをまとめる。どれも実装していない。worker は [マルチコア対応の設計](multicore.md) の「スレッドと worker」に、スケジューラは [マルチコア対応の設計](multicore.md) の「スケジューラ」に、スレッドをまたぐ RC は [マルチコア対応の設計](multicore.md) の「スレッドをまたぐ RC」にあり、この文書はその上で利用者から見える意味と、std とランタイムの境目を書く。C の関数をタスクの中で待つ形は [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」に、ネイティブのコードでタスクが切り替わる所は [ネイティブ化の設計](native.md) の「並列の実行」にある。
+std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の driver、タスクの間の channel、ネットワークとシグナルをまとめる。1つの worker の上のタスク、暗黙のスコープ、`await`、`try_all` は実装してあり、規則は [標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」と [VM](../spec/vm.md) の「`Async` のタスク」にある。この文書はその上に足す取り消し、名前付きのスコープ、時間、I/O などの設計を書く。worker は [マルチコア対応の設計](multicore.md) の「スレッドと worker」に、スケジューラは [マルチコア対応の設計](multicore.md) の「スケジューラ」に、スレッドをまたぐ RC は [マルチコア対応の設計](multicore.md) の「スレッドをまたぐ RC」にあり、この文書はその上で利用者から見える意味と、std とランタイムの境目を書く。C の関数をタスクの中で待つ形は [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」に、ネイティブのコードでタスクが切り替わる所は [ネイティブ化の設計](native.md) の「並列の実行」にある。
 
 ## 目的と範囲
 
@@ -42,7 +42,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 ## `Async` のエフェクト
 
 ```haskell
-pub effect Async where
+pub abstract effect Async where
   await_cell     : Cell -> Wake                  -- タスクかスコープのセルが終わるまで待つ
   await_io       : OpId -> (Wake, OpId)          -- I/O の driver の操作が終わるまで待つ
   await_io_until : OpId -> Int -> (Wake, OpId)   -- 同じく待ち、今から Int ミリ秒が過ぎたら操作を取り消す
@@ -54,38 +54,33 @@ pub data Wake = | Woke | Cancelled
 ```
 
 - `Async` は extern のエフェクトにしない。extern のエフェクトは yield しうるラベルでなく ([型と Kind](../spec/types.md) の「row の具体化の記録」)、`Async` の操作は継続を取り出して待つためである
-- 生の操作は eml とランタイムの間の ABI である。std の外からも見え、ランタイムの ABI として文書に書く。利用者は下の節の包みの関数を呼ぶ。`Cell`、`OpId`、`ChanWait` はランタイムの token の `Foreign` で、std の中で使う。`OpId` は `Lin` で、待つ間はランタイムが預かり、再開するときに `Wake` と組にして返す
-- タスクを始める入口 `start_task : (Unit -> <IO, Panic, Async> a) -> <IO> Unit` は、生の操作ごとに節を1つ持つ handler をタスクの本体にかぶせる。節は継続 `k` をランタイムに預けて (待ちに入れるか、実行待ちに戻す) そのまま戻る。ランタイムは後で `k` に `Wake` の値を渡してタスクを再開する ([マルチコア対応の設計](multicore.md) の「スケジューラ」)
+- 生の操作は eml とランタイムの間の ABI である。`Async` は抽象エフェクトで、名前は見えるが操作は見えない。操作はランタイムの ABI として文書に書く。利用者は下の節の包みの関数を呼ぶ。`Cell` は登録表の添字を持つ `Unr` の即値 (`Repr::Int`) で、`OpId` と `ChanWait` はランタイムの token の `Foreign` である。どれも std の中で使う。`OpId` は `Lin` で、待つ間はランタイムが預かり、再開するときに `Wake` と組にして返す
+- ランタイムが名前で呼ぶ入口は、単相の `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である。単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` は、生の操作ごとに節を1つ持つ handler をタスクの本体にかぶせる。節は継続 `k` をランタイムに預けて (待ちに入れるか、実行待ちに戻す) そのまま戻る。ランタイムは後で `resume_task` で `k` に `Wake` の値を渡し、タスクを再開する ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。タスクの本体は std の底の関数で包む。底は `Panic` と IO の失敗を捕まえ、結果を値のまま、引数を預かる extern (`finish_ok`) に渡す。`await` と `run` は預けた値を `take_result` と `run_result` で1回受け取る。`Lin` の結果も thunk に包まずに渡せる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
 - 生の操作の結果はどれも `Wake` を持つ (`Wake` そのものか、`Wake` と預けた token の組)。そのため、ランタイムはどの待ちのタスクにも即値の `Cancelled` (`await_io` と `await_io_until` では預かった token との組) を渡して再開でき、型が合う。これは std の約束で、テストで確かめる
 - 待ちうる包みの関数はどれも取り消しの地点である。取り消しはここで届く (下の「取り消し」)
 - 操作の予算 (128 回): 待たずに済む速い道 (`try_send`、`try_recv`、すぐに終わる完了、`cancel_requested`) は extern で、`Ctx` の予算の数を数える。128 回続くと速い道は待つ必要があると答え、包みは `reschedule` を通ってほかのタスクに worker を渡す。予算の数は worker のループがタスクを渡すときに戻す。予算は worker の止める語に触れないので、VM の横取り (`PREEMPT`) とは別に働く。VM の横取りは CPU を使い続けるバイトコードを抑え、予算は VM でもネイティブでも速い道の連続を抑える
 
 ## スコープとタスク
 
+`run`、`start`、`spawn`、`await`、`yield_now` と `Task a` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」にある。ここには、名前付きのスコープと取り消しのために足す API を書く。
+
 ```haskell
-pub run          : (Unit -> <IO, Panic, Async> a) -> <IO, Panic> a
 pub scope        : (Scope -> <IO, Panic, Async> a) -> <IO, Panic, Async> a
 pub extern data Scope
-pub spawn        : (Unit -> <IO, Panic, Async> Unit) -> <IO, Async> Unit
-pub start        : (Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a
 pub spawn_in     : Scope -> (Unit -> <IO, Panic, Async> Unit) -> <IO, Panic, Async> Unit
 pub start_in     : Scope -> (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> Task a
 pub cancel_scope : Scope -> <IO> Unit
 pub fail_scope   : Scope -> Failure -> <IO> Unit                                    -- std の中で使う
-pub await        : Task a -> <IO, Panic, Async> a
 pub cancel       : Task a -> <IO> Unit
-pub extern data Task a
-pub yield_now    : Unit -> <IO, Async> Unit
 ```
 
-- タスクの row は `<IO, Panic, Async>` に閉じる。`main` の row に `Async` を足したものである。閉じた row から `Panic` を除くと、タスクは `Int` の足し算も書けない。利用者のエフェクトはタスクのクロージャの中で handle し終える。`Heap h` は閉じた row で除かれる。親の `var` を捕まえたクロージャは型の誤りで ([型と Kind](../spec/types.md) の「範囲の外へ出る閉包」)、タスクの本体の中の `var` は使える
-- ランタイムはタスクごとにタスクのセルを持つ。タスクのセルは状態 (動いている、待ち、実行待ち、取り消し中、終わり)、結果 (値、失敗、取り消しのどれか)、取り消しのビット、属するスコープ、今の持ち主の worker を持つ。スコープごとのスコープのセルは属するタスク、入れ子のスコープ、生きているタスクの数、取り消しの旗 (スコープの失敗か `cancel_scope` で立つ)、最初の失敗、閉じたかどうかを持つ
-- `spawn` と `start` は動的にいちばん内側のスコープに子を加える。`spawn_in` と `start_in` は名前を付けた開いているスコープに加える。`Scope` は開いたスコープの `Unr` のハンドルである。閉じたスコープに `spawn_in` か `start_in` をすると `Panic` になる。閉じたスコープへの `cancel_scope` は何もせず、`drain_within` はすぐに戻る
-- `scope f` は今のスコープの子のスコープのセルを開き、それを今のスコープにして、今のタスクの中で `f s` を動かす。その後、生きているタスクの数が 0 になるまで待つ。本体を動かすタスクはそのスコープの中にいる間だけスコープの取り消しを受ける (下の「取り消し」)。タスクは自分のスコープより長く生きない。`run` は根のスコープである
-- `Task a` は `a` によらず `Lin` である。`await` はハンドルを消費し、タスクの失敗を投げ直す。`cancel` と `drop` は取り消しの要求をタスクのセルの持ち主の worker へ送り、ハンドルを放す。取り消したタスクは `Cancelled` で終わるが、スコープの失敗にはならない。終わったタスクのハンドルなら、残っている結果を記述子で落とす。`Task a` はほかの `Lin` の値と同じく `Chan` で送れる
-- `main` は `use Async.run` と書くと非同期になる。エントリポイントの規則 ([モジュールと名前解決](../spec/modules.md) の「モジュール」) は変えない
-- VM では、`Async.run` は呼んだ側を待たせる組み込みの上に作る。ネイティブのコードではマシンのスタックの上で worker のループを入れ子にする。呼んだ側が完了の後に再開するという約束は同じである ([ネイティブ化の設計](native.md) の「並列の実行」)。タスクの中で `run` を呼ぶと、中の根のスコープが空になるまでそのタスクを待たせる。意味は `scope` と同じで、書けるが勧めない
-- ハンドルはスコープの外へ出てよい。スコープの型引数は付けない。付けると `run_heap` のようなランク2の特別な形が要るためである。外へ出た `Task a` は終わったか、失敗したか、取り消されたかのどれかで、`await` は値を返すか失敗を投げ直す
+- タスクの閉じた row `<IO, Panic, Async>` は `Heap h` も除く
+- 取り消しを入れると、タスクのセルは状態に「取り消し中」を、結果に取り消しを足し、取り消しのビットと今の持ち主の worker を持つ。スコープのセルは、属するタスク、入れ子のスコープ、取り消しの旗 (スコープの失敗か `cancel_scope` で立つ) を持つ。実装したセルの形は [VM](../spec/vm.md) の「セルと登録表」にある
+- `spawn_in` と `start_in` は、名前を付けた開いているスコープに子を加える。`Scope` は開いたスコープの `Unr` のハンドルである。閉じたスコープに `spawn_in` か `start_in` をすると `Panic` になる。閉じたスコープへの `cancel_scope` は何もせず、`drain_within` はすぐに戻る
+- `scope f` は今のスコープの子のスコープのセルを開き、それを今のスコープにして、今のタスクの中で `f s` を動かす。その後、生きているタスクの数が 0 になるまで待つ。本体を動かすタスクはそのスコープの中にいる間だけスコープの取り消しを受ける (下の「取り消し」)。タスクは自分のスコープより長く生きない。`run` は根のスコープである。タスクの中の入れ子の `run` の意味は `scope` と同じで、書けるが勧めない
+- `cancel` と `drop` は取り消しの要求をタスクのセルの持ち主の worker へ送り、ハンドルを放す。取り消したタスクは `Cancelled` で終わるが、スコープの失敗にはならない。終わったタスクのハンドルなら、残っている結果を記述子で落とす。`Task a` はほかの `Lin` の値と同じく `Chan` で送れる
+- ネイティブのコードでは、`Async.run` はマシンのスタックの上で worker のループを入れ子にする。呼んだ側が完了の後に再開するという約束は VM と同じである ([VM](../spec/vm.md) の「待ちの2種類」、[ネイティブ化の設計](native.md) の「並列の実行」)
+- ハンドルにスコープの型引数は付けない。付けると `run_heap` のようなランク2の特別な形が要るためである。取り消しを入れると、スコープの外へ出た `Task a` は取り消されたものでもありうる
 
 スコープの終わりの手順は std の中の eml で書く。そのため、本体が値を返しても、失敗しても、取り消されても、同じ手順が走る。
 
@@ -114,19 +109,10 @@ scope f =
 
 ## 失敗と `exit`
 
-```haskell
-pub data Failure = | IOFailed IOError | Panicked String
-pub try_all : (Unit -> <IO, Panic | e> a) -> <IO | e> Result Failure a   -- try_io と try_panic を重ねる
-```
+`Failure`、`try_all`、`fail_io` と、1つの worker の上の失敗の規則は [標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」と「`fail_io`」にあり、`IOErrorKind` の種類は同じ文書の「`try_io`」にある。ここには、取り消しと複数の worker のために足す規則を書く。
 
-- タスクは中断の境目である。タスクの中の handler が捕まえない IO の失敗か `Panic` はタスクの底に届き、底がタスクのセルに記録する。底はスコープの取り消しの旗を立て、スコープのタスクをすべて取り消す (下の「取り消し」)。種類 `Cancelled` の IO の失敗で終わったタスクは、タスクのセルにだけ記録し、スコープの旗も最初の失敗も変えない
-- タスクの捕まえない失敗は、誰かが `await` しているかによらず、起きた時点でスコープの失敗になる。`await` は待つ側へ最初の知らせとして投げ直し、スコープは終わるときに必ず投げ直す。したがって、分離はいつもタスクの中で `try_all` を使って行い、`Result` を返す。`await` の周りで捕まえても、スコープの失敗は止まらない
+- タスクの底は、捕まえない IO の失敗か `Panic` をタスクのセルに記録するとき、スコープの取り消しの旗も立て、スコープのタスクをすべて取り消す (下の「取り消し」)。種類 `Cancelled` の IO の失敗で終わったタスクは、タスクのセルにだけ記録し、スコープの旗も最初の失敗も変えない
 - 親の `try_io` が子の失敗を捕まえるのは、`try_io` が `await` か `scope` を囲むときである
-- `await` は IO の失敗を `fail_io kind message` で、`Panic` を `panic message` で投げ直す。`try_panic` はメッセージだけを見るので ([標準ライブラリ](../spec/stdlib.md) の「`try_panic`」)、これで元の失敗と区別できない
-- `fail_io` は Prelude の新しい表の行 `fail_io : IOErrorKind -> String -> <IO> a` で、std の中で使う (引数は `Repr::Enum`、戻らない)。VM では新しい `Fault::Raised { kind, message }` にし、今の `Fault::Io` と同じく `io_failed` の節の入口へ回す ([VM](../spec/vm.md) の「`IO` と `Panic` への中断」)。種類は `IoReason` から写さず、そのまま渡す。`Proc.exited` もこの行を使う形にする
-- `IOErrorKind` に `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit` を足す。EPIPE は `ConnectionReset` にする。どれにも当たらない誤りは今と同じく `Other` である
-- `IOErrorKind` の `Cancelled` は `Wake` の `Cancelled` と名前が重なる。修飾しない名前は自分のモジュールと import を Prelude より先に引くので ([モジュールと名前解決](../spec/modules.md) の「名前の解決」)、`Std.Async` の中と `Wake(..)` を import したモジュールでは、種類のほうを `Prelude.Cancelled` と書く
-- Prelude に `pub data Either a b = | Left a | Right b` を足す。Kind は `a` と `b` から普通の規則で決まり、`Either FileIn Int` は `Lin` である
 
 ```haskell
 probe : String -> <IO, Panic, Async> Result Failure Int    -- あいさつの最初の塊のバイト数
@@ -146,8 +132,7 @@ probe_all hosts =
 
 `try_all` は `probe` の中にあるので、1つの接続の失敗は `Err` として返り、スコープの失敗にならない。`timeout` は `try_all` の外にあるので、期限を過ぎた接続は `None`、失敗した接続は `Err` になる。
 
-- `exit n` はどのタスクで呼んでもプログラムを終える。`exit` は今と同じく自分のタスクのスタックを底まで巻き戻し、底が `Control` の終わりの欄に `exit` と終了コードを書いて (最初の書き手が勝つ)、終わりのビットを立てる。各 worker は次の安全点で自分の入口へ戻り、host のスレッドがすべての worker を待つ。実行中のプールの仕事も待つ。その後、I/O の driver を閉じ (操作を取り消して、限られた時間だけ完了を待つ)、ヒープを落とし (ファイナライザが書き出して閉じる)、Host を書き出し、`n & 255` で終わる ([マルチコア対応の設計](multicore.md) の「止める手順」)
-- ほかのタスクと待ちのタスクは巻き戻さない。その `Lin` の資源はヒープを落とすときに後始末する。巻き戻したときとの違いは利用者の `try_*` の本体が走らないことだけで、`try_*` は `exit` を捕まえないので、見える違いはない。REPL では `exit` で評価が終わり、ほかの止め方と同じく回復が走る
+- worker が複数のときも、`exit n` はどのタスクで呼んでもプログラムを終える。底が `Control` の終わりの欄に終了コードを書いた後 (最初の書き手が勝つ)、終わりのビットを立てる。各 worker は次の安全点で自分の入口へ戻り、host のスレッドがすべての worker を待つ。実行中のプールの仕事も待つ。その後、I/O の driver を閉じ (操作を取り消して、限られた時間だけ完了を待つ)、ヒープを落とし (ファイナライザが書き出して閉じる)、Host を書き出し、`n & 255` で終わる ([マルチコア対応の設計](multicore.md) の「止める手順」)。1つの worker の手順は [VM](../spec/vm.md) の「`Async` のタスク」の「終わり」にある
 - 実行時エラー (ヒープの誤り、上限、`Signal.wait Interrupt` で待つタスクのない割り込み) は今と同じく run 全体を止め、1回だけ報告する ([標準ライブラリ](../spec/stdlib.md) の「実行時エラー」)
 
 ### タスクごとの上限
@@ -368,7 +353,7 @@ pub set_nodelay       : Bool -> TcpStream -> <IO> TcpStream
 ```
 
 - 名前はハンドルの規則 ([標準ライブラリ](../spec/stdlib.md) の「ハンドル」) に従い、ハンドルを後に、結果を先に置く。`read_line` はストリームごとの buffer の上に eml で書く
-- 誤りは IO の失敗で、今の種類に `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse` を足す
+- 誤りは IO の失敗で、種類 `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse` を使う。EPIPE は `ConnectionReset` にする
 - `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、破棄処理がソケットを閉じる。取り消したタスクの巻き戻しがハンドルを落とすので、取り消しの道で `close` を書かなくてよい
 - `accept` は ECONNABORTED と EINTR を中でやり直す。EMFILE は IO の失敗で、accept するタスクが捕まえて待ってからやり直せる
 
@@ -440,12 +425,12 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 
 ## テストと決定性
 
-- N = 1 で seed で決まるスケジュール (`--sched seeded:<n>`) を `tests/ui/run/async/` の UI テストの既定にする。安全点の数による横取り、worker の実行待ちの中からの seed による選択、seed で完了の順を決めるテストの driver を使う。`Async` の UI テストはどの seed でも同じ出力を返さなければならない。そのため、ネイティブのコードでも同じになる
+- `async/` の UI テストを seed で流す規則は [テスト戦略](../implementation/testing.md) の「seed で流す」にある。I/O の待ちを持つテストは、seed で完了の順を決めるテストの driver の上で流す。どの seed でも同じ出力を返すことを求めるので、ネイティブのコードでも同じになる
 - テストの driver は仮想の時計を持つ。`sleep_ms` と期限はすべてのタスクが待ちになったときだけ仮想の時間を進める。そのため、期限と取り消しのテストはすぐに終わり、マシンの速さによらない (1つのテストを1秒以内に終える規則)。テストの driver はメモリの上の `TcpStream` の組 (仮想のホストの上の `listen` と `connect`) と、テストの hook で起こす仮想のシグナルも持つ
 - 本物のソケットのテストは `tests/ui/run/net/` に少しだけ置く。ループバックでポート 0 に bind して `local_port` で読み、期限を使わない (期限は仮想の時計の上だけで試す)。接続は一度に1つにするか、順によらない出力にする。N = 1 で流し、複数の worker の組 (N が 2 と 8) では順によらないものだけを流す。Windows の CI は同じ組を IOCP の上で流す
-- 意味のテスト: 取り消したタスクの `FileIn` と `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`timeout` の下の入れ子のスコープが親のない子を残さないこと、`shield` の中の別れの `send` が取り消しの下でも終わること、続く取り消しが2つ目の取り消しの地点で投げること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、取り消した待ち合わせの `send` の値が後始末されて受け手が起きないこと、操作の予算が速い道の 128 回で切り替えること、子の `exit` がその終了コードで run を終えること、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
+- 意味のテスト: 取り消したタスクの `FileIn` と `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`timeout` の下の入れ子のスコープが親のない子を残さないこと、`shield` の中の別れの `send` が取り消しの下でも終わること、続く取り消しが2つ目の取り消しの地点で投げること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、取り消した待ち合わせの `send` の値が後始末されて受け手が起きないこと、操作の予算が速い道の 128 回で切り替えること、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
 - 救済を強いるスケジュール (`--sched rescue-always`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
-- `RunStats` に `tasks`、`parks`、`cancels`、`channel_ops`、`completions`、`dropped_failures` (報告せずに捨てた2つ目からの失敗) と、共有にした物体の数を足す。スナップショットは逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
+- `RunStats` に `cancels`、`channel_ops`、`completions` を足す。スナップショットは実装した欄と同じく逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
 
 ## 未決の論点と将来の拡張
 
@@ -456,7 +441,6 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - 複数の channel の `select`: 既定は入れない。`race`、`timeout`、`merge` で書く
 - broadcast と watch の channel: 既定は作らない
 - `Counter` のほかの `Atomic`: 既定は作らない
-- タスクの中の入れ子の `Async.run`: 既定は許し、呼んだタスクを待たせる
 - タスクを置く worker を選ぶ API (`spawn_here` など): 既定は作らない。スレッドに縛られた仕事は `Gui.run_on_main` で書く ([FFI と拡張の設計](ffi.md) の「GUI」)
 - channel のキュー: 既定は mutex で、ロックフリーには後でランタイムの中だけで替える
 - `Time` のモジュール: 上の「時間」にある

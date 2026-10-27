@@ -14,7 +14,7 @@ use super::string::text;
 use super::{CONS, Probe, cons, list, mortal, probe, raw};
 use crate::alloc::MAX_SMALL_WORDS;
 use crate::cell::{rc_decref_shared, rc_dup_shared};
-use crate::externs::{Exited, Fault, Form, Handle, IoOp, IoReason, Open, ReadAmount, Write};
+use crate::externs::{Fault, Form, Handle, IoOp, IoReason, Open, ReadAmount, Write};
 use crate::heap::ctx::positions::find_byte;
 use crate::host::{BUFFER_BYTES, Failure, FileIn, Reader, WriteMode, consume, fill, host_open};
 use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
@@ -857,6 +857,25 @@ fn an_interrupt_from_another_thread_is_seen() {
     assert_eq!(control.stop_bits(), Control::INTERRUPT);
 }
 
+// `PREEMPT` は worker の語だけに立つ。別のスレッドが立てたのを `poll` が読む
+#[test]
+fn a_preempt_from_another_thread_is_seen() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let ctx = Ctx::<Fast>::new(control.clone(), host(&Arc::default()));
+    let setter = {
+        let control = control.clone();
+        std::thread::spawn(move || control.preempt())
+    };
+    while ctx.poll(0).is_ok() {
+        std::thread::yield_now();
+    }
+    assert_eq!(ctx.poll(0), Err(crate::Stop::Preempt));
+    setter.join().unwrap();
+    assert_eq!(control.stop_bits(), 0);
+    control.take_preempt();
+    assert_eq!(ctx.poll(0), Ok(()));
+}
+
 // T11
 
 /// Host を通る書き込み。メモリの Host で、`println` と `flush` を通す。
@@ -1665,22 +1684,6 @@ fn an_interrupted_child_write_stops_only_when_asked<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// `proc_exited` はいつも `Exited` で失敗し、プログラムの名前の文字列を手放す。
-fn proc_exited_releases_its_string<M: Mode>() {
-    let mut ctx = ctx_tests::ctx::<M>();
-    unsafe {
-        let p = ctx.heap_mut().alloc_string("sh");
-        assert_eq!(
-            ctx.proc_exited(p, 3),
-            Err(Fault::Exited(Box::new(Exited {
-                program: "sh".into(),
-                code: 3,
-            })))
-        );
-    }
-    assert_eq!(mortal(ctx.heap()), 0);
-}
-
 // T13
 
 /// `find_byte` は物体の中身を借りた `&[u8]` を読む。1語に収まる長さ、語の境目の前後、大きい物体のページの末尾で
@@ -1787,6 +1790,5 @@ both_modes!(
     a_waited_child_is_not_killed,
     a_failed_child_write_releases_the_handle,
     an_interrupted_child_write_stops_only_when_asked,
-    proc_exited_releases_its_string,
     find_byte_reads_the_body_of_an_object,
 );

@@ -1,0 +1,40 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/abstract_constructor/main.em
+---
+[E1058] Error: `Handle(..)` imports no constructor: `Handle` is abstract
+   ╭─[ check-fail/names/abstract_constructor/main.em:3:19 ]
+   │
+ 3 │ import Lib (Handle(..))
+   │                   ──┬─  
+   │                     ╰─── hidden by `abstract`
+   │ 
+   │ Help: write `Handle`
+───╯
+[E1058] Error: constructor `Handle` of the abstract type `Handle` is not visible outside `Lib`
+   ╭─[ check-fail/names/abstract_constructor/main.em:7:7 ]
+   │
+ 7 │   let Lib.Handle n = Lib.make 1
+   │       ─────┬────  
+   │            ╰────── hidden by `abstract`
+   │
+   ├─[ check-fail/names/abstract_constructor/Lib.em:2:32 ]
+   │
+ 2 │ pub abstract data Handle a = | Handle Int
+   │                                ───┬──  
+   │                                   ╰──── declared here
+───╯
+[E1058] Error: constructor `Handle` of the abstract type `Handle` is not visible outside `Lib`
+   ╭─[ check-fail/names/abstract_constructor/main.em:8:27 ]
+   │
+ 8 │   println (show (Lib.get (Lib.Handle n)))
+   │                           ─────┬────  
+   │                                ╰────── hidden by `abstract`
+   │
+   ├─[ check-fail/names/abstract_constructor/Lib.em:2:32 ]
+   │
+ 2 │ pub abstract data Handle a = | Handle Int
+   │                                ───┬──  
+   │                                   ╰──── declared here
+───╯

@@ -72,7 +72,7 @@ data Shape =
 - `extern data` に書けるのは型変数の型引数だけで、row の型引数も Kind の宣言も書けない。extern の型の Kind は処理系の表が決める
 - `type` は型の別名の構文として予約する。型の別名は実装しておらず、`type` の宣言は HIR が E0004 にする ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - `extern` でない `data` に `=` がないものは、値を作れない型になるので E1025 とする。どのモジュールでも同じである
-- `Int`、`String`、`Unit` は `Prelude` の、`FileIn` は標準ライブラリのモジュール `FileIn` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)。`List`、`Option`、`Result` も `Prelude` の `data` である (下の「Prelude のクラス」)。コマンドリテラルの値の `Cmd` と、その欄の型 `StderrMode` も `Prelude` の `data` である ([式](expressions.md) の「コマンドリテラル」)
+- `Int`、`String`、`Unit` は `Prelude` の、`FileIn` は標準ライブラリのモジュール `FileIn` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)。`List`、`Option`、`Result`、`Either` も `Prelude` の `data` である (下の「Prelude のクラス」)。コマンドリテラルの値の `Cmd` と、その欄の型 `StderrMode` も `Prelude` の `data` である ([式](expressions.md) の「コマンドリテラル」)
 
 ## `effect`
 
@@ -118,10 +118,13 @@ extern のエフェクトに型引数を持たせないのは、row の中で重
 - `extern` は標準ライブラリ ([モジュールと名前解決](modules.md) の「標準ライブラリ」) のモジュールにだけ書ける。ユーザーのモジュールに書くと、宣言ごとに E1033 にする。help で `extern` を外すよう示すが、外すと E1005 や E1025 になるので自動の修正にはしない。宣言は extern として読み、E1005、E1025、`where` がないことの誤りは重ねて出さない。extern のシグネチャに続く等式は、離れていても読み捨て、E1018 と E1019 も出さない。E1033 は宣言ごとに1つで、その宣言を使った位置には重ねない。handler の節の先頭にユーザーの extern の関数を書いても、E1009 を重ねずに節を捨てる
 - extern の宣言は、処理系が持つ表の行を、モジュールの正式な名前で修飾した名前 (`Prelude.println`、`Std.FileIn.open`) で指す。表にない名前や、表の行と食い違う宣言は処理系の誤りで、診断ではなくテストで防ぐ
 - extern でない宣言の規則は変わらない。等式のないシグネチャは E1005、`=` のない `data` は E1025 で、`Prelude` を含むすべてのモジュールで同じである。extern でない `effect` には、`where` と操作が要る
-- extern の関数の型は、ほかの関数と同じくシグネチャから決まる。引数のそろった呼び出しは、eml のコードを呼び返さずにその場で実行される。ただし、`try_io` が捕まえる種類の誤りで失敗すると VM が `io_failed` の節の入口を呼び、`exit` は中断を始める ([VM](vm.md) の「extern の中断」)。`Std.Par.par` だけはその場で実行しない。引数のそろった呼び出しは `par` の命令になり、受け取った2つの閉包を子として呼ぶ ([Core IR](core-ir.md) の「`par` の呼び出し」)
+- extern の関数の型は、ほかの関数と同じくシグネチャから決まる。引数のそろった呼び出しは、eml のコードを呼び返さずにその場で実行される。ただし、`try_io` が捕まえる種類の誤りで失敗すると VM が `io_failed` の節の入口を呼び、`exit` は中断を始める ([VM](vm.md) の「extern の中断」)。`Std.Par.par` と `Std.Async` の10個の extern は、その場で実行しない。`Std.Par.par` の引数のそろった呼び出しは `par` の命令になり、受け取った2つの閉包を子として呼ぶ ([Core IR](core-ir.md) の「`par` の呼び出し」)。`Std.Async` の extern の呼び出しは VM の `Async` の命令になり、タスクを作ってほかのタスクに切り替える ([VM](vm.md) の「`Async` のタスク」)
+- extern の関数の引数の数は、シグネチャの一番外側の `->` の数である。処理系の表の行は同じ数の引数を持ち、食い違いはテストで防ぐ。結果の型を関数型にはしない (矢印がそのまま引数に数えられる)
 - extern の関数の引数の型に現れる型変数は、Kind のスキームで `Unr` に固定する。本体がないので、extern が引数をどう使うかを Kind に推論できないためである (操作の引数と同じ考えである)。そのため、`Lin` の要素の `Array` にはどの関数も使えない。結果だけに現れる型変数 (`exit` と `panic` の結果、`MutArray.empty` の要素) は固定しない。関数型の引数の矢印の Kind も型変数でないので固定せず、`Std.Par.par` の子の閉包は `Lin` の値を捕まえてよい。
   - 関数型の引数 (コールバック) の最後の結果にだけ現れる型変数も固定しない。コールバックの結果は、extern が eml のコードから受け取る値で、extern は受け取った結果をそれぞれ高々1回だけ使う義務を負うためである。落とす場合も、`Lin` の値を持つフレームの巻き戻しと同じ後始末になる ([線形性](linearity.md) の「暗黙の後始末」)。例えば `Std.Par.par` は、子の結果を組に1回入れるか、もう一方の子が中断したときに落とすので、子は `Lin` の値を返してよい
   - コールバックの引数の型変数と、矢印の row の型引数は固定したままである。どちらも、extern がコールバックに渡す値や起こす操作に現れるためである
+  - 処理系の表で「預かる」印を付けた引数の型変数も固定しない。預かる引数の型引数の値を、処理系は写さず、中身も見ない。引数を消費する行は、その値を持ち、後でほかの行の結果として高々1回 eml のコードへ返すか、使わずに落とす。引数を借りる行は読むだけで、持たない。返した値は新しい束縛になり、その型の規則で1回使われる。落とすときは、コールバックの結果と同じ後始末になる。`Std.Async.finish_ok : a -> <IO> Unit` はタスクの結果の値を預かって持ち、`take_result : Task a -> <IO, Panic> a` はハンドルを預かって消費し、同じセルに持っていた値を返す。`task_cell : Task a -> (Cell, Task a)` はハンドルを預かって借りる。預かった値を返す行の結果の型が、預けた値の型と合うことは、処理系は確かめない。預ける行と返す行を `pub` にせず、包む関数のシグネチャで型変数を結ぶ標準ライブラリが保つ。どの行がどの引数を預かるかは [標準ライブラリ](stdlib.md) の「extern の境界」にある
+  - 預かる引数の型の中の矢印には、閉じた row を書いてよい。処理系は預かった閉包や継続を呼ばず、名前で呼ぶ標準ライブラリの関数が後で呼ぶので、row はその関数の型が決める。預からない引数の矢印の row は空か、`Std.Par.par` のように結果の矢印と共有する row 変数だけである。どちらもテストで防ぐ
 
 instance の `where` のブロックには、メソッドを処理系の表の行に結ぶ `extern` の行も書ける (`extern (==)`。下の「`instance`」)。
 
@@ -340,7 +343,7 @@ pub class Show a where
 - `Eq`、`Ord`、`Show` のメソッドの型は row を持たない。そのため、instance の本体で `Panic` を起こしうる計算をすると E2002 になる。要るときは、本体の中で `try_panic` を使う。導出した instance は `Panic` を起こさない。利用者が宣言するクラスのメソッドの row は、宣言に書いたとおりである
 - `display` はクラスの普通のメソッドなので、ユーザーが呼ぶことも、instance で上書きすることもできる。導出した instance、タプルと `Unit` の instance、`List` の手書きの instance は既定の `display` を使う。そのため `display (Some "x")` は `Some "x"` で、引用符が付かないのは値そのものが `String` のときだけである
 
-Prelude は、標準のデータ型 `List`、`Option`、`Result` も宣言する。
+Prelude は、標準のデータ型 `List`、`Option`、`Result`、`Either` も宣言する。
 
 ```haskell
 pub infixr 5 ::
@@ -359,12 +362,18 @@ pub data Result e a =
   | Err e
   | Ok a
   deriving (Eq, Ord, Show)
+
+pub data Either a b =
+  | Left a
+  | Right b
+  deriving (Eq, Ord, Show)
 ```
 
 - `::` の fixity は、`++` と同じく `infixr 5` で、Haskell の `:` と同じである
-- `Result` の型引数は `Result e a` の順で、Haskell の `Either e a` と同じである。`Err`、`Ok` の順に宣言するので、導出した `Ord` では `Err _ < Ok _` になる
+- `Result` の型引数は `Result e a` の順で、Prelude の `Either e a` (下の項目) と同じである。`Err`、`Ok` の順に宣言するので、導出した `Ord` では `Err _ < Ok _` になる
+- `Either a b` は Haskell の `Either` と同じ型で、`Left`、`Right` の順に宣言するので、導出した `Ord` では `Left _ < Right _` になる。`Result` と違って、どちらの側も失敗を表さない。2つの結果のどちらかを持つ値に使う
 - `List` の導出した `Ord` は `Nil < _ :: _` と要素ごとの辞書順で、Haskell のリストの順と同じである
-- `List` の `Show` は手で書いた instance で、`[1, 2]` の形で表示する。空のリストは `[]` である。要素は `show` で表示し、`, ` で区切る。`show_prec` は既定のままにする。角括弧で閉じているので、引数の位置でも括弧が要らないためである。表示は左辺の文字列を一意なまま伸ばして作るので、リストの長さに比例する時間で済む ([オブジェクトモデル](object-model.md) の「文字列の操作」)。`Option` と `Result` の導出した `Show` は、`Some [1]`、`Some (-1)`、`Ok "a"` のように表示する
+- `List` の `Show` は手で書いた instance で、`[1, 2]` の形で表示する。空のリストは `[]` である。要素は `show` で表示し、`, ` で区切る。`show_prec` は既定のままにする。角括弧で閉じているので、引数の位置でも括弧が要らないためである。表示は左辺の文字列を一意なまま伸ばして作るので、リストの長さに比例する時間で済む ([オブジェクトモデル](object-model.md) の「文字列の操作」)。`Option`、`Result`、`Either` の導出した `Show` は、`Some [1]`、`Some (-1)`、`Ok "a"`、`Left 1` のように表示する
 - リストを扱う関数は Prelude になく、`List` のモジュールにある ([標準ライブラリ](stdlib.md) の「`List`」)
 
 Prelude の instance は次のとおりである。
@@ -397,6 +406,7 @@ Prelude の instance は次のとおりである。
 | `Show (List a)` | Prelude に eml で書いた instance (上の `List` の `Show`) |
 | `Eq (Option a)`、`Ord (Option a)`、`Show (Option a)` | `deriving (Eq, Ord, Show)` |
 | `Eq (Result e a)`、`Ord (Result e a)`、`Show (Result e a)` | `deriving (Eq, Ord, Show)` |
+| `Eq (Either a b)`、`Ord (Either a b)`、`Show (Either a b)` | `deriving (Eq, Ord, Show)` |
 | `Eq IOErrorKind`、`Show IOErrorKind`、`Show IOError` | `IOErrorKind` は `deriving (Eq, Show)`。`Show IOError` は Prelude に書いた instance |
 | タプルと `Unit` の `Eq`、`Ord`、`Show` | 処理系の構造的な instance (上の「`deriving`」) |
 
@@ -409,7 +419,9 @@ Prelude の instance は次のとおりである。
 
 - シグネチャ、`data`、`type`、`effect`、fixity、`class` に `pub` を付けると公開される。付けないものはモジュールの中だけで見える。`pub class` は、クラスとそのメソッドをまとめて公開する。instance は名前を持たず、いつもプログラム全体で見えるので、`pub` を付けられない
 - 等式と import には `pub` を付けられず、付けると構文エラー (E0011) になる。等式で定義する関数は、シグネチャに `pub` を付けて公開する
-- `pub data` は、型とコンストラクタを公開する。コンストラクタを隠した抽象型はない ([ロードマップ](../future/roadmap.md))
+- `pub data` は、型とコンストラクタを公開する。`pub abstract data` は型の名前だけを公開し、コンストラクタと名前付きのフィールドを宣言したモジュールの中だけで見えるようにする (抽象型。[モジュールと名前解決](modules.md) の「公開の範囲」)。`pub abstract effect` は同じくエフェクトの名前だけを公開する ([エフェクトと handler](effects.md) の「抽象エフェクト」)
+- 抽象型の Kind はフィールドから普通の規則で決まり ([型と Kind](types.md))、`deriving` も書ける。導出した `Eq`、`Ord`、`Show` は構造で比べて表示するので、抽象型の中身をそのまま見せる (`show` はコンストラクタの名前を書くが、その名前は外から書けない)。隠したい型には `deriving` を書かず、instance を自分で書く。`abstract` は REPL の表示器からは値を隠さない。`Show` のない抽象型の値も構造で表示する ([REPL の端末](repl.md) の「値の書き方」)
+- `abstract` を付けられるのは `pub data` と `pub effect` だけで、`extern data` (コンストラクタがない)、`extern effect` (いつも隠す)、`type`、シグネチャ、fixity、`class` に付けると E0011 である。`=` のない `pub abstract data` は、ほかの `data` と同じく E1025 である
 - `pub` を付けた item の型に、同じモジュールの `pub` でない型かエフェクトが現れたら E1032 にする。制約に書いた `pub` でないクラスも同じである ([モジュールと名前解決](modules.md) の「公開の範囲」)
 
 標準ライブラリのモジュールは、ユーザーに見せる名前を `pub` で選ぶ。`pub` でない item (`Prelude` の中だけで使う `show_rest` など) は、ユーザーには見えない。モジュールの規則は [モジュールと名前解決](modules.md) にある。

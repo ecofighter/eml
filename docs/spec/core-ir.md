@@ -73,7 +73,7 @@
 
 - 構造体の型の `con` は `struct(S)` の変数を束縛する。引数は形のフィールドの Repr と比べる正確な位置で、配置の宣言した Repr とは比べない
 - 構造体の値を分けるのは、いつも `unpack` である。束縛するフィールドの Repr と印は、形のものになる。構造体の変数はタグの `switch` の scrutinee にならない
-- `with_arg` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
+- `with_arg` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`、`Std.Async.task_cell`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
 - 入口の関数 `entry$<名前>` の `ret` は値1つにする。入口の値の型が構造体なら `ret` を `obj` にし、box の挿入が箱に入れる。VM の `Finish` は値を1つだけ受けるためである ([VM](vm.md) の「誤り、止めること、終わり」)
 - 型から決める構造体 (`StructTypes`) と、型を持たない組 (`with_arg` の組と、`optimize` の状態を渡す形の複製が返す組) は、同じ語の数と `unit` の条件 (`MAX_STRUCT_WORDS`) で決める。型を持たない組の形は `tuple_struct` が作る
 
@@ -164,7 +164,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 
 #### 表の印の列
 
-- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_kinds: &'static [Linearity]` と `ret_kind: Linearity` を持つ。extern の関数の引数に現れる型変数は、スキームで `Unr` に固定される ([宣言](declarations.md) の「`extern`」)。そのため、型変数の位置 (`Std.Array.get` の要素) と、Kind が要素に従う `Array a` は `Unr` で、2値の `Linearity` で足りる。関数型の引数の最後の結果にだけ現れる型変数は固定されないが、該当する行は `Std.Par.par` だけで、その扱いは下の表の後に書く。`exit` の結果の印は、行の `ret_kind` でなく、translate が具体化した結果の型から決める ([LIR](lir.md) の「戻らない extern」)
+- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_marks: &'static [Mark]` と `ret_mark: Mark` を持つ。印は LIR の印と同じ3値 (`unr`、`lin`、`poly`) で、`Mark` は `eml_extern` が持ち `eml_lir` が再公開する。extern の関数の引数に現れる型変数はスキームで `Unr` に固定される ([宣言](declarations.md) の「`extern`」) ので、型変数の位置 (`Std.Array.get` の要素) と、Kind が要素に従う `Array a` は `unr` である。固定しない位置 (コールバックの最後の結果、結果だけの型変数、預かる引数の型変数) は `poly` で、verifier はどの印の値も通す。`exit` の結果の印は、行の `ret_mark` でなく、translate が具体化した結果の型から決める ([LIR](lir.md) の「戻らない extern」)
 
   | 行 | 引数 | 結果 |
   |---|---|---|
@@ -194,9 +194,16 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.MutArray.read` | `Lin`、`Unr` | `Unr` (要素) |
   | `Std.MutArray.write` | `Lin`、`Unr`、`Unr` | `Lin` |
   | `Std.MutArray.freeze` | `Lin` | `Unr` (`Array a`) |
+  | `Std.Par.par` | `poly`、`poly` | `poly` |
+  | `Std.Async.start_raw`、`run_raw` | `poly` | `Lin` (`Task a`) |
+  | `Std.Async.park` | `Unr`、`Lin` | `Unr` |
+  | `Std.Async.ready` | `Lin` | `Unr` |
+  | `Std.Async.finish_ok` | `poly` | `Unr` |
+  | `Std.Async.task_cell` | `Lin` | `Unr` (`Cell`) |
+  | `Std.Async.take_result`、`run_result` | `Lin` | `poly` |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
-  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、型変数は `Unr` に固定されているので、`Unr` の行と合うものとして比べる。`Std.Par.par` の結果の組の型変数は固定されないが、`par` の行は std の宣言を型検査に結ぶためだけにあり、`ret_kind` は `Poly` を通して `Unr` と比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
+  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.Async.task_cell`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
 - 基本操作の表の印の列は [LIR](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
 - 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
@@ -213,6 +220,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 
 - `Std.MutArray.length` と `read` は、宣言の型では結果と配列の組を返す (`MutArray a -> Int -> <Panic> (a, MutArray a)`)。extern は借りない引数を消費するので、組を作る extern にすると、読むたびに組を確保する。そこで行は配列を借り (`FunctionRow::borrowed`)、要素だけを返し、`with_arg: Some(0)` を持つ ([LIR](lir.md) の「extern の借用」)
 - `Std.FileIn`、`Std.Stdin`、`Std.Proc` の読み (`read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) も同じ形である。宣言の型は読んだ結果とハンドル (`FileIn`、`Stdin`、`Child`) の組を返し (`FileIn -> <IO> (String, FileIn)`)、行はハンドルを借りて結果だけを返す。`with_arg` はハンドルの位置で、`read_chunk : Bytes -> FileIn -> <IO> (Bytes, FileIn)` (`Stdin` と `Child` も同じ形) だけは `Some(1)`、ほかは `Some(0)` である
+- `Std.Async.task_cell : Task a -> (Cell, Task a)` も同じ形で、ハンドルを借りてセル (`int`) だけを返し、`with_arg: Some(0)` を持つ。ハンドルは `Lin` なので行の引数の印は `lin` で、この引数は借りたうえで預かる引数でもある ([宣言](declarations.md) の「`extern`」)
 - `Std.FileOut`、`Std.Stdout`、`Std.Stderr` の書き込み (`write`、`write_bytes`、`write_line`) は、書くデータを借り、ハンドルを消費して同じハンドルを返す。結果がハンドルそのものなので、組を返さず、`with_arg` を持たない
 - translate は、`with_arg: Some(k)` の行の引数のそろった呼び出しを、行の結果を束縛する `extern` 命令と、その結果と引数 k を組にする `con` にする。`let t.1: int = extern Std.MutArray.read(m.0, 0)` と `let d.2: (,){int, obj lin} lin = con (,) #0(t.1, m.0)` の形である。組が構造体にならない型なら、`d.2` は `obj` である。extern は m.0 を借りるだけなので、m.0 を消費するのは `con` だけである。`$externN` も同じ形の本体を持つ。どちらも同じ関数 (`ProgramBuilder::extern_call`) が作る
 - 組を受けてすぐ開く所 (`let (v, m) = MutArray.read m i`) では、最適化の既知のコンストラクタ (下の「既知のコンストラクタ」) で組が消え、確保が残らない。組が構造体なら、既知のコンストラクタに頼らなくても確保がない
@@ -257,6 +265,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   - 一様な位置は、関数ごとでなく型変数の位置ごとに決める。`walk : Int -> a -> b -> b` が `a` だけを大きくして自分を呼ぶとき、`walk` を `b := Int` で使った instance は `walk@[_, Int]` で、`b` の位置の引数と `ret` は `int` である。大きくならない型変数の制約の証拠を、具体的な型から確定するためである
   - 一様な位置の型引数は `Flexible` なので、大きくなる成分を通る型の大きさは有界になる。大きくなる成分の外の位置に流れ込む型も、有界な型と `Flexible` から作られるので有界である。そのため、instance を集める手順は止まる。instance の総数に上限は置かない ([実装の現在地](../implementation/status.md) の「コンパイルの時間と深さ」)
   - 入口の関数の鍵は、型変数を持たなければ空の列、持てばすべて `Flexible` である。その Kind は、一様な位置と同じく `uniform_kind` が決める。入口は `main` とは限らず、変換の呼び出し側が選ぶ
+  - ランタイムが名前で呼ぶ関数 (`Std.Async.start_task` と `Std.Async.resume_task`。[標準ライブラリ](stdlib.md) の「`Std.Async`」) も根にする。eml のコードは呼ばないので、入口から届かないためである。そのモジュールを読み込んでいるときだけ、`モジュール名.関数名` で引ける関数を、型引数も row のビットも空の instance にする。どれも単相なので、名前は元の名前のままである
   - instance は、入口の instance から始めて、見つけた順に処理する (FIFO)。各 instance の本体では、関数への参照を HIR の式の ID の順にたどり、まだない鍵を列の後ろに足す。すべて集めてから、instance を HIR の関数の順に並べ、同じ関数の instance は見つけた順に並べて、その順に関数の番号を振る。`TypeId` の値の順には並べない。後の段階が `TypeId` の値に意味を持たせないためである。型変数を持たない関数だけのプログラムでは、関数の並びは HIR の関数の順になる
   - 型変数を持つ関数の instance の名前は、元の名前 (モジュールの修飾を含む) に `@[型引数, …]` を付けた形である (`map@[Int, String]`、`Prelude.>>@[Int, Int, Int]`、`length@[List Int]`)。一様な位置の型引数 (`Flexible`) は `_` と書く (`depth@[_]`)。矢印の線形性は、`Lin` を `once a -> b`、`Poly` を `poly a -> b`、`Unr` を `a -> b` と書く ([型と Kind](types.md) の「Kind の書き出し」)。線形性だけが違う具体化は、別の instance として別の名前になる (`id@[once Int -> Int]` と `id@[Int -> Int]`)。一様な位置と操作ごとの型変数も Kind を書く (`_:poly`、`a:lin`。`Unr` は書かない)。Kind だけが違う鍵の名前を重ねないためである。名前は型引数だけで決まり、ほかの instance の有無や見つけた順によらない。REPL の追記が、名前が同じ関数はいつも同じコードになることに頼るためである ([VM](vm.md) の「追記」)
   - 型引数の型とクラスの名前は、名前のための表 (`NameTable`) で書く。診断の表示名は名前が重なるときだけ修飾するので、ほかのモジュールや後の入力が同じ名前を定義すると表示が変わり、名前が型引数だけで決まらなくなるためである。表は、Prelude の型とクラスを修飾しない (`Int`、`Show`)。Prelude は固定なので、修飾しなくても重なりは入力で変わらない。入口のモジュールと REPL のセッションの型とクラスは中段の名前 (下の「REPL の入力」) で書き、Prelude の型かクラスと同じ名前のものは `Main.` で修飾する (`Main.Bool`)。ほかのモジュールの型とクラスは、モジュール名で修飾する (`Std.FileIn.FileIn`)
@@ -481,7 +490,7 @@ V2 は、`lin` の値を `unr` の受け手に渡すことだけを拒む。`unr
 
 2つの型の比べ方は `TypeStore::lin_compatible` である。2つの型を構造をそろえてたどり、対応する線形性 (矢印の `lin`、`Flexible` と `OpVar` の Kind) の一方が `Unr`、他方が `Lin` なら食い違いとする。`Poly` はどちらとも食い違わない。片方が `Flexible(k)` か `OpVar(_, k)` で他方が別の形の型 `T` なら、`k` と `linearity(T)` を比べる。`Rigid` はどの型とも合う。形が一致しない所 (誤りの跡) は比べない。
 
-- 参照の検査: instance を集めた後に、各関数の instance の中の参照 (関数を指す式) ごとに、代入した参照の型と、呼ばれる instance の型を比べる。比べ方は、参照の一番外側の矢印を飛ばす `lin_compatible_inner` である。その矢印は参照ごとの変数で、宣言の矢印と比べる相手ではないためである ([型と Kind](types.md) の「値を読む式の矢印の線形性」)。飽和した呼び出しだけでなく、部分適用と値としての関数の参照も入る。導出とタプルの生成器の instance と extern の関数は、比べる型を持たないので比べない。extern は行の Kind の列で確かめる (`FunctionRow::param_kinds` と `ret_kind`。`std/` のシグネチャとの結び付けは `crates/eml_core_ir/tests/externs.rs`)
+- 参照の検査: instance を集めた後に、各関数の instance の中の参照 (関数を指す式) ごとに、代入した参照の型と、呼ばれる instance の型を比べる。比べ方は、参照の一番外側の矢印を飛ばす `lin_compatible_inner` である。その矢印は参照ごとの変数で、宣言の矢印と比べる相手ではないためである ([型と Kind](types.md) の「値を読む式の矢印の線形性」)。飽和した呼び出しだけでなく、部分適用と値としての関数の参照も入る。導出とタプルの生成器の instance と extern の関数は、比べる型を持たないので比べない。extern は行の印の列で確かめる (`FunctionRow::param_marks` と `ret_mark`。`std/` のシグネチャとの結び付けは `crates/eml_core_ir/tests/externs.rs`)
 - 操作の検査: 各 `perform` の参照の型を、その参照の具体化の `kind_values` で評価した操作の宣言の型と、`lin_compatible_inner` で比べる。参照の一番外側の矢印は、参照の検査と同じく参照ごとの変数なので比べない。handler の節の引数のパターンの型と `k` の型は、操作の宣言の型と、`Rigid` をどの型とも合う型、`Var` を `Poly` として比べる。節の具体化は記録されていないので、`kind_values` は求めない。この比べ方で確かめられるのは、引数の型の矢印と、結果の型の中で呼ぶ側から節へ渡る位置の矢印が、節の側でも宣言の `Unr` と食い違わないことである
 - 捕獲の検査: 両側が同じに誤った印 (`Lin` の値を持つ `unr` のクロージャ) は、比べ方では見つけられない。そこでクロージャを作る所で、矢印が `Unr` なら、捕まえた値の型の `linearity` がすべて `Unr` であることを確かめる
 
@@ -537,7 +546,7 @@ REPL の入力から作る関数 `input$N` (N は入力の番号) は、`()` を
 
 - 出力は translate の出力と同じ段の Core IR で、`handle`、`perform`、`resume`、`mask` を残す。基本操作、`clause`、`tail`、`box`、`unbox`、RC の命令は出さない (上の「パス」の後のパスの置き場所)
 - 既知の閉包への特殊化は、関数ごとの作業リストで動く。translate の関数を順に書き換え、途中で作った複製を後ろに足して、同じ規則で書き換える。複製は鍵ごとに1つなので、作業リストは止まる
-- 既知の閉包への特殊化 (`specialize`)、handler への特殊化 (`handlers`)、融合 (`fuse`) の順に動く。それぞれの後に `yields` の印を付け直し (下の「`yields` の付け直し」)、最後に入口から届かない関数を落とす。残った関数は元の順のまま番号を振り直す。
+- 既知の閉包への特殊化 (`specialize`)、handler への特殊化 (`handlers`)、融合 (`fuse`) の順に動く。それぞれの後に `yields` の印を付け直し (下の「`yields` の付け直し」)、最後に入口から届かない関数を落とす。ランタイムが名前で呼ぶ関数は入口と並べて根にし、何も呼ばなくても残す。残った関数は元の順のまま番号を振り直す。
 
 #### 既知の閉包
 

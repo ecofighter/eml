@@ -39,6 +39,14 @@ impl BodyCheck<'_, '_> {
             self.unknown_record(base, Site::Projection, &key_text(&field.field));
             return self.table.error;
         }
+        if self.hidden_fields(
+            base_ty,
+            Site::Projection,
+            &key_text(&field.field),
+            field.range,
+        ) {
+            return self.table.error;
+        }
         let Some(resolved) = self.resolve_field(id, base_ty, field, Site::Projection) else {
             return self.table.error;
         };
@@ -56,6 +64,13 @@ impl BodyCheck<'_, '_> {
         fields: &[(FieldName, ExprId)],
     ) -> Ty {
         let base_ty = self.infer_expr(base);
+        let first = &fields[0].0;
+        if self.hidden_fields(base_ty, Site::Update, &first.name, first.range) {
+            for (_, value) in fields {
+                self.infer_expr(*value);
+            }
+            return base_ty;
+        }
         let target = self.update_target(id, base, base_ty, &fields[0].0);
         let mut written = Vec::new();
         let mut discarded = Vec::new();
@@ -94,6 +109,38 @@ impl BodyCheck<'_, '_> {
             self.typing.discarded.insert(id, discarded);
         }
         base_ty
+    }
+
+    /// `base_ty` が別のモジュールの抽象型なら E2021 を1つ出して `true` を返す。フィールドを引く前に止めるので、E2014 の
+    /// help が隠したフィールドの名前を並べることはない (docs/spec/modules.md の「公開の範囲」)。
+    fn hidden_fields(&mut self, base_ty: Ty, site: Site, field: &str, range: TextRange) -> bool {
+        let &TyShape::Con(def, _, _) = self.table.shape(base_ty) else {
+            return false;
+        };
+        let module = self.function_id.module;
+        if !self.program[def].abstract_ctors || self.program.same_scope(def.module, module) {
+            return false;
+        }
+        let ty = &self.program[def].name;
+        let outside = &self.program.modules[def.module].name;
+        let message = match site {
+            Site::Projection => {
+                format!(
+                    "field `{field}` of the abstract type `{ty}` is not visible outside `{outside}`"
+                )
+            }
+            Site::Update => {
+                format!(
+                    "the fields of the abstract type `{ty}` cannot be updated outside `{outside}`"
+                )
+            }
+        };
+        self.diagnostics.push(Diagnostic::error(
+            codes::PRIVATE_FIELD,
+            message,
+            Label::new(self.file(), range, "hidden by `abstract`"),
+        ));
+        true
     }
 
     /// 更新が作り直すコンストラクタと、型引数で具体化したフィールドの型。元の値の型がコンストラクタが1つの `data` で

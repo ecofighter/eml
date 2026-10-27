@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 380
+expression: rendered
+input_file: tests/ui/check-fail/linearity/task_awaited_twice.em
+---
+[E3002] Error: `t` must be used exactly once, but it is used more than once
+    ╭─[ check-fail/linearity/task_awaited_twice.em:10:25 ]
+    │
+ 10 │     let y = Async.await t
+    │                         ┬  
+    │                         ╰── used again here
+    │
+    ├─[ check-fail/linearity/task_awaited_twice.em:10:25 ]
+    │
+  9 │     let x = Async.await t
+    │                         ┬  
+    │                         ╰── first used here
+    │ 
+    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯

@@ -389,3 +389,21 @@ fn a_session_let_cannot_define_a_function() {
     );
     assert_eq!(kind("let f x = x in f 1"), REPL_EXPR);
 }
+
+#[test]
+fn an_input_starting_with_abstract_is_items() {
+    for text in [
+        "pub abstract data Box = | Box Int",
+        "pub abstract effect Ping where\n  ping : Unit -> Int",
+    ] {
+        assert_eq!(kind(text), REPL_ITEMS, "{text:?}");
+    }
+    // 誤った `abstract` も item として読み、E0011 を出す
+    assert_eq!(
+        input("abstract data Box = | Box Int"),
+        (
+            REPL_ITEMS,
+            vec!["E0011 1:1 `abstract` is only allowed on `pub data` and `pub effect`".to_string()]
+        )
+    );
+}

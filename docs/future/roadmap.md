@@ -28,8 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `async-tasks`: 1つの worker の上で `Std.Async` のタスクを動かす。受け箱、タスクのセル、`Async.run` の待ち、入口の `start_task` と `resume_task`、安全点での横取り、止める語、監視のスレッド、run の登録表、終わりの欄を入れる。監視のスレッドの `PREEMPT` で切り替える普通のスケジュールの方針を足し、`eml run` の既定を逐次から替える ([マルチコア対応の設計](multicore.md) の「1つの worker での実行」)。std には `Task`、`await`、`try_all`、`fail_io`、`Either`、`yield_now`、暗黙のスコープ、`IOErrorKind` の新しい種類を入れる。この段のスコープは失敗を記録するだけで、兄弟のタスクは最後まで動く。タスクごとの ID と、`RunStats` のタスクの欄 (共有にした物体の数を含む) も足す。前提: なし。設計: [非同期の設計](async.md) の「スコープとタスク」、[マルチコア対応の設計](multicore.md) の「スケジューラ」
-- `async-cancel`: 取り消しと名前付きのスコープを入れる。取り消しのビット、`Wake.Cancelled`、セルと実行待ちのタスクの待ちを外すこと、失敗した子から兄弟への取り消し、`spawn_in`、`start_in`、`cancel_scope`、`shield`、`check_cancelled` と `cancel_requested`、操作の予算である。前提: `async-tasks`。設計: [非同期の設計](async.md) の「取り消し」
+- `async-cancel`: 取り消しと名前付きのスコープを入れる。取り消しのビット、`Wake.Cancelled`、セルと実行待ちのタスクの待ちを外すこと、失敗した子から兄弟への取り消し、`spawn_in`、`start_in`、`cancel_scope`、`shield`、`check_cancelled` と `cancel_requested`、操作の予算である。前提: なし。設計: [非同期の設計](async.md) の「取り消し」
 - `async-time`: 仮想の時計の上でタイマーを動かす。`await_time`、時間の輪、`sleep_ms`、`timeout`、`race`、`drain_within`、テストの driver の時計、期限付きの待ち、`IoDriver` の下書きを入れる。前提: `async-cancel`。設計: [非同期の設計](async.md) の「時間」
 - `async-chan`: worker が1つの上で `Std.Chan` と `Atomic.Counter` を入れる。受け手の決まらない `Lin` の値は途中の持ち主を使って移し替える。前提: `async-cancel`。設計: [非同期の設計](async.md) の「チャネルと共有の状態」、[マルチコア対応の設計](multicore.md) の「`Lin` の物体の所有者の移し替え」
 - `io-driver`: 本物の I/O の driver とブロックする呼び出しのプールを入れる。まず `compio-driver` を単独で使えるかを試作で確かめ、使うかどうかを段の計画で決める。`IoDriver` の口を決め、`eml_io` に本物の driver とテストの driver を作る。読めるようになってから読みの buffer を取る規則もこの段で入れる。前提: `async-time`。設計: [非同期の設計](async.md) の「I/O の driver」
@@ -122,8 +121,6 @@
 - 可変参照 (方針は決定済み): 値 `Ref h a` と組み込みのエフェクト `Heap h` を持ち、`IO` と分離する。`run_heap` は rank-2 の組み込みとして特別扱いする。`Ref` には `Unr` の値だけを入れ、multi-shot で再開したときの状態は共有する ([マルチコア対応の設計](multicore.md) の「可変状態」)。入れ子の `run_heap` の中から外側の `Ref` を使うには、同じエフェクトのインスタンスを区別する必要がある。名前付きの handler が要るかどうかを、入れるときに決める
 - フィールドの変換の糖衣: `{ p | age = _ + 1 }` のような、関数でフィールドを書き換える構文。`Lin` なレコードでも、分解せずに書けるようにする。今の更新は上書きされる古い値を捨てるので、`Lin` なフィールドは分解して組み直すしかない ([直積型とレコード](../spec/records.md) の「線形性の規則」)
 - 型の別名: `type Name = T`。構文は予約してあり、今は `type` の宣言を HIR が E0004 にする ([宣言](../spec/declarations.md) の「`data` と `type`」)。別名を展開する位置 (HIR か型検査か)、型引数を持つ別名、診断での表示 (別名で書くか展開して書くか) を決める
-- 抽象型: コンストラクタを公開しない `pub data`。名前付きのフィールドも、コンストラクタと一緒に隠す規則を決める。今は射影と更新がフィールドの見える範囲を検査しない ([モジュールと名前解決](../spec/modules.md) の「名前空間」)
-  - `Std.Map` と `Std.Set` は、抽象型がないのでコンストラクタを公開している。抽象型を入れたら隠す
 - 再エクスポート: `pub import`
 - 修飾した演算子の構文 (`Csv.(</>)`)
 - 接頭辞付きリテラルの一般化: `re"..."` のように、ユーザーが接頭辞付きのリテラルを定義できるようにする。穴の型付けにアドホック多相が要る
@@ -354,6 +351,9 @@
 - タスクを置く worker を選ぶ API (`spawn_here` など)
   - 後に回した理由: スレッドに縛られた仕事は `Gui.run_on_main` で書ける ([FFI と拡張の設計](ffi.md) の「GUI」)。
   - 見直す条件: `Gui.run_on_main` のほかに、タスクを特定の worker に置く必要が出たとき。
+- EPIPE を IO の失敗の種類 `ConnectionReset` に写すこと
+  - 後に回した理由: タスクと関係のない `Child` の書き込みの誤りの種類を変えるため。
+  - 見直す条件: ソケットを足す段 (`TcpStream` の書き込みが EPIPE を返す段)。
 
 ### ネイティブ化
 

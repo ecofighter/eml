@@ -3,6 +3,7 @@
 
 mod common;
 
+mod r#async;
 mod boxing;
 mod census;
 mod contract;
