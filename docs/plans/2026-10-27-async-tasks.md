@@ -166,7 +166,7 @@ pub(crate) enum Runnable { Start { cell: CellRef, closure: Word }, Resume { cell
 
 #### D-10: 登録表は VM の実行ごとに1つ
 
-`Registry` とその `Arc<Inbox>` は `vm::run` ごとに作る (`Scheduler` と同じ)。そのため、1つ目の `Async.run` が返したハンドルは、同じ実行の後の `Async.run` で待てる (docs/future/async.md:88)。ハンドルの `Arc<Inbox>` と登録表の `Arc<Inbox>` を `Arc::ptr_eq` で比べ、違えば `VmFault::StaleTask` (表示 `a task handle outlived its run`、壊れた状態にしない) にする。これが起きるのは REPL の入力をまたいだときだけである。古いハンドルの `Drop` は自分の死んだ受け箱に積むだけで、生きている受け箱には届かない。同じ実行の中の添字の使い回しは generation で見つける。
+`Registry` とその `Arc<Inbox>` は `vm::run` ごとに作る (`Scheduler` と同じ)。そのため、1つ目の `Async.run` が返したハンドルは、同じ実行の後の `Async.run` で待てる (docs/future/async.md:88)。ハンドルの `Arc<Inbox>` と登録表の `Arc<Inbox>` を `Arc::ptr_eq` で比べ、違えば `Internal("a task handle outlived its run")` にする。`Task a` は `Lin` で、REPL は線形の値を入力をまたいで持たせない (E2016) ので、検査を通ったプログラムからこの場合には届かない (実行の途中で利用者と決めた。利用者向けの `StaleTask` は置かない)。古いハンドルの `Drop` は自分の死んだ受け箱に積むだけで、生きている受け箱には届かない。同じ実行の中の添字の使い回しは generation で見つける。
 
 #### D-11: セルの形
 
@@ -890,7 +890,7 @@ main () =
 
 ### T-12: VM のタスク (2) 待ち、`await`、失敗、ハンドル
 
-- 目的: `park`、`ready`、`task_cell`、`take_result` と `run_result` の失敗の道、`TaskHandle` の `Drop` と受け箱の処理、`StaleTask`、D-11 の不変条件の `debug_assert!`
+- 目的: `park`、`ready`、`task_cell`、`take_result` と `run_result` の失敗の道、`TaskHandle` の `Drop` と受け箱の処理、古いハンドルの `Internal`、D-11 の不変条件の `debug_assert!`
 - 対象: `cells.rs`、`vm.rs`、`tasks.rs`、REPL のトランスクリプト
 - 作業: 5.2 のとおり。`take_result` の `Raise::Panic(m)` は `Extern::Panic` の道 (`abort_to(Panic, PANICKED, [fresh_string(m)])`、なければ `VmFault::Panicked(m)`)、`Raise::Io { kind, m }` は `failed(Fault::Raised(Box::new(Raised { kind, message })))` (vm.rs:1533-1558)。`take` の `Finished` でない枝は `Internal("awaiting an unfinished task")` のままにする (D-12。T-9d で `Async` が抽象エフェクトになり、操作は `Std.Async` の外から E1058 になるので、検査を通ったプログラムからは届かない)
 - テスト (`tasks.rs`、2つのモード):
@@ -899,9 +899,9 @@ main () =
   - (h) 子の `panic "boom"` を待つ → `RuntimeError` の表示が `` runtime error: panicked: boom in `main` `` と等しい。`await` を `try_panic` で囲むと → `Err boom\n`
   - (j) `MutArray` を返すタスクを `spawn` して待たない → 検査モードの run が `Leak` なしで終わる
   - (l) `Lin` の結果: `MutArray.empty ()` を返すタスクを待って `MutArray.length` → `0\n` (結果は thunk に包まず、値のまま預かる行を通る)
-  - (k) は REPL のトランスクリプト `crates/eml_cli/tests/repl/async/stale_handle.repl` にする。1つ目の入力で `Async.run` が返したハンドルを束縛し、2つ目の入力で `Async.run (fn () -> Async.await t)` → `a task handle outlived its run` の実行時エラー
-- 文書: docs/spec/vm.md の「`Async` のタスク」を仕上げる (`Async` の操作は `Std.Async` の外から見えないので、待たずに再開する道がないことを含む)。docs/spec/stdlib.md の「実行時エラー」に `a task handle outlived its run` の行 (REPL の入力をまたいだとき)
-- 実装者に任せること: (f)〜(l) (欠番の (i) は T-13) のプログラムの細部 (期待を変えない範囲)。(k) の REPL の束縛の書き方
+  - (k) は置かない。REPL の入力をまたいでハンドルを持てないため (D-10)。(h) の誤りの文は、std の中で起きた誤りなので `panicked: boom` と `  at <std>/Async.em:` で始まる形を確かめる (実行の途中で決めた)
+- 文書: docs/spec/vm.md の「`Async` のタスク」を仕上げる (`Async` の操作は `Std.Async` の外から見えないので、待たずに再開する道がないことを含む)。docs/spec/stdlib.md の「実行時エラー」には足さない (検査を通ったプログラムから届かないため。D-10)
+- 実装者に任せること: (f)〜(l) (欠番の (i) は T-13) のプログラムの細部 (期待を変えない範囲)。(k) は置かない。旧: REPL の束縛の書き方
 - 条件: いつも
 - 完了の条件: `cargo nextest run -p eml_vm --test integration -E 'test(tasks::)'` → 10 個通る。`cargo nextest run -p eml_cli --test integration -E 'test(repl::)'` → 通る。共通の確認
 - 落とし穴: タスクを放すときの `retire_worker` が正しいプログラムで `TransferLeak` を出したら Q-2 の既定に従う
@@ -930,7 +930,7 @@ main () =
   2. `run` の終わり: `run` は根のスコープのすべてのタスクが終わってから戻る (待ったかどうかによらない)。失敗がなければ本体の値を返し、あれば終わった順で最初の失敗を起こし直して本体の値を捨てる。IO の失敗は種類と文言を、Panic は文言を保つ。後の失敗は報告せず、1つずつ `RunStats.dropped_failures` に数える。失敗したタスクを待って、起こし直した失敗を捕まえなかったタスクも数える
   3. `Task a` は `Lin` で、`await t` が消費する。`await` は値を返すか、タスクの失敗を起こし直す。失敗はスコープの失敗のままで、`await` の周りで捕まえても `run` は起こし直す。失敗を分けるには、タスクの中で `try_all` を使う
   4. `drop t` はハンドルを放すだけで、タスクは最後まで動き、`run` はそれも待つ。値は終わったときに放し、失敗はスコープの失敗になる
-  5. ハンドルは、1つのプログラムの実行の中なら、作った `run` の外へ出てよい。そのときタスクは終わっているので、`await` はすぐ値を返すか失敗を起こし直す。REPL の入力をまたいだハンドルは実行時エラー ``a task handle outlived its run`` である
+  5. ハンドルは、1つのプログラムの実行の中なら、作った `run` の外へ出てよい。そのときタスクは終わっているので、`await` はすぐ値を返すか失敗を起こし直す。`Task` は線形なので、REPL の入力をまたいで持つことはできない
   6. どのタスクの `exit n` も、プログラムを `n` で終える (T-15 で書く)
   7. `yield_now ()` はタスクを実行待ちの列の後ろへ回す
   8. タスクは閉じた row `<IO, Panic, Async>` で始まる。始めた側の handler と `var` は見えず、`var` を捕まえると型の誤りになる
@@ -1054,6 +1054,6 @@ T-8 まで (9747404)
 - `VmFault::Deadlocked` は足さない。この段では待ちの輪を作れない (D-13)
 - 止める語に `END` のビットを足す案は退けた。host の読み手の振る舞いが変わる。終わりの欄は `exit` だけを持つ (D-4、D-5)
 - `Finished.exit` の出どころは `control.exit_code()` だけにした (D-5)
-- ハンドルは同じ実行の中なら `run` を越えて待てる。`StaleTask` は REPL の入力をまたいだときだけである (D-10)
+- ハンドルは同じ実行の中なら `run` を越えて待てる。`Task` は線形なので REPL の入力をまたげず、古いハンドルの確かめは `Internal` にとどめる (D-10)
 - check-fail のテストは誤りの番号の範囲で `types/` と `linearity/` に置き、`check-fail/async/` は作らない (D-17)
 - 手で `cargo run` を流して確かめることはやめ、UI テストの harness だけで確かめる (D-17)
