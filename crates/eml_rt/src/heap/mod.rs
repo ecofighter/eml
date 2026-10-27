@@ -1450,6 +1450,8 @@ impl<M: Mode> Heap<M> {
         let ghost scanned_perm = perm;
         fill_zero(h, Tracked(&mut perm), first + scanned, cap_words, Ghost(cap), Ghost(M::CHECKED));
         proof {
+            assert(i == scanned);
+            assert(unit_filled(scanned_perm, first as int, first + scanned));
             assert(unit_filled(perm, first as int, first + scanned)) by {
                 assert forall|j: int|
                     #![trigger p_init(perm, j)]
@@ -1459,6 +1461,8 @@ impl<M: Mode> Heap<M> {
                 ).bits_spec() == 1 by {
                     assert(perm.slots[j] == scanned_perm.slots[j]);
                     assert(p_init(scanned_perm, j));
+                    assert(p_word(scanned_perm, j).bits_spec() == 1);
+                    assert(perm.slots.contains_key(j));
                 }
             }
             if extended {
