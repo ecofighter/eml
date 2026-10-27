@@ -558,6 +558,21 @@ fn counts_move_with_the_walk() {
     assert_eq!(heap.check_invariants(), Ok(()));
 }
 
+/// `share` が rc を負にした物体を1つずつ数える。すでに共有の物体は数えない。
+#[test]
+fn share_counts_the_objects_it_turns_negative() {
+    let mut heap = H::new();
+    let l = list(&mut heap, 3);
+    assert_eq!(heap.stats().shared, 0);
+    unsafe {
+        heap.share(l, 0).unwrap();
+        assert_eq!(heap.stats().shared, 3);
+        heap.share(l, 0).unwrap();
+        assert_eq!(heap.stats().shared, 3);
+        heap.decref(l).unwrap();
+    }
+}
+
 /// fork で印を付けた閉包から届く物体には、子が触れてよい。印を付けなければ、子の所有者の検査が必ず落ちる
 /// (docs/future/multicore.md の「論理的な worker ID」)
 #[test]

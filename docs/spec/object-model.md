@@ -597,7 +597,7 @@ is_unique(x)
 
 - モードは `Heap<M: Mode>` の型の引数で選ぶ。`Mode` は封じた trait で、`Fast` と `Checked` の2つがある。各操作は `if M::CHECKED { … }` で検査を書き、速いモードではこの分岐が単相化で消える
 - 実行時の旗にしないのは、速いモードの RC の速い道に、検査のための分岐を1つも足さないためである。VM は2つのモードで単相化して2つ作る。ネイティブは、コンパイル時にどちらかを選ぶ
-- 仕事の回数 (`Stats` の `rc_increments`、`rc_decrements`、確保の回数 `allocations`、生きている箱の数 `live` とその最大 `peak_live` と、`Ctx` の `CtxStats` の `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`) は、検査モードだけで数える。ID ごとの生きている物体の数 (下の「論理的な worker ID」) も同じである。速いモードは数える費用も持たない。ID ごとの数の表は速いモードの `Heap` にも欄として残るが、空のまま触れない。VM では、`RunStats` の回数の固定と UI テストを検査モードで走らせ、`bench/run.sh` の命令の数は速いモードで測る。OS から取ったページのバイト数だけは、両方のモードで数える (上の「確保と解放」)
+- 仕事の回数 (`Stats` の `rc_increments`、`rc_decrements`、確保の回数 `allocations`、生きている箱の数 `live` とその最大 `peak_live`、`share` が rc を負にした物体の数 `shared` (すでに共有の物体は数えない) と、`Ctx` の `CtxStats` の `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`) は、検査モードだけで数える。ID ごとの生きている物体の数 (下の「論理的な worker ID」) も同じである。速いモードは数える費用も持たない。ID ごとの数の表は速いモードの `Heap` にも欄として残るが、空のまま触れない。VM では、`RunStats` の回数の固定と UI テストを検査モードで走らせ、`bench/run.sh` の命令の数は速いモードで測る。OS から取ったページのバイト数だけは、両方のモードで数える (上の「確保と解放」)
 
 `RunStats` の各項目の意味と VM での出どころは、[VM](vm.md) の「`RunStats`」にある。`string_bytes_copied` は、extern が数える `CtxStats` の定義を引き継ぐ (下の「extern」の「仕事の回数」)。
 
@@ -941,7 +941,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ### 誤り
 
-算術の誤りは `ArithFault` (`DivisionByZero`、`IntegerOverflow`、`FloatToInt(u64)`、`FixedDigits(i64)`、`NotScalar(i64)`、`NotByte(i64)`) で、`Copy` である。`FloatToInt` は `Int` に収まらない `Float` をビット列で持ち、`FixedDigits` は `Float.to_fixed` の範囲の外の桁数を持ち、`NotScalar` は `Char.of_int` が断ったスカラー値でない `Int` を、`NotByte` は `Byte.of_int` が断った 0..=255 の外の `Int` を持つ。`Result<i64, ArithFault>` は 16 バイトで、展開されないときも2つのレジスタで返る。`Ctx` のメソッドの誤りは `Fault` (24 バイト) で、`From<ArithFault>` と `From<HeapError>` を持つ。24 バイトに収めるため、まれな誤り (`NotUtf8`、`Index`、`Exited`) の中身は `Box` に入れる。
+算術の誤りは `ArithFault` (`DivisionByZero`、`IntegerOverflow`、`FloatToInt(u64)`、`FixedDigits(i64)`、`NotScalar(i64)`、`NotByte(i64)`) で、`Copy` である。`FloatToInt` は `Int` に収まらない `Float` をビット列で持ち、`FixedDigits` は `Float.to_fixed` の範囲の外の桁数を持ち、`NotScalar` は `Char.of_int` が断ったスカラー値でない `Int` を、`NotByte` は `Byte.of_int` が断った 0..=255 の外の `Int` を持つ。`Result<i64, ArithFault>` は 16 バイトで、展開されないときも2つのレジスタで返る。`Ctx` のメソッドの誤りは `Fault` (24 バイト) で、`From<ArithFault>` と `From<HeapError>` を持つ。24 バイトに収めるため、まれな誤り (`NotUtf8`、`Index`、`Exited`、`Raised`) の中身は `Box` に入れる。
 
 | `Fault` | 中身 | 表示 |
 |---|---|---|
@@ -956,8 +956,9 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Stopped(Stop)` | `FileIn`、標準入力、`Child` の読みが読む途中で、`Child` への書き込みが書く途中で、`Ctx::proc_spawn` が子を起動する前に、`Ctx::proc_wait` が子を待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 | `InUse(StdStream)` | 標準のストリーム (`Stdin`、`Stdout`、`Stderr`) のハンドルが生きている間の、2つ目の `open` | `the standard input is already open`、`the standard output is already open`、`the standard error is already open` |
 | `Exited(Box<Exited>)` | 子が 0 でない終了コードで終わった。`Exited { program, code }` はプログラムの名前と終了コードを持つ。`Ctx::proc_exited` だけが作る | ``command `{program}` exited with code {code}`` |
+| `Raised(Box<Raised>)` | 起こし直された `IO` の誤り。`Raised { kind, message }` は `IOErrorKind` のタグ (`i64`) と元の誤りの文言 (`Box<str>`) を持つ | `{message}` |
 
-`Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`、`Exited`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す。([標準ライブラリ](stdlib.md) の「`try_io`」)。`Exited` のタグは `IO_OTHER` である。`IOErrorKind` に変種を足しても終了コードは持てないので、終了コードは文言で伝える。
+`Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`、`Exited`、`Raised`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す。([標準ライブラリ](stdlib.md) の「`try_io`」)。`Exited` のタグは `IO_OTHER` で、`Raised` のタグは持っている `kind` である。`IOErrorKind` に変種を足しても終了コードは持てないので、終了コードは文言で伝える。
 
 `Fault::panics` は、`try_panic` が捕まえる誤り (`Arith`、`Utf8`、`Index`、`InUse`) で真を返し、ほかでは偽を返す ([標準ライブラリ](stdlib.md) の「`try_panic`」)。値と入力で決まる誤りと、プログラムの順で決まる2つ目の `open` だけを `Panic` にし、どの呼び出しでも起きうるか起きた位置が決まらない誤り (`Heap`、`Output`、`Stopped`) は型に出さない。`io_error_kind` が `Some` を返す誤りとは重ならない。VM はこの2つで、誤りを `Panic` に届けるか、`IO` に届けるか、実行時エラーにするかを決める ([VM](vm.md) の「`IO` と `Panic` への中断」)。
 

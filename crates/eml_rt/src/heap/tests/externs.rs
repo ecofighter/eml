@@ -681,6 +681,19 @@ fn a_failed_wait_is_shown_as_waiting() {
 }
 
 /// 算術の誤りは2つのレジスタで返り、`Fault` は 24 バイトに収まる。
+/// `Raised` は起こし直された `IO` の誤りで、種類のタグと文言をそのまま持つ。`try_io` が捕まえ、`try_panic` は捕まえない。
+#[test]
+fn raised_is_shown_and_caught_as_io() {
+    use crate::externs::{Fault, IO_NOT_FOUND, Raised};
+    let raised = Fault::Raised(Box::new(Raised {
+        kind: IO_NOT_FOUND,
+        message: "no such file".into(),
+    }));
+    assert_eq!(raised.to_string(), "no such file");
+    assert_eq!(raised.io_error_kind(), Some(IO_NOT_FOUND));
+    assert!(!raised.panics());
+}
+
 #[test]
 fn faults_stay_small() {
     assert_eq!(std::mem::size_of::<Result<i64, ArithFault>>(), 16);

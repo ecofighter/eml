@@ -2310,6 +2310,7 @@ impl<M: Mode> Heap<M> {
         let mut objects = Objects::<M> {
             perms: Tracked(perms),
             owned,
+            shared: 0,
             seen,
             env: Tracked(env),
             owner: Ghost(s0.model@.owner),
@@ -2355,6 +2356,7 @@ impl<M: Mode> Heap<M> {
         }
         if M::CHECKED {
             mem::swap(&mut objects.owned, &mut self.owned);
+            self.stats.shared = self.stats.shared.wrapping_add(objects.shared);
         }
         match result {
             Ok(()) => Ok(()),

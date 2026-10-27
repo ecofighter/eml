@@ -963,6 +963,7 @@ impl<M: Mode> Heap<M> {
         let mut objects = Objects::<M> {
             perms: Tracked(perms),
             owned,
+            shared: 0,
             seen,
             env: Tracked(env),
             owner: Ghost(s0.model@.owner),

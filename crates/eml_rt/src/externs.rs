@@ -188,6 +188,15 @@ pub enum IndexFault {
     BytesLength { len: i64 },
 }
 
+/// 起こし直された `IO` の誤り (`Fault::Raised`)。
+#[derive(Debug, PartialEq, Eq)]
+pub struct Raised {
+    /// `IOErrorKind` のタグ。
+    pub kind: i64,
+    /// 元の誤りの文言。
+    pub message: Box<str>,
+}
+
 /// extern の誤り。位置は VM が付けるので持たない。24 バイトに収めるため (`faults_stay_small`)、まれな誤りの中身は
 /// `Box` に入れる。
 #[derive(Debug, PartialEq, Eq)]
@@ -210,6 +219,8 @@ pub enum Fault {
     InUse(StdStream),
     /// 子が 0 でない終了コードで終わった。`try_io` が捕まえ、`kind` は `Other` である。
     Exited(Box<Exited>),
+    /// タスクの失敗として起こし直された `IO` の誤り。`kind` は `IOErrorKind` のタグで、`message` は元の誤りの文言である。
+    Raised(Box<Raised>),
 }
 
 impl Fault {
@@ -221,6 +232,7 @@ impl Fault {
             Fault::Stdin(reason) => Some(reason_kind(*reason)),
             Fault::NotUtf8(_) => Some(IO_NOT_UTF8),
             Fault::Exited(_) => Some(IO_OTHER),
+            Fault::Raised(r) => Some(r.kind),
             Fault::Heap(_)
             | Fault::Arith(_)
             | Fault::Output(_)
@@ -244,7 +256,8 @@ impl Fault {
             | Fault::Stdin(_)
             | Fault::NotUtf8(_)
             | Fault::Stopped(_)
-            | Fault::Exited(_) => false,
+            | Fault::Exited(_)
+            | Fault::Raised(_) => false,
         }
     }
 }
@@ -1333,6 +1346,7 @@ impl fmt::Display for Fault {
                 IndexFault::BytesLength { len } => write!(f, "bytes length {len} is negative"),
             },
             Fault::Stopped(s) => write!(f, "{s}"),
+            Fault::Raised(r) => write!(f, "{}", r.message),
             Fault::Exited(e) => write!(f, "command `{}` exited with code {}", e.program, e.code),
             Fault::InUse(stream) => write!(
                 f,
