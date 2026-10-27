@@ -499,6 +499,12 @@ CI が見るのは合否だけである。テストの時間の条件 (「性能
 
 アクションは commit の SHA で固定し、版の名前をコメントに書く。runner の image は名前で固定し、上げるのは手で行う。nix のストアはキャッシュしない。install-nix-action には `GITHUB_TOKEN` を渡し、`github:` の input の取得が率の制限に当たらないようにする。token は nix.conf に入ってジョブの中で動くものから読めるが、権限は `contents: read` だけで、ジョブとともに切れるので受け入れる。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
 
+## クラウドのセッション
+
+Claude Code のクラウドのセッションでは、外への通信が proxy を通る。proxy は GitHub の archive の取得を断るが、git の clone は通す。flake の `github:` の input は archive で取るので、そのままでは `nix develop` が input の取得で止まる。
+
+`.claude/hooks/session-start.sh` が、SessionStart のフックでこれを補う。フックが動くのはクラウドのセッション (`CLAUDE_CODE_REMOTE=true`) だけである。`flake.lock` の `github:` の input を、同じ rev のまま `git+https` で `nix flake prefetch` して store に置く。input の store の道は中身の narHash で決まる。そのため、置いた後の `nix develop` は archive を取りに行かず、この文書のコマンドがそのまま動く。取った中身の hash が `flake.lock` の `narHash` と違えば、フックは誤りで止まる。最後に devShell を1回組み、コンテナのキャッシュに残す。
+
 ## よく使うコマンド
 
 dev プロファイル (`cargo nextest run` と `cargo test` もこれを使う) は opt-level 1 で、debug assertions は有効である。`--release` は `bench/*.sh` と、`#[ignore]` を付けた時間のテストだけで使う。デバッガで局所変数が最適化で消えるときは、`CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...` で一度だけ opt-level 0 のビルドを作る。
