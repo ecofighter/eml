@@ -158,6 +158,8 @@ R { f = <fn>, n = -3 } : R
 2. 型が `Show` を持ち、その `Show` が導出した instance (`deriving Show`)、タプルの構造的な instance (`()` を含む)、Prelude の `List` の instance のどれかなら、構造で書く。Prelude の `List` は、型の頭が `LangItems` の `list` であることで見分けるので、セッションの利用者が定義した `List` は含まない。Prelude の `Bool`、`Ordering`、`Option`、`Result` は導出した instance なので、構造で書く
 3. ほかの型 (`Int`、`String`、利用者が書いた `Show` の instance を持つ型) は、その型の `show_prec` で書く。入力の値そのものと `List` の要素は `show` で書く
 
+表示器は、抽象型 (`pub abstract data`) の値も、`Show` を持たなければ構造で書き、隠したコンストラクタの名前と中身を見せる。REPL は値を調べる道具なので、`abstract` は名前解決と型検査の規則で、表示器には効かない ([宣言](declarations.md) の「`pub`」)。
+
 構造で書く規則は導出した `Show` ([宣言](declarations.md) の「`deriving`」) と同じなので、`Show` を持つ型を構造で書いた結果は、上限で切れる所を除き、`show` の結果と同じ文字列になる。
 
 - 関数 (handler の継続を含む) は `<fn>` と書く

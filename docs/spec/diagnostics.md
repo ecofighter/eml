@@ -124,7 +124,7 @@ struct Fix {
 | E1055 | `SPREAD_NOT_AN_ARGUMENT` | コマンドリテラルの `\{..}` の穴が、プログラムの後の引数の全体でない ([式](expressions.md) の「コマンドリテラル」) |
 | E1056 | `COMMAND_WITHOUT_PROGRAM` | コマンドリテラルに引数が1つもなく、プログラムがない ([式](expressions.md) の「コマンドリテラル」) |
 | E1057 | `ROW_BOUND_NOT_DECLARED` | row 変数の上限 `never` を、シグネチャが付けていない変数の本体の型の明示か `data` のフィールドに書いた、または操作のシグネチャに書いた ([型と Kind](types.md) の「row 変数の多重度の上限」) |
-| E1058 | `ABSTRACT_MEMBER` | 抽象型 (`pub abstract data`) のコンストラクタか、抽象エフェクト (`pub abstract effect`) の操作を、宣言したモジュールの外で作る式、パターン、perform、handler の節、import の並びの `T(..)` と `E(..)` に書いた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
+| E1058 | `ABSTRACT_MEMBER` | 抽象型 (`pub abstract data`) のコンストラクタか、抽象エフェクト (`pub abstract effect`) の操作を、宣言したモジュールの外で作る式、パターン、perform、handler の節、import の並び (`T(..)`、`E(..)`、操作の名前) に書いた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |

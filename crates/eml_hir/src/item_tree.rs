@@ -197,11 +197,11 @@ pub struct ImportItem {
 pub enum ImportName {
     /// 小文字の名前か `(op)`。
     Value { name: String, range: TextRange },
-    /// 大文字の名前。`T(..)` / `E(..)` なら `all` が真。
+    /// 大文字の名前。`T(..)` / `E(..)` なら、`all` が `(..)` の位置を持つ。
     Type {
         name: String,
         range: TextRange,
-        all: bool,
+        all: Option<TextRange>,
     },
 }
 
@@ -805,7 +805,7 @@ fn import_name(name: &ast::ImportName) -> Option<ImportName> {
             SyntaxKind::UIDENT => ImportName::Type {
                 name: text,
                 range,
-                all: name.all_constructors(),
+                all: name.all_constructors_range(),
             },
             _ => ImportName::Value { name: text, range },
         });

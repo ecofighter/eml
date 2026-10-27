@@ -4,7 +4,6 @@
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange, TextSize};
 use eml_extern::{ExternEffect, ExternType};
-use eml_syntax::{Parse, ast};
 use la_arena::{Idx, RawIdx};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -677,8 +676,16 @@ impl ModuleScope {
                 unusable = true;
                 continue;
             }
-            if definition.visibility == Visibility::Public {
-                return Some(definition.item);
+            match definition.visibility {
+                Visibility::Public => return Some(definition.item),
+                // 抽象エフェクトの操作は、標準ライブラリのものも「定義がない」とせず E1058 にする
+                // (docs/spec/modules.md の「公開の範囲」)
+                Visibility::Abstract => {
+                    let hidden = self.hidden(definition);
+                    diagnostics.push(abstract_member(file, range, name, &hidden));
+                    return None;
+                }
+                Visibility::Private => {}
             }
             if self.origin == ModuleOrigin::Std {
                 break;
@@ -836,7 +843,7 @@ impl Imports {
                             Some((scope, scope.export_type(name, (file, *range), diagnostics)?))
                         }) else {
                             push_source(&mut imports.types, name, None, import.range);
-                            imports.unknown_parts |= *all;
+                            imports.unknown_parts |= all.is_some();
                             continue;
                         };
                         push_source(
@@ -845,7 +852,7 @@ impl Imports {
                             public.then_some(item),
                             import.range,
                         );
-                        if *all {
+                        if let Some(all) = all {
                             let mut hidden = false;
                             for (part, value) in scope.parts.get(&item).into_iter().flatten() {
                                 // 抽象型と抽象エフェクトの部品は取り込まず、`(..)` で1回だけ報告する
@@ -866,8 +873,7 @@ impl Imports {
                                 );
                             }
                             if hidden {
-                                let at = all_range(&module.parse, *range).unwrap_or(*range);
-                                diagnostics.push(abstract_import(file, at, name, item));
+                                diagnostics.push(abstract_import(file, *all, name, item));
                             }
                         }
                     }
@@ -966,21 +972,28 @@ pub(crate) fn not_in_module(
     )
 }
 
-/// 並びの名前 `T(..)` の `(..)` の位置。
-fn all_range(parse: &Parse, name: TextRange) -> Option<TextRange> {
-    parse
-        .items()?
-        .filter_map(|item| match item {
-            ast::Item::ImportItem(import) => import.list(),
-            _ => None,
-        })
-        .flat_map(|list| list.names())
-        .find(|listed| {
-            listed
-                .name()
-                .is_some_and(|name_ref| name_ref.token().text_range() == name)
-        })?
-        .all_constructors_range()
+/// 別のモジュールの抽象型のコンストラクタか抽象エフェクトの操作を、使う位置か import の並びに書いた (E1058)。名前は
+/// 見えるが、宣言したモジュールの外では使えない (docs/spec/modules.md の「公開の範囲」)。
+pub(crate) fn abstract_member(
+    file: FileId,
+    range: TextRange,
+    name: &str,
+    hidden: &Hidden,
+) -> Diagnostic {
+    let (part, owner) = if hidden.effect {
+        ("operation", "effect")
+    } else {
+        ("constructor", "type")
+    };
+    Diagnostic::error(
+        codes::ABSTRACT_MEMBER,
+        format!(
+            "{part} `{name}` of the abstract {owner} `{}` is not visible outside `{}`",
+            hidden.owner, hidden.module
+        ),
+        Label::new(file, range, "hidden by `abstract`"),
+    )
+    .with_secondary(Label::new(hidden.file, hidden.range, "declared here"))
 }
 
 /// 抽象型か抽象エフェクトの `T(..)` (E1058)。型の名前だけは取り込むので、`T` と書けば足りる。

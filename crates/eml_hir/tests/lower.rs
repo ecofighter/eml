@@ -1130,3 +1130,39 @@ fn an_abstract_constructor_field_may_use_a_private_type() {
     let text = "data Secret = | S\n\npub abstract data Sealed = | Sealed Secret\n\npub abstract data Pair = | Pair { left : Secret, right : Int }";
     assert_eq!(diagnostics(text), Vec::<String>::new());
 }
+
+#[test]
+fn an_abstract_operation_named_in_an_import_list_is_hidden() {
+    let lib = "pub abstract effect Ping where\n  ping : Unit -> Int";
+    let entry = "import Lib (ping)\n\nf : Unit -> <Lib.Ping> Int\nf () = ping ()";
+    // 並びの位置に1つだけ出し、本体の `ping` には重ねない
+    insta::assert_snapshot!(module_report(entry, &[("Lib.em", lib)]), @"
+    E1058 test.em 1:13 operation `ping` of the abstract effect `Ping` is not visible outside `Lib`
+      test.em 1:13 hidden by `abstract`
+      Lib.em 2:3 declared here
+    ");
+    // 標準ライブラリの抽象エフェクトの操作も、「定義がない」とせず E1058 にする
+    let std = [
+        ("Prelude.em", eml_hir::PRELUDE_SOURCE),
+        eml_test_support::std_module("Fs.em"),
+        eml_test_support::std_module("FileIn.em"),
+        eml_test_support::std_module("FileOut.em"),
+        eml_test_support::std_module("String.em"),
+        eml_test_support::std_module("Bytes.em"),
+        eml_test_support::std_module("List.em"),
+        eml_test_support::std_module("Char.em"),
+        eml_test_support::std_module("Byte.em"),
+        eml_test_support::std_module("Iter.em"),
+        eml_test_support::std_module("Yield.em"),
+        ("Ping.em", lib),
+    ];
+    let lowered = eml_test_support::lower(eml_test_support::with_std(&std, "import Ping (ping)"));
+    insta::assert_snapshot!(
+        eml_test_support::full_with_paths(lowered.files(), &lowered.diagnostics),
+        @"
+    E1058 test.em 1:14 operation `ping` of the abstract effect `Ping` is not visible outside `Std.Ping`
+      test.em 1:14 hidden by `abstract`
+      <std>/Ping.em 2:3 declared here
+    "
+    );
+}

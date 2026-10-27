@@ -4,9 +4,22 @@ expression: rendered
 input_file: tests/ui/check-fail/names/abstract_operation/main.em
 ---
 [E1058] Error: operation `ping` of the abstract effect `Ping` is not visible outside `Lib`
-   ╭─[ check-fail/names/abstract_operation/main.em:7:39 ]
+   ╭─[ check-fail/names/abstract_operation/main.em:4:13 ]
    │
- 7 │   println (show (Lib.answer (fn () -> Lib.ping ())))
+ 4 │ import Lib (ping)
+   │             ──┬─  
+   │               ╰─── hidden by `abstract`
+   │
+   ├─[ check-fail/names/abstract_operation/Lib.em:3:3 ]
+   │
+ 3 │   ping : Unit -> Int
+   │   ──┬─  
+   │     ╰─── declared here
+───╯
+[E1058] Error: operation `ping` of the abstract effect `Ping` is not visible outside `Lib`
+   ╭─[ check-fail/names/abstract_operation/main.em:8:39 ]
+   │
+ 8 │   println (show (Lib.answer (fn () -> Lib.ping ())))
    │                                       ────┬───  
    │                                           ╰───── hidden by `abstract`
    │
@@ -17,15 +30,15 @@ input_file: tests/ui/check-fail/names/abstract_operation/main.em
    │     ╰─── declared here
 ───╯
 [E1058] Error: operation `ping` of the abstract effect `Ping` is not visible outside `Lib`
-   ╭─[ check-fail/names/abstract_operation/main.em:9:11 ]
-   │
- 9 │     | ctl Lib.ping () k -> k 0
-   │           ────┬───  
-   │               ╰───── hidden by `abstract`
-   │
-   ├─[ check-fail/names/abstract_operation/Lib.em:3:3 ]
-   │
- 3 │   ping : Unit -> Int
-   │   ──┬─  
-   │     ╰─── declared here
-───╯
+    ╭─[ check-fail/names/abstract_operation/main.em:10:11 ]
+    │
+ 10 │     | ctl Lib.ping () k -> k 0
+    │           ────┬───  
+    │               ╰───── hidden by `abstract`
+    │
+    ├─[ check-fail/names/abstract_operation/Lib.em:3:3 ]
+    │
+  3 │   ping : Unit -> Int
+    │   ──┬─  
+    │     ╰─── declared here
+────╯

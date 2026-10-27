@@ -147,7 +147,7 @@ fn import_names(text: &str, import: &ImportItem) -> Vec<String> {
             }
             ImportName::Type { name, range, all } => {
                 assert_eq!(&text[*range], name.as_str());
-                if *all {
+                if all.is_some() {
                     format!("type {name} (..)")
                 } else {
                     format!("type {name}")

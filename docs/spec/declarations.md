@@ -420,7 +420,7 @@ Prelude の instance は次のとおりである。
 - シグネチャ、`data`、`type`、`effect`、fixity、`class` に `pub` を付けると公開される。付けないものはモジュールの中だけで見える。`pub class` は、クラスとそのメソッドをまとめて公開する。instance は名前を持たず、いつもプログラム全体で見えるので、`pub` を付けられない
 - 等式と import には `pub` を付けられず、付けると構文エラー (E0011) になる。等式で定義する関数は、シグネチャに `pub` を付けて公開する
 - `pub data` は、型とコンストラクタを公開する。`pub abstract data` は型の名前だけを公開し、コンストラクタと名前付きのフィールドを宣言したモジュールの中だけで見えるようにする (抽象型。[モジュールと名前解決](modules.md) の「公開の範囲」)。`pub abstract effect` は同じくエフェクトの名前だけを公開する ([エフェクトと handler](effects.md) の「抽象エフェクト」)
-- 抽象型の Kind はフィールドから普通の規則で決まり ([型と Kind](types.md))、`deriving` も書ける。導出した `Eq`、`Ord`、`Show` は構造で比べて表示するので、抽象型の中身をそのまま見せる (`show` はコンストラクタの名前を書くが、その名前は外から書けない)。隠したい型には `deriving` を書かず、instance を自分で書く
+- 抽象型の Kind はフィールドから普通の規則で決まり ([型と Kind](types.md))、`deriving` も書ける。導出した `Eq`、`Ord`、`Show` は構造で比べて表示するので、抽象型の中身をそのまま見せる (`show` はコンストラクタの名前を書くが、その名前は外から書けない)。隠したい型には `deriving` を書かず、instance を自分で書く。`abstract` は REPL の表示器からは値を隠さない。`Show` のない抽象型の値も構造で表示する ([REPL の端末](repl.md) の「値の書き方」)
 - `abstract` を付けられるのは `pub data` と `pub effect` だけで、`extern data` (コンストラクタがない)、`extern effect` (いつも隠す)、`type`、シグネチャ、fixity、`class` に付けると E0011 である。`=` のない `pub abstract data` は、ほかの `data` と同じく E1025 である
 - `pub` を付けた item の型に、同じモジュールの `pub` でない型かエフェクトが現れたら E1032 にする。制約に書いた `pub` でないクラスも同じである ([モジュールと名前解決](modules.md) の「公開の範囲」)
 
