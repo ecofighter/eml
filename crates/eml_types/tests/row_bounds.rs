@@ -342,3 +342,28 @@ fn a_value_use_of_par_keeps_the_bound() {
         ]
     );
 }
+
+/// `var` の読み書きは `var` のエフェクトの操作なので、`var` を使う子も上限を超える
+/// (docs/spec/types.md の「`var` の変数」)。
+#[test]
+fn a_par_child_that_uses_a_var_exceeds_the_bound() {
+    let text = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  var x = 1\n  let (a, b) = Par.par (fn () -> x) (fn () -> 3)\n  println (show (a + b))";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2020 6:16 the row passed to `par` may perform `var x`, but `par` allows only `never` operations"
+        ]
+    );
+}
+
+/// 操作が `once` だけのエフェクトも上限を超える。
+#[test]
+fn a_par_child_that_performs_a_once_operation_exceeds_the_bound() {
+    let text = "import Std.Par\n\neffect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = handle Par.par (fn () -> ask ()) (fn () -> 3) with\n    | fn ask () -> 1\n  println (show (a + b))";
+    assert_eq!(
+        check_short(text),
+        [
+            "E2020 8:23 the row passed to `par` may perform `Ask`, but `par` allows only `never` operations"
+        ]
+    );
+}
