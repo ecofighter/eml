@@ -305,6 +305,7 @@ dependencies = [
  "eml_rt",
  "eml_test_support",
  "insta",
+ "libc",
  "rustc-hash 2.1.3",
 ]
 

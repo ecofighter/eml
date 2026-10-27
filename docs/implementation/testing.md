@@ -197,7 +197,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `roots.rs` は、セッションの根を読み書きする基本操作を確かめる。根に置いた値は実行の終わりに VM が手放すので、検査モードのリークの検査も通る ([LIR](../spec/lir.md) の「基本操作」)
 - `structs.rs` は、複数の値の呼び出しと戻り、構造体を箱で渡す `apply` を確かめる。構造体を持つ手書きの LIR をパスに通して実行し、ダミーを受ける命令はパスの後の形の LIR を手で書いて確かめる ([VM](../spec/vm.md) の「呼び出しと戻り」と「データとクロージャ」)
 - `bench.rs` は、基準のプログラムの VM の `RunStats` を固定する。`scaling.rs` は、仕事の回数と物体とスタックの語の数を上限と比べる (どちらも下の「性能のテスト」)
-- `par.rs` は、`par` の fork と join を手書きの LIR で確かめる ([VM](../spec/vm.md) の「`par` の fork と join」)。fork の関数と起こし直しの関数は、evidence passing の後の形で手で書く。両方の子の値、左と右の中断といちばん左の中断、mask の深さ、子の中と親の `try_panic`、捕まえられなかった子の `Panic` の文言、入れ子の `par`、子の誤りの規則 (止めかたの種類、左が先、中断で救わないこと)、子へ移した `MutArray` と `lin` の値の移し戻し、子の漏れの `TransferLeak`、方針ごとの横取りを確かめる。実行は検査モードの逐次と seed 1 と 2026 で流して出力、結果、スケジュールによらない `RunStats` を比べ、速いモードの逐次でも流す。子の誤りの規則のうち、左の中断で救わないことと左の誤りが先であることは、ソースから作ったコードでも確かめる (`par::source`)。既定の深さの上限の `DepthLimit` は UI テストで起こすには大きすぎるので、`max_depth` を 1000 にして流す
+- `par.rs` は、`par` の fork と join を手書きの LIR で確かめる ([VM](../spec/vm.md) の「`par` の fork と join」)。fork の関数と起こし直しの関数は、evidence passing の後の形で手で書く。両方の子の値、左と右の中断といちばん左の中断、mask の深さ、子の中と親の `try_panic`、捕まえられなかった子の `Panic` の文言、入れ子の `par`、子の誤りの規則 (止めかたの種類、左が先、中断で救わないこと)、子へ移した `MutArray` と `lin` の値の移し戻し、子の漏れの `TransferLeak`、方針ごとの横取りを確かめる。実行は検査モードの逐次、seed 1 と 2026、普通の方針で流して出力、結果、スケジュールによらない `RunStats` を比べ、速いモードの逐次でも流す。普通の方針の run は監視のスレッドの刻みで横取りが起きるかが変わるが、出力と比べる欄はスケジュールによらないので合否は変わらない。監視のスレッドが長い子を横取りさせることは `the_monitor_preempts_a_long_par_child` が確かめる。刻みを数えるので `#[ignore]` を付け、release ビルドで流す。監視のスレッドか普通の方針を変えたときに流す。子の誤りの規則のうち、左の中断で救わないことと左の誤りが先であることは、ソースから作ったコードでも確かめる (`par::source`)。既定の深さの上限の `DepthLimit` は UI テストで起こすには大きすぎるので、`max_depth` を 1000 にして流す
 - `miri.rs` は、Miri で流す小さい実行のテストである (上の「Miri」)
 - `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 を確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
 
@@ -555,6 +555,7 @@ nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace 
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
+cargo nextest run --release -p eml_vm --test integration --run-ignored ignored-only the_monitor_preempts_a_long_par_child   # 監視のスレッドの横取り (性能のテスト)
 cargo test -p eml_vm --test integration scaling::                              # VM の仕事の回数とスタックの語の数 (ふだんの実行にも入る)
 cargo test -p eml_vm --test integration bench::                                # 基準のプログラムの回数 (同上)
 bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)

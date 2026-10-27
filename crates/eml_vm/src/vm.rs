@@ -1174,7 +1174,8 @@ fn resume<R: Exec>(
     let evv = std::mem::replace(&mut incoming.evv, Word::UNIT);
     let saved = unsafe { ctx.switch_task(evv, incoming.worker, incoming.depth_offset) };
     let mut prev = std::mem::replace(task, incoming);
-    let prev_id = std::mem::replace(&mut sched.current, next);
+    let prev_id = sched.current;
+    sched.set_current(next);
     sched.note_depth(&prev);
     match keep {
         Some(state) => {

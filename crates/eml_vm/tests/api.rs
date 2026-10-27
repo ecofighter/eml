@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
-    AnyMachine, CodeBase, Control, Limits, Machine, RunConfig, RuntimeError, Sched, Scheduler,
-    Seeded, Sequential, Stop, Task, VmFault,
+    AnyMachine, CodeBase, Control, Limits, Machine, Normal, RunConfig, RuntimeError, Sched,
+    Scheduler, Seeded, Sequential, Stop, Task, VmFault,
 };
 
 use crate::common::parse;
@@ -28,6 +28,8 @@ fn a_code_base_is_shared_and_a_task_moves() {
 /// 「タスクとスケジュール」)。
 #[test]
 fn a_scheduler_moves_and_a_sched_is_shared() {
+    send::<Normal>();
+    send::<Scheduler<Normal>>();
     send::<Scheduler<Sequential>>();
     send::<Scheduler<Seeded>>();
     send::<Sched>();
@@ -79,6 +81,7 @@ fn the_default_sched_is_sequential() {
 /// CLI の `--sched` が読む綴り (docs/spec/stdlib.md の「起動」)。seed は `u64` の10進数である。
 #[test]
 fn a_sched_parses_and_rejects() {
+    assert_eq!("normal".parse(), Ok(Sched::Normal));
     assert_eq!("sequential".parse(), Ok(Sched::Sequential));
     assert_eq!("seeded:0".parse(), Ok(Sched::Seeded(0)));
     assert_eq!("seeded:2026".parse(), Ok(Sched::Seeded(2026)));
@@ -90,6 +93,7 @@ fn a_sched_parses_and_rejects() {
         "",
         "bogus",
         "Sequential",
+        "Normal",
         " sequential",
         "seeded",
         "seeded:",
@@ -103,7 +107,7 @@ fn a_sched_parses_and_rejects() {
         let error = text.parse::<Sched>().unwrap_err();
         assert_eq!(
             error,
-            format!("expected `sequential` or `seeded:<n>`, found `{text}`")
+            format!("expected `normal`, `sequential` or `seeded:<n>`, found `{text}`")
         );
     }
 }
