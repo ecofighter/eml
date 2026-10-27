@@ -1,0 +1,344 @@
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run@async__await_cancelled.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run@async__await_cancelled.em.snap
+new file mode 100644
+index 0000000..e66aefc
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run@async__await_cancelled.em.snap
+@@ -0,0 +1,11 @@
++---
++source: crates/eml_cli/tests/ui.rs
++assertion_line: 329
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
++input_file: tests/ui/run/async/await_cancelled.em
++---
++--- stdout ---
++await: Cancelled: task was cancelled
++requested False
++after run
++--- stderr ---
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run@async__cancel_requested.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run@async__cancel_requested.em.snap
+new file mode 100644
+index 0000000..72b8a0f
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run@async__cancel_requested.em.snap
+@@ -0,0 +1,12 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
++input_file: tests/ui/run/async/cancel_requested.em
++---
++--- stdout ---
++before False
++after True
++in shield False
++scope: Cancelled: task was cancelled
++outside False
++--- stderr ---
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run@async__check_cancelled.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run@async__check_cancelled.em.snap
+new file mode 100644
+index 0000000..c03c6da
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run@async__check_cancelled.em.snap
+@@ -0,0 +1,8 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
++input_file: tests/ui/run/async/check_cancelled.em
++---
++--- stdout ---
++busy: Cancelled: task was cancelled
++--- stderr ---
+diff --git a/crates/eml_extern/src/lib.rs b/crates/eml_extern/src/lib.rs
+index 37ed403..8a2f8ed 100644
+--- a/crates/eml_extern/src/lib.rs
++++ b/crates/eml_extern/src/lib.rs
+@@ -1168,6 +1168,8 @@ table! {
+             Unit,
+             Purity::Effectful,
+         ),
++        AsyncCancelPoint => row("Std.Async.cancel_point", &[Unit], Enum, Purity::Effectful),
++        AsyncSpendBudget => row("Std.Async.spend_budget", &[Unit], Enum, Purity::Effectful),
+         AsyncShieldEnter => row("Std.Async.shield_enter", &[Unit], Unit, Purity::Effectful),
+         AsyncShieldLeave => row("Std.Async.shield_leave", &[Unit], Unit, Purity::Effectful),
+     }
+@@ -1200,6 +1202,8 @@ impl Extern {
+                 | Extern::AsyncCancelScopeRaw
+                 | Extern::AsyncFailScopeIo
+                 | Extern::AsyncFailScopePanic
++                | Extern::AsyncCancelPoint
++                | Extern::AsyncSpendBudget
+         )
+     }
+ }
+diff --git a/crates/eml_vm/src/cells.rs b/crates/eml_vm/src/cells.rs
+index 65f670c..390e62c 100644
+--- a/crates/eml_vm/src/cells.rs
++++ b/crates/eml_vm/src/cells.rs
+@@ -20,6 +20,8 @@ pub(crate) const WOKE: i64 = 0;
+ pub(crate) const CANCELLED: i64 = 1;
+ /// `IOErrorKind` の `Cancelled` のタグ。この種類で終わったタスクは失敗に数えない。
+ pub(crate) const IO_CANCELLED: i64 = 5;
++/// 待たずに済む速い道の予算 (docs/spec/stdlib.md の「操作の予算」)。
++const BUDGET: u32 = 128;
+ 
+ /// 登録表のセルの番号。添字を使い回すので、generation で古い番号を見分ける。
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+@@ -159,6 +161,8 @@ struct TaskCell {
+     wait: Option<Wait>,
+     cancel: bool,
+     shield: u32,
++    /// 速い道の残りの予算。始めるときと再開するときに戻す。
++    budget: u32,
+     /// 入れ子の `run` で待っている根。
+     run: Option<CellRef>,
+     detached: bool,
+@@ -430,6 +434,7 @@ impl Registry {
+             wait: None,
+             cancel: flag,
+             shield: 0,
++            budget: BUDGET,
+             run: None,
+             detached: false,
+         }));
+@@ -453,6 +458,7 @@ impl Registry {
+             return Err(CellFault::Internal("a task starts twice"));
+         }
+         task.phase = Phase::Running;
++        task.budget = BUDGET;
+         Ok(task.spawner)
+     }
+ 
+@@ -464,6 +470,7 @@ impl Registry {
+             return Err(CellFault::Internal("a task resumes without waiting"));
+         }
+         task.phase = Phase::Running;
++        task.budget = BUDGET;
+         let ready = matches!(task.wait.take(), Some(Wait::Ready));
+         if ready && wake == WOKE && self.point(cell)? {
+             self.stats.cancels += 1;
+@@ -785,6 +792,23 @@ impl Registry {
+         Ok(())
+     }
+ 
++    /// 取り消しの地点が投げるかを答える。タスクの外では偽である。真の答えは取り消しが届いたものとして数える。
++    pub(crate) fn cancel_point(&mut self, me: Option<CellRef>) -> Result<bool, CellFault> {
++        let Some(me) = me else {
++            return Ok(false);
++        };
++        let point = self.point(me)?;
++        self.stats.cancels += u64::from(point);
++        Ok(point)
++    }
++
++    /// 速い道の予算を1つ使う。使い切ったら真を返し、再開まで真のままである。
++    pub(crate) fn spend_budget(&mut self, me: CellRef) -> Result<bool, CellFault> {
++        let task = self.task_mut(me)?;
++        task.budget = task.budget.saturating_sub(1);
++        Ok(task.budget == 0)
++    }
++
+     /// 生きているスコープのセル。閉じていても返す。離れたスコープと前の run のスコープは `None` である。
+     pub(crate) fn scope_cell(&mut self, s: i64) -> Option<CellRef> {
+         let cell = CellRef::decode(s);
+diff --git a/crates/eml_vm/src/vm.rs b/crates/eml_vm/src/vm.rs
+index b5c2736..0e085cd 100644
+--- a/crates/eml_vm/src/vm.rs
++++ b/crates/eml_vm/src/vm.rs
+@@ -1795,6 +1795,15 @@ fn async_op<R: Exec>(
+                 .fail_scope(task.raw(arg(0)), cells::Outcome::Panic(message))?;
+             task.set(dst, Word::UNIT);
+         }
++        Extern::AsyncCancelPoint => {
++            let b = sched.cells.cancel_point(task.cell)?;
++            task.set_raw(dst, i64::from(b));
++        }
++        Extern::AsyncSpendBudget => {
++            let me = current_cell(task)?;
++            let b = sched.cells.spend_budget(me)?;
++            task.set_raw(dst, i64::from(b));
++        }
+         Extern::AsyncShieldEnter => {
+             let me = current_cell(task)?;
+             sched.cells.shield_enter(me)?;
+@@ -2666,7 +2675,9 @@ fn run_extern<R: Exec>(
+             | Extern::AsyncLeaveScope
+             | Extern::AsyncCancelScopeRaw
+             | Extern::AsyncFailScopeIo
+-            | Extern::AsyncFailScopePanic => {
++            | Extern::AsyncFailScopePanic
++            | Extern::AsyncCancelPoint
++            | Extern::AsyncSpendBudget => {
+                 return Err(VmFault::Internal("Async externs run through Op::Async"));
+             }
+         }
+diff --git a/crates/eml_vm/tests/tasks.rs b/crates/eml_vm/tests/tasks.rs
+index 973aa4a..87c3582 100644
+--- a/crates/eml_vm/tests/tasks.rs
++++ b/crates/eml_vm/tests/tasks.rs
+@@ -291,3 +291,28 @@ main () =
+         (3, 3, 0, 2)
+     );
+ }
++/// `check_cancelled` は 128 回目の呼び出しで予算を使い切り、1回だけ `yield_now` でほかのタスクに worker を渡す。
++#[test]
++fn the_budget_yields_once_every_128_checks() {
++    let src = |n: u32| {
++        format!(
++            "\
++import Async (Async)
++import Async
++checks : Int -> <IO, Panic, Async> Unit
++checks n =
++  if n == 0 then ()
++  else
++    Async.check_cancelled ()
++    checks (n - 1)
++main : Unit -> <IO, Panic> Unit
++main () = Async.run (fn () -> checks {n})
++"
++        )
++    };
++    for (n, parks) in [(127, 0), (128, 1), (256, 2)] {
++        let (_, stats) = run_stats(&src(n));
++        let s = stats.expect("the checked run");
++        assert_eq!((s.parks, s.cancels), (parks, 0), "{n} checks");
++    }
++}
+diff --git a/docs/spec/stdlib.md b/docs/spec/stdlib.md
+index d7a8a85..b204922 100644
+--- a/docs/spec/stdlib.md
++++ b/docs/spec/stdlib.md
+@@ -991,6 +991,10 @@ pub data Failure =
+ 
+ (仮)
+ 
++### 操作の予算
++
++(仮)
++
+ ### `Failure` と `try_all`
+ 
+ ```haskell
+diff --git a/std/Async.em b/std/Async.em
+index 0112908..2502d28 100644
+--- a/std/Async.em
++++ b/std/Async.em
+@@ -107,6 +107,18 @@ yield_now () =
+     | Woke -> ()
+     | Cancelled -> raise_cancelled ()
+ 
++-- 待たない取り消しの地点。速い道として予算を1つ使い、使い切ったらほかのタスクに worker を渡す
++-- (docs/spec/stdlib.md の「操作の予算」)
++pub check_cancelled : Unit -> <IO, Async> Unit
++check_cancelled () =
++  if cancel_point () then raise_cancelled ()
++  else if spend_budget () then yield_now ()
++  else ()
++
++-- 取り消しの地点が投げるときだけ真を返すので、`shield` の中では偽である
++pub cancel_requested : Unit -> <IO> Bool
++cancel_requested () = cancel_point ()
++
+ -- 中の取り消しの地点はビットも旗も見ない。立っているビットか旗は、抜けた後の最初の地点で投げる
+ pub shield : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a
+ shield f =
+@@ -172,3 +184,5 @@ extern fail_scope_io    : Scope -> IOErrorKind -> String -> <IO> Unit
+ extern fail_scope_panic : Scope -> String -> <IO> Unit
+ extern shield_enter     : Unit -> <IO> Unit
+ extern shield_leave     : Unit -> <IO> Unit
++extern cancel_point     : Unit -> <IO> Bool
++extern spend_budget     : Unit -> <IO> Bool
+diff --git a/tests/ui/run/async/await_cancelled.em b/tests/ui/run/async/await_cancelled.em
+new file mode 100644
+index 0000000..e3c2b54
+--- /dev/null
++++ b/tests/ui/run/async/await_cancelled.em
+@@ -0,0 +1,23 @@
++-- 取り消されたタスクを待つと、`await` は `Cancelled` を起こし直す。待った側は取り消されていないので、
++-- `cancel_requested` は偽で、run も失敗しない (docs/spec/stdlib.md の「取り消し」)。
++import Async (Async)
++
++spin : Int -> <Panic> Int
++spin n = if n == 0 then 0 else spin (n - 1)
++
++body : Unit -> <IO, Panic, Async> Unit
++body () =
++  let t = Async.start (fn () ->
++    Async.scope (fn s ->
++      Async.cancel_scope s
++      Async.yield_now ()))
++  let _ = spin 40
++  match try_io (fn () -> Async.await t) with
++    | Ok () -> println "unreachable"
++    | Err e -> println "await: \{show e.kind}: \{e}"
++  println "requested \{show (Async.cancel_requested ())}"
++
++main : Unit -> <IO, Panic> Unit
++main () =
++  Async.run body
++  println "after run"
+diff --git a/tests/ui/run/async/cancel_requested.em b/tests/ui/run/async/cancel_requested.em
+new file mode 100644
+index 0000000..02470f9
+--- /dev/null
++++ b/tests/ui/run/async/cancel_requested.em
+@@ -0,0 +1,30 @@
++-- `cancel_requested` はスコープの旗も読み、`shield` の中では偽を返す。`check_cancelled` は旗で投げ、スコープを出た
++-- 後は偽に戻る (docs/spec/stdlib.md の「取り消し」)。
++import Async (Async)
++
++spin : Int -> <Panic> Int
++spin n = if n == 0 then 0 else spin (n - 1)
++
++inner : Async.Scope -> <IO, Panic, Async> Unit
++inner s =
++  Async.spawn_in s (fn () ->
++    let _ = spin 40
++    ())
++  let _ = spin 40
++  println "before \{show (Async.cancel_requested ())}"
++  Async.cancel_scope s
++  println "after \{show (Async.cancel_requested ())}"
++  let shielded = Async.shield (fn () -> Async.cancel_requested ())
++  println "in shield \{show shielded}"
++  Async.check_cancelled ()
++  println "unreachable"
++
++body : Unit -> <IO, Panic, Async> Unit
++body () =
++  match try_io (fn () -> Async.scope inner) with
++    | Ok () -> println "unreachable"
++    | Err e -> println "scope: \{show e.kind}: \{e}"
++  println "outside \{show (Async.cancel_requested ())}"
++
++main : Unit -> <IO, Panic> Unit
++main () = Async.run body
+diff --git a/tests/ui/run/async/check_cancelled.em b/tests/ui/run/async/check_cancelled.em
+new file mode 100644
+index 0000000..aec1e86
+--- /dev/null
++++ b/tests/ui/run/async/check_cancelled.em
+@@ -0,0 +1,24 @@
++-- 待たない純粋なループも、`check_cancelled` を呼べば取り消せる。予算を使い切るたびにほかのタスクへ worker を渡すので、
++-- 取り消すタスクも動ける (docs/spec/stdlib.md の「取り消し」「操作の予算」)。
++import Async (Async)
++
++spin : Int -> <Panic> Int
++spin n = if n == 0 then 0 else spin (n - 1)
++
++busy : Int -> <IO, Panic, Async> Int
++busy n =
++  Async.check_cancelled ()
++  busy (n + 1)
++
++body : Unit -> <IO, Panic, Async> Unit
++body () =
++  let t = Async.start (fn () ->
++    match try_io (fn () -> busy 0) with
++      | Ok n -> println "unreachable \{show n}"
++      | Err e -> println "busy: \{show e.kind}: \{e}")
++  let _ = spin 40
++  Async.yield_now ()
++  Async.cancel t
++
++main : Unit -> <IO, Panic> Unit
++main () = Async.run body
