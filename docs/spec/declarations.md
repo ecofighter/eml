@@ -367,7 +367,7 @@ pub data Either a b =
 ```
 
 - `::` の fixity は、`++` と同じく `infixr 5` で、Haskell の `:` と同じである
-- `Result` の型引数は `Result e a` の順で、Haskell の `Either e a` と同じである。`Err`、`Ok` の順に宣言するので、導出した `Ord` では `Err _ < Ok _` になる
+- `Result` の型引数は `Result e a` の順で、Prelude の `Either e a` (下の項目) と同じである。`Err`、`Ok` の順に宣言するので、導出した `Ord` では `Err _ < Ok _` になる
 - `Either a b` は Haskell の `Either` と同じ型で、`Left`、`Right` の順に宣言するので、導出した `Ord` では `Left _ < Right _` になる。`Result` と違って、どちらの側も失敗を表さない。2つの結果のどちらかを持つ値に使う
 - `List` の導出した `Ord` は `Nil < _ :: _` と要素ごとの辞書順で、Haskell のリストの順と同じである
 - `List` の `Show` は手で書いた instance で、`[1, 2]` の形で表示する。空のリストは `[]` である。要素は `show` で表示し、`, ` で区切る。`show_prec` は既定のままにする。角括弧で閉じているので、引数の位置でも括弧が要らないためである。表示は左辺の文字列を一意なまま伸ばして作るので、リストの長さに比例する時間で済む ([オブジェクトモデル](object-model.md) の「文字列の操作」)。`Option`、`Result`、`Either` の導出した `Show` は、`Some [1]`、`Some (-1)`、`Ok "a"`、`Left 1` のように表示する
