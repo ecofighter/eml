@@ -32,7 +32,7 @@
 - `Float` (IEEE 754 の倍精度) のリテラル、算術、比較と、Python の `repr` の形の表示。変換と数学の関数は `Std.Float` にある ([宣言](../spec/declarations.md) の「Prelude のクラス」、[標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」)
 - 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)
 - 連想配列と集合: キーの順の `Map k v` (`Std.Map`) と `Set a` (`Std.Set`)。どちらも釣り合いを取った木で、キーと要素は `Unr` に限る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」)
-- 2つの計算の組: `Std.Par` の `par` は2つの子を動かして両方を待ち、子の `never` の操作を親で起こし直す。子の row の上限は `never` で、`IO` や `var` を使う子は E2020 になる。`both` は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Par`」)。`eml run` と `eml repl` の `--sched` で、子を切り替える方針を逐次 (`sequential`。既定) と seed で決まる横取り (`seeded:N`) から選ぶ ([標準ライブラリ](../spec/stdlib.md) の「起動」)
+- 2つの計算の組: `Std.Par` の `par` は2つの子を動かして両方を待ち、子の `never` の操作を親で起こし直す。子の row の上限は `never` で、`IO` や `var` を使う子は E2020 になる。`both` は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Par`」)。`eml run` と `eml repl` の `--sched` で、子を切り替える方針を普通の方針 (`normal`。既定。監視のスレッドの刻みで横取りする)、逐次 (`sequential`)、seed で決まる横取り (`seeded:N`) から選ぶ ([標準ライブラリ](../spec/stdlib.md) の「起動」)
 - ブロックの中の `var` と代入 `x <- e`、添字の読み `x[i]` と書き込み `x[i] <- e`、Prelude の `for` と `while` ([式](../spec/expressions.md) の「`var`」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」)
 - 線形性、持ち越し規則、網羅性の検査。`fail` や `exit` のような戻らない呼び出しで終わる経路では、消費しない `Lin` の値を手放さなくてよい ([線形性](../spec/linearity.md) の「暗黙の後始末」)
 - 型クラス: `class` (上位クラス、既定のメソッド、メソッド自身の型変数と制約)、`instance` (文脈、標準ライブラリの中の `extern`)、シグネチャの制約 `Eq a =>`、`deriving (Eq, Ord, Show)`、Prelude のクラス `Eq`、`Ord`、`Show` と `Ordering`、タプルと `Unit` の構造的な instance。証拠は単相化で決め、実行時の辞書は持たない ([宣言](../spec/declarations.md) の「クラスと instance」、[型と Kind](../spec/types.md) の「制約」)

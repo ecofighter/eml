@@ -337,6 +337,66 @@ fn an_interrupt_stops_a_running_program_with_130() {
     assert!(stderr.contains("interrupted"), "{stderr}");
 }
 
+/// 左の子が回り続ける `par`。子は `never` の row なので出力できない。親が子の前に標準エラーへ1行書くので、テストは
+/// その行を待ってから SIGINT を送れる。
+#[cfg(unix)]
+const SPIN_IN_PAR: &str = "\
+import Std.Par
+
+spin : Int -> <Panic> Int
+spin n = spin (n + 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  eprintln \"started\"
+  let (a, b) = Par.par (fn () -> spin 0) (fn () -> spin 0)
+  println (show (a + b))
+";
+
+/// 既定の方針 (`normal`) では、回り続ける `par` の子が2つ目のタスクの追加で監視のスレッドを始める。その run も
+/// 1回目の SIGINT で次の安全点に止まり、終了コード 130 で終わる (docs/spec/vm.md の「上限と割り込み」)。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_par_program_with_130() {
+    use std::io::{BufRead, BufReader};
+    use std::time::Instant;
+
+    let dir = temp_project("cli-sigint-par", &[("main.em", SPIN_IN_PAR)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let stderr = child.stderr.take().unwrap();
+    let (lines, arrived) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = lines.send(());
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text
+    });
+    if arrived
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .is_err()
+    {
+        kill_after_deadline(&mut child, "the program did not start");
+    }
+    sigint(&child);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not stop");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let stderr = reader.join().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{stderr}");
+    assert!(stderr.contains("interrupted"), "{stderr}");
+}
+
 /// 読みの中で待つプログラムは、1回目の SIGINT で読みが `EINTR` で戻って止まり、終了コードは 130 である。読みに入る
 /// 直前に届いた SIGINT は読みを止めないが、2回目の SIGINT でハンドラがその場で終わらせ、終了コードは同じく 130 である
 /// (docs/spec/vm.md の「上限と割り込み」)。続けて届いた2つの SIGINT は1つにまとまることがあるので、終わるまで
@@ -459,8 +519,10 @@ fn a_misspelled_flag_is_a_usage_error() {
 #[test]
 fn sched_flag_is_accepted_and_rejected() {
     let dir = temp_project("cli-sched", &[("main.em", SHOW_ARGS)]);
-    let cases: [(&[&str], i32, &str); 19] = [
+    let cases: [(&[&str], i32, &str); 21] = [
         (&["run", "--sched", "sequential", "main.em"], 0, "[]\n"),
+        (&["run", "--sched", "normal", "main.em"], 0, "[]\n"),
+        (&["run", "--sched=normal", "main.em", "a"], 0, "[\"a\"]\n"),
         (
             &["run", "--sched", "seeded:7", "main.em", "a"],
             0,

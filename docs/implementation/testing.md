@@ -199,7 +199,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `bench.rs` は、基準のプログラムの VM の `RunStats` を固定する。`scaling.rs` は、仕事の回数と物体とスタックの語の数を上限と比べる (どちらも下の「性能のテスト」)
 - `par.rs` は、`par` の fork と join を手書きの LIR で確かめる ([VM](../spec/vm.md) の「`par` の fork と join」)。fork の関数と起こし直しの関数は、evidence passing の後の形で手で書く。両方の子の値、左と右の中断といちばん左の中断、mask の深さ、子の中と親の `try_panic`、捕まえられなかった子の `Panic` の文言、入れ子の `par`、子の誤りの規則 (止めかたの種類、左が先、中断で救わないこと)、子へ移した `MutArray` と `lin` の値の移し戻し、子の漏れの `TransferLeak`、方針ごとの横取りを確かめる。実行は検査モードの逐次、seed 1 と 2026、普通の方針で流して出力、結果、スケジュールによらない `RunStats` を比べ、速いモードの逐次でも流す。普通の方針の run は監視のスレッドの刻みで横取りが起きるかが変わるが、出力と比べる欄はスケジュールによらないので合否は変わらない。監視のスレッドが長い子を横取りさせることは `the_monitor_preempts_a_long_par_child` が確かめる。刻みを数えるので `#[ignore]` を付け、release ビルドで流す。監視のスレッドか普通の方針を変えたときに流す。子の誤りの規則のうち、左の中断で救わないことと左の誤りが先であることは、ソースから作ったコードでも確かめる (`par::source`)。既定の深さの上限の `DepthLimit` は UI テストで起こすには大きすぎるので、`max_depth` を 1000 にして流す
 - `miri.rs` は、Miri で流す小さい実行のテストである (上の「Miri」)
-- `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 を確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
+- `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 (既定の普通の方針で子が回り続ける `par` のプログラムを含む) を確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
 
 ## LIR のテキストの形
 
@@ -332,7 +332,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 ### 2つのモードで流す
 
 - `run` と `run-fail` のテストは、まず VM の検査モード (`debug_heap`) で、`Control::new(default_limits())` を持つ新しい `RunConfig` で実行する。`default_limits()` は `eml run` と同じ既定の上限である。標準出力と誤りの文言は、スナップショットと比べる。`run` のテストは、実行が成功することも確かめる。`file_root` はテストのディレクトリである
-- その後で、新しい `Control` を持つ別の `RunConfig` で、速いモードでも実行する。標準出力と、標準エラーと、書いたファイルと、終わり方 (成功か、誤りの文言) が検査モードと同じことを確かめる。速いモードを後に流すのは、速いモードは前提を確かめないので、VM の誤りがあると未定義の動作になり、1つのテストの失敗が同じプロセスで流すほかのファイルのテストまで壊しうるためである
+- その後で、新しい `Control` を持つ別の `RunConfig` で、速いモードでも実行する。標準出力と、標準エラーと、書いたファイルと、終わり方 (成功か、誤りの文言) が検査モードと同じことを確かめる。速いモードの run は、`eml run` の既定と同じ普通の方針 (`Sched::Normal`) で流し、出力だけを比べる (`RunStats` は比べない)。普通の方針は刻みで横取りするので、`par` のプログラムでも出力は変わらないことを、出荷する既定で確かめることになる。速いモードを後に流すのは、速いモードは前提を確かめないので、VM の誤りがあると未定義の動作になり、1つのテストの失敗が同じプロセスで流すほかのファイルのテストまで壊しうるためである
 - `run-fail` のテストは、検査モードの誤りが `fast_mode_reports` を満たすときだけ、速いモードで流す。満たさないのは、リーク、VM の内部の誤り (`VmFault::Internal`)、extern のヒープの誤り (`VmFault::Extern(Fault::Heap(_))`) である。どれも検査モードだけが見つけるので、VM 自身の誤りを意味し、速いモードで流すとメモリを壊すことがある。それ以外の誤り (算術、出力、入出力、UTF-8) は両方のモードが同じ文言で報告する
 - seed の方針の run は検査モードだけで流す (下の「seed で流す」)
 - 実行ごとに新しい `RunConfig` を作るのは、止める理由のビットが `Control::clear` でしか下りないためである。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる ([VM](../spec/vm.md) の「上限と割り込み」)
@@ -384,7 +384,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `eml FILE ARGS...` の起動 ([標準ライブラリ](../spec/stdlib.md) の「起動」) は、引数がすべて渡ること (`-` で始まるものと、ファイルの後ろの `--debug-heap` を含む)、サブコマンドの名前をファイルとして読まないこと、綴りを誤ったフラグが使い方の誤りであること、パイプで渡した標準入力と標準エラーへの書き込み、shebang で直接動かすこと (`cfg(unix)`)、UTF-8 でない引数と環境変数の実行時エラー (unix と Windows) で確かめる。
 
-`--sched` と引数の分け方は、`sched_flag_is_accepted_and_rejected` が1本で確かめる。終了コード 0 とスクリプトの引数を確かめるのは、値を次の引数と `=` の後に取る形、`--debug-heap` の前と後に書いた形、ファイルより後ろの `--sched` (値のないものを含む) をスクリプトに渡す形、`run` を省いた起動である。2回書いた `--sched`、値のない `--sched`、`run` を省いて先頭に書いた `--sched`、知らない値 (`bogus`、`seeded:`、`seeded:-1`、`rescue-always`)、`check` の `--sched`、`repl --sched bogus` は終了コード 2 である。起動するプロセスが多いので、スレッドで並べて起動する。`Sched` の綴りの読みと既定の値は `crates/eml_vm/tests/api.rs` が確かめる
+`--sched` と引数の分け方は、`sched_flag_is_accepted_and_rejected` が1本で確かめる。終了コード 0 とスクリプトの引数を確かめるのは、`normal` を値に取る形、値を次の引数と `=` の後に取る形、`--debug-heap` の前と後に書いた形、ファイルより後ろの `--sched` (値のないものを含む) をスクリプトに渡す形、`run` を省いた起動である。2回書いた `--sched`、値のない `--sched`、`run` を省いて先頭に書いた `--sched`、知らない値 (`bogus`、`seeded:`、`seeded:-1`、`rescue-always`)、`check` の `--sched`、`repl --sched bogus` は終了コード 2 である。起動するプロセスが多いので、スレッドで並べて起動する。`Sched` の綴りの読みと既定の値は `crates/eml_vm/tests/api.rs` が確かめる
 
 `eml run` の SIGINT のテストは `cfg(unix)` で4本ある。どれも `libc::kill` で SIGINT を送り、10 秒の締め切りを持ち、過ぎたら子を殺して失敗にする。テストが止まらずに CI を待たせないためである。
 
@@ -446,6 +446,8 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 
 1. 合否が機械の速さに左右されない
 2. dev プロファイルで1つずつ流して (`cargo nextest run -j 1`)、開発機で1秒以内に終わる
+
+刻みに依って合否が決まるテストは、ふだんの実行にない (普通の方針を使う速いモードの run と `an_interrupt_stops_a_par_program_with_130` は、横取りが起きたかによらず合否が決まる)。監視のスレッドが長い子を横取りさせることを数えるテストだけが、刻みに依るので `#[ignore]` である。
 
 ファイルを集めて流す5つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`、`repl::transcripts`、`lowering::every_program_lowers_to_the_same_text`) は、1つのファイルが1秒以内で、テスト全体が5秒以内であればよい。この5つはテストの中でファイルを並べて流すので、`.config/nextest.toml` で単独で流し、ほかのテストとコアを取り合わないようにする。テストの中に壁時計の上限を置くのは、止まったことを見つけるためだけにする。上限は測った時間の10倍以上にする。2つの条件に当たらないテストには `#[ignore = "<理由>"]` を付ける。流すコマンドを「よく使うコマンド」に書き、流す時 (何を変えたときか) をそのテストを説明する節に書く。
 

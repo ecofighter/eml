@@ -254,7 +254,7 @@ fn assert_fast_mode_agrees(
     root: &Path,
     checked: &Ran,
 ) {
-    let fast = execute_in(program, path, root, false, Sched::Sequential);
+    let fast = execute_in(program, path, root, false, Sched::Normal);
     assert_agrees(suffix, "the fast mode", &fast, checked, false);
 }
 

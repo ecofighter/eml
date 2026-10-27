@@ -28,8 +28,12 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
-        /// How tasks are scheduled: `sequential`, or `seeded:N` to preempt at points chosen by the seed N
-        #[arg(long, value_name = "sequential|seeded:N", default_value = "sequential")]
+        /// How tasks are scheduled: `normal` preempts on a timer, `sequential` never preempts, `seeded:N` preempts at points chosen by the seed N
+        #[arg(
+            long,
+            value_name = "normal|sequential|seeded:N",
+            default_value = "normal"
+        )]
         sched: Sched,
         file: PathBuf,
     },
@@ -38,8 +42,12 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
-        /// How tasks are scheduled: `sequential`, or `seeded:N` to preempt at points chosen by the seed N
-        #[arg(long, value_name = "sequential|seeded:N", default_value = "sequential")]
+        /// How tasks are scheduled: `normal` preempts on a timer, `sequential` never preempts, `seeded:N` preempts at points chosen by the seed N
+        #[arg(
+            long,
+            value_name = "normal|sequential|seeded:N",
+            default_value = "normal"
+        )]
         sched: Sched,
         /// A file to load first, as with `:load`
         file: Option<PathBuf>,
