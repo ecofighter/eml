@@ -47,6 +47,61 @@ pub enum Linearity {
     Lin,
 }
 
+/// 値が `Lin` を含みうるかを表す印 (docs/spec/lir.md の「Kind の印」)。extern の行の印の列も同じ3値である
+/// (docs/spec/core-ir.md の「表の印の列」)。
+/// 順序を持つ型にしないのは、結びの順 (`Lin` > `Poly` > `Unr`) と宣言の順を取り違えないため。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Mark {
+    /// 共有してよい。
+    Unr,
+    /// 共有してはならず、ちょうど1回消費する。
+    Lin,
+    /// 型変数の位置で、`Lin` かもしれない。
+    Poly,
+}
+
+impl Mark {
+    pub fn name(self) -> &'static str {
+        match self {
+            Mark::Unr => "unr",
+            Mark::Lin => "lin",
+            Mark::Poly => "poly",
+        }
+    }
+
+    pub fn join(self, other: Mark) -> Mark {
+        match (self, other) {
+            (Mark::Lin, _) | (_, Mark::Lin) => Mark::Lin,
+            (Mark::Poly, _) | (_, Mark::Poly) => Mark::Poly,
+            _ => Mark::Unr,
+        }
+    }
+
+    /// 送り手の値を受け手に渡せるか。`lin` ビットを落とす向き (`Lin` を `Unr` の受け手へ) だけが渡せない。
+    /// `Unr` を `Lin` の受け手へ渡すのは、ビットが立たないだけで安全な側である。`Poly` はどちらの向きも通す。
+    pub fn passes_to(sender: Mark, receiver: Mark) -> bool {
+        !matches!((sender, receiver), (Mark::Lin, Mark::Unr))
+    }
+
+    /// 2つの印の小さいほう。順序は `Unr` < `Poly` < `Lin`。
+    pub fn meet(self, other: Mark) -> Mark {
+        if self.at_least(other) { other } else { self }
+    }
+
+    /// `self` が `other` 以上か (`self >= other`)。順序は `Unr` < `Poly` < `Lin`。
+    pub fn at_least(self, other: Mark) -> bool {
+        self.rank() >= other.rank()
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Mark::Unr => 0,
+            Mark::Poly => 1,
+            Mark::Lin => 2,
+        }
+    }
+}
+
 /// 関数を呼んだときに起こりうること。縮約のパスは `Pure` の呼び出しだけを、使われなければ消す (docs/spec/lir.md の「縮約」)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Purity {
@@ -249,7 +304,7 @@ pub struct EffectRow {
 table! {
     /// extern の関数。表の行は宣言の順に並び、`Extern::ALL` の添字は `*self as usize` と同じである。VM のコード生成は
     /// これを行の番号に使う。
-    pub enum Extern: FunctionRow, use {Linearity::{Lin, Unr}, Repr::{Enum, Float, Int, Obj, TObj, Unit}} {
+    pub enum Extern: FunctionRow, use {Mark::{Lin, Poly, Unr}, Repr::{Enum, Float, Int, Obj, TObj, Unit}} {
         Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
         Open => kinded(
             "Std.FileIn.open",
@@ -829,8 +884,8 @@ table! {
             name: "Prelude.exit",
             params: &[Repr::Int],
             ret: OpRet::Never,
-            param_kinds: &[Linearity::Unr],
-            ret_kind: Linearity::Unr,
+            param_marks: &[Mark::Unr],
+            ret_mark: Mark::Unr,
             purity: Purity::Effectful,
             borrowed: &[false],
             with_arg: None,
@@ -841,8 +896,8 @@ table! {
             name: "Prelude.fail_io",
             params: &[Repr::Enum, Repr::Obj],
             ret: OpRet::Never,
-            param_kinds: &[Linearity::Unr, Linearity::Unr],
-            ret_kind: Linearity::Unr,
+            param_marks: &[Mark::Unr, Mark::Unr],
+            ret_mark: Mark::Unr,
             purity: Purity::Effectful,
             borrowed: &[false, false],
             with_arg: None,
@@ -853,8 +908,8 @@ table! {
             name: "Prelude.panic",
             params: &[Repr::Obj],
             ret: OpRet::Never,
-            param_kinds: &[Linearity::Unr],
-            ret_kind: Linearity::Unr,
+            param_marks: &[Mark::Unr],
+            ret_mark: Mark::Unr,
             purity: Purity::Panics,
             borrowed: &[false],
             with_arg: None,
@@ -947,9 +1002,9 @@ table! {
         Par => kinded(
             "Std.Par.par",
             &[TObj, TObj],
-            &[Unr, Unr],
+            &[Poly, Poly],
             Obj,
-            Unr,
+            Poly,
             Purity::Pure,
         ),
     }
@@ -959,20 +1014,20 @@ pub struct FunctionRow {
     pub name: &'static str,
     /// 引数の Repr。数はシグネチャの一番外側の `->` の数と等しい。
     pub params: &'static [Repr],
-    /// 結果の Repr。`Never` は戻らない extern で、`ret_kind` は読まない。データを返す行は、比べる extern、
+    /// 結果の Repr。`Never` は戻らない extern で、`ret_mark` は読まない。データを返す行は、比べる extern、
     /// `Std.Env.has`、`Prelude.shows_minus`、`Std.Float.can_parse` の `Bool` と、`compare` の `Ordering` である。
     /// タグは決まっているので、行は配置を持たない。組は extern が作らず、`with_arg` の行は translate が作る。`List`
     /// や `Option` も extern が作らず、標準ライブラリの eml が包む (docs/spec/core-ir.md の「translate の配置」)。
     pub ret: OpRet,
-    /// 引数ごとの Kind。長さは `params` と同じである。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる
-    /// (docs/spec/core-ir.md の「表の印の列」)。
-    pub param_kinds: &'static [Linearity],
-    pub ret_kind: Linearity,
+    /// 引数ごとの印。長さは `params` と同じである。LIR の印と同じ3値で、型変数の位置のうちスキームが `Unr` に固定しない
+    /// 位置は `Poly` である (docs/spec/core-ir.md の「表の印の列」)。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる。
+    pub param_marks: &'static [Mark],
+    pub ret_mark: Mark,
     pub purity: Purity,
     /// 引数ごとの借用の印。長さは `params` と同じである。印の立つ引数を extern は読むだけで消費せず、失敗したときも
     /// 呼んだ側が持ったままである (docs/spec/lir.md の「extern の借用」)。
     pub borrowed: &'static [bool],
-    /// `Some(k)` の行は、宣言の型では結果と引数 `k` の組を返す。行の結果 (`ret`、`ret_kind`) は組の最初の要素で、
+    /// `Some(k)` の行は、宣言の型では結果と引数 `k` の組を返す。行の結果 (`ret`、`ret_mark`) は組の最初の要素で、
     /// translate が呼び出しの後に `con` で組を作る。組を受けてすぐ開く所では、最適化の既知のコンストラクタで組が
     /// 消える (docs/spec/core-ir.md の「組を返す extern」)。
     pub with_arg: Option<usize>,
@@ -985,28 +1040,28 @@ impl FunctionRow {
     pub fn removable(&self) -> bool {
         self.purity == Purity::Pure
             && self
-                .param_kinds
+                .param_marks
                 .iter()
                 .zip(self.borrowed)
-                .all(|(&kind, &borrowed)| borrowed || kind == Linearity::Unr)
+                .all(|(&mark, &borrowed)| borrowed || mark == Mark::Unr)
     }
 }
 
-/// 引数の Repr と Kind を同じ長さの配列で受け、`params` と `param_kinds` の長さを型で揃える。
+/// 引数の Repr と印を同じ長さの配列で受け、`params` と `param_marks` の長さを型で揃える。
 const fn kinded<const N: usize>(
     name: &'static str,
     params: &'static [Repr; N],
-    param_kinds: &'static [Linearity; N],
+    param_marks: &'static [Mark; N],
     ret: Repr,
-    ret_kind: Linearity,
+    ret_mark: Mark,
     purity: Purity,
 ) -> FunctionRow {
     FunctionRow {
         name,
         params,
         ret: OpRet::Repr(ret),
-        param_kinds,
-        ret_kind,
+        param_marks,
+        ret_mark,
         purity,
         borrowed: const { &[false; N] },
         with_arg: None,
@@ -1032,9 +1087,9 @@ const fn writing(name: &'static str) -> FunctionRow {
         kinded(
             name,
             &[Repr::Obj, Repr::Obj],
-            &[Linearity::Unr, Linearity::Lin],
+            &[Mark::Unr, Mark::Lin],
             Repr::Obj,
-            Linearity::Lin,
+            Mark::Lin,
             Purity::Effectful,
         ),
     )
@@ -1050,9 +1105,9 @@ const fn row<const N: usize>(
     kinded(
         name,
         params,
-        const { &[Linearity::Unr; N] },
+        const { &[Mark::Unr; N] },
         ret,
-        Linearity::Unr,
+        Mark::Unr,
         purity,
     )
 }

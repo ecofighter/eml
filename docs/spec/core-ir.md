@@ -164,7 +164,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 
 #### 表の印の列
 
-- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_kinds: &'static [Linearity]` と `ret_kind: Linearity` を持つ。extern の関数の引数に現れる型変数は、スキームで `Unr` に固定される ([宣言](declarations.md) の「`extern`」)。そのため、型変数の位置 (`Std.Array.get` の要素) と、Kind が要素に従う `Array a` は `Unr` で、2値の `Linearity` で足りる。関数型の引数の最後の結果にだけ現れる型変数は固定されないが、該当する行は `Std.Par.par` だけで、その扱いは下の表の後に書く。`exit` の結果の印は、行の `ret_kind` でなく、translate が具体化した結果の型から決める ([LIR](lir.md) の「戻らない extern」)
+- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_marks: &'static [Mark]` と `ret_mark: Mark` を持つ。印は LIR の印と同じ3値 (`unr`、`lin`、`poly`) で、`Mark` は `eml_extern` が持ち `eml_lir` が再公開する。extern の関数の引数に現れる型変数はスキームで `Unr` に固定される ([宣言](declarations.md) の「`extern`」) ので、型変数の位置 (`Std.Array.get` の要素) と、Kind が要素に従う `Array a` は `unr` である。固定しない位置 (コールバックの最後の結果、結果だけの型変数、預かる引数) は `poly` で、verifier はどの印の値も通す。`exit` の結果の印は、行の `ret_mark` でなく、translate が具体化した結果の型から決める ([LIR](lir.md) の「戻らない extern」)
 
   | 行 | 引数 | 結果 |
   |---|---|---|
@@ -194,9 +194,10 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.MutArray.read` | `Lin`、`Unr` | `Unr` (要素) |
   | `Std.MutArray.write` | `Lin`、`Unr`、`Unr` | `Lin` |
   | `Std.MutArray.freeze` | `Lin` | `Unr` (`Array a`) |
+  | `Std.Par.par` | `poly`、`poly` | `poly` |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
-  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、型変数は `Unr` に固定されているので、`Unr` の行と合うものとして比べる。`Std.Par.par` の結果の組の型変数は固定されないが、`par` の行は std の宣言を型検査に結ぶためだけにあり、`ret_kind` は `Poly` を通して `Unr` と比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
+  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
 - 基本操作の表の印の列は [LIR](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
 - 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
@@ -481,7 +482,7 @@ V2 は、`lin` の値を `unr` の受け手に渡すことだけを拒む。`unr
 
 2つの型の比べ方は `TypeStore::lin_compatible` である。2つの型を構造をそろえてたどり、対応する線形性 (矢印の `lin`、`Flexible` と `OpVar` の Kind) の一方が `Unr`、他方が `Lin` なら食い違いとする。`Poly` はどちらとも食い違わない。片方が `Flexible(k)` か `OpVar(_, k)` で他方が別の形の型 `T` なら、`k` と `linearity(T)` を比べる。`Rigid` はどの型とも合う。形が一致しない所 (誤りの跡) は比べない。
 
-- 参照の検査: instance を集めた後に、各関数の instance の中の参照 (関数を指す式) ごとに、代入した参照の型と、呼ばれる instance の型を比べる。比べ方は、参照の一番外側の矢印を飛ばす `lin_compatible_inner` である。その矢印は参照ごとの変数で、宣言の矢印と比べる相手ではないためである ([型と Kind](types.md) の「値を読む式の矢印の線形性」)。飽和した呼び出しだけでなく、部分適用と値としての関数の参照も入る。導出とタプルの生成器の instance と extern の関数は、比べる型を持たないので比べない。extern は行の Kind の列で確かめる (`FunctionRow::param_kinds` と `ret_kind`。`std/` のシグネチャとの結び付けは `crates/eml_core_ir/tests/externs.rs`)
+- 参照の検査: instance を集めた後に、各関数の instance の中の参照 (関数を指す式) ごとに、代入した参照の型と、呼ばれる instance の型を比べる。比べ方は、参照の一番外側の矢印を飛ばす `lin_compatible_inner` である。その矢印は参照ごとの変数で、宣言の矢印と比べる相手ではないためである ([型と Kind](types.md) の「値を読む式の矢印の線形性」)。飽和した呼び出しだけでなく、部分適用と値としての関数の参照も入る。導出とタプルの生成器の instance と extern の関数は、比べる型を持たないので比べない。extern は行の印の列で確かめる (`FunctionRow::param_marks` と `ret_mark`。`std/` のシグネチャとの結び付けは `crates/eml_core_ir/tests/externs.rs`)
 - 操作の検査: 各 `perform` の参照の型を、その参照の具体化の `kind_values` で評価した操作の宣言の型と、`lin_compatible_inner` で比べる。参照の一番外側の矢印は、参照の検査と同じく参照ごとの変数なので比べない。handler の節の引数のパターンの型と `k` の型は、操作の宣言の型と、`Rigid` をどの型とも合う型、`Var` を `Poly` として比べる。節の具体化は記録されていないので、`kind_values` は求めない。この比べ方で確かめられるのは、引数の型の矢印と、結果の型の中で呼ぶ側から節へ渡る位置の矢印が、節の側でも宣言の `Unr` と食い違わないことである
 - 捕獲の検査: 両側が同じに誤った印 (`Lin` の値を持つ `unr` のクロージャ) は、比べ方では見つけられない。そこでクロージャを作る所で、矢印が `Unr` なら、捕まえた値の型の `linearity` がすべて `Unr` であることを確かめる
 

@@ -3,7 +3,7 @@
 //! extern が作る値のタグと、translate が作る配置も照らし合わせる。
 
 use eml_core_ir::boxed_repr;
-use eml_extern::{Extern, ExternType, Linearity, OpRet, Purity};
+use eml_extern::{Extern, ExternType, Mark, OpRet, Purity};
 use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
 use eml_lir::{FALSE, TRUE, TUPLE};
 use eml_test_support::Checked;
@@ -377,58 +377,72 @@ fn callback_tails(types: &TypeStore, mut ty: TypeId, arity: usize) -> Vec<RowTai
 }
 
 #[test]
-fn every_extern_function_row_has_the_kinds_of_its_std_signature() {
+fn every_extern_function_row_has_the_marks_of_its_std_signature() {
     let checked = checked();
     let mut store = checked.typed.types.clone();
     for &e in Extern::ALL {
         let row = e.row();
         let mut ty = row_type(&checked, &mut store, e);
         let types = &store;
-        assert_eq!(row.param_kinds.len(), row.params.len(), "{}", row.name);
+        assert_eq!(row.param_marks.len(), row.params.len(), "{}", row.name);
         let mut params = Vec::new();
         let mut param_types = Vec::new();
         for _ in row.params {
             let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
-            params.push(kind_of(types.linearity_or_poly(*param)));
+            params.push(mark_of(types.linearity_or_poly(*param)));
             param_types.push(*param);
             ty = *ret;
         }
-        assert_eq!(params, row.param_kinds, "{}", row.name);
+        for (index, (&declared, &mark)) in params.iter().zip(row.param_marks).enumerate() {
+            assert!(
+                mark_fits(declared, mark),
+                "{} parameter {index}: declared {declared:?}, row {mark:?}",
+                row.name
+            );
+        }
         if let OpRet::Repr(_) = row.ret {
             let result = row_result(types, row.name, row.with_arg, &param_types, ty);
-            assert_eq!(
-                kind_of(types.linearity_or_poly(result)),
-                row.ret_kind,
-                "{}",
-                row.name
+            let declared = mark_of(types.linearity_or_poly(result));
+            assert!(
+                mark_fits(declared, row.ret_mark),
+                "{} result: declared {declared:?}, row {:?}",
+                row.name,
+                row.ret_mark
             );
         }
     }
 }
 
-/// 宣言に対して相対的な型 (`Poly`) は `Unr` の行と合う。関数でない引数の型変数は、extern のスキームが `Unr` に
-/// 固定する。関数型の引数 (`Std.Par.par` の子) の矢印の Kind は固定しないので、どの印の閉包も渡せる。結果
-/// だけに現れる型変数は固定しないが、結果がその型変数に依存する行 (`MutArray.empty` の `MutArray a`) は `Lin` である。
-/// `Std.Par.par` の結果の組の型変数も、子の最後の結果にだけ現れるので固定しないが、`par` の行は型検査に結ぶためだけに
-/// あり、`Poly` を通して `Unr` と比べる (docs/spec/declarations.md の「`extern`」)。
-fn kind_of(lin: Lin) -> Linearity {
+/// 型の Kind を行の印に写す。関数でない引数の型変数は、extern のスキームが `Unr` に固定する。関数型の引数
+/// (`Std.Par.par` の子) の矢印の Kind は固定しないので、どの印の閉包も渡せる。結果だけに現れる型変数は固定しないが、
+/// 結果がその型変数に依存する行 (`MutArray.empty` の `MutArray a`) は `Lin` である。固定しない位置は `Poly` の行と
+/// 比べる (docs/spec/core-ir.md の「表の印の列」)。
+fn mark_of(lin: Lin) -> Mark {
     match lin {
-        Lin::Unr | Lin::Poly => Linearity::Unr,
-        Lin::Lin => Linearity::Lin,
+        Lin::Unr => Mark::Unr,
+        Lin::Lin => Mark::Lin,
+        Lin::Poly => Mark::Poly,
         Lin::Var(_) => panic!("an extern row has no kind variable"),
     }
+}
+
+/// 宣言の型から読んだ印と行の印が合うか。型変数に依存する型は `Poly` と読めるが、スキームが `Unr` に固定する位置の
+/// 行は `Unr` で、固定しない位置の行は `Poly` なので、`Poly` はどちらの行とも合う。固定するかどうかは
+/// 宣言の型から読めないので、固定しない行は `only_the_listed_rows_carry_a_lin_or_poly_mark` が列挙する。
+fn mark_fits(declared: Mark, row: Mark) -> bool {
+    declared == row || (declared == Mark::Poly && row == Mark::Unr)
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11と `MutArray` を扱う7つ
 /// 以外は、引数も結果も `Unr` である。
 #[test]
-fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
-    use Linearity::{Lin, Unr};
+fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
+    use Mark::{Lin, Poly, Unr};
     for &e in Extern::ALL {
         let row = e.row();
-        let expected: (&[Linearity], Linearity) = match row.name {
+        let expected: (&[Mark], Mark) = match row.name {
             "Std.FileIn.open" => (&[Unr], Lin),
             "Std.FileIn.read_all" => (&[Lin], Unr),
             "Std.FileIn.read_line_raw" => (&[Lin], Unr),
@@ -476,17 +490,18 @@ fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
             "Std.MutArray.read" => (&[Lin, Unr], Unr),
             "Std.MutArray.write" => (&[Lin, Unr, Unr], Lin),
             "Std.MutArray.freeze" => (&[Lin], Unr),
+            "Std.Par.par" => (&[Poly, Poly], Poly),
             _ => {
                 assert!(
-                    row.param_kinds.iter().all(|&kind| kind == Unr),
+                    row.param_marks.iter().all(|&mark| mark == Unr),
                     "{}",
                     row.name
                 );
-                assert_eq!(row.ret_kind, Unr, "{}", row.name);
+                assert_eq!(row.ret_mark, Unr, "{}", row.name);
                 continue;
             }
         };
-        assert_eq!((row.param_kinds, row.ret_kind), expected, "{}", row.name);
+        assert_eq!((row.param_marks, row.ret_mark), expected, "{}", row.name);
     }
 }
 

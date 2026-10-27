@@ -3,8 +3,8 @@
 
 use std::fmt;
 
-use eml_extern::{EffectMultiplicity, Extern, ExternEffect, Linearity};
-pub use eml_extern::{FloatBits, OpRet, Repr, StructId};
+use eml_extern::{EffectMultiplicity, Extern, ExternEffect};
+pub use eml_extern::{FloatBits, Mark, OpRet, Repr, StructId};
 use rustc_hash::FxHashMap;
 
 mod boxing;
@@ -907,70 +907,6 @@ pub struct FnIdx(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VarId(pub u32);
-
-/// 値が `Lin` を含みうるかを表す印 (docs/spec/lir.md の「Kind の印」)。
-/// 順序を持つ型にしないのは、結びの順 (`Lin` > `Poly` > `Unr`) と宣言の順を取り違えないため。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Mark {
-    /// 共有してよい。
-    Unr,
-    /// 共有してはならず、ちょうど1回消費する。
-    Lin,
-    /// 型変数の位置で、`Lin` かもしれない。
-    Poly,
-}
-
-impl Mark {
-    pub fn name(self) -> &'static str {
-        match self {
-            Mark::Unr => "unr",
-            Mark::Lin => "lin",
-            Mark::Poly => "poly",
-        }
-    }
-
-    pub fn join(self, other: Mark) -> Mark {
-        match (self, other) {
-            (Mark::Lin, _) | (_, Mark::Lin) => Mark::Lin,
-            (Mark::Poly, _) | (_, Mark::Poly) => Mark::Poly,
-            _ => Mark::Unr,
-        }
-    }
-
-    /// 送り手の値を受け手に渡せるか。`lin` ビットを落とす向き (`Lin` を `Unr` の受け手へ) だけが渡せない。
-    /// `Unr` を `Lin` の受け手へ渡すのは、ビットが立たないだけで安全な側である。`Poly` はどちらの向きも通す。
-    pub fn passes_to(sender: Mark, receiver: Mark) -> bool {
-        !matches!((sender, receiver), (Mark::Lin, Mark::Unr))
-    }
-
-    /// 2つの印の小さいほう。順序は `Unr` < `Poly` < `Lin`。
-    pub(crate) fn meet(self, other: Mark) -> Mark {
-        if self.at_least(other) { other } else { self }
-    }
-
-    /// `self` が `other` 以上か (`self >= other`)。順序は `Unr` < `Poly` < `Lin`。
-    pub fn at_least(self, other: Mark) -> bool {
-        self.rank() >= other.rank()
-    }
-
-    fn rank(self) -> u8 {
-        match self {
-            Mark::Unr => 0,
-            Mark::Poly => 1,
-            Mark::Lin => 2,
-        }
-    }
-}
-
-/// extern の行の Kind の列。extern は多相にならないので、`Poly` には写らない。
-impl From<Linearity> for Mark {
-    fn from(kind: Linearity) -> Mark {
-        match kind {
-            Linearity::Unr => Mark::Unr,
-            Linearity::Lin => Mark::Lin,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarInfo {
