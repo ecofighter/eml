@@ -902,11 +902,12 @@ translate の `let r = handle E(init, body) { c_0, .., c_n } return ret` を、�
 - `w0` と `ev` は2回以上消費するので、Perceus が `dup` を足す。`ev_set_clause` は `ev` を借りるだけなので、数に入らない ([LIR](lir.md) の「基本操作」)
 - `apply body(())` は yield の地点にしない。yield したかは `prompt$` が見る。`call prompt$` は、handle を含む関数が `yields` なら yield の地点である (その関数が `yields` でなければ、その row から外へ出る yield はない)
 - `apply body(())` には着地の印 `prompt ev` を付ける ([LIR](lir.md) の「着地の印」)。`ev` 宛ての中断は、VM の巻き戻しがこの `apply` の結果 x にダミーを書いて止まり、続く `prompt$` が状態 2 の経路に進む ([VM](vm.md) の「巻き戻し」)。印を付けるのは EP だけで、付ける所はここと、下の「再開と状態」の `resume$` の2か所である
-- `prompt$(ev, ret, x)` は、最初に `evv` を `ev` の外側の `evv` に戻し、`yield_status(ev)` で4つに分ける。`evv` を戻すときに、今の `evv` を手放す。中断が着地したときの `evv` は中断を始めた所の `evv` のままで意味がないが ([LIR](lir.md) の「`evv` の不変条件」)、ここで正しい `evv` に戻る
+- `prompt$(ev, ret, x)` は、最初に `w = ev_take_evv(ev)` で `ev` の外側の `evv` を取り出し、`evv_set(w)` で `evv` に戻してから、`yield_status(ev)` で4つに分ける。外側の `evv` の参照は `dup` せずに `ev` から `evv` へ移る。`evv` を戻すときに、今の `evv` を手放す。中断が着地したときの `evv` は中断を始めた所の `evv` のままで意味がないが ([LIR](lir.md) の「`evv` の不変条件」)、ここで正しい `evv` に戻る
   - 0 (yield していない): `st = ev_take_state(ev)` で状態を取り出し、`apply ret(x, st)` を末尾で呼ぶ
   - 1 (`ev` 宛ての yield): `drop x` の後、`κ = yield_cont_take()`、`c = yield_finish()`、`st = ev_take_state(ev)` を得て、`k = closure resume$(ev, ret, κ)` を作り、`apply c(k, st)` を末尾で呼ぶ
   - 2 (`ev` 宛ての中断): `drop ret` と `drop x` の後、`c = yield_finish()` と `st = ev_take_state(ev)` を得て、`apply c(st)` を末尾で呼ぶ。中断は κ を組み立てないので、取り出す κ はない
   - 3 (ほかの宛先の yield): `drop x` の後、状態を `ev_take_state(ev)` で取り出し、κ を `rewind$(ev, ret, st, κ)` のクロージャで作り直して、ダミーを返す。ほかの宛先の中断は、巻き戻しがこのフレームを着地せずに外すので、`prompt$` に届かない。EP は状態 3 の経路を中断と yield で分けずに作るが、中断では通らない
+- どの道でも `prompt$` は外側の `evv` と状態を取り出すので、`prompt$` を通った evidence (退いた evidence) は入口の表と tag だけを持ち、状態と外側の `evv` の欄は `()` である。退いた evidence を使うのは `resume$` と `rewind$` だけで、`ev_renew` で表と tag だけを読む (下の「再開と状態」)。継続が捕まえた退いた evidence から走っている evidence に届かないことを、`par` の fork が頼る ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)
 
 #### 再開と状態
 

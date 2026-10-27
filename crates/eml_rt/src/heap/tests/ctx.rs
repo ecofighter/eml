@@ -385,8 +385,9 @@ fn entry_tables_with_a_count_word<M: Mode>() {
     assert_eq!(super::mortal(ctx.heap()), 0);
 }
 
-/// 状態の欄を通る輪 (docs/spec/lir.md の「evidence」): 状態が ev を指す物体を持っていても、ev を呼ぶ側が
-/// 持っている限り、元の状態を手放しても ev は生き残る。
+/// 状態が ev 自身に届く場合 (EP が出すコードでは起きないが、契約はそれに頼らない。docs/spec/object-model.md の
+/// 「基本操作の契約」): 状態が ev を指す物体を持っていても、ev を呼ぶ側が持っている限り、元の状態を手放しても
+/// ev は生き残る。
 fn replacing_a_state_that_reaches_its_evidence<M: Mode>() {
     let mut ctx = ctx::<M>();
     let ev = push(&mut ctx, 0, 1);

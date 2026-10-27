@@ -306,13 +306,13 @@ evidence は、handler の1回の実行を表すヒープの物体で、次を�
 
 - 入口の表: エフェクトの番号と、操作ごとの in-place の入口のクロージャ ([Core IR](core-ir.md) の「`perform` と節の3つの形」) を持つ物体。handle で入れた後は変えない
 - 状態の欄 (`tobj`)
-- 外側の `evv`: その実行の外側で有効な `evv`。作るときに決め、変えない。その evidence 自身を含まない
+- 外側の `evv`: その実行の外側で有効な `evv`。作るときに決め、`prompt$` が取り出すまで変えない。その evidence 自身を含まない
 
 handle の実行と、継続の再開のたびに、新しい evidence を作る。入口の表は handle のときに1つ作り、再開で作る evidence はその表を共有し、状態と外側の `evv` だけを新しくするので、作る費用は操作の数によらない。yield の宛先は evidence の物体そのもので比べるので、目印の番号は持たない。
 
-状態の欄だけは書き換える。書き換えるのは、その evidence の実行が動いている間の、in-place の節 (`ev_take_state`、`ev_set_state`) と `prompt$` (状態の取り出し) と、その実行を中断で外す巻き戻し (状態の取り出し) だけである。別の実行は別の evidence を持つので、欄を共有しない。handle 1回につき evidence を1つにして状態を yield と再開で出し入れする形は採らない。handler の実行中にその handler 自身の継続を再開すると ([Core IR](core-ir.md) の「再開と状態」の例)、2つの実行が状態の欄と外側の `evv` の欄を共有して壊し、外側の `evv` がその evidence 自身を指す参照の輪もできるためである。
+書き換えるのは状態の欄と外側の `evv` の欄だけである。状態の欄を書き換えるのは、その evidence の実行が動いている間の、in-place の節 (`ev_take_state`、`ev_set_state`) と `prompt$` (状態の取り出し) と、その実行を中断で外す巻き戻し (状態の取り出し) だけである。外側の `evv` の欄を書き換えるのは、`prompt$` の取り出し (`ev_take_evv`) だけである ([Core IR](core-ir.md) の「handle と `prompt$`」)。別の実行は別の evidence を持つので、欄を共有しない。handle 1回につき evidence を1つにして状態を yield と再開で出し入れする形は採らない。handler の実行中にその handler 自身の継続を再開すると ([Core IR](core-ir.md) の「再開と状態」の例)、2つの実行が状態の欄と外側の `evv` の欄を共有して壊し、外側の `evv` がその evidence 自身を指す参照の輪もできるためである。
 
-状態の欄を通る参照の輪は、一時的にはできうる。外側の handler O の本体の中で内側の handler I を動かし、I の継続 `k_I` をデータに包んで O の状態に入れると、`evO.状態 → k_I → evI → evI.外側の evv → evO` の輪になる。`prompt$` は、どの出口 ([Core IR](core-ir.md) の「handle と `prompt$`」の 0〜3) でも状態の欄を空にするので、O の実行が `prompt$` を通って終われば輪は切れる。これを不変条件とし、`debug_heap` 付きの UI テスト (`tests/ui/run/effects/continuation_in_outer_state.em`) で確かめる。O の外の宛先への中断と `exit` は `prompt$` を通らないが、O の handle のフレームを着地せずに外すときに、巻き戻しが evO の状態を取り出して手放すので、輪はやはり切れる ([VM](vm.md) の「巻き戻しの手順」)。この場合も UI テスト (`tests/ui/run/unwind/state_holding_inner_continuation_exit.em`、`state_holding_inner_continuation_fail.em`) で確かめる。
+状態の欄を通る参照の輪はできない。状態は値で、値から届く evidence は退いたものだけであり、退いた evidence の状態と外側の欄は `()` である ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)。そのため、evidence を通る輪はない。`prompt$` が、どの出口 ([Core IR](core-ir.md) の「handle と `prompt$`」の 0〜3) でも状態の欄を空にすることは、evidence を退かせることの一部である。外側の handler O の本体の中で内側の handler I を動かし、I の継続 `k_I` をデータに包んで O の状態に入れても、`k_I` が捕まえる I の evidence は退いていて、O の evidence に届かない。これを `debug_heap` 付きの UI テスト (`tests/ui/run/effects/continuation_in_outer_state.em`) で確かめる。O の外の宛先への中断と `exit` は `prompt$` を通らない。O の handle のフレームを着地せずに外すときに、巻き戻しが O の evidence の状態を取り出して手放すのは、状態を早く解放するためだけである ([VM](vm.md) の「巻き戻しの手順」)。この場合も UI テスト (`tests/ui/run/unwind/state_holding_inner_continuation_exit.em`、`state_holding_inner_continuation_fail.em`) で確かめる。
 
 ### evidence を探す
 
@@ -328,7 +328,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - 引数は、表の借用の列が「借用」のものを読み、ほかを消費する。結果は所有した参照である
   - 借用にするのは、基本操作がその引数そのものを物体にも実行の文脈にも入れない引数である。読むだけの引数と、中身の一部を基本操作が自分で `dup` して共有する引数 (`evv_mask` のリストの残り、`ev_renew` の入口の表) がこれに当たる
   - 消費する引数は、extern の行と同じく所有権を受け取る。文脈か物体に入れる引数がこれに当たる
-  - 借用の引数は、`unbox` のオペランドと同じく読む使いである (上の「ブロックの列」)。借りた変数をそのまま渡せる。`ev_take_state` と `ev_set_state` は、借りた evidence の状態の欄を書き換える (上の「evidence」)
+  - 借用の引数は、`unbox` のオペランドと同じく読む使いである (上の「ブロックの列」)。借りた変数をそのまま渡せる。`ev_take_state` と `ev_set_state` は借りた evidence の状態の欄を、`ev_take_evv` は外側の `evv` の欄を書き換える (上の「evidence」)
   - 表は引数ごとの借用の印 (`PrimRow::borrowed`) を `params` と並べて持ち、長さは `params` と同じである
 - 表は `eml_lir` に置き (`Prim::row`)、`eml_extern` には入れない。`eml_extern` の表は `std/` と1対1に結び付けるテストを持ち、基本操作はソースに現れないためである。Core IR も同じ `Prim` を使う
 - 基本操作は純粋でないとみなし、縮約は消さない。例外は `root_get` と `empty_mut_array` で、根か定数を読むだけなので、結果を使わなければ消す
@@ -346,6 +346,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 | `ev_lookup[E]` | なし | | `obj` | 上の「evidence を探す」 |
 | `ev_clause[E.op]` | `obj` | evidence | `tobj` | 入口の欄を読む |
 | `ev_evv` | `obj` | evidence | `tobj` | 外側の `evv` を読む |
+| `ev_take_evv` | `obj` | evidence | `tobj` | 外側の `evv` を取り出し、欄を `()` にする。`prompt$` の入口で使う ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」) |
 | `ev_take_state` | `obj` | evidence | `tobj` | 状態を取り出し、欄を `()` にする |
 | `ev_set_state` | `obj`、`tobj` | evidence | `unit` | 状態の欄を替える |
 | `yielding` | なし | | `int` | yield 中か中断中なら 1、そうでなければ 0 |
@@ -370,7 +371,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   | `ev_new[E]` | `poly` (状態)、`unr` | `unr` |
   | `ev_set_clause` | `unr`、`unr` | `unr` |
   | `ev_renew` | `unr`、`poly` | `unr` |
-  | `ev_lookup` / `ev_clause` / `ev_evv` | なし / `unr` / `unr` | `unr` |
+  | `ev_lookup` / `ev_clause` / `ev_evv` / `ev_take_evv` | なし / `unr` / `unr` / `unr` | `unr` |
   | `ev_take_state` / `ev_set_state` | `unr` / `unr`、`poly` | `poly` / `unr` |
   | `yielding` / `yield_status` | なし / `unr` | `unr` |
   | `yield_to` / `yield_abort` | `unr`、`poly`、`poly` / `unr`、`poly` | `unr` |

@@ -113,7 +113,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `append` | 空の文字列から始め、一意な文字列に `string_push` で 1 バイトずつ足すことを、10,000,000 回繰り返す。その場の追記と、倍の容量での作り直しの費用である |
 | `perform` | evidence が1つの `evv` で、`ev_lookup` と `ev_clause` を呼んで結果を手放すことを、10,000,000 回繰り返す。handler の中で `perform` してその場で戻る道である |
 | `perform-deep` | 同じことを、8つの evidence の `evv` の最も奥の evidence に対して行う |
-| `handle` | handler を `evv_get`、`ev_new`、`ev_set_clause`、`evv_push`、`evv_set` で設け、`ev_evv` と `evv_set` で外すことを、1,000,000 回繰り返す |
+| `handle` | handler を `evv_get`、`ev_new`、`ev_set_clause`、`evv_push`、`evv_set` で設け、`prompt$` と同じく `ev_take_evv` と `evv_set` で外すことを、1,000,000 回繰り返す |
 | `yield` | yield を始め、κ を取り出して入れ直し、yield を終える1往復を、10,000,000 回繰り返す |
 | `mask` | 4つの evidence の `evv` で、2つ目の evidence を飛ばす `evv_mask` (項目は n = 0、m = 1 の1つ) を呼び、結果を手放すことを、10,000,000 回繰り返す |
 | `poll` | 安全点の確かめ `Ctx::poll` を、100,000,000 回繰り返す |

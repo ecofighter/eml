@@ -1038,7 +1038,7 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
         "evv_push",
         "ev_lookup",
         "ev_clause",
-        "ev_evv",
+        "ev_take_evv",
         "ev_renew",
         "evv_mask",
         "ev_take_state",

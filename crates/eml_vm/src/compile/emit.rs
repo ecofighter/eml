@@ -694,6 +694,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 op: op_index(*op),
             },
             Prim::EvEvv => Op::EvEvv { dst, ev: a[0] },
+            Prim::EvTakeEvv => Op::EvTakeEvv { dst, ev: a[0] },
             Prim::EvTakeState => Op::EvTakeState { dst, ev: a[0] },
             Prim::EvSetState => Op::EvSetState {
                 dst,

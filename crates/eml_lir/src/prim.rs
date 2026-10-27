@@ -25,6 +25,7 @@ pub enum Prim {
         op: u32,
     },
     EvEvv,
+    EvTakeEvv,
     EvTakeState,
     EvSetState,
     Yielding,
@@ -99,6 +100,7 @@ kinds! {
     Prim::EvLookup(_) => "ev_lookup", Prim::EvLookup(0);
     Prim::EvClause { .. } => "ev_clause", Prim::EvClause { effect: 0, op: 0 };
     Prim::EvEvv => "ev_evv", Prim::EvEvv;
+    Prim::EvTakeEvv => "ev_take_evv", Prim::EvTakeEvv;
     Prim::EvTakeState => "ev_take_state", Prim::EvTakeState;
     Prim::EvSetState => "ev_set_state", Prim::EvSetState;
     Prim::Yielding => "yielding", Prim::Yielding;
@@ -137,6 +139,7 @@ impl Prim {
             | Prim::EvvPush
             | Prim::EvRenew
             | Prim::EvEvv
+            | Prim::EvTakeEvv
             | Prim::EvTakeState
             | Prim::EvSetState
             | Prim::Yielding
@@ -174,6 +177,7 @@ impl Prim {
             Prim::EvLookup(_) => (&[], NONE, Obj, NO_MARKS, Unr),
             Prim::EvClause { .. } => (&[Obj], &[true], TObj, &[Unr], Unr),
             Prim::EvEvv => (&[Obj], &[true], TObj, &[Unr], Unr),
+            Prim::EvTakeEvv => (&[Obj], &[true], TObj, &[Unr], Unr),
             Prim::EvTakeState => (&[Obj], &[true], TObj, &[Unr], Poly),
             Prim::EvSetState => (&[Obj, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
             Prim::Yielding => (&[], NONE, Int, NO_MARKS, Unr),
@@ -258,7 +262,7 @@ mod tests {
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
         use Mark::{Lin, Poly, Unr};
-        let table: [(&str, &[Mark], Mark); 24] = [
+        let table: [(&str, &[Mark], Mark); 25] = [
             ("evv_get", &[], Unr),
             ("evv_set", &[Unr], Unr),
             ("evv_push", &[Unr, Unr], Unr),
@@ -269,6 +273,7 @@ mod tests {
             ("ev_lookup", &[], Unr),
             ("ev_clause", &[Unr], Unr),
             ("ev_evv", &[Unr], Unr),
+            ("ev_take_evv", &[Unr], Unr),
             ("ev_take_state", &[Unr], Poly),
             ("ev_set_state", &[Unr, Poly], Unr),
             ("yielding", &[], Unr),

@@ -416,6 +416,10 @@ pub enum Op {
         dst: Slot,
         ev: Slot,
     },
+    EvTakeEvv {
+        dst: Slot,
+        ev: Slot,
+    },
     EvTakeState {
         dst: Slot,
         ev: Slot,

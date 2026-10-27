@@ -1,5 +1,5 @@
--- 外側の handler の状態に内側の handler の継続をしまったまま、`exit` で中断する。継続が外側の evidence を
--- 指すので、evidence と状態は輪になる。巻き戻しが外側の handler を外すときに状態を取り出して手放し、輪を切る。
+-- 外側の handler の状態に内側の handler の継続をしまったまま、`exit` で中断する。継続が捕まえる内側の evidence は
+-- 退いているので、状態から外側の evidence には届かない。巻き戻しは外側の handler を外すときに状態を取り出して手放す。
 data R =
   | Done Int
   | Paused (Int -> <Panic> R)

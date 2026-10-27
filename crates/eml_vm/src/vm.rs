@@ -604,6 +604,10 @@ fn step<R: Exec>(
             let w = unsafe { ctx.ev_evv(task.get(ev)) }?;
             task.set(dst, w);
         }
+        Op::EvTakeEvv { dst, ev } => {
+            let w = unsafe { ctx.ev_take_evv(task.get(ev)) }?;
+            task.set(dst, w);
+        }
         Op::EvTakeState { dst, ev } => {
             let w = unsafe { ctx.ev_take_state(task.get(ev)) }?;
             task.set(dst, w);
@@ -852,9 +856,10 @@ fn unwind<R: Exec>(
                         task.set(dst, ctx.heap().dummy());
                         return Ok(());
                     }
-                    // 外す handler の状態は、その handler の継続を持てば evidence と輪になる。ここで取り出して
-                    // 手放し、輪を切る。生き残った継続は `resume$` で新しい evidence と状態を作るので、古い状態は
-                    // もう読まれない (docs/spec/vm.md の「巻き戻し」)
+                    // 外す handler の状態を、ここで取り出して手放す。状態は値なので退いた evidence にしか届かず、
+                    // evidence を通る輪はない (docs/spec/object-model.md の「evidence の3つの物体」)。取り出すのは
+                    // 状態を早く解放するためだけである。生き残った継続は `resume$` で新しい evidence と状態を作るので、
+                    // 古い状態はもう読まれない (docs/spec/vm.md の「巻き戻し」)
                     let state = unsafe { ctx.ev_take_state(ev) }?;
                     unsafe { ctx.heap_mut().decref(state) }?;
                 }
@@ -920,16 +925,18 @@ fn par<R: Exec>(
         }
         sched.shared_roots = roots;
     }
+    // 値から届く evidence は退いたものだけなので、`g` の `share` は親がその場で書き換える evidence に届かない
+    // (docs/spec/object-model.md の「evidence の3つの物体」)
     unsafe { ctx.heap_mut().share(g, child) }?;
-    // 親の `evv` を取り出して、その参照を join の節点に移す。RC に触れずに読めるようにするためである
-    let parent_evv = unsafe { ctx.switch_task(Word::UNIT, task.worker, task.depth_offset) };
-    let fork_evv = fork_evv::<R>(code, ctx, parent_evv)?;
-    // 2つの子が1つずつ参照を持つ。左の子は `Ctx` に入れ、右の子はタスクに退避する
-    unsafe {
+    let parent = ctx.evv_word();
+    let fork_evv = fork_evv::<R>(code, ctx, parent)?;
+    // 2つの子が1つずつ参照を持つ。左の子は `Ctx` に入れ、右の子はタスクに退避する。入れ替えで出る親の `evv` の参照は
+    // join の節点に移す
+    let parent_evv = unsafe {
         ctx.heap_mut().dup(fork_evv)?;
         ctx.heap_mut().share(fork_evv, child)?;
-        ctx.switch_task(fork_evv, task.worker, task.depth_offset);
-    }
+        ctx.switch_task(fork_evv, task.worker, task.depth_offset)
+    };
     let ret = task.pc;
     let j = sched.add_join(JoinNode {
         parent: sched.current,
@@ -980,7 +987,7 @@ fn fork_evv<R: Exec>(
     let mut ranks: Vec<(u16, u32)> = Vec::new();
     let heap = ctx.heap();
     let mut node = parent;
-    // `parent` は VM が参照を持つ `evv` のリストで、節点も evidence も生きている
+    // `parent` は `Ctx` が参照を持つ `evv` のリストで、節点も evidence も生きている
     while node.is_ptr() {
         let effect = unsafe { heap.meta(node) }?
             .tag()

@@ -356,6 +356,7 @@ impl<'a> View<'a> {
             Op::EvLookup { dst, effect } => format!("ev_lookup s{dst}, E{effect}"),
             Op::EvClause { dst, ev, op } => format!("ev_clause s{dst}, s{ev}, op{op}"),
             Op::EvEvv { dst, ev } => format!("ev_evv s{dst}, s{ev}"),
+            Op::EvTakeEvv { dst, ev } => format!("ev_take_evv s{dst}, s{ev}"),
             Op::EvTakeState { dst, ev } => format!("ev_take_state s{dst}, s{ev}"),
             Op::EvSetState { dst, ev, s } => bin("ev_set_state", dst, ev, s),
             Op::Yielding { dst } => format!("yielding s{dst}"),
