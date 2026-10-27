@@ -213,6 +213,8 @@ impl Drop for TaskHandle { fn drop(&mut self) { if !self.taken { self.inbox.push
 - 受け箱の処理 `drain(ctx)`: lock の下で `Vec` を取り、lock を外して処理する。`HandleDropped(c)` は、セルが `Finished` ならその場で放し、そうでなければ `handle_dropped = true` にする。`main` の `Finish` では、受け箱の処理、`sweep_all` (残ったセルをすべて放し、その間に積まれた知らせは後で受け箱ごと捨てる)、`has_children()`、`run_entry` の `check_finished`、`check_heap`、漏れの検査の順に行う
 - 始めるときの `transfer_back(closure, from = spawner)` と、待つときの `transfer_back(value, from = cell.worker)` と、放すときの `retire_worker` は、`par` の fork と join と同じ形をタスクごとに当てたものである
 
+- `finish` を呼ぶ時点 (T-11 の実装で決めた): `finish_ok`、`finish_io`、`finish_panic` の命令は結果を実行系のタスクの欄に置くだけにし、核の `finish` は入口の `Task` の `Op::Finish` (タスクの底を巻き戻し終えた後) で呼ぶ。命令の中で呼ぶと、待つ `Async.run` がタスクの巻き戻しの途中で起き、seed の方針の下で生きた物体を持つ worker の ID を退かせて `TransferLeak` になるためである。ネイティブでも、入口の stub に戻ってから `finish` を呼ぶ
+
 #### D-13: VM の側
 
 - `Task.cell: Option<CellRef>` (`main` と `par` の右の子は `None`)。`TaskState` に `Entry { function: u32, args: [Word; 2], argc: u8 }` と `WaitingCell(CellRef)` を足す。`Entry` を `resume()` するときは、`start` (`argc == 1`) なら先に `transfer_back(args[0], from = spawner)` を行い、引数を入口のフレームの slot 0..argc に書いて入る。`WaitingCell` を `resume()` すると `Ok(None)` で、`Op::Async` の次から続ける
