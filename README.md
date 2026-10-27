@@ -79,6 +79,32 @@ cargo run -p eml_cli -- run <file.em>        # 実行する (--debug-heap でヒ
 nix build                                    # eml のバイナリをビルドする
 ```
 
+### Claude Code のクラウドのセッション
+
+Claude Code のクラウドのセッションで開発するときは、環境の setup script に次を書く。この setup script は Nix の flake の input と devShell を環境のキャッシュに入れ、yomiyasu と ecoskills のプラグインを入れる。理由と仕組みは [docs/implementation/testing.md](docs/implementation/testing.md) の「クラウドのセッション」にある。
+
+```sh
+#!/bin/bash
+set -euo pipefail
+
+# setup script はログインシェルで動くとは限らないので、Nix を PATH に入れる
+if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+  . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+fi
+
+# クラウドのセッションはリポジトリの enabledPlugins を読まないので、プラグインを user の scope に入れる
+claude plugin marketplace add nanaism/yomiyasu
+claude plugin marketplace add ecofighter/ecoskills
+claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin install ecoskills@ecoskills --scope user
+
+# flake の input と devShell を環境のキャッシュに入れる
+if [ -x /home/user/eml/.claude/hooks/session-start.sh ]; then
+  CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR=/home/user/eml \
+    /home/user/eml/.claude/hooks/session-start.sh
+fi
+```
+
 `eml` の終了コードは、成功で 0、診断または実行時エラーで 1、使い方の誤りで 2、Ctrl-C で止めたときは 130 である。
 
 ## リポジトリの構成

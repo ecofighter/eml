@@ -503,7 +503,31 @@ CI が見るのは合否だけである。テストの時間の条件 (「性能
 
 Claude Code のクラウドのセッションでは、外への通信が proxy を通る。proxy は GitHub の archive の取得を断るが、git の clone は通す。flake の `github:` の input は archive で取るので、そのままでは `nix develop` が input の取得で止まる。
 
-`.claude/hooks/session-start.sh` が SessionStart のフックでこれを補う。フックが動くのはクラウドのセッション (`CLAUDE_CODE_REMOTE=true`) だけである。`flake.lock` の `github:` の input を、同じ rev のまま `git+https` で `nix flake prefetch` して store に置く。input の store の道は中身の narHash で決まる。そのため、置いた後の `nix develop` は archive を取りに行かず、この文書のコマンドがそのまま動く。取った中身の hash が `flake.lock` の `narHash` と違えば、フックは誤りで止まる。最後に devShell を1回組み、コンテナのキャッシュに残す。
+`.claude/hooks/session-start.sh` が SessionStart のフックでこれを補う。フックが動くのはクラウドのセッション (`CLAUDE_CODE_REMOTE=true`) だけである。`flake.lock` の `github:` の input を、同じ rev のまま `git+https` で `nix flake prefetch` して store に置く。input の store の道は中身の narHash で決まる。そのため、置いた後の `nix develop` は archive を取りに行かず、この文書のコマンドがそのまま動く。取った中身の hash が `flake.lock` の `narHash` と違えば、フックは誤りで止まる。最後に devShell を1回組む。
+
+クラウドの環境の setup script には次を書く。`README.md` と `CLAUDE.md` の写しはこれに合わせる。setup script は、Claude Code が起動する前に root で動く。5分ほどで終われば、setup script が書いたファイルは環境のキャッシュに残り、後のセッションに引き継がれる。セッションの始めにフックが組んだものは残らないので、setup script からフックを呼んで devShell をキャッシュに入れる。そうすると、各セッションのフックは input を確かめるだけになり、数秒で終わる。クラウドのセッションはリポジトリの `.claude/settings.json` の `enabledPlugins` を読まない。そのため、yomiyasu と ecoskills のプラグインもここで user の scope に入れる。yomiyasu は `CLAUDE.md` が求めるプラグインである。Nix を入れる手順はここには書かず、環境の setup script に置いたままにする。
+
+```sh
+#!/bin/bash
+set -euo pipefail
+
+# setup script はログインシェルで動くとは限らないので、Nix を PATH に入れる
+if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+  . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+fi
+
+# クラウドのセッションはリポジトリの enabledPlugins を読まないので、プラグインを user の scope に入れる
+claude plugin marketplace add nanaism/yomiyasu
+claude plugin marketplace add ecofighter/ecoskills
+claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin install ecoskills@ecoskills --scope user
+
+# flake の input と devShell を環境のキャッシュに入れる
+if [ -x /home/user/eml/.claude/hooks/session-start.sh ]; then
+  CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR=/home/user/eml \
+    /home/user/eml/.claude/hooks/session-start.sh
+fi
+```
 
 ## よく使うコマンド
 

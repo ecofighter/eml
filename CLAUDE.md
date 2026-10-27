@@ -47,6 +47,30 @@ bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ a
 bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input, compare.sh --paths EML PY ARGS... < input)
 ```
 
+In Claude Code cloud sessions, `.claude/hooks/session-start.sh` fetches the flake's `github:` inputs over git so `nix develop` works, and the environment's setup script must be the one below. It caches the devShell and installs the yomiyasu and ecoskills plugins, which cloud sessions do not take from `.claude/settings.json`. The reference copy and the reasons are in docs/implementation/testing.md の「クラウドのセッション」; keep this copy and the one in `README.md` identical to it.
+
+```sh
+#!/bin/bash
+set -euo pipefail
+
+# setup script はログインシェルで動くとは限らないので、Nix を PATH に入れる
+if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+  . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+fi
+
+# クラウドのセッションはリポジトリの enabledPlugins を読まないので、プラグインを user の scope に入れる
+claude plugin marketplace add nanaism/yomiyasu
+claude plugin marketplace add ecofighter/ecoskills
+claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin install ecoskills@ecoskills --scope user
+
+# flake の input と devShell を環境のキャッシュに入れる
+if [ -x /home/user/eml/.claude/hooks/session-start.sh ]; then
+  CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR=/home/user/eml \
+    /home/user/eml/.claude/hooks/session-start.sh
+fi
+```
+
 The dev profile (and so `cargo nextest run` and `cargo test`) is opt-level 1 with debug assertions on; `--release` is only for `bench/*.sh` and the `#[ignore]` timing tests. For a debugger, build once with `CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...`.
 
 The full list, with the scaling tests, is in docs/implementation/testing.md の「よく使うコマンド」.

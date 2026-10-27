@@ -34,5 +34,5 @@ for node in nodes.values():
   fi
 done
 
-# devShell を一度組んでおき、コンテナのキャッシュに残す
+# devShell を一度組んでおく。環境の setup script からこのフックを呼ぶと、組んだものが環境のキャッシュに残る
 nix develop -c true
