@@ -198,11 +198,24 @@ impl Drop for TaskHandle {
     }
 }
 
+/// 登録表が数える仕事の回数。検査モードでなくても数えるが、`RunStats` に写すのは検査モードだけである
+/// (docs/spec/vm.md の「`RunStats`」)。
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct TaskStats {
+    /// `start` が作ったタスクのセルの数。
+    pub(crate) tasks: u64,
+    /// `park` と `ready` が渡された継続の数。
+    pub(crate) parks: u64,
+    /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
+    pub(crate) dropped_failures: u64,
+}
+
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
 pub(crate) struct Registry {
     slots: Vec<(u32, Option<CellKind>)>,
     free: Vec<u32>,
     pub(crate) inbox: Arc<Inbox>,
+    pub(crate) stats: TaskStats,
 }
 
 impl Default for Registry {
@@ -211,6 +224,7 @@ impl Default for Registry {
             slots: Vec::new(),
             free: Vec::new(),
             inbox: Arc::new(Inbox::default()),
+            stats: TaskStats::default(),
         }
     }
 }
@@ -318,6 +332,7 @@ impl Registry {
             handle_dropped: false,
         }));
         self.scope_mut(scope)?.live += 1;
+        self.stats.tasks += 1;
         let handle = heap.alloc_foreign(
             TaskHandle {
                 cell,
@@ -368,6 +383,7 @@ impl Registry {
             CellKind::Scope(scope) => scope.closed,
         };
         self.suspend(me)?;
+        self.stats.parks += 1;
         if done {
             return Ok(Some(Runnable::Resume {
                 cell: me,
@@ -386,6 +402,7 @@ impl Registry {
     /// タスク `me` が、継続 `k` で実行待ちの列の後ろへ回る。
     pub(crate) fn ready(&mut self, me: CellRef, k: Word) -> Result<Runnable, CellFault> {
         self.suspend(me)?;
+        self.stats.parks += 1;
         Ok(Runnable::Resume {
             cell: me,
             k,
@@ -453,10 +470,14 @@ impl Registry {
             "a task finishes in a freed scope"
         );
         let scope = self.scope_mut(scope)?;
-        if let Some(failure) = failure
-            && scope.first_failure.is_none()
-        {
-            scope.first_failure = Some(failure);
+        // スコープへ戻るのは最初の失敗だけで、後の失敗は数だけ残る
+        let mut dropped_failure = false;
+        if let Some(failure) = failure {
+            if scope.first_failure.is_none() {
+                scope.first_failure = Some(failure);
+            } else {
+                dropped_failure = true;
+            }
         }
         scope.live = scope.live.checked_sub(1).ok_or(CellFault::Internal(
             "a scope ends more tasks than it started",
@@ -465,6 +486,7 @@ impl Registry {
             scope.closed = true;
             out.extend(std::mem::take(&mut scope.waiters).into_iter().map(wake));
         }
+        self.stats.dropped_failures += u64::from(dropped_failure);
         if dropped {
             self.free_task(ctx, cell, depth_offset)?;
         }

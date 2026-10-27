@@ -1,7 +1,7 @@
 //! `Std.Async` のタスクの始めと終わり、待ち、失敗と `Async.run` (docs/spec/vm.md の「`Async` のタスク」)。どのプログラムも検査モードの
 //! 逐次と速いモードで流し、標準出力を比べる。
 
-use eml_test_support::{execute, lir, run, schedule_independent};
+use eml_test_support::{execute, lir, run, run_stats, schedule_independent};
 use eml_vm::{RunConfig, Sched};
 
 /// 検査モードと速いモードで流し、どちらも成功して同じ標準出力を返すことを確かめて、その出力を返す。
@@ -184,6 +184,66 @@ main () =
     println (show n))
 ";
     assert_eq!(run_both(src), "0\n");
+}
+
+/// スコープの最初の失敗より後の失敗だけを `dropped_failures` に数える。失敗する子が2つなら、1つが残らない。
+#[test]
+fn the_second_failure_of_a_scope_is_counted_as_dropped() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  let r = try_panic (fn () ->
+    Async.run (fn () ->
+      Async.spawn (fn () -> panic \"one\")
+      Async.spawn (fn () -> panic \"two\")))
+  match r with
+    | Ok () -> println \"ok\"
+    | Err _ -> println \"failed\"
+";
+    let (out, stats) = run_stats(src);
+    let stats = stats.expect("the checked run");
+    assert_eq!(out, "failed\n");
+    assert_eq!(stats.dropped_failures, 1);
+    assert_eq!(stats.tasks, 3);
+}
+
+/// 本体が2つの子を始めて両方を待つと、タスクは3つ、継続を渡す待ちは2つである。`shared_objects` は、始めるときの
+/// `share` が数える。4つの欄は seed によらない。
+#[test]
+fn the_task_counts_do_not_depend_on_the_schedule() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let x = \"a\" ++ show 1
+    let y = \"b\" ++ show 2
+    let a = Async.start (fn () -> x)
+    let b = Async.start (fn () -> y)
+    println (Async.await a)
+    println (Async.await b))
+";
+    let program = lir(src);
+    let checked = || RunConfig::default().with_debug_heap(true);
+    let (out, sequential) = execute(&program, &checked());
+    let sequential = sequential.expect("the sequential run");
+    assert_eq!(out, "a1\nb2\n");
+    assert_eq!(sequential.tasks, 3);
+    assert_eq!(sequential.parks, 2);
+    assert_eq!(sequential.dropped_failures, 0);
+    assert!(sequential.shared_objects > 0);
+    for seed in [1, 2026] {
+        let (seeded_out, seeded) = execute(&program, &checked().with_sched(Sched::Seeded(seed)));
+        let seeded = seeded.unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+        assert_eq!(seeded_out, out, "seed {seed}");
+        let (a, b) = (seeded, sequential);
+        assert_eq!(
+            (a.tasks, a.parks, a.dropped_failures, a.shared_objects),
+            (b.tasks, b.parks, b.dropped_failures, b.shared_objects),
+            "seed {seed}"
+        );
+    }
 }
 
 /// 意味の核はネイティブのコードからも呼べるように、`std` と `eml_rt` だけを import する。

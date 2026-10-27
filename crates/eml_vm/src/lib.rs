@@ -6,6 +6,7 @@ use std::sync::Arc;
 use eml_lir::Program;
 use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, Mode, Stats};
 
+use crate::cells::TaskStats;
 use crate::vm::ExecWith;
 
 mod apply;
@@ -50,6 +51,14 @@ pub struct RunStats {
     pub peak_objects: u64,
     /// タスクのスタックで同時に使った語の数の最大。
     pub peak_stack: u64,
+    /// `Async` が作ったタスクのセルの数。
+    pub tasks: u64,
+    /// `Async` の待ちと `yield_now` が、継続をランタイムに渡した数。
+    pub parks: u64,
+    /// スコープの最初の失敗より後の、タスクの失敗の数。
+    pub dropped_failures: u64,
+    /// `share` が rc を負にした物体の数。
+    pub shared_objects: u64,
 }
 
 /// 1回の実行の結果。`exit` で終わったら、その終了コードを持つ (docs/spec/vm.md の「`RunStats`」)。
@@ -286,6 +295,8 @@ impl<M: Mode> Machine<M> {
                 - self.copying.rc_decrements,
             allocations: self.earlier.allocations + now.allocations - self.copying.allocations,
             peak_objects: self.earlier.peak_objects.max(now.peak_objects),
+            shared_objects: self.earlier.shared_objects + now.shared_objects
+                - self.copying.shared_objects,
         }
     }
 
@@ -363,7 +374,7 @@ impl<M: Mode> Machine<M> {
                 ));
             };
             let finished = Finished {
-                stats: self.run_stats(&counts, scheduled.peak_stack),
+                stats: self.run_stats(&counts, &scheduled),
                 exit: Some(code),
                 preemptions: scheduled.preemptions,
             };
@@ -383,15 +394,15 @@ impl<M: Mode> Machine<M> {
         (self.check_heap)(ctx)
             .map_err(|error| heap_fault(error, code.function_name(task.last_ret, &task)))?;
         let finished = Finished {
-            stats: self.run_stats(&counts, scheduled.peak_stack),
+            stats: self.run_stats(&counts, &scheduled),
             exit,
             preemptions: scheduled.preemptions,
         };
         Ok(Ran::Done(finished, text))
     }
 
-    /// `Machine` を作ってからの積算の `RunStats`。`peak_stack` だけがこの実行の値である。
-    fn run_stats(&self, counts: &RunCounts, peak_stack: u64) -> RunStats {
+    /// `Machine` を作ってからの積算の `RunStats`。`peak_stack` と `Async` の欄だけがこの実行の値である。
+    fn run_stats(&self, counts: &RunCounts, scheduled: &Scheduled) -> RunStats {
         let c = self.ctx.stats();
         let h = self.heap_work();
         RunStats {
@@ -408,7 +419,15 @@ impl<M: Mode> Machine<M> {
             reuses: counts.reuses,
             peak_objects: h.peak_objects,
             // 統計は検査モードだけで数える
-            peak_stack: if M::CHECKED { peak_stack } else { 0 },
+            peak_stack: if M::CHECKED { scheduled.peak_stack } else { 0 },
+            tasks: if M::CHECKED { scheduled.tasks.tasks } else { 0 },
+            parks: if M::CHECKED { scheduled.tasks.parks } else { 0 },
+            dropped_failures: if M::CHECKED {
+                scheduled.tasks.dropped_failures
+            } else {
+                0
+            },
+            shared_objects: h.shared_objects,
         }
     }
 
@@ -438,6 +457,7 @@ struct Scheduled {
     preemptions: u64,
     peak_stack: u64,
     shared_roots: usize,
+    tasks: TaskStats,
 }
 
 /// スケジューラを作るときに `Machine` から渡すもの。
@@ -466,6 +486,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         preemptions: sched.preemptions(),
         peak_stack: sched.peak_stack(task),
         shared_roots: sched.shared_roots,
+        tasks: sched.cells.stats,
     };
     (result, scheduled)
 }
@@ -477,6 +498,7 @@ struct HeapWork {
     rc_decrements: u64,
     allocations: u64,
     peak_objects: u64,
+    shared_objects: u64,
 }
 
 impl HeapWork {
@@ -486,6 +508,7 @@ impl HeapWork {
             rc_decrements: stats.rc_decrements,
             allocations: stats.allocations,
             peak_objects: stats.peak_live,
+            shared_objects: stats.shared,
         }
     }
 }
