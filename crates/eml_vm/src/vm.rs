@@ -51,7 +51,8 @@ pub struct Task {
     pub(crate) entry: u32,
     /// `Finish` が結果を手放さずに残す。`Machine::run_shown` が、実行の後に結果の文字列を写して手放す。
     pub(crate) keep_result: bool,
-    /// `exit` の終了コード。立っていれば、中断が `Finish` まで届く (docs/spec/vm.md の「extern の中断」)。
+    /// 巻き戻しの間の `exit` の終了コード。立っていれば、中断が `Finish` まで届き、底が終わりの欄に書く
+    /// (docs/spec/vm.md の「`exit`」)。
     pub(crate) exit: Option<i64>,
     /// 動いていない間に退避した `evv`。タスクが参照を1つ持つ。動いている間は `()` で、`Ctx` が持つ。
     pub(crate) evv: Word,
@@ -1398,7 +1399,7 @@ fn stops_the_run(error: &RuntimeError) -> bool {
     matches!(
         error,
         RuntimeError::Fault {
-            fault: VmFault::Stopped(Stop::Interrupted | Stop::MemoryLimit)
+            fault: VmFault::Stopped(Stop::Interrupted | Stop::MemoryLimit | Stop::Ended)
                 | VmFault::Extern(eml_rt::Fault::Heap(_))
                 | VmFault::Internal(_),
             ..
@@ -1451,12 +1452,17 @@ fn finish<R: Exec>(
     if task.exit.is_some() && !task.boundaries.is_empty() {
         return Err(VmFault::Internal("an exit ends a run with an open par"));
     }
-    if task.exit.is_some() {
+    if let Some(n) = task.exit {
         // 途中のフレームは巻き戻しで片付けてある。入口の結果はダミーなので手放さない。中断の途中の `evv` には
         // 意味がないので、空に戻す (docs/spec/vm.md の「extern の中断」)
         unsafe {
             ctx.yield_finish()?;
             ctx.evv_set(Word::UNIT)?;
+        }
+        // 終了コードは終わりの欄だけが運ぶ。run の始めに開いた欄に先に書いた者はいないはずである
+        // (docs/spec/vm.md の「`exit`」)
+        if !ctx.heap().control().exit(n) {
+            return Err(VmFault::Internal("an exit after the end of the run"));
         }
         return Ok(());
     }

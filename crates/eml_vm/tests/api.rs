@@ -1,5 +1,5 @@
 //! 公開の API の性質。後の並列 VM のための型の性質 (docs/future/multicore.md の「VM の並列化の備え」の制約1と2) と、
-//! 実行の設定 `RunConfig` と、スケジュールの方針 `Sched` と、実行時エラーの `interrupted` である。
+//! 実行の設定 `RunConfig` と、スケジュールの方針 `Sched` と、実行時エラーの `interrupted` と、`exit` が書く終わりの欄である。
 
 use std::sync::Arc;
 
@@ -242,4 +242,47 @@ fn only_an_interrupt_is_interrupted() {
     assert!(!fault(VmFault::Extern(eml_rt::ArithFault::DivisionByZero.into())).interrupted());
     assert!(!fault(VmFault::Internal("x")).interrupted());
     assert!(!RuntimeError::Leak(vec![("String".to_string(), 1)]).interrupted());
+}
+
+const EXIT: &str = "\
+fn main() -> unit {
+  let z.0: unit = extern Prelude.exit(3)
+  return z.0
+}
+";
+
+/// `main` の底は `exit` の終了コードを `Control` の終わりの欄に書き、`Finished.exit` はそこから来る
+/// (docs/spec/vm.md の「`exit`」)。
+#[test]
+fn an_exit_is_written_to_the_end_field() {
+    for debug_heap in [true, false] {
+        let control = Arc::new(Control::new(Limits::default()));
+        let config = RunConfig::default()
+            .with_debug_heap(debug_heap)
+            .with_control(Arc::clone(&control));
+        let (host, _) = eml_vm::capture_host(Default::default());
+        let finished = eml_vm::execute(&parse(EXIT), &config, host).unwrap();
+        assert_eq!(finished.exit, Some(3));
+        assert_eq!(control.exit_code(), Some(3));
+    }
+}
+
+/// 終わりの欄は run ごとに開くので、`exit` で終わった `Machine` の次の run は `exit` を報告しない
+/// (docs/spec/vm.md の「誤り、止めること、終わり」)。
+#[test]
+fn a_machine_runs_again_after_an_exit() {
+    let quiet = "\
+fn second() -> unit {
+  return ()
+}
+";
+    let (host, _) = eml_vm::capture_host(Default::default());
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut machine = Machine::<Checked>::new(Arc::clone(&control), host);
+    let first = machine.load(&parse(EXIT)).unwrap();
+    let second = machine.load(&parse(quiet)).unwrap();
+    assert_eq!(machine.run(first.entry).unwrap().exit, Some(3));
+    assert_eq!(machine.run(second.entry).unwrap().exit, None);
+    assert_eq!(control.exit_code(), None);
+    machine.close().unwrap();
 }
