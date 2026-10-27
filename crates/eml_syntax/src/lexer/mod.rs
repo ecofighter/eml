@@ -656,6 +656,7 @@ fn keyword(ident: &str) -> Option<SyntaxKind> {
         "where" => WHERE_KW,
         "pub" => PUB_KW,
         "extern" => EXTERN_KW,
+        "abstract" => ABSTRACT_KW,
         "import" => IMPORT_KW,
         "as" => AS_KW,
         "infixl" => INFIXL_KW,

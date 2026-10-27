@@ -320,3 +320,19 @@ fn a_pattern_field_without_its_pattern_binds_nothing() {
       6:17 found `,`
     ");
 }
+
+#[test]
+fn an_abstract_field_is_hidden_outside_its_module() {
+    // 射影に1つ、2つのフィールドの更新に1つ。help に宣言したフィールドの名前を出さない
+    let lib = "pub abstract data Config = | Config { name : String, size : Int }\n\npub config : String -> Config\nconfig n = Config { name = n, size = 1 }\n\npub name_of : Config -> String\nname_of c = c.name";
+    let entry = "import Lib\n\nf : Unit -> String\nf () =\n  let c = Lib.config \"a\"\n  let s = c.name\n  let d = { c | name = \"x\", size = 2 }\n  s ++ Lib.name_of d";
+    let checked = check(eml_test_support::with_modules(entry, &[("Lib.em", lib)]));
+    let report = eml_test_support::full_with_paths(checked.files(), &checked.diagnostics);
+    assert!(!report.contains("help"), "{report}");
+    insta::assert_snapshot!(report, @"
+    E2021 test.em 6:13 field `name` of the abstract type `Config` is not visible outside `Lib`
+      test.em 6:13 hidden by `abstract`
+    E2021 test.em 7:17 the fields of the abstract type `Config` cannot be updated outside `Lib`
+      test.em 7:17 hidden by `abstract`
+    ");
+}

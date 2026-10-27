@@ -42,6 +42,7 @@ pub enum SyntaxKind {
     WHERE_KW,
     PUB_KW,
     EXTERN_KW,
+    ABSTRACT_KW,
     IMPORT_KW,
     AS_KW,
     INFIXL_KW,

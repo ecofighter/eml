@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/abstract_field/main.em
+---
+[E2021] Error: field `name` of the abstract type `Config` is not visible outside `Lib`
+   ╭─[ check-fail/types/abstract_field/main.em:8:13 ]
+   │
+ 8 │   println c.name
+   │             ──┬─  
+   │               ╰─── hidden by `abstract`
+───╯
+[E2021] Error: the fields of the abstract type `Config` cannot be updated outside `Lib`
+   ╭─[ check-fail/types/abstract_field/main.em:9:17 ]
+   │
+ 9 │   let d = { c | name = "x", size = 2 }
+   │                 ──┬─  
+   │                   ╰─── hidden by `abstract`
+───╯

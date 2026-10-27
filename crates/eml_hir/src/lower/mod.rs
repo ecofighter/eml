@@ -19,7 +19,7 @@ use rustc_hash::FxHashMap;
 
 use crate::codes;
 use crate::def_map::{
-    DefMap, NameRef, Resolved, Resolver, item_id, module_id, not_in_module, private_name,
+    DefMap, Hidden, NameRef, Resolved, Resolver, item_id, module_id, not_in_module, private_name,
 };
 use crate::hir::*;
 use crate::item_tree::{FunctionItem, InputItemKind, ItemTree};
@@ -479,6 +479,7 @@ fn declare_var_effects(
             generics: Generics::default(),
             operations: Vec::new(),
             kind: EffectKind::Var { function, var },
+            abstract_ops: false,
         });
         debug_assert_eq!(ItemId::new(function.module, local), data.effect);
         *sites += 1;
@@ -689,6 +690,7 @@ pub(super) fn unresolved<T>(
             at.last(),
             (definition_file, definition),
         )),
+        Resolved::Abstract(hidden) => Some(abstract_member(file, at, &hidden)),
         Resolved::UnknownQualifier => match at.name {
             NameRef::Qualified { qualifier, name } => Some(unknown_qualifier(
                 items,
@@ -701,6 +703,27 @@ pub(super) fn unresolved<T>(
             NameRef::Plain(_) => None,
         },
     }
+}
+
+/// 別のモジュールの抽象型のコンストラクタか抽象エフェクトの操作を使った (E1058)。名前は見えるが、宣言したモジュールの
+/// 外では使えない (docs/spec/modules.md の「公開の範囲」)。
+fn abstract_member(file: FileId, at: &NameUse<'_>, hidden: &Hidden) -> Diagnostic {
+    let (part, owner) = if hidden.effect {
+        ("operation", "effect")
+    } else {
+        ("constructor", "type")
+    };
+    Diagnostic::error(
+        codes::ABSTRACT_MEMBER,
+        format!(
+            "{part} `{}` of the abstract {owner} `{}` is not visible outside `{}`",
+            at.last(),
+            hidden.owner,
+            hidden.module
+        ),
+        Label::new(file, at.range, "hidden by `abstract`"),
+    )
+    .with_secondary(Label::new(hidden.file, hidden.range, "declared here"))
 }
 
 /// E1031。修飾子は1つのセグメントなので、パス全体を書いた `Report.Csv.parse` もここに来る。そのモジュールを別名で

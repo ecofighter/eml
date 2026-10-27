@@ -20,7 +20,7 @@ enum ItemKind {
     ReservedOperator,
 }
 
-/// 今の位置から始まる項目の種類。`pub` と `extern` は項目の前置きなので、ここでは見ない。`at_item_start` と `item` が同じ判定を
+/// 今の位置から始まる項目の種類。`pub`、`abstract`、`extern` は項目の前置きなので、ここでは見ない。`at_item_start` と `item` が同じ判定を
 /// 使うため、項目の種類を足すときはここだけを直す。
 fn item_kind(p: &Parser) -> Option<ItemKind> {
     Some(match p.current() {
@@ -42,14 +42,14 @@ fn item_kind(p: &Parser) -> Option<ItemKind> {
 }
 
 pub(super) fn at_item_start(p: &Parser) -> bool {
-    p.at(PUB_KW) || p.at(EXTERN_KW) || item_kind(p).is_some()
+    p.at(PUB_KW) || p.at(ABSTRACT_KW) || p.at(EXTERN_KW) || item_kind(p).is_some()
 }
 
 /// REPL の入力が item の並びで始まるか。等式の形 (`f x …`、`a + b …`) は、最初の項目の中で括弧の外にあり、ブロックが
 /// 開く前にある `=` を持つときだけ item とみなす。`f x` や `1 + 2` を式として読み、`fn () ->` の後のブロックの中の
 /// `let y = 1` を等式と取り違えないため (docs/spec/grammar.md の「REPL の入力」)。
 pub(super) fn at_items_input(p: &Parser) -> bool {
-    if p.at(PUB_KW) || p.at(EXTERN_KW) {
+    if p.at(PUB_KW) || p.at(ABSTRACT_KW) || p.at(EXTERN_KW) {
         return true;
     }
     match item_kind(p) {
@@ -106,7 +106,20 @@ fn at_reserved_operator(p: &Parser) -> bool {
 /// 項目を1つ読み、import 以外の項目だったかを返す。`declared` は、ファイルの中でこれより前に import 以外の項目があったか。
 pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
     let m = p.start();
+    // `abstract pub` は `extern pub` と同じく、E0011 を1つ出して `pub abstract` と読む
+    let abstract_misordered = p.at(ABSTRACT_KW) && p.nth(1) == PUB_KW;
+    if abstract_misordered {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "`abstract` cannot be written before `pub`",
+            "write `pub abstract`",
+        );
+        p.bump(ABSTRACT_KW);
+    }
+    let pub_at = p.position();
     let public = p.eat(PUB_KW);
+    let abstract_at = p.position();
+    let abstract_ = p.eat(ABSTRACT_KW);
     // 誤った `extern` は、`extern` のトークンに E0011 を1つだけ出す。`pub` の誤りも重ねない。`extern` を直した後に
     // 残る誤りは、そのとき報告すれば足りるため
     let misordered = p.at(EXTERN_KW) && p.nth(1) == PUB_KW;
@@ -122,20 +135,36 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
         p.bump(PUB_KW);
     }
     let kind = item_kind(p);
+    // `abstract` は `pub data` と `pub effect` にだけ付く (docs/spec/grammar.md の `item`)。誤りは `abstract` のトークンに
+    // 1つだけ出し、項目は `abstract` がないものとして読む。項目がないときは「項目がない」誤りだけにする
+    if abstract_
+        && kind.is_some()
+        && (!public || external || !matches!(kind, Some(ItemKind::Data | ItemKind::Effect)))
+    {
+        p.error_at(
+            abstract_at,
+            codes::SYNTAX_ERROR,
+            "`abstract` is only allowed on `pub data` and `pub effect`",
+            "`abstract` goes on `pub data` or `pub effect`",
+        );
+    }
     // `pub` は宣言だけに付く (docs/spec/grammar.md の `item`)。等式の関数はシグネチャで公開する
     if public && !external {
         match kind {
-            Some(ItemKind::Equation | ItemKind::OperatorEquation) => p.error_at_previous(
+            Some(ItemKind::Equation | ItemKind::OperatorEquation) => p.error_at(
+                pub_at,
                 codes::SYNTAX_ERROR,
                 "`pub` cannot be written on an equation",
                 "write `pub` on the signature instead",
             ),
-            Some(ItemKind::Import) => p.error_at_previous(
+            Some(ItemKind::Import) => p.error_at(
+                pub_at,
                 codes::SYNTAX_ERROR,
                 "`pub` cannot be written on an import",
                 "only declarations can be public",
             ),
-            Some(ItemKind::Instance) => p.error_at_previous(
+            Some(ItemKind::Instance) => p.error_at(
+                pub_at,
                 codes::SYNTAX_ERROR,
                 "`pub` cannot be written on an instance",
                 "an instance is visible everywhere",
@@ -619,6 +648,7 @@ fn class_member(p: &mut Parser) -> bool {
         );
         p.bump(PUB_KW);
     }
+    skip_member_abstract(p);
     match item_kind(p) {
         Some(ItemKind::Signature) => signature(p, m),
         Some(ItemKind::Equation) => equation(p, m),
@@ -630,6 +660,19 @@ fn class_member(p: &mut Parser) -> bool {
         }
     }
     true
+}
+
+/// クラスと instance のメンバーに書いた `abstract` は、`pub` と同じく E0011 にして読み飛ばす
+/// (docs/spec/grammar.md の `item`)。メンバーを落とすと、メソッドがないことの誤りが連鎖するため。
+fn skip_member_abstract(p: &mut Parser) {
+    if p.at(ABSTRACT_KW) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "`abstract` is only allowed on `pub data` and `pub effect`",
+            "a member cannot be abstract",
+        );
+        p.bump(ABSTRACT_KW);
+    }
 }
 
 /// instance_item ::= 'instance' context? qUIDENT atype ('where' block(inst_member))?
@@ -669,6 +712,7 @@ fn instance_member(p: &mut Parser) -> bool {
         );
         p.bump(PUB_KW);
     }
+    skip_member_abstract(p);
     if p.eat(EXTERN_KW) {
         if p.at(LIDENT) {
             name(p);

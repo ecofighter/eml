@@ -1,0 +1,11 @@
+# セッションの入力どうしは同じモジュールなので、セッションで宣言した抽象型のコンストラクタは後の入力から見える。
+# import したモジュールの抽象型は、セッションでも隠す
+> pub abstract data Box = | Box Int
+> match Box 1 with
+.   | Box n -> n
+.
+> import Lib
+> match Lib.make 1 with
+.   | Lib.Sealed n -> n
+.
+> Lib.peek (Lib.make 1)

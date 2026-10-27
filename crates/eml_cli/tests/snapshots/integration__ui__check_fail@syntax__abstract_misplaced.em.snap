@@ -1,0 +1,56 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/abstract_misplaced.em
+---
+[E0011] Error: `abstract` is only allowed on `pub data` and `pub effect`
+   ╭─[ check-fail/syntax/abstract_misplaced.em:3:1 ]
+   │
+ 3 │ abstract data T = | T
+   │ ────┬───  
+   │     ╰───── `abstract` goes on `pub data` or `pub effect`
+───╯
+[E0011] Error: `abstract` is only allowed on `pub data` and `pub effect`
+   ╭─[ check-fail/syntax/abstract_misplaced.em:4:5 ]
+   │
+ 4 │ pub abstract f : Int -> Int
+   │     ────┬───  
+   │         ╰───── `abstract` goes on `pub data` or `pub effect`
+───╯
+[E0011] Error: `abstract` is only allowed on `pub data` and `pub effect`
+   ╭─[ check-fail/syntax/abstract_misplaced.em:6:5 ]
+   │
+ 6 │ pub abstract extern data U
+   │     ────┬───  
+   │         ╰───── `abstract` goes on `pub data` or `pub effect`
+───╯
+[E1033] Error: `extern` is only allowed in the standard library
+   ╭─[ check-fail/syntax/abstract_misplaced.em:6:14 ]
+   │
+ 6 │ pub abstract extern data U
+   │              ───┬──  
+   │                 ╰──── user modules cannot declare externs
+   │ 
+   │ Help: remove `extern` and define the declaration in eml
+───╯
+[E0011] Error: `abstract` cannot be written before `pub`
+   ╭─[ check-fail/syntax/abstract_misplaced.em:7:1 ]
+   │
+ 7 │ abstract pub data V = | V
+   │ ────┬───  
+   │     ╰───── write `pub abstract`
+───╯
+[E0011] Error: `abstract` is only allowed on `pub data` and `pub effect`
+   ╭─[ check-fail/syntax/abstract_misplaced.em:8:5 ]
+   │
+ 8 │ pub abstract type W = Int
+   │     ────┬───  
+   │         ╰───── `abstract` goes on `pub data` or `pub effect`
+───╯
+[E0004] Error: `type` declarations are not supported yet
+   ╭─[ check-fail/syntax/abstract_misplaced.em:8:14 ]
+   │
+ 8 │ pub abstract type W = Int
+   │              ──┬─  
+   │                ╰─── this is implemented in a later stage
+───╯

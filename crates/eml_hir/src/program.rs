@@ -352,6 +352,14 @@ impl Program {
         self.items(|items| &items.bindings)
     }
 
+    /// 2つのモジュールを同じモジュールとみなすか。`DefMap::same_scope` と同じ判定で、セッションのモジュールどうしは
+    /// 1つのモジュールとみなす (docs/spec/modules.md の「REPL のセッション」)。
+    pub fn same_scope(&self, a: ModuleId, b: ModuleId) -> bool {
+        a == b
+            || (self.modules[a].origin.session().is_some()
+                && self.modules[b].origin.session().is_some())
+    }
+
     pub fn instance(&self, class: ClassId, head: TypeDefId) -> Option<InstanceId> {
         self.instance_index.get(&(class, head)).copied()
     }

@@ -66,6 +66,9 @@ impl ItemLowering<'_> {
                     types: Arena::new(),
                     kind,
                     lin,
+                    abstract_ctors: item.public
+                        && item.abstract_ctors
+                        && item.extern_keyword.is_none(),
                 }),
             );
             debug_assert_eq!(id, item_id(self.module, k));
@@ -129,13 +132,16 @@ impl ItemLowering<'_> {
                     ));
                 }
                 let def = &mut types[ty.local];
+                // 抽象型のフィールドは外から見えないので、非公開の型が現れても裏口にならない
+                // (docs/spec/modules.md の「公開の範囲」)
+                let exposed = item.public && !def.abstract_ctors;
                 let mut lowering = TypeLowering {
                     file: self.file,
                     types: &mut def.types,
                     generics: &mut def.generics,
                     items: self.resolver,
                     vars: Vars::Data,
-                    public_item: item.public.then_some(constructor.name.as_str()),
+                    public_item: exposed.then_some(constructor.name.as_str()),
                     diagnostics: &mut *self.diagnostics,
                 };
                 let alt = constructor.ptr.to_node(self.root);

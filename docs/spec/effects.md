@@ -96,6 +96,10 @@ extern のエフェクトは、型検査では普通のエフェクトと次の�
 - 型検査では、重なったラベルを1つにまとめ、`mask` に入れない点が `IO` と同じである。多重度は `Never` で、`never` の操作だけを含む row (`Row<Never>`) に入れられる。並列のタスクに渡す関数も `Panic` を起こせる ([マルチコア対応の設計](../future/multicore.md))。操作は `never` の `panicked` だけなので、`Panic` は yield しうるラベルでない ([型と Kind](types.md) の「row の具体化の記録」)。row に `Panic` を足しても、yield の確かめは増えない
 - トップレベルの値の本体と、`Eq`、`Ord`、`Show` のメソッドの row は空なので、そこでは `Panic` を起こせない ([宣言](declarations.md) の「シグネチャと等式」)。`main` の row と REPL の入力の row は `Panic` を許す ([モジュールと名前解決](modules.md) の「モジュール」、[型と Kind](types.md) の「REPL の入力」)
 
+## 抽象エフェクト
+
+`pub abstract effect E where …` は、エフェクトの名前を公開し、操作を宣言したモジュールの外から隠す。外のモジュールは row に `E` を書き、`E` を持つ関数を呼べるが、操作を perform できず、`handle` の節に書けず (どちらも E1058)、import の並びの `E(..)` でも取り込めない。extern のエフェクトはいつも隠す (上の「組み込みの `IO`」)。型検査、evidence passing、`mask` は普通のエフェクトと同じで、違いは名前解決だけである。
+
 ## handler の意味
 
 ```haskell

@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/data/abstract_api.em
+---
+--- stdout ---
+42
+Counter 3
+--- stderr ---
