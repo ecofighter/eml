@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use super::host::host;
-use crate::{Control, Ctx, Heap, Limits, Mode, Stop};
+use crate::control::stop_reason;
+use crate::{Control, Ctx, Fast, Heap, Limits, Mode, Stop};
 
 const PAGE_BYTES: usize = 0x1_0000;
 
@@ -77,6 +78,91 @@ fn interrupt_and_clear() {
     assert_eq!(control.stop_bits(), Control::INTERRUPT);
     control.clear();
     assert_eq!(control.stop_bits(), 0);
+}
+
+// `PREEMPT` は worker の語だけに立ち、host の読み手が見る `stop` には立たない
+#[test]
+fn preempt_reaches_only_the_worker_word() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let ctx = Ctx::<Fast>::new(control.clone(), host(&Arc::default()));
+    control.preempt();
+    assert_eq!(control.worker_bits(), Control::PREEMPT);
+    assert_eq!(control.stop_bits(), 0);
+    assert_eq!(ctx.poll(0), Err(Stop::Preempt));
+    control.take_preempt();
+    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(ctx.poll(0), Ok(()));
+    // 割り込みは両方の語に立つ。`take_preempt` は割り込みを下ろさない
+    control.interrupt();
+    control.preempt();
+    control.take_preempt();
+    assert_eq!(control.worker_bits(), Control::INTERRUPT);
+    assert_eq!(control.stop_bits(), Control::INTERRUPT);
+}
+
+#[test]
+fn the_memory_limit_reaches_the_worker_word() {
+    let control = Control::new(Limits {
+        max_bytes: 10,
+        ..Limits::default()
+    });
+    control.charge(10);
+    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(control.stop_bits(), 0);
+    control.charge(1);
+    assert_eq!(control.worker_bits(), Control::MEMORY);
+    assert_eq!(control.stop_bits(), Control::MEMORY);
+}
+
+#[test]
+fn begin_run_reopens_the_end_and_lowers_preempt() {
+    let control = Control::new(Limits::default());
+    assert!(control.exit(7));
+    control.interrupt();
+    control.preempt();
+    control.begin_run();
+    assert_eq!(control.exit_code(), None);
+    // 止めるビットは下ろさない
+    assert_eq!(control.worker_bits(), Control::INTERRUPT);
+    assert_eq!(control.stop_bits(), Control::INTERRUPT);
+    assert!(control.exit(8));
+    assert_eq!(control.exit_code(), Some(8));
+}
+
+#[test]
+fn clear_lowers_every_bit_and_the_exit() {
+    let control = Control::new(Limits::default());
+    control.interrupt();
+    control.preempt();
+    assert!(control.exit(3));
+    control.clear();
+    assert_eq!(control.stop_bits(), 0);
+    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(control.exit_code(), None);
+}
+
+#[test]
+fn stop_reason_puts_preempt_after_the_stops() {
+    let both = Control::PREEMPT | Control::INTERRUPT;
+    assert_eq!(stop_reason(Control::PREEMPT), Stop::Preempt);
+    assert_eq!(stop_reason(both), Stop::Interrupted);
+    assert_eq!(
+        stop_reason(Control::PREEMPT | Control::MEMORY),
+        Stop::MemoryLimit
+    );
+    assert_eq!(stop_reason(0), Stop::DepthLimit);
+}
+
+#[test]
+fn the_first_exit_is_kept() {
+    let control = Control::new(Limits::default());
+    assert_eq!(control.exit_code(), None);
+    assert!(control.exit(300));
+    assert!(!control.exit(1));
+    assert_eq!(control.exit_code(), Some(300));
+    // 終わりは止める語に出ない
+    assert_eq!(control.stop_bits(), 0);
+    assert_eq!(control.worker_bits(), 0);
 }
 
 fn frozen_chunks_stay_counted_until_dropped<M: Mode>() {
