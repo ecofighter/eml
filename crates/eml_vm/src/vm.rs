@@ -1078,10 +1078,7 @@ fn child_done<R: Exec>(
     let parent_evv = std::mem::replace(&mut join.parent_evv, Word::UNIT);
     let right_done = join.right_outcome.is_some();
     // 境目のフレームを外す。組か起こし直しの結果は join が `par` の結果のスロットに書く
-    let (ret, _, size) = read_header(task.stack[task.base - 2]);
-    task.base = task.stack[task.base - 1].bits();
-    task.frame_size = size;
-    task.pc = ret;
+    task.pop_frame();
     let rest = unsafe { ctx.switch_task(parent_evv, task.worker, task.depth_offset) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     if right_done {
