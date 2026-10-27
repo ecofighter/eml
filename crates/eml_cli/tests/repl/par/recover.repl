@@ -1,0 +1,22 @@
+# 子の実行時エラーの後も、REPL は共有した根を写し直して続く。次の入力は fork のたびに根を共有し直し、
+# `close` はリークを報告しない (docs/spec/object-model.md の「回復」)
+> import Std.Par (par)
+> import Fail (Fail(..))
+> upto : Int -> List Int -> <Panic> List Int
+. upto n acc = if n == 0 then acc else upto (n - 1) (n :: acc)
+.
+> let xs = upto 100 []
+> total : List Int -> <Panic> Int
+. total ys = match ys with
+.   | [] -> 0
+.   | y :: rest -> y + total rest
+.
+> par (fn () -> total xs) (fn () -> 1 / 0)
+> par (fn () -> total xs) (fn () -> total xs + 1)
+> Fail.to_result (fn () -> par (fn () -> Fail.fail "l") (fn () -> total xs))
+> effect Stop where
+.   never stop : Int -> a
+.
+> handle par (fn () -> stop 1) (fn () -> 2) with
+.   | ctl stop n -> (n, n)
+.
