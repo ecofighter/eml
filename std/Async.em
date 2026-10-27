@@ -107,6 +107,18 @@ yield_now () =
     | Woke -> ()
     | Cancelled -> raise_cancelled ()
 
+-- 待たない取り消しの地点。速い道として予算を1つ使い、使い切ったらほかのタスクに worker を渡す
+-- (docs/spec/stdlib.md の「操作の予算」)
+pub check_cancelled : Unit -> <IO, Async> Unit
+check_cancelled () =
+  if cancel_point () then raise_cancelled ()
+  else if spend_budget () then yield_now ()
+  else ()
+
+-- 取り消しの地点が投げるときだけ真を返すので、`shield` の中では偽である
+pub cancel_requested : Unit -> <IO> Bool
+cancel_requested () = cancel_point ()
+
 -- 中の取り消しの地点はビットも旗も見ない。立っているビットか旗は、抜けた後の最初の地点で投げる
 pub shield : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a
 shield f =
@@ -172,3 +184,5 @@ extern fail_scope_io    : Scope -> IOErrorKind -> String -> <IO> Unit
 extern fail_scope_panic : Scope -> String -> <IO> Unit
 extern shield_enter     : Unit -> <IO> Unit
 extern shield_leave     : Unit -> <IO> Unit
+extern cancel_point     : Unit -> <IO> Bool
+extern spend_budget     : Unit -> <IO> Bool

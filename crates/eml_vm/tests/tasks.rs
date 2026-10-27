@@ -291,3 +291,29 @@ main () =
         (3, 3, 0, 2)
     );
 }
+
+/// `check_cancelled` は 128 回目の呼び出しで予算を使い切り、1回だけ `yield_now` でほかのタスクに worker を渡す。
+#[test]
+fn the_budget_yields_once_every_128_checks() {
+    let src = |n: u32| {
+        format!(
+            "\
+import Async (Async)
+import Async
+checks : Int -> <IO, Panic, Async> Unit
+checks n =
+  if n == 0 then ()
+  else
+    Async.check_cancelled ()
+    checks (n - 1)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> checks {n})
+"
+        )
+    };
+    for (n, parks) in [(127, 0), (128, 1), (256, 2)] {
+        let (_, stats) = run_stats(&src(n));
+        let s = stats.expect("the checked run");
+        assert_eq!((s.parks, s.cancels), (parks, 0), "{n} checks");
+    }
+}

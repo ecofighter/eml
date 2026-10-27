@@ -928,6 +928,8 @@ main () = println (show (Async.run body))
 | `spawn_in` | `Scope -> (Unit -> <IO, Panic, Async> Unit) -> <IO, Panic, Async> Unit` | eml |
 | `await` | `Task a -> <IO, Panic, Async> a` | eml |
 | `yield_now` | `Unit -> <IO, Async> Unit` | eml |
+| `check_cancelled` | `Unit -> <IO, Async> Unit` | eml |
+| `cancel_requested` | `Unit -> <IO> Bool` | eml |
 | `cancel` | `Task a -> <IO> Unit` | eml |
 | `cancel_scope` | `Scope -> <IO> Unit` | eml |
 | `shield` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` | eml |
@@ -970,7 +972,7 @@ pub data Failure =
 - `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Scope` は `Cell` と同じ形の即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
 - ランタイムが名前で呼ぶ入口は、std の2つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どちらも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。2つの入口が単相の std の関数であることもテストで確かめる
 - タスクの底 (`bottom`) は、`try_all` で本体の失敗を捕まえ、成功した結果を `finish_ok` に、IO の失敗を種類と文言のまま `finish_io` に、`Panic` を文言のまま `finish_panic` に渡す
-- extern の行は次の21行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の23行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 預かる引数 |
 |---|---|---|
@@ -995,6 +997,8 @@ pub data Failure =
 | `fail_scope_panic` | `Scope -> String -> <IO> Unit` | なし |
 | `shield_enter` | `Unit -> <IO> Unit` | なし |
 | `shield_leave` | `Unit -> <IO> Unit` | なし |
+| `cancel_point` | `Unit -> <IO> Bool` | なし |
+| `spend_budget` | `Unit -> <IO> Bool` | なし |
 
 - タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
 - `take_result` と `run_result` が返す値の型が、`finish_ok` に預けた値の型と合うことは、処理系は確かめない。生の行を `pub` にせず、`start`、`start_in`、`run`、`await` のシグネチャだけが本体の結果の型 `a` とハンドルの `Task a` を結ぶことで、標準ライブラリが保つ
@@ -1023,15 +1027,20 @@ body () =
 - 取り消しは2つの所から来る。タスクの取り消しのビットは、`cancel t`、`drop t`、属するスコープの取り消し、取り消したスコープに加えることで立つ。スコープの取り消しの旗は、`cancel_scope`、スコープのタスクの失敗、`scope` の本体の失敗、親のスコープの取り消しで立ち、開くときに親の旗を写す。どちらも一度立てたら下ろさない
 - タスクにビットが立つと、そのタスクが開いているスコープと、入れ子の `run` で待っている根にも旗が立つ。ビットが立った後に開くスコープと、ビットが立った後に呼ぶ入れ子の `run` の根も、開くときに旗を立てる
 - `scope` の本体を動かすタスクは、そのスコープの中にいる間だけ旗で取り消される (ビットは立てない)。スコープを出た後は、外の旗かビットが立っていなければ取り消されていない
-- 取り消しの地点は `await` と `yield_now` である。取り消しの地点は、`shield` の外で、タスクのビットかタスクの今のスコープの旗が立っていれば、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる
+- 取り消しの地点は `await`、`yield_now`、`check_cancelled` である。取り消しの地点は、`shield` の外で、タスクのビットかタスクの今のスコープの旗が立っていれば、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる
 - 失敗したタスクを同じスコープの中から `await` で待つタスクは、失敗が記録されたときにもう待っていればその失敗を受け取り、まだ待っていなければスコープの取り消しを受けて `Cancelled` を受け取る。どちらになるかはスケジュールで決まる。スコープの最初の失敗はどちらでも同じなので、`run` と `scope` が起こし直す失敗は変わらない。待つ相手の失敗を確かに受け取るには、`await` を `shield` で囲む
-- 取り消しは協調的で、取り消しの地点を通らないコードは止まらない
+- 取り消しは協調的で、取り消しの地点を通らないコードは止まらない。待たないループを取り消せるようにするには、ループの中で `check_cancelled ()` を呼ぶ
+- `cancel_requested ()` は、取り消しの地点が投げるときだけ真を返す。`shield` の中とタスクの外では偽である。`await` から出た `Cancelled` を捕まえたタスクは、`cancel_requested ()` で自分が取り消されたかを確かめられる
 - 投げるのは普通の IO の失敗なので、タスクのフレームを巻き戻して `Lin` の値を落とし、`try_io` と `try_all` が捕まえる。捕まえても取り消しは続き、次の取り消しの地点がまた投げる
 - 種類 `Cancelled` の IO の失敗で終わったタスクは、スコープの失敗にならず、旗も立てない。利用者が `fail_io Prelude.Cancelled` で投げた失敗も同じである。`await` はそれを種類と文言のまま起こし直し、待たないタスクなら報告しない
 - `Cancelled` が `await`、`run`、`scope` から出ると、呼んだタスクの普通の IO の失敗になる。`scope` を囲む `try_io` で捕まえれば、旗だけで取り消されていたタスクは続けて動ける。捕まえない `Cancelled` は実行時エラー `task was cancelled` になる
 - `await t` で待つ側が取り消されたときは、`t` も取り消す
 - `shield f` の中の取り消しの地点はビットも旗も見ない。`shield` の中の待ちは取り消しで外れない。`shield` を出た後の最初の取り消しの地点が投げる
 - 閉じたスコープへの `cancel_scope` は何もしない。`cancel` と `cancel_scope` の row は `Async` を持たないので、タスクの外でも呼べる。`run` は待つ間も取り消しの地点でない
+
+### 操作の予算
+
+待たずに済む速い道は、タスクごとの予算を1つずつ使う。予算は 128 で、タスクが始まるときと再開するときに戻す。予算を使い切った速い道は、`yield_now` でほかのタスクに worker を渡す。今の速い道は `check_cancelled` だけで、`cancel_requested` は予算を使わない。予算は横取りの予算と別で、横取りでは戻さないので、`RunStats.parks` はスケジュールによらない。
 
 ### `Failure` と `try_all`
 

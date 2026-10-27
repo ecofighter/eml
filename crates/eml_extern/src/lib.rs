@@ -1168,6 +1168,8 @@ table! {
             Unit,
             Purity::Effectful,
         ),
+        AsyncCancelPoint => row("Std.Async.cancel_point", &[Unit], Enum, Purity::Effectful),
+        AsyncSpendBudget => row("Std.Async.spend_budget", &[Unit], Enum, Purity::Effectful),
         AsyncShieldEnter => row("Std.Async.shield_enter", &[Unit], Unit, Purity::Effectful),
         AsyncShieldLeave => row("Std.Async.shield_leave", &[Unit], Unit, Purity::Effectful),
     }
@@ -1200,6 +1202,8 @@ impl Extern {
                 | Extern::AsyncCancelScopeRaw
                 | Extern::AsyncFailScopeIo
                 | Extern::AsyncFailScopePanic
+                | Extern::AsyncCancelPoint
+                | Extern::AsyncSpendBudget
         )
     }
 }

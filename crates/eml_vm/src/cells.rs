@@ -30,6 +30,8 @@ pub(crate) const WOKE: i64 = 0;
 pub(crate) const CANCELLED: i64 = 1;
 /// `IOErrorKind` の `Cancelled` のタグ。この種類で終わったタスクは失敗に数えない。
 pub(crate) const IO_CANCELLED: i64 = 5;
+/// 待たずに済む速い道の予算 (docs/spec/stdlib.md の「操作の予算」)。
+const BUDGET: u32 = 128;
 
 /// 登録表のセルの番号。添字を使い回すので、generation で古い番号を見分ける。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +172,8 @@ struct TaskCell {
     wait: Option<Wait>,
     cancel: bool,
     shield: u32,
+    /// 速い道の残りの予算。始めるときと再開するときに戻す。
+    budget: u32,
     /// 入れ子の `run` で待っている根。
     run: Option<CellRef>,
     detached: bool,
@@ -442,6 +446,7 @@ impl Registry {
             wait: None,
             cancel: flag,
             shield: 0,
+            budget: BUDGET,
             run: None,
             detached: false,
         }));
@@ -465,6 +470,7 @@ impl Registry {
             return Err(CellFault::Internal("a task starts twice"));
         }
         task.phase = Phase::Running;
+        task.budget = BUDGET;
         Ok(task.spawner)
     }
 
@@ -476,6 +482,7 @@ impl Registry {
             return Err(CellFault::Internal("a task resumes without waiting"));
         }
         task.phase = Phase::Running;
+        task.budget = BUDGET;
         let ready = matches!(task.wait.take(), Some(Wait::Ready));
         if ready && wake == WOKE && self.point(cell)? {
             self.stats.cancels += 1;
@@ -795,6 +802,23 @@ impl Registry {
             .checked_sub(1)
             .ok_or(CellFault::Internal("a shield is left without entering"))?;
         Ok(())
+    }
+
+    /// 取り消しの地点が投げるかを答える。タスクの外では偽である。真の答えは取り消しが届いたものとして数える。
+    pub(crate) fn cancel_point(&mut self, me: Option<CellRef>) -> Result<bool, CellFault> {
+        let Some(me) = me else {
+            return Ok(false);
+        };
+        let point = self.point(me)?;
+        self.stats.cancels += u64::from(point);
+        Ok(point)
+    }
+
+    /// 速い道の予算を1つ使う。使い切ったら真を返し、再開まで真のままである。
+    pub(crate) fn spend_budget(&mut self, me: CellRef) -> Result<bool, CellFault> {
+        let task = self.task_mut(me)?;
+        task.budget = task.budget.saturating_sub(1);
+        Ok(task.budget == 0)
     }
 
     /// 生きているスコープのセル。閉じていても返す。離れたスコープと前の run のスコープは `None` である。

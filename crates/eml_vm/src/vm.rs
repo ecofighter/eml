@@ -1795,6 +1795,15 @@ fn async_op<R: Exec>(
                 .fail_scope(task.raw(arg(0)), cells::Outcome::Panic(message))?;
             task.set(dst, Word::UNIT);
         }
+        Extern::AsyncCancelPoint => {
+            let b = sched.cells.cancel_point(task.cell)?;
+            task.set_raw(dst, i64::from(b));
+        }
+        Extern::AsyncSpendBudget => {
+            let me = current_cell(task)?;
+            let b = sched.cells.spend_budget(me)?;
+            task.set_raw(dst, i64::from(b));
+        }
         Extern::AsyncShieldEnter => {
             let me = current_cell(task)?;
             sched.cells.shield_enter(me)?;
@@ -2666,7 +2675,9 @@ fn run_extern<R: Exec>(
             | Extern::AsyncLeaveScope
             | Extern::AsyncCancelScopeRaw
             | Extern::AsyncFailScopeIo
-            | Extern::AsyncFailScopePanic => {
+            | Extern::AsyncFailScopePanic
+            | Extern::AsyncCancelPoint
+            | Extern::AsyncSpendBudget => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }
