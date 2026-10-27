@@ -416,7 +416,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 キーの順に並べた写像である。AVL 木で、`Std.List` を import して書いてある。
 
 ```haskell
-pub data Map k v =
+pub abstract data Map k v =
   | Empty
   | LeftHigh (Map k v) k v (Map k v)
   | Even (Map k v) k v (Map k v)
@@ -445,15 +445,14 @@ pub data Map k v =
 - `size` は木を O(n) で数える。数えるのに `+` を使い、`Int` の桁あふれが `Panic` になりうるので、型に `Panic` を持つ
 - `size` のほかの関数は、型に `Panic` を持たない。トップレベルの値 (row は `<>` に限る) と `Show` の instance の本体でも使える
 - キーも値も `Unr` に限る。`Lin` の値は E3001 になる。釣り合いを直す関数の `_ -> t` の枝が、値を捨てるためである
-- コンストラクタは公開される。抽象型がまだなく、コンストラクタを隠せないためである。API は上の関数の表だけである。利用者が `Empty` などで直接作った木に、関数が何を返すかは決めない。そのような木でも、`size` 以外の関数は実行時エラーを起こさない
-- `import Map (Map(..))` と書くと、`Empty` が利用者のコンストラクタと重なりうる。そのため、使い方は `Map.empty` と関数に限る
+- コンストラクタは隠す (`pub abstract data`)。API は上の関数の表だけである
 
 ## `Std.Set`
 
 要素の順に並べた集合である。`Std.Map` と同じ形の AVL 木で、節は値を持たない。`Std.List` を import して書いてある。
 
 ```haskell
-pub data Set a =
+pub abstract data Set a =
   | Empty
   | LeftHigh (Set a) a (Set a)
   | Even (Set a) a (Set a)
@@ -482,8 +481,7 @@ pub data Set a =
 - 3つの演算は、低いほうの木をたどって高いほうの木に入れる。計算量の m は低いほうの木の大きさ、n は高いほうの木の大きさである。木の高さは、印の高いほうの子をたどって O(log n) で求め、`1 <<< 高さ` として数えるので、`Panic` は起きない
 - `size` は木を O(n) で数える。数えるのに `+` を使い、`Int` の桁あふれが `Panic` になりうるので、型に `Panic` を持つ。`size` のほかの関数は、型に `Panic` を持たない。トップレベルの値 (row は `<>` に限る) と `Show` の instance の本体でも使える
 - 要素は `Unr` に限る。`Lin` の値は E3001 になる。釣り合いを直す関数の `_ -> t` の枝が、値を捨てるためである
-- コンストラクタは公開される。抽象型がまだなく、コンストラクタを隠せないためである。API は上の関数の表だけである。利用者が `Empty` などで直接作った木に、関数が何を返すかは決めない。そのような木でも、`size` 以外の関数は実行時エラーを起こさない
-- `import Set (Set(..))` と書くと、`Empty` が利用者のコンストラクタや `Map` のものと重なりうる。そのため、使い方は `Set.empty` と関数に限る
+- コンストラクタは隠す (`pub abstract data`)。API は上の関数の表だけである
 
 ## `Env`
 
@@ -680,7 +678,7 @@ pub data Set a =
 - `Cmd` の値は、コマンドリテラルとこのモジュールの設定の関数で組む。プログラムを変数で与えるときは `` `\{prog} \{..args}` `` と書く
 - `Cmd` は `Eq` と `Show` の instance を持つ。`show` は全部のフィールドを `Cmd { program = "git", args = ["log"], … }` の形で表示し、`display` は人が読む1行で、プログラムと引数を空白でつなぐ。`display` は引用を戻さないので、コマンドリテラルには戻せない
 - フィールドの名前と数は処理系の都合で変わりうる。そのため、利用者のコードは `Cmd { … }` の作る式とパターンを書かない。読むだけの射影 (`cmd.program`、`cmd.args`) は書いてよい。`StderrMode` のコンストラクタも、設定の関数が書くので、利用者は書かない
-  - 見直す条件: 抽象型が入ったとき、`Cmd` と `StderrMode` のコンストラクタを隠す。そのときも `Cmd` は Prelude のレコードのまま型を抽象にし、`extern data` にはしない
+  - 見直す条件: `Cmd` の設定の関数を Prelude へ移すか、読めるフィールドの `pub` を入れたときに隠す
 - `Cmd` を `extern data` にしないのは、`Unr` の `Foreign` は REPL の回復で写せず ([オブジェクトモデル](object-model.md) の「種類」)、`` let c = `ls` `` の後の回復がどれも失敗するためである。`Lin` の `Foreign` にすると、同じ `Cmd` を2回起動できない
 - 設定の関数は対象の `Cmd` を最後に受ける。`` `make` |> Proc.cwd "build" |> Proc.merge_stderr |> Proc.capture `` のように `|>` でつなぐためである。`with_` の名前は、handler を呼ぶ関数の慣習 ([例](examples.md) の `with_env`) に取っておく
 - `cwd dir c` は作業ディレクトリを `dir` にする。相対パスは `FileIn.open` と同じく Host の `file_root` から解釈する。2回設定したら、後の設定が前の設定を置き換える。ないディレクトリは、起動の誤りの理由 `not found` (``cannot run `make`: not found``) になり、プログラムがないときと区別しない
@@ -837,12 +835,13 @@ pub effect State s where
 ## `Iter`
 
 ```haskell
-pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
+pub abstract data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 ```
 
 | 関数 | 型 |
 |---|---|
 | `next` | `Iter <e> a -> <e> Option (a, Iter <e> a)` |
+| `from_fn` | `(once Unit -> <e> Option (a, Iter <e> a)) -> Iter <e> a` |
 | `generate` | `(Unit -> <Yield a \| e> Unit) -> Iter <e> a` |
 | `yield_all` | `Iter <e> a -> <Yield a \| e> Unit` |
 | `from_list` | `List a -> Iter <e> a` |
@@ -857,8 +856,9 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 | `to_list` | `Iter <e> a -> <e> List a` |
 
 - `Iter` は `once` の関数を持つので `Lin` である ([型と Kind](types.md) の「1回だけ呼べる関数の型」)。途中でやめるときは `drop` で捨てる。生産者が `FileIn` を持っていれば、そこで閉じる
-- コンストラクタ `Iter` も公開する。コンストラクタを隠す `pub data` (抽象型) がないためである
+- コンストラクタ `Iter` は隠す
 - `next it` は、次の要素と残りの `Iter` の組を返し、終わりなら `None` を返す
+- `from_fn pull` は、`next` で1回だけ `pull ()` を呼ぶ `Iter` である。隠したコンストラクタの代わりに、`Iter` を手で組むときに使う
 - `generate`、`from_list` と変換 (`map`、`filter`、`filter_map`、`take`、`zip`、`enumerate`) は、`next` を呼ぶまで何も動かさない。そのため、どれもエフェクトを起こさず、矢印に row が要らない。Python のジェネレータが `next` まで本体を動かさないのと同じである
 - `generate producer` は、生産者を `Yield` の handler で包む。名前を `from` にしないのは、`from` が `handle … from …` のキーワードだからである。`yield` の節は、受け取った値と、継続 `k` を包んだ次の `Iter` の組を返し、`return` の節は `None` を返す。`yield_all` は逆向きの変換で、`Iter` の要素を順に `yield` する
 - `take n it` は、n 個を渡した後の `next` で残りを `drop` して `None` を返す。n が 0 以下なら、最初の `next` で何も取り出さずに捨てる。`take` の `Iter` そのものを `drop` したときも、中の `Iter` は一緒に捨てられる。そのため、生産者の `FileIn` が閉じるのは、渡し終えた次の `next` か `drop` の時点である
@@ -909,7 +909,7 @@ pub data Wake =
   | Woke
   | Cancelled
 
-pub effect Async where
+pub abstract effect Async where
   await_cell : Cell -> Wake
   reschedule : Unit -> Wake
 
@@ -922,7 +922,7 @@ pub data Failure =
   deriving (Show)
 ```
 
-- `Async` は普通の eml のエフェクトで、extern のエフェクトではない。生の操作は2つで、どちらも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る
+- `Async` は抽象エフェクト (`pub abstract effect`) で、extern のエフェクトではない。生の操作は `Std.Async` の外から perform も handler の節にも書けない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。生の操作は2つで、どちらも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る
 - `Wake` は、ランタイムが待たせたタスクを再開するときに渡す値である。ランタイムは配置の表を見ずに、宣言の順のタグ (`Woke` = 0、`Cancelled` = 1。`eml_lir::WAKE_WOKE`、`WAKE_CANCELLED`) で作る。タグと宣言の順が合うことはテストで確かめる
 - `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
 - ランタイムが名前で呼ぶ入口は、std の2つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どちらも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。2つの入口が単相の std の関数であることもテストで確かめる

@@ -1,6 +1,6 @@
 -- `iter_pipeline.em` の各段を、ラムダを書き込んだ専用の `evens` / `squares` / `sum` にした手書きの版。
 import Yield (Yield(..))
-import Iter (Iter(..))
+import Iter (Iter)
 
 nums : Int -> Unit -> <Yield Int, Panic> Unit
 nums n () =
@@ -13,7 +13,7 @@ nums n () =
 
 evens : Iter <Panic> Int -> Iter <Panic> Int
 evens it =
-  Iter (fn () ->
+  Iter.from_fn (fn () ->
     match Iter.next it with
       | None -> None
       | Some (x, rest) ->
@@ -21,7 +21,7 @@ evens it =
 
 squares : Iter <Panic> Int -> Iter <Panic> Int
 squares it =
-  Iter (fn () ->
+  Iter.from_fn (fn () ->
     match Iter.next it with
       | None -> None
       | Some (x, rest) -> Some (x * x, squares rest))

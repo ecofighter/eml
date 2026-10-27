@@ -6,8 +6,9 @@ pub data Wake =
   | Woke
   | Cancelled
 
--- タスクの生の操作。どちらも once で、ランタイムとの ABI である
-pub effect Async where
+-- タスクの生の操作。どちらも once である。
+-- 操作はランタイムとの ABI で、利用者は包みの関数を呼ぶ (docs/spec/effects.md の「抽象エフェクト」)
+pub abstract effect Async where
   -- `Cell` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ
   await_cell : Cell -> Wake
   -- 実行待ちの列の後ろへ回る

@@ -1,0 +1,31 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/async_op_handled.em
+---
+[E1058] Error: operation `await_cell` of the abstract effect `Async` is not visible outside `Std.Async`
+    ╭─[ check-fail/names/async_op_handled.em:10:13 ]
+    │
+ 10 │       | ctl Async.await_cell c k -> k Async.Woke
+    │             ────────┬───────  
+    │                     ╰───────── hidden by `abstract`
+    │
+    ├─[ <std>/Async.em:13:3 ]
+    │
+ 13 │   await_cell : Cell -> Wake
+    │   ─────┬────  
+    │        ╰────── declared here
+────╯
+[E1058] Error: operation `reschedule` of the abstract effect `Async` is not visible outside `Std.Async`
+    ╭─[ check-fail/names/async_op_handled.em:11:13 ]
+    │
+ 11 │       | ctl Async.reschedule () k -> k Async.Woke
+    │             ────────┬───────  
+    │                     ╰───────── hidden by `abstract`
+    │
+    ├─[ <std>/Async.em:15:3 ]
+    │
+ 15 │   reschedule : Unit -> Wake
+    │   ─────┬────  
+    │        ╰────── declared here
+────╯

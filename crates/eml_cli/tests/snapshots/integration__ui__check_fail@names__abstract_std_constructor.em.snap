@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/abstract_std_constructor.em
+---
+[E1058] Error: constructor `Empty` of the abstract type `Map` is not visible outside `Std.Map`
+   ╭─[ check-fail/names/abstract_std_constructor.em:8:7 ]
+   │
+ 8 │     | Map.Empty -> println "empty"
+   │       ────┬────  
+   │           ╰────── hidden by `abstract`
+   │
+   ├─[ <std>/Map.em:7:5 ]
+   │
+ 7 │   | Empty
+   │     ──┬──  
+   │       ╰──── declared here
+───╯

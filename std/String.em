@@ -2,7 +2,7 @@
 -- `char_at`、`slice`、`push`、`find_from`、`decode` だけで、ほかは eml で書く。
 import List
 import Char
-import Iter (Iter(..))
+import Iter (Iter)
 import Yield (Yield(..))
 
 pub extern byte_length : String -> Int

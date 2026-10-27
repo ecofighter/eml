@@ -258,6 +258,36 @@ fn every_extern_effect_is_declared_once_in_std() {
     }
 }
 
+/// `Std.Async` の `Async` の操作はランタイムとの ABI なので、抽象エフェクトとして外から隠す
+/// (docs/spec/effects.md の「抽象エフェクト」)。extern のエフェクトはいつも隠すので `abstract` を持たず、普通の
+/// `pub effect` は操作を公開する。
+#[test]
+fn the_async_effect_is_abstract() {
+    let program = std_program();
+    let effect = |name: &str| {
+        let found: Vec<_> = program
+            .effects()
+            .filter(|(id, def)| canonical(&program, id.module, &def.name) == name)
+            .map(|(_, def)| def)
+            .collect();
+        assert_eq!(found.len(), 1, "{name}");
+        found[0]
+    };
+    let async_ = effect("Std.Async.Async");
+    assert_eq!(async_.kind, EffectKind::Defined);
+    assert!(async_.abstract_ops);
+    for name in ["Prelude.IO", "Prelude.Panic"] {
+        assert!(
+            matches!(effect(name).kind, EffectKind::Extern(Some(_))),
+            "{name}"
+        );
+        assert!(!effect(name).abstract_ops, "{name}");
+    }
+    let state = effect("Std.State.State");
+    assert_eq!(state.kind, EffectKind::Defined);
+    assert!(!state.abstract_ops);
+}
+
 #[test]
 fn every_extern_declaration_in_std_names_a_row() {
     let program = std_program();

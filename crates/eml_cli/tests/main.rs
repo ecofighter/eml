@@ -9,5 +9,6 @@ mod cli;
 mod lines;
 mod pretty;
 mod repl;
+mod std_invariants;
 mod terminal;
 mod ui;

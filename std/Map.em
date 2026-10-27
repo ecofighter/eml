@@ -3,7 +3,7 @@
 -- 釣り合いを直す関数は、組み直す節を受け取って同じ関数の中で節を作る (docs/spec/lir.md の「reuse」)
 import List
 
-pub data Map k v =
+pub abstract data Map k v =
   | Empty
   | LeftHigh (Map k v) k v (Map k v)
   | Even (Map k v) k v (Map k v)
