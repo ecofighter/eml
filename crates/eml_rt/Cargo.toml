@@ -8,7 +8,7 @@ license.workspace = true
 doctest = false
 
 [dependencies]
-vstd = "=0.0.0-2026-10-04-0306"
+vstd = "=0.0.0-2026-10-25-0158"
 
 [package.metadata.verus]
 verify = true

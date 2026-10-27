@@ -9,11 +9,11 @@
     # Verus の release の zip。版を上げるときは、2つの URL、`rust-toolchain.toml` の `channel`、下の `stable` の `sha256` を一緒に変える
     # (docs/implementation/testing.md の「Verus」)
     verus-aarch64-darwin = {
-      url = "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.04.426d8b0/verus-0.2026.10.04.426d8b0-arm64-macos.zip";
+      url = "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.26.d17fbd0/verus-0.2026.10.26.d17fbd0-arm64-macos.zip";
       flake = false;
     };
     verus-x86_64-linux = {
-      url = "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.04.426d8b0/verus-0.2026.10.04.426d8b0-x86-linux.zip";
+      url = "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.26.d17fbd0/verus-0.2026.10.26.d17fbd0-x86-linux.zip";
       flake = false;
     };
     # verusfmt の release の tar.xz。rustfmt は `verus!` の中を整えないので、eml_rt のコードはこれで整える
@@ -42,7 +42,7 @@
           # devShell、`nix build`、Verus と、nix の外の rustup が同じ版を使う (docs/implementation/testing.md の「Verus」)
           pin = {
             channel = (pkgs.lib.importTOML ./rust-toolchain.toml).toolchain.channel;
-            sha256 = "sha256-p8h3Sl/YRByZfZTAKXdsvF6xEenXKrXSVvpphmZENH4=";
+            sha256 = "sha256-+xUr6Al1wZSqX8aEsq7DpuFOK4Ve/i+qTl+K5uWQ9GM=";
           };
           stable = fenix.toolchainOf pin;
           devToolchain = stable.withComponents [

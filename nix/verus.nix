@@ -30,7 +30,7 @@ let
 in
 stdenv.mkDerivation {
   pname = "verus";
-  version = "0.2026.10.04.426d8b0";
+  version = "0.2026.10.26.d17fbd0";
   inherit src;
 
   nativeBuildInputs = [ makeWrapper ] ++ lib.optional stdenv.hostPlatform.isLinux autoPatchelfHook;
