@@ -801,6 +801,72 @@ fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
     }
 }
 
+/// `ev_take_evv` は外側の evv の参照を呼ぶ側へ移し、欄を `()` にする。入口の表と状態はそのままで、evidence の形も
+/// 保たれる (docs/spec/object-model.md の「evidence の3つの物体」)。
+fn taking_the_outer_list_leaves_a_retired_evidence<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let e0 = push(&mut ctx, 0, 1);
+    let outer = ctx.evv_word();
+    let ev = push(&mut ctx, 1, 1);
+    unsafe {
+        let clause = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.ev_set_clause(ev, 0, clause).unwrap();
+        ctx.ev_set_state(ev, Word::imm(5)).unwrap();
+        let taken = ctx.ev_take_evv(ev).unwrap();
+        assert_eq!(taken, outer);
+        assert_eq!(ctx.heap().field(ev, 2), Ok(UNIT));
+        assert_eq!(ctx.ev_take_evv(ev).unwrap(), UNIT);
+        // 検査モードでは、ここから先の操作が evidence の形を確かめる
+        assert_eq!(ctx.ev_evv(ev).unwrap(), UNIT);
+        let got = ctx.ev_clause(ev, 0).unwrap();
+        assert_eq!(got, clause);
+        assert_eq!(ctx.ev_take_state(ev).unwrap(), Word::imm(5));
+        clear(&mut ctx);
+        for w in [got, taken, ev, e0] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// 共有にした evidence の外側の欄は書けない。欄は元の値のままで、物体も増減しない。
+fn the_outer_list_of_a_shared_evidence_is_not_writable<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    push(&mut ctx, 0, 1);
+    let outer = ctx.evv_word();
+    let ev = push(&mut ctx, 1, 1);
+    unsafe {
+        ctx.heap_mut().share(ev, 1).unwrap();
+        let before = super::mortal(ctx.heap());
+        assert_eq!(ctx.ev_take_evv(ev).unwrap_err(), HeapError::NotWritable);
+        assert_eq!(ctx.heap().field(ev, 2), Ok(outer));
+        assert_eq!(super::mortal(ctx.heap()), before);
+    }
+}
+
+/// `evv_word` は今の evv の語を返すだけで、参照は `Ctx` に残り、RC の仕事を数えない。
+fn evv_word_reads_the_list_without_rc_work<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    assert_eq!(ctx.evv_word(), UNIT);
+    let ev = push(&mut ctx, 0, 1);
+    unsafe {
+        let list = ctx.evv_get().unwrap();
+        ctx.evv_set(list).unwrap();
+        let start = (ctx.heap().stats(), ctx.stats());
+        assert_eq!(ctx.evv_word(), list);
+        assert_eq!(ctx.evv_word(), list);
+        assert_eq!((ctx.heap().stats(), ctx.stats()), start);
+        clear(&mut ctx);
+        ctx.heap_mut().decref(ev).unwrap();
+    }
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
 both_modes!(
     a_new_ctx_is_finished,
     poll_reports_each_stop,
@@ -833,4 +899,7 @@ both_modes!(
     a_refused_yield_operation_keeps_the_state,
     a_refused_push_keeps_its_arguments,
     the_state_of_a_shared_evidence_is_not_writable,
+    taking_the_outer_list_leaves_a_retired_evidence,
+    the_outer_list_of_a_shared_evidence_is_not_writable,
+    evv_word_reads_the_list_without_rc_work,
 );

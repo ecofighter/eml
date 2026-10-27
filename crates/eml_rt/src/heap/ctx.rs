@@ -1647,6 +1647,15 @@ impl<M: Mode> Ctx<M> {
         r
     }
 
+    /// 今の `evv` の語を読む。参照は `Ctx` に残り、RC に触れない。fork が子の `evv` を作る間に親の `evv` を読むための
+    /// 操作である (docs/spec/object-model.md の「タスクの切り替え」)。
+    pub fn evv_word(&self) -> (r: Word)
+        ensures
+            r == self.evv_spec(),
+    {
+        self.evv
+    }
+
     /// エフェクト `effect` の evidence を作る。入口の表は欄が `n_ops` 個で、どれも `()` である。tag はエフェクトの
     /// 番号 + 1 にする (docs/spec/object-model.md の「evidence の3つの物体」)。`state` と `outer` は消費する。
     ///
@@ -2051,6 +2060,72 @@ impl<M: Mode> Ctx<M> {
             }
         }
         Ok(s)
+    }
+
+    /// evidence の外側の `evv` を返し、欄を `()` にする。外側の参照は呼ぶ側に移る。`ev` は借りる。`prompt$` が
+    /// evidence を退かせるための操作で、退いた evidence は外側の `evv` に届かない
+    /// (docs/spec/object-model.md の「evidence の3つの物体」)。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。`ev` は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`ev`
+    /// は evidence で、ほかのスレッドが読めない局所の物体である (検査モードは形を確かめて `BadEvidence` を、書けない
+    /// 物体には `set_field` の `NotWritable` を返す)。
+    pub unsafe fn ev_take_evv(&mut self, ev: Word) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(ev),
+            !M::CHECKED ==> old(self).ev_shape(ev) && old(self).heap_spec().rc_value(ev) > 0,
+        ensures
+            final(self).wf(),
+            r is Err ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).ev_shape(ev) && old(self).heap_spec().rc_value(ev) > 0
+                ==> (r matches Ok(w) && {
+                &&& w == old(self).ev_outer(ev)
+                &&& final(self).ev_outer(ev).bits_spec() == 1
+                &&& final(self).ev_table(ev) == old(self).ev_table(ev)
+                &&& final(self).ev_state(ev) == old(self).ev_state(ev)
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).ev_shape(ev)
+                &&& final(self).evolved_by(
+                    *old(self),
+                    |b: usize| points(w, b),
+                    Set::empty().insert(ev.bits_spec()),
+                )
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.ev_shape(ev) && s0.heap.rc_value(ev) > 0;
+        if M::CHECKED {
+            self.checked_ev(ev)?;
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        proof {
+            lemma_unextended(h1, ev);
+        }
+        let w = (unsafe { self.heap.field(ev, 2) })?;
+        let unit = Word::UNIT;
+        proof {
+            lemma_unit_bits();
+            if c {
+                self.lemma_settled_ev(s0, ev);
+            }
+        }
+        (unsafe { self.heap.set_field(ev, 2, unit) })?;
+        proof {
+            lemma_words_trans(self.heap, h1, s0.heap);
+            self.lemma_words_kept(s0);
+            if c {
+                self.lemma_take_evv_ok(s0, h1, ev, w, unit);
+            }
+        }
+        Ok(w)
     }
 
     /// evidence の状態の欄を `s` にし、元の状態を手放す。`s` は消費し、`ev` は借りる。元の状態を手放す連鎖が `ev`
