@@ -1034,14 +1034,14 @@ b_fast:
 - 作るのは、プログラムが `par` を走らせうるときだけである。`Call::Par` か `prim root_get` を含むプログラムがこれに当たる (`eml_lir::Program::may_run_par`)。REPL の束縛は前の入力の `par` を走らせる閉包を持てるので、`root_get` も条件に入れる。どちらも含まないプログラムでは、EP の出力は変わらない
 - 作る対象のエフェクト (`eml_lir::fork_effects`) は、操作を1つ以上持ち、`EffectInfo::never_only` が真のものすべてである。`never_only` は、どの操作も `never` のエフェクトで真になり、操作のないエフェクトでも真である。extern のエフェクトだけは、操作でなく `eml_extern` の表の行の多重度で決める ([型と Kind](types.md) の「Kind」)。そのため `Prelude.Panic` は入り、操作の `io_failed` が `never` でも多重度が `Once` の `Prelude.IO` は入らない
 - 操作のないエフェクトは never-only だが、作る関数がない。VM が子の evidence のために持つ表は、操作のないものを含めて never-only のエフェクトすべてを覆い、操作のないエフェクトの表は空である。子の `evv` が親の never-only の evidence と同じ数の evidence を持ち、子の中の `mask` が飛ばす数がそろうためである
-- 名前は、エフェクトの表の名前と操作の名前から `fork$E.op`、`reperform$E.op` とする (`fork$Prelude.Panic.panicked`)。REPL のセッションのエフェクトは版を持つ名前なので、名前に版も入る (`fork$E#2.op`)。中身は操作の表の行とタプルの配置の名前だけで決まるので、名前が同じ関数はいつも同じコードになる。VM はこの名前で関数を引く
-- どちらの関数も `internal` でなく、`yields` でなく、`split` を持たない。`fork$E.op` はプログラムの中から呼ばれず、値としても参照されない。`reperform$E.op` は、`fork$E.op` の `child_abort` のオペランド (`&reperform$E.op`) として値で参照される
-- `fork$E.op` は `clause (E, op)` の印を持つ入口の関数である。引数は evidence の `ev` (`obj`、`unr`) と操作の引数 `a_1, .., a_k` (操作の表の Repr と印) で、戻り値は `obj` (`poly`) である。本体は引数を1つの値 `t` に詰め、`prim child_abort(ev, &reperform$E.op, t)` を呼んでから `prim dummy()` を返す。`child_abort` は戻らないので、この `return` に実行は届かない
-  - `t` は、k = 0 なら `()`、k = 1 なら `a_1`、k ≥ 2 なら k 個の要素のタプルの `con` である。タプルの配置は translate がタプルに使う配置と同じで、配置の表になければ足す。`con` の印は `a_i` の印の結びである
+- 名前は、エフェクトの表の名前と操作の名前から `fork$E.op`、`reperform$E.op` とする (`fork$Prelude.Panic.panicked`)。REPL のセッションのエフェクトは版を持つ名前なので、名前に版も入る (`fork$E#2.op`)。中身は操作の表の行だけで決まるので、名前が同じ関数はいつも同じコードになる。VM はこの名前で関数を引く
+- どちらの関数も `internal` でなく、`yields` でない。`fork$E.op` は `split` を持たず、プログラムの中から呼ばれず、値としても参照されない。`reperform$E.op` は、`fork$E.op` が作る閉包として値で参照される
+- `fork$E.op` は `clause (E, op)` の印を持つ入口の関数である。引数は evidence の `ev` (`obj`、`unr`) と操作の引数 `a_1, .., a_k` (操作の表の Repr と印) で、戻り値は `obj` (`poly`) である。本体は操作の引数を捕まえた閉包 `c = closure reperform$E.op(a_1, .., a_k)` を作り、`prim child_abort(ev, c)` を呼んでから `prim dummy()` を返す。操作の型は関数型なので (`Unit -> ..` の操作も `unit` を1つ受ける)、k は 1 以上である。`child_abort` は戻らないので、この `return` に実行は届かない
+  - 閉包の印は、EP が作るほかの閉包と同じく `a_i` の印の結びである (上の「EP が足す変数の印」)
   - `ev` の持ち主は入口である。`clause` の呼び出しはオペランドをすべて消費するので、入口は evidence を所有して受け取る。`child_abort` は `ev` を借りるだけなので、Perceus は `ev` の `decref` を `child_abort` の後に置き、そこへは実行が届かない。`ev` は `child_abort` の巻き戻しの地点が持つ値になり、子のフレームを巻き戻すときに手放される ([LIR](lir.md) の「巻き戻しの地点」)
-- `reperform$E.op` は詰めた値 `t` を1つ受ける。`t` の Repr は、k = 0 なら `unit`、k = 1 なら `a_1` の Repr の一様な形、k ≥ 2 なら `obj` である。印は `poly` だが、k = 1 で `a_1` が箱を要するスカラー (`int`、`float`、`enum`) なら `a_1` の印 (`unr`) にする。開いた後に Perceus が箱を `decref` し、V1 は `unr` の値だけを `decref` させるためである ([LIR](lir.md) の「Kind の印の検査」)。戻り値は `tobj` (`poly`) である。`fork$` が値として参照し、実行系がその値を呼ぶので、引数と結果は一様である。値として参照する関数の規則 ([LIR](lir.md) の「verifier」) をそのまま満たすので、box の挿入は版 `<f>$uniform` を作らない
-  - 本体は、k ≥ 2 なら `t` を `unpack` で開き、`ev_lookup[E]`、`ev_clause[E.op]`、`clause` で操作を起こす。普通の `perform` と同じく、今の `evv` の最初の `E` の evidence で起こす
-  - `Prelude.Panic` は `extern Prelude.panic(t)` で起こし直す。位置は持たない。`try_panic` がなければ、`panic` と同じく実行時エラーになる
+- `reperform$E.op` は、操作の引数 `a_1, .., a_k` (操作の表の Repr と印) と、最後に `u` (`unit`) を受ける。戻り値は `tobj` (`poly`) である。`split` は `u` の手前 (k) にある。操作の引数は閉包の捕獲なので型どおりの Repr のままで、実行系が閉包に `()` を適用するので、`u` と結果が一様である ([LIR](lir.md) の「関数の ABI」)。値として参照する関数の規則 ([LIR](lir.md) の「verifier」) をそのまま満たすので、box の挿入は版 `<f>$uniform` を作らない
+  - 本体は `ev_lookup[E]`、`ev_clause[E.op]`、`clause` で操作を起こす。普通の `perform` と同じく、今の `evv` の最初の `E` の evidence で起こす
+  - `Prelude.Panic` は `extern Prelude.panic(a_1)` で起こし直す。位置は持たない。`try_panic` がなければ、`panic` と同じく実行時エラーになる
 - 実行系は、親の文脈で `reperform$E.op` を呼ぶ前に、子の操作が届いた handler の evidence が `evv` の最初の `E` の evidence になるように `evv` を整える。`reperform$` は深さを受け取らず、整えた `evv` の最初の `E` の evidence で起こす。fork と join の手順と、子の evidence の作り方は VM の側が決める ([VM](vm.md) の「`par` の fork と join」)
 
 ## Core IR から LIR への変換

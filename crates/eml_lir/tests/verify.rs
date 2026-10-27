@@ -3659,8 +3659,8 @@ fn a_lin_child_of_a_par_is_consumed_once() {
     );
 }
 
-/// 起こし直す関数と詰めた引数を親に渡し、evidence は借りる。
-const CHILD_ABORT: &str = "fn g(e.0: obj, k.1: tobj, t.2: tobj poly) -> obj poly {\n  let u.3: unit = prim child_abort(e.0, k.1, t.2)\n  decref e.0\n  let d.4: obj poly = prim dummy()\n  return d.4\n}\n";
+/// 起こし直す閉包を親に渡し、evidence は借りる。
+const CHILD_ABORT: &str = "fn g(e.0: obj, c.1: tobj poly) -> obj poly {\n  let u.2: unit = prim child_abort(e.0, c.1)\n  decref e.0\n  let d.3: obj poly = prim dummy()\n  return d.3\n}\n";
 
 #[test]
 fn child_abort_borrows_the_evidence() {
@@ -3668,11 +3668,11 @@ fn child_abort_borrows_the_evidence() {
 }
 
 #[test]
-fn child_abort_takes_an_obj_evidence_a_function_and_a_value() {
-    let arity = CHILD_ABORT.replace("(e.0, k.1, t.2)", "(e.0, k.1)");
+fn child_abort_takes_an_obj_evidence_and_a_closure() {
+    let arity = CHILD_ABORT.replace("(e.0, c.1)", "(e.0)");
     assert_eq!(
         check(&arity),
-        Err("`prim child_abort` takes 3 arguments but is given 2 in `g`".to_string())
+        Err("`prim child_abort` takes 2 arguments but is given 1 in `g`".to_string())
     );
     let evidence = CHILD_ABORT
         .replace("e.0: obj", "e.0: int")
@@ -3701,20 +3701,21 @@ fn forking(main: &str, fork: bool, clause: bool, reperform: bool) -> String {
         };
         text.push_str(&format!(
             "{clause}fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {{
-  let u.2: unit = prim child_abort(ev.0, &{target}, a.1)
+  let c.2: tobj poly = closure {target}(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
-  let d.3: obj poly = prim dummy()
-  return d.3
+  let d.4: obj poly = prim dummy()
+  return d.4
 }}
 "
         ));
     }
     if reperform {
         text.push_str(
-            "fn reperform$Fail.fail(t.0: tobj poly) -> tobj poly {
-  let ev.1: obj = prim ev_lookup[Fail]()
-  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
-  tail clause Fail.fail c.2(ev.1, t.0)
+            "uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
+  let ev.2: obj = prim ev_lookup[Fail]()
+  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
+  tail clause Fail.fail c.3(ev.2, a.0)
 }
 ",
         );

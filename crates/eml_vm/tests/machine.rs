@@ -309,15 +309,16 @@ fn second() -> unit {
   return u.1
 }
 clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: tobj poly) -> obj poly {
-  let u.2: unit = prim child_abort(ev.0, &reperform$Fail.fail, a.1)
+  let c.2: tobj poly = closure reperform$Fail.fail(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
-  let d.3: obj poly = prim dummy()
-  return d.3
+  let d.4: obj poly = prim dummy()
+  return d.4
 }
-fn reperform$Fail.fail(t.0: tobj poly) -> tobj poly {
-  let ev.1: obj = prim ev_lookup[Fail]()
-  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
-  tail clause Fail.fail c.2(ev.1, t.0)
+uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
+  let ev.2: obj = prim ev_lookup[Fail]()
+  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
+  tail clause Fail.fail c.3(ev.2, a.0)
 }
 ";
     assert!(parse(second).may_run_par());

@@ -16,31 +16,30 @@ layout (,) { (,)(tobj, tobj) }
 effect Prelude.Panic { never panicked(obj) -> never }
 effect Fail { never fail(int) -> never }
 clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
-  let u.2: unit = prim child_abort(ev.0, &reperform$Prelude.Panic.panicked, a.1)
+  let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
-  let d.3: obj poly = prim dummy()
-  return d.3
+  let d.4: obj poly = prim dummy()
+  return d.4
 }
-fn reperform$Prelude.Panic.panicked(t.0: obj poly) -> tobj poly {
-  let r.1: tobj poly = extern Prelude.panic(t.0)
-  return r.1
+uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj poly {
+  let r.2: tobj poly = extern Prelude.panic(a.0)
+  return r.2
 }
 clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: int) -> obj poly {
-  let a.4: tobj = box a.1
-  let u.2: unit = prim child_abort(ev.0, &reperform$Fail.fail, a.4)
+  let c.2: tobj = closure reperform$Fail.fail(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
-  let d.3: obj poly = prim dummy()
-  return d.3
+  let d.4: obj poly = prim dummy()
+  return d.4
 }
-fn reperform$Fail.fail(t.0: tobj) -> tobj poly {
-  let ev.1: obj = prim ev_lookup[Fail]()
-  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
-  let t.4: int = unbox t.0
-  decref t.0
-  tail clause Fail.fail c.2(ev.1, t.4)
+uniform from 1 fn reperform$Fail.fail(a.0: int, u.1: unit) -> tobj poly {
+  let ev.2: obj = prim ev_lookup[Fail]()
+  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
+  tail clause Fail.fail c.3(ev.2, a.0)
 }
 yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
-  let w.3: tobj = prim ev_evv(ev.0)
+  let w.3: tobj = prim ev_take_evv(ev.0)
   let u.4: unit = prim evv_set(w.3)
   let s.5: int = prim yield_status(ev.0)
   switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }

@@ -724,11 +724,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.out.operands([*root, u32::from(a[0])]);
                 Op::RootSet { dst, at }
             }
-            Prim::ChildAbort => Op::ChildAbort {
-                ev: a[0],
-                f: a[1],
-                t: a[2],
-            },
+            Prim::ChildAbort => Op::ChildAbort { ev: a[0], c: a[1] },
         }
     }
 

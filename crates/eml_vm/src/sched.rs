@@ -142,12 +142,11 @@ pub(crate) enum TaskState {
 pub(crate) enum Outcome {
     Value(eml_rt::Word),
     /// `never` の操作で中断した。`effect` は実行時のエフェクトの番号、`depth` は子の中でのそのエフェクトの evidence
-    /// の順位で、`reperform` に `tuple` を適用して親で起こし直す。
+    /// の順位で、`clause` (操作の引数を捕まえた `reperform$E.op` の閉包) に `()` を適用して親で起こし直す。
     Abort {
         effect: u16,
         depth: u32,
-        reperform: eml_rt::Word,
-        tuple: eml_rt::Word,
+        clause: eml_rt::Word,
     },
     /// 右の子の実行時エラー。左の子の誤りは記録せず、すぐに評価を止める。
     Error(crate::RuntimeError),

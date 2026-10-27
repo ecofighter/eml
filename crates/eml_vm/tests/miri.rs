@@ -404,7 +404,7 @@ fn main() -> unit {
   dup a.4
   let g.5: tobj = closure swap(a.4)
   let t.6: obj = par (,) #0(&spin_one, g.5)
-  let w.7: tobj = prim ev_evv(ev.1)
+  let w.7: tobj = prim ev_take_evv(ev.1)
   let u.8: unit = prim evv_set(w.7)
   decref ev.1
   let (x.9: tobj, p.10: tobj) = unbox t.6 (,)
@@ -439,28 +439,27 @@ fn show(t.0: tobj) -> unit {
   return u.3
 }
 clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
-  let u.2: unit = prim child_abort(ev.0, &reperform$Prelude.Panic.panicked, a.1)
+  let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
-  let d.3: obj poly = prim dummy()
-  return d.3
+  let d.4: obj poly = prim dummy()
+  return d.4
 }
-fn reperform$Prelude.Panic.panicked(t.0: obj poly) -> tobj poly {
-  let r.1: tobj poly = extern Prelude.panic(t.0)
-  return r.1
+uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj poly {
+  let r.2: tobj poly = extern Prelude.panic(a.0)
+  return r.2
 }
 clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: int) -> obj poly {
-  let a.4: tobj = box a.1
-  let u.2: unit = prim child_abort(ev.0, &reperform$Fail.fail, a.4)
+  let c.2: tobj = closure reperform$Fail.fail(a.1)
+  let u.3: unit = prim child_abort(ev.0, c.2)
   decref ev.0
-  let d.3: obj poly = prim dummy()
-  return d.3
+  let d.4: obj poly = prim dummy()
+  return d.4
 }
-fn reperform$Fail.fail(t.0: tobj) -> tobj poly {
-  let ev.1: obj = prim ev_lookup[Fail]()
-  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
-  let t.4: int = unbox t.0
-  decref t.0
-  tail clause Fail.fail c.2(ev.1, t.4)
+uniform from 1 fn reperform$Fail.fail(a.0: int, u.1: unit) -> tobj poly {
+  let ev.2: obj = prim ev_lookup[Fail]()
+  let c.3: tobj = prim ev_clause[Fail.fail](ev.2)
+  tail clause Fail.fail c.3(ev.2, a.0)
 }
 fn spin(n.0: int) -> unit {
   switch n.0 { 0 -> b1, _ -> b2 }

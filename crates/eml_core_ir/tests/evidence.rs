@@ -1526,8 +1526,8 @@ fn a_program_without_par_or_root_get_gets_no_forks() {
     );
 }
 
-/// `par` を含むプログラムには、fork の関数を持つエフェクトの操作ごとに `fork$` と `reperform$` を作る。引数が
-/// 1つの操作はその値を、2つ以上の操作はタプルに詰めた値を運ぶ。`Panic` は `panic` で起こし直す。
+/// `par` を含むプログラムには、fork の関数を持つエフェクトの操作ごとに `fork$` と `reperform$` を作る。`fork$` は
+/// 操作の引数を捕まえた `reperform$` の閉包を運ぶ。`Panic` は `panic` で起こし直す。
 #[test]
 fn a_program_with_par_gets_a_fork_and_a_reperform_per_operation() {
     let text = format!(
@@ -1553,46 +1553,47 @@ fn a_program_with_par_gets_a_fork_and_a_reperform_per_operation() {
     let shown = pretty(&program);
     insta::assert_snapshot!(function(&shown, "fork$Prelude.Panic.panicked"), @"
     clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
-      let u.2: unit = prim child_abort(ev.0, &reperform$Prelude.Panic.panicked, a.1)
-      let d.3: obj poly = prim dummy()
-      return d.3
+      let c.2: tobj = closure reperform$Prelude.Panic.panicked(a.1)
+      let u.3: unit = prim child_abort(ev.0, c.2)
+      let d.4: obj poly = prim dummy()
+      return d.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "reperform$Prelude.Panic.panicked"), @"
-    fn reperform$Prelude.Panic.panicked(t.0: obj poly) -> tobj poly {
-      let r.1: tobj poly = extern Prelude.panic(t.0)
-      return r.1
+    uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj poly {
+      let r.2: tobj poly = extern Prelude.panic(a.0)
+      return r.2
     }
     ");
     insta::assert_snapshot!(function(&shown, "fork$One.one"), @"
     clause One.one fn fork$One.one(ev.0: obj, a.1: tobj poly) -> obj poly {
-      let u.2: unit = prim child_abort(ev.0, &reperform$One.one, a.1)
-      let d.3: obj poly = prim dummy()
-      return d.3
+      let c.2: tobj poly = closure reperform$One.one(a.1)
+      let u.3: unit = prim child_abort(ev.0, c.2)
+      let d.4: obj poly = prim dummy()
+      return d.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "reperform$One.one"), @"
-    fn reperform$One.one(t.0: tobj poly) -> tobj poly {
-      let ev.1: obj = prim ev_lookup[One]()
-      let c.2: tobj = prim ev_clause[One.one](ev.1)
-      let r.3: tobj poly = clause One.one c.2(ev.1, t.0)
-      return r.3
+    uniform from 1 fn reperform$One.one(a.0: tobj poly, u.1: unit) -> tobj poly {
+      let ev.2: obj = prim ev_lookup[One]()
+      let c.3: tobj = prim ev_clause[One.one](ev.2)
+      let r.4: tobj poly = clause One.one c.3(ev.2, a.0)
+      return r.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "fork$Two.two"), @"
     clause Two.two fn fork$Two.two(ev.0: obj, a.1: int, a.2: obj lin) -> obj poly {
-      let t.3: obj lin = con (,) #0(a.1, a.2)
-      let u.4: unit = prim child_abort(ev.0, &reperform$Two.two, t.3)
+      let c.3: tobj lin = closure reperform$Two.two(a.1, a.2)
+      let u.4: unit = prim child_abort(ev.0, c.3)
       let d.5: obj poly = prim dummy()
       return d.5
     }
     ");
     insta::assert_snapshot!(function(&shown, "reperform$Two.two"), @"
-    fn reperform$Two.two(t.0: obj poly) -> tobj poly {
-      unpack t.0 (,) #0(a.1: tobj, a.2: tobj lin)
+    uniform from 2 fn reperform$Two.two(a.0: int, a.1: obj lin, u.2: unit) -> tobj poly {
       let ev.3: obj = prim ev_lookup[Two]()
       let c.4: tobj = prim ev_clause[Two.two](ev.3)
-      let r.5: tobj poly = clause Two.two c.4(ev.3, a.1, a.2)
+      let r.5: tobj poly = clause Two.two c.4(ev.3, a.0, a.1)
       return r.5
     }
     ");
@@ -1629,22 +1630,18 @@ fn a_fork_entry_owns_its_evidence_and_child_abort_borrows_it() {
     let shown = eml_lir::pretty(&lir);
     insta::assert_snapshot!(function(&shown, "fork$Two.two"), @"
     clause Two.two fn fork$Two.two(ev.0: obj, a.1: int, a.2: obj lin) -> obj poly {
-      let a.6: tobj = box a.1
-      let t.3: obj lin = con (,) #0(a.6, a.2)
-      let u.4: unit = prim child_abort(ev.0, &reperform$Two.two, t.3)
+      let c.3: tobj lin = closure reperform$Two.two(a.1, a.2)
+      let u.4: unit = prim child_abort(ev.0, c.3)
       decref ev.0
       let d.5: obj poly = prim dummy()
       return d.5
     }
     ");
     insta::assert_snapshot!(function(&shown, "reperform$Two.two"), @"
-    fn reperform$Two.two(t.0: obj poly) -> tobj poly {
-      unpack t.0 (,) #0(a.1: tobj, a.2: tobj lin)
+    uniform from 2 fn reperform$Two.two(a.0: int, a.1: obj lin, u.2: unit) -> tobj poly {
       let ev.3: obj = prim ev_lookup[Two]()
       let c.4: tobj = prim ev_clause[Two.two](ev.3)
-      let a.6: int = unbox a.1
-      release t.0 (,) #0(_, a.2)
-      tail clause Two.two c.4(ev.3, a.6, a.2)
+      tail clause Two.two c.4(ev.3, a.0, a.1)
     }
     ");
     let index = lir
@@ -1655,19 +1652,19 @@ fn a_fork_entry_owns_its_evidence_and_child_abort_borrows_it() {
     let points = eml_lir::unwind::points_all(&lir)
         .swap_remove(index)
         .unwrap_or_else(|error| panic!("{error}"));
-    // 地点は `child_abort` (b0 の文 2) の1つだけで、持つのは `ev.0` だけである。詰めた `t.3` は `child_abort` が消費する
+    // 地点は `child_abort` (b0 の文 1) の1つだけで、持つのは `ev.0` だけである。閉包の `c.3` は `child_abort` が消費する
     let owned: Vec<_> = points
         .iter()
         .map(|point| (point.block.0, point.stmt, point.owned.clone()))
         .collect();
-    assert_eq!(owned, [(0, 2, vec![(eml_lir::VarId(0), 1)])]);
+    assert_eq!(owned, [(0, 1, vec![(eml_lir::VarId(0), 1)])]);
 }
 
-/// 引数が1つで一様でない操作 (`Unit -> a` と `Int -> a`)。`fork$` は引数をそのまま `child_abort` に渡し、`int` は
-/// box の挿入が箱に入れる。`reperform$` は一様な形で受け、`int` は操作に渡す前に箱から出す。箱は開いた後に
-/// `decref` するので、`int` を受ける引数の印は `unr` である (docs/spec/core-ir.md の「`par` の子の中断」)。
+/// 引数が1つで一様でない操作 (`Unit -> a` と `Int -> a`)。引数は `reperform$` の閉包の捕獲なので、`fork$` も
+/// `reperform$` も型どおりの Repr のまま扱い、箱に入れない。一様なのは `()` を受ける最後の引数と結果だけである
+/// (docs/spec/core-ir.md の「`par` の子の中断」)。
 #[test]
-fn a_single_non_uniform_argument_is_boxed_in_the_fork_and_unboxed_in_the_reperform() {
+fn a_non_uniform_argument_is_captured_without_a_box() {
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 effect Stop { never stop(unit) -> never }
@@ -1683,35 +1680,34 @@ fn main(a.0: tobj, b.1: tobj) -> obj {
     let shown = eml_lir::pretty(&lir);
     insta::assert_snapshot!(function(&shown, "fork$Stop.stop"), @"
     clause Stop.stop fn fork$Stop.stop(ev.0: obj, a.1: unit) -> obj poly {
-      let u.2: unit = prim child_abort(ev.0, &reperform$Stop.stop, a.1)
+      let c.2: tobj = closure reperform$Stop.stop(a.1)
+      let u.3: unit = prim child_abort(ev.0, c.2)
       decref ev.0
-      let d.3: obj poly = prim dummy()
-      return d.3
+      let d.4: obj poly = prim dummy()
+      return d.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "reperform$Stop.stop"), @"
-    fn reperform$Stop.stop(t.0: unit poly) -> tobj poly {
-      let ev.1: obj = prim ev_lookup[Stop]()
-      let c.2: tobj = prim ev_clause[Stop.stop](ev.1)
-      tail clause Stop.stop c.2(ev.1, t.0)
+    uniform from 1 fn reperform$Stop.stop(a.0: unit, u.1: unit) -> tobj poly {
+      let ev.2: obj = prim ev_lookup[Stop]()
+      let c.3: tobj = prim ev_clause[Stop.stop](ev.2)
+      tail clause Stop.stop c.3(ev.2, a.0)
     }
     ");
     insta::assert_snapshot!(function(&shown, "fork$Code.code"), @"
     clause Code.code fn fork$Code.code(ev.0: obj, a.1: int) -> obj poly {
-      let a.4: tobj = box a.1
-      let u.2: unit = prim child_abort(ev.0, &reperform$Code.code, a.4)
+      let c.2: tobj = closure reperform$Code.code(a.1)
+      let u.3: unit = prim child_abort(ev.0, c.2)
       decref ev.0
-      let d.3: obj poly = prim dummy()
-      return d.3
+      let d.4: obj poly = prim dummy()
+      return d.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "reperform$Code.code"), @"
-    fn reperform$Code.code(t.0: tobj) -> tobj poly {
-      let ev.1: obj = prim ev_lookup[Code]()
-      let c.2: tobj = prim ev_clause[Code.code](ev.1)
-      let t.4: int = unbox t.0
-      decref t.0
-      tail clause Code.code c.2(ev.1, t.4)
+    uniform from 1 fn reperform$Code.code(a.0: int, u.1: unit) -> tobj poly {
+      let ev.2: obj = prim ev_lookup[Code]()
+      let c.3: tobj = prim ev_clause[Code.code](ev.2)
+      tail clause Code.code c.3(ev.2, a.0)
     }
     ");
 }

@@ -659,7 +659,7 @@ fn step<R: Exec>(
             let w = unsafe { ctx.root_get(root) }?;
             task.set(dst, w);
         }
-        Op::ChildAbort { ev, f, t } => child_abort::<R>(code, ctx, task, sched, counts, ev, f, t)?,
+        Op::ChildAbort { ev, c } => child_abort::<R>(code, ctx, task, sched, counts, ev, c)?,
         Op::RootSet { dst, at } => {
             let o = ops(at);
             unsafe { ctx.root_set(o[0], task.get(o[1] as Slot)) }?;
@@ -962,15 +962,24 @@ fn par<R: Exec>(
     let base = task.push_frame(ret, dst, BOUNDARY_SIZE);
     task.stack[base + 1] = Word::from_bits(j);
     task.boundaries.push(j);
-    task.scratch.clear();
-    task.scratch.push(Word::UNIT);
-    let target = apply::Target::Frame {
-        ret: CHILD_DONE,
-        dst: 0,
-    };
-    apply::apply::<R>(code, ctx, task, f, target)?;
+    apply_to_unit::<R>(code, ctx, task, f, CHILD_DONE, 0)?;
     sched.ready.push_back(right);
     safepoint::<R>(code, ctx, task, sched)
+}
+
+/// 閉包 `f` に `()` を適用し、戻り先 `ret` で結果を `dst` に受ける。`par` の2つの子の始まりと join の起こし直しは、
+/// どれもこの形である (docs/spec/vm.md の「`par` の fork と join」)。
+fn apply_to_unit<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    f: Word,
+    ret: Pc,
+    dst: Slot,
+) -> Result<(), VmFault> {
+    task.scratch.clear();
+    task.scratch.push(Word::UNIT);
+    apply::apply::<R>(code, ctx, task, f, apply::Target::Frame { ret, dst })
 }
 
 /// 右の子の `evv`。mask を当てた後の親の `evv` を頭からたどり、`Panic` を除く never-only のエフェクトの evidence ごとに、
@@ -1146,16 +1155,10 @@ fn resume<R: Exec>(
     }
     match std::mem::replace(&mut task.state, TaskState::Running) {
         TaskState::Unstarted(g) => {
-            task.scratch.clear();
-            task.scratch.push(Word::UNIT);
-            let target = apply::Target::Frame {
-                ret: CHILD_DONE,
-                dst: 0,
-            };
             // 始めたばかりの子はまだ命令を実行していないので、誤りには fork した `par` の命令の位置を付ける。
             // 横取りされたタスクの位置を付けると、文言がスケジュールで変わる
             let at = sched.join(task.boundaries[0]).ret - 1;
-            let result = apply::apply::<R>(code, ctx, task, g, target);
+            let result = apply_to_unit::<R>(code, ctx, task, g, CHILD_DONE, 0);
             at_par(code, task, sched, at, result).map(|()| None)
         }
         TaskState::Waiting(j) => complete_join::<R>(code, ctx, task, sched, j).map(Some),
@@ -1252,7 +1255,7 @@ fn join_outcomes<R: Exec>(
     };
     // 右の側の語は右の子が残した参照で、親だけが持つ
     let heap = unsafe { ctx.heap_mut() };
-    for w in right.words() {
+    if let Some(w) = right.word() {
         unsafe { heap.transfer_back(w, join.right_worker) }?;
     }
     heap.retire_worker(join.right_worker)?;
@@ -1283,14 +1286,13 @@ fn join_outcomes<R: Exec>(
             (abort, other)
         }
     };
-    for w in dropped.words() {
+    if let Some(w) = dropped.word() {
         unsafe { heap.decref(w) }?;
     }
     let Outcome::Abort {
         effect,
         depth,
-        reperform,
-        tuple,
+        clause,
     } = abort
     else {
         return Err(VmFault::Internal(
@@ -1313,18 +1315,11 @@ fn join_outcomes<R: Exec>(
             ctx.evv_set(m)?;
         }
     }
-    task.scratch.clear();
-    task.scratch.push(tuple);
-    let target = apply::Target::Frame {
-        ret: join.ret,
-        dst: join.dst,
-    };
-    apply::apply::<R>(code, ctx, task, reperform, target)
+    apply_to_unit::<R>(code, ctx, task, clause, join.ret, join.dst)
 }
 
-/// `prim child_abort(ev, f, t)`。fork evidence `ev` からエフェクトと深さを読み、子の境目まで巻き戻す。`ev` は借りる。
+/// `prim child_abort(ev, c)`。fork evidence `ev` からエフェクトと深さを読み、子の境目まで巻き戻す。`ev` は借りる。
 #[inline(never)]
-#[expect(clippy::too_many_arguments, reason = "the operands of child_abort")]
 fn child_abort<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1332,8 +1327,7 @@ fn child_abort<R: Exec>(
     sched: &mut Scheduler<R::P>,
     counts: &mut RunCounts,
     ev: Slot,
-    f: Slot,
-    t: Slot,
+    c: Slot,
 ) -> Result<(), VmFault> {
     if task.boundaries.is_empty() {
         return Err(VmFault::Internal("a child abort outside a par child"));
@@ -1354,14 +1348,13 @@ fn child_abort<R: Exec>(
         .ok_or(VmFault::Internal(
             "a child abort gets evidence without a depth",
         ))?;
-    let (reperform, tuple) = (task.get(f), task.get(t));
+    let clause = task.get(c);
     let dummy = ctx.heap().dummy();
     unwind::<R>(code, ctx, task, counts, dummy)?;
     let outcome = Outcome::Abort {
         effect,
         depth,
-        reperform,
-        tuple,
+        clause,
     };
     child_done::<R>(code, ctx, task, sched, outcome)
 }
@@ -1438,14 +1431,11 @@ fn cancel<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
 }
 
 impl Outcome {
-    /// 子が残した語。値か、起こし直す関数と詰めた値である。
-    fn words(&self) -> Vec<Word> {
+    /// 子が残した語。値か、起こし直しの閉包である。
+    fn word(&self) -> Option<Word> {
         match *self {
-            Outcome::Value(w) => vec![w],
-            Outcome::Abort {
-                reperform, tuple, ..
-            } => vec![reperform, tuple],
-            Outcome::Error(_) => Vec::new(),
+            Outcome::Value(w) | Outcome::Abort { clause: w, .. } => Some(w),
+            Outcome::Error(_) => None,
         }
     }
 }

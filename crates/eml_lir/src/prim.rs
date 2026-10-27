@@ -40,7 +40,7 @@ pub enum Prim {
     RootSet(u32),
     /// 不死の空の `MutArray`。`var` の配列の変数を取り出した後の状態である (docs/spec/lir.md の「基本操作」)。
     EmptyMutArray,
-    /// `par` の子を中断し、親で起こし直す関数と詰めた引数を渡す。戻らない (docs/spec/lir.md の「基本操作」)。
+    /// `par` の子を中断し、親で起こし直す閉包を渡す。戻らない (docs/spec/lir.md の「基本操作」)。
     ChildAbort,
 }
 
@@ -199,14 +199,8 @@ impl Prim {
             Prim::RootSet(_) => (&[TObj], &[false], Unit, &[Unr], Unr),
             // 結果は `MutArray` の値なので `lin` である
             Prim::EmptyMutArray => (&[], NONE, Obj, NO_MARKS, Lin),
-            // evidence は節の入口が持ち続けるので借りる。起こし直す関数と詰めた引数は親に渡る
-            Prim::ChildAbort => (
-                &[Obj, TObj, TObj],
-                &[true, false, false],
-                Unit,
-                &[Unr, Unr, Poly],
-                Unr,
-            ),
+            // evidence は節の入口が持ち続けるので借りる。操作の引数を捕まえた起こし直しの閉包は親に渡る
+            Prim::ChildAbort => (&[Obj, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
         };
         PrimRow {
             params,
@@ -287,7 +281,7 @@ mod tests {
             ("root_get", &[], Unr),
             ("root_set", &[Unr], Unr),
             ("empty_mut_array", &[], Lin),
-            ("child_abort", &[Unr, Unr, Poly], Unr),
+            ("child_abort", &[Unr, Poly], Unr),
         ];
         assert_eq!(table.len(), KINDS.len());
         for (name, params, ret) in table {

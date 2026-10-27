@@ -369,10 +369,10 @@ both : (Unit -> <e> a) -> (Unit -> <e> b) -> <e> (a, b)        -- 逐次の版�
 - 止めるビットを見て止まった子は、それを自分の誤りとして join に記録せず、そのまま止める手順に入る。この規則が順序づけないのは、子が起こしたのでない run 全体の止め方 (割り込み、`TERMINATE`、メモリの硬い上限) だけで、それは起きた時点で終わりの欄に書く
 - 捨てる側の子の結果が `Lin` の場合、`par` は型について多相なので、実行時にオブジェクトの記述子から破棄処理を引いて drop する。`eml_rt` の記述子は破棄処理を持たなければならない。今の `eml_rt` は型ごとの記述子の表を持たず、破棄処理をヘッダの種類で表す ([オブジェクトモデル](../spec/object-model.md) の「ヘッダ」)
 - `par` は実行系の核のプリミティブ (fork / join の節点) で、std の `Par.par` から呼ぶ。子の `never` の操作が `par` から抜けるのを、次の形で親に渡す
-  - evidence passing は、`par` を走らせうるプログラムの `never` の操作 `E.op` ごとに、`fork$E.op` と `reperform$E.op` を作る ([Core IR](../spec/core-ir.md) の「`par` の子の中断」)。`fork$E.op` は引数を詰めて `prim child_abort(ev, &reperform$E.op, t)` を呼び、子を中断する。`reperform$E.op(t)` は詰めた値を開いて `E.op` を普通に perform する
+  - evidence passing は、`par` を走らせうるプログラムの `never` の操作 `E.op` ごとに、`fork$E.op` と `reperform$E.op` を作る ([Core IR](../spec/core-ir.md) の「`par` の子の中断」)。`fork$E.op` は操作の引数を捕まえた閉包 `c = closure reperform$E.op(a_1, .., a_k)` を作り、`prim child_abort(ev, c)` を呼んで子を中断する。`reperform$E.op(a_1, .., a_k, u)` は `()` を受けて `E.op` を普通に perform する
   - 子の `evv` は空でなく、親の `evv` の鏡である。親の `evv` の `never` だけのエフェクトの evidence ごとに、そのエフェクトの何番目かの深さを持つ fork evidence を同じ順に並べ、`Panic` の fork evidence を末尾に置く。子の中の `mask` は数で evidence を飛ばすので、親と同じ形の列にすれば `ev_lookup` と `evv_mask` に手を入れずに済む。fork evidence の節は `fork$E.op` である。エフェクトごとの表と末尾はロードで凍結し、鏡の節点だけを fork ごとに作る ([VM](../spec/vm.md) の「`par` の fork と join」)
   - 子の中の extern の `Panic` も、ほかの `never` の操作と同じく、子の中の `try_panic` か末尾の fork evidence の `fork$Prelude.Panic.panicked` に届く。extern のエフェクトは mask されないので、`Panic` の fork evidence は深さ 0 の1つで足りる
-  - join の節点は `(reperform の関数, 組)` を持つ。両方の子が終わった後、親はいちばん左のものを呼ぶ。深さが 0 でなければ、親の `evv` をその深さまで mask してから呼ぶ。それは親の文脈で親の evidence を使って perform するので、`prompt$` は普通に動く。`par` の呼び出しの位置は巻き戻しの地点である ([Core IR](../spec/core-ir.md) の「`never` の中断」、[VM](../spec/vm.md) の「巻き戻し」)
+  - join の節点は起こし直しの閉包を持つ。両方の子が終わった後、親はいちばん左のものに `()` を適用する。深さが 0 でなければ、親の `evv` をその深さまで mask してから呼ぶ。それは親の文脈で親の evidence を使って perform するので、`prompt$` は普通に動く。`par` の呼び出しの位置は巻き戻しの地点である ([Core IR](../spec/core-ir.md) の「`never` の中断」、[VM](../spec/vm.md) の「巻き戻し」)
   - 子は親の evidence に触れないので、evidence のために印を付けるものはない
 - 子の取り消しを入れるときは、協調的な中断を安全点で行い、中断した子が捕まえている `Lin` の値を `drop k` と同じ後始末の情報で解放する
 

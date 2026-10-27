@@ -361,11 +361,11 @@ fn f(a.0: tobj, b.1: tobj, s.2: obj) -> obj {
   decref t.3
   return s.2
 }
-fn g(e.0: obj, k.1: tobj, t.2: tobj poly) -> obj poly {
-  let u.3: unit = prim child_abort(e.0, k.1, t.2)
+fn g(e.0: obj, c.1: tobj poly) -> obj poly {
+  let u.2: unit = prim child_abort(e.0, c.1)
   decref e.0
-  let d.4: obj poly = prim dummy()
-  return d.4
+  let d.3: obj poly = prim dummy()
+  return d.3
 }
 ";
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
