@@ -1,0 +1,17 @@
+# 右の子は、前の入力の `let` の束縛 (セッションの根) を fork の `share` から読む。
+# 逐次の結果と同じ値が出て、根を共有したまま `close` がリークを報告しない
+# (docs/spec/object-model.md の「セッションの根」)
+> import Std.Par (par)
+> upto : Int -> List Int -> <Panic> List Int
+. upto n acc = if n == 0 then acc else upto (n - 1) (n :: acc)
+.
+> let xs = upto 100 []
+> total : List Int -> <Panic> Int
+. total ys = match ys with
+.   | [] -> 0
+.   | y :: rest -> y + total rest
+.
+> par (fn () -> total xs) (fn () -> total xs * 2)
+> let p = par (fn () -> upto 3 []) (fn () -> total xs)
+> p
+> total xs

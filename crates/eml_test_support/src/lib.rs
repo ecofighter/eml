@@ -287,6 +287,16 @@ pub fn run_stats<'a>(sources: impl Into<Sources<'a>>) -> (String, Result<RunStat
     run_stats_on(sources, capture())
 }
 
+/// `RunStats` のうち、スケジュールの方針で変わりうる欄を 0 にする。方針を変えた実行どうしは、残りの欄で比べる。
+/// 0 にする欄とその理由は次のとおりで、比べる欄がスケジュールによらない理由は
+/// docs/implementation/testing.md の「seed で流す」にある。
+/// - `peak_objects`: 同時に生きている物体の数は、子の実行が交互に進む順で変わる
+#[cfg(feature = "run")]
+pub fn schedule_independent(mut stats: RunStats) -> RunStats {
+    stats.peak_objects = 0;
+    stats
+}
+
 /// `run_stats` と同じく流し、Host を呼び出し側が作る。スクリプトの引数 (`Env.args`) や標準入力を、大きさを変えて
 /// 与えるテストのため。
 #[cfg(feature = "run")]

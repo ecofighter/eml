@@ -353,3 +353,27 @@ fn f(a.0: obj, b.1: obj) -> obj {
     assert!(aborts(text, "f"));
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);
 }
+
+#[test]
+fn par_and_child_abort_are_points() {
+    // `par` は子の中断を親で起こし直し、`child_abort` は子を中断するので、どちらも呼ぶ相手によらず地点になる。
+    // `child_abort` が借りる evidence は、命令の後も持ち主が持っている
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+fn f(a.0: tobj, b.1: tobj, s.2: obj) -> obj {
+  let t.3: obj = par (,) #0(a.0, b.1)
+  decref t.3
+  return s.2
+}
+fn g(e.0: obj, c.1: tobj poly) -> obj poly {
+  let u.2: unit = prim child_abort(e.0, c.1)
+  decref e.0
+  let d.3: obj poly = prim dummy()
+  return d.3
+}
+";
+    assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
+    assert_eq!(points_of(text, "g"), [point(0, 0, &[(0, 1)], None)]);
+    assert!(aborts(text, "f"));
+    assert!(aborts(text, "g"));
+}

@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/lin_through_children.em
+---
+--- stdout ---
+8
+10
+(7, 9)
+(6, 2)
+--- stderr ---

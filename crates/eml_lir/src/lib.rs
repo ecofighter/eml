@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use eml_extern::{Extern, Linearity};
+use eml_extern::{EffectMultiplicity, Extern, ExternEffect, Linearity};
 pub use eml_extern::{FloatBits, OpRet, Repr, StructId};
 use rustc_hash::FxHashMap;
 
@@ -62,6 +62,24 @@ impl Program {
     /// 表にない番号なら `None` である。誤りを含む IR を表示でき、verifier がその番号を誤りとして報告できるようにする。
     pub fn layout(&self, id: LayoutId) -> Option<&Layout> {
         self.layouts.get(id.0 as usize)
+    }
+
+    /// プログラムが `par` を走らせうるか。`par` を含むか、REPL の根を読むときである。根の閉包は前の入力の `par` を
+    /// 走らせうる。真なら fork の関数がそろっていなければならない (docs/spec/core-ir.md の「`par` の子の中断」)。
+    pub fn may_run_par(&self) -> bool {
+        self.functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.stmts)
+            .any(|stmt| {
+                matches!(
+                    stmt,
+                    Stmt::Let {
+                        rhs: Rhs::Call(Call::Par { .. }) | Rhs::Prim(Prim::RootGet(_), _),
+                        ..
+                    }
+                )
+            })
     }
 }
 
@@ -507,6 +525,14 @@ pub enum Call {
         callee: Atom,
         args: Vec<Atom>,
     },
+    /// `par` の fork と join。`left` と `right` の関数値に `()` を適用する子を作り、両方の値を `pair` の構築子で組にして
+    /// 返す。結果は `obj` で、末尾の呼び出しにはならない (docs/spec/lir.md の「LIR の命令」)。
+    Par {
+        left: Atom,
+        right: Atom,
+        pair: Ctor,
+        at: Option<Loc>,
+    },
 }
 
 impl Call {
@@ -522,6 +548,15 @@ impl Call {
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Call::Direct(_, args) => args.iter().for_each(|&atom| f(atom)),
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                f(*left);
+                f(*right);
+            }
             Call::Apply {
                 callee,
                 args,
@@ -543,6 +578,15 @@ impl Call {
     pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
             Call::Direct(_, args) => args.iter_mut().for_each(f),
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                f(left);
+                f(right);
+            }
             Call::Apply {
                 callee,
                 args,
@@ -820,6 +864,38 @@ pub struct OperationInfo {
     pub resumable: bool,
 }
 
+impl EffectInfo {
+    /// どの操作も `never` のエフェクトか。extern のエフェクトは `eml_extern` の行の多重度で決める。`IO` の
+    /// `io_failed` は `never` だが、`IO` そのものは `Once` なので入らない (docs/spec/types.md の「Kind」)。操作の
+    /// ないエフェクトも真である (docs/spec/core-ir.md の「`par` の子の中断」)。
+    pub fn never_only(&self) -> bool {
+        match ExternEffect::from_name(&self.name) {
+            Some(effect) => effect.row().multiplicity == EffectMultiplicity::Never,
+            None => self.operations.iter().all(|operation| !operation.resumable),
+        }
+    }
+}
+
+/// fork の関数を持つエフェクトの番号。操作を1つ以上持つ never-only のエフェクトである
+/// (docs/spec/core-ir.md の「`par` の子の中断」)。
+pub fn fork_effects(effects: &[EffectInfo]) -> impl Iterator<Item = u32> + '_ {
+    effects
+        .iter()
+        .enumerate()
+        .filter(|(_, info)| !info.operations.is_empty() && info.never_only())
+        .map(|(effect, _)| effect as u32)
+}
+
+/// `par` の子の中で操作を中断する関数の名前 (`fork$Fail.fail`)。VM はこの名前で関数を引く。
+pub fn fork_name(effects: &[EffectInfo], effect: u32, op: u32) -> String {
+    format!("fork${}", syntax::operation_text(effects, effect, op))
+}
+
+/// 中断した操作を親で起こし直す関数の名前 (`reperform$Fail.fail`)。
+pub fn reperform_name(effects: &[EffectInfo], effect: u32, op: u32) -> String {
+    format!("reperform${}", syntax::operation_text(effects, effect, op))
+}
+
 /// エフェクトの表の操作。番号が表にあることを verifier が確かめた後のパスが使う。関数の並びを書き換えながら引けるように、
 /// `Program` でなく表だけを借りる。
 pub fn operation(effects: &[EffectInfo], effect: u32, op: u32) -> &OperationInfo {
@@ -1042,6 +1118,70 @@ impl std::error::Error for ParseError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn effect(name: &str, operations: &[bool]) -> EffectInfo {
+        EffectInfo {
+            name: name.to_string(),
+            operations: operations
+                .iter()
+                .enumerate()
+                .map(|(index, &resumable)| OperationInfo {
+                    name: format!("op{index}"),
+                    params: Vec::new(),
+                    ret: if resumable {
+                        OpRet::Repr(Repr::Unit)
+                    } else {
+                        OpRet::Never
+                    },
+                    param_marks: Vec::new(),
+                    ret_mark: if resumable { Mark::Unr } else { Mark::Poly },
+                    resumable,
+                })
+                .collect(),
+        }
+    }
+
+    /// extern のエフェクトは表の行の多重度で決まる。`IO` の操作は `never` だが、`IO` は `Once` なので入らない。ほかの
+    /// エフェクトは、どの操作も `never` のときに入る。操作のないエフェクトも真だが、fork の関数は持たない
+    /// (docs/spec/core-ir.md の「`par` の子の中断」)。
+    #[test]
+    fn never_only_follows_the_extern_row_and_the_operations() {
+        let effects = [
+            effect("Prelude.IO", &[false]),
+            effect("Prelude.Panic", &[false]),
+            effect("Fail", &[false, false]),
+            effect("Mixed", &[false, true]),
+            effect("Ask", &[true]),
+            effect("Empty", &[]),
+        ];
+        let never_only: Vec<bool> = effects.iter().map(EffectInfo::never_only).collect();
+        assert_eq!(never_only, [false, true, true, false, false, true]);
+        assert_eq!(fork_effects(&effects).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(fork_name(&effects, 2, 1), "fork$Fail.op1");
+        assert_eq!(
+            reperform_name(&effects, 1, 0),
+            "reperform$Prelude.Panic.op0"
+        );
+    }
+
+    /// `par` か `root_get` があれば `par` を走らせうる。根を書くだけの `root_set` は当たらない。
+    #[test]
+    fn a_program_may_run_par_with_a_par_or_a_root_get() {
+        let may_run_par = |body: &str| {
+            parse(&format!("layout (,) {{ (,)(tobj, tobj) }}\nfn f(a.0: tobj, b.1: tobj) -> unit {{\n{body}  return ()\n}}\n"))
+                .unwrap_or_else(|error| panic!("{error}"))
+                .may_run_par()
+        };
+        assert!(may_run_par(
+            "  let t.2: obj = par (,) #0(a.0, b.1)\n  decref t.2\n"
+        ));
+        assert!(may_run_par(
+            "  let r.2: tobj = prim root_get[0]()\n  decref r.2\n  decref a.0\n  decref b.1\n"
+        ));
+        assert!(!may_run_par(
+            "  let u.2: unit = prim root_set[0](a.0)\n  decref b.1\n"
+        ));
+    }
 
     fn shape(layout: u32, fields: &[(Repr, Mark)]) -> StructShape {
         StructShape {

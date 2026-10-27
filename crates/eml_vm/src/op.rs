@@ -10,8 +10,11 @@ pub type Pc = u32;
 pub const FINISH: Pc = 0;
 /// 余った引数を適用する組み込みの命令。そのフレームは [結果, n, 一様な引数…] である (docs/spec/vm.md の「フレーム」)。
 pub const APPLY_REST: Pc = 1;
+/// `par` の子の本体が戻る組み込みの命令。子の境目のフレームの上で子の結果を受ける (docs/spec/vm.md の
+/// 「`par` の fork と join」)。
+pub const CHILD_DONE: Pc = 2;
 /// 組み込みの命令の数。関数の命令はこの後に並ぶ。
-pub const BUILTINS: Pc = 2;
+pub const BUILTINS: Pc = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
@@ -60,6 +63,14 @@ pub enum Op {
     },
     Finish,
     ApplyRest,
+    /// `par` の子の本体の戻り先。境目のフレームの slot 0 が子の結果、slot 1 が join の番号である。
+    ChildDone,
+    /// `par` の fork。`operands[at..]` は [左の子のスロット, 右の子のスロット, 組の構築子のタグ]。両方の子が終わった
+    /// 後の join で、組を `dst` に書くか、中断を起こし直す。
+    Par {
+        dst: Slot,
+        at: u32,
+    },
     /// `operands[at..]` は [関数の番号, lin, 引数の数, 引数のスロット…]。`&f` の即値には引数の数を詰める。
     Closure {
         dst: Slot,
@@ -405,6 +416,10 @@ pub enum Op {
         dst: Slot,
         ev: Slot,
     },
+    EvTakeEvv {
+        dst: Slot,
+        ev: Slot,
+    },
     EvTakeState {
         dst: Slot,
         ev: Slot,
@@ -452,6 +467,12 @@ pub enum Op {
     RootSet {
         dst: Slot,
         at: u32,
+    },
+    /// `par` の子を中断する。fork evidence `ev` からエフェクトと深さを読み、起こし直す閉包 `c` を持って子の境目まで
+    /// 巻き戻す。戻らないので、結果のスロットを持たない。
+    ChildAbort {
+        ev: Slot,
+        c: Slot,
     },
 }
 

@@ -2,6 +2,7 @@
 
 mod constants;
 mod emit;
+mod forks;
 mod moves;
 mod slots;
 
@@ -11,7 +12,7 @@ use eml_lir::unwind::UnwindPoint;
 use eml_lir::{FnIdx, Program};
 use eml_rt::{Control, Mode};
 
-use crate::code::{CodeBase, CompileError, FnEntry, Index, Tables};
+use crate::code::{CodeBase, CompileError, FnEntry, Forks, Index, Tables};
 use crate::disasm;
 use constants::Constants;
 
@@ -34,6 +35,11 @@ impl<M: Mode> CodeBase<M> {
             files: Vec::new(),
             index: Index::default(),
             control,
+            forks: Forks {
+                tables: Vec::new(),
+                panic: None,
+                tail: eml_rt::Word::UNIT,
+            },
         }
     }
 
@@ -57,6 +63,7 @@ impl<M: Mode> CodeBase<M> {
             files,
             index,
             control,
+            forks,
         } = self;
         let mut pool = Constants::new(constants, index, region, control);
         let strings = &program.strings;
@@ -108,6 +115,7 @@ impl<M: Mode> CodeBase<M> {
                 .entry(function.name.clone())
                 .or_insert(links.functions[i]);
         }
+        forks::extend(program, &links, index, forks, region, control)?;
         Ok(links.functions[program.entry.0 as usize])
     }
 

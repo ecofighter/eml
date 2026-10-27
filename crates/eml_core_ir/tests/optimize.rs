@@ -3058,3 +3058,23 @@ main () = match hide 0 Some with
         .unwrap_or_else(|| panic!("no constructor wrapper in\n{}", pretty(&program)));
     assert_eq!(wrapper.split, Some(0));
 }
+
+/// never だけのエフェクトの handler は、その `fail` が `par` の子の中にしかなくても optimize の後に残る。子の中断を
+/// 親で起こし直すときに、親がその evidence を持っている必要があるためである (docs/spec/core-ir.md の「`par` の呼び出し」)。
+#[test]
+fn a_handler_whose_only_operation_is_in_a_par_child_stays() {
+    let text = "import Std.Par\nimport Fail (Fail(..))\n\nleft : Unit -> <Fail String> Int\nleft () = Fail.fail \"no\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = Fail.to_result (fn () -> Par.par left (fn () -> 4))\n  println (show r)";
+    let shown = core_text(text, Pass::Optimize);
+    insta::assert_snapshot!(function(&shown, "Std.Fail.to_result@[String, (Int, Int)]{0=main$lambda1}"), @r#"
+    fn "Std.Fail.to_result@[String, (Int, Int)]{0=main$lambda1}"() -> obj {
+      let t.2: obj = handle Std.Fail.Fail((), &"Std.Fail.to_result@[String, (Int, Int)]$handle0{0=main$lambda1}") { fail: &"Std.Fail.to_result@#759c1a9f36b1fe70" } return &"Std.Fail.to_result@#4d102afe93839d58"
+      return t.2
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "Std.Fail.to_result@[String, (Int, Int)]$handle0{0=main$lambda1}"), @r#"
+    internal yields uniform from 0 fn "Std.Fail.to_result@[String, (Int, Int)]$handle0{0=main$lambda1}"(p.1: unit) -> (,){int, int} {
+      let t.3: (,){int, int} = par (,) #0(&left, &main$lambda0)
+      return t.3
+    }
+    "#);
+}

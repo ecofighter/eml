@@ -10,10 +10,7 @@ use crate::tail::tail_position_call;
 use crate::translate::tuple_struct;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::push_var;
-use eml_lir::{
-    Atom, BlockId, Ctor, FnIdx, Layout, LayoutCtor, LayoutId, Mark, Repr, Structs, TUPLE, VarId,
-    VarInfo,
-};
+use eml_lir::{Atom, BlockId, Ctor, FnIdx, LayoutId, Mark, Repr, Structs, TUPLE, VarId, VarInfo};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// 複製 `f{H}` が返す値の並び。複製の元の名前と handler で決まるので、名前が同じ複製はいつも同じ形の結果を返す
@@ -94,7 +91,7 @@ impl Tuples {
             let layout = *tuples
                 .layouts
                 .entry(values.len())
-                .or_insert_with(|| tuple_layout(program, values.len()));
+                .or_insert_with(|| program.tuple_layout(values.len()));
             let repr = tuple_struct(&mut program.structs, layout, values.clone());
             tuples.reprs.insert(values, repr);
         }
@@ -117,27 +114,6 @@ impl Tuples {
             .get(values)
             .expect("the round adds the tuple reprs its copies use")
     }
-}
-
-/// `size` 個の要素のタプルの配置。translate がタプルに使う配置と同じ形 (フィールドはどれも `tobj`) で、配置の表に
-/// なければ足す。
-fn tuple_layout(program: &mut Program, size: usize) -> LayoutId {
-    let name = format!("({})", ",".repeat(size - 1));
-    if let Some(index) = program
-        .layouts
-        .iter()
-        .position(|layout| layout.name == name)
-    {
-        return LayoutId(index as u32);
-    }
-    program.layouts.push(Layout {
-        name: name.clone(),
-        constructors: vec![LayoutCtor {
-            name,
-            fields: vec![Repr::TObj; size],
-        }],
-    });
-    LayoutId(program.layouts.len() as u32 - 1)
 }
 
 /// `return` の節の状態の引数。複製はこの Repr と印で状態を持ち回る。

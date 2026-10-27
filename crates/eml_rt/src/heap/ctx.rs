@@ -820,6 +820,10 @@ pub struct Ctx<M: Mode> {
     /// 安全点の確かめがヒープの中をたどらずに読めるよう、ヒープとは別に持つ。
     control: Arc<Control>,
     max_depth: usize,
+    /// 今のタスクの深さの上限。`max_depth` から、タスクの深さの起点を引いた値である。`par` の右の子の深さは
+    /// fork のときの親の深さから数えるが、引いた上限を持てば、安全点で起点を足さずに済む
+    /// (docs/spec/object-model.md の「タスクの切り替え」)。
+    depth_limit: usize,
     /// `evv` の長さの上限。リストをたどるループは、これを超えたら止まる。
     max_evv: usize,
     stats: CtxStats,
@@ -876,6 +880,34 @@ impl<M: Mode> Ctx<M> {
     /// `w` は `evv` のリストとして正しく、長さが上限以下である。
     pub closed spec fn evv_wf(&self, w: Word) -> bool {
         listed(self.heap, w, self.max_evv)
+    }
+
+    /// `switch_task(l, worker)` の後の文脈。`evv` を `l` にし、ヒープの worker を `worker` にする。検査モードの ID の
+    /// 割り当ての欄は、証明の対象でないので写さない。
+    pub closed spec fn switched(&self, l: Word, worker: u32) -> Ctx<M> {
+        Ctx { heap: Heap { worker, ..self.heap }, evv: l, ..*self }
+    }
+
+    /// 深さの起点が `depth_offset` のタスクに切り替えた後の文脈。今のタスクの深さの上限を、`max_depth` から
+    /// `depth_offset` を引いた値にする。起点が `max_depth` を超えれば 0 にする。
+    pub closed spec fn rebased(&self, depth_offset: usize) -> Ctx<M> {
+        Ctx {
+            depth_limit: if depth_offset <= self.max_depth {
+                (self.max_depth - depth_offset) as usize
+            } else {
+                0
+            },
+            ..*self
+        }
+    }
+
+    /// 仕事の回数 (`CtxStats`)、セッションの根、上限、今のタスクの深さの上限が `old` と同じである。
+    pub closed spec fn same_rest(&self, old: Ctx<M>) -> bool {
+        &&& self.stats == old.stats
+        &&& self.roots == old.roots
+        &&& self.max_depth == old.max_depth
+        &&& self.depth_limit == old.depth_limit
+        &&& self.max_evv == old.max_evv
     }
 
     /// 今の `evv` で、エフェクト `effect` の最初の evidence。tag はエフェクトの番号 + 1 なので、65535 は見つからない。
@@ -1005,6 +1037,7 @@ impl<M: Mode> Ctx<M> {
             roots: Vec::new(),
             control,
             max_depth: limits.max_depth,
+            depth_limit: limits.max_depth,
             max_evv: limits.max_evv,
             stats: CtxStats {
                 evidence_steps: 0,
@@ -1034,9 +1067,12 @@ impl<M: Mode> Ctx<M> {
 
     /// # Safety
     /// ヒープを入れ替えない。`Ctx` が持つ語 (`evv` と yield の状態) を手放したり書き換えたりせず、それらの語からたどれる
-    /// 物体 (`evv` の節点、evidence、入口の表) も書き換えない。`set_worker` を呼ばず、それらの物体を `share` しない。
-    /// 基本操作が頼る、物体の持ち主と rc の符号が変わるためである。`Ctx` のメソッドを次に呼ぶ前に、作っている物体を
-    /// 書き終える。
+    /// 物体の欄も書き換えない。`set_worker` を呼ばない (worker は `switch_task` で替える)。それらの語から届く物体の
+    /// うち、前提で rc が正であることを求める物体 (`ev_take_state` と `ev_set_state` の evidence、`ev_set_clause` の
+    /// 入口の表) は、使い終わるまで `share` しない。そのほかの物体は `share` してよい。`share` が変えるのは `lin` で
+    /// ない局所の物体の rc の符号と、受け手に移す物体の持ち主だけで (速いモードの受け手は今の worker である)、
+    /// `held_ok` は共有の `lin` でない物体を許すためである (docs/spec/object-model.md の「欄」)。`Ctx` のメソッドを
+    /// 次に呼ぶ前に、作っている物体を書き終える。
     pub unsafe fn heap_mut(&mut self) -> &mut Heap<M> {
         &mut self.heap
     }
@@ -1535,6 +1571,91 @@ impl<M: Mode> Ctx<M> {
         r
     }
 
+    /// タスクを切り替える。`evv` を次のタスクの `l` に替え、ヒープの worker を `worker` にし (`Heap::set_worker`)、
+    /// 今のタスクの深さの上限を次のタスクの深さの起点 `depth_offset` から決め直し (`rebased`)、前のタスクの `evv` を
+    /// 返す。変える欄はこの3つだけである。`l` の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、RC に触れない。
+    /// タスクの切り替えが `RunStats` をスケジュールに依存させないための操作である
+    /// (docs/spec/object-model.md の「タスクの切り替え」)。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。`l` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
+    /// 1つ持つ。速いモードでは、切り替えた後の文脈 (`switched(l, worker)`) で `held_ok` が成り立つ。どちらのモードでも
+    /// 確かめない。前の文脈で `held_ok` が成り立っていれば、返す語は前の worker の下で `evv` のリストで、呼ぶ側が
+    /// その参照を1つ持つ。
+    #[verifier::spinoff_prover]
+    pub unsafe fn switch_task(&mut self, l: Word, worker: u32, depth_offset: usize) -> (r: Word)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(l),
+            !M::CHECKED ==> old(self).switched(l, worker).held_ok(),
+        ensures
+            final(self).wf(),
+            r == old(self).evv_spec(),
+            final(self).evv_spec() == l,
+            final(self).yield_spec() == old(self).yield_spec(),
+            final(self).heap_spec().worker_spec() == worker,
+            final(self).heap_spec().same_contents(old(self).heap_spec()),
+            final(self).same_rest(old(self).rebased(depth_offset)),
+            old(self).switched(l, worker).held_ok() ==> final(self).held_ok(),
+            old(self).held_ok() ==> old(self).evv_wf(r) && forall|u: Word|
+                u.bits_spec() == 1 ==> #[trigger] old(self).switched(
+                    u,
+                    old(self).heap_spec().worker_spec(),
+                ).holds(r),
+    {
+        let r = self.evv;
+        self.evv = l;
+        self.heap.set_worker(worker);
+        self.depth_limit = self.max_depth.saturating_sub(depth_offset);
+        proof {
+            let s0 = *old(self);
+            let s = s0.switched(l, worker);
+            self.heap.lemma_same_contents(s0.heap);
+            assert(self.heap.same_contents(s.heap));
+            self.heap.lemma_same_contents(s.heap);
+            if s.held_ok() {
+                let d = |b: usize| 0int;
+                assert(moved(self.heap, s.heap, d, Set::empty()));
+                assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s.need(
+                    seq![],
+                    b,
+                ) + d(b) >= self.need(seq![], b) by {}
+                self.lemma_holds_moved(s, seq![], seq![], d, Set::empty());
+                lemma_listed_kept(self.heap, s.heap, d, Set::empty(), l, s.max_evv);
+            }
+            if s0.held_ok() {
+                // 前の文脈で `evv` を空にすれば、`Ctx` が持っていた参照はそのまま呼ぶ側のものになる
+                lemma_unit_bits();
+                assert forall|u: Word| u.bits_spec() == 1 implies #[trigger] s0.switched(
+                    u,
+                    s0.heap.worker,
+                ).holds(r) by {
+                    let c = s0.switched(u, s0.heap.worker);
+                    assert(c.heap == s0.heap);
+                    let ws = seq![r];
+                    assert forall|b: usize| #[trigger] c.need(ws, b) == s0.need(seq![], b) by {
+                        lemma_points_in(ws, b);
+                        lemma_points_in(seq![], b);
+                    }
+                    assert forall|i: int| 0 <= i < ws.len() implies held_word(
+                        c.heap,
+                        #[trigger] ws[i],
+                    ) by {}
+                }
+            }
+        }
+        r
+    }
+
+    /// 今の `evv` の語を読む。参照は `Ctx` に残り、RC に触れない。fork が子の `evv` を作る間に親の `evv` を読むための
+    /// 操作である (docs/spec/object-model.md の「タスクの切り替え」)。
+    pub fn evv_word(&self) -> (r: Word)
+        ensures
+            r == self.evv_spec(),
+    {
+        self.evv
+    }
+
     /// エフェクト `effect` の evidence を作る。入口の表は欄が `n_ops` 個で、どれも `()` である。tag はエフェクトの
     /// 番号 + 1 にする (docs/spec/object-model.md の「evidence の3つの物体」)。`state` と `outer` は消費する。
     ///
@@ -1941,8 +2062,76 @@ impl<M: Mode> Ctx<M> {
         Ok(s)
     }
 
+    /// evidence の外側の `evv` を返し、欄を `()` にする。外側の参照は呼ぶ側に移る。外側の `evv` がリストとして正しいことは
+    /// EP の不変条件で、この操作は語そのものだけを約束する。`ev` は借りる。`prompt$` が
+    /// evidence を退かせるための操作で、退いた evidence は外側の `evv` に届かない
+    /// (docs/spec/object-model.md の「evidence の3つの物体」)。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。`ev` は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`ev`
+    /// は evidence で、ほかのスレッドが読めない局所の物体である (検査モードは形を確かめて `BadEvidence` を、書けない
+    /// 物体には `set_field` の `NotWritable` を返す)。
+    pub unsafe fn ev_take_evv(&mut self, ev: Word) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(ev),
+            !M::CHECKED ==> old(self).ev_shape(ev) && old(self).heap_spec().rc_value(ev) > 0,
+        ensures
+            final(self).wf(),
+            r is Err ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).ev_shape(ev) && old(self).heap_spec().rc_value(ev) > 0
+                ==> (r matches Ok(w) && {
+                &&& w == old(self).ev_outer(ev)
+                &&& final(self).ev_outer(ev).bits_spec() == 1
+                &&& final(self).ev_table(ev) == old(self).ev_table(ev)
+                &&& final(self).ev_state(ev) == old(self).ev_state(ev)
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).ev_shape(ev)
+                &&& final(self).evolved_by(
+                    *old(self),
+                    |b: usize| points(w, b),
+                    Set::empty().insert(ev.bits_spec()),
+                )
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.ev_shape(ev) && s0.heap.rc_value(ev) > 0;
+        if M::CHECKED {
+            self.checked_ev(ev)?;
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        proof {
+            lemma_unextended(h1, ev);
+        }
+        let w = (unsafe { self.heap.field(ev, 2) })?;
+        let unit = Word::UNIT;
+        proof {
+            lemma_unit_bits();
+            if c {
+                self.lemma_settled_ev(s0, ev);
+            }
+        }
+        (unsafe { self.heap.set_field(ev, 2, unit) })?;
+        proof {
+            lemma_words_trans(self.heap, h1, s0.heap);
+            self.lemma_words_kept(s0);
+            if c {
+                self.lemma_take_evv_ok(s0, h1, ev, w, unit);
+            }
+        }
+        Ok(w)
+    }
+
     /// evidence の状態の欄を `s` にし、元の状態を手放す。`s` は消費し、`ev` は借りる。元の状態を手放す連鎖が `ev`
-    /// 自身に届いても (docs/spec/lir.md の「evidence」の、状態の欄を通る輪)、呼ぶ側が `ev` を持つので `ev` は空かない。
+    /// 自身に届いても、呼ぶ側が `ev` を持つので `ev` は空かない。EP が出すコードでは届かないが、契約はそれに頼らない
+    /// (docs/spec/object-model.md の「基本操作の契約」)。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`ev` と `s` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側が `s`
@@ -3293,11 +3482,12 @@ impl<M: Mode> Ctx<M> {
 // 安全点の確かめは何も約束しないので、`verus!` の外に書く (docs/spec/object-model.md の「実行の制御」)。止める語は
 // 「止めよ」のビットだけを伝えるので、Relaxed で読む
 impl<M: Mode> Ctx<M> {
-    /// 安全点の確かめ。`depth` は VM のタスクのスタックの語の数である。
+    /// 安全点の確かめ。`depth` は VM のタスクのスタックの語の数で、タスクの深さの起点を含まない。起点は
+    /// `switch_task` が上限から引いてある。
     #[inline]
     pub fn poll(&self, depth: usize) -> Result<(), Stop> {
         let bits = self.control.stop_bits();
-        if depth > self.max_depth || bits != 0 {
+        if depth > self.depth_limit || bits != 0 {
             return Err(stop_reason(bits));
         }
         Ok(())

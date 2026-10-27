@@ -9,11 +9,14 @@
 ```sh
 eml wc.em -l input.txt          # eml run wc.em -l input.txt と同じ
 eml run --debug-heap wc.em -l input.txt
+eml run --sched seeded:7 wc.em -l input.txt
 ./wc.em -l input.txt            # 1行目が #!/usr/bin/env eml で、実行できるファイル
 ```
 
 - 最初の引数が `-` で始まらず、サブコマンドの名前 (`check`、`run`、`repl`、`help`) でもなければ、`run` として扱う。`run` という名前のファイルを動かすときは `eml run run` と書く。`-` で始まる最初の引数はフラグとして読むので、`eml --verison` は使い方の誤り (終了コード 2) である
-- ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap` はファイルより前にだけ書ける
+- `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--sched`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--sched=seeded:7`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
+- ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap` と `--sched` はファイルより前にだけ書ける。`eml run main.em --sched bogus` は、スクリプトに `--sched` と `bogus` を渡す
+- `--sched <sequential|seeded:N>` は、タスクを切り替える方針を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。既定は `sequential` で、`seeded:N` は `u64` の seed `N` で横取りの位置を決める。ほかの値と、2回書いた `--sched` は使い方の誤り (終了コード 2) である。`run` と `repl` が持ち、`check` は持たない。環境変数では選べない
 - `Env.args ()` は、ファイルより後ろの引数を返す。`eml` とスクリプトのパスは含めない
 - shebang は `#!/usr/bin/env eml` と書く。Linux の `env` は `#!` の行の残りを1つの引数として渡すので、`#!/usr/bin/env eml run` は動かない
 - ファイルの相対パスと子のプロセスの作業ディレクトリは、プロセスの今のディレクトリである
@@ -21,6 +24,8 @@ eml run --debug-heap wc.em -l input.txt
 ## extern の境界
 
 標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Char`、`Byte`、`Bool`、`Unit`)、文字列、バイト列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。結果が `Char` の extern の行はスカラー値を、結果が `Byte` の extern の行は 0..=255 を返す ([LIR](lir.md) の「値の表現」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
+
+例外は `Std.Par.par` である。`par` は閉包を2つ受け取って呼ぶが、extern は eml のコードを呼び返さない。そのため、`par` の行は std の宣言を型検査に結ぶためだけにあり、引数をそろえた呼び出しは extern の命令でなく `par` の命令になる ([Core IR](core-ir.md) の「`par` の呼び出し」)。
 
 extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
@@ -848,6 +853,31 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 - 速さ: 末尾再帰の生産者を `generate` で引く形は、handler への特殊化 ([Core IR](core-ir.md) の「handler への特殊化」) で yield せず、融合 ([Core IR](core-ir.md) の「`con` の値の形についての特殊化」) で、`fold` で引く形と `map` を重ねた形は1要素ごとに何も確保しないループになる。`filter` を重ねた形では、残した要素ごとに4つの確保 (`Some`、組、`Iter`、閉包) が残る。末尾でない再帰の生産者 (木の走査など) は、1要素ごとに yield する ([実装の現在地](../implementation/status.md) の「最適化が扱わない形」)
 - エフェクトの届く先: 生産者のエフェクトは、`Iter.generate` を呼んだ場所ではなく、`next` を呼んだ場所の handler に届く。そのため、`try_io` は `Iter.generate` ではなく、消費するループを包む (`try_io (fn () -> Iter.each f (Iter.generate producer))`)
 - `multi` の操作: `yield` は `once` の操作なので、`Yield.for_each` の要素ごとの関数の中で `multi` の操作を起こすと E3006 になる。`yield` の継続を持ったまま、`multi` の操作をまたぐためである ([エフェクトと handler](effects.md) の「継続の多重度と持ち越し規則」)。多回の再開ができるジェネレータを用意しないことの帰結である
+
+## `Std.Par`
+
+```haskell
+import Std.Par
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (a, b) = Par.par (fn () -> 1 + 2) (fn () -> 3)
+  println (show (a + b))
+```
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `par` | `(Unit -> <never e> a) -> (Unit -> <never e> b) -> <e> (a, b)` | extern (呼び出しは `par` の命令) |
+| `both` | `(Unit -> <e> a) -> (Unit -> <e> b) -> <e> (a, b)` | eml |
+
+- `par f g` は、`f ()` と `g ()` を2つの子として動かし、両方が終わるのを待って結果の組を返す。今の VM は、2つの子を1つの worker の上で切り替えて動かす ([VM](vm.md) の「`par` の fork と join」)。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」にある
+- 子の row の上限は `never` である ([型と Kind](types.md) の「row 変数の多重度の上限」)。子が起こせるのは、`Panic` と、どの操作も `never` のエフェクトだけである。`IO` (`println` や `exit`)、`var` のエフェクト、`once` か `multi` の操作を持つエフェクトを子が起こしうる呼び出しは E2020 になる。子が `never` の操作だけを起こしても、そのエフェクトが `once` の操作を持てば E2020 である。上限は `par` の型にあるので、`par` を値として渡した先の呼び出しも同じく確かめる
+- 子が `never` の操作で中断すると、両方の子が終わった後で、親がその操作を起こし直す。両方の子が中断すれば左の子の操作を起こし直し、もう一方の結果は捨てる。子の中の handler と `try_panic` は、子の中の操作を子の中で捕まえる
+- 子の実行時エラーは評価を止め、ほかの子の結果では救わない。両方の子が誤りなら左の誤りを報告する ([VM](vm.md) の「子の誤り」)。捕まえられなかった子の `Panic` は親で起こし直した `panic` の実行時エラーになり、文言はソースの位置を持たない ([実装の現在地](../implementation/status.md) の「`par`」)
+- 子の閉包は `Lin` の値を捕まえて消費でき、`Lin` の値を返してもよい。extern のスキームは、関数型の引数の矢印の Kind と、その最後の結果だけに現れる型変数を固定しないためである ([宣言](declarations.md) の「`extern`」)。返った値は組に1回入るか、もう一方の子が中断したときに落とされる。落とすのは、`Lin` の値を持つフレームの巻き戻しと同じである ([線形性](linearity.md) の「暗黙の後始末」)。そのため、`both` と `par` は同じ型を受け付ける (`par` は row の上限だけが狭い)
+- `par` は Prelude から出さない。`import Std.Par` と書いて `Par.par` で呼ぶか、`import Par (par, both)` で修飾せずに使う
+- `both f g` は、呼んだ側の文脈で `f ()`、`g ()` の順に呼び、結果の組を返す。row に上限がないので、`IO` を起こす計算も渡せる。`par` と同じ組を逐次に作る版である
+- 引数をそろえた `par` の呼び出しは、extern の命令でなく `par` の命令になる。部分適用 (`Par.par f`) と値として使う `Par.par` は、同じ命令を本体に持つ包む関数 `$externN` になる ([Core IR](core-ir.md) の「`par` の呼び出し」)
 
 ## 実行時エラー
 

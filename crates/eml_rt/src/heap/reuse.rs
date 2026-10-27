@@ -17,7 +17,7 @@ use super::inv::{p_count, p_first};
 use super::model::{BlockState, Model, Pos};
 #[cfg(verus_only)]
 use super::states::pos_set;
-use super::{Heap, object_words};
+use super::{Heap, move_owned, object_words};
 use crate::error::HeapError;
 use crate::meta::{Header, Meta};
 #[cfg(verus_only)]
@@ -535,6 +535,11 @@ impl<M: Mode> Heap<M> {
                 self.core.lemma_tokens_frame(s0.core);
             }
         }
+        if M::CHECKED {
+            // 箱の持ち主は今の worker に替わるので、token の間持ち主に数えていた1つを移す
+            let owner = self.core.prefix_first_get(h);
+            move_owned(&mut self.owned, owner, self.worker);
+        }
         self.core.token_build(h, Some(meta), self.worker, M::CHECKED, Ghost(c));
         let w = Word::from_ptr(h);
         if M::CHECKED {
@@ -610,6 +615,11 @@ impl<M: Mode> Heap<M> {
         }
         if M::CHECKED {
             reuse_in_place_check(self.core.meta_get(h), meta)?;
+        }
+        if M::CHECKED {
+            // 箱の持ち主は今の worker に替わるので、token の間持ち主に数えていた1つを移す
+            let owner = self.core.prefix_first_get(h);
+            move_owned(&mut self.owned, owner, self.worker);
         }
         self.core.token_build(h, None, self.worker, M::CHECKED, Ghost(c));
         let w = Word::from_ptr(h);

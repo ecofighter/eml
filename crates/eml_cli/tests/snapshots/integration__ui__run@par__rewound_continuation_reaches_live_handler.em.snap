@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/rewound_continuation_reaches_live_handler.em
+---
+--- stdout ---
+55
+--- stderr ---

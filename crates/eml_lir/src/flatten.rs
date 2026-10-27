@@ -425,11 +425,11 @@ impl<'a> Flattener<'a> {
             Call::Clause { effect, op, .. } => {
                 operation(self.effects, *effect, *op).ret == OpRet::Never
             }
-            Call::Direct(_, _) | Call::Apply { .. } => false,
+            Call::Direct(_, _) | Call::Apply { .. } | Call::Par { .. } => false,
         }
     }
 
-    /// 呼び出しの引数を開く。`apply` と `clause` の引数は box の挿入が1語の Repr にしてある。
+    /// 呼び出しの引数を開く。`apply`、`clause`、`par` の引数は box の挿入が1語の Repr にしてある。
     fn call(&mut self, call: &mut Call) {
         match call {
             Call::Direct(target, args) => {
@@ -452,6 +452,10 @@ impl<'a> Flattener<'a> {
                 for arg in args.iter_mut() {
                     *arg = self.single(*arg);
                 }
+            }
+            Call::Par { left, right, .. } => {
+                *left = self.single(*left);
+                *right = self.single(*right);
             }
         }
     }

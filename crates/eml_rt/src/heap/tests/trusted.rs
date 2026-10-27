@@ -108,6 +108,64 @@ fn is_last_reads_twice_only_at_minus_one<M: Mode>() {
     }
 }
 
+/// `share` の3つのスタックと訪問済みの集まりを通す。`lin` の物体と rc 1 の子は所有を移し、rc 2 の子には印を付け、
+/// 送り直しでは検査モードの所有者だけのたどりが共有の親の下へ進む
+fn share_moves_and_passes_owners<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let unique = list(&mut heap, 1);
+    let kept = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 2, 0, true);
+    let pair = heap.alloc_data(0, 1, 0, false);
+    unsafe {
+        heap.dup(kept).unwrap();
+        heap.set_field(lin, 0, unique).unwrap();
+        heap.set_field(lin, 1, kept).unwrap();
+        heap.set_field(pair, 0, lin).unwrap();
+        let rcs = || (raw::rc(pair), raw::rc(lin), raw::rc(unique), raw::rc(kept));
+        heap.share(pair, 1).unwrap();
+        assert_eq!(rcs(), (-1, 1, 1, -2));
+        heap.share(pair, 2).unwrap();
+        assert_eq!(rcs(), (-1, 1, 1, -2));
+        if M::CHECKED {
+            assert_eq!((raw::prefix_first(lin), raw::prefix_first(unique)), (2, 2));
+        }
+        heap.decref(kept).unwrap();
+        heap.set_worker(2);
+        heap.decref(pair).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+/// `transfer_back` の2つのスタックと訪問済みの集まりを通す。共有のリストを裏返し、子が確保したセルの所有者を書き換え、
+/// その下の共有の組を検査モードの所有者だけのたどりで通る
+fn transfer_back_flips_and_rewrites<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let child = heap.fork_worker();
+    let shared = list(&mut heap, 2);
+    let pair = cons(&mut heap, Word::UNIT, Word::UNIT);
+    unsafe {
+        heap.share(shared, child).unwrap();
+        heap.share(pair, child).unwrap();
+        heap.set_worker(child);
+        let inner = list(&mut heap, 1);
+        let top = cons(&mut heap, inner, pair);
+        heap.set_worker(0);
+        heap.transfer_back(shared, child).unwrap();
+        heap.transfer_back(top, child).unwrap();
+        assert_eq!(
+            (raw::rc(shared), raw::rc(top), raw::rc(inner), raw::rc(pair)),
+            (1, 1, 1, -1)
+        );
+        if M::CHECKED {
+            assert_eq!((raw::prefix_first(top), raw::prefix_first(inner)), (0, 0));
+        }
+        assert_eq!(heap.retire_worker(child), Ok(()));
+        heap.decref(shared).unwrap();
+        heap.decref(top).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 #[test]
 fn check_mode_prefixes_change() {
     let mut heap = Heap::<Checked>::new();
@@ -332,6 +390,9 @@ fn every_primitive_once<M: Mode>() {
         let masked = ctx.evv_mask(&[ctx_tests::item(0, 0, 1)], list).unwrap();
         assert_ne!(masked, list);
         assert_eq!(ctx.heap().field(masked, 0), Ok(e1));
+        // 切り替えの1往復
+        let current = ctx.switch_task(masked, 0, 0);
+        assert_eq!(ctx.switch_task(current, 0, 0), masked);
         for w in [masked, list] {
             ctx.heap_mut().decref(w).unwrap();
         }
@@ -1681,6 +1742,8 @@ both_modes!(
     dropping_a_heap_returns_every_page,
     local_and_shared_counts_move,
     is_last_reads_twice_only_at_minus_one,
+    share_moves_and_passes_owners,
+    transfer_back_flips_and_rewrites,
     a_foreign_value_of_another_type_is_wrong_kind,
     foreign_values_with_drop_are_finalized_once,
     a_zero_sized_foreign_value,

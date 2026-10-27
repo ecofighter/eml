@@ -6,7 +6,7 @@ use crate::RunCounts;
 use crate::code::CodeBase;
 use crate::error::VmFault;
 use crate::op::{KEEP, NONE, RAW, SKIP, Slot};
-use crate::vm::Task;
+use crate::vm::{Exec, Task};
 
 /// 走査する語が 255 個以上の物体の、ペイロードの先頭の数の語の分 (docs/spec/object-model.md の「ヘッダ」)。
 pub(crate) fn count_word(scanned: u32) -> u32 {
@@ -14,8 +14,8 @@ pub(crate) fn count_word(scanned: u32) -> u32 {
 }
 
 /// フィールドを物理的な位置から読んでスロットに書く。読むだけなので、参照の数は変えない。
-fn bind_fields<M: Mode>(
-    ctx: &Ctx<M>,
+fn bind_fields<R: Exec>(
+    ctx: &Ctx<R::M>,
     task: &mut Task,
     w: Word,
     fields: &[u32],
@@ -37,14 +37,14 @@ fn bind_fields<M: Mode>(
 
 /// 検査モードで、`w` がタグ `tag` で走査する語が `scanned` 個のデータであることを確かめる。verifier の R8 は値を
 /// 作った配置を追わないので、verifier を通った IR でも外れうる (docs/spec/lir.md の「構造の規則」)。
-fn check_data<M: Mode>(
-    ctx: &Ctx<M>,
+fn check_data<R: Exec>(
+    ctx: &Ctx<R::M>,
     w: Word,
     tag: u32,
     scanned: u32,
     what: &'static str,
 ) -> Result<(), VmFault> {
-    if !M::CHECKED {
+    if !R::M::CHECKED {
         return Ok(());
     }
     let heap = ctx.heap();
@@ -64,9 +64,9 @@ fn check_data<M: Mode>(
 /// 物体を作り、フィールドをすべて書いてから `dst` に置く。`dst` は引数のスロットと同じ色でありうる
 /// (docs/spec/vm.md の「スロットの割り当て」)。
 #[inline]
-pub(crate) fn con<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+pub(crate) fn con<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     dst: Slot,
     at: u32,
@@ -76,7 +76,7 @@ pub(crate) fn con<M: Mode>(
     // ヒープに触れるのは作る物体だけで、`Ctx` の持つ語には触れない
     let heap = unsafe { ctx.heap_mut() };
     let w = heap.alloc_data(tag as u16, scanned as usize, raw as usize, lin);
-    unsafe { write_fields(heap, task, w, &ops[5..5 + 2 * n], false) }?;
+    unsafe { write_fields::<R>(heap, task, w, &ops[5..5 + 2 * n], false) }?;
     task.set(dst, w);
     Ok(())
 }
@@ -86,8 +86,8 @@ pub(crate) fn con<M: Mode>(
 /// # Safety
 /// `w` は作っている途中の物体で、並びはその形の位置である。スロットの値の参照は `w` に移る。
 #[inline]
-unsafe fn write_fields<M: Mode>(
-    heap: &mut Heap<M>,
+unsafe fn write_fields<R: Exec>(
+    heap: &mut Heap<R::M>,
     task: &Task,
     w: Word,
     items: &[u32],
@@ -112,9 +112,9 @@ unsafe fn write_fields<M: Mode>(
 
 /// タグの switch。`w` は scrutinee の語で、`tag` は Repr に従って読んだタグである。
 #[inline]
-pub(crate) fn switch_tag<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &Ctx<M>,
+pub(crate) fn switch_tag<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &Ctx<R::M>,
     task: &mut Task,
     w: Word,
     tag: i64,
@@ -134,7 +134,7 @@ pub(crate) fn switch_tag<M: Mode>(
     let r = &ops[record as usize..];
     let (target, check, n) = (r[0], r[1], r[2] as usize);
     if check != NONE {
-        check_data(
+        check_data::<R>(
             ctx,
             w,
             tag as u32,
@@ -142,7 +142,7 @@ pub(crate) fn switch_tag<M: Mode>(
             "a switch case binds a different number of fields than the value has",
         )?;
     }
-    bind_fields(ctx, task, w, &r[3..3 + 2 * n])?;
+    bind_fields::<R>(ctx, task, w, &r[3..3 + 2 * n])?;
     task.pc = target;
     Ok(())
 }
@@ -156,8 +156,8 @@ fn take_default(task: &mut Task, default: u32) -> Result<(), VmFault> {
 }
 
 #[inline]
-pub(crate) fn switch_int<M: Mode>(
-    code: &CodeBase<M>,
+pub(crate) fn switch_int<R: Exec>(
+    code: &CodeBase<R::M>,
     task: &mut Task,
     n: i64,
     at: u32,
@@ -176,9 +176,9 @@ pub(crate) fn switch_int<M: Mode>(
 }
 
 #[inline]
-pub(crate) fn switch_string<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &Ctx<M>,
+pub(crate) fn switch_string<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &Ctx<R::M>,
     task: &mut Task,
     w: Word,
     at: u32,
@@ -200,9 +200,9 @@ pub(crate) fn switch_string<M: Mode>(
 }
 
 #[inline]
-pub(crate) fn unpack<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &Ctx<M>,
+pub(crate) fn unpack<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &Ctx<R::M>,
     task: &mut Task,
     src: Slot,
     at: u32,
@@ -210,22 +210,22 @@ pub(crate) fn unpack<M: Mode>(
     let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
     let w = task.get(src);
-    check_data(
+    check_data::<R>(
         ctx,
         w,
         tag,
         scanned,
         "an unpack names a tag and number of fields the value does not have",
     )?;
-    bind_fields(ctx, task, w, &ops[3..3 + 2 * n])
+    bind_fields::<R>(ctx, task, w, &ops[3..3 + 2 * n])
 }
 
 /// 形の分かっている `release` の展開 (docs/spec/object-model.md の「核の操作」)。残す変数はすでにスロットにあるので、
 /// 参照の数だけを動かす。
 #[inline]
-pub(crate) fn release<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+pub(crate) fn release<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &Task,
     src: Slot,
     at: u32,
@@ -233,7 +233,7 @@ pub(crate) fn release<M: Mode>(
     let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
     let w = task.get(src);
-    check_data(
+    check_data::<R>(
         ctx,
         w,
         tag,
@@ -241,7 +241,7 @@ pub(crate) fn release<M: Mode>(
         "a release names a tag and number of fields the value does not have",
     )?;
     // VM は `w` の参照を1つ持つ
-    unsafe { release_fields(ctx.heap_mut(), w, &ops[3..3 + n]) }?;
+    unsafe { release_fields::<R>(ctx.heap_mut(), w, &ops[3..3 + n]) }?;
     Ok(())
 }
 
@@ -250,14 +250,14 @@ pub(crate) fn release<M: Mode>(
 /// # Safety
 /// `w` は検査を通った `release` の値で、呼ぶ側がその参照を1つ持つ。`entries` はその形の RC のフィールドの項目である。
 #[inline]
-unsafe fn release_fields<M: Mode>(
-    heap: &mut Heap<M>,
+unsafe fn release_fields<R: Exec>(
+    heap: &mut Heap<R::M>,
     w: Word,
     entries: &[u32],
 ) -> Result<(), HeapError> {
     unsafe {
         if heap.is_last(w)? {
-            drop_children(heap, w, entries)?;
+            drop_children::<R>(heap, w, entries)?;
             heap.free_block(w)
         } else {
             for &entry in entries.iter().filter(|&&e| e & KEEP != 0) {
@@ -274,8 +274,8 @@ unsafe fn release_fields<M: Mode>(
 /// # Safety
 /// `release_fields` と同じで、`w` の参照は最後のものである。
 #[inline]
-unsafe fn drop_children<M: Mode>(
-    heap: &mut Heap<M>,
+unsafe fn drop_children<R: Exec>(
+    heap: &mut Heap<R::M>,
     w: Word,
     entries: &[u32],
 ) -> Result<(), HeapError> {
@@ -294,9 +294,9 @@ unsafe fn drop_children<M: Mode>(
 // 共有された値の道は `release_shared` に出し、`vm::run` に展開するのは一意な道だけにする。全部を展開すると、
 // reuse の命令を使わないプログラムの命令の数が増えたためである (docs/spec/vm.md の「置き場所」)
 #[inline]
-pub(crate) fn release_reuse<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+pub(crate) fn release_reuse<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     src: Slot,
     at: u32,
@@ -305,7 +305,7 @@ pub(crate) fn release_reuse<M: Mode>(
     let (tok, tag, scanned, n) = (ops[0] as Slot, ops[1], ops[2], ops[3] as usize);
     let entries = &ops[4..4 + n];
     let w = task.get(src);
-    check_data(
+    check_data::<R>(
         ctx,
         w,
         tag,
@@ -316,10 +316,10 @@ pub(crate) fn release_reuse<M: Mode>(
     let heap = unsafe { ctx.heap_mut() };
     let token = unsafe {
         if heap.is_unique(w)? {
-            drop_children(heap, w, entries)?;
+            drop_children::<R>(heap, w, entries)?;
             heap.into_token(w)?.into_word()
         } else {
-            release_shared(heap, w, entries)?;
+            release_shared::<R>(heap, w, entries)?;
             Word::EMPTY
         }
     };
@@ -333,12 +333,12 @@ pub(crate) fn release_reuse<M: Mode>(
 /// `release_fields` と同じである。
 #[cold]
 #[inline(never)]
-unsafe fn release_shared<M: Mode>(
-    heap: &mut Heap<M>,
+unsafe fn release_shared<R: Exec>(
+    heap: &mut Heap<R::M>,
     w: Word,
     entries: &[u32],
 ) -> Result<(), HeapError> {
-    unsafe { release_fields(heap, w, entries) }
+    unsafe { release_fields::<R>(heap, w, entries) }
 }
 
 /// token を受ける `con` (docs/spec/vm.md の「reuse」)。空の token なら `con` と同じに確保してフィールドをみな書く。
@@ -346,9 +346,9 @@ unsafe fn release_shared<M: Mode>(
 /// 元の値が残っている。
 // 空の token の道を `con_fresh` に出す理由は、`release_reuse` が共有された値の道を出す理由と同じである
 #[inline]
-pub(crate) fn con_reuse<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+pub(crate) fn con_reuse<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     counts: &mut RunCounts,
     dst: Slot,
@@ -362,9 +362,9 @@ pub(crate) fn con_reuse<M: Mode>(
     let heap = unsafe { ctx.heap_mut() };
     let fields = &ops[7..7 + 2 * n];
     if token.is_empty() {
-        return con_fresh(heap, task, dst, tag, scanned, raw, lin, fields);
+        return con_fresh::<R>(heap, task, dst, tag, scanned, raw, lin, fields);
     }
-    if M::CHECKED {
+    if R::M::CHECKED {
         counts.reuses += 1;
     }
     // 組は走査する語が 255 個未満の形に限るので、`scan` に収まり、数の語もない
@@ -377,7 +377,7 @@ pub(crate) fn con_reuse<M: Mode>(
             heap.con_at(token, (scanned + raw) as usize, meta)?.0
         }
     };
-    unsafe { write_fields(heap, task, w, fields, true) }?;
+    unsafe { write_fields::<R>(heap, task, w, fields, true) }?;
     task.set(dst, w);
     Ok(())
 }
@@ -386,8 +386,8 @@ pub(crate) fn con_reuse<M: Mode>(
 #[cold]
 #[inline(never)]
 #[expect(clippy::too_many_arguments, reason = "the decoded operands of one con")]
-fn con_fresh<M: Mode>(
-    heap: &mut Heap<M>,
+fn con_fresh<R: Exec>(
+    heap: &mut Heap<R::M>,
     task: &mut Task,
     dst: Slot,
     tag: u32,
@@ -397,18 +397,18 @@ fn con_fresh<M: Mode>(
     fields: &[u32],
 ) -> Result<(), VmFault> {
     let w = heap.alloc_data(tag as u16, scanned as usize, raw as usize, lin);
-    unsafe { write_fields(heap, task, w, fields, false) }?;
+    unsafe { write_fields::<R>(heap, task, w, fields, false) }?;
     task.set(dst, w);
     Ok(())
 }
 
 #[inline]
-pub(crate) fn unbox<M: Mode>(
-    ctx: &Ctx<M>,
+pub(crate) fn unbox<R: Exec>(
+    ctx: &Ctx<R::M>,
     w: Word,
     counts: &mut RunCounts,
 ) -> Result<i64, VmFault> {
-    if M::CHECKED {
+    if R::M::CHECKED {
         counts.unboxes += 1;
     }
     if w.is_imm() {
@@ -421,12 +421,12 @@ pub(crate) fn unbox<M: Mode>(
 
 /// `float` の `unbox`。`Float` の箱はいつも物体で、ダミーはビット列 0 (`0.0`) を読む。
 #[inline]
-pub(crate) fn unbox_float<M: Mode>(
-    ctx: &Ctx<M>,
+pub(crate) fn unbox_float<R: Exec>(
+    ctx: &Ctx<R::M>,
     w: Word,
     counts: &mut RunCounts,
 ) -> Result<u64, VmFault> {
-    if M::CHECKED {
+    if R::M::CHECKED {
         counts.unboxes += 1;
         // verifier を通った IR の `float` の `unbox` は、`box` した `Float` かダミーを受ける。検査モードは前提を
         // 確かめるので、即値を物体として読む前に断る
@@ -442,8 +442,8 @@ pub(crate) fn unbox_float<M: Mode>(
 /// ヒープのダミーと同じ語であることも確かめ、ダミーでない `BigInt` を断る。1回の実行の中ではダミーは1つで、回復は
 /// スタックを捨てるので、語で比べてよい。
 #[inline]
-fn is_dummy<M: Mode>(ctx: &Ctx<M>, w: Word) -> Result<bool, VmFault> {
-    if M::CHECKED && !w.is_ptr() {
+fn is_dummy<R: Exec>(ctx: &Ctx<R::M>, w: Word) -> Result<bool, VmFault> {
+    if R::M::CHECKED && !w.is_ptr() {
         return Err(VmFault::Internal("a struct box is not an object"));
     }
     // 構造体の箱かダミーを受けるのは verifier を通った IR の約束で、どちらも物体である
@@ -451,7 +451,7 @@ fn is_dummy<M: Mode>(ctx: &Ctx<M>, w: Word) -> Result<bool, VmFault> {
     if kind != Kind::BigInt {
         return Ok(false);
     }
-    if M::CHECKED && w != ctx.heap().dummy() {
+    if R::M::CHECKED && w != ctx.heap().dummy() {
         return Err(VmFault::Internal(
             "a struct box is a `BigInt` that is not the dummy",
         ));
@@ -464,9 +464,9 @@ fn is_dummy<M: Mode>(ctx: &Ctx<M>, w: Word) -> Result<bool, VmFault> {
 /// 結果を受け直す `unbox` を yield の確認の前に置くので、ダミーを受けうるためである。`vm::step` に展開しないのは、
 /// 複数の値の命令と同じ理由である。
 #[inline(never)]
-pub(crate) fn unbox_struct<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &Ctx<M>,
+pub(crate) fn unbox_struct<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &Ctx<R::M>,
     task: &mut Task,
     src: Slot,
     at: u32,
@@ -475,7 +475,7 @@ pub(crate) fn unbox_struct<M: Mode>(
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
     let fields = &ops[3..3 + 2 * n];
     let w = task.get(src);
-    if is_dummy(ctx, w)? {
+    if is_dummy::<R>(ctx, w)? {
         let dummy = ctx.heap().dummy();
         for pair in fields.as_chunks::<2>().0 {
             let slot = pair[1] as Slot;
@@ -487,36 +487,36 @@ pub(crate) fn unbox_struct<M: Mode>(
         }
         return Ok(());
     }
-    check_data(
+    check_data::<R>(
         ctx,
         w,
         tag,
         scanned,
         "a struct unbox names a tag and number of fields the value does not have",
     )?;
-    bind_fields(ctx, task, w, fields)
+    bind_fields::<R>(ctx, task, w, fields)
 }
 
 /// 構造体の `unbox` で葉を借りた箱の `release`。ダミーなら何もせず、token の形は空の token を書く。名前を書いた葉は
 /// すでにダミーである。ほかは `release` と token を作る `release` と同じである。
 #[inline(never)]
-pub(crate) fn release_unboxed<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+pub(crate) fn release_unboxed<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     src: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
     let tok = code.tables.operands[at as usize];
-    if is_dummy(ctx, task.get(src))? {
+    if is_dummy::<R>(ctx, task.get(src))? {
         if tok != NONE {
             task.set(tok as Slot, Word::EMPTY);
         }
         return Ok(());
     }
     if tok == NONE {
-        release(code, ctx, task, src, at + 1)
+        release::<R>(code, ctx, task, src, at + 1)
     } else {
-        release_reuse(code, ctx, task, src, at)
+        release_reuse::<R>(code, ctx, task, src, at)
     }
 }

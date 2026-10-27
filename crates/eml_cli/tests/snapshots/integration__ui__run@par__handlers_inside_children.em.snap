@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/handlers_inside_children.em
+---
+--- stdout ---
+(465, 210)
+(Err "big", Ok 2)
+--- stderr ---

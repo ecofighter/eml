@@ -17,25 +17,26 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - `eml_rt` の関数に、VM のために `#[inline]` を足すのは、繰り返しの中で呼ぶ関数にインライン化の注釈 (`-C remark=inline`) が「definition is unavailable」を示したときだけにする。足す前と後に `bench/rt.sh` を流し、どの計測も 0.5% より大きく増えないことを確かめる。`#[inline]` の置き方によって、`map-reuse` の命令の数がビルドごとに約2倍振れたためである ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)
 - `eml_vm` の中の関数には、2つが分かったときだけ `#[inline]` を付ける。1つは、インライン化の注釈 (`-C remark=inline`) で、VM の繰り返し (`vm::run` と、そこに展開される関数) に「definition is unavailable」で展開されていないことである。もう1つは、付けると `bench/run.sh` で命令の数が減ることである。総称な関数の実体は、コード生成単位の1つにしかできず、ほかの単位からは展開できないためである。`data` の命令の関数 (`con`、`switch_tag`、`switch_int`、`switch_string`、`unpack`、`release`、`unbox`)、`con` と `release` の本体から reuse の命令と共有するために出した `write_fields`、`release_fields`、`drop_children`、`apply` の `make_closure` と `apply_rest` に付けている。測った数は [計測の基準](../implementation/benchmarks.md) の「`eml_vm` のインライン化」にある
 - reuse の命令の関数 (`release_reuse` と `con_reuse`) は `#[inline]` にして、token を使う道だけを `vm::run` に展開する。値が共有されていた道 (`release_shared`) と token が空の道 (`con_fresh`) は、`#[cold]` と `#[inline(never)]` を付けた関数に出す。`bench/run.sh` で3つの置き方を比べた ([計測の基準](../implementation/benchmarks.md) の「reuse の命令の関数の置き方」)。2つの関数を `#[inline(never)]` にすると、reuse の命令ごとに呼び出しが1つ増え、`bench/tree.em` の命令の数の減り方が小さくなった。遅い道ごと展開すると、`vm::run` が大きくなり、reuse の命令を1つも使わない `bench/iter_pipeline.em` の命令の数が増えた。遅い道を出した置き方は、reuse するプログラムで最も減り、reuse しないプログラムの増え方は 0.5% 以内に収まった。`eml_rt` の部品 (`is_unique`、`into_token`、`con_at` など) は、速い道の中に展開される
+- VM の繰り返し (`vm::run`) は、モードと方針 (「タスクとスケジュール」) の組ごとに写しを作る。`step` から呼ぶ補助の関数 (`data`、`apply`、`vm` の中の関数) は、モード `M` でなく、モードと方針を束ねた1つの型 `R: Exec` (`R::M` と `R::P` を持つ) で総称にする。`M` だけで総称にすると、補助の関数の実体が逐次と seed の2つの写しから呼ばれ、呼び手が1つの関数を inline しやすくする LLVM の判断が外れる。`con`、`release`、`unpack` などが `vm::run` に展開されなくなり、逐次の `bench/run.sh` の実行の分が `records_wide` で 9.8% 増えた。`R` で総称にすれば、補助の関数の実体は写しごとにでき、呼び手は1つのままなので、写しごとの inline の判断は方針のない繰り返しと同じになる。上の `#[inline]` の規則もそのまま使える。測った数は [計測の基準](../implementation/benchmarks.md) の「モードと方針を束ねた型」にある
 - release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりしたためである ([計測の基準](../implementation/benchmarks.md) の「`codegen-units`」)
-- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<Finished, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、入口を実行して閉じる (「追記」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
-- `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)` と `with_control(Arc<Control>)` で組み立てる
+- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<Finished, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、入口を実行して閉じる (「追記」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) と、スケジュールの方針 (`sched: Sched`。「タスクとスケジュール」) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
+- `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)`、`with_control(Arc<Control>)`、`with_sched(Sched)` で組み立てる。方針の既定は `Sched::Sequential` である
 - 1つの `Control` は1回の実行に使う。止める理由のビットは `Control::clear` でしか下りないので、使い回すと、前の実行で立ったビットで次の実行がすぐ止まるためである。REPL (`eml_cli::Repl`) は1つの `Control` をセッション全体で使い、入力の始めに `clear` を呼ぶ。`RunConfig` を `clone` すると `Control` を共有するので、UI テストの仕組みと `eml_test_support` は実行ごとに新しい `RunConfig` を作る
 - `RunConfig` に `Control` を持たせるのは、CLI が Ctrl-C の受け口に同じ `Control` を渡すためである。上限は `Control` が持つので、`RunConfig` に上限の欄は作らない ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - `eml_vm` は、`eml_rt` の `Control`、`Limits`、`Stop` を再公開する。`eml_cli` の lib と bin は `eml_rt` に直接は依存せず (テストは依存する)、これらの名前を `eml_vm` から受け取る
-- `eml_cli` は、`run` の feature で `eml_vm` に依存する。`RunConfig`、`RunStats`、`RuntimeError`、`VmFault`、`SourceLocation`、`Control`、`Limits`、`Stop`、`Finished`、`HostRef`、`Capture`、`CaptureHost`、`Written`、`capture_host`、`stdio_host`、`script_host`、`execute` を `eml_vm` から再公開する
+- `eml_cli` は、`run` の feature で `eml_vm` に依存する。`RunConfig`、`RunStats`、`RuntimeError`、`VmFault`、`SourceLocation`、`Control`、`Limits`、`Stop`、`Sched`、`Finished`、`HostRef`、`Capture`、`CaptureHost`、`Written`、`capture_host`、`stdio_host`、`script_host`、`execute` を `eml_vm` から再公開する
 - `eml run` は速いモードで動き、`--debug-heap` を付けると検査モードになる。UI テストは、いつも検査モードで流してから速いモードでも流す ([テスト戦略](../implementation/testing.md) の「2つのモードで流す」)。Host は `script_host(PathBuf::new(), args)` で、スクリプトの引数と標準入力を持ち、相対パスはカレントディレクトリを基準にする。REPL の Host は `stdio_host(PathBuf::new())` で、引数と標準入力を持たない ([標準ライブラリ](stdlib.md) の「`Stdin`」)
 - テストの Host は `CaptureHost` である。標準出力と標準エラーを、それぞれメモリに捕まえる (`output`、`errors`)。引数、標準入力、環境変数は与えたものだけで (既定は、引数なし、空の標準入力、空の環境)、本物の環境は読まない。`Host::open_write` の書き手 (`FileOut` と、その上に書いた `Fs.write_text`) は、ディスクに書かずにメモリに覚え (`Written`)、同じパスの `FileIn.open` はそれを読む。`open_write` の `Truncate` は開いた時点でそのパスを空にし、`Append` は今の中身を残す。子のプロセスは本物を起動する。子の環境は与えた表に本物の `PATH` と `Proc.env` の組を足したもので、受け継ぐ標準入力は空、作業ディレクトリはファイルの根 (`Proc.cwd` があればそれをつないだ所) である。受け継ぐ標準出力と標準エラーは pipe にしてスレッドで最後まで読み、それまでの出力を書き出した後で、子を待ったときに捕まえたそれぞれの出力に足す。そのため、テストの Host の `wait` (破棄処理の `wait` を含む) は、pipe の書き口を持つプロセスがすべて終わるまで戻らない。`sh -c 'sleep 30 & echo hi'` は、`eml run` では `sh` が終われば戻るが、テストの Host では孫の `sleep` が終わるまで待つ。`capture_host(file_root)` は既定の `CaptureHost` と、捕まえた出力を返す
 
 ## `CodeBase` と `FnEntry`
 
-`CodeBase::new(control)` は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Program) -> Result<u32, CompileError>` はプログラムを追記して入口の関数の番号を返す (「追記」)。1つのプログラムだけを読むときも、空の表に `load` する。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError` は、スロットが `u16` に収まらない関数 (`TooManySlots`)、`Heap::freeze` の誤り (`Freeze`)、debug ビルドの一致の確かめの食い違い (`Mismatch`)、結果が複数の値の入口の関数 (`MultiValueEntry`) である。入口の `ret` は値1つで ([Core IR](core-ir.md) の「構造体にする型」)、`Finish` は値を1つだけ受けるためである。どれも正しいプログラムでは起きないので、`execute` は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)` が `CompileError` をその内部の誤りの `RuntimeError` にし、`execute` と、REPL の `Machine::load` の失敗 (`Outcome::Broken`) がこれを使う。
+`CodeBase::new(control)` は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Program) -> Result<u32, CompileError>` はプログラムを追記して入口の関数の番号を返す (「追記」)。1つのプログラムだけを読むときも、空の表に `load` する。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError` は、スロットが `u16` に収まらない関数 (`TooManySlots`)、`Heap::freeze` の誤り (`Freeze`)、debug ビルドの一致の確かめの食い違い (`Mismatch`)、結果が複数の値の入口の関数 (`MultiValueEntry`)、`par` を走らせうるプログラムで名前が引けない `fork$` の関数 (`MissingFork`。「`par` の fork と join」) である。入口の `ret` は値1つで ([Core IR](core-ir.md) の「構造体にする型」)、`Finish` は値を1つだけ受けるためである。どれも正しいプログラムでは起きないので、`execute` は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)` が `CompileError` をその内部の誤りの `RuntimeError` にし、`execute` と、REPL の `Machine::load` の失敗 (`Outcome::Broken`) がこれを使う。
 
 | 欄 | 中身 |
 |---|---|
 | `functions` | 関数ごとの `FnEntry`。命令の位置の順に並ぶ |
 | `tables` | 命令と、命令の位置で引く表の組 (`Tables`)。下の `tables.` の5つの欄を持つ。コード生成は関数をまたいで1つの `Tables` の末尾に書き、逆アセンブラと追記の一致の確かめも同じ形を読む |
-| `tables.code` | 全関数の命令列 (`Op`)。先頭に組み込みの命令 `Finish` (位置 0) と `ApplyRest` (位置 1) を置く。組み込みの命令は合わせて 2 個 (`BUILTINS`) である |
+| `tables.code` | 全関数の命令列 (`Op`)。先頭に組み込みの命令 `Finish` (位置 0)、`ApplyRest` (位置 1)、`ChildDone` (位置 2) を置く。組み込みの命令は合わせて 3 個 (`BUILTINS`) である |
 | `tables.operands` | 長さの変わるオペランド (`u32` の並び)。呼び出しの関数の番号と引数のスロット、extern の行の番号と引数、`con` のフィールド、switch の表、`release` のフィールド、`ev_new` の操作の数など |
 | `tables.mask_lists` | `evv_mask` の項目の並び (`eml_rt::MaskItem` の並び。エフェクトの番号、n、m)。`Ctx::evv_mask` が `&[MaskItem]` を受けるので、写さずに渡せるように分けて持つ |
 | `constants` | 定数の語。文字列のリテラル、`i32` に収まらない生の `Int` と `Float` の定数 (ビット列)、`box` の定数 (`Int` は 63 ビットに収まれば即値、収まらなければ不死の `BigInt`。`Float` はいつも不死の `Float`)、`empty_mut_array` の不死の空の `MutArray` |
@@ -45,18 +46,20 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 | `files` | 位置のファイルの表示用のパス。読み込んだ `Program.files` のパスを、初めて現れた順に並べる |
 | `index` | 追記で番号を引き直す表。関数の名前、エフェクトの名前、ファイルのパス、文字列と整数と浮動小数の定数の中身から番号を引く (「追記」) |
 | `control` | 定数の塊のページを数える `Control`。実行のヒープと同じものである |
+| `forks` | `par` の子の `evv` の凍結した部分。実行時のエフェクトの番号ごとの fork の表と、`Panic` の fork evidence の末尾である (「`par` の fork と join」) |
 
 - `FnEntry` は、名前、命令列の範囲 `[start, end)`、引数の数 (`arity`)、枠の大きさ (`frame_size`、スロットの数) を公開の欄に持つ。`arity` は開いた後の引数の語の数で、構造体の引数は葉の数だけ数える。クロージャの捕まえた値も引数に数える。`apply` は引数の数だけを見て、部分適用か、ちょうどか、余るかを決める。引数と結果はどれも一様な語なので、シグネチャは要らない ([LIR](lir.md) の「関数の ABI」)
 - `FnEntry` は crate の中だけの欄を2つ持つ。引数の語の Repr の並び (`params`) は、クロージャを作るときと入るときに、捕まえた値を走査する語と生の語のどちらに置くかを引くためにある ([オブジェクトモデル](object-model.md) の「クロージャ」)。結果が RC の Repr か (`ret_rc`) は、その関数を入口として実行したときに `Finish` が結果を手放すかを決める (「誤り、止めること、終わり」)
 - 定数は、`load` が `Heap::with_control(control)` で作った作業用のヒープに不死の物体として作り、`freeze` で塊にする。文字列のリテラルは、`Program.strings` の順にすべて引く。塊のページは同じ `Control` の確保量に数える。実行のヒープは、塊を付け替えてから次の入口を実行する ([オブジェクトモデル](object-model.md) の「凍結した領域」)
 - 塊の物体は、検査モードでも参照を数えない。そのため、文字列の定数を読む命令は `acquire_immortal` を呼ばず、語を写すだけにする
+- `par` の子の `evv` のための fork の表と末尾も、定数の後に同じく作業用のヒープで作って凍結する。`fork$E.op` がすべて名前で引けるようになったエフェクトの表だけを、そのロードで作る (「`par` の fork と join」)
 - `CodeBase` は実行中は読むだけで、`CodeBase<M>: Sync` を型の assert で固定する。書き換えるのは入力の境目の `load` だけである。`CodeBase` は `M` ごとに作るので、検査モードと速いモードを両方動かすテストは2回変換する
 
 ### 追記
 
 REPL (`eml_cli::Repl`) は入力ごとにプログラム全体を lowering し直し、同じ `CodeBase` に追記する。定義ごとに IR を保存して総称な定義の instance をキャッシュする形にしないのは、中段の各パスを純粋な関数のまま保つためである。その代わりに、名前が同じ関数はいつも同じコードになることを、全パスが守る規則にした ([Core IR](core-ir.md) の「変換の規則」)。クロージャは関数の番号を物体の中に持つので、入力をまたいで関数の番号を変えない。REPL のセッションの組み立ては [モジュールと名前解決](modules.md) の「REPL のセッション」に、入力の変換は [Core IR](core-ir.md) の「REPL の入力」にある。
 
-- `Machine<M>` は、`CodeBase<M>` と `Ctx<M>` を入力をまたいで持つ。`Machine::<Fast>::new` と `Machine::<Checked>::new` は `Control` と Host を受け取り、モードごとの確かめを決める。`AnyMachine` は、実行の前にモードを選ぶ呼び出し側のための列挙である
+- `Machine<M>` は、`CodeBase<M>` と `Ctx<M>` を入力をまたいで持つ。`Machine::<Fast>::new` と `Machine::<Checked>::new` は `Control` と Host を受け取り、モードごとの確かめを決める。`Machine::with_sched(sched)` は、実行ごとに作るスケジューラの方針を選ぶ。既定は `Sched::Sequential` で、`AnyMachine::new` は `RunConfig` の `sched` を渡す (「タスクとスケジュール」)。`AnyMachine` は、実行の前にモードを選ぶ呼び出し側のための列挙である
 - `Machine::load(program)` は `CodeBase::load` を呼び、新しい塊があれば実行のヒープに付け替えて、入口の関数の番号を `Loaded { entry }` で返す。誤りを返した後の `Machine` は使い続けない
 - `Machine::run(entry)` は、入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがその実行の値である。検査モードでは、実行の後にヒープの不変条件だけを確かめる。セッションの根は手放さず、次の実行に残す。続けられる誤り (`is_broken` が偽) の後は `Ctx::recover` を呼び、根から届く物体を新しいヒープに写して古いヒープを捨てる ([オブジェクトモデル](object-model.md) の「回復」)。スタックと `evv` と yield の状態に残った語も、残った物体のページも、古いヒープと一緒に消える。回復が成功したら、検査モードでは新しいヒープの不変条件を確かめ、元の誤りをそのまま返す。`eml run` (`execute`) も同じ `run` を通る。根がないので写すものはなく、古いヒープを捨てて届かない `Foreign` の物体を閉じるだけである
 - 回復が `Unrecoverable` を返すか、検査モードで回復の後の不変条件の確かめが失敗したら、`run` は `RuntimeError::Unrecovered { cause, reason }` を返す。`cause` は元の誤りで、`reason` は回復の誤り (`HeapError`) である。表示は元の誤りの後に `\nrecovery failed: {reason}` を足す。根の値は `Unr` なので、検証を通ったプログラムでは起きない
@@ -77,12 +80,12 @@ REPL (`eml_cli::Repl`) は入力ごとにプログラム全体を lowering し�
 
 ### スロットとスタック
 
-- 実行の状態は、ワーカーごとの `Ctx<M>` と、タスクごとの `Task` に分ける。`Task` は、スタック `stack: Vec<Word>`、命令の位置 `pc`、今のフレームの `base` と `frame_size`、最後に戻った `Ret` の位置 `last_ret` (「誤り、止めること、終わり」)、末尾の呼び出しで引数を移す間だけ置く作業用の領域 `scratch`、スタックの容量を伸ばす上限の語の数 `stack_limit`、入口の関数の番号 `entry` (どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める)、`Finish` が結果を手放さずに残す `keep_result` (「追記」の `Machine::run_shown`)、`exit` の終了コード `exit` (立っていれば中断が `Finish` まで届く。「`exit`」) を持つ。VM の繰り返しは `CodeBase`、`Ctx`、`Task` と、検査モードで数える VM の仕事の回数 (`box`、`unbox`、巻き戻しで外したフレーム、`reuses`) だけを受け、安全点をまたいでほかに状態を持たない
+- 実行の状態は、ワーカーごとの `Ctx<M>` と、タスクごとの `Task` に分ける。`Task` は、スタック `stack: Vec<Word>`、命令の位置 `pc`、今のフレームの `base` と `frame_size`、最後に戻った `Ret` の位置 `last_ret` (「誤り、止めること、終わり」)、末尾の呼び出しで引数を移す間だけ置く作業用の領域 `scratch`、スタックの容量を伸ばす上限の語の数 `stack_limit`、入口の関数の番号 `entry` (どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める)、`Finish` が結果を手放さずに残す `keep_result` (「追記」の `Machine::run_shown`)、`exit` の終了コード `exit` (立っていれば中断が `Finish` まで届く。「`exit`」)、動いていない間に退避した `evv`、論理的な worker ID `worker`、深さの起点 `depth_offset`、開いている子の境目の join `boundaries`、タスクの状態 `state` (「`par` の fork と join」) を持つ。VM の繰り返しは `CodeBase`、`Ctx`、`Task`、`Scheduler` (「タスクとスケジュール」) と、検査モードで数える VM の仕事の回数 (`box`、`unbox`、巻き戻しで外したフレーム、`reuses`) だけを受け、安全点をまたいでほかに状態を持たない
 - フレームのスロットはどれも1語である。`obj` と `tobj` の値は語のまま置く。`int` と `enum` は provenance を持たない生のビット列 (`Word::from_bits`) にし、`bits()` で読む。`float` も `f64` のビット列を同じく生の語にする。`unit` は語の値 1 (`Word::UNIT`、値 0 の即値) にする
 - スタックを `Vec<u64>` にしないのは、ポインタを整数に戻すと provenance が失われ、Miri の strict provenance に反するためである
 - 生のビット列の語は、即値やポインタに見えることがある (偶数の値はポインタの形をしている)。そのため、VM は語の形でなく、コード生成が知っている Repr で値を扱う。RC の命令と、即値かどうかの判定は、Repr が `obj` か `tobj` の値にだけ使う (「RC」と「switch」)
 - 関数に入るときと、`ApplyRest` のフレームを積むときに、スタックを `base + frame_size` まで伸ばす。スタックは添字で指すので、`Vec` が伸びて場所が変わってもよい。スロットの読み書きは、境界を確かめる添字で行う。確かめない添字に替えるのは、計測で要ると分かったときだけにし、そのときは Miri のテストで覆う ([テスト戦略](../implementation/testing.md) の「Miri」)。`Vec` の容量は `Task::reserve` が倍に伸ばすが、`min(2 × 今の容量, max_depth + u16::MAX + 2)` 語で止める (`reserve_exact`)。深さが `max_depth` を超えると次の安全点で止まり、安全点の前には通常、1つの枠と見出し (`u16::MAX + 2` 語) までを積むので、それより大きい容量は見込まない。余る引数の適用は、呼ばれる側の枠と同じ安全点の前に `ApplyRest` の枠も積むので、求める長さが上限を超えうる。そのときは容量をその長さちょうどにする
-- 深さはスタックの使っている語の数 (`base + frame_size`) で、`Ctx::poll` に渡す
+- 深さはスタックの使っている語の数 (`base + frame_size`) に、タスクの深さの起点 `depth_offset` を足した値である。起点は入口のタスクでは 0 で、`par` の右の子では fork のときの親の深さである (「`par` の fork と join」)。安全点は `base + frame_size` を `Ctx::poll` に渡す。起点は `Ctx::switch_task` が `Ctx` の深さの上限から引いてあるので、安全点ごとに足さない ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)
 - スタックはヒープの外にあるので、確保量の上限 (`max_bytes`) には数えず、深さの上限 (`max_depth`) で抑える (「上限と割り込み」)
 
 ### フレーム
@@ -143,7 +146,7 @@ base + 0 .. base + frame_size: スロット
 - **`clause`** `Clause { dst, at }`: 呼ばれる値と、evidence を先頭にした引数を `apply` と同じに並べる。引数の Repr は、evidence が `obj`、残りが操作の表の `params` で、入口の関数の引数と同じ Repr なので比べない。引数の数はいつも入口の関数の引数の数と等しく、違えば内部の誤りにする。部分適用で生の `int` をクロージャに入れることもない
 - **末尾の位置の `apply` と `clause`** (`TailApply`、`TailClause`): 今のフレームの見出しを引き継ぎ、引数は作業用の領域を通す。足りなければ、作ったクロージャを戻りと同じに返す。余れば、`ApplyRest` のフレームが今のフレームの位置と見出しを受け継ぐ
 - **末尾呼び出しの結果**: 末尾の位置の呼び出しは、結果の Repr が関数の `rets` と互換なときだけ `tail` になる ([LIR](lir.md) の「末尾の位置の呼び出し」)。そのため、`TailCall`、`TailApply`、`TailClause` は結果を変えずに見出しを引き継ぎ、結果を変えるフレームはない
-- **安全点**: 呼び出し (末尾呼び出し、`apply`、`clause`、`ApplyRest` の適用を含む)、戻り、自己末尾呼び出しのジャンプで、フレームを移した後に `Ctx::poll(深さ)` を呼ぶ。中断の巻き戻しでフレームを外すときは呼ばない (「巻き戻し」)
+- **安全点**: 呼び出し (末尾呼び出し、`apply`、`clause`、`ApplyRest` の適用を含む)、戻り、自己末尾呼び出しのジャンプで、フレームを移した後に `Ctx::poll(深さ)` を呼び、続けて方針に横取りを尋ねる (「タスクとスケジュール」)。中断の巻き戻しでフレームを外すときは呼ばない (「巻き戻し」)
 
 ## 命令ごとの実行
 
@@ -240,7 +243,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 巻き戻しの表
 
-- 巻き戻しの地点は、中断しうる関数の末尾でない `call`、末尾でない `apply` と `clause`、`Pure` でない extern の命令 (`exit`、`panic`、`Int` の算術と配列の専用の命令を含む)、`prim yield_abort` である ([LIR](lir.md) の「巻き戻しの地点」)。中断はこのどれかの命令の中か、その呼ばれる側で始まり、中断しない関数の中では始まらない。そのため、中断が通るフレームはいつも地点の命令の直後で止まっている。中断しない関数の `call` は表の行を持たない
+- 巻き戻しの地点は、中断しうる関数の末尾でない `call`、末尾でない `apply` と `clause`、`par`、`Pure` でない extern の命令 (`exit`、`panic`、`Int` の算術と配列の専用の命令を含む)、`prim yield_abort` と `prim child_abort` である ([LIR](lir.md) の「巻き戻しの地点」)。中断はこのどれかの命令の中か、その呼ばれる側で始まり、中断しない関数の中では始まらない。そのため、中断が通るフレームはいつも地点の命令の直後で止まっている。中断しない関数の `call` は表の行を持たない
 - 地点ごとの所有は、`eml_lir::unwind::points(program, wanted) -> Vec<Option<Result<Vec<UnwindPoint>, VerifyError>>>` が、`wanted` の関数ごとに求める。コード生成は、追記で新しく変換する関数だけを求め、debug ビルドの一致の確かめ (「追記」) ではすでにある関数も求める。各関数の `UnwindPoint { block, stmt, owned, tokens, landing }` は、ブロックの順、文の順に並ぶ
   - `owned` は、地点の命令の直後に所有している RC の対象の変数と、その所有の数 (1 以上) の列で、変数の番号の昇順に並ぶ。命令が束縛する変数 (呼び出しの結果、複数の値の結果、extern の行き先) は含めない。命令が戻らなければ、その変数はまだないためである
   - `tokens` は、地点の命令の直後に生きている token の変数の列で、変数の番号の昇順に並ぶ。token は RC の対象でないので `owned` には入れない。token は yield しうる呼び出しの後で生きていないので、着地の印を持つ地点の `tokens` はいつも空である
@@ -253,15 +256,16 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 巻き戻しの手順
 
-中断を始める所は次の3つである。どれも、`pc` を始めた命令の次の位置にしてから巻き戻す。
+中断を始める所は次の4つである。どれも、`pc` を始めた命令の次の位置にしてから巻き戻す。
 
 - `prim yield_abort(ev, c)` (`Op::YieldAbort { ev, clause }`): `never` の節の入口が呼ぶ。`Ctx::yield_abort` で yield の状態に宛先と節の本体を入れ、`ev` を宛先にして巻き戻す。命令は戻らないので、結果のスロットを持たない
 - `exit n`: 下の「`exit`」
+- `prim child_abort(ev, c)` (`Op::ChildAbort`): `par` の子の中の `fork$E.op` が呼ぶ。不死のダミーを宛先にして、子の境目まで巻き戻す (「`par` の fork と join」)
 - `try_io` が捕まえる IO の失敗と、`try_panic` が捕まえる `Panic`: 下の「`IO` と `Panic` への中断」。VM は `io_failed` か `panicked` の節の入口を呼ぶだけで、入口の `yield_abort` が巻き戻す
 
 巻き戻しは次の繰り返しである。宛先と着地の印の evidence は、語の値で比べる。
 
-1. `pc` が `Finish` なら終わる。`exit` の中断なら、`Finish` の命令に進む (下の「`exit`」)。そうでなければ内部の誤り (`an abort reached the bottom of the task`) にする
+1. `pc` が `Finish` なら終わる。`exit` の中断なら、`Finish` の命令に進む (下の「`exit`」)。そうでなければ内部の誤り (`an abort reached the bottom of the task`) にする。`pc` が `ChildDone` なら、`child_abort` の巻き戻しは子の境目で止まって終わる。ほかの中断なら内部の誤り (`an abort reached the boundary of a par child`) にする
 2. `pc` が `ApplyRest` なら、そのフレームが持つ残りの引数 (`rest_arguments`) をすべて `Heap::decref` で手放す。残りの引数はどれも一様な語なので、生の語は混ざらない
 3. そうでなければ、`pc` で表の行を引く。行がなければ内部の誤り (`a frame stops outside an unwind point`) にする。行が着地のスロットを持ち、その語が宛先と同じなら、着地する。直前に外したフレームの見出しにある結果のスロットにダミーの物体を書き、`pc` から続けて、巻き戻しを終える。着地しないとき、行が着地のスロットを持てば、まずその evidence の状態を `Ctx::ev_take_state` で取り出して `Heap::decref` で手放す。それから、行のスロットをそれぞれ所有の数だけ `Heap::decref` で手放す。`Lin` の物体でも誤りにならず、`FileIn` はここで閉じる。最後に、行の token のスロットをそれぞれ `Heap::drop_token` で手放す。手放さないと token の箱が残り、検査モードの漏れの検査で見つかる
 4. フレームを外す。見出しから戻り先と結果のスロットと呼び出し元の `frame_size` を読み、`base` を呼び出し元のものに戻し、`pc` を戻り先にする。1. に戻る
@@ -270,7 +274,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - 中断を始めたフレームの行は、着地のスロットを持たない。始めた命令は `yield_abort`、extern、算術の専用の命令のどれかで、どれも着地の印を持たないためである。そのため、着地するのはいつも1つ以上のフレームを外した後で、結果のスロットは直前に外したフレームの見出しにある。VM はこれをデバッグビルドで確かめる
 - 巻き戻しの間は安全点を置かず、`Ctx::poll` を呼ばない。仕事は外すフレームの数と手放す値の数で終わり、着地の後の `prompt$` の呼び出しで次の安全点に当たる
 - 巻き戻しの間は物体を作らない。宛先は着地するフレームが所有し続けるので、手放した物体の番地が宛先と取り違えられることはない
-- 巻き戻しは `evv` に触れない ([LIR](lir.md) の「`evv` の不変条件」)。外すフレームが持つ evidence、`return` の節のクロージャ、`mask` の包みが覚えた外側の `evv` は、そのフレームの所有のスロットなので表で手放す。パラメータ付き handler の状態は evidence の欄にあるので、着地せずに外す handle と `resume$` のフレームでは、手順の 3. で着地のスロットの evidence から取り出して手放す。状態がその handler の継続を持つと、継続から evidence へ戻る参照の輪になり、evidence を手放すだけでは解放されないためである ([LIR](lir.md) の「evidence」)。`prompt$` の状態 3 も同じように状態を取り出す。その handler の継続がほかに生き残っていても、再開は `resume$` で新しい evidence と状態を作るので、取り出した古い状態はもう読まれない
+- 巻き戻しは `evv` に触れない ([LIR](lir.md) の「`evv` の不変条件」)。外すフレームが持つ evidence、`return` の節のクロージャ、`mask` の包みが覚えた外側の `evv` は、そのフレームの所有のスロットなので表で手放す。パラメータ付き handler の状態は evidence の欄にあるので、着地せずに外す handle と `resume$` のフレームでは、手順の 3. で着地のスロットの evidence から取り出して手放す。状態は値なので退いた evidence にしか届かず、evidence を通る輪はない ([LIR](lir.md) の「evidence」)。ここで取り出すのは、状態を早く解放するためだけである。`prompt$` の状態 3 も同じように状態を取り出す。その handler の継続がほかに生き残っていても、再開は `resume$` で新しい evidence と状態を作るので、取り出した古い状態はもう読まれない
 - `multi` の継続を再開した区間のフレームも、普通のフレームとして同じ表で片付ける。共有されたクロージャへの `apply` は捕獲を写すので、区間のフレームは自分の写しを持っている
 - 巻き戻しの中で起きた誤り (検査モードのヒープの誤りと、上の内部の誤り) は、中断を始めた命令で起きた誤りとして報告する。始めた命令が `exit` なら、その位置を付ける (「誤り、止めること、終わり」)
 - 検査モードでは、外したフレームの数を `RunStats` の `unwound_frames` に数える。`ApplyRest` のフレームも数える (「`RunStats`」)
@@ -314,7 +318,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 - 実行時エラー `RuntimeError` は、誤り (`VmFault`)、関数の名前、省略できる位置を持つ `Fault` と、検査モードのリークの `Leak` と、回復の失敗の `Unrecovered` (「追記」) である。`VmFault` は、extern、基本操作、ヒープの操作の誤り (`Extern(Fault)`)、捕まえる `try_panic` のない利用者の `panic` (`Panicked(String)`)、安全点で止めたこと (`Stopped(Stop)`)、verifier を通った IR では起きないはずの誤り (`Internal`) の4つである
 - 表示の形は次のとおりである。位置があれば `{fault}\n  at path:line:column`、なければ ``{fault} in `function` ``、リークは `memory leak: objects were not freed: {n} {name}, …`、内部の誤りの `{fault}` は `internal error: {what}`、利用者の `panic` の `{fault}` は `panicked: {message}` である。`eml run` は、この表示の前に `runtime error: ` を付けて標準エラーに書く
-- 関数の名前は、命令の位置から `FnEntry` の範囲を二分探索して引く (`function_at`。位置が範囲の終わりより前であることも確かめる)。`Finish` と `ApplyRest` はどの関数にも属さないので、そこで起きた誤りには、最後に戻った関数の名前を付ける。VM は `Ret` のたびにその位置を `Task::last_ret` に覚える。末尾の位置の部分適用が作ったクロージャを返すときも、関数の中で起きたなら同じく覚える
+- 関数の名前は、命令の位置から `FnEntry` の範囲を二分探索して引く (`function_at`。位置が範囲の終わりより前であることも確かめる)。`Finish`、`ApplyRest`、`ChildDone` はどの関数にも属さないので、そこで起きた誤りには、最後に戻った関数の名前を付ける。`par` の join の完了とその後の安全点で起きた誤りと、右の子を始めるときの誤りには、`par` の命令の関数の名前と位置を付ける (「`par` の fork と join」)。VM は `Ret` のたびにその位置を `Task::last_ret` に覚える。末尾の位置の部分適用が作ったクロージャを返すときも、関数の中で起きたなら同じく覚える
 - 位置は `locations` から命令の位置で引く。表に載せるのは、位置を持つ extern の呼び出しから作った命令である。専用の算術と比較の命令も含む。`run-fail` の UI テストの多くは `/` と `+` の誤りの位置を表示している
 - `Arith`、`Output`、`Io`、`NotUtf8`、`Heap(_)` の文言は `eml_rt` のものを使う ([オブジェクトモデル](object-model.md) の「誤り」)。extern の結果と文言は、`crates/eml_rt/src/heap/tests/expected.txt` の表が固定する ([テスト戦略](../implementation/testing.md) の「期待値の表」)
 - 安全点の `Ctx::poll` が返す `Stop` と extern の `Fault::Stopped` は、どちらも `Stop` の文言で表示する。`FileIn` の読み、標準入力の読み、子の起動と `Child` の読み書きと `Proc.wait` の `Fault::Stopped` は extern の誤りなので位置を付け、安全点の `Stop` には付けない
@@ -322,6 +326,8 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - 繰り返しが誤りで終わっても、`Finish` に着いても、`Machine::run` は `Ctx::flush` を呼んでから結果を返す。`> out 2>&1` のときに出力と誤りの順を保つためである
 - 中断の巻き戻しで起きた誤りには、中断を始めた命令の関数の名前と、その命令の位置があれば位置を付ける (「巻き戻し」)
 - `exit` で終わったときは、先に上の「`exit`」の手順で中断を片付ける
+- `Finish` に着いたとき、入口のタスクのほかにタスクか join が残っていれば、内部の誤り (`a task is left at the end`) にする。子の境目が開いているのに `exit` の終了コードがあっても、内部の誤り (`an exit ends a run with an open par`) にする。`par` の子は `IO` を使えないので、どちらも正しいプログラムでは起きない
+- `vm::run` は誤りを返す前に、ヒープの worker と `Ctx` の深さの上限を入口のタスクのものに戻す (「`par` の fork と join」の「子の誤り」)
 - `Finish` に着いたら、次の順に処理する
   1. 入口の関数の結果を手放す。結果の Repr が `obj` か `tobj` のときだけ `decref` する (`FnEntry` の `ret_rc`)。`run_shown` では手放さずに残し、繰り返しを抜けた直後に `Ctx::copy_string` で写して手放す。写すときの誤りは、次の書き出しの誤りより先に返す。後の手順の確かめ (リークと不変条件) は、手放した後のヒープを見る
   2. flush する。誤りなら、位置なしで返す
@@ -360,9 +366,97 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 割り込みで止まったとき (`RuntimeError::interrupted`) は、1回目でも終了コードを 130 にする。130 は、シェルが SIGINT で終わった子に報告する値と同じである。ほかの実行時エラーは 1 である。
 
+## タスクとスケジュール
+
+- `Sched`、`Policy`、`Scheduler` は `eml_vm` の `sched.rs` に置く。別の crate は作らない。worker が1つの今は、ほかの crate と共有するものがないためである
+- 方針は `Sched` の値で選ぶ。`Sequential` (既定) と `Seeded(seed)` の2つで、`Copy` である。`FromStr` は `sequential` と `seeded:<n>` (`n` は `u64` の10進数) を読み、ほかの綴りは誤りにする。CLI の `--sched` はこれを読む ([標準ライブラリ](stdlib.md) の「起動」)
+- `Policy` は4つのメソッドを持つ。`tick` は安全点ごとに呼び、真なら横取りを試みる。`reload` は横取りを試みた後に、次の横取りまでの予算を詰め直す。`pick` は走れるタスクの列から次のタスクを取り出す。`wake` は起こしたタスクを列に入れる
+- `Sequential` は横取りしない。`tick` は定数の偽なので、安全点に分岐が残らない。`pick` は列の先頭から取り、`wake` は先頭に入れる
+- `Seeded` は、seed から始める splitmix64 の擬似乱数を使う。予算は `1 + 乱数 % 16` の安全点である。`tick` は予算を1つ減らし、0 になったら真を返す。予算は横取りを試みたときにだけ詰め直すので、yield の途中で切り替えなかったときは、次の安全点でまた真を返す。`pick` は `乱数 % 列の長さ` 番目を取り、`wake` は列の後ろに入れる
+- `Scheduler<P: Policy>` は、タスクの表、動いているタスクの番号、走れるタスクの列、join の節点の表、方針、横取りの数、入口のタスクの worker ID を持つ。動いているタスクは VM の繰り返しが持ち、表のその欄は空である。切り替えでは、動いていたタスクと次のタスクを入れ替える。`Machine` が実行ごとに作り、`vm::run` が戻ると捨てる。`Scheduler`、`Task`、join の節点の `Drop` はヒープに触れない。持つ語は数えた参照で、VM のコードが1回入れて1回出す。誤りで止まった実行では、触れずに捨てる
+- タスクを切り替えるのは、安全点での横取りと、`par` の親が join で右の子を待つときと、右の子が終わるか誤りで止まったときである。切り替えは `Ctx::switch_task(次の evv, 次の worker, 次の depth_offset)` の1回で行い、RC に触れない ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)
+- 方針は `Scheduler` の型の引数である。`Machine` は `Sched` の値で、方針ごとの `vm::run` の写しを選ぶ。逐次の写しは方針を確かめる命令を持たないので、方針のない繰り返しと同じ仕事で動く。写しごとの補助の関数の置き方は「置き場所」にある
+- 安全点では、`Ctx::poll` の後で `tick` を呼ぶ。真で、`Ctx::yielding()` が 0 なら横取りを試みる。yield の途中では切り替えない。yield の途中の状態は `Ctx` が1つだけ持つためである。横取りを試みると、走れるタスクがあればそれに切り替え、どちらでも予算を詰め直す。走れるタスクがなければ切り替える先がないので、予算を詰め直すだけである。横取りしたタスクは、`wake` で列に入れる
+- `Finished.preemptions` は、方針が安全点で始めた切り替えの数である。切り替える先がなかった試みは数えない。join で待つ切り替えと、子が終わったときの切り替えは数えない。逐次では常に 0 である。横取りだけを数えるのは、seed の方針で横取りが起きたことをテストで確かめるためである
+- `Scheduler`、`Sched`、方針の型は `Send` で、`Sched` は `Sync` でもある。`crates/eml_vm/tests/api.rs` が型の assert で確かめる
+
+## `par` の fork と join
+
+`par` (LIR の `Call::Par`) は、2つの子を1つの worker の上で動かす。左の子は親のタスクのスタックの上で、右の子は新しいタスクで動く。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」に、子の中断のための関数をコンパイラが作る規則は [Core IR](core-ir.md) の「`par` の子の中断」にある。ここでは VM の側の手順を定める。
+
+### 命令と境目のフレーム
+
+- `Par { dst, at }`: `operands[at..]` は [左の子のスロット, 右の子のスロット, 組の構築子のタグ] である。組の構築子は2つの `tobj` の欄を持つ `tuple_layout(2)` の `TUPLE` なので、欄の位置は引かずに 0 と 1 に書く。`par` は末尾の呼び出しにならず、巻き戻しの地点である (「巻き戻しの表」)。位置があれば `locations` に載せる
+- 子の境目は、2つのスロットのフレームである。slot 0 が子の結果、slot 1 が join の番号 (生の語) である。左の子の境目は親のスタックに積み、見出しの戻り先は `par` の次の位置、結果のスロットは `par` の `dst` である。右の子は境目をいちばん下のフレームに持つ。その見出しの戻り先は `Finish` だが、そこへは戻らない
+- 子の本体は、境目のフレームの上で、閉包に `()` を適用して始める。戻り先は組み込みの命令 `ChildDone` (位置 2、`CHILD_DONE`) で、本体の結果は境目の slot 0 に入る
+- `Task` は、開いている境目の join の番号を `boundaries` に持つ。内側が最後に来る。右の子のタスクの先頭は、そのタスクが右の子である join である
+
+### 子の `evv`
+
+- 子の `evv` は、親の `evv` と同じ形の列にする。親の `evv` の never-only のエフェクト `E` の evidence ごとに、fork evidence を1つ置く。fork evidence は evidence と同じ形の `Data` (tag は `E` の番号 + 1、走査する語は3つ) で、欄は [`E` の fork の表, 即値 d, `()`] である。d は、親の列の中でその evidence が `E` の evidence のうち何番目か (0 から) である。子の中の `mask` は evidence を数で飛ばすので、列が同じ形なら、子の中で飛ばした先の evidence の d が、親の列で同じ数だけ飛ばした先の evidence を指す
+- fork の表は、入口の表と同じ形の `Data(tag 0)` で、操作ごとに即値 `&fork$E.op` を並べる。子の中で `E` の evidence を探すと fork evidence が見つかり、その節の入口は `fork$E.op` である。`fork$E.op` は `prim child_abort` で子を中断する (下の「子の中断」)
+- `Panic` の evidence は、子の `evv` の末尾の1つが受け持つ。extern のエフェクトは mask されないので ([エフェクトと handler](effects.md) の「組み込みの `IO`」)、深さはいつも 0 である。子の中の extern の `Panic` (`failed` と `panic`) は、子の中の `try_panic` か、末尾の `Panic` の fork evidence に届く
+- 凍結した部分: fork の表と末尾 (`Panic` の fork evidence `[Panic の表, 即値 0, ()]` を持つ節点) は、定数と同じく作業用のヒープに不死の物体として作り、凍結する。`CodeBase::load` は、読み込んだプログラムの never-only のエフェクトのうち、`fork$E.op` がすべて名前で引けるようになったものの表を作る。名前は前のロードの関数からも引く。操作のないエフェクトの表は空である。fork の関数は、プログラムが `par` を走らせうるとき (`eml_lir::Program::may_run_par`) だけ作られるので、表は名前が初めてそろったロードで1回だけ作る。再開する操作を持つエフェクトは子の中で使えないので、表を持たない
+- fork ごとの部分: fork は、mask を当てた後の親の `evv` を頭からたどり、`Panic` を除く never-only のエフェクトの evidence ごとに fork evidence と節点を作って、凍結した末尾につなぐ。該当する evidence がなければ、子の `evv` は末尾そのもので、確保しない。表のない never-only のエフェクトの evidence があれば、内部の誤り (`a never-only evidence of a par parent has no fork table`) にする。親の evidence は子に渡さない。子は状態の欄を書き換える親の handler に届かないためである
+- fork evidence を包む `prompt$` はなく、`fork$E.op` の節は状態の欄を書かないので、fork evidence は `ev_take_state`、`ev_set_state`、`ev_take_evv` の的にならない ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)
+- `may_run_par()` のプログラムで `fork$E.op` の名前が引けなければ、`load` は `CompileError::MissingFork` を返す (「`CodeBase` と `FnEntry`」)
+
+### fork
+
+`Par` は、親の文脈で次の順に動く。mask は evidence passing の包みがすでに当てている ([Core IR](core-ir.md) の「`mask` の包み」)。
+
+1. 左の閉包 `f` と右の閉包 `g` を読む。どちらも `par` が消費する参照である
+2. `heap.fork_worker()` で右の子の ID を出す
+3. まだ印のないセッションの根の語 `r` ごとに `heap.share(r, child)` を呼び、続けて `heap.share(g, child)` で、右の閉包から届く物体に印を付ける。根に印を付けるのは、右の子が `root_get` で REPL の束縛を読むためである。印は回復まで残るので、`Machine` が印を付け終えた先頭の根の数を実行をまたいで持ち、fork はそれより後ろの根にだけ印を付ける ([オブジェクトモデル](object-model.md) の「セッションの根」)。右の子が閉包を手放すと子の ID の物体を解放しうるので、印付けは右の子が始まる前に送り手の ID で行う ([マルチコア対応の設計](../future/multicore.md) の「印付けの表」)。値から届く evidence は退いたものだけなので、根と `g` の `share` は、親がその場で書き換える evidence と入口の表に届かない ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)
+4. `ctx.evv_word()` で親の `evv` の語を RC に触れずに読み、その列から子の `evv` を作る (上の「子の `evv`」)。子の `evv` を `dup` してから `share(子の evv, child)` で印を付け、`ctx.switch_task(子の evv, 親の ID, 親の depth_offset)` の1回で `Ctx` に入れる。返る親の `evv` の参照は join の節点に移す。2つの子が子の `evv` の参照を1つずつ持つ。左の子は親の ID で動く
+5. 右の子のタスクを作る。worker は `child`、`evv` は子の `evv`、深さの起点 `depth_offset` は fork のときの親の深さ、状態は始まっていない (`Unstarted(g)`)、`boundaries` は今の join だけである
+6. join の節点を作る。節点は、親と右の子のタスクの番号、右の子の ID、親の `evv`、2つの子の結果の欄、`par` の次の位置と `dst` を持つ。節点は Rust の構造で、ヒープの物体にしない
+7. 左の子の境目のフレームを積み、`boundaries` に join を足し、`f` に `()` を適用し、右の子を走れるタスクの列の後ろに入れて、安全点に進む
+
+まだ始まっていない右の子は、閉包の語1つで表す。切り替えでそのタスクに入るときは、`switch_task` で右の子の ID に替えた後で `g` に `()` を適用する。閉包の捕まえた値を取り出すと閉包の物体を解放しうるためである。
+
+### 子の終わりと join
+
+`ChildDone` は、境目の slot 1 の join の番号で、どちらの子かを決める。yield の途中で子が終わることはなく、yield の途中なら内部の誤りにする。
+
+- 右の子: 結果を節点に記録し、`heap.decref(ctx.switch_task((), 右の子の ID, 右の子の depth_offset))` で、子の ID のまま子の残りの `evv` を手放してタスクを捨てる。親がこの join を待っていれば起こし (逐次は列の先頭に、seed の方針は後ろに入れる)、次のタスクに切り替える
+- 左の子: 結果を節点に記録し、境目のフレームを外し、`heap.decref(ctx.switch_task(親の evv, 親の ID, 親の depth_offset))` で親の `evv` に戻す。右の子が終わっていれば join を完了し、まだなら親を待つ状態にして次のタスクに切り替える。待っていた親は、起こされて切り替わった後で join を完了する
+
+join の完了は、親の文脈と ID で次の順に行う。
+
+1. 左の子が誤りなら左の誤りで、そうでなく右の子が誤りなら右の誤りで、評価を止める (下の「子の誤り」)
+2. 右の側の語 (値か、起こし直しの閉包) を `heap.transfer_back(w, 右の子の ID)` で親の局所に戻し、その後で `heap.retire_worker(右の子の ID)` で ID を退かせる。右の子が手放し忘れた物体があれば、ここで `TransferLeak` になる。ヒープの誤りはそこで実行を止めるので、退かせることも語を手放すこともしない
+3. 左の子が中断していれば右の語を手放し、左の中断を起こし直す。左の子が値を返し、右の子が中断していれば、左の値を手放して右の中断を起こし直す。どちらも値なら、`alloc_data(tag, 2, 0, lin = false)` で組を作り、`dst` に書いて安全点に進む。組は `lin` ビットを持たない
+4. 起こし直しでは、中断した操作のエフェクト `E` と深さ d を使う。d が 0 より大きければ、`w = ctx.evv_get()`、`m = ctx.evv_mask(&[(E, 0, d)], w)`、`heap.decref(w)`、`ctx.evv_set(m)` の順に親の `evv` を mask する。コードの `mask` の包みと同じ基本操作である。その後で、起こし直しの閉包 (操作の引数を捕まえた `reperform$E.op`) に `()` を適用する。戻り先は `par` の次の位置で、結果のスロットは `par` の `dst` である。子の始まりと同じく、閉包に `()` を適用してフレームに入る形である。`reperform$E.op` は今の `evv` の最初の `E` の evidence で perform するので、子が見た d 番目の evidence の handler に届く。その perform は戻らずに `par` のフレームを抜けて handler の `prompt$` まで巻き戻し、`prompt$` が mask した `evv` を手放す。`switch_task` で mask した `evv` を入れないのは、`reperform$E.op` が戻らず、返る親の `evv` を入れ直す時がないためである
+5. 節点を捨てる
+
+join の完了で起きた誤りと、完了の後の安全点で止まったときの誤りには、`par` の命令の関数の名前と、あれば `par` の位置を付ける。まだ始まっていない右の子に入って `g` を適用するときの誤りも同じである。どれもタスクを切り替えた後で起きるので、切り替えを始めた命令の位置は別のタスクのものでありうる。`par` の位置を付ければ、どのスケジュールで親が join に着いても、どのタスクから右の子に切り替わっても、同じ文言になる。
+
+### 子の中断
+
+- `prim child_abort(ev, c)` (`ChildAbort { ev, c }`) は、`fork$E.op` が呼ぶ。`ev` は節の入口が持つ fork evidence で、`child_abort` は借りる。エフェクトを `meta(ev).tag() - 1` で、深さを `ev` の状態の欄の即値で読む。`c` (操作の引数を捕まえた `reperform$E.op` の閉包) は消費し、子の終わりの中断の記録に持たせる
+- `boundaries` が空なら、内部の誤り (`a child abort outside a par child`) にする
+- 不死のダミーを宛先にして巻き戻す (「巻き戻しの手順」)。宛先はどの着地の印とも合わないので、巻き戻しは子の境目の上で止まり、子の終わりを中断として `ChildDone` と同じ手順に渡す
+- 子の中の handler は子の中に着地するので、ほかの中断が子の境目に着くことはない。着けば内部の誤り (`an abort reached the boundary of a par child`) にする
+
+### 子の誤り
+
+子の中の実行時エラーは、次のように扱う。
+
+- 止めたこと (割り込みと確保量の上限)、ヒープの誤り、内部の誤りは、子の中でもすぐに実行を止める
+- 深さの上限とほかの extern の誤りは子の誤りである。左の子の誤りは、すぐに評価を止める。入口のタスクで起きた誤りは、左の子の中でもそうでなくても、実行の誤りになる。右の子の誤り (右の子のタスクの中の入れ子の左の子の誤りを含む) は、その右の子の join に記録し、右のタスクはスタックを巻き戻さずに捨てて、ほかのタスクに切り替える。捨てたタスクの持つ語は手放さない。止めたスタックは巻き戻しの表のない位置で止まっていて解放できないためである。捨てた右の子が開いていた入れ子の `par` の右の子は、結果を受ける親がもういないので、子孫ごと走らせずに捨てる
+- 誤りは、左の子の中断でも値でも救わない。join は記録した右の誤りで評価を止め、両方の子が誤りなら左の誤りを報告する。そのため、子の誤りの後は、実行はいつも誤りで終わる
+- 捕まえられなかった子の `Panic` は、起こし直した `reperform$Prelude.Panic.panicked` の中の `panic` の実行時エラーになる。文言は ``panicked: <message> in `reperform$Prelude.Panic.panicked` `` で、ソースの位置を持たない
+- `vm::run` は誤りを返す前に `ctx.switch_task((), 入口のタスクの ID, 0)` を呼び、ヒープの worker を入口の ID に、`Ctx` の深さの上限を入口のタスクのものに戻す。回復は新しいヒープの worker を古いヒープから写すので、次の入力は入口の ID で始まる。返る語 (失敗したタスクの `evv`) は手放さずに捨てる。子の ID の節点を入口の ID で手放すと、検査モードは `WrongOwner` を返すためである。誤りの後のヒープは、回復で置き換えるか (続けられる誤り。REPL も `execute` も同じ `run` を通る)、`Ctx` ごと落とすので (`is_broken` の誤り)、どちらでも古いヒープは丸ごと捨てる (「追記」、[オブジェクトモデル](object-model.md) の「回復」)。リークの確かめは置き換えた後のヒープを見るので、捨てた語は漏れに数えない
+
+### 深さ
+
+- 右の子の深さは、fork のときの親の深さ `depth_offset` から数える。`Task::depth` は `depth_offset + base + frame_size` で、スタックの容量の上限は `max_depth - depth_offset` から作る。安全点は起点を足さずに `base + frame_size` を `Ctx::poll` に渡し、`Ctx` は `max_depth - depth_offset` と比べる。上限から起点を引くのは切り替えのときの `switch_task` なので、安全点の速い道で足し算をしない ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)。比べる値は同じなので、`par` を通る再帰も `(f (), g ())` と同じく深さの上限で止まる。入口のタスクの `depth_offset` は 0 である
+- `peak_stack` は、タスクごとの `depth_offset + stack.len()` の最大である (「`RunStats`」)
+
 ## `RunStats`
 
-`Machine::run`、`run_shown`、`eml_vm::execute` は、成功すると `Finished { stats, exit }` を返す。`stats` は下の `RunStats` で、`exit` は `exit` で終わったときの終了コード (`Option<i64>`) である。
+`Machine::run`、`run_shown`、`eml_vm::execute` は、成功すると `Finished { stats, exit, preemptions }` を返す。`stats` は下の `RunStats` で、`exit` は `exit` で終わったときの終了コード (`Option<i64>`)、`preemptions` は方針が始めた切り替えの数 (「タスクとスケジュール」) である。
 
 `RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の13で、はじめの11が仕事の回数である。
 
@@ -378,7 +472,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `allocations`: ヒープが物体を確保した回数。検査モードで数える `Heap` の `Stats` の `allocations` をそのまま写す ([オブジェクトモデル](object-model.md) の「仕事の回数」)。速いモードは数えず 0 である。回復の確保は数えない。
 - `reuses`: token を受ける `con` が、空でない token の箱を使った回数 (「reuse」)。空の token で確保した `con` は数えず、その確保は `allocations` に入る。VM が数える
 - `peak_objects`: 同時に生きていたヒープの物体の数の最大 (`Heap` の `Stats` の `peak_live`)。ヒープごとのダミーの物体を1つ含む。フレームはスタックにあり、凍結した領域の物体も数えないので、どちらも含まない
-- `peak_stack`: タスクのスタックで同時に使った語の数の最大。スタックの `Vec` の長さは縮めないので、`Task::reserve` が伸ばした長さがそのまま最大になり、VM は実行の終わりに `task.stack.len()` を読むだけで済む。フレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの欄で見つける
+- `peak_stack`: タスクのスタックで同時に使った語の数の最大。タスクごとの `depth_offset + stack.len()` (「`par` の fork と join」の「深さ」) の最大を `Scheduler` が取る。スタックの `Vec` の長さは縮めないので、`Task::reserve` が伸ばした長さがそのままそのタスクの最大になり、タスクが動くのをやめるときと実行の終わりに `stack.len()` を読むだけで済む。タスクごとの値はそのタスクの動きだけで決まるので、スケジュールによらない。フレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの欄で見つける
 
 回復 (「追記」) の仕事 (写すための確保と `dup`) は数えない。回復はヒープを入れ替えるので、`Machine` は、捨てる古いヒープが実行でした仕事を積算に足し、新しいヒープが写すためにした仕事を起点にして引く。`peak_objects` は、積算の最大と新しいヒープの最大の大きい方である。写している間の、古いヒープと新しいヒープを合わせた物体の数は数えない。
 
@@ -398,9 +492,9 @@ VM は次の4つを守る。
 
 1. 自己末尾呼び出しのジャンプも安全点にする (「呼び出しと戻り」)
 2. スレッドに局所的な変数を置かない。`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)
-3. 呼び出しのスタックは `Task` が持つデータにし、Rust の再帰を使わない。`ApplyRest` と `Finish` もループの中の命令である (制約5)
-4. VM は語をほかのスレッドに渡す経路を持たない。公開は、ランタイムのプリミティブ (`eml_rt` の fork と join、`eml_sched` のキューへの push) の中で、[マルチコア対応の設計](../future/multicore.md) の「印付けの表」の扱いを通す道だけにする。`Word` は `Send + Sync` なので型では守れず、文書の決まりにする。破った場合は、検査モードの所有者の検査が見つける
+3. 呼び出しのスタックは `Task` が持つデータにし、Rust の再帰を使わない。`ApplyRest` と `Finish` もループの中の命令である (制約5)。タスクの切り替えも再帰しない。切り替えた先が join を完了したときの `par` の後の安全点は、切り替えを始めた側 (横取りのループか、子の終わり) が行い、取り消す子孫は作業の列でたどる
+4. VM は語をほかのスレッドに渡す経路を持たない。公開は、`par` の fork と join (「`par` の fork と join」) の中で、`eml_rt` の `share` と `transfer_back` を呼んで [マルチコア対応の設計](../future/multicore.md) の「印付けの表」の扱いを通す道だけにする。`Word` は `Send + Sync` なので型では守れず、文書の決まりにする。破った場合は、検査モードの所有者の検査が見つける
 
 安全点ごとの「生きていて所有しているスロット」の表は作らない。走っている子を安全点で取り消す形 ([マルチコア対応の設計](../future/multicore.md) の「未決の論点と将来の拡張」の `par` の子の取り消し) では、後始末にこの表を使える。スロットの割り当てが静的なので、この表は作れる。ただし、生きているスロットには借りた語もあるので、表は生存解析だけでは決まらない。Perceus の所有の状態 (verifier の所有の段と同じ計算) から作る。巻き戻しの表 (「巻き戻し」) は、同じ計算を巻き戻しの地点についてだけ行ったものである。
 
-スレッドをまたぐキューのうち、ランタイムのキュー (work stealing の deque、スケジューラの実行待ち) は、スケジューラの crate `eml_sched` が `eml_rt` の上に持つ Rust の構造で、数えた参照で語を持つ。deque の `par` の子は fork で印を付けた閉包で、実行待ちの待った継続には救済のほかでは印を付けない ([マルチコア対応の設計](../future/multicore.md) の「印付けの表」)。言語のキュー (channel など) も、Rust の構造が数えた参照で語を持つ形にする。その形は、[マルチコア対応の設計](../future/multicore.md) の「Rust の側が持つ語」にある。
+スレッドをまたぐキューのうち、ランタイムのキュー (work stealing の deque、スケジューラの実行待ち) は、スケジューラが `eml_rt` の上に持つ Rust の構造で、数えた参照で語を持つ。deque の `par` の子は fork で印を付けた閉包で、実行待ちの待った継続には救済のほかでは印を付けない ([マルチコア対応の設計](../future/multicore.md) の「印付けの表」)。言語のキュー (channel など) も、Rust の構造が数えた参照で語を持つ形にする。その形は、[マルチコア対応の設計](../future/multicore.md) の「Rust の側が持つ語」にある。

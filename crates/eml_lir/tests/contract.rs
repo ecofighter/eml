@@ -522,3 +522,16 @@ fn f(a.0: obj, b.1: obj) -> P{obj lin, obj} lin {
     }
     ");
 }
+
+#[test]
+fn a_par_whose_result_is_returned_stays_a_let() {
+    // join に親のフレームが要るので、`par` は末尾呼び出しにしない (docs/spec/lir.md の「末尾の位置の呼び出し」)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+fn f(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = par (,) #0(a.0, b.1)
+  return t.2
+}
+";
+    assert_eq!(contract_text(text), text);
+}

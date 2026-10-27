@@ -58,7 +58,8 @@ pub fn boxing(program: &mut Program) {
 /// あり、その後の文がすべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わない
 /// ので縮約が消し、そこで末尾呼び出しになる (docs/spec/lir.md の「末尾の位置の呼び出し」)。形で決めるので、`never` の操作の
 /// 節の呼び出しも含む。EP は、Core IR の上の同じ判定 (`eml_core_ir` の tail.rs) で、この呼び出しを yield の地点に
-/// しない (docs/spec/core-ir.md の「yield の地点」)。
+/// しない (docs/spec/core-ir.md の「yield の地点」)。`par` は join に親のフレームが要るので、末尾の位置にあっても
+/// 末尾の位置の呼び出しにしない。
 ///
 /// 開くパスの後は、`let (x.0, .., x.n) = <呼び出し>` の後の `return (x.0, .., x.n)` (同じ並び、同じ順) も同じ形で
 /// ある。構造体の `unbox` は純粋な `let` に数える
@@ -81,7 +82,7 @@ pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
             Stmt::Let { var, rhs } => {
                 if is_returned(std::slice::from_ref(var)) {
                     return match rhs {
-                        Rhs::Call(call) => Some((index, call)),
+                        Rhs::Call(call) if !matches!(call, Call::Par { .. }) => Some((index, call)),
                         _ => None,
                     };
                 }
@@ -89,7 +90,10 @@ pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
                     return None;
                 }
             }
-            Stmt::LetMany { vars, call } => return is_returned(vars).then_some((index, call)),
+            Stmt::LetMany { vars, call } => {
+                return (is_returned(vars) && !matches!(call, Call::Par { .. }))
+                    .then_some((index, call));
+            }
             Stmt::UnboxStruct { .. } => {}
             _ => return None,
         }
@@ -609,6 +613,13 @@ impl Converter<'_> {
                     OpRet::Repr(repr) => Some(repr),
                     OpRet::Never => None,
                 }
+            }
+            // 子は `apply` と同じく一様な関数値で、組は VM が作る箱なので `obj` である。構造体の束縛は受け直しの
+            // `unbox` が取り出す
+            Call::Par { left, right, .. } => {
+                *left = self.convert(*left, Repr::TObj, out);
+                *right = self.convert(*right, Repr::TObj, out);
+                Some(Repr::Obj)
             }
         }
     }

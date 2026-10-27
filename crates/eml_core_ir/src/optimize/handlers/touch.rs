@@ -51,7 +51,8 @@ fn touches_locally(function: &CoreFn, effect: u32) -> bool {
                         Call::Perform { effect: e, .. } => *e == effect,
                         Call::Handle { .. } | Call::Resume { .. } | Call::Clause { .. } => true,
                         Call::Apply { yields, .. } => *yields,
-                        Call::Direct(..) => false,
+                        // 子は `never` の操作しか起こせず、親で継続を作らずに起こし直すので H に触れない
+                        Call::Direct(..) | Call::Par { .. } => false,
                     }
             }
             _ => false,

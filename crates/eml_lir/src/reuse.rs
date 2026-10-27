@@ -27,6 +27,8 @@ pub fn may_yield(program: &Program, function: &LirFn, call: &Call) -> bool {
             Call::Direct(callee, _) => program.function(*callee).yields,
             Call::Apply { yields, .. } => *yields,
             Call::Clause { effect, op, .. } => operation(&program.effects, *effect, *op).resumable,
+            // 子の中の操作は親の handler を再開せずに子を中断するので、親の継続は捕まらない
+            Call::Par { .. } => false,
         }
 }
 

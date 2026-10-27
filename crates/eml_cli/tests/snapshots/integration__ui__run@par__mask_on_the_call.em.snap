@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/mask_on_the_call.em
+---
+--- stdout ---
+Err 7
+--- stderr ---

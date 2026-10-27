@@ -9,7 +9,7 @@ mod record;
 mod section;
 mod types;
 
-pub use types::visit_type_vars;
+pub use types::{visit_row_type_vars, visit_type_vars};
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextEdit, TextRange};
 use eml_extern::Extern;

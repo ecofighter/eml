@@ -119,7 +119,8 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 | `Bytes` | 古いバイト列から `alloc_bytes` で作る。`alloc_bytes_room` が作った余りの容量は写さない |
 | `BigInt` | 古い値から `alloc_int` で作る。値は 63 ビットに収まらないので、また `BigInt` になる |
 | `Float` | 古いビット列から `alloc_float` で作る |
-| `Foreign`、`lin` ビットの物体、token の箱、解放した物体、rc が負の物体 (共有) | 写せない (`Unrecoverable`) |
+| rc が負の物体 (共有) | 局所の物体として写す。2つ目からの使い手は `dup` する。不死の `MIN` の rc も、普通の数の rc になる |
+| `Foreign`、`lin` ビットの物体、token の箱、解放した物体 | 写せない (`Unrecoverable`) |
 
 - `Data` の物体は生の語の数を持たないので、容量から走査する語 (と数の語) を引いた残りをすべて生の語として写す。前のコンストラクタの残りの語も写すが、走査しないので害はない。そのために、生の語はいつも書いてある (下の「確保と解放」)
 - 種類を足すときは、その種類の写し方もこの表に決める。`Unr` の `Foreign` の種類を足すなら、写すか移す処理を、信頼する部分の新しい行と一緒に足す
@@ -158,7 +159,9 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 - エフェクトの数の上限は、16 ビットの tag から 0 を除いた 65535 になる
 - 関数の値 `&f` は関数の番号の即値なので (上の「語」)、関数 0 の値と `()` は同じ語である。そのため、入口の欄や κ の欄が空 (`()`) かを確かめる検査モードの確かめは、関数 0 の値が入った欄を空と見て、誤りを見逃しうる。空の欄を空でないと見ることはないので、正しい呼び出しを誤って断ることはない
 - 3つの物体を別の種類にしない。速いモードの振る舞いは `Data` と同じで、分けて得られるのは、リークの報告の名前と検査モードの種類の検査だけだからである。リークの報告では、クロージャと evidence の物体も `Data` と数える
-- `ev_set_state` と `ev_take_state` は、状態の欄を `set_field` でその場で書き換える。`set_field` の前提 (ほかのスレッドが読めない) は、シングルスレッドの VM では成り立つ。`par` で evidence を子のタスクに渡すなら、evidence を共有の印の付いた物体にしないか、状態の欄の書き換えを見直す。1つの worker で動かす `par` の子は `evv` を空にして始めるので、evidence を子のタスクに渡さない (下の「実行文脈 `Ctx`」の「タスクの切り替え」)
+- `ev_set_state` と `ev_take_state` は状態の欄を、`ev_take_evv` は外側の欄を、`set_field` でその場で書き換える。`set_field` の前提 (ほかのスレッドが読めない) は、シングルスレッドの VM では成り立つ。`par` も、これらの操作が書く evidence を子のタスクに渡さず、共有の印も付けない。`par` の子の `evv` は、fork のときに作る fork evidence の列で、親の evidence を含まない。fork の `share` が届くのは値から届く物体だけで、そこには退いた evidence しかない (次の項目)。fork evidence の状態の欄は深さを持つが、fork evidence は `ev_take_state`、`ev_set_state`、`ev_take_evv` の宛先にならない。fork evidence を包む `prompt$` はなく、`fork$E.op` の節は状態の欄を書かず、`prim child_abort` が深さを読むだけだからである。fork evidence は凍結した物体か、fork で共有の印を付けた物体なので、`set_field` の前提も満たさない ([VM](vm.md) の「`par` の fork と join」)
+- 値 (閉包、データ、根) から届く evidence は、退いた evidence だけである。`prompt$` は、どの道でも初めに `ev_take_evv` で外側の `evv` を evidence から取り出して `Ctx` に戻し、状態を `ev_take_state` で取り出す ([Core IR](core-ir.md) の「handle と `prompt$`」)。そのため、退いた evidence は入口の表と tag だけを持ち、状態と外側の欄は `()` である。`resume$` と `rewind$` は `ev_renew` で表と tag だけを使うので、退いた evidence の外側を読む操作はない。走っている evidence に届く道は、値から始まらず、フレームか VM の構造から始まる。たとえば、`Ctx` の `evv`、yield の状態、handle のフレーム (handle の場所と `prompt$`)、`ev_lookup` の結果を持って節を呼ぶ `perform` の地点、`apply κ` の間の `resume$`、`yield_to` までの再開する節の入口、in-place の入口、フレームが持つ `evv` (`mask` の包みの `w0`、under の形の入口の `w`)、`par` の join の節点が持つ親の `evv`、止まっているタスクが退避した `evv` である。ほかの走っている evidence の外側の欄も、これらからたどって届く
+- この不変条件があるので、`par` の fork が値に呼ぶ `share` (`par` の引数の閉包と根) は、前提で rc が正であることを求める物体に届かない。その物体は、`ev_take_state`、`ev_take_evv`、`ev_set_state` の evidence と、`ev_set_clause` の入口の表である (下の「基本操作の契約」)。入口の表を書くのは `ev_new` から `evv_push` までで、その間はまだ値が表に届かない。退いた evidence が外側の欄を持ち続けると、継続が捕まえた退いた evidence から、親で走っている evidence に `share` が届く。その後の親のその場の書き換えは、検査モードでは `NotWritable` になり、速いモードでは契約の外の呼び出しになる。値を公開する新しい基本操作も、この不変条件に頼る
 - evidence は `CodeBase` の不死の定数にしない。空の `evv` は即値の `()` である
 
 ## 確保器
@@ -241,15 +244,43 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 ## `share`
 
 - `share(w, receiver)` は、送り手のスレッドが、値を公開する前に呼ぶ ([マルチコア対応の設計](../future/multicore.md) の「共有の印方式」)。w から届く物体を明示のスタックでたどり、局所の rc n を -n に変える。局所の上限 `MAX` は共有の上限 `MIN` に変える。-n が `DROP_LIMIT` より小さくなるときも `MIN` に変える
-- すでに負の物体と不死の物体で、たどりを止める。不死の物体は、`lin` ビットが立っていても変えない。印を付けた物体はもう一度たどらないので、`lin` でない物体がたどられるのは高々1回である
-- `lin` ビットの立った物体には印を付けず、所有者を `receiver` に移す。ただし、その子はたどり続ける。`Lin` の物体の中の `Unr` の子は、送り手がほかの所からも参照していることがあるためである。`Lin` の物体は rc が 1 なので、受け手は局所の物体としてそのまま使える
-  - `lin` の物体は rc が 1 なので、正しいプログラムでは2回届かない。検査モードは、たどりで同じ `lin` の物体に2回届いたら誤りにする (訪れた `lin` の物体の集合を持つ)。すでに共有の側にある `lin` の物体に届いたときも誤りにする。速いモードは、正しいプログラムに頼る
-  - 検査モードは、たどりで届いた物体が生きていなければ誤りにする
+- たどりは3つのスタックを持つ。印付けのスタック、移し替えのスタック、検査モードだけの所有者だけのスタックである。根は印付けのスタックから始める
+- すでに負の物体と不死の物体では、印付けと移し替えのたどりを止める。不死の物体は、`lin` ビットが立っていても変えない。印を付けた物体はもう一度たどらないので、印を付ける物体がたどられるのは高々1回である
+- 印付けか移し替えのスタックから取り出した局所の物体が、`lin` ビットの立った物体か、移し替えのスタックから取り出した rc 1 の物体なら、印を付けずに所有者を `receiver` に移し、子を移し替えのスタックに積む。ほかの局所の物体には印を付け、子を印付けのスタックに積む。つまり、届いたどの `lin` の物体からも移し替えを始め、そこから rc 1 の物体だけを通って届く物体の所有を移し、最初に rc > 1 の物体に着いたら、その下は印付けに切り替える。移した物体は受け手の局所の物体なので、受け手はその場で書き換えられる ([マルチコア対応の設計](../future/multicore.md) の「`Lin` の物体の所有者の移し替え」)
+  - 移してよい理由: 生きている `lin` の物体に届く参照の道は、ちょうど1つである。`Lin` の値は複製できず、Kind は入れ物に伝わるためである (`Lin` の値を持つ入れ物は `Lin` で、`poly` の入れ物は使う所で `Lin` になる)。rc 1 の物体を指す参照は1つだけなので、`lin` の物体の下の rc 1 の物体には、その `lin` の物体を通ってしか届かない。そのため、移した物体に送り手の側から届く道は残らない。rc > 1 の物体には印を付ける。送り手がほかの所からも参照していることがあるためである
+  - 正しいプログラムでは、所有を移す物体に2回届かない。検査モードは訪問済みの集まり (物体の番地のハッシュ集合) を持ち、所有を移す物体に2回届いたら誤りにする。すでに共有の側にある `lin` の物体に届いたときも誤りにする。速いモードは、正しいプログラムに頼る
+  - 検査モードは、どのスタックでも、届いた物体が生きていなければ誤りにする
+- 所有者だけのスタックは、検査モードだけが持つ。どのスタックのたどりも、`lin` でない rc -1 の共有の物体に着くと、訪問済みの集まりに入れて、子をこのスタックに積む。このスタックから取り出した `lin` の物体と rc 1 の物体は、所有者を `receiver` に書き換え、子をこのスタックに積む。ほかの物体では止まる。訪問済みの物体にもう一度着いたときも止まる
+  - 理由: 共有にした `poly` の入れ物 (`(a, FileIn)` の組や EP の継続のクロージャ) は、中に局所の `lin` の子を持つ (下の項目)。この入れ物をもう一度送ると (入れ子の `par`)、たどりは入れ物で止まるので、中の `lin` の子とその下の rc 1 の物体は前の受け手の持ち物のまま残る。すると、正しい受け手が使っても検査モードは `WrongOwner` を返す。所有者だけのたどりは、これらを新しい受け手の持ち物にする
+  - このスタックは rc を書かず、印付けと移し替えのスタックに積まない。そのため、2つのモードの rc の変化と reuse の判断は同じである。速いモードでは持ち主がないので、このたどりは要らない
+  - 制限: 送り直した `lin` の子の下にある rc > 1 の局所の物体は、前の持ち主のまま残る。受け手が触れると、検査モードは `WrongOwner` を返す。速いモードでは、その物体は局所のまま2つの worker から届く。worker が1つの間は害がないが、worker のスレッドを入れると競合になる。扱いは worker のスレッドを入れるときに決める ([ロードマップ](../future/roadmap.md) の `worker-threads`)
+- `receiver` は今の worker ID でもよい。このとき、所有を移しても持ち主は変わらず、`Unr` の値には印を付けるだけである
 - `lin` ビットのない親の中に `lin` ビットの立った子があることは、ふつうに起きる。`poly` の印の `con` (`(a, FileIn)` の組の型は `poly` になる) と、EP の継続のクロージャ (印は捕まえた値の印の結び) は `lin` ビットを持たないが、中の `FileIn` はビットを持つ。このとき `share` の後は、共有の親から局所の `lin` の子が届く。そのため、共有の物体から届いてよいのは、共有か不死の物体か、`lin` ビットの立った局所の物体である
   - そうした親は、実際には `Lin` の値なので参照は1つで、所有も受け手に移っている。親の最後の参照を手放すのは受け手で、子の所有者の検査とも合う
   - 受け手がその親を手放すとき、親の rc は -1 である。-1 の物体は、参照が自分の1つだけなので、最後の参照として扱い、残すフィールドを `dup` せずに受け取る (下の「核の操作」の `is_last`)。残す `lin` の子を `dup` すると、正しいプログラムでも検査モードの誤りになるためである
 - たどりのコードは、物体への読み書き (生存、rc、`lin` ビット、所有者、子) を `Graph` trait の裏に置いて書く。Verus が、たどりのコードを trait のメソッドの約束の上で、任意のグラフについて証明するためである ([テスト戦略](../implementation/testing.md) の「Verus」)。ヒープの上の実装も証明し、たどりの結果をヒープの抽象のモデルの遷移と結ぶ
-- VM はシングルスレッドだが、`par` の fork と join は worker の数によらず印を付けるので ([マルチコア対応の設計](../future/multicore.md) の「`par` の印付け」)、この経路を通る。物理的なスレッドが1つの間、`receiver` は論理的な worker ID (下の「論理的な worker ID」) である。`par` はまだ実装していないので、今 `share` を呼ぶのは単体テストだけである
+- VM はシングルスレッドだが、`par` の fork と join は worker の数によらず印を付けるので ([マルチコア対応の設計](../future/multicore.md) の「`par` の印付け」)、この経路を通る。物理的なスレッドが1つの間、`receiver` は論理的な worker ID (下の「論理的な worker ID」) である。VM が `share` を呼ぶのは `par` の fork である ([VM](vm.md) の「`par` の fork と join」)
+
+## `transfer_back`
+
+- `transfer_back(w, from)` は、join で右の子の値 w を、今の worker の局所の値に戻す。`from` は右の子の ID で、右の子の値を受け取った後、`retire_worker(from)` の前に呼ぶ (下の「論理的な worker ID」)
+- たどりは2つのスタックを持つ。裏返しのスタックと、検査モードだけの所有者だけのスタックである。根は裏返しのスタックから始める
+- 裏返しのスタックから取り出した rc -1 の物体は、rc を 1 にし、所有者を今の worker にして、子を裏返しのスタックに積む。ほかの物体 (rc -2 以下の共有の物体、不死の物体、局所の物体) では止まる。つまり、根から rc -1 の物体だけを通って届く rc -1 の物体を裏返す。裏返した物体は rc 1 になるので、もう一度着いても止まる。`lin` ビットの立った rc -1 の物体も裏返す
+  - 裏返してよい理由: rc -1 の物体を指す参照は1つだけである。fork で子に渡した親の値を子がそのまま返したとき、その参照は戻す値の中にある。そのため、裏返した物体に別の worker から届く道は残らず、裏返した物体は reuse もその場の書き換えもできる。rc -2 以下の物体は、ほかの所からも参照されうるので共有のまま残す
+- 検査モードでは、裏返しのスタックで止まる局所の物体と、所有者だけのスタックから取り出した物体を、次のように扱う
+  - rc が正の物体は、所有者で見分ける。所有者が今の worker なら止まる。`from` なら、訪問済みの集まりに入れ、所有者を今の worker に書き換え、子を所有者だけのスタックに積む。ほかの ID なら `WrongOwner` を返す
+  - `lin` でない rc -1 の物体は、訪問済みの集まりに入れて、子を所有者だけのスタックに積む
+  - 訪問済みの物体にもう一度着いたときと、ほかの物体では止まる
+  - 理由: 子が確保した物体と、`share` で子へ所有を移した物体は、子の持ち物である。戻さなければ、親が使うと `WrongOwner` になり、`retire_worker` が `TransferLeak` を返す。子の持ち物は、fork で共有にした親の物体の下にもある (共有にした `(a, FileIn)` の組の中の `FileIn`)。所有者だけのスタックは、そこまで進んで持ち主を戻す
+  - 所有者が今の worker の物体は、親の物体である。子が親の物体を書き換えずに値の中に入れて返しただけなら、そのまま止まる。fork で印を付け忘れた物体は、子がそれを使ったときに `WrongOwner` で見つかり、ここでは見つからない。第三の ID の物体は、黙って書き換えずに `WrongOwner` にする
+  - 訪問済みの集まりは `share` と同じものを使い、たどりの初めに空にする。所有を書き換える物体は、書き換えた後の所有者を見て止まるので、訪問済みの集まりはたどりが止まることの証明のために入れる
+  - このスタックは rc を書かず、裏返しのスタックに積まない。そのため、2つのモードの rc の変化と reuse の判断は同じである。速いモードでは持ち主がないので、このたどりは要らない
+  - 検査モードは、どちらのスタックでも、届いた物体が生きていなければ `UseAfterFree` を返す
+- `from` が今の worker ID なのは呼ぶ側の誤りである。検査モードは、何も変えずに `WrongOwner` を返す。速いモードは `from` を使わない
+- 費用: 速いモードは、裏返す物体とその直接の子の数に比例する。検査モードは、これに加えて、戻す値から届く子の持ち物と、その下の rc -1 の物体を1回ずつ訪れる。rc -1 の大きな構造を包んだ値を戻すと、検査モードでだけ、その大きさに比例する
+- 検査モードの ID ごとの数は、裏返した物体を今の ID の数に入れ、所有者を書き換えた物体の数を `from` から今の ID へ移す (下の「論理的な worker ID」)
+- たどりのコードは、`share` と同じく `Graph` trait の上に書き、Verus が証明する。rc の変化 (裏返す物体は rc 1、ほかの物体は変わらない) は2つのモードで同じで、所有者が変わるのは、裏返した物体と、検査モードで所有者を書き換えた物体だけである。裏返しは rc と所有者を1つの `Graph` の操作で書くので、局所の物体の前置きの所有者は、たどりの間も持ち主に等しい
+- VM が `transfer_back` を呼ぶのは `par` の join で、右の子の値の語ごとに呼ぶ ([VM](vm.md) の「`par` の fork と join」)
 
 ## `lin` ビット
 
@@ -294,7 +325,8 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `free_block` | | 呼ぶ側が最後の参照を持ち、子の参照はもう処理してある | rc が 1 か -1 である (`NotLast`)。種類は破棄処理を持たない (`FinalizerSkipped`) |
 | `into_token` | | 呼ぶ側が唯一の参照を持ち、子の参照はもう処理してある | token にできる種類である (`NotTokenable`)。rc が 1 である (`NotUnique`) |
 | `con_at` / `reuse_in_place` / `drop_token` | | token の箱の「残した」語 (`con_at` と `reuse_in_place` で書き直さない語) の参照を呼ぶ側が持つ | token はまだ使っていない (`StaleToken`)。`con_at` の箱は `payload_words` の物体のこのモードでの級にある (`WrongClass`。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす)。`reuse_in_place` の `meta` の tag、scan、種類は箱と同じで (`WrongMeta`)、箱が `lin` ビットを持つなら `meta` も持つ (`LinBitKept`) |
-| `share` | | | 届く物体はどれも生きている (`UseAfterFree`)。局所の `lin` の物体には1回だけ届き (`LinReachedTwice`)、共有の側の `lin` の物体には届かない (`LinShared`) |
+| `share` | | | 届く物体はどれも生きている (`UseAfterFree`)。所有を移す物体 (局所の `lin` の物体と、その下の rc 1 の物体) には1回だけ届き (`LinReachedTwice`)、共有の側の `lin` の物体には届かない (`LinShared`) |
+| `transfer_back` | 裏返す物体 (根から rc -1 の物体だけを通って届く rc -1 の物体) を指す参照は、戻す値の中にしかない | | `from` は今の worker でない (`WrongOwner`)。届く物体はどれも生きている (`UseAfterFree`)。届いた局所の物体の持ち主は、今の worker か `from` である (`WrongOwner`) |
 | `string` | 返す位置を読むのは、物体が生きていて、`string_push` か `string_concat` でその物体を書き換えていない間だけである | | 物体は `String` である (`WrongKind`) |
 | `bytes` | 返す位置を読むのは、物体が生きていて、その物体を書き換えていない間だけである | | 物体は `Bytes` である (`WrongKind`) |
 | `string_push` | `s` は left 自身の中身を指さない (下の「バイト列と文字列」) | 呼ぶ側が left の参照を1つ持つ | left は `String` である (`WrongKind`)。left は `decref` の検査する前提を満たす |
@@ -331,6 +363,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `release(w, tag, keep)` | LIR の `release`。`is_last` が真なら、残さない子を手放して箱を空け、残す子は箱の参照を受け継ぐ。そうでなければ、残す子を `dup` してから w を手放す |
 | `release_reuse(w, tag, keep)` | w が一意なら、残さない子を手放して箱を token にする。そうでなければ `release` と同じにして、空の token を返す |
 | `share(w, receiver)` | 上の「`share`」 |
+| `transfer_back(w, from)` | 上の「`transfer_back`」 |
 | `alloc_string(s)` / `alloc_string_room(room)` / `alloc_string_immortal(s)` / `string(w)` / `string_push(left, s)` / `string_concat(left, right)` | 下の「バイト列と文字列」 |
 | `alloc_bytes(b)` / `alloc_bytes_room(room)` / `alloc_bytes_immortal(b)` / `bytes(w)` | 下の「バイト列と文字列」 |
 
@@ -564,7 +597,7 @@ is_unique(x)
 
 - モードは `Heap<M: Mode>` の型の引数で選ぶ。`Mode` は封じた trait で、`Fast` と `Checked` の2つがある。各操作は `if M::CHECKED { … }` で検査を書き、速いモードではこの分岐が単相化で消える
 - 実行時の旗にしないのは、速いモードの RC の速い道に、検査のための分岐を1つも足さないためである。VM は2つのモードで単相化して2つ作る。ネイティブは、コンパイル時にどちらかを選ぶ
-- 仕事の回数 (`Stats` の `rc_increments`、`rc_decrements`、確保の回数 `allocations`、生きている箱の数 `live` とその最大 `peak_live` と、`Ctx` の `CtxStats` の `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`) は、検査モードだけで数える。速いモードは数える費用も持たない。VM では、`RunStats` の回数の固定と UI テストを検査モードで走らせ、`bench/run.sh` の命令の数は速いモードで測る。OS から取ったページのバイト数だけは、両方のモードで数える (上の「確保と解放」)
+- 仕事の回数 (`Stats` の `rc_increments`、`rc_decrements`、確保の回数 `allocations`、生きている箱の数 `live` とその最大 `peak_live` と、`Ctx` の `CtxStats` の `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`) は、検査モードだけで数える。ID ごとの生きている物体の数 (下の「論理的な worker ID」) も同じである。速いモードは数える費用も持たない。ID ごとの数の表は速いモードの `Heap` にも欄として残るが、空のまま触れない。VM では、`RunStats` の回数の固定と UI テストを検査モードで走らせ、`bench/run.sh` の命令の数は速いモードで測る。OS から取ったページのバイト数だけは、両方のモードで数える (上の「確保と解放」)
 
 `RunStats` の各項目の意味と VM での出どころは、[VM](vm.md) の「`RunStats`」にある。`string_bytes_copied` は、extern が数える `CtxStats` の定義を引き継ぐ (下の「extern」の「仕事の回数」)。
 
@@ -610,8 +643,8 @@ token (`Token`) はどちらのモードでも1語である。VM のレジスタ
 - `freeze` の断り。どちらのモードでも返す。rc が 0 でない物体 (token の箱を含む) か `Foreign` の物体があれば `NotImmortal` を返す。検査モードでは、前置きの状態が生存でない箱 (token の箱と空ける途中の物体) があるときと、走査する語が生存でないブロックを指すときも断る。その行き先が解放したブロックなら `UseAfterFree`、そうでなければ `NotImmortal` である。上の「凍結した領域」
 - `lin` ビットの立った物体への `dup` (`LinDup`)。`lin` の物体の rc は 1 なので、rc が 1 を超える誤りは、この `dup` で見つかる
 - `lin` ビットの立った共有の物体の `release` と `decref` (`LinShared`)。`share` は `lin` の物体に印を付けないので、これは印付けの誤りである。`share` のたどりが、すでに共有の `lin` の物体に届いたときも同じ誤りにする
-- `share` のたどりで、同じ `lin` の物体に2回届くこと (`LinReachedTwice`)
-- 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`foreign_unique`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき
+- `share` のたどりで、所有を移す物体に2回届くこと (`LinReachedTwice`)
+- 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`foreign_unique`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき。`transfer_back` が、今の worker でも `from` でもない所有者の局所の物体に届いたときと、`from` が今の worker のときも同じ誤りにする
 - ほかのスレッドが読みうる物体への書き込み (`NotWritable`)。`set_field` と `set_raw` は、rc が 0 以下 (不死か共有) で構築中でない物体を断る。凍結した塊の物体と、書き終えたヒープ自身の不死の物体もこれに当たる。前置きの状態は構築中と生存を分けないので、検査モードのヒープは構築中の物体の番地を持ち、それと比べて見分ける
 - token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`。rc が 1 でない物体の `foreign_unique` と `set_lin` も同じ誤りにする)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)
 - `free_block` を、破棄処理を持つ種類の物体に使うこと (`FinalizerSkipped`) と、最後の参照でない物体に使うこと (`NotLast`)
@@ -623,10 +656,12 @@ token (`Token`) はどちらのモードでも1語である。VM のレジスタ
   - `ev_lookup` と `evv_mask` で、合う evidence が `evv` にないこと (`NoHandler`)
   - 空の根を読むことと、空でない根に置くこと (`RootMisuse`)。速いモードでも返す (下の「セッションの根」)
   - yield の状態についての前提を破ること (`YieldMisuse`)。yield 中の `yield_to` と `yield_abort`、物体でない宛先、yield していないときの `yield_cont_take`、`yield_cont_set`、`yield_finish`、κ の欄が空でないときの `yield_cont_set` と `yield_finish` がこれに当たる
+- join の後に、退かせる子の ID の物体が残っていること (`TransferLeak`)。移し戻しの漏れである。誤りが持つ `live` は残った物体の数で、`u32` に収まらなければ `u32::MAX` にする。見つかるのは、子の ID が持つ rc が正の物体が残るときだけである。子が確保した物体と、`share` で子へ所有を移した物体がこれに当たる。fork で共有にした物体だけから成る値の移し戻しの漏れは見つからない。上の「論理的な worker ID」
 - 回復で、根から写せない物体に届くこと (`Unrecoverable`)。写せない物体は、上の「種類」の写し方の表と、下の「回復」の輪である。どちらのモードでも返す
 - 生存の列挙 (`check_invariants`) で見つかる不変条件の違反
   - 共有の物体から、共有でも不死でもない物体が届き、それが `lin` ビットの立った局所の物体でもないこと (`SharedReachesLocal`)。上の「`share`」の理由で、`lin` ビットの立った局所の物体は許す
   - 不死の物体から、不死でない物体が届くこと (`ImmortalReachesMortal`)。`share` は不死の物体でたどりを止めるので、不死の物体の子が局所なら、印なしに別のスレッドから届く。Koka の PR #910 は、プロセス全体で共有する物体が atomic でない RC を持っていたために、2つのスレッドで動かすとヒープが壊れたと報告している。その誤りがこの形である
+  - ID ごとの数が、数え直した数と食い違うこと (`OwnedMiscount`)。届き方の検査の後で数え、食い違う ID のうち最小のものを返す。上の「論理的な worker ID」
 - リーク (`leaks`)。生きている不死でない物体と、使われずに残った token を、種類の名前ごとに数える。token は種類の名前 `Token` で数える
 
 `Err` を返した後もヒープを使い続けてよいかは、状態を変える前の `Err` かどうかで決まる (下の「検査モードの約束」)。
@@ -644,9 +679,9 @@ token (`Token`) はどちらのモードでも1語である。VM のレジスタ
 不変条件も2つに分かれる。`safe_wf` は権限の持ち方とブロックの状態の不変条件で、モデルの数と辺には触れない。`full` は、抽象のモデルとの対応を含む不変条件である。`full` が成り立つことを、モデルが合っていると言う。性質は次のとおりである。
 
 - 検査モードの操作は、安全の前提の下で `safe_wf` を保つ
-- モデルが合っていて、モデルの前提と検査する前提がすべて成り立つなら、操作は `Ok` を返し、結果は速いモードと同じモデルの遷移になる。ただし、モデルは不死の物体の外の参照の数、共有の物体の `lin` ビット、物体の持ち主、確保器の級、箱の `meta` を照らす規則を持たない。そのため、解放の連鎖が手放す子についての `ImmortalOverRelease`、`LinShared`、`WrongOwner`、`con_at` の `WrongClass`、`reuse_in_place` の `WrongMeta` と `LinBitKept` は、モデルが合っていても返りうる
+- モデルが合っていて、モデルの前提と検査する前提がすべて成り立つなら、操作は `Ok` を返し、結果は速いモードと同じモデルの遷移になる。ただし、モデルは不死の物体の外の参照の数、共有の物体の `lin` ビット、物体の持ち主、確保器の級、箱の `meta` を照らす規則を持たない。そのため、解放の連鎖が手放す子についての `ImmortalOverRelease`、`LinShared`、`WrongOwner`、`transfer_back` の `WrongOwner`、`con_at` の `WrongClass`、`reuse_in_place` の `WrongMeta` と `LinBitKept` は、モデルが合っていても返りうる
 - `Err` を返すのは、その誤りに対応する違反が操作の前にあったときだけである
-- 状態を変える前に `Err` を返す操作では、ヒープは変わらない。状態を変えた後で `Err` を返しうるのは、解放の連鎖 (`decref`、`release`、`release_reuse` の子の処理)、`release` の最後でない枝の `dup` の列、`share`、`con_at` (token の項目を取り出した後の `WrongClass`) と、`Ctx` の基本操作の `evv_set`、`ev_set_state`、`yield_finish` (元の `evv`、元の状態、宛先を手放す解放の連鎖で起きた誤り) と、extern の `handle_close` (ハンドルを手放す解放の連鎖で起きた誤り。下の「extern」) である。その後はモデルが合わなくてよく、ヒープを使わない。ただし `Heap` と `Ctx` を落とすことは安全である
+- 状態を変える前に `Err` を返す操作では、ヒープは変わらない。状態を変えた後で `Err` を返しうるのは、解放の連鎖 (`decref`、`release`、`release_reuse` の子の処理)、`release` の最後でない枝の `dup` の列、`share`、`transfer_back` (`from` を照らす `WrongOwner` は状態を変える前に返す)、`con_at` (token の項目を取り出した後の `WrongClass`) と、`Ctx` の基本操作の `evv_set`、`ev_set_state`、`yield_finish` (元の `evv`、元の状態、宛先を手放す解放の連鎖で起きた誤り) と、extern の `handle_close` (ハンドルを手放す解放の連鎖で起きた誤り。下の「extern」) である。その後はモデルが合わなくてよく、ヒープを使わない。ただし `Heap` と `Ctx` を落とすことは安全である
 
 同じ物体を2回空けないように、最後の参照と決めた時点で、その物体の前置きを「空ける途中」にする。`release_ref`、`release` の最後の参照の枝、`release_reuse` の子の処理の前がこれに当たる。呼ぶ側が `dup` せずに同じ語を2つのフィールドに書いた親を空けると、同じ子に2回届く。2回目に届いたときは、生きていないので `UseAfterFree` を返す。`Err` で解放の連鎖が途中で止まると、積んだまま空けていない物体が「空ける途中」で残る。`Heap` を落とすときは、その中の `Foreign` の破棄処理を1回だけ呼ぶ。生存の列挙、不変条件の検査、リークは、「空ける途中」の物体を生きている物体と同じに扱う。
 
@@ -657,13 +692,17 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 ### 論理的な worker ID
 
 - `Heap` は今の論理的な worker ID を持つ。確保した物体の所有者を今の ID にする
-- 物理的な worker が1つでも所有者の検査を働かせるために、ID を切り替える操作 (`set_worker`) を持つ。所有者 ID の使い方は [マルチコア対応の設計](../future/multicore.md) の「論理的な worker ID」にある
-- ID を切り替えるのは単体テストだけなので、UI テストでは所有者の検査が効かない
+- 物理的な worker が1つでも所有者の検査を働かせるために、ID を切り替える操作 (`set_worker`) を持つ。VM がタスクを切り替えるときは、`evv` と一緒に替える `Ctx::switch_task` を通す (下の「タスクの切り替え」)。所有者 ID の使い方は [マルチコア対応の設計](../future/multicore.md) の「論理的な worker ID」にある
+- VM が ID を切り替えるのは、`par` の fork、join、タスクの切り替えである ([VM](vm.md) の「`par` の fork と join」)。`par` のないプログラムは基の ID 0 だけで動くので、所有者の検査は働かない
+- `par` の子の ID は `fork_worker` で出し、join で右の子の値をすべて移し戻した後に `retire_worker` で退かせる。0 は基の ID で、子には出さない。検査モードの `fork_worker` は、最後に退いた ID があればそれを使い回し、なければまだ出していない最小の ID を出す。検査モードの `set_worker` は、渡した ID を、まだ出していない ID からも退いた ID からも外す。そのため、テストが選んだ ID と子の ID は重ならない。検査モードの `share` も、w が物体なら、受け手の ID を同じように扱う。`share` が物体を移す ID は、数の表に項目を持たなければならないためである (下の項目)。ID が `u32` の上限に届くときは panic する (T5)。`retire_worker` に渡す ID は `fork_worker` が出した ID で、0 でなく、まだ退いていないものである。2回退かせると、使い回しで2つの子が同じ ID で動き、子の間の所有者の検査が効かなくなる。検査モードはこの前提を確かめ、破れば panic する (T5)。速いモードでは ID は何の働きもしないので、`fork_worker` は 0 を返して何もせず、`retire_worker` はいつも `Ok` を返す
+- 検査モードのヒープは、ID ごとに rc が正の生きている物体 (構築中、空ける途中、token の箱を含む) の数を持つ (`owned_by`)。数は持ち主の書き換えと rc の符号の変化に合わせて変える。確保は今の ID の数を増やし、rc が正のまま空けた箱は持ち主の数を減らす。`share` は、印を付けた物体を持ち主の数から外し、所有を移す物体の数を受け手へ移す。`transfer_back` は、裏返した物体を今の ID の数に入れ、所有者を書き換えた物体の数を `from` から今の ID へ移す。`con_at` と `reuse_in_place` は、token の箱の数を今の ID へ移す。数の表を伸ばすのは、ヒープを作るとき (基の ID 0)、`set_worker`、`fork_worker`、`share` の受け手だけである。表の外の ID の物体は数えず、数え直しがその ID の `OwnedMiscount` を返す。壊れた前置きの所有者を読んでも、大きな表を確保しないためである。数は証明に入れず、`check_invariants` が生存の列挙で数え直して確かめる (下の「報告する誤り」の `OwnedMiscount`)。数の誤りは診断の誤りで、メモリの安全には関わらないので、モデルを広げるより実行時の数え直しで足りるためである
+- `retire_worker` は、その ID の数が 0 でなければ `TransferLeak` を返し、ID を使い回さない。0 なら ID を使い回せるようにする。持ち主が退いた ID の物体は残っていないので、使い回しても所有者の検査は取り違えない。共有の物体の前置きの持ち主は読まないので、古い ID が残っていてもよい。使い回すので、表の大きさは同時に生きている ID の数で決まる
+- 数と ID の表はヒープごとに持つ。worker のスレッドを入れるときに、run の表へ移す ([マルチコア対応の設計](../future/multicore.md) の「論理的な worker ID」)
 - ID は実行文脈 `Ctx` でなく `Heap` に置く。確保のたびに物体の所有者を書くのは `Heap` だからである。`Ctx` は自分のヒープを通して ID を使う (下の「実行文脈 `Ctx`」)
 
 ## 実行文脈 `Ctx`
 
-実行文脈 `Ctx<M>` は、ヒープと、[LIR](lir.md) の「実行の文脈」の `evv` と yield の状態を持ち、同じ文書の「基本操作」の表のうち `dummy` を除く21個をメソッドにする (`dummy` は上の「ダミーの値」の `Heap::dummy`)。VM は `&mut Ctx` だけを持ち回す。ヒープと実行の状態を別の構造体にしないのは、持ち回すものが2つになり、基本操作の契約が2つの値をまたぐためである。
+実行文脈 `Ctx<M>` は、ヒープと、[LIR](lir.md) の「実行の文脈」の `evv` と yield の状態を持ち、同じ文書の「基本操作」の表のうち `dummy` を除く22個をメソッドにする (`dummy` は上の「ダミーの値」の `Heap::dummy`)。このほかに、タスクの切り替えのための `switch_task` と `evv_word` を持つ (下の「タスクの切り替え」)。VM は `&mut Ctx` だけを持ち回す。ヒープと実行の状態を別の構造体にしないのは、持ち回すものが2つになり、基本操作の契約が2つの値をまたぐためである。
 
 ### 欄
 
@@ -680,7 +719,12 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 - `Ctx` は `Send` で `Sync` でない (`Heap` と同じ)。`Control` は `Send` と `Sync` である。どちらも型の assert で固定する
 - 論理的な worker ID はヒープに置く (上の「論理的な worker ID」)
-- `heap()` は安全なメソッドで、`heap_mut()` は `unsafe fn` である。安全なコードがヒープを入れ替えると、`Ctx` の持つ語が、落としたヒープを指すためである。`heap_mut()` の前提は次の3つである。ヒープを入れ替えない (入れ替えるのは下の「回復」の `recover` だけである)。`Ctx` の持つ語 (`evv` と yield の状態の語) を手放したり書き換えたりせず、そこからたどれる物体 (`evv` の節点、evidence、入口の表) も書き換えない。`Ctx` のメソッドを次に呼ぶ前に、作っている物体を書き終える
+- `heap()` は安全なメソッドで、`heap_mut()` は `unsafe fn` である。安全なコードがヒープを入れ替えると、`Ctx` の持つ語が、落としたヒープを指すためである。`heap_mut()` の前提は次の5つである
+  - ヒープを入れ替えない (入れ替えるのは下の「回復」の `recover` だけである)
+  - `Ctx` の持つ語 (`evv` と yield の状態の語) を手放したり書き換えたりせず、そこからたどれる物体の欄も書き換えない
+  - `set_worker` を呼ばない。worker は `switch_task` で替える (下の「タスクの切り替え」)
+  - `Ctx` の持つ語から届く物体のうち、前提で rc が正であることを求める物体は、使い終わるまで `share` しない。`ev_take_state`、`ev_take_evv`、`ev_set_state` の evidence と、`ev_set_clause` の入口の表である (下の「基本操作の契約」)。どれもその場で欄を書き換える操作で、局所の物体にだけ書く。`Ctx` の持つ語から届くそのほかの物体 (evidence の状態、入口の表の閉包と、その下の物体) は `share` してよい。`share` が変えるのは、`lin` でない局所の物体の rc の符号と、受け手に移す物体の持ち主だけである (上の「`share`」)。物体の生存、種類、`lin` ビット、欄、モデルの参照の数は変えない。速いモードの受け手はいつも今の worker なので、持ち主も変わらない。`held_ok` の述語は rc の符号について2つしか求めない。rc が正の物体は持ち主が今の worker であることと、共有の物体は `lin` ビットを持たないことである。外の参照の数は rc の符号によらない。そのため、印を付けても `held_ok` は崩れない
+  - `Ctx` のメソッドを次に呼ぶ前に、作っている物体を書き終える
 - `Ctx` は `Drop` を実装しない。`evv` と yield の状態の参照は個別に手放さず、ヒープと一緒に消える。そのため、基本操作の中の `decref` で破棄処理が panic しても、`Ctx` を落とすことは安全である (下の「`unsafe` の核」の T7)
 - `check_finished()` は、`evv` が空で yield の状態がなしであることを確かめる。VM がリークの検査の前に呼ぶ ([LIR](lir.md) の「`evv` の不変条件」の最後の項)
 - `copy_string(s, max_chars) -> Result<String, Fault>` は、文字列の参照 `s` を1つ受けて手放し、中身の先頭 `max_chars` 文字を Rust の `String` に写して返す。VM が、文字列を返す入口の結果を受け取るのに使う ([VM](vm.md) の「追記」)。`unsafe fn` で、前提と事後条件 (`held_ok`、`evolved_by`) は `println` と同じである。検査モードは種類を確かめ、文字列でなければ何も写さずに `Fault::Heap(WrongKind)` を返す。写す長さを切るのは、利用者の `show` が巨大な文字列を返しても、確保量の上限の外で同じ大きさを写さないためである。文字の始まりは `str::is_char_boundary` で数え、写すのは `str::to_owned` である。どちらも vstd が仕様を持つので、下の「`unsafe` の核」の信頼の一覧は増えない
@@ -693,6 +737,10 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 空の根を読むことと、空でない根に置くことは、2つのモードとも `HeapError::RootMisuse` にして、何も変えない。REPL が根の番号を誤ったことを示すので、VM は続けられない誤りとして扱う ([VM](vm.md) の「追記」)
 - 根の語は `held_ok` の外に置く。VM のスタックのスロットと同じく、根の語が持つ参照は VM が保証する。根を `held_ok` に入れると、ほかの基本操作のすべての証明を直すことになるためである。Verus は、根の操作が `held_ok` を保つこと、`root_get` が根の語の参照を1つ増やすこと (RC のモデル)、誤った使い方では何も変えずに `RootMisuse` を返すことを証明する
 - `take_roots()` は、すべての根の語を表から取り出して返す。`Machine::close` が取り出した語を手放してから、リークを確かめる
+- `roots()` は、根の表を番号の順に読む反復子を返す。空の根は `None` である。参照の数には触れない
+- 根の値は `par` の右の子も読む。`par` の fork は、右の子を始める前に、根の語ごとに `share(r, child)` を呼んで印を付ける ([VM](vm.md) の「`par` の fork と join」)。根に置くとき (`root_set`) には印を付けない。印を fork のときに付ければ、`par` を使わないセッションの振る舞いは変わらないためである。印の付いた根は、共有の物体のまま後の入力に残る
+- 印は回復まで残るので、VM はまだ印のない根にだけ印を付ける。VM は、根の表のうち印を付け終えた先頭の根の数を `Machine` に持ち、実行をまたいで引き継ぐ。fork はその数より後ろの根にだけ `share` を呼び、数を表の長さにする。印を付け終えた根より前の番号に `root_set` で根を置けば、数をその番号まで下げる。回復の後は 0 に戻す (下の「回復」)。新しい根がなければ、fork は確保も `share` もしない。右の子の中の fork も同じ数を見る。共有の物体はどの worker から見ても共有なので、印を付け直さない
+- VM は `roots()` で印のない根の語を集めてから、`heap_mut()` を通して `share` を呼ぶ。これは上の「欄」の `heap_mut()` の前提を守る。根の語は `Ctx` の持つ語でなく、`held_ok` の外にある (上の項)。根の物体は `Ctx` の持つ語からも届くことがある (根の値を状態に持つ evidence や、根の値を捕まえた handler の節の閉包)。それでも、根から届く evidence は退いたものだけなので、前提で rc が正であることを求める物体には届かない (上の「evidence の3つの物体」)。`root_get` と回復の前提も、根の物体が共有であることを許す。根の値は `Unr` なので `lin` の物体に届かず、`share` は印を付けるだけで所有者を移さない
 - 根は回復の起点である。回復は、根から届く物体を新しいヒープに写し、根の語を写した語に書き換える (下の「回復」)
 
 ### 回復
@@ -702,6 +750,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 古いヒープを捨てると、失敗した実行が残したもの (捨てたスタックと `evv` と yield の状態の語、token の箱) がすべて消える。届かない `Foreign` の物体は、古いヒープを落とすときに破棄処理が呼ばれる (`FileIn` なら閉じる。上の「生存の列挙」)。古いヒープのページはすべて `Control` に戻るので、確保量は新しいヒープの分に戻る
 - 写すと物体の番地が変わる。失敗した実行の後に、ヒープの外でヒープの語を持つのは根だけである。`CodeBase` の定数は凍結した領域にあり、写しても変わらない。VM のタスクは実行の局所の値として捨て、Host はヒープの語を持たない
 - その場で解放して RC を数え直す形にしないのは、次の3つのためである。Verus の RC のモデルは外からの参照をただの数で持つので、捨てたスタックや `evv` の参照がなくなったことを表すには、多くのブロックと辺をまとめて消す新しい遷移が要る。速いモードでは token の箱を生きている `Data` と見分けられないので、数え直しの誤りが速いモードのメモリの安全を崩す。小さい物体のページは OS に返さないので、その場で解放しても確保量は減らない
+- 共有の物体 (rc が負) も、局所の物体として写す。回復はすべてのタスクを捨てるので、写しへの参照は根と写した親のフィールドだけである。ほかのタスクが持つ参照は残らないため、共有のまま写す理由がない。`lin` ビットの物体は、rc が負でも写さない
+- `par` の fork で印を付けた根 (上の「セッションの根」) も、回復の後は入口のタスクの ID の局所の物体になる。VM は誤りで戻る前にヒープの worker を入口のタスクの ID に戻し ([VM](vm.md) の「`par` の fork と join」)、新しいヒープはその worker ID を受け継ぐためである。VM は印を付け終えた根の数を 0 に戻すので、次の入力の fork が、根にまた印を付ける
 - 根の値は `Unr` なので、`lin` の物体、`lin` ビットの物体、token の箱には届かない。届いたら写すのをやめ、`Unrecoverable` を返す
 - 写す費用は根から届く物体の数に比例し、古いヒープを落とすときの破棄処理の走査は古いヒープのブロックの数に比例する。写している間は古いヒープと新しいヒープが同時にあり、使うメモリは古いヒープと写しを足した量になる。ほかに要るのは写像と、写している途中の物体のスタックだけで、どちらも根から届く物体の数で決まる (上の「生存の列挙」)。OS の確保が失敗すると、ほかの確保と同じく処理系が止まる
 - 回復は止める理由のビットを見ない。写すことで確保量の上限を超えて `MEMORY` のビットが立っても、写すのはやめない (下の「実行の制御」)
@@ -731,8 +781,14 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 [LIR](lir.md) の「実行の文脈」は、1つの worker で `par` と `Async` のタスクを切り替えるとき ([マルチコア対応の設計](../future/multicore.md) の「1つの worker での実行」)、実行の文脈をタスクごとに持つか、切り替えで退避するかを求める。次のように決める。
 
-- タスクは、yield の状態がなしの安全点でだけ切り替える。そのため、退避するのは `evv` だけで、`evv_get` と `evv_set` で足りる。切り替えのための基本操作は足さない
-- 1つの worker で動かす `par` の子は、`evv` を空 (`()`) にして始める。子の row は `<never e>` なので、evidence がタスクをまたがない。上の「evidence の3つの物体」が、状態の欄をその場で書き換える条件として挙げたことでもある
+- タスクは、yield の状態がなしの安全点でだけ切り替える。そのため、退避するのは `evv` だけである
+- 切り替えは `switch_task(l, worker, depth_offset)` で行う。次のタスクの `evv` の l を入れ、ヒープの worker を次のタスクの ID `worker` にし、今のタスクの深さの上限を決め直し、前のタスクの `evv` を返す。変える欄はこの3つだけである。worker の替え方は `set_worker` と同じで、検査モードでは渡した ID を使っている ID にする (上の「論理的な worker ID」)。l の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、RC に触れない。`switch_task` は [LIR](lir.md) の「基本操作」の表にない、VM のための `Ctx` の操作である
+- `evv` と worker を1つの操作で替えるのは、`Ctx` の前提が `evv` の物体の持ち主を今の worker と比べるためである。次のタスクの `evv` は次のタスクの ID の下で正しく、前のタスクの `evv` は前のタスクの ID の下で正しい。2つを別の操作で替えると、その間はどちらかの `evv` の持ち主が今の worker と合わない。そのため、VM は `heap_mut()` で `set_worker` を呼ばない
+- 今のタスクの深さの上限は、`max_depth` から次のタスクの深さの起点 `depth_offset` を引いた値である。起点が `max_depth` を超えれば 0 にする。起点は、そのタスクのスタックの底より下に数える深さで、`par` の右の子では fork のときの親の深さである ([VM](vm.md) の「スロットとスタック」)。`Ctx::new` は上限を `max_depth` にし、起点 0 のタスクを表す。`switch_task` のほかに上限を変える操作はない
+- 起点を上限から引いて `Ctx` に持つのは、安全点の速い道で起点を足さないためである。VM が安全点ごとにタスクの起点を足すと、基準のプログラムの命令の数が最大で約 1.2 % 増える。切り替えは安全点よりずっと少ないので、引く費用は切り替えの側で払う
+- `evv_word()` は今の `evv` の語を返すだけの操作で、RC に触れず、失敗しない。参照は `Ctx` に残る。`par` の fork が、子の `evv` を作る間に親の `evv` を読むための操作である。VM は返した語からたどれる節点と evidence を読むだけで、手放したり書き換えたりしないので、`heap_mut()` の前提 (上の「欄」) は崩れない。`switch_task` と同じく、[LIR](lir.md) の「基本操作」の表にない、VM のための `Ctx` の操作である
+- `evv_get` と `evv_set` で切り替えないのは、切り替えごとに `dup` と `decref` が1回ずつ増え、仕事の回数 (VM の `RunStats`) がスケジュールに依存するためである
+- `switch_task` は失敗せず、どちらのモードでも何も確かめない。`evv_set` も l の形を確かめない。速いモードの前提は、切り替えた後の文脈 (`evv` が l で、worker が `worker`) で `held_ok()` が成り立つことである。検査モードでも、この前提が成り立てば、切り替えた後の文脈は `held_ok()` を満たす。切り替える前の文脈で `held_ok()` が成り立っていれば、返す語は前のタスクの ID の下で `evv_wf` を満たし、`evv` を空にした前の文脈で呼ぶ側がその参照を1つ持つ。VM はそれを前のタスクに退避し、そのタスクに戻るときに渡す
 
 ### 実行の制御
 
@@ -744,8 +800,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | 確保量 | セッションのヒープが OS から取ったページのバイト数を持つ `AtomicUsize` |
 | 上限 (`Limits`) | `max_bytes` (確保量)、`max_depth` (深さ)、`max_evv` (`evv` の長さ)。`Control::new(limits)` で作るときに決め、変えない。既定の値は、どれも `usize::MAX` である |
 
-- 安全点の確かめは `Ctx::poll(depth) -> Result<(), Stop>` である。速い道は、`depth` が `max_depth` を超えるかと、止める語が 0 でないかの2つの比較で、どちらも偽なら `Ok` を返す。真なら `#[cold]` の関数が、速い道で読んだビットから `Stop` を決める。優先の順は `Interrupted`、`MemoryLimit`、`DepthLimit` である。ビットを読み直さないのは、その間にほかのスレッドが `clear` すると、深さの上限を超えていないのに `DepthLimit` を返すためである。VM は呼び出し、戻り、自己末尾呼び出しのジャンプで `poll` を呼ぶ ([VM](vm.md) の「呼び出しと戻り」)
-- 深さは、VM のタスクが持つスタックの語の数で数える。フレームの数で数えないのは、スタックの大きさを抑えるのが目的だからである
+- 安全点の確かめは `Ctx::poll(depth) -> Result<(), Stop>` である。速い道は、`depth` が今のタスクの深さの上限 (`max_depth` からタスクの深さの起点を引いた値。上の「タスクの切り替え」) を超えるかと、止める語が 0 でないかの2つの比較で、どちらも偽なら `Ok` を返す。真なら `#[cold]` の関数が、速い道で読んだビットから `Stop` を決める。優先の順は `Interrupted`、`MemoryLimit`、`DepthLimit` である。ビットを読み直さないのは、その間にほかのスレッドが `clear` すると、深さの上限を超えていないのに `DepthLimit` を返すためである。VM は呼び出し、戻り、自己末尾呼び出しのジャンプで `poll` を呼ぶ ([VM](vm.md) の「呼び出しと戻り」)
+- 深さは、VM のタスクが持つスタックの語の数で数える。`poll` に渡す深さはタスクの深さの起点を含まず、起点は上限の側で引いてある。フレームの数で数えないのは、スタックの大きさを抑えるのが目的だからである
 - 確保量は、確保器がページを取るときと返すときに数え (上の「確保と解放」)、上限を超えたら `MEMORY` を立てる。worker ごとのヒープの数を足し合わせた、セッション全体の量になる。凍結した塊のページも、塊が生きている間は数に入る。ページを `Frozen` に移しても数はそのまま残り、塊を落とすときに減る
 - 確保器に `Control` を渡すため、ヒープの確保器が `Arc<Control>` を持つ。`Heap::with_control(control)` は共有の `Control` でヒープを作り、`Heap::new()` は上限のない新しい `Control` で作る。`Heap::control()` がそれを返す。`Ctx::new(control, host)` は `with_control` でヒープを作る
 - `Control::interrupt()` は `INTERRUPT` を立て、`Control::clear()` はすべてのビットを下ろす。確保量が上限を下回ってもビットは下りないので、下ろすのは `clear` だけである。REPL (`eml_cli::Repl`) は、入力の始めに `clear` を呼ぶ。確保量の上限で止まった後も、`MEMORY` のビットで次の入力が止まらないようにするためである。`clear` は確保量を減らさない。確保量を戻すのは、続けられる誤りの後の回復である。回復は古いヒープのページをすべて `Control` に戻すので、上限で止まった後の入力も、新しいヒープの分から数える (上の「回復」)。回復は写す間に古いヒープと写しを同時に持つので、写すことで上限を超えることがある。そのとき立つ `MEMORY` のビットは、次の入力の始めの `clear` が下ろす
@@ -764,14 +820,15 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `mask_spec(items, seq)`: `items` の各項目 (エフェクト、残す数 n、飛ばす数 m) について、先頭から tag の合う組を数え、n 個を残して続く m 個を除いた列。i 番目の組の tag があるエフェクトに当たり、それより前に同じ tag の組が s 個あるとき、そのエフェクトの項目について n ≤ s < n + m なら、その組を除く。項目のないエフェクトの組は残す。どんな項目の並びにも定まり、同じエフェクトの項目が2つあれば先の項目を使い、m が 0 の項目は何も除かない。n と m は自然数として扱う。組が tag を持つので、ヒープを読まずに定まる
 - `held_ok()`: モデルが合っていて、`evv_wf(evv)` が成り立ち、`Ctx` の持つ4つの語 (`evv` と、yield の状態の `target`、`clause`、`cont`) の参照を `Ctx` が持っている
 
-外側の `evv` が `evv_wf` であることは、`ev_shape` に入れない。入れると2つの述語が互いに再帰し、検査モードで確かめる費用が、handler の入れ子の深さについて指数で増えるためである。外側の `evv` が正しいことは EP の不変条件として速いモードの前提にし、`ev_evv` の結果は語そのものだけを約束する。
+外側の `evv` が `evv_wf` であることは、`ev_shape` に入れない。入れると2つの述語が互いに再帰し、検査モードで確かめる費用が、handler の入れ子の深さについて指数で増えるためである。外側の `evv` が正しいことは EP の不変条件として速いモードの前提にし、`ev_evv` と `ev_take_evv` の結果は語そのものだけを約束する。
 
-どの基本操作も `held_ok()` を前提にし、保つ。VM の義務は、基本操作の合間に、`Ctx` の持つ語とそこからたどれる物体に触れないことである (`heap_mut()` の前提)。各操作の結果は、RC のモデルで物体ごとの外の参照の数がどう増減するかで書く。借用の引数 ([LIR](lir.md) の「基本操作」の表) は手放さず、ほかの引数は消費する。消費する引数の参照は、呼ぶ側が `Ctx` の参照と別に持つ。同じ物体を指す引数が並べば、その数だけ持つ。`evv_set(evv_get())` のように、`Ctx` の持つ物体を引数に渡せるようにするためである。
+どの基本操作も `held_ok()` を前提にし、保つ。`switch_task` は、切り替えた後の文脈の `held_ok()` を前提にし、それを保つ。VM の義務は、基本操作の合間に、`Ctx` の持つ語とそこからたどれる物体に触れないことである (`heap_mut()` の前提)。各操作の結果は、RC のモデルで物体ごとの外の参照の数がどう増減するかで書く。借用の引数 ([LIR](lir.md) の「基本操作」の表) は手放さず、ほかの引数は消費する。消費する引数の参照は、呼ぶ側が `Ctx` の参照と別に持つ。同じ物体を指す引数が並べば、その数だけ持つ。`evv_set(evv_get())` のように、`Ctx` の持つ物体を引数に渡せるようにするためである。
 
 | 操作 | 前提 (速いモード) | 結果と動作 |
 |---|---|---|
 | `evv_get()` | | `evv` を `dup` して返す |
 | `evv_set(l)` | `evv_wf(l)` | `evv` を l にし、元の `evv` を手放す |
+| `switch_task(l, worker, depth_offset)` | 切り替えた後の文脈 (`evv` が l、worker が `worker`) で `held_ok()` | `evv` を l に、worker を `worker` に、今のタスクの深さの上限を `max_depth` から `depth_offset` を引いた値にし、元の `evv` を返す。RC に触れない (上の「タスクの切り替え」) |
 | `evv_push(l, e)` | `evv_wf(l)`、l の長さが `max_evv` より小さい、`ev_shape(e)` | e と同じ tag の新しい節点を返す。結果の `evv_seq` は、(tag, e) の後に `evv_seq(l)` を続けた列である |
 | `evv_mask(items, w)` | `evv_wf(w)`、どの項目についても合う組が n + m 個以上ある (`mask_spec(items, evv_seq(w))` の長さに、各エフェクトの先の項目の m を足すと、`evv_seq(w)` の長さになる) | 結果の `evv_seq` は `mask_spec(items, evv_seq(w))` である。除いた最後の節点までに残す節点を写し、その後ろは元のリストを共有する |
 | `ev_new(effect, n_ops, state, outer)` | `evv_wf(outer)`、effect が 65535 より小さい | 欄が `n_ops` 個でどれも `()` の入口の表と、それを指す tag が effect + 1 の evidence を作る |
@@ -781,6 +838,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `ev_clause(ev, op)` | `ev_shape(ev)`、op が入口の数より小さい | 入口の欄 op を `dup` して返す |
 | `ev_evv(ev)` | `ev_shape(ev)` | 外側の `evv` を `dup` して返す |
 | `ev_take_state(ev)` | `ev_shape(ev)`、ev の rc が正 | 状態を返し、欄を `()` にする |
+| `ev_take_evv(ev)` | `ev_shape(ev)`、ev の rc が正 | 外側の `evv` を返し、欄を `()` にする。入口の表と状態は変えない (上の「evidence の3つの物体」) |
 | `ev_set_state(ev, s)` | `ev_shape(ev)`、ev の rc が正、呼ぶ側が s と別に ev の参照を持つ | 状態の欄を s にし、元の状態を手放す |
 | `yielding()` | | yield 中か中断中なら 1、そうでなければ 0 |
 | `yield_status(ev)` | | [LIR](lir.md) の「基本操作」の表の 0 / 1 / 2 / 3 |
@@ -792,8 +850,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `root_get(i)` | 根 i が空でない、根の語が生きている | 根 i の語を `dup` して返す |
 | `root_set(i, v)` | 根 i が空 | v を根 i に置く。参照は根が持つ |
 
-- `ev_set_clause`、`ev_take_state`、`ev_set_state` は、書く物体の rc が正であることを前提にする。これらの操作は書き終えた物体を書くので、核の `set_field` の前提 (ほかのスレッドが読めない) は、局所であることと同じになる。後の `par` で evidence が共有になると、検査モードは `set_field` の `NotWritable` を返し、速いモードではこの前提を満たさない呼び出しになる
-- `ev_set_state` が ev の参照を s と別に求めるのは、元の状態を手放す連鎖が ev 自身に届いても、ev を空けないためである ([LIR](lir.md) の「evidence」の、状態の欄を通る輪)
+- `ev_set_clause`、`ev_take_state`、`ev_take_evv`、`ev_set_state` は、書く物体の rc が正であることを前提にする。これらの操作は書き終えた物体を書くので、核の `set_field` の前提 (ほかのスレッドが読めない) は、局所であることと同じになる。`par` の fork の `share` は、値から届く退いた evidence にしか届かないので、これらの操作が書く物体は共有にならない (上の「evidence の3つの物体」)。共有の物体を書けば、検査モードは `set_field` の `NotWritable` を返し、速いモードではこの前提を満たさない呼び出しになる
+- `ev_set_state` が ev の参照を s と別に求めるのは、元の状態を手放す連鎖が ev 自身に届いても、ev を空けないためである。EP が出すコードでは、状態は退いた evidence にしか届かないので (上の「evidence の3つの物体」)、連鎖は走っている ev に届かない。契約は、この不変条件がなくても ev を空けない形にしてある
 - `ev_new` は入口の数を引数で受ける。VM とネイティブのコードは、エフェクトの操作の数をコードの定数として持つためである
 - evidence (3語) と節点 (2語) は、`field` と `set_field` で読み書きする。速いモードで1回の読み込みで済むためである。入口の表は、欄が 255 個以上なら先頭に数の語があるので (上の「ヘッダ」)、`scanned` で読み、書くときは位置を1つずらす
 - `perform` の道は `ev_lookup` と `ev_clause` である。速いモードの `ev_lookup` の1歩は、節点の `meta` を、作っておいた値 (tag が effect + 1、走査する語が2つ、`Data`、`lin` ビットなし) と1回比べ、次の節点を1回読むだけである
@@ -805,7 +863,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 核の操作と同じ分け方にする。速いモードは上の表の前提を安全の前提にし、検査モードは確かめて `Err` を返す (上の「報告する誤り」)
 - 検査モードは、各操作が読む所だけを確かめる。`ev_lookup` と `evv_mask` は、たどる節点ごとに形と tag を確かめ、`ev_*` は evidence の形を確かめる。`evv_set` はリストをたどらず、`evv_push` は l の長さを数えるためにたどる
 - 検査モードのリストをたどるループは、`max_evv` 歩を超えたら `BadEvidence` を返す。`evv_wf` が長さを `max_evv` 以下と定めるので、超えるのは前提を破ったとき (輪になったリストなど) だけである。既定の `max_evv` は `usize::MAX` なので、輪になったリストのテストは小さい上限で作る
-- 検査モードは、状態を変える前に、確かめることをすべて確かめる。たとえば `evv_push` は、確保の前に e の形と l の長さを確かめる。`Err` のとき、ヒープと、`Ctx` の `evv` と yield の状態は変わらない。`ev_evv`、`ev_clause`、`ev_take_state`、`ev_set_clause`、`ev_lookup`、`ev_set_state` は例外で、`Err` を返す前に構築中の物体を書き終えて生きている物体にすることがあり、ヒープはその点だけ変わりうる。仕事の回数は、`ev_lookup` がたどった分だけ増えうる (下の仕事の回数の項)。ただし `evv_set`、`ev_set_state`、`yield_finish` は、状態を変えた後の解放の連鎖で起きた誤りを返しうる。その後は `Ctx` を落とすことしかできない (上の「検査モードの約束」)。extern の誤りのときの約束は、下の「extern」にある
+- 検査モードは、状態を変える前に、確かめることをすべて確かめる。たとえば `evv_push` は、確保の前に e の形と l の長さを確かめる。`Err` のとき、ヒープと、`Ctx` の `evv` と yield の状態は変わらない。`ev_evv`、`ev_clause`、`ev_take_state`、`ev_take_evv`、`ev_set_clause`、`ev_lookup`、`ev_set_state` は例外で、`Err` を返す前に構築中の物体を書き終えて生きている物体にすることがあり、ヒープはその点だけ変わりうる。仕事の回数は、`ev_lookup` がたどった分だけ増えうる (下の仕事の回数の項)。ただし `evv_set`、`ev_set_state`、`yield_finish` は、状態を変えた後の解放の連鎖で起きた誤りを返しうる。その後は `Ctx` を落とすことしかできない (上の「検査モードの約束」)。extern の誤りのときの約束は、下の「extern」にある
 - 検査モードの `evv_mask` は、確保の前にリストをたどって確かめ、項目ごとに合う evidence が n + m 個に足りなければ `NoHandler` を返す。たどった節点の数は、たどりが通ったときだけ `evidence_steps` に足し、`Err` のときは数えない
 - モデルが合っていて `held_ok()` と表の前提が成り立てば、検査モードの基本操作は `Ok` を返し、結果は速いモードと同じになる。ただし `evv_set`、`ev_set_state`、`yield_finish` の解放の連鎖は、核の `decref` と同じく、モデルが照らさない誤りを返しうる。`evv_mask` が合う evidence の足りないときに `NoHandler` を返すことは、テストで確かめ、Verus では約束しない
 - 仕事の回数の数え方は、`heap/tests/ctx.rs` の3つのテストが固定する。
@@ -1160,12 +1218,12 @@ pub struct Spawned {
 
 ## `unsafe` の核
 
-- `unsafe` は小さい核に閉じる。核は、確保器、ヘッダとフィールドの読み書き、バイト列の読み書き、`dup`、`decref`、解放の連鎖、token の操作である。それ以外 (`share` のたどり、`release` の組み立て、生存の列挙) は核の操作を呼んで書く
+- `unsafe` は小さい核に閉じる。核は、確保器、ヘッダとフィールドの読み書き、バイト列の読み書き、`dup`、`decref`、解放の連鎖、token の操作である。それ以外 (`share` と `transfer_back` のたどり、`release` の組み立て、生存の列挙) は核の操作を呼んで書く
 - 核では SeqCst と `fence` を使わない
-- `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
+- `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `transfer_back` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
 
-Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait (既定のメソッドを含む) と `Opened`、子のプロセスの Host の型 `Stdio`、`StderrMode`、`Spawn` (作業ディレクトリを決める `dir` と、プログラムのパスを決める `program_path` を含む)、`Process`、`Spawned`、`StdHost` の子 `OsProcess` と、向きを写す `os_stdio`、受け継いだ標準出力の fd を写す `inherited_stdout`、`host_spawn` の列を要素に分ける `fields`、`StdinSlot` の `new` と、読み手を取り出す `take` と返す `put`、`StdinHandle`、`StdoutHandle`、`StderrHandle`、`Child` の `Drop` (T4)、`OpenFlags` の `new` と、印を選ぶ `flag`、立てる `raise`、下ろす `lower`、`Reader` の `new`、`fill_buf`、`consume` と buffer の残りを取り出す `take_buffered`、trait `Source` と `FileIn` と `StdinHandle` と `Child` の実装、読みの誤りに名前を付ける `fault`、書き込みの誤りで `FileOut` の buffer を捨てる `write_fault`、`exit_code`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、開けなかったパスがディレクトリかを見る `directory_error`、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` と、読みの部品 `check`、`line_part`、`read_line`、`read_all` (上の「読み手」)、テストだけである。
+Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と、ID ごとの数を数え直す `check_invariants` と `owned_by`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait (既定のメソッドを含む) と `Opened`、子のプロセスの Host の型 `Stdio`、`StderrMode`、`Spawn` (作業ディレクトリを決める `dir` と、プログラムのパスを決める `program_path` を含む)、`Process`、`Spawned`、`StdHost` の子 `OsProcess` と、向きを写す `os_stdio`、受け継いだ標準出力の fd を写す `inherited_stdout`、`host_spawn` の列を要素に分ける `fields`、`StdinSlot` の `new` と、読み手を取り出す `take` と返す `put`、`StdinHandle`、`StdoutHandle`、`StderrHandle`、`Child` の `Drop` (T4)、`OpenFlags` の `new` と、印を選ぶ `flag`、立てる `raise`、下ろす `lower`、`Reader` の `new`、`fill_buf`、`consume` と buffer の残りを取り出す `take_buffered`、trait `Source` と `FileIn` と `StdinHandle` と `Child` の実装、読みの誤りに名前を付ける `fault`、書き込みの誤りで `FileOut` の buffer を捨てる `write_fault`、`exit_code`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、開けなかったパスがディレクトリかを見る `directory_error`、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` と、読みの部品 `check`、`line_part`、`read_line`、`read_all` (上の「読み手」)、テストだけである。
 
 | # | 中身 | 理由 | Miri で確かめること |
 |---|---|---|---|
@@ -1174,7 +1232,7 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T2 | rc と前置きの atomic の読み書き。欄の権限を受け、`AtomicI32::from_ptr` と `AtomicU32::from_ptr` で Relaxed と AcqRel の操作をする。約束は、T0 の下での逐次の値である | vstd の atomic は SeqCst だけを扱う | 局所と共有の `dup` と `decref`、`is_last` の2回の読み込み、検査モードの前置きの書き換え。2つのスレッドが同じ共有の rc の欄を並行に増減し、最後の参照を見るのがちょうど1つのスレッドであること |
 | T3 | `Foreign` の物体の中身。破棄処理の表 (関数のポインタ)、`TypeId` の照らし合わせ、`drop_in_place`。`foreign_unique` が書き換えるために返すポインタも、同じ照らし合わせで型を守る | Verus は関数のポインタと `TypeId` を扱わない | 型の違う照らし合わせ、`Drop` を持つ値 (`Box`、`String`、`Vec`)、大きさ 0 の型、破棄処理が panic する場合、解放と `Heap` の破棄での破棄処理の呼び出しが1回だけであること、`foreign_unique` で借りて書き換えた値の破棄処理が1回だけであること |
 | T4 | `verus!` の外の `Drop` の実装 (`Heap`、`Pages`、`Frozen`)。`Frozen` の `Drop` は、親への `Arc` を `Arc::into_inner` のループで手放し、ページは `Pages` の `Drop` が返す。`Heap` は付けた塊の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` が生きている物体の後始末 (`finalize_all`) の後で、`#[inline(never)]` の関数に渡して手放す。`Pages` も、確保量を数える `Control` の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` がページを返して確保量を引いた後で、`#[inline(never)]` の関数に渡して手放す。`HostRef` の `Drop` も、Host の `Arc` を `#[inline(never)]` の関数に渡して手放す (上の「extern」の「Host」)。`StdinHandle` の `Drop` は、持っている読み手を Host の slot に返してから、開いた印を下ろす (上の「読み手」)。`StdoutHandle` と `StderrHandle` の `Drop` は、開いた印を下ろすだけである (上の「出力のバッファ」)。`Child` の `Drop` は、pipe を閉じてから、待っていない子を Host の `Process` で kill して待ち、誤りを捨てる (上の「子のプロセス」)。欄の後始末を展開させると、計測のプログラムのコード生成単位の分け方が変わり、速い道が展開されなくなるためである ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)。後始末の中で破棄処理が panic すると、塊の `Arc` は手放されずに漏れる (メモリの安全は崩れない)。ヒープの ghost の欄の塊の権限の写しは、`wf` で `Arc` の指す塊の権限に結ぶが、写しを使う間 `Arc` が塊のメモリを生かし続けることは Verus が確かめない | Verus は利用者の `Drop` を扱わない。中身は検証した関数を呼ぶか、`Arc` を手放すか、ハンドルを片づけるだけにする。ハンドルの片づけは、読み手を Host の slot に返すこと、開いた印を下ろすこと、pipe を閉じて Host の `Process` の `kill` と `wait` を呼び、誤りを捨てることである | T1 と T3 のテストが通る道。塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れず、残る `Arc` が鎖を生かすこと |
-| T5 | 証明に使う std の約束のうち vstd にないもの。`ptr::without_provenance_mut` (`Word::imm` が const fn のまま即値を作るため)、2つの塊が同じ塊かを `std::ptr::eq` で比べる `same_chunk` (同じ番地の塊は同じ値であると約束する。vstd は `Arc` の番地の比較に約束を持たない)、panic で止める関数 (大きさの桁あふれ、即値に収まらない `Word::imm`、不死の物体の数の桁あふれ、ページの配置の誤り、子孫でない塊を付ける `attach` の `not_a_descendant`)、`<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` の結果が辞書式の順序の spec `lex` に一致すること (上の「extern」。vstd の `assume_specification` は `cmp` を総称の形でしか受けないので、包みにする)、`core::str::from_utf8` の誤りの位置 (`Utf8Error::valid_up_to`) を返す包み `utf8_valid` の結果が、妥当なときだけ `None` で、それが vstd の `valid_utf8` に一致し、誤りの位置がバイト列の長さより前であること (`Ctx::string_decode`。vstd は検査付きの `from_utf8` に約束を持たない。位置は誤りの文言にだけ使う) | vstd の std の約束が足りない。panic の関数は値を返さないことだけを約束する | `utf8_valid` が物体の中身を借りた `&[u8]` を読むこと (1語に収まる長さ、語の境目をまたぐ長さ、大きい物体のページの後ろまで続く長さ) と、誤りの位置 (先頭、途中、末尾)。ほかは値の約束で、メモリに触れない |
+| T5 | 証明に使う std の約束のうち vstd にないもの。`ptr::without_provenance_mut` (`Word::imm` が const fn のまま即値を作るため)、2つの塊が同じ塊かを `std::ptr::eq` で比べる `same_chunk` (同じ番地の塊は同じ値であると約束する。vstd は `Arc` の番地の比較に約束を持たない)、panic で止める関数 (大きさの桁あふれ、即値に収まらない `Word::imm`、不死の物体の数の桁あふれ、論理的な worker ID の桁あふれ (`too_many_workers`)、前提を破る `retire_worker` (`bad_retire`)、ページの配置の誤り、子孫でない塊を付ける `attach` の `not_a_descendant`)、`<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` の結果が辞書式の順序の spec `lex` に一致すること (上の「extern」。vstd の `assume_specification` は `cmp` を総称の形でしか受けないので、包みにする)、`core::str::from_utf8` の誤りの位置 (`Utf8Error::valid_up_to`) を返す包み `utf8_valid` の結果が、妥当なときだけ `None` で、それが vstd の `valid_utf8` に一致し、誤りの位置がバイト列の長さより前であること (`Ctx::string_decode`。vstd は検査付きの `from_utf8` に約束を持たない。位置は誤りの文言にだけ使う) | vstd の std の約束が足りない。panic の関数は値を返さないことだけを約束する | `utf8_valid` が物体の中身を借りた `&[u8]` を読むこと (1語に収まる長さ、語の境目をまたぐ長さ、大きい物体のページの後ろまで続く長さ) と、誤りの位置 (先頭、途中、末尾)。ほかは値の約束で、メモリに触れない |
 | T6 | `global` の宣言: 64 ビットの環境、`Word`、`Header`、`PageHeader`、前置きの配置 | Verus は `global` の宣言をコンパイル時に照らす | なし |
 | T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長と、T11 の Host の呼び出し (`write_line`、`write`、`flush`、`open`、`open_write`、読み手の読みと drop、`FileOut` の書き手への書き込みと書き出しと drop、読んだバイト列の UTF-8 の確かめ、`args`、`env_var`、`stdin`、`spawn`、子の書き口への書き込みと drop、子の `wait` と `kill`) である。Host を呼ぶ前には、ヒープを整った状態にしておく。Host の中で unwind した後に残る状態は、`println` では文字列が漏れ、`FileIn.open` では開く間借りていたパスの文字列が漏れ、`FileIn` と `Child` の読みと、`FileOut` と `Child` の書き込みでは借りたハンドルが呼ぶ側に残り、`proc_spawn` では読んでいた4つの文字列が漏れ、`Heap` を落とすときの `finalize_all` が閉じる。どれもメモリの安全は崩れない。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
 | T8 | 借用の規則 (Stacked Borrows と Tree Borrows) | vstd の権限のモデルは、参照と生のポインタの借用の規則を表さない | 核の各操作を両方のモードで1回ずつ通す小さいテスト。ヒープの物体のフィールドに置いた領域の語を読み、領域の文字列から写し、`share` と解放の連鎖が領域の子で止まること。実行文脈の基本操作を1回ずつ通すこと |

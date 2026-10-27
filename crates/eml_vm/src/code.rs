@@ -38,9 +38,9 @@ pub(crate) struct Unwind {
     pub(crate) landing: Option<Slot>,
 }
 
-/// 組み込みの命令 `Finish` と `ApplyRest`。関数の命令はこの後に並ぶ。
+/// 組み込みの命令 `Finish`、`ApplyRest`、`ChildDone`。関数の命令はこの後に並ぶ。
 pub(crate) fn builtins() -> Vec<Op> {
-    let code = vec![Op::Finish, Op::ApplyRest];
+    let code = vec![Op::Finish, Op::ApplyRest, Op::ChildDone];
     debug_assert_eq!(code.len(), BUILTINS as usize);
     code
 }
@@ -59,6 +59,30 @@ pub struct CodeBase<M: Mode> {
     pub(crate) index: Index,
     /// 定数の塊のページを数える `Control`。実行のヒープと同じものである。
     pub(crate) control: Arc<Control>,
+    /// `par` の子の `evv` を作る、凍結した fork の表と末尾。
+    pub(crate) forks: Forks,
+}
+
+/// `par` の子の `evv` の凍結した部分 (docs/spec/vm.md の「`par` の fork と join」)。ロードごとに、新しく `fork$` の名前が
+/// 引けるようになったエフェクトの表を、定数と同じ凍結した塊に足す。
+pub(crate) struct Forks {
+    /// 実行時のエフェクトの番号ごとの表。読み込んだエフェクトの数だけ並ぶ。
+    pub(crate) tables: Vec<ForkTable>,
+    /// `Panic` の実行時の番号。`Panic` の evidence は末尾の1つが受け持つので、fork のたびには作らない。
+    pub(crate) panic: Option<u16>,
+    /// 子の `evv` の末尾。`Panic` の fork evidence の節点で、`Panic` の表がまだなければ `()` である。
+    pub(crate) tail: Word,
+}
+
+/// 1つのエフェクトの fork の表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForkTable {
+    /// 再開する操作を持つ。`par` の子はこのエフェクトを使えないので、子の `evv` に写さない。
+    Resumable,
+    /// never-only だが、`fork$` の名前がまだ全部は引けない。
+    Missing,
+    /// 凍結した表 `Data(tag 0)`。欄は操作ごとの即値 `&fork$E.op` である。
+    Table(Word),
 }
 
 /// 命令と、命令の位置で引く表。コード生成は関数をまたいで1つの `Tables` の末尾に書き、逆アセンブラも同じ形を読む。
@@ -179,6 +203,9 @@ pub enum CompileError {
     /// 結果が複数の値の入口の関数。入口の `ret` は値1つで、`Finish` は値を1つだけ受ける
     /// (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
     MultiValueEntry { function: String },
+    /// `par` を走らせうるプログラムで、`fork$` の関数が名前で引けない。evidence passing はそのプログラムに fork の
+    /// 関数をすべて作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`par` の fork と join」)。
+    MissingFork { function: String },
 }
 
 impl<M: Mode> CodeBase<M> {

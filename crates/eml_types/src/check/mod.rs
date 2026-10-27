@@ -766,7 +766,7 @@ fn declaration_schemes(
             declaration_problem(context, shape, &signature.generics, file, |table, own| {
                 table.closure_kinds(own.ty, arity, &[]);
                 // 引数に現れる型変数は `Unr` である。本体がないので、extern が引数をどう使うかを Kind に推論できない。
-                // 結果だけに現れる型変数 (`exit`、`MutArray.empty`) は縛らない
+                // 結果だけに現れる型変数 (`exit`、`MutArray.empty`) と、関数型の引数の最後の結果にだけ現れる型変数は縛らない
                 // (docs/spec/declarations.md の「`extern`」)
                 for var in param_type_vars(signature, arity) {
                     table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
@@ -842,7 +842,8 @@ fn declaration_schemes(
     schemes
 }
 
-/// シグネチャの一番外側の `arity` 個の矢印の引数の型に現れる型変数。row の型引数も含む。
+/// シグネチャの一番外側の `arity` 個の矢印の引数の型に現れる型変数。row の型引数も含む。関数型の引数については、
+/// 最後の結果にだけ現れる型変数を除く。
 fn param_type_vars(signature: &Signature, arity: usize) -> Vec<TypeVarId> {
     let mut vars = Vec::new();
     let mut spine = signature.ty;
@@ -850,11 +851,26 @@ fn param_type_vars(signature: &Signature, arity: usize) -> Vec<TypeVarId> {
         let TypeRefKind::Fn { param, ret, .. } = &signature.types[spine].kind else {
             break;
         };
-        eml_hir::visit_type_vars(&signature.types, *param, &mut |var| {
+        let mut collect = |var| {
             if !vars.contains(&var) {
                 vars.push(var);
             }
-        });
+        };
+        let mut callback = *param;
+        if matches!(signature.types[callback].kind, TypeRefKind::Fn { .. }) {
+            // コールバックの最後の結果は extern が受け取る値で、extern はそれを高々1回使う。
+            // そこにだけ現れる型変数は `Unr` に固定しない (docs/spec/declarations.md の「`extern`」)
+            while let TypeRefKind::Fn {
+                param, row, ret, ..
+            } = &signature.types[callback].kind
+            {
+                eml_hir::visit_type_vars(&signature.types, *param, &mut collect);
+                eml_hir::visit_row_type_vars(&signature.types, row, &mut collect);
+                callback = *ret;
+            }
+        } else {
+            eml_hir::visit_type_vars(&signature.types, callback, &mut collect);
+        }
         spine = *ret;
     }
     vars

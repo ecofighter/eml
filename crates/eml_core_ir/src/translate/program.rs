@@ -11,8 +11,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
-    Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark, OpRet, OperationInfo,
-    Prim, Repr, StructShape, Structs, TUPLE, VarInfo,
+    Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet,
+    OperationInfo, Prim, Repr, StructShape, Structs, TUPLE, VarInfo,
 };
 
 use crate::builder::FnBuilder;
@@ -447,7 +447,17 @@ impl ProgramBuilder {
                 Atom::Var(builder.param(info))
             })
             .collect();
-        let result = self.extern_call(&mut builder, hir, types, row, args, Some(at), result_type);
+        // 包む関数の本体は最後の矢印の呼び出しでないので `mask` を持たない。`mask` は包む関数を呼ぶ `apply` が持つ
+        let result = self.extern_call(
+            &mut builder,
+            hir,
+            types,
+            row,
+            args,
+            Vec::new(),
+            Some(at),
+            result_type,
+        );
         builder.terminate(Term::Return(result));
         let info = self.var_info("t", hir, types, result_type);
         // `IO` を起こす extern も、失敗すると継続を作らずに巻き戻すので yield の地点でない。包む関数は extern を呼ぶだけ
@@ -460,6 +470,8 @@ impl ProgramBuilder {
 
     /// extern の行 `ext` を呼び、型 `ty` の値を返す文を足す。`with_arg` の行は、行の結果と引数を `con` で組にする。
     /// extern は借りた配列を消費しないので、組がその配列を受け取る (docs/spec/core-ir.md の「組を返す extern」)。
+    /// `Std.Par.par` は extern の命令でなく `par` の呼び出しにし、`mask` はそれに付ける。ほかの行の `mask` は空である
+    /// (docs/spec/core-ir.md の「`par` の呼び出し」)。
     #[expect(clippy::too_many_arguments, reason = "the parts of one extern call")]
     pub(super) fn extern_call(
         &mut self,
@@ -468,9 +480,28 @@ impl ProgramBuilder {
         types: &TypeStore,
         ext: Extern,
         args: Vec<Atom>,
+        mask: Vec<MaskItem>,
         at: Option<Loc>,
         ty: TypeId,
     ) -> Atom {
+        if ext == Extern::Par {
+            let [left, right] = args[..] else {
+                unreachable!("par takes two children")
+            };
+            let pair = Ctor {
+                layout: self.tuple_layout(2),
+                tag: TUPLE,
+            };
+            let info = self.var_info("t", hir, types, ty);
+            let call = Call::Par {
+                left,
+                right,
+                pair,
+                at,
+            };
+            return Atom::Var(builder.bind(info, Rhs::Call { call, mask }));
+        }
+        debug_assert!(mask.is_empty(), "only par has a mask among the externs");
         if ext.row().with_arg.is_none() {
             let info = self.var_info("t", hir, types, ty);
             return Atom::Var(builder.bind(info, Rhs::Extern { ext, args, at }));

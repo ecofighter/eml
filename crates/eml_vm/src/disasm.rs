@@ -161,6 +161,11 @@ impl<'a> View<'a> {
             }
             Op::Finish => "finish".to_string(),
             Op::ApplyRest => "apply_rest".to_string(),
+            Op::ChildDone => "child_done".to_string(),
+            Op::Par { dst, at } => {
+                let o = ops(at);
+                format!("par s{dst} = #{}(s{}, s{})", o[2], o[0], o[1])
+            }
             Op::CallN { at } => {
                 let o = ops(at);
                 let n = o[1] as usize;
@@ -326,6 +331,7 @@ impl<'a> View<'a> {
             Op::EvLookup { dst, effect } => format!("ev_lookup s{dst}, E{effect}"),
             Op::EvClause { dst, ev, op } => format!("ev_clause s{dst}, s{ev}, op{op}"),
             Op::EvEvv { dst, ev } => format!("ev_evv s{dst}, s{ev}"),
+            Op::EvTakeEvv { dst, ev } => format!("ev_take_evv s{dst}, s{ev}"),
             Op::EvTakeState { dst, ev } => format!("ev_take_state s{dst}, s{ev}"),
             Op::EvSetState { dst, ev, s } => bin("ev_set_state", dst, ev, s),
             Op::Yielding { dst } => format!("yielding s{dst}"),
@@ -340,6 +346,7 @@ impl<'a> View<'a> {
             Op::YieldFinish { dst } => format!("yield_finish s{dst}"),
             Op::Dummy { dst } => format!("dummy s{dst}"),
             Op::RootGet { dst, root } => format!("root_get s{dst}, r{root}"),
+            Op::ChildAbort { ev, c } => format!("child_abort s{ev}, s{c}"),
             Op::RootSet { dst, at } => {
                 let o = ops(at);
                 format!("root_set s{dst}, r{}, s{}", o[0], o[1])

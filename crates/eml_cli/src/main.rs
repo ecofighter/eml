@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use clap::{Parser, Subcommand};
-use eml_cli::{Control, FsProvider, RunConfig, Session, default_limits, script_host};
+use clap::{CommandFactory, Parser, Subcommand};
+use eml_cli::{Control, FsProvider, RunConfig, Sched, Session, default_limits, script_host};
 use eml_diagnostics::{has_errors, render};
 
 mod interrupt;
@@ -28,6 +28,9 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
+        /// How tasks are scheduled: `sequential`, or `seeded:N` to preempt at points chosen by the seed N
+        #[arg(long, value_name = "sequential|seeded:N", default_value = "sequential")]
+        sched: Sched,
         file: PathBuf,
     },
     /// Start an interactive session
@@ -35,6 +38,9 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
+        /// How tasks are scheduled: `sequential`, or `seeded:N` to preempt at points chosen by the seed N
+        #[arg(long, value_name = "sequential|seeded:N", default_value = "sequential")]
+        sched: Sched,
         /// A file to load first, as with `:load`
         file: Option<PathBuf>,
     },
@@ -60,8 +66,16 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        Command::Repl { debug_heap, file } => terminal::run(debug_heap, file),
-        Command::Run { debug_heap, file } => {
+        Command::Repl {
+            debug_heap,
+            sched,
+            file,
+        } => terminal::run(debug_heap, sched, file),
+        Command::Run {
+            debug_heap,
+            sched,
+            file,
+        } => {
             // 読み込みとコンパイルの間の Ctrl-C も、OS の既定の動作でプロセスが終わらずに、この受け口が受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
@@ -71,6 +85,7 @@ fn main() -> ExitCode {
             };
             let config = RunConfig::default()
                 .with_debug_heap(debug_heap)
+                .with_sched(sched)
                 .with_control(control);
             // 警告がプログラムの出力の後に出ないように、実行の前に表示する。
             let compiled = session.compile();
@@ -110,17 +125,39 @@ fn with_run(mut argv: Vec<OsString>) -> Vec<OsString> {
 }
 
 /// `run` のファイルより後ろの引数を clap に渡さずに切り離す (docs/spec/stdlib.md の「起動」)。clap に読ませると、ファイルの直後の
-/// `--debug-heap` や `--help` や `--` をスクリプトの引数にできない。ファイルは `run` の後の、`-` で始まらない最初の引数である。
+/// `--debug-heap` や `--help` や `--` をスクリプトの引数にできない。ファイルは `run` の後の、値を取るフラグの値でない、`-` で
+/// 始まらない最初の引数である。値を取るフラグと同じ引数は次の引数も取り、`--sched=seeded:7` のような引数は自分だけを取る。
 fn split_script_args(mut argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>) {
     if argv.get(1).is_none_or(|command| command != "run") {
         return (argv, Vec::new());
     }
-    let file = argv
-        .iter()
-        .skip(2)
-        .position(|arg| !arg.to_string_lossy().starts_with('-'));
-    let tail = file.map_or_else(Vec::new, |index| argv.split_off(index + 3));
-    (argv, tail)
+    let value_flags = run_value_flags();
+    let mut index = 2;
+    while let Some(arg) = argv.get(index) {
+        let arg = arg.to_string_lossy();
+        if value_flags.iter().any(|flag| *flag == arg) {
+            index += 2;
+        } else if arg.starts_with('-') {
+            index += 1;
+        } else {
+            let tail = argv.split_off(index + 1);
+            return (argv, tail);
+        }
+    }
+    (argv, Vec::new())
+}
+
+/// `run` の値を取るフラグの長い名前 (`--sched`)。clap の定義から読むので、フラグを足しても分け方の規則を直さずに済む。
+fn run_value_flags() -> Vec<String> {
+    let cli = Cli::command();
+    let Some(run) = cli.find_subcommand("run") else {
+        return Vec::new();
+    };
+    run.get_arguments()
+        .filter(|arg| arg.get_action().takes_values())
+        .filter_map(|arg| arg.get_long())
+        .map(|long| format!("--{long}"))
+        .collect()
 }
 
 /// 入口が読めないことは、読み込みの段に入る前に使い方の誤りとして報告する。依存先が読めないことは E1026 である。

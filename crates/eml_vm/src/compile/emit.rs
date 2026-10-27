@@ -311,9 +311,9 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = match call {
                     Call::Direct(f, args) => self.call_operands(*f, args),
                     // `apply` の結果はいつも一様な1語である (docs/spec/lir.md の「関数の ABI」)
-                    Call::Apply { .. } | Call::Clause { .. } => {
+                    Call::Apply { .. } | Call::Clause { .. } | Call::Par { .. } => {
                         unreachable!(
-                            "an apply and an operation return one value (docs/spec/lir.md)"
+                            "an apply, an operation and a par return one value (docs/spec/lir.md)"
                         )
                     }
                 };
@@ -575,6 +575,31 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.apply_operands(call);
                 self.out.push(Op::Apply { dst, at });
             }
+            Rhs::Call(Call::Par {
+                left,
+                right,
+                pair,
+                at,
+            }) => {
+                // 組は2つの `tobj` の欄だけを持つので、join は欄の位置を引かずに 0 と 1 に書く
+                debug_assert!(
+                    {
+                        let shape = self.layout_ctor(*pair).shape();
+                        (shape.scanned, shape.raw) == (2, 0)
+                    },
+                    "the pair of a par has two tobj fields (docs/spec/lir.md)"
+                );
+                let left = self.atom(*left, Repr::TObj);
+                let right = self.atom(*right, Repr::TObj);
+                let operands = self
+                    .out
+                    .operands([u32::from(left), u32::from(right), pair.tag]);
+                let pc = self.out.push(Op::Par { dst, at: operands });
+                if let Some(loc) = at {
+                    let file = self.links.files[loc.file as usize];
+                    self.out.locations.push((pc, Loc { file, ..*loc }));
+                }
+            }
             Rhs::Prim(prim, args) => {
                 let row = prim.row();
                 let slots: Vec<Slot> = args
@@ -646,6 +671,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 op: op_index(*op),
             },
             Prim::EvEvv => Op::EvEvv { dst, ev: a[0] },
+            Prim::EvTakeEvv => Op::EvTakeEvv { dst, ev: a[0] },
             Prim::EvTakeState => Op::EvTakeState { dst, ev: a[0] },
             Prim::EvSetState => Op::EvSetState {
                 dst,
@@ -675,6 +701,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.out.operands([*root, u32::from(a[0])]);
                 Op::RootSet { dst, at }
             }
+            Prim::ChildAbort => Op::ChildAbort { ev: a[0], c: a[1] },
         }
     }
 

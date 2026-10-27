@@ -1,6 +1,6 @@
 -- 外側の handler の状態に内側の handler の継続をしまったまま、さらに外側の `Fail.to_result` へ中断する。継続が
--- 外側の evidence を指すので、evidence と状態は輪になる。巻き戻しが外側の handler を外すときに状態を取り出して
--- 手放し、輪を切る。
+-- 捕まえる内側の evidence は退いているので、状態から外側の evidence には届かない。巻き戻しは外側の handler を
+-- 外すときに状態を取り出して手放す。
 import Fail (Fail(..))
 
 data R =

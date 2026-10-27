@@ -1872,6 +1872,32 @@ fn arrows_with_different_masks_are_applied_apart() {
     ");
 }
 
+/// 引数がそろう `par` は extern の命令でなく `par` の呼び出しになり、最後の矢印の `mask` を持つ。結果は組の型の変数に
+/// そのまま束ねる (docs/spec/core-ir.md の「`par` の呼び出し」)。
+#[test]
+fn a_saturated_par_is_a_par_call_with_the_mask_of_its_last_arrow() {
+    let text = "import Std.Par\nimport Fail (Fail(..))\n\nfoo : (Unit -> <never e> Int) -> <Fail String | e> (Int, Int)\nfoo h = Par.par h h\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = Fail.to_result (fn () -> Fail.to_result (fn () -> foo (fn () -> Fail.fail 7)))\n  println (show r)";
+    insta::assert_snapshot!(function(&core_text_with_positions(text), "foo"), @r#"
+    fn foo(h.0: tobj) -> (,){int, int} {
+      let t.1: (,){int, int} = mask [Std.Fail.Fail] par (,) #0(h.0, h.0) @"test.em":5:9
+      return t.1
+    }
+    "#);
+}
+
+/// 部分適用の `par` は `$externN` の包む関数になり、その本体も同じ `par` の呼び出しである。本体は最後の矢印の呼び出し
+/// でないので `mask` を持たない。
+#[test]
+fn a_partially_applied_par_wraps_the_same_par_call() {
+    let text = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let p = Par.par (fn () -> 0.25)\n  let (y, m) = p (fn () -> 7)\n  println (show (y, m))";
+    insta::assert_snapshot!(function(&core_text_with_positions(text), "main$extern0"), @r#"
+    internal uniform from 0 fn main$extern0(p.0: tobj, p.1: tobj) -> (,){float, int} {
+      let t.2: (,){float, int} = par (,) #0(p.0, p.1) @"test.em":5:11
+      return t.2
+    }
+    "#);
+}
+
 /// 節の中の継続の呼び出しの `mask`。節は handle の外側の row で動くので、ふつうは `mask` が要らない。
 #[test]
 fn a_continuation_call_in_its_clause_has_no_mask() {

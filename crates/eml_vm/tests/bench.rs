@@ -3,11 +3,11 @@
 
 use std::path::{Path, PathBuf};
 
-use eml_test_support::{capture, lir, run_stats, run_stats_on, with_modules};
-use eml_vm::RunStats;
+use eml_test_support::{capture, lir, run_stats, run_stats_on, schedule_independent, with_modules};
+use eml_vm::{RunConfig, RunStats, Sched};
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 40] = [
+const PROGRAMS: [&str; 41] = [
     "apply_float",
     "apply_int",
     "byte_loop",
@@ -28,6 +28,7 @@ const PROGRAMS: [&str; 40] = [
     "nbody",
     "orders",
     "orders_by_hand",
+    "par_tree",
     "push_fold",
     "push_fold_by_hand",
     "rbtree",
@@ -241,8 +242,8 @@ fn ep_float() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 12,
-        rc_increments: 400005,
-        rc_decrements: 400013,
+        rc_increments: 400004,
+        rc_decrements: 400012,
         boxes: 100006,
         unboxes: 100004,
         allocations: 9,
@@ -1015,6 +1016,45 @@ fn fannkuch_by_hand() {
     ");
 }
 
+/// `par` の fork と join の仕事。右の子は共有になった木から新しく作り、左の子と join の後の親はその場で作り直す。
+/// 逐次の回数を固定し、2つの seed でもスケジュールによらない欄が同じことを確かめる
+/// (docs/implementation/testing.md の「重複させない」)。
+#[test]
+fn par_tree() {
+    let sequential = stats("par_tree", "8394750\n");
+    let text = std::fs::read_to_string(bench_dir().join("par_tree.em")).unwrap();
+    let program = lir(&text);
+    for seed in [1, 2026] {
+        let config = RunConfig::default()
+            .with_debug_heap(true)
+            .with_sched(Sched::Seeded(seed));
+        let (out, result) = eml_test_support::execute(&program, &config);
+        assert_eq!(out, "8394750\n", "seed {seed}: {result:?}");
+        assert_eq!(
+            schedule_independent(result.unwrap_or_else(|error| panic!("seed {seed}: {error}"))),
+            schedule_independent(sequential),
+            "seed {seed}"
+        );
+    }
+    insta::assert_debug_snapshot!(sequential, @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 7,
+        rc_increments: 0,
+        rc_decrements: 7977,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 7978,
+        reuses: 4354,
+        peak_objects: 4101,
+        peak_stack: 141,
+    }
+    ");
+}
+
 /// `var` の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。`var` で書いた版と、`MutArray` を線形に
 /// 受け渡して手で書いた版の組と、両方の出力。
 const VAR_PAIRS: [(&str, &str, &str); 2] = [
@@ -1158,6 +1198,7 @@ fn unwind_points() {
     nbody: 93
     orders: 12
     orders_by_hand: 12
+    par_tree: 37
     push_fold: 4
     push_fold_by_hand: 4
     rbtree: 12

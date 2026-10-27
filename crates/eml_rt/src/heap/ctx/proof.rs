@@ -617,7 +617,90 @@ impl<M: Mode> Ctx<M> {
         self.lemma_dupped_holds(s0, s, x);
         lemma_readable_kept(h1, h0, ev);
         lemma_readable_kept(h2, h1, ev);
-        lemma_state_written(h2, h0, d, ev, unit);
+        lemma_ev_field_written(h2, h0, d, ev, 1, unit);
+        lemma_listed_kept(h2, h0, d, x, self.evv, self.max_evv);
+    }
+
+    /// `ev_take_evv` の、モデルが合っている道。外側の欄は `dupable` で、`droppable` より強いので、取り出した語を
+    /// 呼ぶ側が持てる。
+    pub(super) proof fn lemma_take_evv_ok(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        ev: Word,
+        w: Word,
+        unit: Word,
+    )
+        requires
+            s0.held_ok(),
+            s0.ev_shape(ev),
+            s0.heap.rc_value(ev) > 0,
+            h1 == s0.heap.settled_heap(),
+            h1.consistent(),
+            h1.settled(),
+            ev_ok(h1, ev),
+            h1.core.dom().contains(ev.bits_spec()),
+            h1.core.state(ev.bits_spec()) == BlockState::Live,
+            forall|i: int| #[trigger] h1.scanned_word(ev, i) == s0.heap.scanned_word(ev, i),
+            h1.scanned_at(ev, 2),
+            h1.scanned_word(ev, 2) == h1.word_at(ev, 2),
+            w == h1.word_at(ev, 2),
+            unit.bits_spec() == 1,
+            self.heap.field_set(h1, ev, 2, unit),
+            self.heap.consistent(),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            w == s0.ev_outer(ev),
+            self.ev_outer(ev).bits_spec() == 1,
+            self.ev_table(ev) == s0.ev_table(ev),
+            self.ev_state(ev) == s0.ev_state(ev),
+            self.held_ok(),
+            self.holds(w),
+            self.ev_shape(ev),
+            self.evolved_by(s0, |b: usize| points(w, b), Set::empty().insert(ev.bits_spec())),
+    {
+        let h0 = s0.heap;
+        let h2 = self.heap;
+        let z = |b: usize| 0int;
+        let none = Set::<usize>::empty();
+        let x = none.insert(ev.bits_spec());
+        let d = |b: usize| points(w, b);
+        lemma_unit_bits();
+        lemma_settle_moved(h1, h0);
+        lemma_set_moved(h2, h1, ev, 2, unit);
+        lemma_moved_chain(
+            h2,
+            h1,
+            h0,
+            z,
+            |b: usize| points(h1.word_at(ev, 2), b) - points(unit, b),
+            d,
+            none,
+            x,
+            x,
+        );
+        lemma_unextended(h1, ev);
+        lemma_unextended(h2, ev);
+        assert forall|i: int| i != 2 implies #[trigger] h2.scanned_word(ev, i) == h0.scanned_word(
+            ev,
+            i,
+        ) by {
+            assert(h2.word_at(ev, i) == h1.word_at(ev, i));
+        }
+        assert(h2.scanned_word(ev, 2) == unit);
+        assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + d(
+            b,
+        ) >= self.need(seq![], b) by {
+            lemma_points_in(seq![], b);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], d, x);
+        h0.lemma_readable_scanned(ev, 2);
+        self.lemma_dupped_holds(s0, w, x);
+        lemma_readable_kept(h1, h0, ev);
+        lemma_readable_kept(h2, h1, ev);
+        lemma_ev_field_written(h2, h0, d, ev, 2, unit);
         lemma_listed_kept(h2, h0, d, x, self.evv, self.max_evv);
     }
 
@@ -763,7 +846,7 @@ impl<M: Mode> Ctx<M> {
             assert(h2.word_at(ev, i) == h1.word_at(ev, i));
         }
         assert(h3.scanned_word(ev, 1) == s);
-        lemma_state_written(h3, h0, d, ev, s);
+        lemma_ev_field_written(h3, h0, d, ev, 1, s);
         lemma_listed_kept(h3, h0, d, x, self.evv, self.max_evv);
     }
 
@@ -1911,12 +1994,14 @@ pub(super) proof fn lemma_table_kept<M: Mode>(
     }
 }
 
-/// evidence `ev` の状態の欄だけを `v` に書いた変化。`ev` は evidence のままで、節点や入口の表は書いていない。
-pub(super) proof fn lemma_state_written<M: Mode>(
+/// evidence `ev` の状態の欄 (`f` = 1) か外側の欄 (`f` = 2) だけを `v` に書いた変化。`ev` は evidence のままで、
+/// 節点や入口の表は書いていない。
+pub(super) proof fn lemma_ev_field_written<M: Mode>(
     h1: Heap<M>,
     h0: Heap<M>,
     d: spec_fn(usize) -> int,
     ev: Word,
+    f: int,
     v: Word,
 )
     requires
@@ -1927,9 +2012,11 @@ pub(super) proof fn lemma_state_written<M: Mode>(
         h1.settleable(),
         ev_ok(h0, ev),
         h1.readable(ev),
-        forall|i: int| i != 1 ==> #[trigger] h1.scanned_word(ev, i) == h0.scanned_word(ev, i),
-        h1.scanned_word(ev, 1) == v,
+        f == 1 || f == 2,
+        forall|i: int| i != f ==> #[trigger] h1.scanned_word(ev, i) == h0.scanned_word(ev, i),
+        h1.scanned_word(ev, f) == v,
         held_word(h0, v),
+        f == 2 ==> dupable(h0, v),
     ensures
         ev_ok(h1, ev),
         forall|n: Word| #[trigger]
@@ -1950,16 +2037,17 @@ pub(super) proof fn lemma_state_written<M: Mode>(
     assert(live(h0, b) && live(h1, b));
     assert(same_head(h1, h0, b));
     let t = h0.scanned_word(ev, 0);
+    let k = 3 - f;
     h1.lemma_readable_scanned(ev, 0);
     h1.lemma_readable_scanned(ev, 1);
     h1.lemma_readable_scanned(ev, 2);
-    h0.lemma_readable_scanned(ev, 2);
+    h0.lemma_readable_scanned(ev, k);
     assert(h1.scanned_word(ev, 0) == t);
-    assert(h1.scanned_word(ev, 2) == h0.scanned_word(ev, 2));
+    assert(h1.scanned_word(ev, k) == h0.scanned_word(ev, k));
     assert(t.bits_spec() != b);
     lemma_table_kept(h1, h0, d, x, t);
     lemma_word_kept(h1, h0, d, x, v);
-    lemma_word_kept(h1, h0, d, x, h0.scanned_word(ev, 2));
+    lemma_word_kept(h1, h0, d, x, h0.scanned_word(ev, k));
     assert(ev_ok(h1, ev));
     assert forall|e: Word|
         #![trigger ev_ok(h0, e)]
