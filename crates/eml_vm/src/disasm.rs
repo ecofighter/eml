@@ -363,6 +363,11 @@ impl<'a> View<'a> {
                 Extern::ALL[ops(at)[0] as usize].row().name,
                 args(at, 2)
             ),
+            Op::Async { dst, at } => format!(
+                "async s{dst} = {}({})",
+                Extern::ALL[ops(at)[0] as usize].row().name,
+                args(at, 2)
+            ),
         };
         // 手放すものも token も着地もない行は書かない。どの命令に行があるかは命令の種類で決まるので、書かなくても失うものはない
         if let Some(entry) = self.tables.unwind_at(pc + 1)

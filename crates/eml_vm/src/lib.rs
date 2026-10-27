@@ -9,6 +9,7 @@ use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, Mode, Stats};
 use crate::vm::ExecWith;
 
 mod apply;
+mod cells;
 mod code;
 mod compile;
 mod data;
@@ -586,6 +587,10 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         }
         CompileError::MissingFork { function } => (
             "a program that may run a par lacks a fork function",
+            function,
+        ),
+        CompileError::MissingEntry { function } => (
+            "a program that runs Async tasks lacks a runtime entry",
             function,
         ),
     };

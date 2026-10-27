@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 
 use eml_rt::Control;
 
+use crate::cells::{CellRef, Registry};
 use crate::monitor::Monitor;
 use crate::vm::Task;
 
@@ -220,6 +221,15 @@ pub(crate) enum TaskState {
     Waiting(JoinId),
     /// まだ始まっていない右の子。語は `()` を適用する閉包で、タスクがその参照を持つ。
     Unstarted(eml_rt::Word),
+    /// まだ動いていない `Async` の入口の `Task`。動き始めるときに、`args` の先頭 `argc` 個を入口 `function` の
+    /// フレームの slot 0.. に書く。語はタスクが参照を持つ (docs/spec/vm.md の「`Async` のタスク」)。
+    Entry {
+        function: u32,
+        args: [eml_rt::Word; 2],
+        argc: u8,
+    },
+    /// `Async.run` で、根のスコープが閉じるのをスタックを持ったまま待つ。起こされたら `Async` の命令の次から続ける。
+    WaitingCell(CellRef),
 }
 
 /// 子の終わり方 (docs/spec/vm.md の「`par` の fork と join」)。語はどれも、節点が持つ数えた参照である。
@@ -276,6 +286,10 @@ pub struct Scheduler<P: Policy> {
     pub(crate) failed: Option<crate::RuntimeError>,
     /// 根の表のうち、この番号より前の根はどれも印が付いている。`Machine` が実行をまたいで持つ値を受け取って返す。
     pub(crate) shared_roots: usize,
+    /// `Async` のタスクとスコープのセル。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
+    pub(crate) cells: Registry,
+    /// 終わった入口の `Task` のスタック。次の入口の `Task` が使い回す。
+    pub(crate) stacks: Vec<Vec<eml_rt::Word>>,
 }
 
 impl<P: Policy> Scheduler<P> {
@@ -294,6 +308,8 @@ impl<P: Policy> Scheduler<P> {
             max_depth,
             failed: None,
             shared_roots: 0,
+            cells: Registry::default(),
+            stacks: Vec::new(),
         }
     }
 

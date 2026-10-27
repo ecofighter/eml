@@ -71,6 +71,12 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
+    /// `Std.Async` の extern の行。`operands[at..]` は `Extern` と同じ [行の番号, 引数の数, 引数のスロット…] で、
+    /// 意味の核を呼んでタスクを作り、切り替える (docs/spec/vm.md の「`Async` のタスク」)。
+    Async {
+        dst: Slot,
+        at: u32,
+    },
     /// `operands[at..]` は [関数の番号, lin, 引数の数, 引数のスロット…]。`&f` の即値には引数の数を詰める。
     Closure {
         dst: Slot,

@@ -454,7 +454,13 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                         return op;
                     }
                     let at = self.out.slot_list([*ext as u32], &slots);
-                    Op::Extern { dst, at }
+                    // `Std.Async` の行はタスクを作って切り替えるので、`Scheduler` を持つ命令にする
+                    // (docs/spec/vm.md の「`Async` のタスク」)
+                    if ext.is_async() {
+                        Op::Async { dst, at }
+                    } else {
+                        Op::Extern { dst, at }
+                    }
                 });
                 let pc = self.out.push(op);
                 if let Some(loc) = at {

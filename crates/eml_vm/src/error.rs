@@ -5,6 +5,8 @@ use std::fmt;
 
 use eml_rt::{ArithFault, Fault, HeapError, Stop};
 
+use crate::cells::CellFault;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum VmFault {
     /// extern、基本操作、ヒープの操作の誤り。
@@ -43,6 +45,15 @@ impl From<HeapError> for VmFault {
 impl From<ArithFault> for VmFault {
     fn from(fault: ArithFault) -> VmFault {
         VmFault::Extern(Fault::Arith(fault))
+    }
+}
+
+impl From<CellFault> for VmFault {
+    fn from(fault: CellFault) -> VmFault {
+        match fault {
+            CellFault::Heap(error) => error.into(),
+            CellFault::Internal(what) => VmFault::Internal(what),
+        }
     }
 }
 

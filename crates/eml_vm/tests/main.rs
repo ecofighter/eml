@@ -20,4 +20,5 @@ mod run;
 mod scaling;
 mod structs;
 mod tags;
+mod tasks;
 mod variants;

@@ -1013,8 +1013,8 @@ table! {
             Poly,
             Purity::Pure,
         ),
-        // `Std.Async` の行は VM の extern の命令が実行しない。預かる引数の型変数は `Unr` に
-        // 固定せず、その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
+        // `Std.Async` の行は VM の `Async` の命令が実行する (docs/spec/vm.md の「`Async` のタスク」)。預かる
+        // 引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
         AsyncStartRaw => holding(
             &[true],
             kinded(
@@ -1131,8 +1131,8 @@ table! {
 }
 
 impl Extern {
-    /// `Std.Async` の行。VM の extern の命令はこれらの行を実行しない
-    /// (docs/spec/stdlib.md の「`Std.Async`」)。
+    /// `Std.Async` の行。VM はこれらの行を汎用の extern の命令でなく `Async` の命令で実行する
+    /// (docs/spec/vm.md の「`Async` のタスク」)。
     pub fn is_async(self) -> bool {
         matches!(
             self,

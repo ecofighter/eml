@@ -30,7 +30,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 
 ## `CodeBase` と `FnEntry`
 
-`CodeBase::new(control)` は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Program) -> Result<u32, CompileError>` はプログラムを追記して入口の関数の番号を返す (「追記」)。1つのプログラムだけを読むときも、空の表に `load` する。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError` は、スロットが `u16` に収まらない関数 (`TooManySlots`)、`Heap::freeze` の誤り (`Freeze`)、debug ビルドの一致の確かめの食い違い (`Mismatch`)、結果が複数の値の入口の関数 (`MultiValueEntry`)、`par` を走らせうるプログラムで名前が引けない `fork$` の関数 (`MissingFork`。「`par` の fork と join」) である。入口の `ret` は値1つで ([Core IR](core-ir.md) の「構造体にする型」)、`Finish` は値を1つだけ受けるためである。どれも正しいプログラムでは起きないので、`execute` は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)` が `CompileError` をその内部の誤りの `RuntimeError` にし、`execute` と、REPL の `Machine::load` の失敗 (`Outcome::Broken`) がこれを使う。
+`CodeBase::new(control)` は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Program) -> Result<u32, CompileError>` はプログラムを追記して入口の関数の番号を返す (「追記」)。1つのプログラムだけを読むときも、空の表に `load` する。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError` は、スロットが `u16` に収まらない関数 (`TooManySlots`)、`Heap::freeze` の誤り (`Freeze`)、debug ビルドの一致の確かめの食い違い (`Mismatch`)、結果が複数の値の入口の関数 (`MultiValueEntry`)、`par` を走らせうるプログラムで名前が引けない `fork$` の関数 (`MissingFork`。「`par` の fork と join」)、`Async` の命令を持つプログラムで名前が引けないランタイムの入口の関数 (`MissingEntry`。「`Async` のタスク」) である。入口の `ret` は値1つで ([Core IR](core-ir.md) の「構造体にする型」)、`Finish` は値を1つだけ受けるためである。どれも正しいプログラムでは起きないので、`execute` は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)` が `CompileError` をその内部の誤りの `RuntimeError` にし、`execute` と、REPL の `Machine::load` の失敗 (`Outcome::Broken`) がこれを使う。
 
 | 欄 | 中身 |
 |---|---|
@@ -47,6 +47,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 | `index` | 追記で番号を引き直す表。関数の名前、エフェクトの名前、ファイルのパス、文字列と整数と浮動小数の定数の中身から番号を引く (「追記」) |
 | `control` | 定数の塊のページを数える `Control`。実行のヒープと同じものである |
 | `forks` | `par` の子の `evv` の凍結した部分。実行時のエフェクトの番号ごとの fork の表と、`Panic` の fork evidence の末尾である (「`par` の fork と join」) |
+| `entries` | ランタイムが名前で呼ぶ `Std.Async.start_task` と `Std.Async.resume_task` の関数の番号。引けるまでは `None` である (「`Async` のタスク」) |
 
 - `FnEntry` は、名前、命令列の範囲 `[start, end)`、引数の数 (`arity`)、枠の大きさ (`frame_size`、スロットの数) を公開の欄に持つ。`arity` は開いた後の引数の語の数で、構造体の引数は葉の数だけ数える。クロージャの捕まえた値も引数に数える。`apply` は引数の数だけを見て、部分適用か、ちょうどか、余るかを決める。引数と結果はどれも一様な語なので、シグネチャは要らない ([LIR](lir.md) の「関数の ABI」)
 - `FnEntry` は crate の中だけの欄を2つ持つ。引数の語の Repr の並び (`params`) は、クロージャを作るときと入るときに、捕まえた値を走査する語と生の語のどちらに置くかを引くためにある ([オブジェクトモデル](object-model.md) の「クロージャ」)。結果が RC の Repr か (`ret_rc`) は、その関数を入口として実行したときに `Finish` が結果を手放すかを決める (「誤り、止めること、終わり」)
@@ -73,6 +74,7 @@ REPL (`eml_cli::Repl`) は入力ごとにプログラム全体を lowering し�
   - エフェクトの番号: 名前で引き、なければ次の番号を振る。`Program.effects` の添字は HIR の順で決まり、セッションにエフェクトを足すと後ろのエフェクトの添字がずれるためである。`evv_mask` の項目のエフェクトも引き直し、昇順に並べ直す。並べ直すときは、項目 (エフェクト、n、m) を1つの単位として動かす
   - 位置のファイルの番号: パスで引き、なければ `files` の末尾に足す
   - 配置と構造体の形の番号は、命令列を作るときに形を引くだけで、命令列に残らないので引き直さない
+  - `Async` のタスクの入口の番号 (`entries`): まだなければ、ロードごとに名前で引く。`Std.Async` は import したときだけ読み込むので、最初に `Std.Async` を読み込んだ入力の `load` で引ける。`Async` の命令を持つロードで引けなければ `MissingEntry` である (「`Async` のタスク」)
 - debug ビルドでは、すでにある名前の関数も同じ引き直しで変換し直し、前の命令列と比べる。比べるのは、逆アセンブラと同じテキストにした命令の並び (巻き戻しの表の行を含む) と、`FnEntry` の `arity`、`frame_size`、`params`、`ret_rc` である。テキストの命令の位置は関数の先頭からの位置で書き、オペランドは指す中身 (呼ぶ関数の名前、エフェクトの番号、定数の番号、位置のパス) で書く。一致しなければ `CompileError::Mismatch` を返す。比べた写しは消す
 - `RuntimeError::is_broken()` は、続けて実行できない誤り (ヒープの誤りと内部の誤りと `Unrecovered`。ヒープの誤りには、2つのモードで返す根の誤った読み書き `RootMisuse` も入る) で真を返す。この後のヒープは信用できないので、REPL は後の入力を受け付けない
 
@@ -234,6 +236,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Std.String.byte_at` と `Std.String.byte_length` も専用の命令にする。`byte_at` は `StrByteAt { dst, i, s }`、`byte_length` は `StrByteLength { dst, s }` で、どちらも文字列を借りたままにし、誤りのときも手放さない (巻き戻しの表が手放す)。バイト位置の外は `Panics` の行の `byte_at` だけが `step_failed` から `Panic` に届け、巻き戻しの地点になる。`byte_length` は `Pure` で地点を持たない。バイト単位の走査が文字列の読み出しの大半を占めるため、汎用の `Op::Extern` の行の番号の `match` を通さない
 - `Std.Bytes.get` と `Std.Bytes.length` も専用の命令にする。`get` は `BytesGet { dst, i, b }`、`length` は `BytesLength { dst, b }` で、文字列の2つの行と同じく、バイト列を借りたままにし、誤りのときも手放さない。`get` は `Panics` の行で、位置の外を `step_failed` から `Panic` に届けて巻き戻しの地点になり、`length` は `Pure` で地点を持たない。`Show Bytes` を eml で書くために Prelude が持つ `Prelude.bytes_get` と `Prelude.bytes_length` (借用の印も `Ctx` のメソッドも同じ) も、同じ2つの命令に写す
 - ほかの extern (`Float` の `compare`、文字列、表示、`println`、`FileIn`、`Fs`) は `Extern { dst, at }` の1つの命令にする。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…] で、行の番号の `match` で `Ctx` のメソッドを呼ぶ
+- `Std.Async` の10行 (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
 - VM は `Ctx` の基本操作の合間に、`Ctx` が持つ語とそこからたどれる物体に触れない (`heap_mut()` の前提)
 - `Bool`、`Ordering`、`IOErrorKind` のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを、`eml_vm` のテスト (`tags.rs`) で確かめる。VM の `Bool` と `compare` の命令がこれに頼るためである
 
@@ -330,7 +333,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Machine::run` は最初に `Control::begin_run` を呼び、終わりの欄を開いて `PREEMPT` を下ろす。止める理由のビットは下ろさない ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - `exit` で終わったときは、先に上の「`exit`」の手順で中断を片付ける
 - `vm::run` が `Stopped(Stop::Ended)` を返したら、`exit` が run を捨てたとして扱う。ほかのタスクは動かさず、片付けもしていない。書き出した後で、終わりの欄に終了コードがあることを確かめ (なければ内部の誤り `a run ended without an exit`)、その時点の数で `Finished { exit: Some(n), .. }` を作る。下の `Finish` の手順の `check_finished` と検査モードの不変条件は確かめない。残った物体は「追記」の回復で古いヒープと一緒に捨て、回復が成功したら `Finished` を返す
-- `Finish` に着いたとき、入口のタスクのほかにタスクか join が残っていれば、内部の誤り (`a task is left at the end`) にする。子の境目が開いているのに `exit` の終了コードがあっても、内部の誤り (`an exit ends a run with an open par`) にする。`par` の子は `IO` を使えないので、どちらも正しいプログラムでは起きない
+- `Finish` に着いたとき、受け箱を処理して `Async` のセルを放した後で (「`Async` のタスク」の「終わり」)、入口のタスクのほかにタスクか join が残っていれば、内部の誤り (`a task is left at the end`) にする。子の境目が開いているのに `exit` の終了コードがあっても、内部の誤り (`an exit ends a run with an open par`) にする。`par` の子は `IO` を使えないので、どちらも正しいプログラムでは起きない
 - `vm::run` は誤りを返す前に、ヒープの worker と `Ctx` の深さの上限を入口のタスクのものに戻す (「`par` の fork と join」の「子の誤り」)
 - `Finish` に着いたら、次の順に処理する
   1. 入口の関数の結果を手放す。結果の Repr が `obj` か `tobj` のときだけ `decref` する (`FnEntry` の `ret_rc`)。`run_shown` では手放さずに残し、繰り返しを抜けた直後に `Ctx::copy_string` で写して手放す。写すときの誤りは、次の書き出しの誤りより先に返す。後の手順の確かめ (リークと不変条件) は、手放した後のヒープを見る
@@ -375,13 +378,14 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Sched`、`Policy`、`Scheduler` は `eml_vm` の `sched.rs` に置く。別の crate は作らない。worker が1つの今は、ほかの crate と共有するものがないためである
 - 方針は `Sched` の値で選ぶ。`Normal`、`Sequential` (既定)、`Seeded(seed)` の3つで、`Copy` である。`FromStr` は `normal`、`sequential`、`seeded:<n>` (`n` は `u64` の10進数) を読み、ほかの綴りは誤りにする。誤りの文は ``expected `normal`, `sequential` or `seeded:<n>`, found `…` `` である。CLI の `--sched` はこれを読む ([標準ライブラリ](stdlib.md) の「起動」)。ライブラリの既定 (`Sched::default()`、`RunConfig::default()`、`Machine`) を `Sequential` にするのは、`RunStats` とベンチの数を時間に依らないものにするためである
 - `Policy` は6つのメソッドを持つ。`tick` は安全点ごとに呼び、真なら横取りを試みる。`reload` は横取りを試みた後に、次の横取りまでの予算を詰め直す。`pick` は走れるタスクの列から次のタスクを取り出す。`wake` は起こしたタスクを列に入れる。`task_added` は2つ目の仕事が走れるようになりうるとき (`Scheduler::add_task`) に呼ぶ。`switched` は動くタスクが替わったときに呼ぶ。動くタスクの番号を書くのは `Scheduler::set_current` だけで、これが `switched` を呼ぶ。`Sequential` と `Seeded` の `task_added` と `switched` は何もしない
+- `Async` の仕事 (タスクを始める仕事、再開する仕事、起こした `Async.run` の待ち) は、どの方針でも走れるタスクの列の後ろに積む (FIFO)。方針の `wake` を使うのは、join で待つ `par` の親を起こすときだけである。seed の方針の `pick` は、ほかの切り替えと同じく列から乱数で選ぶ
 - `Normal` は監視のスレッドが立てる `PREEMPT` だけで横取りする。`tick` は定数の偽で、`reload` は何もしない。`pick` は列の先頭から取り、`wake` は後ろに入れる (FIFO)
 - 監視のスレッドは `Normal` が持ち、`eml_vm` の `monitor.rs` に置く。最初の `task_added` で1本だけ始め、`Normal` を捨てるとき (run の終わりに `Scheduler` を捨てるとき。成功でも誤りでも) に止めて、終わるまで待つ。2つ目の仕事を持たない run はスレッドを作らない。REPL では入力ごとに高々1本で、入力の間には残らない。スレッドが持つのは `Arc<Control>` と、切り替えの数と止める旗を持つ共有の欄だけで、ヒープの語も `Ctx` も持たない。ビットを写さず、worker を起こさず、シグナルを届けない
 - 監視の刻みは 10 ms である。刻みごとに切り替えの数を読み、前の刻みから変わっていなければ `Control::preempt` で worker の止める語に `PREEMPT` を立てる。1つのタスクが刻みの全体を使ったときだけ横取りさせるためである。スレッドの名前は `eml-monitor`、スタックは 64 KiB である。スレッドを始められなければ、監視なしで続ける。そのときの振る舞いは FIFO の逐次と同じで、報告はしない
 - `Sequential` は横取りしない。`tick` は定数の偽なので、安全点に分岐が残らない。`pick` は列の先頭から取り、`wake` は先頭に入れる
 - `Seeded` は、seed から始める splitmix64 の擬似乱数を使う。予算は `1 + 乱数 % 16` の安全点である。`tick` は予算を1つ減らし、0 になったら真を返す。予算は横取りを試みたときにだけ詰め直すので、yield の途中で切り替えなかったときは、次の安全点でまた真を返す。`pick` は `乱数 % 列の長さ` 番目を取り、`wake` は列の後ろに入れる
 - `Scheduler<P: Policy>` は、タスクの表、動いているタスクの番号、走れるタスクの列、join の節点の表、方針、横取りの数、入口のタスクの worker ID を持つ。動いているタスクは VM の繰り返しが持ち、表のその欄は空である。切り替えでは、動いていたタスクと次のタスクを入れ替える。`Machine` が実行ごとに作り、`vm::run` が戻ると捨てる。`Scheduler`、`Task`、join の節点の `Drop` はヒープに触れない。持つ語は数えた参照で、VM のコードが1回入れて1回出す。誤りで止まった実行では、触れずに捨てる
-- タスクを切り替えるのは、安全点での横取りと、`par` の親が join で右の子を待つときと、右の子が終わるか誤りで止まったときである。切り替えは `Ctx::switch_task(次の evv, 次の worker, 次の depth_offset)` の1回で行い、RC に触れない ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)
+- タスクを切り替えるのは、安全点での横取りと、`par` の親が join で右の子を待つときと、右の子が終わるか誤りで止まったときと、`Async.run` が根のスコープを待つときと、`Async` の入口の `Task` が終わったときである (「`Async` のタスク」)。切り替えは `Ctx::switch_task(次の evv, 次の worker, 次の depth_offset)` の1回で行い、RC に触れない ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)
 - 方針は `Scheduler` の型の引数である。`Machine` は `Sched` の値で、方針ごとの `vm::run` の写しを選ぶ。逐次の写しは方針を確かめる命令を持たないので、方針のない繰り返しと同じ仕事で動く。写しごとの補助の関数の置き方は「置き場所」にある
 - 安全点では、`Ctx::poll` の後で `tick` を呼ぶ。`tick` は予算を数える方針があるので、`PREEMPT` の有無によらず毎回呼ぶ。`PREEMPT` が立っていたか `tick` が真で、`Ctx::yielding()` が 0 なら横取りを試みる。yield の途中では切り替えない。yield の途中の状態は `Ctx` が1つだけ持つためである。`PREEMPT` は、yield の途中ではビットを立てたままにして、次の yield のない安全点で拾う。横取りを試みると、走れるタスクがあればそれに切り替え、どちらでも予算を詰め直す。走れるタスクがなければ切り替える先がないので、切り替えずに戻る。横取りしたタスクは、`wake` で列に入れる
 - `PREEMPT` を拾うときは、`take_preempt` でビットを下ろしてから `Ctx::poll` をもう一度呼ぶ。2回の `poll` の間に命令がないので、深さは同じで、深さの上限の確認は正確である。間に立った `INTERRUPT` と `MEMORY` は、2回目の `poll` が返すので、切り替えより先に勝つ。ビットを下ろした後は、走れるタスクがなくても `PREEMPT` が残らない。切り替えた先の安全点も同じ手順で拾い、`tick` が真か `PREEMPT` が立っていればまた切り替える
@@ -462,6 +466,57 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 - 右の子の深さは、fork のときの親の深さ `depth_offset` から数える。`Task::depth` は `depth_offset + base + frame_size` で、スタックの容量の上限は `max_depth - depth_offset` から作る。安全点は起点を足さずに `base + frame_size` を `Ctx::poll` に渡し、`Ctx` は `max_depth - depth_offset` と比べる。上限から起点を引くのは切り替えのときの `switch_task` なので、安全点の速い道で足し算をしない ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)。比べる値は同じなので、`par` を通る再帰も `(f (), g ())` と同じく深さの上限で止まる。入口のタスクの `depth_offset` は 0 である
 - `peak_stack` は、タスクごとの `depth_offset + stack.len()` の最大である (「`RunStats`」)
+
+## `Async` のタスク
+
+`Std.Async` のタスク ([標準ライブラリ](stdlib.md) の「`Std.Async`」) は、`par` と同じく1つの worker の上で動く。タスクとスコープの意味は `eml_vm` の `cells.rs` の核が持ち、VM の命令 `Async` は核を呼んで、返った仕事を VM の `Task` にする。
+
+### 核と実行系
+
+- `cells.rs` は `std` と `eml_rt` だけを import する。VM の `Task`、`TaskId`、`Scheduler`、フレームを知らず、走らせる仕事を `Runnable` で返す。`Runnable` は、タスクを始める `Start { cell, closure }`、待っていたタスクを再開する `Resume { cell, k, wake }`、token で待つものを起こす `Token(WaitToken)` の3つである。`WaitToken` は不透明な番号で、VM は `Task` の番号に写す。ネイティブのコードが同じ核を `extern "C"` の入口から呼べるようにするためである。import の制限はテスト (`crates/eml_vm/tests/tasks.rs`) で確かめる
+- VM だけが受け持つのは、`run_raw` を呼んだ `Task` をスタックを持ったまま待たせること (`WaitingCell`)、横取りした `Task` がスタックを持つこと、誤りと `exit` で `vm::run` から誤りで出ることの3つである
+
+### セルと登録表
+
+- 登録表 `Registry` は、タスクのセルとスコープのセルを添字で持つ。添字を使い回すので、セルの番号 `CellRef` は添字と generation の組にし、放したセルの古い番号を見分ける。登録表は `Scheduler` が持ち、`vm::run` ごとに作る
+- タスクのセルは、状態 (置いた、動いている、終わった)、終わり方、加わったスコープ、論理的な worker ID、始めたタスクの ID、待ち手、ハンドルが落ちたかを持つ。終わり方は、`finish_ok` が預けた語そのもの (即値のこともある)、IO の失敗の種類と文言、`Panic` の文言のどれかである。失敗の文言は Rust の文字列で持つので、失敗の語は持ち主をまたがない。ランタイムは預かった語を写さず、中身も見ない
+- スコープのセルは、終わっていないタスクの数 `live`、終わった順で最初の失敗、待ち手、閉じたかを持つ。`live` が 0 になるとスコープは閉じる
+- `Task a` の値は、セルの番号と登録表の受け箱を持つ `TaskHandle` を中身にした、`lin` ビットの立つ `Foreign` である
+- 受け箱 `Inbox` は、ハンドルの破棄処理がセルの番号を積む知らせの列で、lock で守る。受け箱の処理 (`drain`) は lock の下で列を取り出し、lock を外してから行う。終わったセルはその場で放し、終わっていないセルには、終わったときにすぐ放す印を付ける
+- セルが持つ語は数えた参照で、VM が1回入れて1回出す。登録表の `Drop` はヒープに触れない。誤りで止まった run と、`exit` が捨てた run では、`Scheduler` と一緒に触れずに捨てる
+- ほかのタスクの ID の値を放すときは、`Ctx::switch_task((), ID, 0)` でその ID に替えて `decref` し、もう一度 `switch_task` で元の `evv`、worker、深さの起点に戻す (`with_worker`)。RC には触れない
+
+### 待ちの2種類
+
+- 継続の待ち (`Waiter::Cont`): `Async` の操作で待つタスクは VM の `Task` を持たず、継続のクロージャだけになる。再開は、新しい入口の `Task` で `resume_task` に入る。この待ちは動かせて、取り消せる。スタックを切り替えられないネイティブのコードでも、同じ手順になる (節が継続を預けて戻り、入口も戻る)
+- token の待ち (`Waiter::Token`): `Async.run` を呼んだ VM の `Task` が、スタックを持ったまま根のスコープを待つ。worker を移らず、取り消しの地点でもない。`par` の join で待つ親と同じ扱いである。`main` の `Async.run` はいつもスタックを持ったまま待つので、この待ちはなくせない
+
+### 入口の `Task`
+
+- 入口の `Task` は、ランタイムが名前で呼ぶ `Std.Async.start_task` か `Std.Async.resume_task` から始まる `Task` である。`Task::new` と同じ根のフレームを作り、深さの起点は 0 で、タスクごとに `max_depth` のすべてを使う。スタックは `Scheduler` が持つスタックの集まりから取り、`Task` が終わったら返す
+- `Task.cell` はタスクのセルである。`main` と `par` の右の子は持たない。`start_task` の入口の `Task` は新しいタスクの ID で動く。`resume_task` の入口の `Task` は、待っていたタスクのセルを持ち、その ID で動く
+- 作った入口の `Task` の状態は `Entry` で、動き始めるとき (`resume`) に引数を入口のフレームの slot 0.. に書く。`start_task` なら、その前に閉包を `transfer_back(閉包, 始めたタスクの ID)` で今の ID に戻す。`par` の join の `transfer_back` と同じ形である
+- `CodeBase` は2つの入口の関数の番号を `entries` に持つ (「追記」)。`entries` がないまま `Async` の命令に着けば、内部の誤り (`the Async entries are not loaded`) にする
+
+### 命令
+
+`Async { dst, at }` の命令は、行ごとに次のとおりに動く。命令の中に安全点を置かない。位置があれば `locations` に載せる。語の引数は、LIR の所有の規則により VM が持つ参照で、行がそれを預かる。
+
+- `start_raw g`: 今の `Task` のセルのスコープに、新しいタスクを置く。核の `start` は、`fork_worker` で新しい ID を出し、まだ印のないセッションの根と `g` に `share(.., 新しい ID)` で印を付け (「`par` の fork と join」の「fork」と同じ)、`Placed` のセルを作り、スコープの `live` を1つ増やし、ハンドルを作る。VM はハンドルを `dst` に書き、始める仕事を入口の `Task` にして列の後ろに積む
+- `run_raw g`: 根のスコープを開き、`start_raw` と同じくそこにタスクを置き、根のスコープを今の `Task` の番号の token で待つ。ハンドルを `dst` に書き、今の `Task` を `WaitingCell` にしてほかのタスクに切り替える。根のスコープが閉じて起こされると、命令の次から続ける
+- `finish_ok x`、`finish_io k m`、`finish_panic m`: 終わり方を今の `Task` に預ける。文言は `Ctx::copy_string` で写して手放す。核に渡すのは入口の `Task` の `Finish` である (下の「終わり」)
+- `run_result t` と `take_result t`: 核の `take` でハンドルを消費する。セルは終わっていなければならない (終わっていなければ内部の誤り `awaiting an unfinished task`)。ハンドルの受け箱が登録表の受け箱と違えば、前の run のハンドルである。`run_result` は、根のスコープの最初の失敗を本体の値より先にし、根のスコープを放す。値なら `transfer_back(値, タスクの ID)` で今の worker の局所の値に戻して `dst` に書く。その後でハンドルを手放し、セルを放す
+
+### 終わり
+
+- 入口の `Task` の `Finish` は、`exit` の終了コードを持っていれば、「`exit`」の 1〜3 の手順の後で `Stopped(Stop::Ended)` を返し、ほかのタスクを動かさずに run を捨てる (「誤り、止めること、終わり」)。持っていなければ、残りの `evv` をタスクの ID のまま手放し、預かった終わり方があれば核の `finish` に渡し、返った仕事を列の後ろに積んで、ほかのタスクに切り替える
+- 核の `finish` は、セルを終わったにし、失敗ならスコープの最初の失敗に書き (2つ目からは書かない)、スコープの `live` を1つ減らす。セルの待ち手を起こし、`live` が 0 ならスコープを閉じてその待ち手も起こす。ハンドルが落ちていれば、セルをすぐ放す
+- 終わり方を `finish_*` の命令で核に渡さず、入口の `Task` の `Finish` で渡すのは、待ち手が起きる前に、タスクの ID の物体を終わり方の値のほかすべて片付けるためである。`finish_*` の後にも、タスクは底の `try_all` と `start_task` の handler のフレームを外す。その間に横取りで動いた待ち手がセルを放すと、`retire_worker` がまだ生きている物体で `TransferLeak` を返す
+- セルを放すときは、受け取られなかった値をタスクの ID の下で `decref` し (`with_worker`)、`retire_worker(タスクの ID)` で ID を退かせ、generation を進めて添字を空ける。`retire_worker` の `TransferLeak` は、`par` の join と同じくヒープの誤りになる
+- セルを放すのは、ハンドルを持つ側の `take`、ハンドルを落とした知らせの処理、run の終わりの `sweep_all` の3つだけである。待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。スコープのセルを放すのは `live` が 0 のときだけで、`run_result` の `take` と `sweep_all` が放す
+- `main` の `Finish` は、受け箱の処理、残ったセルをすべて放す `sweep_all` (その間に積まれた知らせは受け箱ごと捨てる)、残ったタスクの確かめ、`check_finished`、検査モードの不変条件とリークの確かめの順に行う (「誤り、止めること、終わり」)
+- 入口の `Task` の中の実行時エラーのうち、底の `try_all` が捕まえないものは、`main` の誤りと同じく run の誤りにする
+- `Scheduler::current` を書くのは `set_current` だけで、入口の `Task` に入るときも、`Async.run` で待つ `Task` へ戻るときも、`resume` を通る
 
 ## `RunStats`
 

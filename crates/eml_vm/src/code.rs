@@ -61,6 +61,17 @@ pub struct CodeBase<M: Mode> {
     pub(crate) control: Arc<Control>,
     /// `par` の子の `evv` を作る、凍結した fork の表と末尾。
     pub(crate) forks: Forks,
+    /// ランタイムが名前で呼ぶ `Std.Async` の入口。`Std.Async` を読み込んだロードで引く。
+    pub(crate) entries: Option<AsyncEntries>,
+}
+
+/// `Async` のタスクの入口の関数の番号 (docs/spec/vm.md の「`Async` のタスク」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AsyncEntries {
+    /// `Std.Async.start_task`。
+    pub(crate) start: u32,
+    /// `Std.Async.resume_task`。
+    pub(crate) resume: u32,
 }
 
 /// `par` の子の `evv` の凍結した部分 (docs/spec/vm.md の「`par` の fork と join」)。ロードごとに、新しく `fork$` の名前が
@@ -206,6 +217,9 @@ pub enum CompileError {
     /// `par` を走らせうるプログラムで、`fork$` の関数が名前で引けない。evidence passing はそのプログラムに fork の
     /// 関数をすべて作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`par` の fork と join」)。
     MissingFork { function: String },
+    /// `Async` の命令を持つプログラムで、ランタイムが名前で呼ぶ入口の関数が引けない。translate は `Std.Async` を
+    /// 読み込んだプログラムに入口を必ず作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`Async` のタスク」)。
+    MissingEntry { function: String },
 }
 
 impl<M: Mode> CodeBase<M> {
