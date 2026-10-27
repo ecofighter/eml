@@ -2,14 +2,28 @@
 //! 使われない関数を運ばないようにする。
 
 use crate::Program;
+use eml_extern::RuntimeEntry;
 use eml_lir::FnIdx;
 
-/// `program.entry` から `Call::Direct`、`Rhs::MakeClosure`、`Atom::Fn` で届く関数だけを残し、元の順のまま
-/// `FnIdx` を振り直す。
+/// `program.entry` と、ランタイムが名前で呼ぶ関数 (`RuntimeEntry`) から `Call::Direct`、`Rhs::MakeClosure`、
+/// `Atom::Fn` で届く関数だけを残し、元の順のまま `FnIdx` を振り直す。
 pub(crate) fn retain_reachable(program: &mut Program) {
     let count = program.functions.len();
     let mut reached = vec![false; count];
+    // 入口の関数は eml のコードから呼ばれないので、名前を根にして残す (docs/spec/core-ir.md の「最適化」)
     let mut pending = vec![program.entry];
+    pending.extend(
+        program
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(_, function)| {
+                RuntimeEntry::ALL
+                    .iter()
+                    .any(|runtime| runtime.name() == function.name)
+            })
+            .map(|(index, _)| FnIdx(index as u32)),
+    );
     while let Some(function) = pending.pop() {
         if std::mem::replace(&mut reached[function.0 as usize], true) {
             continue;

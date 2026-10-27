@@ -131,3 +131,33 @@ fn f(c.0: tobj) -> tobj {
     .unwrap();
     to_lir(core);
 }
+
+/// ランタイムが名前で呼ぶ入口は、何も呼ばなくても最適化を越えて残る (docs/spec/core-ir.md の「最適化」)。
+#[test]
+fn runtime_entries_stay_when_nothing_calls_them() {
+    let lir = eml_test_support::lir("import Async\nmain : Unit -> Unit\nmain () = ()");
+    for &entry in eml_extern::RuntimeEntry::ALL {
+        assert!(
+            lir.functions
+                .iter()
+                .any(|function| function.name == entry.name()),
+            "`{}` stays",
+            entry.name()
+        );
+    }
+}
+
+/// `Std.Async` を読み込まなければ、入口は根にならない。
+#[test]
+fn runtime_entries_are_absent_without_the_import() {
+    let lir = eml_test_support::lir("main : Unit -> Unit\nmain () = ()");
+    for &entry in eml_extern::RuntimeEntry::ALL {
+        assert!(
+            lir.functions
+                .iter()
+                .all(|function| function.name != entry.name()),
+            "`{}` is absent",
+            entry.name()
+        );
+    }
+}

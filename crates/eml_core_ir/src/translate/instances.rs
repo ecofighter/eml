@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 
-use eml_extern::Extern;
+use eml_extern::{Extern, RuntimeEntry};
 use eml_hir::{
     CoreMethod, ExprId, ExprKind, FunctionId, FunctionKind, InputKind, InstanceOrigin, MethodId,
     MethodImpl, ModuleOrigin, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
@@ -829,6 +829,18 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     // (docs/spec/core-ir.md の「row のビットと instance の鍵」)
     let entry_bits = vec![true; row_vars(hir, entry).len()];
     let entry_index = collector.add(entry, entry_args, entry_bits);
+    // ランタイムが名前で呼ぶ関数は、eml のコードから呼ばれないので、入口と同じく根にする。どれも単相なので、型引数も
+    // row のビットもない (docs/spec/core-ir.md の「変換の規則」)
+    for &runtime in RuntimeEntry::ALL {
+        if let Some(function) = hir.function_by_canonical_name(runtime.name()) {
+            debug_assert!(
+                type_vars(hir, function).is_empty() && row_vars(hir, function).is_empty(),
+                "the runtime entry `{}` is monomorphic",
+                runtime.name()
+            );
+            collector.add(function, vec![], vec![]);
+        }
+    }
     // 入力の値そのものは、`show_prec` で書く型でも `show` を呼ぶ。表示を、利用者が `show` で得る文字列と同じにするため
     // である (docs/spec/core-ir.md の「REPL の入力」)
     let display = match (hir[entry].kind, typed.inputs.get(entry)) {

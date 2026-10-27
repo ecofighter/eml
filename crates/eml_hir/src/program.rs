@@ -413,6 +413,22 @@ impl Program {
         self.modules[id.module].bodies.get(id.local)
     }
 
+    /// 標準ライブラリの関数を `モジュール名.関数名` で引く。Core IR の関数の名前 (`core_name`) と同じ綴りで、ランタイムが
+    /// 名前で呼ぶ入口を探すのに使う。そのモジュールを読み込んでいなければ `None` (docs/spec/core-ir.md の「変換の規則」)。
+    pub fn function_by_canonical_name(&self, name: &str) -> Option<FunctionId> {
+        let (module, function) = name.rsplit_once('.')?;
+        self.modules.iter().find_map(|(id, data)| {
+            if data.origin != ModuleOrigin::Std || data.name != module {
+                return None;
+            }
+            data.items
+                .functions
+                .iter()
+                .find(|(_, item)| item.name == function)
+                .map(|(local, _)| ItemId::new(id, local))
+        })
+    }
+
     /// 引数がそろうまで本体が動かない引数の数。extern の関数はシグネチャの一番外側の `->` の数、ほかは等式の引数の
     /// 数である。本体のない関数 (E1005) は `None`。
     pub fn arity(&self, id: FunctionId) -> Option<usize> {

@@ -596,6 +596,32 @@ fn every_runtime_entry_is_a_monomorphic_std_function() {
     }
 }
 
+/// ランタイムが名前で呼ぶ入口は、下ろした後も宣言の名前のまま、型どおりの ABI で残る (docs/spec/core-ir.md の
+/// 「変換の規則」)。
+#[test]
+fn the_runtime_entries_have_the_declared_abi() {
+    let core = eml_test_support::core_until(
+        "import Async\nmain : Unit -> Unit\nmain () = ()",
+        eml_core_ir::Pass::Evidence,
+    );
+    for &entry in RuntimeEntry::ALL {
+        let function = core
+            .functions
+            .iter()
+            .find(|function| function.name == entry.name())
+            .unwrap_or_else(|| panic!("`{}` is lowered", entry.name()));
+        let params: Vec<Repr> = function
+            .params()
+            .iter()
+            .map(|&param| function.repr(param))
+            .collect();
+        assert_eq!(params, entry.params(), "{}", entry.name());
+        assert_eq!(function.split, None, "{}", entry.name());
+        assert!(!function.internal, "{}", entry.name());
+        assert_eq!(function.ret, Repr::Unit, "{}", entry.name());
+    }
+}
+
 #[test]
 fn every_extern_type_row_has_the_repr_of_its_type() {
     // 型検査は `Unit` を要素のないタプルにするので、`Prelude.Unit` の行は `types.rs` の要素のないタプルの規則と比べる
