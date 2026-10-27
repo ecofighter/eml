@@ -1647,7 +1647,11 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncRunRaw => {
             // 呼んだ `Task` はスタックを持ったまま、根のスコープが閉じるのを待つ
-            let root = sched.cells.open_root();
+            let parent = match task.cell {
+                Some(cell) => Some(sched.cells.scope_of(cell)?),
+                None => None,
+            };
+            let root = sched.cells.open_root(parent)?;
             let (handle, run) = start_task::<R>(ctx, task, sched, root, task.get(arg(0)))?;
             sched.cells.wait(root, WaitToken(sched.current as u64))?;
             task.set(dst, handle);
