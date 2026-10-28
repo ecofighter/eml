@@ -246,6 +246,8 @@ table! {
         Cell => type_row("Std.Async.Cell", Unr, Repr::Int),
         Task => generic_type_row("Std.Async.Task", Lin),
         Scope => type_row("Std.Async.Scope", Unr, Repr::Int),
+        // 登録表の添字の即値。Kind は中身の型によらない (docs/spec/stdlib.md の「`Std.Chan`」)
+        Chan => handle_type_row("Std.Chan.Chan"),
     }
 }
 
@@ -273,10 +275,6 @@ const fn type_row(name: &'static str, linearity: Linearity, repr: Repr) -> TypeR
 }
 
 /// 型引数を1つ持つが、その Kind に引数が効かない `Unr` のハンドル。値は登録表の添字の即値である。
-#[expect(
-    dead_code,
-    reason = "ハンドルの型の行は、標準ライブラリの宣言と一緒に足す"
-)]
 const fn handle_type_row(name: &'static str) -> TypeRow {
     TypeRow {
         params: 1,
@@ -1213,12 +1211,52 @@ table! {
             ),
         ),
         AsyncCancelMembers => row("Std.Async.cancel_members", &[Int], Unit, Purity::Effectful),
+        AsyncParkSend => holding(
+            &[false, true],
+            kinded(
+                "Std.Async.park_send",
+                &[Int, TObj],
+                &[Unr, Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
+        AsyncParkRecv => holding(
+            &[false, true],
+            kinded(
+                "Std.Async.park_recv",
+                &[Int, TObj],
+                &[Unr, Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
+        // channel の行 (docs/spec/stdlib.md の「`Std.Chan`」)。channel の引数は即値で、RC を持たない
+        ChanNewRaw => row("Std.Chan.new_raw", &[Int], Int, Purity::Effectful),
+        ChanToCell => row("Std.Chan.chan_cell", &[Int], Int, Purity::Pure),
+        ChanReserveSend => row("Std.Chan.reserve_send", &[Int, Enum], Int, Purity::Effectful),
+        ChanPushRaw => holding(
+            &[true, false],
+            kinded(
+                "Std.Chan.push_raw",
+                &[TObj, Int],
+                &[Poly, Unr],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
+        ChanReserveRecv => row("Std.Chan.reserve_recv", &[Int, Enum], Int, Purity::Effectful),
+        ChanPopRaw => kinded("Std.Chan.pop_raw", &[Int], &[Unr], TObj, Poly, Purity::Effectful),
+        ChanCloseRaw => row("Std.Chan.close_raw", &[Int], Unit, Purity::Effectful),
     }
 }
 
 impl Extern {
-    /// `Std.Async` の行。VM はこれらの行を汎用の extern の命令でなく `Async` の命令で実行する
-    /// (docs/spec/vm.md の「`Async` のタスク」)。
+    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行。VM はこれらの行を汎用の extern の命令でなく `Async` の
+    /// 命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub fn is_async(self) -> bool {
         matches!(
             self,
@@ -1249,6 +1287,14 @@ impl Extern {
                 | Extern::AsyncClaimScope
                 | Extern::AsyncParkDrain
                 | Extern::AsyncCancelMembers
+                | Extern::AsyncParkSend
+                | Extern::AsyncParkRecv
+                | Extern::ChanNewRaw
+                | Extern::ChanReserveSend
+                | Extern::ChanPushRaw
+                | Extern::ChanReserveRecv
+                | Extern::ChanPopRaw
+                | Extern::ChanCloseRaw
         )
     }
 }

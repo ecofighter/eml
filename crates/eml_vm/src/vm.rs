@@ -1661,7 +1661,7 @@ fn finish<R: Exec>(
 
 // `Async` の命令は呼び出しや戻りに比べてまれなので、`par` と同じく `step` に展開しない
 
-/// `Std.Async` の行 (docs/spec/vm.md の「`Async` のタスク」)。意味の核を呼び、返った仕事を入口の `Task` にするか、
+/// `Std.Async` と `Std.Chan` の行 (docs/spec/vm.md の「`Async` のタスク」)。意味の核を呼び、返った仕事を入口の `Task` にするか、
 /// 待っていた `Task` を実行待ちに戻す。安全点を置かない。
 #[inline(never)]
 fn async_op<R: Exec>(
@@ -1860,9 +1860,58 @@ fn async_op<R: Exec>(
             sched.cells.shield_leave(me)?;
             task.set(dst, Word::UNIT);
         }
+        ext @ (Extern::AsyncParkSend | Extern::AsyncParkRecv) => {
+            let me = current_cell(task)?;
+            let (c, k) = (task.raw(arg(0)), task.get(arg(1)));
+            let run = if ext == Extern::AsyncParkSend {
+                sched.cells.park_send(c, me, k)?
+            } else {
+                sched.cells.park_recv(c, me, k)?
+            };
+            if let Some(run) = run {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
+        // channel の行は、待ちのほかは今のタスクのセルを使わないので、タスクの外でも動く (docs/spec/vm.md の「命令」)
+        Extern::ChanNewRaw => {
+            let c = sched.cells.new_chan(ctx, task.raw(arg(0)));
+            task.set_raw(dst, c);
+        }
+        ext @ (Extern::ChanReserveSend | Extern::ChanReserveRecv) => {
+            let (c, yields) = (task.raw(arg(0)), task.raw(arg(1)) != 0);
+            let r = if ext == Extern::ChanReserveSend {
+                sched.cells.reserve_send(c, task.cell, yields)?
+            } else {
+                sched.cells.reserve_recv(c, task.cell, yields)?
+            };
+            task.set_raw(dst, r);
+        }
+        Extern::ChanPushRaw => {
+            if let Some(run) = sched
+                .cells
+                .push_raw(ctx, task.get(arg(0)), task.raw(arg(1)))?
+            {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
+        Extern::ChanPopRaw => {
+            let (x, run) = sched.cells.pop_raw(ctx, task.raw(arg(0)))?;
+            if let Some(run) = run {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, x);
+        }
+        Extern::ChanCloseRaw => {
+            for run in sched.cells.close_raw(ctx, task.raw(arg(0)))? {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside `Std.Async` reached the Async instruction",
+                "a row outside Std.Async and Std.Chan reached the Async instruction",
             ));
         }
     }
@@ -2214,6 +2263,8 @@ fn run_extern<R: Exec>(
                 ctx.println(Stream::Out, task.get(arg(0)))?;
                 task.set(dst, Word::UNIT);
             }
+            // channel の即値をそのまま `Cell` の即値にする (docs/spec/vm.md の「命令」)
+            Extern::ChanToCell => task.set_raw(dst, task.raw(arg(0))),
             Extern::Open | Extern::FileOutCreate | Extern::FileOutAppend => {
                 let open = match ext {
                     Extern::Open => Open::Read,
@@ -2727,7 +2778,15 @@ fn run_extern<R: Exec>(
             | Extern::AsyncSpendBudget
             | Extern::AsyncClaimScope
             | Extern::AsyncParkDrain
-            | Extern::AsyncCancelMembers => {
+            | Extern::AsyncCancelMembers
+            | Extern::AsyncParkSend
+            | Extern::AsyncParkRecv
+            | Extern::ChanNewRaw
+            | Extern::ChanReserveSend
+            | Extern::ChanPushRaw
+            | Extern::ChanReserveRecv
+            | Extern::ChanPopRaw
+            | Extern::ChanCloseRaw => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

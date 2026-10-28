@@ -8,4 +8,4 @@ before
 --- stderr ---
 --- runtime error ---
 panicked: boom
-  at <std>/Async.em:60:9
+  at <std>/Async.em:66:9

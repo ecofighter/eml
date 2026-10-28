@@ -236,7 +236,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Std.String.byte_at` と `Std.String.byte_length` も専用の命令にする。`byte_at` は `StrByteAt { dst, i, s }`、`byte_length` は `StrByteLength { dst, s }` で、どちらも文字列を借りたままにし、誤りのときも手放さない (巻き戻しの表が手放す)。バイト位置の外は `Panics` の行の `byte_at` だけが `step_failed` から `Panic` に届け、巻き戻しの地点になる。`byte_length` は `Pure` で地点を持たない。バイト単位の走査が文字列の読み出しの大半を占めるため、汎用の `Op::Extern` の行の番号の `match` を通さない
 - `Std.Bytes.get` と `Std.Bytes.length` も専用の命令にする。`get` は `BytesGet { dst, i, b }`、`length` は `BytesLength { dst, b }` で、文字列の2つの行と同じく、バイト列を借りたままにし、誤りのときも手放さない。`get` は `Panics` の行で、位置の外を `step_failed` から `Panic` に届けて巻き戻しの地点になり、`length` は `Pure` で地点を持たない。`Show Bytes` を eml で書くために Prelude が持つ `Prelude.bytes_get` と `Prelude.bytes_length` (借用の印も `Ctx` のメソッドも同じ) も、同じ2つの命令に写す
 - ほかの extern (`Float` の `compare`、文字列、表示、`println`、`FileIn`、`Fs`) は `Extern { dst, at }` の1つの命令にする。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…] で、行の番号の `match` で `Ctx` のメソッドを呼ぶ
-- `Std.Async` の27行 (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
+- `Std.Async` の29行と `Std.Chan` の6行 (`chan_cell` を除く) (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
 - VM は `Ctx` の基本操作の合間に、`Ctx` が持つ語とそこからたどれる物体に触れない (`heap_mut()` の前提)
 - `Bool`、`Ordering`、`IOErrorKind` のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを、`eml_vm` のテスト (`tags.rs`) で確かめる。VM の `Bool` と `compare` の命令がこれに頼るためである
 
@@ -506,11 +506,12 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 ### セルと登録表
 
-- 登録表 `Registry` はタスクのセルとスコープのセルを添字で持つ。添字を使い回すので、セルの番号 `CellRef` は添字と generation の組にし、放したセルの古い番号を見分ける。登録表は `Scheduler` が持ち、`vm::run` ごとに作る
+- 登録表 `Registry` はタスクのセル、スコープのセル、channel のセルを添字で持つ。添字を使い回すので、セルの番号 `CellRef` は添字と generation の組にし、放したセルの古い番号を見分ける。登録表は `Scheduler` が持ち、`vm::run` ごとに作る
 - 新しい添字の generation は、`Machine` が前の run から受け取る数から始める。`Scope` の即値は run をまたいで残りうるので、前の run の値が後の run のセルを指さないようにするためである。`Machine` は、誤りや `exit` で終わった run でも run の終わりごとにこの数を受け取り、回復では戻さない
 - generation は 32 ビットで、セルを放すたびに1つ進め、一周すると 0 に戻る。そのため、放したセルの古い番号と前の run の `Scope` を見分けられるのは、その添字の generation が一周するまでである ([ロードマップ](../future/roadmap.md) の「非同期」)
 - タスクのセルは、状態 (置いた、動いている、待っている、終わった)、終わり方、加わったスコープとその一覧の中の位置、今のスコープ、論理的な worker ID、始めたタスクの ID、待ち手、待っている間の継続、持ち手がないか、取り消しのビット、待ちの登録 (セルの待ち、実行待ち、時間の待ちのどれか1つ)、`shield` の深さ、操作の予算、入れ子の `run` で待っている根を持つ。操作の予算は、速い道が使う残りの回数で、タスクが始まるときと再開するときに 128 に戻し、横取りでは戻さない ([標準ライブラリ](stdlib.md) の「操作の予算」)。終わり方は、`finish_ok` が預けた語そのもの (即値のこともある)、IO の失敗の種類と文言、`Panic` の文言のどれかである。失敗の文言は Rust の文字列で持つので、失敗の語は持ち主をまたがない。ランタイムは預かった語を写さず、中身も見ない
 - 受け手の決まらない値の預かり先の操作は `Depot` にまとめる。`open` (`fork_worker`)、`publish` (`share`)、`receive` (`transfer_back`)、`discard` (預かる ID の下の `decref`)、`close` (`retire_worker`) で、タスクの結果と channel の品物が同じ道を通る
+- 登録表は channel のセルも持つ。channel のセルは、容量、閉じたか、積んだ品物 (数えた参照の語)、待っている送り手と受け手の列 (FIFO)、品物の預かり先 (`Depot`) を持つ。待ち手の列の項はいつも生きていて、`wait` がその channel のセルを指すタスクである。閉じた後は、両方の列がいつも空である (下の「channel」)
 - スコープのセルは、親のスコープ、開いたタスク (`scope` が開くスコープではそのタスク、入れ子の `run` の根では呼んだタスク、`main` の根ではなし)、取り消しの旗、閉じかけか、属するタスクの一覧、入れ子のスコープの一覧と親の一覧の中の位置、終わった順で最初の失敗、待ち手、閉じたか、開いたときの開いたタスクの `shield` の深さ、`shield` の境目の印、加わるタスクを取り消す印を持つ。終わっていないタスクの数は、属するタスクの一覧の長さである。`main` の `run` の根は親を持たず、タスクの中の入れ子の `run` の根と `scope` が開くスコープは、開いたタスクの今のスコープを親にする。タスクは終わるときに一覧から外れる。一覧が空になると、閉じかけのスコープは閉じ、加わるタスクを取り消す印を下ろし、スコープの待ち手をすべて起こす。閉じかけでないスコープの待ち手は、`park_drain` で属するタスクがなくなるのを待つタスクである。根は開くときから閉じかけで、`scope` が開くスコープは本体が終わってから閉じかけになる。一覧の項はいつも生きているセルを指す
 - 登録表は時間の輪 `timers` と、次に登録するタイマーの番号 `timer_seq` も持つ。輪は期限と番号の組からタスクのセルの番号への順序付きの表で、語を持たない (下の「時間の待ち」)
 - `Task a` の値は、セルの番号と登録表の受け箱を持つ `TaskHandle` を中身にした、`lin` ビットの立つ `Foreign` である
@@ -543,6 +544,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `ready k`: 今の `Task` のセルの状態を「待っている」にし、待ちの登録を実行待ちにして、`k` を再開する仕事を列の後ろに積む。`yield_now` が使う
 - `park_time ms k`: `ms` が正なら今の時刻を切り上げたミリ秒で読み、今の `Task` のセルを継続 `k` で `ms` ミリ秒眠らせる (下の「時間の待ち」)。すぐ再開する仕事ができれば列の後ろに積む。命令は `park` と同じく `()` を書いて終わる。`sleep_ms` が使う
 - `park_drain s k`: 今の `Task` のセルの状態を「待っている」にし、継続 `k` でスコープ `s` に属するタスクがなくなるまで待つ。`s` を閉じない。待つ前に「取り消しの届け方」の規則を確かめる。`s` が閉じているか、放したセルか前の run の値か、属するタスクがなければ、すぐ再開する仕事を列の後ろに積む。そうでなければ `k` を今のタスクのセルに置き、`s` の待ち手に積む。積む前に、もう `s` を待っていない待ち手の項と、今のタスクの古い項を除く。閉じないスコープは何度も待たれるので、取り消しで外れた項が残り続けないようにするためである。命令は `park` と同じく `()` を書いて終わる。`drain_within` が使う
+- `park_send c k` と `park_recv c k`: `park` と同じく、今の `Task` のセルの状態を「待っている」にして `parks` と `channel_waits` を数え、「取り消しの届け方」の規則を確かめる。すぐ戻れるなら `Woke` で再開する仕事を列の後ろに積み、そうでなければ継続 `k` で channel `c` の送り手か受け手の列に登録する。`park_recv` は登録の後、積めるようになれば送り手を1つ起こす (下の「channel」)。`c` が生きた channel のセルでなければ (放したセル、前の run の値、タスクかスコープのセル)、閉じて空の channel と同じく、すぐ `Woke` で再開する。命令は `park` と同じく `()` を書いて終わる。`Std.Chan` の `send` と `recv` が `Std.Async` の `chan_wait_send` と `chan_wait_recv` を通して使う
 - 再開する仕事は、待ったタスクのセルを持つ `resume_task` の入口の `Task` になり、そのタスクの ID で動く。動き始めるときにセルの状態を「動いている」に戻し、`k` に `Woke` か `Cancelled` を渡す。実行待ちから再開するときは、核の `resumed` が渡す値を決める
 - `detach t`: ハンドルを消費し、受け取った印を付けて手放す。タスクが終わっていればセルを放し、終わっていなければ持ち手のないタスクにする
 - `cancel_raw t`: `detach` と同じく手放し、終わっていないタスクには取り消しの印を付ける
@@ -555,13 +557,21 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `cancel_members s`: `s` が生きていて閉じていないスコープなら、加わるタスクを取り消す印を、属するタスクがあれば立て、なければ下ろす。印を立ててから一覧を読み、属するタスクごとに取り消しの印を付ける。`s` の旗は立てない。そうでなければ何もしない。`drain_within` が期限の後に呼ぶ。印を立てたタスクは、`s` が空になって印が下りるまで待つ
 - `claim_scope s`: 今のタスクのビットか今のスコープの旗が立っていれば、取り消しが届いたものとして `cancels` を数えて偽を `dst` に書く。`shield` は見ない。そうでなければ `cancel_scope_raw s` と同じく旗を立て、真を `dst` に書く。確かめることと旗を立てることを1つの命令で行うので、`race` の勝ちは横取りがどこに入っても1つである
 - `fail_scope_io s k m` と `fail_scope_panic s m`: 文言を `Ctx::copy_string` で写して手放す。種類 `Cancelled` でなければスコープの最初の失敗に書く (2つ目からは書かずに `dropped_failures` に数える)。種類によらず、スコープに取り消しの印を付ける
-- `run_raw` と `run_result` はトップレベルの `Async.run` のたびにタスクの外で動く。今のタスクがなければ、`run_raw` は親のない根を開く。`task_cell`、`take_result`、`detach`、`cancel_raw`、`close_scope`、`cancel_scope_raw`、`fail_scope_io`、`fail_scope_panic`、`cancel_members` も今の `Task` のセルを使わないので、タスクの外でも動く。`cancel_point` はタスクの外で偽を返す。`finish_ok`、`finish_io`、`finish_panic` はタスクの外では内部の誤り (`a task finishes twice or outside a task`) にする。残りの行 (`start_raw`、`start_in_raw`、`park`、`park_time`、`park_drain`、`ready`、`open_scope`、`leave_scope`、`shield_enter`、`shield_leave`、`spend_budget`、`claim_scope`) は今の `Task` のセルが要り、タスクの外では内部の誤り (`an Async operation runs outside a task`) にする。`run_raw` と `run_result` のほかの行は `Async` を持つ包みからしか呼ばれないので、この2つの誤りは検査を通ったプログラムからは届かない
+- `new_raw n`: 容量 `n` を `0..=u32::MAX` に収めて channel のセルを作り、`Depot::open` で預かる ID を出す。セルの番号を `Std.Chan.Chan` の即値 `(generation << 32) | index` で `dst` に書く
+- `reserve_send c yields` と `reserve_recv c yields`: タスクの中なら操作の予算を1つ使い、`yields` が真で予算が 0 になれば 3 (先に譲る) を `dst` に書く。そうでなければ、`reserve_send` は、`c` が放したセルか前の run の値か閉じた channel なら 2、積めれば 0、ほかは 1 を書く。`reserve_recv` は、放したセルか前の run の値なら 2、品物があれば 0、閉じていれば 2、ほかは 1 を書く
+- `push_raw x c`: 品物 `x` を channel の預かり先に `publish` で預け、品物の列の後ろに積んで `channel_ops` を数える。待っている受け手がいれば、先頭を1つ起こす。`c` が生きた channel のセルでなければ内部の誤りにする
+- `pop_raw c`: 品物の列の先頭を取り、預かり先から `receive` で受け取って `dst` に書き、`channel_ops` を数える。積めるようになれば送り手の先頭を1つ起こし、続けて `settle` を呼ぶ。列が空か、`c` が生きた channel のセルでなければ内部の誤りにする
+- `close_raw c`: 放したセル、前の run の値、閉じた channel には何もしない。そうでなければ閉じて、待ち手をすべて起こし、`settle` を呼ぶ (下の「channel」)
+- `push_raw` と `pop_raw` は、0 を返した `reserve_*` の直後に標準ライブラリが呼ぶ。処理系はこの順を確かめない
+- `chan_cell c` は `Async` の命令でなく extern の命令で、即値をそのまま写す
+- channel の行は、`park_send` と `park_recv` のほかは今のタスクのセルを使わないので、タスクの外でも動く (予算は使わない)
+- `run_raw` と `run_result` はトップレベルの `Async.run` のたびにタスクの外で動く。今のタスクがなければ、`run_raw` は親のない根を開く。`task_cell`、`take_result`、`detach`、`cancel_raw`、`close_scope`、`cancel_scope_raw`、`fail_scope_io`、`fail_scope_panic`、`cancel_members` も今の `Task` のセルを使わないので、タスクの外でも動く。`cancel_point` はタスクの外で偽を返す。`finish_ok`、`finish_io`、`finish_panic` はタスクの外では内部の誤り (`a task finishes twice or outside a task`) にする。残りの行 (`start_raw`、`start_in_raw`、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`ready`、`open_scope`、`leave_scope`、`shield_enter`、`shield_leave`、`spend_budget`、`claim_scope`) は今の `Task` のセルが要り、タスクの外では内部の誤り (`an Async operation runs outside a task`) にする。`run_raw` と `run_result` のほかの行は `Async` を持つ包みからしか呼ばれないので、この2つの誤りは検査を通ったプログラムからは届かない
 - `shield_enter ()` と `shield_leave ()`: 今の `Task` のセルの `shield` の深さを1つ増やすか減らす。深さが 0 のときに減らせば内部の誤りにする
 - `cancel_point ()`: 今のタスクが取り消しの地点で投げるかを、`dst` に真偽で書く。規則は「取り消しの届け方」の取り消しの地点の規則と同じである。真を返したときは `cancels` を数える。タスクの外では偽を返す
 - `spend_budget ()`: 今のタスクの操作の予算を1つ減らし、0 になったら真を `dst` に書く。再開するまで 0 のままである
 - `run_result t` と `take_result t`: 核の `take` でハンドルを消費する。ハンドルの受け箱が登録表の受け箱と違えば、前の run のハンドルで、内部の誤り (`a task handle outlived its run`) にする。`task_cell` も同じに確かめる。`Task a` のハンドルは、前の run のものを受け箱で見分ける。`Scope` の即値は generation で見分ける (「セルと登録表」)。`Task a` は `Lin` なので REPL は入力をまたいで残さず、検査を通ったプログラムではこの確かめは誤りにならない。セルは終わっていなければならない (終わっていなければ内部の誤り `awaiting an unfinished task`)。`run_result` は、根のスコープの最初の失敗を本体の値より先にし、根のスコープを放す。値なら `transfer_back(値, タスクの ID)` で今の worker の局所の値に戻して `dst` に書く。続けてハンドルに受け取った印を付けて手放し、セルを放す
 - 受け取ったのが失敗なら、今のタスクで起こし直す。`Panic` は `panic` の extern と同じく最も近い `Panic` の handler の `panicked` に届け、なければ実行時エラー `panicked: …` にする。IO の失敗は、種類と文言を持つ `Fault::Raised` を失敗した extern と同じく `failed` に渡し、`try_io` に届けるか実行時エラーにする (「`IO` と `Panic` への中断」)。文言はセルが Rust の文字列で持っていたので、今の worker で新しい文字列を作る。位置は `Async` の命令の位置で、std の中の呼び出しになる
-- `Async` は抽象エフェクトで、操作 `await_cell`、`reschedule`、`await_time`、`await_drain` は `Std.Async` の外から perform も handle もできない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。操作を処理するのは `start_task` の handler だけで、その節は継続を `park`、`ready`、`park_time`、`park_drain` のどれかに渡す。そのため、利用者の handler が待たずに継続を再開する道はなく、終わっていないセルの `take` は検査を通ったプログラムからは届かない
+- `Async` は抽象エフェクトで、6つの操作 `await_cell`、`reschedule`、`await_time`、`await_drain`、`await_send`、`await_recv` は `Std.Async` の外から perform も handle もできない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。操作を処理するのは `start_task` の handler だけで、その節は継続を `park`、`ready`、`park_time`、`park_drain`、`park_send`、`park_recv` のどれかに渡す。そのため、利用者の handler が待たずに継続を再開する道はなく、終わっていないセルの `take` は検査を通ったプログラムからは届かない
 
 ### 時間の待ち
 
@@ -577,6 +587,51 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `shield` の中の眠りは、外の取り消しで外れない。待ちを外す受け箱の処理が、取り消しの地点の規則を確かめるためである
 - run の終わりの `sweep_all` は、輪を空にする。眠ったままのタスクを残して終わる run (`exit` や誤り) があるので、輪が空であることは確かめない
 
+### channel
+
+`Std.Chan` の channel ([標準ライブラリ](stdlib.md) の「`Std.Chan`」) は、登録表のセルの3つ目の種類で、`cells.rs` の核が持つ。待ちの種類は足さず、channel を待つタスクの待ちの登録は、ほかのセルと同じセルの待ちである。
+
+- 積めるかは、積んだ品物の数が容量と待っている受け手の数の和より少ないかで決める (`items.len() < cap + receivers.len()`)。待っている受け手1人につき枠が1つ開くので、容量 0 の channel でも、受け手が待っていれば1つ積める (待ち合わせ)
+- 起こすこと (`wake`) は、列から外した待ち手の `wait` を空にし、継続を取り出して `Woke` で再開する仕事を積むことである。待ち手は生きていて、止まっていて、`wait` がその channel のセルを指していなければならず、そうでなければ内部の誤り (`a channel waiter is not waiting`) にする。起こす側は枠も品物も取っておかない。起こされたタスクは、取り消しを確かめず、譲らずに速い道をやり直す。積めないか空なら、もう一度待つ。待つときには取り消しを確かめる
+- 起こしを取りこぼさないのは、次の不変条件のためである。品物があるのに受け手が待っている状態は、受け手を起こす仕事が実行待ちにあるときにだけありうる。積めるのに送り手が待っている状態も同じである。代わりに公平さは弱く、起こされたタスクより先に速い道のタスクが品物や枠を取ることがある。そのときは列の後ろで待ち直す
+- `park_send` と `park_recv` は、止めて数え、取り消しの地点の規則を確かめる (「命令」)。`c` が生きた channel のセルでないか、閉じているか、送りで積めるか、受け取りで品物があれば、`Woke` で再開する仕事を返す。1つの worker では速い道が確かめたときの状態のまま待ちに来るので、この道は届かない守りである。そうでなければ継続をタスクのセルに置き、待ちの登録をその channel のセルの待ちにして、送り手か受け手の列の後ろに積む。`park_recv` は、登録の後に積めるようになれば送り手の先頭を1つ起こす
+- 受け箱の処理が channel を待つタスクの待ちを取り消しで外すとき (`unpark`)、そのタスクを列から外す。タスクとスコープの待ち手の項は残すが (「取り消しの届け方」)、channel の列の項はいつも生きていなければならないためである
+- `close_raw` は channel を閉じ、待っている受け手をすべて起こし、次に送り手をすべて起こし、`settle` を呼ぶ。同じ channel で受け手と送り手が同時に待つことはないので (待っている受け手がいれば積めるので、送り手は待たない)、起こす順は列ごとの FIFO だけで決まる
+- `settle` は、閉じて空になった channel の預かり先を `close` で閉じ、セルを放す。`pop_raw` と `close_raw` の後に呼ぶ
+- タスクが送り手か受け手の列にあるのは、そのタスクが止まっていて、`wait` がその channel のセルを指すときだけで、1回だけ現れる。閉じた後は、両方の列がいつも空である。channel のセルを放すのは `settle` と `sweep_all` だけである
+
+経路ごとに変わるものと起こすものは次のとおりである。
+
+| 経路 | 変わるもの | 起こすもの |
+|---|---|---|
+| `push_raw` | 品物が1つ増える | 受け手がいれば、先頭を1つ |
+| `pop_raw` | 品物が1つ減る | 積めるなら送り手の先頭を1つ。続けて `settle` |
+| `park_recv` の登録 | 受け手が1つ増える | 積めるなら送り手の先頭を1つ |
+| `park_send` の登録 | 送り手が1つ増える | なし |
+| 待っている間の取り消し (`unpark`) | その項を列から外す | 自分を `Cancelled` で |
+| 起こされた後の取り消し | なし (項はもう外れている) | 速い道をやり直す。空なら `park_*` が `Cancelled` で再開する |
+| `close_raw` | 閉じて、両方の列を空にする | 全員を `Woke` で。続けて `settle` |
+| `settle` | 閉じて空なら預かり先を閉じ、セルを放す | なし |
+| タスクの終わり | なし (待つタスクは終われない) | なし |
+| `sweep_all` | 品物を落とし、預かり先を閉じてセルを放す。`channels_swept` を1つ数える | なし |
+
+受け手の決まらない値の預かり先 (`Depot`。「セルと登録表」) は、次の所で呼ぶ。
+
+| 呼ぶ所 | 呼ぶもの | 今の worker |
+|---|---|---|
+| `finish_ok` | タスクの ID の `publish` (預ける前に) | 終わるタスク |
+| `take` | タスクの ID の `receive` | 受け取るタスク |
+| `take` の投げる道と、タスクのセルを放すとき | タスクの ID の `discard`。放すときは続けて `close` | どれでも |
+| `new_raw` | `open` | 作るタスク |
+| `push_raw` | `publish`。続けて品物の列に積む | 送り手 |
+| `pop_raw` | 列から取って `receive` | 受け手 |
+| `sweep_all` が放す channel の、残った品物ごと | `discard` | どれでも |
+| `settle` と、`sweep_all` が channel を放す終わり | `close` | どれでも |
+| `reserve_*` が 1、2、3 を返したとき、`close_raw`、待っている間に取り消された送り手 | 呼ばない (値は channel に入っていない) | — |
+
+- 預けた値は、`receive` か `discard` を呼ぶまで預かる ID の持ち物である。構造が値をタスクの局所の値に渡さずに手放す道は、どれも `discard` を通る。その道は、タスクのセルを放すときと、`sweep_all` が channel を放すときだけである
+- 誤りと `exit` で捨てた run では何もしない。登録表はヒープに触れずに落とし、回復が新しい ID の表のヒープを作る (「誤り、止めること、終わり」)
+
 ### 終わり
 
 - 入口の `Task` の `Finish` は、`exit` の終了コードを持っていなければ、残りの `evv` をタスクの ID のまま手放し、預かった終わり方があれば核の `finish` に渡し、返った仕事を列の後ろに積んで、ほかのタスクに切り替える
@@ -585,6 +640,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - 核の `finish` は次の順に進む。タスクをスコープの属するタスクの一覧から外し、セルを終わったにし、セルの待ち手を起こす。失敗なら、スコープの最初の失敗に書き (2つ目からは書かない)、スコープに取り消しの印を付ける。種類 `Cancelled` の IO の失敗は失敗に数えない。一覧が空なら、閉じかけのスコープを閉じ、加わるタスクを取り消す印を下ろし、スコープの待ち手を起こす。最後に、持ち手がなければセルをすぐ放す
 - 終わり方を `finish_*` の命令で核に渡さず、入口の `Task` の `Finish` で渡すのは、待ち手が起きる前に、タスクの ID の物体を終わり方の値のほかすべて片付けるためである。`finish_*` の後にも、タスクは底の `try_all` と `start_task` の handler のフレームを外す。その間に横取りで動いた待ち手がセルを放すと、`retire_worker` がまだ生きている物体で `TransferLeak` を返す
 - セルを放すときは、受け取られなかった値をタスクの ID の下で `Depot::discard` で落とし、`Depot::close` で ID を退かせ、generation を進めて添字を空ける。`retire_worker` の `TransferLeak` は、`par` の join と同じくヒープの誤りになる
+- `sweep_all` は channel のセルも放す。残った品物を channel の預かり先の下で落とし、ID を退かせ、`channels_swept` を1つ数える
 - セルを放すのは、ハンドルを持つ側の `take`、ハンドルを落とした知らせの処理、run の終わりの `sweep_all` の3つだけである。待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。スコープのセルを放すのは閉じた後だけで、`run_result` の `take`、`leave_scope`、`sweep_all` が放す。`take` と `leave_scope` は親の一覧から外してから放す
 - `main` の `Finish` は、受け箱の処理 (再開の仕事ができれば内部の誤り `a task is left at the end`)、残ったセルをすべて放す `sweep_all` (その間に積まれた知らせは受け箱ごと捨てる)、残ったタスクの確かめ、`check_finished`、検査モードの不変条件とリークの確かめの順に行う (「誤り、止めること、終わり」)
 - 入口の `Task` の中の実行時エラーのうち、底の `try_all` が捕まえないものは、`main` の誤りと同じく run の誤りにする。入口の `Task` が動き始めるときの誤りには、入口の関数の先頭の位置を付ける。切り替える前のタスクの命令の位置を付けると、文言がスケジュールで変わるためである
@@ -609,7 +665,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 `Machine::run`、`run_shown`、`eml_vm::execute` は、成功すると `Finished { stats, exit, preemptions }` を返す。`stats` は下の `RunStats` で、`exit` は `exit` で終わったときの終了コード (`Option<i64>`。終わりの欄から読む。「`exit`」)、`preemptions` は方針が始めた切り替えの数 (「タスクとスケジュール」) である。
 
-`RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の19で、`peak_objects` と `peak_stack` 以外が仕事の回数である。
+`RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の22で、`peak_objects` と `peak_stack` 以外が仕事の回数である。
 
 - `evidence_steps`: `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。今有効な handler の数で決まり、呼び出しの深さにはよらない。検査モードの `evv_mask` は、合う evidence が足りずに誤りを返したときは数えない ([オブジェクトモデル](object-model.md) の「速いモードと検査モード」)。出どころは `Ctx` の `CtxStats` である
 - `yields`: `yield_to` を実行した回数。すぐに再開する操作は yield しないので数えない。中断 (`yield_abort` と `exit`) は yield でないので数えない。出どころは `CtxStats` である
@@ -625,13 +681,16 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `peak_objects`: 同時に生きていたヒープの物体の数の最大 (`Heap` の `Stats` の `peak_live`)。ヒープごとのダミーの物体を1つ含む。フレームはスタックにあり、凍結した領域の物体も数えないので、どちらも含まない
 - `peak_stack`: タスクのスタックで同時に使った語の数の最大。タスクごとの `depth_offset + stack.len()` (「`par` の fork と join」の「深さ」) の最大を `Scheduler` が取る。スタックの `Vec` の長さは縮めないので、`Task::reserve` が伸ばした長さがそのままそのタスクの最大になり、タスクが動くのをやめるときと実行の終わりに `stack.len()` を読むだけで済む。タスクごとの値はそのタスクの動きだけで決まるので、スケジュールによらない。フレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの欄で見つける
 - `tasks`: `Async` のタスクのセルを作った回数。`Async.run` の本体のタスクも数える。登録表の `start` が数える (「`Async` のタスク」)
-- `parks`: `Async` の待ち (`await`)、`yield_now`、`sleep_ms`、`drain_within` が、継続をランタイムに渡した回数。相手がもう終わっていて、すぐ再開する待ちも数える。登録表の `park`、`ready`、`park_time`、`park_drain` が数える
+- `parks`: `Async` の待ち (`await`)、`yield_now`、`sleep_ms`、`drain_within`、channel の待ちが、継続をランタイムに渡した回数。相手がもう終わっていて、すぐ再開する待ちも数える。登録表の `park`、`ready`、`park_time`、`park_drain`、`park_send`、`park_recv` が数える
 - `dropped_failures`: スコープの最初の失敗より後に終わった、失敗したタスクと失敗した `scope` の本体の数。失敗の原因の数ではない。スコープは最初の失敗だけを `run` か `scope` に返すので、残りの失敗は捨てられる。`await` が捕まえずに起こし直した失敗は、それを待ったタスクの失敗になるので、数える。登録表の `finish` と `fail_scope` が数える
-- `cancels`: 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、受け箱の処理が外した待ち、取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を数える (「`Async` のタスク」の「取り消しの届け方」)。登録表が数える
+- `cancels`: 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、受け箱の処理が外した待ち、取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を数える (「`Async` のタスク」の「取り消しの届け方」)。登録表が数える
 - `timers`: `await_time` が時間の輪に登録した回数。`ms` が 0 以下の眠りと、眠る前に取り消しが見つかった眠りは数えない (「`Async` のタスク」の「時間の待ち」)。登録表の `park_time` が数える
-- `shared_objects`: `share` が rc を負にした物体の数。すでに共有の物体は数えない。`par` の fork と `Async` のタスクの始めが、渡す閉包とセッションの根に印を付けるときと、タスクの結果を `finish_ok` が預けるときに増える。出どころは `Heap` の `Stats` の `shared` である
+- `shared_objects`: `share` が rc を負にした物体の数。すでに共有の物体は数えない。`par` の fork と `Async` のタスクの始めが、渡す閉包とセッションの根に印を付けるときと、タスクの結果を `finish_ok` が預けるときと、channel の `push_raw` が品物に印を付けるときに増える。出どころは `Heap` の `Stats` の `shared` である
+- `channel_ops`: `Std.Chan` の速い道が品物を積んだ回数と取った回数の和。登録表の `push_raw` と `pop_raw` が数える
+- `channel_waits`: `send` と `recv` が継続を `park_send`、`park_recv` に渡した回数。すぐ再開する待ちも数え、`parks` にも数える
+- `channels_swept`: run の終わりの `sweep_all` が放した channel の数。閉じなかった channel と、閉じても品物の残った channel を数える。閉じて空になってその場で放した channel は数えない
 
-取り消しが届かない run では、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects` の5つの欄は、スケジュールの方針によらない。タスクの数と待ちの数と時間の登録の数はプログラムが決め、最初より後の失敗の数は最初の失敗がどれかによらず決まり、共有の印は始めるときの値とタスクの結果だけで決まるためである。
+取り消しが届かず、channel の操作も待ちもない run では、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept` の欄はスケジュールの方針によらない。channel を使う run では、待つかどうかと、送り手が参照を持ち続けた品物の裏返しが順で変わり、仕事の回数と `parks`、`shared_objects` がそれに従う。そうした run でもスケジュールによらないのは、`tasks`、`timers`、`dropped_failures`、`channels_swept` である。`tasks` と `timers` はプログラムが決め、`dropped_failures` は最初の失敗がどれかによらず、`channels_swept` は run の終わりに閉じていないか品物の残った channel の数で、どれもタスクの順で変わらない。
 
 `cancels` はスケジュールで変わる。取り消しが届くと、届いた時点からそのタスクの仕事が変わるためである。
 
@@ -654,8 +713,10 @@ VM は次の4つを守る。
 1. 自己末尾呼び出しのジャンプも安全点にする (「呼び出しと戻り」)
 2. スレッドに局所的な変数を置かない。`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)
 3. 呼び出しのスタックは `Task` が持つデータにし、Rust の再帰を使わない。`ApplyRest` と `Finish` もループの中の命令である (制約5)。タスクの切り替えも再帰しない。切り替えた先が join を完了したときの `par` の後の安全点は、切り替えを始めた側 (横取りのループか、子の終わり) が行い、取り消す子孫は作業の列でたどる
-4. VM は語をほかのスレッドに渡す経路を持たない。公開は、次の道の中で `eml_rt` の `share` と `transfer_back` を呼んで、[マルチコア対応の設計](../future/multicore.md) の「印付けの表」の扱いを通すものだけにする。`par` の fork と join (「`par` の fork と join」) と、`Async` のタスクを始める道 (登録表の `start` の `share` と、`start_task` の入口の `Task` に入るときの `transfer_back`) と、タスクの結果を受け取る道 (登録表の `take` の `transfer_back`) である (「`Async` のタスク」)。`Word` は `Send + Sync` なので型では守れず、文書の決まりにする。破った場合は、検査モードの所有者の検査が見つける
+4. VM は語をほかのスレッドに渡す経路を持たない。公開は、次の道の中で `eml_rt` の `share` と `transfer_back` を呼んで、[マルチコア対応の設計](../future/multicore.md) の「印付けの表」の扱いを通すものだけにする。`par` の fork と join (「`par` の fork と join」) と、`Async` のタスクを始める道 (登録表の `start` の `share` と、`start_task` の入口の `Task` に入るときの `transfer_back`) と、タスクの結果を受け取る道 (登録表の `take` の `transfer_back`) と、channel の送りと受け取り (登録表の `push_raw` の `share` と `pop_raw` の `transfer_back`) である (「`Async` のタスク」)。`Word` は `Send + Sync` なので型では守れず、文書の決まりにする。破った場合は、検査モードの所有者の検査が見つける
 
 安全点ごとの「生きていて所有しているスロット」の表は作らない。走っている子を安全点で取り消す形 ([マルチコア対応の設計](../future/multicore.md) の「未決の論点と将来の拡張」の `par` の子の取り消し) では、後始末にこの表を使える。スロットの割り当てが静的なので、この表は作れる。ただし、生きているスロットには借りた語もあるので、表は生存解析だけでは決まらない。Perceus の所有の状態 (verifier の所有の段と同じ計算) から作る。巻き戻しの表 (「巻き戻し」) は、同じ計算を巻き戻しの地点についてだけ行ったものである。
 
 スレッドをまたぐキューのうち、ランタイムのキュー (work stealing の deque、スケジューラの実行待ち) は、スケジューラが `eml_rt` の上に持つ Rust の構造で、数えた参照で語を持つ。deque の `par` の子は fork で印を付けた閉包で、実行待ちの待った継続には救済のほかでは印を付けない ([マルチコア対応の設計](../future/multicore.md) の「印付けの表」)。言語のキュー (channel など) も、Rust の構造が数えた参照で語を持つ形にする。その形は、[マルチコア対応の設計](../future/multicore.md) の「Rust の側が持つ語」にある。
+
+今は `Registry` を1つの worker が持ち、channel のセルもその中にある。worker のスレッドを入れるときは、登録表を run の lock の下に置き (スコープの一覧を mutex で守る予定と同じ)、送り手は lock の下で積む。待ち手を起こすときは、その項を列から外し、そのタスクのセルの持ち主の worker の受け箱へ `Wake` の知らせを送る。継続 `k` を取り出すのは持ち主である。`reserve_*` と `push_raw`、`pop_raw` の間は lock の外になるので、そのときに枠と品物の予約の数を `ChanCell` に足す。ハンドルは添字の即値のまま変わらない。ロックフリーのキューに替えるときは `ChanCell` の中身だけを替える。

@@ -9,4 +9,4 @@ caught TimedOut: too slow
 --- stderr ---
 --- runtime error ---
 too slow
-  at <std>/Async.em:60:9
+  at <std>/Async.em:66:9

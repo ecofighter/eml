@@ -66,6 +66,9 @@ probe_task t = t
 probe_scope : Async.Scope -> Async.Scope
 probe_scope s = s
 
+probe_chan : Chan.Chan Int -> Chan.Chan Int
+probe_chan c = c
+
 probe_panic : Unit -> <Panic> Int
 probe_panic () = panic \"x\"
 
@@ -97,6 +100,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Cell => "probe_cell",
         ExternType::Task => "probe_task",
         ExternType::Scope => "probe_scope",
+        ExternType::Chan => "probe_chan",
     }
 }
 
@@ -514,6 +518,9 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Async.take_result" | "Std.Async.run_result" => (&[Lin], Poly),
             "Std.Async.detach" | "Std.Async.cancel_raw" => (&[Lin], Unr),
             "Std.Async.start_in_raw" => (&[Unr, Poly], Lin),
+            "Std.Chan.push_raw" => (&[Poly, Unr], Unr),
+            "Std.Chan.pop_raw" => (&[Unr], Poly),
+            "Std.Async.park_send" | "Std.Async.park_recv" => (&[Unr, Lin], Unr),
             _ => {
                 assert!(
                     row.param_marks.iter().all(|&mark| mark == Unr),
@@ -528,10 +535,10 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     }
 }
 
-/// 表の値そのもの。引数を預かる行は `Std.Async` の13行だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
+/// 表の値そのもの。引数を預かる行は `Std.Async` の15行と `Std.Chan.push_raw` だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
 /// その印は `Unr` でない (docs/spec/declarations.md の「`extern`」)。
 #[test]
-fn only_the_async_rows_hold_an_argument() {
+fn only_the_listed_rows_hold_an_argument() {
     let holding: Vec<&str> = Extern::ALL
         .iter()
         .map(|e| e.row())
@@ -554,6 +561,9 @@ fn only_the_async_rows_hold_an_argument() {
             "Std.Async.cancel_raw",
             "Std.Async.start_in_raw",
             "Std.Async.park_drain",
+            "Std.Async.park_send",
+            "Std.Async.park_recv",
+            "Std.Chan.push_raw",
         ]
     );
     for &e in Extern::ALL {
