@@ -677,3 +677,27 @@ fn main() -> unit {{
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "ran\n");
 }
+
+/// `main` の `Finish` に届かない誤りの run でも、`vm::run` の直後と回復の前に driver を空にする。成功した run と違い
+/// `Finish` の `quiesce` を通らないので、2回はこの2か所の分である (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_failed_run_quiesces_its_driver_before_recovery() {
+    let (driver, quiesces) = FakeDriver::new(true);
+    let (host, _) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(&parse(
+            "\
+fn main() -> unit {
+  let n.0: int = extern \"Prelude.Div Int.%\"(1, 0)
+  return ()
+}
+",
+        ))
+        .unwrap();
+    let error = machine.run(loaded.entry).unwrap_err();
+    assert_eq!(error.to_string(), "division by zero in `main`");
+    assert_eq!(quiesces.load(Ordering::SeqCst), 2);
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+}

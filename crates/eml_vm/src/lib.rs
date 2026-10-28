@@ -271,6 +271,9 @@ impl<M: Mode> Machine<M> {
 
     /// プログラムを追記する。誤りを返した後の `Machine` は使い続けない (`CodeBase::load`)。
     pub fn load(&mut self, program: &Program) -> Result<Loaded, CompileError> {
+        if self.poisoned {
+            return Err(CompileError::Poisoned);
+        }
         let entry = self.code.load(program)?;
         if let Some(region) = &self.code.region {
             // 入力の境目で、Ctx の持つ語には触れずに塊を付け替えるだけなので、`heap_mut` の前提を崩さない。新しい塊は
@@ -317,7 +320,8 @@ impl<M: Mode> Machine<M> {
             // 登録表は `run_scheduled` が返るときに捨ててあるので、古いヒープの語を持つものは回復の後に残らない
             // (docs/spec/vm.md の「追記」)
             Ok(Ran::Abandoned(finished, cause)) => self.recover(cause).map(|_| (finished, None)),
-            Err(cause) if !cause.is_broken() => Err(match self.recover(cause) {
+            // 毒された `Machine` は回復せず、run の誤りをそのまま返す
+            Err(cause) if !cause.is_broken() && !self.poisoned => Err(match self.recover(cause) {
                 Ok(cause) | Err(cause) => cause,
             }),
             Err(cause) => Err(cause),
@@ -444,10 +448,21 @@ impl<M: Mode> Machine<M> {
         // 誤りで返る道でも driver を失わないように、run の直後に戻す
         self.driver = scheduled.driver.take();
         if scheduled.kept_pending {
-            // 貸したままの記憶があるので、結果を写さず、書き出しも確かめもせずに返す
-            // (docs/spec/vm.md の「時計と driver」)
+            // 貸したままの記憶があるので、結果を写さず、終わりの確かめもしない。書き出しはヒープに触れないので、ほかの
+            // 誤りと同じく誤りの前に行う。run の誤りがあれば、元の原因としてそれを返す (docs/spec/vm.md の「時計と driver」)
             self.poisoned = true;
-            return Err(poisoned_fault(code.functions[entry as usize].name.as_str()));
+            let flushed = ctx.flush();
+            return Err(match result {
+                Ok(())
+                | Err(RuntimeError::Fault {
+                    fault: VmFault::Stopped(Stop::Ended),
+                    ..
+                }) => match flushed {
+                    Ok(()) => poisoned_fault(code.functions[entry as usize].name.as_str()),
+                    Err(fault) => after(fault.into(), &task),
+                },
+                Err(cause) => cause,
+            });
         }
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
@@ -775,7 +790,8 @@ fn check_leaks(ctx: &Ctx<Checked>) -> Result<(), RuntimeError> {
     }
 }
 
-/// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。REPL は `Machine::load` の誤りをこれで報告する。
+/// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。毒された `Machine` の `Poisoned` だけは driver
+/// の誤りにする。REPL は `Machine::load` の誤りをこれで報告する。
 pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
     let (what, function) = match error {
         CompileError::TooManySlots { function } => {
@@ -799,6 +815,9 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
             "a program that runs Async tasks lacks a runtime entry",
             function,
         ),
+        CompileError::Poisoned => {
+            return poisoned_fault(program.function(program.entry).name.as_str());
+        }
     };
     RuntimeError::Fault {
         fault: VmFault::Internal(what),

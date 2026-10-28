@@ -220,6 +220,9 @@ pub enum CompileError {
     /// `Async` の命令を持つプログラムで、ランタイムが名前で呼ぶ入口の関数が引けない。translate は `Std.Async` を
     /// 読み込んだプログラムに入口を必ず作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`Async` のタスク」)。
     MissingEntry { function: String },
+    /// driver が保留の操作を残した `Machine` には読み込まない。ヒープに触れないためである
+    /// (docs/spec/vm.md の「時計と driver」)。
+    Poisoned,
 }
 
 impl<M: Mode> CodeBase<M> {
