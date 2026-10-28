@@ -1,0 +1,635 @@
+diff --git a/crates/eml_extern/src/lib.rs b/crates/eml_extern/src/lib.rs
+index 8a2f8ed..3d385c9 100644
+--- a/crates/eml_extern/src/lib.rs
++++ b/crates/eml_extern/src/lib.rs
+@@ -1170,6 +1170,30 @@ table! {
+         ),
+         AsyncCancelPoint => row("Std.Async.cancel_point", &[Unit], Enum, Purity::Effectful),
+         AsyncSpendBudget => row("Std.Async.spend_budget", &[Unit], Enum, Purity::Effectful),
++        AsyncParkDrain => holding(
++            &[false, true],
++            kinded(
++                "Std.Async.park_drain",
++                &[Int, TObj],
++                &[Unr, Lin],
++                Unit,
++                Unr,
++                Purity::Effectful,
++            ),
++        ),
++        AsyncParkTime => holding(
++            &[false, true],
++            kinded(
++                "Std.Async.park_time",
++                &[Int, TObj],
++                &[Unr, Lin],
++                Unit,
++                Unr,
++                Purity::Effectful,
++            ),
++        ),
++        AsyncClaimScope => row("Std.Async.claim_scope", &[Int], Enum, Purity::Effectful),
++        AsyncCancelMembers => row("Std.Async.cancel_members", &[Int], Unit, Purity::Effectful),
+         AsyncShieldEnter => row("Std.Async.shield_enter", &[Unit], Unit, Purity::Effectful),
+         AsyncShieldLeave => row("Std.Async.shield_leave", &[Unit], Unit, Purity::Effectful),
+     }
+@@ -1204,6 +1228,10 @@ impl Extern {
+                 | Extern::AsyncFailScopePanic
+                 | Extern::AsyncCancelPoint
+                 | Extern::AsyncSpendBudget
++                | Extern::AsyncParkDrain
++                | Extern::AsyncCancelMembers
++                | Extern::AsyncParkTime
++                | Extern::AsyncClaimScope
+         )
+     }
+ }
+diff --git a/crates/eml_vm/src/cells.rs b/crates/eml_vm/src/cells.rs
+index fc8f9a2..6829711 100644
+--- a/crates/eml_vm/src/cells.rs
++++ b/crates/eml_vm/src/cells.rs
+@@ -151,6 +151,7 @@ enum Phase {
+ enum Wait {
+     Cell(CellRef),
+     Ready,
++    Time((u64, u64)),
+ }
+ 
+ struct TaskCell {
+@@ -196,6 +197,9 @@ struct ScopeCell {
+     first_failure: Option<Outcome>,
+     waiters: Vec<Waiter>,
+     closed: bool,
++    cancel_new: bool,
++    shield: u32,
++    boundary: bool,
+ }
+ 
+ /// 印を付ける作業の項。
+@@ -275,6 +279,9 @@ pub(crate) struct Registry {
+     floor: u32,
+     pub(crate) inbox: Arc<Inbox>,
+     pub(crate) stats: TaskStats,
++    pub(crate) timers: std::collections::BTreeMap<(u64, u64), CellRef>,
++    timer_seq: u64,
++    pub(crate) now: u64,
+ }
+ 
+ impl Registry {
+@@ -285,7 +292,45 @@ impl Registry {
+             floor,
+             inbox: Arc::new(Inbox::default()),
+             stats: TaskStats::default(),
++            timers: std::collections::BTreeMap::new(),
++            timer_seq: 0,
++            now: 0,
++        }
++    }
++
++    pub(crate) fn park_time(&mut self, ms: i64, me: CellRef, k: Word) -> Result<Option<Runnable>, CellFault> {
++        self.suspend(me)?;
++        self.stats.parks += 1;
++        if self.point(me)? {
++            self.stats.cancels += 1;
++            return Ok(Some(Runnable::Resume { cell: me, k, wake: CANCELLED }));
++        }
++        if ms <= 0 {
++            self.task_mut(me)?.wait = Some(Wait::Ready);
++            return Ok(Some(Runnable::Resume { cell: me, k, wake: WOKE }));
+         }
++        let key = (self.now.saturating_add(ms as u64), self.timer_seq);
++        self.timer_seq += 1;
++        self.timers.insert(key, me);
++        
++        let task = self.task_mut(me)?;
++        task.k = Some(k);
++        task.wait = Some(Wait::Time(key));
++        Ok(None)
++    }
++
++    pub(crate) fn advance(&mut self, out: &mut Vec<Runnable>) -> Result<bool, CellFault> {
++        let Some((&(d, _), _)) = self.timers.first_key_value() else { return Ok(false) };
++        self.now = self.now.max(d);
++        while let Some((&key, _)) = self.timers.first_key_value() {
++            if key.0 > self.now { break; }
++            let cell = self.timers.remove(&key).unwrap();
++            let task = self.task_mut(cell)?;
++            task.wait = None;
++            let k = task.k.take().unwrap();
++            out.push(Runnable::Resume { cell, k, wake: WOKE });
++        }
++        Ok(true)
+     }
+ }
+ 
+@@ -374,6 +419,17 @@ impl Registry {
+             Some(p) => self.scope_mut(p)?.nested.len() as u32,
+             None => 0,
+         };
++        let level = match opener {
++            Some(o) => self.task_mut(o)?.shield,
++            None => 0,
++        };
++        let base = match parent {
++            Some(p) => {
++                let ps = self.scope_mut(p)?;
++                if ps.opener == opener && opener.is_some() { ps.shield } else { 0 }
++            }
++            None => 0,
++        };
+         let s = self.alloc(CellKind::Scope(ScopeCell {
+             parent,
+             opener,
+@@ -385,6 +441,9 @@ impl Registry {
+             first_failure: None,
+             waiters: Vec::new(),
+             closed: false,
++            cancel_new: false,
++            shield: level,
++            boundary: level > base,
+         }));
+         if let Some(p) = parent {
+             self.scope_mut(p)?.nested.push(s);
+@@ -397,12 +456,17 @@ impl Registry {
+     /// (docs/spec/vm.md の「取り消しの届け方」)。
+     fn inherit_flag(&mut self, s: CellRef) -> Result<(), CellFault> {
+         let scope = self.scope_mut(s)?;
+-        let (parent, opener) = (scope.parent, scope.opener);
++        if scope.boundary {
++            return Ok(());
++        }
++        let (parent, opener, level) = (scope.parent, scope.opener, scope.shield);
+         let mut flag = match parent {
+             Some(p) => self.scope_mut(p)?.flag,
+             None => false,
+         };
+-        if let Some(o) = opener {
++        if let Some(o) = opener
++            && level == 0
++        {
+             flag |= self.task_mut(o)?.cancel;
+         }
+         self.scope_mut(s)?.flag = flag;
+@@ -438,7 +502,7 @@ impl Registry {
+         if s.closed {
+             return Ok(None);
+         }
+-        let (flag, member_at) = (s.flag, s.members.len() as u32);
++        let (flag, member_at) = (s.flag || s.cancel_new, s.members.len() as u32);
+         // 印付けは送り手の ID のまま行い、`Ctx` の持つ語には触れない。値から届く evidence は退いたものだけである
+         // (docs/spec/object-model.md の「evidence の3つの物体」)
+         let heap = unsafe { ctx.heap_mut() };
+@@ -508,14 +572,12 @@ impl Registry {
+     /// 取り消しの地点の規則。
+     fn point(&mut self, cell: CellRef) -> Result<bool, CellFault> {
+         let task = self.task_mut(cell)?;
+-        if task.shield > 0 {
+-            return Ok(false);
++        let (k, bit, current) = (task.shield, task.cancel, task.current);
++        if k == 0 {
++            return Ok(bit || self.scope_mut(current)?.flag);
+         }
+-        if task.cancel {
+-            return Ok(true);
+-        }
+-        let current = task.current;
+-        Ok(self.scope_mut(current)?.flag)
++        let sc = self.scope_mut(current)?;
++        Ok(sc.flag && sc.opener == Some(cell) && sc.shield == k)
+     }
+ 
+     /// 借りたハンドル `handle` のセルの番号を `Std.Async.Cell` の即値で返す。
+@@ -564,6 +626,73 @@ impl Registry {
+         Ok(None)
+     }
+ 
++    pub(crate) fn park_drain(
++        &mut self,
++        s: i64,
++        me: CellRef,
++        k: Word,
++    ) -> Result<Option<Runnable>, CellFault> {
++        let target = self.scope_cell(s);
++        let done = match target {
++            None => true,
++            Some(t) => {
++                let scope = self.scope_mut(t)?;
++                scope.closed || scope.members.is_empty()
++            }
++        };
++        self.suspend(me)?;
++        self.stats.parks += 1;
++        if self.point(me)? {
++            self.stats.cancels += 1;
++            return Ok(Some(Runnable::Resume { cell: me, k, wake: CANCELLED }));
++        }
++        let Some(target) = target.filter(|_| !done) else {
++            return Ok(Some(Runnable::Resume { cell: me, k, wake: WOKE }));
++        };
++        let task = self.task_mut(me)?;
++        task.k = Some(k);
++        task.wait = Some(Wait::Cell(target));
++        let old = std::mem::take(&mut self.scope_mut(target)?.waiters);
++        let mut kept = Vec::with_capacity(old.len() + 1);
++        for w in old {
++            let alive = match w {
++                Waiter::Task(t) => matches!(self.live(t), Some(CellKind::Task(x)) if matches!(x.wait, Some(Wait::Cell(c)) if c == target)),
++                Waiter::Token(_) => true,
++            };
++            if alive && !matches!(w, Waiter::Task(t) if t == me) {
++                kept.push(w);
++            }
++        }
++        kept.push(Waiter::Task(me));
++        self.scope_mut(target)?.waiters = kept;
++        Ok(None)
++    }
++
++    pub(crate) fn claim_scope(&mut self, s: i64, me: CellRef) -> Result<bool, CellFault> {
++        let task = self.task_mut(me)?;
++        let (bit, current) = (task.cancel, task.current);
++        if bit || self.scope_mut(current)?.flag {
++            self.stats.cancels += 1;
++            return Ok(false);
++        }
++        self.cancel_scope(s)?;
++        Ok(true)
++    }
++
++    pub(crate) fn cancel_members(&mut self, s: i64) -> Result<(), CellFault> {
++        if let Some(cell) = self.scope_cell(s)
++            && !self.scope_mut(cell)?.closed
++        {
++            let scope = self.scope_mut(cell)?;
++            scope.cancel_new = !scope.members.is_empty();
++            let members = scope.members.clone();
++            for m in members {
++                self.mark(Mark::Task(m))?;
++            }
++        }
++        Ok(())
++    }
++
+     /// タスク `me` が、継続 `k` で実行待ちの列の後ろへ回る。
+     pub(crate) fn ready(&mut self, me: CellRef, k: Word) -> Result<Runnable, CellFault> {
+         self.suspend(me)?;
+@@ -643,8 +772,9 @@ impl Registry {
+             self.mark(Mark::Scope(scope))?;
+         }
+         let s = self.scope_mut(scope)?;
+-        if s.closing && s.members.is_empty() {
+-            s.closed = true;
++        if s.members.is_empty() {
++            s.closed |= s.closing;
++            s.cancel_new = false;
+             for waiter in std::mem::take(&mut s.waiters) {
+                 self.wake(waiter, scope, out)?;
+             }
+@@ -925,16 +1055,19 @@ impl Registry {
+                     task.cancel = true;
+                     // 開いているスコープは今のスコープから親へ、このタスクが開いたスコープが続く間である
+                     let (mut s, run, home) = (task.current, task.run, task.scope);
++                    let mut chain: Vec<(CellRef, bool)> = Vec::new();
++                    if let Some(r) = run {
++                        chain.push((r, self.scope_mut(r)?.boundary));
++                    }
+                     while s != home {
+-                        work.push(Mark::Scope(s));
+-                        s = self
+-                            .scope_mut(s)?
++                        let sc = self.scope_mut(s)?;
++                        chain.push((s, sc.boundary));
++                        s = sc
+                             .parent
+                             .ok_or(CellFault::Internal("a named scope has no parent"))?;
+                     }
+-                    if let Some(r) = run {
+-                        work.push(Mark::Scope(r));
+-                    }
++                    let cut = chain.iter().rposition(|&(_, b)| b).map_or(0, |i| i + 1);
++                    work.extend(chain[cut..].iter().map(|&(c, _)| Mark::Scope(c)));
+                     self.inbox.push(Notice::Cancel(t));
+                 }
+                 Mark::Scope(s) => {
+@@ -944,7 +1077,13 @@ impl Registry {
+                     }
+                     scope.flag = true;
+                     work.extend(scope.members.iter().map(|&m| Mark::Task(m)));
+-                    work.extend(scope.nested.iter().map(|&n| Mark::Scope(n)));
++                    let nested = scope.nested.clone();
++                    for n in nested {
++                        if !self.scope_mut(n)?.boundary {
++                            work.push(Mark::Scope(n));
++                        }
++                    }
++                    let scope = self.scope_mut(s)?;
+                     // 本体のタスクにはビットを立てず、届けるだけにする。外すかは `unpark` が持ち主の側で規則を確かめて決める
+                     if let Some(o) = scope.opener {
+                         self.inbox.push(Notice::Cancel(o));
+@@ -960,13 +1099,17 @@ impl Registry {
+         let Some(CellKind::Task(task)) = self.live(cell) else {
+             return Ok(());
+         };
+-        if !matches!(task.phase, Phase::Parked) || !matches!(task.wait, Some(Wait::Cell(_))) {
++        if !matches!(task.phase, Phase::Parked) || !matches!(task.wait, Some(Wait::Cell(_)) | Some(Wait::Time(_))) {
+             return Ok(());
+         }
+         if !self.point(cell)? {
+             return Ok(());
+         }
+         let task = self.task_mut(cell)?;
++        if let Some(Wait::Time(key)) = task.wait {
++            self.timers.remove(&key);
++        }
++        let task = self.task_mut(cell)?;
+         task.wait = None;
+         let k = task
+             .k
+diff --git a/crates/eml_vm/src/code.rs b/crates/eml_vm/src/code.rs
+index 879f39b..c90b26f 100644
+--- a/crates/eml_vm/src/code.rs
++++ b/crates/eml_vm/src/code.rs
+@@ -6,7 +6,7 @@ use eml_lir::{FloatBits, Loc, Repr};
+ use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
+ use rustc_hash::FxHashMap;
+ 
+-use crate::error::{RuntimeError, SourceLocation};
++use crate::error::{RuntimeError, SourceLocation, VmFault};
+ use crate::op::{BUILTINS, Op, Pc, Slot};
+ use crate::vm::{Failure, Task};
+ 
+@@ -249,6 +249,9 @@ impl<M: Mode> CodeBase<M> {
+     /// 誤りに関数の名前と位置を付ける。組み込みの命令で起きた誤りには、最後に戻った関数の名前を付ける
+     /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
+     pub(crate) fn error(&self, Failure { fault, pc }: Failure, task: &Task) -> RuntimeError {
++        if matches!(fault, VmFault::Deadlock) {
++            return RuntimeError::Deadlock;
++        }
+         let function = self
+             .function_at(pc)
+             .or_else(|| self.function_at(task.last_ret))
+diff --git a/crates/eml_vm/src/error.rs b/crates/eml_vm/src/error.rs
+index c74e8ac..0a20b16 100644
+--- a/crates/eml_vm/src/error.rs
++++ b/crates/eml_vm/src/error.rs
+@@ -17,6 +17,7 @@ pub enum VmFault {
+     Stopped(Stop),
+     /// verifier を通った IR では起きないはずの誤り。
+     Internal(&'static str),
++    Deadlock,
+ }
+ 
+ impl fmt::Display for VmFault {
+@@ -26,6 +27,7 @@ impl fmt::Display for VmFault {
+             VmFault::Panicked(message) => write!(f, "panicked: {message}"),
+             VmFault::Stopped(stop) => write!(f, "{stop}"),
+             VmFault::Internal(what) => write!(f, "internal error: {what}"),
++            VmFault::Deadlock => write!(f, "deadlock: every task is waiting and no timer is pending"),
+         }
+     }
+ }
+@@ -79,6 +81,7 @@ pub enum RuntimeError {
+     },
+     /// 検査モードで、終わったときに残っていた物体の種類の名前と数。
+     Leak(Vec<(String, u64)>),
++    Deadlock,
+     /// 続けられる誤り `cause` の後の回復が `reason` で失敗した。根から届く物体を写せなかったか、検査モードで回復の後の
+     /// ヒープの不変条件が崩れていた (docs/spec/vm.md の「追記」)。
+     Unrecovered {
+@@ -127,6 +130,7 @@ impl fmt::Display for RuntimeError {
+                 function,
+                 at: None,
+             } => write!(f, "{fault} in `{function}`"),
++            RuntimeError::Deadlock => write!(f, "deadlock: every task is waiting and no timer is pending"),
+             RuntimeError::Leak(live) => {
+                 let parts: Vec<String> =
+                     live.iter().map(|(name, n)| format!("{n} {name}")).collect();
+diff --git a/crates/eml_vm/src/vm.rs b/crates/eml_vm/src/vm.rs
+index 0e085cd..2cac39e 100644
+--- a/crates/eml_vm/src/vm.rs
++++ b/crates/eml_vm/src/vm.rs
+@@ -1220,10 +1220,18 @@ fn switch_away<R: Exec>(
+     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
+     // (docs/spec/vm.md の「`Async` のタスク」)
+     drain::<R>(code, ctx, task.depth_offset, sched)?;
+-    let next = sched
+-        .policy
+-        .pick(&mut sched.ready)
+-        .ok_or(VmFault::Internal("no task is ready to run"))?;
++    let next = loop {
++        if let Some(next) = sched.policy.pick(&mut sched.ready) {
++            break next;
++        }
++        let mut out = Vec::new();
++        if !sched.cells.advance(&mut out)? {
++            return Err(VmFault::Deadlock);
++        }
++        for run in out {
++            schedule(code, sched, code.entries.unwrap(), run)?;
++        }
++    };
+     match resume::<R>(code, ctx, task, sched, next, keep)? {
+         Some(at) => {
+             let result = safepoint::<R>(code, ctx, task, sched);
+@@ -1569,6 +1577,7 @@ fn stops_the_run(error: &RuntimeError) -> bool {
+                 | VmFault::Internal(_),
+             ..
+         } | RuntimeError::Leak(_)
++            | RuntimeError::Deadlock
+             | RuntimeError::Unrecovered { .. }
+     )
+ }
+@@ -1724,6 +1733,31 @@ fn async_op<R: Exec>(
+             }
+             task.set(dst, Word::UNIT);
+         }
++        Extern::AsyncParkDrain => {
++            let me = current_cell(task)?;
++            let k = task.get(arg(1));
++            if let Some(run) = sched.cells.park_drain(task.raw(arg(0)), me, k)? {
++                schedule(code, sched, entries, run)?;
++            }
++            task.set(dst, Word::UNIT);
++        }
++        Extern::AsyncParkTime => {
++            let me = current_cell(task)?;
++            let k = task.get(arg(1));
++            if let Some(run) = sched.cells.park_time(task.raw(arg(0)), me, k)? {
++                schedule(code, sched, entries, run)?;
++            }
++            task.set(dst, Word::UNIT);
++        }
++        Extern::AsyncClaimScope => {
++            let me = current_cell(task)?;
++            let b = sched.cells.claim_scope(task.raw(arg(0)), me)?;
++            task.set_raw(dst, i64::from(b));
++        }
++        Extern::AsyncCancelMembers => {
++            sched.cells.cancel_members(task.raw(arg(0)))?;
++            task.set(dst, Word::UNIT);
++        }
+         Extern::AsyncReady => {
+             let me = current_cell(task)?;
+             let run = sched.cells.ready(me, task.get(arg(0)))?;
+@@ -2677,7 +2711,11 @@ fn run_extern<R: Exec>(
+             | Extern::AsyncFailScopeIo
+             | Extern::AsyncFailScopePanic
+             | Extern::AsyncCancelPoint
+-            | Extern::AsyncSpendBudget => {
++            | Extern::AsyncSpendBudget
++            | Extern::AsyncParkDrain
++            | Extern::AsyncCancelMembers
++            | Extern::AsyncParkTime
++            | Extern::AsyncClaimScope => {
+                 return Err(VmFault::Internal("Async externs run through Op::Async"));
+             }
+         }
+diff --git a/crates/eml_vm/tests/tasks.rs b/crates/eml_vm/tests/tasks.rs
+index 7f9bc71..2ca0519 100644
+--- a/crates/eml_vm/tests/tasks.rs
++++ b/crates/eml_vm/tests/tasks.rs
+@@ -318,3 +318,28 @@ main () = Async.run (fn () -> checks {n})
+         assert_eq!((s.parks, s.cancels), (parks, 0), "{n} checks");
+     }
+ }
++
++fn stats_of(src: &str) -> eml_vm::RunStats {
++    let (out, stats) = run_stats(src);
++    eprintln!("OUT {out:?}");
++    stats.expect("checked")
++}
++
++#[test]
++fn zz_probe_stats() {
++    let progs = [
++        ("timeout_value", "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 100 (fn () -> 42))))\n"),
++        ("timeout_late", "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 50 (fn () ->\n  Async.sleep_ms 100\n  1))))\n"),
++        ("timeout_early", "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 100 (fn () ->\n  Async.sleep_ms 50\n  1))))\n"),
++        ("timeout_zero", "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 0 (fn () ->\n  Async.sleep_ms 50\n  1))))\n"),
++        ("race", "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.race (fn () ->\n  Async.sleep_ms 30\n  1) (fn () ->\n  Async.sleep_ms 60\n  2))))\n"),
++        ("race_panic", "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.try_all (fn () -> Async.race (fn () ->\n  Async.sleep_ms 30\n  let x : Int = panic \"a\"\n  x) (fn () ->\n  match try_io (fn () -> Async.sleep_ms 60) with\n    | Ok () -> 2\n    | Err _ -> panic \"b\")))))\n"),
++        ("drain_done", "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 30)\n  Async.drain_within 100 s\n  let t = Async.start_in s (fn () -> 5)\n  println (show (Async.await t))))\n"),
++        ("drain_deadline", "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 300)\n  Async.drain_within 100 s\n  println \"after\"))\n"),
++        ("drain_closed", "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () ->\n  let s = Async.scope (fn s -> s)\n  Async.drain_within 100 s\n  Async.drain_within 0 s\n  println \"at once\")\n"),
++    ];
++    for (name, src) in progs {
++        let s = stats_of(src);
++        eprintln!("{name}: tasks {} parks {} cancels {} dropped {}", s.tasks, s.parks, s.cancels, s.dropped_failures);
++    }
++}
+diff --git a/std/Async.em b/std/Async.em
+index 2502d28..48687ef 100644
+--- a/std/Async.em
++++ b/std/Async.em
+@@ -13,6 +13,8 @@ pub abstract effect Async where
+   await_cell : Cell -> Wake
+   -- 実行待ちの列の後ろへ回る
+   reschedule : Unit -> Wake
++  await_drain : Scope -> Wake
++  await_time : Int -> Wake
+ 
+ -- 登録表の添字 `(generation << 32) | index` を持つ即値である。Kind は `Unr`
+ pub extern data Cell
+@@ -37,6 +39,8 @@ start_task f =
+   handle f () with
+     | ctl await_cell c k -> park c k
+     | ctl reschedule () k -> ready k
++    | ctl await_drain s k -> park_drain s k
++    | ctl await_time ms k -> park_time ms k
+     | return () -> ()
+ 
+ resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit
+@@ -186,3 +190,93 @@ extern shield_enter     : Unit -> <IO> Unit
+ extern shield_leave     : Unit -> <IO> Unit
+ extern cancel_point     : Unit -> <IO> Bool
+ extern spend_budget     : Unit -> <IO> Bool
++extern park_drain       : Scope -> (once Wake -> <IO> Unit) -> <IO> Unit
++extern cancel_members   : Scope -> <IO> Unit
++extern claim_scope      : Scope -> <IO> Bool
++
++extern park_time        : Int -> (once Wake -> <IO> Unit) -> <IO> Unit
++
++pub sleep_ms : Int -> <IO, Async> Unit
++sleep_ms ms =
++  match await_time ms with
++    | Woke -> ()
++    | Cancelled -> raise_cancelled ()
++
++pub timeout : Int -> (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> Option a
++timeout ms f =
++  let s = open_scope ()
++  let timer = deadline s ms
++  let r = try_all (fn () -> scope (fn _ -> f ()))
++  cancel_scope_raw s
++  wait_closed s
++  let late = expired timer
++  match r with
++    | Ok x -> Some x
++    | Err e -> if late && cancelled e && not (cancel_point ()) then None else reraise e
++
++deadline : Scope -> Int -> <IO, Panic, Async> Option (Task Unit)
++deadline s ms =
++  if ms <= 0 then
++    cancel_scope_raw s
++    None
++  else Some (start_in s (fn () ->
++    sleep_ms ms
++    cancel_scope_raw s))
++
++expired : Option (Task Unit) -> <IO> Bool
++expired t = match t with
++  | None -> True
++  | Some t -> match try_all (fn () -> take_result t) with
++    | Ok () -> True
++    | Err _ -> False
++
++cancelled : Failure -> Bool
++cancelled e = match e with
++  | IOFailed (IOError { kind = k, message = _ }) -> k == Prelude.Cancelled
++  | Panicked _ -> False
++
++pub race : (Unit -> <IO, Panic, Async> a) -> (Unit -> <IO, Panic, Async> b) -> <IO, Panic, Async> Either a b
++race f g =
++  let s = open_scope ()
++  let ta = start_in s (arm s f)
++  let tb = start_in s (arm s g)
++  wait_closed s
++  match try_all (fn () -> take_result ta) with
++    | Ok x ->
++      drop tb
++      Left x
++    | Err e -> match try_all (fn () -> take_result tb) with
++      | Ok y -> Right y
++      | Err _ -> reraise e
++
++arm : Scope -> (Unit -> <IO, Panic, Async> a) -> Unit -> <IO, Panic, Async> a
++arm s f () =
++  let x = scope (fn _ -> f ())
++  if claim_scope s then x else raise_cancelled ()
++
++pub drain_within : Int -> Scope -> <IO, Async> Unit
++drain_within ms s =
++  if ms <= 0 then
++    cancel_members s
++    drained s
++  else
++    let p = open_scope ()
++    let timer : Task Unit = start_raw (bottom (fn () ->
++      sleep_ms ms
++      cancel_members s))
++    let r = try_io (fn () -> drained s)
++    cancel_raw timer
++    let c = close_scope p
++    shield_enter ()
++    let _ = await_cell c
++    shield_leave ()
++    let _ = try_panic (fn () -> leave_scope p)
++    match r with
++      | Ok () -> ()
++      | Err e -> fail_io e.kind e.message
++
++drained : Scope -> <IO, Async> Unit
++drained s =
++  match await_drain s with
++    | Woke -> ()
++    | Cancelled -> raise_cancelled ()
