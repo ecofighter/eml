@@ -339,7 +339,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - `run-fail` のテストは、検査モードの誤りが `fast_mode_reports` を満たすときだけ、速いモードで流す。満たさないのは、リーク、VM の内部の誤り (`VmFault::Internal`)、extern のヒープの誤り (`VmFault::Extern(Fault::Heap(_))`) である。どれも検査モードだけが見つけるので、VM 自身の誤りを意味し、速いモードで流すとメモリを壊すことがある。それ以外の誤り (算術、出力、入出力、UTF-8) は両方のモードが同じ文言で報告する
 - seed の方針の run は検査モードだけで流す (下の「seed で流す」)
 - 実行ごとに新しい `RunConfig` を作るのは、止める理由のビットが `Control::clear` でしか下りないためである。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる ([VM](../spec/vm.md) の「上限と割り込み」)
-- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動する。`sh`、`sort`、`cat` を起動するテストは、それらのある環境で流し、Windows では印を付けて流さない (下の「OS ごとのテスト」)
+- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動する。子のプロセスを起こす UI テストは `eml` 自身を子にする。仕組みがテストのビルドの `eml` を子の `PATH` の先頭に置く (`CaptureHost::with_path_prefix`) ので、テストは `` `eml run <file> child …` `` で自分を子にでき、`Env.args` が `child` で始まれば子として動く。混ぜたパイプの順が意味を持つときは、子が標準エラーの前に標準出力を書き出す (`Stdout.flush`)。印を付けて Windows で流さないのは、シグナル、shebang、POSIX のシェルのように Windows にない振る舞いだけである (下の「OS ごとのテスト」)
 
 ### seed で流す
 

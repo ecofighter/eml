@@ -1,4 +1,3 @@
--- windows: skip (子のプロセスに POSIX のツールを使う)
 -- pipe でやりとりする子 (docs/spec/stdlib.md の「`Proc`」)。eml は1度に1本の pipe しか読み書きせず、pipe の buffer は
 -- OS が持つ (ふつう 64 KiB)。詰まらないように、次の規則で読み書きする
 -- - 入力を読み終えてから出力を書く子 (`sort`、`wc`) には、書き終えて `close_stdin` してから読む。入力の量に上限はない
@@ -6,8 +5,30 @@
 --   両方が止まる。そういう子には buffer より少なく書くか、入力を分けて書くたびに読む
 -- - `wait` の前に標準出力を読み切る。読まずに `wait` すると、buffer より多く出力する子で止まる
 -- - 止まったときは Ctrl-C で終われる。処理系はこの状態を検出しない
+-- 子はこのファイルを `child` の引数で流した eml である
+import Env
 import Proc
 import Bytes
+import List
+import Stdin
+import Stdout
+import String
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  match Env.args () with
+    | ["child", "sort"] -> println (String.join "\n" (List.sort (String.lines (Stdin.read_text ()))))
+    | ["child", "cat"] -> Stdout.close (Stdout.write (Stdin.read_text ()) (Stdout.open ()))
+    | ["child", "merge"] ->
+      let (line, stdin) = Stdin.read_line (Stdin.open ())
+      Stdin.close stdin
+      let got = match line with
+        | Some x -> x
+        | None -> ""
+      -- 標準出力を書き出してから標準エラーに書き、合わせた pipe の中の順を決める
+      Stdout.close (Stdout.flush (Stdout.write_line "got \{got}" (Stdout.open ())))
+      eprintln "oops"
+    | _ -> parent ()
 
 feed : Int -> Proc.Child -> <IO, Panic> Proc.Child
 feed n c = if n == 0 then c else feed (n - 1) (Proc.write_line "line \{n}" c)
@@ -20,13 +41,14 @@ show_lines c =
       println line
       show_lines c
 
-main : Unit -> <IO, Panic> Unit
-main () =
-  let c = feed 10 (Proc.spawn `sort`)
+parent : Unit -> <IO, Panic> Unit
+parent () =
+  let child = `eml run proc_spawn.em child`
+  let c = feed 10 (Proc.spawn (Proc.arg "sort" child))
   let c = show_lines (Proc.close_stdin c)
   println "sort \{Proc.wait c}"
-  -- `cat` には buffer より少なく書くので、書いてから読んでも詰まらない
-  let c = Proc.write "a " (Proc.spawn `cat`)
+  -- 標準入力を写す子には buffer より少なく書くので、書いてから読んでも詰まらない
+  let c = Proc.write "a " (Proc.spawn (Proc.arg "cat" child))
   let c = Proc.write_bytes (Bytes.of_string "b") c
   let c = Proc.close_stdin c
   let (bytes, c) = Proc.read_chunk (Bytes.empty ()) c
@@ -34,9 +56,9 @@ main () =
   println "\{show (Bytes.append bytes rest)}"
   println "cat \{Proc.wait c}"
   -- `merge_stderr` は子の標準エラーも標準出力の pipe に入れる
-  let c = Proc.spawn (Proc.merge_stderr `sh -c 'read x; echo "got $x"; echo oops >&2'`)
+  let c = Proc.spawn (Proc.merge_stderr (Proc.arg "merge" child))
   let c = Proc.write_line "hello" c
   let (first, c) = Proc.read_line_bytes c
   let (all, c) = Proc.read_all c
   println "\{show first} \{show all}"
-  println "sh \{Proc.wait c}"
+  println "merge \{Proc.wait c}"

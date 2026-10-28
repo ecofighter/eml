@@ -7,6 +7,6 @@ input_file: tests/ui/run/std/proc_env.em
 "[foo] []\n"
 "[z] [b c]\n"
 "[] []\n"
-Other: cannot run `sh`: I/O error
-Other: cannot run `sh`: I/O error
+Other: cannot run `eml`: I/O error
+Other: cannot run `eml`: I/O error
 --- stderr ---

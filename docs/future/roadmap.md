@@ -246,9 +246,6 @@
 - n 列の `match`: 今は決定木の列に、最初の行でコンストラクタ、タプル、リテラルのどれかのパターンを持ついちばん左の列を選ぶ ([Core IR](../spec/core-ir.md))。行列によっては部分木が大きくなりうる。今の選び方でも決定木は正しいので、部分木の大きさが問題になる例が出てから列の選び方を見直す
 - doc comment: trivia の付け方を決める。doc comment を解釈するドキュメント生成と LSP の hover ([字句](../spec/lexical.md)) がまだないので、それを作るときに、使う側に合わせて決める。前提: LSP
 - JIT (投機的): バイトコードから機械語を安く作る copy-and-patch や、トレース JIT。VM が安定し、起動時間が支配的になってから検討する。トレース JIT はバイトコードにスタックのスタックを持たせる別の道で、evidence passing とは前提が合わない。前提: `native-aot`
-- Windows の子のプロセスのテストと `inherited_stdout`: `eml` 自身を子にする、Windows でも流せる `Proc` のテストを足し、Host の `inherited_stdout` を Windows に移す。今は子のプロセスを起こす UI テストを Windows で流さず、`run (merge_stderr c)` は起動の誤りになる ([テスト戦略](../implementation/testing.md) の「Windows で流さないテスト」、[標準ライブラリ](../spec/stdlib.md) の「`Proc`」)
-  - 後に回した理由: Windows で `inherited_stdout` の道を通すテストがなかった。
-  - 見直す条件: `io-driver` の段を進めるとき。
 
 ### REPL
 
