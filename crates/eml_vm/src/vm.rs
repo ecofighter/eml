@@ -1702,7 +1702,8 @@ fn async_op<R: Exec>(
             switch_away::<R>(code, ctx, task, sched, Some(TaskState::WaitingCell(root)))?;
         }
         Extern::AsyncFinishOk => {
-            let value = task.get(arg(0));
+            // 結果はタスクの ID に預けた印を付けてから置く。`take` が同じ ID から受け取る
+            let value = cells::Depot::of(task.worker).publish(ctx, task.get(arg(0)))?;
             deposit(task, cells::Outcome::Value(value))?;
             task.set(dst, Word::UNIT);
         }

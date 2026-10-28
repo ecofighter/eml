@@ -928,14 +928,13 @@ impl Registry {
         let result = match (raised, outcome) {
             (Some(failure), outcome) => {
                 if let Outcome::Value(w) = outcome {
-                    drop_value(ctx, worker, w, depth_offset)?;
+                    Depot::of(worker).discard(ctx, w, depth_offset)?;
                 }
                 Err(raise(failure))
             }
             (None, Outcome::Value(w)) => {
                 // 値はタスクが `finish_ok` に預けた参照で、受け取る側だけが持つ
-                unsafe { ctx.heap_mut().transfer_back(w, worker) }?;
-                Ok(w)
+                Ok(Depot::of(worker).receive(ctx, w)?)
             }
             (None, failure) => Err(raise(failure)),
         };
@@ -1267,10 +1266,11 @@ impl Registry {
     ) -> Result<(), CellFault> {
         let task = self.task_mut(cell)?;
         let (worker, outcome) = (task.worker, task.outcome.take());
+        let mut depot = Depot::of(worker);
         if let Some(Outcome::Value(w)) = outcome {
-            drop_value(ctx, worker, w, depth_offset)?;
+            depot.discard(ctx, w, depth_offset)?;
         }
-        unsafe { ctx.heap_mut() }.retire_worker(worker)?;
+        depot.close(ctx)?;
         self.release(cell.index);
         Ok(())
     }
@@ -1284,17 +1284,68 @@ fn raise(failure: Outcome) -> Raise {
     }
 }
 
-/// 受け取られない値を、値を持つタスクの ID の下で落とす。`decref` は即値も、破棄処理を持つ `Foreign` も受ける。
-fn drop_value<M: Mode>(
-    ctx: &mut Ctx<M>,
+/// 受け手の決まらない値の預かり先。預かる構造 (タスクのセル) の論理的な worker ID を持ち、送り手は `publish` で値を
+/// 預け、受け手は `receive` で受け取る (docs/spec/object-model.md の「論理的な worker ID」)。
+pub(crate) struct Depot {
+    /// 預かる ID。速いモードでは 0 である
     worker: u32,
-    w: Word,
-    depth_offset: usize,
-) -> Result<(), CellFault> {
-    with_worker(ctx, worker, depth_offset, |ctx| unsafe {
-        ctx.heap_mut().decref(w)
-    })?;
-    Ok(())
+}
+
+impl Depot {
+    /// 新しい預かる ID を出す。
+    #[allow(dead_code)] // channel のセルが使う
+    pub(crate) fn open<M: Mode>(ctx: &mut Ctx<M>) -> Depot {
+        Depot {
+            worker: unsafe { ctx.heap_mut() }.fork_worker(),
+        }
+    }
+
+    /// ほかで出した ID (タスクのセルの ID) を預かる ID として使う。`close` は呼ぶ側が ID を退かせる所で呼ぶ。
+    pub(crate) fn of(worker: u32) -> Depot {
+        Depot { worker }
+    }
+
+    /// 値 `w` を預ける。送り手の ID のまま、構造に入れる前に呼ぶ。`Unr` の物体に共有の印を付け、`lin` の物体から rc 1 の
+    /// 道で届く物体の持ち主を預かる ID にする (docs/spec/object-model.md の「`share`」)。語は変わらない。
+    pub(crate) fn publish<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        w: Word,
+    ) -> Result<Word, CellFault> {
+        unsafe { ctx.heap_mut().share(w, self.worker) }?;
+        Ok(w)
+    }
+
+    /// 構造から取り出した値 `w` を、今の worker の局所の値として受け取る。取り出した後、ほかに参照がない状態で、受け手の
+    /// ID のまま呼ぶ (docs/spec/object-model.md の「`transfer_back`」)。語は変わらない。
+    pub(crate) fn receive<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        w: Word,
+    ) -> Result<Word, CellFault> {
+        unsafe { ctx.heap_mut().transfer_back(w, self.worker) }?;
+        Ok(w)
+    }
+
+    /// 受け取られない値 `w` を預かる ID の下で落とす。`decref` は即値も、破棄処理を持つ `Foreign` も受ける。
+    pub(crate) fn discard<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        w: Word,
+        depth_offset: usize,
+    ) -> Result<(), CellFault> {
+        with_worker(ctx, self.worker, depth_offset, |ctx| unsafe {
+            ctx.heap_mut().decref(w)
+        })?;
+        Ok(())
+    }
+
+    /// 預かる ID を退かせる。値をすべて `discard` した後、セルを放す直前に1回呼ぶ。ID の物体が残っていれば
+    /// `TransferLeak` を返す (`par` の join と同じ)。
+    pub(crate) fn close<M: Mode>(self, ctx: &mut Ctx<M>) -> Result<(), CellFault> {
+        unsafe { ctx.heap_mut() }.retire_worker(self.worker)?;
+        Ok(())
+    }
 }
 
 /// ほかのタスクの ID の物体を放すときの切り替え。`evv` を空にして ID `id` に替え、`f` の後で元の `evv`、worker、
