@@ -66,7 +66,7 @@ import の循環は E1027 にする。型検査は item と SCC の単位で動�
 
 ## 標準ライブラリ
 
-標準ライブラリは、リポジトリの `std/` ツリーのモジュールで、処理系のバイナリに埋め込まれている。`std/` は `Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Map.em`、`Set.em`、`Par.em`、`Async.em` からなる。各モジュールの関数は [標準ライブラリ](stdlib.md) にある。標準ライブラリのモジュールだけが `extern` を書ける ([宣言](declarations.md) の「`extern`」)。
+標準ライブラリは、リポジトリの `std/` ツリーのモジュールで、処理系のバイナリに埋め込まれている。`std/` は `Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Map.em`、`Set.em`、`Par.em`、`Async.em`、`Chan.em`、`Atomic.em` からなる。各モジュールの関数は [標準ライブラリ](stdlib.md) にある。標準ライブラリのモジュールだけが `extern` を書ける ([宣言](declarations.md) の「`extern`」)。
 
 - 標準ライブラリのモジュールの正式な名前は、予約した根 `Std` の下に置く (`Std.Fs`)。`Prelude` だけは `Prelude` のままである。診断に出すパスは `<std>/Prelude.em`、`<std>/Fs.em` のように書き、手元の相対パスと区別する
 - Prelude はいつも読み込み、どのモジュールからも使える。ほかの標準ライブラリのモジュール `X` は、`X` を import したモジュールからだけ修飾子として使える (`import X`、`import Std.X`、`import Std.X as A`、`import X (…)`)。import しないモジュールでは、`X.f` も `Std.X.f` も E1031 である (下の「名前の解決」)。修飾子の指す先が import だけで決まるようにするためである。REPL も同じ規則である (下の「REPL のセッション」)
@@ -177,6 +177,8 @@ REPL (`eml_cli::Repl`) では、セッションを1つのモジュールとみ�
 - 誤りがどのファイルにあっても、入力を受け付けない。警告 (E4004、E4005) は、その入力で初めて読んだファイル (パスで見分ける) のものだけを返す。セッション全体を入力ごとに検査し直すので、前の入力の警告が毎回出るのを防ぐためである
 - 前端の検査に誤りのない入力は、lowering の後、`Machine::load` の前に止める語を読み、割り込みが立っていれば入力の種類によらず受け付けない (`Outcome::Interrupted`)。セッションは変わらない ([REPL の端末](repl.md) の「割り込み」)
 - `:type` の問い合わせは、受け付けた入力の後に、次の入力の番号を持つセッションのモジュールとして読む。入力の関数は `InputKind::Query` で、検査だけをし、lowering も実行もせず、受け付けない ([型と Kind](types.md) の「REPL の入力」)
+- `Std.Chan.Chan a` の値は束縛に残せるが、前の入力の channel は閉じて空の channel として振る舞う。後の入力の channel とは generation で見分ける ([VM](vm.md) の「セルと登録表」)
+- `Std.Atomic.Counter` は入力をまたいで使える。表を `Machine` が持つためである ([VM](vm.md) の「セルと登録表」)
 
 ## 公開の範囲
 

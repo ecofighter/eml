@@ -186,6 +186,33 @@ main () =
     assert_eq!(run_both(src), "0\n");
 }
 
+/// タスクの結果は `finish_ok` が預ける前に印を付ける。`Int` は即値で印が要らず、`String` の物体は1つ印を付ける。
+#[test]
+fn a_task_result_is_marked_before_it_is_deposited() {
+    let program = |result: &str, print: &str| {
+        format!(
+            "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start (fn () -> {result})
+    println {print})
+"
+        )
+    };
+    let int = program("1", "(show (Async.await t))");
+    let string = program("\"a\" ++ show 1", "(Async.await t)");
+    let (out, stats) = run_stats(&int);
+    assert_eq!(out, "1\n");
+    assert_eq!(stats.expect("the checked run").shared_objects, 0);
+    let (out, stats) = run_stats(&string);
+    assert_eq!(out, "a1\n");
+    assert_eq!(stats.expect("the checked run").shared_objects, 1);
+    assert_eq!(run_both(&int), "1\n");
+    assert_eq!(run_both(&string), "a1\n");
+}
+
 /// スコープの最初の失敗より後の失敗だけを `dropped_failures` に数える。失敗する子が2つなら、1つが残らない。
 #[test]
 fn the_second_failure_of_a_scope_is_counted_as_dropped() {

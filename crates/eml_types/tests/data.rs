@@ -235,3 +235,15 @@ fn array_is_covariant() {
     };
     assert_eq!(codes_of(&accepted("Array")), Vec::<String>::new());
 }
+
+#[test]
+fn chan_is_invariant() {
+    // フィールドの矢印は `Unr` に決まる。共有するハンドルでは、その channel を `once` の関数の channel として書かせない
+    let widen = |ty: &str| {
+        format!(
+            "import Chan\n\ndata Box =\n  | Box ({ty} (Unit -> Int))\n\ng : {ty} (once Unit -> Int) -> {ty} (once Unit -> Int)\ng a = a\n\nh : Box -> {ty} (once Unit -> Int)\nh b = match b with\n  | Box a -> g a"
+        )
+    };
+    assert_eq!(codes_of(&widen("Array")), Vec::<String>::new());
+    assert_eq!(codes_of(&widen("Chan.Chan")), ["E2001"]);
+}

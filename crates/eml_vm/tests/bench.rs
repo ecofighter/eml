@@ -151,6 +151,9 @@ fn byte_loop() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -178,6 +181,9 @@ fn char_loop() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -205,6 +211,9 @@ fn bytes_loop() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -232,6 +241,9 @@ fn apply_float() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -259,6 +271,9 @@ fn apply_int() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -286,6 +301,9 @@ fn ep_float() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -315,6 +333,9 @@ fn records_wide() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     "
     );
@@ -343,6 +364,9 @@ fn empty() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -370,6 +394,9 @@ fn fib() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -397,6 +424,9 @@ fn fold_state() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -424,6 +454,9 @@ fn list() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -451,6 +484,9 @@ fn loop_() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -478,6 +514,9 @@ fn state() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -505,6 +544,9 @@ fn state_loop() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -532,6 +574,9 @@ fn state_loop_by_hand() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -559,6 +604,9 @@ fn state_nested() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -586,6 +634,9 @@ fn tree() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -613,6 +664,9 @@ fn iter_generate() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -685,6 +739,9 @@ fn iter_pipeline() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -712,6 +769,9 @@ fn iter_pipeline_by_hand() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -739,6 +799,9 @@ fn orders() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -766,6 +829,9 @@ fn orders_by_hand() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -793,6 +859,9 @@ fn push_fold() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -820,6 +889,9 @@ fn push_fold_by_hand() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -847,6 +919,9 @@ fn sum_loop() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -874,6 +949,9 @@ fn tree_by_hand() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -901,6 +979,9 @@ fn upsert() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -928,6 +1009,9 @@ fn upsert_by_hand() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -955,6 +1039,9 @@ fn records() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -982,6 +1069,9 @@ fn rbtree() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1009,6 +1099,9 @@ fn tree_map() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1036,6 +1129,9 @@ fn std_list() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1063,6 +1159,9 @@ fn std_map() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1090,6 +1189,9 @@ fn mandelbrot() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1117,6 +1219,9 @@ fn nbody() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1144,6 +1249,9 @@ fn spectral_norm() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1171,6 +1279,9 @@ fn sieve_var() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1198,6 +1309,9 @@ fn sieve_by_hand() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1225,6 +1339,9 @@ fn fannkuch_var() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1252,6 +1369,9 @@ fn fannkuch_by_hand() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1297,6 +1417,9 @@ fn par_tree() {
         cancels: 0,
         timers: 0,
         shared_objects: 3851,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
 }
@@ -1502,6 +1625,9 @@ fn trade_offs() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     "
     );
@@ -1528,6 +1654,9 @@ fn trade_offs() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     "
     );
@@ -1558,6 +1687,9 @@ fn trade_offs() {
         cancels: 0,
         timers: 0,
         shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
     }
     ");
     insta::assert_debug_snapshot!(

@@ -1,13 +1,13 @@
-//! `Async` のタスクとスコープの意味の核 (docs/spec/vm.md の「`Async` のタスク」)。VM の `Task`、`Scheduler`、フレームを
-//! 知らず、走らせる仕事を `Runnable` と不透明な `WaitToken` で返す。ネイティブのコードが同じ核を `extern "C"` の入口から
-//! 呼べるように、`std` と `eml_rt` だけに依存する。
+//! `Async` のタスクとスコープと channel の意味の核 (docs/spec/vm.md の「`Async` のタスク」、「channel」)。VM の
+//! `Task`、`Scheduler`、フレームを知らず、走らせる仕事を `Runnable` と不透明な `WaitToken` で返す。ネイティブのコードが
+//! 同じ核を `extern "C"` の入口から呼べるように、`std` と `eml_rt` だけに依存する。
 //!
 //! セルが持つ語は数えた参照で、VM が1回入れて1回出す。`Registry` はヒープに触れる `Drop` を持たないので、誤りで終わった
 //! run と捨てた run では、`Scheduler` と一緒に触れずに捨てる。
 //!
 //! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、
-//! `wake` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))` か `Some(Time(_))` であることは同値で
-//! ある (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項 `key` と `wait == Some(Time(key))` は、いつも両方
+//! `wake_waiter` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))` か `Some(Time(_))` であることは
+//! 同値である (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項 `key` と `wait == Some(Time(key))` は、いつも両方
 //! あるか両方ないかである。タスクの今のスコープ `current` から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
 //! `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed` の
 //! スコープは `closing` で、`members` が空である。スコープのセルを放すのは、閉じた後の `release_scope`
@@ -16,13 +16,19 @@
 //! タスクのセルを放すのは、ハンドルを持つ側の `take`、自分のハンドルを落とした知らせの処理、`sweep_all` の3つだけで、
 //! 待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。
 //!
+//! channel の不変条件: タスクが `senders` か `receivers` にあるのは、そのタスクが止まっていて
+//! `wait == Some(Cell(その channel))` のときだけで、1回だけ現れる。`closed` の後、両方の列はいつも空である。
+//! channel のセルを放すのは `settle` と `sweep_all` だけである。品物があるのに受け手が待っている状態は、受け手を起こす
+//! 仕事が実行待ちにあるときにだけありうる。積めるのに送り手が待っている状態も同じである。起こす側は枠も品物も取って
+//! おかないので、起こされたタスクが速い道をやり直す (docs/spec/vm.md の「channel」)。
+//!
 //! 取り消しは、印を付ける `mark` と受け箱の処理 `drain` が待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
 //! 仕事をほかのタスクのために作るのは `drain` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
 //! `cancel`、`flag`、`cancel_new` はどのタスクの操作からも書く。`current` と `run` は持ち主だけが書き、印を付ける
 //! 操作が読む。スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
 //! そのタスクを動かすか受け箱を処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_rt::{Control, Ctx, Fault, HeapError, Mode, Word};
@@ -35,6 +41,9 @@ pub(crate) const CANCELLED: i64 = 1;
 pub(crate) const IO_CANCELLED: i64 = 5;
 /// 待たずに済む速い道の予算 (docs/spec/stdlib.md の「操作の予算」)。
 const BUDGET: u32 = 128;
+/// 使い切った添字の generation。番号には出さず、この generation の添字は空けない。一周させると、古い `Chan a` の値が
+/// 別の型の品物を持つ channel を指しうるからである (docs/spec/vm.md の「セルと登録表」)。
+const RETIRED: u32 = u32::MAX;
 
 /// 登録表のセルの番号。添字を使い回すので、generation で古い番号を見分ける。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,6 +236,28 @@ enum Mark {
 enum CellKind {
     Task(TaskCell),
     Scope(ScopeCell),
+    Chan(ChanCell),
+}
+
+/// channel のセル (docs/spec/vm.md の「channel」)。
+struct ChanCell {
+    cap: u32,
+    closed: bool,
+    /// 積んだ品物。語は数えた参照で、`depot.publish` で預けたもの。
+    items: VecDeque<Word>,
+    /// 待っている送り手。項はいつも生きていて、`wait == Some(Wait::Cell(このセル))` である。
+    senders: VecDeque<CellRef>,
+    /// 待っている受け手。同上。
+    receivers: VecDeque<CellRef>,
+    /// 品物の預かり先。`new_chan` で開き、セルを放すときに閉じる。
+    depot: Depot,
+}
+
+impl ChanCell {
+    /// 積めるか。待っている受け手1人につき枠が1つ開くので、容量 0 でも受け手が待っていれば積める。
+    fn can_send(&self) -> bool {
+        self.items.len() < self.cap as usize + self.receivers.len()
+    }
 }
 
 /// 受け箱の知らせ。落ちたハンドルの知らせはハンドルの `Drop` が、取り消しの知らせは `mark` が積む。
@@ -278,41 +309,57 @@ impl Drop for TaskHandle {
 pub(crate) struct TaskStats {
     /// `start` が作ったタスクのセルの数。
     pub(crate) tasks: u64,
-    /// `park`、`ready`、`park_time`、`park_drain` が渡された継続の数。
+    /// `park`、`ready`、`park_time`、`park_drain`、`park_send`、`park_recv` が渡された継続の数。
     pub(crate) parks: u64,
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
-    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、受け箱の処理が外した待ち、
-    /// 取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
+    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
+    /// 受け箱の処理が外した待ち、取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を
+    /// 数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
     /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` だけを数える。
     pub(crate) timers: u64,
+    /// channel に品物を積んだ回数と取った回数の和。
+    pub(crate) channel_ops: u64,
+    /// `park_send` と `park_recv` が渡された継続の数。`parks` にも数える。
+    pub(crate) channel_waits: u64,
+    /// `sweep_all` が放した channel の数。
+    pub(crate) channels_swept: u64,
 }
 
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
 pub(crate) struct Registry {
+    /// 添字ごとの generation と中身。空いた添字の generation は、次に出す番号のものである。
     slots: Vec<(u32, Option<CellKind>)>,
     free: Vec<u32>,
-    /// 新しい添字の最初の generation。前の run の `Scope` の値がこの run のセルを指さないようにする。
-    floor: u32,
     pub(crate) inbox: Arc<Inbox>,
     pub(crate) stats: TaskStats,
     /// 時間の輪。項は時間を待つタスクのセルの番号だけで、語を持たない (docs/spec/vm.md の「時間の待ち」)。
     timers: BTreeMap<TimerKey, CellRef>,
     /// 次に登録するタイマーの `seq`。
     timer_seq: u64,
+    /// `Std.Atomic.Counter` の表。添字は `Machine` が run をまたいで持つので、回復でも戻さない。
+    pub(crate) counters: Vec<i64>,
 }
 
 impl Registry {
-    pub(crate) fn new(floor: u32) -> Registry {
+    /// `generations` は前の run までに使った添字の、次に出す generation である (`next_generations`)。前の run の
+    /// `Scope` と `Chan a` の値がこの run のセルを指さないように、添字ごとに generation を続ける。
+    pub(crate) fn new(generations: Vec<u32>) -> Registry {
+        // 小さい添字から使うように、逆の順に積む
+        let free = (0..generations.len())
+            .rev()
+            .filter(|&index| generations[index] != RETIRED)
+            .map(|index| u32::try_from(index).expect("the cells fit in u32 positions"))
+            .collect();
         Registry {
-            slots: Vec::new(),
-            free: Vec::new(),
-            floor,
+            slots: generations.into_iter().map(|g| (g, None)).collect(),
+            free,
             inbox: Arc::new(Inbox::default()),
             stats: TaskStats::default(),
             timers: BTreeMap::new(),
             timer_seq: 0,
+            counters: Vec::new(),
         }
     }
 
@@ -356,7 +403,7 @@ impl Registry {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
-                self.slots.push((self.floor, None));
+                self.slots.push((0, None));
                 u32::try_from(self.slots.len() - 1).expect("the cells fit in u32 positions")
             }
         };
@@ -368,12 +415,15 @@ impl Registry {
         }
     }
 
-    /// 添字を使い回せるようにし、generation を1つ進めて古い番号を見分ける。
+    /// generation を1つ進めて古い番号を見分け、添字を使い回せるようにする。進めた generation が `RETIRED` なら、
+    /// 添字は空けずに退かせる。出した番号の generation は `RETIRED` より小さいので、足しても一周しない。
     fn release(&mut self, index: u32) {
         let slot = &mut self.slots[index as usize];
-        slot.0 = slot.0.wrapping_add(1);
+        slot.0 += 1;
         slot.1 = None;
-        self.free.push(index);
+        if slot.0 != RETIRED {
+            self.free.push(index);
+        }
     }
 
     fn cell_mut(&mut self, cell: CellRef) -> Result<&mut CellKind, CellFault> {
@@ -391,14 +441,18 @@ impl Registry {
     fn task_mut(&mut self, cell: CellRef) -> Result<&mut TaskCell, CellFault> {
         match self.cell_mut(cell)? {
             CellKind::Task(task) => Ok(task),
-            CellKind::Scope(_) => Err(CellFault::Internal("a task cell reference names a scope")),
+            CellKind::Scope(_) | CellKind::Chan(_) => Err(CellFault::Internal(
+                "a task cell reference names another kind of cell",
+            )),
         }
     }
 
     fn scope_mut(&mut self, cell: CellRef) -> Result<&mut ScopeCell, CellFault> {
         match self.cell_mut(cell)? {
             CellKind::Scope(scope) => Ok(scope),
-            CellKind::Task(_) => Err(CellFault::Internal("a scope cell reference names a task")),
+            CellKind::Task(_) | CellKind::Chan(_) => Err(CellFault::Internal(
+                "a scope cell reference names another kind of cell",
+            )),
         }
     }
 
@@ -407,12 +461,21 @@ impl Registry {
         Ok(self.task_mut(cell)?.worker)
     }
 
-    /// 次の run の `floor`。この run が出したどの generation よりも大きい。`slots` は run の間に縮まない。
-    pub(crate) fn next_floor(&self) -> u32 {
+    /// 表の中の `Counter`。添字が表の外なのは、検査を通ったプログラムからは起きない。
+    pub(crate) fn counter(&mut self, i: i64) -> Result<&mut i64, CellFault> {
+        usize::try_from(i)
+            .ok()
+            .and_then(|i| self.counters.get_mut(i))
+            .ok_or(CellFault::Internal("a counter index is out of range"))
+    }
+
+    /// 次の run の `generations`。添字ごとに、この run までに出したどの generation よりも大きい。誤りで止まった run は
+    /// セルを残すので、残ったセルの generation も1つ進める。`slots` は run の間に縮まない。
+    pub(crate) fn next_generations(&self) -> Vec<u32> {
         self.slots
             .iter()
-            .map(|(generation, _)| generation.wrapping_add(1))
-            .fold(self.floor, u32::max)
+            .map(|(generation, kind)| generation + u32::from(kind.is_some()))
+            .collect()
     }
 
     /// タスクが新しいタスクを加える今のスコープ。
@@ -617,6 +680,7 @@ impl Registry {
         let done = match self.cell_mut(target)? {
             CellKind::Task(task) => matches!(task.phase, Phase::Finished),
             CellKind::Scope(scope) => scope.closed,
+            CellKind::Chan(_) => return Err(CellFault::Internal("a cell of the wrong kind")),
         };
         self.suspend(me)?;
         self.stats.parks += 1;
@@ -641,6 +705,7 @@ impl Registry {
         let waiters = match self.cell_mut(target)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
+            CellKind::Chan(_) => return Err(CellFault::Internal("a cell of the wrong kind")),
         };
         waiters.push(Waiter::Task(me));
         Ok(None)
@@ -765,7 +830,7 @@ impl Registry {
     }
 
     /// ハンドルのセル。ハンドルの受け箱が登録表の受け箱と違えば、前の run のハンドルである。ハンドルは落ちたときに
-    /// 知らせを積むために自分の run の受け箱を持つので、それを比べれば generation の一周によらずに run を見分けられる。
+    /// 知らせを積むために自分の run の受け箱を持つので、それを比べれば run を見分けられる。
     /// `Task a` は `Lin` で入力をまたいで残らないので、検査を通ったプログラムからは届かない
     /// (docs/spec/vm.md の「`Async` のタスク」)。
     fn handle_cell<M: Mode>(&self, ctx: &Ctx<M>, handle: Word) -> Result<CellRef, CellFault> {
@@ -783,6 +848,7 @@ impl Registry {
         let waiters = match self.cell_mut(cell)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
+            CellKind::Chan(_) => return Err(CellFault::Internal("a cell of the wrong kind")),
         };
         waiters.push(Waiter::Token(token));
         Ok(())
@@ -811,7 +877,7 @@ impl Registry {
         task.phase = Phase::Finished;
         task.outcome = Some(outcome);
         for waiter in std::mem::take(&mut task.waiters) {
-            self.wake(waiter, cell, out)?;
+            self.wake_waiter(waiter, cell, out)?;
         }
         if let Some(failure) = failure {
             let s = self.scope_mut(scope)?;
@@ -827,7 +893,7 @@ impl Registry {
             s.closed |= s.closing;
             s.cancel_new = false;
             for waiter in std::mem::take(&mut s.waiters) {
-                self.wake(waiter, scope, out)?;
+                self.wake_waiter(waiter, scope, out)?;
             }
         }
         if detached {
@@ -839,7 +905,7 @@ impl Registry {
     /// 起こす待ち手。継続で待つタスクは、セルの継続を取り出して再開する。
     /// `from` が終わるか閉じたときの起こし。取り消しで外した待ちの項は待ち手に残るので、タスクが今も `from` を
     /// 待っているときだけ起こす。
-    fn wake(
+    fn wake_waiter(
         &mut self,
         waiter: Waiter,
         from: CellRef,
@@ -928,14 +994,13 @@ impl Registry {
         let result = match (raised, outcome) {
             (Some(failure), outcome) => {
                 if let Outcome::Value(w) = outcome {
-                    drop_value(ctx, worker, w, depth_offset)?;
+                    Depot::of(worker).discard(ctx, w, depth_offset)?;
                 }
                 Err(raise(failure))
             }
             (None, Outcome::Value(w)) => {
                 // 値はタスクが `finish_ok` に預けた参照で、受け取る側だけが持つ
-                unsafe { ctx.heap_mut().transfer_back(w, worker) }?;
-                Ok(w)
+                Ok(Depot::of(worker).receive(ctx, w)?)
             }
             (None, failure) => Err(raise(failure)),
         };
@@ -1179,7 +1244,8 @@ impl Registry {
         Ok(())
     }
 
-    /// 取り消しの知らせを受けたタスクの待ちを外す。待ち手の項は残し、起こす側が `wait` で見分ける。
+    /// 取り消しの知らせを受けたタスクの待ちを外す。タスクとスコープの待ち手の項は残し、起こす側が `wait` で見分ける。
+    /// channel の待ち手の列の項はいつも生きているので、ここで外す。
     fn unpark(&mut self, cell: CellRef, out: &mut Vec<Runnable>) -> Result<(), CellFault> {
         let Some(CellKind::Task(task)) = self.live(cell) else {
             return Ok(());
@@ -1193,9 +1259,18 @@ impl Registry {
             return Ok(());
         }
         let task = self.task_mut(cell)?;
-        // 輪の項を残すと、満期に `expire` が待たないタスクを名指して誤りにする
-        if let Some(Wait::Time(key)) = task.wait.take() {
-            self.timers.remove(&key);
+        match task.wait.take() {
+            // 輪の項を残すと、満期に `expire` が待たないタスクを名指して誤りにする
+            Some(Wait::Time(key)) => {
+                self.timers.remove(&key);
+            }
+            Some(Wait::Cell(c)) => {
+                if let Some(chan) = self.chan_mut(c) {
+                    chan.senders.retain(|&t| t != cell);
+                    chan.receivers.retain(|&t| t != cell);
+                }
+            }
+            Some(Wait::Ready) | None => {}
         }
         let task = self.task_mut(cell)?;
         let k = task
@@ -1233,7 +1308,8 @@ impl Registry {
         }
     }
 
-    /// run の終わりに、残ったセルをすべて放す。その間に積まれた知らせは受け箱ごと捨てる。
+    /// run の終わりに、残ったセルをすべて放す。閉じていない channel と品物の残った channel もここで放す。その間に
+    /// 積まれた知らせは受け箱ごと捨てる。
     pub(crate) fn sweep_all<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
@@ -1248,6 +1324,7 @@ impl Registry {
             match kind {
                 Some(CellKind::Task(_)) => self.free_task(ctx, cell, depth_offset)?,
                 Some(CellKind::Scope(_)) => self.release(cell.index),
+                Some(CellKind::Chan(_)) => self.free_chan(ctx, cell, depth_offset)?,
                 None => {}
             }
         }
@@ -1267,13 +1344,317 @@ impl Registry {
     ) -> Result<(), CellFault> {
         let task = self.task_mut(cell)?;
         let (worker, outcome) = (task.worker, task.outcome.take());
+        let mut depot = Depot::of(worker);
         if let Some(Outcome::Value(w)) = outcome {
-            drop_value(ctx, worker, w, depth_offset)?;
+            depot.discard(ctx, w, depth_offset)?;
         }
-        unsafe { ctx.heap_mut() }.retire_worker(worker)?;
+        depot.close(ctx)?;
         self.release(cell.index);
         Ok(())
     }
+}
+
+/// channel の操作 (docs/spec/vm.md の「channel」)。channel の引数は `Std.Chan.Chan` の即値で、放したセルと前の run の
+/// 値は閉じて空の channel として振る舞う。
+impl Registry {
+    /// 生きた channel のセル。放したセル、前の run の値、タスクかスコープのセルは `None` である。
+    fn chan_mut(&mut self, c: CellRef) -> Option<&mut ChanCell> {
+        match self.live(c) {
+            Some(CellKind::Chan(chan)) => Some(chan),
+            _ => None,
+        }
+    }
+
+    /// 容量 `cap` の channel を作る。容量は `0..=u32::MAX` に収める。
+    pub(crate) fn new_chan<M: Mode>(&mut self, ctx: &mut Ctx<M>, cap: i64) -> i64 {
+        let cap = cap.clamp(0, i64::from(u32::MAX)) as u32;
+        self.alloc(CellKind::Chan(ChanCell {
+            cap,
+            closed: false,
+            items: VecDeque::new(),
+            senders: VecDeque::new(),
+            receivers: VecDeque::new(),
+            depot: Depot::open(ctx),
+        }))
+        .encode()
+    }
+
+    /// タスクの中なら予算を1つ使い、`yields` が真で使い切ったら真を返す。タスクの外では予算を使わない。
+    fn spend(&mut self, me: Option<CellRef>, yields: bool) -> Result<bool, CellFault> {
+        match me {
+            Some(me) => Ok(self.spend_budget(me)? && yields),
+            None => Ok(false),
+        }
+    }
+
+    /// 送りの速い道。0 なら `push_raw` で積んでよく、1 なら待ち、2 なら閉じていて、3 なら先に譲る。
+    pub(crate) fn reserve_send(
+        &mut self,
+        c: i64,
+        me: Option<CellRef>,
+        yields: bool,
+    ) -> Result<i64, CellFault> {
+        if self.spend(me, yields)? {
+            return Ok(3);
+        }
+        Ok(match self.chan_mut(CellRef::decode(c)) {
+            None => 2,
+            Some(chan) if chan.closed => 2,
+            Some(chan) if chan.can_send() => 0,
+            Some(_) => 1,
+        })
+    }
+
+    /// 受け取りの速い道。0 なら `pop_raw` で取ってよく、1 なら待ち、2 なら閉じて空で、3 なら先に譲る。
+    pub(crate) fn reserve_recv(
+        &mut self,
+        c: i64,
+        me: Option<CellRef>,
+        yields: bool,
+    ) -> Result<i64, CellFault> {
+        if self.spend(me, yields)? {
+            return Ok(3);
+        }
+        Ok(match self.chan_mut(CellRef::decode(c)) {
+            None => 2,
+            Some(chan) if !chan.items.is_empty() => 0,
+            Some(chan) if chan.closed => 2,
+            Some(_) => 1,
+        })
+    }
+
+    /// 0 を返した `reserve_send` の直後に、品物 `x` を預けて積む。待っている受け手がいれば先頭を1つ起こす。`x` は呼ぶ側
+    /// から移ってきた参照である。
+    pub(crate) fn push_raw<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        x: Word,
+        c: i64,
+    ) -> Result<Option<Runnable>, CellFault> {
+        let cell = CellRef::decode(c);
+        let chan = self
+            .chan_mut(cell)
+            .ok_or(CellFault::Internal("an item is pushed to a freed channel"))?;
+        let x = chan.depot.publish(ctx, x)?;
+        chan.items.push_back(x);
+        let receiver = chan.receivers.pop_front();
+        self.stats.channel_ops += 1;
+        receiver.map(|r| self.wake(r, cell)).transpose()
+    }
+
+    /// 0 を返した `reserve_recv` の直後に、先頭の品物を取って受け取る。積めるようになれば待っている送り手の先頭を1つ
+    /// 起こし、閉じて空になれば channel を放す。
+    pub(crate) fn pop_raw<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        c: i64,
+    ) -> Result<(Word, Option<Runnable>), CellFault> {
+        let cell = CellRef::decode(c);
+        let chan = self.chan_mut(cell).ok_or(CellFault::Internal(
+            "an item is popped from a freed channel",
+        ))?;
+        let x = chan.items.pop_front().ok_or(CellFault::Internal(
+            "an item is popped from an empty channel",
+        ))?;
+        let x = chan.depot.receive(ctx, x)?;
+        let sender = if chan.can_send() {
+            chan.senders.pop_front()
+        } else {
+            None
+        };
+        self.stats.channel_ops += 1;
+        let run = sender.map(|s| self.wake(s, cell)).transpose()?;
+        self.settle(ctx, cell)?;
+        Ok((x, run))
+    }
+
+    /// 閉じる。待っている受け手と送り手をすべて起こし、空なら放す。放したか閉じた channel には何もしない。同じ
+    /// channel で受け手と送り手が同時に待つことはないので、起こす順は列ごとの FIFO だけで決まる。
+    pub(crate) fn close_raw<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        c: i64,
+    ) -> Result<Vec<Runnable>, CellFault> {
+        let cell = CellRef::decode(c);
+        let Some(chan) = self.chan_mut(cell) else {
+            return Ok(Vec::new());
+        };
+        if chan.closed {
+            return Ok(Vec::new());
+        }
+        chan.closed = true;
+        let waiters: Vec<CellRef> = chan
+            .receivers
+            .drain(..)
+            .chain(chan.senders.drain(..))
+            .collect();
+        let woken = waiters
+            .into_iter()
+            .map(|t| self.wake(t, cell))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.settle(ctx, cell)?;
+        Ok(woken)
+    }
+
+    /// channel の待ち手 `t` を起こす。列から外した後に呼ぶ。枠も品物も取っておかず、起こされたタスクが速い道を
+    /// やり直す。
+    fn wake(&mut self, t: CellRef, chan: CellRef) -> Result<Runnable, CellFault> {
+        let task = self.task_mut(t)?;
+        if !matches!(task.phase, Phase::Parked)
+            || !matches!(task.wait, Some(Wait::Cell(c)) if c == chan)
+        {
+            return Err(CellFault::Internal("a channel waiter is not waiting"));
+        }
+        task.wait = None;
+        let k = task
+            .k
+            .take()
+            .ok_or(CellFault::Internal("a parked task has no continuation"))?;
+        Ok(Runnable::Resume {
+            cell: t,
+            k,
+            wake: WOKE,
+        })
+    }
+
+    /// タスク `me` が、継続 `k` で channel `c` に枠が空くか閉じるまで待つ。
+    pub(crate) fn park_send(
+        &mut self,
+        c: i64,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        self.park_chan(c, me, k, Side::Send)
+    }
+
+    /// タスク `me` が、継続 `k` で channel `c` に品物が来るか閉じるまで待つ。
+    pub(crate) fn park_recv(
+        &mut self,
+        c: i64,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        self.park_chan(c, me, k, Side::Recv)
+    }
+
+    /// `park` と同じく、止めて数え、取り消しの規則を確かめる。すぐ戻れるなら `Woke` で戻り、そうでなければ待ち手の列に
+    /// 登録する。受け手の登録は枠を1つ開くので、積めるようになれば送り手の先頭を1つ起こす。
+    fn park_chan(
+        &mut self,
+        c: i64,
+        me: CellRef,
+        k: Word,
+        side: Side,
+    ) -> Result<Option<Runnable>, CellFault> {
+        let cell = CellRef::decode(c);
+        self.suspend(me)?;
+        self.stats.parks += 1;
+        self.stats.channel_waits += 1;
+        if self.point(me)? {
+            self.stats.cancels += 1;
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: CANCELLED,
+            }));
+        }
+        // 生きた channel でない値は、閉じて空の channel として扱う。閉じているか進める channel の道は、1つの worker では
+        // 速い道が確かめた状態のまま待ちに来るので届かない守りである
+        let ready = match self.chan_mut(cell) {
+            None => true,
+            Some(chan) => {
+                chan.closed
+                    || match side {
+                        Side::Send => chan.can_send(),
+                        Side::Recv => !chan.items.is_empty(),
+                    }
+            }
+        };
+        if ready {
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: WOKE,
+            }));
+        }
+        let task = self.task_mut(me)?;
+        task.k = Some(k);
+        task.wait = Some(Wait::Cell(cell));
+        let chan = self
+            .chan_mut(cell)
+            .ok_or(CellFault::Internal("a channel is freed while a task parks"))?;
+        let sender = match side {
+            Side::Send => {
+                chan.senders.push_back(me);
+                None
+            }
+            Side::Recv => {
+                chan.receivers.push_back(me);
+                if chan.can_send() {
+                    chan.senders.pop_front()
+                } else {
+                    None
+                }
+            }
+        };
+        sender.map(|s| self.wake(s, cell)).transpose()
+    }
+
+    /// 閉じて空の channel を放す。品物は残っていないので、預かる ID を退かせるだけである。
+    fn settle<M: Mode>(&mut self, ctx: &mut Ctx<M>, cell: CellRef) -> Result<(), CellFault> {
+        if self
+            .chan_mut(cell)
+            .is_some_and(|chan| chan.closed && chan.items.is_empty())
+        {
+            let chan = self.take_chan(cell)?;
+            chan.depot.close(ctx)?;
+        }
+        Ok(())
+    }
+
+    /// run の終わりに残った channel を放す。残った品物を預かる ID の下で落としてから ID を退かせる。
+    fn free_chan<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        cell: CellRef,
+        depth_offset: usize,
+    ) -> Result<(), CellFault> {
+        let ChanCell {
+            items, mut depot, ..
+        } = self.take_chan(cell)?;
+        for item in items {
+            depot.discard(ctx, item, depth_offset)?;
+        }
+        depot.close(ctx)?;
+        self.stats.channels_swept += 1;
+        Ok(())
+    }
+
+    /// channel のセルを登録表から取り出して放す。
+    fn take_chan(&mut self, cell: CellRef) -> Result<ChanCell, CellFault> {
+        let chan = match self.slots.get_mut(cell.index as usize) {
+            Some((generation, kind @ Some(CellKind::Chan(_))))
+                if *generation == cell.generation =>
+            {
+                kind.take()
+            }
+            _ => None,
+        };
+        let Some(CellKind::Chan(chan)) = chan else {
+            return Err(CellFault::Internal(
+                "a channel reference names a freed cell",
+            ));
+        };
+        self.release(cell.index);
+        Ok(chan)
+    }
+}
+
+/// channel の待ちの側。
+#[derive(Clone, Copy)]
+enum Side {
+    Send,
+    Recv,
 }
 
 fn raise(failure: Outcome) -> Raise {
@@ -1284,17 +1665,67 @@ fn raise(failure: Outcome) -> Raise {
     }
 }
 
-/// 受け取られない値を、値を持つタスクの ID の下で落とす。`decref` は即値も、破棄処理を持つ `Foreign` も受ける。
-fn drop_value<M: Mode>(
-    ctx: &mut Ctx<M>,
+/// 受け手の決まらない値の預かり先。預かる構造 (channel のセル、タスクのセル) の論理的な worker ID を持ち、送り手は `publish` で値を
+/// 預け、受け手は `receive` で受け取る (docs/spec/object-model.md の「論理的な worker ID」)。
+pub(crate) struct Depot {
+    /// 預かる ID。速いモードでは 0 である
     worker: u32,
-    w: Word,
-    depth_offset: usize,
-) -> Result<(), CellFault> {
-    with_worker(ctx, worker, depth_offset, |ctx| unsafe {
-        ctx.heap_mut().decref(w)
-    })?;
-    Ok(())
+}
+
+impl Depot {
+    /// 新しい預かる ID を出す。`new_chan` が1回呼ぶ。
+    pub(crate) fn open<M: Mode>(ctx: &mut Ctx<M>) -> Depot {
+        Depot {
+            worker: unsafe { ctx.heap_mut() }.fork_worker(),
+        }
+    }
+
+    /// ほかで出した ID (タスクのセルの ID) を預かる ID として使う。`close` は呼ぶ側が ID を退かせる所で呼ぶ。
+    pub(crate) fn of(worker: u32) -> Depot {
+        Depot { worker }
+    }
+
+    /// 値 `w` を預ける。送り手の ID のまま、構造に入れる前に呼ぶ。`Unr` の物体に共有の印を付け、`lin` の物体から rc 1 の
+    /// 道で届く物体の持ち主を預かる ID にする (docs/spec/object-model.md の「`share`」)。語は変わらない。
+    pub(crate) fn publish<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        w: Word,
+    ) -> Result<Word, CellFault> {
+        unsafe { ctx.heap_mut().share(w, self.worker) }?;
+        Ok(w)
+    }
+
+    /// 構造から取り出した値 `w` を、今の worker の局所の値として受け取る。取り出した後、ほかに参照がない状態で、受け手の
+    /// ID のまま呼ぶ (docs/spec/object-model.md の「`transfer_back`」)。語は変わらない。
+    pub(crate) fn receive<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        w: Word,
+    ) -> Result<Word, CellFault> {
+        unsafe { ctx.heap_mut().transfer_back(w, self.worker) }?;
+        Ok(w)
+    }
+
+    /// 受け取られない値 `w` を預かる ID の下で落とす。`decref` は即値も、破棄処理を持つ `Foreign` も受ける。
+    pub(crate) fn discard<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        w: Word,
+        depth_offset: usize,
+    ) -> Result<(), CellFault> {
+        with_worker(ctx, self.worker, depth_offset, |ctx| unsafe {
+            ctx.heap_mut().decref(w)
+        })?;
+        Ok(())
+    }
+
+    /// 預かる ID を退かせる。値をすべて `discard` した後、セルを放す直前に1回呼ぶ。ID の物体が残っていれば
+    /// `TransferLeak` を返す (`par` の join と同じ)。
+    pub(crate) fn close<M: Mode>(self, ctx: &mut Ctx<M>) -> Result<(), CellFault> {
+        unsafe { ctx.heap_mut() }.retire_worker(self.worker)?;
+        Ok(())
+    }
 }
 
 /// ほかのタスクの ID の物体を放すときの切り替え。`evv` を空にして ID `id` に替え、`f` の後で元の `evv`、worker、
@@ -1357,7 +1788,7 @@ fn resumed_cells(out: &[Runnable]) -> Vec<(CellRef, i64)> {
 
 #[test]
 fn timers_with_the_same_deadline_expire_in_registration_order() {
-    let mut registry = Registry::new(0);
+    let mut registry = Registry::new(Vec::new());
     let scope = registry.open_root(None, None).unwrap();
     let first = running_task(&mut registry, scope);
     let second = running_task(&mut registry, scope);
@@ -1384,7 +1815,7 @@ fn timers_with_the_same_deadline_expire_in_registration_order() {
 
 #[test]
 fn unparking_a_sleeping_task_removes_its_timer() {
-    let mut registry = Registry::new(0);
+    let mut registry = Registry::new(Vec::new());
     let scope = registry.open_root(None, None).unwrap();
     let first = running_task(&mut registry, scope);
     let second = running_task(&mut registry, scope);
@@ -1397,4 +1828,55 @@ fn unparking_a_sleeping_task_removes_its_timer() {
     out.clear();
     registry.expire(50, &mut out).unwrap();
     assert_eq!(resumed_cells(&out), [(second, WOKE)]);
+}
+
+#[test]
+fn a_slot_retires_instead_of_wrapping_its_generation() {
+    let mut registry = Registry::new(vec![RETIRED - 2]);
+    let scope = registry.open_root(None, None).unwrap();
+    assert_eq!(
+        scope,
+        CellRef {
+            index: 0,
+            generation: RETIRED - 2
+        }
+    );
+    registry.release(scope.index);
+    let last = registry.open_root(None, None).unwrap();
+    assert_eq!(
+        last,
+        CellRef {
+            index: 0,
+            generation: RETIRED - 1
+        }
+    );
+    registry.release(last.index);
+    // 進めた generation が一周の手前に来た添字は空けないので、次のセルは新しい添字に置く
+    let next = registry.open_root(None, None).unwrap();
+    assert_eq!(
+        next,
+        CellRef {
+            index: 1,
+            generation: 0
+        }
+    );
+    assert!(registry.live(scope).is_none() && registry.live(last).is_none());
+    // 退いた添字は次の run でも使わず、ほかの添字は generation を続ける
+    assert_eq!(registry.next_generations(), [RETIRED, 1]);
+    let mut later = Registry::new(registry.next_generations());
+    let reused = later.open_root(None, None).unwrap();
+    assert_eq!(
+        reused,
+        CellRef {
+            index: 1,
+            generation: 1
+        }
+    );
+    assert_eq!(
+        later.open_root(None, None).unwrap(),
+        CellRef {
+            index: 2,
+            generation: 0
+        }
+    );
 }

@@ -1,5 +1,6 @@
 //! `transfer_back` (docs/spec/object-model.md の「`transfer_back`」)。
 
+use std::any::Any;
 use std::sync::atomic::Ordering;
 
 use super::raw;
@@ -236,6 +237,39 @@ fn skipping_transfer_back_leaks_the_list_of_the_child<M: Mode>() {
     let _ = l;
 }
 
+/// 受け手が今の worker である `share` の後、別の ID が `transfer_back` で受け取れる。VM がタスクの結果を預かる ID に
+/// 預けて受け取る道で、持ち主の数は検査モードだけで動く。
+fn a_value_shared_to_the_current_id_is_received_by_another_id<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let a = heap.fork_worker();
+    heap.set_worker(a);
+    let x = list(&mut heap, 1);
+    // 持ち主の数は検査モードのヒープにだけある
+    let owned = |heap: &Heap<M>, id| {
+        (heap as &dyn Any)
+            .downcast_ref::<H>()
+            .map(|heap| heap.owned_by(id))
+    };
+    let before = owned(&heap, a);
+    unsafe {
+        heap.share(x, a).unwrap();
+        assert_eq!(raw::rc(x), -1);
+        assert_eq!(owned(&heap, a), before.map(|n| n - 1));
+        let b = heap.fork_worker();
+        heap.set_worker(b);
+        let before = owned(&heap, b);
+        assert_eq!(heap.transfer_back(x, a), Ok(()));
+        assert_eq!(raw::rc(x), 1);
+        assert_eq!(owned(&heap, b), before.map(|n| n + 1));
+        if let Some(heap) = (&heap as &dyn Any).downcast_ref::<H>() {
+            assert_eq!(heap.check_invariants(), Ok(()));
+        }
+        assert_eq!(heap.retire_worker(a), Ok(()));
+        heap.decref(x).unwrap();
+        assert_eq!(heap.retire_worker(b), Ok(()));
+    }
+}
+
 both_modes!(
     a_shared_list_becomes_local_again,
     shared_counts_above_one_and_immortal_objects_stop,
@@ -247,6 +281,7 @@ both_modes!(
     a_deep_shared_list_comes_back_without_recursion,
     a_deep_list_of_the_child_comes_back_without_recursion,
     skipping_transfer_back_leaks_the_list_of_the_child,
+    a_value_shared_to_the_current_id_is_received_by_another_id,
 );
 
 #[test]

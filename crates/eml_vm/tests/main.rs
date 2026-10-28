@@ -7,6 +7,7 @@ mod api;
 mod apply;
 mod bench;
 mod calls;
+mod chan;
 mod codegen;
 mod data;
 mod evidence;

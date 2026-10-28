@@ -84,7 +84,7 @@ A batch pipeline whose dependencies flow strictly top to bottom (docs/implementa
 
 ```
 eml_cli          check / run / repl; the only pipeline driver (`Session`); stage features types < core < run
-eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `par` and `Async` tasks on one worker; `Machine` appends programs by name (the REPL)
+eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `par`, `Async` tasks and channels on one worker; `Machine` appends programs by name (the REPL)
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
 eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> Perceus -> reuse, verifier
@@ -123,6 +123,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | Evidence passing | docs/spec/core-ir.md の「evidence passing」 |
 | Reprs, marks, the LIR passes, verifiers | docs/spec/lir.md の「値の表現」, docs/spec/lir.md の「Kind の印」, docs/spec/lir.md の「パスの順番」, docs/spec/lir.md の「verifier」 |
 | `Std.Async` tasks | docs/spec/stdlib.md の「`Std.Async`」, docs/spec/stdlib.md の「取り消し」, docs/spec/stdlib.md の「時間」, docs/spec/vm.md の「`Async` のタスク」, docs/spec/vm.md の「取り消しの届け方」, docs/spec/vm.md の「時計と driver」, docs/spec/declarations.md の「`extern`」 (held arguments) |
+| `Std.Chan` and `Std.Atomic` | docs/spec/stdlib.md の「`Std.Chan`」, docs/spec/stdlib.md の「`Std.Atomic`」, docs/spec/vm.md の「channel」, docs/spec/object-model.md の「論理的な worker ID」 |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
 | The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |

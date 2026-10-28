@@ -454,8 +454,8 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                         return op;
                     }
                     let at = self.out.slot_list([*ext as u32], &slots);
-                    // `Std.Async` の行はタスクを作って切り替えるので、`Scheduler` を持つ命令にする
-                    // (docs/spec/vm.md の「`Async` のタスク」)
+                    // `Std.Async`、`Std.Chan`、`Std.Atomic` の行は登録表に触れ、`Std.Async` の行はタスクを作るか起こして
+                    // 切り替えるので、`Scheduler` を持つ命令にする (docs/spec/vm.md の「`Async` のタスク」)
                     if ext.is_async() {
                         Op::Async { dst, at }
                     } else {

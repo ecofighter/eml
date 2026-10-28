@@ -31,7 +31,7 @@ eml run --clock virtual sleeper.em
 
 extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
-extern の行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md) の「`extern`」)。預かる行は `Std.Async` の `start_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw`、`park_time`、`park_drain` の13行で、`task_cell` だけは借りて預かる。預からない引数の型変数は、同じ節の規則のとおり `Unr` に固定するか、コールバックの結果なら固定しない。
+extern の行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md) の「`extern`」)。預かる行は `Std.Async` の `start_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw`、`park_time`、`park_drain`、`park_send`、`park_recv` の15行と、`Std.Chan` の `push_raw` の1行で、`task_cell` だけは借りて預かる。預からない引数の型変数は、同じ節の規則のとおり `Unr` に固定するか、コールバックの結果なら固定しない。
 
 文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
@@ -951,7 +951,7 @@ main () = println (show (Async.run body))
 - `yield_now ()` は、呼んだタスクを実行待ちの列の後ろへ回す。取り消しの地点である
 - `sleep_ms ms` は、呼んだタスクを `ms` ミリ秒眠らせる取り消しの地点である (下の「時間」)
 - タスクは閉じた row `<IO, Panic, Async>` で始まる。始めた側の handler と `var` はタスクから見えない。`var` を捕まえた閉包を `start` や `spawn` に渡すと型の誤り (E2002) になる
-- `Async` は抽象エフェクトで、操作 `await_cell`、`reschedule`、`await_time`、`await_drain` は `Std.Async` の外から perform も handle もできない (E1058。[エフェクトと handler](effects.md) の「抽象エフェクト」)。利用者は `await`、`yield_now` などの包む関数を呼ぶ
+- `Async` は抽象エフェクトで、操作 `await_cell`、`reschedule`、`await_time`、`await_drain`、`await_send`、`await_recv` は `Std.Async` の外から perform も handle もできない (E1058。[エフェクトと handler](effects.md) の「抽象エフェクト」)。利用者は `await`、`yield_now` などの包む関数を呼ぶ。channel の待ちは `chan_wait_send` と `chan_wait_recv` が包む (下の「`Std.Chan`」)
 
 `Async` のエフェクト、ランタイムが名前で呼ぶ入口、extern の行は、eml とランタイムの間の ABI である。形を変えるときはランタイムも合わせて変える。
 
@@ -965,6 +965,8 @@ pub abstract effect Async where
   reschedule : Unit -> Wake
   await_time : Int -> Wake
   await_drain : Scope -> Wake
+  await_send : Cell -> Wake
+  await_recv : Cell -> Wake
 
 pub extern data Cell
 pub extern data Task a
@@ -976,12 +978,12 @@ pub data Failure =
   deriving (Show)
 ```
 
-- `Async` は抽象エフェクト (`pub abstract effect`) で、extern のエフェクトではない。生の操作は `Std.Async` の外では perform できず、handler の節にも書けない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。生の操作は4つで、どれも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る。`await_time ms` は `ms` ミリ秒眠り、`ms` が 0 以下なら `reschedule ()` と同じく列の後ろへ回る。`await_drain s` はスコープ `s` に属するタスクがなくなるまで待ち、`s` を閉じない。どの操作でも、タスクの待ちの登録はいつも高々1つである
+- `Async` は抽象エフェクト (`pub abstract effect`) で、extern のエフェクトではない。生の操作は `Std.Async` の外では perform できず、handler の節にも書けない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。生の操作は6つで、どれも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る。`await_time ms` は `ms` ミリ秒眠り、`ms` が 0 以下なら `reschedule ()` と同じく列の後ろへ回る。`await_drain s` はスコープ `s` に属するタスクがなくなるまで待ち、`s` を閉じない。`await_send c` は channel `c` に枠が空くか閉じるまで、`await_recv c` は品物が来るか閉じるまで待つ。どの操作でも、タスクの待ちの登録はいつも高々1つである
 - `Wake` は、ランタイムが待たせたタスクを再開するときに渡す値である。ランタイムは配置の表を見ずに、宣言の順のタグ (`Woke` = 0、`Cancelled` = 1。`eml_lir::WAKE_WOKE`、`WAKE_CANCELLED`) で作る。タグと宣言の順が合うことはテストで確かめる。ランタイムは取り消したタスクを `Cancelled` で再開する
 - `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Scope` は `Cell` と同じ形の即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
-- ランタイムが名前で呼ぶ入口は、std の2つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どちらも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に、`await_time` の節は継続を `park_time` に、`await_drain` の節は継続を `park_drain` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。2つの入口が単相の std の関数であることもテストで確かめる
+- ランタイムが名前で呼ぶ入口は、std の2つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どちらも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に、`await_time` の節は継続を `park_time` に、`await_drain` の節は継続を `park_drain` に、`await_send` の節は継続を `park_send` に、`await_recv` の節は継続を `park_recv` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。2つの入口が単相の std の関数であることもテストで確かめる
 - タスクの底 (`bottom`) は、`try_all` で本体の失敗を捕まえ、成功した結果を `finish_ok` に、IO の失敗を種類と文言のまま `finish_io` に、`Panic` を文言のまま `finish_panic` に渡す
-- extern の行は次の27行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の29行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 預かる引数 |
 |---|---|---|
@@ -991,6 +993,8 @@ pub data Failure =
 | `park` | `Cell -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
 | `park_time` | `Int -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
 | `park_drain` | `Scope -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
+| `park_send` | `Cell -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
+| `park_recv` | `Cell -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
 | `ready` | `(once Wake -> <IO> Unit) -> <IO> Unit` | 継続 |
 | `finish_ok` | `a -> <IO> Unit` | 結果の値 |
 | `finish_io` | `IOErrorKind -> String -> <IO> Unit` | なし |
@@ -1015,8 +1019,9 @@ pub data Failure =
 
 - タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
 - `take_result` と `run_result` が返す値の型が、`finish_ok` に預けた値の型と合うことは、処理系は確かめない。生の行を `pub` にせず、`start`、`start_in`、`run`、`await` のシグネチャだけが本体の結果の型 `a` とハンドルの `Task a` を結ぶことで、標準ライブラリが保つ
-- 預かる引数の矢印 (`start_raw`、`run_raw`、`start_in_raw` の閉包、`park`、`park_time`、`park_drain`、`ready` の継続) には、閉じた row を書く。ランタイムはそれを呼ばず、入口の `start_task` と `resume_task` が呼ぶので、row は入口の型が決める
+- 預かる引数の矢印 (`start_raw`、`run_raw`、`start_in_raw` の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`ready` の継続) には、閉じた row を書く。ランタイムはそれを呼ばず、入口の `start_task` と `resume_task` が呼ぶので、row は入口の型が決める
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
+- `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のための口で、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
 
 ### スコープ
 
@@ -1032,7 +1037,7 @@ body () =
 - `scope f` は、呼んだタスクの今のスコープの子のスコープを開いて今のスコープにし、同じタスクの中で `f s` を動かす。`f s` が値を返しても、失敗しても、取り消されても、スコープのすべてのタスクが終わるまで待ってから今のスコープを元に戻す。この待ちは `shield` の中で行うので、取り消しで外れない
 - `scope` の結果はスコープに最初に記録した失敗 (本体か子かによらず、終わった順) を起こし直すか、記録がなければ本体の結果 (値、失敗、`Cancelled`) である。本体の失敗も記録し、記録した時点で子をすべて取り消す。本体が種類 `Cancelled` の失敗で終わったときは、記録はしないが、子はすべて取り消す。2つ目からの失敗は報告せず、`RunStats.dropped_failures` に数える ([VM](vm.md) の「`RunStats`」)
 - `start_in s f` と `spawn_in s f` は名前を付けたスコープ `s` にタスクを加える。`s` が閉じていれば `Panic` `the scope is closed` を起こす。本体が終わって閉じかけでも、まだタスクの残るスコープには加えられる。旗の立ったスコープに加えたタスクは、作るときに取り消す
-- `Scope` は `Unr` の即値で、子のタスクに渡せ、`scope` の外へも出せる。REPL の束縛にも置ける。離れたスコープの値と前の run の値は、その添字の generation が一周するまでは、閉じたスコープとして扱う ([VM](vm.md) の「セルと登録表」)
+- `Scope` は `Unr` の即値で、子のタスクに渡せ、`scope` の外へも出せる。REPL の束縛にも置ける。離れたスコープの値と前の run の値は、閉じたスコープとして扱う ([VM](vm.md) の「セルと登録表」)
 - タスクは自分のスコープより長く生きない。スコープはタスクがすべて終わるまで閉じず、タスクが開いたスコープはタスクの底より前に閉じる
 
 ### 取り消し
@@ -1040,7 +1045,8 @@ body () =
 - 取り消しは2つの所から来る。タスクの取り消しのビットは、`cancel t`、`drop t`、属するスコープの取り消し、取り消したスコープに加えることで立つ。スコープの取り消しの旗は、`cancel_scope`、スコープのタスクの失敗、`scope` の本体の失敗、親のスコープの取り消しで立ち、開くときに親の旗を写す (`shield` の境目は写さない。下の `shield` の箇条)。どちらも一度立てたら下ろさない
 - タスクにビットが立つと、そのタスクが開いているスコープと、入れ子の `run` で待っている根にも旗が立つ。ただし `shield` の中で開いたスコープには立たない。ビットが立った後に `shield` の外で開くスコープと、ビットが立った後に `shield` の外で呼ぶ入れ子の `run` の根も、開くときに旗を立てる
 - `scope` の本体を動かすタスクは、そのスコープの中にいる間だけ旗で取り消される (ビットは立てない)。スコープを出た後は、外の旗かビットが立っていなければ取り消されていない
-- 取り消しの地点は `await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` である。取り消しの地点は、`shield` の外では、タスクのビットかタスクの今のスコープの旗が立っていれば (`shield` の中の規則は下の `shield` の箇条にある)、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる
+- 取り消しの地点は `await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` と、`Std.Chan` の `send` と `recv` である。取り消しの地点は、`shield` の外では、タスクのビットかタスクの今のスコープの旗が立っていれば (`shield` の中の規則は下の `shield` の箇条にある)、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる
+- `send` と `recv` は、待つ前と待っている間に取り消しが立てば投げる。起こされた後は、`await` と同じく、まず操作をやり直し (枠か品物があれば送るか受け取る)、次の取り消しの地点が投げる。やり直しで待ち直すときは、待つ前の規則で投げる
 - 失敗したタスクを同じスコープの中から `await` で待つタスクは、失敗が記録されたときにもう待っていればその失敗を受け取り、まだ待っていなければスコープの取り消しを受けて `Cancelled` を受け取る。どちらになるかはスケジュールで決まる。スコープの最初の失敗はどちらでも同じなので、`run` と `scope` が起こし直す失敗は変わらない。相手のスコープを `shield` の外で開いたときは、`await` を `shield` で囲めば、待つ相手の失敗を確かに受け取る
 - 取り消しは協調的で、取り消しの地点を通らないコードは止まらない。待たないループを取り消せるようにするには、ループの中で `check_cancelled ()` を呼ぶ
 - `cancel_requested ()` は、取り消しの地点が投げるときだけ真を返す。`shield` の中では、今のスコープを今の `shield` の中で自分が開いたときだけ、その旗を読む。タスクの外では偽である。`await` から出た `Cancelled` を捕まえたタスクは、`cancel_requested ()` で自分が取り消されたかを確かめられる
@@ -1057,7 +1063,7 @@ body () =
 
 ### 操作の予算
 
-待たずに済む速い道は、タスクごとの予算を1つずつ使う。予算は 128 で、タスクが始まるときと再開するときに戻す。予算を使い切った速い道は、`yield_now` でほかのタスクに worker を渡す。予算を使う速い道は `check_cancelled` だけで、`cancel_requested` は予算を使わない。予算は横取りの予算と別で、横取りでは戻さない。戻すのは始まるときと再開するときだけなので、`RunStats.parks` はスケジュールによらず、横取りのないネイティブのコードでも同じに動く。予算はタスクのセルに持ち、`Ctx` には置かない。予算を使う行はどれも登録表に触れるので、`eml_rt` を変えずに済むためである。
+待たずに済む速い道は、タスクごとの予算を1つずつ使う。予算は 128 で、タスクが始まるときと再開するときに戻す。予算を使い切った速い道は、`yield_now` でほかのタスクに worker を渡す。予算を使う速い道は、`check_cancelled` と、`Std.Chan` の `send`、`recv`、`try_send`、`try_recv` の速い道である。`try_send` と `try_recv` の row は `Async` を持たないので、予算を使うだけで譲らず、次に予算を見る `send`、`recv`、`check_cancelled` が譲る。待ちから起こされた直後のやり直しは、予算を使っても譲らない。譲った後のやり直しは予算をもう1つ使う。`cancel_requested` は予算を使わない。予算は横取りの予算と別で、横取りでは戻さない。戻すのは始まるときと再開するときだけなので、`RunStats.parks` はスケジュールによらず、横取りのないネイティブのコードでも同じに動く。予算はタスクのセルに持ち、`Ctx` には置かない。予算を使う行はどれも登録表に触れるので、`eml_rt` を変えずに済むためである。
 
 ### 時間
 
@@ -1114,6 +1120,122 @@ pub try_all : (Unit -> <IO, Panic | e> a) -> <IO | e> Result Failure a
 - `try_all action` は、`action ()` の IO の失敗と `Panic` を両方捕まえて `Failure` の値にする。IO の失敗は `IOFailed` に `IOError` のまま入れ、`Panic` は `Panicked` に文言を入れる。成功すれば `Ok` で結果を返す
 - `try_io` の中で `try_panic` を呼ぶ形で書く。`action` の `Panic` は内側の `try_panic` が、IO の失敗は外側の `try_io` が捕まえる (上の「`try_io`」と「`try_panic`」)
 - タスクの底は `try_all` でタスクの失敗を捕まえる。接続ごとの分離のように、タスクの中で失敗を受け止めるときにも使う
+
+## `Std.Chan`
+
+`Std.Chan` はタスクの間で値を受け渡す channel のモジュールである。1つの型で、送り手と受け手をいくつでも持てる。
+
+```haskell
+import Async (Async)
+import Chan
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let c = Chan.new 0
+  let r = Async.start (fn () -> Chan.recv c)
+  println (show (Chan.send 2 c))
+  println (show (Async.await r))
+  Chan.close c
+```
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `new` | `Int -> <IO> Chan a` | eml |
+| `send` | `a -> Chan a -> <IO, Async> SendResult a` | eml |
+| `recv` | `Chan a -> <IO, Async> Option a` | eml |
+| `try_send` | `a -> Chan a -> <IO> TrySendResult a` | eml |
+| `try_recv` | `Chan a -> <IO> TryRecvResult a` | eml |
+| `close` | `Chan a -> <IO> Unit` | eml |
+| `merge` | `List (Chan a) -> <IO, Async> Chan a` | eml |
+| `SendResult` | `Sent` と `Rejected a` を持つ型 | eml (`deriving (Eq, Show)`) |
+| `TrySendResult` | `Accepted`、`Full a`、`Refused a` を持つ型 | eml (`deriving (Eq, Show)`) |
+| `TryRecvResult` | `Got a`、`Empty`、`Drained` を持つ型 | eml (`deriving (Eq, Show)`) |
+
+- `Chan a` は登録表の添字を持つ `Unr` の即値で、Kind は `a` によらず `Unr` である。channel は `close` で放す資源で、閉じて空になった時点でその場で放す。閉じないままの channel と、閉じても品物の残った channel は run の終わりに放し、残った品物をそのとき落とす。放した channel と前の run の channel の値は、閉じて空の channel として振る舞う (`Scope` と同じ)。1回だけの受け渡しには `Task a` と `await` を使う。`Task a` は `Lin` で、捨てれば後始末が走るためである
+- `new n` は容量 `n` の channel を作る。0 は待ち合わせで、負の数は 0 として扱う。積めるのは、積んだ品物の数が容量と待っている受け手の数の和より少ないときである。そのため、容量 0 でも受け手が待っていれば1つ積める
+- `send x c` は、積めれば積んで `Sent` を返し、積めなければ枠が空くか閉じるまで待つ。閉じていれば `x` を `Rejected x` で返す。`recv c` は、品物があれば取って `Some` で返し、なければ品物が来るか閉じるまで待つ。閉じて空なら `None` を返す
+- `try_send` と `try_recv` は待たない。`try_send` は、積めれば `Accepted`、満ちていれば `Full x`、閉じていれば `Refused x` を返す。`try_recv` は、品物があれば `Got x`、空なら `Empty`、閉じて空なら `Drained` を返す。どちらも row に `Async` を持たないので、タスクの外でも呼べる
+- `close c` は何度呼んでもよく、2回目からは何もしない。待っている受け手と送り手をすべて起こす (同じ channel で両方が待つことはない)。積んであった品物は閉じた後も順に取れ、取り切ると `recv` は `None` を返す。起こされた送り手は `Rejected` を受け取る
+- 待ち手は側ごとに FIFO で起こす。起こされたタスクより先に速い道のタスクが品物や枠を取ることがあり、そのときは列の後ろで待ち直す。約束する順は起こす順だけである
+- `send` と `recv` は取り消しの地点である (上の「取り消し」)。取り消しの巻き戻しは `close` を飛ばす。取り消されうるタスクで作った channel は、`try_all` の handler か `shield` の中で `close` する
+- 品物の値は、積むときに送り手が印を付け、取るときに受け手が受け取る ([オブジェクトモデル](object-model.md) の「論理的な worker ID」)。断られた値と、待っている間に取り消された送り手の値は channel に入らない。送り手の値のまま戻るか、巻き戻しが落とす
+- 待っているタスクのほかに進むものがなくなると、実行時エラー `deadlock` で止まる ([VM](vm.md) の「時計と driver」)
+- `merge srcs` は容量 0 の出力を作り、入力ごとに転送のタスクを1つと、終わりを集めて出力を閉じるタスクを1つ、呼んだタスクの今のスコープに `spawn` する。空の並びなら閉じた出力を返し、タスクを作らない。出力の順はスケジュールで決まる。入力がすべて閉じて空になると出力を閉じる。`merge` の結果をそのスコープの外へ出すと、スコープが閉じるときに転送は取り消される。出力を先に閉じると、転送のタスクは次に受け取った品物を落として終わる。閉じない入力を待つ転送は、入力が閉じるかスコープが取り消されるまで待つ。転送の終わりは容量 0 の `Chan Unit` で集め、終わった後にその channel も閉じるので、`merge` は run の終わりまで残る資源を作らない
+- REPL の入力をまたいだ channel の扱いは、[モジュールと名前解決](modules.md) の「REPL のセッション」にある
+
+`Std.Chan` の extern の行は次の7行で、どれも `pub` でない。`chan_cell` のほかの6行は `Async` の命令で実行する ([VM](vm.md) の「channel」)。
+
+| 行 | 型 | 預かる引数 |
+|---|---|---|
+| `new_raw` | `Int -> <IO> Chan a` | なし |
+| `chan_cell` | `Chan a -> Async.Cell` | なし |
+| `reserve_send` | `Chan a -> Bool -> <IO> Int` | なし |
+| `push_raw` | `a -> Chan a -> <IO> Unit` | 品物 (1つ目の引数) |
+| `reserve_recv` | `Chan a -> Bool -> <IO> Int` | なし |
+| `pop_raw` | `Chan a -> <IO> a` | なし |
+| `close_raw` | `Chan a -> <IO> Unit` | なし |
+
+- `reserve_send` と `reserve_recv` は、0 (確定してよい)、1 (待つ)、2 (閉じている。受け取りでは閉じて空)、3 (先に譲る。2つ目の引数が真のときだけ) を返す
+- `push_raw` と `pop_raw` は、0 を返した `reserve_*` の直後に、`Int` を比べるほかは呼び出しを挟まずに呼ぶ。標準ライブラリがこの形を保ち、処理系は確かめない
+- 待ちは `Std.Async` の `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) を通す
+
+```haskell
+send : a -> Chan a -> <IO, Async> SendResult a
+send x c = if Async.cancel_requested () then raise_cancelled () else send_loop x c True
+
+recv : Chan a -> <IO, Async> Option a
+recv c = if Async.cancel_requested () then raise_cancelled () else recv_loop c True
+
+send_loop : a -> Chan a -> Bool -> <IO, Async> SendResult a
+send_loop x c yields =
+  let r = reserve_send c yields
+  if r == 0 then
+    push_raw x c
+    Sent
+  else if r == 2 then Rejected x
+  else if r == 3 then
+    Async.yield_now ()
+    send_loop x c True
+  else match Async.chan_wait_send (chan_cell c) with
+    | Async.Woke -> send_loop x c False
+    | Async.Cancelled -> raise_cancelled ()
+
+recv_loop : Chan a -> Bool -> <IO, Async> Option a
+recv_loop c yields =
+  let r = reserve_recv c yields
+  if r == 0 then Some (pop_raw c)
+  else if r == 2 then None
+  else if r == 3 then
+    Async.yield_now ()
+    recv_loop c True
+  else match Async.chan_wait_recv (chan_cell c) with
+    | Async.Woke -> recv_loop c False
+    | Async.Cancelled -> raise_cancelled ()
+```
+
+## `Std.Atomic`
+
+`Std.Atomic` はタスクと REPL の入力の間で共有する数 `Counter` のモジュールである。
+
+```haskell
+import Atomic
+
+body : Unit -> <IO> Int
+body () =
+  let c = Atomic.new 0
+  Atomic.add 2 c
+```
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `Counter` | `Unr` の即値の型 | extern |
+| `new` | `Int -> <IO> Counter` | extern |
+| `add` | `Int -> Counter -> <IO> Int` | extern |
+| `load` | `Counter -> <IO> Int` | extern |
+| `store` | `Int -> Counter -> <IO> Unit` | extern |
+
+- `Counter` は、run をまたいで `Machine` が持つ表の添字を持つ `Unr` の即値である。`add n c` は足した後の値を返し、64 ビットで巻き戻る。`Counter` は放さない。数の少ない共有の状態のためのものである。worker のスレッドを入れるときは、表を `SeqCst` の atomic にする
+- 行は `Async` の命令で動くので、`Std.Atomic` は `Std.Async` を読み込む。row は `IO` だけで、タスクの外でも、REPL の入力をまたいでも使え、実行時エラーで捨てた run の `add` も残る
 
 ## 実行時エラー
 

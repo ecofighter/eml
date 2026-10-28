@@ -55,17 +55,24 @@ pub struct RunStats {
     pub peak_stack: u64,
     /// `Async` が作ったタスクのセルの数。
     pub tasks: u64,
-    /// `Async` の待ち、`yield_now`、`sleep_ms`、`drain_within` が、継続をランタイムに渡した数。
+    /// `Async` の待ち、`yield_now`、`sleep_ms`、`drain_within`、channel の待ちが、継続をランタイムに渡した数。
     pub parks: u64,
     /// スコープの最初の失敗より後の、タスクの失敗の数。
     pub dropped_failures: u64,
-    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、受け箱の処理が外した待ち、
-    /// 取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
+    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
+    /// 受け箱の処理が外した待ち、取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を
+    /// 数える (docs/spec/vm.md の「`RunStats`」)。
     pub cancels: u64,
     /// `await_time` が時間の輪に登録した回数。
     pub timers: u64,
     /// `share` が rc を負にした物体の数。
     pub shared_objects: u64,
+    /// `Std.Chan` の速い道が品物を積んだ回数と取った回数の和。
+    pub channel_ops: u64,
+    /// `send` と `recv` が継続を `park_send`、`park_recv` に渡した回数。`parks` にも数える。
+    pub channel_waits: u64,
+    /// run の終わりに放した channel の数。閉じなかった channel と、閉じても品物の残った channel を数える。
+    pub channels_swept: u64,
 }
 
 /// 1回の実行の結果。`exit` で終わったら、その終了コードを持つ (docs/spec/vm.md の「`RunStats`」)。
@@ -176,8 +183,10 @@ pub struct Machine<M: Mode> {
     /// 根の表のうち、印を付け終えた先頭の根の数。実行をまたいで持ち、回復で 0 に戻す
     /// (docs/spec/object-model.md の「セッションの根」)。
     shared_roots: usize,
-    /// 次の run の登録表の最初の generation (docs/spec/vm.md の「`Async` のタスク」)。
-    generations: u32,
+    /// 次の run の登録表の、添字ごとの generation (docs/spec/vm.md の「セルと登録表」)。
+    generations: Vec<u32>,
+    /// `Std.Atomic.Counter` の表。run をまたぎ、REPL の入力をまたいで残る (docs/spec/vm.md の「セルと登録表」)。
+    counters: Vec<i64>,
     /// 時計と待ち。run の間は `Scheduler` に移すので、run の外ではいつも `Some` である。`Machine` ごとに1つなので、
     /// 時刻は run をまたいで続く (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
@@ -217,7 +226,8 @@ impl<M: Mode> Machine<M> {
             earlier: HeapWork::default(),
             copying: HeapWork::default(),
             shared_roots: 0,
-            generations: 0,
+            generations: Vec::new(),
+            counters: Vec::new(),
             driver: Some(Clock::Virtual.driver()),
         }
     }
@@ -360,7 +370,8 @@ impl<M: Mode> Machine<M> {
         let start = Start {
             max_depth: self.max_depth,
             shared_roots: self.shared_roots,
-            generations: self.generations,
+            generations: std::mem::take(&mut self.generations),
+            counters: std::mem::take(&mut self.counters),
             driver: self
                 .driver
                 .take()
@@ -379,7 +390,8 @@ impl<M: Mode> Machine<M> {
             }
         };
         self.shared_roots = scheduled.shared_roots;
-        self.generations = scheduled.generations;
+        self.generations = std::mem::take(&mut scheduled.generations);
+        self.counters = std::mem::take(&mut scheduled.counters);
         // 誤りで返る道でも driver を失わないように、run の直後に戻す
         self.driver = scheduled.driver.take();
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
@@ -475,6 +487,21 @@ impl<M: Mode> Machine<M> {
                 0
             },
             shared_objects: h.shared_objects,
+            channel_ops: if M::CHECKED {
+                scheduled.tasks.channel_ops
+            } else {
+                0
+            },
+            channel_waits: if M::CHECKED {
+                scheduled.tasks.channel_waits
+            } else {
+                0
+            },
+            channels_swept: if M::CHECKED {
+                scheduled.tasks.channels_swept
+            } else {
+                0
+            },
         }
     }
 
@@ -505,7 +532,8 @@ struct Scheduled {
     peak_stack: u64,
     shared_roots: usize,
     tasks: TaskStats,
-    generations: u32,
+    generations: Vec<u32>,
+    counters: Vec<i64>,
     /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
     driver: Option<Box<dyn IoDriver>>,
 }
@@ -514,7 +542,8 @@ struct Scheduled {
 struct Start {
     max_depth: usize,
     shared_roots: usize,
-    generations: u32,
+    generations: Vec<u32>,
+    counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
 }
 
@@ -538,13 +567,15 @@ fn run_scheduled<M: Mode, P: Policy>(
         start.generations,
     );
     sched.shared_roots = start.shared_roots;
+    sched.cells.counters = start.counters;
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     let scheduled = Scheduled {
         preemptions: sched.preemptions(),
         peak_stack: sched.peak_stack(task),
         shared_roots: sched.shared_roots,
         tasks: sched.cells.stats,
-        generations: sched.cells.next_floor(),
+        generations: sched.cells.next_generations(),
+        counters: std::mem::take(&mut sched.cells.counters),
         driver: Some(sched.driver),
     };
     (result, scheduled)

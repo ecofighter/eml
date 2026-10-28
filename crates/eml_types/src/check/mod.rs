@@ -772,7 +772,11 @@ fn declaration_schemes(
                     FunctionKind::Extern(Some(e)) => e.row().held,
                     _ => &[],
                 };
-                for var in param_type_vars(signature, arity, held) {
+                let handle = |def: eml_hir::TypeDefId| {
+                    matches!(program[def].kind, TypeDefKind::Extern(Some(ty))
+                        if ty.row().params > 0 && !ty.row().kind_follows_params)
+                };
+                for var in param_type_vars(signature, arity, held, &handle) {
                     table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
                 }
             });
@@ -847,8 +851,14 @@ fn declaration_schemes(
 }
 
 /// シグネチャの一番外側の `arity` 個の矢印の引数の型に現れる型変数。row の型引数も含む。関数型の引数については、
-/// 最後の結果にだけ現れる型変数を除く。`held` は表の預かる印で、印の立つ引数の型変数は集めない。
-fn param_type_vars(signature: &Signature, arity: usize, held: &[bool]) -> Vec<TypeVarId> {
+/// 最後の結果にだけ現れる型変数を除く。`held` は表の預かる印で、印の立つ引数の型変数は集めない。`handle` が真の型
+/// (型引数が Kind に効かないハンドル) の中の型変数も集めない。
+fn param_type_vars(
+    signature: &Signature,
+    arity: usize,
+    held: &[bool],
+    handle: &dyn Fn(eml_hir::TypeDefId) -> bool,
+) -> Vec<TypeVarId> {
     let mut vars = Vec::new();
     let mut spine = signature.ty;
     for index in 0..arity {
@@ -878,11 +888,39 @@ fn param_type_vars(signature: &Signature, arity: usize, held: &[bool]) -> Vec<Ty
                 callback = *ret;
             }
         } else {
-            eml_hir::visit_type_vars(&signature.types, callback, &mut collect);
+            visit_outside_handles(signature, callback, handle, &mut collect);
         }
         spine = *ret;
     }
     vars
+}
+
+/// `visit_type_vars` と同じだが、型引数が Kind に効かないハンドルの型 (`Chan a`) の中には下りない。処理系はハンドルの
+/// 即値だけを読み、中身の値に触れないためである (docs/spec/declarations.md の「`extern`」)。
+fn visit_outside_handles(
+    signature: &Signature,
+    id: eml_hir::TypeRefId,
+    handle: &dyn Fn(eml_hir::TypeDefId) -> bool,
+    visit: &mut impl FnMut(TypeVarId),
+) {
+    let types = &signature.types;
+    match &types[id].kind {
+        eml_hir::TypeRefKind::Con(def, _, _) if handle(*def) => {}
+        eml_hir::TypeRefKind::Con(_, args, rows) => {
+            for &arg in args {
+                visit_outside_handles(signature, arg, handle, visit);
+            }
+            for row in rows {
+                eml_hir::visit_row_type_vars(types, row, visit);
+            }
+        }
+        eml_hir::TypeRefKind::Tuple(args) => {
+            for &arg in args {
+                visit_outside_handles(signature, arg, handle, visit);
+            }
+        }
+        _ => eml_hir::visit_type_vars(types, id, visit),
+    }
 }
 
 /// 宣言の形を使い捨ての表に置き、宣言から出る制約だけを足した Kind の問題。`file` は `generics` を書いたファイルで、
@@ -1219,10 +1257,36 @@ mod tests {
             })
             .and_then(|(_, function)| function.signature.as_ref())
             .expect("the std declares `read`");
-        assert!(super::param_type_vars(signature, 2, &[true, false]).is_empty());
+        assert!(super::param_type_vars(signature, 2, &[true, false], &|_| false).is_empty());
         assert_eq!(
-            super::param_type_vars(signature, 2, &[false, false]).len(),
+            super::param_type_vars(signature, 2, &[false, false], &|_| false).len(),
             1
         );
+    }
+
+    #[test]
+    fn a_handle_parameter_leaves_its_type_variables_free() {
+        // `MutArray.read` の `a` は `MutArray a` の中にだけ現れる。`MutArray` をハンドルとして渡すと、その中の `a` は数えない
+        let program = crate::test_program("import MutArray\n");
+        let signature = program
+            .functions()
+            .find(|(_, function)| {
+                function.kind
+                    == eml_hir::FunctionKind::Extern(Some(eml_extern::Extern::MutArrayRead))
+            })
+            .and_then(|(_, function)| function.signature.as_ref())
+            .expect("the std declares `read`");
+        let eml_hir::TypeRefKind::Fn { param, .. } = &signature.types[signature.ty].kind else {
+            panic!("`read` is a function");
+        };
+        let eml_hir::TypeRefKind::Con(handle_def, ..) = &signature.types[*param].kind else {
+            panic!("the first parameter is `MutArray a`");
+        };
+        let held = [false, false];
+        assert_eq!(
+            super::param_type_vars(signature, 2, &held, &|_| false).len(),
+            1
+        );
+        assert!(super::param_type_vars(signature, 2, &held, &|def| def == *handle_def).is_empty());
     }
 }
