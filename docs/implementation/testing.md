@@ -426,7 +426,7 @@ Ctrl-C の受け口は、bin の `interrupt` モジュールの単体テスト�
 
 ### Windows で流さないテスト
 
-印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のツールを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットがそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
+印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のシェルを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットがそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
 
 - Rust のテストは、`#[test]` の関数か、そうしたテストだけを持つ `mod` に `#[cfg(unix)]` を付ける。`src/` の中のテストの `mod` には `#[cfg(all(test, unix))]` を付ける。本体が `libc::kill`、`mkfifo`、`PermissionsExt`、`CommandExt::process_group` を使い、Windows でコンパイルできないので、`cfg_attr(windows, ignore)` は使えない
 - UI テストとトランスクリプトは、入口のファイルの、shebang (`#!…`) でない最初の行に印を書く。`.em` は `-- windows: skip (<理由>)`、`.repl` は `# windows: skip (<理由>)` である。理由は空にしない。印は入口のファイル (1つのファイルか `main.em`、`main.repl`) にだけ書く
