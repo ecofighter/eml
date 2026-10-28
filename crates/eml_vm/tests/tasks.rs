@@ -331,6 +331,9 @@ main () =
     println \"a\")
 ";
     assert_eq!(run_both(src), "a\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.expect("the checked run");
+    assert_eq!((s.parks, s.timers), (1, 1));
 }
 
 /// 同じ忙しい期間に登録した眠りは、どのスケジュールでも長さの順に満ちる。
@@ -361,6 +364,16 @@ main () =
         result.unwrap_or_else(|error| panic!("{sched:?}: {error}"));
         assert_eq!(out, "50\n70\n100\n", "{sched:?}");
     }
+    let counts = |sched| {
+        let (_, result) = execute(&program, &checked().with_sched(sched));
+        let s = result.expect("the checked run");
+        (s.tasks, s.parks, s.timers)
+    };
+    let sequential = counts(Sched::Sequential);
+    assert_eq!(sequential.2, 3);
+    for sched in [Sched::Seeded(1), Sched::Seeded(2026)] {
+        assert_eq!(counts(sched), sequential, "{sched:?}");
+    }
 }
 
 /// 0 以下の眠りは、輪に載らずに列の後ろへ回るだけである。
@@ -377,6 +390,9 @@ main () =
     println \"negative\")
 ";
     assert_eq!(run_both(src), "zero\nnegative\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.expect("the checked run");
+    assert_eq!((s.parks, s.timers, s.cancels), (2, 0, 0));
 }
 
 /// 眠るタスクのハンドルを落とすと、受け箱の処理が輪の項ごと待ちを外し、タスクは眠り切らずに `Cancelled` で終わる。
@@ -398,6 +414,7 @@ main () =
     let (_, stats) = run_stats(src);
     let s = stats.expect("the checked run");
     assert_eq!((s.tasks, s.dropped_failures, s.cancels), (2, 0, 1));
+    assert_eq!((s.timers, s.cancels), (1, 1));
 }
 
 /// `shield` の中の眠りは取り消しで外れず、眠り切った後の最初の取り消しの地点でタスクが `Cancelled` で終わる。

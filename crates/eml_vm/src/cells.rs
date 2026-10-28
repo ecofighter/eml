@@ -276,6 +276,8 @@ pub(crate) struct TaskStats {
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、受け箱の処理が外した待ち、取り消しで再開する
     /// `yield_now`、真を返した `cancel_point` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
+    /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` だけを数える。
+    pub(crate) timers: u64,
 }
 
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
@@ -661,6 +663,7 @@ impl Registry {
         };
         self.timer_seq += 1;
         self.timers.insert(key, me);
+        self.stats.timers += 1;
         let task = self.task_mut(me)?;
         task.k = Some(k);
         task.wait = Some(Wait::Time(key));

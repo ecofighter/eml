@@ -358,7 +358,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `rc_increments` と `rc_decrements` は比べる。切り替えは RC に触れず (`Ctx::switch_task`)、fork と join の RC の仕事は親の `evv` と子の値だけで決まる。共有の物体を最後に手放すタスクは順で変わるが、手放す回数は変わらない
   - `evidence_steps`、`yields`、`yield_frames`、`unwound_frames` は比べる。yield の途中では切り替えず、子の中断はどの順でも両方の子が終わった後で同じ親の handler に起こし直すためである
   - `cancels` は 0 にして比べない。どの run も `cancels` が 0 のときに限って、ほかの欄を比べる
-  - `tasks`、`parks`、`dropped_failures`、`shared_objects` は比べる。`tasks` と `parks` は `start` と `await` と `yield_now` の呼び出しの数で、順によらない。`dropped_failures` は、スコープで失敗したタスクの数から最初の1つを引いた数で、どれが最初かによらない。`shared_objects` は、始めるときと fork のときに印を付ける物体の数で、始める順で変わらない
+  - `tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects` は比べる。`tasks` と `parks` は `start` と `await` と `yield_now` の呼び出しの数で、順によらない。`timers` は取り消しが届かない run では `await_time` の呼び出しのうち `ms` が正のものの数で、順によらない。`dropped_failures` は、スコープで失敗したタスクの数から最初の1つを引いた数で、どれが最初かによらない。`shared_objects` は、始めるときと fork のときに印を付ける物体の数で、始める順で変わらない
 - 欄がスケジュールで変わると分かったら、その欄の定義を直すか、理由を書いてこの一覧と `schedule_independent` に足す。食い違う欄を一律に外すことはしない
 
 ## REPL のトランスクリプト
