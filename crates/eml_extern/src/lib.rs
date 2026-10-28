@@ -256,7 +256,8 @@ table! {
 pub struct TypeRow {
     pub name: &'static str,
     pub linearity: Linearity,
-    /// 型引数の数。型引数はすべて共変で、`Unr` の行の Kind は引数の Kind に従う。
+    /// 型引数の数。`kind_follows_params` の行では、型引数は共変で、`Unr` の行の Kind は引数の Kind に従う。そうでない行
+    /// (ハンドルの型) の型引数は両方向である (docs/spec/types.md の「Kind」)。
     pub params: usize,
     /// 型引数の Kind が値の Kind に効くか。ハンドルの型 (`Chan a`) は効かない。値は登録表の添字の即値で、中身の値の
     /// 持ち主は処理系の表だからである (docs/spec/types.md の「Kind」)。

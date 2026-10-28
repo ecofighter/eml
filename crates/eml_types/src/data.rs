@@ -69,10 +69,18 @@ pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
                     TypeDefKind::Extern(None) => false,
                     TypeDefKind::Data { constructors: _ } => def.lin,
                 },
-                // 行のない extern の型の型引数は誤り (E1033) の跡で、使われ方が分からないので、安全な側の両方向にする
+                // 行のない extern の型の型引数は誤り (E1033) の跡で、使われ方が分からないので、安全な側の両方向にする。
+                // ハンドルの型 (`Chan a`) の値は共有する表を指し、ある持ち主が書いた値を別の持ち主が読む。共変にすると、
+                // 規則 W で広げた写しから `once` の関数を書き、`Unr` の関数として読めてしまうので、両方向にする
+                // (docs/spec/types.md の「Kind」)
                 variance: match def.kind {
                     TypeDefKind::Extern(Some(ty)) if ty.row().params > 0 => {
-                        vec![Variance::Co; arity]
+                        let variance = if ty.row().kind_follows_params {
+                            Variance::Co
+                        } else {
+                            Variance::Both
+                        };
+                        vec![variance; arity]
                     }
                     TypeDefKind::Extern(_) => vec![Variance::Both; arity],
                     TypeDefKind::Data { constructors: _ } => vec![Variance::Absent; arity],
