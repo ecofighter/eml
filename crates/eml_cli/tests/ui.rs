@@ -148,7 +148,9 @@ fn host_for(path: &Path, root: &Path) -> CaptureHost {
             .map(str::to_string)
             .collect()
     };
-    let mut host = CaptureHost::new(root.to_path_buf());
+    // 子として `eml` 自身を `PATH` から起こせるようにする
+    let bin = Path::new(env!("CARGO_BIN_EXE_eml")).parent().unwrap();
+    let mut host = CaptureHost::new(root.to_path_buf()).with_path_prefix(bin.to_path_buf());
     if let Some(args) = read("args") {
         host = host.with_args(lines(args).into_iter().map(OsString::from).collect());
     }
