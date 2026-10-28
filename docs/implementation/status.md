@@ -160,5 +160,4 @@
 ### Windows
 
 - 待っている読み (標準入力、`FileIn`、`Child`) は Ctrl-C で止まらない。コンソールの標準入力の読みは Ctrl-C で戻るが、std がその場で読み直す。pipe とファイルの読みは Ctrl-C で戻らない。止める語を見るのは、データが来るか相手が閉じて読みが戻った後である。待っている読みからは `eml run` の2回目の Ctrl-C で抜けられる ([VM](../spec/vm.md) の「上限と割り込み」)。std を通さない読み手は入れていない ([ロードマップ](../future/roadmap.md) の「マルチコア対応」)
-- `run (merge_stderr c)` は使えず、起動の誤り (``cannot run `x`: not available``) になる ([標準ライブラリ](../spec/stdlib.md) の「`Proc`」)。Windows でこの道を通すテストがないので、移植していない ([ロードマップ](../future/roadmap.md) の「処理系」)
 - 子のプロセスを起こす UI テストは Windows で流さない。POSIX の道具 (`sh`、`cat` など) を子にするためである。Windows で `eml` 自身を子にする、移植できる `Proc` のテストはない ([テスト戦略](testing.md) の「Windows で流さないテスト」)

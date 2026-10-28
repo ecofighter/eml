@@ -1167,20 +1167,6 @@ fn os_stdio(stdio: Stdio) -> process::Stdio {
     }
 }
 
-/// 受け継いだ標準出力の fd の写し。`2>&1` で標準出力を受け継ぐ子の、標準エラーに渡す。
-#[cfg(unix)]
-fn inherited_stdout() -> io::Result<process::Stdio> {
-    use std::os::fd::AsFd;
-    Ok(process::Stdio::from(
-        io::stdout().as_fd().try_clone_to_owned()?,
-    ))
-}
-
-#[cfg(not(unix))]
-fn inherited_stdout() -> io::Result<process::Stdio> {
-    Err(io::Error::from(io::ErrorKind::Unsupported))
-}
-
 /// 子のプロセスの終了コード。シグナルで終わった子は、シェルと同じく 128 + シグナルの番号にする。
 pub fn exit_code(status: ExitStatus) -> i32 {
     #[cfg(unix)]
@@ -1380,10 +1366,11 @@ impl Host for StdHost {
                 command.stderr(writer.try_clone()?).stdout(writer);
                 shared = Some(reader);
             }
+            // std は `io::Stdout` を、どの OS でも子に渡せる標準出力の写しにする (`2>&1` の意味)
             (Stdio::Inherit, StderrMode::ToStdout) => {
                 command
                     .stdout(process::Stdio::inherit())
-                    .stderr(inherited_stdout()?);
+                    .stderr(io::stdout());
             }
             (Stdio::Null, StderrMode::ToStdout) => {
                 command
