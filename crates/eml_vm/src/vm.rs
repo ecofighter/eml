@@ -15,7 +15,7 @@ use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
-use crate::driver::floor_ms;
+use crate::driver::{ceil_ms, floor_ms};
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{JoinId, JoinNode, MAIN, Outcome, Policy, Scheduler, TaskId, TaskState};
@@ -1739,6 +1739,17 @@ fn async_op<R: Exec>(
             }
             task.set(dst, Word::UNIT);
         }
+        Extern::AsyncParkTime => {
+            let me = current_cell(task)?;
+            let now = ceil_ms(sched.driver.now());
+            if let Some(run) = sched
+                .cells
+                .park_time(now, task.raw(arg(0)), me, task.get(arg(1)))?
+            {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
         Extern::AsyncReady => {
             let me = current_cell(task)?;
             let run = sched.cells.ready(me, task.get(arg(0)))?;
@@ -2673,6 +2684,7 @@ fn run_extern<R: Exec>(
             Extern::AsyncStartRaw
             | Extern::AsyncRunRaw
             | Extern::AsyncPark
+            | Extern::AsyncParkTime
             | Extern::AsyncReady
             | Extern::AsyncFinishOk
             | Extern::AsyncFinishIo

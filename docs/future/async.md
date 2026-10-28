@@ -53,6 +53,7 @@ pub abstract effect Async where
 pub data Wake = | Woke | Cancelled
 ```
 
+- このうち `await_cell`、`await_time`、`reschedule` の3つは実装してある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
 - `Async` は extern のエフェクトにしない。extern のエフェクトは yield しうるラベルでなく ([型と Kind](../spec/types.md) の「row の具体化の記録」)、`Async` の操作は継続を取り出して待つためである
 - 生の操作は eml とランタイムの間の ABI である。`Async` は抽象エフェクトで、名前は見えるが操作は見えない。操作はランタイムの ABI として文書に書く。利用者は下の節の包みの関数を呼ぶ。`Cell` は登録表の添字を持つ `Unr` の即値 (`Repr::Int`) で、`OpId` と `ChanWait` はランタイムの token の `Foreign` である。どれも std の中で使う。`OpId` は `Lin` で、待つ間はランタイムが預かり、再開するときに `Wake` と組にして返す
 - ランタイムが名前で呼ぶ入口は、単相の `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である。単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` は、生の操作ごとに節を1つ持つ handler をタスクの本体にかぶせる。節は継続 `k` をランタイムに預けて (待ちに入れるか、実行待ちに戻す) そのまま戻る。ランタイムは後で `resume_task` で `k` に `Wake` の値を渡し、タスクを再開する ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。タスクの本体は std の底の関数で包む。底は `Panic` と IO の失敗を捕まえ、結果を値のまま、引数を預かる extern (`finish_ok`) に渡す。`await` と `run` は預けた値を `take_result` と `run_result` で1回受け取る。`Lin` の結果も thunk に包まずに渡せる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
@@ -118,11 +119,11 @@ probe_all hosts =
 
 ### 待ちを外す
 
-取り消しで再開する前に、ランタイムは待ちの理由ごとに待ちを外す。外すのは、取り消しを処理するときのタスクのセルの持ち主の worker で、その受け箱の lock の下で行う。救済で持ち主が変わると、外す務めも新しい持ち主へ移る ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。セルの待ちと実行待ちの外し方は [VM](../spec/vm.md) の「取り消しの届け方」にある。
+取り消しで再開する前に、ランタイムは待ちの理由ごとに待ちを外す。外すのは、取り消しを処理するときのタスクのセルの持ち主の worker で、その受け箱の lock の下で行う。救済で持ち主が変わると、外す務めも新しい持ち主へ移る ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。セルの待ち、実行待ち、時間の待ちの外し方は [VM](../spec/vm.md) の「取り消しの届け方」にある。
 
 待つ継続はどの待ちでも待つタスクのセルが持ち、待ちの登録 (時間の輪、channel の待ち手、I/O の操作の記録、プールの仕事の記録) はタスクのセルの番号だけを持つ。タスクのセルの待ちの欄は、何を待っているかを名指す。核の持たない登録の待ちでは、受け箱の処理が待ちの種類を実行系に返し、実行系は自分の登録を外してから、タスクのセルから継続を取り出して `Cancelled` で再開する。時間と channel の待ちではすぐに取り出し、I/O の操作とプールの仕事の待ちでは完了の後に取り出す。取り消し中の状態は、待ちの欄が残ったまま取り消しのビットが立っている形で表し、状態の種類は足さない。
 
-- 時間の待ち: 持ち主の worker の時間の輪から登録を消す
+- 時間の待ち: 時間の輪は核の登録表にあるので、受け箱の処理が実行系を通さずに輪の項を消す ([VM](../spec/vm.md) の「時間の待ち」)
 - channel の待ち: channel の lock の下で、待つ側の登録を消した印に替える。消した登録には品物を渡さない。待ち合わせの `send` の値は送り手のフレームに残り、巻き戻しが落とす。これは後始末で、漏れではない
 - I/O の操作の待ち: タスクを取り消し中の状態にし、ハンドルを縛った worker の I/O の driver に操作の取り消しを頼む (`CancelIoEx`、io_uring の `ASYNC_CANCEL`、epoll と kqueue では登録を外す)。完了 (取り消した状態か、競合したときはデータ) が届いてから `Cancelled` で再開する。取り出しは buffer とハンドルを返し、巻き戻しがそれを落とす。カーネルが書きうる間は buffer を放さない。取り消し中のタスクは完了の前に再開しない
 - プールの仕事の待ち: 仕事は止められないので、I/O の操作と同じく完了を待ってから再開する (下の「I/O の driver」の表)
@@ -159,7 +160,7 @@ pub drain_within : Int -> Scope -> <IO, Async> Unit
 - 時間は今からの長さを表す `Int` のミリ秒である。`sleep_ms`、`timeout`、`_within` の関数、生の操作の `await_time` と `await_io_until` はどれもこれを受ける。時刻を扱う `Time` のモジュールは後で足す
 - `timeout ms f` は `f` をタスクとして動かし、期限が来たら取り消して `None` を返す。`race f g` は先に終わった側の値を返し、もう一方を取り消す
 - `drain_within ms s` は名前を付けたスコープ `s` のタスクが終わるのを最大 `ms` ミリ秒待ち、残っていれば属するタスクを取り消す。`cancel_scope` と違い、呼んだタスクは取り消さない。サーバを穏やかに止めるときに使う (下の「ネットワークとシグナル」)。閉じたスコープでは、すぐに戻る
-- 時間の待ちは worker ごとの I/O の driver の時間の輪に登録する。テストでは仮想の時計を使う (下の「テストと決定性」)
+- 時間の待ちは、worker ごとの核の登録表にある時間の輪に登録し、満期は driver の時計で見る ([VM](../spec/vm.md) の「時間の待ち」)。テストでは仮想の時計を使う (下の「テストと決定性」)
 - 期限付きの読み (`_within` の版) は、期限が来ても接続を閉じない。受け付けた後に `await_io_until` で待つと、ランタイムは待つときに時間を登録し、期限で操作を取り消す。ここでの取り消しはタスクの取り消しではない。完了が届いたら `Woke` で再開し、完了の状態が `TimedOut` なら取り出しは `None` とハンドルを返す
 
 ```haskell
@@ -241,7 +242,7 @@ read_chunk buf s =
 
 ### `IoDriver` と `eml_io`
 
-- `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。語の単位の trait で `external_body` にし、信頼の一覧では Host と同じ T11 の行に属する。`Ctx` を通して届く
+- `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。語の単位の trait で `external_body` にし、信頼の一覧では Host と同じ T11 の行に属する。`eml_rt` の extern が driver を要るまでは実行系が持ち、`Ctx` には入れない。`eml_rt` の extern が I/O を持つときに `Ctx` へ移す
 - 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、`eml_test_support` が選ぶ。`Session::run` が実行系を組み立てるときに driver を渡す
 - driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る
 - 本物の driver の第一の案は `compio-driver` と `compio-buf` である。IOCP、io_uring、kqueue と epoll (`polling`)、所有ごと渡す buffer を持つ。使えないときの代わりの案は下の「未決の論点と将来の拡張」にある

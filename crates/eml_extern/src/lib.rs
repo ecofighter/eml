@@ -1049,6 +1049,17 @@ table! {
                 Purity::Effectful,
             ),
         ),
+        AsyncParkTime => holding(
+            &[false, true],
+            kinded(
+                "Std.Async.park_time",
+                &[Int, TObj],
+                &[Unr, Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
         AsyncReady => holding(
             &[true],
             kinded(
@@ -1184,6 +1195,7 @@ impl Extern {
             Extern::AsyncStartRaw
                 | Extern::AsyncRunRaw
                 | Extern::AsyncPark
+                | Extern::AsyncParkTime
                 | Extern::AsyncReady
                 | Extern::AsyncFinishOk
                 | Extern::AsyncFinishIo

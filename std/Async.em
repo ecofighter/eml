@@ -6,13 +6,15 @@ pub data Wake =
   | Woke
   | Cancelled
 
--- タスクの生の操作。どちらも once である。
+-- タスクの生の操作。どれも once である。
 -- 操作はランタイムとの ABI で、利用者は包みの関数を呼ぶ (docs/spec/effects.md の「抽象エフェクト」)
 pub abstract effect Async where
   -- `Cell` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ
   await_cell : Cell -> Wake
   -- 実行待ちの列の後ろへ回る
   reschedule : Unit -> Wake
+  -- 指定したミリ秒だけ眠る。0 以下は `reschedule` と同じく列の後ろへ回る
+  await_time : Int -> Wake
 
 -- 登録表の添字 `(generation << 32) | index` を持つ即値である。Kind は `Unr`
 pub extern data Cell
@@ -37,6 +39,7 @@ start_task f =
   handle f () with
     | ctl await_cell c k -> park c k
     | ctl reschedule () k -> ready k
+    | ctl await_time ms k -> park_time ms k
     | return () -> ()
 
 resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit
@@ -131,6 +134,12 @@ shield f =
       shield_leave ()
       reraise e
 
+pub sleep_ms : Int -> <IO, Async> Unit
+sleep_ms ms =
+  match await_time ms with
+    | Woke -> ()
+    | Cancelled -> raise_cancelled ()
+
 -- 取り消しを受けた包みが投げる IO の失敗。`Wake` の `Cancelled` と名前が重なるので、種類は修飾して書く
 -- (docs/spec/stdlib.md の「取り消し」)
 raise_cancelled : Unit -> <IO> a
@@ -160,8 +169,8 @@ wait_closed s =
 
 -- ランタイムの口。生の行を `pub` にせず、結果の型の `a` は `start`、`start_in`、`run`、`await` のシグネチャだけが結ぶ。
 -- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`run_raw`、`ready`、`finish_ok`、
--- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park` と `start_in_raw` の2つ目の引数、`task_cell` の
--- 引数 (`task_cell` だけは借りて預かる) である。預かる引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける
+-- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`start_in_raw` の2つ目の引数、
+-- `task_cell` の引数 (`task_cell` だけは借りて預かる) である。預かる引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける
 -- (docs/spec/stdlib.md の「`Std.Async`」)
 extern start_raw        : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern run_raw          : (Unit -> <IO, Async> Unit) -> <IO> Task a
@@ -186,3 +195,4 @@ extern shield_enter     : Unit -> <IO> Unit
 extern shield_leave     : Unit -> <IO> Unit
 extern cancel_point     : Unit -> <IO> Bool
 extern spend_budget     : Unit -> <IO> Bool
+extern park_time        : Int -> (once Wake -> <IO> Unit) -> <IO> Unit

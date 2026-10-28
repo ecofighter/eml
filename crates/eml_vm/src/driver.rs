@@ -92,10 +92,6 @@ pub(crate) fn floor_ms(d: Duration) -> u64 {
 }
 
 /// 登録で読む今の時刻。切り上げるので、本物の時計で期限が `ms` より早く来ない (docs/spec/vm.md の「時計と driver」)。
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "時間の待ちを登録する操作だけが使う")
-)]
 pub(crate) fn ceil_ms(d: Duration) -> u64 {
     d.as_millis() as u64 + u64::from(!d.subsec_nanos().is_multiple_of(1_000_000))
 }

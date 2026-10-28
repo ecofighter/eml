@@ -5,9 +5,10 @@
 //! セルが持つ語は数えた参照で、VM が1回入れて1回出す。`Registry` はヒープに触れる `Drop` を持たないので、誤りで終わった
 //! run と捨てた run では、`Scheduler` と一緒に触れずに捨てる。
 //!
-//! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、`wake` が `wait` で確かめる。`k.is_some()` と
-//! `wait == Some(Cell(_))` は同値である (`Ready` の継続は列に積んだ仕事が持つ)。タスクの今のスコープ `current` から
-//! 親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
+//! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、
+//! `wake` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))` か `Some(Time(_))` であることは同値で
+//! ある (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項 `key` と `wait == Some(Time(key))` は、いつも両方
+//! あるか両方ないかである。タスクの今のスコープ `current` から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
 //! `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed` の
 //! スコープは `closing` で、`members` が空である。スコープのセルを放すのは、閉じた後の `release_scope`
 //! (`Take::Run` は根の待ちが `closed` で起きた後に、`leave_scope` は今のスコープを親に戻した後に呼ぶ) と、run の終わりの
@@ -153,11 +154,10 @@ enum Wait {
     Cell(CellRef),
     Ready,
     /// 時間の輪の鍵 `TimerKey` の項。
-    #[expect(dead_code, reason = "時間の待ちを登録する操作だけが作る")]
     Time(TimerKey),
 }
 
-/// 時間の輪の鍵。期限はミリ秒で、同じ期限は `seq` で登録の順に並ぶ (docs/spec/vm.md の「時計と driver」)。
+/// 時間の輪の鍵。期限はミリ秒で、同じ期限は `seq` で登録の順に並ぶ (docs/spec/vm.md の「時間の待ち」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct TimerKey {
     deadline: u64,
@@ -286,10 +286,9 @@ pub(crate) struct Registry {
     floor: u32,
     pub(crate) inbox: Arc<Inbox>,
     pub(crate) stats: TaskStats,
-    /// 時間の輪。項は時間を待つタスクのセルの番号だけで、語を持たない (docs/spec/vm.md の「時計と driver」)。
+    /// 時間の輪。項は時間を待つタスクのセルの番号だけで、語を持たない (docs/spec/vm.md の「時間の待ち」)。
     timers: BTreeMap<TimerKey, CellRef>,
     /// 次に登録するタイマーの `seq`。
-    #[expect(dead_code, reason = "時間の待ちを登録する操作だけが読む")]
     timer_seq: u64,
 }
 
@@ -312,7 +311,7 @@ impl Registry {
     }
 
     /// 期限が `now_ms` までのタイマーを、期限の順、同じ期限なら登録の順に外し、待っていたタスクを再開する仕事を
-    /// `out` に積む。輪の項と待ちの登録は、どちらが先に外れても他方を残さない (docs/spec/vm.md の「時計と driver」)。
+    /// `out` に積む。輪の項と待ちの登録は、どちらが先に外れても他方を残さない (docs/spec/vm.md の「時間の待ち」)。
     pub(crate) fn expire(&mut self, now_ms: u64, out: &mut Vec<Runnable>) -> Result<(), CellFault> {
         while let Some(entry) = self.timers.first_entry() {
             let key = *entry.key();
@@ -626,6 +625,46 @@ impl Registry {
             k,
             wake: WOKE,
         })
+    }
+
+    /// タスク `me` が、継続 `k` で `ms` ミリ秒眠る。`now_ms` は切り上げて読んだ今の時刻である。0 以下は譲りにして
+    /// 輪に載せないので、時計の読みも次に集める地点までの遅れもない (docs/spec/vm.md の「時間の待ち」)。
+    pub(crate) fn park_time(
+        &mut self,
+        now_ms: u64,
+        ms: i64,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        self.suspend(me)?;
+        self.stats.parks += 1;
+        if self.point(me)? {
+            self.stats.cancels += 1;
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: CANCELLED,
+            }));
+        }
+        if ms <= 0 {
+            self.task_mut(me)?.wait = Some(Wait::Ready);
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: WOKE,
+            }));
+        }
+        // 期限は飽和させ、どんな長さも誤りにしない。仮想の時計が端に着いた後は、どの期限も今と等しくなる
+        let key = TimerKey {
+            deadline: now_ms.saturating_add(ms as u64),
+            seq: self.timer_seq,
+        };
+        self.timer_seq += 1;
+        self.timers.insert(key, me);
+        let task = self.task_mut(me)?;
+        task.k = Some(k);
+        task.wait = Some(Wait::Time(key));
+        Ok(None)
     }
 
     fn suspend(&mut self, me: CellRef) -> Result<(), CellFault> {
@@ -1012,14 +1051,20 @@ impl Registry {
         let Some(CellKind::Task(task)) = self.live(cell) else {
             return Ok(());
         };
-        if !matches!(task.phase, Phase::Parked) || !matches!(task.wait, Some(Wait::Cell(_))) {
+        if !matches!(task.phase, Phase::Parked)
+            || !matches!(task.wait, Some(Wait::Cell(_) | Wait::Time(_)))
+        {
             return Ok(());
         }
         if !self.point(cell)? {
             return Ok(());
         }
         let task = self.task_mut(cell)?;
-        task.wait = None;
+        // 輪の項を残すと、満期に `expire` が待たないタスクを名指して誤りにする
+        if let Some(Wait::Time(key)) = task.wait.take() {
+            self.timers.remove(&key);
+        }
+        let task = self.task_mut(cell)?;
         let k = task
             .k
             .take()
@@ -1074,6 +1119,8 @@ impl Registry {
             }
         }
         drop(self.inbox.take());
+        // 眠るタスクを残して終わる run がある (`exit` や誤り) ので、空であることは確かめない
+        self.timers.clear();
         Ok(())
     }
 
@@ -1138,4 +1185,83 @@ pub(crate) fn with_worker<M: Mode, T>(
 /// (docs/spec/object-model.md の「実行の制御」)。
 pub(crate) fn end_with_exit(control: &Control, n: i64) -> bool {
     control.exit(n)
+}
+
+// 輪の単体テストは子のモジュールに置かない。子のモジュールは親を `super` の道で読むが、このファイルは `std` と
+// `eml_rt` だけを読む約束で、`crates/eml_vm/tests/tasks.rs` がそれを行ごとに確かめる
+
+/// 根のスコープに、動いているタスクのセルを1つ置く。輪だけを確かめるので、ヒープの ID は持たない。
+#[cfg(test)]
+fn running_task(registry: &mut Registry, scope: CellRef) -> CellRef {
+    registry.alloc(CellKind::Task(TaskCell {
+        phase: Phase::Running,
+        outcome: None,
+        scope,
+        worker: 0,
+        spawner: 0,
+        member_at: 0,
+        waiters: Vec::new(),
+        k: None,
+        current: scope,
+        wait: None,
+        cancel: false,
+        shield: 0,
+        budget: BUDGET,
+        run: None,
+        detached: false,
+    }))
+}
+
+#[cfg(test)]
+fn resumed_cells(out: &[Runnable]) -> Vec<(CellRef, i64)> {
+    out.iter()
+        .map(|run| match run {
+            Runnable::Resume { cell, wake, .. } => (*cell, *wake),
+            _ => panic!("expected a resume"),
+        })
+        .collect()
+}
+
+#[test]
+fn timers_with_the_same_deadline_expire_in_registration_order() {
+    let mut registry = Registry::new(0);
+    let scope = registry.open_root(None, None).unwrap();
+    let first = running_task(&mut registry, scope);
+    let second = running_task(&mut registry, scope);
+    assert!(
+        registry
+            .park_time(3, 50, first, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        registry
+            .park_time(3, 50, second, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(registry.next_deadline(), Some(53));
+    let mut out = Vec::new();
+    registry.expire(52, &mut out).unwrap();
+    assert!(out.is_empty());
+    registry.expire(53, &mut out).unwrap();
+    assert_eq!(resumed_cells(&out), [(first, WOKE), (second, WOKE)]);
+    assert_eq!(registry.next_deadline(), None);
+}
+
+#[test]
+fn unparking_a_sleeping_task_removes_its_timer() {
+    let mut registry = Registry::new(0);
+    let scope = registry.open_root(None, None).unwrap();
+    let first = running_task(&mut registry, scope);
+    let second = running_task(&mut registry, scope);
+    registry.park_time(0, 50, first, Word::UNIT).unwrap();
+    registry.park_time(0, 50, second, Word::UNIT).unwrap();
+    registry.task_mut(first).unwrap().cancel = true;
+    let mut out = Vec::new();
+    registry.unpark(first, &mut out).unwrap();
+    assert_eq!(resumed_cells(&out), [(first, CANCELLED)]);
+    out.clear();
+    registry.expire(50, &mut out).unwrap();
+    assert_eq!(resumed_cells(&out), [(second, WOKE)]);
 }

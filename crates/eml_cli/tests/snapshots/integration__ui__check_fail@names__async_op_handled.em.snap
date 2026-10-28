@@ -29,3 +29,16 @@ input_file: tests/ui/check-fail/names/async_op_handled.em
     │   ─────┬────  
     │        ╰────── declared here
 ────╯
+[E1058] Error: operation `await_time` of the abstract effect `Async` is not visible outside `Std.Async`
+    ╭─[ check-fail/names/async_op_handled.em:12:13 ]
+    │
+ 12 │       | ctl Async.await_time ms k -> k Async.Woke
+    │             ────────┬───────  
+    │                     ╰───────── hidden by `abstract`
+    │
+    ├─[ <std>/Async.em:17:3 ]
+    │
+ 17 │   await_time : Int -> Wake
+    │   ─────┬────  
+    │        ╰────── declared here
+────╯
