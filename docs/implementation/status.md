@@ -33,7 +33,7 @@
 - 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)
 - 連想配列と集合: キーの順の `Map k v` (`Std.Map`) と `Set a` (`Std.Set`)。どちらも釣り合いを取った木で、キーと要素は `Unr` に限る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」)
 - 2つの計算の組: `Std.Par` の `par` は2つの子を動かして両方を待ち、子の `never` の操作を親で起こし直す。子の row の上限は `never` で、`IO` や `var` を使う子は E2020 になる。`both` は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Par`」)。`eml run` と `eml repl` の `--sched` で、子を切り替える方針を普通の方針 (`normal`。既定。監視のスレッドの刻みで横取りする)、逐次 (`sequential`)、seed で決まる横取り (`seeded:N`) から選ぶ ([標準ライブラリ](../spec/stdlib.md) の「起動」)
-- 非同期のタスク: `Std.Async` の `run` が根のスコープを開いて本体をタスクとして動かし、`start` と `spawn` が今のスコープにタスクを足し、`await` がタスクの値を受け取るか失敗を起こし直す。`run` はスコープのすべてのタスクを待ってから戻る。`scope` が名前付きのスコープを開き、`start_in` と `spawn_in` がそこにタスクを足す。`cancel` と `cancel_scope` がタスクとスコープを取り消し、`shield` が取り消しの地点を守り、`check_cancelled` と `cancel_requested` が待たないループの中で取り消しを確かめる。ほかに `yield_now`、`try_all`、`Failure` がある。タスクは `par` の子と同じく1つの worker の上で切り替えて動き、`--sched` の方針に従う ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」、[VM](../spec/vm.md) の「`Async` のタスク」)
+- 非同期のタスク: `Std.Async` の `run` が根のスコープを開いて本体をタスクとして動かし、`start` と `spawn` が今のスコープにタスクを足し、`await` がタスクの値を受け取るか失敗を起こし直す。`run` はスコープのすべてのタスクを待ってから戻る。`scope` が名前付きのスコープを開き、`start_in` と `spawn_in` がそこにタスクを足す。`cancel` と `cancel_scope` がタスクとスコープを取り消し、`shield` が取り消しの地点を守り、`check_cancelled` と `cancel_requested` が待たないループの中で取り消しを確かめる。ほかに `yield_now`、`try_all`、`Failure` と、時間を扱う `sleep_ms`、`timeout`、`race`、`drain_within` がある。タスクは `par` の子と同じく1つの worker の上で切り替えて動き、`--sched` の方針に従う ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」、[VM](../spec/vm.md) の「`Async` のタスク」)
 - ブロックの中の `var` と代入 `x <- e`、添字の読み `x[i]` と書き込み `x[i] <- e`、Prelude の `for` と `while` ([式](../spec/expressions.md) の「`var`」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」)
 - 線形性、持ち越し規則、網羅性の検査。`fail` や `exit` のような戻らない呼び出しで終わる経路では、消費しない `Lin` の値を手放さなくてよい ([線形性](../spec/linearity.md) の「暗黙の後始末」)
 - 型クラス: `class` (上位クラス、既定のメソッド、メソッド自身の型変数と制約)、`instance` (文脈、標準ライブラリの中の `extern`)、シグネチャの制約 `Eq a =>`、`deriving (Eq, Ord, Show)`、Prelude のクラス `Eq`、`Ord`、`Show` と `Ordering`、タプルと `Unit` の構造的な instance。証拠は単相化で決め、実行時の辞書は持たない ([宣言](../spec/declarations.md) の「クラスと instance」、[型と Kind](../spec/types.md) の「制約」)
@@ -138,7 +138,7 @@
 
 ### `Async`
 
-- channel と I/O の driver はない。タスクの中の読み書きはその場で動き、その間はほかのタスクも動かない ([ロードマップ](../future/roadmap.md) の「段の列」)
+- channel と本物の I/O の driver はない。driver は時間だけを扱う。タスクの中の読み書きはその場で動き、その間はほかのタスクも動かない ([ロードマップ](../future/roadmap.md) の「段の列」)
 - 時間は `sleep_ms`、`timeout`、`race`、`drain_within` で扱う。時計は `eml run` と `eml repl` では `--clock` で選び、既定は本物の時計である。テストとライブラリの既定は仮想の時計で、すべてのタスクが待つときだけ進む ([標準ライブラリ](../spec/stdlib.md) の「時間」、[VM](../spec/vm.md) の「時計と driver」)
 - 取り消しは協調的で、取り消しの地点 (`await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled`) でだけ届く。読み書きの extern と `par` の子は取り消しの地点でない ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
 - タスクの中で `Async.run` を入れ子に呼ぶと、中のスコープのタスクがすべて終わるまで、呼んだタスクはスタックを持ったまま待ち、その間は取り消しの地点でない。中のタスクには取り消しが届く。`shield` の中では、入れ子の `run` の根が境目になる ([VM](../spec/vm.md) の「待ちの2種類」)
