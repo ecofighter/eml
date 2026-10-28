@@ -243,7 +243,7 @@ fn g(n.0: int) -> (,){{obj, int}} {{
 #[test]
 fn the_dummy_leaves_of_a_call_that_never_returns_are_unr() {
     // 構造体が `lin` の葉を持っても、戻らない呼び出しの葉のダミーは `unr` である。使われない葉は Perceus が手放すが、
-    // `unr` でない値を手放せるのは `drop` だけなので (V1)、`lin` のダミーは verifier を通らない。制御が届かないので、
+    // V1 は `unr` でない変数の `decref` を拒むので、`lin` のダミーは verifier を通らない。制御が届かないので、
     // 手放す命令は実行されない (docs/spec/lir.md の「開く」)
     let text = "\
 layout (,) { (,)(tobj, tobj) }

@@ -389,8 +389,8 @@ impl<'a> Flattener<'a> {
 
     /// 戻らない呼び出しの構造体の束縛。結果を `unr` の `obj` の変数で受け、葉をダミーの値で定義する。box の挿入は
     /// この束縛の使いを変換しないので、1語の位置の使いが残りうる。その使いは受けた変数に置き換える。制御が届かない
-    /// ので、どちらも実行されない。葉のダミーは構造体の印によらず `unr` にする。使われない葉は Perceus が手放し、
-    /// `unr` でない値を手放す命令は `drop` だけだからである (docs/spec/lir.md の「開く」)。
+    /// ので、どちらも実行されない。葉のダミーは構造体の印によらず `unr` にする。使われない葉は Perceus が `decref` で
+    /// 手放し、V1 は `unr` でない変数の `decref` を拒むからである (docs/spec/lir.md の「開く」)。
     fn bind_never(&mut self, var: VarId, id: StructId, rhs: Rhs, out: &mut Vec<Stmt>) {
         let name = self.function.vars[var.0 as usize].name.clone();
         let word = self.fresh(name.clone(), Repr::Obj, Mark::Unr);
