@@ -202,30 +202,17 @@ arm s f () =
   let x = scope (fn _ -> f ())
   if claim_scope s then x else raise_cancelled ()
 
--- 期限のタスクは `s` の外の子のスコープに置き、期限に `s` のタスクを取り消す。呼んだタスクは `s` が空になるのを
--- 待つだけなので、`shield` の中でも期限が効く (docs/spec/stdlib.md の「時間」)
+-- 待ちを `timeout` で区切り、期限が来たら呼んだタスク自身が残ったタスクを取り消し、空になるまで待ち直す。期限が触る
+-- のは呼んだタスクの待ちだけなので、戻った後に期限が `s` に触れることはない (docs/spec/stdlib.md の「時間」)
 pub drain_within : Int -> Scope -> <IO, Async> Unit
 drain_within ms s =
-  if ms <= 0 then
-    cancel_members s
-    drained s
-  else
-    let p = open_scope ()
-    -- 今のスコープは `p` なので、期限のタスクは `p` に加わる
-    let timer : Task Unit = start_raw (bottom (fn () ->
-      sleep_ms ms
-      cancel_members s))
-    let r = try_io (fn () -> drained s)
-    cancel_raw timer
-    let c = close_scope p
-    shield_enter ()
-    let _ = await_cell c
-    shield_leave ()
-    -- `p` のタスクは期限のタスクだけで、種類 `Cancelled` でしか失敗しないので、離れるときに起こす失敗はない
-    let _ = try_panic (fn () -> leave_scope p)
-    match r with
-      | Ok () -> ()
-      | Err e -> fail_io e.kind e.message
+  -- `timeout` の期限のタスクは種類 `Cancelled` でしか失敗せず、`drained` は `Panic` を持たないので、`Err` は届かない
+  match try_panic (fn () -> timeout ms (fn () -> drained s)) with
+    | Ok (Some ()) -> ()
+    | Ok None ->
+      cancel_members s
+      drained s
+    | Err _ -> ()
 
 drained : Scope -> <IO, Async> Unit
 drained s =

@@ -538,7 +538,7 @@ fn race_decides_the_winner_in_one_claim() {
     }
 }
 
-/// `drain_within` は期限のタスクを `s` の外に1つ始め、`s` に属するタスクがなくなるまで待つ。数え方は
+/// `drain_within` は `s` に属するタスクがなくなるのを待ち、その待ちを `timeout` で区切る。数え方は
 /// docs/spec/stdlib.md の「時間」のとおり。
 #[test]
 fn drain_within_waits_until_the_scope_has_no_task() {
@@ -546,17 +546,17 @@ fn drain_within_waits_until_the_scope_has_no_task() {
         (
             "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 30)\n  Async.drain_within 100 s\n  let t = Async.start_in s (fn () -> 5)\n  println (show (Async.await t))))\n",
             "5\n",
-            (4, 6, 2, 1),
+            (4, 7, 2, 1),
         ),
         (
             "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 300)\n  Async.drain_within 100 s\n  println \"after\"))\n",
             "after\n",
-            (3, 5, 2, 1),
+            (3, 7, 2, 2),
         ),
         (
             "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () ->\n  let s = Async.scope (fn s -> s)\n  Async.drain_within 100 s\n  Async.drain_within 0 s\n  println \"at once\")\n",
             "at once\n",
-            (2, 5, 1, 1),
+            (2, 9, 1, 2),
         ),
     ];
     for (src, out, counts) in programs {
