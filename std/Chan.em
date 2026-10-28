@@ -59,6 +59,21 @@ try_recv c =
 pub close : Chan a -> <IO> Unit
 close c = close_raw c
 
+-- 品物をすべて1つの channel に集める。転送のタスクと閉じるタスクは呼んだタスクの今のスコープに加わり、出力は
+-- 容量 0 で、入力がすべて閉じて空になると閉じる。出力を閉じると、転送のタスクは次に受け取った品物を落として終わる
+pub merge : List (Chan a) -> <IO, Async> Chan a
+merge srcs =
+  let out = new 0
+  match srcs with
+    | Nil -> close_raw out
+    | _ ->
+      -- 転送の終わりを数で持たず、入力の並びをもう一度たどって終わりの知らせを1つずつ受け取る。数を持つ
+      -- `Counter` は放せないので、呼ぶたびに表が伸びるためである
+      let done = new 0
+      start_forwarders srcs out done
+      Async.spawn (fn () -> close_after srcs out done)
+  out
+
 -- 予約と確定の間は `Int` の比べだけにする。間に呼び出しを置くと、ほかのタスクが確かめた後の channel を変えうるため
 -- である (docs/spec/vm.md の「channel」)。起こされた後のやり直しは、予算を使っても譲らず、取り消しも確かめない。
 -- 品物か枠があれば、先に操作を終えるためである (docs/spec/stdlib.md の「取り消し」)
@@ -87,6 +102,39 @@ recv_loop c yields =
   else match Async.chan_wait_recv (chan_cell c) with
     | Async.Woke -> recv_loop c False
     | Async.Cancelled -> raise_cancelled ()
+
+start_forwarders : List (Chan a) -> Chan a -> Chan Unit -> <IO, Async> Unit
+start_forwarders srcs out done =
+  match srcs with
+    | Nil -> ()
+    | s :: rest ->
+      Async.spawn (fn () -> forward s out done)
+      start_forwarders rest out done
+
+-- 入力が閉じて空になるか、出力が閉じると、終わりを知らせる
+forward : Chan a -> Chan a -> Chan Unit -> <IO, Async> Unit
+forward s out done =
+  match recv s with
+    | Some x -> match send x out with
+      | Sent -> forward s out done
+      | Rejected x ->
+        drop x
+        let _ = send () done
+        ()
+    | None ->
+      let _ = send () done
+      ()
+
+-- 入力ごとに転送の終わりを1つ受け取ってから、出力を閉じる
+close_after : List (Chan a) -> Chan a -> Chan Unit -> <IO, Async> Unit
+close_after srcs out done =
+  match srcs with
+    | Nil ->
+      close_raw out
+      close_raw done
+    | _ :: rest ->
+      let _ = recv done
+      close_after rest out done
 
 -- `Std.Async` の取り消しの地点と同じ失敗 (docs/spec/stdlib.md の「取り消し」)
 raise_cancelled : Unit -> <IO> a

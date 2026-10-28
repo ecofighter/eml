@@ -1146,6 +1146,7 @@ body () =
 | `try_send` | `a -> Chan a -> <IO> TrySendResult a` | eml |
 | `try_recv` | `Chan a -> <IO> TryRecvResult a` | eml |
 | `close` | `Chan a -> <IO> Unit` | eml |
+| `merge` | `List (Chan a) -> <IO, Async> Chan a` | eml |
 | `SendResult` | `Sent` と `Rejected a` を持つ型 | eml (`deriving (Eq, Show)`) |
 | `TrySendResult` | `Accepted`、`Full a`、`Refused a` を持つ型 | eml (`deriving (Eq, Show)`) |
 | `TryRecvResult` | `Got a`、`Empty`、`Drained` を持つ型 | eml (`deriving (Eq, Show)`) |
@@ -1159,6 +1160,7 @@ body () =
 - `send` と `recv` は取り消しの地点である (上の「取り消し」)。取り消しの巻き戻しは `close` を飛ばす。取り消されうるタスクで作った channel は、`try_all` の handler か `shield` の中で `close` する
 - 品物の値は、積むときに送り手が印を付け、取るときに受け手が受け取る ([オブジェクトモデル](object-model.md) の「論理的な worker ID」)。断られた値と、待っている間に取り消された送り手の値は channel に入らない。送り手の値のまま戻るか、巻き戻しが落とす
 - 待っているタスクのほかに進むものがなくなると、実行時エラー `deadlock` で止まる ([VM](vm.md) の「時計と driver」)
+- `merge srcs` は容量 0 の出力を作り、入力ごとに転送のタスクを1つと、終わりを集めて出力を閉じるタスクを1つ、呼んだタスクの今のスコープに `spawn` する。空の並びなら閉じた出力を返し、タスクを作らない。出力の順はスケジュールで決まる。入力がすべて閉じて空になると出力を閉じる。`merge` の結果をそのスコープの外へ出すと、スコープが閉じるときに転送は取り消される。出力を先に閉じると、転送のタスクは次に受け取った品物を落として終わる。閉じない入力を待つ転送は、入力が閉じるかスコープが取り消されるまで待つ。転送の終わりは容量 0 の `Chan Unit` で集め、終わった後にその channel も閉じるので、`merge` は run の終わりまで残る資源を作らない
 - REPL の入力をまたいだ channel の扱いは、[モジュールと名前解決](modules.md) の「REPL のセッション」にある
 
 `Std.Chan` の extern の行は次の7行で、どれも `pub` でない。`chan_cell` のほかの6行は `Async` の命令で実行する ([VM](vm.md) の「channel」)。
