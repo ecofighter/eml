@@ -453,9 +453,9 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 - `crates/eml_rt` の期待値の表で OS によって飛ばす行は、上の「期待値の表」の入力に書いてある
 - `a_miscased_entry_path_is_still_the_entry` は、大文字と小文字を区別しないファイルシステムでだけ規則を確かめる。区別するファイルシステムでは入口が読めず、終了コード 2 で早く戻る。macOS と Windows の既定のファイルシステムは区別せず、Linux のものは区別する。どちらでも落ちないので、印は付けない
 
-### nix build の中で流さないテスト
+## nix build の中で流さないテスト
 
-`nix build` はパッケージを組むときにテストを流す。nix の build の sandbox には `/usr/bin/env` が無いので、`#!/usr/bin/env eml` で始まるスクリプトを直に動かす `cli::a_script_with_a_shebang_runs_directly` は、`flake.nix` の `checkFlags` で外す。sandbox は nix が決める環境で、機械の設定によらず同じに外れるので、上の「機械の設定で飛ばすことはしない」には当たらない。CI と開発機の `cargo nextest run` では、このテストも流れる。
+`nix build` はパッケージを組むときにテストを流す。nix の build の sandbox には `/usr/bin/env` が無いので、`#!/usr/bin/env eml` で始まるスクリプトを直に動かす `cli::a_script_with_a_shebang_runs_directly` は、`flake.nix` の `checkFlags` で外す。sandbox は nix が決める環境で、機械の設定によらず同じに外れるので、「Windows で流さないテスト」の「機械の設定で飛ばすことはしない」には当たらない。CI と開発機の `cargo nextest run` では、このテストも流れる。
 
 ## 性能のテスト
 
