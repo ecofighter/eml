@@ -1,0 +1,26 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/async/chan_stale.repl
+---
+> import Async
+> import Chan
+> let c : Chan.Chan Int = Async.run (fn () -> Chan.new 1)
+> println (show (Chan.try_send 1 c))
+Refused 1
+> println (show (Chan.try_recv c))
+Drained
+> Async.run (fn () -> println (show (Chan.send 2 c)))
+Rejected 2
+> Async.run (fn () -> println (show (Chan.recv c)))
+None
+> Chan.close c
+> probe : Chan.Chan Int -> Chan.Chan Int -> <IO> Unit
+. probe old live =
+.   let _ = Chan.try_send 5 live
+.   println "\{show (Chan.try_recv old)} \{show (Chan.try_recv live)}"
+.
+> probe c (Chan.new 1)
+Drained Got 5
+--- close ---
+no leaks

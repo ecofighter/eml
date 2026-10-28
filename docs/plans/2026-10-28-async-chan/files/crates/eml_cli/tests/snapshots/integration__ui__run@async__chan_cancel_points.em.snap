@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/chan_cancel_points.em
+---
+--- stdout ---
+try_send: Accepted
+send: Cancelled: task was cancelled
+recv: Cancelled: task was cancelled
+shielded send: Sent
+left: [1, 3]
+--- stderr ---
