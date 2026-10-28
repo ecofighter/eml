@@ -1,5 +1,0 @@
-# どのタスクも待ちで時間の待ちもない run は `deadlock` で止まり、REPL は回復して次の入力を受け付ける
-# (docs/spec/vm.md の「時計と driver」)
-> import Async
-> Async.run (fn () -> Async.scope (fn s -> Async.spawn_in s (fn () -> Async.shield (fn () -> Async.drain_within 10 s))))
-> println "next"

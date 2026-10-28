@@ -138,9 +138,12 @@
 
 ### `Async`
 
-- 時間 (`sleep_ms`、`timeout`)、channel、I/O の driver はない。タスクの中の読み書きはその場で動き、その間はほかのタスクも動かない ([ロードマップ](../future/roadmap.md) の「段の列」)
-- 取り消しは協調的で、取り消しの地点 (`await`、`yield_now`、`check_cancelled`) でだけ届く。読み書きの extern と `par` の子は取り消しの地点でない ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
-- タスクの中で `Async.run` を入れ子に呼ぶと、中のスコープのタスクがすべて終わるまで、呼んだタスクはスタックを持ったまま待ち、その間は取り消しの地点でない。中のタスクには取り消しが届く ([VM](../spec/vm.md) の「待ちの2種類」)
+- channel と I/O の driver はない。タスクの中の読み書きはその場で動き、その間はほかのタスクも動かない ([ロードマップ](../future/roadmap.md) の「段の列」)
+- 時間は `sleep_ms`、`timeout`、`race`、`drain_within` で扱う。時計は `eml run` と `eml repl` では `--clock` で選び、既定は本物の時計である。テストとライブラリの既定は仮想の時計で、すべてのタスクが待つときだけ進む ([標準ライブラリ](../spec/stdlib.md) の「時間」、[VM](../spec/vm.md) の「時計と driver」)
+- 取り消しは協調的で、取り消しの地点 (`await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled`) でだけ届く。読み書きの extern と `par` の子は取り消しの地点でない ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
+- タスクの中で `Async.run` を入れ子に呼ぶと、中のスコープのタスクがすべて終わるまで、呼んだタスクはスタックを持ったまま待ち、その間は取り消しの地点でない。中のタスクには取り消しが届く。`shield` の中では、入れ子の `run` の根が境目になる ([VM](../spec/vm.md) の「待ちの2種類」)
+- `shield` の中で自分の属するスコープを `drain_within` で待つなど、自分を待つ形は、ほかに進むものがなくなったときにだけ実行時エラー `deadlock` で止まる。ほかのタスクが動くか眠る間は、互いを待つタスクも待ち続ける ([VM](../spec/vm.md) の「時計と driver」)
+- `race` の勝ちは、1つの worker の登録表が1つの行で決める。worker をまたぐ勝ちの決め方は持たない ([標準ライブラリ](../spec/stdlib.md) の「時間」)
 - スコープの失敗は、終わった順で最初のものだけを `run` と `scope` が起こし直す。2つ目からは報告せず、`RunStats.dropped_failures` に数えるだけである
 - `Cell` と `Scope` の即値の generation は 32 ビットである。1つの添字で generation が一周すると、放したセルの古い番号や前の run の `Scope` が新しいセルを指しうる ([VM](../spec/vm.md) の「セルと登録表」、[ロードマップ](../future/roadmap.md) の「非同期」)
 - 速い道で操作の予算を使うのは `check_cancelled` だけである ([標準ライブラリ](../spec/stdlib.md) の「操作の予算」)

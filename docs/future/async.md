@@ -150,17 +150,9 @@ channel の待ちでも、外すことと、すでに出た起こしが競合し
 
 ## 時間
 
-```haskell
-pub sleep_ms     : Int -> <IO, Async> Unit
-pub timeout      : Int -> (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> Option a   -- None: 本体を取り消した
-pub race         : (Unit -> <IO, Panic, Async> a) -> (Unit -> <IO, Panic, Async> b)
-                 -> <IO, Panic, Async> Either a b                                        -- 負けた側を取り消す
-pub drain_within : Int -> Scope -> <IO, Async> Unit
-```
+`sleep_ms`、`timeout`、`race`、`drain_within` は [標準ライブラリ](../spec/stdlib.md) の「時間」にある。ここには I/O の期限を書く。
 
 - 時間は今からの長さを表す `Int` のミリ秒である。`sleep_ms`、`timeout`、`_within` の関数、生の操作の `await_time` と `await_io_until` はどれもこれを受ける。時刻を扱う `Time` のモジュールは後で足す
-- `timeout ms f` は `f` をタスクとして動かし、期限が来たら取り消して `None` を返す。`race f g` は先に終わった側の値を返し、もう一方を取り消す
-- `drain_within ms s` は名前を付けたスコープ `s` のタスクが終わるのを最大 `ms` ミリ秒待ち、残っていれば属するタスクを取り消す。`cancel_scope` と違い、呼んだタスクは取り消さない。サーバを穏やかに止めるときに使う (下の「ネットワークとシグナル」)。閉じたスコープでは、すぐに戻る
 - 時間の待ちは、worker ごとの核の登録表にある時間の輪に登録し、満期は driver の時計で見る ([VM](../spec/vm.md) の「時間の待ち」)。テストでは仮想の時計を使う (下の「テストと決定性」)
 - 期限付きの読み (`_within` の版) は、期限が来ても接続を閉じない。受け付けた後に `await_io_until` で待つと、ランタイムは待つときに時間を登録し、期限で操作を取り消す。ここでの取り消しはタスクの取り消しではない。完了が届いたら `Woke` で再開し、完了の状態が `TimedOut` なら取り出しは `None` とハンドルを返す
 
@@ -344,7 +336,7 @@ main () =
   Async.drain_within 30000 conns
 ```
 
-`SIGTERM` が来ると `race` が accept するタスクを取り消し、`drain_within` が実行中の接続を最大 30 秒待ってから取り消す。接続のスコープはその後で終わりの手順を通る。`session` を `try_all` で包まないと、1つの接続の失敗がスコープの失敗になり、サーバが止まる。
+`SIGTERM` が来ると `race` が accept するタスクを取り消し、`drain_within` が実行中の接続を最大 30 秒待ち、残りを取り消して終わるまで待つ。接続のスコープはその後で終わりの手順を通る。`session` を `try_all` で包まないと、1つの接続の失敗がスコープの失敗になり、サーバが止まる。
 
 ### シグナル
 
@@ -381,9 +373,9 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 ## テストと決定性
 
 - `async/` の UI テストを seed で流す規則は [テスト戦略](../implementation/testing.md) の「seed で流す」にある。I/O の待ちを持つテストは、seed で完了の順を決めるテストの driver の上で流す。どの seed でも同じ出力を返すことを求めるので、ネイティブのコードでも同じになる
-- テストの driver は仮想の時計を持つ。`sleep_ms` と期限はすべてのタスクが待ちになったときだけ仮想の時間を進める。そのため、期限と取り消しのテストはすぐに終わり、マシンの速さによらない (1つのテストを1秒以内に終える規則)。テストの driver はメモリの上の `TcpStream` の組 (仮想のホストの上の `listen` と `connect`) と、テストの hook で起こす仮想のシグナルも持つ
+- テストの driver は、メモリの上の `TcpStream` の組 (仮想のホストの上の `listen` と `connect`) と、テストの hook で起こす仮想のシグナルを持つ。時間の待ちは `Clock` が決め、仮想の時計の規則は [VM](../spec/vm.md) の「時計と driver」にある
 - 本物のソケットのテストは `tests/ui/run/net/` に少しだけ置く。ループバックでポート 0 に bind して `local_port` で読み、期限を使わない (期限は仮想の時計の上だけで試す)。接続は一度に1つにするか、順によらない出力にする。N = 1 で流し、複数の worker の組 (N が 2 と 8) では順によらないものだけを流す。Windows の CI は同じ組を IOCP の上で流す
-- 意味のテスト: 取り消したタスクの `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`timeout` の下の入れ子のスコープが親のない子を残さないこと、`shield` の中の別れの `send` が取り消しの下でも終わること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、取り消した待ち合わせの `send` の値が後始末されて受け手が起きないこと、`try_send` と `try_recv` が予算を使い切ると切り替えること、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
+- 意味のテスト: 取り消したタスクの `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`shield` の中の別れの `send` が取り消しの下でも終わること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、取り消した待ち合わせの `send` の値が後始末されて受け手が起きないこと、`try_send` と `try_recv` が予算を使い切ると切り替えること、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
 - 救済を強いるスケジュール (`--sched rescue-always`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
 - `RunStats` に `channel_ops` と `completions` を足す。スナップショットは実装した欄と同じく逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
 
