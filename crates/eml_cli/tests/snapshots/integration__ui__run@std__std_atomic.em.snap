@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/std_atomic.em
+---
+--- stdout ---
+9223372036854775807
+-9223372036854775808
+-3
+-3
+--- stderr ---

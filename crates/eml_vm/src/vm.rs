@@ -1909,9 +1909,30 @@ fn async_op<R: Exec>(
             }
             task.set(dst, Word::UNIT);
         }
+        Extern::AtomicNew => {
+            sched.cells.counters.push(task.raw(arg(0)));
+            let i = sched.cells.counters.len() as i64 - 1;
+            task.set_raw(dst, i);
+        }
+        Extern::AtomicAdd => {
+            let n = task.raw(arg(0));
+            let v = sched.cells.counter(task.raw(arg(1)))?;
+            *v = v.wrapping_add(n);
+            let v = *v;
+            task.set_raw(dst, v);
+        }
+        Extern::AtomicLoad => {
+            let v = *sched.cells.counter(task.raw(arg(0)))?;
+            task.set_raw(dst, v);
+        }
+        Extern::AtomicStore => {
+            let n = task.raw(arg(0));
+            *sched.cells.counter(task.raw(arg(1)))? = n;
+            task.set(dst, Word::UNIT);
+        }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async and Std.Chan reached the Async instruction",
+                "a row outside Std.Async, Std.Chan and Std.Atomic reached the Async instruction",
             ));
         }
     }
@@ -2786,7 +2807,11 @@ fn run_extern<R: Exec>(
             | Extern::ChanPushRaw
             | Extern::ChanReserveRecv
             | Extern::ChanPopRaw
-            | Extern::ChanCloseRaw => {
+            | Extern::ChanCloseRaw
+            | Extern::AtomicNew
+            | Extern::AtomicAdd
+            | Extern::AtomicLoad
+            | Extern::AtomicStore => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

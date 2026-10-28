@@ -1211,6 +1211,30 @@ recv_loop c yields =
     | Async.Cancelled -> raise_cancelled ()
 ```
 
+## `Std.Atomic`
+
+`Std.Atomic` はタスクと REPL の入力の間で共有する数 `Counter` のモジュールである。
+
+```haskell
+import Atomic
+
+body : Unit -> <IO> Int
+body () =
+  let c = Atomic.new 0
+  Atomic.add 2 c
+```
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `Counter` | `Unr` の即値の型 | extern |
+| `new` | `Int -> <IO> Counter` | extern |
+| `add` | `Int -> Counter -> <IO> Int` | extern |
+| `load` | `Counter -> <IO> Int` | extern |
+| `store` | `Int -> Counter -> <IO> Unit` | extern |
+
+- `Counter` は、run をまたいで `Machine` が持つ表の添字を持つ `Unr` の即値である。`add n c` は足した後の値を返し、64 ビットで巻き戻る。`Counter` は放さない。数の少ない共有の状態のためのものである。worker のスレッドを入れるときは、表を `SeqCst` の atomic にする
+- 行は `Async` の命令で動くので、`Std.Atomic` は `Std.Async` を読み込む。row は `IO` だけで、タスクの外でも、REPL の入力をまたいでも使え、実行時エラーで捨てた run の `add` も残る
+
 ## 実行時エラー
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。

@@ -236,7 +236,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Std.String.byte_at` と `Std.String.byte_length` も専用の命令にする。`byte_at` は `StrByteAt { dst, i, s }`、`byte_length` は `StrByteLength { dst, s }` で、どちらも文字列を借りたままにし、誤りのときも手放さない (巻き戻しの表が手放す)。バイト位置の外は `Panics` の行の `byte_at` だけが `step_failed` から `Panic` に届け、巻き戻しの地点になる。`byte_length` は `Pure` で地点を持たない。バイト単位の走査が文字列の読み出しの大半を占めるため、汎用の `Op::Extern` の行の番号の `match` を通さない
 - `Std.Bytes.get` と `Std.Bytes.length` も専用の命令にする。`get` は `BytesGet { dst, i, b }`、`length` は `BytesLength { dst, b }` で、文字列の2つの行と同じく、バイト列を借りたままにし、誤りのときも手放さない。`get` は `Panics` の行で、位置の外を `step_failed` から `Panic` に届けて巻き戻しの地点になり、`length` は `Pure` で地点を持たない。`Show Bytes` を eml で書くために Prelude が持つ `Prelude.bytes_get` と `Prelude.bytes_length` (借用の印も `Ctx` のメソッドも同じ) も、同じ2つの命令に写す
 - ほかの extern (`Float` の `compare`、文字列、表示、`println`、`FileIn`、`Fs`) は `Extern { dst, at }` の1つの命令にする。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…] で、行の番号の `match` で `Ctx` のメソッドを呼ぶ
-- `Std.Async` の29行と `Std.Chan` の6行 (`chan_cell` を除く) (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
+- `Std.Async` の29行と `Std.Chan` の6行 (`chan_cell` を除く)、`Std.Atomic` の4行 (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
 - VM は `Ctx` の基本操作の合間に、`Ctx` が持つ語とそこからたどれる物体に触れない (`heap_mut()` の前提)
 - `Bool`、`Ordering`、`IOErrorKind` のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを、`eml_vm` のテスト (`tags.rs`) で確かめる。VM の `Bool` と `compare` の命令がこれに頼るためである
 
@@ -513,6 +513,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - 受け手の決まらない値の預かり先の操作は `Depot` にまとめる。`open` (`fork_worker`)、`publish` (`share`)、`receive` (`transfer_back`)、`discard` (預かる ID の下の `decref`)、`close` (`retire_worker`) で、タスクの結果と channel の品物が同じ道を通る
 - 登録表は channel のセルも持つ。channel のセルは、容量、閉じたか、積んだ品物 (数えた参照の語)、待っている送り手と受け手の列 (FIFO)、品物の預かり先 (`Depot`) を持つ。待ち手の列の項はいつも生きていて、`wait` がその channel のセルを指すタスクである。閉じた後は、両方の列がいつも空である (下の「channel」)
 - スコープのセルは、親のスコープ、開いたタスク (`scope` が開くスコープではそのタスク、入れ子の `run` の根では呼んだタスク、`main` の根ではなし)、取り消しの旗、閉じかけか、属するタスクの一覧、入れ子のスコープの一覧と親の一覧の中の位置、終わった順で最初の失敗、待ち手、閉じたか、開いたときの開いたタスクの `shield` の深さ、`shield` の境目の印、加わるタスクを取り消す印を持つ。終わっていないタスクの数は、属するタスクの一覧の長さである。`main` の `run` の根は親を持たず、タスクの中の入れ子の `run` の根と `scope` が開くスコープは、開いたタスクの今のスコープを親にする。タスクは終わるときに一覧から外れる。一覧が空になると、閉じかけのスコープは閉じ、加わるタスクを取り消す印を下ろし、スコープの待ち手をすべて起こす。閉じかけでないスコープの待ち手は、`park_drain` で属するタスクがなくなるのを待つタスクである。根は開くときから閉じかけで、`scope` が開くスコープは本体が終わってから閉じかけになる。一覧の項はいつも生きているセルを指す
+- 登録表は `Std.Atomic.Counter` の表 `counters` も持つ。`Counter` の値は表の添字の即値で、表は `Machine` が持ち、run のたびに `Scheduler` の登録表へ渡して受け取る (generation の数と同じ道)。回復でも戻さず、`Counter` は放さない。run ごとの登録表の項目にしないのは、REPL の入力をまたいで使えるようにするためである
 - 登録表は時間の輪 `timers` と、次に登録するタイマーの番号 `timer_seq` も持つ。輪は期限と番号の組からタスクのセルの番号への順序付きの表で、語を持たない (下の「時間の待ち」)
 - `Task a` の値は、セルの番号と登録表の受け箱を持つ `TaskHandle` を中身にした、`lin` ビットの立つ `Foreign` である
 - 受け箱 `Inbox` は、セルの番号を持つ知らせの列で、lock で守る。受け箱は落ちたハンドルの知らせと取り消しの知らせを積む。ハンドルの `Drop` は、`take` が受け取っていなければ知らせを積むだけで、セルに触れない。破棄処理はヒープの `decref` の中で走るためである。受け箱の処理 (`drain`) では、lock の下で列を取り出し、lock を外してから知らせを処理する。落ちたハンドルの知らせでは、終わったセルはその場で放し、終わっていないセルには、終わったときにすぐ放す印と取り消しの印を付ける。取り消しの知らせでは、下の「取り消しの届け方」のとおりに待ちを外す。知らせの処理が新しい知らせを積むので、受け箱の処理は知らせがなくなるまで繰り返す。受け箱を処理するのは、ほかのタスクに切り替える所と横取りを試みる所の頭と、`main` の `Finish` である。落ちたハンドルのセルとタスクの ID を、run の終わりまで残さないためである
@@ -564,6 +565,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `close_raw c`: 放したセル、前の run の値、閉じた channel には何もしない。そうでなければ閉じて、待ち手をすべて起こし、`settle` を呼ぶ (下の「channel」)
 - `push_raw` と `pop_raw` は、0 を返した `reserve_*` の直後に標準ライブラリが呼ぶ。処理系はこの順を確かめない
 - `chan_cell c` は `Async` の命令でなく extern の命令で、即値をそのまま写す
+- `Std.Atomic` の4行は `Machine` の表 `counters` を読み書きする。`new n` は表に `n` を積み、その添字を `Counter` の即値として `dst` に書く。`add n c` は `counters[c]` に `n` を `wrapping_add` で足して書き戻し、足した後の値を返す。`load c` は値を返し、`store n c` は書く。添字が表の外なら内部の誤り (`a counter index is out of range`) にするが、検査を通ったプログラムからは届かない
 - channel の行は、`park_send` と `park_recv` のほかは今のタスクのセルを使わないので、タスクの外でも動く (予算は使わない)
 - `run_raw` と `run_result` はトップレベルの `Async.run` のたびにタスクの外で動く。今のタスクがなければ、`run_raw` は親のない根を開く。`task_cell`、`take_result`、`detach`、`cancel_raw`、`close_scope`、`cancel_scope_raw`、`fail_scope_io`、`fail_scope_panic`、`cancel_members` も今の `Task` のセルを使わないので、タスクの外でも動く。`cancel_point` はタスクの外で偽を返す。`finish_ok`、`finish_io`、`finish_panic` はタスクの外では内部の誤り (`a task finishes twice or outside a task`) にする。残りの行 (`start_raw`、`start_in_raw`、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`ready`、`open_scope`、`leave_scope`、`shield_enter`、`shield_leave`、`spend_budget`、`claim_scope`) は今の `Task` のセルが要り、タスクの外では内部の誤り (`an Async operation runs outside a task`) にする。`run_raw` と `run_result` のほかの行は `Async` を持つ包みからしか呼ばれないので、この2つの誤りは検査を通ったプログラムからは届かない
 - `shield_enter ()` と `shield_leave ()`: 今の `Task` のセルの `shield` の深さを1つ増やすか減らす。深さが 0 のときに減らせば内部の誤りにする

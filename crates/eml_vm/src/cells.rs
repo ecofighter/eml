@@ -336,6 +336,8 @@ pub(crate) struct Registry {
     timers: BTreeMap<TimerKey, CellRef>,
     /// 次に登録するタイマーの `seq`。
     timer_seq: u64,
+    /// `Std.Atomic.Counter` の表。添字は `Machine` が run をまたいで持つので、回復でも戻さない。
+    pub(crate) counters: Vec<i64>,
 }
 
 impl Registry {
@@ -348,6 +350,7 @@ impl Registry {
             stats: TaskStats::default(),
             timers: BTreeMap::new(),
             timer_seq: 0,
+            counters: Vec::new(),
         }
     }
 
@@ -447,6 +450,14 @@ impl Registry {
     }
 
     /// 次の run の `floor`。この run が出したどの generation よりも大きい。`slots` は run の間に縮まない。
+    /// 表の中の `Counter`。添字が表の外なのは、検査を通ったプログラムからは起きない。
+    pub(crate) fn counter(&mut self, i: i64) -> Result<&mut i64, CellFault> {
+        usize::try_from(i)
+            .ok()
+            .and_then(|i| self.counters.get_mut(i))
+            .ok_or(CellFault::Internal("a counter index is out of range"))
+    }
+
     pub(crate) fn next_floor(&self) -> u32 {
         self.slots
             .iter()

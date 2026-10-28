@@ -185,6 +185,8 @@ pub struct Machine<M: Mode> {
     shared_roots: usize,
     /// 次の run の登録表の最初の generation (docs/spec/vm.md の「`Async` のタスク」)。
     generations: u32,
+    /// `Std.Atomic.Counter` の表。run をまたぎ、REPL の入力をまたいで残る (docs/spec/vm.md の「セルと登録表」)。
+    counters: Vec<i64>,
     /// 時計と待ち。run の間は `Scheduler` に移すので、run の外ではいつも `Some` である。`Machine` ごとに1つなので、
     /// 時刻は run をまたいで続く (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
@@ -225,6 +227,7 @@ impl<M: Mode> Machine<M> {
             copying: HeapWork::default(),
             shared_roots: 0,
             generations: 0,
+            counters: Vec::new(),
             driver: Some(Clock::Virtual.driver()),
         }
     }
@@ -368,6 +371,7 @@ impl<M: Mode> Machine<M> {
             max_depth: self.max_depth,
             shared_roots: self.shared_roots,
             generations: self.generations,
+            counters: std::mem::take(&mut self.counters),
             driver: self
                 .driver
                 .take()
@@ -387,6 +391,7 @@ impl<M: Mode> Machine<M> {
         };
         self.shared_roots = scheduled.shared_roots;
         self.generations = scheduled.generations;
+        self.counters = std::mem::take(&mut scheduled.counters);
         // 誤りで返る道でも driver を失わないように、run の直後に戻す
         self.driver = scheduled.driver.take();
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
@@ -528,6 +533,7 @@ struct Scheduled {
     shared_roots: usize,
     tasks: TaskStats,
     generations: u32,
+    counters: Vec<i64>,
     /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
     driver: Option<Box<dyn IoDriver>>,
 }
@@ -537,6 +543,7 @@ struct Start {
     max_depth: usize,
     shared_roots: usize,
     generations: u32,
+    counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
 }
 
@@ -560,6 +567,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         start.generations,
     );
     sched.shared_roots = start.shared_roots;
+    sched.cells.counters = start.counters;
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     let scheduled = Scheduled {
         preemptions: sched.preemptions(),
@@ -567,6 +575,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         shared_roots: sched.shared_roots,
         tasks: sched.cells.stats,
         generations: sched.cells.next_floor(),
+        counters: std::mem::take(&mut sched.cells.counters),
         driver: Some(sched.driver),
     };
     (result, scheduled)

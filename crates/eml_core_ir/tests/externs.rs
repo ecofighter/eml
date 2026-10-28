@@ -69,6 +69,9 @@ probe_scope s = s
 probe_chan : Chan.Chan Int -> Chan.Chan Int
 probe_chan c = c
 
+probe_counter : Atomic.Counter -> Atomic.Counter
+probe_counter c = c
+
 probe_panic : Unit -> <Panic> Int
 probe_panic () = panic \"x\"
 
@@ -101,6 +104,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Task => "probe_task",
         ExternType::Scope => "probe_scope",
         ExternType::Chan => "probe_chan",
+        ExternType::Counter => "probe_counter",
     }
 }
 

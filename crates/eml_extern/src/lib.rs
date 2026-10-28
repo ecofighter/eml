@@ -248,6 +248,8 @@ table! {
         Scope => type_row("Std.Async.Scope", Unr, Repr::Int),
         // 登録表の添字の即値。Kind は中身の型によらない (docs/spec/stdlib.md の「`Std.Chan`」)
         Chan => handle_type_row("Std.Chan.Chan"),
+        // 登録表ではなく `Machine` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
+        Counter => type_row("Std.Atomic.Counter", Unr, Repr::Int),
     }
 }
 
@@ -1251,6 +1253,10 @@ table! {
         ChanReserveRecv => row("Std.Chan.reserve_recv", &[Int, Enum], Int, Purity::Effectful),
         ChanPopRaw => kinded("Std.Chan.pop_raw", &[Int], &[Unr], TObj, Poly, Purity::Effectful),
         ChanCloseRaw => row("Std.Chan.close_raw", &[Int], Unit, Purity::Effectful),
+        AtomicNew => row("Std.Atomic.new", &[Int], Int, Purity::Effectful),
+        AtomicAdd => row("Std.Atomic.add", &[Int, Int], Int, Purity::Effectful),
+        AtomicLoad => row("Std.Atomic.load", &[Int], Int, Purity::Effectful),
+        AtomicStore => row("Std.Atomic.store", &[Int, Int], Unit, Purity::Effectful),
     }
 }
 
@@ -1295,6 +1301,10 @@ impl Extern {
                 | Extern::ChanReserveRecv
                 | Extern::ChanPopRaw
                 | Extern::ChanCloseRaw
+                | Extern::AtomicNew
+                | Extern::AtomicAdd
+                | Extern::AtomicLoad
+                | Extern::AtomicStore
         )
     }
 }
