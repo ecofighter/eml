@@ -241,6 +241,31 @@ fn g(n.0: int) -> (,){{obj, int}} {{
 }
 
 #[test]
+fn the_dummy_leaves_of_a_call_that_never_returns_are_unr() {
+    // 構造体が `lin` の葉を持っても、戻らない呼び出しの葉のダミーは `unr` である。使われない葉は Perceus が手放すが、
+    // `unr` でない値を手放せるのは `drop` だけなので (V1)、`lin` のダミーは verifier を通らない。制御が届かないので、
+    // 手放す命令は実行されない (docs/spec/lir.md の「開く」)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+fn h(n.0: int) -> unit {
+  let p.1: (,){obj lin, int} lin = extern Prelude.exit(n.0)
+  return ()
+}
+";
+    let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    passes_until(&mut program, Pass::Perceus);
+    insta::assert_snapshot!(function(&pretty(&program), "h"), @"
+    fn h(n.0: int) -> unit {
+      let p.2: obj = extern Prelude.exit(n.0)
+      decref p.2
+      let p.0.3: obj = prim dummy()
+      decref p.0.3
+      return ()
+    }
+    ");
+}
+
+#[test]
 fn a_struct_drop_drops_each_rc_leaf() {
     // 構造体の `drop` は、RC の対象の葉ごとの `drop` になる。結果の `unit` の変数は `()` に置き換わる
     let text = "\
