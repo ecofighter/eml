@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/shield_marking.em
+---
+--- stdout ---
+shielded scope survives
+grandchild: done
+after the shield: Cancelled
+--- stderr ---

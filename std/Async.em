@@ -118,8 +118,8 @@ check_cancelled () =
   else if spend_budget () then yield_now ()
   else ()
 
--- 取り消しの地点が投げるときだけ真を返す。`shield` の中では、いちばん内側の `shield` の中で開いたスコープの旗だけを
--- 読む
+-- 取り消しの地点が投げるときだけ真を返す。`shield` の中では、今のスコープを今の `shield` の中で自分が開いたときだけ、
+-- その旗を読む
 pub cancel_requested : Unit -> <IO> Bool
 cancel_requested () = cancel_point ()
 
