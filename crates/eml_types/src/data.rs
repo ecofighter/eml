@@ -61,7 +61,7 @@ pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
             // 型引数を持つ extern の型の Kind は、`Lin` の行を除いて引数に従う。本体がないので、使われ方は行が決める
             // (docs/spec/types.md)
             let follows_args = matches!(def.kind, TypeDefKind::Extern(Some(ty))
-                if ty.row().params > 0 && ty.row().linearity == Linearity::Unr);
+                if ty.row().params > 0 && ty.row().linearity == Linearity::Unr && ty.row().kind_follows_params);
             let kind = DataKind {
                 params: vec![follows_args; arity],
                 lin: match def.kind {

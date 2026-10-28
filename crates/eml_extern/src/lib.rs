@@ -254,6 +254,9 @@ pub struct TypeRow {
     pub linearity: Linearity,
     /// 型引数の数。型引数はすべて共変で、`Unr` の行の Kind は引数の Kind に従う。
     pub params: usize,
+    /// 型引数の Kind が値の Kind に効くか。ハンドルの型 (`Chan a`) は効かない。値は登録表の添字の即値で、中身の値の
+    /// 持ち主は処理系の表だからである (docs/spec/types.md の「Kind」)。
+    pub kind_follows_params: bool,
     /// 値の Repr。translate は extern の型の Repr をここから読む。型検査は `Unit` を要素のないタプルにするので、translate は
     /// `Unit` の行を読まない。この行が要素のないタプルの Repr と同じであることは、結合テストが確かめる。
     pub repr: Repr,
@@ -264,7 +267,21 @@ const fn type_row(name: &'static str, linearity: Linearity, repr: Repr) -> TypeR
         name,
         linearity,
         params: 0,
+        kind_follows_params: true,
         repr,
+    }
+}
+
+/// 型引数を1つ持つが、その Kind に引数が効かない `Unr` のハンドル。値は登録表の添字の即値である。
+#[expect(
+    dead_code,
+    reason = "ハンドルの型の行は、標準ライブラリの宣言と一緒に足す"
+)]
+const fn handle_type_row(name: &'static str) -> TypeRow {
+    TypeRow {
+        params: 1,
+        kind_follows_params: false,
+        ..type_row(name, Linearity::Unr, Repr::Int)
     }
 }
 
