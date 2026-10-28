@@ -150,7 +150,7 @@ pub(crate) fn bytes_lend(
 /// # Safety
 /// `bytes_lend` の位置から `n` バイトを、外の書き手がすでに書き終えている。ページの記憶は確保で 0 にしないので、
 /// 書かれていないバイトを足すと、後の `bytes` が初期化していない記憶を読む。この前提を確かめられるのは貸した側だけ
-/// なので、呼ぶのは `Heap::bytes_commit` だけである (docs/spec/object-model.md の「`unsafe` の核」の T10)。
+/// なので、呼ぶのは `Heap::bytes_commit` の中の `commit_in_place` だけである (docs/spec/object-model.md の「`unsafe` の核」の T10)。
 #[verifier::external_body]
 #[inline]
 pub(crate) unsafe fn bytes_commit(
