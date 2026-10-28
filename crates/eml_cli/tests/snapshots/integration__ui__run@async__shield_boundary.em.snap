@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/shield_boundary.em
+---
+--- stdout ---
+the shielded body runs
+child: done
+back outside
+after the shield: Cancelled
+inner flag: Cancelled
+nested scopes in the shield run
+after the shield: Cancelled
+--- stderr ---

@@ -118,11 +118,13 @@ check_cancelled () =
   else if spend_budget () then yield_now ()
   else ()
 
--- 取り消しの地点が投げるときだけ真を返すので、`shield` の中では偽である
+-- 取り消しの地点が投げるときだけ真を返す。`shield` の中では、いちばん内側の `shield` の中で開いたスコープの旗だけを
+-- 読む
 pub cancel_requested : Unit -> <IO> Bool
 cancel_requested () = cancel_point ()
 
--- 中の取り消しの地点はビットも旗も見ない。立っているビットか旗は、抜けた後の最初の地点で投げる
+-- 中の取り消しの地点は、ビットと、`shield` の外で開いたスコープの旗を見ない。中で開いたスコープには外の取り消しが
+-- 届かない。外で立っているビットか旗は、抜けた後の最初の地点で投げる
 pub shield : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a
 shield f =
   shield_enter ()

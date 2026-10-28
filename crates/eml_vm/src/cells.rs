@@ -17,9 +17,10 @@
 //! 待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。
 //!
 //! 取り消しは、印を付ける `mark` と受け箱の処理 `drain` が待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
-//! 仕事をほかのタスクのために作るのは `drain` だけである。`cancel` と `flag` はどのタスクの操作からも書く。`current` と
-//! `run` は持ち主だけが書き、印を付ける操作が読む。タスクのセルの残りは、そのタスクを動かすか受け箱を処理する持ち主だけが
-//! 読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
+//! 仕事をほかのタスクのために作るのは `drain` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
+//! `cancel` と `flag` はどのタスクの操作からも書く。`current` と `run` は持ち主だけが書き、印を付ける操作が読む。
+//! スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、そのタスクを動かすか
+//! 受け箱を処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -207,6 +208,11 @@ struct ScopeCell {
     first_failure: Option<Outcome>,
     waiters: Vec<Waiter>,
     closed: bool,
+    /// 開くときの開き手の `shield` の深さ。開き手のない根は 0 である。
+    shield: u32,
+    /// `shield` の境目の印。開き手が同じ親より深い `shield` の中で開いたスコープに立つ。外の取り消しはここで止まる
+    /// (docs/spec/stdlib.md の「取り消し」)。
+    boundary: bool,
 }
 
 /// 印を付ける作業の項。
@@ -427,6 +433,18 @@ impl Registry {
             Some(p) => self.scope_mut(p)?.nested.len() as u32,
             None => 0,
         };
+        let level = match opener {
+            Some(o) => self.task_mut(o)?.shield,
+            None => 0,
+        };
+        // 親を同じタスクが開いていれば、その深さより深いときだけ境目になる。ほかの親は `shield` の外にある
+        let base = match parent {
+            Some(p) if opener.is_some() => {
+                let ps = self.scope_mut(p)?;
+                if ps.opener == opener { ps.shield } else { 0 }
+            }
+            _ => 0,
+        };
         let s = self.alloc(CellKind::Scope(ScopeCell {
             parent,
             opener,
@@ -438,6 +456,8 @@ impl Registry {
             first_failure: None,
             waiters: Vec::new(),
             closed: false,
+            shield: level,
+            boundary: level > base,
         }));
         if let Some(p) = parent {
             self.scope_mut(p)?.nested.push(s);
@@ -447,15 +467,21 @@ impl Registry {
 
     /// 親の旗と開いたタスクのビットを新しいスコープに写す。一覧と `current` (根なら `run`) に載せた後に呼ぶ。
     /// 印を付ける側はビットと旗を立ててから一覧と `current` を読むので、どちらが先でも新しいスコープは旗を得る
-    /// (docs/spec/vm.md の「取り消しの届け方」)。
+    /// (docs/spec/vm.md の「取り消しの届け方」)。境目は何も写さない。ビットは `shield` の外の取り消しから来ることが
+    /// あるので、写すのは深さ 0 で開くスコープだけである (docs/spec/stdlib.md の「取り消し」)。
     fn inherit_flag(&mut self, s: CellRef) -> Result<(), CellFault> {
         let scope = self.scope_mut(s)?;
-        let (parent, opener) = (scope.parent, scope.opener);
+        if scope.boundary {
+            return Ok(());
+        }
+        let (parent, opener, level) = (scope.parent, scope.opener, scope.shield);
         let mut flag = match parent {
             Some(p) => self.scope_mut(p)?.flag,
             None => false,
         };
-        if let Some(o) = opener {
+        if let Some(o) = opener
+            && level == 0
+        {
             flag |= self.task_mut(o)?.cancel;
         }
         self.scope_mut(s)?.flag = flag;
@@ -558,17 +584,16 @@ impl Registry {
         Ok(wake)
     }
 
-    /// 取り消しの地点の規則。
+    /// 取り消しの地点の規則。`shield` の中では、いちばん内側の `shield` の中で自分が開いたスコープの旗だけを見る
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
     fn point(&mut self, cell: CellRef) -> Result<bool, CellFault> {
         let task = self.task_mut(cell)?;
-        if task.shield > 0 {
-            return Ok(false);
+        let (depth, bit, current) = (task.shield, task.cancel, task.current);
+        if depth == 0 {
+            return Ok(bit || self.scope_mut(current)?.flag);
         }
-        if task.cancel {
-            return Ok(true);
-        }
-        let current = task.current;
-        Ok(self.scope_mut(current)?.flag)
+        let scope = self.scope_mut(current)?;
+        Ok(scope.flag && scope.opener == Some(cell) && scope.shield == depth)
     }
 
     /// 借りたハンドル `handle` のセルの番号を `Std.Async.Cell` の即値で返す。
@@ -1017,18 +1042,23 @@ impl Registry {
                         continue;
                     }
                     task.cancel = true;
-                    // 開いているスコープは今のスコープから親へ、このタスクが開いたスコープが続く間である
+                    // 開いているスコープは、入れ子の `run` の根から今のスコープを経て親へ、このタスクが開いたスコープが
+                    // 続く間である。内から外へ並べ、いちばん外の境目とその内側には印を付けない
+                    // (docs/spec/vm.md の「取り消しの届け方」)
                     let (mut s, run, home) = (task.current, task.run, task.scope);
+                    let mut chain = Vec::new();
+                    if let Some(r) = run {
+                        chain.push((r, self.scope_mut(r)?.boundary));
+                    }
                     while s != home {
-                        work.push(Mark::Scope(s));
-                        s = self
-                            .scope_mut(s)?
+                        let scope = self.scope_mut(s)?;
+                        chain.push((s, scope.boundary));
+                        s = scope
                             .parent
                             .ok_or(CellFault::Internal("a named scope has no parent"))?;
                     }
-                    if let Some(r) = run {
-                        work.push(Mark::Scope(r));
-                    }
+                    let cut = chain.iter().rposition(|&(_, b)| b).map_or(0, |i| i + 1);
+                    work.extend(chain[cut..].iter().map(|&(c, _)| Mark::Scope(c)));
                     self.inbox.push(Notice::Cancel(t));
                 }
                 Mark::Scope(s) => {
@@ -1038,7 +1068,14 @@ impl Registry {
                     }
                     scope.flag = true;
                     work.extend(scope.members.iter().map(|&m| Mark::Task(m)));
-                    work.extend(scope.nested.iter().map(|&n| Mark::Scope(n)));
+                    // 入れ子の境目は外の取り消しを止める
+                    let nested = scope.nested.clone();
+                    for n in nested {
+                        if !self.scope_mut(n)?.boundary {
+                            work.push(Mark::Scope(n));
+                        }
+                    }
+                    let scope = self.scope_mut(s)?;
                     // 本体のタスクにはビットを立てず、届けるだけにする。外すかは `unpark` が持ち主の側で規則を確かめて決める
                     if let Some(o) = scope.opener {
                         self.inbox.push(Notice::Cancel(o));
