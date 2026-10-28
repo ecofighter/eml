@@ -148,7 +148,7 @@
 - スコープの失敗は、終わった順で最初のものだけを `run` と `scope` が起こし直す。2つ目からは報告せず、`RunStats.dropped_failures` に数えるだけである
 - 速い道で操作の予算を使うのは、`check_cancelled` と `Std.Chan` の速い道である。`try_send` と `try_recv` は使うだけで譲らない ([標準ライブラリ](../spec/stdlib.md) の「操作の予算」)
 - 閉じない channel は run の終わりまで登録表に残り、残った品物もそのときまで落とさない (`RunStats.channels_swept`。[ロードマップ](../future/roadmap.md) の「非同期」)
-- `Counter` の表は `Machine` が持ち、放さない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Atomic`」)
+- `Counter` の表は `Machine` が持ち、放さない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Atomic`」、[ロードマップ](../future/roadmap.md) の「非同期」)
 - `IOErrorKind` の `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit` を出すのは `fail_io` だけで、extern の誤りはこれらの種類を出さない ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」)
 
 ### 子のプロセス

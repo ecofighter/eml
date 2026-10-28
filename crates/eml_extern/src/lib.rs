@@ -1262,8 +1262,8 @@ table! {
 }
 
 impl Extern {
-    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行。VM はこれらの行を汎用の extern の命令でなく `Async` の
-    /// 命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
+    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic` の行。VM はこれらの行を汎用の extern の
+    /// 命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub fn is_async(self) -> bool {
         matches!(
             self,

@@ -1661,7 +1661,7 @@ fn finish<R: Exec>(
 
 // `Async` の命令は呼び出しや戻りに比べてまれなので、`par` と同じく `step` に展開しない
 
-/// `Std.Async` と `Std.Chan` の行 (docs/spec/vm.md の「`Async` のタスク」)。意味の核を呼び、返った仕事を入口の `Task` にするか、
+/// `Std.Async`、`Std.Chan`、`Std.Atomic` の行 (docs/spec/vm.md の「`Async` のタスク」)。意味の核を呼び、返った仕事を入口の `Task` にするか、
 /// 待っていた `Task` を実行待ちに戻す。安全点を置かない。
 #[inline(never)]
 fn async_op<R: Exec>(

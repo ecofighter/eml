@@ -566,7 +566,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `push_raw` と `pop_raw` は、0 を返した `reserve_*` の直後に標準ライブラリが呼ぶ。処理系はこの順を確かめない
 - `chan_cell c` は `Async` の命令でなく extern の命令で、即値をそのまま写す
 - `Std.Atomic` の4行は `Machine` の表 `counters` を読み書きする。`new n` は表に `n` を積み、その添字を `Counter` の即値として `dst` に書く。`add n c` は `counters[c]` に `n` を `wrapping_add` で足して書き戻し、足した後の値を返す。`load c` は値を返し、`store n c` は書く。添字が表の外なら内部の誤り (`a counter index is out of range`) にするが、検査を通ったプログラムからは届かない
-- channel と `Counter` の行は、`park_send` と `park_recv` のほかは今のタスクのセルを使わないので、タスクの外でも動く (予算は使わない)
+- `Std.Chan` と `Std.Atomic` の行は今のタスクのセルを使わないので、タスクの外でも動く。タスクの外では予算を使わない。`park_send` と `park_recv` は `Std.Async` の行で、下の残りの行と同じく今のタスクのセルが要る
 - `run_raw` と `run_result` はトップレベルの `Async.run` のたびにタスクの外で動く。今のタスクがなければ、`run_raw` は親のない根を開く。`task_cell`、`take_result`、`detach`、`cancel_raw`、`close_scope`、`cancel_scope_raw`、`fail_scope_io`、`fail_scope_panic`、`cancel_members` も今の `Task` のセルを使わないので、タスクの外でも動く。`cancel_point` はタスクの外で偽を返す。`finish_ok`、`finish_io`、`finish_panic` はタスクの外では内部の誤り (`a task finishes twice or outside a task`) にする。残りの行 (`start_raw`、`start_in_raw`、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`ready`、`open_scope`、`leave_scope`、`shield_enter`、`shield_leave`、`spend_budget`、`claim_scope`) は今の `Task` のセルが要り、タスクの外では内部の誤り (`an Async operation runs outside a task`) にする。`run_raw` と `run_result` のほかの行は `Async` を持つ包みからしか呼ばれないので、この2つの誤りは検査を通ったプログラムからは届かない
 - `shield_enter ()` と `shield_leave ()`: 今の `Task` のセルの `shield` の深さを1つ増やすか減らす。深さが 0 のときに減らせば内部の誤りにする
 - `cancel_point ()`: 今のタスクが取り消しの地点で投げるかを、`dst` に真偽で書く。規則は「取り消しの届け方」の取り消しの地点の規則と同じである。真を返したときは `cancels` を数える。タスクの外では偽を返す
@@ -692,7 +692,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `channel_waits`: `send` と `recv` が継続を `park_send`、`park_recv` に渡した回数。すぐ再開する待ちも数え、`parks` にも数える
 - `channels_swept`: run の終わりの `sweep_all` が放した channel の数。閉じなかった channel と、閉じても品物の残った channel を数える。閉じて空になってその場で放した channel は数えない
 
-取り消しが届かず、channel の操作も待ちもない run では、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept` の欄はスケジュールの方針によらない。channel を使う run では、待つかどうかと、送り手が参照を持ち続けた品物の裏返しが順で変わり、仕事の回数と `parks`、`shared_objects` がそれに従う。そうした run でもスケジュールによらないのは、`tasks`、`timers`、`dropped_failures`、`channels_swept` である。`tasks` と `timers` はプログラムが決め、`dropped_failures` は最初の失敗がどれかによらず、`channels_swept` は run の終わりに閉じていないか品物の残った channel の数で、どれもタスクの順で変わらない。
+取り消しが届かず、channel の操作も待ちもない run では、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept` の欄はスケジュールの方針によらない。channel を使う run では、待つかどうかと、送り手が参照を持ち続けた品物の裏返しが順で変わり、仕事の回数と `parks`、`shared_objects` がそれに従う。そうした run でもスケジュールによらないのは、`tasks`、`timers`、`dropped_failures`、`channels_swept` である。`tasks` と `timers` はプログラムが決め、`dropped_failures` は最初の失敗がどれかによらないので、この3つはタスクの順で変わらない。`channels_swept` は run の終わりに閉じていないか品物の残った channel の数で、どの channel が閉じずに残るか、品物が残るかがプログラムで決まるときだけ、タスクの順で変わらない。`try_send` の成否や、受け手が早く止まるかが順で変わると、残る品物も変わる。
 
 `cancels` はスケジュールで変わる。取り消しが届くと、届いた時点からそのタスクの仕事が変わるためである。
 

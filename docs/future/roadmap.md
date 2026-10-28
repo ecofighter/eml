@@ -321,6 +321,9 @@
 - `Counter` のほかの `Atomic`
   - 後に回した理由: 利用者にメモリモデルを見せない。共有して書き換える状態は、持ち主のタスクの後ろに `Chan` を置く形 (actor) で書く。
   - 見直す条件: actor の形では遅すぎるとき。
+- `Counter` の表を縮めること: `Counter` は放さず、`Machine` の表は伸び続ける ([標準ライブラリ](../spec/stdlib.md) の「`Std.Atomic`」)
+  - 後に回した理由: `Counter` は数の少ない共有の状態のためのもので、表の項は作った `Counter` の数だけである。
+  - 見直す条件: `Counter` を大量に作るプログラムが出たとき。worker のスレッドを入れるときは、表を `SeqCst` の atomic にする。
 - 最後のハンドルで放す channel: 今の channel は `close` で放し、閉じないままの channel は run の終わりまで残る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Chan`」)。戻す形は [非同期の設計](async.md) の「未決の論点と将来の拡張」の「`Lin` の closer token」にある
   - 後に回した理由: `Chan a` を `Unr` の `Foreign` にして最後のハンドルで放す形は、初めての `Unr` の `Foreign` になる。回復で `Foreign` を移す信頼の一覧の行 (T3。[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」) と、Verus と Miri の作業を `eml_rt` に要し、送受信のたびにハンドルの `dup`、`decref` と表の照らし合わせが入る。品物が自分の channel のハンドルを持つ輪では最後のハンドルが落ちないので、放す保証はどちらの形でも「閉じるか run の終わり」になる。ネイティブ化の簡潔さと速さを優先し、即値にした。
   - 見直す条件: 接続やリクエストごとに channel を作り、取り消しの巻き戻しで `close` を飛ばす形のサーバが実際に書かれ、長く走る run で登録表の slot が増え続けると測れたとき (`RunStats.channels_swept` か、検査モードの終わりの数で)。
