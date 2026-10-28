@@ -24,6 +24,16 @@ pub enum Sched {
     Seeded(u64),
 }
 
+impl Sched {
+    /// テストの driver に渡す seed。seed の方針のときだけある (docs/spec/vm.md の「時計と driver」)。
+    pub fn seed(self) -> Option<u64> {
+        match self {
+            Sched::Seeded(seed) => Some(seed),
+            Sched::Normal | Sched::Sequential => None,
+        }
+    }
+}
+
 impl FromStr for Sched {
     type Err = String;
 

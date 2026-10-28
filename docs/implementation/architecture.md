@@ -44,7 +44,8 @@ eml/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。workspace の crate では eml_extern だけに依存する
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
-    eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_rt、eml_extern だけに依存する
+    eml_io/             # I/O の driver (本物の driver とテストの driver)。workspace の crate では eml_rt だけに依存する
+    eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_io、eml_rt、eml_extern だけに依存する
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
   std/                  # 標準ライブラリ (Prelude.em、Fs.em、List.em など)。eml_hir がバイナリに埋め込む
@@ -73,6 +74,7 @@ eml/
 ```
 eml_cli          check / run コマンド。パイプラインを組む唯一の場所 (Session)。テストから呼べる lib API を公開する
 eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_rt の Ctx の上で実行する
+eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver)。時計と I/O の待ちを受け持つ
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。最適化と evidence passing のパスと、LIR への変換
 eml_lir          LIR (box、RC、末尾呼び出しを明示する基本ブロックの列)。box/unbox の挿入、構造体を葉に開くパス、縮約、dup/decref/release の挿入、reuse のパス
@@ -83,7 +85,8 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne �
 eml_extern       extern の表 (型、エフェクト、関数)。依存を持たず、HIR、型検査、Core IR、LIR、VM が引く
 ```
 
-- 段階の連なりに `eml_rt` は入らず、`eml_vm` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
+- 段階の連なりに `eml_rt` は入らず、`eml_vm` と `eml_io` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
+- `eml_io` は `eml_rt` だけに依存し、`eml_vm` には依存しない。依存の順は `eml_cli` > `eml_vm` > `eml_io` > `eml_rt` である。trait `IoDriver` と driver に渡す型は `eml_rt` が持ち、`eml_io` はその実装だけを持つ ([VM](../spec/vm.md) の「時計と driver」)
 - `eml_lir` は、workspace の crate では `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである。表 (`Extern`、`ExternType`、`ExternEffect`) は `table!` が1つの並びから変種、`ALL`、静的な行を作り、`row` は行への参照を返す。VM のコード生成は `self as usize` を行の番号に使い、VM は `ALL` で引き戻すので、並びが1つなら2つの順は食い違わない
@@ -306,7 +309,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - reuse (`eml_lir` の `reuse.rs`) は、関数ごとに `Planner` がブロックを番号の順に1回たどって組を決め、`Plan::apply` がまとめて書き換える ([LIR](../spec/lir.md) の「reuse」)。道ごとの状態 (`Path`) は、構築子が分かっている変数と使える token の並びで、`switch` の行き先へ写し、合流するブロックでは構築子の事実を入る道の共通部分にし、token を空にする。たどり終えてから、どの道でも使わなかった元を元の文に戻し、一部の道でだけ使う token の `drop_token` を行き先の入口に置く。yield しうる呼び出しは `may_yield` が決め、verifier も同じ関数で、yield しうる呼び出しの後に token が生きていないことを確かめる
 - パス、verifier、`pretty`、`parse`、VM のコード生成は、ブロックと文の並びをループでたどり、IR の大きさに比例して再帰しない。生存解析は、ブロックを後ろからたどる1回のループで、ブロックごとの入口の生存集合を側の表 (`liveness::live_in`) に返す。辺がすべて前向きなので、不動点の計算は要らない
 - 縮約 (`eml_lir` の `contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換なときだけ `tail` にする ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出しの書き換えは、translate が組み立てるときに行う。組み立てた後に別のパスで書き換えると、書き換えのたびに枝の部分木を置き換えるので、長い `else if` の連鎖で2乗の時間がかかるためである
-- `eml_vm` は、コード生成 (`compile/`) と実行に分かれる。`compile/` では、`slots.rs` が文の単位の生存から干渉グラフを作ってスロットを塗り、`moves.rs` がブロック引数への並列な代入を `Move` の列に直し、`emit.rs` が関数ごとに命令を出し、`constants.rs` が定数を作業用のヒープに作って凍結する ([VM](../spec/vm.md) の「スロットの割り当て」と「`CodeBase` と `FnEntry`」)。実行は `vm.rs` の、命令を `match` で分ける1つのループである。関数の値の適用とクロージャは `apply.rs`、`CodeBase` と `FnEntry` と組み込みの命令 (`Finish`、`ApplyRest`、`par` の子の終わりの `ChildDone`。位置は `op.rs` の `FINISH`、`APPLY_REST`、`CHILD_DONE`) は `code.rs`、データの命令は `data.rs` にあり、基本操作の命令も `vm.rs` の `match` の腕で `Ctx` のメソッドを呼ぶ。命令の型は `op.rs`、実行時エラーの型と表示の文言は `error.rs`、`eml run` と REPL とテストが使う Host は `hosts.rs` にある。スケジュールの方針 (`Sched`、`Policy`、`Normal`、`Sequential`、`Seeded`) とタスクの表と join の節点を持つ `Scheduler` は `sched.rs` に、普通の方針 `Normal` が持つ監視のスレッドは `monitor.rs` に、本物の時計と仮想の時計の driver とその選び方 `Clock` は `driver.rs` にあり、`par` の fork と join は `vm.rs` が行う ([VM](../spec/vm.md) の「タスクとスケジュール」と「`par` の fork と join」)。`Async` のタスクとスコープと channel の意味 (登録表 `Registry`、セル、受け箱、ハンドル、`Counter` の表) は `cells.rs` の核が持ち、`cells.rs` は `std` と `eml_rt` だけを import する。`Async` の命令と入口の `Task` は `vm.rs` が扱い、核を呼んで返った仕事を `Task` にする ([VM](../spec/vm.md) の「`Async` のタスク」)。逆アセンブラは `disasm.rs` である
+- `eml_vm` は、コード生成 (`compile/`) と実行に分かれる。`compile/` では、`slots.rs` が文の単位の生存から干渉グラフを作ってスロットを塗り、`moves.rs` がブロック引数への並列な代入を `Move` の列に直し、`emit.rs` が関数ごとに命令を出し、`constants.rs` が定数を作業用のヒープに作って凍結する ([VM](../spec/vm.md) の「スロットの割り当て」と「`CodeBase` と `FnEntry`」)。実行は `vm.rs` の、命令を `match` で分ける1つのループである。関数の値の適用とクロージャは `apply.rs`、`CodeBase` と `FnEntry` と組み込みの命令 (`Finish`、`ApplyRest`、`par` の子の終わりの `ChildDone`。位置は `op.rs` の `FINISH`、`APPLY_REST`、`CHILD_DONE`) は `code.rs`、データの命令は `data.rs` にあり、基本操作の命令も `vm.rs` の `match` の腕で `Ctx` のメソッドを呼ぶ。命令の型は `op.rs`、実行時エラーの型と表示の文言は `error.rs`、`eml run` と REPL とテストが使う Host は `hosts.rs` にある。スケジュールの方針 (`Sched`、`Policy`、`Normal`、`Sequential`、`Seeded`) とタスクの表と join の節点を持つ `Scheduler` は `sched.rs` に、普通の方針 `Normal` が持つ監視のスレッドは `monitor.rs` に、時計の選び方 `Clock` と時刻のミリ秒への丸めは `driver.rs` にあり (driver そのものは `eml_io` にある)、`par` の fork と join は `vm.rs` が行う ([VM](../spec/vm.md) の「タスクとスケジュール」と「`par` の fork と join」)。`Async` のタスクとスコープと channel の意味 (登録表 `Registry`、セル、受け箱、ハンドル、`Counter` の表) は `cells.rs` の核が持ち、`cells.rs` は `std` と `eml_rt` だけを import する。`Async` の命令と入口の `Task` は `vm.rs` が扱い、核を呼んで返った仕事を `Task` にする ([VM](../spec/vm.md) の「`Async` のタスク」)。逆アセンブラは `disasm.rs` である
 - VM は状態を `Ctx` と `Task` だけに置き、Rust の再帰を使わない。呼び出しのスタックは `Task` のデータである ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約5)
 - 位置を持つ `extern` 命令から作った命令にだけ、`Tables::locations` で源の位置 (`SourceLocation`) を付ける ([LIR](../spec/lir.md) の「実行時エラー」)
 - `RunStats` の回数は、`Ctx` の `CtxStats` とヒープの `Stats` が検査モードで数える。`boxes`、`unboxes`、`reuses`、`unwound_frames` は VM が数え、`peak_stack` はタスクごとの深さの起点とスタックの長さの和の最大で、`Scheduler` が取る。`tasks`、`parks`、`timers`、`dropped_failures`、`cancels`、`channel_ops`、`channel_waits`、`channels_swept` は登録表が数える ([VM](../spec/vm.md) の「`RunStats`」)
@@ -344,6 +347,14 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `extern` 命令は、フレームを積まずにその場で実行して値を返す。extern は eml のコードを呼び返さないので、継続を組み立てる必要がないためである。ただし、IO の extern が `try_io` の捕まえる種類の誤りで失敗すると、VM が最も近い `IO` の evidence (`Ctx::ev_find`) の `io_failed` の節の入口を呼んで、失敗を届ける。入口は中断を始め、巻き戻しが `try_io` の handle のフレームまでスタックを戻す
 - `exit` は、`Ctx::exit_abort` で宛先を不死のダミーの物体にした中断を始め、`Finish` まで巻き戻す。途中のフレームが持っていた値は、巻き戻しの表で後始末される ([VM](../spec/vm.md) の「extern の中断」)
 
+## `eml_io` の内部
+
+- `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、単調な時計 (`Instant`) で読み、1回の `wait` で眠る長さの上限 `IDLE_TICK` を持つ。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、メモリの上の `pair` の端、seed で混ぜる決着の順を持つ ([VM](../spec/vm.md) の「時計と driver」)
+- driver は `Word`、`Ctx`、RC に触れず、記憶には `RawBuf` を通してだけ届く。そのため `eml_io` は `eml_vm` を知らずに組み立てられる。どちらの driver を使うかは `eml_vm` の `Clock` が決める
+- `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
+- driver は作ったスレッドの上でだけ使う。`eml_io` は driver の型に `unsafe impl Send` を書かない
+- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計と、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、渡す前の取り消しが次の決着で終わること) を確かめる
+
 ## ソースファイルと位置
 
 - `FileId` と `SourceFiles` (`FileId` → パスとテキスト) は `eml_diagnostics` に置く。`SourceFiles` には読み込みの段が読んだすべてのファイルが入る。`FileId` はモジュールの番号と同じ順である
@@ -364,7 +375,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `eml repl [--debug-heap] [--sched <normal|sequential|seeded:N>] [--clock <real|virtual>] [file]` は、`file` を渡すと `:load` と同じく最初の入力として読み、`repl_limits()` の上限で `eml_cli::Repl` を使う。端末の繰り返しは bin の `terminal.rs` で、行を入力にまとめるのは lib の `eml_cli::lines` である。規則は [REPL の端末](../spec/repl.md) にある。終了コードは、0 = `:quit` か EOF で終わった、1 = 検査モードのリーク、続けられない誤り、行を読めない誤り、2 = 使い方の誤り、である。入力の誤りと実行時エラーは終了コードを変えない
 - Ctrl-C の受け口は bin の `interrupt` モジュールが入れる。unix では `interrupt/unix.rs` が `libc::sigaction` で、Windows では `interrupt/windows.rs` が `SetConsoleCtrlHandler` で入れる。`src/` の `unsafe` は、`interrupt` モジュールと、`physical_memory` と、端末の列の数を読む bin の `terminal.rs` の `stdout_width` の中だけに置く
 
-`eml_cli` の lib は次の API を公開する。`Session` はパイプラインを組む唯一の場所で、CLI、UI テスト、`eml_test_support` がこれを通す。UI テストはこれをプロセス内で呼ぶ。どのメソッドも読み込みの結果から計算し直し、途中の結果を持たない。途中の結果を使い回すのは、salsa でクエリ化するときに考える。`Session` は `Send + Sync` で、`crates/eml_cli/tests/api.rs` が確かめる。salsa への載せ替えと、フロントエンドの並列のコンパイルに備えるためで、実行とは関係ない。読み込みの結果が持つのは緑の木 (green tree) と `AstPtr` だけで、ノードを持たないので `Send + Sync` にできる。
+`eml_cli` の lib は次の API を公開する。`Session` はパイプラインを組む唯一の場所で、CLI、UI テスト、`eml_test_support` がこれを通す。UI テストはこれをプロセス内で呼ぶ。どのメソッドも読み込みの結果から計算し直し、途中の結果を持たない。途中の結果を使い回すのは、salsa でクエリ化するときに考える。`Session` は `Send + Sync` で、`crates/eml_cli/tests/api.rs` が確かめる。salsa への載せ替えと、フロントエンドの並列のコンパイルに備えるためで、実行とは関係ない。読み込みの結果が持つのは緑の木 (green tree) と `AstPtr` だけで、ノードを持たないので `Send + Sync` にできる。`Repl` は `Machine` を持つので `Send` でなく、作ったスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。
 
 - `Session::load(entry_path, entry_text, &dyn ModuleSource) -> Session` は、入口の表示のパスと本文を受け取り、読み込みの段で Prelude と、import をたどって見つけたモジュールを読む ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)。`Session::user_module_names` は出どころがユーザーのモジュールの名前を返し、UI テストの harness が1ファイルのテストの import を確かめるのに使う。`Session` は1回の検査や実行で読むソースの集まりである。入口のファイルは `main.rs` が読み、読めなければ終了コード 2 にする。ファイルシステムから読む `ModuleSource` は `FsProvider` で、パスの各段の名前がディレクトリの一覧と大文字小文字まで一致することを確かめる。macOS のように大文字小文字を区別しないファイルシステムで、`import Report.Csv` が `report/Csv.em` に当たらないようにするためである。大文字小文字だけが違う名前があれば、実際の名前を読めない理由として返す (E1026)。`main.rs` は、入口のファイル名をディレクトリの一覧にある綴りに直してから `Session::load` に渡す。`t/server.em` で `t/Server.em` を開けたときも、依存先の `import Server` が入口を指すと分かるようにするためである。実行を始める `main` は入口のモジュールからだけ探し (`hir::Program::main`)、Prelude には置かない
 - `Session::def_map() -> DefMapped`、`Session::lower() -> Lowered`、`Session::check() -> Checked` (feature `types`)。結果は段階の出力 (`DefMap`、HIR の `Program`、`TypedProgram`) と診断を持つ。診断は読み込みの段からその段階までのすべてで、`sort_diagnostics` で並べて返す。各段階は診断の順を約束しない。`eml check` は `check().diagnostics` を表示する

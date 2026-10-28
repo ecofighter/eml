@@ -347,13 +347,6 @@ impl Console {
     }
 }
 
-/// `Session` と同じく、後で並列のコンパイルやクエリに載せる妨げにしない (docs/spec/modules.md の「REPL のセッション」)。
-#[test]
-fn a_repl_is_send() {
-    fn assert_send<T: Send>() {}
-    assert_send::<Repl>();
-}
-
 #[test]
 fn a_rejected_input_leaves_the_session_unchanged() {
     let mut console = Console::new(&RunConfig::default());

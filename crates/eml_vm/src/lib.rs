@@ -168,6 +168,10 @@ pub struct Loaded {
 /// `run` で入口の関数を実行する。モードごとの確かめは、作るときに `Machine<Fast>::new` と `Machine<Checked>::new` が
 /// 決める。
 pub struct Machine<M: Mode> {
+    /// 時計と待ち。最初の run が `clock` と方針の seed から作り、run の間は `Scheduler` に移す。`with_clock` と
+    /// `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。driver が貸した記憶は
+    /// ヒープにあるので、`code` と `ctx` より先に落とす欄として最初に置く (docs/spec/vm.md の「時計と driver」)。
+    driver: Option<Box<dyn IoDriver>>,
     code: CodeBase<M>,
     ctx: Ctx<M>,
     max_depth: usize,
@@ -187,9 +191,8 @@ pub struct Machine<M: Mode> {
     generations: Vec<u32>,
     /// `Std.Atomic.Counter` の表。run をまたぎ、REPL の入力をまたいで残る (docs/spec/vm.md の「セルと登録表」)。
     counters: Vec<i64>,
-    /// 時計と待ち。run の間は `Scheduler` に移すので、run の外ではいつも `Some` である。`Machine` ごとに1つなので、
-    /// 時刻は run をまたいで続く (docs/spec/vm.md の「時計と driver」)。
-    driver: Option<Box<dyn IoDriver>>,
+    /// driver を作るときの時計。
+    clock: Clock,
 }
 
 impl Machine<Fast> {
@@ -228,19 +231,23 @@ impl<M: Mode> Machine<M> {
             shared_roots: 0,
             generations: Vec::new(),
             counters: Vec::new(),
-            driver: Some(Clock::Virtual.driver()),
+            clock: Clock::Virtual,
+            driver: None,
         }
     }
 
-    /// 実行ごとに作るスケジューラの方針を選ぶ。既定は `Sched::Sequential` である。
+    /// 実行ごとに作るスケジューラの方針を選ぶ。既定は `Sched::Sequential` である。seed は driver に渡すので、次の run
+    /// が driver を作り直す。
     pub fn with_sched(mut self, sched: Sched) -> Machine<M> {
         self.sched = sched;
+        self.driver = None;
         self
     }
 
-    /// タイマーが使う時計を選び、新しい driver を作る。既定は `Clock::Virtual` である。
+    /// タイマーが使う時計を選ぶ。既定は `Clock::Virtual` である。次の run が新しい driver を作る。
     pub fn with_clock(mut self, clock: Clock) -> Machine<M> {
-        self.driver = Some(clock.driver());
+        self.clock = clock;
+        self.driver = None;
         self
     }
 
@@ -366,16 +373,26 @@ impl<M: Mode> Machine<M> {
             }
             task.keep_result = true;
         }
+        // driver は run を行うスレッドで作る。作れなければヒープに触れずに終わる (docs/spec/vm.md の「時計と driver」)
+        let driver = match self.driver.take() {
+            Some(driver) => driver,
+            None => self.clock.driver(self.sched.seed()).map_err(|e| {
+                code.error(
+                    vm::Failure {
+                        fault: VmFault::Driver(e.to_string()),
+                        pc: task.pc,
+                    },
+                    &task,
+                )
+            })?,
+        };
         let mut counts = RunCounts::default();
         let start = Start {
             max_depth: self.max_depth,
             shared_roots: self.shared_roots,
             generations: std::mem::take(&mut self.generations),
             counters: std::mem::take(&mut self.counters),
-            driver: self
-                .driver
-                .take()
-                .expect("a machine holds its driver between runs"),
+            driver,
         };
         let (result, mut scheduled) = match self.sched {
             Sched::Normal => {

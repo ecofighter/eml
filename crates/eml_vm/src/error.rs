@@ -19,6 +19,8 @@ pub enum VmFault {
     Internal(&'static str),
     /// 実行待ちのタスクも時間の待ちもないのに、終わっていないタスクがある (docs/spec/vm.md の「時計と driver」)。
     Deadlock,
+    /// I/O の driver を作れなかったか、driver が壊れた (docs/spec/vm.md の「時計と driver」)。
+    Driver(String),
 }
 
 /// デッドロックの文言。関数の名前と位置は内部のコードとスケジュールで変わるので付けない。
@@ -32,6 +34,7 @@ impl fmt::Display for VmFault {
             VmFault::Stopped(stop) => write!(f, "{stop}"),
             VmFault::Internal(what) => write!(f, "internal error: {what}"),
             VmFault::Deadlock => f.write_str(DEADLOCK),
+            VmFault::Driver(error) => write!(f, "the I/O driver failed: {error}"),
         }
     }
 }
@@ -110,12 +113,13 @@ impl RuntimeError {
     }
 
     /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き `RootMisuse` を含む) と内部の誤りの後と、回復が
-    /// 失敗した後は、ヒープを信用できない。REPL はこの後の入力を受け付けない (docs/spec/vm.md の「追記」)。
+    /// 失敗した後は、ヒープを信用できない。driver の誤りの後は、driver が貸した記憶を手放したかを確かめられない。
+    /// REPL はこの後の入力を受け付けない (docs/spec/vm.md の「追記」)。
     pub fn is_broken(&self) -> bool {
         matches!(
             self,
             RuntimeError::Fault {
-                fault: VmFault::Internal(_) | VmFault::Extern(Fault::Heap(_)),
+                fault: VmFault::Internal(_) | VmFault::Driver(_) | VmFault::Extern(Fault::Heap(_)),
                 ..
             } | RuntimeError::Unrecovered { .. }
         )

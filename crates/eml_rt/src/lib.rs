@@ -27,7 +27,7 @@ mod trust;
 mod word;
 
 pub use control::{Control, Limits, Stop};
-pub use driver::{IoDriver, RawBuf};
+pub use driver::{Completion, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf};
 pub use error::HeapError;
 pub use externs::{
     ArithFault, Fault, Form, Handle, IndexFault, IoOp, IoReason, Open, Raised, ReadAmount,

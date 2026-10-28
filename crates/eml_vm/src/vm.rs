@@ -1221,15 +1221,22 @@ fn switch_away<R: Exec>(
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)
     collect::<R>(code, ctx, task.depth_offset, sched)?;
-    // 走れるタスクがなければ、次の期限まで眠って集め直す。眠りは1回ごとに短く切り、起きるたびに止める語を読む。
-    // `PREEMPT` は切り替える先がないので捨てる。期限もなければ、どのタスクも進めないデッドロックである
-    // (docs/spec/vm.md の「時計と driver」)
+    // 走れるタスクがなければ、次の期限か driver の完了まで待って集め直す。待ちは1回ごとに短く切り、戻るたびに止める
+    // 語を読む。`PREEMPT` は切り替える先がないので捨てる。期限も保留の操作もないか、driver がもう何も進まないと
+    // 答えたら、どのタスクも進めないデッドロックである (docs/spec/vm.md の「時計と driver」)
     let next = loop {
         if let Some(next) = sched.policy.pick(&mut sched.ready) {
             break next;
         }
-        let deadline = sched.cells.next_deadline().ok_or(VmFault::Deadlock)?;
-        sched.driver.wait_until(deadline);
+        let deadline = sched.cells.next_deadline();
+        if deadline.is_none() && sched.driver.pending() == 0 {
+            return Err(VmFault::Deadlock);
+        }
+        match sched.driver.wait(deadline) {
+            Ok(true) => {}
+            Ok(false) => return Err(VmFault::Deadlock),
+            Err(e) => return Err(VmFault::Driver(e.to_string())),
+        }
         poll(ctx, task.stack_depth())?;
         collect::<R>(code, ctx, task.depth_offset, sched)?;
     };

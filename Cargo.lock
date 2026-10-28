@@ -243,6 +243,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "eml_io"
+version = "0.1.0"
+dependencies = [
+ "eml_rt",
+]
+
+[[package]]
 name = "eml_lir"
 version = "0.1.0"
 dependencies = [
@@ -301,6 +308,7 @@ name = "eml_vm"
 version = "0.1.0"
 dependencies = [
  "eml_extern",
+ "eml_io",
  "eml_lir",
  "eml_rt",
  "eml_test_support",

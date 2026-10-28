@@ -260,6 +260,7 @@ fn a_broken_error_is_a_heap_or_internal_fault() {
         at: None,
     };
     assert!(fault(VmFault::Internal("x")).is_broken());
+    assert!(fault(VmFault::Driver("x".to_string())).is_broken());
     assert!(
         fault(VmFault::Extern(Fault::Heap(
             eml_rt::HeapError::UseAfterFree

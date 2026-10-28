@@ -76,7 +76,7 @@ REPL (`eml_cli::Repl`) は入力ごとにプログラム全体を lowering し�
   - 配置と構造体の形の番号は、命令列を作るときに形を引くだけで、命令列に残らないので引き直さない
   - `Async` のタスクの入口の番号 (`entries`): まだなければ、ロードごとに名前で引く。`Std.Async` は import したときだけ読み込むので、最初に `Std.Async` を読み込んだ入力の `load` で引ける。`Async` の命令を持つロードで引けなければ `MissingEntry` である (「`Async` のタスク」)
 - debug ビルドでは、すでにある名前の関数も同じ引き直しで変換し直し、前の命令列と比べる。比べるのは、逆アセンブラと同じテキストにした命令の並び (巻き戻しの表の行を含む) と、`FnEntry` の `arity`、`frame_size`、`params`、`ret_rc` である。テキストの命令の位置は関数の先頭からの位置で書き、オペランドは指す中身 (呼ぶ関数の名前、エフェクトの番号、定数の番号、位置のパス) で書く。一致しなければ `CompileError::Mismatch` を返す。比べた写しは消す
-- `RuntimeError::is_broken()` は、続けて実行できない誤り (ヒープの誤りと内部の誤りと `Unrecovered`。ヒープの誤りには、2つのモードで返す根の誤った読み書き `RootMisuse` も入る) で真を返す。この後のヒープは信用できないので、REPL は後の入力を受け付けない
+- `RuntimeError::is_broken()` は、続けて実行できない誤り (ヒープの誤りと内部の誤りと driver の誤りと `Unrecovered`。ヒープの誤りには、2つのモードで返す根の誤った読み書き `RootMisuse` も入る) で真を返す。この後のヒープは信用できないので、REPL は後の入力を受け付けない
 
 ## 命令とフレーム
 
@@ -321,7 +321,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ## 誤り、止めること、終わり
 
-- 実行時エラー `RuntimeError` は、誤り (`VmFault`)、関数の名前、省略できる位置を持つ `Fault` と、検査モードのリークの `Leak` と、すべてのタスクが待つ `Deadlock` (「時計と driver」) と、回復の失敗の `Unrecovered` (「追記」) である。`VmFault` は、extern、基本操作、ヒープの操作の誤り (`Extern(Fault)`)、捕まえる `try_panic` のない利用者の `panic` (`Panicked(String)`)、安全点で止めたこと (`Stopped(Stop)`)、verifier を通った IR では起きないはずの誤り (`Internal`)、空きのループが見つけたデッドロック (`Deadlock`) の5つである。`CodeBase::error` は `VmFault::Deadlock` を、関数の名前も位置も付けずに `RuntimeError::Deadlock` にする
+- 実行時エラー `RuntimeError` は、誤り (`VmFault`)、関数の名前、省略できる位置を持つ `Fault` と、検査モードのリークの `Leak` と、すべてのタスクが待つ `Deadlock` (「時計と driver」) と、回復の失敗の `Unrecovered` (「追記」) である。`VmFault` は、extern、基本操作、ヒープの操作の誤り (`Extern(Fault)`)、捕まえる `try_panic` のない利用者の `panic` (`Panicked(String)`)、安全点で止めたこと (`Stopped(Stop)`)、verifier を通った IR では起きないはずの誤り (`Internal`)、空きのループが見つけたデッドロック (`Deadlock`)、I/O の driver を作れなかったか driver が壊れたこと (`Driver(String)`。「時計と driver」) の6つである。`CodeBase::error` は `VmFault::Deadlock` を、関数の名前も位置も付けずに `RuntimeError::Deadlock` にする
 - 表示の形は次のとおりである。位置があれば `{fault}\n  at path:line:column`、なければ ``{fault} in `function` ``、リークは `memory leak: objects were not freed: {n} {name}, …`、内部の誤りの `{fault}` は `internal error: {what}`、利用者の `panic` の `{fault}` は `panicked: {message}`、デッドロックは `deadlock: every task is waiting and no timer is pending` である。`eml run` は、この表示の前に `runtime error: ` を付けて標準エラーに書く
 - 関数の名前は、命令の位置から `FnEntry` の範囲を二分探索して引く (`function_at`。位置が範囲の終わりより前であることも確かめる)。`Finish`、`ApplyRest`、`ChildDone` はどの関数にも属さないので、そこで起きた誤りには、最後に戻った関数の名前を付ける。`par` の join の完了とその後の安全点で起きた誤りと、右の子を始めるときの誤りには、`par` の命令の関数の名前と位置を付ける (「`par` の fork と join」)。VM は `Ret` のたびにその位置を `Task::last_ret` に覚える。末尾の位置の部分適用が作ったクロージャを返すときも、関数の中で起きたなら同じく覚える
 - 位置は `locations` から命令の位置で引く。表に載せるのは、位置を持つ extern の呼び出しから作った命令である。専用の算術と比較の命令も含む。`run-fail` の UI テストの多くは `/` と `+` の誤りの位置を表示している
@@ -391,34 +391,70 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `PREEMPT` を拾うときは、`take_preempt` でビットを下ろしてから `Ctx::poll` をもう一度呼ぶ。2回の `poll` の間に命令がないので、深さは同じで、深さの上限の確認は正確である。間に立った `INTERRUPT` と `MEMORY` は、2回目の `poll` が返すので、切り替えより先に勝つ。ビットを下ろした後は、走れるタスクがなくても `PREEMPT` が残らない。切り替えた先の安全点も同じ手順で拾い、`tick` が真か `PREEMPT` が立っていればまた切り替える
 - 速い道は `Ctx::poll` が `Ok(())` を返す分岐だけである。`PREEMPT` を含む残りの扱いは、`#[cold]` と `#[inline(never)]` を付けた関数に置く
 - `Finished.preemptions` は、方針か `PREEMPT` が安全点で始めた切り替えの数である。監視のスレッドの `PREEMPT` による切り替えも数える。切り替える先がなかった試みは数えない。join で待つ切り替えと、子が終わったときの切り替えは数えない。逐次では、ほかの者が `Control::preempt` を呼ばなければ 0 である。横取りだけを数えるのは、seed の方針で横取りが起きたことをテストで確かめるためである
-- `Scheduler`、`Sched`、方針の型は `Send` で、`Sched` は `Sync` でもある。`crates/eml_vm/tests/api.rs` が型の assert で確かめる
+- `Sched` と方針の型は `Send` で、`Sched` は `Sync` でもある。`crates/eml_vm/tests/api.rs` が型の assert で確かめる。`Scheduler` は driver を持つので `Send` でない (「時計と driver」)
 
 ## 時計と driver
 
-- 時計と待ちは、`eml_rt` の trait `IoDriver` が受け持つ。時間だけを扱い、`verus!` の外に置く ([オブジェクトモデル](object-model.md) の「`unsafe` の核」)
+- 時計と I/O の待ちは、`eml_rt` の trait `IoDriver` が受け持つ。driver は `Word` にも `Ctx` にも RC にも触れず、記憶には `RawBuf` を通してだけ届く。そのため trait と型は `verus!` の外に置く ([オブジェクトモデル](object-model.md) の「`unsafe` の核」)
 
   ```rust
-  pub trait IoDriver: Send {
+  pub type OpKey = u64;
+  pub type IoHandle = u64;
+
+  #[derive(Clone, Copy)]
+  pub struct RawBuf { pub ptr: *mut u8, pub cap: usize }
+
+  pub enum Op {
+      Readable { handle: IoHandle },
+      Read { handle: IoHandle, buf: RawBuf },
+      Write { handle: IoHandle, buf: RawBuf },
+      Job(Box<dyn FnOnce() -> io::Result<usize> + Send + 'static>),
+  }
+
+  pub struct Completion { pub key: OpKey, pub result: io::Result<usize> }
+
+  pub trait IoWaker: Send + Sync { fn wake(&self); }
+
+  #[derive(Default)]
+  pub struct HandleBin { pub dropped: Mutex<Vec<IoHandle>> }
+
+  pub trait IoDriver {
       fn now(&self) -> Duration;
-      fn wait_until(&mut self, deadline_ms: u64);
+      fn wait(&mut self, deadline_ms: Option<u64>) -> io::Result<bool>;
+      fn submit(&mut self, op: Op) -> OpKey;
+      fn cancel(&mut self, key: OpKey);
+      fn completions(&mut self, out: &mut Vec<Completion>);
+      fn pending(&self) -> usize;
+      fn waker(&self) -> Arc<dyn IoWaker>;
+      fn bin(&self) -> Arc<HandleBin>;
+      fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)>;
+      fn close(&mut self, handle: IoHandle);
+      fn quiesce(&mut self);
   }
   ```
 
-- `now` は、driver を作ったときからの経過時間を返す。単調で、戻らない。仮想の時計はミリ秒の整数だけで進む
-- `wait_until(deadline_ms)` は、`now()` が `deadline_ms` ミリ秒以上になるまで待つ。早く戻ってよい。呼ぶ側は戻るたびに `now` で時刻を確かめ直す。本物の時計はスレッドを止めて待ち、仮想の時計は止まらずに `now` を `deadline_ms` へ進める
-- driver は worker ごとに1つで、持ち主の worker だけが触る。`&mut self` で呼び、`Sync` は求めない
-- driver を持つのは実行系 (`eml_vm`) で、`Ctx` は持たない。`eml_rt` の核は時間を知らない
+- `now` は、driver を作ったときからの経過時間を返す。単調で、戻らない。テストの driver の時計はミリ秒の整数だけで進む
+- `wait(deadline)` は、`now()` が `deadline` ミリ秒以上になるか、完了が届くか、waker が鳴るまで待つ。早く戻ってよい。呼ぶ側は戻るたびに時刻と完了を確かめ直す。`Ok(true)` は進みうること、`Ok(false)` は外からの入力なしには何も進まないこと、`Err` は driver が壊れたことを表す
+- `submit` は操作を受け付けて鍵 `OpKey` を返す。失敗しない。出せなかった操作は、次の `completions` で誤りとして終わる。鍵とハンドルは、1つの driver の寿命の間は使い回さない
+- `cancel(key)` は、できるだけ操作を取り消す。取り消しても `key` の完了は届く。`Op::Job` は取り消せない
+- `completions` は、届いた完了をすべて渡す。順は driver が決める。`pending` は、受け付けて、まだ `completions` で渡していない操作の数である
+- `RawBuf` は、driver に貸す記憶である。`cap == 0` は記憶がないことを表し、そのときの `ptr` は読みも書きもしない。貸した側は、その操作の完了を `completions` から取り出すまで、物体を生かし、一意に保ち、動かさない
+- `Readable` は、ハンドルの読みがブロックしなくなったら (データか EOF) `Ok(0)` で終わる。`Read` は `ptr[0..cap]` に読み、`Ok(n)` で終わる。`n == 0` は EOF である。`Write` は `ptr[0..cap]` を書き、`Ok(n)` で終わる。`n` は短いことがある。`Job` はブロックする呼び出しのプールの仕事で、自分が所有する値 (所有して受け取る入力と、値で返す結果) を通してだけ記憶に届き、ヒープにも RC にも触れない
+- `pair` はつながった2つの端を返す。`close` は driver の参照を落とす。保留の操作は、終わるまで OS の資源を生かす。`HandleBin` は、落とされたハンドルを積む所で、driver は次の `wait`、`completions`、`quiesce` と driver を落とすときに閉じる。`quiesce` は保留の操作をすべて取り消し、完了がすべて届くまで待って捨て、`HandleBin` のハンドルを閉じる。仕事は終わるまで待つ
+- `IoDriver` は `Send` も `Sync` も求めない。driver は作ったスレッドの上でだけ使い、`&mut self` で呼ぶ。そのため、driver を持つ `Scheduler`、`Machine`、`AnyMachine` と、`Machine` を持つ REPL のセッション (`eml_cli::Repl`) は `Send` でなく、作ったスレッドの上でだけ使う。スレッドをまたぐ口は、`Send + Sync` の `IoWaker` だけである。`IoWaker::wake` はどのスレッドからも呼べる。シグナルのハンドラからは呼ばない
+- driver は worker ごとに1つで、持ち主の worker だけが触る。driver を持つのは実行系 (`eml_vm`) で、`Ctx` は持たない。`eml_rt` の核は時間を知らない
 - 時計は `Clock` の値で選ぶ。`Real` と `Virtual` (既定) の2つで、`Copy` である。`FromStr` は `real` と `virtual` を読み、ほかの綴りは誤りにする。誤りの文は ``expected `real` or `virtual`, found `…` `` である。ライブラリの既定 (`Clock::default()`、`RunConfig::default()`、`Machine`) を `Virtual` にするのは、テストを速く決定的に流すためである。CLI の `eml run` と `eml repl` は `--clock` で選び、既定は `real` である ([標準ライブラリ](stdlib.md) の「起動」)
-- 2つの driver は `eml_vm` の `driver.rs` に置く。本物の時計は単調な時計 (`Instant`) で読む。仮想の時計は 0 から始まるミリ秒の整数を持ち、`wait_until(d)` で今の時刻と `d` の大きいほうに進む。`Clock` と `Sched` は独立している。時計はタイマーがいつ満ちるかを決め、方針は実行待ちのどのタスクを動かすかを決める
-- `Machine` は driver を1つ持つ。`Machine::with_clock(clock)` が新しい driver を作り、`AnyMachine::new` は `RunConfig` の `clock` を渡す。run の間は driver を `Scheduler` に預け、run が終わると誤りでも `Machine` に戻す。そのため、仮想の時刻は run をまたいで続き、REPL では入力をまたいで残る。時間の輪は登録表と一緒に run ごとに作り直す
+- 2つの driver は `eml_io` に置く。`Clock::Real` は本物の driver `RealDriver` で、単調な時計 (`Instant`) で読む。`Clock::Virtual` はテストの driver `TestDriver` である。`Clock::driver(seed)` が driver を作る。`seed` は `Sched::seed` で、方針が `Seeded(n)` のときだけ `Some(n)` である。`Clock` と `Sched` は独立している。時計はタイマーがいつ満ちるかを決め、方針は実行待ちのどのタスクを動かすかを決める
+- テストの driver は、時計が 0 から始まり、ミリ秒の整数で進む。操作は `wait` と `completions` の始めにだけ決着させる。まず `HandleBin` を空にしてハンドルを閉じ、次に受け付けの順に、終わる操作を終わらせる。seed があれば、その決着で終わった操作の組の順を混ぜる。組の中身は seed で変わらない。`wait(Some(d))` は、決着で終わった操作がないときだけ、今の時刻と `d` の大きいほうへ時計を進める。終わる操作も期限もなければ `Ok(false)` を返す。`Err` は返さない。`pair` の端は、相手が書いたバイトの列と閉じた印を持つ。相手が閉じた後も、残りを読みきってから EOF を受ける。書きは、相手が開いていれば全部を写して終わり、閉じていれば `BrokenPipe` で終わる。仕事は決着のときにその場で動かす。渡す前の操作を取り消すと、次の決着で誤り `cancelled` で終わる。waker は旗を立てるだけである。そのため、完了は集める地点でだけ届き、結果はプログラムと方針と seed で決まる
+- `Machine` は時計 (`clock`) と driver を持つ。driver は最初の run が、run を行うスレッドの上で `clock` と方針の seed から作る。`Machine::with_clock(clock)` と `Machine::with_sched(sched)` は driver を捨て、次の run が作り直す。`AnyMachine::new` は `RunConfig` の `clock` を渡す。driver を作れなければ、その run はヒープに触れずに `VmFault::Driver` で終わる。run の間は driver を `Scheduler` に預け、run が終わると誤りでも `Machine` に戻す。そのため、テストの driver の時刻は run をまたいで続き、REPL では入力をまたいで残る。時間の輪は登録表と一緒に run ごとに作り直す。driver は `Machine` の最初の欄で、ヒープより先に落ちる
 - 時間の輪は、driver でなく登録表 (`Registry`) が持つ。鍵は期限 (ミリ秒) と登録の番号 `seq` の組で、値は待つタスクのセルの番号だけである。語は持たない。待ちを外す側が driver を往復せずに輪の項を外せ、2つの driver が同じ輪を別々に持たずに済むためである
 - 集める地点は、ほかのタスクに切り替える所と横取りを試みる所の頭である。そこでは受け箱を処理した後、輪が空でなければ今の時刻を読み、期限がその時刻までのタイマーを外す。外す順は期限で、同じ期限なら登録の順である。外したタイマーが待つタスクは `Woke` で再開し、その仕事を列の後ろに積む。外したタイマーが待っているタスクを指さなければ、内部の誤り (`a timer names no waiting task`) にする。輪が空なら時計を読まないので、タイマーのない run の仕事は時計によらない。`main` の `Finish` は受け箱だけを処理し、輪を見ない。見ると、眠ったまま残ったタスクが内部の誤りになるかどうかが機械の速さで変わるためである
-- 今の時刻は、タイマーを登録するときは切り上げたミリ秒で、満期を判定するときと期限と比べるときは切り捨てたミリ秒で読む。そのため、本物の時計の `ms` ミリ秒のタイマーは、`ms` 以上 `ms + 1` ミリ秒未満と起きるまでの遅れだけ待ち、早くは満ちない。仮想の時計はいつもミリ秒の整数なので、2つの丸めは同じ値になる
+- 今の時刻は、タイマーを登録するときは切り上げたミリ秒で、満期を判定するときと期限と比べるときは切り捨てたミリ秒で読む。そのため、本物の時計の `ms` ミリ秒のタイマーは、`ms` 以上 `ms + 1` ミリ秒未満と起きるまでの遅れだけ待ち、早くは満ちない。テストの driver の時計はいつもミリ秒の整数なので、2つの丸めは同じ値になる
 - 集めた後で実行待ちの列が空なら、worker は空きである。`Async.run` の呼び手、入れ子の `run` の呼び手、join で待つ `par` の親は列にいないので、空きを妨げない。`par` の右の子は列にいるので、右の子が残る間は空きにならない。横取りを試みる所では、列が空なら切り替えずに戻り、空きのループには入らない
-- 空きのループでは、輪のいちばん早い期限で `wait_until` を呼び、止める語を読み (`Ctx::poll`)、もう一度集める。走れるタスクができるまで繰り返す。`INTERRUPT` と `MEMORY` は run を止め、その誤りには切り替えに入った命令の位置を付ける。`PREEMPT` は切り替える先がないので、下ろして捨てる。実行待ちのタスクも輪のタイマーもなければ、どのタスクも進めないデッドロックなので、実行時エラー `deadlock: every task is waiting and no timer is pending` で run を止める
-- デッドロックの誤りは関数の名前も位置も持たない。どの関数で空きのループに入ったかは、内部のコードとスケジュールで変わるためである。`par` の子の中でもすぐに実行を止める (「子の誤り」)。ヒープは壊れていないので `is_broken` は偽で、REPL は回復して次の入力を受け付ける。ほかのタスクが動くか眠る間は、互いを待つタスクも待ち続ける。約束するのは、すべてのタスクが待ち、満ちるタイマーもないときに止まることだけである
-- 本物の時計の `wait_until` は、1回に高々 `IDLE_TICK` (10 ms) だけ眠る。空きのループは起きるたびに止める語を読むので、どの方針でも、Ctrl-C と確保量の上限は 10 ms と OS の遅れのうちに眠る worker を止める。シグナルのハンドラからは condvar も `unpark` も呼べず、監視のスレッドは `Normal` にしかないので、眠る worker を起こす仕組みは置かない。Ctrl-C の反応の遅れや空きの CPU 使用が問題になったときは `IDLE_TICK` を見直す。シグナルのハンドラや監視のスレッドから眠る worker を起こす案 (condvar、self-pipe) は、ハンドラが触れるのがアトミックだけなので、今は取らない
-- 仮想の時計が進むのは、空きのループの中だけである。いちばん早い期限まで進み、それを越えず、戻らない。2つの空きの間の、タスクが動いている期間では、今の時刻は変わらない。そのため、同じ期間に登録した長さの違うタイマーは、どのスケジュールでも長さの順に満ちる。同じ期限のタイマーは登録の順に満ちるが、並んで動くタスクのどれが先に登録するかはスケジュールで決まる。`yield_now` や `check_cancelled` を繰り返すタスクは実行待ちの列に残るので、空きにならず、時間は進まない
+- 空きのループは、走れるタスクができるまで次を繰り返す。輪のいちばん早い期限を読み、期限がなく driver の `pending()` も 0 なら、デッドロックで止める。そうでなければ `wait(期限)` を呼ぶ。`Ok(true)` なら止める語を読み (`Ctx::poll`)、もう一度集める。`Ok(false)` はデッドロックで止める。`Err(e)` は実行時エラー `VmFault::Driver` で止める。表示は `the I/O driver failed: {e}` である。driver が貸した記憶を手放したかを確かめられないので、`is_broken` は真である。`INTERRUPT` と `MEMORY` は run を止め、その誤りには切り替えに入った命令の位置を付ける。`PREEMPT` は切り替える先がないので、下ろして捨てる。デッドロックの文は `deadlock: every task is waiting and no timer is pending` である
+- デッドロックの誤りは関数の名前も位置も持たない。どの関数で空きのループに入ったかは、内部のコードとスケジュールで変わるためである。`par` の子の中でもすぐに実行を止める (「子の誤り」)。ヒープは壊れていないので `is_broken` は偽で、REPL は回復して次の入力を受け付ける。ほかのタスクが動くか眠る間は、互いを待つタスクも待ち続ける。約束するのは、すべてのタスクが待ち、満ちるタイマーも保留の操作もないときに止まることだけである
+- 本物の driver の `wait` は、1回に高々 `IDLE_TICK` (10 ms。`eml_io` に置く) だけ眠る。空きのループは戻るたびに止める語を読むので、どの方針でも、Ctrl-C と確保量の上限は 10 ms と OS の遅れのうちに眠る worker を止める。driver は `IoWaker` を持つが、今は本番のコードから鳴らさない。シグナルのハンドラからも、監視のスレッドからも呼ばない。起こしの道 (kqueue の通知など) が async-signal-safe と決まっていないためである。そのため、driver のどの待ちも起こしで戻るという設計 ([非同期の設計](../future/async.md) の「`IoDriver` と `eml_io`」、[マルチコア対応の設計](../future/multicore.md) の「止める手順」) はまだ満たさず、`IDLE_TICK` の上限で代える。この食い違いは `worker-threads` で解く。Ctrl-C の反応の遅れや空きの CPU 使用が問題になったときは `IDLE_TICK` を見直す
+- テストの driver の時計が進むのは、空きのループの中だけである。いちばん早い期限まで進み、それを越えず、戻らない。2つの空きの間の、タスクが動いている期間では、今の時刻は変わらない。そのため、同じ期間に登録した長さの違うタイマーは、どのスケジュールでも長さの順に満ちる。同じ期限のタイマーは登録の順に満ちるが、並んで動くタスクのどれが先に登録するかはスケジュールで決まる。`yield_now` や `check_cancelled` を繰り返すタスクは実行待ちの列に残るので、空きにならず、時間は進まない
 - 本物の時計は単調で、タイマーは早く満ちない。満ちたタイマーは、満期の後の最初の集める地点で動く。空きで眠っていたときは `IDLE_TICK` と OS の遅れの分だけ遅れ、ほかのタスクが動いていれば次の切り替えか横取りの頭まで遅れる。`Sequential` では、CPU を使い続けるタスクが切り替わるまで動かない。同じ期限のタイマーは登録の順に満ちる
 
 ## `par` の fork と join
