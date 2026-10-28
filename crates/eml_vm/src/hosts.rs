@@ -310,7 +310,11 @@ impl Host for CaptureHost {
 /// 子の `PATH`。`prefix` があれば本物の `PATH` の前に足す。`prefix` が区切りや `"` を含むと `join_paths` が
 /// 失敗し、そのまま起動の誤りになる。
 fn child_path(prefix: Option<&Path>) -> io::Result<Option<OsString>> {
-    let real = std::env::var_os("PATH");
+    join_child_path(prefix, std::env::var_os("PATH"))
+}
+
+/// `child_path` の中身。本物の `PATH` を引数で受けるので、環境を変えずに試せる。
+fn join_child_path(prefix: Option<&Path>, real: Option<OsString>) -> io::Result<Option<OsString>> {
     let Some(prefix) = prefix else {
         return Ok(real);
     };
@@ -443,5 +447,67 @@ mod tests {
         assert_eq!(read, "out\nerr\n");
         assert_eq!(host.output().contents(), "out\nerr\n");
         assert_eq!(host.errors().contents(), "");
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use std::env::{join_paths, split_paths};
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    use super::join_child_path;
+
+    fn joined(dirs: &[&str]) -> OsString {
+        join_paths(dirs.iter().map(PathBuf::from)).unwrap()
+    }
+
+    #[test]
+    fn without_a_prefix_the_real_path_is_kept() {
+        assert_eq!(join_child_path(None, None).unwrap(), None);
+        let real = joined(&["a", "b"]);
+        assert_eq!(
+            join_child_path(None, Some(real.clone())).unwrap(),
+            Some(real)
+        );
+        assert_eq!(
+            join_child_path(None, Some(OsString::new())).unwrap(),
+            Some(OsString::new())
+        );
+    }
+
+    #[test]
+    fn a_prefix_alone_becomes_the_path() {
+        let d = Path::new("eml-bin");
+        assert_eq!(
+            join_child_path(Some(d), None).unwrap(),
+            Some(joined(&["eml-bin"]))
+        );
+        assert_eq!(
+            join_child_path(Some(d), Some(OsString::new())).unwrap(),
+            Some(joined(&["eml-bin"]))
+        );
+    }
+
+    #[test]
+    fn a_prefix_goes_before_the_real_path() {
+        let path = join_child_path(Some(Path::new("eml-bin")), Some(joined(&["a", "b"])))
+            .unwrap()
+            .unwrap();
+        let dirs: Vec<PathBuf> = split_paths(&path).collect();
+        assert_eq!(
+            dirs,
+            [
+                PathBuf::from("eml-bin"),
+                PathBuf::from("a"),
+                PathBuf::from("b")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_prefix_with_a_separator_fails() {
+        let separator = if cfg!(windows) { "eml;bin" } else { "eml:bin" };
+        assert!(join_child_path(Some(Path::new(separator)), None).is_err());
     }
 }
