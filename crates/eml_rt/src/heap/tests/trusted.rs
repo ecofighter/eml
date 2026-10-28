@@ -17,7 +17,7 @@ use crate::cell::{rc_decref_shared, rc_dup_shared};
 use crate::externs::{Fault, Form, Handle, IoOp, IoReason, Open, ReadAmount, Write};
 use crate::heap::ctx::positions::find_byte;
 use crate::host::{BUFFER_BYTES, Failure, FileIn, Reader, WriteMode, consume, fill, host_open};
-use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
+use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, RawBuf, Word};
 
 const PAGE_BYTES: usize = 0x1_0000;
 
@@ -720,6 +720,59 @@ fn shared_bytes_are_copied_before_writing<M: Mode>() {
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// `bytes_lend` の位置に外から書き、`bytes_commit` で確定する。語に揃わない長さの後ろへの書き込みと、大きい物体の
+/// ページの末尾まで埋める書き込みを通し、`bytes` で読み戻す。
+fn lent_room_is_written_and_committed<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    for room in [16, LARGE_BODY + 3] {
+        unsafe {
+            let w = heap.alloc_bytes_room(room);
+            let mut expected = Vec::new();
+            for step in [3, 0, usize::MAX] {
+                let b = heap.bytes_lend(w).unwrap();
+                assert!(b.cap >= room - expected.len());
+                let n = step.min(b.cap);
+                let more: Vec<u8> = (expected.len()..expected.len() + n)
+                    .map(|i| i as u8)
+                    .collect();
+                for (i, &v) in more.iter().enumerate() {
+                    b.ptr.add(i).write(v);
+                }
+                heap.bytes_commit(w, n).unwrap();
+                expected.extend(more);
+                assert_eq!(&*heap.bytes(w).unwrap(), &expected[..]);
+            }
+            // 埋めた後は空きがない
+            assert_eq!(heap.bytes_lend(w).unwrap().cap, 0);
+            heap.decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+/// `bytes` の位置を、ヒープに触れない間に別のスレッドで読む (I/O の driver が書きの中身を読む形)。
+fn bytes_are_read_on_another_thread<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let large: Vec<u8> = (0..LARGE_BODY + 3).map(|i| (i % 251) as u8).collect();
+    for b in [b"abcdefghijklmnopq".to_vec(), large] {
+        unsafe {
+            let w = heap.alloc_bytes(&b);
+            let p = heap.bytes(w).unwrap();
+            let buf = RawBuf {
+                ptr: p.cast::<u8>().cast_mut(),
+                cap: p.len(),
+            };
+            let read = std::thread::spawn(move || {
+                let buf = buf;
+                std::slice::from_raw_parts(buf.ptr.cast_const(), buf.cap).to_vec()
+            });
+            assert_eq!(read.join().unwrap(), b);
+            heap.decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(&heap), 0);
 }
 
 // 凍結した領域
@@ -1767,6 +1820,8 @@ both_modes!(
     bytes_are_written_through_the_core,
     a_part_of_other_bytes_is_appended_in_place,
     shared_bytes_are_copied_before_writing,
+    lent_room_is_written_and_committed,
+    bytes_are_read_on_another_thread,
     frozen_pages_are_returned,
     two_threads_read_one_region,
     chains_drop_in_any_order,

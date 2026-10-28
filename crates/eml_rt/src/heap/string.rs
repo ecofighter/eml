@@ -12,11 +12,14 @@ use vstd::utf8::{
 };
 
 use super::*;
+use crate::driver::RawBuf;
 #[cfg(verus_only)]
 use crate::heap::inv::body_wf;
 #[cfg(verus_only)]
 use crate::meta::{field_ptr, slot_offset};
-use crate::text::{bytes, bytes_ptr, text, text_ptr, write_byte, write_bytes, write_text};
+use crate::text::{
+    bytes, bytes_commit, bytes_lend, bytes_ptr, text, text_ptr, write_byte, write_bytes, write_text,
+};
 
 verus! {
 
@@ -819,6 +822,143 @@ impl<M: Mode> Heap<M> {
         }
         let tracked p = self.core.tracked_perm(h@.addr);
         Ok(bytes_ptr(h, len, Tracked(p)))
+    }
+
+    /// `bytes_lend` と `bytes_commit` の前提がみな成り立ち、モデルが合っている。`w` は呼ぶ側だけが参照を持つ生きている
+    /// バイト列である。
+    pub closed spec fn lend_ok(&self, w: Word) -> bool {
+        &&& self.push_ok(w, Kind::Bytes)
+        &&& self.rc_value(w) == 1
+    }
+
+    /// 一意なバイト列 `w` の、長さの後ろの空きを貸す。返す位置から `cap` バイトを外 (I/O の driver とカーネル) に
+    /// 書かせ、書いた長さを `bytes_commit` で確定する。何も書かず、状態も変えない (docs/spec/object-model.md の
+    /// 「`unsafe` の核」の T10)。
+    ///
+    /// # Safety
+    /// `w` はこのヒープの生きているバイト列の物体を指し、呼ぶ側がその唯一の参照を持つ。返す位置に書いてよいのは、
+    /// `bytes_commit` を呼ぶまで、物体を生かし、一意に保ち、このヒープの操作でその物体を書き換えない間だけである。
+    pub unsafe fn bytes_lend(&mut self, w: Word) -> (r: Result<RawBuf, HeapError>)
+        requires
+            old(self).wf(),
+            w.is_ptr_spec(),
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).lend_ok(w),
+        ensures
+            *final(self) == *old(self),
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(b) ==> b.cap == old(self).capacity(w) - old(self).text_of(w).len(),
+    {
+        let h = self.header_of(w);
+        proof {
+            self.lemma_checks_pass(w);
+            if self.consistent() && self.settleable() && self.readable(w) {
+                self.core.lemma_readable(w);
+            }
+        }
+        self.checked_live(h)?;
+        if M::CHECKED && !matches!(self.core.meta_get(h).kind(), Kind::Bytes) {
+            return Err(HeapError::WrongKind);
+        }
+        if M::CHECKED && self.core.rc_get(h) != 1 {
+            return Err(HeapError::NotUnique);
+        }
+        proof {
+            if M::CHECKED {
+                self.core.lemma_shape(h@.addr);
+                if self.core.dom().contains(h@.addr) {
+                    self.core.lemma_safe_at(h@.addr);
+                }
+            } else {
+                self.core.lemma_live_block(h@.addr);
+            }
+        }
+        let len = self.core.slot_get(h, 0).bits();
+        let cap = self.core.cap_get(h);
+        proof {
+            self.core.lemma_shape(h@.addr);
+            assert((8 * (cap - 1) + 7) / 8 == cap - 1);
+        }
+        let tracked p = self.core.tracked_perm(h@.addr);
+        let ptr = bytes_lend(h, cap, len, Tracked(p));
+        Ok(RawBuf { ptr, cap: 8 * (cap - 1) - len })
+    }
+
+    /// `bytes_lend` で貸した空きに外が書いた `n` バイトを確定する。長さの語だけを書き、バイト列の語は書かない。`Bytes`
+    /// には UTF-8 の不変条件がないので、足したバイトの値は約束しない (docs/spec/object-model.md の「`unsafe` の核」の
+    /// T10)。どの誤りも状態を変える前に返す。
+    ///
+    /// # Safety
+    /// `w` はこのヒープの生きているバイト列の物体を指し、呼ぶ側がその唯一の参照を持つ。`bytes_lend` の後、物体を
+    /// 書き換えていない。`n` バイトは、`bytes_lend` が返した位置から外が書き終えている。
+    pub unsafe fn bytes_commit(&mut self, w: Word, n: usize) -> (r: Result<(), HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            w.is_ptr_spec(),
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).lend_ok(w),
+            old(self).text_of(w).len() + n <= old(self).capacity(w),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok,
+            old(self).lend_ok(w) ==> r is Ok || chain_err(r),
+            r is Ok ==> final(self).is_bytes(w) && final(self).capacity(w) == old(self).capacity(w)
+                && exists|s: Seq<u8>|
+                s.len() == n && #[trigger] (old(self).text_of(w) + s) == final(self).text_of(w),
+            r is Ok ==> (old(self).lend_ok(w) ==> final(self).consistent() && final(self).pushed(
+                *old(self),
+                w,
+                w,
+            )),
+            final(self).settled(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let ghost c = self.lend_ok(w);
+        self.settle();
+        let h = self.header_of(w);
+        proof {
+            self.lemma_checks_pass(w);
+            reveal(Core::building_wf);
+            if c {
+                self.core.lemma_readable(w);
+            }
+        }
+        self.checked_body(h, Kind::Bytes)?;
+        if M::CHECKED && self.core.rc_get(h) != 1 {
+            return Err(HeapError::NotUnique);
+        }
+        let ghost s1 = *self;
+        proof {
+            assert(old(self).core.settled_view() == s1.core);
+            // 一意な物体 (rc 1) は、塊の物体でない
+            if !s1.core.dom().contains(h@.addr) {
+                s1.core.lemma_region_at(h@.addr);
+            }
+        }
+        self.commit_in_place(h, n);
+        proof {
+            let a = h@.addr;
+            let t = self.core.perm(a).text();
+            let t0 = s1.core.perm(a).text();
+            let s = t.subrange(t0.len() as int, t.len() as int);
+            assert(t0 + s =~= t);
+            if c {
+                reveal(Core::refs_wf);
+                assert(s1.core.counted_wf(a));
+                assert forall|b: usize|
+                    #![trigger self.core.settled_state(b), s1.core.settled_state(b)]
+                    self.core.has(b) && s1.core.has(b) && b != a implies self.core.perm(b)
+                    == s1.core.perm(b) by {
+                    if s1.core.dom().contains(b) {
+                        assert(self.core.perms@[b] == s1.core.perms@[b]);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// `string_push` と `bytes_extend` の前提がみな成り立ち、モデルが合っている。`decref` の前提に、left が生きている
@@ -1905,6 +2045,66 @@ impl<M: Mode> Heap<M> {
         }
         let tracked mut slot = perm.slots.tracked_remove(0);
         ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(n));
+        proof {
+            perm.slots.tracked_insert(0, slot);
+            self.core.perms.borrow_mut().tracked_insert(h@.addr, perm);
+            let a = h@.addr;
+            let q = s0.core.perm(a);
+            assert(self.core.perms@.dom() =~= s0.core.perms@.dom());
+            assert(self.core.perm(a).slots.dom() =~= q.slots.dom());
+            assert(self.core.text_changed(s0.core, a));
+            if s0.consistent() {
+                self.core.lemma_text_set(s0.core, a);
+                assert(self.core.perms@[s0.dummy.bits_spec()]
+                    == s0.core.perms@[s0.dummy.bits_spec()]);
+            }
+            if M::CHECKED {
+                self.core.lemma_safe_text_set(s0.core, a);
+            }
+        }
+    }
+
+    /// 一意なバイト列 `h` に、`bytes_lend` の位置から外が書いた `n` バイトを足す。長さの語だけを書き、バイト列の語は
+    /// 書かない。
+    #[inline]
+    fn commit_in_place(&mut self, h: *mut Header, n: usize)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.state(h@.addr) == BlockState::Live,
+            old(self).core.kind(h@.addr) == Kind::Bytes,
+            old(self).core.perm(h@.addr).text().len() + n <= 8 * (old(self).core.cap(h@.addr) - 1),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
+            final(self).worker == old(self).worker,
+            final(self).core.text_changed(old(self).core, h@.addr),
+            final(self).core.perm(h@.addr).text().len() == old(self).core.perm(h@.addr).text().len()
+                + n,
+            final(self).core.perm(h@.addr).text().subrange(
+                0,
+                old(self).core.perm(h@.addr).text().len() as int,
+            ) == old(self).core.perm(h@.addr).text(),
+            old(self).consistent() ==> final(self).consistent(),
+            forall|x: Word| #[trigger] final(self).core.word_ok(x) == old(self).core.word_ok(x),
+    {
+        let ghost s0 = *self;
+        proof {
+            s0.core.lemma_shape(h@.addr);
+        }
+        let len = self.core.slot_get(h, 0).bits();
+        let cap = self.core.cap_get(h);
+        let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
+        proof {
+            assert((8 * (cap - 1) + 7) / 8 == cap - 1);
+        }
+        bytes_commit(h, cap, len, n, Tracked(&mut perm));
+        let tracked mut slot = perm.slots.tracked_remove(0);
+        ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(len + n));
         proof {
             perm.slots.tracked_insert(0, slot);
             self.core.perms.borrow_mut().tracked_insert(h@.addr, perm);

@@ -1,13 +1,16 @@
 //! 文字列とバイト列の中身 (docs/spec/object-model.md の「バイト列と文字列」)。Verus の権限は語の単位で、語の中のバイトの
-//! 位置を扱わないので、`&[u8]` で読み書きする4つの関数 (`write_bytes`、`write_byte`、`bytes`、`bytes_ptr`) は信頼の
-//! 一覧の T10 である。どれも `String` か `Bytes` のブロックの権限を受け、長さの語 (ペイロードの 0 語目) の後ろの容量の
+//! 位置を扱わないので、`&[u8]` で読み書きする4つの関数 (`write_bytes`、`write_byte`、`bytes`、`bytes_ptr`) と、外の
+//! 書き手 (I/O の driver とカーネル) に長さの後ろの空きを貸す2つの関数 (`bytes_lend`、`bytes_commit`) は信頼の一覧の
+//! T10 である。どれも `String` か `Bytes` のブロックの権限を受け、長さの語 (ペイロードの 0 語目) の後ろの容量の
 //! 中だけを読み書きする。メモリのバイト列は、いつも権限の ghost のバイト列 `text` に等しい。この約束は、権限が渡した
 //! ポインタの `String` か `Bytes` のブロックのものであるとき (`BlockPerm::holds_body`) に限る。ghost のバイト列を
-//! 変えるのは、ここの `write_bytes` と `write_byte`、確保のたびに列を空にする `BlockPerm::clear_text`、列を前の部分に
-//! 縮める `BlockPerm::truncate_text` だけである。
+//! 変えるのは、ここの `write_bytes`、`write_byte`、`bytes_commit`、確保のたびに列を空にする `BlockPerm::clear_text`、
+//! 列を前の部分に縮める `BlockPerm::truncate_text` だけである。
 //! `str` で読み書きする `write_text`、`text`、`text_ptr` は、vstd の `str::as_bytes` と `str::from_utf8_unchecked` の
 //! 約束を使って、この4つの上に検証して書く。
 
+#[cfg(verus_only)]
+use crate::driver::RawBuf;
 use crate::meta::{BlockPerm, Header, slot_ptr};
 use vstd::prelude::*;
 #[cfg(verus_only)]
@@ -16,6 +19,12 @@ use vstd::string::StringSliceAdditionalSpecFns;
 use vstd::utf8::valid_utf8;
 
 verus! {
+
+/// `RawBuf` の欄を Verus に見せる。`Heap::bytes_lend` の約束が、返す容量を言うのに使う。欄はふつうの構造体のままで、
+/// Verus は rustc の定義を読むので、何も仮定しない。Verus のためだけの宣言なので、ふつうのビルドには入れない。
+#[cfg(verus_only)]
+#[verifier::external_type_specification]
+pub struct ExRawBuf(RawBuf);
 
 /// `h` のペイロードの `at` バイト目 (長さの語の後ろから数える) から `b` を写す。`at` は今の ghost のバイト列の
 /// 長さで、写した後の ghost のバイト列は連結になる。長さの語と、ほかの欄は書かない。
@@ -113,6 +122,56 @@ pub(crate) fn bytes_ptr(
         len == perm.text().len(),
 {
     std::ptr::slice_from_raw_parts(slot_ptr(h, 1).cast::<u8>().cast_const(), len)
+}
+
+/// `h` のペイロードの `at` バイト目 (今の長さの位置) の番地。そこから容量の終わりまでを外から書かせる。何も書かず、
+/// 権限も変えない。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn bytes_lend(
+    h: *mut Header,
+    cap: usize,
+    at: usize,
+    Tracked(perm): Tracked<&BlockPerm>,
+) -> *mut u8
+    requires
+        cap >= 1,
+        perm.holds_body(h, 8 * (cap - 1)),
+        at == perm.text().len(),
+        at <= 8 * (cap - 1),
+{
+    debug_assert!(at <= 8 * (cap - 1));
+    unsafe { slot_ptr(h, 1).cast::<u8>().add(at) }
+}
+
+/// `bytes_lend` の位置から外が書いた `n` バイトを、ghost のバイト列に足す。中身はメモリにあるバイトそのもので、
+/// Verus はその値を知らないので長さだけを約束する。メモリも長さの語も書かない。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn bytes_commit(
+    h: *mut Header,
+    cap: usize,
+    at: usize,
+    n: usize,
+    Tracked(perm): Tracked<&mut BlockPerm>,
+)
+    requires
+        forall|i: int| #[trigger] old(perm).slots.contains_key(i) <==> 0 <= i < cap,
+        cap >= 1,
+        old(perm).holds_body(h, 8 * (cap - 1)),
+        at == old(perm).text().len(),
+        at + n <= 8 * (cap - 1),
+    ensures
+        final(perm).text().len() == at + n,
+        final(perm).text().subrange(0, at as int) == old(perm).text(),
+        final(perm).rc == old(perm).rc,
+        final(perm).meta == old(perm).meta,
+        final(perm).prefix == old(perm).prefix,
+        final(perm).slots == old(perm).slots,
+{
+    // 書くのは外で、ここは ghost のバイト列を伸ばすだけなので、位置は使わない
+    let _ = h;
+    debug_assert!(at + n <= 8 * (cap - 1));
 }
 
 /// `h` のペイロードの `at` バイト目から `s` のバイト列を写す。約束は `write_bytes` と同じである。
