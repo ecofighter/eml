@@ -15,3 +15,6 @@
 
 # 調査レポートに添付された、調査時のコードの写し
 docs/reports/**/*.tar.gz
+
+# nix build が作る、組んだパッケージへのリンク
+/result

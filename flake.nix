@@ -104,6 +104,12 @@
                 "-p"
                 "eml_cli"
               ];
+              # nix の build の sandbox には /usr/bin/env が無く、shebang の行を解決できない
+              # (docs/implementation/testing.md の「nix build の中で流さないテスト」)
+              checkFlags = [
+                "--skip"
+                "cli::a_script_with_a_shebang_runs_directly"
+              ];
               meta.license = pkgs.lib.licenses.mit;
             };
             inherit verus verusfmt;
