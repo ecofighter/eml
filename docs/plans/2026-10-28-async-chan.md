@@ -48,9 +48,9 @@
 | 要るもの | 用途 | 確かめ方 | ないとき |
 |---|---|---|---|
 | nix の devShell | すべての T と確認 | `nix develop -c cargo nextest --version` → 版が出る | `nix/prefetch-inputs.sh` を流してやり直す。それでも駄目なら止めて報告する |
-| Verus と verusfmt | T-1 (eml_rt のテストを足す) | `nix develop -c cargo verus --version` → 版が出る | 止めて報告する (eml_rt の門を通せない) |
+| Verus と verusfmt | T-1 (eml_rt のテストを足す) | `nix develop -c verus --version` と `nix develop -c verusfmt --version` → 版が出る | 止めて報告する (eml_rt の門を通せない) |
 | Miri の shell | T-1 | `nix develop .#miri -c cargo miri --version` → 版が出る | 止めて報告する |
-| macOS の機械 | T-7 の計測 | `uname` → `Darwin` | 表の入れ替えだけを別のコミット (`Measure async-chan`) にする (roadmap.md の「進め方」) |
+| macOS の機械 | T-7 の計測 | `uname` → `Darwin` | 表の入れ替えだけを別のコミット (`Measure async-chan`) にする (roadmap.md の「進め方」)。この段は Linux のクラウドのセッションで実装するので、計測のコミットは利用者が macOS で作る |
 
 以下のコマンドは devShell の中で流す (`nix develop -c <コマンド>` か、`direnv` で入った shell)。
 
