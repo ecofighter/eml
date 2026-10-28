@@ -48,6 +48,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | ハンドル | 標準入出力のハンドル `Stdin`、`Stdout`、`Stderr` とファイルのハンドル `FileIn.FileIn`、`FileOut.FileOut` は `Lin` の型で、型ごとに1つのモジュールを持つ。文字列を読み書きする関数が短い名前を持ち、バイト列の版は `_bytes` を足す。読む関数はハンドルを借りて結果を先に返し、書く関数はデータを借りてハンドルを返す。標準のストリームごとに、生きているハンドルは高々1つである。標準出力の書き込みの buffer は Host が持ち、`println` と共有する。`FileOut` は自分の buffer を持ち、閉じずに手放しても書き出す | [標準ライブラリ](spec/stdlib.md) の「ハンドル」 |
 | 配列 | `Array a` と `MutArray a` は Prelude の extern の型である。`Array` は意味の上で書き換わらず、Kind は要素に従う。`MutArray` は Kind が常に `Lin` で、線形に受け渡して使う | [標準ライブラリ](spec/stdlib.md) の「`Std.Array`」「`Std.MutArray`」 |
 | 取り消しと時間 | `shield` に入ってからタスクが最初に開くスコープは境目で、外からの取り消しは境目で止まる。境目とその内側のスコープ自身の旗 (期限、子の失敗、`cancel_scope`) は `shield` の中でも届く。時間は今からの長さを `Int` のミリ秒で表す。時計は `eml run` と `eml repl` では本物を既定にし、テストとライブラリでは仮想にする。仮想の時計はすべてのタスクが待つときだけ進む | [標準ライブラリ](spec/stdlib.md) の「取り消し」「時間」、[VM](spec/vm.md) の「時計と driver」 |
+| channel と共有の数 | `Std.Chan` の `Chan a` は登録表の添字を持つ `Unr` の即値で、Kind は `a` によらず `Unr` である。channel は `close` で放す資源で、閉じて空になった時点でその場で放し、閉じないままの channel は run の終わりに放す。受け手の決まらない値 (channel の品物とタスクの結果) は、値を預かる構造の論理的な worker ID を途中の持ち主にして移す。共有して書き換える数は `Std.Atomic.Counter` だけである | [標準ライブラリ](spec/stdlib.md) の「`Std.Chan`」「`Std.Atomic`」、[VM](spec/vm.md) の「channel」、[オブジェクトモデル](spec/object-model.md) の「論理的な worker ID」 |
 
 ### 構文
 

@@ -28,9 +28,8 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `async-chan`: worker が1つの上で `Std.Chan` と `Atomic.Counter` を入れる。受け手の決まらない `Lin` の値は途中の持ち主を使って移し替える。前提: なし。設計: [非同期の設計](async.md) の「チャネルと共有の状態」、[マルチコア対応の設計](multicore.md) の「`Lin` の物体の所有者の移し替え」
 - `io-driver`: 本物の I/O の driver とブロックする呼び出しのプールを入れる。まず `compio-driver` を単独で使えるかを試作で確かめ、使うかどうかを段の計画で決める。時間だけの `IoDriver` (`now` と `wait_until`) と時間の輪はすでにあるので、その上に受け付けと完了のメソッドを足し、`await_io_until` と `_within` の版を時間の輪の項として載せる。`eml_io` に本物の driver とテストの driver を作る。読めるようになってから読みの buffer を取る規則もこの段で入れる。前提: なし。設計: [非同期の設計](async.md) の「I/O の driver」
-- `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。前提: `io-driver`、`async-chan`。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
+- `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。前提: `io-driver`。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
 - `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。前提: `async-net`。設計: [非同期の設計](async.md) の「テストと決定性」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
 - `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`、`async-net`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
@@ -322,6 +321,9 @@
 - `Counter` のほかの `Atomic`
   - 後に回した理由: 利用者にメモリモデルを見せない。共有して書き換える状態は、持ち主のタスクの後ろに `Chan` を置く形 (actor) で書く。
   - 見直す条件: actor の形では遅すぎるとき。
+- 最後のハンドルで放す channel: 今の channel は `close` で放し、閉じないままの channel は run の終わりまで残る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Chan`」)。戻す形は [非同期の設計](async.md) の「未決の論点と将来の拡張」の「`Lin` の closer token」にある
+  - 後に回した理由: `Chan a` を `Unr` の `Foreign` にして最後のハンドルで放す形は、初めての `Unr` の `Foreign` になる。回復で `Foreign` を移す信頼の一覧の行 (T3。[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」) と、Verus と Miri の作業を `eml_rt` に要し、送受信のたびにハンドルの `dup`、`decref` と表の照らし合わせが入る。品物が自分の channel のハンドルを持つ輪では最後のハンドルが落ちないので、放す保証はどちらの形でも「閉じるか run の終わり」になる。ネイティブ化の簡潔さと速さを優先し、即値にした。
+  - 見直す条件: 接続やリクエストごとに channel を作り、取り消しの巻き戻しで `close` を飛ばす形のサーバが実際に書かれ、長く走る run で登録表の slot が増え続けると測れたとき (`RunStats.channels_swept` か、検査モードの終わりの数で)。
 - UDP
   - 後に回した理由: 目標のネットワークサーバは TCP で書く。
   - 見直す条件: UDP を使う最初のプログラムが出たとき。
