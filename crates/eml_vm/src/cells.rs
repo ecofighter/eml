@@ -1591,7 +1591,8 @@ impl Registry {
 
     /// タスク `me` が、継続 `k` で token `token` の操作が終わるまで待つ。`token` は呼ぶ側から移ってきた参照で、待つ間は
     /// 記録が持ち、再開の仕事に移す。終わっていれば、すぐ再開する仕事を返す。取り消しの地点で、終わっていなければ
-    /// driver に取り消しを頼んで完了を待つ。driver が記憶を使い終わるまで、buffer を返せないためである。
+    /// driver に取り消しを頼んで完了を待つ。driver が記憶を使い終わるまで、buffer を返せないためである。取り消しの
+    /// 地点なら、終わっていてもいなくても、記録に取り消しを頼んだ印を付ける。
     pub(crate) fn park_io<M: Mode>(
         &mut self,
         ctx: &Ctx<M>,
@@ -1607,12 +1608,14 @@ impl Registry {
         self.suspend(me)?;
         self.stats.parks += 1;
         let cancelled = self.point(me)?;
-        let record = self.op_mut(op)?;
-        let done = matches!(record.phase, OpPhase::Done(_));
         if cancelled {
             self.stats.cancels += 1;
         }
-        if done {
+        let record = self.op_mut(op)?;
+        // `Cancelled` で再開する記録には、いつも取り消しの印を付ける。取り出しの行は印で中断を見分け、結果の誤りを
+        // 投げずに包みへ返すので、包みが結果によらず `Cancelled` を投げる (docs/spec/stdlib.md の「`Std.IoTest`」)
+        record.cancelling |= cancelled;
+        if matches!(record.phase, OpPhase::Done(_)) {
             let wake = if cancelled { CANCELLED } else { WOKE };
             return Ok(Some(Runnable::ResumeIo {
                 cell: me,
@@ -1621,9 +1624,7 @@ impl Registry {
                 op: token,
             }));
         }
-        let record = self.op_mut(op)?;
         if cancelled {
-            record.cancelling = true;
             driver.cancel(record.key);
         }
         record.waiter = Some(me);
@@ -2246,7 +2247,7 @@ fn unparking_a_sleeping_task_removes_its_timer() {
     registry.task_mut(first).unwrap().cancel = true;
     let mut out = Vec::new();
     registry
-        .unpark(&mut eml_io::TestDriver::new(None), first, &mut out)
+        .unpark(&mut NoDriver::default(), first, &mut out)
         .unwrap();
     assert_eq!(resumed_cells(&out), [(first, CANCELLED)]);
     out.clear();
@@ -2303,4 +2304,146 @@ fn a_slot_retires_instead_of_wrapping_its_generation() {
             generation: 0
         }
     );
+}
+
+/// 操作を受け付けるだけで完了を返さない driver。核の単体テストが driver の crate に頼らないためのものである。
+#[cfg(test)]
+#[derive(Default)]
+struct NoDriver {
+    next_key: OpKey,
+    cancelled: Vec<OpKey>,
+}
+
+#[cfg(test)]
+struct NoWaker;
+
+#[cfg(test)]
+impl eml_rt::IoWaker for NoWaker {
+    fn wake(&self) {}
+}
+
+#[cfg(test)]
+impl IoDriver for NoDriver {
+    fn now(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
+    fn wait(&mut self, _deadline_ms: Option<u64>) -> io::Result<bool> {
+        Ok(false)
+    }
+
+    fn submit(&mut self, _op: Op) -> OpKey {
+        self.next_key += 1;
+        self.next_key
+    }
+
+    fn cancel(&mut self, key: OpKey) {
+        self.cancelled.push(key);
+    }
+
+    fn completions(&mut self, _out: &mut Vec<Completion>) {}
+
+    fn pending(&self) -> usize {
+        0
+    }
+
+    fn waker(&self) -> Arc<dyn eml_rt::IoWaker> {
+        Arc::new(NoWaker)
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        Arc::default()
+    }
+
+    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
+        Ok((0, 1))
+    }
+
+    fn close(&mut self, _handle: IoHandle) {}
+
+    fn quiesce(&mut self) {}
+}
+
+/// 出力を捨てる Host の上の、検査モードの `Ctx`。
+#[cfg(test)]
+fn test_ctx() -> Ctx<eml_rt::Checked> {
+    let host = eml_rt::StdHost::new(
+        Box::new(io::sink()),
+        Box::new(io::sink()),
+        std::path::PathBuf::new(),
+        eml_rt::Buffering::Block,
+    );
+    Ctx::new(
+        Arc::new(Control::new(eml_rt::Limits::default())),
+        eml_rt::HostRef::new(Arc::new(host)),
+    )
+}
+
+/// `b"x"` を書く操作を受け付け、token を返す。
+#[cfg(test)]
+fn submit_x(
+    registry: &mut Registry,
+    ctx: &mut Ctx<eml_rt::Checked>,
+    driver: &mut NoDriver,
+    worker: u32,
+) -> Word {
+    let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"x");
+    let stream = open_stream(ctx, 0, None, Arc::default());
+    registry
+        .submit_write(ctx, driver, worker, buf, stream)
+        .unwrap()
+}
+
+/// 取り消しの地点で、もう終わった操作を待つと `Cancelled` で再開し、記録に取り消しの印を付ける。印がないと、取り出しの
+/// 行が終わった操作の誤りを投げ、包みが `Cancelled` を投げられない (docs/spec/vm.md の「命令」の `park_io`)。
+#[test]
+fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    let op = registry.token_op(&ctx, token).unwrap();
+    registry.ops.clear();
+    registry.op_mut(op).unwrap().phase =
+        OpPhase::Done(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
+    registry.task_mut(me).unwrap().cancel = true;
+    let run = registry
+        .park_io(&ctx, &mut driver, token, me, Word::UNIT)
+        .unwrap();
+    assert!(matches!(
+        run,
+        Some(Runnable::ResumeIo { cell, wake: CANCELLED, .. }) if cell == me
+    ));
+    // 終わった操作の取り消しは driver に頼まない
+    assert!(driver.cancelled.is_empty());
+    let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+    assert!(taken.cancelling && taken.result.is_err());
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// run の終わりの `sweep_all` は、待つタスクが残した記録の buffer、ストリーム、token をタスクの ID の下で落としてから、
+/// タスクのセルが ID を退かせる。記録を後に回すと、退かせるときに記録の物体が残って `TransferLeak` になる
+/// (docs/spec/vm.md の「終わり」)。
+#[test]
+fn sweep_all_frees_a_waited_op_before_its_task() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let worker = unsafe { ctx.heap_mut() }.fork_worker();
+    registry.task_mut(me).unwrap().worker = worker;
+    with_worker(&mut ctx, worker, 0, |ctx| {
+        let token = submit_x(&mut registry, ctx, &mut driver, worker);
+        let run = registry
+            .park_io(ctx, &mut driver, token, me, Word::UNIT)
+            .unwrap();
+        assert!(run.is_none());
+    });
+    registry.sweep_all(&mut ctx, 0).unwrap();
+    assert!(registry.ops.is_empty());
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }
