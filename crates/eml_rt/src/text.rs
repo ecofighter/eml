@@ -146,9 +146,14 @@ pub(crate) fn bytes_lend(
 
 /// `bytes_lend` の位置から外が書いた `n` バイトを、ghost のバイト列に足す。中身はメモリにあるバイトそのもので、
 /// Verus はその値を知らないので長さだけを約束する。メモリも長さの語も書かない。
+///
+/// # Safety
+/// `bytes_lend` の位置から `n` バイトを、外の書き手がすでに書き終えている。ページの記憶は確保で 0 にしないので、
+/// 書かれていないバイトを足すと、後の `bytes` が初期化していない記憶を読む。この前提を確かめられるのは貸した側だけ
+/// なので、呼ぶのは `Heap::bytes_commit` だけである (docs/spec/object-model.md の「`unsafe` の核」の T10)。
 #[verifier::external_body]
 #[inline]
-pub(crate) fn bytes_commit(
+pub(crate) unsafe fn bytes_commit(
     h: *mut Header,
     cap: usize,
     at: usize,

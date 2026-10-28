@@ -376,6 +376,26 @@ fn another_worker_cannot_push_to_a_local_left<M: Mode>() {
     unsafe { heap.decref(w) }.unwrap();
 }
 
+/// ほかの worker の一意なバイト列は、検査モードで貸す前に断る。`bytes_commit` と同じ誤りで、外はまだ何も書いていない。
+fn another_worker_cannot_lend_a_local_bytes<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_bytes_room(8);
+    heap.set_worker(1);
+    let wrong = HeapError::WrongOwner {
+        owner: 0,
+        worker: 1,
+    };
+    assert_eq!(unsafe { heap.bytes_lend(w) }.err(), Some(wrong));
+    assert_eq!(unsafe { heap.bytes_commit(w, 0) }.unwrap_err(), wrong);
+    heap.set_worker(0);
+    assert_eq!(unsafe { raw::rc(w) }, 1);
+    unsafe { heap.decref(w) }.unwrap();
+    assert_eq!(super::mortal(&heap), 0);
+}
+
 /// 容量を決めて作った空の文字列は、容量の中の追記をその場で受ける (`String.show` が1回だけ確保するため)。
 fn a_room_string_takes_pushes_in_place<M: Mode>() {
     let mut heap = Heap::<M>::new();
@@ -456,6 +476,7 @@ both_modes!(
     concat_of_a_shared_last_reference_twice_is_refused,
     concat_of_an_immortal_with_itself_needs_two_references,
     another_worker_cannot_push_to_a_local_left,
+    another_worker_cannot_lend_a_local_bytes,
     a_room_string_takes_pushes_in_place,
     a_unique_foreign_value_can_be_written,
     a_shared_or_foreign_workers_value_is_not_written,

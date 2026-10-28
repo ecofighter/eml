@@ -17,7 +17,7 @@ use crate::cell::{rc_decref_shared, rc_dup_shared};
 use crate::externs::{Fault, Form, Handle, IoOp, IoReason, Open, ReadAmount, Write};
 use crate::heap::ctx::positions::find_byte;
 use crate::host::{BUFFER_BYTES, Failure, FileIn, Reader, WriteMode, consume, fill, host_open};
-use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, RawBuf, Word};
+use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
 
 const PAGE_BYTES: usize = 0x1_0000;
 
@@ -752,24 +752,32 @@ fn lent_room_is_written_and_committed<M: Mode>() {
     assert_eq!(mortal(&heap), 0);
 }
 
-/// `bytes` の位置を、ヒープに触れない間に別のスレッドで読む (I/O の driver が書きの中身を読む形)。
-fn bytes_are_read_on_another_thread<M: Mode>() {
+/// `bytes_lend` で貸した後、外から書く前に、ほかの物体を確保して解放する (VM が完了を待つ間にほかのタスクを
+/// 流す形)。貸した位置に書いて確定し、貸した物体とほかの物体をどちらも読み戻す。
+fn lent_room_outlives_other_allocations<M: Mode>() {
     let mut heap = Heap::<M>::new();
-    let large: Vec<u8> = (0..LARGE_BODY + 3).map(|i| (i % 251) as u8).collect();
-    for b in [b"abcdefghijklmnopq".to_vec(), large] {
+    for room in [16, LARGE_BODY + 3] {
+        let other: Vec<u8> = (0..room).map(|i| (i % 251) as u8 ^ 0x5a).collect();
         unsafe {
-            let w = heap.alloc_bytes(&b);
-            let p = heap.bytes(w).unwrap();
-            let buf = RawBuf {
-                ptr: p.cast::<u8>().cast_mut(),
-                cap: p.len(),
-            };
-            let read = std::thread::spawn(move || {
-                let buf = buf;
-                std::slice::from_raw_parts(buf.ptr.cast_const(), buf.cap).to_vec()
-            });
-            assert_eq!(read.join().unwrap(), b);
-            heap.decref(w).unwrap();
+            let w = heap.alloc_bytes_room(room);
+            let b = heap.bytes_lend(w).unwrap();
+            let x = heap.alloc_bytes(&other);
+            let y = heap.alloc_bytes(b"xyz");
+            heap.decref(x).unwrap();
+            // 空いた `x` の場所を使い直す確保
+            let z = heap.alloc_bytes(&other);
+            let n = b.cap.min(room);
+            let expected: Vec<u8> = (0..n).map(|i| i as u8).collect();
+            for (i, &v) in expected.iter().enumerate() {
+                b.ptr.add(i).write(v);
+            }
+            heap.bytes_commit(w, n).unwrap();
+            assert_eq!(&*heap.bytes(w).unwrap(), &expected[..]);
+            assert_eq!(&*heap.bytes(y).unwrap(), b"xyz");
+            assert_eq!(&*heap.bytes(z).unwrap(), &other[..]);
+            for v in [w, y, z] {
+                heap.decref(v).unwrap();
+            }
         }
     }
     assert_eq!(mortal(&heap), 0);
@@ -1821,7 +1829,7 @@ both_modes!(
     a_part_of_other_bytes_is_appended_in_place,
     shared_bytes_are_copied_before_writing,
     lent_room_is_written_and_committed,
-    bytes_are_read_on_another_thread,
+    lent_room_outlives_other_allocations,
     frozen_pages_are_returned,
     two_threads_read_one_region,
     chains_drop_in_any_order,

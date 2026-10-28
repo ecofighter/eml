@@ -856,10 +856,8 @@ impl<M: Mode> Heap<M> {
                 self.core.lemma_readable(w);
             }
         }
-        self.checked_live(h)?;
-        if M::CHECKED && !matches!(self.core.meta_get(h).kind(), Kind::Bytes) {
-            return Err(HeapError::WrongKind);
-        }
+        // 外が書き始める前に誤りを返すため、`bytes_commit` と同じ確かめを同じ順で行う
+        self.checked_body(h, Kind::Bytes)?;
         if M::CHECKED && self.core.rc_get(h) != 1 {
             return Err(HeapError::NotUnique);
         }
@@ -938,7 +936,8 @@ impl<M: Mode> Heap<M> {
                 s1.core.lemma_region_at(h@.addr);
             }
         }
-        self.commit_in_place(h, n);
+        // 呼ぶ側の前提 (`n` バイトが書き終えてある) をそのまま渡す
+        unsafe { self.commit_in_place(h, n) };
         proof {
             let a = h@.addr;
             let t = self.core.perm(a).text();
@@ -2066,8 +2065,11 @@ impl<M: Mode> Heap<M> {
 
     /// 一意なバイト列 `h` に、`bytes_lend` の位置から外が書いた `n` バイトを足す。長さの語だけを書き、バイト列の語は
     /// 書かない。
+    ///
+    /// # Safety
+    /// `bytes_lend` の位置から `n` バイトを、外の書き手がすでに書き終えている。
     #[inline]
-    fn commit_in_place(&mut self, h: *mut Header, n: usize)
+    unsafe fn commit_in_place(&mut self, h: *mut Header, n: usize)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
@@ -2102,7 +2104,8 @@ impl<M: Mode> Heap<M> {
         proof {
             assert((8 * (cap - 1) + 7) / 8 == cap - 1);
         }
-        bytes_commit(h, cap, len, n, Tracked(&mut perm));
+        // 呼ぶ側の前提 (`n` バイトが書き終えてある) をそのまま渡す
+        unsafe { bytes_commit(h, cap, len, n, Tracked(&mut perm)) };
         let tracked mut slot = perm.slots.tracked_remove(0);
         ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(len + n));
         proof {

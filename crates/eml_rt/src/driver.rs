@@ -12,17 +12,14 @@ pub type OpKey = u64;
 /// driver が持つハンドル (今は `pair` の両端)。1つの driver の寿命の間は使い回さない。
 pub type IoHandle = u64;
 
-/// カーネルかプールのスレッドが読み書きする記憶。`cap == 0` は記憶がないことを表し、`ptr` は空でない任意の
-/// 番地で、読みも書きもしない。貸した側は、その操作の完了を `completions` から取り出すまで、物体を生かし、
-/// 一意に保ち、動かさない。
+/// カーネルが読み書きする記憶。driver を持つスレッドの外へは出さないので `Send` ではない。`cap == 0` は
+/// 記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側は、その操作の完了を
+/// `completions` から取り出すまで、物体を生かし、一意に保ち、動かさない。
 #[derive(Clone, Copy)]
 pub struct RawBuf {
     pub ptr: *mut u8,
     pub cap: usize,
 }
-
-// 指す先を使ってよい条件は、貸した側が上の約束で守る
-unsafe impl Send for RawBuf {}
 
 /// driver に出す操作。
 pub enum Op {
