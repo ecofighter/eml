@@ -364,7 +364,7 @@ impl IoDriver for RealDriver {
             self.cancel(key);
         }
         // 取り消しの完了も、走っているプールの仕事も、届くまで待つ。壊れた driver は待てないので、保留を残して戻る
-        let limit = Instant::now() + CANCEL_LIMIT;
+        let mut limit = None;
         let mut discarded = Vec::new();
         while !self.ops.is_empty() && self.broken.is_none() {
             self.poll(IDLE_TICK);
@@ -372,12 +372,15 @@ impl IoDriver for RealDriver {
             discarded.clear();
             // polling の backend は、取り消しで関心を外す `epoll_ctl` などが失敗すると、完了を出さないまま操作を
             // 落とす。その操作は二度と終わらないので、期限を過ぎても I/O の操作が残れば壊れた状態にして戻る。
-            // 仕事はいつか終わるので、仕事だけが残る間は待ち続ける
-            if Instant::now() >= limit
-                && self.ops.values().any(|slot| !matches!(slot, Slot::Job(_)))
-            {
+            // 仕事はいつか終わるので、仕事が残る間は待ち続け、期限は仕事がなくなってから数える
+            let jobs_left = self.ops.values().any(|slot| matches!(slot, Slot::Job(_)));
+            if jobs_left || self.ops.is_empty() {
+                continue;
+            }
+            let limit = *limit.get_or_insert_with(|| Instant::now() + CANCEL_LIMIT);
+            if Instant::now() >= limit {
                 self.broken = Some((
-                    io::ErrorKind::TimedOut,
+                    io::ErrorKind::Other,
                     "a cancelled op did not complete".to_string(),
                 ));
             }

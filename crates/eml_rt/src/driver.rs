@@ -63,7 +63,8 @@ pub trait IoDriver {
     /// 失敗しない。出せなかった操作は、次の `completions` で誤りとして終わる。本物の driver では、プールの
     /// スレッドがすべて仕事中なら、仕事の `submit` はスレッドが空くまで、安全点を通らずに呼んだスレッドの上で待つ。
     fn submit(&mut self, op: Op) -> OpKey;
-    /// できるだけ取り消す。`key` の完了はそれでも届く。`Op::Job` には何もしない。
+    /// できるだけ取り消す。`key` の完了はふつうはそれでも届く。届かないことがあれば、driver は `quiesce` で壊れた
+    /// 状態になる。`Op::Job` には何もしない。
     fn cancel(&mut self, key: OpKey);
     /// 届いた完了をすべて `out` に移す。順は driver が決める。
     fn completions(&mut self, out: &mut Vec<Completion>);
@@ -76,5 +77,7 @@ pub trait IoDriver {
     /// driver の参照を落とす。保留の操作は、終わるまで OS の資源を生かす。前提はない。
     fn close(&mut self, handle: IoHandle);
     /// 保留の操作をすべて取り消し、完了がすべて届くまで待って捨て、`bin` のハンドルを閉じる。仕事は待ちきる。
+    /// driver が壊れているか、取り消した操作の完了がいつまでも届かず壊れた状態になったときは、保留を残して戻る
+    /// (呼ぶ側は `pending()` で確かめる)。
     fn quiesce(&mut self);
 }
