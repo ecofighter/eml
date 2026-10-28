@@ -15,6 +15,7 @@ use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
+use crate::driver::floor_ms;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{JoinId, JoinNode, MAIN, Outcome, Policy, Scheduler, TaskId, TaskState};
@@ -1219,11 +1220,21 @@ fn switch_away<R: Exec>(
 ) -> Result<(), VmFault> {
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)
-    drain::<R>(code, ctx, task.depth_offset, sched)?;
-    let next = sched
-        .policy
-        .pick(&mut sched.ready)
-        .ok_or(VmFault::Internal("no task is ready to run"))?;
+    collect::<R>(code, ctx, task.depth_offset, sched)?;
+    // 走れるタスクがなければ、次の期限まで眠って集め直す。眠りは1回ごとに短く切り、起きるたびに止める語を読む。
+    // `PREEMPT` は切り替える先がないので捨てる (docs/spec/vm.md の「時計と driver」)
+    let next = loop {
+        if let Some(next) = sched.policy.pick(&mut sched.ready) {
+            break next;
+        }
+        let deadline = sched
+            .cells
+            .next_deadline()
+            .ok_or(VmFault::Internal("no task is ready to run"))?;
+        sched.driver.wait_until(deadline);
+        poll(ctx, task.stack_depth())?;
+        collect::<R>(code, ctx, task.depth_offset, sched)?;
+    };
     match resume::<R>(code, ctx, task, sched, next, keep)? {
         Some(at) => {
             let result = safepoint::<R>(code, ctx, task, sched);
@@ -1301,8 +1312,9 @@ fn resume<R: Exec>(
     }
 }
 
-/// 受け箱を処理し、取り消しで待ちを外したタスクを再開する仕事を列の後ろに積む。
-fn drain<R: Exec>(
+/// 集める地点。受け箱を処理し、満ちたタイマーを外して、待ちを外したタスクを再開する仕事を列の後ろに積む。タイマーの
+/// ない run は時計を読まない (docs/spec/vm.md の「時計と driver」)。
+fn collect<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     depth_offset: usize,
@@ -1310,6 +1322,9 @@ fn drain<R: Exec>(
 ) -> Result<(), VmFault> {
     let mut out = Vec::new();
     sched.cells.drain(ctx, depth_offset, &mut out)?;
+    if sched.cells.next_deadline().is_some() {
+        sched.cells.expire(floor_ms(sched.driver.now()), &mut out)?;
+    }
     if out.is_empty() {
         return Ok(());
     }
@@ -1334,7 +1349,7 @@ fn preempt<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    drain::<R>(code, ctx, task.depth_offset, sched)?;
+    collect::<R>(code, ctx, task.depth_offset, sched)?;
     loop {
         let next = sched.policy.pick(&mut sched.ready);
         sched.policy.reload();

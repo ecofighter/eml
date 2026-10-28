@@ -20,6 +20,7 @@
 //! `run` は持ち主だけが書き、印を付ける操作が読む。タスクのセルの残りは、そのタスクを動かすか受け箱を処理する持ち主だけが
 //! 読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_rt::{Control, Ctx, Fault, HeapError, Mode, Word};
@@ -151,6 +152,16 @@ enum Phase {
 enum Wait {
     Cell(CellRef),
     Ready,
+    /// 時間の輪の鍵 `TimerKey` の項。
+    #[expect(dead_code, reason = "時間の待ちを登録する操作だけが作る")]
+    Time(TimerKey),
+}
+
+/// 時間の輪の鍵。期限はミリ秒で、同じ期限は `seq` で登録の順に並ぶ (docs/spec/vm.md の「時計と driver」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct TimerKey {
+    deadline: u64,
+    seq: u64,
 }
 
 struct TaskCell {
@@ -275,6 +286,11 @@ pub(crate) struct Registry {
     floor: u32,
     pub(crate) inbox: Arc<Inbox>,
     pub(crate) stats: TaskStats,
+    /// 時間の輪。項は時間を待つタスクのセルの番号だけで、語を持たない (docs/spec/vm.md の「時計と driver」)。
+    timers: BTreeMap<TimerKey, CellRef>,
+    /// 次に登録するタイマーの `seq`。
+    #[expect(dead_code, reason = "時間の待ちを登録する操作だけが読む")]
+    timer_seq: u64,
 }
 
 impl Registry {
@@ -285,7 +301,43 @@ impl Registry {
             floor,
             inbox: Arc::new(Inbox::default()),
             stats: TaskStats::default(),
+            timers: BTreeMap::new(),
+            timer_seq: 0,
         }
+    }
+
+    /// いちばん早いタイマーの期限。輪が空なら `None` である。
+    pub(crate) fn next_deadline(&self) -> Option<u64> {
+        self.timers.first_key_value().map(|(key, _)| key.deadline)
+    }
+
+    /// 期限が `now_ms` までのタイマーを、期限の順、同じ期限なら登録の順に外し、待っていたタスクを再開する仕事を
+    /// `out` に積む。輪の項と待ちの登録は、どちらが先に外れても他方を残さない (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn expire(&mut self, now_ms: u64, out: &mut Vec<Runnable>) -> Result<(), CellFault> {
+        while let Some(entry) = self.timers.first_entry() {
+            let key = *entry.key();
+            if key.deadline > now_ms {
+                break;
+            }
+            let cell = entry.remove();
+            let task = self.task_mut(cell)?;
+            if !matches!(task.phase, Phase::Parked)
+                || !matches!(task.wait, Some(Wait::Time(k)) if k == key)
+            {
+                return Err(CellFault::Internal("a timer names no waiting task"));
+            }
+            task.wait = None;
+            let k = task
+                .k
+                .take()
+                .ok_or(CellFault::Internal("a parked task has no continuation"))?;
+            out.push(Runnable::Resume {
+                cell,
+                k,
+                wake: WOKE,
+            });
+        }
+        Ok(())
     }
 }
 

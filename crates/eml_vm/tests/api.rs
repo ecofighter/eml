@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
-    AnyMachine, CodeBase, Control, Limits, Machine, Normal, RunConfig, RuntimeError, Sched,
+    AnyMachine, Clock, CodeBase, Control, Limits, Machine, Normal, RunConfig, RuntimeError, Sched,
     Scheduler, Seeded, Sequential, Stop, Task, VmFault,
 };
 
@@ -76,6 +76,29 @@ fn the_default_sched_is_sequential() {
         config.with_sched(Sched::Sequential).sched,
         Sched::Sequential
     );
+}
+
+/// ライブラリの既定の時計は、すべてのタスクが待つときにだけ進む仮想の時計である (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn the_default_clock_is_virtual() {
+    assert_eq!(RunConfig::default().clock, Clock::Virtual);
+    assert_eq!(Clock::default(), Clock::Virtual);
+    let config = RunConfig::default().with_clock(Clock::Real);
+    assert_eq!(config.clock, Clock::Real);
+    assert_eq!(config.with_clock(Clock::Virtual).clock, Clock::Virtual);
+}
+
+#[test]
+fn a_clock_parses_and_rejects() {
+    assert_eq!("real".parse(), Ok(Clock::Real));
+    assert_eq!("virtual".parse(), Ok(Clock::Virtual));
+    for text in ["", "Real", "wall", "virtual "] {
+        let error = text.parse::<Clock>().unwrap_err();
+        assert_eq!(
+            error,
+            format!("expected `real` or `virtual`, found `{text}`")
+        );
+    }
 }
 
 /// CLI の `--sched` が読む綴り (docs/spec/stdlib.md の「起動」)。seed は `u64` の10進数である。

@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use eml_lir::Program;
-use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, Mode, Stats};
+use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
 use crate::cells::TaskStats;
 use crate::vm::ExecWith;
@@ -15,6 +15,7 @@ mod code;
 mod compile;
 mod data;
 mod disasm;
+mod driver;
 mod error;
 mod hosts;
 mod monitor;
@@ -24,6 +25,7 @@ mod vm;
 
 pub use code::{CodeBase, CompileError, FnEntry};
 pub use disasm::disassemble;
+pub use driver::Clock;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
@@ -93,6 +95,8 @@ pub struct RunConfig {
     pub control: Arc<Control>,
     /// タスクを切り替える方針。既定は横取りしない `Sched::Sequential` である。
     pub sched: Sched,
+    /// タイマーが使う時計。既定はすべてのタスクが待つときにだけ進む `Clock::Virtual` である。
+    pub clock: Clock,
 }
 
 // `Control` は `Default` を持たないので、手で書く
@@ -102,6 +106,7 @@ impl Default for RunConfig {
             debug_heap: false,
             control: Arc::new(Control::new(Limits::default())),
             sched: Sched::Sequential,
+            clock: Clock::Virtual,
         }
     }
 }
@@ -119,6 +124,11 @@ impl RunConfig {
 
     pub fn with_sched(mut self, sched: Sched) -> RunConfig {
         self.sched = sched;
+        self
+    }
+
+    pub fn with_clock(mut self, clock: Clock) -> RunConfig {
+        self.clock = clock;
         self
     }
 }
@@ -166,6 +176,9 @@ pub struct Machine<M: Mode> {
     shared_roots: usize,
     /// 次の run の登録表の最初の generation (docs/spec/vm.md の「`Async` のタスク」)。
     generations: u32,
+    /// 時計と待ち。run の間は `Scheduler` に移すので、run の外ではいつも `Some` である。`Machine` ごとに1つなので、
+    /// 時刻は run をまたいで続く (docs/spec/vm.md の「時計と driver」)。
+    driver: Option<Box<dyn IoDriver>>,
 }
 
 impl Machine<Fast> {
@@ -203,12 +216,19 @@ impl<M: Mode> Machine<M> {
             copying: HeapWork::default(),
             shared_roots: 0,
             generations: 0,
+            driver: Some(Clock::Virtual.driver()),
         }
     }
 
     /// 実行ごとに作るスケジューラの方針を選ぶ。既定は `Sched::Sequential` である。
     pub fn with_sched(mut self, sched: Sched) -> Machine<M> {
         self.sched = sched;
+        self
+    }
+
+    /// タイマーが使う時計を選び、新しい driver を作る。既定は `Clock::Virtual` である。
+    pub fn with_clock(mut self, clock: Clock) -> Machine<M> {
+        self.driver = Some(clock.driver());
         self
     }
 
@@ -339,8 +359,12 @@ impl<M: Mode> Machine<M> {
             max_depth: self.max_depth,
             shared_roots: self.shared_roots,
             generations: self.generations,
+            driver: self
+                .driver
+                .take()
+                .expect("a machine holds its driver between runs"),
         };
-        let (result, scheduled) = match self.sched {
+        let (result, mut scheduled) = match self.sched {
             Sched::Normal => {
                 let policy = Normal::new(Arc::clone(ctx.heap().control()));
                 run_scheduled(code, ctx, &mut task, policy, start, &mut counts)
@@ -354,6 +378,8 @@ impl<M: Mode> Machine<M> {
         };
         self.shared_roots = scheduled.shared_roots;
         self.generations = scheduled.generations;
+        // 誤りで返る道でも driver を失わないように、run の直後に戻す
+        self.driver = scheduled.driver.take();
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
         // `exit` で終わった実行の入口の結果はダミーなので写さない
@@ -473,14 +499,16 @@ struct Scheduled {
     shared_roots: usize,
     tasks: TaskStats,
     generations: u32,
+    /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
+    driver: Option<Box<dyn IoDriver>>,
 }
 
 /// スケジューラを作るときに `Machine` から渡すもの。
-#[derive(Clone, Copy)]
 struct Start {
     max_depth: usize,
     shared_roots: usize,
     generations: u32,
+    driver: Box<dyn IoDriver>,
 }
 
 /// 方針 `P` のスケジューラを作って `task` から実行する。方針を型の引数にして、方針ごとに VM の繰り返しを作る
@@ -495,7 +523,13 @@ fn run_scheduled<M: Mode, P: Policy>(
 ) -> (Result<(), RuntimeError>, Scheduled) {
     let main_worker = ctx.heap().worker();
     task.worker = main_worker;
-    let mut sched = Scheduler::new(policy, main_worker, start.max_depth, start.generations);
+    let mut sched = Scheduler::new(
+        policy,
+        start.driver,
+        main_worker,
+        start.max_depth,
+        start.generations,
+    );
     sched.shared_roots = start.shared_roots;
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     let scheduled = Scheduled {
@@ -504,6 +538,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         shared_roots: sched.shared_roots,
         tasks: sched.cells.stats,
         generations: sched.cells.next_floor(),
+        driver: Some(sched.driver),
     };
     (result, scheduled)
 }
@@ -540,9 +575,17 @@ impl AnyMachine {
     pub fn new(config: &RunConfig, host: HostRef) -> AnyMachine {
         let control = Arc::clone(&config.control);
         if config.debug_heap {
-            AnyMachine::Checked(Machine::<Checked>::new(control, host).with_sched(config.sched))
+            AnyMachine::Checked(
+                Machine::<Checked>::new(control, host)
+                    .with_sched(config.sched)
+                    .with_clock(config.clock),
+            )
         } else {
-            AnyMachine::Fast(Machine::<Fast>::new(control, host).with_sched(config.sched))
+            AnyMachine::Fast(
+                Machine::<Fast>::new(control, host)
+                    .with_sched(config.sched)
+                    .with_clock(config.clock),
+            )
         }
     }
 
