@@ -408,7 +408,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `wait_until(deadline_ms)` は、`now()` が `deadline_ms` ミリ秒以上になるまで待つ。早く戻ってよい。呼ぶ側は戻るたびに `now` で時刻を確かめ直す。本物の時計はスレッドを止めて待ち、仮想の時計は止まらずに `now` を `deadline_ms` へ進める
 - driver は worker ごとに1つで、持ち主の worker だけが触る。`&mut self` で呼び、`Sync` は求めない
 - driver を持つのは実行系 (`eml_vm`) で、`Ctx` は持たない。`eml_rt` の核は時間を知らない
-- 時計は `Clock` の値で選ぶ。`Real` と `Virtual` (既定) の2つで、`Copy` である。`FromStr` は `real` と `virtual` を読み、ほかの綴りは誤りにする。誤りの文は ``expected `real` or `virtual`, found `…` `` である。ライブラリの既定 (`Clock::default()`、`RunConfig::default()`、`Machine`) を `Virtual` にするのは、テストを速く決定的に流すためである
+- 時計は `Clock` の値で選ぶ。`Real` と `Virtual` (既定) の2つで、`Copy` である。`FromStr` は `real` と `virtual` を読み、ほかの綴りは誤りにする。誤りの文は ``expected `real` or `virtual`, found `…` `` である。ライブラリの既定 (`Clock::default()`、`RunConfig::default()`、`Machine`) を `Virtual` にするのは、テストを速く決定的に流すためである。CLI の `eml run` と `eml repl` は `--clock` で選び、既定は `real` である ([標準ライブラリ](stdlib.md) の「起動」)
 - 2つの driver は `eml_vm` の `driver.rs` に置く。本物の時計は単調な時計 (`Instant`) で読む。仮想の時計は 0 から始まるミリ秒の整数を持ち、`wait_until(d)` で今の時刻と `d` の大きいほうに進む。`Clock` と `Sched` は独立している。時計はタイマーがいつ満ちるかを決め、方針は実行待ちのどのタスクを動かすかを決める
 - `Machine` は driver を1つ持つ。`Machine::with_clock(clock)` が新しい driver を作り、`AnyMachine::new` は `RunConfig` の `clock` を渡す。run の間は driver を `Scheduler` に預け、run が終わると誤りでも `Machine` に戻す。そのため、仮想の時刻は run をまたいで続き、REPL では入力をまたいで残る。時間の輪は登録表と一緒に run ごとに作り直す
 - 時間の輪は、driver でなく登録表 (`Registry`) が持つ。鍵は期限 (ミリ秒) と登録の番号 `seq` の組で、値は待つタスクのセルの番号だけである。語は持たない。待ちを外す側が driver を往復せずに輪の項を外せ、2つの driver が同じ輪を別々に持たずに済むためである

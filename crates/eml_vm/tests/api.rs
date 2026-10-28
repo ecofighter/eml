@@ -359,3 +359,34 @@ fn second() -> unit {
     machine.close().unwrap();
     assert_eq!(out.contents(), "exiting\n");
 }
+
+/// すべてのタスクが本物の時計で眠る run は、空きのループが毎回割り込みを読むので、別のスレッドの割り込みで止まる
+/// (docs/spec/vm.md の「時計と driver」)。2 秒は止まりの見張りで、本物の眠り (100 秒) よりずっと短い。
+#[test]
+fn an_interrupt_wakes_a_sleeping_worker() {
+    use std::time::{Duration, Instant};
+
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> Async.sleep_ms 100000)
+";
+    let program = eml_test_support::lir(src);
+    let control = Arc::new(Control::new(Limits::default()));
+    let config = RunConfig::default()
+        .with_clock(Clock::Real)
+        .with_sched(Sched::Sequential)
+        .with_control(Arc::clone(&control));
+    let interrupter = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        control.interrupt();
+    });
+    let (host, _) = eml_vm::capture_host(Default::default());
+    let start = Instant::now();
+    let result = eml_vm::execute(&program, &config, host);
+    let elapsed = start.elapsed();
+    interrupter.join().unwrap();
+    let error = result.unwrap_err();
+    assert!(error.interrupted(), "{error:?}");
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+}

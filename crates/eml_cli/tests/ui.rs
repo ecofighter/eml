@@ -269,7 +269,7 @@ fn seeded(suffix: &str) -> bool {
 
 /// 食い違ったときの文言に、同じ実行を再現するコマンドを書く。スケジュールは seed とプログラムと入力だけで決まる。
 fn seeded_label(seed: u64) -> String {
-    format!("`eml run --debug-heap --sched seeded:{seed}`")
+    format!("`eml run --debug-heap --sched seeded:{seed} --clock virtual`")
 }
 
 /// 逐次の検査モードの結果を、seed ごとの検査モードの run と比べる。成功した run は、スケジュールによらない
