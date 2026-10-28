@@ -178,11 +178,16 @@ impl<M: Mode> CodeBase<M> {
 /// (docs/spec/vm.md の「`Async` のタスク」)。
 fn async_entries(program: &Program, index: &Index) -> Result<Option<AsyncEntries>, CompileError> {
     let find = |entry: RuntimeEntry| index.functions.get(entry.name()).copied();
-    if let (Some(start), Some(resume)) = (
+    if let (Some(start), Some(resume), Some(resume_io)) = (
         find(RuntimeEntry::StartTask),
         find(RuntimeEntry::ResumeTask),
+        find(RuntimeEntry::ResumeIo),
     ) {
-        return Ok(Some(AsyncEntries { start, resume }));
+        return Ok(Some(AsyncEntries {
+            start,
+            resume,
+            resume_io,
+        }));
     }
     let runs_async = program
         .functions

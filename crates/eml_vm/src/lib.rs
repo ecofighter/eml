@@ -57,13 +57,14 @@ pub struct RunStats {
     pub peak_stack: u64,
     /// `Async` が作ったタスクのセルの数。
     pub tasks: u64,
-    /// `Async` の待ち、`yield_now`、`sleep_ms`、`drain_within`、channel の待ちが、継続をランタイムに渡した数。
+    /// `Async` の待ち、`yield_now`、`sleep_ms`、`drain_within`、channel の待ち、driver の操作の待ちが、継続をランタイムに
+    /// 渡した数。
     pub parks: u64,
     /// スコープの最初の失敗より後の、タスクの失敗の数。
     pub dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
-    /// 受け箱の処理が外した待ち、取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を
-    /// 数える (docs/spec/vm.md の「`RunStats`」)。
+    /// `park_io`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`、真を返した
+    /// `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub cancels: u64,
     /// `await_time` が時間の輪に登録した回数。
     pub timers: u64,
@@ -75,6 +76,8 @@ pub struct RunStats {
     pub channel_waits: u64,
     /// run の終わりに放した channel の数。閉じなかった channel と、閉じても品物の残った channel を数える。
     pub channels_swept: u64,
+    /// driver から取り出し、操作の記録に当てた完了の数。`quiesce` が捨てた完了は数えない。
+    pub completions: u64,
 }
 
 /// 1回の実行の結果。`exit` で終わったら、その終了コードを持つ (docs/spec/vm.md の「`RunStats`」)。
@@ -569,6 +572,11 @@ impl<M: Mode> Machine<M> {
             },
             channels_swept: if M::CHECKED {
                 scheduled.tasks.channels_swept
+            } else {
+                0
+            },
+            completions: if M::CHECKED {
+                scheduled.tasks.completions
             } else {
                 0
             },

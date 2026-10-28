@@ -701,3 +701,58 @@ fn main() -> unit {
     assert_eq!(quiesces.load(Ordering::SeqCst), 2);
     machine.close().unwrap_or_else(|error| panic!("{error}"));
 }
+
+/// `IoTest.write` で待つプログラム。待つ書きのほかに走れるタスクも期限もないので、空きのループが driver を待つ。
+const WAITS_ON_A_WRITE: &str = "\
+import Async
+import Bytes
+import IoTest
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let (a, b) = IoTest.pair ()
+  let (n, a) = IoTest.write (Bytes.of_string \"x\") a
+  drop a
+  drop b
+  println (show n))
+";
+
+/// 待ちの中で driver の `wait` が誤りを返すと、run は壊れた run として driver の誤りで終わる
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_failing_driver_breaks_the_run() {
+    let (driver, _) = FakeDriver::new(true);
+    let (host, _) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(&eml_test_support::lir(WAITS_ON_A_WRITE))
+        .unwrap();
+    let error = machine.run(loaded.entry).unwrap_err();
+    assert!(error.is_broken(), "{error}");
+    assert!(
+        error
+            .to_string()
+            .starts_with("the I/O driver failed: broken"),
+        "{error}"
+    );
+}
+
+/// `quiesce` の後も保留の操作が残れば、`Machine` は毒された状態になり、ヒープに触れずに `close` が driver の誤りを
+/// 返す (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_driver_left_pending_poisons_the_machine() {
+    let (driver, _) = FakeDriver::new(false);
+    let (host, _) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(&eml_test_support::lir(WAITS_ON_A_WRITE))
+        .unwrap();
+    let error = machine.run(loaded.entry).unwrap_err();
+    assert!(error.is_broken(), "{error}");
+    let error = machine.close().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "the I/O driver failed: the driver kept pending ops after quiesce in `<close>`"
+    );
+}

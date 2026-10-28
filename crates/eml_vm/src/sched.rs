@@ -235,7 +235,7 @@ pub(crate) enum TaskState {
     /// フレームの slot 0.. に書く。語はタスクが参照を持つ (docs/spec/vm.md の「`Async` のタスク」)。
     Entry {
         function: u32,
-        args: [eml_rt::Word; 2],
+        args: [eml_rt::Word; 3],
         argc: u8,
     },
     /// `Async.run` で、根のスコープが閉じるのをスタックを持ったまま待つ。起こされたら `Async` の命令の次から続ける。

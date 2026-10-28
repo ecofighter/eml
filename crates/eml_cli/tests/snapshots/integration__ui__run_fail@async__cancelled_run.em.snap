@@ -8,4 +8,4 @@ before
 --- stderr ---
 --- runtime error ---
 task was cancelled
-  at <std>/Async.em:66:9
+  at <std>/Async.em:69:9

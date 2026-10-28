@@ -72,6 +72,8 @@ pub(crate) struct AsyncEntries {
     pub(crate) start: u32,
     /// `Std.Async.resume_task`。
     pub(crate) resume: u32,
+    /// `Std.Async.resume_io`。
+    pub(crate) resume_io: u32,
 }
 
 /// `par` の子の `evv` の凍結した部分 (docs/spec/vm.md の「`par` の fork と join」)。ロードごとに、新しく `fork$` の名前が

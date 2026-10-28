@@ -128,7 +128,7 @@ impl Task {
     fn entry<M: Mode>(
         code: &CodeBase<M>,
         function: u32,
-        args: [Word; 2],
+        args: [Word; 3],
         argc: u8,
         cell: CellRef,
         worker: u32,
@@ -1317,8 +1317,9 @@ fn resume<R: Exec>(
     }
 }
 
-/// 集める地点。受け箱を処理し、満ちたタイマーを外して、待ちを外したタスクを再開する仕事を列の後ろに積む。タイマーの
-/// ない run は時計を読まない (docs/spec/vm.md の「時計と driver」)。
+/// 集める地点。受け箱を処理し、driver の完了を操作の記録に当て、満ちたタイマーを外して、待ちを外したタスクを再開する
+/// 仕事を列の後ろに積む。タイマーのない run は時計を読まず、記録のない run は driver の完了を読まない
+/// (docs/spec/vm.md の「時計と driver」)。
 fn collect<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1326,7 +1327,10 @@ fn collect<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let mut out = Vec::new();
-    sched.cells.drain(ctx, depth_offset, &mut out)?;
+    sched
+        .cells
+        .drain(ctx, &mut *sched.driver, depth_offset, &mut out)?;
+    sched.cells.complete(&mut *sched.driver, &mut out)?;
     if sched.cells.next_deadline().is_some() {
         sched.cells.expire(floor_ms(sched.driver.now()), &mut out)?;
     }
@@ -1634,7 +1638,9 @@ fn finish<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let mut out = Vec::new();
-    sched.cells.drain(ctx, task.depth_offset, &mut out)?;
+    sched
+        .cells
+        .drain(ctx, &mut *sched.driver, task.depth_offset, &mut out)?;
     if !out.is_empty() {
         return Err(VmFault::Internal("a task is left at the end"));
     }
@@ -1943,13 +1949,85 @@ fn async_op<R: Exec>(
             *sched.cells.counter(task.raw(arg(1)))? = n;
             task.set(dst, Word::UNIT);
         }
+        Extern::AsyncParkIo => {
+            let me = current_cell(task)?;
+            let (token, k) = (task.get(arg(0)), task.get(arg(1)));
+            if let Some(run) = sched.cells.park_io(ctx, &mut *sched.driver, token, me, k)? {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
+        // ストリームの組を作る2つの行は、今のタスクのセルを使わないので、タスクの外でも動く
+        // (docs/spec/stdlib.md の「`Std.IoTest`」)
+        Extern::IoTestOpenPair => match sched.driver.pair() {
+            Ok((a, b)) => {
+                let bin = sched.driver.bin();
+                let s = cells::open_stream(ctx, a, Some(b), bin);
+                task.set(dst, s);
+            }
+            Err(e) => {
+                let raise = Raise::Io {
+                    kind: io_kind(&e),
+                    message: format!("cannot open a stream pair: {e}"),
+                };
+                return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestOpenPair);
+            }
+        },
+        Extern::IoTestPeer => {
+            // 端は借りるだけで、組を作る後の `con` が消費する (docs/spec/core-ir.md の「組を返す extern」)
+            let s = cells::peer(ctx, task.get(arg(0)))?;
+            task.set(dst, s);
+        }
+        Extern::IoTestSubmitWrite => {
+            let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
+            let token =
+                sched
+                    .cells
+                    .submit_write(ctx, &mut *sched.driver, task.worker, buf, stream)?;
+            task.set(dst, token);
+        }
+        Extern::IoTestOpStream => {
+            // token は借りるだけで、組を作る後の `con` が消費する
+            let s = sched.cells.op_stream(ctx, task.get(arg(0)))?;
+            task.set(dst, s);
+        }
+        Extern::IoTestTakeWrite => {
+            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
+            // 書きの buffer は返さない。取り消しか期限で終わった操作の誤りは、包みが投げる取り消しに含める
+            // (docs/spec/stdlib.md の「`Std.IoTest`」)
+            if let Some(buf) = taken.buf {
+                unsafe { ctx.heap_mut().decref(buf) }?;
+            }
+            match taken.result {
+                Ok(n) => task.set_raw(dst, n as i64),
+                Err(_) if taken.cancelling => task.set_raw(dst, 0),
+                Err(e) => {
+                    let raise = Raise::Io {
+                        kind: io_kind(&e),
+                        message: format!("cannot write to the stream: {e}"),
+                    };
+                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestTakeWrite);
+                }
+            }
+        }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async, Std.Chan and Std.Atomic reached the Async instruction",
+                "a row outside Std.Async, Std.Chan, Std.Atomic and Std.IoTest reached the Async instruction",
             ));
         }
     }
     Ok(())
+}
+
+/// driver の誤りの種類を `IOErrorKind` のタグにする。extern の誤りと同じく、最初の5種類のうち I/O の4つだけを出す
+/// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+fn io_kind(e: &std::io::Error) -> i64 {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => externs::IO_NOT_FOUND,
+        std::io::ErrorKind::PermissionDenied => externs::IO_PERMISSION_DENIED,
+        std::io::ErrorKind::Unsupported => externs::IO_NOT_AVAILABLE,
+        _ => externs::IO_OTHER,
+    }
 }
 
 /// 今の `Task` のタスクのセル。`main` と `par` の右の子は `Async` の操作を実行しない。
@@ -2020,10 +2098,21 @@ fn schedule<M: Mode, P: Policy>(
     run: Runnable,
 ) -> Result<(), VmFault> {
     let (function, args, argc, cell) = match run {
-        Runnable::Start { cell, closure } => (entries.start, [closure, Word::UNIT], 1, cell),
-        Runnable::Resume { cell, k, wake } => {
-            (entries.resume, [k, Word::from_bits(wake as usize)], 2, cell)
+        Runnable::Start { cell, closure } => {
+            (entries.start, [closure, Word::UNIT, Word::UNIT], 1, cell)
         }
+        Runnable::Resume { cell, k, wake } => (
+            entries.resume,
+            [k, Word::from_bits(wake as usize), Word::UNIT],
+            2,
+            cell,
+        ),
+        Runnable::ResumeIo { cell, k, wake, op } => (
+            entries.resume_io,
+            [k, Word::from_bits(wake as usize), op],
+            3,
+            cell,
+        ),
         Runnable::Token(WaitToken(token)) => {
             let id = token as TaskId;
             match sched.tasks.get(id) {
@@ -2064,7 +2153,7 @@ fn enter<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     function: u32,
-    mut args: [Word; 2],
+    mut args: [Word; 3],
     argc: u8,
 ) -> Result<(), VmFault> {
     let cell = task
@@ -2815,6 +2904,7 @@ fn run_extern<R: Exec>(
             | Extern::AsyncCancelMembers
             | Extern::AsyncParkSend
             | Extern::AsyncParkRecv
+            | Extern::AsyncParkIo
             | Extern::ChanNewRaw
             | Extern::ChanReserveSend
             | Extern::ChanPushRaw
@@ -2824,7 +2914,12 @@ fn run_extern<R: Exec>(
             | Extern::AtomicNew
             | Extern::AtomicAdd
             | Extern::AtomicLoad
-            | Extern::AtomicStore => {
+            | Extern::AtomicStore
+            | Extern::IoTestOpenPair
+            | Extern::IoTestPeer
+            | Extern::IoTestSubmitWrite
+            | Extern::IoTestOpStream
+            | Extern::IoTestTakeWrite => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

@@ -154,6 +154,7 @@ fn byte_loop() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -184,6 +185,7 @@ fn char_loop() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -214,6 +216,7 @@ fn bytes_loop() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -244,6 +247,7 @@ fn apply_float() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -274,6 +278,7 @@ fn apply_int() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -304,6 +309,7 @@ fn ep_float() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -336,6 +342,7 @@ fn records_wide() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     "
     );
@@ -367,6 +374,7 @@ fn empty() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -397,6 +405,7 @@ fn fib() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -427,6 +436,7 @@ fn fold_state() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -457,6 +467,7 @@ fn list() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -487,6 +498,7 @@ fn loop_() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -517,6 +529,7 @@ fn state() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -547,6 +560,7 @@ fn state_loop() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -577,6 +591,7 @@ fn state_loop_by_hand() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -607,6 +622,7 @@ fn state_nested() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -637,6 +653,7 @@ fn tree() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -667,6 +684,7 @@ fn iter_generate() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -742,6 +760,7 @@ fn iter_pipeline() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -772,6 +791,7 @@ fn iter_pipeline_by_hand() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -802,6 +822,7 @@ fn orders() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -832,6 +853,7 @@ fn orders_by_hand() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -862,6 +884,7 @@ fn push_fold() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -892,6 +915,7 @@ fn push_fold_by_hand() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -922,6 +946,7 @@ fn sum_loop() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -952,6 +977,7 @@ fn tree_by_hand() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -982,6 +1008,7 @@ fn upsert() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1012,6 +1039,7 @@ fn upsert_by_hand() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1042,6 +1070,7 @@ fn records() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1072,6 +1101,7 @@ fn rbtree() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1102,6 +1132,7 @@ fn tree_map() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1132,6 +1163,7 @@ fn std_list() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1162,6 +1194,7 @@ fn std_map() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1192,6 +1225,7 @@ fn mandelbrot() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1222,6 +1256,7 @@ fn nbody() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1252,6 +1287,7 @@ fn spectral_norm() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1282,6 +1318,7 @@ fn sieve_var() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1312,6 +1349,7 @@ fn sieve_by_hand() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1342,6 +1380,7 @@ fn fannkuch_var() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1372,6 +1411,7 @@ fn fannkuch_by_hand() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1420,6 +1460,7 @@ fn par_tree() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
 }
@@ -1628,6 +1669,7 @@ fn trade_offs() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     "
     );
@@ -1657,6 +1699,7 @@ fn trade_offs() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     "
     );
@@ -1690,6 +1733,7 @@ fn trade_offs() {
         channel_ops: 0,
         channel_waits: 0,
         channels_swept: 0,
+        completions: 0,
     }
     ");
     insta::assert_debug_snapshot!(

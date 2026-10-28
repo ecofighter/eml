@@ -301,7 +301,7 @@ pub fn schedule_independent(mut stats: RunStats) -> RunStats {
 
 /// channel を使った run の `RunStats` のうち、スケジュールの方針によらない欄だけを残す。待つかどうかと、送り手が
 /// 参照を持ち続けた品物の裏返しが順で変わり、仕事の回数がそれに従うので、残すのはタスクの数、時間の登録、捨てた失敗、
-/// run の終わりに放した channel の数だけである (docs/implementation/testing.md の「seed で流す」)。
+/// run の終わりに放した channel の数、driver の完了の数だけである (docs/implementation/testing.md の「seed で流す」)。
 #[cfg(feature = "run")]
 pub fn channel_independent(stats: RunStats) -> RunStats {
     let mut kept = RunStats::default();
@@ -309,6 +309,7 @@ pub fn channel_independent(stats: RunStats) -> RunStats {
     kept.timers = stats.timers;
     kept.dropped_failures = stats.dropped_failures;
     kept.channels_swept = stats.channels_swept;
+    kept.completions = stats.completions;
     kept
 }
 

@@ -246,10 +246,14 @@ table! {
         Cell => type_row("Std.Async.Cell", Unr, Repr::Int),
         Task => generic_type_row("Std.Async.Task", Lin),
         Scope => type_row("Std.Async.Scope", Unr, Repr::Int),
+        // driver の操作の記録を指す token の `Foreign` (docs/spec/stdlib.md の「`Std.Async`」)
+        OpId => type_row("Std.Async.OpId", Lin, Repr::Obj),
         // 登録表の添字の即値。Kind は中身の型によらない (docs/spec/stdlib.md の「`Std.Chan`」)
         Chan => handle_type_row("Std.Chan.Chan"),
         // 登録表ではなく `Machine` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
         Counter => type_row("Std.Atomic.Counter", Unr, Repr::Int),
+        // driver の `pair` の片方の端を持つ `Foreign` (docs/spec/stdlib.md の「`Std.IoTest`」)
+        IoTestStream => type_row("Std.IoTest.Stream", Lin, Repr::Obj),
     }
 }
 
@@ -1236,6 +1240,19 @@ table! {
                 Purity::Effectful,
             ),
         ),
+        // token は待つ間だけ記録が持ち、再開のときに継続へ返す。預かるのは継続だけである
+        // (docs/spec/vm.md の「`Async` のタスク」)
+        AsyncParkIo => holding(
+            &[false, true],
+            kinded(
+                "Std.Async.park_io",
+                &[Obj, TObj],
+                &[Lin, Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
         // channel の行 (docs/spec/stdlib.md の「`Std.Chan`」)。channel の引数は即値で、RC を持たない
         ChanNewRaw => row("Std.Chan.new_raw", &[Int], Int, Purity::Effectful),
         ChanToCell => row("Std.Chan.chan_cell", &[Int], Int, Purity::Pure),
@@ -1258,12 +1275,66 @@ table! {
         AtomicAdd => row("Std.Atomic.add", &[Int, Int], Int, Purity::Effectful),
         AtomicLoad => row("Std.Atomic.load", &[Int], Int, Purity::Effectful),
         AtomicStore => row("Std.Atomic.store", &[Int, Int], Unit, Purity::Effectful),
+        // 実行系のテストのための内部の口 (docs/spec/stdlib.md の「`Std.IoTest`」)。受け付けの行は buffer とストリームを
+        // 消費して操作の記録に移し、取り出しの行が token を消費して記録を放す
+        IoTestOpenPair => kinded(
+            "Std.IoTest.open_pair",
+            &[Unit],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        IoTestPeer => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.IoTest.peer",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        IoTestSubmitWrite => kinded(
+            "Std.IoTest.submit_write",
+            &[Obj, Obj],
+            &[Unr, Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        IoTestOpStream => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.IoTest.op_stream",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        IoTestTakeWrite => kinded(
+            "Std.IoTest.take_write",
+            &[Obj],
+            &[Lin],
+            Int,
+            Unr,
+            Purity::Effectful,
+        ),
     }
 }
 
 impl Extern {
-    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic` の行。VM はこれらの行を汎用の extern の
-    /// 命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
+    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic` と `Std.IoTest` の行。VM はこれらの行を
+    /// 汎用の extern の命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub fn is_async(self) -> bool {
         matches!(
             self,
@@ -1296,6 +1367,7 @@ impl Extern {
                 | Extern::AsyncCancelMembers
                 | Extern::AsyncParkSend
                 | Extern::AsyncParkRecv
+                | Extern::AsyncParkIo
                 | Extern::ChanNewRaw
                 | Extern::ChanReserveSend
                 | Extern::ChanPushRaw
@@ -1306,6 +1378,11 @@ impl Extern {
                 | Extern::AtomicAdd
                 | Extern::AtomicLoad
                 | Extern::AtomicStore
+                | Extern::IoTestOpenPair
+                | Extern::IoTestPeer
+                | Extern::IoTestSubmitWrite
+                | Extern::IoTestOpStream
+                | Extern::IoTestTakeWrite
         )
     }
 }
@@ -1318,15 +1395,22 @@ pub enum RuntimeEntry {
     StartTask,
     /// 待たせたタスクを再開する。引数は預けた継続と、それに渡す `Wake` である。
     ResumeTask,
+    /// driver の操作を待たせたタスクを再開する。引数は預けた継続と、それに渡す `Wake` と token である。
+    ResumeIo,
 }
 
 impl RuntimeEntry {
-    pub const ALL: &[RuntimeEntry] = &[RuntimeEntry::StartTask, RuntimeEntry::ResumeTask];
+    pub const ALL: &[RuntimeEntry] = &[
+        RuntimeEntry::StartTask,
+        RuntimeEntry::ResumeTask,
+        RuntimeEntry::ResumeIo,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             RuntimeEntry::StartTask => "Std.Async.start_task",
             RuntimeEntry::ResumeTask => "Std.Async.resume_task",
+            RuntimeEntry::ResumeIo => "Std.Async.resume_io",
         }
     }
 
@@ -1339,6 +1423,7 @@ impl RuntimeEntry {
         match self {
             RuntimeEntry::StartTask => &[Repr::TObj],
             RuntimeEntry::ResumeTask => &[Repr::TObj, Repr::Enum],
+            RuntimeEntry::ResumeIo => &[Repr::TObj, Repr::Enum, Repr::Obj],
         }
     }
 }
