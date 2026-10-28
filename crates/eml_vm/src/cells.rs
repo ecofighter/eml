@@ -210,7 +210,7 @@ struct ScopeCell {
     closed: bool,
     /// 開くときの開き手の `shield` の深さ。開き手のない根は 0 である。
     shield: u32,
-    /// `shield` の境目の印。開き手が同じ親より深い `shield` の中で開いたスコープに立つ。外の取り消しはここで止まる
+    /// `shield` の境目の印。開いたときの `shield` の深さが、同じタスクが開いた親の深さより大きい (親がほかのタスクのものなら 0 より大きい) スコープに立つ。外の取り消しはここで止まる
     /// (docs/spec/stdlib.md の「取り消し」)。
     boundary: bool,
     /// 加わるタスクを取り消す印。`cancel_members` が立て、属するタスクがなくなったときに `finish` が下ろす
@@ -283,7 +283,7 @@ pub(crate) struct TaskStats {
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、受け箱の処理が外した待ち、
-    /// 取り消しで再開する `yield_now`、真を返した `cancel_point` を数える (docs/spec/vm.md の「`RunStats`」)。
+    /// 取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
     /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` だけを数える。
     pub(crate) timers: u64,

@@ -59,6 +59,10 @@ bottom f () =
 pub run : (Unit -> <IO, Panic, Async> a) -> <IO, Panic> a
 run f = run_result (run_raw (bottom f))
 
+-- 置き場所の決まり。`run` の位置 (`<std>/Async.em:行:桁`) は実行時エラーの UI テストと REPL のスナップショットに出る。
+-- そのため `run` より上には `Async` の操作の宣言と `start_task` の節だけを置き、関数は `shield` より下に足す。
+-- extern は extern の並びの末尾に足す。
+
 -- 名前付きのスコープのセルの番号を持つ即値で、`Cell` と同じ形である。Kind は `Unr` で、子のタスクにも渡せる。閉じて
 -- 離れたスコープの番号と前の run の番号は、閉じたスコープとして扱う (docs/spec/stdlib.md の「スコープ」)
 pub extern data Scope
