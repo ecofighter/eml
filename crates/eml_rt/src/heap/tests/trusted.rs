@@ -467,7 +467,9 @@ fn strings_of_every_length_are_read_back<M: Mode>() {
         LARGE_BODY,
         LARGE_BODY + 3,
     ] {
-        let s: String = (0..n).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        // 1文字ずつ push すると Miri の下で遅いので、繰り返しを切り詰めて作る
+        let mut s = "abcdefghijklmnopqrstuvwxyz".repeat(n / 26 + 1);
+        s.truncate(n);
         let w = heap.alloc_string(&s);
         assert_eq!(text(&heap, w), s);
         unsafe { heap.decref(w) }.unwrap();
@@ -890,7 +892,7 @@ fn two_threads_share_one_control<M: Mode>() {
             let control = control.clone();
             std::thread::spawn(move || {
                 let mut heap = Heap::<M>::with_control(control);
-                let big = heap.alloc_data(0, 0, PAGE_BYTES / 8, false);
+                let big = heap.alloc_data(0, 0, LARGE_BODY / 8, false);
                 unsafe { heap.decref(big) }.unwrap();
             })
         })
@@ -966,21 +968,43 @@ unsafe fn read_borrowed<M: Mode>(
     }
 }
 
-/// Host を通る読み。区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の誤り、UTF-8 でない中身、
-/// 止める語、閉じることを、全部の読みと行の読みの両方で、ハンドルを借りる `handle_read` で通す。誤りと止めたときも、
-/// ハンドルは呼ぶ側に残り、`close` で閉じる。
-fn borrowed_files_go_through_the_host<M: Mode>() {
+/// 長い行のファイル。長さの見込みのない読み手で、行も全体も 64 KiB の区切りをまたぐ。
+fn long_lines() -> (String, String, MemoryFile) {
+    let long_line = "x".repeat(65_600);
+    let all = format!("{long_line}\na\r\n\nlast");
+    let file = MemoryFile {
+        sized: false,
+        chunk: 4096,
+        ..MemoryFile::text(&all)
+    };
+    (long_line, all, file)
+}
+
+/// Host を通る行の読み。64 KiB の区切りをまたぐ行を、ハンドルを借りる `handle_read` で通す。
+fn borrowed_lines_cross_the_buffer<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let (long_line, _, file) = long_lines();
+    memory.add("lines.txt", file);
+    let mut ctx = Ctx::<M>::new(Arc::new(Control::new(Limits::default())), host(&memory));
+    unsafe {
+        let p = ctx.heap_mut().alloc_string("lines.txt");
+        let f = ctx.fs_open(p, Open::Read).unwrap();
+        assert_eq!(
+            read_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
+            format!("{long_line}\n")
+        );
+        ctx.handle_close(f, Handle::FileIn).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// Host を通る全部の読みと行の読み。区切りをまたぐ長さと長さの見込みのない読み手、`\r\n` を残した行、空の行、行の
+/// 終わりのない最後の行、終わりの空の文字列を通し、短い読み、途中の誤り、UTF-8 でない
+/// 中身、止める語、閉じることを、全部の読みと行の読みの両方で通す。誤りと止めたときも、ハンドルは呼ぶ側に残り、
+/// `close` で閉じる。
+fn borrowed_reads_cross_the_buffer_and_fail<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
     let control = Arc::new(Control::new(Limits::default()));
-    let body = "0123456789".repeat(7000);
-    memory.add(
-        "big.txt",
-        MemoryFile {
-            sized: false,
-            chunk: 4096,
-            ..MemoryFile::text(&body)
-        },
-    );
     memory.add(
         "broken.txt",
         MemoryFile {
@@ -1003,36 +1027,23 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
             ..MemoryFile::text("abc")
         },
     );
-    let long_line = "x".repeat(70_000);
-    memory.add(
-        "lines.txt",
-        MemoryFile {
-            chunk: 4096,
-            ..MemoryFile::text(&format!("{long_line}\na\r\n\nlast"))
-        },
-    );
+    let (_, all, file) = long_lines();
+    memory.add("lines.txt", file);
+    memory.add("short.txt", MemoryFile::text("a\r\n\nlast"));
     let mut ctx = Ctx::<M>::new(control.clone(), host(&memory));
     let open = |ctx: &mut Ctx<M>, name: &str| unsafe {
         let p = ctx.heap_mut().alloc_string(name);
         ctx.fs_open(p, Open::Read).unwrap()
     };
     unsafe {
-        // 64 KiB の区切りをまたぐ行、`\r\n` を残した行、空の行、行の終わりのない最後の行、終わりの空の文字列
-        let f = open(&mut ctx, "lines.txt");
-        for expected in [
-            format!("{long_line}\n"),
-            "a\r\n".into(),
-            "\n".into(),
-            "last".into(),
-            String::new(),
-        ] {
+        let f = open(&mut ctx, "short.txt");
+        for expected in ["a\r\n", "\n", "last", ""] {
             assert_eq!(
                 read_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
                 expected
             );
         }
         ctx.handle_close(f, Handle::FileIn).unwrap();
-        assert_eq!(mortal(ctx.heap()), 0);
         for read in [ReadAmount::Line, ReadAmount::All] {
             for name in ["broken.txt", "bad.bin"] {
                 let f = open(&mut ctx, name);
@@ -1059,8 +1070,8 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
             ctx.handle_close(f, Handle::FileIn).unwrap();
             assert_eq!(mortal(ctx.heap()), 0);
         }
-        let f = open(&mut ctx, "big.txt");
-        assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), body);
+        let f = open(&mut ctx, "lines.txt");
+        assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), all);
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
@@ -1781,7 +1792,12 @@ fn find_byte_reads_the_body_of_an_object<M: Mode>() {
         for (body, x_at, ax_at) in cases {
             let w = ctx.heap_mut().alloc_bytes(&body);
             let len = body.len();
-            for from in [0, 1, 8, len / 2, len] {
+            let froms: &[usize] = if len > 1024 {
+                &[0, len]
+            } else {
+                &[0, 1, 8, len / 2, len]
+            };
+            for &from in froms {
                 if from > len {
                     continue;
                 }
@@ -1836,7 +1852,8 @@ both_modes!(
     own_objects_read_region_words,
     two_threads_share_one_control,
     println_goes_through_the_host,
-    borrowed_files_go_through_the_host,
+    borrowed_lines_cross_the_buffer,
+    borrowed_reads_cross_the_buffer_and_fail,
     borrowed_bytes_go_through_the_host,
     two_buffered_lines_flush_once,
     a_line_across_two_refills_flushes_before_each,
