@@ -506,3 +506,34 @@ fn timeout_runs_the_body_in_the_calling_task() {
         assert_eq!((s.tasks, s.parks, s.timers, s.cancels), counts, "{src}");
     }
 }
+
+/// `race` は腕のタスクを2つ始め、勝ちを `claim_scope` の1行で決める。数え方は docs/spec/stdlib.md の「時間」のとおり。
+#[test]
+fn race_decides_the_winner_in_one_claim() {
+    let programs = [
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.race (fn () ->\n  Async.sleep_ms 30\n  1) (fn () ->\n  Async.sleep_ms 60\n  2))))\n",
+            "Left 1\n",
+            (3, 5, 2, 1, 0),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.try_all (fn () -> Async.race (fn () ->\n  Async.sleep_ms 30\n  let x : Int = panic \"a\"\n  x) (fn () ->\n  match try_io (fn () -> Async.sleep_ms 60) with\n    | Ok () -> 2\n    | Err _ -> panic \"b\")))))\n",
+            "Err (Panicked \"a\")\n",
+            (3, 5, 2, 1, 1),
+        ),
+    ];
+    for (src, out, counts) in programs {
+        let program = lir(src);
+        let config = RunConfig::default()
+            .with_debug_heap(true)
+            .with_sched(Sched::Sequential);
+        let (got, result) = execute(&program, &config);
+        let s = result.expect("the checked run");
+        assert_eq!(got, out, "{src}");
+        assert_eq!(
+            (s.tasks, s.parks, s.timers, s.cancels, s.dropped_failures),
+            counts,
+            "{src}"
+        );
+    }
+}

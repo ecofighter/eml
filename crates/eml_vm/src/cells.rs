@@ -1015,6 +1015,20 @@ impl Registry {
         Ok(())
     }
 
+    /// `race` の勝ちを決める。呼んだタスクのビットか今のスコープの旗が立っていれば、取り消しが届いたものとして数えて偽を
+    /// 返す。そうでなければ、同じ呼び出しの中で `s` に旗を立てて真を返す。`shield` は見ない
+    /// (docs/spec/vm.md の「命令」)。
+    pub(crate) fn claim_scope(&mut self, s: i64, me: CellRef) -> Result<bool, CellFault> {
+        let task = self.task_mut(me)?;
+        let (bit, current) = (task.cancel, task.current);
+        if bit || self.scope_mut(current)?.flag {
+            self.stats.cancels += 1;
+            return Ok(false);
+        }
+        self.cancel_scope(s)?;
+        Ok(true)
+    }
+
     /// `scope` の本体の失敗を記録し、子をすべて取り消す。種類 `Cancelled` は記録しない。
     pub(crate) fn fail_scope(&mut self, s: i64, failure: Outcome) -> Result<(), CellFault> {
         let cell = self

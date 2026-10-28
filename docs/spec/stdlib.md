@@ -932,6 +932,7 @@ main () = println (show (Async.run body))
 | `yield_now` | `Unit -> <IO, Async> Unit` | eml |
 | `sleep_ms` | `Int -> <IO, Async> Unit` | eml |
 | `timeout` | `Int -> (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> Option a` | eml |
+| `race` | `(Unit -> <IO, Panic, Async> a) -> (Unit -> <IO, Panic, Async> b) -> <IO, Panic, Async> Either a b` | eml |
 | `check_cancelled` | `Unit -> <IO, Async> Unit` | eml |
 | `cancel_requested` | `Unit -> <IO> Bool` | eml |
 | `cancel` | `Task a -> <IO> Unit` | eml |
@@ -978,7 +979,7 @@ pub data Failure =
 - `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Scope` は `Cell` と同じ形の即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
 - ランタイムが名前で呼ぶ入口は、std の2つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どちらも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に、`await_time` の節は継続を `park_time` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。2つの入口が単相の std の関数であることもテストで確かめる
 - タスクの底 (`bottom`) は、`try_all` で本体の失敗を捕まえ、成功した結果を `finish_ok` に、IO の失敗を種類と文言のまま `finish_io` に、`Panic` を文言のまま `finish_panic` に渡す
-- extern の行は次の24行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の25行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 預かる引数 |
 |---|---|---|
@@ -1006,6 +1007,7 @@ pub data Failure =
 | `shield_leave` | `Unit -> <IO> Unit` | なし |
 | `cancel_point` | `Unit -> <IO> Bool` | なし |
 | `spend_budget` | `Unit -> <IO> Bool` | なし |
+| `claim_scope` | `Scope -> <IO> Bool` | なし |
 
 - タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
 - `take_result` と `run_result` が返す値の型が、`finish_ok` に預けた値の型と合うことは、処理系は確かめない。生の行を `pub` にせず、`start`、`start_in`、`run`、`await` のシグネチャだけが本体の結果の型 `a` とハンドルの `Task a` を結ぶことで、標準ライブラリが保つ
@@ -1043,7 +1045,7 @@ body () =
 - `Cancelled` が `await`、`run`、`scope` から出ると、呼んだタスクの普通の IO の失敗になる。`scope` を囲む `try_io` で捕まえれば、旗だけで取り消されていたタスクは続けて動ける。捕まえない `Cancelled` は実行時エラー `task was cancelled` になる
 - `await t` で待つ側が取り消されたときは、`t` も取り消す
 - `shield f` の中の取り消しの地点は、タスクのビットと、`shield` の外で開いたスコープの旗を見ない。`shield` の中の待ちは外の取り消しで外れない
-- `shield` に入ってからタスクが最初に開くスコープ (`scope` のスコープ、`timeout` の子のスコープ、入れ子の `run` の根) は境目である。境目は開くときに親の旗もタスクのビットも写さず、外からの印付けは境目で止まる。境目の内側で開くスコープは親の旗を写すが、タスクのビットは写さない
+- `shield` に入ってからタスクが最初に開くスコープ (`scope` のスコープ、`timeout` と `race` の子のスコープ、入れ子の `run` の根) は境目である。境目は開くときに親の旗もタスクのビットも写さず、外からの印付けは境目で止まる。境目の内側で開くスコープは親の旗を写すが、タスクのビットは写さない
 - 境目とその内側のスコープの旗は、`shield` の中でも、その中の取り消しの地点に届く。取り消しの地点はいちばん内側の `shield` の中で開いたスコープの旗だけを見るので、さらに内側の `shield` の中では届かない
 - 守るのはスコープである。`shield` の中から外のスコープに加えたタスクは、外の取り消しを受ける。外のタスクが境目に `start_in` で加えたタスクは受けない
 - `shield` を出た後の最初の取り消しの地点が、外の取り消しで投げる
@@ -1078,6 +1080,12 @@ body () =
 | ほかの失敗 | どれでも | どれでも | 起こし直す。スコープの失敗にならない |
 
 - 本体の失敗は呼んだタスクの失敗として出るので、`timeout` を囲む `try_all` が捕まえる
+- `race f g` は子のスコープ `p` に腕のタスクを2つ始め、`shield` の中で両方の終わりを待つ。腕は `scope (fn _ -> f ())` を動かした後、値を返したときにまだ取り消されていなければ `p` に旗を立てて勝つ。旗が立つと、もう一方の腕とその腕が始めたタスクが取り消される。勝った側が `Left x` か `Right y` で、負けた側の値は巻き戻しが落とすので、`Lin` の値も漏れない。どちらの腕も `RunStats.tasks` に1つ数える
+- 勝ちは1つの行 `claim_scope s` で決める。呼んだタスクのビットと今のスコープの旗を読み、どちらも立っていなければ、同じ行で `s` に旗を立てて真を返す。立っていれば取り消しが届いたものとして `RunStats.cancels` に数え、偽を返す。確かめることと旗を立てることが1つの行なので、横取りがどこに入っても、勝つのは1つである。`claim_scope` は `shield` の中のビットと旗の区別を見ない
+- 同時に終わる2つの腕のどちらが勝つかは、スケジュールで決まる。テストの出力には、どちらが勝つかが両方ありうる形を出さない
+- 腕の失敗 (種類 `Cancelled` を除く) は `p` の最初の失敗になり、もう一方を取り消す。勝った側があっても `race` から起こし直す。後の失敗は報告せず、`RunStats.dropped_failures` に数える
+- 種類 `Cancelled` で終わった腕は勝たず、もう一方も取り消さない。両方がそう終われば、`f` の失敗を起こし直す
+- 呼んだタスクが `p` を離れる前に取り消されたときは、`Cancelled` を起こし直す。`race` 自身は取り消しの地点でない。`shield` の中の `race` には外の取り消しが届かない。`race` の子のスコープが境目になるためである (上の「取り消し」)
 - `shield` の中の `timeout` には、外の取り消しが届かず、期限は届く。`timeout` の子のスコープが境目になるためである (上の「取り消し」)。本体の中でさらに `shield` を開けば、その中には期限が届かない
 
 ### `Failure` と `try_all`

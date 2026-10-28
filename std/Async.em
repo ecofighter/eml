@@ -177,6 +177,28 @@ expired timer = match timer with
     | Ok () -> True
     | Err _ -> False
 
+-- 2つの本体を子のスコープのタスクで競わせ、shield の中で両方の終わりを待つ。本体の失敗はスコープの最初の失敗
+-- として `wait_closed` が起こし直す (docs/spec/stdlib.md の「時間」)
+pub race : (Unit -> <IO, Panic, Async> a) -> (Unit -> <IO, Panic, Async> b) -> <IO, Panic, Async> Either a b
+race f g =
+  let s = open_scope ()
+  let ta = start_in s (arm s f)
+  let tb = start_in s (arm s g)
+  wait_closed s
+  match try_all (fn () -> take_result ta) with
+    | Ok x ->
+      drop tb
+      Left x
+    | Err e -> match try_all (fn () -> take_result tb) with
+      | Ok y -> Right y
+      | Err _ -> reraise e
+
+-- 値を返したときにまだ取り消されていなければ、勝って旗を立てる。負けた側の値は巻き戻しが落とす
+arm : Scope -> (Unit -> <IO, Panic, Async> a) -> Unit -> <IO, Panic, Async> a
+arm s f () =
+  let x = scope (fn _ -> f ())
+  if claim_scope s then x else raise_cancelled ()
+
 cancelled : Failure -> Bool
 cancelled e = match e with
   | IOFailed (IOError { kind = k, message = _ }) -> k == Prelude.Cancelled
@@ -238,3 +260,4 @@ extern shield_leave     : Unit -> <IO> Unit
 extern cancel_point     : Unit -> <IO> Bool
 extern spend_budget     : Unit -> <IO> Bool
 extern park_time        : Int -> (once Wake -> <IO> Unit) -> <IO> Unit
+extern claim_scope      : Scope -> <IO> Bool

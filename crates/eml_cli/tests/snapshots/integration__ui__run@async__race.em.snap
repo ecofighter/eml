@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/race.em
+---
+--- stdout ---
+Right 2
+Left 1
+array 9
+loser: Cancelled
+Right "winner"
+shielded: Left "cleanup"
+bit first: Left "cleanup"
+after the shield: Cancelled
+--- stderr ---

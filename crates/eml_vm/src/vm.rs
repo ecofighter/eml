@@ -1833,6 +1833,11 @@ fn async_op<R: Exec>(
             let b = sched.cells.spend_budget(me)?;
             task.set_raw(dst, i64::from(b));
         }
+        Extern::AsyncClaimScope => {
+            let me = current_cell(task)?;
+            let won = sched.cells.claim_scope(task.raw(arg(0)), me)?;
+            task.set_raw(dst, i64::from(won));
+        }
         Extern::AsyncShieldEnter => {
             let me = current_cell(task)?;
             sched.cells.shield_enter(me)?;
@@ -2707,7 +2712,8 @@ fn run_extern<R: Exec>(
             | Extern::AsyncFailScopeIo
             | Extern::AsyncFailScopePanic
             | Extern::AsyncCancelPoint
-            | Extern::AsyncSpendBudget => {
+            | Extern::AsyncSpendBudget
+            | Extern::AsyncClaimScope => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }
