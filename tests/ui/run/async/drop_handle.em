@@ -1,5 +1,5 @@
--- `drop` はハンドルを放すだけでタスクを取り消さない。落としたタスクの `Lin` の結果は終わったときに放し、検査モードで
--- 漏れが出ない (docs/spec/stdlib.md の「`Std.Async`」)。
+-- `drop` で落としても、取り消しの地点を通らないタスクは最後まで動く。落としたタスクの `Lin` の結果は終わったときに
+-- 放し、検査モードで漏れが出ない (docs/spec/stdlib.md の「取り消し」)。
 import Async (Async)
 import MutArray
 

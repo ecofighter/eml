@@ -1,0 +1,7 @@
+# 前の入力の run が返した `Scope` は閉じたスコープとして扱う。`cancel_scope` は何もせず、`spawn_in` は、同じ添字に
+# 次の run が開いたスコープがあっても、Panic を起こす (docs/spec/stdlib.md の「スコープ」)
+> import Async
+> let s = Async.run (fn () -> Async.scope (fn s -> s))
+> Async.run (fn () -> Async.cancel_scope s)
+> Async.run (fn () -> Async.scope (fn t -> Async.spawn_in s (fn () -> println "unreachable")))
+> println "next"

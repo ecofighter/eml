@@ -5,10 +5,20 @@
 //! セルが持つ語は数えた参照で、VM が1回入れて1回出す。`Registry` はヒープに触れる `Drop` を持たないので、誤りで終わった
 //! run と捨てた run では、`Scheduler` と一緒に触れずに捨てる。
 //!
-//! 不変条件: タスクのセルが `scope` を読むのは `start` と `finish` だけで、`Finished` の後は読まない。スコープのセルを
-//! 放すのは `live == 0` のとき (`Take::Run` は根の待ちが `closed` で起きた後、`sweep_all` は run の終わり) だけである。
+//! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、`wake` が `wait` で確かめる。`k.is_some()` と
+//! `wait == Some(Cell(_))` は同値である (`Ready` の継続は列に積んだ仕事が持つ)。タスクの今のスコープ `current` から
+//! 親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
+//! `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed` の
+//! スコープは `closing` で、`members` が空である。スコープのセルを放すのは、閉じた後の `release_scope`
+//! (`Take::Run` は根の待ちが `closed` で起きた後に、`leave_scope` は今のスコープを親に戻した後に呼ぶ) と、run の終わりの
+//! `sweep_all` だけである。
 //! タスクのセルを放すのは、ハンドルを持つ側の `take`、自分のハンドルを落とした知らせの処理、`sweep_all` の3つだけで、
 //! 待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。
+//!
+//! 取り消しは、印を付ける `mark` と受け箱の処理 `drain` が待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
+//! 仕事をほかのタスクのために作るのは `drain` だけである。`cancel` と `flag` はどのタスクの操作からも書く。`current` と
+//! `run` は持ち主だけが書き、印を付ける操作が読む。タスクのセルの残りは、そのタスクを動かすか受け箱を処理する持ち主だけが
+//! 読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -16,6 +26,12 @@ use eml_rt::{Control, Ctx, Fault, HeapError, Mode, Word};
 
 /// 再開するタスクに渡す `Std.Async.Wake` の `Woke` のタグ (docs/spec/stdlib.md の「`Std.Async`」)。
 pub(crate) const WOKE: i64 = 0;
+/// `Cancelled` のタグ。
+pub(crate) const CANCELLED: i64 = 1;
+/// `IOErrorKind` の `Cancelled` のタグ。この種類で終わったタスクは失敗に数えない。
+pub(crate) const IO_CANCELLED: i64 = 5;
+/// 待たずに済む速い道の予算 (docs/spec/stdlib.md の「操作の予算」)。
+const BUDGET: u32 = 128;
 
 /// 登録表のセルの番号。添字を使い回すので、generation で古い番号を見分ける。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,9 +69,9 @@ pub(crate) enum Runnable {
 }
 
 /// セルが終わるか閉じるのを待つもの。
-pub(crate) enum Waiter {
-    /// 継続だけになって待つタスク。`task` は待った側のセルで、`k` はセルが参照を1つ持つ。
-    Cont { task: CellRef, k: Word },
+enum Waiter {
+    /// 継続だけになって待つタスク。継続は待つタスクのセルが持つ。
+    Task(CellRef),
     /// スタックを持ったまま待つもの。`Async.run` を呼んだ VM の `Task` である。
     Token(WaitToken),
 }
@@ -77,6 +93,7 @@ impl Outcome {
     fn failure(&self) -> Option<Outcome> {
         match self {
             Outcome::Value(_) => None,
+            Outcome::Io { kind, .. } if *kind == IO_CANCELLED => None,
             Outcome::Io { kind, message } => Some(Outcome::Io {
                 kind: *kind,
                 message: message.clone(),
@@ -130,25 +147,61 @@ enum Phase {
     Finished,
 }
 
+/// 待ちの登録。
+enum Wait {
+    Cell(CellRef),
+    Ready,
+}
+
 struct TaskCell {
     phase: Phase,
     outcome: Option<Outcome>,
+    /// 加わったスコープ。作るときに決まり、`members` の一覧と失敗の記録の先になる。
     scope: CellRef,
     /// タスクの論理的な worker ID。速いモードでは 0 である。
     worker: u32,
     /// 始めたタスクの論理的な ID。始めるときの `transfer_back` に使う。
     spawner: u32,
+    /// スコープの属するタスクの一覧の中の位置。
+    member_at: u32,
     waiters: Vec<Waiter>,
-    handle_dropped: bool,
+    /// 待っている間の継続。セルが参照を1つ持つ。
+    k: Option<Word>,
+    /// タスクが `scope` で開いたいちばん内側のスコープ。開いていなければ `scope` である。
+    current: CellRef,
+    wait: Option<Wait>,
+    cancel: bool,
+    /// `shield` の深さ。std にはタスクごとの動的な値を持つ仕組みがなく (タスクは閉じた row で始まり、`var` を
+    /// 捕まえられない)、VM の `Task` は起きるたびに作り直すので、タスクのセルに持つ。
+    shield: u32,
+    /// 速い道の残りの予算。始めるときと再開するときに戻す。
+    budget: u32,
+    /// 入れ子の `run` で待っている根。
+    run: Option<CellRef>,
+    detached: bool,
 }
 
 struct ScopeCell {
-    /// まだ終わっていないタスクの数。
-    live: u32,
+    parent: Option<CellRef>,
+    opener: Option<CellRef>,
+    flag: bool,
+    /// 閉じる印。根は開くときから立つ。
+    closing: bool,
+    /// 親の入れ子の一覧の中の位置。
+    nested_at: u32,
+    /// まだ終わっていないタスク。
+    members: Vec<CellRef>,
+    nested: Vec<CellRef>,
     /// 終わった順で最初の失敗。
     first_failure: Option<Outcome>,
     waiters: Vec<Waiter>,
     closed: bool,
+}
+
+/// 印を付ける作業の項。
+enum Mark {
+    Task(CellRef),
+    Scope(CellRef),
 }
 
 enum CellKind {
@@ -156,9 +209,10 @@ enum CellKind {
     Scope(ScopeCell),
 }
 
-/// ハンドルの `Drop` が積み、核が受け箱の処理で読む知らせ。
+/// 受け箱の知らせ。落ちたハンドルの知らせはハンドルの `Drop` が、取り消しの知らせは `mark` が積む。
 pub(crate) enum Notice {
     HandleDropped(CellRef),
+    Cancel(CellRef),
 }
 
 /// ほかの worker やハンドルの破棄処理が核へ知らせる受け箱。
@@ -208,21 +262,27 @@ pub(crate) struct TaskStats {
     pub(crate) parks: u64,
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
+    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、受け箱の処理が外した待ち、取り消しで再開する
+    /// `yield_now`、真を返した `cancel_point` を数える (docs/spec/vm.md の「`RunStats`」)。
+    pub(crate) cancels: u64,
 }
 
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
 pub(crate) struct Registry {
     slots: Vec<(u32, Option<CellKind>)>,
     free: Vec<u32>,
+    /// 新しい添字の最初の generation。前の run の `Scope` の値がこの run のセルを指さないようにする。
+    floor: u32,
     pub(crate) inbox: Arc<Inbox>,
     pub(crate) stats: TaskStats,
 }
 
-impl Default for Registry {
-    fn default() -> Registry {
+impl Registry {
+    pub(crate) fn new(floor: u32) -> Registry {
         Registry {
             slots: Vec::new(),
             free: Vec::new(),
+            floor,
             inbox: Arc::new(Inbox::default()),
             stats: TaskStats::default(),
         }
@@ -234,7 +294,7 @@ impl Registry {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
-                self.slots.push((0, None));
+                self.slots.push((self.floor, None));
                 u32::try_from(self.slots.len() - 1).expect("the cells fit in u32 positions")
             }
         };
@@ -255,9 +315,14 @@ impl Registry {
     }
 
     fn cell_mut(&mut self, cell: CellRef) -> Result<&mut CellKind, CellFault> {
+        self.live(cell)
+            .ok_or(CellFault::Internal("a cell reference names a freed cell"))
+    }
+
+    fn live(&mut self, cell: CellRef) -> Option<&mut CellKind> {
         match self.slots.get_mut(cell.index as usize) {
-            Some((generation, Some(kind))) if *generation == cell.generation => Ok(kind),
-            _ => Err(CellFault::Internal("a cell reference names a freed cell")),
+            Some((generation, Some(kind))) if *generation == cell.generation => Some(kind),
+            _ => None,
         }
     }
 
@@ -280,9 +345,17 @@ impl Registry {
         Ok(self.task_mut(cell)?.worker)
     }
 
-    /// タスクが新しいタスクを加えるスコープ。
-    pub(crate) fn scope_of(&mut self, cell: CellRef) -> Result<CellRef, CellFault> {
-        Ok(self.task_mut(cell)?.scope)
+    /// 次の run の `floor`。この run が出したどの generation よりも大きい。`slots` は run の間に縮まない。
+    pub(crate) fn next_floor(&self) -> u32 {
+        self.slots
+            .iter()
+            .map(|(generation, _)| generation.wrapping_add(1))
+            .fold(self.floor, u32::max)
+    }
+
+    /// タスクが新しいタスクを加える今のスコープ。
+    pub(crate) fn current_of(&mut self, cell: CellRef) -> Result<CellRef, CellFault> {
+        Ok(self.task_mut(cell)?.current)
     }
 
     /// スコープが閉じているか。
@@ -290,14 +363,64 @@ impl Registry {
         Ok(self.scope_mut(scope)?.closed)
     }
 
-    /// 根のスコープを開く。
-    pub(crate) fn open_root(&mut self) -> CellRef {
-        self.alloc(CellKind::Scope(ScopeCell {
-            live: 0,
+    /// スコープのセルを開いて親の一覧に積む。旗は呼ぶ側が載せた後に `inherit_flag` で写す。
+    fn new_scope(
+        &mut self,
+        parent: Option<CellRef>,
+        opener: Option<CellRef>,
+        closing: bool,
+    ) -> Result<CellRef, CellFault> {
+        let nested_at = match parent {
+            Some(p) => self.scope_mut(p)?.nested.len() as u32,
+            None => 0,
+        };
+        let s = self.alloc(CellKind::Scope(ScopeCell {
+            parent,
+            opener,
+            flag: false,
+            closing,
+            nested_at,
+            members: Vec::new(),
+            nested: Vec::new(),
             first_failure: None,
             waiters: Vec::new(),
             closed: false,
-        }))
+        }));
+        if let Some(p) = parent {
+            self.scope_mut(p)?.nested.push(s);
+        }
+        Ok(s)
+    }
+
+    /// 親の旗と開いたタスクのビットを新しいスコープに写す。一覧と `current` (根なら `run`) に載せた後に呼ぶ。
+    /// 印を付ける側はビットと旗を立ててから一覧と `current` を読むので、どちらが先でも新しいスコープは旗を得る
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
+    fn inherit_flag(&mut self, s: CellRef) -> Result<(), CellFault> {
+        let scope = self.scope_mut(s)?;
+        let (parent, opener) = (scope.parent, scope.opener);
+        let mut flag = match parent {
+            Some(p) => self.scope_mut(p)?.flag,
+            None => false,
+        };
+        if let Some(o) = opener {
+            flag |= self.task_mut(o)?.cancel;
+        }
+        self.scope_mut(s)?.flag = flag;
+        Ok(())
+    }
+
+    /// 根のスコープを開く。入れ子の `run` の根は呼んだタスク `caller` を開いたタスクとして持つ。
+    pub(crate) fn open_root(
+        &mut self,
+        parent: Option<CellRef>,
+        caller: Option<CellRef>,
+    ) -> Result<CellRef, CellFault> {
+        let s = self.new_scope(parent, caller, true)?;
+        if let Some(c) = caller {
+            self.task_mut(c)?.run = Some(s);
+        }
+        self.inherit_flag(s)?;
+        Ok(s)
     }
 
     /// スコープ `scope` に新しいタスクを置き、ハンドルと始める仕事を返す。`spawner` は呼んだタスクの論理的な ID で、
@@ -310,10 +433,12 @@ impl Registry {
         spawner: u32,
         g: Word,
         roots: &[Word],
-    ) -> Result<(Word, Runnable), CellFault> {
-        if self.scope_mut(scope)?.closed {
-            return Err(CellFault::Internal("a task starts in a closed scope"));
+    ) -> Result<Option<(Word, Runnable)>, CellFault> {
+        let s = self.scope_mut(scope)?;
+        if s.closed {
+            return Ok(None);
         }
+        let (flag, member_at) = (s.flag, s.members.len() as u32);
         // 印付けは送り手の ID のまま行い、`Ctx` の持つ語には触れない。値から届く evidence は退いたものだけである
         // (docs/spec/object-model.md の「evidence の3つの物体」)
         let heap = unsafe { ctx.heap_mut() };
@@ -328,10 +453,18 @@ impl Registry {
             scope,
             worker,
             spawner,
+            member_at,
             waiters: Vec::new(),
-            handle_dropped: false,
+            k: None,
+            current: scope,
+            wait: None,
+            cancel: flag,
+            shield: 0,
+            budget: BUDGET,
+            run: None,
+            detached: false,
         }));
-        self.scope_mut(scope)?.live += 1;
+        self.scope_mut(scope)?.members.push(cell);
         self.stats.tasks += 1;
         let handle = heap.alloc_foreign(
             TaskHandle {
@@ -341,7 +474,7 @@ impl Registry {
             },
             true,
         );
-        Ok((handle, Runnable::Start { cell, closure: g }))
+        Ok(Some((handle, Runnable::Start { cell, closure: g })))
     }
 
     /// 始める仕事を実行系が動かし始めた。始めたタスクの ID を返す。実行系は、その ID から閉包を `transfer_back` する。
@@ -351,17 +484,38 @@ impl Registry {
             return Err(CellFault::Internal("a task starts twice"));
         }
         task.phase = Phase::Running;
+        task.budget = BUDGET;
         Ok(task.spawner)
     }
 
-    /// 再開する仕事を実行系が動かし始めた。
-    pub(crate) fn resumed(&mut self, cell: CellRef) -> Result<(), CellFault> {
+    /// 再開する仕事を実行系が動かし始めた。渡す `Wake` を返す。実行待ちから再開するタスクが取り消されていれば
+    /// `Cancelled` に替える。
+    pub(crate) fn resumed(&mut self, cell: CellRef, wake: i64) -> Result<i64, CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Parked) {
             return Err(CellFault::Internal("a task resumes without waiting"));
         }
         task.phase = Phase::Running;
-        Ok(())
+        task.budget = BUDGET;
+        let ready = matches!(task.wait.take(), Some(Wait::Ready));
+        if ready && wake == WOKE && self.point(cell)? {
+            self.stats.cancels += 1;
+            return Ok(CANCELLED);
+        }
+        Ok(wake)
+    }
+
+    /// 取り消しの地点の規則。
+    fn point(&mut self, cell: CellRef) -> Result<bool, CellFault> {
+        let task = self.task_mut(cell)?;
+        if task.shield > 0 {
+            return Ok(false);
+        }
+        if task.cancel {
+            return Ok(true);
+        }
+        let current = task.current;
+        Ok(self.scope_mut(current)?.flag)
     }
 
     /// 借りたハンドル `handle` のセルの番号を `Std.Async.Cell` の即値で返す。
@@ -384,6 +538,14 @@ impl Registry {
         };
         self.suspend(me)?;
         self.stats.parks += 1;
+        if self.point(me)? {
+            self.stats.cancels += 1;
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: CANCELLED,
+            }));
+        }
         if done {
             return Ok(Some(Runnable::Resume {
                 cell: me,
@@ -391,11 +553,14 @@ impl Registry {
                 wake: WOKE,
             }));
         }
+        let task = self.task_mut(me)?;
+        task.k = Some(k);
+        task.wait = Some(Wait::Cell(target));
         let waiters = match self.cell_mut(target)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
         };
-        waiters.push(Waiter::Cont { task: me, k });
+        waiters.push(Waiter::Task(me));
         Ok(None)
     }
 
@@ -403,6 +568,7 @@ impl Registry {
     pub(crate) fn ready(&mut self, me: CellRef, k: Word) -> Result<Runnable, CellFault> {
         self.suspend(me)?;
         self.stats.parks += 1;
+        self.task_mut(me)?.wait = Some(Wait::Ready);
         Ok(Runnable::Resume {
             cell: me,
             k,
@@ -419,9 +585,10 @@ impl Registry {
         Ok(())
     }
 
-    /// ハンドルのセル。ハンドルの受け箱が登録表の受け箱と違えば、前の run のハンドルである。添字は run ごとに
-    /// 使い回すので、generation では見分けられない。`Task a` は `Lin` で入力をまたいで残らないので、検査を通った
-    /// プログラムからは届かない (docs/spec/vm.md の「`Async` のタスク」)。
+    /// ハンドルのセル。ハンドルの受け箱が登録表の受け箱と違えば、前の run のハンドルである。ハンドルは落ちたときに
+    /// 知らせを積むために自分の run の受け箱を持つので、それを比べれば generation の一周によらずに run を見分けられる。
+    /// `Task a` は `Lin` で入力をまたいで残らないので、検査を通ったプログラムからは届かない
+    /// (docs/spec/vm.md の「`Async` のタスク」)。
     fn handle_cell<M: Mode>(&self, ctx: &Ctx<M>, handle: Word) -> Result<CellRef, CellFault> {
         // ハンドルは `Task a` の `Foreign` で、呼ぶ側が持つ唯一の参照である (`Task a` は `Lin`)
         let h = unsafe { ctx.heap().foreign_unique::<TaskHandle>(handle) }?;
@@ -458,38 +625,94 @@ impl Registry {
         if !matches!(task.phase, Phase::Running) {
             return Err(CellFault::Internal("a task finishes without running"));
         }
+        let (scope, at, detached) = (task.scope, task.member_at, task.detached);
+        self.remove_member(scope, at)?;
+        let task = self.task_mut(cell)?;
         task.phase = Phase::Finished;
         task.outcome = Some(outcome);
-        // スコープはタスクが終わるまで閉じず、閉じる前には放さないので、この番号はまだ生きている (ファイルの頭の
-        // 不変条件)。`Finished` の後はこの欄を読まない
-        let scope = task.scope;
-        let dropped = task.handle_dropped;
-        out.extend(std::mem::take(&mut task.waiters).into_iter().map(wake));
-        debug_assert_eq!(
-            self.slots[scope.index as usize].0, scope.generation,
-            "a task finishes in a freed scope"
-        );
-        let scope = self.scope_mut(scope)?;
-        // スコープへ戻るのは最初の失敗だけで、後の失敗は数だけ残る
-        let mut dropped_failure = false;
+        for waiter in std::mem::take(&mut task.waiters) {
+            self.wake(waiter, cell, out)?;
+        }
         if let Some(failure) = failure {
-            if scope.first_failure.is_none() {
-                scope.first_failure = Some(failure);
+            let s = self.scope_mut(scope)?;
+            if s.first_failure.is_none() {
+                s.first_failure = Some(failure);
             } else {
-                dropped_failure = true;
+                self.stats.dropped_failures += 1;
+            }
+            self.mark(Mark::Scope(scope))?;
+        }
+        let s = self.scope_mut(scope)?;
+        if s.closing && s.members.is_empty() {
+            s.closed = true;
+            for waiter in std::mem::take(&mut s.waiters) {
+                self.wake(waiter, scope, out)?;
             }
         }
-        scope.live = scope.live.checked_sub(1).ok_or(CellFault::Internal(
-            "a scope ends more tasks than it started",
-        ))?;
-        if scope.live == 0 {
-            scope.closed = true;
-            out.extend(std::mem::take(&mut scope.waiters).into_iter().map(wake));
-        }
-        self.stats.dropped_failures += u64::from(dropped_failure);
-        if dropped {
+        if detached {
             self.free_task(ctx, cell, depth_offset)?;
         }
+        Ok(())
+    }
+
+    /// 起こす待ち手。継続で待つタスクは、セルの継続を取り出して再開する。
+    /// `from` が終わるか閉じたときの起こし。取り消しで外した待ちの項は待ち手に残るので、タスクが今も `from` を
+    /// 待っているときだけ起こす。
+    fn wake(
+        &mut self,
+        waiter: Waiter,
+        from: CellRef,
+        out: &mut Vec<Runnable>,
+    ) -> Result<(), CellFault> {
+        match waiter {
+            Waiter::Task(t) => {
+                if let Some(CellKind::Task(task)) = self.live(t)
+                    && matches!(task.wait, Some(Wait::Cell(c)) if c == from)
+                {
+                    task.wait = None;
+                    let k = task
+                        .k
+                        .take()
+                        .ok_or(CellFault::Internal("a parked task has no continuation"))?;
+                    out.push(Runnable::Resume {
+                        cell: t,
+                        k,
+                        wake: WOKE,
+                    });
+                }
+            }
+            Waiter::Token(token) => out.push(Runnable::Token(token)),
+        }
+        Ok(())
+    }
+
+    fn remove_member(&mut self, scope: CellRef, at: u32) -> Result<(), CellFault> {
+        let s = self.scope_mut(scope)?;
+        s.members.swap_remove(at as usize);
+        if let Some(&moved) = s.members.get(at as usize) {
+            self.task_mut(moved)?.member_at = at;
+        }
+        Ok(())
+    }
+
+    /// 閉じたスコープのセルを、親の一覧から外してから放す。
+    fn release_scope(&mut self, s: CellRef) -> Result<(), CellFault> {
+        let scope = self.scope_mut(s)?;
+        let (parent, at, opener) = (scope.parent, scope.nested_at, scope.opener);
+        if let Some(o) = opener {
+            let task = self.task_mut(o)?;
+            if task.run == Some(s) {
+                task.run = None;
+            }
+        }
+        if let Some(p) = parent {
+            let p = self.scope_mut(p)?;
+            p.nested.swap_remove(at as usize);
+            if let Some(&moved) = p.nested.get(at as usize) {
+                self.scope_mut(moved)?.nested_at = at;
+            }
+        }
+        self.release(s.index);
         Ok(())
     }
 
@@ -519,7 +742,7 @@ impl Registry {
                 return Err(CellFault::Internal("a run ends before its scope closes"));
             }
             raised = root.first_failure.take();
-            self.release(scope.index);
+            self.release_scope(scope)?;
         }
         let result = match (raised, outcome) {
             (Some(failure), outcome) => {
@@ -537,33 +760,247 @@ impl Registry {
         };
         // ハンドルの参照は呼ぶ側から移ってきたもので、ここで手放す。受け取った印を先に付けるので、破棄処理は
         // 知らせを積まない
-        unsafe {
-            (*ctx.heap().foreign_unique::<TaskHandle>(handle)?).taken = true;
-            ctx.heap_mut().decref(handle)?;
-        }
+        self.give_up(ctx, handle)?;
         self.free_task(ctx, cell, depth_offset)?;
         Ok(result)
     }
 
-    /// 受け箱の知らせを処理する。lock の下では取り出すだけにする。
-    pub(crate) fn drain<M: Mode>(
+    /// ハンドルに受け取った印を付けて手放す。印があるので破棄処理は知らせを積まない。
+    fn give_up<M: Mode>(&mut self, ctx: &mut Ctx<M>, handle: Word) -> Result<(), CellFault> {
+        unsafe {
+            (*ctx.heap().foreign_unique::<TaskHandle>(handle)?).taken = true;
+            ctx.heap_mut().decref(handle)?;
+        }
+        Ok(())
+    }
+
+    /// `detach` と `cancel_raw`。ハンドルを手放し、終わったタスクのセルを放すか、持ち手のないタスクにする。
+    pub(crate) fn detach<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
+        handle: Word,
+        cancel: bool,
         depth_offset: usize,
     ) -> Result<(), CellFault> {
-        for notice in self.inbox.take() {
-            match notice {
-                Notice::HandleDropped(cell) => {
-                    let task = self.task_mut(cell)?;
-                    if matches!(task.phase, Phase::Finished) {
-                        self.free_task(ctx, cell, depth_offset)?;
-                    } else {
-                        task.handle_dropped = true;
+        let cell = self.handle_cell(ctx, handle)?;
+        self.give_up(ctx, handle)?;
+        self.let_go(ctx, cell, cancel, depth_offset)
+    }
+
+    fn let_go<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        cell: CellRef,
+        cancel: bool,
+        depth_offset: usize,
+    ) -> Result<(), CellFault> {
+        let task = self.task_mut(cell)?;
+        if matches!(task.phase, Phase::Finished) {
+            return self.free_task(ctx, cell, depth_offset);
+        }
+        task.detached = true;
+        if cancel {
+            self.mark(Mark::Task(cell))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn shield_enter(&mut self, me: CellRef) -> Result<(), CellFault> {
+        self.task_mut(me)?.shield += 1;
+        Ok(())
+    }
+
+    pub(crate) fn shield_leave(&mut self, me: CellRef) -> Result<(), CellFault> {
+        let task = self.task_mut(me)?;
+        task.shield = task
+            .shield
+            .checked_sub(1)
+            .ok_or(CellFault::Internal("a shield is left without entering"))?;
+        Ok(())
+    }
+
+    /// 取り消しの地点が投げるかを答える。タスクの外では偽である。真の答えは取り消しが届いたものとして数える。
+    pub(crate) fn cancel_point(&mut self, me: Option<CellRef>) -> Result<bool, CellFault> {
+        let Some(me) = me else {
+            return Ok(false);
+        };
+        let point = self.point(me)?;
+        self.stats.cancels += u64::from(point);
+        Ok(point)
+    }
+
+    /// 速い道の予算を1つ使う。使い切ったら真を返し、再開まで真のままである。
+    pub(crate) fn spend_budget(&mut self, me: CellRef) -> Result<bool, CellFault> {
+        let task = self.task_mut(me)?;
+        task.budget = task.budget.saturating_sub(1);
+        Ok(task.budget == 0)
+    }
+
+    /// 生きているスコープのセル。閉じていても返す。離れたスコープと前の run のスコープは `None` である。
+    pub(crate) fn scope_cell(&mut self, s: i64) -> Option<CellRef> {
+        let cell = CellRef::decode(s);
+        match self.live(cell) {
+            Some(CellKind::Scope(_)) => Some(cell),
+            _ => None,
+        }
+    }
+
+    /// `scope` の本体のスコープを開いて、`me` の今のスコープにする。
+    pub(crate) fn open_scope(&mut self, me: CellRef) -> Result<i64, CellFault> {
+        let parent = self.task_mut(me)?.current;
+        let s = self.new_scope(Some(parent), Some(me), false)?;
+        self.task_mut(me)?.current = s;
+        self.inherit_flag(s)?;
+        Ok(s.encode())
+    }
+
+    /// 閉じる印を付け、待つセルの番号を返す。タスクが残っていなければすぐ閉じる。
+    pub(crate) fn close_scope(&mut self, s: i64) -> Result<i64, CellFault> {
+        let cell = self
+            .scope_cell(s)
+            .ok_or(CellFault::Internal("a scope closes after it is left"))?;
+        let scope = self.scope_mut(cell)?;
+        scope.closing = true;
+        if scope.members.is_empty() {
+            scope.closed = true;
+        }
+        Ok(s)
+    }
+
+    /// 閉じたスコープを離れ、今のスコープを親に戻す。最初の失敗を返す。
+    pub(crate) fn leave_scope(&mut self, s: i64, me: CellRef) -> Result<Option<Raise>, CellFault> {
+        let cell = self
+            .scope_cell(s)
+            .ok_or(CellFault::Internal("a scope is left twice"))?;
+        let scope = self.scope_mut(cell)?;
+        if !scope.closed {
+            return Err(CellFault::Internal("a scope is left before it closes"));
+        }
+        let (parent, failure) = (scope.parent, scope.first_failure.take());
+        let task = self.task_mut(me)?;
+        if task.current != cell {
+            return Err(CellFault::Internal("a task leaves a scope it is not in"));
+        }
+        task.current = parent.ok_or(CellFault::Internal("a named scope has no parent"))?;
+        self.release_scope(cell)?;
+        Ok(failure.map(raise))
+    }
+
+    /// `cancel_scope`。閉じたスコープには何もしない。
+    pub(crate) fn cancel_scope(&mut self, s: i64) -> Result<(), CellFault> {
+        if let Some(cell) = self.scope_cell(s)
+            && !self.scope_mut(cell)?.closed
+        {
+            self.mark(Mark::Scope(cell))?;
+        }
+        Ok(())
+    }
+
+    /// `scope` の本体の失敗を記録し、子をすべて取り消す。種類 `Cancelled` は記録しない。
+    pub(crate) fn fail_scope(&mut self, s: i64, failure: Outcome) -> Result<(), CellFault> {
+        let cell = self
+            .scope_cell(s)
+            .ok_or(CellFault::Internal("a scope fails after it is left"))?;
+        if let Some(failure) = failure.failure() {
+            let scope = self.scope_mut(cell)?;
+            if scope.first_failure.is_none() {
+                scope.first_failure = Some(failure);
+            } else {
+                self.stats.dropped_failures += 1;
+            }
+        }
+        self.mark(Mark::Scope(cell))
+    }
+
+    /// 取り消しの印を付ける。ビットと旗を立てて知らせを積むだけで、待ちは外さない。作業の列でたどる。
+    fn mark(&mut self, first: Mark) -> Result<(), CellFault> {
+        let mut work = vec![first];
+        while let Some(m) = work.pop() {
+            match m {
+                Mark::Task(t) => {
+                    let task = self.task_mut(t)?;
+                    if task.cancel {
+                        continue;
+                    }
+                    task.cancel = true;
+                    // 開いているスコープは今のスコープから親へ、このタスクが開いたスコープが続く間である
+                    let (mut s, run, home) = (task.current, task.run, task.scope);
+                    while s != home {
+                        work.push(Mark::Scope(s));
+                        s = self
+                            .scope_mut(s)?
+                            .parent
+                            .ok_or(CellFault::Internal("a named scope has no parent"))?;
+                    }
+                    if let Some(r) = run {
+                        work.push(Mark::Scope(r));
+                    }
+                    self.inbox.push(Notice::Cancel(t));
+                }
+                Mark::Scope(s) => {
+                    let scope = self.scope_mut(s)?;
+                    if scope.flag {
+                        continue;
+                    }
+                    scope.flag = true;
+                    work.extend(scope.members.iter().map(|&m| Mark::Task(m)));
+                    work.extend(scope.nested.iter().map(|&n| Mark::Scope(n)));
+                    // 本体のタスクにはビットを立てず、届けるだけにする。外すかは `unpark` が持ち主の側で規則を確かめて決める
+                    if let Some(o) = scope.opener {
+                        self.inbox.push(Notice::Cancel(o));
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    /// 取り消しの知らせを受けたタスクの待ちを外す。待ち手の項は残し、起こす側が `wait` で見分ける。
+    fn unpark(&mut self, cell: CellRef, out: &mut Vec<Runnable>) -> Result<(), CellFault> {
+        let Some(CellKind::Task(task)) = self.live(cell) else {
+            return Ok(());
+        };
+        if !matches!(task.phase, Phase::Parked) || !matches!(task.wait, Some(Wait::Cell(_))) {
+            return Ok(());
+        }
+        if !self.point(cell)? {
+            return Ok(());
+        }
+        let task = self.task_mut(cell)?;
+        task.wait = None;
+        let k = task
+            .k
+            .take()
+            .ok_or(CellFault::Internal("a parked task has no continuation"))?;
+        self.stats.cancels += 1;
+        out.push(Runnable::Resume {
+            cell,
+            k,
+            wake: CANCELLED,
+        });
+        Ok(())
+    }
+
+    /// 受け箱の知らせを処理し、取り消しで待ちを外したタスクの再開を `out` に積む。処理が新しい知らせを積むので、
+    /// 受け箱が空になるまで繰り返す。
+    pub(crate) fn drain<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        depth_offset: usize,
+        out: &mut Vec<Runnable>,
+    ) -> Result<(), CellFault> {
+        loop {
+            let notices = self.inbox.take();
+            if notices.is_empty() {
+                return Ok(());
+            }
+            for notice in notices {
+                match notice {
+                    Notice::HandleDropped(cell) => self.let_go(ctx, cell, true, depth_offset)?,
+                    Notice::Cancel(cell) => self.unpark(cell, out)?,
+                }
+            }
+        }
     }
 
     /// run の終わりに、残ったセルをすべて放す。その間に積まれた知らせは受け箱ごと捨てる。
@@ -604,18 +1041,6 @@ impl Registry {
         unsafe { ctx.heap_mut() }.retire_worker(worker)?;
         self.release(cell.index);
         Ok(())
-    }
-}
-
-/// 待ち手を起こす仕事にする。継続で待つタスクは、待った側のセルの worker で再開する。
-fn wake(waiter: Waiter) -> Runnable {
-    match waiter {
-        Waiter::Cont { task, k } => Runnable::Resume {
-            cell: task,
-            k,
-            wake: WOKE,
-        },
-        Waiter::Token(token) => Runnable::Token(token),
     }
 }
 

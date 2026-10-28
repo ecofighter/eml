@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/cancel_persists.em
+---
+--- stdout ---
+first: Cancelled: task was cancelled
+second: Cancelled: task was cancelled
+--- stderr ---

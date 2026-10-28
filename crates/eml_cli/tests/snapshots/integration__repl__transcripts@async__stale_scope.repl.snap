@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/async/stale_scope.repl
+---
+> import Async
+> let s = Async.run (fn () -> Async.scope (fn s -> s))
+> Async.run (fn () -> Async.cancel_scope s)
+> Async.run (fn () -> Async.scope (fn t -> Async.spawn_in s (fn () -> println "unreachable")))
+runtime error: panicked: the scope is closed
+  at <std>/Async.em:54:9
+> println "next"
+next
+--- close ---
+no leaks

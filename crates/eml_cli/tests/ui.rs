@@ -287,7 +287,8 @@ fn assert_seeds_agree(
     let compare_stats = !(suffix.starts_with("async/") && matches!(checked.result, Ok(Some(_))));
     for seed in SEEDS {
         let ran = execute_in(program, path, root, true, Sched::Seeded(seed));
-        assert_agrees(suffix, &seeded_label(seed), &ran, checked, compare_stats);
+        let compare = compare_stats && compares_stats(checked, &ran);
+        assert_agrees(suffix, &seeded_label(seed), &ran, checked, compare);
         if let Some(finished) = ran.finished {
             assert!(
                 finished.preemptions > 0,
@@ -295,6 +296,39 @@ fn assert_seeds_agree(
             );
         }
     }
+}
+
+/// 取り消しの届いた run は `RunStats` を比べない。届いた時点で、それぞれのタスクがした仕事が変わる
+/// (docs/implementation/testing.md の「seed で流す」)。
+fn compares_stats(checked: &Ran, other: &Ran) -> bool {
+    let quiet = |ran: &Ran| ran.finished.is_none_or(|f| f.stats.cancels == 0);
+    quiet(checked) && quiet(other)
+}
+
+#[test]
+fn stats_are_compared_only_without_cancellations() {
+    let ran = |cancels: Option<u64>| {
+        let finished = cancels.map(|cancels| {
+            let mut stats = eml_cli::RunStats::default();
+            stats.cancels = cancels;
+            Finished {
+                stats,
+                exit: None,
+                preemptions: 1,
+            }
+        });
+        Ran {
+            stdout: String::new(),
+            stderr: String::new(),
+            written: String::new(),
+            result: Ok(None),
+            finished,
+        }
+    };
+    assert!(compares_stats(&ran(Some(0)), &ran(Some(0))));
+    assert!(!compares_stats(&ran(Some(1)), &ran(Some(0))));
+    assert!(!compares_stats(&ran(Some(0)), &ran(Some(1))));
+    assert!(compares_stats(&ran(None), &ran(None)));
 }
 
 /// 速いモードも同じ誤りを報告するか。漏れ、内部の誤り、ヒープの誤りは検査モードだけが見つける。これらは VM 自身の

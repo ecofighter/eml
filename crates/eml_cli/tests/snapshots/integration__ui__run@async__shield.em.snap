@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 329
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/shield.em
+---
+--- stdout ---
+shielded 7
+after shield: Cancelled: task was cancelled
+--- stderr ---
