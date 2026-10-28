@@ -349,11 +349,18 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ## `eml_io` の内部
 
-- `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、単調な時計 (`Instant`) で読み、1回の `wait` で眠る長さの上限 `IDLE_TICK` を持つ。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、メモリの上の `pair` の端、seed で混ぜる決着の順を持つ ([VM](../spec/vm.md) の「時計と driver」)
+- `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、compio-driver の `Proactor` をそのまま持ち (「外部 crate」)、単調な時計 (`Instant`) で読み、1回の `wait` で眠る長さの上限 `IDLE_TICK` を持つ。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、メモリの上の `pair` の端、seed で混ぜる決着の順を持つ ([VM](../spec/vm.md) の「時計と driver」)
 - driver は `Word`、`Ctx`、RC に触れず、記憶には `RawBuf` を通してだけ届く。そのため `eml_io` は `eml_vm` を知らずに組み立てられる。どちらの driver を使うかは `eml_vm` の `Clock` が決める
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
 - driver は作ったスレッドの上でだけ使う。`eml_io` は driver の型に `unsafe impl Send` を書かない
-- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計と、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと) を確かめる
+- `RealDriver` の作り
+  - 出した操作は、操作の種類ごとの compio の鍵 (`Key`) として表に持つ。unix の `Readable` は `PollOnce` で読めるようになるのを待ち、Windows の `Readable` は長さ0の `Recv` である。`Read` は `Recv`、`Write` は `Send`、仕事は `Asyncify` で、プールのスレッドは32本までである。`buffer_pool` は使わない
+  - `RawBuf` は別の crate の型なので、`real.rs` の包み `Mem` が compio の `IoBuf`、`IoBufMut`、`SetLen` を実装する。`cap == 0` は空の slice である。`eml_io` の本物の driver の `unsafe` は、この包みが `RawBuf` から slice を作る所だけである
+  - polling の backend は `push` の中でまず読み書きを試すので、`push` が `Ready` を返すことがある。その結果も次の `completions` で返す完了として持つ。そのため、`pair` の端はブロックしない unix のソケットである
+  - `completions` は、保留の操作があれば待たずに `poll` してから、すべての鍵を `pop` し、終わったものを受け付けの順に返す。取り消しは鍵を残したまま `register_cancel` と `cancel_token` で行い、取り消された操作の完了も `pop` で受ける
+  - `wait` は、期限までの長さと `IDLE_TICK` の短い方だけ `poll` する。`poll` の `Ok`、時間切れ、割り込みは戻っただけと読む (polling の backend は、起こされたときも時間切れを返す)。ほかの誤りで driver は壊れた状態になり、以後の `wait` は `Err` を返し、`completions` は新しい完了を返さない。保留の操作の buffer は貸したまま残る
+  - `quiesce` は、仕事のほかの保留の操作をすべて取り消し、仕事も含めてすべての完了が届くまで `poll` して捨てる。壊れた driver では待てないので、保留を残して戻る
+- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こし、プールの仕事とその上限、unix の `pair` の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、Windows の `pair` が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと) を確かめる
 
 ## ソースファイルと位置
 
@@ -394,7 +401,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 | crate | バージョン | 用途 |
 |---|---|---|
-| `rowan` | 0.16 | CST |
+| `rowan` | 0.17 | CST |
 | `logos` | 0.16 | lexer |
 | `text-size` | 1.1 | `TextRange` |
 | `ariadne` | 0.6 | 診断の表示 |
@@ -404,4 +411,12 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `rustc-hash` | 2.1 | コンパイラの段階 (`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm`) のハッシュ表 (`FxHashMap`、`FxHashSet`)。鍵は処理系の中の ID、型、名前で、入力は利用者自身のプログラムなので、衝突を狙った入力への耐性より速さを選ぶ。表の順に出力が依存しないので、std の表から替えても出力は変わらない。aHash、foldhash、rapidhash と比べると、x86_64 と aarch64 のどちらでも命令の数が最も少なく、CPU 時間を縮める候補もなかった ([計測の基準](benchmarks.md) の「コンパイラの段階のハッシュ関数」) |
 | `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`)。`eml_vm` は unix だけで依存し、監視のスレッドを始める間のシグナルの塞ぎ (`pthread_sigmask`) に使う |
 | `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`)、物理メモリの大きさ (`GlobalMemoryStatusEx`) |
-| `rustyline` | 18.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
+| `rustyline` | 19.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
+| `compio-driver` | =0.12.5 (`polling`、`sync`。既定の feature は使わない) | 本物の I/O の driver (`eml_io`)。unix は polling (epoll と kqueue)、Windows は IOCP で、ブロックする呼び出しのプールも使う。io_uring は使わない |
+| `compio-buf` | =0.8.3 | `compio-driver` に渡す buffer の trait (`IoBuf`、`IoBufMut`、`SetLen`) |
+
+`compio-driver` と `compio-buf` は、上位の crate `compio` の安定版が使う版に `=` で固定する。`compio` は実行系を持ち、eml は自前のスケジューラを持つので、部品の crate だけを使う。io_uring を有効にするときも、`single_issuer` と `defer_taskrun` は有効にしない。スレッドに縛られるためである。版を上げるときは、次をすべて確かめる。
+
+1. `Proactor` の `poll`、`push`、`pop`、`cancel` と `register_cancel`、`waker`、操作の `Asyncify`、`PollOnce`、`Recv`、`Send` の API の差分を読んだ
+2. `.#cross` の shell で、`x86_64-pc-windows-msvc` を対象に `cargo check` か `cargo clippy` が通る
+3. `eml_io` のテストが、macOS、Linux、Windows の CI で通る

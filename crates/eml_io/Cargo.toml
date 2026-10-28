@@ -10,6 +10,8 @@ autotests = false
 doctest = false
 
 [dependencies]
+compio-buf.workspace = true
+compio-driver.workspace = true
 eml_rt.workspace = true
 
 [[test]]

@@ -23,9 +23,9 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | 5 | 取り消し | 取り消しは `Wake.Cancelled` で届け、std の包みが IO の失敗 `Prelude.Cancelled` として投げる。タスクは自分のフレームとスコープの後始末を通って巻き戻る。継続を捨てる強い取り消しは `exit`、致命的な誤り、run の終わり、回復のときだけにする。柔らかい確かめの名前は `check_cancelled` と `cancel_requested` である |
 | 6 | `exit` | `exit` は自分のタスクだけを巻き戻し、`Control` の終わりの欄に終了コードを書いて終わりのビットを立てる。ほかのタスクは巻き戻さず、ヒープを落とすときに `Lin` の資源を後始末する |
 | 7 | タスクごとの上限 | タスクの中で深さ、スタック、メモリの柔らかい上限を超えると、そのタスクの IO の失敗 `ResourceLimit` になる。メモリの硬い上限は今と同じく run 全体を止める |
-| 8 | 失敗の種類 | `IOErrorKind` に `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit` を足す |
+| 8 | 失敗の種類 | `IOErrorKind` は `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit` を持つ。extern はこの5種類を出さず、出すのは `fail_io` だけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」) |
 | 9 | 時間 | 時間は今からの長さを `Int` のミリ秒で表す。名前を付けたスコープを期限付きで待つ関数は `Async.drain_within` である |
-| 10 | I/O | std の API は OS によらず完了型にする。buffer は所有ごと渡して返してもらい、受け付け、待ち、取り出しの3段で行う。`IoDriver` の trait を `eml_rt` に置き、`eml_io` が実装する。第一の案は `compio-driver` である |
+| 10 | I/O | std の API は OS によらず完了型にする。buffer は所有ごと渡して返してもらい、受け付け、待ち、取り出しの3段で行う。`IoDriver` の trait を `eml_rt` に置き、`eml_io` が実装する。本物の driver は `compio-driver` の上に作り、unix は polling、Windows は IOCP を使う |
 | 11 | ハンドルと worker | ハンドルは最初に受け付けた worker の I/O の driver に縛る。別の worker からの受け付けはその worker の受け箱を通して回す |
 | 12 | 読みの buffer | 読みの buffer の容量はソケットが読めるようになってから確保する。IOCP ではまず0バイトの受信を出す |
 | 13 | ブロックする呼び出し | ブロックする呼び出しのプールはヒープを持たない。`blocking` の行は型に `<IO, Async>` を要する。std の今の同期の行はタスクの中でその場で動き、非同期のファイルとパイプは I/O の driver で作る |
@@ -228,19 +228,19 @@ read_chunk buf s =
 
 ### 所有ごと渡す buffer
 
-- buffer は値で渡す `Bytes` である。受け付けは語を受け取り、一意でなければ (rc ≠ 1。共有の印の付いた rc < 0 の物体を含む) 新しい一意な物体に写す。カーネルが書くのは、参照がちょうど1つの物体だけで、その参照は I/O の driver の保留の表が持つ
-- 保留の表は worker の登録した根で、語は長さを進めて戻る
+- buffer は値で渡す `Bytes` である。受け付けは語を受け取り、一意でなければ (rc ≠ 1。共有の印の付いた rc < 0 の物体を含む) 新しい一意な物体に写す。カーネルが書くのは、参照がちょうど1つの物体だけで、その参照は登録表の操作の記録が持つ。driver は語を見ず、記録が貸す `RawBuf` だけを見る
+- 操作の記録は worker の登録表に載り、語は長さを進めて戻る。記録の語は公開しないので、共有の印が付かず、一意なまま残る
 - 読みでは、受け付けは buffer を預かるだけで、容量を足すのはソケットが読めるようになってからにする。kqueue と epoll では読めると分かってから容量を `length + 64 KiB` にし (容量が足りなければ一意な物体を確保し直す)、`(payload + length, 64 KiB)` をカーネルに渡す。IOCP ではまず0バイトの受信を出し、それが終わってから容量を足して受信する。そのため、何も来ない接続は読みの buffer を持たない
 - `write_bytes` も同じく buffer を移し (一意でなければ写す)、完了の後で放す。buffer は返さない
 - Perceus の reuse には頼らない。上の `read_chunk` を繰り返すと、1回ごとに 64 KiB の物体を1つ確保する (`Bytes.empty ()` の容量は 0 で、extern が増やす)
 
 ### `IoDriver` と `eml_io`
 
-- `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。語の単位の trait で `external_body` にし、信頼の一覧では Host と同じ T11 の行に属する。`eml_rt` の extern が driver を要るまでは実行系が持ち、`Ctx` には入れない。`eml_rt` の extern が I/O を持つときに `Ctx` へ移す
-- 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、`eml_test_support` が選ぶ。`Session::run` が実行系を組み立てるときに driver を渡す
-- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る
-- 本物の driver の第一の案は `compio-driver` と `compio-buf` である。IOCP、io_uring、kqueue と epoll (`polling`)、所有ごと渡す buffer を持つ。使えないときの代わりの案は下の「未決の論点と将来の拡張」にある
-- 完了は持ち主の worker の受け箱に届く。完了の中身は保留の表が持つ数えた参照で、ハンドルを縛った worker とタスクの worker が違えば、普通の移し替えの歩きでタスクへ渡る
+- `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。今は `verus!` の外の安全なつなぎのコードで、`external_body` も信頼の一覧の行も持たない ([VM](../spec/vm.md) の「時計と driver」)。`eml_rt` の extern が driver を要るまでは実行系が持ち、`Ctx` には入れない。`eml_rt` の extern が I/O を持ち、`Ctx` が driver を持つときに、`external_body` と信頼の一覧の行を足す
+- 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
+- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM は起こしを使わず、1回の待ちを `IDLE_TICK` で切って代える ([VM](../spec/vm.md) の「時計と driver」)
+- 本物の driver は `compio-driver` と `compio-buf` の上に作る。unix は polling (epoll と kqueue)、Windows は IOCP を使い、io_uring は使わない。単独で使えること、スレッドごとに driver を持てること、別のスレッドから起こせる待ちを持つこと、プールの仕事の完了が待ちを起こすことは確かめた。版と、上げるときに確かめることは [アーキテクチャ](../implementation/architecture.md) の「外部 crate」にある
+- 完了は持ち主の worker の driver の完了の列に届き、集める地点で登録表の操作の記録に当てる。完了の中身は保留の表が持つ数えた参照で、ハンドルを縛った worker とタスクの worker が違えば、普通の移し替えの歩きでタスクへ渡る
 - REPL の回復は実行中の操作を取り消して完了を待ちきってから写す
 
 ### ハンドルと worker
@@ -258,10 +258,11 @@ read_chunk buf s =
 
 ### ブロックする呼び出しのプール
 
-- プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない
+- プールは各 worker の I/O の driver の一部で、仕事は driver に出す操作 (`Op::Job`) である。仕事の記録は run の登録表の操作の記録で、I/O の操作と同じ待ちの仕組みで待つ
+- プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない。std の内部の仕事は、入力を写して所有して受け取り、結果を値で返す。カーネルに貸す記憶 (`RawBuf`) は driver を持つスレッドから出さないので、仕事には渡さない
 - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
 - プールは入力の中身を読み、移した `Mut*Array` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
-- 完了は持ち主の worker の受け箱の mutex を通して届く。これがプールの書き込みと持ち主の読みの順を決める
+- 完了は持ち主の worker の driver の完了の列を通して届く。これがプールの書き込みと持ち主の読みの順を決める
 - DNS の名前の解決 (`getaddrinfo`) も、`connect` の中で同じ3段のプールの仕事にする
 - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し戻しで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
 - 場合ごとの扱いは次のとおりである
@@ -382,7 +383,7 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 
 ## 未決の論点と将来の拡張
 
-- I/O の driver の crate: 既定は `compio-driver` である。単独で使えること、worker ごとに driver を持てること、別のスレッドから起こせる待ちを持つことは、まだ確かめていない。本物の driver を作る前の試作で決める。使えなければ、`polling` と手で書く IOCP (`windows-sys`) で自前の driver を作る。API は変わらない。mio は Windows で AFD の readiness を真似るので採らない
+- I/O の driver の crate: `compio-driver` を使う。macOS か Windows で compio の中の理由 (IOCP の時間付きの待ち、起こし、プールの不具合、ビルドの失敗、kqueue の `PollOnce` の振る舞い) で使えないと分かったら、同じ trait の後ろで、`polling` と手で書く IOCP (`windows-sys`) の自前の driver に替える。API は変わらない。mio は Windows で AFD の readiness を真似るので採らない。io_uring を使うかは、ネットワークの計測で readiness の道が目立ったときに決める
 - 受け付けをスレッドをまたいで安全に出せる backend (IOCP、SQ を lock する io_uring) では、受け箱を通す回り道を省いてよい。既定は backend ごとに `eml_io` が決める
 - `write_bytes` が buffer を返して使い回す形: 既定は返さない。計測で確保が目立ったときに考える
 - 2つ目からの失敗をまとめて報告する形 (MultiError): 既定は最初の失敗が勝ち、ほかは数えるだけにする

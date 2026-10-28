@@ -1,4 +1,4 @@
-//! 2つの driver が共有する、旗だけの waker。
+//! テストの driver の、旗だけの waker。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
