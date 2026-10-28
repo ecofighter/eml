@@ -692,7 +692,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `channel_waits`: `send` と `recv` が継続を `park_send`、`park_recv` に渡した回数。すぐ再開する待ちも数え、`parks` にも数える
 - `channels_swept`: run の終わりの `sweep_all` が放した channel の数。閉じなかった channel と、閉じても品物の残った channel を数える。閉じて空になってその場で放した channel は数えない
 
-取り消しが届かず、channel の操作も待ちもない run では、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept` の欄はスケジュールの方針によらない。channel を使う run では、待つかどうかと、送り手が参照を持ち続けた品物の裏返しが順で変わり、仕事の回数と `parks`、`shared_objects` がそれに従う。そうした run でもスケジュールによらないのは、`tasks`、`timers`、`dropped_failures`、`channels_swept` である。`tasks` と `timers` はプログラムが決め、`dropped_failures` は最初の失敗がどれかによらないので、この3つはタスクの順で変わらない。`channels_swept` は run の終わりに閉じていないか品物の残った channel の数で、どの channel が閉じずに残るか、品物が残るかがプログラムで決まるときだけ、タスクの順で変わらない。`try_send` の成否や、受け手が早く止まるかが順で変わると、残る品物も変わる。
+取り消しが届かず、channel の操作も待ちもない run では、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept` の欄はスケジュールの方針によらない。channel を使う run では、待つかどうかと、送り手が参照を持ち続けた品物の裏返しが順で変わり、仕事の回数と `parks`、`shared_objects` がそれに従う。そうした run でもスケジュールによらないのは `tasks`、`timers`、`dropped_failures` で、`channels_swept` は次の条件のときだけである。`tasks` と `timers` はプログラムが決め、`dropped_failures` は最初の失敗がどれかによらないので、この3つはタスクの順で変わらない。`channels_swept` は run の終わりに閉じていないか品物の残った channel の数で、どの channel が閉じずに残るか、品物が残るかがプログラムで決まるときだけ、タスクの順で変わらない。`try_send` の成否や、受け手が早く止まるかが順で変わると、残る品物も変わる。
 
 `cancels` はスケジュールで変わる。取り消しが届くと、届いた時点からそのタスクの仕事が変わるためである。
 

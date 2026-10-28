@@ -830,7 +830,7 @@ impl Registry {
     }
 
     /// ハンドルのセル。ハンドルの受け箱が登録表の受け箱と違えば、前の run のハンドルである。ハンドルは落ちたときに
-    /// 知らせを積むために自分の run の受け箱を持つので、それを比べれば generation の一周によらずに run を見分けられる。
+    /// 知らせを積むために自分の run の受け箱を持つので、それを比べれば run を見分けられる。
     /// `Task a` は `Lin` で入力をまたいで残らないので、検査を通ったプログラムからは届かない
     /// (docs/spec/vm.md の「`Async` のタスク」)。
     fn handle_cell<M: Mode>(&self, ctx: &Ctx<M>, handle: Word) -> Result<CellRef, CellFault> {
