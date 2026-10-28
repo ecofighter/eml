@@ -307,8 +307,8 @@ impl Host for CaptureHost {
     }
 }
 
-/// 子の `PATH`。`prefix` があれば本物の `PATH` の前に足す。`prefix` が区切りや `"` を含むと `join_paths` が
-/// 失敗し、そのまま起動の誤りになる。
+/// 子の `PATH`。`prefix` があれば本物の `PATH` の前に足す。`prefix` が `join_paths` の断る文字 (unix では区切りの
+/// `:`、Windows では `"`) を含むと失敗し、そのまま起動の誤りになる。
 fn child_path(prefix: Option<&Path>) -> io::Result<Option<OsString>> {
     join_child_path(prefix, std::env::var_os("PATH"))
 }
@@ -506,8 +506,10 @@ mod path_tests {
     }
 
     #[test]
-    fn a_prefix_with_a_separator_fails() {
-        let separator = if cfg!(windows) { "eml;bin" } else { "eml:bin" };
-        assert!(join_child_path(Some(Path::new(separator)), None).is_err());
+    fn a_prefix_join_paths_cannot_hold_fails() {
+        // unix の `join_paths` は区切りの `:` を、Windows の `join_paths` は `"` を含む項を断る。Windows は `;` を
+        // 含む項を `"` で囲んで受け入れる
+        let prefix = if cfg!(windows) { "eml\"bin" } else { "eml:bin" };
+        assert!(join_child_path(Some(Path::new(prefix)), None).is_err());
     }
 }
