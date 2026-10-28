@@ -10,5 +10,6 @@ main () =
       | ctl Async.await_cell c k -> k Async.Woke
       | ctl Async.reschedule () k -> k Async.Woke
       | ctl Async.await_time ms k -> k Async.Woke
+      | ctl Async.await_drain s k -> k Async.Woke
       | return x -> x
     println (show x))

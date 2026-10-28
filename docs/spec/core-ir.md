@@ -196,7 +196,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.MutArray.freeze` | `Lin` | `Unr` (`Array a`) |
   | `Std.Par.par` | `poly`、`poly` | `poly` |
   | `Std.Async.start_raw`、`run_raw` | `poly` | `Lin` (`Task a`) |
-  | `Std.Async.park`、`park_time` | `Unr`、`Lin` | `Unr` |
+  | `Std.Async.park`、`park_time`、`park_drain` | `Unr`、`Lin` | `Unr` |
   | `Std.Async.ready` | `Lin` | `Unr` |
   | `Std.Async.finish_ok` | `poly` | `Unr` |
   | `Std.Async.task_cell` | `Lin` | `Unr` (`Cell`) |

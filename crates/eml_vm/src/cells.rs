@@ -18,9 +18,9 @@
 //!
 //! 取り消しは、印を付ける `mark` と受け箱の処理 `drain` が待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
 //! 仕事をほかのタスクのために作るのは `drain` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
-//! `cancel` と `flag` はどのタスクの操作からも書く。`current` と `run` は持ち主だけが書き、印を付ける操作が読む。
-//! スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、そのタスクを動かすか
-//! 受け箱を処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
+//! `cancel`、`flag`、`cancel_new` はどのタスクの操作からも書く。`current` と `run` は持ち主だけが書き、印を付ける
+//! 操作が読む。スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
+//! そのタスクを動かすか受け箱を処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -213,6 +213,9 @@ struct ScopeCell {
     /// `shield` の境目の印。開き手が同じ親より深い `shield` の中で開いたスコープに立つ。外の取り消しはここで止まる
     /// (docs/spec/stdlib.md の「取り消し」)。
     boundary: bool,
+    /// 加わるタスクを取り消す印。`cancel_members` が立て、属するタスクがなくなったときに `finish` が下ろす
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
+    cancel_new: bool,
 }
 
 /// 印を付ける作業の項。
@@ -275,12 +278,12 @@ impl Drop for TaskHandle {
 pub(crate) struct TaskStats {
     /// `start` が作ったタスクのセルの数。
     pub(crate) tasks: u64,
-    /// `park`、`ready`、`park_time` が渡された継続の数。
+    /// `park`、`ready`、`park_time`、`park_drain` が渡された継続の数。
     pub(crate) parks: u64,
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
-    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park` と `park_time`、受け箱の処理が外した待ち、取り消しで再開する
-    /// `yield_now`、真を返した `cancel_point` を数える (docs/spec/vm.md の「`RunStats`」)。
+    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、受け箱の処理が外した待ち、
+    /// 取り消しで再開する `yield_now`、真を返した `cancel_point` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
     /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` だけを数える。
     pub(crate) timers: u64,
@@ -458,6 +461,7 @@ impl Registry {
             closed: false,
             shield: level,
             boundary: level > base,
+            cancel_new: false,
         }));
         if let Some(p) = parent {
             self.scope_mut(p)?.nested.push(s);
@@ -517,7 +521,7 @@ impl Registry {
         if s.closed {
             return Ok(None);
         }
-        let (flag, member_at) = (s.flag, s.members.len() as u32);
+        let (flag, member_at) = (s.flag || s.cancel_new, s.members.len() as u32);
         // 印付けは送り手の ID のまま行い、`Ctx` の持つ語には触れない。値から届く evidence は退いたものだけである
         // (docs/spec/object-model.md の「evidence の3つの物体」)
         let heap = unsafe { ctx.heap_mut() };
@@ -642,6 +646,62 @@ impl Registry {
         Ok(None)
     }
 
+    /// タスク `me` が、継続 `k` でスコープ `s` に属するタスクがなくなるまで待つ。`s` は閉じない。閉じたスコープ、
+    /// 離れたスコープ、前の run のスコープ、空のスコープでは、すぐ再開する仕事を返す (docs/spec/vm.md の「命令」)。
+    pub(crate) fn park_drain(
+        &mut self,
+        s: i64,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        let target = match self.scope_cell(s) {
+            Some(t) => {
+                let scope = self.scope_mut(t)?;
+                (!scope.closed && !scope.members.is_empty()).then_some(t)
+            }
+            None => None,
+        };
+        self.suspend(me)?;
+        self.stats.parks += 1;
+        if self.point(me)? {
+            self.stats.cancels += 1;
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: CANCELLED,
+            }));
+        }
+        let Some(target) = target else {
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: WOKE,
+            }));
+        };
+        let task = self.task_mut(me)?;
+        task.k = Some(k);
+        task.wait = Some(Wait::Cell(target));
+        // 閉じないスコープは何度も待たれるので、取り消しで外れた古い項をここで除き、待ち手が増え続けないようにする
+        let old = std::mem::take(&mut self.scope_mut(target)?.waiters);
+        let mut kept = Vec::with_capacity(old.len() + 1);
+        for waiter in old {
+            let keep = match waiter {
+                Waiter::Task(t) => {
+                    t != me
+                        && matches!(self.live(t), Some(CellKind::Task(task))
+                            if matches!(task.wait, Some(Wait::Cell(c)) if c == target))
+                }
+                Waiter::Token(_) => true,
+            };
+            if keep {
+                kept.push(waiter);
+            }
+        }
+        kept.push(Waiter::Task(me));
+        self.scope_mut(target)?.waiters = kept;
+        Ok(None)
+    }
+
     /// タスク `me` が、継続 `k` で実行待ちの列の後ろへ回る。
     pub(crate) fn ready(&mut self, me: CellRef, k: Word) -> Result<Runnable, CellFault> {
         self.suspend(me)?;
@@ -729,7 +789,8 @@ impl Registry {
     }
 
     /// タスク `cell` を `outcome` で終える。起こす仕事を `out` に積む。失敗はスコープの最初の失敗として記録する。
-    /// スコープの最後のタスクならスコープを閉じ、その待ち手も起こす。ハンドルがもう落ちていれば、セルをすぐ放す。
+    /// スコープの最後のタスクなら、閉じる印のあるスコープを閉じ、加わるタスクを取り消す印を下ろし、スコープの待ち手を
+    /// すべて起こす。`park_drain` の待ち手は閉じる印のないスコープも待つ。ハンドルがもう落ちていれば、セルをすぐ放す。
     /// `depth_offset` は呼んだ実行系のタスクの深さの起点で、セルを放すときに `Ctx` へ戻す。
     pub(crate) fn finish<M: Mode>(
         &mut self,
@@ -762,8 +823,9 @@ impl Registry {
             self.mark(Mark::Scope(scope))?;
         }
         let s = self.scope_mut(scope)?;
-        if s.closing && s.members.is_empty() {
-            s.closed = true;
+        if s.members.is_empty() {
+            s.closed |= s.closing;
+            s.cancel_new = false;
             for waiter in std::mem::take(&mut s.waiters) {
                 self.wake(waiter, scope, out)?;
             }
@@ -1027,6 +1089,23 @@ impl Registry {
         }
         self.cancel_scope(s)?;
         Ok(true)
+    }
+
+    /// `s` に属するタスクをそれぞれ取り消し、`s` が空になるまで加わるタスクも取り消す。`s` の旗は立てないので、`s` の
+    /// 本体は取り消さない。印は一覧を読む前に立て、間に加わるタスクを取りこぼさない
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
+    pub(crate) fn cancel_members(&mut self, s: i64) -> Result<(), CellFault> {
+        if let Some(cell) = self.scope_cell(s)
+            && !self.scope_mut(cell)?.closed
+        {
+            let scope = self.scope_mut(cell)?;
+            scope.cancel_new = !scope.members.is_empty();
+            let members = scope.members.clone();
+            for m in members {
+                self.mark(Mark::Task(m))?;
+            }
+        }
+        Ok(())
     }
 
     /// `scope` の本体の失敗を記録し、子をすべて取り消す。種類 `Cancelled` は記録しない。

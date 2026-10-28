@@ -6,7 +6,7 @@ use eml_lir::{FloatBits, Loc, Repr};
 use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 use rustc_hash::FxHashMap;
 
-use crate::error::{RuntimeError, SourceLocation};
+use crate::error::{RuntimeError, SourceLocation, VmFault};
 use crate::op::{BUILTINS, Op, Pc, Slot};
 use crate::vm::{Failure, Task};
 
@@ -247,8 +247,12 @@ impl<M: Mode> CodeBase<M> {
     }
 
     /// 誤りに関数の名前と位置を付ける。組み込みの命令で起きた誤りには、最後に戻った関数の名前を付ける
-    /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
+    /// (docs/spec/vm.md の「誤り、止めること、終わり」)。デッドロックには付けない
+    /// (docs/spec/vm.md の「時計と driver」)。
     pub(crate) fn error(&self, Failure { fault, pc }: Failure, task: &Task) -> RuntimeError {
+        if matches!(fault, VmFault::Deadlock) {
+            return RuntimeError::Deadlock;
+        }
         let function = self
             .function_at(pc)
             .or_else(|| self.function_at(task.last_ret))

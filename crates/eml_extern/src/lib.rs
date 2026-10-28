@@ -1184,6 +1184,18 @@ table! {
         AsyncShieldEnter => row("Std.Async.shield_enter", &[Unit], Unit, Purity::Effectful),
         AsyncShieldLeave => row("Std.Async.shield_leave", &[Unit], Unit, Purity::Effectful),
         AsyncClaimScope => row("Std.Async.claim_scope", &[Int], Enum, Purity::Effectful),
+        AsyncParkDrain => holding(
+            &[false, true],
+            kinded(
+                "Std.Async.park_drain",
+                &[Int, TObj],
+                &[Unr, Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
+        AsyncCancelMembers => row("Std.Async.cancel_members", &[Int], Unit, Purity::Effectful),
     }
 }
 
@@ -1218,6 +1230,8 @@ impl Extern {
                 | Extern::AsyncCancelPoint
                 | Extern::AsyncSpendBudget
                 | Extern::AsyncClaimScope
+                | Extern::AsyncParkDrain
+                | Extern::AsyncCancelMembers
         )
     }
 }

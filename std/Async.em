@@ -15,6 +15,8 @@ pub abstract effect Async where
   reschedule : Unit -> Wake
   -- 指定したミリ秒だけ眠る。0 以下は `reschedule` と同じく列の後ろへ回る
   await_time : Int -> Wake
+  -- スコープに属するタスクがなくなるまで待つ。スコープは閉じない
+  await_drain : Scope -> Wake
 
 -- 登録表の添字 `(generation << 32) | index` を持つ即値である。Kind は `Unr`
 pub extern data Cell
@@ -40,6 +42,7 @@ start_task f =
     | ctl await_cell c k -> park c k
     | ctl reschedule () k -> ready k
     | ctl await_time ms k -> park_time ms k
+    | ctl await_drain s k -> park_drain s k
     | return () -> ()
 
 resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit
@@ -199,6 +202,37 @@ arm s f () =
   let x = scope (fn _ -> f ())
   if claim_scope s then x else raise_cancelled ()
 
+-- 期限のタスクは `s` の外の子のスコープに置き、期限に `s` のタスクを取り消す。呼んだタスクは `s` が空になるのを
+-- 待つだけなので、`shield` の中でも期限が効く (docs/spec/stdlib.md の「時間」)
+pub drain_within : Int -> Scope -> <IO, Async> Unit
+drain_within ms s =
+  if ms <= 0 then
+    cancel_members s
+    drained s
+  else
+    let p = open_scope ()
+    -- 今のスコープは `p` なので、期限のタスクは `p` に加わる
+    let timer : Task Unit = start_raw (bottom (fn () ->
+      sleep_ms ms
+      cancel_members s))
+    let r = try_io (fn () -> drained s)
+    cancel_raw timer
+    let c = close_scope p
+    shield_enter ()
+    let _ = await_cell c
+    shield_leave ()
+    -- `p` のタスクは期限のタスクだけで、種類 `Cancelled` でしか失敗しないので、離れるときに起こす失敗はない
+    let _ = try_panic (fn () -> leave_scope p)
+    match r with
+      | Ok () -> ()
+      | Err e -> fail_io e.kind e.message
+
+drained : Scope -> <IO, Async> Unit
+drained s =
+  match await_drain s with
+    | Woke -> ()
+    | Cancelled -> raise_cancelled ()
+
 cancelled : Failure -> Bool
 cancelled e = match e with
   | IOFailed (IOError { kind = k, message = _ }) -> k == Prelude.Cancelled
@@ -233,9 +267,9 @@ wait_closed s =
 
 -- ランタイムの口。生の行を `pub` にせず、結果の型の `a` は `start`、`start_in`、`run`、`await` のシグネチャだけが結ぶ。
 -- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`run_raw`、`ready`、`finish_ok`、
--- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`start_in_raw` の2つ目の引数、
--- `task_cell` の引数 (`task_cell` だけは借りて預かる) である。預かる引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける
--- (docs/spec/stdlib.md の「`Std.Async`」)
+-- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`park_drain`、`start_in_raw` の
+-- 2つ目の引数、`task_cell` の引数 (`task_cell` だけは借りて預かる) である。預かる引数の型変数は `Unr` に固定せず、
+-- その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
 extern start_raw        : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern run_raw          : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern start_in_raw     : Scope -> (Unit -> <IO, Async> Unit) -> <IO, Panic> Task a
@@ -261,3 +295,5 @@ extern cancel_point     : Unit -> <IO> Bool
 extern spend_budget     : Unit -> <IO> Bool
 extern park_time        : Int -> (once Wake -> <IO> Unit) -> <IO> Unit
 extern claim_scope      : Scope -> <IO> Bool
+extern park_drain       : Scope -> (once Wake -> <IO> Unit) -> <IO> Unit
+extern cancel_members   : Scope -> <IO> Unit

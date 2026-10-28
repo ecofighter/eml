@@ -42,3 +42,16 @@ input_file: tests/ui/check-fail/names/async_op_handled.em
     │   ─────┬────  
     │        ╰────── declared here
 ────╯
+[E1058] Error: operation `await_drain` of the abstract effect `Async` is not visible outside `Std.Async`
+    ╭─[ check-fail/names/async_op_handled.em:13:13 ]
+    │
+ 13 │       | ctl Async.await_drain s k -> k Async.Woke
+    │             ────────┬────────  
+    │                     ╰────────── hidden by `abstract`
+    │
+    ├─[ <std>/Async.em:19:3 ]
+    │
+ 19 │   await_drain : Scope -> Wake
+    │   ─────┬─────  
+    │        ╰─────── declared here
+────╯

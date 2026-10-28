@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/drain_within_cancelled.em
+---
+--- stdout ---
+drainer: Cancelled
+drainer: Cancelled
+drainer: Cancelled
+kept: done
+drained after 3 cancelled drains
+e: Cancelled
+the shielded drain returned
+--- stderr ---

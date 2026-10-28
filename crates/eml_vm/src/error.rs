@@ -17,7 +17,12 @@ pub enum VmFault {
     Stopped(Stop),
     /// verifier を通った IR では起きないはずの誤り。
     Internal(&'static str),
+    /// 実行待ちのタスクも時間の待ちもないのに、終わっていないタスクがある (docs/spec/vm.md の「時計と driver」)。
+    Deadlock,
 }
+
+/// デッドロックの文言。関数の名前と位置は内部のコードとスケジュールで変わるので付けない。
+const DEADLOCK: &str = "deadlock: every task is waiting and no timer is pending";
 
 impl fmt::Display for VmFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -26,6 +31,7 @@ impl fmt::Display for VmFault {
             VmFault::Panicked(message) => write!(f, "panicked: {message}"),
             VmFault::Stopped(stop) => write!(f, "{stop}"),
             VmFault::Internal(what) => write!(f, "internal error: {what}"),
+            VmFault::Deadlock => f.write_str(DEADLOCK),
         }
     }
 }
@@ -79,6 +85,8 @@ pub enum RuntimeError {
     },
     /// 検査モードで、終わったときに残っていた物体の種類の名前と数。
     Leak(Vec<(String, u64)>),
+    /// すべてのタスクが待ち、満ちるタイマーもない。関数の名前も位置も持たない。
+    Deadlock,
     /// 続けられる誤り `cause` の後の回復が `reason` で失敗した。根から届く物体を写せなかったか、検査モードで回復の後の
     /// ヒープの不変条件が崩れていた (docs/spec/vm.md の「追記」)。
     Unrecovered {
@@ -136,6 +144,7 @@ impl fmt::Display for RuntimeError {
                     parts.join(", ")
                 )
             }
+            RuntimeError::Deadlock => f.write_str(DEADLOCK),
             RuntimeError::Unrecovered { cause, reason } => {
                 write!(f, "{cause}\nrecovery failed: {reason}")
             }

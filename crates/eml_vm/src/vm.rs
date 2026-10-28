@@ -1222,15 +1222,13 @@ fn switch_away<R: Exec>(
     // (docs/spec/vm.md の「`Async` のタスク」)
     collect::<R>(code, ctx, task.depth_offset, sched)?;
     // 走れるタスクがなければ、次の期限まで眠って集め直す。眠りは1回ごとに短く切り、起きるたびに止める語を読む。
-    // `PREEMPT` は切り替える先がないので捨てる (docs/spec/vm.md の「時計と driver」)
+    // `PREEMPT` は切り替える先がないので捨てる。期限もなければ、どのタスクも進めないデッドロックである
+    // (docs/spec/vm.md の「時計と driver」)
     let next = loop {
         if let Some(next) = sched.policy.pick(&mut sched.ready) {
             break next;
         }
-        let deadline = sched
-            .cells
-            .next_deadline()
-            .ok_or(VmFault::Internal("no task is ready to run"))?;
+        let deadline = sched.cells.next_deadline().ok_or(VmFault::Deadlock)?;
         sched.driver.wait_until(deadline);
         poll(ctx, task.stack_depth())?;
         collect::<R>(code, ctx, task.depth_offset, sched)?;
@@ -1584,6 +1582,7 @@ fn stops_the_run(error: &RuntimeError) -> bool {
                 | VmFault::Internal(_),
             ..
         } | RuntimeError::Leak(_)
+            | RuntimeError::Deadlock
             | RuntimeError::Unrecovered { .. }
     )
 }
@@ -1837,6 +1836,18 @@ fn async_op<R: Exec>(
             let me = current_cell(task)?;
             let won = sched.cells.claim_scope(task.raw(arg(0)), me)?;
             task.set_raw(dst, i64::from(won));
+        }
+        Extern::AsyncParkDrain => {
+            let me = current_cell(task)?;
+            let k = task.get(arg(1));
+            if let Some(run) = sched.cells.park_drain(task.raw(arg(0)), me, k)? {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
+        Extern::AsyncCancelMembers => {
+            sched.cells.cancel_members(task.raw(arg(0)))?;
+            task.set(dst, Word::UNIT);
         }
         Extern::AsyncShieldEnter => {
             let me = current_cell(task)?;
@@ -2713,7 +2724,9 @@ fn run_extern<R: Exec>(
             | Extern::AsyncFailScopePanic
             | Extern::AsyncCancelPoint
             | Extern::AsyncSpendBudget
-            | Extern::AsyncClaimScope => {
+            | Extern::AsyncClaimScope
+            | Extern::AsyncParkDrain
+            | Extern::AsyncCancelMembers => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

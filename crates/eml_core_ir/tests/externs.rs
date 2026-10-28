@@ -507,6 +507,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Async.start_raw" | "Std.Async.run_raw" => (&[Poly], Lin),
             "Std.Async.park" => (&[Unr, Lin], Unr),
             "Std.Async.park_time" => (&[Unr, Lin], Unr),
+            "Std.Async.park_drain" => (&[Unr, Lin], Unr),
             "Std.Async.ready" => (&[Lin], Unr),
             "Std.Async.finish_ok" => (&[Poly], Unr),
             "Std.Async.task_cell" => (&[Lin], Unr),
@@ -527,7 +528,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     }
 }
 
-/// 表の値そのもの。引数を預かる行は `Std.Async` の12行だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
+/// 表の値そのもの。引数を預かる行は `Std.Async` の13行だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
 /// その印は `Unr` でない (docs/spec/declarations.md の「`extern`」)。
 #[test]
 fn only_the_async_rows_hold_an_argument() {
@@ -552,6 +553,7 @@ fn only_the_async_rows_hold_an_argument() {
             "Std.Async.detach",
             "Std.Async.cancel_raw",
             "Std.Async.start_in_raw",
+            "Std.Async.park_drain",
         ]
     );
     for &e in Extern::ALL {
