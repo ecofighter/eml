@@ -449,7 +449,6 @@ impl Registry {
         Ok(self.task_mut(cell)?.worker)
     }
 
-    /// 次の run の `floor`。この run が出したどの generation よりも大きい。`slots` は run の間に縮まない。
     /// 表の中の `Counter`。添字が表の外なのは、検査を通ったプログラムからは起きない。
     pub(crate) fn counter(&mut self, i: i64) -> Result<&mut i64, CellFault> {
         usize::try_from(i)
@@ -458,6 +457,7 @@ impl Registry {
             .ok_or(CellFault::Internal("a counter index is out of range"))
     }
 
+    /// 次の run の `floor`。この run が出したどの generation よりも大きい。`slots` は run の間に縮まない。
     pub(crate) fn next_floor(&self) -> u32 {
         self.slots
             .iter()

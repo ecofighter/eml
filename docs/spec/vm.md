@@ -566,7 +566,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `push_raw` と `pop_raw` は、0 を返した `reserve_*` の直後に標準ライブラリが呼ぶ。処理系はこの順を確かめない
 - `chan_cell c` は `Async` の命令でなく extern の命令で、即値をそのまま写す
 - `Std.Atomic` の4行は `Machine` の表 `counters` を読み書きする。`new n` は表に `n` を積み、その添字を `Counter` の即値として `dst` に書く。`add n c` は `counters[c]` に `n` を `wrapping_add` で足して書き戻し、足した後の値を返す。`load c` は値を返し、`store n c` は書く。添字が表の外なら内部の誤り (`a counter index is out of range`) にするが、検査を通ったプログラムからは届かない
-- channel の行は、`park_send` と `park_recv` のほかは今のタスクのセルを使わないので、タスクの外でも動く (予算は使わない)
+- channel と `Counter` の行は、`park_send` と `park_recv` のほかは今のタスクのセルを使わないので、タスクの外でも動く (予算は使わない)
 - `run_raw` と `run_result` はトップレベルの `Async.run` のたびにタスクの外で動く。今のタスクがなければ、`run_raw` は親のない根を開く。`task_cell`、`take_result`、`detach`、`cancel_raw`、`close_scope`、`cancel_scope_raw`、`fail_scope_io`、`fail_scope_panic`、`cancel_members` も今の `Task` のセルを使わないので、タスクの外でも動く。`cancel_point` はタスクの外で偽を返す。`finish_ok`、`finish_io`、`finish_panic` はタスクの外では内部の誤り (`a task finishes twice or outside a task`) にする。残りの行 (`start_raw`、`start_in_raw`、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`ready`、`open_scope`、`leave_scope`、`shield_enter`、`shield_leave`、`spend_budget`、`claim_scope`) は今の `Task` のセルが要り、タスクの外では内部の誤り (`an Async operation runs outside a task`) にする。`run_raw` と `run_result` のほかの行は `Async` を持つ包みからしか呼ばれないので、この2つの誤りは検査を通ったプログラムからは届かない
 - `shield_enter ()` と `shield_leave ()`: 今の `Task` のセルの `shield` の深さを1つ増やすか減らす。深さが 0 のときに減らせば内部の誤りにする
 - `cancel_point ()`: 今のタスクが取り消しの地点で投げるかを、`dst` に真偽で書く。規則は「取り消しの届け方」の取り消しの地点の規則と同じである。真を返したときは `cancels` を数える。タスクの外では偽を返す
