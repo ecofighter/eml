@@ -136,11 +136,51 @@ shield f =
       shield_leave ()
       reraise e
 
+-- `ms` ミリ秒待つ取り消しの地点。0 以下なら実行待ちの列の後ろへ回るだけである (docs/spec/stdlib.md の「時間」)
 pub sleep_ms : Int -> <IO, Async> Unit
 sleep_ms ms =
   match await_time ms with
     | Woke -> ()
     | Cancelled -> raise_cancelled ()
+
+-- 本体は呼んだタスクで動かし、期限は子のスコープに置いたタスクが旗で届ける。本体を `scope` で包むのは、本体が
+-- 始めたタスクにも期限を届け、終わるまで待つためである (docs/spec/stdlib.md の「時間」)
+pub timeout : Int -> (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> Option a
+timeout ms f =
+  let s = open_scope ()
+  let timer = deadline s ms
+  let r = try_all (fn () -> scope (fn _ -> f ()))
+  -- 残る期限のタスクを取り消す。旗はスコープを離れるまで呼んだタスクにも届くが、この後に取り消しの地点はない
+  cancel_scope_raw s
+  wait_closed s
+  let late = expired timer
+  match r with
+    | Ok x -> Some x
+    -- 外から取り消された呼び手は、期限が過ぎていても `None` で取り消しを飲み込まない
+    | Err e -> if late && cancelled e && not (cancel_point ()) then None else reraise e
+
+-- 過ぎた期限は、タスクを始めずにすぐ旗を立てる
+deadline : Scope -> Int -> <IO, Panic, Async> Option (Task Unit)
+deadline s ms =
+  if ms <= 0 then
+    cancel_scope_raw s
+    None
+  else Some (start_in s (fn () ->
+    sleep_ms ms
+    cancel_scope_raw s))
+
+-- 期限のタスクが眠り切って終わっていれば、期限は過ぎている
+expired : Option (Task Unit) -> <IO> Bool
+expired timer = match timer with
+  | None -> True
+  | Some t -> match try_all (fn () -> take_result t) with
+    | Ok () -> True
+    | Err _ -> False
+
+cancelled : Failure -> Bool
+cancelled e = match e with
+  | IOFailed (IOError { kind = k, message = _ }) -> k == Prelude.Cancelled
+  | Panicked _ -> False
 
 -- 取り消しを受けた包みが投げる IO の失敗。`Wake` の `Cancelled` と名前が重なるので、種類は修飾して書く
 -- (docs/spec/stdlib.md の「取り消し」)

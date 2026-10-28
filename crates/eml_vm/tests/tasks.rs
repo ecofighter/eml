@@ -469,3 +469,40 @@ main () =
 ";
     assert_eq!(run_both(src), "woke\n");
 }
+
+/// `timeout` は本体を呼んだタスクで動かし、期限のタスクを1つだけ始める。数え方は docs/spec/stdlib.md の「時間」のとおり。
+#[test]
+fn timeout_runs_the_body_in_the_calling_task() {
+    let programs = [
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 100 (fn () -> 42))))\n",
+            "Some 42\n",
+            (2, 3, 1, 1),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 50 (fn () ->\n  Async.sleep_ms 100\n  1))))\n",
+            "None\n",
+            (2, 4, 2, 1),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 100 (fn () ->\n  Async.sleep_ms 50\n  1))))\n",
+            "Some 1\n",
+            (2, 4, 2, 1),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 0 (fn () ->\n  Async.sleep_ms 50\n  1))))\n",
+            "None\n",
+            (1, 3, 0, 1),
+        ),
+    ];
+    for (src, out, counts) in programs {
+        let program = lir(src);
+        let config = RunConfig::default()
+            .with_debug_heap(true)
+            .with_sched(Sched::Sequential);
+        let (got, result) = execute(&program, &config);
+        let s = result.expect("the checked run");
+        assert_eq!(got, out, "{src}");
+        assert_eq!((s.tasks, s.parks, s.timers, s.cancels), counts, "{src}");
+    }
+}
