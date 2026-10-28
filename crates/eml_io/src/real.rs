@@ -30,6 +30,10 @@ pub const IDLE_TICK: Duration = Duration::from_millis(10);
 /// プールのスレッドの数の上限。仕事がこれより多ければ、`submit` はスレッドが空くまで待つ。
 const POOL_LIMIT: usize = 32;
 
+/// `quiesce` が取り消した I/O の操作の完了を待つ長さの上限。取り消しの完了はふつうすぐに届くので、これを
+/// 過ぎたら届かないものとみなす。
+const CANCEL_LIMIT: Duration = Duration::from_secs(5);
+
 type Job = Box<dyn FnOnce() -> BufResult<usize, ()> + std::marker::Send>;
 
 /// compio の操作の鍵。`completions` で `pop` するまでここに置く。
@@ -180,7 +184,6 @@ impl RealDriver {
         if self.broken.is_some() {
             return;
         }
-        let start = out.len();
         let ops = std::mem::take(&mut self.ops);
         for (key, slot) in ops {
             let result = match slot {
@@ -196,8 +199,6 @@ impl RealDriver {
                 }
             }
         }
-        // `HashMap` の順は走るたびに変わるので、受け付けの順にそろえる
-        out[start..].sort_by_key(|completion| completion.key);
     }
 }
 
@@ -305,11 +306,19 @@ impl IoDriver for RealDriver {
 
     fn completions(&mut self, out: &mut Vec<Completion>) {
         self.empty_bin();
+        // 壊れた後は、`push` の中で終わっていた結果も含めて何も渡さない。保留は `quiesce` の後も残り、実行系はそれを見て
+        // 機械を毒された状態にする (docs/spec/vm.md の「時計と driver」)
+        if self.broken.is_some() {
+            return;
+        }
+        let start = out.len();
         out.append(&mut self.done);
         if !self.ops.is_empty() {
             self.poll(Duration::ZERO);
             self.reap(out);
         }
+        // `HashMap` の順は走るたびに変わるので、`push` の中で終わったものも含めて受け付けの順にそろえる
+        out[start..].sort_by_key(|completion| completion.key);
     }
 
     fn pending(&self) -> usize {
@@ -355,17 +364,68 @@ impl IoDriver for RealDriver {
             self.cancel(key);
         }
         // 取り消しの完了も、走っているプールの仕事も、届くまで待つ。壊れた driver は待てないので、保留を残して戻る
+        let limit = Instant::now() + CANCEL_LIMIT;
         let mut discarded = Vec::new();
         while !self.ops.is_empty() && self.broken.is_none() {
             self.poll(IDLE_TICK);
             self.reap(&mut discarded);
             discarded.clear();
+            // polling の backend は、取り消しで関心を外す `epoll_ctl` などが失敗すると、完了を出さないまま操作を
+            // 落とす。その操作は二度と終わらないので、期限を過ぎても I/O の操作が残れば壊れた状態にして戻る。
+            // 仕事はいつか終わるので、仕事だけが残る間は待ち続ける
+            if Instant::now() >= limit
+                && self.ops.values().any(|slot| !matches!(slot, Slot::Job(_)))
+            {
+                self.broken = Some((
+                    io::ErrorKind::TimedOut,
+                    "a cancelled op did not complete".to_string(),
+                ));
+            }
         }
     }
 }
 
 impl Drop for RealDriver {
+    /// 保留の仕事の鍵を、プールのスレッドと持ち主のスレッドが同時に落とさないようにする。compio は仕事を出すとき、
+    /// 鍵の写しを凍らせてプールのスレッドへ送る。凍らせた鍵の間は、ほかのスレッドがその数え方の状態 (ただのセルで、
+    /// atomic でない) に触れてはならない。仕事が終わったとき、`Proactor` がなければ、プールのスレッドはその写しを
+    /// 自分で落とす。そのため、ここで仕事を待たずに `ops` の鍵を落とすと、2つのスレッドが同じ数を書き換える。
+    /// 壊れていなければ `quiesce` で仕事を待ちきる。壊れていて待てなければ、残った鍵を手放さずに漏らす
+    /// (docs/spec/vm.md の「時計と driver」)。
     fn drop(&mut self) {
+        if self.broken.is_none() {
+            self.quiesce();
+        }
+        if !self.ops.is_empty() {
+            std::mem::forget(std::mem::take(&mut self.ops));
+        }
         self.empty_bin();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// waker は、上限なしの長い `poll` を別のスレッドから起こす。`wait` は1回の待ちを `IDLE_TICK` で切るので、
+    /// 起こしは `Proactor` を直に待って確かめる。
+    #[test]
+    fn a_wake_from_another_thread_ends_a_long_poll() {
+        let mut driver = RealDriver::new().unwrap();
+        let waker = driver.waker();
+        let start = Instant::now();
+        let ringer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            waker.wake();
+        });
+        // polling の backend は、起こされた待ちでも時間切れを返す
+        match driver.proactor.poll(Some(Duration::from_millis(900))) {
+            Ok(()) => {}
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::TimedOut),
+        }
+        let elapsed = start.elapsed();
+        ringer.join().unwrap();
+        assert!(elapsed >= Duration::from_millis(50), "{elapsed:?}");
+        assert!(elapsed < Duration::from_millis(500), "{elapsed:?}");
     }
 }

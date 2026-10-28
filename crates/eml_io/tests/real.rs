@@ -70,8 +70,10 @@ fn a_real_driver_without_work_or_deadline_cannot_progress() {
     assert!(!driver.wait(None).unwrap());
 }
 
+/// 保留の操作がある間に別のスレッドが waker を鳴らしても、`wait` は壊れずに戻る。1回の待ちは `IDLE_TICK` で
+/// 切れるので、起こしで戻ることそのものは `real.rs` の単体テストが確かめる。
 #[test]
-fn a_wake_from_another_thread_returns_a_wait() {
+fn a_wake_from_another_thread_leaves_a_wait_working() {
     let mut driver = RealDriver::new().unwrap();
     #[cfg(unix)]
     let _ends = {
@@ -95,6 +97,26 @@ fn a_wake_from_another_thread_returns_a_wait() {
     ringer.join().unwrap();
     driver.quiesce();
     assert_eq!(driver.pending(), 0);
+}
+
+/// 走っている仕事を持つ driver を落とすと、落とすことが仕事の終わりを待つ。
+#[test]
+fn dropping_a_driver_waits_for_a_running_job() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let finished = Arc::new(AtomicBool::new(false));
+    let mut driver = RealDriver::new().unwrap();
+    let flag = Arc::clone(&finished);
+    driver.submit(Op::Job(Box::new(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        flag.store(true, Ordering::SeqCst);
+        Ok(0)
+    })));
+    let start = Instant::now();
+    drop(driver);
+    assert!(finished.load(Ordering::SeqCst));
+    assert!(start.elapsed() >= Duration::from_millis(150));
 }
 
 #[test]

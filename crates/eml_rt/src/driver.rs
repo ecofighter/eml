@@ -30,7 +30,8 @@ pub enum Op {
     /// `buf.ptr[0..cap]` を書く。`Ok(n)` で終わり、n は短いことがある。
     Write { handle: IoHandle, buf: RawBuf },
     /// ブロックする呼び出しのプールの仕事。自分が所有する値 (所有して受け取る入力と、値で返す結果) を通してだけ
-    /// 記憶に届き、ヒープにも RC にも触れない。
+    /// 記憶に届き、ヒープにも RC にも触れない。panic しない。本物の driver は、仕事の panic を driver を持つ
+    /// スレッドの上で起こし直すためである。
     Job(Box<dyn FnOnce() -> io::Result<usize> + Send + 'static>),
 }
 
@@ -59,7 +60,8 @@ pub trait IoDriver {
     /// `now() >= deadline_ms` か、完了が届くか、waker が鳴るまで待つ。早く戻ってよい。
     /// `Ok(false)` は外からの入力なしには何も進まないこと、`Err` は driver が壊れたことを表す。
     fn wait(&mut self, deadline_ms: Option<u64>) -> io::Result<bool>;
-    /// 失敗しない。出せなかった操作は、次の `completions` で誤りとして終わる。
+    /// 失敗しない。出せなかった操作は、次の `completions` で誤りとして終わる。本物の driver では、プールの
+    /// スレッドがすべて仕事中なら、仕事の `submit` はスレッドが空くまで、安全点を通らずに呼んだスレッドの上で待つ。
     fn submit(&mut self, op: Op) -> OpKey;
     /// できるだけ取り消す。`key` の完了はそれでも届く。`Op::Job` には何もしない。
     fn cancel(&mut self, key: OpKey);
