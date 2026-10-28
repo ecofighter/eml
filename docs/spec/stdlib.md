@@ -1017,9 +1017,9 @@ body () =
 ```
 
 - `scope f` は、呼んだタスクの今のスコープの子のスコープを開いて今のスコープにし、同じタスクの中で `f s` を動かす。`f s` が値を返しても、失敗しても、取り消されても、スコープのすべてのタスクが終わるまで待ってから今のスコープを元に戻す。この待ちは `shield` の中で行うので、取り消しで外れない
-- `scope` の結果はスコープに最初に記録した失敗 (本体か子かによらず、終わった順) を起こし直すか、記録がなければ本体の結果 (値、失敗、`Cancelled`) である。本体の失敗も記録し、記録した時点で子をすべて取り消す。2つ目からの失敗は報告せず、`RunStats.dropped_failures` に数える ([VM](vm.md) の「`RunStats`」)
+- `scope` の結果はスコープに最初に記録した失敗 (本体か子かによらず、終わった順) を起こし直すか、記録がなければ本体の結果 (値、失敗、`Cancelled`) である。本体の失敗も記録し、記録した時点で子をすべて取り消す。本体が種類 `Cancelled` の失敗で終わったときは、記録はしないが、子はすべて取り消す。2つ目からの失敗は報告せず、`RunStats.dropped_failures` に数える ([VM](vm.md) の「`RunStats`」)
 - `start_in s f` と `spawn_in s f` は名前を付けたスコープ `s` にタスクを加える。`s` が閉じていれば `Panic` `the scope is closed` を起こす。本体が終わって閉じかけでも、まだタスクの残るスコープには加えられる。旗の立ったスコープに加えたタスクは、作るときに取り消す
-- `Scope` は `Unr` の即値で、子のタスクに渡せ、`scope` の外へも出せる。離れたスコープの値と前の run の値は、閉じたスコープとして扱う。REPL の束縛にも置ける
+- `Scope` は `Unr` の即値で、子のタスクに渡せ、`scope` の外へも出せる。REPL の束縛にも置ける。離れたスコープの値と前の run の値は、その添字の generation が一周するまでは、閉じたスコープとして扱う ([VM](vm.md) の「セルと登録表」)
 - タスクは自分のスコープより長く生きない。スコープはタスクがすべて終わるまで閉じず、タスクが開いたスコープはタスクの底より前に閉じる
 
 ### 取り消し
@@ -1032,7 +1032,7 @@ body () =
 - 取り消しは協調的で、取り消しの地点を通らないコードは止まらない。待たないループを取り消せるようにするには、ループの中で `check_cancelled ()` を呼ぶ
 - `cancel_requested ()` は、取り消しの地点が投げるときだけ真を返す。`shield` の中とタスクの外では偽である。`await` から出た `Cancelled` を捕まえたタスクは、`cancel_requested ()` で自分が取り消されたかを確かめられる
 - 投げるのは普通の IO の失敗なので、タスクのフレームを巻き戻して `Lin` の値を落とし、`try_io` と `try_all` が捕まえる。捕まえても取り消しは続き、次の取り消しの地点がまた投げる
-- 種類 `Cancelled` の IO の失敗で終わったタスクは、スコープの失敗にならず、旗も立てない。利用者が `fail_io Prelude.Cancelled` で投げた失敗も同じである。`await` はそれを種類と文言のまま起こし直し、待たないタスクなら報告しない
+- 種類 `Cancelled` の IO の失敗で終わったタスクは、スコープの失敗にならず、旗も立てない。利用者が `fail_io Prelude.Cancelled` で投げた失敗も同じである。`await` はそれを種類と文言のまま起こし直し、待たないタスクなら報告しない。これに対し、`scope` の本体が種類 `Cancelled` の失敗で終わると、失敗は記録しないが、スコープに旗を立てて子をすべて取り消す
 - `Cancelled` が `await`、`run`、`scope` から出ると、呼んだタスクの普通の IO の失敗になる。`scope` を囲む `try_io` で捕まえれば、旗だけで取り消されていたタスクは続けて動ける。捕まえない `Cancelled` は実行時エラー `task was cancelled` になる
 - `await t` で待つ側が取り消されたときは、`t` も取り消す
 - `shield f` の中の取り消しの地点はビットも旗も見ない。`shield` の中の待ちは取り消しで外れない。`shield` を出た後の最初の取り消しの地点が投げる
@@ -1040,7 +1040,7 @@ body () =
 
 ### 操作の予算
 
-待たずに済む速い道は、タスクごとの予算を1つずつ使う。予算は 128 で、タスクが始まるときと再開するときに戻す。予算を使い切った速い道は、`yield_now` でほかのタスクに worker を渡す。予算を使う速い道は `check_cancelled` だけで、`cancel_requested` は予算を使わない。予算は横取りの予算と別で、横取りでは戻さないので、`RunStats.parks` はスケジュールによらない。
+待たずに済む速い道は、タスクごとの予算を1つずつ使う。予算は 128 で、タスクが始まるときと再開するときに戻す。予算を使い切った速い道は、`yield_now` でほかのタスクに worker を渡す。予算を使う速い道は `check_cancelled` だけで、`cancel_requested` は予算を使わない。予算は横取りの予算と別で、横取りでは戻さない。戻すのは始まるときと再開するときだけなので、`RunStats.parks` はスケジュールによらず、横取りのないネイティブのコードでも同じに動く。予算はタスクのセルに持ち、`Ctx` には置かない。予算を使う行はどれも登録表に触れるので、`eml_rt` を変えずに済むためである。
 
 ### `Failure` と `try_all`
 
@@ -1056,7 +1056,7 @@ pub try_all : (Unit -> <IO, Panic | e> a) -> <IO | e> Result Failure a
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルと、`Async.start_in` と `spawn_in` の閉じたスコープは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|
@@ -1085,6 +1085,7 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | 標準入力の2つ目のハンドル | ``the standard input is already open`` |
 | 標準出力の2つ目のハンドル | ``the standard output is already open`` |
 | 標準エラーの2つ目のハンドル | ``the standard error is already open`` |
+| `Async.start_in`、`spawn_in` の閉じたスコープ | ``the scope is closed`` |
 | 標準入力の読み | ``cannot read the standard input: not available`` |
 | UTF-8 でない標準入力 | ``the standard input is not valid UTF-8`` |
 | UTF-8 でない引数 | ``argument 2 is not valid UTF-8`` (`Env.args ()` のリストの 0 から数えた位置) |

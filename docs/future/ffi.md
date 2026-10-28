@@ -50,6 +50,7 @@ matmul n a b =
 ```
 
 - 属性は ABI の文字列と名前の間に置く文脈の語である。`pure` は下の「効果と中断の分類」、`blocking` は下の「長く走る呼び出し」で扱う。`symbol` は C の記号の名前で、書かなければ eml の名前を使う
+- 利用者の `extern "C"` は処理系の表の行を持たないので、引数に「預かる」印を書けない。引数の型に現れる型変数は、[宣言](../spec/declarations.md) の「`extern`」の規則のとおり `Unr` に固定したままである
 - `extern "C" data` は不透明なハンドルの型を宣言する。`drop` に書いた C の関数が後始末をする (下の「C のハンドル」)
 - `link` はモジュールの最上位に書く。`on linux`、`on macos`、`on windows` は、その OS のときだけ効く。`framework` は macOS だけのものである。AOT では `-l` と `-framework` にしてリンカに渡し ([ネイティブ化の設計](native.md) の「AOT と配布」)、VM と JIT では読み込みのときに `dlopen` で開く (`libopenblas` の `.dylib`、`.so`、`.dll`)
 - CLI の `--link <名前>` は `run` と `build` で使え、モジュールの `link` を上書きする。同じプログラムを別の BLAS で動かすためである

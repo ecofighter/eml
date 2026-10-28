@@ -171,6 +171,8 @@ struct TaskCell {
     current: CellRef,
     wait: Option<Wait>,
     cancel: bool,
+    /// `shield` の深さ。std にはタスクごとの動的な値を持つ仕組みがなく (タスクは閉じた row で始まり、`var` を
+    /// 捕まえられない)、VM の `Task` は起きるたびに作り直すので、タスクのセルに持つ。
     shield: u32,
     /// 速い道の残りの予算。始めるときと再開するときに戻す。
     budget: u32,
@@ -261,7 +263,7 @@ pub(crate) struct TaskStats {
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、受け箱の処理が外した待ち、取り消しで再開する
-    /// `yield_now` を数える (docs/spec/vm.md の「取り消しの届け方」)。
+    /// `yield_now`、真を返した `cancel_point` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
 }
 
@@ -583,9 +585,10 @@ impl Registry {
         Ok(())
     }
 
-    /// ハンドルのセル。ハンドルの受け箱が登録表の受け箱と違えば、前の run のハンドルである。添字は run ごとに
-    /// 使い回すので、generation では見分けられない。`Task a` は `Lin` で入力をまたいで残らないので、検査を通った
-    /// プログラムからは届かない (docs/spec/vm.md の「`Async` のタスク」)。
+    /// ハンドルのセル。ハンドルの受け箱が登録表の受け箱と違えば、前の run のハンドルである。ハンドルは落ちたときに
+    /// 知らせを積むために自分の run の受け箱を持つので、それを比べれば generation の一周によらずに run を見分けられる。
+    /// `Task a` は `Lin` で入力をまたいで残らないので、検査を通ったプログラムからは届かない
+    /// (docs/spec/vm.md の「`Async` のタスク」)。
     fn handle_cell<M: Mode>(&self, ctx: &Ctx<M>, handle: Word) -> Result<CellRef, CellFault> {
         // ハンドルは `Task a` の `Foreign` で、呼ぶ側が持つ唯一の参照である (`Task a` は `Lin`)
         let h = unsafe { ctx.heap().foreign_unique::<TaskHandle>(handle) }?;
