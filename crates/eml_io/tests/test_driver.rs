@@ -189,6 +189,23 @@ fn a_cancel_before_return_ends_the_op_at_the_next_settle() {
     assert_eq!(driver.pending(), 0);
 }
 
+/// すでに終わってまだ渡していない操作は、取り消しても終わったときの結果のまま渡す。
+#[test]
+fn a_cancel_after_the_op_finished_keeps_its_result() {
+    let mut driver = TestDriver::new(None);
+    let (a, _b) = driver.pair().unwrap();
+    let mut data = *b"abc";
+    let write = driver.submit(Op::Write {
+        handle: a,
+        buf: raw(&mut data),
+    });
+    assert!(driver.wait(Some(5)).unwrap());
+    driver.cancel(write);
+    let done = collect(&mut driver);
+    assert_eq!(keys(&done), [write]);
+    assert_eq!(*done[0].result.as_ref().unwrap(), 3);
+}
+
 /// 保留の操作は取り消して捨てるが、仕事は取り消せないので動かしきる。
 #[test]
 fn quiesce_drops_every_pending_op_and_runs_jobs() {

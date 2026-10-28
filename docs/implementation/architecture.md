@@ -353,7 +353,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - driver は `Word`、`Ctx`、RC に触れず、記憶には `RawBuf` を通してだけ届く。そのため `eml_io` は `eml_vm` を知らずに組み立てられる。どちらの driver を使うかは `eml_vm` の `Clock` が決める
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
 - driver は作ったスレッドの上でだけ使う。`eml_io` は driver の型に `unsafe impl Send` を書かない
-- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計と、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、渡す前の取り消しが次の決着で終わること) を確かめる
+- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計と、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと) を確かめる
 
 ## ソースファイルと位置
 

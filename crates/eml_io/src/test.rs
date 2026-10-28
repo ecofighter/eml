@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use eml_rt::{Completion, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf};
 
-use crate::real::Flag;
+use crate::flag::Flag;
 
 /// 終わる操作がないときにだけ、期限まで進む仮想の時計の driver。時計は 0 から始まり、ミリ秒の整数で進む。
 pub struct TestDriver {

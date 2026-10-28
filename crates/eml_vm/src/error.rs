@@ -114,7 +114,8 @@ impl RuntimeError {
 
     /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き `RootMisuse` を含む) と内部の誤りの後と、回復が
     /// 失敗した後は、ヒープを信用できない。driver の誤りの後は、driver が貸した記憶を手放したかを確かめられない。
-    /// REPL はこの後の入力を受け付けない (docs/spec/vm.md の「追記」)。
+    /// driver を作れなかったときも、その `Machine` では I/O を動かせないので同じに扱う。REPL はこの後の入力を受け付けない
+    /// (docs/spec/vm.md の「追記」と「時計と driver」)。
     pub fn is_broken(&self) -> bool {
         matches!(
             self,

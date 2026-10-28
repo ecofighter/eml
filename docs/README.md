@@ -59,6 +59,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | `eml_lir` | lir |
 | `eml_vm` | vm、lir、object-model |
 | `eml_rt` | object-model |
+| `eml_io` | vm |
 | 診断を出すすべての段階 | diagnostics |
 
 ## 文書の扱い

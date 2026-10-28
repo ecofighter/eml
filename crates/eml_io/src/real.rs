@@ -3,10 +3,11 @@
 
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use eml_rt::{Completion, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey};
+
+use crate::flag::Flag;
 
 /// 本物の driver が1回の `wait` で眠る長さの上限。空きのループは起きるたびに止める語を読むので、Ctrl-C と確保量の
 /// 上限はどの方針でもこの長さのうちに眠る worker を止める (docs/spec/vm.md の「時計と driver」)。
@@ -104,24 +105,5 @@ impl IoDriver for RealDriver {
     fn quiesce(&mut self) {
         self.unsupported.clear();
         self.empty_bin();
-    }
-}
-
-/// 鳴ったことだけを覚える waker。眠るスレッドは起こさず、次の `wait` がすぐに戻る (docs/spec/vm.md の「時計と driver」)。
-#[derive(Default)]
-pub(crate) struct Flag {
-    rung: AtomicBool,
-}
-
-impl Flag {
-    /// 鳴っていたかを返し、旗を下ろす。
-    pub(crate) fn take(&self) -> bool {
-        self.rung.swap(false, Ordering::Relaxed)
-    }
-}
-
-impl IoWaker for Flag {
-    fn wake(&self) {
-        self.rung.store(true, Ordering::Relaxed);
     }
 }

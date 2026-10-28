@@ -28,7 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `io-driver`: 本物の I/O の driver とブロックする呼び出しのプールを入れる。まず `compio-driver` を単独で使えるかを試作で確かめ、使うかどうかを段の計画で決める。時間だけの `IoDriver` (`now` と `wait_until`) と時間の輪はすでにあるので、その上に受け付けと完了のメソッドを足し、`await_io_until` と `_within` の版を時間の輪の項として載せる。`eml_io` に本物の driver とテストの driver を作る。読めるようになってから読みの buffer を取る規則もこの段で入れる。前提: なし。設計: [非同期の設計](async.md) の「I/O の driver」
+- `io-driver`: 本物の I/O の driver とブロックする呼び出しのプールを入れる。まず `compio-driver` を単独で使えるかを試作で確かめ、使うかどうかを段の計画で決める。受け付け、取り消し、完了、待ちを持つ `IoDriver` の trait と、`eml_io` のテストの driver と、時間の輪はすでにあるので、`eml_io` の本物の driver をその trait の上に作り、`await_io_until` と `_within` の版を時間の輪の項として載せる。読めるようになってから読みの buffer を取る規則もこの段で入れる。前提: なし。設計: [非同期の設計](async.md) の「I/O の driver」
 - `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。前提: `io-driver`。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
 - `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。前提: `async-net`。設計: [非同期の設計](async.md) の「テストと決定性」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
