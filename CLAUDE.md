@@ -122,7 +122,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | Translate, instance names, optimize | docs/spec/core-ir.md の「変換の規則」, docs/spec/core-ir.md の「最適化」 |
 | Evidence passing | docs/spec/core-ir.md の「evidence passing」 |
 | Reprs, marks, the LIR passes, verifiers | docs/spec/lir.md の「値の表現」, docs/spec/lir.md の「Kind の印」, docs/spec/lir.md の「パスの順番」, docs/spec/lir.md の「verifier」 |
-| `Std.Async` tasks | docs/spec/stdlib.md の「`Std.Async`」, docs/spec/vm.md の「`Async` のタスク」, docs/spec/declarations.md の「`extern`」 (held arguments) |
+| `Std.Async` tasks | docs/spec/stdlib.md の「`Std.Async`」, docs/spec/stdlib.md の「取り消し」, docs/spec/vm.md の「`Async` のタスク」, docs/spec/vm.md の「取り消しの届け方」, docs/spec/declarations.md の「`extern`」 (held arguments) |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
 | The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |

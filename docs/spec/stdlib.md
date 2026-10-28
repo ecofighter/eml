@@ -29,7 +29,7 @@ eml run --sched seeded:7 wc.em -l input.txt
 
 extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
-extern の行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md) の「`extern`」)。預かる行は `Std.Async` の `start_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw` の11行で、`task_cell` だけは借りて預かる。利用者の extern (将来の `extern "C"`) は表の印を書けないので、型変数は `Unr` に固定されたままである。
+extern の行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md) の「`extern`」)。預かる行は `Std.Async` の `start_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw` の11行で、`task_cell` だけは借りて預かる。預からない引数の型変数は、同じ節の規則のとおり `Unr` に固定するか、コールバックの結果なら固定しない。
 
 文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
@@ -1040,7 +1040,7 @@ body () =
 
 ### 操作の予算
 
-待たずに済む速い道は、タスクごとの予算を1つずつ使う。予算は 128 で、タスクが始まるときと再開するときに戻す。予算を使い切った速い道は、`yield_now` でほかのタスクに worker を渡す。今の速い道は `check_cancelled` だけで、`cancel_requested` は予算を使わない。予算は横取りの予算と別で、横取りでは戻さないので、`RunStats.parks` はスケジュールによらない。
+待たずに済む速い道は、タスクごとの予算を1つずつ使う。予算は 128 で、タスクが始まるときと再開するときに戻す。予算を使い切った速い道は、`yield_now` でほかのタスクに worker を渡す。予算を使う速い道は `check_cancelled` だけで、`cancel_requested` は予算を使わない。予算は横取りの予算と別で、横取りでは戻さないので、`RunStats.parks` はスケジュールによらない。
 
 ### `Failure` と `try_all`
 
