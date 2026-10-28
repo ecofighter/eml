@@ -83,10 +83,10 @@
   - 取り消しは2段で行う。印を付ける (`mark`: ビットと旗を立て、スコープの属するタスクと入れ子のスコープへたどる。一度立てたら2度目は何もしない。たどる道は作業の列で持ち、Rust の再帰を使わない) と、届ける (取り消しの知らせ `Notice::Cancel(cell)` を受け箱に積む) である
   - `CANCELLED` で再開する仕事をほかのタスクのために作るのは、受け箱の処理 (`drain`) だけである。`park` の待つ前の確認と、`resumed` の実行待ちの決め直しは、タスクが自分のセルを読むだけである
   - `drain` は受け箱が空になるまで繰り返す (落ちたハンドルの処理が取り消しの知らせを積むため)
-  - セルの状態の区分: 共有 (どのタスクの操作からも書く) は `cancel` と `flag`、スコープの一覧、`closing`/`closed`/`first_failure`。持ち主だけ (タスクを動かすか受け箱を処理する worker だけが読み書きする) は `phase`、`k`、`wait`、`shield`、`budget`、`current`、`run`、タスクのセルの待ち手
+  - セルの状態の区分: 共有 (どのタスクの操作からも書く) は `cancel` と `flag`、スコープの一覧、`closing`/`closed`/`first_failure`。公開 (持ち主だけが書き、印を付ける操作が読む) は `current` と `run`。持ち主だけ (タスクを動かすか受け箱を処理する worker だけが読み書きする) は `phase`、`k`、`wait`、`shield`、`budget`、タスクのセルの待ち手
   - 複数の worker を入れる段 (async-threads) は、受け箱を worker ごとにし、`cancel` と `flag` を atomic に、一覧を mutex にするなど表現だけを替える。`mark`、`drain`、`unpark`、`resumed` の呼び口は変えない
-- 理由: multicore.md の「スケジューラ」の「待ちを外すのは持ち主の worker がその受け箱の lock の下でだけ行う」を、1つの worker の場合にそのまま当てた形である。受け箱はほかのタスクに切り替える所と横取りを試みる所の頭で処理するので、印を付けてから待ちを外すまでにほかのタスクは動かない
-- 却下した案: `finish` や `async_op` から直接ほかのタスクの待ちを外す (multicore.md の規則と逆の形になり、async-threads で作り直しになる)
+- 理由: multicore.md の「スケジューラ」の「待ちを外すのは持ち主の worker がその受け箱の lock の下でだけ行う」を、1つの worker の場合にそのまま当てた形である。受け箱はほかのタスクに切り替える所と横取りを試みる所の頭で処理するので、印を付けてから待ちを外すまでにほかのタスクは動かない。`mark` は開いているスコープと入れ子の `run` の根を `current` と `run` からたどる。async-threads では atomic にし、開く側は載せてから読み、印を付ける側は立ててから読むので、開くのと印を付けるのが重なっても、新しいスコープは旗を得る
+- 却下した案: `finish` や `async_op` から直接ほかのタスクの待ちを外す (multicore.md の規則と逆の形になり、async-threads で作り直しになる)。たどるのを持ち主の受け箱の処理に移す (子の取り消しが持ち主の次の処理まで遅れ、たどる所が2つになる)
 - 影響する所: async-threads、async-rescue
 - 見直す条件: 受け箱を通す遅れが計測で問題になったとき
 - リポジトリに残す所: vm.md の「取り消しの届け方」(T-3)、`cells.rs` の先頭のコメント (T-3)
@@ -177,9 +177,9 @@ enum Mark { Task(CellRef), Scope(CellRef) }           // 印を付ける作業�
 
 struct TaskCell {
     phase, outcome, scope /* 加わったスコープ */, worker, spawner, member_at, waiters,
-    k: Option<Word>, current: CellRef, wait: Option<Wait>, shield: u32, budget: u32,  // 持ち主だけ
-    cancel: bool,                                                                       // 共有
-    run: Option<CellRef>,   // 入れ子の run で待っている根
+    k: Option<Word>, wait: Option<Wait>, shield: u32, budget: u32,  // 持ち主だけ
+    current: CellRef, run: Option<CellRef> /* 入れ子の run で待っている根 */,  // 公開
+    cancel: bool,                                                     // 共有
     detached: bool,         // 今の handle_dropped
 }
 struct ScopeCell {
@@ -195,8 +195,8 @@ pub(crate) struct Registry { slots, free, floor: u32, inbox, stats }
 | 操作 | 振る舞い |
 |---|---|
 | `Registry::new(floor)`、`next_floor()` | 新しい添字は generation `floor` から始める。`next_floor` は全添字の `generation.wrapping_add(1)` の最大と `floor` の大きい方 |
-| 非公開 `new_scope(parent, opener, closing)` | `flag = parent.flag \|\| opener.cancel`。`nested_at` を決めて `parent.nested` に積む |
-| `open_root(parent, caller)` | `new_scope(parent, caller, true)`。`caller.run = Some(root)` |
+| 非公開 `new_scope(parent, opener, closing)` | `nested_at` を決めて `parent.nested` に積む。旗は `inherit_flag` で写す |
+| `open_root(parent, caller)` | `new_scope(parent, caller, true)`。`caller.run = Some(root)`、`inherit_flag(s)` (`flag = parent.flag \|\| opener.cancel`) |
 | `start(..) -> Result<Option<(Word, Runnable)>, CellFault>` | 閉じたスコープなら `None`。`cancel = scope.flag`、`current = scope`、`budget = BUDGET`、`members` に積む |
 | `started(cell)`、`resumed(cell, wake) -> i64` | 予算を戻す。`resumed` は `wait` が `Ready` で、渡す値が `WOKE` で、取り消しの地点の規則を満たせば `CANCELLED` を返す (`cancels += 1`) |
 | 非公開 `point(t)` | `shield == 0 && (cancel \|\| scope(current).flag)` |
@@ -207,7 +207,7 @@ pub(crate) struct Registry { slots, free, floor: u32, inbox, stats }
 | `take(.., Take::Run)` | `release_scope(root)` |
 | `detach(ctx, handle, cancel, depth_offset)`、非公開 `let_go(cell, cancel)` | ハンドルを受け取った印を付けて放す。終わっていればセルを放し、終わっていなければ `detached = true`、`cancel` なら `mark(Task)` |
 | `scope_cell(i64) -> Option<CellRef>` | 生きているスコープのセル (閉じていてもよい) なら `Some` |
-| `open_scope(me) -> i64` | `new_scope(Some(me.current), Some(me), false)`、`me.current = s` |
+| `open_scope(me) -> i64` | `new_scope(Some(me.current), Some(me), false)`、`me.current = s`、`inherit_flag(s)` (`flag = parent.flag \|\| opener.cancel`) |
 | `close_scope(s) -> i64` | `closing = true`。`members` が空ならすぐ `closed`。`s` を `Cell` として返す |
 | `leave_scope(s, me) -> Result<Option<Raise>, CellFault>` | `closed` と `me.current == s` を要する。`current = parent`、最初の失敗を取り出し、`release_scope` |
 | 非公開 `release_scope(s)` | `opener.run == Some(s)` なら空にする。親の `nested` から外して放す |
@@ -216,11 +216,11 @@ pub(crate) struct Registry { slots, free, floor: u32, inbox, stats }
 | `shield_enter(me)`、`shield_leave(me)` | 深さを ±1 (0 から減らせば内部の誤り) |
 | `cancel_point(me: Option<CellRef>) -> bool` | `None` なら偽。真なら `cancels += 1` |
 | `spend_budget(me) -> bool` | `budget = budget.saturating_sub(1); budget == 0` |
-| 非公開 `mark(first)` | 作業の列。`Task(t)`: ビットが立っていれば戻る。立てる。`t.current` から親へ、`t.scope` の手前までのスコープを `Scope` で積む。`t.run` があれば積む。`Notice::Cancel(t)` を積む。`Scope(s)`: 旗が立っていれば戻る。立てる。`members` を `Task` で、`nested` を `Scope` で積む。`s.opener == Some(o)` で `o.current == s` なら `Notice::Cancel(o)` を積む |
+| 非公開 `mark(first)` | 作業の列。`Task(t)`: ビットが立っていれば戻る。立てる。`t.current` から親へ、`t.scope` の手前までのスコープを `Scope` で積む。`t.run` があれば積む。`Notice::Cancel(t)` を積む。`Scope(s)`: 旗が立っていれば戻る。立てる。`members` を `Task` で、`nested` を `Scope` で積む。`s.opener == Some(o)` なら `Notice::Cancel(o)` を積む |
 | `drain(ctx, depth_offset, out)` | 受け箱が空になるまで繰り返す。`HandleDropped` は `let_go(.., true)`、`Cancel` は `unpark` |
 | 非公開 `unpark(t, out)` | 生きていて、`Parked` で、`wait == Cell(_)` で、規則を満たせば、`wait` を空にし、`k` を取り出し、`cancels += 1`、`Resume CANCELLED`。相手の待ち手の項は残す |
 
-先頭の不変条件のコメント (今の段落を置き換える): `members` と `nested` の項は生きているセルを指す。`waiters` の項は古くてもよく、`wake` が `wait` で確かめる。`k.is_some() ⇔ wait == Some(Cell(_))` (`Ready` の継続は列に積んだ仕事が持つ)。今のスコープから親への列は、そのタスクが開いたスコープからなり、加わったスコープで終わる。入れ子の `run` の根の `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed ⇒ closing && members が空`。スコープのセルを放すのは、閉じた後の `release_scope` と `sweep_all` だけである。`cancel` と `flag` は共有で、タスクのセルの残りは持ち主だけが読み書きする。
+先頭の不変条件のコメント (今の段落を置き換える): `members` と `nested` の項は生きているセルを指す。`waiters` の項は古くてもよく、`wake` が `wait` で確かめる。`k.is_some() ⇔ wait == Some(Cell(_))` (`Ready` の継続は列に積んだ仕事が持つ)。今のスコープから親への列は、そのタスクが開いたスコープからなり、加わったスコープで終わる。入れ子の `run` の根の `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed ⇒ closing && members が空`。スコープのセルを放すのは、閉じた後の `release_scope` と `sweep_all` だけである。`cancel` と `flag` は共有、`current` と `run` は持ち主が書いて印を付ける操作が読み、タスクのセルの残りは持ち主だけが読み書きする。
 
 #### D-11: `vm.rs` の呼び出し
 | 場所 | 変更 |
@@ -490,6 +490,7 @@ VM の `Task` の欄、`Ctx`、`eml_rt` は変えない。
   - testing.md の `async/` の行に「名前付きのスコープ、`shield`」
 - テスト:
   - 新しい UI テスト `run/async/`: `scope_cancel`、`scope_child_failure_wins`、`closed_scope`、`start_in_flagged`、`cancel_reaches_open_scopes`、`shield`。`run-fail/async/cancelled_run`。REPL `crates/eml_cli/tests/repl/async/stale_scope.repl` (付録 `ui-tests.md`)
+  - レビューの後に足すテスト (種類 1): `run/async/scope_stays_open` (本体が動いている間は名前付きのスコープが閉じない) と `run/async/scope_cancel_reaches_body` (本体がスコープの外のタスクを待っていても、スコープの旗が本体に届く)。理由は閉じる規則と本体への届けのどちらを戻しても、ほかのテストが通ってしまうこと
   - 期待値の変更 (種類 2): タイの2つの一覧 (`start_in_raw`、doc の数 10 → 11)。`externs.rs` の `PROBES` と `probe()` に `probe_scope : Async.Scope -> Async.Scope` と `ExternType::Scope => "probe_scope"` (網羅の match なので要る)。理由は型の行と行を足したこと
   - `only_the_listed_rows_borrow_or_return_a_pair` は変わらない (借りる `Scope` の引数はない)
 - 実装者に任せること: `start` の `Option` と `start_task` を `vm.rs` でどう組むか。放したスコープへの `close_scope`、`leave_scope`、`fail_scope` の内部の誤りの文言 (std から届かない)
@@ -609,3 +610,4 @@ T-1 と T-2 は互いに依らない。付録のパッチは T-1 → T-2 → T-3
 - ビットが立った後に開くスコープと、入れ子の `run` に取り消しが届かず止まる (試作で再現) → `flag = parent.flag || opener.cancel` と `TaskCell.run` を入れた (D-5)
 - `caught_await_still_fails_run.em` の出力が新しい規則でスケジュールに依る (seed 100 のうち 52 で変わる) → 競合を spec に書き、テストを `shield` で直した。`spin` を増やす直し方は採らない (D-13)
 - seed の比較の規則にレビューだけの約束が残っていた → `cancel_point` の真も `cancels` に数え、ハーネスの規則だけで足りるようにした (D-9)
+- T-4 のレビュー: `mark` が持ち主だけのはずの `current` を読んでいた → `current` と `run` を公開の区分にし、開く側は載せてから旗を写し、開いたタスクへはいつも届けるようにした (D-3、D-10。2026-10-28 に利用者が承認)。閉じる規則と本体への届けを確かめるテストがなかった → `scope_stays_open` と `scope_cancel_reaches_body` を足した (T-4)

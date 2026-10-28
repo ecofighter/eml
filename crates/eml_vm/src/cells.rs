@@ -16,8 +16,9 @@
 //! 待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。
 //!
 //! 取り消しは、印を付ける `mark` と受け箱の処理 `drain` が待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
-//! 仕事をほかのタスクのために作るのは `drain` だけである。`cancel` と `flag` はどのタスクの操作からも書き、タスクの
-//! セルの残りは、そのタスクを動かすか受け箱を処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
+//! 仕事をほかのタスクのために作るのは `drain` だけである。`cancel` と `flag` はどのタスクの操作からも書く。`current` と
+//! `run` は持ち主だけが書き、印を付ける操作が読む。タスクのセルの残りは、そのタスクを動かすか受け箱を処理する持ち主だけが
+//! 読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -360,27 +361,21 @@ impl Registry {
         Ok(self.scope_mut(scope)?.closed)
     }
 
-    /// スコープのセルを開く。旗は親の旗を写し、開くタスクのビットが立っていれば立てる。
+    /// スコープのセルを開いて親の一覧に積む。旗は呼ぶ側が載せた後に `inherit_flag` で写す。
     fn new_scope(
         &mut self,
         parent: Option<CellRef>,
         opener: Option<CellRef>,
         closing: bool,
     ) -> Result<CellRef, CellFault> {
-        let (mut flag, nested_at) = match parent {
-            Some(p) => {
-                let p = self.scope_mut(p)?;
-                (p.flag, p.nested.len() as u32)
-            }
-            None => (false, 0),
+        let nested_at = match parent {
+            Some(p) => self.scope_mut(p)?.nested.len() as u32,
+            None => 0,
         };
-        if let Some(o) = opener {
-            flag |= self.task_mut(o)?.cancel;
-        }
         let s = self.alloc(CellKind::Scope(ScopeCell {
             parent,
             opener,
-            flag,
+            flag: false,
             closing,
             nested_at,
             members: Vec::new(),
@@ -395,6 +390,23 @@ impl Registry {
         Ok(s)
     }
 
+    /// 親の旗と開いたタスクのビットを新しいスコープに写す。一覧と `current` (根なら `run`) に載せた後に呼ぶ。
+    /// 印を付ける側はビットと旗を立ててから一覧と `current` を読むので、どちらが先でも新しいスコープは旗を得る
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
+    fn inherit_flag(&mut self, s: CellRef) -> Result<(), CellFault> {
+        let scope = self.scope_mut(s)?;
+        let (parent, opener) = (scope.parent, scope.opener);
+        let mut flag = match parent {
+            Some(p) => self.scope_mut(p)?.flag,
+            None => false,
+        };
+        if let Some(o) = opener {
+            flag |= self.task_mut(o)?.cancel;
+        }
+        self.scope_mut(s)?.flag = flag;
+        Ok(())
+    }
+
     /// 根のスコープを開く。入れ子の `run` の根は呼んだタスク `caller` を開いたタスクとして持つ。
     pub(crate) fn open_root(
         &mut self,
@@ -405,6 +417,7 @@ impl Registry {
         if let Some(c) = caller {
             self.task_mut(c)?.run = Some(s);
         }
+        self.inherit_flag(s)?;
         Ok(s)
     }
 
@@ -834,6 +847,7 @@ impl Registry {
         let parent = self.task_mut(me)?.current;
         let s = self.new_scope(Some(parent), Some(me), false)?;
         self.task_mut(me)?.current = s;
+        self.inherit_flag(s)?;
         Ok(s.encode())
     }
 
@@ -928,10 +942,8 @@ impl Registry {
                     scope.flag = true;
                     work.extend(scope.members.iter().map(|&m| Mark::Task(m)));
                     work.extend(scope.nested.iter().map(|&n| Mark::Scope(n)));
-                    // 本体のタスクにはビットを立てず、今のスコープがこのスコープなら届ける
-                    if let Some(o) = scope.opener
-                        && self.task_mut(o)?.current == s
-                    {
+                    // 本体のタスクにはビットを立てず、届けるだけにする。外すかは `unpark` が持ち主の側で規則を確かめて決める
+                    if let Some(o) = scope.opener {
                         self.inbox.push(Notice::Cancel(o));
                     }
                 }
