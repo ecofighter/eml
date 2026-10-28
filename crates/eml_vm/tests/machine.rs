@@ -1,9 +1,15 @@
 //! 入力をまたいで `CodeBase` と `Ctx` を持つ `Machine` (docs/spec/vm.md の「追記」)。手書きの LIR のプログラムを1つの
 //! `Machine` に続けて読み込み、名前で照らした関数の番号、定数、エフェクト、位置のファイルの引き直しを確かめる。
 
+use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
-use eml_rt::{ArithFault, Checked, Fast, Fault, HeapError};
+use eml_rt::{
+    ArithFault, Checked, Completion, Fast, Fault, HandleBin, HeapError, IoDriver, IoHandle,
+    IoWaker, Op, OpKey,
+};
 use eml_vm::{
     AnyMachine, CompileError, Control, Limits, Machine, RunConfig, RuntimeError, SourceLocation,
     VmFault, capture_host, disassemble,
@@ -571,4 +577,103 @@ fn a_shown_entry_must_return_an_object() {
         ),
         "{error:?}"
     );
+}
+
+/// 完了を返さない driver。`wait` はいつも壊れた driver の誤りを返す。`quiesce` は呼ばれた回数を数え、`drains` のときだけ
+/// 保留の操作を空にする。
+struct FakeDriver {
+    drains: bool,
+    pending: usize,
+    next_key: OpKey,
+    quiesces: Arc<AtomicUsize>,
+}
+
+impl FakeDriver {
+    fn new(drains: bool) -> (FakeDriver, Arc<AtomicUsize>) {
+        let quiesces = Arc::new(AtomicUsize::new(0));
+        let driver = FakeDriver {
+            drains,
+            pending: 0,
+            next_key: 0,
+            quiesces: Arc::clone(&quiesces),
+        };
+        (driver, quiesces)
+    }
+}
+
+struct NoWaker;
+
+impl IoWaker for NoWaker {
+    fn wake(&self) {}
+}
+
+impl IoDriver for FakeDriver {
+    fn now(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    fn wait(&mut self, _deadline_ms: Option<u64>) -> io::Result<bool> {
+        Err(io::Error::other("broken"))
+    }
+
+    fn submit(&mut self, _op: Op) -> OpKey {
+        self.pending += 1;
+        self.next_key += 1;
+        self.next_key
+    }
+
+    fn cancel(&mut self, _key: OpKey) {}
+
+    fn completions(&mut self, _out: &mut Vec<Completion>) {}
+
+    fn pending(&self) -> usize {
+        self.pending
+    }
+
+    fn waker(&self) -> Arc<dyn IoWaker> {
+        Arc::new(NoWaker)
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        Arc::new(HandleBin::default())
+    }
+
+    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
+        Ok((1, 2))
+    }
+
+    fn close(&mut self, _handle: IoHandle) {}
+
+    fn quiesce(&mut self) {
+        self.quiesces.fetch_add(1, Ordering::SeqCst);
+        if self.drains {
+            self.pending = 0;
+        }
+    }
+}
+
+/// 渡した driver は run の外に保留の操作を残さないように、run の後に `quiesce` を受ける (docs/spec/vm.md の「時計と
+/// driver」)。
+#[test]
+fn every_run_quiesces_its_driver() {
+    let (driver, quiesces) = FakeDriver::new(true);
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(&parse(&format!(
+            "\
+fn main() -> unit {{
+  let s.0: obj = const \"ran\"
+  tail call say(s.0)
+}}
+{SAY}"
+        )))
+        .unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(quiesces.load(Ordering::SeqCst) >= 1);
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "ran\n");
 }

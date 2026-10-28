@@ -1309,7 +1309,8 @@ impl Registry {
     }
 
     /// run の終わりに、残ったセルをすべて放す。閉じていない channel と品物の残った channel もここで放す。その間に
-    /// 積まれた知らせは受け箱ごと捨てる。
+    /// 積まれた知らせは受け箱ごと捨てる。driver が保留の操作を持たないことを前提にし、呼ぶ側が先に `quiesce` する
+    /// (docs/spec/vm.md の「時計と driver」)。
     pub(crate) fn sweep_all<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,

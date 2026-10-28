@@ -16,7 +16,7 @@ use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
 use crate::driver::{ceil_ms, floor_ms};
-use crate::error::VmFault;
+use crate::error::{KEPT_PENDING, VmFault};
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{JoinId, JoinNode, MAIN, Outcome, Policy, Scheduler, TaskId, TaskState};
 use crate::{RunCounts, RuntimeError};
@@ -1637,6 +1637,12 @@ fn finish<R: Exec>(
     sched.cells.drain(ctx, task.depth_offset, &mut out)?;
     if !out.is_empty() {
         return Err(VmFault::Internal("a task is left at the end"));
+    }
+    // driver が貸した記憶をセルが持つうちは放せないので、保留の操作を片付けてから掃く。片付かなければ放さずに driver
+    // の誤りで終わる (docs/spec/vm.md の「`Async` のタスク」の「終わり」)
+    sched.driver.quiesce();
+    if sched.driver.pending() > 0 {
+        return Err(VmFault::Driver(KEPT_PENDING.to_string()));
     }
     sched.cells.sweep_all(ctx, task.depth_offset)?;
     if sched.has_children() {

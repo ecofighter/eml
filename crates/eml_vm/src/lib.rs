@@ -1,12 +1,14 @@
 //! LIR を実行するレジスタ型のバイトコード VM (docs/spec/vm.md)。`eml_rt` の `Ctx` の上で動き、フロントエンドに
 //! 依存しない。
 
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use eml_lir::Program;
 use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
 use crate::cells::TaskStats;
+use crate::error::KEPT_PENDING;
 use crate::vm::ExecWith;
 
 mod apply;
@@ -168,12 +170,16 @@ pub struct Loaded {
 /// `run` で入口の関数を実行する。モードごとの確かめは、作るときに `Machine<Fast>::new` と `Machine<Checked>::new` が
 /// 決める。
 pub struct Machine<M: Mode> {
-    /// 時計と待ち。最初の run が `clock` と方針の seed から作り、run の間は `Scheduler` に移す。`with_clock` と
-    /// `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。driver が貸した記憶は
-    /// ヒープにあるので、`code` と `ctx` より先に落とす欄として最初に置く (docs/spec/vm.md の「時計と driver」)。
+    /// 時計と待ち。`with_driver` が渡すか、最初の run が `clock` と方針の seed から作り、run の間は `Scheduler` に
+    /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
+    /// driver が貸した記憶はヒープにあるので、`Drop` は `ctx` より先にこの欄を落とす (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
     code: CodeBase<M>,
-    ctx: Ctx<M>,
+    /// 毒された `Machine` では、driver が貸したままの記憶を放さないように、`Drop` が落とさずに漏らす。
+    ctx: ManuallyDrop<Ctx<M>>,
+    /// `quiesce` の後にも driver が保留の操作を残した。この後の run、回復、`close` はヒープに触れずに driver の誤りを
+    /// 返す (docs/spec/vm.md の「時計と driver」)。
+    poisoned: bool,
     max_depth: usize,
     sched: Sched,
     /// 実行と回復の後の確かめ。検査モードではヒープの不変条件を確かめる。
@@ -222,7 +228,8 @@ impl<M: Mode> Machine<M> {
         Machine {
             code: CodeBase::new(Arc::clone(&control)),
             max_depth: control.limits().max_depth,
-            ctx: Ctx::new(control, host),
+            ctx: ManuallyDrop::new(Ctx::new(control, host)),
+            poisoned: false,
             sched: Sched::Sequential,
             check_heap,
             at_close,
@@ -248,6 +255,13 @@ impl<M: Mode> Machine<M> {
     pub fn with_clock(mut self, clock: Clock) -> Machine<M> {
         self.clock = clock;
         self.driver = None;
+        self
+    }
+
+    /// 次の run から使う driver を渡す。後の `with_clock` と `with_sched` はこれを捨てる。driver は `Machine` を使う
+    /// スレッドの上で作る (docs/spec/vm.md の「時計と driver」)。
+    pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
+        self.driver = Some(driver);
         self
     }
 
@@ -302,25 +316,38 @@ impl<M: Mode> Machine<M> {
             // 捨てた run のヒープには片付けていないタスクの物体が残るので、誤りの後と同じく入れ替える。`Scheduler` と
             // 登録表は `run_scheduled` が返るときに捨ててあるので、古いヒープの語を持つものは回復の後に残らない
             // (docs/spec/vm.md の「追記」)
-            Ok(Ran::Abandoned(finished, cause)) => match self.recover() {
-                Ok(()) => Ok((finished, None)),
-                Err(reason) => Err(RuntimeError::Unrecovered {
-                    cause: Box::new(cause),
-                    reason,
-                }),
-            },
-            Err(cause) if !cause.is_broken() => Err(match self.recover() {
-                Ok(()) => cause,
-                Err(reason) => RuntimeError::Unrecovered {
-                    cause: Box::new(cause),
-                    reason,
-                },
+            Ok(Ran::Abandoned(finished, cause)) => self.recover(cause).map(|_| (finished, None)),
+            Err(cause) if !cause.is_broken() => Err(match self.recover(cause) {
+                Ok(cause) | Err(cause) => cause,
             }),
             Err(cause) => Err(cause),
         }
     }
 
-    fn recover(&mut self) -> Result<(), HeapError> {
+    /// 誤り `cause` の後にヒープを入れ替え、成功したら `cause` を返す。失敗したら、回復の誤りを足した `Unrecovered`
+    /// か、毒された `Machine` の driver の誤りを返す。
+    fn recover(&mut self, cause: RuntimeError) -> Result<RuntimeError, RuntimeError> {
+        // カーネルやプールのスレッドが書いている記憶を写したり放したりしないように、ヒープに触れる前に driver を
+        // 空にする (docs/spec/object-model.md の「回復」)
+        if let Some(driver) = &mut self.driver {
+            driver.quiesce();
+            if driver.pending() > 0 {
+                self.poisoned = true;
+            }
+        }
+        if self.poisoned {
+            return Err(poisoned_fault("<recover>"));
+        }
+        match self.recover_heap() {
+            Ok(()) => Ok(cause),
+            Err(reason) => Err(RuntimeError::Unrecovered {
+                cause: Box::new(cause),
+                reason,
+            }),
+        }
+    }
+
+    fn recover_heap(&mut self) -> Result<(), HeapError> {
         let old = self.heap_work();
         // 根の語は根が持つ参照で、根から届く物体は失敗した実行が書き換えないので、`recover` の前提を守る
         unsafe { self.ctx.recover() }?;
@@ -347,6 +374,11 @@ impl<M: Mode> Machine<M> {
     }
 
     fn run_entry(&mut self, entry: u32, shown: Option<usize>) -> Result<Ran, RuntimeError> {
+        if self.poisoned {
+            return Err(poisoned_fault(
+                self.code.functions[entry as usize].name.as_str(),
+            ));
+        }
         // 終わりの欄は run ごとに開く (docs/spec/vm.md の「誤り、止めること、終わり」)
         self.ctx.heap().control().begin_run();
         let (code, ctx) = (&self.code, &mut self.ctx);
@@ -411,6 +443,12 @@ impl<M: Mode> Machine<M> {
         self.counters = std::mem::take(&mut scheduled.counters);
         // 誤りで返る道でも driver を失わないように、run の直後に戻す
         self.driver = scheduled.driver.take();
+        if scheduled.kept_pending {
+            // 貸したままの記憶があるので、結果を写さず、書き出しも確かめもせずに返す
+            // (docs/spec/vm.md の「時計と driver」)
+            self.poisoned = true;
+            return Err(poisoned_fault(code.functions[entry as usize].name.as_str()));
+        }
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
         // `exit` で終わった実行の入口の結果はダミーなので写さない
@@ -525,6 +563,9 @@ impl<M: Mode> Machine<M> {
     /// 実行の状態を閉じる。根の参照は VM が持つので先に手放す。検査モードでは、その後にヒープの不変条件を確かめ、
     /// 残った物体をリークとして返す。
     pub fn close(mut self) -> Result<(), RuntimeError> {
+        if self.poisoned {
+            return Err(poisoned_fault("<close>"));
+        }
         let close_error = |error| heap_fault(error, "<close>".to_string());
         for root in self.ctx.take_roots().into_iter().flatten() {
             // 根の語は根が持つ参照で、ほかの語には触れないので、`heap_mut` の前提を崩さない
@@ -532,6 +573,26 @@ impl<M: Mode> Machine<M> {
         }
         (self.check_heap)(&self.ctx).map_err(close_error)?;
         (self.at_close)(&self.ctx)
+    }
+}
+
+impl<M: Mode> Drop for Machine<M> {
+    fn drop(&mut self) {
+        // 本物の driver は落とすときに仕事を待ちきるので、その間はヒープを生かしておく
+        self.driver = None;
+        if !self.poisoned {
+            // `ctx` はこの後に使わない
+            unsafe { ManuallyDrop::drop(&mut self.ctx) }
+        }
+    }
+}
+
+/// 毒された `Machine` の誤り。
+fn poisoned_fault(function: &str) -> RuntimeError {
+    RuntimeError::Fault {
+        fault: VmFault::Driver(KEPT_PENDING.to_string()),
+        function: function.to_string(),
+        at: None,
     }
 }
 
@@ -553,6 +614,8 @@ struct Scheduled {
     counters: Vec<i64>,
     /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
     driver: Option<Box<dyn IoDriver>>,
+    /// run の直後の `quiesce` の後にも、driver が保留の操作を残した。
+    kept_pending: bool,
 }
 
 /// スケジューラを作るときに `Machine` から渡すもの。
@@ -586,6 +649,10 @@ fn run_scheduled<M: Mode, P: Policy>(
     sched.shared_roots = start.shared_roots;
     sched.cells.counters = start.counters;
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
+    // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
+    // (docs/spec/vm.md の「時計と driver」)
+    sched.driver.quiesce();
+    let kept_pending = sched.driver.pending() > 0;
     let scheduled = Scheduled {
         preemptions: sched.preemptions(),
         peak_stack: sched.peak_stack(task),
@@ -594,6 +661,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         generations: sched.cells.next_generations(),
         counters: std::mem::take(&mut sched.cells.counters),
         driver: Some(sched.driver),
+        kept_pending,
     };
     (result, scheduled)
 }
