@@ -1741,11 +1741,14 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncParkTime => {
             let me = current_cell(task)?;
-            let now = ceil_ms(sched.driver.now());
-            if let Some(run) = sched
-                .cells
-                .park_time(now, task.raw(arg(0)), me, task.get(arg(1)))?
-            {
+            let ms = task.raw(arg(0));
+            // 0 以下は譲りなので時計を読まない (docs/spec/vm.md の「時間の待ち」)
+            let now = if ms > 0 {
+                ceil_ms(sched.driver.now())
+            } else {
+                0
+            };
+            if let Some(run) = sched.cells.park_time(now, ms, me, task.get(arg(1)))? {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);

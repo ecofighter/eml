@@ -269,11 +269,11 @@ impl Drop for TaskHandle {
 pub(crate) struct TaskStats {
     /// `start` が作ったタスクのセルの数。
     pub(crate) tasks: u64,
-    /// `park` と `ready` が渡された継続の数。
+    /// `park`、`ready`、`park_time` が渡された継続の数。
     pub(crate) parks: u64,
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
-    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、受け箱の処理が外した待ち、取り消しで再開する
+    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park` と `park_time`、受け箱の処理が外した待ち、取り消しで再開する
     /// `yield_now`、真を返した `cancel_point` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
     /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` だけを数える。
@@ -630,7 +630,7 @@ impl Registry {
     }
 
     /// タスク `me` が、継続 `k` で `ms` ミリ秒眠る。`now_ms` は切り上げて読んだ今の時刻である。0 以下は譲りにして
-    /// 輪に載せないので、時計の読みも次に集める地点までの遅れもない (docs/spec/vm.md の「時間の待ち」)。
+    /// 輪に載せないので、VM は時計を読まず、次に集める地点までの遅れもない (docs/spec/vm.md の「時間の待ち」)。
     pub(crate) fn park_time(
         &mut self,
         now_ms: u64,

@@ -62,7 +62,7 @@ REPL (`eml_cli::Repl`) は入力ごとにプログラム全体を lowering し�
 
 - `Machine<M>` は、`CodeBase<M>` と `Ctx<M>` を入力をまたいで持つ。`Machine::<Fast>::new` と `Machine::<Checked>::new` は `Control` と Host を受け取り、モードごとの確かめを決める。`Machine::with_sched(sched)` は、実行ごとに作るスケジューラの方針を選ぶ。既定は `Sched::Sequential` で、`AnyMachine::new` は `RunConfig` の `sched` を渡す (「タスクとスケジュール」)。`Machine::with_clock(clock)` は時計を選ぶ。既定は `Clock::Virtual` で、`AnyMachine::new` は `RunConfig` の `clock` を渡す (「時計と driver」)。`AnyMachine` は、実行の前にモードを選ぶ呼び出し側のための列挙である
 - `Machine::load(program)` は `CodeBase::load` を呼び、新しい塊があれば実行のヒープに付け替えて、入口の関数の番号を `Loaded { entry }` で返す。誤りを返した後の `Machine` は使い続けない
-- `Machine::run(entry)` は、入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` と、実行ごとの登録表が数える `tasks`、`parks`、`dropped_failures`、`cancels` だけがその実行の値である (`shared_objects` はヒープの数なので積算である)。検査モードでは、実行の後にヒープの不変条件だけを確かめる。セッションの根は手放さず、次の実行に残す。続けられる誤り (`is_broken` が偽) の後と、`exit` が run を捨てた後 (「誤り、止めること、終わり」) は `Ctx::recover` を呼び、根から届く物体を新しいヒープに写して古いヒープを捨てる ([オブジェクトモデル](object-model.md) の「回復」)。スタックと `evv` と yield の状態に残った語も、残った物体のページも、古いヒープと一緒に消える。回復が成功したら、検査モードでは新しいヒープの不変条件を確かめ、元の誤りをそのまま返す。捨てた run では、誤りの代わりに `exit` の終了コードを持つ `Finished` を返す。`eml run` (`execute`) も同じ `run` を通る。根がないので写すものはなく、古いヒープを捨てて届かない `Foreign` の物体を閉じるだけである
+- `Machine::run(entry)` は、入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` と、実行ごとの登録表が数える `tasks`、`parks`、`timers`、`dropped_failures`、`cancels` だけがその実行の値である (`shared_objects` はヒープの数なので積算である)。検査モードでは、実行の後にヒープの不変条件だけを確かめる。セッションの根は手放さず、次の実行に残す。続けられる誤り (`is_broken` が偽) の後と、`exit` が run を捨てた後 (「誤り、止めること、終わり」) は `Ctx::recover` を呼び、根から届く物体を新しいヒープに写して古いヒープを捨てる ([オブジェクトモデル](object-model.md) の「回復」)。スタックと `evv` と yield の状態に残った語も、残った物体のページも、古いヒープと一緒に消える。回復が成功したら、検査モードでは新しいヒープの不変条件を確かめ、元の誤りをそのまま返す。捨てた run では、誤りの代わりに `exit` の終了コードを持つ `Finished` を返す。`eml run` (`execute`) も同じ `run` を通る。根がないので写すものはなく、古いヒープを捨てて届かない `Foreign` の物体を閉じるだけである
 - 回復が `Unrecoverable` を返すか、検査モードで回復の後の不変条件の確かめが失敗したら、`run` は `RuntimeError::Unrecovered { cause, reason }` を返す。`cause` は元の誤り (捨てた run では `Stopped(Stop::Ended)`) で、`reason` は回復の誤り (`HeapError`) である。表示は元の誤りの後に `\nrecovery failed: {reason}` を足す。根の値は `Unr` なので、検証を通ったプログラムでは起きない
 - `Machine::run_shown(entry, max_chars)` は、文字列を返す入口の関数を実行し、結果の文字列の先頭 `max_chars` 文字を写し、`Finished` と組にして返す (`Result<(Finished, Option<String>), RuntimeError>`)。`exit` で終わったときは入口の結果がないので、文字列は `None` である (下の「`exit`」)。REPL が式の入力の値を書いた文字列を受け取るのに使う ([REPL の端末](repl.md) の「結果の表示」)。LIR は入口が文字列を返すことを印さないので、呼ぶ側が文字列を返す入口にだけ使う。入口の `ret` が RC の Repr でなければ、実行せずに内部の誤りを返す。速いモードで文字列でない語を写さないためである。`Finish` は結果を手放さずに残し、`vm::run` が成功した直後、書き出しの前に `Ctx::copy_string` で写して手放す (下の「誤り、止めること、終わり」)。実行時エラーと回復は `run` と同じで、写す前に止まれば、結果は回復で古いヒープと一緒に捨てられる
 - `Machine::write_line(line)` は、`Ctx::print_line` で Host の標準出力に1行を書いて書き出す。`AnyMachine` も、`run_shown` と `write_line` を持つ
@@ -236,7 +236,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Std.String.byte_at` と `Std.String.byte_length` も専用の命令にする。`byte_at` は `StrByteAt { dst, i, s }`、`byte_length` は `StrByteLength { dst, s }` で、どちらも文字列を借りたままにし、誤りのときも手放さない (巻き戻しの表が手放す)。バイト位置の外は `Panics` の行の `byte_at` だけが `step_failed` から `Panic` に届け、巻き戻しの地点になる。`byte_length` は `Pure` で地点を持たない。バイト単位の走査が文字列の読み出しの大半を占めるため、汎用の `Op::Extern` の行の番号の `match` を通さない
 - `Std.Bytes.get` と `Std.Bytes.length` も専用の命令にする。`get` は `BytesGet { dst, i, b }`、`length` は `BytesLength { dst, b }` で、文字列の2つの行と同じく、バイト列を借りたままにし、誤りのときも手放さない。`get` は `Panics` の行で、位置の外を `step_failed` から `Panic` に届けて巻き戻しの地点になり、`length` は `Pure` で地点を持たない。`Show Bytes` を eml で書くために Prelude が持つ `Prelude.bytes_get` と `Prelude.bytes_length` (借用の印も `Ctx` のメソッドも同じ) も、同じ2つの命令に写す
 - ほかの extern (`Float` の `compare`、文字列、表示、`println`、`FileIn`、`Fs`) は `Extern { dst, at }` の1つの命令にする。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…] で、行の番号の `match` で `Ctx` のメソッドを呼ぶ
-- `Std.Async` の23行 (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
+- `Std.Async` の24行 (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
 - VM は `Ctx` の基本操作の合間に、`Ctx` が持つ語とそこからたどれる物体に触れない (`heap_mut()` の前提)
 - `Bool`、`Ordering`、`IOErrorKind` のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを、`eml_vm` のテスト (`tags.rs`) で確かめる。VM の `Bool` と `compare` の命令がこれに頼るためである
 
@@ -538,7 +538,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `task_cell t`: ハンドルを借りて、そのセルの番号を `Std.Async.Cell` の即値 `(generation << 32) | index` で `dst` に書く。ハンドルを消費するのは、組を作る後の `con` である ([Core IR](core-ir.md) の「組を返す extern」)
 - `park c k`: 今の `Task` のセルの状態を「待っている」にし、継続 `k` でセル `c` を待つ。待つ前に下の「取り消しの届け方」の規則を確かめる。`c` がもう終わっているか閉じていれば、すぐ再開する仕事を列の後ろに積む。そうでなければ `k` を今のタスクのセルに置き、そのセルを `c` の待ち手に積み、`c` が終わるか閉じたときに再開する仕事にする。終わったセルにも近道をせず、いつも継続を渡す。命令は `()` を書いて終わり、`start_task` の handler の節がそのまま戻るので、入口の `Task` が終わってほかのタスクに切り替わる
 - `ready k`: 今の `Task` のセルの状態を「待っている」にし、待ちの登録を実行待ちにして、`k` を再開する仕事を列の後ろに積む。`yield_now` が使う
-- `park_time ms k`: 今の時刻を切り上げたミリ秒で読み、今の `Task` のセルを継続 `k` で `ms` ミリ秒眠らせる (下の「時間の待ち」)。すぐ再開する仕事ができれば列の後ろに積む。命令は `park` と同じく `()` を書いて終わる。`sleep_ms` が使う
+- `park_time ms k`: `ms` が正なら今の時刻を切り上げたミリ秒で読み、今の `Task` のセルを継続 `k` で `ms` ミリ秒眠らせる (下の「時間の待ち」)。すぐ再開する仕事ができれば列の後ろに積む。命令は `park` と同じく `()` を書いて終わる。`sleep_ms` が使う
 - 再開する仕事は、待ったタスクのセルを持つ `resume_task` の入口の `Task` になり、そのタスクの ID で動く。動き始めるときにセルの状態を「動いている」に戻し、`k` に `Woke` か `Cancelled` を渡す。実行待ちから再開するときは、核の `resumed` が渡す値を決める
 - `detach t`: ハンドルを消費し、受け取った印を付けて手放す。タスクが終わっていればセルを放し、終わっていなければ持ち手のないタスクにする
 - `cancel_raw t`: `detach` と同じく手放し、終わっていないタスクには取り消しの印を付ける
@@ -559,7 +559,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 ### 時間の待ち
 
-- `park_time(now_ms, ms, me, k)` は、核の中で次の順に進む。`now_ms` は登録で読む切り上げた今の時刻である (「時計と driver」)
+- `park_time(now_ms, ms, me, k)` は、核の中で次の順に進む。`now_ms` は登録で読む切り上げた今の時刻で、`ms` が 0 以下なら読まない (「時計と driver」)
   1. `me` の状態を「待っている」にし、`parks` を数える
   2. 下の「取り消しの届け方」の取り消しの地点の規則を満たせば、`cancels` を数え、`Cancelled` で再開する仕事を返す。`park` が待つ前に確かめるのと同じである
   3. `ms` が 0 以下なら、`ready` と同じく待ちの登録を実行待ちにし、`Woke` で再開する仕事を返す。輪には載せない
@@ -617,9 +617,9 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `peak_objects`: 同時に生きていたヒープの物体の数の最大 (`Heap` の `Stats` の `peak_live`)。ヒープごとのダミーの物体を1つ含む。フレームはスタックにあり、凍結した領域の物体も数えないので、どちらも含まない
 - `peak_stack`: タスクのスタックで同時に使った語の数の最大。タスクごとの `depth_offset + stack.len()` (「`par` の fork と join」の「深さ」) の最大を `Scheduler` が取る。スタックの `Vec` の長さは縮めないので、`Task::reserve` が伸ばした長さがそのままそのタスクの最大になり、タスクが動くのをやめるときと実行の終わりに `stack.len()` を読むだけで済む。タスクごとの値はそのタスクの動きだけで決まるので、スケジュールによらない。フレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの欄で見つける
 - `tasks`: `Async` のタスクのセルを作った回数。`Async.run` の本体のタスクも数える。登録表の `start` が数える (「`Async` のタスク」)
-- `parks`: `Async` の待ち (`await`) と `yield_now` が、継続をランタイムに渡した回数。相手がもう終わっていて、すぐ再開する待ちも数える。登録表の `park` と `ready` が数える
+- `parks`: `Async` の待ち (`await`)、`yield_now`、`sleep_ms` が、継続をランタイムに渡した回数。相手がもう終わっていて、すぐ再開する待ちも数える。登録表の `park`、`ready`、`park_time` が数える
 - `dropped_failures`: スコープの最初の失敗より後に終わった、失敗したタスクと失敗した `scope` の本体の数。失敗の原因の数ではない。スコープは最初の失敗だけを `run` か `scope` に返すので、残りの失敗は捨てられる。`await` が捕まえずに起こし直した失敗は、それを待ったタスクの失敗になるので、数える。登録表の `finish` と `fail_scope` が数える
-- `cancels`: 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、受け箱の処理が外した待ち、取り消しで再開する `yield_now`、真を返した `cancel_point` を数える (「`Async` のタスク」の「取り消しの届け方」)。登録表が数える
+- `cancels`: 取り消しが届いた回数。待つ前に取り消しを見つけた `park` と `park_time`、受け箱の処理が外した待ち、取り消しで再開する `yield_now`、真を返した `cancel_point` を数える (「`Async` のタスク」の「取り消しの届け方」)。登録表が数える
 - `timers`: `await_time` が時間の輪に登録した回数。`ms` が 0 以下の眠りと、眠る前に取り消しが見つかった眠りは数えない (「`Async` のタスク」の「時間の待ち」)。登録表の `park_time` が数える
 - `shared_objects`: `share` が rc を負にした物体の数。すでに共有の物体は数えない。`par` の fork と `Async` のタスクの始めが、渡す閉包とセッションの根に印を付けるときに増える。出どころは `Heap` の `Stats` の `shared` である
 

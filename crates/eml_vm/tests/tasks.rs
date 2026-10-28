@@ -450,6 +450,7 @@ main () =
     Async.sleep_ms 9223372036854775807
     Async.sleep_ms 9223372036854775807
     Async.sleep_ms 1
+    Async.sleep_ms 1
     println \"end\")
 ";
     assert_eq!(run_both(src), "end\n");
