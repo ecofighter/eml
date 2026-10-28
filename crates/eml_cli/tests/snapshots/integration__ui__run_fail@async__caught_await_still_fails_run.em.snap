@@ -1,6 +1,5 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-assertion_line: 352
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
 input_file: tests/ui/run-fail/async/caught_await_still_fails_run.em
 ---
@@ -10,4 +9,4 @@ caught TimedOut: too slow
 --- stderr ---
 --- runtime error ---
 too slow
-  at <std>/Async.em:54:9
+  at <std>/Async.em:60:9

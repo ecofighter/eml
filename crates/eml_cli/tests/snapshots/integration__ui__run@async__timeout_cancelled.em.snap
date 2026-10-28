@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/timeout_cancelled.em
+---
+--- stdout ---
+cancelled while waiting: Cancelled
+cancelled with a past deadline: Cancelled
+shielded: Some 3 None
+after the shield: Cancelled
+bit first: Some 1 None
+after the shield: Cancelled
+--- stderr ---

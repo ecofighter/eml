@@ -6,13 +6,17 @@ pub data Wake =
   | Woke
   | Cancelled
 
--- タスクの生の操作。どちらも once である。
+-- タスクの生の操作。どれも once である。
 -- 操作はランタイムとの ABI で、利用者は包みの関数を呼ぶ (docs/spec/effects.md の「抽象エフェクト」)
 pub abstract effect Async where
   -- `Cell` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ
   await_cell : Cell -> Wake
   -- 実行待ちの列の後ろへ回る
   reschedule : Unit -> Wake
+  -- 指定したミリ秒だけ眠る。0 以下は `reschedule` と同じく列の後ろへ回る
+  await_time : Int -> Wake
+  -- スコープに属するタスクがなくなるまで待つ。スコープは閉じない
+  await_drain : Scope -> Wake
 
 -- 登録表の添字 `(generation << 32) | index` を持つ即値である。Kind は `Unr`
 pub extern data Cell
@@ -37,6 +41,8 @@ start_task f =
   handle f () with
     | ctl await_cell c k -> park c k
     | ctl reschedule () k -> ready k
+    | ctl await_time ms k -> park_time ms k
+    | ctl await_drain s k -> park_drain s k
     | return () -> ()
 
 resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit
@@ -52,6 +58,10 @@ bottom f () =
 
 pub run : (Unit -> <IO, Panic, Async> a) -> <IO, Panic> a
 run f = run_result (run_raw (bottom f))
+
+-- 置き場所の決まり。`run` の位置 (`<std>/Async.em:行:桁`) は実行時エラーの UI テストと REPL のスナップショットに出る。
+-- そのため `run` より上には `Async` の操作の宣言と `start_task` の節だけを置き、関数は `shield` より下に足す。
+-- extern は extern の並びの末尾に足す。
 
 -- 名前付きのスコープのセルの番号を持つ即値で、`Cell` と同じ形である。Kind は `Unr` で、子のタスクにも渡せる。閉じて
 -- 離れたスコープの番号と前の run の番号は、閉じたスコープとして扱う (docs/spec/stdlib.md の「スコープ」)
@@ -115,11 +125,13 @@ check_cancelled () =
   else if spend_budget () then yield_now ()
   else ()
 
--- 取り消しの地点が投げるときだけ真を返すので、`shield` の中では偽である
+-- 取り消しの地点が投げるときだけ真を返す。`shield` の中では、今のスコープを今の `shield` の中で自分が開いたときだけ、
+-- その旗を読む
 pub cancel_requested : Unit -> <IO> Bool
 cancel_requested () = cancel_point ()
 
--- 中の取り消しの地点はビットも旗も見ない。立っているビットか旗は、抜けた後の最初の地点で投げる
+-- 中の取り消しの地点は、ビットと、`shield` の外で開いたスコープの旗を見ない。中で開いたスコープには外の取り消しが
+-- 届かない。外で立っているビットか旗は、抜けた後の最初の地点で投げる
 pub shield : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a
 shield f =
   shield_enter ()
@@ -130,6 +142,92 @@ shield f =
     | Err e ->
       shield_leave ()
       reraise e
+
+-- `ms` ミリ秒待つ取り消しの地点。0 以下なら実行待ちの列の後ろへ回るだけである (docs/spec/stdlib.md の「時間」)
+pub sleep_ms : Int -> <IO, Async> Unit
+sleep_ms ms =
+  match await_time ms with
+    | Woke -> ()
+    | Cancelled -> raise_cancelled ()
+
+-- 本体は呼んだタスクで動かし、期限は子のスコープに置いたタスクが旗で届ける。本体を `scope` で包むのは、本体が
+-- 始めたタスクにも期限を届け、終わるまで待つためである (docs/spec/stdlib.md の「時間」)
+pub timeout : Int -> (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> Option a
+timeout ms f =
+  let s = open_scope ()
+  let timer = deadline s ms
+  let r = try_all (fn () -> scope (fn _ -> f ()))
+  -- 残る期限のタスクを取り消す。旗はスコープを離れるまで呼んだタスクにも届くが、この後に取り消しの地点はない
+  cancel_scope_raw s
+  wait_closed s
+  let late = expired timer
+  match r with
+    | Ok x -> Some x
+    -- 外から取り消された呼び手は、期限が過ぎていても `None` で取り消しを飲み込まない
+    | Err e -> if late && cancelled e && not (cancel_point ()) then None else reraise e
+
+-- 過ぎた期限は、タスクを始めずにすぐ旗を立てる
+deadline : Scope -> Int -> <IO, Panic, Async> Option (Task Unit)
+deadline s ms =
+  if ms <= 0 then
+    cancel_scope_raw s
+    None
+  else Some (start_in s (fn () ->
+    sleep_ms ms
+    cancel_scope_raw s))
+
+-- 期限のタスクが眠り切って終わっていれば、期限は過ぎている
+expired : Option (Task Unit) -> <IO> Bool
+expired timer = match timer with
+  | None -> True
+  | Some t -> match try_all (fn () -> take_result t) with
+    | Ok () -> True
+    | Err _ -> False
+
+-- 2つの本体を子のスコープのタスクで競わせ、shield の中で両方の終わりを待つ。本体の失敗はスコープの最初の失敗
+-- として `wait_closed` が起こし直す (docs/spec/stdlib.md の「時間」)
+pub race : (Unit -> <IO, Panic, Async> a) -> (Unit -> <IO, Panic, Async> b) -> <IO, Panic, Async> Either a b
+race f g =
+  let s = open_scope ()
+  let ta = start_in s (arm s f)
+  let tb = start_in s (arm s g)
+  wait_closed s
+  match try_all (fn () -> take_result ta) with
+    | Ok x ->
+      drop tb
+      Left x
+    | Err e -> match try_all (fn () -> take_result tb) with
+      | Ok y -> Right y
+      | Err _ -> reraise e
+
+-- 値を返したときにまだ取り消されていなければ、勝って旗を立てる。負けた側の値は巻き戻しが落とす
+arm : Scope -> (Unit -> <IO, Panic, Async> a) -> Unit -> <IO, Panic, Async> a
+arm s f () =
+  let x = scope (fn _ -> f ())
+  if claim_scope s then x else raise_cancelled ()
+
+-- 待ちを `timeout` で区切り、期限が来たら呼んだタスク自身が残ったタスクを取り消し、空になるまで待ち直す。期限が触る
+-- のは呼んだタスクの待ちだけなので、戻った後に期限が `s` に触れることはない (docs/spec/stdlib.md の「時間」)
+pub drain_within : Int -> Scope -> <IO, Async> Unit
+drain_within ms s =
+  -- `timeout` の期限のタスクは種類 `Cancelled` でしか失敗せず、`drained` は `Panic` を持たないので、`Err` は届かない
+  match try_panic (fn () -> timeout ms (fn () -> drained s)) with
+    | Ok (Some ()) -> ()
+    | Ok None ->
+      cancel_members s
+      drained s
+    | Err _ -> ()
+
+drained : Scope -> <IO, Async> Unit
+drained s =
+  match await_drain s with
+    | Woke -> ()
+    | Cancelled -> raise_cancelled ()
+
+cancelled : Failure -> Bool
+cancelled e = match e with
+  | IOFailed (IOError { kind = k, message = _ }) -> k == Prelude.Cancelled
+  | Panicked _ -> False
 
 -- 取り消しを受けた包みが投げる IO の失敗。`Wake` の `Cancelled` と名前が重なるので、種類は修飾して書く
 -- (docs/spec/stdlib.md の「取り消し」)
@@ -160,9 +258,9 @@ wait_closed s =
 
 -- ランタイムの口。生の行を `pub` にせず、結果の型の `a` は `start`、`start_in`、`run`、`await` のシグネチャだけが結ぶ。
 -- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`run_raw`、`ready`、`finish_ok`、
--- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park` と `start_in_raw` の2つ目の引数、`task_cell` の
--- 引数 (`task_cell` だけは借りて預かる) である。預かる引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける
--- (docs/spec/stdlib.md の「`Std.Async`」)
+-- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`park_drain`、`start_in_raw` の
+-- 2つ目の引数、`task_cell` の引数 (`task_cell` だけは借りて預かる) である。預かる引数の型変数は `Unr` に固定せず、
+-- その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
 extern start_raw        : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern run_raw          : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern start_in_raw     : Scope -> (Unit -> <IO, Async> Unit) -> <IO, Panic> Task a
@@ -186,3 +284,7 @@ extern shield_enter     : Unit -> <IO> Unit
 extern shield_leave     : Unit -> <IO> Unit
 extern cancel_point     : Unit -> <IO> Bool
 extern spend_budget     : Unit -> <IO> Bool
+extern park_time        : Int -> (once Wake -> <IO> Unit) -> <IO> Unit
+extern claim_scope      : Scope -> <IO> Bool
+extern park_drain       : Scope -> (once Wake -> <IO> Unit) -> <IO> Unit
+extern cancel_members   : Scope -> <IO> Unit

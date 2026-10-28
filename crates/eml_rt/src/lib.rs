@@ -11,6 +11,7 @@ use vstd::prelude::*;
 mod alloc;
 mod cell;
 mod control;
+mod driver;
 mod error;
 pub mod externs;
 mod foreign;
@@ -26,6 +27,7 @@ mod trust;
 mod word;
 
 pub use control::{Control, Limits, Stop};
+pub use driver::IoDriver;
 pub use error::HeapError;
 pub use externs::{
     ArithFault, Fault, Form, Handle, IndexFault, IoOp, IoReason, Open, Raised, ReadAmount,

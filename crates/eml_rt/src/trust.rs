@@ -8,6 +8,7 @@ const FILES: &[(&str, &str)] = &[
     ("alloc.rs", include_str!("alloc.rs")),
     ("cell.rs", include_str!("cell.rs")),
     ("control.rs", include_str!("control.rs")),
+    ("driver.rs", include_str!("driver.rs")),
     ("error.rs", include_str!("error.rs")),
     ("externs.rs", include_str!("externs.rs")),
     ("foreign.rs", include_str!("foreign.rs")),

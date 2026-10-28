@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use eml_rt::Control;
+use eml_rt::{Control, IoDriver};
 
 use crate::cells::{CellRef, Registry};
 use crate::monitor::Monitor;
@@ -290,11 +290,14 @@ pub struct Scheduler<P: Policy> {
     pub(crate) cells: Registry,
     /// 終わった入口の `Task` のスタック。次の入口の `Task` が使い回す。
     pub(crate) stacks: Vec<Vec<eml_rt::Word>>,
+    /// 時計と待ち。`Machine` が持つものを run の間だけ預かる (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) driver: Box<dyn IoDriver>,
 }
 
 impl<P: Policy> Scheduler<P> {
     pub(crate) fn new(
         policy: P,
+        driver: Box<dyn IoDriver>,
         main_worker: u32,
         max_depth: usize,
         generations: u32,
@@ -315,6 +318,7 @@ impl<P: Policy> Scheduler<P> {
             shared_roots: 0,
             cells: Registry::new(generations),
             stacks: Vec::new(),
+            driver,
         }
     }
 

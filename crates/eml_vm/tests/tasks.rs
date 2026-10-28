@@ -318,3 +318,255 @@ main () = Async.run (fn () -> checks {n})
         assert_eq!((s.parks, s.cancels), (parks, 0), "{n} checks");
     }
 }
+
+/// 仮想の時計では、すべてのタスクが待つときだけ時間が進むので、眠りは待たずに終わる (docs/spec/vm.md の「時間の待ち」)。
+#[test]
+fn a_task_sleeps_and_prints() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    Async.sleep_ms 100
+    println \"a\")
+";
+    assert_eq!(run_both(src), "a\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.expect("the checked run");
+    assert_eq!((s.parks, s.timers), (1, 1));
+}
+
+/// 同じ忙しい期間に登録した眠りは、どのスケジュールでも長さの順に満ちる。
+#[test]
+fn sleeps_registered_together_end_in_the_order_of_their_lengths() {
+    let src = "\
+import Async (Async)
+import Async
+nap : Int -> <IO, Async> Unit
+nap ms =
+  Async.sleep_ms ms
+  println (show ms)
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let a = Async.start (fn () -> nap 50)
+    let b = Async.start (fn () -> nap 100)
+    let c = Async.start (fn () -> nap 70)
+    Async.await a
+    Async.await b
+    Async.await c)
+";
+    assert_eq!(run_both(src), "50\n70\n100\n");
+    let program = lir(src);
+    let checked = || RunConfig::default().with_debug_heap(true);
+    for sched in [Sched::Sequential, Sched::Seeded(1), Sched::Seeded(2026)] {
+        let (out, result) = execute(&program, &checked().with_sched(sched));
+        result.unwrap_or_else(|error| panic!("{sched:?}: {error}"));
+        assert_eq!(out, "50\n70\n100\n", "{sched:?}");
+    }
+    let counts = |sched| {
+        let (_, result) = execute(&program, &checked().with_sched(sched));
+        let s = result.expect("the checked run");
+        (s.tasks, s.parks, s.timers)
+    };
+    let sequential = counts(Sched::Sequential);
+    assert_eq!(sequential.2, 3);
+    for sched in [Sched::Seeded(1), Sched::Seeded(2026)] {
+        assert_eq!(counts(sched), sequential, "{sched:?}");
+    }
+}
+
+/// 0 以下の眠りは、輪に載らずに列の後ろへ回るだけである。
+#[test]
+fn a_sleep_of_zero_or_less_yields() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    Async.sleep_ms 0
+    println \"zero\"
+    Async.sleep_ms (-1)
+    println \"negative\")
+";
+    assert_eq!(run_both(src), "zero\nnegative\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.expect("the checked run");
+    assert_eq!((s.parks, s.timers, s.cancels), (2, 0, 0));
+}
+
+/// 眠るタスクのハンドルを落とすと、受け箱の処理が輪の項ごと待ちを外し、タスクは眠り切らずに `Cancelled` で終わる。
+#[test]
+fn a_dropped_handle_cancels_a_sleeping_task() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start (fn () ->
+      Async.sleep_ms 10000
+      println \"woke\")
+    Async.yield_now ()
+    drop t
+    println \"dropped\")
+";
+    assert_eq!(run_both(src), "dropped\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.expect("the checked run");
+    assert_eq!((s.tasks, s.dropped_failures, s.cancels), (2, 0, 1));
+    assert_eq!((s.timers, s.cancels), (1, 1));
+}
+
+/// `shield` の中の眠りは取り消しで外れず、眠り切った後の最初の取り消しの地点でタスクが `Cancelled` で終わる。
+#[test]
+fn a_shielded_sleep_is_not_cancelled() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    drop (Async.start (fn () ->
+      Async.shield (fn () ->
+        Async.sleep_ms 10
+        println \"slept\")
+      Async.check_cancelled ()
+      println \"not cancelled\"))
+    println \"dropped\")
+";
+    assert_eq!(run_both(src), "dropped\nslept\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.expect("the checked run");
+    assert_eq!((s.tasks, s.dropped_failures, s.cancels), (2, 0, 1));
+}
+
+/// 期限は飽和するので、どんな長さの眠りも誤りにならない。仮想の時計が端に着いた後の眠りは、次の空きで満ちる。
+#[test]
+fn the_longest_sleeps_saturate() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    Async.sleep_ms 9223372036854775807
+    Async.sleep_ms 9223372036854775807
+    Async.sleep_ms 1
+    Async.sleep_ms 1
+    println \"end\")
+";
+    assert_eq!(run_both(src), "end\n");
+}
+
+/// 仮想の時計は 60 秒の眠りを待たない。
+#[test]
+fn a_long_sleep_on_the_virtual_clock_does_not_wait() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    Async.sleep_ms 60000
+    println \"woke\")
+";
+    assert_eq!(run_both(src), "woke\n");
+}
+
+/// `timeout` は本体を呼んだタスクで動かし、期限のタスクを1つだけ始める。数え方は docs/spec/stdlib.md の「時間」のとおり。
+#[test]
+fn timeout_runs_the_body_in_the_calling_task() {
+    let programs = [
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 100 (fn () -> 42))))\n",
+            "Some 42\n",
+            (2, 3, 1, 1),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 50 (fn () ->\n  Async.sleep_ms 100\n  1))))\n",
+            "None\n",
+            (2, 4, 2, 1),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 100 (fn () ->\n  Async.sleep_ms 50\n  1))))\n",
+            "Some 1\n",
+            (2, 4, 2, 1),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.timeout 0 (fn () ->\n  Async.sleep_ms 50\n  1))))\n",
+            "None\n",
+            (1, 3, 0, 1),
+        ),
+    ];
+    for (src, out, counts) in programs {
+        let program = lir(src);
+        let config = RunConfig::default()
+            .with_debug_heap(true)
+            .with_sched(Sched::Sequential);
+        let (got, result) = execute(&program, &config);
+        let s = result.expect("the checked run");
+        assert_eq!(got, out, "{src}");
+        assert_eq!((s.tasks, s.parks, s.timers, s.cancels), counts, "{src}");
+    }
+}
+
+/// `race` は腕のタスクを2つ始め、勝ちを `claim_scope` の1行で決める。数え方は docs/spec/stdlib.md の「時間」のとおり。
+#[test]
+fn race_decides_the_winner_in_one_claim() {
+    let programs = [
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.race (fn () ->\n  Async.sleep_ms 30\n  1) (fn () ->\n  Async.sleep_ms 60\n  2))))\n",
+            "Left 1\n",
+            (3, 5, 2, 1, 0),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> Async.try_all (fn () -> Async.race (fn () ->\n  Async.sleep_ms 30\n  let x : Int = panic \"a\"\n  x) (fn () ->\n  match try_io (fn () -> Async.sleep_ms 60) with\n    | Ok () -> 2\n    | Err _ -> panic \"b\")))))\n",
+            "Err (Panicked \"a\")\n",
+            (3, 5, 2, 1, 1),
+        ),
+    ];
+    for (src, out, counts) in programs {
+        let program = lir(src);
+        let config = RunConfig::default()
+            .with_debug_heap(true)
+            .with_sched(Sched::Sequential);
+        let (got, result) = execute(&program, &config);
+        let s = result.expect("the checked run");
+        assert_eq!(got, out, "{src}");
+        assert_eq!(
+            (s.tasks, s.parks, s.timers, s.cancels, s.dropped_failures),
+            counts,
+            "{src}"
+        );
+    }
+}
+
+/// `drain_within` は `s` に属するタスクがなくなるのを待ち、その待ちを `timeout` で区切る。数え方は
+/// docs/spec/stdlib.md の「時間」のとおり。
+#[test]
+fn drain_within_waits_until_the_scope_has_no_task() {
+    let programs = [
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 30)\n  Async.drain_within 100 s\n  let t = Async.start_in s (fn () -> 5)\n  println (show (Async.await t))))\n",
+            "5\n",
+            (4, 7, 2, 1),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () -> Async.scope (fn s ->\n  Async.spawn_in s (fn () -> Async.sleep_ms 300)\n  Async.drain_within 100 s\n  println \"after\"))\n",
+            "after\n",
+            (3, 7, 2, 2),
+        ),
+        (
+            "import Async (Async)\nimport Async\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () ->\n  let s = Async.scope (fn s -> s)\n  Async.drain_within 100 s\n  Async.drain_within 0 s\n  println \"at once\")\n",
+            "at once\n",
+            (2, 9, 1, 2),
+        ),
+    ];
+    for (src, out, counts) in programs {
+        let program = lir(src);
+        let config = RunConfig::default()
+            .with_debug_heap(true)
+            .with_sched(Sched::Sequential);
+        let (got, result) = execute(&program, &config);
+        let s = result.expect("the checked run");
+        assert_eq!(got, out, "{src}");
+        assert_eq!((s.tasks, s.parks, s.timers, s.cancels), counts, "{src}");
+    }
+}

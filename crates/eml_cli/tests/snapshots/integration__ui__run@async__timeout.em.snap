@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/timeout.em
+---
+--- stdout ---
+None
+Some "early"
+Some 1
+None
+failed: IOFailed IOError { kind = NotFound, message = "no such host" }
+array 7
+--- stderr ---

@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/async/deadlock.repl
+---
+> import Async
+> Async.run (fn () -> Async.scope (fn s -> Async.spawn_in s (fn () -> Async.shield (fn () -> Async.drain_within 10 s))))
+runtime error: deadlock: every task is waiting and no timer is pending
+> println "next"
+next
+--- close ---
+no leaks

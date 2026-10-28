@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
-    AnyMachine, CodeBase, Control, Limits, Machine, Normal, RunConfig, RuntimeError, Sched,
+    AnyMachine, Clock, CodeBase, Control, Limits, Machine, Normal, RunConfig, RuntimeError, Sched,
     Scheduler, Seeded, Sequential, Stop, Task, VmFault,
 };
 
@@ -76,6 +76,29 @@ fn the_default_sched_is_sequential() {
         config.with_sched(Sched::Sequential).sched,
         Sched::Sequential
     );
+}
+
+/// ライブラリの既定の時計は、すべてのタスクが待つときにだけ進む仮想の時計である (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn the_default_clock_is_virtual() {
+    assert_eq!(RunConfig::default().clock, Clock::Virtual);
+    assert_eq!(Clock::default(), Clock::Virtual);
+    let config = RunConfig::default().with_clock(Clock::Real);
+    assert_eq!(config.clock, Clock::Real);
+    assert_eq!(config.with_clock(Clock::Virtual).clock, Clock::Virtual);
+}
+
+#[test]
+fn a_clock_parses_and_rejects() {
+    assert_eq!("real".parse(), Ok(Clock::Real));
+    assert_eq!("virtual".parse(), Ok(Clock::Virtual));
+    for text in ["", "Real", "wall", "virtual "] {
+        let error = text.parse::<Clock>().unwrap_err();
+        assert_eq!(
+            error,
+            format!("expected `real` or `virtual`, found `{text}`")
+        );
+    }
 }
 
 /// CLI の `--sched` が読む綴り (docs/spec/stdlib.md の「起動」)。seed は `u64` の10進数である。
@@ -335,4 +358,35 @@ fn second() -> unit {
     assert_eq!(machine.run(second.entry).unwrap().exit, None);
     machine.close().unwrap();
     assert_eq!(out.contents(), "exiting\n");
+}
+
+/// すべてのタスクが本物の時計で眠る run は、空きのループが毎回割り込みを読むので、別のスレッドの割り込みで止まる
+/// (docs/spec/vm.md の「時計と driver」)。2 秒は止まりの見張りで、本物の眠り (100 秒) よりずっと短い。
+#[test]
+fn an_interrupt_wakes_a_sleeping_worker() {
+    use std::time::{Duration, Instant};
+
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> Async.sleep_ms 100000)
+";
+    let program = eml_test_support::lir(src);
+    let control = Arc::new(Control::new(Limits::default()));
+    let config = RunConfig::default()
+        .with_clock(Clock::Real)
+        .with_sched(Sched::Sequential)
+        .with_control(Arc::clone(&control));
+    let interrupter = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        control.interrupt();
+    });
+    let (host, _) = eml_vm::capture_host(Default::default());
+    let start = Instant::now();
+    let result = eml_vm::execute(&program, &config, host);
+    let elapsed = start.elapsed();
+    interrupter.join().unwrap();
+    let error = result.unwrap_err();
+    assert!(error.interrupted(), "{error:?}");
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
 }

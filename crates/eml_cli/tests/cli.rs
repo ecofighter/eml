@@ -398,6 +398,58 @@ fn an_interrupt_stops_a_par_program_with_130() {
     assert!(stderr.contains("interrupted"), "{stderr}");
 }
 
+/// 眠るタスクしかない run は、空きのループで本物の時計の上限付きの眠りを繰り返す。ループが毎回割り込みを読むので、
+/// 1回目の SIGINT で止まり、終了コードは 130 である (docs/spec/vm.md の「時計と driver」)。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_sleeping_program_with_130() {
+    use std::io::{BufRead, BufReader};
+    use std::time::Instant;
+
+    let text = "\
+import Async
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  eprintln \"sleeping\"
+  Async.run (fn () -> Async.sleep_ms 100000)
+";
+    let dir = temp_project("cli-sigint-sleep", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let stderr = child.stderr.take().unwrap();
+    let (lines, arrived) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = lines.send(());
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text
+    });
+    if arrived
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .is_err()
+    {
+        kill_after_deadline(&mut child, "the program did not start");
+    }
+    sigint(&child);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not stop");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let stderr = reader.join().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{stderr}");
+    assert!(stderr.contains("interrupted"), "{stderr}");
+}
+
 /// 読みの中で待つプログラムは、1回目の SIGINT で読みが `EINTR` で戻って止まり、終了コードは 130 である。読みに入る
 /// 直前に届いた SIGINT は読みを止めないが、2回目の SIGINT でハンドラがその場で終わらせ、終了コードは同じく 130 である
 /// (docs/spec/vm.md の「上限と割り込み」)。続けて届いた2つの SIGINT は1つにまとまることがあるので、終わるまで
@@ -568,6 +620,63 @@ fn sched_flag_is_accepted_and_rejected() {
         (&["repl", "--sched", "bogus"], 2, ""),
         (&["run", "--sched=bogus", "main.em"], 2, ""),
         (&["run", "--sched", "seeded:7"], 2, ""),
+    ];
+    // 1本のテストで多くのプロセスを起動するので、並べて起動して1秒に収める
+    let outputs: Vec<Output> = std::thread::scope(|scope| {
+        let handles: Vec<_> = cases
+            .iter()
+            .map(|(args, _, _)| scope.spawn(|| eml_in(&dir, args)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+    for ((args, code, stdout), output) in cases.iter().zip(&outputs) {
+        assert_eq!(output.status.code(), Some(*code), "{args:?}: {output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), *stdout, "{args:?}");
+    }
+}
+
+/// `--clock` は `--sched` と同じく `run` と `repl` のフラグで、値を次の引数か `=` の後に取る。ファイルより後ろの
+/// `--clock` はスクリプトに渡す (docs/spec/stdlib.md の「起動」)。2 で終わる引数は使い方の誤りである。
+#[test]
+fn clock_flag_is_accepted_and_rejected() {
+    let dir = temp_project("cli-clock", &[("main.em", SHOW_ARGS)]);
+    let cases: [(&[&str], i32, &str); 13] = [
+        (&["run", "--clock", "real", "main.em"], 0, "[]\n"),
+        (&["run", "--clock=virtual", "main.em", "a"], 0, "[\"a\"]\n"),
+        (
+            &[
+                "run",
+                "--clock",
+                "virtual",
+                "--sched",
+                "sequential",
+                "main.em",
+            ],
+            0,
+            "[]\n",
+        ),
+        (
+            &["run", "main.em", "--clock", "bogus"],
+            0,
+            "[\"--clock\", \"bogus\"]\n",
+        ),
+        (
+            &["main.em", "--clock", "real"],
+            0,
+            "[\"--clock\", \"real\"]\n",
+        ),
+        (&["run", "main.em", "--clock"], 0, "[\"--clock\"]\n"),
+        (&["run", "--clock"], 2, ""),
+        (&["--clock", "real", "main.em"], 2, ""),
+        (&["run", "--clock", "bogus", "main.em"], 2, ""),
+        (&["run", "--clock=bogus", "main.em"], 2, ""),
+        (&["run", "--clock", "Real", "main.em"], 2, ""),
+        (&["check", "--clock", "real", "main.em"], 2, ""),
+        (&["repl", "--clock", "bogus"], 2, ""),
     ];
     // 1本のテストで多くのプロセスを起動するので、並べて起動して1秒に収める
     let outputs: Vec<Output> = std::thread::scope(|scope| {

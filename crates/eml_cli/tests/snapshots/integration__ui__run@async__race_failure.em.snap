@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/race_failure.em
+---
+--- stdout ---
+other: Cancelled
+panic: Panicked "arm failed"
+one gives up: Right 2
+both give up: IOFailed IOError { kind = Cancelled, message = "a" }
+caller cancelled: IOFailed IOError { kind = Cancelled, message = "task was cancelled" }
+--- stderr ---

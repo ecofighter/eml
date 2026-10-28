@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/drain_within.em
+---
+--- stdout ---
+a: done
+drained before the deadline
+b: done
+c: Cancelled
+late: Cancelled
+after the deadline
+again: done
+the body is not cancelled
+a left scope returns at once
+d: Cancelled
+a past deadline cancels at once
+--- stderr ---

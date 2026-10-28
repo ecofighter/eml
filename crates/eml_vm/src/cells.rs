@@ -5,9 +5,10 @@
 //! セルが持つ語は数えた参照で、VM が1回入れて1回出す。`Registry` はヒープに触れる `Drop` を持たないので、誤りで終わった
 //! run と捨てた run では、`Scheduler` と一緒に触れずに捨てる。
 //!
-//! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、`wake` が `wait` で確かめる。`k.is_some()` と
-//! `wait == Some(Cell(_))` は同値である (`Ready` の継続は列に積んだ仕事が持つ)。タスクの今のスコープ `current` から
-//! 親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
+//! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、
+//! `wake` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))` か `Some(Time(_))` であることは同値で
+//! ある (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項 `key` と `wait == Some(Time(key))` は、いつも両方
+//! あるか両方ないかである。タスクの今のスコープ `current` から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
 //! `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed` の
 //! スコープは `closing` で、`members` が空である。スコープのセルを放すのは、閉じた後の `release_scope`
 //! (`Take::Run` は根の待ちが `closed` で起きた後に、`leave_scope` は今のスコープを親に戻した後に呼ぶ) と、run の終わりの
@@ -16,10 +17,12 @@
 //! 待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。
 //!
 //! 取り消しは、印を付ける `mark` と受け箱の処理 `drain` が待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
-//! 仕事をほかのタスクのために作るのは `drain` だけである。`cancel` と `flag` はどのタスクの操作からも書く。`current` と
-//! `run` は持ち主だけが書き、印を付ける操作が読む。タスクのセルの残りは、そのタスクを動かすか受け箱を処理する持ち主だけが
-//! 読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
+//! 仕事をほかのタスクのために作るのは `drain` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
+//! `cancel`、`flag`、`cancel_new` はどのタスクの操作からも書く。`current` と `run` は持ち主だけが書き、印を付ける
+//! 操作が読む。スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
+//! そのタスクを動かすか受け箱を処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_rt::{Control, Ctx, Fault, HeapError, Mode, Word};
@@ -151,6 +154,15 @@ enum Phase {
 enum Wait {
     Cell(CellRef),
     Ready,
+    /// 時間の輪の鍵 `TimerKey` の項。
+    Time(TimerKey),
+}
+
+/// 時間の輪の鍵。期限はミリ秒で、同じ期限は `seq` で登録の順に並ぶ (docs/spec/vm.md の「時間の待ち」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct TimerKey {
+    deadline: u64,
+    seq: u64,
 }
 
 struct TaskCell {
@@ -196,6 +208,14 @@ struct ScopeCell {
     first_failure: Option<Outcome>,
     waiters: Vec<Waiter>,
     closed: bool,
+    /// 開くときの開き手の `shield` の深さ。開き手のない根は 0 である。
+    shield: u32,
+    /// `shield` の境目の印。開いたときの `shield` の深さが、同じタスクが開いた親の深さより大きい (親がほかのタスクのものなら 0 より大きい) スコープに立つ。外の取り消しはここで止まる
+    /// (docs/spec/stdlib.md の「取り消し」)。
+    boundary: bool,
+    /// 加わるタスクを取り消す印。`cancel_members` が立て、属するタスクがなくなったときに `finish` が下ろす
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
+    cancel_new: bool,
 }
 
 /// 印を付ける作業の項。
@@ -258,13 +278,15 @@ impl Drop for TaskHandle {
 pub(crate) struct TaskStats {
     /// `start` が作ったタスクのセルの数。
     pub(crate) tasks: u64,
-    /// `park` と `ready` が渡された継続の数。
+    /// `park`、`ready`、`park_time`、`park_drain` が渡された継続の数。
     pub(crate) parks: u64,
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
-    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、受け箱の処理が外した待ち、取り消しで再開する
-    /// `yield_now`、真を返した `cancel_point` を数える (docs/spec/vm.md の「`RunStats`」)。
+    /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、受け箱の処理が外した待ち、
+    /// 取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
+    /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` だけを数える。
+    pub(crate) timers: u64,
 }
 
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
@@ -275,6 +297,10 @@ pub(crate) struct Registry {
     floor: u32,
     pub(crate) inbox: Arc<Inbox>,
     pub(crate) stats: TaskStats,
+    /// 時間の輪。項は時間を待つタスクのセルの番号だけで、語を持たない (docs/spec/vm.md の「時間の待ち」)。
+    timers: BTreeMap<TimerKey, CellRef>,
+    /// 次に登録するタイマーの `seq`。
+    timer_seq: u64,
 }
 
 impl Registry {
@@ -285,7 +311,43 @@ impl Registry {
             floor,
             inbox: Arc::new(Inbox::default()),
             stats: TaskStats::default(),
+            timers: BTreeMap::new(),
+            timer_seq: 0,
         }
+    }
+
+    /// いちばん早いタイマーの期限。輪が空なら `None` である。
+    pub(crate) fn next_deadline(&self) -> Option<u64> {
+        self.timers.first_key_value().map(|(key, _)| key.deadline)
+    }
+
+    /// 期限が `now_ms` までのタイマーを、期限の順、同じ期限なら登録の順に外し、待っていたタスクを再開する仕事を
+    /// `out` に積む。輪の項と待ちの登録は、どちらが先に外れても他方を残さない (docs/spec/vm.md の「時間の待ち」)。
+    pub(crate) fn expire(&mut self, now_ms: u64, out: &mut Vec<Runnable>) -> Result<(), CellFault> {
+        while let Some(entry) = self.timers.first_entry() {
+            let key = *entry.key();
+            if key.deadline > now_ms {
+                break;
+            }
+            let cell = entry.remove();
+            let task = self.task_mut(cell)?;
+            if !matches!(task.phase, Phase::Parked)
+                || !matches!(task.wait, Some(Wait::Time(k)) if k == key)
+            {
+                return Err(CellFault::Internal("a timer names no waiting task"));
+            }
+            task.wait = None;
+            let k = task
+                .k
+                .take()
+                .ok_or(CellFault::Internal("a parked task has no continuation"))?;
+            out.push(Runnable::Resume {
+                cell,
+                k,
+                wake: WOKE,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -374,6 +436,18 @@ impl Registry {
             Some(p) => self.scope_mut(p)?.nested.len() as u32,
             None => 0,
         };
+        let level = match opener {
+            Some(o) => self.task_mut(o)?.shield,
+            None => 0,
+        };
+        // 親を同じタスクが開いていれば、その深さより深いときだけ境目になる。ほかの親は `shield` の外にある
+        let base = match parent {
+            Some(p) if opener.is_some() => {
+                let ps = self.scope_mut(p)?;
+                if ps.opener == opener { ps.shield } else { 0 }
+            }
+            _ => 0,
+        };
         let s = self.alloc(CellKind::Scope(ScopeCell {
             parent,
             opener,
@@ -385,6 +459,9 @@ impl Registry {
             first_failure: None,
             waiters: Vec::new(),
             closed: false,
+            shield: level,
+            boundary: level > base,
+            cancel_new: false,
         }));
         if let Some(p) = parent {
             self.scope_mut(p)?.nested.push(s);
@@ -394,15 +471,21 @@ impl Registry {
 
     /// 親の旗と開いたタスクのビットを新しいスコープに写す。一覧と `current` (根なら `run`) に載せた後に呼ぶ。
     /// 印を付ける側はビットと旗を立ててから一覧と `current` を読むので、どちらが先でも新しいスコープは旗を得る
-    /// (docs/spec/vm.md の「取り消しの届け方」)。
+    /// (docs/spec/vm.md の「取り消しの届け方」)。境目は何も写さない。ビットは `shield` の外の取り消しから来ることが
+    /// あるので、写すのは深さ 0 で開くスコープだけである (docs/spec/stdlib.md の「取り消し」)。
     fn inherit_flag(&mut self, s: CellRef) -> Result<(), CellFault> {
         let scope = self.scope_mut(s)?;
-        let (parent, opener) = (scope.parent, scope.opener);
+        if scope.boundary {
+            return Ok(());
+        }
+        let (parent, opener, level) = (scope.parent, scope.opener, scope.shield);
         let mut flag = match parent {
             Some(p) => self.scope_mut(p)?.flag,
             None => false,
         };
-        if let Some(o) = opener {
+        if let Some(o) = opener
+            && level == 0
+        {
             flag |= self.task_mut(o)?.cancel;
         }
         self.scope_mut(s)?.flag = flag;
@@ -438,7 +521,7 @@ impl Registry {
         if s.closed {
             return Ok(None);
         }
-        let (flag, member_at) = (s.flag, s.members.len() as u32);
+        let (flag, member_at) = (s.flag || s.cancel_new, s.members.len() as u32);
         // 印付けは送り手の ID のまま行い、`Ctx` の持つ語には触れない。値から届く evidence は退いたものだけである
         // (docs/spec/object-model.md の「evidence の3つの物体」)
         let heap = unsafe { ctx.heap_mut() };
@@ -505,17 +588,16 @@ impl Registry {
         Ok(wake)
     }
 
-    /// 取り消しの地点の規則。
+    /// 取り消しの地点の規則。`shield` の中では、いちばん内側の `shield` の中で自分が開いたスコープの旗だけを見る
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
     fn point(&mut self, cell: CellRef) -> Result<bool, CellFault> {
         let task = self.task_mut(cell)?;
-        if task.shield > 0 {
-            return Ok(false);
+        let (depth, bit, current) = (task.shield, task.cancel, task.current);
+        if depth == 0 {
+            return Ok(bit || self.scope_mut(current)?.flag);
         }
-        if task.cancel {
-            return Ok(true);
-        }
-        let current = task.current;
-        Ok(self.scope_mut(current)?.flag)
+        let scope = self.scope_mut(current)?;
+        Ok(scope.flag && scope.opener == Some(cell) && scope.shield == depth)
     }
 
     /// 借りたハンドル `handle` のセルの番号を `Std.Async.Cell` の即値で返す。
@@ -564,6 +646,62 @@ impl Registry {
         Ok(None)
     }
 
+    /// タスク `me` が、継続 `k` でスコープ `s` に属するタスクがなくなるまで待つ。`s` は閉じない。閉じたスコープ、
+    /// 離れたスコープ、前の run のスコープ、空のスコープでは、すぐ再開する仕事を返す (docs/spec/vm.md の「命令」)。
+    pub(crate) fn park_drain(
+        &mut self,
+        s: i64,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        let target = match self.scope_cell(s) {
+            Some(t) => {
+                let scope = self.scope_mut(t)?;
+                (!scope.closed && !scope.members.is_empty()).then_some(t)
+            }
+            None => None,
+        };
+        self.suspend(me)?;
+        self.stats.parks += 1;
+        if self.point(me)? {
+            self.stats.cancels += 1;
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: CANCELLED,
+            }));
+        }
+        let Some(target) = target else {
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: WOKE,
+            }));
+        };
+        let task = self.task_mut(me)?;
+        task.k = Some(k);
+        task.wait = Some(Wait::Cell(target));
+        // 閉じないスコープは何度も待たれるので、取り消しで外れた古い項をここで除き、待ち手が増え続けないようにする
+        let old = std::mem::take(&mut self.scope_mut(target)?.waiters);
+        let mut kept = Vec::with_capacity(old.len() + 1);
+        for waiter in old {
+            let keep = match waiter {
+                Waiter::Task(t) => {
+                    t != me
+                        && matches!(self.live(t), Some(CellKind::Task(task))
+                            if matches!(task.wait, Some(Wait::Cell(c)) if c == target))
+                }
+                Waiter::Token(_) => true,
+            };
+            if keep {
+                kept.push(waiter);
+            }
+        }
+        kept.push(Waiter::Task(me));
+        self.scope_mut(target)?.waiters = kept;
+        Ok(None)
+    }
+
     /// タスク `me` が、継続 `k` で実行待ちの列の後ろへ回る。
     pub(crate) fn ready(&mut self, me: CellRef, k: Word) -> Result<Runnable, CellFault> {
         self.suspend(me)?;
@@ -574,6 +712,47 @@ impl Registry {
             k,
             wake: WOKE,
         })
+    }
+
+    /// タスク `me` が、継続 `k` で `ms` ミリ秒眠る。`now_ms` は切り上げて読んだ今の時刻である。0 以下は譲りにして
+    /// 輪に載せないので、VM は時計を読まず、次に集める地点までの遅れもない (docs/spec/vm.md の「時間の待ち」)。
+    pub(crate) fn park_time(
+        &mut self,
+        now_ms: u64,
+        ms: i64,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        self.suspend(me)?;
+        self.stats.parks += 1;
+        if self.point(me)? {
+            self.stats.cancels += 1;
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: CANCELLED,
+            }));
+        }
+        if ms <= 0 {
+            self.task_mut(me)?.wait = Some(Wait::Ready);
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: WOKE,
+            }));
+        }
+        // 期限は飽和させ、どんな長さも誤りにしない。仮想の時計が端に着いた後は、どの期限も今と等しくなる
+        let key = TimerKey {
+            deadline: now_ms.saturating_add(ms as u64),
+            seq: self.timer_seq,
+        };
+        self.timer_seq += 1;
+        self.timers.insert(key, me);
+        self.stats.timers += 1;
+        let task = self.task_mut(me)?;
+        task.k = Some(k);
+        task.wait = Some(Wait::Time(key));
+        Ok(None)
     }
 
     fn suspend(&mut self, me: CellRef) -> Result<(), CellFault> {
@@ -610,7 +789,8 @@ impl Registry {
     }
 
     /// タスク `cell` を `outcome` で終える。起こす仕事を `out` に積む。失敗はスコープの最初の失敗として記録する。
-    /// スコープの最後のタスクならスコープを閉じ、その待ち手も起こす。ハンドルがもう落ちていれば、セルをすぐ放す。
+    /// スコープの最後のタスクなら、閉じる印のあるスコープを閉じ、加わるタスクを取り消す印を下ろし、スコープの待ち手を
+    /// すべて起こす。`park_drain` の待ち手は閉じる印のないスコープも待つ。ハンドルがもう落ちていれば、セルをすぐ放す。
     /// `depth_offset` は呼んだ実行系のタスクの深さの起点で、セルを放すときに `Ctx` へ戻す。
     pub(crate) fn finish<M: Mode>(
         &mut self,
@@ -643,8 +823,9 @@ impl Registry {
             self.mark(Mark::Scope(scope))?;
         }
         let s = self.scope_mut(scope)?;
-        if s.closing && s.members.is_empty() {
-            s.closed = true;
+        if s.members.is_empty() {
+            s.closed |= s.closing;
+            s.cancel_new = false;
             for waiter in std::mem::take(&mut s.waiters) {
                 self.wake(waiter, scope, out)?;
             }
@@ -896,6 +1077,37 @@ impl Registry {
         Ok(())
     }
 
+    /// `race` の勝ちを決める。呼んだタスクのビットか今のスコープの旗が立っていれば、取り消しが届いたものとして数えて偽を
+    /// 返す。そうでなければ、同じ呼び出しの中で `s` に旗を立てて真を返す。`shield` は見ない
+    /// (docs/spec/vm.md の「命令」)。
+    pub(crate) fn claim_scope(&mut self, s: i64, me: CellRef) -> Result<bool, CellFault> {
+        let task = self.task_mut(me)?;
+        let (bit, current) = (task.cancel, task.current);
+        if bit || self.scope_mut(current)?.flag {
+            self.stats.cancels += 1;
+            return Ok(false);
+        }
+        self.cancel_scope(s)?;
+        Ok(true)
+    }
+
+    /// `s` に属するタスクをそれぞれ取り消し、`s` が空になるまで加わるタスクも取り消す。`s` の旗は立てないので、`s` の
+    /// 本体は取り消さない。印は一覧を読む前に立て、間に加わるタスクを取りこぼさない
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
+    pub(crate) fn cancel_members(&mut self, s: i64) -> Result<(), CellFault> {
+        if let Some(cell) = self.scope_cell(s)
+            && !self.scope_mut(cell)?.closed
+        {
+            let scope = self.scope_mut(cell)?;
+            scope.cancel_new = !scope.members.is_empty();
+            let members = scope.members.clone();
+            for m in members {
+                self.mark(Mark::Task(m))?;
+            }
+        }
+        Ok(())
+    }
+
     /// `scope` の本体の失敗を記録し、子をすべて取り消す。種類 `Cancelled` は記録しない。
     pub(crate) fn fail_scope(&mut self, s: i64, failure: Outcome) -> Result<(), CellFault> {
         let cell = self
@@ -923,18 +1135,23 @@ impl Registry {
                         continue;
                     }
                     task.cancel = true;
-                    // 開いているスコープは今のスコープから親へ、このタスクが開いたスコープが続く間である
+                    // 開いているスコープは、入れ子の `run` の根から今のスコープを経て親へ、このタスクが開いたスコープが
+                    // 続く間である。内から外へ並べ、いちばん外の境目とその内側には印を付けない
+                    // (docs/spec/vm.md の「取り消しの届け方」)
                     let (mut s, run, home) = (task.current, task.run, task.scope);
+                    let mut chain = Vec::new();
+                    if let Some(r) = run {
+                        chain.push((r, self.scope_mut(r)?.boundary));
+                    }
                     while s != home {
-                        work.push(Mark::Scope(s));
-                        s = self
-                            .scope_mut(s)?
+                        let scope = self.scope_mut(s)?;
+                        chain.push((s, scope.boundary));
+                        s = scope
                             .parent
                             .ok_or(CellFault::Internal("a named scope has no parent"))?;
                     }
-                    if let Some(r) = run {
-                        work.push(Mark::Scope(r));
-                    }
+                    let cut = chain.iter().rposition(|&(_, b)| b).map_or(0, |i| i + 1);
+                    work.extend(chain[cut..].iter().map(|&(c, _)| Mark::Scope(c)));
                     self.inbox.push(Notice::Cancel(t));
                 }
                 Mark::Scope(s) => {
@@ -944,7 +1161,14 @@ impl Registry {
                     }
                     scope.flag = true;
                     work.extend(scope.members.iter().map(|&m| Mark::Task(m)));
-                    work.extend(scope.nested.iter().map(|&n| Mark::Scope(n)));
+                    // 入れ子の境目は外の取り消しを止める
+                    let nested = scope.nested.clone();
+                    for n in nested {
+                        if !self.scope_mut(n)?.boundary {
+                            work.push(Mark::Scope(n));
+                        }
+                    }
+                    let scope = self.scope_mut(s)?;
                     // 本体のタスクにはビットを立てず、届けるだけにする。外すかは `unpark` が持ち主の側で規則を確かめて決める
                     if let Some(o) = scope.opener {
                         self.inbox.push(Notice::Cancel(o));
@@ -960,14 +1184,20 @@ impl Registry {
         let Some(CellKind::Task(task)) = self.live(cell) else {
             return Ok(());
         };
-        if !matches!(task.phase, Phase::Parked) || !matches!(task.wait, Some(Wait::Cell(_))) {
+        if !matches!(task.phase, Phase::Parked)
+            || !matches!(task.wait, Some(Wait::Cell(_) | Wait::Time(_)))
+        {
             return Ok(());
         }
         if !self.point(cell)? {
             return Ok(());
         }
         let task = self.task_mut(cell)?;
-        task.wait = None;
+        // 輪の項を残すと、満期に `expire` が待たないタスクを名指して誤りにする
+        if let Some(Wait::Time(key)) = task.wait.take() {
+            self.timers.remove(&key);
+        }
+        let task = self.task_mut(cell)?;
         let k = task
             .k
             .take()
@@ -1022,6 +1252,8 @@ impl Registry {
             }
         }
         drop(self.inbox.take());
+        // 眠るタスクを残して終わる run がある (`exit` や誤り) ので、空であることは確かめない
+        self.timers.clear();
         Ok(())
     }
 
@@ -1086,4 +1318,83 @@ pub(crate) fn with_worker<M: Mode, T>(
 /// (docs/spec/object-model.md の「実行の制御」)。
 pub(crate) fn end_with_exit(control: &Control, n: i64) -> bool {
     control.exit(n)
+}
+
+// 輪の単体テストは子のモジュールに置かない。子のモジュールは親を `super` の道で読むが、このファイルは `std` と
+// `eml_rt` だけを読む約束で、`crates/eml_vm/tests/tasks.rs` がそれを行ごとに確かめる
+
+/// 根のスコープに、動いているタスクのセルを1つ置く。輪だけを確かめるので、ヒープの ID は持たない。
+#[cfg(test)]
+fn running_task(registry: &mut Registry, scope: CellRef) -> CellRef {
+    registry.alloc(CellKind::Task(TaskCell {
+        phase: Phase::Running,
+        outcome: None,
+        scope,
+        worker: 0,
+        spawner: 0,
+        member_at: 0,
+        waiters: Vec::new(),
+        k: None,
+        current: scope,
+        wait: None,
+        cancel: false,
+        shield: 0,
+        budget: BUDGET,
+        run: None,
+        detached: false,
+    }))
+}
+
+#[cfg(test)]
+fn resumed_cells(out: &[Runnable]) -> Vec<(CellRef, i64)> {
+    out.iter()
+        .map(|run| match run {
+            Runnable::Resume { cell, wake, .. } => (*cell, *wake),
+            _ => panic!("expected a resume"),
+        })
+        .collect()
+}
+
+#[test]
+fn timers_with_the_same_deadline_expire_in_registration_order() {
+    let mut registry = Registry::new(0);
+    let scope = registry.open_root(None, None).unwrap();
+    let first = running_task(&mut registry, scope);
+    let second = running_task(&mut registry, scope);
+    assert!(
+        registry
+            .park_time(3, 50, first, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        registry
+            .park_time(3, 50, second, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(registry.next_deadline(), Some(53));
+    let mut out = Vec::new();
+    registry.expire(52, &mut out).unwrap();
+    assert!(out.is_empty());
+    registry.expire(53, &mut out).unwrap();
+    assert_eq!(resumed_cells(&out), [(first, WOKE), (second, WOKE)]);
+    assert_eq!(registry.next_deadline(), None);
+}
+
+#[test]
+fn unparking_a_sleeping_task_removes_its_timer() {
+    let mut registry = Registry::new(0);
+    let scope = registry.open_root(None, None).unwrap();
+    let first = running_task(&mut registry, scope);
+    let second = running_task(&mut registry, scope);
+    registry.park_time(0, 50, first, Word::UNIT).unwrap();
+    registry.park_time(0, 50, second, Word::UNIT).unwrap();
+    registry.task_mut(first).unwrap().cancel = true;
+    let mut out = Vec::new();
+    registry.unpark(first, &mut out).unwrap();
+    assert_eq!(resumed_cells(&out), [(first, CANCELLED)]);
+    out.clear();
+    registry.expire(50, &mut out).unwrap();
+    assert_eq!(resumed_cells(&out), [(second, WOKE)]);
 }
