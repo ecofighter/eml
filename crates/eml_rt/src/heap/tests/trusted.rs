@@ -980,7 +980,8 @@ fn long_lines() -> (String, String, MemoryFile) {
     (long_line, all, file)
 }
 
-/// Host を通る行の読み。64 KiB の区切りをまたぐ行を、ハンドルを借りる `handle_read` で通す。
+/// Host を通る行の読み。64 KiB の区切りをまたぐ行を、ハンドルを借りる `handle_read` で通し、続く行を同じハンドルで
+/// 読んで、区切りをまたいだ後に読み手に残った分を確かめる。
 fn borrowed_lines_cross_the_buffer<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
     let (long_line, _, file) = long_lines();
@@ -992,6 +993,10 @@ fn borrowed_lines_cross_the_buffer<M: Mode>() {
         assert_eq!(
             read_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
             format!("{long_line}\n")
+        );
+        assert_eq!(
+            read_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
+            "a\r\n"
         );
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
@@ -1792,7 +1797,7 @@ fn find_byte_reads_the_body_of_an_object<M: Mode>() {
         for (body, x_at, ax_at) in cases {
             let w = ctx.heap_mut().alloc_bytes(&body);
             let len = body.len();
-            let froms: &[usize] = if len > 1024 {
+            let froms: &[usize] = if len >= LARGE_BODY {
                 &[0, len]
             } else {
                 &[0, 1, 8, len / 2, len]
