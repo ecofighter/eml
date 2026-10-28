@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eml_cli::{
-    CaptureHost, Control, Finished, FsProvider, RunConfig, RuntimeError, Sched, Session, VmFault,
-    default_limits, execute,
+    CaptureHost, Control, Finished, FsProvider, RunConfig, RunStats, RuntimeError, Sched, Session,
+    VmFault, default_limits, execute,
 };
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
@@ -209,7 +209,7 @@ fn execute_in(
 /// 検査モードの結果をスナップショットと比べた後で、同じプログラムを別の設定で流した結果 `other` が、同じ出力、
 /// 同じ標準エラー、同じファイル、同じ終わり方になることを確かめる。`label` は別の設定の名前で、食い違ったときの文言に
 /// 入る。`compare_stats` なら、スケジュールによらない `RunStats` も比べる。速いモードは仕事の回数を数えないので比べない。
-fn assert_agrees(suffix: &str, label: &str, other: &Ran, checked: &Ran, compare_stats: bool) {
+fn assert_agrees(suffix: &str, label: &str, other: &Ran, checked: &Ran, compare_stats: Compare) {
     assert_eq!(
         other.stdout, checked.stdout,
         "{suffix}: {label} printed something else"
@@ -231,10 +231,10 @@ fn assert_agrees(suffix: &str, label: &str, other: &Ran, checked: &Ran, compare_
             .map_err(ToString::to_string),
         "{suffix}: {label} ended otherwise"
     );
-    if compare_stats {
+    if compare_stats != Compare::Nothing {
         let stats = |ran: &Ran| {
             ran.finished
-                .map(|finished| eml_test_support::schedule_independent(finished.stats))
+                .map(|finished| compare_stats.kept(finished.stats))
         };
         assert_eq!(
             stats(other),
@@ -255,7 +255,7 @@ fn assert_fast_mode_agrees(
     checked: &Ran,
 ) {
     let fast = execute_in(program, path, root, false, Sched::Normal);
-    assert_agrees(suffix, "the fast mode", &fast, checked, false);
+    assert_agrees(suffix, "the fast mode", &fast, checked, Compare::Nothing);
 }
 
 /// seed の方針で流すテストの seed (docs/implementation/testing.md の「seed で流す」)。
@@ -287,7 +287,11 @@ fn assert_seeds_agree(
     let compare_stats = !(suffix.starts_with("async/") && matches!(checked.result, Ok(Some(_))));
     for seed in SEEDS {
         let ran = execute_in(program, path, root, true, Sched::Seeded(seed));
-        let compare = compare_stats && compares_stats(checked, &ran);
+        let compare = if compare_stats {
+            compares_stats(checked, &ran)
+        } else {
+            Compare::Nothing
+        };
         assert_agrees(suffix, &seeded_label(seed), &ran, checked, compare);
         if let Some(finished) = ran.finished {
             assert!(
@@ -298,19 +302,49 @@ fn assert_seeds_agree(
     }
 }
 
-/// 取り消しの届いた run は `RunStats` を比べない。届いた時点で、それぞれのタスクがした仕事が変わる
-/// (docs/implementation/testing.md の「seed で流す」)。
-fn compares_stats(checked: &Ran, other: &Ran) -> bool {
-    let quiet = |ran: &Ran| ran.finished.is_none_or(|f| f.stats.cancels == 0);
-    quiet(checked) && quiet(other)
+/// 比べる `RunStats` の欄を選ぶ。取り消しの届いた run は比べない。届いた時点で、それぞれのタスクがした仕事が
+/// 変わる。channel を使った run は、スケジュールによらない少しの欄だけを比べる (docs/implementation/testing.md の
+/// 「seed で流す」)。
+fn compares_stats(checked: &Ran, other: &Ran) -> Compare {
+    let stats = |ran: &Ran| ran.finished.map(|f| f.stats).unwrap_or_default();
+    let (a, b) = (stats(checked), stats(other));
+    if a.cancels != 0 || b.cancels != 0 {
+        return Compare::Nothing;
+    }
+    let channels = |s: &RunStats| s.channel_ops != 0 || s.channel_waits != 0;
+    if channels(&a) || channels(&b) {
+        Compare::ChannelIndependent
+    } else {
+        Compare::ScheduleIndependent
+    }
+}
+
+/// seed の run と比べる `RunStats` の欄。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Compare {
+    Nothing,
+    ScheduleIndependent,
+    ChannelIndependent,
+}
+
+impl Compare {
+    fn kept(self, stats: RunStats) -> RunStats {
+        match self {
+            Compare::Nothing => RunStats::default(),
+            Compare::ScheduleIndependent => eml_test_support::schedule_independent(stats),
+            Compare::ChannelIndependent => eml_test_support::channel_independent(stats),
+        }
+    }
 }
 
 #[test]
-fn stats_are_compared_only_without_cancellations() {
-    let ran = |cancels: Option<u64>| {
-        let finished = cancels.map(|cancels| {
+fn stats_are_compared_by_cancellations_and_channels() {
+    let ran = |counts: Option<(u64, u64, u64)>| {
+        let finished = counts.map(|(cancels, channel_ops, channel_waits)| {
             let mut stats = eml_cli::RunStats::default();
             stats.cancels = cancels;
+            stats.channel_ops = channel_ops;
+            stats.channel_waits = channel_waits;
             Finished {
                 stats,
                 exit: None,
@@ -325,10 +359,18 @@ fn stats_are_compared_only_without_cancellations() {
             finished,
         }
     };
-    assert!(compares_stats(&ran(Some(0)), &ran(Some(0))));
-    assert!(!compares_stats(&ran(Some(1)), &ran(Some(0))));
-    assert!(!compares_stats(&ran(Some(0)), &ran(Some(1))));
-    assert!(compares_stats(&ran(None), &ran(None)));
+    let (all, few, none) = (
+        Compare::ScheduleIndependent,
+        Compare::ChannelIndependent,
+        Compare::Nothing,
+    );
+    let quiet = Some((0, 0, 0));
+    assert_eq!(compares_stats(&ran(quiet), &ran(quiet)), all);
+    assert_eq!(compares_stats(&ran(None), &ran(None)), all);
+    assert_eq!(compares_stats(&ran(Some((1, 0, 0))), &ran(quiet)), none);
+    assert_eq!(compares_stats(&ran(quiet), &ran(Some((1, 3, 0)))), none);
+    assert_eq!(compares_stats(&ran(Some((0, 2, 0))), &ran(quiet)), few);
+    assert_eq!(compares_stats(&ran(quiet), &ran(Some((0, 0, 1)))), few);
 }
 
 /// 速いモードも同じ誤りを報告するか。漏れ、内部の誤り、ヒープの誤りは検査モードだけが見つける。これらは VM 自身の
@@ -454,7 +496,13 @@ fn a_seeded_mismatch_names_the_seed() {
         result: Ok(None),
         finished: None,
     };
-    assert_agrees("par/x.em", &seeded_label(7), &ran("1\n"), &ran("2\n"), true);
+    assert_agrees(
+        "par/x.em",
+        &seeded_label(7),
+        &ran("1\n"),
+        &ran("2\n"),
+        Compare::ScheduleIndependent,
+    );
 }
 
 /// 左の子が短い `par` は seed で横取りされず、ハーネスがそのファイルを落とす。
