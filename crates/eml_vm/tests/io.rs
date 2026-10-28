@@ -33,6 +33,57 @@ main () = Async.run (fn () ->
     assert_eq!((s.completions, s.parks, s.cancels), (1, 1, 0));
 }
 
+/// 読みは、端が読めるようになるのを待つ操作と、buffer を貸して読む操作の2つの完了を受ける。書きと合わせて3つで、
+/// 待ちはどちらも1回である (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_write_and_a_read_count_three_completions() {
+    let src = "\
+import Async
+import Bytes
+import IoTest
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let (a, b) = IoTest.pair ()
+  let (_, a) = IoTest.write (Bytes.of_string \"hello\") a
+  let (buf, b) = IoTest.read_chunk (Bytes.of_string \"> \") b
+  drop a
+  drop b
+  println (String.decode buf))
+";
+    let (out, result) = run(src);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "> hello\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((s.completions, s.parks, s.cancels), (3, 2, 0));
+}
+
+/// 相手の端が閉じた読みは、読めるようになった後の読みが 0 バイトで終わり、buffer の中身を変えずに返す。足した空きは
+/// 中身に出ない (docs/spec/stdlib.md の「`Std.IoTest`」)。
+#[test]
+fn a_read_at_the_peer_eof_returns_the_buffer_unchanged() {
+    let src = "\
+import Async
+import Bytes
+import IoTest
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let (a, b) = IoTest.pair ()
+  drop a
+  let (buf, b) = IoTest.read_chunk (Bytes.of_string \"keep\") b
+  drop b
+  println \"\\{String.decode buf} \\{show (Bytes.length buf)}\")
+";
+    let (out, result) = run(src);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "keep 4\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((s.completions, s.parks), (2, 1));
+}
+
 /// 書きを取り消されるまで終わらせない driver。取り消した書きは、次の `completions` で誤りとして終わる。
 #[derive(Default)]
 struct HoldingDriver {

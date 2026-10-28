@@ -1329,6 +1329,22 @@ table! {
             Unr,
             Purity::Effectful,
         ),
+        IoTestSubmitRead => kinded(
+            "Std.IoTest.submit_read",
+            &[Obj, Obj],
+            &[Unr, Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        IoTestTakeRead => kinded(
+            "Std.IoTest.take_read",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Unr,
+            Purity::Effectful,
+        ),
     }
 }
 
@@ -1383,6 +1399,8 @@ impl Extern {
                 | Extern::IoTestSubmitWrite
                 | Extern::IoTestOpStream
                 | Extern::IoTestTakeWrite
+                | Extern::IoTestSubmitRead
+                | Extern::IoTestTakeRead
         )
     }
 }

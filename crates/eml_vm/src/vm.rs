@@ -1330,7 +1330,9 @@ fn collect<R: Exec>(
     sched
         .cells
         .drain(ctx, &mut *sched.driver, depth_offset, &mut out)?;
-    sched.cells.complete(&mut *sched.driver, &mut out)?;
+    sched
+        .cells
+        .complete(ctx, &mut *sched.driver, depth_offset, &mut out)?;
     if sched.cells.next_deadline().is_some() {
         sched.cells.expire(floor_ms(sched.driver.now()), &mut out)?;
     }
@@ -1986,6 +1988,14 @@ fn async_op<R: Exec>(
                     .submit_write(ctx, &mut *sched.driver, task.worker, buf, stream)?;
             task.set(dst, token);
         }
+        Extern::IoTestSubmitRead => {
+            let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
+            let token =
+                sched
+                    .cells
+                    .submit_read(ctx, &mut *sched.driver, task.worker, buf, stream)?;
+            task.set(dst, token);
+        }
         Extern::IoTestOpStream => {
             // token は借りるだけで、組を作る後の `con` が消費する
             let s = sched.cells.op_stream(ctx, task.get(arg(0)))?;
@@ -2008,6 +2018,25 @@ fn async_op<R: Exec>(
                     };
                     return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestTakeWrite);
                 }
+            }
+        }
+        Extern::IoTestTakeRead => {
+            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
+            let buf = taken
+                .buf
+                .ok_or(VmFault::Internal("a read op has no buffer"))?;
+            // 取り消した読みは、確定したバイトを持つ buffer を返し、包みが落として取り消しを投げる
+            // (docs/spec/stdlib.md の「`Std.IoTest`」)
+            match taken.result {
+                Err(e) if !taken.cancelling => {
+                    unsafe { ctx.heap_mut().decref(buf) }?;
+                    let raise = Raise::Io {
+                        kind: io_kind(&e),
+                        message: format!("cannot read the stream: {e}"),
+                    };
+                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestTakeRead);
+                }
+                _ => task.set(dst, buf),
             }
         }
         _ => {
@@ -2919,7 +2948,9 @@ fn run_extern<R: Exec>(
             | Extern::IoTestPeer
             | Extern::IoTestSubmitWrite
             | Extern::IoTestOpStream
-            | Extern::IoTestTakeWrite => {
+            | Extern::IoTestTakeWrite
+            | Extern::IoTestSubmitRead
+            | Extern::IoTestTakeRead => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

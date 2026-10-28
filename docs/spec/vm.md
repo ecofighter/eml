@@ -236,7 +236,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Std.String.byte_at` と `Std.String.byte_length` も専用の命令にする。`byte_at` は `StrByteAt { dst, i, s }`、`byte_length` は `StrByteLength { dst, s }` で、どちらも文字列を借りたままにし、誤りのときも手放さない (巻き戻しの表が手放す)。バイト位置の外は `Panics` の行の `byte_at` だけが `step_failed` から `Panic` に届け、巻き戻しの地点になる。`byte_length` は `Pure` で地点を持たない。バイト単位の走査が文字列の読み出しの大半を占めるため、汎用の `Op::Extern` の行の番号の `match` を通さない
 - `Std.Bytes.get` と `Std.Bytes.length` も専用の命令にする。`get` は `BytesGet { dst, i, b }`、`length` は `BytesLength { dst, b }` で、文字列の2つの行と同じく、バイト列を借りたままにし、誤りのときも手放さない。`get` は `Panics` の行で、位置の外を `step_failed` から `Panic` に届けて巻き戻しの地点になり、`length` は `Pure` で地点を持たない。`Show Bytes` を eml で書くために Prelude が持つ `Prelude.bytes_get` と `Prelude.bytes_length` (借用の印も `Ctx` のメソッドも同じ) も、同じ2つの命令に写す
 - ほかの extern (`Float` の `compare`、文字列、表示、`println`、`FileIn`、`Fs`) は `Extern { dst, at }` の1つの命令にする。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…] で、行の番号の `match` で `Ctx` のメソッドを呼ぶ
-- `Std.Async` の30行と `Std.Chan` の6行 (`chan_cell` を除く)、`Std.Atomic` の4行、`Std.IoTest` の5行 (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
+- `Std.Async` の30行と `Std.Chan` の6行 (`chan_cell` を除く)、`Std.Atomic` の4行、`Std.IoTest` の7行 (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
 - VM は `Ctx` の基本操作の合間に、`Ctx` が持つ語とそこからたどれる物体に触れない (`heap_mut()` の前提)
 - `Bool`、`Ordering`、`IOErrorKind` のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを、`eml_vm` のテスト (`tags.rs`) で確かめる。VM の `Bool` と `compare` の命令がこれに頼るためである
 
@@ -562,14 +562,16 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 `Std.IoTest` の待つ関数 ([標準ライブラリ](stdlib.md) の「`Std.IoTest`」) は、driver に出した操作を登録表の記録で追う。driver は語を見ないので (「時計と driver」)、操作に貸した記憶の物体は記録が持つ。
 
-- 記録は登録表のセルの4つ目の種類で、同じ添字と generation の表に入る。記録は、driver の鍵、段階 (driver が記憶を使っている `Transfer` か、完了が届いた `Done(結果)`)、受け付けたタスクの論理的な worker ID、buffer とストリームと待つ間の token の語、待っているタスク、取り消しを頼んだかを持つ。登録表は driver の鍵から記録への表 `ops` と、完了を受ける使い回しの列も持つ
+- 記録は登録表のセルの4つ目の種類で、同じ添字と generation の表に入る。記録は、driver の鍵、操作の種類 (読みか書き)、段階 (読みが端の読めるようになるのを待つ `Probe`、driver が記憶を使っている `Transfer`、完了が届いた `Done(結果)` のどれか)、受け付けたタスクの論理的な worker ID、buffer とストリームと待つ間の token の語、待っているタスク、取り消しを頼んだかを持つ。登録表は driver の鍵から記録への表 `ops` と、完了を受ける使い回しの列も持つ
 - 記録の語は `Depot` で公開しない。`Heap::share` は届く `Unr` の物体を共有にするので、公開すると driver に貸す物体の一意さが崩れるためである。語は受け付けたタスクの ID の物体のまま記録が持ち、そのタスクの外で記録の語に触れるときは `with_worker(記録の worker ID)` の下で行う。取り出しは受け付けたタスクで行い、違えば内部の誤り `an op is taken by another task` にする
 - `Std.Async.OpId` の値は、記録の番号と登録表の受け箱を持つ `OpToken` を中身にした、`lin` ビットの立つ `Foreign` である。`OpToken` の `Drop` は、取り出しが受け取っていなければ取り出す前に落ちた知らせを積む。受け箱の処理は、記録が生きていればこれを内部の誤り `an op token was dropped before its take` にし、放した記録への古い知らせは無視する。token の受け箱が登録表の受け箱と違えば前の run の token で、内部の誤り `an op token outlived its run` にする
 - `Std.IoTest.Stream` の値は、driver のハンドルと、まだ分けていない2つ目の端と、driver の `HandleBin` を持つ `IoStream` を中身にした、`lin` ビットの立つ `Foreign` である。`IoStream` の `Drop` は driver に触れず、ハンドルを `HandleBin` に積む。driver は次の待ちか完了の取り出しか `quiesce` で閉じる
-- 受け付け (`submit_write`) は、buffer とストリームを記録に移す。buffer が一意でなければ、同じ中身の新しい `Bytes` を作って元を手放すので、記録の buffer の語は、受け付けから取り出しまでその物体へのただ1つの参照である。driver には `Heap::bytes` の位置から作った `RawBuf` で `Op::Write` を出し、段階を `Transfer` にする。受け付けの行は預かる印のない普通の消費の行である
+- 受け付け (`submit_write`) は、buffer とストリームを記録に移す。buffer が一意でなければ、同じ中身の新しい `Bytes` を作って元を手放すので、記録の buffer の語は、受け付けから取り出しまでその物体へのただ1つの参照である。driver には `Heap::bytes` の位置から作った `RawBuf` で `Op::Write` を出し、段階を `Transfer` にする。読みの受け付け (`submit_read`) も同じく buffer とストリームを移すが、buffer の容量は足さず、端が読めるようになるのを待つ `Op::Readable` を出して、段階を `Probe` にする。何も来ない端の読みに記憶を持たせないためである。受け付けの行は預かる印のない普通の消費の行である
 - 待ち (`park_io`) は、token から記録を引き、すでに待つタスクがいれば内部の誤り `an op is awaited twice` にする。待つ間は記録が token を持ち、タスクのセルが継続を持つ。待ちの登録は、その記録の操作の待ちである
 - 完了は集める地点 (「時計と driver」) でだけ受け取る。`ops` が空でなければ driver の `completions` を呼び、driver の順に、鍵で記録を引いて `ops` から外し、段階を `Done(結果)` にする。鍵に記録がなければ内部の誤り `a completion names no op` にする。待つタスクがあれば、待ちの登録を空にし、継続と token を取り出して、再開の仕事 `ResumeIo` を列の後ろに積む。渡す `Wake` は、取り消しを頼んだ記録なら `Cancelled`、ほかは `Woke` である
-- `op_stream` は、終わった記録からストリームを移し出す。取り出し (`take_write`) は、終わった記録と受け付けたタスクを確かめ、token に受け取った印を付けて手放し、残ったストリームを手放して記録を放し、結果と buffer を返す。終わっていなければ内部の誤り `an op is taken before its completion` にする
+- 読みは1つの記録で driver の操作を2つ使う。`Probe` の完了は、取り消しを頼んだ記録なら buffer を貸さずに `Done(誤り)` にし、誤りなら `Done(その誤り)` にする。`Ok` なら、端が読めるようになった (データか EOF) ので、buffer の長さの後ろの空きを `Heap::bytes_lend` で貸し、`Op::Read` を新しい鍵で出して `ops` に入れ直し、段階を `Transfer` にする。待つタスクはそのまま待つ。空きが 65 536 バイトより少なければ、先に長さに 65 536 を足した容量の新しい `Bytes` を作って中身を写し、記録の buffer をそれに替えて元を手放す。`Readable` は EOF でも終わるので、その後の読みが `Ok(0)` を返すことが EOF のただ1つの知らせである
+- 読みの `Transfer` の完了が `Ok(n)` なら、外が書いた `n` バイトを `Heap::bytes_commit` で buffer の長さに確定してから `Done(Ok(n))` にする。取り消しを頼んだ記録でも確定する。読んだバイトを捨てずに buffer を返すためである。buffer の操作 (`bytes_extend`、`decref`、`bytes_lend`、`bytes_commit`) は記録の語に触れるので、`with_worker(記録の worker ID)` の下で行う。その誤りは検査モードの前提の違反で、壊れた run にする。driver に出す前に返すので、貸したままの記憶は残らない。確保量の上限は誤りにせず、`MEMORY` のビットで次の安全点に止まり、run の後の `quiesce` が読みを取り消す
+- `op_stream` は、終わった記録からストリームを移し出す。取り出し (`take_write`、`take_read`) は、終わった記録と受け付けたタスクを確かめ、token に受け取った印を付けて手放し、残ったストリームを手放して記録を放し、結果と buffer を返す。終わっていなければ内部の誤り `an op is taken before its completion` にする
 - 1つの token に記録は1つで、1つのタスクの待ちの登録は1つである。driver の `cancel` を呼ぶのは、待つ前の取り消し (`park_io`)、受け箱の処理の取り消し (`unpark`)、`quiesce` だけである。記録を放すのは、受け付けたタスクの取り出しと、run の終わりの `sweep_all` だけである
 
 ### 待ちの2種類
@@ -750,7 +752,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `channel_ops`: `Std.Chan` の速い道が品物を積んだ回数と取った回数の和。登録表の `push_raw` と `pop_raw` が数える
 - `channel_waits`: `send` と `recv` が継続を `park_send`、`park_recv` に渡した回数。すぐ再開する待ちも数え、`parks` にも数える
 - `channels_swept`: run の終わりの `sweep_all` が放した channel の数。閉じなかった channel と、閉じても品物の残った channel を数える。閉じて空になってその場で放した channel は数えない
-- `completions`: 集める地点が driver から取り出し、操作の記録に当てた完了の数 (「`Async` のタスク」の「操作の記録」)。書きは1つである。`quiesce` が捨てた完了は数えない。登録表の `complete` が数える
+- `completions`: 集める地点が driver から取り出し、操作の記録に当てた完了の数 (「`Async` のタスク」の「操作の記録」)。書きは1つ、読みは2つで、読めるようになる前に取り消した読みは1つである。`quiesce` が捨てた完了は数えない。登録表の `complete` が数える
 
 取り消しが届かず、channel の操作も待ちもない run では、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept`、`completions` の欄はスケジュールの方針によらない。`completions` は出した操作の数で決まり、テストの driver では seed が混ぜるのは1回の決着で終わった操作の順だけである。channel を使う run では、待つかどうかと、送り手が参照を持ち続けた品物の裏返しが順で変わり、仕事の回数と `parks`、`shared_objects` がそれに従う。そうした run でもスケジュールによらないのは `tasks`、`timers`、`dropped_failures`、`completions` で、`channels_swept` は次の条件のときだけである。`tasks` と `timers` はプログラムが決め、`dropped_failures` は最初の失敗がどれかによらないので、この3つはタスクの順で変わらない。`channels_swept` は run の終わりに閉じていないか品物の残った channel の数で、どの channel が閉じずに残るか、品物が残るかがプログラムで決まるときだけ、タスクの順で変わらない。`try_send` の成否や、受け手が早く止まるかが順で変わると、残る品物も変わる。
 

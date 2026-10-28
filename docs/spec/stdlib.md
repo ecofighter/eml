@@ -1245,21 +1245,23 @@ body () =
 
 ## `Std.IoTest`
 
-`Std.IoTest` は実行系のテストのためのモジュールで、driver の操作 (書き) を UI テストから動かす ([VM](vm.md) の「時計と driver」)。利用者の API ではなく、断りなく変わる。モジュールの仕組みに内部のモジュールの段階はないので、ほかの std のモジュールと同じく読み込める。
+`Std.IoTest` は実行系のテストのためのモジュールで、driver の操作 (書きと読み) を UI テストから動かす ([VM](vm.md) の「時計と driver」)。利用者の API ではなく、断りなく変わる。モジュールの仕組みに内部のモジュールの段階はないので、ほかの std のモジュールと同じく読み込める。
 
 | 名前 | 型 | 実装 |
 |---|---|---|
 | `Stream` | `Lin` の `Foreign` の型 | extern |
 | `pair` | `Unit -> <IO> (Stream, Stream)` | eml |
+| `read_chunk` | `Bytes -> Stream -> <IO, Async> (Bytes, Stream)` | eml |
 | `write` | `Bytes -> Stream -> <IO, Async> (Int, Stream)` | eml |
 
 - `Stream` は driver の `pair` の片方の端を持つ `Foreign` で、Kind は `Lin`、Repr は `obj` である。落とすと端を閉じる。閉じるのは driver で、次の待ち、完了の取り出し、`quiesce` のどれかのときである。相手の端は、閉じた端が書いた残りを読みきってから EOF を受ける
 - `pair ()` はつながった2つの端を作る。タスクの外でも動く。テストの driver ではいつも作れる。本物の driver は unix で `socketpair` を使い、Windows では種類 `NotAvailable` の IO の失敗 `cannot open a stream pair: …` を起こす
 - `write b s` は `b` を書き、書いたバイトの数と端を返す。本物の driver では数が `b` の長さより短いことがある。取り消しの地点である (上の「取り消し」)。書けなかったときは IO の失敗 `cannot write to the stream: …` を起こす。テストの driver では、相手の端が閉じていれば `cannot write to the stream: broken pipe` (種類 `Other`) である
+- `read_chunk b s` は `s` を1回読み、読んだバイトを `b` の後ろに足して、その `Bytes` と端を返す。読めるものがなければ、相手が書くか端を閉じるまで待つ。EOF では何も足さずに `b` の中身のまま返す (`FileIn.read_chunk` と同じ形)。取り消しの地点である。読めなかったときは IO の失敗 `cannot read the stream: …` を起こす。buffer の空きは、端が読めるようになってから足す ([VM](vm.md) の「操作の記録」)
 - driver の誤りの種類は、`NotFound` を `NotFound`、`PermissionDenied` を `PermissionDenied`、`Unsupported` を `NotAvailable`、ほかを `Other` にする。extern が出す種類が最初の5種類だけであることは変わらない (上の「`try_io`」)
 - 待つ関数の包みは同じ形である。取り消しの地点が投げるなら、ストリームを落として種類 `Cancelled` の失敗を投げ、何も受け付けない。そうでなければ、受け付けの行で token を作り、`Async.io_wait` で待ち、`op_stream` で端を取り戻し、取り出しの行で token を消費して結果を受け取る。再開の `Wake` が `Woke` なら結果を返し、`Cancelled` なら端を落として種類 `Cancelled` の失敗を投げる
 - 結果は、操作の記録の状態で決める。誤りの種類では分けない。取り消しを頼んだ記録は、結果によらず `Cancelled` になる。そうでない記録の `Err(e)` は IO の失敗である
-- extern の行は次の5行で、どれも `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の7行で、どれも `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 借りる引数 |
 |---|---|---|
@@ -1268,11 +1270,14 @@ body () =
 | `submit_write` | `Bytes -> Stream -> <IO> Async.OpId` | なし |
 | `op_stream` | `Async.OpId -> <IO> (Stream, Async.OpId)` | token |
 | `take_write` | `Async.OpId -> <IO> Int` | なし |
+| `submit_read` | `Bytes -> Stream -> <IO> Async.OpId` | なし |
+| `take_read` | `Async.OpId -> <IO> Bytes` | なし |
 
 - `open_pair` は driver の `pair` で2つの端を作り、1つの `Stream` の物体に持たせる。`peer` はその物体から2つ目の端を分ける。`pair () = peer (open_pair ())` で、どちらもタスクの外で動く。2回目の `peer` は内部の誤り `a stream pair is split twice` である
-- `submit_write` は buffer と端を消費して操作の記録に移し、token を返す。buffer が一意でなければ (共有、不死、ほかの参照)、同じ中身の新しい `Bytes` に写して元を手放す。driver が読む間に書き換わらないためである
+- `submit_write` と `submit_read` は buffer と端を消費して操作の記録に移し、token を返す。buffer が一意でなければ (共有、不死、ほかの参照)、同じ中身の新しい `Bytes` に写して元を手放す。driver が読む間に書き換わらないためである
 - `peer` と `op_stream` は引数を借り、宣言の型では結果と引数の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。`op_stream` は終わった記録から端を移し出す
 - `take_write` は token を消費して記録を放し、buffer を手放して、書いたバイトの数を返す。取り消しを頼んだ記録の誤りは 0 を返し、包みが `Cancelled` を投げる。そうでない誤りは IO の失敗を起こす
+- `take_read` は token を消費して記録を放し、読んだバイトを足した buffer を返す。取り消しを頼んだ記録は、結果によらず、確定したバイトを持つ buffer を返し、包みが落として `Cancelled` を投げる。そうでない誤りは buffer を手放して IO の失敗を起こす
 
 ## 実行時エラー
 

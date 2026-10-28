@@ -25,6 +25,22 @@ write b s =
         drop s
         raise_cancelled ()
 
+-- `s` を1回読み、読んだバイトを `b` の後ろに足して返す。EOF では何も足さない。取り消しの地点である
+pub read_chunk : Bytes -> Stream -> <IO, Async> (Bytes, Stream)
+read_chunk b s =
+  if Async.cancel_requested () then
+    drop s
+    raise_cancelled ()
+  else
+    let (w, op) = Async.io_wait (submit_read b s)
+    let (s, op) = op_stream op
+    let r = take_read op
+    match w with
+      | Async.Woke -> (r, s)
+      | Async.Cancelled ->
+        drop s
+        raise_cancelled ()
+
 -- `Std.Async` の取り消しの地点と同じ失敗 (docs/spec/stdlib.md の「取り消し」)
 raise_cancelled : Unit -> <IO> a
 raise_cancelled () = fail_io Prelude.Cancelled "task was cancelled"
@@ -36,3 +52,5 @@ extern peer         : Stream -> <IO> (Stream, Stream)
 extern submit_write : Bytes -> Stream -> <IO> Async.OpId
 extern op_stream    : Async.OpId -> <IO> (Stream, Async.OpId)
 extern take_write   : Async.OpId -> <IO> Int
+extern submit_read  : Bytes -> Stream -> <IO> Async.OpId
+extern take_read    : Async.OpId -> <IO> Bytes

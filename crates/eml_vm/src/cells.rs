@@ -263,6 +263,7 @@ enum CellKind {
 struct OpRecord {
     /// driver が振った鍵。`Registry::ops` の項の鍵と同じである。
     key: OpKey,
+    kind: OpKind,
     phase: OpPhase,
     /// 受け付けたタスクの論理的な worker ID。そのタスクの外で記録の語に触れるときは、この ID に切り替える。
     worker: u32,
@@ -277,7 +278,15 @@ struct OpRecord {
     cancelling: bool,
 }
 
+/// 記録の操作の種類。読みの `Transfer` の完了だけが、外の書いた長さを buffer に確定する。
+enum OpKind {
+    Read,
+    Write,
+}
+
 enum OpPhase {
+    /// 読みの1つ目の操作。driver が端の読めるようになるのを待っている。buffer はまだ貸していない。
+    Probe,
     /// driver が記憶を読み書きしている。
     Transfer,
     /// 完了が届いた。
@@ -1563,7 +1572,38 @@ impl Registry {
             ctx,
             OpRecord {
                 key,
+                kind: OpKind::Write,
                 phase: OpPhase::Transfer,
+                worker,
+                buf: Some(buf),
+                stream: Some(stream),
+                token: None,
+                waiter: None,
+                cancelling: false,
+            },
+        ))
+    }
+
+    /// `Std.IoTest.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移し、端が読めるようになるのを待つ
+    /// 操作を driver に出す。buffer の容量はここでは足さず、読めるようになってから足して貸す。何も来ない端の読みに
+    /// 記憶を持たせないためである (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn submit_read<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
+        worker: u32,
+        buf: Word,
+        stream: Word,
+    ) -> Result<Word, CellFault> {
+        let buf = unique_bytes(ctx, buf)?;
+        let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
+        let key = driver.submit(Op::Readable { handle });
+        Ok(self.record(
+            ctx,
+            OpRecord {
+                key,
+                kind: OpKind::Read,
+                phase: OpPhase::Probe,
                 worker,
                 buf: Some(buf),
                 stream: Some(stream),
@@ -1636,10 +1676,13 @@ impl Registry {
     }
 
     /// 集める地点で、driver の完了を driver の順に記録へ当て、待つタスクを再開する仕事を `out` に積む。記録がなければ
-    /// driver に触れない。
-    pub(crate) fn complete(
+    /// driver に触れない。読みの `Probe` の完了は、buffer を貸して `Transfer` の操作を新しい鍵で出し直し、待ちを続ける。
+    /// 記録の語は受け付けたタスクの物体なので、今のタスクが誰でも、その ID に切り替えてから触れる。
+    pub(crate) fn complete<M: Mode>(
         &mut self,
+        ctx: &mut Ctx<M>,
         driver: &mut dyn IoDriver,
+        depth_offset: usize,
         out: &mut Vec<Runnable>,
     ) -> Result<(), CellFault> {
         if self.ops.is_empty() {
@@ -1654,9 +1697,41 @@ impl Registry {
                 .remove(&key)
                 .ok_or(CellFault::Internal("a completion names no op"))?;
             let record = self.op_mut(op)?;
-            if !matches!(record.phase, OpPhase::Transfer) {
-                return Err(CellFault::Internal("an op completes twice"));
-            }
+            let result = match (&record.phase, &record.kind, result) {
+                (OpPhase::Done(_), _, _) => {
+                    return Err(CellFault::Internal("an op completes twice"));
+                }
+                // 取り消しを頼んだ読みには、もう buffer を貸さない。包みは結果によらず取り消しを投げる
+                (OpPhase::Probe, _, _) if record.cancelling => Err(io::Error::other("cancelled")),
+                (OpPhase::Probe, _, Err(e)) => Err(e),
+                (OpPhase::Probe, _, Ok(_)) => {
+                    let (worker, buf, stream) = (record.worker, record.buf, record.stream);
+                    let (Some(buf), Some(stream)) = (buf, stream) else {
+                        return Err(CellFault::Internal("a read op has no buffer or stream"));
+                    };
+                    let (buf, handle, raw) = with_worker(ctx, worker, depth_offset, |ctx| {
+                        lend_read_room(ctx, buf, stream)
+                    })?;
+                    let key = driver.submit(Op::Read { handle, buf: raw });
+                    let record = self.op_mut(op)?;
+                    record.buf = Some(buf);
+                    record.key = key;
+                    record.phase = OpPhase::Transfer;
+                    self.ops.insert(key, op);
+                    continue;
+                }
+                // 取り消しを頼んだ読みも、外が書いたバイトは確定してから buffer を返す
+                (OpPhase::Transfer, OpKind::Read, Ok(n)) => {
+                    let (worker, buf) = (record.worker, record.buf);
+                    let buf = buf.ok_or(CellFault::Internal("a read op has no buffer"))?;
+                    with_worker(ctx, worker, depth_offset, |ctx| unsafe {
+                        ctx.heap_mut().bytes_commit(buf, n)
+                    })?;
+                    Ok(n)
+                }
+                (OpPhase::Transfer, _, result) => result,
+            };
+            let record = self.op_mut(op)?;
             record.phase = OpPhase::Done(result);
             let Some(t) = record.waiter else {
                 continue;
@@ -1761,6 +1836,41 @@ pub(crate) fn peer<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, Cell
         .ok_or(CellFault::Internal("a stream pair is split twice"))?;
     let bin = Arc::clone(&s.bin);
     Ok(open_stream(ctx, handle, None, bin))
+}
+
+/// 読みが1回に足す空きのバイト数 (docs/spec/vm.md の「操作の記録」)。
+const READ_ROOM: usize = 65_536;
+
+/// 読めるようになった端 `stream` の読みに、記録の buffer `buf` の長さの後ろの空きを貸す。空きが `READ_ROOM` より
+/// 少なければ、長さに `READ_ROOM` を足した容量の新しい物体に中身を写し、元を手放す。返すのは記録が持つ buffer の語、
+/// 端のハンドル、貸した記憶である。記録の worker ID に切り替えた下で呼ぶ。`HeapError` は検査モードの前提の違反で、
+/// driver に出す前に返すので、貸したままの記憶は残らない。確保量の上限は誤りにせず、次の安全点で止まる。
+fn lend_read_room<M: Mode>(
+    ctx: &mut Ctx<M>,
+    buf: Word,
+    stream: Word,
+) -> Result<(Word, IoHandle, RawBuf), CellFault> {
+    let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
+    let heap = unsafe { ctx.heap_mut() };
+    // 貸すことは状態を変えないので、空きを測るのにも使える
+    let room = unsafe { heap.bytes_lend(buf)? }.cap;
+    let buf = if room < READ_ROOM {
+        let content = unsafe { heap.bytes(buf)? };
+        let len = content.len();
+        let mut fresh = heap.alloc_bytes_room(len + READ_ROOM);
+        if len > 0 {
+            // `content` は `fresh` と別の物体の中身で、`fresh` を作っても動かない
+            fresh = unsafe { heap.bytes_extend(fresh, &*content)? };
+        }
+        unsafe { heap.decref(buf)? };
+        fresh
+    } else {
+        buf
+    };
+    // 記録が物体を生かし、一意に保ち、完了を受け取るまで書き換えないので、driver はこの空きに書ける
+    // (docs/spec/object-model.md の T10 の行)
+    let raw = unsafe { heap.bytes_lend(buf)? };
+    Ok((buf, handle, raw))
 }
 
 /// 呼ぶ側から移ってきた `Bytes` の参照 `w` を、一意な物体の参照にする。共有か不死の物体と、ほかに参照のある物体は、

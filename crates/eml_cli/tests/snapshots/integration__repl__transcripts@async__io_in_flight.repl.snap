@@ -1,0 +1,36 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/async/io_in_flight.repl
+---
+> import Async
+> import IoTest
+> import Bytes
+> import String
+> stuck : Unit -> <IO, Panic, Async.Async> Unit
+. stuck () =
+.   let (a, b) = IoTest.pair ()
+.   let t = Async.start (fn () ->
+.     let (buf, a) = IoTest.read_chunk (Bytes.empty ()) a
+.     drop a
+.     buf)
+.   let _ = Async.await t
+.   drop b
+.
+> Async.run stuck
+runtime error: deadlock: every task is waiting and no timer is pending
+> println "next"
+next
+> echo : String -> <IO, Panic, Async.Async> String
+. echo s =
+.   let (a, b) = IoTest.pair ()
+.   let (_, a) = IoTest.write (Bytes.of_string s) a
+.   drop a
+.   let (buf, b) = IoTest.read_chunk (Bytes.empty ()) b
+.   drop b
+.   String.decode buf
+.
+> println (Async.run (fn () -> echo "hello"))
+hello
+--- close ---
+no leaks

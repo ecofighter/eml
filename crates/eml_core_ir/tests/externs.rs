@@ -466,7 +466,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par`、`Std.Async` の16行、`Std.Chan` の2行、`Std.IoTest` の5行以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の16行、`Std.Chan` の2行、`Std.IoTest` の7行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -537,8 +537,8 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Async.park_io" => (&[Lin, Lin], Unr),
             "Std.IoTest.open_pair" => (&[Unr], Lin),
             "Std.IoTest.peer" | "Std.IoTest.op_stream" => (&[Lin], Lin),
-            "Std.IoTest.submit_write" => (&[Unr, Lin], Lin),
-            "Std.IoTest.take_write" => (&[Lin], Unr),
+            "Std.IoTest.submit_write" | "Std.IoTest.submit_read" => (&[Unr, Lin], Lin),
+            "Std.IoTest.take_write" | "Std.IoTest.take_read" => (&[Lin], Unr),
             _ => {
                 assert!(
                     row.param_marks.iter().all(|&mark| mark == Unr),

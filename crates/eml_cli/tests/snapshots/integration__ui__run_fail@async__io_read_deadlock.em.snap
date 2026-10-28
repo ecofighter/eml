@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/async/io_read_deadlock.em
+---
+--- stdout ---
+before
+--- stderr ---
+--- runtime error ---
+deadlock: every task is waiting and no timer is pending
