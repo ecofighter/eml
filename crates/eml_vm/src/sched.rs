@@ -300,7 +300,7 @@ impl<P: Policy> Scheduler<P> {
         driver: Box<dyn IoDriver>,
         main_worker: u32,
         max_depth: usize,
-        generations: u32,
+        generations: Vec<u32>,
     ) -> Scheduler<P> {
         Scheduler {
             policy,

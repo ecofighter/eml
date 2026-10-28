@@ -146,7 +146,6 @@
 - `shield` の中で自分の属するスコープを `drain_within` で待つなど、自分を待つ形は、ほかに進むものがなくなったときにだけ実行時エラー `deadlock` で止まる。ほかのタスクが動くか眠る間は、互いを待つタスクも待ち続ける ([VM](../spec/vm.md) の「時計と driver」)
 - `race` の勝ちは、1つの worker の登録表が1つの行で決める。worker をまたぐ勝ちの決め方は持たない ([標準ライブラリ](../spec/stdlib.md) の「時間」)
 - スコープの失敗は、終わった順で最初のものだけを `run` と `scope` が起こし直す。2つ目からは報告せず、`RunStats.dropped_failures` に数えるだけである
-- `Cell`、`Scope`、`Chan a` の即値の generation は 32 ビットである。1つの添字で generation が一周すると、放したセルの古い番号や前の run の `Scope` と `Chan a` が新しいセルを指しうる ([VM](../spec/vm.md) の「セルと登録表」、[ロードマップ](../future/roadmap.md) の「非同期」)
 - 速い道で操作の予算を使うのは、`check_cancelled` と `Std.Chan` の速い道である。`try_send` と `try_recv` は使うだけで譲らない ([標準ライブラリ](../spec/stdlib.md) の「操作の予算」)
 - 閉じない channel は run の終わりまで登録表に残り、残った品物もそのときまで落とさない (`RunStats.channels_swept`。[ロードマップ](../future/roadmap.md) の「非同期」)
 - `Counter` の表は `Machine` が持ち、放さない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Atomic`」)

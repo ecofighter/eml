@@ -41,6 +41,9 @@ pub(crate) const CANCELLED: i64 = 1;
 pub(crate) const IO_CANCELLED: i64 = 5;
 /// 待たずに済む速い道の予算 (docs/spec/stdlib.md の「操作の予算」)。
 const BUDGET: u32 = 128;
+/// 使い切った添字の generation。番号には出さず、この generation の添字は空けない。一周させると、古い `Chan a` の値が
+/// 別の型の品物を持つ channel を指しうるからである (docs/spec/vm.md の「セルと登録表」)。
+const RETIRED: u32 = u32::MAX;
 
 /// 登録表のセルの番号。添字を使い回すので、generation で古い番号を見分ける。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,10 +329,9 @@ pub(crate) struct TaskStats {
 
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
 pub(crate) struct Registry {
+    /// 添字ごとの generation と中身。空いた添字の generation は、次に出す番号のものである。
     slots: Vec<(u32, Option<CellKind>)>,
     free: Vec<u32>,
-    /// 新しい添字の最初の generation。前の run の `Scope` の値がこの run のセルを指さないようにする。
-    floor: u32,
     pub(crate) inbox: Arc<Inbox>,
     pub(crate) stats: TaskStats,
     /// 時間の輪。項は時間を待つタスクのセルの番号だけで、語を持たない (docs/spec/vm.md の「時間の待ち」)。
@@ -341,11 +343,18 @@ pub(crate) struct Registry {
 }
 
 impl Registry {
-    pub(crate) fn new(floor: u32) -> Registry {
+    /// `generations` は前の run までに使った添字の、次に出す generation である (`next_generations`)。前の run の
+    /// `Scope` と `Chan a` の値がこの run のセルを指さないように、添字ごとに generation を続ける。
+    pub(crate) fn new(generations: Vec<u32>) -> Registry {
+        // 小さい添字から使うように、逆の順に積む
+        let free = (0..generations.len())
+            .rev()
+            .filter(|&index| generations[index] != RETIRED)
+            .map(|index| u32::try_from(index).expect("the cells fit in u32 positions"))
+            .collect();
         Registry {
-            slots: Vec::new(),
-            free: Vec::new(),
-            floor,
+            slots: generations.into_iter().map(|g| (g, None)).collect(),
+            free,
             inbox: Arc::new(Inbox::default()),
             stats: TaskStats::default(),
             timers: BTreeMap::new(),
@@ -394,7 +403,7 @@ impl Registry {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
-                self.slots.push((self.floor, None));
+                self.slots.push((0, None));
                 u32::try_from(self.slots.len() - 1).expect("the cells fit in u32 positions")
             }
         };
@@ -406,12 +415,15 @@ impl Registry {
         }
     }
 
-    /// 添字を使い回せるようにし、generation を1つ進めて古い番号を見分ける。
+    /// generation を1つ進めて古い番号を見分け、添字を使い回せるようにする。進めた generation が `RETIRED` なら、
+    /// 添字は空けずに退かせる。出した番号の generation は `RETIRED` より小さいので、足しても一周しない。
     fn release(&mut self, index: u32) {
         let slot = &mut self.slots[index as usize];
-        slot.0 = slot.0.wrapping_add(1);
+        slot.0 += 1;
         slot.1 = None;
-        self.free.push(index);
+        if slot.0 != RETIRED {
+            self.free.push(index);
+        }
     }
 
     fn cell_mut(&mut self, cell: CellRef) -> Result<&mut CellKind, CellFault> {
@@ -457,12 +469,13 @@ impl Registry {
             .ok_or(CellFault::Internal("a counter index is out of range"))
     }
 
-    /// 次の run の `floor`。この run が出したどの generation よりも大きい。`slots` は run の間に縮まない。
-    pub(crate) fn next_floor(&self) -> u32 {
+    /// 次の run の `generations`。添字ごとに、この run までに出したどの generation よりも大きい。誤りで止まった run は
+    /// セルを残すので、残ったセルの generation も1つ進める。`slots` は run の間に縮まない。
+    pub(crate) fn next_generations(&self) -> Vec<u32> {
         self.slots
             .iter()
-            .map(|(generation, _)| generation.wrapping_add(1))
-            .fold(self.floor, u32::max)
+            .map(|(generation, kind)| generation + u32::from(kind.is_some()))
+            .collect()
     }
 
     /// タスクが新しいタスクを加える今のスコープ。
@@ -1775,7 +1788,7 @@ fn resumed_cells(out: &[Runnable]) -> Vec<(CellRef, i64)> {
 
 #[test]
 fn timers_with_the_same_deadline_expire_in_registration_order() {
-    let mut registry = Registry::new(0);
+    let mut registry = Registry::new(Vec::new());
     let scope = registry.open_root(None, None).unwrap();
     let first = running_task(&mut registry, scope);
     let second = running_task(&mut registry, scope);
@@ -1802,7 +1815,7 @@ fn timers_with_the_same_deadline_expire_in_registration_order() {
 
 #[test]
 fn unparking_a_sleeping_task_removes_its_timer() {
-    let mut registry = Registry::new(0);
+    let mut registry = Registry::new(Vec::new());
     let scope = registry.open_root(None, None).unwrap();
     let first = running_task(&mut registry, scope);
     let second = running_task(&mut registry, scope);
@@ -1815,4 +1828,55 @@ fn unparking_a_sleeping_task_removes_its_timer() {
     out.clear();
     registry.expire(50, &mut out).unwrap();
     assert_eq!(resumed_cells(&out), [(second, WOKE)]);
+}
+
+#[test]
+fn a_slot_retires_instead_of_wrapping_its_generation() {
+    let mut registry = Registry::new(vec![RETIRED - 2]);
+    let scope = registry.open_root(None, None).unwrap();
+    assert_eq!(
+        scope,
+        CellRef {
+            index: 0,
+            generation: RETIRED - 2
+        }
+    );
+    registry.release(scope.index);
+    let last = registry.open_root(None, None).unwrap();
+    assert_eq!(
+        last,
+        CellRef {
+            index: 0,
+            generation: RETIRED - 1
+        }
+    );
+    registry.release(last.index);
+    // 進めた generation が一周の手前に来た添字は空けないので、次のセルは新しい添字に置く
+    let next = registry.open_root(None, None).unwrap();
+    assert_eq!(
+        next,
+        CellRef {
+            index: 1,
+            generation: 0
+        }
+    );
+    assert!(registry.live(scope).is_none() && registry.live(last).is_none());
+    // 退いた添字は次の run でも使わず、ほかの添字は generation を続ける
+    assert_eq!(registry.next_generations(), [RETIRED, 1]);
+    let mut later = Registry::new(registry.next_generations());
+    let reused = later.open_root(None, None).unwrap();
+    assert_eq!(
+        reused,
+        CellRef {
+            index: 1,
+            generation: 1
+        }
+    );
+    assert_eq!(
+        later.open_root(None, None).unwrap(),
+        CellRef {
+            index: 2,
+            generation: 0
+        }
+    );
 }

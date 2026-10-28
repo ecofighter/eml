@@ -183,8 +183,8 @@ pub struct Machine<M: Mode> {
     /// 根の表のうち、印を付け終えた先頭の根の数。実行をまたいで持ち、回復で 0 に戻す
     /// (docs/spec/object-model.md の「セッションの根」)。
     shared_roots: usize,
-    /// 次の run の登録表の最初の generation (docs/spec/vm.md の「`Async` のタスク」)。
-    generations: u32,
+    /// 次の run の登録表の、添字ごとの generation (docs/spec/vm.md の「セルと登録表」)。
+    generations: Vec<u32>,
     /// `Std.Atomic.Counter` の表。run をまたぎ、REPL の入力をまたいで残る (docs/spec/vm.md の「セルと登録表」)。
     counters: Vec<i64>,
     /// 時計と待ち。run の間は `Scheduler` に移すので、run の外ではいつも `Some` である。`Machine` ごとに1つなので、
@@ -226,7 +226,7 @@ impl<M: Mode> Machine<M> {
             earlier: HeapWork::default(),
             copying: HeapWork::default(),
             shared_roots: 0,
-            generations: 0,
+            generations: Vec::new(),
             counters: Vec::new(),
             driver: Some(Clock::Virtual.driver()),
         }
@@ -370,7 +370,7 @@ impl<M: Mode> Machine<M> {
         let start = Start {
             max_depth: self.max_depth,
             shared_roots: self.shared_roots,
-            generations: self.generations,
+            generations: std::mem::take(&mut self.generations),
             counters: std::mem::take(&mut self.counters),
             driver: self
                 .driver
@@ -390,7 +390,7 @@ impl<M: Mode> Machine<M> {
             }
         };
         self.shared_roots = scheduled.shared_roots;
-        self.generations = scheduled.generations;
+        self.generations = std::mem::take(&mut scheduled.generations);
         self.counters = std::mem::take(&mut scheduled.counters);
         // 誤りで返る道でも driver を失わないように、run の直後に戻す
         self.driver = scheduled.driver.take();
@@ -532,7 +532,7 @@ struct Scheduled {
     peak_stack: u64,
     shared_roots: usize,
     tasks: TaskStats,
-    generations: u32,
+    generations: Vec<u32>,
     counters: Vec<i64>,
     /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
     driver: Option<Box<dyn IoDriver>>,
@@ -542,7 +542,7 @@ struct Scheduled {
 struct Start {
     max_depth: usize,
     shared_roots: usize,
-    generations: u32,
+    generations: Vec<u32>,
     counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
 }
@@ -574,7 +574,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         peak_stack: sched.peak_stack(task),
         shared_roots: sched.shared_roots,
         tasks: sched.cells.stats,
-        generations: sched.cells.next_floor(),
+        generations: sched.cells.next_generations(),
         counters: std::mem::take(&mut sched.cells.counters),
         driver: Some(sched.driver),
     };
