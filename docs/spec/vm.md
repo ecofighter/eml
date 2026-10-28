@@ -393,6 +393,22 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Finished.preemptions` は、方針か `PREEMPT` が安全点で始めた切り替えの数である。監視のスレッドの `PREEMPT` による切り替えも数える。切り替える先がなかった試みは数えない。join で待つ切り替えと、子が終わったときの切り替えは数えない。逐次では、ほかの者が `Control::preempt` を呼ばなければ 0 である。横取りだけを数えるのは、seed の方針で横取りが起きたことをテストで確かめるためである
 - `Scheduler`、`Sched`、方針の型は `Send` で、`Sched` は `Sync` でもある。`crates/eml_vm/tests/api.rs` が型の assert で確かめる
 
+## 時計と driver
+
+- 時計と待ちは、`eml_rt` の trait `IoDriver` が受け持つ。時間だけを扱い、`verus!` の外に置く ([オブジェクトモデル](object-model.md) の「`unsafe` の核」)
+
+  ```rust
+  pub trait IoDriver: Send {
+      fn now(&self) -> Duration;
+      fn wait_until(&mut self, deadline_ms: u64);
+  }
+  ```
+
+- `now` は、driver を作ったときからの経過時間を返す。単調で、戻らない。仮想の時計はミリ秒の整数だけで進む
+- `wait_until(deadline_ms)` は、`now()` が `deadline_ms` ミリ秒以上になるまで待つ。早く戻ってよい。呼ぶ側は戻るたびに `now` で時刻を確かめ直す。本物の時計はスレッドを止めて待ち、仮想の時計は止まらずに `now` を `deadline_ms` へ進める
+- driver は worker ごとに1つで、持ち主の worker だけが触る。`&mut self` で呼び、`Sync` は求めない
+- driver を持つのは実行系 (`eml_vm`) で、`Ctx` は持たない。`eml_rt` の核は時間を知らない
+
 ## `par` の fork と join
 
 `par` (LIR の `Call::Par`) は、2つの子を1つの worker の上で動かす。左の子は親のタスクのスタックの上で、右の子は新しいタスクで動く。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」に、子の中断のための関数をコンパイラが作る規則は [Core IR](core-ir.md) の「`par` の子の中断」にある。ここでは VM の側の手順を定める。
