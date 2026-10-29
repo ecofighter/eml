@@ -365,6 +365,8 @@
 - io_uring の backend: unix の本物の driver は polling (epoll と kqueue) を使い、io_uring を使わない ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
   - 後に回した理由: io_uring を使わなければ、確かめていない実行時の backend の切り替えがなく、自前の操作も compio の1つの trait で書ける。
   - 見直す条件: `Std.Net` の計測で、readiness の道が支配的になったとき。
+  - 見直すときの形: Linux だけ `compio-driver` の feature に `io-uring` を足し、`polling` と両方を有効にする (compio の fusion の driver)。fusion は起動時に io_uring の opcode を調べ、io_uring が使えない環境では polling で動く。Docker の既定の seccomp プロファイル、gVisor、sysctl の `kernel.io_uring_disabled` を 0 以外にしたホストでは io_uring が使えない。`polling` を外して io_uring だけにすると、そうした環境で `RealDriver::new` が失敗する。fusion では backend が実行時に決まるので、CI では `ProactorBuilder::driver_type` で backend を固定し、両方でテストを流す
+  - io_uring で失敗するテストと直し方: `eml_io` の `real::a_readable_probe_stays_pending_without_data`、`real::a_read_after_a_probe_returns_the_bytes`、`real::a_closed_peer_reads_eof` の3つが失敗する。io_uring の `PollOnce` (`IORING_OP_POLL_ADD`) は、`Ok(0)` でなく poll の revents で終わるためである。revents は、読めるだけなら `POLLIN` (1)、相手が閉じていれば `POLLIN | POLLHUP | POLLRDHUP` (8209) になる。`Readable` は `Ok(0)` で終わると決めている ([VM](../spec/vm.md) の「時計と driver」) ので、`RealDriver::reap` で `Slot::Readable` の `Ok` を `Ok(0)` にそろえる。VM は `Probe` の完了の `Ok` と `Err` しか見ないので、ほかに直す所はない
 - `Clock` と `--clock` の名前: 時計の選び方 `Clock` と CLI の `--clock` は、時計と一緒に driver (本物の driver かテストの driver) も選ぶ。driver を選ぶ名前に変えるかを決める ([VM](../spec/vm.md) の「時計と driver」)
   - 後に回した理由: driver の違いが見えるのは実行系のテストのための `Std.IoTest` だけで、利用者の API の I/O はまだ driver に乗っていない。
   - 見直す条件: `Std.Net` などの利用者の I/O が driver に乗り、`--clock` が時計のほかに I/O の振る舞いも変えることが利用者に見えるようになったとき。
