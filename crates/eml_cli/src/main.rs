@@ -5,7 +5,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use eml_cli::{Clock, Control, FsProvider, RunConfig, Sched, Session, default_limits, script_host};
+use eml_cli::{
+    Clock, Control, Finished, FsProvider, RunConfig, Sched, Session, default_limits, script_host,
+};
 use eml_diagnostics::{has_errors, render};
 
 mod interrupt;
@@ -35,6 +37,9 @@ enum Command {
             default_value = "normal"
         )]
         sched: Sched,
+        /// Run in checked mode and print the run's counters on stderr after it finishes
+        #[arg(long)]
+        stats: bool,
         file: PathBuf,
     },
     /// Start an interactive session
@@ -82,6 +87,7 @@ fn main() -> ExitCode {
         Command::Run {
             debug_heap,
             sched,
+            stats,
             file,
         } => {
             // 読み込みとコンパイルの間の Ctrl-C と SIGTERM も、OS の既定の動作でプロセスが終わらずに、このハンドラが受ける。そこで立てたビットは、
@@ -93,7 +99,7 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             };
             let mut config = RunConfig::default()
-                .with_debug_heap(debug_heap)
+                .with_debug_heap(debug_heap || stats)
                 .with_sched(sched)
                 .with_clock(Clock::Real)
                 .with_control(control);
@@ -109,7 +115,12 @@ fn main() -> ExitCode {
             // 相対パスはカレントディレクトリを基準にする
             match eml_cli::execute(&program, &config, script_host(PathBuf::new(), script_args)) {
                 // シェルと同じく、終了コードは下の 8 ビットである (docs/spec/stdlib.md の「`exit`」)
-                Ok(finished) => ExitCode::from(finished.exit.map_or(0, |code| (code & 255) as u8)),
+                Ok(finished) => {
+                    if stats {
+                        print_stats(&finished);
+                    }
+                    ExitCode::from(finished.exit.map_or(0, |code| (code & 255) as u8))
+                }
                 Err(error) => {
                     eprintln!("runtime error: {error}");
                     let code = if error.interrupted() {
@@ -124,6 +135,21 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+/// 実行時エラーでない run の終わりに、数えた仕事を標準エラーの1行に出す (docs/implementation/architecture.md の「CLI と lib API」)。
+fn print_stats(finished: &Finished) {
+    let fields: Vec<String> = finished
+        .stats
+        .fields()
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect();
+    eprintln!(
+        "stats: {} preemptions={}",
+        fields.join(" "),
+        finished.preemptions
+    );
 }
 
 /// `eml FILE ARGS...` を `eml run FILE ARGS...` にする (docs/spec/stdlib.md の「起動」)。`-` で始まる最初の引数は今と同じく

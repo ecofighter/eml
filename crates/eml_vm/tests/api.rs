@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
-    Clock, CodeBase, Control, Limits, Machine, Normal, RunConfig, RuntimeError, Sched, Stop, Task,
-    VmFault,
+    Clock, CodeBase, Control, Limits, Machine, Normal, RunConfig, RunStats, RuntimeError, Sched,
+    Stop, Task, VmFault,
 };
 
 use crate::common::parse;
@@ -720,4 +720,22 @@ main () =
         out,
         "NotAvailable: cannot listen on 127.0.0.1:0: unsupported\n"
     );
+}
+
+#[test]
+fn the_stats_fields_follow_the_declaration() {
+    let stats = RunStats::default();
+    // Debug の `RunStats { a: 0, b: 0, ... }` から欄の名前を宣言の順に取る
+    let debug = format!("{stats:?}");
+    let inner = debug
+        .strip_prefix("RunStats { ")
+        .unwrap()
+        .strip_suffix(" }")
+        .unwrap();
+    let declared: Vec<&str> = inner
+        .split(", ")
+        .map(|field| field.split(':').next().unwrap())
+        .collect();
+    let named: Vec<&str> = stats.fields().iter().map(|(name, _)| *name).collect();
+    assert_eq!(named, declared);
 }

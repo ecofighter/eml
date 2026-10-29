@@ -82,6 +82,38 @@ pub struct RunStats {
     pub completions: u64,
 }
 
+impl RunStats {
+    /// 欄の名前と値を宣言の順に返す。`eml run --stats` の出力はこれを並べるだけなので、欄を足したらここにも足す
+    /// (長さの型が数の食い違いを止める)。
+    pub fn fields(&self) -> [(&'static str, u64); 23] {
+        [
+            ("evidence_steps", self.evidence_steps),
+            ("yields", self.yields),
+            ("yield_frames", self.yield_frames),
+            ("unwound_frames", self.unwound_frames),
+            ("string_bytes_copied", self.string_bytes_copied),
+            ("rc_increments", self.rc_increments),
+            ("rc_decrements", self.rc_decrements),
+            ("boxes", self.boxes),
+            ("unboxes", self.unboxes),
+            ("allocations", self.allocations),
+            ("reuses", self.reuses),
+            ("peak_objects", self.peak_objects),
+            ("peak_stack", self.peak_stack),
+            ("tasks", self.tasks),
+            ("parks", self.parks),
+            ("dropped_failures", self.dropped_failures),
+            ("cancels", self.cancels),
+            ("timers", self.timers),
+            ("shared_objects", self.shared_objects),
+            ("channel_ops", self.channel_ops),
+            ("channel_waits", self.channel_waits),
+            ("channels_swept", self.channels_swept),
+            ("completions", self.completions),
+        ]
+    }
+}
+
 /// 1回の実行の結果。`exit` で終わったら、その終了コードを持つ (docs/spec/vm.md の「`RunStats`」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Finished {

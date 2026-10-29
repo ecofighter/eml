@@ -381,6 +381,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `eml FILE ARGS...` は `eml run FILE ARGS...` と同じである。`run` のファイルより後ろの引数は、`-` で始まるものも含めて clap に読ませず、`split_script_args` で切り離してスクリプトに渡す ([標準ライブラリ](../spec/stdlib.md) の「起動」)。ファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグの集まりは、`<Cli as clap::CommandFactory>::command()` の `run` の定義から読む。フラグを足しても分け方を直さずに済むためである。引数は `Env.args` で読め、`eml_vm` の `script_host` (`eml_cli` が再公開する) が標準入力と一緒に Host に持たせる
 - `eml check <file>` は、診断を stderr に表示する。`eml run <file>` は、診断 (警告を含む) を先に stderr に表示し、エラーがなければ実行する。警告がプログラムの出力の後に出ないようにするため
 - `eml run` は VM の速いモードで実行し、`eml run --debug-heap` は検査モードで実行する。検査モードは、RC のリーク、解放済みの物体の使用、`lin` の物体の `dup` などを見つける ([オブジェクトモデル](../spec/object-model.md) の「報告する誤り」)
+- `eml run --stats` も検査モードで実行し、実行時エラーで終わらなかった run の後に、標準エラーに `stats: <欄>=<値> ... preemptions=<値>` の1行を出す。欄は `RunStats::fields()` が宣言の順に返す名前そのままで、最後に `Finished::preemptions` を置く。検査モードの run なので、その run の時間は物差しに使えない。REPL には足さない
 - `eml run` は、ファイルを読む前に Ctrl-C と SIGTERM のハンドラを入れ、`default_limits()` の上限で実行する ([VM](../spec/vm.md) の「上限と割り込み」)
 - 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、エントリのファイルが読めない)、130 = 割り込みで止まった、143 = SIGTERM で止まった、とする。2 は、clap が引数の誤りで返す値に合わせた。130 と 143 は、シェルが SIGINT と SIGTERM で終わった子に報告する値と同じである。import したモジュールが見つからないことは診断 (E1026) なので 1 である
 - `eml run` と `eml repl` は `--sched <normal|sequential|seeded:N>` でスケジュールの方針を選ぶ (既定は `normal`。ライブラリの既定の `Sched::default()` は `sequential` である。[VM](../spec/vm.md) の「タスクとスケジュール」)
