@@ -39,6 +39,7 @@ nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace 
 nix build                            # build the eml binary (eml_cli)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri, trusted tests only; run once more with -Zmiri-tree-borrows added
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # Miri on the VM's small runs (same two settings)
+nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib cells::a_read   # Miri on the read lend in eml_vm's op records (same two settings)
 cargo verus verify -p eml_rt         # Verus proofs of eml_rt
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)
@@ -85,6 +86,7 @@ A batch pipeline whose dependencies flow strictly top to bottom (docs/implementa
 ```
 eml_cli          check / run / repl; the only pipeline driver (`Session`); stage features types < core < run
 eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `par`, `Async` tasks and channels on one worker; `Machine` appends programs by name (the REPL)
+eml_io           IoDriver implementations: the compio-driver real driver, the deterministic test driver, the blocking pool
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
 eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> Perceus -> reuse, verifier

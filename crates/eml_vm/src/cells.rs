@@ -1424,7 +1424,7 @@ impl Registry {
                 if !record.timed_out {
                     driver.cancel(record.key);
                 }
-                // 輪の項を残すと、満期に `expire` が取り消した記録の期限を立てる
+                // 輪の項を残すと、満期に `expire` が取り消した記録に期限が来た印を付ける
                 if let Some(key) = record.timer.take() {
                     self.timers.remove(&key);
                 }

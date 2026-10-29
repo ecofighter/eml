@@ -130,3 +130,7 @@ jobs:
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
           nix develop .#miri -c cargo miri test -p eml_vm --test integration miri::
+      - name: "cargo miri test -p eml_vm --lib cells::a_read"
+        if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
+        run: |
+          nix develop .#miri -c cargo miri test -p eml_vm --lib cells::a_read

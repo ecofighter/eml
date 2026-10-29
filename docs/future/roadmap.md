@@ -28,8 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `io-driver`: 本物の I/O の driver とブロックする呼び出しのプールを入れる。まず `compio-driver` を単独で使えるかを試作で確かめ、使うかどうかを段の計画で決める。受け付け、取り消し、完了、待ちを持つ `IoDriver` の trait と、`eml_io` のテストの driver と、時間の輪はすでにあるので、`eml_io` の本物の driver をその trait の上に作り、`await_io_until` と `_within` の版を時間の輪の項として載せる。読めるようになってから読みの buffer を取る規則もこの段で入れる。前提: なし。設計: [非同期の設計](async.md) の「I/O の driver」
-- `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。前提: `io-driver`。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
+- `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。`Std.Net` ができたら `Std.IoTest` の口を置き換えるか消す ([標準ライブラリ](../spec/stdlib.md) の「`Std.IoTest`」)。前提: なし。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
 - `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。前提: `async-net`。設計: [非同期の設計](async.md) の「テストと決定性」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
 - `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`、`async-net`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
@@ -43,7 +42,7 @@
   - 配列の要素は一様な位置なので、今は `Array Float` と `MutArray Float` の要素が書くたびに `Float` の箱に入る。spectral-norm では、確保のほとんどがこの箱である (`RunStats` の `allocations` 4043 のうち `boxes` が 4001。[計測の基準](../implementation/benchmarks.md) の「配列の `Float` の要素の箱」)。構造体の表現もこの箱を消さない
   - 新しい配列は `Array a` とは別の型で、長さの語と連続した中身を持つ物体の仲間 (`String`、`Bytes`。[オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」) の別の種類である。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
 - `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: `raw-arrays`。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
-- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。前提: `ffi-c`、`io-driver`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
+- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
 - `main-pinning`: プロセスのメインスレッドをメインの worker にし、`Std.Gui` を `Gui.run_on_main` だけで作る。メインの worker のタスクとその子は、救済されず、ほかの worker に移らない。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「固定したタスク」、同じ文書の「スレッドと worker」
 - `gui-plugin`: VM の上で egui のプラグインを動かし、`Std.Gui` の残りを入れる。前提: `main-pinning`。設計: [FFI と拡張の設計](ffi.md) の「GUI」、同じ文書の「拡張」
 - `borrowed-params`: 借用パラメータを入れる。所有の引数で1バイトごとに `dup` する形をなくし、verifier が借用のブロック引数を確かめる。前提: なし。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
@@ -360,6 +359,21 @@
 - `shield` の中で取り消しの要求を読む確かめ
   - 後に回した理由: `cancel_requested` は、`shield` の中では外から来た取り消しを読まない。`shield` の中の後始末が要求を知る使い道が、まだない。
   - 見直す条件: `shield` の中の後始末が、取り消されたかどうかで動きを変える必要が出たとき。
+- io_uring の backend: unix の本物の driver は polling (epoll と kqueue) を使い、io_uring を使わない ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
+  - 後に回した理由: io_uring を使わなければ、確かめていない実行時の backend の切り替えがなく、自前の操作も compio の1つの trait で書ける。
+  - 見直す条件: `Std.Net` の計測で、readiness の道が支配的になったとき。
+- `Clock` と `--clock` の名前: 時計の選び方 `Clock` と CLI の `--clock` は、時計と一緒に driver (本物の driver かテストの driver) も選ぶ。driver を選ぶ名前に変えるかを決める ([VM](../spec/vm.md) の「時計と driver」)
+  - 後に回した理由: driver の違いが見えるのは実行系のテストのための `Std.IoTest` だけで、利用者の API の I/O はまだ driver に乗っていない。
+  - 見直す条件: `Std.Net` などの利用者の I/O が driver に乗り、`--clock` が時計のほかに I/O の振る舞いも変えることが利用者に見えるようになったとき。
+- waker の本番の呼び出しと 10 ms の上限をなくすこと: 本物の driver は `IoWaker` を持つが、本番のコードは鳴らさない。空きの worker は1回の待ちを `IDLE_TICK` (10 ms) で切り、止める語を読む ([VM](../spec/vm.md) の「時計と driver」)。そのため、driver のどの待ちも起こしで戻るという設計 ([非同期の設計](async.md) の「`IoDriver` と `eml_io`」) を満たしていない
+  - 後に回した理由: kqueue の通知と compio の起こしの道は async-signal-safe と書かれておらず、シグナルのハンドラから呼べない。worker が1つの間は、10 ms の上限で Ctrl-C と確保量の上限が眠る worker に届く。
+  - 見直す条件: `worker-threads` で、監視のスレッドとスレッドをまたぐ知らせが worker を起こすようになったとき。または、Ctrl-C の反応の遅れか空きの CPU 使用が問題になったとき。そのときは `IDLE_TICK` を見直す。
+- プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ。プールの32本のスレッドがすべて仕事中なら、仕事の受け付けは安全点を通らずに待つ ([VM](../spec/vm.md) の「時計と driver」)
+  - 後に回した理由: 今の仕事は std の内部の短いもの (`Std.IoTest.checksum`) だけで、長さに上限がある。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
+  - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
+- `compio-driver` の 0.13 の系列: `compio-driver` と `compio-buf` は、上位の crate `compio` の安定版が使う版に固定している ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
+  - 後に回した理由: 0.13 の系列には beta の版しかない。
+  - 見直す条件: 0.13 の系列が安定版になったとき。上げるときは、アーキテクチャの「外部 crate」に書いた項目をすべて確かめる。
 
 ### ネイティブ化
 
