@@ -1278,6 +1278,8 @@ main () = Async.run (fn () ->
 | `connect` | `String -> Int -> <IO, Async> TcpStream` | eml |
 | `read_chunk` | `Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)` | eml |
 | `read_chunk_within` | `Int -> Bytes -> TcpStream -> <IO, Async> (Option Bytes, TcpStream)` | eml |
+| `read_line` | `TcpStream -> <IO, Panic, Async> (Option String, TcpStream)` | eml |
+| `read_line_within` | `Int -> TcpStream -> <IO, Panic, Async> (Option (Option String), TcpStream)` | eml |
 | `write` | `String -> TcpStream -> <IO, Async> TcpStream` | eml |
 | `write_bytes` | `Bytes -> TcpStream -> <IO, Async> TcpStream` | eml |
 | `write_line` | `String -> TcpStream -> <IO, Async> TcpStream` | eml |
@@ -1292,8 +1294,11 @@ main () = Async.run (fn () ->
 - `accept l` はリスナーに来た接続を1つ受け、そのストリームとリスナーを返す。接続が来るまで待つ
 - `accept_within ms l` は `accept l` を `ms` ミリ秒の期限で区切り、結果を `Option` に包む。`None` は期限が過ぎたことだけを表し、リスナーは続けて使える。期限と競って届いた接続は `Some` で返す (上の「時間」)
 - `read_chunk b s` は `s` を1回読み、読んだバイトを `b` の後ろに足して、その `Bytes` とストリームを返す。足すのは 1 バイト以上 65 536 バイト以下で、EOF のときだけ何も足さずに `b` の中身のまま返す。EOF は失敗でない (`FileIn.read_chunk` と同じ形)。読めるものがなければ、相手が書くか閉じるまで待つ。buffer の空きは、ストリームが読めるようになってから足す ([VM](vm.md) の「操作の記録」)
-- 読みは次のことを保証する。受け取ったバイトはすべて、受け取った順に `read_chunk` に届く。ストリームは隠れた読みの buffer を持たないので、読んだバイトは `read_chunk` が返した `Bytes` にしかない
+- 読みは次のことを保証する。受け取ったバイトはすべて、受け取った順に `read_chunk` か `read_line` に届く。`read_line` で一度も読んでいないストリームは隠れた読みの buffer を持たないので、読んだバイトは `read_chunk` が返した `Bytes` にしかない。`read_line` が読みすぎたバイトはストリームの buffer に残り、次の `read_chunk` がそれを先に、1回に 65 536 バイトまで、driver の操作を出さずに返す。そのため `read_line` と `read_chunk` を混ぜても、バイトは失われず、順も入れ替わらない
 - `read_chunk_within ms b s` は `read_chunk b s` を `ms` ミリ秒の期限で区切り、結果を `Option` に包む。`None` は期限が過ぎたことだけを表し、そのとき読んだバイトはない。`b` は捨て、ストリームは閉じずに続けて使える。期限と競って届いたデータは `Some` で返す。期限と競った本物の誤り (reset など) は、期限のない読みと同じく投げる。そのため `None` はバイトを失わず、誤りも隠さない。`ms` が 0 以下の過ぎた期限は、待ち始める前に読みが終わったかを見るだけである。データのないストリームではいつも `None` だが、データのあるストリームでは、待ち始める前に読みが終わったかがスケジュールで変わるので、`Some` と `None` のどちらにもなる
+- `read_line s` は `s` から1行を読み、終わりの改行 (`\n` か `\r\n`) を除いた行とストリームを返す。改行のない最後の行はそのまま返し、残りのない EOF では `None` を返す (`Stdin.read_line` と同じ形)。読んだバイトはストリームの buffer に入る。buffer にもう1行あれば driver の操作を出さずに返し、なければ改行か EOF が来るまで、読めるようになるのを待つ操作と読みを繰り返す。1行は 1 MiB (1 048 576 バイト) までで、改行のないまま buffer の残りがそれに届くと、種類 `Other` の IO の失敗 `cannot read the stream: a line is longer than 1048576 bytes` になる。読んだバイトは buffer に残る。UTF-8 でない行は、種類 `NotUtf8` の IO の失敗 `cannot read the stream: the line is not valid UTF-8` になり、その行は buffer から除かれる
+- `read_line_within ms s` は `read_line s` を `ms` ミリ秒の期限で区切り、結果を `Option` に包む。期限は1行の全体に付き、読みの1回ごとには付かない。`None` は期限が過ぎたことだけを表し、そのとき読んだ途中の行はストリームの buffer に残って、次の読みが続きと合わせて返す。期限と競って行がそろったときは `Some` で返す
+- `_within` の関数 (`accept_within`、`read_chunk_within`、`read_line_within`) は、期限のない関数の結果を `Option` に包んで返す。`None` は期限が過ぎたことだけを表し、リスナーかストリームは続けて使える
 - `write_bytes b s` は `b` をすべて書き、ストリームを返す。本物の driver は、短く終わった送りを出し直す。`write str s` は `str` の UTF-8 のバイトを書き、`write_line str s` は `str` と改行を書く。どれも `write_bytes` を呼ぶ
 - 書きの期限は `Async.timeout ms (fn () -> Net.write_bytes b s)` で付ける。期限が来ると、巻き戻しがストリームを閉じる
 - `local_port` と `peer_addr` は、作ったときに記録した値を読む。引数を借りて組で返し ([Core IR](core-ir.md) の「組を返す extern」)、効果を持たない。`peer_addr` は Rust の `SocketAddr` の表示の形 (`127.0.0.1:49153`、`[::1]:8080`) で返す
@@ -1315,7 +1320,7 @@ main () = Async.run (fn () ->
 | ほかの誤り | 6 | `finish` が、driver の誤りの種類を最初の5つに写して投げる |
 
 - 期限と競った本物の誤りは、期限に負けたとせずに報告する。誤りはそれを報告した syscall が消費するので、後の操作は同じ誤りを見られない。番号 1 は期限があるときだけ出るので、見るのは `_within` の包みだけである
-- extern の行は次の16行である。`local_port`、`peer_addr`、`shutdown_write`、`set_nodelay` のほかは `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の18行である。`local_port`、`peer_addr`、`shutdown_write`、`set_nodelay` のほかは `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 借りる引数 |
 |---|---|---|
@@ -1323,6 +1328,7 @@ main () = Async.run (fn () ->
 | `submit_accept` | `TcpListener -> <IO> Async.OpId` | なし |
 | `submit_connect` | `String -> Int -> <IO> Async.OpId` | なし |
 | `submit_read` | `Bytes -> TcpStream -> <IO> Async.OpId` | なし |
+| `submit_read_line` | `TcpStream -> <IO> Async.OpId` | なし |
 | `submit_write` | `Bytes -> TcpStream -> <IO> Async.OpId` | なし |
 | `op_listener` | `Async.OpId -> <IO> (TcpListener, Async.OpId)` | token |
 | `op_stream` | `Async.OpId -> <IO> (TcpStream, Async.OpId)` | token |
@@ -1330,15 +1336,16 @@ main () = Async.run (fn () ->
 | `take_listener` | `Async.OpId -> <IO> TcpListener` | なし |
 | `take_stream` | `Async.OpId -> <IO> TcpStream` | なし |
 | `take_read` | `Async.OpId -> <IO> Bytes` | なし |
+| `take_line` | `Async.OpId -> <IO> String` | なし |
 | `finish` | `Async.OpId -> <IO> Unit` | なし |
 | `local_port` | `TcpListener -> (Int, TcpListener)` | リスナー |
 | `peer_addr` | `TcpStream -> (String, TcpStream)` | ストリーム |
 | `shutdown_write` | `TcpStream -> <IO> TcpStream` | なし |
 | `set_nodelay` | `Bool -> TcpStream -> <IO> TcpStream` | なし |
 
-- 受け付けの行は引数を消費して記録に移し、token を返す。`submit_listen` と `submit_connect` は `host` を写して手放し、文言の prefix を記録に持たせる。`submit_read` と `submit_write` は buffer が一意でなければ (共有、不死、ほかの参照)、同じ中身の新しい `Bytes` に写して元を手放す。driver が読み書きする間に書き換わらないためである
+- 受け付けの行は引数を消費して記録に移し、token を返す。`submit_listen` と `submit_connect` は `host` を写して手放し、文言の prefix を記録に持たせる。`submit_read` と `submit_write` は buffer が一意でなければ (共有、不死、ほかの参照)、同じ中身の新しい `Bytes` に写して元を手放す。driver が読み書きする間に書き換わらないためである。`submit_read` は、ストリームの buffer に `read_line` が残したバイトがあれば、それを buffer に足して、driver の操作を出さずに終わった記録を作る。`submit_read_line` はストリームだけを記録に移す
 - `op_listener` と `op_stream` は、終わった記録から受け付けに渡したものを移し出す。`op_outcome` は結果の番号を返す
-- `take_listener` と `take_stream` は token を消費して記録を放し、完了から作ったリスナーかストリームを返す。`take_read` は token を消費して記録を放し、読んだバイトを足した buffer を返す。どれも、番号が 0 でない記録では内部の誤り `an op is taken after it failed` になる
+- `take_listener` と `take_stream` は token を消費して記録を放し、完了から作ったリスナーかストリームを返す。`take_read` は token を消費して記録を放し、読んだバイトを足した buffer を返す。`take_line` は token を消費して記録を放し、記録が切り出した行を終わりの改行を含めて返す。残りのない EOF では空の文字列を返し、包みがそれを `None` にする。どれも、番号が 0 でない記録では内部の誤り `an op is taken after it failed` になる
 - `finish` は token を消費して記録を放し、記録がまだ持つもの (完了から作ったハンドルを含む) を落とす。番号 6 の誤りは、取り消しを頼んだ記録でなければ IO の失敗にする
 
 ## `Std.IoTest`

@@ -677,6 +677,54 @@ fn a_real_read_chunk_within_keeps_the_stream() {
     );
 }
 
+/// 本物の driver の `read_line` は、間を置いた2回の書きにまたがる行を1行にし、1回の書きに入った2行を分け、改行のない
+/// 最後の行と EOF の `None` を返す。2本目の接続では、`read_line` が読みすぎたバイトを次の `read_chunk` が返す
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(unix)]
+#[test]
+fn a_real_read_line_reads_lines_split_across_writes() {
+    let src = format!(
+        "{REAL_CONNECTED}  let t = Async.start (fn () ->
+    let a = Net.write \"ab\" a
+    Async.sleep_ms 20
+    let a = Net.write \"c\\nd\\n\" a
+    Net.close (Net.write \"tail\" a))
+  let b = lines b
+  Async.await t
+  let (port, l) = Net.local_port (Net.listen \"127.0.0.1\" 0)
+  let u = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let c = Net.connect \"127.0.0.1\" port
+  let d = Async.await u
+  let c = Net.write \"x\\nyz\" c
+  let (r, d) = Net.read_line d
+  println (show r)
+  let (buf, d) = Net.read_chunk (Bytes.empty ()) d
+  println (String.decode buf)
+  Net.close b
+  Net.close c
+  Net.close d)
+
+lines : Net.TcpStream -> <IO, Panic, Async> Net.TcpStream
+lines s =
+  let (r, s) = Net.read_line s
+  println (show r)
+  match r with
+    | Some _ -> lines s
+    | None -> s
+"
+    );
+    let (out, result, closed, _) = run_real(&src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        out,
+        "Some \"abc\"\nSome \"d\"\nSome \"tail\"\nNone\nSome \"x\"\nyz\n"
+    );
+}
+
 /// 本物の driver の 8 MiB の `write_bytes` は、送りの buffer を超えて短く終わる送りを driver が出し直し、1つの完了で
 /// 終わる。相手のタスクが EOF まで読んだバイトの数は、書いた数と同じである (docs/spec/vm.md の「時計と driver」)。
 #[cfg(unix)]

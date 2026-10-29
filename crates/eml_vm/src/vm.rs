@@ -2234,6 +2234,25 @@ fn async_op<R: Exec>(
             let buf = sched.cells.take_read(ctx, task.get(arg(0)), task.worker)?;
             task.set(dst, buf);
         }
+        Extern::NetSubmitReadLine => {
+            let stream = task.get(arg(0));
+            let token =
+                sched
+                    .cells
+                    .submit_read_line(ctx, &mut *sched.driver, task.worker, stream)?;
+            task.set(dst, token);
+        }
+        Extern::NetTakeLine => match sched.cells.take_line(ctx, task.get(arg(0)), task.worker)? {
+            Ok(line) => task.set(dst, line),
+            // `Stdin.read_line` と同じく、UTF-8 でない行は種類 `NotUtf8` にする (docs/spec/stdlib.md の「`Std.Net`」)
+            Err(message) => {
+                let raise = Raise::Io {
+                    kind: externs::IO_NOT_UTF8,
+                    message,
+                };
+                return raise_again::<R>(code, ctx, task, dst, raise, Extern::NetTakeLine);
+            }
+        },
         Extern::NetFinish => {
             let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
             // 記録が持っていたものは受け付けたタスクの ID の物体で、操作は終わっているので driver はもう触れない。
@@ -3214,6 +3233,7 @@ fn run_extern<R: Exec>(
             | Extern::NetSubmitAccept
             | Extern::NetSubmitConnect
             | Extern::NetSubmitRead
+            | Extern::NetSubmitReadLine
             | Extern::NetSubmitWrite
             | Extern::NetOpListener
             | Extern::NetOpStream
@@ -3221,6 +3241,7 @@ fn run_extern<R: Exec>(
             | Extern::NetTakeListener
             | Extern::NetTakeStream
             | Extern::NetTakeRead
+            | Extern::NetTakeLine
             | Extern::NetFinish
             | Extern::NetLocalPort
             | Extern::NetPeerAddr

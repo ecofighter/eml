@@ -2,6 +2,7 @@
 -- 行い、token の `OpId` を外へ出さない
 import Async (Async)
 import Bytes
+import String
 
 -- driver のリスナーのハンドルと待ち受けるポートを中身に持つ。Kind は `Lin` で、落とすとソケットを閉じる
 pub extern data TcpListener
@@ -142,6 +143,60 @@ read_chunk_within ms b s =
           drop s
           fail_code code "cannot read the stream"
 
+-- `s` から1行を読み、終わりの改行 (`\n` か `\r\n`) を除いた行とストリームを返す。残りのない EOF なら `None` で、改行
+-- のない最後の行はそのまま返す。読みすぎたバイトはストリームの buffer に残り、次の読みが先に返す。取り消しの地点である
+-- (docs/spec/stdlib.md の「`Std.Net`」)
+pub read_line : TcpStream -> <IO, Panic, Async> (Option String, TcpStream)
+read_line s =
+  if Async.cancel_requested () then
+    drop s
+    raise_cancelled ()
+  else
+    let (w, op) = Async.io_wait (submit_read_line s)
+    let (s, op) = op_stream op
+    let (code, op) = op_outcome op
+    match w with
+      | Async.Cancelled ->
+        finish op
+        drop s
+        raise_cancelled ()
+      | Async.Woke ->
+        if code == 0 then (line_of (take_line op), s)
+        else
+          finish op
+          drop s
+          fail_code code "cannot read the stream"
+
+-- `read_line` に `ms` ミリ秒の期限を付ける。期限は1行の全体に付く。期限が過ぎれば `None` とストリームを返し、読んだ
+-- 途中の行はストリームの buffer に残る。取り消しの地点である (docs/spec/stdlib.md の「`Std.Net`」)
+pub read_line_within : Int -> TcpStream -> <IO, Panic, Async> (Option (Option String), TcpStream)
+read_line_within ms s =
+  if Async.cancel_requested () then
+    drop s
+    raise_cancelled ()
+  else
+    let (w, op) = Async.io_wait_until (submit_read_line s) ms
+    let (s, op) = op_stream op
+    let (code, op) = op_outcome op
+    match w with
+      | Async.Cancelled ->
+        finish op
+        drop s
+        raise_cancelled ()
+      | Async.Woke ->
+        if code == 0 then (Some (line_of (take_line op)), s)
+        else if code == 1 then
+          finish op
+          (None, s)
+        else
+          finish op
+          drop s
+          fail_code code "cannot read the stream"
+
+-- `take_line` の行を `Stdin.read_line` と同じ形にする。空の行は残りのない EOF である
+line_of : String -> <Panic> Option String
+line_of line = if String.byte_length line == 0 then None else Some (String.trim_line_end line)
+
 -- `b` をすべて書き、ストリームを返す。取り消しの地点である
 pub write_bytes : Bytes -> TcpStream -> <IO, Async> TcpStream
 write_bytes b s =
@@ -209,6 +264,7 @@ extern submit_listen  : String -> Int -> <IO> Async.OpId
 extern submit_accept  : TcpListener -> <IO> Async.OpId
 extern submit_connect : String -> Int -> <IO> Async.OpId
 extern submit_read    : Bytes -> TcpStream -> <IO> Async.OpId
+extern submit_read_line : TcpStream -> <IO> Async.OpId
 extern submit_write   : Bytes -> TcpStream -> <IO> Async.OpId
 extern op_listener    : Async.OpId -> <IO> (TcpListener, Async.OpId)
 extern op_stream      : Async.OpId -> <IO> (TcpStream, Async.OpId)
@@ -216,4 +272,5 @@ extern op_outcome     : Async.OpId -> <IO> (Int, Async.OpId)
 extern take_listener  : Async.OpId -> <IO> TcpListener
 extern take_stream    : Async.OpId -> <IO> TcpStream
 extern take_read      : Async.OpId -> <IO> Bytes
+extern take_line      : Async.OpId -> <IO> String
 extern finish         : Async.OpId -> <IO> Unit

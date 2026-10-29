@@ -1425,6 +1425,14 @@ table! {
             Lin,
             Purity::Effectful,
         ),
+        NetSubmitReadLine => kinded(
+            "Std.Net.submit_read_line",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
         NetSubmitWrite => kinded(
             "Std.Net.submit_write",
             &[Obj, Obj],
@@ -1493,6 +1501,14 @@ table! {
         ),
         NetTakeRead => kinded(
             "Std.Net.take_read",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Unr,
+            Purity::Effectful,
+        ),
+        NetTakeLine => kinded(
+            "Std.Net.take_line",
             &[Obj],
             &[Lin],
             Obj,
@@ -1616,6 +1632,7 @@ impl Extern {
                 | Extern::NetSubmitAccept
                 | Extern::NetSubmitConnect
                 | Extern::NetSubmitRead
+                | Extern::NetSubmitReadLine
                 | Extern::NetSubmitWrite
                 | Extern::NetOpListener
                 | Extern::NetOpStream
@@ -1623,6 +1640,7 @@ impl Extern {
                 | Extern::NetTakeListener
                 | Extern::NetTakeStream
                 | Extern::NetTakeRead
+                | Extern::NetTakeLine
                 | Extern::NetFinish
                 | Extern::NetLocalPort
                 | Extern::NetPeerAddr

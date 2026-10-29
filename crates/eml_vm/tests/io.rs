@@ -270,6 +270,39 @@ fn a_timed_out_net_read_counts_one_completion_and_one_timer() {
     );
 }
 
+/// ストリームの buffer にもう1行ある `Net.read_line` は、driver の操作を出さずに受け付けの時点で終わるので、完了を
+/// 受けない。待ちは、すぐ再開する待ちとして1回数える (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn a_buffered_read_line_counts_no_completion() {
+    let (_, one) = connected_stats(
+        "  let a = Net.write \"x\\ny\\n\" a
+  let (r, b) = Net.read_line b
+  Net.close a
+  Net.close b
+  println (show r))
+",
+    );
+    let (out, two) = connected_stats(
+        "  let a = Net.write \"x\\ny\\n\" a
+  let (r, b) = Net.read_line b
+  let (q, b) = Net.read_line b
+  Net.close a
+  Net.close b
+  println (show r)
+  println (show q))
+",
+    );
+    assert_eq!(out, "Some \"x\"\nSome \"y\"\n");
+    assert_eq!(
+        (
+            two.completions - one.completions,
+            two.parks - one.parks,
+            two.cancels
+        ),
+        (0, 1, 0)
+    );
+}
+
 /// 書きと読みを取り消されるまで終わらせない driver。端が読めるようになるのを待つ操作と、待ち受け、受け、接続はすぐ
 /// 終わる。取り消した書きは、
 /// 次の `completions` で誤りとして終わる。取り消した読みは、取り消しが間に合わなかったものとして、貸された記憶に

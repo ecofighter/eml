@@ -223,12 +223,13 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.IoTest.op_timed_out` | `Lin` | `Unr` (`Bool`) |
   | `Std.IoTest.submit_checksum` | `Unr`、`Unr` | `Lin` (`OpId`) |
   | `Std.Net.submit_listen`、`submit_connect` | `Unr`、`Unr` | `Lin` (`OpId`) |
-  | `Std.Net.submit_accept` | `Lin` | `Lin` (`OpId`) |
+  | `Std.Net.submit_accept`、`submit_read_line` | `Lin` | `Lin` (`OpId`) |
   | `Std.Net.submit_read`、`submit_write` | `Unr`、`Lin` | `Lin` (`OpId`) |
   | `Std.Net.op_listener`、`take_listener` | `Lin` | `Lin` (`TcpListener`) |
   | `Std.Net.op_stream`、`take_stream` | `Lin` | `Lin` (`TcpStream`) |
   | `Std.Net.op_outcome` | `Lin` | `Unr` (`Int`) |
   | `Std.Net.take_read` | `Lin` | `Unr` (`Bytes`) |
+  | `Std.Net.take_line` | `Lin` | `Unr` (`String`) |
   | `Std.Net.finish` | `Lin` | `Unr` |
   | `Std.Net.local_port` | `Lin` | `Unr` (`Int`) |
   | `Std.Net.peer_addr` | `Lin` | `Unr` (`String`) |

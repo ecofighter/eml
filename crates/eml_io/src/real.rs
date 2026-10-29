@@ -117,9 +117,10 @@ impl IoBuf for Mem {
         if self.len == 0 {
             return &[];
         }
-        // SAFETY: `len <= cap` で、貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない。書きの出し直しの
-        // `RawBuf` は貸した記憶の後ろの部分を指す。driver は貸した側と同じスレッドで動く (`RawBuf`。
-        // docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
+        // SAFETY: `len <= cap` で、貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない。記憶は `Bytes` の
+        // 物体の空きか、操作の記録が持つ `Foreign` の `Vec<u8>` の空きである。書きの出し直しの `RawBuf` は貸した記憶の
+        // 後ろの部分を指す。driver は貸した側と同じスレッドで動く (`RawBuf`。docs/spec/vm.md の「時計と driver」、
+        // docs/spec/object-model.md の T10 の行)
         unsafe { std::slice::from_raw_parts(self.buf.ptr, self.len) }
     }
 }
