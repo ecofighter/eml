@@ -107,7 +107,8 @@ impl TestDriver {
                 };
                 match self.ends.get_mut(&peer) {
                     Some(peer) if !peer.closed => {
-                        // 貸した側は完了を取り出すまで記憶を生かし、書き換えない (`RawBuf`)
+                        // 貸した側は完了を取り出すまで記憶を生かし、書き換えない (`RawBuf`。docs/spec/vm.md の
+                        // 「時計と driver」、docs/spec/object-model.md の T10 の行)
                         peer.inbox.extend(unsafe { bytes(buf) });
                         done(Ok(buf.cap))
                     }
@@ -128,7 +129,8 @@ impl TestDriver {
                     let inbox = &mut self.ends.get_mut(&handle).expect("a readable end").inbox;
                     let n = buf.cap.min(inbox.len());
                     for (i, byte) in inbox.drain(..n).enumerate() {
-                        // 貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない (`RawBuf`)
+                        // 貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない。`i < n <= cap` である
+                        // (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
                         unsafe { buf.ptr.add(i).write(byte) };
                     }
                     done(Ok(n))
@@ -158,6 +160,7 @@ unsafe fn bytes(buf: RawBuf) -> Vec<u8> {
     if buf.cap == 0 {
         return Vec::new();
     }
+    // `cap > 0` の `ptr` は、貸した側が完了まで生かす `cap` バイトを指す (docs/spec/vm.md の「時計と driver」)
     unsafe { std::slice::from_raw_parts(buf.ptr, buf.cap) }.to_vec()
 }
 

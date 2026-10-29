@@ -86,7 +86,7 @@ A batch pipeline whose dependencies flow strictly top to bottom (docs/implementa
 ```
 eml_cli          check / run / repl; the only pipeline driver (`Session`); stage features types < core < run
 eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `par`, `Async` tasks and channels on one worker; `Machine` appends programs by name (the REPL)
-eml_io           IoDriver implementations: the compio-driver real driver, the deterministic test driver, the blocking pool
+eml_io           IoDriver implementations: the compio-driver real driver and the deterministic test driver; jobs run on compio's pool inside the real driver (`Asyncify`, at most 32 threads)
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
 eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> Perceus -> reuse, verifier

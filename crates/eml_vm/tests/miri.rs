@@ -298,10 +298,14 @@ fn scale(k.0: float, x.1: tobj) -> tobj {
 /// 複数の値の戻りと、構造体と箱の間の変換。構造体は参照の葉 (文字列) を持つ。`pair` は葉を `RetN` で返す。`apply`
 /// に渡す箱は、`same` の一様な変種が葉に開いて空け、`same` の葉の結果を同じ箱に入れ直す。`take` の一様な変種は箱を
 /// 空けて葉を受け取り、`take` は構造体を葉のまま受ける。構造体はまだソースから作られないので、手書きの LIR を
-/// パスに通した結果をそのまま書く。Miri の下でパスを流すと、実行よりも時間がかかるためである。
+/// パスに通した結果をそのまま書く。Miri の下でパスを流すと、実行よりも時間がかかるためである。テキストがパスの出力と
+/// 同じであることは、`structs.rs` の `the_miri_texts_are_the_pass_output` が Miri の外で確かめる。
 #[test]
 fn multi_value_returns() {
-    let text = "\
+    assert_eq!(run_both(MULTI_VALUE_RETURNS), "multi value\n1.5\n");
+}
+
+pub(crate) const MULTI_VALUE_RETURNS: &str = "\
 layout Named { Named(obj, float) }
 fn main() -> unit {
   let a.0: obj = const \"multi\"
@@ -342,14 +346,18 @@ fn take$uniform(p.2: tobj) -> tobj {
   return r.3
 }
 ";
-    assert_eq!(run_both(text), "multi value\n1.5\n");
-}
 
 /// 共有の箱から、`tobj` の欄に入ったスカラーの葉と文字列の葉を2回取り出す (docs/spec/vm.md の「データとクロージャ」)。
 /// 上の `multi_value_returns` と同じく、パスを通した結果を書く。
 #[test]
 fn shared_struct_boxes_with_scalar_leaves() {
-    let text = "\
+    assert_eq!(
+        run_both(SHARED_STRUCT_BOXES_WITH_SCALAR_LEAVES),
+        "4611686018427387904\nhello\n"
+    );
+}
+
+pub(crate) const SHARED_STRUCT_BOXES_WITH_SCALAR_LEAVES: &str = "\
 layout (,,) { (,,)(tobj, tobj, tobj) }
 fn main() -> unit {
   let w.0: tobj = apply &make$uniform(())
@@ -400,8 +408,6 @@ fn third$uniform(p.2: tobj) -> obj {
   tail call third(p.0.4, p.1.6, p.2.7)
 }
 ";
-    assert_eq!(run_both(text), "4611686018427387904\nhello\n");
-}
 
 /// `par` の fork と join とタスクの切り替え。VM は検証していないコードから `share`、`transfer_back`、
 /// `Ctx::switch_task` を呼び、`Task` と join の節点は切り替えをまたいでヒープの語を持つ。右の閉包は親も持つ組を

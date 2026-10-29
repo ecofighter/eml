@@ -60,8 +60,9 @@ impl IoBuf for Mem {
         if self.len == 0 {
             return &[];
         }
-        // SAFETY: `len <= cap` で、貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない (`RawBuf`)。
-        // driver は貸した側と同じスレッドで動く
+        // SAFETY: `len <= cap` で、貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない。driver は
+        // 貸した側と同じスレッドで動く (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の
+        // T10 の行)
         unsafe { std::slice::from_raw_parts(self.buf.ptr, self.len) }
     }
 }
@@ -79,7 +80,8 @@ impl IoBufMut for Mem {
         if self.buf.cap == 0 {
             return &mut [];
         }
-        // SAFETY: `as_init` と同じ。読みの間は貸した側も記憶に触れない
+        // SAFETY: `as_init` と同じ。読みの間は貸した側も記憶に触れない。外が書いた長さは貸した側が `bytes_commit`
+        // で確定する (docs/spec/object-model.md の T10 の行)
         unsafe { std::slice::from_raw_parts_mut(self.buf.ptr.cast(), self.buf.cap) }
     }
 }

@@ -2025,7 +2025,8 @@ fn async_op<R: Exec>(
         Extern::IoTestTakeWrite => {
             let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
             // 書きの buffer は返さない。取り消しか期限で終わった操作の誤りは、包みが投げる取り消しに含める
-            // (docs/spec/stdlib.md の「`Std.IoTest`」)
+            // (docs/spec/stdlib.md の「`Std.IoTest`」)。取り出した buffer は記録が持っていた唯一の参照で、このタスクの
+            // ID の物体である。操作は終わっているので、driver はもう読まない (docs/spec/vm.md の「操作の記録」)
             if let Some(buf) = taken.buf {
                 unsafe { ctx.heap_mut().decref(buf) }?;
             }
@@ -2050,6 +2051,8 @@ fn async_op<R: Exec>(
             // 読みも buffer を返し、包みが `None` にする (docs/spec/stdlib.md の「`Std.IoTest`」)
             match taken.result {
                 Err(e) if !taken.cancelling && !taken.timed_out => {
+                    // 書きと同じく、buffer は記録が持っていた参照で、driver はもう書かない (docs/spec/vm.md の
+                    // 「操作の記録」)
                     unsafe { ctx.heap_mut().decref(buf) }?;
                     let raise = Raise::Io {
                         kind: io_kind(&e),
@@ -2084,6 +2087,8 @@ fn async_op<R: Exec>(
         }
         Extern::IoTestTakeChecksum => {
             let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
+            // buffer は記録が持っていた参照である。仕事は写しを受け取ったので、物体の記憶には触れない
+            // (docs/spec/vm.md の「操作の記録」)
             if let Some(buf) = taken.buf {
                 unsafe { ctx.heap_mut().decref(buf) }?;
             }

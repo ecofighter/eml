@@ -245,6 +245,9 @@
 - n 列の `match`: 今は決定木の列に、最初の行でコンストラクタ、タプル、リテラルのどれかのパターンを持ついちばん左の列を選ぶ ([Core IR](../spec/core-ir.md))。行列によっては部分木が大きくなりうる。今の選び方でも決定木は正しいので、部分木の大きさが問題になる例が出てから列の選び方を見直す
 - doc comment: trivia の付け方を決める。doc comment を解釈するドキュメント生成と LSP の hover ([字句](../spec/lexical.md)) がまだないので、それを作るときに、使う側に合わせて決める。前提: LSP
 - JIT (投機的): バイトコードから機械語を安く作る copy-and-patch や、トレース JIT。VM が安定し、起動時間が支配的になってから検討する。トレース JIT はバイトコードにスタックのスタックを持たせる別の道で、evidence passing とは前提が合わない。前提: `native-aot`
+- `miri.rs` のテストの1つあたりの Miri の費用: `crates/eml_vm/tests/miri.rs` の `par_switches_between_tasks`、`shared_struct_boxes_with_scalar_leaves`、`multi_value_returns`、`an_immediate_clause_reads_and_writes_the_state_of_its_evidence` の4つは、1つのテストの上限 (Tree Borrows の下で 10 秒) を超える ([テスト戦略](../implementation/testing.md) の「Miri」)。上限に収めるには、1回の実行ごとの準備を安くする必要がある
+  - 後に回した理由: コマンド全体の `user` は予算に収まっている。4つはどれも、VM が核の操作の前提を守ることを別の道 (`par` の切り替え、構造体と箱の変換、共有の箱の葉、節の状態の読み書き) で確かめるので、削れない。テストの大きさは `cfg!(miri)` で変えない。
+  - 見直す条件: `miri.rs` にテストを足すとき。または、`eml_vm` の `miri::` のコマンド全体の `user` が予算の半分を超えたとき。
 
 ### REPL
 

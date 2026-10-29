@@ -44,7 +44,7 @@ eml/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。workspace の crate では eml_extern だけに依存する
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
-    eml_io/             # I/O の driver (本物の driver とテストの driver)。workspace の crate では eml_rt だけに依存する
+    eml_io/             # I/O の driver (本物の driver とテストの driver。ブロックする呼び出しの仕事は本物の driver の中の compio のプールで `Asyncify` として動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存する
     eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_io、eml_rt、eml_extern だけに依存する
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
@@ -74,7 +74,7 @@ eml/
 ```
 eml_cli          check / run コマンド。パイプラインを組む唯一の場所 (Session)。テストから呼べる lib API を公開する
 eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_rt の Ctx の上で実行する
-eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver)。時計と I/O の待ちを受け持つ
+eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver。ブロックする呼び出しの仕事は本物の driver の中の compio のプールで `Asyncify` として動き、スレッドは32本まで)。時計と I/O の待ちを受け持つ
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。最適化と evidence passing のパスと、LIR への変換
 eml_lir          LIR (box、RC、末尾呼び出しを明示する基本ブロックの列)。box/unbox の挿入、構造体を葉に開くパス、縮約、dup/decref/release の挿入、reuse のパス

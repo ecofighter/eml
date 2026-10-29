@@ -1591,6 +1591,8 @@ impl Registry {
         stream: Word,
     ) -> Result<Word, CellFault> {
         let buf = unique_bytes(ctx, buf)?;
+        // 端は `Stream` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`Stream` は `Lin`。docs/spec/vm.md の
+        // 「操作の記録」)
         let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
         // 記録が物体を生かし、一意に保ち、取り出すまで書き換えないので、driver は完了までこの位置を読める
         // (docs/spec/object-model.md の T10 の行)
@@ -1634,6 +1636,7 @@ impl Registry {
         stream: Word,
     ) -> Result<Word, CellFault> {
         let buf = unique_bytes(ctx, buf)?;
+        // 端は `submit_write` と同じく、呼ぶ側から移ってきた唯一の参照である (docs/spec/vm.md の「操作の記録」)
         let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
         let key = driver.submit(Op::Readable { handle });
         Ok(self.record(
@@ -1665,7 +1668,8 @@ impl Registry {
         buf: Word,
         make: impl FnOnce(Vec<u8>) -> Op,
     ) -> Result<Word, CellFault> {
-        // 写すまでの間だけ読むので、共有の物体でもよい
+        // 写すまでの間だけ読むので、共有の物体でもよい。仕事には写しを渡し、物体の位置は渡さない
+        // (docs/spec/vm.md の「操作の記録」)
         let input = unsafe { (*ctx.heap().bytes(buf)?).to_vec() };
         let key = driver.submit(make(input));
         Ok(self.record(
@@ -1691,6 +1695,8 @@ impl Registry {
         let key = record.key;
         let op = self.alloc(CellKind::Op(record));
         self.ops.insert(key, op);
+        // token を確保するだけで、`Ctx` の持つ語には触れない。`OpId` は `Lin` なので `lin` ビットを立てる
+        // (docs/spec/vm.md の「操作の記録」)
         unsafe { ctx.heap_mut() }.alloc_foreign(
             OpToken {
                 op,
@@ -1853,6 +1859,8 @@ impl Registry {
                 (OpPhase::Transfer, OpKind::Read, Ok(n)) => {
                     let (worker, buf) = (record.worker, record.buf);
                     let buf = buf.ok_or(CellFault::Internal("a read op has no buffer"))?;
+                    // 記録は貸した後も buffer の唯一の参照を持ち、書き換えていない。driver は `Ok(n)` で `n` バイトを
+                    // 書き終えている (docs/spec/object-model.md の T10 の行、docs/spec/vm.md の「操作の記録」)
                     with_worker(ctx, worker, depth_offset, |ctx| unsafe {
                         ctx.heap_mut().bytes_commit(buf, n)
                     })?;
@@ -1948,6 +1956,9 @@ impl Registry {
             unreachable!("the op cell is live");
         };
         self.release(op.index);
+        // token は呼ぶ側から移ってきた唯一の参照で、ストリームは記録が持っていた参照である。どちらも受け付けた
+        // タスクの ID の物体で、上でそのタスクだと確かめた。操作は終わっているので、driver はもう記憶に触れない
+        // (docs/spec/vm.md の「操作の記録」)
         unsafe {
             (*ctx.heap().foreign_unique::<OpToken>(token)?).taken = true;
             ctx.heap_mut().decref(token)?;
@@ -1974,6 +1985,8 @@ pub(crate) fn open_stream<M: Mode>(
     peer: Option<IoHandle>,
     bin: Arc<HandleBin>,
 ) -> Word {
+    // 端を確保するだけで、`Ctx` の持つ語には触れない。`Stream` は `Lin` なので `lin` ビットを立てる
+    // (docs/spec/vm.md の「操作の記録」)
     unsafe { ctx.heap_mut() }.alloc_foreign(IoStream { handle, peer, bin }, true)
 }
 
@@ -2028,6 +2041,8 @@ fn lend_read_room<M: Mode>(
 /// 同じ中身の新しい物体に写して元を手放す。driver が読む間、ほかの参照から書き換えられないためである
 /// (docs/spec/vm.md の「操作の記録」)。
 fn unique_bytes<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<Word, CellFault> {
+    // `w` は呼ぶ側が持つ今の worker の参照で、`Ctx` の持つ語には触れない。中身は写し終えてから手放す
+    // (docs/spec/vm.md の「操作の記録」)
     let heap = unsafe { ctx.heap_mut() };
     if unsafe { heap.is_unique(w) }? {
         return Ok(w);
