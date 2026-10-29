@@ -230,8 +230,11 @@ struct TaskCell {
     /// `shield` の深さ。std にはタスクごとの動的な値を持つ仕組みがなく (タスクは閉じた row で始まり、`var` を
     /// 捕まえられない)、VM の `Task` は起きるたびに作り直すので、タスクのセルに持つ。
     shield: u32,
-    /// 速い道の残りの予算。始めるときと再開するときに戻す。
+    /// 速い道の残りの予算。始めるときと、操作の待ちでない再開のときと、予算を使い切った操作の待ちからの再開のときに
+    /// 戻す (docs/spec/stdlib.md の「操作の予算」)。
     budget: u32,
+    /// 終わった操作の速い道が予算を使い切って、続く `reschedule` で譲るところである。その再開は取り消しを数えない。
+    fast_yield: bool,
     /// 入れ子の `run` で待っている根。
     run: Option<CellRef>,
     detached: bool,
@@ -609,8 +612,9 @@ pub(crate) struct TaskStats {
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
-    /// `park_io`、`park_io_until`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now` と
-    /// 速い道の `reschedule`、真を返した `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
+    /// `park_io`、`park_io_until`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`
+    /// (速い道が譲る `reschedule` は除く)、真を返した `cancel_point`、偽を返した `claim_scope` を数える
+    /// (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
     /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` と `park_io_until` を数える。
     /// `park_io_until` は、操作がもう終わっていて輪に載せなかったときも数える。`ms > 0` で続けた `op_ready` も同じく数える。
@@ -961,6 +965,7 @@ impl Registry {
             cancel: flag,
             shield: 0,
             budget: BUDGET,
+            fast_yield: false,
             run: None,
             detached: false,
         }));
@@ -989,20 +994,22 @@ impl Registry {
     }
 
     /// 再開する仕事を実行系が動かし始めた。渡す `Wake` を返す。実行待ちから再開するタスクが取り消されていれば
-    /// `Cancelled` に替える。操作の待ち (`io`) からの再開では予算を戻さない。その待ちが park するかは、操作が受け付けで
-    /// 終わったかでスケジュールに依るので、戻すと予算の切れる位置と `parks` もスケジュールに依る
-    /// (docs/spec/stdlib.md の「操作の予算」)。
+    /// `Cancelled` に替える。操作の待ち (`io`) からの再開では、その待ちが予算を使い切ったときだけ予算を戻す。待ちが
+    /// park するかは操作が受け付けで終わったかでスケジュールに依るので、park したかで戻すと予算の切れる位置と `parks`
+    /// もスケジュールに依る (docs/spec/stdlib.md の「操作の予算」)。速い道の `reschedule` からの再開は取り消しを
+    /// 数えない。std の包みはその `Wake` を見ず、次の取り消しの地点が数えて投げるためである。
     pub(crate) fn resumed(&mut self, cell: CellRef, wake: i64, io: bool) -> Result<i64, CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Parked) {
             return Err(CellFault::Internal("a task resumes without waiting"));
         }
         task.phase = Phase::Running;
-        if !io {
+        if !io || task.budget == 0 {
             task.budget = BUDGET;
         }
+        let fast = std::mem::take(&mut task.fast_yield);
         let ready = matches!(task.wait.take(), Some(Wait::Ready));
-        if ready && wake == WOKE && self.point(cell)? {
+        if ready && !fast && wake == WOKE && self.point(cell)? {
             self.stats.cancels += 1;
             return Ok(CANCELLED);
         }
@@ -2093,10 +2100,10 @@ impl Registry {
         Ok(cell.encode())
     }
 
-    /// 速い道の `Std.Async.op_ready`。タスク `me` が token `token` の操作を待たずに続けてよいかを答える。記録が終わって
-    /// いて取り消しの地点が投げなければ、待ちを1つ数えて予算を1つ使い、残れば `FAST_GO`、切れれば `FAST_YIELD` を返す。
-    /// ほかは `FAST_WAIT` で、待つ側の `park_io` か `park_io_until` が今の規則で数える。地点を読むだけで、取り消しは数えない
-    /// (docs/spec/vm.md の「操作の記録」)。
+    /// 速い道の `Std.Async.op_ready`。タスク `me` が token `token` の操作を待たずに続けてよいかを答える。どの待ちでも
+    /// 予算を1つ使う。記録が終わっていて取り消しの地点が投げなければ、予算が残れば待ちを1つ数えて `FAST_GO`、切れれば
+    /// 数えずに `FAST_YIELD` を返す。ほかは `FAST_WAIT` で、待つ側の `park_io` か `park_io_until` が今の規則で数える。
+    /// 地点を読むだけで、取り消しは数えない (docs/spec/vm.md の「操作の記録」)。
     pub(crate) fn op_ready(&mut self, token: i64, ms: i64, me: CellRef) -> Result<i64, CellFault> {
         let worker = self.task_mut(me)?.worker;
         let op = self.op_of(token, worker)?;
@@ -2104,20 +2111,25 @@ impl Registry {
         if record.waiter.is_some() {
             return Err(CellFault::Internal("an op is awaited twice"));
         }
-        if !matches!(record.phase, OpPhase::Done(..)) || self.point(me)? {
+        let done = matches!(record.phase, OpPhase::Done(..));
+        // 予算は、操作が受け付けで終わったかによらず待ちごとに1つ使う。予算の切れる位置をプログラムだけで決めるためで
+        // ある。使い切った待ちは、park するか先に譲るかして、再開で予算を戻す (docs/spec/stdlib.md の「操作の予算」)
+        let spent = self.spend_budget(me)?;
+        if !done || self.point(me)? {
             return Ok(FAST_WAIT);
         }
-        // 待ちと期限は、終わっていた操作でも `park_io` と同じく数える。数をスケジュールによらず決めるためである
+        // 期限は、終わっていた操作でも `park_io_until` と同じく数える。数をスケジュールによらず決めるためである
         // (docs/spec/vm.md の「`RunStats`」)
-        self.stats.parks += 1;
         if ms > 0 {
             self.stats.timers += 1;
         }
-        Ok(if self.spend_budget(me)? {
-            FAST_YIELD
-        } else {
-            FAST_GO
-        })
+        if spent {
+            // 待ちは、続く `reschedule` の `ready` が1つ数える
+            self.task_mut(me)?.fast_yield = true;
+            return Ok(FAST_YIELD);
+        }
+        self.stats.parks += 1;
+        Ok(FAST_GO)
     }
 
     /// タスク `me` が、継続 `k` で token `token` の操作が終わるまで待つ。token は即値で、再開の仕事が継続に返す。
@@ -3197,6 +3209,7 @@ fn running_task(registry: &mut Registry, scope: CellRef) -> CellRef {
         cancel: false,
         shield: 0,
         budget: BUDGET,
+        fast_yield: false,
         run: None,
         detached: false,
     }))
@@ -3453,9 +3466,10 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }
 
-/// 受け付けで終わった記録の `op_ready` は、取り消しの地点が投げなければ待ちを1つ数え、予算を1つ使って続ける。予算が
-/// 切れれば先に譲る。終わっていない記録と、取り消しの地点が投げるときは待たせ、待ちも取り消しも数えない。待つ側の
-/// `park_io` が数えるためである (docs/spec/vm.md の「操作の記録」)。
+/// `op_ready` はどの待ちでも予算を1つ使う。受け付けで終わった記録では、取り消しの地点が投げなければ、予算が残れば
+/// 待ちを1つ数えて続け、切れれば数えずに先に譲る。譲る待ちは続く `reschedule` が数える。終わっていない記録と、取り消しの
+/// 地点が投げるときは待たせ、待ちも取り消しも数えない。待つ側の `park_io` が数えるためである
+/// (docs/spec/vm.md の「操作の記録」)。
 #[test]
 fn op_ready_counts_a_wait_only_on_a_finished_op() {
     let mut ctx = test_ctx();
@@ -3465,14 +3479,20 @@ fn op_ready_counts_a_wait_only_on_a_finished_op() {
     let me = running_task(&mut registry, scope);
     let pending = submit_x(&mut registry, &mut ctx, &mut driver, 0);
     assert_eq!(registry.op_ready(pending, 0, me).unwrap(), FAST_WAIT);
+    assert_eq!(
+        (registry.stats.parks, registry.task_mut(me).unwrap().budget),
+        (0, BUDGET - 1)
+    );
     driver.finish_writes = true;
     let done = submit_x(&mut registry, &mut ctx, &mut driver, 0);
     assert_eq!(registry.in_flight, 1);
     assert_eq!(registry.op_ready(done, 50, me).unwrap(), FAST_GO);
     assert_eq!((registry.stats.parks, registry.stats.timers), (1, 1));
     registry.task_mut(me).unwrap().budget = 1;
-    assert_eq!(registry.op_ready(done, 0, me).unwrap(), FAST_YIELD);
-    assert_eq!((registry.stats.parks, registry.stats.timers), (2, 1));
+    assert_eq!(registry.op_ready(done, 50, me).unwrap(), FAST_YIELD);
+    assert_eq!((registry.stats.parks, registry.stats.timers), (1, 2));
+    assert!(registry.task_mut(me).unwrap().fast_yield);
+    registry.task_mut(me).unwrap().fast_yield = false;
     registry.task_mut(me).unwrap().cancel = true;
     assert_eq!(registry.op_ready(done, 50, me).unwrap(), FAST_WAIT);
     assert_eq!(
@@ -3481,7 +3501,7 @@ fn op_ready_counts_a_wait_only_on_a_finished_op() {
             registry.stats.timers,
             registry.stats.cancels
         ),
-        (2, 1, 0)
+        (1, 2, 0)
     );
     let taken = registry.take_op(&mut ctx, done, 0).unwrap();
     assert!(matches!(taken.result, Ok(1)));
@@ -3489,6 +3509,40 @@ fn op_ready_counts_a_wait_only_on_a_finished_op() {
     registry.in_flight = 0;
     registry.op_mut(CellRef::decode(pending)).unwrap().phase = OpPhase::Done(Ok(1), false);
     let taken = registry.take_op(&mut ctx, pending, 0).unwrap();
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 速い道が先に譲る `reschedule` の間に届いた取り消しは、その再開では数えず、次の取り消しの地点で1回だけ数える。
+/// 操作の待ちからの再開は、予算を使い切った待ちのときだけ予算を戻す (docs/spec/stdlib.md の「操作の予算」)。
+#[test]
+fn a_cancel_during_a_fast_yield_is_counted_once() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver {
+        finish_writes: true,
+        ..NoDriver::default()
+    };
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let done = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    registry.task_mut(me).unwrap().budget = 1;
+    assert_eq!(registry.op_ready(done, 0, me).unwrap(), FAST_YIELD);
+    registry.ready(me, Word::UNIT).unwrap();
+    registry.task_mut(me).unwrap().cancel = true;
+    assert_eq!(registry.resumed(me, WOKE, false).unwrap(), WOKE);
+    assert_eq!(registry.stats.cancels, 0);
+    assert_eq!(registry.task_mut(me).unwrap().budget, BUDGET);
+    // 予算の残る操作の待ちからの再開は予算を戻さない
+    registry.task_mut(me).unwrap().budget = 5;
+    registry.task_mut(me).unwrap().phase = Phase::Parked;
+    assert_eq!(registry.resumed(me, WOKE, true).unwrap(), WOKE);
+    assert_eq!(registry.task_mut(me).unwrap().budget, 5);
+    registry.task_mut(me).unwrap().budget = 0;
+    registry.task_mut(me).unwrap().phase = Phase::Parked;
+    registry.resumed(me, WOKE, true).unwrap();
+    assert_eq!(registry.task_mut(me).unwrap().budget, BUDGET);
+    let taken = registry.take_op(&mut ctx, done, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }

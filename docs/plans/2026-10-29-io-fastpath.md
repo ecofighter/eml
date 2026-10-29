@@ -166,9 +166,9 @@
 - 理由
   - 待ちのたびに park と再開の2回の切り替えがあり、書きは `sendto` 1回で終わるのに park と再開を払っている (echo-py は往復で `parks` 2)。
   - 速い道を VM の命令でなく eml の `if` にすると、取り消しの地点と予算の規則を std の1か所で書ける。
-  - `RunStats` は「プログラムだけで決まる数」に保つ。その場で終わるかはスケジュールで変わるので、`parks` と `completions` の意味を「頼んだ待ちの数」「終わった操作の数」にそろえれば seed によらない。
+  - その場で終わるかはスケジュールで変わるので、`parks` と `completions` の意味を「頼んだ待ちの数」「終わった操作の数」にそろえれば seed によらない。driver を使う run では、VM の仕事の回数 (`evidence_steps`、`yields`、`rc_*`、`allocations`、`boxes` など) と `peak_stack` はスケジュールに従う。終わった操作の待ちは perform も切り替えもしないためである。スケジュールによらないのは、`eml_test_support::driver_independent` が比べる欄 (`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept`、`completions`) である。
   - 速い道は切り替えを 0 にするので、`Sequential` では走れる他のタスクが待たされうる。操作の予算は、同じ理由で `check_cancelled` に入っている仕組みである。
-  - 操作の待ちからの再開では予算を戻さない。操作の待ちが park するかはスケジュールで変わるので、そこで戻すと予算の切れる位置と、譲りが数える `parks` がスケジュールに依る。
+  - 予算は、操作が終わっていたかによらず `io_wait` と `io_wait_until` の1回ごとに1つ使う。どの待ちも `parks` を1つだけ数える。終わった操作の待ちが予算を使い切ったときは、`op_ready` は数えずに 2 を返し、続く `reschedule` が数える。予算を使い切った待ちは譲り (終わっていない操作は park して、終わった操作は `reschedule` で)、その再開で予算を戻す。ほかに予算を戻すのは、始まるときと、操作の待ちでない再開のときだけである。操作の待ちが park するかはスケジュールで変わるので、終わった操作の待ちだけで予算を使ったり、park した待ちの再開で予算を戻したりすると、予算の切れる位置と、譲りが数える `parks` がスケジュールに依る。
 - 退けた案
   - `RunStats` にその場で終わった数の欄を足す: スケジュールで変わる値を `RunStats` に入れない方針に反する。
   - 予算を使わず、`Normal` の横取りだけに任せる: `Sequential` で走れる他のタスクが飢える。
@@ -176,7 +176,7 @@
 - 影響の範囲: `Async.io_wait`、`io_wait_until`、`op_ready`、`Registry::record`、`submit_*`、両方の driver、`RunStats`。`park_io` の取り消しの道は変えない。
 - 見直す条件: ネイティブのコードの `Async` の入り口を作るとき (`jit-effects`)。
 - 守る規則
-  - G-18 MUST: `IoDriver::submit` が `Submit::Done` を返した操作の記録は `Done` の段階で生まれ、std の `io_wait` と `io_wait_until` は、記録が終わっていて取り消しの地点が投げないときは perform せず、予算を1つ使い、切れていれば `reschedule` (その `Wake` は見ない) してから `(Woke, op)` を返す。perform、park、再開、完了の収集は `Pending` の操作にだけ起きる。操作の待ちからの再開は操作の予算を戻さない。本物の driver とテストの driver は、受け付けの時点で決められる操作を `Done` で返す。`RunStats` の `parks` は `io_wait`/`io_wait_until` の呼び出しの数、`completions` は終わった driver の操作の数 (`Done` と集めた完了の和) で、どちらもスケジュールに依らない。スケジュールで変わる数は `RunStats` に入れない。
+  - G-18 MUST: `IoDriver::submit` が `Submit::Done` を返した操作の記録は `Done` の段階で生まれ、std の `io_wait` と `io_wait_until` は、記録が終わっていて取り消しの地点が投げないときは perform せず、予算を1つ使い、切れていれば `reschedule` (その `Wake` は見ない) してから `(Woke, op)` を返す。perform、park、再開、完了の収集は `Pending` の操作にだけ起きる。予算は、操作が終わっていたかによらず `io_wait` と `io_wait_until` の1回ごとに1つ使う。どの待ちも `parks` を1つだけ数える。終わった操作の待ちが予算を使い切ったときは、`op_ready` は数えずに 2 を返し、続く `reschedule` が数える。予算を使い切った待ちは譲り (終わっていない操作は park して、終わった操作は `reschedule` で)、その再開で予算を戻す。ほかに予算を戻すのは、始まるときと、操作の待ちでない再開のときだけである。本物の driver とテストの driver は、受け付けの時点で決められる操作を `Done` で返す。`RunStats` の `parks` は `io_wait`/`io_wait_until` の呼び出しの数、`completions` は終わった driver の操作の数 (`Done` と集めた完了の和) で、どちらもスケジュールに依らない。スケジュールで変わる数を新しい欄として `RunStats` に足さない。driver を使う run では VM の仕事の回数と `peak_stack` がスケジュールに従い、`driver_independent` の欄は従わない。
 - 適合の確かめ (この段)
   - (1) `io.rs` の `one_task_of_finished_ops_never_waits_on_the_driver`: 1つのタスクが `listen`、`connect`、`accept`、`write_bytes`、`read_chunk` を順に行い、`TestDriver::immediate() == 5`、driver の `wait` の呼び出しが 0 回、`RunStats.parks == 5`、`completions == 5` (T-5 で中間の値、T-8 で最終の値)。
   - (2) `io.rs` の `echo_counts_do_not_depend_on_the_seed`: 2つのタスクの echo を seed 1、2、3 で流して `parks` と `completions` が同じ。
@@ -251,7 +251,7 @@
   - `grep -n "OpToken\|OpDropped" crates/eml_vm/src` → 0行。
   - `grep -n 'OpId => type_row' crates/eml_extern/src/lib.rs` の行が `Lin, Repr::Int`。
   - `crates/eml_core_ir/tests/externs.rs` の印の表で `OpId` の位置が `unr`。
-  - `io.rs` の `a_second_take_of_an_op_is_an_internal_error`、`cells.rs` の `an_op_used_by_another_task_is_an_internal_error`。
+  - `cells.rs` の `a_second_take_of_an_op_is_an_internal_error` (手で書いた LIR は `Async` のエントリを持たないので `cells.rs` に置く) と `an_op_used_by_another_task_is_an_internal_error`。
 - リポジトリに残す所: stdlib.md の「`Std.Async`」、vm.md の「操作の記録」、core-ir.md の「表の印の列」(T-5)。
 
 #### D-7: 空きの待ちの上限、監視のスレッド、集める地点が OS を見る頻度
@@ -499,6 +499,7 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
     - T-4 と T-5: `tests/ui/run/async/net_*` と `crates/eml_cli/tests/repl/async/*.repl` のうち、操作が受け付けで終わったことと、終わった操作を待たないことで、出力の順が変わるもの。理由: 終わった操作の待ちが切り替えなくなり、タスクの交錯が変わる。
     - T-5: `crates/eml_core_ir/tests/externs.rs` の印の表の `OpId` の位置を `unr` に、2つの一覧の行を直す。理由: 即値の token の印は `unr` である。
     - T-5: `crates/eml_cli/tests/ui.rs` の `compares_stats` で、channel を使わず、どちらかの run の `completions` が 0 でない run は、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept`、`completions` だけを比べる (新しい `eml_test_support::driver_independent`)。`par/` の run と driver の操作のない run は、すべての欄を比べたままにする。理由: 操作が受け付けで終わって待ちを省くかはスケジュールで変わるので、VM の仕事の回数がスケジュールに従う。D-3 が約束する数は変わらない。これがないと `tests/ui/run/async/net_*` の9本が seed の run で落ちる。
+    - T-5 の後追い (予算の規則を決め直した利用者の判断): `cells.rs` の `op_ready_counts_a_wait_only_on_a_finished_op` の期待値 (終わっていない記録でも予算を使う、譲る待ちは `parks` を数えない) と、`io.rs` の `the_budget_runs_out_at_the_same_wait_in_every_schedule` の形 (待ちの数の偶奇を変えた2つの形)。理由: どの `io_wait` も予算を1つ使い、`parks` を1つだけ数える規則に替えた。付録1 の7.4節の4本の値は変わらない。
     - T-5 と T-8: `io.rs` の `one_task_of_finished_ops_never_waits_on_the_driver` を T-5 で中間の値 (`immediate == 6`、`completions == 6`) で入れ、T-8 で最終の値 (`immediate == 5`、`completions == 5`) に直す。理由: 空きのある buffer の読みと `write_bytes` の新しい型が T-6 と T-8 で入る。
     - T-7: `cells.rs` の単体テストのうち貸し方を確かめる4本 (`a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one`、`probed_read` を使うもの、`a_read_line_lends_the_stream_buffer_and_frees_it_when_empty`、`a_read_after_a_read_line_is_served_from_the_stream_buffer`) を新しい規則の値に書き直す。理由: 貸し方と広げる式が変わる。
     - T-8: `io.rs` の `a_read_line_that_is_not_utf8_raises_not_utf8` の `Net.write_bytes ... a` を `let (_, a) = ...` にする。理由: `write_bytes` が組を返す。

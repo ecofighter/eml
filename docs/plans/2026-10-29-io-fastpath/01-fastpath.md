@@ -132,15 +132,15 @@ fn settle<M>(
 
 | 記録と地点 | 結果 | 数える欄 |
 |---|---|---|
-| 段階が `Done` でない | 1 (待つ) | 数えない (`park_io` が数える) |
-| `Done` だが、今のタスクの取り消しの地点が投げる | 1 (待つ) | 数えない。`cancels` も数えない |
-| `Done` で地点が投げず、予算が残る | 0 (続ける) | `parks += 1`。`ms > 0` なら `timers += 1`。予算を1つ使う |
-| `Done` で地点が投げず、予算が切れた | 2 (先に譲る) | 同上 |
+| 段階が `Done` でない | 1 (待つ) | 予算を1つ使う。ほかは数えない (`park_io` が数える) |
+| `Done` だが、今のタスクの取り消しの地点が投げる | 1 (待つ) | 予算を1つ使う。ほかは数えない。`cancels` も数えない |
+| `Done` で地点が投げず、予算が残る | 0 (続ける) | 予算を1つ使う。`parks += 1`。`ms > 0` なら `timers += 1` |
+| `Done` で地点が投げず、予算が切れた | 2 (先に譲る) | 予算を1つ使う。`ms > 0` なら `timers += 1`。`parks` は数えず、続く `reschedule` の `ready` が数える。その再開は取り消しを数えない |
 | 待つタスクがもういる | 内部の誤り `an op is awaited twice` | |
 
 - 1 のときの `park_io` と `park_io_until` は今の数え方 (`parks`、`cancels`、`timers`) のままである。そのため `parks` は `io_wait` と `io_wait_until` の呼び出しの数、`timers` は今の定義 (地点で取り消されなかった正の期限) のままで、どちらもスケジュールに依らない。
 - `completions` は受け付けで終わった操作と集めた完了の和である。driver の結果1つにつき1つ数える (確かめとその後の読みは2つ)。
-- 予算は今の操作の予算 (タスクごとに 128。`check_cancelled` と同じ `spend_budget`) で、再開 (`resumed`) で 128 に戻る。ただし操作の待ちからの再開 (`resume_io`) では戻さない。速い道があるので操作の待ちが park するかはスケジュールで変わり、そこで戻すと予算の切れる位置と `parks` がスケジュールに依る (逐次と seed で `parks` が 1 違う例を `io.rs` の `the_budget_runs_out_at_the_same_wait_in_every_schedule` が固定する)。
+- 予算は今の操作の予算 (タスクごとに 128。`check_cancelled` と同じ `spend_budget`) で、どの `io_wait` も1つ使う。始まるとき、操作の待ちでない再開 (`resumed`) のとき、予算を使い切った操作の待ちからの再開 (`resume_io`) のときに 128 に戻り、予算の残る操作の待ちからの再開では戻らない。操作の待ちが park するかはスケジュールで変わるので、終わった操作の待ちだけで予算を使ったり、park した待ちの再開で戻したりすると、予算の切れる位置と `parks` がスケジュールに依る。`io.rs` の `the_budget_runs_out_at_the_same_wait_in_every_schedule` が、待ちの数の偶奇を変えた2つの形でこれを固定する。
 - `vm.rs` に `AsyncOpReady` の腕を足し、`Extern::is_async()` と、vm.rs の `Async` の命令にする行の一覧 (3090 行付近の、`Extern::AsyncStartRaw` から並ぶ腕) に足す。
 
 ### 2.5 空きのループの期限と監視のスレッド (`lib.rs`、`sched.rs`、`vm.rs`、T-3)

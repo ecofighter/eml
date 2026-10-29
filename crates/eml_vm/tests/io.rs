@@ -714,39 +714,45 @@ fn a_cancelled_fast_path_loop_stops_at_its_next_wait() {
 }
 
 /// 2つ目の受けは、始めたタスクの接続が先に走ったかで、受け付けで終わるか待つかが変わる。その後の速い道のループは
-/// 操作の予算を越える。操作の待ちからの再開は予算を戻さないので、予算の切れる位置は順によらず、`parks` は逐次と
-/// seed の run で同じである (docs/spec/stdlib.md の「操作の予算」)。
+/// 操作の予算を越える。予算は操作が終わっていたかによらず待ちごとに1つ使い、`parks` は待ちごとに1つ数えるので、
+/// 予算の切れる位置も `parks` も逐次と seed の run で同じである。書きを1つ足して待ちの数の偶奇を変えた形も流す
+/// (docs/spec/stdlib.md の「操作の予算」)。
 #[test]
 fn the_budget_runs_out_at_the_same_wait_in_every_schedule() {
-    let src = format!(
-        "{SPIN_IO}  let l2 = Net.listen \"127.0.0.1\" 0
+    for extra in [0, 1] {
+        for n in [61, 62] {
+            let writes = "  let a = Net.write \"y\" a\n".repeat(extra);
+            let src = format!(
+                "{SPIN_IO}  let l2 = Net.listen \"127.0.0.1\" 0
   let (port2, l2) = Net.local_port l2
   let t = Async.start (fn () -> Net.connect \"127.0.0.1\" port2)
   let _ = spin 40
   let (s, l2) = Net.accept l2
   Net.close_listener l2
-  spin_io 62 counter (Bytes.empty ()) a b
+{writes}  spin_io {n} counter (Bytes.empty ()) a b
   Net.close s
   Net.close (Async.await t))
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
 "
-    );
-    let program = eml_test_support::lir(src.as_str());
-    let parks: Vec<_> = [
-        Sched::Sequential,
-        Sched::Seeded(1),
-        Sched::Seeded(2),
-        Sched::Seeded(7),
-    ]
-    .into_iter()
-    .map(|sched| {
-        let config = RunConfig::default().with_debug_heap(true).with_sched(sched);
-        let (_, stats) = eml_test_support::execute(&program, &config);
-        stats
-            .unwrap_or_else(|error| panic!("{sched:?}: {error}"))
-            .parks
-    })
-    .collect();
-    assert_eq!(parks, [parks[0]; 4]);
+            );
+            let program = eml_test_support::lir(src.as_str());
+            let parks: Vec<_> = [
+                Sched::Sequential,
+                Sched::Seeded(1),
+                Sched::Seeded(2),
+                Sched::Seeded(7),
+            ]
+            .into_iter()
+            .map(|sched| {
+                let config = RunConfig::default().with_debug_heap(true).with_sched(sched);
+                let (_, stats) = eml_test_support::execute(&program, &config);
+                stats
+                    .unwrap_or_else(|error| panic!("{sched:?}: {error}"))
+                    .parks
+            })
+            .collect();
+            assert_eq!(parks, [parks[0]; 4], "extra {extra}, n {n}");
+        }
+    }
 }

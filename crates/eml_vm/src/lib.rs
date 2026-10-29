@@ -67,10 +67,12 @@ pub struct RunStats {
     /// スコープの最初の失敗より後の、タスクの失敗の数。
     pub dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
-    /// `park_io`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`、真を返した
-    /// `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
+    /// `park_io`、`park_io_until`、`park_signal`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで
+    /// 再開する `yield_now` (速い道が譲る `reschedule` は除く)、真を返した `cancel_point`、偽を返した `claim_scope` を
+    /// 数える (docs/spec/vm.md の「`RunStats`」)。
     pub cancels: u64,
-    /// `await_time` が時間の輪に登録した回数。
+    /// `await_time` と `await_io_until` が求めた、`ms` が正の待ちの数。待つ前に取り消しが見つかった待ちは数えない。
+    /// 操作がもう終わっていて輪に載せなかった待ちと、`io_wait_until` の速い道で続けた待ちも数える。
     pub timers: u64,
     /// `share` が rc を負にした物体の数。
     pub shared_objects: u64,
