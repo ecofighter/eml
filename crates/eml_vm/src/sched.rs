@@ -186,6 +186,10 @@ pub(crate) const MAIN: TaskId = 0;
 /// 止めるまでの遅れの上限になる (docs/spec/vm.md の「時計と driver」)。
 const WAIT_CAP_MS: u64 = 10;
 
+/// 切り替えが続くとき、`switch_away` の頭の集める地点がこの回数に1回だけ OS を見る。driver の `completions` は
+/// OS を見ないので、見る頻度は集める地点が持つ (docs/spec/vm.md の「時計と driver」)。
+pub(crate) const POLL_EVERY: u32 = 16;
+
 /// タスクの状態。動いているタスクは VM の繰り返しが持つ。
 pub(crate) enum TaskState {
     Running,
@@ -269,6 +273,8 @@ pub struct Scheduler<P: Policy> {
     /// driver の出どころ。`Real` の run だけが OS のシグナルを待つタスクへ届ける (docs/spec/stdlib.md の
     /// 「`Std.Signal`」)。空きの待ちに上限を掛けるかもこれで決まる (docs/spec/vm.md の「時計と driver」)。
     pub(crate) driver_kind: DriverKind,
+    /// OS を見ずに続けた `switch_away` の切り替えの数。`POLL_EVERY` に達するか、集める地点が OS を見たら 0 に戻す。
+    pub(crate) since_poll: u32,
     /// 監視のスレッドと、それに渡すもの。
     pub(crate) watcher: Watcher,
 }
@@ -322,6 +328,7 @@ impl<P: Policy> Scheduler<P> {
             stacks: Vec::new(),
             driver,
             driver_kind: DriverKind::Virtual,
+            since_poll: 0,
             watcher: Watcher {
                 control,
                 doorbell,

@@ -8,14 +8,17 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// driver が振り、1つの driver の寿命の間は使い回さない。`submit` のたびに新しい値を返す。
+/// 呼ぶ側が振る操作の名前。1つの driver の中で、保留の操作 (`submit` が `Submit::Pending` を返し、まだ
+/// `completions` で返していない操作) の鍵は互いに違う。`Submit::Done` を返した鍵と、完了を `completions` で
+/// 返した鍵は、すぐに次の操作に使い回してよい。
 pub type OpKey = u64;
 /// driver が持つハンドル (リスナー、ストリーム)。1つの driver の寿命の間は使い回さない。
 pub type IoHandle = u64;
 
 /// カーネルが読み書きする記憶。driver を持つスレッドの外へは出さないので `Send` ではない。`cap == 0` は
-/// 記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側はその操作の完了を
-/// `completions` から取り出すまで、物体を生かし、一意に保ち、動かさない。
+/// 記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側は、`submit` が
+/// `Submit::Done` を返すか、その操作の完了を `completions` から取り出すまで、物体を生かし、動かさない。
+/// `Read` に貸した記憶は一意に保ち、`Write` に貸した記憶は書き換えない。
 #[derive(Clone, Copy)]
 pub struct RawBuf {
     pub ptr: *mut u8,
@@ -24,9 +27,11 @@ pub struct RawBuf {
 
 /// driver に出す操作。
 pub enum Op {
-    /// `handle` の読みがブロックしなくなったら (データか EOF) `Ok(0)` で終わる。
+    /// `handle` の次の読みがブロックしない状態 (読めるデータがあるか EOF) なら `Ok(0)` で終わる。状態の問いで、
+    /// 辺ではない。受け付けたときにその状態なら、その場で終わってよい。
     Readable { handle: IoHandle },
-    /// `buf.ptr[0..cap]` に読む。`Ok(n)` で終わり、n == 0 は EOF。
+    /// `buf.ptr[0..cap]` に1回読む。読めるデータか EOF があればその場で読み、なければ読めるようになるまで
+    /// 待ってから読む。`Ok(n)` で終わり、n == 0 は EOF である。`cap` は 1 以上。
     Read { handle: IoHandle, buf: RawBuf },
     /// `buf.ptr[0..cap]` をすべて書き、`Ok(cap)` で終わる。短く終わった書きは driver が続きを出し直す。
     Write { handle: IoHandle, buf: RawBuf },
@@ -54,6 +59,15 @@ pub enum Done {
     Stream { handle: IoHandle, peer: SocketAddr },
 }
 
+/// `submit` の結果。
+#[derive(Debug)]
+pub enum Submit {
+    /// その場で終わった。完了は `completions` に届かず、`pending` にも数えない。
+    Done(io::Result<Done>),
+    /// 後で `completions` にちょうど1回届く。
+    Pending,
+}
+
 /// 終わった操作の結果。
 pub struct Completion {
     pub key: OpKey,
@@ -79,18 +93,26 @@ pub struct HandleBin {
 pub trait IoDriver {
     /// 作ったときからの単調な経過時間。
     fn now(&self) -> Duration;
-    /// `now() >= deadline_ms` か、完了が届くか、waker が鳴るまで待つ。早く戻ってよい。
-    /// `Ok(false)` は外からの入力なしには何も進まないこと、`Err` は driver が壊れたことを表す。
+    /// `now() >= deadline_ms` か、完了が届くか、waker が鳴るまで待つ。OS を見るのは `wait` だけで、
+    /// `deadline_ms` が今以前でも OS を1回確かめ、終わった操作を完了として届けてから戻る。ほかの理由で早く
+    /// 戻ってよいが、内部の刻みでは戻らない。`Ok(false)` を返すのは、`deadline_ms` が `None` で、期限なしには
+    /// 完了が届きえないときだけである。保留の操作も届いた完了もないときがそれに当たり、仮想の時計の driver では、
+    /// 保留の操作のどれも終わりえないときも当たる。`deadline_ms == u64::MAX` は期限なしで待つが、`Ok(false)` は返さず、
+    /// waker が鳴れば `Ok(true)` で戻る。`Ok(false)` は外からの入力なしには何も進まないこと、`Err` は driver が
+    /// 壊れたことを表す。
     fn wait(&mut self, deadline_ms: Option<u64>) -> io::Result<bool>;
-    /// 失敗しない。出せなかった操作は次の `completions` で誤りとして終わる。本物の driver では、プールの
-    /// スレッドがすべて仕事中なら、仕事の `submit` はスレッドが空くまで、安全点を通らずに呼んだスレッドの上で待つ。
-    fn submit(&mut self, op: Op) -> OpKey;
-    /// できるだけ取り消す。`key` の完了はふつうはそれでも届く。届かないことがあれば、driver は `quiesce` で壊れた
-    /// 状態になる。`Op::Job` には何もしない。
+    /// 失敗しない。出せなかった操作は `Submit::Done(Err(_))` で返す。`Op::Job` はいつも `Pending` を返す。
+    /// 保留の鍵と同じ鍵で呼んではならない。
+    fn submit(&mut self, key: OpKey, op: Op) -> Submit;
+    /// 呼んだ時点で保留の鍵 `key` の操作だけを、できるだけ取り消す。保留でない鍵には何もしない。後で同じ鍵で
+    /// 出した操作に効いてはならない (取り消しを後で OS に出す driver は、出す時点で同じ操作であることを確かめる)。
+    /// 保留の操作の完了は、取り消しで終わったか自分で着いた結果で、それでも1回届く。壊れた driver では届かない
+    /// ことがあり、そのとき `quiesce` は保留を残して戻る。`Op::Job` には何もしない。
     fn cancel(&mut self, key: OpKey);
-    /// 届いた完了をすべて `out` に移す。順は driver が決める。
+    /// `wait` (と `cancel` の即時の取り消し) が届けた完了をすべて `out` に移す。OS を見ず、保留の表を歩かない。
+    /// 順は driver が決め、呼ぶ側は鍵で記録を引く。
     fn completions(&mut self, out: &mut Vec<Completion>);
-    /// 出してまだ `completions` で返していない操作の数。
+    /// `Pending` を返して、まだ `completions` で返していない操作の数。
     fn pending(&self) -> usize;
     fn waker(&self) -> Arc<dyn IoWaker>;
     fn bin(&self) -> Arc<HandleBin>;
@@ -101,8 +123,7 @@ pub trait IoDriver {
     /// driver の参照を落とす。保留の操作は終わるまで OS の資源を生かす。前提はない。
     fn close(&mut self, handle: IoHandle);
     /// 保留の操作をすべて取り消し、完了がすべて届くまで待って捨て、捨てた完了の中身のハンドルと `bin` のハンドルを
-    /// 閉じる。仕事は待ちきり、名前の解決は待たない。
-    /// driver が壊れているか、取り消した操作の完了がいつまでも届かず壊れた状態になったときは、保留を残して戻る
+    /// 閉じる。仕事は待ちきり、名前の解決は待たない。driver が壊れているときは保留を残して戻る
     /// (呼ぶ側は `pending()` で確かめる)。
     fn quiesce(&mut self);
 }

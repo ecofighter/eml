@@ -239,7 +239,7 @@ read_chunk buf s =
 
 - `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。今は `verus!` の外の安全なつなぎのコードで、`external_body` も信頼の一覧の行も持たない ([VM](../spec/vm.md) の「時計と driver」)。`eml_rt` の extern が driver を要るまでは実行系が持ち、`Ctx` には入れない。`eml_rt` の extern が I/O を持ち、`Ctx` が driver を持つときに、`external_body` と信頼の一覧の行を足す
 - 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び方 (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
-- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM では、監視のスレッドのない run は Ctrl-C の後に起こされないので、1回の待ちを `IDLE_TICK` で切る ([VM](../spec/vm.md) の「時計と driver」)
+- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM では、監視のスレッドのない run は Ctrl-C の後に起こされないので、VM が1回の待ちを 10 ms で切る。driver は内部の刻みを持たない ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver は `compio-driver` と `compio-buf` の上に作る。unix は polling (epoll と kqueue)、Windows は IOCP を使い、io_uring は使わない。単独で使えること、スレッドごとに driver を持てること、別のスレッドから起こせる待ちを持つこと、プールの仕事の完了が待ちを起こすことは確かめた。バージョンと、上げるときに確かめることは [アーキテクチャ](../implementation/architecture.md) の「外部 crate」にある
 - compio の上位の crate (`compio-net`、`compio-fs`、`compio-process`) は使わない。どれも compio の実行系 (`compio-runtime`) を要し、実行系が持つ別の `Proactor` に操作を出すので、eml の driver の完了の列にも `quiesce` にも乗らない。eml は `compio-driver` の操作を自分の driver から直接出す
 - Windows では、ソケットを IOCP のポートに結び付けてから (`Proactor::attach`) `Recv` と `Send` を出す。今の driver は Windows でハンドルを作らないので結び付けもしない。Windows のソケットを扱うときに足す

@@ -79,7 +79,8 @@ pub struct RunStats {
     pub channel_waits: u64,
     /// run の終わりに放した channel の数。閉じなかった channel と、閉じても品物の残った channel を数える。
     pub channels_swept: u64,
-    /// driver から取り出し、操作の記録に当てた完了の数。`quiesce` が捨てた完了は数えない。
+    /// 終わった driver の操作の数。受け付けで終わった操作と、driver から取り出して記録に当てた完了の和である。
+    /// `quiesce` が捨てた完了は数えない。
     pub completions: u64,
 }
 
@@ -687,7 +688,7 @@ impl<M: Mode> Machine<M> {
 
 impl<M: Mode> Drop for Machine<M> {
     fn drop(&mut self) {
-        // 本物の driver は落とすときに仕事を待ちきるので、その間はヒープを生かしておく
+        // 本物の driver には、落とすときにカーネルの書き込みの終わりを待つものがあるので、その間はヒープを生かしておく
         self.driver = None;
         if !self.poisoned {
             // `ctx` はこの後に使わない

@@ -349,23 +349,23 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ## `eml_io` の内部
 
-- `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、compio-driver の `Proactor` をそのまま持ち (「外部 crate」)、単調な時計 (`Instant`) で読み、1回の `wait` で眠る長さの上限 `IDLE_TICK` を持つ。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、`test/net.rs` の仮想のネットワーク (メモリの上の端、リスナー、ポート)、seed で混ぜる決着の順を持つ ([VM](../spec/vm.md) の「時計と driver」)
+- `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、compio-driver の `Proactor` をそのまま持ち (「外部 crate」)、単調な時計 (`Instant`) で読み、内部の刻みを持たない。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、`test/net.rs` の仮想のネットワーク (メモリの上の端、リスナー、ポート)、seed で混ぜる決着の順、`submit` の中で終えた操作の数 (`immediate()`) を持つ ([VM](../spec/vm.md) の「時計と driver」)
 - driver は `Word`、`Ctx`、RC に触れず、記憶には `RawBuf` を通してだけ届く。そのため `eml_io` は `eml_vm` を知らずに組み立てられる。どちらの driver を使うかは `eml_vm` の `Clock` が決める
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
 - unix の `RealDriver::with_lookup(lookup)` は、名前の解決の関数を差し替えた driver を作る。テストと組み込み先のためで、テストは機械の `/etc/hosts` に頼らない。`RealDriver::new` は std の解決器を使う
 - driver は作ったスレッドの上でだけ使う。`eml_io` は driver の型に `unsafe impl Send` を書かない
 - `mask.rs` の `spawn_masked` は、unix で SIGINT と SIGTERM を塞いでスレッドを始める。`eml_vm` の監視のスレッドと、解決のスレッドがこれで始まる。プールへ仕事を渡す間の塞ぎも同じモジュールの `Masked` で行う ([VM](../spec/vm.md) の「上限と割り込み」)
 - `RealDriver` の作り
-  - 出した操作は、操作の種類ごとの compio の鍵 (`Key`) を持つ項 (`Slot`) として、`OpKey` で引く表に持つ。unix の `Readable` は `PollOnce` で読めるようになるのを待ち、Windows の `Readable` は長さ0の `Recv` である (ソケットを IOCP のポートに結び付ける `attach` はまだなく、Windows の driver はハンドルを作らない)。`Read` は `Recv`、`Write` は `Send`、仕事は `Asyncify` で、プールのスレッドは32本までである。unix の `Accept` は compio の `Accept` で、受けたソケットと相手の番地を `pop` と `into_inner` で受け取る。`Connect` は番地ごとに socket2 でソケットを作り、compio の `Connect` を出す。`Listen` は socket2 で持ち主のスレッドの上で行う。書きの出し直し、受けの再試行、接続の次の試行は、表の項の compio の鍵を新しいものに替え、`OpKey` は替えない。取り消しを頼まれた項は出し直さない。`buffer_pool` は使わない
-  - 名前の解決は `resolve.rs` の `Resolver` が、切り離したスレッド (`eml-resolve`) で行う。手放していない解決は同時に8本 (`RESOLVE_LIMIT`) まで走り、残りは受け付けの順に待つ。取り消した解決のスレッドは手放して別に数え、まだ戻らないものが64本 (`ABANDONED_LIMIT`) たまっている間は、新しい解決をその場で誤りにする。スレッドは結果を mpsc の channel に送ってから waker を鳴らし、`wait` と `completions` が取り出す
+  - 保留の操作は、操作の種類ごとの compio の鍵 (`Key`) を持つ項 (`Slot`) として、呼ぶ側が振った `OpKey` で引く表に持つ。unix の `Readable` は `PollOnce` で読めるようになるのを待ち、Windows の `Readable` は長さ0の `Recv` である (ソケットを IOCP のポートに結び付ける `attach` はまだなく、Windows の driver はハンドルを作らない)。`Read` は `Recv`、`Write` は `Send`、仕事は `Asyncify` で、プールのスレッドは32本までである。unix の `Accept` は compio の `Accept` で、受けたソケットと相手の番地を `pop` と `into_inner` で受け取る。`Connect` は番地ごとに socket2 でソケットを作り、compio の `Connect` を出す。`Listen` は socket2 で持ち主のスレッドの上で行う。書きの出し直し、受けの再試行、接続の次の試行は、表の項の compio の鍵を新しいものに替え、`OpKey` は替えない。取り消しを頼まれた項は出し直さない。`buffer_pool` は使わない
+  - 名前の解決は `resolve.rs` の `Resolver` が、切り離したスレッド (`eml-resolve`) で行う。手放していない解決は同時に8本 (`RESOLVE_LIMIT`) まで走り、残りは受け付けの順に待つ。取り消した解決のスレッドは手放して別に数え、まだ戻らないものが64本 (`ABANDONED_LIMIT`) たまっている間は、新しい解決をその場で誤りにする。スレッドは結果を mpsc の channel に送ってから waker を鳴らし、`wait` が取り出す。解決の鍵は呼ぶ側の鍵である
   - ブロックする呼び出しのプールは `Op::Job` のために残す。std に仕事を出す行はなく、使うのは Rust のテストだけである ([VM](../spec/vm.md) の「時計と driver」)
   - `RawBuf` は別の crate の型なので、`real.rs` の包み `Mem` が compio の `IoBuf`、`IoBufMut`、`SetLen` を実装する。`cap == 0` は空の slice である。`eml_io` の本物の driver の `unsafe` は、この包みが `RawBuf` から slice を作る所と、`mask.rs` がシグナルの塞ぎを `pthread_sigmask` で変える所だけである
-  - polling の backend は `push` の中でまず読み書きを試すので、`push` が `Ready` を返すことがある。その結果も次の `completions` で返す完了として持つ。そのため、driver が持つソケットはブロックしない
-  - `completions` は、保留の操作があれば待たずに `poll` してから、すべての鍵を `pop` し、`push` の中で終わったものと合わせて、受け付けの順 (`OpKey` の順) に返す。取り消しは鍵を残したまま `register_cancel` と `cancel_token` で行い、取り消された操作の完了も `pop` で受ける
-  - `wait` は期限までの長さと `IDLE_TICK` の短い方だけ `poll` する。`poll` の `Ok`、時間切れ、割り込みは戻っただけと読む (polling の backend は、起こされたときも時間切れを返す)。ほかの誤りで driver は壊れた状態になり、以後の `wait` は `Err` を返し、`completions` は何も返さない。壊れる前に `push` の中で終わっていた結果も返さない。保留の操作の buffer は貸したまま残る
-  - `quiesce` は仕事のほかの保留の操作をすべて取り消し、仕事も含めてすべての完了が届くまで `poll` して捨てる。仕事は時間の上限なしに待つ。polling の backend は、取り消しで関心を外す呼び出しが失敗すると完了を出さずに操作を落とすので、取り消した I/O の操作が5秒たっても終わらなければ、driver を壊れた状態にして戻る。壊れた driver では待てないので、保留を残して戻る
-  - compio は仕事の鍵の写しをプールのスレッドへ送り、仕事が終わるとプールのスレッドがその写しを落とす。鍵の数え方は atomic でないので、持ち主のスレッドが同時に自分の写しを落としてはならない。そのため driver を落とすときは、壊れていなければ `quiesce` で仕事を待ちきる。壊れていれば、残った鍵を落とさずに漏らす
-- 起こしが長い待ちを終わらせることは、`real.rs` の単体テストが `Proactor` を直に待って確かめる。`wait` は1回の待ちを `IDLE_TICK` で切るので、`wait` を通しては確かめられない
+  - polling の backend は `push` の中でまず読み書きを試すので、`push` が `Ready` を返すことがある。`submit` はその結果を `Submit::Done` で返し、表に入れない。そのため、driver が持つソケットはブロックしない
+  - `completions` は、`wait` が集めた完了と、`cancel` がその場で終えた解決の完了を移すだけで、`poll` も `pop` もしない。順は決めない。取り消しは鍵を残したまま `register_cancel` と `cancel_token` で行い、取り消された操作の完了も `pop` で受ける。取り消しで終わった完了の誤りは、OS の誤りでなく `cancelled` にそろえる
+  - `wait` は OS を見る唯一の所である。届いた完了か解決の答えがあれば待たずに、なければ期限までの長さ (期限 `u64::MAX` と、保留か解決のある期限 `None` は上限なし、ほかは `i32::MAX` ミリ秒で切る) だけ `poll` し、解決の答えを受け取って、すべての鍵を `pop` する。期限 `None` で保留も解決もなければ `Ok(false)` を返す。`poll` の `Ok`、時間切れ、割り込みは戻っただけと読む (polling の backend は、起こされたときも時間切れを返す)。ほかの誤りで driver は壊れた状態になり、以後の `wait` は `Err` を返し、`completions` は何も返さない。壊れる前に集めてあった結果も返さない。保留の操作の buffer は貸したまま残る
+  - `quiesce` は仕事のほかの保留の操作をすべて取り消し、仕事も含めてすべての完了が届くまで 10 ms (`CANCEL_POLL`) ずつ `poll` して捨てる。仕事は時間の上限なしに待つ。polling の backend は、取り消しで関心を外す呼び出しが失敗すると完了を出さずに操作を落とすので、取り消した I/O の操作が5秒たっても終わらなければ、driver を壊れた状態にして戻る。壊れた driver では待てないので、保留を残して戻る
+  - compio は仕事の鍵の写しをプールのスレッドへ送り、仕事が終わるとプールのスレッドがその写しを落とす。鍵の数え方は atomic でないので、持ち主のスレッドが同時に自分の写しを落としてはならない。そのため driver を落とすときは、壊れていなければ `quiesce` で仕事の終わりを待つ。壊れていれば、残った鍵を落とさずに漏らす
+- 起こしが長い待ちを終わらせることは、結合テストが遠い期限と期限 `u64::MAX` の `wait` で確かめる
 - 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落とすと仕事を待つこと、unix のループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、名前の解決とその2つの上限と、Windows のソケットの操作が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF) を確かめる
 
 ## ソースファイルと位置

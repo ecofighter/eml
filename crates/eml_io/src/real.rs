@@ -15,7 +15,7 @@ use crate::mask::Masked;
 use compio_buf::{BufResult, IoBuf, IoBufMut, SetLen};
 use compio_driver::op::{Asyncify, Recv, RecvFlags, Send, SendFlags};
 use compio_driver::{Key, OpCode, Proactor, PushEntry, SharedFd};
-use eml_rt::{Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf};
+use eml_rt::{Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit};
 
 #[cfg(unix)]
 use crate::resolve::{Lookup, Resolver, std_lookup};
@@ -32,11 +32,15 @@ use std::os::fd::OwnedFd as Fd;
 #[cfg(windows)]
 use std::os::windows::io::OwnedSocket as Fd;
 
-/// 本物の driver が1回の `wait` で眠る長さの上限。空きのループは起きるたびに止める語を読むので、Ctrl-C と確保量の
-/// 上限はどの方針でもこの長さのうちに眠る worker を止める (docs/spec/vm.md の「時計と driver」)。
-pub const IDLE_TICK: Duration = Duration::from_millis(10);
+/// 1回の `poll` に渡す待ちの長さの上限 (約 24.8 日)。compio は待ちの長さをミリ秒の `i32` で OS に渡すので、遠い
+/// 期限はここで切る。切った待ちは早く戻るだけなので、`wait` の約束に合う。
+const MAX_POLL: Duration = Duration::from_millis(i32::MAX as u64);
 
-/// プールのスレッドの数の上限。仕事がこれより多ければ、`submit` はスレッドが空くまで待つ。
+/// `quiesce` が取り消しの完了を待つ1回の `poll` の長さ。`CANCEL_LIMIT` を過ぎたかを、この間隔で確かめる。
+const CANCEL_POLL: Duration = Duration::from_millis(10);
+
+/// プールのスレッドの数の上限。仕事がこれより多ければ、仕事の `submit` はスレッドが空くまで、安全点を通らずに
+/// 呼んだスレッドの上で待つ (docs/spec/vm.md の「時計と driver」)。
 const POOL_LIMIT: usize = 32;
 
 /// `quiesce` が取り消した I/O の操作の完了を待つ長さの上限。取り消しの完了はふつうすぐに届くので、これを
@@ -57,7 +61,7 @@ const SEND_FLAGS: SendFlags = SendFlags::empty();
 type Job = Box<dyn FnOnce() -> BufResult<usize, ()> + std::marker::Send>;
 
 /// 出した操作の今の compio の鍵。1つの `OpKey` の操作は、書きの出し直し、受けの再試行、接続の次の試行で、
-/// compio の鍵をいくつか通ることがある。`completions` で `pop` するまでここに置く。
+/// compio の鍵をいくつか通ることがある。`wait` で `pop` するまでここに置く。
 enum Slot {
     #[cfg(unix)]
     Readable(Key<PollOnce<SharedFd<Fd>>>),
@@ -156,9 +160,9 @@ impl IoWaker for ProactorWaker {
 /// 本物の時計で待ち、OS で読み書きする driver。
 pub struct RealDriver {
     proactor: Proactor,
-    /// 出してまだ終わったと分かっていない操作。compio の鍵はすべてここにある。
+    /// 出してまだ終わったと分かっていない操作。鍵は呼ぶ側が振ったもので、compio の鍵はすべてここにある。
     ops: HashMap<OpKey, Entry>,
-    /// `push` の中で終わったか、出せなかったか、その場で終わった操作。次の `completions` で返す。
+    /// `wait` が集めたか、`cancel` がその場で終えた操作。次の `completions` で返す。
     done: Vec<Completion>,
     handles: HashMap<IoHandle, SharedFd<Fd>>,
     bin: Arc<HandleBin>,
@@ -169,7 +173,6 @@ pub struct RealDriver {
     /// `poll` が想定外の誤りを返した。以後は待たず、新しい完了も返さない。保留の操作の buffer は貸したまま残る。
     broken: Option<(io::ErrorKind, String)>,
     epoch: Instant,
-    next_key: OpKey,
     #[cfg_attr(
         windows,
         expect(
@@ -212,7 +215,6 @@ impl RealDriver {
             waker: Arc::new(ProactorWaker(waker)),
             broken: None,
             epoch: Instant::now(),
-            next_key: 0,
             next_handle: 0,
         })
     }
@@ -228,26 +230,6 @@ impl RealDriver {
         );
         for handle in dropped {
             self.close(handle);
-        }
-    }
-
-    /// 進めた操作を、待つなら表に、終わったなら次の `completions` で返す完了に置く。
-    fn place(&mut self, key: OpKey, step: Step) {
-        match step {
-            Step::Wait(slot) => {
-                self.ops.insert(
-                    key,
-                    Entry {
-                        slot,
-                        cancelled: false,
-                    },
-                );
-            }
-            Step::Done(result, cancelled) => self.done.push(Completion {
-                key,
-                result,
-                cancelled,
-            }),
         }
     }
 
@@ -397,13 +379,13 @@ impl RealDriver {
         self.handles.get(&handle).cloned()
     }
 
-    /// `timeout` まで `poll` する。`Ok` と、時間切れと、割り込みは戻っただけと読み、ほかの誤りで壊れた状態になる。
-    /// polling の backend は起こされたときも時間切れを返す。
-    fn poll(&mut self, timeout: Duration) {
+    /// `timeout` まで (`None` なら起こされるか操作が終わるまで) `poll` する。`Ok` と、時間切れと、割り込みは戻った
+    /// だけと読み、ほかの誤りで壊れた状態になる。polling の backend は起こされたときも時間切れを返す。
+    fn poll(&mut self, timeout: Option<Duration>) {
         if self.broken.is_some() {
             return;
         }
-        match self.proactor.poll(Some(timeout)) {
+        match self.proactor.poll(timeout) {
             Ok(()) => {}
             Err(e)
                 if matches!(
@@ -482,7 +464,15 @@ impl RealDriver {
                     result,
                     cancelled,
                 }),
-                wait => self.place(key, wait),
+                Step::Wait(slot) => {
+                    self.ops.insert(
+                        key,
+                        Entry {
+                            slot,
+                            cancelled: false,
+                        },
+                    );
+                }
             }
         }
     }
@@ -499,6 +489,18 @@ impl RealDriver {
     fn receive_lookups(&mut self) {
         #[cfg(unix)]
         self.resolver.receive();
+    }
+
+    /// 受け取って、まだ接続の試行を始めていない解決の答えがあるか。
+    fn answered(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.resolver.answered()
+        }
+        #[cfg(windows)]
+        {
+            false
+        }
     }
 
     /// 待ちか実行中の、放棄していない解決と、受け取ってまだ試行を始めていない解決の数。
@@ -543,10 +545,14 @@ fn sent(result: io::Result<usize>, writing: &mut Writing) -> Option<io::Result<D
     }
 }
 
-/// 操作が着いた結果。取り消しを頼んだ操作が取り消しの誤りで終わったときだけ、取り消しで終わったとする。
+/// 操作が着いた結果。取り消しを頼んだ操作が取り消しの誤りで終わったときだけ、取り消しで終わったとする。そのときの
+/// 誤りは OS のものでなく `cancelled_error()` にする。実行系は旗で見分けるので、続きをやめた取り消しと同じ文言に
+/// そろえておく (docs/spec/vm.md の「時計と driver」)。
 fn finished(result: io::Result<Done>, cancelled: bool) -> Step {
-    let by_cancel = cancelled && result.as_ref().is_err_and(is_cancel);
-    Step::Done(result, by_cancel)
+    if cancelled && result.as_ref().is_err_and(is_cancel) {
+        return Step::Done(Err(cancelled_error()), true);
+    }
+    Step::Done(result, false)
 }
 
 /// compio の取り消しの誤り。poll の backend は取り消した操作を `ECANCELED` で、IOCP は
@@ -599,33 +605,38 @@ impl IoDriver for RealDriver {
             return Err(io::Error::new(*kind, message.clone()));
         }
         self.receive_lookups();
-        #[cfg(unix)]
-        if self.resolver.answered() {
-            return Ok(true);
-        }
-        if !self.done.is_empty() {
-            return Ok(true);
-        }
-        // 監視のスレッドのない run では、止める語が立っても driver を起こす者がいないので
-        // (解決のスレッドが起こすのは結果を送ったときだけである)、
-        // 空きのループが止める語を読めるよう、1回の待ちを短く切る
-        let timeout = match deadline_ms {
-            Some(deadline_ms) => Duration::from_millis(deadline_ms)
-                .saturating_sub(self.now())
-                .min(IDLE_TICK),
-            None if self.ops.is_empty() && self.lookups() == 0 => return Ok(false),
-            None => IDLE_TICK,
+        // 届いた完了か解決の答えがあれば待たずに OS を1回だけ見る。解決の答えは `reap` が受けるまで残るので、
+        // 見ずに戻ると呼ぶ側は回り続ける。`Ok(false)` の確かめを `u64::MAX` の写しより先に置くので、
+        // `Some(u64::MAX)` は保留がなくても起こしを待つ
+        let timeout = if !self.done.is_empty() || self.answered() {
+            Some(Duration::ZERO)
+        } else {
+            match deadline_ms {
+                None if self.ops.is_empty() && self.lookups() == 0 => return Ok(false),
+                None | Some(u64::MAX) => None,
+                Some(deadline_ms) => Some(
+                    Duration::from_millis(deadline_ms)
+                        .saturating_sub(self.now())
+                        .min(MAX_POLL),
+                ),
+            }
         };
         self.poll(timeout);
+        self.receive_lookups();
+        let mut done = std::mem::take(&mut self.done);
+        self.reap(&mut done);
+        self.done = done;
         match &self.broken {
             Some((kind, message)) => Err(io::Error::new(*kind, message.clone())),
             None => Ok(true),
         }
     }
 
-    fn submit(&mut self, op: Op) -> OpKey {
-        let key = self.next_key;
-        self.next_key += 1;
+    fn submit(&mut self, key: OpKey, op: Op) -> Submit {
+        debug_assert!(
+            !self.ops.contains_key(&key),
+            "a pending key is submitted again"
+        );
         let step = match op {
             Op::Readable { handle } | Op::Read { handle, .. } | Op::Write { handle, .. }
                 if !self.handles.contains_key(&handle) =>
@@ -680,7 +691,7 @@ impl IoDriver for RealDriver {
             Op::Connect { host, port } => match host.parse::<IpAddr>() {
                 Ok(ip) => self.connect(vec![SocketAddr::new(ip, port)].into_iter(), None),
                 Err(_) => match self.resolver.submit(key, host, port) {
-                    Ok(()) => return key,
+                    Ok(()) => return Submit::Pending,
                     Err(e) => Step::Done(Err(e), false),
                 },
             },
@@ -690,8 +701,19 @@ impl IoDriver for RealDriver {
                 Step::Done(Err(io::Error::from(io::ErrorKind::Unsupported)), false)
             }
         };
-        self.place(key, step);
-        key
+        match step {
+            Step::Done(result, _) => Submit::Done(result),
+            Step::Wait(slot) => {
+                self.ops.insert(
+                    key,
+                    Entry {
+                        slot,
+                        cancelled: false,
+                    },
+                );
+                Submit::Pending
+            }
+        }
     }
 
     fn cancel(&mut self, key: OpKey) {
@@ -724,20 +746,12 @@ impl IoDriver for RealDriver {
 
     fn completions(&mut self, out: &mut Vec<Completion>) {
         self.empty_bin();
-        // 壊れた後は、`push` の中で終わっていた結果も含めて何も渡さない。保留は `quiesce` の後も残り、実行系はそれを見て
+        // 壊れた後は、集めてあった結果も含めて何も渡さない。保留は `quiesce` の後も残り、実行系はそれを見て
         // 機械を poisoned の状態にする (docs/spec/vm.md の「時計と driver」)
         if self.broken.is_some() {
             return;
         }
-        let start = out.len();
         out.append(&mut self.done);
-        if !self.ops.is_empty() {
-            self.poll(Duration::ZERO);
-        }
-        self.receive_lookups();
-        self.reap(out);
-        // `HashMap` の順は走るたびに変わるので、`push` の中で終わったものも含めて受け付けの順にそろえる
-        out[start..].sort_by_key(|completion| completion.key);
     }
 
     fn pending(&self) -> usize {
@@ -795,7 +809,7 @@ impl IoDriver for RealDriver {
         let mut limit = None;
         let mut discarded = Vec::new();
         while !self.ops.is_empty() && self.broken.is_none() {
-            self.poll(IDLE_TICK);
+            self.poll(Some(CANCEL_POLL));
             self.reap(&mut discarded);
             let completions = std::mem::take(&mut discarded);
             self.discard(completions);
@@ -835,32 +849,5 @@ impl Drop for RealDriver {
             std::mem::forget(std::mem::take(&mut self.ops));
         }
         self.empty_bin();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// waker は上限なしの長い `poll` を別のスレッドから起こす。`wait` は1回の待ちを `IDLE_TICK` で切るので、
-    /// 起こしは `Proactor` を直に待って確かめる。
-    #[test]
-    fn a_wake_from_another_thread_ends_a_long_poll() {
-        let mut driver = RealDriver::new().unwrap();
-        let waker = driver.waker();
-        let start = Instant::now();
-        let ringer = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            waker.wake();
-        });
-        // polling の backend は起こされた待ちでも時間切れを返す
-        match driver.proactor.poll(Some(Duration::from_millis(900))) {
-            Ok(()) => {}
-            Err(e) => assert_eq!(e.kind(), io::ErrorKind::TimedOut),
-        }
-        let elapsed = start.elapsed();
-        ringer.join().unwrap();
-        assert!(elapsed >= Duration::from_millis(50), "{elapsed:?}");
-        assert!(elapsed < Duration::from_millis(500), "{elapsed:?}");
     }
 }

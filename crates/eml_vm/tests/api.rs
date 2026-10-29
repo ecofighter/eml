@@ -412,7 +412,7 @@ impl eml_rt::IoDriver for DeadlineRecorder {
         }
     }
 
-    fn submit(&mut self, _op: eml_rt::Op) -> eml_rt::OpKey {
+    fn submit(&mut self, _key: eml_rt::OpKey, _op: eml_rt::Op) -> eml_rt::Submit {
         unreachable!("the program submits no ops")
     }
 

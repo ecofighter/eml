@@ -10,5 +10,5 @@ mod resolve;
 mod test;
 
 pub use mask::spawn_masked;
-pub use real::{IDLE_TICK, RealDriver};
+pub use real::RealDriver;
 pub use test::TestDriver;

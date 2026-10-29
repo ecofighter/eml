@@ -18,7 +18,9 @@ use crate::data;
 use crate::driver::{DriverKind, ceil_ms, floor_ms};
 use crate::error::{KEPT_PENDING, VmFault};
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
-use crate::sched::{JoinId, JoinNode, MAIN, Outcome, Policy, Scheduler, TaskId, TaskState};
+use crate::sched::{
+    JoinId, JoinNode, MAIN, Outcome, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
+};
 use crate::{RunCounts, RuntimeError};
 
 // 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
@@ -406,7 +408,8 @@ fn safepoint<R: Exec>(
     Ok(())
 }
 
-/// 安全点で `NOTICE` を見たときの集める地点。安全点の速い道に残さないように分けてある。
+/// 安全点で `NOTICE` を見たときの集める地点。安全点の速い道に残さないように分けてある。計算の重いタスクが走る
+/// worker でも I/O の完了が届くように、OS を1回見てから集める (docs/spec/vm.md の「時計と driver」)。
 #[cold]
 #[inline(never)]
 fn collect_notice<R: Exec>(
@@ -415,7 +418,7 @@ fn collect_notice<R: Exec>(
     depth_offset: usize,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    collect::<R>(code, ctx, depth_offset, sched)
+    collect::<R>(code, ctx, depth_offset, sched, true)
 }
 
 /// タスクを実行する。`task` はエントリのタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときはエントリの
@@ -1260,8 +1263,15 @@ fn switch_away<R: Exec>(
     keep: Option<TaskState>,
 ) -> Result<(), VmFault> {
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
-    // (docs/spec/vm.md の「`Async` のタスク」)
-    collect::<R>(code, ctx, task.depth_offset, sched)?;
+    // (docs/spec/vm.md の「`Async` のタスク」)。走れるタスクがなければ直後の `wait` が OS を見るので、ここでは
+    // 見ない。走れるタスクが続くときは `POLL_EVERY` 回に1回だけ見る (docs/spec/vm.md の「時計と driver」)
+    collect::<R>(code, ctx, task.depth_offset, sched, false)?;
+    if !sched.ready.is_empty() {
+        sched.since_poll += 1;
+        if sched.since_poll >= POLL_EVERY {
+            collect::<R>(code, ctx, task.depth_offset, sched, true)?;
+        }
+    }
     // 走れるタスクがなければ、次の期限か driver の完了まで待って集め直す。戻るたびに止める語を読む。中継のない run
     // では、止める語を読み直すために `wait_deadline` が1回の待ちを短く切る。`PREEMPT` は切り替える先がないので
     // 捨てる。期限も保留の操作もないか、driver がもう何も進まないと答えたら、どのタスクも進めないデッドロックである。
@@ -1283,9 +1293,11 @@ fn switch_away<R: Exec>(
             Ok(false) => return Err(VmFault::Deadlock),
             Err(e) => return Err(VmFault::Driver(e.to_string())),
         }
-        // `PREEMPT` と `NOTICE` は捨てる。`NOTICE` の知らせは続く集める地点が集める
+        // `PREEMPT` と `NOTICE` は捨てる。`NOTICE` の知らせは続く集める地点が集める。直前の `wait` が OS を見たので、
+        // 集める地点は見ない
         poll(ctx, task.stack_depth())?;
-        collect::<R>(code, ctx, task.depth_offset, sched)?;
+        sched.since_poll = 0;
+        collect::<R>(code, ctx, task.depth_offset, sched, false)?;
     };
     match resume::<R>(code, ctx, task, sched, next, keep)? {
         Some(at) => {
@@ -1365,7 +1377,8 @@ fn resume<R: Exec>(
 }
 
 /// 集める地点。受け箱を処理し、driver の完了を操作の記録に当て、満ちたタイマーを外して、待ちを外したタスクを再開する
-/// 仕事を列の後ろに積む。タイマーのない run は時計を読まず、記録のない run は driver の完了を読まない
+/// 仕事を列の後ろに積む。`look` なら、先に driver の `wait` に今を渡して OS を1回見る。driver の `completions` は
+/// OS を見ないためである。タイマーのない run は時計を読まず、保留の操作のない run は driver に触れない
 /// (docs/spec/vm.md の「時計と driver」)。聞く者のいなかったシグナルがあれば、その後で run を止める
 /// (docs/spec/vm.md の「タスクとスケジュール」)。
 fn collect<R: Exec>(
@@ -1373,9 +1386,21 @@ fn collect<R: Exec>(
     ctx: &mut Ctx<R::M>,
     depth_offset: usize,
     sched: &mut Scheduler<R::P>,
+    look: bool,
 ) -> Result<(), VmFault> {
     // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
     ctx.heap().control().take_notice();
+    if look {
+        sched.since_poll = 0;
+        if sched.cells.in_flight() > 0 {
+            // 今以前の期限なので待たない。`ceil_ms` は今より先になりうるので、driver が眠りうる
+            let now = floor_ms(sched.driver.now());
+            sched
+                .driver
+                .wait(Some(now))
+                .map_err(|e| VmFault::Driver(e.to_string()))?;
+        }
+    }
     let mut out = Vec::new();
     sched
         .cells
@@ -1431,7 +1456,9 @@ fn preempt<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    collect::<R>(code, ctx, task.depth_offset, sched)?;
+    // 横取りの刻みごとに OS を見るので、計算の重いタスクが走る worker でも I/O の完了の遅れは刻みの長さまでである
+    // (docs/spec/vm.md の「時計と driver」)
+    collect::<R>(code, ctx, task.depth_offset, sched, true)?;
     loop {
         let next = sched.policy.pick(&mut sched.ready);
         sched.policy.reload();
@@ -1446,7 +1473,7 @@ fn preempt<R: Exec>(
         };
         let polled = match poll(ctx, task.stack_depth()) {
             Ok(Polled::Collect) => {
-                collect::<R>(code, ctx, task.depth_offset, sched).map(|()| Polled::Collect)
+                collect::<R>(code, ctx, task.depth_offset, sched, true).map(|()| Polled::Collect)
             }
             polled => polled,
         };
@@ -2072,30 +2099,48 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitWrite => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
-            let token =
-                sched
-                    .cells
-                    .submit_write(ctx, &mut *sched.driver, task.worker, buf, stream)?;
+            let token = sched.cells.submit_write(
+                ctx,
+                &mut *sched.driver,
+                task.worker,
+                task.depth_offset,
+                buf,
+                stream,
+            )?;
             task.set(dst, token);
         }
         Extern::NetSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
-            let token =
-                sched
-                    .cells
-                    .submit_read(ctx, &mut *sched.driver, task.worker, buf, stream)?;
+            let token = sched.cells.submit_read(
+                ctx,
+                &mut *sched.driver,
+                task.worker,
+                task.depth_offset,
+                buf,
+                stream,
+            )?;
             task.set(dst, token);
         }
         ext @ (Extern::NetSubmitListen | Extern::NetSubmitConnect) => {
             let (host, port) = (task.get(arg(0)), task.raw(arg(1)));
             let submitted = if ext == Extern::NetSubmitListen {
-                sched
-                    .cells
-                    .submit_listen(ctx, &mut *sched.driver, task.worker, host, port)?
+                sched.cells.submit_listen(
+                    ctx,
+                    &mut *sched.driver,
+                    task.worker,
+                    task.depth_offset,
+                    host,
+                    port,
+                )?
             } else {
-                sched
-                    .cells
-                    .submit_connect(ctx, &mut *sched.driver, task.worker, host, port)?
+                sched.cells.submit_connect(
+                    ctx,
+                    &mut *sched.driver,
+                    task.worker,
+                    task.depth_offset,
+                    host,
+                    port,
+                )?
             };
             match submitted {
                 Ok(token) => task.set(dst, token),
@@ -2111,10 +2156,13 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitAccept => {
             let listener = task.get(arg(0));
-            let token =
-                sched
-                    .cells
-                    .submit_accept(ctx, &mut *sched.driver, task.worker, listener)?;
+            let token = sched.cells.submit_accept(
+                ctx,
+                &mut *sched.driver,
+                task.worker,
+                task.depth_offset,
+                listener,
+            )?;
             task.set(dst, token);
         }
         Extern::NetOpListener | Extern::NetOpStream => {
@@ -2140,10 +2188,13 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitReadLine => {
             let stream = task.get(arg(0));
-            let token =
-                sched
-                    .cells
-                    .submit_read_line(ctx, &mut *sched.driver, task.worker, stream)?;
+            let token = sched.cells.submit_read_line(
+                ctx,
+                &mut *sched.driver,
+                task.worker,
+                task.depth_offset,
+                stream,
+            )?;
             task.set(dst, token);
         }
         Extern::NetTakeLine => match sched.cells.take_line(ctx, task.get(arg(0)), task.worker)? {

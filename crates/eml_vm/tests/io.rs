@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eml_rt::{
-    Checked, Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf,
+    Checked, Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit,
 };
 use eml_test_support::{run, run_stats};
 use eml_vm::{Machine, RunConfig, capture_host};
@@ -240,7 +240,6 @@ fn a_read_line_that_is_not_utf8_raises_not_utf8() {
 /// 間に合わなかったものとして、貸された記憶に `xy` を書いて2バイトで終わる。
 #[derive(Default)]
 struct HoldingDriver {
-    next_key: OpKey,
     held: Vec<(OpKey, Option<RawBuf>)>,
     done: Vec<Completion>,
 }
@@ -260,9 +259,7 @@ impl IoDriver for HoldingDriver {
         Ok(!self.done.is_empty())
     }
 
-    fn submit(&mut self, op: Op) -> OpKey {
-        self.next_key += 1;
-        let key = self.next_key;
+    fn submit(&mut self, key: OpKey, op: Op) -> Submit {
         match op {
             Op::Readable { .. } => self.done.push(Completion {
                 key,
@@ -288,7 +285,7 @@ impl IoDriver for HoldingDriver {
             }),
             _ => self.held.push((key, None)),
         }
-        key
+        Submit::Pending
     }
 
     fn cancel(&mut self, key: OpKey) {

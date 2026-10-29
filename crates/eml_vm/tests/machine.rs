@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use eml_rt::{
     ArithFault, Checked, Completion, Done, Fast, Fault, HandleBin, HeapError, IoDriver, IoHandle,
-    IoWaker, Op, OpKey,
+    IoWaker, Op, OpKey, Submit,
 };
 use eml_vm::{
     AnyMachine, CompileError, Control, Limits, Machine, RunConfig, RuntimeError, SourceLocation,
@@ -584,7 +584,6 @@ fn a_shown_entry_must_return_an_object() {
 struct FakeDriver {
     drains: bool,
     pending: usize,
-    next_key: OpKey,
     quiesces: Arc<AtomicUsize>,
 }
 
@@ -594,7 +593,6 @@ impl FakeDriver {
         let driver = FakeDriver {
             drains,
             pending: 0,
-            next_key: 0,
             quiesces: Arc::clone(&quiesces),
         };
         (driver, quiesces)
@@ -616,10 +614,9 @@ impl IoDriver for FakeDriver {
         Err(io::Error::other("broken"))
     }
 
-    fn submit(&mut self, _op: Op) -> OpKey {
+    fn submit(&mut self, _key: OpKey, _op: Op) -> Submit {
         self.pending += 1;
-        self.next_key += 1;
-        self.next_key
+        Submit::Pending
     }
 
     fn cancel(&mut self, _key: OpKey) {}
@@ -761,7 +758,6 @@ fn a_driver_left_pending_poisons_the_machine() {
 #[derive(Default)]
 struct StubDriver {
     now_ms: u64,
-    next_key: OpKey,
     held: Vec<OpKey>,
     cancelled: Vec<OpKey>,
     done: Vec<Completion>,
@@ -798,11 +794,10 @@ impl IoDriver for StubDriver {
         Ok(deadline_ms.is_some() || !self.done.is_empty())
     }
 
-    fn submit(&mut self, _op: Op) -> OpKey {
+    fn submit(&mut self, key: OpKey, _op: Op) -> Submit {
         self.note("submit".to_string());
-        self.next_key += 1;
-        self.held.push(self.next_key);
-        self.next_key
+        self.held.push(key);
+        Submit::Pending
     }
 
     fn cancel(&mut self, key: OpKey) {
