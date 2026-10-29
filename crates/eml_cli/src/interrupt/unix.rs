@@ -43,7 +43,8 @@ extern "C" fn on_sigterm(_: libc::c_int) {
     respond(Control::TERMINATE);
 }
 
-/// async-signal-safe なことだけをする。アトミックな読み書きと `_exit` で、`errno` を変える関数は呼ばない。
+/// async-signal-safe なことだけをする。アトミックな読み書きと、自己パイプへの `write` と、`_exit` である。`write` が
+/// 変えた `errno` は `Doorbell::ring` が戻す。
 fn respond(signal: u32) {
     if let Some(Response::Exit(code)) = INSTALLED.get().map(|installed| installed.respond(signal)) {
         // まだ書いていない出力は捨てる (docs/spec/vm.md の「上限と割り込み」)

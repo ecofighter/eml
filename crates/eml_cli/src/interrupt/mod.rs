@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use eml_cli::Control;
+use eml_cli::{Control, Doorbell};
 
 #[cfg(unix)]
 mod unix;
@@ -20,6 +20,9 @@ static INSTALLED: OnceLock<Installed> = OnceLock::new();
 
 struct Installed {
     control: Arc<Control>,
+    /// 監視のスレッドを起こす自己パイプ。run の設定にも同じものを渡す。作れなかったときは `None` で、監視のスレッドは
+    /// 刻みでシグナルを見に行く (docs/spec/vm.md の「タスクとスケジュール」)。
+    doorbell: Option<Arc<Doorbell>>,
     mode: Mode,
 }
 
@@ -48,11 +51,24 @@ enum Response {
     Exit(u8),
 }
 
+/// ハンドラと run の設定の両方に渡す自己パイプを作る。作れなくてもプログラムは実行でき、シグナルは監視の刻みで届く。
+pub fn doorbell() -> Option<Arc<Doorbell>> {
+    Doorbell::new()
+        .inspect_err(|error| eprintln!("warning: cannot create the signal doorbell: {error}"))
+        .ok()
+}
+
 /// `Control` と動き方を static に置いてから、ハンドラを入れる。逆の順だと、間に来た Ctrl-C が `Control` を見つけられ
 /// ない。
-pub fn install(control: Arc<Control>, mode: Mode) {
+pub fn install(control: Arc<Control>, doorbell: Option<Arc<Doorbell>>, mode: Mode) {
     assert!(
-        INSTALLED.set(Installed { control, mode }).is_ok(),
+        INSTALLED
+            .set(Installed {
+                control,
+                doorbell,
+                mode
+            })
+            .is_ok(),
         "the signal handlers are installed once per process"
     );
     // 入れられなくてもプログラムは実行できる。その場合シグナルは既定の動作でプロセスを終わらせる
@@ -65,7 +81,8 @@ impl Installed {
     /// シグナル `signal` (`Control::INTERRUPT` か `Control::TERMINATE`) を受けたときの動きを決める。アトミックな読み書き
     /// だけをするので、シグナルのハンドラからも呼べる。前の同じシグナルを届けていない間か、それがもう run を止めている間は、
     /// `eml run` ではその場で終わる。待つタスクがいれば届けるまで保留にし、いなければ run を止める (docs/spec/vm.md の
-    /// 「上限と割り込み」)。2つの種類は互いのビットを見ない。
+    /// 「上限と割り込み」)。2つの種類は互いのビットを見ない。終わらないときは自己パイプを鳴らし、監視のスレッドに保留を
+    /// 中継させ、眠っている worker を起こさせる。
     fn respond(&self, signal: u32) -> Response {
         let control = &self.control;
         if matches!(self.mode, Mode::Run)
@@ -84,6 +101,9 @@ impl Installed {
         } else {
             control.terminate();
         }
+        if let Some(doorbell) = &self.doorbell {
+            doorbell.ring();
+        }
         Response::Handled
     }
 }
@@ -100,6 +120,7 @@ mod tests {
     pub(super) fn installed(mode: Mode) -> Installed {
         Installed {
             control: Arc::new(Control::new(Limits::default())),
+            doorbell: None,
             mode,
         }
     }

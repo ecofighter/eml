@@ -17,6 +17,7 @@ mod code;
 mod compile;
 mod data;
 mod disasm;
+mod doorbell;
 mod driver;
 mod error;
 mod hosts;
@@ -28,6 +29,7 @@ mod vm;
 
 pub use code::{CodeBase, CompileError, FnEntry};
 pub use disasm::disassemble;
+pub use doorbell::Doorbell;
 pub use driver::Clock;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
@@ -112,6 +114,9 @@ pub struct RunConfig {
     pub sched: Sched,
     /// タイマーが使う時計。既定はすべてのタスクが待つときにだけ進む `Clock::Virtual` である。
     pub clock: Clock,
+    /// 監視のスレッドを起こす自己パイプ。シグナルのハンドラと同じものを渡す。既定はなしで、監視のスレッドは刻みで
+    /// シグナルを見に行く (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub doorbell: Option<Arc<Doorbell>>,
 }
 
 // `Control` は `Default` を持たないので、手で書く
@@ -122,6 +127,7 @@ impl Default for RunConfig {
             control: Arc::new(Control::new(Limits::default())),
             sched: Sched::Sequential,
             clock: Clock::Virtual,
+            doorbell: None,
         }
     }
 }
@@ -144,6 +150,11 @@ impl RunConfig {
 
     pub fn with_clock(mut self, clock: Clock) -> RunConfig {
         self.clock = clock;
+        self
+    }
+
+    pub fn with_doorbell(mut self, doorbell: Arc<Doorbell>) -> RunConfig {
+        self.doorbell = Some(doorbell);
         self
     }
 }
@@ -203,6 +214,9 @@ pub struct Machine<M: Mode> {
     counters: Vec<i64>,
     /// driver を作るときの時計。
     clock: Clock,
+    /// 実行ごとの `Scheduler` に渡す自己パイプ。1つの自己パイプは1つの `Machine` だけに渡す
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    doorbell: Option<Arc<Doorbell>>,
 }
 
 impl Machine<Fast> {
@@ -244,6 +258,7 @@ impl<M: Mode> Machine<M> {
             counters: Vec::new(),
             clock: Clock::Virtual,
             driver: None,
+            doorbell: None,
         }
     }
 
@@ -259,6 +274,12 @@ impl<M: Mode> Machine<M> {
     pub fn with_clock(mut self, clock: Clock) -> Machine<M> {
         self.clock = clock;
         self.driver = None;
+        self
+    }
+
+    /// 監視のスレッドを起こす自己パイプを渡す。ないときは、監視のスレッドが刻みでシグナルを見に行く。
+    pub fn with_doorbell(mut self, doorbell: Arc<Doorbell>) -> Machine<M> {
+        self.doorbell = Some(doorbell);
         self
     }
 
@@ -434,12 +455,10 @@ impl<M: Mode> Machine<M> {
             counters: std::mem::take(&mut self.counters),
             driver,
             real_clock: matches!(self.clock, Clock::Real),
+            doorbell: self.doorbell.clone(),
         };
         let (result, mut scheduled) = match self.sched {
-            Sched::Normal => {
-                let policy = Normal::new(Arc::clone(ctx.heap().control()));
-                run_scheduled(code, ctx, &mut task, policy, start, &mut counts)
-            }
+            Sched::Normal => run_scheduled(code, ctx, &mut task, Normal, start, &mut counts),
             Sched::Sequential => {
                 run_scheduled(code, ctx, &mut task, Sequential, start, &mut counts)
             }
@@ -652,6 +671,7 @@ struct Start {
     driver: Box<dyn IoDriver>,
     /// `Machine` の時計が本物か。`with_driver` で差し込んだ driver でも、時計の欄で決める。
     real_clock: bool,
+    doorbell: Option<Arc<Doorbell>>,
 }
 
 /// 方針 `P` のスケジューラを作って `task` から実行する。方針を型の引数にして、方針ごとに VM の繰り返しを作る
@@ -669,6 +689,8 @@ fn run_scheduled<M: Mode, P: Policy>(
     let mut sched = Scheduler::new(
         policy,
         start.driver,
+        Arc::clone(ctx.heap().control()),
+        start.doorbell,
         main_worker,
         start.max_depth,
         start.generations,
@@ -726,17 +748,17 @@ impl AnyMachine {
     pub fn new(config: &RunConfig, host: HostRef) -> AnyMachine {
         let control = Arc::clone(&config.control);
         if config.debug_heap {
-            AnyMachine::Checked(
-                Machine::<Checked>::new(control, host)
-                    .with_sched(config.sched)
-                    .with_clock(config.clock),
-            )
+            let mut machine = Machine::<Checked>::new(control, host)
+                .with_sched(config.sched)
+                .with_clock(config.clock);
+            machine.doorbell = config.doorbell.clone();
+            AnyMachine::Checked(machine)
         } else {
-            AnyMachine::Fast(
-                Machine::<Fast>::new(control, host)
-                    .with_sched(config.sched)
-                    .with_clock(config.clock),
-            )
+            let mut machine = Machine::<Fast>::new(control, host)
+                .with_sched(config.sched)
+                .with_clock(config.clock);
+            machine.doorbell = config.doorbell.clone();
+            AnyMachine::Fast(machine)
         }
     }
 

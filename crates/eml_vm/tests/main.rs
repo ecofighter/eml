@@ -20,6 +20,7 @@ mod reuse;
 mod roots;
 mod run;
 mod scaling;
+mod signal;
 mod structs;
 mod tags;
 mod tasks;

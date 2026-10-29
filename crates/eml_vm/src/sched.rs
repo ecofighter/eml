@@ -9,6 +9,7 @@ use std::sync::atomic::Ordering;
 use eml_rt::{Control, IoDriver};
 
 use crate::cells::{CellRef, Registry};
+use crate::doorbell::Doorbell;
 use crate::monitor::Monitor;
 use crate::vm::Task;
 
@@ -60,6 +61,9 @@ pub type TaskId = usize;
 
 /// スケジュールの方針。いつ横取りし、次にどのタスクを動かし、起こしたタスクを列のどこに入れるかを決める。
 pub trait Policy: Send {
+    /// 監視のスレッドの `PREEMPT` で横取りするか。真なら、`Scheduler` は最初のタスクで監視のスレッドを始め、切り替えを
+    /// 監視のスレッドに数えさせる。
+    const PREEMPTS: bool;
     /// 安全点ごとに1回呼ぶ。真を返したら、横取りを試みる。
     fn tick(&mut self) -> bool;
     /// 横取りを試みた後に、次の横取りまでの予算を詰め直す。
@@ -68,31 +72,15 @@ pub trait Policy: Send {
     fn pick(&mut self, ready: &mut VecDeque<TaskId>) -> Option<TaskId>;
     /// 起こしたタスクを、走れるタスクの列に入れる。
     fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId);
-    /// 2つ目の仕事が走れるようになりうるときに呼ぶ。
-    fn task_added(&mut self);
-    /// 動くタスクが替わったときに呼ぶ。
-    fn switched(&mut self);
 }
 
-/// 監視のスレッドの `PREEMPT` だけで横取りする方針。列は FIFO である。監視のスレッドは最初の `task_added` で始め、
-/// 方針を捨てるときに止める。2つ目の仕事を持たない run はスレッドを作らない (docs/spec/vm.md の「タスクとスケジュール」)。
-pub struct Normal {
-    /// 監視のスレッドに渡す `Control`。始めるときに取り出すので、始めるのは1回だけで、始められなかったときも
-    /// 試し直さない。
-    control: Option<Arc<Control>>,
-    pub(crate) monitor: Option<Monitor>,
-}
-
-impl Normal {
-    pub fn new(control: Arc<Control>) -> Normal {
-        Normal {
-            control: Some(control),
-            monitor: None,
-        }
-    }
-}
+/// 監視のスレッドの `PREEMPT` だけで横取りする方針。列は FIFO である。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Normal;
 
 impl Policy for Normal {
+    const PREEMPTS: bool = true;
+
     // 横取りは監視のスレッドの `PREEMPT` が求めるので、安全点に分岐を残さない
     #[inline(always)]
     fn tick(&mut self) -> bool {
@@ -108,27 +96,6 @@ impl Policy for Normal {
     fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId) {
         ready.push_back(task);
     }
-
-    fn task_added(&mut self) {
-        if let Some(control) = self.control.take() {
-            self.monitor = Monitor::start(control);
-        }
-    }
-
-    fn switched(&mut self) {
-        if let Some(monitor) = &self.monitor {
-            monitor.watch.switches.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-}
-
-impl Drop for Normal {
-    // run の終わりに `Scheduler` を捨てるときに止める。成功でも誤りでも同じで、run の後にスレッドを残さない
-    fn drop(&mut self) {
-        if let Some(monitor) = self.monitor.take() {
-            monitor.stop();
-        }
-    }
 }
 
 /// 横取りしない方針。列の先頭から取り、起こしたタスクも先頭に入れる。
@@ -136,6 +103,8 @@ impl Drop for Normal {
 pub struct Sequential;
 
 impl Policy for Sequential {
+    const PREEMPTS: bool = false;
+
     // 定数の偽に畳まれ、安全点に分岐を残さない
     #[inline(always)]
     fn tick(&mut self) -> bool {
@@ -151,12 +120,6 @@ impl Policy for Sequential {
     fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId) {
         ready.push_front(task);
     }
-
-    #[inline(always)]
-    fn task_added(&mut self) {}
-
-    #[inline(always)]
-    fn switched(&mut self) {}
 }
 
 /// seed で決まる方針。擬似乱数は splitmix64 で、予算は 1 から 16 までの安全点である。
@@ -187,6 +150,8 @@ impl Seeded {
 }
 
 impl Policy for Seeded {
+    const PREEMPTS: bool = false;
+
     // 予算が 0 になっても yield の途中なら切り替えないので、詰め直すのは横取りを試みたときだけにする
     fn tick(&mut self) -> bool {
         self.budget = self.budget.saturating_sub(1);
@@ -208,12 +173,6 @@ impl Policy for Seeded {
     fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId) {
         ready.push_back(task);
     }
-
-    #[inline(always)]
-    fn task_added(&mut self) {}
-
-    #[inline(always)]
-    fn switched(&mut self) {}
 }
 
 /// join の節点の番号。境目のフレームの slot 1 に生の語で置く。
@@ -305,12 +264,37 @@ pub struct Scheduler<P: Policy> {
     /// `Machine` の時計が本物か。プールの仕事の遅れは本物の時計でだけ効かせ、仮想の時計の run は本物の時間を眠らない
     /// (docs/spec/stdlib.md の「`Std.IoTest`」)。
     pub(crate) real_clock: bool,
+    /// 監視のスレッドと、それに渡すもの。
+    pub(crate) watcher: Watcher,
+}
+
+/// `Scheduler` が持つ監視のスレッド。`Scheduler` を捨てるとき (成功でも誤りでも) に止める。`Scheduler` は run の後に
+/// driver を取り出すので、`Drop` はこの欄に置く (docs/spec/vm.md の「タスクとスケジュール」)。
+pub(crate) struct Watcher {
+    control: Arc<Control>,
+    doorbell: Option<Arc<Doorbell>>,
+    pub(crate) monitor: Option<Monitor>,
+    /// 始めるのは1回だけで、始められなかったときも試し直さない。
+    tried: bool,
+}
+
+impl Drop for Watcher {
+    // run の後に待つタスクはいない。最後の集める地点の後に保留になったシグナルは、run が終わることで消費する
+    fn drop(&mut self) {
+        self.control.set_watched(0);
+        self.control.take_pending();
+        if let Some(monitor) = self.monitor.take() {
+            monitor.stop();
+        }
+    }
 }
 
 impl<P: Policy> Scheduler<P> {
     pub(crate) fn new(
         policy: P,
         driver: Box<dyn IoDriver>,
+        control: Arc<Control>,
+        doorbell: Option<Arc<Doorbell>>,
         main_worker: u32,
         max_depth: usize,
         generations: Vec<u32>,
@@ -333,11 +317,35 @@ impl<P: Policy> Scheduler<P> {
             stacks: Vec::new(),
             driver,
             real_clock: false,
+            watcher: Watcher {
+                control,
+                doorbell,
+                monitor: None,
+                tried: false,
+            },
         }
     }
 
+    /// 監視のスレッドを1回だけ始める。横取りする方針では2つ目の仕事が走れるようになりうるときに呼ぶので、2つ目の仕事を
+    /// 持たない run はスレッドを作らない (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn start_monitor(&mut self) {
+        let watcher = &mut self.watcher;
+        if std::mem::replace(&mut watcher.tried, true) {
+            return;
+        }
+        watcher.monitor = Monitor::start(
+            Arc::clone(&watcher.control),
+            Arc::clone(&self.cells.inbox),
+            self.driver.waker(),
+            watcher.doorbell.clone(),
+            P::PREEMPTS,
+        );
+    }
+
     pub(crate) fn add_task(&mut self, task: Task) -> TaskId {
-        self.policy.task_added();
+        if P::PREEMPTS {
+            self.start_monitor();
+        }
         match self.free_tasks.pop() {
             Some(id) => {
                 self.tasks[id] = Some(task);
@@ -350,10 +358,14 @@ impl<P: Policy> Scheduler<P> {
         }
     }
 
-    /// 動いているタスクの番号を替える。`current` はここでだけ書き、方針に切り替えを伝える。
+    /// 動いているタスクの番号を替える。`current` はここでだけ書き、横取りする方針では監視のスレッドに切り替えを伝える。
     pub(crate) fn set_current(&mut self, id: TaskId) {
         self.current = id;
-        self.policy.switched();
+        if P::PREEMPTS
+            && let Some(monitor) = &self.watcher.monitor
+        {
+            monitor.watch.switches.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// 表から外したタスクの欄を空ける。

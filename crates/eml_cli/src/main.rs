@@ -87,15 +87,19 @@ fn main() -> ExitCode {
             // 読み込みとコンパイルの間の Ctrl-C と SIGTERM も、OS の既定の動作でプロセスが終わらずに、このハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
-            interrupt::install(Arc::clone(&control), interrupt::Mode::Run);
+            let doorbell = interrupt::doorbell();
+            interrupt::install(Arc::clone(&control), doorbell.clone(), interrupt::Mode::Run);
             let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
-            let config = RunConfig::default()
+            let mut config = RunConfig::default()
                 .with_debug_heap(debug_heap)
                 .with_sched(sched)
                 .with_clock(Clock::Real)
                 .with_control(control);
+            if let Some(doorbell) = doorbell {
+                config = config.with_doorbell(doorbell);
+            }
             // 警告がプログラムの出力の後に出ないように、実行の前に表示する。
             let compiled = session.compile();
             eprint!("{}", render(&compiled.diagnostics, session.files()));

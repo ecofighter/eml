@@ -340,12 +340,15 @@ impl ChanCell {
     }
 }
 
-/// 受け箱の知らせ。落ちたハンドルの知らせはハンドルの `Drop` が、取り消しの知らせは `mark` が積む。
+/// 受け箱の知らせ。落ちたハンドルの知らせはハンドルの `Drop` が、取り消しの知らせは `mark` が、シグナルの知らせは
+/// 監視のスレッドが積む。
 pub(crate) enum Notice {
     HandleDropped(CellRef),
     Cancel(CellRef),
     /// 取り出す前の token が落ちた。std の包みからは届かない。
     OpDropped(CellRef),
+    /// 監視のスレッドが中継した保留のシグナル (`Control::INTERRUPT` と `Control::TERMINATE` のビット)。
+    Signal(u32),
 }
 
 /// ほかの worker やハンドルの破棄処理が核へ知らせる受け箱。
@@ -355,14 +358,14 @@ pub(crate) struct Inbox {
 }
 
 impl Inbox {
-    fn push(&self, notice: Notice) {
+    pub(crate) fn push(&self, notice: Notice) {
         self.notices
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(notice);
     }
 
-    fn take(&self) -> Vec<Notice> {
+    pub(crate) fn take(&self) -> Vec<Notice> {
         std::mem::take(&mut *self.notices.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
@@ -469,6 +472,9 @@ pub(crate) struct Registry {
     ops: HashMap<OpKey, CellRef>,
     /// `complete` が driver から完了を受ける列。集めるたびに作らないように使い回す。
     completed: Vec<Completion>,
+    /// 届けたときに待つタスクのいなかったシグナルのビット。集める地点の後で run を止める
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) unheard: u32,
 }
 
 impl Registry {
@@ -491,6 +497,7 @@ impl Registry {
             counters: Vec::new(),
             ops: HashMap::new(),
             completed: Vec::new(),
+            unheard: 0,
         }
     }
 
@@ -1494,6 +1501,12 @@ impl Registry {
                                 "an op token was dropped before its take",
                             ));
                         }
+                    }
+                    // シグナルを待つタスクはまだいないので、届けたシグナルはどれも聞く者がいない。届けたので保留から
+                    // 下ろし、次の同じシグナルをハンドラが1回目として扱うようにする (docs/spec/vm.md の「上限と割り込み」)
+                    Notice::Signal(bits) => {
+                        self.unheard |= bits;
+                        ctx.heap().control().settle(bits);
                     }
                 }
             }

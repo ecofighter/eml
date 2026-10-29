@@ -8,7 +8,7 @@ use std::time::Duration;
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::{
-    Ctx, Form, Handle, MaskItem, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write,
+    Control, Ctx, Form, Handle, MaskItem, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write,
     WriteMode,
 };
 
@@ -331,48 +331,59 @@ fn read_header(w: Word) -> (Pc, Slot, usize) {
     ((bits >> 32) as Pc, (bits >> 16) as Slot, bits & 0xFFFF)
 }
 
-/// `Ctx::poll` の VM での呼び方。切り替えたいなら `true` を返す。速い道は `Ok(())` の分岐だけで、残りは
-/// `polled_stop` に置く (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 安全点の `poll` が求めること。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Polled {
+    Continue,
+    /// 横取りを試みる。
+    Switch,
+    /// 切り替えずに知らせを集める。
+    Collect,
+}
+
+/// `Ctx::poll` の VM での呼び方。速い道は `Ok(())` の分岐だけで、残りは `polled_stop` に置く
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
 #[inline(always)]
-fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize) -> Result<bool, VmFault> {
+fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize) -> Result<Polled, VmFault> {
     match ctx.poll(depth) {
-        Ok(()) => Ok(false),
+        Ok(()) => Ok(Polled::Continue),
         Err(stop) => polled_stop(ctx, depth, stop),
     }
 }
 
-/// `poll` が止める理由を返したときの扱い。`Preempt` と `Notice` 以外は誤りとして返す。`Notice` は、受け箱に知らせを
-/// 置く者がいないので、ビットを下ろして続ける。`Preempt` は、yield の途中でなければビットを下ろしてからもう一度 `poll`
-/// する。間に命令がないので、深さの上限は正確で、同時に立った止めるビットは切り替えより先に勝つ。
+/// `poll` が止める理由を返したときの扱い。`Preempt` と `Notice` 以外は誤りとして返す。2つは、yield の途中でなければ
+/// ビットを下ろしてからもう一度 `poll` する。間に命令がないので、深さの上限は正確で、同時に立った止めるビットは切り替えと
+/// 集めることより先に勝つ。`Notice` は `Preempt` より先に返るので、両方が立っていれば切り替え、切り替えの前の集める地点が
+/// 知らせを集める。
 #[cold]
 #[inline(never)]
-fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<bool, VmFault> {
+fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<Polled, VmFault> {
+    let control = ctx.heap().control();
     match stop {
-        Stop::Notice => {
-            ctx.heap().control().take_notice();
-            return match ctx.poll(depth) {
-                Ok(()) => Ok(false),
-                Err(stop) => polled_stop(ctx, depth, stop),
-            };
-        }
-        Stop::Preempt => {}
+        Stop::Notice | Stop::Preempt => {}
         _ => return Err(stop.into()),
     }
-    // yield の途中では切り替えない。ビットは立てたままにして、次の yield のない安全点で拾う
+    // yield の途中では切り替えも集めることもしない。ビットは立てたままにして、次の yield のない安全点で拾う
     if ctx.yielding() != 0 {
-        return Ok(false);
+        return Ok(Polled::Continue);
     }
-    ctx.heap().control().take_preempt();
+    if stop == Stop::Notice {
+        control.take_notice();
+    } else {
+        control.take_preempt();
+    }
     match ctx.poll(depth) {
-        // 間に立った `NOTICE` は下ろさずに残し、次の安全点で下ろす
-        Ok(()) | Err(Stop::Preempt | Stop::Notice) => Ok(true),
+        Ok(()) if stop == Stop::Notice => Ok(Polled::Collect),
+        // 間に立った `NOTICE` は下ろさずに残す。切り替えの前の集める地点が下ろす
+        Ok(()) | Err(Stop::Preempt | Stop::Notice) => Ok(Polled::Switch),
         Err(stop) => Err(stop.into()),
     }
 }
 
 /// 安全点 (docs/spec/vm.md の「タスクとスケジュール」)。止める理由と深さを確かめた後で、`PREEMPT` が立っていたか
 /// 方針が求め、yield の途中でなければ横取りを試みる。yield の途中の状態は `Ctx` が1つだけ持つので、そこでは
-/// 切り替えない。`tick` は予算を数える方針があるので、`PREEMPT` の有無によらず毎回呼ぶ。
+/// 切り替えない。`tick` は予算を数える方針があるので、`PREEMPT` の有無によらず毎回呼ぶ。`NOTICE` は切り替えずに
+/// 集めるので、`Sequential` は今のタスクを続ける。
 #[inline(always)]
 fn safepoint<R: Exec>(
     code: &CodeBase<R::M>,
@@ -380,12 +391,27 @@ fn safepoint<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    let wants = poll(ctx, task.stack_depth())?;
+    let polled = poll(ctx, task.stack_depth())?;
     let tick = sched.policy.tick();
-    if (wants || tick) && ctx.yielding() == 0 {
+    if polled == Polled::Collect {
+        collect_notice::<R>(code, ctx, task.depth_offset, sched)?;
+    }
+    if (polled == Polled::Switch || tick) && ctx.yielding() == 0 {
         preempt::<R>(code, ctx, task, sched)?;
     }
     Ok(())
+}
+
+/// 安全点で `NOTICE` を見たときの集める地点。安全点の速い道に残さないように分けてある。
+#[cold]
+#[inline(never)]
+fn collect_notice<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    depth_offset: usize,
+    sched: &mut Scheduler<R::P>,
+) -> Result<(), VmFault> {
+    collect::<R>(code, ctx, depth_offset, sched)
 }
 
 /// タスクを実行する。`task` はエントリのタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときはエントリの
@@ -1248,6 +1274,7 @@ fn switch_away<R: Exec>(
             Ok(false) => return Err(VmFault::Deadlock),
             Err(e) => return Err(VmFault::Driver(e.to_string())),
         }
+        // `PREEMPT` と `NOTICE` は捨てる。`NOTICE` の知らせは続く集める地点が集める
         poll(ctx, task.stack_depth())?;
         collect::<R>(code, ctx, task.depth_offset, sched)?;
     };
@@ -1330,13 +1357,16 @@ fn resume<R: Exec>(
 
 /// 集める地点。受け箱を処理し、driver の完了を操作の記録に当て、満ちたタイマーを外して、待ちを外したタスクを再開する
 /// 仕事を列の後ろに積む。タイマーのない run は時計を読まず、記録のない run は driver の完了を読まない
-/// (docs/spec/vm.md の「時計と driver」)。
+/// (docs/spec/vm.md の「時計と driver」)。聞く者のいなかったシグナルがあれば、その後で run を止める
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
 fn collect<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     depth_offset: usize,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
+    // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
+    ctx.heap().control().take_notice();
     let mut out = Vec::new();
     sched
         .cells
@@ -1348,16 +1378,33 @@ fn collect<R: Exec>(
         let now = floor_ms(sched.driver.now());
         sched.cells.expire(now, &mut *sched.driver, &mut out)?;
     }
-    if out.is_empty() {
-        return Ok(());
+    if !out.is_empty() {
+        let entries = code
+            .entries
+            .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
+        for run in out {
+            schedule(code, sched, entries, run)?;
+        }
     }
-    let entries = code
-        .entries
-        .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
-    for run in out {
-        schedule(code, sched, entries, run)?;
+    if sched.cells.unheard != 0 {
+        return Err(unheard(ctx.heap().control(), sched.cells.unheard));
     }
     Ok(())
+}
+
+/// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを止める語に
+/// 立てるので、`eml run` の次の同じシグナルはその場で終わらせる (docs/spec/vm.md の「上限と割り込み」)。
+#[cold]
+#[inline(never)]
+fn unheard(control: &Control, bits: u32) -> VmFault {
+    if bits & Control::TERMINATE != 0 {
+        control.terminate();
+    }
+    if bits & Control::INTERRUPT != 0 {
+        control.interrupt();
+        return VmFault::Stopped(Stop::Interrupted);
+    }
+    VmFault::Stopped(Stop::Terminated)
 }
 
 /// 方針か `PREEMPT` が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す (`PREEMPT` は
@@ -1385,12 +1432,18 @@ fn preempt<R: Exec>(
         let Some(at) = resume::<R>(code, ctx, task, sched, next, Some(TaskState::Ready))? else {
             return Ok(());
         };
-        let wants = match poll(ctx, task.stack_depth()) {
-            Ok(wants) => wants,
+        let polled = match poll(ctx, task.stack_depth()) {
+            Ok(Polled::Collect) => {
+                collect::<R>(code, ctx, task.depth_offset, sched).map(|()| Polled::Collect)
+            }
+            polled => polled,
+        };
+        let polled = match polled {
+            Ok(polled) => polled,
             Err(fault) => return at_par(code, task, sched, at, Err(fault)),
         };
         let tick = sched.policy.tick();
-        if !((wants || tick) && ctx.yielding() == 0) {
+        if !((polled == Polled::Switch || tick) && ctx.yielding() == 0) {
             return Ok(());
         }
     }
