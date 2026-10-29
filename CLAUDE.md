@@ -16,7 +16,7 @@ The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/`
 - The documents under `docs/` describe the current state. They do not name stages, dates, or what came before; that history lives in git (docs/README.md の「文書の扱い」). The only exception is `docs/reports/`.
 - A stage's design and plan live in `docs/plans/`, are committed as the stage's first commit, and are deleted when the stage closes (docs/future/roadmap.md の「進め方」). Code and `docs/` never cite `docs/plans/`; write the `docs/spec/` section in the same commit that implements the rule, and cite that.
 - Code comments and docs are written in Japanese. Code comments explain why, not what: do not restate the code, and cite `docs/` paths when pointing at a rule.
-- Whenever you write Japanese text (docs under `docs/`, code comments, or anything else), always follow the `yomiyasu:yomiyasu` skill: invoke it before writing and apply its rules to everything you write.
+- Whenever you write Japanese text (docs under `docs/`, code comments, or anything else), always follow the `natural-japanese:natural-japanese` skill: invoke it before writing and apply its rules to everything you write.
 - The CLAUDE.md files (this one and `crates/eml_rt/CLAUDE.md`) hold working rules and pointers into `docs/`. When a stage changes the design, write it in `docs/` and touch a CLAUDE.md only when a rule or a pointer changes, so the two never drift apart.
 - Run ad-hoc `.em` programs (`eml run`, `cargo run -p eml_cli -- run`, probes in a scratchpad) under `timeout` (e.g. `timeout 20`). An eml program can legitimately loop forever: a tail-recursive loop that does not allocate hits neither `max_depth` nor `max_bytes` (docs/spec/vm.md の「上限と割り込み」).
 - When a Bash call exceeds its timeout, Claude Code moves it to a background task instead of killing it. Before finishing (above all as a subagent), stop every such task with TaskStop or wait for it to complete; a task left running keeps a finished subagent listed as running and leaves its process behind.
@@ -48,7 +48,7 @@ bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ a
 bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input, compare.sh --paths EML PY ARGS... < input)
 ```
 
-In Claude Code cloud sessions, the proxy refuses GitHub archive downloads, so the environment's setup script must be the one below: it installs Nix, runs `nix/prefetch-inputs.sh` (fetches the flake's `github:` inputs over git) and builds the devShell into the environment cache, and installs the yomiyasu and ecoskills plugins, which cloud sessions do not take from `.claude/settings.json`. If `flake.lock` changed since the cache was built, run `nix/prefetch-inputs.sh` before `nix develop`. The reference copy and the reasons are in docs/implementation/testing.md の「クラウドのセッション」; keep this copy and the one in `README.md` identical to it.
+In Claude Code cloud sessions, the proxy refuses GitHub archive downloads, so the environment's setup script must be the one below: it installs Nix, runs `nix/prefetch-inputs.sh` (fetches the flake's `github:` inputs over git) and builds the devShell into the environment cache, and installs the natural-japanese and ecoskills plugins, which cloud sessions do not take from `.claude/settings.json`. If `flake.lock` changed since the cache was built, run `nix/prefetch-inputs.sh` before `nix develop`. The reference copy and the reasons are in docs/implementation/testing.md の「クラウドのセッション」; keep this copy and the one in `README.md` identical to it.
 
 ```sh
 #!/bin/bash
@@ -69,9 +69,9 @@ nix develop "path:$eml" -c true
 rm -rf "$eml"
 
 # クラウドのセッションはリポジトリの enabledPlugins を読まないので、プラグインを user の scope に入れる
-claude plugin marketplace add nanaism/yomiyasu
+claude plugin marketplace add coji/natural-japanese
 claude plugin marketplace add ecofighter/ecoskills
-claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin install natural-japanese@natural-japanese --scope user
 claude plugin install ecoskills@ecoskills --scope user
 ```
 

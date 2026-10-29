@@ -81,7 +81,7 @@ nix build                                    # eml のバイナリをビルド�
 
 ### Claude Code のクラウドのセッション
 
-Claude Code のクラウドのセッションで開発するときは、環境の setup script に次を書く。この setup script は Nix を入れ、flake の input と devShell を環境のキャッシュに置き、yomiyasu と ecoskills のプラグインを入れる。理由と仕組みは [docs/implementation/testing.md](docs/implementation/testing.md) の「クラウドのセッション」にある。
+Claude Code のクラウドのセッションで開発するときは、環境の setup script に次を書く。この setup script は Nix を入れ、flake の input と devShell を環境のキャッシュに置き、natural-japanese と ecoskills のプラグインを入れる。理由と仕組みは [docs/implementation/testing.md](docs/implementation/testing.md) の「クラウドのセッション」にある。
 
 ```sh
 #!/bin/bash
@@ -102,9 +102,9 @@ nix develop "path:$eml" -c true
 rm -rf "$eml"
 
 # クラウドのセッションはリポジトリの enabledPlugins を読まないので、プラグインを user の scope に入れる
-claude plugin marketplace add nanaism/yomiyasu
+claude plugin marketplace add coji/natural-japanese
 claude plugin marketplace add ecofighter/ecoskills
-claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin install natural-japanese@natural-japanese --scope user
 claude plugin install ecoskills@ecoskills --scope user
 ```
 
