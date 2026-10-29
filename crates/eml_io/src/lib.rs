@@ -3,6 +3,7 @@
 //! `eml_vm` には依存しない。
 
 mod flag;
+mod mask;
 mod real;
 mod test;
 

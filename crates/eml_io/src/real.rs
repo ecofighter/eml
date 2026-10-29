@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::task::Waker;
 use std::time::{Duration, Instant};
 
+use crate::mask::Masked;
 use compio_buf::{BufResult, IoBuf, IoBufMut, SetLen};
 use compio_driver::op::{Asyncify, Recv, RecvFlags, Send, SendFlags};
 use compio_driver::{Key, OpCode, Proactor, PushEntry, SharedFd};
@@ -288,6 +289,8 @@ impl IoDriver for RealDriver {
             }
             (Op::Job(job), _) => {
                 let job: Job = Box::new(move || BufResult(job(), ()));
+                // プールのスレッドは `push` を呼んだスレッドから生まれ、塞ぎを受け継ぐ (docs/spec/vm.md の「上限と割り込み」)
+                let _masked = Masked::new();
                 self.push(key, Asyncify::new(job), Slot::Job)
             }
             (_, None) => unreachable!("an I/O op has a handle"),

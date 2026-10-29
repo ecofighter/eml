@@ -302,3 +302,28 @@ fn an_op_on_an_unknown_handle_fails() {
         ErrorKind::InvalidInput
     );
 }
+
+/// プールの仕事は、SIGINT と SIGTERM を塞いだスレッドで動く。塞ぐのは `submit` の間だけなので、呼んだスレッドは
+/// 元の塞ぎに戻る。
+#[cfg(unix)]
+#[test]
+fn pool_threads_block_interrupt_and_terminate() {
+    fn blocked(signal: libc::c_int) -> bool {
+        // SAFETY: 集合はこの関数の局所変数で、`pthread_sigmask` は読み書きするだけである
+        unsafe {
+            let mut set: libc::sigset_t = std::mem::zeroed();
+            assert_eq!(
+                libc::pthread_sigmask(libc::SIG_BLOCK, std::ptr::null(), &mut set),
+                0
+            );
+            libc::sigismember(&set, signal) == 1
+        }
+    }
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let key = driver.submit(Op::Job(Box::new(|| {
+        Ok(usize::from(blocked(libc::SIGINT) && blocked(libc::SIGTERM)))
+    })));
+    assert!(!blocked(libc::SIGINT) && !blocked(libc::SIGTERM));
+    assert_eq!(complete(&mut driver, &mut stash, key).result.unwrap(), 1);
+}

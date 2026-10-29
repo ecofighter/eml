@@ -362,7 +362,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
   - `quiesce` は仕事のほかの保留の操作をすべて取り消し、仕事も含めてすべての完了が届くまで `poll` して捨てる。仕事は時間の上限なしに待つ。polling の backend は、取り消しで関心を外す呼び出しが失敗すると完了を出さずに操作を落とすので、取り消した I/O の操作が5秒たっても終わらなければ、driver を壊れた状態にして戻る。壊れた driver では待てないので、保留を残して戻る
   - compio は仕事の鍵の写しをプールのスレッドへ送り、仕事が終わるとプールのスレッドがその写しを落とす。鍵の数え方は atomic でないので、持ち主のスレッドが同時に自分の写しを落としてはならない。そのため driver を落とすときは、壊れていなければ `quiesce` で仕事を待ちきる。壊れていれば、残った鍵を落とさずに漏らす
 - 起こしが長い待ちを終わらせることは、`real.rs` の単体テストが `Proactor` を直に待って確かめる。`wait` は1回の待ちを `IDLE_TICK` で切るので、`wait` を通しては確かめられない
-- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、仕事が走る driver を落とすと仕事を待つこと、unix の `pair` の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、Windows の `pair` が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと) を確かめる
+- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落とすと仕事を待つこと、unix の `pair` の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、Windows の `pair` が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと) を確かめる
 
 ## ソースファイルと位置
 
@@ -410,7 +410,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `insta` | 1.49 | スナップショットテスト |
 | `la-arena` | 0.3 | HIR の ID とアリーナ、型検査の別テーブル (`ArenaMap`) |
 | `rustc-hash` | 2.1 | コンパイラの段階 (`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm`) のハッシュ表 (`FxHashMap`、`FxHashSet`)。鍵は処理系の中の ID、型、名前で、入力は利用者自身のプログラムなので、衝突を狙った入力への耐性より速さを選ぶ。表の順に出力が依存しないので、std の表から替えても出力は変わらない。aHash、foldhash、rapidhash と比べると、x86_64 と aarch64 のどちらでも命令の数が最も少なく、CPU 時間を縮める候補もなかった ([計測の基準](benchmarks.md) の「コンパイラの段階のハッシュ関数」) |
-| `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`)。`eml_vm` は unix だけで依存し、監視のスレッドを始める間のシグナルの塞ぎ (`pthread_sigmask`) に使う |
+| `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`)。`eml_vm` と `eml_io` は unix だけで依存し、`eml_vm` は監視のスレッドを始める間、`eml_io` はプールへ仕事を渡す間のシグナルの塞ぎ (`pthread_sigmask`) に使う |
 | `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`)、物理メモリの大きさ (`GlobalMemoryStatusEx`) |
 | `rustyline` | 19.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
 | `compio-driver` | =0.12.5 (`polling`、`sync`。既定の feature は使わない) | 本物の I/O の driver (`eml_io`)。unix は polling (epoll と kqueue)、Windows は IOCP で、ブロックする呼び出しのプールも使う。io_uring は使わない |
@@ -421,3 +421,4 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 1. `Proactor` の `poll`、`push`、`pop`、`cancel` と `register_cancel` と `cancel_token`、`waker`、操作の `Asyncify`、`PollOnce`、`Recv`、`Send` の API の差分を読んだ
 2. `.#cross` の shell で、`x86_64-pc-windows-msvc` を対象に `cargo check` か `cargo clippy` が通る
 3. `eml_io` のテストが、macOS、Linux、Windows の CI で通る
+4. プールのスレッドは `push` を呼んだスレッドから生まれ、シグナルの塞ぎを受け継ぐ (`eml_io` の `pool_threads_block_interrupt_and_terminate` が確かめる)

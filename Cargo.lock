@@ -338,6 +338,7 @@ dependencies = [
  "compio-buf",
  "compio-driver",
  "eml_rt",
+ "libc",
 ]
 
 [[package]]
