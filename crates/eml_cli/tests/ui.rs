@@ -9,12 +9,15 @@ use std::sync::Arc;
 
 use eml_cli::{
     CaptureHost, Control, Finished, FsProvider, RunConfig, RunStats, RuntimeError, Sched, Session,
-    VmFault, default_limits, execute,
+    Signal, VirtualSignal, VmFault, default_limits, execute,
 };
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
 
-use crate::common::{assert_filter_matches, for_each_file, run_all, temp_project, windows_skip};
+use crate::common::{
+    Marks, assert_filter_matches, for_each_file, leading_marks, marks_of, run_all, temp_project,
+    windows_skip,
+};
 
 fn ui_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -171,11 +174,13 @@ fn host_for(path: &Path, root: &Path) -> CaptureHost {
 }
 
 /// `eml run` と同じ既定の上限で流す。止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい
-/// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。
+/// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。`signals` はファイルの
+/// シグナルの印の予定で、どの run にも同じものを渡す (docs/implementation/testing.md の「UI テスト」)。
 fn execute_in(
     program: &eml_lir::Program,
     path: &Path,
     root: &Path,
+    signals: &[VirtualSignal],
     debug_heap: bool,
     sched: Sched,
 ) -> Ran {
@@ -184,7 +189,8 @@ fn execute_in(
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(default_limits())))
-        .with_sched(sched);
+        .with_sched(sched)
+        .with_signals(signals.to_vec());
     let outcome = execute(program, &config, host.into_ref());
     let finished = outcome.as_ref().ok().copied();
     let result = outcome.map(|finished| finished.exit);
@@ -254,9 +260,10 @@ fn assert_fast_mode_agrees(
     program: &eml_lir::Program,
     path: &Path,
     root: &Path,
+    signals: &[VirtualSignal],
     checked: &Ran,
 ) {
-    let fast = execute_in(program, path, root, false, Sched::Normal);
+    let fast = execute_in(program, path, root, signals, false, Sched::Normal);
     assert_agrees(suffix, "the fast mode", &fast, checked, Compare::Nothing);
 }
 
@@ -270,8 +277,14 @@ fn seeded(suffix: &str) -> bool {
 }
 
 /// 食い違ったときの文言に、同じ実行を再現するコマンドを書く。スケジュールは seed とプログラムと入力だけで決まる。
-fn seeded_label(seed: u64) -> String {
-    format!("`eml run --debug-heap --sched seeded:{seed}` on the virtual driver")
+/// シグナルの印は CLI で書けないので、印のあるファイルではそのことを添える。
+fn seeded_label(seed: u64, signals: &[VirtualSignal]) -> String {
+    let marks = if signals.is_empty() {
+        ""
+    } else {
+        " with the signal marks of the file"
+    };
+    format!("`eml run --debug-heap --sched seeded:{seed}` on the virtual driver{marks}")
 }
 
 /// 逐次の検査モードの結果を、seed ごとの検査モードの run と比べる。成功した run は、スケジュールによらない
@@ -284,17 +297,18 @@ fn assert_seeds_agree(
     program: &eml_lir::Program,
     path: &Path,
     root: &Path,
+    signals: &[VirtualSignal],
     checked: &Ran,
 ) {
     let compare_stats = !(suffix.starts_with("async/") && matches!(checked.result, Ok(Some(_))));
     for seed in SEEDS {
-        let ran = execute_in(program, path, root, true, Sched::Seeded(seed));
+        let ran = execute_in(program, path, root, signals, true, Sched::Seeded(seed));
         let compare = if compare_stats {
             compares_stats(checked, &ran)
         } else {
             Compare::Nothing
         };
-        assert_agrees(suffix, &seeded_label(seed), &ran, checked, compare);
+        assert_agrees(suffix, &seeded_label(seed, signals), &ran, checked, compare);
         if let Some(finished) = ran.finished {
             assert!(
                 finished.preemptions > 0,
@@ -390,12 +404,12 @@ fn fast_mode_reports(error: &RuntimeError) -> bool {
 
 #[test]
 fn run() {
-    for_each_file(&ui_root().join("run"), "em", |path| {
+    for_each_file(&ui_root().join("run"), "em", true, |path, signals| {
         let Entry::Test(suffix) = classify(path, "run") else {
             return;
         };
         let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, true, Sched::Sequential);
+        let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential);
         assert!(ran.result.is_ok(), "{:?}\n{diagnostics}", ran.result);
         let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
         let exit = match ran.result {
@@ -407,21 +421,21 @@ fn run() {
                 "--- stdout ---\n{stdout}--- stderr ---\n{diagnostics}{stderr}{written}{exit}"
             ));
         });
-        assert_fast_mode_agrees(&suffix, &program, path, &root, &ran);
+        assert_fast_mode_agrees(&suffix, &program, path, &root, signals, &ran);
         if seeded(&suffix) {
-            assert_seeds_agree(&suffix, &program, path, &root, &ran);
+            assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
         }
     });
 }
 
 #[test]
 fn run_fail() {
-    for_each_file(&ui_root().join("run-fail"), "em", |path| {
+    for_each_file(&ui_root().join("run-fail"), "em", true, |path, signals| {
         let Entry::Test(suffix) = classify(path, "run-fail") else {
             return;
         };
         let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, true, Sched::Sequential);
+        let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential);
         let Err(error) = &ran.result else {
             panic!("expected a runtime error");
         };
@@ -433,9 +447,9 @@ fn run_fail() {
         });
         // VM の誤りの文言は worker ID を含みうる。ID はスケジュールで変わるので、seed の run とも比べない
         if fast_mode_reports(error) {
-            assert_fast_mode_agrees(&suffix, &program, path, &root, &ran);
+            assert_fast_mode_agrees(&suffix, &program, path, &root, signals, &ran);
             if seeded(&suffix) {
-                assert_seeds_agree(&suffix, &program, path, &root, &ran);
+                assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
             }
         }
     });
@@ -443,7 +457,7 @@ fn run_fail() {
 
 #[test]
 fn check_fail() {
-    for_each_file(&ui_root().join("check-fail"), "em", |path| {
+    for_each_file(&ui_root().join("check-fail"), "em", false, |path, _| {
         let Entry::Test(suffix) = classify(path, "check-fail") else {
             return;
         };
@@ -500,7 +514,7 @@ fn a_seeded_mismatch_names_the_seed() {
     };
     assert_agrees(
         "par/x.em",
-        &seeded_label(7),
+        &seeded_label(7, &[]),
         &ran("1\n"),
         &ran("2\n"),
         Compare::ScheduleIndependent,
@@ -516,8 +530,8 @@ fn a_par_file_that_is_never_preempted_fails() {
     let program = session.compile().program.expect("the program compiles");
     let root = ui_root().join("run/par");
     let path = root.join("short.em");
-    let checked = execute_in(&program, &path, &root, true, Sched::Sequential);
-    assert_seeds_agree("par/short.em", &program, &path, &root, &checked);
+    let checked = execute_in(&program, &path, &root, &[], true, Sched::Sequential);
+    assert_seeds_agree("par/short.em", &program, &path, &root, &[], &checked);
 }
 
 #[test]
@@ -596,4 +610,65 @@ fn the_windows_mark_is_the_first_line() {
     assert!(windows_skip("-- windows: skip", "--").is_err());
     assert!(windows_skip("-- windows: skip ()", "--").is_err());
     assert!(windows_skip("-- windows:skip (x)", "--").is_err());
+}
+
+#[test]
+fn signal_marks_are_parsed_in_order() {
+    let marks = leading_marks(
+        "-- signal: terminate at 100\n-- signal: interrupt at 5\nmain () = ()\n-- signal: interrupt at 7\n",
+        "--",
+    );
+    let at = |at_ms, signal| VirtualSignal { at_ms, signal };
+    assert_eq!(
+        marks,
+        Ok(Marks {
+            windows_skip: false,
+            signals: vec![at(100, Signal::Terminate), at(5, Signal::Interrupt)],
+        })
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "the signal mark is `-- signal: <interrupt|terminate> at <ms>`, not `-- signal: terminate at +5`"
+)]
+fn a_malformed_signal_mark_panics() {
+    marks_of("run/async/x.em", "-- signal: terminate at +5\n", "--", true);
+}
+
+#[test]
+fn a_windows_mark_and_signal_marks_can_share_the_leading_lines() {
+    let marks = leading_marks(
+        "#!/usr/bin/env eml\n-- signal: interrupt at 5\n-- windows: skip (x)\n-- signal: terminate at 9\n",
+        "--",
+    )
+    .unwrap();
+    assert!(marks.windows_skip);
+    assert_eq!(
+        marks.signals,
+        [
+            VirtualSignal {
+                at_ms: 5,
+                signal: Signal::Interrupt
+            },
+            VirtualSignal {
+                at_ms: 9,
+                signal: Signal::Terminate
+            },
+        ]
+    );
+    for wrong in [
+        "-- signal: Interrupt at 5",
+        "-- signal: interrupt  at 5",
+        "-- signal: interrupt at",
+        "-- signal:interrupt at 5",
+    ] {
+        assert!(leading_marks(wrong, "--").is_err(), "{wrong}");
+    }
+}
+
+#[test]
+#[should_panic(expected = "x.repl: signal marks are not supported here")]
+fn a_signal_mark_in_a_transcript_panics() {
+    marks_of("x.repl", "# signal: interrupt at 5\n> 1\n", "#", false);
 }

@@ -475,7 +475,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par`、`Std.Async` の17行、`Std.Chan` の2行、`Std.Net` の18行以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の18行、`Std.Chan` の2行、`Std.Net` の18行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -532,7 +532,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Par.par" => (&[Poly, Poly], Poly),
             "Std.Async.start_raw" | "Std.Async.run_raw" => (&[Poly], Lin),
             "Std.Async.park" => (&[Unr, Lin], Unr),
-            "Std.Async.park_time" => (&[Unr, Lin], Unr),
+            "Std.Async.park_time" | "Std.Async.park_signal" => (&[Unr, Lin], Unr),
             "Std.Async.park_drain" => (&[Unr, Lin], Unr),
             "Std.Async.ready" => (&[Lin], Unr),
             "Std.Async.finish_ok" => (&[Poly], Unr),
@@ -570,7 +570,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     }
 }
 
-/// 表の値そのもの。引数を預かる行は `Std.Async` の17行と `Std.Chan.push_raw` だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
+/// 表の値そのもの。引数を預かる行は `Std.Async` の18行と `Std.Chan.push_raw` だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
 /// その印は `Unr` でない (docs/spec/declarations.md の「`extern`」)。
 #[test]
 fn only_the_listed_rows_hold_an_argument() {
@@ -600,6 +600,7 @@ fn only_the_listed_rows_hold_an_argument() {
             "Std.Async.park_recv",
             "Std.Async.park_io",
             "Std.Async.park_io_until",
+            "Std.Async.park_signal",
             "Std.Chan.push_raw",
         ]
     );

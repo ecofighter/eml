@@ -29,7 +29,7 @@ mod vm;
 pub use code::{CodeBase, CompileError, FnEntry};
 pub use disasm::disassemble;
 pub use doorbell::Doorbell;
-pub use driver::Clock;
+pub use driver::{Clock, Signal, VirtualSignal};
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
@@ -116,6 +116,8 @@ pub struct RunConfig {
     /// 監視のスレッドを起こす自己パイプ。シグナルのハンドラと同じものを渡す。既定はなしで、監視のスレッドは刻みで
     /// シグナルを見に行く (docs/spec/vm.md の「タスクとスケジュール」)。
     pub doorbell: Option<Arc<Doorbell>>,
+    /// 仮想のシグナルの予定。既定は空で、テストのハーネスだけが使う (docs/spec/vm.md の「時間の待ち」)。
+    pub signals: Vec<VirtualSignal>,
 }
 
 // `Control` は `Default` を持たないので、手で書く
@@ -127,6 +129,7 @@ impl Default for RunConfig {
             sched: Sched::Sequential,
             clock: Clock::Virtual,
             doorbell: None,
+            signals: Vec::new(),
         }
     }
 }
@@ -154,6 +157,11 @@ impl RunConfig {
 
     pub fn with_doorbell(mut self, doorbell: Arc<Doorbell>) -> RunConfig {
         self.doorbell = Some(doorbell);
+        self
+    }
+
+    pub fn with_signals(mut self, signals: Vec<VirtualSignal>) -> RunConfig {
+        self.signals = signals;
         self
     }
 }
@@ -216,6 +224,9 @@ pub struct Machine<M: Mode> {
     /// 実行ごとの `Scheduler` に渡す自己パイプ。1つの自己パイプは1つの `Machine` だけに渡す
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
     doorbell: Option<Arc<Doorbell>>,
+    /// 次の run だけに渡す仮想のシグナルの予定。run が取り出すので、後の run は再生しない
+    /// (docs/spec/vm.md の「時間の待ち」)。
+    signals: Vec<VirtualSignal>,
 }
 
 impl Machine<Fast> {
@@ -258,6 +269,7 @@ impl<M: Mode> Machine<M> {
             clock: Clock::Virtual,
             driver: None,
             doorbell: None,
+            signals: Vec::new(),
         }
     }
 
@@ -279,6 +291,12 @@ impl<M: Mode> Machine<M> {
     /// 監視のスレッドを起こす自己パイプを渡す。ないときは、監視のスレッドが刻みでシグナルを見に行く。
     pub fn with_doorbell(mut self, doorbell: Arc<Doorbell>) -> Machine<M> {
         self.doorbell = Some(doorbell);
+        self
+    }
+
+    /// 次の run で時間の輪に載せる仮想のシグナルの予定を渡す。期限は driver を作ったときからのミリ秒である。
+    pub fn with_signals(mut self, signals: Vec<VirtualSignal>) -> Machine<M> {
+        self.signals = signals;
         self
     }
 
@@ -454,6 +472,7 @@ impl<M: Mode> Machine<M> {
             counters: std::mem::take(&mut self.counters),
             driver,
             doorbell: self.doorbell.clone(),
+            signals: std::mem::take(&mut self.signals),
         };
         let (result, mut scheduled) = match self.sched {
             Sched::Normal => run_scheduled(code, ctx, &mut task, Normal, start, &mut counts),
@@ -668,6 +687,7 @@ struct Start {
     counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
     doorbell: Option<Arc<Doorbell>>,
+    signals: Vec<VirtualSignal>,
 }
 
 /// 方針 `P` のスケジューラを作って `task` から実行する。方針を型の引数にして、方針ごとに VM の繰り返しを作る
@@ -693,6 +713,10 @@ fn run_scheduled<M: Mode, P: Policy>(
     );
     sched.shared_roots = start.shared_roots;
     sched.cells.counters = start.counters;
+    // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
+    sched
+        .cells
+        .schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
     // (docs/spec/vm.md の「時計と driver」)
@@ -745,13 +769,15 @@ impl AnyMachine {
         if config.debug_heap {
             let mut machine = Machine::<Checked>::new(control, host)
                 .with_sched(config.sched)
-                .with_clock(config.clock);
+                .with_clock(config.clock)
+                .with_signals(config.signals.clone());
             machine.doorbell = config.doorbell.clone();
             AnyMachine::Checked(machine)
         } else {
             let mut machine = Machine::<Fast>::new(control, host)
                 .with_sched(config.sched)
-                .with_clock(config.clock);
+                .with_clock(config.clock)
+                .with_signals(config.signals.clone());
             machine.doorbell = config.doorbell.clone();
             AnyMachine::Fast(machine)
         }

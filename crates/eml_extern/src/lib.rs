@@ -1266,6 +1266,18 @@ table! {
                 Purity::Effectful,
             ),
         ),
+        // シグナルの待ち。シグナルの番号は即値で、預かるのは継続だけである (docs/spec/stdlib.md の「`Std.Signal`」)
+        AsyncParkSignal => holding(
+            &[false, true],
+            kinded(
+                "Std.Async.park_signal",
+                &[Int, TObj],
+                &[Unr, Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
         // channel の行 (docs/spec/stdlib.md の「`Std.Chan`」)。channel の引数は即値で、RC を持たない
         ChanNewRaw => row("Std.Chan.new_raw", &[Int], Int, Purity::Effectful),
         ChanToCell => row("Std.Chan.chan_cell", &[Int], Int, Purity::Pure),
@@ -1505,6 +1517,7 @@ impl Extern {
                 | Extern::AsyncParkRecv
                 | Extern::AsyncParkIo
                 | Extern::AsyncParkIoUntil
+                | Extern::AsyncParkSignal
                 | Extern::ChanNewRaw
                 | Extern::ChanReserveSend
                 | Extern::ChanPushRaw

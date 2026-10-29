@@ -6,10 +6,11 @@
 //! run と捨てた run では、`Scheduler` と一緒に触れずに捨てる。
 //!
 //! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、
-//! `wake_waiter` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))`、`Some(Time(_))`、`Some(Io(_))` の
-//! どれかであることは同値である (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項 `key → t` があるのは、
-//! `t` の `wait` が `Some(Time(key))` のときか、`Some(Io(op))` で記録 `op` の `timer` が `Some(key)` のときだけで、
-//! 時間の待ちの登録と記録が覚えた鍵には、いつも項がある。タスクの今のスコープ `current` から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
+//! `wake_waiter` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))`、`Some(Time(_))`、`Some(Io(_))`、
+//! `Some(Signal(_))` のどれかであることは同値である (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項
+//! `key → Due::Task(t)` があるのは、`t` の `wait` が `Some(Time(key))` のときか、`Some(Io(op))` で記録 `op` の
+//! `timer` が `Some(key)` のときだけで、時間の待ちの登録と記録が覚えた鍵には、いつも項がある。タスクがシグナルの
+//! 待ち手の列にあるのは、止まっていて `wait == Some(Signal(その番号))` のときだけで、1回だけ現れる。タスクの今のスコープ `current` から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
 //! `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed` の
 //! スコープは `closing` で、`members` が空である。スコープのセルを放すのは、閉じた後の `release_scope`
 //! (`Take::Run` は根の待ちが `closed` で起きた後に、`leave_scope` は今のスコープを親に戻した後に呼ぶ) と、run の終わりの
@@ -185,7 +186,20 @@ enum Wait {
     Time(TimerKey),
     /// 操作の記録が終わるのを待つ。記録の `waiter` がこのタスクを指す。
     Io(CellRef),
+    /// シグナルを待つ。値はシグナルの番号 (0 が `Interrupt`、1 が `Terminate`) で、タスクはその番号の待ち手の列にいる。
+    Signal(usize),
 }
+
+/// 時間の輪の項の値。語を持たない (docs/spec/vm.md の「時間の待ち」)。
+enum Due {
+    /// 時間か期限付きの操作を待つタスクのセル。
+    Task(CellRef),
+    /// 予定した仮想のシグナルのビット (`Control::INTERRUPT` か `Control::TERMINATE`)。
+    Signal(u32),
+}
+
+/// シグナルの番号ごとの `Control` のビット。番号は `Std.Async.signal_wait` に渡す値である。
+const SIGNAL_BITS: [u32; 2] = [Control::INTERRUPT, Control::TERMINATE];
 
 /// 時間の輪の鍵。期限はミリ秒で、同じ期限は `seq` で登録の順に並ぶ (docs/spec/vm.md の「時間の待ち」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -634,8 +648,8 @@ pub(crate) struct Registry {
     free: Vec<u32>,
     pub(crate) inbox: Arc<Inbox>,
     pub(crate) stats: TaskStats,
-    /// 時間の輪。項は時間を待つタスクのセルの番号だけで、語を持たない (docs/spec/vm.md の「時間の待ち」)。
-    timers: BTreeMap<TimerKey, CellRef>,
+    /// 時間の輪。項は時間を待つタスクのセルの番号か予定したシグナルで、語を持たない (docs/spec/vm.md の「時間の待ち」)。
+    timers: BTreeMap<TimerKey, Due>,
     /// 次に登録するタイマーの `seq`。
     timer_seq: u64,
     /// `Std.Atomic.Counter` の表。添字は `Machine` が run をまたいで持つので、回復でも戻さない。
@@ -644,6 +658,8 @@ pub(crate) struct Registry {
     ops: HashMap<OpKey, CellRef>,
     /// `complete` が driver から完了を受ける列。集めるたびに作らないように使い回す。
     completed: Vec<Completion>,
+    /// シグナルの番号ごとの、待ち始めた順の待ち手。項はいつも生きていて、`wait == Some(Wait::Signal(その番号))` である。
+    signal_waiters: [Vec<CellRef>; 2],
     /// 届けたときに待つタスクのいなかったシグナルのビット。集める地点の後で run を止める
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) unheard: u32,
@@ -669,7 +685,22 @@ impl Registry {
             counters: Vec::new(),
             ops: HashMap::new(),
             completed: Vec::new(),
+            signal_waiters: [Vec::new(), Vec::new()],
             unheard: 0,
+        }
+    }
+
+    /// 予定した仮想のシグナル (期限のミリ秒とビットの組) を、並びの順に時間の輪へ載せる。run の始めに、どのタイマー
+    /// よりも先に呼ぶので、同じ期限ではプログラムのタイマーより先に満ちる。`timers` には数えない
+    /// (docs/spec/vm.md の「時間の待ち」)。
+    pub(crate) fn schedule_signals(&mut self, signals: impl IntoIterator<Item = (u64, u32)>) {
+        for (deadline, bit) in signals {
+            let key = TimerKey {
+                deadline,
+                seq: self.timer_seq,
+            };
+            self.timer_seq += 1;
+            self.timers.insert(key, Due::Signal(bit));
         }
     }
 
@@ -681,7 +712,7 @@ impl Registry {
     /// 期限が `now_ms` までのタイマーを、期限の順、同じ期限なら登録の順に外し、待っていたタスクを再開する仕事を
     /// `out` に積む。輪の項と待ちの登録は、どちらが先に外れても他方を残さない (docs/spec/vm.md の「時間の待ち」)。
     /// 操作の待ちの期限は再開せず、driver に取り消しを頼む。driver が記憶を使い終わるまで buffer を返せないので、
-    /// 再開は完了を当てる `complete` が行う。
+    /// 再開は完了を当てる `complete` が行う。予定したシグナルは、そのときの待ち手に届ける。
     pub(crate) fn expire(
         &mut self,
         now_ms: u64,
@@ -693,7 +724,13 @@ impl Registry {
             if key.deadline > now_ms {
                 break;
             }
-            let cell = entry.remove();
+            let cell = match entry.remove() {
+                Due::Task(cell) => cell,
+                Due::Signal(bit) => {
+                    self.deliver(bit, out)?;
+                    continue;
+                }
+            };
             let task = self.task_mut(cell)?;
             let parked = matches!(task.phase, Phase::Parked);
             if let (true, Some(Wait::Io(op))) = (parked, &task.wait) {
@@ -1143,12 +1180,75 @@ impl Registry {
             seq: self.timer_seq,
         };
         self.timer_seq += 1;
-        self.timers.insert(key, me);
+        self.timers.insert(key, Due::Task(me));
         self.stats.timers += 1;
         let task = self.task_mut(me)?;
         task.k = Some(k);
         task.wait = Some(Wait::Time(key));
         Ok(None)
+    }
+
+    /// タスク `me` が、継続 `k` でシグナル `signal` (0 が `Interrupt`、1 が `Terminate`) を待つ。取り消しの地点で、
+    /// 待つ前に取り消されていれば列に積まずに `Cancelled` で再開する仕事を返す (docs/spec/vm.md の「待ちの2種類」)。
+    pub(crate) fn park_signal(
+        &mut self,
+        signal: i64,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        // 番号は `Std.Async.signal_wait` が確かめて渡すので、ほかの値は検査を通ったプログラムからは届かない
+        let index = usize::try_from(signal)
+            .ok()
+            .filter(|&i| i < SIGNAL_BITS.len())
+            .ok_or(CellFault::Internal("a signal number is out of range"))?;
+        self.suspend(me)?;
+        self.stats.parks += 1;
+        if self.point(me)? {
+            self.stats.cancels += 1;
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: CANCELLED,
+            }));
+        }
+        self.signal_waiters[index].push(me);
+        let task = self.task_mut(me)?;
+        task.k = Some(k);
+        task.wait = Some(Wait::Signal(index));
+        Ok(None)
+    }
+
+    /// シグナルのビット `bits` を届ける。種類ごとに、待つタスクをすべて待ち始めた順に `Woke` で再開する仕事を `out` に
+    /// 積み、列を空にする。待つタスクのいない種類は `unheard` に足す (docs/spec/stdlib.md の「`Std.Signal`」)。
+    fn deliver(&mut self, bits: u32, out: &mut Vec<Runnable>) -> Result<(), CellFault> {
+        for (index, &bit) in SIGNAL_BITS.iter().enumerate() {
+            if bits & bit == 0 {
+                continue;
+            }
+            let waiters = std::mem::take(&mut self.signal_waiters[index]);
+            if waiters.is_empty() {
+                self.unheard |= bit;
+            }
+            for cell in waiters {
+                let task = self.task_mut(cell)?;
+                if !matches!(task.phase, Phase::Parked)
+                    || !matches!(task.wait, Some(Wait::Signal(i)) if i == index)
+                {
+                    return Err(CellFault::Internal("a signal waiter is not waiting"));
+                }
+                task.wait = None;
+                let k = task
+                    .k
+                    .take()
+                    .ok_or(CellFault::Internal("a parked task has no continuation"))?;
+                out.push(Runnable::Resume {
+                    cell,
+                    k,
+                    wake: WOKE,
+                });
+            }
+        }
+        Ok(())
     }
 
     fn suspend(&mut self, me: CellRef) -> Result<(), CellFault> {
@@ -1591,7 +1691,10 @@ impl Registry {
             return Ok(());
         };
         if !matches!(task.phase, Phase::Parked)
-            || !matches!(task.wait, Some(Wait::Cell(_) | Wait::Time(_) | Wait::Io(_)))
+            || !matches!(
+                task.wait,
+                Some(Wait::Cell(_) | Wait::Time(_) | Wait::Io(_) | Wait::Signal(_))
+            )
         {
             return Ok(());
         }
@@ -1630,6 +1733,7 @@ impl Registry {
                     chan.receivers.retain(|&t| t != cell);
                 }
             }
+            Some(Wait::Signal(index)) => self.signal_waiters[index].retain(|&t| t != cell),
             Some(Wait::Ready | Wait::Io(_)) | None => {}
         }
         let task = self.task_mut(cell)?;
@@ -1674,10 +1778,10 @@ impl Registry {
                             ));
                         }
                     }
-                    // シグナルを待つタスクはまだいないので、届けたシグナルはどれも聞く者がいない。届けたので保留から
-                    // 下ろし、次の同じシグナルをハンドラが1回目として扱うようにする (docs/spec/vm.md の「上限と割り込み」)
+                    // 届けたので保留から下ろし、次の同じシグナルをハンドラが1回目として扱うようにする
+                    // (docs/spec/vm.md の「上限と割り込み」)
                     Notice::Signal(bits) => {
-                        self.unheard |= bits;
+                        self.deliver(bits, out)?;
                         ctx.heap().control().settle(bits);
                     }
                 }
@@ -1726,6 +1830,9 @@ impl Registry {
         drop(self.inbox.take());
         // 眠るタスクを残して終わる run がある (`exit` や誤り) ので、空であることは確かめない
         self.timers.clear();
+        for waiters in &mut self.signal_waiters {
+            waiters.clear();
+        }
         Ok(())
     }
 
@@ -2055,7 +2162,7 @@ impl Registry {
                     seq: self.timer_seq,
                 };
                 self.timer_seq += 1;
-                self.timers.insert(key, me);
+                self.timers.insert(key, Due::Task(me));
                 self.op_mut(op)?.timer = Some(key);
             }
             _ => {}

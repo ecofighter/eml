@@ -2047,6 +2047,16 @@ fn async_op<R: Exec>(
             }
             task.set(dst, Word::UNIT);
         }
+        Extern::AsyncParkSignal => {
+            let me = current_cell(task)?;
+            if let Some(run) = sched
+                .cells
+                .park_signal(task.raw(arg(0)), me, task.get(arg(1)))?
+            {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
         Extern::NetSubmitWrite => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             let token =
@@ -3090,6 +3100,7 @@ fn run_extern<R: Exec>(
             | Extern::AsyncParkRecv
             | Extern::AsyncParkIo
             | Extern::AsyncParkIoUntil
+            | Extern::AsyncParkSignal
             | Extern::ChanNewRaw
             | Extern::ChanReserveSend
             | Extern::ChanPushRaw

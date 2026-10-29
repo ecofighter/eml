@@ -4,7 +4,7 @@ use std::io;
 use std::time::Duration;
 
 use eml_io::{RealDriver, TestDriver};
-use eml_rt::IoDriver;
+use eml_rt::{Control, IoDriver};
 
 /// タイマーが使う時計の選び方。`RunConfig::with_clock` と `Machine::with_clock` で選ぶ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -25,6 +25,31 @@ impl Clock {
             Clock::Virtual => Box::new(TestDriver::new(seed)),
         })
     }
+}
+
+/// 予定できるシグナルの種類。`Std.Signal.Signal` に対応する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signal {
+    Interrupt,
+    Terminate,
+}
+
+impl Signal {
+    /// 止める語と同じ `Control` のビット。
+    pub(crate) fn bit(self) -> u32 {
+        match self {
+            Signal::Interrupt => Control::INTERRUPT,
+            Signal::Terminate => Control::TERMINATE,
+        }
+    }
+}
+
+/// 仮想のシグナルの予定の1項。`at_ms` は driver を作ったときからのミリ秒で、driver の時計で数える。テストの
+/// ハーネスが `RunConfig::with_signals` と `Machine::with_signals` で渡す (docs/spec/vm.md の「時間の待ち」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VirtualSignal {
+    pub at_ms: u64,
+    pub signal: Signal,
 }
 
 /// 満期の判定で読む今の時刻。切り捨てるので、期限より早くは満ちない (docs/spec/vm.md の「時計と driver」)。
