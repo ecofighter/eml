@@ -97,7 +97,7 @@ probe_all hosts =
 
 `try_all` は `probe` の中にあるので、1つの接続の失敗は `Err` として返り、スコープの失敗にならない。`timeout` は `try_all` の外にあるので、期限を過ぎた接続は `None`、失敗した接続は `Err` になる。
 
-- worker が複数のときも、`exit n` はどのタスクで呼んでもプログラムを終える。底が `Control` の終わりの欄に終了コードを書いた後 (最初の書き手が勝つ)、終わりのビットを立てる。各 worker は次の安全点で自分の入口へ戻り、自分のスレッドの上で I/O の driver を空にしてから終わる。driver を空にするとは、操作を取り消し、実行中のプールの仕事も含めて完了がすべて届くまで時間の上限なしに待つことである。host のスレッドはすべての worker を待ち、その後、ヒープを落とし (ファイナライザが書き出して閉じる)、Host を書き出し、`n & 255` で終わる ([マルチコア対応の設計](multicore.md) の「止める手順」)。1つの worker の手順は [VM](../spec/vm.md) の「`Async` のタスク」の「終わり」にある
+- worker が複数のときも、`exit n` はどのタスクで呼んでもプログラムを終える。底が `Control` の終わりの欄に終了コードを書いた後 (最初の書き手が勝つ)、終わりのビットを立てる。各 worker は次の安全点で自分の入口へ戻り、自分のスレッドの上で I/O の driver を空にしてから終わる。driver を空にするとは操作を取り消し、実行中のプールの仕事も含めて完了がすべて届くまで時間の上限なしに待つことである。host のスレッドはすべての worker を待ち、その後、ヒープを落とし (ファイナライザが書き出して閉じる)、Host を書き出し、`n & 255` で終わる ([マルチコア対応の設計](multicore.md) の「止める手順」)。1つの worker の手順は [VM](../spec/vm.md) の「`Async` のタスク」の「終わり」にある
 - 実行時エラー (ヒープの誤り、上限、`Signal.wait Interrupt` で待つタスクのない割り込み) は今と同じく run 全体を止め、1回だけ報告する ([標準ライブラリ](../spec/stdlib.md) の「実行時エラー」)
 
 ### タスクごとの上限
@@ -237,8 +237,8 @@ read_chunk buf s =
 ### `IoDriver` と `eml_io`
 
 - `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。今は `verus!` の外の安全なつなぎのコードで、`external_body` も信頼の一覧の行も持たない ([VM](../spec/vm.md) の「時計と driver」)。`eml_rt` の extern が driver を要るまでは実行系が持ち、`Ctx` には入れない。`eml_rt` の extern が I/O を持ち、`Ctx` が driver を持つときに、`external_body` と信頼の一覧の行を足す
-- 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
-- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM は起こしを使わず、1回の待ちを `IDLE_TICK` で切って代える ([VM](../spec/vm.md) の「時計と driver」)
+- 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び方 (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
+- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM は起こしを使わず、代わりに1回の待ちを `IDLE_TICK` で切る ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver は `compio-driver` と `compio-buf` の上に作る。unix は polling (epoll と kqueue)、Windows は IOCP を使い、io_uring は使わない。単独で使えること、スレッドごとに driver を持てること、別のスレッドから起こせる待ちを持つこと、プールの仕事の完了が待ちを起こすことは確かめた。版と、上げるときに確かめることは [アーキテクチャ](../implementation/architecture.md) の「外部 crate」にある
 - compio の上位の crate (`compio-net`、`compio-fs`、`compio-process`) は使わない。どれも compio の実行系 (`compio-runtime`) を要し、実行系が持つ別の `Proactor` に操作を出すので、eml の driver の完了の列にも `quiesce` にも乗らない。eml は `compio-driver` の操作を自分の driver から直接出す
 - Windows では、ソケットを IOCP のポートに結び付けてから (`Proactor::attach`) `Recv` と `Send` を出す。今の driver は Windows でハンドルを作らないので結び付けもしない。Windows のソケットを扱うときに足す
@@ -262,7 +262,7 @@ read_chunk buf s =
 
 - 今のプールの仕事は `Std.IoTest.checksum` の1つで、本物の driver では `compio-driver` の `Asyncify` で動く。プールのスレッドは driver ごとに32本までである ([VM](../spec/vm.md) の「時計と driver」)
 - プールは各 worker の I/O の driver の一部で、仕事は driver に出す操作 (`Op::Job`) である。仕事の記録は run の登録表の操作の記録で、I/O の操作と同じ待ちの仕組みで待つ
-- プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない。std の内部の仕事は、入力を写して所有して受け取り、結果を値で返す。カーネルに貸す記憶 (`RawBuf`) は driver を持つスレッドから出さないので、仕事には渡さない
+- プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない。std の内部の仕事は入力を写して所有して受け取り、結果を値で返す。カーネルに貸す記憶 (`RawBuf`) は driver を持つスレッドから出さないので、仕事には渡さない
 - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
 - プールは入力の中身を読み、移した `Mut*Array` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
 - 完了は持ち主の worker の driver の完了の列を通して届く。これがプールの書き込みと持ち主の読みの順を決める

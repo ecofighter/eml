@@ -293,7 +293,7 @@ enum OpKind {
 }
 
 enum OpPhase {
-    /// 読みの1つ目の操作。driver が端の読めるようになるのを待っている。buffer はまだ貸していない。
+    /// 読みの1つ目の操作。端が読めるようになるのを driver が待っている。buffer はまだ貸していない。
     Probe,
     /// driver が記憶を読み書きしている。
     Transfer,
@@ -395,7 +395,7 @@ impl Drop for OpToken {
     }
 }
 
-/// `Std.IoTest.Stream` の `Foreign` の中身。driver のハンドルを指す。`peer` は、`pair` の2つ目の端をまだ分けていない
+/// `Std.IoTest.Stream` の `Foreign` の中身。driver のハンドルを指す。`peer` は `pair` の2つ目の端をまだ分けていない
 /// 間だけある。
 pub(crate) struct IoStream {
     handle: IoHandle,
@@ -2828,7 +2828,7 @@ fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }
 
-/// 操作の待ちの期限は、満ちても再開せずに driver に取り消しを頼み、記録に期限の印を付ける。取り消した操作の完了が
+/// 操作の待ちの期限は満ちても再開せずに driver に取り消しを頼み、記録に期限の印を付ける。取り消した操作の完了が
 /// `Woke` で再開し、誤りの結果は期限切れとして読める (docs/spec/vm.md の「時間の待ち」)。
 #[test]
 fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {

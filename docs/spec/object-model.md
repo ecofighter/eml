@@ -451,7 +451,7 @@ left が一意 (is_unique)
 | `alloc_bytes_immortal(b: &[u8]) -> Word` | 安全な関数。rc 0 の不死の物体として作る。`freeze` はこの物体を受ける |
 | `bytes(w) -> Result<*const [u8], HeapError>` | `unsafe fn`。中身の位置を返す。`string` と同じく生のポインタにする。指す先は、w の物体が生きていて、その物体を書き換えていない間だけ読める |
 | `bytes_extend(left, b: &[u8]) -> Result<Word, HeapError>` | `unsafe fn`。`string_push` のバイト列の版で、動作も約束も同じである。`b` は left 自身の中身を指さない |
-| `bytes_lend(w) -> Result<RawBuf, HeapError>` | `unsafe fn`。一意なバイト列 w の、長さの後ろの空きの位置と大きさ (容量から長さを引いたもの) を返す。何も書かず、ヒープの状態を変えない。I/O の driver とカーネルが、この空きに直接読み込む。返した空きに書いてよいのは、`bytes_commit` を呼ぶまで、w を生かし、一意に保ち、ヒープの操作で書き換えない間だけである。検査モードは `bytes_commit` と同じ確かめを同じ順に行い、外が書く前に誤りを返す。誤りは、語を受ける操作の共通の誤り (`UseAfterFree`、`WrongOwner`)、種類が `Bytes` でないときの `WrongKind`、`decref` の確かめの `LinShared` と `ImmortalOverRelease`、rc が 1 でないときの `NotUnique` である |
+| `bytes_lend(w) -> Result<RawBuf, HeapError>` | `unsafe fn`。一意なバイト列 w の、長さの後ろの空きの位置と大きさ (容量から長さを引いたもの) を返す。何も書かず、ヒープの状態を変えない。I/O の driver とカーネルがこの空きに直接読み込む。返した空きに書いてよいのは、`bytes_commit` を呼ぶまで、w を生かし、一意に保ち、ヒープの操作で書き換えない間だけである。検査モードは `bytes_commit` と同じ確かめを同じ順に行い、外が書く前に誤りを返す。誤りは語を受ける操作の共通の誤り (`UseAfterFree`、`WrongOwner`)、種類が `Bytes` でないときの `WrongKind`、`decref` が確かめる `LinShared` と `ImmortalOverRelease`、rc が 1 でないときの `NotUnique` である |
 | `bytes_commit(w, n) -> Result<(), HeapError>` | `unsafe fn`。`bytes_lend` の空きの先頭から外が書いた `n` バイトを確定する。長さの語だけを書き、容量は保つ。`Bytes` には UTF-8 の不変条件がないので、約束は、ghost のバイト列が前の列に長さ `n` の何かの列を足したものになることだけである。`n` は空きの大きさ以下である。検査モードの誤りは `bytes_lend` と同じで、どの誤りもヒープを変える前に返す |
 
 - バイト列は文字列と同じ道で作り、中身を写すのも文字列と同じ T10 の `write_bytes` である
@@ -770,7 +770,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 5. 根の表を新しい語に書き換え、ヒープを入れ替え、`evv` を `()` に、yield の状態をなしに戻し、古いヒープを落とす。新しいヒープには作りかけの物体も token もない
 
 - 各物体は、読む前に写せる状態かを確かめる。速いモードでは、前提 (根の語は生きている物体を指す) から写せる状態が出る。検査モードは前置きの状態を読み、解放した物体と token の箱を `Unrecoverable` にする。凍結した領域の物体は読まず、語をそのまま使う
-- VM は、回復の前に driver の `quiesce` を呼び、保留の操作をなくしておく。カーネルやプールのスレッドが書いている記憶を、回復が写したり古いヒープと一緒に放したりしないためである。`quiesce` の後も保留の操作が残れば、回復せずに `Machine` を毒された状態にする ([VM](vm.md) の「時計と driver」)
+- VM は回復の前に driver の `quiesce` を呼び、保留の操作をなくしておく。カーネルやプールのスレッドが書いている記憶を、回復が写したり古いヒープと一緒に放したりしないためである。`quiesce` の後も保留の操作が残れば、回復せずに `Machine` を毒された状態にする ([VM](vm.md) の「時計と driver」)
 - 前提は `root_get` と同じ形である。根の語は即値か、このヒープか付けた塊の生きている物体を指し、それぞれ参照を1つ持つ。Verus は、古いヒープを安全に読むことと、成功したときに新しいヒープの不変条件が成り立ち、各ブロックの外からの参照の数が根の表の中の出現の数に等しいこと (速いモード)、`evv` が空で yield していないことを証明する
 - `Unrecoverable` のときは、根の表と `evv` と yield の状態を変えずに返す。古いヒープは作りかけの物体を書き終えた形になるだけで、物体は変わらない。作りかけの新しいヒープは落とし、そのページは `Control` に戻る。作りかけの新しいヒープには `Foreign` の物体がないので、破棄処理は呼ばれない。VM は、元の誤りと回復の誤りを持つ `RuntimeError::Unrecovered` を返し、セッションを使えなくする ([VM](vm.md) の「追記」)
 

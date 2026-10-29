@@ -99,7 +99,7 @@ fn a_wake_from_another_thread_leaves_a_wait_working() {
     assert_eq!(driver.pending(), 0);
 }
 
-/// 走っている仕事を持つ driver を落とすと、落とすことが仕事の終わりを待つ。
+/// 走っている仕事を持つ driver は、落とすときに仕事の終わりを待つ。
 #[test]
 fn dropping_a_driver_waits_for_a_running_job() {
     use std::sync::Arc;
@@ -248,7 +248,7 @@ fn a_closed_peer_reads_eof() {
     assert_eq!(complete(&mut driver, &mut stash, read).result.unwrap(), 0);
 }
 
-/// 相手が読まない端に書くと、2回目の書きは送りの buffer が空くまで終わらない。`quiesce` は、終わらない読みと書きを
+/// 相手が読まない端に書くと、2回目の書きは送りの buffer が空くまで終わらない。`quiesce` は終わらない読みと書きを
 /// 取り消し、走っている仕事を待ちきる。
 #[cfg(unix)]
 #[test]

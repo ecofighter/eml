@@ -354,12 +354,12 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
 - driver は作ったスレッドの上でだけ使う。`eml_io` は driver の型に `unsafe impl Send` を書かない
 - `RealDriver` の作り
-  - 出した操作は、操作の種類ごとの compio の鍵 (`Key`) として表に持つ。unix の `Readable` は `PollOnce` で読めるようになるのを待ち、Windows の `Readable` は長さ0の `Recv` である (ソケットを IOCP のポートに結び付ける `attach` はまだなく、Windows の `pair` はハンドルを作らない)。`Read` は `Recv`、`Write` は `Send`、仕事は `Asyncify` で、プールのスレッドは32本までである。`buffer_pool` は使わない
+  - 出した操作は操作の種類ごとの compio の鍵 (`Key`) として表に持つ。unix の `Readable` は `PollOnce` で読めるようになるのを待ち、Windows の `Readable` は長さ0の `Recv` である (ソケットを IOCP のポートに結び付ける `attach` はまだなく、Windows の `pair` はハンドルを作らない)。`Read` は `Recv`、`Write` は `Send`、仕事は `Asyncify` で、プールのスレッドは32本までである。`buffer_pool` は使わない
   - `RawBuf` は別の crate の型なので、`real.rs` の包み `Mem` が compio の `IoBuf`、`IoBufMut`、`SetLen` を実装する。`cap == 0` は空の slice である。`eml_io` の本物の driver の `unsafe` は、この包みが `RawBuf` から slice を作る所だけである
   - polling の backend は `push` の中でまず読み書きを試すので、`push` が `Ready` を返すことがある。その結果も次の `completions` で返す完了として持つ。そのため、`pair` の端はブロックしない unix のソケットである
   - `completions` は、保留の操作があれば待たずに `poll` してから、すべての鍵を `pop` し、`push` の中で終わったものと合わせて、受け付けの順 (`OpKey` の順) に返す。取り消しは鍵を残したまま `register_cancel` と `cancel_token` で行い、取り消された操作の完了も `pop` で受ける
-  - `wait` は、期限までの長さと `IDLE_TICK` の短い方だけ `poll` する。`poll` の `Ok`、時間切れ、割り込みは戻っただけと読む (polling の backend は、起こされたときも時間切れを返す)。ほかの誤りで driver は壊れた状態になり、以後の `wait` は `Err` を返し、`completions` は何も返さない。壊れる前に `push` の中で終わっていた結果も返さない。保留の操作の buffer は貸したまま残る
-  - `quiesce` は、仕事のほかの保留の操作をすべて取り消し、仕事も含めてすべての完了が届くまで `poll` して捨てる。仕事は時間の上限なしに待つ。polling の backend は、取り消しで関心を外す呼び出しが失敗すると完了を出さずに操作を落とすので、取り消した I/O の操作が5秒たっても終わらなければ、driver を壊れた状態にして戻る。壊れた driver では待てないので、保留を残して戻る
+  - `wait` は期限までの長さと `IDLE_TICK` の短い方だけ `poll` する。`poll` の `Ok`、時間切れ、割り込みは戻っただけと読む (polling の backend は、起こされたときも時間切れを返す)。ほかの誤りで driver は壊れた状態になり、以後の `wait` は `Err` を返し、`completions` は何も返さない。壊れる前に `push` の中で終わっていた結果も返さない。保留の操作の buffer は貸したまま残る
+  - `quiesce` は仕事のほかの保留の操作をすべて取り消し、仕事も含めてすべての完了が届くまで `poll` して捨てる。仕事は時間の上限なしに待つ。polling の backend は、取り消しで関心を外す呼び出しが失敗すると完了を出さずに操作を落とすので、取り消した I/O の操作が5秒たっても終わらなければ、driver を壊れた状態にして戻る。壊れた driver では待てないので、保留を残して戻る
   - compio は仕事の鍵の写しをプールのスレッドへ送り、仕事が終わるとプールのスレッドがその写しを落とす。鍵の数え方は atomic でないので、持ち主のスレッドが同時に自分の写しを落としてはならない。そのため driver を落とすときは、壊れていなければ `quiesce` で仕事を待ちきる。壊れていれば、残った鍵を落とさずに漏らす
 - 起こしが長い待ちを終わらせることは、`real.rs` の単体テストが `Proactor` を直に待って確かめる。`wait` は1回の待ちを `IDLE_TICK` で切るので、`wait` を通しては確かめられない
 - 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、仕事が走る driver を落とすと仕事を待つこと、unix の `pair` の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、Windows の `pair` が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと) を確かめる

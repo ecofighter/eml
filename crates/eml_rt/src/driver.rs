@@ -13,7 +13,7 @@ pub type OpKey = u64;
 pub type IoHandle = u64;
 
 /// カーネルが読み書きする記憶。driver を持つスレッドの外へは出さないので `Send` ではない。`cap == 0` は
-/// 記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側は、その操作の完了を
+/// 記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側はその操作の完了を
 /// `completions` から取り出すまで、物体を生かし、一意に保ち、動かさない。
 #[derive(Clone, Copy)]
 pub struct RawBuf {
@@ -60,7 +60,7 @@ pub trait IoDriver {
     /// `now() >= deadline_ms` か、完了が届くか、waker が鳴るまで待つ。早く戻ってよい。
     /// `Ok(false)` は外からの入力なしには何も進まないこと、`Err` は driver が壊れたことを表す。
     fn wait(&mut self, deadline_ms: Option<u64>) -> io::Result<bool>;
-    /// 失敗しない。出せなかった操作は、次の `completions` で誤りとして終わる。本物の driver では、プールの
+    /// 失敗しない。出せなかった操作は次の `completions` で誤りとして終わる。本物の driver では、プールの
     /// スレッドがすべて仕事中なら、仕事の `submit` はスレッドが空くまで、安全点を通らずに呼んだスレッドの上で待つ。
     fn submit(&mut self, op: Op) -> OpKey;
     /// できるだけ取り消す。`key` の完了はふつうはそれでも届く。届かないことがあれば、driver は `quiesce` で壊れた
@@ -74,7 +74,7 @@ pub trait IoDriver {
     fn bin(&self) -> Arc<HandleBin>;
     /// つながった2つの端。
     fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)>;
-    /// driver の参照を落とす。保留の操作は、終わるまで OS の資源を生かす。前提はない。
+    /// driver の参照を落とす。保留の操作は終わるまで OS の資源を生かす。前提はない。
     fn close(&mut self, handle: IoHandle);
     /// 保留の操作をすべて取り消し、完了がすべて届くまで待って捨て、`bin` のハンドルを閉じる。仕事は待ちきる。
     /// driver が壊れているか、取り消した操作の完了がいつまでも届かず壊れた状態になったときは、保留を残して戻る

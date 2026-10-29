@@ -163,7 +163,7 @@ impl RealDriver {
     }
 
     /// `timeout` まで `poll` する。`Ok` と、時間切れと、割り込みは戻っただけと読み、ほかの誤りで壊れた状態になる。
-    /// polling の backend は、起こされたときも時間切れを返す。
+    /// polling の backend は起こされたときも時間切れを返す。
     fn poll(&mut self, timeout: Duration) {
         if self.broken.is_some() {
             return;
@@ -336,7 +336,7 @@ impl IoDriver for RealDriver {
     #[cfg(unix)]
     fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
         let (a, b) = std::os::unix::net::UnixStream::pair()?;
-        // polling の backend は、`push` の中でまず読み書きを試すので、ブロックしない fd を求める
+        // polling の backend は `push` の中でまず読み書きを試すので、ブロックしない fd を求める
         a.set_nonblocking(true)?;
         b.set_nonblocking(true)?;
         let (ha, hb) = (self.next_handle, self.next_handle + 1);
@@ -410,7 +410,7 @@ impl Drop for RealDriver {
 mod tests {
     use super::*;
 
-    /// waker は、上限なしの長い `poll` を別のスレッドから起こす。`wait` は1回の待ちを `IDLE_TICK` で切るので、
+    /// waker は上限なしの長い `poll` を別のスレッドから起こす。`wait` は1回の待ちを `IDLE_TICK` で切るので、
     /// 起こしは `Proactor` を直に待って確かめる。
     #[test]
     fn a_wake_from_another_thread_ends_a_long_poll() {
@@ -421,7 +421,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
             waker.wake();
         });
-        // polling の backend は、起こされた待ちでも時間切れを返す
+        // polling の backend は起こされた待ちでも時間切れを返す
         match driver.proactor.poll(Some(Duration::from_millis(900))) {
             Ok(()) => {}
             Err(e) => assert_eq!(e.kind(), io::ErrorKind::TimedOut),

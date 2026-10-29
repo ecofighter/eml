@@ -103,7 +103,7 @@ main () = Async.run (fn () -> println (show (IoTest.checksum 1000 (Bytes.of_stri
     assert_eq!((s.completions, s.parks, s.timers, s.cancels), (1, 1, 0, 0));
 }
 
-/// 書き手のない端の期限付きの読みは、期限が端の読めるようになるのを待つ操作に当たり、その取り消しの完了1つで終わる。
+/// 書き手のない端の期限付きの読みは、期限が、端が読めるようになるのを待つ操作に当たり、その取り消しの完了1つで終わる。
 /// buffer を貸す操作は出さない。期限は時間の輪に1つ載り、再開は取り消しでなく `None` である
 /// (docs/spec/vm.md の「`RunStats`」)。
 #[test]

@@ -1,5 +1,5 @@
 -- 実行系のテストのための、driver の操作の口 (docs/spec/stdlib.md の「`Std.IoTest`」)。利用者の API ではなく、断りなく
--- 変わる。待つ関数は、受け付けから取り出しまでを1つの呼び出しの中で行い、token の `OpId` を外へ出さない
+-- 変わる。待つ関数は受け付けから取り出しまでを1つの呼び出しの中で行い、token の `OpId` を外へ出さない
 import Async (Async)
 
 -- driver の `pair` の片方の端を中身に持つ。Kind は `Lin` で、落とすと端を閉じる

@@ -61,7 +61,7 @@ eml_rt         語の単位の操作 (share、移し戻し、範囲のプリミ�
 
 - 依存の順は `eml_rt` ← `eml_sched` ← `eml_vm` である。`eml_sched` は worker のループが呼ぶ `Exec` の trait を持ち、`eml_vm` がそれを実装する。`eml_io` は `eml_rt` に依存して `IoDriver` を実装する ([非同期の設計](async.md) の「I/O の driver」)。`eml_native` は `eml_rt`、`eml_lir`、`eml_sched`、Cranelift に依存する。`eml_cli` はすべてに依存する
 - `eml_sched` はまだない。worker が1つの今は、ほかの crate と共有するものがないので、スケジューラは `eml_vm` の `sched.rs` に置いている ([VM](../spec/vm.md) の「タスクとスケジュール」)
-- `Session::run` が実行系を組み立てるので、`Session` は今と同じく唯一のパイプラインの駆動役である。`Host`、`Sched`、`IoDriver` の trait は `eml_rt` に置く。`Host` と `Sched` は `Ctx` を通して届く。`IoDriver` は、`eml_rt` の extern が要るまでは実行系が持ち、`Ctx` には入れない。`Session::run` は driver そのものでなく、`Copy + Send` の時計の選び (`Clock`) と seed を渡し、各 worker が自分のスレッドの上で driver を作る。driver はそのスレッドから動かない ([VM](../spec/vm.md) の「時計と driver」)
+- `Session::run` が実行系を組み立てるので、`Session` は今と同じく唯一のパイプラインの駆動役である。`Host`、`Sched`、`IoDriver` の trait は `eml_rt` に置く。`Host` と `Sched` は `Ctx` を通して届く。`IoDriver` は、`eml_rt` の extern が要るまでは実行系が持ち、`Ctx` には入れない。`Session::run` は driver そのものでなく、`Copy + Send` の時計の選び方 (`Clock`) と seed を渡し、各 worker が自分のスレッドの上で driver を作る。driver はそのスレッドから動かない ([VM](../spec/vm.md) の「時計と driver」)
 - `eml_rt` は vstd だけに依存したまま Verus で証明する。スケジューラ (`eml_sched`) は Verus の外に置き、Miri と TSan で確かめる (下の「テスト」)
 - スケジューラをエフェクトのライブラリとして書く形は採らない。救済、監視、スレッドをまたぐ起こし、根の登録は、語の外の Rust の構造を要るためである。ライブラリとして書いた協調的なスケジューラ `tests/ui/run/kinds/scheduler.em` は、継続を扱う言語のテストとして残す
 
@@ -462,8 +462,8 @@ run の終わり方は `main` の正常な終わり、`exit`、致命的な誤�
    - `exit n` は今と同じく自分のタスクのスタックを底まで巻き戻し、底が欄に書く ([非同期の設計](async.md) の「失敗と `exit`」)
    - `par` の子の外での worker k の致命的な誤り (`eml_fatal`、または VM の `step` の `Err`) は、欄に誤りを書いてビットを立ててから、自分の入口へ切る。`par` の子の中の実行時エラーは子の境目まで切って join の節点に記録し、親が左の子を終えてから欄に書く (上の「`par` の意味」)
    - 待つ者のないシグナルでは、監視のスレッドが割り込みか `TERMINATE` の致命的な誤りを書く (下の「シグナル:」の項)
-2. 監視のスレッドがビットを各 worker の止める語に写し、待っている worker と host のスレッドを起こす。host のスレッドはここで SIGINT の塞ぎを解く。そのため、worker を join する間 (worker が I/O の driver を空にし、プールの仕事を待つ間を含む) の2回目の Ctrl-C も `_exit(130)` に届く。受け箱での待ち、join の節点での待ち、I/O の driver での待ち (worker を起こす口で)、差し替えた GUI の待ち (プラグインの起こす口で) のどれも起きる。今の VM は driver の待ちを起こさず、1回の待ちを `IDLE_TICK` で切って代える。起こしの道は `worker-threads` で入れる ([VM](../spec/vm.md) の「時計と driver」)
-3. 各 worker は次の安全点でビットを見て、自分の入口へ戻る。VM の worker は今と同じく `step` から `Err(Stop)` を返し、ネイティブの worker は入口へ longjmp する。フレームの後始末はしない。入口へ戻った worker は、自分のスレッドの上で I/O の driver を空にしてから終わる。driver はそのスレッドから動かないためである。空にする手順は、保留の操作を取り消し、プールの仕事も含めて完了がすべて届くまで待って捨てる。プールの仕事は取り消せないので、終わるまで待つ
+2. 監視のスレッドがビットを各 worker の止める語に写し、待っている worker と host のスレッドを起こす。host のスレッドはここで SIGINT の塞ぎを解く。そのため、worker を join する間 (worker が I/O の driver を空にし、プールの仕事を待つ間を含む) の2回目の Ctrl-C も `_exit(130)` に届く。受け箱での待ち、join の節点での待ち、I/O の driver での待ち (worker を起こす口で)、差し替えた GUI の待ち (プラグインの起こす口で) のどれも起きる。今の VM は driver の待ちを起こさず、代わりに1回の待ちを `IDLE_TICK` で切る。起こしの道は `worker-threads` で入れる ([VM](../spec/vm.md) の「時計と driver」)
+3. 各 worker は次の安全点でビットを見て、自分の入口へ戻る。VM の worker は今と同じく `step` から `Err(Stop)` を返し、ネイティブの worker は入口へ longjmp する。フレームの後始末はしない。入口へ戻った worker は、自分のスレッドの上で I/O の driver を空にしてから終わる。driver はそのスレッドから動かないためである。空にする手順は保留の操作を取り消し、プールの仕事も含めて完了がすべて届くまで待って捨てる。プールの仕事は取り消せないので、終わるまで待つ
 4. host のスレッドが次の順で後を片付ける
    1. すべての worker を join する
    2. ヒープを落とす。ファイナライザがファイルとソケットを書き出して閉じる
