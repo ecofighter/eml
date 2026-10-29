@@ -321,7 +321,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `unwind/`: 中断と巻き戻し。`exit` と `abort` がハンドラやファイルを抜けるときの後始末
   - `var/`: `var` の変数。配列の添字、スコープ、中断との組み合わせ
   - `par/`: `Std.Par.par` の fork と join。子と handler の組み合わせ。逐次のほかに2つの seed でも流す (下の「seed で流す」)
-  - `async/`: `Std.Async` のタスク。始めること、待つこと、スコープの終わり、失敗の起こし直し、`Lin` の結果、取り消し、名前付きのスコープ、`shield`、`shield` の境目、`timeout`、`sleep_ms`、`race`、`drain_within`、全員が待って止まるデッドロック、`Std.IoTest` の driver の操作 (`io_*.em`)。逐次のほかに2つの seed でも流す (下の「seed で流す」)。driver の操作の UI テストは、いつもテストの driver (`Clock::Virtual`) の上で流す。本物の driver の振る舞いは OS で変わるので、Rust のテストで確かめる
+  - `async/`: `Std.Async` のタスク。始めること、待つこと、スコープの終わり、失敗の起こし直し、`Lin` の結果、取り消し、名前付きのスコープ、`shield`、`shield` の境目、`timeout`、`sleep_ms`、`race`、`drain_within`、全員が待って止まるデッドロック、`Std.IoTest` の driver の操作 (`io_*.em`)。逐次のほかに2つの seed でも流す (下の「seed で流す」)。driver の操作の UI テストは、いつもテストの driver (`Clock::Virtual`) の上で流す。本物の driver の振る舞いは OS で変わるので、Rust のテストで確かめる。`_within` の期限は、正の値か、データのない端の 0 以下の値で書く。データのある端の 0 以下の期限は、待ち始める前に読みが終わったかで結果と `completions` が seed によって変わる ([標準ライブラリ](../spec/stdlib.md) の「`Std.IoTest`」)
   - `scripts/`: 5本のスクリプト (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`)。どれもディレクトリのテストで、入力は `main.args`、`main.stdin` と隣のファイルで与える。1回の起動で主な経路を通す。`deploy` のほかは、同じ処理を Python で書いた版 (`bench/scripts/<名前>.py`) と標準出力と終了コードが一致することを `bench/scripts/compare.sh --fixture <名前>` で確かめてから、スナップショットを受け入れる。UI テストで固定しない経路 (ほかのフラグ、空の入力、誤りの経路) も、`bench/scripts/compare.sh <名前> 引数…` で Python の版と比べて確かめる ([計測の基準](benchmarks.md) の「スクリプトの計測」)
   - `runtime/`: 実装の性質を確かめるテスト。メモリの解放、スタックの深さ、合流のブロック (`join_points.em`)、末尾呼び出し、部分を共有する型 (`shared_types_*.em`。木として書き下すと列の長さの指数の大きさになる型を、長さ40の列で作る)
 - 部分を共有する型の扱いが指数の時間に戻ると、`runtime/shared_types_*.em` は、終わらないかメモリを使い尽くす形で現れ、テストの失敗としては報告されない。`ui::run` は `run/` のファイルをすべて1つのテストで流すので、1つのファイルが終わらないとテスト全体が止まる。そのファイルの名前は、ハーネスが 10 秒を超えたところで標準エラーに出す (上の UI テストの項目)。nextest は 60 秒でテストを止めて失敗にし、その標準エラーを見せる (「性能のテスト」)
@@ -360,8 +360,8 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `rc_increments` と `rc_decrements` は比べる。切り替えは RC に触れず (`Ctx::switch_task`)、fork と join の RC の仕事は親の `evv` と子の値だけで決まる。共有の物体を最後に手放すタスクは順で変わるが、手放す回数は変わらない
   - `evidence_steps`、`yields`、`yield_frames`、`unwound_frames` は比べる。yield の途中では切り替えず、子の中断はどの順でも両方の子が終わった後で同じ親の handler に起こし直すためである
   - `cancels` は 0 にして比べない。どの run も `cancels` が 0 のときに限って、ほかの欄を比べる
-  - `tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects` は比べる。`tasks` と `parks` は `start` と `await` と `yield_now` の呼び出しの数で、順によらない。`timers` は取り消しが届かない run では `await_time` の呼び出しのうち `ms` が正のものの数で、順によらない。`dropped_failures` は、スコープで失敗したタスクの数から最初の1つを引いた数で、どれが最初かによらない。`shared_objects` は、始めるときと fork のときと、タスクの結果で印を付ける物体の数で、始める順で変わらない。channel の `push_raw` が品物に付ける印も数えるが、channel を使う run では比べない
-  - `completions` は比べる。driver から取り出して記録に当てた完了の数で、出した操作の数で決まる。テストの driver の seed が混ぜるのは、1回の決着で終わった操作の順だけである。channel を使う run でも比べる (`channel_independent` も残す)
+  - `tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects` は比べる。`tasks` と `parks` は `start` と `await` と `yield_now` の呼び出しの数で、順によらない。`timers` は取り消しが届かない run では `await_time` と `await_io_until` の呼び出しのうち `ms` が正のものの数で、順によらない。`await_io_until` は、操作がもう終わっていて輪に載せなかった待ちも数える。`dropped_failures` は、スコープで失敗したタスクの数から最初の1つを引いた数で、どれが最初かによらない。`shared_objects` は、始めるときと fork のときと、タスクの結果で印を付ける物体の数で、始める順で変わらない。channel の `push_raw` が品物に付ける印も数えるが、channel を使う run では比べない
+  - `completions` は比べる。driver から取り出して記録に当てた完了の数で、出した操作の数で決まる。テストの driver の seed が混ぜるのは、1回の決着で終わった操作の順だけである。データのある端の 0 以下の期限の読みだけは順で変わるので、`async/` のファイルはそれを書かない (上の `async/` のファイルの規則)。channel を使う run でも比べる (`channel_independent` も残す)
   - `channels_swept` は比べる。run の終わりに放した channel の数で、どの channel が閉じずに残るか、品物が残るかがプログラムで決まるときだけ順によらない。`async/` のファイルはそう書く (上の `async/` のファイルの規則)
 - 欄がスケジュールで変わると分かったら、その欄の定義を直すか、理由を書いてこの一覧と `schedule_independent` に足す。食い違う欄を一律に外すことはしない
 

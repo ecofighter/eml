@@ -1,6 +1,7 @@
 -- `IoTest.read_chunk_within` は、期限までに読めなければ `None` と端を返し、端は続けて使える。期限の前に読めれば、
--- 期限を付けても `Some` を返す。テストの driver は終わる操作がないときだけ時計を進めるので、どの seed でも同じ結果
--- になる (docs/spec/stdlib.md の「`Std.IoTest`」)。
+-- 期限を付けても `Some` を返す。過ぎた期限 (0 以下) は、データのない端では待たずに `None` になる。テストの driver は
+-- 終わる操作がないときだけ時計を進めるので、正の期限とデータのない端の過ぎた期限は、どの seed でも同じ結果になる
+-- (docs/spec/stdlib.md の「`Std.IoTest`」、docs/implementation/testing.md の「UI テスト」)。
 import Async (Async)
 import Async
 import Bytes
@@ -19,6 +20,8 @@ reads : Unit -> <IO, Panic, Async> Unit
 reads () =
   let (a, b) = IoTest.pair ()
   let (r, b) = IoTest.read_chunk_within 50 (Bytes.empty ()) b
+  show_read r
+  let (r, b) = IoTest.read_chunk_within 0 (Bytes.empty ()) b
   show_read r
   let (_, a) = IoTest.write (Bytes.of_string "hello") a
   let (buf, b) = IoTest.read_chunk (Bytes.empty ()) b

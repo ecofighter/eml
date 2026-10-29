@@ -5,6 +5,7 @@ input_file: tests/ui/run/async/io_read_within.em
 ---
 --- stdout ---
 None
+None
 hello
 Some > again
 --- stderr ---

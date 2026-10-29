@@ -430,8 +430,8 @@ pub(crate) struct TaskStats {
     /// `park_io`、`park_io_until`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`、真を返した
     /// `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
-    /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` と、`ms > 0` で、地点で取り消され
-    /// ず、実際に待った `park_io_until` だけを数える。
+    /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` と `park_io_until` を数える。
+    /// `park_io_until` は、操作がもう終わっていて輪に載せなかったときも数える。
     pub(crate) timers: u64,
     /// channel に品物を積んだ回数と取った回数の和。
     pub(crate) channel_ops: u64,
@@ -1721,6 +1721,11 @@ impl Registry {
         if cancelled {
             self.stats.cancels += 1;
         }
+        // 正の期限は、操作がもう終わっていて輪に載せないときも数える。終わったかどうかはスケジュールで変わるので、
+        // 数をプログラムだけで決めるためである (docs/spec/vm.md の「`RunStats`」)
+        if matches!(until, Some((_, ms)) if ms > 0) && !cancelled {
+            self.stats.timers += 1;
+        }
         let record = self.op_mut(op)?;
         // `Cancelled` で再開する記録には、いつも取り消しの印を付ける。取り出しの行は印で中断を見分け、結果の誤りを
         // 投げずに包みへ返すので、包みが結果によらず `Cancelled` を投げる (docs/spec/stdlib.md の「`Std.IoTest`」)
@@ -1752,7 +1757,6 @@ impl Registry {
                 };
                 self.timer_seq += 1;
                 self.timers.insert(key, me);
-                self.stats.timers += 1;
                 self.op_mut(op)?.timer = Some(key);
             }
             _ => {}
@@ -2924,6 +2928,39 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
     };
     assert!(registry.op_timed_out(&ctx, op).unwrap());
     let taken = registry.take_op(&mut ctx, op, 0).unwrap();
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 正の期限は、操作がもう終わっていて輪に載せないときも `timers` に数える。終わったかどうかはスケジュールで変わるので、
+/// 数はプログラムだけで決まる (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    let key = driver.next_key;
+    driver.done.push(Completion { key, result: Ok(1) });
+    let mut out = Vec::new();
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut out)
+        .unwrap();
+    assert!(out.is_empty());
+    let run = registry
+        .park_io_until(&ctx, &mut driver, 0, 50, token, me, Word::UNIT)
+        .unwrap();
+    assert!(matches!(
+        run,
+        Some(Runnable::ResumeIo { cell, wake: WOKE, .. }) if cell == me
+    ));
+    assert_eq!((registry.next_deadline(), registry.stats.timers), (None, 1));
+    assert!(driver.cancelled.is_empty());
+    assert!(!registry.op_timed_out(&ctx, token).unwrap());
+    let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+    assert!(matches!(taken.result, Ok(1)) && !taken.timed_out);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }

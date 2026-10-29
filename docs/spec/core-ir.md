@@ -187,6 +187,13 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Stdout` と `Std.Stderr` の `write`、`write_bytes`、`write_line` | `Unr`、`Lin` | `Lin` (同じハンドル) |
   | `Std.Stdout.flush` | `Lin` | `Lin` |
   | `Std.Stdout.close`、`Std.Stderr.close` | `Lin` | `Unr` |
+  | `Std.Proc.spawn_raw` | `Unr` (7つ) | `Lin` (`Child`) |
+  | `Std.Proc.write`、`write_bytes`、`write_line` | `Unr`、`Lin` | `Lin` (同じハンドル) |
+  | `Std.Proc.close_stdin` | `Lin` | `Lin` |
+  | `Std.Proc.read_all`、`read_line_raw` | `Lin` | `Unr` (`String`) |
+  | `Std.Proc.read_all_bytes`、`read_line_bytes_raw` | `Lin` | `Unr` (`Bytes`) |
+  | `Std.Proc.read_chunk` | `Unr`、`Lin` | `Unr` (`Bytes`) |
+  | `Std.Proc.wait` | `Lin` | `Unr` |
   | `Std.Array.thaw` | `Unr` | `Lin` (`MutArray a`) |
   | `Std.MutArray.make` | `Unr`、`Unr` | `Lin` |
   | `Std.MutArray.empty` | `Unr` | `Lin` |
@@ -203,8 +210,17 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Async.take_result`、`run_result` | `Lin` | `poly` |
   | `Std.Async.detach`、`cancel_raw` | `Lin` | `Unr` |
   | `Std.Async.start_in_raw` | `Unr`、`poly` | `Lin` (`Task a`) |
+  | `Std.Async.park_io` | `Lin`、`Lin` | `Unr` |
+  | `Std.Async.park_io_until` | `Lin`、`Unr`、`Lin` | `Unr` |
   | `Std.Chan.push_raw` | `poly`、`Unr` | `Unr` |
   | `Std.Chan.pop_raw` | `Unr` | `poly` |
+  | `Std.IoTest.open_pair` | `Unr` | `Lin` (`Stream`) |
+  | `Std.IoTest.peer` | `Lin` | `Lin` (`Stream`) |
+  | `Std.IoTest.submit_write`、`submit_read` | `Unr`、`Lin` | `Lin` (`OpId`) |
+  | `Std.IoTest.op_stream` | `Lin` | `Lin` (`Stream`) |
+  | `Std.IoTest.take_write` | `Lin` | `Unr` (`Int`) |
+  | `Std.IoTest.take_read` | `Lin` | `Unr` (`Bytes`) |
+  | `Std.IoTest.op_timed_out` | `Lin` | `Unr` (`Bool`) |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
   `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.Async.task_cell`、`Std.IoTest.peer`、`op_stream`、`op_timed_out`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
