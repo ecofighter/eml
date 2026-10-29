@@ -1141,7 +1141,8 @@ main () = Async.run (fn () ->
     let rest: Vec<String> = lines.iter().collect();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130), "{rest:?}");
-    // 安全点で止めたので、文言の後には止めたときの関数の名前が続く (docs/spec/vm.md の「誤り、止めること、終わり」)
+    // 眠る main の空きのループが止めるので、誤りには切り替えに入った命令の位置が付き、文言の後にその関数の名前が続く
+    // (docs/spec/vm.md の「時計と driver」)
     assert!(
         rest.first()
             .is_some_and(|line| line.starts_with("runtime error: interrupted in `")),
@@ -1188,7 +1189,7 @@ main () = Async.run (fn () ->
         .unwrap();
     // 書き手を開いたままにして、読みを待たせる
     let writer = child.stdin.take();
-    let _lines = read_after_ready(&mut child);
+    let lines = read_after_ready(&mut child);
     let status = loop {
         send(&child);
         std::thread::sleep(Duration::from_millis(100));
@@ -1200,8 +1201,11 @@ main () = Async.run (fn () ->
         }
     };
     drop(writer);
+    let rest: Vec<String> = lines.iter().collect();
     std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(status.code(), Some(code));
+    assert_eq!(status.code(), Some(code), "{rest:?}");
+    // ハンドラの `_exit` は何も書かない。止める語で止まったのなら、実行時エラーの文言が出る
+    assert!(rest.is_empty(), "{rest:?}");
 }
 
 #[cfg(unix)]

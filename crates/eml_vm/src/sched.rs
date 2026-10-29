@@ -261,8 +261,8 @@ pub struct Scheduler<P: Policy> {
     pub(crate) stacks: Vec<Vec<eml_rt::Word>>,
     /// 時計と待ち。`Machine` が持つものを run の間だけ預かる (docs/spec/vm.md の「時計と driver」)。
     pub(crate) driver: Box<dyn IoDriver>,
-    /// `Machine` の時計が本物か。`with_driver` で差し込んだ driver でも、時計の欄で決める。本物の driver の run だけが
-    /// OS のシグナルを待つタスクへ届ける (docs/spec/stdlib.md の「`Std.Signal`」)。
+    /// driver を `Machine` が `Clock::Real` から作ったか。そうした run だけが OS のシグナルを待つタスクへ届ける
+    /// (docs/spec/stdlib.md の「`Std.Signal`」)。
     pub(crate) real_driver: bool,
     /// 監視のスレッドと、それに渡すもの。
     pub(crate) watcher: Watcher,

@@ -180,7 +180,15 @@ main () = Async.run (fn () ->
   Signal.wait Signal.Terminate
   println \"got\")
 ";
-    let run = run_real(src, Sched::Sequential, Vec::new(), terminate_when_watched);
+    fn poke(control: &Control, doorbell: &Doorbell) -> bool {
+        if !until(|| control.watched() & Control::TERMINATE != 0) {
+            return false;
+        }
+        // 見張りの語は `park_signal` の中で立つので、worker が空きのループで眠るまで少し待ってから送る
+        thread::sleep(Duration::from_millis(20));
+        terminate_when_watched(control, doorbell)
+    }
+    let run = run_real(src, Sched::Sequential, Vec::new(), poke);
     assert!(run.poked, "no task waited");
     assert!(run.result.is_ok(), "{:?}", run.result);
     assert_eq!(run.stdout, "got\n");
@@ -267,4 +275,43 @@ main () = Async.run (fn () ->
     assert!(run.poked, "the signal was not collected");
     let error = run.result.unwrap_err();
     assert!(error.terminated(), "{error:?}");
+}
+
+/// `with_driver` で渡した driver の run は、時計の欄が `Clock::Real` でも OS のシグナルを届けない。テストの driver は
+/// 眠らないので、シグナルだけを待つ run はデッドロックで止まり、回り続けない (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn an_injected_driver_does_not_listen_for_os_signals() {
+    let program = eml_test_support::lir(
+        "\
+import Async
+import Signal
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> Signal.wait Signal.Terminate)
+",
+    );
+    let control = Arc::new(Control::new(Limits::default()));
+    let (host, _) = eml_vm::capture_host(Default::default());
+    let mut machine = Machine::<Checked>::new(Arc::clone(&control), host)
+        .with_clock(Clock::Real)
+        .with_driver(Box::new(eml_io::TestDriver::new(None)));
+    let loaded = machine.load(&program).unwrap();
+    // 番犬は失敗の条件にだけ使う。回り続ければ割り込みで止まり、下の検査が落ちる
+    let (done, finished) = mpsc::channel::<()>();
+    let watchdog = thread::spawn(move || {
+        let start = Instant::now();
+        while finished.recv_timeout(Duration::from_millis(1))
+            == Err(mpsc::RecvTimeoutError::Timeout)
+        {
+            if start.elapsed() >= WATCHDOG {
+                control.interrupt();
+                return;
+            }
+        }
+    });
+    let result = machine.run(loaded.entry);
+    drop(done);
+    watchdog.join().unwrap();
+    let error = result.unwrap_err();
+    assert!(matches!(error, eml_vm::RuntimeError::Deadlock), "{error:?}");
 }

@@ -196,6 +196,10 @@ pub struct Machine<M: Mode> {
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
     /// driver が貸した記憶はヒープにあるので、`Drop` は `ctx` より先にこの欄を落とす (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
+    /// 持っている driver を `Machine` が `Clock::Real` から作ったか。`with_driver` で渡した driver は、時計の欄によらず
+    /// 偽にする。テストの driver は眠らないので、その run に OS のシグナルを待たせると空きのループが回り続けるためである
+    /// (docs/spec/vm.md の「時計と driver」)。
+    real_driver: bool,
     code: CodeBase<M>,
     /// poisoned の `Machine` では、driver が貸したままの記憶を放さないように、`Drop` が落とさずに漏らす。
     ctx: ManuallyDrop<Ctx<M>>,
@@ -268,6 +272,7 @@ impl<M: Mode> Machine<M> {
             counters: Vec::new(),
             clock: Clock::Virtual,
             driver: None,
+            real_driver: false,
             doorbell: None,
             signals: Vec::new(),
         }
@@ -304,6 +309,7 @@ impl<M: Mode> Machine<M> {
     /// スレッドの上で作る (docs/spec/vm.md の「時計と driver」)。
     pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
+        self.real_driver = false;
         self
     }
 
@@ -454,15 +460,18 @@ impl<M: Mode> Machine<M> {
         // driver は run を行うスレッドで作る。作れなければヒープに触れずに終わる (docs/spec/vm.md の「時計と driver」)
         let driver = match self.driver.take() {
             Some(driver) => driver,
-            None => self.clock.driver(self.sched.seed()).map_err(|e| {
-                code.error(
-                    vm::Failure {
-                        fault: VmFault::Driver(e.to_string()),
-                        pc: task.pc,
-                    },
-                    &task,
-                )
-            })?,
+            None => {
+                self.real_driver = matches!(self.clock, Clock::Real);
+                self.clock.driver(self.sched.seed()).map_err(|e| {
+                    code.error(
+                        vm::Failure {
+                            fault: VmFault::Driver(e.to_string()),
+                            pc: task.pc,
+                        },
+                        &task,
+                    )
+                })?
+            }
         };
         let mut counts = RunCounts::default();
         let start = Start {
@@ -471,7 +480,7 @@ impl<M: Mode> Machine<M> {
             generations: std::mem::take(&mut self.generations),
             counters: std::mem::take(&mut self.counters),
             driver,
-            real_driver: matches!(self.clock, Clock::Real),
+            real_driver: self.real_driver,
             doorbell: self.doorbell.clone(),
             signals: std::mem::take(&mut self.signals),
         };
@@ -687,7 +696,7 @@ struct Start {
     generations: Vec<u32>,
     counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
-    /// `Machine` の時計が本物か。`with_driver` で差し込んだ driver でも、時計の欄で決める。
+    /// driver を `Machine` が `Clock::Real` から作ったか。
     real_driver: bool,
     doorbell: Option<Arc<Doorbell>>,
     signals: Vec<VirtualSignal>,
