@@ -524,7 +524,7 @@ Claude Code のクラウドのセッションでは、外への通信が proxy �
 
 `nix/prefetch-inputs.sh` は、`flake.lock` の `github:` の input を、同じ rev のまま `git+https` で `nix flake prefetch` して store に置く。input の store の道は中身の narHash で決まる。そのため、置いた後の `nix develop` は archive を取りに行かず、この文書のコマンドがそのまま動く。取った中身の hash が `flake.lock` の `narHash` と違えば、スクリプトは誤りで止まる。
 
-クラウドの環境の setup script には次を書く。`README.md` と `CLAUDE.md` の写しはこれに合わせる。setup script は、Claude Code が起動する前に root で動く。5分ほどで終われば、setup script が書いたファイルは環境のキャッシュに残り、後のセッションに引き継がれる。setup script は Nix を入れ、main を clone して `nix/prefetch-inputs.sh` を走らせ、devShell を1回組む。コンテナには systemd がないので、Nix は daemon を使わず root だけが使う形で入れる。クラウドのセッションはリポジトリの `.claude/settings.json` の `enabledPlugins` を読まない。そのため、yomiyasu と ecoskills のプラグインもここで user の scope に入れる。yomiyasu は `CLAUDE.md` が求めるプラグインである。
+クラウドの環境の setup script には次を書く。`README.md` と `CLAUDE.md` の写しはこれに合わせる。setup script は、Claude Code が起動する前に root で動く。5分ほどで終われば、setup script が書いたファイルは環境のキャッシュに残り、後のセッションに引き継がれる。setup script は Nix を入れ、main を clone して `nix/prefetch-inputs.sh` を走らせ、devShell を1回組む。コンテナには systemd がないので、Nix は daemon を使わず root だけが使う形で入れる。クラウドのセッションはリポジトリの `.claude/settings.json` の `enabledPlugins` を読まない。そのため、natural-japanese と ecoskills のプラグインもここで user の scope に入れる。natural-japanese は `CLAUDE.md` が求めるプラグインである。
 
 ```sh
 #!/bin/bash
@@ -545,9 +545,9 @@ nix develop "path:$eml" -c true
 rm -rf "$eml"
 
 # クラウドのセッションはリポジトリの enabledPlugins を読まないので、プラグインを user の scope に入れる
-claude plugin marketplace add nanaism/yomiyasu
+claude plugin marketplace add coji/natural-japanese
 claude plugin marketplace add ecofighter/ecoskills
-claude plugin install yomiyasu@yomiyasu --scope user
+claude plugin install natural-japanese@natural-japanese --scope user
 claude plugin install ecoskills@ecoskills --scope user
 ```
 
