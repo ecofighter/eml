@@ -1253,6 +1253,18 @@ table! {
                 Purity::Effectful,
             ),
         ),
+        // 期限の付いた操作の待ち。期限は待ちの属性で、預かるのは `park_io` と同じく継続だけである
+        AsyncParkIoUntil => holding(
+            &[false, false, true],
+            kinded(
+                "Std.Async.park_io_until",
+                &[Obj, Int, TObj],
+                &[Lin, Unr, Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
         // channel の行 (docs/spec/stdlib.md の「`Std.Chan`」)。channel の引数は即値で、RC を持たない
         ChanNewRaw => row("Std.Chan.new_raw", &[Int], Int, Purity::Effectful),
         ChanToCell => row("Std.Chan.chan_cell", &[Int], Int, Purity::Pure),
@@ -1345,6 +1357,20 @@ table! {
             Unr,
             Purity::Effectful,
         ),
+        IoTestOpTimedOut => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.IoTest.op_timed_out",
+                    &[Obj],
+                    &[Lin],
+                    Enum,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
     }
 }
 
@@ -1384,6 +1410,7 @@ impl Extern {
                 | Extern::AsyncParkSend
                 | Extern::AsyncParkRecv
                 | Extern::AsyncParkIo
+                | Extern::AsyncParkIoUntil
                 | Extern::ChanNewRaw
                 | Extern::ChanReserveSend
                 | Extern::ChanPushRaw
@@ -1401,6 +1428,7 @@ impl Extern {
                 | Extern::IoTestTakeWrite
                 | Extern::IoTestSubmitRead
                 | Extern::IoTestTakeRead
+                | Extern::IoTestOpTimedOut
         )
     }
 }

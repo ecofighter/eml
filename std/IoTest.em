@@ -41,12 +41,31 @@ read_chunk b s =
         drop s
         raise_cancelled ()
 
+-- `read_chunk` に `ms` ミリ秒の期限を付ける。期限までに読めなければ `None` と端を返し、端は続けて使える。期限と
+-- 競って届いたデータは `Some` で返す。取り消しの地点である (docs/spec/stdlib.md の「`Std.IoTest`」)
+pub read_chunk_within : Int -> Bytes -> Stream -> <IO, Async> (Option Bytes, Stream)
+read_chunk_within ms b s =
+  if Async.cancel_requested () then
+    drop s
+    raise_cancelled ()
+  else
+    let (w, op) = Async.io_wait_until (submit_read b s) ms
+    let (s, op) = op_stream op
+    let (late, op) = op_timed_out op
+    let r = take_read op
+    match w with
+      | Async.Woke -> if late then (None, s) else (Some r, s)
+      | Async.Cancelled ->
+        drop s
+        raise_cancelled ()
+
 -- `Std.Async` の取り消しの地点と同じ失敗 (docs/spec/stdlib.md の「取り消し」)
 raise_cancelled : Unit -> <IO> a
 raise_cancelled () = fail_io Prelude.Cancelled "task was cancelled"
 
 -- ランタイムの口。受け付けの行は buffer とストリームを操作の記録に移して token を返し、`op_stream` は終わった記録から
--- ストリームを取り出し、取り出しの行は token を消費して記録を放す (docs/spec/vm.md の「`Async` のタスク」)
+-- ストリームを取り出し、`op_timed_out` は終わった記録が期限で誤りになったかを読み、取り出しの行は token を消費して
+-- 記録を放す (docs/spec/vm.md の「`Async` のタスク」)
 extern open_pair    : Unit -> <IO> Stream
 extern peer         : Stream -> <IO> (Stream, Stream)
 extern submit_write : Bytes -> Stream -> <IO> Async.OpId
@@ -54,3 +73,4 @@ extern op_stream    : Async.OpId -> <IO> (Stream, Async.OpId)
 extern take_write   : Async.OpId -> <IO> Int
 extern submit_read  : Bytes -> Stream -> <IO> Async.OpId
 extern take_read    : Async.OpId -> <IO> Bytes
+extern op_timed_out : Async.OpId -> <IO> (Bool, Async.OpId)

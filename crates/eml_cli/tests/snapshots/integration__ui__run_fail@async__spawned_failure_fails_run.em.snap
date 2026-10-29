@@ -8,4 +8,4 @@ before
 --- stderr ---
 --- runtime error ---
 cannot open `missing.txt`: not found
-  at <std>/Async.em:69:9
+  at <std>/Async.em:72:9

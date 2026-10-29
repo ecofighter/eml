@@ -84,6 +84,33 @@ main () = Async.run (fn () ->
     assert_eq!((s.completions, s.parks), (2, 1));
 }
 
+/// 書き手のない端の期限付きの読みは、期限が端の読めるようになるのを待つ操作に当たり、その取り消しの完了1つで終わる。
+/// buffer を貸す操作は出さない。期限は時間の輪に1つ載り、再開は取り消しでなく `None` である
+/// (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn a_timed_out_read_counts_one_completion_and_one_timer() {
+    let src = "\
+import Async
+import Bytes
+import IoTest
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let (a, b) = IoTest.pair ()
+  let (r, b) = IoTest.read_chunk_within 50 (Bytes.of_string \"keep\") b
+  drop a
+  drop b
+  match r with
+    | Some _ -> println \"Some\"
+    | None -> println \"None\")
+";
+    let (out, result) = run(src);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "None\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((s.completions, s.timers, s.parks, s.cancels), (1, 1, 1, 0));
+}
+
 /// 書きと読みを取り消されるまで終わらせない driver。端が読めるようになるのを待つ操作はすぐ終わる。取り消した書きは、
 /// 次の `completions` で誤りとして終わる。取り消した読みは、取り消しが間に合わなかったものとして、貸された記憶に
 /// `xy` を書いて2バイトで終わる。

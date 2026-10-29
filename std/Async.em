@@ -23,6 +23,8 @@ pub abstract effect Async where
   await_recv : Cell -> Wake
   -- driver の操作が終わるまで待つ。token は記録が預かり、再開のときに返る (docs/spec/stdlib.md の「`Std.Async`」)
   await_io : OpId -> (Wake, OpId)
+  -- `await_io` に期限を付ける。期限が来ると driver に取り消しを頼み、操作が終わってから `Woke` で戻る
+  await_io_until : OpId -> Int -> (Wake, OpId)
 
 -- 登録表の添字 `(generation << 32) | index` を持つ即値である。Kind は `Unr`
 pub extern data Cell
@@ -52,6 +54,7 @@ start_task f =
     | ctl await_send c k -> park_send c k
     | ctl await_recv c k -> park_recv c k
     | ctl await_io op k -> park_io op k
+    | ctl await_io_until op ms k -> park_io_until op ms k
     | return () -> ()
 
 resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit
@@ -281,6 +284,9 @@ chan_wait_recv c = await_recv c
 pub io_wait : OpId -> <IO, Async> (Wake, OpId)
 io_wait op = await_io op
 
+pub io_wait_until : OpId -> Int -> <IO, Async> (Wake, OpId)
+io_wait_until op ms = await_io_until op ms
+
 -- ランタイムが名前で呼ぶ入口。extern は組を作らないので、継続に渡す組はここで作る
 -- (docs/spec/core-ir.md の「translate の配置」)
 resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit
@@ -289,8 +295,8 @@ resume_io k w op = k (w, op)
 -- ランタイムの口。生の行を `pub` にせず、結果の型の `a` は `start`、`start_in`、`run`、`await` のシグネチャだけが結ぶ。
 -- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`run_raw`、`ready`、`finish_ok`、
 -- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`park_drain`、`park_send`、
--- `park_recv`、`park_io`、`start_in_raw` の2つ目の引数、`task_cell` の引数 (`task_cell` だけは借りて預かる) で
--- ある。預かる引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
+-- `park_recv`、`park_io`、`start_in_raw` の2つ目の引数、`park_io_until` の3つ目の引数、`task_cell` の引数
+-- (`task_cell` だけは借りて預かる) である。預かる引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
 extern start_raw        : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern run_raw          : (Unit -> <IO, Async> Unit) -> <IO> Task a
 extern start_in_raw     : Scope -> (Unit -> <IO, Async> Unit) -> <IO, Panic> Task a
@@ -321,3 +327,4 @@ extern cancel_members   : Scope -> <IO> Unit
 extern park_send        : Cell -> (once Wake -> <IO> Unit) -> <IO> Unit
 extern park_recv        : Cell -> (once Wake -> <IO> Unit) -> <IO> Unit
 extern park_io          : OpId -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit
+extern park_io_until    : OpId -> Int -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit

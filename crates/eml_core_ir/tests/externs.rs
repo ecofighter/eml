@@ -272,7 +272,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 }
 
 /// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`、
-/// `Std.IoTest` の `peer` と `op_stream` と、`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
+/// `Std.IoTest` の `peer` と `op_stream` と `op_timed_out` と、`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
@@ -284,7 +284,9 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Std.MutArray.length" => (&[true], Some(0)),
             "Std.MutArray.read" => (&[true, false], Some(0)),
             "Std.Async.task_cell" => (&[true], Some(0)),
-            "Std.IoTest.peer" | "Std.IoTest.op_stream" => (&[true], Some(0)),
+            "Std.IoTest.peer" | "Std.IoTest.op_stream" | "Std.IoTest.op_timed_out" => {
+                (&[true], Some(0))
+            }
             "Std.FileIn.read_all"
             | "Std.FileIn.read_line_raw"
             | "Std.FileIn.read_all_bytes"
@@ -466,7 +468,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par`、`Std.Async` の16行、`Std.Chan` の2行、`Std.IoTest` の7行以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の17行、`Std.Chan` の2行、`Std.IoTest` の8行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -535,10 +537,12 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Chan.pop_raw" => (&[Unr], Poly),
             "Std.Async.park_send" | "Std.Async.park_recv" => (&[Unr, Lin], Unr),
             "Std.Async.park_io" => (&[Lin, Lin], Unr),
+            "Std.Async.park_io_until" => (&[Lin, Unr, Lin], Unr),
             "Std.IoTest.open_pair" => (&[Unr], Lin),
             "Std.IoTest.peer" | "Std.IoTest.op_stream" => (&[Lin], Lin),
             "Std.IoTest.submit_write" | "Std.IoTest.submit_read" => (&[Unr, Lin], Lin),
             "Std.IoTest.take_write" | "Std.IoTest.take_read" => (&[Lin], Unr),
+            "Std.IoTest.op_timed_out" => (&[Lin], Unr),
             _ => {
                 assert!(
                     row.param_marks.iter().all(|&mark| mark == Unr),
@@ -553,7 +557,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     }
 }
 
-/// 表の値そのもの。引数を預かる行は `Std.Async` の16行と `Std.Chan.push_raw` だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
+/// 表の値そのもの。引数を預かる行は `Std.Async` の17行と `Std.Chan.push_raw` だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
 /// その印は `Unr` でない (docs/spec/declarations.md の「`extern`」)。
 #[test]
 fn only_the_listed_rows_hold_an_argument() {
@@ -582,6 +586,7 @@ fn only_the_listed_rows_hold_an_argument() {
             "Std.Async.park_send",
             "Std.Async.park_recv",
             "Std.Async.park_io",
+            "Std.Async.park_io_until",
             "Std.Chan.push_raw",
         ]
     );

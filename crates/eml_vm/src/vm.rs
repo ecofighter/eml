@@ -1334,7 +1334,8 @@ fn collect<R: Exec>(
         .cells
         .complete(ctx, &mut *sched.driver, depth_offset, &mut out)?;
     if sched.cells.next_deadline().is_some() {
-        sched.cells.expire(floor_ms(sched.driver.now()), &mut out)?;
+        let now = floor_ms(sched.driver.now());
+        sched.cells.expire(now, &mut *sched.driver, &mut out)?;
     }
     if out.is_empty() {
         return Ok(());
@@ -1959,6 +1960,24 @@ fn async_op<R: Exec>(
             }
             task.set(dst, Word::UNIT);
         }
+        Extern::AsyncParkIoUntil => {
+            let me = current_cell(task)?;
+            let (token, ms, k) = (task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)));
+            // 0 以下は過ぎた期限なので時計を読まない (docs/spec/vm.md の「時間の待ち」)
+            let now = if ms > 0 {
+                ceil_ms(sched.driver.now())
+            } else {
+                0
+            };
+            if let Some(run) =
+                sched
+                    .cells
+                    .park_io_until(ctx, &mut *sched.driver, now, ms, token, me, k)?
+            {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
         // ストリームの組を作る2つの行は、今のタスクのセルを使わないので、タスクの外でも動く
         // (docs/spec/stdlib.md の「`Std.IoTest`」)
         Extern::IoTestOpenPair => match sched.driver.pair() {
@@ -2010,7 +2029,7 @@ fn async_op<R: Exec>(
             }
             match taken.result {
                 Ok(n) => task.set_raw(dst, n as i64),
-                Err(_) if taken.cancelling => task.set_raw(dst, 0),
+                Err(_) if taken.cancelling || taken.timed_out => task.set_raw(dst, 0),
                 Err(e) => {
                     let raise = Raise::Io {
                         kind: io_kind(&e),
@@ -2025,10 +2044,10 @@ fn async_op<R: Exec>(
             let buf = taken
                 .buf
                 .ok_or(VmFault::Internal("a read op has no buffer"))?;
-            // 取り消した読みは、確定したバイトを持つ buffer を返し、包みが落として取り消しを投げる
-            // (docs/spec/stdlib.md の「`Std.IoTest`」)
+            // 取り消した読みは、確定したバイトを持つ buffer を返し、包みが落として取り消しを投げる。期限で終わった
+            // 読みも buffer を返し、包みが `None` にする (docs/spec/stdlib.md の「`Std.IoTest`」)
             match taken.result {
-                Err(e) if !taken.cancelling => {
+                Err(e) if !taken.cancelling && !taken.timed_out => {
                     unsafe { ctx.heap_mut().decref(buf) }?;
                     let raise = Raise::Io {
                         kind: io_kind(&e),
@@ -2038,6 +2057,11 @@ fn async_op<R: Exec>(
                 }
                 _ => task.set(dst, buf),
             }
+        }
+        Extern::IoTestOpTimedOut => {
+            // token は借りるだけで、組を作る後の `con` が消費する
+            let late = sched.cells.op_timed_out(ctx, task.get(arg(0)))?;
+            task.set_raw(dst, i64::from(late));
         }
         _ => {
             return Err(VmFault::Internal(
@@ -2934,6 +2958,7 @@ fn run_extern<R: Exec>(
             | Extern::AsyncParkSend
             | Extern::AsyncParkRecv
             | Extern::AsyncParkIo
+            | Extern::AsyncParkIoUntil
             | Extern::ChanNewRaw
             | Extern::ChanReserveSend
             | Extern::ChanPushRaw
@@ -2950,7 +2975,8 @@ fn run_extern<R: Exec>(
             | Extern::IoTestOpStream
             | Extern::IoTestTakeWrite
             | Extern::IoTestSubmitRead
-            | Extern::IoTestTakeRead => {
+            | Extern::IoTestTakeRead
+            | Extern::IoTestOpTimedOut => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

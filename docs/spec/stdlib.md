@@ -31,7 +31,7 @@ eml run --clock virtual sleeper.em
 
 extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
-extern の行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md) の「`extern`」)。預かる行は `Std.Async` の `start_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io` の16行と、`Std.Chan` の `push_raw` の1行で、`task_cell` だけは借りて預かる。預からない引数の型変数は、同じ節の規則のとおり `Unr` に固定するか、コールバックの結果なら固定しない。
+extern の行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md) の「`extern`」)。預かる行は `Std.Async` の `start_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until` の17行と、`Std.Chan` の `push_raw` の1行で、`task_cell` だけは借りて預かる。預からない引数の型変数は、同じ節の規則のとおり `Unr` に固定するか、コールバックの結果なら固定しない。
 
 文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
@@ -950,7 +950,7 @@ main () = println (show (Async.run body))
 - `yield_now ()` は、呼んだタスクを実行待ちの列の後ろへ回す。取り消しの地点である
 - `sleep_ms ms` は、呼んだタスクを `ms` ミリ秒眠らせる取り消しの地点である (下の「時間」)
 - タスクは閉じた row `<IO, Panic, Async>` で始まる。始めた側の handler と `var` はタスクから見えない。`var` を捕まえた閉包を `start` や `spawn` に渡すと型の誤り (E2002) になる
-- `Async` は抽象エフェクトで、操作 `await_cell`、`reschedule`、`await_time`、`await_drain`、`await_send`、`await_recv`、`await_io` は `Std.Async` の外から perform も handle もできない (E1058。[エフェクトと handler](effects.md) の「抽象エフェクト」)。利用者は `await`、`yield_now` などの包む関数を呼ぶ。channel の待ちは `chan_wait_send` と `chan_wait_recv` が包む (下の「`Std.Chan`」)
+- `Async` は抽象エフェクトで、操作 `await_cell`、`reschedule`、`await_time`、`await_drain`、`await_send`、`await_recv`、`await_io`、`await_io_until` は `Std.Async` の外から perform も handle もできない (E1058。[エフェクトと handler](effects.md) の「抽象エフェクト」)。利用者は `await`、`yield_now` などの包む関数を呼ぶ。channel の待ちは `chan_wait_send` と `chan_wait_recv` が包む (下の「`Std.Chan`」)
 
 `Async` のエフェクト、ランタイムが名前で呼ぶ入口、extern の行は、eml とランタイムの間の ABI である。形を変えるときはランタイムも合わせて変える。
 
@@ -967,6 +967,7 @@ pub abstract effect Async where
   await_send : Cell -> Wake
   await_recv : Cell -> Wake
   await_io : OpId -> (Wake, OpId)
+  await_io_until : OpId -> Int -> (Wake, OpId)
 
 pub extern data Cell
 pub extern data Task a
@@ -979,13 +980,13 @@ pub data Failure =
   deriving (Show)
 ```
 
-- `Async` は抽象エフェクト (`pub abstract effect`) で、extern のエフェクトではない。生の操作は `Std.Async` の外では perform できず、handler の節にも書けない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。生の操作は7つで、どれも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る。`await_time ms` は `ms` ミリ秒眠り、`ms` が 0 以下なら `reschedule ()` と同じく列の後ろへ回る。`await_drain s` はスコープ `s` に属するタスクがなくなるまで待ち、`s` を閉じない。`await_send c` は channel `c` に枠が空くか閉じるまで、`await_recv c` は品物が来るか閉じるまで待つ。`await_io op` は token `op` が指す driver の操作が終わるまで待ち、再開のときに `Wake` と token の組を返す (下の `OpId` の箇条)。どの操作でも、タスクの待ちの登録はいつも高々1つである
+- `Async` は抽象エフェクト (`pub abstract effect`) で、extern のエフェクトではない。生の操作は `Std.Async` の外では perform できず、handler の節にも書けない ([エフェクトと handler](effects.md) の「抽象エフェクト」)。生の操作は8つで、どれも `once` である。`await_cell c` は `c` が指すタスクのセルが終わるか、スコープのセルが閉じるまで待つ。`reschedule ()` は実行待ちの列の後ろへ回る。`await_time ms` は `ms` ミリ秒眠り、`ms` が 0 以下なら `reschedule ()` と同じく列の後ろへ回る。`await_drain s` はスコープ `s` に属するタスクがなくなるまで待ち、`s` を閉じない。`await_send c` は channel `c` に枠が空くか閉じるまで、`await_recv c` は品物が来るか閉じるまで待つ。`await_io op` は token `op` が指す driver の操作が終わるまで待ち、再開のときに `Wake` と token の組を返す (下の `OpId` の箇条)。`await_io_until op ms` は `await_io` に今から `ms` ミリ秒の期限を付けた待ちである。期限が来ると driver に操作の取り消しを頼み、取り消した操作が終わってから `Woke` で戻る。期限が来たことは記録に残り、包みが読む (下の「`Std.IoTest`」)。`ms` が 0 以下なら、待ち始めるときに取り消しを頼む。どの操作でも、タスクの待ちの登録はいつも高々1つである
 - `Wake` は、ランタイムが待たせたタスクを再開するときに渡す値である。ランタイムは配置の表を見ずに、宣言の順のタグ (`Woke` = 0、`Cancelled` = 1。`eml_lir::WAKE_WOKE`、`WAKE_CANCELLED`) で作る。タグと宣言の順が合うことはテストで確かめる。ランタイムは取り消したタスクを `Cancelled` で再開する
 - `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Scope` は `Cell` と同じ形の即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
 - `OpId` は driver に出した操作の記録を指す token の `Foreign` で、Kind は `Lin`、Repr は `obj` である。受け付けの行が作り、取り出しの行が消費する。待つ間はランタイムが預かり、再開のときに継続へ返す。受け付けから取り出しまでを1つの包みの関数の中で行うので、利用者のコードは `OpId` を持たず、`Chan` でも送れない。取り出すのは受け付けたタスクだけで、ほかのタスクの取り出しは内部の誤り `an op is taken by another task` になる。取り出す前に落とした token は内部の誤り `an op token was dropped before its take` になる。包みは受け付けから待ちまで投げうる呼び出しを挟まず、取り出しは投げる前に token を受け取るので、std の包みからはどちらも起きない ([VM](vm.md) の「`Async` のタスク」)
-- ランタイムが名前で呼ぶ入口は、std の3つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit`、`resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit`、`resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どれも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に、`await_time` の節は継続を `park_time` に、`await_drain` の節は継続を `park_drain` に、`await_send` の節は継続を `park_send` に、`await_recv` の節は継続を `park_recv` に、`await_io` の節は token と継続を `park_io` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`resume_io k w op` は `k` に組 `(w, op)` を渡す。extern は組を作らない ([Core IR](core-ir.md) の「translate の配置」) ので、組は eml の入口が作る。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。3つの入口が単相の std の関数であることもテストで確かめる
+- ランタイムが名前で呼ぶ入口は、std の3つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit`、`resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit`、`resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どれも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に、`await_time` の節は継続を `park_time` に、`await_drain` の節は継続を `park_drain` に、`await_send` の節は継続を `park_send` に、`await_recv` の節は継続を `park_recv` に、`await_io` の節は token と継続を `park_io` に、`await_io_until` の節は token と期限と継続を `park_io_until` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`resume_io k w op` は `k` に組 `(w, op)` を渡す。extern は組を作らない ([Core IR](core-ir.md) の「translate の配置」) ので、組は eml の入口が作る。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。3つの入口が単相の std の関数であることもテストで確かめる
 - タスクの底 (`bottom`) は、`try_all` で本体の失敗を捕まえ、成功した結果を `finish_ok` に、IO の失敗を種類と文言のまま `finish_io` に、`Panic` を文言のまま `finish_panic` に渡す
-- extern の行は次の30行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の31行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 預かる引数 |
 |---|---|---|
@@ -998,6 +999,7 @@ pub data Failure =
 | `park_send` | `Cell -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
 | `park_recv` | `Cell -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
 | `park_io` | `OpId -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
+| `park_io_until` | `OpId -> Int -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit` | 継続 (3つ目の引数) |
 | `ready` | `(once Wake -> <IO> Unit) -> <IO> Unit` | 継続 |
 | `finish_ok` | `a -> <IO> Unit` | 結果の値 |
 | `finish_io` | `IOErrorKind -> String -> <IO> Unit` | なし |
@@ -1022,11 +1024,11 @@ pub data Failure =
 
 - タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
 - `take_result` と `run_result` が返す値の型が、`finish_ok` に預けた値の型と合うことは、処理系は確かめない。生の行を `pub` にせず、`start`、`start_in`、`run`、`await` のシグネチャだけが本体の結果の型 `a` とハンドルの `Task a` を結ぶことで、標準ライブラリが保つ
-- 預かる引数の矢印 (`start_raw`、`run_raw`、`start_in_raw` の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`ready` の継続) には、閉じた row を書く。ランタイムはそれを呼ばず、入口の `start_task`、`resume_task`、`resume_io` が呼ぶので、row は入口の型が決める
-- `park_io` は token を預からずに消費する。token は `Lin` の `Foreign` で、型変数を持たないためである。待つ間は操作の記録が token を持ち、再開の仕事が `resume_io` に渡す
+- 預かる引数の矢印 (`start_raw`、`run_raw`、`start_in_raw` の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`ready` の継続) には、閉じた row を書く。ランタイムはそれを呼ばず、入口の `start_task`、`resume_task`、`resume_io` が呼ぶので、row は入口の型が決める
+- `park_io` と `park_io_until` は token を預からずに消費する。token は `Lin` の `Foreign` で、型変数を持たないためである。待つ間は操作の記録が token を持ち、再開の仕事が `resume_io` に渡す
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
 - `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のための口で、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
-- `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) は `Std.IoTest` のための口で、同じ理由で `pub` である。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.IoTest`」)
+- `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.IoTest` のための口で、同じ理由で `pub` である。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.IoTest`」)
 
 ### スコープ
 
@@ -1082,6 +1084,7 @@ body () =
 ```
 
 - 時間は今からの長さを `Int` のミリ秒で表す。0 以下は過ぎた期限である。時計は [VM](vm.md) の「時計と driver」にある
+- `_within` の関数 (`IoTest.read_chunk_within`) は、driver の操作の待ちに期限を付ける。期限は待ちの属性で、子のスコープもタスクも作らない。期限までに終わらなければ操作を取り消し、取り消しが終わってから `None` と端を返す。端は閉じず、続けて使える。期限と競って届いたデータは `Some` で返す。`_within` は取り消しの地点で、外からの取り消しは期限より優先して `Cancelled` を投げる (下の「`Std.IoTest`」)
 - `sleep_ms ms` は `ms` ミリ秒待つ取り消しの地点である。0 以下なら `yield_now` と同じく列の後ろへ回る
 - `timeout ms f` は子のスコープ `p` を開き、`ms` が正のときだけ `p` に期限のタスクを1つ始め、呼んだタスクで `scope (fn _ -> f ())` を動かす。期限のタスクは眠り切ると `p` に旗を立て、本体と本体が始めたタスクを取り消す。`ms` が 0 以下ならタスクを始めず、すぐ旗を立てる。`ms` が正のとき、期限のタスクを `RunStats.tasks` に1つ数える
 - `timeout` 自身は取り消しの地点でない。期限は本体の取り消しの地点でだけ届く。本体が `await` で待つ外のタスクは、`await` の規則で取り消される (上の「取り消し」)
@@ -1252,16 +1255,21 @@ body () =
 | `Stream` | `Lin` の `Foreign` の型 | extern |
 | `pair` | `Unit -> <IO> (Stream, Stream)` | eml |
 | `read_chunk` | `Bytes -> Stream -> <IO, Async> (Bytes, Stream)` | eml |
+| `read_chunk_within` | `Int -> Bytes -> Stream -> <IO, Async> (Option Bytes, Stream)` | eml |
 | `write` | `Bytes -> Stream -> <IO, Async> (Int, Stream)` | eml |
 
 - `Stream` は driver の `pair` の片方の端を持つ `Foreign` で、Kind は `Lin`、Repr は `obj` である。落とすと端を閉じる。閉じるのは driver で、次の待ち、完了の取り出し、`quiesce` のどれかのときである。相手の端は、閉じた端が書いた残りを読みきってから EOF を受ける
 - `pair ()` はつながった2つの端を作る。タスクの外でも動く。テストの driver ではいつも作れる。本物の driver は unix で `socketpair` を使い、Windows では種類 `NotAvailable` の IO の失敗 `cannot open a stream pair: …` を起こす
 - `write b s` は `b` を書き、書いたバイトの数と端を返す。本物の driver では数が `b` の長さより短いことがある。取り消しの地点である (上の「取り消し」)。書けなかったときは IO の失敗 `cannot write to the stream: …` を起こす。テストの driver では、相手の端が閉じていれば `cannot write to the stream: broken pipe` (種類 `Other`) である
 - `read_chunk b s` は `s` を1回読み、読んだバイトを `b` の後ろに足して、その `Bytes` と端を返す。読めるものがなければ、相手が書くか端を閉じるまで待つ。EOF では何も足さずに `b` の中身のまま返す (`FileIn.read_chunk` と同じ形)。取り消しの地点である。読めなかったときは IO の失敗 `cannot read the stream: …` を起こす。buffer の空きは、端が読めるようになってから足す ([VM](vm.md) の「操作の記録」)
+- `read_chunk_within ms b s` は、`read_chunk b s` を `ms` ミリ秒の期限で区切る。期限までに読めれば、読んだ後の `Bytes` を `Some` に入れて端と返す。読めなければ `None` と端を返し、`b` は捨てる。端は閉じない。期限が端の読めるようになるのを待つ間に来れば、buffer の空きは足さない。テストの driver では、読めるデータがあればどの期限よりも先に読みが終わり、データがなければ期限はいつも読めるようになるのを待つ間に来る ([VM](vm.md) の「時計と driver」)。取り消しの地点である
 - driver の誤りの種類は、`NotFound` を `NotFound`、`PermissionDenied` を `PermissionDenied`、`Unsupported` を `NotAvailable`、ほかを `Other` にする。extern が出す種類が最初の5種類だけであることは変わらない (上の「`try_io`」)
-- 待つ関数の包みは同じ形である。取り消しの地点が投げるなら、ストリームを落として種類 `Cancelled` の失敗を投げ、何も受け付けない。そうでなければ、受け付けの行で token を作り、`Async.io_wait` で待ち、`op_stream` で端を取り戻し、取り出しの行で token を消費して結果を受け取る。再開の `Wake` が `Woke` なら結果を返し、`Cancelled` なら端を落として種類 `Cancelled` の失敗を投げる
-- 結果は、操作の記録の状態で決める。誤りの種類では分けない。取り消しを頼んだ記録は、結果によらず `Cancelled` になる。そうでない記録の `Err(e)` は IO の失敗である
-- extern の行は次の7行で、どれも `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- 待つ関数の包みは同じ形である。取り消しの地点が投げるなら、ストリームを落として種類 `Cancelled` の失敗を投げ、何も受け付けない。そうでなければ、受け付けの行で token を作り、`Async.io_wait` (`_within` は `Async.io_wait_until`) で待ち、`op_stream` で端を取り戻す。`_within` だけは続けて `op_timed_out` で期限切れかを読む。最後に取り出しの行で token を消費して結果を受け取る。再開の `Wake` が `Woke` なら結果 (`_within` は期限切れなら `None`、そうでなければ `Some`) を返し、`Cancelled` なら端を落として種類 `Cancelled` の失敗を投げる
+- 結果は、操作の記録の状態で決める。誤りの種類では分けない
+  - 取り消しを頼んだ記録は、結果によらず `Cancelled` になる。期限が来た後に取り消されても同じである
+  - 期限が来て、取り消しを頼んでいない記録の `Err(_)` は期限切れで、`None` と端になる。本物の誤りが期限と競って届いたときも同じである。その誤り (EOF、reset、broken pipe) は端に残るので、次の操作が報告する。`Ok(n)` は期限と競って届いたデータで、`Some` になる
+  - どちらでもない記録の `Err(e)` は IO の失敗である
+- extern の行は次の8行で、どれも `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 借りる引数 |
 |---|---|---|
@@ -1272,12 +1280,13 @@ body () =
 | `take_write` | `Async.OpId -> <IO> Int` | なし |
 | `submit_read` | `Bytes -> Stream -> <IO> Async.OpId` | なし |
 | `take_read` | `Async.OpId -> <IO> Bytes` | なし |
+| `op_timed_out` | `Async.OpId -> <IO> (Bool, Async.OpId)` | token |
 
 - `open_pair` は driver の `pair` で2つの端を作り、1つの `Stream` の物体に持たせる。`peer` はその物体から2つ目の端を分ける。`pair () = peer (open_pair ())` で、どちらもタスクの外で動く。2回目の `peer` は内部の誤り `a stream pair is split twice` である
 - `submit_write` と `submit_read` は buffer と端を消費して操作の記録に移し、token を返す。buffer が一意でなければ (共有、不死、ほかの参照)、同じ中身の新しい `Bytes` に写して元を手放す。driver が読む間に書き換わらないためである
-- `peer` と `op_stream` は引数を借り、宣言の型では結果と引数の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。`op_stream` は終わった記録から端を移し出す
-- `take_write` は token を消費して記録を放し、buffer を手放して、書いたバイトの数を返す。取り消しを頼んだ記録の誤りは 0 を返し、包みが `Cancelled` を投げる。そうでない誤りは IO の失敗を起こす
-- `take_read` は token を消費して記録を放し、読んだバイトを足した buffer を返す。取り消しを頼んだ記録は、結果によらず、確定したバイトを持つ buffer を返し、包みが落として `Cancelled` を投げる。そうでない誤りは buffer を手放して IO の失敗を起こす
+- `peer`、`op_stream`、`op_timed_out` は引数を借り、宣言の型では結果と引数の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。`op_stream` は終わった記録から端を移し出す。`op_timed_out` は、終わった記録に期限が来ていて、結果が誤りなら真を返す
+- `take_write` は token を消費して記録を放し、buffer を手放して、書いたバイトの数を返す。取り消しを頼んだ記録と期限が来た記録の誤りは 0 を返し、包みが結果を決める。そうでない誤りは IO の失敗を起こす
+- `take_read` は token を消費して記録を放し、読んだバイトを足した buffer を返す。取り消しを頼んだ記録は、結果によらず、確定したバイトを持つ buffer を返し、包みが落として `Cancelled` を投げる。期限が来た記録の誤りも buffer を返し、包みが `None` にして落とす。そうでない誤りは buffer を手放して IO の失敗を起こす
 
 ## 実行時エラー
 
