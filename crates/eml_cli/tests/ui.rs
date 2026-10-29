@@ -15,8 +15,8 @@ use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
 
 use crate::common::{
-    Marks, assert_filter_matches, for_each_file, leading_marks, marks_of, run_all, temp_project,
-    windows_skip,
+    Marks, assert_filter_matches, for_each_file, is_entry, leading_marks, marks_of, run_all,
+    temp_project, windows_skip,
 };
 
 fn ui_root() -> PathBuf {
@@ -671,4 +671,20 @@ fn a_windows_mark_and_signal_marks_can_share_the_leading_lines() {
 #[should_panic(expected = "x.repl: signal marks are not supported here")]
 fn a_signal_mark_in_a_transcript_panics() {
     marks_of("x.repl", "# signal: interrupt at 5\n> 1\n", "#", false);
+}
+
+/// ディレクトリのテストのモジュールのファイルはエントリでないので、シグナルの印を書くと panic する。
+#[test]
+#[should_panic(expected = "run/async/dir/helper.em: signal marks are not supported here")]
+fn a_signal_mark_in_a_module_file_panics() {
+    let root = ui_root().join("run");
+    assert!(is_entry(&root, &root.join("async/x.em"), "em"));
+    assert!(is_entry(&root, &root.join("async/dir/main.em"), "em"));
+    let module = root.join("async/dir/helper.em");
+    marks_of(
+        "run/async/dir/helper.em",
+        "-- signal: interrupt at 5\n",
+        "--",
+        is_entry(&root, &module, "em"),
+    );
 }

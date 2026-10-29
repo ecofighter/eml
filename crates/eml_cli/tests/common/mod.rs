@@ -88,7 +88,7 @@ pub fn for_each_file(
                 &shown(&path),
                 &fs::read_to_string(&path).unwrap(),
                 leader,
-                signals,
+                signals && is_entry(root, &path, extension),
             );
             (path, marks)
         })
@@ -110,6 +110,18 @@ pub struct Marks {
     pub windows_skip: bool,
     /// 行の順のシグナルの予定。
     pub signals: Vec<VirtualSignal>,
+}
+
+/// テストのエントリか。分類の直下のファイルか、ディレクトリのテストの `main.<extension>` である。ディレクトリの
+/// テストのほかのファイルは import するモジュールで、シグナルの印を書けない (docs/implementation/testing.md の「UI テスト」)。
+pub fn is_entry(root: &Path, path: &Path, extension: &str) -> bool {
+    let depth = path
+        .strip_prefix(root)
+        .map_or(0, |relative| relative.components().count());
+    depth == 2
+        || path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy() == format!("main.{extension}"))
 }
 
 /// `leading_marks` の誤りと、許さない場所のシグナルの印で panic する。`shown` は文言に出すファイルの名前である。
