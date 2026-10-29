@@ -103,6 +103,19 @@ fn poll_reports_each_stop<M: Mode>() {
     assert_eq!(ctx.poll(0), Ok(()));
 }
 
+/// 終了の求めも割り込みと同じく両方の語に立ち、`poll` は `Terminated` を返す。割り込みと同時なら割り込みが勝つ。
+fn poll_reports_a_terminate<M: Mode>() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let ctx = Ctx::<M>::new(control.clone(), host(&Arc::default()));
+    control.terminate();
+    assert_eq!(control.stop_bits(), Control::TERMINATE);
+    assert_eq!(ctx.poll(0), Err(Stop::Terminated));
+    control.interrupt();
+    assert_eq!(ctx.poll(0), Err(Stop::Interrupted));
+    control.clear();
+    assert_eq!(ctx.poll(0), Ok(()));
+}
+
 /// `switch_task` は次のタスクの深さの起点を上限から引く。`poll` は起点を含まない深さを受け、起点と合わせて
 /// `max_depth` を超えたら止める。起点が上限を超えるタスクは、最初の安全点で止まる。
 fn switch_task_rebases_the_depth_limit<M: Mode>() {
@@ -871,6 +884,7 @@ fn evv_word_reads_the_list_without_rc_work<M: Mode>() {
 both_modes!(
     a_new_ctx_is_finished,
     poll_reports_each_stop,
+    poll_reports_a_terminate,
     switch_task_rebases_the_depth_limit,
     yields_and_continuation_frames_are_counted,
     yield_status_tells_targets_apart,

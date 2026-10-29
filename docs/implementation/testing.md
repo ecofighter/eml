@@ -203,7 +203,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `preempt.rs` は、`PREEMPT` の立つ安全点の扱いを確かめる ([VM](../spec/vm.md) の「タスクとスケジュール」)。どれも逐次の方針で流し、`write_line` が書くときに `PREEMPT` を立てる Host を使う。走れるタスクがなければビットを下ろすだけであること、一緒に立った止めるビットが先に勝つこと、走れる `Async` のタスクがあれば次の安全点で切り替えて `preemptions` を1と数えることを確かめる
 - `io.rs` は、`Std.IoTest` の操作の記録と driver の完了をソースのプログラムで確かめる ([VM](../spec/vm.md) の「操作の記録」)。書きと仕事が完了を1つ、読みが2つ数えることと、相手の端が閉じた読みが buffer の中身を変えずに返すことと、期限が来た読みが完了を1つ、タイマーを1つ数えることは、テストの driver (`Clock::Virtual`) の上で確かめる。仕事の記録が本体と分け合う `Bytes` を持ったまま、取り出しの前に本体の `exit` で run が終わり、`sweep_all` が残った記録を放しても漏れないことも、同じ driver の上で確かめる。書きを待つタスクの取り消しと、貸した記憶へ読む間の読みの取り消し (driver の取り消しの完了で `Cancelled` で再開し、種類 `Cancelled` を投げ、漏れがないこと) は、書きと読みを取り消すまで終わらせない driver を `Machine::with_driver` で渡して確かめる。テストの driver の書きは次の集める地点で必ず終わり、待っている間の取り消しに届かないためである。終わった操作を取り消しの地点で待つ道と、`sweep_all` が待つタスクの残した記録を落とす道は、プログラムから決まった順で起こせないので、`cells.rs` の単体テストで確かめる。操作の待ちの期限が満ちたときと過ぎた期限が、再開せずに driver に取り消しを頼み、完了で `Woke` で再開すること、取り消しと完了が期限の輪の項を外すことも、`cells.rs` の単体テストで確かめる。取り消した読みが読んだバイトを確定して buffer を返すこと、空きの足りる buffer をそのまま貸し、足りない buffer を写して貸すことも、包みが buffer を外へ出さないので、`cells.rs` の単体テストで buffer の中身と語を見て確かめる。driver が壊れたときと保留の操作を残したときの `Machine` は、`eml_rt::IoDriver` を実装する偽の driver を `Machine::with_driver` で渡して `machine.rs` で確かめる。仕事の closure を作る `jobs.rs` が `std` と `eml_rt::Op` だけを使い、`unsafe` を持たないことも `io.rs` がソースを読んで確かめる
 - `miri.rs` は、Miri で流す小さい実行のテストである (上の「Miri」)
-- `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 (既定の普通の方針で子が回り続ける `par` のプログラムを含む) を確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
+- `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 (既定の普通の方針で子が回り続ける `par` のプログラムを含む)、SIGTERM で止めたときの終了コード 143 を確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
 
 ## LIR のテキストの形
 
@@ -409,7 +409,12 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、同じく 100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。プログラムが標準エラーに書いた行を読んでから送る。ハンドラを入れる前の SIGINT は、既定の動作でプロセスを終わらせるためである
 - `Proc.run` で `sh -c 'echo started >&2; exec sleep 30'` を待つプログラムを自分のプロセスグループで起動し、子が標準エラーに書いた行を読んでから、グループ全体に SIGINT を1回送る。端末の Ctrl-C と同じく子にも届くので、子が終わり、終了コード 130 と、標準エラーの `interrupted` を確かめる。子が動いてから送るのは、起動と同時に届いた SIGINT は子に届かないことがあるためである
 
-Ctrl-C のハンドラは、bin の `interrupt` モジュールの単体テストが確かめる。テストは static を使わず、ハンドラが static から読む値を自分で作って渡す。`mod.rs` の `respond` のテストはどの OS でも流れ、1回目が `INTERRUPT` を立てること、`eml run` の2回目は終わり、REPL の2回目は終わらないこと、`clear` の後は1回目に戻ることを確かめる。Windows では `windows.rs` のテストが handler の本体の関数を直接呼ぶ。`CTRL_C_EVENT` には TRUE を返して `INTERRUPT` を立て、`eml run` の2回目では終わる関数に 130 を渡すことと、ほかの事象と static を置く前の Ctrl-C には FALSE を返し、ビットを変えず終わらないことを確かめる。Windows で本当の Ctrl-C を送るテストは置かない。
+`eml run` の SIGTERM のテストも `cfg(unix)` で2本あり、`libc::kill` で SIGTERM を送るほかは SIGINT のテストと同じ形である。
+
+- `Async.run` の中で標準エラーに `ready` を書いてから眠るプログラムに、その行が届いたら SIGTERM を1回送り、終了コード 143 と、標準エラーが `runtime error: terminated in` で始まることを確かめる。待つタスクがないので、1回目の SIGTERM が run を止める
+- 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、100 ms ごとに SIGTERM を送り続け、終了コード 143 で終わることを確かめる。SIGINT の同じテストと同じく、2回目の SIGTERM でハンドラが終わらせることもある
+
+シグナルのハンドラは、bin の `interrupt` モジュールの単体テストが確かめる。テストは static を使わず、ハンドラが static から読む値を自分で作って渡す。`mod.rs` の `respond` のテストはどの OS でも流れ、1回目が `INTERRUPT` を立てること、`eml run` の2回目は終わり、REPL の2回目は終わらないこと、`clear` の後は1回目に戻ることを確かめる。待つタスクがいればシグナルを保留にすること、保留の間の2回目は終わること、届けた後は1回目に戻ること、SIGTERM は 143 で終わること、2つの種類が互いの2回目にならないことも確かめる。Windows では `windows.rs` のテストが handler の本体の関数を直接呼ぶ。`CTRL_C_EVENT` には TRUE を返して `INTERRUPT` を立て (待つタスクがいれば保留にし)、`eml run` の2回目では終わる関数に 130 を渡すことと、ほかの事象と static を置く前の Ctrl-C には FALSE を返し、ビットを変えず終わらないことを確かめる。Windows で本当の Ctrl-C を送るテストは置かない。
 
 `default_limits()` のテストは `crates/eml_cli/tests/api.rs` にある。`max_depth` が 2^27 であることと、`max_bytes` の既定の値を確かめる。既定の上限まで実際に再帰するテストは、1 GiB を使うので置かない。
 

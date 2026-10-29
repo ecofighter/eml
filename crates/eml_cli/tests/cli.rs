@@ -275,6 +275,13 @@ pub(crate) fn sigint(child: &std::process::Child) {
     assert_eq!(unsafe { libc::kill(pid, libc::SIGINT) }, 0);
 }
 
+#[cfg(unix)]
+fn sigterm(child: &std::process::Child) {
+    let pid = libc::pid_t::try_from(child.id()).unwrap();
+    // 子はまだ待っていないので、終わっていても pid はほかのプロセスに使い回されていない
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+}
+
 /// 締め切りを過ぎたら子を殺して、テストを失敗にする。
 #[cfg(unix)]
 pub(crate) fn kill_after_deadline(child: &mut std::process::Child, what: &str) -> ! {
@@ -911,6 +918,109 @@ main () =
     drop(writer);
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130));
+}
+
+/// 待つタスクのない SIGTERM は、割り込みと同じ止め方で run を止め、終了コードは 143 である。眠るタスクしかない run は
+/// 空きのループの上限付きの眠りの後に止める語を読むので、1回目の SIGTERM で止まる (docs/spec/vm.md の「上限と割り込み」)。
+#[cfg(unix)]
+#[test]
+fn a_terminate_ends_an_idle_program_with_143() {
+    use std::io::{BufRead, BufReader};
+    use std::time::Instant;
+
+    let text = "\
+import Async
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    eprintln \"ready\"
+    Async.sleep_ms 600000)
+";
+    let dir = temp_project("cli-sigterm-sleep", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    // ハンドラを入れる前の SIGTERM はプロセスを殺すので、スクリプトが書いた行を読んでから送る
+    let mut ready = String::new();
+    stderr.read_line(&mut ready).unwrap();
+    assert_eq!(ready, "ready\n");
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        for line in stderr.lines().map_while(Result::ok) {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text
+    });
+    sigterm(&child);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not stop");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let stderr = reader.join().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(143), "{stderr}");
+    // 安全点で止めたので、文言の後には止めたときの関数の名前が続く (docs/spec/vm.md の「誤り、止めること、終わり」)
+    assert!(
+        stderr.starts_with("runtime error: terminated in `"),
+        "{stderr}"
+    );
+}
+
+/// 標準入力の読みの中で待つプログラムも SIGTERM で止まり、終了コードは 143 である。読みに入る直前に届いた SIGTERM は
+/// 読みを止めないが、2回目の SIGTERM でハンドラがその場で終わらせ、終了コードは同じく 143 である。そのため、終わるまで
+/// 100 ms ごとに送り続ける (`repeated_interrupts_end_a_program_waiting_for_the_standard_input_with_130` と同じ)。
+#[cfg(unix)]
+#[test]
+fn repeated_terminates_end_a_program_waiting_for_the_standard_input_with_143() {
+    use std::io::{BufRead, BufReader};
+    use std::time::{Duration, Instant};
+
+    let text = "import Stdin\n\
+main : Unit -> <IO, Panic> Unit
+main () =
+  eprintln \"ready\"
+  let (line, h) = Stdin.read_line (Stdin.open ())
+  Stdin.close h
+  println (show line)
+";
+    let dir = temp_project("cli-sigterm-stdin", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .arg("main.em")
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // 書き手を開いたままにして、読みを待たせる
+    let writer = child.stdin.take();
+    // ハンドラを入れる前の SIGTERM はプロセスを殺すので、スクリプトが書いた行を読んでから送る
+    let mut ready = String::new();
+    BufReader::new(child.stderr.as_mut().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert_eq!(ready, "ready\n");
+    let status = loop {
+        sigterm(&child);
+        std::thread::sleep(Duration::from_millis(100));
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not end");
+        }
+    };
+    drop(writer);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(143));
 }
 
 /// 標準出力を受け継ぐ `run (merge_stderr c)` の子は、標準エラーを eml の標準出力に書く。`before` が子の行より前に

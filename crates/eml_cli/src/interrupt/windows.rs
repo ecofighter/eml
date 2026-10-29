@@ -8,9 +8,12 @@ use windows_sys::Win32::System::Console::{CTRL_C_EVENT, SetConsoleCtrlHandler};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
 use windows_sys::core::BOOL;
 
-use super::{EXIT_CODE, INSTALLED, Installed, Response};
+use eml_cli::Control;
 
-pub(super) fn register() -> io::Result<()> {
+use super::{INSTALLED, Installed, Mode, Response};
+
+/// Windows には SIGTERM がないので、動き方によらず同じ handler を入れる。
+pub(super) fn register(_: Mode) -> io::Result<()> {
     // 関数を足すだけで、ほかの前提を持たない
     if unsafe { SetConsoleCtrlHandler(Some(on_console_event), TRUE) } != 0 {
         Ok(())
@@ -33,8 +36,8 @@ fn console_event(installed: Option<&Installed>, event: u32, exit: impl FnOnce(u3
     let Some(installed) = installed else {
         return FALSE;
     };
-    if installed.respond() == Response::Exit {
-        exit(EXIT_CODE.into());
+    if let Response::Exit(code) = installed.respond(Control::INTERRUPT) {
+        exit(code.into());
     }
     TRUE
 }
@@ -50,7 +53,6 @@ fn terminate(code: u32) {
 mod tests {
     use std::cell::Cell;
 
-    use eml_cli::Control;
     use windows_sys::Win32::System::Console::{
         CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
     };
@@ -76,6 +78,18 @@ mod tests {
             TRUE
         );
         assert_eq!(exited.get(), Some(130));
+    }
+
+    #[test]
+    fn a_watched_ctrl_c_is_handled_without_exit() {
+        let installed = installed(Mode::Run);
+        installed.control.set_watched(Control::INTERRUPT);
+        assert_eq!(
+            console_event(Some(&installed), CTRL_C_EVENT, |_| panic!("exited")),
+            TRUE
+        );
+        assert_eq!(installed.control.stop_bits(), 0);
+        assert_eq!(installed.control.pending_signals(), Control::INTERRUPT);
     }
 
     #[test]

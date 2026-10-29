@@ -341,14 +341,22 @@ fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize) -> Result<bool, VmFault> {
     }
 }
 
-/// `poll` が止める理由を返したときの扱い。`Preempt` 以外は誤りとして返す。`Preempt` は、yield の途中でなければ
-/// ビットを下ろしてからもう一度 `poll` する。間に命令がないので、深さの上限は正確で、同時に立った止めるビットは
-/// 切り替えより先に勝つ。
+/// `poll` が止める理由を返したときの扱い。`Preempt` と `Notice` 以外は誤りとして返す。`Notice` は、受け箱に知らせを
+/// 置く者がいないので、ビットを下ろして続ける。`Preempt` は、yield の途中でなければビットを下ろしてからもう一度 `poll`
+/// する。間に命令がないので、深さの上限は正確で、同時に立った止めるビットは切り替えより先に勝つ。
 #[cold]
 #[inline(never)]
 fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<bool, VmFault> {
-    if stop != Stop::Preempt {
-        return Err(stop.into());
+    match stop {
+        Stop::Notice => {
+            ctx.heap().control().take_notice();
+            return match ctx.poll(depth) {
+                Ok(()) => Ok(false),
+                Err(stop) => polled_stop(ctx, depth, stop),
+            };
+        }
+        Stop::Preempt => {}
+        _ => return Err(stop.into()),
     }
     // yield の途中では切り替えない。ビットは立てたままにして、次の yield のない安全点で拾う
     if ctx.yielding() != 0 {
@@ -356,7 +364,8 @@ fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<bool, 
     }
     ctx.heap().control().take_preempt();
     match ctx.poll(depth) {
-        Ok(()) | Err(Stop::Preempt) => Ok(true),
+        // 間に立った `NOTICE` は下ろさずに残し、次の安全点で下ろす
+        Ok(()) | Err(Stop::Preempt | Stop::Notice) => Ok(true),
         Err(stop) => Err(stop.into()),
     }
 }
@@ -1593,8 +1602,9 @@ fn stops_the_run(error: &RuntimeError) -> bool {
     matches!(
         error,
         RuntimeError::Fault {
-            fault: VmFault::Stopped(Stop::Interrupted | Stop::MemoryLimit | Stop::Ended)
-                | VmFault::Extern(eml_rt::Fault::Heap(_))
+            fault: VmFault::Stopped(
+                Stop::Interrupted | Stop::Terminated | Stop::MemoryLimit | Stop::Ended
+            ) | VmFault::Extern(eml_rt::Fault::Heap(_))
                 | VmFault::Internal(_),
             ..
         } | RuntimeError::Leak(_)

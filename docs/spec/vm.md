@@ -21,7 +21,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりしたためである ([計測の基準](../implementation/benchmarks.md) の「`codegen-units`」)
 - 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<Finished, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、エントリを実行して閉じる (「追記」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) と、スケジュールの方針 (`sched: Sched`。「タスクとスケジュール」) と、タイマーが使う時計 (`clock: Clock`。「時計と driver」) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
 - `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)`、`with_control(Arc<Control>)`、`with_sched(Sched)`、`with_clock(Clock)` で組み立てる。方針の既定は `Sched::Sequential` で、時計の既定は `Clock::Virtual` である
-- 1つの `Control` は1回の実行に使う。止める理由のビットは `Control::clear` でしか下りないので、使い回すと、前の実行で立ったビットで次の実行がすぐ止まるためである。終わりの欄 (`exit` の終了コード) と `PREEMPT` は、`Machine::run` の始めに `Control::begin_run` が開いて下ろすので、使い回しの妨げにならない (「誤り、止めること、終わり」)。REPL (`eml_cli::Repl`) は1つの `Control` をセッション全体で使い、入力の始めに `clear` を呼ぶ。`RunConfig` を `clone` すると `Control` を共有するので、UI テストの仕組みと `eml_test_support` は実行ごとに新しい `RunConfig` を作る
+- 1つの `Control` は1回の実行に使う。止める理由のビットは `Control::clear` でしか下りないので、使い回すと、前の実行で立ったビットで次の実行がすぐ止まるためである。終わりの欄 (`exit` の終了コード) と `PREEMPT` と `NOTICE` は、`Machine::run` の始めに `Control::begin_run` が開いて下ろすので、使い回しの妨げにならない (「誤り、止めること、終わり」)。REPL (`eml_cli::Repl`) は1つの `Control` をセッション全体で使い、入力の始めに `clear` を呼ぶ。`RunConfig` を `clone` すると `Control` を共有するので、UI テストの仕組みと `eml_test_support` は実行ごとに新しい `RunConfig` を作る
 - `RunConfig` に `Control` を持たせるのは、CLI が Ctrl-C のハンドラに同じ `Control` を渡すためである。上限は `Control` が持つので、`RunConfig` に上限の欄は作らない ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - `eml_vm` は、`eml_rt` の `Control`、`Limits`、`Stop` を再公開する。`eml_cli` の lib と bin は `eml_rt` に直接は依存せず (テストは依存する)、これらの名前を `eml_vm` から受け取る
 - `eml_cli` は、`run` の feature で `eml_vm` に依存する。`RunConfig`、`RunStats`、`RuntimeError`、`VmFault`、`SourceLocation`、`Control`、`Limits`、`Stop`、`Sched`、`Clock`、`Finished`、`HostRef`、`Capture`、`CaptureHost`、`Written`、`capture_host`、`stdio_host`、`script_host`、`execute` を `eml_vm` から再公開する
@@ -327,10 +327,10 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - 位置は `locations` から命令の位置で引く。表に載せるのは、位置を持つ extern の呼び出しから作った命令である。専用の算術と比較の命令も含む。`run-fail` の UI テストの多くは `/` と `+` の誤りの位置を表示している
 - `Arith`、`Output`、`Io`、`NotUtf8`、`Heap(_)` の文言は `eml_rt` のものを使う ([オブジェクトモデル](object-model.md) の「誤り」)。extern の結果と文言は、`crates/eml_rt/src/heap/tests/expected.txt` の表が固定する ([テスト戦略](../implementation/testing.md) の「期待値の表」)
 - 安全点の `Ctx::poll` が返す `Stop` と extern の `Fault::Stopped` は、どちらも `Stop` の文言で表示する。`FileIn` の読み、標準入力の読み、子の起動と `Child` の読み書きと `Proc.wait` の `Fault::Stopped` は extern の誤りなので位置を付け、安全点の `Stop` には付けない
-- 割り込みで止めたときの表示も、ほかの実行時エラーと同じ形である。安全点で止めたときは ``interrupted in `f` `` (`f` は止めたときの関数)、extern (`FileIn` の読み、標準入力の読み、子の起動と `Child` の読み書きと `Proc.wait`) の中で止めたときは位置付きの `interrupted` である。`RuntimeError::interrupted()` は、安全点の `Stopped(Stop::Interrupted)` と、extern の中で止めた `Extern(Fault::Stopped(Stop::Interrupted))` の両方で真を返す。CLI が終了コードを決めるのに使う (「上限と割り込み」)
+- 割り込みで止めたときの表示も、ほかの実行時エラーと同じ形である。安全点で止めたときは ``interrupted in `f` `` (`f` は止めたときの関数)、extern (`FileIn` の読み、標準入力の読み、子の起動と `Child` の読み書きと `Proc.wait`) の中で止めたときは位置付きの `interrupted` である。`RuntimeError::interrupted()` は、安全点の `Stopped(Stop::Interrupted)` と、extern の中で止めた `Extern(Fault::Stopped(Stop::Interrupted))` の両方で真を返す。`RuntimeError::terminated()` は、同じ2つの形の `Stop::Terminated` で真を返す。CLI が終了コードを決めるのに使う (「上限と割り込み」)
 - 繰り返しが誤りで終わっても、`Finish` に着いても、`Machine::run` は `Ctx::flush` を呼んでから結果を返す。`> out 2>&1` のときに出力と誤りの順を保つためである
 - 中断の巻き戻しで起きた誤りには、中断を始めた命令の関数の名前と、その命令の位置があれば位置を付ける (「巻き戻し」)
-- `Machine::run` は最初に `Control::begin_run` を呼び、終わりの欄を開いて `PREEMPT` を下ろす。止める理由のビットは下ろさない ([オブジェクトモデル](object-model.md) の「実行の制御」)
+- `Machine::run` は最初に `Control::begin_run` を呼び、終わりの欄を開いて `PREEMPT` と `NOTICE` を下ろす。止める理由のビットとシグナルの語は下ろさない ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - `exit` で終わったときは、先に上の「`exit`」の手順で中断を片付ける
 - `vm::run` が `Stopped(Stop::Ended)` を返したら、`exit` が run を捨てたとして扱う。ほかのタスクは動かさず、片付けもしていない。書き出した後で、終わりの欄に終了コードがあることを確かめ (なければ内部の誤り `a run ended without an exit`)、その時点の数で `Finished { exit: Some(n), .. }` を作る。下の `Finish` の手順の `check_finished` と検査モードの不変条件は確かめない。`Scheduler` と登録表は回復の前に捨てる。残った物体は「追記」の回復で古いヒープと一緒に捨て、回復が成功したら `Finished` を返す
 - `Finish` に着いたとき、受け箱を処理して `Async` のセルを放した後で (「`Async` のタスク」の「終わり」)、エントリのタスクのほかにタスクか join が残っていれば、内部の誤り (`a task is left at the end`) にする。子の境目が開いているのに `exit` の終了コードがあっても、内部の誤り (`an exit ends a run with an open par`) にする。`par` の子は `IO` を使えないので、どちらも正しいプログラムでは起きない
@@ -360,19 +360,23 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `eml repl` の上限は `eml_cli::repl_limits()` が作る。確保量だけが違い、物理メモリの 40% である ([REPL の端末](repl.md) の「コマンドライン」)
 - 深さか確保量の上限で止まったときは ``the call depth limit is exceeded in `f` `` か ``the memory limit is exceeded in `f` `` と表示し、終了コードは 1 である
 
-`eml run` と `eml repl` は、`Control` を作った直後に、`eml_cli` の bin の `interrupt` モジュールで Ctrl-C のハンドラを入れる。ハンドラは、unix では SIGINT のハンドラ、Windows ではコンソールの handler (`SetConsoleCtrlHandler`) である。`eml run` はファイルを読む前に入れるので、読み込みとコンパイルの間の Ctrl-C も、OS の既定の動作 (プロセスを終わらせる) でなく、このハンドラが受ける。`eml check` には入れない。
+`eml run` と `eml repl` は、`Control` を作った直後に、`eml_cli` の bin の `interrupt` モジュールでシグナルのハンドラを入れる。ハンドラは、unix では SIGINT のハンドラと SIGTERM のハンドラ、Windows ではコンソールの handler (`SetConsoleCtrlHandler`) である。SIGTERM のハンドラは `eml run` だけが入れる。`eml repl` のプロンプトでは止める語を読む者がいないので、SIGTERM は OS の既定の動作でプロセスを終わらせる。`eml run` はファイルを読む前に入れるので、読み込みとコンパイルの間の Ctrl-C と SIGTERM も、OS の既定の動作 (プロセスを終わらせる) でなく、このハンドラが受ける。`eml check` には入れない。
 
-- unix では `libc::sigaction` で入れ、`sa_flags` に `SA_RESTART` も `SA_NODEFER` も入れない。`SA_RESTART` を外すので、待っている読みと書き込みは `EINTR` で戻り、`FileIn` の読み、標準入力の読み、`Child` の読みと書き込みが止める語を読んで止まる ([オブジェクトモデル](object-model.md) の「読み手」)。子のプロセスを待つ間の Ctrl-C は、同じプロセスグループの子にも届くので、子が終わって `Proc.wait` が止まる。`SA_NODEFER` を入れないので、ハンドラが動く間は同じ SIGINT が塞がれ、ハンドラは入れ子にならない
+- unix では SIGINT と SIGTERM のどちらも `libc::sigaction` で入れ、`sa_flags` に `SA_RESTART` も `SA_NODEFER` も入れない。`SA_RESTART` を外すので、待っている読みと書き込みは `EINTR` で戻り、`FileIn` の読み、標準入力の読み、`Child` の読みと書き込みが止める語を読んで止まる ([オブジェクトモデル](object-model.md) の「読み手」)。子のプロセスを待つ間の Ctrl-C は、同じプロセスグループの子にも届くので、子が終わって `Proc.wait` が止まる。`SA_NODEFER` を入れないので、ハンドラが動く間は同じシグナルが塞がれ、同じシグナルのハンドラは入れ子にならない
 - Windows の handler は、OS が作るスレッドで、プログラムのスレッドと並んで動く。受けるのは `CTRL_C_EVENT` だけで、TRUE を返す。`CTRL_BREAK_EVENT`、`CTRL_CLOSE_EVENT`、`CTRL_LOGOFF_EVENT`、`CTRL_SHUTDOWN_EVENT` には FALSE を返し、OS の既定の handler がプロセスを終わらせる。このとき、まだ書いていない出力は捨てる。Ctrl-Break は、REPL が抜けられない処理から抜ける道である ([REPL の端末](repl.md) の「残る制限」)
 - Windows では続けて押した2回の Ctrl-C の handler が同時に動くと、どちらも1回目として扱うことがある。そのとき `eml run` は次の Ctrl-C で終わる。unix のハンドラは入れ子にならないので、この重なりはない
 - Windows では待っている読みは Ctrl-C で止まらない。コンソールの標準入力の読みは Ctrl-C で戻るが、std がその場で読み直す。pipe とファイルの読みと書き込みは Ctrl-C で戻らない。標準入力、`FileIn`、`Child` の読みは、データが来るか相手が閉じて読みが戻った後で止める語を見る。`eml run` は、待っている読みからも2回目の Ctrl-C で抜けられる。子のプロセスを待つ間の Ctrl-C は同じコンソールにつながる子にも届くので、子が終わって `Proc.wait` が止まる
 - ハンドラは static に置いた `Control` と動き方だけを読み、アトミックな読み書きと、その場で終わる関数 (unix は `libc::_exit`、Windows は `TerminateProcess`) だけを呼ぶ。static はハンドラを入れる前に置く
-- 止める語の `INTERRUPT` が 0 なら、`control.interrupt()` を呼ぶ。VM は次の安全点で止まる。コンパイルの間に立ったビットは、実行の最初の安全点で読まれる
-- `eml run` では、すでに立っていれば (2回目の Ctrl-C)、終了コード 130 でその場で終わる。まだ書いていない出力は捨てる。安全点に来ない処理から抜けるための道だからである。`eml repl` は終わらず、`interrupt()` を呼ぶだけである ([REPL の端末](repl.md) の「割り込み」)
+- ハンドラは、受けたシグナルのビット `b` (Ctrl-C は `INTERRUPT`、SIGTERM は `TERMINATE`) について、次の順に決める ([オブジェクトモデル](object-model.md) の「実行の制御」)
+  1. `eml run` で、止める語か保留のシグナル (`Control::pending_signals()`) に `b` が立っていれば、その場で終わる。Ctrl-C は終了コード 130、SIGTERM は 143 である。前の同じシグナルをまだ届けていないか、それがもう run を止めているので、これは2回目である。まだ書いていない出力は捨てる。安全点に来ない処理から抜けるための道だからである
+  2. そうでなく、`Control::watched()` に `b` が立っていれば (そのシグナルを待つタスクがいれば)、`Control::defer(b)` で保留にする
+  3. どちらでもなければ、Ctrl-C は `control.interrupt()` を、SIGTERM は `control.terminate()` を呼ぶ。VM は次の安全点で止まる。コンパイルの間に立ったビットは、実行の最初の安全点で読まれる
+- 届けた後のシグナルは保留から下りるので、次の同じシグナルは1回目として扱う。2つの種類は互いのビットを見ないので、Ctrl-C の後の SIGTERM も、SIGTERM の後の Ctrl-C も1回目である
+- `eml repl` は1の手順を持たず、終わらない。2か3を行うだけである ([REPL の端末](repl.md) の「割り込み」)
 - unix では、監視のスレッド (「タスクとスケジュール」) はすべてのシグナルを塞いで始まる。VM のスレッドで `spawn` を `pthread_sigmask` で囲み、すべてを塞いでから始めて元に戻す。新しいスレッドは始めたスレッドの塞ぎを受け継ぐためである。監視のスレッドに SIGINT が届くと、VM のスレッドの待っている読みに `EINTR` が来なくなる。`eml run` と `eml repl` のプロセスでシグナルを塞がないスレッドは VM のスレッドだけなので、SIGINT は読んでいるスレッドに届く。Windows では塞がない。並列 VM で worker のスレッドを持つときは、worker 0 のほかのすべてのスレッドで SIGINT を塞ぎ、host のスレッドは止める手順が始まったときに塞ぎを解く ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」)
 - unix では、`eml_io` の本物の driver も、ブロックする呼び出しのプールへ仕事を渡す間、VM のスレッドで SIGINT と SIGTERM を塞ぐ。プールのスレッドは仕事を渡したスレッドから生まれ、その塞ぎを受け継ぐので、シグナルを受けるのは VM のスレッドだけになる。塞ぐのをこの2つに限るのは、SIGSEGV などの同期のシグナルを塞ぐと、その動きが未定義になるためである
 
-割り込みで止まったとき (`RuntimeError::interrupted`) は、1回目でも終了コードを 130 にする。130 は、シェルが SIGINT で終わった子に報告する値と同じである。ほかの実行時エラーは 1 である。
+割り込みで止まったとき (`RuntimeError::interrupted`) は、1回目でも終了コードを 130 にする。SIGTERM で止まったとき (`RuntimeError::terminated`) は 143 にする。どちらも、シェルが SIGINT と SIGTERM で終わった子に報告する値と同じである。SIGTERM で止まったときの表示は、割り込みと同じ形で、文言は `terminated` である。ほかの実行時エラーは 1 である。
 
 ## タスクとスケジュール
 
@@ -389,7 +393,8 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - タスクを切り替えるのは、安全点での横取りと、`par` の親が join で右の子を待つときと、右の子が終わるか誤りで止まったときと、`Async.run` が根のスコープを待つときと、`Async` のエントリの `Task` が終わったときである (「`Async` のタスク」)。切り替えは `Ctx::switch_task(次の evv, 次の worker, 次の depth_offset)` の1回で行い、RC に触れない ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)
 - 方針は `Scheduler` の型の引数である。`Machine` は `Sched` の値で、方針ごとの `vm::run` の写しを選ぶ。逐次の写しは方針を確かめる命令を持たないので、方針のない繰り返しと同じ仕事で動く。写しごとの補助の関数の置き方は「置き場所」にある
 - 安全点では、`Ctx::poll` の後で `tick` を呼ぶ。予算を数える方針があるので、`tick` は `PREEMPT` の有無によらず毎回呼ぶ。`PREEMPT` が立っていたか `tick` が真で、`Ctx::yielding()` が 0 なら横取りを試みる。yield の途中では切り替えない。yield の途中の状態は `Ctx` が1つだけ持つためである。`PREEMPT` は、yield の途中ではビットを立てたままにして、次の yield のない安全点で拾う。横取りを試みると、走れるタスクがあればそれに切り替え、どちらでも予算を詰め直す。走れるタスクがなければ切り替える先がないので、切り替えずに戻る。横取りしたタスクは、`wake` で列に入れる
-- `PREEMPT` を拾うときは、`take_preempt` でビットを下ろしてから `Ctx::poll` をもう一度呼ぶ。2回の `poll` の間に命令がないので、深さは同じで、深さの上限の確認は正確である。間に立った `INTERRUPT` と `MEMORY` は、2回目の `poll` が返すので、切り替えより先に勝つ。ビットを下ろした後は、走れるタスクがなくても `PREEMPT` が残らない。切り替えた先の安全点も同じ手順で拾い、`tick` が真か `PREEMPT` が立っていればまた切り替える
+- `PREEMPT` を拾うときは、`take_preempt` でビットを下ろしてから `Ctx::poll` をもう一度呼ぶ。2回の `poll` の間に命令がないので、深さは同じで、深さの上限の確認は正確である。間に立った `INTERRUPT`、`TERMINATE`、`MEMORY` は、2回目の `poll` が返すので、切り替えより先に勝つ。ビットを下ろした後は、走れるタスクがなくても `PREEMPT` が残らない。切り替えた先の安全点も同じ手順で拾い、`tick` が真か `PREEMPT` が立っていればまた切り替える
+- `poll` が `Stop::Notice` を返したときは、`take_notice` で `NOTICE` を下ろしてから `Ctx::poll` をもう一度呼び、その結果に従う。知らせを受け箱に置く者はいないので、下ろして続けるだけである。`PREEMPT` を拾った後の2回目の `poll` が `Notice` を返したときは、`NOTICE` を立てたまま切り替え、次の安全点で下ろす
 - 速い道は `Ctx::poll` が `Ok(())` を返す分岐だけである。`PREEMPT` を含む残りの扱いは、`#[cold]` と `#[inline(never)]` を付けた関数に置く
 - `Finished.preemptions` は、方針か `PREEMPT` が安全点で始めた切り替えの数である。監視のスレッドの `PREEMPT` による切り替えも数える。切り替える先がなかった試みは数えない。join で待つ切り替えと、子が終わったときの切り替えは数えない。逐次では、ほかの者が `Control::preempt` を呼ばなければ 0 である。横取りだけを数えるのは、seed の方針で横取りが起きたことをテストで確かめるためである
 - `Sched` と方針の型は `Send` で、`Sched` は `Sync` でもある。`crates/eml_vm/tests/api.rs` が型の assert で確かめる。`Scheduler` は driver を持つので `Send` でない (「時計と driver」)
@@ -524,7 +529,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 子の中の実行時エラーは、次のように扱う。
 
-- 止めたこと (割り込みと確保量の上限)、`exit` が run を捨てたこと (`Stop::Ended`)、ヒープの誤り、内部の誤り、デッドロック (「時計と driver」) は、子の中でもすぐに実行を止める
+- 止めたこと (割り込み、SIGTERM、確保量の上限)、`exit` が run を捨てたこと (`Stop::Ended`)、ヒープの誤り、内部の誤り、デッドロック (「時計と driver」) は、子の中でもすぐに実行を止める
 - 深さの上限とほかの extern の誤りは子の誤りである。左の子の誤りは、すぐに評価を止める。エントリのタスクで起きた誤りは、左の子の中でもそうでなくても、実行の誤りになる。右の子の誤り (右の子のタスクの中の入れ子の左の子の誤りを含む) は、その右の子の join に記録し、右のタスクはスタックを巻き戻さずに捨てて、ほかのタスクに切り替える。捨てたタスクの持つ語は手放さない。止めたスタックは巻き戻しの表のない位置で止まっていて解放できないためである。捨てた右の子が開いていた入れ子の `par` の右の子は、結果を受ける親がもういないので、子孫ごと走らせずに捨てる
 - 誤りは、左の子の中断でも値でも救わない。join は記録した右の誤りで評価を止め、両方の子が誤りなら左の誤りを報告する。そのため、子の誤りの後は、実行はいつも誤りで終わる
 - 捕まえられなかった子の `Panic` は、起こし直した `reperform$Prelude.Panic.panicked` の中の `panic` の実行時エラーになる。文言は ``panicked: <message> in `reperform$Prelude.Panic.panicked` `` で、ソースの位置を持たない

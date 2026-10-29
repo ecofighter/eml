@@ -825,7 +825,7 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 
 ## 実行時エラー
 
-次の場合は実行を止めて実行時エラーにする。CLI の終了コードは 1 で、割り込みで止まったときだけ 130 である ([VM](vm.md) の「上限と割り込み」)。
+次の場合は実行を止めて実行時エラーにする。CLI の終了コードは 1 で、割り込みで止まったときは 130、SIGTERM で止まったときは 143 である ([VM](vm.md) の「上限と割り込み」)。
 
 - `Int` のオーバーフローとゼロ除算 ([宣言](declarations.md) の標準の演算子の表)
 - `Std.Float` の `truncate`、`floor`、`ceil`、`round` の結果が `Int` に収まらないとき (`` float `<x>` does not fit in `Int` ``。`x` は `show` の形)、`Float.to_fixed` の桁数が 0 から 100 の外のとき (`` `to_fixed` takes 0 to 100 digits, not <n> ``) ([標準ライブラリ](stdlib.md) の「`Std.Float`」)

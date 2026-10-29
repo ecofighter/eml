@@ -84,7 +84,7 @@ fn main() -> ExitCode {
             sched,
             file,
         } => {
-            // 読み込みとコンパイルの間の Ctrl-C も、OS の既定の動作でプロセスが終わらずに、このハンドラが受ける。そこで立てたビットは、
+            // 読み込みとコンパイルの間の Ctrl-C と SIGTERM も、OS の既定の動作でプロセスが終わらずに、このハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
             interrupt::install(Arc::clone(&control), interrupt::Mode::Run);
@@ -109,7 +109,9 @@ fn main() -> ExitCode {
                 Err(error) => {
                     eprintln!("runtime error: {error}");
                     let code = if error.interrupted() {
-                        interrupt::EXIT_CODE
+                        interrupt::INTERRUPT_EXIT_CODE
+                    } else if error.terminated() {
+                        interrupt::TERMINATE_EXIT_CODE
                     } else {
                         1
                     };
