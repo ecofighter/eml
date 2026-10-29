@@ -380,18 +380,27 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
     assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
 }
 
-/// 本物の時計の検査モードの `Machine` で `src` を流し、閉じるまでの経過を測る。返すのは出力、run の結果、閉じたときの
-/// 結果 (検査モードの漏れの検査)、経過である。`interrupt_on` があれば、出力にその文字列が出たときに別のスレッドが
-/// 割り込む。どの run も、3 秒たって終わらなければ見張りのスレッドが割り込むので、止まったテストも待ち続けない。
-fn run_real(
-    src: &str,
-    interrupt_on: Option<&'static str>,
-) -> (
+/// `run_real_on` の結果。出力、run の結果、閉じたときの結果 (検査モードの漏れの検査)、経過である。
+type RealRun = (
     String,
     Result<eml_vm::Finished, RuntimeError>,
     Result<(), RuntimeError>,
     std::time::Duration,
-) {
+);
+
+/// 本物の時計の検査モードの `Machine` で `src` を流し、閉じるまでの経過を測る。`interrupt_on` があれば、出力に
+/// その文字列が出たときに別のスレッドが割り込む。どの run も、3 秒たって終わらなければ見張りのスレッドが割り込むので、
+/// 止まったテストも待ち続けない。
+fn run_real(src: &str, interrupt_on: Option<&'static str>) -> RealRun {
+    run_real_on(src, interrupt_on, None)
+}
+
+/// `run_real` を、`driver` があればその driver で流す。
+fn run_real_on(
+    src: &str,
+    interrupt_on: Option<&'static str>,
+    driver: Option<Box<dyn eml_rt::IoDriver>>,
+) -> RealRun {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
@@ -399,6 +408,9 @@ fn run_real(
     let control = Arc::new(Control::new(Limits::default()));
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host).with_clock(Clock::Real);
+    if let Some(driver) = driver {
+        machine = machine.with_driver(driver);
+    }
     let loaded = machine.load(&program).unwrap();
     let (done, finished) = mpsc::channel::<()>();
     let seen = out.clone();
@@ -557,6 +569,150 @@ main () = Async.run (fn () ->
     assert!(error.interrupted(), "{error:?}");
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "waiting\n");
+}
+
+/// 本物の driver で、`listen` のポート 0 が選んだポートへの `connect` を、別のタスクの `accept` が受ける。2つの
+/// ストリームの相手の番地は、互いのポートを持つ (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(unix)]
+#[test]
+fn a_real_connection_is_accepted() {
+    let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let c = Net.connect \"127.0.0.1\" port
+  let s = Async.await t
+  let (a, s) = Net.peer_addr s
+  let (b, c) = Net.peer_addr c
+  Net.close s
+  Net.close c
+  println (show port)
+  println a
+  println b)
+";
+    let (out, result, closed, _) = run_real(src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    let lines: Vec<&str> = out.lines().collect();
+    let [port, accepted, connected] = lines[..] else {
+        panic!("{out}");
+    };
+    assert!(accepted.starts_with("127.0.0.1:"), "{out}");
+    assert_eq!(connected, format!("127.0.0.1:{port}"), "{out}");
+}
+
+/// 接続の来ないリスナーで受けを待つ run は、空きのループが割り込みを読むので、別のスレッドの割り込みで止まる。止める
+/// ときに受けの操作を取り消して待ちきるので、検査モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
+/// 割り込みは `waiting` が出てから送るので、受けの待ちの間に届く。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_run_blocked_in_a_real_accept() {
+    let src = "\
+import Async
+import Net
+import Stdout
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  Async.yield_now ()
+  println \"waiting\"
+  Stdout.close (Stdout.flush (Stdout.open ()))
+  Net.close (Async.await t))
+";
+    let (out, result, closed, _) = run_real(src, Some("waiting"));
+    let error = result.unwrap_err();
+    assert!(error.interrupted(), "{error:?}");
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "waiting\n");
+}
+
+/// 10 秒戻らない名前の解決。名前の解決を待たずに手放す道を確かめるので、戻る前にテストが終わる。
+#[cfg(unix)]
+fn block_10_s(_host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    std::thread::sleep(std::time::Duration::from_secs(10));
+    Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))])
+}
+
+/// 名前の解決を待つ run も、割り込みで止まる。止めるときの `quiesce` は解決を手放し、終わりを待たない
+/// (docs/spec/vm.md の「時計と driver」)。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_run_waiting_on_a_lookup() {
+    let src = "\
+import Async
+import Net
+import Stdout
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () -> Net.connect \"slow.test\" 80)
+  Async.yield_now ()
+  println \"waiting\"
+  Stdout.close (Stdout.flush (Stdout.open ()))
+  Net.close (Async.await t))
+";
+    let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
+    let (out, result, closed, _) = run_real_on(src, Some("waiting"), Some(Box::new(driver)));
+    let error = result.unwrap_err();
+    assert!(error.interrupted(), "{error:?}");
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "waiting\n");
+}
+
+/// 名前の解決を待つ `connect` を `timeout` で囲むと、期限の取り消しが解決を手放し、`timeout` は `None` を返す
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(unix)]
+#[test]
+fn a_timeout_around_a_slow_lookup_returns_none() {
+    let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  match Async.timeout 20 (fn () -> Net.connect \"slow.test\" 80) with
+    | Some s ->
+      Net.close s
+      println \"Some\"
+    | None -> println \"None\")
+";
+    let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
+    let (out, result, closed, _) = run_real_on(src, None, Some(Box::new(driver)));
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "None\n");
+}
+
+/// Windows の本物の driver はまだソケットを扱わないので、`listen` は種類 `NotAvailable` の IO の失敗になる
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(windows)]
+#[test]
+fn a_real_listen_is_not_available() {
+    let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () =
+  match try_io (fn () -> Async.run (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))) with
+    | Ok _ -> println \"listening\"
+    | Err e -> println \"\\{show e.kind}: \\{e.message}\"
+";
+    let (out, result, closed, _) = run_real(src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        out,
+        "NotAvailable: cannot listen on 127.0.0.1:0: unsupported\n"
+    );
 }
 
 /// Windows の本物の driver はまだソケットを扱わないので、`pair` は種類 `NotAvailable` の IO の失敗になる

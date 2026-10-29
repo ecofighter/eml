@@ -1,4 +1,4 @@
-//! `Std.IoTest` の操作の記録と driver の完了 (docs/spec/vm.md の「操作の記録」)。完了の数はテストの driver
+//! `Std.IoTest` と `Std.Net` の操作の記録と driver の完了 (docs/spec/vm.md の「操作の記録」)。完了の数はテストの driver
 //! (`Clock::Virtual`) の上で、取り消しの道は書きを取り消すまで終わらせない driver の上で確かめる。テストの driver の
 //! 書きは次の集める地点でいつも終わるので、待っている間の取り消しに届かないためである。
 
@@ -130,6 +130,59 @@ main () = Async.run (fn () ->
     let (_, stats) = run_stats(src);
     let s = stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!((s.completions, s.timers, s.parks, s.cancels), (1, 1, 1, 0));
+}
+
+/// `Net.listen` は driver の操作を1つ出し、完了を1つ受けて、待っていたタスクを再開する。リスナーは完了の中身から
+/// 集める地点で作る (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_listen_counts_one_completion() {
+    let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  Net.close_listener l
+  println (show port))
+";
+    let (out, result) = run(src);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "49152\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((s.completions, s.parks, s.cancels), (1, 1, 0));
+}
+
+/// 待ち受け、受け、接続はどれも1つの操作で、完了を1つずつ受ける。継続を渡す待ちは、3つの操作と `await` の4回である
+/// (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn an_accept_and_a_connect_count_three_completions() {
+    let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let c = Net.connect \"127.0.0.1\" port
+  let s = Async.await t
+  let (a, s) = Net.peer_addr s
+  let (b, c) = Net.peer_addr c
+  Net.close s
+  Net.close c
+  println \"\\{a} \\{b}\")
+";
+    let (out, result) = run(src);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "127.0.0.1:49153 127.0.0.1:49152\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((s.completions, s.parks, s.cancels), (3, 4, 0));
 }
 
 /// 書きと読みを取り消されるまで終わらせない driver。端が読めるようになるのを待つ操作はすぐ終わる。取り消した書きは、

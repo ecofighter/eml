@@ -2175,9 +2175,117 @@ fn async_op<R: Exec>(
                 }
             }
         }
+        ext @ (Extern::NetSubmitListen | Extern::NetSubmitConnect) => {
+            let (host, port) = (task.get(arg(0)), task.raw(arg(1)));
+            let submitted = if ext == Extern::NetSubmitListen {
+                sched
+                    .cells
+                    .submit_listen(ctx, &mut *sched.driver, task.worker, host, port)?
+            } else {
+                sched
+                    .cells
+                    .submit_connect(ctx, &mut *sched.driver, task.worker, host, port)?
+            };
+            match submitted {
+                Ok(token) => task.set(dst, token),
+                // 受け付けの前に断った引数は、driver の誤りと分けて種類 `Other` にする (docs/spec/stdlib.md の「`Std.Net`」)
+                Err(message) => {
+                    let raise = Raise::Io {
+                        kind: externs::IO_OTHER,
+                        message,
+                    };
+                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
+                }
+            }
+        }
+        Extern::NetSubmitAccept => {
+            let listener = task.get(arg(0));
+            let token =
+                sched
+                    .cells
+                    .submit_accept(ctx, &mut *sched.driver, task.worker, listener)?;
+            task.set(dst, token);
+        }
+        Extern::NetOpListener | Extern::NetOpStream => {
+            // token は借りるだけで、組を作る後の `con` が消費する
+            let w = sched.cells.op_stream(ctx, task.get(arg(0)))?;
+            task.set(dst, w);
+        }
+        Extern::NetOpOutcome => {
+            // token は借りるだけで、組を作る後の `con` が消費する
+            let code = sched.cells.op_outcome(ctx, task.get(arg(0)))?;
+            task.set_raw(dst, code);
+        }
+        ext @ (Extern::NetTakeListener | Extern::NetTakeStream) => {
+            let listener = ext == Extern::NetTakeListener;
+            let w = sched
+                .cells
+                .take_made(ctx, task.get(arg(0)), task.worker, listener)?;
+            task.set(dst, w);
+        }
+        Extern::NetFinish => {
+            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
+            // 記録が持っていたものは受け付けたタスクの ID の物体で、操作は終わっているので driver はもう触れない。
+            // 作ったハンドルは落とすと bin を通して閉じる (docs/spec/vm.md の「操作の記録」)
+            for w in [taken.buf, taken.made].into_iter().flatten() {
+                unsafe { ctx.heap_mut().decref(w) }?;
+            }
+            // 種類を決めた誤りは包みが投げる。取り消しを頼んだ記録の誤りは、包みが投げる取り消しに含める
+            // (docs/spec/stdlib.md の「`Std.Net`」)
+            if let Some((e, message)) = taken.failure() {
+                let raise = Raise::Io {
+                    kind: io_kind(e),
+                    message,
+                };
+                return raise_again::<R>(code, ctx, task, dst, raise, Extern::NetFinish);
+            }
+            task.set(dst, Word::UNIT);
+        }
+        Extern::NetLocalPort => {
+            // リスナーは借りるだけで、組を作る後の `con` が消費する
+            let port = cells::local_port(ctx, task.get(arg(0)))?;
+            task.set_raw(dst, port);
+        }
+        Extern::NetPeerAddr => {
+            // ストリームは借りるだけで、組を作る後の `con` が消費する
+            let peer = cells::peer_addr(ctx, task.get(arg(0)))?;
+            task.set(dst, peer);
+        }
+        ext @ (Extern::NetShutdownWrite | Extern::NetSetNodelay) => {
+            let stream = if ext == Extern::NetShutdownWrite {
+                task.get(arg(0))
+            } else {
+                task.get(arg(1))
+            };
+            let handle = cells::stream_handle(ctx, stream)?;
+            let (done, what) = if ext == Extern::NetShutdownWrite {
+                (
+                    sched.driver.shutdown_write(handle),
+                    "cannot shut down the stream",
+                )
+            } else {
+                let on = task.raw(arg(0)) != 0;
+                (
+                    sched.driver.set_nodelay(handle, on),
+                    "cannot set the no-delay option",
+                )
+            };
+            match done {
+                Ok(()) => task.set(dst, stream),
+                Err(e) => {
+                    // ストリームは呼ぶ側から移ってきた参照で、失敗では返さないので落とす
+                    unsafe { ctx.heap_mut().decref(stream) }?;
+                    let raise = Raise::Io {
+                        kind: io_kind(&e),
+                        message: format!("{what}: {e}"),
+                    };
+                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
+                }
+            }
+        }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async, Std.Chan, Std.Atomic and Std.IoTest reached the Async instruction",
+                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.IoTest and Std.Net reached the Async instruction",
             ));
         }
     }
@@ -2185,7 +2293,7 @@ fn async_op<R: Exec>(
 }
 
 /// driver の誤りの種類を `IOErrorKind` のタグにする。extern の誤りと同じく、最初の5種類のうち I/O の4つだけを出す
-/// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+/// (docs/spec/stdlib.md の「`Std.Net`」と「`Std.IoTest`」)。
 fn io_kind(e: &std::io::Error) -> i64 {
     match e.kind() {
         std::io::ErrorKind::NotFound => externs::IO_NOT_FOUND,
@@ -3090,7 +3198,20 @@ fn run_extern<R: Exec>(
             | Extern::IoTestTakeRead
             | Extern::IoTestOpTimedOut
             | Extern::IoTestSubmitChecksum
-            | Extern::IoTestTakeChecksum => {
+            | Extern::IoTestTakeChecksum
+            | Extern::NetSubmitListen
+            | Extern::NetSubmitAccept
+            | Extern::NetSubmitConnect
+            | Extern::NetOpListener
+            | Extern::NetOpStream
+            | Extern::NetOpOutcome
+            | Extern::NetTakeListener
+            | Extern::NetTakeStream
+            | Extern::NetFinish
+            | Extern::NetLocalPort
+            | Extern::NetPeerAddr
+            | Extern::NetShutdownWrite
+            | Extern::NetSetNodelay => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

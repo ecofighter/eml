@@ -35,6 +35,7 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_rt::{
@@ -270,7 +271,10 @@ struct OpRecord {
     worker: u32,
     /// 操作に貸した `Bytes`。受け付けから取り出しまで、その物体へのただ1つの参照である。
     buf: Option<Word>,
+    /// 受け付けに渡されたストリームかリスナー (`accept`)。`op_stream` が取り戻すまで持つ。
     stream: Option<Word>,
+    /// 完了の中身から集める地点で作った `NetListener` か `NetStream` の `Foreign`。取り出しの行が受け取るまで持つ。
+    made: Option<Word>,
     /// 待つ間だけ持つ token。再開の仕事に移す。
     token: Option<Word>,
     /// 待っているタスク。
@@ -290,6 +294,28 @@ enum OpKind {
     Write,
     /// プールの仕事。buffer は写した後は読まないので、一意でなくてよい。
     Job,
+    /// `prefix` は誤りの文言の前に付ける `cannot listen on {host}:{port}` である。
+    Listen {
+        prefix: Box<str>,
+    },
+    Accept,
+    /// `prefix` は `cannot connect to {host}:{port}` である。
+    Connect {
+        prefix: Box<str>,
+    },
+}
+
+impl OpKind {
+    /// `finish` が投げる IO の失敗の文言の前に付ける語 (docs/spec/stdlib.md の「`Std.Net`」)。
+    fn prefix(&self) -> &str {
+        match self {
+            OpKind::Read => "cannot read the stream",
+            OpKind::Write => "cannot write to the stream",
+            OpKind::Job => "the job failed",
+            OpKind::Listen { prefix } | OpKind::Connect { prefix } => prefix,
+            OpKind::Accept => "cannot accept a connection",
+        }
+    }
 }
 
 enum OpPhase {
@@ -297,15 +323,9 @@ enum OpPhase {
     Probe,
     /// driver が記憶を読み書きしている。
     Transfer,
-    /// 完了が届いた。2つ目は完了の `cancelled` で、driver の取り消しだけで終わったことを表す。
-    Done(
-        io::Result<usize>,
-        #[expect(
-            dead_code,
-            reason = "期限の取り消しで終わった完了と、期限と競った本物の誤りを分けるための印で、`Std.IoTest` の行はまだ読まない"
-        )]
-        bool,
-    ),
+    /// 完了が届いた。2つ目は完了の `cancelled` で、driver の取り消しだけで終わったことを表す。登録表が期限か取り消しの
+    /// ために `Probe` を終わらせたときも立てる。ハンドルを作る操作の結果は `Ok(0)` で、作ったものは記録の `made` にある。
+    Done(io::Result<usize>, bool),
 }
 
 /// `take_op` が返す、終わった操作の結果。
@@ -313,10 +333,63 @@ pub(crate) struct Taken {
     pub(crate) result: io::Result<usize>,
     /// 記録が持っていた buffer。呼ぶ側が返すか落とす。
     pub(crate) buf: Option<Word>,
+    /// 記録が持っていた、完了の中身から作った `Foreign`。呼ぶ側が返すか落とす。
+    pub(crate) made: Option<Word>,
+    kind: OpKind,
     /// 待つタスクが取り消され、結果によらず包みが取り消しを投げる。
     pub(crate) cancelling: bool,
     /// 待ちの期限が来た。誤りの結果は IO の失敗でなく期限切れである。
     pub(crate) timed_out: bool,
+    /// 完了の `cancelled`。
+    cancelled: bool,
+}
+
+impl Taken {
+    /// `op_outcome` と同じ結果の番号。
+    pub(crate) fn outcome(&self) -> i64 {
+        outcome(&self.result, self.timed_out, self.cancelled)
+    }
+
+    /// 結果の番号が `OUTCOME_FAILED` で、取り消しを頼んでいない記録の、IO の失敗の誤りと文言 (docs/spec/stdlib.md の
+    /// 「`Std.Net`」)。
+    pub(crate) fn failure(&self) -> Option<(&io::Error, String)> {
+        match &self.result {
+            Err(e) if !self.cancelling && self.outcome() == OUTCOME_FAILED => {
+                Some((e, format!("{}: {e}", self.kind.prefix())))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// `op_outcome` の結果の番号 (docs/spec/vm.md の「操作の記録」)。成功の完了は期限と競ってもデータである。
+pub(crate) const OUTCOME_OK: i64 = 0;
+/// 期限の取り消しで終わった。
+const OUTCOME_LATE: i64 = 1;
+const OUTCOME_RESET: i64 = 2;
+const OUTCOME_REFUSED: i64 = 3;
+const OUTCOME_ADDR_IN_USE: i64 = 4;
+const OUTCOME_TIMED_OUT: i64 = 5;
+/// そのほかの誤り。`finish` が投げる。
+const OUTCOME_FAILED: i64 = 6;
+
+/// 終わった記録の結果の番号。取り消しを頼んだ記録は包みが番号を見ないので、ここでは分けない。期限に負けたとみなすのは、
+/// 期限が来て、完了が取り消しだけで終わったときだけである。期限と競った本物の誤りは、その誤りを報告した syscall が
+/// 消費しているので、種類のまま報告する (docs/spec/stdlib.md の「`Std.Net`」)。
+fn outcome(result: &io::Result<usize>, timed_out: bool, cancelled: bool) -> i64 {
+    match result {
+        Ok(_) => OUTCOME_OK,
+        Err(_) if timed_out && cancelled => OUTCOME_LATE,
+        Err(e) => match e.kind() {
+            io::ErrorKind::ConnectionReset
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionAborted => OUTCOME_RESET,
+            io::ErrorKind::ConnectionRefused => OUTCOME_REFUSED,
+            io::ErrorKind::AddrInUse => OUTCOME_ADDR_IN_USE,
+            io::ErrorKind::TimedOut => OUTCOME_TIMED_OUT,
+            _ => OUTCOME_FAILED,
+        },
+    }
 }
 
 /// channel のセル (docs/spec/vm.md の「channel」)。
@@ -425,6 +498,41 @@ impl Drop for IoStream {
         dropped.push(self.handle);
         dropped.extend(self.peer);
     }
+}
+
+/// `Std.Net.TcpListener` の `Foreign` の中身。driver のハンドルと、待ち受けるポートを持つ。
+pub(crate) struct NetListener {
+    handle: IoHandle,
+    port: u16,
+    bin: Arc<HandleBin>,
+}
+
+impl Drop for NetListener {
+    // `IoStream` と同じく、driver に触れずに閉じるハンドルとして積むだけにする (docs/spec/vm.md の「時計と driver」)
+    fn drop(&mut self) {
+        bin_push(&self.bin, self.handle);
+    }
+}
+
+/// `Std.Net.TcpStream` の `Foreign` の中身。driver のハンドルと、作ったときの相手の番地を持つ。
+pub(crate) struct NetStream {
+    handle: IoHandle,
+    peer: SocketAddr,
+    bin: Arc<HandleBin>,
+}
+
+impl Drop for NetStream {
+    // `NetListener` と同じ
+    fn drop(&mut self) {
+        bin_push(&self.bin, self.handle);
+    }
+}
+
+fn bin_push(bin: &HandleBin, handle: IoHandle) {
+    bin.dropped
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(handle);
 }
 
 /// 登録表が数える仕事の回数。検査モードでなくても数えるが、`RunStats` に写すのは検査モードだけである
@@ -1528,7 +1636,7 @@ impl Registry {
             {
                 // 預かる ID は記録のものではなく、タスクのセルか `main` のもので、`free_task` が退かせる
                 let mut depot = Depot::of(record.worker);
-                for w in [record.buf, record.stream, record.token]
+                for w in [record.buf, record.stream, record.made, record.token]
                     .into_iter()
                     .flatten()
                 {
@@ -1635,6 +1743,7 @@ impl Registry {
                 worker,
                 buf: Some(buf),
                 stream: Some(stream),
+                made: None,
                 token: None,
                 waiter: None,
                 timer: None,
@@ -1668,6 +1777,7 @@ impl Registry {
                 worker,
                 buf: Some(buf),
                 stream: Some(stream),
+                made: None,
                 token: None,
                 waiter: None,
                 timer: None,
@@ -1701,6 +1811,7 @@ impl Registry {
                 worker,
                 buf: Some(buf),
                 stream: None,
+                made: None,
                 token: None,
                 waiter: None,
                 timer: None,
@@ -1708,6 +1819,72 @@ impl Registry {
                 timed_out: false,
             },
         ))
+    }
+
+    /// `Std.Net.submit_listen`。`host` と `port` は呼ぶ側から移ってきた参照と即値で、`host` は読んでから手放す。
+    /// `host` が IP アドレスの綴りでないか `port` が範囲の外なら、操作を出さずに IO の失敗の文言を返す
+    /// (docs/spec/stdlib.md の「`Std.Net`」)。
+    pub(crate) fn submit_listen<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
+        worker: u32,
+        host: Word,
+        port: i64,
+    ) -> Result<Result<Word, String>, CellFault> {
+        let host = take_string(ctx, host)?;
+        let prefix = format!("cannot listen on {host}:{port}");
+        let Ok(ip) = host.parse::<IpAddr>() else {
+            return Ok(Err(format!("{prefix}: the host is not an IP address")));
+        };
+        let Ok(port) = u16::try_from(port) else {
+            return Ok(Err(format!("{prefix}: the port is out of range")));
+        };
+        let key = driver.submit(Op::Listen {
+            addr: SocketAddr::new(ip, port),
+        });
+        let kind = OpKind::Listen {
+            prefix: prefix.into(),
+        };
+        Ok(Ok(self.record(ctx, net_record(key, kind, worker, None))))
+    }
+
+    /// `Std.Net.submit_accept`。リスナー `listener` は呼ぶ側から移ってきた参照で、記録に移す。
+    pub(crate) fn submit_accept<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
+        worker: u32,
+        listener: Word,
+    ) -> Result<Word, CellFault> {
+        // リスナーは `TcpListener` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`TcpListener` は `Lin`)
+        let handle = unsafe { (*ctx.heap().foreign_unique::<NetListener>(listener)?).handle };
+        let key = driver.submit(Op::Accept { listener: handle });
+        let record = net_record(key, OpKind::Accept, worker, Some(listener));
+        Ok(self.record(ctx, record))
+    }
+
+    /// `Std.Net.submit_connect`。`submit_listen` と同じく `host` を読んで手放す。`host` は名前でもよく、driver が解決する。
+    /// `port` が 1 から 65535 の外なら、操作を出さずに IO の失敗の文言を返す (docs/spec/stdlib.md の「`Std.Net`」)。
+    pub(crate) fn submit_connect<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
+        worker: u32,
+        host: Word,
+        port: i64,
+    ) -> Result<Result<Word, String>, CellFault> {
+        let host = take_string(ctx, host)?;
+        let prefix = format!("cannot connect to {host}:{port}");
+        let port = match u16::try_from(port) {
+            Ok(port) if port > 0 => port,
+            _ => return Ok(Err(format!("{prefix}: the port is out of range"))),
+        };
+        let key = driver.submit(Op::Connect { host, port });
+        let kind = OpKind::Connect {
+            prefix: prefix.into(),
+        };
+        Ok(Ok(self.record(ctx, net_record(key, kind, worker, None))))
     }
 
     /// 記録を表に入れ、鍵の項を足し、token を作る。
@@ -1849,30 +2026,25 @@ impl Registry {
         } in completed.drain(..)
         {
             self.stats.completions += 1;
-            // 記録が出すのはバイトの数で終わる操作だけである
-            let result = match result {
-                Ok(Done::Size(n)) => Ok(n),
-                Ok(Done::Listener { .. } | Done::Stream { .. }) => {
-                    return Err(CellFault::Internal("an op completes with a handle"));
-                }
-                Err(e) => Err(e),
-            };
             let op = self
                 .ops
                 .remove(&key)
                 .ok_or(CellFault::Internal("a completion names no op"))?;
+            let mut cancelled = cancelled;
+            let mut made = None;
             let record = self.op_mut(op)?;
             let result = match (&record.phase, &record.kind, result) {
                 (OpPhase::Done(..), _, _) => {
                     return Err(CellFault::Internal("an op completes twice"));
                 }
                 // 取り消しか期限で driver に取り消しを頼んだ読みには、もう buffer を貸さない。取り消しなら包みは結果に
-                // よらず取り消しを投げ、期限なら `None` を返す
+                // よらず取り消しを投げ、期限なら `None` を返す。読んだバイトはないので、取り消しで終わった完了と同じに扱う
                 (OpPhase::Probe, _, _) if record.cancelling || record.timed_out => {
+                    cancelled = true;
                     Err(io::Error::other("cancelled"))
                 }
                 (OpPhase::Probe, _, Err(e)) => Err(e),
-                (OpPhase::Probe, _, Ok(_)) => {
+                (OpPhase::Probe, _, Ok(Done::Size(_))) => {
                     let (worker, buf, stream) = (record.worker, record.buf, record.stream);
                     let (Some(buf), Some(stream)) = (buf, stream) else {
                         return Err(CellFault::Internal("a read op has no buffer or stream"));
@@ -1889,7 +2061,7 @@ impl Registry {
                     continue;
                 }
                 // 取り消しを頼んだ読みも、外が書いたバイトは確定してから buffer を返す
-                (OpPhase::Transfer, OpKind::Read, Ok(n)) => {
+                (OpPhase::Transfer, OpKind::Read, Ok(Done::Size(n))) => {
                     let (worker, buf) = (record.worker, record.buf);
                     let buf = buf.ok_or(CellFault::Internal("a read op has no buffer"))?;
                     // 記録は貸した後も buffer の唯一の参照を持ち、書き換えていない。driver は `Ok(n)` で `n` バイトを
@@ -1899,9 +2071,46 @@ impl Registry {
                     })?;
                     Ok(n)
                 }
-                (OpPhase::Transfer, _, result) => result,
+                (OpPhase::Transfer, OpKind::Write | OpKind::Job, Ok(Done::Size(n))) => Ok(n),
+                // 完了の中身のハンドルは、ここで記録のタスクの物体にする。取り消しを頼んだ記録でも作り、取り出しか
+                // `finish` が落とすと、ハンドルは bin を通して閉じる (docs/spec/vm.md の「操作の記録」)
+                (OpPhase::Transfer, OpKind::Listen { .. }, Ok(Done::Listener { handle, port })) => {
+                    let listener = NetListener {
+                        handle,
+                        port,
+                        bin: driver.bin(),
+                    };
+                    made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
+                        // 確保するだけで、`Ctx` の持つ語には触れない。`TcpListener` は `Lin` である
+                        unsafe { ctx.heap_mut() }.alloc_foreign(listener, true)
+                    }));
+                    Ok(0)
+                }
+                (
+                    OpPhase::Transfer,
+                    OpKind::Accept | OpKind::Connect { .. },
+                    Ok(Done::Stream { handle, peer }),
+                ) => {
+                    let stream = NetStream {
+                        handle,
+                        peer,
+                        bin: driver.bin(),
+                    };
+                    made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
+                        // `NetListener` と同じ。`TcpStream` は `Lin` である
+                        unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
+                    }));
+                    Ok(0)
+                }
+                (OpPhase::Transfer, _, Err(e)) => Err(e),
+                (OpPhase::Probe | OpPhase::Transfer, _, Ok(_)) => {
+                    return Err(CellFault::Internal(
+                        "an op completes with another kind of result",
+                    ));
+                }
             };
             let record = self.op_mut(op)?;
+            record.made = made;
             record.phase = OpPhase::Done(result, cancelled);
             // 終わった操作の期限は要らない。輪の項を残すと、満期に `expire` が待たないタスクを名指す
             let timer = record.timer.take();
@@ -1935,7 +2144,8 @@ impl Registry {
         Ok(())
     }
 
-    /// `Std.IoTest.op_stream`。借りた token の終わった記録からストリームを移し出す。
+    /// `Std.IoTest.op_stream`、`Std.Net.op_stream` と `op_listener`。借りた token の終わった記録から、受け付けに渡した
+    /// ストリームかリスナーを移し出す。
     pub(crate) fn op_stream<M: Mode>(
         &mut self,
         ctx: &Ctx<M>,
@@ -1969,6 +2179,43 @@ impl Registry {
         }
     }
 
+    /// `Std.Net.op_outcome`。借りた token の終わった記録の結果の番号 (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn op_outcome<M: Mode>(
+        &mut self,
+        ctx: &Ctx<M>,
+        token: Word,
+    ) -> Result<i64, CellFault> {
+        let op = self.token_op(ctx, token)?;
+        let record = self.op_mut(op)?;
+        match &record.phase {
+            OpPhase::Done(result, cancelled) => Ok(outcome(result, record.timed_out, *cancelled)),
+            OpPhase::Probe | OpPhase::Transfer => {
+                Err(CellFault::Internal("an op is taken before its completion"))
+            }
+        }
+    }
+
+    /// `Std.Net.take_listener` と `take_stream`。token を消費して記録を放し、完了の中身から作った `Foreign` を返す。
+    /// 結果の番号が `OUTCOME_OK` の記録だけを取り出す。`listener` はリスナーを作る操作 (`listen`) の記録を求める。
+    pub(crate) fn take_made<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        token: Word,
+        worker: u32,
+        listener: bool,
+    ) -> Result<Word, CellFault> {
+        let taken = self.take_op(ctx, token, worker)?;
+        if taken.outcome() != OUTCOME_OK {
+            return Err(CellFault::Internal("an op is taken after it failed"));
+        }
+        if matches!(taken.kind, OpKind::Listen { .. }) != listener {
+            return Err(CellFault::Internal("an op is taken as another kind of op"));
+        }
+        taken
+            .made
+            .ok_or(CellFault::Internal("an op has no handle to give"))
+    }
+
     /// 取り出しの行。token を消費して終わった記録を放し、結果と buffer を返す。残ったストリームは落とす。取り出すのは
     /// 受け付けたタスク (`worker`) だけである。記録の語はそのタスクの物体なので、切り替えずに受け取れる。
     pub(crate) fn take_op<M: Mode>(
@@ -1999,16 +2246,67 @@ impl Registry {
         if let Some(stream) = record.stream {
             unsafe { ctx.heap_mut().decref(stream) }?;
         }
-        let OpPhase::Done(result, _) = record.phase else {
+        let OpPhase::Done(result, cancelled) = record.phase else {
             unreachable!("the phase is checked above");
         };
         Ok(Taken {
             result,
             buf: record.buf,
+            made: record.made,
+            kind: record.kind,
             cancelling: record.cancelling,
             timed_out: record.timed_out,
+            cancelled,
         })
     }
+}
+
+/// buffer を持たない `Std.Net` の操作の記録。どれも driver が記憶を使わないので、段階は `Transfer` から始める。
+fn net_record(key: OpKey, kind: OpKind, worker: u32, stream: Option<Word>) -> OpRecord {
+    OpRecord {
+        key,
+        kind,
+        phase: OpPhase::Transfer,
+        worker,
+        buf: None,
+        stream,
+        made: None,
+        token: None,
+        waiter: None,
+        timer: None,
+        cancelling: false,
+        timed_out: false,
+    }
+}
+
+/// 呼ぶ側から移ってきた `String` の参照 `w` の中身を写して、参照を手放す。
+fn take_string<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<String, CellFault> {
+    // `w` は呼ぶ側が持つ今の worker の参照で、`Ctx` の持つ語には触れない。中身は写し終えてから手放す
+    let text = unsafe { (*ctx.heap().string(w)?).to_owned() };
+    unsafe { ctx.heap_mut().decref(w)? };
+    Ok(text)
+}
+
+/// `Std.Net.local_port`。借りたリスナーが待ち受けるポート。
+pub(crate) fn local_port<M: Mode>(ctx: &Ctx<M>, listener: Word) -> Result<i64, CellFault> {
+    // リスナーは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpListener` は `Lin`)
+    Ok(i64::from(unsafe {
+        (*ctx.heap().foreign_unique::<NetListener>(listener)?).port
+    }))
+}
+
+/// `Std.Net.peer_addr`。借りたストリームの相手の番地を、Rust の `SocketAddr` の表示の形の新しい文字列にする。
+pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
+    // ストリームは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpStream` は `Lin`)
+    let peer = unsafe { (*ctx.heap().foreign_unique::<NetStream>(stream)?).peer };
+    Ok(ctx.fresh_string(&peer.to_string()))
+}
+
+/// `Std.Net.shutdown_write` と `set_nodelay` が driver に渡すハンドル。ストリームは呼ぶ側から移ってきた参照で、呼ぶ側が
+/// 返すか落とす。
+pub(crate) fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
+    // ストリームは呼ぶ側が持つ唯一の参照である (`TcpStream` は `Lin`)
+    Ok(unsafe { (*ctx.heap().foreign_unique::<NetStream>(stream)?).handle })
 }
 
 /// `Std.IoTest.open_pair` が作る最初の端。`peer` は2つ目の端で、`peer` の行が分けるまで同じ物体が持つ。
@@ -3073,4 +3371,65 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
     assert!(matches!(taken.result, Ok(1)) && !taken.timed_out);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 受けの記録を期限付きで待ち、期限を満たしてから `result` の完了を当てる。返すのは `op_outcome` の番号である。
+/// どちらの番号も `finish` は投げず、包みが種類を決める。
+#[cfg(test)]
+fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let listener = NetListener {
+        handle: 0,
+        port: 1,
+        bin: Arc::default(),
+    };
+    let listener = unsafe { ctx.heap_mut() }.alloc_foreign(listener, true);
+    let token = registry
+        .submit_accept(&mut ctx, &mut driver, 0, listener)
+        .unwrap();
+    let key = driver.next_key;
+    let run = registry
+        .park_io_until(&ctx, &mut driver, 0, 50, token, me, Word::UNIT)
+        .unwrap();
+    assert!(run.is_none());
+    let mut out = Vec::new();
+    registry.expire(50, &mut driver, &mut out).unwrap();
+    assert_eq!(driver.cancelled, [key]);
+    driver.done.push(Completion {
+        key,
+        result: Err(result),
+        cancelled,
+    });
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut out)
+        .unwrap();
+    let Some(Runnable::ResumeIo { wake: WOKE, op, .. }) = out.pop() else {
+        panic!("the op wait resumes with `Woke`");
+    };
+    let code = registry.op_outcome(&ctx, op).unwrap();
+    let back = registry.op_stream(&ctx, op).unwrap();
+    let taken = registry.take_op(&mut ctx, op, 0).unwrap();
+    assert!(taken.timed_out && taken.made.is_none() && taken.failure().is_none());
+    unsafe { ctx.heap_mut().decref(back) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    code
+}
+
+/// 期限が来た後に届いた本物の誤りは、期限に負けたとせず、その種類で報告する。誤りはそれを報告した syscall が消費した
+/// ので、後の操作はもう見られない (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_deadline_that_races_a_reset_reports_the_reset() {
+    let reset = io::Error::from(io::ErrorKind::ConnectionReset);
+    assert_eq!(expired_accept_outcome(reset, false), OUTCOME_RESET);
+}
+
+/// 期限の取り消しだけで終わった完了は、期限に負けた番号になる (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_deadline_cancel_ends_late() {
+    let cancelled = io::Error::other("cancelled");
+    assert_eq!(expired_accept_outcome(cancelled, true), OUTCOME_LATE);
 }

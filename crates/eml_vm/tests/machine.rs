@@ -710,18 +710,12 @@ fn main() -> unit {
     machine.close().unwrap_or_else(|error| panic!("{error}"));
 }
 
-/// `IoTest.write` で待つプログラム。待つ書きのほかに走れるタスクも期限もないので、空きのループが driver を待つ。
-const WAITS_ON_A_WRITE: &str = "\
+/// `Net.listen` で待つプログラム。待つ操作のほかに走れるタスクも期限もないので、空きのループが driver を待つ。
+const WAITS_ON_A_LISTEN: &str = "\
 import Async
-import Bytes
-import IoTest
+import Net
 main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let (a, b) = IoTest.pair ()
-  let (n, a) = IoTest.write (Bytes.of_string \"x\") a
-  drop a
-  drop b
-  println (show n))
+main () = Async.run (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))
 ";
 
 /// 待ちの中で driver の `wait` が誤りを返すと、run は壊れた run として driver の誤りで終わる
@@ -733,7 +727,7 @@ fn a_failing_driver_breaks_the_run() {
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
     let loaded = machine
-        .load(&eml_test_support::lir(WAITS_ON_A_WRITE))
+        .load(&eml_test_support::lir(WAITS_ON_A_LISTEN))
         .unwrap();
     let error = machine.run(loaded.entry).unwrap_err();
     assert!(error.is_broken(), "{error}");
@@ -754,7 +748,7 @@ fn a_driver_left_pending_poisons_the_machine() {
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
     let loaded = machine
-        .load(&eml_test_support::lir(WAITS_ON_A_WRITE))
+        .load(&eml_test_support::lir(WAITS_ON_A_LISTEN))
         .unwrap();
     let error = machine.run(loaded.entry).unwrap_err();
     assert!(error.is_broken(), "{error}");

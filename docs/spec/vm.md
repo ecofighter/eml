@@ -236,7 +236,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Std.String.byte_at` と `Std.String.byte_length` も専用の命令にする。`byte_at` は `StrByteAt { dst, i, s }`、`byte_length` は `StrByteLength { dst, s }` で、どちらも文字列を借りたままにし、誤りのときも手放さない (巻き戻しの表が手放す)。バイト位置の外は `Panics` の行の `byte_at` だけが `step_failed` から `Panic` に届け、巻き戻しの地点になる。`byte_length` は `Pure` で地点を持たない。バイト単位の走査が文字列の読み出しの大半を占めるため、汎用の `Op::Extern` の行の番号の `match` を通さない
 - `Std.Bytes.get` と `Std.Bytes.length` も専用の命令にする。`get` は `BytesGet { dst, i, b }`、`length` は `BytesLength { dst, b }` で、文字列の2つの行と同じく、バイト列を借りたままにし、誤りのときも手放さない。`get` は `Panics` の行で、位置の外を `step_failed` から `Panic` に届けて巻き戻しの地点になり、`length` は `Pure` で地点を持たない。`Show Bytes` を eml で書くために Prelude が持つ `Prelude.bytes_get` と `Prelude.bytes_length` (借用の印も `Ctx` のメソッドも同じ) も、同じ2つの命令に写す
 - ほかの extern (`Float` の `compare`、文字列、表示、`println`、`FileIn`、`Fs`) は `Extern { dst, at }` の1つの命令にする。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…] で、行の番号の `match` で `Ctx` のメソッドを呼ぶ
-- `Std.Async` の31行と `Std.Chan` の6行 (`chan_cell` を除く)、`Std.Atomic` の4行、`Std.IoTest` の10行 (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
+- `Std.Async` の31行と `Std.Chan` の6行 (`chan_cell` を除く)、`Std.Atomic` の4行、`Std.IoTest` の10行、`Std.Net` の13行 (`Extern::is_async`) は `Async { dst, at }` の命令にする。オペランドは `Extern` と同じ形である。タスクを作って切り替えるので `Scheduler` を受ける。そのため、`Scheduler` を受けない汎用の `Extern` の命令と分ける (「`Async` のタスク」)
 - VM は `Ctx` の基本操作の合間に、`Ctx` が持つ語とそこからたどれる物体に触れない (`heap_mut()` の前提)
 - `Bool`、`Ordering`、`IOErrorKind` のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを、`eml_vm` のテスト (`tags.rs`) で確かめる。VM の `Bool` と `compare` の命令がこれに頼るためである
 
@@ -585,18 +585,22 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 ### 操作の記録
 
-`Std.IoTest` の待つ関数 ([標準ライブラリ](stdlib.md) の「`Std.IoTest`」) は、driver に出した操作を登録表の記録で追う。driver は語を見ないので (「時計と driver」)、操作に貸した記憶の物体は記録が持つ。
+`Std.Net` と `Std.IoTest` の待つ関数 ([標準ライブラリ](stdlib.md) の「`Std.Net`」と「`Std.IoTest`」) は、driver に出した操作を登録表の記録で追う。driver は語を見ないので (「時計と driver」)、操作に貸した記憶の物体は記録が持つ。
 
-- 記録は登録表のセルの4つ目の種類で、同じ添字と generation の表に入る。記録は、driver の鍵、操作の種類 (読みか書きかプールの仕事)、段階 (端が読めるようになるのを読みが待つ `Probe`、driver が記憶を使っている `Transfer`、完了が届いた `Done(結果)` のどれか)、受け付けたタスクの論理的な worker ID、buffer とストリームと待つ間の token の語、待っているタスク、待ちの期限の輪の鍵、取り消しを頼んだか、期限が来たかを持つ。登録表は driver の鍵から記録への表 `ops` と、完了を受ける使い回しの列も持つ
+- 記録は登録表のセルの4つ目の種類で、同じ添字と generation の表に入る。記録は、driver の鍵、操作の種類 (読み、書き、プールの仕事、待ち受け、受け、接続のどれか。待ち受けと接続は誤りの文言の prefix も持つ)、段階 (端が読めるようになるのを読みが待つ `Probe`、driver が記憶を使っている `Transfer`、完了が届いた `Done(結果, 取り消しだけで終わったか)` のどれか)、受け付けたタスクの論理的な worker ID、buffer とストリーム (受けではリスナー) と完了から作ったハンドルと待つ間の token の語、待っているタスク、待ちの期限の輪の鍵、取り消しを頼んだか、期限が来たかを持つ。登録表は driver の鍵から記録への表 `ops` と、完了を受ける使い回しの列も持つ
 - 記録の語は `Depot` で公開しない。`Heap::share` は届く `Unr` の物体を共有にするので、公開すると driver に貸す物体の一意さが崩れるためである。語は受け付けたタスクの ID の物体のまま記録が持ち、そのタスクの外で記録の語に触れるときは `with_worker(記録の worker ID)` の下で行う。取り出しは受け付けたタスクで行い、違えば内部の誤り `an op is taken by another task` にする
 - `Std.Async.OpId` の値は記録の番号と登録表の受け箱を持つ `OpToken` を中身にした、`lin` ビットの立つ `Foreign` である。`OpToken` の `Drop` は、取り出しが受け取っていなければ取り出す前に落ちた知らせを積む。受け箱の処理は、記録が生きていればこれを内部の誤り `an op token was dropped before its take` にし、放した記録への古い知らせは無視する。token の受け箱が登録表の受け箱と違えば前の run の token で、内部の誤り `an op token outlived its run` にする
 - `Std.IoTest.Stream` の値は driver のハンドルと、まだ分けていない2つ目の端と、driver の `HandleBin` を持つ `IoStream` を中身にした、`lin` ビットの立つ `Foreign` である。`IoStream` の `Drop` は driver に触れず、ハンドルを `HandleBin` に積む。driver は次の待ちか完了の取り出しか `quiesce` で閉じる
+- `Std.Net.TcpListener` の値は、driver のハンドルと待ち受けるポートと `HandleBin` を持つ `NetListener` を中身にした、`lin` ビットの立つ `Foreign` である。`Std.Net.TcpStream` の値は、ハンドルと相手の番地と `HandleBin` を持つ `NetStream` を中身にした、同じ形の `Foreign` である。どちらの `Drop` も `IoStream` と同じく、ハンドルを `HandleBin` に積むだけである
 - 受け付け (`submit_write`) は、buffer とストリームを記録に移す。buffer が一意でなければ、同じ中身の新しい `Bytes` を作って元を手放すので、記録の buffer の語は受け付けから取り出しまでその物体へのただ1つの参照である。driver には `Heap::bytes` の位置から作った `RawBuf` で `Op::Write` を出し、段階を `Transfer` にする。読みの受け付け (`submit_read`) も同じく buffer とストリームを移すが、buffer の容量は足さず、端が読めるようになるのを待つ `Op::Readable` を出して、段階を `Probe` にする。何も来ない端の読みに記憶を持たせないためである。仕事の受け付け (`submit_checksum`) は buffer を記録に移し、中身を `Vec<u8>` に写して仕事を作り、`Op::Job` を出して段階を `Transfer` にする。仕事はプールのスレッドで動くので、ヒープの記憶を貸さない。そのため buffer は一意でなくてよい。`Op::Job` の closure を作るのは `eml_vm` の `jobs.rs` だけで、`jobs.rs` は `std` と `eml_rt::Op` だけを使い、`unsafe` を持たない (テスト `io.rs` の `the_jobs_module_imports_only_std_and_eml_rt`)。受け付けの行は預かる印のない普通の消費の行である
+- 待ち受けと接続の受け付け (`submit_listen`、`submit_connect`) は `host` の中身を写して手放し、`host` とポートを確かめてから `Op::Listen` か `Op::Connect` を出す。確かめに落ちれば操作を出さず、種類 `Other` の IO の失敗を `failed` に渡す。受けの受け付け (`submit_accept`) はリスナーを記録に移して `Op::Accept` を出す。どれも buffer を持たず、driver は記憶を使わないので、段階を `Transfer` にする
 - 待ち (`park_io`、`park_io_until`) は、token から記録を引き、すでに待つタスクがいれば内部の誤り `an op is awaited twice` にする。待つ間は記録が token を持ち、タスクのセルが継続を持つ。待ちの登録はその記録の操作の待ちである。`park_io_until` の期限は待ちの属性で、記録が輪の鍵を持つ (「時間の待ち」)
-- 完了は集める地点 (「時計と driver」) でだけ受け取る。`ops` が空でなければ driver の `completions` を呼び、driver の順に、鍵で記録を引いて `ops` から外し、段階を `Done(結果)` にする。期限の輪の項があれば外す。鍵に記録がなければ内部の誤り `a completion names no op` にする。待つタスクがあれば、待ちの登録を空にし、継続と token を取り出して、再開の仕事 `ResumeIo` を列の後ろに積む。渡す `Wake` は、取り消しを頼んだ記録なら `Cancelled`、ほかは `Woke` である
-- 読みは1つの記録で driver の操作を2つ使う。`Probe` の完了は、取り消しを頼んだ記録か期限が来た記録なら buffer を貸さずに `Done(誤り)` にし、誤りなら `Done(その誤り)` にする。`Ok` なら、端が読めるようになった (データか EOF) ので、buffer の長さの後ろの空きを `Heap::bytes_lend` で貸し、`Op::Read` を新しい鍵で出して `ops` に入れ直し、段階を `Transfer` にする。待つタスクはそのまま待つ。空きが 65 536 バイトより少なければ、先に長さに 65 536 を足した容量の新しい `Bytes` を作って中身を写し、記録の buffer をそれに替えて元を手放す。`Readable` は EOF でも終わるので、その後の読みが `Ok(0)` を返すことが EOF のただ1つの知らせである
+- 完了は集める地点 (「時計と driver」) でだけ受け取る。`ops` が空でなければ driver の `completions` を呼び、driver の順に、鍵で記録を引いて `ops` から外し、段階を `Done(結果, 完了の cancelled)` にする。期限の輪の項があれば外す。鍵に記録がなければ内部の誤り `a completion names no op` にする。待つタスクがあれば、待ちの登録を空にし、継続と token を取り出して、再開の仕事 `ResumeIo` を列の後ろに積む。渡す `Wake` は、取り消しを頼んだ記録なら `Cancelled`、ほかは `Woke` である
+- 読みは1つの記録で driver の操作を2つ使う。`Probe` の完了は、取り消しを頼んだ記録か期限が来た記録なら buffer を貸さずに、取り消しだけで終わった `Done(誤り)` にし、誤りなら `Done(その誤り)` にする。`Ok` なら、端が読めるようになった (データか EOF) ので、buffer の長さの後ろの空きを `Heap::bytes_lend` で貸し、`Op::Read` を新しい鍵で出して `ops` に入れ直し、段階を `Transfer` にする。待つタスクはそのまま待つ。空きが 65 536 バイトより少なければ、先に長さに 65 536 を足した容量の新しい `Bytes` を作って中身を写し、記録の buffer をそれに替えて元を手放す。`Readable` は EOF でも終わるので、その後の読みが `Ok(0)` を返すことが EOF のただ1つの知らせである
 - 読みの `Transfer` の完了が `Ok(n)` なら、外が書いた `n` バイトを `Heap::bytes_commit` で buffer の長さに確定してから `Done(Ok(n))` にする。取り消しを頼んだ記録でも確定する。読んだバイトを捨てずに buffer を返すためである。buffer の操作 (`bytes_extend`、`decref`、`bytes_lend`、`bytes_commit`) は記録の語に触れるので、`with_worker(記録の worker ID)` の下で行う。その誤りは検査モードの前提の違反で、壊れた run にする。driver に出す前に返すので、貸したままの記憶は残らない。確保量の上限は誤りにせず、`MEMORY` のビットで次の安全点に止まり、run の後の `quiesce` が読みを取り消す
-- `op_stream` は終わった記録からストリームを移し出す。取り出し (`take_write`、`take_read`、`take_checksum`) は、終わった記録と受け付けたタスクを確かめ、token に受け取った印を付けて手放し、残ったストリームを手放して記録を放し、結果と buffer を返す。終わっていなければ内部の誤り `an op is taken before its completion` にする
+- 完了の中身の `Done::Listener` と `Done::Stream` は、集める地点で `with_worker(記録の worker ID)` の下で `NetListener` か `NetStream` の `Foreign` にし、記録に持たせる。結果は `Ok(0)` にする。取り消しを頼んだ記録でも作り、`finish` が落とす。記録の種類と中身の種類が合わなければ、内部の誤り `an op completes with another kind of result` にする
+- `op_outcome` は終わった記録の結果の番号を返す。成功なら 0、期限が来ていて完了が取り消しだけで終わった誤りなら 1、誤りの種類が ConnectionReset、BrokenPipe、ConnectionAborted なら 2、ConnectionRefused なら 3、AddrInUse なら 4、TimedOut なら 5、ほかの誤りなら 6 である。取り消しを頼んだ記録も同じに決める。包みはその番号を見ない
+- `op_stream` (`Std.Net` の `op_listener` も同じ) は終わった記録からストリームかリスナーを移し出す。取り出し (`take_write`、`take_read`、`take_checksum`、`take_listener`、`take_stream`、`finish`) は、終わった記録と受け付けたタスクを確かめ、token に受け取った印を付けて手放し、残ったストリームを手放して記録を放し、結果と buffer を返す。終わっていなければ内部の誤り `an op is taken before its completion` にする
 - 1つの token に記録は1つで、1つのタスクの待ちの登録は1つである。driver の `cancel` を呼ぶのは、待つ前の取り消しと過ぎた期限 (`park_io`、`park_io_until`)、満ちた期限 (`expire`)、受け箱の処理の取り消し (`unpark`)、`quiesce` だけである。記録を放すのは、受け付けたタスクの取り出しと、run の終わりの `sweep_all` だけである
 
 ### 待ちの2種類
@@ -637,6 +641,14 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `submit_checksum delay b`: 今の `Task` の worker ID で記録を作り、`b` の中身を写した仕事を出して、token を `dst` に書く。仕事に渡す遅れは、時計が本物のときだけ `delay` を 0 から 1000 ミリ秒に収めたもので、仮想の時計では 0 である (「時計と driver」)
 - `take_checksum op`: token を消費して記録を放し、buffer を手放す。結果が `Ok(n)` なら `n` を、取り消しを頼んだ記録の誤りなら 0 を `dst` に書く。そうでない誤りは IO の失敗 `the checksum job failed: …` を `failed` に渡す
 - `op_timed_out op`: 借りた token の終わった記録に期限が来ていて、結果が誤りなら真を、そうでなければ偽を `dst` に書く。終わっていなければ内部の誤り `an op is taken before its completion` にする。token を消費するのは、組を作る後の `con` である
+- `submit_listen host port` と `submit_connect host port`: 今の `Task` の worker ID で記録を作って待ち受けか接続を出し、token を `dst` に書く。`host` かポートが確かめに落ちれば、種類 `Other` の IO の失敗を `failed` に渡す (「操作の記録」)
+- `submit_accept l`: 今の `Task` の worker ID で、リスナー `l` を移した記録を作って受けを出し、token を `dst` に書く
+- `op_listener op` と、`Std.Net` の `op_stream op`: `Std.IoTest` の `op_stream` と同じく、借りた token の記録からリスナーかストリームを移し出して `dst` に書く
+- `op_outcome op`: 借りた token の終わった記録の結果の番号 (「操作の記録」) を `dst` に書く。終わっていなければ内部の誤り `an op is taken before its completion` にする。token を消費するのは、組を作る後の `con` である
+- `take_listener op` と `take_stream op`: token を消費して記録を放し、完了から作ったリスナーかストリームを `dst` に書く。番号が 0 でなければ内部の誤り `an op is taken after it failed` にし、`take_listener` が待ち受けでない記録を受けたときと、`take_stream` が受けでも接続でもない記録を受けたときは、内部の誤り `an op is taken as another kind of op` にする
+- `finish op`: token を消費して記録を放し、記録がまだ持つ buffer とハンドルを手放す。番号が 6 で、取り消しを頼んだ記録でなければ、driver の誤りの種類を `IOErrorKind` に写した IO の失敗 `{prefix}: …` を `failed` に渡す。そうでなければ `()` を書く
+- `local_port l` と `peer_addr s`: 借りたリスナーのポートを即値で、借りたストリームの相手の番地を新しい文字列で `dst` に書く。引数を消費するのは、組を作る後の `con` である
+- `shutdown_write s` と `set_nodelay on s`: ストリームのハンドルで driver の同じ名前のメソッドを呼び、ストリームを `dst` に書く。誤りならストリームを手放し、IO の失敗 `cannot shut down the stream: …` か `cannot set the no-delay option: …` を `failed` に渡す
 - 再開する仕事は、待ったタスクのセルを持つ `resume_task` のエントリの `Task` になり、そのタスクの ID で動く。動き始めるときにセルの状態を「動いている」に戻し、`k` に `Woke` か `Cancelled` を渡す。実行待ちから再開するときは、核の `resumed` が渡す値を決める。操作の待ちの再開は `resume_io` のエントリの `Task` になり、`k` に `Wake` と token を渡す
 - `detach t`: ハンドルを消費し、受け取った印を付けて手放す。タスクが終わっていればセルを放し、終わっていなければ持ち手のないタスクにする
 - `cancel_raw t`: `detach` と同じく手放し、終わっていないタスクには取り消しの印を付ける
@@ -657,7 +669,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `push_raw` と `pop_raw` は、0 を返した `reserve_*` の直後に標準ライブラリが呼ぶ。処理系はこの順を確かめない
 - `chan_cell c` は `Async` の命令でなく extern の命令で、即値をそのまま写す
 - `Std.Atomic` の4行は `Machine` の表 `counters` を読み書きする。`new n` は表に `n` を積み、その添字を `Counter` の即値として `dst` に書く。`add n c` は `counters[c]` に `n` を `wrapping_add` で足して書き戻し、足した後の値を返す。`load c` は値を返し、`store n c` は書く。添字が表の外なら内部の誤り (`a counter index is out of range`) にするが、検査を通ったプログラムからは届かない
-- `Std.Chan` と `Std.Atomic` の行と、`Std.IoTest` の `open_pair` と `peer` は今のタスクのセルを使わないので、タスクの外でも動く。`Std.IoTest` のほかの行も今のタスクのセルを使わないが、`Async` を持つ包みからしか呼ばれない。タスクの外では予算を使わない。`park_send` と `park_recv` は `Std.Async` の行で、下の残りの行と同じく今のタスクのセルが要る
+- `Std.Chan` と `Std.Atomic` の行と、`Std.IoTest` の `open_pair` と `peer` と、`Std.Net` の `local_port`、`peer_addr`、`shutdown_write`、`set_nodelay` は今のタスクのセルを使わないので、タスクの外でも動く。`Std.IoTest` と `Std.Net` のほかの行も今のタスクのセルを使わないが、`Async` を持つ包みからしか呼ばれない。タスクの外では予算を使わない。`park_send` と `park_recv` は `Std.Async` の行で、下の残りの行と同じく今のタスクのセルが要る
 - `run_raw` と `run_result` はトップレベルの `Async.run` のたびにタスクの外で動く。今のタスクがなければ、`run_raw` は親のない根を開く。`task_cell`、`take_result`、`detach`、`cancel_raw`、`close_scope`、`cancel_scope_raw`、`fail_scope_io`、`fail_scope_panic`、`cancel_members` も今の `Task` のセルを使わないので、タスクの外でも動く。`cancel_point` はタスクの外で偽を返す。`finish_ok`、`finish_io`、`finish_panic` はタスクの外では内部の誤り (`a task finishes twice or outside a task`) にする。残りの行 (`start_raw`、`start_in_raw`、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`ready`、`open_scope`、`leave_scope`、`shield_enter`、`shield_leave`、`spend_budget`、`claim_scope`) は今の `Task` のセルが要り、タスクの外では内部の誤り (`an Async operation runs outside a task`) にする。`run_raw` と `run_result` のほかの行は `Async` を持つ包みからしか呼ばれないので、この2つの誤りは検査を通ったプログラムからは届かない
 - `shield_enter ()` と `shield_leave ()`: 今の `Task` のセルの `shield` の深さを1つ増やすか減らす。深さが 0 のときに減らせば内部の誤りにする
 - `cancel_point ()`: 今のタスクが取り消しの地点で投げるかを、`dst` に真偽で書く。規則は「取り消しの届け方」の取り消しの地点の規則と同じである。真を返したときは `cancels` を数える。タスクの外では偽を返す

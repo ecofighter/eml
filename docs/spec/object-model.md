@@ -143,6 +143,8 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 | `Child` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、Rust の値 `Child` (下の「extern」の「子のプロセス」) |
 | `Std.Async.OpId` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、`eml_vm` の Rust の値 `OpToken` ([VM](vm.md) の「操作の記録」) |
 | `Std.IoTest.Stream` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、`eml_vm` の Rust の値 `IoStream` ([VM](vm.md) の「操作の記録」) |
+| `Std.Net.TcpListener` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、`eml_vm` の Rust の値 `NetListener` ([VM](vm.md) の「操作の記録」) |
+| `Std.Net.TcpStream` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、`eml_vm` の Rust の値 `NetStream` ([VM](vm.md) の「操作の記録」) |
 
 ### クロージャ
 

@@ -78,6 +78,12 @@ probe_op o = o
 probe_stream : IoTest.Stream -> IoTest.Stream
 probe_stream s = s
 
+probe_tcp_listener : Net.TcpListener -> Net.TcpListener
+probe_tcp_listener l = l
+
+probe_tcp_stream : Net.TcpStream -> Net.TcpStream
+probe_tcp_stream s = s
+
 probe_panic : Unit -> <Panic> Int
 probe_panic () = panic \"x\"
 
@@ -113,6 +119,8 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Counter => "probe_counter",
         ExternType::OpId => "probe_op",
         ExternType::IoTestStream => "probe_stream",
+        ExternType::NetTcpListener => "probe_tcp_listener",
+        ExternType::NetTcpStream => "probe_tcp_stream",
     }
 }
 
@@ -272,7 +280,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 }
 
 /// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`、
-/// `Std.IoTest` の `peer` と `op_stream` と `op_timed_out` と、`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
+/// `Std.IoTest` の `peer` と `op_stream` と `op_timed_out` と、`Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`local_port`、`peer_addr` と、`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
@@ -287,6 +295,11 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Std.IoTest.peer" | "Std.IoTest.op_stream" | "Std.IoTest.op_timed_out" => {
                 (&[true], Some(0))
             }
+            "Std.Net.op_listener"
+            | "Std.Net.op_stream"
+            | "Std.Net.op_outcome"
+            | "Std.Net.local_port"
+            | "Std.Net.peer_addr" => (&[true], Some(0)),
             "Std.FileIn.read_all"
             | "Std.FileIn.read_line_raw"
             | "Std.FileIn.read_all_bytes"
@@ -468,7 +481,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par`、`Std.Async` の17行、`Std.Chan` の2行、`Std.IoTest` の10行以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の17行、`Std.Chan` の2行、`Std.IoTest` の10行、`Std.Net` の13行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -544,6 +557,14 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.IoTest.take_write" | "Std.IoTest.take_read" => (&[Lin], Unr),
             "Std.IoTest.op_timed_out" | "Std.IoTest.take_checksum" => (&[Lin], Unr),
             "Std.IoTest.submit_checksum" => (&[Unr, Unr], Lin),
+            "Std.Net.submit_listen" | "Std.Net.submit_connect" => (&[Unr, Unr], Lin),
+            "Std.Net.submit_accept" => (&[Lin], Lin),
+            "Std.Net.op_listener" | "Std.Net.op_stream" => (&[Lin], Lin),
+            "Std.Net.op_outcome" | "Std.Net.finish" => (&[Lin], Unr),
+            "Std.Net.take_listener" | "Std.Net.take_stream" => (&[Lin], Lin),
+            "Std.Net.local_port" | "Std.Net.peer_addr" => (&[Lin], Unr),
+            "Std.Net.shutdown_write" => (&[Lin], Lin),
+            "Std.Net.set_nodelay" => (&[Unr, Lin], Lin),
             _ => {
                 assert!(
                     row.param_marks.iter().all(|&mark| mark == Unr),
@@ -772,11 +793,12 @@ fn the_io_error_kind_tags_match_the_prelude_declaration() {
             ("NotUtf8", eml_lir::IO_NOT_UTF8),
             ("Other", eml_lir::IO_OTHER),
             ("Cancelled", eml_lir::IO_CANCELLED),
-            // 次の4つには Rust の定数がない。Rust の側は作らず、`fail_io` がタグをそのまま渡す
+            // 次の5つには Rust の定数がない。Rust の側は作らず、`fail_io` がタグをそのまま渡す
             ("TimedOut", 6),
             ("ConnectionReset", 7),
             ("AddrInUse", 8),
-            ("ResourceLimit", 9)
+            ("ResourceLimit", 9),
+            ("ConnectionRefused", 10)
         ]
     );
 }
