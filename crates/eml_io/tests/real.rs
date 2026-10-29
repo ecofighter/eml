@@ -705,11 +705,12 @@ fn a_long_write_completes_once_with_its_whole_length() {
     assert!(reader.join().unwrap() == data);
 }
 
-/// 読まない相手への長い書きを取り消すと、出し直さずに完了がちょうど1つ届く。相手が少し読んで送りの buffer が
-/// 空いた後、次の `wait` より前に取り消す。期限の取り消しと同じ順 (`wait`、`cancel`、`wait`、`completions`) である。
+/// 待っている長い書きを取り消すと、完了がちょうど1つ、取り消しの誤り `cancelled` で届き、その後には何も届かない。
+/// 相手が少し読んで送りの buffer が空いた後、次の `wait` より前に取り消す。期限の取り消しと同じ順 (`wait`、`cancel`、
+/// `wait`、`completions`) である。
 #[cfg(unix)]
 #[test]
-fn a_cancelled_long_write_stops_resubmitting() {
+fn a_cancelled_pending_long_write_completes_once() {
     use std::io::Read;
 
     let mut driver = RealDriver::new().unwrap();
@@ -1242,6 +1243,21 @@ fn a_cancel_after_completion_does_not_touch_the_next_op_of_the_key() {
     assert!(!completion.cancelled);
     assert_eq!(completion.result.unwrap(), Done::Size(2));
     assert_eq!(&room[..2], b"yz");
+}
+
+/// 受け付けで終わる操作だけが続いても、落とされたハンドルは次の `submit` で閉じる。`wait` も `completions` も
+/// 呼ばない run で、落としたリスナーとストリームの fd が積もらないためである。
+#[cfg(unix)]
+#[test]
+fn a_submit_closes_dropped_handles() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (listener, port) = listen(&mut driver, &mut stash);
+    driver.bin().dropped.lock().unwrap().push(listener);
+    let again = submit(&mut driver, Op::Listen { addr: loopback(0) });
+    assert!(again.done.is_some());
+    let error = std::net::TcpStream::connect(loopback(port)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::ConnectionRefused);
 }
 
 #[cfg(debug_assertions)]

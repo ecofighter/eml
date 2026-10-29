@@ -121,7 +121,8 @@ impl IoBuf for Mem {
         if self.len == 0 {
             return &[];
         }
-        // SAFETY: `len <= cap` で、貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない。記憶は `Bytes` の
+        // SAFETY: `len <= cap` で、貸した側は、`submit` が `Submit::Done` を返すか完了を取り出すまで記憶を生かし、
+        // 一意に保ち、動かさない。記憶は `Bytes` の
         // 物体の空きか、操作の記録が持つ `Foreign` の `Vec<u8>` の空きである。書きの出し直しの `RawBuf` は貸した記憶の
         // 後ろの部分を指す。driver は貸した側と同じスレッドで動く (`RawBuf`。docs/spec/vm.md の「時計と driver」、
         // docs/spec/object-model.md の T10 の行)
@@ -245,6 +246,9 @@ impl RealDriver {
     /// 書きの残りを出す。`push` の中で終わった短い書きは、その場で続きを出す。`cancelled` なら出し直さずに終える。
     fn send(&mut self, mut writing: Writing, cancelled: bool) -> Step {
         loop {
+            // poll の backend では、`wait` が `poll` と `pop` を1回で行い、`cancel` は待っている送りをその場で
+            // `ECANCELED` にするので、ここに取り消した書きの短い結果は来ない。IOCP は取り消しの前に終わった短い送りの
+            // 結果を返しうるので、続きを出さずに終える道を残す
             if cancelled {
                 return Step::Done(Err(cancelled_error()), true);
             }
@@ -503,6 +507,19 @@ impl RealDriver {
         }
     }
 
+    /// 解決が `key` をまだ持つか。手放した解決も、スレッドが答えるまで鍵を持つ。
+    fn resolver_holds(&self, key: OpKey) -> bool {
+        #[cfg(unix)]
+        {
+            self.resolver.holds(key)
+        }
+        #[cfg(windows)]
+        {
+            let _ = key;
+            false
+        }
+    }
+
     /// 待ちか実行中の、放棄していない解決と、受け取ってまだ試行を始めていない解決の数。
     fn lookups(&self) -> usize {
         #[cfg(unix)]
@@ -633,10 +650,16 @@ impl IoDriver for RealDriver {
     }
 
     fn submit(&mut self, key: OpKey, op: Op) -> Submit {
+        // 渡していない完了の鍵と、解決が持つ鍵もまだ保留である。手放した解決の鍵は、スレッドが答えるまで使い回せない
+        // (`Resolver::cancel`)
         debug_assert!(
-            !self.ops.contains_key(&key),
+            !self.ops.contains_key(&key)
+                && self.done.iter().all(|c| c.key != key)
+                && !self.resolver_holds(key),
             "a pending key is submitted again"
         );
+        // 受け付けで終わる操作が続くと `wait` も `completions` も呼ばれないので、落とされたハンドルはここでも閉じる
+        self.empty_bin();
         let step = match op {
             Op::Readable { handle } | Op::Read { handle, .. } | Op::Write { handle, .. }
                 if !self.handles.contains_key(&handle) =>
@@ -718,7 +741,9 @@ impl IoDriver for RealDriver {
 
     fn cancel(&mut self, key: OpKey) {
         let Some(entry) = self.ops.get_mut(&key) else {
-            // 名前の解決は結果を待たずに手放す (docs/spec/vm.md の「時計と driver」)
+            // 名前の解決は結果を待たずに手放す (docs/spec/vm.md の「時計と driver」)。手放したスレッドの答えは鍵で
+            // 捨てるので、その鍵はスレッドが答えるまで次の操作に使い回せない。VM は記録を放すたびに generation を
+            // 進めるので、鍵を使い回さない
             #[cfg(unix)]
             if self.resolver.cancel(key) {
                 self.done.push(Completion {

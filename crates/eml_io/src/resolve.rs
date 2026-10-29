@@ -136,7 +136,9 @@ impl Resolver {
     }
 
     /// `key` の解決を手放す。解決だったら真を返し、呼ぶ側が取り消しの完了を作る。走っている解決のスレッドは手放して
-    /// 数え、後から届く結果は捨てる。
+    /// 数え、後から届く結果は捨てる。結果は鍵で見分けるので、スレッドが答えるまでその鍵の新しい解決を受け付けては
+    /// ならない。受け付けると、古い答えが新しい解決に当たる。
+    /// `IoDriver::submit` の約束 (完了を返した鍵はすぐ使い回せる) の例外で、呼ぶ側の VM は鍵を使い回さない。
     pub(crate) fn cancel(&mut self, key: OpKey) -> bool {
         if self.live.remove(&key) {
             self.abandoned.insert(key);
@@ -152,6 +154,14 @@ impl Resolver {
             return true;
         }
         false
+    }
+
+    /// `key` の解決が、待ちか実行中か受け取り済みか、手放してまだ答えていないか。
+    pub(crate) fn holds(&self, key: OpKey) -> bool {
+        self.live.contains(&key)
+            || self.abandoned.contains(&key)
+            || self.ready.iter().any(|(k, _)| *k == key)
+            || self.queue.iter().any(|(k, _, _)| *k == key)
     }
 
     /// すべての解決を、完了を作らずに手放す。

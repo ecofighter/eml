@@ -125,8 +125,8 @@ impl TestDriver {
                 let (peer, shut) = (end.peer, end.shut);
                 match self.net.ends.get_mut(&peer) {
                     Some(peer) if !peer.closed && !shut => {
-                        // 貸した側は完了を取り出すまで記憶を生かし、書き換えない (`RawBuf`。docs/spec/vm.md の
-                        // 「時計と driver」、docs/spec/object-model.md の T10 の行)
+                        // 貸した側は、`submit` が `Submit::Done` を返すか完了を取り出すまで記憶を生かし、書き換えない
+                        // (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
                         peer.inbox.extend(unsafe { bytes(buf) });
                         done(Ok(Done::Size(buf.cap)))
                     }
@@ -148,8 +148,8 @@ impl TestDriver {
                         .inbox;
                     let n = buf.cap.min(inbox.len());
                     for (i, byte) in inbox.drain(..n).enumerate() {
-                        // 貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない。`i < n <= cap` である
-                        // (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
+                        // 貸した側は、`submit` が `Submit::Done` を返すか完了を取り出すまで記憶を生かし、一意に保ち、
+                        // 動かさない。`i < n <= cap` である (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
                         unsafe { buf.ptr.add(i).write(byte) };
                     }
                     done(Ok(Done::Size(n)))
@@ -243,8 +243,10 @@ impl IoDriver for TestDriver {
     }
 
     fn submit(&mut self, key: OpKey, op: Op) -> Submit {
+        // 渡していない完了の鍵もまだ保留である (`IoDriver::submit`)
         debug_assert!(
-            self.ops.iter().all(|pending| pending.key != key),
+            self.ops.iter().all(|pending| pending.key != key)
+                && self.done.iter().all(|c| c.key != key),
             "a pending key is submitted again"
         );
         // 決着と同じく、落とされたハンドルを閉じた後の状態を見る
