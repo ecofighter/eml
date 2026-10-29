@@ -1269,8 +1269,12 @@ fn switch_away<R: Exec>(
         if let Some(next) = sched.policy.pick(&mut sched.ready) {
             break next;
         }
-        let deadline = sched.cells.next_deadline();
-        if deadline.is_none() && sched.driver.pending() == 0 {
+        let mut deadline = sched.cells.next_deadline();
+        // OS のシグナルを待つタスクがいれば、ほかに進むものがなくてもシグナルが来るまで眠る。本物の driver は1回の
+        // 眠りを短く切り、届いたときは監視のスレッドが waker で起こす
+        if sched.listening() {
+            deadline = deadline.or(Some(u64::MAX));
+        } else if deadline.is_none() && sched.driver.pending() == 0 {
             return Err(VmFault::Deadlock);
         }
         match sched.driver.wait(deadline) {
@@ -1390,6 +1394,9 @@ fn collect<R: Exec>(
             schedule(code, sched, entries, run)?;
         }
     }
+    // ハンドラは見張りの語で保留にするか既定の動きにするかを決めるので、届けて空になった列と取り消しで外れた待ち手を
+    // ここで写す (docs/spec/vm.md の「上限と割り込み」)
+    sched.sync_watched();
     if sched.cells.unheard != 0 {
         return Err(unheard(ctx.heap().control(), sched.cells.unheard));
     }
@@ -2049,12 +2056,17 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncParkSignal => {
             let me = current_cell(task)?;
+            // 本物の driver では、OS のシグナルを中継する監視のスレッドが要る (docs/spec/vm.md の「タスクとスケジュール」)
+            if sched.real_driver {
+                sched.start_monitor();
+            }
             if let Some(run) = sched
                 .cells
                 .park_signal(task.raw(arg(0)), me, task.get(arg(1)))?
             {
                 schedule(code, sched, entries, run)?;
             }
+            sched.sync_watched();
             task.set(dst, Word::UNIT);
         }
         Extern::NetSubmitWrite => {

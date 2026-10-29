@@ -261,6 +261,9 @@ pub struct Scheduler<P: Policy> {
     pub(crate) stacks: Vec<Vec<eml_rt::Word>>,
     /// 時計と待ち。`Machine` が持つものを run の間だけ預かる (docs/spec/vm.md の「時計と driver」)。
     pub(crate) driver: Box<dyn IoDriver>,
+    /// `Machine` の時計が本物か。`with_driver` で差し込んだ driver でも、時計の欄で決める。本物の driver の run だけが
+    /// OS のシグナルを待つタスクへ届ける (docs/spec/stdlib.md の「`Std.Signal`」)。
+    pub(crate) real_driver: bool,
     /// 監視のスレッドと、それに渡すもの。
     pub(crate) watcher: Watcher,
 }
@@ -313,6 +316,7 @@ impl<P: Policy> Scheduler<P> {
             cells: Registry::new(generations),
             stacks: Vec::new(),
             driver,
+            real_driver: false,
             watcher: Watcher {
                 control,
                 doorbell,
@@ -336,6 +340,29 @@ impl<P: Policy> Scheduler<P> {
             watcher.doorbell.clone(),
             P::PREEMPTS,
         );
+    }
+
+    /// OS のシグナルを待つタスクへ中継するか。本物の driver の上で、監視のスレッドが動いているときだけである。
+    /// 仮想の driver の run では本物のシグナルは既定の動きをする (docs/spec/stdlib.md の「`Std.Signal`」)。
+    pub(crate) fn relay_on(&self) -> bool {
+        self.real_driver && self.watcher.monitor.is_some()
+    }
+
+    /// 見張りの語を、待ち手の列が空でないシグナルに合わせる。`park_signal` の後と集める地点の終わりに呼ぶので、
+    /// 中継する間は、待つタスクのいる種類がいつも語に立っている (docs/spec/vm.md の「上限と割り込み」)。
+    pub(crate) fn sync_watched(&self) {
+        let bits = if self.relay_on() {
+            self.cells.signal_bits()
+        } else {
+            0
+        };
+        self.watcher.control.set_watched(bits);
+    }
+
+    /// 空きのループが OS のシグナルを待つか。待つなら、ほかに進むものがなくてもデッドロックにしない
+    /// (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn listening(&self) -> bool {
+        self.relay_on() && self.cells.signal_bits() != 0
     }
 
     pub(crate) fn add_task(&mut self, task: Task) -> TaskId {

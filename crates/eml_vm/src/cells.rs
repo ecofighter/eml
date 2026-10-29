@@ -1218,6 +1218,15 @@ impl Registry {
         Ok(None)
     }
 
+    /// 待ち手の列が空でないシグナルのビット。
+    pub(crate) fn signal_bits(&self) -> u32 {
+        SIGNAL_BITS
+            .iter()
+            .zip(&self.signal_waiters)
+            .filter(|(_, waiters)| !waiters.is_empty())
+            .fold(0, |bits, (&bit, _)| bits | bit)
+    }
+
     /// シグナルのビット `bits` を届ける。種類ごとに、待つタスクをすべて待ち始めた順に `Woke` で再開する仕事を `out` に
     /// 積み、列を空にする。待つタスクのいない種類は `unheard` に足す (docs/spec/stdlib.md の「`Std.Signal`」)。
     fn deliver(&mut self, bits: u32, out: &mut Vec<Runnable>) -> Result<(), CellFault> {

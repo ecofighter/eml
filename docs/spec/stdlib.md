@@ -1372,8 +1372,11 @@ main () = Async.run (fn () ->
 - `Interrupt` は Ctrl-C で、unix の SIGINT と Windows の `CTRL_C_EVENT` である。`Terminate` は unix の SIGTERM である。Windows には `Terminate` を起こす OS の出来事がない
 - `wait s` は、シグナル `s` が来るまでタスクを待たせる。取り消しの地点で、取り消されると IO の失敗 `Prelude.Cancelled` を投げる。取り消された待ちは待ち手から外れる。待ちは `Std.Async` の `signal_wait` を通す (上の「`Std.Async`」)
 - シグナルが来ると、そのとき同じシグナルを待つタスクをすべて、待ち始めた順に起こす。起こしたタスクは実行待ちの列の後ろに入る。シグナルは貯めない。待つタスクがなければ既定の動きをする。`Interrupt` は run を止めて終了コードを 130 にし、`Terminate` も同じ止め方で 143 にする ([VM](vm.md) の「上限と割り込み」)。起こされてから次の `wait` までに来たシグナルも既定の動きをする
-- 本物のシグナル (Ctrl-C と SIGTERM) はいつも既定の動きをし、`wait` には届かない。`wait` に届くのは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` で予定した仮想のシグナルだけである ([VM](vm.md) の「時間の待ち」)
-- 予定のないシグナルは来ないので、シグナルだけを待つ run は、ほかに進むものがなければデッドロックで止まる ([VM](vm.md) の「時計と driver」)
+- 届ける前に同じシグナルが続けて来ると、1つにまとまる。`eml run` では、前の同じシグナルをまだ届けていない間か、それがもう run を止めている間に来たシグナルは、その場でプロセスを終わらせる。Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)` である。届けた後のシグナルは1回目として扱う。2つの種類は互いを数えない ([VM](vm.md) の「上限と割り込み」)
+- worker が別のタスクを動かしていても、シグナルは次の安全点で届き、待つタスクは実行待ちの列の後ろに入る。標準入力、`FileIn`、`Child` の同期の読みで worker が止まっている間に来たシグナルは、読みが戻ってから届く
+- 本物のシグナル (Ctrl-C と SIGTERM) が `wait` に届くのは、本物の driver の run だけである。シグナルを待つタスクのいる run は、ほかに進むものがなくてもデッドロックにならず、シグナルが来るまで眠る ([VM](vm.md) の「時計と driver」)
+- テストの driver の run では、本物のシグナルはいつも既定の動きをする。そこで `wait` に届くのは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` で予定した仮想のシグナルだけである。予定は本物の driver の run でも同じに満ちる ([VM](vm.md) の「時間の待ち」)。テストの driver の run では、予定の残っていないシグナルだけを待つ run は、ほかに進むものがなければデッドロックで止まる
+- `eml repl` は SIGTERM を受けず、SIGTERM は OS の既定の動作でプロセスを終わらせる。`Signal.wait Interrupt` は REPL でも使える
 
 ## 実行時エラー
 

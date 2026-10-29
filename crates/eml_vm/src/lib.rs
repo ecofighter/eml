@@ -471,6 +471,7 @@ impl<M: Mode> Machine<M> {
             generations: std::mem::take(&mut self.generations),
             counters: std::mem::take(&mut self.counters),
             driver,
+            real_driver: matches!(self.clock, Clock::Real),
             doorbell: self.doorbell.clone(),
             signals: std::mem::take(&mut self.signals),
         };
@@ -686,6 +687,8 @@ struct Start {
     generations: Vec<u32>,
     counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
+    /// `Machine` の時計が本物か。`with_driver` で差し込んだ driver でも、時計の欄で決める。
+    real_driver: bool,
     doorbell: Option<Arc<Doorbell>>,
     signals: Vec<VirtualSignal>,
 }
@@ -712,6 +715,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         start.generations,
     );
     sched.shared_roots = start.shared_roots;
+    sched.real_driver = start.real_driver;
     sched.cells.counters = start.counters;
     // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
     sched

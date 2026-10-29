@@ -1023,6 +1023,209 @@ main () =
     assert_eq!(status.code(), Some(143));
 }
 
+/// `ready` の行を読んでから、残りの標準エラーを別のスレッドで読み続ける。ハンドラを入れる前のシグナルはプロセスを殺すので、
+/// シグナルを送るのは `ready` の後にする。
+#[cfg(unix)]
+fn read_after_ready(child: &mut std::process::Child) -> std::sync::mpsc::Receiver<String> {
+    use std::io::{BufRead, BufReader};
+
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut ready = String::new();
+    stderr.read_line(&mut ready).unwrap();
+    assert_eq!(ready, "ready\n");
+    let (lines, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stderr.lines().map_while(Result::ok) {
+            if lines.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    received
+}
+
+/// 子が終わるまで待つ。締め切りを過ぎたら子を殺して、テストを失敗にする。
+#[cfg(unix)]
+fn wait_for_exit(
+    child: &mut std::process::Child,
+    deadline: std::time::Instant,
+) -> std::process::ExitStatus {
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if std::time::Instant::now() >= deadline {
+            kill_after_deadline(child, "the program did not end");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// `eml run` では、SIGTERM は `Signal.wait Terminate` で待つタスクに届き、run は続く (docs/spec/stdlib.md の
+/// 「`Std.Signal`」)。逐次の方針では、`yield_now` で待つタスクが待ちに入ってから `ready` を書く。
+#[cfg(unix)]
+#[test]
+fn a_terminate_reaches_a_waiting_task() {
+    use std::time::Instant;
+
+    let text = "\
+import Async
+import Signal
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () ->
+    Signal.wait Signal.Terminate
+    eprintln \"got\")
+  Async.yield_now ()
+  eprintln \"ready\"
+  Async.await t)
+";
+    let dir = temp_project("cli-sigterm-wait", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .args(["run", "--sched", "sequential", "main.em"])
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let lines = read_after_ready(&mut child);
+    sigterm(&child);
+    let status = wait_for_exit(&mut child, deadline);
+    let rest: Vec<String> = lines.iter().collect();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(0), "{rest:?}");
+    assert_eq!(rest, ["got"]);
+}
+
+/// 届けた後のシグナルは1回目として扱う。待つタスクがもういないので、2回目の Ctrl-C は run を止め、終了コードは 130 で
+/// ある (docs/spec/vm.md の「上限と割り込み」)。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_after_a_delivered_one_ends_the_program_with_130() {
+    use std::time::Instant;
+
+    let text = "\
+import Async
+import Signal
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () ->
+    Signal.wait Signal.Interrupt
+    eprintln \"got\")
+  Async.yield_now ()
+  eprintln \"ready\"
+  Async.await t
+  Async.sleep_ms 600000)
+";
+    let dir = temp_project("cli-sigint-delivered", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .args(["run", "--sched", "sequential", "main.em"])
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let lines = read_after_ready(&mut child);
+    sigint(&child);
+    let got = lines.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    if got.as_deref() != Ok("got") {
+        kill_after_deadline(&mut child, "the waiting task did not wake");
+    }
+    // `got` は届けた後にしか書かれず、届けた集める地点が見張りの語も空にしている
+    sigint(&child);
+    let status = wait_for_exit(&mut child, deadline);
+    let rest: Vec<String> = lines.iter().collect();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{rest:?}");
+    // 安全点で止めたので、文言の後には止めたときの関数の名前が続く (docs/spec/vm.md の「誤り、止めること、終わり」)
+    assert!(
+        rest.first()
+            .is_some_and(|line| line.starts_with("runtime error: interrupted in `")),
+        "{rest:?}"
+    );
+}
+
+/// 待つタスクがいても、worker が標準入力の読みで止まっていれば、シグナルは読みが戻るまで届かない。届けていない間の
+/// 2回目のシグナルは、ハンドラがその場で終わらせる (docs/spec/vm.md の「上限と割り込み」)。
+#[cfg(unix)]
+fn a_second_signal_ends_a_program_whose_waiter_cannot_be_reached(
+    name: &str,
+    kind: &str,
+    send: fn(&std::process::Child),
+    code: i32,
+) {
+    use std::time::{Duration, Instant};
+
+    let text = format!(
+        "\
+import Async
+import Signal
+import Stdin
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.spawn (fn () -> Signal.wait Signal.{kind})
+  Async.yield_now ()
+  eprintln \"ready\"
+  let (line, h) = Stdin.read_line (Stdin.open ())
+  Stdin.close h
+  println (show line))
+"
+    );
+    let dir = temp_project(name, &[("main.em", &text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .args(["run", "--sched", "sequential", "main.em"])
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // 書き手を開いたままにして、読みを待たせる
+    let writer = child.stdin.take();
+    let _lines = read_after_ready(&mut child);
+    let status = loop {
+        send(&child);
+        std::thread::sleep(Duration::from_millis(100));
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not end");
+        }
+    };
+    drop(writer);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(code));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_second_ctrl_c_ends_a_program_whose_waiter_cannot_be_reached() {
+    a_second_signal_ends_a_program_whose_waiter_cannot_be_reached(
+        "cli-sigint-unreached",
+        "Interrupt",
+        sigint,
+        130,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_second_terminate_ends_a_program_whose_waiter_cannot_be_reached() {
+    a_second_signal_ends_a_program_whose_waiter_cannot_be_reached(
+        "cli-sigterm-unreached",
+        "Terminate",
+        sigterm,
+        143,
+    );
+}
+
 /// 標準出力を受け継ぐ `run (merge_stderr c)` の子は、標準エラーを eml の標準出力に書く。`before` が子の行より前に
 /// 並ぶのは、起動の前に標準出力を書き出す規則による (docs/spec/stdlib.md の「`Proc`」の「起動」)。
 #[test]
