@@ -6,7 +6,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eml_rt::{Checked, Completion, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey};
+use eml_rt::{Checked, Completion, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf};
 use eml_test_support::{run, run_stats};
 use eml_vm::{Machine, RunConfig, capture_host};
 
@@ -84,11 +84,13 @@ main () = Async.run (fn () ->
     assert_eq!((s.completions, s.parks), (2, 1));
 }
 
-/// 書きを取り消されるまで終わらせない driver。取り消した書きは、次の `completions` で誤りとして終わる。
+/// 書きと読みを取り消されるまで終わらせない driver。端が読めるようになるのを待つ操作はすぐ終わる。取り消した書きは、
+/// 次の `completions` で誤りとして終わる。取り消した読みは、取り消しが間に合わなかったものとして、貸された記憶に
+/// `xy` を書いて2バイトで終わる。
 #[derive(Default)]
 struct HoldingDriver {
     next_key: OpKey,
-    held: Vec<OpKey>,
+    held: Vec<(OpKey, Option<RawBuf>)>,
     done: Vec<Completion>,
 }
 
@@ -107,19 +109,29 @@ impl IoDriver for HoldingDriver {
         Ok(!self.done.is_empty())
     }
 
-    fn submit(&mut self, _op: Op) -> OpKey {
+    fn submit(&mut self, op: Op) -> OpKey {
         self.next_key += 1;
-        self.held.push(self.next_key);
-        self.next_key
+        let key = self.next_key;
+        match op {
+            Op::Readable { .. } => self.done.push(Completion { key, result: Ok(0) }),
+            Op::Read { buf, .. } => self.held.push((key, Some(buf))),
+            _ => self.held.push((key, None)),
+        }
+        key
     }
 
     fn cancel(&mut self, key: OpKey) {
-        if let Some(at) = self.held.iter().position(|&k| k == key) {
-            self.held.remove(at);
-            self.done.push(Completion {
-                key,
-                result: Err(io::Error::other("cancelled")),
-            });
+        if let Some(at) = self.held.iter().position(|&(k, _)| k == key) {
+            let result = match self.held.remove(at).1 {
+                Some(buf) => {
+                    assert!(buf.cap >= 2);
+                    // 記録が完了を受け取るまで、貸された記憶に書いてよい
+                    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), buf.ptr, 2) };
+                    Ok(2)
+                }
+                None => Err(io::Error::other("cancelled")),
+            };
+            self.done.push(Completion { key, result });
         }
     }
 
@@ -187,4 +199,44 @@ main () = Async.run (fn () ->
     assert_eq!(out.contents(), "Cancelled: task was cancelled\n");
     let s = finished.stats;
     assert_eq!((s.completions, s.cancels), (1, 1));
+}
+
+/// 貸した記憶へ読んでいる間に取り消された読みは、取り消しが間に合わずにバイトを読んでいても、タスクを `Cancelled` で
+/// 再開して種類 `Cancelled` の失敗を投げる。取り出しの行は読んだバイトを確定した buffer を返し、包みが落とすので、
+/// 検査モードの漏れの検査も通る (docs/spec/stdlib.md の「`Std.IoTest`」)。
+#[test]
+fn a_read_cancelled_during_its_transfer_raises_cancelled() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import IoTest
+reader : IoTest.Stream -> <IO, Async> Unit
+reader b =
+  match try_io (fn () -> IoTest.read_chunk (Bytes.of_string \"ab\") b) with
+    | Ok (buf, b) ->
+      drop b
+      println \"read \\{show (Bytes.length buf)}\"
+    | Err e -> println \"\\{show e.kind}: \\{e}\"
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let (a, b) = IoTest.pair ()
+  let t = Async.start (fn () -> reader b)
+  Async.yield_now ()
+  Async.yield_now ()
+  Async.cancel t
+  drop a)
+";
+    let (host, out) = capture_host(Default::default());
+    let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
+        .with_driver(Box::new(HoldingDriver::default()));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "Cancelled: task was cancelled\n");
+    let s = finished.stats;
+    // 端が読めるようになった完了と、取り消した読みの完了
+    assert_eq!((s.completions, s.cancels), (2, 1));
 }

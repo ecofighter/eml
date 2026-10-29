@@ -606,6 +606,8 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `submit_write b s`: 今の `Task` の worker ID で記録を作って書きを出し、token を `dst` に書く (「操作の記録」)
 - `op_stream op`: 借りた token の記録からストリームを移し出して `dst` に書く。token を消費するのは、組を作る後の `con` である
 - `take_write op`: token を消費して記録を放し、buffer を手放す。結果が `Ok(n)` なら `n` を、取り消しを頼んだ記録の誤りなら 0 を `dst` に書く。そうでない誤りは、IO の失敗 `cannot write to the stream: …` を `failed` に渡す
+- `submit_read b s`: 今の `Task` の worker ID で記録を作り、buffer の容量を足さずに、端が読めるようになるのを待つ操作を出す。token を `dst` に書く (「操作の記録」)
+- `take_read op`: token を消費して記録を放し、buffer を `dst` に書く。結果が `Ok(n)` なら、buffer は読んだ `n` バイトを確定したものである。取り消しを頼んだ記録は、誤りでも、確定したバイトを持つ buffer を書く。そうでない誤りは、buffer を手放し、IO の失敗 `cannot read the stream: …` を `failed` に渡す
 - 再開する仕事は、待ったタスクのセルを持つ `resume_task` の入口の `Task` になり、そのタスクの ID で動く。動き始めるときにセルの状態を「動いている」に戻し、`k` に `Woke` か `Cancelled` を渡す。実行待ちから再開するときは、核の `resumed` が渡す値を決める。操作の待ちの再開は `resume_io` の入口の `Task` になり、`k` に `Wake` と token を渡す
 - `detach t`: ハンドルを消費し、受け取った印を付けて手放す。タスクが終わっていればセルを放し、終わっていなければ持ち手のないタスクにする
 - `cancel_raw t`: `detach` と同じく手放し、終わっていないタスクには取り消しの印を付ける

@@ -2416,12 +2416,15 @@ fn a_slot_retires_instead_of_wrapping_its_generation() {
     );
 }
 
-/// 操作を受け付けるだけで完了を返さない driver。核の単体テストが driver の crate に頼らないためのものである。
+/// 操作を受け付けるだけで、テストが積んだ完了だけを返す driver。核の単体テストが driver の crate に頼らないための
+/// ものである。読みに貸された記憶を覚え、テストが外の書き手としてそこに書く。
 #[cfg(test)]
 #[derive(Default)]
 struct NoDriver {
     next_key: OpKey,
     cancelled: Vec<OpKey>,
+    done: Vec<Completion>,
+    lent: Vec<RawBuf>,
 }
 
 #[cfg(test)]
@@ -2442,7 +2445,10 @@ impl IoDriver for NoDriver {
         Ok(false)
     }
 
-    fn submit(&mut self, _op: Op) -> OpKey {
+    fn submit(&mut self, op: Op) -> OpKey {
+        if let Op::Read { buf, .. } = op {
+            self.lent.push(buf);
+        }
         self.next_key += 1;
         self.next_key
     }
@@ -2451,7 +2457,9 @@ impl IoDriver for NoDriver {
         self.cancelled.push(key);
     }
 
-    fn completions(&mut self, _out: &mut Vec<Completion>) {}
+    fn completions(&mut self, out: &mut Vec<Completion>) {
+        out.append(&mut self.done);
+    }
 
     fn pending(&self) -> usize {
         0
@@ -2555,5 +2563,110 @@ fn sweep_all_frees_a_waited_op_before_its_task() {
     });
     registry.sweep_all(&mut ctx, 0).unwrap();
     assert!(registry.ops.is_empty());
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// `bytes` の読みを受け付けて待ち、端が読めるようになった完了を当てる。返すのは token と記録である。
+#[cfg(test)]
+fn probed_read(
+    registry: &mut Registry,
+    ctx: &mut Ctx<eml_rt::Checked>,
+    driver: &mut NoDriver,
+    me: CellRef,
+    buf: Word,
+) -> (Word, CellRef) {
+    let stream = open_stream(ctx, 0, None, Arc::default());
+    let token = registry.submit_read(ctx, driver, 0, buf, stream).unwrap();
+    let op = registry.token_op(ctx, token).unwrap();
+    assert!(
+        registry
+            .park_io(ctx, driver, token, me, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    let key = registry.op_mut(op).unwrap().key;
+    driver.done.push(Completion { key, result: Ok(0) });
+    let mut out = Vec::new();
+    registry.complete(ctx, driver, 0, &mut out).unwrap();
+    // 読めるようになっただけでは再開せず、貸した記憶への読みを新しい鍵で待つ
+    assert!(out.is_empty());
+    assert!(matches!(
+        registry.op_mut(op).unwrap().phase,
+        OpPhase::Transfer
+    ));
+    (token, op)
+}
+
+/// 中身 `ab` を持ち、長さの後ろに `room` バイト以上の空きがある一意な `Bytes`。
+#[cfg(test)]
+fn bytes_ab(ctx: &mut Ctx<eml_rt::Checked>, room: usize) -> Word {
+    let heap = unsafe { ctx.heap_mut() };
+    let w = heap.alloc_bytes_room(room + 2);
+    unsafe { heap.bytes_extend(w, b"ab") }.unwrap()
+}
+
+/// 貸した空きが `READ_ROOM` 以上あれば、同じ物体をそのまま貸す。足りなければ、中身を写した新しい物体を貸し、元を
+/// 手放す (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    for (room, in_place) in [(READ_ROOM, true), (0, false)] {
+        let me = running_task(&mut registry, scope);
+        let buf = bytes_ab(&mut ctx, room);
+        let (token, op) = probed_read(&mut registry, &mut ctx, &mut driver, me, buf);
+        let lent = registry.op_mut(op).unwrap().buf.unwrap();
+        assert_eq!(lent == buf, in_place);
+        assert!(driver.lent.pop().unwrap().cap >= READ_ROOM);
+        let key = registry.op_mut(op).unwrap().key;
+        driver.done.push(Completion { key, result: Ok(0) });
+        let mut out = Vec::new();
+        registry
+            .complete(&mut ctx, &mut driver, 0, &mut out)
+            .unwrap();
+        let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+        let back = taken.buf.unwrap();
+        assert_eq!(back, lent);
+        assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"ab");
+        unsafe { ctx.heap_mut().decref(back) }.unwrap();
+    }
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 貸した記憶へ読んでいる間に取り消された読みも、外が書いたバイトを確定し、それを持つ buffer を返す
+/// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+#[test]
+fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let buf = bytes_ab(&mut ctx, 0);
+    let (token, op) = probed_read(&mut registry, &mut ctx, &mut driver, me, buf);
+    let raw = driver.lent.pop().unwrap();
+    // 外の書き手として、貸した空きの先頭に書く
+    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), raw.ptr, 2) };
+    registry.task_mut(me).unwrap().cancel = true;
+    let mut out = Vec::new();
+    registry.unpark(&mut driver, me, &mut out).unwrap();
+    let key = registry.op_mut(op).unwrap().key;
+    assert_eq!(driver.cancelled, [key]);
+    // 取り消しが間に合わず、読みは2バイトで終わった
+    driver.done.push(Completion { key, result: Ok(2) });
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut out)
+        .unwrap();
+    assert!(matches!(
+        out.as_slice(),
+        [Runnable::ResumeIo { cell, wake: CANCELLED, .. }] if *cell == me
+    ));
+    let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+    assert!(taken.cancelling && matches!(taken.result, Ok(2)));
+    let back = taken.buf.unwrap();
+    assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abxy");
+    unsafe { ctx.heap_mut().decref(back) }.unwrap();
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }

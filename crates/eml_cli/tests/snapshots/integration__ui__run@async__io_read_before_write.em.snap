@@ -4,6 +4,7 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{s
 input_file: tests/ui/run/async/io_read_before_write.em
 ---
 --- stdout ---
+reading
 writing
 read late
 --- stderr ---
