@@ -140,7 +140,7 @@ fn settle<M>(
 
 - 1 のときの `park_io` と `park_io_until` は今の数え方 (`parks`、`cancels`、`timers`) のままである。そのため `parks` は `io_wait` と `io_wait_until` の呼び出しの数、`timers` は今の定義 (地点で取り消されなかった正の期限) のままで、どちらもスケジュールに依らない。
 - `completions` は受け付けで終わった操作と集めた完了の和である。driver の結果1つにつき1つ数える (確かめとその後の読みは2つ)。
-- 予算は今の操作の予算 (タスクごとに 128。`check_cancelled` と同じ `spend_budget`) で、再開 (`resumed`) で 128 に戻る。
+- 予算は今の操作の予算 (タスクごとに 128。`check_cancelled` と同じ `spend_budget`) で、再開 (`resumed`) で 128 に戻る。ただし操作の待ちからの再開 (`resume_io`) では戻さない。速い道があるので操作の待ちが park するかはスケジュールで変わり、そこで戻すと予算の切れる位置と `parks` がスケジュールに依る (逐次と seed で `parks` が 1 違う例を `io.rs` の `the_budget_runs_out_at_the_same_wait_in_every_schedule` が固定する)。
 - `vm.rs` に `AsyncOpReady` の腕を足し、`Extern::is_async()` と、vm.rs の `Async` の命令にする行の一覧 (3090 行付近の、`Extern::AsyncStartRaw` から並ぶ腕) に足す。
 
 ### 2.5 空きのループの期限と監視のスレッド (`lib.rs`、`sched.rs`、`vm.rs`、T-3)
@@ -384,12 +384,16 @@ io_wait_until op ms =
 | テスト | 扱い | 種類 |
 |---|---|---|
 | `crates/eml_core_ir/tests/externs.rs` の印の表の期待値 | `OpId` の位置が `Unr` になる (即値の token の印は `unr`)。印を読む関数 `declared_mark` が Repr のスカラーを `Unr` にし、2つの一覧の行を直す | 2 |
-| `io.rs` の `one_task_of_finished_ops_never_waits_on_the_driver` | 新しく足す (中間の値)。`TestDriver` を包んで `wait` と `completions` の呼び出しと受け付けた `Op` の種類を記録し、`quiesce` で `immediate()` を写す driver `Recorder` を `with_driver` で渡す。1つのタスクで `listen`、`local_port`、`connect`、`accept`、`write_bytes (Bytes.of_string "hi")`、`read_chunk (Bytes.of_string "hi")` を順に行う。確かめる値: `immediate == 6` (読みは空きがないので `Readable` と `Read`)、`wait` の呼び出し 0、`RunStats.parks == 5`、`completions == 6`、出力 `hi`。T-8 で最終の値にする (7.7 節) | 新規 (値は T-8 で種類 2) |
+| `io.rs` の `one_task_of_finished_ops_never_waits_on_the_driver` | 新しく足す (中間の値)。`TestDriver` を包んで `wait` と `completions` の呼び出しと受け付けた `Op` の種類を記録し、`quiesce` で `immediate()` を写す driver `Recorder` を `with_driver` で渡す。1つのタスクで `listen`、`local_port`、`connect`、`accept`、`write_bytes (Bytes.of_string "hi")`、`read_chunk (Bytes.empty ())` を順に行う (読みの buffer を空にして、出力を書いた `hi` にする)。確かめる値: `immediate == 6` (読みは空きがないので `Readable` と `Read`)、`wait` の呼び出し 0、`RunStats.parks == 5`、`completions == 6`、出力 `hi`。T-8 で最終の値にする (7.7 節) | 新規 (値は T-8 で種類 2) |
 | `io.rs` の `echo_counts_do_not_depend_on_the_seed` | 新しく足す。2つのタスクの 20 往復の echo を `Sched::Seeded(1)`、`(2)`、`(3)` と検査モードで流し、`parks` と `completions` が3つで同じ | — |
 | `io.rs` の `a_fast_path_loop_yields_to_another_task_under_sequential` | 新しく足す。`Sequential` で、`main` のタスクが自分の2つの端で書きと読みを 300 回 (`Bytes.truncate 0` で buffer を使い回す)、先に `Async.start` したタスクが `println "other"`。出力が `other\nloop done\n` | — |
-| `io.rs` の `a_cancelled_fast_path_loop_stops_at_its_next_wait` | 新しく足す。`Sequential` で、タスク `t` が自分の2つの端で書きと読みを 1000 回繰り返し、回るたびに `Atomic.add` で数を足す。`main` は `t` を始めた後 `Async.yield_now ()` で `t` を動かし (`t` は予算の 128 回で譲る)、戻ったら `Async.cancel t` と `Async.await` を `try_io` で受ける。確かめる値: `await` が種類 `Cancelled` の失敗、数が 64 以上 65 以下 (128 回の `io_wait` は 64 周で、取り消しの後に終える操作は高々1つ)。値は実装で数えて、この範囲で固定する | — |
+| `io.rs` の `a_cancelled_fast_path_loop_stops_at_its_next_wait` | 新しく足す。`Sequential` で、タスク `t` が自分の2つの端で書きと読みを 1000 回繰り返し、回るたびに `Atomic.add` で数を足す。`main` は名前付きのスコープ `s` に `t` を始めた後 `Async.yield_now ()` で `t` を動かし (`t` は予算の 128 回で譲る)、戻ったら `Async.cancel_scope s` と `Async.await t` を行い、スコープの全体を `try_io` で受ける (`Async.cancel` はハンドルを消費して待てないため)。確かめる値: 結果が種類 `Cancelled` の失敗、数が 64 以上 65 以下 (128 回の `io_wait` は 64 周で、取り消しの後に終える操作は高々1つ)。値は実装で数えて、この範囲で固定する | — |
+| `io.rs` の `the_budget_runs_out_at_the_same_wait_in_every_schedule` | 新しく足す。2つ目の受けが、始めたタスクの接続が先に走ったかで受け付けで終わるか待つかが変わり、その後の `spin_io 62` が予算を越える。`parks` が `Sequential` と seed 1、2、7 で同じ。操作の待ちからの再開で予算を戻すと、131 と 132 に割れる | — |
 | `cells.rs` の単体テスト `an_op_used_by_another_task_is_an_internal_error` | 新しく足す。worker 1 で受け付けた記録を worker 2 の `op_of` に渡すと `an op is used by another task` | — |
-| `io.rs` の `a_second_take_of_an_op_is_an_internal_error` | 新しく足す。LIR の本文で `extern "Std.Net.submit_listen"` の結果を `take_listener` に2回渡す (`Async.run` なしの `main`)。誤りの文言に `an op names no record` を含む。LIR から書けなければ `cells.rs` の単体テストにし、計画書とコミットのメッセージにその旨を書く | — |
+| `cells.rs` の単体テスト `a_second_take_of_an_op_is_an_internal_error` | 新しく足す。受け付けで終わった記録を `take_op` で2回取り出すと、2回目が `an op names no record`。LIR の本文からは書けない。`Async` の命令はどれも std の3つのエントリを要し、手で書いた LIR はそれを持たないためである | — |
+| `cells.rs` の単体テスト `op_ready_counts_a_wait_only_on_a_finished_op` | 新しく足す。2.4節の表の4行 (終わっていない、地点が投げる、続ける、先に譲る) の結果と数える欄 | — |
+| `cells.rs` の `NoDriver` | 書きを受け付けで終える印 `finish_writes` を足す (上の2本と `an_op_used_by_another_task_is_an_internal_error` が使う) | 3 |
+| `crates/eml_cli/tests/ui.rs` の `compares_stats` | channel を使わず、どちらかの run の `completions` が 0 でない run は、`eml_test_support::driver_independent` を通した欄 (`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept`、`completions`) だけを比べる。新しい単体テスト `stats_of_driver_runs_are_compared_without_the_work_counts` が選び方を確かめる。理由: 操作が受け付けで終わるかが順で変わり、終わった操作の待ちは切り替えないので、VM の仕事の回数が順に従う | 2 |
 | `io.rs` の既存の値 | 変わらない (`parks` は `io_wait` の数で、今の park の数と同じ) | — |
 | UI テストと REPL のトランスクリプト | 7.3 節の範囲のとおり | 2 (範囲) |
 

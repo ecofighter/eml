@@ -168,6 +168,7 @@
   - 速い道を VM の命令でなく eml の `if` にすると、取り消しの地点と予算の規則を std の1か所で書ける。
   - `RunStats` は「プログラムだけで決まる数」に保つ。その場で終わるかはスケジュールで変わるので、`parks` と `completions` の意味を「頼んだ待ちの数」「終わった操作の数」にそろえれば seed によらない。
   - 速い道は切り替えを 0 にするので、`Sequential` では走れる他のタスクが待たされうる。操作の予算は、同じ理由で `check_cancelled` に入っている仕組みである。
+  - 操作の待ちからの再開では予算を戻さない。操作の待ちが park するかはスケジュールで変わるので、そこで戻すと予算の切れる位置と、譲りが数える `parks` がスケジュールに依る。
 - 退けた案
   - `RunStats` にその場で終わった数の欄を足す: スケジュールで変わる値を `RunStats` に入れない方針に反する。
   - 予算を使わず、`Normal` の横取りだけに任せる: `Sequential` で走れる他のタスクが飢える。
@@ -175,7 +176,7 @@
 - 影響の範囲: `Async.io_wait`、`io_wait_until`、`op_ready`、`Registry::record`、`submit_*`、両方の driver、`RunStats`。`park_io` の取り消しの道は変えない。
 - 見直す条件: ネイティブのコードの `Async` の入り口を作るとき (`jit-effects`)。
 - 守る規則
-  - G-18 MUST: `IoDriver::submit` が `Submit::Done` を返した操作の記録は `Done` の段階で生まれ、std の `io_wait` と `io_wait_until` は、記録が終わっていて取り消しの地点が投げないときは perform せず、予算を1つ使い、切れていれば `reschedule` (その `Wake` は見ない) してから `(Woke, op)` を返す。perform、park、再開、完了の収集は `Pending` の操作にだけ起きる。本物の driver とテストの driver は、受け付けの時点で決められる操作を `Done` で返す。`RunStats` の `parks` は `io_wait`/`io_wait_until` の呼び出しの数、`completions` は終わった driver の操作の数 (`Done` と集めた完了の和) で、どちらもスケジュールに依らない。スケジュールで変わる数は `RunStats` に入れない。
+  - G-18 MUST: `IoDriver::submit` が `Submit::Done` を返した操作の記録は `Done` の段階で生まれ、std の `io_wait` と `io_wait_until` は、記録が終わっていて取り消しの地点が投げないときは perform せず、予算を1つ使い、切れていれば `reschedule` (その `Wake` は見ない) してから `(Woke, op)` を返す。perform、park、再開、完了の収集は `Pending` の操作にだけ起きる。操作の待ちからの再開は操作の予算を戻さない。本物の driver とテストの driver は、受け付けの時点で決められる操作を `Done` で返す。`RunStats` の `parks` は `io_wait`/`io_wait_until` の呼び出しの数、`completions` は終わった driver の操作の数 (`Done` と集めた完了の和) で、どちらもスケジュールに依らない。スケジュールで変わる数は `RunStats` に入れない。
 - 適合の確かめ (この段)
   - (1) `io.rs` の `one_task_of_finished_ops_never_waits_on_the_driver`: 1つのタスクが `listen`、`connect`、`accept`、`write_bytes`、`read_chunk` を順に行い、`TestDriver::immediate() == 5`、driver の `wait` の呼び出しが 0 回、`RunStats.parks == 5`、`completions == 5` (T-5 で中間の値、T-8 で最終の値)。
   - (2) `io.rs` の `echo_counts_do_not_depend_on_the_seed`: 2つのタスクの echo を seed 1、2、3 で流して `parks` と `completions` が同じ。
@@ -497,10 +498,11 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
     - T-4: `tests/test_driver.rs` と `tests/real.rs` のうち、`completions` を呼んで決着か OS の確かめを待っていたテスト (基点で 21 本) を、`wait(Some(now))` を挟んでから `completions` で受ける形に直す。受け付けの時点で決まる操作を `completions` から受け取っていたテストを、`submit` の戻り値から受け取る形に書き直す。seed のテスト `a_seed_does_not_change_which_ops_finish` と取り消しの2本 (`a_cancel_before_return_ends_the_op_at_the_next_settle`、`a_cancel_before_settle_marks_the_completion_cancelled`) を、受け付けの時点で決まらない操作で組み直す。`tests/real.rs` の `live_lookups_beyond_the_limit_wait_in_order` の待ちのループを `poll_for` に替える。どれも完了の値は変えない。理由: 受け付けで終わる操作は完了として届かず、`completions` は OS を見なくなり、`wait` に刻みがなくなる。
     - T-4 と T-5: `tests/ui/run/async/net_*` と `crates/eml_cli/tests/repl/async/*.repl` のうち、操作が受け付けで終わったことと、終わった操作を待たないことで、出力の順が変わるもの。理由: 終わった操作の待ちが切り替えなくなり、タスクの交錯が変わる。
     - T-5: `crates/eml_core_ir/tests/externs.rs` の印の表の `OpId` の位置を `unr` に、2つの一覧の行を直す。理由: 即値の token の印は `unr` である。
+    - T-5: `crates/eml_cli/tests/ui.rs` の `compares_stats` で、channel を使わず、どちらかの run の `completions` が 0 でない run は、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept`、`completions` だけを比べる (新しい `eml_test_support::driver_independent`)。`par/` の run と driver の操作のない run は、すべての欄を比べたままにする。理由: 操作が受け付けで終わって待ちを省くかはスケジュールで変わるので、VM の仕事の回数がスケジュールに従う。D-3 が約束する数は変わらない。これがないと `tests/ui/run/async/net_*` の9本が seed の run で落ちる。
     - T-5 と T-8: `io.rs` の `one_task_of_finished_ops_never_waits_on_the_driver` を T-5 で中間の値 (`immediate == 6`、`completions == 6`) で入れ、T-8 で最終の値 (`immediate == 5`、`completions == 5`) に直す。理由: 空きのある buffer の読みと `write_bytes` の新しい型が T-6 と T-8 で入る。
     - T-7: `cells.rs` の単体テストのうち貸し方を確かめる4本 (`a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one`、`probed_read` を使うもの、`a_read_line_lends_the_stream_buffer_and_frees_it_when_empty`、`a_read_after_a_read_line_is_served_from_the_stream_buffer`) を新しい規則の値に書き直す。理由: 貸し方と広げる式が変わる。
     - T-8: `io.rs` の `a_read_line_that_is_not_utf8_raises_not_utf8` の `Net.write_bytes ... a` を `let (_, a) = ...` にする。理由: `write_bytes` が組を返す。
-  - 機械的な追随 (種類3): `tests/real.rs` と `tests/test_driver.rs` の署名の追随と補助 `run_op`、`IDLE_TICK` を書いたコメント、`externs.rs` の行の名前 `take_bytes`。
+  - 機械的な追随 (種類3): `tests/real.rs` と `tests/test_driver.rs` の署名の追随と補助 `run_op`、`IDLE_TICK` を書いたコメント、`externs.rs` の行の名前 `take_bytes`。T-5 の `cells.rs` の単体テストの stub `NoDriver` に、書きを受け付けで終える印を足すこと。
   - ここに挙げたほかに成否が変わるテストが出たら、そのタスクで止め、計画書に種類1として1件ずつ足してから進める。
 - 実装者に任せること: なし
 - 条件: いつも

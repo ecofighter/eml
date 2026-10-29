@@ -2056,17 +2056,25 @@ fn async_op<R: Exec>(
             *sched.cells.counter(task.raw(arg(1)))? = n;
             task.set(dst, Word::UNIT);
         }
+        Extern::AsyncOpReady => {
+            // token は借りるだけで、組を作る後の `con` が返す
+            let me = current_cell(task)?;
+            let step = sched
+                .cells
+                .op_ready(task.raw(arg(0)), task.raw(arg(1)), me)?;
+            task.set_raw(dst, step);
+        }
         Extern::AsyncParkIo => {
             let me = current_cell(task)?;
-            let (token, k) = (task.get(arg(0)), task.get(arg(1)));
-            if let Some(run) = sched.cells.park_io(ctx, &mut *sched.driver, token, me, k)? {
+            let (token, k) = (task.raw(arg(0)), task.get(arg(1)));
+            if let Some(run) = sched.cells.park_io(&mut *sched.driver, token, me, k)? {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncParkIoUntil => {
             let me = current_cell(task)?;
-            let (token, ms, k) = (task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)));
+            let (token, ms, k) = (task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)));
             // 0 以下は過ぎた期限なので時計を読まない (docs/spec/vm.md の「時間の待ち」)
             let now = if ms > 0 {
                 ceil_ms(sched.driver.now())
@@ -2076,7 +2084,7 @@ fn async_op<R: Exec>(
             if let Some(run) =
                 sched
                     .cells
-                    .park_io_until(ctx, &mut *sched.driver, now, ms, token, me, k)?
+                    .park_io_until(&mut *sched.driver, now, ms, token, me, k)?
             {
                 schedule(code, sched, entries, run)?;
             }
@@ -2107,7 +2115,7 @@ fn async_op<R: Exec>(
                 buf,
                 stream,
             )?;
-            task.set(dst, token);
+            task.set_raw(dst, token);
         }
         Extern::NetSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
@@ -2119,7 +2127,7 @@ fn async_op<R: Exec>(
                 buf,
                 stream,
             )?;
-            task.set(dst, token);
+            task.set_raw(dst, token);
         }
         ext @ (Extern::NetSubmitListen | Extern::NetSubmitConnect) => {
             let (host, port) = (task.get(arg(0)), task.raw(arg(1)));
@@ -2143,7 +2151,7 @@ fn async_op<R: Exec>(
                 )?
             };
             match submitted {
-                Ok(token) => task.set(dst, token),
+                Ok(token) => task.set_raw(dst, token),
                 // 受け付けの前に断った引数は、driver の誤りと分けて種類 `Other` にする (docs/spec/stdlib.md の「`Std.Net`」)
                 Err(message) => {
                     let raise = Raise::Io {
@@ -2163,27 +2171,27 @@ fn async_op<R: Exec>(
                 task.depth_offset,
                 listener,
             )?;
-            task.set(dst, token);
+            task.set_raw(dst, token);
         }
         Extern::NetOpListener | Extern::NetOpStream => {
             // token は借りるだけで、組を作る後の `con` が消費する
-            let w = sched.cells.op_stream(ctx, task.get(arg(0)))?;
+            let w = sched.cells.op_stream(task.raw(arg(0)), task.worker)?;
             task.set(dst, w);
         }
         Extern::NetOpOutcome => {
             // token は借りるだけで、組を作る後の `con` が消費する
-            let code = sched.cells.op_outcome(ctx, task.get(arg(0)))?;
+            let code = sched.cells.op_outcome(task.raw(arg(0)), task.worker)?;
             task.set_raw(dst, code);
         }
         ext @ (Extern::NetTakeListener | Extern::NetTakeStream) => {
             let listener = ext == Extern::NetTakeListener;
             let w = sched
                 .cells
-                .take_made(ctx, task.get(arg(0)), task.worker, listener)?;
+                .take_made(ctx, task.raw(arg(0)), task.worker, listener)?;
             task.set(dst, w);
         }
         Extern::NetTakeRead => {
-            let buf = sched.cells.take_read(ctx, task.get(arg(0)), task.worker)?;
+            let buf = sched.cells.take_read(ctx, task.raw(arg(0)), task.worker)?;
             task.set(dst, buf);
         }
         Extern::NetSubmitReadLine => {
@@ -2195,9 +2203,9 @@ fn async_op<R: Exec>(
                 task.depth_offset,
                 stream,
             )?;
-            task.set(dst, token);
+            task.set_raw(dst, token);
         }
-        Extern::NetTakeLine => match sched.cells.take_line(ctx, task.get(arg(0)), task.worker)? {
+        Extern::NetTakeLine => match sched.cells.take_line(ctx, task.raw(arg(0)), task.worker)? {
             Ok(line) => task.set(dst, line),
             // `Stdin.read_line` と同じく、UTF-8 でない行は種類 `NotUtf8` にする (docs/spec/stdlib.md の「`Std.Net`」)
             Err(message) => {
@@ -2209,7 +2217,7 @@ fn async_op<R: Exec>(
             }
         },
         Extern::NetFinish => {
-            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
+            let taken = sched.cells.take_op(ctx, task.raw(arg(0)), task.worker)?;
             // 記録が持っていたものは受け付けたタスクの ID の物体で、操作は終わっているので driver はもう触れない。
             // 作ったハンドルは落とすと bin を通して閉じる (docs/spec/vm.md の「操作の記録」)
             for w in [taken.buf, taken.made].into_iter().flatten() {
@@ -2367,7 +2375,11 @@ fn schedule<M: Mode, P: Policy>(
         ),
         Runnable::ResumeIo { cell, k, wake, op } => (
             entries.resume_io,
-            [k, Word::from_bits(wake as usize), op],
+            [
+                k,
+                Word::from_bits(wake as usize),
+                Word::from_bits(op as usize),
+            ],
             3,
             cell,
         ),
@@ -2422,7 +2434,10 @@ fn enter<R: Exec>(
         // 閉包は始めたタスクが印を付けて渡した参照で、このタスクだけが持つ
         unsafe { ctx.heap_mut().transfer_back(args[0], spawner) }?;
     } else {
-        let wake = sched.cells.resumed(cell, args[1].bits() as i64)?;
+        // 引数が3つのエントリは `resume_io` で、操作の待ちからの再開である
+        let wake = sched
+            .cells
+            .resumed(cell, args[1].bits() as i64, argc == 3)?;
         args[1] = Word::from_bits(wake as usize);
     }
     let argc = usize::from(argc);
@@ -3165,6 +3180,7 @@ fn run_extern<R: Exec>(
             | Extern::AsyncParkIo
             | Extern::AsyncParkIoUntil
             | Extern::AsyncParkSignal
+            | Extern::AsyncOpReady
             | Extern::ChanNewRaw
             | Extern::ChanReserveSend
             | Extern::ChanPushRaw

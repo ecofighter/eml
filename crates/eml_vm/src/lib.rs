@@ -60,8 +60,9 @@ pub struct RunStats {
     pub peak_stack: u64,
     /// `Async` が作ったタスクのセルの数。
     pub tasks: u64,
-    /// `Async` の待ち、`yield_now`、`sleep_ms`、`drain_within`、channel の待ち、driver の操作の待ちが、継続をランタイムに
-    /// 渡した数。
+    /// `Async` の待ち、`yield_now`、`sleep_ms`、`drain_within`、channel の待ち、driver の操作の待ち、シグナルの待ちの数。
+    /// driver の操作の待ちは `io_wait` と `io_wait_until` の呼び出しの数で、操作が終わっていて継続を渡さずに続けた待ちも
+    /// 数える。ほかの待ちは継続をランタイムに渡した数である。
     pub parks: u64,
     /// スコープの最初の失敗より後の、タスクの失敗の数。
     pub dropped_failures: u64,

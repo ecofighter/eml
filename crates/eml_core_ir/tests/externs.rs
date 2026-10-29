@@ -276,6 +276,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 }
 
 /// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`、
+/// `Std.Async.op_ready`、
 /// `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`local_port`、`peer_addr` と、`Std.FileIn`、`Std.Stdin`、
 /// `Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
@@ -289,6 +290,7 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Std.MutArray.length" => (&[true], Some(0)),
             "Std.MutArray.read" => (&[true, false], Some(0)),
             "Std.Async.task_cell" => (&[true], Some(0)),
+            "Std.Async.op_ready" => (&[true, false], Some(0)),
             "Std.Net.op_listener"
             | "Std.Net.op_stream"
             | "Std.Net.op_outcome"
@@ -430,7 +432,7 @@ fn every_extern_function_row_has_the_marks_of_its_std_signature() {
             let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
-            params.push(mark_of(types.linearity_or_poly(*param)));
+            params.push(declared_mark(types, *param, &checked.program));
             param_types.push(*param);
             ty = *ret;
         }
@@ -443,7 +445,7 @@ fn every_extern_function_row_has_the_marks_of_its_std_signature() {
         }
         if let OpRet::Repr(_) = row.ret {
             let result = row_result(types, row.name, row.with_arg, &param_types, ty);
-            let declared = mark_of(types.linearity_or_poly(result));
+            let declared = declared_mark(types, result, &checked.program);
             assert!(
                 mark_fits(declared, row.ret_mark),
                 "{} result: declared {declared:?}, row {:?}",
@@ -452,6 +454,15 @@ fn every_extern_function_row_has_the_marks_of_its_std_signature() {
             );
         }
     }
+}
+
+/// 宣言の型 `ty` から読む印。Repr が RC の対象でない値は、型の Kind によらず `Unr` である (`Std.Async.OpId` の
+/// 即値。docs/spec/core-ir.md の「translate が決める印」)。
+fn declared_mark(types: &TypeStore, ty: TypeId, program: &eml_hir::Program) -> Mark {
+    if !boxed_repr(types, ty, program).is_rc() {
+        return Mark::Unr;
+    }
+    mark_of(types.linearity_or_poly(ty))
 }
 
 /// 型の Kind を行の印に写す。関数でない引数の型変数は、extern のスキームが `Unr` に固定する。関数型の引数
@@ -475,7 +486,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par`、`Std.Async` の18行、`Std.Chan` の2行、`Std.Net` の18行以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の18行、`Std.Chan` の2行、`Std.Net` の12行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -543,16 +554,12 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Chan.push_raw" => (&[Poly, Unr], Unr),
             "Std.Chan.pop_raw" => (&[Unr], Poly),
             "Std.Async.park_send" | "Std.Async.park_recv" => (&[Unr, Lin], Unr),
-            "Std.Async.park_io" => (&[Lin, Lin], Unr),
-            "Std.Async.park_io_until" => (&[Lin, Unr, Lin], Unr),
-            "Std.Net.submit_listen" | "Std.Net.submit_connect" => (&[Unr, Unr], Lin),
-            "Std.Net.submit_accept" | "Std.Net.submit_read_line" => (&[Lin], Lin),
-            "Std.Net.submit_read" | "Std.Net.submit_write" => (&[Unr, Lin], Lin),
-            "Std.Net.op_listener" | "Std.Net.op_stream" => (&[Lin], Lin),
-            "Std.Net.op_outcome" | "Std.Net.finish" | "Std.Net.take_read" | "Std.Net.take_line" => {
-                (&[Lin], Unr)
-            }
-            "Std.Net.take_listener" | "Std.Net.take_stream" => (&[Lin], Lin),
+            "Std.Async.park_io" => (&[Unr, Lin], Unr),
+            "Std.Async.park_io_until" => (&[Unr, Unr, Lin], Unr),
+            "Std.Net.submit_accept" | "Std.Net.submit_read_line" => (&[Lin], Unr),
+            "Std.Net.submit_read" | "Std.Net.submit_write" => (&[Unr, Lin], Unr),
+            "Std.Net.op_listener" | "Std.Net.op_stream" => (&[Unr], Lin),
+            "Std.Net.take_listener" | "Std.Net.take_stream" => (&[Unr], Lin),
             "Std.Net.local_port" | "Std.Net.peer_addr" => (&[Lin], Unr),
             "Std.Net.shutdown_write" => (&[Lin], Lin),
             "Std.Net.set_nodelay" => (&[Unr, Lin], Lin),

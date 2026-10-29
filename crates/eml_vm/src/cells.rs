@@ -88,13 +88,13 @@ pub(crate) enum Runnable {
     Start { cell: CellRef, closure: Word },
     /// 待っていたタスク `cell` を、継続 `k` に `wake` を渡して再開する。`k` は仕事が参照を1つ持つ。
     Resume { cell: CellRef, k: Word, wake: i64 },
-    /// driver の操作を待っていたタスク `cell` を、継続 `k` に `wake` と token `op` を渡して再開する。`k` と `op` は
-    /// 仕事が参照を1つずつ持つ。
+    /// driver の操作を待っていたタスク `cell` を、継続 `k` に `wake` と token `op` を渡して再開する。`k` は仕事が参照を
+    /// 1つ持ち、`op` は記録の番号の即値である。
     ResumeIo {
         cell: CellRef,
         k: Word,
         wake: i64,
-        op: Word,
+        op: i64,
     },
     /// token で待つものを起こす。
     Token(WaitToken),
@@ -288,8 +288,6 @@ struct OpRecord {
     stream: Option<Word>,
     /// 完了の中身から集める地点で作った `NetListener` か `NetStream` の `Foreign`。取り出しの行が受け取るまで持つ。
     made: Option<Word>,
-    /// 待つ間だけ持つ token。再開の仕事に移す。
-    token: Option<Word>,
     /// 待っているタスク。
     waiter: Option<CellRef>,
     /// 待ちの期限の輪の鍵。期限が来るか、完了が届くか、取り消しで外れるまで持つ。
@@ -378,6 +376,11 @@ impl Taken {
     }
 }
 
+/// `op_ready` の結果。続ける、待つ、先に譲るの3つで、std の包みが分ける (docs/spec/vm.md の「操作の記録」)。
+const FAST_GO: i64 = 0;
+const FAST_WAIT: i64 = 1;
+const FAST_YIELD: i64 = 2;
+
 /// `op_outcome` の結果の番号 (docs/spec/vm.md の「操作の記録」)。成功の完了は期限と競ってもデータである。
 pub(crate) const OUTCOME_OK: i64 = 0;
 /// 期限の取り消しで終わった。
@@ -434,8 +437,6 @@ impl ChanCell {
 pub(crate) enum Notice {
     HandleDropped(CellRef),
     Cancel(CellRef),
-    /// 取り出す前の token が落ちた。std の包みからは届かない。
-    OpDropped(CellRef),
     /// 監視のスレッドが中継した保留のシグナル (`Control::INTERRUPT` と `Control::TERMINATE` のビット)。
     Signal(u32),
 }
@@ -473,23 +474,6 @@ impl Drop for TaskHandle {
     fn drop(&mut self) {
         if !self.taken {
             self.inbox.push(Notice::HandleDropped(self.cell));
-        }
-    }
-}
-
-/// `Std.Async.OpId` の `Foreign` の中身。操作の記録を指す。
-pub(crate) struct OpToken {
-    op: CellRef,
-    inbox: Arc<Inbox>,
-    /// `take_op` が受け取った。受け取った token は記録をもう指さないので、落ちても知らせない。
-    taken: bool,
-}
-
-impl Drop for OpToken {
-    // `TaskHandle` と同じく、ヒープの `decref` の中で走るので知らせを積むだけにする
-    fn drop(&mut self) {
-        if !self.taken {
-            self.inbox.push(Notice::OpDropped(self.op));
         }
     }
 }
@@ -619,16 +603,17 @@ pub(crate) struct TaskStats {
     /// `start` が作ったタスクのセルの数。
     pub(crate) tasks: u64,
     /// `park`、`ready`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until` が渡された
-    /// 継続の数。
+    /// 継続の数と、終わった操作で続けた `op_ready` の数。driver の操作の待ちは `io_wait` と `io_wait_until` の呼び出しの
+    /// 数になる。
     pub(crate) parks: u64,
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
-    /// `park_io`、`park_io_until`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`、真を返した
-    /// `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
+    /// `park_io`、`park_io_until`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now` と
+    /// 速い道の `reschedule`、真を返した `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
     /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` と `park_io_until` を数える。
-    /// `park_io_until` は、操作がもう終わっていて輪に載せなかったときも数える。
+    /// `park_io_until` は、操作がもう終わっていて輪に載せなかったときも数える。`ms > 0` で続けた `op_ready` も同じく数える。
     pub(crate) timers: u64,
     /// channel に品物を積んだ回数と取った回数の和。
     pub(crate) channel_ops: u64,
@@ -1004,14 +989,18 @@ impl Registry {
     }
 
     /// 再開する仕事を実行系が動かし始めた。渡す `Wake` を返す。実行待ちから再開するタスクが取り消されていれば
-    /// `Cancelled` に替える。
-    pub(crate) fn resumed(&mut self, cell: CellRef, wake: i64) -> Result<i64, CellFault> {
+    /// `Cancelled` に替える。操作の待ち (`io`) からの再開では予算を戻さない。その待ちが park するかは、操作が受け付けで
+    /// 終わったかでスケジュールに依るので、戻すと予算の切れる位置と `parks` もスケジュールに依る
+    /// (docs/spec/stdlib.md の「操作の予算」)。
+    pub(crate) fn resumed(&mut self, cell: CellRef, wake: i64, io: bool) -> Result<i64, CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Parked) {
             return Err(CellFault::Internal("a task resumes without waiting"));
         }
         task.phase = Phase::Running;
-        task.budget = BUDGET;
+        if !io {
+            task.budget = BUDGET;
+        }
         let ready = matches!(task.wait.take(), Some(Wait::Ready));
         if ready && wake == WOKE && self.point(cell)? {
             self.stats.cancels += 1;
@@ -1782,16 +1771,6 @@ impl Registry {
                 match notice {
                     Notice::HandleDropped(cell) => self.let_go(ctx, cell, true, depth_offset)?,
                     Notice::Cancel(cell) => self.unpark(driver, cell, out)?,
-                    // std の包みは受け付けから `park_io` まで投げうる呼び出しなしに token を移し、待つ間は記録が持ち、
-                    // 取り出しは投げる前に受け取った印を付けるので、生きた記録の token は落ちない。放した記録への古い
-                    // 知らせは、落ちたハンドルと同じく無視する
-                    Notice::OpDropped(op) => {
-                        if let Some(CellKind::Op(_)) = self.live(op) {
-                            return Err(CellFault::Internal(
-                                "an op token was dropped before its take",
-                            ));
-                        }
-                    }
                     // 届けたので保留から下ろし、次の同じシグナルをハンドラが1回目として扱うようにする
                     // (docs/spec/vm.md の「上限と割り込み」)
                     Notice::Signal(bits) => {
@@ -1818,7 +1797,7 @@ impl Registry {
             {
                 // 預かる ID は記録のものではなく、タスクのセルか `main` のもので、`free_task` が退かせる
                 let mut depot = Depot::of(record.worker);
-                for w in [record.buf, record.stream, record.made, record.token]
+                for w in [record.buf, record.stream, record.made]
                     .into_iter()
                     .flatten()
                 {
@@ -1884,14 +1863,18 @@ impl Registry {
         }
     }
 
-    /// 借りた token `token` が指す記録。token の受け箱が登録表の受け箱と違えば、前の run の token である。
-    fn token_op<M: Mode>(&self, ctx: &Ctx<M>, token: Word) -> Result<CellRef, CellFault> {
-        // token は `OpId` の `Foreign` で、呼ぶ側が持つ唯一の参照である (`OpId` は `Lin`)
-        let t = unsafe { &*ctx.heap().foreign_unique::<OpToken>(token)? };
-        if !Arc::ptr_eq(&t.inbox, &self.inbox) {
-            return Err(CellFault::Internal("an op token outlived its run"));
+    /// token `raw` が指す記録。token を受ける行はどれもここを通る。放した記録と前の run の記録は generation で見分ける。
+    /// 記録に触れるのは受け付けたタスク `worker` だけである。速いモードでは worker ID がいつも 0 なので、この比べは
+    /// 検査モードでだけ効く (docs/spec/vm.md の「操作の記録」)。
+    fn op_of(&mut self, raw: i64, worker: u32) -> Result<CellRef, CellFault> {
+        let op = CellRef::decode(raw);
+        let Some(CellKind::Op(record)) = self.live(op) else {
+            return Err(CellFault::Internal("an op names no record"));
+        };
+        if record.worker != worker {
+            return Err(CellFault::Internal("an op is used by another task"));
         }
-        Ok(t.op)
+        Ok(op)
     }
 
     /// `Std.Net.submit_write`。`buf` と `stream` は呼ぶ側から移ってきた参照で、記録に移す。
@@ -1905,7 +1888,7 @@ impl Registry {
         depth_offset: usize,
         buf: Word,
         stream: Word,
-    ) -> Result<Word, CellFault> {
+    ) -> Result<i64, CellFault> {
         let buf = unique_bytes(ctx, buf)?;
         let handle = stream_handle(ctx, stream)?;
         // 記録が物体を生かし、一意に保ち、取り出すまで書き換えないので、driver は完了までこの位置を読める
@@ -1926,7 +1909,6 @@ impl Registry {
             buf: Some(buf),
             stream: Some(stream),
             made: None,
-            token: None,
             waiter: None,
             timer: None,
             cancelling: false,
@@ -1947,7 +1929,7 @@ impl Registry {
         depth_offset: usize,
         buf: Word,
         stream: Word,
-    ) -> Result<Word, CellFault> {
+    ) -> Result<i64, CellFault> {
         let buf = unique_bytes(ctx, buf)?;
         // `read_line` が読みすぎたバイトがあれば、driver の操作を出さずにそれを返す (docs/spec/stdlib.md の「`Std.Net`」)
         let (buf, phase, op) = match serve_rest(ctx, buf, stream)? {
@@ -1964,7 +1946,6 @@ impl Registry {
             buf: Some(buf),
             stream: Some(stream),
             made: None,
-            token: None,
             waiter: None,
             timer: None,
             cancelling: false,
@@ -1983,7 +1964,7 @@ impl Registry {
         worker: u32,
         depth_offset: usize,
         stream: Word,
-    ) -> Result<Word, CellFault> {
+    ) -> Result<i64, CellFault> {
         // ストリームは `TcpStream` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`TcpStream` は `Lin`)
         let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
         let (op, phase, line) = match s.cut_line(0, false) {
@@ -2011,7 +1992,7 @@ impl Registry {
         depth_offset: usize,
         host: Word,
         port: i64,
-    ) -> Result<Result<Word, String>, CellFault> {
+    ) -> Result<Result<i64, String>, CellFault> {
         let host = take_string(ctx, host)?;
         let prefix = format!("cannot listen on {host}:{port}");
         let Ok(ip) = host.parse::<IpAddr>() else {
@@ -2044,7 +2025,7 @@ impl Registry {
         worker: u32,
         depth_offset: usize,
         listener: Word,
-    ) -> Result<Word, CellFault> {
+    ) -> Result<i64, CellFault> {
         // リスナーは `TcpListener` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`TcpListener` は `Lin`)
         let handle = unsafe { (*ctx.heap().foreign_unique::<NetListener>(listener)?).handle };
         let op = Op::Accept { listener: handle };
@@ -2062,7 +2043,7 @@ impl Registry {
         depth_offset: usize,
         host: Word,
         port: i64,
-    ) -> Result<Result<Word, String>, CellFault> {
+    ) -> Result<Result<i64, String>, CellFault> {
         let host = take_string(ctx, host)?;
         let prefix = format!("cannot connect to {host}:{port}");
         let port = match u16::try_from(port) {
@@ -2083,9 +2064,9 @@ impl Registry {
         )?))
     }
 
-    /// 記録を表に入れ、`op` があれば記録の番号を鍵にして driver に出し、token を作る。driver がその場で終えた操作は
-    /// ここで決着させる。誤りで終わっても記録は終わった記録として残り、取り出しの行が放す。driver の操作を出さずに
-    /// 終わった記録は `op` を持たない (docs/spec/vm.md の「操作の記録」)。
+    /// 記録を表に入れ、`op` があれば記録の番号を鍵にして driver に出し、記録の番号を token として返す。driver がその場で
+    /// 終えた操作はここで決着させる。誤りで終わっても記録は終わった記録として残り、取り出しの行が放す。driver の操作を
+    /// 出さずに終わった記録は `op` を持たない (docs/spec/vm.md の「操作の記録」)。
     fn record<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
@@ -2093,7 +2074,7 @@ impl Registry {
         depth_offset: usize,
         record: OpRecord,
         op: Option<Op>,
-    ) -> Result<Word, CellFault> {
+    ) -> Result<i64, CellFault> {
         let cell = self.alloc(CellKind::Op(record));
         if let Some(op) = op {
             match driver.submit(op_key(cell), op) {
@@ -2109,63 +2090,75 @@ impl Registry {
                 }
             }
         }
-        // token を確保するだけで、`Ctx` の持つ語には触れない。`OpId` は `Lin` なので `lin` ビットを立てる
-        // (docs/spec/vm.md の「操作の記録」)
-        Ok(unsafe { ctx.heap_mut() }.alloc_foreign(
-            OpToken {
-                op: cell,
-                inbox: Arc::clone(&self.inbox),
-                taken: false,
-            },
-            true,
-        ))
+        Ok(cell.encode())
     }
 
-    /// タスク `me` が、継続 `k` で token `token` の操作が終わるまで待つ。`token` は呼ぶ側から移ってきた参照で、待つ間は
-    /// 記録が持ち、再開の仕事に移す。終わっていれば、すぐ再開する仕事を返す。取り消しの地点で、終わっていなければ
-    /// driver に取り消しを頼んで完了を待つ。driver が記憶を使い終わるまで、buffer を返せないためである。取り消しの
-    /// 地点なら、終わっていてもいなくても、記録に取り消しを頼んだ印を付ける。
-    pub(crate) fn park_io<M: Mode>(
+    /// 速い道の `Std.Async.op_ready`。タスク `me` が token `token` の操作を待たずに続けてよいかを答える。記録が終わって
+    /// いて取り消しの地点が投げなければ、待ちを1つ数えて予算を1つ使い、残れば `FAST_GO`、切れれば `FAST_YIELD` を返す。
+    /// ほかは `FAST_WAIT` で、待つ側の `park_io` か `park_io_until` が今の規則で数える。地点を読むだけで、取り消しは数えない
+    /// (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn op_ready(&mut self, token: i64, ms: i64, me: CellRef) -> Result<i64, CellFault> {
+        let worker = self.task_mut(me)?.worker;
+        let op = self.op_of(token, worker)?;
+        let record = self.op_mut(op)?;
+        if record.waiter.is_some() {
+            return Err(CellFault::Internal("an op is awaited twice"));
+        }
+        if !matches!(record.phase, OpPhase::Done(..)) || self.point(me)? {
+            return Ok(FAST_WAIT);
+        }
+        // 待ちと期限は、終わっていた操作でも `park_io` と同じく数える。数をスケジュールによらず決めるためである
+        // (docs/spec/vm.md の「`RunStats`」)
+        self.stats.parks += 1;
+        if ms > 0 {
+            self.stats.timers += 1;
+        }
+        Ok(if self.spend_budget(me)? {
+            FAST_YIELD
+        } else {
+            FAST_GO
+        })
+    }
+
+    /// タスク `me` が、継続 `k` で token `token` の操作が終わるまで待つ。token は即値で、再開の仕事が継続に返す。
+    /// 終わっていれば、すぐ再開する仕事を返す。取り消しの地点で、終わっていなければ driver に取り消しを頼んで完了を
+    /// 待つ。driver が記憶を使い終わるまで、buffer を返せないためである。取り消しの地点なら、終わっていてもいなくても、
+    /// 記録に取り消しを頼んだ印を付ける。
+    pub(crate) fn park_io(
         &mut self,
-        ctx: &Ctx<M>,
         driver: &mut dyn IoDriver,
-        token: Word,
+        token: i64,
         me: CellRef,
         k: Word,
     ) -> Result<Option<Runnable>, CellFault> {
-        self.park_op(ctx, driver, token, me, k, None)
+        self.park_op(driver, token, me, k, None)
     }
 
     /// `park_io` に `ms` ミリ秒の期限を付けた待ち。`now_ms` は切り上げて読んだ今の時刻で、`ms` が 0 以下なら読まない。
     /// 期限は実際に待つときだけ付ける。0 以下は過ぎた期限なので、すぐ driver に取り消しを頼む。期限が来ても再開せず、
     /// 取り消した操作の完了が `Woke` で再開する (docs/spec/vm.md の「時間の待ち」)。
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the operands of `park_io` and the deadline"
-    )]
-    pub(crate) fn park_io_until<M: Mode>(
+    pub(crate) fn park_io_until(
         &mut self,
-        ctx: &Ctx<M>,
         driver: &mut dyn IoDriver,
         now_ms: u64,
         ms: i64,
-        token: Word,
+        token: i64,
         me: CellRef,
         k: Word,
     ) -> Result<Option<Runnable>, CellFault> {
-        self.park_op(ctx, driver, token, me, k, Some((now_ms, ms)))
+        self.park_op(driver, token, me, k, Some((now_ms, ms)))
     }
 
-    fn park_op<M: Mode>(
+    fn park_op(
         &mut self,
-        ctx: &Ctx<M>,
         driver: &mut dyn IoDriver,
-        token: Word,
+        token: i64,
         me: CellRef,
         k: Word,
         until: Option<(u64, i64)>,
     ) -> Result<Option<Runnable>, CellFault> {
-        let op = self.token_op(ctx, token)?;
+        let worker = self.task_mut(me)?.worker;
+        let op = self.op_of(token, worker)?;
         if self.op_mut(op)?.waiter.is_some() {
             return Err(CellFault::Internal("an op is awaited twice"));
         }
@@ -2197,7 +2190,6 @@ impl Registry {
             driver.cancel(op_key(op));
         }
         record.waiter = Some(me);
-        record.token = Some(token);
         match until {
             Some((_, ms)) if !cancelled && ms <= 0 => {
                 record.timed_out = true;
@@ -2441,14 +2433,12 @@ impl Registry {
         let timer = record.timer.take();
         let waiter = record.waiter;
         let wake = if record.cancelling { CANCELLED } else { WOKE };
-        let token = record.token.take();
         if let Some(key) = timer {
             self.timers.remove(&key);
         }
         let Some(t) = waiter else {
             return Ok(None);
         };
-        let token = token.ok_or(CellFault::Internal("a waited op has no token"))?;
         let task = self.task_mut(t)?;
         if !matches!(task.wait, Some(Wait::Io(o)) if o == op) {
             return Err(CellFault::Internal("an op names no waiting task"));
@@ -2462,18 +2452,14 @@ impl Registry {
             cell: t,
             k,
             wake,
-            op: token,
+            op: op.encode(),
         }))
     }
 
     /// `Std.Net.op_stream` と `op_listener`。借りた token の終わった記録から、受け付けに渡した
     /// ストリームかリスナーを移し出す。
-    pub(crate) fn op_stream<M: Mode>(
-        &mut self,
-        ctx: &Ctx<M>,
-        token: Word,
-    ) -> Result<Word, CellFault> {
-        let op = self.token_op(ctx, token)?;
+    pub(crate) fn op_stream(&mut self, token: i64, worker: u32) -> Result<Word, CellFault> {
+        let op = self.op_of(token, worker)?;
         let record = self.op_mut(op)?;
         if !matches!(record.phase, OpPhase::Done(..)) {
             return Err(CellFault::Internal("an op is taken before its completion"));
@@ -2485,12 +2471,8 @@ impl Registry {
     }
 
     /// `Std.Net.op_outcome`。借りた token の終わった記録の結果の番号 (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn op_outcome<M: Mode>(
-        &mut self,
-        ctx: &Ctx<M>,
-        token: Word,
-    ) -> Result<i64, CellFault> {
-        let op = self.token_op(ctx, token)?;
+    pub(crate) fn op_outcome(&mut self, token: i64, worker: u32) -> Result<i64, CellFault> {
+        let op = self.op_of(token, worker)?;
         let record = self.op_mut(op)?;
         match &record.phase {
             OpPhase::Done(result, cancelled) => Ok(outcome(result, record.timed_out, *cancelled)),
@@ -2505,7 +2487,7 @@ impl Registry {
     pub(crate) fn take_made<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
-        token: Word,
+        token: i64,
         worker: u32,
         listener: bool,
     ) -> Result<Word, CellFault> {
@@ -2529,7 +2511,7 @@ impl Registry {
     pub(crate) fn take_read<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
-        token: Word,
+        token: i64,
         worker: u32,
     ) -> Result<Word, CellFault> {
         let taken = self.take_op(ctx, token, worker)?;
@@ -2548,7 +2530,7 @@ impl Registry {
     pub(crate) fn take_line<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
-        token: Word,
+        token: i64,
         worker: u32,
     ) -> Result<Result<Word, String>, CellFault> {
         let taken = self.take_op(ctx, token, worker)?;
@@ -2572,28 +2554,20 @@ impl Registry {
     pub(crate) fn take_op<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
-        token: Word,
+        token: i64,
         worker: u32,
     ) -> Result<Taken, CellFault> {
-        let op = self.token_op(ctx, token)?;
+        let op = self.op_of(token, worker)?;
         let record = self.op_mut(op)?;
         if !matches!(record.phase, OpPhase::Done(..)) {
             return Err(CellFault::Internal("an op is taken before its completion"));
-        }
-        if record.worker != worker {
-            return Err(CellFault::Internal("an op is taken by another task"));
         }
         let Some(CellKind::Op(record)) = self.slots[op.index as usize].1.take() else {
             unreachable!("the op cell is live");
         };
         self.release(op.index);
-        // token は呼ぶ側から移ってきた唯一の参照で、ストリームは記録が持っていた参照である。どちらも受け付けた
-        // タスクの ID の物体で、上でそのタスクだと確かめた。操作は終わっているので、driver はもう記憶に触れない
-        // (docs/spec/vm.md の「操作の記録」)
-        unsafe {
-            (*ctx.heap().foreign_unique::<OpToken>(token)?).taken = true;
-            ctx.heap_mut().decref(token)?;
-        }
+        // ストリームは記録が持っていた参照で、受け付けたタスクの ID の物体である。そのタスクだと `op_of` で確かめた。
+        // 操作は終わっているので、driver はもう記憶に触れない (docs/spec/vm.md の「操作の記録」)
         if let Some(stream) = record.stream {
             unsafe { ctx.heap_mut().decref(stream) }?;
         }
@@ -2627,7 +2601,6 @@ fn net_record(kind: OpKind, worker: u32, stream: Option<Word>) -> OpRecord {
         buf: None,
         stream,
         made: None,
-        token: None,
         waiter: None,
         timer: None,
         cancelling: false,
@@ -3343,7 +3316,8 @@ fn a_slot_retires_instead_of_wrapping_its_generation() {
 }
 
 /// 操作を受け付けるだけで、テストが積んだ完了だけを返す driver。核の単体テストが driver の crate に頼らないための
-/// ものである。読みに貸された記憶を覚え、テストが外の書き手としてそこに書く。
+/// ものである。読みに貸された記憶を覚え、テストが外の書き手としてそこに書く。`finish_writes` が立っていれば、書きを
+/// 受け付けの時点で終える。
 #[cfg(test)]
 #[derive(Default)]
 struct NoDriver {
@@ -3353,6 +3327,7 @@ struct NoDriver {
     cancelled: Vec<OpKey>,
     done: Vec<Completion>,
     lent: Vec<RawBuf>,
+    finish_writes: bool,
 }
 
 #[cfg(test)]
@@ -3379,7 +3354,10 @@ impl IoDriver for NoDriver {
         }
         self.last_key = key;
         self.submits += 1;
-        Submit::Pending
+        match op {
+            Op::Write { buf, .. } if self.finish_writes => Submit::Done(Ok(Done::Size(buf.cap))),
+            _ => Submit::Pending,
+        }
     }
 
     fn cancel(&mut self, key: OpKey) {
@@ -3437,7 +3415,7 @@ fn submit_x(
     ctx: &mut Ctx<eml_rt::Checked>,
     driver: &mut NoDriver,
     worker: u32,
-) -> Word {
+) -> i64 {
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"x");
     let stream = net_stream(ctx);
     registry
@@ -3455,13 +3433,13 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     let scope = registry.open_root(None, None).unwrap();
     let me = running_task(&mut registry, scope);
     let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
-    let op = registry.token_op(&ctx, token).unwrap();
+    let op = CellRef::decode(token);
     registry.in_flight = 0;
     registry.op_mut(op).unwrap().phase =
         OpPhase::Done(Err(io::Error::from(io::ErrorKind::BrokenPipe)), false);
     registry.task_mut(me).unwrap().cancel = true;
     let run = registry
-        .park_io(&ctx, &mut driver, token, me, Word::UNIT)
+        .park_io(&mut driver, token, me, Word::UNIT)
         .unwrap();
     assert!(matches!(
         run,
@@ -3475,7 +3453,94 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }
 
-/// run の終わりの `sweep_all` は、待つタスクが残した記録の buffer、ストリーム、token をタスクの ID の下で落としてから、
+/// 受け付けで終わった記録の `op_ready` は、取り消しの地点が投げなければ待ちを1つ数え、予算を1つ使って続ける。予算が
+/// 切れれば先に譲る。終わっていない記録と、取り消しの地点が投げるときは待たせ、待ちも取り消しも数えない。待つ側の
+/// `park_io` が数えるためである (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn op_ready_counts_a_wait_only_on_a_finished_op() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let pending = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    assert_eq!(registry.op_ready(pending, 0, me).unwrap(), FAST_WAIT);
+    driver.finish_writes = true;
+    let done = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    assert_eq!(registry.in_flight, 1);
+    assert_eq!(registry.op_ready(done, 50, me).unwrap(), FAST_GO);
+    assert_eq!((registry.stats.parks, registry.stats.timers), (1, 1));
+    registry.task_mut(me).unwrap().budget = 1;
+    assert_eq!(registry.op_ready(done, 0, me).unwrap(), FAST_YIELD);
+    assert_eq!((registry.stats.parks, registry.stats.timers), (2, 1));
+    registry.task_mut(me).unwrap().cancel = true;
+    assert_eq!(registry.op_ready(done, 50, me).unwrap(), FAST_WAIT);
+    assert_eq!(
+        (
+            registry.stats.parks,
+            registry.stats.timers,
+            registry.stats.cancels
+        ),
+        (2, 1, 0)
+    );
+    let taken = registry.take_op(&mut ctx, done, 0).unwrap();
+    assert!(matches!(taken.result, Ok(1)));
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    registry.in_flight = 0;
+    registry.op_mut(CellRef::decode(pending)).unwrap().phase = OpPhase::Done(Ok(1), false);
+    let taken = registry.take_op(&mut ctx, pending, 0).unwrap();
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 記録に触れるのは受け付けたタスクだけである。ほかの worker のタスクが token を渡すと内部の誤りになる
+/// (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn an_op_used_by_another_task_is_an_internal_error() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver {
+        finish_writes: true,
+        ..NoDriver::default()
+    };
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let other = running_task(&mut registry, scope);
+    registry.task_mut(other).unwrap().worker = 2;
+    let token = submit_x(&mut registry, &mut ctx, &mut driver, 1);
+    assert!(matches!(
+        registry.op_ready(token, 0, other),
+        Err(CellFault::Internal("an op is used by another task"))
+    ));
+    assert!(matches!(
+        registry.op_of(token, 2),
+        Err(CellFault::Internal("an op is used by another task"))
+    ));
+    let taken = registry.take_op(&mut ctx, token, 1).unwrap();
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 取り出した記録は放すので、同じ token の2度目の取り出しは記録を指さない。token は即値で、型検査が1回だけ使うことを
+/// 守るので、std の包みからは届かない (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_second_take_of_an_op_is_an_internal_error() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver {
+        finish_writes: true,
+        ..NoDriver::default()
+    };
+    let mut registry = Registry::new(Vec::new());
+    let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(matches!(
+        registry.take_op(&mut ctx, token, 0),
+        Err(CellFault::Internal("an op names no record"))
+    ));
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// run の終わりの `sweep_all` は、待つタスクが残した記録の buffer とストリームをタスクの ID の下で落としてから、
 /// タスクのセルが ID を退かせる。記録を後に回すと、退かせるときに記録の物体が残って `TransferLeak` になる
 /// (docs/spec/vm.md の「終わり」)。
 #[test]
@@ -3490,7 +3555,7 @@ fn sweep_all_frees_a_waited_op_before_its_task() {
     with_worker(&mut ctx, worker, 0, |ctx| {
         let token = submit_x(&mut registry, ctx, &mut driver, worker);
         let run = registry
-            .park_io(ctx, &mut driver, token, me, Word::UNIT)
+            .park_io(&mut driver, token, me, Word::UNIT)
             .unwrap();
         assert!(run.is_none());
     });
@@ -3520,7 +3585,7 @@ fn a_completion_with_a_stale_generation_names_no_op() {
     let taken = registry.take_op(&mut ctx, old, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let new = submit_x(&mut registry, &mut ctx, &mut driver, 0);
-    let fresh = registry.token_op(&ctx, new).unwrap();
+    let fresh = CellRef::decode(new);
     assert_eq!(fresh.index, CellRef::decode(stale as i64).index);
     assert_ne!(driver.last_key, stale);
     driver.done.push(Completion {
@@ -3545,15 +3610,15 @@ fn probed_read(
     driver: &mut NoDriver,
     me: CellRef,
     buf: Word,
-) -> (Word, CellRef) {
+) -> (i64, CellRef) {
     let stream = net_stream(ctx);
     let token = registry
         .submit_read(ctx, driver, 0, 0, buf, stream)
         .unwrap();
-    let op = registry.token_op(ctx, token).unwrap();
+    let op = CellRef::decode(token);
     assert!(
         registry
-            .park_io(ctx, driver, token, me, Word::UNIT)
+            .park_io(driver, token, me, Word::UNIT)
             .unwrap()
             .is_none()
     );
@@ -3668,7 +3733,7 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
     let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
     let key = driver.last_key;
     let run = registry
-        .park_io_until(&ctx, &mut driver, 3, 50, token, me, Word::UNIT)
+        .park_io_until(&mut driver, 3, 50, token, me, Word::UNIT)
         .unwrap();
     assert!(run.is_none());
     assert_eq!(
@@ -3698,7 +3763,7 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
         panic!("the op wait resumes with `Woke`");
     };
     assert_eq!(cell, me);
-    assert_eq!(registry.op_outcome(&ctx, op).unwrap(), OUTCOME_LATE);
+    assert_eq!(registry.op_outcome(op, 0).unwrap(), OUTCOME_LATE);
     let taken = registry.take_op(&mut ctx, op, 0).unwrap();
     assert!(taken.timed_out && !taken.cancelling);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
@@ -3720,10 +3785,10 @@ fn cancelling_or_finishing_a_timed_op_wait_removes_its_timer() {
     let t2 = submit_x(&mut registry, &mut ctx, &mut driver, 0);
     let k2 = driver.last_key;
     registry
-        .park_io_until(&ctx, &mut driver, 0, 50, t1, first, Word::UNIT)
+        .park_io_until(&mut driver, 0, 50, t1, first, Word::UNIT)
         .unwrap();
     registry
-        .park_io_until(&ctx, &mut driver, 0, 60, t2, second, Word::UNIT)
+        .park_io_until(&mut driver, 0, 60, t2, second, Word::UNIT)
         .unwrap();
     registry.task_mut(first).unwrap().cancel = true;
     let mut out = Vec::new();
@@ -3775,7 +3840,7 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
     let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
     let key = driver.last_key;
     let run = registry
-        .park_io_until(&ctx, &mut driver, 0, 0, token, me, Word::UNIT)
+        .park_io_until(&mut driver, 0, 0, token, me, Word::UNIT)
         .unwrap();
     assert!(run.is_none());
     assert_eq!(driver.cancelled, [key]);
@@ -3792,7 +3857,7 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
     let Some(Runnable::ResumeIo { wake: WOKE, op, .. }) = out.pop() else {
         panic!("the op wait resumes with `Woke`");
     };
-    assert_eq!(registry.op_outcome(&ctx, op).unwrap(), OUTCOME_LATE);
+    assert_eq!(registry.op_outcome(op, 0).unwrap(), OUTCOME_LATE);
     let taken = registry.take_op(&mut ctx, op, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
@@ -3820,7 +3885,7 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
         .unwrap();
     assert!(out.is_empty());
     let run = registry
-        .park_io_until(&ctx, &mut driver, 0, 50, token, me, Word::UNIT)
+        .park_io_until(&mut driver, 0, 50, token, me, Word::UNIT)
         .unwrap();
     assert!(matches!(
         run,
@@ -3828,7 +3893,7 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
     ));
     assert_eq!((registry.next_deadline(), registry.stats.timers), (None, 1));
     assert!(driver.cancelled.is_empty());
-    assert_eq!(registry.op_outcome(&ctx, token).unwrap(), OUTCOME_OK);
+    assert_eq!(registry.op_outcome(token, 0).unwrap(), OUTCOME_OK);
     let taken = registry.take_op(&mut ctx, token, 0).unwrap();
     assert!(matches!(taken.result, Ok(1)) && !taken.timed_out);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
@@ -3855,7 +3920,7 @@ fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
         .unwrap();
     let key = driver.last_key;
     let run = registry
-        .park_io_until(&ctx, &mut driver, 0, 50, token, me, Word::UNIT)
+        .park_io_until(&mut driver, 0, 50, token, me, Word::UNIT)
         .unwrap();
     assert!(run.is_none());
     let mut out = Vec::new();
@@ -3872,8 +3937,8 @@ fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
     let Some(Runnable::ResumeIo { wake: WOKE, op, .. }) = out.pop() else {
         panic!("the op wait resumes with `Woke`");
     };
-    let code = registry.op_outcome(&ctx, op).unwrap();
-    let back = registry.op_stream(&ctx, op).unwrap();
+    let code = registry.op_outcome(op, 0).unwrap();
+    let back = registry.op_stream(op, 0).unwrap();
     let taken = registry.take_op(&mut ctx, op, 0).unwrap();
     assert!(taken.timed_out && taken.made.is_none() && taken.failure().is_none());
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
@@ -3971,10 +4036,10 @@ fn a_read_line_lends_the_stream_buffer_and_frees_it_when_empty() {
         let token = registry
             .submit_read_line(&mut ctx, &mut driver, 0, 0, stream)
             .unwrap();
-        let op = registry.token_op(&ctx, token).unwrap();
+        let op = CellRef::decode(token);
         assert!(
             registry
-                .park_io(&ctx, &mut driver, token, me, Word::UNIT)
+                .park_io(&mut driver, token, me, Word::UNIT)
                 .unwrap()
                 .is_none()
         );
@@ -3985,7 +4050,7 @@ fn a_read_line_lends_the_stream_buffer_and_frees_it_when_empty() {
             [Runnable::ResumeIo { cell, wake: WOKE, .. }] if *cell == me
         ));
         assert!(registry.op_mut(op).unwrap().buf.is_none());
-        stream = registry.op_stream(&ctx, token).unwrap();
+        stream = registry.op_stream(token, 0).unwrap();
         let taken = registry.take_line(&mut ctx, token, 0).unwrap().unwrap();
         assert_eq!(unsafe { &*ctx.heap().string(taken).unwrap() }, line);
         unsafe { ctx.heap_mut().decref(taken) }.unwrap();
@@ -4010,9 +4075,9 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
     let token = registry
         .submit_read_line(&mut ctx, &mut driver, 0, 0, stream)
         .unwrap();
-    let op = registry.token_op(&ctx, token).unwrap();
+    let op = CellRef::decode(token);
     registry
-        .park_io(&ctx, &mut driver, token, me, Word::UNIT)
+        .park_io(&mut driver, token, me, Word::UNIT)
         .unwrap();
     let mut out = Vec::new();
     complete_op(
@@ -4041,7 +4106,7 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
         out.as_slice(),
         [Runnable::ResumeIo { cell, wake: CANCELLED, .. }] if *cell == me
     ));
-    let back = registry.op_stream(&ctx, token).unwrap();
+    let back = registry.op_stream(token, 0).unwrap();
     let taken = registry.take_op(&mut ctx, token, 0).unwrap();
     assert!(taken.cancelling && taken.result.is_err() && taken.failure().is_none());
     assert_eq!(net_rest(&ctx, back).pending(), b"xy");
@@ -4063,9 +4128,9 @@ fn read_line_through(chunks: &[&[u8]]) -> Result<usize, String> {
     let token = registry
         .submit_read_line(&mut ctx, &mut driver, 0, 0, stream)
         .unwrap();
-    let op = registry.token_op(&ctx, token).unwrap();
+    let op = CellRef::decode(token);
     registry
-        .park_io(&ctx, &mut driver, token, me, Word::UNIT)
+        .park_io(&mut driver, token, me, Word::UNIT)
         .unwrap();
     let mut out = Vec::new();
     for chunk in chunks {
@@ -4076,8 +4141,8 @@ fn read_line_through(chunks: &[&[u8]]) -> Result<usize, String> {
         out.as_slice(),
         [Runnable::ResumeIo { cell, wake: WOKE, .. }] if *cell == me
     ));
-    let back = registry.op_stream(&ctx, token).unwrap();
-    let ok = registry.op_outcome(&ctx, token).unwrap() == OUTCOME_OK;
+    let back = registry.op_stream(token, 0).unwrap();
+    let ok = registry.op_outcome(token, 0).unwrap() == OUTCOME_OK;
     let taken = registry.take_op(&mut ctx, token, 0).unwrap();
     let result = match (&taken.kind, taken.failure()) {
         (
@@ -4146,9 +4211,9 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
     let token = registry
         .submit_read_line(&mut ctx, &mut driver, 0, 0, stream)
         .unwrap();
-    let op = registry.token_op(&ctx, token).unwrap();
+    let op = CellRef::decode(token);
     registry
-        .park_io(&ctx, &mut driver, token, me, Word::UNIT)
+        .park_io(&mut driver, token, me, Word::UNIT)
         .unwrap();
     let mut out = Vec::new();
     read_line_round(
@@ -4159,7 +4224,7 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
         b"ab\ncd",
         &mut out,
     );
-    let stream = registry.op_stream(&ctx, token).unwrap();
+    let stream = registry.op_stream(token, 0).unwrap();
     let line = registry.take_line(&mut ctx, token, 0).unwrap().unwrap();
     unsafe { ctx.heap_mut().decref(line) }.unwrap();
     let submitted = driver.submits;
@@ -4171,13 +4236,13 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
     assert_eq!(registry.in_flight, 0);
     let next = running_task(&mut registry, scope);
     let run = registry
-        .park_io(&ctx, &mut driver, token, next, Word::UNIT)
+        .park_io(&mut driver, token, next, Word::UNIT)
         .unwrap();
     assert!(matches!(
         run,
         Some(Runnable::ResumeIo { cell, wake: WOKE, .. }) if cell == next
     ));
-    let stream = registry.op_stream(&ctx, token).unwrap();
+    let stream = registry.op_stream(token, 0).unwrap();
     let back = registry.take_read(&mut ctx, token, 0).unwrap();
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abcd");
     let s = net_rest(&ctx, stream);
