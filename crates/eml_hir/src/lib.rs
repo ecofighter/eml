@@ -51,7 +51,6 @@ pub const STD: &[(&str, &str)] = &[
     ("Async.em", include_str!("../../../std/Async.em")),
     ("Chan.em", include_str!("../../../std/Chan.em")),
     ("Atomic.em", include_str!("../../../std/Atomic.em")),
-    ("IoTest.em", include_str!("../../../std/IoTest.em")),
     ("Net.em", include_str!("../../../std/Net.em")),
 ];
 

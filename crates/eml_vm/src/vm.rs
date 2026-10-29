@@ -3,7 +3,6 @@
 //! (docs/future/multicore.md の「VM の並列化の備え」の制約5)。
 
 use std::marker::PhantomData;
-use std::time::Duration;
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault, Raised};
@@ -18,7 +17,6 @@ use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
 use crate::driver::{ceil_ms, floor_ms};
 use crate::error::{KEPT_PENDING, VmFault};
-use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{JoinId, JoinNode, MAIN, Outcome, Policy, Scheduler, TaskId, TaskState};
 use crate::{RunCounts, RuntimeError};
@@ -2049,29 +2047,7 @@ fn async_op<R: Exec>(
             }
             task.set(dst, Word::UNIT);
         }
-        // ストリームの組を作る2つの行は、今のタスクのセルを使わないので、タスクの外でも動く
-        // (docs/spec/stdlib.md の「`Std.IoTest`」)
-        Extern::IoTestOpenPair => match sched.driver.pair() {
-            Ok((a, b)) => {
-                let bin = sched.driver.bin();
-                let s = cells::open_stream(ctx, a, Some(b), bin);
-                task.set(dst, s);
-            }
-            Err(e) => {
-                let raise = Raise::Io {
-                    kind: io_kind(&e),
-                    message: format!("cannot open a stream pair: {e}"),
-                };
-                return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestOpenPair);
-            }
-        },
-        Extern::IoTestPeer => {
-            // 端は借りるだけで、組を作る後の `con` が消費する (docs/spec/core-ir.md の「組を返す extern」)
-            let s = cells::peer(ctx, task.get(arg(0)))?;
-            task.set(dst, s);
-        }
-        // 書きと読みの受け付けは、`Std.IoTest` と `Std.Net` のどちらのストリームも受ける
-        Extern::IoTestSubmitWrite | Extern::NetSubmitWrite => {
+        Extern::NetSubmitWrite => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             let token =
                 sched
@@ -2079,108 +2055,13 @@ fn async_op<R: Exec>(
                     .submit_write(ctx, &mut *sched.driver, task.worker, buf, stream)?;
             task.set(dst, token);
         }
-        Extern::IoTestSubmitRead | Extern::NetSubmitRead => {
+        Extern::NetSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             let token =
                 sched
                     .cells
                     .submit_read(ctx, &mut *sched.driver, task.worker, buf, stream)?;
             task.set(dst, token);
-        }
-        Extern::IoTestOpStream => {
-            // token は借りるだけで、組を作る後の `con` が消費する
-            let s = sched.cells.op_stream(ctx, task.get(arg(0)))?;
-            task.set(dst, s);
-        }
-        Extern::IoTestTakeWrite => {
-            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
-            // 書きの buffer は返さない。取り消しか期限で終わった操作の誤りは、包みが投げる取り消しに含める
-            // (docs/spec/stdlib.md の「`Std.IoTest`」)。取り出した buffer は記録が持っていた唯一の参照で、このタスクの
-            // ID の物体である。操作は終わっているので、driver はもう読まない (docs/spec/vm.md の「操作の記録」)
-            if let Some(buf) = taken.buf {
-                unsafe { ctx.heap_mut().decref(buf) }?;
-            }
-            match taken.result {
-                Ok(n) => task.set_raw(dst, n as i64),
-                Err(_) if taken.cancelling || taken.timed_out => task.set_raw(dst, 0),
-                Err(e) => {
-                    let raise = Raise::Io {
-                        kind: io_kind(&e),
-                        message: format!("cannot write to the stream: {e}"),
-                    };
-                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestTakeWrite);
-                }
-            }
-        }
-        Extern::IoTestTakeRead => {
-            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
-            let buf = taken
-                .buf
-                .ok_or(VmFault::Internal("a read op has no buffer"))?;
-            // 取り消した読みは、確定したバイトを持つ buffer を返し、包みが落として取り消しを投げる。期限で終わった
-            // 読みも buffer を返し、包みが `None` にする (docs/spec/stdlib.md の「`Std.IoTest`」)
-            match taken.result {
-                Err(e) if !taken.cancelling && !taken.timed_out => {
-                    // 書きと同じく、buffer は記録が持っていた参照で、driver はもう書かない (docs/spec/vm.md の
-                    // 「操作の記録」)
-                    unsafe { ctx.heap_mut().decref(buf) }?;
-                    let raise = Raise::Io {
-                        kind: io_kind(&e),
-                        message: format!("cannot read the stream: {e}"),
-                    };
-                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestTakeRead);
-                }
-                _ => task.set(dst, buf),
-            }
-        }
-        Extern::IoTestOpTimedOut => {
-            // token は借りるだけで、組を作る後の `con` が消費する
-            let late = sched.cells.op_timed_out(ctx, task.get(arg(0)))?;
-            task.set_raw(dst, i64::from(late));
-        }
-        Extern::IoTestSubmitChecksum => {
-            // 遅れは本物の時計でだけ効かせ、0..=1000 ms に収める。仮想の時計の run は本物の時間を眠らない
-            // (docs/spec/stdlib.md の「`Std.IoTest`」)
-            let delay = if sched.real_clock {
-                Duration::from_millis(task.raw(arg(0)).clamp(0, 1000) as u64)
-            } else {
-                Duration::ZERO
-            };
-            let buf = task.get(arg(1));
-            let token =
-                sched
-                    .cells
-                    .submit_job(ctx, &mut *sched.driver, task.worker, buf, |input| {
-                        jobs::checksum(input, delay)
-                    })?;
-            task.set(dst, token);
-        }
-        Extern::IoTestTakeChecksum => {
-            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
-            // buffer は記録が持っていた参照である。仕事は写しを受け取ったので、物体の記憶には触れない
-            // (docs/spec/vm.md の「操作の記録」)
-            if let Some(buf) = taken.buf {
-                unsafe { ctx.heap_mut().decref(buf) }?;
-            }
-            // 取り消しで終わった待ちの結果は、包みが投げる取り消しに含める (docs/spec/stdlib.md の「`Std.IoTest`」)
-            match taken.result {
-                Ok(n) => task.set_raw(dst, n as i64),
-                Err(_) if taken.cancelling || taken.timed_out => task.set_raw(dst, 0),
-                Err(e) => {
-                    let raise = Raise::Io {
-                        kind: io_kind(&e),
-                        message: format!("the checksum job failed: {e}"),
-                    };
-                    return raise_again::<R>(
-                        code,
-                        ctx,
-                        task,
-                        dst,
-                        raise,
-                        Extern::IoTestTakeChecksum,
-                    );
-                }
-            }
         }
         ext @ (Extern::NetSubmitListen | Extern::NetSubmitConnect) => {
             let (host, port) = (task.get(arg(0)), task.raw(arg(1)));
@@ -2315,7 +2196,7 @@ fn async_op<R: Exec>(
         }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.IoTest and Std.Net reached the Async instruction",
+                "a row outside Std.Async, Std.Chan, Std.Atomic and Std.Net reached the Async instruction",
             ));
         }
     }
@@ -2323,7 +2204,7 @@ fn async_op<R: Exec>(
 }
 
 /// driver の誤りの種類を `IOErrorKind` のタグにする。extern の誤りと同じく、最初の5種類のうち I/O の4つだけを出す
-/// (docs/spec/stdlib.md の「`Std.Net`」と「`Std.IoTest`」)。
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
 fn io_kind(e: &std::io::Error) -> i64 {
     match e.kind() {
         std::io::ErrorKind::NotFound => externs::IO_NOT_FOUND,
@@ -3219,16 +3100,6 @@ fn run_extern<R: Exec>(
             | Extern::AtomicAdd
             | Extern::AtomicLoad
             | Extern::AtomicStore
-            | Extern::IoTestOpenPair
-            | Extern::IoTestPeer
-            | Extern::IoTestSubmitWrite
-            | Extern::IoTestOpStream
-            | Extern::IoTestTakeWrite
-            | Extern::IoTestSubmitRead
-            | Extern::IoTestTakeRead
-            | Extern::IoTestOpTimedOut
-            | Extern::IoTestSubmitChecksum
-            | Extern::IoTestTakeChecksum
             | Extern::NetSubmitListen
             | Extern::NetSubmitAccept
             | Extern::NetSubmitConnect

@@ -261,7 +261,7 @@ read_chunk buf s =
 
 ### ブロックする呼び出しのプール
 
-- 今のプールの仕事は `Std.IoTest.checksum` の1つで、本物の driver では `compio-driver` の `Asyncify` で動く。プールのスレッドは driver ごとに32本までである ([VM](../spec/vm.md) の「時計と driver」)
+- 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。本物の driver では、仕事は `compio-driver` の `Asyncify` で動く。プールのスレッドは driver ごとに32本までである ([VM](../spec/vm.md) の「時計と driver」)
 - プールは各 worker の I/O の driver の一部で、仕事は driver に出す操作 (`Op::Job`) である。仕事の記録は run の登録表の操作の記録で、I/O の操作と同じ待ちの仕組みで待つ
 - プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない。std の内部の仕事は入力を写して所有して受け取り、結果を値で返す。カーネルに貸す記憶 (`RawBuf`) は driver を持つスレッドから出さないので、仕事には渡さない
 - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
@@ -391,7 +391,7 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 
 - I/O の driver の crate: `compio-driver` を使う。macOS か Windows で compio の中の理由 (IOCP の時間付きの待ち、起こし、プールの不具合、ビルドの失敗、kqueue の `PollOnce` の振る舞い) で使えないと分かったら、同じ trait の後ろで、`polling` と手で書く IOCP (`windows-sys`) の自前の driver に替える。API は変わらない。mio は Windows で AFD の readiness を真似るので採らない。io_uring を使うかは、ネットワークの計測で readiness の道が目立ったときに決める
 - `Machine` と REPL のセッションを別のスレッドへ移すこと: 既定は移さない。driver は作ったスレッドから動かず、driver を持つ `Machine` もそのスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。ホストへの埋め込みなどで移す使い道が出たら、専用の実行系のスレッドが状態を持ち、`Machine` と REPL を頼みを送るハンドルにする形を考える
-- 書きの期限 (`write_within`): 取り消し、期限、データの区別は誤りの種類でなく操作の記録の状態で決める ([標準ライブラリ](../spec/stdlib.md) の「`Std.IoTest`」)。`Std.Net` で書きに期限を付けるときは、この区別を書きにもそのまま当てられるかを見直す
+- 書きの期限 (`write_within`): 取り消し、期限、データの区別は誤りの種類でなく操作の記録の状態で決める ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。`Std.Net` で書きに期限を付けるときは、この区別を書きにもそのまま当てられるかを見直す
 - 受け付けをスレッドをまたいで安全に出せる backend (IOCP、SQ を lock する io_uring) では、受け箱を通す回り道を省いてよい。既定は backend ごとに `eml_io` が決める
 - `write_bytes` が buffer を返して使い回す形: 既定は返さない。計測で確保が目立ったときに考える
 - 2つ目からの失敗をまとめて報告する形 (MultiError): 既定は最初の失敗が勝ち、ほかは数えるだけにする

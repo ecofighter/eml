@@ -21,7 +21,6 @@ mod doorbell;
 mod driver;
 mod error;
 mod hosts;
-mod jobs;
 mod monitor;
 mod op;
 mod sched;
@@ -454,7 +453,6 @@ impl<M: Mode> Machine<M> {
             generations: std::mem::take(&mut self.generations),
             counters: std::mem::take(&mut self.counters),
             driver,
-            real_clock: matches!(self.clock, Clock::Real),
             doorbell: self.doorbell.clone(),
         };
         let (result, mut scheduled) = match self.sched {
@@ -669,8 +667,6 @@ struct Start {
     generations: Vec<u32>,
     counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
-    /// `Machine` の時計が本物か。`with_driver` で差し込んだ driver でも、時計の欄で決める。
-    real_clock: bool,
     doorbell: Option<Arc<Doorbell>>,
 }
 
@@ -696,7 +692,6 @@ fn run_scheduled<M: Mode, P: Policy>(
         start.generations,
     );
     sched.shared_roots = start.shared_roots;
-    sched.real_clock = start.real_clock;
     sched.cells.counters = start.counters;
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける

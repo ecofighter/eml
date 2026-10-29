@@ -10,7 +10,7 @@ use std::time::Duration;
 
 /// driver が振り、1つの driver の寿命の間は使い回さない。`submit` のたびに新しい値を返す。
 pub type OpKey = u64;
-/// driver が持つハンドル (`pair` の両端、リスナー、ストリーム)。1つの driver の寿命の間は使い回さない。
+/// driver が持つハンドル (リスナー、ストリーム)。1つの driver の寿命の間は使い回さない。
 pub type IoHandle = u64;
 
 /// カーネルが読み書きする記憶。driver を持つスレッドの外へは出さないので `Send` ではない。`cap == 0` は
@@ -94,8 +94,6 @@ pub trait IoDriver {
     fn pending(&self) -> usize;
     fn waker(&self) -> Arc<dyn IoWaker>;
     fn bin(&self) -> Arc<HandleBin>;
-    /// つながった2つの端。
-    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)>;
     /// ストリームの書く側を閉じる。相手は残りを読みきってから EOF を受ける。その場で終わる。
     fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()>;
     /// ストリームの `TCP_NODELAY` を切り替える。その場で終わる。

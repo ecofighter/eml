@@ -77,7 +77,7 @@ fn a_wake_from_another_thread_leaves_a_wait_working() {
     let mut driver = RealDriver::new().unwrap();
     #[cfg(unix)]
     let _ends = {
-        let (a, b) = driver.pair().unwrap();
+        let (a, b) = connection(&mut driver, &mut Vec::new());
         driver.submit(Op::Readable { handle: a });
         (a, b)
     };
@@ -157,7 +157,7 @@ fn a_job_pool_is_capped() {
 fn a_readable_probe_stays_pending_without_data() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let (a, b) = driver.pair().unwrap();
+    let (a, b) = connection(&mut driver, &mut stash);
     let probe = driver.submit(Op::Readable { handle: a });
     let deadline = driver.now().as_millis() as u64 + 20;
     while driver.now() < Duration::from_millis(deadline) {
@@ -189,7 +189,7 @@ fn a_readable_probe_stays_pending_without_data() {
 fn a_read_after_a_probe_returns_the_bytes() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let (a, b) = driver.pair().unwrap();
+    let (a, b) = connection(&mut driver, &mut stash);
     let probe = driver.submit(Op::Readable { handle: a });
     let mut data = *b"hello";
     let write = driver.submit(Op::Write {
@@ -221,7 +221,7 @@ fn a_read_after_a_probe_returns_the_bytes() {
 fn a_write_is_read_by_the_peer() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let (a, b) = driver.pair().unwrap();
+    let (a, b) = connection(&mut driver, &mut stash);
     let mut data = *b"from a";
     let write = driver.submit(Op::Write {
         handle: a,
@@ -248,7 +248,7 @@ fn a_write_is_read_by_the_peer() {
 fn a_cancelled_probe_completes_with_an_error() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let (a, _b) = driver.pair().unwrap();
+    let (a, _b) = connection(&mut driver, &mut stash);
     let probe = driver.submit(Op::Readable { handle: a });
     driver.cancel(probe);
     assert!(complete(&mut driver, &mut stash, probe).result.is_err());
@@ -260,7 +260,7 @@ fn a_cancelled_probe_completes_with_an_error() {
 fn a_closed_peer_reads_eof() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let (a, b) = driver.pair().unwrap();
+    let (a, b) = connection(&mut driver, &mut stash);
     let probe = driver.submit(Op::Readable { handle: a });
     driver.close(b);
     assert_eq!(
@@ -284,10 +284,10 @@ fn a_closed_peer_reads_eof() {
 #[test]
 fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
     let mut driver = RealDriver::new().unwrap();
-    let (a, _b) = driver.pair().unwrap();
+    let (a, _b) = connection(&mut driver, &mut Vec::new());
     let probe = driver.submit(Op::Readable { handle: a });
-    let mut first = vec![1u8; 1 << 20];
-    let mut second = vec![2u8; 1 << 20];
+    let mut first = vec![1u8; 8 << 20];
+    let mut second = vec![2u8; 8 << 20];
     driver.submit(Op::Write {
         handle: a,
         buf: raw(&mut first),
@@ -310,13 +310,6 @@ fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
     assert_eq!(driver.pending(), 0);
     drop(second);
     drop(first);
-}
-
-#[cfg(windows)]
-#[test]
-fn pair_is_unsupported() {
-    let mut driver = RealDriver::new().unwrap();
-    assert_eq!(driver.pair().unwrap_err().kind(), ErrorKind::Unsupported);
 }
 
 #[test]

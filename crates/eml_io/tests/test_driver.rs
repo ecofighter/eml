@@ -45,21 +45,21 @@ fn a_wait_without_work_or_deadline_cannot_progress() {
 #[test]
 fn a_wait_advances_the_clock_only_when_no_op_finishes() {
     let mut driver = TestDriver::new(None);
-    let (a, b) = driver.pair().unwrap();
+    let (a, b) = connection(&mut driver);
     let probe = driver.submit(Op::Readable { handle: b });
     assert!(driver.wait(Some(10)).unwrap());
     assert_eq!(driver.now(), Duration::from_millis(10));
     assert_eq!(driver.pending(), 1);
 
     let mut data = *b"hi";
-    driver.submit(Op::Write {
+    let write = driver.submit(Op::Write {
         handle: a,
         buf: raw(&mut data),
     });
     assert!(driver.wait(Some(20)).unwrap());
     assert_eq!(driver.now(), Duration::from_millis(10));
     let done = collect(&mut driver);
-    assert_eq!(keys(&done), [1, probe]);
+    assert_eq!(keys(&done), [write, probe]);
     assert!(done.iter().all(|c| c.result.is_ok()));
 
     let mut room = [0u8; 8];
@@ -78,7 +78,7 @@ fn a_wait_advances_the_clock_only_when_no_op_finishes() {
 fn a_seed_does_not_change_which_ops_finish() {
     let run = |seed| {
         let mut driver = TestDriver::new(seed);
-        let (a, b) = driver.pair().unwrap();
+        let (a, b) = connection(&mut driver);
         let mut data = *b"x";
         for _ in 0..8 {
             driver.submit(Op::Job(Box::new(|| Ok(7))));
@@ -111,7 +111,7 @@ fn a_seed_does_not_change_which_ops_finish() {
 #[test]
 fn the_bin_is_emptied_before_ops_settle() {
     let mut driver = TestDriver::new(None);
-    let (a, b) = driver.pair().unwrap();
+    let (a, b) = connection(&mut driver);
     let probe = driver.submit(Op::Readable { handle: b });
     assert!(collect(&mut driver).is_empty());
     driver.bin().dropped.lock().unwrap().push(a);
@@ -133,7 +133,7 @@ fn the_bin_is_emptied_before_ops_settle() {
 #[test]
 fn a_closed_peer_leaves_its_bytes_before_eof() {
     let mut driver = TestDriver::new(None);
-    let (a, b) = driver.pair().unwrap();
+    let (a, b) = connection(&mut driver);
     let mut data = *b"abc";
     driver.submit(Op::Write {
         handle: a,
@@ -155,7 +155,7 @@ fn a_closed_peer_leaves_its_bytes_before_eof() {
 #[test]
 fn a_write_to_a_closed_peer_is_a_broken_pipe() {
     let mut driver = TestDriver::new(None);
-    let (a, b) = driver.pair().unwrap();
+    let (a, b) = connection(&mut driver);
     driver.close(b);
     let mut data = *b"x";
     driver.submit(Op::Write {
@@ -173,7 +173,7 @@ fn a_write_to_a_closed_peer_is_a_broken_pipe() {
 #[test]
 fn a_cancel_before_return_ends_the_op_at_the_next_settle() {
     let mut driver = TestDriver::new(None);
-    let (_, b) = driver.pair().unwrap();
+    let (_, b) = connection(&mut driver);
     let probe = driver.submit(Op::Readable { handle: b });
     assert!(collect(&mut driver).is_empty());
     driver.cancel(probe);
@@ -193,7 +193,7 @@ fn a_cancel_before_return_ends_the_op_at_the_next_settle() {
 #[test]
 fn a_cancel_after_the_op_finished_keeps_its_result() {
     let mut driver = TestDriver::new(None);
-    let (a, _b) = driver.pair().unwrap();
+    let (a, _b) = connection(&mut driver);
     let mut data = *b"abc";
     let write = driver.submit(Op::Write {
         handle: a,
@@ -210,7 +210,7 @@ fn a_cancel_after_the_op_finished_keeps_its_result() {
 #[test]
 fn quiesce_drops_every_pending_op_and_runs_jobs() {
     let mut driver = TestDriver::new(None);
-    let (_, b) = driver.pair().unwrap();
+    let (_, b) = connection(&mut driver);
     let ran = Arc::new(AtomicBool::new(false));
     driver.submit(Op::Readable { handle: b });
     let flag = Arc::clone(&ran);

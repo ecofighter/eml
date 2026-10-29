@@ -284,7 +284,7 @@ struct OpRecord {
     /// 待つタスクが取り消され、driver に取り消しを頼んだ。完了は `Cancelled` で再開する。
     cancelling: bool,
     /// 待ちの期限が来て、driver に取り消しを頼んだ。完了は `Woke` で再開し、誤りの結果は期限切れとして扱う
-    /// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+    /// (docs/spec/stdlib.md の「`Std.Net`」)。
     timed_out: bool,
 }
 
@@ -292,8 +292,6 @@ struct OpRecord {
 enum OpKind {
     Read,
     Write,
-    /// プールの仕事。buffer は写した後は読まないので、一意でなくてよい。
-    Job,
     /// `prefix` は誤りの文言の前に付ける `cannot listen on {host}:{port}` である。
     Listen {
         prefix: Box<str>,
@@ -317,7 +315,6 @@ impl OpKind {
         match self {
             OpKind::Read | OpKind::Line { .. } => "cannot read the stream",
             OpKind::Write => "cannot write to the stream",
-            OpKind::Job => "the job failed",
             OpKind::Listen { prefix } | OpKind::Connect { prefix } => prefix,
             OpKind::Accept => "cannot accept a connection",
         }
@@ -484,28 +481,6 @@ impl Drop for OpToken {
     }
 }
 
-/// `Std.IoTest.Stream` の `Foreign` の中身。driver のハンドルを指す。`peer` は `pair` の2つ目の端をまだ分けていない
-/// 間だけある。
-pub(crate) struct IoStream {
-    handle: IoHandle,
-    peer: Option<IoHandle>,
-    bin: Arc<HandleBin>,
-}
-
-impl Drop for IoStream {
-    // ヒープの `decref` の中で走るので driver に触れず、driver が次に閉じるハンドルとして積むだけにする
-    // (docs/spec/vm.md の「時計と driver」)
-    fn drop(&mut self) {
-        let mut dropped = self
-            .bin
-            .dropped
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        dropped.push(self.handle);
-        dropped.extend(self.peer);
-    }
-}
-
 /// `Std.Net.TcpListener` の `Foreign` の中身。driver のハンドルと、待ち受けるポートを持つ。
 pub(crate) struct NetListener {
     handle: IoHandle,
@@ -514,7 +489,8 @@ pub(crate) struct NetListener {
 }
 
 impl Drop for NetListener {
-    // `IoStream` と同じく、driver に触れずに閉じるハンドルとして積むだけにする (docs/spec/vm.md の「時計と driver」)
+    // ヒープの `decref` の中で走るので driver に触れず、driver が次に閉じるハンドルとして積むだけにする
+    // (docs/spec/vm.md の「時計と driver」)
     fn drop(&mut self) {
         bin_push(&self.bin, self.handle);
     }
@@ -1772,7 +1748,7 @@ impl Registry {
         Ok(t.op)
     }
 
-    /// `Std.IoTest.submit_write` と `Std.Net.submit_write`。`buf` と `stream` は呼ぶ側から移ってきた参照で、記録に移す。
+    /// `Std.Net.submit_write`。`buf` と `stream` は呼ぶ側から移ってきた参照で、記録に移す。
     /// `buf` の内容をすべて書く操作を driver に出し、token を返す。`worker` は呼んだタスクの論理的な ID である。
     pub(crate) fn submit_write<M: Mode>(
         &mut self,
@@ -1815,8 +1791,8 @@ impl Registry {
         ))
     }
 
-    /// `Std.IoTest.submit_read` と `Std.Net.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移し、端が
-    /// 読めるようになるのを待つ操作を driver に出す。buffer の容量はここでは足さず、読めるようになってから足して貸す。
+    /// `Std.Net.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移し、端が読めるようになるのを待つ
+    /// 操作を driver に出す。buffer の容量はここでは足さず、読めるようになってから足して貸す。
     /// 何も来ない端の読みに記憶を持たせないためである (docs/spec/vm.md の「操作の記録」)。
     pub(crate) fn submit_read<M: Mode>(
         &mut self,
@@ -1876,40 +1852,6 @@ impl Registry {
         let mut record = net_record(key, kind, worker, Some(stream));
         record.phase = phase;
         Ok(self.record(ctx, record))
-    }
-
-    /// プールの仕事の受け付け。`buf` は呼ぶ側から移ってきた参照で、記録に移す。中身を `Vec<u8>` に写して `make` に
-    /// 渡し、できた仕事を driver に出す。仕事は別のスレッドで動くので、ヒープの記憶を貸さない
-    /// (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn submit_job<M: Mode>(
-        &mut self,
-        ctx: &mut Ctx<M>,
-        driver: &mut dyn IoDriver,
-        worker: u32,
-        buf: Word,
-        make: impl FnOnce(Vec<u8>) -> Op,
-    ) -> Result<Word, CellFault> {
-        // 写すまでの間だけ読むので、共有の物体でもよい。仕事には写しを渡し、物体の位置は渡さない
-        // (docs/spec/vm.md の「操作の記録」)
-        let input = unsafe { (*ctx.heap().bytes(buf)?).to_vec() };
-        let key = driver.submit(make(input));
-        Ok(self.record(
-            ctx,
-            OpRecord {
-                key,
-                kind: OpKind::Job,
-                phase: OpPhase::Transfer,
-                worker,
-                buf: Some(buf),
-                stream: None,
-                made: None,
-                token: None,
-                waiter: None,
-                timer: None,
-                cancelling: false,
-                timed_out: false,
-            },
-        ))
     }
 
     /// `Std.Net.submit_listen`。`host` と `port` は呼ぶ側から移ってきた参照と即値で、`host` は読んでから手放す。
@@ -2059,7 +2001,7 @@ impl Registry {
         }
         let record = self.op_mut(op)?;
         // `Cancelled` で再開する記録には、いつも取り消しの印を付ける。取り出しの行は印で中断を見分け、結果の誤りを
-        // 投げずに包みへ返すので、包みが結果によらず `Cancelled` を投げる (docs/spec/stdlib.md の「`Std.IoTest`」)
+        // 投げずに包みへ返すので、包みが結果によらず `Cancelled` を投げる (docs/spec/stdlib.md の「`Std.Net`」)
         record.cancelling |= cancelled;
         if matches!(record.phase, OpPhase::Done(..)) {
             let wake = if cancelled { CANCELLED } else { WOKE };
@@ -2179,7 +2121,7 @@ impl Registry {
                     })?;
                     Ok(n)
                 }
-                (OpPhase::Transfer, OpKind::Write | OpKind::Job, Ok(Done::Size(n))) => Ok(n),
+                (OpPhase::Transfer, OpKind::Write, Ok(Done::Size(n))) => Ok(n),
                 // 外が書いたバイトは、取り消しを頼んだ記録でもストリームの buffer に確定する。行の途中で止めても、
                 // 読んだバイトを次の読みに残すためである (docs/spec/stdlib.md の「`Std.Net`」)
                 (OpPhase::Transfer, &OpKind::Line { filled, .. }, result) => {
@@ -2300,7 +2242,7 @@ impl Registry {
         Ok(())
     }
 
-    /// `Std.IoTest.op_stream`、`Std.Net.op_stream` と `op_listener`。借りた token の終わった記録から、受け付けに渡した
+    /// `Std.Net.op_stream` と `op_listener`。借りた token の終わった記録から、受け付けに渡した
     /// ストリームかリスナーを移し出す。
     pub(crate) fn op_stream<M: Mode>(
         &mut self,
@@ -2316,23 +2258,6 @@ impl Registry {
             .stream
             .take()
             .ok_or(CellFault::Internal("an op has no stream to give back"))
-    }
-
-    /// `Std.IoTest.op_timed_out`。借りた token の終わった記録が、期限で誤りになったか。期限と競って届いたデータは
-    /// データである (docs/spec/stdlib.md の「`Std.IoTest`」)。
-    pub(crate) fn op_timed_out<M: Mode>(
-        &mut self,
-        ctx: &Ctx<M>,
-        token: Word,
-    ) -> Result<bool, CellFault> {
-        let op = self.token_op(ctx, token)?;
-        let record = self.op_mut(op)?;
-        match &record.phase {
-            OpPhase::Done(result, _) => Ok(record.timed_out && result.is_err()),
-            OpPhase::Probe | OpPhase::Transfer => {
-                Err(CellFault::Internal("an op is taken before its completion"))
-            }
-        }
     }
 
     /// `Std.Net.op_outcome`。借りた token の終わった記録の結果の番号 (docs/spec/vm.md の「操作の記録」)。
@@ -2504,42 +2429,11 @@ pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word,
     Ok(ctx.fresh_string(&peer.to_string()))
 }
 
-/// ストリーム `stream` の driver のハンドル。`Std.Net.TcpStream` と `Std.IoTest.Stream` のどちらの `Foreign` でもよい。
-/// ストリームは呼ぶ側から移ってきた参照か記録が持つ参照で、持ち主が返すか落とす。
+/// ストリーム `stream` の driver のハンドル。ストリームは呼ぶ側から移ってきた参照か記録が持つ参照で、持ち主が返すか
+/// 落とす。
 pub(crate) fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
-    // ストリームは持ち主のただ1つの参照である (どちらの型も `Lin`。docs/spec/vm.md の「操作の記録」)。中身の型が
-    // 違えば `WrongKind` で、もう一方の型で読み直す
-    match unsafe { ctx.heap().foreign_unique::<NetStream>(stream) } {
-        Ok(s) => Ok(unsafe { (*s).handle }),
-        Err(HeapError::WrongKind) => {
-            Ok(unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle })
-        }
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// `Std.IoTest.open_pair` が作る最初の端。`peer` は2つ目の端で、`peer` の行が分けるまで同じ物体が持つ。
-pub(crate) fn open_stream<M: Mode>(
-    ctx: &mut Ctx<M>,
-    handle: IoHandle,
-    peer: Option<IoHandle>,
-    bin: Arc<HandleBin>,
-) -> Word {
-    // 端を確保するだけで、`Ctx` の持つ語には触れない。`Stream` は `Lin` なので `lin` ビットを立てる
-    // (docs/spec/vm.md の「操作の記録」)
-    unsafe { ctx.heap_mut() }.alloc_foreign(IoStream { handle, peer, bin }, true)
-}
-
-/// `Std.IoTest.peer`。借りた端 `stream` から2つ目の端を分けて、新しい物体にする。
-pub(crate) fn peer<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
-    // 端は `Stream` の `Foreign` で、呼ぶ側が持つ唯一の参照である (`Stream` は `Lin`)
-    let s = unsafe { &mut *ctx.heap().foreign_unique::<IoStream>(stream)? };
-    let handle = s
-        .peer
-        .take()
-        .ok_or(CellFault::Internal("a stream pair is split twice"))?;
-    let bin = Arc::clone(&s.bin);
-    Ok(open_stream(ctx, handle, None, bin))
+    // ストリームは持ち主のただ1つの参照である (`TcpStream` は `Lin`。docs/spec/vm.md の「操作の記録」)
+    Ok(unsafe { (*ctx.heap().foreign_unique::<NetStream>(stream)?).handle })
 }
 
 /// 読みが1回に足す空きのバイト数 (docs/spec/vm.md の「操作の記録」)。
@@ -2608,18 +2502,14 @@ fn line_step<M: Mode>(
 }
 
 /// ストリーム `stream` の buffer に残りがあれば、その先頭の `READ_ROOM` バイトまでを `buf` の後ろに足して返したことに
-/// し、足した後の buffer の語とバイト数を返す。残りがないか、`Std.IoTest.Stream` なら `None` で、`buf` はそのままである。
+/// し、足した後の buffer の語とバイト数を返す。残りがなければ `None` で、`buf` はそのままである。
 fn serve_rest<M: Mode>(
     ctx: &mut Ctx<M>,
     buf: Word,
     stream: Word,
 ) -> Result<Option<(Word, usize)>, CellFault> {
     // ストリームは呼ぶ側から移ってきた唯一の参照である (`TcpStream` は `Lin`)
-    let s = match unsafe { ctx.heap().foreign_unique::<NetStream>(stream) } {
-        Ok(s) => unsafe { &mut *s },
-        Err(HeapError::WrongKind) => return Ok(None),
-        Err(e) => return Err(e.into()),
-    };
+    let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
     let n = s.pending().len().min(READ_ROOM);
     if n == 0 {
         return Ok(None);
@@ -3276,10 +3166,6 @@ impl IoDriver for NoDriver {
         Arc::default()
     }
 
-    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
-        Ok((0, 1))
-    }
-
     fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
         Ok(())
     }
@@ -3317,7 +3203,7 @@ fn submit_x(
     worker: u32,
 ) -> Word {
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"x");
-    let stream = open_stream(ctx, 0, None, Arc::default());
+    let stream = net_stream(ctx);
     registry
         .submit_write(ctx, driver, worker, buf, stream)
         .unwrap()
@@ -3386,7 +3272,7 @@ fn probed_read(
     me: CellRef,
     buf: Word,
 ) -> (Word, CellRef) {
-    let stream = open_stream(ctx, 0, None, Arc::default());
+    let stream = net_stream(ctx);
     let token = registry.submit_read(ctx, driver, 0, buf, stream).unwrap();
     let op = registry.token_op(ctx, token).unwrap();
     assert!(
@@ -3455,7 +3341,7 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
 }
 
 /// 貸した記憶へ読んでいる間に取り消された読みも、外が書いたバイトを確定し、それを持つ buffer を返す
-/// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+/// (docs/spec/vm.md の「操作の記録」)。
 #[test]
 fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
     let mut ctx = test_ctx();
@@ -3536,7 +3422,7 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
         panic!("the op wait resumes with `Woke`");
     };
     assert_eq!(cell, me);
-    assert!(registry.op_timed_out(&ctx, op).unwrap());
+    assert_eq!(registry.op_outcome(&ctx, op).unwrap(), OUTCOME_LATE);
     let taken = registry.take_op(&mut ctx, op, 0).unwrap();
     assert!(taken.timed_out && !taken.cancelling);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
@@ -3630,7 +3516,7 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
     let Some(Runnable::ResumeIo { wake: WOKE, op, .. }) = out.pop() else {
         panic!("the op wait resumes with `Woke`");
     };
-    assert!(registry.op_timed_out(&ctx, op).unwrap());
+    assert_eq!(registry.op_outcome(&ctx, op).unwrap(), OUTCOME_LATE);
     let taken = registry.take_op(&mut ctx, op, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
@@ -3666,7 +3552,7 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
     ));
     assert_eq!((registry.next_deadline(), registry.stats.timers), (None, 1));
     assert!(driver.cancelled.is_empty());
-    assert!(!registry.op_timed_out(&ctx, token).unwrap());
+    assert_eq!(registry.op_outcome(&ctx, token).unwrap(), OUTCOME_OK);
     let taken = registry.take_op(&mut ctx, token, 0).unwrap();
     assert!(matches!(taken.result, Ok(1)) && !taken.timed_out);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();

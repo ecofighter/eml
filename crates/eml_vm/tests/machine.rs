@@ -2,12 +2,12 @@
 //! `Machine` に続けて読み込み、名前で照らした関数の番号、定数、エフェクト、位置のファイルの引き直しを確かめる。
 
 use std::io;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eml_rt::{
-    ArithFault, Checked, Completion, Fast, Fault, HandleBin, HeapError, IoDriver, IoHandle,
+    ArithFault, Checked, Completion, Done, Fast, Fault, HandleBin, HeapError, IoDriver, IoHandle,
     IoWaker, Op, OpKey,
 };
 use eml_vm::{
@@ -638,10 +638,6 @@ impl IoDriver for FakeDriver {
         Arc::new(HandleBin::default())
     }
 
-    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
-        Ok((1, 2))
-    }
-
     fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
         Ok(())
     }
@@ -757,4 +753,155 @@ fn a_driver_left_pending_poisons_the_machine() {
         error.to_string(),
         "the I/O driver failed: the driver kept pending ops after quiesce in `<close>`"
     );
+}
+
+/// 操作を持ったまま終わらせない driver。`cancel` は記録するだけで操作を終わらせず、取り消しを頼まれた操作は次の
+/// `wait` で成功として終わる。`wait` は期限まで時計を進める。`quiesce` は保留の操作をすべて終わらせて捨てる。
+/// 受け付け、取り消し、完了の受け渡し、`quiesce` を順に `log` に書く。
+#[derive(Default)]
+struct StubDriver {
+    now_ms: u64,
+    next_key: OpKey,
+    held: Vec<OpKey>,
+    cancelled: Vec<OpKey>,
+    done: Vec<Completion>,
+    log: Arc<Mutex<Vec<String>>>,
+}
+
+impl StubDriver {
+    fn note(&self, event: String) {
+        self.log.lock().unwrap().push(event);
+    }
+}
+
+impl IoDriver for StubDriver {
+    fn now(&self) -> Duration {
+        Duration::from_millis(self.now_ms)
+    }
+
+    fn wait(&mut self, deadline_ms: Option<u64>) -> io::Result<bool> {
+        if let Some(deadline) = deadline_ms {
+            self.now_ms = self.now_ms.max(deadline);
+        }
+        let cancelled = std::mem::take(&mut self.cancelled);
+        for key in cancelled {
+            self.held.retain(|&k| k != key);
+            self.done.push(Completion {
+                key,
+                result: Ok(Done::Listener {
+                    handle: key,
+                    port: 1,
+                }),
+                cancelled: false,
+            });
+        }
+        Ok(deadline_ms.is_some() || !self.done.is_empty())
+    }
+
+    fn submit(&mut self, _op: Op) -> OpKey {
+        self.note("submit".to_string());
+        self.next_key += 1;
+        self.held.push(self.next_key);
+        self.next_key
+    }
+
+    fn cancel(&mut self, key: OpKey) {
+        self.note("cancel".to_string());
+        self.cancelled.push(key);
+    }
+
+    fn completions(&mut self, out: &mut Vec<Completion>) {
+        if !self.done.is_empty() {
+            self.note("completed".to_string());
+        }
+        out.append(&mut self.done);
+    }
+
+    fn pending(&self) -> usize {
+        self.held.len() + self.done.len()
+    }
+
+    fn waker(&self) -> Arc<dyn IoWaker> {
+        Arc::new(NoWaker)
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        Arc::new(HandleBin::default())
+    }
+
+    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn close(&mut self, _handle: IoHandle) {}
+
+    fn quiesce(&mut self) {
+        self.note(format!("quiesce {}", self.pending()));
+        self.held.clear();
+        self.cancelled.clear();
+        self.done.clear();
+    }
+}
+
+/// `StubDriver` の上で検査モードの `Machine` を流して閉じ、出力、結果、`log` を返す。
+fn run_on_stub(src: &str) -> (String, eml_vm::Finished, Vec<String>) {
+    let driver = StubDriver::default();
+    let log = Arc::clone(&driver.log);
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    let log = log.lock().unwrap().clone();
+    (out.contents(), finished, log)
+}
+
+/// 期限で取り消されたタスクの待ちは、driver が取り消しを無視しても、操作の完了が届くまで続き、それから `Cancelled` で
+/// 再開する。driver が書き終えるまで記録の記憶を放さないためである。完了は成功でも、`timeout` は `None` を返し、
+/// 作られたリスナーは落とす (docs/spec/vm.md の「取り消しの届け方」)。
+#[test]
+fn a_cancelled_wait_resumes_only_after_the_driver_completes() {
+    let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  match Async.timeout 20 (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0)) with
+    | Some _ -> println \"Some\"
+    | None -> println \"None\")
+";
+    let (out, finished, log) = run_on_stub(src);
+    assert_eq!(out, "None\n");
+    assert_eq!((finished.stats.completions, finished.stats.cancels), (1, 1));
+    assert_eq!(log[..3], ["submit", "cancel", "completed"]);
+    assert!(log[3..].iter().all(|event| event == "quiesce 0"), "{log:?}");
+}
+
+/// 操作を待つタスクを残して `exit` で終わる run は、ヒープを落とす前に driver の `quiesce` で保留の操作を終わらせる。
+/// 終了コードはそのまま報告し、検査モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn an_exit_quiesces_pending_driver_work() {
+    let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () -> Net.listen \"127.0.0.1\" 0)
+  Async.yield_now ()
+  println \"exiting\"
+  (exit 3 : Unit)
+  Net.close_listener (Async.await t))
+";
+    let (out, finished, log) = run_on_stub(src);
+    assert_eq!(finished.exit, Some(3));
+    assert_eq!(out, "exiting\n");
+    assert_eq!(log[..2], ["submit", "quiesce 1"]);
+    assert!(log[2..].iter().all(|event| event == "quiesce 0"), "{log:?}");
 }

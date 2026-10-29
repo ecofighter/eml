@@ -252,8 +252,6 @@ table! {
         Chan => handle_type_row("Std.Chan.Chan"),
         // 登録表ではなく `Machine` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
         Counter => type_row("Std.Atomic.Counter", Unr, Repr::Int),
-        // driver の `pair` の片方の端を持つ `Foreign` (docs/spec/stdlib.md の「`Std.IoTest`」)
-        IoTestStream => type_row("Std.IoTest.Stream", Lin, Repr::Obj),
         // driver のリスナーとストリームのハンドルを持つ `Foreign` (docs/spec/stdlib.md の「`Std.Net`」)
         NetTcpListener => type_row("Std.Net.TcpListener", Lin, Repr::Obj),
         NetTcpStream => type_row("Std.Net.TcpStream", Lin, Repr::Obj),
@@ -1290,107 +1288,6 @@ table! {
         AtomicAdd => row("Std.Atomic.add", &[Int, Int], Int, Purity::Effectful),
         AtomicLoad => row("Std.Atomic.load", &[Int], Int, Purity::Effectful),
         AtomicStore => row("Std.Atomic.store", &[Int, Int], Unit, Purity::Effectful),
-        // 実行系のテストのための内部のインターフェース (docs/spec/stdlib.md の「`Std.IoTest`」)。受け付けの行は buffer とストリームを
-        // 消費して操作の記録に移し、取り出しの行が token を消費して記録を放す
-        IoTestOpenPair => kinded(
-            "Std.IoTest.open_pair",
-            &[Unit],
-            &[Unr],
-            Obj,
-            Lin,
-            Purity::Effectful,
-        ),
-        IoTestPeer => borrowing(
-            &[true],
-            FunctionRow {
-                with_arg: Some(0),
-                ..kinded(
-                    "Std.IoTest.peer",
-                    &[Obj],
-                    &[Lin],
-                    Obj,
-                    Lin,
-                    Purity::Effectful,
-                )
-            },
-        ),
-        IoTestSubmitWrite => kinded(
-            "Std.IoTest.submit_write",
-            &[Obj, Obj],
-            &[Unr, Lin],
-            Obj,
-            Lin,
-            Purity::Effectful,
-        ),
-        IoTestOpStream => borrowing(
-            &[true],
-            FunctionRow {
-                with_arg: Some(0),
-                ..kinded(
-                    "Std.IoTest.op_stream",
-                    &[Obj],
-                    &[Lin],
-                    Obj,
-                    Lin,
-                    Purity::Effectful,
-                )
-            },
-        ),
-        IoTestTakeWrite => kinded(
-            "Std.IoTest.take_write",
-            &[Obj],
-            &[Lin],
-            Int,
-            Unr,
-            Purity::Effectful,
-        ),
-        IoTestSubmitRead => kinded(
-            "Std.IoTest.submit_read",
-            &[Obj, Obj],
-            &[Unr, Lin],
-            Obj,
-            Lin,
-            Purity::Effectful,
-        ),
-        IoTestTakeRead => kinded(
-            "Std.IoTest.take_read",
-            &[Obj],
-            &[Lin],
-            Obj,
-            Unr,
-            Purity::Effectful,
-        ),
-        IoTestOpTimedOut => borrowing(
-            &[true],
-            FunctionRow {
-                with_arg: Some(0),
-                ..kinded(
-                    "Std.IoTest.op_timed_out",
-                    &[Obj],
-                    &[Lin],
-                    Enum,
-                    Unr,
-                    Purity::Effectful,
-                )
-            },
-        ),
-        // プールの仕事。`Bytes` の中身を写して仕事に渡すので、記録の buffer は一意でなくてよい
-        IoTestSubmitChecksum => kinded(
-            "Std.IoTest.submit_checksum",
-            &[Int, Obj],
-            &[Unr, Unr],
-            Obj,
-            Lin,
-            Purity::Effectful,
-        ),
-        IoTestTakeChecksum => kinded(
-            "Std.IoTest.take_checksum",
-            &[Obj],
-            &[Lin],
-            Int,
-            Unr,
-            Purity::Effectful,
-        ),
         // TCP の操作の記録のインターフェース (docs/spec/stdlib.md の「`Std.Net`」)。受け付けの行は引数を消費して記録に
         // 移し、`op_*` は token を借りて記録が持つものを読み、取り出しの行と `finish` が token を消費して記録を放す
         NetSubmitListen => kinded(
@@ -1572,7 +1469,7 @@ table! {
 }
 
 impl Extern {
-    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.IoTest`、`Std.Net` の行。VM はこれらの行を
+    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net` の行。VM はこれらの行を
     /// 汎用の extern の命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub fn is_async(self) -> bool {
         matches!(
@@ -1618,16 +1515,6 @@ impl Extern {
                 | Extern::AtomicAdd
                 | Extern::AtomicLoad
                 | Extern::AtomicStore
-                | Extern::IoTestOpenPair
-                | Extern::IoTestPeer
-                | Extern::IoTestSubmitWrite
-                | Extern::IoTestOpStream
-                | Extern::IoTestTakeWrite
-                | Extern::IoTestSubmitRead
-                | Extern::IoTestTakeRead
-                | Extern::IoTestOpTimedOut
-                | Extern::IoTestSubmitChecksum
-                | Extern::IoTestTakeChecksum
                 | Extern::NetSubmitListen
                 | Extern::NetSubmitAccept
                 | Extern::NetSubmitConnect

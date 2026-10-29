@@ -280,7 +280,7 @@ chan_wait_send c = await_send c
 pub chan_wait_recv : Cell -> <IO, Async> Wake
 chan_wait_recv c = await_recv c
 
--- `Std.Net` と `Std.IoTest` の待ち。`OpId` を作る公開の関数はないので、利用者が呼んでも渡せる値はない
+-- `Std.Net` の待ち。`OpId` を作る公開の関数はないので、利用者が呼んでも渡せる値はない
 pub io_wait : OpId -> <IO, Async> (Wake, OpId)
 io_wait op = await_io op
 

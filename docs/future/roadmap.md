@@ -28,7 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。`Std.Net` ができたら `Std.IoTest` のインターフェースを置き換えるか消す ([標準ライブラリ](../spec/stdlib.md) の「`Std.IoTest`」)。前提: なし。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
+- `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。前提: なし。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
 - `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。前提: `async-net`。設計: [非同期の設計](async.md) の「テストと決定性」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
 - `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`、`async-net`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
@@ -369,7 +369,7 @@
   - 後に回した理由: kqueue の通知と compio の起こしの道は async-signal-safe と書かれておらず、シグナルのハンドラから呼べない。worker が1つの間は、10 ms の上限で Ctrl-C と確保量の上限が眠る worker に届く。
   - 見直す条件: `worker-threads` で、監視のスレッドとスレッドをまたぐ知らせが worker を起こすようになったとき。または、Ctrl-C の反応の遅れか空きの CPU 使用が問題になったとき。そのときは `IDLE_TICK` を見直す。
 - プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ。プールの32本のスレッドがすべて仕事中なら、仕事の受け付けは安全点を通らずに待つ ([VM](../spec/vm.md) の「時計と driver」)
-  - 後に回した理由: 今の仕事は std の内部の短いもの (`Std.IoTest.checksum`) だけで、長さに上限がある。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
+  - 後に回した理由: 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
   - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
 - `compio-driver` の 0.13 の系列: `compio-driver` と `compio-buf` は、上位の crate `compio` の安定版が使うバージョンに固定している ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
   - 後に回した理由: 0.13 の系列には beta のバージョンしかない。

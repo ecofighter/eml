@@ -752,25 +752,6 @@ impl IoDriver for RealDriver {
     }
 
     #[cfg(unix)]
-    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
-        let (a, b) = std::os::unix::net::UnixStream::pair()?;
-        // polling の backend は `push` の中でまず読み書きを試すので、ブロックしない fd を求める
-        a.set_nonblocking(true)?;
-        b.set_nonblocking(true)?;
-        let (ha, hb) = (self.next_handle, self.next_handle + 1);
-        self.next_handle += 2;
-        self.handles.insert(ha, SharedFd::new(Fd::from(a)));
-        self.handles.insert(hb, SharedFd::new(Fd::from(b)));
-        Ok((ha, hb))
-    }
-
-    /// Windows のソケットは `net-windows` で扱う。
-    #[cfg(windows)]
-    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
-        Err(io::Error::from(io::ErrorKind::Unsupported))
-    }
-
-    #[cfg(unix)]
     fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
         let fd = self.fd(handle).ok_or_else(no_handle)?;
         SockRef::from(&fd).shutdown(std::net::Shutdown::Write)

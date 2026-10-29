@@ -101,9 +101,9 @@ impl Network {
     }
 
     /// つながった2つの端を作る。`port` は1つ目の端が持つポートである。
-    pub(super) fn pair(&mut self, port: Option<u16>) -> (IoHandle, IoHandle) {
+    fn connected_ends(&mut self, port: u16) -> (IoHandle, IoHandle) {
         let (a, b) = (self.handle(), self.handle());
-        for (handle, peer, port) in [(a, b, port), (b, a, None)] {
+        for (handle, peer, port) in [(a, b, Some(port)), (b, a, None)] {
             let end = End {
                 peer,
                 inbox: VecDeque::new(),
@@ -146,7 +146,7 @@ impl Network {
         let client_port = self
             .free_port()
             .ok_or_else(|| io::Error::other("no free port"))?;
-        let (client_end, server_end) = self.pair(Some(client_port));
+        let (client_end, server_end) = self.connected_ends(client_port);
         let listener = self.listeners.get_mut(&listener).expect("a listening port");
         listener.backlog.push_back(server_end);
         Ok(Connection::Connected { client_end })

@@ -271,10 +271,6 @@ impl IoDriver for TestDriver {
         Arc::clone(&self.bin)
     }
 
-    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
-        Ok(self.net.pair(None))
-    }
-
     fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
         self.net.shutdown_write(handle)
     }
