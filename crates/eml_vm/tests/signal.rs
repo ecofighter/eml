@@ -98,8 +98,11 @@ fn run_real(
     let (done, finished) = mpsc::channel::<()>();
     let poker = thread::spawn(move || {
         let poked = poke(&control, &doorbell);
+        // 自己パイプのある run では、止める語を立てた後に鳴らさないと眠る worker に届かない
+        // (docs/spec/vm.md の「タスクとスケジュール」)
         if !poked {
             control.interrupt();
+            doorbell.ring();
             return false;
         }
         let start = Instant::now();
@@ -108,6 +111,7 @@ fn run_real(
         {
             if start.elapsed() >= WATCHDOG {
                 control.interrupt();
+                doorbell.ring();
                 return true;
             }
         }
@@ -277,8 +281,8 @@ main () = Async.run (fn () ->
     assert!(error.terminated(), "{error:?}");
 }
 
-/// `with_driver` で渡した driver の run は、時計の欄が `Clock::Real` でも OS のシグナルを届けない。テストの driver は
-/// 眠らないので、シグナルだけを待つ run はデッドロックで止まり、回り続けない (docs/spec/vm.md の「時計と driver」)。
+/// `with_driver` で渡した driver の run は、時計の欄が `Clock::Real` でも OS のシグナルを中継しない。そのため、
+/// シグナルだけを待つ run は待ち続けずにデッドロックで止まる (docs/spec/vm.md の「時計と driver」)。
 #[test]
 fn an_injected_driver_does_not_listen_for_os_signals() {
     let program = eml_test_support::lir(

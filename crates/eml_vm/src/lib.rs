@@ -147,7 +147,8 @@ pub struct RunConfig {
     /// タイマーが使う時計。既定はすべてのタスクが待つときにだけ進む `Clock::Virtual` である。
     pub clock: Clock,
     /// 監視のスレッドを起こす自己パイプ。シグナルのハンドラと同じものを渡す。既定はなしで、監視のスレッドは刻みで
-    /// シグナルを見に行く (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// シグナルを見に行く。`Clock::Real` の run に渡すと、run の始めに監視のスレッドが起き、VM は空きの待ちを切らない。
+    /// そのため、止める語を立てる者は自己パイプも鳴らす (docs/spec/vm.md の「タスクとスケジュール」)。
     pub doorbell: Option<Arc<Doorbell>>,
     /// 仮想のシグナルの予定。既定は空で、テストのハーネスだけが使う (docs/spec/vm.md の「時間の待ち」)。
     pub signals: Vec<VirtualSignal>,
@@ -229,8 +230,8 @@ pub struct Machine<M: Mode> {
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
     /// driver が貸した記憶はヒープにあるので、`Drop` は `ctx` より先にこの欄を落とす (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
-    /// 持っている driver の出どころ。`with_driver` で渡した driver は、時計の欄によらず `Injected` にする。テストの
-    /// driver を渡されたときに OS のシグナルを待たせると、空きのループが回り続けるためである
+    /// 持っている driver の出どころ。`with_driver` で渡した driver は、時計の欄によらず `Injected` にする。出どころを
+    /// 知らない driver の run には OS のシグナルを中継せず、眠る driver として空きの待ちを切る
     /// (docs/spec/vm.md の「時計と driver」)。
     driver_kind: DriverKind,
     code: CodeBase<M>,
@@ -326,7 +327,9 @@ impl<M: Mode> Machine<M> {
         self
     }
 
-    /// 監視のスレッドを起こす自己パイプを渡す。ないときは、監視のスレッドが刻みでシグナルを見に行く。
+    /// 監視のスレッドを起こす自己パイプを渡す。ないときは、監視のスレッドが刻みでシグナルを見に行く。`Clock::Real` の
+    /// run に渡すと、run の始めに監視のスレッドが起き、VM は空きの待ちを切らない。そのため、止める語を立てる者は
+    /// 自己パイプも鳴らす (docs/spec/vm.md の「タスクとスケジュール」)。
     pub fn with_doorbell(mut self, doorbell: Arc<Doorbell>) -> Machine<M> {
         self.doorbell = Some(doorbell);
         self
@@ -339,7 +342,9 @@ impl<M: Mode> Machine<M> {
     }
 
     /// 次の run から使う driver を渡す。後の `with_clock` と `with_sched` はこれを捨てる。driver は `Machine` を使う
-    /// スレッドの上で作る (docs/spec/vm.md の「時計と driver」)。
+    /// スレッドの上で作る。渡すのは眠る driver に限る。VM はその run の空きの待ちを 10 ms ごとに切るので、期限まで
+    /// 時計を進める driver では、終わらない保留のある run がデッドロックで止まらない (docs/spec/vm.md の
+    /// 「時計と driver」)。
     pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
         self.driver_kind = DriverKind::Injected;

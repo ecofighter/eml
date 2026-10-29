@@ -528,9 +528,13 @@ mod tests {
         let mut unbelled = scheduler(DriverKind::Real, false);
         unbelled.start_monitor();
         assert!(unbelled.watcher.monitor.is_some());
+        // 自己パイプがあっても、監視のスレッドが起きていなければ切る (起こせなかった run と同じ)
+        let unwatched = scheduler(DriverKind::Real, true);
+        assert!(unwatched.watcher.monitor.is_none());
         for sched in [
             scheduler(DriverKind::Real, false),
             unbelled,
+            unwatched,
             scheduler(DriverKind::Injected, true),
         ] {
             let cap = ceil_ms(sched.driver.now()) + WAIT_CAP_MS;
