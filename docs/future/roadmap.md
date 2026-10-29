@@ -29,6 +29,8 @@
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
 - `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。前提: なし。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
+- `net-tls`: `Std.Tls` のクライアントを入れる。TLS の状態は rustls の上の crate `eml_tls` が持ち、`eml_vm` の feature `tls` (既定で有効) で結ぶ。ソケットの I/O は `Std.Net` が行い、`Tls` の eml のコードが `TcpStream` と TLS の状態の間でバイトを汲む。server は作らない。テストの相手は、テストの driver の仮想のホスト `tls.localhost` が Rust で TLS を終端し、平文を `localhost` の listener へつなぐ。暗号は aws-lc-rs、根の証明書は webpki-roots で、追加の CA は PEM で渡す。最初に `nix build` と CI で C の依存が組めることを確かめる。前提: `async-net`。設計: [非同期の設計](async.md) の「TLS と HTTP」
+- `std-http`: `Std.Http` の HTTP/1.1 のクライアントを、`Net` と `Tls` の上に eml で書く。`Content-Length`、chunked、EOF までの本文、リダイレクトを扱い、接続は要求ごとに閉じる。速さは `bench/scripts.sh` の行で測る。前提: `net-tls`。設計: [非同期の設計](async.md) の「TLS と HTTP」
 - `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。前提: `async-net`。設計: [非同期の設計](async.md) の「テストと決定性」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
 - `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`、`async-net`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
@@ -332,12 +334,23 @@
 - `SO_REUSEPORT` で複数のタスクが accept する形
   - 後に回した理由: N が 4 以下では accept が詰まりにならない。既定では1つの listener の accept を1つのタスクで行う。
   - 見直す条件: N が 8 以上で accept が詰まりになったとき。
-- TLS のプラグイン: rustls の上の Rust のプラグイン (`eml_tls`) で、形は GUI のプラグインと同じである ([FFI と拡張の設計](ffi.md) の「拡張」)
-  - 後に回した理由: プラグインの仕組みは GUI のプラグインと一緒に入る。
-  - 見直す条件: HTTPS が要るとき。
-- `Http`: `Net` と `Chan` の上のライブラリ
-  - 後に回した理由: HTTPS には TLS のプラグインが先に要る。
-  - 見直す条件: TLS のプラグインが入った後か、平文の HTTP を使うプログラムが出たとき。
+- TLS の server (`Tls.accept`、SNI で証明書を選ぶこと、クライアント認証、ALPN)
+  - 後に回した理由: 目標は HTTPS のクライアントで、server は作らない。テストの相手はテストの driver が Rust で終端する。
+  - 見直す条件: eml で HTTPS のサーバを書くとき。
+- close_notify なしの EOF を EOF として読む `Tls` の読み
+  - 後に回した理由: 既定は IO の失敗 `ConnectionReset` にした。長さを持たない本文 (EOF までの本文) が黙って切れるのを防ぐためである。
+  - 見直す条件: close_notify を送らないサーバと話す必要が出たとき。
+- OS の証明書ストアで検証すること (`rustls-platform-verifier`)
+  - 後に回した理由: webpki-roots の根と `Tls.connect_with_ca` の追加の CA で足り、OS ごとの依存を増やさない。
+  - 見直す条件: OS のストアにしかない CA を使うプログラムが出たとき。
+- `Http` の HTTP/2 と ALPN、gzip、keep-alive の接続のプール、ストリーミングの本文、本文の大きさの上限、プロキシ
+  - 後に回した理由: スクリプトの HTTPS のクライアントには、要求ごとに閉じる HTTP/1.1 で足りる。gzip は展開の extern がまだない。
+  - 見直す条件: 大きな本文を少しずつ読むプログラムか、同じホストへ多数の要求を出すプログラムが出たとき。
+- libcurl の上の HTTP のクライアント: 採らない。本物のソケットを要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないのでほかのプロトコルに使える TLS の層にならない。OS ごとに違う TLS (OpenSSL、Schannel) と libcurl、zlib、pkg-config の依存も持ち込む。
+  - 見直す条件: `Http` に HTTP/2、プロキシ、圧縮が要り、eml で書くより libcurl を結ぶほうが小さいと分かったとき。
+- musl で静的に結んだ Linux の配布物 (`x86_64-unknown-linux-musl`)
+  - 後に回した理由: TLS とは別の配布の話である。aws-lc-sys のために musl を対象にする C のツールチェーンを flake に足し、`nix build` の2つ目のパッケージと CI のジョブが要る。musl の名前の解決と確保の速さは glibc と違う。AOT の配布物は `libeml_rt.a` を同梱して利用者の `cc` で結ぶので、musl の配布物には musl 向けの `libeml_rt.a` と結び方を別に用意する必要がある。根の証明書は webpki-roots なので、静的な配布物でも OS のストアは要らない。
+  - 見直す条件: Linux の tarball を配布するとき。既定の配布物とは別の配布物にする。
 - 時刻を扱う `Time` のモジュール
   - 後に回した理由: 待ちと期限は `Int` のミリ秒で足りる。
   - 見直す条件: 時刻か、時間あたりの回数の制限が要るとき。

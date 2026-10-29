@@ -9,7 +9,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 - 目的: 多数の接続を1つのプロセスで受けるネットワークのサーバを eml で書けるようにする。接続ごとにタスクを1つ作り、1つの接続の失敗 (IO の失敗、`Panic`、タスクごとの上限) をその接続の中にとどめる
 - 範囲: `Async` のエフェクト、スコープとタスク、失敗と `exit`、取り消し、時間、channel と共有の状態、I/O の driver、`Net` と `Signal`、非同期のファイルとパイプ、`compute`、テスト
 - 範囲の外: worker のループ、受け箱、救済、横取り、スレッドをまたぐ RC、データ並列の `par`。worker のループ、受け箱、救済、横取りは [マルチコア対応の設計](multicore.md) の「スケジューラ」に、スレッドをまたぐ RC は [マルチコア対応の設計](multicore.md) の「スレッドをまたぐ RC」に、`par` は [マルチコア対応の設計](multicore.md) の「並列と並行の API」にある
-- 範囲の外: TLS、HTTP、時刻。下の「ネットワークとシグナル」と「未決の論点と将来の拡張」に、後で足す形を書く
+- 範囲の外: 時刻。下の「未決の論点と将来の拡張」に、後で足す形を書く。TLS と HTTP は下の「TLS と HTTP」にある
 - 並行処理のための新しい構文は足さない。タスクはラムダと `use` で書く
 
 ## 確定した設計判断
@@ -352,12 +352,114 @@ main () =
 - `signalfd` と `EVFILT_SIGNAL` は使わない。どちらもすべてのスレッドでシグナルを止める必要があり、今の handler とブロックする読みの EINTR の道と食い違う
 - 2回目の Ctrl-C は今と同じく `_exit(130)` である。handler がビットを立ててから監視のスレッドが下ろすまでの間 (高々監視の刻み1つ) の2回目の Ctrl-C も終わる。これは文書にある2回の Ctrl-C の意味と同じである
 
+### TLS と HTTP
+
+段 `net-tls` と `std-http` の設計である ([ロードマップ](roadmap.md) の「段の列」)。
+
+- TLS はプラグインにせず、普通の std のモジュール `Std.Tls` にする。利用者に見せるのはクライアントだけである。プラグインの仕組みは GUI の要求 (スレッドの固定、イベントループ) のためにあり、sans-IO の TLS の状態はそのどれも要らない。TLS の状態 `Tls.Conn` は rustls の接続と復号した平文の列を持つ `Lin` の `Foreign` で、I/O を持たない。`eml_vm` が `Foreign` を作り、extern の行の腕を持つ。`eml_rt` は変わらない
+- ソケットの I/O はすべて `Std.Net` が行う。`Tls.Stream` は `Conn` と `TcpStream` を持つ eml の `data` で、`Tls` の eml のコードが、送る TLS のバイトを `Conn` から取り出して `Net.write_bytes` で書き、`Net.read_chunk` で読んだバイトを `Conn` に入れ、復号した平文を返す。待ち、取り消し、期限は `Net` のもので、`Tls` は何も足さない。`Tls` の extern は同期の行で、`Async` の行にしない。`Conn` の行は `client_raw` を除いて投げず、TLS の誤りは `Conn` に記録して、eml の側が alert を書き出してから IO の失敗にする
+- driver 側に `TlsStream` を置かないのは、本物の driver に rustls が入り、取り消しと期限の意味が別に要るからである。sans-IO なら、待ち、取り消し、期限が `Net` の1か所に集まる
+- rustls は受け取った平文を 16 KiB までしか持たないので、`Conn` は TLS のバイトを処理するたびに平文を自分の列へ移す。読みの道では、カーネルが書いた `Bytes` から rustls へ、rustls から `Conn` の列へ、列から `Bytes` へと3回写す。費用は `std-http` の `bench/scripts.sh` の行で測る
+- 取り消しの巻き戻しは `Stream` を落とし、`Conn` はメモリだけを放し、`TcpStream` の破棄処理がソケットを閉じる。close_notify は送らない。`Tls.shutdown_write` と `Tls.close` が close_notify を書き出してから `Net.shutdown_write` する
+- 相手が close_notify を送って閉じたら `read_chunk` は EOF を返す。close_notify なしに EOF が来たら IO の失敗 `ConnectionReset` にする。EOF までの本文が黙って切れないためである。handshake の途中で相手が閉じたときも `ConnectionReset` にする。証明書の拒否と、PEM やサーバ名の誤りは種類 `Other` で、文言に rustls の詳細を付けない。`connect` と handshake に期限はなく、黙る相手は `Async.timeout` で切る
+
+`Std.Tls` の面は次のとおりである。`read_line` の意味は `Net.read_line` と同じにする。行の上限と文言も同じで、`Tls.Stream` は専用の読み残しの `Bytes` を持つ。
+
+```haskell
+pub extern data Conn                                                       -- Lin
+pub data Stream = | Stream { conn : Conn, sock : Net.TcpStream }          -- Lin
+
+pub connect           : String -> Int -> <IO, Async> Stream                -- host port。host を SNI に使い、handshake まで行う
+pub connect_with_ca   : String -> String -> Int -> <IO, Async> Stream      -- 追加の CA (PEM) host port
+pub wrap              : String -> Net.TcpStream -> <IO, Async> Stream      -- 既にある TcpStream の上で handshake する
+pub read_chunk        : Bytes -> Stream -> <IO, Async> (Bytes, Stream)     -- 何も足さなければ、相手が close_notify で閉じた
+pub read_chunk_within : Int -> Bytes -> Stream -> <IO, Async> (Option Bytes, Stream)
+pub read_line         : Stream -> <IO, Panic, Async> (Option String, Stream)
+pub read_line_within  : Int -> Stream -> <IO, Panic, Async> (Option (Option String), Stream)
+pub write             : String -> Stream -> <IO, Async> Stream
+pub write_bytes       : Bytes -> Stream -> <IO, Async> Stream
+pub write_line        : String -> Stream -> <IO, Async> Stream
+pub shutdown_write    : Stream -> <IO, Async> Stream                       -- close_notify を書き出し、Net.shutdown_write
+pub close             : Stream -> <IO, Async> Unit                         -- shutdown_write してから落とす
+
+extern client_raw        : String -> String -> <IO> Conn     -- host と追加の CA の PEM (空なら既定の根だけ)。失敗は IO の失敗
+extern push_tls          : Bytes -> Conn -> <IO> Conn        -- 投げない。TLS の誤りは status の 16
+extern push_eof          : Conn -> <IO> Conn
+extern pull_tls          : Conn -> <IO> (Bytes, Conn)        -- 送るものがなければ空の Bytes
+extern write_plain       : Bytes -> Conn -> <IO> Conn
+extern read_plain        : Bytes -> Conn -> <IO> (Bytes, Conn)
+extern status            : Conn -> <IO> (Int, Conn)          -- 1 handshaking, 2 has_outgoing, 4 peer_closed, 8 truncated, 16 failed
+extern error_message     : Conn -> <IO> (String, Conn)
+extern send_close_notify : Conn -> <IO> Conn
+```
+
+- extern の境界に `Option` と `List` は出さない。`Conn` を取る行は `Conn` を借りて組にして返す
+- `Tls` の eml のコードは、`pull_tls` が空になるまで `Net.write_bytes` で書き出す補助と、`status` の 16 を見て alert を書き出してから IO の失敗にする補助を持つ。handshake は、`status` の 1 が立っている間、`Net.read_chunk` で読んでは `push_tls` することを繰り返し、最後にクライアントの Finished を書き出す。`read_chunk` は先に `read_plain` を試し、増えなければ `status` の 4 (EOF) と 8 (切り詰め) を見てから `Net.read_chunk` を呼ぶ。空の読みは `push_eof` にする
+
+crate `eml_tls` は eml に依存せず、rustls の接続と復号した平文の列を包む。形は次のとおりである。`process_new_packets` のたびに平文を移し出すので、rustls の平文の上限 (`set_buffer_limit` の対象外) に当たらない。
+
+```rust
+pub struct Conn { /* rustls::Connection, plaintext: Vec<u8>, failed: Option<Error>, eof: bool */ }
+impl Conn {
+    pub fn client(server_name: &str, extra_ca_pem: &[u8]) -> Result<Conn, Error>;
+    pub fn server(cert_chain_pem: &[u8], key_pem: &[u8]) -> Result<Conn, Error>;  // テストの driver の終端器と eml_tls のテストだけが使う
+    pub fn push_tls(&mut self, bytes: &[u8]);
+    pub fn push_eof(&mut self);
+    pub fn pull_tls(&mut self, out: &mut Vec<u8>);   // 失敗の後も、待たせている alert を書き出す
+    pub fn write_plain(&mut self, bytes: &[u8]);
+    pub fn read_plain(&mut self, out: &mut Vec<u8>) -> usize;
+    pub fn status(&self) -> u32;                     // HANDSHAKING=1, HAS_OUTGOING=2, PEER_CLOSED=4, TRUNCATED=8, FAILED=16
+    pub fn error_message(&self) -> String;
+    pub fn send_close_notify(&mut self);
+}
+```
+
+- crate は rustls 0.23 を `aws_lc_rs` と `tls12` の feature で使い、webpki-roots を根にする。`install_default` は呼ばず、provider を `builder_with_provider` で渡す。追加の CA は `Tls.connect_with_ca` が PEM で渡す。OS の証明書ストアは使わない
+- 暗号が aws-lc-rs なのは、rustls の既定で推奨の provider だからである。ring の最後のリリースは 2025-03 で、純 Rust の provider は TLS 1.3 だけか、対応する CPU が限られる。要るのは rustc がリンクに使うのと同じ C のツールチェーンだけである。Windows では NASM があれば使い、なければ rustls の feature が有効にする prebuilt の object を使う。段の最初に、`nix build` と CI の3つの OS で aws-lc-sys が組めることを確かめる。`nix build` で失敗したら provider を `ring` に替えてやり直し、それも失敗したら設計を決め直す
+- `eml_vm` と `eml_io` の feature `tls` で結ぶ。`eml_io` の `tls` はテストの driver の終端器と `tls.localhost` の名前だけを分け、本物の driver は `eml_tls` を参照しない。`eml_cli` の `tls` が両方を有効にし、`default` に入れる。`eml_cli` の `--no-default-features --features run` で外せ、外した処理系では `Std.Tls` の腕が IO の失敗 `not available` (種類は `NotAvailable`) を投げ、テストの driver は `tls.localhost` を知らない名前 (`NotFound`) として扱う
+- `eml_vm` だけを組む Miri の job は `eml_tls` に届かない。workspace 全体の `cargo nextest run` は `eml_tls` を組む
+- `.#cross` の Windows の clippy は C のツールチェーンを持たず、ring も aws-lc-sys も組めない。そのため、`--exclude eml_tls --no-default-features --features eml_cli/run,eml_test_support/run` を付けて流す。`x86_64-unknown-linux-gnu` も同じ形にする。`eml_tls` を外した clippy は、CI の別の行 (`cargo clippy -p eml_cli --no-default-features --features run`) で補う ([テスト戦略](../implementation/testing.md) の「OS ごとのテスト」)
+- `Conn` の rustls の送る側の buffer は、`write_bytes` に渡した1つの `Bytes` で押さえ、同じ呼び出しの中で書き出す。`Conn` の列と rustls の buffer は `max_bytes` に数えない
+
+テストの相手は、テストの driver の仮想のホストが持つ。
+
+- 名前 `tls.localhost` への接続は、driver が次の3つを作る。(a) 暗号文の端の組で、eml 側の端が返される `TcpStream` になる。(b) 平文の端の組で、遠い側は普通の `Net.connect "localhost" p` と同じく仮想の listener `localhost:p` の `accept` の待ち行列に入る。listener がなければ `ConnectionRefused` で、backlog が満ちていれば保留になる。(c) driver が持つ終端器で、`eml_tls::Conn::server` の状態と2つの端の組を持つ。平文の組を作るには、普通の `connect` が使う関数を呼ぶ
+- `settle` の最初に、どの終端器も進まなくなるまで汲む。暗号文の inbox から `push_tls` と `read_plain` を経て平文の相手の inbox へ、平文の inbox から `write_plain` と `pull_tls` を経て暗号文の相手の inbox へ足す。eml のクライアントが自分の端を閉じたら `push_eof` して平文の端を閉じる。eml の server が自分の端を閉じたら `send_close_notify` して、暗号文の端を閉じる。`FAILED` なら alert のバイトを暗号文の inbox に入れてから両方の端を閉じる。両方の端が閉じたら終端器を取り除く。操作を試す前に汲むので、`settle` の順、seed での並べ替え、仮想の時計は変わらない
+- `tls.localhost` への1つの接続は、仮想のポートのカウンタから2つのクライアントのポートを取る。eml の server の `peer_addr` は、平文の組のクライアントのポートを見せる
+- `tls-cut.localhost` は、eml の server が閉じるときに close_notify なしで暗号文の端を閉じる。切り詰めのテストに使う
+- 証明書と鍵は `eml_tls` の `fixtures` が持つテスト用の固定のもので、CA は ECDSA P-256 の自己署名、leaf の SAN は `tls.localhost`、`localhost`、`127.0.0.1` で、どちらも期限を 2126 年にする。rustls はシステムの時刻に対して検証するためである。`gen.sh` が作り直し、UI テストのディレクトリへ `ca.pem` を写す。UI のプログラムは `FileIn.read_all "ca.pem"` で読んで `Tls.connect_with_ca` に渡す。`Tls.connect "tls.localhost" p` は既定の根で検証して失敗する
+- handshake は録音で再生できない (クライアントの乱数が毎回変わる) ので、相手は生きた server でなければならない。公開の server の API もテスト専用の std のモジュールも置かないので、決定的にできる場所はテストの driver の仮想のホストだけである
+- 終端器の Rust のテストは、`eml_tls::Conn::client` を `tls.localhost` の接続に対する driver の `Op::Write` と `Op::Read` で動かし、平文の listener の端に対して handshake を終えてバイトを往復させる。本物のソケットの Rust のテストは `#[cfg(unix)]` で `eml_cli` に置き、std の `TcpListener` と rustls の `ServerConnection` のスレッドを相手に、本物の driver で `Tls.connect_with_ca ca "localhost" port` を動かす
+- 仮想のホストの形が feature で分けたモジュールから拡張できず、終端器を作れなかったときは、Rust のテストだけにして `tls/` と https の UI テストを置かない
+
+`Std.Http` は `Net` と `Tls` の上に eml で書く HTTP/1.1 のクライアントで、extern を足さない。
+
+```haskell
+pub data Options  = | Options { headers : List (String, String), ca : String, max_redirects : Int }   -- ca: 追加の CA の PEM。"" なら既定の根
+pub data Response = | Response { status : Int, headers : List (String, String), body : Bytes }
+pub defaults : Options                                                   -- [] "" 5
+pub get          : String -> <IO, Panic, Async> Response
+pub request      : String -> String -> Bytes -> Options -> <IO, Panic, Async> Response   -- method url body options
+```
+
+- URL は `http://` と `https://` で、`host[:port]` と path?query を持つ。既定のポートは 80 と 443 である。userinfo、IDN、fragment は扱わない
+- 要求は `Host`、`Connection: close`、`User-Agent: eml` を付け、本文が空でなければ `Content-Length` を付ける。`options.headers` は末尾に足す。応答の後に stream を閉じる
+- 応答の状態行とヘッダーは `read_line` で読み、それぞれ 64 KiB までにする。ヘッダー名は大文字小文字を区別しない。本文は `Content-Length` があればそれで、なければ `Transfer-Encoding: chunked` (拡張は無視し、trailer は捨てる)、それもなければ EOF まで読む。`HEAD`、1xx、204、304 には本文がない。EOF までの本文が https で切り詰められたら、`Tls` の IO の失敗のまま伝える
+- リダイレクトは 301、302、303、307、308 を、どのメソッドでも `options.max_redirects` の回数まで追う。超えたら IO の失敗にする。301、302、303 は `GET` にして本文と呼び出し側の `Content-Length`、`Content-Type` を捨て、307 と 308 は同じメソッドと本文で送る。`Location` は絶対 URL か絶対パスにする。別のオリジン (scheme、host、port のどれかが違う) へは、呼び出し側の `Authorization`、`Cookie`、`Proxy-Authorization` を落とす。https から http は断り、http から https は許す
+- gzip、HTTP/2 と ALPN、keep-alive とプール、ストリーミングの本文、プロキシ、cookie、本文の上限、期限は持たない。期限は `Async.timeout` で書く ([ロードマップ](roadmap.md) の「非同期」)
+- libcurl は使わない。本物のソケットを要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないので TLS の層にならない ([ロードマップ](roadmap.md) の「非同期」)
+
+テストは次のとおりである。
+
+- TLS と HTTP の UI テストは `tests/ui/run/tls/`、`tests/ui/run/http/` と、`run-fail` の同じ名前のディレクトリに置く。仮想のホストの上で、`Net` で書いた eml の server のタスクと、`tls.localhost` へつなぐ client のタスクを1つのプログラムで動かす。`async/` には置かない。TLS のレコードがまとまる数が seed で変わり、`completions` が seed によらないという `async/` の規則に合わないためである
+- `run/tls/` には、echo、200 KiB の本文、close_notify での EOF を置く。`run-fail/tls/` には、CA なしの `Tls.connect` (証明書の拒否)、`tls-cut.localhost` の切り詰め、handshake の前に server が閉じることを置く
+- `run/http/` には、`Content-Length`、chunked、EOF までの本文、リダイレクトの連鎖 (POST の後の 303、オリジンが変わったときのヘッダーの除去を含む)、`tls.localhost` への https を置く。`run-fail/http/` には、リダイレクトの回数超過、https から http への格下げ、切り詰められた EOF までの https の本文を置く
+- `bench/scripts.sh` に行 `https-get` を足す。eml の `Http.get` で手元の rustls の server から 64 MiB の本文を取り、Python の `urllib.request` と比べる。CI に上限は置かず、「Python の 1.5 倍以内」という目標を目安にする
+
 ### 後で足すもの
 
 - UDP、`SO_REUSEPORT` で複数のタスクが accept する形
 - 非同期の名前の解決。既定では `getaddrinfo` をプールで動かす。`resolve` も同じ形で持つ
-- TLS: Rust のプラグイン (`eml_tls`、rustls の上) にする。形は GUI のプラグインと同じである ([FFI と拡張の設計](ffi.md) の「拡張」)
-- HTTP: `Net` と `Chan` の上のライブラリにする
 
 ## ファイルとパイプ
 
@@ -402,4 +504,4 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - channel のキュー: 既定は mutex で、ロックフリーには後でランタイムの中だけで替える
 - `Lin` の closer token: 既定は作らない。`Chan.owned : Int -> <IO> (Chan a, ChanOwner)` のように `Lin` の `Foreign` の `ChanOwner` を足し、その `Drop` が受け箱に閉じる知らせを積む形である。`TaskHandle` と同じ仕組みなので、`eml_rt` は変わらず、送受信に費用を足さない。これで足りなければ、`Chan a` を `Unr` の `Foreign` のハンドルにする。channel の Rust の構造は変わらず、ハンドルの読みと放す引き金だけが変わる ([ロードマップ](roadmap.md) の「非同期」)
 - `Time` のモジュール: 上の「時間」にある
-- UDP、`SO_REUSEPORT`、TLS のプラグイン、`Http`、非同期の名前の解決: 上の「ネットワークとシグナル」の「後で足すもの」にある
+- UDP、`SO_REUSEPORT`、非同期の名前の解決: 上の「ネットワークとシグナル」の「後で足すもの」にある
