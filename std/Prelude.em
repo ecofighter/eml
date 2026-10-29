@@ -213,6 +213,7 @@ pub data IOErrorKind =
   | ConnectionReset
   | AddrInUse
   | ResourceLimit
+  | ConnectionRefused
   deriving (Eq, Show)
 
 pub data IOError =

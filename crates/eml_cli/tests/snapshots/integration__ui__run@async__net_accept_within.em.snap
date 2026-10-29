@@ -1,9 +1,10 @@
 ---
 source: crates/eml_cli/tests/ui.rs
+assertion_line: 406
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
-input_file: tests/ui/run/async/io_write_read.em
+input_file: tests/ui/run/async/net_accept_within.em
 ---
 --- stdout ---
-> hello
-eof
+None
+Some 127.0.0.1:49153
 --- stderr ---

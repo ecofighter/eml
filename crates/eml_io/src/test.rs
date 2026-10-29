@@ -1,14 +1,18 @@
-//! テストの driver。仮想の時計で動き、操作を決まった時点でだけ決着させるので、結果はプログラムと方針と seed で
-//! 決まる (docs/spec/vm.md の「時計と driver」)。
+//! テストの driver。仮想の時計と仮想のネットワークで動き、操作を決まった時点でだけ決着させるので、結果は
+//! プログラムと方針と seed で決まる (docs/spec/vm.md の「時計と driver」)。
 
-use std::collections::{HashMap, VecDeque};
+mod net;
+
+use std::collections::VecDeque;
 use std::io;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use eml_rt::{Completion, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf};
+use eml_rt::{Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf};
 
 use crate::flag::Flag;
+use net::{Connection, Network, check_virtual_host, no_handle};
 
 /// 終わる操作がないときにだけ、期限まで進む仮想の時計の driver。時計は 0 から始まり、ミリ秒の整数で進む。
 pub struct TestDriver {
@@ -16,12 +20,11 @@ pub struct TestDriver {
     /// seed の方針のときだけある擬似乱数の状態。1回の決着で終わった操作の組を混ぜる。
     rng: Option<u64>,
     next_key: OpKey,
-    next_handle: IoHandle,
     /// まだ終わっていない操作。受け付けの順に並ぶ。
     ops: VecDeque<Pending>,
     /// 終わったが、まだ `completions` で返していない操作。
     done: Vec<Completion>,
-    ends: HashMap<IoHandle, End>,
+    net: Network,
     bin: Arc<HandleBin>,
     waker: Arc<Flag>,
 }
@@ -32,25 +35,15 @@ struct Pending {
     cancelled: bool,
 }
 
-/// `pair` の片方の端。
-struct End {
-    peer: IoHandle,
-    /// 相手が書き、この端がまだ読んでいないバイト。
-    inbox: VecDeque<u8>,
-    /// driver の参照を落とした。相手は `inbox` の残りを読みきってから EOF を受ける。
-    closed: bool,
-}
-
 impl TestDriver {
     pub fn new(seed: Option<u64>) -> TestDriver {
         TestDriver {
             now_ms: 0,
             rng: seed,
             next_key: 0,
-            next_handle: 0,
             ops: VecDeque::new(),
             done: Vec::new(),
-            ends: HashMap::new(),
+            net: Network::new(),
             bin: Arc::default(),
             waker: Arc::default(),
         }
@@ -95,64 +88,113 @@ impl TestDriver {
     /// 今の状態で終わる操作なら完了を返し、終わらなければ操作を返す。
     fn try_finish(&mut self, pending: Pending) -> Result<Completion, Pending> {
         let key = pending.key;
-        let done = |result: io::Result<usize>| Ok(Completion { key, result });
+        let done = |result: io::Result<Done>| -> Result<Completion, Pending> {
+            Ok(Completion {
+                key,
+                result,
+                cancelled: false,
+            })
+        };
         if pending.cancelled {
-            return done(Err(io::Error::other("cancelled")));
+            return Ok(Completion {
+                key,
+                result: Err(io::Error::other("cancelled")),
+                cancelled: true,
+            });
         }
+        let wait = |op: Op| -> Result<Completion, Pending> {
+            Err(Pending {
+                key,
+                op,
+                cancelled: false,
+            })
+        };
         match pending.op {
-            Op::Job(job) => done(job()),
+            Op::Job(job) => done(job().map(Done::Size)),
             Op::Write { handle, buf } => {
-                let Some(peer) = self.ends.get(&handle).map(|end| end.peer) else {
+                let Some(end) = self.net.ends.get(&handle) else {
                     return done(Err(no_handle()));
                 };
-                match self.ends.get_mut(&peer) {
-                    Some(peer) if !peer.closed => {
+                let (peer, shut) = (end.peer, end.shut);
+                match self.net.ends.get_mut(&peer) {
+                    Some(peer) if !peer.closed && !shut => {
                         // 貸した側は完了を取り出すまで記憶を生かし、書き換えない (`RawBuf`。docs/spec/vm.md の
                         // 「時計と driver」、docs/spec/object-model.md の T10 の行)
                         peer.inbox.extend(unsafe { bytes(buf) });
-                        done(Ok(buf.cap))
+                        done(Ok(Done::Size(buf.cap)))
                     }
                     _ => done(Err(io::Error::from(io::ErrorKind::BrokenPipe))),
                 }
             }
             Op::Readable { handle } => match self.readable(handle) {
-                Some(Ok(())) => done(Ok(0)),
+                Some(Ok(())) => done(Ok(Done::Size(0))),
                 Some(Err(e)) => done(Err(e)),
-                None => Err(Pending {
-                    key,
-                    op: Op::Readable { handle },
-                    cancelled: false,
-                }),
+                None => wait(Op::Readable { handle }),
             },
             Op::Read { handle, buf } => match self.readable(handle) {
                 Some(Ok(())) => {
-                    let inbox = &mut self.ends.get_mut(&handle).expect("a readable end").inbox;
+                    let inbox = &mut self
+                        .net
+                        .ends
+                        .get_mut(&handle)
+                        .expect("a readable end")
+                        .inbox;
                     let n = buf.cap.min(inbox.len());
                     for (i, byte) in inbox.drain(..n).enumerate() {
                         // 貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない。`i < n <= cap` である
                         // (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
                         unsafe { buf.ptr.add(i).write(byte) };
                     }
-                    done(Ok(n))
+                    done(Ok(Done::Size(n)))
                 }
                 Some(Err(e)) => done(Err(e)),
-                None => Err(Pending {
-                    key,
-                    op: Op::Read { handle, buf },
-                    cancelled: false,
-                }),
+                None => wait(Op::Read { handle, buf }),
             },
+            Op::Listen { addr } => done(self.net.listen(addr.port())),
+            Op::Accept { listener } => match self.net.accept(listener) {
+                Some(Ok((handle, port))) => done(Ok(Done::Stream {
+                    handle,
+                    peer: localhost(port),
+                })),
+                Some(Err(e)) => done(Err(e)),
+                None => wait(Op::Accept { listener }),
+            },
+            Op::Connect { host, port } => {
+                let connection =
+                    check_virtual_host(&host).and_then(|()| self.net.virtual_connect(port));
+                match connection {
+                    Ok(Connection::Connected { client_end }) => done(Ok(Done::Stream {
+                        handle: client_end,
+                        peer: localhost(port),
+                    })),
+                    Ok(Connection::Pending) => wait(Op::Connect { host, port }),
+                    Ok(Connection::Refused) => {
+                        done(Err(io::Error::from(io::ErrorKind::ConnectionRefused)))
+                    }
+                    Err(e) => done(Err(e)),
+                }
+            }
         }
     }
 
-    /// `handle` の読みがブロックしないか。データがあるか、相手が閉じていれば読める。読めなければ `None` である。
+    /// `handle` の読みがブロックしないか。データがあるか、相手が閉じているか書く側を閉じていれば読める。読めなければ
+    /// `None` である。
     fn readable(&self, handle: IoHandle) -> Option<io::Result<()>> {
-        let Some(end) = self.ends.get(&handle) else {
+        let Some(end) = self.net.ends.get(&handle) else {
             return Some(Err(no_handle()));
         };
-        let peer_open = self.ends.get(&end.peer).is_some_and(|peer| !peer.closed);
+        let peer_open = self
+            .net
+            .ends
+            .get(&end.peer)
+            .is_some_and(|peer| !peer.closed && !peer.shut);
         (!end.inbox.is_empty() || !peer_open).then_some(Ok(()))
     }
+}
+
+/// 仮想のホストの `port`。仮想のホストの番地はいつも `127.0.0.1` と書く。
+fn localhost(port: u16) -> SocketAddr {
+    SocketAddr::from((Ipv4Addr::LOCALHOST, port))
 }
 
 /// `buf` の指す `cap` バイト。前提は `RawBuf` の約束である。
@@ -162,10 +204,6 @@ unsafe fn bytes(buf: RawBuf) -> Vec<u8> {
     }
     // `cap > 0` の `ptr` は、貸した側が完了まで生かす `cap` バイトを指す (docs/spec/vm.md の「時計と driver」)
     unsafe { std::slice::from_raw_parts(buf.ptr, buf.cap) }.to_vec()
-}
-
-fn no_handle() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, "no such handle")
 }
 
 /// 小さく決定的な擬似乱数 (splitmix64)。
@@ -233,26 +271,20 @@ impl IoDriver for TestDriver {
         Arc::clone(&self.bin)
     }
 
-    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
-        let (a, b) = (self.next_handle, self.next_handle + 1);
-        self.next_handle += 2;
-        for (handle, peer) in [(a, b), (b, a)] {
-            self.ends.insert(
-                handle,
-                End {
-                    peer,
-                    inbox: VecDeque::new(),
-                    closed: false,
-                },
-            );
+    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
+        self.net.shutdown_write(handle)
+    }
+
+    fn set_nodelay(&mut self, handle: IoHandle, _on: bool) -> io::Result<()> {
+        if self.net.is_stream(handle) {
+            Ok(())
+        } else {
+            Err(no_handle())
         }
-        Ok((a, b))
     }
 
     fn close(&mut self, handle: IoHandle) {
-        if let Some(end) = self.ends.get_mut(&handle) {
-            end.closed = true;
-        }
+        self.net.close(handle);
     }
 
     fn quiesce(&mut self) {
@@ -262,7 +294,14 @@ impl IoDriver for TestDriver {
                 let _ = job();
             }
         }
-        self.done.clear();
+        // 捨てる完了が作ったリスナーとストリームは、受け取る者がいないので閉じる
+        for completion in std::mem::take(&mut self.done) {
+            if let Ok(Done::Listener { handle, .. } | Done::Stream { handle, .. }) =
+                completion.result
+            {
+                self.net.close(handle);
+            }
+        }
         self.empty_bin();
     }
 }

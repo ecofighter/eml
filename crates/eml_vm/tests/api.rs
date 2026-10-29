@@ -76,19 +76,6 @@ fn the_default_clock_is_virtual() {
     assert_eq!(config.with_clock(Clock::Virtual).clock, Clock::Virtual);
 }
 
-#[test]
-fn a_clock_parses_and_rejects() {
-    assert_eq!("real".parse(), Ok(Clock::Real));
-    assert_eq!("virtual".parse(), Ok(Clock::Virtual));
-    for text in ["", "Real", "wall", "virtual "] {
-        let error = text.parse::<Clock>().unwrap_err();
-        assert_eq!(
-            error,
-            format!("expected `real` or `virtual`, found `{text}`")
-        );
-    }
-}
-
 /// CLI の `--sched` が読む綴り (docs/spec/stdlib.md の「起動」)。seed は `u64` の10進数である。
 #[test]
 fn a_sched_parses_and_rejects() {
@@ -245,18 +232,32 @@ fn fault(fault: VmFault) -> RuntimeError {
     }
 }
 
-/// 割り込みだけが真になる。上限で止めたことも、ほかの誤りも、リークも割り込みではない。
+/// 割り込みだけが真になる。上限で止めたことも、終了の求めも、ほかの誤りも、リークも割り込みではない。
 #[test]
 fn only_an_interrupt_is_interrupted() {
     assert!(fault(VmFault::Stopped(Stop::Interrupted)).interrupted());
     assert!(fault(VmFault::Extern(Fault::Stopped(Stop::Interrupted))).interrupted());
-    for stop in [Stop::DepthLimit, Stop::MemoryLimit] {
+    for stop in [Stop::DepthLimit, Stop::MemoryLimit, Stop::Terminated] {
         assert!(!fault(VmFault::Stopped(stop)).interrupted());
         assert!(!fault(VmFault::Extern(Fault::Stopped(stop))).interrupted());
     }
     assert!(!fault(VmFault::Extern(eml_rt::ArithFault::DivisionByZero.into())).interrupted());
     assert!(!fault(VmFault::Internal("x")).interrupted());
     assert!(!RuntimeError::Leak(vec![("String".to_string(), 1)]).interrupted());
+}
+
+/// 終了の求めだけが真になる。安全点で止めたときも、ハンドルの読みの中で止めたときも真で、割り込みや上限では偽である
+/// (docs/spec/vm.md の「上限と割り込み」)。
+#[test]
+fn only_a_terminate_is_terminated() {
+    assert!(fault(VmFault::Stopped(Stop::Terminated)).terminated());
+    assert!(fault(VmFault::Extern(Fault::Stopped(Stop::Terminated))).terminated());
+    for stop in [Stop::DepthLimit, Stop::MemoryLimit, Stop::Interrupted] {
+        assert!(!fault(VmFault::Stopped(stop)).terminated());
+        assert!(!fault(VmFault::Extern(Fault::Stopped(stop))).terminated());
+    }
+    assert!(!fault(VmFault::Internal("x")).terminated());
+    assert!(!RuntimeError::Leak(vec![("String".to_string(), 1)]).terminated());
 }
 
 const EXIT: &str = "\
@@ -379,18 +380,27 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
     assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
 }
 
-/// 本物の時計の検査モードの `Machine` で `src` を流し、閉じるまでの経過を測る。返すのは出力、run の結果、閉じたときの
-/// 結果 (検査モードの漏れの検査)、経過である。`interrupt_on` があれば、出力にその文字列が出たときに別のスレッドが
-/// 割り込む。どの run も、3 秒たって終わらなければ見張りのスレッドが割り込むので、止まったテストも待ち続けない。
-fn run_real(
-    src: &str,
-    interrupt_on: Option<&'static str>,
-) -> (
+/// `run_real_on` の結果。出力、run の結果、閉じたときの結果 (検査モードの漏れの検査)、経過である。
+type RealRun = (
     String,
     Result<eml_vm::Finished, RuntimeError>,
     Result<(), RuntimeError>,
     std::time::Duration,
-) {
+);
+
+/// 本物の時計の検査モードの `Machine` で `src` を流し、閉じるまでの経過を測る。`interrupt_on` があれば、出力に
+/// その文字列が出たときに別のスレッドが割り込む。どの run も、3 秒たって終わらなければ見張りのスレッドが割り込むので、
+/// 止まったテストも待ち続けない。
+fn run_real(src: &str, interrupt_on: Option<&'static str>) -> RealRun {
+    run_real_on(src, interrupt_on, None)
+}
+
+/// `run_real` を、`driver` があればその driver で流す。
+fn run_real_on(
+    src: &str,
+    interrupt_on: Option<&'static str>,
+    driver: Option<Box<dyn eml_rt::IoDriver>>,
+) -> RealRun {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
@@ -398,6 +408,9 @@ fn run_real(
     let control = Arc::new(Control::new(Limits::default()));
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host).with_clock(Clock::Real);
+    if let Some(driver) = driver {
+        machine = machine.with_driver(driver);
+    }
     let loaded = machine.load(&program).unwrap();
     let (done, finished) = mpsc::channel::<()>();
     let seen = out.clone();
@@ -421,135 +434,208 @@ fn run_real(
     (out.contents(), result, closed, elapsed)
 }
 
-/// 本物の driver の `pair` は unix の `socketpair` で、片方の端に書いたバイトを別のタスクが読む
-/// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+/// 本物の driver で、`listen` のポート 0 が選んだポートへの `connect` を、別のタスクの `accept` が受ける。2つの
+/// ストリームの相手の番地は、互いのポートを持つ (docs/spec/stdlib.md の「`Std.Net`」)。
 #[cfg(unix)]
 #[test]
-fn a_real_pair_carries_bytes_between_tasks() {
+fn a_real_connection_is_accepted() {
     let src = "\
 import Async
-import Bytes
-import IoTest
-import String
+import Net
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
-  let (a, b) = IoTest.pair ()
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
   let t = Async.start (fn () ->
-    let (buf, b) = IoTest.read_chunk (Bytes.of_string \"> \") b
-    drop b
-    String.decode buf)
-  let (n, a) = IoTest.write (Bytes.of_string \"hello\") a
-  drop a
-  println \"\\{show n} \\{Async.await t}\")
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let c = Net.connect \"127.0.0.1\" port
+  let s = Async.await t
+  let (a, s) = Net.peer_addr s
+  let (b, c) = Net.peer_addr c
+  Net.close s
+  Net.close c
+  println (show port)
+  println a
+  println b)
 ";
     let (out, result, closed, _) = run_real(src, None);
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out, "5 > hello\n");
+    let lines: Vec<&str> = out.lines().collect();
+    let [port, accepted, connected] = lines[..] else {
+        panic!("{out}");
+    };
+    assert!(accepted.starts_with("127.0.0.1:"), "{out}");
+    assert_eq!(connected, format!("127.0.0.1:{port}"), "{out}");
 }
 
-/// 仕事は本物の driver のプールのスレッドで動き、本物の時計では遅れの分だけ眠る。並んだ2つの仕事も `await` の順に
-/// 受け取る (docs/spec/stdlib.md の「`Std.IoTest`」)。経過は遅れより短くならない。
-#[test]
-fn a_checksum_runs_on_the_real_pool() {
-    let src = "\
-import Async
-import Bytes
-import IoTest
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  println (show (IoTest.checksum 50 (Bytes.of_string \"ab\")))
-  let t = Async.start (fn () -> IoTest.checksum 50 (Bytes.of_string \"abc\"))
-  let u = Async.start (fn () -> IoTest.checksum 50 (Bytes.of_string \"xyz\"))
-  println (show (Async.await u))
-  println (show (Async.await t)))
-";
-    let (out, result, closed, elapsed) = run_real(src, None);
-    result.unwrap_or_else(|error| panic!("{error}"));
-    closed.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out, "195\n363\n294\n");
-    assert!(
-        elapsed >= std::time::Duration::from_millis(100),
-        "{elapsed:?}"
-    );
-}
-
-/// 仕事は止められないので、期限で取り消されたタスクは仕事が終わるのを待ってから `Cancelled` で再開する。`timeout` は
-/// `None` を返すが、戻るのは 300 ms の仕事が終わってからである (docs/spec/vm.md の「時計と driver」)。
-#[test]
-fn a_cancelled_job_resumes_after_it_completes() {
-    let src = "\
-import Async
-import Bytes
-import IoTest
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  match Async.timeout 20 (fn () -> IoTest.checksum 300 (Bytes.of_string \"ab\")) with
-    | Some n -> println \"Some \\{show n}\"
-    | None -> println \"None\")
-";
-    let (out, result, closed, elapsed) = run_real(src, None);
-    result.unwrap_or_else(|error| panic!("{error}"));
-    closed.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out, "None\n");
-    assert!(
-        elapsed >= std::time::Duration::from_millis(300),
-        "{elapsed:?}"
-    );
-}
-
-/// 仕事が走っている間に `exit` で終わる run は、ヒープを落とす前に仕事を待ちきる。終了コードはそのまま報告し、検査
-/// モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
-#[test]
-fn an_exit_waits_for_a_running_job() {
-    let src = "\
-import Async
-import Bytes
-import IoTest
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let t = Async.start (fn () -> IoTest.checksum 300 (Bytes.of_string \"ab\"))
-  Async.yield_now ()
-  println \"exiting\"
-  (exit 3 : Unit)
-  println (show (Async.await t)))
-";
-    let (out, result, closed, elapsed) = run_real(src, None);
-    let finished = result.unwrap_or_else(|error| panic!("{error}"));
-    closed.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(finished.exit, Some(3));
-    assert_eq!(out, "exiting\n");
-    assert!(
-        elapsed >= std::time::Duration::from_millis(200),
-        "{elapsed:?}"
-    );
-}
-
-/// 書き手のいない本物の端で読みを待つ run は、空きのループが割り込みを読むので、別のスレッドの割り込みで止まる。
-/// 止めるときに読みの操作を取り消して待ちきるので、検査モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
-/// 走れるタスクの列は FIFO なので、本体が `yield_now` から戻って `waiting` を書くときには、読むタスクはもう本物の
-/// 読みで待っている。割り込みは `waiting` が出てから送るので、読みの待ちの間に届く。
+/// 本物の driver の `Net` の頭。`listen` が選んだポートへ `connect` し、別のタスクの `accept` が受けたストリームを `b`、
+/// 接続した側を `a` にする。
 #[cfg(unix)]
-#[test]
-fn an_interrupt_stops_a_run_blocked_in_a_real_read() {
-    let src = "\
+const REAL_CONNECTED: &str = "\
+import Async (Async)
 import Async
 import Bytes
-import IoTest
-import Stdout
+import Byte
+import Net
 import String
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
-  let (a, b) = IoTest.pair ()
-  let t = Async.start (fn () ->
-    let (buf, b) = IoTest.read_chunk (Bytes.empty ()) b
-    drop b
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let u = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let a = Net.connect \"127.0.0.1\" port
+  let b = Async.await u
+";
+
+/// 本物の driver の接続で、片方のストリームに書いたバイトを別のタスクが読む (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(unix)]
+#[test]
+fn a_real_connection_carries_bytes_between_tasks() {
+    let src = format!(
+        "{REAL_CONNECTED}  let t = Async.start (fn () ->
+    let (buf, b) = Net.read_chunk (Bytes.of_string \"> \") b
+    Net.close b
     String.decode buf)
+  let a = Net.write \"hello\" a
+  Net.close a
+  println (Async.await t))
+"
+    );
+    let (out, result, closed, _) = run_real(&src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "> hello\n");
+}
+
+/// 本物の driver で、データのないストリームの `read_chunk_within` は期限で `None` を返し、ストリームは続けて使える。後で
+/// 相手のタスクが書いたバイトは、次の `read_chunk` が返す (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(unix)]
+#[test]
+fn a_real_read_chunk_within_keeps_the_stream() {
+    let src = format!(
+        "{REAL_CONNECTED}  let (r, b) = Net.read_chunk_within 20 (Bytes.empty ()) b
+  match r with
+    | Some _ -> println \"Some\"
+    | None -> println \"None\"
+  let t = Async.start (fn () -> Net.close (Net.write \"later\" a))
+  let (buf, b) = Net.read_chunk (Bytes.empty ()) b
+  Net.close b
+  Async.await t
+  println (String.decode buf))
+"
+    );
+    let (out, result, closed, elapsed) = run_real(&src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "None\nlater\n");
+    assert!(
+        elapsed >= std::time::Duration::from_millis(20),
+        "{elapsed:?}"
+    );
+}
+
+/// 本物の driver の `read_line` は、間を置いた2回の書きにまたがる行を1行にし、1回の書きに入った2行を分け、改行のない
+/// 最後の行と EOF の `None` を返す。2本目の接続では、`read_line` が読みすぎたバイトを次の `read_chunk` が返す
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(unix)]
+#[test]
+fn a_real_read_line_reads_lines_split_across_writes() {
+    let src = format!(
+        "{REAL_CONNECTED}  let t = Async.start (fn () ->
+    let a = Net.write \"ab\" a
+    Async.sleep_ms 20
+    let a = Net.write \"c\\nd\\n\" a
+    Net.close (Net.write \"tail\" a))
+  let b = lines b
+  Async.await t
+  let (port, l) = Net.local_port (Net.listen \"127.0.0.1\" 0)
+  let u = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let c = Net.connect \"127.0.0.1\" port
+  let d = Async.await u
+  let c = Net.write \"x\\nyz\" c
+  let (r, d) = Net.read_line d
+  println (show r)
+  let (buf, d) = Net.read_chunk (Bytes.empty ()) d
+  println (String.decode buf)
+  Net.close b
+  Net.close c
+  Net.close d)
+
+lines : Net.TcpStream -> <IO, Panic, Async> Net.TcpStream
+lines s =
+  let (r, s) = Net.read_line s
+  println (show r)
+  match r with
+    | Some _ -> lines s
+    | None -> s
+"
+    );
+    let (out, result, closed, _) = run_real(&src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        out,
+        "Some \"abc\"\nSome \"d\"\nSome \"tail\"\nNone\nSome \"x\"\nyz\n"
+    );
+}
+
+/// 本物の driver の 8 MiB の `write_bytes` は、送りの buffer を超えて短く終わる送りを driver が出し直し、1つの完了で
+/// 終わる。相手のタスクが EOF まで読んだバイトの数は、書いた数と同じである (docs/spec/vm.md の「時計と driver」)。
+#[cfg(unix)]
+#[test]
+fn a_real_write_of_8_mib_arrives_whole() {
+    let src = format!(
+        "{REAL_CONNECTED}  let t = Async.start (fn () -> count 0 b)
+  let a = Net.write_bytes (Bytes.make 8388608 (Byte.wrap 7)) a
+  Net.close a
+  println (show (Async.await t)))
+
+count : Int -> Net.TcpStream -> <IO, Panic, Async> Int
+count n s =
+  let (buf, s) = Net.read_chunk (Bytes.empty ()) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else count (n + k) s
+"
+    );
+    let (out, result, closed, _) = run_real(&src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "8388608\n");
+}
+
+/// 接続の来ないリスナーで受けを待つ run は、空きのループが割り込みを読むので、別のスレッドの割り込みで止まる。止める
+/// ときに受けの操作を取り消して待ちきるので、検査モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
+/// 割り込みは `waiting` が出てから送るので、受けの待ちの間に届く。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_run_blocked_in_a_real_accept() {
+    let src = "\
+import Async
+import Net
+import Stdout
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
   Async.yield_now ()
   println \"waiting\"
   Stdout.close (Stdout.flush (Stdout.open ()))
-  println (Async.await t)
-  drop a)
+  Net.close (Async.await t))
 ";
     let (out, result, closed, _) = run_real(src, Some("waiting"));
     let error = result.unwrap_err();
@@ -558,24 +644,80 @@ main () = Async.run (fn () ->
     assert_eq!(out, "waiting\n");
 }
 
-/// Windows の本物の driver はまだソケットを扱わないので、`pair` は種類 `NotAvailable` の IO の失敗になる
-/// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+/// 10 秒戻らない名前の解決。名前の解決を待たずに手放す道を確かめるので、戻る前にテストが終わる。
+#[cfg(unix)]
+fn block_10_s(_host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    std::thread::sleep(std::time::Duration::from_secs(10));
+    Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))])
+}
+
+/// 名前の解決を待つ run も、割り込みで止まる。止めるときの `quiesce` は解決を手放し、終わりを待たない
+/// (docs/spec/vm.md の「時計と driver」)。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_run_waiting_on_a_lookup() {
+    let src = "\
+import Async
+import Net
+import Stdout
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () -> Net.connect \"slow.test\" 80)
+  Async.yield_now ()
+  println \"waiting\"
+  Stdout.close (Stdout.flush (Stdout.open ()))
+  Net.close (Async.await t))
+";
+    let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
+    let (out, result, closed, _) = run_real_on(src, Some("waiting"), Some(Box::new(driver)));
+    let error = result.unwrap_err();
+    assert!(error.interrupted(), "{error:?}");
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "waiting\n");
+}
+
+/// 名前の解決を待つ `connect` を `timeout` で囲むと、期限の取り消しが解決を手放し、`timeout` は `None` を返す
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(unix)]
+#[test]
+fn a_timeout_around_a_slow_lookup_returns_none() {
+    let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  match Async.timeout 20 (fn () -> Net.connect \"slow.test\" 80) with
+    | Some s ->
+      Net.close s
+      println \"Some\"
+    | None -> println \"None\")
+";
+    let driver = eml_io::RealDriver::with_lookup(block_10_s).unwrap();
+    let (out, result, closed, _) = run_real_on(src, None, Some(Box::new(driver)));
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "None\n");
+}
+
+/// Windows の本物の driver はまだソケットを扱わないので、`listen` は種類 `NotAvailable` の IO の失敗になる
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
 #[cfg(windows)]
 #[test]
-fn a_real_pair_is_not_available() {
+fn a_real_listen_is_not_available() {
     let src = "\
-import IoTest
+import Async
+import Net
 main : Unit -> <IO, Panic> Unit
 main () =
-  match try_io (fn () -> IoTest.pair ()) with
-    | Ok (a, b) ->
-      drop a
-      drop b
-      println \"pair\"
-    | Err e -> println (show e.kind)
+  match try_io (fn () -> Async.run (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))) with
+    | Ok _ -> println \"listening\"
+    | Err e -> println \"\\{show e.kind}: \\{e.message}\"
 ";
     let (out, result, closed, _) = run_real(src, None);
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out, "NotAvailable\n");
+    assert_eq!(
+        out,
+        "NotAvailable: cannot listen on 127.0.0.1:0: unsupported\n"
+    );
 }

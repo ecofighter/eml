@@ -14,6 +14,10 @@ compio-buf.workspace = true
 compio-driver.workspace = true
 eml_rt.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+socket2.workspace = true
+
 [[test]]
 name = "integration"
 path = "tests/main.rs"

@@ -4,8 +4,8 @@
 
 ## コマンドライン
 
-- `eml repl [--debug-heap] [--sched <normal|sequential|seeded:N>] [--clock <real|virtual>] [file]` でセッションを始める。`--debug-heap` は `eml run` と同じく検査モードにし、`--sched` は `eml run` と同じくスケジュールの方針を選び、`--clock` は `eml run` と同じく時計を選ぶ ([標準ライブラリ](stdlib.md) の「起動」)。`file` を渡すと、最初に `:load file` と同じことをする。ただし `file` を読めなければ、`eml run` と同じく使い方の誤り (``error: cannot read `file`: …``、終了コード 2) にする
-- 仮想の時計 (`--clock virtual`) の時刻は、セッションの間は入力をまたいで続く。時計はセッションの `Machine` が持つので、`:load` で新しいセッションを作ると 0 に戻る。タイマーは入力ごとの run のものなので、入力をまたいで残らない ([VM](vm.md) の「時計と driver」)
+- `eml repl [--debug-heap] [--sched <normal|sequential|seeded:N>] [file]` でセッションを始める。`--debug-heap` は `eml run` と同じく検査モードにし、`--sched` は `eml run` と同じくスケジュールの方針を選ぶ。`file` を渡すと、最初に `:load file` と同じことをする。ただし `file` を読めなければ、`eml run` と同じく使い方の誤り (``error: cannot read `file`: …``、終了コード 2) にする
+- `eml repl` は本物の時計で動く。テストのハーネスが仮想の時計で作るセッション (REPL のトランスクリプト) では、仮想の時計の時刻はセッションの間は入力をまたいで続く。時計はセッションの `Machine` が持つので、`:load` で新しいセッションを作ると 0 に戻る。タイマーは入力ごとの run のものなので、入力をまたいで残らない ([VM](vm.md) の「時計と driver」)
 - REPL のプログラムは引数を持たないので、`Env.args ()` は `[]` を返す。標準入力は REPL 自身が入力の行を読むので、プログラムは読めない。`Stdin.open` は通るが、ハンドルの読みと `Stdin.read_text` は I/O の失敗 (`cannot read the standard input: not available`) になる ([標準ライブラリ](stdlib.md) の「ハンドル」)。ハンドルは線形なので、ほかの線形な値と同じく、入力の中で使い切る
 - import の根と Host の相対パスの基準は、`eml run` と同じくカレントディレクトリである。`:load` の後は、import の根はファイルのディレクトリである (「ファイルの読み込み」)
 - 上限は `eml_cli::repl_limits()` が決める。深さは `eml run` と同じ 2^27 語で、確保量は物理メモリの 40% である。回復は写す間に古いヒープと写しを同時に持ち、写しは根から届く物体だけなので古いヒープより大きくならない。合わせて、`eml run` の上限と同じ 80% を目安に収める。どちらの上限も、安全点で止めるまでの間に少し超えうる目安である。物理メモリを読めない OS では上限を置かない
@@ -260,6 +260,7 @@ REPL は Ctrl-C で終わらない ([VM](vm.md) の「上限と割り込み」�
 - `:type` は始めに止める語を下ろし、前端の検査の後で止める語を読む。割り込みが立っていれば、型を書かずに `interrupted` を書き、同じ読みで届いた残りの行を捨てる
 - 実行の間の割り込みは、VM の安全点か `FileIn` の読み (`FileIn.read_all` など) の中で止まり、`Failed` になる。unix では待っている読みも、ハンドラが `SA_RESTART` を外して入れるので止まる ([オブジェクトモデル](object-model.md) の「読み手」)。Windows では待っている読みは戻るまで止まらない ([VM](vm.md) の「上限と割り込み」)。最後の安全点の後に来た割り込みでは、入力は終わりまで動き、`let` の束縛もできる
 - 入力を待つ間と、行を読み終えてから次の入力の始めまでに来た割り込みは、次の入力の始めの `Control::clear` が捨てる
+- REPL は SIGTERM のハンドラを入れない。SIGTERM は OS の既定の動作でプロセスを終わらせる。`Signal.wait Interrupt` は REPL でも Ctrl-C で起きるが、`Signal.wait Terminate` を起こす OS のシグナルはない ([標準ライブラリ](stdlib.md) の「`Std.Signal`」)
 
 ### 残る制限
 

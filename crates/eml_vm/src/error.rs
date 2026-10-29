@@ -116,6 +116,19 @@ impl RuntimeError {
         )
     }
 
+    /// 終了の求め (unix の SIGTERM) で止まったか。`interrupted` と同じく、安全点で止めたときと、ハンドルの読みの中で
+    /// 止めたときの両方で真になる。CLI が終了コードを決めるために使う。
+    pub fn terminated(&self) -> bool {
+        matches!(
+            self,
+            RuntimeError::Fault {
+                fault: VmFault::Stopped(Stop::Terminated)
+                    | VmFault::Extern(Fault::Stopped(Stop::Terminated)),
+                ..
+            }
+        )
+    }
+
     /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き `RootMisuse` を含む) と内部の誤りの後と、回復が
     /// 失敗した後は、ヒープを信用できない。driver の誤りの後は、driver が貸した記憶を手放したかを確かめられない。
     /// driver を作れなかったときも、その `Machine` では I/O を動かせないので同じに扱う。REPL はこの後の入力を受け付けない

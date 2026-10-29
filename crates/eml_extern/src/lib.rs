@@ -252,8 +252,9 @@ table! {
         Chan => handle_type_row("Std.Chan.Chan"),
         // 登録表ではなく `Machine` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
         Counter => type_row("Std.Atomic.Counter", Unr, Repr::Int),
-        // driver の `pair` の片方の端を持つ `Foreign` (docs/spec/stdlib.md の「`Std.IoTest`」)
-        IoTestStream => type_row("Std.IoTest.Stream", Lin, Repr::Obj),
+        // driver のリスナーとストリームのハンドルを持つ `Foreign` (docs/spec/stdlib.md の「`Std.Net`」)
+        NetTcpListener => type_row("Std.Net.TcpListener", Lin, Repr::Obj),
+        NetTcpStream => type_row("Std.Net.TcpStream", Lin, Repr::Obj),
     }
 }
 
@@ -1265,6 +1266,18 @@ table! {
                 Purity::Effectful,
             ),
         ),
+        // シグナルの待ち。シグナルの番号は即値で、預かるのは継続だけである (docs/spec/stdlib.md の「`Std.Signal`」)
+        AsyncParkSignal => holding(
+            &[false, true],
+            kinded(
+                "Std.Async.park_signal",
+                &[Int, TObj],
+                &[Unr, Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
         // channel の行 (docs/spec/stdlib.md の「`Std.Chan`」)。channel の引数は即値で、RC を持たない
         ChanNewRaw => row("Std.Chan.new_raw", &[Int], Int, Purity::Effectful),
         ChanToCell => row("Std.Chan.chan_cell", &[Int], Int, Purity::Pure),
@@ -1287,112 +1300,188 @@ table! {
         AtomicAdd => row("Std.Atomic.add", &[Int, Int], Int, Purity::Effectful),
         AtomicLoad => row("Std.Atomic.load", &[Int], Int, Purity::Effectful),
         AtomicStore => row("Std.Atomic.store", &[Int, Int], Unit, Purity::Effectful),
-        // 実行系のテストのための内部のインターフェース (docs/spec/stdlib.md の「`Std.IoTest`」)。受け付けの行は buffer とストリームを
-        // 消費して操作の記録に移し、取り出しの行が token を消費して記録を放す
-        IoTestOpenPair => kinded(
-            "Std.IoTest.open_pair",
-            &[Unit],
-            &[Unr],
-            Obj,
-            Lin,
-            Purity::Effectful,
-        ),
-        IoTestPeer => borrowing(
-            &[true],
-            FunctionRow {
-                with_arg: Some(0),
-                ..kinded(
-                    "Std.IoTest.peer",
-                    &[Obj],
-                    &[Lin],
-                    Obj,
-                    Lin,
-                    Purity::Effectful,
-                )
-            },
-        ),
-        IoTestSubmitWrite => kinded(
-            "Std.IoTest.submit_write",
-            &[Obj, Obj],
-            &[Unr, Lin],
-            Obj,
-            Lin,
-            Purity::Effectful,
-        ),
-        IoTestOpStream => borrowing(
-            &[true],
-            FunctionRow {
-                with_arg: Some(0),
-                ..kinded(
-                    "Std.IoTest.op_stream",
-                    &[Obj],
-                    &[Lin],
-                    Obj,
-                    Lin,
-                    Purity::Effectful,
-                )
-            },
-        ),
-        IoTestTakeWrite => kinded(
-            "Std.IoTest.take_write",
-            &[Obj],
-            &[Lin],
-            Int,
-            Unr,
-            Purity::Effectful,
-        ),
-        IoTestSubmitRead => kinded(
-            "Std.IoTest.submit_read",
-            &[Obj, Obj],
-            &[Unr, Lin],
-            Obj,
-            Lin,
-            Purity::Effectful,
-        ),
-        IoTestTakeRead => kinded(
-            "Std.IoTest.take_read",
-            &[Obj],
-            &[Lin],
-            Obj,
-            Unr,
-            Purity::Effectful,
-        ),
-        IoTestOpTimedOut => borrowing(
-            &[true],
-            FunctionRow {
-                with_arg: Some(0),
-                ..kinded(
-                    "Std.IoTest.op_timed_out",
-                    &[Obj],
-                    &[Lin],
-                    Enum,
-                    Unr,
-                    Purity::Effectful,
-                )
-            },
-        ),
-        // プールの仕事。`Bytes` の中身を写して仕事に渡すので、記録の buffer は一意でなくてよい
-        IoTestSubmitChecksum => kinded(
-            "Std.IoTest.submit_checksum",
-            &[Int, Obj],
+        // TCP の操作の記録のインターフェース (docs/spec/stdlib.md の「`Std.Net`」)。受け付けの行は引数を消費して記録に
+        // 移し、`op_*` は token を借りて記録が持つものを読み、取り出しの行と `finish` が token を消費して記録を放す
+        NetSubmitListen => kinded(
+            "Std.Net.submit_listen",
+            &[Obj, Int],
             &[Unr, Unr],
             Obj,
             Lin,
             Purity::Effectful,
         ),
-        IoTestTakeChecksum => kinded(
-            "Std.IoTest.take_checksum",
+        NetSubmitAccept => kinded(
+            "Std.Net.submit_accept",
             &[Obj],
             &[Lin],
-            Int,
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        NetSubmitConnect => kinded(
+            "Std.Net.submit_connect",
+            &[Obj, Int],
+            &[Unr, Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        NetSubmitRead => kinded(
+            "Std.Net.submit_read",
+            &[Obj, Obj],
+            &[Unr, Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        NetSubmitReadLine => kinded(
+            "Std.Net.submit_read_line",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        NetSubmitWrite => kinded(
+            "Std.Net.submit_write",
+            &[Obj, Obj],
+            &[Unr, Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        NetOpListener => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Net.op_listener",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        NetOpStream => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Net.op_stream",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        NetOpOutcome => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Net.op_outcome",
+                    &[Obj],
+                    &[Lin],
+                    Int,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        NetTakeListener => kinded(
+            "Std.Net.take_listener",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        NetTakeStream => kinded(
+            "Std.Net.take_stream",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        NetTakeRead => kinded(
+            "Std.Net.take_read",
+            &[Obj],
+            &[Lin],
+            Obj,
             Unr,
+            Purity::Effectful,
+        ),
+        NetTakeLine => kinded(
+            "Std.Net.take_line",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Unr,
+            Purity::Effectful,
+        ),
+        NetFinish => kinded(
+            "Std.Net.finish",
+            &[Obj],
+            &[Lin],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        // 作ったときに記録した値を読むだけなので、`Std.MutArray.length` と同じく借りるだけの効果のない行にする
+        NetLocalPort => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Net.local_port",
+                    &[Obj],
+                    &[Lin],
+                    Int,
+                    Unr,
+                    Purity::Pure,
+                )
+            },
+        ),
+        NetPeerAddr => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Net.peer_addr",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Pure,
+                )
+            },
+        ),
+        NetShutdownWrite => kinded(
+            "Std.Net.shutdown_write",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        NetSetNodelay => kinded(
+            "Std.Net.set_nodelay",
+            &[Enum, Obj],
+            &[Unr, Lin],
+            Obj,
+            Lin,
             Purity::Effectful,
         ),
     }
 }
 
 impl Extern {
-    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic` と `Std.IoTest` の行。VM はこれらの行を
+    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net` の行。VM はこれらの行を
     /// 汎用の extern の命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub fn is_async(self) -> bool {
         matches!(
@@ -1428,6 +1517,7 @@ impl Extern {
                 | Extern::AsyncParkRecv
                 | Extern::AsyncParkIo
                 | Extern::AsyncParkIoUntil
+                | Extern::AsyncParkSignal
                 | Extern::ChanNewRaw
                 | Extern::ChanReserveSend
                 | Extern::ChanPushRaw
@@ -1438,16 +1528,24 @@ impl Extern {
                 | Extern::AtomicAdd
                 | Extern::AtomicLoad
                 | Extern::AtomicStore
-                | Extern::IoTestOpenPair
-                | Extern::IoTestPeer
-                | Extern::IoTestSubmitWrite
-                | Extern::IoTestOpStream
-                | Extern::IoTestTakeWrite
-                | Extern::IoTestSubmitRead
-                | Extern::IoTestTakeRead
-                | Extern::IoTestOpTimedOut
-                | Extern::IoTestSubmitChecksum
-                | Extern::IoTestTakeChecksum
+                | Extern::NetSubmitListen
+                | Extern::NetSubmitAccept
+                | Extern::NetSubmitConnect
+                | Extern::NetSubmitRead
+                | Extern::NetSubmitReadLine
+                | Extern::NetSubmitWrite
+                | Extern::NetOpListener
+                | Extern::NetOpStream
+                | Extern::NetOpOutcome
+                | Extern::NetTakeListener
+                | Extern::NetTakeStream
+                | Extern::NetTakeRead
+                | Extern::NetTakeLine
+                | Extern::NetFinish
+                | Extern::NetLocalPort
+                | Extern::NetPeerAddr
+                | Extern::NetShutdownWrite
+                | Extern::NetSetNodelay
         )
     }
 }

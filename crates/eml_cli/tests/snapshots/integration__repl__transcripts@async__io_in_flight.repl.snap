@@ -4,18 +4,29 @@ expression: checked.render()
 input_file: crates/eml_cli/tests/repl/async/io_in_flight.repl
 ---
 > import Async
-> import IoTest
+> import Net
 > import Bytes
 > import String
+> connected : Unit -> <IO, Panic, Async.Async> (Net.TcpStream, Net.TcpStream)
+. connected () =
+.   let l = Net.listen "127.0.0.1" 0
+.   let (port, l) = Net.local_port l
+.   let t = Async.start (fn () ->
+.     let (s, l) = Net.accept l
+.     Net.close_listener l
+.     s)
+.   let c = Net.connect "127.0.0.1" port
+.   (c, Async.await t)
+.
 > stuck : Unit -> <IO, Panic, Async.Async> Unit
 . stuck () =
-.   let (a, b) = IoTest.pair ()
+.   let (a, b) = connected ()
 .   let t = Async.start (fn () ->
-.     let (buf, a) = IoTest.read_chunk (Bytes.empty ()) a
-.     drop a
+.     let (buf, a) = Net.read_chunk (Bytes.empty ()) a
+.     Net.close a
 .     buf)
 .   let _ = Async.await t
-.   drop b
+.   Net.close b
 .
 > Async.run stuck
 runtime error: deadlock: every task is waiting and no timer is pending
@@ -23,11 +34,11 @@ runtime error: deadlock: every task is waiting and no timer is pending
 next
 > echo : String -> <IO, Panic, Async.Async> String
 . echo s =
-.   let (a, b) = IoTest.pair ()
-.   let (_, a) = IoTest.write (Bytes.of_string s) a
-.   drop a
-.   let (buf, b) = IoTest.read_chunk (Bytes.empty ()) b
-.   drop b
+.   let (a, b) = connected ()
+.   let a = Net.write s a
+.   Net.close a
+.   let (buf, b) = Net.read_chunk (Bytes.empty ()) b
+.   Net.close b
 .   String.decode buf
 .
 > println (Async.run (fn () -> echo "hello"))

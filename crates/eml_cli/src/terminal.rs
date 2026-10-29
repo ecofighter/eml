@@ -26,14 +26,22 @@ Commands:
   :{             start an input of several lines, blank lines included; a line `:}` ends it
 A command may be shortened to any prefix of its name (`:q`, `:l`, `:r`, `:t`).";
 
-pub fn run(debug_heap: bool, sched: Sched, clock: Clock, file: Option<PathBuf>) -> ExitCode {
+pub fn run(debug_heap: bool, sched: Sched, file: Option<PathBuf>) -> ExitCode {
     let control = Arc::new(Control::new(repl_limits()));
-    crate::interrupt::install(Arc::clone(&control), crate::interrupt::Mode::Repl);
-    let config = RunConfig::default()
+    let doorbell = crate::interrupt::doorbell();
+    crate::interrupt::install(
+        Arc::clone(&control),
+        doorbell.clone(),
+        crate::interrupt::Mode::Repl,
+    );
+    let mut config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_sched(sched)
-        .with_clock(clock)
+        .with_clock(Clock::Real)
         .with_control(Arc::clone(&control));
+    if let Some(doorbell) = doorbell {
+        config = config.with_doorbell(doorbell);
+    }
     let file = match file {
         None => None,
         Some(path) => {

@@ -33,7 +33,7 @@ cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # UI tests
 cargo insta review                   # accept snapshots
 cargo clippy --all-targets -- -D warnings && cargo fmt
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core; eml_test_support also hir)
-cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--sched normal|sequential|seeded:N] [--clock real|virtual] <file.em> [args...] (the VM; --debug-heap is checked mode; --sched picks how `par` children and `Async` tasks switch, normal (a timer-driven monitor thread) by default; --clock picks the timer clock, real by default for the CLI; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--sched ...] [--clock ...] [file.em] (the terminal REPL)
+cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--sched normal|sequential|seeded:N] <file.em> [args...] (the VM; --debug-heap is checked mode; --sched picks how `par` children and `Async` tasks switch, normal (a timer-driven monitor thread) by default; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--sched ...] [file.em] (the terminal REPL)
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # type-check the Windows-only code (Linux: x86_64-unknown-linux-gnu)
 nix build                            # build the eml binary (eml_cli)
@@ -86,7 +86,7 @@ A batch pipeline whose dependencies flow strictly top to bottom (docs/implementa
 ```
 eml_cli          check / run / repl; the only pipeline driver (`Session`); stage features types < core < run
 eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `par`, `Async` tasks and channels on one worker; `Machine` appends programs by name (the REPL)
-eml_io           IoDriver implementations: the compio-driver real driver and the deterministic test driver; jobs run on compio's pool inside the real driver (`Asyncify`, at most 32 threads)
+eml_io           IoDriver implementations: the compio-driver real driver and the deterministic test driver; jobs run on compio's pool inside the real driver (`Asyncify`, at most 32 threads); name lookups run on the driver's resolver threads (at most 8 live, 64 abandoned)
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
 eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> Perceus -> reuse, verifier
@@ -126,6 +126,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | Reprs, marks, the LIR passes, verifiers | docs/spec/lir.md の「値の表現」, docs/spec/lir.md の「Kind の印」, docs/spec/lir.md の「パスの順番」, docs/spec/lir.md の「verifier」 |
 | `Std.Async` tasks | docs/spec/stdlib.md の「`Std.Async`」, docs/spec/stdlib.md の「取り消し」, docs/spec/stdlib.md の「時間」, docs/spec/vm.md の「`Async` のタスク」, docs/spec/vm.md の「取り消しの届け方」, docs/spec/vm.md の「時計と driver」, docs/spec/declarations.md の「`extern`」 (held arguments) |
 | `Std.Chan` and `Std.Atomic` | docs/spec/stdlib.md の「`Std.Chan`」, docs/spec/stdlib.md の「`Std.Atomic`」, docs/spec/vm.md の「channel」, docs/spec/object-model.md の「論理的な worker ID」 |
+| `Std.Net` and `Std.Signal` | docs/spec/stdlib.md の「`Std.Net`」, docs/spec/stdlib.md の「`Std.Signal`」, docs/spec/vm.md の「上限と割り込み」 |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
 | The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |

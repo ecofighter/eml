@@ -28,13 +28,14 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。`Std.Net` ができたら `Std.IoTest` のインターフェースを置き換えるか消す ([標準ライブラリ](../spec/stdlib.md) の「`Std.IoTest`」)。前提: なし。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
-- `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。前提: `async-net`。設計: [非同期の設計](async.md) の「テストと決定性」
+- `net-tls`: `Std.Tls` のクライアントを入れる。TLS の状態は rustls の上の crate `eml_tls` が持ち、`eml_vm` と `eml_io` の feature `tls` で結び、`eml_cli` の既定の feature で有効にする。ソケットの I/O は `Std.Net` が行い、`Tls` の eml のコードが `TcpStream` と TLS の状態の間でバイトを汲む。server は作らない。テストの相手は、テストの driver の仮想のホスト `tls.localhost` が Rust で TLS を終端し、平文を `localhost` の listener へつなぐ。暗号は aws-lc-rs、根の証明書は webpki-roots で、追加の CA は PEM で渡す。最初に `nix build` と CI で C の依存が組めることを確かめる。前提: なし。設計: [非同期の設計](async.md) の「TLS と HTTP」
+- `std-http`: `Std.Http` の HTTP/1.1 のクライアントを、`Net` と `Tls` の上に eml で書く。`Content-Length`、chunked、EOF までの本文、リダイレクトを扱い、接続は要求ごとに閉じる。速さは `bench/scripts.sh` の行で測る。前提: `net-tls`。設計: [非同期の設計](async.md) の「TLS と HTTP」
+- `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。`Std.Signal` の `Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写す。前提: なし。設計: [非同期の設計](async.md) の「テストと決定性」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
-- `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`、`async-net`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
+- `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
 - `async-rescue`: 詰まった worker のタスクを、空いた worker が救済する。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「救済」
 - `task-limits`: タスクごとに深さ、スタック、メモリの上限を設け、超えたタスクだけを IO の失敗 `ResourceLimit` で止める。メモリの硬い上限は今と同じく run 全体を止める。安全点と末尾でない呼び出しの位置が、巻き戻しの地点になる。前提: `async-threads`。設計: [非同期の設計](async.md) の「タスクごとの上限」
-- `async-files`: 非同期のファイルと、子のプロセスのパイプを入れる。今のブロックする std の行では書けない次の3つを書けるようにする。前提: `async-net`。設計: [非同期の設計](async.md) の「ファイルとパイプ」
+- `async-files`: 非同期のファイルと、子のプロセスのパイプを入れる。今のブロックする std の行では書けない次の3つを書けるようにする。前提: なし。設計: [非同期の設計](async.md) の「ファイルとパイプ」
   - パイプ (`.|`): 子の標準出力を次の子の標準入力へつなぐ。今の行で eml が読んで書き写すと、2段目の標準出力を pipe にした途端に 64 KiB で詰まる。`Cmd` の列を1回の `spawn` で OS の fd でつなぐ形もある
   - `run` と `output` の標準入力を文字列で与えること: 今の行では、読みながら書く子で詰まる ([標準ライブラリ](../spec/stdlib.md) の「`Child`」の pipe の規則)。今は `spawn` で書く。Host が書きながら読む `output` を持つ形もある
   - `Child` の標準エラーの pipe (読み分け): 今の行では3本の pipe を1つのスレッドで扱うと詰まる
@@ -42,7 +43,7 @@
   - 配列の要素は一様な位置なので、今は `Array Float` と `MutArray Float` の要素が書くたびに `Float` の箱に入る。spectral-norm では、確保のほとんどがこの箱である (`RunStats` の `allocations` 4043 のうち `boxes` が 4001。[計測の基準](../implementation/benchmarks.md) の「配列の `Float` の要素の箱」)。構造体の表現もこの箱を消さない
   - 新しい配列は `Array a` とは別の型で、長さの語と連続した中身を持つ物体の仲間 (`String`、`Bytes`。[オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」) の別の種類である。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
 - `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: `raw-arrays`。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
-- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
+- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。今は std に仕事を出す行がなく、プールの仕事は `eml_io` のテストだけが確かめるので、VM からプールの仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
 - `main-pinning`: プロセスのメインスレッドをメインの worker にし、`Std.Gui` を `Gui.run_on_main` だけで作る。メインの worker のタスクとその子は、救済されず、ほかの worker に移らない。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「固定したタスク」、同じ文書の「スレッドと worker」
 - `gui-plugin`: VM の上で egui のプラグインを動かし、`Std.Gui` の残りを入れる。前提: `main-pinning`。設計: [FFI と拡張の設計](ffi.md) の「GUI」、同じ文書の「拡張」
 - `borrowed-params`: 借用パラメータを入れる。所有の引数で1バイトごとに `dup` する形をなくし、verifier が借用のブロック引数を確かめる。前提: なし。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
@@ -332,12 +333,32 @@
 - `SO_REUSEPORT` で複数のタスクが accept する形
   - 後に回した理由: N が 4 以下では accept が詰まりにならない。既定では1つの listener の accept を1つのタスクで行う。
   - 見直す条件: N が 8 以上で accept が詰まりになったとき。
-- TLS のプラグイン: rustls の上の Rust のプラグイン (`eml_tls`) で、形は GUI のプラグインと同じである ([FFI と拡張の設計](ffi.md) の「拡張」)
-  - 後に回した理由: プラグインの仕組みは GUI のプラグインと一緒に入る。
-  - 見直す条件: HTTPS が要るとき。
-- `Http`: `Net` と `Chan` の上のライブラリ
-  - 後に回した理由: HTTPS には TLS のプラグインが先に要る。
-  - 見直す条件: TLS のプラグインが入った後か、平文の HTTP を使うプログラムが出たとき。
+- 書きの期限を持つ `write_within`: 書きの期限は `Async.timeout` で付け、期限が来ると巻き戻しがストリームを閉じる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)
+  - 後に回した理由: 書きの期限は `Async.timeout` で書ける。失うのはストリームだけである。
+  - 見直す条件: 書きの期限の後もストリームを保たなければならないプロトコルが出たとき。
+- `Net.resolve` と、名前での `listen`: `listen` は IP アドレスの綴りだけを受け、名前を解決するのは `connect` だけである
+  - 後に回した理由: 番地の一覧も名前での bind も、使うプログラムがまだない。
+  - 見直す条件: 番地の一覧か名前での bind が要るプログラムが出たとき。
+- Happy Eyeballs: `connect` は解決した番地を順に1つずつ試す
+  - 後に回した理由: 順に試す形で足りる。
+  - 見直す条件: IPv6 が壊れたネットワークで `connect` が遅れるとき。
+- TLS の server (`Tls.accept`、SNI で証明書を選ぶこと、クライアント認証、ALPN)
+  - 後に回した理由: 目標は HTTPS のクライアントで、server は作らない。テストの相手はテストの driver が Rust で終端する。
+  - 見直す条件: eml で HTTPS のサーバを書くとき。
+- close_notify なしの EOF を EOF として読む `Tls` の読み
+  - 後に回した理由: 既定は IO の失敗 `ConnectionReset` にした。長さを持たない本文 (EOF までの本文) が黙って切れるのを防ぐためである。
+  - 見直す条件: close_notify を送らないサーバと話す必要が出たとき。
+- OS の証明書ストアで検証すること (`rustls-platform-verifier`)
+  - 後に回した理由: webpki-roots の根と `Tls.connect_with_ca` の追加の CA で足り、OS ごとの依存を増やさない。
+  - 見直す条件: OS のストアにしかない CA を使うプログラムが出たとき。
+- `Http` の HTTP/2 と ALPN、gzip、keep-alive の接続のプール、ストリーミングの本文、本文の大きさの上限、プロキシ
+  - 後に回した理由: スクリプトの HTTPS のクライアントには、要求ごとに閉じる HTTP/1.1 で足りる。gzip は展開の extern がまだない。
+  - 見直す条件: 大きな本文を少しずつ読むプログラムか、同じホストへ多数の要求を出すプログラムが出たとき。
+- libcurl の上の HTTP のクライアント: 採らない。本物のソケットが要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないのでほかのプロトコルに使える TLS の層にならない。OS ごとに違う TLS (OpenSSL、Schannel) と libcurl、zlib、pkg-config の依存も持ち込む。
+  - 見直す条件: `Http` に HTTP/2、プロキシ、圧縮が要り、eml で書くより libcurl を結ぶほうが小さいと分かったとき。
+- musl で静的に結んだ Linux の配布物 (`x86_64-unknown-linux-musl`)
+  - 後に回した理由: TLS とは別の配布の話である。aws-lc-sys のために musl を対象にする C のツールチェーンを flake に足し、`nix build` の2つ目のパッケージと CI のジョブが要る。musl の名前の解決と確保の速さは glibc と違う。AOT の配布物は `libeml_rt.a` を同梱して利用者の `cc` で結ぶので、musl の配布物には musl 向けの `libeml_rt.a` と結び方を別に用意する必要がある。根の証明書は webpki-roots なので、静的な配布物でも OS のストアは要らない。
+  - 見直す条件: Linux の tarball を配布するとき。既定の配布物とは別の配布物にする。
 - 時刻を扱う `Time` のモジュール
   - 後に回した理由: 待ちと期限は `Int` のミリ秒で足りる。
   - 見直す条件: 時刻か、時間あたりの回数の制限が要るとき。
@@ -350,15 +371,12 @@
 - 2つ目からの失敗をまとめて報告する形 (MultiError)
   - 後に回した理由: 既定では最初の失敗が勝ち、ほかは数えるだけにする (`RunStats` の `dropped_failures`)。
   - 見直す条件: 2つ目からの失敗の中身がデバッグに要るとき。
-- 非同期の名前の解決
-  - 後に回した理由: 既定では `getaddrinfo` をブロックする呼び出しのプールで動かし、それで足りる。
-  - 見直す条件: 名前の解決でプールが埋まるとき。
+- 非同期の名前の解決: 戻らない解決のスレッドが64本たまると、名前での `connect` は IO の失敗になる ([VM](../spec/vm.md) の「時計と driver」)
+  - 後に回した理由: 名前の解決は driver の解決のスレッド (同時に8本) で行い、取り消しと `quiesce` は待たない。
+  - 見直す条件: その失敗か、8本の待ちが計測で見えたとき。
 - タスクを置く worker を選ぶ API (`spawn_here` など)
   - 後に回した理由: スレッドに縛られた仕事は `Gui.run_on_main` で書ける ([FFI と拡張の設計](ffi.md) の「GUI」)。
   - 見直す条件: `Gui.run_on_main` のほかに、タスクを特定の worker に置く必要が出たとき。
-- EPIPE を IO の失敗の種類 `ConnectionReset` に写すこと
-  - 後に回した理由: タスクと関係のない `Child` の書き込みの誤りの種類を変えるため。
-  - 見直す条件: ソケットを足す段 (`TcpStream` の書き込みが EPIPE を返す段)。
 - `shield` の中で取り消しの要求を読む確かめ
   - 後に回した理由: `cancel_requested` は、`shield` の中では外から来た取り消しを読まない。`shield` の中の後始末が要求を知る使い道が、まだない。
   - 見直す条件: `shield` の中の後始末が、取り消されたかどうかで動きを変える必要が出たとき。
@@ -367,14 +385,11 @@
   - 見直す条件: `Std.Net` の計測で、readiness の道が支配的になったとき。
   - 見直すときの形: Linux だけ `compio-driver` の feature に `io-uring` を足し、`polling` と両方を有効にする (compio の fusion の driver)。fusion は起動時に io_uring の opcode を調べ、io_uring が使えない環境では polling で動く。Docker の既定の seccomp プロファイル、gVisor、sysctl の `kernel.io_uring_disabled` を 0 以外にしたホストでは io_uring が使えない。`polling` を外して io_uring だけにすると、そうした環境で `RealDriver::new` が失敗する。fusion では backend が実行時に決まるので、CI では `ProactorBuilder::driver_type` で backend を固定し、両方でテストを流す
   - io_uring で失敗するテストと直し方: `eml_io` の `real::a_readable_probe_stays_pending_without_data`、`real::a_read_after_a_probe_returns_the_bytes`、`real::a_closed_peer_reads_eof` の3つが失敗する。io_uring の `PollOnce` (`IORING_OP_POLL_ADD`) は、`Ok(0)` でなく poll の revents で終わるためである。revents は、読めるだけなら `POLLIN` (1)、相手が閉じていれば `POLLIN | POLLHUP | POLLRDHUP` (8209) になる。`Readable` は `Ok(0)` で終わると決めている ([VM](../spec/vm.md) の「時計と driver」) ので、`RealDriver::reap` で `Slot::Readable` の `Ok` を `Ok(0)` にそろえる。VM は `Probe` の完了の `Ok` と `Err` しか見ないので、ほかに直す所はない
-- `Clock` と `--clock` の名前: 時計の選び方 `Clock` と CLI の `--clock` は、時計と一緒に driver (本物の driver かテストの driver) も選ぶ。driver を選ぶ名前に変えるかを決める ([VM](../spec/vm.md) の「時計と driver」)
-  - 後に回した理由: driver の違いが見えるのは実行系のテストのための `Std.IoTest` だけで、利用者の API の I/O はまだ driver に乗っていない。
-  - 見直す条件: `Std.Net` などの利用者の I/O が driver に乗り、`--clock` が時計のほかに I/O の振る舞いも変えることが利用者に見えるようになったとき。
-- waker の本番の呼び出しと 10 ms の上限をなくすこと: 本物の driver は `IoWaker` を持つが、本番のコードは鳴らさない。空きの worker は1回の待ちを `IDLE_TICK` (10 ms) で切り、止める語を読む ([VM](../spec/vm.md) の「時計と driver」)。そのため、driver のどの待ちも起こしで戻るという設計 ([非同期の設計](async.md) の「`IoDriver` と `eml_io`」) を満たしていない
+- 10 ms の上限をなくすこと: 空きの worker は本物の driver の1回の待ちを `IDLE_TICK` (10 ms) で切り、止める語を読む ([VM](../spec/vm.md) の「時計と driver」)。driver の `IoWaker` を鳴らすのは解決のスレッドと監視のスレッドの中継だけで、監視のスレッドのない run では Ctrl-C の後に鳴らす者がいない。そのため、driver のどの待ちも起こしで戻るという設計 ([非同期の設計](async.md) の「`IoDriver` と `eml_io`」) を満たしていない
   - 後に回した理由: kqueue の通知と compio の起こしの道は async-signal-safe と書かれておらず、シグナルのハンドラから呼べない。worker が1つの間は、10 ms の上限で Ctrl-C と確保量の上限が眠る worker に届く。
   - 見直す条件: `worker-threads` で、監視のスレッドとスレッドをまたぐ知らせが worker を起こすようになったとき。または、Ctrl-C の反応の遅れか空きの CPU 使用が問題になったとき。そのときは `IDLE_TICK` を見直す。
 - プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ。プールの32本のスレッドがすべて仕事中なら、仕事の受け付けは安全点を通らずに待つ ([VM](../spec/vm.md) の「時計と driver」)
-  - 後に回した理由: 今の仕事は std の内部の短いもの (`Std.IoTest.checksum`) だけで、長さに上限がある。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
+  - 後に回した理由: 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
   - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
 - 完了を集める手間: 本物の driver の `completions` は、保留の操作をすべて `pop` して終わったかを確かめる。そのため、保留が N 個あれば、集める地点ごとに O(N) かかる ([アーキテクチャ](../implementation/architecture.md) の「`eml_io` の内部」)
   - 後に回した理由: 今の保留の操作は `Std.IoTest` のものだけで、数が少ない。

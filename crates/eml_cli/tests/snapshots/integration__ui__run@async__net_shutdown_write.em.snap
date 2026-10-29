@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/net_shutdown_write.em
+---
+--- stdout ---
+ping
+eof
+pong
+ConnectionReset: cannot write to the stream: connection reset
+--- stderr ---
