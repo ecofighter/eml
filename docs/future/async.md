@@ -390,6 +390,8 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 ## 未決の論点と将来の拡張
 
 - I/O の driver の crate: `compio-driver` を使う。macOS か Windows で compio の中の理由 (IOCP の時間付きの待ち、起こし、プールの不具合、ビルドの失敗、kqueue の `PollOnce` の振る舞い) で使えないと分かったら、同じ trait の後ろで、`polling` と手で書く IOCP (`windows-sys`) の自前の driver に替える。API は変わらない。mio は Windows で AFD の readiness を真似るので採らない。io_uring を使うかは、ネットワークの計測で readiness の道が目立ったときに決める
+  - 自前の driver に替えるもう1つの条件は、`async-threads` の計測で、救済の後の受け付けが縛った worker の受け箱を通る遅れが目立ったときである。`Proactor` は `Send` でないので、compio の上では受け付けを別のスレッドから出せず、下の受け箱を省く形がとれない。自前の driver なら、操作の記録を `OpKey` で引く1つの表で持てる。そのため、driver を落とすときに仕事を待ちきることも、壊れた driver の鍵を漏らすこともいらなくなる。今の driver がこの2つをするのは、compio が数え方の atomic でない仕事の鍵の写しをプールのスレッドへ送るためである ([VM](../spec/vm.md) の「時計と driver」)
+  - 替えるときも、まず IOCP だけを `windows-sys` で書き、unix は `polling` に任せる。io_uring は最後に足す。io_uring を入れても、io_uring が使えない環境のために epoll の道は残る。自前の driver の syscall の周りの `unsafe` は Miri で動かせないので、3つの OS の CI で確かめる
 - `Machine` と REPL のセッションを別のスレッドへ移すこと: 既定は移さない。driver は作ったスレッドから動かず、driver を持つ `Machine` もそのスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。ホストへの埋め込みなどで移す使い道が出たら、専用の実行系のスレッドが状態を持ち、`Machine` と REPL を頼みを送るハンドルにする形を考える
 - 書きの期限 (`write_within`): 取り消し、期限、データの区別は誤りの種類でなく操作の記録の状態で決める ([標準ライブラリ](../spec/stdlib.md) の「`Std.IoTest`」)。`Std.Net` で書きに期限を付けるときは、この区別を書きにもそのまま当てられるかを見直す
 - 受け付けをスレッドをまたいで安全に出せる backend (IOCP、SQ を lock する io_uring) では、受け箱を通す回り道を省いてよい。既定は backend ごとに `eml_io` が決める

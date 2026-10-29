@@ -376,6 +376,10 @@
 - プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ。プールの32本のスレッドがすべて仕事中なら、仕事の受け付けは安全点を通らずに待つ ([VM](../spec/vm.md) の「時計と driver」)
   - 後に回した理由: 今の仕事は std の内部の短いもの (`Std.IoTest.checksum`) だけで、長さに上限がある。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
   - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
+- 完了を集める手間: 本物の driver の `completions` は、保留の操作をすべて `pop` して終わったかを確かめる。そのため、保留が N 個あれば、集める地点ごとに O(N) かかる ([アーキテクチャ](../implementation/architecture.md) の「`eml_io` の内部」)
+  - 後に回した理由: 今の保留の操作は `Std.IoTest` のものだけで、数が少ない。
+  - 見直す条件: `async-net` で、1つの worker が多くの接続の読みを同時に待つようになるとき。
+  - 見直すときの形: 操作を出すときに `Proactor::update_waker` で操作ごとの waker を付ける。waker は終わった操作の `OpKey` を driver の列に積み、`completions` はその列の鍵だけを `pop` する。手間は O(終わった数) になり、`compio-driver` を使い続けたまま直せる。受け付けの順にそろえる並べ替えは残す
 - `compio-driver` の 0.13 の系列: `compio-driver` と `compio-buf` は、上位の crate `compio` の安定版が使うバージョンに固定している ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
   - 後に回した理由: 0.13 の系列には beta のバージョンしかない。
   - 見直す条件: 0.13 の系列が安定版になったとき。上げるときは、アーキテクチャの「外部 crate」に書いた項目をすべて確かめる。
