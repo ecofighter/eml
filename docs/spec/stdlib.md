@@ -1053,7 +1053,7 @@ body () =
 - `scope` の本体を動かすタスクは、そのスコープの中にいる間だけ旗で取り消される (ビットは立てない)。スコープを出た後は、外の旗かビットが立っていなければ取り消されていない
 - 取り消しの地点は `await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` と、`Std.Chan` の `send` と `recv` と、`Std.Net` と `Std.IoTest` の待つ関数である。取り消しの地点は、`shield` の外では、タスクのビットかタスクの今のスコープの旗が立っていれば (`shield` の中の規則は下の `shield` の箇条にある)、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる
 - `send` と `recv` は、待つ前と待っている間に取り消しが立てば投げる。起こされた後は、`await` と同じく、まず操作をやり直し (枠か品物があれば送るか受け取る)、次の取り消しの地点が投げる。やり直しで待ち直すときは、待つ前の規則で投げる
-- `Std.Net` の待つ関数は、待つ前に取り消しが立っていれば、何も受け付けずにストリームかリスナーを落として投げる。待っている間に立てば、driver に取り消しを頼み、操作の完了を待ってから、完了が作ったハンドルと渡したリスナーを落として投げる (下の「`Std.Net`」)
+- `Std.Net` の待つ関数は、待つ前に取り消しが立っていれば、何も受け付けずにストリームかリスナーを落として投げる。待っている間に立てば、driver に取り消しを頼み、操作の完了を待ってから、完了が作ったハンドル、記録の buffer、渡したストリームかリスナーを落として投げる。driver が buffer を使い終わるまで返せないためである (下の「`Std.Net`」)
 - `Std.IoTest` の待つ関数は、待つ前に取り消しが立っていれば、何も受け付けずにストリームを落として投げる。待っている間に立てば、driver に取り消しを頼み、操作の完了を待ってから投げる。driver が buffer を使い終わるまで返せないためである。取り消した操作は buffer を返してから投げ、ストリームと buffer は包みが落とす (下の「`Std.IoTest`」)
 - 失敗したタスクを同じスコープの中から `await` で待つタスクは、失敗が記録されたときにもう待っていればその失敗を受け取り、まだ待っていなければスコープの取り消しを受けて `Cancelled` を受け取る。どちらになるかはスケジュールで決まる。スコープの最初の失敗はどちらでも同じなので、`run` と `scope` が起こし直す失敗は変わらない。相手のスコープを `shield` の外で開いたときは、`await` を `shield` で囲めば、待つ相手の失敗を確かに受け取る
 - 取り消しは協調的で、取り消しの地点を通らないコードは止まらない。待たないループを取り消せるようにするには、ループの中で `check_cancelled ()` を呼ぶ
@@ -1084,7 +1084,7 @@ body () =
 ```
 
 - 時間は今からの長さを `Int` のミリ秒で表す。0 以下は過ぎた期限である。時計は [VM](vm.md) の「時計と driver」にある
-- `_within` の関数 (`Net.accept_within`、`IoTest.read_chunk_within`) は driver の操作の待ちに期限を付ける。期限は待ちの属性で、子のスコープもタスクも作らない。期限までに終わらなければ操作を取り消し、取り消しが終わってから `None` と、渡した端かリスナーを返す。端もリスナーも閉じず、続けて使える。期限と競って届いたデータは `Some` で返す。`_within` は取り消しの地点で、外からの取り消しは期限より優先して `Cancelled` を投げる (下の「`Std.Net`」と「`Std.IoTest`」)
+- `_within` の関数 (`Net.accept_within`、`Net.read_chunk_within`、`IoTest.read_chunk_within`) は driver の操作の待ちに期限を付ける。期限は待ちの属性で、子のスコープもタスクも作らない。期限までに終わらなければ操作を取り消し、取り消しが終わってから `None` と、渡した端かリスナーを返す。端もリスナーも閉じず、続けて使える。期限と競って届いたデータは `Some` で返す。`_within` は取り消しの地点で、外からの取り消しは期限より優先して `Cancelled` を投げる (下の「`Std.Net`」と「`Std.IoTest`」)
 - `sleep_ms ms` は `ms` ミリ秒待つ取り消しの地点である。0 以下なら `yield_now` と同じく列の後ろへ回る
 - `timeout ms f` は子のスコープ `p` を開き、`ms` が正のときだけ `p` に期限のタスクを1つ始め、呼んだタスクで `scope (fn _ -> f ())` を動かす。期限のタスクは眠り切ると `p` に旗を立て、本体と本体が始めたタスクを取り消す。`ms` が 0 以下ならタスクを始めず、すぐ旗を立てる。`ms` が正のとき、期限のタスクを `RunStats.tasks` に1つ数える
 - `timeout` 自身は取り消しの地点でない。期限は本体の取り消しの地点でだけ届く。本体が `await` で待つ外のタスクは、`await` の規則で取り消される (上の「取り消し」)
@@ -1276,6 +1276,11 @@ main () = Async.run (fn () ->
 | `accept_within` | `Int -> TcpListener -> <IO, Async> (Option TcpStream, TcpListener)` | eml |
 | `close_listener` | `TcpListener -> <IO> Unit` | eml |
 | `connect` | `String -> Int -> <IO, Async> TcpStream` | eml |
+| `read_chunk` | `Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)` | eml |
+| `read_chunk_within` | `Int -> Bytes -> TcpStream -> <IO, Async> (Option Bytes, TcpStream)` | eml |
+| `write` | `String -> TcpStream -> <IO, Async> TcpStream` | eml |
+| `write_bytes` | `Bytes -> TcpStream -> <IO, Async> TcpStream` | eml |
+| `write_line` | `String -> TcpStream -> <IO, Async> TcpStream` | eml |
 | `shutdown_write` | `TcpStream -> <IO> TcpStream` | extern |
 | `close` | `TcpStream -> <IO> Unit` | eml |
 | `peer_addr` | `TcpStream -> (String, TcpStream)` | extern |
@@ -1286,18 +1291,23 @@ main () = Async.run (fn () ->
 - `connect host port` の `host` は IP アドレスの綴りか名前で、`port` は 1 から 65535 である。名前は driver の解決のスレッドで解決し、得た番地を順に試して、最後に試した番地の誤りを報告する。取り消し、期限、`quiesce` は名前の解決を待たない ([VM](vm.md) の「時計と driver」)
 - `accept l` はリスナーに来た接続を1つ受け、そのストリームとリスナーを返す。接続が来るまで待つ
 - `accept_within ms l` は `accept l` を `ms` ミリ秒の期限で区切り、結果を `Option` に包む。`None` は期限が過ぎたことだけを表し、リスナーは続けて使える。期限と競って届いた接続は `Some` で返す (上の「時間」)
+- `read_chunk b s` は `s` を1回読み、読んだバイトを `b` の後ろに足して、その `Bytes` とストリームを返す。足すのは 1 バイト以上 65 536 バイト以下で、EOF のときだけ何も足さずに `b` の中身のまま返す。EOF は失敗でない (`FileIn.read_chunk` と同じ形)。読めるものがなければ、相手が書くか閉じるまで待つ。buffer の空きは、ストリームが読めるようになってから足す ([VM](vm.md) の「操作の記録」)
+- 読みは次のことを保証する。受け取ったバイトはすべて、受け取った順に `read_chunk` に届く。ストリームは隠れた読みの buffer を持たないので、読んだバイトは `read_chunk` が返した `Bytes` にしかない
+- `read_chunk_within ms b s` は `read_chunk b s` を `ms` ミリ秒の期限で区切り、結果を `Option` に包む。`None` は期限が過ぎたことだけを表し、そのとき読んだバイトはない。`b` は捨て、ストリームは閉じずに続けて使える。期限と競って届いたデータは `Some` で返す。期限と競った本物の誤り (reset など) は、期限のない読みと同じく投げる。そのため `None` はバイトを失わず、誤りも隠さない。`ms` が 0 以下の過ぎた期限は、待ち始める前に読みが終わったかを見るだけである。データのないストリームではいつも `None` だが、データのあるストリームでは、待ち始める前に読みが終わったかがスケジュールで変わるので、`Some` と `None` のどちらにもなる
+- `write_bytes b s` は `b` をすべて書き、ストリームを返す。本物の driver は、短く終わった送りを出し直す。`write str s` は `str` の UTF-8 のバイトを書き、`write_line str s` は `str` と改行を書く。どれも `write_bytes` を呼ぶ
+- 書きの期限は `Async.timeout ms (fn () -> Net.write_bytes b s)` で付ける。期限が来ると、巻き戻しがストリームを閉じる
 - `local_port` と `peer_addr` は、作ったときに記録した値を読む。引数を借りて組で返し ([Core IR](core-ir.md) の「組を返す extern」)、効果を持たない。`peer_addr` は Rust の `SocketAddr` の表示の形 (`127.0.0.1:49153`、`[::1]:8080`) で返す
 - `shutdown_write s` は送る側を閉じ、相手は残りを読みきってから EOF を受ける。`set_nodelay on s` は TCP_NODELAY を設定する。どちらも driver の操作を待たない。失敗はそれぞれ IO の失敗 `cannot shut down the stream: …` と `cannot set the no-delay option: …` で、種類は次の箇条の、extern が投げる誤りと同じ規則で決める
 - 拒まれた接続は種類 `ConnectionRefused`、reset と EPIPE と ECONNABORTED は `ConnectionReset`、使用中の番地は `AddrInUse`、OS の時間切れは `TimedOut` である。この4つは包みが `fail_io` で投げる。ほかの誤りは extern が投げ、種類は最初の5つから OS の誤りで決める。解決できない名前は `NotFound`、権限のない操作 (1024 より小さいポートの `listen` など) は `PermissionDenied`、扱えない操作は `NotAvailable`、残りは `Other` である (上の「`try_io`」)
-- 文言は prefix と理由を `: ` でつないだものである。prefix は `cannot listen on {host}:{port}`、`cannot connect to {host}:{port}`、`cannot accept a connection` のどれかである。理由は、包みが投げる4つの種類では `connection refused`、`connection reset`、`address in use`、`timed out` で、ほかは driver の誤りの表示である。テストの driver では、解決できない名前の理由は `unknown host` になる
+- 文言は prefix と理由を `: ` でつないだものである。prefix は `cannot listen on {host}:{port}`、`cannot connect to {host}:{port}`、`cannot accept a connection`、`cannot read the stream`、`cannot write to the stream` のどれかである。理由は、包みが投げる4つの種類では `connection refused`、`connection reset`、`address in use`、`timed out` で、ほかは driver の誤りの表示である。テストの driver では、解決できない名前の理由は `unknown host` になり、相手が閉じたストリームへの書きは `cannot write to the stream: connection reset` (種類 `ConnectionReset`) になる
 - `listen` の `host` が IP アドレスの綴りでないときと、`listen` と `connect` の `port` が範囲の外のときは、操作を出さずに種類 `Other` の IO の失敗を起こす。理由はそれぞれ `the host is not an IP address` と `the port is out of range` である
 - Windows の本物の driver はまだソケットを扱わないので、`listen`、`accept`、`connect` は種類 `NotAvailable` の IO の失敗 (`cannot listen on 127.0.0.1:0: unsupported`) になる。テストの driver はどの OS でも同じに動く
-- 待つ関数の包みは同じ形である。取り消しの地点が投げるなら、渡すリスナーがあれば落とし、何も受け付けずに種類 `Cancelled` の失敗を投げる。そうでなければ、受け付けの行で token を作り、`Async.io_wait` (`_within` は `Async.io_wait_until`) で待つ。`accept` と `accept_within` は `op_listener` でリスナーを取り戻す。続けて `op_outcome` で結果の番号を読む。再開の `Wake` が `Cancelled` なら、`finish` で記録を放し、リスナーがあれば落として `Cancelled` を投げる。`Woke` なら次の表で分ける。表は上の行から順に見て、最初に合う行を使う
+- 待つ関数の包みは同じ形である。取り消しの地点が投げるなら、渡すリスナーかストリームがあれば落とし、何も受け付けずに種類 `Cancelled` の失敗を投げる。そうでなければ、受け付けの行で token を作り、`Async.io_wait` (`_within` は `Async.io_wait_until`) で待つ。`accept` と `accept_within` は `op_listener` でリスナーを、読みと書きは `op_stream` でストリームを取り戻す。続けて `op_outcome` で結果の番号を読む。再開の `Wake` が `Cancelled` なら、`finish` で記録を放し、リスナーかストリームがあれば落として `Cancelled` を投げる。`Woke` なら次の表で分ける。表は上の行から順に見て、最初に合う行を使う
 
 | 記録の状態 | 番号 | 包みがすること |
 |---|---|---|
-| 結果が成功 (期限と競ったときも) | 0 | 取り出しの行で結果を受け取る。`_within` は `Some` に包む |
-| 期限が来て、完了が期限の取り消しだけで終わった | 1 | `finish` で記録を放し、`None` とリスナーを返す |
+| 結果が成功 (期限と競ったときも) | 0 | 取り出しの行で結果を受け取る。`_within` は `Some` に包む。書きは結果を受け取らず、`finish` で記録を放す |
+| 期限が来て、完了が期限の取り消しだけで終わった | 1 | `finish` で記録を放し、`None` とリスナーかストリームを返す |
 | 誤りの種類が ConnectionReset、BrokenPipe、ConnectionAborted | 2 | `finish` で記録を放し、`ConnectionReset` を投げる |
 | 誤りの種類が ConnectionRefused | 3 | 同じく `ConnectionRefused` を投げる |
 | 誤りの種類が AddrInUse | 4 | 同じく `AddrInUse` を投げる |
@@ -1305,27 +1315,30 @@ main () = Async.run (fn () ->
 | ほかの誤り | 6 | `finish` が、driver の誤りの種類を最初の5つに写して投げる |
 
 - 期限と競った本物の誤りは、期限に負けたとせずに報告する。誤りはそれを報告した syscall が消費するので、後の操作は同じ誤りを見られない。番号 1 は期限があるときだけ出るので、見るのは `_within` の包みだけである
-- extern の行は次の13行である。`local_port`、`peer_addr`、`shutdown_write`、`set_nodelay` のほかは `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の16行である。`local_port`、`peer_addr`、`shutdown_write`、`set_nodelay` のほかは `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 借りる引数 |
 |---|---|---|
 | `submit_listen` | `String -> Int -> <IO> Async.OpId` | なし |
 | `submit_accept` | `TcpListener -> <IO> Async.OpId` | なし |
 | `submit_connect` | `String -> Int -> <IO> Async.OpId` | なし |
+| `submit_read` | `Bytes -> TcpStream -> <IO> Async.OpId` | なし |
+| `submit_write` | `Bytes -> TcpStream -> <IO> Async.OpId` | なし |
 | `op_listener` | `Async.OpId -> <IO> (TcpListener, Async.OpId)` | token |
 | `op_stream` | `Async.OpId -> <IO> (TcpStream, Async.OpId)` | token |
 | `op_outcome` | `Async.OpId -> <IO> (Int, Async.OpId)` | token |
 | `take_listener` | `Async.OpId -> <IO> TcpListener` | なし |
 | `take_stream` | `Async.OpId -> <IO> TcpStream` | なし |
+| `take_read` | `Async.OpId -> <IO> Bytes` | なし |
 | `finish` | `Async.OpId -> <IO> Unit` | なし |
 | `local_port` | `TcpListener -> (Int, TcpListener)` | リスナー |
 | `peer_addr` | `TcpStream -> (String, TcpStream)` | ストリーム |
 | `shutdown_write` | `TcpStream -> <IO> TcpStream` | なし |
 | `set_nodelay` | `Bool -> TcpStream -> <IO> TcpStream` | なし |
 
-- 受け付けの行は引数を消費して記録に移し、token を返す。`submit_listen` と `submit_connect` は `host` を写して手放し、文言の prefix を記録に持たせる
+- 受け付けの行は引数を消費して記録に移し、token を返す。`submit_listen` と `submit_connect` は `host` を写して手放し、文言の prefix を記録に持たせる。`submit_read` と `submit_write` は buffer が一意でなければ (共有、不死、ほかの参照)、同じ中身の新しい `Bytes` に写して元を手放す。driver が読み書きする間に書き換わらないためである
 - `op_listener` と `op_stream` は、終わった記録から受け付けに渡したものを移し出す。`op_outcome` は結果の番号を返す
-- `take_listener` と `take_stream` は token を消費して記録を放し、完了から作ったリスナーかストリームを返す。番号が 0 でない記録では、内部の誤り `an op is taken after it failed` になる
+- `take_listener` と `take_stream` は token を消費して記録を放し、完了から作ったリスナーかストリームを返す。`take_read` は token を消費して記録を放し、読んだバイトを足した buffer を返す。どれも、番号が 0 でない記録では内部の誤り `an op is taken after it failed` になる
 - `finish` は token を消費して記録を放し、記録がまだ持つもの (完了から作ったハンドルを含む) を落とす。番号 6 の誤りは、取り消しを頼んだ記録でなければ IO の失敗にする
 
 ## `Std.IoTest`

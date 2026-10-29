@@ -2070,7 +2070,8 @@ fn async_op<R: Exec>(
             let s = cells::peer(ctx, task.get(arg(0)))?;
             task.set(dst, s);
         }
-        Extern::IoTestSubmitWrite => {
+        // 書きと読みの受け付けは、`Std.IoTest` と `Std.Net` のどちらのストリームも受ける
+        Extern::IoTestSubmitWrite | Extern::NetSubmitWrite => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             let token =
                 sched
@@ -2078,7 +2079,7 @@ fn async_op<R: Exec>(
                     .submit_write(ctx, &mut *sched.driver, task.worker, buf, stream)?;
             task.set(dst, token);
         }
-        Extern::IoTestSubmitRead => {
+        Extern::IoTestSubmitRead | Extern::NetSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             let token =
                 sched
@@ -2228,6 +2229,10 @@ fn async_op<R: Exec>(
                 .cells
                 .take_made(ctx, task.get(arg(0)), task.worker, listener)?;
             task.set(dst, w);
+        }
+        Extern::NetTakeRead => {
+            let buf = sched.cells.take_read(ctx, task.get(arg(0)), task.worker)?;
+            task.set(dst, buf);
         }
         Extern::NetFinish => {
             let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
@@ -3208,11 +3213,14 @@ fn run_extern<R: Exec>(
             | Extern::NetSubmitListen
             | Extern::NetSubmitAccept
             | Extern::NetSubmitConnect
+            | Extern::NetSubmitRead
+            | Extern::NetSubmitWrite
             | Extern::NetOpListener
             | Extern::NetOpStream
             | Extern::NetOpOutcome
             | Extern::NetTakeListener
             | Extern::NetTakeStream
+            | Extern::NetTakeRead
             | Extern::NetFinish
             | Extern::NetLocalPort
             | Extern::NetPeerAddr

@@ -481,7 +481,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par`、`Std.Async` の17行、`Std.Chan` の2行、`Std.IoTest` の10行、`Std.Net` の13行以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の17行、`Std.Chan` の2行、`Std.IoTest` の10行、`Std.Net` の16行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -559,8 +559,9 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.IoTest.submit_checksum" => (&[Unr, Unr], Lin),
             "Std.Net.submit_listen" | "Std.Net.submit_connect" => (&[Unr, Unr], Lin),
             "Std.Net.submit_accept" => (&[Lin], Lin),
+            "Std.Net.submit_read" | "Std.Net.submit_write" => (&[Unr, Lin], Lin),
             "Std.Net.op_listener" | "Std.Net.op_stream" => (&[Lin], Lin),
-            "Std.Net.op_outcome" | "Std.Net.finish" => (&[Lin], Unr),
+            "Std.Net.op_outcome" | "Std.Net.finish" | "Std.Net.take_read" => (&[Lin], Unr),
             "Std.Net.take_listener" | "Std.Net.take_stream" => (&[Lin], Lin),
             "Std.Net.local_port" | "Std.Net.peer_addr" => (&[Lin], Unr),
             "Std.Net.shutdown_write" => (&[Lin], Lin),

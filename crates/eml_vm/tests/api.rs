@@ -608,6 +608,102 @@ main () = Async.run (fn () ->
     assert_eq!(connected, format!("127.0.0.1:{port}"), "{out}");
 }
 
+/// 本物の driver の `Net` の頭。`listen` が選んだポートへ `connect` し、別のタスクの `accept` が受けたストリームを `b`、
+/// 接続した側を `a` にする。
+#[cfg(unix)]
+const REAL_CONNECTED: &str = "\
+import Async (Async)
+import Async
+import Bytes
+import Byte
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let u = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let a = Net.connect \"127.0.0.1\" port
+  let b = Async.await u
+";
+
+/// 本物の driver の接続で、片方のストリームに書いたバイトを別のタスクが読む (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(unix)]
+#[test]
+fn a_real_connection_carries_bytes_between_tasks() {
+    let src = format!(
+        "{REAL_CONNECTED}  let t = Async.start (fn () ->
+    let (buf, b) = Net.read_chunk (Bytes.of_string \"> \") b
+    Net.close b
+    String.decode buf)
+  let a = Net.write \"hello\" a
+  Net.close a
+  println (Async.await t))
+"
+    );
+    let (out, result, closed, _) = run_real(&src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "> hello\n");
+}
+
+/// 本物の driver で、データのないストリームの `read_chunk_within` は期限で `None` を返し、ストリームは続けて使える。後で
+/// 相手のタスクが書いたバイトは、次の `read_chunk` が返す (docs/spec/stdlib.md の「`Std.Net`」)。
+#[cfg(unix)]
+#[test]
+fn a_real_read_chunk_within_keeps_the_stream() {
+    let src = format!(
+        "{REAL_CONNECTED}  let (r, b) = Net.read_chunk_within 20 (Bytes.empty ()) b
+  match r with
+    | Some _ -> println \"Some\"
+    | None -> println \"None\"
+  let t = Async.start (fn () -> Net.close (Net.write \"later\" a))
+  let (buf, b) = Net.read_chunk (Bytes.empty ()) b
+  Net.close b
+  Async.await t
+  println (String.decode buf))
+"
+    );
+    let (out, result, closed, elapsed) = run_real(&src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "None\nlater\n");
+    assert!(
+        elapsed >= std::time::Duration::from_millis(20),
+        "{elapsed:?}"
+    );
+}
+
+/// 本物の driver の 8 MiB の `write_bytes` は、送りの buffer を超えて短く終わる送りを driver が出し直し、1つの完了で
+/// 終わる。相手のタスクが EOF まで読んだバイトの数は、書いた数と同じである (docs/spec/vm.md の「時計と driver」)。
+#[cfg(unix)]
+#[test]
+fn a_real_write_of_8_mib_arrives_whole() {
+    let src = format!(
+        "{REAL_CONNECTED}  let t = Async.start (fn () -> count 0 b)
+  let a = Net.write_bytes (Bytes.make 8388608 (Byte.wrap 7)) a
+  Net.close a
+  println (show (Async.await t)))
+
+count : Int -> Net.TcpStream -> <IO, Panic, Async> Int
+count n s =
+  let (buf, s) = Net.read_chunk (Bytes.empty ()) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else count (n + k) s
+"
+    );
+    let (out, result, closed, _) = run_real(&src, None);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "8388608\n");
+}
+
 /// 接続の来ないリスナーで受けを待つ run は、空きのループが割り込みを読むので、別のスレッドの割り込みで止まる。止める
 /// ときに受けの操作を取り消して待ちきるので、検査モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
 /// 割り込みは `waiting` が出てから送るので、受けの待ちの間に届く。

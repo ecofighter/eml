@@ -1,6 +1,7 @@
 -- TCP のモジュール (docs/spec/stdlib.md の「`Std.Net`」)。待つ関数は受け付けから取り出しまでを1つの呼び出しの中で
 -- 行い、token の `OpId` を外へ出さない
 import Async (Async)
+import Bytes
 
 -- driver のリスナーのハンドルと待ち受けるポートを中身に持つ。Kind は `Lin` で、落とすとソケットを閉じる
 pub extern data TcpListener
@@ -92,6 +93,87 @@ connect host port =
           finish op
           fail_code code "cannot connect to \{host}:\{show port}"
 
+-- `s` から 1 バイト以上 65 536 バイト以下を読んで `b` の後ろに足し、その `Bytes` とストリームを返す。EOF では何も
+-- 足さない。取り消しの地点である
+pub read_chunk : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
+read_chunk b s =
+  if Async.cancel_requested () then
+    drop s
+    raise_cancelled ()
+  else
+    let (w, op) = Async.io_wait (submit_read b s)
+    let (s, op) = op_stream op
+    let (code, op) = op_outcome op
+    match w with
+      | Async.Cancelled ->
+        finish op
+        drop s
+        raise_cancelled ()
+      | Async.Woke ->
+        if code == 0 then (take_read op, s)
+        else
+          finish op
+          drop s
+          fail_code code "cannot read the stream"
+
+-- `read_chunk` に `ms` ミリ秒の期限を付ける。期限が過ぎれば `None` とストリームを返し、そのとき読んだバイトはない。
+-- ストリームは続けて使える。取り消しの地点である (docs/spec/stdlib.md の「`Std.Net`」)
+pub read_chunk_within : Int -> Bytes -> TcpStream -> <IO, Async> (Option Bytes, TcpStream)
+read_chunk_within ms b s =
+  if Async.cancel_requested () then
+    drop s
+    raise_cancelled ()
+  else
+    let (w, op) = Async.io_wait_until (submit_read b s) ms
+    let (s, op) = op_stream op
+    let (code, op) = op_outcome op
+    match w with
+      | Async.Cancelled ->
+        finish op
+        drop s
+        raise_cancelled ()
+      | Async.Woke ->
+        if code == 0 then (Some (take_read op), s)
+        else if code == 1 then
+          finish op
+          (None, s)
+        else
+          finish op
+          drop s
+          fail_code code "cannot read the stream"
+
+-- `b` をすべて書き、ストリームを返す。取り消しの地点である
+pub write_bytes : Bytes -> TcpStream -> <IO, Async> TcpStream
+write_bytes b s =
+  if Async.cancel_requested () then
+    drop s
+    raise_cancelled ()
+  else
+    let (w, op) = Async.io_wait (submit_write b s)
+    let (s, op) = op_stream op
+    let (code, op) = op_outcome op
+    match w with
+      | Async.Cancelled ->
+        finish op
+        drop s
+        raise_cancelled ()
+      | Async.Woke ->
+        if code == 0 then
+          finish op
+          s
+        else
+          finish op
+          drop s
+          fail_code code "cannot write to the stream"
+
+-- 文字列を UTF-8 のバイトで書く
+pub write : String -> TcpStream -> <IO, Async> TcpStream
+write str s = write_bytes (Bytes.of_string str) s
+
+-- 文字列と改行を書く
+pub write_line : String -> TcpStream -> <IO, Async> TcpStream
+write_line str s = write_bytes (Bytes.of_string "\{str}\n") s
+
 pub close : TcpStream -> <IO> Unit
 close s = drop s
 
@@ -126,9 +208,12 @@ pub extern set_nodelay : Bool -> TcpStream -> <IO> TcpStream
 extern submit_listen  : String -> Int -> <IO> Async.OpId
 extern submit_accept  : TcpListener -> <IO> Async.OpId
 extern submit_connect : String -> Int -> <IO> Async.OpId
+extern submit_read    : Bytes -> TcpStream -> <IO> Async.OpId
+extern submit_write   : Bytes -> TcpStream -> <IO> Async.OpId
 extern op_listener    : Async.OpId -> <IO> (TcpListener, Async.OpId)
 extern op_stream      : Async.OpId -> <IO> (TcpStream, Async.OpId)
 extern op_outcome     : Async.OpId -> <IO> (Int, Async.OpId)
 extern take_listener  : Async.OpId -> <IO> TcpListener
 extern take_stream    : Async.OpId -> <IO> TcpStream
+extern take_read      : Async.OpId -> <IO> Bytes
 extern finish         : Async.OpId -> <IO> Unit

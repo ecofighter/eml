@@ -1708,8 +1708,8 @@ impl Registry {
         Ok(t.op)
     }
 
-    /// `Std.IoTest.submit_write`。`buf` と `stream` は呼ぶ側から移ってきた参照で、記録に移す。`buf` の内容を書く操作を
-    /// driver に出し、token を返す。`worker` は呼んだタスクの論理的な ID である。
+    /// `Std.IoTest.submit_write` と `Std.Net.submit_write`。`buf` と `stream` は呼ぶ側から移ってきた参照で、記録に移す。
+    /// `buf` の内容をすべて書く操作を driver に出し、token を返す。`worker` は呼んだタスクの論理的な ID である。
     pub(crate) fn submit_write<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
@@ -1719,9 +1719,7 @@ impl Registry {
         stream: Word,
     ) -> Result<Word, CellFault> {
         let buf = unique_bytes(ctx, buf)?;
-        // 端は `Stream` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`Stream` は `Lin`。docs/spec/vm.md の
-        // 「操作の記録」)
-        let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
+        let handle = stream_handle(ctx, stream)?;
         // 記録が物体を生かし、一意に保ち、取り出すまで書き換えないので、driver は完了までこの位置を読める
         // (docs/spec/object-model.md の T10 の行)
         let bytes = unsafe { ctx.heap().bytes(buf)? };
@@ -1753,9 +1751,9 @@ impl Registry {
         ))
     }
 
-    /// `Std.IoTest.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移し、端が読めるようになるのを待つ
-    /// 操作を driver に出す。buffer の容量はここでは足さず、読めるようになってから足して貸す。何も来ない端の読みに
-    /// 記憶を持たせないためである (docs/spec/vm.md の「操作の記録」)。
+    /// `Std.IoTest.submit_read` と `Std.Net.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移し、端が
+    /// 読めるようになるのを待つ操作を driver に出す。buffer の容量はここでは足さず、読めるようになってから足して貸す。
+    /// 何も来ない端の読みに記憶を持たせないためである (docs/spec/vm.md の「操作の記録」)。
     pub(crate) fn submit_read<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
@@ -1765,8 +1763,7 @@ impl Registry {
         stream: Word,
     ) -> Result<Word, CellFault> {
         let buf = unique_bytes(ctx, buf)?;
-        // 端は `submit_write` と同じく、呼ぶ側から移ってきた唯一の参照である (docs/spec/vm.md の「操作の記録」)
-        let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
+        let handle = stream_handle(ctx, stream)?;
         let key = driver.submit(Op::Readable { handle });
         Ok(self.record(
             ctx,
@@ -2219,6 +2216,24 @@ impl Registry {
         }
     }
 
+    /// `Std.Net.take_read`。token を消費して記録を放し、読んだバイトを足した buffer を返す。結果の番号が `OUTCOME_OK` の
+    /// 読みの記録だけを取り出す (docs/spec/stdlib.md の「`Std.Net`」)。
+    pub(crate) fn take_read<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        token: Word,
+        worker: u32,
+    ) -> Result<Word, CellFault> {
+        let taken = self.take_op(ctx, token, worker)?;
+        if taken.outcome() != OUTCOME_OK {
+            return Err(CellFault::Internal("an op is taken after it failed"));
+        }
+        match taken.buf {
+            Some(buf) if matches!(taken.kind, OpKind::Read) => Ok(buf),
+            _ => Err(CellFault::Internal("an op is taken as another kind of op")),
+        }
+    }
+
     /// 取り出しの行。token を消費して終わった記録を放し、結果と buffer を返す。残ったストリームは落とす。取り出すのは
     /// 受け付けたタスク (`worker`) だけである。記録の語はそのタスクの物体なので、切り替えずに受け取れる。
     pub(crate) fn take_op<M: Mode>(
@@ -2305,11 +2320,18 @@ pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word,
     Ok(ctx.fresh_string(&peer.to_string()))
 }
 
-/// `Std.Net.shutdown_write` と `set_nodelay` が driver に渡すハンドル。ストリームは呼ぶ側から移ってきた参照で、呼ぶ側が
-/// 返すか落とす。
+/// ストリーム `stream` の driver のハンドル。`Std.Net.TcpStream` と `Std.IoTest.Stream` のどちらの `Foreign` でもよい。
+/// ストリームは呼ぶ側から移ってきた参照か記録が持つ参照で、持ち主が返すか落とす。
 pub(crate) fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
-    // ストリームは呼ぶ側が持つ唯一の参照である (`TcpStream` は `Lin`)
-    Ok(unsafe { (*ctx.heap().foreign_unique::<NetStream>(stream)?).handle })
+    // ストリームは持ち主のただ1つの参照である (どちらの型も `Lin`。docs/spec/vm.md の「操作の記録」)。中身の型が
+    // 違えば `WrongKind` で、もう一方の型で読み直す
+    match unsafe { ctx.heap().foreign_unique::<NetStream>(stream) } {
+        Ok(s) => Ok(unsafe { (*s).handle }),
+        Err(HeapError::WrongKind) => {
+            Ok(unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle })
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// `Std.IoTest.open_pair` が作る最初の端。`peer` は2つ目の端で、`peer` の行が分けるまで同じ物体が持つ。
@@ -2339,16 +2361,18 @@ pub(crate) fn peer<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, Cell
 /// 読みが1回に足す空きのバイト数 (docs/spec/vm.md の「操作の記録」)。
 const READ_ROOM: usize = 65_536;
 
-/// 読めるようになった端 `stream` の読みに、記録の buffer `buf` の長さの後ろの空きを貸す。空きが `READ_ROOM` より
-/// 少なければ、長さに `READ_ROOM` を足した容量の新しい物体に中身を写し、元を手放す。返すのは記録が持つ buffer の語、
-/// 端のハンドル、貸した記憶である。記録の worker ID に切り替えた下で呼ぶ。`HeapError` は検査モードの前提の違反で、
-/// driver に出す前に返すので、貸したままの記憶は残らない。確保量の上限は誤りにせず、次の安全点で止まる。
+/// 読めるようになった端 `stream` の読みに、記録の buffer `buf` の長さの後ろの空きを、ちょうど `READ_ROOM` バイト貸す。
+/// 空きが `READ_ROOM` より少なければ、長さに `READ_ROOM` を足した容量の新しい物体に中身を写し、元を手放す。1回の読みが
+/// 足すバイトを、buffer の空きによらず `READ_ROOM` までにするためである (docs/spec/stdlib.md の「`Std.Net`」)。返すのは
+/// 記録が持つ buffer の語、端のハンドル、貸した記憶である。記録の worker ID に切り替えた下で呼ぶ。`HeapError` は検査
+/// モードの前提の違反で、driver に出す前に返すので、貸したままの記憶は残らない。確保量の上限は誤りにせず、次の安全点で
+/// 止まる。
 fn lend_read_room<M: Mode>(
     ctx: &mut Ctx<M>,
     buf: Word,
     stream: Word,
 ) -> Result<(Word, IoHandle, RawBuf), CellFault> {
-    let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
+    let handle = stream_handle(ctx, stream)?;
     let heap = unsafe { ctx.heap_mut() };
     // 貸すことは状態を変えないので、空きを測るのにも使える
     let room = unsafe { heap.bytes_lend(buf)? }.cap;
@@ -2368,6 +2392,10 @@ fn lend_read_room<M: Mode>(
     // 記録が物体を生かし、一意に保ち、完了を受け取るまで書き換えないので、driver はこの空きに書ける
     // (docs/spec/object-model.md の T10 の行)
     let raw = unsafe { heap.bytes_lend(buf)? };
+    let raw = RawBuf {
+        ptr: raw.ptr,
+        cap: READ_ROOM,
+    };
     Ok((buf, handle, raw))
 }
 
@@ -3124,7 +3152,7 @@ fn bytes_ab(ctx: &mut Ctx<eml_rt::Checked>, room: usize) -> Word {
 }
 
 /// 貸した空きが `READ_ROOM` 以上あれば、同じ物体をそのまま貸す。足りなければ、中身を写した新しい物体を貸し、元を
-/// 手放す (docs/spec/vm.md の「操作の記録」)。
+/// 手放す。どちらも貸すのはちょうど `READ_ROOM` バイトである (docs/spec/vm.md の「操作の記録」)。
 #[test]
 fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
     let mut ctx = test_ctx();
@@ -3137,7 +3165,7 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
         let (token, op) = probed_read(&mut registry, &mut ctx, &mut driver, me, buf);
         let lent = registry.op_mut(op).unwrap().buf.unwrap();
         assert_eq!(lent == buf, in_place);
-        assert!(driver.lent.pop().unwrap().cap >= READ_ROOM);
+        assert_eq!(driver.lent.pop().unwrap().cap, READ_ROOM);
         let key = registry.op_mut(op).unwrap().key;
         driver.done.push(Completion {
             key,

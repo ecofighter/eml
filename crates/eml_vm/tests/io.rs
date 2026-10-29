@@ -185,7 +185,93 @@ main () = Async.run (fn () ->
     assert_eq!((s.completions, s.parks, s.cancels), (3, 4, 0));
 }
 
-/// 書きと読みを取り消されるまで終わらせない driver。端が読めるようになるのを待つ操作はすぐ終わる。取り消した書きは、
+/// `Net` のつながった2つのストリーム `a` (接続した側) と `b` (受けた側) を作る本体の頭。待ち受け、受け、接続の完了を
+/// 1つずつ受ける。
+const CONNECTED: &str = "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let a = Net.connect \"127.0.0.1\" port
+  let b = Async.await t
+";
+
+/// `CONNECTED` の後ろに `rest` を足したプログラムの検査モードの `RunStats`。
+fn connected_stats(rest: &str) -> (String, eml_vm::RunStats) {
+    let src = format!("{CONNECTED}{rest}");
+    let (out, stats) = run_stats(src.as_str());
+    (out, stats.unwrap_or_else(|error| panic!("{error}")))
+}
+
+/// `Net.write` は driver の操作を1つ出して完了を1つ受け、`Net.read_chunk` は、ストリームが読めるようになるのを待つ
+/// 操作と、buffer を貸して読む操作の2つの完了を受ける。待ちはどちらも1回である (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn a_net_write_and_read_count_three_more_completions_than_setup() {
+    let (_, setup) = connected_stats(
+        "  Net.close a
+  Net.close b)
+",
+    );
+    let (out, s) = connected_stats(
+        "  let a = Net.write \"hello\" a
+  let (buf, b) = Net.read_chunk (Bytes.of_string \"> \") b
+  Net.close a
+  Net.close b
+  println (String.decode buf))
+",
+    );
+    assert_eq!(out, "> hello\n");
+    assert_eq!(
+        (
+            s.completions - setup.completions,
+            s.parks - setup.parks,
+            s.cancels
+        ),
+        (3, 2, 0)
+    );
+}
+
+/// 書き手のない `Net` のストリームの期限付きの読みは、期限が、読めるようになるのを待つ操作に当たり、その取り消しの
+/// 完了1つで終わる。buffer を貸す操作は出さない。期限は時間の輪に1つ載り、再開は取り消しでなく `None` である
+/// (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn a_timed_out_net_read_counts_one_completion_and_one_timer() {
+    let (_, setup) = connected_stats(
+        "  Net.close a
+  Net.close b)
+",
+    );
+    let (out, s) = connected_stats(
+        "  let (r, b) = Net.read_chunk_within 50 (Bytes.of_string \"keep\") b
+  Net.close a
+  Net.close b
+  match r with
+    | Some _ -> println \"Some\"
+    | None -> println \"None\")
+",
+    );
+    assert_eq!(out, "None\n");
+    assert_eq!(
+        (
+            s.completions - setup.completions,
+            s.timers,
+            s.parks - setup.parks,
+            s.cancels
+        ),
+        (1, 1, 1, 0)
+    );
+}
+
+/// 書きと読みを取り消されるまで終わらせない driver。端が読めるようになるのを待つ操作と、待ち受け、受け、接続はすぐ
+/// 終わる。取り消した書きは、
 /// 次の `completions` で誤りとして終わる。取り消した読みは、取り消しが間に合わなかったものとして、貸された記憶に
 /// `xy` を書いて2バイトで終わる。
 #[derive(Default)]
@@ -220,6 +306,22 @@ impl IoDriver for HoldingDriver {
                 cancelled: false,
             }),
             Op::Read { buf, .. } => self.held.push((key, Some(buf))),
+            Op::Listen { .. } => self.done.push(Completion {
+                key,
+                result: Ok(Done::Listener {
+                    handle: key,
+                    port: 1,
+                }),
+                cancelled: false,
+            }),
+            Op::Accept { .. } | Op::Connect { .. } => self.done.push(Completion {
+                key,
+                result: Ok(Done::Stream {
+                    handle: key,
+                    peer: ([127, 0, 0, 1], 1).into(),
+                }),
+                cancelled: false,
+            }),
             _ => self.held.push((key, None)),
         }
         key
@@ -316,6 +418,50 @@ main () = Async.run (fn () ->
     assert_eq!(out.contents(), "Cancelled: task was cancelled\n");
     let s = finished.stats;
     assert_eq!((s.completions, s.cancels), (1, 1));
+}
+
+/// `Net.write` を待つタスクを取り消すと、`IoTest.write` と同じく、待ちは driver の取り消しの完了まで続き、`Cancelled` で
+/// 再開して種類 `Cancelled` の失敗を投げる。`finish` は取り消した操作の誤りを投げず、記録の buffer を落とし、
+/// ストリームは包みが落とすので、検査モードの漏れの検査も通る (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_cancelled_net_write_wait_raises_cancelled() {
+    let src = "\
+import Async (Async)
+import Async
+import Net
+writer : Net.TcpStream -> <IO, Async> Unit
+writer a =
+  match try_io (fn () -> Net.write \"x\" a) with
+    | Ok a ->
+      Net.close a
+      println \"wrote\"
+    | Err e -> println \"\\{show e.kind}: \\{e}\"
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let u = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let a = Net.connect \"127.0.0.1\" 1
+  let b = Async.await u
+  let t = Async.start (fn () -> writer a)
+  Async.yield_now ()
+  Async.cancel t
+  Net.close b)
+";
+    let (host, out) = capture_host(Default::default());
+    let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
+        .with_driver(Box::new(HoldingDriver::default()));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "Cancelled: task was cancelled\n");
+    let s = finished.stats;
+    // 待ち受け、受け、接続の完了と、取り消した書きの完了
+    assert_eq!((s.completions, s.cancels), (4, 1));
 }
 
 /// 貸した記憶へ読んでいる間に取り消された読みは、取り消しが間に合わずにバイトを読んでいても、タスクを `Cancelled` で

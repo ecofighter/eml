@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/net_server_try_all.em
+---
+--- stdout ---
+echo a
+a connection failed: ConnectionReset: cannot write to the stream: connection reset
+echo c
+server finished
+--- stderr ---
