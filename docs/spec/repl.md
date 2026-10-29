@@ -4,7 +4,7 @@
 
 ## コマンドライン
 
-- `eml repl [--debug-heap] [--sched <normal|sequential|seeded:N>] [file]` でセッションを始める。`--debug-heap` は `eml run` と同じく検査モードにし、`--sched` は `eml run` と同じくスケジュールの方針を選び。`file` を渡すと、最初に `:load file` と同じことをする。ただし `file` を読めなければ、`eml run` と同じく使い方の誤り (``error: cannot read `file`: …``、終了コード 2) にする
+- `eml repl [--debug-heap] [--sched <normal|sequential|seeded:N>] [file]` でセッションを始める。`--debug-heap` は `eml run` と同じく検査モードにし、`--sched` は `eml run` と同じくスケジュールの方針を選ぶ。`file` を渡すと、最初に `:load file` と同じことをする。ただし `file` を読めなければ、`eml run` と同じく使い方の誤り (``error: cannot read `file`: …``、終了コード 2) にする
 - 仮想の時計の時刻は、セッションの間は入力をまたいで続く。時計はセッションの `Machine` が持つので、`:load` で新しいセッションを作ると 0 に戻る。タイマーは入力ごとの run のものなので、入力をまたいで残らない ([VM](vm.md) の「時計と driver」)
 - REPL のプログラムは引数を持たないので、`Env.args ()` は `[]` を返す。標準入力は REPL 自身が入力の行を読むので、プログラムは読めない。`Stdin.open` は通るが、ハンドルの読みと `Stdin.read_text` は I/O の失敗 (`cannot read the standard input: not available`) になる ([標準ライブラリ](stdlib.md) の「ハンドル」)。ハンドルは線形なので、ほかの線形な値と同じく、入力の中で使い切る
 - import の根と Host の相対パスの基準は、`eml run` と同じくカレントディレクトリである。`:load` の後は、import の根はファイルのディレクトリである (「ファイルの読み込み」)
