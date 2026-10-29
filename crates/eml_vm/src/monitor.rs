@@ -43,7 +43,9 @@ impl Monitor {
         let builder = thread::Builder::new()
             .name("eml-monitor".to_string())
             .stack_size(STACK);
-        let thread = spawn_masked(builder, move || watch_loop(&control, &shared)).ok()?;
+        // SIGINT と SIGTERM が監視のスレッドに届くと、VM のスレッドの待っている読みに `EINTR` が来なくなる
+        // (docs/spec/vm.md の「上限と割り込み」)
+        let thread = eml_io::spawn_masked(builder, move || watch_loop(&control, &shared)).ok()?;
         Some(Monitor { watch, thread })
     }
 
@@ -89,38 +91,6 @@ fn watch_loop(control: &Control, watch: &Watch) {
         }
         next += TICK;
     }
-}
-
-/// すべてのシグナルを塞いだまま、監視のスレッドを始める。新しいスレッドは始めたスレッドの塞ぎを受け継ぐので、
-/// `spawn` の間だけ VM のスレッドで塞ぐ。SIGINT が監視のスレッドに届くと、VM のスレッドの待っている読みに `EINTR` が
-/// 来なくなるためである (docs/spec/vm.md の「上限と割り込み」)。
-#[cfg(unix)]
-fn spawn_masked<F: FnOnce() + Send + 'static>(
-    builder: thread::Builder,
-    body: F,
-) -> std::io::Result<JoinHandle<()>> {
-    // 2つの集合はこの関数の局所変数で、`pthread_sigmask` は渡した集合を読み書きするだけである
-    unsafe {
-        let mut all: libc::sigset_t = std::mem::zeroed();
-        let mut old: libc::sigset_t = std::mem::zeroed();
-        assert_eq!(libc::sigfillset(&mut all), 0);
-        assert_eq!(libc::pthread_sigmask(libc::SIG_SETMASK, &all, &mut old), 0);
-        let spawned = builder.spawn(body);
-        assert_eq!(
-            libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut()),
-            0
-        );
-        spawned
-    }
-}
-
-/// Windows のコンソールの handler は OS が作るスレッドで動くので、塞ぐものがない。
-#[cfg(not(unix))]
-fn spawn_masked<F: FnOnce() + Send + 'static>(
-    builder: thread::Builder,
-    body: F,
-) -> std::io::Result<JoinHandle<()>> {
-    builder.spawn(body)
 }
 
 #[cfg(test)]

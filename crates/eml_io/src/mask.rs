@@ -46,3 +46,18 @@ impl Masked {
         Masked
     }
 }
+
+/// SIGINT と SIGTERM を塞いだまま、スレッドを始める。新しいスレッドは始めたスレッドの塞ぎを受け継ぐので、`spawn` の
+/// 間だけ呼んだスレッドで塞ぐ。監視のスレッドと名前の解決のスレッドがこれで始まり、2つのシグナルは VM のスレッドに
+/// 届く (docs/spec/vm.md の「上限と割り込み」)。unix でない OS では、ふつうの `spawn` と同じである。
+pub fn spawn_masked<F, T>(
+    builder: std::thread::Builder,
+    body: F,
+) -> std::io::Result<std::thread::JoinHandle<T>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let _masked = Masked::new();
+    builder.spawn(body)
+}

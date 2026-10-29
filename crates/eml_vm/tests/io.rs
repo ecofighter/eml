@@ -6,7 +6,9 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eml_rt::{Checked, Completion, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf};
+use eml_rt::{
+    Checked, Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf,
+};
 use eml_test_support::{run, run_stats};
 use eml_vm::{Machine, RunConfig, capture_host};
 
@@ -159,7 +161,11 @@ impl IoDriver for HoldingDriver {
         self.next_key += 1;
         let key = self.next_key;
         match op {
-            Op::Readable { .. } => self.done.push(Completion { key, result: Ok(0) }),
+            Op::Readable { .. } => self.done.push(Completion {
+                key,
+                result: Ok(Done::Size(0)),
+                cancelled: false,
+            }),
             Op::Read { buf, .. } => self.held.push((key, Some(buf))),
             _ => self.held.push((key, None)),
         }
@@ -168,16 +174,20 @@ impl IoDriver for HoldingDriver {
 
     fn cancel(&mut self, key: OpKey) {
         if let Some(at) = self.held.iter().position(|&(k, _)| k == key) {
-            let result = match self.held.remove(at).1 {
+            let (result, cancelled) = match self.held.remove(at).1 {
                 Some(buf) => {
                     assert!(buf.cap >= 2);
                     // 記録が完了を受け取るまで、貸された記憶に書いてよい
                     unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), buf.ptr, 2) };
-                    Ok(2)
+                    (Ok(Done::Size(2)), false)
                 }
-                None => Err(io::Error::other("cancelled")),
+                None => (Err(io::Error::other("cancelled")), true),
             };
-            self.done.push(Completion { key, result });
+            self.done.push(Completion {
+                key,
+                result,
+                cancelled,
+            });
         }
     }
 
@@ -199,6 +209,14 @@ impl IoDriver for HoldingDriver {
 
     fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
         Ok((1, 2))
+    }
+
+    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
+        Ok(())
     }
 
     fn close(&mut self, _handle: IoHandle) {}

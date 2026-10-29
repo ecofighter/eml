@@ -642,6 +642,14 @@ impl IoDriver for FakeDriver {
         Ok((1, 2))
     }
 
+    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
+        Ok(())
+    }
+
     fn close(&mut self, _handle: IoHandle) {}
 
     fn quiesce(&mut self) {

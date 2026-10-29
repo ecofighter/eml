@@ -38,8 +38,8 @@ use std::io;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_rt::{
-    Completion, Control, Ctx, Fault, HandleBin, HeapError, IoDriver, IoHandle, Mode, Op, OpKey,
-    RawBuf, Word,
+    Completion, Control, Ctx, Done, Fault, HandleBin, HeapError, IoDriver, IoHandle, Mode, Op,
+    OpKey, RawBuf, Word,
 };
 
 /// 再開するタスクに渡す `Std.Async.Wake` の `Woke` のタグ (docs/spec/stdlib.md の「`Std.Async`」)。
@@ -297,8 +297,15 @@ enum OpPhase {
     Probe,
     /// driver が記憶を読み書きしている。
     Transfer,
-    /// 完了が届いた。
-    Done(io::Result<usize>),
+    /// 完了が届いた。2つ目は完了の `cancelled` で、driver の取り消しだけで終わったことを表す。
+    Done(
+        io::Result<usize>,
+        #[expect(
+            dead_code,
+            reason = "期限の取り消しで終わった完了と、期限と競った本物の誤りを分けるための印で、`Std.IoTest` の行はまだ読まない"
+        )]
+        bool,
+    ),
 }
 
 /// `take_op` が返す、終わった操作の結果。
@@ -1770,7 +1777,7 @@ impl Registry {
         // `Cancelled` で再開する記録には、いつも取り消しの印を付ける。取り出しの行は印で中断を見分け、結果の誤りを
         // 投げずに包みへ返すので、包みが結果によらず `Cancelled` を投げる (docs/spec/stdlib.md の「`Std.IoTest`」)
         record.cancelling |= cancelled;
-        if matches!(record.phase, OpPhase::Done(_)) {
+        if matches!(record.phase, OpPhase::Done(..)) {
             let wake = if cancelled { CANCELLED } else { WOKE };
             return Ok(Some(Runnable::ResumeIo {
                 cell: me,
@@ -1822,15 +1829,28 @@ impl Registry {
         }
         let mut completed = std::mem::take(&mut self.completed);
         driver.completions(&mut completed);
-        for Completion { key, result } in completed.drain(..) {
+        for Completion {
+            key,
+            result,
+            cancelled,
+        } in completed.drain(..)
+        {
             self.stats.completions += 1;
+            // 記録が出すのはバイトの数で終わる操作だけである
+            let result = match result {
+                Ok(Done::Size(n)) => Ok(n),
+                Ok(Done::Listener { .. } | Done::Stream { .. }) => {
+                    return Err(CellFault::Internal("an op completes with a handle"));
+                }
+                Err(e) => Err(e),
+            };
             let op = self
                 .ops
                 .remove(&key)
                 .ok_or(CellFault::Internal("a completion names no op"))?;
             let record = self.op_mut(op)?;
             let result = match (&record.phase, &record.kind, result) {
-                (OpPhase::Done(_), _, _) => {
+                (OpPhase::Done(..), _, _) => {
                     return Err(CellFault::Internal("an op completes twice"));
                 }
                 // 取り消しか期限で driver に取り消しを頼んだ読みには、もう buffer を貸さない。取り消しなら包みは結果に
@@ -1869,7 +1889,7 @@ impl Registry {
                 (OpPhase::Transfer, _, result) => result,
             };
             let record = self.op_mut(op)?;
-            record.phase = OpPhase::Done(result);
+            record.phase = OpPhase::Done(result, cancelled);
             // 終わった操作の期限は要らない。輪の項を残すと、満期に `expire` が待たないタスクを名指す
             let timer = record.timer.take();
             let waiter = record.waiter;
@@ -1910,7 +1930,7 @@ impl Registry {
     ) -> Result<Word, CellFault> {
         let op = self.token_op(ctx, token)?;
         let record = self.op_mut(op)?;
-        if !matches!(record.phase, OpPhase::Done(_)) {
+        if !matches!(record.phase, OpPhase::Done(..)) {
             return Err(CellFault::Internal("an op is taken before its completion"));
         }
         record
@@ -1929,7 +1949,7 @@ impl Registry {
         let op = self.token_op(ctx, token)?;
         let record = self.op_mut(op)?;
         match &record.phase {
-            OpPhase::Done(result) => Ok(record.timed_out && result.is_err()),
+            OpPhase::Done(result, _) => Ok(record.timed_out && result.is_err()),
             OpPhase::Probe | OpPhase::Transfer => {
                 Err(CellFault::Internal("an op is taken before its completion"))
             }
@@ -1946,7 +1966,7 @@ impl Registry {
     ) -> Result<Taken, CellFault> {
         let op = self.token_op(ctx, token)?;
         let record = self.op_mut(op)?;
-        if !matches!(record.phase, OpPhase::Done(_)) {
+        if !matches!(record.phase, OpPhase::Done(..)) {
             return Err(CellFault::Internal("an op is taken before its completion"));
         }
         if record.worker != worker {
@@ -1966,7 +1986,7 @@ impl Registry {
         if let Some(stream) = record.stream {
             unsafe { ctx.heap_mut().decref(stream) }?;
         }
-        let OpPhase::Done(result) = record.phase else {
+        let OpPhase::Done(result, _) = record.phase else {
             unreachable!("the phase is checked above");
         };
         Ok(Taken {
@@ -2649,6 +2669,14 @@ impl IoDriver for NoDriver {
         Ok((0, 1))
     }
 
+    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
+        Ok(())
+    }
+
     fn close(&mut self, _handle: IoHandle) {}
 
     fn quiesce(&mut self) {}
@@ -2697,7 +2725,7 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     let op = registry.token_op(&ctx, token).unwrap();
     registry.ops.clear();
     registry.op_mut(op).unwrap().phase =
-        OpPhase::Done(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
+        OpPhase::Done(Err(io::Error::from(io::ErrorKind::BrokenPipe)), false);
     registry.task_mut(me).unwrap().cancel = true;
     let run = registry
         .park_io(&ctx, &mut driver, token, me, Word::UNIT)
@@ -2757,7 +2785,11 @@ fn probed_read(
             .is_none()
     );
     let key = registry.op_mut(op).unwrap().key;
-    driver.done.push(Completion { key, result: Ok(0) });
+    driver.done.push(Completion {
+        key,
+        result: Ok(Done::Size(0)),
+        cancelled: false,
+    });
     let mut out = Vec::new();
     registry.complete(ctx, driver, 0, &mut out).unwrap();
     // 読めるようになっただけでは再開せず、貸した記憶への読みを新しい鍵で待つ
@@ -2793,7 +2825,11 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
         assert_eq!(lent == buf, in_place);
         assert!(driver.lent.pop().unwrap().cap >= READ_ROOM);
         let key = registry.op_mut(op).unwrap().key;
-        driver.done.push(Completion { key, result: Ok(0) });
+        driver.done.push(Completion {
+            key,
+            result: Ok(Done::Size(0)),
+            cancelled: false,
+        });
         let mut out = Vec::new();
         registry
             .complete(&mut ctx, &mut driver, 0, &mut out)
@@ -2827,7 +2863,11 @@ fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
     let key = registry.op_mut(op).unwrap().key;
     assert_eq!(driver.cancelled, [key]);
     // 取り消しが間に合わず、読みは2バイトで終わった
-    driver.done.push(Completion { key, result: Ok(2) });
+    driver.done.push(Completion {
+        key,
+        result: Ok(Done::Size(2)),
+        cancelled: false,
+    });
     registry
         .complete(&mut ctx, &mut driver, 0, &mut out)
         .unwrap();
@@ -2870,6 +2910,7 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
     driver.done.push(Completion {
         key,
         result: Err(io::Error::other("cancelled")),
+        cancelled: true,
     });
     registry
         .complete(&mut ctx, &mut driver, 0, &mut out)
@@ -2919,11 +2960,13 @@ fn cancelling_or_finishing_a_timed_op_wait_removes_its_timer() {
     assert_eq!(registry.next_deadline(), Some(60));
     driver.done.push(Completion {
         key: k2,
-        result: Ok(1),
+        result: Ok(Done::Size(1)),
+        cancelled: false,
     });
     driver.done.push(Completion {
         key: k1,
         result: Err(io::Error::other("cancelled")),
+        cancelled: true,
     });
     registry
         .complete(&mut ctx, &mut driver, 0, &mut out)
@@ -2967,6 +3010,7 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
     driver.done.push(Completion {
         key,
         result: Err(io::Error::other("cancelled")),
+        cancelled: true,
     });
     let mut out = Vec::new();
     registry
@@ -2992,7 +3036,11 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
     let me = running_task(&mut registry, scope);
     let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
     let key = driver.next_key;
-    driver.done.push(Completion { key, result: Ok(1) });
+    driver.done.push(Completion {
+        key,
+        result: Ok(Done::Size(1)),
+        cancelled: false,
+    });
     let mut out = Vec::new();
     registry
         .complete(&mut ctx, &mut driver, 0, &mut out)
