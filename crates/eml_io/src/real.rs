@@ -605,7 +605,8 @@ impl IoDriver for RealDriver {
         if !self.done.is_empty() {
             return Ok(true);
         }
-        // 別のスレッドからはまだ起こさないので、空きのループが止める語を読めるよう、1回の待ちを短く切る
+        // 止める語が立っても driver を起こす者はいないので (解決のスレッドが起こすのは結果を送ったときだけである)、
+        // 空きのループが止める語を読めるよう、1回の待ちを短く切る
         let timeout = match deadline_ms {
             Some(deadline_ms) => Duration::from_millis(deadline_ms)
                 .saturating_sub(self.now())
