@@ -442,7 +442,7 @@ verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')
 cargo test -p eml_rt trust
 ```
 
-CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`、`miri` の2行が緑であること。
+CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`、`miri` の2行が緑であること。 実行の始めに利用者が決めたとおり、各タスクは Linux と `.#cross` の clippy で確かめ、PR は段を閉じる前に作って CI を流す。macOS と Windows で落ちたら、そのときに直すコミットを足す。
 
 ### T-0: 計画を入れ、roadmap に段を足す
 - 目的: 段の設計と計画をリポジトリに入れ、roadmap の段の列に4つの段を置き、後の段の設計の要点を roadmap に残す (D-1、D-9)。
