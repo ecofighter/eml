@@ -355,7 +355,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - driver は作ったスレッドの上でだけ使う。`eml_io` は driver の型に `unsafe impl Send` を書かない
 - `RealDriver` の作り
   - 出した操作は操作の種類ごとの compio の鍵 (`Key`) として表に持つ。unix の `Readable` は `PollOnce` で読めるようになるのを待ち、Windows の `Readable` は長さ0の `Recv` である (ソケットを IOCP のポートに結び付ける `attach` はまだなく、Windows の `pair` はハンドルを作らない)。`Read` は `Recv`、`Write` は `Send`、仕事は `Asyncify` で、プールのスレッドは32本までである。`buffer_pool` は使わない
-  - `RawBuf` は別の crate の型なので、`real.rs` の包み `Mem` が compio の `IoBuf`、`IoBufMut`、`SetLen` を実装する。`cap == 0` は空の slice である。`eml_io` の本物の driver の `unsafe` は、この包みが `RawBuf` から slice を作る所だけである
+  - `RawBuf` は別の crate の型なので、`real.rs` の包み `Mem` が compio の `IoBuf`、`IoBufMut`、`SetLen` を実装する。`cap == 0` は空の slice である。`eml_io` の本物の driver の `unsafe` は、この包みが `RawBuf` から slice を作る所と、`mask.rs` がシグナルの塞ぎを `pthread_sigmask` で変える所だけである
   - polling の backend は `push` の中でまず読み書きを試すので、`push` が `Ready` を返すことがある。その結果も次の `completions` で返す完了として持つ。そのため、`pair` の端はブロックしない unix のソケットである
   - `completions` は、保留の操作があれば待たずに `poll` してから、すべての鍵を `pop` し、`push` の中で終わったものと合わせて、受け付けの順 (`OpKey` の順) に返す。取り消しは鍵を残したまま `register_cancel` と `cancel_token` で行い、取り消された操作の完了も `pop` で受ける
   - `wait` は期限までの長さと `IDLE_TICK` の短い方だけ `poll` する。`poll` の `Ok`、時間切れ、割り込みは戻っただけと読む (polling の backend は、起こされたときも時間切れを返す)。ほかの誤りで driver は壊れた状態になり、以後の `wait` は `Err` を返し、`completions` は何も返さない。壊れる前に `push` の中で終わっていた結果も返さない。保留の操作の buffer は貸したまま残る

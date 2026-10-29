@@ -11,14 +11,16 @@ pub(crate) struct Masked {
 #[cfg(unix)]
 impl Masked {
     pub(crate) fn new() -> Masked {
-        // 2つの集合はこの関数の局所変数で、`pthread_sigmask` は渡した集合を読み書きするだけである
+        // SAFETY: 2つの集合はこの関数の局所変数で、0 で埋めた `sigset_t` は `sigemptyset` の前の値として正しい。
+        // `pthread_sigmask` は渡した集合を読み書きするだけである。正しい引数ではどの呼び出しも失敗しない
         unsafe {
             let mut block: libc::sigset_t = std::mem::zeroed();
             let mut old: libc::sigset_t = std::mem::zeroed();
-            assert_eq!(libc::sigemptyset(&mut block), 0);
-            assert_eq!(libc::sigaddset(&mut block, libc::SIGINT), 0);
-            assert_eq!(libc::sigaddset(&mut block, libc::SIGTERM), 0);
-            assert_eq!(libc::pthread_sigmask(libc::SIG_BLOCK, &block, &mut old), 0);
+            let mut status = libc::sigemptyset(&mut block);
+            status |= libc::sigaddset(&mut block, libc::SIGINT);
+            status |= libc::sigaddset(&mut block, libc::SIGTERM);
+            status |= libc::pthread_sigmask(libc::SIG_BLOCK, &block, &mut old);
+            debug_assert_eq!(status, 0);
             Masked { old }
         }
     }
