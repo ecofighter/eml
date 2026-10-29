@@ -326,6 +326,7 @@ Windows には次のものが残る。
 
 ### シグナル
 
+- 2回目のシグナルでその場で終わるのは、前の同じシグナルが保留か、もう run を止めている間である (#18)。保留の間を監視の刻み1つに限る案は採らない。その形では、待つタスクがいて同期の読みで止まったプログラムを Ctrl-C で止められないためである。process manager が SIGTERM の2回目に別の意味を求めたときに見直す
 - Windows には `Terminate` を起こす OS の出来事がない。`Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写すことは、Windows のソケットと一緒に入れる ([ロードマップ](roadmap.md) の `net-windows`)
 
 ### TLS と HTTP
