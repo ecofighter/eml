@@ -140,7 +140,7 @@ fn settle<M>(
 
 - 1 のときの `park_io` と `park_io_until` は今の数え方 (`parks`、`cancels`、`timers`) のままである。そのため `parks` は `io_wait` と `io_wait_until` の呼び出しの数、`timers` は今の定義 (地点で取り消されなかった正の期限) のままで、どちらもスケジュールに依らない。
 - `completions` は受け付けで終わった操作と集めた完了の和である。driver の結果1つにつき1つ数える (確かめとその後の読みは2つ)。
-- 予算は今の操作の予算 (タスクごとに 128。`check_cancelled` と同じ `spend_budget`) で、どの `io_wait` も1つ使う。始まるとき、操作の待ちでない再開 (`resumed`) のとき、予算を使い切った操作の待ちからの再開 (`resume_io`) のときに 128 に戻り、予算の残る操作の待ちからの再開では戻らない。操作の待ちが park するかはスケジュールで変わるので、終わった操作の待ちだけで予算を使ったり、park した待ちの再開で戻したりすると、予算の切れる位置と `parks` がスケジュールに依る。`io.rs` の `the_budget_runs_out_at_the_same_wait_in_every_schedule` が、待ちの数の偶奇を変えた2つの形でこれを固定する。
+- 予算は今の操作の予算 (タスクごとに 128。`check_cancelled` と同じ `spend_budget`) で、どの `io_wait` も1つ使う。始まるとき、操作の待ちでない再開 (`resumed`) のとき、予算を使い切った操作の待ちからの再開 (`resume_io`) のときに 128 に戻り、予算の残る操作の待ちからの再開では戻らない。操作の待ちが park するかはスケジュールで変わるので、終わった操作の待ちだけで予算を使ったり、park した待ちの再開で戻したりすると、予算の切れる位置と `parks` がスケジュールに依る。`io_wait` はどの道でも待ちを1つだけ数えるので、予算の切れる位置は `check_cancelled` が譲る `yield_now` の待ちに表れる。`io.rs` の `the_budget_runs_out_at_the_same_point_in_every_schedule` が、ループに `check_cancelled` を入れ、待ちの数の偶奇を変えた2つの形でこれを固定する。io の再開のたびに予算を戻す規則でも、終わった操作の待ちだけで予算を使う規則でも、逐次と seed の `parks` が割れて落ちる。
 - `vm.rs` に `AsyncOpReady` の腕を足し、`Extern::is_async()` と、vm.rs の `Async` の命令にする行の一覧 (3090 行付近の、`Extern::AsyncStartRaw` から並ぶ腕) に足す。
 
 ### 2.5 空きのループの期限と監視のスレッド (`lib.rs`、`sched.rs`、`vm.rs`、T-3)
@@ -388,7 +388,7 @@ io_wait_until op ms =
 | `io.rs` の `echo_counts_do_not_depend_on_the_seed` | 新しく足す。2つのタスクの 20 往復の echo を `Sched::Seeded(1)`、`(2)`、`(3)` と検査モードで流し、`parks` と `completions` が3つで同じ | — |
 | `io.rs` の `a_fast_path_loop_yields_to_another_task_under_sequential` | 新しく足す。`Sequential` で、`main` のタスクが自分の2つの端で書きと読みを 300 回 (`Bytes.truncate 0` で buffer を使い回す)、先に `Async.start` したタスクが `println "other"`。出力が `other\nloop done\n` | — |
 | `io.rs` の `a_cancelled_fast_path_loop_stops_at_its_next_wait` | 新しく足す。`Sequential` で、タスク `t` が自分の2つの端で書きと読みを 1000 回繰り返し、回るたびに `Atomic.add` で数を足す。`main` は名前付きのスコープ `s` に `t` を始めた後 `Async.yield_now ()` で `t` を動かし (`t` は予算の 128 回で譲る)、戻ったら `Async.cancel_scope s` と `Async.await t` を行い、スコープの全体を `try_io` で受ける (`Async.cancel` はハンドルを消費して待てないため)。確かめる値: 結果が種類 `Cancelled` の失敗、数が 64 以上 65 以下 (128 回の `io_wait` は 64 周で、取り消しの後に終える操作は高々1つ)。値は実装で数えて、この範囲で固定する | — |
-| `io.rs` の `the_budget_runs_out_at_the_same_wait_in_every_schedule` | 新しく足す。2つ目の受けが、始めたタスクの接続が先に走ったかで受け付けで終わるか待つかが変わり、その後の `spin_io 62` が予算を越える。`parks` が `Sequential` と seed 1、2、7 で同じ。操作の待ちからの再開で予算を戻すと、131 と 132 に割れる | — |
+| `io.rs` の `the_budget_runs_out_at_the_same_point_in_every_schedule` | 新しく足す。2つ目の受けが、始めたタスクの接続が先に走ったかで受け付けで終わるか待つかが変わる。その後、書き、`check_cancelled`、読みのループが予算を越える。書きを0か1つ足した形と、61、62、200 周の形で、`parks` が `Sequential` と seed 1、2、7 で同じ。io の再開のたびに予算を戻す規則と、終わった操作の待ちだけで予算を使う規則では落ちる | — |
 | `cells.rs` の単体テスト `an_op_used_by_another_task_is_an_internal_error` | 新しく足す。worker 1 で受け付けた記録を worker 2 の `op_of` に渡すと `an op is used by another task` | — |
 | `cells.rs` の単体テスト `a_second_take_of_an_op_is_an_internal_error` | 新しく足す。受け付けで終わった記録を `take_op` で2回取り出すと、2回目が `an op names no record`。LIR の本文からは書けない。`Async` の命令はどれも std の3つのエントリを要し、手で書いた LIR はそれを持たないためである | — |
 | `cells.rs` の単体テスト `op_ready_counts_a_wait_only_on_a_finished_op` | 新しく足す。2.4節の表の4行 (終わっていない、地点が投げる、続ける、先に譲る) の結果と数える欄 | — |

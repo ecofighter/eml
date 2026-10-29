@@ -713,14 +713,15 @@ fn a_cancelled_fast_path_loop_stops_at_its_next_wait() {
     assert_eq!(out, "Cancelled\n64\n");
 }
 
-/// 2つ目の受けは、始めたタスクの接続が先に走ったかで、受け付けで終わるか待つかが変わる。その後の速い道のループは
-/// 操作の予算を越える。予算は操作が終わっていたかによらず待ちごとに1つ使い、`parks` は待ちごとに1つ数えるので、
-/// 予算の切れる位置も `parks` も逐次と seed の run で同じである。書きを1つ足して待ちの数の偶奇を変えた形も流す
-/// (docs/spec/stdlib.md の「操作の予算」)。
+/// 2つ目の受けは、始めたタスクの接続が先に走ったかで、受け付けで終わるか待つかが変わる。その後のループは、操作の
+/// 予算を越えるまで書き、`check_cancelled`、読みを繰り返す。`io_wait` はどの道でも待ちを1つだけ数えるので、予算の切れる
+/// 位置は `check_cancelled` が譲る `yield_now` の待ちの数に表れる。予算は操作が終わっていたかによらず待ちごとに1つ使い、
+/// 戻す時点もプログラムで決まるので、その数も `parks` も逐次と seed の run で同じである。書きを1つ足して待ちの数の偶奇を
+/// 変えた形も流す (docs/spec/stdlib.md の「操作の予算」)。
 #[test]
-fn the_budget_runs_out_at_the_same_wait_in_every_schedule() {
+fn the_budget_runs_out_at_the_same_point_in_every_schedule() {
     for extra in [0, 1] {
-        for n in [61, 62] {
+        for n in [61, 62, 200] {
             let writes = "  let a = Net.write \"y\" a\n".repeat(extra);
             let src = format!(
                 "{SPIN_IO}  let l2 = Net.listen \"127.0.0.1\" 0
@@ -729,11 +730,21 @@ fn the_budget_runs_out_at_the_same_wait_in_every_schedule() {
   let _ = spin 40
   let (s, l2) = Net.accept l2
   Net.close_listener l2
-{writes}  spin_io {n} counter (Bytes.empty ()) a b
+{writes}  spin_checked {n} (Bytes.empty ()) a b
   Net.close s
   Net.close (Async.await t))
 spin : Int -> <Panic> Int
 spin n = if n == 0 then 0 else spin (n - 1)
+spin_checked : Int -> Bytes -> Net.TcpStream -> Net.TcpStream -> <IO, Panic, Async> Unit
+spin_checked n buf a b =
+  if n == 0 then
+    Net.close a
+    Net.close b
+  else
+    let a = Net.write \"x\" a
+    Async.check_cancelled ()
+    let (buf, b) = Net.read_chunk (Bytes.truncate 0 buf) b
+    spin_checked (n - 1) buf a b
 "
             );
             let program = eml_test_support::lir(src.as_str());

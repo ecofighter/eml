@@ -612,12 +612,12 @@ pub(crate) struct TaskStats {
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
-    /// `park_io`、`park_io_until`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`
+    /// `park_io`、`park_io_until`、`park_signal`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`
     /// (速い道が譲る `reschedule` は除く)、真を返した `cancel_point`、偽を返した `claim_scope` を数える
     /// (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
-    /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` と `park_io_until` を数える。
-    /// `park_io_until` は、操作がもう終わっていて輪に載せなかったときも数える。`ms > 0` で続けた `op_ready` も同じく数える。
+    /// `ms > 0` で、地点で取り消されなかった時間の待ちの数。`park_time` と `park_io_until` と、終わった操作で続けるか
+    /// 譲った `op_ready` を数える。`park_io_until` は、操作がもう終わっていて輪に載せなかったときも数える。
     pub(crate) timers: u64,
     /// channel に品物を積んだ回数と取った回数の和。
     pub(crate) channel_ops: u64,
@@ -3533,6 +3533,10 @@ fn a_cancel_during_a_fast_yield_is_counted_once() {
     assert_eq!(registry.resumed(me, WOKE, false).unwrap(), WOKE);
     assert_eq!(registry.stats.cancels, 0);
     assert_eq!(registry.task_mut(me).unwrap().budget, BUDGET);
+    // 次の取り消しの地点が1回だけ数える
+    assert!(registry.cancel_point(Some(me)).unwrap());
+    assert_eq!(registry.stats.cancels, 1);
+    registry.task_mut(me).unwrap().cancel = false;
     // 予算の残る操作の待ちからの再開は予算を戻さない
     registry.task_mut(me).unwrap().budget = 5;
     registry.task_mut(me).unwrap().phase = Phase::Parked;
