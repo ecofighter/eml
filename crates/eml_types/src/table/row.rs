@@ -359,7 +359,7 @@ impl Table<'_> {
         self.effect_occurs_in(effect, ty)
     }
 
-    /// `effect_occurs` の row 版。row のラベルそのものと、ラベルの型引数を調べる。
+    /// `effect_occurs` の row 向けのもの。row のラベルそのものと、ラベルの型引数を調べる。
     pub fn effect_occurs_in_row(&self, effect: EffectId, row: &Row) -> bool {
         let _walk = self.start_walk();
         self.effect_occurs_within(effect, row)

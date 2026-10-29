@@ -396,7 +396,7 @@ fn f(x.0: float) -> Vec3{{float, float, float}} {{
 
 #[test]
 fn an_unused_struct_unbox_is_removed_and_the_call_becomes_tail() {
-    // `g` の入口で引数を受け直す `unbox` は、box の挿入の覗き穴が箱をそのまま渡すので使われない。`h` の `apply` の
+    // `g` のエントリで引数を受け直す `unbox` は、box の挿入の覗き穴が箱をそのまま渡すので使われない。`h` の `apply` の
     // 結果を受け直す `unbox` は、葉をどれも使わない。構造体の `unbox` は純粋な `let` なので縮約がどちらも消し、
     // その後の呼び出しは末尾呼び出しになる
     let text = "\

@@ -850,7 +850,7 @@ impl<M: Mode> Ctx<M> {
         lemma_listed_kept(h3, h0, d, x, self.evv, self.max_evv);
     }
 
-    /// 入口の表の欄 `op` を書く物理的な位置は `i` で、その欄は書ける。
+    /// エントリの表の欄 `op` を書く物理的な位置は `i` で、その欄は書ける。
     pub(super) proof fn lemma_entry_slot(&self, s0: Ctx<M>, ev: Word, op: int, i: int)
         requires
             s0.held_ok(),
@@ -1917,7 +1917,7 @@ pub(super) proof fn lemma_word_kept<M: Mode>(
     }
 }
 
-/// evidence の形は、語を変えない変化で保たれる。入口の表が書いた物体なら、その表の形は呼ぶ側が示す。
+/// evidence の形は、語を変えない変化で保たれる。エントリの表が書いた物体なら、その表の形は呼ぶ側が示す。
 pub(super) proof fn lemma_ev_kept<M: Mode>(
     h1: Heap<M>,
     h0: Heap<M>,
@@ -1959,7 +1959,7 @@ pub(super) proof fn lemma_ev_kept<M: Mode>(
     }
 }
 
-/// 入口の表の形は、語を変えない変化で保たれる。
+/// エントリの表の形は、語を変えない変化で保たれる。
 pub(super) proof fn lemma_table_kept<M: Mode>(
     h1: Heap<M>,
     h0: Heap<M>,
@@ -1995,7 +1995,7 @@ pub(super) proof fn lemma_table_kept<M: Mode>(
 }
 
 /// evidence `ev` の状態の欄 (`f` = 1) か外側の欄 (`f` = 2) だけを `v` に書いた変化。`ev` は evidence のままで、
-/// 節点や入口の表は書いていない。
+/// 節点やエントリの表は書いていない。
 pub(super) proof fn lemma_ev_field_written<M: Mode>(
     h1: Heap<M>,
     h0: Heap<M>,
@@ -2055,7 +2055,7 @@ pub(super) proof fn lemma_ev_field_written<M: Mode>(
         && h1.tag_of(e) == h0.tag_of(e) by {}
 }
 
-/// 入口の表 `t` の欄 `op` だけを `c` に書いた変化。表は入口の表のままで、節点や evidence は書いていない。
+/// エントリの表 `t` の欄 `op` だけを `c` に書いた変化。表はエントリの表のままで、節点や evidence は書いていない。
 pub(super) proof fn lemma_entry_written<M: Mode>(
     h1: Heap<M>,
     h0: Heap<M>,
@@ -2119,7 +2119,7 @@ pub(super) proof fn lemma_entry_written<M: Mode>(
 }
 
 /// リストの節点と evidence が保たれる変化では、リストの列も変わらない。書いた物体 `x` は節点でなく、evidence か
-/// 入口の表なら、その形は呼ぶ側が示す。
+/// エントリの表なら、その形は呼ぶ側が示す。
 pub(super) proof fn lemma_path_kept<M: Mode>(
     h1: Heap<M>,
     h0: Heap<M>,

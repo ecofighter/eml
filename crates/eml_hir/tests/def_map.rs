@@ -121,7 +121,7 @@ fn fixities_belong_to_the_definition_a_name_resolves_to() {
 
 #[test]
 fn prelude_fixities_follow_the_standard_table() {
-    // docs/spec/declarations.md の標準の演算子の表。入口のモジュールから、Prelude の `pub` の fixity として引く
+    // docs/spec/declarations.md の標準の演算子の表。エントリのモジュールから、Prelude の `pub` の fixity として引く
     let table: &[(&[&str], u8, Assoc)] = &[
         (&["<|"], 0, Assoc::Right),
         (&["|>"], 1, Assoc::Left),

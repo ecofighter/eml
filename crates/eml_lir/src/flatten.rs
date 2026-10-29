@@ -708,7 +708,7 @@ fn constant_target(value: Atom, cases: &[Case], default: Option<BlockId>) -> Opt
     matched.map(|case| case.target).or(default)
 }
 
-/// 入口から届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。辺の入らないブロックを残すと、構造の
+/// エントリから届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。辺の入らないブロックを残すと、構造の
 /// 規則 (docs/spec/lir.md の「構造の規則」の R4) に反する。
 fn prune(function: &mut LirFn) {
     let mut reached = vec![false; function.blocks.len()];

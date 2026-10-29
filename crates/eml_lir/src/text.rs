@@ -7,7 +7,7 @@
 use crate::syntax::{self, FnState, Reader, error};
 use crate::{Atom, Block, Call, Ctor, LirFn, ParseError, Program, Reuse, Rhs, Stmt, Term, VarId};
 
-/// `pretty` の表示を `Program` に戻す。入口は `entry$main` という名前の関数で、なければ最初の関数である。
+/// `pretty` の表示を `Program` に戻す。エントリは `entry$main` という名前の関数で、なければ最初の関数である。
 pub fn parse(text: &str) -> Result<Program, ParseError> {
     let tokens = syntax::lex(text)?;
     let mut parser = Parser {
@@ -35,7 +35,7 @@ struct Parser<'t> {
 }
 
 impl Parser<'_> {
-    /// 関数の頭に、入口のブロックとラベルの付いたブロックの列が続く。
+    /// 関数の頭に、エントリのブロックとラベルの付いたブロックの列が続く。
     fn function(&mut self) -> Result<LirFn, ParseError> {
         let mut state = FnState::default();
         let header = self.reader.function_header(&mut state)?;

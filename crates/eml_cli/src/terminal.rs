@@ -41,7 +41,7 @@ pub fn run(debug_heap: bool, sched: Sched, clock: Clock, file: Option<PathBuf>) 
             match fs::read_to_string(&shown) {
                 Ok(text) => Some((shown, text)),
                 Err(error) => {
-                    // `eml run` の入口と同じく、読めないファイルは使い方の誤りにする
+                    // `eml run` のエントリと同じく、読めないファイルは使い方の誤りにする
                     eprintln!("error: cannot read `{}`: {error}", path.display());
                     return ExitCode::from(2);
                 }
@@ -174,7 +174,7 @@ impl Terminal {
     /// 結果によらずファイルを覚えるので、誤りを直してから `:reload` で読める。
     fn load_text(&mut self, shown: &str, text: &str) -> Flow {
         self.replace_with_empty();
-        // import の根は、`eml run` の入口と同じくファイルのディレクトリである
+        // import の根は、`eml run` のエントリと同じくファイルのディレクトリである
         let dir = Path::new(shown)
             .parent()
             .filter(|dir| !dir.as_os_str().is_empty())

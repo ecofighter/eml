@@ -51,8 +51,8 @@ const PROGRAMS: [&str; 41] = [
     "upsert_by_hand",
 ];
 
-/// 自動の版と手で特殊化した `_by_hand` の版の組と、両方の出力。`state_loop` の組は、状態を渡す形の
-/// 特殊化と、状態を手で渡す版を比べる (docs/implementation/benchmarks.md の「回数のテスト」)。
+/// 自動に任せたプログラムと手で特殊化した `_by_hand` のプログラムの組と、両方の出力。`state_loop` の組は、状態を渡す形の
+/// 特殊化と、状態を手で渡すプログラムを比べる (docs/implementation/benchmarks.md の「回数のテスト」)。
 const PAIRS: [(&str, &str, &str); 6] = [
     ("orders", "orders_by_hand", "150308561\n"),
     ("push_fold", "push_fold_by_hand", "5000050000\n"),
@@ -1465,8 +1465,8 @@ fn par_tree() {
     ");
 }
 
-/// `var` の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。`var` で書いた版と、`MutArray` を線形に
-/// 受け渡して手で書いた版の組と、両方の出力。
+/// `var` の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。`var` で書いたプログラムと、`MutArray` を線形に
+/// 受け渡して手で書いたプログラムの組と、両方の出力。
 const VAR_PAIRS: [(&str, &str, &str); 2] = [
     ("sieve_var", "sieve_by_hand", "2262\n"),
     (
@@ -1476,7 +1476,7 @@ const VAR_PAIRS: [(&str, &str, &str); 2] = [
     ),
 ];
 
-/// `var` の版が手書きの版より多く確保する数。経路の関数の末尾でない呼び出しから2つ以上の値が戻る所のタプルは、
+/// `var` のプログラムが手書きのプログラムより多く確保する数。経路の関数の末尾でない呼び出しから2つ以上の値が戻る所のタプルは、
 /// 構造体になり、確保しなくなった。fannkuch-redux に残る 1 は、`main` が受ける 8 つの値の組で、6 語を
 /// 超えるので構造体にしない (docs/spec/core-ir.md の「構造体にする型」)。
 const RESIDUAL: [(&str, u64); 2] = [("sieve_var", 0), ("fannkuch_var", 1)];
@@ -1532,7 +1532,7 @@ fn allocations_are_counted_in_checked_mode() {
     assert!(stats.allocations >= 100_000, "{stats:?}");
 }
 
-/// 既知の閉包の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。既知の閉包を渡す版と手で特殊化した版で、
+/// 既知の閉包の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。既知の閉包を渡すプログラムと手で特殊化したプログラムで、
 /// 確保と `box` / `unbox` の回数が同じになる。RC の回数は、本体を埋め込む融合で揃うので、下の
 /// `specialization_matches_hand_written_rc` が比べる。
 #[test]
@@ -1548,8 +1548,8 @@ fn specialization_matches_hand_written_work() {
     }
 }
 
-/// インライン化と融合の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。インライン化と融合の後は、自動の版と
-/// `_by_hand` の版の6つの組で、RC の回数も同じになる。
+/// インライン化と融合の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。インライン化と融合の後は、自動に任せたプログラムと
+/// `_by_hand` のプログラムの6つの組で、RC の回数も同じになる。
 #[test]
 fn specialization_matches_hand_written_rc() {
     for (name, by_hand, output) in PAIRS {
@@ -1638,7 +1638,7 @@ fn unwind_points() {
 }
 
 /// 呼び出しの規約と構造体の表現の引き換え (docs/implementation/benchmarks.md の「呼び出しの規約の引き換え」と「構造体の表現の引き換え」)。特殊化されない `List.map` が呼ぶ関数の値は結果が一様なので、
-/// 受けた `Float` をそのまま返すラムダの版が、要素ごとに結果の `Float` の箱を1つ作る。組を入れ替える関数の値を渡すと、ラムダが要素の組を箱から
+/// 受けた `Float` をそのまま返すラムダの変種が、要素ごとに結果の `Float` の箱を1つ作る。組を入れ替える関数の値を渡すと、ラムダが要素の組を箱から
 /// 取り出して入れ替え、新しい箱に入れて返す。その回数を固定して記録する。特殊化される組の入れ替えと、RC の葉を3つ持つ組を展開しない関数に通す形も
 /// 固定する。
 #[test]

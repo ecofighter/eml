@@ -305,7 +305,7 @@ spec fn data_obj<M: Mode>(h: Heap<M>, w: Word, scan: u8) -> bool {
     &&& h.owned(w)
 }
 
-/// 入口の表。読める tag 0 の `Data` の物体で、どの欄も `dup` できる。
+/// エントリの表。読める tag 0 の `Data` の物体で、どの欄も `dup` できる。
 spec fn table_ok<M: Mode>(h: Heap<M>, t: Word) -> bool {
     &&& t.is_ptr_spec()
     &&& h.readable(t)
@@ -316,7 +316,7 @@ spec fn table_ok<M: Mode>(h: Heap<M>, t: Word) -> bool {
     &&& forall|i: int| 0 <= i < h.count_of(t) ==> dupable(h, #[trigger] h.scanned_word(t, i))
 }
 
-/// evidence の浅い形 (docs/spec/object-model.md の「evidence の3つの物体」)。[入口の表, 状態, 外側の evv] を持つ。
+/// evidence の浅い形 (docs/spec/object-model.md の「evidence の3つの物体」)。[エントリの表, 状態, 外側の evv] を持つ。
 /// 外側の evv がリストとして正しいことは入れない。入れると節点の述語と互いに再帰し、検査モードで確かめる費用が
 /// handler の入れ子の深さについて指数になるためである。
 spec fn ev_ok<M: Mode>(h: Heap<M>, e: Word) -> bool {
@@ -1069,7 +1069,7 @@ impl<M: Mode> Ctx<M> {
     /// ヒープを入れ替えない。`Ctx` が持つ語 (`evv` と yield の状態) を手放したり書き換えたりせず、それらの語からたどれる
     /// 物体の欄も書き換えない。`set_worker` を呼ばない (worker は `switch_task` で替える)。それらの語から届く物体の
     /// うち、前提で rc が正であることを求める物体 (`ev_take_state` と `ev_set_state` の evidence、`ev_set_clause` の
-    /// 入口の表) は、使い終わるまで `share` しない。そのほかの物体は `share` してよい。`share` が変えるのは `lin` で
+    /// エントリの表) は、使い終わるまで `share` しない。そのほかの物体は `share` してよい。`share` が変えるのは `lin` で
     /// ない局所の物体の rc の符号と、受け手に移す物体の持ち主だけで (速いモードの受け手は今の worker である)、
     /// `held_ok` は共有の `lin` でない物体を許すためである (docs/spec/object-model.md の「欄」)。`Ctx` のメソッドを
     /// 次に呼ぶ前に、作っている物体を書き終える。
@@ -1656,7 +1656,7 @@ impl<M: Mode> Ctx<M> {
         self.evv
     }
 
-    /// エフェクト `effect` の evidence を作る。入口の表は欄が `n_ops` 個で、どれも `()` である。tag はエフェクトの
+    /// エフェクト `effect` の evidence を作る。エントリの表は欄が `n_ops` 個で、どれも `()` である。tag はエフェクトの
     /// 番号 + 1 にする (docs/spec/object-model.md の「evidence の3つの物体」)。`state` と `outer` は消費する。
     ///
     /// # Safety
@@ -1722,7 +1722,7 @@ impl<M: Mode> Ctx<M> {
                 lemma_alloc_moved(h1, h0, table);
                 lemma_alloc_moved(h2, h1, ev);
                 lemma_moved_chain(h2, h1, h0, z, z, z, none, none, none);
-                // 先に作った入口の表は、外の参照を1つ持ったまま生き残る
+                // 先に作ったエントリの表は、外の参照を1つ持ったまま生き残る
                 assert(live(h1, table.bits_spec()));
                 lemma_arg_moved(h2, h1, z, none, table);
                 assert(h2.scanned_word(ev, 0).bits_spec() == 1);
@@ -1932,11 +1932,11 @@ impl<M: Mode> Ctx<M> {
         Ok(w)
     }
 
-    /// 入口の表の欄 `op` を `dup` して返す。`ev` は借りる。
+    /// エントリの表の欄 `op` を `dup` して返す。`ev` は借りる。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`ev` は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`ev`
-    /// は evidence で、`op` は入口の数より小さい (検査モードは確かめ、違えば `BadEvidence` を返す)。
+    /// は evidence で、`op` はエントリの数より小さい (検査モードは確かめ、違えば `BadEvidence` を返す)。
     pub unsafe fn ev_clause(&mut self, ev: Word, op: usize) -> (r: Result<Word, HeapError>)
         requires
             old(self).wf(),
@@ -2221,13 +2221,13 @@ impl<M: Mode> Ctx<M> {
         r
     }
 
-    /// 入口の表の欄 `op` に節の本体 `c` を入れる。`c` は消費し、`ev` は借りる。欄が 255 個以上の表は、先頭に数の語を
+    /// エントリの表の欄 `op` に節の本体 `c` を入れる。`c` は消費し、`ev` は借りる。欄が 255 個以上の表は、先頭に数の語を
     /// 持つので、書く位置を1つずらす (docs/spec/object-model.md の「物体の形」)。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`ev` と `c` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側が `c`
-    /// の参照を1つ持つ。速いモードでは、`ev` は evidence で、`op` は入口の数より小さく、欄はまだ `()` で、`c` は `lin`
-    /// ビットを持たず、入口の表はほかのスレッドが読めない局所の物体である (検査モードは確かめ、違えば `BadEvidence`
+    /// の参照を1つ持つ。速いモードでは、`ev` は evidence で、`op` はエントリの数より小さく、欄はまだ `()` で、`c` は `lin`
+    /// ビットを持たず、エントリの表はほかのスレッドが読めない局所の物体である (検査モードは確かめ、違えば `BadEvidence`
     /// を、書けない表には `NotWritable` を返す)。
     pub unsafe fn ev_set_clause(&mut self, ev: Word, op: usize, c: Word) -> (r: Result<
         (),
@@ -2352,7 +2352,7 @@ impl<M: Mode> Ctx<M> {
         Ok(())
     }
 
-    /// `ev` と同じ入口の表を指し、状態を `state` に、外側の `evv` を今の `evv` にした新しい evidence を返す。tag は
+    /// `ev` と同じエントリの表を指し、状態を `state` に、外側の `evv` を今の `evv` にした新しい evidence を返す。tag は
     /// `ev` と同じである。`state` は消費し、`ev` は借りる。
     ///
     /// # Safety
@@ -3221,7 +3221,7 @@ impl<M: Mode> Ctx<M> {
         matches!(m.kind(), Kind::Data) && m.scan() == scan && !m.lin()
     }
 
-    /// `ev` が evidence の形かを確かめ、入口の表を返す。表の欄の値は、読む操作が確かめる。
+    /// `ev` が evidence の形かを確かめ、エントリの表を返す。表の欄の値は、読む操作が確かめる。
     fn checked_ev(&self, ev: Word) -> (r: Result<Word, HeapError>)
         requires
             M::CHECKED,

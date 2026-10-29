@@ -10,7 +10,7 @@ use eml_lir::FnIdx;
 pub(crate) fn retain_reachable(program: &mut Program) {
     let count = program.functions.len();
     let mut reached = vec![false; count];
-    // 入口の関数は eml のコードから呼ばれないので、名前を根にして残す (docs/spec/core-ir.md の「最適化」)
+    // エントリの関数は eml のコードから呼ばれないので、名前を根にして残す (docs/spec/core-ir.md の「最適化」)
     let mut pending = vec![program.entry];
     pending.extend(
         program

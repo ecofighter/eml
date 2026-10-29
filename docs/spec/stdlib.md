@@ -501,7 +501,7 @@ pub abstract data Set a =
 
 `Stdin.Stdin` と `FileIn.FileIn` は読むためのハンドルで、`Stdout.Stdout`、`Stderr.Stderr`、`FileOut.FileOut` は書くためのハンドルである。ハンドルの型ごとに1つのモジュールを置き、どのモジュールも、開く関数 (`open`、`FileOut` では `create` と `append`)、`close`、次の規則の名前の読みか書きを持つ。読みと書きを型で分けるので、取り違えは型の誤り (E2001) になる。`Proc.Child` は子のプロセスとやりとりするハンドルで、子の標準入力への書きと標準出力の読みの両方を持つ。`Proc.spawn` で作り、`close` の代わりに `Proc.wait` で使い終える (下の「`Proc`」の「`Child`」)。`Child` もほかのハンドルとは別の型なので、`FileIn` の関数に渡すと型の誤りになる。
 
-関数の名前は、std 全体で次の規則に従う。文字列を読み書きする関数が短い名前を持ち、バイト列の版は `_bytes` を足す。読みは `read_all` と `read_all_bytes`、`read_line` と `read_line_bytes` で、書きは `write` と `write_bytes`、文字列だけの `write_line` である。バイト列にしかない読み (`read_chunk`) は、その名前のままである。スクリプトの大半は文字列を読み、文字列の読みが UTF-8 を確かめることが「`String` はいつも妥当な UTF-8」を支えるので、文字列の版を既定にする。
+関数の名前は、std 全体で次の規則に従う。文字列を読み書きする関数が短い名前を持ち、バイト列向けの関数は `_bytes` を足す。読みは `read_all` と `read_all_bytes`、`read_line` と `read_line_bytes` で、書きは `write` と `write_bytes`、文字列だけの `write_line` である。バイト列にしかない読み (`read_chunk`) は、その名前のままである。スクリプトの大半は文字列を読み、文字列の読みが UTF-8 を確かめることが「`String` はいつも妥当な UTF-8」を支えるので、文字列向けの関数を既定にする。
 
 - ハンドルは線形な型 (`Lin`) で、ちょうど1回使う ([線形性](linearity.md))。`Stdin`、`Stdout`、`Stderr`、`FileIn` の `close h` は `drop h` と同じで、ハンドルを手放して閉じる。`FileOut` の `close` は書き出してから閉じ、書き出せなければ誤りを返す (下の「`FileOut`」)
 - 読む関数はハンドルを借りて読み、結果を先に、同じハンドルを後に置いた組で返す。`Stdin`、`FileIn`、`Child` は同じ名前と同じ形の読む関数を持つ (下の「`Stdin`」、「`FileIn`」、「`Proc`」)
@@ -692,8 +692,8 @@ pub abstract data Set a =
 ### 起動
 
 - `run c` は、標準入出力を受け継いで子を起動し、終わるのを待って終了コードを返す
-- `output c` は、子の標準出力を文字列に読み、終了コードと組で返す。子の標準入力は空 (`/dev/null`) である。`output_bytes` はバイト列の版で、UTF-8 を確かめない
-- `capture c` は `output` と同じく標準出力を読み、終了コードが 0 なら読んだ文字列を返す。0 でなければ IO の失敗 (`kind` は `Other`、``command `git` exited with code 128``) で、読んだ出力は捨てる。`capture_bytes` はバイト列の版である。失敗するコマンドは、バグでなく IO の条件として `try_io` で扱う
+- `output c` は、子の標準出力を文字列に読み、終了コードと組で返す。子の標準入力は空 (`/dev/null`) である。`output_bytes` はバイト列向けの関数で、UTF-8 を確かめない
+- `capture c` は `output` と同じく標準出力を読み、終了コードが 0 なら読んだ文字列を返す。0 でなければ IO の失敗 (`kind` は `Other`、``command `git` exited with code 128``) で、読んだ出力は捨てる。`capture_bytes` はバイト列向けの関数である。失敗するコマンドは、バグでなく IO の条件として `try_io` で扱う
 - `spawn c` は、標準入力と標準出力を pipe にして子を起動し、`Child` を返す (下の「`Child`」)
 - 標準エラーの向きはどの形でも `Cmd` の設定に従う。`merge_stderr` の標準エラーは、`output` と `capture` では文字列に入り、`run` では標準出力に出て、`spawn` では `read_*` で読める
 - 終了コードは子の終了コードで、シグナルで終わった子は、シェルと同じく 128 + シグナルの番号にする。これは unix だけで、Windows にはシグナルで終わる子がない
@@ -726,7 +726,7 @@ std の中だけの extern は次の4つである。
 
 ### `Child`
 
-`Child` は、子のプロセスと、その標準入力への書き口と、標準出力の読み手を持つハンドルである (上の「ハンドル」)。線形な型 (`Lin`) で、ちょうど1回使う。
+`Child` は、子のプロセスと、その標準入力への書き込む端と、標準出力の読み手を持つハンドルである (上の「ハンドル」)。線形な型 (`Lin`) で、ちょうど1回使う。
 
 - `write`、`write_bytes`、`write_line` は、`FileOut` の同じ名前の関数と同じ形で、子の標準入力に書く。`Child` は buffer を持たず、書くたびに pipe に書き出す
 - `close_stdin h` は子の標準入力を閉じ、子に EOF を届ける。閉じた後の書き込みは `not available` で失敗する
@@ -899,7 +899,7 @@ main () =
 - 子の実行時エラーは評価を止め、ほかの子の結果では救わない。両方の子が誤りなら左の誤りを報告する ([VM](vm.md) の「子の誤り」)。捕まえられなかった子の `Panic` は親で起こし直した `panic` の実行時エラーになり、文言はソースの位置を持たない ([実装の現在地](../implementation/status.md) の「`par`」)
 - 子の閉包は `Lin` の値を捕まえて消費でき、`Lin` の値を返してもよい。extern のスキームは、関数型の引数の矢印の Kind と、その最後の結果だけに現れる型変数を固定しないためである ([宣言](declarations.md) の「`extern`」)。返った値は組に1回入るか、もう一方の子が中断したときに落とされる。落とすのは、`Lin` の値を持つフレームの巻き戻しと同じである ([線形性](linearity.md) の「暗黙の後始末」)。そのため、`both` と `par` は同じ型を受け付ける (`par` は row の上限だけが狭い)
 - `par` は Prelude から出さない。`import Std.Par` と書いて `Par.par` で呼ぶか、`import Par (par, both)` で修飾せずに使う
-- `both f g` は、呼んだ側の文脈で `f ()`、`g ()` の順に呼び、結果の組を返す。row に上限がないので、`IO` を起こす計算も渡せる。`par` と同じ組を逐次に作る版である
+- `both f g` は、呼んだ側の文脈で `f ()`、`g ()` の順に呼び、結果の組を返す。row に上限がないので、`IO` を起こす計算も渡せる。`par` と同じ組を逐次に作る関数である
 - 引数をそろえた `par` の呼び出しは、extern の命令でなく `par` の命令になる。部分適用 (`Par.par f`) と値として使う `Par.par` は、同じ命令を本体に持つ包む関数 `$externN` になる ([Core IR](core-ir.md) の「`par` の呼び出し」)
 
 ## `Std.Async`
@@ -952,7 +952,7 @@ main () = println (show (Async.run body))
 - タスクは閉じた row `<IO, Panic, Async>` で始まる。始めた側の handler と `var` はタスクから見えない。`var` を捕まえた閉包を `start` や `spawn` に渡すと型の誤り (E2002) になる
 - `Async` は抽象エフェクトで、操作 `await_cell`、`reschedule`、`await_time`、`await_drain`、`await_send`、`await_recv`、`await_io`、`await_io_until` は `Std.Async` の外から perform も handle もできない (E1058。[エフェクトと handler](effects.md) の「抽象エフェクト」)。利用者は `await`、`yield_now` などの包む関数を呼ぶ。channel の待ちは `chan_wait_send` と `chan_wait_recv` が包む (下の「`Std.Chan`」)
 
-`Async` のエフェクト、ランタイムが名前で呼ぶ入口、extern の行は、eml とランタイムの間の ABI である。形を変えるときはランタイムも合わせて変える。
+`Async` のエフェクト、ランタイムが名前で呼ぶエントリ、extern の行は、eml とランタイムの間の ABI である。形を変えるときはランタイムも合わせて変える。
 
 ```haskell
 pub data Wake =
@@ -984,7 +984,7 @@ pub data Failure =
 - `Wake` は、ランタイムが待たせたタスクを再開するときに渡す値である。ランタイムは配置の表を見ずに、宣言の順のタグ (`Woke` = 0、`Cancelled` = 1。`eml_lir::WAKE_WOKE`、`WAKE_CANCELLED`) で作る。タグと宣言の順が合うことはテストで確かめる。ランタイムは取り消したタスクを `Cancelled` で再開する
 - `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Scope` は `Cell` と同じ形の即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
 - `OpId` は driver に出した操作の記録を指す token の `Foreign` で、Kind は `Lin`、Repr は `obj` である。受け付けの行が作り、取り出しの行が消費する。待つ間はランタイムが預かり、再開のときに継続へ返す。受け付けから取り出しまでを1つの包みの関数の中で行うので、利用者のコードは `OpId` を持たず、`Chan` でも送れない。取り出すのは受け付けたタスクだけで、ほかのタスクの取り出しは内部の誤り `an op is taken by another task` になる。取り出す前に落とした token は内部の誤り `an op token was dropped before its take` になる。包みは受け付けから待ちまで投げうる呼び出しを挟まず、取り出しは投げる前に token を受け取るので、std の包みからはどちらも起きない ([VM](vm.md) の「`Async` のタスク」)
-- ランタイムが名前で呼ぶ入口は、std の3つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit`、`resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit`、`resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どれも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に、`await_time` の節は継続を `park_time` に、`await_drain` の節は継続を `park_drain` に、`await_send` の節は継続を `park_send` に、`await_recv` の節は継続を `park_recv` に、`await_io` の節は token と継続を `park_io` に、`await_io_until` の節は token と期限と継続を `park_io_until` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`resume_io k w op` は `k` に組 `(w, op)` を渡す。extern は組を作らない ([Core IR](core-ir.md) の「translate の配置」) ので、組は eml の入口が作る。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。3つの入口が単相の std の関数であることもテストで確かめる
+- ランタイムが名前で呼ぶエントリは、std の3つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit`、`resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit`、`resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どれも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に、`await_time` の節は継続を `park_time` に、`await_drain` の節は継続を `park_drain` に、`await_send` の節は継続を `park_send` に、`await_recv` の節は継続を `park_recv` に、`await_io` の節は token と継続を `park_io` に、`await_io_until` の節は token と期限と継続を `park_io_until` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`resume_io k w op` は `k` に組 `(w, op)` を渡す。extern は組を作らない ([Core IR](core-ir.md) の「translate の配置」) ので、組は eml のエントリが作る。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。3つのエントリが単相の std の関数であることもテストで確かめる
 - タスクの底 (`bottom`) は、`try_all` で本体の失敗を捕まえ、成功した結果を `finish_ok` に、IO の失敗を種類と文言のまま `finish_io` に、`Panic` を文言のまま `finish_panic` に渡す
 - extern の行は次の31行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
@@ -1024,11 +1024,11 @@ pub data Failure =
 
 - タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
 - `take_result` と `run_result` が返す値の型が、`finish_ok` に預けた値の型と合うことは、処理系は確かめない。生の行を `pub` にせず、`start`、`start_in`、`run`、`await` のシグネチャだけが本体の結果の型 `a` とハンドルの `Task a` を結ぶことで、標準ライブラリが保つ
-- 預かる引数の矢印 (`start_raw`、`run_raw`、`start_in_raw` の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`ready` の継続) には、閉じた row を書く。ランタイムはそれを呼ばず、入口の `start_task`、`resume_task`、`resume_io` が呼ぶので、row は入口の型が決める
+- 預かる引数の矢印 (`start_raw`、`run_raw`、`start_in_raw` の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`ready` の継続) には、閉じた row を書く。ランタイムはそれを呼ばず、エントリの `start_task`、`resume_task`、`resume_io` が呼ぶので、row はエントリの型が決める
 - `park_io` と `park_io_until` は token を預からずに消費する。token は `Lin` の `Foreign` で、型変数を持たないためである。待つ間は操作の記録が token を持ち、再開の仕事が `resume_io` に渡す
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
-- `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のための口で、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
-- `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.IoTest` のための口で、同じ理由で `pub` である。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.IoTest`」)
+- `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のためのインターフェースで、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
+- `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.IoTest` のためのインターフェースで、同じ理由で `pub` である。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.IoTest`」)
 
 ### スコープ
 

@@ -173,7 +173,7 @@ fn modules_are_read_from_the_entry_directory() {
         ],
     );
     let nested = eml_in(&dir, &["run", "--debug-heap", "app/main.em"]);
-    // ディレクトリのない入口のパスでは、根が作業ディレクトリになる
+    // ディレクトリのないエントリのパスでは、根が作業ディレクトリになる
     let bare = eml_in(&dir.join("app"), &["check", "main.em"]);
     let dotted = eml_in(&dir, &["check", "./app/main.em"]);
     let absolute_path = dir.join("app/main.em");
@@ -189,7 +189,7 @@ fn modules_are_read_from_the_entry_directory() {
 #[test]
 fn a_miscased_entry_path_is_still_the_entry() {
     // 大文字小文字を区別しないファイルシステムでは `t/server.em` で `t/Server.em` を開ける。そのときも依存先の
-    // `import Server` は入口を指す E1030 で、入口を2回読んだ循環 (E1027) にしない (docs/spec/modules.md の「モジュール」)
+    // `import Server` はエントリを指す E1030 で、エントリを2回読んだ循環 (E1027) にしない (docs/spec/modules.md の「モジュール」)
     let dir = temp_project(
         "cli-entry-case",
         &[
@@ -199,7 +199,7 @@ fn a_miscased_entry_path_is_still_the_entry() {
     );
     let output = eml_in(&dir, &["check", "t/server.em"]);
     std::fs::remove_dir_all(&dir).unwrap();
-    // 大文字小文字を区別するファイルシステムでは、入口が読めない使い方の誤りになる
+    // 大文字小文字を区別するファイルシステムでは、エントリが読めない使い方の誤りになる
     if output.status.code() == Some(2) {
         return;
     }

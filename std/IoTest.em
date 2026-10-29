@@ -1,4 +1,4 @@
--- 実行系のテストのための、driver の操作の口 (docs/spec/stdlib.md の「`Std.IoTest`」)。利用者の API ではなく、断りなく
+-- 実行系のテストのための、driver の操作のインターフェース (docs/spec/stdlib.md の「`Std.IoTest`」)。利用者の API ではなく、断りなく
 -- 変わる。待つ関数は受け付けから取り出しまでを1つの呼び出しの中で行い、token の `OpId` を外へ出さない
 import Async (Async)
 
@@ -76,7 +76,7 @@ checksum delay b =
 raise_cancelled : Unit -> <IO> a
 raise_cancelled () = fail_io Prelude.Cancelled "task was cancelled"
 
--- ランタイムの口。受け付けの行は buffer とストリームを操作の記録に移して token を返し、`op_stream` は終わった記録から
+-- ランタイムのインターフェース。受け付けの行は buffer とストリームを操作の記録に移して token を返し、`op_stream` は終わった記録から
 -- ストリームを取り出し、`op_timed_out` は終わった記録が期限で誤りになったかを読み、取り出しの行は token を消費して
 -- 記録を放す。`submit_checksum` は buffer の中身を写して仕事に渡す (docs/spec/vm.md の「`Async` のタスク」)
 extern open_pair       : Unit -> <IO> Stream

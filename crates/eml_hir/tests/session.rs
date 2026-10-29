@@ -164,7 +164,7 @@ fn session_modules_follow_the_prelude_in_input_order() {
             ModuleOrigin::Session(3),
         ]
     );
-    // 今の入力 (最後の入力) が入口である
+    // 今の入力 (最後の入力) がエントリである
     assert_eq!(loaded.files.path(loaded.entry), "<input 3>");
 }
 
@@ -288,7 +288,7 @@ fn a_session_has_no_main() {
         module_named(&lowered.loaded, "<input 1>")
     );
     assert_eq!(lowered.program.entry, lowered.def_map.entry());
-    // セッションでは `check_main` を当てないので、`main` を入口の関数として探さない
+    // セッションでは `check_main` を当てないので、`main` をエントリの関数として探さない
     assert_eq!(lowered.program.main(), None);
 }
 
@@ -593,7 +593,7 @@ fn later_inputs_and_functions_refer_to_a_binding() {
 
 #[test]
 fn a_binding_does_not_see_itself() {
-    // 右辺の `x` は前の版の `x` である
+    // 右辺の `x` は前のバージョンの `x` である
     let lowered = lower(&[(1, "let x = 1"), (2, "let x = x + 1")], &[]);
     assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
     insta::assert_snapshot!(eml_hir::pretty(&lowered.program), @"
@@ -690,7 +690,7 @@ fn a_file_input_is_read_as_a_file_under_its_path() {
     );
 }
 
-/// 式だけのテキストは、入力の入口なら式の入力になる。ファイルの文法では構文の誤りで、入力の関数を作らない。
+/// 式だけのテキストは、入力のエントリなら式の入力になる。ファイルの文法では構文の誤りで、入力の関数を作らない。
 #[test]
 fn a_file_input_does_not_take_an_expression() {
     let inputs = [SessionInput {
@@ -706,7 +706,7 @@ fn a_file_input_does_not_take_an_expression() {
     assert_eq!(program.input(), None);
 }
 
-/// ファイルは `eml run` の入口と同じく import できない。依存先からも、後の入力からも E1030 である。
+/// ファイルは `eml run` のエントリと同じく import できない。依存先からも、後の入力からも E1030 である。
 #[test]
 fn the_loaded_file_cannot_be_imported() {
     let file = "import Util\nmain : Unit -> <IO> Unit\nmain _ = Util.go ()\n";
@@ -721,7 +721,7 @@ fn the_loaded_file_cannot_be_imported() {
         diagnostics.iter().any(|d| d.contains("E1030")),
         "{diagnostics:?}"
     );
-    // ファイルを受け付けなかったセッションでも、入口のファイル名は渡るので同じ
+    // ファイルを受け付けなかったセッションでも、エントリのファイル名は渡るので同じ
     let inputs = [SessionInput {
         number: 2,
         text: "import Main2",

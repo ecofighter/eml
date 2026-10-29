@@ -1,7 +1,7 @@
-//! handle、`perform`、`resume`、`mask` の変換と、節ごとの in-place の入口
+//! handle、`perform`、`resume`、`mask` の変換と、節ごとの in-place のエントリ
 //! (docs/spec/core-ir.md の「handle と `prompt$`」「再開と状態」
-//! 「`perform` と節の3つの形」「`mask` の包み」)。入口を先にすべて決めてから、関数ごとに命令を置き換える。handle の場所は
-//! 入口の関数を `ev_set_clause` に入れるので、どの節がどの形になるかを先に知る必要があるためである。
+//! 「`perform` と節の3つの形」「`mask` の包み」)。エントリを先にすべて決めてから、関数ごとに命令を置き換える。handle の場所は
+//! エントリの関数を `ev_set_clause` に入れるので、どの節がどの形になるかを先に知る必要があるためである。
 
 use std::mem;
 
@@ -19,8 +19,8 @@ use eml_lir::{
 use super::split::Annotations;
 use super::{Helpers, captured_mark, direct, dummy};
 
-/// translate の節の関数 g ごとの in-place の入口。すぐに再開する節では g 自身を書き換えて入口にし、ほかの節では
-/// yield を始める入口 `g$entry` を足す。返す表は g から入口への対応である。
+/// translate の節の関数 g ごとの in-place のエントリ。すぐに再開する節では g 自身を書き換えてエントリにし、ほかの節では
+/// yield を始めるエントリ `g$entry` を足す。返す表は g からエントリへの対応である。
 pub(super) fn entries(
     program: &mut Program,
     count: usize,
@@ -38,7 +38,7 @@ pub(super) fn entries(
     }
     let mut entries = FxHashMap::default();
     for (clause, effect, op) in clauses {
-        // 同じ g を2回書き換えると、入口の引数と状態の取り出しが重なる。translate は節ごとに別の g を作る
+        // 同じ g を2回書き換えると、エントリの引数と状態の取り出しが重なる。translate は節ごとに別の g を作る
         debug_assert!(
             !entries.contains_key(&clause),
             "a clause function is handled once"
@@ -82,7 +82,7 @@ pub(super) fn lower(
         .any(|stmt| handled(stmt).is_some());
     let mut function = source.clone();
     let prompt = handles.then(|| helpers.prompt(program));
-    // 節の値のクロージャは handle のためだけに作られるので、作る関数を入口に替える
+    // 節の値のクロージャは handle のためだけに作られるので、作る関数をエントリに替える
     let clause_closures: FxHashSet<VarId> = function
         .blocks
         .iter()
@@ -319,9 +319,9 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
     uses == returns
 }
 
-/// すぐに再開する節の関数 g を、その場で入口にする。引数を「捕獲、evidence、操作の引数」にし、状態は入口の先頭で
+/// すぐに再開する節の関数 g を、その場でエントリにする。引数を「捕獲、evidence、操作の引数」にし、状態はエントリの先頭で
 /// evidence の欄から取り出す。末尾の `resume k(v, s)` は、状態を欄に戻して v を返す形にする。本体が何かを呼ぶなら
-/// under の形にし、入口の先頭で `evv` を evidence の外側に替え、`return` の前に戻す。節の本体は handler の外側で
+/// under の形にし、エントリの先頭で `evv` を evidence の外側に替え、`return` の前に戻す。節の本体は handler の外側で
 /// 動くので、本体の中の中断と `perform` が handle の本体の中の handler に届かないようにするためである。何も呼ばず、
 /// `Pure` の extern だけを使う節では `evv` を読む命令がないので、替えない (docs/spec/core-ir.md の
 /// 「`perform` と節の3つの形」)。
@@ -465,7 +465,7 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     function.ret_mark = ret_mark;
     function.name.push_str("$entry");
     function.clause = Some((effect, op));
-    // 入口は操作の ABI で呼ばれ、`prompt$` に呼ばれる節の `split` を持たない
+    // エントリは操作の ABI で呼ばれ、`prompt$` に呼ばれる節の `split` を持たない
     // (docs/spec/lir.md の「関数の ABI」)
     function.split = None;
 }
@@ -494,7 +494,7 @@ fn calls_anything(clause: &CoreFn, resumes: &[(usize, usize)]) -> bool {
     })
 }
 
-/// 再開する節と `never` の節の入口 `g$entry`。節のクロージャを作って yield か中断を始め、ダミーを返す。`prompt$` が
+/// 再開する節と `never` の節のエントリ `g$entry`。節のクロージャを作って yield か中断を始め、ダミーを返す。`prompt$` が
 /// 後でそのクロージャを、再開する節なら `(k, st)`、`never` の節なら `(st)` で呼ぶ。
 fn yielding_entry(
     program: &mut Program,
@@ -547,7 +547,7 @@ fn yielding_entry(
     };
     let value = dummy(ret, |info, rhs| b.bind(info, rhs));
     b.terminate(Term::Return(value));
-    // `yield_to` の入口はいつも yield を始めるので、g の印によらず `yields` を立てる。`never` の入口は中断を始めるだけで、
+    // `yield_to` のエントリはいつも yield を始めるので、g の印によらず `yields` を立てる。`never` のエントリは中断を始めるだけで、
     // 中断は継続を作らずに巻き戻すので立てない (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
     // 戻り値の印は操作の表から写す。`never` の操作の表の印は `poly` である
     let mut entry = b.finish(
@@ -589,13 +589,13 @@ impl Out<'_> {
         var
     }
 
-    /// 結果の印は基本操作の表の印である。evidence、`evv`、入口のクロージャは `unr` になる。
+    /// 結果の印は基本操作の表の印である。evidence、`evv`、エントリのクロージャは `unr` になる。
     fn prim(&mut self, name: &str, repr: Repr, prim: Prim, args: Vec<Atom>) -> VarId {
         let mark = prim.row().ret_mark;
         self.bind(name, repr, mark, Rhs::Prim(prim, args))
     }
 
-    /// 新しい evidence に入口を入れて `evv` の先頭に足し、本体を呼んで、その結果を `prompt$` に渡す。本体の
+    /// 新しい evidence にエントリを入れて `evv` の先頭に足し、本体を呼んで、その結果を `prompt$` に渡す。本体の
     /// `apply` は yield の地点にしない。yield したかは `prompt$` が見る。
     #[expect(clippy::too_many_arguments, reason = "the parts of one handle")]
     fn handle(
@@ -656,7 +656,7 @@ impl Out<'_> {
         });
     }
 
-    /// 今の `evv` から evidence を探し、その入口を節の呼び出しで呼ぶ。
+    /// 今の `evv` から evidence を探し、そのエントリを節の呼び出しで呼ぶ。
     fn perform(&mut self, result: VarId, effect: u32, op: u32, args: Vec<Atom>) {
         let evidence = self.prim("ev", Repr::Obj, Prim::EvLookup(effect), Vec::new());
         let entry = self.prim(

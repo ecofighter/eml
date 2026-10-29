@@ -1,5 +1,5 @@
 //! 複数の値の呼び出しと戻り、構造体と箱の間の変換 (docs/spec/vm.md の「呼び出しと戻り」、docs/spec/lir.md の「box の挿入」と「ダミーの値」)。構造体はまだソースから作られないので、構造体を持つ手書きの LIR を
-//! パスに通して実行する。`apply` の引数と結果の構造体は一様な箱で渡り、型どおりの関数の値は一様な版を通る。ダミーを
+//! パスに通して実行する。`apply` の引数と結果の構造体は一様な箱で渡り、型どおりの関数の値は一様な変種を通る。ダミーを
 //! 受ける命令は、パスの後の形の LIR を手で書いて確かめる。
 
 use eml_vm::CompileError;
@@ -143,7 +143,7 @@ fn times(k.0: float, v.1: {V}) -> {V} {{
     assert_eq!(stats.allocations, DUMMY + 3, "{stats:?}");
 }
 
-/// 構造体を返す関数を `apply` で呼ぶと、一様な版が葉を受けて箱を1つ作る。受けた側は箱から葉を取り出す。
+/// 構造体を返す関数を `apply` で呼ぶと、一様な変種が葉を受けて箱を1つ作る。受けた側は箱から葉を取り出す。
 #[test]
 fn a_struct_result_crosses_an_apply_in_a_box() {
     let text = format!(
@@ -166,7 +166,7 @@ fn make(u.0: unit) -> {V} {{
     assert_eq!(stats.allocations, DUMMY + 1, "{stats:?}");
 }
 
-/// `apply` の構造体の引数は箱で渡る。結果が一様な `first` は箱から葉を取り出し、型どおりの `same` の一様な版は
+/// `apply` の構造体の引数は箱で渡る。結果が一様な `first` は箱から葉を取り出し、型どおりの `same` の一様な変種は
 /// 箱から葉を取り出して `same` を呼び、結果をまた箱に入れる。
 #[test]
 fn struct_arguments_cross_an_apply_in_boxes() {
@@ -383,7 +383,7 @@ fn main() -> unit {
     );
 }
 
-/// 入口の関数は値を1つ返す。`load` は結果が複数の値の入口を断る。
+/// エントリの関数は値を1つ返す。`load` は結果が複数の値のエントリを断る。
 #[test]
 fn a_multi_value_entry_is_rejected_at_load() {
     let text = "\
@@ -440,12 +440,12 @@ fn third(p.0: {t}) -> obj {{
     let (out, stats) = run_lowered_stats(&text);
     let stats = stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "4611686018427387904\nhello\n");
-    // `box` は `make` の結果の `int` と `float` の葉と、`first` の結果の `int` の3つである。`first` と `third` の版が
+    // `box` は `make` の結果の `int` と `float` の葉と、`first` の結果の `int` の3つである。`first` と `third` の変種が
     // 葉の箱を2つずつ開け、`main` が `first` の結果の箱を開ける
     assert_eq!((stats.boxes, stats.unboxes), (3, 5), "{stats:?}");
 }
 
-/// `tobj` と宣言された欄に入った構造体は、箱の中でも箱になる。一様な版が入れ子の箱を作り、共有の箱から2回取り出す
+/// `tobj` と宣言された欄に入った構造体は、箱の中でも箱になる。一様な変種が入れ子の箱を作り、共有の箱から2回取り出す
 /// たびに、入れ子の箱からも葉を取り出す。
 #[test]
 fn a_nested_struct_boxes_and_unboxes_its_inner_struct() {
@@ -481,6 +481,6 @@ fn sum(s.0: {seg}) -> float {{
     let (out, stats) = run_lowered_stats(&text);
     let stats = stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "7.5\n");
-    // `box` は `sum` の版の `float` の結果の2つで、`main` がどちらも開ける。入れ子の箱は `con` で作る
+    // `box` は `sum` の変種の `float` の結果の2つで、`main` がどちらも開ける。入れ子の箱は `con` で作る
     assert_eq!((stats.boxes, stats.unboxes), (2, 2), "{stats:?}");
 }

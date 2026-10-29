@@ -1287,7 +1287,7 @@ table! {
         AtomicAdd => row("Std.Atomic.add", &[Int, Int], Int, Purity::Effectful),
         AtomicLoad => row("Std.Atomic.load", &[Int], Int, Purity::Effectful),
         AtomicStore => row("Std.Atomic.store", &[Int, Int], Unit, Purity::Effectful),
-        // 実行系のテストのための内部の口 (docs/spec/stdlib.md の「`Std.IoTest`」)。受け付けの行は buffer とストリームを
+        // 実行系のテストのための内部のインターフェース (docs/spec/stdlib.md の「`Std.IoTest`」)。受け付けの行は buffer とストリームを
         // 消費して操作の記録に移し、取り出しの行が token を消費して記録を放す
         IoTestOpenPair => kinded(
             "Std.IoTest.open_pair",

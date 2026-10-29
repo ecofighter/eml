@@ -351,7 +351,7 @@ fn clauses_states_and_outer_lists<M: Mode>() {
         ctx.heap_mut().decref(taken).unwrap();
         // 外側の evv は、作ったときの evv (空) である
         assert_eq!(ctx.ev_evv(ev).unwrap(), UNIT);
-        // renew は同じ入口の表を指し、外側を今の evv にする
+        // renew は同じエントリの表を指し、外側を今の evv にする
         let renewed = ctx.ev_renew(ev, UNIT).unwrap();
         let got = ctx.ev_clause(renewed, 1).unwrap();
         assert_eq!(got, clause);
@@ -368,7 +368,7 @@ fn clauses_states_and_outer_lists<M: Mode>() {
     assert_eq!(super::mortal(ctx.heap()), 0);
 }
 
-/// 操作が 255 個以上のエフェクトの入口の表は、先頭に数の語を持つ (docs/spec/object-model.md の「物体の形」)。
+/// 操作が 255 個以上のエフェクトのエントリの表は、先頭に数の語を持つ (docs/spec/object-model.md の「物体の形」)。
 fn entry_tables_with_a_count_word<M: Mode>() {
     let mut ctx = ctx::<M>();
     let ev = push(&mut ctx, 0, 300);
@@ -424,7 +424,7 @@ fn bad_evidence_is_reported_in_checked_mode<M: Mode>() {
         // 範囲の外の操作
         let ev = push(&mut ctx, 0, 1);
         assert_eq!(ctx.ev_clause(ev, 1).unwrap_err(), HeapError::BadEvidence);
-        // 入口の欄に2回入れる
+        // エントリの欄に2回入れる
         let c = ctx.heap_mut().alloc_data(0, 1, 0, false);
         ctx.ev_set_clause(ev, 0, c).unwrap();
         let c2 = ctx.heap_mut().alloc_data(0, 1, 0, false);
@@ -802,7 +802,7 @@ fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
     }
 }
 
-/// `ev_take_evv` は外側の evv の参照を呼ぶ側へ移し、欄を `()` にする。入口の表と状態はそのままで、evidence の形も
+/// `ev_take_evv` は外側の evv の参照を呼ぶ側へ移し、欄を `()` にする。エントリの表と状態はそのままで、evidence の形も
 /// 保たれる (docs/spec/object-model.md の「evidence の3つの物体」)。
 fn taking_the_outer_list_leaves_a_retired_evidence<M: Mode>() {
     let mut ctx = ctx::<M>();

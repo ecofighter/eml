@@ -148,7 +148,7 @@ impl RunConfig {
     }
 }
 
-/// プログラムを1回だけ実行する。新しい `Machine` に読み込み、入口を実行し、閉じる。
+/// プログラムを1回だけ実行する。新しい `Machine` に読み込み、エントリを実行し、閉じる。
 pub fn execute(
     program: &Program,
     config: &RunConfig,
@@ -166,12 +166,12 @@ pub fn execute(
 /// `Machine::load` の結果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Loaded {
-    /// 読み込んだプログラムの入口の関数の、`CodeBase` での番号。
+    /// 読み込んだプログラムのエントリの関数の、`CodeBase` での番号。
     pub entry: u32,
 }
 
 /// 入力をまたいで `CodeBase` と `Ctx` を持つ実行の状態 (docs/spec/vm.md の「追記」)。`load` でプログラムを追記し、
-/// `run` で入口の関数を実行する。モードごとの確かめは、作るときに `Machine<Fast>::new` と `Machine<Checked>::new` が
+/// `run` でエントリの関数を実行する。モードごとの確かめは、作るときに `Machine<Fast>::new` と `Machine<Checked>::new` が
 /// 決める。
 pub struct Machine<M: Mode> {
     /// 時計と待ち。`with_driver` が渡すか、最初の run が `clock` と方針の seed から作り、run の間は `Scheduler` に
@@ -179,7 +179,7 @@ pub struct Machine<M: Mode> {
     /// driver が貸した記憶はヒープにあるので、`Drop` は `ctx` より先にこの欄を落とす (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
     code: CodeBase<M>,
-    /// 毒された `Machine` では、driver が貸したままの記憶を放さないように、`Drop` が落とさずに漏らす。
+    /// poisoned の `Machine` では、driver が貸したままの記憶を放さないように、`Drop` が落とさずに漏らす。
     ctx: ManuallyDrop<Ctx<M>>,
     /// `quiesce` の後にも driver が保留の操作を残した。この後の run、回復、`close` はヒープに触れずに driver の誤りを
     /// 返す (docs/spec/vm.md の「時計と driver」)。
@@ -287,7 +287,7 @@ impl<M: Mode> Machine<M> {
         Ok(Loaded { entry })
     }
 
-    /// 入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
+    /// エントリの関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
     /// 根は手放さず、次の実行に残す。続けられる誤りの後と `exit` が実行を捨てた後は、根から届く物体を新しいヒープに
     /// 写して古いヒープを捨て、元の誤りか `exit` の `Finished` を返す。回復が失敗したら `Unrecovered` を返す
     /// (docs/spec/vm.md の「追記」)。
@@ -296,8 +296,8 @@ impl<M: Mode> Machine<M> {
             .map(|(finished, _)| finished)
     }
 
-    /// 文字列を返す入口の関数を実行し、結果の文字列の先頭 `max_chars` 文字を写して返す。REPL が式の入力の値を書いた
-    /// 文字列を受け取るのに使う。LIR は入口が文字列を返すことを印さないので、呼ぶ側が文字列を返す入口にだけ使う。誤りと
+    /// 文字列を返すエントリの関数を実行し、結果の文字列の先頭 `max_chars` 文字を写して返す。REPL が式の入力の値を書いた
+    /// 文字列を受け取るのに使う。LIR はエントリが文字列を返すことを印さないので、呼ぶ側が文字列を返すエントリにだけ使う。誤りと
     /// 回復は `run` と同じである。`exit` で終わった実行は結果を返さないので、文字列は `None` になる
     /// (docs/spec/vm.md の「追記」)。
     pub fn run_shown(
@@ -324,7 +324,7 @@ impl<M: Mode> Machine<M> {
             // 登録表は `run_scheduled` が返るときに捨ててあるので、古いヒープの語を持つものは回復の後に残らない
             // (docs/spec/vm.md の「追記」)
             Ok(Ran::Abandoned(finished, cause)) => self.recover(cause).map(|_| (finished, None)),
-            // 毒された `Machine` は回復せず、run の誤りをそのまま返す
+            // poisoned の `Machine` は回復せず、run の誤りをそのまま返す
             Err(cause) if !cause.is_broken() && !self.poisoned => Err(match self.recover(cause) {
                 Ok(cause) | Err(cause) => cause,
             }),
@@ -333,7 +333,7 @@ impl<M: Mode> Machine<M> {
     }
 
     /// 誤り `cause` の後にヒープを入れ替え、成功したら `cause` を返す。失敗したら、回復の誤りを足した `Unrecovered`
-    /// か、毒された `Machine` の driver の誤りを返す。
+    /// か、poisoned の `Machine` の driver の誤りを返す。
     fn recover(&mut self, cause: RuntimeError) -> Result<RuntimeError, RuntimeError> {
         // カーネルやプールのスレッドが書いている記憶を写したり放したりしないように、ヒープに触れる前に driver を
         // 空にする (docs/spec/object-model.md の「回復」)
@@ -471,7 +471,7 @@ impl<M: Mode> Machine<M> {
         }
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
-        // `exit` で終わった実行の入口の結果はダミーなので写さない
+        // `exit` で終わった実行のエントリの結果はダミーなので写さない
         let exit = ctx.heap().control().exit_code();
         let copied = match (&result, shown, exit) {
             (Ok(()), Some(max_chars), None) => {
@@ -612,7 +612,7 @@ impl<M: Mode> Drop for Machine<M> {
     }
 }
 
-/// 毒された `Machine` の誤り。
+/// poisoned の `Machine` の誤り。
 fn poisoned_fault(function: &str) -> RuntimeError {
     RuntimeError::Fault {
         fault: VmFault::Driver(KEPT_PENDING.to_string()),
@@ -623,7 +623,7 @@ fn poisoned_fault(function: &str) -> RuntimeError {
 
 /// `run_entry` の結果。
 enum Ran {
-    /// 入口の関数が戻った。`exit` で終わったときは、`main` の底が終わりの欄に書いてある。
+    /// エントリの関数が戻った。`exit` で終わったときは、`main` の底が終わりの欄に書いてある。
     Done(Finished, Option<String>),
     /// `main` でないタスクの底の `exit` が run を捨てた。誤りは回復が失敗したときの `cause` に使う。
     Abandoned(Finished, RuntimeError),
@@ -803,7 +803,7 @@ fn check_leaks(ctx: &Ctx<Checked>) -> Result<(), RuntimeError> {
     }
 }
 
-/// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。毒された `Machine` の `Poisoned` だけは driver
+/// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。poisoned の `Machine` の `Poisoned` だけは driver
 /// の誤りにする。REPL は `Machine::load` の誤りをこれで報告する。
 pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
     let (what, function) = match error {

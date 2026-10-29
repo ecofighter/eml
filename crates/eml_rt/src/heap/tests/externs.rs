@@ -137,7 +137,7 @@ fn check_index_accepts_only_positions_inside_the_length() {
     );
 }
 
-/// 幅 `w` の語のシフトの素直な版。`i128` で計算して `w` ビットに切る。量が負なら逆向きで、符号を反転しない
+/// 幅 `w` の語のシフトの素直な実装。`i128` で計算して `w` ビットに切る。量が負なら逆向きで、符号を反転しない
 fn naive_shift(x: i64, n: i64, width: u32, left: bool) -> i64 {
     let (left, amount) = if n < 0 {
         (!left, -(n as i128))

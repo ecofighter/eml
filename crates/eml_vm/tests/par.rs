@@ -277,7 +277,7 @@ fn run_with(
     (out.contents(), result)
 }
 
-/// 入口は最初の関数なので、`PRELUDE` の前に置く。レイアウトとエフェクトの宣言は先頭に要る。
+/// エントリは最初の関数なので、`PRELUDE` の前に置く。レイアウトとエフェクトの宣言は先頭に要る。
 fn with_prelude(text: &str) -> String {
     let (decls, functions) =
         PRELUDE.split_at(PRELUDE.find("clause ").expect("the prelude has functions"));
@@ -966,7 +966,7 @@ fn the_monitor_preempts_a_long_par_child() {
     );
 }
 
-/// 子の誤りの規則を、ソースから作った `fork$` と `reperform$` のコードで確かめる。上の手書きの LIR の版は VM の
+/// 子の誤りの規則を、ソースから作った `fork$` と `reperform$` のコードで確かめる。上の手書きの LIR のテストは VM の
 /// 順序を、こちらは利用者の見る規則を確かめる (docs/implementation/testing.md の「重複させない」)。誤りは
 /// 小さい深さの上限で起こす。既定の上限の `DepthLimit` は UI テストで起こすには大きすぎるためである。
 mod source {

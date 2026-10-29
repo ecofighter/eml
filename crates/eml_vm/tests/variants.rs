@@ -1,5 +1,5 @@
-//! 型どおりの関数を値として使うときの一様な版 `<f>$uniform` (docs/spec/lir.md の「関数の ABI」)。薄い形と写しの形、
-//! 薄い形のフレームを通る yield と再開、版のフレームを通る巻き戻しを、ソースから作ったプログラムで確かめる。
+//! 型どおりの関数を値として使うときの一様な変種 `<f>$uniform` (docs/spec/lir.md の「関数の ABI」)。薄い形と写しの形、
+//! 薄い形のフレームを通る yield と再開、変種のフレームを通る巻き戻しを、ソースから作ったプログラムで確かめる。
 
 use eml_test_support::{lir, run_stats};
 use eml_vm::RunStats;
@@ -38,8 +38,8 @@ fn stats(text: &str, expected: &str) -> RunStats {
     result.unwrap_or_else(|error| panic!("{error}"))
 }
 
-/// 末尾の位置で `apply` も `clause` も呼ばない関数の版は薄い形で、引数を取り出して元の関数を呼び、結果を箱に入れる。
-/// `apply_twice` は末尾の位置で `apply` を呼ぶので、版は写しの形で、写した本体が末尾の `apply` を持つ。
+/// 末尾の位置で `apply` も `clause` も呼ばない関数の変種は薄い形で、引数を取り出して元の関数を呼び、結果を箱に入れる。
+/// `apply_twice` は末尾の位置で `apply` を呼ぶので、変種は写しの形で、写した本体が末尾の `apply` を持つ。
 #[test]
 fn a_variant_is_thin_unless_its_function_ends_in_an_apply() {
     let text = format!(
@@ -66,8 +66,8 @@ main () =
     stats(&text, "2.5\n");
 }
 
-/// 写しの形は、結果が型どおりの関数への末尾の位置の直接の呼び出しを、その関数の版へ向け直す。`inner` の版は
-/// `outer` の版を、`outer` の版は `inner` の版を末尾で呼ぶので、2つの版の輪は型どおりのコードへ戻らない。
+/// 写しの形は、結果が型どおりの関数への末尾の位置の直接の呼び出しを、その関数の変種へ向け直す。`inner` の変種は
+/// `outer` の変種を、`outer` の変種は `inner` の変種を末尾で呼ぶので、2つの変種の輪は型どおりのコードへ戻らない。
 #[test]
 fn a_copy_tail_calls_the_variants_of_typed_functions() {
     let text = format!(
@@ -94,7 +94,7 @@ main () =
     stats(&text, "7\n");
 }
 
-/// 薄い形の版が呼ぶ関数が yield する。版の `call` には yield の確かめがなく、yield 中は関数がダミーを返し、版は
+/// 薄い形の変種が呼ぶ関数が yield する。変種の `call` には yield の確かめがなく、yield 中は関数がダミーを返し、変種は
 /// スカラーのダミーを箱に入れ (箱もダミーになる)、構造体のダミーを箱の配置に入れて返す。再開した値は継続を通って
 /// `apply` の場所に一様な値として届く (docs/spec/lir.md の「関数の ABI」)。
 #[test]
@@ -134,8 +134,8 @@ main () =
     assert!(stats.yields > 0, "{stats:?}");
 }
 
-/// `never` の操作が、薄い形の版のフレームの下で中断する。`check` の `fail` は末尾の位置にないので、版は薄い形である。
-/// 巻き戻しは `check` と版のフレームを外して handler に着地する。検査モードは、残った物体をリークとして報告する。
+/// `never` の操作が、薄い形の変種のフレームの下で中断する。`check` の `fail` は末尾の位置にないので、変種は薄い形である。
+/// 巻き戻しは `check` と変種のフレームを外して handler に着地する。検査モードは、残った物体をリークとして報告する。
 #[test]
 fn an_abort_unwinds_a_variant_frame() {
     let text = format!(

@@ -5,7 +5,7 @@
 use crate::{Block, CoreFn, Stmt, Term};
 use eml_lir::{Atom, BlockId, CasePattern, VarId, VarInfo, push_var};
 
-/// 入口から届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。展開や `switch` の畳み込みで
+/// エントリから届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。展開や `switch` の畳み込みで
 /// 切り離したブロックは辺が入らなくなるので、残すと構造の規則に反する (docs/spec/lir.md の「構造の規則」)。融合の
 /// 書き換えのたびに呼ぶので、印と番号の表はブロックの数の配列にする。
 pub(crate) fn prune(function: &mut CoreFn) {
@@ -276,7 +276,7 @@ impl<'a> Renamer<'a> {
         }
     }
 
-    /// `index` 番目のブロックの引数を写す。入口のブロックの引数は実引数に置き換えるので、写さない。
+    /// `index` 番目のブロックの引数を写す。エントリのブロックの引数は実引数に置き換えるので、写さない。
     pub(crate) fn params(&mut self, index: usize, block: &Block) -> Vec<VarId> {
         if index == 0 {
             return Vec::new();

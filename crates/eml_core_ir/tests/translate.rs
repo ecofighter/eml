@@ -390,7 +390,7 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
 #[test]
 fn lower_until_stops_after_the_named_pass() {
     // 使われない純粋な `let` は optimize の融合の段が消し (docs/spec/core-ir.md の「融合」)、Perceus は RC
-    // の命令を足す。小さな `main` は入口に展開される
+    // の命令を足す。小さな `main` はエントリに展開される
     let text = "f : Int -> <Panic> Int\nf x = x + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let unused = \"unused\"\n  let s = \"used\"\n  let n = f 1\n  println s\n  println (s ++ show n)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
     fn main(p.0: unit) -> unit {
@@ -907,7 +907,7 @@ fn user_effects_are_numbered_after_io() {
 
 #[test]
 fn the_entry_function_is_chosen_by_the_caller() {
-    // REPL は、`main` の代わりにその回の式から作った関数を入口にする
+    // REPL は、`main` の代わりにその回の式から作った関数をエントリにする
     // (docs/implementation/architecture.md の「`eml_core_ir`、`eml_lir`、`eml_vm` の内部」)
     let text = "main : Unit -> <IO> Unit\nmain () = println \"main\"\n\nalt : Unit -> <IO> Unit\nalt () = println \"alt\"";
     let checked = eml_test_support::check(text);
@@ -935,7 +935,7 @@ fn the_entry_function_is_chosen_by_the_caller() {
 
 #[test]
 fn names_outside_the_entry_are_qualified_with_their_module() {
-    // テキストの形は関数とエフェクトを名前で引くので、入口以外のモジュールの名前には `モジュール名.` を付ける
+    // テキストの形は関数とエフェクトを名前で引くので、エントリ以外のモジュールの名前には `モジュール名.` を付ける
     // (docs/spec/core-ir.md)。入れ子のモジュールのエフェクトの `perform` と `handle` も読み戻せることを確かめる
     let csv = "pub data Row = | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () =\n  let get = next\n  let make = Row\n  make (get ())";
     let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | ctl Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show n)";
@@ -992,7 +992,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
 
 #[test]
 fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
-    // 入口の `println` という操作を包む関数は `$op$println` で、Prelude の `println` を包む関数は参照する場所の名前を
+    // エントリの `println` という操作を包む関数は `$op$println` で、Prelude の `println` を包む関数は参照する場所の名前を
     // 持つ `main$extern0` なので、名前が重ならない (docs/spec/core-ir.md)
     let text = "effect Log where\n  println : String -> Unit\n\neach : (String -> <e> Unit) -> <e> Unit\neach f = f \"x\"\n\nlogged : Unit -> <Log> Unit\nlogged () = each println\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle logged () with\n    | ctl println s k -> k ()\n  each Prelude.println";
     let shown = core_text(text, Pass::Translate);
@@ -1012,7 +1012,7 @@ fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
 
 #[test]
 fn only_functions_reachable_from_the_entry_are_lowered() {
-    // 使わない Prelude の関数を Core IR に入れないため、入口から届く関数だけを変換する (docs/spec/core-ir.md)
+    // 使わない Prelude の関数を Core IR に入れないため、エントリから届く関数だけを変換する (docs/spec/core-ir.md)
     let text = "used : Int -> Int\nused x = x\n\nunused : Int -> Int\nunused x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (used 1))";
     let shown = core_text(text, Pass::Translate);
     assert!(shown.contains("fn used("), "{shown}");
@@ -1207,8 +1207,8 @@ fn a_tail_if_returns_from_each_arm() {
 
 #[test]
 fn nested_value_ifs_meet_in_their_own_merge_blocks() {
-    // 内側の `if` の続きのブロックは、外側の `if` の続きのブロックへ jump する。どちらの続きも、入口で定義した `s` を
-    // 引数で受け取らずにそのまま使う。入口がすべての行き先を支配するためである
+    // 内側の `if` の続きのブロックは、外側の `if` の続きのブロックへ jump する。どちらの続きも、エントリで定義した `s` を
+    // 引数で受け取らずにそのまま使う。エントリがすべての行き先を支配するためである
     let text = "label : Bool -> Bool -> String -> String\nlabel a b s =\n  let t =\n    if a then\n      let u = if b then s ++ \"!\" else \"plain\"\n      u ++ \"?\"\n    else s\n  t ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (label True False \"x\")";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "label"), @r#"
@@ -1733,7 +1733,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
 
 #[test]
 fn effects_of_the_same_name_in_two_modules_stay_apart() {
-    // エフェクトの表は名前で引くので、入口の `Log` と `Audit.Log` は別の名前になる (docs/spec/core-ir.md)
+    // エフェクトの表は名前で引くので、エントリの `Log` と `Audit.Log` は別の名前になる (docs/spec/core-ir.md)
     let audit = "pub effect Log where\n  emit : Int -> Unit\n\npub audited : Unit -> <Log> Unit\naudited () = emit 1";
     let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | ctl Audit.emit n k -> k (println (show n))\n  handle local () with\n    | ctl emit n k -> k (println (show n))";
     let shown = core_text_files(main, &[("Audit.em", audit)], Pass::Translate);
@@ -1788,7 +1788,7 @@ effect State s where
 
 ";
 
-/// `body` を `State Int` の handler の中で動かす `main`。変換は入口から届く関数だけを作るので、確かめる関数をここから呼ぶ。
+/// `body` を `State Int` の handler の中で動かす `main`。変換はエントリから届く関数だけを作るので、確かめる関数をここから呼ぶ。
 fn state_main(body: &str) -> String {
     format!(
         "main : Unit -> <IO, Panic> Unit\nmain () =\n  let n =\n    handle {body} from 0 with\n      | ctl get () k st -> k st st\n      | ctl put s k _ -> k () s\n      | return x _ -> x\n  println (show n)\n"
@@ -3480,7 +3480,7 @@ main () =
       return d.6
     }
     "#);
-    // `first` は入口に展開される。使われない `freeze` も、`Lin` の配列を消費するので消さない
+    // `first` はエントリに展開される。使われない `freeze` も、`Lin` の配列を消費するので消さない
     let optimized = function(&core_text(text, Pass::Optimize), "entry$main");
     assert!(!optimized.contains("con"), "{optimized}");
     insta::assert_snapshot!(optimized, @r#"

@@ -235,7 +235,7 @@ fn collect_label_variance(
 mod tests {
     use super::*;
 
-    /// 入口のモジュールの `data` の、型引数ごとの変位。
+    /// エントリのモジュールの `data` の、型引数ごとの変位。
     fn variance(text: &str, name: &str) -> Vec<Variance> {
         let program = crate::test_program(text);
         let kinds = data_kinds(&program);

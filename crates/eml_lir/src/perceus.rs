@@ -3,7 +3,7 @@
 //! 変数だけである。
 //!
 //! `switch` と `unpack` のフィールドは値から借りて始まり、読むだけなら借りたまま使う。所有を取るのは、消費するとき、
-//! 合流するブロックの入口で生きているとき、持ち主の最後の参照を消費した後も生きているとき、保持されている持ち主に
+//! 合流するブロックのエントリで生きているとき、持ち主の最後の参照を消費した後も生きているとき、保持されている持ち主に
 //! 属して呼び出しの後で生きているときだけである。持ち主がその命令で要るならフィールドを `dup` し、要らないなら
 //! 持ち主を `release` で解いてフィールドを受け取る (docs/spec/lir.md の「Perceus」)。こうすると、分解した後に使わない
 //! 持ち主のフィールドは `dup` されず、`Lin` の物体の参照は1つのまま保たれる。
@@ -47,7 +47,7 @@ fn insert_rc(function: &mut LirFn, layouts: &[Layout]) {
         let id = BlockId(index as u32);
         let after_term = live_after_term(function, &function.blocks[index].term, &live_in);
         let block = &mut function.blocks[index];
-        // 入口と合流するブロックは、生きている変数と引数を1つずつ所有して始まり、借りた変数を持たない
+        // エントリと合流するブロックは、生きている変数と引数を1つずつ所有して始まり、借りた変数を持たない
         let mut state = switch_entries.remove(&id).unwrap_or_else(|| State {
             owned: live_in[index]
                 .iter()
@@ -218,7 +218,7 @@ impl Fields<'_> {
         }
     }
 
-    /// ブロックの入口で、所有していて死んでいる変数 (使わない引数、ほかの行き先だけが使う変数、フィールドを使わない
+    /// ブロックのエントリで、所有していて死んでいる変数 (使わない引数、ほかの行き先だけが使う変数、フィールドを使わない
     /// scrutinee) を番号の順に捨てる。生きている変数が属している変数は、保持して後で手放す。
     fn enter(&mut self, state: &mut State, live: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
         state.lent.retain(|_, vars| {
@@ -371,9 +371,9 @@ impl Fields<'_> {
         }
     }
 
-    /// `return`、`tail`、`jump` の前に置く命令。実引数と、`jump` の行き先の入口で生きている借りた変数の所有を取り、
+    /// `return`、`tail`、`jump` の前に置く命令。実引数と、`jump` の行き先のエントリで生きている借りた変数の所有を取り、
     /// 消費の数の `dup` を置き、保持している変数を手放す。合流するブロックは所有だけで始まるので、どの辺でも所有は
-    /// 行き先の入口の生存集合と一致する。`switch` は scrutinee を読むだけなので、何も置かない。
+    /// 行き先のエントリの生存集合と一致する。`switch` は scrutinee を読むだけなので、何も置かない。
     fn term(
         &mut self,
         state: &mut State,
@@ -431,7 +431,7 @@ impl Fields<'_> {
         );
     }
 
-    /// `switch` の行き先ごとの入口の状態。case のフィールドは借りた変数として加わる。
+    /// `switch` の行き先ごとのエントリの状態。case のフィールドは借りた変数として加わる。
     fn switch_entries(
         &mut self,
         state: &State,

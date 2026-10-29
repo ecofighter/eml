@@ -8,7 +8,7 @@ use eml_types::TypedProgram;
 use crate::{Program, evidence, optimize, to_lir, translate, verify_evidence, verify_translated};
 use eml_lir::VerifyError;
 
-/// Core IR を作る入口の入力。どの入口も同じ4つを受け取るので、1つにまとめて渡す。
+/// Core IR を作るエントリの入力。どのエントリも同じ4つを受け取るので、1つにまとめて渡す。
 ///
 /// 診断のエラーがないプログラムだけを受け取る。エラーがあれば `eml_cli` は Core IR を作らない
 /// (docs/implementation/architecture.md)。`files` は、extern の呼び出しの位置 (`Loc`) を行と列にするのに使う。

@@ -802,7 +802,7 @@ fn each_walk_ends_before_the_next_one_starts() {
     let int = table.int;
     let x = table.fresh_var();
     let pair = table.tuple(vec![x, int]);
-    // 入口ごとに印の処理を終えていなければ、次の入口の開始で debug ビルドが止まる
+    // エントリごとに印の処理を終えていなければ、次のエントリの開始で debug ビルドが止まる
     assert_eq!(table.kind_bounds(pair).len(), 2);
     let v = table.fresh_var();
     assert_eq!(table.unify(v, pair), Ok(()));

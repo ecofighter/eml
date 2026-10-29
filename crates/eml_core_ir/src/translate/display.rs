@@ -1,4 +1,4 @@
-//! REPL の式の入力の値を書く表示関数 (docs/spec/core-ir.md の「表示関数」)。`instances.rs` が入口の型から幅優先で
+//! REPL の式の入力の値を書く表示関数 (docs/spec/core-ir.md の「表示関数」)。`instances.rs` がエントリの型から幅優先で
 //! 集めた型ごとに、値を書いた文字列を `acc` の後ろに足し、残りの予算と組にして返す関数 `display$N$k` を組む。`List`
 //! は背骨をたどる補助の関数 `display$N$k$rest` も組む。書き方は導出した `Show` と同じで
 //! (docs/spec/declarations.md の「`deriving`」)、予算と深さの上限は docs/spec/repl.md の「上限」にある。値はいつも

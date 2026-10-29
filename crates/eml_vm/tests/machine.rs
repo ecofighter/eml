@@ -26,7 +26,7 @@ fn names<M: eml_rt::Mode>(machine: &Machine<M>) -> Vec<&str> {
         .collect()
 }
 
-/// 2つのプログラムを1つの `Machine` に読み込み、それぞれの入口を実行して出力を集める。両方のモードで流し、出力が
+/// 2つのプログラムを1つの `Machine` に読み込み、それぞれのエントリを実行して出力を集める。両方のモードで流し、出力が
 /// 同じことを確かめる。
 fn run_two(first: &str, second: &str) -> String {
     let mut outputs = Vec::new();
@@ -523,7 +523,7 @@ fn main() -> unit {
     }
 }
 
-/// 文字列を返す入口。`run_shown` が結果を写して手放すので、検査モードの `close` はリークを報告しない
+/// 文字列を返すエントリ。`run_shown` が結果を写して手放すので、検査モードの `close` はリークを報告しない
 /// (docs/spec/vm.md の「追記」)。
 const SHOWN: &str = "\
 fn shown() -> obj {
@@ -547,7 +547,7 @@ fn a_shown_entry_returns_its_text_after_the_output() {
         let loaded = machine.load(&program).unwrap();
         let (_, text) = machine.run_shown(loaded.entry, 100).unwrap();
         assert_eq!(text.as_deref(), Some("x = 42"));
-        // 入口が書いた行は、結果を返す前に書き出してある
+        // エントリが書いた行は、結果を返す前に書き出してある
         assert_eq!(out.contents(), "printed\n");
         let (_, text) = machine.run_shown(loaded.entry, 3).unwrap();
         assert_eq!(text.as_deref(), Some("x ="));
@@ -557,7 +557,7 @@ fn a_shown_entry_returns_its_text_after_the_output() {
     }
 }
 
-/// `Unit` を返す入口は文字列を返さないので、`run_shown` は内部の誤りにする。速いモードで文字列でない語を読まないため
+/// `Unit` を返すエントリは文字列を返さないので、`run_shown` は内部の誤りにする。速いモードで文字列でない語を読まないため
 /// である。
 #[test]
 fn a_shown_entry_must_return_an_object() {
@@ -737,7 +737,7 @@ fn a_failing_driver_breaks_the_run() {
     );
 }
 
-/// `quiesce` の後も保留の操作が残れば、`Machine` は毒された状態になり、ヒープに触れずに `close` が driver の誤りを
+/// `quiesce` の後も保留の操作が残れば、`Machine` は poisoned の状態になり、ヒープに触れずに `close` が driver の誤りを
 /// 返す (docs/spec/vm.md の「時計と driver」)。
 #[test]
 fn a_driver_left_pending_poisons_the_machine() {

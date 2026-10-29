@@ -1,4 +1,4 @@
-//! 開発用の数え方。`bench/` と `tests/ui/run*` のすべてのプログラムを最後の LIR まで通し、文と終端の数、一様な版
+//! 開発用の数え方。`bench/` と `tests/ui/run*` のすべてのプログラムを最後の LIR まで通し、文と終端の数、一様な変種
 //! `$uniform` の数、そのうち写しの形の数を数える。呼び出しの規約を変えたときの、コードの大きさの変わり方を見るため
 //! である (docs/implementation/testing.md の「開発用の数え方」)。ふだんは流さず、
 //! `cargo nextest run -p eml_core_ir --test integration --run-ignored ignored-only --no-capture census` で流す。
@@ -16,7 +16,7 @@ struct Census {
     copies: usize,
 }
 
-/// 薄い形の版は1つのブロックで元の関数を直接呼ぶ。そうでない版は写しの形である。
+/// 薄い形の変種は1つのブロックで元の関数を直接呼ぶ。そうでない変種は写しの形である。
 fn is_thin(variant: &LirFn, base: &str, functions: &[LirFn]) -> bool {
     variant.blocks.len() == 1
         && variant.blocks[0].stmts.iter().any(|stmt| {

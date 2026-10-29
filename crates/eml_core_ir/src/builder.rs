@@ -38,7 +38,7 @@ pub(crate) struct FnBuilder {
 }
 
 impl FnBuilder {
-    /// 入口のブロックを今のブロックにして始める。
+    /// エントリのブロックを今のブロックにして始める。
     pub(crate) fn new() -> FnBuilder {
         let mut builder = FnBuilder {
             vars: Vec::new(),
@@ -70,7 +70,7 @@ impl FnBuilder {
         self.vars[var.0 as usize].repr
     }
 
-    /// 関数の引数。入口のブロックの引数になる。
+    /// 関数の引数。エントリのブロックの引数になる。
     pub(crate) fn param(&mut self, info: VarInfo) -> VarId {
         let var = self.var(info);
         self.blocks[BlockId::ENTRY.0 as usize].params.push(var);

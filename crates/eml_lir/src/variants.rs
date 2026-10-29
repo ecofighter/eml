@@ -1,6 +1,6 @@
 //! box の挿入の手順 2〜4 (docs/spec/lir.md の「box の挿入」)。値として参照する型どおりの関数に、すべて一様な ABI の
-//! 版 `<f>$uniform` を作り、値の参照をそちらへ向ける。結果が一様な関数の中の、結果が型どおりの関数への末尾の位置の
-//! 直接の呼び出しも版へ向ける。版の形は `f` のコードと、`f` から末尾でたどる関数のコードだけで決まる
+//! 変種 `<f>$uniform` を作り、値の参照をそちらへ向ける。結果が一様な関数の中の、結果が型どおりの関数への末尾の位置の
+//! 直接の呼び出しも変種へ向ける。変種の形は `f` のコードと、`f` から末尾でたどる関数のコードだけで決まる
 //! (docs/spec/lir.md の「関数の ABI」)。
 
 use rustc_hash::FxHashMap;
@@ -37,7 +37,7 @@ impl Abi {
     }
 }
 
-/// 末尾の位置の呼び出しの種類。版の形を決める `needs_copy` が読む。
+/// 末尾の位置の呼び出しの種類。変種の形を決める `needs_copy` が読む。
 #[derive(Clone, Copy)]
 enum Tail {
     Direct(FnIdx),
@@ -47,7 +47,7 @@ enum Tail {
 
 pub(crate) fn make(program: &mut Program) {
     let originals = program.functions.len();
-    // 版の形は、書き換える前の末尾の呼び出しで決める。結果が一様な関数の末尾の呼び出しは手順 4 で版へ向くので、先に写す
+    // 変種の形は、書き換える前の末尾の呼び出しで決める。結果が一様な関数の末尾の呼び出しは手順 4 で変種へ向くので、先に写す
     let tails: Vec<Vec<Tail>> = program
         .functions
         .iter()
@@ -72,7 +72,7 @@ pub(crate) fn make(program: &mut Program) {
         variants: FxHashMap::default(),
         thin: vec![false; originals],
     };
-    // 作った版も後ろに足されるので、関数の数が増えなくなるまで順に見る
+    // 作った変種も後ろに足されるので、関数の数が増えなくなるまで順に見る
     let mut index = 0;
     while index < program.functions.len() {
         maker.redirect(program, FnIdx(index as u32));
@@ -89,15 +89,15 @@ struct Maker {
     tails: Vec<Vec<Tail>>,
     /// 元の関数ごとの `needs_copy` の答え。
     copies: FxHashMap<FnIdx, bool>,
-    /// 元の関数から、その版。
+    /// 元の関数から、その変種。
     variants: FxHashMap<FnIdx, FnIdx>,
-    /// 関数ごとの、薄い形の版か。薄い形の `call f` は結果を `box` するために残すので、末尾の振り替えをしない。
+    /// 関数ごとの、薄い形の変種か。薄い形の `call f` は結果を `box` するために残すので、末尾の振り替えをしない。
     thin: Vec<bool>,
 }
 
 impl Maker {
-    /// 関数 `index` の値の参照を、ABI が一様でなければ版へ向ける。結果が一様な関数 (薄い形の版を除く) では、結果が
-    /// 型どおりの関数への末尾の位置の直接の呼び出しも版へ向ける。版は先にすべて作ってから書き換える。関数が自分を
+    /// 関数 `index` の値の参照を、ABI が一様でなければ変種へ向ける。結果が一様な関数 (薄い形の変種を除く) では、結果が
+    /// 型どおりの関数への末尾の位置の直接の呼び出しも変種へ向ける。変種は先にすべて作ってから書き換える。関数が自分を
     /// 値として参照するときも、写しの形がその関数の本体を読めるようにするためである。
     fn redirect(&mut self, program: &mut Program, index: FnIdx) {
         let function = program.function(index);
@@ -171,14 +171,14 @@ impl Maker {
         program.functions[index.0 as usize] = function;
     }
 
-    /// 捕獲を `captured` 個受けて値として参照する関数に、版が要るか。`clause` の印の関数は操作の ABI で呼ばれるので、
-    /// そのまま参照する (docs/spec/lir.md の「入口の関数の印」)。
+    /// 捕獲を `captured` 個受けて値として参照する関数に、変種が要るか。`clause` の印の関数は操作の ABI で呼ばれるので、
+    /// そのまま参照する (docs/spec/lir.md の「エントリの関数の印」)。
     fn needs_variant(&self, target: FnIdx, captured: usize) -> bool {
         let abi = &self.abis[target.0 as usize];
         !abi.clause && !abi.uniform_beyond(captured)
     }
 
-    /// 値として参照する関数。版が要れば、作ってある版にする。
+    /// 値として参照する関数。変種が要れば、作ってある変種にする。
     fn value(&self, target: FnIdx, captured: usize) -> FnIdx {
         if self.needs_variant(target, captured) {
             self.variants[&target]
@@ -197,7 +197,7 @@ impl Maker {
         }
     }
 
-    /// `source` の版。なければ作って関数の並びの末尾に足す。
+    /// `source` の変種。なければ作って関数の並びの末尾に足す。
     fn variant(&mut self, program: &mut Program, source: FnIdx) -> FnIdx {
         if let Some(&variant) = self.variants.get(&source) {
             return variant;
@@ -252,7 +252,7 @@ impl Maker {
         copy
     }
 
-    /// 版がそれぞれ、元の関数から作り直したものと同じであることを確かめる。版のコードが名前で決まることの確かめで、
+    /// 変種がそれぞれ、元の関数から作り直したものと同じであることを確かめる。変種のコードが名前で決まることの確かめで、
     /// 作った順や作業の列の状態に左右されないことを見る。
     fn check(&mut self, program: &mut Program) {
         let mut variants: Vec<(FnIdx, FnIdx)> = self
@@ -290,7 +290,7 @@ impl Maker {
     }
 }
 
-/// `source` の版 `<source>$uniform`。引数と結果はすべて一様である。薄い形は引数を `unbox` して `call source` を
+/// `source` の変種 `<source>$uniform`。引数と結果はすべて一様である。薄い形は引数を `unbox` して `call source` を
 /// 呼び、結果を `box` して返す。写しの形は `source` のブロックと変数の表を写す。どちらも引数を一様にするのは
 /// `conform` で、結果の `box` は手順 5 の変換が入れる。`yields`、`internal`、印、文の位置は `source` から写す
 /// (docs/spec/lir.md の「関数の ABI」)。

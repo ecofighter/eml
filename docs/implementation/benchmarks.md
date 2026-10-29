@@ -5,7 +5,7 @@
 実行の費用を測るための、基準のプログラムと測り方と、今の数値をまとめる。費用は2つの数で見る。
 
 - 実行の仕事の回数 (`RunStats`): 決定的なので、テストのスナップショットで固定する。回数が変わると、スナップショットの差分として出る
-- 実行した命令の数: macOS の `/usr/bin/time -l` が出す `instructions retired` を、`bench/run.sh` と `bench/rt.sh` で測る。スクリプトと数値計算は、Python と実時間で比べ、スクリプトは大きい入力で Rust の版とも比べる (`bench/scripts.sh`)
+- 実行した命令の数: macOS の `/usr/bin/time -l` が出す `instructions retired` を、`bench/run.sh` と `bench/rt.sh` で測る。スクリプトと数値計算は、Python と実時間で比べ、スクリプトは大きい入力で Rust の実装とも比べる (`bench/scripts.sh`)
 
 下の「今の数値」の表は、段を閉じるときに、3つとも同じ機種で測り直して入れ替える ([ロードマップ](../future/roadmap.md) の「進め方」)。測り直すのは、前の表のコミットから `crates/eml_vm`、`crates/eml_rt`、`crates/eml_lir`、`crates/eml_core_ir`、`std/`、`bench/` のどれかが変わった段である。測るのはコードの最後のコミットの作業ツリーで、未コミットの変更がある木の値は載せない。段の途中では入れ替えない。段ごとの前後は、この文書の git の履歴 (`git log -p docs/implementation/benchmarks.md`) と、閉じるコミットのメッセージで読む。
 
@@ -22,50 +22,50 @@
 | `loop.em` | 末尾再帰のループ | 末尾呼び出し |
 | `state.em` | `get` と `put` を持つ `Counter` の handler の下で数える再帰 | すぐに再開する操作 |
 | `state_loop.em` | 末尾でない `put` を `Std.State` の handler の下で回すループ | 状態を渡す形の特殊化 |
-| `state_loop_by_hand.em` | `state_loop.em` のループの状態を、引数で手で受け渡した版 | `state_loop.em` の下限 |
+| `state_loop_by_hand.em` | `state_loop.em` のループの状態を、引数で手で受け渡したもの | `state_loop.em` の下限 |
 | `state_nested.em` | 状態つきの handler を2つ重ねたループ | 入れ子の handler の特殊化 |
 | `apply_int.em` | 実行時に選んだ `Int -> Int` の関数の値を、ループの中で10万回 `apply` する | 引数と結果を一様な語で渡す `apply` |
-| `apply_float.em` | `apply_int.em` の `Float -> Float` の版 | `Float` の引数と結果が `apply` を通る費用 |
+| `apply_float.em` | `apply_int.em` を `Float -> Float` にしたもの | `Float` の引数と結果が `apply` を通る費用 |
 | `ep_float.em` | `Float` の結果と `Int` の状態を持つ操作を、特殊化しない handler の下で10万回起こす | EP の道で、操作の結果と状態を運ぶ費用 |
 | `fold_state.em` | `State.run` の中で `Yield.fold` に純粋なラムダを渡し、10万要素を合計する | 純粋なコールバックを節がその場で呼ぶこと (`yields` が0) |
 | `list.em` | プログラムの中で定義した `List a` を `range`、`map`、`foldl` で合計する | 型変数のフィールドの `Int`、高階関数 |
 | `tree.em` | 線形合同法で作った `Int` を二分探索木に入れ、総称な `size` と `fold` で畳む | 再帰的なデータ、`switch` と `unpack` |
 | `orders.em` | 10万件の `Order` のレコードを、ラムダを渡した `List.filter`、`List.map`、`List.fold` で集計する | リストの高階関数に渡すラムダ |
-| `orders_by_hand.em` | `orders.em` のラムダを各ループに書き込んだ版 | `orders.em` の特殊化が目指す下限 |
+| `orders_by_hand.em` | `orders.em` のラムダを各ループに書き込んだもの | `orders.em` の特殊化が目指す下限 |
 | `push_fold.em` | `Yield.fold (fn acc x -> acc + x) 0 (nums 100000)` | `Yield` の畳み込みに渡すラムダ |
-| `push_fold_by_hand.em` | 専用の `sum` handler に `acc + x` を書き込んだ版 | `push_fold.em` の下限 |
+| `push_fold_by_hand.em` | 専用の `sum` handler に `acc + x` を書き込んだもの | `push_fold.em` の下限 |
 | `iter_pipeline.em` | `Iter.generate (nums 100000)` を `Iter.filter`、`Iter.map`、`Iter.fold` に通す | `Iter` の段ごとのラムダ |
-| `iter_pipeline_by_hand.em` | 専用の `evens`、`squares`、`sum` にした版 | `iter_pipeline.em` の下限 |
+| `iter_pipeline_by_hand.em` | 専用の `evens`、`squares`、`sum` にしたもの | `iter_pipeline.em` の下限 |
 | `iter_generate.em` | `Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 100000))` | `Iter.generate` が生産者を包む費用 |
 | `sum_loop.em` | 1 から 100000 までの合計を直接の末尾再帰で求める | `iter_generate.em` と `push_fold.em` を比べる基準 |
 | `byte_loop.em` | 10 万バイトの文字列を作り、`String.byte_at` で先頭から足し上げる | 1バイトずつ読むループの RC (借用の extern は `rc_increments` が0) |
 | `char_loop.em` | `byte_loop.em` と同じ文字列を、`String.char_at` で1文字ずつ読んで足し上げる | 汎用の extern の命令で文字を読むループ (`byte_at` の専用の命令との差) |
 | `bytes_loop.em` | 10 万バイトのバイト列を `Bytes.push` で作り、`Bytes.get` で先頭から足し上げる | バイト列の `push` が容量を倍にして伸ばすこと (確保が log2 に比例する) と、1バイトずつ読むループの RC (`rc_increments` が0) |
-| `tree_by_hand.em` | `tree.em` の `fold (fn acc x -> acc + x)` を専用の `fold_sum` にした版 | `tree.em` の下限 |
+| `tree_by_hand.em` | `tree.em` の `fold (fn acc x -> acc + x)` を専用の `fold_sum` にしたもの | `tree.em` の下限 |
 | `upsert.em` | AA 木の `upsert key increment` で 20000 個の文字列のキーを数え、`sort_by (fn (_, a) (_, b) -> a > b)` で並べる | 高階の更新関数と比較関数 |
-| `upsert_by_hand.em` | `increment` と比較を `upsert` と `sort_by` に書き込んだ版 | `upsert.em` の下限 |
+| `upsert_by_hand.em` | `increment` と比較を `upsert` と `sort_by` に書き込んだもの | `upsert.em` の下限 |
 | `records.em` | 4つのフィールドのレコードを、`{ st \| … }` で10万回更新する | 構造体の値の更新 (確保も reuse もしない) |
-| `records_wide.em` | `records.em` を7つの `Int` のフィールドのレコードにした版 | 構造体にしない値の reuse |
+| `records_wide.em` | `records.em` を7つの `Int` のフィールドのレコードにしたもの | 構造体にしない値の reuse |
 | `rbtree.em` | 赤黒木に1万個の `Int` を入れる。`balance` は組み直す節を受ける | 同じ関数の中で節を作り直す reuse |
 | `tree_map.em` | 8191 節の完全二分木の全節を、`incr` で20回作り直す | 書かないフィールドとその場の書き換え |
 | `par_tree.em` | 4095 節の完全二分木の全節に、上の深さ 4 までを `par` で分けて 1 を足し (15 回の fork)、逐次にもう一度足す | fork と join の仕事。右の子は共有の印の付いた木から新しく作り、左の子と join の後の親はその場で作り直す |
 | `std_list.em` | 2万要素のリストに、std の `List.map` と `List.filter` を5回通す | std のリストの関数の reuse |
 | `std_map.em` | std の `Map.upsert` で 20000 個の文字列のキーを数え、`List.sort_by` で件数の降順に並べる (`upsert.em` と同じ入力) | 釣り合いを直す関数が受けた節の箱を使い回すことと、並べ替えが手放すセルを使い回すこと |
 | `sieve_var.em` | 引数 (既定は 20000) より小さい素数の数を、`var` で書いたふるいで数える | 入れ子の `var` の、状態を渡す形の特殊化 |
-| `sieve_by_hand.em` | `MutArray` を末尾再帰のループに線形に受け渡した版 | `sieve_var.em` の下限 |
+| `sieve_by_hand.em` | `MutArray` を末尾再帰のループに線形に受け渡したもの | `sieve_var.em` の下限 |
 | `fannkuch_var.em` | fannkuch-redux (既定は n = 7) を、3本の配列の変数と10本の `Unr` の変数で書く | 何重にも入れ子になった `var` と、配列の添字 |
-| `fannkuch_by_hand.em` | 状態をすべて末尾再帰の局所関数に受け渡した版 | `fannkuch_var.em` の下限 |
+| `fannkuch_by_hand.em` | 状態をすべて末尾再帰の局所関数に受け渡したもの | `fannkuch_var.em` の下限 |
 | `nbody.em` | Benchmarks Game の5つの天体を、`Vec3` の値で引数の回数 (既定は 1000) だけ進める | 配列に書く構造体の箱と `Float` の算術 |
 | `spectral_norm.em` | 引数の大きさ (既定は 100) のスペクトルノルムを、`Array Float` と `var` で求める | 配列の `Float` の要素の箱 |
 | `mandelbrot.em` | 引数の大きさ (既定は 128) の正方形の格子で、集合に入る点を `Complex` の値で数える | 構造体の値の算術 |
 
-`nbody.em`、`spectral_norm.em`、`mandelbrot.em`、`sieve_var.em`、`fannkuch_var.em` は、大きさを省略できる引数で受ける。引数がなければ表の既定の大きさで動き、回数のテストと `bench/run.sh` はこの大きさで測る。`bench/scripts.sh` は大きな大きさを渡して Python の版と比べる (下の「スクリプトの計測」)。大きさを読むために `Std.Env` と `String.to_int` のコードがプログラムに入るので、この5つの実行の分には、それをコンパイルして動かす約 6608 万命令が加わる (「今の数値」の環境で、大きさを読むだけのプログラムを測った値)。
+`nbody.em`、`spectral_norm.em`、`mandelbrot.em`、`sieve_var.em`、`fannkuch_var.em` は、大きさを省略できる引数で受ける。引数がなければ表の既定の大きさで動き、回数のテストと `bench/run.sh` はこの大きさで測る。`bench/scripts.sh` は大きな大きさを渡して Python の実装と比べる (下の「スクリプトの計測」)。大きさを読むために `Std.Env` と `String.to_int` のコードがプログラムに入るので、この5つの実行の分には、それをコンパイルして動かす約 6608 万命令が加わる (「今の数値」の環境で、大きさを読むだけのプログラムを測った値)。
 
-`_by_hand` の版は、対応する自動の版と同じ出力を出す。特殊化の効果は、自動の版の `RunStats` が手書きの版に近づくことで測る。
+`_by_hand` のプログラムは、対応する自動に任せたプログラムと同じ出力を出す。特殊化の効果は、自動に任せたプログラムの `RunStats` が手書きのプログラムに近づくことで測る。
 
 `list.em` と `tree.em` はデータ型を自分で定義する。2つの多相な関数 (`map`、`foldl`、`size`、`fold`) では、型変数の位置の `Int` が `box` と `unbox` を通る。
 
-`bench/` のプログラムは std の `List` を `import Std.List` と書く。`bench/run.sh` と `bench/scripts.sh` は `bench/` を根にして読むので、`import List` は大文字小文字だけが違う `bench/list.em` を見つけて E1026 になり、標準ライブラリに進まない ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)。回数のテストは入口のファイルだけをメモリの上の木 (`MemorySource`) から読むので、`import List` と書いても通り、この誤りに気づかない。
+`bench/` のプログラムは std の `List` を `import Std.List` と書く。`bench/run.sh` と `bench/scripts.sh` は `bench/` を根にして読むので、`import List` は大文字小文字だけが違う `bench/list.em` を見つけて E1026 になり、標準ライブラリに進まない ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)。回数のテストはエントリのファイルだけをメモリの上の木 (`MemorySource`) から読むので、`import List` と書いても通り、この誤りに気づかない。
 
 ## 回数のテスト
 
@@ -75,11 +75,11 @@
 
 プログラムをまたいで比べるテストは次のとおりである。
 
-- `specialization_matches_hand_written_work` と `specialization_matches_hand_written_rc`: 自動の版と `_by_hand` の版の6つの組で、`allocations`、`boxes`、`unboxes` と RC の回数が同じである
+- `specialization_matches_hand_written_work` と `specialization_matches_hand_written_rc`: 自動に任せたプログラムと `_by_hand` のプログラムの6つの組で、`allocations`、`boxes`、`unboxes` と RC の回数が同じである
 - `handler_specialization_removes_yields_and_evidence`: `iter_generate` と `iter_pipeline` の `yields` と、`push_fold`、`fold_state`、`state_loop`、`state_nested` の `evidence_steps` が0である
 - `iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop`: `Iter.fold` で引く形の確保の数が入力の大きさによらず、直接のループ `sum_loop` と同じである。`Iter.filter` を重ねた形は、残した要素ごとに4つ確保する
 - `rebuilding_programs_reuse_boxes`: 関数の中で手放して作り直す8つのプログラムで `reuses` が0より大きい。`allocations_are_counted_in_checked_mode` は、確保の数が検査モードの数え方から来ることを確かめる
-- `var_matches_hand_written_work`: `var` で書いた版と手書きの版の2つの組で、`var` の版の `evidence_steps` と `yields` が0で、確保の数の差が表 `RESIDUAL` の値に等しい
+- `var_matches_hand_written_work`: `var` で書いたプログラムと手書きのプログラムの2つの組で、`var` のプログラムの `evidence_steps` と `yields` が0で、確保の数の差が表 `RESIDUAL` の値に等しい
 - `nbody_allocates_25_per_step`、`mandelbrot_does_not_allocate_complex`、`spectral_norm_allocates_14_fewer`: 構造体の表現で消える確保と残る確保の数 (下の「配列に書く構造体の箱」と「配列の `Float` の要素の箱」)
 - `unwind_points`: `bench/` と `tests/ui/run/scripts/` のプログラムの巻き戻しの表の行の数を固定する
 - `trade_offs`: 呼び出しの規約と構造体の表現の引き換えの形の回数を固定する (下の「呼び出しの規約の引き換え」と「構造体の表現の引き換え」)
@@ -88,7 +88,7 @@
 
 ## 測り方
 
-命令の数は `bench/run.sh` と `bench/rt.sh` で、Python と Rust の版との実時間の比は `bench/scripts.sh` で測る。どれも macOS の `/usr/bin/time -l` を使うので、macOS でだけ動く。
+命令の数は `bench/run.sh` と `bench/rt.sh` で、Python と Rust の実装との実時間の比は `bench/scripts.sh` で測る。どれも macOS の `/usr/bin/time -l` を使うので、macOS でだけ動く。
 
 ### 命令の数の測り方
 
@@ -96,7 +96,7 @@
 bench/run.sh
 ```
 
-`bench/run.sh` は、release ビルドの `eml run` (VM の速いモード) で各プログラムを3回ずつ走らせ、`instructions retired` と実時間の中央値と、実行の分を Markdown の表で出す。実行の分は、各プログラムの命令の数から `empty` の命令の数を引いた値である。`empty` はフロントエンド、コード生成、起動の費用なので、プログラムどうしと、測り直した表どうしは実行の分で比べる。実行の分が 0 以下になったときは、理由を出して止まる。比べられる値でないものを記録しないためである。表の前に、測定の環境 (機種と CPU、macOS の版、`rustc -V`、コミット) を出す。コミットしていない変更があれば、コミットの行に未コミットの変更を示す印が付く。プログラムが実行時エラーで止まったときと、`time -l` の出力から命令の数か実時間を読めなかったときは、その出力を見せて止まる。macOS でだけ動く。
+`bench/run.sh` は、release ビルドの `eml run` (VM の速いモード) で各プログラムを3回ずつ走らせ、`instructions retired` と実時間の中央値と、実行の分を Markdown の表で出す。実行の分は、各プログラムの命令の数から `empty` の命令の数を引いた値である。`empty` はフロントエンド、コード生成、起動の費用なので、プログラムどうしと、測り直した表どうしは実行の分で比べる。実行の分が 0 以下になったときは、理由を出して止まる。比べられる値でないものを記録しないためである。表の前に、測定の環境 (機種と CPU、macOS のバージョン、`rustc -V`、コミット) を出す。コミットしていない変更があれば、コミットの行に未コミットの変更を示す印が付く。プログラムが実行時エラーで止まったときと、`time -l` の出力から命令の数か実時間を読めなかったときは、その出力を見せて止まる。macOS でだけ動く。
 
 valgrind が arm64 の macOS で動かないので、callgrind は使わない。`instructions retired` は callgrind ほど決定的ではない。同じ木で `bench/run.sh` を2回流すと、実行の分の差は最大で 0.27% (`push_fold_by_hand`、実行の分 47441191 命令) だった。arm64 の命令の数なので、x86_64 の callgrind で測った値とは直接比べない。
 
@@ -163,9 +163,9 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 bench/scripts.sh
 ```
 
-- 表は3つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ) の5行である。数値計算の表は nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行である。3つ目の表は、大きい入力で Rust の版と比べる (下の「C/Rust との比べ方」)
+- 表は3つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ) の5行である。数値計算の表は nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行である。3つ目の表は、大きい入力で Rust の実装と比べる (下の「C/Rust との比べ方」)
 - スクリプトの入力は、`bench/scripts/gen.py` が種類 (アクセスログか CSV) と大きさごとに、種を固定して1つずつ作る。`target/bench-scripts/` に大きさを名前に入れて置き、すでにあれば作り直さない
-- 比べる Python の版は、スクリプトが `bench/scripts/<名前>.py`、数値計算が `bench/numeric/<名前>.py` で、Python の標準ライブラリで普通に書いたものである。速さのために手で凝ったものにはしない。数値計算の版は、浮動小数の演算を eml の版と同じ順で行い、ビットまで同じ結果を出す
+- 比べる Python の実装は、スクリプトが `bench/scripts/<名前>.py`、数値計算が `bench/numeric/<名前>.py` で、Python の標準ライブラリで普通に書いたものである。速さのために手で凝ったものにはしない。数値計算の実装は、浮動小数の演算を eml の実装と同じ順で行い、ビットまで同じ結果を出す
 - 各行の前に `bench/scripts/compare.sh` で、eml と Python の標準出力と終了コード (と書き出したファイル) が一致することを確かめる。一致しなければ止まる
 - release ビルドの `eml run` (VM の速いモード) と `python3 -I` を3回ずつ走らせ、`/usr/bin/time -l` の実時間と最大の常駐メモリの中央値を出す。`bench/run.sh` と同じく macOS でだけ動く
 
@@ -179,25 +179,25 @@ bench/scripts.sh
 - 実時間は 0.01 秒の単位で出るので、300 ms では約 3% の刻みになる。小さな差は `instructions retired` で確かめる。Python の実時間が数十 ms の行 (`wc`) では、比が刻みの分だけ大きく揺れる
 - fannkuch-redux の大きさは順列の長さ n で、n が1つ増えると実時間が約9倍になる。300 ms に近い n がないので、300 ms との比が最も小さい n にし、実時間が 150 ms から 600 ms の範囲を外れても決め直さない
 
-`bench/scripts/compare.sh` は3つの形で使う。`--paths <eml の版> <Python の版> [引数...]` は、パスで渡した2つの版を比べる。`<名前> [引数...]` は、`tests/ui/run/scripts/<名前>/main.em` と `bench/scripts/<名前>.py` を比べる。`--fixture <名前>` は、UI テストの付属のファイルで出力を確かめる ([テスト戦略](testing.md) の「分類」)。どちらかのファイルがなければ、比べずに止まる。先頭に `--rust` を置くと、相手を Python の版から `bench/scripts/rust/<名前>.rs` に替える。`rustc --edition 2024 -C opt-level=3` で `target/bench-scripts/rust/<名前>` に build してから動かす。
+`bench/scripts/compare.sh` は3つの形で使う。`--paths <eml の実装> <Python の実装> [引数...]` は、パスで渡した2つの実装を比べる。`<名前> [引数...]` は、`tests/ui/run/scripts/<名前>/main.em` と `bench/scripts/<名前>.py` を比べる。`--fixture <名前>` は、UI テストの付属のファイルで出力を確かめる ([テスト戦略](testing.md) の「分類」)。どちらかのファイルがなければ、比べずに止まる。先頭に `--rust` を置くと、相手を Python の実装から `bench/scripts/rust/<名前>.rs` に替える。`rustc --edition 2024 -C opt-level=3` で `target/bench-scripts/rust/<名前>` に build してから動かす。
 
 #### C/Rust との比べ方
 
-ネイティブ化の目標は、`wc`、`grep -n`、`logstat`、`csv2jsonl` で、同じ出力を返す Rust の版の約2倍以内の実時間にすることである ([ネイティブ化の設計](../future/native.md) の「目的と範囲」)。Python の1.5倍以下という完了の条件は変えず、この目標は門にしない。核だけのベンチは、原因を見るためだけに使う。
+ネイティブ化の目標は、`wc`、`grep -n`、`logstat`、`csv2jsonl` で、同じ出力を返す Rust の実装の約2倍以内の実時間にすることである ([ネイティブ化の設計](../future/native.md) の「目的と範囲」)。Python の1.5倍以下という完了の条件は変えず、この目標は門にしない。核だけのベンチは、原因を見るためだけに使う。
 
 - 対象: `bench/scripts.sh` の5行 (`wc`、`grep -n`、`logstat`、`logstat --whole`、`csv2jsonl`)
-- 基準: スクリプトごとに1つの Rust のプログラム `bench/scripts/rust/<名前>.rs` を置く。安全な std だけで書き、crate、`unsafe`、明示した SIMD を使わない。`rustc --edition 2024 -C opt-level=3` (既定の target CPU) で build する。eml の版の手順をなぞる
+- 基準: スクリプトごとに1つの Rust のプログラム `bench/scripts/rust/<名前>.rs` を置く。安全な std だけで書き、crate、`unsafe`、明示した SIMD を使わない。`rustc --edition 2024 -C opt-level=3` (既定の target CPU) で build する。eml の実装の手順をなぞる
   - 入力を走査する回数が同じである
   - 意味の仕事が同じである (eml が `String` を読む所では UTF-8 を確かめる)
   - eml が呼ぶ std の操作 (`split`、`lines`、`contains`、整数の解析) には、std の対応物を使う
   - 同じ計算量の一番近い std のデータ構造を使う (順序つきの木は `BTreeMap`)
-  - 確保と借用のやり方は自由である。eml の版が手順を変えたら、Rust の版も書き直す
+  - 確保と借用のやり方は自由である。eml の実装が手順を変えたら、Rust の実装も書き直す
 - 等しさ: 標準出力、終了コード、書いたファイルが eml と同じことを `bench/scripts/compare.sh --rust` で確かめる。`bench/scripts.sh` は各行を測る前にこれを流し、違えば止まる
-- 入力: `bench/scripts/gen.py` が作る log (約 102 MB) と CSV (約 51 MB) を `target/bench-scripts/access-100000k.log` と `target/bench-scripts/data-50000k.csv` に置く。Rust の版は bench の大きさの入力では 5 から 40 ms で、揺れが大きいためである
+- 入力: `bench/scripts/gen.py` が作る log (約 102 MB) と CSV (約 51 MB) を `target/bench-scripts/access-100000k.log` と `target/bench-scripts/data-50000k.csv` に置く。Rust の実装は bench の大きさの入力では 5 から 40 ms で、揺れが大きいためである
 - 測り方: 実時間の5回の中央値を、ほかの表と同じ機種で測る。(最大 - 最小) / 中央値 が 10% を超えたら、1回だけ測り直してその値を使う。比 = (t_eml - t_eml_empty) / (t_rust - t_rust_empty) で、`_empty` はそれぞれの空のプログラムの実時間である。起動の時間は比から引くので、ネイティブの eml が AOT か JIT かに比が左右されない。今の空のプログラムは `time -l` の分解能 (10 ms) より短く、表では 0.00 になる
 - 2倍を超えた行は、主な原因を所見に書く。原因の候補は、1バイトずつの呼び出し、RC、確保、写し、境界と桁あふれの確かめ、ベクトル化の有無、読み込みである
 
-比べる相手は、同じ1回の走査を書いた Rust のループである。2回の走査にした慣用の Rust は、書き方で結果が変わり、eml の側にベクトル化が要るので基準にしない。SIMD の crate や GNU と BSD の道具は、SIMD があるかを測ることになるので基準にしない。C の版は、道具が1つ増え、std の順序つきの写像がないので作らない。
+比べる相手は、同じ1回の走査を書いた Rust のループである。2回の走査にした慣用の Rust は、書き方で結果が変わり、eml の側にベクトル化が要るので基準にしない。SIMD の crate や GNU と BSD の道具は、SIMD があるかを測ることになるので基準にしない。C の実装は、道具が1つ増え、std の順序つきの写像がないので作らない。
 
 
 ## 今の数値
@@ -329,9 +329,9 @@ eml / 参照の比 (1 MiB の2組は目標が2倍、続く4組は予算の行、
 
 命令の数の比は、`find-byte` が 1.25 (予算 1.5)、`find-sub` が 1.35 (予算 1.6) で、予算の中にある。超えた行は次の初めの2つである。
 
-- `slice-short` は命令の数の比が 1.08 で (実時間は 0.01 秒きざみで粗く、この大きさの比には使わない)、予算の 1.0 を超える。1回の切り出しと手放しが `Box<[u8]>::from` と drop より約20命令多く (2,807,219,643 対 2,609,685,808 命令を 10,000,000 回で割った差)、`Ctx` の呼び出しとヒープの確保の道の費用である。行ごとの確保は `grep -n` で 3.0、`logstat` で 25.8、`csv2jsonl` で 35.8 なので (下の「VM と Rust の版の比の主な原因」)、確保がすべてこの切り出しなら差は行あたり約60、約510、約700 命令になる。上限の見積もりで、約2倍の目標に足りるかは測っていない。`Box` の確保と同じ費用まで縮めるには、確保の道のインライン化 (「`eml_rt` のインライン化」) が要る。
+- `slice-short` は命令の数の比が 1.08 で (実時間は 0.01 秒きざみで粗く、この大きさの比には使わない)、予算の 1.0 を超える。1回の切り出しと手放しが `Box<[u8]>::from` と drop より約20命令多く (2,807,219,643 対 2,609,685,808 命令を 10,000,000 回で割った差)、`Ctx` の呼び出しとヒープの確保の道の費用である。行ごとの確保は `grep -n` で 3.0、`logstat` で 25.8、`csv2jsonl` で 35.8 なので (下の「VM と Rust の実装の比の主な原因」)、確保がすべてこの切り出しなら差は行あたり約60、約510、約700 命令になる。上限の見積もりで、約2倍の目標に足りるかは測っていない。`Box` の確保と同じ費用まで縮めるには、確保の道のインライン化 (「`eml_rt` のインライン化」) が要る。
 - `read-all-bytes` は命令の数の比が 2.01 で (404,354,702 対 201,333,790 命令)、行の予算の 1.3 を超える。どちらの側も、入力の 64 MiB を組む費用を含むので、比は 1 の側に寄る。測っているのは `handle_read` の `Form::Bytes` で、UTF-8 の検査はない。差は、`Vec` に読んでからヒープへ写す2回目の写しと、`read_to_end` が空き領域を 0 で埋める費用である (「`FileIn.read_all` の読み方」)。参照の `read_to_end` は `&[u8]` から `Vec` へ1回写すだけである
-  - 2倍の行への費用: 100 MB の入力で、eml の `read_all` (読み、UTF-8 の検査、写し) は 23 ms、Rust の `read_to_end` は 9〜10 ms で、差は約 13 ms である (設計のときの計測)。`wc` の Rust の版は 0.07 s なので、2倍の目標 ([ネイティブ化の設計](../future/native.md) の「目的と範囲」の、スクリプト全体の目標で、この行の予算とは別) の余裕約 70 ms のうち、約 13 ms を読みが使う
+  - 2倍の行への費用: 100 MB の入力で、eml の `read_all` (読み、UTF-8 の検査、写し) は 23 ms、Rust の `read_to_end` は 9〜10 ms で、差は約 13 ms である (設計のときの計測)。`wc` の Rust の実装は 0.07 s なので、2倍の目標 ([ネイティブ化の設計](../future/native.md) の「目的と範囲」の、スクリプト全体の目標で、この行の予算とは別) の余裕約 70 ms のうち、約 13 ms を読みが使う
   - `read_into` (Host の読みを一意な `Bytes` の空きに直接書く) は入れていない。入れる引き金は、ネイティブのコードで、この行が `read_to_end` の 1.3 倍を超えることで、VM の測定では判定しない ([ロードマップ](../future/roadmap.md) の「処理系」の `read_into`)。`read_into` は `Vec` からの写しを省くが、stable の Rust は `read_buf` を持たず、読む前に空きを 0 で埋めるので、ヒープへ直接読んでも得は 6〜10% に留まる。1.3 の予算に入れるには、写しを省くことに加えて、0 で埋めずに読む手段が要る
 - `read-line-bytes-64mib` (56 バイトの行の 64 MiB を `Form::Bytes` の行の読みで読む) は記録だけの行で、予算を持たない。64 KiB の `BufReader` の `read_until` で行ごとに `Vec` に読む参照に対し、命令の数の比は 0.84 である (646,318,379 対 770,332,257 命令。どちらも入力の 64 MiB を組む費用を含む)。行の読みは読み手の buffer から行を1回だけヒープへ写し、行の終わりを T13 の `find_byte` で 8 バイトずつ探す。行の終わりを1バイトずつ探すループで測ったときの比は 1.28 で、差の主な原因はそのループだった。
 - `stdout-write-line-10m` (23 バイトの行を `Stdout` のハンドルで 10,000,000 回書く) は記録だけの行で、1回の書き込みは約303命令、約 10 ns である (3,027,759,672 命令と 0.10 秒)。`println-block` の1行あたり約254命令に比べ、ハンドルの型の確かめと、ハンドルを返す分が多い。
@@ -455,7 +455,7 @@ C/Rust との比
 - 主張: 末尾でない再帰の中に小さな関数を展開すると、1つのフレームのスロットが増え、深い再帰でスタックの上限に早く当たる
 - 数値: `upsert` の `peak_stack` は 352 語で、展開しなければ 206 語 (6f77feb)。`RunStats` の値なので機種によらない。352 は `crates/eml_vm/tests/bench.rs` のスナップショットと同じ
 - 根拠にしている所: [実装の現在地](status.md) の「最適化が扱わない形」
-- 受け入れた理由: 展開は、自動の版と手書きの版の組の RC の回数をそろえるために要る
+- 受け入れた理由: 展開は、自動に任せたプログラムと手書きのプログラムの組の RC の回数をそろえるために要る
 
 ### reuse の token で増えるスタック
 
@@ -466,14 +466,14 @@ C/Rust との比
 
 ### 1バイトずつ回すループ
 
-- 主張: eml で1バイトずつ回すループは、`bench/loop.em` の1反復に約336命令かかる。入力を1バイトずつ数える `wc` は Python の版の約13倍の実時間で、Python の版は C で書かれた `bytes.count` と `bytes.split` に任せている。1行の読みと検索を extern に任せる `grep -n` は Python より少し速い。素のループでは VM は CPython より速い
+- 主張: eml で1バイトずつ回すループは、`bench/loop.em` の1反復に約336命令かかる。入力を1バイトずつ数える `wc` は Python の実装の約13倍の実時間で、Python の実装は C で書かれた `bytes.count` と `bytes.split` に任せている。1行の読みと検索を extern に任せる `grep -n` は Python より少し速い。素のループでは VM は CPython より速い
 - 数値: `loop` の実行の分 167,771,674 命令 / 500,000 反復 (「今の数値」の表)。`gen.py log 30000` の 30 MB の入力で、`wc` は eml 0.88 秒、Python 0.07 秒 (12.6倍)、`grep -n` は eml 0.10 秒、Python 0.12 秒 (0.8倍)。3回の中央値 (M5、6120a11、Python 3.14.8)。3,000万回のループは VM 0.26 秒、Python 0.66 秒で、`wc` を Python でも1バイトずつのループで書くと VM 1.56 秒、Python 1.45 秒 (M4、Python 3.14.7。リポジトリにない使い捨ての試作で、コミットの記録はない)。「今の数値」の `wc` の比は大きさが 9000 KiB で Python の実時間が小さく、この30 MB の値とは違う数になる
 - 根拠にしている所: [実装の現在地](status.md) の「実行の費用」、[ネイティブ化の設計](../future/native.md) の「目的と範囲」の完了の条件
 
 ### 文字を読むループと `char_at` の命令
 
 - 主張: `String.char_at` には専用の VM の命令を置かず、汎用の `Op::Extern` で動かす。専用の命令 `StrCharAt` を足しても、文字を読むループの命令の数は 10% も減らない。一方、区切りがすべて ASCII の走査を `char_at` で書くと、専用の命令を持つ `byte_at` で書くより遅いので、`wc` はバイトで走査する
-- 数値: `bench/char_loop.em` は、汎用の `Op::Extern` で 207,838,220 命令、`StrCharAt` を足すと 200,857,118 命令で、実行の分で 4.4% の減りだった。文字列を伸ばすだけの版 (131,419,002 命令) を引いた読みのループの分では、約 9.1% の減りである (M5、4364489a の木と、それに `StrCharAt` を足した未コミットの木)。`bench/scripts.sh` の `wc` の行 (9000 KiB) は、`char_at` と `String.next` で読む形で eml 0.40 秒、`byte_at` で読む形で 0.28 秒だった (M5、64e6248 と be27bf7)
+- 数値: `bench/char_loop.em` は、汎用の `Op::Extern` で 207,838,220 命令、`StrCharAt` を足すと 200,857,118 命令で、実行の分で 4.4% の減りだった。文字列を伸ばすだけのプログラム (131,419,002 命令) を引いた読みのループの分では、約 9.1% の減りである (M5、4364489a の木と、それに `StrCharAt` を足した未コミットの木)。`bench/scripts.sh` の `wc` の行 (9000 KiB) は、`char_at` と `String.next` で読む形で eml 0.40 秒、`byte_at` で読む形で 0.28 秒だった (M5、64e6248 と be27bf7)
 - 根拠にしている所: [VM](../spec/vm.md) の「基本操作と extern」の `byte_at` と `byte_length` の項、[標準ライブラリ](../spec/stdlib.md) の「`String`」の走査の方針、`tests/ui/run/scripts/wc/main.em` の `is_space`、[ロードマップ](../future/roadmap.md) の「処理系」の、`Char`、`Byte`、`Bits`、`String` の行に VM の命令を足す項目
 
 ### `String` を import するプログラムの前段の分
@@ -488,7 +488,7 @@ C/Rust との比
 - 数値: release、5回の中央値。文字列のキー 2000 種に30万回の `upsert` で、採った形 0.21 秒、赤黒木 0.26 秒、高さの欄を持つ AVL 0.49 秒、OCaml の AVL 0.37 秒、Adams の木 0.36 秒、AA 木 0.32 秒。昇順の Int のキー30万では 0.37 秒、0.53 秒、0.69 秒、0.64 秒、0.62 秒、0.55 秒。5万個に100万回の `lookup` はどれも 0.43〜0.45 秒。昇順の2万個を入れる確保は、検査モードで採った形 40012、赤黒木 99955、高さの欄を持つ AVL 327230、OCaml の AVL 347213、Adams の木 416480。2319493b に試作を足した木で測った。リポジトリにない試作で、コミットからは再現できない
 - 根拠にしている所: [標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」の釣り合いを直す関数の項、`bench/std_map.em`
 
-### VM と Rust の版の比の主な原因
+### VM と Rust の実装の比の主な原因
 
 - 主張: 今の VM の比は、どの行も約2倍の目標を大きく超える。主な原因は行ごとに違う。`wc` は1バイトずつ回すループの命令の数、`grep -n` は行ごとの写しと探索、`logstat` と `csv2jsonl` は行ごとの確保と RC である
 - 数値: 「今の数値」の「C/Rust との比」の表 (M5)。`wc` 43.0、`grep -n` 4.0、`logstat` 13.1、`logstat --whole` 13.0、`csv2jsonl` 35.9。1 MB の入力 (`gen.py` の `log 1000` と `csv 1000`) の検査モードの `RunStats` は、`grep -n` が行ごとに確保 3.0、`rc_increments` 0.0、写しは入力の 2.0 倍。`logstat` が行ごとに確保 25.8、`rc_increments` 25.5、写しは 2.9 倍。`csv2jsonl` が行ごとに確保 35.8、`rc_increments` 26.7、写しは 5.8 倍である (be27bf7 の木に使い捨てのテストを足して測った。テストはリポジトリにない)
@@ -529,14 +529,14 @@ C/Rust との比
 
 - 主張: 関数の値の、捕まえた値より後ろの引数と結果をいつも一様にする規約 ([LIR](../spec/lir.md) の「関数の ABI」) には、次の費用がある
   - 特殊化されない関数の値に `Float` や構造体を渡すと、呼ぶたびに引数と結果が箱に入る。`Int` の箱はタグを付けるだけで、確保しない
-  - 値として参照する型どおりの関数には、版 `<f>$uniform` ができる。末尾の位置で `apply` か `clause` か、結果が `ret` と互換でない直接の呼び出しに届く関数の版は本体を写した写しの形になり、コードが増える
+  - 値として参照する型どおりの関数には、変種 `<f>$uniform` ができる。末尾の位置で `apply` か `clause` か、結果が `ret` と互換でない直接の呼び出しに届く関数の変種は本体を写した写しの形になり、コードが増える
   - 値として生まれて値としても参照される関数は、直接呼ぶ所でも引数と結果を一様にして渡す
   - 直接だけ呼ばれる持ち上げた関数と、値の参照が残らない handler への特殊化の継続の関数は、型どおりのままなので、この費用を持たない ([Core IR](../spec/core-ir.md) の「直接だけ呼ばれる持ち上げた関数」)。節の写しは `perform` の地点ごとに継続の関数について複製するので、継続を閉包にせず、再開の値と状態も箱に入らない ([Core IR](../spec/core-ir.md) の「節の写しの、継続についての複製」)。その代わり、節の本体のコードは地点の数だけ写る
 - 数値:
   - `apply_float` (10万回の `apply`) は `boxes` 200000、`allocations` 200002 で、呼ぶたびに引数と結果の箱を1つずつ確保する。`apply_int` も `boxes` 200000 だが、`allocations` は 2 である
   - `ep_float` の `allocations` は10万回の操作で 9 である
-  - `unspecialized_map_passes_floats.em` は `boxes` 20、`allocations` 22。`boxes` はリストの10個の要素の箱と、ラムダの版 `main$lambda0$uniform` が要素ごとに結果を入れる箱である
-  - `bench/` と `tests/ui/run*` のプログラムの reuse の後の LIR は、関数が 3685、文が 33432 で、版が 54、そのうち写しの形が 17 である ([テスト戦略](testing.md) の「開発用の数え方」)
+  - `unspecialized_map_passes_floats.em` は `boxes` 20、`allocations` 22。`boxes` はリストの10個の要素の箱と、ラムダの変種 `main$lambda0$uniform` が要素ごとに結果を入れる箱である
+  - `bench/` と `tests/ui/run*` のプログラムの reuse の後の LIR は、関数が 3685、文が 33432 で、変種が 54、そのうち写しの形が 17 である ([テスト戦略](testing.md) の「開発用の数え方」)
   - d650bdec の値。`RunStats` の値なので機種によらず、`bench.rs` のスナップショットと同じ
 - 根拠にしている所: `crates/eml_vm/tests/bench.rs` の `trade_offs`、`bench/apply_int.em`、`bench/apply_float.em`、`bench/ep_float.em` と `tests/ui/run/functions/unspecialized_map_passes_floats.em` の先頭のコメント
 - 受け入れた理由: 実行時に Repr を変える仕組みが要らず、`apply` は引数の数だけを比べればよい ([VM](../spec/vm.md) の「呼び出しと戻り」)。末尾の位置の呼び出しの鎖ごとに残るフレームは多くとも1つで ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)、ネイティブ化では Cranelift の `return_call` をそのまま使える。ABI は名前で決まるので、REPL の追記とネイティブのコードの使い回しで食い違わない

@@ -603,7 +603,7 @@ fn only_the_listed_rows_hold_an_argument() {
     }
 }
 
-/// ランタイムが名前で呼ぶ入口は、std の単相の関数である。単相なので instance の名前が正式な名前のままになり、
+/// ランタイムが名前で呼ぶエントリは、std の単相の関数である。単相なので instance の名前が正式な名前のままになり、
 /// 引数の Repr が宣言の型から決まる (docs/spec/stdlib.md の「`Std.Async`」)。
 #[test]
 fn every_runtime_entry_is_a_monomorphic_std_function() {
@@ -644,7 +644,7 @@ fn every_runtime_entry_is_a_monomorphic_std_function() {
     }
 }
 
-/// ランタイムが名前で呼ぶ入口は、下ろした後も宣言の名前のまま、型どおりの ABI で残る (docs/spec/core-ir.md の
+/// ランタイムが名前で呼ぶエントリは、下ろした後も宣言の名前のまま、型どおりの ABI で残る (docs/spec/core-ir.md の
 /// 「変換の規則」)。
 #[test]
 fn the_runtime_entries_have_the_declared_abi() {

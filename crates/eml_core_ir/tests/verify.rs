@@ -577,7 +577,7 @@ fn a_long_run_of_if_statements_is_verified_in_linear_time() {
 const STATE: &str = "effect State { get(unit) -> tobj, put(tobj) -> unit }\n";
 const COUNTER: &str = "effect Counter { get(unit) -> int, put(int) -> unit }\n";
 
-/// handle の場所で入口の表を作り、`State.get` を節の呼び出しで呼ぶ形。
+/// handle の場所でエントリの表を作り、`State.get` を節の呼び出しで呼ぶ形。
 const EVIDENCE_EXAMPLE: &str = "\
 effect State { get(unit) -> tobj, put(tobj) -> unit }
 yields fn f(s.0: tobj) -> tobj {
@@ -820,7 +820,7 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
         )),
         Err("`g` is a clause of `Counter.put`, but it is called directly in `f`".to_string())
     );
-    // 捕獲のある節は、同じ関数の中の `closure` で入口の表に入れる
+    // 捕獲のある節は、同じ関数の中の `closure` でエントリの表に入れる
     let put = format!(
         "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  return u.4\n}}\n{PUT_CLAUSE}"
     );

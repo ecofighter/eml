@@ -1,6 +1,6 @@
 //! `Async` のタスクとスコープと channel の意味の核 (docs/spec/vm.md の「`Async` のタスク」、「channel」)。VM の
 //! `Task`、`Scheduler`、フレームを知らず、走らせる仕事を `Runnable` と不透明な `WaitToken` で返す。ネイティブのコードが
-//! 同じ核を `extern "C"` の入口から呼べるように、`std` と `eml_rt` だけに依存する。
+//! 同じ核を `extern "C"` のエントリから呼べるように、`std` と `eml_rt` だけに依存する。
 //!
 //! セルが持つ語は数えた参照で、VM が1回入れて1回出す。`Registry` はヒープに触れる `Drop` を持たないので、誤りで終わった
 //! run と捨てた run では、`Scheduler` と一緒に触れずに捨てる。
@@ -81,7 +81,7 @@ pub(crate) struct WaitToken(pub u64);
 
 /// 核が実行系に渡す仕事。
 pub(crate) enum Runnable {
-    /// タスク `cell` を始める。`closure` は入口 `start_task` に渡す閉包で、仕事が参照を1つ持つ。
+    /// タスク `cell` を始める。`closure` はエントリ `start_task` に渡す閉包で、仕事が参照を1つ持つ。
     Start { cell: CellRef, closure: Word },
     /// 待っていたタスク `cell` を、継続 `k` に `wake` を渡して再開する。`k` は仕事が参照を1つ持つ。
     Resume { cell: CellRef, k: Word, wake: i64 },
@@ -711,7 +711,7 @@ impl Registry {
     }
 
     /// スコープ `scope` に新しいタスクを置き、ハンドルと始める仕事を返す。`spawner` は呼んだタスクの論理的な ID で、
-    /// `g` は入口に渡す閉包である。新しい ID に渡す前に、`g` とまだ印のないセッションの根 `roots` に共有の印を付ける
+    /// `g` はエントリに渡す閉包である。新しい ID に渡す前に、`g` とまだ印のないセッションの根 `roots` に共有の印を付ける
     /// (`par` の fork と同じ。docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) fn start<M: Mode>(
         &mut self,
@@ -2429,7 +2429,7 @@ pub(crate) fn with_worker<M: Mode, T>(
 }
 
 /// タスクの底に着いた `exit n` を、終わりの欄に書く。`control.exit` を呼ぶのはここだけである。最初の書き手だけが
-/// 真を返す。実行系は、`main` の底なら普通に戻り、ほかのタスクの底ならほかのタスクを動かさずに worker の入口へ戻る
+/// 真を返す。実行系は、`main` の底なら普通に戻り、ほかのタスクの底ならほかのタスクを動かさずに worker のエントリへ戻る
 /// (docs/spec/object-model.md の「実行の制御」)。
 pub(crate) fn end_with_exit(control: &Control, n: i64) -> bool {
     control.exit(n)

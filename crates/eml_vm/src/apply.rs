@@ -108,8 +108,8 @@ fn apply_other<R: Exec>(
     Ok(())
 }
 
-/// `clause` で入口のクロージャ `callee` を呼ぶ。引数は操作の ABI の Repr で、入口の関数の引数と同じ Repr なので比べない。
-/// 引数の数はいつも入口の関数の引数の数と等しい。部分適用で生の `int` をクロージャに入れることもない。
+/// `clause` でエントリのクロージャ `callee` を呼ぶ。引数は操作の ABI の Repr で、エントリの関数の引数と同じ Repr なので比べない。
+/// 引数の数はいつもエントリの関数の引数の数と等しい。部分適用で生の `int` をクロージャに入れることもない。
 pub(crate) fn apply_clause<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,

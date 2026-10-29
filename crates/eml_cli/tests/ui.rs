@@ -1,6 +1,6 @@
 //! 成功すべきか失敗すべきかは最上位のディレクトリ (`run/`、`run-fail/`、`check-fail/`) で決める。スナップショットの承認を
 //! 誤っても、成功と失敗の入れ替わりを検出できるようにするため。テストはその下の分類のサブディレクトリに置き、1つの
-//! ファイルか、`main.em` を入口とする1つのディレクトリである (docs/implementation/testing.md の「UI テスト」)。
+//! ファイルか、`main.em` をエントリとする1つのディレクトリである (docs/implementation/testing.md の「UI テスト」)。
 
 use std::ffi::OsString;
 use std::fs;
@@ -23,7 +23,7 @@ fn ui_root() -> PathBuf {
         .unwrap()
 }
 
-/// スナップショットの中のパスを安定させるため、入口を `tests/ui` からの相対パスで渡す。モジュールの根は入口の
+/// スナップショットの中のパスを安定させるため、エントリを `tests/ui` からの相対パスで渡す。モジュールの根はエントリの
 /// ディレクトリである。
 fn load(path: &Path, suffix: &str) -> Session {
     let relative = path
@@ -59,7 +59,7 @@ fn assert_single_file(session: &Session, suffix: &str) {
 /// 集めた `.em` の役割。
 #[derive(Debug, PartialEq)]
 enum Entry {
-    /// テストの入口。スナップショットの名前の接尾辞を持つ。
+    /// テストのエントリ。スナップショットの名前の接尾辞を持つ。
     Test(String),
     /// ディレクトリのテストの `main.em` から読むモジュール。単独のテストにしない。
     Module,
@@ -77,7 +77,7 @@ fn classify(path: &Path, top: &str) -> Entry {
         .collect();
     match parts.as_slice() {
         [category, file] => {
-            // `main.em` はディレクトリのテストの入口の名前なので、分類の直下にあれば置き場所の誤りである
+            // `main.em` はディレクトリのテストのエントリの名前なので、分類の直下にあれば置き場所の誤りである
             assert!(
                 file != "main.em",
                 "tests/ui/{top}/{category}/main.em must be in a test directory: tests/ui/{top}/{category}/<name>/main.em"

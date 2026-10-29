@@ -7,7 +7,7 @@ use eml_hir::{
 
 use crate::common::{diagnostics, lower_text};
 
-/// 標準ライブラリだけのプログラム。標準ライブラリは使うモジュールだけを読み込むので、入口がすべてのモジュールを
+/// 標準ライブラリだけのプログラム。標準ライブラリは使うモジュールだけを読み込むので、エントリがすべてのモジュールを
 /// import する。
 fn std_program() -> Program {
     let imports: String = eml_hir::STD
@@ -165,7 +165,7 @@ fn every_extern_function_is_declared_once_in_std() {
     }
 }
 
-/// 預かる引数の型の中の矢印。処理系は預かった閉包を呼ばず、名前で呼ぶ std の入口が後で呼ぶので、その row は入口の
+/// 預かる引数の型の中の矢印。処理系は預かった閉包を呼ばず、名前で呼ぶ std のエントリが後で呼ぶので、その row はエントリの
 /// 型が決める (docs/spec/declarations.md の「`extern`」)。
 fn held_arrows(signature: &Signature, held: &[bool]) -> Vec<eml_hir::TypeRefId> {
     fn arrows_in(signature: &Signature, ty: eml_hir::TypeRefId, out: &mut Vec<eml_hir::TypeRefId>) {

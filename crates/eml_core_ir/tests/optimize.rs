@@ -5,7 +5,7 @@ use eml_lir::Atom;
 
 use crate::common::{core_text, function};
 
-/// 1階のプログラムは、小さな `main` が入口に展開されるほかは変わらない。
+/// 1階のプログラムは、小さな `main` がエントリに展開されるほかは変わらない。
 #[test]
 fn optimize_keeps_a_first_order_program() {
     let text = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (1 + 2))";
@@ -1871,7 +1871,7 @@ pong f it =
       | Some (x, rest) -> Some (f (f x), Iter.map f (ping f rest)))
 ";
 
-/// 2つのプログラムに共通する名前の関数は、同じコードになる。その名前を返す。プログラムごとに違う `main` と入口の
+/// 2つのプログラムに共通する名前の関数は、同じコードになる。その名前を返す。プログラムごとに違う `main` とエントリの
 /// 関数は比べない。
 fn shared_functions(a: &str, b: &str) -> Vec<String> {
     let (a_shown, b_shown) = (core_text(a, Pass::Optimize), core_text(b, Pass::Optimize));
@@ -2821,7 +2821,7 @@ fn entry$main() -> int {
 }
 
 /// 既知の閉包をフィールドに持つ構造体の `con` を渡す呼び出しの複製は、値のフィールドを形の Repr (`int`) で受ける。
-/// 複製の入口で作り直す構造体の `con` の引数は、形と比べる正確な位置だからである。配置の Repr (`tobj`) で受けると、
+/// 複製のエントリで作り直す構造体の `con` の引数は、形と比べる正確な位置だからである。配置の Repr (`tobj`) で受けると、
 /// 作り直す `con` が verifier に断られる
 /// (docs/spec/core-ir.md の「handler の複製」)。
 #[test]

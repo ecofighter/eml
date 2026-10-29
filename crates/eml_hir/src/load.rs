@@ -1,4 +1,4 @@
-//! 読み込みの段 (docs/implementation/architecture.md の「`eml_hir` の内部」)。埋め込んだ標準ライブラリと入口を登録し、
+//! 読み込みの段 (docs/implementation/architecture.md の「`eml_hir` の内部」)。埋め込んだ標準ライブラリとエントリを登録し、
 //! import を宣言の順に幅優先でたどって、モジュールの列を作る。ファイルの読み方は `ModuleSource` で受け取り、この段は IO を
 //! 持たない。同じ読み方を渡せば同じ結果を返すので、診断の並びも安定する。
 
@@ -69,9 +69,9 @@ pub struct Loaded {
     pub files: SourceFiles,
     pub prelude: FileId,
     pub entry: FileId,
-    /// 番号が `ModuleId` で、`FileId` の番号とも一致する。0 が Prelude、1 が入口で、その後に import をたどって
+    /// 番号が `ModuleId` で、`FileId` の番号とも一致する。0 が Prelude、1 がエントリで、その後に import をたどって
     /// 見つけた順に、標準ライブラリのモジュールとユーザーのモジュールが並ぶ。セッション (`load_session`) では、1 から
-    /// セッションのモジュールが入力の順に並び、最後の今の入力が入口である。その後に、見つけた順のモジュールが続く
+    /// セッションのモジュールが入力の順に並び、最後の今の入力がエントリである。その後に、見つけた順のモジュールが続く
     /// (docs/spec/modules.md の「標準ライブラリ」)。
     pub modules: Vec<LoadedModule>,
     /// 埋め込んだ標準ライブラリのモジュールの短い名前 (`Fs`)。読み込まなかったものも含み、Prelude は除く。import の
@@ -155,7 +155,7 @@ pub fn load_with_std(
     (loaded, diagnostics)
 }
 
-/// REPL のセッションを読む。受け付けた入力と今の入力 (最後) をセッションのモジュールにし、今の入力を入口にする
+/// REPL のセッションを読む。受け付けた入力と今の入力 (最後) をセッションのモジュールにし、今の入力をエントリにする
 /// (docs/spec/modules.md の「REPL のセッション」)。`file` は `:load` のファイルの表示のパスで、import の根はその最後の
 /// `/` までである。ファイルがなければ根は空である。ユーザーの import は、`cache` にあればその先と本文を使い、なければ
 /// `source` から読む。返す `ImportCache` は、この呼び出しで新しく読んだものだけを持つ。
@@ -166,7 +166,7 @@ pub fn load_session(
     source: &dyn ModuleSource,
     cache: &ImportCache,
 ) -> (Loaded, Vec<Diagnostic>, ImportCache) {
-    // 入口のファイルは `:load` のファイルで、なければ空である。依存先と後の入力がそれを import すると E1030 になる
+    // エントリのファイルは `:load` のファイルで、なければ空である。依存先と後の入力がそれを import すると E1030 になる
     let (root, entry_file) = file.map_or(("", ""), split_path);
     let mut loader = Loader::new(std, root, entry_file, source, cache);
     let prelude = loader.add_prelude();
@@ -214,7 +214,7 @@ struct Loader<'a> {
     std: &'a [(&'a str, &'a str)],
     /// `std` の各ファイルの、`std/` からのモジュールのパス。import のたびにファイル名から作り直さないため、先に作る。
     std_paths: Vec<ModulePath>,
-    /// 入口の表示のパスのディレクトリ (`/` で終わるか空)。根は入口のファイルのディレクトリである
+    /// エントリの表示のパスのディレクトリ (`/` で終わるか空)。根はエントリのファイルのディレクトリである
     /// (docs/spec/modules.md の「モジュール」)。
     root: &'a str,
     entry_file: &'a str,
@@ -241,7 +241,7 @@ enum Reserved {
     PreludeQualifier,
     /// `Std` は標準ライブラリの根で、モジュールではない。
     StdRoot,
-    /// 入口は、どの名前でも import できない。
+    /// エントリは、どの名前でも import できない。
     Entry,
 }
 
@@ -490,8 +490,8 @@ impl<'a> Loader<'a> {
         }
     }
 
-    /// 標準ライブラリのモジュールも Prelude を暗黙に取り込むので、予約した名前の規則は出どころによらない。入口の
-    /// ファイルはユーザーの根にあり、標準ライブラリの import は根を探さないので、入口の検査はユーザーの import だけに
+    /// 標準ライブラリのモジュールも Prelude を暗黙に取り込むので、予約した名前の規則は出どころによらない。エントリの
+    /// ファイルはユーザーの根にあり、標準ライブラリの import は根を探さないので、エントリの検査はユーザーの import だけに
     /// かける。
     fn reserved(&self, origin: ModuleOrigin, import: &ImportItem) -> Option<Reserved> {
         let name = import.path.dotted();

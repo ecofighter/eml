@@ -1,4 +1,4 @@
-//! 変換の途中で関数を足していく表と、extern の関数、操作、コンストラクタ、継続を包む関数、入口の関数、エフェクトの表。
+//! 変換の途中で関数を足していく表と、extern の関数、操作、コンストラクタ、継続を包む関数、エントリの関数、エフェクトの表。
 
 use eml_extern::{Extern, ExternType};
 use eml_hir::{
@@ -540,8 +540,8 @@ impl ProgramBuilder {
         ))
     }
 
-    /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。等式に引数のない
-    /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。`yields` は、入口の
+    /// エントリの関数を `()` で呼ぶ関数を作る。名前は `entry$` にエントリの関数の名前を続ける。等式に引数のない
+    /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。`yields` は、エントリの
     /// 関数の宣言の型の最初の矢印が yield しうるかで、作る関数とその `apply` の印にする。`after` は、REPL の入力の
     /// 結果を根に置くか、値を書いた文字列を返すかである。入力の関数は普通の関数のまま `T` を返し、入力ごとの扱いはここに置く。
     #[expect(clippy::too_many_arguments, reason = "the parts of one entry function")]
@@ -560,7 +560,7 @@ impl ProgramBuilder {
             "entry${}",
             core_name(hir, target_id.module, &hir[target_id].name)
         );
-        // どちらの形でも、入口の関数の型は `Unit -> ...` である
+        // どちらの形でも、エントリの関数の型は `Unit -> ...` である
         let (_, result_type) = split_arrows(types, target_type, 1);
         let mut builder = FnBuilder::new();
         let unit = vec![Atom::Unit];
@@ -588,7 +588,7 @@ impl ProgramBuilder {
         });
         let value = Atom::Var(result);
         let (returned, ret, ret_mark) = match after {
-            // 入口の `ret` は値1つにする。構造体なら `obj` にし、box の挿入が箱に入れる
+            // エントリの `ret` は値1つにする。構造体なら `obj` にし、box の挿入が箱に入れる
             // (docs/spec/core-ir.md の「構造体にする型」)
             EntryAfter::Return => (
                 value,
@@ -614,7 +614,7 @@ impl ProgramBuilder {
             }
         };
         builder.terminate(Term::Return(returned));
-        // 入口の関数は実行系が外から呼ぶので、内部の関数でない
+        // エントリの関数は実行系が外から呼ぶので、内部の関数でない
         let core = builder.finish(name, false, yields, ret, ret_mark);
         self.finish(function, core);
         function
@@ -672,7 +672,7 @@ impl ProgramBuilder {
     }
 }
 
-/// 入口の関数が、入口の関数の結果をどう扱うか
+/// エントリの関数が、エントリの関数の結果をどう扱うか
 /// (docs/spec/core-ir.md の「REPL の入力」)。
 pub(super) enum EntryAfter {
     /// `main` と、型が `Unit` の式の入力。結果をそのまま返す。
@@ -756,9 +756,9 @@ pub(super) fn effect_index(hir: &HirProgram, effect: EffectId) -> u32 {
         .expect("every effect is in the program") as u32
 }
 
-/// Core IR の関数とエフェクトの名前。テキストの形は関数とエフェクトを名前で引くので、入口以外のモジュールの名前には
+/// Core IR の関数とエフェクトの名前。テキストの形は関数とエフェクトを名前で引くので、エントリ以外のモジュールの名前には
 /// `モジュール名.` を付け、モジュールをまたいで重ならないようにする。Prelude もこの規則に従う (docs/spec/core-ir.md)。
-/// REPL のセッションのモジュールは修飾せず、版を付ける (`versioned`)。
+/// REPL のセッションのモジュールは修飾せず、バージョンを付ける (`versioned`)。
 pub(super) fn core_name(hir: &HirProgram, module: ModuleId, name: &str) -> String {
     match hir.modules[module].origin {
         ModuleOrigin::Session(_) => versioned(hir, module, name),
@@ -768,11 +768,11 @@ pub(super) fn core_name(hir: &HirProgram, module: ModuleId, name: &str) -> Strin
 }
 
 /// セッションの item の中段の名前 (docs/spec/core-ir.md の「REPL の入力」)。前の入力が
-/// 同じ名前を定義していれば、定義した入力の番号を付けて `名前#N` にする。最初の版には付けない。前の入力は後の入力で
+/// 同じ名前を定義していれば、定義した入力の番号を付けて `名前#N` にする。最初のバージョンには付けない。前の入力は後の入力で
 /// 変わらないので、同じ定義はどの入力を処理し直しても同じ名前になる。セッションでないモジュールの名前は変えない。
 ///
 /// 中段では名前空間を分けずに数える。名前空間の違う同じ名前の item (型とそのコンストラクタ) は、中段では配置と関数の
-/// ように別の表に入るので、版がそろわなくても重ならない。前の入力の item を毎回たどるので、入力の数が増えて遅くなれば
+/// ように別の表に入るので、バージョンがそろわなくても重ならない。前の入力の item を毎回たどるので、入力の数が増えて遅くなれば
 /// 名前ごとの索引を持つ。
 pub(super) fn versioned(hir: &HirProgram, module: ModuleId, name: &str) -> String {
     let ModuleOrigin::Session(input) = hir.modules[module].origin else {

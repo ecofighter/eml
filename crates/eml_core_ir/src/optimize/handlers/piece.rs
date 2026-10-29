@@ -32,7 +32,7 @@ pub(crate) fn joins(blocks: &[Block]) -> Vec<bool> {
         .collect()
 }
 
-/// `function` の `block` の `start` 番目の文からの続きを、1つの関数の本体にする。入口は、引数を `params` にした
+/// `function` の `block` の `start` 番目の文からの続きを、1つの関数の本体にする。エントリは、引数を `params` にした
 /// ブロックの残りで、そこから合流のブロックを通らずに届くブロックを元の順のまま番号を振り直して続ける。合流の
 /// ブロック J への `jump` は、`exit(J, 実引数)` が返す呼び出しの末尾呼び出しにして、J には進まない。届かない
 /// ブロックは落とす。継続の関数 `f{H}$hN` と合流のブロックの関数 `f{H}$hjJ` は、どちらもこの形で作る。作る関数は
@@ -131,7 +131,7 @@ pub(crate) fn region(
 }
 
 /// `target` の `at` の文 (`perform`) の場所に、すぐに再開する節の関数 `clause` の本体を写して展開する。ブロックの
-/// `perform` から後ろは捨て、節の入口のブロックの文を続ける。節のほかのブロックは後ろに足す。`args` は捕獲と操作の
+/// `perform` から後ろは捨て、節のエントリのブロックの文を続ける。節のほかのブロックは後ろに足す。`args` は捕獲と操作の
 /// 引数で、状態の引数は `state` に、末尾の `resume k(v, s)` は `resume(v, s)` の右辺にする (`clause_blocks`)。
 /// `resume` の結果は `target` が返す値なので、その変数の Repr と印は `target` の戻り値にそろえる。
 pub(crate) fn inline_clause(
@@ -175,7 +175,7 @@ pub(crate) fn inline_clause(
 }
 
 /// すぐに再開する節の関数 `clause` の本体のブロックを写す。節の変数は `vars` に足す新しい変数にし、引数は置き換える。
-/// `args` は捕獲と操作の引数で、状態の引数は `state` にする。返すブロックの 0 番目は入口で、その文と終端は呼ぶ側が
+/// `args` は捕獲と操作の引数で、状態の引数は `state` にする。返すブロックの 0 番目はエントリで、その文と終端は呼ぶ側が
 /// 地点のブロックに続ける。節の i 番目 (i > 0) のブロックは `BlockId(base + i - 1)` に置く前提で行き先を振る。
 /// 末尾の `resume k(v, s)` は、`resume(vars, v, s)` が返す文と終端にする。`resume` から `return` までの純粋な
 /// `let` は使われないので写さない。
@@ -200,7 +200,7 @@ pub(crate) fn clause_blocks(
         copy.substitute(param, arg);
     }
     copy.substitute(params[count - 1], state);
-    // 入口のブロックには辺が入らないので、行き先になるのは 1 番目から後ろのブロックだけである
+    // エントリのブロックには辺が入らないので、行き先になるのは 1 番目から後ろのブロックだけである
     let block_of = |block: BlockId| {
         debug_assert_ne!(block, BlockId::ENTRY, "no edge enters the entry block");
         BlockId(base + block.0 - 1)

@@ -153,7 +153,7 @@ fn f(n.0: int, c.6: tobj) -> unit {
 #[test]
 fn calls_applies_and_returns_carry_leaves() {
     // 関数の引数、直接の呼び出しの引数、ブロックの引数と `jump` の実引数を葉の並びに開く。構造体の結果は複数の値の
-    // `let` で受け、`return` は値の並びを返す。関数の結果も値の並びになる。`apply` の引数と結果と、一様な版を指す
+    // `let` で受け、`return` は値の並びを返す。関数の結果も値の並びになる。`apply` の引数と結果と、一様な変種を指す
     // `closure` の引数は一様なので、構造体の箱で渡す
     let vec3 = "Vec3{float, float, float}";
     let text = format!(

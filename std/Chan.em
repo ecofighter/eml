@@ -140,7 +140,7 @@ close_after srcs out done =
 raise_cancelled : Unit -> <IO> a
 raise_cancelled () = fail_io Prelude.Cancelled "task was cancelled"
 
--- ランタイムの口。生の行を `pub` にせず、品物の型の `a` は包む関数のシグネチャが結ぶ。`push_raw` の1つ目の引数は
+-- ランタイムのインターフェース。生の行を `pub` にせず、品物の型の `a` は包む関数のシグネチャが結ぶ。`push_raw` の1つ目の引数は
 -- 預かる引数で、`pop_raw` がそれを1回返す (docs/spec/declarations.md の「`extern`」)。`reserve_send` と
 -- `reserve_recv` は、0 なら確定してよく、1 なら待ち、2 なら閉じている (受け取りは閉じて空)、3 なら先に譲る。3 は
 -- 2つ目の引数が真のときだけ返す

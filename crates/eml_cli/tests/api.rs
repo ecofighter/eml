@@ -12,7 +12,7 @@ use eml_rt::{Fault, Host, Opened, Stream};
 
 use crate::common::temp_project;
 
-/// import のない入口だけのセッション。
+/// import のないエントリだけのセッション。
 fn single(text: &str) -> Session {
     Session::load("a.em", text, &MemorySource(&[]))
 }
@@ -185,7 +185,7 @@ fn a_missing_main_points_at_the_entry() {
 
 #[test]
 fn an_imported_main_does_not_start_the_program() {
-    // `main` は入口のモジュールからだけ探すので、import した `main` があっても E2003 にする (docs/spec/types.md)
+    // `main` はエントリのモジュールからだけ探すので、import した `main` があっても E2003 にする (docs/spec/types.md)
     let source = MemorySource(&[("Util.em", "pub main : Unit -> <IO> Unit\nmain () = ()")]);
     let session = Session::load("main.em", "import Util (main)\n", &source);
     let compiled = session.compile();
@@ -1020,7 +1020,7 @@ fn an_interrupted_file_is_not_accepted() {
     assert_eq!(codes(&repl.eval("one 1").diagnostics), ["E1001"]);
 }
 
-/// `:type` は入力を受け付けず、番号を進めない。後で定義し直した item の古い版の番号は、受け付けた入力の番号のままである。
+/// `:type` は入力を受け付けず、番号を進めない。後で定義し直した item の古いバージョンの番号は、受け付けた入力の番号のままである。
 #[test]
 fn type_of_neither_accepts_nor_numbers_its_question() {
     let mut console = Console::new(&RunConfig::default());

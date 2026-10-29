@@ -307,7 +307,7 @@ impl IoDriver for RealDriver {
     fn completions(&mut self, out: &mut Vec<Completion>) {
         self.empty_bin();
         // 壊れた後は、`push` の中で終わっていた結果も含めて何も渡さない。保留は `quiesce` の後も残り、実行系はそれを見て
-        // 機械を毒された状態にする (docs/spec/vm.md の「時計と driver」)
+        // 機械を poisoned の状態にする (docs/spec/vm.md の「時計と driver」)
         if self.broken.is_some() {
             return;
         }

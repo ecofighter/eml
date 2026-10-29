@@ -96,7 +96,7 @@ struct Fix {
 | E1027 | `IMPORT_CYCLE` | import の循環 |
 | E1028 | `AMBIGUOUS_NAME` | 修飾しない名前、または合流した修飾子の名前が、別々の定義を指して曖昧である |
 | E1029 | `PRIVATE_NAME` | ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った |
-| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイル (REPL では `:load` のファイル) を指す import、`import Std` (標準ライブラリの根) |
+| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、エントリのファイル (REPL では `:load` のファイル) を指す import、`import Std` (標準ライブラリの根) |
 | E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む |
 | E1032 | `PRIVATE_IN_PUBLIC` | `pub` の item の型に、同じモジュールの `pub` でない型かエフェクトが現れた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
 | E1033 | `EXTERN_OUTSIDE_STD` | ユーザーのモジュールに `extern` を書いた。instance の中の `extern` の行を含む。標準ライブラリ (`std/`) のモジュールだけが書ける ([宣言](declarations.md) の「`extern`」) |
@@ -127,7 +127,7 @@ struct Fix {
 | E1058 | `ABSTRACT_MEMBER` | 抽象型 (`pub abstract data`) のコンストラクタか、抽象エフェクト (`pub abstract effect`) の操作を、宣言したモジュールの外で作る式、パターン、perform、handler の節、import の並び (`T(..)`、`E(..)`、操作の名前) に書いた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
-| E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
+| E2003 | `MISSING_MAIN` | エントリのモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが、row のラベルが `IO` と `Panic` だけの `Unit -> <…> Unit` でない ([モジュールと名前解決](modules.md) の「モジュール」) |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む |
 | E2006 | `NO_INSTANCE` | 制約 `C T` を満たす instance がない。上位クラスの instance がないこと、導出した instance のフィールドの型が instance を持たないことを含む ([型と Kind](types.md) の「制約の解決」) |

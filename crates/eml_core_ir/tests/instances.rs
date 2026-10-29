@@ -265,7 +265,7 @@ fn a_type_outside_the_prelude_and_the_entry_is_qualified_by_its_module() {
 
 #[test]
 fn a_prelude_type_is_not_qualified_even_when_another_module_shares_its_name() {
-    // 入口の `Bool` は Prelude の `Bool` と重なるので `Main.` で修飾する。Prelude の `Bool` は修飾しない
+    // エントリの `Bool` は Prelude の `Bool` と重なるので `Main.` で修飾する。Prelude の `Bool` は修飾しない
     let text = "data Bool = | No | Yes\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = id True\n  let _ = id No\n  ()";
     assert_eq!(instances_of(text, "id"), ["id@[Bool]", "id@[Main.Bool]"]);
     // import したモジュールが Prelude と同じ名前を定義しても、Prelude の型は修飾しない
@@ -371,7 +371,7 @@ fn a_polymorphic_entry_is_uniform() {
     assert_eq!(names, ["first@[_:poly]", "entry$first"]);
 }
 
-/// `name` の関数を入口にして、`Pass::Translate` までの Core IR を表示する。
+/// `name` の関数をエントリにして、`Pass::Translate` までの Core IR を表示する。
 fn core_text_with_entry(text: &str, name: &str) -> String {
     let checked = eml_test_support::check(text);
     let (entry, _) = checked
@@ -388,7 +388,7 @@ fn core_text_with_entry(text: &str, name: &str) -> String {
 #[test]
 fn a_row_polymorphic_entry_may_yield() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ngo : Unit -> <e> Int\ngo () = 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    // 入口の row のビットはすべて立つので、`go<e>` と入口の関数が yield しうる
+    // エントリの row のビットはすべて立つので、`go<e>` とエントリの関数が yield しうる
     insta::assert_snapshot!(core_text_with_entry(text, "go"), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Prelude.Panic { never panicked(obj) -> never }
@@ -406,7 +406,7 @@ fn a_row_polymorphic_entry_may_yield() {
 #[test]
 fn a_point_free_entry_takes_its_mark_from_its_first_arrow() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nact : Unit -> <Ask> Int\nact = fn () -> ask ()\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    // 引数のない値の instance は印を持たないが、入口の関数は `()` を渡す矢印の row で yield しうる
+    // 引数のない値の instance は印を持たないが、エントリの関数は `()` を渡す矢印の row で yield しうる
     insta::assert_snapshot!(function(&core_text_with_entry(text, "act"), "entry$act"), @"
     yields fn entry$act() -> int {
       let f.0: tobj = call act()
@@ -419,7 +419,7 @@ fn a_point_free_entry_takes_its_mark_from_its_first_arrow() {
 #[test]
 fn a_point_free_entry_whose_first_arrow_has_its_own_row_variable_may_yield() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ngo : Unit -> <e> Int\ngo = fn () -> 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
-    // 最初の矢印の row は入口自身の row 変数なので、その印は入口の row のビット (すべて立つ) から決まる
+    // 最初の矢印の row はエントリ自身の row 変数なので、その印はエントリの row のビット (すべて立つ) から決まる
     insta::assert_snapshot!(function(&core_text_with_entry(text, "go"), "entry$go"), @r#"
     yields fn entry$go() -> int {
       let f.0: tobj = call "go<e>"()

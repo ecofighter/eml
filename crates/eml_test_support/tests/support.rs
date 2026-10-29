@@ -79,7 +79,7 @@ fn the_files_variants_read_modules_from_memory() {
         short(missing.files(), &missing.diagnostics),
         ["E1026 1:8 cannot find module `Util`"]
     );
-    // 入口以外のモジュールの `main` は、実行を始める関数でも E2004 の対象でもない (docs/spec/types.md)
+    // エントリ以外のモジュールの `main` は、実行を始める関数でも E2004 の対象でもない (docs/spec/types.md)
     let library_main = [("Util.em", "pub main : Int\nmain = 1")];
     assert_eq!(
         codes(&check(with_modules(entry, &library_main)).diagnostics),

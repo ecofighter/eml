@@ -1,5 +1,5 @@
 -- 1つの worker の上でタスクを動かす (docs/spec/stdlib.md の「`Std.Async`」)。`Async` の生の操作、ランタイムが名前で
--- 呼ぶ入口、extern はランタイムとの ABI なので、形を変えるときはランタイムも合わせて変える
+-- 呼ぶエントリ、extern はランタイムとの ABI なので、形を変えるときはランタイムも合わせて変える
 
 -- ランタイムが待たせたタスクを再開するときに渡す値。ランタイムは宣言の順のタグ (`Woke` = 0、`Cancelled` = 1) で作る
 pub data Wake =
@@ -43,7 +43,7 @@ try_all action =
     | Ok (Err m) -> Err (Panicked m)
     | Err e -> Err (IOFailed e)
 
--- ランタイムが名前で呼ぶ入口。単相に保つ (名前で ABI が決まり、instance の名前が正式な名前のままになるため)
+-- ランタイムが名前で呼ぶエントリ。単相に保つ (名前で ABI が決まり、instance の名前が正式な名前のままになるため)
 start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit
 start_task f =
   handle f () with
@@ -287,12 +287,12 @@ io_wait op = await_io op
 pub io_wait_until : OpId -> Int -> <IO, Async> (Wake, OpId)
 io_wait_until op ms = await_io_until op ms
 
--- ランタイムが名前で呼ぶ入口。extern は組を作らないので、継続に渡す組はここで作る
+-- ランタイムが名前で呼ぶエントリ。extern は組を作らないので、継続に渡す組はここで作る
 -- (docs/spec/core-ir.md の「translate の配置」)
 resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit
 resume_io k w op = k (w, op)
 
--- ランタイムの口。生の行を `pub` にせず、結果の型の `a` は `start`、`start_in`、`run`、`await` のシグネチャだけが結ぶ。
+-- ランタイムのインターフェース。生の行を `pub` にせず、結果の型の `a` は `start`、`start_in`、`run`、`await` のシグネチャだけが結ぶ。
 -- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`run_raw`、`ready`、`finish_ok`、
 -- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`park_drain`、`park_send`、
 -- `park_recv`、`park_io`、`start_in_raw` の2つ目の引数、`park_io_until` の3つ目の引数、`task_cell` の引数

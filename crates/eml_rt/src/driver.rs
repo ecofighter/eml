@@ -53,7 +53,7 @@ pub struct HandleBin {
 }
 
 /// worker ごとの時計と I/O の待ち。driver は作ったスレッドの上でだけ使うので、`Send` も `Sync` も求めない。
-/// スレッドをまたぐ口は `IoWaker` だけである (docs/spec/vm.md の「時計と driver」)。
+/// スレッドをまたぐインターフェースは `IoWaker` だけである (docs/spec/vm.md の「時計と driver」)。
 pub trait IoDriver {
     /// 作ったときからの単調な経過時間。
     fn now(&self) -> Duration;

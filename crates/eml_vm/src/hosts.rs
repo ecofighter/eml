@@ -287,7 +287,7 @@ impl Host for CaptureHost {
             StderrMode::ToStdout => {}
         }
         let mut child = command.spawn()?;
-        // `command` が持つ pipe の書き口を閉じる。残すと、子が終わっても読むスレッドに終わりが届かない
+        // `command` が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読むスレッドに終わりが届かない
         drop(command);
         let stdin = child
             .stdin

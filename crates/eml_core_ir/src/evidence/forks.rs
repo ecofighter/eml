@@ -49,7 +49,7 @@ fn may_run_par(program: &Program) -> bool {
 }
 
 /// `fork$E.op(ev, a_1, .., a_k)`。操作の引数を捕まえた `reperform$E.op` の閉包を `child_abort` に渡す。`ev` は節の
-/// 入口の引数として入口が持ち、`child_abort` は借りるだけである。`child_abort` は戻らないので、後のダミーには実行が
+/// エントリの引数としてエントリが持ち、`child_abort` は借りるだけである。`child_abort` は戻らないので、後のダミーには実行が
 /// 届かない。
 fn fork(program: &Program, effect: u32, op: u32, reperform: FnIdx) -> crate::CoreFn {
     let operation = eml_lir::operation(&program.effects, effect, op).clone();

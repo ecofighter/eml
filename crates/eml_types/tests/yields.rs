@@ -5,7 +5,7 @@ use eml_hir::FunctionId;
 use eml_test_support::{Checked, check, short_text};
 use eml_types::RowYield;
 
-/// 入口のモジュールの関数 `name`。誤りのないプログラムだけを受け取る。
+/// エントリのモジュールの関数 `name`。誤りのないプログラムだけを受け取る。
 fn entry(checked: &Checked, name: &str) -> FunctionId {
     assert_eq!(short_text(checked.files(), &checked.diagnostics), "");
     let program = &checked.program;

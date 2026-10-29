@@ -1,13 +1,13 @@
-//! 変数の生存 (docs/spec/lir.md の「生存解析」)。ブロックを後ろからたどる1回のループで、ブロックごとの入口の生存集合を
+//! 変数の生存 (docs/spec/lir.md の「生存解析」)。ブロックを後ろからたどる1回のループで、ブロックごとのエントリの生存集合を
 //! 求め、側の表として返す。IR には書かない。辺はすべて番号の大きいブロックへ向かうので、後ろからたどれば、行き先の
-//! 入口の集合はいつも求め終わっている。
+//! エントリの集合はいつも求め終わっている。
 
 use std::collections::BTreeSet;
 
 use crate::{Block, CoreFn, Stmt, Term};
 use eml_lir::{Atom, BlockId, VarId};
 
-/// ブロックごとの入口の生存集合。`BlockId` の番号で引き、各集合は昇順に並ぶ。入口は、ブロックの引数と case の
+/// ブロックごとのエントリの生存集合。`BlockId` の番号で引き、各集合は昇順に並ぶ。エントリは、ブロックの引数と case の
 /// フィールドを束縛した後の位置なので、使う引数とフィールドも集合に入る。
 pub(crate) fn live_in(function: &CoreFn) -> Vec<Vec<VarId>> {
     let mut live_in = vec![Vec::new(); function.blocks.len()];
@@ -22,7 +22,7 @@ pub(crate) fn live_in(function: &CoreFn) -> Vec<Vec<VarId>> {
 }
 
 /// 終端の後で生きている変数。終端そのものが使う変数は入らない。`return` の後には何も残らない。`jump` は
-/// (行き先の入口 − 行き先の引数)、`switch` は各 case の (行き先の入口 − フィールド) と default の入口の和である。
+/// (行き先のエントリ − 行き先の引数)、`switch` は各 case の (行き先のエントリ − フィールド) と default のエントリの和である。
 pub(crate) fn live_after_term(
     function: &CoreFn,
     term: &Term,
@@ -68,7 +68,7 @@ pub(crate) fn live_before_term(
     live
 }
 
-/// 合流のブロック `join` の入口で生きている変数から、`join` の引数と `exclude` を除いたもの。番号の昇順に並ぶ。
+/// 合流のブロック `join` のエントリで生きている変数から、`join` の引数と `exclude` を除いたもの。番号の昇順に並ぶ。
 pub(crate) fn join_live<'a>(
     function: &'a CoreFn,
     live_in: &'a [Vec<VarId>],

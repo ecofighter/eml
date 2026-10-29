@@ -4,7 +4,7 @@
 //! 関数ごとに、ブロックを番号の順に1回たどる。道ごとに、構築子が分かっている変数と、使える token を持つ。token は
 //! `switch` の行き先へだけ流れ、合流するブロックは token なしで始まる。合流するブロックで分かっている構築子は、入る
 //! すべての道で分かっているもの (共通部分) である。たどり終えてから、どの道でも使わなかった元を元の文に戻し、一部の道で
-//! だけ使う token を、使わない行き先の入口で手放す。
+//! だけ使う token を、使わない行き先のエントリで手放す。
 //!
 //! Perceus は、保持した持ち主を、借りたフィールドが要る所 (末尾呼び出しなど) で解く。そのため、手放す箱と同じ語の数の
 //! `con` が `release` より前に来ることがある。元の文は、ブロックの中を前へたどり、越えられない最初の文で止まる。
@@ -96,7 +96,7 @@ struct Planner<'a> {
     tokens: Vec<Token>,
     /// token を受ける `con` の位置と、その受け方。
     pairings: FxHashMap<At, Pairing>,
-    /// ブロックごとの、入口で使える token と、そのブロックで `con` が使った token。
+    /// ブロックごとの、エントリで使える token と、そのブロックで `con` が使った token。
     available: Vec<Vec<usize>>,
     used: Vec<Vec<usize>>,
     /// 今のブロックで、まだ token を受けていない `con` の文の番号と語の数。番号の順に並ぶ。
@@ -428,9 +428,9 @@ impl<'a> Planner<'a> {
             .collect()
     }
 
-    /// 使った token を残し、一部の道で使わない token を、その道で使わないと決まる行き先の入口で手放す。行き先から
+    /// 使った token を残し、一部の道で使わない token を、その道で使わないと決まる行き先のエントリで手放す。行き先から
     /// `switch` の辺だけでたどれるブロックのどこでも使わなければ、そこで決まる。token は合流するブロックへ流れず、
-    /// yield しうる呼び出しと `jump`、`return`、`tail` の前で消えるので、使わない道はどれも、そのような行き先の入口を
+    /// yield しうる呼び出しと `jump`、`return`、`tail` の前で消えるので、使わない道はどれも、そのような行き先のエントリを
     /// 通る。
     fn finish(self) -> Plan {
         let blocks = self.function.blocks.len();
@@ -439,7 +439,7 @@ impl<'a> Planner<'a> {
             kept[pairing.token] = true;
         }
         let contains = |set: &[usize], id: usize| set.binary_search(&id).is_ok();
-        // needed[b] は、b の入口で使える token のうち、b から `switch` の辺だけでたどれるブロックのどこかで使うもので
+        // needed[b] は、b のエントリで使える token のうち、b から `switch` の辺だけでたどれるブロックのどこかで使うもので
         // ある。行き先の番号は大きいので、後ろからたどれば、行き先の分は求め終わっている
         let mut needed: Vec<Vec<usize>> = vec![Vec::new(); blocks];
         for (index, block) in self.function.blocks.iter().enumerate().rev() {
@@ -456,7 +456,7 @@ impl<'a> Planner<'a> {
             needed[index] = here;
         }
         // 行き先 t で手放すのは、t より下で使わない token のうち、`switch` のブロックで定義したか、そのブロックより下の
-        // どこかで使うものである。そうでない token は、もっと上の行き先の入口で手放してある
+        // どこかで使うものである。そうでない token は、もっと上の行き先のエントリで手放してある
         let mut drops: Vec<Vec<usize>> = vec![Vec::new(); blocks];
         for (index, block) in self.function.blocks.iter().enumerate() {
             if let Term::Switch { .. } = block.term {
@@ -536,7 +536,7 @@ struct Plan {
     tokens: Vec<Token>,
     kept: Vec<bool>,
     pairings: FxHashMap<At, Pairing>,
-    /// ブロックごとの、入口で手放す token。
+    /// ブロックごとの、エントリで手放す token。
     drops: Vec<Vec<usize>>,
 }
 

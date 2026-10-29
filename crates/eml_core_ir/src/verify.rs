@@ -137,7 +137,7 @@ struct Checker<'a> {
     level: Level,
     /// 命令の型に関わらない検査の状態。
     cx: Context<'a>,
-    /// 着地の印の検査が使う入口の生存集合。印がなければ求めない。
+    /// 着地の印の検査が使うエントリの生存集合。印がなければ求めない。
     live_in: std::cell::OnceCell<Vec<Vec<VarId>>>,
 }
 
@@ -509,7 +509,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 呼び出しの直後で `var` が生きているか。生存解析の入口の集合から、終端と後ろの文を逆にたどって求める。
+    /// 呼び出しの直後で `var` が生きているか。生存解析のエントリの集合から、終端と後ろの文を逆にたどって求める。
     fn used_after(&self, var: VarId) -> bool {
         let function = self.function;
         let live_in = self.live_in.get_or_init(|| liveness::live_in(function));

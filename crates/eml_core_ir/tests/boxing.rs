@@ -15,7 +15,7 @@ const APPLY_TO: &str =
 const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";
 
 /// 持ち主の一族のコードが直接だけ呼ぶラムダは型どおりの ABI を持つ。このラムダを値として参照するのは `hide` の複製
-/// だけなので型どおりのままで、その値の参照は一様な版 `main$lambda0$uniform` が受ける
+/// だけなので型どおりのままで、その値の参照は一様な変種 `main$lambda0$uniform` が受ける
 /// (docs/spec/core-ir.md の「直接だけ呼ばれる持ち上げた関数」、docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn a_lambda_used_only_as_a_value_keeps_its_typed_abi() {
@@ -79,7 +79,7 @@ fn shared_wrappers_are_never_called_directly() {
 
 #[test]
 fn a_top_level_function_used_as_a_value_keeps_its_typed_abi() {
-    // 値として使うトップレベルの関数は型どおりの ABI のまま残り、値の参照は一様な版 `inc$uniform` に向く。版のほかに
+    // 値として使うトップレベルの関数は型どおりの ABI のまま残り、値の参照は一様な変種 `inc$uniform` に向く。変種のほかに
     // 一様な包み `f$boxed` は作らない (docs/spec/lir.md の「関数の ABI」)
     let text = format!(
         "{HIDE}inc : Int -> <Panic> Int\ninc n = n + 1\n\n{APPLY_TO}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 inc\n  println (show (apply_to f 2))"
@@ -151,7 +151,7 @@ fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
 
 #[test]
 fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
-    // 継続の関数は再開の値と結果が一様である。入口で `unbox` した再開の値を返すときは、`box` を作らずに受けた `tobj`
+    // 継続の関数は再開の値と結果が一様である。エントリで `unbox` した再開の値を返すときは、`box` を作らずに受けた `tobj`
     // をそのまま返す。`1` は新しく `box` する
     let text = format!(
         "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}pick : Int -> <Ask, Panic> Int\npick n =\n  let x = ask ()\n  if x > n then x else n\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box body = hide 0 (fn () -> pick 1)\n  let r =\n    handle body () with\n      | ctl ask () k -> k 2\n  println (show r)"
@@ -354,7 +354,7 @@ fn a_chain_of_tail_calls_keeps_its_typed_rets() {
 #[test]
 fn a_body_ending_in_a_typed_call_tail_calls_its_uniform_variant() {
     // handle の本体は `split` で結果が一様な `tobj` になり、`Int` を返す `answer` を末尾の位置で呼ぶ。この呼び出しは
-    // 一様な版 `answer$uniform` に向き、引数を箱に入れた末尾呼び出しになる (docs/spec/lir.md の「末尾の位置の呼び出し」)
+    // 一様な変種 `answer$uniform` に向き、引数を箱に入れた末尾呼び出しになる (docs/spec/lir.md の「末尾の位置の呼び出し」)
     let text = format!(
         "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}answer : Int -> <Ask, Panic> Int\nanswer n =\n  if n > 0 then answer (n - 1)\n  else\n    let Box q = hide 0 ask\n    q () + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = handle answer 0 with\n    | ctl ask () k -> k 1\n  println (show r)"
     );

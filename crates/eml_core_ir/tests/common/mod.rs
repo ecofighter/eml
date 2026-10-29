@@ -88,7 +88,7 @@ pub fn function(shown: &str, name: &str) -> String {
     shown[start..end].to_string()
 }
 
-/// REPL のセッションの入力を入力 1, 2, … として読み、最後の入力を入口にして、`last` のパスの直後の Core IR にして
+/// REPL のセッションの入力を入力 1, 2, … として読み、最後の入力をエントリにして、`last` のパスの直後の Core IR にして
 /// 表示する。
 pub fn session_core_text(inputs: &[&str], last: Pass) -> String {
     let checked = session(inputs);
@@ -126,7 +126,7 @@ fn session(inputs: &[&str]) -> eml_test_support::Checked {
     checked
 }
 
-/// 最後の入力の関数を入口にする。
+/// 最後の入力の関数をエントリにする。
 fn input(checked: &eml_test_support::Checked) -> eml_core_ir::Input<'_> {
     let entry = checked
         .program

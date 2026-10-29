@@ -44,7 +44,7 @@ pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
     String::from_utf8(out).expect("ariadne writes UTF-8")
 }
 
-/// ariadne の読み口。ariadne はファイルごとに行の表を作るので、診断が指すファイルの表だけを、最初に指したときに作る。
+/// ariadne がファイルを読むインターフェース。ariadne はファイルごとに行の表を作るので、診断が指すファイルの表だけを、最初に指したときに作る。
 /// 読み込んだファイルをすべて写すと、診断が1件でも標準ライブラリのすべての表を作るためである。
 struct Sources<'a> {
     files: &'a SourceFiles,

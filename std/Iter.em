@@ -8,7 +8,7 @@ pub abstract data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 pub next : Iter <e> a -> <e> Option (a, Iter <e> a)
 next (Iter pull) = pull ()
 
--- コンストラクタは隠すので、引く関数から `Iter` を手で組む口はこれだけである (docs/spec/stdlib.md の「`Iter`」)
+-- コンストラクタは隠すので、引く関数から `Iter` を手で組むインターフェースはこれだけである (docs/spec/stdlib.md の「`Iter`」)
 pub from_fn : (once Unit -> <e> Option (a, Iter <e> a)) -> Iter <e> a
 from_fn pull = Iter pull
 

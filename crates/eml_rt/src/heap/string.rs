@@ -521,7 +521,7 @@ impl<M: Mode> Heap<M> {
         self.make_bytes(b, 1)
     }
 
-    /// 容量が `room` バイト以上の空のバイト列を作る。`alloc_string_room` のバイト列の版である。
+    /// 容量が `room` バイト以上の空のバイト列を作る。`alloc_string_room` のバイト列向けの関数である。
     pub fn alloc_bytes_room(&mut self, room: usize) -> (w: Word)
         requires
             old(self).wf(),
@@ -2421,7 +2421,7 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// バイト列の後ろに `src` を足したバイト列を返す。`string_push` のバイト列の版で、約束も同じである。
+    /// バイト列の後ろに `src` を足したバイト列を返す。`string_push` のバイト列向けの関数で、約束も同じである。
     ///
     /// # Safety
     /// `left` はこのヒープか付けた塊の生きているバイト列の物体を指し、呼ぶ側がその参照を1つ持つ。`src` は left 自身の

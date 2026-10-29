@@ -56,7 +56,7 @@ pub struct Task {
     pub(crate) scratch: Vec<Word>,
     /// `reserve` がスタックの容量を伸ばす上限の語の数 (`stack_limit`)。
     pub(crate) stack_limit: usize,
-    /// 入口の関数の番号。どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める。
+    /// エントリの関数の番号。どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める。
     pub(crate) entry: u32,
     /// `Finish` が結果を手放さずに残す。`Machine::run_shown` が、実行の後に結果の文字列を写して手放す。
     pub(crate) keep_result: bool,
@@ -67,15 +67,15 @@ pub struct Task {
     pub(crate) evv: Word,
     /// ヒープの論理的な worker ID。右の子は fork でもらった ID で動き、左の子は親の ID で動く。
     pub(crate) worker: u32,
-    /// fork のときの親の深さ。右の子の深さはここから数える。入口のタスクは 0 である。
+    /// fork のときの親の深さ。右の子の深さはここから数える。エントリのタスクは 0 である。
     pub(crate) depth_offset: usize,
     /// 開いている子の境目の join。内側が最後に来る。右の子の先頭は、自分が右の子である join である。
     pub(crate) boundaries: Vec<JoinId>,
     pub(crate) state: TaskState,
-    /// `Async` のタスクのセル。入口の `Task` だけが持ち、`main` と `par` の右の子は `None` である。`resume_task` の
-    /// 入口の `Task` は、待っていたタスクのセルを持つ (docs/spec/vm.md の「`Async` のタスク」)。
+    /// `Async` のタスクのセル。エントリの `Task` だけが持ち、`main` と `par` の右の子は `None` である。`resume_task` の
+    /// エントリの `Task` は、待っていたタスクのセルを持つ (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) cell: Option<CellRef>,
-    /// `finish_*` が預けたタスクの終わり方。入口の `Task` の `Finish` が核の `finish` に渡す。タスクの ID の物体が
+    /// `finish_*` が預けたタスクの終わり方。エントリの `Task` の `Finish` が核の `finish` に渡す。タスクの ID の物体が
     /// すべて片付く前に待ち手を起こさないためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) outcome: Option<cells::Outcome>,
 }
@@ -86,7 +86,7 @@ pub(crate) struct Failure {
     pub(crate) pc: Pc,
 }
 
-// いちばん下に置く空のフレーム。入口の関数の結果を受けるスロットを1つ持つ
+// いちばん下に置く空のフレーム。エントリの関数の結果を受けるスロットを1つ持つ
 const ROOT_BASE: usize = 2;
 const ROOT_SIZE: usize = 1;
 // 子の境目のフレーム。slot 0 が子の結果、slot 1 が join の番号である
@@ -120,8 +120,8 @@ impl Task {
         }
     }
 
-    /// `Async` のタスクの入口の `Task`。`Task::new` と同じ根のフレームを作り、スタックは集まりから取った `stack` を
-    /// 使う。引数は動き始めるときに入口のフレームに書く (`resume`)。深さは 0 から数え、タスクごとに `max_depth` の
+    /// `Async` のタスクのエントリの `Task`。`Task::new` と同じ根のフレームを作り、スタックは集まりから取った `stack` を
+    /// 使う。引数は動き始めるときにエントリのフレームに書く (`resume`)。深さは 0 から数え、タスクごとに `max_depth` の
     /// すべてを使う (docs/spec/vm.md の「`Async` のタスク」)。
     #[expect(
         clippy::too_many_arguments,
@@ -379,8 +379,8 @@ fn safepoint<R: Exec>(
     Ok(())
 }
 
-/// タスクを実行する。`task` は入口のタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときは入口の
-/// タスクに戻っている (`Finish` が確かめる)。誤りで戻る前に、ヒープの worker と `Ctx` の深さの上限を入口のタスクのものに戻す。返る語は失敗した
+/// タスクを実行する。`task` はエントリのタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときはエントリの
+/// タスクに戻っている (`Finish` が確かめる)。誤りで戻る前に、ヒープの worker と `Ctx` の深さの上限をエントリのタスクのものに戻す。返る語は失敗した
 /// タスクの `evv` で、手放さずに捨てる。誤りの後のヒープは回復で置き換えるか、`Ctx` ごと落とすので、捨てた語は漏れに
 /// 数えない (docs/spec/vm.md の「`par` の fork と join」)。
 pub(crate) fn run<R: Exec>(
@@ -1280,7 +1280,7 @@ fn resume<R: Exec>(
             sched.tasks[prev_id] = Some(prev);
         }
         None => {
-            // 終わった入口の `Task` のスタックは、次の入口の `Task` が使い回す
+            // 終わったエントリの `Task` のスタックは、次のエントリの `Task` が使い回す
             if prev.cell.is_some() {
                 sched.stacks.push(std::mem::take(&mut prev.stack));
             }
@@ -1301,7 +1301,7 @@ fn resume<R: Exec>(
             args,
             argc,
         } => {
-            // 入口の `Task` はまだ命令を実行していないので、誤りには入口の関数の先頭の位置を付ける。`run` が持つ
+            // エントリの `Task` はまだ命令を実行していないので、誤りにはエントリの関数の先頭の位置を付ける。`run` が持つ
             // 位置は、切り替える前のタスクのものである
             let at = code.functions[function as usize].start;
             let result = enter::<R>(code, ctx, task, sched, function, args, argc);
@@ -1404,8 +1404,8 @@ fn complete_join<R: Exec>(
 
 /// join の完了、その後の安全点、右の子の始まりで起きた誤りに、`par` の命令 `at` の関数と位置を付ける。どれも
 /// 切り替えの後で起きるので、`run` が持つ命令の位置は別のタスクのものでありうる。`par` の位置を付ければ、どの
-/// スケジュールでも同じ文言になる (docs/spec/vm.md の「子の終わりと join」)。`Async` の入口の `Task` の始まりの誤りも、
-/// 同じ理由で入口の関数の先頭の位置 `at` を付ける。すでに記録した誤りはそのまま渡す。
+/// スケジュールでも同じ文言になる (docs/spec/vm.md の「子の終わりと join」)。`Async` のエントリの `Task` の始まりの誤りも、
+/// 同じ理由でエントリの関数の先頭の位置 `at` を付ける。すでに記録した誤りはそのまま渡す。
 fn at_par<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     task: &Task,
@@ -1524,7 +1524,7 @@ fn child_abort<R: Exec>(
         return Err(VmFault::Internal("a child abort outside a par child"));
     }
     let ev = task.get(ev);
-    // `ev` は節の入口が持つ fork evidence で、状態の欄は深さの即値である
+    // `ev` は節のエントリが持つ fork evidence で、状態の欄は深さの即値である
     let heap = ctx.heap();
     let effect = unsafe { heap.meta(ev) }?
         .tag()
@@ -1550,7 +1550,7 @@ fn child_abort<R: Exec>(
     child_done::<R>(code, ctx, task, sched, outcome)
 }
 
-/// 実行時エラーの後。すぐに実行を止める誤りと、入口のタスクの誤り (左の子の誤りを含む) は実行の誤りにする。右の子の
+/// 実行時エラーの後。すぐに実行を止める誤りと、エントリのタスクの誤り (左の子の誤りを含む) は実行の誤りにする。右の子の
 /// 誤りは join に記録し、右のタスクはスタックを巻き戻さずに捨てて、ほかのタスクに切り替える。止めたスタックは
 /// 巻き戻しの表のない位置で止まっていて解放できない。記録した誤りは join が必ず報告するので、実行は誤りで終わる
 /// (docs/spec/vm.md の「`par` の fork と join」)。
@@ -1634,7 +1634,7 @@ impl Outcome {
     }
 }
 
-/// 入口の関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。その前に、受け箱の
+/// エントリの関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。その前に、受け箱の
 /// 知らせを処理し、残った `Async` のセルを放す (docs/spec/vm.md の「`Async` のタスク」)。
 fn finish<R: Exec>(
     code: &CodeBase<R::M>,
@@ -1663,7 +1663,7 @@ fn finish<R: Exec>(
         return Err(VmFault::Internal("an exit ends a run with an open par"));
     }
     if let Some(n) = task.exit {
-        // 途中のフレームは巻き戻しで片付けてある。入口の結果はダミーなので手放さない。中断の途中の `evv` には
+        // 途中のフレームは巻き戻しで片付けてある。エントリの結果はダミーなので手放さない。中断の途中の `evv` には
         // 意味がないので、空に戻す (docs/spec/vm.md の「extern の中断」)
         unsafe {
             ctx.yield_finish()?;
@@ -1677,7 +1677,7 @@ fn finish<R: Exec>(
         return Ok(());
     }
     if code.functions[task.entry as usize].ret_rc && !task.keep_result {
-        // 結果は入口の関数が返した、VM の持つ参照である
+        // 結果はエントリの関数が返した、VM の持つ参照である
         unsafe { ctx.heap_mut().decref(task.get(0)) }?;
     }
     Ok(())
@@ -1685,7 +1685,7 @@ fn finish<R: Exec>(
 
 // `Async` の命令は呼び出しや戻りに比べてまれなので、`par` と同じく `step` に展開しない
 
-/// `Std.Async`、`Std.Chan`、`Std.Atomic` の行 (docs/spec/vm.md の「`Async` のタスク」)。意味の核を呼び、返った仕事を入口の `Task` にするか、
+/// `Std.Async`、`Std.Chan`、`Std.Atomic` の行 (docs/spec/vm.md の「`Async` のタスク」)。意味の核を呼び、返った仕事をエントリの `Task` にするか、
 /// 待っていた `Task` を実行待ちに戻す。安全点を置かない。
 #[inline(never)]
 fn async_op<R: Exec>(
@@ -2175,7 +2175,7 @@ fn start_task<R: Exec>(
     Ok(sched.cells.start(ctx, scope, task.worker, g, &roots)?)
 }
 
-/// `finish_*` の終わり方を入口の `Task` に預ける。核に渡すのは `Task` の `Finish` で、そのときにはタスクの ID の物体は
+/// `finish_*` の終わり方をエントリの `Task` に預ける。核に渡すのは `Task` の `Finish` で、そのときにはタスクの ID の物体は
 /// 終わり方の値のほかに片付いている。先に渡すと、起こした側がセルを放してタスクの ID を退かせたときに、まだ動いている
 /// タスクの物体が残る (docs/spec/vm.md の「`Async` のタスク」)。
 fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), VmFault> {
@@ -2187,7 +2187,7 @@ fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), VmFault> {
 }
 
 /// 核が返した仕事を実行待ちの列の後ろに積む。どの方針でも FIFO である (docs/spec/vm.md の「タスクとスケジュール」)。
-/// 始める仕事と再開する仕事は、集まりのスタックで入口の `Task` にする。token は待っている `Task` の番号である。
+/// 始める仕事と再開する仕事は、集まりのスタックでエントリの `Task` にする。token は待っている `Task` の番号である。
 fn schedule<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     sched: &mut Scheduler<P>,
@@ -2242,8 +2242,8 @@ fn schedule<M: Mode, P: Policy>(
     Ok(())
 }
 
-/// 入口の `Task` が動き始める。始める仕事なら、閉包を始めたタスクの ID から今の ID へ戻す (`par` の join の
-/// `transfer_back` と同じ形)。引数を入口のフレームの slot 0.. に書いて入口の先頭へ進む。
+/// エントリの `Task` が動き始める。始める仕事なら、閉包を始めたタスクの ID から今の ID へ戻す (`par` の join の
+/// `transfer_back` と同じ形)。引数をエントリのフレームの slot 0.. に書いてエントリの先頭へ進む。
 fn enter<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -2271,7 +2271,7 @@ fn enter<R: Exec>(
     Ok(())
 }
 
-/// 入口の `Task` の `Finish`。タスクの残りの `evv` を手放し、預かった終わり方を核に渡して起こす仕事を積み、スタックを
+/// エントリの `Task` の `Finish`。タスクの残りの `evv` を手放し、預かった終わり方を核に渡して起こす仕事を積み、スタックを
 /// 集まりに返してほかのタスクに切り替える。`exit` の巻き戻しが底に着いたら、終わりの欄に書いて run を捨てる
 /// (docs/spec/vm.md の「`exit`」)。
 #[inline(never)]
@@ -2414,9 +2414,9 @@ fn failed<R: Exec>(
     }
 }
 
-/// 実行の時点で最も近い `effect` の handler の、`never` の操作 `op` の節の入口を、evidence と `args` で呼ぶ。evidence
-/// がなければ何もせずに `false` を返し、`args` も作らない。入口は `never` の節の入口なので、`yield_abort` で巻き戻しを
-/// 始めて戻らない。中断を起こした命令のフレームは入口の呼び出し元になり、その命令の地点の表の行で片付く。入口が戻らない
+/// 実行の時点で最も近い `effect` の handler の、`never` の操作 `op` の節のエントリを、evidence と `args` で呼ぶ。evidence
+/// がなければ何もせずに `false` を返し、`args` も作らない。エントリは `never` の節のエントリなので、`yield_abort` で巻き戻しを
+/// 始めて戻らない。中断を起こした命令のフレームはエントリの呼び出し元になり、その命令の地点の表の行で片付く。エントリが戻らない
 /// ので、安全点も置かない (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
 fn abort_to<R: Exec, const N: usize>(
     code: &CodeBase<R::M>,
@@ -2433,7 +2433,7 @@ fn abort_to<R: Exec, const N: usize>(
     let Some(ev) = (unsafe { ctx.ev_find(number) })? else {
         return Ok(false);
     };
-    // `ev_find` が `dup` した evidence を、節の入口の引数として渡す。`ev_clause` はそれを借りる
+    // `ev_find` が `dup` した evidence を、節のエントリの引数として渡す。`ev_clause` はそれを借りる
     let clause = unsafe { ctx.ev_clause(ev, op) }?;
     let args = args(ctx);
     task.scratch.clear();

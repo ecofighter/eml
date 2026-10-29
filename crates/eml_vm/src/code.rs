@@ -22,7 +22,7 @@ pub struct FnEntry {
     /// 引数の語の Repr。捕まえた値はクロージャの中で Repr のとおり走査する語か生の語に分かれるので、クロージャを
     /// 作るときと入るときに語の並べ方を引く (docs/spec/object-model.md の「クロージャ」)。
     pub(crate) params: Box<[Repr]>,
-    /// 結果が RC の Repr か。入口の関数として呼んだとき、`Finish` が結果を手放すかを決める。
+    /// 結果が RC の Repr か。エントリの関数として呼んだとき、`Finish` が結果を手放すかを決める。
     pub(crate) ret_rc: bool,
 }
 
@@ -61,11 +61,11 @@ pub struct CodeBase<M: Mode> {
     pub(crate) control: Arc<Control>,
     /// `par` の子の `evv` を作る、凍結した fork の表と末尾。
     pub(crate) forks: Forks,
-    /// ランタイムが名前で呼ぶ `Std.Async` の入口。`Std.Async` を読み込んだロードで引く。
+    /// ランタイムが名前で呼ぶ `Std.Async` のエントリ。`Std.Async` を読み込んだロードで引く。
     pub(crate) entries: Option<AsyncEntries>,
 }
 
-/// `Async` のタスクの入口の関数の番号 (docs/spec/vm.md の「`Async` のタスク」)。
+/// `Async` のタスクのエントリの関数の番号 (docs/spec/vm.md の「`Async` のタスク」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AsyncEntries {
     /// `Std.Async.start_task`。
@@ -213,14 +213,14 @@ pub enum CompileError {
     /// すでにある名前の関数を変換し直すと、前と違うコードになった。debug ビルドだけが確かめる
     /// (docs/spec/vm.md の「追記」)。
     Mismatch { function: String },
-    /// 結果が複数の値の入口の関数。入口の `ret` は値1つで、`Finish` は値を1つだけ受ける
+    /// 結果が複数の値のエントリの関数。エントリの `ret` は値1つで、`Finish` は値を1つだけ受ける
     /// (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
     MultiValueEntry { function: String },
     /// `par` を走らせうるプログラムで、`fork$` の関数が名前で引けない。evidence passing はそのプログラムに fork の
     /// 関数をすべて作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`par` の fork と join」)。
     MissingFork { function: String },
-    /// `Async` の命令を持つプログラムで、ランタイムが名前で呼ぶ入口の関数が引けない。translate は `Std.Async` を
-    /// 読み込んだプログラムに入口を必ず作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`Async` のタスク」)。
+    /// `Async` の命令を持つプログラムで、ランタイムが名前で呼ぶエントリの関数が引けない。translate は `Std.Async` を
+    /// 読み込んだプログラムにエントリを必ず作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`Async` のタスク」)。
     MissingEntry { function: String },
     /// driver が保留の操作を残した `Machine` には読み込まない。ヒープに触れないためである
     /// (docs/spec/vm.md の「時計と driver」)。
@@ -243,7 +243,7 @@ impl<M: Mode> CodeBase<M> {
             .filter(|f| pc < f.end)
     }
 
-    /// 命令の位置の関数の名前。どの関数にも属さない位置には、タスクの入口の関数の名前を返す。
+    /// 命令の位置の関数の名前。どの関数にも属さない位置には、タスクのエントリの関数の名前を返す。
     pub(crate) fn function_name(&self, pc: Pc, task: &Task) -> String {
         self.function_at(pc)
             .unwrap_or(&self.functions[task.entry as usize])

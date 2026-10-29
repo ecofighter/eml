@@ -1,9 +1,9 @@
 //! translate と縮約の間の box の挿入のパス (docs/spec/lir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
 //! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。関数の ABI は具体化した型と `split` だけで決まる。
-//! 手順は、`split` による一様化、版 `<f>$uniform` の作成と値の参照の向け直し、位置ごとの変換である
+//! 手順は、`split` による一様化、変種 `<f>$uniform` の作成と値の参照の向け直し、位置ごとの変換である
 //! (docs/spec/lir.md の「box の挿入」)。型は読まず、呼ばれる関数の
 //! シグネチャ、`split` と `clause` の印、配置の表、操作の表、基本操作の表だけを読む。入力は EP の出力を
-//! 写した LIR で、`tail`、`box`、`unbox`、RC の命令はない (`passes_until` の入口で `verify_lowered` が確かめる)。
+//! 写した LIR で、`tail`、`box`、`unbox`、RC の命令はない (`passes_until` のエントリで `verify_lowered` が確かめる)。
 //!
 //! 変数は具体化した型の Repr を持ち、値を受ける位置の Repr と互換でなければ変換する。変換は箱を要するスカラーと
 //! `tobj` の間と、構造体とその箱 (`obj`) の間だけで、`unit` と `obj` は命令なしで `tobj` と行き来する
@@ -23,7 +23,7 @@ use crate::{
 use rustc_hash::FxHashMap;
 
 pub fn boxing(program: &mut Program) {
-    // 手順 1: 値として生まれる関数と入口の関数を、その場でそろえる
+    // 手順 1: 値として生まれる関数とエントリの関数を、その場でそろえる
     for function in &mut program.functions {
         match function.clause {
             Some((effect, op)) => conform_clause(
@@ -34,7 +34,7 @@ pub fn boxing(program: &mut Program) {
             None => conform_split(function, &program.structs),
         }
     }
-    // 手順 2〜4: 値として使う型どおりの関数の版を作り、値の参照と末尾の呼び出しをそちらへ向ける
+    // 手順 2〜4: 値として使う型どおりの関数の変種を作り、値の参照と末尾の呼び出しをそちらへ向ける
     variants::make(program);
     // 手順 5: 変換はほかの関数を `signatures` でだけ見るので、関数を1つずつ書き換えながら表を共有で借りられる
     let signatures: Vec<Signature> = program.functions.iter().map(Signature::of).collect();
@@ -177,8 +177,8 @@ fn conform_split(function: &mut LirFn, structs: &Structs) {
 }
 
 /// `clause` の印の関数を操作の ABI に合わせる。捕獲は一様な Repr、evidence は `obj`、残りの引数は操作の表の Repr で
-/// 受け、`ret` は操作の `ret` にする。`never` の操作の節の入口はダミーの物体を返すので `obj` である
-/// (docs/spec/lir.md の「box の挿入」)。操作の表は構造体の型の位置を `obj` にするので、構造体の引数は入口で
+/// 受け、`ret` は操作の `ret` にする。`never` の操作の節のエントリはダミーの物体を返すので `obj` である
+/// (docs/spec/lir.md の「box の挿入」)。操作の表は構造体の型の位置を `obj` にするので、構造体の引数はエントリで
 /// `unbox` して受け直す。
 fn conform_clause(function: &mut LirFn, structs: &Structs, operation: &OperationInfo) {
     let params = function.params();
@@ -196,7 +196,7 @@ fn conform_clause(function: &mut LirFn, structs: &Structs, operation: &Operation
     conform(function, structs, &expected, ret);
 }
 
-/// `expected` と互換でない引数を、同じ名前の新しい `expected` の Repr の引数に替え、入口のブロックの先頭で、引数の順に
+/// `expected` と互換でない引数を、同じ名前の新しい `expected` の Repr の引数に替え、エントリのブロックの先頭で、引数の順に
 /// `let p = unbox p'` (または `box`) を置いて元の変数を定義する。p' は p と同じ値なので、p の印を写す。`ret` を替えた
 /// ときの `return` の変換は `Converter` に任せる。
 pub(crate) fn conform(function: &mut LirFn, structs: &Structs, expected: &[Repr], ret: Repr) {
@@ -325,7 +325,7 @@ impl Converter<'_> {
                 joined[target.0 as usize] = true;
             }
         }
-        // ブロックごとの、支配木で自身か祖先のうち最も近い合流 (なければ入口)。直接の支配者は番号が小さいので、
+        // ブロックごとの、支配木で自身か祖先のうち最も近い合流 (なければエントリ)。直接の支配者は番号が小さいので、
         // 番号の順に1回で決まる
         let mut nearest_join = vec![0u32; count];
         for block in 1..count {
@@ -507,7 +507,7 @@ impl Converter<'_> {
                         }
                         Some(row.ret)
                     }
-                    // 入力にある `unbox` と `box` は、`split` と `clause` の印の関数の入口で引数を合わせたものだけである
+                    // 入力にある `unbox` と `box` は、`split` と `clause` の印の関数のエントリで引数を合わせたものだけである
                     Rhs::Unbox(Atom::Var(from)) => {
                         self.unboxed_from.insert(var, *from);
                         None

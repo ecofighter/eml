@@ -293,7 +293,7 @@ fn entry(uses: &[usize], block: &Block) -> Option<Entry> {
     }
 }
 
-/// `jump` の実引数で解ける合流のブロックの入口を、`jump` の側で決める (docs/spec/core-ir.md の
+/// `jump` の実引数で解ける合流のブロックのエントリを、`jump` の側で決める (docs/spec/core-ir.md の
 /// 「既知のコンストラクタ」)。`jump M(a…)` の行き先 `M(p…)` が `switch p_i` か `unpack p_i` で始まり、
 /// `a_i` が `Tag` や `Int` の定数か、唯一の使いがこの `jump` である既知の `con` なら、`switch` か `unpack` を飛ばす。
 /// `unpack` で始まる M では、`p_i` をほかで使わない。`switch` で始まる M では、`p_i` を選ばれる行き先の外の、ほかの

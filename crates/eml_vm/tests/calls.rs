@@ -208,7 +208,7 @@ b2:
 }
 ";
 
-/// 自己末尾呼び出しは入口へのジャンプなので、深さは反復の数によらない。上限を枠いくつかの深さにしても止まらない。
+/// 自己末尾呼び出しはエントリへのジャンプなので、深さは反復の数によらない。上限を枠いくつかの深さにしても止まらない。
 #[test]
 fn a_self_tail_loop_runs_in_constant_depth() {
     let control = Arc::new(Control::new(Limits {
@@ -322,7 +322,7 @@ fn a_closure_with_many_captures_applies_in_order() {
     assert_eq!(run_lir(&text), (format!("{}\n", n - 1), Ok(())));
 }
 
-/// `clause` の引数の数は、いつも入口の関数の引数の数と等しい。違う IR は verifier を通らないので、通さずに実行する。
+/// `clause` の引数の数は、いつもエントリの関数の引数の数と等しい。違う IR は verifier を通らないので、通さずに実行する。
 #[test]
 fn a_clause_with_the_wrong_number_of_arguments_is_an_internal_error() {
     let text = "\

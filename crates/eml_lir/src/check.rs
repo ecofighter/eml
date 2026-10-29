@@ -78,7 +78,7 @@ pub fn clause_function<'v>(
     }
     let expected_ret = match operation.ret {
         OpRet::Repr(repr) => repr,
-        // `never` の節の入口はダミーの物体を返す
+        // `never` の節のエントリはダミーの物体を返す
         OpRet::Never => Repr::Obj,
     };
     if !ret.compatible(expected_ret) {
@@ -156,7 +156,7 @@ impl Dominators {
         self.tree.intersect(a, b)
     }
 
-    /// `block` の直接の支配者。入口の支配者は入口自身である。
+    /// `block` の直接の支配者。エントリの支配者はエントリ自身である。
     pub fn parent(&self, block: u32) -> u32 {
         self.tree.parent(block)
     }
@@ -246,7 +246,7 @@ pub fn shape(blocks: &[BlockShape]) -> Result<Dominators, String> {
             return Err(format!("b{index} has no edge into it"));
         }
     }
-    // R4 を満たせば、どのブロックにも番号の小さいブロックから辺が入るので、入口から届き、支配者が決まっている
+    // R4 を満たせば、どのブロックにも番号の小さいブロックから辺が入るので、エントリから届き、支配者が決まっている
     Ok(Dominators::new(tree))
 }
 
@@ -383,7 +383,7 @@ pub struct Site {
 }
 
 impl Site {
-    /// ブロックの入口。ブロックの引数と case のフィールドを定義する位置である。
+    /// ブロックのエントリ。ブロックの引数と case のフィールドを定義する位置である。
     pub fn entry(block: u32) -> Site {
         Site { block, index: -1 }
     }
@@ -401,10 +401,10 @@ pub struct Context<'a> {
     /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛か、戻らない extern の束縛かどうか。束縛の使いには
     /// 制御が届かないので、互換の位置で位置と比べない。
     never: Vec<bool>,
-    /// `closure` で束縛した変数の関数と、捕獲した値の数。`ev_set_clause` の入口の関数と、Core IR の `handle` の節の
+    /// `closure` で束縛した変数の関数と、捕獲した値の数。`ev_set_clause` のエントリの関数と、Core IR の `handle` の節の
     /// 引数の数を確かめるのに使う。
     closures: FxHashMap<VarId, (FnIdx, usize)>,
-    /// `ev_new[E]` で束縛した変数の、エフェクトの番号。`ev_set_clause` の入口がその evidence のエフェクトの操作で
+    /// `ev_new[E]` で束縛した変数の、エフェクトの番号。`ev_set_clause` のエントリがその evidence のエフェクトの操作で
     /// あることを確かめるのに使う。
     evidences: FxHashMap<VarId, u32>,
     dominators: Dominators,
@@ -523,9 +523,9 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
-    /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
+    /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。エントリの
     /// 関数は操作の ABI で呼ばれ、`apply` の一様な規約に合わないためである
-    /// (docs/spec/lir.md の「入口の関数の印」)。変数は1回だけ定義されるので (R5)、呼ぶ側は先に `closure` をすべて
+    /// (docs/spec/lir.md の「エントリの関数の印」)。変数は1回だけ定義されるので (R5)、呼ぶ側は先に `closure` をすべて
     /// `closures` に渡し、`uses` で `ev_set_clause` の2つ目の引数を除いた使いをすべて渡す。
     pub fn clause_values(
         &self,
@@ -1113,7 +1113,7 @@ impl<'a> Context<'a> {
         self.bound_mark(var, row.ret_mark, || format!("`{}`", row.name))
     }
 
-    /// 入口の段では、行の Repr が `tobj` でない位置の引数と結果の Repr は行と同じである。`tobj` の位置は、型変数の
+    /// エントリの段では、行の Repr が `tobj` でない位置の引数と結果の Repr は行と同じである。`tobj` の位置は、型変数の
     /// 位置として具体化した型の Repr のまま渡され、box の挿入が合わせる。行に構造体は現れず、構造体の型の位置は箱の
     /// `obj` なので、`obj` の位置にも構造体がそのまま渡され、box の挿入が合わせる
     /// (docs/spec/lir.md の「extern の行」)。
