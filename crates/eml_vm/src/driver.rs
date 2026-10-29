@@ -25,6 +25,26 @@ impl Clock {
             Clock::Virtual => Box::new(TestDriver::new(seed)),
         })
     }
+
+    /// この時計から `Machine` が作った driver の種類。
+    pub(crate) fn kind(self) -> DriverKind {
+        match self {
+            Clock::Real => DriverKind::Real,
+            Clock::Virtual => DriverKind::Virtual,
+        }
+    }
+}
+
+/// run が使う driver の出どころ。OS のシグナルを中継するか、空きの待ちに上限を掛けるかを決める
+/// (docs/spec/vm.md の「時計と driver」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DriverKind {
+    /// `Machine` が `Clock::Real` から作った本物の driver。
+    Real,
+    /// `Machine` が `Clock::Virtual` から作ったテストの driver。空きのループで時計を進める。
+    Virtual,
+    /// `Machine::with_driver` で渡した driver。眠る driver として扱い、OS のシグナルは中継しない。
+    Injected,
 }
 
 /// 予定できるシグナルの種類。`Std.Signal.Signal` に対応する。

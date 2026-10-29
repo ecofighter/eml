@@ -380,6 +380,152 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
     assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
 }
 
+/// `wait` の1回の呼び出しの、期限と呼んだときの時刻。
+type WaitCall = (Option<u64>, u64);
+
+/// `wait` の呼び出しを `calls` に書き、期限まで自分の時計を進める driver。操作は受け付けない。
+#[derive(Default)]
+struct DeadlineRecorder {
+    now_ms: u64,
+    calls: Arc<std::sync::Mutex<Vec<WaitCall>>>,
+}
+
+struct NoWaker;
+
+impl eml_rt::IoWaker for NoWaker {
+    fn wake(&self) {}
+}
+
+impl eml_rt::IoDriver for DeadlineRecorder {
+    fn now(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.now_ms)
+    }
+
+    fn wait(&mut self, deadline_ms: Option<u64>) -> std::io::Result<bool> {
+        self.calls.lock().unwrap().push((deadline_ms, self.now_ms));
+        match deadline_ms {
+            Some(deadline) => {
+                self.now_ms = self.now_ms.max(deadline);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn submit(&mut self, _op: eml_rt::Op) -> eml_rt::OpKey {
+        unreachable!("the program submits no ops")
+    }
+
+    fn cancel(&mut self, _key: eml_rt::OpKey) {}
+
+    fn completions(&mut self, _out: &mut Vec<eml_rt::Completion>) {}
+
+    fn pending(&self) -> usize {
+        0
+    }
+
+    fn waker(&self) -> Arc<dyn eml_rt::IoWaker> {
+        Arc::new(NoWaker)
+    }
+
+    fn bin(&self) -> Arc<eml_rt::HandleBin> {
+        Arc::new(eml_rt::HandleBin::default())
+    }
+
+    fn shutdown_write(&mut self, _handle: eml_rt::IoHandle) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn set_nodelay(&mut self, _handle: eml_rt::IoHandle, _on: bool) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn close(&mut self, _handle: eml_rt::IoHandle) {}
+
+    fn quiesce(&mut self) {}
+}
+
+/// `with_driver` で渡した driver には中継がないので、空きのループは1回の待ちを今から 10 ms 先までに切る
+/// (docs/spec/vm.md の「時計と driver」)。driver の時計で確かめ、実時間は測らない。
+#[test]
+fn an_injected_driver_waits_at_most_10_ms_at_a_time() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> Async.sleep_ms 50)
+";
+    let driver = DeadlineRecorder::default();
+    let calls = Arc::clone(&driver.calls);
+    let (host, _) = eml_vm::capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap();
+    let calls = calls.lock().unwrap();
+    assert!(calls.len() >= 5, "{calls:?}");
+    for &(deadline, now) in calls.iter() {
+        assert!(deadline.is_some_and(|d| d <= now + 10), "{calls:?}");
+    }
+}
+
+/// 自己パイプのある本物の driver の run は、タスクが1つでも run の始めから監視のスレッドを持ち、割り込みは自己パイプ
+/// から監視のスレッドの waker を通って眠る worker に届く (docs/spec/vm.md の「タスクとスケジュール」)。`cargo test`
+/// は1つのプロセスでテストを並べるので、ほかのテストの監視のスレッドを見つけて偽に通りうる。nextest の結果で確かめる。
+#[cfg(target_os = "linux")]
+#[test]
+fn a_real_run_with_a_doorbell_has_a_monitor_from_its_start() {
+    use std::time::{Duration, Instant};
+
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> Async.sleep_ms 100000)
+";
+    let program = eml_test_support::lir(src);
+    let control = Arc::new(Control::new(Limits::default()));
+    let doorbell = eml_vm::Doorbell::new().unwrap();
+    let runner = {
+        let control = Arc::clone(&control);
+        let doorbell = Arc::clone(&doorbell);
+        std::thread::spawn(move || {
+            let (host, _) = eml_vm::capture_host(Default::default());
+            let mut machine = Machine::<Checked>::new(control, host)
+                .with_clock(Clock::Real)
+                .with_sched(Sched::Sequential)
+                .with_doorbell(doorbell);
+            let loaded = machine.load(&program).unwrap();
+            machine.run(loaded.entry)
+        })
+    };
+    let has_monitor = || {
+        std::fs::read_dir("/proc/self/task").unwrap().any(|task| {
+            std::fs::read_to_string(task.unwrap().path().join("comm"))
+                .is_ok_and(|comm| comm.trim_end() == "eml-monitor")
+        })
+    };
+    // 3 秒は見つからなかったときの番犬で、そのときも割り込んで run を終わらせてから落ちる
+    let start = Instant::now();
+    let found = loop {
+        if has_monitor() {
+            break true;
+        }
+        if start.elapsed() >= Duration::from_secs(3) {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    // シグナルのハンドラと同じ手順で、止める語を立ててから自己パイプを鳴らす
+    control.interrupt();
+    doorbell.ring();
+    let result = runner.join().unwrap();
+    assert!(found, "no eml-monitor thread appeared");
+    let error = result.unwrap_err();
+    assert!(error.interrupted(), "{error:?}");
+}
+
 /// `run_real_on` の結果。出力、run の結果、閉じたときの結果 (検査モードの漏れの検査)、経過である。
 type RealRun = (
     String,

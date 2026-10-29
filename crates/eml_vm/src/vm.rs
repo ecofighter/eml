@@ -15,7 +15,7 @@ use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
-use crate::driver::{ceil_ms, floor_ms};
+use crate::driver::{DriverKind, ceil_ms, floor_ms};
 use crate::error::{KEPT_PENDING, VmFault};
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{JoinId, JoinNode, MAIN, Outcome, Policy, Scheduler, TaskId, TaskState};
@@ -1262,22 +1262,23 @@ fn switch_away<R: Exec>(
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)
     collect::<R>(code, ctx, task.depth_offset, sched)?;
-    // 走れるタスクがなければ、次の期限か driver の完了まで待って集め直す。待ちは1回ごとに短く切り、戻るたびに止める
-    // 語を読む。`PREEMPT` は切り替える先がないので捨てる。期限も保留の操作もないか、driver がもう何も進まないと
-    // 答えたら、どのタスクも進めないデッドロックである (docs/spec/vm.md の「時計と driver」)
+    // 走れるタスクがなければ、次の期限か driver の完了まで待って集め直す。戻るたびに止める語を読む。中継のない run
+    // では、止める語を読み直すために `wait_deadline` が1回の待ちを短く切る。`PREEMPT` は切り替える先がないので
+    // 捨てる。期限も保留の操作もないか、driver がもう何も進まないと答えたら、どのタスクも進めないデッドロックである。
+    // デッドロックは切る前の期限で決める (docs/spec/vm.md の「時計と driver」)
     let next = loop {
         if let Some(next) = sched.policy.pick(&mut sched.ready) {
             break next;
         }
         let mut deadline = sched.cells.next_deadline();
-        // OS のシグナルを待つタスクがいれば、ほかに進むものがなくてもシグナルが来るまで眠る。本物の driver は1回の
-        // 眠りを短く切り、届いたときは監視のスレッドが waker で起こす
+        // OS のシグナルを待つタスクがいれば、ほかに進むものがなくてもシグナルが来るまで眠る。届いたときは監視の
+        // スレッドが waker で起こす
         if sched.listening() {
             deadline = deadline.or(Some(u64::MAX));
         } else if deadline.is_none() && sched.driver.pending() == 0 {
             return Err(VmFault::Deadlock);
         }
-        match sched.driver.wait(deadline) {
+        match sched.driver.wait(sched.wait_deadline(deadline)) {
             Ok(true) => {}
             Ok(false) => return Err(VmFault::Deadlock),
             Err(e) => return Err(VmFault::Driver(e.to_string())),
@@ -2057,7 +2058,7 @@ fn async_op<R: Exec>(
         Extern::AsyncParkSignal => {
             let me = current_cell(task)?;
             // 本物の driver では、OS のシグナルを中継する監視のスレッドが要る (docs/spec/vm.md の「タスクとスケジュール」)
-            if sched.real_driver {
+            if sched.driver_kind == DriverKind::Real {
                 sched.start_monitor();
             }
             if let Some(run) = sched

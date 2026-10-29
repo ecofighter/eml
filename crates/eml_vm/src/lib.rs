@@ -8,6 +8,7 @@ use eml_lir::Program;
 use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
 use crate::cells::TaskStats;
+use crate::driver::DriverKind;
 use crate::error::KEPT_PENDING;
 use crate::vm::ExecWith;
 
@@ -228,10 +229,10 @@ pub struct Machine<M: Mode> {
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
     /// driver が貸した記憶はヒープにあるので、`Drop` は `ctx` より先にこの欄を落とす (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
-    /// 持っている driver を `Machine` が `Clock::Real` から作ったか。`with_driver` で渡した driver は、時計の欄によらず
-    /// 偽にする。テストの driver は眠らないので、その run に OS のシグナルを待たせると空きのループが回り続けるためである
+    /// 持っている driver の出どころ。`with_driver` で渡した driver は、時計の欄によらず `Injected` にする。テストの
+    /// driver を渡されたときに OS のシグナルを待たせると、空きのループが回り続けるためである
     /// (docs/spec/vm.md の「時計と driver」)。
-    real_driver: bool,
+    driver_kind: DriverKind,
     code: CodeBase<M>,
     /// poisoned の `Machine` では、driver が貸したままの記憶を放さないように、`Drop` が落とさずに漏らす。
     ctx: ManuallyDrop<Ctx<M>>,
@@ -304,7 +305,7 @@ impl<M: Mode> Machine<M> {
             counters: Vec::new(),
             clock: Clock::Virtual,
             driver: None,
-            real_driver: false,
+            driver_kind: DriverKind::Virtual,
             doorbell: None,
             signals: Vec::new(),
         }
@@ -341,7 +342,7 @@ impl<M: Mode> Machine<M> {
     /// スレッドの上で作る (docs/spec/vm.md の「時計と driver」)。
     pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
-        self.real_driver = false;
+        self.driver_kind = DriverKind::Injected;
         self
     }
 
@@ -493,7 +494,7 @@ impl<M: Mode> Machine<M> {
         let driver = match self.driver.take() {
             Some(driver) => driver,
             None => {
-                self.real_driver = matches!(self.clock, Clock::Real);
+                self.driver_kind = self.clock.kind();
                 self.clock.driver(self.sched.seed()).map_err(|e| {
                     code.error(
                         vm::Failure {
@@ -512,7 +513,7 @@ impl<M: Mode> Machine<M> {
             generations: std::mem::take(&mut self.generations),
             counters: std::mem::take(&mut self.counters),
             driver,
-            real_driver: self.real_driver,
+            driver_kind: self.driver_kind,
             doorbell: self.doorbell.clone(),
             signals: std::mem::take(&mut self.signals),
         };
@@ -728,8 +729,7 @@ struct Start {
     generations: Vec<u32>,
     counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
-    /// driver を `Machine` が `Clock::Real` から作ったか。
-    real_driver: bool,
+    driver_kind: DriverKind,
     doorbell: Option<Arc<Doorbell>>,
     signals: Vec<VirtualSignal>,
 }
@@ -756,12 +756,13 @@ fn run_scheduled<M: Mode, P: Policy>(
         start.generations,
     );
     sched.shared_roots = start.shared_roots;
-    sched.real_driver = start.real_driver;
+    sched.driver_kind = start.driver_kind;
     sched.cells.counters = start.counters;
     // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
     sched
         .cells
         .schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
+    sched.begin_run();
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
     // (docs/spec/vm.md の「時計と driver」)
