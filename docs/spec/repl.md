@@ -260,6 +260,7 @@ REPL は Ctrl-C で終わらない ([VM](vm.md) の「上限と割り込み」�
 - `:type` は始めに止める語を下ろし、前端の検査の後で止める語を読む。割り込みが立っていれば、型を書かずに `interrupted` を書き、同じ読みで届いた残りの行を捨てる
 - 実行の間の割り込みは、VM の安全点か `FileIn` の読み (`FileIn.read_all` など) の中で止まり、`Failed` になる。unix では待っている読みも、ハンドラが `SA_RESTART` を外して入れるので止まる ([オブジェクトモデル](object-model.md) の「読み手」)。Windows では待っている読みは戻るまで止まらない ([VM](vm.md) の「上限と割り込み」)。最後の安全点の後に来た割り込みでは、入力は終わりまで動き、`let` の束縛もできる
 - 入力を待つ間と、行を読み終えてから次の入力の始めまでに来た割り込みは、次の入力の始めの `Control::clear` が捨てる
+- REPL は SIGTERM のハンドラを入れない。SIGTERM は OS の既定の動作でプロセスを終わらせる。`Signal.wait Interrupt` は REPL でも Ctrl-C で起きるが、`Signal.wait Terminate` を起こす OS のシグナルはない ([標準ライブラリ](stdlib.md) の「`Std.Signal`」)
 
 ### 残る制限
 

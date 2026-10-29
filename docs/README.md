@@ -35,7 +35,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
 | [future/roadmap.md](future/roadmap.md) | 将来の設計 | 段の進め方と閉じる手順、段の列、その後の項目 |
-| [future/async.md](future/async.md) | 将来の設計 | 非同期の設計 (`Async` のタスクとスコープ、取り消し、時間、チャネル、I/O の driver、ネットワークとシグナル) |
+| [future/async.md](future/async.md) | 将来の設計 | 非同期の設計 (`Async` のタスクとスコープ、取り消し、時間、チャネル、I/O の driver、ネットワークとシグナル、TLS と HTTP) |
 | [future/native.md](future/native.md) | 将来の設計 | ネイティブ化の設計 (Cranelift のコード生成、呼び出し規約、中断と実行時エラー、安全点、生の要素の配列、AOT と配布) |
 | [future/ffi.md](future/ffi.md) | 将来の設計 | FFI と拡張の設計 (`extern "C"` の宣言、型の対応、長く走る呼び出し、拡張、GUI) |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (スレッドと worker、スケジューラ、共有の印方式の RC、`par`、継続の移動、止める手順) |

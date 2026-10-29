@@ -23,7 +23,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | 5 | 取り消し | 取り消しは `Wake.Cancelled` で届け、std の包みが IO の失敗 `Prelude.Cancelled` として投げる。タスクは自分のフレームとスコープの後始末を通って巻き戻る。継続を捨てる強い取り消しは `exit`、致命的な誤り、run の終わり、回復のときだけにする。柔らかい確かめの名前は `check_cancelled` と `cancel_requested` である |
 | 6 | `exit` | `exit` は自分のタスクだけを巻き戻し、`Control` の終わりの欄に終了コードを書いて終わりのビットを立てる。ほかのタスクは巻き戻さず、ヒープを落とすときに `Lin` の資源を後始末する |
 | 7 | タスクごとの上限 | タスクの中で深さ、スタック、メモリの柔らかい上限を超えると、そのタスクの IO の失敗 `ResourceLimit` になる。メモリの硬い上限は今と同じく run 全体を止める |
-| 8 | 失敗の種類 | `IOErrorKind` は `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit` を持つ。extern はこの5種類を出さず、出すのは `fail_io` だけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」) |
+| 8 | 失敗の種類 | `IOErrorKind` は `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit`、`ConnectionRefused` を持つ。extern はこの6種類を出さず、出すのは `fail_io` だけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」) |
 | 9 | 時間 | 時間は今からの長さを `Int` のミリ秒で表す。名前を付けたスコープを期限付きで待つ関数は `Async.drain_within` である |
 | 10 | I/O | std の API は OS によらず完了型にする。buffer は所有ごと渡して返してもらい、受け付け、待ち、取り出しの3段で行う。`IoDriver` の trait を `eml_rt` に置き、`eml_io` が実装する。本物の driver は `compio-driver` の上に作り、unix は polling、Windows は IOCP を使う |
 | 11 | ハンドルと worker | ハンドルは最初に受け付けた worker の I/O の driver に縛る。別の worker からの受け付けはその worker の受け箱を通して回す |
@@ -33,7 +33,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | 15 | 共有の状態 | 共有の状態は持ち主のタスクの後ろに `Chan` を置く形 (actor) で書く。利用者に見せる atomic な操作は `Atomic.Counter` だけである |
 | 16 | 受け手の決まらない `Lin` の値 | MPMC の `Chan` と `Task` の結果で送る `Lin` の値は、途中の持ち主の ID を付けて送る |
 | 17 | Rust の側が持つ語 | channel の buffer、タスクのセルの結果、スコープの失敗の欄、join の節点、プールの仕事の記録は、run の登録表に載せる |
-| 18 | シグナル | シグナルの handler は `Control` のビットを立てて監視のスレッドを起こし、監視のスレッドが `Signal.wait` で待つタスクへ完了として届ける。待つタスクがなければ、`INTERRUPT` は今と同じく致命的で、`TERMINATE` は同じ止め方で run を止めて 143 で終わる |
+| 18 | シグナル | シグナルの handler は `Control` のビットを立て、自己パイプで監視のスレッドを起こす。監視のスレッドは、`Signal.wait` で待つタスクのセルの持ち主の受け箱へ知らせを積み、worker が次の安全点で集めるように `NOTICE` を立てて、driver の waker を鳴らす。待つタスクがなければ、`INTERRUPT` は run を止めて 130 で終わり、`TERMINATE` は同じ止め方で 143 で終わる。`eml run` で、前の同じシグナルをまだ届けていない間か、それがもう run を止めている間に来たシグナルは、その場でプロセスを終わらせる。Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)` である |
 | 19 | `Net` のハンドル | `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、破棄処理がソケットを閉じる |
 | 20 | 決定性 | `Async` の UI テストはどの seed でも同じ出力を返す |
 | 21 | 操作の予算 | 待たずに済む速い道が 128 回続いたら、タスクはほかのタスクに worker を渡す |
@@ -51,11 +51,12 @@ pub abstract effect Async where
   await_time     : Int -> Wake                   -- 今から Int ミリ秒待つ
   await_drain    : Scope -> Wake                 -- スコープに属するタスクがなくなるまで待つ
   reschedule     : Unit -> Wake                  -- 実行待ちに戻る (`yield_now` と操作の予算)
+  await_signal   : Int -> Wake                   -- シグナルが来るまで待つ (`Signal.wait`)
 
 pub data Wake = | Woke | Cancelled
 ```
 
-- 8つの生の操作はすべて実装してある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
+- 9つの生の操作はすべて実装してある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
 - `Async` は extern のエフェクトにしない。extern のエフェクトは yield しうるラベルでなく ([型と Kind](../spec/types.md) の「row の具体化の記録」)、`Async` の操作は継続を取り出して待つためである
 - 生の操作は eml とランタイムの間の ABI である。`Async` は抽象エフェクトで、名前は見えるが操作は見えない。操作はランタイムの ABI として文書に書く。利用者は下の節の包みの関数を呼ぶ。`Cell` は登録表の添字を持つ `Unr` の即値 (`Repr::Int`) で、`OpId` はランタイムの token の `Foreign` である。どれも std の中で使う。`OpId` は `Lin` で、待つ間はランタイムが預かり、再開するときに `Wake` と組にして返す
 - ランタイムが名前で呼ぶエントリは、単相の `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である。単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` は、生の操作ごとに節を1つ持つ handler をタスクの本体にかぶせる。節は継続 `k` をランタイムに預けて (待ちに入れるか、実行待ちに戻す) そのまま戻る。ランタイムは後で `resume_task` で `k` に `Wake` の値を渡し、タスクを再開する ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。タスクの本体は std の底の関数で包む。底は `Panic` と IO の失敗を捕まえ、結果を値のまま、引数を預かる extern (`finish_ok`) に渡す。`await` と `run` は預けた値を `take_result` と `run_result` で1回受け取る。`Lin` の結果も thunk に包まずに渡せる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
@@ -238,7 +239,7 @@ read_chunk buf s =
 
 - `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。今は `verus!` の外の安全なつなぎのコードで、`external_body` も信頼の一覧の行も持たない ([VM](../spec/vm.md) の「時計と driver」)。`eml_rt` の extern が driver を要るまでは実行系が持ち、`Ctx` には入れない。`eml_rt` の extern が I/O を持ち、`Ctx` が driver を持つときに、`external_body` と信頼の一覧の行を足す
 - 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び方 (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
-- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM は起こしを使わず、代わりに1回の待ちを `IDLE_TICK` で切る ([VM](../spec/vm.md) の「時計と driver」)
+- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM では、監視のスレッドのない run は Ctrl-C の後に起こされないので、1回の待ちを `IDLE_TICK` で切る ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver は `compio-driver` と `compio-buf` の上に作る。unix は polling (epoll と kqueue)、Windows は IOCP を使い、io_uring は使わない。単独で使えること、スレッドごとに driver を持てること、別のスレッドから起こせる待ちを持つこと、プールの仕事の完了が待ちを起こすことは確かめた。バージョンと、上げるときに確かめることは [アーキテクチャ](../implementation/architecture.md) の「外部 crate」にある
 - compio の上位の crate (`compio-net`、`compio-fs`、`compio-process`) は使わない。どれも compio の実行系 (`compio-runtime`) を要し、実行系が持つ別の `Proactor` に操作を出すので、eml の driver の完了の列にも `quiesce` にも乗らない。eml は `compio-driver` の操作を自分の driver から直接出す
 - Windows では、ソケットを IOCP のポートに結び付けてから (`Proactor::attach`) `Recv` と `Send` を出す。今の driver は Windows でハンドルを作らないので結び付けもしない。Windows のソケットを扱うときに足す
@@ -267,7 +268,7 @@ read_chunk buf s =
 - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
 - プールは入力の中身を読み、移した `Mut*Array` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
 - 完了は持ち主の worker の driver の完了の列を通して届く。これがプールの書き込みと持ち主の読みの順を決める
-- DNS の名前の解決 (`getaddrinfo`) も、`connect` の中で同じ3段のプールの仕事にする
+- `connect` の中の名前の解決はプールの仕事にせず、本物の driver の中の解決のスレッドで行う。プールの仕事は終わる前に手放せないが、名前の解決は取り消し、期限、`quiesce`、Ctrl-C で手放せるようにするためである ([VM](../spec/vm.md) の「時計と driver」)
 - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し戻しで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
 - 場合ごとの扱いは次のとおりである
 
@@ -283,33 +284,7 @@ read_chunk buf s =
 
 ## ネットワークとシグナル
 
-```haskell
-pub extern data TcpListener                                                      -- Lin
-pub extern data TcpStream                                                        -- Lin
-pub listen            : String -> Int -> <IO> TcpListener                         -- ホストとポート (0 は空いているポート)
-pub local_port        : TcpListener -> (Int, TcpListener)
-pub accept            : TcpListener -> <IO, Async> (TcpStream, TcpListener)       -- ECONNABORTED と EINTR は中でやり直す
-pub accept_within     : Int -> TcpListener -> <IO, Async> (Option TcpStream, TcpListener)
-pub close_listener    : TcpListener -> <IO> Unit
-pub connect           : String -> Int -> <IO, Async> TcpStream                   -- 名前の解決をプールで行い、非同期に接続する
-pub read_chunk        : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)      -- 最大 64 KiB を足す。何も足さなければ EOF
-pub read_chunk_within : Int -> Bytes -> TcpStream -> <IO, Async> (Option Bytes, TcpStream)
-pub read_line         : TcpStream -> <IO, Panic, Async> (Option String, TcpStream)
-pub read_line_within  : Int -> TcpStream -> <IO, Panic, Async> (Option (Option String), TcpStream)
-pub write             : String -> TcpStream -> <IO, Async> TcpStream
-pub write_bytes       : Bytes -> TcpStream -> <IO, Async> TcpStream               -- buffer をすべて書く
-pub write_line        : String -> TcpStream -> <IO, Async> TcpStream
-pub shutdown_write    : TcpStream -> <IO> TcpStream                               -- FIN。読みは続けられる
-pub close             : TcpStream -> <IO> Unit                                    -- drop と同じ
-pub peer_addr         : TcpStream -> (String, TcpStream)
-pub set_nodelay       : Bool -> TcpStream -> <IO> TcpStream
-```
-
-- 名前はハンドルの規則 ([標準ライブラリ](../spec/stdlib.md) の「ハンドル」) に従い、ハンドルを後に、結果を先に置く。`read_line` はストリームごとの buffer の上に eml で書く
-- 誤りは IO の失敗で、種類 `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse` を使う。EPIPE は `ConnectionReset` にする
-- `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、破棄処理がソケットを閉じる。取り消したタスクの巻き戻しがハンドルを落とすので、取り消しの道で `close` を書かなくてよい
-- `accept` は ECONNABORTED と EINTR を中でやり直す。EMFILE は IO の失敗で、accept するタスクが捕まえて待ってからやり直せる
-- driver の操作は `compio-driver` の操作で出す (上の「`IoDriver` と `eml_io`」)。unix では、ソケットの作成、bind、listen、accept、connect、書きの側を閉じること、閉じることに、`CreateSocket`、`Bind`、`Listen`、`Accept`、`Connect`、`ShutdownSocket`、`CloseSocket` を使う。Windows の `compio-driver` にあるのは IOCP の `Accept`、`Connect`、`CloseSocket` だけなので、ソケットの作成、bind、listen は `eml_io` が socket2 で書く。Windows の accept と connect の後には、それぞれ `update_context` を呼ぶ。ConnectEx はソケットが bind 済みであることを求めるので、connect の前の bind も `eml_io` で書く。accept などは完了のときに操作の中身 (受けたソケットと相手の番地) を要るので、本物の driver が完了を取り出す所を、操作を返す形に広げる
+`Std.Net` の TCP と `Std.Signal` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」と「`Std.Signal`」にある。driver の操作と名前の解決のスレッドは [VM](../spec/vm.md) の「時計と driver」に、シグナルを届ける道は [VM](../spec/vm.md) の「上限と割り込み」にある。ここには、部品を組み合わせたサーバの例と、Windows に残るものと、後で足すものを書く。
 
 ```haskell
 import Async
@@ -317,13 +292,13 @@ import Net
 import Chan
 import Signal
 
-session : TcpStream -> <IO, Panic, Async> Unit
+session : Net.TcpStream -> <IO, Panic, Async.Async> Unit
 session conn =
   match Net.read_line_within 10000 conn with          -- 要求の期限。ストリームは戻る
     | (Some (Some line), conn) -> session (Net.write_line (answer line) conn)
     | (_, conn) -> Net.close conn                     -- 取り消されたときは破棄処理が conn を閉じる
 
-acceptor : Async.Scope -> Chan Unit -> TcpListener -> <IO, Panic, Async> Unit
+acceptor : Async.Scope -> Chan.Chan Unit -> Net.TcpListener -> <IO, Panic, Async.Async> Unit
 acceptor conns slots l =
   let _ = Chan.send () slots                          -- 生きている接続が 10000 なら待つ
   let (conn, l) = Net.accept l
@@ -339,18 +314,19 @@ main () =
   let slots = Chan.new 10000
   use conns <- Async.scope
   let _ = Async.race (fn () -> acceptor conns slots (Net.listen "0.0.0.0" 8080))
-                     (fn () -> Signal.wait Terminate)
+                     (fn () -> Signal.wait Signal.Terminate)
   Async.drain_within 30000 conns
 ```
 
 `SIGTERM` が来ると `race` が accept するタスクを取り消し、`drain_within` が実行中の接続を最大 30 秒待ち、残りを取り消して終わるまで待つ。接続のスコープはその後で終わりの手順を通る。`session` を `try_all` で包まないと、1つの接続の失敗がスコープの失敗になり、サーバが止まる。
 
+Windows には次のものが残る。
+
+- Windows の本物の driver はまだソケットを扱わない。Windows の `compio-driver` にあるのは IOCP の `Accept`、`Connect`、`CloseSocket` だけなので、ソケットの作成、bind、listen は `eml_io` が socket2 で書く。Windows の accept と connect の後には、それぞれ `update_context` を呼ぶ。ConnectEx はソケットが bind 済みであることを求めるので、connect の前の bind も `eml_io` で書く ([ロードマップ](roadmap.md) の `net-windows`)
+
 ### シグナル
 
-- `std/Signal` は `data Signal = | Interrupt | Terminate` と `wait : Signal -> <IO, Async> Unit` を持つ。`Terminate` は `SIGTERM` で、Windows では `CTRL_CLOSE_EVENT` と `CTRL_SHUTDOWN_EVENT` である
-- シグナルの handler は async-signal-safe のまま、`Control` のビットを立て (Ctrl-C は `INTERRUPT`、`SIGTERM` は新しい `TERMINATE`)、自己パイプに1バイト書いて監視のスレッドを起こす ([マルチコア対応の設計](multicore.md) の「スレッドと worker」)。Windows ではコンソールの handler が同じビットを立て、監視のスレッドを起こす。ビットが立ったのを見た監視のスレッドは、そのシグナルを `Signal.wait` で待つタスクが登録されていればビットを下ろし、待つタスクのセルの持ち主へ完了として届ける。登録されていなければ、終わりの欄に致命的な誤りを書いて run を止める。`INTERRUPT` では今と同じである ([VM](../spec/vm.md) の「上限と割り込み」)。`TERMINATE` も同じ止め方で run を止め、終了コードは 143 にする。シェルが SIGTERM で終わった子に返す値で、SIGINT の 130 と同じ考え方である
-- `signalfd` と `EVFILT_SIGNAL` は使わない。どちらもすべてのスレッドでシグナルを止める必要があり、今の handler とブロックする読みの EINTR の道と食い違う
-- 2回目の Ctrl-C は今と同じく `_exit(130)` である。handler がビットを立ててから監視のスレッドが下ろすまでの間 (高々監視の刻み1つ) の2回目の Ctrl-C も終わる。これは文書にある2回の Ctrl-C の意味と同じである
+- Windows には `Terminate` を起こす OS の出来事がない。`Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写すことは、Windows のソケットと一緒に入れる ([ロードマップ](roadmap.md) の `net-windows`)
 
 ### TLS と HTTP
 
@@ -447,7 +423,7 @@ pub request      : String -> String -> Bytes -> Options -> <IO, Panic, Async> Re
 - 応答の状態行とヘッダーは `read_line` で読み、それぞれ 64 KiB までにする。ヘッダー名は大文字小文字を区別しない。本文は `Content-Length` があればそれで、なければ `Transfer-Encoding: chunked` (拡張は無視し、trailer は捨てる)、それもなければ EOF まで読む。`HEAD`、1xx、204、304 には本文がない。EOF までの本文が https で切り詰められたら、`Tls` の IO の失敗のまま伝える
 - リダイレクトは 301、302、303、307、308 を、どのメソッドでも `options.max_redirects` の回数まで追う。超えたら IO の失敗にする。301、302、303 は `GET` にして本文と呼び出し側の `Content-Length`、`Content-Type` を捨て、307 と 308 は同じメソッドと本文で送る。`Location` は絶対 URL か絶対パスにする。別のオリジン (scheme、host、port のどれかが違う) へは、呼び出し側の `Authorization`、`Cookie`、`Proxy-Authorization` を落とす。https から http は断り、http から https は許す
 - gzip、HTTP/2 と ALPN、keep-alive とプール、ストリーミングの本文、プロキシ、cookie、本文の上限、期限は持たない。期限は `Async.timeout` で書く ([ロードマップ](roadmap.md) の「非同期」)
-- libcurl は使わない。本物のソケットを要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないので TLS の層にならない ([ロードマップ](roadmap.md) の「非同期」)
+- libcurl は使わない。本物のソケットが要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないので TLS の層にならない ([ロードマップ](roadmap.md) の「非同期」)
 
 テストは次のとおりである。
 
@@ -459,7 +435,8 @@ pub request      : String -> String -> Bytes -> Options -> <IO, Panic, Async> Re
 ### 後で足すもの
 
 - UDP、`SO_REUSEPORT` で複数のタスクが accept する形
-- 非同期の名前の解決。既定では `getaddrinfo` をプールで動かす。`resolve` も同じ形で持つ
+- 非同期の名前の解決。既定では、本物の driver の解決のスレッドで std の解決器を動かす
+- `Net.resolve` と名前での `listen`、Happy Eyeballs、書きの期限 (`write_within`)。後に回した理由と見直す条件は [ロードマップ](roadmap.md) の「非同期」にある
 
 ## ファイルとパイプ
 
@@ -483,8 +460,9 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 ## テストと決定性
 
 - `async/` の UI テストを seed で流す規則は [テスト戦略](../implementation/testing.md) の「seed で流す」にある。I/O の待ちを持つテストは、seed で完了の順を決めるテストの driver の上で流す。どの seed でも同じ出力を返すことを求めるので、ネイティブのコードでも同じになる
-- テストの driver は、メモリの上の `TcpStream` の組 (仮想のホストの上の `listen` と `connect`) と、テストの hook で起こす仮想のシグナルを持つ。時間の待ちは `Clock` が決め、仮想の時計の規則は [VM](../spec/vm.md) の「時計と driver」にある
-- 本物のソケットのテストは `tests/ui/run/net/` に少しだけ置く。ループバックでポート 0 に bind して `local_port` で読み、期限を使わない (期限は仮想の時計の上だけで試す)。接続は一度に1つにするか、順によらない出力にする。N = 1 で流し、複数の worker の組 (N が 2 と 8) では順によらないものだけを流す。Windows の CI は同じ組を IOCP の上で流す
+- テストの driver は、仮想のホストの上の `listen` と `connect` が作るメモリの上の `TcpStream` の組を持つ。時間の待ちは `Clock` が決め、仮想の時計の規則は [VM](../spec/vm.md) の「時計と driver」にある
+- 仮想のシグナルは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` に渡す予定で起こす。UI テストは先頭の印の行 `-- signal: <interrupt|terminate> at <ms>` で予定を書く ([VM](../spec/vm.md) の「時間の待ち」、[テスト戦略](../implementation/testing.md) の「UI テスト」)
+- `Net` と `Signal` の UI テストは `tests/ui/{run,run-fail}/async/` の `net_*.em` と `signal_*.em` で、どれもテストの driver の上で流れる。本物のソケットと OS のシグナルは、Rust のテスト (`crates/eml_io/tests/real.rs`、`crates/eml_vm/tests/api.rs` と `signal.rs`、`crates/eml_cli/tests/cli.rs`) だけで試す。unix のものは `#[cfg(unix)]` にし、Windows では `listen` が `NotAvailable` になることを確かめる。ループバックでポート 0 に bind して `local_port` で読む。複数の worker の組 (N が 2 と 8) では順によらないものだけを流す。Windows の CI は同じ組を IOCP の上で流す
 - 意味のテスト: 取り消したタスクの `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`shield` の中の別れの `send` が取り消しの下でも終わること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
 - 救済を強いるスケジュール (`--sched rescue-always`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
 - `RunStats` は driver の完了の数 `completions` と、channel の欄 `channel_ops`、`channel_waits`、`channels_swept` を持つ。`Std.Net` のテストのスナップショットも、ほかの欄と同じく逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
@@ -504,4 +482,4 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - channel のキュー: 既定は mutex で、ロックフリーには後でランタイムの中だけで替える
 - `Lin` の closer token: 既定は作らない。`Chan.owned : Int -> <IO> (Chan a, ChanOwner)` のように `Lin` の `Foreign` の `ChanOwner` を足し、その `Drop` が受け箱に閉じる知らせを積む形である。`TaskHandle` と同じ仕組みなので、`eml_rt` は変わらず、送受信に費用を足さない。これで足りなければ、`Chan a` を `Unr` の `Foreign` のハンドルにする。channel の Rust の構造は変わらず、ハンドルの読みと放す引き金だけが変わる ([ロードマップ](roadmap.md) の「非同期」)
 - `Time` のモジュール: 上の「時間」にある
-- UDP、`SO_REUSEPORT`、非同期の名前の解決: 上の「ネットワークとシグナル」の「後で足すもの」にある
+- UDP、`SO_REUSEPORT`、非同期の名前の解決、`Net.resolve`、Happy Eyeballs: 上の「ネットワークとシグナル」の「後で足すもの」にある

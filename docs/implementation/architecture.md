@@ -354,9 +354,11 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
 - unix の `RealDriver::with_lookup(lookup)` は、名前の解決の関数を差し替えた driver を作る。テストと組み込み先のためで、テストは機械の `/etc/hosts` に頼らない。`RealDriver::new` は std の解決器を使う
 - driver は作ったスレッドの上でだけ使う。`eml_io` は driver の型に `unsafe impl Send` を書かない
+- `mask.rs` の `spawn_masked` は、unix で SIGINT と SIGTERM を塞いでスレッドを始める。`eml_vm` の監視のスレッドと、解決のスレッドがこれで始まる。プールへ仕事を渡す間の塞ぎも同じモジュールの `Masked` で行う ([VM](../spec/vm.md) の「上限と割り込み」)
 - `RealDriver` の作り
-  - 出した操作は操作の種類ごとの compio の鍵 (`Key`) として表に持つ。unix の `Readable` は `PollOnce` で読めるようになるのを待ち、Windows の `Readable` は長さ0の `Recv` である (ソケットを IOCP のポートに結び付ける `attach` はまだなく、Windows の driver はハンドルを作らない)。`Read` は `Recv`、`Write` は `Send`、仕事は `Asyncify` で、プールのスレッドは32本までである。unix の `Accept` は compio の `Accept` で、受けたソケットと相手の番地を `pop` と `into_inner` で受け取る。`Connect` は番地ごとに socket2 でソケットを作り、compio の `Connect` を出す。`Listen` は socket2 で持ち主のスレッドの上で行う。書きの出し直し、受けの再試行、接続の次の試行は、表の項の compio の鍵を新しいものに替え、`OpKey` は替えない。`buffer_pool` は使わない
-  - 名前の解決は `resolve.rs` の解決器が、切り離したスレッドで行う。スレッドは結果を mpsc の channel に送り、`wait` と `completions` が取り出す
+  - 出した操作は、操作の種類ごとの compio の鍵 (`Key`) を持つ項 (`Slot`) として、`OpKey` で引く表に持つ。unix の `Readable` は `PollOnce` で読めるようになるのを待ち、Windows の `Readable` は長さ0の `Recv` である (ソケットを IOCP のポートに結び付ける `attach` はまだなく、Windows の driver はハンドルを作らない)。`Read` は `Recv`、`Write` は `Send`、仕事は `Asyncify` で、プールのスレッドは32本までである。unix の `Accept` は compio の `Accept` で、受けたソケットと相手の番地を `pop` と `into_inner` で受け取る。`Connect` は番地ごとに socket2 でソケットを作り、compio の `Connect` を出す。`Listen` は socket2 で持ち主のスレッドの上で行う。書きの出し直し、受けの再試行、接続の次の試行は、表の項の compio の鍵を新しいものに替え、`OpKey` は替えない。取り消しを頼まれた項は出し直さない。`buffer_pool` は使わない
+  - 名前の解決は `resolve.rs` の `Resolver` が、切り離したスレッド (`eml-resolve`) で行う。手放していない解決は同時に8本 (`RESOLVE_LIMIT`) まで走り、残りは受け付けの順に待つ。取り消した解決のスレッドは手放して別に数え、まだ戻らないものが64本 (`ABANDONED_LIMIT`) たまっている間は、新しい解決をその場で誤りにする。スレッドは結果を mpsc の channel に送ってから waker を鳴らし、`wait` と `completions` が取り出す
+  - ブロックする呼び出しのプールは `Op::Job` のために残す。std に仕事を出す行はなく、使うのは Rust のテストだけである ([VM](../spec/vm.md) の「時計と driver」)
   - `RawBuf` は別の crate の型なので、`real.rs` の包み `Mem` が compio の `IoBuf`、`IoBufMut`、`SetLen` を実装する。`cap == 0` は空の slice である。`eml_io` の本物の driver の `unsafe` は、この包みが `RawBuf` から slice を作る所と、`mask.rs` がシグナルの塞ぎを `pthread_sigmask` で変える所だけである
   - polling の backend は `push` の中でまず読み書きを試すので、`push` が `Ready` を返すことがある。その結果も次の `completions` で返す完了として持つ。そのため、driver が持つソケットはブロックしない
   - `completions` は、保留の操作があれば待たずに `poll` してから、すべての鍵を `pop` し、`push` の中で終わったものと合わせて、受け付けの順 (`OpKey` の順) に返す。取り消しは鍵を残したまま `register_cancel` と `cancel_token` で行い、取り消された操作の完了も `pop` で受ける

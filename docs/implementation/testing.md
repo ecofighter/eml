@@ -52,6 +52,7 @@
 - `eml_vm` の `structs.rs` の逆アセンブラのテストは、`dup s` と `(boxes, unboxes)` を確かめる。`miri.rs` の同じプログラムは、この事実を持たない
 - `eml_cli` の `api.rs` の `Outcome::Rejected` のテストは、トランスクリプトに出ない結果を固定する
 - `RunStats` がスケジュールによらないことは3か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムと、`exit` で終わらない `run/async/` のプログラムで生成したコードを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
+- シグナルを届ける道は3か所で確かめる。`run/async/` と `run-fail/async/` の `signal_*.em` は、仮想のシグナルの予定で `Std.Signal` の意味の筋書きを確かめる。`eml_vm` の `signal.rs` は、ハンドラの代わりにテストのスレッドが `Control` と自己パイプを書き、本物の driver の上の監視のスレッドの中継と、集める地点で届けることを確かめる。`eml_cli` の `cli.rs` のシグナルのテストは、OS のシグナルを `eml run` に送り、ハンドラと終了コード、届けていない間の2回目の強制の終わりを確かめる
 - `par` の子の誤りの規則は、`par.rs` の手書きの LIR のテストと `par::source` の組で確かめる。右の子の誤りを左の子が終わった後で報告する順序は、左の子が出力する LIR で書いた子 (`noisy`) だけが確かめる。ソースの子は出力できないので、ソースでは順序が見えない。`par::source` は、生成した `fork$` と `reperform$` を通っても、左の中断で右の誤りを救わないことと、左の誤りが先であることを確かめる
 
 ### crate の中の置き方
@@ -202,8 +203,9 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `tasks.rs` は、`Std.Async` のタスクをソースのプログラムで確かめる ([VM](../spec/vm.md) の「`Async` のタスク」)。`run` の値、タスクの中の `run`、スコープのタスクを待つこと、相手が終わる前と後の `await`、`yield_now` の順番、`panic` の起こし直し、待たない `Lin` の結果が漏れないこと、`Lin` の結果の `await`、スコープの2つ目の失敗の数、待っているタスクのハンドルを落としたときの数、予算が 128 回ごとに1回だけ切り替えることを確かめる。どのプログラムも検査モードの逐次と速いモードで流して、標準出力を比べる。seed 1 と 2026 の run は、出力とスケジュールによらない `RunStats` を逐次と比べる。核の `cells.rs` が `std` と `eml_rt` だけを import することも、ここで確かめる
 - `preempt.rs` は、`PREEMPT` の立つ安全点の扱いを確かめる ([VM](../spec/vm.md) の「タスクとスケジュール」)。どれも逐次の方針で流し、`write_line` が書くときに `PREEMPT` を立てる Host を使う。走れるタスクがなければビットを下ろすだけであること、一緒に立った止めるビットが先に勝つこと、走れる `Async` のタスクがあれば次の安全点で切り替えて `preemptions` を1と数えることを確かめる
 - `io.rs` は、`Std.Net` の操作の記録と driver の完了をソースのプログラムで確かめる ([VM](../spec/vm.md) の「操作の記録」)。書きが完了を1つ、読みが2つ数えることと、相手の端が閉じた読みが buffer の中身を変えずに返すことと、期限が来た読みが完了を1つ、タイマーを1つ数えることは、テストの driver (`Clock::Virtual`) の上で確かめる。受けの記録がリスナーを持ったまま、取り出しの前に本体の `exit` で run が終わり、`sweep_all` が残った記録を放しても漏れないことも、同じ driver の上で確かめる。書きを待つタスクの取り消しと、貸した記憶へ読む間の読みの取り消し (driver の取り消しの完了で `Cancelled` で再開し、種類 `Cancelled` を投げ、漏れがないこと) は、書きと読みを取り消すまで終わらせない driver を `Machine::with_driver` で渡して確かめる。テストの driver の書きは次の集める地点で必ず終わり、待っている間の取り消しに届かないためである。終わった操作を取り消しの地点で待つ道と、`sweep_all` が待つタスクの残した記録を落とす道は、プログラムから決まった順で起こせないので、`cells.rs` の単体テストで確かめる。操作の待ちの期限が満ちたときと過ぎた期限が、再開せずに driver に取り消しを頼み、完了で `Woke` で再開すること、取り消しと完了が期限の輪の項を外すことも、`cells.rs` の単体テストで確かめる。取り消した読みが読んだバイトを確定して buffer を返すこと、空きの足りる buffer をそのまま貸し、足りない buffer を写して貸すことも、包みが buffer を外へ出さないので、`cells.rs` の単体テストで buffer の中身と語を見て確かめる。driver が壊れたときと保留の操作を残したときの `Machine` は、`eml_rt::IoDriver` を実装する偽の driver を `Machine::with_driver` で渡して `machine.rs` で確かめる。取り消しを無視する driver の上で、取り消したタスクの待ちが操作の完了まで続くことと、`exit` で終わる run が `quiesce` で保留の操作を終わらせることも、`machine.rs` が同じく確かめる。std に仕事を出す行はないので、プールの仕事は `eml_io` のテストだけが確かめる
+- `signal.rs` は、シグナルを届ける道を本物の driver の上で確かめる ([VM](../spec/vm.md) の「タスクとスケジュール」と「上限と割り込み」)。テストのスレッドがハンドラの代わりに `Control::defer` を呼んで自己パイプを鳴らし、監視のスレッドの中継で待つタスクが起きること、待つタスクのいない保留が run を止めること、シグナルだけを待つ run がデッドロックにならないこと、予定した仮想のシグナルが本物の driver でも満ちること、yield せずに回る worker が `NOTICE` で知らせを集めること、`with_driver` で渡した driver の run が OS のシグナルを届けないことを確かめる。経過は下限だけを比べ、3 秒の番犬は止まったテストが待ち続けないためだけにある。自己パイプは `Machine` ごとなので、1つのプロセスで流す `cargo test` でもテストどうしは起こしを取り合わない
 - `miri.rs` は、Miri で流す小さい実行のテストである (上の「Miri」)
-- `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 (既定の普通の方針で子が回り続ける `par` のプログラムを含む)、SIGTERM で止めたときの終了コード 143 を確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
+- `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 (既定の普通の方針で子が回り続ける `par` のプログラムを含む)、SIGTERM で止めたときの終了コード 143、`Signal.wait` で待つタスクへ OS のシグナルが届くことを確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
 
 ## LIR のテキストの形
 
@@ -414,6 +416,12 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 - `Async.run` の中で標準エラーに `ready` を書いてから眠るプログラムに、その行が届いたら SIGTERM を1回送り、終了コード 143 と、標準エラーが `runtime error: terminated in` で始まることを確かめる。待つタスクがないので、1回目の SIGTERM が run を止める
 - 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、100 ms ごとに SIGTERM を送り続け、終了コード 143 で終わることを確かめる。SIGINT の同じテストと同じく、2回目の SIGTERM でハンドラが終わらせることもある
+
+`Signal.wait` で待つタスクへ届くことを確かめる `eml run` のテストは `cfg(unix)` で4本ある。どれも逐次の方針 (`--sched sequential`) で流し、待つタスクが `yield_now` で待ちに入ってから本体が標準エラーに `ready` を書き、その行が届いてからシグナルを送る。
+
+- SIGTERM を1回送り、待つタスクが起きて終了コード 0 で終わることを確かめる
+- Ctrl-C を待つタスクに SIGINT を送って届けた後にもう1回送り、待つタスクがもういないので run が止まり、終了コード 130 で終わることを確かめる
+- 待つタスクがいる間に本体が書き手を開いたままの標準入力を読むプログラムに、100 ms ごとに SIGINT か SIGTERM を送り続け、終了コード 130 か 143 で終わることを確かめる。worker が読みで止まっていて届けられないので、届けていない間の2回目のシグナルでハンドラが終わらせる
 
 シグナルのハンドラは、bin の `interrupt` モジュールの単体テストが確かめる。テストは static を使わず、ハンドラが static から読む値を自分で作って渡す。`mod.rs` の `respond` のテストはどの OS でも流れ、1回目が `INTERRUPT` を立てること、`eml run` の2回目は終わり、REPL の2回目は終わらないこと、`clear` の後は1回目に戻ることを確かめる。待つタスクがいればシグナルを保留にすること、保留の間の2回目は終わること、届けた後は1回目に戻ること、SIGTERM は 143 で終わること、2つの種類が互いの2回目にならないことも確かめる。Windows では `windows.rs` のテストが handler の本体の関数を直接呼ぶ。`CTRL_C_EVENT` には TRUE を返して `INTERRUPT` を立て (待つタスクがいれば保留にし)、`eml run` の2回目では終わる関数に 130 を渡すことと、ほかの事象と static を置く前の Ctrl-C には FALSE を返し、ビットを変えず終わらないことを確かめる。Windows で本当の Ctrl-C を送るテストは置かない。
 
