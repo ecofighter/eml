@@ -365,9 +365,6 @@
 - io_uring の backend: unix の本物の driver は polling (epoll と kqueue) を使い、io_uring を使わない ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
   - 後に回した理由: io_uring を使わなければ、確かめていない実行時の backend の切り替えがなく、自前の操作も compio の1つの trait で書ける。
   - 見直す条件: `Std.Net` の計測で、readiness の道が支配的になったとき。
-- `Clock` と `--clock` の名前: 時計の選び方 `Clock` と CLI の `--clock` は、時計と一緒に driver (本物の driver かテストの driver) も選ぶ。driver を選ぶ名前に変えるかを決める ([VM](../spec/vm.md) の「時計と driver」)
-  - 後に回した理由: driver の違いが見えるのは実行系のテストのための `Std.IoTest` だけで、利用者の API の I/O はまだ driver に乗っていない。
-  - 見直す条件: `Std.Net` などの利用者の I/O が driver に乗り、`--clock` が時計のほかに I/O の振る舞いも変えることが利用者に見えるようになったとき。
 - waker の本番の呼び出しと 10 ms の上限をなくすこと: 本物の driver は `IoWaker` を持つが、本番のコードは鳴らさない。空きの worker は1回の待ちを `IDLE_TICK` (10 ms) で切り、止める語を読む ([VM](../spec/vm.md) の「時計と driver」)。そのため、driver のどの待ちも起こしで戻るという設計 ([非同期の設計](async.md) の「`IoDriver` と `eml_io`」) を満たしていない
   - 後に回した理由: kqueue の通知と compio の起こしの道は async-signal-safe と書かれておらず、シグナルのハンドラから呼べない。worker が1つの間は、10 ms の上限で Ctrl-C と確保量の上限が眠る worker に届く。
   - 見直す条件: `worker-threads` で、監視のスレッドとスレッドをまたぐ知らせが worker を起こすようになったとき。または、Ctrl-C の反応の遅れか空きの CPU 使用が問題になったとき。そのときは `IDLE_TICK` を見直す。

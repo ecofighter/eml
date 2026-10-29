@@ -1,7 +1,6 @@
 //! 時計の選び方 `Clock` と、時刻のミリ秒への丸め (docs/spec/vm.md の「時計と driver」)。driver そのものは `eml_io` にある。
 
 use std::io;
-use std::str::FromStr;
 use std::time::Duration;
 
 use eml_io::{RealDriver, TestDriver};
@@ -25,19 +24,6 @@ impl Clock {
             Clock::Real => Box::new(RealDriver::new()?),
             Clock::Virtual => Box::new(TestDriver::new(seed)),
         })
-    }
-}
-
-impl FromStr for Clock {
-    type Err = String;
-
-    /// `real` か `virtual` を読む。
-    fn from_str(text: &str) -> Result<Clock, String> {
-        match text {
-            "real" => Ok(Clock::Real),
-            "virtual" => Ok(Clock::Virtual),
-            _ => Err(format!("expected `real` or `virtual`, found `{text}`")),
-        }
     }
 }
 

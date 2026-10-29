@@ -640,61 +640,17 @@ fn sched_flag_is_accepted_and_rejected() {
     }
 }
 
-/// `--clock` は `--sched` と同じく `run` と `repl` のフラグで、値を次の引数か `=` の後に取る。ファイルより後ろの
-/// `--clock` はスクリプトに渡す (docs/spec/stdlib.md の「起動」)。2 で終わる引数は使い方の誤りである。
+/// `run` が持たないフラグも、ファイルより後ろならそのままスクリプトに渡す (docs/spec/stdlib.md の「起動」)。
 #[test]
-fn clock_flag_is_accepted_and_rejected() {
-    let dir = temp_project("cli-clock", &[("main.em", SHOW_ARGS)]);
-    let cases: [(&[&str], i32, &str); 13] = [
-        (&["run", "--clock", "real", "main.em"], 0, "[]\n"),
-        (&["run", "--clock=virtual", "main.em", "a"], 0, "[\"a\"]\n"),
-        (
-            &[
-                "run",
-                "--clock",
-                "virtual",
-                "--sched",
-                "sequential",
-                "main.em",
-            ],
-            0,
-            "[]\n",
-        ),
-        (
-            &["run", "main.em", "--clock", "bogus"],
-            0,
-            "[\"--clock\", \"bogus\"]\n",
-        ),
-        (
-            &["main.em", "--clock", "real"],
-            0,
-            "[\"--clock\", \"real\"]\n",
-        ),
-        (&["run", "main.em", "--clock"], 0, "[\"--clock\"]\n"),
-        (&["run", "--clock"], 2, ""),
-        (&["--clock", "real", "main.em"], 2, ""),
-        (&["run", "--clock", "bogus", "main.em"], 2, ""),
-        (&["run", "--clock=bogus", "main.em"], 2, ""),
-        (&["run", "--clock", "Real", "main.em"], 2, ""),
-        (&["check", "--clock", "real", "main.em"], 2, ""),
-        (&["repl", "--clock", "bogus"], 2, ""),
-    ];
-    // 1本のテストで多くのプロセスを起動するので、並べて起動して1秒に収める
-    let outputs: Vec<Output> = std::thread::scope(|scope| {
-        let handles: Vec<_> = cases
-            .iter()
-            .map(|(args, _, _)| scope.spawn(|| eml_in(&dir, args)))
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| handle.join().unwrap())
-            .collect()
-    });
+fn flags_after_the_file_go_to_the_script() {
+    let dir = temp_project("cli-after-file", &[("main.em", SHOW_ARGS)]);
+    let output = eml_in(&dir, &["run", "main.em", "--anything", "x"]);
     std::fs::remove_dir_all(&dir).unwrap();
-    for ((args, code, stdout), output) in cases.iter().zip(&outputs) {
-        assert_eq!(output.status.code(), Some(*code), "{args:?}: {output:?}");
-        assert_eq!(String::from_utf8_lossy(&output.stdout), *stdout, "{args:?}");
-    }
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "[\"--anything\", \"x\"]\n"
+    );
 }
 
 #[test]

@@ -143,7 +143,7 @@
 - 本物の driver は compio-driver の上にあり、unix は polling (epoll と kqueue)、Windows は IOCP を使う。Windows の本物の driver はまだソケットを扱わないので、`IoTest.pair` は種類 `NotAvailable` の IO の失敗になる。本物の driver の VM のテストは Rust のテスト (`eml_io` と `crates/eml_vm/tests/api.rs`) で書き、UI テストはいつもテストの driver の上で流す ([VM](../spec/vm.md) の「時計と driver」、[ロードマップ](../future/roadmap.md) の `net-windows`)
 - 本物の driver の上では、空きの worker は1回の待ちを 10 ms で切って止める語を読む。別のスレッドから driver を起こす本番の道がないためで、眠る worker に Ctrl-C と確保量の上限が届くまで、10 ms と OS の遅れだけかかる ([VM](../spec/vm.md) の「時計と driver」、[ロードマップ](../future/roadmap.md) の「非同期」)
 - プールの仕事は取り消せない。本物の時計では、取り消されたタスクも期限の切れた `timeout` も、走っている仕事が終わるまで戻らず、`exit` と誤りで終わる run も仕事を待ちきってからヒープを落とす。仕事のスレッドは driver ごとに32本までで、すべてが仕事中なら、次の仕事の受け付けは安全点を通らずに待つ ([VM](../spec/vm.md) の「時計と driver」)
-- 時間は `sleep_ms`、`timeout`、`race`、`drain_within` で扱う。時計は `eml run` と `eml repl` では `--clock` で選び、既定は本物の時計である。テストとライブラリの既定は仮想の時計で、すべてのタスクが待つときだけ進む ([標準ライブラリ](../spec/stdlib.md) の「時間」、[VM](../spec/vm.md) の「時計と driver」)
+- 時間は `sleep_ms`、`timeout`、`race`、`drain_within` で扱う。`eml run` と `eml repl` はいつも本物の時計で動く。テストとライブラリの既定は仮想の時計で、すべてのタスクが待つときだけ進む ([標準ライブラリ](../spec/stdlib.md) の「時間」、[VM](../spec/vm.md) の「時計と driver」)
 - 取り消しは協調的で、取り消しの地点 (`await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` と、`Std.Chan` の `send`、`recv` と、`Std.IoTest` の待つ関数) でだけ届く。読み書きの extern と `par` の子は取り消しの地点でない ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
 - タスクの中で `Async.run` を入れ子に呼ぶと、中のスコープのタスクがすべて終わるまで、呼んだタスクはスタックを持ったまま待ち、その間は取り消しの地点でない。中のタスクには取り消しが届く。`shield` の中では、入れ子の `run` の根が境目になる ([VM](../spec/vm.md) の「待ちの2種類」)
 - `shield` の中で自分の属するスコープを `drain_within` で待つなど、自分を待つ形は、ほかに進むものがなくなったときにだけ実行時エラー `deadlock` で止まる。ほかのタスクが動くか眠る間は、互いを待つタスクも待ち続ける ([VM](../spec/vm.md) の「時計と driver」)

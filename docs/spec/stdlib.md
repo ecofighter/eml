@@ -10,15 +10,13 @@
 eml wc.em -l input.txt          # eml run wc.em -l input.txt と同じ
 eml run --debug-heap wc.em -l input.txt
 eml run --sched seeded:7 wc.em -l input.txt
-eml run --clock virtual sleeper.em
 ./wc.em -l input.txt            # 1行目が #!/usr/bin/env eml で、実行できるファイル
 ```
 
 - 最初の引数が `-` で始まらず、サブコマンドの名前 (`check`、`run`、`repl`、`help`) でもなければ、`run` として扱う。`run` という名前のファイルを動かすときは `eml run run` と書く。`-` で始まる最初の引数はフラグとして読むので、`eml --verison` は使い方の誤り (終了コード 2) である
-- `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--sched`、`--clock`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--sched=seeded:7`、`--clock=virtual`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
-- ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap`、`--sched`、`--clock` はファイルより前にだけ書ける。`eml run main.em --sched bogus` は、スクリプトに `--sched` と `bogus` を渡す
+- `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--sched`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--sched=seeded:7`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
+- ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap` と `--sched` はファイルより前にだけ書ける。`eml run main.em --sched bogus` は、スクリプトに `--sched` と `bogus` を渡す
 - `--sched <normal|sequential|seeded:N>` は、タスクを切り替える方針を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。既定は `normal` で、監視のスレッドの刻みで横取りする。`sequential` は横取りしない。`seeded:N` は `u64` の seed `N` で横取りの位置を決める。ほかの値と、2回書いた `--sched` は使い方の誤り (終了コード 2) である。`run` と `repl` が持ち、`check` は持たない。環境変数では選べない
-- `--clock <real|virtual>` は、タイマーが使う時計を選ぶ ([VM](vm.md) の「時計と driver」)。既定は `real` で、単調な時計の上で眠る。`virtual` はすべてのタスクが待つときだけ時間を進めるので、眠りが実際の時間を使わない。ほかの値と、2回書いた `--clock` は使い方の誤り (終了コード 2) である。`run` と `repl` が持ち、`check` は持たない。環境変数では選べない
 - `Env.args ()` は、ファイルより後ろの引数を返す。`eml` とスクリプトのパスは含めない
 - shebang は `#!/usr/bin/env eml` と書く。Linux の `env` は `#!` の行の残りを1つの引数として渡すので、`#!/usr/bin/env eml run` は動かない
 - ファイルの相対パスと子のプロセスの作業ディレクトリは、プロセスの今のディレクトリである

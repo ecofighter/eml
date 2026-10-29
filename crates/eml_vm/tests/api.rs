@@ -76,19 +76,6 @@ fn the_default_clock_is_virtual() {
     assert_eq!(config.with_clock(Clock::Virtual).clock, Clock::Virtual);
 }
 
-#[test]
-fn a_clock_parses_and_rejects() {
-    assert_eq!("real".parse(), Ok(Clock::Real));
-    assert_eq!("virtual".parse(), Ok(Clock::Virtual));
-    for text in ["", "Real", "wall", "virtual "] {
-        let error = text.parse::<Clock>().unwrap_err();
-        assert_eq!(
-            error,
-            format!("expected `real` or `virtual`, found `{text}`")
-        );
-    }
-}
-
 /// CLI の `--sched` が読む綴り (docs/spec/stdlib.md の「起動」)。seed は `u64` の10進数である。
 #[test]
 fn a_sched_parses_and_rejects() {
