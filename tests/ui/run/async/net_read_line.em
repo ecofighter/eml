@@ -1,6 +1,8 @@
--- `Net.read_line` は改行 (`\n` か `\r\n`) を除いた行を返し、2回の書きにまたがる行も1行にする。改行のない最後の行は
--- そのまま返し、残りのない EOF は `None` である。`read_line` が読みすぎたバイトは、次の `read_chunk` が先に返す。
--- 読む前に書きをすべて終えるので、読みの周回の数はスケジュールによらない (docs/spec/stdlib.md の「`Std.Net`」)。
+-- `Net.read_line` は改行 (`\n` か `\r\n`) を除いた行を返す。改行のない最後の行はそのまま返し、残りのない EOF は
+-- `None` である。`read_line` が読みすぎたバイトはストリームの buffer に残り、次の `read_line` と `read_chunk` が先に
+-- 返す。読み手は書きがすべて終わってから読み始めるので、テストの driver の1回の読みが3回の書きをまとめて受け、読みの
+-- 周回の数はスケジュールによらない。1回の `read_line` の中で読みを繰り返す道は、`crates/eml_vm/src/cells.rs` の単体
+-- テストと本物の driver のテストが確かめる (docs/spec/stdlib.md の「`Std.Net`」)。
 import Async (Async)
 import Async
 import Bytes

@@ -16,6 +16,7 @@ use eml_vm::{Machine, RunConfig, capture_host};
 /// 1つずつ受け、待ちは3つの操作と `await` の4回である。
 const CONNECTED: &str = "\
 import Async
+import Byte
 import Bytes
 import Net
 import String
@@ -244,6 +245,27 @@ fn a_buffered_read_line_counts_no_completion() {
             two.cancels
         ),
         (0, 1, 0)
+    );
+}
+
+/// UTF-8 でない行の `Net.read_line` は、種類 `NotUtf8` の IO の失敗 `cannot read the stream: the line is not valid UTF-8`
+/// を投げる。投げるのは `take_line` で、包みのストリームは巻き戻しが落とすので、検査モードの漏れの検査も通る
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_read_line_that_is_not_utf8_raises_not_utf8() {
+    let (out, _) = connected_stats(
+        "  let a = Net.write_bytes (Bytes.append (Bytes.make 1 (Byte.wrap 255)) (Bytes.of_string \"\\n\")) a
+  Net.close a
+  match try_io (fn () -> Net.read_line b) with
+    | Ok (_, b) ->
+      Net.close b
+      println \"read\"
+    | Err e -> println \"\\{show e.kind}: \\{e}\")
+",
+    );
+    assert_eq!(
+        out,
+        "NotUtf8: cannot read the stream: the line is not valid UTF-8\n"
     );
 }
 

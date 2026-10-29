@@ -521,16 +521,40 @@ impl NetStream {
         }
     }
 
-    /// 残りの最初の行を、終わりの改行を含めて切り出す。改行がなければ残りをすべて返す (EOF の前の最後の行)。
-    fn take_line(&mut self) -> Vec<u8> {
+    /// 残りの `from` バイト目から後に改行があるか、`eof` なら、残りの最初の行を終わりの改行を含めて切り出す。`eof` で
+    /// 改行がなければ、残りをすべて返す (EOF の前の最後の行)。行の中身 (終わりの `\n` か `\r\n` を除いたバイト、EOF
+    /// では残りのすべて) が `LINE_LIMIT` バイトを超えれば `TooLong` である。上限を中身の長さで決めるので、結果は
+    /// バイトが読みにどう分かれて届いたかによらない (docs/spec/stdlib.md の「`Std.Net`」)。どちらでもなければ `None` で、
+    /// 何も変えない。
+    fn cut_line(&mut self, from: usize, eof: bool) -> Option<LineStep> {
         let pending = self.pending();
-        let n = pending
-            .iter()
-            .position(|&b| b == b'\n')
-            .map_or(pending.len(), |i| i + 1);
+        // 改行のない周が大半なので、まず語ごとに比べる `contains` で探し、あるときだけ位置を求める
+        let newline = if pending[from..].contains(&b'\n') {
+            pending[from..].iter().position(|&b| b == b'\n')
+        } else {
+            None
+        };
+        let (content, n) = match newline {
+            Some(i) => {
+                let end = from + i;
+                let cr = end > 0 && pending[end - 1] == b'\r';
+                (end - usize::from(cr), end + 1)
+            }
+            None if eof => (pending.len(), pending.len()),
+            None => return None,
+        };
+        if content > LINE_LIMIT {
+            return Some(LineStep::TooLong);
+        }
         let line = pending[..n].to_vec();
         self.consume(n);
-        line
+        Some(LineStep::Line(line))
+    }
+
+    /// 改行のまだ来ない行の中身の、今わかっている長さ。最後の `\r` は `\r\n` の始まりかもしれないので数えない。
+    fn open_line_len(&self) -> usize {
+        let pending = self.pending();
+        pending.len() - usize::from(pending.last() == Some(&b'\r'))
     }
 
     /// 返したバイトを詰め、buffer の後ろに `READ_ROOM` バイトの空きを作って貸す。返すのは空きを作る前の長さと、
@@ -1842,11 +1866,13 @@ impl Registry {
     ) -> Result<Word, CellFault> {
         // ストリームは `TcpStream` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`TcpStream` は `Lin`)
         let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
-        let (key, phase, line) = if s.pending().contains(&b'\n') {
-            (NO_KEY, OpPhase::Done(Ok(0), false), Some(s.take_line()))
-        } else {
-            let handle = s.handle;
-            (driver.submit(Op::Readable { handle }), OpPhase::Probe, None)
+        let (key, phase, line) = match s.cut_line(0, false) {
+            Some(LineStep::Line(line)) => (NO_KEY, OpPhase::Done(Ok(0), false), Some(line)),
+            Some(_) => (NO_KEY, OpPhase::Done(Err(line_too_long()), false), None),
+            None => {
+                let handle = s.handle;
+                (driver.submit(Op::Readable { handle }), OpPhase::Probe, None)
+            }
         };
         let kind = OpKind::Line { filled: 0, line };
         let mut record = net_record(key, kind, worker, Some(stream));
@@ -2162,9 +2188,7 @@ impl Registry {
                             cancelled = true;
                             Err(io::Error::other("cancelled"))
                         }
-                        (LineStep::TooLong, _) => Err(io::Error::other(format!(
-                            "a line is longer than {LINE_LIMIT} bytes"
-                        ))),
+                        (LineStep::TooLong, _) => Err(line_too_long()),
                         (LineStep::Failed, result) => result.map(|_| 0),
                     }
                 }
@@ -2456,7 +2480,7 @@ enum LineStep {
     Line(Vec<u8>),
     /// 取り消しか期限で止めた。
     Stopped,
-    /// 改行のないまま `LINE_LIMIT` バイトに届いた。
+    /// 行の中身が `LINE_LIMIT` バイトを超えた。
     TooLong,
     /// 読みが誤りで終わった。
     Failed,
@@ -2489,16 +2513,23 @@ fn line_step<M: Mode>(
     let Some(n) = got else {
         return Ok(LineStep::Failed);
     };
-    // 新しく読んだバイトだけを探す。前のバイトには改行がなかった
-    Ok(if n == 0 || s.rest[filled..].contains(&b'\n') {
-        LineStep::Line(s.take_line())
-    } else if stopped {
+    // 空きを貸すときに返したバイトを詰めたので、残りは buffer の先頭から始まる。新しく読んだバイトだけを探す。前の
+    // バイトには改行がなかった
+    if let Some(step) = s.cut_line(filled, n == 0) {
+        return Ok(step);
+    }
+    Ok(if stopped {
         LineStep::Stopped
-    } else if s.pending().len() >= LINE_LIMIT {
+    } else if s.open_line_len() > LINE_LIMIT {
         LineStep::TooLong
     } else {
         LineStep::Again(s.handle)
     })
+}
+
+/// 行の中身が `LINE_LIMIT` バイトを超えたときの誤り (docs/spec/stdlib.md の「`Std.Net`」)。
+fn line_too_long() -> io::Error {
+    io::Error::other(format!("a line is longer than {LINE_LIMIT} bytes"))
 }
 
 /// ストリーム `stream` の buffer に残りがあれば、その先頭の `READ_ROOM` バイトまでを `buf` の後ろに足して返したことに
@@ -3773,10 +3804,11 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }
 
-/// 改行のないまま `LINE_LIMIT` バイトに届いた行の連鎖は、種類 `Other` の誤りで終わり、読んだバイトはストリームの buffer
-/// に残る (docs/spec/stdlib.md の「`Std.Net`」)。
-#[test]
-fn a_read_line_past_the_limit_fails_and_keeps_the_bytes() {
+/// 行の連鎖を、周ごとに `chunks` の1つを外の書き手として書いて進める。最後の周の前には終わらず、最後の周で終わる
+/// ことを確かめる。返すのは、成功なら記録が切り出した行のバイト数、失敗なら `finish` が投げる文言である。行は文字列に
+/// しない。1 MiB の UTF-8 の確かめは Miri の下で重いためで、文字列にする所はほかのテストが通す。
+#[cfg(test)]
+fn read_line_through(chunks: &[&[u8]]) -> Result<usize, String> {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let mut registry = Registry::new(Vec::new());
@@ -3790,26 +3822,122 @@ fn a_read_line_past_the_limit_fails_and_keeps_the_bytes() {
     registry
         .park_io(&ctx, &mut driver, token, me, Word::UNIT)
         .unwrap();
-    let chunk = vec![b'a'; READ_ROOM];
     let mut out = Vec::new();
-    for _ in 0..LINE_LIMIT / READ_ROOM {
+    for chunk in chunks {
         assert!(out.is_empty());
-        read_line_round(&mut registry, &mut ctx, &mut driver, op, &chunk, &mut out);
+        read_line_round(&mut registry, &mut ctx, &mut driver, op, chunk, &mut out);
     }
     assert!(matches!(
         out.as_slice(),
         [Runnable::ResumeIo { cell, wake: WOKE, .. }] if *cell == me
     ));
-    assert_eq!(registry.op_outcome(&ctx, token).unwrap(), OUTCOME_FAILED);
     let back = registry.op_stream(&ctx, token).unwrap();
+    let ok = registry.op_outcome(&ctx, token).unwrap() == OUTCOME_OK;
     let taken = registry.take_op(&mut ctx, token, 0).unwrap();
-    let (e, message) = taken.failure().unwrap();
-    assert_eq!(e.kind(), io::ErrorKind::Other);
-    assert_eq!(
-        message,
-        "cannot read the stream: a line is longer than 1048576 bytes"
-    );
-    assert_eq!(net_rest(&ctx, back).pending().len(), LINE_LIMIT);
+    let result = match (&taken.kind, taken.failure()) {
+        (
+            OpKind::Line {
+                line: Some(line), ..
+            },
+            None,
+        ) if ok => Ok(line.len()),
+        (_, Some((e, message))) if !ok => {
+            assert_eq!(e.kind(), io::ErrorKind::Other);
+            Err(message)
+        }
+        _ => panic!("the line op ends with a line or a failure"),
+    };
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    result
+}
+
+/// 上限の失敗の文言。
+#[cfg(test)]
+const TOO_LONG: &str = "cannot read the stream: a line is longer than 1048576 bytes";
+
+/// 中身がちょうど `LINE_LIMIT` バイトの行は、終わりの `\r\n` を足しても受け付ける。改行の来る前の最後の `\r` は終わりの
+/// 始まりかもしれないので、まだ中身に数えない (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_read_line_of_exactly_the_limit_is_accepted() {
+    let chunk = vec![b'a'; READ_ROOM];
+    let mut chunks = vec![&chunk[..]; LINE_LIMIT / READ_ROOM];
+    chunks.extend([&b"\r"[..], b"\n"]);
+    assert_eq!(read_line_through(&chunks), Ok(LINE_LIMIT + 2));
+}
+
+/// 上限を越える読みが改行を運んできても、行の中身が `LINE_LIMIT` バイトを超えれば失敗する。結果はバイトが読みにどう
+/// 分かれて届いたかによらない (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_read_line_whose_newline_crosses_the_limit_fails() {
+    let chunk = vec![b'a'; READ_ROOM];
+    let mut chunks = vec![&chunk[..]; LINE_LIMIT / READ_ROOM - 1];
+    chunks.push(&chunk[10..]);
+    let last = [&[b'a'; 20][..], b"\n"].concat();
+    chunks.push(&last);
+    assert_eq!(read_line_through(&chunks), Err(TOO_LONG.to_owned()));
+}
+
+/// 改行のないまま中身が `LINE_LIMIT` バイトを超えた行の連鎖は、種類 `Other` の誤りで終わる
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_read_line_past_the_limit_fails() {
+    let chunk = vec![b'a'; READ_ROOM];
+    let mut chunks = vec![&chunk[..]; LINE_LIMIT / READ_ROOM];
+    chunks.push(b"a");
+    assert_eq!(read_line_through(&chunks), Err(TOO_LONG.to_owned()));
+}
+
+/// `read_line` が読みすぎたバイトは、次の読みが driver の操作を出さずに先に返す。受け付けの時点で終わった記録は鍵の
+/// 項を持たず、待ちはすぐ再開する。残りを返しきったストリームは buffer の確保を放す (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let stream = net_stream(&mut ctx);
+    let token = registry
+        .submit_read_line(&mut ctx, &mut driver, 0, stream)
+        .unwrap();
+    let op = registry.token_op(&ctx, token).unwrap();
+    registry
+        .park_io(&ctx, &mut driver, token, me, Word::UNIT)
+        .unwrap();
+    let mut out = Vec::new();
+    read_line_round(
+        &mut registry,
+        &mut ctx,
+        &mut driver,
+        op,
+        b"ab\ncd",
+        &mut out,
+    );
+    let stream = registry.op_stream(&ctx, token).unwrap();
+    let line = registry.take_line(&mut ctx, token, 0).unwrap().unwrap();
+    unsafe { ctx.heap_mut().decref(line) }.unwrap();
+    let submitted = driver.next_key;
+    let buf = bytes_ab(&mut ctx, 0);
+    let token = registry
+        .submit_read(&mut ctx, &mut driver, 0, buf, stream)
+        .unwrap();
+    assert_eq!(driver.next_key, submitted);
+    assert!(registry.ops.is_empty());
+    let next = running_task(&mut registry, scope);
+    let run = registry
+        .park_io(&ctx, &mut driver, token, next, Word::UNIT)
+        .unwrap();
+    assert!(matches!(
+        run,
+        Some(Runnable::ResumeIo { cell, wake: WOKE, .. }) if cell == next
+    ));
+    let stream = registry.op_stream(&ctx, token).unwrap();
+    let back = registry.take_read(&mut ctx, token, 0).unwrap();
+    assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abcd");
+    let s = net_rest(&ctx, stream);
+    assert!(s.pending().is_empty() && s.rest.capacity() == 0);
+    unsafe { ctx.heap_mut().decref(back) }.unwrap();
+    unsafe { ctx.heap_mut().decref(stream) }.unwrap();
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }
