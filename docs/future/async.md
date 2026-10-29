@@ -308,7 +308,7 @@ pub set_nodelay       : Bool -> TcpStream -> <IO> TcpStream
 - 誤りは IO の失敗で、種類 `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse` を使う。EPIPE は `ConnectionReset` にする
 - `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、破棄処理がソケットを閉じる。取り消したタスクの巻き戻しがハンドルを落とすので、取り消しの道で `close` を書かなくてよい
 - `accept` は ECONNABORTED と EINTR を中でやり直す。EMFILE は IO の失敗で、accept するタスクが捕まえて待ってからやり直せる
-- driver では、ソケットの作成、bind、listen、accept、connect、閉じることに `compio-driver` の操作 (`CreateSocket`、`Bind`、`Listen`、`Accept`、`Connect`、`ShutdownSocket`、`CloseSocket`) を使う (上の「`IoDriver` と `eml_io`」)。Windows で、AcceptEx の後の `update_context` と、ConnectEx の前に要る bind は `eml_io` で書く
+- driver の操作は `compio-driver` の操作で出す (上の「`IoDriver` と `eml_io`」)。unix では、ソケットの作成、bind、listen、accept、connect、書きの側を閉じること、閉じることに、`CreateSocket`、`Bind`、`Listen`、`Accept`、`Connect`、`ShutdownSocket`、`CloseSocket` を使う。Windows の `compio-driver` にあるのは IOCP の `Accept`、`Connect`、`CloseSocket` だけなので、ソケットの作成、bind、listen は `eml_io` が socket2 で書く。Windows の accept と connect の後には、それぞれ `update_context` を呼ぶ。ConnectEx はソケットが bind 済みであることを求めるので、connect の前の bind も `eml_io` で書く
 
 ```haskell
 import Async

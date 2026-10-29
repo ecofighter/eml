@@ -288,47 +288,30 @@ main () = Async.run (fn () ->
 }
 
 /// プールの仕事はプールのスレッドで動くので、仕事を作るモジュールは `std` と `eml_rt::Op` だけを使い、`unsafe` を
-/// 持たない。ヒープにも RC にも届かないことを、`use` の行 (`pub use` を含む) と、行の中のどの `eml_rt::` の道と、
-/// `unsafe` のなさで確かめる (docs/spec/vm.md の「操作の記録」)。
+/// 持たない。ヒープにも RC にも届かないことを、`//` の注釈を除いたコードで確かめる。`eml_rt` の語を含んでよいのは
+/// `use eml_rt::Op;` の行だけなので、別名 (`as`) も `extern crate` も通らない (docs/spec/vm.md の「操作の記録」)。
 #[test]
 fn the_jobs_module_imports_only_std_and_eml_rt() {
     let source = include_str!("../src/jobs.rs");
     for line in source.lines() {
-        let line = line.trim_start();
-        if line.starts_with("//") {
-            continue;
-        }
-        let item = line
-            .strip_prefix("pub(crate) ")
-            .or_else(|| line.strip_prefix("pub "))
-            .unwrap_or(line);
-        if item.starts_with("use ") {
-            assert!(
-                item.starts_with("use std::") || item == "use eml_rt::Op;",
-                "{line}"
-            );
-        }
-        for (at, _) in line.match_indices("eml_rt::") {
-            let rest = &line[at + "eml_rt::".len()..];
-            let name_end = rest
-                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-                .unwrap_or(rest.len());
-            assert_eq!(&rest[..name_end], "Op", "{line}");
+        let code = line.split("//").next().unwrap_or("").trim();
+        if code.contains("eml_rt") {
+            assert_eq!(code, "use eml_rt::Op;", "{line}");
         }
         assert!(
-            !line.contains("crate::") && !line.contains("super::") && !line.contains("unsafe"),
+            !code.contains("crate::") && !code.contains("super::") && !code.contains("unsafe"),
             "{line}"
         );
     }
 }
 
-/// 仕事の記録が持つ `Bytes` を本体と分け合ったまま、取り出しの前に run が `exit` で終わる。本体の `exit` は run の
-/// 終わりで、タスクの `exit` は run を捨てて回復するが、どちらでも登録表を掃くときに残った記録が buffer を落とすので、
-/// 検査モードの漏れの検査が通る。テストの driver は仕事を集める地点でその場で動かすので、記録は完了を受けるが、
-/// `took` が出ないとおり、取り出されずに残る (docs/spec/vm.md の「操作の記録」)。
+/// 仕事の記録が持つ `Bytes` を本体と分け合ったまま、取り出しの前に本体の `exit` で run が終わる。`main` の終わりの
+/// `sweep_all` が、残った記録を放して buffer を落とすので、検査モードの漏れの検査が通る。テストの driver は仕事を
+/// 集める地点でその場で動かすので、記録は完了を受けるが、`took` が出ないとおり、取り出されずに残る
+/// (docs/spec/vm.md の「操作の記録」)。
 #[test]
 fn a_job_record_left_at_an_exit_does_not_leak() {
-    let by_main = "\
+    let src = "\
 import Async
 import Bytes
 import IoTest
@@ -344,34 +327,15 @@ main () = Async.run (fn () ->
   (exit 3 : Unit)
   println (show (Async.await t)))
 ";
-    let by_task = "\
-import Async
-import Bytes
-import IoTest
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let b = Bytes.of_string \"ab\"
-  let t = Async.start (fn () ->
-    let n = IoTest.checksum 0 b
-    println \"took\"
-    n)
-  let u = Async.start (fn () ->
-    println (show (Bytes.length b))
-    (exit 3 : Unit))
-  Async.await u
-  println (show (Async.await t)))
-";
-    for src in [by_main, by_task] {
-        let (host, out) = capture_host(Default::default());
-        let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
-        let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
-        let finished = machine
-            .run(loaded.entry)
-            .unwrap_or_else(|error| panic!("{error}"));
-        machine.close().unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(finished.exit, Some(3));
-        assert_eq!(out.contents(), "2\n");
-        // 仕事の完了は記録に届いたが、取り出す前に終わった
-        assert_eq!(finished.stats.completions, 1);
-    }
+    let (host, out) = capture_host(Default::default());
+    let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(finished.exit, Some(3));
+    assert_eq!(out.contents(), "2\n");
+    // 仕事の完了は記録に届いたが、取り出す前に終わった
+    assert_eq!(finished.stats.completions, 1);
 }

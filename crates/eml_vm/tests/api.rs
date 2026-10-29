@@ -379,12 +379,12 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
     assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
 }
 
-/// 本物の時計の検査モードの `Machine` で `src` を流し、閉じるまでの経過を測る。`interrupt_after` を過ぎても run が
-/// 終わらなければ、別のスレッドが割り込む。止まったテストも、その長さのうちに誤りで終わる。返すのは出力、run の結果、
-/// 閉じたときの結果 (検査モードの漏れの検査)、経過である。
+/// 本物の時計の検査モードの `Machine` で `src` を流し、閉じるまでの経過を測る。返すのは出力、run の結果、閉じたときの
+/// 結果 (検査モードの漏れの検査)、経過である。`interrupt_on` があれば、出力にその文字列が出たときに別のスレッドが
+/// 割り込む。どの run も、3 秒たって終わらなければ見張りのスレッドが割り込むので、止まったテストも待ち続けない。
 fn run_real(
     src: &str,
-    interrupt_after: std::time::Duration,
+    interrupt_on: Option<&'static str>,
 ) -> (
     String,
     Result<eml_vm::Finished, RuntimeError>,
@@ -392,7 +392,7 @@ fn run_real(
     std::time::Duration,
 ) {
     use std::sync::mpsc;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     let program = eml_test_support::lir(src);
     let control = Arc::new(Control::new(Limits::default()));
@@ -400,12 +400,19 @@ fn run_real(
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host).with_clock(Clock::Real);
     let loaded = machine.load(&program).unwrap();
     let (done, finished) = mpsc::channel::<()>();
+    let seen = out.clone();
+    let start = Instant::now();
     let watchdog = std::thread::spawn(move || {
-        if finished.recv_timeout(interrupt_after) == Err(mpsc::RecvTimeoutError::Timeout) {
-            control.interrupt();
+        while finished.recv_timeout(Duration::from_millis(1))
+            == Err(mpsc::RecvTimeoutError::Timeout)
+        {
+            let marked = interrupt_on.is_some_and(|marker| seen.contents().contains(marker));
+            if marked || start.elapsed() >= Duration::from_secs(3) {
+                control.interrupt();
+                return;
+            }
         }
     });
-    let start = Instant::now();
     let result = machine.run(loaded.entry);
     let closed = machine.close();
     let elapsed = start.elapsed();
@@ -415,7 +422,7 @@ fn run_real(
 }
 
 /// 本物の driver の `pair` は unix の `socketpair` で、片方の端に書いたバイトを別のタスクが読む
-/// (docs/spec/stdlib.md の「`Std.IoTest`」)。3 秒は止まりの見張りである。
+/// (docs/spec/stdlib.md の「`Std.IoTest`」)。
 #[cfg(unix)]
 #[test]
 fn a_real_pair_carries_bytes_between_tasks() {
@@ -435,11 +442,10 @@ main () = Async.run (fn () ->
   drop a
   println \"\\{show n} \\{Async.await t}\")
 ";
-    let (out, result, closed, elapsed) = run_real(src, std::time::Duration::from_secs(3));
+    let (out, result, closed, _) = run_real(src, None);
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "5 > hello\n");
-    assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
 }
 
 /// 仕事は本物の driver のプールのスレッドで動き、本物の時計では遅れの分だけ眠る。並んだ2つの仕事も `await` の順に
@@ -458,7 +464,7 @@ main () = Async.run (fn () ->
   println (show (Async.await u))
   println (show (Async.await t)))
 ";
-    let (out, result, closed, elapsed) = run_real(src, std::time::Duration::from_secs(3));
+    let (out, result, closed, elapsed) = run_real(src, None);
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "195\n363\n294\n");
@@ -466,12 +472,10 @@ main () = Async.run (fn () ->
         elapsed >= std::time::Duration::from_millis(100),
         "{elapsed:?}"
     );
-    assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
 }
 
 /// 仕事は止められないので、期限で取り消されたタスクは仕事が終わるのを待ってから `Cancelled` で再開する。`timeout` は
-/// `None` を返すが、戻るのは 300 ms の仕事が終わってからである (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの
-/// 見張りである。
+/// `None` を返すが、戻るのは 300 ms の仕事が終わってからである (docs/spec/vm.md の「時計と driver」)。
 #[test]
 fn a_cancelled_job_resumes_after_it_completes() {
     let src = "\
@@ -484,7 +488,7 @@ main () = Async.run (fn () ->
     | Some n -> println \"Some \\{show n}\"
     | None -> println \"None\")
 ";
-    let (out, result, closed, elapsed) = run_real(src, std::time::Duration::from_secs(3));
+    let (out, result, closed, elapsed) = run_real(src, None);
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "None\n");
@@ -492,11 +496,10 @@ main () = Async.run (fn () ->
         elapsed >= std::time::Duration::from_millis(300),
         "{elapsed:?}"
     );
-    assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
 }
 
 /// 仕事が走っている間に `exit` で終わる run は、ヒープを落とす前に仕事を待ちきる。終了コードはそのまま報告し、検査
-/// モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りである。
+/// モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
 #[test]
 fn an_exit_waits_for_a_running_job() {
     let src = "\
@@ -511,7 +514,7 @@ main () = Async.run (fn () ->
   (exit 3 : Unit)
   println (show (Async.await t)))
 ";
-    let (out, result, closed, elapsed) = run_real(src, std::time::Duration::from_secs(3));
+    let (out, result, closed, elapsed) = run_real(src, None);
     let finished = result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(finished.exit, Some(3));
@@ -520,12 +523,12 @@ main () = Async.run (fn () ->
         elapsed >= std::time::Duration::from_millis(200),
         "{elapsed:?}"
     );
-    assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
 }
 
 /// 書き手のいない本物の端で読みを待つ run は、空きのループが割り込みを読むので、別のスレッドの割り込みで止まる。
 /// 止めるときに読みの操作を取り消して待ちきるので、検査モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
-/// 2 秒は止まりの見張りである。
+/// 走れるタスクの列は FIFO なので、本体が `yield_now` から戻って `waiting` を書くときには、読むタスクはもう本物の
+/// 読みで待っている。割り込みは `waiting` が出てから送るので、読みの待ちの間に届く。
 #[cfg(unix)]
 #[test]
 fn an_interrupt_stops_a_run_blocked_in_a_real_read() {
@@ -533,21 +536,26 @@ fn an_interrupt_stops_a_run_blocked_in_a_real_read() {
 import Async
 import Bytes
 import IoTest
+import Stdout
 import String
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
   let (a, b) = IoTest.pair ()
-  let (buf, b) = IoTest.read_chunk (Bytes.empty ()) b
-  drop a
-  drop b
-  println (String.decode buf))
+  let t = Async.start (fn () ->
+    let (buf, b) = IoTest.read_chunk (Bytes.empty ()) b
+    drop b
+    String.decode buf)
+  Async.yield_now ()
+  println \"waiting\"
+  Stdout.close (Stdout.flush (Stdout.open ()))
+  println (Async.await t)
+  drop a)
 ";
-    let (out, result, closed, elapsed) = run_real(src, std::time::Duration::from_millis(20));
+    let (out, result, closed, _) = run_real(src, Some("waiting"));
     let error = result.unwrap_err();
     assert!(error.interrupted(), "{error:?}");
     closed.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out, "");
-    assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+    assert_eq!(out, "waiting\n");
 }
 
 /// Windows の本物の driver はまだソケットを扱わないので、`pair` は種類 `NotAvailable` の IO の失敗になる
@@ -566,7 +574,7 @@ main () =
       println \"pair\"
     | Err e -> println (show e.kind)
 ";
-    let (out, result, closed, _) = run_real(src, std::time::Duration::from_secs(3));
+    let (out, result, closed, _) = run_real(src, None);
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "NotAvailable\n");
