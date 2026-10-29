@@ -1248,7 +1248,7 @@ body () =
 
 ## `Std.IoTest`
 
-`Std.IoTest` は実行系のテストのためのモジュールで、driver の操作 (書きと読み) を UI テストから動かす ([VM](vm.md) の「時計と driver」)。利用者の API ではなく、断りなく変わる。モジュールの仕組みに内部のモジュールの段階はないので、ほかの std のモジュールと同じく読み込める。
+`Std.IoTest` は実行系のテストのためのモジュールで、driver の操作 (書きと読みとプールの仕事) を UI テストから動かす ([VM](vm.md) の「時計と driver」)。利用者の API ではなく、断りなく変わる。モジュールの仕組みに内部のモジュールの段階はないので、ほかの std のモジュールと同じく読み込める。
 
 | 名前 | 型 | 実装 |
 |---|---|---|
@@ -1257,19 +1257,21 @@ body () =
 | `read_chunk` | `Bytes -> Stream -> <IO, Async> (Bytes, Stream)` | eml |
 | `read_chunk_within` | `Int -> Bytes -> Stream -> <IO, Async> (Option Bytes, Stream)` | eml |
 | `write` | `Bytes -> Stream -> <IO, Async> (Int, Stream)` | eml |
+| `checksum` | `Int -> Bytes -> <IO, Async> Int` | eml |
 
 - `Stream` は driver の `pair` の片方の端を持つ `Foreign` で、Kind は `Lin`、Repr は `obj` である。落とすと端を閉じる。閉じるのは driver で、次の待ち、完了の取り出し、`quiesce` のどれかのときである。相手の端は、閉じた端が書いた残りを読みきってから EOF を受ける
 - `pair ()` はつながった2つの端を作る。タスクの外でも動く。テストの driver ではいつも作れる。本物の driver は unix で `socketpair` を使い、Windows では種類 `NotAvailable` の IO の失敗 `cannot open a stream pair: …` を起こす
 - `write b s` は `b` を書き、書いたバイトの数と端を返す。本物の driver では数が `b` の長さより短いことがある。取り消しの地点である (上の「取り消し」)。書けなかったときは IO の失敗 `cannot write to the stream: …` を起こす。テストの driver では、相手の端が閉じていれば `cannot write to the stream: broken pipe` (種類 `Other`) である
 - `read_chunk b s` は `s` を1回読み、読んだバイトを `b` の後ろに足して、その `Bytes` と端を返す。読めるものがなければ、相手が書くか端を閉じるまで待つ。EOF では何も足さずに `b` の中身のまま返す (`FileIn.read_chunk` と同じ形)。取り消しの地点である。読めなかったときは IO の失敗 `cannot read the stream: …` を起こす。buffer の空きは、端が読めるようになってから足す ([VM](vm.md) の「操作の記録」)
 - `read_chunk_within ms b s` は、`read_chunk b s` を `ms` ミリ秒の期限で区切る。期限までに読めれば、読んだ後の `Bytes` を `Some` に入れて端と返す。読めなければ `None` と端を返し、`b` は捨てる。端は閉じない。期限が端の読めるようになるのを待つ間に来れば、buffer の空きは足さない。`ms` が正なら、テストの driver では結果がプログラムで決まる。読めるデータがあればどの期限よりも先に読みが終わり、データがなければ期限はいつも読めるようになるのを待つ間に来る ([VM](vm.md) の「時計と driver」)。`ms` が 0 以下の過ぎた期限は、待ち始める前に終わったかを見るだけである。データのない端ではいつも `None` だが、データのある端では、待ち始める前に読みが終わったかがスケジュールで変わるので、`Some` と `None` のどちらにもなる。本物の driver で操作と待ちの始めが競うのと同じである。取り消しの地点である
+- `checksum delay b` は、`b` のバイトの和をブロックする呼び出しのプールの仕事で求める。仕事は `delay` ミリ秒眠ってから和を求める。遅れは `Machine` の時計が本物 (`Clock::Real`) のときだけ効き、0 から 1000 の間に収める。仮想の時計 (`Clock::Virtual`) では遅れを 0 にする。テストの driver は仕事を次の決着でその場で動かすので、仕事の間に仮想の時間は進まず、UI テストは本物の時間を眠らない ([VM](vm.md) の「時計と driver」)。取り消しの地点である。待っている間に取り消されても、仕事は取り消せないので、終わるのを待ってから投げる。仕事の誤りは IO の失敗 `the checksum job failed: …` だが、今の仕事は失敗しないので届かない
 - driver の誤りの種類は、`NotFound` を `NotFound`、`PermissionDenied` を `PermissionDenied`、`Unsupported` を `NotAvailable`、ほかを `Other` にする。extern が出す種類が最初の5種類だけであることは変わらない (上の「`try_io`」)
-- 待つ関数の包みは同じ形である。取り消しの地点が投げるなら、ストリームを落として種類 `Cancelled` の失敗を投げ、何も受け付けない。そうでなければ、受け付けの行で token を作り、`Async.io_wait` (`_within` は `Async.io_wait_until`) で待ち、`op_stream` で端を取り戻す。`_within` だけは続けて `op_timed_out` で期限切れかを読む。最後に取り出しの行で token を消費して結果を受け取る。再開の `Wake` が `Woke` なら結果 (`_within` は期限切れなら `None`、そうでなければ `Some`) を返し、`Cancelled` なら端を落として種類 `Cancelled` の失敗を投げる
+- 待つ関数の包みは同じ形である。取り消しの地点が投げるなら、ストリームを落として (`checksum` は端を持たない) 種類 `Cancelled` の失敗を投げ、何も受け付けない。そうでなければ、受け付けの行で token を作り、`Async.io_wait` (`_within` は `Async.io_wait_until`) で待ち、`op_stream` で端を取り戻す (`checksum` は端を持たないので取り戻さない)。`_within` だけは続けて `op_timed_out` で期限切れかを読む。最後に取り出しの行で token を消費して結果を受け取る。再開の `Wake` が `Woke` なら結果 (`_within` は期限切れなら `None`、そうでなければ `Some`) を返し、`Cancelled` なら端を落として種類 `Cancelled` の失敗を投げる
 - 結果は、操作の記録の状態で決める。誤りの種類では分けない
   - 取り消しを頼んだ記録は、結果によらず `Cancelled` になる。期限が来た後に取り消されても同じである
   - 期限が来て、取り消しを頼んでいない記録の `Err(_)` は期限切れで、`None` と端になる。本物の誤りが期限と競って届いたときも同じである。その誤り (EOF、reset、broken pipe) は端に残るので、次の操作が報告する。`Ok(n)` は期限と競って届いたデータで、`Some` になる
   - どちらでもない記録の `Err(e)` は IO の失敗である
-- extern の行は次の8行で、どれも `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の10行で、どれも `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 借りる引数 |
 |---|---|---|
@@ -1281,12 +1283,16 @@ body () =
 | `submit_read` | `Bytes -> Stream -> <IO> Async.OpId` | なし |
 | `take_read` | `Async.OpId -> <IO> Bytes` | なし |
 | `op_timed_out` | `Async.OpId -> <IO> (Bool, Async.OpId)` | token |
+| `submit_checksum` | `Int -> Bytes -> <IO> Async.OpId` | なし |
+| `take_checksum` | `Async.OpId -> <IO> Int` | なし |
 
 - `open_pair` は driver の `pair` で2つの端を作り、1つの `Stream` の物体に持たせる。`peer` はその物体から2つ目の端を分ける。`pair () = peer (open_pair ())` で、どちらもタスクの外で動く。2回目の `peer` は内部の誤り `a stream pair is split twice` である
 - `submit_write` と `submit_read` は buffer と端を消費して操作の記録に移し、token を返す。buffer が一意でなければ (共有、不死、ほかの参照)、同じ中身の新しい `Bytes` に写して元を手放す。driver が読む間に書き換わらないためである
 - `peer`、`op_stream`、`op_timed_out` は引数を借り、宣言の型では結果と引数の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。`op_stream` は終わった記録から端を移し出す。`op_timed_out` は、終わった記録に期限が来ていて、結果が誤りなら真を返す
 - `take_write` は token を消費して記録を放し、buffer を手放して、書いたバイトの数を返す。取り消しを頼んだ記録と期限が来た記録の誤りは 0 を返し、包みが結果を決める。そうでない誤りは IO の失敗を起こす
 - `take_read` は token を消費して記録を放し、読んだバイトを足した buffer を返す。取り消しを頼んだ記録は、結果によらず、確定したバイトを持つ buffer を返し、包みが落として `Cancelled` を投げる。期限が来た記録の誤りも buffer を返し、包みが `None` にして落とす。そうでない誤りは buffer を手放して IO の失敗を起こす
+- `submit_checksum` は buffer を消費して操作の記録に移し、中身を写して仕事に渡し、token を返す。仕事は別のスレッドで動くので、ヒープの記憶を貸さない。そのため buffer は一意でなくてよく、`submit_write` と違って一意な `Bytes` に写し直さない
+- `take_checksum` は token を消費して記録を放し、buffer を手放して、仕事の結果の和を返す。取り消しを頼んだ記録の誤りは 0 を返し、包みが `Cancelled` を投げる。そうでない誤りは IO の失敗を起こす
 
 ## 実行時エラー
 

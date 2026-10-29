@@ -84,6 +84,25 @@ main () = Async.run (fn () ->
     assert_eq!((s.completions, s.parks), (2, 1));
 }
 
+/// プールの仕事は driver の操作を1つ出し、完了を1つ受ける。仮想の時計では遅れを渡さないので、時間の待ちはない
+/// (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn a_checksum_counts_one_completion() {
+    let src = "\
+import Async
+import Bytes
+import IoTest
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> println (show (IoTest.checksum 1000 (Bytes.of_string \"ab\"))))
+";
+    let (out, result) = run(src);
+    result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "195\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((s.completions, s.parks, s.timers, s.cancels), (1, 1, 0, 0));
+}
+
 /// 書き手のない端の期限付きの読みは、期限が端の読めるようになるのを待つ操作に当たり、その取り消しの完了1つで終わる。
 /// buffer を貸す操作は出さない。期限は時間の輪に1つ載り、再開は取り消しでなく `None` である
 /// (docs/spec/vm.md の「`RunStats`」)。
@@ -266,4 +285,27 @@ main () = Async.run (fn () ->
     let s = finished.stats;
     // 端が読めるようになった完了と、取り消した読みの完了
     assert_eq!((s.completions, s.cancels), (2, 1));
+}
+
+/// プールの仕事はプールのスレッドで動くので、仕事を作るモジュールは `std` と `eml_rt` だけを import し、`unsafe` を
+/// 持たない。ヒープにも RC にも届かないことを、import と `unsafe` のなさで確かめる (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn the_jobs_module_imports_only_std_and_eml_rt() {
+    let source = include_str!("../src/jobs.rs");
+    for line in source.lines() {
+        let line = line.trim_start();
+        if line.starts_with("//") {
+            continue;
+        }
+        if line.starts_with("use ") {
+            assert!(
+                line.starts_with("use std::") || line.starts_with("use eml_rt::"),
+                "{line}"
+            );
+        }
+        assert!(
+            !line.contains("crate::") && !line.contains("super::") && !line.contains("unsafe"),
+            "{line}"
+        );
+    }
 }

@@ -1371,6 +1371,23 @@ table! {
                 )
             },
         ),
+        // プールの仕事。`Bytes` の中身を写して仕事に渡すので、記録の buffer は一意でなくてよい
+        IoTestSubmitChecksum => kinded(
+            "Std.IoTest.submit_checksum",
+            &[Int, Obj],
+            &[Unr, Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        IoTestTakeChecksum => kinded(
+            "Std.IoTest.take_checksum",
+            &[Obj],
+            &[Lin],
+            Int,
+            Unr,
+            Purity::Effectful,
+        ),
     }
 }
 
@@ -1429,6 +1446,8 @@ impl Extern {
                 | Extern::IoTestSubmitRead
                 | Extern::IoTestTakeRead
                 | Extern::IoTestOpTimedOut
+                | Extern::IoTestSubmitChecksum
+                | Extern::IoTestTakeChecksum
         )
     }
 }

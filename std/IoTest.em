@@ -59,18 +59,33 @@ read_chunk_within ms b s =
         drop s
         raise_cancelled ()
 
+-- `b` のバイトの和を、ブロックする呼び出しのプールの仕事で求める。仕事は `delay` ミリ秒眠ってから和を求める。遅れは
+-- 本物の時計でだけ効き、0 から 1000 の間に収める。取り消しの地点である (docs/spec/stdlib.md の「`Std.IoTest`」)
+pub checksum : Int -> Bytes -> <IO, Async> Int
+checksum delay b =
+  if Async.cancel_requested () then
+    raise_cancelled ()
+  else
+    let (w, op) = Async.io_wait (submit_checksum delay b)
+    let n = take_checksum op
+    match w with
+      | Async.Woke -> n
+      | Async.Cancelled -> raise_cancelled ()
+
 -- `Std.Async` の取り消しの地点と同じ失敗 (docs/spec/stdlib.md の「取り消し」)
 raise_cancelled : Unit -> <IO> a
 raise_cancelled () = fail_io Prelude.Cancelled "task was cancelled"
 
 -- ランタイムの口。受け付けの行は buffer とストリームを操作の記録に移して token を返し、`op_stream` は終わった記録から
 -- ストリームを取り出し、`op_timed_out` は終わった記録が期限で誤りになったかを読み、取り出しの行は token を消費して
--- 記録を放す (docs/spec/vm.md の「`Async` のタスク」)
-extern open_pair    : Unit -> <IO> Stream
-extern peer         : Stream -> <IO> (Stream, Stream)
-extern submit_write : Bytes -> Stream -> <IO> Async.OpId
-extern op_stream    : Async.OpId -> <IO> (Stream, Async.OpId)
-extern take_write   : Async.OpId -> <IO> Int
-extern submit_read  : Bytes -> Stream -> <IO> Async.OpId
-extern take_read    : Async.OpId -> <IO> Bytes
-extern op_timed_out : Async.OpId -> <IO> (Bool, Async.OpId)
+-- 記録を放す。`submit_checksum` は buffer の中身を写して仕事に渡す (docs/spec/vm.md の「`Async` のタスク」)
+extern open_pair       : Unit -> <IO> Stream
+extern peer            : Stream -> <IO> (Stream, Stream)
+extern submit_write    : Bytes -> Stream -> <IO> Async.OpId
+extern op_stream       : Async.OpId -> <IO> (Stream, Async.OpId)
+extern take_write      : Async.OpId -> <IO> Int
+extern submit_read     : Bytes -> Stream -> <IO> Async.OpId
+extern take_read       : Async.OpId -> <IO> Bytes
+extern op_timed_out    : Async.OpId -> <IO> (Bool, Async.OpId)
+extern submit_checksum : Int -> Bytes -> <IO> Async.OpId
+extern take_checksum   : Async.OpId -> <IO> Int

@@ -3,6 +3,7 @@
 //! (docs/future/multicore.md の「VM の並列化の備え」の制約5)。
 
 use std::marker::PhantomData;
+use std::time::Duration;
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault, Raised};
@@ -17,6 +18,7 @@ use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
 use crate::driver::{ceil_ms, floor_ms};
 use crate::error::{KEPT_PENDING, VmFault};
+use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{JoinId, JoinNode, MAIN, Outcome, Policy, Scheduler, TaskId, TaskState};
 use crate::{RunCounts, RuntimeError};
@@ -2063,6 +2065,48 @@ fn async_op<R: Exec>(
             let late = sched.cells.op_timed_out(ctx, task.get(arg(0)))?;
             task.set_raw(dst, i64::from(late));
         }
+        Extern::IoTestSubmitChecksum => {
+            // 遅れは本物の時計でだけ効かせ、0..=1000 ms に収める。仮想の時計の run は本物の時間を眠らない
+            // (docs/spec/stdlib.md の「`Std.IoTest`」)
+            let delay = if sched.real_clock {
+                Duration::from_millis(task.raw(arg(0)).clamp(0, 1000) as u64)
+            } else {
+                Duration::ZERO
+            };
+            let buf = task.get(arg(1));
+            let token =
+                sched
+                    .cells
+                    .submit_job(ctx, &mut *sched.driver, task.worker, buf, |input| {
+                        jobs::checksum(input, delay)
+                    })?;
+            task.set(dst, token);
+        }
+        Extern::IoTestTakeChecksum => {
+            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
+            if let Some(buf) = taken.buf {
+                unsafe { ctx.heap_mut().decref(buf) }?;
+            }
+            // 取り消しで終わった待ちの結果は、包みが投げる取り消しに含める (docs/spec/stdlib.md の「`Std.IoTest`」)
+            match taken.result {
+                Ok(n) => task.set_raw(dst, n as i64),
+                Err(_) if taken.cancelling || taken.timed_out => task.set_raw(dst, 0),
+                Err(e) => {
+                    let raise = Raise::Io {
+                        kind: io_kind(&e),
+                        message: format!("the checksum job failed: {e}"),
+                    };
+                    return raise_again::<R>(
+                        code,
+                        ctx,
+                        task,
+                        dst,
+                        raise,
+                        Extern::IoTestTakeChecksum,
+                    );
+                }
+            }
+        }
         _ => {
             return Err(VmFault::Internal(
                 "a row outside Std.Async, Std.Chan, Std.Atomic and Std.IoTest reached the Async instruction",
@@ -2976,7 +3020,9 @@ fn run_extern<R: Exec>(
             | Extern::IoTestTakeWrite
             | Extern::IoTestSubmitRead
             | Extern::IoTestTakeRead
-            | Extern::IoTestOpTimedOut => {
+            | Extern::IoTestOpTimedOut
+            | Extern::IoTestSubmitChecksum
+            | Extern::IoTestTakeChecksum => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

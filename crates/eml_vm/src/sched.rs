@@ -302,6 +302,9 @@ pub struct Scheduler<P: Policy> {
     pub(crate) stacks: Vec<Vec<eml_rt::Word>>,
     /// 時計と待ち。`Machine` が持つものを run の間だけ預かる (docs/spec/vm.md の「時計と driver」)。
     pub(crate) driver: Box<dyn IoDriver>,
+    /// `Machine` の時計が本物か。プールの仕事の遅れは本物の時計でだけ効かせ、仮想の時計の run は本物の時間を眠らない
+    /// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+    pub(crate) real_clock: bool,
 }
 
 impl<P: Policy> Scheduler<P> {
@@ -329,6 +332,7 @@ impl<P: Policy> Scheduler<P> {
             cells: Registry::new(generations),
             stacks: Vec::new(),
             driver,
+            real_clock: false,
         }
     }
 

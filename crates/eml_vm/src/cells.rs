@@ -288,6 +288,8 @@ struct OpRecord {
 enum OpKind {
     Read,
     Write,
+    /// プールの仕事。buffer は写した後は読まないので、一意でなくてよい。
+    Job,
 }
 
 enum OpPhase {
@@ -1643,6 +1645,38 @@ impl Registry {
                 worker,
                 buf: Some(buf),
                 stream: Some(stream),
+                token: None,
+                waiter: None,
+                timer: None,
+                cancelling: false,
+                timed_out: false,
+            },
+        ))
+    }
+
+    /// プールの仕事の受け付け。`buf` は呼ぶ側から移ってきた参照で、記録に移す。中身を `Vec<u8>` に写して `make` に
+    /// 渡し、できた仕事を driver に出す。仕事は別のスレッドで動くので、ヒープの記憶を貸さない
+    /// (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn submit_job<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
+        worker: u32,
+        buf: Word,
+        make: impl FnOnce(Vec<u8>) -> Op,
+    ) -> Result<Word, CellFault> {
+        // 写すまでの間だけ読むので、共有の物体でもよい
+        let input = unsafe { (*ctx.heap().bytes(buf)?).to_vec() };
+        let key = driver.submit(make(input));
+        Ok(self.record(
+            ctx,
+            OpRecord {
+                key,
+                kind: OpKind::Job,
+                phase: OpPhase::Transfer,
+                worker,
+                buf: Some(buf),
+                stream: None,
                 token: None,
                 waiter: None,
                 timer: None,
