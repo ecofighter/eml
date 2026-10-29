@@ -1,4 +1,4 @@
-# fannkuch-redux の Python の版。bench/fannkuch_var.em のループを1つずつ写し、同じ2行を書く
+# fannkuch-redux の Python の実装。bench/fannkuch_var.em のループを1つずつ写し、同じ2行を書く
 # (docs/implementation/benchmarks.md の「スクリプトの計測」)。
 import sys
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# スクリプトと数値計算のプログラムを、release ビルドの `eml run` (VM の速いモード) と Python の版の両方で3回ずつ
+# スクリプトと数値計算のプログラムを、release ビルドの `eml run` (VM の速いモード) と Python の実装の両方で3回ずつ
 # 走らせ、実時間と最大の常駐メモリの中央値を Markdown の表で出す (docs/implementation/benchmarks.md の「スクリプトの
 # 計測」)。行ごとの大きさは、eml の実時間が約 300 ms になるように決めてある。測る前に、両方の出力が一致することを
-# bench/scripts/compare.sh で確かめる。最後に、大きい入力 (log 100 MB、csv 51 MB) で Rust の版と比べる表を出す。実時間の
+# bench/scripts/compare.sh で確かめる。最後に、大きい入力 (log 100 MB、csv 51 MB) で Rust の実装と比べる表を出す。実時間の
 # 5回の中央値から空のプログラムの分を引いた比である (「C/Rust との比べ方」)。macOS の `/usr/bin/time -l` を使うので、
 # macOS でだけ動く。
 set -euo pipefail
@@ -73,7 +73,7 @@ measure() {
   echo "$(median "${seconds[@]}") $(( $(median "${sizes[@]}") / 1024 / 1024 )) $(head -n 1 <<<"$sorted") $(tail -n 1 <<<"$sorted")"
 }
 
-# 計測 `$1` の大きさの欄 `$2` の行を出す。eml の版 `$3` と Python の版 `$4` を、標準入力 `$5` と引数 (`$6` 以降) で
+# 計測 `$1` の大きさの欄 `$2` の行を出す。eml の実装 `$3` と Python の実装 `$4` を、標準入力 `$5` と引数 (`$6` 以降) で
 # 比べてから測る。引数の `@OUT` は書き出すファイルのパスである
 row() {
   local label="$1" size="$2" eml_file="$3" py_file="$4" stdin="$5"
@@ -148,7 +148,7 @@ printf 'main : Unit -> Unit\nmain () = ()\n' > "$empty_eml"
 printf 'fn main() {}\n' > "$data/rust/empty.rs"
 rustc --edition 2024 -C opt-level=3 -o "$empty_rust" "$data/rust/empty.rs"
 
-# 計測 `$1` の行。eml の版 `scripts/$4/main.em` と Rust の版 `bench/scripts/rust/$4.rs` を、種類 `$2` の約 `$3` KiB の
+# 計測 `$1` の行。eml の実装 `scripts/$4/main.em` と Rust の実装 `bench/scripts/rust/$4.rs` を、種類 `$2` の約 `$3` KiB の
 # 入力と引数 (`$5` 以降) で比べてから測る。`@IN` と `@OUT` の扱いは `script_row` と同じである
 rust_row() {
   local label="$1" kind="$2" kib="$3" name="$4"

@@ -1,4 +1,4 @@
--- `both` は左、右の順に呼ぶ逐次の版で、どの row の計算も受け付ける (docs/spec/stdlib.md の「`Std.Par`」)。子は `IO`
+-- `both` は左、右の順に呼ぶ逐次の関数で、どの row の計算も受け付ける (docs/spec/stdlib.md の「`Std.Par`」)。子は `IO`
 -- を起こせ、左の子の中断は右の子を走らせずに抜ける。`par` の子の中でも使える。
 import Std.Par
 import Fail (Fail(..))

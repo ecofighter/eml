@@ -1,4 +1,4 @@
-# mandelbrot の Python の版。bench/mandelbrot.em と同じ順で浮動小数の演算を行い、集合に入る格子点の数を書く
+# mandelbrot の Python の実装。bench/mandelbrot.em と同じ順で浮動小数の演算を行い、集合に入る格子点の数を書く
 # (docs/implementation/benchmarks.md の「スクリプトの計測」)。`complex` は掛け算の演算の順が決まらないので使わない
 import sys
 

@@ -9,7 +9,7 @@
   toolchain,
   src,
 }:
-# toolchain は Verus が求める版の fenix の `rustc`。rust_verify は公式の版の librustc_driver に繋がるので、source から
+# toolchain は Verus が求めるバージョンの fenix の `rustc`。rust_verify は公式のバージョンの librustc_driver に繋がるので、source から
 # 組む nixpkgs の rustc では動かない。fenix の `rustc` は std を含み、librustc_driver の実体を std と同じディレクトリに
 # 置くので、rustc がそこから sysroot を決められる
 let

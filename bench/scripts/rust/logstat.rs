@@ -1,4 +1,4 @@
-// logstat の Rust の版。tests/ui/run/scripts/logstat/main.em と同じ標準出力と終了コードを返す基準である
+// logstat の Rust の実装。tests/ui/run/scripts/logstat/main.em と同じ標準出力と終了コードを返す基準である
 // (docs/implementation/benchmarks.md の「スクリプトの計測」)。安全な std だけを使う。
 // 順序つきの表は eml の `Map` に合わせて `BTreeMap` である。
 use std::collections::BTreeMap;

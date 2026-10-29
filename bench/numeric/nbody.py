@@ -1,4 +1,4 @@
-# nbody の Python の版。bench/nbody.em と同じ順で浮動小数の演算を行い、進める前と後のエネルギーを書く
+# nbody の Python の実装。bench/nbody.em と同じ順で浮動小数の演算を行い、進める前と後のエネルギーを書く
 # (docs/implementation/benchmarks.md の「スクリプトの計測」)。
 import math
 import sys

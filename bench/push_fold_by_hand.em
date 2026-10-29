@@ -1,4 +1,4 @@
--- `push_fold.em` の畳み込みを、`acc + x` を書き込んだ専用の `sum` handler にした手書きの版。
+-- `push_fold.em` の畳み込みを、`acc + x` を書き込んだ専用の `sum` handler にした手書きのプログラム。
 import Yield (Yield(..))
 
 nums : Int -> Unit -> <Yield Int, Panic> Unit

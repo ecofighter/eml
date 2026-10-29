@@ -1,4 +1,4 @@
-// grep の Rust の版。tests/ui/run/scripts/grep/main.em と同じ標準出力と終了コードを返す基準である
+// grep の Rust の実装。tests/ui/run/scripts/grep/main.em と同じ標準出力と終了コードを返す基準である
 // (docs/implementation/benchmarks.md の「スクリプトの計測」)。安全な std だけを使う。
 // 標準入力は1行ずつ、ファイルは全体を読んでから `\n` で分け、各行の末尾の `\r` を1つ除く。
 use std::io::{BufRead, Write};

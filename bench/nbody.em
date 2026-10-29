@@ -1,6 +1,6 @@
 -- nbody。Benchmarks Game の5つの天体を引数の回数 (既定は 1000) だけ進め、進める前と後のエネルギーを書く。
 -- ベクトルは `Vec3` の値で書く。計算の途中の `Vec3` は構造体なので確保しない。配列に書く `Vec3` は箱に入る
--- (docs/implementation/benchmarks.md の「配列に書く構造体の箱」)。bench/numeric/nbody.py は、同じ順で浮動小数の演算を行う Python の版である
+-- (docs/implementation/benchmarks.md の「配列に書く構造体の箱」)。bench/numeric/nbody.py は、同じ順で浮動小数の演算を行う Python の実装である
 import Array
 import Env
 import Float

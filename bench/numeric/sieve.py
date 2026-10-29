@@ -1,4 +1,4 @@
-# エラトステネスのふるいの Python の版。bench/sieve_var.em と同じく、引数 N より小さい素数の数を書く
+# エラトステネスのふるいの Python の実装。bench/sieve_var.em と同じく、引数 N より小さい素数の数を書く
 # (docs/implementation/benchmarks.md の「スクリプトの計測」)。
 import sys
 

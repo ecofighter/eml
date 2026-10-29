@@ -1,5 +1,5 @@
 -- `var` で書いた fannkuch-redux (既定は n = 7)。n を引数で受ける。配列の変数を3本使う。
--- `fannkuch_by_hand.em` は、同じ計算で状態をすべて末尾再帰の局所関数に受け渡す版である
+-- `fannkuch_by_hand.em` は、同じ計算で状態をすべて末尾再帰の局所関数に受け渡すプログラムである
 import Env
 import MutArray
 import String

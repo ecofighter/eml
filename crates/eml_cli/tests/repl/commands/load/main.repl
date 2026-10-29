@@ -4,7 +4,7 @@
 > area (Circle 2)
 > k
 > :type area
-# ファイルの item を定義し直すと、古い版は `#1` になる
+# ファイルの item を定義し直すと、古いバージョンは `#1` になる
 > data Shape = | Dot
 > :type area
 # ファイルの関数の実行時エラーはファイルのパスを指す

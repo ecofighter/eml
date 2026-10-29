@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# スクリプトの eml の版と Python の版を、今のディレクトリで同じ引数と同じ標準入力で動かし、標準出力と終了コードを
+# スクリプトの eml の実装と Python の実装を、今のディレクトリで同じ引数と同じ標準入力で動かし、標準出力と終了コードを
 # 比べる (docs/implementation/benchmarks.md の「スクリプトの計測」)。標準エラーの文言は比べない。
 #
-#   compare.sh [--rust] ...      先頭に `--rust` を置くと、相手を Python の版から `bench/scripts/rust/NAME.rs` に替える。
+#   compare.sh [--rust] ...      先頭に `--rust` を置くと、相手を Python の実装から `bench/scripts/rust/NAME.rs` に替える。
 #                                `rustc --edition 2024 -C opt-level=3` で `target/bench-scripts/rust/NAME` に build してから
 #                                動かす。`--paths` では PY_FILE の名前 (拡張子を除く) から NAME を決める
 #   compare.sh --paths EML_FILE PY_FILE [ARG...]
-#                                eml のプログラムと Python の版を、パスで渡す。標準入力をそのまま両方に渡す
+#                                eml のプログラムと Python の実装を、パスで渡す。標準入力をそのまま両方に渡す
 #   compare.sh NAME [ARG...]     tests/ui/run/scripts/NAME/main.em と bench/scripts/NAME.py を `--paths` で比べる
 #   compare.sh --fixture NAME    tests/ui/run/scripts/NAME/ の写しの中で、main.args を引数に、main.stdin を標準入力に
 #                                する。各側は自分の写しの中で動き、書いたファイルも比べる (リポジトリにファイルを残さない)

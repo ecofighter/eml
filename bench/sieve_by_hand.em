@@ -1,4 +1,4 @@
--- `sieve_var.em` のふるいを、`MutArray` を末尾再帰のループに線形に受け渡して手で書いた版
+-- `sieve_var.em` のふるいを、`MutArray` を末尾再帰のループに線形に受け渡して手で書いたもの
 import Array
 import MutArray
 

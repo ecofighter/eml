@@ -1,4 +1,4 @@
--- 状態が `FileIn` の handler の、その場で動く `fn` 節が、`exit 6` を呼ぶ補助の関数を呼ぶ。巻き戻しは節の入口の
+-- 状態が `FileIn` の handler の、その場で動く `fn` 節が、`exit 6` を呼ぶ補助の関数を呼ぶ。巻き戻しは節のエントリの
 -- フレームが取り出した `FileIn` を閉じ、`Finish` まで届く。
 import FileIn
 
