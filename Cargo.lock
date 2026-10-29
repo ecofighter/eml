@@ -338,6 +338,8 @@ dependencies = [
  "compio-buf",
  "compio-driver",
  "eml_rt",
+ "libc",
+ "socket2",
 ]
 
 [[package]]

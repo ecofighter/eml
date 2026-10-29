@@ -1,11 +1,10 @@
 ---
 source: crates/eml_cli/tests/ui.rs
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
-input_file: tests/ui/run/async/io_checksum.em
+input_file: tests/ui/run/async/net_read_line_within.em
 ---
 --- stdout ---
-195
-363
-294
-Some 195
+None
+Some hello
+eof
 --- stderr ---

@@ -141,6 +141,125 @@ fn clear_lowers_every_bit_and_the_exit() {
     assert_eq!(control.exit_code(), None);
 }
 
+// `NOTICE` も worker の語だけに立つ。`poll` は止めずに続ける知らせとして `Notice` を返す
+#[test]
+fn notice_reaches_only_the_worker_word() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let ctx = Ctx::<Fast>::new(control.clone(), host(&Arc::default()));
+    control.notice();
+    assert_eq!(control.worker_bits(), Control::NOTICE);
+    assert_eq!(control.stop_bits(), 0);
+    assert_eq!(ctx.poll(0), Err(Stop::Notice));
+    control.take_notice();
+    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(ctx.poll(0), Ok(()));
+}
+
+#[test]
+fn stop_reason_puts_notice_between_the_stops_and_preempt() {
+    let notice = Control::NOTICE | Control::PREEMPT;
+    assert_eq!(stop_reason(notice), Stop::Notice);
+    assert_eq!(stop_reason(Control::NOTICE), Stop::Notice);
+    assert_eq!(stop_reason(notice | Control::MEMORY), Stop::MemoryLimit);
+    assert_eq!(stop_reason(notice | Control::TERMINATE), Stop::Terminated);
+    assert_eq!(
+        stop_reason(Control::TERMINATE | Control::MEMORY),
+        Stop::Terminated
+    );
+    assert_eq!(
+        stop_reason(Control::TERMINATE | Control::INTERRUPT),
+        Stop::Interrupted
+    );
+}
+
+#[test]
+fn a_claimed_signal_is_returned_once_until_it_is_settled() {
+    let control = Control::new(Limits::default());
+    assert_eq!(control.claim_signals(), 0);
+    control.defer(Control::INTERRUPT);
+    assert_eq!(control.pending_signals(), Control::INTERRUPT);
+    assert_eq!(control.claim_signals(), Control::INTERRUPT);
+    assert_eq!(control.claim_signals(), 0);
+    // 中継済みでも、届けるまでは保留のままである
+    assert_eq!(control.pending_signals(), Control::INTERRUPT);
+    // 中継した後に来た別の種類だけを返す
+    control.defer(Control::TERMINATE);
+    control.defer(Control::INTERRUPT);
+    assert_eq!(control.claim_signals(), Control::TERMINATE);
+    assert_eq!(
+        control.pending_signals(),
+        Control::INTERRUPT | Control::TERMINATE
+    );
+    // 届けた種類は保留も中継済みも下りるので、次の保留はまた1回返る
+    control.settle(Control::INTERRUPT);
+    assert_eq!(control.pending_signals(), Control::TERMINATE);
+    assert_eq!(control.claim_signals(), 0);
+    control.defer(Control::INTERRUPT);
+    assert_eq!(control.claim_signals(), Control::INTERRUPT);
+    // シグナルの語は止める語に出ない
+    assert_eq!(control.stop_bits(), 0);
+    assert_eq!(control.worker_bits(), 0);
+}
+
+#[test]
+fn take_pending_empties_the_signal_word() {
+    let control = Control::new(Limits::default());
+    control.defer(Control::TERMINATE);
+    assert_eq!(control.claim_signals(), Control::TERMINATE);
+    control.defer(Control::INTERRUPT);
+    assert_eq!(
+        control.take_pending(),
+        Control::INTERRUPT | Control::TERMINATE
+    );
+    assert_eq!(control.pending_signals(), 0);
+    assert_eq!(control.take_pending(), 0);
+    // 中継済みの印も消えたので、次の保留はまた返る
+    control.defer(Control::TERMINATE);
+    assert_eq!(control.claim_signals(), Control::TERMINATE);
+}
+
+#[test]
+fn watched_keeps_the_last_bits() {
+    let control = Control::new(Limits::default());
+    assert_eq!(control.watched(), 0);
+    control.set_watched(Control::INTERRUPT | Control::TERMINATE);
+    assert_eq!(control.watched(), Control::INTERRUPT | Control::TERMINATE);
+    control.set_watched(Control::TERMINATE);
+    assert_eq!(control.watched(), Control::TERMINATE);
+}
+
+#[test]
+fn begin_run_lowers_notice_but_keeps_the_signals() {
+    let control = Control::new(Limits::default());
+    control.terminate();
+    control.notice();
+    control.preempt();
+    control.defer(Control::INTERRUPT);
+    control.set_watched(Control::INTERRUPT);
+    control.begin_run();
+    assert_eq!(control.worker_bits(), Control::TERMINATE);
+    assert_eq!(control.stop_bits(), Control::TERMINATE);
+    assert_eq!(control.pending_signals(), Control::INTERRUPT);
+    assert_eq!(control.watched(), Control::INTERRUPT);
+}
+
+#[test]
+fn clear_lowers_the_signals_and_the_watched_bits() {
+    let control = Control::new(Limits::default());
+    control.terminate();
+    control.notice();
+    control.defer(Control::TERMINATE);
+    assert_eq!(control.claim_signals(), Control::TERMINATE);
+    control.set_watched(Control::TERMINATE);
+    control.clear();
+    assert_eq!(control.stop_bits(), 0);
+    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(control.pending_signals(), 0);
+    assert_eq!(control.watched(), 0);
+    control.defer(Control::TERMINATE);
+    assert_eq!(control.claim_signals(), Control::TERMINATE);
+}
+
 #[test]
 fn stop_reason_puts_preempt_after_the_stops() {
     let both = Control::PREEMPT | Control::INTERRUPT;

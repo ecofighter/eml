@@ -9,7 +9,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 - 目的: 多数の接続を1つのプロセスで受けるネットワークのサーバを eml で書けるようにする。接続ごとにタスクを1つ作り、1つの接続の失敗 (IO の失敗、`Panic`、タスクごとの上限) をその接続の中にとどめる
 - 範囲: `Async` のエフェクト、スコープとタスク、失敗と `exit`、取り消し、時間、channel と共有の状態、I/O の driver、`Net` と `Signal`、非同期のファイルとパイプ、`compute`、テスト
 - 範囲の外: worker のループ、受け箱、救済、横取り、スレッドをまたぐ RC、データ並列の `par`。worker のループ、受け箱、救済、横取りは [マルチコア対応の設計](multicore.md) の「スケジューラ」に、スレッドをまたぐ RC は [マルチコア対応の設計](multicore.md) の「スレッドをまたぐ RC」に、`par` は [マルチコア対応の設計](multicore.md) の「並列と並行の API」にある
-- 範囲の外: TLS、HTTP、時刻。下の「ネットワークとシグナル」と「未決の論点と将来の拡張」に、後で足す形を書く
+- 範囲の外: 時刻。下の「未決の論点と将来の拡張」に、後で足す形を書く。TLS と HTTP は下の「TLS と HTTP」にある
 - 並行処理のための新しい構文は足さない。タスクはラムダと `use` で書く
 
 ## 確定した設計判断
@@ -23,7 +23,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | 5 | 取り消し | 取り消しは `Wake.Cancelled` で届け、std の包みが IO の失敗 `Prelude.Cancelled` として投げる。タスクは自分のフレームとスコープの後始末を通って巻き戻る。継続を捨てる強い取り消しは `exit`、致命的な誤り、run の終わり、回復のときだけにする。柔らかい確かめの名前は `check_cancelled` と `cancel_requested` である |
 | 6 | `exit` | `exit` は自分のタスクだけを巻き戻し、`Control` の終わりの欄に終了コードを書いて終わりのビットを立てる。ほかのタスクは巻き戻さず、ヒープを落とすときに `Lin` の資源を後始末する |
 | 7 | タスクごとの上限 | タスクの中で深さ、スタック、メモリの柔らかい上限を超えると、そのタスクの IO の失敗 `ResourceLimit` になる。メモリの硬い上限は今と同じく run 全体を止める |
-| 8 | 失敗の種類 | `IOErrorKind` は `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit` を持つ。extern はこの5種類を出さず、出すのは `fail_io` だけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」) |
+| 8 | 失敗の種類 | `IOErrorKind` は `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit`、`ConnectionRefused` を持つ。extern はこの6種類を出さず、出すのは `fail_io` だけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」) |
 | 9 | 時間 | 時間は今からの長さを `Int` のミリ秒で表す。名前を付けたスコープを期限付きで待つ関数は `Async.drain_within` である |
 | 10 | I/O | std の API は OS によらず完了型にする。buffer は所有ごと渡して返してもらい、受け付け、待ち、取り出しの3段で行う。`IoDriver` の trait を `eml_rt` に置き、`eml_io` が実装する。本物の driver は `compio-driver` の上に作り、unix は polling、Windows は IOCP を使う |
 | 11 | ハンドルと worker | ハンドルは最初に受け付けた worker の I/O の driver に縛る。別の worker からの受け付けはその worker の受け箱を通して回す |
@@ -33,7 +33,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | 15 | 共有の状態 | 共有の状態は持ち主のタスクの後ろに `Chan` を置く形 (actor) で書く。利用者に見せる atomic な操作は `Atomic.Counter` だけである |
 | 16 | 受け手の決まらない `Lin` の値 | MPMC の `Chan` と `Task` の結果で送る `Lin` の値は、途中の持ち主の ID を付けて送る |
 | 17 | Rust の側が持つ語 | channel の buffer、タスクのセルの結果、スコープの失敗の欄、join の節点、プールの仕事の記録は、run の登録表に載せる |
-| 18 | シグナル | シグナルの handler は `Control` のビットを立てて監視のスレッドを起こし、監視のスレッドが `Signal.wait` で待つタスクへ完了として届ける。待つタスクがなければ、`INTERRUPT` は今と同じく致命的で、`TERMINATE` は同じ止め方で run を止めて 143 で終わる |
+| 18 | シグナル | シグナルの handler は `Control` のビットを立て、自己パイプで監視のスレッドを起こす。監視のスレッドは、`Signal.wait` で待つタスクのセルの持ち主の受け箱へ知らせを積み、worker が次の安全点で集めるように `NOTICE` を立てて、driver の waker を鳴らす。待つタスクがなければ、`INTERRUPT` は run を止めて 130 で終わり、`TERMINATE` は同じ止め方で 143 で終わる。`eml run` で、前の同じシグナルをまだ届けていない間か、それがもう run を止めている間に来たシグナルは、その場でプロセスを終わらせる。Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)` である |
 | 19 | `Net` のハンドル | `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、破棄処理がソケットを閉じる |
 | 20 | 決定性 | `Async` の UI テストはどの seed でも同じ出力を返す |
 | 21 | 操作の予算 | 待たずに済む速い道が 128 回続いたら、タスクはほかのタスクに worker を渡す |
@@ -51,11 +51,12 @@ pub abstract effect Async where
   await_time     : Int -> Wake                   -- 今から Int ミリ秒待つ
   await_drain    : Scope -> Wake                 -- スコープに属するタスクがなくなるまで待つ
   reschedule     : Unit -> Wake                  -- 実行待ちに戻る (`yield_now` と操作の予算)
+  await_signal   : Int -> Wake                   -- シグナルが来るまで待つ (`Signal.wait`)
 
 pub data Wake = | Woke | Cancelled
 ```
 
-- 8つの生の操作はすべて実装してある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
+- 9つの生の操作はすべて実装してある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
 - `Async` は extern のエフェクトにしない。extern のエフェクトは yield しうるラベルでなく ([型と Kind](../spec/types.md) の「row の具体化の記録」)、`Async` の操作は継続を取り出して待つためである
 - 生の操作は eml とランタイムの間の ABI である。`Async` は抽象エフェクトで、名前は見えるが操作は見えない。操作はランタイムの ABI として文書に書く。利用者は下の節の包みの関数を呼ぶ。`Cell` は登録表の添字を持つ `Unr` の即値 (`Repr::Int`) で、`OpId` はランタイムの token の `Foreign` である。どれも std の中で使う。`OpId` は `Lin` で、待つ間はランタイムが預かり、再開するときに `Wake` と組にして返す
 - ランタイムが名前で呼ぶエントリは、単相の `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit` と `resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit` である。単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` は、生の操作ごとに節を1つ持つ handler をタスクの本体にかぶせる。節は継続 `k` をランタイムに預けて (待ちに入れるか、実行待ちに戻す) そのまま戻る。ランタイムは後で `resume_task` で `k` に `Wake` の値を渡し、タスクを再開する ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。タスクの本体は std の底の関数で包む。底は `Panic` と IO の失敗を捕まえ、結果を値のまま、引数を預かる extern (`finish_ok`) に渡す。`await` と `run` は預けた値を `take_result` と `run_result` で1回受け取る。`Lin` の結果も thunk に包まずに渡せる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」)
@@ -238,7 +239,7 @@ read_chunk buf s =
 
 - `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。今は `verus!` の外の安全なつなぎのコードで、`external_body` も信頼の一覧の行も持たない ([VM](../spec/vm.md) の「時計と driver」)。`eml_rt` の extern が driver を要るまでは実行系が持ち、`Ctx` には入れない。`eml_rt` の extern が I/O を持ち、`Ctx` が driver を持つときに、`external_body` と信頼の一覧の行を足す
 - 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び方 (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
-- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM は起こしを使わず、代わりに1回の待ちを `IDLE_TICK` で切る ([VM](../spec/vm.md) の「時計と driver」)
+- driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM では、監視のスレッドのない run は Ctrl-C の後に起こされないので、1回の待ちを `IDLE_TICK` で切る ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver は `compio-driver` と `compio-buf` の上に作る。unix は polling (epoll と kqueue)、Windows は IOCP を使い、io_uring は使わない。単独で使えること、スレッドごとに driver を持てること、別のスレッドから起こせる待ちを持つこと、プールの仕事の完了が待ちを起こすことは確かめた。バージョンと、上げるときに確かめることは [アーキテクチャ](../implementation/architecture.md) の「外部 crate」にある
 - compio の上位の crate (`compio-net`、`compio-fs`、`compio-process`) は使わない。どれも compio の実行系 (`compio-runtime`) を要し、実行系が持つ別の `Proactor` に操作を出すので、eml の driver の完了の列にも `quiesce` にも乗らない。eml は `compio-driver` の操作を自分の driver から直接出す
 - Windows では、ソケットを IOCP のポートに結び付けてから (`Proactor::attach`) `Recv` と `Send` を出す。今の driver は Windows でハンドルを作らないので結び付けもしない。Windows のソケットを扱うときに足す
@@ -261,13 +262,13 @@ read_chunk buf s =
 
 ### ブロックする呼び出しのプール
 
-- 今のプールの仕事は `Std.IoTest.checksum` の1つで、本物の driver では `compio-driver` の `Asyncify` で動く。プールのスレッドは driver ごとに32本までである ([VM](../spec/vm.md) の「時計と driver」)
+- 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。本物の driver では、仕事は `compio-driver` の `Asyncify` で動く。プールのスレッドは driver ごとに32本までである ([VM](../spec/vm.md) の「時計と driver」)
 - プールは各 worker の I/O の driver の一部で、仕事は driver に出す操作 (`Op::Job`) である。仕事の記録は run の登録表の操作の記録で、I/O の操作と同じ待ちの仕組みで待つ
 - プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない。std の内部の仕事は入力を写して所有して受け取り、結果を値で返す。カーネルに貸す記憶 (`RawBuf`) は driver を持つスレッドから出さないので、仕事には渡さない
 - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
 - プールは入力の中身を読み、移した `Mut*Array` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
 - 完了は持ち主の worker の driver の完了の列を通して届く。これがプールの書き込みと持ち主の読みの順を決める
-- DNS の名前の解決 (`getaddrinfo`) も、`connect` の中で同じ3段のプールの仕事にする
+- `connect` の中の名前の解決はプールの仕事にせず、本物の driver の中の解決のスレッドで行う。プールの仕事は終わる前に手放せないが、名前の解決は取り消し、期限、`quiesce`、Ctrl-C で手放せるようにするためである ([VM](../spec/vm.md) の「時計と driver」)
 - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し戻しで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
 - 場合ごとの扱いは次のとおりである
 
@@ -283,33 +284,7 @@ read_chunk buf s =
 
 ## ネットワークとシグナル
 
-```haskell
-pub extern data TcpListener                                                      -- Lin
-pub extern data TcpStream                                                        -- Lin
-pub listen            : String -> Int -> <IO> TcpListener                         -- ホストとポート (0 は空いているポート)
-pub local_port        : TcpListener -> (Int, TcpListener)
-pub accept            : TcpListener -> <IO, Async> (TcpStream, TcpListener)       -- ECONNABORTED と EINTR は中でやり直す
-pub accept_within     : Int -> TcpListener -> <IO, Async> (Option TcpStream, TcpListener)
-pub close_listener    : TcpListener -> <IO> Unit
-pub connect           : String -> Int -> <IO, Async> TcpStream                   -- 名前の解決をプールで行い、非同期に接続する
-pub read_chunk        : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)      -- 最大 64 KiB を足す。何も足さなければ EOF
-pub read_chunk_within : Int -> Bytes -> TcpStream -> <IO, Async> (Option Bytes, TcpStream)
-pub read_line         : TcpStream -> <IO, Panic, Async> (Option String, TcpStream)
-pub read_line_within  : Int -> TcpStream -> <IO, Panic, Async> (Option (Option String), TcpStream)
-pub write             : String -> TcpStream -> <IO, Async> TcpStream
-pub write_bytes       : Bytes -> TcpStream -> <IO, Async> TcpStream               -- buffer をすべて書く
-pub write_line        : String -> TcpStream -> <IO, Async> TcpStream
-pub shutdown_write    : TcpStream -> <IO> TcpStream                               -- FIN。読みは続けられる
-pub close             : TcpStream -> <IO> Unit                                    -- drop と同じ
-pub peer_addr         : TcpStream -> (String, TcpStream)
-pub set_nodelay       : Bool -> TcpStream -> <IO> TcpStream
-```
-
-- 名前はハンドルの規則 ([標準ライブラリ](../spec/stdlib.md) の「ハンドル」) に従い、ハンドルを後に、結果を先に置く。`read_line` はストリームごとの buffer の上に eml で書く
-- 誤りは IO の失敗で、種類 `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse` を使う。EPIPE は `ConnectionReset` にする
-- `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、破棄処理がソケットを閉じる。取り消したタスクの巻き戻しがハンドルを落とすので、取り消しの道で `close` を書かなくてよい
-- `accept` は ECONNABORTED と EINTR を中でやり直す。EMFILE は IO の失敗で、accept するタスクが捕まえて待ってからやり直せる
-- driver の操作は `compio-driver` の操作で出す (上の「`IoDriver` と `eml_io`」)。unix では、ソケットの作成、bind、listen、accept、connect、書きの側を閉じること、閉じることに、`CreateSocket`、`Bind`、`Listen`、`Accept`、`Connect`、`ShutdownSocket`、`CloseSocket` を使う。Windows の `compio-driver` にあるのは IOCP の `Accept`、`Connect`、`CloseSocket` だけなので、ソケットの作成、bind、listen は `eml_io` が socket2 で書く。Windows の accept と connect の後には、それぞれ `update_context` を呼ぶ。ConnectEx はソケットが bind 済みであることを求めるので、connect の前の bind も `eml_io` で書く。accept などは完了のときに操作の中身 (受けたソケットと相手の番地) を要るので、本物の driver が完了を取り出す所を、操作を返す形に広げる
+`Std.Net` の TCP と `Std.Signal` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」と「`Std.Signal`」にある。driver の操作と名前の解決のスレッドは [VM](../spec/vm.md) の「時計と driver」に、シグナルを届ける道は [VM](../spec/vm.md) の「上限と割り込み」にある。ここには、部品を組み合わせたサーバの例と、Windows に残るものと、後で足すものを書く。
 
 ```haskell
 import Async
@@ -317,13 +292,13 @@ import Net
 import Chan
 import Signal
 
-session : TcpStream -> <IO, Panic, Async> Unit
+session : Net.TcpStream -> <IO, Panic, Async.Async> Unit
 session conn =
   match Net.read_line_within 10000 conn with          -- 要求の期限。ストリームは戻る
     | (Some (Some line), conn) -> session (Net.write_line (answer line) conn)
     | (_, conn) -> Net.close conn                     -- 取り消されたときは破棄処理が conn を閉じる
 
-acceptor : Async.Scope -> Chan Unit -> TcpListener -> <IO, Panic, Async> Unit
+acceptor : Async.Scope -> Chan.Chan Unit -> Net.TcpListener -> <IO, Panic, Async.Async> Unit
 acceptor conns slots l =
   let _ = Chan.send () slots                          -- 生きている接続が 10000 なら待つ
   let (conn, l) = Net.accept l
@@ -339,25 +314,130 @@ main () =
   let slots = Chan.new 10000
   use conns <- Async.scope
   let _ = Async.race (fn () -> acceptor conns slots (Net.listen "0.0.0.0" 8080))
-                     (fn () -> Signal.wait Terminate)
+                     (fn () -> Signal.wait Signal.Terminate)
   Async.drain_within 30000 conns
 ```
 
 `SIGTERM` が来ると `race` が accept するタスクを取り消し、`drain_within` が実行中の接続を最大 30 秒待ち、残りを取り消して終わるまで待つ。接続のスコープはその後で終わりの手順を通る。`session` を `try_all` で包まないと、1つの接続の失敗がスコープの失敗になり、サーバが止まる。
 
+Windows には次のものが残る。
+
+- Windows の本物の driver はまだソケットを扱わない。Windows の `compio-driver` にあるのは IOCP の `Accept`、`Connect`、`CloseSocket` だけなので、ソケットの作成、bind、listen は `eml_io` が socket2 で書く。Windows の accept と connect の後には、それぞれ `update_context` を呼ぶ。ConnectEx はソケットが bind 済みであることを求めるので、connect の前の bind も `eml_io` で書く ([ロードマップ](roadmap.md) の `net-windows`)
+
 ### シグナル
 
-- `std/Signal` は `data Signal = | Interrupt | Terminate` と `wait : Signal -> <IO, Async> Unit` を持つ。`Terminate` は `SIGTERM` で、Windows では `CTRL_CLOSE_EVENT` と `CTRL_SHUTDOWN_EVENT` である
-- シグナルの handler は async-signal-safe のまま、`Control` のビットを立て (Ctrl-C は `INTERRUPT`、`SIGTERM` は新しい `TERMINATE`)、自己パイプに1バイト書いて監視のスレッドを起こす ([マルチコア対応の設計](multicore.md) の「スレッドと worker」)。Windows ではコンソールの handler が同じビットを立て、監視のスレッドを起こす。ビットが立ったのを見た監視のスレッドは、そのシグナルを `Signal.wait` で待つタスクが登録されていればビットを下ろし、待つタスクのセルの持ち主へ完了として届ける。登録されていなければ、終わりの欄に致命的な誤りを書いて run を止める。`INTERRUPT` では今と同じである ([VM](../spec/vm.md) の「上限と割り込み」)。`TERMINATE` も同じ止め方で run を止め、終了コードは 143 にする。シェルが SIGTERM で終わった子に返す値で、SIGINT の 130 と同じ考え方である
-- `signalfd` と `EVFILT_SIGNAL` は使わない。どちらもすべてのスレッドでシグナルを止める必要があり、今の handler とブロックする読みの EINTR の道と食い違う
-- 2回目の Ctrl-C は今と同じく `_exit(130)` である。handler がビットを立ててから監視のスレッドが下ろすまでの間 (高々監視の刻み1つ) の2回目の Ctrl-C も終わる。これは文書にある2回の Ctrl-C の意味と同じである
+- 2回目のシグナルでその場で終わるのは、前の同じシグナルが保留か、もう run を止めている間である (#18)。保留の間を監視の刻み1つに限る案は採らない。その形では、待つタスクがいて同期の読みで止まったプログラムを Ctrl-C で止められないためである。process manager が SIGTERM の2回目に別の意味を求めたときに見直す
+- Windows には `Terminate` を起こす OS の出来事がない。`Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写すことは、Windows のソケットと一緒に入れる ([ロードマップ](roadmap.md) の `net-windows`)
+
+### TLS と HTTP
+
+段 `net-tls` と `std-http` の設計である ([ロードマップ](roadmap.md) の「段の列」)。
+
+- TLS はプラグインにせず、普通の std のモジュール `Std.Tls` にする。利用者に見せるのはクライアントだけである。プラグインの仕組みは GUI の要求 (スレッドの固定、イベントループ) のためにあり、sans-IO の TLS の状態はそのどれも要らない。TLS の状態 `Tls.Conn` は rustls の接続と復号した平文の列を持つ `Lin` の `Foreign` で、I/O を持たない。`eml_vm` が `Foreign` を作り、extern の行の腕を持つ。`eml_rt` は変わらない
+- ソケットの I/O はすべて `Std.Net` が行う。`Tls.Stream` は `Conn` と `TcpStream` を持つ eml の `data` で、`Tls` の eml のコードが、送る TLS のバイトを `Conn` から取り出して `Net.write_bytes` で書き、`Net.read_chunk` で読んだバイトを `Conn` に入れ、復号した平文を返す。待ち、取り消し、期限は `Net` のもので、`Tls` は何も足さない。`Tls` の extern は同期の行で、`Async` の行にしない。`Conn` の行は `client_raw` を除いて投げず、TLS の誤りは `Conn` に記録して、eml の側が alert を書き出してから IO の失敗にする
+- driver 側に `TlsStream` を置かないのは、本物の driver に rustls が入り、取り消しと期限の意味が別に要るからである。sans-IO なら、待ち、取り消し、期限が `Net` の1か所に集まる
+- rustls は受け取った平文を 16 KiB までしか持たないので、`Conn` は TLS のバイトを処理するたびに平文を自分の列へ移す。読みの道では、カーネルが書いた `Bytes` から rustls へ、rustls から `Conn` の列へ、列から `Bytes` へと3回写す。費用は `std-http` の `bench/scripts.sh` の行で測る
+- 取り消しの巻き戻しは `Stream` を落とし、`Conn` はメモリだけを放し、`TcpStream` の破棄処理がソケットを閉じる。close_notify は送らない。`Tls.shutdown_write` と `Tls.close` が close_notify を書き出してから `Net.shutdown_write` する
+- 相手が close_notify を送って閉じたら `read_chunk` は EOF を返す。close_notify なしに EOF が来たら IO の失敗 `ConnectionReset` にする。EOF までの本文が黙って切れないためである。handshake の途中で相手が閉じたときも `ConnectionReset` にする。証明書の拒否と、PEM やサーバ名の誤りは種類 `Other` で、文言に rustls の詳細を付けない。`connect` と handshake に期限はなく、黙る相手は `Async.timeout` で切る
+
+`Std.Tls` の面は次のとおりである。`read_line` の意味は `Net.read_line` と同じにする。行の上限と文言も同じで、`Tls.Stream` は専用の読み残しの `Bytes` を持つ。
+
+```haskell
+pub extern data Conn                                                       -- Lin
+pub data Stream = | Stream { conn : Conn, sock : Net.TcpStream }          -- Lin
+
+pub connect           : String -> Int -> <IO, Async> Stream                -- host port。host を SNI に使い、handshake まで行う
+pub connect_with_ca   : String -> String -> Int -> <IO, Async> Stream      -- 追加の CA (PEM) host port
+pub wrap              : String -> Net.TcpStream -> <IO, Async> Stream      -- 既にある TcpStream の上で handshake する
+pub read_chunk        : Bytes -> Stream -> <IO, Async> (Bytes, Stream)     -- 何も足さなければ、相手が close_notify で閉じた
+pub read_chunk_within : Int -> Bytes -> Stream -> <IO, Async> (Option Bytes, Stream)
+pub read_line         : Stream -> <IO, Panic, Async> (Option String, Stream)
+pub read_line_within  : Int -> Stream -> <IO, Panic, Async> (Option (Option String), Stream)
+pub write             : String -> Stream -> <IO, Async> Stream
+pub write_bytes       : Bytes -> Stream -> <IO, Async> Stream
+pub write_line        : String -> Stream -> <IO, Async> Stream
+pub shutdown_write    : Stream -> <IO, Async> Stream                       -- close_notify を書き出し、Net.shutdown_write
+pub close             : Stream -> <IO, Async> Unit                         -- shutdown_write してから落とす
+
+extern client_raw        : String -> String -> <IO> Conn     -- host と追加の CA の PEM (空なら既定の根だけ)。失敗は IO の失敗
+extern push_tls          : Bytes -> Conn -> <IO> Conn        -- 投げない。TLS の誤りは status の 16
+extern push_eof          : Conn -> <IO> Conn
+extern pull_tls          : Conn -> <IO> (Bytes, Conn)        -- 送るものがなければ空の Bytes
+extern write_plain       : Bytes -> Conn -> <IO> Conn
+extern read_plain        : Bytes -> Conn -> <IO> (Bytes, Conn)
+extern status            : Conn -> <IO> (Int, Conn)          -- 1 handshaking, 2 has_outgoing, 4 peer_closed, 8 truncated, 16 failed
+extern error_message     : Conn -> <IO> (String, Conn)
+extern send_close_notify : Conn -> <IO> Conn
+```
+
+- extern の境界に `Option` と `List` は出さない。`Conn` を取る行は `Conn` を借りて組にして返す
+- `Tls` の eml のコードは、`pull_tls` が空になるまで `Net.write_bytes` で書き出す補助と、`status` の 16 を見て alert を書き出してから IO の失敗にする補助を持つ。handshake は、`status` の 1 が立っている間、`Net.read_chunk` で読んでは `push_tls` することを繰り返し、最後にクライアントの Finished を書き出す。`read_chunk` は先に `read_plain` を試し、増えなければ `status` の 4 (EOF) と 8 (切り詰め) を見てから `Net.read_chunk` を呼ぶ。空の読みは `push_eof` にする
+
+crate `eml_tls` は eml に依存せず、rustls の接続と復号した平文の列を包む。形は次のとおりである。`process_new_packets` のたびに平文を移し出すので、rustls の平文の上限 (`set_buffer_limit` の対象外) に当たらない。
+
+```rust
+pub struct Conn { /* rustls::Connection, plaintext: Vec<u8>, failed: Option<Error>, eof: bool */ }
+impl Conn {
+    pub fn client(server_name: &str, extra_ca_pem: &[u8]) -> Result<Conn, Error>;
+    pub fn server(cert_chain_pem: &[u8], key_pem: &[u8]) -> Result<Conn, Error>;  // テストの driver の終端器と eml_tls のテストだけが使う
+    pub fn push_tls(&mut self, bytes: &[u8]);
+    pub fn push_eof(&mut self);
+    pub fn pull_tls(&mut self, out: &mut Vec<u8>);   // 失敗の後も、待たせている alert を書き出す
+    pub fn write_plain(&mut self, bytes: &[u8]);
+    pub fn read_plain(&mut self, out: &mut Vec<u8>) -> usize;
+    pub fn status(&self) -> u32;                     // HANDSHAKING=1, HAS_OUTGOING=2, PEER_CLOSED=4, TRUNCATED=8, FAILED=16
+    pub fn error_message(&self) -> String;
+    pub fn send_close_notify(&mut self);
+}
+```
+
+- crate は rustls 0.23 を `aws_lc_rs` と `tls12` の feature で使い、webpki-roots を根にする。`install_default` は呼ばず、provider を `builder_with_provider` で渡す。追加の CA は `Tls.connect_with_ca` が PEM で渡す。OS の証明書ストアは使わない
+- 暗号が aws-lc-rs なのは、rustls の既定で推奨の provider だからである。ring の最後のリリースは 2025-03 で、純 Rust の provider は TLS 1.3 だけか、対応する CPU が限られる。要るのは rustc がリンクに使うのと同じ C のツールチェーンだけである。Windows では NASM があれば使い、なければ rustls の feature が有効にする prebuilt の object を使う。段の最初に、`nix build` と CI の3つの OS で aws-lc-sys が組めることを確かめる。`nix build` で失敗したら provider を `ring` に替えてやり直し、それも失敗したら設計を決め直す
+- `eml_vm` と `eml_io` の feature `tls` で結ぶ。`eml_io` の `tls` はテストの driver の終端器と `tls.localhost` の名前だけを分け、本物の driver は `eml_tls` を参照しない。`eml_cli` の `tls` が両方を有効にし、`default` に入れる。`eml_cli` の `--no-default-features --features run` で外せ、外した処理系では `Std.Tls` の腕が IO の失敗 `not available` (種類は `NotAvailable`) を投げ、テストの driver は `tls.localhost` を知らない名前 (`NotFound`) として扱う
+- `eml_vm` だけを組む Miri の job は `eml_tls` に届かない。workspace 全体の `cargo nextest run` は `eml_tls` を組む
+- `.#cross` の Windows の clippy は C のツールチェーンを持たず、ring も aws-lc-sys も組めない。そのため、`--exclude eml_tls --no-default-features --features eml_cli/run,eml_test_support/run` を付けて流す。`x86_64-unknown-linux-gnu` も同じ形にする。`eml_tls` を外した clippy は、CI の別の行 (`cargo clippy -p eml_cli --no-default-features --features run`) で補う ([テスト戦略](../implementation/testing.md) の「OS ごとのテスト」)
+- `Conn` の rustls の送る側の buffer は、`write_bytes` に渡した1つの `Bytes` で押さえ、同じ呼び出しの中で書き出す。`Conn` の列と rustls の buffer は `max_bytes` に数えない
+
+テストの相手は、テストの driver の仮想のホストが持つ。
+
+- 名前 `tls.localhost` への接続は、driver が次の3つを作る。(a) 暗号文の端の組で、eml 側の端が返される `TcpStream` になる。(b) 平文の端の組で、遠い側は普通の `Net.connect "localhost" p` と同じく仮想の listener `localhost:p` の `accept` の待ち行列に入る。listener がなければ `ConnectionRefused` で、backlog が満ちていれば保留になる。(c) driver が持つ終端器で、`eml_tls::Conn::server` の状態と2つの端の組を持つ。平文の組を作るには、普通の `connect` が使う関数を呼ぶ
+- `settle` の最初に、どの終端器も進まなくなるまで汲む。暗号文の inbox から `push_tls` と `read_plain` を経て平文の相手の inbox へ、平文の inbox から `write_plain` と `pull_tls` を経て暗号文の相手の inbox へ足す。eml のクライアントが自分の端を閉じたら `push_eof` して平文の端を閉じる。eml の server が自分の端を閉じたら `send_close_notify` して、暗号文の端を閉じる。`FAILED` なら alert のバイトを暗号文の inbox に入れてから両方の端を閉じる。両方の端が閉じたら終端器を取り除く。操作を試す前に汲むので、`settle` の順、seed での並べ替え、仮想の時計は変わらない
+- `tls.localhost` への1つの接続は、仮想のポートのカウンタから2つのクライアントのポートを取る。eml の server の `peer_addr` は、平文の組のクライアントのポートを見せる
+- `tls-cut.localhost` は、eml の server が閉じるときに close_notify なしで暗号文の端を閉じる。切り詰めのテストに使う
+- 証明書と鍵は `eml_tls` の `fixtures` が持つテスト用の固定のもので、CA は ECDSA P-256 の自己署名、leaf の SAN は `tls.localhost`、`localhost`、`127.0.0.1` で、どちらも期限を 2126 年にする。rustls はシステムの時刻に対して検証するためである。`gen.sh` が作り直し、UI テストのディレクトリへ `ca.pem` を写す。UI のプログラムは `FileIn.read_all "ca.pem"` で読んで `Tls.connect_with_ca` に渡す。`Tls.connect "tls.localhost" p` は既定の根で検証して失敗する
+- handshake は録音で再生できない (クライアントの乱数が毎回変わる) ので、相手は生きた server でなければならない。公開の server の API もテスト専用の std のモジュールも置かないので、決定的にできる場所はテストの driver の仮想のホストだけである
+- 終端器の Rust のテストは、`eml_tls::Conn::client` を `tls.localhost` の接続に対する driver の `Op::Write` と `Op::Read` で動かし、平文の listener の端に対して handshake を終えてバイトを往復させる。本物のソケットの Rust のテストは `#[cfg(unix)]` で `eml_cli` に置き、std の `TcpListener` と rustls の `ServerConnection` のスレッドを相手に、本物の driver で `Tls.connect_with_ca ca "localhost" port` を動かす
+- 仮想のホストの形が feature で分けたモジュールから拡張できず、終端器を作れなかったときは、Rust のテストだけにして `tls/` と https の UI テストを置かない
+
+`Std.Http` は `Net` と `Tls` の上に eml で書く HTTP/1.1 のクライアントで、extern を足さない。
+
+```haskell
+pub data Options  = | Options { headers : List (String, String), ca : String, max_redirects : Int }   -- ca: 追加の CA の PEM。"" なら既定の根
+pub data Response = | Response { status : Int, headers : List (String, String), body : Bytes }
+pub defaults : Options                                                   -- [] "" 5
+pub get          : String -> <IO, Panic, Async> Response
+pub request      : String -> String -> Bytes -> Options -> <IO, Panic, Async> Response   -- method url body options
+```
+
+- URL は `http://` と `https://` で、`host[:port]` と path?query を持つ。既定のポートは 80 と 443 である。userinfo、IDN、fragment は扱わない
+- 要求は `Host`、`Connection: close`、`User-Agent: eml` を付け、本文が空でなければ `Content-Length` を付ける。`options.headers` は末尾に足す。応答の後に stream を閉じる
+- 応答の状態行とヘッダーは `read_line` で読み、それぞれ 64 KiB までにする。ヘッダー名は大文字小文字を区別しない。本文は `Content-Length` があればそれで、なければ `Transfer-Encoding: chunked` (拡張は無視し、trailer は捨てる)、それもなければ EOF まで読む。`HEAD`、1xx、204、304 には本文がない。EOF までの本文が https で切り詰められたら、`Tls` の IO の失敗のまま伝える
+- リダイレクトは 301、302、303、307、308 を、どのメソッドでも `options.max_redirects` の回数まで追う。超えたら IO の失敗にする。301、302、303 は `GET` にして本文と呼び出し側の `Content-Length`、`Content-Type` を捨て、307 と 308 は同じメソッドと本文で送る。`Location` は絶対 URL か絶対パスにする。別のオリジン (scheme、host、port のどれかが違う) へは、呼び出し側の `Authorization`、`Cookie`、`Proxy-Authorization` を落とす。https から http は断り、http から https は許す
+- gzip、HTTP/2 と ALPN、keep-alive とプール、ストリーミングの本文、プロキシ、cookie、本文の上限、期限は持たない。期限は `Async.timeout` で書く ([ロードマップ](roadmap.md) の「非同期」)
+- libcurl は使わない。本物のソケットが要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないので TLS の層にならない ([ロードマップ](roadmap.md) の「非同期」)
+
+テストは次のとおりである。
+
+- TLS と HTTP の UI テストは `tests/ui/run/tls/`、`tests/ui/run/http/` と、`run-fail` の同じ名前のディレクトリに置く。仮想のホストの上で、`Net` で書いた eml の server のタスクと、`tls.localhost` へつなぐ client のタスクを1つのプログラムで動かす。`async/` には置かない。TLS のレコードがまとまる数が seed で変わり、`completions` が seed によらないという `async/` の規則に合わないためである
+- `run/tls/` には、echo、200 KiB の本文、close_notify での EOF を置く。`run-fail/tls/` には、CA なしの `Tls.connect` (証明書の拒否)、`tls-cut.localhost` の切り詰め、handshake の前に server が閉じることを置く
+- `run/http/` には、`Content-Length`、chunked、EOF までの本文、リダイレクトの連鎖 (POST の後の 303、オリジンが変わったときのヘッダーの除去を含む)、`tls.localhost` への https を置く。`run-fail/http/` には、リダイレクトの回数超過、https から http への格下げ、切り詰められた EOF までの https の本文を置く
+- `bench/scripts.sh` に行 `https-get` を足す。eml の `Http.get` で手元の rustls の server から 64 MiB の本文を取り、Python の `urllib.request` と比べる。CI に上限は置かず、「Python の 1.5 倍以内」という目標を目安にする
 
 ### 後で足すもの
 
 - UDP、`SO_REUSEPORT` で複数のタスクが accept する形
-- 非同期の名前の解決。既定では `getaddrinfo` をプールで動かす。`resolve` も同じ形で持つ
-- TLS: Rust のプラグイン (`eml_tls`、rustls の上) にする。形は GUI のプラグインと同じである ([FFI と拡張の設計](ffi.md) の「拡張」)
-- HTTP: `Net` と `Chan` の上のライブラリにする
+- 非同期の名前の解決。既定では、本物の driver の解決のスレッドで std の解決器を動かす
+- `Net.resolve` と名前での `listen`、Happy Eyeballs、書きの期限 (`write_within`)。後に回した理由と見直す条件は [ロードマップ](roadmap.md) の「非同期」にある
 
 ## ファイルとパイプ
 
@@ -381,8 +461,9 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 ## テストと決定性
 
 - `async/` の UI テストを seed で流す規則は [テスト戦略](../implementation/testing.md) の「seed で流す」にある。I/O の待ちを持つテストは、seed で完了の順を決めるテストの driver の上で流す。どの seed でも同じ出力を返すことを求めるので、ネイティブのコードでも同じになる
-- テストの driver は、メモリの上の `TcpStream` の組 (仮想のホストの上の `listen` と `connect`) と、テストの hook で起こす仮想のシグナルを持つ。時間の待ちは `Clock` が決め、仮想の時計の規則は [VM](../spec/vm.md) の「時計と driver」にある
-- 本物のソケットのテストは `tests/ui/run/net/` に少しだけ置く。ループバックでポート 0 に bind して `local_port` で読み、期限を使わない (期限は仮想の時計の上だけで試す)。接続は一度に1つにするか、順によらない出力にする。N = 1 で流し、複数の worker の組 (N が 2 と 8) では順によらないものだけを流す。Windows の CI は同じ組を IOCP の上で流す
+- テストの driver は、仮想のホストの上の `listen` と `connect` が作るメモリの上の `TcpStream` の組を持つ。時間の待ちは `Clock` が決め、仮想の時計の規則は [VM](../spec/vm.md) の「時計と driver」にある
+- 仮想のシグナルは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` に渡す予定で起こす。UI テストは先頭の印の行 `-- signal: <interrupt|terminate> at <ms>` で予定を書く ([VM](../spec/vm.md) の「時間の待ち」、[テスト戦略](../implementation/testing.md) の「UI テスト」)
+- `Net` と `Signal` の UI テストは `tests/ui/{run,run-fail}/async/` の `net_*.em` と `signal_*.em` で、どれもテストの driver の上で流れる。本物のソケットと OS のシグナルは、Rust のテスト (`crates/eml_io/tests/real.rs`、`crates/eml_vm/tests/api.rs` と `signal.rs`、`crates/eml_cli/tests/cli.rs`) だけで試す。unix のものは `#[cfg(unix)]` にし、Windows では `listen` が `NotAvailable` になることを確かめる。ループバックでポート 0 に bind して `local_port` で読む。複数の worker の組 (N が 2 と 8) では順によらないものだけを流す。Windows の CI は同じ組を IOCP の上で流す
 - 意味のテスト: 取り消したタスクの `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`shield` の中の別れの `send` が取り消しの下でも終わること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
 - 救済を強いるスケジュール (`--sched rescue-always`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
 - `RunStats` は driver の完了の数 `completions` と、channel の欄 `channel_ops`、`channel_waits`、`channels_swept` を持つ。`Std.Net` のテストのスナップショットも、ほかの欄と同じく逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
@@ -391,7 +472,7 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 
 - I/O の driver の crate: `compio-driver` を使う。macOS か Windows で compio の中の理由 (IOCP の時間付きの待ち、起こし、プールの不具合、ビルドの失敗、kqueue の `PollOnce` の振る舞い) で使えないと分かったら、同じ trait の後ろで、`polling` と手で書く IOCP (`windows-sys`) の自前の driver に替える。API は変わらない。mio は Windows で AFD の readiness を真似るので採らない。io_uring を使うかは、ネットワークの計測で readiness の道が目立ったときに決める
 - `Machine` と REPL のセッションを別のスレッドへ移すこと: 既定は移さない。driver は作ったスレッドから動かず、driver を持つ `Machine` もそのスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。ホストへの埋め込みなどで移す使い道が出たら、専用の実行系のスレッドが状態を持ち、`Machine` と REPL を頼みを送るハンドルにする形を考える
-- 書きの期限 (`write_within`): 取り消し、期限、データの区別は誤りの種類でなく操作の記録の状態で決める ([標準ライブラリ](../spec/stdlib.md) の「`Std.IoTest`」)。`Std.Net` で書きに期限を付けるときは、この区別を書きにもそのまま当てられるかを見直す
+- 書きの期限 (`write_within`): 取り消し、期限、データの区別は誤りの種類でなく操作の記録の状態で決める ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。`Std.Net` で書きに期限を付けるときは、この区別を書きにもそのまま当てられるかを見直す
 - 受け付けをスレッドをまたいで安全に出せる backend (IOCP、SQ を lock する io_uring) では、受け箱を通す回り道を省いてよい。既定は backend ごとに `eml_io` が決める
 - `write_bytes` が buffer を返して使い回す形: 既定は返さない。計測で確保が目立ったときに考える
 - 2つ目からの失敗をまとめて報告する形 (MultiError): 既定は最初の失敗が勝ち、ほかは数えるだけにする
@@ -402,4 +483,4 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - channel のキュー: 既定は mutex で、ロックフリーには後でランタイムの中だけで替える
 - `Lin` の closer token: 既定は作らない。`Chan.owned : Int -> <IO> (Chan a, ChanOwner)` のように `Lin` の `Foreign` の `ChanOwner` を足し、その `Drop` が受け箱に閉じる知らせを積む形である。`TaskHandle` と同じ仕組みなので、`eml_rt` は変わらず、送受信に費用を足さない。これで足りなければ、`Chan a` を `Unr` の `Foreign` のハンドルにする。channel の Rust の構造は変わらず、ハンドルの読みと放す引き金だけが変わる ([ロードマップ](roadmap.md) の「非同期」)
 - `Time` のモジュール: 上の「時間」にある
-- UDP、`SO_REUSEPORT`、TLS のプラグイン、`Http`、非同期の名前の解決: 上の「ネットワークとシグナル」の「後で足すもの」にある
+- UDP、`SO_REUSEPORT`、非同期の名前の解決、`Net.resolve`、Happy Eyeballs: 上の「ネットワークとシグナル」の「後で足すもの」にある

@@ -17,10 +17,10 @@ mod code;
 mod compile;
 mod data;
 mod disasm;
+mod doorbell;
 mod driver;
 mod error;
 mod hosts;
-mod jobs;
 mod monitor;
 mod op;
 mod sched;
@@ -28,7 +28,8 @@ mod vm;
 
 pub use code::{CodeBase, CompileError, FnEntry};
 pub use disasm::disassemble;
-pub use driver::Clock;
+pub use doorbell::Doorbell;
+pub use driver::{Clock, Signal, VirtualSignal};
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
@@ -112,6 +113,11 @@ pub struct RunConfig {
     pub sched: Sched,
     /// タイマーが使う時計。既定はすべてのタスクが待つときにだけ進む `Clock::Virtual` である。
     pub clock: Clock,
+    /// 監視のスレッドを起こす自己パイプ。シグナルのハンドラと同じものを渡す。既定はなしで、監視のスレッドは刻みで
+    /// シグナルを見に行く (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub doorbell: Option<Arc<Doorbell>>,
+    /// 仮想のシグナルの予定。既定は空で、テストのハーネスだけが使う (docs/spec/vm.md の「時間の待ち」)。
+    pub signals: Vec<VirtualSignal>,
 }
 
 // `Control` は `Default` を持たないので、手で書く
@@ -122,6 +128,8 @@ impl Default for RunConfig {
             control: Arc::new(Control::new(Limits::default())),
             sched: Sched::Sequential,
             clock: Clock::Virtual,
+            doorbell: None,
+            signals: Vec::new(),
         }
     }
 }
@@ -144,6 +152,16 @@ impl RunConfig {
 
     pub fn with_clock(mut self, clock: Clock) -> RunConfig {
         self.clock = clock;
+        self
+    }
+
+    pub fn with_doorbell(mut self, doorbell: Arc<Doorbell>) -> RunConfig {
+        self.doorbell = Some(doorbell);
+        self
+    }
+
+    pub fn with_signals(mut self, signals: Vec<VirtualSignal>) -> RunConfig {
+        self.signals = signals;
         self
     }
 }
@@ -178,6 +196,10 @@ pub struct Machine<M: Mode> {
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
     /// driver が貸した記憶はヒープにあるので、`Drop` は `ctx` より先にこの欄を落とす (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
+    /// 持っている driver を `Machine` が `Clock::Real` から作ったか。`with_driver` で渡した driver は、時計の欄によらず
+    /// 偽にする。テストの driver は眠らないので、その run に OS のシグナルを待たせると空きのループが回り続けるためである
+    /// (docs/spec/vm.md の「時計と driver」)。
+    real_driver: bool,
     code: CodeBase<M>,
     /// poisoned の `Machine` では、driver が貸したままの記憶を放さないように、`Drop` が落とさずに漏らす。
     ctx: ManuallyDrop<Ctx<M>>,
@@ -203,6 +225,12 @@ pub struct Machine<M: Mode> {
     counters: Vec<i64>,
     /// driver を作るときの時計。
     clock: Clock,
+    /// 実行ごとの `Scheduler` に渡す自己パイプ。1つの自己パイプは1つの `Machine` だけに渡す
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    doorbell: Option<Arc<Doorbell>>,
+    /// 次の run だけに渡す仮想のシグナルの予定。run が取り出すので、後の run は再生しない
+    /// (docs/spec/vm.md の「時間の待ち」)。
+    signals: Vec<VirtualSignal>,
 }
 
 impl Machine<Fast> {
@@ -244,6 +272,9 @@ impl<M: Mode> Machine<M> {
             counters: Vec::new(),
             clock: Clock::Virtual,
             driver: None,
+            real_driver: false,
+            doorbell: None,
+            signals: Vec::new(),
         }
     }
 
@@ -262,10 +293,23 @@ impl<M: Mode> Machine<M> {
         self
     }
 
+    /// 監視のスレッドを起こす自己パイプを渡す。ないときは、監視のスレッドが刻みでシグナルを見に行く。
+    pub fn with_doorbell(mut self, doorbell: Arc<Doorbell>) -> Machine<M> {
+        self.doorbell = Some(doorbell);
+        self
+    }
+
+    /// 次の run で時間の輪に載せる仮想のシグナルの予定を渡す。期限は driver を作ったときからのミリ秒である。
+    pub fn with_signals(mut self, signals: Vec<VirtualSignal>) -> Machine<M> {
+        self.signals = signals;
+        self
+    }
+
     /// 次の run から使う driver を渡す。後の `with_clock` と `with_sched` はこれを捨てる。driver は `Machine` を使う
     /// スレッドの上で作る (docs/spec/vm.md の「時計と driver」)。
     pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
+        self.real_driver = false;
         self
     }
 
@@ -416,15 +460,18 @@ impl<M: Mode> Machine<M> {
         // driver は run を行うスレッドで作る。作れなければヒープに触れずに終わる (docs/spec/vm.md の「時計と driver」)
         let driver = match self.driver.take() {
             Some(driver) => driver,
-            None => self.clock.driver(self.sched.seed()).map_err(|e| {
-                code.error(
-                    vm::Failure {
-                        fault: VmFault::Driver(e.to_string()),
-                        pc: task.pc,
-                    },
-                    &task,
-                )
-            })?,
+            None => {
+                self.real_driver = matches!(self.clock, Clock::Real);
+                self.clock.driver(self.sched.seed()).map_err(|e| {
+                    code.error(
+                        vm::Failure {
+                            fault: VmFault::Driver(e.to_string()),
+                            pc: task.pc,
+                        },
+                        &task,
+                    )
+                })?
+            }
         };
         let mut counts = RunCounts::default();
         let start = Start {
@@ -433,13 +480,12 @@ impl<M: Mode> Machine<M> {
             generations: std::mem::take(&mut self.generations),
             counters: std::mem::take(&mut self.counters),
             driver,
-            real_clock: matches!(self.clock, Clock::Real),
+            real_driver: self.real_driver,
+            doorbell: self.doorbell.clone(),
+            signals: std::mem::take(&mut self.signals),
         };
         let (result, mut scheduled) = match self.sched {
-            Sched::Normal => {
-                let policy = Normal::new(Arc::clone(ctx.heap().control()));
-                run_scheduled(code, ctx, &mut task, policy, start, &mut counts)
-            }
+            Sched::Normal => run_scheduled(code, ctx, &mut task, Normal, start, &mut counts),
             Sched::Sequential => {
                 run_scheduled(code, ctx, &mut task, Sequential, start, &mut counts)
             }
@@ -650,8 +696,10 @@ struct Start {
     generations: Vec<u32>,
     counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
-    /// `Machine` の時計が本物か。`with_driver` で差し込んだ driver でも、時計の欄で決める。
-    real_clock: bool,
+    /// driver を `Machine` が `Clock::Real` から作ったか。
+    real_driver: bool,
+    doorbell: Option<Arc<Doorbell>>,
+    signals: Vec<VirtualSignal>,
 }
 
 /// 方針 `P` のスケジューラを作って `task` から実行する。方針を型の引数にして、方針ごとに VM の繰り返しを作る
@@ -669,13 +717,19 @@ fn run_scheduled<M: Mode, P: Policy>(
     let mut sched = Scheduler::new(
         policy,
         start.driver,
+        Arc::clone(ctx.heap().control()),
+        start.doorbell,
         main_worker,
         start.max_depth,
         start.generations,
     );
     sched.shared_roots = start.shared_roots;
-    sched.real_clock = start.real_clock;
+    sched.real_driver = start.real_driver;
     sched.cells.counters = start.counters;
+    // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
+    sched
+        .cells
+        .schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
     // (docs/spec/vm.md の「時計と driver」)
@@ -726,17 +780,19 @@ impl AnyMachine {
     pub fn new(config: &RunConfig, host: HostRef) -> AnyMachine {
         let control = Arc::clone(&config.control);
         if config.debug_heap {
-            AnyMachine::Checked(
-                Machine::<Checked>::new(control, host)
-                    .with_sched(config.sched)
-                    .with_clock(config.clock),
-            )
+            let mut machine = Machine::<Checked>::new(control, host)
+                .with_sched(config.sched)
+                .with_clock(config.clock)
+                .with_signals(config.signals.clone());
+            machine.doorbell = config.doorbell.clone();
+            AnyMachine::Checked(machine)
         } else {
-            AnyMachine::Fast(
-                Machine::<Fast>::new(control, host)
-                    .with_sched(config.sched)
-                    .with_clock(config.clock),
-            )
+            let mut machine = Machine::<Fast>::new(control, host)
+                .with_sched(config.sched)
+                .with_clock(config.clock)
+                .with_signals(config.signals.clone());
+            machine.doorbell = config.doorbell.clone();
+            AnyMachine::Fast(machine)
         }
     }
 

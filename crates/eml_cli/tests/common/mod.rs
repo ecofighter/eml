@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+use eml_cli::{Signal, VirtualSignal};
+
 /// 1つのテストが多くのファイルを流すので、この時間を超えて走るファイルの名前を出し、どこで止まったかを分かるようにする
 /// (docs/implementation/testing.md の「UI テスト」)。
 const SLOW: Duration = Duration::from_secs(10);
@@ -54,12 +56,18 @@ pub fn assert_filter_matches(filter: &str) {
 }
 
 /// `root` の下の `.<extension>` を名前の順に集め、`EML_UI_FILTER` の部分文字列がワークスペースからの相対パスに
-/// 含まれるものだけを `run_all` で流す。
+/// 含まれるものだけを `run_all` で流す。`test` にはファイルとその先頭の印のシグナルの予定を渡す。シグナルの印を
+/// 許すのは `signals` が真のときだけである (docs/implementation/testing.md の「UI テスト」)。
 ///
 /// insta の `glob!` は失敗の数をプロセスで1つのスタック (insta 1.49 の `GLOB_STACK`) に数える。並んで走ると、
 /// ほかのテストの失敗を自分の失敗として報告する。そのため UI テストとトランスクリプトのファイルは、`glob!` を使わずに
 /// ここで集めて並べて流し、失敗をまとめて報告する (docs/implementation/testing.md の「UI テスト」)。
-pub fn for_each_file(root: &Path, extension: &str, test: impl Fn(&Path) + Sync) {
+pub fn for_each_file(
+    root: &Path,
+    extension: &str,
+    signals: bool,
+    test: impl Fn(&Path, &[VirtualSignal]) + Sync,
+) {
     let mut files = Vec::new();
     collect(root, extension, &mut files);
     files.sort();
@@ -73,24 +81,84 @@ pub fn for_each_file(root: &Path, extension: &str, test: impl Fn(&Path) + Sync) 
         files.retain(|path| shown(path).contains(&filter));
     }
     let leader = if extension == "repl" { "#" } else { "--" };
-    files.retain(|path| {
-        let text = fs::read_to_string(path).unwrap();
-        // shebang は1行目にしか書けないので、その後ろの行に印を置く
-        let first = text
-            .lines()
-            .find(|line| !line.starts_with("#!"))
-            .unwrap_or("");
-        let skip = windows_skip(first, leader)
-            .unwrap_or_else(|message| panic!("{}: {message}", shown(path)));
-        !(cfg!(windows) && skip)
+    let mut marked: Vec<(PathBuf, Marks)> = files
+        .into_iter()
+        .map(|path| {
+            let marks = marks_of(
+                &shown(&path),
+                &fs::read_to_string(&path).unwrap(),
+                leader,
+                signals && is_entry(root, &path, extension),
+            );
+            (path, marks)
+        })
+        .collect();
+    marked.retain(|(_, marks)| !(cfg!(windows) && marks.windows_skip));
+    let files: Vec<PathBuf> = marked.iter().map(|(path, _)| path.clone()).collect();
+    run_all(&files, |path| {
+        let (_, marks) = marked
+            .iter()
+            .find(|(p, _)| p == path)
+            .expect("a file to run was collected");
+        test(path, &marks.signals);
     });
-    run_all(&files, test);
 }
 
-/// shebang を除いた1行目が `<leader> windows: skip (<理由>)` なら Windows で流さない (docs/implementation/testing.md の「OS ごとのテスト」)。
+/// ファイルの先頭の印の行が書いたもの (docs/implementation/testing.md の「OS ごとのテスト」と「UI テスト」)。
+#[derive(Debug, Default, PartialEq)]
+pub struct Marks {
+    pub windows_skip: bool,
+    /// 行の順のシグナルの予定。
+    pub signals: Vec<VirtualSignal>,
+}
+
+/// テストのエントリか。分類の直下のファイルか、ディレクトリのテストの `main.<extension>` である。ディレクトリの
+/// テストのほかのファイルは import するモジュールで、シグナルの印を書けない (docs/implementation/testing.md の「UI テスト」)。
+pub fn is_entry(root: &Path, path: &Path, extension: &str) -> bool {
+    let depth = path
+        .strip_prefix(root)
+        .map_or(0, |relative| relative.components().count());
+    depth == 2
+        || path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy() == format!("main.{extension}"))
+}
+
+/// `leading_marks` の誤りと、許さない場所のシグナルの印で panic する。`shown` は文言に出すファイルの名前である。
+pub fn marks_of(shown: &str, text: &str, leader: &str, signals: bool) -> Marks {
+    let marks = leading_marks(text, leader).unwrap_or_else(|message| panic!("{shown}: {message}"));
+    if !signals && !marks.signals.is_empty() {
+        panic!("{shown}: signal marks are not supported here");
+    }
+    marks
+}
+
+/// 先頭の印の行を読む。印の行は、shebang の行があればその後ろから続く、`<leader> windows:` か `<leader> signal:` で
+/// 始まる行の並びで、2種類をどの順に混ぜてもよい。shebang は1行目にしか書けないので、印はその後ろに置く。
+pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
+    let mut lines = text.lines().peekable();
+    let _shebang = lines.next_if(|line| line.starts_with("#!"));
+    let mut marks = Marks::default();
+    let starts = |line: &str, kind: &str| {
+        line.strip_prefix(leader)
+            .is_some_and(|rest| rest.starts_with(kind))
+    };
+    for line in lines {
+        if starts(line, " windows:") {
+            marks.windows_skip |= windows_skip(line, leader)?;
+        } else if starts(line, " signal:") {
+            marks.signals.push(signal_mark(line, leader)?);
+        } else {
+            break;
+        }
+    }
+    Ok(marks)
+}
+
+/// 先頭の印の行の1つが `<leader> windows: skip (<理由>)` なら Windows で流さない (docs/implementation/testing.md の「OS ごとのテスト」)。
 /// 綴りを誤った印が黙ってテストを流し続けないよう、`<leader> windows:` で始まる行は正しい形でなければ誤りにする。
-pub fn windows_skip(first_line: &str, leader: &str) -> Result<bool, String> {
-    let Some(rest) = first_line
+pub fn windows_skip(line: &str, leader: &str) -> Result<bool, String> {
+    let Some(rest) = line
         .strip_prefix(leader)
         .and_then(|rest| rest.strip_prefix(" windows:"))
     else {
@@ -102,9 +170,35 @@ pub fn windows_skip(first_line: &str, leader: &str) -> Result<bool, String> {
     {
         Some(reason) if !reason.trim().is_empty() => Ok(true),
         _ => Err(format!(
-            "the Windows mark is `{leader} windows: skip (<reason>)`, not `{first_line}`"
+            "the Windows mark is `{leader} windows: skip (<reason>)`, not `{line}`"
         )),
     }
+}
+
+/// `<leader> signal: <interrupt|terminate> at <ms>` の印を読む。`ms` は10進の数字だけで、空白は1つずつである。
+/// 綴りを誤った印が黙って予定を落とさないよう、`<leader> signal:` で始まる行は正しい形でなければ誤りにする。
+pub fn signal_mark(line: &str, leader: &str) -> Result<VirtualSignal, String> {
+    line.strip_prefix(leader)
+        .and_then(|rest| rest.strip_prefix(" signal: "))
+        .and_then(|rest| rest.split_once(" at "))
+        .and_then(|(kind, ms)| {
+            let signal = match kind {
+                "interrupt" => Signal::Interrupt,
+                "terminate" => Signal::Terminate,
+                _ => return None,
+            };
+            // `u64::from_str` は先頭の `+` も読むので、数字だけの綴りに限る
+            ms.bytes()
+                .all(|b| b.is_ascii_digit())
+                .then(|| ms.parse().ok())
+                .flatten()
+                .map(|at_ms| VirtualSignal { at_ms, signal })
+        })
+        .ok_or_else(|| {
+            format!(
+                "the signal mark is `{leader} signal: <interrupt|terminate> at <ms>`, not `{line}`"
+            )
+        })
 }
 
 /// 失敗したファイルをすべて挙げるため、ファイルごとの panic を捕まえて最後まで流し、終わりに1回だけ panic する。

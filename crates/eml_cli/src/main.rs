@@ -35,9 +35,6 @@ enum Command {
             default_value = "normal"
         )]
         sched: Sched,
-        /// Which clock timers use: `real` sleeps on the monotonic clock, `virtual` advances only when every task waits
-        #[arg(long, value_name = "real|virtual", default_value = "real")]
-        clock: Clock,
         file: PathBuf,
     },
     /// Start an interactive session
@@ -52,9 +49,6 @@ enum Command {
             default_value = "normal"
         )]
         sched: Sched,
-        /// Which clock timers use: `real` sleeps on the monotonic clock, `virtual` advances only when every task waits
-        #[arg(long, value_name = "real|virtual", default_value = "real")]
-        clock: Clock,
         /// A file to load first, as with `:load`
         file: Option<PathBuf>,
     },
@@ -83,27 +77,29 @@ fn main() -> ExitCode {
         Command::Repl {
             debug_heap,
             sched,
-            clock,
             file,
-        } => terminal::run(debug_heap, sched, clock, file),
+        } => terminal::run(debug_heap, sched, file),
         Command::Run {
             debug_heap,
             sched,
-            clock,
             file,
         } => {
-            // 読み込みとコンパイルの間の Ctrl-C も、OS の既定の動作でプロセスが終わらずに、このハンドラが受ける。そこで立てたビットは、
+            // 読み込みとコンパイルの間の Ctrl-C と SIGTERM も、OS の既定の動作でプロセスが終わらずに、このハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
-            interrupt::install(Arc::clone(&control), interrupt::Mode::Run);
+            let doorbell = interrupt::doorbell();
+            interrupt::install(Arc::clone(&control), doorbell.clone(), interrupt::Mode::Run);
             let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
-            let config = RunConfig::default()
+            let mut config = RunConfig::default()
                 .with_debug_heap(debug_heap)
                 .with_sched(sched)
-                .with_clock(clock)
+                .with_clock(Clock::Real)
                 .with_control(control);
+            if let Some(doorbell) = doorbell {
+                config = config.with_doorbell(doorbell);
+            }
             // 警告がプログラムの出力の後に出ないように、実行の前に表示する。
             let compiled = session.compile();
             eprint!("{}", render(&compiled.diagnostics, session.files()));
@@ -117,7 +113,9 @@ fn main() -> ExitCode {
                 Err(error) => {
                     eprintln!("runtime error: {error}");
                     let code = if error.interrupted() {
-                        interrupt::EXIT_CODE
+                        interrupt::INTERRUPT_EXIT_CODE
+                    } else if error.terminated() {
+                        interrupt::TERMINATE_EXIT_CODE
                     } else {
                         1
                     };
@@ -164,7 +162,7 @@ fn split_script_args(mut argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>) 
     (argv, Vec::new())
 }
 
-/// `run` の値を取るフラグの長い名前 (`--sched`、`--clock`)。clap の定義から読むので、フラグを足しても分け方の規則を直さずに済む。
+/// `run` の値を取るフラグの長い名前 (`--sched`)。clap の定義から読むので、フラグを足しても分け方の規則を直さずに済む。
 fn run_value_flags() -> Vec<String> {
     let cli = Cli::command();
     let Some(run) = cli.find_subcommand("run") else {

@@ -343,7 +343,7 @@ fn run(inputs: &[Input], root: &Path, directory: bool, debug_heap: bool) -> Tran
 /// 流す」)。
 #[test]
 fn transcripts() {
-    for_each_file(&repl_root(), "repl", |path| {
+    for_each_file(&repl_root(), "repl", false, |path, _| {
         let suffix = classify(path);
         let inputs = parse_transcript(&fs::read_to_string(path).unwrap());
         // コマンドの行は `input_status` でなく `eml_cli::lines` が読むので、入力の終わりの規則を当てない
