@@ -617,7 +617,7 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
 ### T-5: 終わった操作を待たない
 - 目的: 速い道、即値の token、`op_ready` と数え方 (D-3、D-6、D-12)。
 - 基づく決定: D-3、D-6、D-12
-- 対象: `crates/eml_extern/src/lib.rs` (付録1 の6.4節の T-5 の行)、`std/Async.em` (6.1節)、`crates/eml_vm/src/cells.rs` (2.3節と2.4節。`TaskStats` の doc)、`vm.rs` (Net と park の腕、`AsyncOpReady` の腕、`schedule`、`Async` の命令の一覧)、`crates/eml_vm/src/lib.rs` (`RunStats::parks` と `completions` の doc)、`crates/eml_core_ir/tests/externs.rs`、docs (付録1 の8.5節)
+- 対象: `crates/eml_extern/src/lib.rs` (付録1 の6.4節の T-5 の行)、`std/Async.em` (6.1節)、`crates/eml_vm/src/cells.rs` (2.3節と2.4節。`TaskStats` の doc)、`vm.rs` (Net と park の腕、`AsyncOpReady` の腕、`schedule`、`Async` の命令の一覧)、`crates/eml_vm/src/lib.rs` (`RunStats::parks` の doc。`completions` の doc は T-4 で書いた)、`crates/eml_core_ir/tests/externs.rs`、docs (付録1 の8.5節)
 - 作業: 付録1 の2.3節、2.4節、6.1節、6.4節のとおりにする。
 - テスト: 付録1 の7.4節。
 - 実装者に任せること: `op_ready` の本体の分け方。`a_second_take_of_an_op_is_an_internal_error` を LIR で書けないときの置き場所 (`cells.rs` の単体テストにし、計画書に書く)

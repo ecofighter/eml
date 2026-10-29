@@ -139,7 +139,7 @@ fn settle<M>(
 | 待つタスクがもういる | 内部の誤り `an op is awaited twice` | |
 
 - 1 のときの `park_io` と `park_io_until` は今の数え方 (`parks`、`cancels`、`timers`) のままである。そのため `parks` は `io_wait` と `io_wait_until` の呼び出しの数、`timers` は今の定義 (地点で取り消されなかった正の期限) のままで、どちらもスケジュールに依らない。
-- `completions` は受け付けで終わった操作と集めた完了の和である。`settle` が段階を `Done` にするたびに1つ数える。
+- `completions` は受け付けで終わった操作と集めた完了の和である。driver の結果1つにつき1つ数える (確かめとその後の読みは2つ)。
 - 予算は今の操作の予算 (タスクごとに 128。`check_cancelled` と同じ `spend_budget`) で、再開 (`resumed`) で 128 に戻る。
 - `vm.rs` に `AsyncOpReady` の腕を足し、`Extern::is_async()` と、vm.rs の `Async` の命令にする行の一覧 (3090 行付近の、`Extern::AsyncStartRaw` から並ぶ腕) に足す。
 
