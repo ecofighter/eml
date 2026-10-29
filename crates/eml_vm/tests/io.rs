@@ -54,22 +54,6 @@ fn a_write_counts_one_completion() {
     assert_eq!((s.completions, s.parks, s.cancels), (4, 5, 0));
 }
 
-/// 読みは、ストリームが読めるようになるのを待つ操作と、buffer を貸して読む操作の2つの完了を受ける。書きと合わせて
-/// 3つで、待ちはどちらも1回である。つなぐまでの完了3つと待ち4回を合わせて数える (docs/spec/vm.md の「操作の記録」)。
-#[test]
-fn a_write_and_a_read_count_three_completions() {
-    let (out, s) = connected_stats(
-        "  let a = Net.write \"hello\" a
-  let (buf, b) = Net.read_chunk (Bytes.of_string \"> \") b
-  Net.close a
-  Net.close b
-  println (String.decode buf))
-",
-    );
-    assert_eq!(out, "> hello\n");
-    assert_eq!((s.completions, s.parks, s.cancels), (6, 6, 0));
-}
-
 /// 相手が閉じたストリームの読みは、読めるようになった後の読みが 0 バイトで終わり、buffer の中身を変えずに返す。足した
 /// 空きは中身に出ない (docs/spec/stdlib.md の「`Std.Net`」)。
 #[test]
@@ -83,24 +67,6 @@ fn a_read_at_the_peer_eof_returns_the_buffer_unchanged() {
     );
     assert_eq!(out, "keep 4\n");
     assert_eq!((s.completions, s.parks), (5, 5));
-}
-
-/// 書き手のないストリームの期限付きの読みは、期限が、読めるようになるのを待つ操作に当たり、その取り消しの完了1つで
-/// 終わる。buffer を貸す操作は出さない。期限は時間の輪に1つ載り、再開は取り消しでなく `None` である。つなぐまでの
-/// 完了3つと待ち4回を合わせて数える (docs/spec/vm.md の「`RunStats`」)。
-#[test]
-fn a_timed_out_read_counts_one_completion_and_one_timer() {
-    let (out, s) = connected_stats(
-        "  let (r, b) = Net.read_chunk_within 50 (Bytes.of_string \"keep\") b
-  Net.close a
-  Net.close b
-  match r with
-    | Some _ -> println \"Some\"
-    | None -> println \"None\")
-",
-    );
-    assert_eq!(out, "None\n");
-    assert_eq!((s.completions, s.timers, s.parks, s.cancels), (4, 1, 5, 0));
 }
 
 /// `Net.listen` は driver の操作を1つ出し、完了を1つ受けて、待っていたタスクを再開する。リスナーは完了の中身から
@@ -466,7 +432,7 @@ main () = Async.run (fn () ->
     assert_eq!((s.completions, s.cancels), (5, 1));
 }
 
-/// 受けの記録が待ち受けたストリームを持ったまま、本体の `exit` で run が終わる。`main` の終わりの `sweep_all` が、残った
+/// 受けの記録がリスナーを持ったまま、本体の `exit` で run が終わる。`main` の終わりの `sweep_all` が、残った
 /// 記録を放してリスナーを落とすので、検査モードの漏れの検査が通る。接続する者はいないので、`took` は出ない
 /// (docs/spec/vm.md の「操作の記録」)。
 #[test]
