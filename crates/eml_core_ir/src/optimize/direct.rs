@@ -42,7 +42,7 @@ pub(crate) fn lifted(program: &Program) -> Vec<(FnIdx, FnIdx)> {
 ///   `k` として渡す継続の関数 `f{H}$hN` を、節の写しの複製が直接呼ぶようになると、値の参照が残らない
 ///
 /// どちらの一族のコードも名前で決まるので、決め方も名前だけで決まる。一族の外の関数 (持ち主の複製や、持ち上げた
-/// 関数を鍵にする複製) に残る値の参照は、boxing が作る `$uniform` の版が受ける (docs/spec/lir.md の「関数の ABI」)。
+/// 関数を鍵にする複製) に残る値の参照は、boxing が作る `$uniform` の変種が受ける (docs/spec/lir.md の「関数の ABI」)。
 /// 到達できない関数を落とす前に呼ぶ。
 pub(crate) fn type_direct_only(
     program: &mut Program,

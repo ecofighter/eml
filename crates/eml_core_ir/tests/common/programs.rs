@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// 1つのプログラム。`modules` は入口のディレクトリからの相対パスと本文の組で、
+/// 1つのプログラム。`modules` はエントリのディレクトリからの相対パスと本文の組で、
 /// `eml_test_support::with_modules` にそのまま渡す。
 pub struct UiProgram {
     /// `run/basics/hello.em`、`run/names/import_cycle`、`bench/fib` の形の名前。
@@ -59,7 +59,7 @@ pub fn ui_programs() -> Vec<UiProgram> {
     programs
 }
 
-/// ディレクトリのテスト。入口は `main.em` で、ほかの `.em` はディレクトリからの相対パスのモジュールである。
+/// ディレクトリのテスト。エントリは `main.em` で、ほかの `.em` はディレクトリからの相対パスのモジュールである。
 fn directory_program(top: &str, category: &str, dir: &Path) -> UiProgram {
     let mut modules = Vec::new();
     collect_modules(dir, dir, &mut modules);

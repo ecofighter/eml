@@ -177,7 +177,7 @@ fn main() -> unit {{
     assert_eq!(output, "3\n1\n");
 }
 
-/// handler の下で継続を再開するときの形。`ev_renew` は入口の表を共有し、状態を差し替え、今の `evv` を外側の `evv`
+/// handler の下で継続を再開するときの形。`ev_renew` はエントリの表を共有し、状態を差し替え、今の `evv` を外側の `evv`
 /// にした evidence を作る (docs/spec/object-model.md の「evidence の3つの物体」)。元の evidence の外側の `evv` は空なので、
 /// `ev_evv` が元の外側を返せば `ev_lookup` は evidence を見つけられない。
 #[test]

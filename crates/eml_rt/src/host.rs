@@ -406,7 +406,7 @@ pub(crate) fn host_env_var(host: &HostRef, name: &str) -> (r: Result<String, Fau
     }
 }
 
-/// `Proc.spawn` で起動した子。`Foreign` の物体の中身にする。子のプロセスと、その標準入力への書き口と、標準出力の
+/// `Proc.spawn` で起動した子。`Foreign` の物体の中身にする。子のプロセスと、その標準入力への書き込む端と、標準出力の
 /// 読み手を持つ。破棄処理は pipe を閉じてから子を kill して待つ (docs/spec/object-model.md の「子のプロセス」)。
 #[verifier::external_body]
 pub(crate) struct Child {
@@ -498,9 +498,9 @@ pub(crate) fn host_spawn(
     }
 }
 
-/// `bytes` を (`line` なら続けて `\n` も) 子の標準入力に書き、書き出す。書き口がなければ (`close_stdin` の後) `not
+/// `bytes` を (`line` なら続けて `\n` も) 子の標準入力に書き、書き出す。書き込む端がなければ (`close_stdin` の後) `not
 /// available` の誤りにする。書き込みが `Interrupted` で戻るか失敗したとき、止める語が立っていれば、止めたことにする
-/// (docs/spec/object-model.md の「実行の制御」)。誤りなら書き口を閉じる。
+/// (docs/spec/object-model.md の「実行の制御」)。誤りなら書き込む端を閉じる。
 ///
 /// # Safety
 /// `c` は生きている `Child` を指し、呼ぶ間ほかに参照がない。呼ぶ側が `Heap::foreign_unique` で確かめる (T3)。
@@ -778,7 +778,7 @@ impl StdinSlot {
         *self.lock() = Some(reader);
     }
 
-    // 中身は読み手だけなので、ロックが毒されても続けて使う
+    // 中身は読み手だけなので、ロックが poisoned になっても続けて使う
     fn lock(&self) -> std::sync::MutexGuard<'_, Option<Reader>> {
         self.reader.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -1010,7 +1010,7 @@ pub trait Host: Send + Sync {
     fn open_write(&self, _path: &str, _mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
     }
-    /// 子のプロセスを起動し、pipe にした標準入力の書き口と標準出力の読み手を返す。子と eml の出力が順に並ぶよう、起動の
+    /// 子のプロセスを起動し、pipe にした標準入力の書き込む端と標準出力の読み手を返す。子と eml の出力が順に並ぶよう、起動の
     /// 前に標準出力を書き出す。
     fn spawn(&self, _spawn: &Spawn<'_>) -> io::Result<Spawned> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
@@ -1167,20 +1167,6 @@ fn os_stdio(stdio: Stdio) -> process::Stdio {
     }
 }
 
-/// 受け継いだ標準出力の fd の写し。`2>&1` で標準出力を受け継ぐ子の、標準エラーに渡す。
-#[cfg(unix)]
-fn inherited_stdout() -> io::Result<process::Stdio> {
-    use std::os::fd::AsFd;
-    Ok(process::Stdio::from(
-        io::stdout().as_fd().try_clone_to_owned()?,
-    ))
-}
-
-#[cfg(not(unix))]
-fn inherited_stdout() -> io::Result<process::Stdio> {
-    Err(io::Error::from(io::ErrorKind::Unsupported))
-}
-
 /// 子のプロセスの終了コード。シグナルで終わった子は、シェルと同じく 128 + シグナルの番号にする。
 pub fn exit_code(status: ExitStatus) -> i32 {
     #[cfg(unix)]
@@ -1273,7 +1259,7 @@ impl StdHost {
     }
 }
 
-/// ストリームのロックを取る。中身は書き込みのバッファだけなので、書き込み先の panic でロックが毒されても、続けて使って
+/// ストリームのロックを取る。中身は書き込みのバッファだけなので、書き込み先の panic でロックが poisoned になっても、続けて使って
 /// 壊れることはない。
 fn lock(
     stream: &Mutex<BufWriter<Box<dyn Write + Send>>>,
@@ -1374,16 +1360,17 @@ impl Host for StdHost {
         command.stdin(os_stdio(spawn.stdin));
         let mut shared = None;
         match (spawn.stdout, spawn.stderr) {
-            // 1本の pipe の書き口を2つに分けて、標準出力と標準エラーに渡す
+            // 1本の pipe の書き込む端を2つに分けて、標準出力と標準エラーに渡す
             (Stdio::Pipe, StderrMode::ToStdout) => {
                 let (reader, writer) = io::pipe()?;
                 command.stderr(writer.try_clone()?).stdout(writer);
                 shared = Some(reader);
             }
+            // std は `io::Stdout` を、どの OS でも子に渡せる標準出力の写しにする (`2>&1` の意味)
             (Stdio::Inherit, StderrMode::ToStdout) => {
                 command
                     .stdout(process::Stdio::inherit())
-                    .stderr(inherited_stdout()?);
+                    .stderr(io::stdout());
             }
             (Stdio::Null, StderrMode::ToStdout) => {
                 command
@@ -1402,7 +1389,7 @@ impl Host for StdHost {
             }
         }
         let mut child = command.spawn()?;
-        // `command` が持つ pipe の書き口を閉じる。残すと、子が終わっても読み手に終わりが届かない
+        // `command` が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読み手に終わりが届かない
         drop(command);
         let stdin = child
             .stdin

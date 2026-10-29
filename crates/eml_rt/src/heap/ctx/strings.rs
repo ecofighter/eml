@@ -2131,7 +2131,7 @@ impl<M: Mode> Ctx<M> {
             assert(self.heap.core.kept_block(mid.core, w.bits_spec()));
             self.lemma_fresh_holds(s0, w);
         }
-        // `a` は文字列なので、`evv` の節点でも evidence でも入口の表でもない
+        // `a` は文字列なので、`evv` の節点でも evidence でもエントリの表でもない
         lemma_listed_kept(self.heap, h0, d, xa, self.evv, self.max_evv);
     }
 
@@ -2226,7 +2226,7 @@ impl<M: Mode> Ctx<M> {
             assert(self.heap.core.settled_state(w.bits_spec()) == BlockState::Live);
             self.lemma_fresh_holds(s0, w);
         }
-        // `left` は文字列かバイト列なので、`evv` の節点でも evidence でも入口の表でもない
+        // `left` は文字列かバイト列なので、`evv` の節点でも evidence でもエントリの表でもない
         lemma_listed_kept(self.heap, h0, d, xa, self.evv, self.max_evv);
     }
 

@@ -1,5 +1,5 @@
--- `call_at` は型変数の位置が一様 (`_`) である。その中で `divide` の部分適用を呼ぶと、`apply` は一様な版 `divide$uniform`
--- に入り、版が `divide` を呼ぶ (docs/spec/lir.md の「関数の ABI」)。ゼロ除算の誤りは、版でなく `divide` の中の位置を
+-- `call_at` は型変数の位置が一様 (`_`) である。その中で `divide` の部分適用を呼ぶと、`apply` は一様な変種 `divide$uniform`
+-- に入り、変種が `divide` を呼ぶ (docs/spec/lir.md の「関数の ABI」)。ゼロ除算の誤りは、変種でなく `divide` の中の位置を
 -- 指す。関数の値はデータに通し、optimize が `call_at` を既知の閉包に特殊化しないようにする。
 divide : Int -> Unit -> <Panic> Int
 divide d () = 100 / d

@@ -76,7 +76,7 @@ pub fn prim_text(effects: &[EffectInfo], prim: &Prim) -> String {
 /// 関数と extern の行の名前。単相化の instance の名前 (`id@[Int, String]`) と instance の extern の行の名前
 /// (`Prelude.Eq Int.==`) は、テキストの形の字句の区切りを含むので、文字列と同じ逃がし方で引用符で囲む
 /// (docs/implementation/testing.md の「LIR のテキストの形」)。row のビットを書いた名前 (`twice<e>`) も同じく
-/// 囲む (docs/spec/core-ir.md の「row のビットと instance の鍵」)。版の名前 (`f#3`) とハッシュの名前 (`f@#…`) は
+/// 囲む (docs/spec/core-ir.md の「row のビットと instance の鍵」)。バージョンの名前 (`f#3`) とハッシュの名前 (`f@#…`) は
 /// タグの字 `#` を含むので、これも囲む (docs/spec/core-ir.md の「変換の規則」)。
 pub fn function_name(name: &str) -> Cow<'_, str> {
     let separates = |c: char| c.is_whitespace() || "(){}[],\"<>#".contains(c);
@@ -420,7 +420,7 @@ impl<'t> Reader<'t> {
         self.peek().is_none()
     }
 
-    /// 関数を読み終えた後の表。入口は `entry$main` という名前の関数で、なければ最初の関数である。
+    /// 関数を読み終えた後の表。エントリは `entry$main` という名前の関数で、なければ最初の関数である。
     pub fn finish(self) -> Result<Tables, ParseError> {
         // 読めた関数は、どれも `declare_functions` が番号を振っている
         if self.functions.is_empty() {
@@ -616,7 +616,7 @@ impl<'t> Reader<'t> {
         Ok(())
     }
 
-    /// `[internal] [yields] [clause E.op] [uniform from N] fn name(params) -> repr {` を読む。入口のブロックとラベルの付いた
+    /// `[internal] [yields] [clause E.op] [uniform from N] fn name(params) -> repr {` を読む。エントリのブロックとラベルの付いた
     /// ブロックの列が続く。
     pub fn function_header(&mut self, state: &mut FnState) -> Result<FnHeader, ParseError> {
         let internal = self.at_word("internal");
@@ -1606,7 +1606,7 @@ impl<'p> Writer<'p> {
         .unwrap();
     }
 
-    /// 入口でないブロックの `bN:` か `bN(params):` の行。
+    /// エントリでないブロックの `bN:` か `bN(params):` の行。
     pub fn label(&self, index: usize, params: &[VarId], vars: &[VarInfo], out: &mut String) {
         if params.is_empty() {
             writeln!(out, "b{index}:").unwrap();

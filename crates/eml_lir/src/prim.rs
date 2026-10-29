@@ -50,7 +50,7 @@ pub struct PrimRow {
     pub params: &'static [Repr],
     /// 引数ごとの借用の印で、長さは `params` と同じである。借用の引数は読む使いで、所有を受け取らない。借用にするのは、
     /// 基本操作がその引数そのものを物体にも実行の文脈にも入れない引数である。中身の一部を基本操作が自分で `dup` して
-    /// 共有する引数 (`evv_mask` のリストの残り、`ev_renew` の入口の表) も借用にする
+    /// 共有する引数 (`evv_mask` のリストの残り、`ev_renew` のエントリの表) も借用にする
     /// (docs/spec/lir.md の「基本操作」)。
     pub borrowed: &'static [bool],
     pub ret: Repr,
@@ -199,7 +199,7 @@ impl Prim {
             Prim::RootSet(_) => (&[TObj], &[false], Unit, &[Unr], Unr),
             // 結果は `MutArray` の値なので `lin` である
             Prim::EmptyMutArray => (&[], NONE, Obj, NO_MARKS, Lin),
-            // evidence は節の入口が持ち続けるので借りる。操作の引数を捕まえた起こし直しの閉包は親に渡る
+            // evidence は節のエントリが持ち続けるので借りる。操作の引数を捕まえた起こし直しの閉包は親に渡る
             Prim::ChildAbort => (&[Obj, TObj], &[true, false], Unit, &[Unr, Poly], Unr),
         };
         PrimRow {

@@ -72,6 +72,12 @@ probe_chan c = c
 probe_counter : Atomic.Counter -> Atomic.Counter
 probe_counter c = c
 
+probe_op : Async.OpId -> Async.OpId
+probe_op o = o
+
+probe_stream : IoTest.Stream -> IoTest.Stream
+probe_stream s = s
+
 probe_panic : Unit -> <Panic> Int
 probe_panic () = panic \"x\"
 
@@ -105,6 +111,8 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Scope => "probe_scope",
         ExternType::Chan => "probe_chan",
         ExternType::Counter => "probe_counter",
+        ExternType::OpId => "probe_op",
+        ExternType::IoTestStream => "probe_stream",
     }
 }
 
@@ -263,8 +271,8 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     }
 }
 
-/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`
-/// と、`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
+/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`、
+/// `Std.IoTest` の `peer` と `op_stream` と `op_timed_out` と、`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
@@ -276,6 +284,9 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Std.MutArray.length" => (&[true], Some(0)),
             "Std.MutArray.read" => (&[true, false], Some(0)),
             "Std.Async.task_cell" => (&[true], Some(0)),
+            "Std.IoTest.peer" | "Std.IoTest.op_stream" | "Std.IoTest.op_timed_out" => {
+                (&[true], Some(0))
+            }
             "Std.FileIn.read_all"
             | "Std.FileIn.read_line_raw"
             | "Std.FileIn.read_all_bytes"
@@ -457,7 +468,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par` と `Std.Async` の13以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の17行、`Std.Chan` の2行、`Std.IoTest` の10行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -525,6 +536,14 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Chan.push_raw" => (&[Poly, Unr], Unr),
             "Std.Chan.pop_raw" => (&[Unr], Poly),
             "Std.Async.park_send" | "Std.Async.park_recv" => (&[Unr, Lin], Unr),
+            "Std.Async.park_io" => (&[Lin, Lin], Unr),
+            "Std.Async.park_io_until" => (&[Lin, Unr, Lin], Unr),
+            "Std.IoTest.open_pair" => (&[Unr], Lin),
+            "Std.IoTest.peer" | "Std.IoTest.op_stream" => (&[Lin], Lin),
+            "Std.IoTest.submit_write" | "Std.IoTest.submit_read" => (&[Unr, Lin], Lin),
+            "Std.IoTest.take_write" | "Std.IoTest.take_read" => (&[Lin], Unr),
+            "Std.IoTest.op_timed_out" | "Std.IoTest.take_checksum" => (&[Lin], Unr),
+            "Std.IoTest.submit_checksum" => (&[Unr, Unr], Lin),
             _ => {
                 assert!(
                     row.param_marks.iter().all(|&mark| mark == Unr),
@@ -539,7 +558,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     }
 }
 
-/// 表の値そのもの。引数を預かる行は `Std.Async` の15行と `Std.Chan.push_raw` だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
+/// 表の値そのもの。引数を預かる行は `Std.Async` の17行と `Std.Chan.push_raw` だけである。預かる引数は型変数を `Unr` に固定しない位置なので、
 /// その印は `Unr` でない (docs/spec/declarations.md の「`extern`」)。
 #[test]
 fn only_the_listed_rows_hold_an_argument() {
@@ -567,6 +586,8 @@ fn only_the_listed_rows_hold_an_argument() {
             "Std.Async.park_drain",
             "Std.Async.park_send",
             "Std.Async.park_recv",
+            "Std.Async.park_io",
+            "Std.Async.park_io_until",
             "Std.Chan.push_raw",
         ]
     );
@@ -582,7 +603,7 @@ fn only_the_listed_rows_hold_an_argument() {
     }
 }
 
-/// ランタイムが名前で呼ぶ入口は、std の単相の関数である。単相なので instance の名前が正式な名前のままになり、
+/// ランタイムが名前で呼ぶエントリは、std の単相の関数である。単相なので instance の名前が正式な名前のままになり、
 /// 引数の Repr が宣言の型から決まる (docs/spec/stdlib.md の「`Std.Async`」)。
 #[test]
 fn every_runtime_entry_is_a_monomorphic_std_function() {
@@ -623,7 +644,7 @@ fn every_runtime_entry_is_a_monomorphic_std_function() {
     }
 }
 
-/// ランタイムが名前で呼ぶ入口は、下ろした後も宣言の名前のまま、型どおりの ABI で残る (docs/spec/core-ir.md の
+/// ランタイムが名前で呼ぶエントリは、下ろした後も宣言の名前のまま、型どおりの ABI で残る (docs/spec/core-ir.md の
 /// 「変換の規則」)。
 #[test]
 fn the_runtime_entries_have_the_declared_abi() {

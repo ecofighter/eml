@@ -1,4 +1,4 @@
-//! 単相化の instance の表 (docs/spec/core-ir.md の「変換の規則」)。本体を変換する前に、入口から届く (関数, 型引数,
+//! 単相化の instance の表 (docs/spec/core-ir.md の「変換の規則」)。本体を変換する前に、エントリから届く (関数, 型引数,
 //! row のビット) の組と生成する関数をすべて集め、番号の順を決める。変換はこの表を読むだけで、変換の途中で instance
 //! を足さない。
 
@@ -167,7 +167,7 @@ impl From<CoreMethod> for GeneratedMethod {
 pub(super) struct Instances {
     pub(super) list: Vec<Instance>,
     pub(super) entry: InstanceId,
-    /// 入口が値を書く式の入力なら、その値の書き方。入口の関数 `entry$` が値の文字列を作るのに使う。入力の本体にない
+    /// エントリが値を書く式の入力なら、その値の書き方。エントリの関数 `entry$` が値の文字列を作るのに使う。入力の本体にない
     /// 呼び出しなので、参照の行き先 (`targets`) とは別に持つ (docs/spec/core-ir.md の「REPL の入力」)。
     pub(super) display: Option<Part>,
     /// 型検査の型の表に、代入の結果を足した表。
@@ -188,7 +188,7 @@ enum Found {
     Display {
         /// 入力の中で見つけた順の番号 `k`。
         number: usize,
-        /// 入口からの最小の段。
+        /// エントリからの最小の段。
         depth: u32,
         form: DisplayForm,
         parts: Vec<Vec<FoundPart>>,
@@ -220,7 +220,7 @@ impl FoundTarget {
     }
 }
 
-/// 入口から届く instance を集める途中の状態。
+/// エントリから届く instance を集める途中の状態。
 struct Collector<'a> {
     hir: &'a HirProgram,
     typed: &'a TypedProgram,
@@ -799,7 +799,7 @@ impl Collector<'_> {
 }
 
 pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId) -> Instances {
-    // 制約を持つ関数の証拠は呼び出し側の型で決まるので、入口にはできない。入口を選ぶのは translate の呼び出し側で
+    // 制約を持つ関数の証拠は呼び出し側の型で決まるので、エントリにはできない。エントリを選ぶのは translate の呼び出し側で
     // ある (docs/spec/core-ir.md の「メソッドの解決」)
     assert!(
         hir[entry]
@@ -818,7 +818,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
         display_keys: FxHashMap::default(),
         queue: VecDeque::new(),
     };
-    // 入口は呼び出し側が選ぶので、型変数を持つ関数なら、どの型でも動く一様な instance にする
+    // エントリは呼び出し側が選ぶので、型変数を持つ関数なら、どの型でも動く一様な instance にする
     let entry_args = (0..type_vars(hir, entry).len())
         .map(|position| {
             let kind = typed.uniform_kind(entry, position);
@@ -829,7 +829,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     // (docs/spec/core-ir.md の「row のビットと instance の鍵」)
     let entry_bits = vec![true; row_vars(hir, entry).len()];
     let entry_index = collector.add(entry, entry_args, entry_bits);
-    // ランタイムが名前で呼ぶ関数は、eml のコードから呼ばれないので、入口と同じく根にする。どれも単相なので、型引数も
+    // ランタイムが名前で呼ぶ関数は、eml のコードから呼ばれないので、エントリと同じく根にする。どれも単相なので、型引数も
     // row のビットもない (docs/spec/core-ir.md の「変換の規則」)
     for &runtime in RuntimeEntry::ALL {
         if let Some(function) = hir.function_by_canonical_name(runtime.name()) {

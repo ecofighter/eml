@@ -389,9 +389,10 @@ impl<'a> Flattener<'a> {
 
     /// 戻らない呼び出しの構造体の束縛。結果を `unr` の `obj` の変数で受け、葉をダミーの値で定義する。box の挿入は
     /// この束縛の使いを変換しないので、1語の位置の使いが残りうる。その使いは受けた変数に置き換える。制御が届かない
-    /// ので、どちらも実行されない (docs/spec/lir.md の「開く」)。
+    /// ので、どちらも実行されない。葉のダミーは構造体の印によらず `unr` にする。使われない葉は Perceus が `decref` で
+    /// 手放し、V1 は `unr` でない変数の `decref` を拒むからである (docs/spec/lir.md の「開く」)。
     fn bind_never(&mut self, var: VarId, id: StructId, rhs: Rhs, out: &mut Vec<Stmt>) {
-        let VarInfo { name, mark, .. } = self.function.vars[var.0 as usize].clone();
+        let name = self.function.vars[var.0 as usize].name.clone();
         let word = self.fresh(name.clone(), Repr::Obj, Mark::Unr);
         out.push(Stmt::Let { var: word, rhs });
         let leaves = self
@@ -400,13 +401,13 @@ impl<'a> Flattener<'a> {
             .iter()
             .copied()
             .enumerate()
-            .map(|(index, (repr, leaf_mark))| match repr {
+            .map(|(index, (repr, _))| match repr {
                 Repr::Unit => Atom::Unit,
                 Repr::Int => Atom::Int(0),
                 Repr::Float => Atom::Float(FloatBits::new(0.0)),
                 Repr::Enum => Atom::Tag(0),
                 Repr::Obj | Repr::TObj => {
-                    let dummy = self.fresh(format!("{name}.{index}"), repr, leaf_mark.meet(mark));
+                    let dummy = self.fresh(format!("{name}.{index}"), repr, Mark::Unr);
                     out.push(Stmt::Let {
                         var: dummy,
                         rhs: Rhs::Prim(Prim::Dummy, Vec::new()),
@@ -707,7 +708,7 @@ fn constant_target(value: Atom, cases: &[Case], default: Option<BlockId>) -> Opt
     matched.map(|case| case.target).or(default)
 }
 
-/// 入口から届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。辺の入らないブロックを残すと、構造の
+/// エントリから届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。辺の入らないブロックを残すと、構造の
 /// 規則 (docs/spec/lir.md の「構造の規則」の R4) に反する。
 fn prune(function: &mut LirFn) {
     let mut reached = vec![false; function.blocks.len()];

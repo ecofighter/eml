@@ -1,14 +1,15 @@
 //! `Async` のタスクとスコープと channel の意味の核 (docs/spec/vm.md の「`Async` のタスク」、「channel」)。VM の
 //! `Task`、`Scheduler`、フレームを知らず、走らせる仕事を `Runnable` と不透明な `WaitToken` で返す。ネイティブのコードが
-//! 同じ核を `extern "C"` の入口から呼べるように、`std` と `eml_rt` だけに依存する。
+//! 同じ核を `extern "C"` のエントリから呼べるように、`std` と `eml_rt` だけに依存する。
 //!
 //! セルが持つ語は数えた参照で、VM が1回入れて1回出す。`Registry` はヒープに触れる `Drop` を持たないので、誤りで終わった
 //! run と捨てた run では、`Scheduler` と一緒に触れずに捨てる。
 //!
 //! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、
-//! `wake_waiter` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))` か `Some(Time(_))` であることは
-//! 同値である (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項 `key` と `wait == Some(Time(key))` は、いつも両方
-//! あるか両方ないかである。タスクの今のスコープ `current` から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
+//! `wake_waiter` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))`、`Some(Time(_))`、`Some(Io(_))` の
+//! どれかであることは同値である (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項 `key → t` があるのは、
+//! `t` の `wait` が `Some(Time(key))` のときか、`Some(Io(op))` で記録 `op` の `timer` が `Some(key)` のときだけで、
+//! 時間の待ちの登録と記録が覚えた鍵には、いつも項がある。タスクの今のスコープ `current` から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
 //! `opener` は呼んだタスクで、根は誰の今のスコープにもならず、放されるまで呼んだタスクの `run` が名指す。`closed` の
 //! スコープは `closing` で、`members` が空である。スコープのセルを放すのは、閉じた後の `release_scope`
 //! (`Take::Run` は根の待ちが `closed` で起きた後に、`leave_scope` は今のスコープを親に戻した後に呼ぶ) と、run の終わりの
@@ -22,16 +23,24 @@
 //! 仕事が実行待ちにあるときにだけありうる。積めるのに送り手が待っている状態も同じである。起こす側は枠も品物も取って
 //! おかないので、起こされたタスクが速い道をやり直す (docs/spec/vm.md の「channel」)。
 //!
+//! 操作の記録の不変条件: `ops` の項は、完了がまだ届いていない記録だけを指す。記録の `waiter` が `t` を指して完了が
+//! まだなら、`t` の `wait` は `Some(Io(その記録))` である。1つの token に記録は1つで、1つのタスクの待ちの登録は1つである。
+//! 記録を放すのは、受け付けたタスクの `take_op` と `sweep_all` だけである。
+//!
 //! 取り消しは、印を付ける `mark` と受け箱の処理 `drain` が待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
-//! 仕事をほかのタスクのために作るのは `drain` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
+//! 仕事をほかのタスクのために作るのは、`drain` と、取り消しを頼んだ操作の完了を当てる `complete` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
 //! `cancel`、`flag`、`cancel_new` はどのタスクの操作からも書く。`current` と `run` は持ち主だけが書き、印を付ける
 //! 操作が読む。スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
 //! そのタスクを動かすか受け箱を処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::io;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use eml_rt::{Control, Ctx, Fault, HeapError, Mode, Word};
+use eml_rt::{
+    Completion, Control, Ctx, Fault, HandleBin, HeapError, IoDriver, IoHandle, Mode, Op, OpKey,
+    RawBuf, Word,
+};
 
 /// 再開するタスクに渡す `Std.Async.Wake` の `Woke` のタグ (docs/spec/stdlib.md の「`Std.Async`」)。
 pub(crate) const WOKE: i64 = 0;
@@ -72,10 +81,18 @@ pub(crate) struct WaitToken(pub u64);
 
 /// 核が実行系に渡す仕事。
 pub(crate) enum Runnable {
-    /// タスク `cell` を始める。`closure` は入口 `start_task` に渡す閉包で、仕事が参照を1つ持つ。
+    /// タスク `cell` を始める。`closure` はエントリ `start_task` に渡す閉包で、仕事が参照を1つ持つ。
     Start { cell: CellRef, closure: Word },
     /// 待っていたタスク `cell` を、継続 `k` に `wake` を渡して再開する。`k` は仕事が参照を1つ持つ。
     Resume { cell: CellRef, k: Word, wake: i64 },
+    /// driver の操作を待っていたタスク `cell` を、継続 `k` に `wake` と token `op` を渡して再開する。`k` と `op` は
+    /// 仕事が参照を1つずつ持つ。
+    ResumeIo {
+        cell: CellRef,
+        k: Word,
+        wake: i64,
+        op: Word,
+    },
     /// token で待つものを起こす。
     Token(WaitToken),
 }
@@ -165,6 +182,8 @@ enum Wait {
     Ready,
     /// 時間の輪の鍵 `TimerKey` の項。
     Time(TimerKey),
+    /// 操作の記録が終わるのを待つ。記録の `waiter` がこのタスクを指す。
+    Io(CellRef),
 }
 
 /// 時間の輪の鍵。期限はミリ秒で、同じ期限は `seq` で登録の順に並ぶ (docs/spec/vm.md の「時間の待ち」)。
@@ -237,6 +256,60 @@ enum CellKind {
     Task(TaskCell),
     Scope(ScopeCell),
     Chan(ChanCell),
+    Op(OpRecord),
+}
+
+/// driver に出した操作の記録 (docs/spec/vm.md の「操作の記録」)。driver は語を見ないので、操作に貸した記憶の物体と
+/// ストリームは記録が持つ。語は `Depot` で公開せず、受け付けたタスクの ID `worker` の物体のまま持つ。
+struct OpRecord {
+    /// driver が振った鍵。`Registry::ops` の項の鍵と同じである。
+    key: OpKey,
+    kind: OpKind,
+    phase: OpPhase,
+    /// 受け付けたタスクの論理的な worker ID。そのタスクの外で記録の語に触れるときは、この ID に切り替える。
+    worker: u32,
+    /// 操作に貸した `Bytes`。受け付けから取り出しまで、その物体へのただ1つの参照である。
+    buf: Option<Word>,
+    stream: Option<Word>,
+    /// 待つ間だけ持つ token。再開の仕事に移す。
+    token: Option<Word>,
+    /// 待っているタスク。
+    waiter: Option<CellRef>,
+    /// 待ちの期限の輪の鍵。期限が来るか、完了が届くか、取り消しで外れるまで持つ。
+    timer: Option<TimerKey>,
+    /// 待つタスクが取り消され、driver に取り消しを頼んだ。完了は `Cancelled` で再開する。
+    cancelling: bool,
+    /// 待ちの期限が来て、driver に取り消しを頼んだ。完了は `Woke` で再開し、誤りの結果は期限切れとして扱う
+    /// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+    timed_out: bool,
+}
+
+/// 記録の操作の種類。読みの `Transfer` の完了だけが、外の書いた長さを buffer に確定する。
+enum OpKind {
+    Read,
+    Write,
+    /// プールの仕事。buffer は写した後は読まないので、一意でなくてよい。
+    Job,
+}
+
+enum OpPhase {
+    /// 読みの1つ目の操作。端が読めるようになるのを driver が待っている。buffer はまだ貸していない。
+    Probe,
+    /// driver が記憶を読み書きしている。
+    Transfer,
+    /// 完了が届いた。
+    Done(io::Result<usize>),
+}
+
+/// `take_op` が返す、終わった操作の結果。
+pub(crate) struct Taken {
+    pub(crate) result: io::Result<usize>,
+    /// 記録が持っていた buffer。呼ぶ側が返すか落とす。
+    pub(crate) buf: Option<Word>,
+    /// 待つタスクが取り消され、結果によらず包みが取り消しを投げる。
+    pub(crate) cancelling: bool,
+    /// 待ちの期限が来た。誤りの結果は IO の失敗でなく期限切れである。
+    pub(crate) timed_out: bool,
 }
 
 /// channel のセル (docs/spec/vm.md の「channel」)。
@@ -264,6 +337,8 @@ impl ChanCell {
 pub(crate) enum Notice {
     HandleDropped(CellRef),
     Cancel(CellRef),
+    /// 取り出す前の token が落ちた。std の包みからは届かない。
+    OpDropped(CellRef),
 }
 
 /// ほかの worker やハンドルの破棄処理が核へ知らせる受け箱。
@@ -303,21 +378,62 @@ impl Drop for TaskHandle {
     }
 }
 
+/// `Std.Async.OpId` の `Foreign` の中身。操作の記録を指す。
+pub(crate) struct OpToken {
+    op: CellRef,
+    inbox: Arc<Inbox>,
+    /// `take_op` が受け取った。受け取った token は記録をもう指さないので、落ちても知らせない。
+    taken: bool,
+}
+
+impl Drop for OpToken {
+    // `TaskHandle` と同じく、ヒープの `decref` の中で走るので知らせを積むだけにする
+    fn drop(&mut self) {
+        if !self.taken {
+            self.inbox.push(Notice::OpDropped(self.op));
+        }
+    }
+}
+
+/// `Std.IoTest.Stream` の `Foreign` の中身。driver のハンドルを指す。`peer` は `pair` の2つ目の端をまだ分けていない
+/// 間だけある。
+pub(crate) struct IoStream {
+    handle: IoHandle,
+    peer: Option<IoHandle>,
+    bin: Arc<HandleBin>,
+}
+
+impl Drop for IoStream {
+    // ヒープの `decref` の中で走るので driver に触れず、driver が次に閉じるハンドルとして積むだけにする
+    // (docs/spec/vm.md の「時計と driver」)
+    fn drop(&mut self) {
+        let mut dropped = self
+            .bin
+            .dropped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        dropped.push(self.handle);
+        dropped.extend(self.peer);
+    }
+}
+
 /// 登録表が数える仕事の回数。検査モードでなくても数えるが、`RunStats` に写すのは検査モードだけである
 /// (docs/spec/vm.md の「`RunStats`」)。
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct TaskStats {
     /// `start` が作ったタスクのセルの数。
     pub(crate) tasks: u64,
-    /// `park`、`ready`、`park_time`、`park_drain`、`park_send`、`park_recv` が渡された継続の数。
+    /// `park`、`ready`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until` が渡された
+    /// 継続の数。
     pub(crate) parks: u64,
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
     pub(crate) dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
-    /// 受け箱の処理が外した待ち、取り消しで再開する `yield_now`、真を返した `cancel_point`、偽を返した `claim_scope` を
-    /// 数える (docs/spec/vm.md の「`RunStats`」)。
+    /// `park_io`、`park_io_until`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`、真を返した
+    /// `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) cancels: u64,
-    /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` だけを数える。
+    /// 時間の輪に載せた登録の数。`ms > 0` で、地点で取り消されなかった `park_time` と `park_io_until` を数える。
+    /// `park_io_until` は、操作がもう終わっていて輪に載せなかったときも数える。
     pub(crate) timers: u64,
     /// channel に品物を積んだ回数と取った回数の和。
     pub(crate) channel_ops: u64,
@@ -325,6 +441,8 @@ pub(crate) struct TaskStats {
     pub(crate) channel_waits: u64,
     /// `sweep_all` が放した channel の数。
     pub(crate) channels_swept: u64,
+    /// driver から取り出し、操作の記録に当てた完了の数。
+    pub(crate) completions: u64,
 }
 
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
@@ -340,6 +458,10 @@ pub(crate) struct Registry {
     timer_seq: u64,
     /// `Std.Atomic.Counter` の表。添字は `Machine` が run をまたいで持つので、回復でも戻さない。
     pub(crate) counters: Vec<i64>,
+    /// driver の鍵から操作の記録へ。完了を記録に当てる。
+    ops: HashMap<OpKey, CellRef>,
+    /// `complete` が driver から完了を受ける列。集めるたびに作らないように使い回す。
+    completed: Vec<Completion>,
 }
 
 impl Registry {
@@ -360,6 +482,8 @@ impl Registry {
             timers: BTreeMap::new(),
             timer_seq: 0,
             counters: Vec::new(),
+            ops: HashMap::new(),
+            completed: Vec::new(),
         }
     }
 
@@ -370,7 +494,14 @@ impl Registry {
 
     /// 期限が `now_ms` までのタイマーを、期限の順、同じ期限なら登録の順に外し、待っていたタスクを再開する仕事を
     /// `out` に積む。輪の項と待ちの登録は、どちらが先に外れても他方を残さない (docs/spec/vm.md の「時間の待ち」)。
-    pub(crate) fn expire(&mut self, now_ms: u64, out: &mut Vec<Runnable>) -> Result<(), CellFault> {
+    /// 操作の待ちの期限は再開せず、driver に取り消しを頼む。driver が記憶を使い終わるまで buffer を返せないので、
+    /// 再開は完了を当てる `complete` が行う。
+    pub(crate) fn expire(
+        &mut self,
+        now_ms: u64,
+        driver: &mut dyn IoDriver,
+        out: &mut Vec<Runnable>,
+    ) -> Result<(), CellFault> {
         while let Some(entry) = self.timers.first_entry() {
             let key = *entry.key();
             if key.deadline > now_ms {
@@ -378,9 +509,19 @@ impl Registry {
             }
             let cell = entry.remove();
             let task = self.task_mut(cell)?;
-            if !matches!(task.phase, Phase::Parked)
-                || !matches!(task.wait, Some(Wait::Time(k)) if k == key)
-            {
+            let parked = matches!(task.phase, Phase::Parked);
+            if let (true, Some(Wait::Io(op))) = (parked, &task.wait) {
+                let op = *op;
+                let record = self.op_mut(op)?;
+                if record.timer != Some(key) {
+                    return Err(CellFault::Internal("a timer names no waiting task"));
+                }
+                record.timer = None;
+                record.timed_out = true;
+                driver.cancel(record.key);
+                continue;
+            }
+            if !parked || !matches!(task.wait, Some(Wait::Time(k)) if k == key) {
                 return Err(CellFault::Internal("a timer names no waiting task"));
             }
             task.wait = None;
@@ -441,7 +582,7 @@ impl Registry {
     fn task_mut(&mut self, cell: CellRef) -> Result<&mut TaskCell, CellFault> {
         match self.cell_mut(cell)? {
             CellKind::Task(task) => Ok(task),
-            CellKind::Scope(_) | CellKind::Chan(_) => Err(CellFault::Internal(
+            CellKind::Scope(_) | CellKind::Chan(_) | CellKind::Op(_) => Err(CellFault::Internal(
                 "a task cell reference names another kind of cell",
             )),
         }
@@ -450,7 +591,7 @@ impl Registry {
     fn scope_mut(&mut self, cell: CellRef) -> Result<&mut ScopeCell, CellFault> {
         match self.cell_mut(cell)? {
             CellKind::Scope(scope) => Ok(scope),
-            CellKind::Task(_) | CellKind::Chan(_) => Err(CellFault::Internal(
+            CellKind::Task(_) | CellKind::Chan(_) | CellKind::Op(_) => Err(CellFault::Internal(
                 "a scope cell reference names another kind of cell",
             )),
         }
@@ -570,7 +711,7 @@ impl Registry {
     }
 
     /// スコープ `scope` に新しいタスクを置き、ハンドルと始める仕事を返す。`spawner` は呼んだタスクの論理的な ID で、
-    /// `g` は入口に渡す閉包である。新しい ID に渡す前に、`g` とまだ印のないセッションの根 `roots` に共有の印を付ける
+    /// `g` はエントリに渡す閉包である。新しい ID に渡す前に、`g` とまだ印のないセッションの根 `roots` に共有の印を付ける
     /// (`par` の fork と同じ。docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) fn start<M: Mode>(
         &mut self,
@@ -680,7 +821,9 @@ impl Registry {
         let done = match self.cell_mut(target)? {
             CellKind::Task(task) => matches!(task.phase, Phase::Finished),
             CellKind::Scope(scope) => scope.closed,
-            CellKind::Chan(_) => return Err(CellFault::Internal("a cell of the wrong kind")),
+            CellKind::Chan(_) | CellKind::Op(_) => {
+                return Err(CellFault::Internal("a cell of the wrong kind"));
+            }
         };
         self.suspend(me)?;
         self.stats.parks += 1;
@@ -705,7 +848,9 @@ impl Registry {
         let waiters = match self.cell_mut(target)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
-            CellKind::Chan(_) => return Err(CellFault::Internal("a cell of the wrong kind")),
+            CellKind::Chan(_) | CellKind::Op(_) => {
+                return Err(CellFault::Internal("a cell of the wrong kind"));
+            }
         };
         waiters.push(Waiter::Task(me));
         Ok(None)
@@ -848,7 +993,9 @@ impl Registry {
         let waiters = match self.cell_mut(cell)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
-            CellKind::Chan(_) => return Err(CellFault::Internal("a cell of the wrong kind")),
+            CellKind::Chan(_) | CellKind::Op(_) => {
+                return Err(CellFault::Internal("a cell of the wrong kind"));
+            }
         };
         waiters.push(Waiter::Token(token));
         Ok(())
@@ -1245,17 +1392,44 @@ impl Registry {
     }
 
     /// 取り消しの知らせを受けたタスクの待ちを外す。タスクとスコープの待ち手の項は残し、起こす側が `wait` で見分ける。
-    /// channel の待ち手の列の項はいつも生きているので、ここで外す。
-    fn unpark(&mut self, cell: CellRef, out: &mut Vec<Runnable>) -> Result<(), CellFault> {
+    /// channel の待ち手の列の項はいつも生きているので、ここで外す。操作を待つタスクは、driver が記憶を使い終わるまで
+    /// 再開できないので、待ちを外さずに取り消しを頼み、完了で `Cancelled` として再開する (docs/spec/vm.md の
+    /// 「取り消しの届け方」)。
+    fn unpark(
+        &mut self,
+        driver: &mut dyn IoDriver,
+        cell: CellRef,
+        out: &mut Vec<Runnable>,
+    ) -> Result<(), CellFault> {
         let Some(CellKind::Task(task)) = self.live(cell) else {
             return Ok(());
         };
         if !matches!(task.phase, Phase::Parked)
-            || !matches!(task.wait, Some(Wait::Cell(_) | Wait::Time(_)))
+            || !matches!(task.wait, Some(Wait::Cell(_) | Wait::Time(_) | Wait::Io(_)))
         {
             return Ok(());
         }
+        let io = match task.wait {
+            Some(Wait::Io(op)) => Some(op),
+            _ => None,
+        };
         if !self.point(cell)? {
+            return Ok(());
+        }
+        if let Some(op) = io {
+            let record = self.op_mut(op)?;
+            if !record.cancelling {
+                record.cancelling = true;
+                // 期限がもう取り消しを頼んでいれば、頼み直さない
+                if !record.timed_out {
+                    driver.cancel(record.key);
+                }
+                // 輪の項を残すと、満期に `expire` が取り消した記録に期限が来た印を付ける
+                if let Some(key) = record.timer.take() {
+                    self.timers.remove(&key);
+                }
+                self.stats.cancels += 1;
+            }
             return Ok(());
         }
         let task = self.task_mut(cell)?;
@@ -1270,7 +1444,7 @@ impl Registry {
                     chan.receivers.retain(|&t| t != cell);
                 }
             }
-            Some(Wait::Ready) | None => {}
+            Some(Wait::Ready | Wait::Io(_)) | None => {}
         }
         let task = self.task_mut(cell)?;
         let k = task
@@ -1291,6 +1465,7 @@ impl Registry {
     pub(crate) fn drain<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
         depth_offset: usize,
         out: &mut Vec<Runnable>,
     ) -> Result<(), CellFault> {
@@ -1302,19 +1477,47 @@ impl Registry {
             for notice in notices {
                 match notice {
                     Notice::HandleDropped(cell) => self.let_go(ctx, cell, true, depth_offset)?,
-                    Notice::Cancel(cell) => self.unpark(cell, out)?,
+                    Notice::Cancel(cell) => self.unpark(driver, cell, out)?,
+                    // std の包みは受け付けから `park_io` まで投げうる呼び出しなしに token を移し、待つ間は記録が持ち、
+                    // 取り出しは投げる前に受け取った印を付けるので、生きた記録の token は落ちない。放した記録への古い
+                    // 知らせは、落ちたハンドルと同じく無視する
+                    Notice::OpDropped(op) => {
+                        if let Some(CellKind::Op(_)) = self.live(op) {
+                            return Err(CellFault::Internal(
+                                "an op token was dropped before its take",
+                            ));
+                        }
+                    }
                 }
             }
         }
     }
 
     /// run の終わりに、残ったセルをすべて放す。閉じていない channel と品物の残った channel もここで放す。その間に
-    /// 積まれた知らせは受け箱ごと捨てる。
+    /// 積まれた知らせは受け箱ごと捨てる。driver が保留の操作を持たないことを前提にし、呼ぶ側が先に `quiesce` する
+    /// (docs/spec/vm.md の「時計と driver」)。操作の記録の語は受け付けたタスクの ID の物体なので、タスクのセルが ID を
+    /// 退かせる前に、記録を先に回って落とす (docs/spec/vm.md の「終わり」)。
     pub(crate) fn sweep_all<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         depth_offset: usize,
     ) -> Result<(), CellFault> {
+        for index in 0..self.slots.len() {
+            if matches!(self.slots[index].1, Some(CellKind::Op(_)))
+                && let Some(CellKind::Op(record)) = self.slots[index].1.take()
+            {
+                // 預かる ID は記録のものではなく、タスクのセルか `main` のもので、`free_task` が退かせる
+                let mut depot = Depot::of(record.worker);
+                for w in [record.buf, record.stream, record.token]
+                    .into_iter()
+                    .flatten()
+                {
+                    depot.discard(ctx, w, depth_offset)?;
+                }
+                self.release(index as u32);
+            }
+        }
+        self.ops.clear();
         for index in 0..self.slots.len() {
             let (generation, kind) = &self.slots[index];
             let cell = CellRef {
@@ -1325,7 +1528,7 @@ impl Registry {
                 Some(CellKind::Task(_)) => self.free_task(ctx, cell, depth_offset)?,
                 Some(CellKind::Scope(_)) => self.release(cell.index),
                 Some(CellKind::Chan(_)) => self.free_chan(ctx, cell, depth_offset)?,
-                None => {}
+                Some(CellKind::Op(_)) | None => {}
             }
         }
         drop(self.inbox.take());
@@ -1352,6 +1555,502 @@ impl Registry {
         self.release(cell.index);
         Ok(())
     }
+}
+
+/// driver の操作の記録 (docs/spec/vm.md の「操作の記録」)。受け付けの行が buffer とストリームを記録に移して
+/// token を返し、`park_io` が待ち、集める地点の `complete` が完了を当てて再開し、取り出しの行が記録を放す。完了を
+/// 受け取るのは集める地点だけで、driver の順に当てる。
+impl Registry {
+    fn op_mut(&mut self, op: CellRef) -> Result<&mut OpRecord, CellFault> {
+        match self.cell_mut(op)? {
+            CellKind::Op(record) => Ok(record),
+            CellKind::Task(_) | CellKind::Scope(_) | CellKind::Chan(_) => Err(CellFault::Internal(
+                "an op reference names another kind of cell",
+            )),
+        }
+    }
+
+    /// 借りた token `token` が指す記録。token の受け箱が登録表の受け箱と違えば、前の run の token である。
+    fn token_op<M: Mode>(&self, ctx: &Ctx<M>, token: Word) -> Result<CellRef, CellFault> {
+        // token は `OpId` の `Foreign` で、呼ぶ側が持つ唯一の参照である (`OpId` は `Lin`)
+        let t = unsafe { &*ctx.heap().foreign_unique::<OpToken>(token)? };
+        if !Arc::ptr_eq(&t.inbox, &self.inbox) {
+            return Err(CellFault::Internal("an op token outlived its run"));
+        }
+        Ok(t.op)
+    }
+
+    /// `Std.IoTest.submit_write`。`buf` と `stream` は呼ぶ側から移ってきた参照で、記録に移す。`buf` の内容を書く操作を
+    /// driver に出し、token を返す。`worker` は呼んだタスクの論理的な ID である。
+    pub(crate) fn submit_write<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
+        worker: u32,
+        buf: Word,
+        stream: Word,
+    ) -> Result<Word, CellFault> {
+        let buf = unique_bytes(ctx, buf)?;
+        // 端は `Stream` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`Stream` は `Lin`。docs/spec/vm.md の
+        // 「操作の記録」)
+        let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
+        // 記録が物体を生かし、一意に保ち、取り出すまで書き換えないので、driver は完了までこの位置を読める
+        // (docs/spec/object-model.md の T10 の行)
+        let bytes = unsafe { ctx.heap().bytes(buf)? };
+        let raw = RawBuf {
+            ptr: if bytes.is_empty() {
+                std::ptr::NonNull::dangling().as_ptr()
+            } else {
+                bytes.cast::<u8>().cast_mut()
+            },
+            cap: bytes.len(),
+        };
+        let key = driver.submit(Op::Write { handle, buf: raw });
+        Ok(self.record(
+            ctx,
+            OpRecord {
+                key,
+                kind: OpKind::Write,
+                phase: OpPhase::Transfer,
+                worker,
+                buf: Some(buf),
+                stream: Some(stream),
+                token: None,
+                waiter: None,
+                timer: None,
+                cancelling: false,
+                timed_out: false,
+            },
+        ))
+    }
+
+    /// `Std.IoTest.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移し、端が読めるようになるのを待つ
+    /// 操作を driver に出す。buffer の容量はここでは足さず、読めるようになってから足して貸す。何も来ない端の読みに
+    /// 記憶を持たせないためである (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn submit_read<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
+        worker: u32,
+        buf: Word,
+        stream: Word,
+    ) -> Result<Word, CellFault> {
+        let buf = unique_bytes(ctx, buf)?;
+        // 端は `submit_write` と同じく、呼ぶ側から移ってきた唯一の参照である (docs/spec/vm.md の「操作の記録」)
+        let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
+        let key = driver.submit(Op::Readable { handle });
+        Ok(self.record(
+            ctx,
+            OpRecord {
+                key,
+                kind: OpKind::Read,
+                phase: OpPhase::Probe,
+                worker,
+                buf: Some(buf),
+                stream: Some(stream),
+                token: None,
+                waiter: None,
+                timer: None,
+                cancelling: false,
+                timed_out: false,
+            },
+        ))
+    }
+
+    /// プールの仕事の受け付け。`buf` は呼ぶ側から移ってきた参照で、記録に移す。中身を `Vec<u8>` に写して `make` に
+    /// 渡し、できた仕事を driver に出す。仕事は別のスレッドで動くので、ヒープの記憶を貸さない
+    /// (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn submit_job<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
+        worker: u32,
+        buf: Word,
+        make: impl FnOnce(Vec<u8>) -> Op,
+    ) -> Result<Word, CellFault> {
+        // 写すまでの間だけ読むので、共有の物体でもよい。仕事には写しを渡し、物体の位置は渡さない
+        // (docs/spec/vm.md の「操作の記録」)
+        let input = unsafe { (*ctx.heap().bytes(buf)?).to_vec() };
+        let key = driver.submit(make(input));
+        Ok(self.record(
+            ctx,
+            OpRecord {
+                key,
+                kind: OpKind::Job,
+                phase: OpPhase::Transfer,
+                worker,
+                buf: Some(buf),
+                stream: None,
+                token: None,
+                waiter: None,
+                timer: None,
+                cancelling: false,
+                timed_out: false,
+            },
+        ))
+    }
+
+    /// 記録を表に入れ、鍵の項を足し、token を作る。
+    fn record<M: Mode>(&mut self, ctx: &mut Ctx<M>, record: OpRecord) -> Word {
+        let key = record.key;
+        let op = self.alloc(CellKind::Op(record));
+        self.ops.insert(key, op);
+        // token を確保するだけで、`Ctx` の持つ語には触れない。`OpId` は `Lin` なので `lin` ビットを立てる
+        // (docs/spec/vm.md の「操作の記録」)
+        unsafe { ctx.heap_mut() }.alloc_foreign(
+            OpToken {
+                op,
+                inbox: Arc::clone(&self.inbox),
+                taken: false,
+            },
+            true,
+        )
+    }
+
+    /// タスク `me` が、継続 `k` で token `token` の操作が終わるまで待つ。`token` は呼ぶ側から移ってきた参照で、待つ間は
+    /// 記録が持ち、再開の仕事に移す。終わっていれば、すぐ再開する仕事を返す。取り消しの地点で、終わっていなければ
+    /// driver に取り消しを頼んで完了を待つ。driver が記憶を使い終わるまで、buffer を返せないためである。取り消しの
+    /// 地点なら、終わっていてもいなくても、記録に取り消しを頼んだ印を付ける。
+    pub(crate) fn park_io<M: Mode>(
+        &mut self,
+        ctx: &Ctx<M>,
+        driver: &mut dyn IoDriver,
+        token: Word,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        self.park_op(ctx, driver, token, me, k, None)
+    }
+
+    /// `park_io` に `ms` ミリ秒の期限を付けた待ち。`now_ms` は切り上げて読んだ今の時刻で、`ms` が 0 以下なら読まない。
+    /// 期限は実際に待つときだけ付ける。0 以下は過ぎた期限なので、すぐ driver に取り消しを頼む。期限が来ても再開せず、
+    /// 取り消した操作の完了が `Woke` で再開する (docs/spec/vm.md の「時間の待ち」)。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the operands of `park_io` and the deadline"
+    )]
+    pub(crate) fn park_io_until<M: Mode>(
+        &mut self,
+        ctx: &Ctx<M>,
+        driver: &mut dyn IoDriver,
+        now_ms: u64,
+        ms: i64,
+        token: Word,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        self.park_op(ctx, driver, token, me, k, Some((now_ms, ms)))
+    }
+
+    fn park_op<M: Mode>(
+        &mut self,
+        ctx: &Ctx<M>,
+        driver: &mut dyn IoDriver,
+        token: Word,
+        me: CellRef,
+        k: Word,
+        until: Option<(u64, i64)>,
+    ) -> Result<Option<Runnable>, CellFault> {
+        let op = self.token_op(ctx, token)?;
+        if self.op_mut(op)?.waiter.is_some() {
+            return Err(CellFault::Internal("an op is awaited twice"));
+        }
+        self.suspend(me)?;
+        self.stats.parks += 1;
+        let cancelled = self.point(me)?;
+        if cancelled {
+            self.stats.cancels += 1;
+        }
+        // 正の期限は、操作がもう終わっていて輪に載せないときも数える。終わったかどうかはスケジュールで変わるので、
+        // 数をプログラムだけで決めるためである (docs/spec/vm.md の「`RunStats`」)
+        if matches!(until, Some((_, ms)) if ms > 0) && !cancelled {
+            self.stats.timers += 1;
+        }
+        let record = self.op_mut(op)?;
+        // `Cancelled` で再開する記録には、いつも取り消しの印を付ける。取り出しの行は印で中断を見分け、結果の誤りを
+        // 投げずに包みへ返すので、包みが結果によらず `Cancelled` を投げる (docs/spec/stdlib.md の「`Std.IoTest`」)
+        record.cancelling |= cancelled;
+        if matches!(record.phase, OpPhase::Done(_)) {
+            let wake = if cancelled { CANCELLED } else { WOKE };
+            return Ok(Some(Runnable::ResumeIo {
+                cell: me,
+                k,
+                wake,
+                op: token,
+            }));
+        }
+        if cancelled {
+            driver.cancel(record.key);
+        }
+        record.waiter = Some(me);
+        record.token = Some(token);
+        match until {
+            Some((_, ms)) if !cancelled && ms <= 0 => {
+                record.timed_out = true;
+                driver.cancel(record.key);
+            }
+            Some((now_ms, ms)) if !cancelled => {
+                // 期限は `park_time` と同じく飽和させる
+                let key = TimerKey {
+                    deadline: now_ms.saturating_add(ms as u64),
+                    seq: self.timer_seq,
+                };
+                self.timer_seq += 1;
+                self.timers.insert(key, me);
+                self.op_mut(op)?.timer = Some(key);
+            }
+            _ => {}
+        }
+        let task = self.task_mut(me)?;
+        task.k = Some(k);
+        task.wait = Some(Wait::Io(op));
+        Ok(None)
+    }
+
+    /// 集める地点で、driver の完了を driver の順に記録へ当て、待つタスクを再開する仕事を `out` に積む。記録がなければ
+    /// driver に触れない。読みの `Probe` の完了は、buffer を貸して `Transfer` の操作を新しい鍵で出し直し、待ちを続ける。
+    /// 記録の語は受け付けたタスクの物体なので、今のタスクが誰でも、その ID に切り替えてから触れる。
+    pub(crate) fn complete<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        driver: &mut dyn IoDriver,
+        depth_offset: usize,
+        out: &mut Vec<Runnable>,
+    ) -> Result<(), CellFault> {
+        if self.ops.is_empty() {
+            return Ok(());
+        }
+        let mut completed = std::mem::take(&mut self.completed);
+        driver.completions(&mut completed);
+        for Completion { key, result } in completed.drain(..) {
+            self.stats.completions += 1;
+            let op = self
+                .ops
+                .remove(&key)
+                .ok_or(CellFault::Internal("a completion names no op"))?;
+            let record = self.op_mut(op)?;
+            let result = match (&record.phase, &record.kind, result) {
+                (OpPhase::Done(_), _, _) => {
+                    return Err(CellFault::Internal("an op completes twice"));
+                }
+                // 取り消しか期限で driver に取り消しを頼んだ読みには、もう buffer を貸さない。取り消しなら包みは結果に
+                // よらず取り消しを投げ、期限なら `None` を返す
+                (OpPhase::Probe, _, _) if record.cancelling || record.timed_out => {
+                    Err(io::Error::other("cancelled"))
+                }
+                (OpPhase::Probe, _, Err(e)) => Err(e),
+                (OpPhase::Probe, _, Ok(_)) => {
+                    let (worker, buf, stream) = (record.worker, record.buf, record.stream);
+                    let (Some(buf), Some(stream)) = (buf, stream) else {
+                        return Err(CellFault::Internal("a read op has no buffer or stream"));
+                    };
+                    let (buf, handle, raw) = with_worker(ctx, worker, depth_offset, |ctx| {
+                        lend_read_room(ctx, buf, stream)
+                    })?;
+                    let key = driver.submit(Op::Read { handle, buf: raw });
+                    let record = self.op_mut(op)?;
+                    record.buf = Some(buf);
+                    record.key = key;
+                    record.phase = OpPhase::Transfer;
+                    self.ops.insert(key, op);
+                    continue;
+                }
+                // 取り消しを頼んだ読みも、外が書いたバイトは確定してから buffer を返す
+                (OpPhase::Transfer, OpKind::Read, Ok(n)) => {
+                    let (worker, buf) = (record.worker, record.buf);
+                    let buf = buf.ok_or(CellFault::Internal("a read op has no buffer"))?;
+                    // 記録は貸した後も buffer の唯一の参照を持ち、書き換えていない。driver は `Ok(n)` で `n` バイトを
+                    // 書き終えている (docs/spec/object-model.md の T10 の行、docs/spec/vm.md の「操作の記録」)
+                    with_worker(ctx, worker, depth_offset, |ctx| unsafe {
+                        ctx.heap_mut().bytes_commit(buf, n)
+                    })?;
+                    Ok(n)
+                }
+                (OpPhase::Transfer, _, result) => result,
+            };
+            let record = self.op_mut(op)?;
+            record.phase = OpPhase::Done(result);
+            // 終わった操作の期限は要らない。輪の項を残すと、満期に `expire` が待たないタスクを名指す
+            let timer = record.timer.take();
+            let waiter = record.waiter;
+            let wake = if record.cancelling { CANCELLED } else { WOKE };
+            let token = record.token.take();
+            if let Some(key) = timer {
+                self.timers.remove(&key);
+            }
+            let Some(t) = waiter else {
+                continue;
+            };
+            let token = token.ok_or(CellFault::Internal("a waited op has no token"))?;
+            let task = self.task_mut(t)?;
+            if !matches!(task.wait, Some(Wait::Io(o)) if o == op) {
+                return Err(CellFault::Internal("an op names no waiting task"));
+            }
+            task.wait = None;
+            let k = task
+                .k
+                .take()
+                .ok_or(CellFault::Internal("a parked task has no continuation"))?;
+            out.push(Runnable::ResumeIo {
+                cell: t,
+                k,
+                wake,
+                op: token,
+            });
+        }
+        self.completed = completed;
+        Ok(())
+    }
+
+    /// `Std.IoTest.op_stream`。借りた token の終わった記録からストリームを移し出す。
+    pub(crate) fn op_stream<M: Mode>(
+        &mut self,
+        ctx: &Ctx<M>,
+        token: Word,
+    ) -> Result<Word, CellFault> {
+        let op = self.token_op(ctx, token)?;
+        let record = self.op_mut(op)?;
+        if !matches!(record.phase, OpPhase::Done(_)) {
+            return Err(CellFault::Internal("an op is taken before its completion"));
+        }
+        record
+            .stream
+            .take()
+            .ok_or(CellFault::Internal("an op has no stream to give back"))
+    }
+
+    /// `Std.IoTest.op_timed_out`。借りた token の終わった記録が、期限で誤りになったか。期限と競って届いたデータは
+    /// データである (docs/spec/stdlib.md の「`Std.IoTest`」)。
+    pub(crate) fn op_timed_out<M: Mode>(
+        &mut self,
+        ctx: &Ctx<M>,
+        token: Word,
+    ) -> Result<bool, CellFault> {
+        let op = self.token_op(ctx, token)?;
+        let record = self.op_mut(op)?;
+        match &record.phase {
+            OpPhase::Done(result) => Ok(record.timed_out && result.is_err()),
+            OpPhase::Probe | OpPhase::Transfer => {
+                Err(CellFault::Internal("an op is taken before its completion"))
+            }
+        }
+    }
+
+    /// 取り出しの行。token を消費して終わった記録を放し、結果と buffer を返す。残ったストリームは落とす。取り出すのは
+    /// 受け付けたタスク (`worker`) だけである。記録の語はそのタスクの物体なので、切り替えずに受け取れる。
+    pub(crate) fn take_op<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        token: Word,
+        worker: u32,
+    ) -> Result<Taken, CellFault> {
+        let op = self.token_op(ctx, token)?;
+        let record = self.op_mut(op)?;
+        if !matches!(record.phase, OpPhase::Done(_)) {
+            return Err(CellFault::Internal("an op is taken before its completion"));
+        }
+        if record.worker != worker {
+            return Err(CellFault::Internal("an op is taken by another task"));
+        }
+        let Some(CellKind::Op(record)) = self.slots[op.index as usize].1.take() else {
+            unreachable!("the op cell is live");
+        };
+        self.release(op.index);
+        // token は呼ぶ側から移ってきた唯一の参照で、ストリームは記録が持っていた参照である。どちらも受け付けた
+        // タスクの ID の物体で、上でそのタスクだと確かめた。操作は終わっているので、driver はもう記憶に触れない
+        // (docs/spec/vm.md の「操作の記録」)
+        unsafe {
+            (*ctx.heap().foreign_unique::<OpToken>(token)?).taken = true;
+            ctx.heap_mut().decref(token)?;
+        }
+        if let Some(stream) = record.stream {
+            unsafe { ctx.heap_mut().decref(stream) }?;
+        }
+        let OpPhase::Done(result) = record.phase else {
+            unreachable!("the phase is checked above");
+        };
+        Ok(Taken {
+            result,
+            buf: record.buf,
+            cancelling: record.cancelling,
+            timed_out: record.timed_out,
+        })
+    }
+}
+
+/// `Std.IoTest.open_pair` が作る最初の端。`peer` は2つ目の端で、`peer` の行が分けるまで同じ物体が持つ。
+pub(crate) fn open_stream<M: Mode>(
+    ctx: &mut Ctx<M>,
+    handle: IoHandle,
+    peer: Option<IoHandle>,
+    bin: Arc<HandleBin>,
+) -> Word {
+    // 端を確保するだけで、`Ctx` の持つ語には触れない。`Stream` は `Lin` なので `lin` ビットを立てる
+    // (docs/spec/vm.md の「操作の記録」)
+    unsafe { ctx.heap_mut() }.alloc_foreign(IoStream { handle, peer, bin }, true)
+}
+
+/// `Std.IoTest.peer`。借りた端 `stream` から2つ目の端を分けて、新しい物体にする。
+pub(crate) fn peer<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
+    // 端は `Stream` の `Foreign` で、呼ぶ側が持つ唯一の参照である (`Stream` は `Lin`)
+    let s = unsafe { &mut *ctx.heap().foreign_unique::<IoStream>(stream)? };
+    let handle = s
+        .peer
+        .take()
+        .ok_or(CellFault::Internal("a stream pair is split twice"))?;
+    let bin = Arc::clone(&s.bin);
+    Ok(open_stream(ctx, handle, None, bin))
+}
+
+/// 読みが1回に足す空きのバイト数 (docs/spec/vm.md の「操作の記録」)。
+const READ_ROOM: usize = 65_536;
+
+/// 読めるようになった端 `stream` の読みに、記録の buffer `buf` の長さの後ろの空きを貸す。空きが `READ_ROOM` より
+/// 少なければ、長さに `READ_ROOM` を足した容量の新しい物体に中身を写し、元を手放す。返すのは記録が持つ buffer の語、
+/// 端のハンドル、貸した記憶である。記録の worker ID に切り替えた下で呼ぶ。`HeapError` は検査モードの前提の違反で、
+/// driver に出す前に返すので、貸したままの記憶は残らない。確保量の上限は誤りにせず、次の安全点で止まる。
+fn lend_read_room<M: Mode>(
+    ctx: &mut Ctx<M>,
+    buf: Word,
+    stream: Word,
+) -> Result<(Word, IoHandle, RawBuf), CellFault> {
+    let handle = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).handle };
+    let heap = unsafe { ctx.heap_mut() };
+    // 貸すことは状態を変えないので、空きを測るのにも使える
+    let room = unsafe { heap.bytes_lend(buf)? }.cap;
+    let buf = if room < READ_ROOM {
+        let content = unsafe { heap.bytes(buf)? };
+        let len = content.len();
+        let mut fresh = heap.alloc_bytes_room(len + READ_ROOM);
+        if len > 0 {
+            // `content` は `fresh` と別の物体の中身で、`fresh` を作っても動かない
+            fresh = unsafe { heap.bytes_extend(fresh, &*content)? };
+        }
+        unsafe { heap.decref(buf)? };
+        fresh
+    } else {
+        buf
+    };
+    // 記録が物体を生かし、一意に保ち、完了を受け取るまで書き換えないので、driver はこの空きに書ける
+    // (docs/spec/object-model.md の T10 の行)
+    let raw = unsafe { heap.bytes_lend(buf)? };
+    Ok((buf, handle, raw))
+}
+
+/// 呼ぶ側から移ってきた `Bytes` の参照 `w` を、一意な物体の参照にする。共有か不死の物体と、ほかに参照のある物体は、
+/// 同じ中身の新しい物体に写して元を手放す。driver が読む間、ほかの参照から書き換えられないためである
+/// (docs/spec/vm.md の「操作の記録」)。
+fn unique_bytes<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<Word, CellFault> {
+    // `w` は呼ぶ側が持つ今の worker の参照で、`Ctx` の持つ語には触れない。中身は写し終えてから手放す
+    // (docs/spec/vm.md の「操作の記録」)
+    let heap = unsafe { ctx.heap_mut() };
+    if unsafe { heap.is_unique(w) }? {
+        return Ok(w);
+    }
+    let content = unsafe { &*heap.bytes(w)? }.to_vec();
+    let copy = heap.alloc_bytes(&content);
+    unsafe { heap.decref(w) }?;
+    Ok(copy)
 }
 
 /// channel の操作 (docs/spec/vm.md の「channel」)。channel の引数は `Std.Chan.Chan` の即値で、放したセルと前の run の
@@ -1745,7 +2444,7 @@ pub(crate) fn with_worker<M: Mode, T>(
 }
 
 /// タスクの底に着いた `exit n` を、終わりの欄に書く。`control.exit` を呼ぶのはここだけである。最初の書き手だけが
-/// 真を返す。実行系は、`main` の底なら普通に戻り、ほかのタスクの底ならほかのタスクを動かさずに worker の入口へ戻る
+/// 真を返す。実行系は、`main` の底なら普通に戻り、ほかのタスクの底ならほかのタスクを動かさずに worker のエントリへ戻る
 /// (docs/spec/object-model.md の「実行の制御」)。
 pub(crate) fn end_with_exit(control: &Control, n: i64) -> bool {
     control.exit(n)
@@ -1806,9 +2505,13 @@ fn timers_with_the_same_deadline_expire_in_registration_order() {
     );
     assert_eq!(registry.next_deadline(), Some(53));
     let mut out = Vec::new();
-    registry.expire(52, &mut out).unwrap();
+    registry
+        .expire(52, &mut NoDriver::default(), &mut out)
+        .unwrap();
     assert!(out.is_empty());
-    registry.expire(53, &mut out).unwrap();
+    registry
+        .expire(53, &mut NoDriver::default(), &mut out)
+        .unwrap();
     assert_eq!(resumed_cells(&out), [(first, WOKE), (second, WOKE)]);
     assert_eq!(registry.next_deadline(), None);
 }
@@ -1823,10 +2526,14 @@ fn unparking_a_sleeping_task_removes_its_timer() {
     registry.park_time(0, 50, second, Word::UNIT).unwrap();
     registry.task_mut(first).unwrap().cancel = true;
     let mut out = Vec::new();
-    registry.unpark(first, &mut out).unwrap();
+    registry
+        .unpark(&mut NoDriver::default(), first, &mut out)
+        .unwrap();
     assert_eq!(resumed_cells(&out), [(first, CANCELLED)]);
     out.clear();
-    registry.expire(50, &mut out).unwrap();
+    registry
+        .expire(50, &mut NoDriver::default(), &mut out)
+        .unwrap();
     assert_eq!(resumed_cells(&out), [(second, WOKE)]);
 }
 
@@ -1879,4 +2586,430 @@ fn a_slot_retires_instead_of_wrapping_its_generation() {
             generation: 0
         }
     );
+}
+
+/// 操作を受け付けるだけで、テストが積んだ完了だけを返す driver。核の単体テストが driver の crate に頼らないための
+/// ものである。読みに貸された記憶を覚え、テストが外の書き手としてそこに書く。
+#[cfg(test)]
+#[derive(Default)]
+struct NoDriver {
+    next_key: OpKey,
+    cancelled: Vec<OpKey>,
+    done: Vec<Completion>,
+    lent: Vec<RawBuf>,
+}
+
+#[cfg(test)]
+struct NoWaker;
+
+#[cfg(test)]
+impl eml_rt::IoWaker for NoWaker {
+    fn wake(&self) {}
+}
+
+#[cfg(test)]
+impl IoDriver for NoDriver {
+    fn now(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
+    fn wait(&mut self, _deadline_ms: Option<u64>) -> io::Result<bool> {
+        Ok(false)
+    }
+
+    fn submit(&mut self, op: Op) -> OpKey {
+        if let Op::Read { buf, .. } = op {
+            self.lent.push(buf);
+        }
+        self.next_key += 1;
+        self.next_key
+    }
+
+    fn cancel(&mut self, key: OpKey) {
+        self.cancelled.push(key);
+    }
+
+    fn completions(&mut self, out: &mut Vec<Completion>) {
+        out.append(&mut self.done);
+    }
+
+    fn pending(&self) -> usize {
+        0
+    }
+
+    fn waker(&self) -> Arc<dyn eml_rt::IoWaker> {
+        Arc::new(NoWaker)
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        Arc::default()
+    }
+
+    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
+        Ok((0, 1))
+    }
+
+    fn close(&mut self, _handle: IoHandle) {}
+
+    fn quiesce(&mut self) {}
+}
+
+/// 出力を捨てる Host の上の、検査モードの `Ctx`。
+#[cfg(test)]
+fn test_ctx() -> Ctx<eml_rt::Checked> {
+    let host = eml_rt::StdHost::new(
+        Box::new(io::sink()),
+        Box::new(io::sink()),
+        std::path::PathBuf::new(),
+        eml_rt::Buffering::Block,
+    );
+    Ctx::new(
+        Arc::new(Control::new(eml_rt::Limits::default())),
+        eml_rt::HostRef::new(Arc::new(host)),
+    )
+}
+
+/// `b"x"` を書く操作を受け付け、token を返す。
+#[cfg(test)]
+fn submit_x(
+    registry: &mut Registry,
+    ctx: &mut Ctx<eml_rt::Checked>,
+    driver: &mut NoDriver,
+    worker: u32,
+) -> Word {
+    let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"x");
+    let stream = open_stream(ctx, 0, None, Arc::default());
+    registry
+        .submit_write(ctx, driver, worker, buf, stream)
+        .unwrap()
+}
+
+/// 取り消しの地点で、もう終わった操作を待つと `Cancelled` で再開し、記録に取り消しの印を付ける。印がないと、取り出しの
+/// 行が終わった操作の誤りを投げ、包みが `Cancelled` を投げられない (docs/spec/vm.md の「命令」の `park_io`)。
+#[test]
+fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    let op = registry.token_op(&ctx, token).unwrap();
+    registry.ops.clear();
+    registry.op_mut(op).unwrap().phase =
+        OpPhase::Done(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
+    registry.task_mut(me).unwrap().cancel = true;
+    let run = registry
+        .park_io(&ctx, &mut driver, token, me, Word::UNIT)
+        .unwrap();
+    assert!(matches!(
+        run,
+        Some(Runnable::ResumeIo { cell, wake: CANCELLED, .. }) if cell == me
+    ));
+    // 終わった操作の取り消しは driver に頼まない
+    assert!(driver.cancelled.is_empty());
+    let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+    assert!(taken.cancelling && taken.result.is_err());
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// run の終わりの `sweep_all` は、待つタスクが残した記録の buffer、ストリーム、token をタスクの ID の下で落としてから、
+/// タスクのセルが ID を退かせる。記録を後に回すと、退かせるときに記録の物体が残って `TransferLeak` になる
+/// (docs/spec/vm.md の「終わり」)。
+#[test]
+fn sweep_all_frees_a_waited_op_before_its_task() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let worker = unsafe { ctx.heap_mut() }.fork_worker();
+    registry.task_mut(me).unwrap().worker = worker;
+    with_worker(&mut ctx, worker, 0, |ctx| {
+        let token = submit_x(&mut registry, ctx, &mut driver, worker);
+        let run = registry
+            .park_io(ctx, &mut driver, token, me, Word::UNIT)
+            .unwrap();
+        assert!(run.is_none());
+    });
+    registry.sweep_all(&mut ctx, 0).unwrap();
+    assert!(registry.ops.is_empty());
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// `bytes` の読みを受け付けて待ち、端が読めるようになった完了を当てる。返すのは token と記録である。
+#[cfg(test)]
+fn probed_read(
+    registry: &mut Registry,
+    ctx: &mut Ctx<eml_rt::Checked>,
+    driver: &mut NoDriver,
+    me: CellRef,
+    buf: Word,
+) -> (Word, CellRef) {
+    let stream = open_stream(ctx, 0, None, Arc::default());
+    let token = registry.submit_read(ctx, driver, 0, buf, stream).unwrap();
+    let op = registry.token_op(ctx, token).unwrap();
+    assert!(
+        registry
+            .park_io(ctx, driver, token, me, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    let key = registry.op_mut(op).unwrap().key;
+    driver.done.push(Completion { key, result: Ok(0) });
+    let mut out = Vec::new();
+    registry.complete(ctx, driver, 0, &mut out).unwrap();
+    // 読めるようになっただけでは再開せず、貸した記憶への読みを新しい鍵で待つ
+    assert!(out.is_empty());
+    assert!(matches!(
+        registry.op_mut(op).unwrap().phase,
+        OpPhase::Transfer
+    ));
+    (token, op)
+}
+
+/// 中身 `ab` を持ち、長さの後ろに `room` バイト以上の空きがある一意な `Bytes`。
+#[cfg(test)]
+fn bytes_ab(ctx: &mut Ctx<eml_rt::Checked>, room: usize) -> Word {
+    let heap = unsafe { ctx.heap_mut() };
+    let w = heap.alloc_bytes_room(room + 2);
+    unsafe { heap.bytes_extend(w, b"ab") }.unwrap()
+}
+
+/// 貸した空きが `READ_ROOM` 以上あれば、同じ物体をそのまま貸す。足りなければ、中身を写した新しい物体を貸し、元を
+/// 手放す (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    for (room, in_place) in [(READ_ROOM, true), (0, false)] {
+        let me = running_task(&mut registry, scope);
+        let buf = bytes_ab(&mut ctx, room);
+        let (token, op) = probed_read(&mut registry, &mut ctx, &mut driver, me, buf);
+        let lent = registry.op_mut(op).unwrap().buf.unwrap();
+        assert_eq!(lent == buf, in_place);
+        assert!(driver.lent.pop().unwrap().cap >= READ_ROOM);
+        let key = registry.op_mut(op).unwrap().key;
+        driver.done.push(Completion { key, result: Ok(0) });
+        let mut out = Vec::new();
+        registry
+            .complete(&mut ctx, &mut driver, 0, &mut out)
+            .unwrap();
+        let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+        let back = taken.buf.unwrap();
+        assert_eq!(back, lent);
+        assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"ab");
+        unsafe { ctx.heap_mut().decref(back) }.unwrap();
+    }
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 貸した記憶へ読んでいる間に取り消された読みも、外が書いたバイトを確定し、それを持つ buffer を返す
+/// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+#[test]
+fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let buf = bytes_ab(&mut ctx, 0);
+    let (token, op) = probed_read(&mut registry, &mut ctx, &mut driver, me, buf);
+    let raw = driver.lent.pop().unwrap();
+    // 外の書き手として、貸した空きの先頭に書く
+    unsafe { std::ptr::copy_nonoverlapping(b"xy".as_ptr(), raw.ptr, 2) };
+    registry.task_mut(me).unwrap().cancel = true;
+    let mut out = Vec::new();
+    registry.unpark(&mut driver, me, &mut out).unwrap();
+    let key = registry.op_mut(op).unwrap().key;
+    assert_eq!(driver.cancelled, [key]);
+    // 取り消しが間に合わず、読みは2バイトで終わった
+    driver.done.push(Completion { key, result: Ok(2) });
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut out)
+        .unwrap();
+    assert!(matches!(
+        out.as_slice(),
+        [Runnable::ResumeIo { cell, wake: CANCELLED, .. }] if *cell == me
+    ));
+    let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+    assert!(taken.cancelling && matches!(taken.result, Ok(2)));
+    let back = taken.buf.unwrap();
+    assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abxy");
+    unsafe { ctx.heap_mut().decref(back) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 操作の待ちの期限は満ちても再開せずに driver に取り消しを頼み、記録に期限の印を付ける。取り消した操作の完了が
+/// `Woke` で再開し、誤りの結果は期限切れとして読める (docs/spec/vm.md の「時間の待ち」)。
+#[test]
+fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    let key = driver.next_key;
+    let run = registry
+        .park_io_until(&ctx, &mut driver, 3, 50, token, me, Word::UNIT)
+        .unwrap();
+    assert!(run.is_none());
+    assert_eq!(
+        (registry.next_deadline(), registry.stats.timers),
+        (Some(53), 1)
+    );
+    let mut out = Vec::new();
+    registry.expire(53, &mut driver, &mut out).unwrap();
+    assert!(out.is_empty());
+    assert_eq!(driver.cancelled, [key]);
+    assert_eq!(registry.next_deadline(), None);
+    driver.done.push(Completion {
+        key,
+        result: Err(io::Error::other("cancelled")),
+    });
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut out)
+        .unwrap();
+    let Some(Runnable::ResumeIo {
+        cell,
+        wake: WOKE,
+        op,
+        ..
+    }) = out.pop()
+    else {
+        panic!("the op wait resumes with `Woke`");
+    };
+    assert_eq!(cell, me);
+    assert!(registry.op_timed_out(&ctx, op).unwrap());
+    let taken = registry.take_op(&mut ctx, op, 0).unwrap();
+    assert!(taken.timed_out && !taken.cancelling);
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 期限の付いた操作の待ちは、取り消しで外れても完了で終わっても輪の項を外す。項を残すと、満期に `expire` が待たない
+/// タスクを名指す。
+#[test]
+fn cancelling_or_finishing_a_timed_op_wait_removes_its_timer() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let first = running_task(&mut registry, scope);
+    let second = running_task(&mut registry, scope);
+    let t1 = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    let k1 = driver.next_key;
+    let t2 = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    let k2 = driver.next_key;
+    registry
+        .park_io_until(&ctx, &mut driver, 0, 50, t1, first, Word::UNIT)
+        .unwrap();
+    registry
+        .park_io_until(&ctx, &mut driver, 0, 60, t2, second, Word::UNIT)
+        .unwrap();
+    registry.task_mut(first).unwrap().cancel = true;
+    let mut out = Vec::new();
+    registry.unpark(&mut driver, first, &mut out).unwrap();
+    assert!(out.is_empty());
+    assert_eq!(driver.cancelled, [k1]);
+    assert_eq!(registry.next_deadline(), Some(60));
+    driver.done.push(Completion {
+        key: k2,
+        result: Ok(1),
+    });
+    driver.done.push(Completion {
+        key: k1,
+        result: Err(io::Error::other("cancelled")),
+    });
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut out)
+        .unwrap();
+    assert_eq!(registry.next_deadline(), None);
+    let resumed: Vec<(CellRef, i64)> = out
+        .iter()
+        .map(|run| match run {
+            Runnable::ResumeIo { cell, wake, .. } => (*cell, *wake),
+            _ => panic!("expected an op resume"),
+        })
+        .collect();
+    assert_eq!(resumed, [(second, WOKE), (first, CANCELLED)]);
+    for run in out {
+        let Runnable::ResumeIo { op, .. } = run else {
+            unreachable!("checked above");
+        };
+        let taken = registry.take_op(&mut ctx, op, 0).unwrap();
+        assert!(!taken.timed_out);
+        unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    }
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 0 以下の期限は過ぎた期限なので、輪に載せずにすぐ driver に取り消しを頼み、記録に期限の印を付ける。
+#[test]
+fn a_past_deadline_cancels_the_op_without_a_timer() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    let key = driver.next_key;
+    let run = registry
+        .park_io_until(&ctx, &mut driver, 0, 0, token, me, Word::UNIT)
+        .unwrap();
+    assert!(run.is_none());
+    assert_eq!(driver.cancelled, [key]);
+    assert_eq!((registry.next_deadline(), registry.stats.timers), (None, 0));
+    driver.done.push(Completion {
+        key,
+        result: Err(io::Error::other("cancelled")),
+    });
+    let mut out = Vec::new();
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut out)
+        .unwrap();
+    let Some(Runnable::ResumeIo { wake: WOKE, op, .. }) = out.pop() else {
+        panic!("the op wait resumes with `Woke`");
+    };
+    assert!(registry.op_timed_out(&ctx, op).unwrap());
+    let taken = registry.take_op(&mut ctx, op, 0).unwrap();
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 正の期限は、操作がもう終わっていて輪に載せないときも `timers` に数える。終わったかどうかはスケジュールで変わるので、
+/// 数はプログラムだけで決まる (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let token = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    let key = driver.next_key;
+    driver.done.push(Completion { key, result: Ok(1) });
+    let mut out = Vec::new();
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut out)
+        .unwrap();
+    assert!(out.is_empty());
+    let run = registry
+        .park_io_until(&ctx, &mut driver, 0, 50, token, me, Word::UNIT)
+        .unwrap();
+    assert!(matches!(
+        run,
+        Some(Runnable::ResumeIo { cell, wake: WOKE, .. }) if cell == me
+    ));
+    assert_eq!((registry.next_deadline(), registry.stats.timers), (None, 1));
+    assert!(driver.cancelled.is_empty());
+    assert!(!registry.op_timed_out(&ctx, token).unwrap());
+    let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+    assert!(matches!(taken.result, Ok(1)) && !taken.timed_out);
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }

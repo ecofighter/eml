@@ -1,9 +1,15 @@
 //! 入力をまたいで `CodeBase` と `Ctx` を持つ `Machine` (docs/spec/vm.md の「追記」)。手書きの LIR のプログラムを1つの
 //! `Machine` に続けて読み込み、名前で照らした関数の番号、定数、エフェクト、位置のファイルの引き直しを確かめる。
 
+use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
-use eml_rt::{ArithFault, Checked, Fast, Fault, HeapError};
+use eml_rt::{
+    ArithFault, Checked, Completion, Fast, Fault, HandleBin, HeapError, IoDriver, IoHandle,
+    IoWaker, Op, OpKey,
+};
 use eml_vm::{
     AnyMachine, CompileError, Control, Limits, Machine, RunConfig, RuntimeError, SourceLocation,
     VmFault, capture_host, disassemble,
@@ -20,7 +26,7 @@ fn names<M: eml_rt::Mode>(machine: &Machine<M>) -> Vec<&str> {
         .collect()
 }
 
-/// 2つのプログラムを1つの `Machine` に読み込み、それぞれの入口を実行して出力を集める。両方のモードで流し、出力が
+/// 2つのプログラムを1つの `Machine` に読み込み、それぞれのエントリを実行して出力を集める。両方のモードで流し、出力が
 /// 同じことを確かめる。
 fn run_two(first: &str, second: &str) -> String {
     let mut outputs = Vec::new();
@@ -260,6 +266,7 @@ fn a_broken_error_is_a_heap_or_internal_fault() {
         at: None,
     };
     assert!(fault(VmFault::Internal("x")).is_broken());
+    assert!(fault(VmFault::Driver("x".to_string())).is_broken());
     assert!(
         fault(VmFault::Extern(Fault::Heap(
             eml_rt::HeapError::UseAfterFree
@@ -516,7 +523,7 @@ fn main() -> unit {
     }
 }
 
-/// 文字列を返す入口。`run_shown` が結果を写して手放すので、検査モードの `close` はリークを報告しない
+/// 文字列を返すエントリ。`run_shown` が結果を写して手放すので、検査モードの `close` はリークを報告しない
 /// (docs/spec/vm.md の「追記」)。
 const SHOWN: &str = "\
 fn shown() -> obj {
@@ -540,7 +547,7 @@ fn a_shown_entry_returns_its_text_after_the_output() {
         let loaded = machine.load(&program).unwrap();
         let (_, text) = machine.run_shown(loaded.entry, 100).unwrap();
         assert_eq!(text.as_deref(), Some("x = 42"));
-        // 入口が書いた行は、結果を返す前に書き出してある
+        // エントリが書いた行は、結果を返す前に書き出してある
         assert_eq!(out.contents(), "printed\n");
         let (_, text) = machine.run_shown(loaded.entry, 3).unwrap();
         assert_eq!(text.as_deref(), Some("x ="));
@@ -550,7 +557,7 @@ fn a_shown_entry_returns_its_text_after_the_output() {
     }
 }
 
-/// `Unit` を返す入口は文字列を返さないので、`run_shown` は内部の誤りにする。速いモードで文字列でない語を読まないため
+/// `Unit` を返すエントリは文字列を返さないので、`run_shown` は内部の誤りにする。速いモードで文字列でない語を読まないため
 /// である。
 #[test]
 fn a_shown_entry_must_return_an_object() {
@@ -569,5 +576,183 @@ fn a_shown_entry_must_return_an_object() {
             }
         ),
         "{error:?}"
+    );
+}
+
+/// 完了を返さない driver。`wait` はいつも壊れた driver の誤りを返す。`quiesce` は呼ばれた回数を数え、`drains` のときだけ
+/// 保留の操作を空にする。
+struct FakeDriver {
+    drains: bool,
+    pending: usize,
+    next_key: OpKey,
+    quiesces: Arc<AtomicUsize>,
+}
+
+impl FakeDriver {
+    fn new(drains: bool) -> (FakeDriver, Arc<AtomicUsize>) {
+        let quiesces = Arc::new(AtomicUsize::new(0));
+        let driver = FakeDriver {
+            drains,
+            pending: 0,
+            next_key: 0,
+            quiesces: Arc::clone(&quiesces),
+        };
+        (driver, quiesces)
+    }
+}
+
+struct NoWaker;
+
+impl IoWaker for NoWaker {
+    fn wake(&self) {}
+}
+
+impl IoDriver for FakeDriver {
+    fn now(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    fn wait(&mut self, _deadline_ms: Option<u64>) -> io::Result<bool> {
+        Err(io::Error::other("broken"))
+    }
+
+    fn submit(&mut self, _op: Op) -> OpKey {
+        self.pending += 1;
+        self.next_key += 1;
+        self.next_key
+    }
+
+    fn cancel(&mut self, _key: OpKey) {}
+
+    fn completions(&mut self, _out: &mut Vec<Completion>) {}
+
+    fn pending(&self) -> usize {
+        self.pending
+    }
+
+    fn waker(&self) -> Arc<dyn IoWaker> {
+        Arc::new(NoWaker)
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        Arc::new(HandleBin::default())
+    }
+
+    fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
+        Ok((1, 2))
+    }
+
+    fn close(&mut self, _handle: IoHandle) {}
+
+    fn quiesce(&mut self) {
+        self.quiesces.fetch_add(1, Ordering::SeqCst);
+        if self.drains {
+            self.pending = 0;
+        }
+    }
+}
+
+/// 渡した driver は run の外に保留の操作を残さないように、run の後に `quiesce` を受ける (docs/spec/vm.md の「時計と
+/// driver」)。
+#[test]
+fn every_run_quiesces_its_driver() {
+    let (driver, quiesces) = FakeDriver::new(true);
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(&parse(&format!(
+            "\
+fn main() -> unit {{
+  let s.0: obj = const \"ran\"
+  tail call say(s.0)
+}}
+{SAY}"
+        )))
+        .unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(quiesces.load(Ordering::SeqCst) >= 1);
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "ran\n");
+}
+
+/// `main` の `Finish` に届かない誤りの run でも、`vm::run` の直後と回復の前に driver を空にする。成功した run と違い
+/// `Finish` の `quiesce` を通らないので、2回はこの2か所の分である (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_failed_run_quiesces_its_driver_before_recovery() {
+    let (driver, quiesces) = FakeDriver::new(true);
+    let (host, _) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(&parse(
+            "\
+fn main() -> unit {
+  let n.0: int = extern \"Prelude.Div Int.%\"(1, 0)
+  return ()
+}
+",
+        ))
+        .unwrap();
+    let error = machine.run(loaded.entry).unwrap_err();
+    assert_eq!(error.to_string(), "division by zero in `main`");
+    assert_eq!(quiesces.load(Ordering::SeqCst), 2);
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// `IoTest.write` で待つプログラム。待つ書きのほかに走れるタスクも期限もないので、空きのループが driver を待つ。
+const WAITS_ON_A_WRITE: &str = "\
+import Async
+import Bytes
+import IoTest
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let (a, b) = IoTest.pair ()
+  let (n, a) = IoTest.write (Bytes.of_string \"x\") a
+  drop a
+  drop b
+  println (show n))
+";
+
+/// 待ちの中で driver の `wait` が誤りを返すと、run は壊れた run として driver の誤りで終わる
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_failing_driver_breaks_the_run() {
+    let (driver, _) = FakeDriver::new(true);
+    let (host, _) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(&eml_test_support::lir(WAITS_ON_A_WRITE))
+        .unwrap();
+    let error = machine.run(loaded.entry).unwrap_err();
+    assert!(error.is_broken(), "{error}");
+    assert!(
+        error
+            .to_string()
+            .starts_with("the I/O driver failed: broken"),
+        "{error}"
+    );
+}
+
+/// `quiesce` の後も保留の操作が残れば、`Machine` は poisoned の状態になり、ヒープに触れずに `close` が driver の誤りを
+/// 返す (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_driver_left_pending_poisons_the_machine() {
+    let (driver, _) = FakeDriver::new(false);
+    let (host, _) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(&eml_test_support::lir(WAITS_ON_A_WRITE))
+        .unwrap();
+    let error = machine.run(loaded.entry).unwrap_err();
+    assert!(error.is_broken(), "{error}");
+    let error = machine.close().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "the I/O driver failed: the driver kept pending ops after quiesce in `<close>`"
     );
 }

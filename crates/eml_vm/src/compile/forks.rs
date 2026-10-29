@@ -74,7 +74,7 @@ pub(crate) fn extend<M: Mode>(
     Ok(())
 }
 
-/// 走査する語に即値 `&fork$E.op` を操作の順に並べた `Data(tag 0)`。evidence の入口の表と同じ形である
+/// 走査する語に即値 `&fork$E.op` を操作の順に並べた `Data(tag 0)`。evidence のエントリの表と同じ形である
 /// (docs/spec/object-model.md の「evidence の3つの物体」)。
 fn table<M: Mode>(heap: &mut Heap<M>, entries: &[u32]) -> Word {
     let scan = u8::try_from(entries.len())

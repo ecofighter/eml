@@ -3,7 +3,7 @@
 
 use eml_test_support::{Checked, check, short_text};
 
-/// 入口のモジュールの関数 `name` の本体の `mask` を、式の位置の順に `<行:列>#<矢印> [<項目>, …]` の形で出す。項目は
+/// エントリのモジュールの関数 `name` の本体の `mask` を、式の位置の順に `<行:列>#<矢印> [<項目>, …]` の形で出す。項目は
 /// IR のテキストと同じく、エフェクトの名前の後に、n が 0 でなければ `@n` を、m が 1 でなければ `*m` を続ける。
 fn masks(text: &str, name: &str) -> String {
     let checked: Checked = check(text);

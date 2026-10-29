@@ -9,7 +9,7 @@ use super::program::versioned;
 use crate::fnv::Fnv;
 use eml_types::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeNames, TypeStore};
 
-/// 型、エフェクト、クラスの名前の表。Prelude の item は修飾しない。入口のモジュールの item は修飾しないが、Prelude の
+/// 型、エフェクト、クラスの名前の表。Prelude の item は修飾しない。エントリのモジュールの item は修飾しないが、Prelude の
 /// 型、エフェクト、クラスと同じ名前のものはモジュール名で修飾する。ほかのモジュールの item は、いつもモジュール名で
 /// 修飾する。Prelude は固定なので、どの名前が重なるかは入力で変わらない。
 pub(super) struct NameTable {
@@ -78,7 +78,7 @@ impl TypeNames for NameTable {
     }
 }
 
-/// REPL のセッションのモジュールは、入口と同じく修飾せず、版を付けた中段の名前で書く。Prelude の名前と重なれば
+/// REPL のセッションのモジュールは、エントリと同じく修飾せず、バージョンを付けた中段の名前で書く。Prelude の名前と重なれば
 /// `Main.` で修飾する。セッションのモジュールの名前 (`<input N>`) は入力の番号を含むので、修飾には使わない
 /// (docs/spec/core-ir.md の「REPL の入力」)。
 fn qualified(hir: &HirProgram, prelude: &FxHashSet<&str>, module: ModuleId, name: &str) -> String {

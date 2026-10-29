@@ -2,7 +2,7 @@
 //! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr、`box` と `unbox` のオペランドと
 //! 束縛の Repr (R7)、データの配置 (R8) と、引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類)、基本操作と
 //! 節の呼び出しの形を確かめる (`verify_scopes`)。R7 と R8 には境界の検査も入る。呼び出しの引数と結果、`closure` の
-//! 引数、`tobj` のフィールドを比べる。`tail` の結果は印だけを比べる。box の挿入の前の入口の段では、
+//! 引数、`tobj` のフィールドを比べる。`tail` の結果は印だけを比べる。box の挿入の前のエントリの段では、
 //! 境界を確かめずに、`box`、`unbox`、`tail` と、Perceus が入れるものがまだないことを確かめる (`verify_lowered`)。
 //! Perceus の後は、RC の対象の所有の多重集合 (R6) も確かめる (`verify`)。`switch`、`unpack`、`unbox` は値を読む
 //! だけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
@@ -18,7 +18,7 @@
 //! 育つ。所有の多重集合は辺ごとに写して比べるので、その手間は辺の数と所有の大きさの積に比例する
 //! (docs/spec/lir.md の「verifier」)。
 //!
-//! 印は Repr を比べる所と同じ所で比べる (V2)。入口の段では `jump` と `return` だけを、範囲の段と所有の段では境界の
+//! 印は Repr を比べる所と同じ所で比べる (V2)。エントリの段では `jump` と `return` だけを、範囲の段と所有の段では境界の
 //! すべてを比べる。`con` と `closure` が束縛する変数の印が引数の印の結び以上であることはどの段でも確かめ (作る所の
 //! 検査)、`dup` と `decref` の対象が `unr` であることは所有の段で確かめる (V1)。段の分け方は
 //! docs/spec/lir.md の「Kind の印の検査」による。
@@ -65,7 +65,7 @@ pub fn verify_lowered(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Lowered)
 }
 
-/// 検査の段。段はパスの順に直線に並ぶ。入口の段の LIR には、box の挿入と縮約が作るものがまだない。開くパスより前の
+/// 検査の段。段はパスの順に直線に並ぶ。エントリの段の LIR には、box の挿入と縮約が作るものがまだない。開くパスより前の
 /// LIR には構造体が残り、複数の値の命令がまだない。Perceus より前の LIR には、所有を確かめる材料 (`dup`、`decref`、`release`) がまだない。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
@@ -231,7 +231,7 @@ fn uniform_beyond(function: &LirFn, captured: usize) -> bool {
             .all(|&param| function.repr(param).is_uniform())
 }
 
-/// `<f>$uniform` という名前の関数は版で、`<f>` があるときだけ存在し、すべて一様な ABI を持つ
+/// `<f>$uniform` という名前の関数は変種で、`<f>` があるときだけ存在し、すべて一様な ABI を持つ
 /// (docs/spec/lir.md の「関数の ABI」)。
 fn variant_name(program: &Program, function: &LirFn) -> Result<(), String> {
     let Some(base) = function.name.strip_suffix("$uniform") else {
@@ -430,12 +430,12 @@ struct Checker<'a> {
     level: Level,
     /// 所有にも命令の型にも関わらない検査の状態。
     cx: Context<'a>,
-    /// 着地の印の検査が使う入口の生存集合。印がなければ求めない。
+    /// 着地の印の検査が使うエントリの生存集合。印がなければ求めない。
     live_in: std::cell::OnceCell<Vec<Vec<VarId>>>,
-    /// まだ着いていないブロックの入口の所有。`switch` の行き先は1本の辺から、合流するブロックは最初の `jump` から
+    /// まだ着いていないブロックのエントリの所有。`switch` の行き先は1本の辺から、合流するブロックは最初の `jump` から
     /// 作る。
     pending: FxHashMap<u32, Owned>,
-    /// 今の道の `Known` と、まだ着いていないブロックの入口の `Known`。`pending` と同じ辺で写す。
+    /// 今の道の `Known` と、まだ着いていないブロックのエントリの `Known`。`pending` と同じ辺で写す。
     known: Known,
     pending_known: FxHashMap<u32, Known>,
     /// フィールドの持ち主と出どころ。持ち主は、分解した値が束縛の時点で所有を持っていればその値、なければその値の
@@ -955,7 +955,7 @@ impl<'a> Checker<'a> {
                     Atom::Var(var) => self.read(&owned, var, "switched on")?,
                     atom => self.consume(&mut owned, atom)?,
                 }
-                // 行き先は辺を1本しか持たないので (R3)、ここで入口の状態を決める。フィールドは行き先の先頭で定義する
+                // 行き先は辺を1本しか持たないので (R3)、ここでエントリの状態を決める。フィールドは行き先の先頭で定義する
                 for case in cases {
                     let mut entry = owned.clone();
                     let site = Site::entry(case.target.0);
@@ -1052,7 +1052,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 合流するブロックに入る `jump` は、渡す値を除いて、どれも同じ多重集合を所有する。その集合が入口の所有になる (R6)。
+    /// 合流するブロックに入る `jump` は、渡す値を除いて、どれも同じ多重集合を所有する。その集合がエントリの所有になる (R6)。
     fn merge(&mut self, target: BlockId, owned: Owned) -> Result<(), String> {
         let Some(first) = self.pending.get(&target.0) else {
             self.pending.insert(target.0, owned);
@@ -1069,7 +1069,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 合流するブロックの入口の `Known` は、入るすべての `jump` の道で分かっているものの共通部分である。
+    /// 合流するブロックのエントリの `Known` は、入るすべての `jump` の道で分かっているものの共通部分である。
     fn merge_known(&mut self, target: BlockId) {
         let known = std::mem::take(&mut self.known);
         match self.pending_known.get_mut(&target.0) {
@@ -1594,7 +1594,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 呼び出しの直後で `var` が生きているか。生存解析の入口の集合から、終端と後ろの文を逆にたどって求める。
+    /// 呼び出しの直後で `var` が生きているか。生存解析のエントリの集合から、終端と後ろの文を逆にたどって求める。
     fn used_after(&self, var: VarId) -> bool {
         let function = self.function;
         let live_in = self.live_in.get_or_init(|| liveness::live_in(function));
@@ -1692,7 +1692,7 @@ impl<'a> Checker<'a> {
                         self.cx.typed_atom_text(*callee)
                     ));
                 }
-                // 呼ばれる入口のクロージャは `ev_clause` が `dup` して返すので `unr` である
+                // 呼ばれるエントリのクロージャは `ev_clause` が `dup` して返すので `unr` である
                 // (docs/spec/lir.md の「Kind の印の検査」)
                 if !self.cx.mark_passes(*callee, Mark::Unr) {
                     return Err(format!(
@@ -1895,7 +1895,7 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// 入口の段が拒む `tail` の言い方。
+/// エントリの段が拒む `tail` の言い方。
 fn tail_text(call: &Call) -> &'static str {
     match call {
         Call::Direct(_, _) => "a tail call",

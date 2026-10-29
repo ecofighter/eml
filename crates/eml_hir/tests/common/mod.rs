@@ -7,7 +7,7 @@ pub fn lower_text(text: &str) -> String {
     lower_files_text(text, &[])
 }
 
-/// 入口と、根からの相対パスで置いたモジュールを変換する。表示は `lower_text` と同じ形である。
+/// エントリと、根からの相対パスで置いたモジュールを変換する。表示は `lower_text` と同じ形である。
 pub fn lower_files_text(entry: &str, modules: &[(&str, &str)]) -> String {
     let lowered = lower(with_modules(entry, modules));
     with_diagnostics(

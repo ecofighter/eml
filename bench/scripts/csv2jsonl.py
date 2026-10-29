@@ -1,6 +1,6 @@
-# csv2jsonl の Python の版。tests/ui/run/scripts/csv2jsonl/main.em と同じ標準出力、書き出すファイル、終了コードを返す
+# csv2jsonl の Python の実装。tests/ui/run/scripts/csv2jsonl/main.em と同じ標準出力、書き出すファイル、終了コードを返す
 # (docs/implementation/benchmarks.md の「スクリプトの計測」)。比べるのは正しい入力の結果だけで、誤りの文言と行番号は
-# eml の版に合わせていない。
+# eml の実装に合わせていない。
 import csv
 import json
 import sys

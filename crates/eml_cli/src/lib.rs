@@ -54,7 +54,7 @@ pub struct Compiled<P> {
     pub program: Option<P>,
 }
 
-/// 1回の検査や実行で読むソースの集まり。読み込みの段が Prelude、入口、import でたどった依存先を登録する
+/// 1回の検査や実行で読むソースの集まり。読み込みの段が Prelude、エントリ、import でたどった依存先を登録する
 /// (docs/implementation/architecture.md の「CLI と lib API」)。`eml_cli` は段階をつなぐだけで、診断を自分では作らない。
 ///
 /// 段階のメソッドは、エラーがあっても止めずに、読み込みの結果から呼ばれた段階までをすべて実行する。1回の実行で、
@@ -73,7 +73,7 @@ impl Session {
     }
 
     /// 標準ライブラリを `(ファイル名, 本文)` の並びに差し替えて読む。標準ライブラリの中の item の扱いを確かめるテストの
-    /// ための口である。並びの条件は `eml_hir::load_with_std` と同じである。
+    /// ためのインターフェースである。並びの条件は `eml_hir::load_with_std` と同じである。
     pub fn load_with_std(
         std: &[(&str, &str)],
         entry_path: &str,
@@ -120,12 +120,12 @@ impl Session {
         self.loaded.prelude
     }
 
-    /// 入口のファイルの番号。`main` がないことの診断はここを指す。
+    /// エントリのファイルの番号。`main` がないことの診断はここを指す。
     pub fn entry(&self) -> FileId {
         self.loaded.entry
     }
 
-    /// 読み込んだモジュールの名前。番号の順で、Prelude、入口 (`Main`) の後に、import を幅優先でたどって見つけた順の
+    /// 読み込んだモジュールの名前。番号の順で、Prelude、エントリ (`Main`) の後に、import を幅優先でたどって見つけた順の
     /// モジュールが並ぶ。
     pub fn module_names(&self) -> impl Iterator<Item = &str> {
         self.loaded
@@ -134,7 +134,7 @@ impl Session {
             .map(|module| module.name.as_str())
     }
 
-    /// 出どころがユーザーのモジュールの名前。入口 (`Main`) と、import でたどった依存先である。標準ライブラリはいつも
+    /// 出どころがユーザーのモジュールの名前。エントリ (`Main`) と、import でたどった依存先である。標準ライブラリはいつも
     /// 読み込むので、UI テストの harness は 1ファイルのテストが import していないことをこれで確かめる。
     pub fn user_module_names(&self) -> impl Iterator<Item = &str> {
         self.loaded

@@ -77,7 +77,7 @@ fn modules_are_numbered_in_breadth_first_order() {
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert_eq!(names(&loaded), ["Prelude", "Main", "B", "A.C", "D"]);
-    // 表示のパスは、入口の表示のパスのディレクトリに根からの相対パスをつないだもの
+    // 表示のパスは、エントリの表示のパスのディレクトリに根からの相対パスをつないだもの
     assert_eq!(
         paths(&loaded),
         [
@@ -639,7 +639,7 @@ fn an_unimported_module_is_neither_the_user_nor_the_std_one() {
 
 #[test]
 fn a_qualifier_means_what_each_module_imports() {
-    // 入口の `import Fs` はユーザーの `Fs.em` を指すが、`B` の `import Std.Fs` は標準ライブラリを指す
+    // エントリの `import Fs` はユーザーの `Fs.em` を指すが、`B` の `import Std.Fs` は標準ライブラリを指す
     let modules = [
         ("Fs.em", "pub greet : Unit -> String\ngreet () = \"user\""),
         (
@@ -821,7 +821,7 @@ fn a_std_module_reaches_another_only_through_an_import() {
         iter,
         yield_,
     ];
-    // 入口が `Fs` を使わないと、標準ライブラリの `Fs` を読まない
+    // エントリが `Fs` を使わないと、標準ライブラリの `Fs` を読まない
     let lowered = lower_std(&without, "import Std.Fs", &MemorySource(&[]));
     assert_eq!(
         lowered.diagnostics,

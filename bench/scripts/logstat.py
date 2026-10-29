@@ -1,4 +1,4 @@
-# logstat の Python の版。tests/ui/run/scripts/logstat/main.em と同じ標準出力と終了コードを返す
+# logstat の Python の実装。tests/ui/run/scripts/logstat/main.em と同じ標準出力と終了コードを返す
 # (docs/implementation/benchmarks.md の「スクリプトの計測」)。
 import io
 import re

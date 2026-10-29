@@ -9,8 +9,8 @@ use crate::program::{ClassId, ConstructorId, EffectId, TypeDefId};
 /// 標準ライブラリのモジュールの名前は正式な名前 (`Std.FileIn`) なので、短い名前の修飾子とは違う `Std.FileIn.FileIn` になる。
 /// ユーザーのモジュールの `FileIn` と見分けるため。
 ///
-/// REPL のセッションは1つの定義元と数え、セッションの item は修飾しない。定義し直された item の古い版には、定義した
-/// 入力の番号を付ける (`T#1`)。最新の版には付けない。利用者が今その名前で書けるものを、印なしで見せるためである
+/// REPL のセッションは1つの定義元と数え、セッションの item は修飾しない。定義し直された item の古いバージョンには、定義した
+/// 入力の番号を付ける (`T#1`)。最新のバージョンには付けない。利用者が今その名前で書けるものを、印なしで見せるためである
 /// (docs/spec/modules.md の「REPL のセッション」)。
 #[derive(Debug, Clone)]
 pub struct DisplayNames {

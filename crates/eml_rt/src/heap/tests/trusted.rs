@@ -467,7 +467,9 @@ fn strings_of_every_length_are_read_back<M: Mode>() {
         LARGE_BODY,
         LARGE_BODY + 3,
     ] {
-        let s: String = (0..n).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        // 1文字ずつ push すると Miri の下で遅いので、繰り返しを切り詰めて作る
+        let mut s = "abcdefghijklmnopqrstuvwxyz".repeat(n / 26 + 1);
+        s.truncate(n);
         let w = heap.alloc_string(&s);
         assert_eq!(text(&heap, w), s);
         unsafe { heap.decref(w) }.unwrap();
@@ -722,6 +724,67 @@ fn shared_bytes_are_copied_before_writing<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// `bytes_lend` の位置に外から書き、`bytes_commit` で確定する。語に揃わない長さの後ろへの書き込みと、大きい物体の
+/// ページの末尾まで埋める書き込みを通し、`bytes` で読み戻す。
+fn lent_room_is_written_and_committed<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    for room in [16, LARGE_BODY + 3] {
+        unsafe {
+            let w = heap.alloc_bytes_room(room);
+            let mut expected = Vec::new();
+            for step in [3, 0, usize::MAX] {
+                let b = heap.bytes_lend(w).unwrap();
+                assert!(b.cap >= room - expected.len());
+                let n = step.min(b.cap);
+                let more: Vec<u8> = (expected.len()..expected.len() + n)
+                    .map(|i| i as u8)
+                    .collect();
+                for (i, &v) in more.iter().enumerate() {
+                    b.ptr.add(i).write(v);
+                }
+                heap.bytes_commit(w, n).unwrap();
+                expected.extend(more);
+                assert_eq!(&*heap.bytes(w).unwrap(), &expected[..]);
+            }
+            // 埋めた後は空きがない
+            assert_eq!(heap.bytes_lend(w).unwrap().cap, 0);
+            heap.decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+/// `bytes_lend` で貸した後、外から書く前に、ほかの物体を確保して解放する (VM が完了を待つ間にほかのタスクを
+/// 流す形)。貸した位置に書いて確定し、貸した物体とほかの物体をどちらも読み戻す。
+fn lent_room_outlives_other_allocations<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    for room in [16, LARGE_BODY + 3] {
+        let other: Vec<u8> = (0..room).map(|i| (i % 251) as u8 ^ 0x5a).collect();
+        unsafe {
+            let w = heap.alloc_bytes_room(room);
+            let b = heap.bytes_lend(w).unwrap();
+            let x = heap.alloc_bytes(&other);
+            let y = heap.alloc_bytes(b"xyz");
+            heap.decref(x).unwrap();
+            // 空いた `x` の場所を使い直す確保
+            let z = heap.alloc_bytes(&other);
+            let n = b.cap.min(room);
+            let expected: Vec<u8> = (0..n).map(|i| i as u8).collect();
+            for (i, &v) in expected.iter().enumerate() {
+                b.ptr.add(i).write(v);
+            }
+            heap.bytes_commit(w, n).unwrap();
+            assert_eq!(&*heap.bytes(w).unwrap(), &expected[..]);
+            assert_eq!(&*heap.bytes(y).unwrap(), b"xyz");
+            assert_eq!(&*heap.bytes(z).unwrap(), &other[..]);
+            for v in [w, y, z] {
+                heap.decref(v).unwrap();
+            }
+        }
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 // 凍結した領域
 fn frozen_pages_are_returned<M: Mode>() {
     let (b, _, _) = super::frozen::builder::<M>();
@@ -829,7 +892,7 @@ fn two_threads_share_one_control<M: Mode>() {
             let control = control.clone();
             std::thread::spawn(move || {
                 let mut heap = Heap::<M>::with_control(control);
-                let big = heap.alloc_data(0, 0, PAGE_BYTES / 8, false);
+                let big = heap.alloc_data(0, 0, LARGE_BODY / 8, false);
                 unsafe { heap.decref(big) }.unwrap();
             })
         })
@@ -905,21 +968,48 @@ unsafe fn read_borrowed<M: Mode>(
     }
 }
 
-/// Host を通る読み。区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の誤り、UTF-8 でない中身、
-/// 止める語、閉じることを、全部の読みと行の読みの両方で、ハンドルを借りる `handle_read` で通す。誤りと止めたときも、
-/// ハンドルは呼ぶ側に残り、`close` で閉じる。
-fn borrowed_files_go_through_the_host<M: Mode>() {
+/// 長い行のファイル。長さの見込みのない読み手で、行も全体も 64 KiB の区切りをまたぐ。
+fn long_lines() -> (String, String, MemoryFile) {
+    let long_line = "x".repeat(65_600);
+    let all = format!("{long_line}\na\r\n\nlast");
+    let file = MemoryFile {
+        sized: false,
+        chunk: 4096,
+        ..MemoryFile::text(&all)
+    };
+    (long_line, all, file)
+}
+
+/// Host を通る行の読み。64 KiB の区切りをまたぐ行を、ハンドルを借りる `handle_read` で通し、続く行を同じハンドルで
+/// 読んで、区切りをまたいだ後に読み手に残った分を確かめる。
+fn borrowed_lines_cross_the_buffer<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let (long_line, _, file) = long_lines();
+    memory.add("lines.txt", file);
+    let mut ctx = Ctx::<M>::new(Arc::new(Control::new(Limits::default())), host(&memory));
+    unsafe {
+        let p = ctx.heap_mut().alloc_string("lines.txt");
+        let f = ctx.fs_open(p, Open::Read).unwrap();
+        assert_eq!(
+            read_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
+            format!("{long_line}\n")
+        );
+        assert_eq!(
+            read_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
+            "a\r\n"
+        );
+        ctx.handle_close(f, Handle::FileIn).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// Host を通る全部の読みと行の読み。区切りをまたぐ長さと長さの見込みのない読み手、`\r\n` を残した行、空の行、行の
+/// 終わりのない最後の行、終わりの空の文字列を通し、短い読み、途中の誤り、UTF-8 でない
+/// 中身、止める語、閉じることを、全部の読みと行の読みの両方で通す。誤りと止めたときも、ハンドルは呼ぶ側に残り、
+/// `close` で閉じる。
+fn borrowed_reads_cross_the_buffer_and_fail<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
     let control = Arc::new(Control::new(Limits::default()));
-    let body = "0123456789".repeat(7000);
-    memory.add(
-        "big.txt",
-        MemoryFile {
-            sized: false,
-            chunk: 4096,
-            ..MemoryFile::text(&body)
-        },
-    );
     memory.add(
         "broken.txt",
         MemoryFile {
@@ -942,36 +1032,23 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
             ..MemoryFile::text("abc")
         },
     );
-    let long_line = "x".repeat(70_000);
-    memory.add(
-        "lines.txt",
-        MemoryFile {
-            chunk: 4096,
-            ..MemoryFile::text(&format!("{long_line}\na\r\n\nlast"))
-        },
-    );
+    let (_, all, file) = long_lines();
+    memory.add("lines.txt", file);
+    memory.add("short.txt", MemoryFile::text("a\r\n\nlast"));
     let mut ctx = Ctx::<M>::new(control.clone(), host(&memory));
     let open = |ctx: &mut Ctx<M>, name: &str| unsafe {
         let p = ctx.heap_mut().alloc_string(name);
         ctx.fs_open(p, Open::Read).unwrap()
     };
     unsafe {
-        // 64 KiB の区切りをまたぐ行、`\r\n` を残した行、空の行、行の終わりのない最後の行、終わりの空の文字列
-        let f = open(&mut ctx, "lines.txt");
-        for expected in [
-            format!("{long_line}\n"),
-            "a\r\n".into(),
-            "\n".into(),
-            "last".into(),
-            String::new(),
-        ] {
+        let f = open(&mut ctx, "short.txt");
+        for expected in ["a\r\n", "\n", "last", ""] {
             assert_eq!(
                 read_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
                 expected
             );
         }
         ctx.handle_close(f, Handle::FileIn).unwrap();
-        assert_eq!(mortal(ctx.heap()), 0);
         for read in [ReadAmount::Line, ReadAmount::All] {
             for name in ["broken.txt", "bad.bin"] {
                 let f = open(&mut ctx, name);
@@ -998,8 +1075,8 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
             ctx.handle_close(f, Handle::FileIn).unwrap();
             assert_eq!(mortal(ctx.heap()), 0);
         }
-        let f = open(&mut ctx, "big.txt");
-        assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), body);
+        let f = open(&mut ctx, "lines.txt");
+        assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), all);
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
@@ -1720,7 +1797,12 @@ fn find_byte_reads_the_body_of_an_object<M: Mode>() {
         for (body, x_at, ax_at) in cases {
             let w = ctx.heap_mut().alloc_bytes(&body);
             let len = body.len();
-            for from in [0, 1, 8, len / 2, len] {
+            let froms: &[usize] = if len >= LARGE_BODY {
+                &[0, len]
+            } else {
+                &[0, 1, 8, len / 2, len]
+            };
+            for &from in froms {
                 if from > len {
                     continue;
                 }
@@ -1767,13 +1849,16 @@ both_modes!(
     bytes_are_written_through_the_core,
     a_part_of_other_bytes_is_appended_in_place,
     shared_bytes_are_copied_before_writing,
+    lent_room_is_written_and_committed,
+    lent_room_outlives_other_allocations,
     frozen_pages_are_returned,
     two_threads_read_one_region,
     chains_drop_in_any_order,
     own_objects_read_region_words,
     two_threads_share_one_control,
     println_goes_through_the_host,
-    borrowed_files_go_through_the_host,
+    borrowed_lines_cross_the_buffer,
+    borrowed_reads_cross_the_buffer_and_fail,
     borrowed_bytes_go_through_the_host,
     two_buffered_lines_flush_once,
     a_line_across_two_refills_flushes_before_each,

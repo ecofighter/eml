@@ -1,4 +1,4 @@
-//! LIR の実行: 定数、extern、直接の呼び出しと戻り (入口でないブロックからの戻りを含む)、末尾呼び出し、誤りと位置、
+//! LIR の実行: 定数、extern、直接の呼び出しと戻り (エントリでないブロックからの戻りを含む)、末尾呼び出し、誤りと位置、
 //! 終わりの処理 (docs/spec/vm.md の「呼び出しと戻り」と「誤り、止めること、終わり」)。
 
 use eml_rt::{ArithFault, Fault, HeapError};
@@ -182,7 +182,7 @@ b1(p.2: int, q.3: int):
 
 #[test]
 fn a_call_resumes_at_the_next_statement_of_its_block() {
-    // 入口でないブロックの2つの呼び出しから、それぞれ次の文に戻り、呼ぶ側のスロットに残る `n.0` を合流のブロック
+    // エントリでないブロックの2つの呼び出しから、それぞれ次の文に戻り、呼ぶ側のスロットに残る `n.0` を合流のブロック
     // まで持ち越す (docs/spec/vm.md の「呼び出しと戻り」)
     let text = "\
 fn main() -> unit {
@@ -398,7 +398,7 @@ fn main() -> unit {{
 }
 
 /// `thaw` は共有された配列だけを写す (docs/spec/object-model.md の「配列」)。写しは確保が 1 つ増えるので、
-/// 配列を後で使う版と使わない版の `allocations` の差はちょうど 1 になる。
+/// 配列を後で使うプログラムと使わないプログラムの `allocations` の差はちょうど 1 になる。
 #[test]
 fn thaw_copies_only_shared_arrays() {
     let unique = "import Array\nimport MutArray\nmain : Unit -> <IO, Panic> Unit

@@ -2026,7 +2026,7 @@ fn an_extern_with_the_wrong_number_of_arguments_is_rejected() {
     );
 }
 
-// 入口の段
+// エントリの段
 
 #[test]
 fn the_lowered_level_rejects_tail_calls() {
@@ -2285,7 +2285,7 @@ fn f(e.0: obj) -> obj {
 // 大きさ
 
 /// `n` 個の `switch` が続き、片方の枝が呼び出しをして合流する関数。所有の検査の段では、合流のブロックの数だけ、
-/// 入口の所有を比べる。
+/// エントリの所有を比べる。
 fn chain_of_switches(n: u32) -> String {
     let mut text = format!(
         "{BOOL}{K}fn f(s.0: obj, n.1: int, c.2: enum) -> obj {{\n  switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}\n"
@@ -2396,7 +2396,7 @@ fn many_deep_jumps_into_one_block_are_verified_in_near_linear_time() {
 const STATE: &str = "effect State { get(unit) -> tobj, put(tobj) -> unit }\n";
 const COUNTER: &str = "effect Counter { get(unit) -> int, put(int) -> unit }\n";
 
-/// handle の場所で入口の表を作り、`State.get` を節の呼び出しで呼ぶ形。
+/// handle の場所でエントリの表を作り、`State.get` を節の呼び出しで呼ぶ形。
 const EVIDENCE_EXAMPLE: &str = "\
 effect State { get(unit) -> tobj, put(tobj) -> unit }
 yields fn f(s.0: tobj) -> tobj {
@@ -2522,7 +2522,7 @@ fn a_clause_function_has_the_reprs_of_its_operation() {
         clause("Fail.fail fn g(e.0: obj, x.1: tobj)", "int"),
         Err("`g` is a clause of `Fail.fail`, but it returns int in `g`".to_string())
     );
-    // 引数の数は境界の検査でないので、入口の段でも確かめる
+    // 引数の数は境界の検査でないので、エントリの段でも確かめる
     assert_eq!(
         check_lowered(&format!(
             "{COUNTER}fn f() -> int {{\n  return 1\n}}\ninternal clause Counter.put fn g(n.0: int) -> unit {{\n  return ()\n}}\n"
@@ -2569,7 +2569,7 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
         )),
         Err("`g` is a clause of `Counter.put`, but it is called directly in `f`".to_string())
     );
-    // 捕獲のある節は、同じ関数の中の `closure` で入口の表に入れる
+    // 捕獲のある節は、同じ関数の中の `closure` でエントリの表に入れる
     let put = format!(
         "{COUNTER}fn f(m.0: tobj, w.1: tobj) -> unit {{\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(m.0)\n  let u.4: unit = prim ev_set_clause[Counter.put](e.2, g.3)\n  return u.4\n}}\n{PUT_CLAUSE}"
     );
@@ -3378,7 +3378,7 @@ fn a_token_release_known_on_one_incoming_path_is_rejected() {
     );
 }
 
-/// 入口の段でも、`tobj` でない行の位置には同じ Repr だけが渡せる。`Prelude.++` の引数は `obj` である。
+/// エントリの段でも、`tobj` でない行の位置には同じ Repr だけが渡せる。`Prelude.++` の引数は `obj` である。
 #[test]
 fn an_int_argument_for_an_obj_extern_parameter_is_rejected_at_the_entry_level() {
     let text = "fn f(n.0: int, s.1: obj) -> obj {
@@ -3408,7 +3408,7 @@ fn a_split_is_not_past_the_end_of_the_parameters() {
 
 const VEC3: &str = "layout Vec3 { Vec3(float, float, float) }\n";
 
-/// 入口の段と box の挿入の後の段は構造体の変数を受ける。印だけが違う形どうしは互換である
+/// エントリの段と box の挿入の後の段は構造体の変数を受ける。印だけが違う形どうしは互換である
 /// (docs/spec/lir.md の「verifier」)。
 #[test]
 fn the_lowered_and_scopes_stages_accept_structs() {
@@ -3624,7 +3624,7 @@ fn the_children_of_a_par_are_uniform() {
         rejected_at_both_levels(&text),
         "argument 0 of a par is `n.0` (int), but a par takes tobj in `f`"
     );
-    // 入口の段は境界を比べない
+    // エントリの段は境界を比べない
     assert_eq!(check_lowered(&text), Ok(()));
     let result = format!(
         "{PAIR}fn f(a.0: tobj, b.1: tobj) -> int {{\n  let t.2: int = par (,) #0(a.0, b.1)\n  return t.2\n}}\n"

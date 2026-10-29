@@ -130,13 +130,13 @@ struct Imports {
     unknown_parts: bool,
 }
 
-/// 値と型の名前空間を同じ手順で引くための口。
+/// 値と型の名前空間を同じ手順で引くためのインターフェース。
 trait Namespace: Copy {
     fn definitions(scope: &ModuleScope) -> &FxHashMap<String, Vec<Definition<Self>>>;
     fn imported(imports: &Imports) -> &FxHashMap<String, Vec<Source<Self>>>;
     /// どこにも見つからない名前を、診断を出さずに誤りにするか。
     fn unknown(imports: &Imports) -> bool;
-    /// REPL の `let` の束縛か。束縛は、束縛した入力のモジュールからは引かない。右辺の同じ名前は前の版を指すため
+    /// REPL の `let` の束縛か。束縛は、束縛した入力のモジュールからは引かない。右辺の同じ名前は前のバージョンを指すため
     /// である。
     fn is_binding(self) -> bool {
         false
@@ -233,7 +233,7 @@ pub struct DefMap {
     names: DisplayNames,
 }
 
-/// モジュール 0 を Prelude として読む。入口は `Loaded::entry` のファイルのモジュールである。値と型の名前空間の重複
+/// モジュール 0 を Prelude として読む。エントリは `Loaded::entry` のファイルのモジュールである。値と型の名前空間の重複
 /// (E1003)、fixity の重複 (E1021)、このモジュールにない演算子の fixity (E1022)、import の並びの名前 (E1001、E1002、
 /// E1029)、import の循環 (E1027) を出す。
 pub fn def_map(loaded: &Loaded) -> (DefMap, Vec<Diagnostic>) {
@@ -1214,7 +1214,7 @@ impl DefMap {
         &self.names
     }
 
-    /// `module` の中から名前を引く口。
+    /// `module` の中から名前を引くインターフェース。
     pub fn resolver(&self, module: ModuleId) -> Resolver<'_> {
         Resolver {
             def_map: self,
@@ -1245,7 +1245,7 @@ impl DefMap {
     }
 }
 
-/// モジュールの中から名前を引く口。修飾しない名前は「自分のモジュール → import の並びの名前 → Prelude の `pub` の名前」
+/// モジュールの中から名前を引くインターフェース。修飾しない名前は「自分のモジュール → import の並びの名前 → Prelude の `pub` の名前」
 /// の順に引き、修飾した名前は修飾子のモジュールだけを引く (docs/spec/modules.md の「名前の解決」)。セッションの
 /// モジュールでは、自分のモジュールの次に前の入力のトップレベルを引き、import は入力ごとに新しい入力から順に引く
 /// (docs/spec/modules.md の「REPL のセッション」)。
@@ -1507,7 +1507,7 @@ impl<'a> Resolver<'a> {
             return Resolved::Silent(Silence::Unusable);
         }
         // 前の入力のトップレベルは、新しい入力から順に引き、その名前を定義する最も新しいモジュールで止まる。種類で
-        // 絞って古い版まで探すと、定義し直した名前の古い版が戻ってくるためである
+        // 絞って古いバージョンまで探すと、定義し直した名前の古いバージョンが戻ってくるためである
         // (docs/spec/modules.md の「REPL のセッション」)
         for scope in self.earlier_sessions() {
             let Some(definitions) = V::definitions(scope).get(name) else {

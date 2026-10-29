@@ -420,7 +420,7 @@ fn modules_other_than_the_prelude_are_printed_in_order() {
 
 #[test]
 fn an_import_cycle_is_reported_at_the_import_that_closes_it() {
-    // 循環を報告した後も名前解決を続けるので、入口の未定義の名前も報告する
+    // 循環を報告した後も名前解決を続けるので、エントリの未定義の名前も報告する
     let modules = [
         ("A.em", "import B\n\npub a : Int\na = 1"),
         ("B.em", "import A\n\npub b : Int\nb = 2"),

@@ -204,7 +204,7 @@ b2:
 
 #[test]
 fn a_token_unused_below_a_switch_target_is_dropped_once() {
-    // b2 より下のどこでも使わないので、b2 の入口で1回だけ手放す。b3 と b4 は手放さない
+    // b2 より下のどこでも使わないので、b2 のエントリで1回だけ手放す。b3 と b4 は手放さない
     let text = format!(
         "{BOOL}{P2}fn f(x.0: obj, c.1: enum, e.2: enum) -> obj {{
   unpack x.0 P #0(a.3: obj, b.4: obj)

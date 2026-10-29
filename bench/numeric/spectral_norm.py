@@ -1,4 +1,4 @@
-# spectral-norm の Python の版。bench/spectral_norm.em と同じ順で浮動小数の演算を行い、ノルムを書く
+# spectral-norm の Python の実装。bench/spectral_norm.em と同じ順で浮動小数の演算を行い、ノルムを書く
 # (docs/implementation/benchmarks.md の「スクリプトの計測」)。
 import math
 import sys

@@ -435,7 +435,7 @@ impl Shared {
 
 impl Write for Shared {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // 旗のロックを放してから panic する。持ったままだと、旗のロックまで毒されて次の書き込みが止まる
+        // 旗のロックを放してから panic する。持ったままだと、旗のロックまで poisoned になって次の書き込みが止まる
         let panic_now = std::mem::take(&mut *self.1.lock().unwrap());
         if panic_now {
             panic!("a writer that panics once");
@@ -676,7 +676,7 @@ mod std_host {
         }
     }
 
-    /// 書き込み先が panic してロックが毒されても、次の行は書ける。panic した行は `BufWriter` に残り、次の行と一緒に
+    /// 書き込み先が panic してロックが poisoned になっても、次の行は書ける。panic した行は `BufWriter` に残り、次の行と一緒に
     /// 書かれる。
     #[test]
     fn a_poisoned_lock_is_recovered() {

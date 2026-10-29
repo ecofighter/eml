@@ -253,8 +253,8 @@ pub struct BodyTypes {
     pub discarded: ArenaMap<ExprId, Vec<(u32, TypeId)>>,
     /// 本体が動く row (関数の型の、引数の数番目の矢印の row) の分類。引数のない値は `Never` である。
     pub body_yield: RowYield,
-    /// 宣言の型の最初の矢印の row の分類。関数型でなければ `Never` である。入口を `()` で呼ぶ関数 `entry$` の印に
-    /// 使う。等式に引数のない入口 (`main = fn () -> ..`) では `body_yield` が使えず、書き出した型の rigid な末尾は名前
+    /// 宣言の型の最初の矢印の row の分類。関数型でなければ `Never` である。エントリを `()` で呼ぶ関数 `entry$` の印に
+    /// 使う。等式に引数のないエントリ (`main = fn () -> ..`) では `body_yield` が使えず、書き出した型の rigid な末尾は名前
     /// でしか区別できないので、ここで分類しておく (docs/spec/core-ir.md の「`yields` の印」)。
     pub first_arrow_yield: RowYield,
     /// ラムダの本体が動く row (ラムダで最後にたどった矢印の row) の分類。キーはラムダの式である。
@@ -348,8 +348,8 @@ pub fn check(program: &Program, files: &SourceFiles) -> (TypedProgram, Vec<Diagn
     check::check_module(program, files)
 }
 
-/// 入口のモジュールに `main` がないこと。`eml check` では検査せず、`eml run` だけが報告する (docs/spec/types.md の
-/// 「推論」)。import した `main` は実行を始める関数にならないので、メッセージは入口のモジュールの定義を求める。
+/// エントリのモジュールに `main` がないこと。`eml check` では検査せず、`eml run` だけが報告する (docs/spec/types.md の
+/// 「推論」)。import した `main` は実行を始める関数にならないので、メッセージはエントリのモジュールの定義を求める。
 pub fn missing_main(file: FileId) -> Diagnostic {
     Diagnostic::error(
         codes::MISSING_MAIN,
@@ -383,7 +383,7 @@ pub fn input_changes_uniform(file: FileId, len: TextSize, name: &str) -> Diagnos
     .with_help("start a new session to use this input")
 }
 
-/// 単体テストのための `Program`。Prelude と、`text` を入口にしたモジュールを変換する。
+/// 単体テストのための `Program`。Prelude と、`text` をエントリにしたモジュールを変換する。
 #[cfg(test)]
 pub(crate) fn test_program(text: &str) -> eml_hir::Program {
     test_program_with_files(text).0

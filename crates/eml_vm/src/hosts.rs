@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::{self, Cursor, PipeReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -97,6 +97,8 @@ pub struct CaptureHost {
     env: Vec<(String, OsString)>,
     /// `None` なら標準入力を使えない (REPL)。
     stdin: Option<Arc<StdinSlot>>,
+    /// 子の `PATH` の先頭に足すディレクトリ。
+    path_prefix: Option<PathBuf>,
 }
 
 impl CaptureHost {
@@ -118,6 +120,7 @@ impl CaptureHost {
             args: Vec::new(),
             env: Vec::new(),
             stdin: None,
+            path_prefix: None,
         }
         .with_stdin(Vec::new())
     }
@@ -140,6 +143,12 @@ impl CaptureHost {
 
     pub fn with_env(mut self, env: Vec<(String, OsString)>) -> CaptureHost {
         self.env = env;
+        self
+    }
+
+    /// 子の `PATH` の先頭に `dir` を足す。プログラムの `Env.get` が見る環境は変えない。
+    pub fn with_path_prefix(mut self, dir: PathBuf) -> CaptureHost {
+        self.path_prefix = Some(dir);
         self
     }
 
@@ -214,7 +223,8 @@ impl Host for CaptureHost {
         }))
     }
 
-    /// 子の環境は与えた表に本物の `PATH` を足したもので、`Stdio::Inherit` の標準入力は空である。受け継ぐ標準出力と
+    /// 子の環境は、与えた表、本物の `PATH` (`with_path_prefix` のディレクトリが前に付く)、Windows では本物の
+    /// `SystemRoot`、`Proc.env` の組をこの順に足したもので、`Stdio::Inherit` の標準入力は空である。受け継ぐ標準出力と
     /// 標準エラーは pipe にしてスレッドで最後まで読み、子を待った後で、捕まえたそれぞれの出力に `out`、`err` の順に
     /// 足す。捕まえた出力の順を固定するためである。
     /// スレッドで読むのは、子が pipe の buffer より多く書いても、eml の側の読み書きと詰まらないためである。
@@ -226,8 +236,13 @@ impl Host for CaptureHost {
             .args(spawn.args)
             .env_clear()
             .envs(self.env.iter().map(|(key, value)| (key, value)));
-        if let Some(path) = std::env::var_os("PATH") {
+        if let Some(path) = child_path(self.path_prefix.as_deref())? {
             command.env("PATH", path);
+        }
+        // 子の Windows の初期化は `SystemRoot` を読む。環境を空にしたので、本物の値を渡さないと起動の途中で落ちる
+        #[cfg(windows)]
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            command.env("SystemRoot", root);
         }
         command.envs(spawn.env.iter().copied());
         if !dir.as_os_str().is_empty() {
@@ -272,7 +287,7 @@ impl Host for CaptureHost {
             StderrMode::ToStdout => {}
         }
         let mut child = command.spawn()?;
-        // `command` が持つ pipe の書き口を閉じる。残すと、子が終わっても読むスレッドに終わりが届かない
+        // `command` が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読むスレッドに終わりが届かない
         drop(command);
         let stdin = child
             .stdin
@@ -290,6 +305,25 @@ impl Host for CaptureHost {
             }),
         })
     }
+}
+
+/// 子の `PATH`。`prefix` があれば本物の `PATH` の前に足す。`prefix` が `join_paths` の断る文字 (unix では区切りの
+/// `:`、Windows では `"`) を含むと失敗し、そのまま起動の誤りになる。
+fn child_path(prefix: Option<&Path>) -> io::Result<Option<OsString>> {
+    join_child_path(prefix, std::env::var_os("PATH"))
+}
+
+/// `child_path` の中身。本物の `PATH` を引数で受けるので、環境を変えずに試せる。
+fn join_child_path(prefix: Option<&Path>, real: Option<OsString>) -> io::Result<Option<OsString>> {
+    let Some(prefix) = prefix else {
+        return Ok(real);
+    };
+    // 空の `PATH` を `split_paths` に通すと空のディレクトリが1つ出て、末尾に区切りが付くので除く
+    let rest = real.iter().filter(|path| !path.is_empty());
+    let dirs = std::iter::once(prefix.to_path_buf()).chain(rest.flat_map(std::env::split_paths));
+    std::env::join_paths(dirs)
+        .map(Some)
+        .map_err(io::Error::other)
 }
 
 /// `pipe` を終わりまで読むスレッド。読みの誤りは、それまでに読んだ分で終える。
@@ -413,5 +447,69 @@ mod tests {
         assert_eq!(read, "out\nerr\n");
         assert_eq!(host.output().contents(), "out\nerr\n");
         assert_eq!(host.errors().contents(), "");
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use std::env::{join_paths, split_paths};
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    use super::join_child_path;
+
+    fn joined(dirs: &[&str]) -> OsString {
+        join_paths(dirs.iter().map(PathBuf::from)).unwrap()
+    }
+
+    #[test]
+    fn without_a_prefix_the_real_path_is_kept() {
+        assert_eq!(join_child_path(None, None).unwrap(), None);
+        let real = joined(&["a", "b"]);
+        assert_eq!(
+            join_child_path(None, Some(real.clone())).unwrap(),
+            Some(real)
+        );
+        assert_eq!(
+            join_child_path(None, Some(OsString::new())).unwrap(),
+            Some(OsString::new())
+        );
+    }
+
+    #[test]
+    fn a_prefix_alone_becomes_the_path() {
+        let d = Path::new("eml-bin");
+        assert_eq!(
+            join_child_path(Some(d), None).unwrap(),
+            Some(joined(&["eml-bin"]))
+        );
+        assert_eq!(
+            join_child_path(Some(d), Some(OsString::new())).unwrap(),
+            Some(joined(&["eml-bin"]))
+        );
+    }
+
+    #[test]
+    fn a_prefix_goes_before_the_real_path() {
+        let path = join_child_path(Some(Path::new("eml-bin")), Some(joined(&["a", "b"])))
+            .unwrap()
+            .unwrap();
+        let dirs: Vec<PathBuf> = split_paths(&path).collect();
+        assert_eq!(
+            dirs,
+            [
+                PathBuf::from("eml-bin"),
+                PathBuf::from("a"),
+                PathBuf::from("b")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_prefix_join_paths_cannot_hold_fails() {
+        // unix の `join_paths` は区切りの `:` を、Windows の `join_paths` は `"` を含む項を断る。Windows は `;` を
+        // 含む項を `"` で囲んで受け入れる
+        let prefix = if cfg!(windows) { "eml\"bin" } else { "eml:bin" };
+        assert!(join_child_path(Some(Path::new(prefix)), None).is_err());
     }
 }

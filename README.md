@@ -69,7 +69,7 @@ $ eml check leak.em
 
 ## ビルドと実行
 
-開発環境は Nix flake で用意する。direnv を使う場合は `direnv allow` で devShell に入る。devShell には clippy、rustfmt、cargo-insta が入っている。nix を使わないときは、rustup が `rust-toolchain.toml` の版を入れる。
+開発環境は Nix flake で用意する。direnv を使う場合は `direnv allow` で devShell に入る。devShell には clippy、rustfmt、cargo-insta が入っている。nix を使わないときは、rustup が `rust-toolchain.toml` のバージョンを入れる。
 
 ```sh
 cargo build                                  # すべての crate をビルドする

@@ -299,7 +299,7 @@ yields fn f(c.0: tobj, e.1: obj) -> tobj {
     ");
 }
 
-/// `shown` の関数 `name` の、ラベル `label` のブロックの文の行。入口のブロックのラベルは `b0` とする。
+/// `shown` の関数 `name` の、ラベル `label` のブロックの文の行。エントリのブロックのラベルは `b0` とする。
 fn block_lines<'a>(shown: &'a str, name: &str, label: &str) -> Vec<&'a str> {
     let header = [format!("fn {name}("), format!("fn {name:?}(")];
     let mut lines = shown

@@ -1,4 +1,4 @@
-# 同じ (クラス, 型) の instance は定義し直せない。型を定義し直せば、新しい版に instance を書ける
+# 同じ (クラス, 型) の instance は定義し直せない。型を定義し直せば、新しいバージョンに instance を書ける
 > data Color = | Red | Green
 > instance Show Color where
 .   show c = "color"

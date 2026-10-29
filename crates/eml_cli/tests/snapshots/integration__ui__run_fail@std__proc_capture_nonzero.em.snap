@@ -7,5 +7,5 @@ input_file: tests/ui/run-fail/std/proc_capture_nonzero.em
 before
 --- stderr ---
 --- runtime error ---
-command `sh` exited with code 3
+command `eml` exited with code 3
   at <std>/Proc.em:14:23

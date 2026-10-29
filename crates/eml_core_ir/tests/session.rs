@@ -235,7 +235,7 @@ fn the_display_calls_the_prelude_show_even_when_shadowed() {
 
 #[test]
 fn a_redefined_function_is_named_after_its_input_and_old_callers_keep_the_old_one() {
-    // 前の版の名前は後の入力で変わらない。`g` は入力 2 の時点の `f` を呼び続ける
+    // 前のバージョンの名前は後の入力で変わらない。`g` は入力 2 の時点の `f` を呼び続ける
     let shown = session_core_text(
         &[
             "f : Int -> <Panic> Int\nf n = n",
@@ -288,7 +288,7 @@ fn a_redefined_effect_gets_its_own_name_and_number() {
 
 #[test]
 fn derived_functions_of_a_redefined_type_are_told_apart() {
-    // 導出した関数の名前は、型の版を持つ。持たないと、2つの `C` の `show` が同じ名前になる
+    // 導出した関数の名前は、型のバージョンを持つ。持たないと、2つの `C` の `show` が同じ名前になる
     let shown = session_core_text(
         &[
             "data C = | A deriving (Show)",
@@ -327,7 +327,7 @@ fn instance_names_carry_the_version_of_their_type_arguments() {
 #[test]
 fn instance_methods_of_a_redefined_type_keep_their_names() {
     // 利用者向けの表示名は古い型を `Color#1` と書くが、中段の名前は後の入力で変わらない。古い instance のメソッドは
-    // `Show Color.show` のままで、新しい型の instance のメソッドは型の版を持つ
+    // `Show Color.show` のままで、新しい型の instance のメソッドは型のバージョンを持つ
     let shown = session_core_text(
         &[
             "data Color = | Red",

@@ -241,7 +241,7 @@ impl<T, V: fmt::Debug> fmt::Debug for ItemMap<T, V> {
     }
 }
 
-/// プログラム全体の HIR。Prelude、入口、Prelude を除く標準ライブラリ、import でたどった依存先のモジュールからなる。
+/// プログラム全体の HIR。Prelude、エントリ、Prelude を除く標準ライブラリ、import でたどった依存先のモジュールからなる。
 #[derive(Debug)]
 pub struct Program {
     pub modules: Arena<Module>,
@@ -315,7 +315,7 @@ impl Program {
         })
     }
 
-    /// Prelude、入口のモジュールの順に、モジュールの中の宣言の順でたどる。
+    /// Prelude、エントリのモジュールの順に、モジュールの中の宣言の順でたどる。
     pub fn functions(&self) -> impl Iterator<Item = (FunctionId, &Function)> {
         self.items(|items| &items.functions)
     }
@@ -414,7 +414,7 @@ impl Program {
     }
 
     /// 標準ライブラリの関数を `モジュール名.関数名` で引く。Core IR の関数の名前 (`core_name`) と同じ綴りで、ランタイムが
-    /// 名前で呼ぶ入口を探すのに使う。そのモジュールを読み込んでいなければ `None` (docs/spec/core-ir.md の「変換の規則」)。
+    /// 名前で呼ぶエントリを探すのに使う。そのモジュールを読み込んでいなければ `None` (docs/spec/core-ir.md の「変換の規則」)。
     pub fn function_by_canonical_name(&self, name: &str) -> Option<FunctionId> {
         let (module, function) = name.rsplit_once('.')?;
         self.modules.iter().find_map(|(id, data)| {
@@ -467,9 +467,9 @@ impl Program {
         self.modules[module].origin
     }
 
-    /// `eml run` が実行を始める関数。入口のモジュールだけから探し、Prelude には置かない
+    /// `eml run` が実行を始める関数。エントリのモジュールだけから探し、Prelude には置かない
     /// (docs/implementation/architecture.md の「CLI と lib API」)。同じ名前の関数が重複したときは、最初の定義である。
-    /// REPL のセッションは `main` から始めないので、入口がセッションのモジュールなら `None` である。
+    /// REPL のセッションは `main` から始めないので、エントリがセッションのモジュールなら `None` である。
     pub fn main(&self) -> Option<FunctionId> {
         if self.origin(self.entry).session().is_some() {
             return None;
@@ -482,7 +482,7 @@ impl Program {
             .map(|(local, _)| ItemId::new(self.entry, local))
     }
 
-    /// REPL が実行する関数。入口のモジュール (今の入力) の `input$N` で、item の並びの入力とファイルは持たない。
+    /// REPL が実行する関数。エントリのモジュール (今の入力) の `input$N` で、item の並びの入力とファイルは持たない。
     pub fn input(&self) -> Option<FunctionId> {
         self.modules[self.entry]
             .items

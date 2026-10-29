@@ -3,6 +3,7 @@
 //! (docs/future/multicore.md の「VM の並列化の備え」の制約5)。
 
 use std::marker::PhantomData;
+use std::time::Duration;
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault, Raised};
@@ -16,7 +17,8 @@ use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
 use crate::driver::{ceil_ms, floor_ms};
-use crate::error::VmFault;
+use crate::error::{KEPT_PENDING, VmFault};
+use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{JoinId, JoinNode, MAIN, Outcome, Policy, Scheduler, TaskId, TaskState};
 use crate::{RunCounts, RuntimeError};
@@ -54,7 +56,7 @@ pub struct Task {
     pub(crate) scratch: Vec<Word>,
     /// `reserve` がスタックの容量を伸ばす上限の語の数 (`stack_limit`)。
     pub(crate) stack_limit: usize,
-    /// 入口の関数の番号。どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める。
+    /// エントリの関数の番号。どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める。
     pub(crate) entry: u32,
     /// `Finish` が結果を手放さずに残す。`Machine::run_shown` が、実行の後に結果の文字列を写して手放す。
     pub(crate) keep_result: bool,
@@ -65,15 +67,15 @@ pub struct Task {
     pub(crate) evv: Word,
     /// ヒープの論理的な worker ID。右の子は fork でもらった ID で動き、左の子は親の ID で動く。
     pub(crate) worker: u32,
-    /// fork のときの親の深さ。右の子の深さはここから数える。入口のタスクは 0 である。
+    /// fork のときの親の深さ。右の子の深さはここから数える。エントリのタスクは 0 である。
     pub(crate) depth_offset: usize,
     /// 開いている子の境目の join。内側が最後に来る。右の子の先頭は、自分が右の子である join である。
     pub(crate) boundaries: Vec<JoinId>,
     pub(crate) state: TaskState,
-    /// `Async` のタスクのセル。入口の `Task` だけが持ち、`main` と `par` の右の子は `None` である。`resume_task` の
-    /// 入口の `Task` は、待っていたタスクのセルを持つ (docs/spec/vm.md の「`Async` のタスク」)。
+    /// `Async` のタスクのセル。エントリの `Task` だけが持ち、`main` と `par` の右の子は `None` である。`resume_task` の
+    /// エントリの `Task` は、待っていたタスクのセルを持つ (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) cell: Option<CellRef>,
-    /// `finish_*` が預けたタスクの終わり方。入口の `Task` の `Finish` が核の `finish` に渡す。タスクの ID の物体が
+    /// `finish_*` が預けたタスクの終わり方。エントリの `Task` の `Finish` が核の `finish` に渡す。タスクの ID の物体が
     /// すべて片付く前に待ち手を起こさないためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) outcome: Option<cells::Outcome>,
 }
@@ -84,7 +86,7 @@ pub(crate) struct Failure {
     pub(crate) pc: Pc,
 }
 
-// いちばん下に置く空のフレーム。入口の関数の結果を受けるスロットを1つ持つ
+// いちばん下に置く空のフレーム。エントリの関数の結果を受けるスロットを1つ持つ
 const ROOT_BASE: usize = 2;
 const ROOT_SIZE: usize = 1;
 // 子の境目のフレーム。slot 0 が子の結果、slot 1 が join の番号である
@@ -118,8 +120,8 @@ impl Task {
         }
     }
 
-    /// `Async` のタスクの入口の `Task`。`Task::new` と同じ根のフレームを作り、スタックは集まりから取った `stack` を
-    /// 使う。引数は動き始めるときに入口のフレームに書く (`resume`)。深さは 0 から数え、タスクごとに `max_depth` の
+    /// `Async` のタスクのエントリの `Task`。`Task::new` と同じ根のフレームを作り、スタックは集まりから取った `stack` を
+    /// 使う。引数は動き始めるときにエントリのフレームに書く (`resume`)。深さは 0 から数え、タスクごとに `max_depth` の
     /// すべてを使う (docs/spec/vm.md の「`Async` のタスク」)。
     #[expect(
         clippy::too_many_arguments,
@@ -128,7 +130,7 @@ impl Task {
     fn entry<M: Mode>(
         code: &CodeBase<M>,
         function: u32,
-        args: [Word; 2],
+        args: [Word; 3],
         argc: u8,
         cell: CellRef,
         worker: u32,
@@ -377,8 +379,8 @@ fn safepoint<R: Exec>(
     Ok(())
 }
 
-/// タスクを実行する。`task` は入口のタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときは入口の
-/// タスクに戻っている (`Finish` が確かめる)。誤りで戻る前に、ヒープの worker と `Ctx` の深さの上限を入口のタスクのものに戻す。返る語は失敗した
+/// タスクを実行する。`task` はエントリのタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときはエントリの
+/// タスクに戻っている (`Finish` が確かめる)。誤りで戻る前に、ヒープの worker と `Ctx` の深さの上限をエントリのタスクのものに戻す。返る語は失敗した
 /// タスクの `evv` で、手放さずに捨てる。誤りの後のヒープは回復で置き換えるか、`Ctx` ごと落とすので、捨てた語は漏れに
 /// 数えない (docs/spec/vm.md の「`par` の fork と join」)。
 pub(crate) fn run<R: Exec>(
@@ -1221,15 +1223,22 @@ fn switch_away<R: Exec>(
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)
     collect::<R>(code, ctx, task.depth_offset, sched)?;
-    // 走れるタスクがなければ、次の期限まで眠って集め直す。眠りは1回ごとに短く切り、起きるたびに止める語を読む。
-    // `PREEMPT` は切り替える先がないので捨てる。期限もなければ、どのタスクも進めないデッドロックである
-    // (docs/spec/vm.md の「時計と driver」)
+    // 走れるタスクがなければ、次の期限か driver の完了まで待って集め直す。待ちは1回ごとに短く切り、戻るたびに止める
+    // 語を読む。`PREEMPT` は切り替える先がないので捨てる。期限も保留の操作もないか、driver がもう何も進まないと
+    // 答えたら、どのタスクも進めないデッドロックである (docs/spec/vm.md の「時計と driver」)
     let next = loop {
         if let Some(next) = sched.policy.pick(&mut sched.ready) {
             break next;
         }
-        let deadline = sched.cells.next_deadline().ok_or(VmFault::Deadlock)?;
-        sched.driver.wait_until(deadline);
+        let deadline = sched.cells.next_deadline();
+        if deadline.is_none() && sched.driver.pending() == 0 {
+            return Err(VmFault::Deadlock);
+        }
+        match sched.driver.wait(deadline) {
+            Ok(true) => {}
+            Ok(false) => return Err(VmFault::Deadlock),
+            Err(e) => return Err(VmFault::Driver(e.to_string())),
+        }
         poll(ctx, task.stack_depth())?;
         collect::<R>(code, ctx, task.depth_offset, sched)?;
     };
@@ -1271,7 +1280,7 @@ fn resume<R: Exec>(
             sched.tasks[prev_id] = Some(prev);
         }
         None => {
-            // 終わった入口の `Task` のスタックは、次の入口の `Task` が使い回す
+            // 終わったエントリの `Task` のスタックは、次のエントリの `Task` が使い回す
             if prev.cell.is_some() {
                 sched.stacks.push(std::mem::take(&mut prev.stack));
             }
@@ -1292,7 +1301,7 @@ fn resume<R: Exec>(
             args,
             argc,
         } => {
-            // 入口の `Task` はまだ命令を実行していないので、誤りには入口の関数の先頭の位置を付ける。`run` が持つ
+            // エントリの `Task` はまだ命令を実行していないので、誤りにはエントリの関数の先頭の位置を付ける。`run` が持つ
             // 位置は、切り替える前のタスクのものである
             let at = code.functions[function as usize].start;
             let result = enter::<R>(code, ctx, task, sched, function, args, argc);
@@ -1310,8 +1319,9 @@ fn resume<R: Exec>(
     }
 }
 
-/// 集める地点。受け箱を処理し、満ちたタイマーを外して、待ちを外したタスクを再開する仕事を列の後ろに積む。タイマーの
-/// ない run は時計を読まない (docs/spec/vm.md の「時計と driver」)。
+/// 集める地点。受け箱を処理し、driver の完了を操作の記録に当て、満ちたタイマーを外して、待ちを外したタスクを再開する
+/// 仕事を列の後ろに積む。タイマーのない run は時計を読まず、記録のない run は driver の完了を読まない
+/// (docs/spec/vm.md の「時計と driver」)。
 fn collect<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1319,9 +1329,15 @@ fn collect<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let mut out = Vec::new();
-    sched.cells.drain(ctx, depth_offset, &mut out)?;
+    sched
+        .cells
+        .drain(ctx, &mut *sched.driver, depth_offset, &mut out)?;
+    sched
+        .cells
+        .complete(ctx, &mut *sched.driver, depth_offset, &mut out)?;
     if sched.cells.next_deadline().is_some() {
-        sched.cells.expire(floor_ms(sched.driver.now()), &mut out)?;
+        let now = floor_ms(sched.driver.now());
+        sched.cells.expire(now, &mut *sched.driver, &mut out)?;
     }
     if out.is_empty() {
         return Ok(());
@@ -1388,8 +1404,8 @@ fn complete_join<R: Exec>(
 
 /// join の完了、その後の安全点、右の子の始まりで起きた誤りに、`par` の命令 `at` の関数と位置を付ける。どれも
 /// 切り替えの後で起きるので、`run` が持つ命令の位置は別のタスクのものでありうる。`par` の位置を付ければ、どの
-/// スケジュールでも同じ文言になる (docs/spec/vm.md の「子の終わりと join」)。`Async` の入口の `Task` の始まりの誤りも、
-/// 同じ理由で入口の関数の先頭の位置 `at` を付ける。すでに記録した誤りはそのまま渡す。
+/// スケジュールでも同じ文言になる (docs/spec/vm.md の「子の終わりと join」)。`Async` のエントリの `Task` の始まりの誤りも、
+/// 同じ理由でエントリの関数の先頭の位置 `at` を付ける。すでに記録した誤りはそのまま渡す。
 fn at_par<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     task: &Task,
@@ -1508,7 +1524,7 @@ fn child_abort<R: Exec>(
         return Err(VmFault::Internal("a child abort outside a par child"));
     }
     let ev = task.get(ev);
-    // `ev` は節の入口が持つ fork evidence で、状態の欄は深さの即値である
+    // `ev` は節のエントリが持つ fork evidence で、状態の欄は深さの即値である
     let heap = ctx.heap();
     let effect = unsafe { heap.meta(ev) }?
         .tag()
@@ -1534,7 +1550,7 @@ fn child_abort<R: Exec>(
     child_done::<R>(code, ctx, task, sched, outcome)
 }
 
-/// 実行時エラーの後。すぐに実行を止める誤りと、入口のタスクの誤り (左の子の誤りを含む) は実行の誤りにする。右の子の
+/// 実行時エラーの後。すぐに実行を止める誤りと、エントリのタスクの誤り (左の子の誤りを含む) は実行の誤りにする。右の子の
 /// 誤りは join に記録し、右のタスクはスタックを巻き戻さずに捨てて、ほかのタスクに切り替える。止めたスタックは
 /// 巻き戻しの表のない位置で止まっていて解放できない。記録した誤りは join が必ず報告するので、実行は誤りで終わる
 /// (docs/spec/vm.md の「`par` の fork と join」)。
@@ -1618,7 +1634,7 @@ impl Outcome {
     }
 }
 
-/// 入口の関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。その前に、受け箱の
+/// エントリの関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。その前に、受け箱の
 /// 知らせを処理し、残った `Async` のセルを放す (docs/spec/vm.md の「`Async` のタスク」)。
 fn finish<R: Exec>(
     code: &CodeBase<R::M>,
@@ -1627,9 +1643,17 @@ fn finish<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let mut out = Vec::new();
-    sched.cells.drain(ctx, task.depth_offset, &mut out)?;
+    sched
+        .cells
+        .drain(ctx, &mut *sched.driver, task.depth_offset, &mut out)?;
     if !out.is_empty() {
         return Err(VmFault::Internal("a task is left at the end"));
+    }
+    // driver が貸した記憶をセルが持つうちは放せないので、保留の操作を片付けてから掃く。片付かなければ放さずに driver
+    // の誤りで終わる (docs/spec/vm.md の「`Async` のタスク」の「終わり」)
+    sched.driver.quiesce();
+    if sched.driver.pending() > 0 {
+        return Err(VmFault::Driver(KEPT_PENDING.to_string()));
     }
     sched.cells.sweep_all(ctx, task.depth_offset)?;
     if sched.has_children() {
@@ -1639,7 +1663,7 @@ fn finish<R: Exec>(
         return Err(VmFault::Internal("an exit ends a run with an open par"));
     }
     if let Some(n) = task.exit {
-        // 途中のフレームは巻き戻しで片付けてある。入口の結果はダミーなので手放さない。中断の途中の `evv` には
+        // 途中のフレームは巻き戻しで片付けてある。エントリの結果はダミーなので手放さない。中断の途中の `evv` には
         // 意味がないので、空に戻す (docs/spec/vm.md の「extern の中断」)
         unsafe {
             ctx.yield_finish()?;
@@ -1653,7 +1677,7 @@ fn finish<R: Exec>(
         return Ok(());
     }
     if code.functions[task.entry as usize].ret_rc && !task.keep_result {
-        // 結果は入口の関数が返した、VM の持つ参照である
+        // 結果はエントリの関数が返した、VM の持つ参照である
         unsafe { ctx.heap_mut().decref(task.get(0)) }?;
     }
     Ok(())
@@ -1661,7 +1685,7 @@ fn finish<R: Exec>(
 
 // `Async` の命令は呼び出しや戻りに比べてまれなので、`par` と同じく `step` に展開しない
 
-/// `Std.Async`、`Std.Chan`、`Std.Atomic` の行 (docs/spec/vm.md の「`Async` のタスク」)。意味の核を呼び、返った仕事を入口の `Task` にするか、
+/// `Std.Async`、`Std.Chan`、`Std.Atomic` の行 (docs/spec/vm.md の「`Async` のタスク」)。意味の核を呼び、返った仕事をエントリの `Task` にするか、
 /// 待っていた `Task` を実行待ちに戻す。安全点を置かない。
 #[inline(never)]
 fn async_op<R: Exec>(
@@ -1930,13 +1954,182 @@ fn async_op<R: Exec>(
             *sched.cells.counter(task.raw(arg(1)))? = n;
             task.set(dst, Word::UNIT);
         }
+        Extern::AsyncParkIo => {
+            let me = current_cell(task)?;
+            let (token, k) = (task.get(arg(0)), task.get(arg(1)));
+            if let Some(run) = sched.cells.park_io(ctx, &mut *sched.driver, token, me, k)? {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
+        Extern::AsyncParkIoUntil => {
+            let me = current_cell(task)?;
+            let (token, ms, k) = (task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)));
+            // 0 以下は過ぎた期限なので時計を読まない (docs/spec/vm.md の「時間の待ち」)
+            let now = if ms > 0 {
+                ceil_ms(sched.driver.now())
+            } else {
+                0
+            };
+            if let Some(run) =
+                sched
+                    .cells
+                    .park_io_until(ctx, &mut *sched.driver, now, ms, token, me, k)?
+            {
+                schedule(code, sched, entries, run)?;
+            }
+            task.set(dst, Word::UNIT);
+        }
+        // ストリームの組を作る2つの行は、今のタスクのセルを使わないので、タスクの外でも動く
+        // (docs/spec/stdlib.md の「`Std.IoTest`」)
+        Extern::IoTestOpenPair => match sched.driver.pair() {
+            Ok((a, b)) => {
+                let bin = sched.driver.bin();
+                let s = cells::open_stream(ctx, a, Some(b), bin);
+                task.set(dst, s);
+            }
+            Err(e) => {
+                let raise = Raise::Io {
+                    kind: io_kind(&e),
+                    message: format!("cannot open a stream pair: {e}"),
+                };
+                return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestOpenPair);
+            }
+        },
+        Extern::IoTestPeer => {
+            // 端は借りるだけで、組を作る後の `con` が消費する (docs/spec/core-ir.md の「組を返す extern」)
+            let s = cells::peer(ctx, task.get(arg(0)))?;
+            task.set(dst, s);
+        }
+        Extern::IoTestSubmitWrite => {
+            let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
+            let token =
+                sched
+                    .cells
+                    .submit_write(ctx, &mut *sched.driver, task.worker, buf, stream)?;
+            task.set(dst, token);
+        }
+        Extern::IoTestSubmitRead => {
+            let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
+            let token =
+                sched
+                    .cells
+                    .submit_read(ctx, &mut *sched.driver, task.worker, buf, stream)?;
+            task.set(dst, token);
+        }
+        Extern::IoTestOpStream => {
+            // token は借りるだけで、組を作る後の `con` が消費する
+            let s = sched.cells.op_stream(ctx, task.get(arg(0)))?;
+            task.set(dst, s);
+        }
+        Extern::IoTestTakeWrite => {
+            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
+            // 書きの buffer は返さない。取り消しか期限で終わった操作の誤りは、包みが投げる取り消しに含める
+            // (docs/spec/stdlib.md の「`Std.IoTest`」)。取り出した buffer は記録が持っていた唯一の参照で、このタスクの
+            // ID の物体である。操作は終わっているので、driver はもう読まない (docs/spec/vm.md の「操作の記録」)
+            if let Some(buf) = taken.buf {
+                unsafe { ctx.heap_mut().decref(buf) }?;
+            }
+            match taken.result {
+                Ok(n) => task.set_raw(dst, n as i64),
+                Err(_) if taken.cancelling || taken.timed_out => task.set_raw(dst, 0),
+                Err(e) => {
+                    let raise = Raise::Io {
+                        kind: io_kind(&e),
+                        message: format!("cannot write to the stream: {e}"),
+                    };
+                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestTakeWrite);
+                }
+            }
+        }
+        Extern::IoTestTakeRead => {
+            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
+            let buf = taken
+                .buf
+                .ok_or(VmFault::Internal("a read op has no buffer"))?;
+            // 取り消した読みは、確定したバイトを持つ buffer を返し、包みが落として取り消しを投げる。期限で終わった
+            // 読みも buffer を返し、包みが `None` にする (docs/spec/stdlib.md の「`Std.IoTest`」)
+            match taken.result {
+                Err(e) if !taken.cancelling && !taken.timed_out => {
+                    // 書きと同じく、buffer は記録が持っていた参照で、driver はもう書かない (docs/spec/vm.md の
+                    // 「操作の記録」)
+                    unsafe { ctx.heap_mut().decref(buf) }?;
+                    let raise = Raise::Io {
+                        kind: io_kind(&e),
+                        message: format!("cannot read the stream: {e}"),
+                    };
+                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::IoTestTakeRead);
+                }
+                _ => task.set(dst, buf),
+            }
+        }
+        Extern::IoTestOpTimedOut => {
+            // token は借りるだけで、組を作る後の `con` が消費する
+            let late = sched.cells.op_timed_out(ctx, task.get(arg(0)))?;
+            task.set_raw(dst, i64::from(late));
+        }
+        Extern::IoTestSubmitChecksum => {
+            // 遅れは本物の時計でだけ効かせ、0..=1000 ms に収める。仮想の時計の run は本物の時間を眠らない
+            // (docs/spec/stdlib.md の「`Std.IoTest`」)
+            let delay = if sched.real_clock {
+                Duration::from_millis(task.raw(arg(0)).clamp(0, 1000) as u64)
+            } else {
+                Duration::ZERO
+            };
+            let buf = task.get(arg(1));
+            let token =
+                sched
+                    .cells
+                    .submit_job(ctx, &mut *sched.driver, task.worker, buf, |input| {
+                        jobs::checksum(input, delay)
+                    })?;
+            task.set(dst, token);
+        }
+        Extern::IoTestTakeChecksum => {
+            let taken = sched.cells.take_op(ctx, task.get(arg(0)), task.worker)?;
+            // buffer は記録が持っていた参照である。仕事は写しを受け取ったので、物体の記憶には触れない
+            // (docs/spec/vm.md の「操作の記録」)
+            if let Some(buf) = taken.buf {
+                unsafe { ctx.heap_mut().decref(buf) }?;
+            }
+            // 取り消しで終わった待ちの結果は、包みが投げる取り消しに含める (docs/spec/stdlib.md の「`Std.IoTest`」)
+            match taken.result {
+                Ok(n) => task.set_raw(dst, n as i64),
+                Err(_) if taken.cancelling || taken.timed_out => task.set_raw(dst, 0),
+                Err(e) => {
+                    let raise = Raise::Io {
+                        kind: io_kind(&e),
+                        message: format!("the checksum job failed: {e}"),
+                    };
+                    return raise_again::<R>(
+                        code,
+                        ctx,
+                        task,
+                        dst,
+                        raise,
+                        Extern::IoTestTakeChecksum,
+                    );
+                }
+            }
+        }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async, Std.Chan and Std.Atomic reached the Async instruction",
+                "a row outside Std.Async, Std.Chan, Std.Atomic and Std.IoTest reached the Async instruction",
             ));
         }
     }
     Ok(())
+}
+
+/// driver の誤りの種類を `IOErrorKind` のタグにする。extern の誤りと同じく、最初の5種類のうち I/O の4つだけを出す
+/// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+fn io_kind(e: &std::io::Error) -> i64 {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => externs::IO_NOT_FOUND,
+        std::io::ErrorKind::PermissionDenied => externs::IO_PERMISSION_DENIED,
+        std::io::ErrorKind::Unsupported => externs::IO_NOT_AVAILABLE,
+        _ => externs::IO_OTHER,
+    }
 }
 
 /// 今の `Task` のタスクのセル。`main` と `par` の右の子は `Async` の操作を実行しない。
@@ -1987,7 +2180,7 @@ fn start_task<R: Exec>(
     Ok(sched.cells.start(ctx, scope, task.worker, g, &roots)?)
 }
 
-/// `finish_*` の終わり方を入口の `Task` に預ける。核に渡すのは `Task` の `Finish` で、そのときにはタスクの ID の物体は
+/// `finish_*` の終わり方をエントリの `Task` に預ける。核に渡すのは `Task` の `Finish` で、そのときにはタスクの ID の物体は
 /// 終わり方の値のほかに片付いている。先に渡すと、起こした側がセルを放してタスクの ID を退かせたときに、まだ動いている
 /// タスクの物体が残る (docs/spec/vm.md の「`Async` のタスク」)。
 fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), VmFault> {
@@ -1999,7 +2192,7 @@ fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), VmFault> {
 }
 
 /// 核が返した仕事を実行待ちの列の後ろに積む。どの方針でも FIFO である (docs/spec/vm.md の「タスクとスケジュール」)。
-/// 始める仕事と再開する仕事は、集まりのスタックで入口の `Task` にする。token は待っている `Task` の番号である。
+/// 始める仕事と再開する仕事は、集まりのスタックでエントリの `Task` にする。token は待っている `Task` の番号である。
 fn schedule<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     sched: &mut Scheduler<P>,
@@ -2007,10 +2200,21 @@ fn schedule<M: Mode, P: Policy>(
     run: Runnable,
 ) -> Result<(), VmFault> {
     let (function, args, argc, cell) = match run {
-        Runnable::Start { cell, closure } => (entries.start, [closure, Word::UNIT], 1, cell),
-        Runnable::Resume { cell, k, wake } => {
-            (entries.resume, [k, Word::from_bits(wake as usize)], 2, cell)
+        Runnable::Start { cell, closure } => {
+            (entries.start, [closure, Word::UNIT, Word::UNIT], 1, cell)
         }
+        Runnable::Resume { cell, k, wake } => (
+            entries.resume,
+            [k, Word::from_bits(wake as usize), Word::UNIT],
+            2,
+            cell,
+        ),
+        Runnable::ResumeIo { cell, k, wake, op } => (
+            entries.resume_io,
+            [k, Word::from_bits(wake as usize), op],
+            3,
+            cell,
+        ),
         Runnable::Token(WaitToken(token)) => {
             let id = token as TaskId;
             match sched.tasks.get(id) {
@@ -2043,15 +2247,15 @@ fn schedule<M: Mode, P: Policy>(
     Ok(())
 }
 
-/// 入口の `Task` が動き始める。始める仕事なら、閉包を始めたタスクの ID から今の ID へ戻す (`par` の join の
-/// `transfer_back` と同じ形)。引数を入口のフレームの slot 0.. に書いて入口の先頭へ進む。
+/// エントリの `Task` が動き始める。始める仕事なら、閉包を始めたタスクの ID から今の ID へ戻す (`par` の join の
+/// `transfer_back` と同じ形)。引数をエントリのフレームの slot 0.. に書いてエントリの先頭へ進む。
 fn enter<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     function: u32,
-    mut args: [Word; 2],
+    mut args: [Word; 3],
     argc: u8,
 ) -> Result<(), VmFault> {
     let cell = task
@@ -2072,7 +2276,7 @@ fn enter<R: Exec>(
     Ok(())
 }
 
-/// 入口の `Task` の `Finish`。タスクの残りの `evv` を手放し、預かった終わり方を核に渡して起こす仕事を積み、スタックを
+/// エントリの `Task` の `Finish`。タスクの残りの `evv` を手放し、預かった終わり方を核に渡して起こす仕事を積み、スタックを
 /// 集まりに返してほかのタスクに切り替える。`exit` の巻き戻しが底に着いたら、終わりの欄に書いて run を捨てる
 /// (docs/spec/vm.md の「`exit`」)。
 #[inline(never)]
@@ -2215,9 +2419,9 @@ fn failed<R: Exec>(
     }
 }
 
-/// 実行の時点で最も近い `effect` の handler の、`never` の操作 `op` の節の入口を、evidence と `args` で呼ぶ。evidence
-/// がなければ何もせずに `false` を返し、`args` も作らない。入口は `never` の節の入口なので、`yield_abort` で巻き戻しを
-/// 始めて戻らない。中断を起こした命令のフレームは入口の呼び出し元になり、その命令の地点の表の行で片付く。入口が戻らない
+/// 実行の時点で最も近い `effect` の handler の、`never` の操作 `op` の節のエントリを、evidence と `args` で呼ぶ。evidence
+/// がなければ何もせずに `false` を返し、`args` も作らない。エントリは `never` の節のエントリなので、`yield_abort` で巻き戻しを
+/// 始めて戻らない。中断を起こした命令のフレームはエントリの呼び出し元になり、その命令の地点の表の行で片付く。エントリが戻らない
 /// ので、安全点も置かない (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
 fn abort_to<R: Exec, const N: usize>(
     code: &CodeBase<R::M>,
@@ -2234,7 +2438,7 @@ fn abort_to<R: Exec, const N: usize>(
     let Some(ev) = (unsafe { ctx.ev_find(number) })? else {
         return Ok(false);
     };
-    // `ev_find` が `dup` した evidence を、節の入口の引数として渡す。`ev_clause` はそれを借りる
+    // `ev_find` が `dup` した evidence を、節のエントリの引数として渡す。`ev_clause` はそれを借りる
     let clause = unsafe { ctx.ev_clause(ev, op) }?;
     let args = args(ctx);
     task.scratch.clear();
@@ -2802,6 +3006,8 @@ fn run_extern<R: Exec>(
             | Extern::AsyncCancelMembers
             | Extern::AsyncParkSend
             | Extern::AsyncParkRecv
+            | Extern::AsyncParkIo
+            | Extern::AsyncParkIoUntil
             | Extern::ChanNewRaw
             | Extern::ChanReserveSend
             | Extern::ChanPushRaw
@@ -2811,7 +3017,17 @@ fn run_extern<R: Exec>(
             | Extern::AtomicNew
             | Extern::AtomicAdd
             | Extern::AtomicLoad
-            | Extern::AtomicStore => {
+            | Extern::AtomicStore
+            | Extern::IoTestOpenPair
+            | Extern::IoTestPeer
+            | Extern::IoTestSubmitWrite
+            | Extern::IoTestOpStream
+            | Extern::IoTestTakeWrite
+            | Extern::IoTestSubmitRead
+            | Extern::IoTestTakeRead
+            | Extern::IoTestOpTimedOut
+            | Extern::IoTestSubmitChecksum
+            | Extern::IoTestTakeChecksum => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

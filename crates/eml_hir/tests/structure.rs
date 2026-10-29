@@ -215,13 +215,13 @@ fn the_prelude_and_the_entry_are_separate_modules() {
     assert_eq!(entry.name, "Main");
     assert_eq!(lowered.files().path(prelude.file), eml_hir::PRELUDE_PATH);
     assert_eq!(entry.file, lowered.file());
-    // Prelude の item は Prelude のモジュールに、ユーザーの関数は入口のモジュールにある
+    // Prelude の item は Prelude のモジュールに、ユーザーの関数はエントリのモジュールにある
     let (concat, _) = program.functions().find(|(_, f)| f.name == "++").unwrap();
     let (f, _) = program.functions().find(|(_, f)| f.name == "f").unwrap();
     assert_eq!(concat.module, program.prelude);
     assert_eq!(f.module, program.entry);
     assert_eq!(program.lang.bool.module, program.prelude);
-    // 本体は入口のモジュールの表にある
+    // 本体はエントリのモジュールの表にある
     assert!(program.body(f).is_some());
     assert!(program.body(concat).is_none());
     assert_eq!(program.arity(concat), Some(2));
@@ -275,7 +275,7 @@ fn an_operation_named_main_is_not_the_entry_function() {
 
 #[test]
 fn a_main_in_the_prelude_is_not_the_entry_function() {
-    // `main` は入口のモジュールからだけ探す (docs/implementation/architecture.md の「CLI と lib API」)
+    // `main` はエントリのモジュールからだけ探す (docs/implementation/architecture.md の「CLI と lib API」)
     let prelude = format!(
         "{}\nmain : Unit -> <IO> Unit\nmain () = ()\n",
         eml_hir::PRELUDE_SOURCE

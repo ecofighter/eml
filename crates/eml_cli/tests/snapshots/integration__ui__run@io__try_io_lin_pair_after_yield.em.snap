@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/io/try_io_lin_pair_after_yield.em
+---
+--- stdout ---
+kept 1
+Other: gave up
+--- stderr ---

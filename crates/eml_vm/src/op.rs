@@ -100,7 +100,7 @@ pub enum Op {
     TailClause {
         at: u32,
     },
-    /// 自己末尾呼び出し。`operands[at..]` は [入口の命令の位置, 引数の数, 引数のスロット…]。
+    /// 自己末尾呼び出し。`operands[at..]` は [エントリの命令の位置, 引数の数, 引数のスロット…]。
     TailSelf {
         at: u32,
     },
@@ -400,7 +400,7 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
-    /// `operands[at..]` は [evidence のスロット, 操作, 入口のスロット]。
+    /// `operands[at..]` は [evidence のスロット, 操作, エントリのスロット]。
     EvSetClause {
         dst: Slot,
         at: u32,

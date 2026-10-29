@@ -1,12 +1,12 @@
-//! 変数の生存 (docs/spec/lir.md の「生存解析」)。ブロックを後ろからたどる1回のループで、ブロックごとの入口の生存集合を
+//! 変数の生存 (docs/spec/lir.md の「生存解析」)。ブロックを後ろからたどる1回のループで、ブロックごとのエントリの生存集合を
 //! 求め、側の表として返す。IR には書かない。辺はすべて番号の大きいブロックへ向かうので、後ろからたどれば、行き先の
-//! 入口の集合はいつも求め終わっている。
+//! エントリの集合はいつも求め終わっている。
 
 use std::collections::BTreeSet;
 
 use crate::{Atom, BlockId, LirFn, Rhs, Stmt, Term, VarId};
 
-/// ブロックごとの入口の生存集合。`BlockId` の番号で引き、各集合は昇順に並ぶ。入口は、ブロックの引数と case の
+/// ブロックごとのエントリの生存集合。`BlockId` の番号で引き、各集合は昇順に並ぶ。エントリは、ブロックの引数と case の
 /// フィールドを束縛した後の位置なので、使う引数とフィールドも集合に入る。RC の対象に限らず、すべての変数を持つ。
 /// VM のスロットの割り当てが、文の単位の干渉を作るのに RC でない変数も数えるためである
 /// (docs/spec/vm.md の「スロットの割り当て」)。
@@ -24,7 +24,7 @@ pub fn live_in(function: &LirFn) -> Vec<Vec<VarId>> {
 }
 
 /// 終端の後で生きている変数。終端そのものが使う変数は入らない。`return` と `tail` の後には何も残らない。`jump` は
-/// (行き先の入口 − 行き先の引数)、`switch` は各 case の (行き先の入口 − フィールド) と default の入口の和である。
+/// (行き先のエントリ − 行き先の引数)、`switch` は各 case の (行き先のエントリ − フィールド) と default のエントリの和である。
 pub fn live_after_term(function: &LirFn, term: &Term, live_in: &[Vec<VarId>]) -> BTreeSet<VarId> {
     let mut live = BTreeSet::new();
     let mut add = |target: BlockId, bound: &[VarId]| {

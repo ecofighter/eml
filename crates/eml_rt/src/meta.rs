@@ -547,7 +547,8 @@ pub(crate) tracked struct BlockPerm {
 
 /// `String` と `Bytes` の物体のバイト列。メモリのバイト列はこれに等しい (信頼の一覧の T10)。証明が好きな列を書けると
 /// T10 の約束が崩れるので、欄を隠して、この module の外では作れないようにする。列を変えるのは
-/// `BlockPerm::clear_text`、`BlockPerm::truncate_text`、`crate::text` の `write_bytes` と `write_byte` だけである。
+/// `BlockPerm::clear_text`、`BlockPerm::truncate_text`、`crate::text` の `write_bytes`、`write_byte`、`bytes_commit` だけ
+/// である。
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
 pub(crate) ghost struct Text {
     bytes: Seq<u8>,

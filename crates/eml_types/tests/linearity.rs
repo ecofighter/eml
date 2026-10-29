@@ -1083,7 +1083,7 @@ fn a_member_beside_a_self_recursive_one_is_named() {
     ");
 }
 
-/// 戻らない呼び出しの前で暗黙に手放す変数の副表 (`BodyTypes::implicit_drops`) を、入口のモジュールのすべての本体から
+/// 戻らない呼び出しの前で暗黙に手放す変数の副表 (`BodyTypes::implicit_drops`) を、エントリのモジュールのすべての本体から
 /// 集め、`行:列 [名前, …]` の行に呼び出しの位置の順で並べる。診断のないプログラムだけを受ける。
 fn implicit_drops(text: &str) -> String {
     let checked = check(text);

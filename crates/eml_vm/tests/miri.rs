@@ -2,7 +2,7 @@
 //! の `unsafe fn` を呼ぶので、核の操作の前提を守っていることを確かめる。メモリの Host だけを使い、ファイルを開かない。
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
-//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、`apply` と生の語の捕獲、複数の値の戻りと構造体と箱の間の
+//! 文字列を返すエントリの結果を写すこと、`exit` の巻き戻し、`apply` と生の語の捕獲、複数の値の戻りと構造体と箱の間の
 //! 変換、`par` のタスクの切り替えと子の中断、両方のモード。
 
 use eml_vm::{AnyMachine, RunConfig, RuntimeError, Sched, VmFault, capture_host, execute};
@@ -202,7 +202,7 @@ fn second() -> unit {
     }
 }
 
-/// 文字列を返す入口の結果を写す (`Ctx::copy_string`)。`Finish` は結果を手放さず、写した後に手放す。
+/// 文字列を返すエントリの結果を写す (`Ctx::copy_string`)。`Finish` は結果を手放さず、写した後に手放す。
 #[test]
 fn a_shown_entry_copies_its_result() {
     let text = "\
@@ -296,90 +296,118 @@ fn scale(k.0: float, x.1: tobj) -> tobj {
 }
 
 /// 複数の値の戻りと、構造体と箱の間の変換。構造体は参照の葉 (文字列) を持つ。`pair` は葉を `RetN` で返す。`apply`
-/// に渡す箱は、`same` の一様な版が葉に開いて空け、`same` の葉の結果を版が箱に入れる。`main` の
-/// 構造体の `unbox` はその箱から葉を借り、`release unboxed` が箱を空けて葉を受け取る。`take` は構造体を葉のまま
-/// 受ける。構造体はまだソースから作られないので、手書きの LIR をパスに通す。
+/// に渡す箱は、`same` の一様な変種が葉に開いて空け、`same` の葉の結果を同じ箱に入れ直す。`take` の一様な変種は箱を
+/// 空けて葉を受け取り、`take` は構造体を葉のまま受ける。構造体はまだソースから作られないので、手書きの LIR を
+/// パスに通した結果をそのまま書く。Miri の下でパスを流すと、実行よりも時間がかかるためである。テキストがパスの出力と
+/// 同じであることは、`structs.rs` の `the_miri_texts_are_the_pass_output` が Miri の外で確かめる。
 #[test]
 fn multi_value_returns() {
-    let named = "Named{obj, float}";
-    let text = format!(
-        "\
-layout Named {{ Named(obj, float) }}
-fn main() -> unit {{
+    assert_eq!(run_both(MULTI_VALUE_RETURNS), "multi value\n1.5\n");
+}
+
+pub(crate) const MULTI_VALUE_RETURNS: &str = "\
+layout Named { Named(obj, float) }
+fn main() -> unit {
   let a.0: obj = const \"multi\"
   let b.1: obj = const \" value\"
   let s.2: obj = extern \"Prelude.++\"(a.0, b.1)
-  let p.3: {named} = call pair(s.2)
-  let q.4: {named} = apply &same(p.3)
-  let x.5: float = apply &take(q.4)
+  let (p.0.11: obj, p.1.12: float) = call pair(s.2)
+  let p.8: obj = con Named #0(p.0.11, p.1.12)
+  let q.9: tobj = apply &same$uniform(p.8)
+  let x.10: tobj = apply &take$uniform(q.9)
+  let x.5: float = unbox x.10
+  decref x.10
   let t.6: obj = extern \"Prelude.Show Float.show\"(x.5)
   let u.7: unit = extern Prelude.println(t.6)
   return u.7
-}}
-fn pair(s.0: obj) -> {named} {{
-  let p.1: {named} = con Named #0(s.0, 1.5)
-  return p.1
-}}
-fn same(p.0: {named}) -> {named} {{
-  return p.0
-}}
-fn take(p.0: {named}) -> float {{
-  unpack p.0 Named #0(s.1: obj, x.2: float)
-  let u.3: unit = extern Prelude.println(s.1)
-  return x.2
-}}
-"
-    );
-    let mut program = eml_lir::parse(&text).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+}
+fn pair(s.0: obj) -> (obj, float) {
+  return (s.0, 1.5)
+}
+fn same(p.0.1: obj, p.1.2: float) -> (obj, float) {
+  return (p.0.1, p.1.2)
+}
+fn take(p.0.4: obj, p.1.5: float) -> float {
+  let u.3: unit = extern Prelude.println(p.0.4)
+  return p.1.5
+}
+fn same$uniform(p.2: tobj) -> tobj {
+  let (p.0.4: obj, p.1.5: float) = unbox p.2 Named
+  let r.8: token = release unboxed p.2 Named #0(p.0.4, _)
+  let (r.0.6: obj, r.1.7: float) = call same(p.0.4, p.1.5)
+  let r.3: obj = con Named #0(r.0.6, r.1.7) reuse r.8 in place
+  return r.3
+}
+fn take$uniform(p.2: tobj) -> tobj {
+  let (p.0.4: obj, p.1.5: float) = unbox p.2 Named
+  release unboxed p.2 Named #0(p.0.4, _)
+  let r.1: float = call take(p.0.4, p.1.5)
+  let r.3: tobj = box r.1
+  return r.3
+}
+";
+
+/// 共有の箱から、`tobj` の欄に入ったスカラーの葉と文字列の葉を2回取り出す (docs/spec/vm.md の「データとクロージャ」)。
+/// 上の `multi_value_returns` と同じく、パスを通した結果を書く。
+#[test]
+fn shared_struct_boxes_with_scalar_leaves() {
     assert_eq!(
-        run_program(&program, Sched::Sequential),
-        "multi value\n1.5\n"
+        run_both(SHARED_STRUCT_BOXES_WITH_SCALAR_LEAVES),
+        "4611686018427387904\nhello\n"
     );
 }
 
-/// 共有の箱から、`tobj` の欄に入ったスカラーの葉と文字列の葉を2回取り出す (docs/spec/vm.md の「データとクロージャ」)。
-#[test]
-fn shared_struct_boxes_with_scalar_leaves() {
-    let t = "(,,){int, float, obj}";
-    let text = format!(
-        "\
-layout (,,) {{ (,,)(tobj, tobj, tobj) }}
-fn main() -> unit {{
-  let w.0: tobj = apply &make(())
-  let x.1: int = apply &first(w.0)
-  let y.2: obj = apply &third(w.0)
+pub(crate) const SHARED_STRUCT_BOXES_WITH_SCALAR_LEAVES: &str = "\
+layout (,,) { (,,)(tobj, tobj, tobj) }
+fn main() -> unit {
+  let w.0: tobj = apply &make$uniform(())
+  dup w.0
+  let x.6: tobj = apply &first$uniform(w.0)
+  let x.1: int = unbox x.6
+  decref x.6
+  let y.2: obj = apply &third$uniform(w.0)
   let s.3: obj = extern \"Prelude.Show Int.show\"(x.1)
   let u.4: unit = extern Prelude.println(s.3)
   let u.5: unit = extern Prelude.println(y.2)
   return u.5
-}}
-fn make(u.0: unit) -> {t} {{
+}
+fn make(u.0: unit) -> (int, float, obj) {
   let a.1: obj = const \"he\"
   let b.2: obj = const \"llo\"
   let s.3: obj = extern \"Prelude.++\"(a.1, b.2)
-  let p.4: {t} = con (,,) #0(4611686018427387904, 2.5, s.3)
-  return p.4
-}}
-fn first(p.0: {t}) -> int {{
-  unpack p.0 (,,) #0(x.1: int, y.2: float, z.3: obj)
-  return x.1
-}}
-fn third(p.0: {t}) -> obj {{
-  unpack p.0 (,,) #0(x.1: int, y.2: float, z.3: obj)
-  return z.3
-}}
-"
-    );
-    let mut program = eml_lir::parse(&text).unwrap_or_else(|error| panic!("{error}"));
-    eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
-    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(
-        run_program(&program, Sched::Sequential),
-        "4611686018427387904\nhello\n"
-    );
+  return (4611686018427387904, 2.5, s.3)
 }
+fn first(p.0.4: int, p.1.5: float, p.2.6: obj) -> int {
+  decref p.2.6
+  return p.0.4
+}
+fn third(p.0.4: int, p.1.5: float, p.2.6: obj) -> obj {
+  return p.2.6
+}
+fn make$uniform(u.0: unit) -> tobj {
+  let (r.0.3: int, r.1.4: float, r.2.5: obj) = call make(u.0)
+  let r.6: tobj = box r.0.3
+  let r.7: tobj = box r.1.4
+  let r.2: obj = con (,,) #0(r.6, r.7, r.2.5)
+  return r.2
+}
+fn first$uniform(p.2: tobj) -> tobj {
+  let (p.0.4: tobj, p.1.6: tobj, p.2.8: obj) = unbox p.2 (,,)
+  let p.0.5: int = unbox p.0.4
+  let p.1.7: float = unbox p.1.6
+  release unboxed p.2 (,,) #0(_, _, p.2.8)
+  let r.1: int = call first(p.0.5, p.1.7, p.2.8)
+  let r.3: tobj = box r.1
+  return r.3
+}
+fn third$uniform(p.2: tobj) -> obj {
+  let (p.0.3: tobj, p.1.5: tobj, p.2.7: obj) = unbox p.2 (,,)
+  let p.0.4: int = unbox p.0.3
+  let p.1.6: float = unbox p.1.5
+  release unboxed p.2 (,,) #0(_, _, p.2.7)
+  tail call third(p.0.4, p.1.6, p.2.7)
+}
+";
 
 /// `par` の fork と join とタスクの切り替え。VM は検証していないコードから `share`、`transfer_back`、
 /// `Ctx::switch_task` を呼び、`Task` と join の節点は切り替えをまたいでヒープの語を持つ。右の閉包は親も持つ組を

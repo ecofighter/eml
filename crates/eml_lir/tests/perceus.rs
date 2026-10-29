@@ -22,7 +22,7 @@ fn perceus_text(text: &str) -> String {
 
 #[test]
 fn live_in_holds_every_variable_used_later() {
-    // RC の対象でない変数も入る。VM のスロットの割り当てが使うためである。jump の引数と case のフィールドは行き先の入口で生きている
+    // RC の対象でない変数も入る。VM のスロットの割り当てが使うためである。jump の引数と case のフィールドは行き先のエントリで生きている
     let program = parse(
         "\
 layout Prelude.Bool { False, True }
@@ -87,7 +87,7 @@ fn first(a.0: obj, b.1: tobj, n.2: int) -> obj {
 
 #[test]
 fn a_variable_that_dies_on_one_edge_is_released_in_that_block() {
-    // `b1` は `s.1` を使わずに `b3` へ行くので、入口で捨てる。`b2` は `s.1` を引数で渡す
+    // `b1` は `s.1` を使わずに `b3` へ行くので、エントリで捨てる。`b2` は `s.1` を引数で渡す
     let text = "\
 layout Prelude.Bool { False, True }
 fn pick(c.0: enum, s.1: obj) -> obj {
@@ -338,7 +338,7 @@ fn echo(s.0: obj) -> obj {
 #[test]
 fn a_field_passed_to_an_arm_and_used_after_it_is_dupped_before_the_jump() {
     // case-of-case で枝のラベルへフィールドを渡し、枝の後でも使う形。`b3` は `v.2` を引数で渡し、`b5` でも使うので
-    // jump の前で複製する。`b5` の入口で生きている `v.2` は、どちらの辺でも jump の前で `o` を解いて所有にする
+    // jump の前で複製する。`b5` のエントリで生きている `v.2` は、どちらの辺でも jump の前で `o` を解いて所有にする
     let text = "\
 layout Option { None, Some(tobj) }
 layout Prelude.Bool { False, True }
@@ -506,7 +506,7 @@ fn twenty_thousand_conditions_are_rewritten() {
 
 #[test]
 fn a_field_of_a_live_scrutinee_is_dupped_where_it_is_consumed() {
-    // 死んだ `y` は行き先の入口で捨てる。`s` は `con` が消費する所で所有を取り、持ち主の `o` もその `con` が使うので
+    // 死んだ `y` は行き先のエントリで捨てる。`s` は `con` が消費する所で所有を取り、持ち主の `o` もその `con` が使うので
     // 複製する (docs/spec/lir.md の「所有を取る時点」)
     let text = "\
 layout Option { None, Some(tobj) }
@@ -923,7 +923,7 @@ fn f(p.0: obj) -> obj {
 #[test]
 fn the_owner_of_a_borrowed_scrutinee_is_kept_at_the_target() {
     // b2 の scrutinee h.1 は借用なので、その持ち主 x.0 が、b2 で生きている v.2 のために保持される。b1 では何も
-    // 生きていないので、入口で x.0 を `decref` する
+    // 生きていないので、エントリで x.0 を `decref` する
     let shown = perceus_text(
         "\
 layout Option { None, Some(tobj) }
@@ -1321,7 +1321,7 @@ internal uniform from 0 fn f(p.0: (,){obj, obj}) -> obj {
 
 #[test]
 fn a_lin_box_unboxed_before_a_switch_is_dropped_only_where_it_is_not_consumed() {
-    // box の挿入は構造体の `unbox` を使う所の支配点 (入口) に置く。`b2` は箱をそのまま返して消費し、`b1` は葉だけを
+    // box の挿入は構造体の `unbox` を使う所の支配点 (エントリ) に置く。`b2` は箱をそのまま返して消費し、`b1` は葉だけを
     // 使う。`lin` の箱は `decref` できない (V1) ので、`b1` の道でだけ `drop` で手放す。RC の対象の葉がないので、
     // 名前を書く葉もない
     let text = "\
@@ -1442,7 +1442,7 @@ b2:
 
 #[test]
 fn a_lin_box_unboxed_before_a_switch_is_released_with_the_leaf_its_path_uses() {
-    // 入口で取り出した RC の葉を `b1` だけが使う。`b1` は葉に名前を書いた `release unboxed` で箱を解き、`b2` は箱を
+    // エントリで取り出した RC の葉を `b1` だけが使う。`b1` は葉に名前を書いた `release unboxed` で箱を解き、`b2` は箱を
     // そのまま返す
     let text = "\
 layout Tok { Tok(tobj, float) }

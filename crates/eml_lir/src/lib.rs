@@ -37,7 +37,7 @@ pub use verify::{verify, verify_flattened, verify_lowered, verify_scopes};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub functions: Vec<LirFn>,
-    /// 実行の入口。`main` を `()` で呼ぶ、引数のない関数 (docs/spec/core-ir.md)。
+    /// 実行のエントリ。`main` を `()` で呼ぶ、引数のない関数 (docs/spec/core-ir.md)。
     pub entry: FnIdx,
     /// 文字列リテラルの定数表。`ConstString` と `CasePattern::String` が添字で引く。VM のコード生成は項目ごとに
     /// 凍結した領域の物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/vm.md の「値と定数」)。
@@ -96,16 +96,16 @@ pub struct LirFn {
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
-    /// in-place の入口の関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
+    /// in-place のエントリの関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
     /// 返す。`ev_set_clause` に渡す値としてだけ参照される。テキストの形では `yields` の後に `clause E.op fn` と書く
-    /// (docs/spec/lir.md の「入口の関数の印」)。
+    /// (docs/spec/lir.md の「エントリの関数の印」)。
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr と印の並び。長さは1以上である。開くパス (flatten) の前はいつも1つで、開いた後は
     /// 構造体を返す関数がその葉を並べる (docs/spec/lir.md の「開く」)。
     /// テキストの形では、2つ以上の値を `-> (float, float)` と書く。
     pub rets: Vec<(Repr, Mark)>,
-    /// `blocks[0]` が入口で、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
+    /// `blocks[0]` がエントリで、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
     pub blocks: Vec<Block>,
 }
 
@@ -516,7 +516,7 @@ pub enum Call {
         /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
         prompt: Option<VarId>,
     },
-    /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
+    /// 操作の in-place のエントリのクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
     /// (docs/spec/lir.md の「節の呼び出し」)。
     Clause {
@@ -628,7 +628,7 @@ pub struct Ctor {
 /// data の型1つか、タプルの要素の数1つの配置 (docs/spec/lir.md の「データの配置」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Layout {
-    /// テキストの形で引く名前。関数と同じく、入口以外のモジュールの型は修飾する (`Prelude.Bool`)。タプルは `(,)`。
+    /// テキストの形で引く名前。関数と同じく、エントリ以外のモジュールの型は修飾する (`Prelude.Bool`)。タプルは `(,)`。
     pub name: String,
     /// タグの順のコンストラクタ。
     pub constructors: Vec<LayoutCtor>,

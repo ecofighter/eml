@@ -182,7 +182,7 @@ fn ctx() -> Ctx<Fast> {
     )
 }
 
-/// `evv` の先頭に、エフェクト `effect` の操作1つの evidence を足す。入口は関数の値 (即値) である。
+/// `evv` の先頭に、エフェクト `effect` の操作1つの evidence を足す。エントリは関数の値 (即値) である。
 fn push(ctx: &mut Ctx<Fast>, effect: u16) {
     // SAFETY: evv_get と ev_new が返した参照をそのまま次の操作に渡し、ほかの語には触れない。
     unsafe {

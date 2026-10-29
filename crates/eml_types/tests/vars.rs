@@ -6,7 +6,7 @@ use eml_test_support::{check, short_text};
 
 use crate::common::{check_full, check_short, check_text};
 
-/// 入口のモジュールの関数ごとに、`var` の変数の型と分類、添字のノードの種類を出す。診断があれば先に出す。
+/// エントリのモジュールの関数ごとに、`var` の変数の型と分類、添字のノードの種類を出す。診断があれば先に出す。
 fn vars(text: &str) -> String {
     let checked = check(text);
     let program = &checked.program;

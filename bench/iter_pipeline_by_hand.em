@@ -1,4 +1,4 @@
--- `iter_pipeline.em` の各段を、ラムダを書き込んだ専用の `evens` / `squares` / `sum` にした手書きの版。
+-- `iter_pipeline.em` の各段を、ラムダを書き込んだ専用の `evens` / `squares` / `sum` にした手書きのプログラム。
 import Yield (Yield(..))
 import Iter (Iter)
 

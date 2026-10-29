@@ -1,5 +1,5 @@
 -- 呼び出しの規約の引き換えの形 (docs/implementation/benchmarks.md の「呼び出しの規約の引き換え」)。データに通した
--- `List.map` は特殊化されず、一様な版を通って、データに通した関数の値を呼ぶ。関数の値は引数と結果が一様なので、`map`
+-- `List.map` は特殊化されず、一様な変種を通って、データに通した関数の値を呼ぶ。関数の値は引数と結果が一様なので、`map`
 -- はリストの要素の箱をそのまま渡す。`keep` は箱から `Float` を取り出して比べ、結果を箱に入れて返す
 -- (docs/spec/lir.md の「関数の ABI」)。要素ごとの箱の数は `crates/eml_vm/tests/bench.rs` の `trade_offs` が固定する。
 import List

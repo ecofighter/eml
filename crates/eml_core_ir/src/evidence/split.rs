@@ -275,7 +275,7 @@ impl<'a> Splitter<'a> {
         }
     }
 
-    /// 合流のブロック J の入口で生きている変数から、J の引数を除いたもの。番号の順に並ぶ。
+    /// 合流のブロック J のエントリで生きている変数から、J の引数を除いたもの。番号の順に並ぶ。
     fn join_live(&self, join: BlockId) -> Vec<VarId> {
         join_live(self.source, &self.live_in, join, None).collect()
     }

@@ -1,4 +1,4 @@
-//! 型付き HIR から、前向きの辺だけを持つブロックの列への変換 (docs/spec/core-ir.md)。式の値の渡し先 (出口) と、
+//! 型付き HIR から、前向きの辺だけを持つブロックの列への変換 (docs/spec/core-ir.md)。式の値の渡し先 (行き先) と、
 //! 条件の分かれ方という制御の骨組みをここに置く。ブロックの組み立ては crate の `builder.rs`、式ごとの変換は `expr.rs`、
 //! パターンの決定木と case-of-case は `pattern.rs`、関数の表と包む関数は `program.rs`、型から決まる Repr は
 //! `types.rs`、導出した instance とタプルの instance の生成器は `derive.rs`、REPL の式の入力の値を書く表示関数の生成器は `display.rs` にある。
@@ -47,7 +47,7 @@ pub(crate) use types::tuple_struct;
 enum ContinuationForm {
     /// `k` を生の継続のまま持ち、呼び出しを `Call::Resume` にする。`k` を捕まえた入れ子の関数でも生の継続のままである。
     Direct,
-    /// 節の入口で、生の継続を `$cont$` か `$cont$state` のクロージャに包み、それを `k` とする。
+    /// 節のエントリで、生の継続を `$cont$` か `$cont$state` のクロージャに包み、それを `k` とする。
     Wrapped,
 }
 
@@ -419,7 +419,7 @@ pub(crate) fn translate(
     let InstanceKind::Function(entry_instance) = &instances.list[instances.entry.0].kind else {
         unreachable!("the entry is a function of the program")
     };
-    // 入口の関数とその中の `()` の呼び出しの印は、宣言の型の最初の矢印から決める (docs/spec/core-ir.md の
+    // エントリの関数とその中の `()` の呼び出しの印は、宣言の型の最初の矢印から決める (docs/spec/core-ir.md の
     // 「`yields` の印」)
     let first_arrow = typed
         .bodies
@@ -451,7 +451,7 @@ pub(crate) fn translate(
     }
 }
 
-/// 入口の関数が入口の結果をどう扱うか。REPL の入力なら、`let` は根に置き、式は値を書いた文字列を返す
+/// エントリの関数がエントリの結果をどう扱うか。REPL の入力なら、`let` は根に置き、式は値を書いた文字列を返す
 /// (docs/spec/core-ir.md の「REPL の入力」)。
 fn entry_after(
     hir: &HirProgram,
@@ -819,7 +819,7 @@ impl<'a> FnLowering<'a> {
         }
     }
 
-    /// 式の値を `exit` に渡す。`if`、`match` と、文の後に続く値は、同じ出口のまま中へ進む。条件の `if` が入れ子でも、
+    /// 式の値を `exit` に渡す。`if`、`match` と、文の後に続く値は、同じ行き先のまま中へ進む。条件の `if` が入れ子でも、
     /// 内側の枝は外側の文脈に直接値を渡すので、真偽値を作らずに分かれる。
     fn tail_expr(&mut self, id: ExprId, exit: Exit) {
         let body = self.ctx.body;
@@ -895,7 +895,7 @@ impl<'a> FnLowering<'a> {
         }
     }
 
-    /// 文脈に値を渡す。値が分かれば行き先へ直接向かい、分からなければ値の分からない出口として扱う。
+    /// 文脈に値を渡す。値が分かれば行き先へ直接向かい、分からなければ値の分からない枝の終わりとして扱う。
     fn select(&mut self, ctx: CtxId, value: Occ) {
         match &self.contexts[ctx.0] {
             &Ctx::Bool {

@@ -1656,7 +1656,7 @@ proof fn lemma_rekinded_same<M: Mode>(h1: Heap<M>, h0: Heap<M>, a: usize, kind: 
     }
 }
 
-/// `set_body_kind` の後も、`evv` のリストは同じ列のリストである。節点も evidence も入口の表も `Data` で、書き換えた
+/// `set_body_kind` の後も、`evv` のリストは同じ列のリストである。節点も evidence もエントリの表も `Data` で、書き換えた
 /// 物体は前も後も文字列かバイト列なので、どの物体が `Data` かは変わらない。
 proof fn lemma_path_rekinded<M: Mode>(
     h1: Heap<M>,

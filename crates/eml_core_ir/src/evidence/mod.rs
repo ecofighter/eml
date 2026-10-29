@@ -18,7 +18,7 @@ use rustc_hash::FxHashMap;
 
 use split::split;
 
-/// 節ごとに in-place の入口を作り、handle、`perform`、`resume`、`mask` を基本操作と呼び出しに替えてから、`yields` の
+/// 節ごとに in-place のエントリを作り、handle、`perform`、`resume`、`mask` を基本操作と呼び出しに替えてから、`yields` の
 /// 関数のうち `clause` の印のないものを、yield の地点で継続の関数に分ける
 /// (docs/spec/core-ir.md の「evidence passing」)。
 pub fn evidence(program: &mut Program) {

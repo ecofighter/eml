@@ -146,7 +146,7 @@ struct Printer<'a> {
 }
 
 impl Printer<'_> {
-    /// 入口の外のモジュールの item への参照に、そのモジュールの名前を付ける。名前の解決のテストで、同じ名前の
+    /// エントリの外のモジュールの item への参照に、そのモジュールの名前を付ける。名前の解決のテストで、同じ名前の
     /// どの定義に解決したかを読み分けるため。
     fn qualified(&self, module: ModuleId, name: &str) -> String {
         if module == self.program.entry {

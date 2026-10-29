@@ -44,7 +44,7 @@ fn records(checked: &Checked, module: &str, name: &str) -> String {
     rows.into_iter().map(|(_, row)| row).collect()
 }
 
-/// 入口のモジュールの関数 `name` の記録。
+/// エントリのモジュールの関数 `name` の記録。
 fn entry_table(text: &str, name: &str) -> String {
     table(&check(text), "Main", name)
 }

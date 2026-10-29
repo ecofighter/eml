@@ -1,4 +1,4 @@
-# 定義し直した型の古い版は、診断で `#` と定義した入力の番号を付けて表示する
+# 定義し直した型の古いバージョンは、診断で `#` と定義した入力の番号を付けて表示する
 > data Shape = | Circle Int
 > let old = Circle 1
 > data Shape = | Square Int

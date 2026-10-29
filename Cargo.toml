@@ -16,11 +16,14 @@ eml_types = { path = "crates/eml_types" }
 eml_core_ir = { path = "crates/eml_core_ir" }
 eml_lir = { path = "crates/eml_lir" }
 eml_rt = { path = "crates/eml_rt" }
+eml_io = { path = "crates/eml_io" }
 eml_vm = { path = "crates/eml_vm" }
 eml_cli = { path = "crates/eml_cli", default-features = false }
 eml_test_support = { path = "crates/eml_test_support", default-features = false }
 ariadne = "0.6"
 clap = { version = "4.6", features = ["derive"] }
+compio-buf = "=0.8.3"
+compio-driver = { version = "=0.12.5", default-features = false, features = ["polling", "sync"] }
 insta = "1.49"
 la-arena = "0.3"
 libc = "0.2"

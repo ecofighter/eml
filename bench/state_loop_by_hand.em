@@ -1,4 +1,4 @@
--- `state_loop.em` のループを、状態を引数で手で受け渡す形に書いた版。`run_by_hand` と `exec_by_hand` は、
+-- `state_loop.em` のループを、状態を引数で手で受け渡す形に書いたもの。`run_by_hand` と `exec_by_hand` は、
 -- `Std.State` の `run` と `exec` をなぞる
 bump : Int -> Int -> <Panic> Int
 bump i st = st + i

@@ -1,4 +1,4 @@
-//! スロットの割り当て (docs/spec/vm.md の「スロットの割り当て」)。文の単位の生存から干渉グラフを作り、入口の引数を
+//! スロットの割り当て (docs/spec/vm.md の「スロットの割り当て」)。文の単位の生存から干渉グラフを作り、エントリの引数を
 //! スロット 0.. に固定してから、残りの変数を番号の順に、隣と違ういちばん小さい色で塗る。
 
 use eml_lir::liveness::{live_after_term, live_in, step_back};
@@ -65,13 +65,13 @@ fn interference(function: &LirFn) -> Vec<Vec<u32>> {
     };
     let live_in = live_in(function);
     for (index, block) in function.blocks.iter().enumerate() {
-        // ブロックの引数は入口で同時に書くので、互いと、入口で生きている変数と干渉する
+        // ブロックの引数はエントリで同時に書くので、互いと、エントリで生きている変数と干渉する
         for &param in &block.params {
             for &other in block.params.iter().chain(&live_in[index]) {
                 edge(param, other);
             }
         }
-        // case のフィールドは switch で書くので、互いと、行き先の入口で生きている変数と、scrutinee と干渉する。
+        // case のフィールドは switch で書くので、互いと、行き先のエントリで生きている変数と、scrutinee と干渉する。
         // scrutinee のスロットを上書きすると、残りのフィールドを読めなくなるためである
         if let Term::Switch {
             scrutinee, cases, ..

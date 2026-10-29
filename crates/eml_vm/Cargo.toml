@@ -12,6 +12,7 @@ doctest = false
 [dependencies]
 eml_extern.workspace = true
 eml_lir.workspace = true
+eml_io.workspace = true
 eml_rt.workspace = true
 rustc-hash.workspace = true
 

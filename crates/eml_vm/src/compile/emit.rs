@@ -153,7 +153,7 @@ struct Emitter<'a, 'c, M: Mode> {
     goto_patches: Vec<(Pc, BlockId)>,
     /// 行き先のブロックを後で書くオペランドの位置。
     operand_patches: Vec<(usize, BlockId)>,
-    /// 自己末尾呼び出しのオペランドの位置。先頭の関数の番号を、関数を書き終えた後で入口の命令の位置に書き換える。
+    /// 自己末尾呼び出しのオペランドの位置。先頭の関数の番号を、関数を書き終えた後でエントリの命令の位置に書き換える。
     self_tail_patches: Vec<usize>,
     /// どこかで使う変数 (`used_vars`)。
     used: Vec<bool>,

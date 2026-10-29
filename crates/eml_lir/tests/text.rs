@@ -471,7 +471,7 @@ fn g(x.0: int, y.1: int) -> int {
 
 #[test]
 fn a_function_name_with_a_hash_sign_is_quoted() {
-    // 版の名前 (`f#3`) とハッシュの名前 (`f@#…`) は `#` を含む。`#` はタグの字なので、引用符で囲んで書く
+    // バージョンの名前 (`f#3`) とハッシュの名前 (`f@#…`) は `#` を含む。`#` はタグの字なので、引用符で囲んで書く
     // (docs/spec/core-ir.md の「変換の規則」)
     let program = round_trip(
         "\
@@ -748,7 +748,7 @@ fn f(c.0: tobj) -> int {
     );
 }
 
-/// 入口のブロックを除いて、ブロックは書いた順に `b1`、`b2`、… と番号が付く。
+/// エントリのブロックを除いて、ブロックは書いた順に `b1`、`b2`、… と番号が付く。
 #[test]
 fn labels_follow_the_order_of_the_blocks() {
     let error = parse_error("fn f() -> int {\n  jump b2()\nb2:\n  return 1\n}\n");
@@ -769,7 +769,7 @@ fn a_jump_to_an_unknown_block_is_an_error() {
     assert_eq!(error.message, "unknown block `b5`");
 }
 
-/// parser は構文だけを検査する。後ろ向きの辺、入口へ向かう辺、引数の数の誤り、見えない変数の使用、フィールドの数の
+/// parser は構文だけを検査する。後ろ向きの辺、エントリへ向かう辺、引数の数の誤り、見えない変数の使用、フィールドの数の
 /// 違う case は verifier に報告させるため、読めなければならない。
 #[test]
 fn ill_formed_blocks_parse() {

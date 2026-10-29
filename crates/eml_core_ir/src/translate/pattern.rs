@@ -1,7 +1,7 @@
 //! `match`、分解する `let`、分解する引数のパターンを決定木にし、ブロックに出す (docs/spec/core-ir.md)。
 //! 値は出現 (`Occ`) で表し、頭のコンストラクタかリテラルが分かっている出現では、`switch` を出さずにその場で case を
-//! 選ぶ。scrutinee は値をそのまま調べる文脈 (`Ctx::Match`) で変換する。出口の値が、値を調べずに1つの枝に行き着けば、
-//! その枝のラベルへ直接向かう (case-of-case)。行き着かない出口だけを集め、そこで決定木を出す。
+//! 選ぶ。scrutinee は値をそのまま調べる文脈 (`Ctx::Match`) で変換する。枝の終わりの値が、値を調べずに1つの枝に行き着けば、
+//! その枝のラベルへ直接向かう (case-of-case)。行き着かない枝の終わりだけを集め、そこで決定木を出す。
 
 use std::mem;
 
@@ -63,7 +63,7 @@ pub(super) struct Known {
     pub(super) args: Vec<Atom>,
 }
 
-/// scrutinee を値をそのまま調べる文脈。枝ごとのラベルと、値の分からなかった出口を持つ。
+/// scrutinee を値をそのまま調べる文脈。枝ごとのラベルと、値の分からなかった枝の終わりを持つ。
 pub(super) struct MatchCtx {
     /// 枝の順のパターン。
     pats: Vec<PatId>,
@@ -71,12 +71,12 @@ pub(super) struct MatchCtx {
     arms: Vec<Label>,
     /// 枝が、`let x = S` の直後の本体が `match x` である形の `x` を受けるか。
     passes_alias: Vec<bool>,
-    /// 値の分からなかった出口。開いたままのブロックと、そこで渡す出現。
+    /// 値の分からなかった枝の終わり。開いたままのブロックと、そこで渡す出現。
     unknown: Vec<(BlockId, Occ)>,
 }
 
 /// 調べる値の入り方。`match` と分解する `let` は式を、分解する引数は引数の変数を調べる。`Occ` の `Repr` と印は、
-/// 値の分からない出口をまとめるラベルの引数に使う。
+/// 値の分からない枝の終わりをまとめるラベルの引数に使う。
 pub(super) enum Scrutinee {
     Expr(ExprId),
     Occ(Occ, Repr, Mark),
@@ -86,7 +86,7 @@ pub(super) enum Scrutinee {
 /// (docs/spec/core-ir.md の「translate が決める印」)。
 #[derive(Clone, Copy)]
 enum Attempt<'a> {
-    /// 出口の値を調べずに1つの枝に行き着くかの試み (`select_arm`)。値を調べる必要が出たら諦める。行き着く葉は1つなので、
+    /// 枝の終わりの値を調べずに1つの枝に行き着くかの試み (`select_arm`)。値を調べる必要が出たら諦める。行き着く葉は1つなので、
     /// どの `con` の変数も開いてよい。
     Static,
     /// 値を調べる決定木。`received` は、ある枝が受け取るので開かない `con` の変数である。
@@ -242,8 +242,8 @@ impl FnLowering<'_> {
         }
     }
 
-    /// scrutinee を文脈 `Ctx::Match` で変換し、値の分からなかった出口で決定木を出す。枝のラベルを返す。
-    /// 分からない出口が1つならそのブロックに戻り、出現のまま決定木を作るので、タプルのリテラルの要素はそのまま
+    /// scrutinee を文脈 `Ctx::Match` で変換し、値の分からなかった枝の終わりで決定木を出す。枝のラベルを返す。
+    /// 分からない枝の終わりが1つならそのブロックに戻り、出現のまま決定木を作るので、タプルのリテラルの要素はそのまま
     /// 決定木の列になる。2つ以上なら値を作って未知の値のラベルに集め、その引数で決定木を作る
     /// (docs/spec/core-ir.md)。
     fn scrutinize(
@@ -253,7 +253,7 @@ impl FnLowering<'_> {
         alias: Option<LocalId>,
         passes_alias: Vec<bool>,
     ) -> Vec<Label> {
-        // 値の分からない出口が2つ以上のときだけ、まとめるラベルの引数の Repr を引く。構造体の Repr は配置を表に入れる
+        // 値の分からない枝の終わりが2つ以上のときだけ、まとめるラベルの引数の Repr を引く。構造体の Repr は配置を表に入れる
         // ので、作らずに分解するだけのタプルの配置を表に入れないためである
         let merged = match &scrutinee {
             Scrutinee::Expr(expr) => Err(self.ty(*expr)),
@@ -345,8 +345,8 @@ impl FnLowering<'_> {
             .collect()
     }
 
-    /// 文脈 `Ctx::Match` に出口の値を渡す。値を調べずに1つの枝に行き着けば、その枝のラベルへ向かい、コンストラクタは
-    /// 作らない。行き着かなければ、今のブロックを開いたまま、値の分からない出口として残す。
+    /// 文脈 `Ctx::Match` に枝の終わりの値を渡す。値を調べずに1つの枝に行き着けば、その枝のラベルへ向かい、コンストラクタは
+    /// 作らない。行き着かなければ、今のブロックを開いたまま、値の分からない枝の終わりとして残す。
     pub(super) fn select_arm(&mut self, ctx: CtxId, occ: Occ) {
         let rows = self.rows(ctx);
         match self.decide(std::slice::from_ref(&occ), rows, Attempt::Static) {

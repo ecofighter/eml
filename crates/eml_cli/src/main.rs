@@ -92,7 +92,7 @@ fn main() -> ExitCode {
             clock,
             file,
         } => {
-            // 読み込みとコンパイルの間の Ctrl-C も、OS の既定の動作でプロセスが終わらずに、この受け口が受ける。そこで立てたビットは、
+            // 読み込みとコンパイルの間の Ctrl-C も、OS の既定の動作でプロセスが終わらずに、このハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
             interrupt::install(Arc::clone(&control), interrupt::Mode::Run);
@@ -177,12 +177,12 @@ fn run_value_flags() -> Vec<String> {
         .collect()
 }
 
-/// 入口が読めないことは、読み込みの段に入る前に使い方の誤りとして報告する。依存先が読めないことは E1026 である。
+/// エントリが読めないことは、読み込みの段に入る前に使い方の誤りとして報告する。依存先が読めないことは E1026 である。
 fn load(path: &Path) -> Option<Session> {
     match fs::read_to_string(path) {
         Ok(text) => {
             let shown = entry_name(path);
-            // 根は入口のファイルのディレクトリである
+            // 根はエントリのファイルのディレクトリである
             let root = Path::new(&shown).parent().unwrap_or(Path::new(""));
             let source = FsProvider::new(root);
             Some(Session::load(&shown, &text, &source))
@@ -194,7 +194,7 @@ fn load(path: &Path) -> Option<Session> {
     }
 }
 
-/// 入口の表示のパス。モジュールの名前は `/` で区切るので、Windows では `\` を `/` に替える
+/// エントリの表示のパス。モジュールの名前は `/` で区切るので、Windows では `\` を `/` に替える
 /// (docs/spec/modules.md の「モジュール」)。
 fn entry_name(path: &Path) -> String {
     let shown = exact_spelling(path).display().to_string();
@@ -205,9 +205,9 @@ fn entry_name(path: &Path) -> String {
     }
 }
 
-/// 入口のファイル名を、ディレクトリの一覧にある綴りに直す。大文字小文字を区別しないファイルシステムでは
-/// `t/server.em` で `t/Server.em` を開ける。渡された綴りのままでは、依存先の `import Server` が入口を指すと分からず、
-/// 入口を別のモジュールとしてもう1回読んでしまう (docs/spec/modules.md の「モジュール」)。一覧を読めないか一致する
+/// エントリのファイル名を、ディレクトリの一覧にある綴りに直す。大文字小文字を区別しないファイルシステムでは
+/// `t/server.em` で `t/Server.em` を開ける。渡された綴りのままでは、依存先の `import Server` がエントリを指すと分からず、
+/// エントリを別のモジュールとしてもう1回読んでしまう (docs/spec/modules.md の「モジュール」)。一覧を読めないか一致する
 /// 名前がなければ、渡されたパスをそのまま使う。
 fn exact_spelling(path: &Path) -> PathBuf {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {

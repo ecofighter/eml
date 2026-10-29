@@ -33,7 +33,7 @@ pub use verify::{verify_evidence, verify_translated};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub functions: Vec<CoreFn>,
-    /// 実行の入口。`main` を `()` で呼ぶ、引数のない関数 (docs/spec/core-ir.md)。
+    /// 実行のエントリ。`main` を `()` で呼ぶ、引数のない関数 (docs/spec/core-ir.md)。
     pub entry: FnIdx,
     /// 文字列リテラルの定数表。`ConstString` と `CasePattern::String` が添字で引く。VM のコード生成は項目ごとに
     /// 凍結した領域の物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/vm.md の「値と定数」)。
@@ -87,15 +87,15 @@ pub struct CoreFn {
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
-    /// in-place の入口の関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
+    /// in-place のエントリの関数が受け持つ (エフェクト, 操作)。捕獲の後に evidence と操作の引数を受け、操作の結果を
     /// 返す。`ev_set_clause` に渡す値としてだけ参照される。テキストの形では `yields` の後に `clause E.op fn` と書く
-    /// (docs/spec/lir.md の「入口の関数の印」)。
+    /// (docs/spec/lir.md の「エントリの関数の印」)。
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr。
     pub ret: Repr,
     pub ret_mark: Mark,
-    /// `blocks[0]` が入口で、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
+    /// `blocks[0]` がエントリで、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
     pub blocks: Vec<Block>,
 }
 
@@ -483,7 +483,7 @@ pub enum Call {
     /// 継続を再開する。`state` は再開した handler の次の状態で、値は handle 式の値である。translate だけが出し、EP が
     /// `apply` に置き換える (docs/spec/core-ir.md の「再開と状態」)。
     Resume { k: Atom, arg: Atom, state: Atom },
-    /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
+    /// 操作の in-place のエントリのクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
     /// (docs/spec/lir.md の「節の呼び出し」)。
     Clause {

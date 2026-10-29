@@ -153,7 +153,7 @@ fn f(n.0: int, c.6: tobj) -> unit {
 #[test]
 fn calls_applies_and_returns_carry_leaves() {
     // 関数の引数、直接の呼び出しの引数、ブロックの引数と `jump` の実引数を葉の並びに開く。構造体の結果は複数の値の
-    // `let` で受け、`return` は値の並びを返す。関数の結果も値の並びになる。`apply` の引数と結果と、一様な版を指す
+    // `let` で受け、`return` は値の並びを返す。関数の結果も値の並びになる。`apply` の引数と結果と、一様な変種を指す
     // `closure` の引数は一様なので、構造体の箱で渡す
     let vec3 = "Vec3{float, float, float}";
     let text = format!(
@@ -236,6 +236,31 @@ fn g(n.0: int) -> (,){{obj, int}} {{
       let p.2: obj = extern Prelude.exit(n.0)
       let p.0.3: obj = prim dummy()
       return (p.0.3, 0)
+    }
+    ");
+}
+
+#[test]
+fn the_dummy_leaves_of_a_call_that_never_returns_are_unr() {
+    // 構造体が `lin` の葉を持っても、戻らない呼び出しの葉のダミーは `unr` である。使われない葉は Perceus が手放すが、
+    // V1 は `unr` でない変数の `decref` を拒むので、`lin` のダミーは verifier を通らない。制御が届かないので、
+    // 手放す命令は実行されない (docs/spec/lir.md の「開く」)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+fn h(n.0: int) -> unit {
+  let p.1: (,){obj lin, int} lin = extern Prelude.exit(n.0)
+  return ()
+}
+";
+    let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    passes_until(&mut program, Pass::Perceus);
+    insta::assert_snapshot!(function(&pretty(&program), "h"), @"
+    fn h(n.0: int) -> unit {
+      let p.2: obj = extern Prelude.exit(n.0)
+      decref p.2
+      let p.0.3: obj = prim dummy()
+      decref p.0.3
+      return ()
     }
     ");
 }

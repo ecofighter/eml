@@ -89,7 +89,7 @@ fn constructor_arguments_are_owned_by_the_value() {
 #[test]
 fn a_known_value_that_skips_its_field_releases_it() {
     // `Some s` と `Some "x"` は値を作らずに `Some _` の枝へ向かい、枝はフィールドを受け取らない。`s` はどこでも使わない
-    // ので、関数の入口で捨てる
+    // ので、関数のエントリで捨てる
     let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Option a = | None | Some a\n\npick : Bool -> Bool -> String -> String\npick a b s = match (if a then None else if b then Some s else Some \"x\") with\n  | None -> \"none\"\n  | Some _ -> \"some\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box pick = hide 0 pick\n  println (pick False True \"s\")";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "pick"), @r#"
     fn pick(a.0: enum, b.1: enum, s.2: obj) -> obj {
@@ -153,7 +153,7 @@ fn a_default_target_owns_the_scrutinee_without_a_dup() {
 #[test]
 fn a_string_switch_leaves_the_scrutinee_to_its_targets() {
     // 文字列のリテラルは1つの `switch` で比べる。`switch` の前で複製せず、`other` の枝は scrutinee をそのまま返し、
-    // ほかの行き先は入口で手放す
+    // ほかの行き先はエントリで手放す
     let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ngreet : String -> String\ngreet name = match name with\n  | \"en\" -> \"hello\"\n  | \"ja\" -> \"konnichiwa\"\n  | other -> other\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box greet = hide 0 greet\n  println (greet \"en\")";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "greet"), @r#"
     fn greet(name.0: obj) -> obj {

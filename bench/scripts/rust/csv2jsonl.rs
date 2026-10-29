@@ -1,6 +1,6 @@
-// csv2jsonl の Rust の版。tests/ui/run/scripts/csv2jsonl/main.em と同じ標準出力、書き出すファイル、終了コードを返す基準である
+// csv2jsonl の Rust の実装。tests/ui/run/scripts/csv2jsonl/main.em と同じ標準出力、書き出すファイル、終了コードを返す基準である
 // (docs/implementation/benchmarks.md の「スクリプトの計測」)。安全な std だけを使う。
-// 比べるのは正しい入力の結果だけで、誤りの文言は eml の版に合わせていない。
+// 比べるのは正しい入力の結果だけで、誤りの文言は eml の実装に合わせていない。
 use std::borrow::Cow;
 use std::io::Write;
 fn fail(m: &str, code: i32) -> ! {

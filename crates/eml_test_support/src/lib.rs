@@ -55,7 +55,7 @@ impl<T> std::ops::Deref for WithSession<T> {
     }
 }
 
-/// `entry` を入口にして IR を作る入力。`main` でない関数を入口にするテストのため。
+/// `entry` をエントリにして IR を作る入力。`main` でない関数をエントリにするテストのため。
 #[cfg(feature = "core")]
 impl WithSession<eml_cli::Checked> {
     pub fn input(&self, entry: eml_hir::FunctionId) -> eml_core_ir::Input<'_> {
@@ -76,10 +76,10 @@ pub type Lowered = WithSession<eml_cli::Lowered>;
 #[cfg(feature = "types")]
 pub type Checked = WithSession<eml_cli::Checked>;
 
-/// UI テスト以外のテストで登録する、入口のファイルの表示のパス。
+/// UI テスト以外のテストで登録する、エントリのファイルの表示のパス。
 pub const ENTRY_PATH: &str = "test.em";
 
-/// パイプラインに通すソースの集まり。入口の本文だけ (`&str` から作る)、依存先のモジュールを足したもの (`with_modules`)、
+/// パイプラインに通すソースの集まり。エントリの本文だけ (`&str` から作る)、依存先のモジュールを足したもの (`with_modules`)、
 /// 標準ライブラリを差し替えたもの (`with_std`) の3つがある。段階の関数はどれもこれを受け取るので、ソースの組み方と
 /// 止める段階を別々に選べる。
 #[cfg(feature = "hir")]
@@ -104,7 +104,7 @@ impl<'a> From<&'a String> for Sources<'a> {
     }
 }
 
-/// 入口の本文と、依存先のモジュール。`modules` は根からの相対パス (`"Report/Csv.em"`) と本文の組である。
+/// エントリの本文と、依存先のモジュール。`modules` は根からの相対パス (`"Report/Csv.em"`) と本文の組である。
 #[cfg(feature = "hir")]
 pub fn with_modules<'a>(entry: &'a str, modules: &'a [(&'a str, &'a str)]) -> Sources<'a> {
     Sources {
@@ -217,7 +217,7 @@ pub fn check<'a>(sources: impl Into<Sources<'a>>) -> Checked {
     checked_session(sources.into().session())
 }
 
-/// REPL のセッションの入力を読み、型検査までを通す。入力の関数を入口にした Core IR を見るテストのため。
+/// REPL のセッションの入力を読み、型検査までを通す。入力の関数をエントリにした Core IR を見るテストのため。
 #[cfg(feature = "types")]
 pub fn check_inputs(inputs: &[eml_hir::SessionInput]) -> Checked {
     let (session, _) = Session::load_session(
@@ -301,7 +301,7 @@ pub fn schedule_independent(mut stats: RunStats) -> RunStats {
 
 /// channel を使った run の `RunStats` のうち、スケジュールの方針によらない欄だけを残す。待つかどうかと、送り手が
 /// 参照を持ち続けた品物の裏返しが順で変わり、仕事の回数がそれに従うので、残すのはタスクの数、時間の登録、捨てた失敗、
-/// run の終わりに放した channel の数だけである (docs/implementation/testing.md の「seed で流す」)。
+/// run の終わりに放した channel の数、driver の完了の数だけである (docs/implementation/testing.md の「seed で流す」)。
 #[cfg(feature = "run")]
 pub fn channel_independent(stats: RunStats) -> RunStats {
     let mut kept = RunStats::default();
@@ -309,6 +309,7 @@ pub fn channel_independent(stats: RunStats) -> RunStats {
     kept.timers = stats.timers;
     kept.dropped_failures = stats.dropped_failures;
     kept.channels_swept = stats.channels_swept;
+    kept.completions = stats.completions;
     kept
 }
 

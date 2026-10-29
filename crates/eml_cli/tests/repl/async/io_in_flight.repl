@@ -1,0 +1,28 @@
+# 読みを待ったまま `deadlock` で止まった run は、driver の保留の操作と記録を残さずに回復し、次の入力の run は driver の
+# 読みと書きを使える (docs/spec/vm.md の「時計と driver」)
+> import Async
+> import IoTest
+> import Bytes
+> import String
+> stuck : Unit -> <IO, Panic, Async.Async> Unit
+. stuck () =
+.   let (a, b) = IoTest.pair ()
+.   let t = Async.start (fn () ->
+.     let (buf, a) = IoTest.read_chunk (Bytes.empty ()) a
+.     drop a
+.     buf)
+.   let _ = Async.await t
+.   drop b
+.
+> Async.run stuck
+> println "next"
+> echo : String -> <IO, Panic, Async.Async> String
+. echo s =
+.   let (a, b) = IoTest.pair ()
+.   let (_, a) = IoTest.write (Bytes.of_string s) a
+.   drop a
+.   let (buf, b) = IoTest.read_chunk (Bytes.empty ()) b
+.   drop b
+.   String.decode buf
+.
+> println (Async.run (fn () -> echo "hello"))

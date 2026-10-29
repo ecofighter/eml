@@ -4,6 +4,5 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{s
 input_file: tests/ui/run/io/try_io_cmd_exit.em
 ---
 --- stdout ---
-Other: command `sh` exited with code 3
-Other: command `sh` exited with code 143
+Other: command `eml` exited with code 3
 --- stderr ---

@@ -1,4 +1,4 @@
--- `tree.em` の畳み込みのラムダを、専用の `fold_sum` にした手書きの版。
+-- `tree.em` の畳み込みのラムダを、専用の `fold_sum` にした手書きのプログラム。
 data Tree a =
   | Leaf
   | Node (Tree a) a (Tree a)

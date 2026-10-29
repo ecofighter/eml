@@ -1305,7 +1305,7 @@ fn a_local_function_runs_like_a_top_level_helper() {
 }
 
 /// 結果の Repr が呼び出し元の `ret` と互換でない末尾の位置の呼び出しを通るループ。結果が一様なコードは型どおりの
-/// 関数を一様な版を通して末尾で呼ぶので、スタックは反復の数によらない (docs/spec/lir.md の「末尾の位置の呼び出し」)。
+/// 関数を一様な変種を通して末尾で呼ぶので、スタックは反復の数によらない (docs/spec/lir.md の「末尾の位置の呼び出し」)。
 /// - `count` は `State Int` の `get` で終わる。本体をデータに通して隠すので handler に特殊化されず、`tobj` を返す
 ///   操作の `clause` は `int` を返す `count` の末尾呼び出しにならない。それより前の `count` の自分への呼び出しは
 ///   末尾呼び出しである。
@@ -1366,7 +1366,7 @@ main () = println (show (back {n}))
 
 /// 特殊化しない handler の節が末尾で再開するループ。本体の関数の値をデータに通して隠すので、optimize は handler に
 /// 特殊化せず、操作は EP の道を通る (`evidence_steps` が 0 より大きい)。結果が一様な本体は `int` を返す `sum_asks` を
-/// 一様な版 `sum_asks$uniform` を通して末尾で呼ぶ。
+/// 一様な変種 `sum_asks$uniform` を通して末尾で呼ぶ。
 #[test]
 fn an_unspecialized_clause_resuming_in_tail_position_keeps_the_stack_flat() {
     let program = |n: u64| {
@@ -1397,7 +1397,7 @@ main () =
     assert_flat((short, long));
 }
 
-/// 非末尾の再帰の各段が、`apply` で自分を呼ぶ。`&down` は一様な版 `down$uniform` を指すので、各段は版のフレームと
+/// 非末尾の再帰の各段が、`apply` で自分を呼ぶ。`&down` は一様な変種 `down$uniform` を指すので、各段は変種のフレームと
 /// 関数のフレームを1つずつ積み、どちらも深さに数える。小さい深さの上限では、ふつうの深さの誤りで止まる
 /// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
@@ -1460,7 +1460,7 @@ b2:
     );
 }
 
-/// データに隠した関数の値から、型どおりの `Float` の累積のループに入る。入口は一様な版を1回通るだけで、ループは
+/// データに隠した関数の値から、型どおりの `Float` の累積のループに入る。エントリは一様な変種を1回通るだけで、ループは
 /// 型どおりの自分への末尾呼び出しなので、スタックもヒープも反復の数によらず、確保も増えない
 /// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
@@ -1486,7 +1486,7 @@ main () =
 }
 
 /// `Char` を比べて持ち回るループ。`Char` は `Int` の語なので、型どおりのループの中では箱に入らず、一様な位置の
-/// 入口と出口で即値の箱になるだけである。反復の数によらず、箱も確保も増えない
+/// エントリと戻りで即値の箱になるだけである。反復の数によらず、箱も確保も増えない
 /// (docs/spec/lir.md の「値の表現」)。
 #[test]
 fn a_char_comparison_loop_does_not_box_or_allocate_per_iteration() {
@@ -1513,8 +1513,8 @@ main () =
     assert_flat((short, long));
 }
 
-/// 同じく、構造体 (組) の累積のループに入る。組は型どおりのループの中では葉のまま運ばれ、箱になるのは版の入口と
-/// 出口だけである。
+/// 同じく、構造体 (組) の累積のループに入る。組は型どおりのループの中では葉のまま運ばれ、箱になるのは一様な位置のエントリと
+/// 戻りだけである。
 #[test]
 fn a_struct_accumulator_entered_through_a_hidden_value_stays_flat() {
     let (short, long) = peaks(|n| {

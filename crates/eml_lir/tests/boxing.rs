@@ -4,7 +4,7 @@
 use crate::common::function;
 use eml_lir::{Pass, boxing, parse, passes_until, pretty, verify_lowered, verify_scopes};
 
-/// 入力が入口の段の verifier を、出力が範囲の段の verifier を通ることも確かめる。
+/// 入力がエントリの段の verifier を、出力が範囲の段の verifier を通ることも確かめる。
 fn boxing_text(text: &str) -> String {
     let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
     if let Err(error) = verify_lowered(&program) {
@@ -141,7 +141,7 @@ internal uniform from 2 fn g(n.0: int, x.1: int, k.2: tobj, s.3: int) -> int {
 
 #[test]
 fn closure_arguments_convert_to_the_callee_params() {
-    // 型どおりの関数の `closure` は一様な版 `depth@[_]$uniform` を指し、引数を版の一様な引数へ変換する。`_` の instance
+    // 型どおりの関数の `closure` は一様な変種 `depth@[_]$uniform` を指し、引数を変種の一様な引数へ変換する。`_` の instance
     // の部分適用では、`int` の `5` を `box` して捕まえる (docs/spec/lir.md の「関数の ABI」)
     let text = "\
 fn \"depth@[_]\"(x.0: tobj, n.1: int) -> int {
@@ -253,7 +253,7 @@ fn a_clause_call_uses_the_reprs_of_its_operation() {
 
 #[test]
 fn a_clause_function_takes_the_reprs_of_its_operation() {
-    // 引数 n は `put` の `int` になり、入口で元の `tobj` の変数を `box` で定義する。`ret` は `unit` になる
+    // 引数 n は `put` の `int` になり、エントリで元の `tobj` の変数を `box` で定義する。`ret` は `unit` になる
     let text = "effect Counter { get(unit) -> int, put(int) -> unit }\ninternal yields clause Counter.put fn g(e.0: obj, n.1: tobj) -> tobj {\n  return ()\n}\nfn main() -> unit {\n  let w.0: tobj = prim evv_get()\n  let e.1: obj = prim ev_new[Counter](0, w.0)\n  let u.2: unit = prim ev_set_clause[Counter.put](e.1, &g)\n  return ()\n}\n";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "g"), @"
@@ -275,7 +275,7 @@ fn a_clause_function_takes_the_reprs_of_its_operation() {
 
 #[test]
 fn a_clause_function_keeps_its_captures_uniform() {
-    // `int` の捕獲は `tobj` で受けて入口で `unbox` し、`closure` は捕獲を `box` して渡す。evidence と `get` の引数と
+    // `int` の捕獲は `tobj` で受けてエントリで `unbox` し、`closure` は捕獲を `box` して渡す。evidence と `get` の引数と
     // `ret` はすでに操作の表と合っている
     let text = "effect Counter { get(unit) -> int, put(int) -> unit }\ninternal yields clause Counter.get fn g(k.0: int, e.1: obj, u.2: unit) -> int {\n  return k.0\n}\nfn main(k.0: int) -> unit {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[Counter]((), w.1)\n  let g.3: tobj = closure g(k.0)\n  let u.4: unit = prim ev_set_clause[Counter.get](e.2, g.3)\n  return ()\n}\n";
     let shown = boxing_text(text);
@@ -358,7 +358,7 @@ fn a_clause_function_unboxes_its_return_to_a_scalar_operation_result() {
 
 #[test]
 fn a_never_clause_function_returns_obj() {
-    // `never` の操作の節の入口はダミーの物体を返すので、`ret` は `obj` になる
+    // `never` の操作の節のエントリはダミーの物体を返すので、`ret` は `obj` になる
     let text = "effect Fail { never fail(tobj) -> never }\ninternal yields clause Fail.fail fn g(e.0: obj, s.1: tobj) -> tobj {\n  let d.2: obj = prim dummy()\n  return d.2\n}\nfn main() -> unit {\n  let w.0: tobj = prim evv_get()\n  let e.1: obj = prim ev_new[Fail]((), w.0)\n  let u.2: unit = prim ev_set_clause[Fail.fail](e.1, &g)\n  return ()\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "g"), @"
     internal yields clause Fail.fail fn g(e.0: obj, s.1: tobj) -> obj {
@@ -621,7 +621,7 @@ fn f(c.0: tobj, v.1: P{int, obj lin} lin) -> obj lin {
 
 #[test]
 fn a_struct_parameter_in_a_uniform_position_is_unboxed_at_entry() {
-    // `split` 以降の位置の構造体の引数は、入口で `unbox` して受け直す。捕獲の位置は型どおりなので、構造体のまま
+    // `split` 以降の位置の構造体の引数は、エントリで `unbox` して受け直す。捕獲の位置は型どおりなので、構造体のまま
     // 受ける。`clause` の印の関数は、操作の表が `obj` とする構造体の引数を同じく受け直す
     // (docs/spec/lir.md の「box の挿入」)
     let text = "\

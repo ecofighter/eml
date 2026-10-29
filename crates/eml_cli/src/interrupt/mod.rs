@@ -1,4 +1,4 @@
-//! Ctrl-C の受け口 (docs/spec/vm.md の「上限と割り込み」)。unix では SIGINT のハンドラ、Windows ではコンソールの
+//! Ctrl-C のハンドラ (docs/spec/vm.md の「上限と割り込み」)。unix では SIGINT のハンドラ、Windows ではコンソールの
 //! handler が受け、どちらも static に置いた `Installed` の `respond` で何をするかを決める。
 
 use std::sync::{Arc, OnceLock};
@@ -14,8 +14,8 @@ mod windows;
 #[cfg(windows)]
 use windows::register;
 
-/// 受け口が読む `Control` と動き方。受け口の中ではロックを取れないので static に置く。`OnceLock::get` は初期化の後は
-/// アトミックな読みだけである。受け口は読んだ値を引数で受ける関数に渡すので、テストは static を使わない。
+/// ハンドラが読む `Control` と動き方。ハンドラの中ではロックを取れないので static に置く。`OnceLock::get` は初期化の後は
+/// アトミックな読みだけである。ハンドラは読んだ値を引数で受ける関数に渡すので、テストは static を使わない。
 static INSTALLED: OnceLock<Installed> = OnceLock::new();
 
 struct Installed {
@@ -44,7 +44,7 @@ enum Response {
     Exit,
 }
 
-/// `Control` と動き方を static に置いてから、受け口を入れる。逆の順だと、間に来た Ctrl-C が `Control` を見つけられ
+/// `Control` と動き方を static に置いてから、ハンドラを入れる。逆の順だと、間に来た Ctrl-C が `Control` を見つけられ
 /// ない。
 pub fn install(control: Arc<Control>, mode: Mode) {
     assert!(

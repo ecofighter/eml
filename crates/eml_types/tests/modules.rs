@@ -100,7 +100,7 @@ fn a_carry_over_through_a_composition_points_into_the_prelude() {
     assert!(shown.contains("  <std>/Prelude.em "), "{shown}");
 }
 
-/// 入口と依存先のモジュールを検査し、推論結果と診断を並べる。
+/// エントリと依存先のモジュールを検査し、推論結果と診断を並べる。
 fn check_modules(entry: &str, modules: &[(&str, &str)]) -> String {
     let checked = eml_test_support::check(eml_test_support::with_modules(entry, modules));
     eml_test_support::with_diagnostics(

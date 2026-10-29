@@ -45,7 +45,7 @@ fn release_entries(entries: &[u32]) -> String {
         .join(", ")
 }
 
-/// mask の項目を、IR のテキストの形の数字の版で書く。`keep` が 0 なら `@n` を、`skip` が 1 なら `*m` を省く。
+/// mask の項目を、IR のテキストの形の数字の形で書く。`keep` が 0 なら `@n` を、`skip` が 1 なら `*m` を省く。
 fn mask_item(item: &MaskItem) -> String {
     let mut text = item.effect.to_string();
     if item.keep != 0 {
@@ -136,7 +136,7 @@ impl<'a> View<'a> {
         format!("s{}({})", o[0], slots(&o[2..2 + n]))
     }
 
-    /// 命令のテキスト。命令の位置 (飛び先と、自己末尾呼び出しの入口) は `origin` からの位置で書く。
+    /// 命令のテキスト。命令の位置 (飛び先と、自己末尾呼び出しのエントリ) は `origin` からの位置で書く。
     fn line(&self, pc: Pc, origin: Pc) -> String {
         let ops = |at: u32| &self.tables.operands[at as usize..];
         let args = |at: u32, skip: usize| {

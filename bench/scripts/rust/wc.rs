@@ -1,6 +1,6 @@
-// wc の Rust の版。tests/ui/run/scripts/wc/main.em と同じ標準出力と終了コードを返す基準である
+// wc の Rust の実装。tests/ui/run/scripts/wc/main.em と同じ標準出力と終了コードを返す基準である
 // (docs/implementation/benchmarks.md の「スクリプトの計測」)。安全な std だけを使う。
-// eml の版に合わせ、入力を UTF-8 の文字列として1回だけ走査する。
+// eml の実装に合わせ、入力を UTF-8 の文字列として1回だけ走査する。
 use std::io::{Read, Write};
 
 // 語は ASCII の空白 (空白と 0x09 から 0x0D) で区切る

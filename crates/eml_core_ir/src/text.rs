@@ -8,7 +8,7 @@ use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::syntax::{self, FnState, Reader, error};
 use eml_lir::{MaskItem, ParseError, VarId};
 
-/// `pretty` の表示を `Program` に戻す。入口は `entry$main` という名前の関数で、なければ最初の関数である。
+/// `pretty` の表示を `Program` に戻す。エントリは `entry$main` という名前の関数で、なければ最初の関数である。
 pub fn parse(text: &str) -> Result<Program, ParseError> {
     let tokens = syntax::lex(text)?;
     let mut parser = Parser {
@@ -36,7 +36,7 @@ struct Parser<'t> {
 }
 
 impl Parser<'_> {
-    /// 関数の頭に、入口のブロックとラベルの付いたブロックの列が続く。
+    /// 関数の頭に、エントリのブロックとラベルの付いたブロックの列が続く。
     fn function(&mut self) -> Result<CoreFn, ParseError> {
         let mut state = FnState::default();
         let line = self.reader.line();

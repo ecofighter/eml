@@ -1186,7 +1186,7 @@ impl Copies<'_> {
     }
 
     /// `copy` の `block` の `start` 番目の文からの続きを関数にする (`piece::region`)。合流のブロック J への `jump` は、
-    /// J の関数を、`jump` の実引数、J の入口で生きている変数、状態の順で末尾で呼ぶ形にする。
+    /// J の関数を、`jump` の実引数、J のエントリで生きている変数、状態の順で末尾で呼ぶ形にする。
     fn region(&mut self, copy: &mut Rewrite, at: (BlockId, usize), params: Vec<VarId>) -> CoreFn {
         let Rewrite {
             source,
@@ -1222,7 +1222,7 @@ struct Rewrite {
     state: Option<VarId>,
     /// ブロックごとの、合流のブロックか (`piece::joins`)。
     joins: Vec<bool>,
-    /// ブロックごとの入口の生存集合。後ろのブロックから、書き換えた後のコードで求める。
+    /// ブロックごとのエントリの生存集合。後ろのブロックから、書き換えた後のコードで求める。
     live_in: Vec<Vec<VarId>>,
     /// 番号を取った合流のブロックの関数 `f{H}$hjJ`。
     join_functions: FxHashMap<BlockId, FnIdx>,

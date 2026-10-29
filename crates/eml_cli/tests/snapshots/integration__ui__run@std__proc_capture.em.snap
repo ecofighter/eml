@@ -7,8 +7,6 @@ input_file: tests/ui/run/std/proc_capture.em
 "hi\n"
 ("partial\n", 5)
 ""
-Bytes [97, 255] 0
-Bytes [97, 98]
-echo one two three
+eml run proc_capture.em child one two three
 "one two three\n"
 --- stderr ---

@@ -24,6 +24,16 @@ pub enum Sched {
     Seeded(u64),
 }
 
+impl Sched {
+    /// テストの driver に渡す seed。seed の方針のときだけある (docs/spec/vm.md の「時計と driver」)。
+    pub fn seed(self) -> Option<u64> {
+        match self {
+            Sched::Seeded(seed) => Some(seed),
+            Sched::Normal | Sched::Sequential => None,
+        }
+    }
+}
+
 impl FromStr for Sched {
     type Err = String;
 
@@ -209,7 +219,7 @@ impl Policy for Seeded {
 /// join の節点の番号。境目のフレームの slot 1 に生の語で置く。
 pub type JoinId = usize;
 
-/// 入口のタスクの番号。
+/// エントリのタスクの番号。
 pub(crate) const MAIN: TaskId = 0;
 
 /// タスクの状態。動いているタスクは VM の繰り返しが持つ。
@@ -221,11 +231,11 @@ pub(crate) enum TaskState {
     Waiting(JoinId),
     /// まだ始まっていない右の子。語は `()` を適用する閉包で、タスクがその参照を持つ。
     Unstarted(eml_rt::Word),
-    /// まだ動いていない `Async` の入口の `Task`。動き始めるときに、`args` の先頭 `argc` 個を入口 `function` の
+    /// まだ動いていない `Async` のエントリの `Task`。動き始めるときに、`args` の先頭 `argc` 個をエントリ `function` の
     /// フレームの slot 0.. に書く。語はタスクが参照を持つ (docs/spec/vm.md の「`Async` のタスク」)。
     Entry {
         function: u32,
-        args: [eml_rt::Word; 2],
+        args: [eml_rt::Word; 3],
         argc: u8,
     },
     /// `Async.run` で、根のスコープが閉じるのをスタックを持ったまま待つ。起こされたら `Async` の命令の次から続ける。
@@ -288,10 +298,13 @@ pub struct Scheduler<P: Policy> {
     pub(crate) shared_roots: usize,
     /// `Async` のタスクとスコープのセル。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) cells: Registry,
-    /// 終わった入口の `Task` のスタック。次の入口の `Task` が使い回す。
+    /// 終わったエントリの `Task` のスタック。次のエントリの `Task` が使い回す。
     pub(crate) stacks: Vec<Vec<eml_rt::Word>>,
     /// 時計と待ち。`Machine` が持つものを run の間だけ預かる (docs/spec/vm.md の「時計と driver」)。
     pub(crate) driver: Box<dyn IoDriver>,
+    /// `Machine` の時計が本物か。プールの仕事の遅れは本物の時計でだけ効かせ、仮想の時計の run は本物の時間を眠らない
+    /// (docs/spec/stdlib.md の「`Std.IoTest`」)。
+    pub(crate) real_clock: bool,
 }
 
 impl<P: Policy> Scheduler<P> {
@@ -319,6 +332,7 @@ impl<P: Policy> Scheduler<P> {
             cells: Registry::new(generations),
             stacks: Vec::new(),
             driver,
+            real_clock: false,
         }
     }
 
@@ -371,7 +385,7 @@ impl<P: Policy> Scheduler<P> {
         join
     }
 
-    /// 入口のタスクのほかにタスクか join が残っているか。
+    /// エントリのタスクのほかにタスクか join が残っているか。
     pub(crate) fn has_children(&self) -> bool {
         self.tasks.iter().any(Option::is_some) || self.joins.iter().any(Option::is_some)
     }

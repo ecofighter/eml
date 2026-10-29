@@ -38,7 +38,7 @@ measure() {
     fi
     count="$(awk '/instructions retired/ { print $1 }' <<<"$report")"
     elapsed="$(awk '/ real / { print $1 }' <<<"$report")"
-    # macOS の版や実行の環境によって `time -l` が数を出さないと、表に空の欄が混ざるので止める
+    # macOS のバージョンや実行の環境によって `time -l` が数を出さないと、表に空の欄が混ざるので止める
     if [[ ! "$count" =~ ^[0-9]+$ || ! "$elapsed" =~ ^[0-9]+\.[0-9]+$ ]]; then
       echo "bench/run.sh: $name の /usr/bin/time -l の出力から命令の数か実時間を読めなかった" >&2
       echo "$report" >&2

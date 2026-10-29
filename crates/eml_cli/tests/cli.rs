@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -172,7 +173,7 @@ fn modules_are_read_from_the_entry_directory() {
         ],
     );
     let nested = eml_in(&dir, &["run", "--debug-heap", "app/main.em"]);
-    // ディレクトリのない入口のパスでは、根が作業ディレクトリになる
+    // ディレクトリのないエントリのパスでは、根が作業ディレクトリになる
     let bare = eml_in(&dir.join("app"), &["check", "main.em"]);
     let dotted = eml_in(&dir, &["check", "./app/main.em"]);
     let absolute_path = dir.join("app/main.em");
@@ -188,7 +189,7 @@ fn modules_are_read_from_the_entry_directory() {
 #[test]
 fn a_miscased_entry_path_is_still_the_entry() {
     // 大文字小文字を区別しないファイルシステムでは `t/server.em` で `t/Server.em` を開ける。そのときも依存先の
-    // `import Server` は入口を指す E1030 で、入口を2回読んだ循環 (E1027) にしない (docs/spec/modules.md の「モジュール」)
+    // `import Server` はエントリを指す E1030 で、エントリを2回読んだ循環 (E1027) にしない (docs/spec/modules.md の「モジュール」)
     let dir = temp_project(
         "cli-entry-case",
         &[
@@ -198,7 +199,7 @@ fn a_miscased_entry_path_is_still_the_entry() {
     );
     let output = eml_in(&dir, &["check", "t/server.em"]);
     std::fs::remove_dir_all(&dir).unwrap();
-    // 大文字小文字を区別するファイルシステムでは、入口が読めない使い方の誤りになる
+    // 大文字小文字を区別するファイルシステムでは、エントリが読めない使い方の誤りになる
     if output.status.code() == Some(2) {
         return;
     }
@@ -791,6 +792,17 @@ main () =
     assert_eq!(kept.unwrap(), "kept\n");
 }
 
+/// テストのビルドの `eml` を先頭に置いた `PATH`。子のプロセスが `eml` を探せるようにする。
+fn path_with_eml() -> OsString {
+    let bin = Path::new(env!("CARGO_BIN_EXE_eml")).parent().unwrap();
+    std::env::join_paths(
+        std::iter::once(bin.to_path_buf()).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )),
+    )
+    .unwrap()
+}
+
 /// 1行目が `#!/usr/bin/env eml` の実行できるファイルは、そのまま動かせる。
 #[cfg(unix)]
 #[test]
@@ -800,14 +812,9 @@ fn a_script_with_a_shebang_runs_directly() {
     let dir = temp_project("cli-shebang", &[("script.em", &text)]);
     let script = dir.join("script.em");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let bin = Path::new(env!("CARGO_BIN_EXE_eml")).parent().unwrap();
-    let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
-        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
-    ))
-    .unwrap();
     let output = Command::new(&script)
         .args(["1", "-2"])
-        .env("PATH", path)
+        .env("PATH", path_with_eml())
         .current_dir(&dir)
         .output()
         .unwrap();
@@ -948,4 +955,31 @@ main () =
     drop(writer);
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130));
+}
+
+/// 標準出力を受け継ぐ `run (merge_stderr c)` の子は、標準エラーを eml の標準出力に書く。`before` が子の行より前に
+/// 並ぶのは、起動の前に標準出力を書き出す規則による (docs/spec/stdlib.md の「`Proc`」の「起動」)。
+#[test]
+fn a_run_child_with_merged_errors_writes_them_to_the_standard_output() {
+    let main = "import Proc\n\
+main : Unit -> <IO, Panic> Unit
+main () =
+  println \"before\"
+  println \"exit \\{show (Proc.run (Proc.merge_stderr `eml run child.em`))}\"
+";
+    let child = "main : Unit -> <IO> Unit\nmain () =\n  eprintln \"child error\"\n  exit 3\n";
+    let dir = temp_project("cli-merged-run", &[("main.em", main), ("child.em", child)]);
+    let output = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .args(["run", "main.em"])
+        .env("PATH", path_with_eml())
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "before\nchild error\nexit 3\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }

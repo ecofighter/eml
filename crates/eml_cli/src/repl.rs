@@ -235,8 +235,8 @@ impl Repl {
             FunctionKind::Input(kind) => kind,
             _ => unreachable!("`Program::input` is an input function"),
         });
-        // 止める語は lowering の後、`load` の前に1回だけ読む。VM は入口では安全点を通らないので、ここで止めないと、
-        // 入口から最初の呼び出しまでの extern と `root_set` が動く (docs/spec/repl.md の「割り込み」)
+        // 止める語は lowering の後、`load` の前に1回だけ読む。VM はエントリでは安全点を通らないので、ここで止めないと、
+        // エントリから最初の呼び出しまでの extern と `root_set` が動く (docs/spec/repl.md の「割り込み」)
         let program = match input {
             Some(entry) if !has_errors(&diagnostics) => Some((
                 eml_core_ir::lower(eml_core_ir::Input {

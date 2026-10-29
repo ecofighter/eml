@@ -6,7 +6,7 @@
 
 ## 進め方
 
-- 各段は、設計、計画、実装、閉じる作業の順に進める。設計は、この文書のその段の項目を出発点にし、設計と計画は `docs/plans/YYYY-MM-DD-<段>.md` (付録を分けるときは同じ名前のディレクトリ) に書く。承認した版を段の最初のコミットで入れ、途中で変えたときもコミットする
+- 各段は、設計、計画、実装、閉じる作業の順に進める。設計は、この文書のその段の項目を出発点にし、設計と計画は `docs/plans/YYYY-MM-DD-<段>.md` (付録を分けるときは同じ名前のディレクトリ) に書く。承認したものを段の最初のコミットで入れ、途中で変えたときもコミットする
 - 「決めたこと」は方針で、細部はその段の設計で決める。「論点」は、その段の設計で決める
 - 機能を足さず、実装の整理だけを行う段は「段の列」に載せない。設計と計画を `docs/plans/` に置くことと、閉じる手順は、ほかの段と同じである
 - `spec/` は段の中で書く。規則を実装するコミットと同じコミットで `spec/` の節を書き、コードのコメントはその節を引く。設計の文書は引かない。段を途中でやめるときは、コードと `spec/` を一緒に戻す
@@ -28,8 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `io-driver`: 本物の I/O の driver とブロックする呼び出しのプールを入れる。まず `compio-driver` を単独で使えるかを試作で確かめ、使うかどうかを段の計画で決める。時間だけの `IoDriver` (`now` と `wait_until`) と時間の輪はすでにあるので、その上に受け付けと完了のメソッドを足し、`await_io_until` と `_within` の版を時間の輪の項として載せる。`eml_io` に本物の driver とテストの driver を作る。読めるようになってから読みの buffer を取る規則もこの段で入れる。前提: なし。設計: [非同期の設計](async.md) の「I/O の driver」
-- `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。前提: `io-driver`。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
+- `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。`Std.Net` ができたら `Std.IoTest` のインターフェースを置き換えるか消す ([標準ライブラリ](../spec/stdlib.md) の「`Std.IoTest`」)。前提: なし。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
 - `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。前提: `async-net`。設計: [非同期の設計](async.md) の「テストと決定性」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
 - `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`、`async-net`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
@@ -43,22 +42,22 @@
   - 配列の要素は一様な位置なので、今は `Array Float` と `MutArray Float` の要素が書くたびに `Float` の箱に入る。spectral-norm では、確保のほとんどがこの箱である (`RunStats` の `allocations` 4043 のうち `boxes` が 4001。[計測の基準](../implementation/benchmarks.md) の「配列の `Float` の要素の箱」)。構造体の表現もこの箱を消さない
   - 新しい配列は `Array a` とは別の型で、長さの語と連続した中身を持つ物体の仲間 (`String`、`Bytes`。[オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」) の別の種類である。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
 - `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: `raw-arrays`。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
-- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。前提: `ffi-c`、`io-driver`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
+- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
 - `main-pinning`: プロセスのメインスレッドをメインの worker にし、`Std.Gui` を `Gui.run_on_main` だけで作る。メインの worker のタスクとその子は、救済されず、ほかの worker に移らない。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「固定したタスク」、同じ文書の「スレッドと worker」
 - `gui-plugin`: VM の上で egui のプラグインを動かし、`Std.Gui` の残りを入れる。前提: `main-pinning`。設計: [FFI と拡張の設計](ffi.md) の「GUI」、同じ文書の「拡張」
 - `borrowed-params`: 借用パラメータを入れる。所有の引数で1バイトごとに `dup` する形をなくし、verifier が借用のブロック引数を確かめる。前提: なし。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
-  - 1つの呼び出しでは、所有の引数を消費した後で借用の引数を確かめる。借用の推論では、同じ配置の `con` を作る行き先を持つ `switch` の scrutinee を所有にする。借用にすると、その値の箱が reuse の元にならないためである。継続のクロージャが捕まえる値に借用の部分を含めない。借用のブロック引数は持ち主 (同じブロックの引数か関数の入口) を宣言し、verifier は辺ごとに確かめる
+  - 1つの呼び出しでは、所有の引数を消費した後で借用の引数を確かめる。借用の推論では、同じ配置の `con` を作る行き先を持つ `switch` の scrutinee を所有にする。借用にすると、その値の箱が reuse の元にならないためである。継続のクロージャが捕まえる値に借用の部分を含めない。借用のブロック引数は持ち主 (同じブロックの引数か関数のエントリ) を宣言し、verifier は辺ごとに確かめる
   - 所有の都合で `TailCall` を `let r = <呼び出し>` と `return r` に降格するのも、借用パラメータと一緒に入れる。今は `tail` の前に実引数をすべて所有にし、保持している変数をすべて手放す ([LIR](../spec/lir.md) の「持ち主を手放す時点」) ので、借用パラメータを入れるまで降格は起きない。Perceus は、終端を文と新しい終端に置き換える編集をその場でできる形にしてある
   - 降格は、末尾の位置の呼び出しの輪の上の `tail` には当てない ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。借用の推論は、輪の上の `tail` が渡す引数の仮引数を所有にして、降格を避ける (Lean の `ownParamsUsingArgs`)。降格してよいのは、輪の上にない末尾呼び出しだけである
   - extern の行は引数ごとの借用の列 (`FunctionRow::borrowed`) を持ち、どの位置の引数も借りられる。配列、`String`、`Bytes` を読む行と、ハンドルの読み書きの行は借りる。1つの命令が同じ変数を借りて消費するときに `dup` を入れる別名の規則もある ([LIR](../spec/lir.md) の「extern の借用」)。借用パラメータでも、この別名の規則を使う。引数を消費したままの `Effectful` の行 (`println`、`FileIn.open`、`Env` の行など) を借用にするかは、借用パラメータと一緒に決める
-  - 部分適用される関数と値として使う関数は借用を持てないので、所有の版の包みが要る (Ullrich と de Moura)。包みは、box の挿入が作る版 `<f>$uniform` と同じく名前で決まる関数 (`f$owned` など) にし、借用を入れるときに決める ([LIR](../spec/lir.md) の「関数の ABI」)。`apply` は実行時に値を変えないので ([VM](../spec/vm.md) の「呼び出しと戻り」)、借用を手放す仕事は包みが受け持つ
+  - 部分適用される関数と値として使う関数は借用を持てないので、所有の変種の包みが要る (Ullrich と de Moura)。包みは、box の挿入が作る変種 `<f>$uniform` と同じく名前で決まる関数 (`f$owned` など) にし、借用を入れるときに決める ([LIR](../spec/lir.md) の「関数の ABI」)。`apply` は実行時に値を変えないので ([VM](../spec/vm.md) の「呼び出しと戻り」)、借用を手放す仕事は包みが受け持つ
   - 借りたまま読む射影も、借用パラメータで扱う。今の所有の形では、射影で得たフィールドを読むだけなら RC の命令は出ない。しかし `f p.name` の後に `p` を使う形は、呼び出しがフィールドを消費するので、今と同じく `dup` する ([Core IR](../spec/core-ir.md) の「変換の規則」)。これを減らすには、`f` の引数を借用にする必要がある
-- `rt-layout`: `eml_rt` に、物体のペイロードの先頭 (走査する語の数から決まる数の語の有無と、走査の始まり) を求める口を足し、`eml_vm` の `data::count_word` が写して持つ同じ規則を消す。口の性質は、ヘッダの規則と同じく Verus で証明する。ネイティブのコード生成もこの口を使い、規則の写しを持たない。前提: なし。設計: [オブジェクトモデル](../spec/object-model.md) の「ヘッダ」
-- `jit-core`: `eml_native` に、一階の部分 (スカラー、データ、呼び出し、末尾呼び出し、クロージャと `apply`、RC) を CLIF にするコード生成を作り、`eml run --native` で動かす。AAPCS64 と x86_64 の SysV の `eml_enter` と `eml_fatal`、安全点、ネイティブのコードが読む `Ctx` の欄の配置、利用者の C の行をネイティブのコードから呼ぶことを入れる。扱わない形は E0004 で断り、UI テストの印 `// native: skip` を導入する。前提: `borrowed-params`、`ffi-c`、`rt-layout`。設計: [ネイティブ化の設計](native.md) の「確定した設計判断」、同じ文書の「呼び出し規約と入口」
-- `jit-externs`: すべての extern とプラグインの行を、ネイティブのコードから呼ぶ。包みと VM の腕を表から作り、extern の失敗を `Ctx.fault` で返す。前提: `jit-core`。設計: [ネイティブ化の設計](native.md) の「extern の入口」
-- `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` の入口、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`task-limits`、`async-rescue`、`async-files`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
-- `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 の入口の stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
-- `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の版の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`、`raw-arrays`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
+- `rt-layout`: `eml_rt` に、物体のペイロードの先頭 (走査する語の数から決まる数の語の有無と、走査の始まり) を求めるインターフェースを足し、`eml_vm` の `data::count_word` が写して持つ同じ規則を消す。インターフェースの性質は、ヘッダの規則と同じく Verus で証明する。ネイティブのコード生成もこのインターフェースを使い、規則の写しを持たない。前提: なし。設計: [オブジェクトモデル](../spec/object-model.md) の「ヘッダ」
+- `jit-core`: `eml_native` に、一階の部分 (スカラー、データ、呼び出し、末尾呼び出し、クロージャと `apply`、RC) を CLIF にするコード生成を作り、`eml run --native` で動かす。AAPCS64 と x86_64 の SysV の `eml_enter` と `eml_fatal`、安全点、ネイティブのコードが読む `Ctx` の欄の配置、利用者の C の行をネイティブのコードから呼ぶことを入れる。扱わない形は E0004 で断り、UI テストの印 `// native: skip` を導入する。前提: `borrowed-params`、`ffi-c`、`rt-layout`。設計: [ネイティブ化の設計](native.md) の「確定した設計判断」、同じ文書の「呼び出し規約とエントリ」
+- `jit-externs`: すべての extern とプラグインの行を、ネイティブのコードから呼ぶ。包みと VM の腕を表から作り、extern の失敗を `Ctx.fault` で返す。前提: `jit-core`。設計: [ネイティブ化の設計](native.md) の「extern のエントリ」
+- `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`task-limits`、`async-rescue`、`async-files`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
+- `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 のエントリの stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
+- `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の実装の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`、`raw-arrays`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
 - `par-steal`: VM の `par` の子を別の worker で動かす。worker ごとの deque、盗み、スレッドをまたぐ join の待ちを入れる。前提: `worker-threads`。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
 - `std-par`: `std/Par` のデータ並列の集まりの関数と、添字の範囲のプリミティブを入れる。前提: `par-steal`、`raw-arrays`。設計: [マルチコア対応の設計](multicore.md) の「データ並列での使い勝手」
 - `native-par`: ネイティブのコードで、join で待つ worker が手伝う fork / join を動かす。前提: `native-inline`、`std-par`、`jit-effects`。設計: [ネイティブ化の設計](native.md) の「並列の実行」
@@ -138,7 +137,7 @@
 - ビット演算と `Bytes` の小さな操作: `pop_count`、`test_bit`、`count_leading_zeros`、`count_trailing_zeros`、`Int` の論理右シフト、`Bytes.reserve`、`Bytes` の先頭をその場で切ること、`read_chunk` の大きさの引数 ([宣言](../spec/declarations.md) の「Prelude のクラス」、[標準ライブラリ](../spec/stdlib.md) の「`Bytes`」)
   - 後に回した理由: 要る用途がまだない。論理右シフトは `(x >>> n) &&& ((1 <<< (64 - n)) - 1)` (0 < n < 64) で書ける。`reserve` は意味に現れないので、後から `Pure` の恒等の行として足しても仕様は変わらない。先頭をその場で切るには、offset の語か memmove が要る。
   - 見直す条件: 要るプログラムが出たとき。`reserve` は、計測で差が出たとき。
-- 置換付きのデコード: 妥当でない UTF-8 を U+FFFD に置き換えて `String` にする版。今は `String.decode` が `Panic` を起こし、`String.from_utf8` が `None` を返し、文字列の読みが IO の失敗 `NotUtf8` になる ([標準ライブラリ](../spec/stdlib.md) の「`Bytes` との変換」)
+- 置換付きのデコード: 妥当でない UTF-8 を U+FFFD に置き換えて `String` にする関数。今は `String.decode` が `Panic` を起こし、`String.from_utf8` が `None` を返し、文字列の読みが IO の失敗 `NotUtf8` になる ([標準ライブラリ](../spec/stdlib.md) の「`Bytes` との変換」)
   - 後に回した理由: バイト列を文字列として扱いたい所がまだなく、UTF-8 でないファイルは `Bytes` の読みで受けられる。
   - 見直す条件: UTF-8 でないファイルを `grep` のように文字列の関数で扱う用途が出たとき。
 - Unicode の表が要る文字の操作: ASCII でない大文字と小文字の変換、`is_alphabetic`、`is_whitespace` など。今の `Std.Char` は ASCII の判定と変換だけを持つ ([標準ライブラリ](../spec/stdlib.md) の「`Std.Char`」)
@@ -147,9 +146,9 @@
 - `Char.from_int : Int -> Option Char` と `Char.is_scalar`: 今の `Char.of_int` は範囲外の値で `Panic` を起こし、`try_panic` で受けられる
   - 後に回した理由: `Char.of_byte` が全域なので、失敗を値で扱う所が出なかった。
   - 見直す条件: バイトや数から文字を作って、失敗を値で扱う所が出たとき。
-- 範囲外の添字で `Option` を返す `Array` と `MutArray` の読み: 今は範囲外の添字は `Panic` で、`Option` を返す版はない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」)
+- 範囲外の添字で `Option` を返す `Array` と `MutArray` の読み: 今は範囲外の添字は `Panic` で、`Option` を返す関数はない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」)
   - 後に回した理由: eml で書くと `Array.get` の `<Panic>` が型に残る。除くには、範囲を確かめない取り出しの extern が要る。スクリプトに使う所がない。
-  - 見直す条件: 添字の範囲外を値で扱うプログラムが出たとき。または、`Option` を返す版の方針を std 全体で決めるとき。
+  - 見直す条件: 添字の範囲外を値で扱うプログラムが出たとき。または、`Option` を返す関数の方針を std 全体で決めるとき。
 - `Lin` の要素の `Array` と `MutArray` の API: extern の関数の引数の型変数は `Unr` に固定している ([宣言](../spec/declarations.md) の「`extern`」) ので、今は `Lin` の要素の配列にどの関数も使えない
   - 後に回した理由: この固定を、行ごとに緩める仕組みが要る。
   - 見直す条件: 複数のリソースを配列に持つプログラムが出たとき。または「Kind の宣言化」に着手するとき。
@@ -235,7 +234,7 @@
     - 見直す条件: 分岐が合流した後で節を作る形の確保が計測で目立ったとき。
   - FP² (Lorenzen、Leijen、Swierstra) の `fip` のような、確保なしで動くことの静的な検査を置くかは、`multi` の継続が同じ値を共有しうる点との相性を確かめてから決める
 - ループ化 (後ろ向きの辺): 自己末尾呼び出しを、関数の中のブロックへ戻る `jump` にする。トップレベルの関数を呼び出し元のブロックにする contification も同じ枠で扱う。今は辺がすべて番号の大きいブロックへ向かう ([LIR](../spec/lir.md) の「構造の規則」の R2)
-  - 後に回した理由: VM は、自己末尾呼び出しをバイトコードの出力で入口へのジャンプにする (`TailSelf`。[VM](../spec/vm.md) の「呼び出しと戻り」)ので、IR の R2 を緩めずに済む。ネイティブのコードでも、自分への `return_call` は機械語ではすでにループである ([ネイティブ化の設計](native.md) の「展開と最適化の前提」)。R2 を緩めるのは、ループの中で変わらない値の移動が要るときにする。
+  - 後に回した理由: VM は、自己末尾呼び出しをバイトコードの出力でエントリへのジャンプにする (`TailSelf`。[VM](../spec/vm.md) の「呼び出しと戻り」)ので、IR の R2 を緩めずに済む。ネイティブのコードでも、自分への `return_call` は機械語ではすでにループである ([ネイティブ化の設計](native.md) の「展開と最適化の前提」)。R2 を緩めるのは、ループの中で変わらない値の移動が要るときにする。
   - 見直す条件: ネイティブの展開で巻き上げの不足を測ったとき。
   - 残りの作業: R2 を、ループの頭への後ろ向きの辺だけを許す形に緩めることと、変換にループ化を足すこと。ブロックはすでに複数の引数を持てる
   - 生存解析、縮約、verifier は、辺がすべて前向きであることを使って1回のループで済ませている。ループ化では、ループの頭に印を付け、そこだけ不動点を計算する。支配木の計算も、後ろ向きの辺を含む形に広げる
@@ -246,9 +245,9 @@
 - n 列の `match`: 今は決定木の列に、最初の行でコンストラクタ、タプル、リテラルのどれかのパターンを持ついちばん左の列を選ぶ ([Core IR](../spec/core-ir.md))。行列によっては部分木が大きくなりうる。今の選び方でも決定木は正しいので、部分木の大きさが問題になる例が出てから列の選び方を見直す
 - doc comment: trivia の付け方を決める。doc comment を解釈するドキュメント生成と LSP の hover ([字句](../spec/lexical.md)) がまだないので、それを作るときに、使う側に合わせて決める。前提: LSP
 - JIT (投機的): バイトコードから機械語を安く作る copy-and-patch や、トレース JIT。VM が安定し、起動時間が支配的になってから検討する。トレース JIT はバイトコードにスタックのスタックを持たせる別の道で、evidence passing とは前提が合わない。前提: `native-aot`
-- Windows の子のプロセスのテストと `inherited_stdout`: `eml` 自身を子にする、Windows でも流せる `Proc` のテストを足し、Host の `inherited_stdout` を Windows に移す。今は子のプロセスを起こす UI テストを Windows で流さず、`run (merge_stderr c)` は起動の誤りになる ([テスト戦略](../implementation/testing.md) の「Windows で流さないテスト」、[標準ライブラリ](../spec/stdlib.md) の「`Proc`」)
-  - 後に回した理由: Windows で `inherited_stdout` の道を通すテストがなかった。
-  - 見直す条件: `io-driver` の段を進めるとき。
+- `miri.rs` のテストの1つあたりの Miri の費用: `crates/eml_vm/tests/miri.rs` の `par_switches_between_tasks`、`shared_struct_boxes_with_scalar_leaves`、`multi_value_returns`、`an_immediate_clause_reads_and_writes_the_state_of_its_evidence` の4つは、1つのテストの上限 (Tree Borrows の下で 10 秒) を超える ([テスト戦略](../implementation/testing.md) の「Miri」)。上限に収めるには、1回の実行ごとの準備を安くする必要がある
+  - 後に回した理由: コマンド全体の `user` は予算に収まっている。4つはどれも、VM が核の操作の前提を守ることを別の道 (`par` の切り替え、構造体と箱の変換、共有の箱の葉、節の状態の読み書き) で確かめるので、削れない。テストの大きさは `cfg!(miri)` で変えない。
+  - 見直す条件: `miri.rs` にテストを足すとき。または、`eml_vm` の `miri::` のコマンド全体の `user` が予算の半分を超えたとき。
 
 ### REPL
 
@@ -279,7 +278,7 @@
   - 見直す条件: 印付けがプロファイルで目立つとき。
 - ロックフリーの受け箱と channel
   - 後に回した理由: 既定の mutex は Miri で確かめられる。
-  - 見直す条件: N が 8 以上で競合を測ったとき。同じ口の後ろで替える。
+  - 見直す条件: N が 8 以上で競合を測ったとき。同じインターフェースの後ろで替える。
 - タスクを置く worker を、実行待ちと待ちの集まりのいちばん短いものにすること
   - 後に回した理由: 既定は置ける worker を順に回す形で、echo のサーバが worker の数に応じて速くなる条件はこれで満たす。
   - 見直す条件: 偏りを測ったとき。
@@ -304,7 +303,7 @@
 - Windows のコンソールの標準入力を std を通さずに読む読み手: `ReadConsoleW` を直接呼び、Ctrl-C で戻った読みを `Interrupted` で返す。今は std がその場で読み直すので、`Stdin` の読みは Ctrl-C で止まらない ([マルチコア対応の設計](multicore.md) の「未決の論点と将来の拡張」)
   - 後に回した理由: UTF-16 の変換、Ctrl-Z の扱い、Windows だけのテストが要る。
   - 見直す条件: `Stdin` の読みを待つ間の1回目の Ctrl-C が見えないことが問題になったとき。
-- Ctrl-C の受け口で、ビットの確かめと立てを不可分にすること: Windows の handler は `INTERRUPT` が立っているかを確かめてから立てる。そのため、同時に動いた2回の handler がどちらも1回目として扱うことがある ([VM](../spec/vm.md) の「上限と割り込み」)
+- Ctrl-C のハンドラで、ビットの確かめと立てを不可分にすること: Windows の handler は `INTERRUPT` が立っているかを確かめてから立てる。そのため、同時に動いた2回の handler がどちらも1回目として扱うことがある ([VM](../spec/vm.md) の「上限と割り込み」)
   - 後に回した理由: `Control` が前のビットを返す必要があり、`eml_rt` の変更になる。
   - 見直す条件: `TERMINATE` がビットごとの操作を `Control` に足すとき。
 
@@ -363,15 +362,30 @@
 - `shield` の中で取り消しの要求を読む確かめ
   - 後に回した理由: `cancel_requested` は、`shield` の中では外から来た取り消しを読まない。`shield` の中の後始末が要求を知る使い道が、まだない。
   - 見直す条件: `shield` の中の後始末が、取り消されたかどうかで動きを変える必要が出たとき。
+- io_uring の backend: unix の本物の driver は polling (epoll と kqueue) を使い、io_uring を使わない ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
+  - 後に回した理由: io_uring を使わなければ、確かめていない実行時の backend の切り替えがなく、自前の操作も compio の1つの trait で書ける。
+  - 見直す条件: `Std.Net` の計測で、readiness の道が支配的になったとき。
+- `Clock` と `--clock` の名前: 時計の選び方 `Clock` と CLI の `--clock` は、時計と一緒に driver (本物の driver かテストの driver) も選ぶ。driver を選ぶ名前に変えるかを決める ([VM](../spec/vm.md) の「時計と driver」)
+  - 後に回した理由: driver の違いが見えるのは実行系のテストのための `Std.IoTest` だけで、利用者の API の I/O はまだ driver に乗っていない。
+  - 見直す条件: `Std.Net` などの利用者の I/O が driver に乗り、`--clock` が時計のほかに I/O の振る舞いも変えることが利用者に見えるようになったとき。
+- waker の本番の呼び出しと 10 ms の上限をなくすこと: 本物の driver は `IoWaker` を持つが、本番のコードは鳴らさない。空きの worker は1回の待ちを `IDLE_TICK` (10 ms) で切り、止める語を読む ([VM](../spec/vm.md) の「時計と driver」)。そのため、driver のどの待ちも起こしで戻るという設計 ([非同期の設計](async.md) の「`IoDriver` と `eml_io`」) を満たしていない
+  - 後に回した理由: kqueue の通知と compio の起こしの道は async-signal-safe と書かれておらず、シグナルのハンドラから呼べない。worker が1つの間は、10 ms の上限で Ctrl-C と確保量の上限が眠る worker に届く。
+  - 見直す条件: `worker-threads` で、監視のスレッドとスレッドをまたぐ知らせが worker を起こすようになったとき。または、Ctrl-C の反応の遅れか空きの CPU 使用が問題になったとき。そのときは `IDLE_TICK` を見直す。
+- プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ。プールの32本のスレッドがすべて仕事中なら、仕事の受け付けは安全点を通らずに待つ ([VM](../spec/vm.md) の「時計と driver」)
+  - 後に回した理由: 今の仕事は std の内部の短いもの (`Std.IoTest.checksum`) だけで、長さに上限がある。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
+  - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
+- `compio-driver` の 0.13 の系列: `compio-driver` と `compio-buf` は、上位の crate `compio` の安定版が使うバージョンに固定している ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
+  - 後に回した理由: 0.13 の系列には beta のバージョンしかない。
+  - 見直す条件: 0.13 の系列が安定版になったとき。上げるときは、アーキテクチャの「外部 crate」に書いた項目をすべて確かめる。
 
 ### ネイティブ化
 
 設計は [ネイティブ化の設計](native.md) にある。ここには後に回した項目を置く。
 
-- 引数を型どおりに受ける版 `f$ret`: 関数の値の呼び出し規約で採らなかった案は、[ネイティブ化の設計](native.md) の「呼び出し規約と入口」にある
-  - 後に回した理由: 今は版の薄い形が、自分を呼ぶ `Float` のループを型どおりに保つ。
+- 引数を型どおりに受ける変種 `f$ret`: 関数の値の呼び出し規約で採らなかった案は、[ネイティブ化の設計](native.md) の「呼び出し規約とエントリ」にある
+  - 後に回した理由: 今は変種の薄い形が、自分を呼ぶ `Float` のループを型どおりに保つ。
   - 見直す条件: 特殊化されなかったクロージャで `Float` や構造体を累積するループの箱が、測って問題になったとき。または、データ並列の集まりの関数を入れる段で、`Par.tabulate_floats` の要素ごとの `Float` の箱を固定した `RunStats` の行で測るとき ([マルチコア対応の設計](multicore.md) の「未決の論点と将来の拡張」)。
-- 置き換えの所で印を下げて `run_once g` を展開する手: 関数の値の呼び出し規約 ([ネイティブ化の設計](native.md) の「呼び出し規約と入口」) とともに後に回した手で、展開の置き換えで Kind の印を下げることを許す
+- 置き換えの所で印を下げて `run_once g` を展開する手: 関数の値の呼び出し規約 ([ネイティブ化の設計](native.md) の「呼び出し規約とエントリ」) とともに後に回した手で、展開の置き換えで Kind の印を下げることを許す
   - 後に回した理由: 今は展開の置き換えで、変数の実引数と引数の Kind の印が等しいことを求める ([Core IR](../spec/core-ir.md) の「インライン化」)。
   - 見直す条件: 測って要るとわかったとき。
 - 範囲の確かめを消す最適化
@@ -400,7 +414,7 @@
 - NUL で終わる文字列を利用者の `extern "C"` で渡すこと
   - 後に回した理由: `String` と `Bytes` は NUL を置かない。NUL で終わる `const char*` が要る C の API は、Rust で書いた std の extern の行の中で写して渡せる。
   - 見直す条件: `const char*` を受ける C の関数を、利用者の `extern "C"` で直接呼びたい用途が出たとき。
-- C のレベルの受け箱: 自分のスレッドを持つ C のライブラリから eml へ知らせる口
+- C のレベルの受け箱: 自分のスレッドを持つ C のライブラリから eml へ知らせるインターフェース
   - 後に回した理由: そういう連携は Rust のプラグインだけで行う。
   - 見直す条件: 自分のスレッドを持つ C のライブラリを、プラグインなしで使いたいとき。
 - Slint のプラグイン

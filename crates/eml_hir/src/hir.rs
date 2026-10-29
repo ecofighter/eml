@@ -269,7 +269,7 @@ pub enum InputKind {
 }
 
 /// REPL の `let` の束縛。値の名前空間に置くトップレベルの値で、値は根に置く。束縛した入力のモジュールからは見えない。
-/// 右辺の同じ名前は前の版を指すためである。
+/// 右辺の同じ名前は前のバージョンを指すためである。
 #[derive(Debug)]
 pub struct Binding {
     pub name: String,

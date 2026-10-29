@@ -17,7 +17,7 @@ fn checked_clean(text: &str) -> Checked {
     checked
 }
 
-/// 入口のモジュールの関数。
+/// エントリのモジュールの関数。
 fn function(program: &Program, name: &str) -> FunctionId {
     program
         .functions()

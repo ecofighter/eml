@@ -200,7 +200,7 @@ b4:
 #[test]
 fn a_continuation_calls_a_join_block_function() {
     // yield の地点の後の if の2つの枝が、合流のブロック b3 に jump する。`f$k0` の2つの jump は `f$j3` の呼び出しに
-    // なり、`f$j3` は b3 の入口で生きている `a.0` と、b3 の引数を受ける。元の `f` の jump はそのまま残る
+    // なり、`f$j3` は b3 のエントリで生きている `a.0` と、b3 の引数を受ける。元の `f` の jump はそのまま残る
     let text = "\
 yields fn g() -> int {
   return 1
@@ -508,7 +508,7 @@ yields fn p(n.0: int, s.1: obj) -> (,){int, obj} {
 #[test]
 fn helpers_are_made_once_in_their_final_form() {
     // 2つの関数が yield の地点を持っても `compose$` は1つで、その中の `apply` は分けられない。`id$` は yield を
-    // 始める節の入口だけが使うので、まだ作られない
+    // 始める節のエントリだけが使うので、まだ作られない
     let text = "\
 yields fn g() -> int {
   return 1
@@ -619,7 +619,7 @@ const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
 const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";
 
 /// handle の場所の形 (docs/spec/core-ir.md の「handle と `prompt$`」)。
-/// in-place の入口を `ev_set_clause` で入れてから `evv` を替え、本体の結果を `prompt$` に渡す。
+/// in-place のエントリを `ev_set_clause` で入れてから `evv` を替え、本体の結果を `prompt$` に渡す。
 #[test]
 fn a_handle_installs_evidence_and_calls_prompt() {
     let text = format!(
@@ -647,7 +647,7 @@ fn a_handle_installs_evidence_and_calls_prompt() {
 
 #[test]
 fn an_immediate_clause_becomes_its_entry() {
-    // 末尾で1回だけ再開する節は、`k` と状態の引数を除いた入口になり、状態を evidence の欄から出し入れする。
+    // 末尾で1回だけ再開する節は、`k` と状態の引数を除いたエントリになり、状態を evidence の欄から出し入れする。
     // resume は残らない
     let text = format!(
         "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k -> k 41\n  println (show r)"
@@ -665,7 +665,7 @@ fn an_immediate_clause_becomes_its_entry() {
 
 #[test]
 fn a_clause_that_does_not_resume_at_once_yields_to_its_handler() {
-    // 入口は節のクロージャを作って `yield_to` を呼び、ダミーを返す。節の関数は `prompt$` が `apply c(k, st)` で呼ぶ
+    // エントリは節のクロージャを作って `yield_to` を呼び、ダミーを返す。節の関数は `prompt$` が `apply c(k, st)` で呼ぶ
     let text = format!(
         "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
     );
@@ -698,7 +698,7 @@ fn a_resume_becomes_an_apply() {
 
 #[test]
 fn a_clause_that_performs_another_effect_is_not_run_in_place() {
-    // 節の本体が外の handler の操作を呼ぶ (yield の地点を持つ) と、すぐに再開する節でも `yield_to` の入口になる
+    // 節の本体が外の handler の操作を呼ぶ (yield の地点を持つ) と、すぐに再開する節でも `yield_to` のエントリになる
     let text = format!(
         "{ASK}{HIDE}effect Log where\n  log : Int -> Unit\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle (handle b () with\n              | ctl ask () k ->\n                log 1\n                k 41) with\n      | ctl log n k -> k ()\n  println (show r)"
     );
@@ -721,7 +721,7 @@ fn a_clause_that_performs_another_effect_is_not_run_in_place() {
 
 #[test]
 fn a_never_clause_aborts() {
-    // `never` の節の入口は `yield_abort` を呼ぶ。`ret` は `obj` で、ダミーの物体を返す
+    // `never` の節のエントリは `yield_abort` を呼ぶ。`ret` は `obj` で、ダミーの物体を返す
     let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | ctl fail _ -> 0\n  println (show r)";
     let shown = core_text(text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$fail$entry"), @"
@@ -736,7 +736,7 @@ fn a_never_clause_aborts() {
 
 #[test]
 fn a_perform_looks_up_evidence_and_calls_its_clause() {
-    // `perform` は evidence を探し、その入口の欄を読んで節の呼び出しにする。末尾でないので yield の地点になる
+    // `perform` は evidence を探し、そのエントリの欄を読んで節の呼び出しにする。末尾でないので yield の地点になる
     let text = format!(
         "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k -> k 41\n  println (show r)"
     );
@@ -961,7 +961,7 @@ fn binding(line: &str) -> &str {
 #[test]
 fn closures_ep_builds_take_the_join_of_their_captures() {
     // yield をまたいで `FileIn` が生きている `use_it` の続きのクロージャは `lin` で、それを足した κ も `lin` である。
-    // `count` の続きは `Int` しか捕まえないので `unr` になる。すぐに再開しない節の入口が作る節のクロージャも、
+    // `count` の続きは `Int` しか捕まえないので `unr` になる。すぐに再開しない節のエントリが作る節のクロージャも、
     // 操作の引数の `FileIn` を捕まえて `lin` になる
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
     let text = format!(
@@ -993,8 +993,8 @@ fn closures_ep_builds_take_the_join_of_their_captures() {
 
 #[test]
 fn evidence_and_evv_are_unr_and_state_is_poly() {
-    // EP が基本操作の結果を束縛する変数は、基本操作の表の結果の印を持つ。evidence、`evv`、入口のクロージャは `unr`、
-    // 状態、κ、節の本体、ダミーは `poly` である。ただし in-place の入口が取り出す状態は、translate が節の状態の引数に
+    // EP が基本操作の結果を束縛する変数は、基本操作の表の結果の印を持つ。evidence、`evv`、エントリのクロージャは `unr`、
+    // 状態、κ、節の本体、ダミーは `poly` である。ただし in-place のエントリが取り出す状態は、translate が節の状態の引数に
     // 付けた印のままである。handle の本体の結果は `FileIn` でありうるので `poly` である
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
     let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let a = handle b () with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n  println (show a)";
@@ -1111,7 +1111,7 @@ fn a_never_clause_call_is_not_a_yield_point() {
     "#);
 }
 
-/// `never` の入口は `yield_abort` で中断を始めるだけで、κ を作らずに巻き戻すので `yields` を立てない。
+/// `never` のエントリは `yield_abort` で中断を始めるだけで、κ を作らずに巻き戻すので `yields` を立てない。
 #[test]
 fn a_never_entry_does_not_yield() {
     let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | ctl fail _ -> 0\n  println (show r)";
@@ -1200,7 +1200,7 @@ fn clause_local_function_resumes_once() {
     ");
 }
 
-/// `fn` の節は `| ctl ask () k -> k n` と同じ形に下ろすので、yield の地点のない本体はその場で動く入口になる
+/// `fn` の節は `| ctl ask () k -> k n` と同じ形に下ろすので、yield の地点のない本体はその場で動くエントリになる
 /// (docs/spec/core-ir.md の「evidence passing」)。
 #[test]
 fn a_fn_clause_runs_in_place() {
@@ -1224,7 +1224,7 @@ fn a_fn_clause_runs_in_place() {
     ");
 }
 
-/// 本体が別のエフェクトの操作を起こす `fn` の節は yield の地点を持つので、その場で動かず `yield_to` の入口になる。
+/// 本体が別のエフェクトの操作を起こす `fn` の節は yield の地点を持つので、その場で動かず `yield_to` のエントリになる。
 #[test]
 fn a_fn_clause_that_performs_yields() {
     let text = format!(
@@ -1241,7 +1241,7 @@ fn a_fn_clause_that_performs_yields() {
 }
 
 /// 本体が `println` を呼ぶ `fn` の節は、IO の extern を yield の地点に数えないので、その場で動く。節の本体は handler の
-/// 外側の `evv` で動かすので、入口の先頭で `evv` を evidence の外側に替え、`return` の前に戻す
+/// 外側の `evv` で動かすので、エントリの先頭で `evv` を evidence の外側に替え、`return` の前に戻す
 /// (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
 #[test]
 fn a_fn_clause_that_prints_runs_in_place_under_the_outer_evv() {
@@ -1616,7 +1616,7 @@ fn a_program_with_root_get_gets_the_forks() {
     );
 }
 
-/// fork の関数は LIR のパスをすべて通る。`ev` は節の入口の引数として入口が持ち、`child_abort` は借りるだけなので、
+/// fork の関数は LIR のパスをすべて通る。`ev` は節のエントリの引数としてエントリが持ち、`child_abort` は借りるだけなので、
 /// Perceus は `ev` の `decref` を `child_abort` の後に置く。そこへは実行が届かず、`ev` は `child_abort` の巻き戻しの
 /// 地点が持つ値として、巻き戻しが手放す (docs/spec/core-ir.md の「`par` の子の中断」)。
 #[test]
