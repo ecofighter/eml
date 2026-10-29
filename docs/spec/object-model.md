@@ -1145,7 +1145,7 @@ pub struct Spawned {
 - 書くファイルのハンドルは、`FileOut { path: Box<str>, writer: Option<BufWriter<Box<dyn Write + Send>>> }` を中身にした `Foreign` の物体で、作るときに `lin` ビットを立てる。Verus には `external_body` の不透明な型として見せる。`Ctx::fs_open(path, Open::Write(mode))` が、信頼の関数 `host_open_write` で Host の `open_write` を呼んで作る。パスの扱いと開けないときの誤りは、`FileIn` と同じである (下の「読み手」の `FileIn.open`)
 - `FileOut` は、標準出力と同じ大きさ (64 KiB、`BUFFER_BYTES`) の自分の buffer を持つ。Host の書き手に書き出すのは、buffer があふれたとき、`flush` のとき、閉じるときの3つだけで、`fsync` はしない。buffer の大きさ以上の書き込みは、buffer を通らずに書き手に届く (`BufWriter` の振る舞い)。書き込みは信頼の関数 `file_out_write(f, bytes, line)` が、書き出しは `file_out_flush(f)` が行う。`f` は `foreign_unique` で借りた中身のポインタである。書き手がない (`writer` が `None`) ときは `Io { op: Write, reason: NotAvailable }` を返す
 - VM の書き出しの地点 (プログラムの終わり、実行時エラーを出す前、止めたとき) は、`Ctx::flush` で Host の buffer だけを書き出す。`FileOut` の buffer には触れない
-- 閉じる処理は、`FileOut` の drop glue (`BufWriter` の `Drop`) だけである。手で書いた `Drop` は置かない。drop glue が残りの buffer を書き、誤りを捨てる。そのため、`close`、巻き戻し、`exit`、捕まえなかった実行時エラーの回復、`Heap` を落とすとき、REPL、Rust の panic のどれで手放しても、書いた中身は書き出される。失うのは、2回目の Ctrl-C (`_exit(130)` か `TerminateProcess`) と abort のときだけである。書けなかった後の約束は、上の「誤りのときの約束」にある
+- 閉じる処理は、`FileOut` の drop glue (`BufWriter` の `Drop`) だけである。手で書いた `Drop` は置かない。drop glue が残りの buffer を書き、誤りを捨てる。そのため、`close`、巻き戻し、`exit`、捕まえなかった実行時エラーの回復、`Heap` を落とすとき、REPL、Rust の panic のどれで手放しても、書いた中身は書き出される。失うのは、2回目の Ctrl-C (`_exit(130)` か `TerminateProcess`)、2回目の SIGTERM (`_exit(143)`)、abort のときだけである。書けなかった後の約束は、上の「誤りのときの約束」にある
 - 破棄処理の中で Host の lock は入れ子にならない。破棄処理は Host のメソッドが走っていない時にだけ呼ばれ、テストの Host の書き手 (`eml_vm` の `WrittenFile`) は、書き込みごとに lock を1つ取るだけである
 
 ### 読み手

@@ -232,18 +232,32 @@ fn fault(fault: VmFault) -> RuntimeError {
     }
 }
 
-/// 割り込みだけが真になる。上限で止めたことも、ほかの誤りも、リークも割り込みではない。
+/// 割り込みだけが真になる。上限で止めたことも、終了の求めも、ほかの誤りも、リークも割り込みではない。
 #[test]
 fn only_an_interrupt_is_interrupted() {
     assert!(fault(VmFault::Stopped(Stop::Interrupted)).interrupted());
     assert!(fault(VmFault::Extern(Fault::Stopped(Stop::Interrupted))).interrupted());
-    for stop in [Stop::DepthLimit, Stop::MemoryLimit] {
+    for stop in [Stop::DepthLimit, Stop::MemoryLimit, Stop::Terminated] {
         assert!(!fault(VmFault::Stopped(stop)).interrupted());
         assert!(!fault(VmFault::Extern(Fault::Stopped(stop))).interrupted());
     }
     assert!(!fault(VmFault::Extern(eml_rt::ArithFault::DivisionByZero.into())).interrupted());
     assert!(!fault(VmFault::Internal("x")).interrupted());
     assert!(!RuntimeError::Leak(vec![("String".to_string(), 1)]).interrupted());
+}
+
+/// 終了の求めだけが真になる。安全点で止めたときも、ハンドルの読みの中で止めたときも真で、割り込みや上限では偽である
+/// (docs/spec/vm.md の「上限と割り込み」)。
+#[test]
+fn only_a_terminate_is_terminated() {
+    assert!(fault(VmFault::Stopped(Stop::Terminated)).terminated());
+    assert!(fault(VmFault::Extern(Fault::Stopped(Stop::Terminated))).terminated());
+    for stop in [Stop::DepthLimit, Stop::MemoryLimit, Stop::Interrupted] {
+        assert!(!fault(VmFault::Stopped(stop)).terminated());
+        assert!(!fault(VmFault::Extern(Fault::Stopped(stop))).terminated());
+    }
+    assert!(!fault(VmFault::Internal("x")).terminated());
+    assert!(!RuntimeError::Leak(vec![("String".to_string(), 1)]).terminated());
 }
 
 const EXIT: &str = "\
