@@ -2208,12 +2208,15 @@ impl Registry {
         if taken.outcome() != OUTCOME_OK {
             return Err(CellFault::Internal("an op is taken after it failed"));
         }
-        if matches!(taken.kind, OpKind::Listen { .. }) != listener {
-            return Err(CellFault::Internal("an op is taken as another kind of op"));
+        let kind_matches = if listener {
+            matches!(taken.kind, OpKind::Listen { .. })
+        } else {
+            matches!(taken.kind, OpKind::Accept | OpKind::Connect { .. })
+        };
+        match taken.made {
+            Some(made) if kind_matches => Ok(made),
+            _ => Err(CellFault::Internal("an op is taken as another kind of op")),
         }
-        taken
-            .made
-            .ok_or(CellFault::Internal("an op has no handle to give"))
     }
 
     /// 取り出しの行。token を消費して終わった記録を放し、結果と buffer を返す。残ったストリームは落とす。取り出すのは

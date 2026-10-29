@@ -1027,7 +1027,7 @@ pub data Failure =
 - `park_io` と `park_io_until` は token を預からずに消費する。token は `Lin` の `Foreign` で、型変数を持たないためである。待つ間は操作の記録が token を持ち、再開の仕事が `resume_io` に渡す
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
 - `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のためのインターフェースで、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
-- `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.IoTest` のためのインターフェースで、同じ理由で `pub` である。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.IoTest`」)
+- `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.Net` と `Std.IoTest` のためのインターフェースで、同じ理由で `pub` である。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.IoTest`」)
 
 ### スコープ
 
@@ -1288,7 +1288,7 @@ main () = Async.run (fn () ->
 - `accept_within ms l` は `accept l` を `ms` ミリ秒の期限で区切り、結果を `Option` に包む。`None` は期限が過ぎたことだけを表し、リスナーは続けて使える。期限と競って届いた接続は `Some` で返す (上の「時間」)
 - `local_port` と `peer_addr` は、作ったときに記録した値を読む。引数を借りて組で返し ([Core IR](core-ir.md) の「組を返す extern」)、効果を持たない。`peer_addr` は Rust の `SocketAddr` の表示の形 (`127.0.0.1:49153`、`[::1]:8080`) で返す
 - `shutdown_write s` は送る側を閉じ、相手は残りを読みきってから EOF を受ける。`set_nodelay on s` は TCP_NODELAY を設定する。どちらも driver の操作を待たない。失敗はそれぞれ IO の失敗 `cannot shut down the stream: …` と `cannot set the no-delay option: …` で、種類は次の箇条の、extern が投げる誤りと同じ規則で決める
-- 拒まれた接続は種類 `ConnectionRefused`、reset と EPIPE と ECONNABORTED は `ConnectionReset`、使用中の番地は `AddrInUse`、OS の時間切れは `TimedOut` である。この4つは包みが `fail_io` で投げる。ほかの誤りは extern が投げ、解決できない名前は `NotFound`、扱えない操作は `NotAvailable`、残りは `Other` にする (上の「`try_io`」)
+- 拒まれた接続は種類 `ConnectionRefused`、reset と EPIPE と ECONNABORTED は `ConnectionReset`、使用中の番地は `AddrInUse`、OS の時間切れは `TimedOut` である。この4つは包みが `fail_io` で投げる。ほかの誤りは extern が投げ、種類は最初の5つから OS の誤りで決める。解決できない名前は `NotFound`、権限のない操作 (1024 より小さいポートの `listen` など) は `PermissionDenied`、扱えない操作は `NotAvailable`、残りは `Other` である (上の「`try_io`」)
 - 文言は prefix と理由を `: ` でつないだものである。prefix は `cannot listen on {host}:{port}`、`cannot connect to {host}:{port}`、`cannot accept a connection` のどれかである。理由は、包みが投げる4つの種類では `connection refused`、`connection reset`、`address in use`、`timed out` で、ほかは driver の誤りの表示である。テストの driver では、解決できない名前の理由は `unknown host` になる
 - `listen` の `host` が IP アドレスの綴りでないときと、`listen` と `connect` の `port` が範囲の外のときは、操作を出さずに種類 `Other` の IO の失敗を起こす。理由はそれぞれ `the host is not an IP address` と `the port is out of range` である
 - Windows の本物の driver はまだソケットを扱わないので、`listen`、`accept`、`connect` は種類 `NotAvailable` の IO の失敗 (`cannot listen on 127.0.0.1:0: unsupported`) になる。テストの driver はどの OS でも同じに動く
