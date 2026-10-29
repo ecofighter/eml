@@ -353,8 +353,8 @@ fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize) -> Result<Polled, VmFault> {
 
 /// `poll` が止める理由を返したときの扱い。`Preempt` と `Notice` 以外は誤りとして返す。2つは、yield の途中でなければ
 /// ビットを下ろしてからもう一度 `poll` する。間に命令がないので、深さの上限は正確で、同時に立った止めるビットは切り替えと
-/// 集めることより先に勝つ。`Notice` は `Preempt` より先に返るので、両方が立っていれば切り替え、切り替えの前の集める地点が
-/// 知らせを集める。
+/// 集めることより先に勝つ。`NOTICE` だけでは切り替えないので、`Sequential` は `NOTICE` では切り替えない
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
 #[cold]
 #[inline(never)]
 fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<Polled, VmFault> {
@@ -367,15 +367,21 @@ fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<Polled
     if ctx.yielding() != 0 {
         return Ok(Polled::Continue);
     }
-    if stop == Stop::Notice {
-        control.take_notice();
-    } else {
+    if stop == Stop::Preempt {
         control.take_preempt();
+        return match ctx.poll(depth) {
+            // 間に立った `NOTICE` は下ろさずに残す。切り替えの前の集める地点が下ろす
+            Ok(()) | Err(Stop::Preempt | Stop::Notice) => Ok(Polled::Switch),
+            Err(stop) => Err(stop.into()),
+        };
     }
+    control.take_notice();
     match ctx.poll(depth) {
-        Ok(()) if stop == Stop::Notice => Ok(Polled::Collect),
-        // 間に立った `NOTICE` は下ろさずに残す。切り替えの前の集める地点が下ろす
-        Ok(()) | Err(Stop::Preempt | Stop::Notice) => Ok(Polled::Switch),
+        // 2回目の `poll` の前に立ち直した `NOTICE` も、集める地点が下ろす
+        Ok(()) | Err(Stop::Notice) => Ok(Polled::Collect),
+        // 横取りも求められていれば、`PREEMPT` を拾うときと同じく下ろしてから切り替える。下ろさないと、切り替えた先の
+        // 最初の安全点がまた切り替える
+        Err(Stop::Preempt) => polled_stop(ctx, depth, Stop::Preempt),
         Err(stop) => Err(stop.into()),
     }
 }
@@ -3221,7 +3227,10 @@ fn run_extern<R: Exec>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::cells::Notice;
 
     fn empty_task(max_depth: usize) -> Task {
         Task {
@@ -3243,6 +3252,74 @@ mod tests {
             cell: None,
             outcome: None,
         }
+    }
+
+    /// `NOTICE` だけなら切り替えずに集め、`PREEMPT` も立っていれば両方を下ろして切り替える。
+    #[test]
+    fn a_notice_collects_and_a_notice_with_a_preempt_switches() {
+        let control = Arc::new(Control::new(eml_rt::Limits::default()));
+        let (host, _) = crate::capture_host(Default::default());
+        let ctx = Ctx::<eml_rt::Checked>::new(Arc::clone(&control), host);
+        control.notice();
+        assert!(poll(&ctx, 0).ok() == Some(Polled::Collect));
+        assert_eq!(control.worker_bits(), 0);
+        control.notice();
+        control.preempt();
+        assert!(poll(&ctx, 0).ok() == Some(Polled::Switch));
+        assert_eq!(control.worker_bits(), 0);
+    }
+
+    /// 動いているタスクの安全点が `NOTICE` を見て集め、聞く者のいないシグナルで run を止める。逐次の方針なので、
+    /// 切り替えはしない。届けたシグナルは集める地点が保留から下ろす。`Scheduler` を捨てると保留は消えるので、捨てる前に
+    /// 確かめる (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[test]
+    fn a_running_task_collects_a_notice_at_its_safepoint() {
+        let program = eml_lir::parse(
+            "\
+fn main() -> unit {
+  let u.0: unit = call f(())
+  return u.0
+}
+fn f(p.0: unit) -> unit {
+  return p.0
+}
+",
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        let control = Arc::new(Control::new(eml_rt::Limits::default()));
+        let mut code = CodeBase::<eml_rt::Checked>::new(Arc::clone(&control));
+        let entry = code.load(&program).unwrap();
+        let (host, _) = crate::capture_host(Default::default());
+        let mut ctx = Ctx::new(Arc::clone(&control), host);
+        let mut task = Task::new(&code, entry, usize::MAX);
+        task.worker = ctx.heap().worker();
+        let mut sched = Scheduler::new(
+            crate::Sequential,
+            Box::new(eml_io::TestDriver::new(None)),
+            Arc::clone(&control),
+            None,
+            task.worker,
+            usize::MAX,
+            Vec::new(),
+        );
+        // 監視のスレッドの中継と同じことをする
+        control.defer(Control::TERMINATE);
+        assert_eq!(control.claim_signals(), Control::TERMINATE);
+        sched.cells.inbox.push(Notice::Signal(Control::TERMINATE));
+        control.notice();
+        let mut counts = crate::RunCounts::default();
+        let result = run::<ExecWith<eml_rt::Checked, crate::Sequential>>(
+            &code,
+            &mut ctx,
+            &mut task,
+            &mut sched,
+            &mut counts,
+        );
+        let error = result.unwrap_err();
+        assert!(error.terminated(), "{error:?}");
+        assert_eq!(control.pending_signals(), 0);
+        assert_eq!(control.stop_bits(), Control::TERMINATE);
+        assert_eq!(sched.preemptions(), 0);
     }
 
     #[test]

@@ -110,6 +110,8 @@ impl Installed {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use eml_cli::Limits;
 
     use super::*;
@@ -123,6 +125,23 @@ mod tests {
             doorbell: None,
             mode,
         }
+    }
+
+    /// 終わらないときはどちらの手順でも自己パイプを鳴らし、その場で終わるときは鳴らさない。
+    #[test]
+    fn a_handled_signal_rings_the_doorbell() {
+        let doorbell = Doorbell::new().unwrap();
+        let installed = Installed {
+            doorbell: Some(Arc::clone(&doorbell)),
+            ..installed(Mode::Run)
+        };
+        installed.control.set_watched(TERMINATE);
+        assert_eq!(installed.respond(TERMINATE), Response::Handled);
+        assert!(doorbell.wait(Some(Duration::ZERO)));
+        assert_eq!(installed.respond(INTERRUPT), Response::Handled);
+        assert!(doorbell.wait(Some(Duration::ZERO)));
+        assert_eq!(installed.respond(INTERRUPT), Response::Exit(130));
+        assert!(!doorbell.wait(Some(Duration::ZERO)));
     }
 
     #[test]

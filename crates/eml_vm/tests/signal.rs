@@ -47,5 +47,4 @@ main () = Async.run (fn () -> Async.sleep_ms 2000)
     watchdog.join().unwrap();
     let error = result.unwrap_err();
     assert!(error.terminated(), "{error:?}");
-    assert_eq!(control.pending_signals(), 0);
 }

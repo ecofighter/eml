@@ -131,7 +131,10 @@ fn watch_loop(relay: &Relay, watch: &Watch, doorbell: Option<&Doorbell>, preempt
         // 自己パイプがあり横取りもしなければ、鳴るまで眠る。自己パイプがなければ刻みでシグナルを見に行く
         let until_next = next.saturating_duration_since(Instant::now());
         match doorbell {
-            Some(doorbell) => doorbell.wait(preempt.then_some(until_next)),
+            // 鳴ったかどうかによらず、保留のシグナルを見に行く
+            Some(doorbell) => {
+                doorbell.wait(preempt.then_some(until_next));
+            }
             None => thread::park_timeout(until_next),
         }
         if watch.stop.load(Ordering::Relaxed) {
