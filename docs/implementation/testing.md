@@ -514,6 +514,8 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 `SourceFiles::line_col` の表のテスト (`eml_diagnostics` の `source.rs`)、verifier の大きな IR のテスト (`eml_lir` の `tests/verify.rs` の、長い `switch` の連鎖、借りたフィールドへの長い `switch` の連鎖、1つのブロックに深さの違う辺が多く合流する形と、`eml_core_ir` の `tests/verify.rs` の、長い文の `if` の列) は、数えられる仕事の回数がないので時間を測る。2乗の実装だけが超える緩い上限 (5 秒と 10 秒) を置く。ふだんの実行に入る。
 
+`bench/net` はテストではなく、CI では流さない。ふだんの実行にも I/O の時間の assert は入れない。規則は [計測の基準](benchmarks.md) の「ネットワークの計測」にある。
+
 ### 開発用の数え方
 
 `crates/eml_core_ir/tests/census.rs` は、`bench/` と `tests/ui/run*` のすべてのプログラムを reuse の後の LIR まで通し、プログラムごとと合計の、関数の数、文の数、終端 (ブロック) の数、一様な変種 `<f>$uniform` の数、そのうち写しの形の数を表示する ([LIR](../spec/lir.md) の「関数の ABI」)。呼び出しの規約を変えたときに、コードの大きさの変わり方を前後で比べるためのもので、合否を持たない。`#[ignore]` を付け、`cargo nextest run -p eml_core_ir --test integration --run-ignored ignored-only --no-capture census` で流す。
@@ -596,6 +598,7 @@ cargo test -p eml_vm --test integration scaling::                              #
 cargo test -p eml_vm --test integration bench::                                # 基準のプログラムの回数 (同上)
 bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)
 bench/scripts.sh                                                               # スクリプトと数値計算のプログラムを Python と比べた実時間と常駐メモリ (大きさは eml で約 300 ms) と、大きい入力のスクリプトの Rust の実装との比 (macOS、release)
+bench/net.sh LABEL=EML [LABEL=EML] [--only REGEX] [--stats]                             # Std.Net を本物の driver の上で流した CPU、syscall (strace、Linux)、RSS、RunStats (release)
 bench/scripts/compare.sh --fixture wc                                          # スクリプトの UI テストの入力で、eml と Python の実装の出力を比べる (compare.sh --paths EML PY 引数... < 入力 でも比べる)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # VM の Miri (同上)

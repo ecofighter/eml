@@ -375,6 +375,45 @@ C/Rust との比
 | `logstat --whole` | 100000 KiB | 3.54 | 0.23 | 0.00 | 0.00 | 15.4 |
 | `csv2jsonl` | 50000 KiB | 4.85 | 0.14 | 0.00 | 0.00 | 34.6 |
 
+## ネットワークの計測
+
+`bench/net.sh` は、`Std.Net` を本物の driver の上で動かす物差しである。release ビルドの eml で `bench/net/cases.tsv` の件を流し、1件1行の JSONL を標準出力に出す。`python3 -I bench/net/report.py` がそれを Markdown の表にする。テストではなく、CI では流さない。命令の数でなく CPU の時間と syscall の数を測るので、同じ機械で前と後を並べたときだけ意味がある。
+
+`bench.py` は `LABEL=EML` を1つ以上受け取る。2つ以上渡すと、時間の run を件ごとに交互に流す。`--only REGEX` で件を絞り、`--stats` で `eml run --stats` の `RunStats` を1回取る。`--stats` の run は検査モードなので、時間には使わない。
+
+### 件
+
+eml の側は `Std.Net` で書く。相手は同じ run の中の eml のタスク (`-self`) か、ブロックする socket の Python (`peer.py`、`-py`) である。`-py` の件では eml のプロセスだけを測る。名前が `py:` で始まる件は Python 同士の床で、時間だけを測る。
+
+| 件 | 何をするか | 単位 |
+|---|---|---|
+| `base` | `Net` と `Async` を読み込み、listen して閉じるだけ。コンパイルと起動の床 | run |
+| `compute-fib` | I/O のない単一タスクの run (`bench/fib.em`)。監視のスレッドを run の始めに起こす費用を見る | run |
+| `echo-{self,py}-{fresh,reuse}` | 1本の接続で 16 バイトの往復を繰り返す。`fresh` は書くたびに `Bytes.make`、読むたびに `Bytes.empty ()`。`reuse` は1つの buffer を `Bytes.truncate 0` で空にして読みに渡し直す | 往復 |
+| `bulk-{self,shared,reuse,1k}` | 1本の接続で大きく転送する。`shared` は同じ `Bytes` を毎回書き、`reuse` は読み手が buffer を使い回し、`1k` は 1 KiB ずつ書く | MiB |
+| `bulk-{send,recv}-py` | eml が送るだけ、または読むだけ | MiB |
+| `bulk-accum` | 1つの buffer に足し続け、写しの伸び方を見る | MiB |
+| `many-self-{250,1000,2000}`、`many-py-1000` | C 本を1本ずつ順に張り、張り終えてから全部で 16 バイトを往復して閉じる。張る間は読みが張った本数だけ保留になる | 接続 |
+| `conn-self-{1,32}`、`conn-py` | 接続を張って EOF を読んで閉じることを繰り返す。`32` は32個のタスクが同時に行う | 接続 |
+| `py:{echo,bulk,conn}` | Python 同士の床 | 往復、MiB、接続 |
+
+各件の引数と単位の数は `cases.tsv` にある。件の足し引きは行の足し引きで済む。
+
+### 主指標
+
+主指標は、eml のプロセスの CPU (user+sys) から `base` の中央値を引き、単位で割った値である。時間の run は件ごとに 11 回流し、中央値を使う。実時間、sys、最大 RSS、`minflt`、自発と非自発の切り替えは副の指標として並べる。`-py` の件の実時間は Python の相手が律速するので、eml の違いは CPU にしか出ない。
+
+syscall の数は `strace -f` で数える (Linux のみ)。main のスレッドとほかのスレッドに分け、名前ごと、失敗の errno ごとに数え、`base` を引いて単位で割る。3回流して範囲を出す。`RunStats` は `eml run --stats` の1回から取り、床の行にある欄だけを表に出す。
+
+### 比べる規則
+
+- 後 ÷ 前の比が 0.90 以下か 1.10 以上で、かつ生の CPU の四分位の範囲 (25% から 75%) が前と後で重ならないときだけ「差」とする。そうでなければ「差なし (この機械では見分けられない)」と書く
+- 最小値は採らない。同じ実行の道の2つの eml を比べた A/A の run では、この規則で「差」になった件がなく、最小値の比は中央値の比より広く開いた
+- CPU は固定しない。`taskset` で固定しても揺れは狭まらなかった
+- `minflt` の単位あたりの値が前と後で 1 以上違う件は「確保の揺れ」と印を付け、時間の判定から外す。1往復ごとに確保して手放す buffer が glibc のヒープの頂きを縮めて伸ばすかはバイナリの配置で変わり、物差しでは決まらない。その件の確保の違いは `RunStats` の `allocations` と syscall の `brk` で見る
+- syscall は main のスレッドで比べ、3回のどれもが目標以下であることを見る
+- 前と後は同じ機械で、ほかに負荷のない状態で測る
+
 ## 所見
 
 機種の M4 は Mac16,1 (Apple M4)、M5 は Mac17,2 (Apple M5) である。OS はどれも macOS 27.0.1 (26A434)、rustc は 1.98.1 で、「`decref` が一意な物体を空ける道」だけ 1.95.0 である。

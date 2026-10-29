@@ -45,6 +45,7 @@ verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # forma
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)
 bench/rt.sh                          # eml_rt fast-mode instruction counts (macOS)
 bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ and the numeric bench/ programs against their Python versions, each row sized to ~300 ms of eml time: wall time and peak RSS (macOS)
+bench/net.sh LABEL=EML [LABEL=EML] [--only REGEX] [--stats]   # Std.Net on the real driver: CPU, syscalls (strace, Linux), RSS and RunStats per case as JSONL; bench/net/report.py makes the tables
 bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input, compare.sh --paths EML PY ARGS... < input)
 ```
 
