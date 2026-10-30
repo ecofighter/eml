@@ -20,4 +20,8 @@ Other: cannot read the response: the chunked body is not valid
 ConnectionReset: cannot read the response: the connection closed before the end of the body
 ConnectionReset: cannot read the response: the connection closed before the end of the body
 Other: cannot follow the redirect to next?u=http://x: the location is not an absolute URL or an absolute path
+ok: 200
+Other: cannot follow the redirect to : the location is not an absolute URL or an absolute path
+Other: cannot read the response: the transfer coding  is not supported
+NotUtf8: cannot read the response: a line is not valid UTF-8
 --- stderr ---
