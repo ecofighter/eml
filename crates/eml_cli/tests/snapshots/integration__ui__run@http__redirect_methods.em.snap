@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/http/redirect_methods.em
+---
+--- stdout ---
+server: PUT /a HTTP/1.1
+server: Content-Length: 4
+server: body data
+server: PUT /b HTTP/1.1
+server: Content-Length: 4
+server: body data
+server: PUT /c HTTP/1.1
+server: Content-Length: 4
+server: body data
+server: GET /d HTTP/1.1
+client: 200 ok
+server: HEAD /e HTTP/1.1
+server: HEAD /f HTTP/1.1
+client: 200 0
+server: GET /g HTTP/1.1
+client: 302 move
+--- stderr ---

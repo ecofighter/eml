@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/http/no_body.em
+---
+--- stdout ---
+status: 200
+header: content-length: 5
+length: 0
+status: 204
+header: content-length: 5
+length: 0
+status: 304
+header: content-length: 5
+length: 0
+status: 200
+header: content-length: 2
+length: 2
+--- stderr ---

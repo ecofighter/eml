@@ -1,0 +1,36 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/http/post.em
+---
+--- stdout ---
+server: POST /items HTTP/1.1
+server: Host: localhost:49152
+server: User-Agent: eml
+server: Connection: close
+server: Content-Length: 15
+server: Content-Type: application/json
+server: x-trace: a b
+server: body {"name": "eml"}
+client: 201 done
+server: POST /items HTTP/1.1
+server: Host: localhost:49152
+server: User-Agent: eml
+server: Connection: close
+server: Content-Length: 0
+server: body 
+client: 201 done
+server: PUT /items HTTP/1.1
+server: Host: localhost:49152
+server: Connection: close
+server: Content-Length: 1
+server: User-Agent: probe/1
+server: body x
+client: 201 done
+server: DELETE /items HTTP/1.1
+server: Host: localhost:49152
+server: User-Agent: eml
+server: Connection: close
+server: body 
+client: 201 done
+--- stderr ---

@@ -1,0 +1,35 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/http/redirects.em
+---
+--- stdout ---
+server: POST /form HTTP/1.1
+server: Host: localhost:49152
+server: User-Agent: eml
+server: Connection: close
+server: Content-Length: 3
+server: Content-Type: text/plain
+server: Authorization: Bearer t
+server: Cookie: k=v
+server: Accept: */*
+server: body a=1
+server: GET /see HTTP/1.1
+server: Host: localhost:49152
+server: User-Agent: eml
+server: Connection: close
+server: Authorization: Bearer t
+server: Cookie: k=v
+server: Accept: */*
+server: GET /moved HTTP/1.1
+server: Host: 127.0.0.1:49152
+server: User-Agent: eml
+server: Connection: close
+server: Accept: */*
+client: 200 here
+server: GET /plain HTTP/1.1
+server: Host: localhost:49152
+server: User-Agent: eml
+server: Connection: close
+client: 302 no location
+--- stderr ---

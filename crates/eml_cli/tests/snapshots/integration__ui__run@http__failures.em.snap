@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/http/failures.em
+---
+--- stdout ---
+ConnectionReset: cannot read the response: the connection closed before the end of the headers
+ConnectionReset: cannot read the response: the connection closed before the end of the headers
+Other: cannot read the response: the status line is not valid
+Other: cannot read the response: the status line is not valid
+Other: cannot read the response: a line is longer than 65536 bytes
+Other: cannot read the response: a header line is not valid
+Other: cannot read the response: a header line is not valid
+Other: cannot read the response: the Content-Length is not valid
+Other: cannot read the response: the Content-Length is not valid
+ConnectionReset: cannot read the response: the connection closed before the end of the body
+Other: cannot read the response: the transfer coding gzip, chunked is not supported
+Other: cannot read the response: the chunked body is not valid
+Other: cannot read the response: the chunked body is not valid
+ConnectionReset: cannot read the response: the connection closed before the end of the body
+ConnectionReset: cannot read the response: the connection closed before the end of the body
+Other: cannot follow the redirect to next?u=http://x: the location is not an absolute URL or an absolute path
+--- stderr ---

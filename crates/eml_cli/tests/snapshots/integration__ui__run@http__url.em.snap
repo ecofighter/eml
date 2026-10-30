@@ -1,0 +1,32 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/http/url.em
+---
+--- stdout ---
+server: GET / HTTP/1.1 | Host: localhost:49152
+client: 200
+server: GET /?a=1&b=2 HTTP/1.1 | Host: localhost:49152
+client: 200
+server: GET /a/b/../c?x HTTP/1.1 | Host: 127.0.0.1:49152
+client: 200
+client: Other: invalid URL ftp://localhost/: the scheme is not http or https
+client: Other: invalid URL localhost/: the scheme is not http or https
+client: Other: invalid URL http://: the host is not valid
+client: Other: invalid URL http:///path: the host is not valid
+client: Other: invalid URL http://user:pw@localhost/: userinfo is not supported
+client: Other: invalid URL http://[::1]:8080/: IPv6 addresses are not supported
+client: Other: invalid URL http://localhost:0/: the port is not valid
+client: Other: invalid URL http://localhost:65536/: the port is not valid
+client: Other: invalid URL http://localhost:/: the port is not valid
+client: Other: invalid URL http://localhost:8a/: the port is not valid
+client: Other: invalid URL http://local host/: the URL contains a space, a control or a non-ASCII character
+client: Other: invalid URL http://localhost/café: the URL contains a space, a control or a non-ASCII character
+client: Other: invalid URL http://local%68ost/: the host is not valid
+client: NotFound: cannot connect to nowhere.invalid:80: unknown host
+client: Other: invalid request: the method GET POST is not valid
+client: Other: invalid request: the header Bad Name is not valid
+client: Other: invalid request: the header X-Split is not valid
+client: Other: invalid request: the header content-LENGTH is set by Std.Http
+client: Other: invalid request: the header Host is set by Std.Http
+--- stderr ---

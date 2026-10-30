@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/http/content_length.em
+---
+--- stdout ---
+server: GET /index.html?q=1 HTTP/1.1
+server: Host: localhost:49152
+server: User-Agent: eml
+server: Connection: close
+status: 200
+header: content-type: text/plain
+header: x-multi: a
+header: x-multi: b
+header: x-folded: one two
+header: content-length: 5
+body: hello
+--- stderr ---

@@ -134,6 +134,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | `Std.Chan` and `Std.Atomic` | docs/spec/stdlib.md の「`Std.Chan`」, docs/spec/stdlib.md の「`Std.Atomic`」, docs/spec/vm.md の「channel」, docs/spec/object-model.md の「論理的な worker ID」 |
 | `Std.Net` and `Std.Signal` | docs/spec/stdlib.md の「`Std.Net`」, docs/spec/stdlib.md の「`Std.Signal`」, docs/spec/vm.md の「上限と割り込み」 |
 | `Std.Tls` | docs/spec/stdlib.md の「`Std.Tls`」, docs/spec/vm.md の「時計と driver」 (the test driver's `tls.localhost`) |
+| `Std.Http` | docs/spec/stdlib.md の「`Std.Http`」 |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
 | The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |
