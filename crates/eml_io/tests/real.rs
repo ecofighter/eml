@@ -605,6 +605,29 @@ fn closed_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
+/// 受け入れの列が詰まった待ち受けと、列を詰めている接続。列が詰まると Linux も macOS も SYN を黙って捨てるので、
+/// ここへの接続は拒まれもつながりもせず、進行中のまま残る。閉じたポートへの接続は、拒まれるのが速く、同じ `wait`
+/// の中で終わることがあるので、待つ接続には使えない。どちらもテストの間は生かしておく。
+#[cfg(unix)]
+fn full_listener() -> (std::net::TcpListener, Vec<std::net::TcpStream>) {
+    use std::os::fd::AsRawFd;
+    let listener = std::net::TcpListener::bind(loopback(0)).unwrap();
+    // std は backlog を選べないので、待ち受けている socket に backlog 0 で `listen` を出し直す。0 の読み方は OS で
+    // 違うので、列の長さは決め打ちせず、つながらない接続が出るまで詰める
+    // SAFETY: `listener` が生きている socket の fd を持っている
+    assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
+    let addr = listener.local_addr().unwrap();
+    let mut fillers = Vec::new();
+    loop {
+        assert!(fillers.len() < 1024, "the accept queue never filled");
+        match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(50)) {
+            Ok(filler) => fillers.push(filler),
+            Err(e) if e.kind() == ErrorKind::TimedOut => return (listener, fillers),
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn a_listener_on_port_zero_gets_a_port() {
@@ -869,16 +892,14 @@ fn a_cancelled_pending_long_write_completes_once() {
 fn a_cancelled_connect_does_not_try_the_next_address() {
     use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
-    static CLOSED: AtomicU16 = AtomicU16::new(0);
+    static FULL: AtomicU16 = AtomicU16::new(0);
     static LOOKED_UP: AtomicBool = AtomicBool::new(false);
     fn lookup(_host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
         LOOKED_UP.store(true, Ordering::SeqCst);
-        Ok(vec![
-            loopback(CLOSED.load(Ordering::SeqCst)),
-            loopback(port),
-        ])
+        Ok(vec![loopback(FULL.load(Ordering::SeqCst)), loopback(port)])
     }
-    CLOSED.store(closed_port(), Ordering::SeqCst);
+    let (full, _fillers) = full_listener();
+    FULL.store(full.local_addr().unwrap().port(), Ordering::SeqCst);
     let mut driver = RealDriver::with_lookup(lookup).unwrap();
     let mut stash = Vec::new();
     let (_, port) = listen(&mut driver, &mut stash);
