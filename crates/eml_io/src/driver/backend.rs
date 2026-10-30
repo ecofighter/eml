@@ -4,6 +4,10 @@
 //! 完了型の値 (`Hold::Buffer`、`Cancel::Pending`、`Arrival::Done` と `Arrival::Cancelled`) は暫定である。今それを返すのは
 //! 核のテストの偽の backend だけで、最初の完了型の backend (IOCP のソケットか io_uring) を載せるときに形を変えてよい。
 
+// Windows の backend はソケットを扱わないので、歩と結果の値を作らない。それを作るのは、そこでは核のテストの偽の
+// backend だけである
+#![cfg_attr(all(windows, not(test)), expect(dead_code))]
+
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -45,6 +49,8 @@ pub(crate) enum Outcome<S> {
 /// 形を見直す。
 pub(crate) enum Hold {
     None,
+    // 今これを返すのは核のテストの偽の backend だけである
+    #[cfg_attr(not(test), expect(dead_code))]
     Buffer,
 }
 
@@ -57,6 +63,8 @@ pub(crate) enum Start<S> {
 /// `Pending` は暫定で、最初の完了型の backend を載せるときに形を見直す。
 pub(crate) enum Cancel {
     Done,
+    // 今これを返すのは核のテストの偽の backend だけである
+    #[cfg_attr(not(test), expect(dead_code))]
     Pending,
 }
 
@@ -65,8 +73,10 @@ pub(crate) enum Arrival<S> {
     /// readiness: 同じ `Step` をもう1度 `start` せよ。余分に届いても害がない
     Retry,
     /// 完了型: OS がこの歩を終えた (暫定)
+    #[cfg_attr(not(test), expect(dead_code))]
     Done(io::Result<Outcome<S>>),
     /// 完了型: 核が頼んだ取り消しで終わった (暫定)
+    #[cfg_attr(not(test), expect(dead_code))]
     Cancelled,
 }
 

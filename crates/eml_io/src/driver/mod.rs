@@ -2,9 +2,6 @@
 //! 中止された受けの出し直し、接続の次の番地、解決の答えからの接続) を持つ。OS に触れるのは `Backend` だけである。
 //! 核のテストは偽の backend の上で Miri でも流す (docs/implementation/testing.md の「核の Miri」)。
 
-// 本物の driver はまだこの核を使わず、核のテストだけが使う
-#![allow(dead_code)]
-
 pub(crate) mod backend;
 mod inbox;
 mod pool;
@@ -110,9 +107,8 @@ enum Kind<S> {
     Lookup {
         ticket: Ticket,
     },
-    Job {
-        ticket: Ticket,
-    },
+    /// 仕事の答えは札で欄に当たり、仕事は取り消せないので、欄は札を持たない。
+    Job,
 }
 
 impl<S> Kind<S> {
@@ -122,7 +118,7 @@ impl<S> Kind<S> {
             Kind::Readable { handle } | Kind::Read { handle, .. } => Some((handle, Dir::Read)),
             Kind::Accept { listener } => Some((listener, Dir::Read)),
             Kind::Write { handle, .. } => Some((handle, Dir::Write)),
-            Kind::Connect { .. } | Kind::Lookup { .. } | Kind::Job { .. } => None,
+            Kind::Connect { .. } | Kind::Lookup { .. } | Kind::Job => None,
         }
     }
 }
@@ -217,7 +213,7 @@ fn step_of<'a, S>(
             listener: sock(handles, *listener),
         },
         Kind::Connect { sock, peer, .. } => Step::Connect { sock, peer: *peer },
-        Kind::Lookup { .. } | Kind::Job { .. } => unreachable!("a thread's op has no step"),
+        Kind::Lookup { .. } | Kind::Job => unreachable!("a thread's op has no step"),
     }
 }
 
@@ -484,7 +480,7 @@ impl<B: Backend> Driver<B> {
             }
             return;
         };
-        if matches!(slot.kind, Kind::Lookup { .. } | Kind::Job { .. }) {
+        if matches!(slot.kind, Kind::Lookup { .. } | Kind::Job) {
             // スレッドの操作は札で終わる。使い回した鍵に古い event が来ても触れない
             self.slots.insert(key, slot);
             if let Arrival::Done(Ok(Outcome::Accepted { sock, .. })) = arrival {
@@ -722,7 +718,7 @@ impl<B: Backend> IoDriver for Driver<B> {
                 self.slots.insert(
                     key,
                     Slot {
-                        kind: Kind::Job { ticket },
+                        kind: Kind::Job,
                         cancelled: false,
                         hold: Hold::None,
                         cancel_sent: None,
@@ -739,7 +735,7 @@ impl<B: Backend> IoDriver for Driver<B> {
         let Some(slot) = self.slots.get_mut(&key) else {
             return;
         };
-        if slot.cancelled || matches!(slot.kind, Kind::Job { .. }) {
+        if slot.cancelled || matches!(slot.kind, Kind::Job) {
             return;
         }
         if broken {

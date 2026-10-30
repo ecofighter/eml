@@ -19,7 +19,6 @@ const FILES: &[(&str, &str)] = &[
         "driver/tests/abort.rs",
         include_str!("driver/tests/abort.rs"),
     ),
-    ("resolve.rs", include_str!("resolve.rs")),
     ("sys/mod.rs", include_str!("sys/mod.rs")),
     ("sys/unix.rs", include_str!("sys/unix.rs")),
     ("sys/epoll.rs", include_str!("sys/epoll.rs")),
@@ -36,17 +35,12 @@ const SKIPPED: &[&str] = &["trust.rs"];
 const UNSAFE_FILES: &[&str] = &[
     "mask.rs",
     "test.rs",
-    "real.rs",
     "sys/unix.rs",
     "sys/epoll.rs",
     "sys/kqueue.rs",
     "sys/iocp.rs",
     "driver/tests/fake.rs",
 ];
-
-/// `the_real_driver_makes_no_slices_and_leaks_nothing` と `the_core_names_no_os` が見ないファイル。compio の上の
-/// 本物の driver で、compio の buffer の trait のために slice を作り、壊れたときに鍵を漏らす。
-const LEGACY: &[&str] = &["real.rs"];
 
 fn is_ident(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
@@ -238,18 +232,14 @@ fn has_raw_string(text: &str) -> bool {
     })
 }
 
-fn is_legacy(file: &str) -> bool {
-    LEGACY.contains(&file)
-}
-
-/// 核のファイル。OS を名指さず、偽の backend の上で Miri で流せる部分である。
+/// 核のファイルと、核を包む本物の driver。OS を名指さない。核は偽の backend の上で Miri で流せる。
 fn is_core(file: &str) -> bool {
-    file.starts_with("driver/") && !file.starts_with("driver/tests/")
+    file == "real.rs" || (file.starts_with("driver/") && !file.starts_with("driver/tests/"))
 }
 
 #[test]
 fn the_real_driver_makes_no_slices_and_leaks_nothing() {
-    for (file, text) in FILES.iter().filter(|(f, _)| !is_legacy(f)) {
+    for (file, text) in FILES {
         let text = prepare(text);
         for word in ["mem::forget", "Box::leak"] {
             assert!(!text.contains(word), "{file} has {word}");

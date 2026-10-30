@@ -154,27 +154,29 @@ fn a_wake_from_another_thread_leaves_a_wait_working() {
     assert_eq!(driver.pending(), 0);
 }
 
-/// 走っている仕事を持つ driver は、落とすときに仕事の終わりを待つ。
+/// 走っている仕事を持つ driver は、落とすときに仕事の終わりを待たない。仕事は driver が消えた後も走り終える。
 #[test]
-fn dropping_a_driver_waits_for_a_running_job() {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    let finished = Arc::new(AtomicBool::new(false));
+fn dropping_a_driver_does_not_wait_for_a_running_job() {
+    use std::sync::mpsc;
+    let (started_tx, started) = mpsc::channel();
+    let (gate, gate_rx) = mpsc::channel::<()>();
+    let (end_tx, end) = mpsc::channel();
     let mut driver = RealDriver::new().unwrap();
-    let flag = Arc::clone(&finished);
     submit(
         &mut driver,
         Op::Job(Box::new(move || {
-            std::thread::sleep(Duration::from_millis(200));
-            flag.store(true, Ordering::SeqCst);
+            started_tx.send(()).unwrap();
+            // `drop` が待てば門は開かず、10 s の見張りで false を送る
+            end_tx
+                .send(gate_rx.recv_timeout(Duration::from_secs(10)).is_ok())
+                .unwrap();
             Ok(0)
         })),
     );
-    let start = Instant::now();
+    started.recv().unwrap();
     drop(driver);
-    assert!(finished.load(Ordering::SeqCst));
-    assert!(start.elapsed() >= Duration::from_millis(150));
+    gate.send(()).unwrap();
+    assert!(end.recv().unwrap());
 }
 
 #[test]
@@ -189,22 +191,60 @@ fn a_job_completes_with_its_value() {
     assert_eq!(driver.pending(), 0);
 }
 
-/// プールのスレッドは32本までで、それを超える仕事はスレッドが空くのを待ってから動く。
+/// プールのスレッドは32本までで、それを超える仕事は driver の中の列で待ち、スレッドが空いてから動く。32 の仕事が
+/// 門で止まっている間も、33 本目の `submit` は呼んだスレッドを止めずに戻る。
 #[test]
 fn a_job_pool_is_capped() {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::{Arc, mpsc};
+
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let keys: Vec<Started> = (0..33)
-        .map(|i| {
-            submit(
-                &mut driver,
-                Op::Job(Box::new(move || {
-                    std::thread::sleep(Duration::from_millis(20));
+    let (started_tx, started) = mpsc::channel();
+    let finished = Arc::new(AtomicUsize::new(0));
+    let mut gates = Vec::new();
+    let mut keys = Vec::new();
+    for i in 0..32 {
+        let started_tx = started_tx.clone();
+        let finished = Arc::clone(&finished);
+        let (gate, gate_rx) = mpsc::channel::<()>();
+        gates.push(gate);
+        keys.push(submit(
+            &mut driver,
+            Op::Job(Box::new(move || {
+                started_tx.send(()).unwrap();
+                // 門が開かなければ、10 s の見張りの後に誤りで終わる
+                let opened = gate_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+                finished.fetch_add(1, Ordering::SeqCst);
+                if opened {
                     Ok(i)
-                })),
-            )
-        })
-        .collect();
+                } else {
+                    Err(std::io::Error::other("the gate never opened"))
+                }
+            })),
+        ));
+    }
+    for _ in 0..32 {
+        started.recv().unwrap();
+    }
+    // 空いたスレッドがないので、33 本目は列で待つ。ここへ戻れたことが、`submit` が止まらない証拠である。
+    // 列の仕事はほかの仕事が終わってからしか動かないので、動いたときには終わった仕事がある
+    let seen = Arc::clone(&finished);
+    let last = submit(
+        &mut driver,
+        Op::Job(Box::new(move || {
+            Ok(if seen.load(Ordering::SeqCst) > 0 {
+                32
+            } else {
+                usize::MAX
+            })
+        })),
+    );
+    assert!(last.done.is_none());
+    keys.push(last);
+    for gate in gates {
+        gate.send(()).unwrap();
+    }
     for (i, key) in keys.into_iter().enumerate() {
         assert_eq!(
             complete(&mut driver, &mut stash, key).result.unwrap(),
@@ -391,9 +431,7 @@ fn a_probe_on_a_reset_stream_fails_at_submit() {
     let (a, _) = stream(complete(&mut driver, &mut stash, connect));
     let (peer, _) = listener.accept().unwrap();
     // linger 0 で閉じた端は、FIN でなく RST を送る
-    socket2::SockRef::from(&peer)
-        .set_linger(Some(Duration::ZERO))
-        .unwrap();
+    reset_on_close(&peer);
     drop(peer);
     let first = submit(&mut driver, Op::Readable { handle: a });
     let probe = match first.done {
@@ -441,30 +479,16 @@ fn a_closed_peer_reads_eof() {
     );
 }
 
-/// 相手が読まない端に書くと、2回目の書きは送りの buffer が空くまで終わらない。`quiesce` は終わらない読みと書きを
-/// 取り消し、走っている仕事を待ちきる。
+/// 相手が読まない端への書きは、送りの buffer が空くまで終わらない。`quiesce` は終わらない読みと書きを取り消し、
+/// 走っている仕事を待ちきる。
 #[cfg(unix)]
 #[test]
 fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
     let mut driver = RealDriver::new().unwrap();
     let (a, _b) = connection(&mut driver, &mut Vec::new());
     let probe = pending(&mut driver, Op::Readable { handle: a });
-    let mut first = vec![1u8; 8 << 20];
-    let mut second = vec![2u8; 8 << 20];
-    submit(
-        &mut driver,
-        Op::Write {
-            handle: a,
-            buf: raw(&mut first),
-        },
-    );
-    let full = pending(
-        &mut driver,
-        Op::Write {
-            handle: a,
-            buf: raw(&mut second),
-        },
-    );
+    let mut chunk = vec![1u8; 64 << 10];
+    let full = write_until_pending(&mut driver, a, &mut chunk);
     let job = pending(
         &mut driver,
         Op::Job(Box::new(|| {
@@ -481,8 +505,7 @@ fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
     }
     driver.quiesce();
     assert_eq!(driver.pending(), 0);
-    drop(second);
-    drop(first);
+    drop(chunk);
 }
 
 #[test]
@@ -927,7 +950,7 @@ fn quiesce_drains_a_pending_accept_and_closes_discarded_streams() {
     );
     let (mut peer, _) = server.accept().unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-    // 接続を compio の中で終わらせ、完了は受け取らない。`quiesce` はその完了を捨て、中身のストリームを閉じる
+    // 接続を driver の中で終わらせ、完了は受け取らない。`quiesce` はその完了を捨て、中身のストリームを閉じる
     poll_for(&mut driver, 20);
     driver.quiesce();
     assert_eq!(driver.pending(), 0);
@@ -1376,4 +1399,288 @@ fn listen_accept_and_connect_are_unsupported() {
         driver.shutdown_write(0).unwrap_err().kind(),
         ErrorKind::Unsupported
     );
+}
+
+/// 閉じたときに FIN でなく RST を送るよう、`s` に linger 0 を立てる。std の `TcpStream::set_linger` は安定していない。
+#[cfg(unix)]
+fn reset_on_close(s: &std::net::TcpStream) {
+    use std::os::fd::AsRawFd;
+
+    let linger = libc::linger {
+        l_onoff: 1,
+        l_linger: 0,
+    };
+    // SAFETY: `s` の fd は呼び出しの間開いている。`linger` はこの関数の局所変数で、その大きさを長さとして渡す
+    let r = unsafe {
+        libc::setsockopt(
+            s.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            (&raw const linger).cast(),
+            std::mem::size_of::<libc::linger>() as libc::socklen_t,
+        )
+    };
+    assert_eq!(r, 0, "{}", std::io::Error::last_os_error());
+}
+
+/// 相手が読まない端 `handle` に、`chunk` の書きを保留になるまで出し、保留の書きの鍵を返す。送りと受けの buffer の和は
+/// 有限なのでどこかで保留になり、その大きさには頼らない。4096 回 (64 KiB なら 256 MiB) で保留にならなければ落ちる。
+/// 保留の書きが終わるまで、呼ぶ側が `chunk` を生かしておく。
+#[cfg(unix)]
+fn write_until_pending(
+    driver: &mut RealDriver,
+    handle: eml_rt::IoHandle,
+    chunk: &mut [u8],
+) -> OpKey {
+    for _ in 0..4096 {
+        let key = next_key();
+        match driver.submit(
+            key,
+            Op::Write {
+                handle,
+                buf: raw(chunk),
+            },
+        ) {
+            Submit::Done(result) => {
+                result.unwrap();
+            }
+            Submit::Pending => return key,
+        }
+    }
+    panic!("4096 writes to a peer that does not read never went pending");
+}
+
+/// std のリスナーへ driver で接続し、driver の端と std の相手を返す。
+#[cfg(unix)]
+fn connect_to_std(
+    driver: &mut RealDriver,
+    stash: &mut Vec<Completion>,
+) -> (eml_rt::IoHandle, std::net::TcpStream) {
+    let listener = std::net::TcpListener::bind(loopback(0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connect = submit(
+        driver,
+        Op::Connect {
+            host: "127.0.0.1".to_string(),
+            port,
+        },
+    );
+    let (a, _) = stream(complete(driver, stash, connect));
+    let (peer, _) = listener.accept().unwrap();
+    (a, peer)
+}
+
+/// 相手が接続して書いた後に受けたストリームの `Readable` は、受けの前に届いていたデータで終わる。受けた後に新しい
+/// データが来なくても、登録の時点で読めることが分かる。
+#[cfg(unix)]
+#[test]
+fn a_probe_on_a_stream_that_had_data_before_accept_finishes() {
+    use std::io::Write;
+
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (listener, port) = listen(&mut driver, &mut stash);
+    let mut peer = std::net::TcpStream::connect(loopback(port)).unwrap();
+    peer.write_all(b"x").unwrap();
+    let accept = submit(&mut driver, Op::Accept { listener });
+    let (server, _) = stream(complete(&mut driver, &mut stash, accept));
+    let probe = submit(&mut driver, Op::Readable { handle: server });
+    complete(&mut driver, &mut stash, probe).result.unwrap();
+    let mut room = [0u8; 4];
+    let read = Op::Read {
+        handle: server,
+        buf: raw(&mut room),
+    };
+    assert_eq!(
+        run_op(&mut driver, &mut stash, read).unwrap(),
+        Done::Size(1)
+    );
+}
+
+/// 1つのストリームで、待つ `Readable` と待つ書きを同時に持てる。相手が書いて読めば、両方が終わる。待ち手は向きごとに
+/// 1つずつある。
+#[cfg(unix)]
+#[test]
+fn a_pending_read_and_a_pending_write_on_one_stream_both_finish() {
+    use std::io::{Read, Write};
+
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (a, mut peer) = connect_to_std(&mut driver, &mut stash);
+    let mut chunk = vec![5u8; 64 << 10];
+    let write = write_until_pending(&mut driver, a, &mut chunk);
+    let probe = pending(&mut driver, Op::Readable { handle: a });
+    peer.write_all(b"x").unwrap();
+    // 相手は EOF まで読み続け、送りの buffer を空ける
+    let reader = std::thread::spawn(move || {
+        let mut sink = Vec::new();
+        peer.read_to_end(&mut sink).unwrap();
+    });
+    wait_for(&mut driver, &mut stash, probe).result.unwrap();
+    assert_eq!(
+        wait_for(&mut driver, &mut stash, write).result.unwrap(),
+        Done::Size(chunk.len())
+    );
+    // 読まないデータを残して閉じると、相手には EOF でなくリセットが届く
+    let mut room = [0u8; 4];
+    let read = Op::Read {
+        handle: a,
+        buf: raw(&mut room),
+    };
+    assert_eq!(
+        run_op(&mut driver, &mut stash, read).unwrap(),
+        Done::Size(1)
+    );
+    driver.close(a);
+    reader.join().unwrap();
+    drop(chunk);
+}
+
+/// 2本つないでから受けを1つずつ2回出すと、どちらも終わる。2本が1つの event で知らされても、受けは記憶によらずに
+/// 試す。
+#[cfg(unix)]
+#[test]
+fn queued_connections_are_accepted_one_per_op() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (listener, port) = listen(&mut driver, &mut stash);
+    let _first = std::net::TcpStream::connect(loopback(port)).unwrap();
+    let _second = std::net::TcpStream::connect(loopback(port)).unwrap();
+    for _ in 0..2 {
+        let accept = submit(&mut driver, Op::Accept { listener });
+        stream(complete(&mut driver, &mut stash, accept));
+    }
+    assert_eq!(driver.pending(), 0);
+}
+
+/// 閉じたポートへの接続は `ConnectionRefused` で1回だけ終わる。再試行で `connect` を出し直さないので、後から
+/// 完了が来ない。
+#[cfg(unix)]
+#[test]
+fn a_refused_connect_completes_once() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let key = submit(
+        &mut driver,
+        Op::Connect {
+            host: "127.0.0.1".to_string(),
+            port: closed_port(),
+        },
+    );
+    let completion = complete(&mut driver, &mut stash, key);
+    assert_eq!(
+        completion.result.unwrap_err().kind(),
+        ErrorKind::ConnectionRefused
+    );
+    assert_eq!(driver.pending(), 0);
+    poll_for(&mut driver, 20);
+    driver.completions(&mut stash);
+    assert!(stash.is_empty(), "{:?}", keys(&stash));
+}
+
+/// 相手がリセットすると、送りの buffer が空くのを待っていた書きは誤りで終わる。
+#[cfg(unix)]
+#[test]
+fn a_reset_ends_a_pending_write_with_an_error() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (a, peer) = connect_to_std(&mut driver, &mut stash);
+    let mut chunk = vec![6u8; 64 << 10];
+    let write = write_until_pending(&mut driver, a, &mut chunk);
+    reset_on_close(&peer);
+    drop(peer);
+    let error = wait_for(&mut driver, &mut stash, write).result.unwrap_err();
+    assert!(
+        matches!(
+            error.kind(),
+            ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+        ),
+        "{error}"
+    );
+    drop(chunk);
+}
+
+/// シグナルで OS の待ちが割り込まれても、`wait` は壊れずに戻り、driver はそのまま使える。`SIGUSR1` の handler は何も
+/// しない関数で、プロセスに残しても害がない。戻すと、遅れて届いた1つが既定の動き (プロセスの終わり) になりうる。
+#[cfg(unix)]
+#[test]
+fn a_signal_during_a_wait_leaves_the_driver_working() {
+    use std::os::unix::thread::JoinHandleExt;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+
+    extern "C" fn ignore(_: libc::c_int) {}
+    // SAFETY: `action` はこの関数の局所変数で、handler は何もしない `extern "C"` の関数である。`sa_flags` が 0 なので
+    // 割り込まれた呼び出しは `EINTR` で戻る
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = ignore as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        action.sa_flags = 0;
+        libc::sigemptyset(&mut action.sa_mask);
+        assert_eq!(
+            libc::sigaction(libc::SIGUSR1, &action, std::ptr::null_mut()),
+            0
+        );
+    }
+    let waited = Arc::new(AtomicBool::new(false));
+    let (ready_tx, ready) = mpsc::channel();
+    let flag = Arc::clone(&waited);
+    let waiter = std::thread::spawn(move || {
+        let mut driver = RealDriver::new().unwrap();
+        let mut stash = Vec::new();
+        let (a, _b) = connection(&mut driver, &mut stash);
+        let probe = pending(&mut driver, Op::Readable { handle: a });
+        ready_tx.send(()).unwrap();
+        assert!(driver.wait(Some(u64::MAX)).unwrap());
+        flag.store(true, Ordering::SeqCst);
+        driver.cancel(probe);
+        assert!(wait_for(&mut driver, &mut stash, probe).cancelled);
+        let job = submit(&mut driver, Op::Job(Box::new(|| Ok(3))));
+        assert_eq!(
+            complete(&mut driver, &mut stash, job).result.unwrap(),
+            Done::Size(3)
+        );
+    });
+    ready.recv().unwrap();
+    // 待ちに入る前に届いたシグナルは待ちを割り込まないので、待ちが戻るまで叩き続ける
+    while !waited.load(Ordering::SeqCst) && !waiter.is_finished() {
+        // SAFETY: スレッドはまだ join していないので、その `pthread_t` は有効である
+        assert_eq!(
+            unsafe { libc::pthread_kill(waiter.as_pthread_t(), libc::SIGUSR1) },
+            0
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    waiter.join().unwrap();
+}
+
+/// driver を落とした後に waker を鳴らしても害がない。waker は鳴らす OS の物体を自分で持つ。
+#[test]
+fn a_wake_after_the_driver_drops_is_harmless() {
+    let driver = RealDriver::new().unwrap();
+    let waker = driver.waker();
+    drop(driver);
+    std::thread::spawn(move || {
+        waker.wake();
+        waker.wake();
+    })
+    .join()
+    .unwrap();
+}
+
+/// 待つ前に何度鳴らしても、終わるのは次の待ち1つだけである。続く待ちは期限まで眠る。時間は下限だけを比べる。
+#[test]
+fn wakes_before_a_wait_end_only_that_wait() {
+    let mut driver = RealDriver::new().unwrap();
+    let waker = driver.waker();
+    for _ in 0..100 {
+        waker.wake();
+    }
+    assert!(driver.wait(Some(u64::MAX)).unwrap());
+    let deadline = driver.now().as_millis() as u64 + 100;
+    let start = Instant::now();
+    assert!(driver.wait(Some(deadline)).unwrap());
+    let elapsed = start.elapsed();
+    assert!(elapsed >= Duration::from_millis(75), "{elapsed:?}");
 }

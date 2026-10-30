@@ -191,12 +191,12 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 ### `unsafe` の一覧
 
 - `unsafe` を書いてよいファイルは `crates/eml_io/src/trust.rs` の `UNSAFE_FILES` が決める。`lib.rs` は `#![deny(unsafe_code)]` を持ち、一覧のファイルだけが先頭に `#![allow(unsafe_code)]` を置く
-- 規則の範囲は `src/` である。`tests/` の結合テストは対象に入れない (`tests/real.rs` は `pthread_sigmask` のために `unsafe` を使う)
+- 規則の範囲は `src/` である。`tests/` の結合テストは対象に入れない (`tests/real.rs` は、シグナルの塞ぎと handler とソケットの linger の設定のために `unsafe` を使う)
 - `unsafe_stays_in_the_listed_files` は、識別子 `unsafe` を持つファイルの集合と、`#![allow(unsafe_code)]` で始まるファイルの集合と、`UNSAFE_FILES` が等しいこと、`allow(unsafe_code)` がほかにないこと、`lib.rs` が `#![deny(unsafe_code)]` を持つことを確かめる
 - `every_source_file_is_listed` は、`src/` の `.rs` が `FILES` と `SKIPPED` の和と一致することを確かめる。新しいファイルを足したら `FILES` に1行足す
 - `the_scanner_skips_comments_and_strings` は、コメント、文字列、文字のリテラルの中の `unsafe` を数えないことと、どのファイルにも生の文字列がないことを確かめる。消し方は `eml_rt` の `trust.rs` と同じで、生の文字列を扱わないためである
-- `the_real_driver_makes_no_slices_and_leaks_nothing` は、`mem::forget` と `Box::leak` がないことと、`from_raw_parts` が `test.rs` のほかにないことを確かめる。テストの driver は貸しの規則を守って slice を作るが、driver の核と偽の backend は生のポインタのまま記憶に触れる。compio の上の `real.rs` は、compio の buffer の trait のために slice を作り、壊れたときに鍵を漏らすので、このテストと次のテストの対象から外す
-- `the_core_names_no_os` は、driver の核 (`driver/` の下で `driver/tests/` でないファイル) が `libc::`、`windows_sys::`、`Instant`、`thread::spawn`、`Builder::spawn`、`raw_os_error`、`ECANCELED`、`ECONNABORTED`、`EAGAIN` を書かず、スレッドを `backend.spawn(` でだけ作ることを確かめる
+- `the_real_driver_makes_no_slices_and_leaks_nothing` は、`mem::forget` と `Box::leak` がないことと、`from_raw_parts` が `test.rs` のほかにないことを確かめる。テストの driver は貸しの規則を守って slice を作るが、本物の driver と偽の backend は生のポインタのまま記憶に触れる
+- `the_core_names_no_os` は、driver の核 (`driver/` の下で `driver/tests/` でないファイル) と、核を包む `real.rs` が `libc::`、`windows_sys::`、`Instant`、`thread::spawn`、`Builder::spawn`、`raw_os_error`、`ECANCELED`、`ECONNABORTED`、`EAGAIN` を書かず、スレッドを `backend.spawn(` でだけ作ることを確かめる
 - `readiness_backends_report_only_retries` は、epoll と kqueue の backend (`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`) が暫定の完了型の値 (`Arrival::Done`、`Arrival::Cancelled`、`Hold::Buffer`、`Cancel::Pending`) を書かないことを確かめる
 - `the_core_walks_its_table_only_to_shut_down` は、`driver/mod.rs` の `mem::take`、`slots.iter`、`slots.values`、`slots.keys`、`slots.drain` が `quiesce` か `drop` の中にだけあることを確かめる。保留の表を歩くと、1つの接続の費用が保留の数に比例するためである
 

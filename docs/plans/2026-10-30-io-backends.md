@@ -206,6 +206,7 @@ src/trust.rs         ソースを読む unsafe のテスト
 - 成否の変更 (1件): `crates/eml_io/tests/real.rs` の `dropping_a_driver_waits_for_a_running_job` を消し、`dropping_a_driver_does_not_wait_for_a_running_job` を足す (中身は A4 Q6。時間を測らず、仕事の中の 10 s の見張りで確かめる)。理由: D-4 で `Drop` が仕事を待たなくなる。
 - 期待値の変更 (範囲): 512 を変えるときだけ、`cells.rs` の `writes_spend_budget_by_their_length` の長さと `spent`、書きの重みで変わる UI テストの出力と `RunStats` の snapshot (`crates/eml_vm/tests/*.rs`、`tests/ui/run/`)。arm と ASan の仕分けで見つかったものは、見た後で1件ずつ足す。
 - 機械的な追随: `tests/real.rs:394` の socket2 の linger を `reset_on_close` (`libc::setsockopt` の `SO_LINGER`。`TcpStream::set_linger` は 1.99.1 で unstable) に替える。`tests/real.rs:930` のコメントの compio を driver にする。`a_job_pool_is_capped` の説明を「それを超える仕事は driver の中の列で待ち、スレッドが空いてから動く」にする。
+- `quiesce_drains_a_pending_probe_a_full_write_and_a_running_job` の保留の書きを、同じ handle への2つの 8 MiB の書きから `write_until_pending` の1つに替える (G-5 で同じ向きの2つ目の保留が `InvalidInput` になるため。成否と期待値は変わらない)
 - `a_job_pool_is_capped` に、32 の仕事を門で止めた間に 33 本目の `submit` が戻ることの確かめを足す (核の `POOL_LIMIT` の配線を本物の driver で確かめるため)。
 - 残すもの: `tests/real.rs` の 1 s の見張り6か所と `eml_vm/tests/api.rs:376` の 2 s。どれも ms の桁の待ちの見張りで、測った時間の 10 倍以上の規則を満たす。新しい runner で切れたら D-13 の仕分けで延ばす。誤りの文言 `cancelled`、`too many name lookups are stuck`、`no such handle`、`unsupported` は保つ。
 - 足すテスト: 核とプールと解決器 (`src/driver/tests/`、Miri の対象)、本物の backend (`tests/real.rs`)、backend の中 (`sys/unix.rs` の `mod tests`、`sys/mod.rs` の `millis`)。名前は A2 §1、A3 Q6、A4 Q1 と Q6。新しいテストはこの一覧に載せない。

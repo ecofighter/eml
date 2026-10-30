@@ -44,7 +44,7 @@ eml/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。workspace の crate では eml_extern だけに依存する
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
-    eml_io/             # I/O の driver (本物の driver とテストの driver。ブロックする呼び出しの仕事は本物の driver の中の compio のプールで `Asyncify` として動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存する
+    eml_io/             # I/O の driver (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存する
     eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_io、eml_rt、eml_extern だけに依存する
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
@@ -74,7 +74,7 @@ eml/
 ```
 eml_cli          check / run コマンド。パイプラインを組む唯一の場所 (Session)。テストから呼べる lib API を公開する
 eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_rt の Ctx の上で実行する
-eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver。ブロックする呼び出しの仕事は本物の driver の中の compio のプールで `Asyncify` として動き、スレッドは32本まで)。時計と I/O の待ちを受け持つ
+eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。時計と I/O の待ちを受け持つ
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。最適化と evidence passing のパスと、LIR への変換
 eml_lir          LIR (box、RC、末尾呼び出しを明示する基本ブロックの列)。box/unbox の挿入、構造体を葉に開くパス、縮約、dup/decref/release の挿入、reuse のパス
@@ -349,24 +349,27 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ## `eml_io` の内部
 
-- `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、compio-driver の `Proactor` をそのまま持ち (「外部 crate」)、単調な時計 (`Instant`) で読み、内部の刻みを持たない。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、`test/net.rs` の仮想のネットワーク (メモリの上の端、リスナー、ポート)、seed で混ぜる決着の順、`submit` の中で終えた操作の数 (`immediate()`) を持つ ([VM](../spec/vm.md) の「時計と driver」)
+- `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、OS を呼ばない核 `driver::Driver` を OS ごとの backend `sys::Os` の上で動かす包みである。backend の時計は単調な時計 (`Instant`) で、driver は内部の刻みを持たない。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、`test/net.rs` の仮想のネットワーク (メモリの上の端、リスナー、ポート)、seed で混ぜる決着の順、`submit` の中で終えた操作の数 (`immediate()`) を持つ ([VM](../spec/vm.md) の「時計と driver」)
 - driver は `Word`、`Ctx`、RC に触れず、記憶には `RawBuf` を通してだけ届く。そのため `eml_io` は `eml_vm` を知らずに組み立てられる。どちらの driver を使うかは `eml_vm` の `Clock` が決める
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
-- unix の `RealDriver::with_lookup(lookup)` は、名前の解決の関数を差し替えた driver を作る。テストと組み込み先のためで、テストは機械の `/etc/hosts` に頼らない。`RealDriver::new` は std の解決器を使う
+- `RealDriver::with_lookup(lookup)` は、名前の解決の関数を差し替えた driver を作る。テストと組み込み先のためで、テストは機械の `/etc/hosts` に頼らない。`RealDriver::new` は `sys::lookup` (std の解決器) を使う
 - driver は作ったスレッドの上でだけ使う。`eml_io` は driver の型に `unsafe impl Send` を書かない
-- `mask.rs` の `spawn_masked` は、unix で SIGINT と SIGTERM を塞いでスレッドを始める。`eml_vm` の監視のスレッドと、解決のスレッドがこれで始まる。プールへ仕事を渡す間の塞ぎも同じモジュールの `Masked` で行う ([VM](../spec/vm.md) の「上限と割り込み」)
-- `RealDriver` の作り
-  - 保留の操作は、操作の種類ごとの compio の鍵 (`Key`) を持つ項 (`Slot`) として、呼ぶ側が振った `OpKey` で引く表に持つ。unix の `Readable` は、socket2 の `recv_with_flags` で1バイトを覗いて読めなければ `PollOnce` で読めるようになるのを待ち、Windows の `Readable` は長さ0の `Recv` である (ソケットを IOCP のポートに結び付ける `attach` はまだなく、Windows の driver はハンドルを作らない)。`Read` は `Recv`、`Write` は `Send`、仕事は `Asyncify` で、プールのスレッドは32本までである。unix の `Accept` は compio の `Accept` で、受けたソケットと相手の番地を `pop` と `into_inner` で受け取る。`Connect` は番地ごとに socket2 でソケットを作り、compio の `Connect` を出す。`Listen` は socket2 で持ち主のスレッドの上で行う。書きの出し直し、受けの再試行、接続の次の試行は、表の項の compio の鍵を新しいものに替え、`OpKey` は替えない。取り消しを頼まれた項は出し直さない。`buffer_pool` は使わない
-  - 名前の解決は `resolve.rs` の `Resolver` が、切り離したスレッド (`eml-resolve`) で行う。手放していない解決は同時に8本 (`RESOLVE_LIMIT`) まで走り、残りは受け付けの順に待つ。取り消した解決のスレッドは手放して別に数え、まだ戻らないものが64本 (`ABANDONED_LIMIT`) たまっている間は、新しい解決をその場で誤りにする。スレッドは結果を mpsc の channel に送ってから waker を鳴らし、`wait` が取り出す。解決の鍵は呼ぶ側の鍵である
-  - ブロックする呼び出しのプールは `Op::Job` のために残す。std に仕事を出す行はなく、使うのは Rust のテストだけである ([VM](../spec/vm.md) の「時計と driver」)
-  - `RawBuf` は別の crate の型なので、`real.rs` の包み `Mem` が compio の `IoBuf`、`IoBufMut`、`SetLen` を実装する。`cap == 0` は空の slice である。`eml_io` の本物の driver の `unsafe` は、この包みが `RawBuf` から slice を作る所と、`mask.rs` がシグナルの塞ぎを `pthread_sigmask` で変える所だけである
-  - polling の backend は `push` の中でまず読み書きを試すので、`push` が `Ready` を返すことがある。`submit` はその結果を `Submit::Done` で返し、表に入れない。そのため、driver が持つソケットはブロックしない
-  - `completions` は、`wait` が集めた完了と、`cancel` がその場で終えた解決の完了を移すだけで、`poll` も `pop` もしない。順は決めない。取り消しは鍵を残したまま `register_cancel` と `cancel_token` で行い、取り消された操作の完了も `pop` で受ける。取り消しで終わった完了の誤りは、OS の誤りでなく `cancelled` にそろえる
-  - `wait` は OS を見る唯一の所である。届いた完了か解決の答えがあれば待たずに、なければ期限までの長さ (期限 `u64::MAX` と、保留か解決のある期限 `None` は上限なし、ほかは `i32::MAX` ミリ秒で切る) だけ `poll` し、解決の答えを受け取って、すべての鍵を `pop` する。期限 `None` で保留も解決もなければ `Ok(false)` を返す。`poll` の `Ok`、時間切れ、割り込みは戻っただけと読む (polling の backend は、起こされたときも時間切れを返す)。ほかの誤りで driver は壊れた状態になり、以後の `wait` は `Err` を返し、`completions` は何も返さない。壊れる前に集めてあった結果も返さない。保留の操作の buffer は貸したまま残る
-  - `quiesce` は仕事のほかの保留の操作をすべて取り消し、仕事も含めてすべての完了が届くまで 10 ms (`CANCEL_POLL`) ずつ `poll` して捨てる。仕事は時間の上限なしに待つ。polling の backend は、取り消しで関心を外す呼び出しが失敗すると完了を出さずに操作を落とすので、取り消した I/O の操作が5秒たっても終わらなければ、driver を壊れた状態にして戻る。壊れた driver では待てないので、保留を残して戻る
-  - compio は仕事の鍵の写しをプールのスレッドへ送り、仕事が終わるとプールのスレッドがその写しを落とす。鍵の数え方は atomic でないので、持ち主のスレッドが同時に自分の写しを落としてはならない。そのため driver を落とすときは、壊れていなければ `quiesce` で仕事の終わりを待つ。壊れていれば、残った鍵を落とさずに漏らす
+- `mask.rs` の `spawn_masked` は、unix で SIGINT と SIGTERM を塞いでスレッドを始める。`eml_vm` の監視のスレッドと、本物の driver のプールと解決のスレッドがこれで始まる ([VM](../spec/vm.md) の「上限と割り込み」)
+- 本物の driver のモジュール
+  - `driver/mod.rs` は核である。保留の操作の表 (呼ぶ側が振った `OpKey` で引き、作り直さずに使い回す)、届いた完了、ハンドルの表 (向きごとの保留の印と閉じた印)、札から鍵への表、プール、解決器、`HandleBin`、壊れた印を持つ。続き (短い書きの残り、`ConnectionAborted` の受けの出し直し、接続の次の番地、解決の答えからの接続) を出すのは核だけで、どれも同じ `OpKey` の下で次の歩として出す。`wait`、`quiesce`、`Drop` は1回分の待ち `turn` を共有し、`turn` は受け箱の答えと backend の event が名指した欄にだけ触れる。表を歩くのは `quiesce` と `Drop` だけである。`completions` は届いた完了を移すだけである
+  - `driver/backend.rs` は、核と backend の境界の trait `Backend` と、その型 (`Step`、`Outcome`、`Hold`、`Start`、`Cancel`、`Arrival`、`Event`) を持つ。backend は OS の資源と時計とスレッドの作り方を持ち、`start` 1回で歩の1回の試みだけを OS に出す。完了型の値 (`Hold::Buffer`、`Cancel::Pending`、`Arrival::Done` と `Arrival::Cancelled`) は暫定で、今それを返すのは核のテストの偽の backend だけである
+  - `driver/inbox.rs` は、プールと解決のスレッドの答えを積む受け箱である。答えは driver の中で使い回さない札 (`Ticket`) を持ち、スレッドは積んでから waker を鳴らす。核は札で欄を引き、外した札の答えは捨てる
+  - `driver/pool.rs` はブロックする呼び出しのプールで、`Op::Job` のためにある。std のスレッドを `Backend::spawn` で32本 (`POOL_LIMIT`) まで作り、満ちたら仕事は列で待つ。仕事は `catch_unwind` の下で走り、空いたスレッドは10秒で抜ける。std に仕事を出す行はなく、使うのは Rust のテストだけである
+  - `driver/resolve.rs` は名前の解決器で、切り離せるスレッド (`eml-resolve`、スタック 256 KiB) を `Backend::spawn` で作る。手放していない解決は同時に8本 (`RESOLVE_LIMIT`) まで走り、残りは受け付けの順に待つ。取り消した解決のスレッドは手放して別に数え、まだ戻らないものが64本 (`ABANDONED_LIMIT`) たまっている間は、新しい解決をその場で誤りにする
+  - `driver/tests/` は、核の単体テスト (`mod.rs`)、偽の backend (`fake.rs`)、abort の子プロセスのテスト (`abort.rs`) を持つ。核のテストは Miri でも流す ([テスト](testing.md) の「核の Miri」)
+  - `sys/mod.rs` は、OS ごとの `type Os` (Linux は `unix::Unix<epoll::Epoll>`、Apple は `unix::Unix<kqueue::Kqueue>`、Windows は `iocp::Iocp`。ほかの OS は `compile_error!`)、待ちの長さをミリ秒に切り上げる `millis`、OS の解決器 `lookup` を持つ
+  - `sys/unix.rs` は、epoll と kqueue に共通の backend `Unix<P: Poller>` である。fd ごとの行の表 (読める印とその新しさ、向きごとの待ち手1つ、接続中の印、世代) と、各歩と、ソケットの作り方を持つ。OS に渡す識別子は行番号と世代から1か所で作り、`wait` は世代の合わない event を捨てる。ソケットは作るか受けた後に1回だけ edge で登録し、`close` まで登録を変えない
+  - `sys/epoll.rs` と `sys/kqueue.rs` は `Poller` の実装で、登録と待ちと起こしだけを持つ。起こしは、Linux では level で登録した eventfd、Apple では `EVFILT_USER` である
+  - `sys/iocp.rs` は Windows の backend で、ソケットを扱わない (`SOCKETS = false`)。IOCP のポートで起こしと時間切れだけを待つ。ソケットの操作は、核がハンドルを引く前に `Unsupported` で終える
+- `unsafe` は `mask.rs`、`test.rs`、`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`、`sys/iocp.rs`、`driver/tests/fake.rs` にだけ置き、`trust.rs` のテストが一覧を固定する ([テスト](testing.md) の「`unsafe` の一覧」)。核と `real.rs` は OS を名指さず、`RawBuf` の番地は backend の OS を呼ぶ関数の中でだけ読み、slice を作らない
+- 壊れる条件と壊れた後の振る舞い、`quiesce`、driver を落とすときの規則は [VM](../spec/vm.md) の「時計と driver」にある
 - 起こしが長い待ちを終わらせることは、結合テストが遠い期限と期限 `u64::MAX` の `wait` で確かめる
-- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落とすと仕事を待つこと、unix のループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、名前の解決とその2つの上限と、Windows のソケットの操作が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF) を確かめる
+- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落としても仕事を待たないこと、落とした後の起こしと、待つ前の起こしが次の待ちだけを終えること、unix のループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、1つのストリームで待つ読みと待つ書きが両方終わること、溜まった接続の受け、リセットで終わる待つ書き、シグナルで割り込まれた待ち、名前の解決とその2つの上限と、Windows のソケットの操作が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF) を確かめる
 
 ## ソースファイルと位置
 
@@ -415,17 +418,6 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `insta` | 1.49 | スナップショットテスト |
 | `la-arena` | 0.3 | HIR の ID とアリーナ、型検査の別テーブル (`ArenaMap`) |
 | `rustc-hash` | 2.1 | コンパイラの段階 (`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm`) のハッシュ表 (`FxHashMap`、`FxHashSet`)。鍵は処理系の中の ID、型、名前で、入力は利用者自身のプログラムなので、衝突を狙った入力への耐性より速さを選ぶ。表の順に出力が依存しないので、std の表から替えても出力は変わらない。aHash、foldhash、rapidhash と比べると、x86_64 と aarch64 のどちらでも命令の数が最も少なく、CPU 時間を縮める候補もなかった ([計測の基準](benchmarks.md) の「コンパイラの段階のハッシュ関数」) |
-| `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`)。`eml_io` は unix だけで依存し、監視のスレッドと解決のスレッドを始める間 (`spawn_masked`) と、プールへ仕事を渡す間のシグナルの塞ぎ (`pthread_sigmask`) に使う。`eml_vm` も unix だけで依存し、自己パイプ (`Doorbell`。`pipe`、`poll`、`write`) に使う |
-| `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`)、物理メモリの大きさ (`GlobalMemoryStatusEx`) |
+| `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`)。`eml_io` は unix だけで依存し、epoll と kqueue の backend のソケット、登録、待ち、起こし (`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`) と、スレッドを始める間のシグナルの塞ぎ (`spawn_masked` の `pthread_sigmask`) に使う。`eml_vm` も unix だけで依存し、自己パイプ (`Doorbell`。`pipe`、`poll`、`write`) に使う |
+| `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`)、物理メモリの大きさ (`GlobalMemoryStatusEx`)。`eml_io` は Windows だけで依存し、IOCP の backend のポートと待ちと起こし (`CreateIoCompletionPort`、`GetQueuedCompletionStatusEx`、`PostQueuedCompletionStatus`) に使う |
 | `rustyline` | 19.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
-| `compio-driver` | =0.12.5 (`polling`、`sync`。既定の feature は使わない) | 本物の I/O の driver (`eml_io`)。unix は polling (epoll と kqueue)、Windows は IOCP で、ブロックする呼び出しのプールも使う。io_uring は使わない |
-| `compio-buf` | =0.8.3 | `compio-driver` に渡す buffer の trait (`IoBuf`、`IoBufMut`、`SetLen`) |
-| `socket2` | =0.6.5 (`all`) | 本物の driver の TCP のソケットを作り、bind、listen、shutdown、`TCP_NODELAY`、`SO_NOSIGPIPE` を設定する (`eml_io`。unix だけで依存する)。compio は `socket2::SockAddr` を外に出さないので直接に依存し、`Connect` に渡す番地の型を compio のものとそろえる |
-
-`compio-driver` と `compio-buf` は、上位の crate `compio` の安定版が使うバージョンに `=` で固定する。`compio` は実行系を持ち、eml は自前のスケジューラを持つので、部品の crate だけを使う。io_uring を有効にするときも、`single_issuer` と `defer_taskrun` は有効にしない。スレッドに縛られるためである。バージョンを上げるときは、次をすべて確かめる。
-
-1. `Proactor` の `poll`、`push`、`pop`、`cancel` と `register_cancel` と `cancel_token`、`waker`、操作の `Asyncify`、`PollOnce`、`Recv`、`Send`、`Accept`、`Connect` の API の差分を読んだ
-2. `.#cross` の shell で、`x86_64-pc-windows-msvc` を対象に `cargo check` か `cargo clippy` が通る
-3. `eml_io` のテストが、macOS、Linux、Windows の CI で通る
-4. プールのスレッドは `push` を呼んだスレッドから生まれ、シグナルの塞ぎを受け継ぐ (`eml_io` の `pool_threads_block_interrupt_and_terminate` が確かめる)
-5. `socket2` の版は `compio-driver` が使う版に合わせる (`Cargo.lock` の `socket2` が1つだけである)

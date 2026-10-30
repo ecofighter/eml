@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
-//! Windows の backend。ソケットはまだ扱わず、IOCP のポートで起こしと時間切れだけを待つ
-//! (docs/spec/vm.md の「時計と driver」)。
+//! Windows の backend。ソケットを扱わず、IOCP のポートで起こしと時間切れだけを待つ
+//! (docs/spec/vm.md の「時計と driver」)。ソケットは docs/future/roadmap.md の `net-windows` の項目である。
 
 use std::io;
 use std::net::SocketAddr;
@@ -59,8 +59,8 @@ impl IoWaker for PortWaker {
             if ok != 0 {
                 return;
             }
-            // 失敗は非ページプールが尽きたときに起きる。ここで `posted` を下ろすと、同時に来たほかの鳴らしの分が
-            // 失われる。だから立てたまま、空くまで出し直す
+            // 失敗の原因によらず、立てたまま出し直す。ここで `posted` を下ろすと、同時に来たほかの鳴らしの分が
+            // 失われる
             thread::sleep(POST_RETRY);
         }
     }
