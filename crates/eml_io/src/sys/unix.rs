@@ -332,7 +332,8 @@ fn accept_raw(
     let fd = syscall(|| unsafe { libc::accept(fd.as_raw_fd(), storage.cast(), &mut *len) })?;
     // SAFETY: `accept` が返したばかりの fd で、ほかに持ち主はない。以後の失敗では `OwnedFd` の drop が閉じる
     let fd = unsafe { OwnedFd::from_raw_fd(fd) };
-    prepare(fd.as_fd())?;
+    // 受けた後の設定の失敗 (受ける前に切られた接続など) はその1本だけの誤りなので、受けの出し直しに乗せる
+    prepare(fd.as_fd()).map_err(|e| io::Error::new(io::ErrorKind::ConnectionAborted, e))?;
     Ok(fd)
 }
 
@@ -867,6 +868,7 @@ mod tests {
         ));
         peer.write_all(b"ab").unwrap();
         wait_for(&mut backend, key);
+        assert!(row(&mut backend, &sock).fresh);
         assert!(matches!(
             done(backend.start(key, Step::Peek { sock: &mut sock })),
             Outcome::Size(0)
