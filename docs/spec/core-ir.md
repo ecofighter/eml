@@ -73,7 +73,7 @@
 
 - 構造体の型の `con` は `struct(S)` の変数を束縛する。引数は形のフィールドの Repr と比べる正確な位置で、配置の宣言した Repr とは比べない
 - 構造体の値を分けるのは、いつも `unpack` である。束縛するフィールドの Repr と印は、形のものになる。構造体の変数はタグの `switch` の scrutinee にならない
-- `with_arg` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`、`Std.Async.task_cell`、`op_ready`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`local_port`、`peer_addr`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
+- `with_arg` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`、`Std.Async.task_cell`、`op_ready`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
 - エントリの関数 `entry$<名前>` の `ret` は値1つにする。エントリの値の型が構造体なら `ret` を `obj` にし、box の挿入が箱に入れる。VM の `Finish` は値を1つだけ受けるためである ([VM](vm.md) の「誤り、止めること、終わり」)
 - 型から決める構造体 (`StructTypes`) と、型を持たない組 (`with_arg` の組と、`optimize` の状態を渡す形の複製が返す組) は、同じ語の数と `unit` の条件 (`MAX_STRUCT_WORDS`) で決める。型を持たない組の形は `tuple_struct` が作る
 
@@ -222,9 +222,16 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Net.peer_addr` | `Lin` | `Unr` (`String`) |
   | `Std.Net.shutdown_write` | `Lin` | `Lin` (`TcpStream`) |
   | `Std.Net.set_nodelay` | `Unr`、`Lin` | `Lin` (`TcpStream`) |
+  | `Std.Tls.client_raw` | `Unr`、`Unr` | `Lin` (`Conn`) |
+  | `Std.Tls.push_tls`、`write_plain` | `Unr`、`Lin` | `Lin` (同じ `Conn`) |
+  | `Std.Tls.push_eof`、`send_close_notify` | `Lin` | `Lin` (同じ `Conn`) |
+  | `Std.Tls.pull_tls` | `Lin` | `Unr` (`Bytes`) |
+  | `Std.Tls.read_plain` | `Unr`、`Lin` | `Unr` (`Bytes`) |
+  | `Std.Tls.status`、`line_ready` | `Lin` | `Unr` (`Int`) |
+  | `Std.Tls.error_message`、`take_line` | `Lin` | `Unr` (`String`) |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
-  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.Async.task_cell`、`op_ready`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`local_port`、`peer_addr`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
+  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.Async.task_cell`、`op_ready`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
 - 基本操作の表の印の列は [LIR](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
 - 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
@@ -244,6 +251,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 - `Std.Async.task_cell : Task a -> (Cell, Task a)` も同じ形で、ハンドルを借りてセル (`int`) だけを返し、`with_arg: Some(0)` を持つ。ハンドルは `Lin` なので行の引数の印は `lin` で、この引数は借りたうえで預かる引数でもある ([宣言](declarations.md) の「`extern`」)
 - `Std.Async.op_ready : OpId -> Int -> <IO> (Int, OpId)` も token を借りて結果の番号 (`int`) だけを返し、`with_arg: Some(0)` を持ち、引数を預からない ([標準ライブラリ](stdlib.md) の「`Std.Async`」)
 - `Std.Net` の `op_listener`、`op_stream`、`op_outcome` も token を借りてリスナー、ストリーム、結果の番号 (`int`) だけを返し、`local_port : TcpListener -> (Int, TcpListener)` と `peer_addr : TcpStream -> (String, TcpStream)` はハンドルを借りてポートと番地だけを返す。どれも `with_arg: Some(0)` を持ち、引数を預からない。`local_port` と `peer_addr` の行は `Std.MutArray.length` と同じく `Pure` である ([標準ライブラリ](stdlib.md) の「`Std.Net`」)
+- `Std.Tls` の `pull_tls`、`status`、`error_message`、`line_ready`、`take_line` は `Conn` を借りて結果 (`Bytes`、`int`、`String`) だけを返し、`with_arg: Some(0)` を持つ。`read_plain : Bytes -> Conn -> <IO> (Bytes, Conn)` は `Std.FileIn.read_chunk` と同じ形で、`Some(1)` を持つ。どれも引数を預からない ([標準ライブラリ](stdlib.md) の「`Std.Tls`」)。`push_tls` と `write_plain` は、下の書き込みと同じ形である
 - `Std.FileOut`、`Std.Stdout`、`Std.Stderr` の書き込み (`write`、`write_bytes`、`write_line`) は、書くデータを借り、ハンドルを消費して同じハンドルを返す。結果がハンドルそのものなので、組を返さず、`with_arg` を持たない
 - translate は、`with_arg: Some(k)` の行の引数のそろった呼び出しを、行の結果を束縛する `extern` 命令と、その結果と引数 k を組にする `con` にする。`let t.1: int = extern Std.MutArray.read(m.0, 0)` と `let d.2: (,){int, obj lin} lin = con (,) #0(t.1, m.0)` の形である。組が構造体にならない型なら、`d.2` は `obj` である。extern は m.0 を借りるだけなので、m.0 を消費するのは `con` だけである。`$externN` も同じ形の本体を持つ。どちらも同じ関数 (`ProgramBuilder::extern_call`) が作る
 - 組を受けてすぐ開く所 (`let (v, m) = MutArray.read m i`) では、最適化の既知のコンストラクタ (下の「既知のコンストラクタ」) で組が消え、確保が残らない。組が構造体なら、既知のコンストラクタに頼らなくても確保がない

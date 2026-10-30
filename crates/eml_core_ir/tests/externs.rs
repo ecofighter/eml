@@ -81,6 +81,9 @@ probe_tcp_listener l = l
 probe_tcp_stream : Net.TcpStream -> Net.TcpStream
 probe_tcp_stream s = s
 
+probe_tls_conn : Tls.Conn -> Tls.Conn
+probe_tls_conn c = c
+
 probe_panic : Unit -> <Panic> Int
 probe_panic () = panic \"x\"
 
@@ -117,6 +120,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::OpId => "probe_op",
         ExternType::NetTcpListener => "probe_tcp_listener",
         ExternType::NetTcpStream => "probe_tcp_stream",
+        ExternType::TlsConn => "probe_tls_conn",
     }
 }
 
@@ -277,8 +281,9 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 
 /// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`、
 /// `Std.Async.op_ready`、
-/// `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`local_port`、`peer_addr` と、`Std.FileIn`、`Std.Stdin`、
-/// `Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
+/// `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`local_port`、`peer_addr` と、`Std.Tls` の6つの行と、
+/// `Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.Tls` の `push_tls` と `write_plain` は
+/// データを借りて `Conn` を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
@@ -296,6 +301,13 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             | "Std.Net.op_outcome"
             | "Std.Net.local_port"
             | "Std.Net.peer_addr" => (&[true], Some(0)),
+            "Std.Tls.pull_tls"
+            | "Std.Tls.status"
+            | "Std.Tls.error_message"
+            | "Std.Tls.line_ready"
+            | "Std.Tls.take_line" => (&[true], Some(0)),
+            "Std.Tls.read_plain" => (&[false, true], Some(1)),
+            "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[true, false], None),
             "Std.FileIn.read_all"
             | "Std.FileIn.read_line_raw"
             | "Std.FileIn.read_all_bytes"
@@ -486,7 +498,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par`、`Std.Async` の18行、`Std.Chan` の2行、`Std.Net` の12行以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の18行、`Std.Chan` の2行、`Std.Net` の12行、`Std.Tls` の11行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -563,6 +575,15 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Net.local_port" | "Std.Net.peer_addr" => (&[Lin], Unr),
             "Std.Net.shutdown_write" => (&[Lin], Lin),
             "Std.Net.set_nodelay" => (&[Unr, Lin], Lin),
+            "Std.Tls.client_raw" => (&[Unr, Unr], Lin),
+            "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[Unr, Lin], Lin),
+            "Std.Tls.push_eof" | "Std.Tls.send_close_notify" => (&[Lin], Lin),
+            "Std.Tls.pull_tls"
+            | "Std.Tls.status"
+            | "Std.Tls.error_message"
+            | "Std.Tls.line_ready"
+            | "Std.Tls.take_line" => (&[Lin], Unr),
+            "Std.Tls.read_plain" => (&[Unr, Lin], Unr),
             _ => {
                 assert!(
                     row.param_marks.iter().all(|&mark| mark == Unr),

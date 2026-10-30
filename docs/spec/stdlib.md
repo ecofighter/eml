@@ -1358,6 +1358,103 @@ main () = Async.run (fn () ->
 - `take_listener` と `take_stream` は token を消費して記録を放し、完了から作ったリスナーかストリームを返す。`take_bytes` は token を消費して記録を放し、記録の buffer を返す。読みでは読んだバイトを足した buffer、書きでは書いた buffer そのものである。`take_line` は token を消費して記録を放し、記録が切り出した行を終わりの改行を含めて返す。残りのない EOF では空の文字列を返し、包みがそれを `None` にする。どれも、番号が 0 でない記録では内部の誤り `an op is taken after it failed` になる
 - `finish` は token を消費して記録を放し、記録がまだ持つもの (完了から作ったハンドルを含む) を落とす。番号 6 の誤りは、取り消しを頼んだ記録でなければ IO の失敗にする
 
+## `Std.Tls`
+
+`Std.Tls` は TLS のクライアントのモジュールである。`Conn` は rustls の接続と、復号してまだ返していない平文の列を持つ `Lin` の `Foreign` で、I/O を持たない。`Stream` は `Conn` と `Net.TcpStream` の組の eml のデータで、`std/Tls.em` のコードが両者の間でバイトを汲む。ソケットの読み書き、待ち、取り消し、期限はすべて `Std.Net` のもので、`Std.Tls` は何も足さない。暗号は aws-lc-rs、既定の根は webpki-roots の根で、OS の証明書ストアは使わない。根に足す CA は PEM で渡す。TLS 1.2 と 1.3 を受ける。server の側の API はない。
+
+```haskell
+import Async
+import Fs
+import Tls
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let s = Tls.connect_with_ca (Fs.read_text "ca.pem") "localhost" 8443
+  let s = Tls.write_line "hello" s
+  let (line, s) = Tls.read_line s
+  match line with
+    | Some text -> println text
+    | None -> println "eof"
+  Tls.close s)
+```
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `Conn` | `Lin` の `Foreign` の型 | extern |
+| `Stream` | `Stream { conn : Conn, sock : Net.TcpStream }` | eml |
+| `connect` | `String -> Int -> <IO, Async> Stream` | eml |
+| `connect_with_ca` | `String -> String -> Int -> <IO, Async> Stream` | eml |
+| `wrap` | `String -> Net.TcpStream -> <IO, Async> Stream` | eml |
+| `wrap_with_ca` | `String -> String -> Net.TcpStream -> <IO, Async> Stream` | eml |
+| `read_chunk` | `Bytes -> Stream -> <IO, Async> (Bytes, Stream)` | eml |
+| `read_line` | `Stream -> <IO, Panic, Async> (Option String, Stream)` | eml |
+| `write` | `String -> Stream -> <IO, Async> Stream` | eml |
+| `write_bytes` | `Bytes -> Stream -> <IO, Async> Stream` | eml |
+| `write_line` | `String -> Stream -> <IO, Async> Stream` | eml |
+| `shutdown_write` | `Stream -> <IO, Async> Stream` | eml |
+| `close` | `Stream -> <IO, Async> Unit` | eml |
+
+- `connect host port` は `Net.connect host port` で接続し、`host` を SNI と証明書の名前の照合に使って handshake まで行う。根は既定の根だけである。`connect_with_ca ca host port` は、PEM の `ca` の証明書を根に足す。`ca` が空の文字列なら `connect` と同じである。`wrap host s` は、既にある `TcpStream` の上で同じ handshake を行い、根は既定の根だけである。`wrap_with_ca ca host s` は `connect_with_ca` と同じく `ca` を根に足し、`ca` が空の文字列なら `wrap` と同じである。サーバーの名前と PEM の誤りは、接続を開く前に投げる
+- どの関数も期限を持たない。期限は `Async.timeout ms (fn () -> Tls.connect host port)` のように付ける。期限が来ると巻き戻しが `Stream` を落とすので、期限の後に同じ `Stream` は使えない。`Net.read_line_within` のような、期限の後も読みを続けられる `_within` の関数はない
+- `read_chunk b s` は、平文を `b` の後ろに 1 バイト以上 65 536 バイト以下足して返す。`Conn` に平文がなければ、ソケットを読んで復号するのを平文が届くまで繰り返す。相手が close_notify で閉じた後は、何も足さずに `b` の中身のまま返す。これが EOF である。close_notify のない EOF は、届いた平文をすべて返した後で、種類 `ConnectionReset` の IO の失敗になる。TLS の誤りを見つけた押し込みで復号した平文は返さない
+- `read_line s` は1行を読み、終わりの改行を除いて返す。改行、上限、UTF-8 の扱いと文言は `Net.read_line` と同じで、行は同じ関数で切り出す (上の「`Std.Net`」)。EOF は close_notify の後だけで、改行のない最後の行はそのまま返し、残りがなければ `None` を返す。close_notify のない EOF は `read_chunk` と同じ失敗である。読みすぎた平文は `Conn` に残り、次の `read_chunk` か `read_line` が先に返す。そのため2つを混ぜても、平文は失われず、順も入れ替わらない
+- `read_chunk` と `read_line` は、入口でいつも取り消しを確かめる取り消しの地点である。取り消されると `Stream` を落とし、`Cancelled` を投げる。平文が `Conn` に残っていて `Net` の読みを呼ばないときも同じである
+- `write_bytes b s` は `b` を暗号にし、同じ呼び出しの中で `Net.write_bytes` で書き出す。`write str s` は `str` の UTF-8 のバイトを、`write_line str s` は `str` と改行を書く。書き出すときは `Net.write_bytes` と同じく取り消しの地点である。`shutdown_write` の後の書きは、`Net` の書きと同じ失敗になる。テストの driver では種類 `ConnectionReset`、文言 `cannot write to the stream: connection reset` である
+- `shutdown_write s` は close_notify を書き出してから、`Net.shutdown_write` で送る側を閉じる。`close s` は `shutdown_write` してから `Stream` を落とす。相手がもう閉じていれば close_notify は書けないので、`close` は書きの失敗を捨てる。`Cancelled` だけはそのまま投げ、ほかの失敗では失敗しない
+- `Stream` を落とすと、巻き戻しの間も含めて、close_notify を送らずにソケットを閉じる。取り消しで落ちた `Stream` も同じである
+- `Conn` の平文、rustls の buffer、`pull_tls` が埋める `Vec` は Rust の確保で、`max_bytes` に数えない ([VM](vm.md) の「上限と割り込み」)。平文は、`Conn` に平文がないときの `read_chunk`、行のそろっていないときの `read_line`、handshake のときにだけ、`Net.read_chunk` の1回分 (暗号文で 65 536 バイトまで) を押し込んで増える。上限を超えた開いた行は投げるので、返していない平文は `Conn` ごとに 1 048 576 + 2 × 65 536 バイトを超えない。書きの間に rustls が持つ暗号文は、書く平文とレコードの余分の分で、呼び出しが終われば残らない。受け取りの途中のレコードは1つで、16 KiB とレコードの余分までである
+- feature `tls` を外した処理系では、`connect`、`connect_with_ca`、`wrap`、`wrap_with_ca` は種類 `NotAvailable` の IO の失敗 `cannot set up TLS for {host}: not available` を投げる。テストの driver の `tls.localhost` と `tls-cut.localhost` も `NotFound` になる ([VM](vm.md) の「時計と driver」)
+
+失敗の種類と文言は次のとおりである。
+
+| 場合 | 種類 | 文言 |
+|---|---|---|
+| サーバーの名前を使えない | `Other` | `cannot set up TLS for {host}: the server name is not valid` |
+| 足す CA の PEM の誤り | `Other` | `cannot set up TLS for {host}: the CA certificates are not valid PEM` |
+| TLS のない処理系 | `NotAvailable` | `cannot set up TLS for {host}: not available` |
+| 証明書の拒否 | `Other` | `cannot complete the TLS handshake with {host}: the server certificate was rejected` |
+| handshake のほかの TLS の誤り | `Other` | `cannot complete the TLS handshake with {host}: {rustls の文言}` |
+| handshake の途中で相手が閉じた (EOF か close_notify) | `ConnectionReset` | `cannot complete the TLS handshake with {host}: the peer closed the connection` |
+| 読みの TLS の誤り | `Other` | `cannot read the stream: {rustls の文言}` |
+| close_notify のない EOF | `ConnectionReset` | `cannot read the stream: the peer closed the connection without close_notify` |
+| 長すぎる行、UTF-8 でない行 | `Other`、`NotUtf8` | `Net.read_line` と同じ |
+| `shutdown_write` の後の書き | `Net` の書きと同じ | `Net` の書きと同じ |
+| 取り消し | `Cancelled` | `task was cancelled` |
+| ソケットの誤り | `Std.Net` と同じ | `Std.Net` の文言 |
+
+証明書の拒否は、理由によらず同じ文言で、rustls の詳細を付けない。
+
+包みの形は次のとおりである。`status` は `Conn` の状態を次の印の和で返す。
+
+| 印 | 名前 | 立つとき |
+|---|---|---|
+| 1 | handshaking | handshake の途中である |
+| 2 | has_outgoing | `pull_tls` で書き出す暗号文がある |
+| 4 | peer_closed | 相手の close_notify を受けた |
+| 8 | truncated | close_notify のないまま EOF を押し込んだ。handshake の途中も含む |
+| 16 | failed | TLS の誤りを記録した |
+
+- handshake は、書き出すものを書き出し、`status` が handshaking でなくなるまで、`Net.read_chunk` の1回分を押し込んでは書き出すことを繰り返す。peer_closed か truncated が立てば、handshake の途中で相手が閉じた失敗にする
+- 押し込みの後に failed が立てば、`error_message` で理由を読み、alert を `try_io` の中で書き出してから、種類 `Other` の IO の失敗を投げる。alert を書けなくても TLS の誤りのほうを報告する。書き出しが `Cancelled` で失敗したときだけは `Cancelled` を投げる。failed が立たなければ、書き出すもの (TLS 1.3 の KeyUpdate への応答など) を書き出す
+- `line_ready` は、`Conn` の平文の先頭の行の状態を 0 (行も EOF もまだない)、1 (行がある)、2 (中身が上限を超えた)、3 (UTF-8 でない) で返す。EOF とみなすのは peer_closed のときだけである。`Conn` は前の `line_ready` が探し終えた位置を持ち、次は新しく届いた平文だけを探す。平文を返すと位置を先頭に戻す。1 のときだけ `take_line` を呼び、行を終わりの改行ごと文字列にして返す。残りのない EOF では空の文字列で、包みがそれを `None` にする
+- extern の行は次の11行で、どれも `pub` でない。どれも待たないので、VM は普通の extern の行として実行する。投げるのは `client_raw` だけで、ほかの行の TLS の誤りは `status` の failed と `error_message` に残る
+
+| 行 | 型 | 借りる引数 |
+|---|---|---|
+| `client_raw` | `String -> String -> <IO> Conn` | なし |
+| `push_tls` | `Bytes -> Conn -> <IO> Conn` | バイト列 |
+| `push_eof` | `Conn -> <IO> Conn` | なし |
+| `pull_tls` | `Conn -> <IO> (Bytes, Conn)` | `Conn` |
+| `write_plain` | `Bytes -> Conn -> <IO> Conn` | バイト列 |
+| `read_plain` | `Bytes -> Conn -> <IO> (Bytes, Conn)` | `Conn` |
+| `status` | `Conn -> <IO> (Int, Conn)` | `Conn` |
+| `error_message` | `Conn -> <IO> (String, Conn)` | `Conn` |
+| `send_close_notify` | `Conn -> <IO> Conn` | なし |
+| `line_ready` | `Conn -> <IO> (Int, Conn)` | `Conn` |
+| `take_line` | `Conn -> <IO> (String, Conn)` | `Conn` |
+
+- `client_raw host ca` は `host` と `ca` を写して手放し、`Conn` を作る。`push_tls` は暗号文を押し込み、`push_eof` は EOF を記録する。`pull_tls` は書き出す暗号文をすべて新しい `Bytes` にする。failed の後も alert はここから出る。`write_plain` は平文を暗号にして積む。failed の後は捨てる。`read_plain` は平文の先頭の 65 536 バイトまでを `Bytes` の後ろに足して返す。`send_close_notify` は1度だけ close_notify を積む。致命的な alert の後は何もしない。`take_line` を行のそろっていないときに呼ぶと、内部の誤りになる
+
 ## `Std.Signal`
 
 `Std.Signal` はタスクがシグナルを待つモジュールである。

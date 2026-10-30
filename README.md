@@ -9,7 +9,8 @@ eml は「線形型 × 代数的エフェクト」の組み合わせを試す、
 - 関数型、式指向で、イミュータブルがデフォルトである。
 - 線形性を Kind で区別する。線形な値 (ファイルや `once` 操作の継続など) は、ちょうど1回使わなければならない。値を捨てるときは `drop` を明示する。
 - エフェクトは Koka 方式の Row 多相で扱う。操作ごとに継続の多重度 (`never` / `once` / `multi`) を宣言する。
-- 副作用は組み込みの `IO` エフェクトとして管理する。`IO` は操作のないラベルで、`println` やファイルの操作 (`Fs.open` など) は `extern` の関数である。
+- 副作用は組み込みの `IO` エフェクトとして管理する。`IO` は操作のないラベルで、`println` やファイルの操作 (`FileIn.open` など) は `extern` の関数である。
+- 構造化並行性の `Async` のタスク、`par` の fork と join、channel を持つ。標準ライブラリは TCP (`Std.Net`) と TLS のクライアント (`Std.Tls`) を扱う。
 - 型付きの Core IR を LIR に写し、レジスタ型のバイトコードの VM で実行する。メモリは Perceus 方式の参照カウントで管理する。
 - 1回の検査で、構文・名前解決・型・線形性・網羅性の誤りをまとめて報告する。
 
@@ -21,14 +22,14 @@ eml は「線形型 × 代数的エフェクト」の組み合わせを試す、
 effect Ask where
   ask : Unit -> Int
 
-add_two : Unit -> <Ask> Int
+add_two : Unit -> <Ask, Panic> Int
 add_two () = ask () + ask ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let total =
     handle add_two () with
-      | ask () k -> k 21
+      | fn ask () -> 21
   println (show total)
 ```
 
@@ -40,22 +41,24 @@ $ eml run ask.em
 ファイルは線形な値なので、閉じ忘れをコンパイル時に検出できる。
 
 ```
+import FileIn
+
 main : Unit -> <IO> Unit
 main () =
-  let f = Fs.open "input.txt"
-  let (f, text) = Fs.read_all f
+  let f = FileIn.open "input.txt"
+  let (text, f) = FileIn.read_all f
   println text
 ```
 
 ```sh
 $ eml check leak.em
 [E3003] Error: `f` must be used exactly once, but it is not used
-   ╭─[ leak.em:4:8 ]
+   ╭─[ leak.em:6:14 ]
    │
- 4 │   let (f, text) = Fs.read_all f
-   │        ┬
-   │        ╰── `f` is bound here
- 5 │   println text
+ 6 │   let (text, f) = FileIn.read_all f
+   │              ┬
+   │              ╰── `f` is bound here
+ 7 │   println text
    │               │
    │               ╰─ `f` is not used before the end of this scope
    │
@@ -69,15 +72,18 @@ $ eml check leak.em
 
 ## ビルドと実行
 
-開発環境は Nix flake で用意する。direnv を使う場合は `direnv allow` で devShell に入る。devShell には clippy、rustfmt、cargo-insta が入っている。nix を使わないときは、rustup が `rust-toolchain.toml` のバージョンを入れる。
+開発環境は Nix flake で用意する。direnv を使う場合は `direnv allow` で devShell に入る。devShell には clippy、rustfmt、rust-analyzer、cargo-insta、cargo-nextest、Verus (`cargo-verus` と `verusfmt`) が入っている。nix を使わないときは、rustup が `rust-toolchain.toml` のバージョンを入れる。TLS の暗号 (aws-lc) を組むので、C のツールチェーンも要る。
 
 ```sh
 cargo build                                  # すべての crate をビルドする
-cargo test                                   # すべてのテストを実行する
+cargo nextest run                            # すべてのテストを実行する (cargo test でも同じテストが流れる)
 cargo run -p eml_cli -- check <file.em>      # 検査だけを行う
 cargo run -p eml_cli -- run <file.em>        # 実行する (--debug-heap でヒープの検査を有効にする)
+cargo run -p eml_cli -- repl                 # 端末の REPL
 nix build                                    # eml のバイナリをビルドする
 ```
+
+`eml <file.em>` は `eml run <file.em>` と同じである。コマンドの一覧は [CLAUDE.md](CLAUDE.md) の「Commands」と [docs/implementation/testing.md](docs/implementation/testing.md) の「よく使うコマンド」にある。
 
 ### Claude Code のクラウドのセッション
 
@@ -108,7 +114,7 @@ claude plugin install natural-japanese@natural-japanese --scope user
 claude plugin install ecoskills@ecoskills --scope user
 ```
 
-`eml` の終了コードは、成功で 0、診断または実行時エラーで 1、使い方の誤りで 2、Ctrl-C で止めたときは 130 である。
+`eml run` の終了コードは、成功で 0、診断または実行時エラーで 1、使い方の誤りで 2、Ctrl-C で止めたときは 130、SIGTERM で止めたときは 143 である。プログラムが `exit n` で終わったときは `n` の下位 8 ビットである。
 
 ## リポジトリの構成
 
@@ -116,8 +122,10 @@ claude plugin install ecoskills@ecoskills --scope user
 
 | crate | 役割 |
 |---|---|
-| `eml_cli` | `check` / `run` のコマンド。各段階をつなぐ |
-| `eml_vm` | LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上で実行する |
+| `eml_cli` | `check` / `run` / `repl` のコマンド。各段階をつなぐ唯一の場所 (`Session`) |
+| `eml_vm` | LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上で実行する。`par`、`Async` のタスク、channel も扱う |
+| `eml_io` | I/O の driver。OS ごとの backend (epoll、kqueue、IOCP) の上の本物の driver と、決定的なテストの driver |
+| `eml_tls` | rustls の接続を包む TLS の状態 (I/O を持たない) |
 | `eml_rt` | VM とネイティブで共有するランタイムの核 (物体、ヒープ、参照カウント、検査モード、extern)。Verus で検証する |
 | `eml_core_ir` | 型付き HIR から Core IR (基本ブロックの列) への変換、evidence passing、LIR への変換 |
 | `eml_lir` | LIR と、`box` / `unbox` の挿入、縮約、`dup` / `decref` / `release` の挿入 |
@@ -128,7 +136,15 @@ claude plugin install ecoskills@ecoskills --scope user
 | `eml_extern` | 標準ライブラリの extern の表 |
 | `eml_test_support` | 統合テスト用の補助 (開発時のみ) |
 
-UI テストは [tests/ui/](tests/ui/) に置いている。`run/` は最後まで実行できるプログラム、`run-fail/` は実行時エラーで終わるプログラム、`check-fail/` は検査でエラーになるプログラムである。
+crate の依存と各 crate の中身は [docs/implementation/architecture.md](docs/implementation/architecture.md) にある。crate のほかに、次のディレクトリがある。
+
+| ディレクトリ | 中身 |
+|---|---|
+| [std/](std/) | 標準ライブラリのモジュール (`.em`)。処理系に埋め込む |
+| [tests/ui/](tests/ui/) | UI テスト。`run/` は最後まで実行できるプログラム、`run-fail/` は実行時エラーで終わるプログラム、`check-fail/` は検査でエラーになるプログラムである |
+| [bench/](bench/) | 計測のプログラムとスクリプト。数値は [docs/implementation/benchmarks.md](docs/implementation/benchmarks.md) にある |
+| [docs/](docs/) | 仕様、処理系の構成、将来の設計 (下の「文書」) |
+| [nix/](nix/) | flake の補助 (Verus と verusfmt のパッケージ、クラウドのセッションで flake の input を取るスクリプト) |
 
 ## 文書
 

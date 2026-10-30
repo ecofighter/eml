@@ -50,6 +50,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 取り消しと時間 | `shield` に入ってからタスクが最初に開くスコープは境目で、外からの取り消しは境目で止まる。境目とその内側のスコープ自身の旗 (期限、子の失敗、`cancel_scope`) は `shield` の中でも届く。時間は今からの長さを `Int` のミリ秒で表す。時計は `eml run` と `eml repl` ではいつも本物で、ライブラリの既定は仮想である。仮想の時計とテストの driver はテストのハーネスが選ぶ。仮想の時計はすべてのタスクが待つときだけ進む | [標準ライブラリ](spec/stdlib.md) の「取り消し」「時間」、[VM](spec/vm.md) の「時計と driver」 |
 | channel と共有の数 | `Std.Chan` の `Chan a` は登録表の添字を持つ `Unr` の即値で、Kind は `a` によらず `Unr` である。channel は `close` で放す資源で、閉じて空になった時点でその場で放し、閉じないままの channel は run の終わりに放す。受け手の決まらない値 (channel の品物とタスクの結果) は、値を預かる構造の論理的な worker ID を途中の持ち主にして移す。共有して書き換える数は `Std.Atomic.Counter` だけである | [標準ライブラリ](spec/stdlib.md) の「`Std.Chan`」「`Std.Atomic`」、[VM](spec/vm.md) の「channel」、[オブジェクトモデル](spec/object-model.md) の「論理的な worker ID」 |
 | ネットワークとシグナル | `Std.Net` の `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、落とすとソケットを閉じる。待つ関数はどれも取り消しの地点で、`_within` の版は結果を `Option` に包み、`None` は期限が過ぎたことだけを表す。拒まれた接続 (`ConnectionRefused`)、reset、使用中の番地、時間切れは IO の失敗の種類で分ける。driver が受け付けで終えた操作は、待たずに続ける。読みは buffer の空きにそのまま読み、`write_bytes` は書いた `Bytes` を写さずに返す。`Std.Signal.wait` はシグナルを貯めず、同じシグナルを待つタスクをすべて起こす。待つタスクがなければ、Ctrl-C は run を止めて 130 で、SIGTERM は同じ止め方で 143 で終わる | [標準ライブラリ](spec/stdlib.md) の「`Std.Net`」「`Std.Signal`」、[VM](spec/vm.md) の「操作の記録」「上限と割り込み」 |
+| TLS | `Std.Tls` はクライアントだけを持つ。TLS の状態 `Tls.Conn` は I/O を持たない `Lin` の `Foreign` で、ソケットの読み書き、待ち、取り消し、期限は `Std.Net` のものを使い、`std/Tls.em` が両者の間でバイトを汲む。close_notify のない EOF は IO の失敗にする。信頼する根は webpki-roots の根と、渡した PEM の CA である | [標準ライブラリ](spec/stdlib.md) の「`Std.Tls`」 |
 
 ### 構文
 

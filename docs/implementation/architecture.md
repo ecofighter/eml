@@ -44,8 +44,9 @@ eml/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。workspace の crate では eml_extern だけに依存する
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
-    eml_io/             # I/O の driver (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存する
-    eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_io、eml_rt、eml_extern だけに依存する
+    eml_io/             # I/O の driver (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存し、feature `tls` の下では eml_tls にも依存する
+    eml_tls/            # rustls のクライアント接続を包む TLS の状態 (I/O を持たない)。workspace の crate には依存しない
+    eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_io、eml_rt、eml_extern だけに依存し、feature `tls` の下では eml_tls にも依存する
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
   std/                  # 標準ライブラリ (Prelude.em、Fs.em、List.em など)。eml_hir がバイナリに埋め込む
@@ -75,6 +76,7 @@ eml/
 eml_cli          check / run コマンド。パイプラインを組む唯一の場所 (Session)。テストから呼べる lib API を公開する
 eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_rt の Ctx の上で実行する
 eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。時計と I/O の待ちを受け持つ
+eml_tls          rustls のクライアント接続を包む TLS の状態 (I/O を持たない)。aws-lc-rs の provider と webpki-roots を使い、eml のどの crate にも依存しない
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。最適化と evidence passing のパスと、LIR への変換
 eml_lir          LIR (box、RC、末尾呼び出しを明示する基本ブロックの列)。box/unbox の挿入、構造体を葉に開くパス、縮約、dup/decref/release の挿入、reuse のパス
@@ -86,11 +88,13 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 ```
 
 - 段階の連なりに `eml_rt` は入らず、`eml_vm` と `eml_io` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
-- `eml_io` は `eml_rt` だけに依存し、`eml_vm` には依存しない。依存の順は `eml_cli` > `eml_vm` > `eml_io` > `eml_rt` である。trait `IoDriver` と driver に渡す型は `eml_rt` が持ち、`eml_io` はその実装だけを持つ ([VM](../spec/vm.md) の「時計と driver」)
+- `eml_io` は workspace の crate では `eml_rt` と、feature `tls` の下の `eml_tls` だけに依存し、`eml_vm` には依存しない。依存の順は `eml_cli` > `eml_vm` > `eml_io` > `eml_rt` で、feature `tls` の下では `eml_io` > `eml_tls` と `eml_vm` > `eml_tls` が加わる。trait `IoDriver` と driver に渡す型は `eml_rt` が持ち、`eml_io` はその実装だけを持つ ([VM](../spec/vm.md) の「時計と driver」)
+- `eml_tls` は workspace のどの crate にも依存しない。`eml_vm` と `eml_io` が依存するのは feature `tls` の下だけである。`eml_cli` の feature `tls` も `eml_tls` を省ける普通の依存として足す。`eml_cli` の `src/` はこれを使わず、本物のソケットの上で TLS のサーバーを立てる結合テスト (`tests/tls.rs`) が使う。rustls は aws-lc-rs の provider だけで使い、根の証明書は webpki-roots が持つ。aws-lc-sys が要るのは C のツールチェーンだけで、Windows の x86_64 では NASM を使い、NASM がなければ組み済みのオブジェクトを使う。C のツールチェーンを持たない `.#cross` の clippy が `eml_tls` を除くのはこのためである
+- aws-lc-sys は、target の C のツールチェーンだけで組めることを前提にする。対応する OS か `nix build` で、組めない、リンクできない、動かないときは、OS ごとのツールや環境変数を足さず、provider を ring に替える。ring でも同じことが起きたら、設計から決め直す
 - `eml_lir` は、workspace の crate では `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである。表 (`Extern`、`ExternType`、`ExternEffect`) は `table!` が1つの並びから変種、`ALL`、静的な行を作り、`row` は行への参照を返す。VM のコード生成は `self as usize` を行の番号に使い、VM は `ALL` で引き戻すので、並びが1つなら2つの順は食い違わない
-- `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れて物理メモリを読む `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` で、バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
+- `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れて物理メモリを読む `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` と `tls` で、`tls` は `eml_vm/tls`、`eml_io/tls` の順に feature を有効にする。バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
 - `eml_test_support` は開発専用の crate で、パイプラインに入らない。各 crate の結合テストが dev-dependency として使う。パイプラインは `eml_cli::Session` で組み、段階を feature (`hir` < `types` < `core` < `run`) で選ぶ。各 feature は、`eml_cli` の同じ段階までの feature を有効にする。各 crate は自分の段階までを有効にする。破壊的な変更の途中で下流の crate がまだ組み立たなくても、変更している段階のテストを流せるようにするため ([テスト戦略](testing.md))
 
 ## 各段階の規律
@@ -309,7 +313,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - reuse (`eml_lir` の `reuse.rs`) は、関数ごとに `Planner` がブロックを番号の順に1回たどって組を決め、`Plan::apply` がまとめて書き換える ([LIR](../spec/lir.md) の「reuse」)。道ごとの状態 (`Path`) は、構築子が分かっている変数と使える token の並びで、`switch` の行き先へ写し、合流するブロックでは構築子の事実を入る道の共通部分にし、token を空にする。たどり終えてから、どの道でも使わなかった元を元の文に戻し、一部の道でだけ使う token の `drop_token` を行き先のエントリに置く。yield しうる呼び出しは `may_yield` が決め、verifier も同じ関数で、yield しうる呼び出しの後に token が生きていないことを確かめる
 - パス、verifier、`pretty`、`parse`、VM のコード生成は、ブロックと文の並びをループでたどり、IR の大きさに比例して再帰しない。生存解析は、ブロックを後ろからたどる1回のループで、ブロックごとのエントリの生存集合を側の表 (`liveness::live_in`) に返す。辺がすべて前向きなので、不動点の計算は要らない
 - 縮約 (`eml_lir` の `contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換なときだけ `tail` にする ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出しの書き換えは、translate が組み立てるときに行う。組み立てた後に別のパスで書き換えると、書き換えのたびに枝の部分木を置き換えるので、長い `else if` の連鎖で2乗の時間がかかるためである
-- `eml_vm` は、コード生成 (`compile/`) と実行に分かれる。`compile/` では、`slots.rs` が文の単位の生存から干渉グラフを作ってスロットを塗り、`moves.rs` がブロック引数への並列な代入を `Move` の列に直し、`emit.rs` が関数ごとに命令を出し、`constants.rs` が定数を作業用のヒープに作って凍結する ([VM](../spec/vm.md) の「スロットの割り当て」と「`CodeBase` と `FnEntry`」)。実行は `vm.rs` の、命令を `match` で分ける1つのループである。関数の値の適用とクロージャは `apply.rs`、`CodeBase` と `FnEntry` と組み込みの命令 (`Finish`、`ApplyRest`、`par` の子の終わりの `ChildDone`。位置は `op.rs` の `FINISH`、`APPLY_REST`、`CHILD_DONE`) は `code.rs`、データの命令は `data.rs` にあり、基本操作の命令も `vm.rs` の `match` の腕で `Ctx` のメソッドを呼ぶ。命令の型は `op.rs`、実行時エラーの型と表示の文言は `error.rs`、`eml run` と REPL とテストが使う Host は `hosts.rs` にある。スケジュールの方針 (`Sched`、`Policy`、`Normal`、`Sequential`、`Seeded`) とタスクの表と join の節点を持つ `Scheduler` は `sched.rs` に、`Scheduler` が持つ監視のスレッドは `monitor.rs` に、監視のスレッドを起こす自己パイプ `Doorbell` は `doorbell.rs` に、時計の選び方 `Clock` と時刻のミリ秒への丸めは `driver.rs` にあり (driver そのものは `eml_io` にある)、`par` の fork と join は `vm.rs` が行う ([VM](../spec/vm.md) の「タスクとスケジュール」と「`par` の fork と join」)。`Async` のタスクとスコープと channel の意味 (登録表 `Registry`、セル、受け箱、ハンドル、driver の操作の記録、`Counter` の表) は `cells.rs` の核が持ち、`cells.rs` は `std` と `eml_rt` だけを import する。`Async` の命令とエントリの `Task` は `vm.rs` が扱い、核を呼んで返った仕事を `Task` にする ([VM](../spec/vm.md) の「`Async` のタスク」)。逆アセンブラは `disasm.rs` である
+- `eml_vm` は、コード生成 (`compile/`) と実行に分かれる。`compile/` では、`slots.rs` が文の単位の生存から干渉グラフを作ってスロットを塗り、`moves.rs` がブロック引数への並列な代入を `Move` の列に直し、`emit.rs` が関数ごとに命令を出し、`constants.rs` が定数を作業用のヒープに作って凍結する ([VM](../spec/vm.md) の「スロットの割り当て」と「`CodeBase` と `FnEntry`」)。実行は `vm.rs` の、命令を `match` で分ける1つのループである。関数の値の適用とクロージャは `apply.rs`、`CodeBase` と `FnEntry` と組み込みの命令 (`Finish`、`ApplyRest`、`par` の子の終わりの `ChildDone`。位置は `op.rs` の `FINISH`、`APPLY_REST`、`CHILD_DONE`) は `code.rs`、データの命令は `data.rs` にあり、基本操作の命令も `vm.rs` の `match` の腕で `Ctx` のメソッドを呼ぶ。命令の型は `op.rs`、実行時エラーの型と表示の文言は `error.rs`、`eml run` と REPL とテストが使う Host は `hosts.rs` にある。スケジュールの方針 (`Sched`、`Policy`、`Normal`、`Sequential`、`Seeded`) とタスクの表と join の節点を持つ `Scheduler` は `sched.rs` に、`Scheduler` が持つ監視のスレッドは `monitor.rs` に、監視のスレッドを起こす自己パイプ `Doorbell` は `doorbell.rs` に、時計の選び方 `Clock` と時刻のミリ秒への丸めは `driver.rs` にあり (driver そのものは `eml_io` にある)、`par` の fork と join は `vm.rs` が行う ([VM](../spec/vm.md) の「タスクとスケジュール」と「`par` の fork と join」)。`Async` のタスクとスコープと channel の意味 (登録表 `Registry`、セル、受け箱、ハンドル、driver の操作の記録、`Counter` の表) は `cells.rs` の核が持ち、`cells.rs` は `std` と `eml_rt` だけを import する。`Async` の命令とエントリの `Task` は `vm.rs` が扱い、核を呼んで返った仕事を `Task` にする ([VM](../spec/vm.md) の「`Async` のタスク」)。`Std.Tls` の extern の腕と、`Foreign` の中身 `TlsConn` (`eml_tls::Conn` と行を探し終えた位置) は `tls.rs` にある。feature `tls` を外すと、`tls.rs` は同じ名前とメソッドを持つ値のない `Conn` で組み、`client_raw` がいつも `NotAvailable` を投げるので、`vm.rs` に cfg はない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」)。逆アセンブラは `disasm.rs` である
 - VM は状態を `Ctx` と `Task` だけに置き、Rust の再帰を使わない。呼び出しのスタックは `Task` のデータである ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約5)
 - 位置を持つ `extern` 命令から作った命令にだけ、`Tables::locations` で源の位置 (`SourceLocation`) を付ける ([LIR](../spec/lir.md) の「実行時エラー」)
 - `RunStats` の回数は、`Ctx` の `CtxStats` とヒープの `Stats` が検査モードで数える。`boxes`、`unboxes`、`reuses`、`unwound_frames` は VM が数え、`peak_stack` はタスクごとの深さの起点とスタックの長さの和の最大で、`Scheduler` が取る。`tasks`、`parks`、`timers`、`dropped_failures`、`cancels`、`channel_ops`、`channel_waits`、`channels_swept`、`completions` は登録表が数える ([VM](../spec/vm.md) の「`RunStats`」)
@@ -350,6 +354,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 ## `eml_io` の内部
 
 - `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、OS を呼ばない核 `driver::Driver` を OS ごとの backend `sys::Os` の上で動かす包みである。backend の時計は単調な時計 (`Instant`) で、driver は内部の刻みを持たない。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、`test/net.rs` の仮想のネットワーク (メモリの上の端、リスナー、ポート)、seed で混ぜる決着の順、`submit` の中で終えた操作の数 (`immediate()`) を持つ ([VM](../spec/vm.md) の「時計と driver」)
+- feature `tls` のときだけ組む `test/tls.rs` は、テストの driver の TLS の終端器である。`tls.localhost` と `tls-cut.localhost` への接続ごとに `eml_tls::Conn` のサーバーを1つ持ち、決着の始めに汲む。仮想のネットワークに足したのは、ポートを振った端の対を作る `Network::pair` だけで、端の表には `test` の子のモジュールとして触れる。`eml_io` の `src/` で `eml_tls` を参照するのはこのファイルだけである
 - driver は `Word`、`Ctx`、RC に触れず、記憶には `RawBuf` を通してだけ届く。そのため `eml_io` は `eml_vm` を知らずに組み立てられる。どちらの driver を使うかは `eml_vm` の `Clock` が決める
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
 - `RealDriver::with_lookup(lookup)` は、名前の解決の関数を差し替えた driver を作る。テストと組み込み先のためで、テストは機械の `/etc/hosts` に頼らない。`RealDriver::new` は `sys::lookup` (std の解決器) を使う
@@ -369,7 +374,23 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `unsafe` は `mask.rs`、`test.rs`、`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`、`sys/iocp.rs`、`driver/tests/fake.rs` にだけ置き、`trust.rs` のテストが一覧を固定する ([テスト](testing.md) の「`unsafe` の一覧」)。核と `real.rs` は OS を名指さず、`RawBuf` の番地は backend の OS を呼ぶ関数の中でだけ読み、slice を作らない
 - 壊れる条件と壊れた後の振る舞い、`quiesce`、driver を落とすときの規則は [VM](../spec/vm.md) の「時計と driver」にある
 - 起こしが長い待ちを終わらせることは、結合テストが遠い期限と期限 `u64::MAX` の `wait` で確かめる
-- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落としても仕事を待たないこと、落とした後の起こしと、待つ前の起こしが次の待ちだけを終えること、unix のループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、1つのストリームで待つ読みと待つ書きが両方終わること、溜まった接続の受け、リセットで終わる待つ書き、シグナルで割り込まれた待ち、名前の解決とその2つの上限と、Windows のソケットの操作が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF) を確かめる
+- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落としても仕事を待たないこと、落とした後の起こしと、待つ前の起こしが次の待ちだけを終えること、unix のループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、1つのストリームで待つ読みと待つ書きが両方終わること、溜まった接続の受け、リセットで終わる待つ書き、シグナルで割り込まれた待ち、名前の解決とその2つの上限と、Windows のソケットの操作が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF) を確かめる。`tests/tls.rs` は `tls` のときだけ組み、Rust の `eml_tls::Conn` のクライアントで終端器の handshake、平文の受け渡し、close_notify とその省略、半分の閉じ、証明書の拒否、閉じる順ごとの EOF とポートの解放を確かめる。`tests/tls_off.rs` は `tls` を外したときだけ組み、TLS の名前が `NotFound` で終わることを確かめる ([テスト](testing.md) の「feature の組み合わせの確認」)
+
+## `eml_tls` の内部
+
+- `Conn` は rustls の接続 (`rustls::Connection`) と、復号した平文の列を持ち、I/O を持たない。暗号文は呼ぶ側が `push_tls` で渡し、`pull_tls` で受け取る。相手の EOF は `push_eof` で知らせる。provider は接続ごとに `builder_with_provider` で aws-lc-rs のものを渡し、`install_default` は呼ばない。設定も接続ごとに作り、プロセスの全体で共有する状態を持たない
+- `Conn::client` が信頼する根は、webpki-roots の根に、渡された PEM の証明書を足したものである。PEM が空なら webpki-roots の根だけになる。PEM が読めないとき、証明書を根に足せないとき、空でない入力から証明書が1つも出てこないときは `Error::CaPem` になる。受ける版は TLS 1.2 と 1.3 である
+- 作るときに `set_buffer_limit(None)` を呼び、送る側の buffer の上限を外す。上限があると、`write_plain` が平文の一部しか受け取らないことがある。受けた平文の buffer にはこの呼び出しと別の上限 (16 KiB) があり、満ちると `read_tls` が失敗する。そこで `push_tls` は `process_new_packets` を呼ぶたびに、rustls の平文を自分の列へすべて移す。移す前に読み終えた部分を詰めるが、`plaintext()` が返すバイトの並びは変わらないので、その中の位置は `push_tls` の呼び出しをまたいでも同じバイトを指す。`consume` で列が空になったら `Vec` を手放す
+- `status()` は次の5つの印の和を返す
+  - `HANDSHAKING` (1): rustls の `is_handshaking()` が真である
+  - `HAS_OUTGOING` (2): rustls の `wants_write()` が真で、`pull_tls` で出すバイトがある
+  - `PEER_CLOSED` (4): 相手の close_notify を処理した
+  - `TRUNCATED` (8): `push_eof` を受け、close_notify はまだ受けていない。handshake の途中の EOF もこれになる
+  - `FAILED` (16): 失敗を記録した
+- 失敗は最初の1つだけを記録し、その後の `push_tls` は何も読まず、`write_plain` は平文を捨てる。同じ `push_tls` の中で失敗の前に復号できた平文は列に残す。それを捨てるかどうかは呼ぶ側が決める。失敗の後も rustls が積んだ alert は `pull_tls` で取り出せるので、呼ぶ側は相手に失敗を伝えてから閉じられる。close_notify を受けた後も `push_tls` は何も読まず、その後ろのレコードは捨てる
+- 文言は固定である。作るときの誤り (`Error`) はそれぞれ1つの文言を持つ。証明書の拒否 (rustls の `InvalidCertificate`) は理由によらず `the server certificate was rejected` とし、rustls の詳細を付けない。ほかの TLS の誤りと `read_tls` の誤りは rustls の文言をそのまま使う
+- `send_close_notify` は rustls のものを呼ぶだけで、2度目は何もしない。致命的な alert を送った後も何もしない。close_notify を送った後の `write_plain` も、rustls は止めずにレコードを作る。そのため、呼ぶ側がソケットの送る向きを閉じた後に書くと、そのレコードはソケットまで届いてそこで失敗する。close_notify を送った後に相手の壊れたレコードが届くと、rustls は致命的な alert を積む前の `debug_assert!` で panic する。そこで workspace の `Cargo.toml` は dev の profile で rustls の debug assertions を切り、release と同じく `FAILED` になるようにしている
+- `Conn::server` と `fixtures` は、テストの driver の終端器とテストのためだけにある。`fixtures` の鍵は公開されたテスト用の定数で、何も認証しない
 
 ## ソースファイルと位置
 
@@ -421,3 +442,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`)。`eml_io` は unix だけで依存し、epoll と kqueue の backend のソケット、登録、待ち、起こし (`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`) と、スレッドを始める間のシグナルの塞ぎ (`spawn_masked` の `pthread_sigmask`) に使う。`eml_vm` も unix だけで依存し、自己パイプ (`Doorbell`。`pipe`、`poll`、`write`) に使う |
 | `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`)、物理メモリの大きさ (`GlobalMemoryStatusEx`)。`eml_io` は Windows だけで依存し、IOCP の backend のポートと待ちと起こし (`CreateIoCompletionPort`、`GetQueuedCompletionStatusEx`、`PostQueuedCompletionStatus`) に使う |
 | `rustyline` | 19.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
+| `rustls` | 0.23 (`aws_lc_rs`、`std`、`tls12`) | `eml_tls` の TLS の接続。provider は aws-lc-rs だけで、接続ごとに `builder_with_provider` で渡す。aws-lc-rs は rustls の既定で推奨の provider で、組むのに要るのは C のツールチェーンだけである (上の「crate の依存関係」) |
+| `webpki-roots` | 1.0 | `eml_tls` の既定の根の証明書 |
+
+`eml` バイナリには、aws-lc、rustls、webpki-roots の根の証明書のデータが入る。どれも eml と別のライセンスに従う。aws-lc は `ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause` ほか、rustls は `Apache-2.0 OR ISC OR MIT`、webpki-roots の根のデータは `CDLA-Permissive-2.0` である。`flake.nix` の `meta.license` は eml 自身のライセンス (MIT) だけを書く。

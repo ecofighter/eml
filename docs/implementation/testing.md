@@ -364,6 +364,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `var/`: `var` の変数。配列の添字、スコープ、中断との組み合わせ
   - `par/`: `Std.Par.par` の fork と join。子と handler の組み合わせ。逐次のほかに2つの seed でも流す (下の「seed で流す」)
   - `async/`: `Std.Async` のタスク。始めること、待つこと、スコープの終わり、失敗の起こし直し、`Lin` の結果、取り消し、名前付きのスコープ、`shield`、`shield` の境目、`timeout`、`sleep_ms`、`race`、`drain_within`、全員が待って止まるデッドロック、`Std.Net` の driver の操作 (`net_*.em`)、`Std.Signal` の待ちと仮想のシグナル (`signal_*.em`)。逐次のほかに2つの seed でも流す (下の「seed で流す」)。driver の操作の UI テストはいつもテストの driver (`Clock::Virtual`) の上で流す。本物の driver の振る舞いは OS で変わるので、Rust のテストで確かめる。`_within` の期限は正の値か、データのないストリームの 0 以下の値で書く。データのあるストリームの 0 以下の期限は、待ち始める前に読みが終わったかで結果と `completions` が seed によって変わる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)
+  - `tls/`: `Std.Tls` のクライアント。相手はテストの driver の `tls.localhost` と `tls-cut.localhost` の終端器で、平文の側はプログラムの中の `Net` の server のタスクである ([VM](../spec/vm.md) の「時計と driver」)。終端器の証明書は `eml_tls` の `fixtures` にあり、その CA は `fixtures/gen.sh` が `run/tls/ca.pem` と `run-fail/tls/ca.pem` に写す。プログラムは `Fs.read_text "ca.pem"` で読み、`Tls.connect_with_ca` か `Tls.wrap_with_ca` に渡す。`par/` や `async/` と違って seed では流さない。seed で流す run は `completions` を比べるが (下の「seed で流す」)、終端器が1回に汲む平文の量は決着の順で変わり、TLS のレコードの切れ目、`Net` の読みの回数、`completions` がそれに従うためである。出力は、どのスケジュールでも同じになるように書く。閉じる server のタスクは、閉じる前にその接続で読むか書くかする。そうしないと、クライアントが handshake の途中で EOF を読むかどうかがスケジュールで決まる。読みも書きもせずに閉じるテストは、受けと閉じを1つのタスクで書く ([VM](../spec/vm.md) の「時計と driver」)
   - `scripts/`: 5本のスクリプト (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`)。どれもディレクトリのテストで、入力は `main.args`、`main.stdin` と隣のファイルで与える。1回の起動で主な経路を通す。`deploy` のほかは、同じ処理を Python で書いたもの (`bench/scripts/<名前>.py`) と標準出力と終了コードが一致することを `bench/scripts/compare.sh --fixture <名前>` で確かめてから、スナップショットを受け入れる。UI テストで固定しない経路 (ほかのフラグ、空の入力、誤りの経路) も、`bench/scripts/compare.sh <名前> 引数…` で Python の実装と比べて確かめる ([計測の基準](benchmarks.md) の「スクリプトの計測」)
   - `runtime/`: 実装の性質を確かめるテスト。メモリの解放、スタックの深さ、合流のブロック (`join_points.em`)、末尾呼び出し、部分を共有する型 (`shared_types_*.em`。木として書き下すと列の長さの指数の大きさになる型を、長さ40の列で作る)
 - 部分を共有する型の扱いが指数の時間に戻ると、`runtime/shared_types_*.em` は、終わらないかメモリを使い尽くす形で現れ、テストの失敗としては報告されない。`ui::run` は `run/` のファイルをすべて1つのテストで流すので、1つのファイルが終わらないとテスト全体が止まる。そのファイルの名前は、ハーネスが 10 秒を超えたところで標準エラーに出す (上の UI テストの項目)。nextest は 60 秒でテストを止めて失敗にし、その標準エラーを見せる (「性能のテスト」)
@@ -473,11 +474,15 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 結果の整形 (`eml_cli::pretty`) も端末に依存しない純粋な関数なので、`crates/eml_cli/tests/pretty.rs` が文字列と幅を渡して確かめる。整形の規則の各項目、10,000 文字で切ること、5,000 段の入れ子の括弧を再帰なしで整えることを確かめる。
 
+`crates/eml_cli/tests/tls.rs` は、本物の driver の上で `Std.Tls` を動かす唯一のテストである。テストのスレッドがループバックに `eml_tls::Conn` のサーバーを立て、`Clock::Real` の run の `Tls.connect_with_ca` が handshake、1行の往復、close_notify の後の EOF、`Tls.close` まで進むことを確かめる。`cfg(all(unix, feature = "tls"))` の下だけで組む。Windows の本物の driver はソケットを扱わないためである。`eml_tls` には、dev-dependency でなく feature `tls` が足す依存として届く (「OS ごとのテスト」)。
+
 ## OS ごとのテスト
 
 テストは macOS、Linux (x86_64 と aarch64)、Windows の3つの OS で流す。Windows で対応する target は `x86_64-pc-windows-msvc` だけで、`x86_64-pc-windows-gnu` (MinGW) は対応せず、流さない。テストは移植できるのが既定である。Windows での違いが処理系の側にあるなら、ソースを直すかテストを移す。
 
 開発機の OS で組まれないコード (`cfg(windows)` や `cfg(unix)` の部分) は、`nix develop .#cross` の clippy で型を検査する。この devShell の toolchain は、ふだんと同じバージョンに `x86_64-pc-windows-msvc`、`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu` の `rust-std` を足したものである。link はできないので、流すのは clippy だけで、テストは CI の各 OS のジョブで流す。build の置き場所は `target/cross` で、ふだんの `target/` と分ける。
+
+`eml_tls` は aws-lc-sys を組み、そのために対象の C のツールチェーンが要る。`.#cross` の devShell にはないので、この clippy は `eml_tls` を除き、`tls` を外した形で流す。Linux の2つの target も同じフラグである。`tls` を外した側のコードは、feature の組み合わせの clippy の行が検査する。`eml_tls` そのものは、CI のどの OS でも clippy とテストにかける。C の暗号を組む crate を dev-dependency に持ってよいのは `eml_tls` だけで、ほかの crate のテストは、optional の依存を `cfg(feature = "tls")` の下で通して `eml_tls` に届く。CI はこの決まりを `cargo tree` で確かめる (「feature の組み合わせの確認」)。
 
 ### 新しい対象で落ちたテストの仕分け
 
@@ -573,19 +578,32 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ## feature の組み合わせの確認
 
-ワークスペースの `cargo clippy --all-targets` は、各 crate を既定の feature でしか検査しない。`eml_cli` と `eml_test_support` の feature や、feature で切り替えるコードを変えたときは、既定でない組み合わせの lib も検査する。組み合わせは、`eml_cli` の feature なし、`types`、`core` と、`eml_test_support` の feature なし、`hir`、`types`、`core` の7つで、どれも `cargo clippy -p <crate> --no-default-features [--features <feature>] -- -D warnings` で流す。テストと bin は `run` を前提にするので、`--all-targets` は付けない。上流の crate のテストが下流の crate を組み立てないことは、`cargo tree -p eml_hir -e normal,dev` と `cargo tree -p eml_types -e normal,dev` に下流の段階の crate が出ないことで確かめる。
+ワークスペースの `cargo clippy --all-targets` は、各 crate を既定の feature でしか検査しない。`eml_cli` と `eml_test_support` の feature や、feature で切り替えるコードを変えたときは、既定でない組み合わせの lib も検査する。組み合わせは、`eml_cli` の feature なし、`types`、`core` と、`eml_test_support` の feature なし、`hir`、`types`、`core` の7つに、`eml_cli` の `--no-default-features --features run` (lib、`tls` なし) と、`-p eml_io -p eml_vm --all-targets` (`tls` なし、テストも含む) を足した9つである。前の7つは `cargo clippy -p <crate> --no-default-features [--features <feature>] -- -D warnings` で流す。テストと bin は `run` を前提にするので、`--all-targets` は付けない。上流の crate のテストが下流の crate を組み立てないことは、`cargo tree -p eml_hir -e normal,dev` と `cargo tree -p eml_types -e normal,dev` に下流の段階の crate が出ないことで確かめる。
+
+`tls` は `eml_cli` の既定で有効になり、`eml_vm/tls`、`eml_io/tls` の順に伝わる。ワークスペース全体の実行では feature が統一されて `eml_io` と `eml_vm` の `tls` も有効になるが、`-p eml_io` や `-p eml_vm` で選ぶと無効になる。この2つの crate の `tls` ありのテストだけを流すには `cargo nextest run -p eml_io -p eml_vm --features eml_io/tls,eml_vm/tls` を使う。`cargo test -p eml_cli --no-default-features --features run` は対応しない。UI テストが `tls` を前提にするためである。
+
+CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で配線を守る。
+
+- `cargo tree --workspace -e features -i eml_io` に `eml_io feature "tls"` が出る。ワークスペースの実行で `eml_io` の `tls` が有効になることを守る
+- 同じく `eml_vm feature "tls"` が出る。`eml_vm` の側を守る
+- `cargo tree -p eml_vm -p eml_io -e normal,dev,build --target all` に `eml_tls`、`aws-lc`、`ring v` が出ない。`eml_vm` だけを選ぶ Miri と ASan に C の暗号が入らないことを守る
+- `.#cross` の clippy と同じ選び方 (`--workspace --exclude eml_tls --no-default-features --features eml_cli/run,eml_test_support/run`) でも同じ3つが出ない。`eml_tls` を除いた clippy が C のツールチェーンなしで組めることと、`eml_tls` 以外の crate が C の暗号を組む dev-dependency を持たないことを守る
+
+`grep -c` は0件で exit 1 を返すが、`test "$(…)"` の中では段を落とさない。
+
+`tls` を外した処理系の振る舞いのテストは、`eml_io` と `eml_vm` の結合テストの `mod tls_off` に置く。ワークスペースの実行では feature の統一で `tls` が有効になり、このモジュールは組まれない。そこで CI の段「cargo nextest run without tls」が `cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::)'` で別に流す。`tls_off` のモジュールは `cfg(not(feature = "tls"))` だけで分け、OS では分けない。nextest は何も合わない filter を exit 4 で落とすので、この段はモジュールの名前を変えたことも見つける。
 
 ## CI
 
 `.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の5つのジョブを流す。
 
-- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる。ubuntu-24.04 では、同じビルドで時間の検査 (「性能のテスト」) も流す
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls` を外した `tls_off::` のテスト、既定でない feature の clippy (「feature の組み合わせの確認」の9つ) と、段「feature resolution of tls」の `cargo tree` の検査を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる。ubuntu-24.04 では、同じビルドで時間の検査 (「性能のテスト」) も流す
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 - `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::` と `signal::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
 
-CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
+CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
 
 アクションは commit の SHA で固定し、バージョンの名前をコメントに書く。runner の image は名前で固定し、上げるのは手で行う。nix のストアはキャッシュしない。install-nix-action には `GITHUB_TOKEN` を渡し、`github:` の input の取得が率の制限に当たらないようにする。token は nix.conf に入ってジョブの中で動くものから読めるが、権限は `contents: read` だけで、ジョブとともに切れるので受け入れる。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
 
@@ -635,6 +653,7 @@ cargo nextest run -j 1                               # ふだんの実行の条�
 cargo nextest run --profile timing -j 1              # CI の時間の検査 (SLOW の時間を過ぎたテストを失敗にする。性能のテスト)
 cargo nextest run -p eml_syntax --test integration parser::empty_file    # 1つのテスト
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'          # UI テスト
+cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::)'               # tls を外した振る舞い (ワークスペースの実行では eml_cli の既定で tls が有効になる。feature の組み合わせの確認)
 EML_UI_FILTER=basics/hello.em cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # 1つの UI テストだけ流す
 EML_UI_FILTER=/par/ cargo nextest run -p eml_cli --test integration -E 'test(=ui::run) | test(=ui::run_fail)'   # par の UI テスト (逐次と2つの seed。seed で流す)
 cargo run -p eml_cli -- run --debug-heap --sched seeded:2026 tests/ui/run/par/nested.em   # seed の run の食い違いを再現する
@@ -642,7 +661,7 @@ cargo insta review                                   # スナップショット�
 cargo insta test --test-runner nextest --accept      # テストを流し、スナップショットを受け入れる
 cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
-nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # Windows の target の clippy (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu。OS ごとのテスト)
+nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
 nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: と signal:: も。eml_io の検証)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
@@ -661,5 +680,5 @@ nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -
 cargo verus verify -p eml_rt                                                                # Verus の証明
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')                         # eml_rt の verus! の中の書式
 bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)
-cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でない feature (なし、types、core。eml_test_support は hir も)
+cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でない feature (なし、types、core、run (tls なし)。eml_test_support は hir も。eml_io と eml_vm は --all-targets で tls なし)
 ```

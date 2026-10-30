@@ -11,4 +11,6 @@ mod pretty;
 mod repl;
 mod std_invariants;
 mod terminal;
+#[cfg(all(unix, feature = "tls"))]
+mod tls;
 mod ui;

@@ -53,6 +53,7 @@ pub const STD: &[(&str, &str)] = &[
     ("Atomic.em", include_str!("../../../std/Atomic.em")),
     ("Net.em", include_str!("../../../std/Net.em")),
     ("Signal.em", include_str!("../../../std/Signal.em")),
+    ("Tls.em", include_str!("../../../std/Tls.em")),
 ];
 
 /// Prelude のソース。標準ライブラリの Prelude を差し替えるテストが、本文に宣言を足すのに使う。

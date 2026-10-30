@@ -143,13 +143,18 @@ impl Network {
         if self.listeners[&listener].backlog.len() >= BACKLOG {
             return Ok(Connection::Pending);
         }
-        let client_port = self
-            .free_port()
-            .ok_or_else(|| io::Error::other("no free port"))?;
-        let (client_end, server_end) = self.connected_ends(client_port);
+        let (client_end, server_end) = self.pair()?;
         let listener = self.listeners.get_mut(&listener).expect("a listening port");
         listener.backlog.push_back(server_end);
         Ok(Connection::Connected { client_end })
+    }
+
+    /// 空いているポートを振った端の対を作る。1つ目がポートを持つ接続した側の端である。
+    pub(super) fn pair(&mut self) -> io::Result<(IoHandle, IoHandle)> {
+        let port = self
+            .free_port()
+            .ok_or_else(|| io::Error::other("no free port"))?;
+        Ok(self.connected_ends(port))
     }
 
     /// backlog から接続を1つ受け、受ける側の端と接続した側のポートを返す。backlog が空なら `None` である。

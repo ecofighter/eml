@@ -255,6 +255,8 @@ table! {
         // driver のリスナーとストリームのハンドルを持つ `Foreign` (docs/spec/stdlib.md の「`Std.Net`」)
         NetTcpListener => type_row("Std.Net.TcpListener", Lin, Repr::Obj),
         NetTcpStream => type_row("Std.Net.TcpStream", Lin, Repr::Obj),
+        // rustls の接続と平文の列を持つ `Foreign`。I/O は持たない (docs/spec/stdlib.md の「`Std.Tls`」)
+        TlsConn => type_row("Std.Tls.Conn", Lin, Repr::Obj),
     }
 }
 
@@ -1492,6 +1494,118 @@ table! {
             Obj,
             Lin,
             Purity::Effectful,
+        ),
+        // TLS の状態のインターフェース (docs/spec/stdlib.md の「`Std.Tls`」)。どれも待たないので普通の extern の行で、
+        // 投げるのは `client_raw` だけである。組を返す行は `Conn` を借りる
+        TlsClientRaw => kinded(
+            "Std.Tls.client_raw",
+            &[Obj, Obj],
+            &[Unr, Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        TlsPushTls => writing("Std.Tls.push_tls"),
+        TlsPushEof => kinded(
+            "Std.Tls.push_eof",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        TlsPullTls => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Tls.pull_tls",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        TlsWritePlain => writing("Std.Tls.write_plain"),
+        TlsReadPlain => borrowing(
+            &[false, true],
+            FunctionRow {
+                with_arg: Some(1),
+                ..kinded(
+                    "Std.Tls.read_plain",
+                    &[Obj, Obj],
+                    &[Unr, Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        TlsStatus => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Tls.status",
+                    &[Obj],
+                    &[Lin],
+                    Int,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        TlsErrorMessage => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Tls.error_message",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        TlsSendCloseNotify => kinded(
+            "Std.Tls.send_close_notify",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        TlsLineReady => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Tls.line_ready",
+                    &[Obj],
+                    &[Lin],
+                    Int,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        TlsTakeLine => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Tls.take_line",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
         ),
     }
 }

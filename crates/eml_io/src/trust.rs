@@ -26,6 +26,7 @@ const FILES: &[(&str, &str)] = &[
     ("sys/iocp.rs", include_str!("sys/iocp.rs")),
     ("test.rs", include_str!("test.rs")),
     ("test/net.rs", include_str!("test/net.rs")),
+    ("test/tls.rs", include_str!("test/tls.rs")),
 ];
 
 /// 調べないファイル。この module だけである。

@@ -18,11 +18,15 @@ required-features = ["run"]
 
 # `eml_test_support` はこの crate でパイプラインを組むので、段階ごとに feature を分ける。各 crate のテストは自分より
 # 下流の crate を組み立てずに済む (docs/implementation/testing.md)。
+# tls は run に足す Std.Tls で、外すと Std.Tls の腕が NotAvailable を投げる。`dep:eml_tls` は src/ では使わず、
+# 本物のソケットの上の結合テスト (tests/tls.rs) がサーバーを立てるためにある。dev-dependency にしない理由は
+# docs/implementation/testing.md の「OS ごとのテスト」にある。
 [features]
-default = ["run"]
+default = ["run", "tls"]
 types = ["dep:eml_types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
 run = ["core", "dep:eml_vm", "dep:libc", "dep:rustyline", "dep:windows-sys"]
+tls = ["run", "eml_vm/tls", "dep:eml_tls"]
 
 [dependencies]
 clap.workspace = true
@@ -31,6 +35,7 @@ eml_diagnostics.workspace = true
 eml_hir.workspace = true
 eml_lir = { workspace = true, optional = true }
 eml_syntax.workspace = true
+eml_tls = { workspace = true, optional = true }
 eml_types = { workspace = true, optional = true }
 eml_vm = { workspace = true, optional = true }
 rustyline = { workspace = true, optional = true }

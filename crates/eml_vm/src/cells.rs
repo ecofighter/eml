@@ -546,33 +546,12 @@ impl NetStream {
     /// バイトが読みにどう分かれて届いたかによらない (docs/spec/stdlib.md の「`Std.Net`」)。どちらでもなければ `None` で
     /// ある。どの場合も残りを変えない。行は `take_line_text` が文字列に写して返したことにする。
     fn find_line(&self, from: usize, eof: bool) -> Option<Found> {
-        let pending = self.pending();
-        // 改行のない周が大半なので、まず語ごとに比べる `contains` で探し、あるときだけ位置を求める
-        let newline = if pending[from..].contains(&b'\n') {
-            pending[from..].iter().position(|&b| b == b'\n')
-        } else {
-            None
-        };
-        let (content, n) = match newline {
-            Some(i) => {
-                let end = from + i;
-                let cr = end > 0 && pending[end - 1] == b'\r';
-                (end - usize::from(cr), end + 1)
-            }
-            None if eof => (pending.len(), pending.len()),
-            None => return None,
-        };
-        Some(if content > LINE_LIMIT {
-            Found::TooLong
-        } else {
-            Found::Line(n)
-        })
+        find_line(self.pending(), from, eof)
     }
 
-    /// 改行のまだ来ない行の中身の、今わかっている長さ。最後の `\r` は `\r\n` の始まりかもしれないので数えない。
+    /// 改行のまだ来ない行の中身の、今わかっている長さ。
     fn open_line_len(&self) -> usize {
-        let pending = self.pending();
-        pending.len() - usize::from(pending.last() == Some(&b'\r'))
+        open_line_len(self.pending())
     }
 
     /// 返したバイトを詰め、buffer の長さの後ろの空きが `MIN_ROOM` バイト以上あれば、そのうち `READ_ROOM` バイトまでを
@@ -2738,7 +2717,7 @@ pub(crate) fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHan
 }
 
 /// 1回の読みに貸す空きのバイト数の上限で、広げたときに貸すバイト数 (docs/spec/vm.md の「操作の記録」)。
-const READ_ROOM: usize = 65_536;
+pub(crate) const READ_ROOM: usize = 65_536;
 
 /// 読みに貸す空きの下限。これより少ない空きは空きなしとみなす。確保器が長さを語に切り上げた余り (0〜7 バイト) に、
 /// 読む量を決めさせないためである (docs/spec/vm.md の「操作の記録」)。
@@ -2751,14 +2730,47 @@ fn grown_capacity(len: usize) -> usize {
 }
 
 /// `read_line` の1行のバイト数の上限 (docs/spec/stdlib.md の「`Std.Net`」)。
-const LINE_LIMIT: usize = 1_048_576;
+pub(crate) const LINE_LIMIT: usize = 1_048_576;
 
 /// ストリームの buffer の残りに見つけた最初の行。
-enum Found {
+pub(crate) enum Found {
     /// 終わりの改行を含めた行のバイト数。
     Line(usize),
     /// 行の中身が `LINE_LIMIT` バイトを超えた。
     TooLong,
+}
+
+/// `pending` の `from` バイト目から後に改行があるか、`eof` なら、`pending` の最初の行の、終わりの改行を含めた長さを返す。
+/// `eof` で改行がなければ、`pending` のすべてが行である (EOF の前の最後の行)。行の中身 (終わりの `\n` か `\r\n` を
+/// 除いたバイト、EOF ではすべて) が `LINE_LIMIT` バイトを超えれば `TooLong` である。上限を中身の長さで決めるので、
+/// 結果はバイトが読みにどう分かれて届いたかによらない (docs/spec/stdlib.md の「`Std.Net`」)。どちらでもなければ `None`
+/// である。
+pub(crate) fn find_line(pending: &[u8], from: usize, eof: bool) -> Option<Found> {
+    // 改行のない周が大半なので、まず語ごとに比べる `contains` で探し、あるときだけ位置を求める
+    let newline = if pending[from..].contains(&b'\n') {
+        pending[from..].iter().position(|&b| b == b'\n')
+    } else {
+        None
+    };
+    let (content, n) = match newline {
+        Some(i) => {
+            let end = from + i;
+            let cr = end > 0 && pending[end - 1] == b'\r';
+            (end - usize::from(cr), end + 1)
+        }
+        None if eof => (pending.len(), pending.len()),
+        None => return None,
+    };
+    Some(if content > LINE_LIMIT {
+        Found::TooLong
+    } else {
+        Found::Line(n)
+    })
+}
+
+/// 改行のまだ来ない行の中身の、今わかっている長さ。最後の `\r` は `\r\n` の始まりかもしれないので数えない。
+pub(crate) fn open_line_len(pending: &[u8]) -> usize {
+    pending.len() - usize::from(pending.last() == Some(&b'\r'))
 }
 
 /// 行の連鎖の読みが終わった後の次の段階。
@@ -3555,7 +3567,7 @@ impl IoDriver for NoDriver {
 
 /// 出力を捨てる Host の上の、検査モードの `Ctx`。
 #[cfg(test)]
-fn test_ctx() -> Ctx<eml_rt::Checked> {
+pub(crate) fn test_ctx() -> Ctx<eml_rt::Checked> {
     mode_ctx()
 }
 
