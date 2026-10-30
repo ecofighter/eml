@@ -780,12 +780,16 @@ fn a_cancelled_fast_path_loop_stops_at_its_next_wait() {
 
 /// 2つ目の受けは、始めたタスクの接続が先に走ったかで、受け付けで終わるか待つかが変わる。その後のループは、操作の
 /// 予算を越えるまで書き、`check_cancelled`、読みを繰り返す。`io_wait` はどの道でも待ちを1つだけ数えるので、予算の切れる
-/// 位置は `check_cancelled` が譲る `yield_now` の待ちの数に表れる。予算は操作が終わっていたかによらず待ちごとに1つ使い、
+/// 位置は `check_cancelled` が譲る `yield_now` の待ちの数に表れる。予算は操作が終わっていたかによらず待ちごとに使い、
 /// 戻す時点もプログラムで決まるので、その数も `parks` も逐次と seed の run で同じである。書きを1つ足して待ちの数の偶奇を
-/// 変えた形も流す (docs/spec/stdlib.md の「操作の予算」)。
+/// 変えた形と、ループの書きを予算を2つ使う 1000 バイトにした形も流す (docs/spec/stdlib.md の「操作の予算」)。
 #[test]
 fn the_budget_runs_out_at_the_same_point_in_every_schedule() {
-    for extra in [0, 1] {
+    let writes = [
+        "let a = Net.write \"x\" a",
+        "let (_, a) = Net.write_bytes (Bytes.make 1000 'x'u8) a",
+    ];
+    for (extra, write) in [(0, writes[0]), (1, writes[0]), (0, writes[1])] {
         for n in [61, 62, 200] {
             let writes = "  let a = Net.write \"y\" a\n".repeat(extra);
             let src = format!(
@@ -806,7 +810,7 @@ spin_checked n buf a b =
     Net.close a
     Net.close b
   else
-    let a = Net.write \"x\" a
+    {write}
     Async.check_cancelled ()
     let (buf, b) = Net.read_chunk (Bytes.truncate 0 buf) b
     spin_checked (n - 1) buf a b
@@ -828,9 +832,55 @@ spin_checked n buf a b =
                     .parks
             })
             .collect();
-            assert_eq!(parks, [parks[0]; 4], "extra {extra}, n {n}");
+            assert_eq!(parks, [parks[0]; 4], "extra {extra}, {write}, n {n}");
         }
     }
+}
+
+/// 操作の予算を使い切った終わった操作の待ちは、保留の操作があれば OS を1回見る。走れるタスクがなければ譲らずに
+/// 続け、待ちは譲るときと同じく1つ数える。受けを待つタスクが保留の操作を持つ間に、本体が速い道だけで `n` 周回る。
+/// 63 周の待ちは 126 回で予算が残り、64 周の 128 回目で使い切る。64 周の run だけ `wait` が1回多く、`parks` は
+/// 1周につき2つずつ増える (docs/spec/stdlib.md の「操作の予算」、docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_spent_budget_looks_at_the_os_and_goes_on_alone() {
+    let run = |n: u32| {
+        let src = format!(
+            "{SPIN_IO}  let l2 = Net.listen \"127.0.0.1\" 0
+  let (port2, l2) = Net.local_port l2
+  let t = Async.start (fn () ->
+    let (s, l2) = Net.accept l2
+    Net.close_listener l2
+    Net.close s)
+  Async.yield_now ()
+  spin_io {n} counter (Bytes.empty ()) a b
+  let c = Net.connect \"127.0.0.1\" port2
+  Async.await t
+  Net.close c)
+"
+        );
+        let log = Arc::new(std::sync::Mutex::new(Log::default()));
+        let driver = Recorder {
+            inner: eml_io::TestDriver::new(None),
+            log: Arc::clone(&log),
+        };
+        let (host, _) = capture_host(Default::default());
+        let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
+            .with_driver(Box::new(driver));
+        let loaded = machine.load(&eml_test_support::lir(src.as_str())).unwrap();
+        let finished = machine
+            .run(loaded.entry)
+            .unwrap_or_else(|error| panic!("{error}"));
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
+        let waits = log.lock().unwrap().waits;
+        (waits, finished.stats.parks, finished.stats.yields)
+    };
+    let (w62, p62, y62) = run(62);
+    let (w63, p63, y63) = run(63);
+    let (w64, p64, y64) = run(64);
+    assert_eq!((w63 - w62, w64 - w63), (0, 1));
+    assert_eq!((p63 - p62, p64 - p63), (2, 2));
+    // 続けた周は `reschedule` を perform しないので、yield は1周の分しか増えない
+    assert_eq!(y64 - y63, y63 - y62);
 }
 
 /// 1つのタスクが自分で待ち受け、接続し、受け、`hi` を書いてから、`buf` を buffer にして読む。返すのは出力と、

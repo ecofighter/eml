@@ -53,6 +53,9 @@ pub(crate) const CANCELLED: i64 = 1;
 pub(crate) const IO_CANCELLED: i64 = 5;
 /// 待たずに済む速い道の予算 (docs/spec/stdlib.md の「操作の予算」)。
 const BUDGET: u32 = 128;
+/// 書きの待ちが予算を1つ余分に使うバイト数。64 KiB の書き1回で予算を使い切り、同じ worker の読み手を起こす
+/// (docs/spec/stdlib.md の「操作の予算」)。
+const WRITE_UNIT: usize = 512;
 /// 使い切った添字の generation。番号には出さず、この generation の添字は空けない。一周させると、古い `Chan a` の値が
 /// 別の型の品物を持つ channel を指しうるからである (docs/spec/vm.md の「セルと登録表」)。
 const RETIRED: u32 = u32::MAX;
@@ -306,7 +309,10 @@ struct OpRecord {
 /// 記録の操作の種類。読みの `Transfer` の完了だけが、外の書いた長さを buffer に確定する。
 enum OpKind {
     Read,
-    Write,
+    /// `len` はプログラムが渡した buffer の長さで、待ちの予算の重みになる。
+    Write {
+        len: usize,
+    },
     /// `prefix` は誤りの文言の前に付ける `cannot listen on {host}:{port}` である。
     Listen {
         prefix: Box<str>,
@@ -330,9 +336,20 @@ impl OpKind {
     fn prefix(&self) -> &str {
         match self {
             OpKind::Read | OpKind::Line { .. } => "cannot read the stream",
-            OpKind::Write => "cannot write to the stream",
+            OpKind::Write { .. } => "cannot write to the stream",
             OpKind::Listen { prefix } | OpKind::Connect { prefix } => prefix,
             OpKind::Accept => "cannot accept a connection",
+        }
+    }
+
+    /// 待ちが使う予算。書きは長さで重くする。長さはプログラムが決めるので、予算の切れる位置はスケジュールに
+    /// よらない。読めた量はスケジュールで変わるので、読みは重くしない (docs/spec/stdlib.md の「操作の予算」)。
+    fn cost(&self) -> u32 {
+        match self {
+            OpKind::Write { len } => u32::try_from(len / WRITE_UNIT)
+                .unwrap_or(u32::MAX)
+                .saturating_add(1),
+            _ => 1,
         }
     }
 }
@@ -384,7 +401,7 @@ impl Taken {
 /// `op_ready` の結果。続ける、待つ、先に譲るの3つで、std の包みが分ける (docs/spec/vm.md の「操作の記録」)。
 const FAST_GO: i64 = 0;
 const FAST_WAIT: i64 = 1;
-const FAST_YIELD: i64 = 2;
+pub(crate) const FAST_YIELD: i64 = 2;
 
 /// `op_outcome` の結果の番号 (docs/spec/vm.md の「操作の記録」)。成功の完了は期限と競ってもデータである。
 pub(crate) const OUTCOME_OK: i64 = 0;
@@ -1532,10 +1549,10 @@ impl Registry {
         Ok(point)
     }
 
-    /// 速い道の予算を1つ使う。使い切ったら真を返し、再開まで真のままである。
-    pub(crate) fn spend_budget(&mut self, me: CellRef) -> Result<bool, CellFault> {
+    /// 速い道の予算を `cost` だけ使う。残りより多ければ残りをすべて使う。使い切ったら真を返し、再開まで真のままである。
+    pub(crate) fn spend_budget(&mut self, me: CellRef, cost: u32) -> Result<bool, CellFault> {
         let task = self.task_mut(me)?;
-        task.budget = task.budget.saturating_sub(1);
+        task.budget = task.budget.saturating_sub(cost);
         Ok(task.budget == 0)
     }
 
@@ -1924,7 +1941,7 @@ impl Registry {
             cap: bytes.len(),
         };
         let record = OpRecord {
-            kind: OpKind::Write,
+            kind: OpKind::Write { len: raw.cap },
             phase: OpPhase::Transfer,
             worker,
             buf: Some(buf),
@@ -2129,8 +2146,9 @@ impl Registry {
     }
 
     /// 速い道の `Std.Async.op_ready`。タスク `me` が token `token` の操作を待たずに続けてよいかを答える。どの待ちでも
-    /// 予算を1つ使う。記録が終わっていて取り消しの地点が投げなければ、予算が残れば待ちを1つ数えて `FAST_GO`、切れれば
-    /// 数えずに `FAST_YIELD` を返す。ほかは `FAST_WAIT` で、待つ側の `park_io` か `park_io_until` が今の規則で数える。
+    /// 予算を使い、書きは長さに応じて多く使う。記録が終わっていて取り消しの地点が投げなければ、予算が残れば待ちを
+    /// 1つ数えて `FAST_GO`、切れれば数えずに `FAST_YIELD` を返す。`FAST_YIELD` の後は、呼ぶ側が OS を見てから譲るか
+    /// `go_on` で続けるかを決める。ほかは `FAST_WAIT` で、待つ側の `park_io` か `park_io_until` が今の規則で数える。
     /// 地点を読むだけで、取り消しは数えない (docs/spec/vm.md の「操作の記録」)。
     pub(crate) fn op_ready(&mut self, token: i64, ms: i64, me: CellRef) -> Result<i64, CellFault> {
         let worker = self.task_mut(me)?.worker;
@@ -2140,9 +2158,11 @@ impl Registry {
             return Err(CellFault::Internal("an op is awaited twice"));
         }
         let done = matches!(record.phase, OpPhase::Done(..));
-        // 予算は、操作が受け付けで終わったかによらず待ちごとに1つ使う。予算の切れる位置をプログラムだけで決めるためで
-        // ある。使い切った待ちは、park するか先に譲るかして、再開で予算を戻す (docs/spec/stdlib.md の「操作の予算」)
-        let spent = self.spend_budget(me)?;
+        let cost = record.kind.cost();
+        // 予算は、操作が受け付けで終わったかによらず待ちごとに使う。予算の切れる位置をプログラムだけで決めるためで
+        // ある。使い切った待ちは、park するか、先に譲るか、譲らずに続けるかして、予算を戻す
+        // (docs/spec/stdlib.md の「操作の予算」)
+        let spent = self.spend_budget(me, cost)?;
         if !done || self.point(me)? {
             return Ok(FAST_WAIT);
         }
@@ -2156,6 +2176,19 @@ impl Registry {
             self.task_mut(me)?.fast_yield = true;
             return Ok(FAST_YIELD);
         }
+        self.stats.parks += 1;
+        Ok(FAST_GO)
+    }
+
+    /// `op_ready` が `FAST_YIELD` を返した後、OS を見ても走れるタスクがなかった。譲らずに続けるので、譲る印を下ろし、
+    /// 譲った待ちの再開と同じく予算を戻して、続く `reschedule` の代わりに待ちを1つ数える。譲っても続けても予算の
+    /// 切れる位置と `parks` が同じになるためである (docs/spec/stdlib.md の「操作の予算」)。
+    pub(crate) fn go_on(&mut self, me: CellRef) -> Result<i64, CellFault> {
+        let task = self.task_mut(me)?;
+        if !std::mem::take(&mut task.fast_yield) {
+            return Err(CellFault::Internal("a task goes on without a fast yield"));
+        }
+        task.budget = BUDGET;
         self.stats.parks += 1;
         Ok(FAST_GO)
     }
@@ -2386,7 +2419,7 @@ impl Registry {
                 })?;
                 Ok(n)
             }
-            (OpPhase::Transfer, OpKind::Write, Ok(Done::Size(n))) => Ok(n),
+            (OpPhase::Transfer, OpKind::Write { .. }, Ok(Done::Size(n))) => Ok(n),
             // 外が書いたバイトは、取り消しを頼んだ記録でもストリームの buffer に確定する。行の途中で止めても、
             // 読んだバイトを次の読みに残すためである (docs/spec/stdlib.md の「`Std.Net`」)
             (OpPhase::Transfer, &OpKind::Line { filled, .. }, result) => {
@@ -2583,7 +2616,7 @@ impl Registry {
             return Err(CellFault::Internal("an op is taken after it failed"));
         }
         match taken.buf {
-            Some(buf) if matches!(taken.kind, OpKind::Read | OpKind::Write) => Ok(buf),
+            Some(buf) if matches!(taken.kind, OpKind::Read | OpKind::Write { .. }) => Ok(buf),
             _ => Err(CellFault::Internal("an op is taken as another kind of op")),
         }
     }
@@ -2900,7 +2933,7 @@ impl Registry {
     /// タスクの中なら予算を1つ使い、`yields` が真で使い切ったら真を返す。タスクの外では予算を使わない。
     fn spend(&mut self, me: Option<CellRef>, yields: bool) -> Result<bool, CellFault> {
         match me {
-            Some(me) => Ok(self.spend_budget(me)? && yields),
+            Some(me) => Ok(self.spend_budget(me, 1)? && yields),
             None => Ok(false),
         }
     }
@@ -3549,7 +3582,19 @@ fn submit_x(
     driver: &mut NoDriver,
     worker: u32,
 ) -> i64 {
-    let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"x");
+    submit_bytes(registry, ctx, driver, worker, b"x")
+}
+
+/// `bytes` を書く操作を出し、token を返す。
+#[cfg(test)]
+fn submit_bytes(
+    registry: &mut Registry,
+    ctx: &mut Ctx<eml_rt::Checked>,
+    driver: &mut NoDriver,
+    worker: u32,
+    bytes: &[u8],
+) -> i64 {
+    let buf = unsafe { ctx.heap_mut() }.alloc_bytes(bytes);
     let stream = net_stream(ctx);
     registry
         .submit_write(ctx, driver, worker, 0, buf, stream)
@@ -3586,8 +3631,8 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }
 
-/// `op_ready` はどの待ちでも予算を1つ使う。受け付けで終わった記録では、取り消しの地点が投げなければ、予算が残れば
-/// 待ちを1つ数えて続け、切れれば数えずに先に譲る。譲る待ちは続く `reschedule` が数える。終わっていない記録と、取り消しの
+/// `op_ready` はどの待ちでも予算を使い、1バイトの書きは1つ使う。受け付けで終わった記録では、取り消しの地点が
+/// 投げなければ、予算が残れば待ちを1つ数えて続け、切れれば数えずに先に譲る。譲る待ちは続く `reschedule` が数える。終わっていない記録と、取り消しの
 /// 地点が投げるときは待たせ、待ちも取り消しも数えない。待つ側の `park_io` が数えるためである
 /// (docs/spec/vm.md の「操作の記録」)。
 #[test]
@@ -3629,6 +3674,63 @@ fn op_ready_counts_a_wait_only_on_a_finished_op() {
     registry.in_flight = 0;
     registry.op_mut(CellRef::decode(pending)).unwrap().phase = OpPhase::Done(Ok(1), false);
     let taken = registry.take_op(&mut ctx, pending, 0).unwrap();
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 書きの待ちは、1 に長さを 512 で割った商を足しただけ予算を使い、残りより多ければ残りをすべて使う。64 KiB の書きは
+/// 1回で予算を使い切る。読みとほかの待ちは 1 だけ使う (docs/spec/stdlib.md の「操作の予算」)。
+#[test]
+fn a_write_spends_budget_by_its_length() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver {
+        finish_writes: true,
+        ..NoDriver::default()
+    };
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let mut spent = Vec::new();
+    for len in [0, 511, 512, 1500] {
+        let token = submit_bytes(&mut registry, &mut ctx, &mut driver, 0, &vec![1; len]);
+        assert_eq!(registry.op_ready(token, 0, me).unwrap(), FAST_GO);
+        spent.push(BUDGET - registry.task_mut(me).unwrap().budget);
+        registry.task_mut(me).unwrap().budget = BUDGET;
+        let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+        unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    }
+    assert_eq!(spent, [1, 1, 2, 3]);
+    let token = submit_bytes(&mut registry, &mut ctx, &mut driver, 0, &[1; 65536]);
+    assert_eq!(registry.op_ready(token, 0, me).unwrap(), FAST_YIELD);
+    assert_eq!(registry.task_mut(me).unwrap().budget, 0);
+    let taken = registry.take_op(&mut ctx, token, 0).unwrap();
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+}
+
+/// 予算を使い切った終わった操作の待ちが譲らずに続けると、譲った待ちの再開と同じく予算を戻し、`reschedule` の代わりに
+/// 待ちを1つ数える。譲る印のない続けは内部の誤りである (docs/spec/stdlib.md の「操作の予算」)。
+#[test]
+fn going_on_after_a_spent_budget_counts_the_wait_and_refills() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver {
+        finish_writes: true,
+        ..NoDriver::default()
+    };
+    let mut registry = Registry::new(Vec::new());
+    let scope = registry.open_root(None, None).unwrap();
+    let me = running_task(&mut registry, scope);
+    let done = submit_x(&mut registry, &mut ctx, &mut driver, 0);
+    registry.task_mut(me).unwrap().budget = 1;
+    assert_eq!(registry.op_ready(done, 0, me).unwrap(), FAST_YIELD);
+    assert_eq!(registry.stats.parks, 0);
+    assert_eq!(registry.go_on(me).unwrap(), FAST_GO);
+    let task = registry.task_mut(me).unwrap();
+    assert!(!task.fast_yield);
+    assert_eq!(task.budget, BUDGET);
+    assert_eq!(registry.stats.parks, 1);
+    assert!(matches!(registry.go_on(me), Err(CellFault::Internal(_))));
+    let taken = registry.take_op(&mut ctx, done, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }

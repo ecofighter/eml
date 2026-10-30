@@ -1962,7 +1962,7 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncSpendBudget => {
             let me = current_cell(task)?;
-            let b = sched.cells.spend_budget(me)?;
+            let b = sched.cells.spend_budget(me, 1)?;
             task.set_raw(dst, i64::from(b));
         }
         Extern::AsyncClaimScope => {
@@ -2065,9 +2065,18 @@ fn async_op<R: Exec>(
         Extern::AsyncOpReady => {
             // token は借りるだけで、組を作る後の `con` が返す
             let me = current_cell(task)?;
-            let step = sched
+            let mut step = sched
                 .cells
                 .op_ready(task.raw(arg(0)), task.raw(arg(1)), me)?;
+            // 予算を使い切った終わった操作の待ちは、OS を1回見て集める。受け付けで終わる書きを続ける書き手が、OS を
+            // 見ないと起きない同じ worker の読み手の先へ走り続けないためである。走れるタスクがなければ譲らずに続ける
+            // (docs/spec/stdlib.md の「操作の予算」、docs/spec/vm.md の「時計と driver」)
+            if step == cells::FAST_YIELD {
+                collect::<R>(code, ctx, task.depth_offset, sched, true)?;
+                if sched.ready.is_empty() {
+                    step = sched.cells.go_on(me)?;
+                }
+            }
             task.set_raw(dst, step);
         }
         Extern::AsyncParkIo => {

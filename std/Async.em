@@ -284,8 +284,8 @@ pub chan_wait_recv : Cell -> <IO, Async> Wake
 chan_wait_recv c = await_recv c
 
 -- `Std.Net` の待ち。`OpId` を作る公開の関数はないので、利用者が呼んでも渡せる値はない。操作が終わっていて取り消しの
--- 地点が投げなければ待たずに続け、予算が切れていれば列の後ろへ回ってから続ける。回る間の取り消しは次の地点で投げる
--- (docs/spec/vm.md の「操作の記録」)
+-- 地点が投げなければ待たずに続け、予算が切れて VM が譲ると答えれば列の後ろへ回ってから続ける。回る間の取り消しは
+-- 次の地点で投げる (docs/spec/vm.md の「操作の記録」)
 pub io_wait : OpId -> <IO, Async> (Wake, OpId)
 io_wait op =
   let (step, op) = op_ready op 0

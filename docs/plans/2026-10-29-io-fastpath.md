@@ -42,6 +42,7 @@
   - `write_bytes` が buffer を返すこと、書きの貸しに一意を求めず写しを 0 にすること (D-4、D-5、D-14)
   - 空きのループの 10 ms の上限を VM に置くこと、監視のスレッドを run の始めに起こすこと、集める地点が OS を見る頻度 (D-7、D-15、D-16)
   - 1操作あたりの確保を減らすこと (D-21)
+  - 同じ run の bulk の後退を直す、書きの重み、予算が切れたときの OS の確かめ、受け付けの `Readable` (D-22)
   - `eml run --stats`、`bench/net`、1点目と2点目の計測 (D-1、D-20)
   - roadmap に後の段を置き、付録3と付録4の要点を書き写すこと (T-0)
 - 含まないもの
@@ -160,7 +161,7 @@
 
 #### D-3: 終わった操作を待たない速い道と `RunStats`
 - 決定
-  - `IoDriver::submit` が `Submit::Done` を返した操作の記録は、`Done` の段階で生まれる。std の `io_wait` と `io_wait_until` は、記録が終わっていて取り消しの地点が投げないときは perform しない。予算を1つ使い、切れていれば `reschedule` してから (その `Wake` は見ない) `(Woke, op)` を返す。
+  - `IoDriver::submit` が `Submit::Done` を返した操作の記録は、`Done` の段階で生まれる。std の `io_wait` と `io_wait_until` は、記録が終わっていて取り消しの地点が投げないときは perform しない。予算を使い、切れていれば OS を1回見て集め、走れるタスクがあれば `reschedule` してから (その `Wake` は見ない)、なければ予算を戻してそのまま `(Woke, op)` を返す (D-22)。
   - 保留の操作の待ち (継続を預けて戻り、エントリで再開する) は変えない。ネイティブのコードと同じ形だからである。
   - `RunStats` の `parks` は `io_wait` と `io_wait_until` の呼び出しの数、`completions` は終わった driver の操作の数 (受け付けで終わった操作と集めた完了の和) にする。スケジュールで変わる数 (その場で終わった操作の数、集めた完了の数、切り替えの数) は `RunStats` に入れない。速い道は、テストの driver の `immediate()` と、Rust のテストの driver が持つ `wait` と `completions` の呼び出しの数と、本物の driver の計測で確かめる。
 - 理由
@@ -168,7 +169,7 @@
   - 速い道を VM の命令でなく eml の `if` にすると、取り消しの地点と予算の規則を std の1か所で書ける。
   - その場で終わるかはスケジュールで変わるので、`parks` と `completions` の意味を「頼んだ待ちの数」「終わった操作の数」にそろえれば seed によらない。driver を使う run では、VM の仕事の回数 (`evidence_steps`、`yields`、`rc_*`、`allocations`、`boxes` など) と `peak_stack` はスケジュールに従う。終わった操作の待ちは perform も切り替えもしないためである。スケジュールによらないのは、`eml_test_support::driver_independent` が比べる欄 (`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept`、`completions`) である。
   - 速い道は切り替えを 0 にするので、`Sequential` では走れる他のタスクが待たされうる。操作の予算は、同じ理由で `check_cancelled` に入っている仕組みである。
-  - 予算は、操作が終わっていたかによらず `io_wait` と `io_wait_until` の1回ごとに1つ使う。どの待ちも `parks` を1つだけ数える。終わった操作の待ちが予算を使い切ったときは、`op_ready` は数えずに 2 を返し、続く `reschedule` が数える。予算を使い切った待ちは譲り (終わっていない操作は park して、終わった操作は `reschedule` で)、その再開で予算を戻す。ほかに予算を戻すのは、始まるときと、操作の待ちでない再開のときだけである。操作の待ちが park するかはスケジュールで変わるので、終わった操作の待ちだけで予算を使ったり、park した待ちの再開で予算を戻したりすると、予算の切れる位置と、譲りが数える `parks` がスケジュールに依る。
+  - 予算は、操作が終わっていたかによらず `io_wait` と `io_wait_until` の1回ごとに使う。書きの待ちは 1 に長さを 512 で割った商を足した数 (残りより多ければ残りすべて)、ほかの待ちは 1 を使う (D-22)。どの待ちも `parks` を1つだけ数える。終わった操作の待ちが予算を使い切ったときは、`op_ready` は数えずに 2 を返し、続く `reschedule` が数える。予算を使い切った待ちは、終わっていない操作なら park して譲り、終わった操作なら OS を1回見て集めてから、走れるタスクがあれば `reschedule` で譲り、なければ予算を戻して譲らずに続け、`op_ready` が待ちを1つ数える。譲った待ちは再開で予算を戻す。ほかに予算を戻すのは、始まるときと、操作の待ちでない再開のときだけである。操作の待ちが park するかはスケジュールで変わるので、終わった操作の待ちだけで予算を使ったり、park した待ちの再開で予算を戻したりすると、予算の切れる位置と、譲りが数える `parks` がスケジュールに依る。
 - 退けた案
   - `RunStats` にその場で終わった数の欄を足す: スケジュールで変わる数を新しい欄として `RunStats` に足さない方針 (G-18) に反する。
   - 予算を使わず、`Normal` の横取りだけに任せる: `Sequential` で走れる他のタスクが飢える。
@@ -176,7 +177,7 @@
 - 影響の範囲: `Async.io_wait`、`io_wait_until`、`op_ready`、`Registry::record`、`submit_*`、両方の driver、`RunStats`。`park_io` の取り消しの道は変えない。
 - 見直す条件: ネイティブのコードの `Async` の入り口を作るとき (`jit-effects`)。
 - 守る規則
-  - G-18 MUST: `IoDriver::submit` が `Submit::Done` を返した操作の記録は `Done` の段階で生まれ、std の `io_wait` と `io_wait_until` は、記録が終わっていて取り消しの地点が投げないときは perform せず、予算を1つ使い、切れていれば `reschedule` (その `Wake` は見ない) してから `(Woke, op)` を返す。perform と完了の収集は `Pending` の操作にだけ起き、park と再開は `Pending` の操作と、予算を使い切った終わった操作の待ち (`reschedule` で譲る) にだけ起きる。予算は、操作が終わっていたかによらず `io_wait` と `io_wait_until` の1回ごとに1つ使う。どの待ちも `parks` を1つだけ数える。終わった操作の待ちが予算を使い切ったときは、`op_ready` は数えずに 2 を返し、続く `reschedule` が数える。予算を使い切った待ちは譲り (終わっていない操作は park して、終わった操作は `reschedule` で)、その再開で予算を戻す。ほかに予算を戻すのは、始まるときと、操作の待ちでない再開のときだけである。本物の driver とテストの driver は、受け付けの時点で決められる操作を `Done` で返す。`RunStats` の `parks` は `io_wait`/`io_wait_until` の呼び出しの数、`completions` は終わった driver の操作の数 (`Done` と集めた完了の和) で、どちらもスケジュールに依らない。スケジュールで変わる数を新しい欄として `RunStats` に足さない。driver を使う run では VM の仕事の回数と `peak_stack` がスケジュールに従い、`driver_independent` の欄は従わない。
+  - G-18 MUST: `IoDriver::submit` が `Submit::Done` を返した操作の記録は `Done` の段階で生まれ、std の `io_wait` と `io_wait_until` は、記録が終わっていて取り消しの地点が投げないときは perform せず、予算を使い、切れていれば OS を1回見て集め、走れるタスクがあれば `reschedule` (その `Wake` は見ない) してから、なければ予算を戻してそのまま `(Woke, op)` を返す。perform と完了の収集は `Pending` の操作にだけ起き、park と再開は `Pending` の操作と、予算を使い切って譲る終わった操作の待ち (`reschedule`) にだけ起きる。予算は、操作が終わっていたかによらず `io_wait` と `io_wait_until` の1回ごとに使う。書きの待ちは 1 に長さを 512 で割った商を足した数 (残りより多ければ残りすべて)、ほかの待ちは 1 を使う (D-22)。どの待ちも `parks` を1つだけ数える。終わった操作の待ちが予算を使い切ったときは、`op_ready` は数えずに 2 を返し、続く `reschedule` が数える。予算を使い切った待ちは、終わっていない操作なら park して譲り、終わった操作なら OS を1回見て集めてから、走れるタスクがあれば `reschedule` で譲り、なければ予算を戻して譲らずに続け、`op_ready` が待ちを1つ数える。譲った待ちは再開で予算を戻す。ほかに予算を戻すのは、始まるときと、操作の待ちでない再開のときだけである。本物の driver とテストの driver は、受け付けの時点で決められる操作を `Done` で返す。`RunStats` の `parks` は `io_wait`/`io_wait_until` の呼び出しの数、`completions` は終わった driver の操作の数 (`Done` と集めた完了の和) で、どちらもスケジュールに依らない。スケジュールで変わる数を新しい欄として `RunStats` に足さない。driver を使う run では VM の仕事の回数と `peak_stack` がスケジュールに従い、`driver_independent` の欄は従わない。
 - 適合の確かめ (この段)
   - (1) `io.rs` の `one_task_of_finished_ops_never_waits_on_the_driver`: 1つのタスクが `listen`、`connect`、`accept`、`write_bytes`、`read_chunk` を順に行い、`TestDriver::immediate() == 5`、driver の `wait` の呼び出しが 0 回、`RunStats.parks == 5`、`completions == 5` (T-5 で中間の値、T-8 で最終の値)。
   - (2) `io.rs` の `echo_counts_do_not_depend_on_the_seed`: 2つのタスクの echo を seed 1、2、3 で流して `parks` と `completions` が同じ。
@@ -258,7 +259,7 @@
 - 決定
   - `Clock::Real` で自己パイプのある run は、run の始めに監視のスレッドを起こし、VM は driver の `wait` の期限を切らない。
   - 眠る driver で中継のない run (`Clock::Real` で自己パイプがないか監視のスレッドを起こせなかった run、`with_driver` で注入した run) では、VM が `wait` に渡す期限を今から 10 ms 先までに切る。`Clock::Virtual` のテストの driver の run には上限を掛けない。
-  - 集める地点は、空きの待ちの直前では OS を見ない。切り替えが続くときは 16 回に1回 (`POLL_EVERY = 16`)、横取りと `NOTICE` の集める地点ではいつも、`wait(今)` で OS を1回見てから集める。
+  - 集める地点は、空きの待ちの直前では OS を見ない。切り替えが続くときは 16 回に1回 (`POLL_EVERY = 16`)、横取りと `NOTICE` の集める地点と、予算を使い切った終わった操作の待ちの `op_ready` の集める地点 (D-22) ではいつも、`wait(今)` で OS を1回見てから集める。
 - 理由
   - Ctrl-C と止める語を届ける道を waker の1本にし、空の起きをなくす。自己パイプのない監視のスレッドは 100 Hz で起きるので、その run では起こさない。CLI はいつも自己パイプを渡す。
   - テストの driver は `wait(Some(d))` で時計を進めるので、上限を掛けると終わらない保留のある run がデッドロックで止まらない。`Injected` に上限を掛けないと、`with_driver` で渡す本物の driver の run が割り込みで起きない。
@@ -267,11 +268,11 @@
   - 監視のスレッドをすべての `Clock::Real` の run で起こす: 自己パイプのない run では 100 Hz で起きる。
   - `Normal` の単一タスクの run では今どおり2つ目のタスクで起こす: run の始めに起こす規則に反する。費用は T-10 で測る (10 章の Q-1)。
   - `with_driver(driver, Sleeps::Yes)` の口を作る: 要るテストがない。
-- 影響の範囲: `Machine::run`、`Scheduler::begin_run`、`Scheduler::wait_deadline`、`switch_away` の空きのループ、`collect` と5つの呼ぶ所。
+- 影響の範囲: `Machine::run`、`Scheduler::begin_run`、`Scheduler::wait_deadline`、`switch_away` の空きのループ、`collect` と6つの呼ぶ所 (6つ目は D-22 の `op_ready`)。
 - 見直す条件: `worker-threads` で worker のループを作るとき (同じ方針をそのループに持つ)。`busy-self` の比べで 16 が遅いと分かったとき (T-9)。
 - 守る規則
   - G-21 MUST: `Clock::Real` で自己パイプのある run は、run の始めに監視のスレッドを起こし、VM は driver の `wait` の期限を切らない。眠る driver で中継のない run (`Clock::Real` で自己パイプがないか監視のスレッドを起こせなかった run、`with_driver` で注入した run) では、VM が `wait` に渡す期限を今から 10 ms 先までに切る。`Clock::Virtual` のテストの driver の run には上限を掛けない (時計を進める driver に掛けると、終わらない保留のある run がデッドロックで止まらない)。`with_driver` に渡す driver は眠る driver に限り、テストの driver を包んだ driver に終わらない保留のあるプログラムを流さないことを vm.md に書く。driver は刻みを持たない (G-6)。
-  - MUST (集める地点): `IoDriver::wait` を OS を見るために呼ぶのは、`switch_away` の切り替えが `POLL_EVERY` 回続いたときと、横取りの頭、横取りのループの `NOTICE`、安全点の `NOTICE` の集める地点と、空きのループだけである。`switch_away` の頭の集める地点は OS を見ない。
+  - MUST (集める地点): `IoDriver::wait` を OS を見るために呼ぶのは、`switch_away` の切り替えが `POLL_EVERY` 回続いたときと、横取りの頭、横取りのループの `NOTICE`、安全点の `NOTICE`、予算を使い切った終わった操作の待ちの `op_ready` (D-22) の集める地点と、空きのループだけである。`switch_away` の頭の集める地点は OS を見ない。
 - 適合の確かめ (この段)
   - T-3: `sched.rs` の `wait_deadline_caps_only_drivers_that_sleep_without_a_relay` と `begin_run_starts_the_monitor_only_for_a_real_run_with_a_doorbell`。`api.rs` の `an_injected_driver_waits_at_most_10_ms_at_a_time` と、Linux の `a_real_run_with_a_doorbell_has_a_monitor_from_its_start`。`grep -n "real_driver" crates/eml_vm/src` → 0行。
   - T-4: `tests/real.rs` の `a_wait_without_ops_sleeps_until_its_deadline` (driver に刻みがない)。`io-backends` で `a_wait_with_a_pending_probe_does_not_tick` (保留ありの版)。
@@ -360,6 +361,7 @@
 #### D-17: compio の driver の追随
 - `submit` は `Step::Done` を `Submit::Done` で返し、鍵は呼ぶ側のものを `ops` に使う。`completions` は `done` を移すだけにし、`poll(ZERO)`、`receive_lookups`、`reap` を `wait` に移す。`IDLE_TICK` を消し、期限 `u64::MAX` は期限なし、ほかは `MAX_POLL` (`i32::MAX` ミリ秒) で切る。`quiesce` の1回の poll は私的な `CANCEL_POLL` (10 ms)。
 - 退けた案: `wait` の早い戻り (`done` があれば poll せずに戻る、解決の答えがあれば戻る) を残す。解決の答えは `reap` が受けないと消えないので、回り続ける。
+- unix の `Readable` は、`PollOnce` を出す前に socket2 の `recv_with_flags` で1バイトを `MSG_PEEK | MSG_DONTWAIT` で覗き、データか EOF があれば `Submit::Done(Ok(0))`、誤りならその誤りで受け付けで終える (D-22)。poll(2) の 0 秒の待ちでなく覗きにしたのは、unsafe なしに書け、ソケットの設定によらず待たないためである。誤りを `Ok(0)` にすると、覗きがリセットの誤りを消費し、次の読みが EOF に見える。Windows は長さ0の `Recv` のままである。
 - 細部は付録1 の5.1節。io-backends の差し替えで丸ごと消える。
 
 #### D-18: テストの driver の決着
@@ -379,6 +381,32 @@
 
 #### D-21: 1操作あたりの確保
 - `collect` の `Vec::new()` を `Scheduler::runnables` の使い回しにする。残る確保を `--dump` と callgrind で見て、記録と std の包みの局所の組から消せるものを消す。目標の数は決めず、echo-py-reuse の往復あたりの `allocations` が1点目より下がることだけを基準にする。
+
+#### D-22: 書きの重み、予算が切れたときの OS の確かめ、受け付けの `Readable`
+- 決定
+  - `Std.Net` の書きの待ちは、予算を 1 と、プログラムが渡した長さを 512 で割った商の和だけ使う。残りより多ければ残りをすべて使う。64 KiB の書きは1回で予算の 128 を使い切る。読みとほかの待ちは 1 のままである。数の予算の横に 64 KiB のバイトの予算を置く形も考えたが、戻す時点と切れる時点を2つの予算で書くことになるので、式1つの形にした。
+  - 終わった操作の待ちが予算を使い切ったら、`op_ready` の行が OS を1回見て集める (保留の操作があるときだけ `wait(Some(今))`)。集めた後に走れるタスクがあれば今までどおり `reschedule` で譲り、なければ予算を戻して譲らずに続ける。待ちはどちらでも1つ数える。`POLL_EVERY` は 16 のままである (D-16)。
+  - 本物の driver の unix の `Readable` は、受け付けでデータか EOF があればその場で終える (D-17)。
+- 理由
+  - 原因は、同じ run の bulk で書き手が読み手より先に走り続けることである。compio の poll の backend は `push` の中で `sendto` を試すので、書きはどれも受け付けで終わる。書き手は `sendto` が EAGAIN を返すまで、平均で約 27 回 (約 1.7 MiB) 書き続ける。読み手の `Readable` (`PollOnce`) はいつも保留なので、読み手は OS を見るまで起きない。送りの列にたまったバイトを読むときの写しが重くなり、送りの処理は softirq に回る。`bulk.em 1024 64 shared fresh` の perf (cpu-clock の標本数) で、`_copy_to_iter` が 148 から 270 に、`handle_softirqs` がほぼ 0 から 173 に増え、1 MiB あたりの sys が倍になった。
+  - 確かめ: 予算 1 と `POLL_EVERY` 1 の試しのビルド (1回の書きごとに OS を見て譲る) では、bulk-self、bulk-shared、bulk-reuse の 1 GiB の CPU が 0.444、0.349、0.386 s になり、34cad91 (0.441、0.444、0.446 s) 以下に戻った。予算 1 だけ、予算 4 だけでは直らなかった (bulk-shared 0.735、0.623 s)。譲っても OS を見なければ、読み手は 16 回の切り替えまで起きないためである。
+  - 書きの重みがないと、終わった書きの待ちは 128 回 (64 KiB の書きなら 8 MiB) まで譲らない。OS を見る間に 128 KiB 書くだけでも、bulk-self の得の大半が消えた (0.53 s。1回の書きごとに見ると 0.38〜0.45 s)。64 KiB ごとに OS を見ると、読み手は書き手の次の書きの前に起きる。16 バイトの書きは今までどおり1つ使うので、echo、many、conn は 128 回に1回しか OS を見ず、費用は見分けられない。
+  - 走れるタスクがないときに続けるのは、相手が別のプロセスの run で、書きごとの `reschedule` の費用を払わないためである。続けない形では bulk-send-py の CPU が 1.16 倍 (9 回で流し直して 1.10 倍) になり、続ける形では 0.99 倍だった。syscall の数は同じで、差は `reschedule` の費用である。
+  - スケジュールによらないこと (G-18): 書きの長さはプログラムが決めるので、予算の切れる位置はプログラムだけで決まる。読めた量はスケジュールで変わるので、読みは重くしない。譲るか続けるかはスケジュールで変わるが、どちらでも予算を 128 に戻し、待ちを1つ数えるので、予算の切れる位置と `parks` は変わらない。`timers` は予算を見る前に数え、`completions` は操作ごとに1つなので、OS を見る回数で変わらない。VM の仕事の回数 (`yields` など) は変わるが、`driver_independent` は比べない。
+  - `Readable` を受け付けで終えると、`Bytes.empty ()` で読む読み手は、データがあれば `Readable` も `Read` も受け付けで終わり、park しない。この変更だけの試しのビルドでは、bulk-self 0.73 から 0.62〜0.63、bulk-shared 0.62 から 0.51〜0.53 s/GiB になった。bulk-reuse は読みがもう受け付けで終わっているので変わらない (0.59〜0.61)。テストの driver と vm.md の約束にも合う。
+- 退けた案
+  - 原因を benchmarks.md に書くだけにする: 同じ run の bulk が 1.3〜1.6 倍のまま残る。読みを受け付けで終えるだけでは直らない。読みがもう受け付けで終わる bulk-reuse も後退しているからである。
+  - 予算 1 と `POLL_EVERY` 1 の定数にする: bulk は直るが、echo-self-reuse が 18.5 から 27.2 µs、many-self-1000 が 156 から 259 µs、conn-self-32 が 39 から 49 µs になり、速い道の得を消す。D-16 にも反する。
+  - 受け付けで終わった操作の待ちで譲る: 受け付けで終わったかはスケジュールで変わるので、譲る位置と仕事の回数がスケジュールに依り、G-18 に反する。書きだけで譲る形は bulk-reuse を 0.420 s にしたが、bulk-self は 1.078 s に悪くなり、echo-self-reuse が 23% 遅くなった。
+  - 送りの列を `TCP_NOTSENT_LOWAT`、`SO_SNDBUF`、`SO_RCVBUF` で抑える: どの値でも run が良い状態と悪い状態に分かれた (`TCP_NOTSENT_LOWAT` 64 KiB の bulk-self は 9 回のうち4回が 0.36〜0.39 s、5回が 0.72〜0.78 s)。OS ごとの設定で、Windows に `TCP_NOTSENT_LOWAT` に当たるものがない。言語の性能が sysctl に依る。
+- 影響の範囲: `cells.rs` の `OpKind::Write`、`op_ready`、`spend_budget`、`go_on`。`vm.rs` の `op_ready` の行。`real.rs` の `Readable`。
+- 見直す条件: io-backends の自前の driver と macOS で、512 バイトの単位を測り直す。ネイティブのコードの `Async` の入り口を作るとき (`jit-effects`)。
+- 守る規則: G-18 と D-7 の集める地点の MUST に書いた。
+- 適合の確かめ (この段)
+  - `cells.rs` の `a_write_spends_budget_by_its_length` (長さ 0、511、512、1500 の書きが 1、1、2、3 を使い、64 KiB の書きは1回で使い切る) と `going_on_after_a_spent_budget_counts_the_wait_and_refills`。
+  - `io.rs` の `a_spent_budget_looks_at_the_os_and_goes_on_alone` (受けを待つタスクの保留がある間に、速い道だけで 62、63、64 周回る。64 周の run だけ `wait` が1回多く、`parks` は1周に2つずつ増え、続けた周は `yields` を増やさない) と、1000 バイトの書きの形を足した `the_budget_runs_out_at_the_same_point_in_every_schedule`。
+  - `tests/real.rs` の `a_probe_with_data_finishes_at_submit`。
+- リポジトリに残す所: stdlib.md の「操作の予算」と `op_ready` の項、vm.md の「時計と driver」の `Readable` と集める地点の箇条、「操作の記録」、「`RunStats`」の `parks`。benchmarks.md の「ネットワークの計測」に原因と数字。
 
 ## 6. 実装の約束
 
@@ -412,7 +440,8 @@
 | T-8 | 書いた buffer を返し、写さずに貸す (`Return the written buffer and lend it without a copy`) | D-4、D-5、D-14 | T-7 | 付録1 の4節、6.2節、付録2 の8.3節 |
 | T-9 | 1操作の確保を減らし、`POLL_EVERY` を比べる (`Cut the allocations of one op`) | D-16、D-21 | T-8 | 付録1 の2.7節、付録2 の8.4節 |
 | T-10 | 段を閉じる (`Close io-fastpath`) | すべて | T-9 | 付録1 の8.9節、付録2 の6節 |
-| T-11 | 「今の数値」の3つの表 (`Measure io-fastpath`) | D-1 | T-10 | - |
+| T-10c | 受け付けの `Readable`、書きの重みと予算が切れたときの OS の確かめ、再計測 (`Decide Readable at submit in the real driver`、`Weigh writes in the op budget and look at the OS when it runs out`、`Record the bulk regression fix`) | D-22 | T-10 | 付録2 の6節 |
+| T-11 | 「今の数値」の3つの表 (`Measure io-fastpath`) | D-1 | T-10c | - |
 
 ### すべてのタスクに共通の完了の条件
 
@@ -503,6 +532,7 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
     - T-5 と T-8: `io.rs` の `one_task_of_finished_ops_never_waits_on_the_driver` を T-5 で中間の値 (`immediate == 6`、`completions == 6`) で入れ、T-8 で最終の値 (`immediate == 5`、`completions == 5`) に直す。理由: 空きのある buffer の読みと `write_bytes` の新しい型が T-6 と T-8 で入る。
     - T-7: `cells.rs` の単体テストのうち貸し方を確かめる4本 (`a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one`、`probed_read` を使うもの、`a_read_line_lends_the_stream_buffer_and_frees_it_when_empty`、`a_read_after_a_read_line_is_served_from_the_stream_buffer`) を新しい規則の値に書き直す。理由: 貸し方と広げる式が変わる。
     - T-8: `io.rs` の `a_read_line_that_is_not_utf8_raises_not_utf8` の `Net.write_bytes ... a` を `let (_, a) = ...` にする。理由: `write_bytes` が組を返す。
+    - T-10c (書きの重みと予算が切れたときの OS の確かめを選んだ利用者の判断、D-22): `io.rs` の `the_budget_runs_out_at_the_same_point_in_every_schedule` に、ループの書きを 1000 バイトにした形を足す。今の形の期待 (4つのスケジュールで `parks` が同じ) は変えない。理由: 書きの重みが予算の切れる位置を変えても、`parks` がスケジュールによらないことを確かめる。ほかの UI の出力、`RunStats` のスナップショット、`io.rs` の値は変わらなかった。
   - 機械的な追随 (種類3): `tests/real.rs` と `tests/test_driver.rs` の署名の追随と補助 `run_op`、`IDLE_TICK` を書いたコメント。T-5 の `cells.rs` の単体テストの stub `NoDriver` に、書きを受け付けで終える印を足すこと。
   - ここに挙げたほかに成否が変わるテストが出たら、そのタスクで止め、計画書に種類1として1件ずつ足してから進める。
 - 実装者に任せること: なし
@@ -925,7 +955,7 @@ T-2b、T-9 の数字をここに書く。T-10 が benchmarks.md に移してか�
   - 壊れた driver の後始末は、前回の2回の裁定を経て「1 秒で終わらなければ abort し、`Box::leak` と `mem::forget` は書かない」に決まり、利用者が承認した。1回目の裁定は「1 秒の確かめの後に、終わらない箱を `Box::leak` で残す」だった。その後、run からの panic の巻き戻しでは driver が `quiesce` を通らずに `Scheduler` の中で落ち、poisoned でない `Machine` がヒープを放す道が見つかった。この道では箱だけを漏らしても使用後解放になるので、abort を選んだ。この決定を前提として保つ。
   - backend の範囲 (io_uring を入れるか) と段の分け方は、設計に任せた。設計は、io_uring を試作と計測を最初のタスクに持つ段 `io-uring` に分け、段の順を `io-fastpath`、`io-backends`、`net-windows`、`io-uring` にした。
   - メモリ安全は設計の検討で確かめさせ、書きの貸しに一意を求めない規則 (D-5) を採った。その場で書き換える操作はどれも一意を求めるので、書きの記録が参照を1つ持つ間はほかの参照から書き換わらない、という論証である。
-- 設計で退けた案 (D-1 から D-21 に書いたもののほか)
+- 設計で退けた案 (D-1 から D-22 に書いたもののほか)
   - 三段 (受け付け、待ち、取り出し) を1つの extern か VM の命令にする案: 取り消しの地点と予算の規則が VM と std に割れ、ネイティブのコードの待ちの形 (節が継続を預けて戻る) と違う道ができる。
   - `Readable` を消し、読みをいつも1つの操作にする案: 空きのない buffer の読みで、何も来ない接続に 64 KiB を持たせることになる。
   - 鍵から記録への表を登録表の中に driver の状態として置く案: 鍵を記録の番号にすれば表が要らない。
