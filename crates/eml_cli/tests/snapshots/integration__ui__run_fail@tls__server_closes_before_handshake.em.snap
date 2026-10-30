@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/tls/server_closes_before_handshake.em
+---
+--- stdout ---
+ConnectionReset
+--- stderr ---
+--- runtime error ---
+cannot complete the TLS handshake with tls.localhost: the peer closed the connection
+  at run-fail/tls/server_closes_before_handshake.em:21:7

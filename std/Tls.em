@@ -26,8 +26,12 @@ connect_with_ca ca host port =
 
 -- 既にある `TcpStream` の上で handshake する。`host` は SNI と証明書の名前で、根は既定の根だけである
 pub wrap : String -> Net.TcpStream -> <IO, Async> Stream
-wrap host sock =
-  let conn = client_raw host ""
+wrap host sock = wrap_with_ca "" host sock
+
+-- `wrap` に、根に足す CA の証明書 (PEM) を渡す。空の文字列なら既定の根だけを使う
+pub wrap_with_ca : String -> String -> Net.TcpStream -> <IO, Async> Stream
+wrap_with_ca ca host sock =
+  let conn = client_raw host ca
   handshake host conn sock
 
 -- handshake の間、送るものを書き出しては読んで `Conn` に入れる。最後の書き出しがクライアントの Finished を送る

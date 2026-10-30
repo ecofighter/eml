@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/tls/truncated.em
+---
+--- stdout ---
+partial
+ConnectionReset
+--- stderr ---
+--- runtime error ---
+cannot read the stream: the peer closed the connection without close_notify
+  at run-fail/tls/truncated.em:34:7

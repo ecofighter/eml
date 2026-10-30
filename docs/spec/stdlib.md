@@ -1385,6 +1385,7 @@ main () = Async.run (fn () ->
 | `connect` | `String -> Int -> <IO, Async> Stream` | eml |
 | `connect_with_ca` | `String -> String -> Int -> <IO, Async> Stream` | eml |
 | `wrap` | `String -> Net.TcpStream -> <IO, Async> Stream` | eml |
+| `wrap_with_ca` | `String -> String -> Net.TcpStream -> <IO, Async> Stream` | eml |
 | `read_chunk` | `Bytes -> Stream -> <IO, Async> (Bytes, Stream)` | eml |
 | `read_line` | `Stream -> <IO, Panic, Async> (Option String, Stream)` | eml |
 | `write` | `String -> Stream -> <IO, Async> Stream` | eml |
@@ -1393,7 +1394,7 @@ main () = Async.run (fn () ->
 | `shutdown_write` | `Stream -> <IO, Async> Stream` | eml |
 | `close` | `Stream -> <IO, Async> Unit` | eml |
 
-- `connect host port` は `Net.connect host port` で接続し、`host` を SNI と証明書の名前の照合に使って handshake まで行う。根は既定の根だけである。`connect_with_ca ca host port` は、PEM の `ca` の証明書を根に足す。`ca` が空の文字列なら `connect` と同じである。`wrap host s` は、既にある `TcpStream` の上で同じ handshake を行い、根は既定の根だけである。サーバーの名前と PEM の誤りは、接続を開く前に投げる
+- `connect host port` は `Net.connect host port` で接続し、`host` を SNI と証明書の名前の照合に使って handshake まで行う。根は既定の根だけである。`connect_with_ca ca host port` は、PEM の `ca` の証明書を根に足す。`ca` が空の文字列なら `connect` と同じである。`wrap host s` は、既にある `TcpStream` の上で同じ handshake を行い、根は既定の根だけである。`wrap_with_ca ca host s` は `connect_with_ca` と同じく `ca` を根に足す。サーバーの名前と PEM の誤りは、接続を開く前に投げる
 - どの関数も期限を持たない。期限は `Async.timeout ms (fn () -> Tls.connect host port)` のように付ける。期限が来ると巻き戻しが `Stream` を落とすので、期限の後に同じ `Stream` は使えない。`Net.read_line_within` のような、期限の後も読みを続けられる `_within` の関数はない
 - `read_chunk b s` は、平文を `b` の後ろに 1 バイト以上 65 536 バイト以下足して返す。`Conn` に平文がなければ、ソケットを読んで復号するのを平文が届くまで繰り返す。相手が close_notify で閉じた後は、何も足さずに `b` の中身のまま返す。これが EOF である。close_notify のない EOF は、届いた平文をすべて返した後で、種類 `ConnectionReset` の IO の失敗になる。TLS の誤りを見つけた押し込みで復号した平文は返さない
 - `read_line s` は1行を読み、終わりの改行を除いて返す。改行、上限、UTF-8 の扱いと文言は `Net.read_line` と同じで、行は同じ関数で切り出す (上の「`Std.Net`」)。EOF は close_notify の後だけで、改行のない最後の行はそのまま返し、残りがなければ `None` を返す。close_notify のない EOF は `read_chunk` と同じ失敗である。読みすぎた平文は `Conn` に残り、次の `read_chunk` か `read_line` が先に返す。そのため2つを混ぜても、平文は失われず、順も入れ替わらない
@@ -1402,7 +1403,7 @@ main () = Async.run (fn () ->
 - `shutdown_write s` は close_notify を書き出してから、`Net.shutdown_write` で送る側を閉じる。`close s` は `shutdown_write` してから `Stream` を落とす。相手がもう閉じていれば close_notify は書けないので、`close` は書きの失敗を捨てる。`Cancelled` だけはそのまま投げ、ほかの失敗では失敗しない
 - `Stream` を落とすと、巻き戻しの間も含めて、close_notify を送らずにソケットを閉じる。取り消しで落ちた `Stream` も同じである
 - `Conn` の平文、rustls の buffer、`pull_tls` が埋める `Vec` は Rust の確保で、`max_bytes` に数えない ([VM](vm.md) の「上限と割り込み」)。平文は、`Conn` に平文がないときの `read_chunk`、行のそろっていないときの `read_line`、handshake のときにだけ、`Net.read_chunk` の1回分 (暗号文で 65 536 バイトまで) を押し込んで増える。上限を超えた開いた行は投げるので、返していない平文は `Conn` ごとに 1 048 576 + 2 × 65 536 バイトを超えない。書きの間に rustls が持つ暗号文は、書く平文とレコードの余分の分で、呼び出しが終われば残らない。受け取りの途中のレコードは1つで、16 KiB とレコードの余分までである
-- feature `tls` を外した処理系では、`connect`、`connect_with_ca`、`wrap` は種類 `NotAvailable` の IO の失敗 `cannot set up TLS for {host}: not available` を投げる。テストの driver の `tls.localhost` と `tls-cut.localhost` も `NotFound` になる ([VM](vm.md) の「時計と driver」)
+- feature `tls` を外した処理系では、`connect`、`connect_with_ca`、`wrap`、`wrap_with_ca` は種類 `NotAvailable` の IO の失敗 `cannot set up TLS for {host}: not available` を投げる。テストの driver の `tls.localhost` と `tls-cut.localhost` も `NotFound` になる ([VM](vm.md) の「時計と driver」)
 
 失敗の種類と文言は次のとおりである。
 

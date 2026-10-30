@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/tls/line_too_long.em
+---
+--- stdout ---
+Other
+--- stderr ---
+--- runtime error ---
+cannot read the stream: a line is longer than 1048576 bytes
+  at run-fail/tls/line_too_long.em:33:7

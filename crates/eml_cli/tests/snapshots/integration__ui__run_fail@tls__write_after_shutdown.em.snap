@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/tls/write_after_shutdown.em
+---
+--- stdout ---
+ConnectionReset
+--- stderr ---
+--- runtime error ---
+cannot write to the stream: connection reset
+  at run-fail/tls/write_after_shutdown.em:33:7
