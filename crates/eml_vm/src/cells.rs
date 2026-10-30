@@ -3991,8 +3991,9 @@ fn write_of_a_shared_buffer<M: Mode>() -> Ctx<M> {
     ctx
 }
 
-/// driver が保留にしている書きの buffer を、もう1つの参照で書き換えても、rc が 2 なので `Bytes.set` は写してから書く。
-/// driver が完了を返すときに貸された記憶から読む中身は元のままで、書き換えた側だけが新しい中身を持つ
+/// driver が保留にしている書きの buffer を、もう1つの参照で書き換えても、rc が 2 以上なので `Bytes.set`、`push`、
+/// `append`、`truncate` は写してから書く。同じ物体への読みも空きを貸さず、読めるようになるのを待つ操作を出す。driver が
+/// 完了を返すときに貸された記憶から読む中身は元のままで、書き換えた側だけが新しい中身を持つ
 /// (docs/spec/object-model.md の T10 の行)。
 #[test]
 fn a_write_held_by_the_driver_is_not_changed_by_its_alias() {
@@ -4006,15 +4007,64 @@ fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
     let mut ctx = mode_ctx::<M>();
     let mut driver = NoDriver::default();
     let mut registry = Registry::new(Vec::new());
-    let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"abc");
+    // 空きのある物体にして、一意ならその場で書き換えられる形にする
+    let buf = {
+        let heap = unsafe { ctx.heap_mut() };
+        let w = heap.alloc_bytes_room(64);
+        unsafe { heap.bytes_extend(w, b"abc") }.unwrap()
+    };
     unsafe { ctx.heap_mut().dup(buf) }.unwrap();
     let stream = net_stream(&mut ctx);
     let token = registry
         .submit_write(&mut ctx, &mut driver, 0, 0, buf, stream)
         .unwrap();
     assert_eq!(driver.held.len(), 1);
+    let lent = driver.held[0].1;
     let alias = unsafe { ctx.bytes_set(0, i64::from(b'z'), buf) }.unwrap();
     assert!(alias != buf);
+    // ほかのその場で書き換える操作も、rc が 2 以上なので写す。どれも呼ぶ側の参照を1つ消費するので、先に1つ足す
+    let dup = |ctx: &mut Ctx<M>| unsafe { ctx.heap_mut().dup(buf) }.unwrap();
+    dup(&mut ctx);
+    let pushed = unsafe { ctx.bytes_push(i64::from(b'd'), buf) }.unwrap();
+    dup(&mut ctx);
+    let tail = unsafe { ctx.heap_mut() }.alloc_bytes(b"de");
+    let appended = unsafe { ctx.bytes_append(buf, tail) }.unwrap();
+    dup(&mut ctx);
+    let truncated = unsafe { ctx.bytes_truncate(1, buf) }.unwrap();
+    for (w, content) in [
+        (pushed, &b"abcd"[..]),
+        (appended, b"abcde"),
+        (truncated, b"a"),
+    ] {
+        assert!(w != buf);
+        assert_eq!(unsafe { &*ctx.heap().bytes(w).unwrap() }, content);
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    }
+    // 同じ物体への読みは、一意でないので空きを貸さず、読めるようになるのを待つ操作を出す
+    dup(&mut ctx);
+    let reads = driver.lent.len();
+    let other = net_stream(&mut ctx);
+    let read = registry
+        .submit_read(&mut ctx, &mut driver, 0, 0, buf, other)
+        .unwrap();
+    assert_eq!(driver.lent.len(), reads);
+    assert!(matches!(
+        registry.op_mut(CellRef::decode(read)).unwrap().phase,
+        OpPhase::Probe
+    ));
+    driver.done.push(Completion {
+        key: op_key(CellRef::decode(read)),
+        result: Err(io::Error::from(io::ErrorKind::ConnectionReset)),
+        cancelled: false,
+    });
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut Vec::new())
+        .unwrap();
+    let taken = registry.take_op(&mut ctx, read, 0).unwrap();
+    assert!(taken.buf == Some(buf));
+    unsafe { ctx.heap_mut().decref(buf) }.unwrap();
+    assert!(driver.written.is_empty());
+    assert_eq!(lent_content(lent), b"abc");
     driver.done.push(Completion {
         key: op_key(CellRef::decode(token)),
         result: Ok(Done::Size(3)),

@@ -597,12 +597,19 @@ main () = Async.run (fn () ->
     assert_eq!((s.parks, s.completions, s.cancels), (5, 5, 0));
 }
 
-/// `write_bytes` は渡した buffer をそのまま返す。返った buffer を次の往復の書きに渡し、読みの buffer を `truncate 0` で
-/// 空にして渡し直す echo は、往復ごとに buffer を確保しないので、確保の数が往復の数に比例する。読みの buffer は
-/// `Bytes.with_capacity` で作り、4 バイトの返事を1回の読みで受ける (docs/spec/stdlib.md の「`Std.Net`」)。
+/// `write_bytes` は渡した buffer を写さずにそのまま返す。echo を2つの形で流す。一意の形は、返った buffer を次の往復の
+/// 書きに渡す。共有の形は、返った buffer を捨て、引数で持ち続ける同じ buffer を毎回書くので、書く buffer にはいつも
+/// もう1つの参照がある。書きは一意を求めないので、往復ごとの確保の数と写したバイトの数は2つの形で同じになる。書きが
+/// 一意でない buffer を写すと、共有の形だけ往復ごとに確保と写しが増える。読みの buffer は `Bytes.with_capacity` で作り、
+/// 4 バイトの返事を1回の読みで受ける (docs/spec/stdlib.md の「`Std.Net`」、docs/spec/vm.md の「操作の記録」)。
 #[test]
 fn write_bytes_returns_the_same_buffer() {
-    let allocations = |rounds: u64| {
+    let counts = |rounds: u64, shared: bool| {
+        let write = if shared {
+            "let (_, a) = Net.write_bytes msg a"
+        } else {
+            "let (msg, a) = Net.write_bytes msg a"
+        };
         let src = format!(
             "\
 import Async (Async)
@@ -617,7 +624,7 @@ echo n msg r q a b =
     Net.close b
     q
   else
-    let (msg, a) = Net.write_bytes msg a
+    {write}
     let (r, b) = Net.read_chunk (Bytes.truncate 0 r) b
     let (r, b) = Net.write_bytes r b
     let (q, a) = Net.read_chunk (Bytes.truncate 0 q) a
@@ -636,10 +643,15 @@ main () = Async.run (fn () ->
         let (out, stats) = run_stats(src.as_str());
         let s = stats.unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(out, "ping\n");
-        s.allocations
+        (s.allocations, s.string_bytes_copied)
     };
-    let (one, two, three) = (allocations(1), allocations(2), allocations(3));
-    assert_eq!(three - one, 2 * (two - one));
+    let per_round = |shared: bool| {
+        let (one, two, three) = (counts(1, shared), counts(2, shared), counts(3, shared));
+        assert_eq!(three.0 - one.0, 2 * (two.0 - one.0));
+        assert_eq!(three.1 - one.1, 2 * (two.1 - one.1));
+        (two.0 - one.0, two.1 - one.1)
+    };
+    assert_eq!(per_round(true), per_round(false));
 }
 
 /// 2つのタスクが 20 往復の echo をする。操作が受け付けで終わるかは順で変わるが、`parks` は `io_wait` の呼び出しの数、

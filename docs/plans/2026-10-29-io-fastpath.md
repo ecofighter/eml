@@ -503,7 +503,7 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
     - T-5 と T-8: `io.rs` の `one_task_of_finished_ops_never_waits_on_the_driver` を T-5 で中間の値 (`immediate == 6`、`completions == 6`) で入れ、T-8 で最終の値 (`immediate == 5`、`completions == 5`) に直す。理由: 空きのある buffer の読みと `write_bytes` の新しい型が T-6 と T-8 で入る。
     - T-7: `cells.rs` の単体テストのうち貸し方を確かめる4本 (`a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one`、`probed_read` を使うもの、`a_read_line_lends_the_stream_buffer_and_frees_it_when_empty`、`a_read_after_a_read_line_is_served_from_the_stream_buffer`) を新しい規則の値に書き直す。理由: 貸し方と広げる式が変わる。
     - T-8: `io.rs` の `a_read_line_that_is_not_utf8_raises_not_utf8` の `Net.write_bytes ... a` を `let (_, a) = ...` にする。理由: `write_bytes` が組を返す。
-  - 機械的な追随 (種類3): `tests/real.rs` と `tests/test_driver.rs` の署名の追随と補助 `run_op`、`IDLE_TICK` を書いたコメント、`externs.rs` の行の名前 `take_bytes`。T-5 の `cells.rs` の単体テストの stub `NoDriver` に、書きを受け付けで終える印を足すこと。
+  - 機械的な追随 (種類3): `tests/real.rs` と `tests/test_driver.rs` の署名の追随と補助 `run_op`、`IDLE_TICK` を書いたコメント。T-5 の `cells.rs` の単体テストの stub `NoDriver` に、書きを受け付けで終える印を足すこと。
   - ここに挙げたほかに成否が変わるテストが出たら、そのタスクで止め、計画書に種類1として1件ずつ足してから進める。
 - 実装者に任せること: なし
 - 条件: いつも
@@ -664,7 +664,7 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
 ### T-8: 書いた buffer を返し、写さずに貸す
 - 目的: `write_bytes` の型と、書きの写し 0 回 (D-4、D-5、D-14)。
 - 基づく決定: D-4、D-5、D-14
-- 対象: `crates/eml_vm/src/cells.rs` (`submit_write`、`unique_bytes` の削除、`take_bytes`)、`vm.rs` (`NetTakeBytes`)、`crates/eml_extern/src/lib.rs` (`NetTakeBytes`)、`std/Net.em` (付録1 の6.2節)、`bench/net/{echo,bulk,many}.em` (付録2 の8.3節)、`crates/eml_core_ir/tests/externs.rs`、`crates/eml_io/src/real.rs` と `test.rs` の SAFETY、`crates/eml_vm/tests/{io,miri}.rs`、docs (付録1 の4.2節と8.8節)
+- 対象: `crates/eml_vm/src/cells.rs` (`submit_write`、`unique_bytes` の削除、`take_bytes`)、`vm.rs` (`NetTakeBytes`)、`crates/eml_extern/src/lib.rs` (`NetTakeBytes`)、`std/Net.em` (付録1 の6.2節)、`bench/net/{echo,bulk,many}.em` (付録2 の8.3節)、`crates/eml_io/src/real.rs` と `test.rs` の SAFETY、`crates/eml_vm/tests/{io,miri}.rs`、docs (付録1 の4.2節と8.8節)
 - 作業: 付録1 の4節と6.2節のとおりにする。`bench/net` の3つのプログラムに付録2 の8.3節の差分を当てる。
 - テスト: 付録1 の7.7節。
 - 実装者に任せること: miri.rs の driver の形 (実装で決めたこと: 手で書いた LIR は `Async` のエントリを持たず、`Std.Net` の行がどれも `is_async` なので `Async.run` なしに呼べない。T-5 の `a_second_take_of_an_op_is_an_internal_error` と同じく、2本を `cells.rs` の単体テストにし、stub の `NoDriver` が書きに貸された記憶を、書きを終える時点で読む。Miri は `cells::a_read` の実行に `cells::a_write` を足して流す)
@@ -673,8 +673,8 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
   - 共通の条件、cross の clippy
   - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::` → 通る
   - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test -p eml_vm --test integration miri::` → 通る
-  - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write` → 10本が通る
-  - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write` → 10本が通る
+  - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write` → 通る
+  - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write` → 通る
   - `grep -rn "unique_bytes\|take_read" crates/eml_vm/src std` → 0行
   - `grep -rn "一意に保ち" crates docs | grep -v docs/plans` の行が、どれも読みの貸しを述べる所 (レビューで読む)
   - `cargo build --release -p eml_cli` の後、`timeout 60 ./target/release/eml run bench/net/echo.em 200 16 reuse` → `echo done 200`。`bulk.em 4 64 shared fresh` → `bulk done 4194304`。`many.em 50` → `many done 50`
