@@ -3,8 +3,9 @@
 # 走らせ、実時間と最大の常駐メモリの中央値を Markdown の表で出す (docs/implementation/benchmarks.md の「スクリプトの
 # 計測」)。行ごとの大きさは、eml の実時間が約 300 ms になるように決めてある。測る前に、両方の出力が一致することを
 # bench/scripts/compare.sh で確かめる。最後に、大きい入力 (log 100 MB、csv 51 MB) で Rust の実装と比べる表を出す。実時間の
-# 5回の中央値から空のプログラムの分を引いた比である (「C/Rust との比べ方」)。macOS の `/usr/bin/time -l` を使うので、
-# macOS でだけ動く。
+# 5回の中央値から空のプログラムの分を引いた比である (「C/Rust との比べ方」)。スクリプトの表の `https-get` は、手元の
+# TLS の server (`crates/eml_tls/examples/https_server.rs`) を裏で動かし、そこから本文を取る。macOS の
+# `/usr/bin/time -l` を使うので、macOS でだけ動く。
 set -euo pipefail
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -20,6 +21,12 @@ scripts="$root/tests/ui/run/scripts"
 
 cargo build --release -p eml_cli --manifest-path "$root/Cargo.toml" >&2
 eml="$root/target/release/eml"
+# `--example` を付けると選んだ target しか組まないので、eml_cli とは別の呼び出しにする
+cargo build --release -p eml_tls --example https_server --manifest-path "$root/Cargo.toml" >&2
+https_server="$root/target/release/examples/https_server"
+# 行 `https-get` の server を、途中で止まったときも残さない
+server_pid=""
+trap 'if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; fi' EXIT
 
 # 種類 `$1` (`log` か `csv`) で約 `$2` KiB の入力のパスを出す。生成に時間がかかるので、あれば作り直さない。名前に大きさを
 # 入れるので、ほかの大きさで作ったファイルを測ることはない
@@ -123,6 +130,38 @@ numeric_row() {
   row "$label" "$size" "$root/bench/$program.em" "$root/bench/numeric/$py.py" /dev/null "$size"
 }
 
+# 行 `https-get`。`crates/eml_tls/examples/https_server.rs` を `$2` MiB の本文で裏で動かし、eml の `Http` と Python の
+# `urllib.request` が `https://127.0.0.1:PORT/` から取る。比べも計測も同じ server につなぐ
+https_row() {
+  local label="$1" mib="$2"
+  local port_file="$data/https-port.txt" port="" cpu_before cpu_after
+  # 前の実行のポートを読まないよう、起こす前に消す
+  rm -f "$port_file"
+  "$https_server" "$mib" > "$port_file" &
+  server_pid=$!
+  # 起動で落ちた server を待ち続けない
+  for _ in $(seq 100); do
+    if [[ -s "$port_file" ]] || ! kill -0 "$server_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  port="$(head -n 1 "$port_file" 2>/dev/null || true)"
+  if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+    echo "bench/scripts.sh: https_server がポートを出さなかった" >&2
+    exit 1
+  fi
+  cpu_before="$(ps -o time= -p "$server_pid")"
+  row "$label" "$mib MiB" "$root/bench/scripts/https_get.em" "$root/bench/scripts/https_get.py" /dev/null \
+    "$root/crates/eml_tls/fixtures/ca.pem" "https://127.0.0.1:$port/"
+  # server が eml の速さを抑えていないかを見るため、比べと計測の接続の分の CPU 時間を出す
+  cpu_after="$(ps -o time= -p "$server_pid")"
+  echo "bench/scripts.sh: https_server の CPU 時間 $cpu_before -> $cpu_after (接続 $((2 + 2 * runs)) 本)" >&2
+  kill "$server_pid"
+  wait "$server_pid" 2>/dev/null || true
+  server_pid=""
+}
+
 # 5回測った実時間の中央値を使う。(最大 - 最小) / 中央値 が 10% を超えたら、1回だけ測り直してその値を使う
 # (docs/implementation/benchmarks.md の「C/Rust との比べ方」)
 rust_runs=5
@@ -203,6 +242,7 @@ script_row '`grep -n`' log 70000 grep -n "/api/v1/items/7 "
 script_row '`logstat`' log 6700 logstat
 script_row '`logstat --whole`' log 6700 logstat --whole
 script_row '`csv2jsonl`' csv 2900 csv2jsonl --columns id,name,score @IN @OUT
+https_row https-get 64
 echo
 echo "数値計算"
 echo
