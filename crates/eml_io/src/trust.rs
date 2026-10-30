@@ -187,11 +187,24 @@ fn the_scanner_skips_comments_and_strings() {
         allow_count("// allow(unsafe_code)\n\"allow(unsafe_code)\""),
         0
     );
+    assert!(has_raw_string("let s = r\"x\";"));
+    assert!(has_raw_string("f(br#\"x\"#)"));
+    assert!(!has_raw_string("let s = \"driver\";"));
+    assert!(!has_raw_string("let r#type = 1;"));
     // 生の文字列は扱わないので、どのファイルにもあってはならない
     for (file, text) in FILES {
-        assert!(
-            !text.contains("r\"") && !text.contains("r#\""),
-            "{file} has a raw string"
-        );
+        assert!(!has_raw_string(text), "{file} has a raw string");
     }
+}
+
+/// `r"`、`r#"` (と `b` の付いた形) を探す。`r#type` のような生の識別子は数えない。`"driver"` のように識別子の文字の後の `r"` は数えない。
+fn has_raw_string(text: &str) -> bool {
+    let s = text.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    (0..s.len()).any(|i| {
+        let hashes = s[i + 1..].iter().take_while(|&&c| c == b'#').count();
+        let opens = s[i] == b'r' && s.get(i + 1 + hashes) == Some(&b'"');
+        let start = if i > 0 && s[i - 1] == b'b' { i - 1 } else { i };
+        opens && (start == 0 || !ident(s[start - 1]))
+    })
 }
