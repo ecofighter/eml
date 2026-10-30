@@ -57,6 +57,11 @@ jobs:
       - name: cargo nextest run
         id: test
         run: cargo nextest run --failure-output immediate-final
+      # ワークスペースの実行では eml_cli の既定が tls を有効にするので、tls を外した処理系の振る舞いは
+      # eml_io と eml_vm だけを選んで流す (docs/implementation/testing.md の「feature の組み合わせの確認」)
+      - name: cargo nextest run without tls
+        if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
+        run: cargo nextest run -p eml_io -p eml_vm --failure-output immediate-final -E 'test(tls_off::)'
       # テストが落ちても lint の結果は見たいので、前の手順が済んでいれば流す
       - name: cargo clippy --all-targets
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}

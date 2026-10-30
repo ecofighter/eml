@@ -33,6 +33,7 @@ cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # UI tests
 cargo insta review                   # accept snapshots
 cargo clippy --all-targets -- -D warnings && cargo fmt
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core, run without tls; eml_test_support also hir; eml_io + eml_vm --all-targets without tls)
+cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::)'   # the tls-off behaviour (a workspace run has tls on through eml_cli's default)
 cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--stats] [--sched normal|sequential|seeded:N] <file.em> [args...] (the VM; --debug-heap is checked mode; --stats is checked mode and prints the counters of `RunStats` on stderr after a run that did not fail; --sched picks how `par` children and `Async` tasks switch, normal (a timer-driven monitor thread) by default; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--sched ...] [file.em] (the terminal REPL)
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # type-check the Windows-only code; eml_tls (C crypto) is excluded (Linux: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, same flags)

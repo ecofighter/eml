@@ -586,11 +586,13 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 
 `grep -c` は0件で exit 1 を返すが、`test "$(…)"` の中では段を落とさない。
 
+`tls` を外した処理系の振る舞いのテストは、`eml_io` と `eml_vm` の結合テストの `mod tls_off` に置く。ワークスペースの実行では feature の統一で `tls` が有効になり、このモジュールは組まれない。そこで CI の段「cargo nextest run without tls」が `cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::)'` で別に流す。`tls_off` のモジュールは `cfg(not(feature = "tls"))` だけで分け、OS では分けない。nextest は何も合わない filter を exit 4 で落とすので、この段はモジュールの名前を変えたことも見つける。
+
 ## CI
 
 `.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の5つのジョブを流す。
 
-- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の9つ) と、段「feature resolution of tls」の `cargo tree` の検査を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls` を外した `tls_off::` のテスト、既定でない feature の clippy (「feature の組み合わせの確認」の9つ) と、段「feature resolution of tls」の `cargo tree` の検査を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
@@ -645,6 +647,7 @@ cargo test                                           # 同じテストを流す 
 cargo nextest run -j 1                               # ふだんの実行の条件を確かめる (1秒を超えるのは集めて流す5つだけ。性能のテスト)
 cargo nextest run -p eml_syntax --test integration parser::empty_file    # 1つのテスト
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'          # UI テスト
+cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::)'               # tls を外した振る舞い (ワークスペースの実行では eml_cli の既定で tls が有効になる。feature の組み合わせの確認)
 EML_UI_FILTER=basics/hello.em cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # 1つの UI テストだけ流す
 EML_UI_FILTER=/par/ cargo nextest run -p eml_cli --test integration -E 'test(=ui::run) | test(=ui::run_fail)'   # par の UI テスト (逐次と2つの seed。seed で流す)
 cargo run -p eml_cli -- run --debug-heap --sched seeded:2026 tests/ui/run/par/nested.em   # seed の run の食い違いを再現する

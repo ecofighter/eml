@@ -353,6 +353,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 ## `eml_io` の内部
 
 - `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、OS を呼ばない核 `driver::Driver` を OS ごとの backend `sys::Os` の上で動かす包みである。backend の時計は単調な時計 (`Instant`) で、driver は内部の刻みを持たない。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、`test/net.rs` の仮想のネットワーク (メモリの上の端、リスナー、ポート)、seed で混ぜる決着の順、`submit` の中で終えた操作の数 (`immediate()`) を持つ ([VM](../spec/vm.md) の「時計と driver」)
+- feature `tls` のときだけ組む `test/tls.rs` は、テストの driver の TLS の終端器である。`tls.localhost` と `tls-cut.localhost` への接続ごとに `eml_tls::Conn` のサーバーを1つ持ち、決着の始めに汲む。仮想のネットワークに足したのは、ポートを振った端の対を作る `Network::pair` だけで、端の表には `test` の子のモジュールとして触れる。`eml_io` の `src/` で `eml_tls` を参照するのはこのファイルだけである
 - driver は `Word`、`Ctx`、RC に触れず、記憶には `RawBuf` を通してだけ届く。そのため `eml_io` は `eml_vm` を知らずに組み立てられる。どちらの driver を使うかは `eml_vm` の `Clock` が決める
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
 - `RealDriver::with_lookup(lookup)` は、名前の解決の関数を差し替えた driver を作る。テストと組み込み先のためで、テストは機械の `/etc/hosts` に頼らない。`RealDriver::new` は `sys::lookup` (std の解決器) を使う
@@ -372,7 +373,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `unsafe` は `mask.rs`、`test.rs`、`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`、`sys/iocp.rs`、`driver/tests/fake.rs` にだけ置き、`trust.rs` のテストが一覧を固定する ([テスト](testing.md) の「`unsafe` の一覧」)。核と `real.rs` は OS を名指さず、`RawBuf` の番地は backend の OS を呼ぶ関数の中でだけ読み、slice を作らない
 - 壊れる条件と壊れた後の振る舞い、`quiesce`、driver を落とすときの規則は [VM](../spec/vm.md) の「時計と driver」にある
 - 起こしが長い待ちを終わらせることは、結合テストが遠い期限と期限 `u64::MAX` の `wait` で確かめる
-- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落としても仕事を待たないこと、落とした後の起こしと、待つ前の起こしが次の待ちだけを終えること、unix のループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、1つのストリームで待つ読みと待つ書きが両方終わること、溜まった接続の受け、リセットで終わる待つ書き、シグナルで割り込まれた待ち、名前の解決とその2つの上限と、Windows のソケットの操作が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF) を確かめる
+- 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落としても仕事を待たないこと、落とした後の起こしと、待つ前の起こしが次の待ちだけを終えること、unix のループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、1つのストリームで待つ読みと待つ書きが両方終わること、溜まった接続の受け、リセットで終わる待つ書き、シグナルで割り込まれた待ち、名前の解決とその2つの上限と、Windows のソケットの操作が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF) を確かめる。`tests/tls.rs` は `tls` のときだけ組み、Rust の `eml_tls::Conn` のクライアントで終端器の handshake、平文の受け渡し、close_notify とその省略、半分の閉じ、証明書の拒否、閉じる順ごとの EOF とポートの解放を確かめる。`tests/tls_off.rs` は `tls` を外したときだけ組み、TLS の名前が `NotFound` で終わることを確かめる ([テスト](testing.md) の「feature の組み合わせの確認」)
 
 ## `eml_tls` の内部
 

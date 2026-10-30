@@ -5,6 +5,8 @@
 #![allow(unsafe_code)]
 
 mod net;
+#[cfg(feature = "tls")]
+mod tls;
 
 use std::collections::VecDeque;
 use std::io;
@@ -29,6 +31,9 @@ pub struct TestDriver {
     /// 終わったが、まだ `completions` で返していない操作。
     done: Vec<Completion>,
     net: Network,
+    /// `tls.localhost` への接続ごとの TLS の終端器。
+    #[cfg(feature = "tls")]
+    tls: tls::Terminators,
     bin: Arc<HandleBin>,
     waker: Arc<Flag>,
 }
@@ -48,6 +53,8 @@ impl TestDriver {
             ops: VecDeque::new(),
             done: Vec::new(),
             net: Network::new(),
+            #[cfg(feature = "tls")]
+            tls: tls::Terminators::default(),
             bin: Arc::default(),
             waker: Arc::default(),
         }
@@ -72,9 +79,11 @@ impl TestDriver {
     }
 
     /// 落とされたハンドルを閉じ、受け付けの順に操作を決着させる。ハンドルを先に閉じるので、同じ決着の中の操作は
-    /// 閉じた後の状態を見る。
+    /// 閉じた後の状態を見る。TLS の終端器は、閉じた後で操作の前に汲むので、操作は汲んだ後の状態を見る。
     fn settle(&mut self) {
         self.empty_bin();
+        #[cfg(feature = "tls")]
+        self.tls.pump(&mut self.net);
         let mut finished = Vec::new();
         let mut waiting = VecDeque::new();
         while let Some(pending) = self.ops.pop_front() {
@@ -168,22 +177,28 @@ impl TestDriver {
                 Some(Err(e)) => done(Err(e)),
                 None => wait(Op::Accept { listener }),
             },
-            Op::Connect { host, port } => {
-                let connection =
-                    check_virtual_host(&host).and_then(|()| self.net.virtual_connect(port));
-                match connection {
-                    Ok(Connection::Connected { client_end }) => done(Ok(Done::Stream {
-                        handle: client_end,
-                        peer: localhost(port),
-                    })),
-                    Ok(Connection::Pending) => wait(Op::Connect { host, port }),
-                    Ok(Connection::Refused) => {
-                        done(Err(io::Error::from(io::ErrorKind::ConnectionRefused)))
-                    }
-                    Err(e) => done(Err(e)),
+            Op::Connect { host, port } => match self.connect(&host, port) {
+                Ok(Connection::Connected { client_end }) => done(Ok(Done::Stream {
+                    handle: client_end,
+                    peer: localhost(port),
+                })),
+                Ok(Connection::Pending) => wait(Op::Connect { host, port }),
+                Ok(Connection::Refused) => {
+                    done(Err(io::Error::from(io::ErrorKind::ConnectionRefused)))
                 }
-            }
+                Err(e) => done(Err(e)),
+            },
         }
+    }
+
+    /// TLS の名前は終端器を挟み、ほかの名前は仮想のホストへ直に接続する。
+    fn connect(&mut self, host: &str, port: u16) -> io::Result<Connection> {
+        #[cfg(feature = "tls")]
+        if let Some(cut) = tls::tls_host(host) {
+            return self.tls.connect(&mut self.net, port, cut);
+        }
+        check_virtual_host(host)?;
+        self.net.virtual_connect(port)
     }
 
     /// `handle` の読みがブロックしないか。データがあるか、相手が閉じているか書く側を閉じていれば読める。読めなければ
