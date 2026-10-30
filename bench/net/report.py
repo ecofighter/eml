@@ -162,10 +162,15 @@ def strace_runs(c, label):
     for x in r["data"]:
         m = x["syscalls"].get("main", {})
         v = {k: m.get(k, 0) - bm.get(k, 0) for k in keys}
-        v["#main"] = sum(m.values()) - sum(bm.values())
+        # run.py は失敗した呼び出しを `名前` と `名前!ERRNO` の両方で数えるので、目標の式は `!` の鍵を除いた呼び出しの数を使う
+        v["#main"] = calls(m) - calls(bm)
         v["raw epoll_ctl"] = m.get("epoll_ctl", 0)
         out.append(derive(v))
     return out, r["n_small"]
+
+
+def calls(m):
+    return sum(n for k, n in m.items() if "!" not in k)
 
 
 def span(xs):
