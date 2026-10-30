@@ -487,7 +487,7 @@ fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
     let mut driver = RealDriver::new().unwrap();
     let (a, _b) = connection(&mut driver, &mut Vec::new());
     let probe = pending(&mut driver, Op::Readable { handle: a });
-    let mut chunk = vec![1u8; 64 << 10];
+    let mut chunk = vec![1u8; PENDING_CHUNK];
     let full = write_until_pending(&mut driver, a, &mut chunk);
     let job = pending(
         &mut driver,
@@ -1424,8 +1424,13 @@ fn reset_on_close(s: &std::net::TcpStream) {
 }
 
 /// 相手が読まない端 `handle` に、`chunk` の書きを保留になるまで出し、保留の書きの鍵を返す。送りと受けの buffer の和は
-/// 有限なのでどこかで保留になり、その大きさには頼らない。4096 回 (64 KiB なら 256 MiB) で保留にならなければ落ちる。
-/// 保留の書きが終わるまで、呼ぶ側が `chunk` を生かしておく。
+/// 有限なのでどこかで保留になり、その大きさには頼らない。4096 回で保留にならなければ落ちる。保留の書きが終わるまで、
+/// 呼ぶ側が `chunk` を生かしておく。macOS は相手の窓が満ちた後にも送りの buffer を広げうるので、小さな `chunk` の保留の
+/// 書きは、相手が読まなくても少し後に終わりうる。保留のまま残ってほしいテストは `PENDING_CHUNK` を渡す。
+/// 保留の書きの残りが、広がった送りの buffer にも収まらない大きさ。
+#[cfg(unix)]
+const PENDING_CHUNK: usize = 8 << 20;
+
 #[cfg(unix)]
 fn write_until_pending(
     driver: &mut RealDriver,
@@ -1507,7 +1512,7 @@ fn a_pending_read_and_a_pending_write_on_one_stream_both_finish() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (a, mut peer) = connect_to_std(&mut driver, &mut stash);
-    let mut chunk = vec![5u8; 64 << 10];
+    let mut chunk = vec![5u8; PENDING_CHUNK];
     let write = write_until_pending(&mut driver, a, &mut chunk);
     let probe = pending(&mut driver, Op::Readable { handle: a });
     peer.write_all(b"x").unwrap();
@@ -1585,7 +1590,7 @@ fn a_reset_ends_a_pending_write_with_an_error() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (a, peer) = connect_to_std(&mut driver, &mut stash);
-    let mut chunk = vec![6u8; 64 << 10];
+    let mut chunk = vec![6u8; PENDING_CHUNK];
     let write = write_until_pending(&mut driver, a, &mut chunk);
     reset_on_close(&peer);
     drop(peer);
@@ -1646,10 +1651,9 @@ fn a_signal_during_a_wait_leaves_the_driver_working() {
     // 待ちに入る前に届いたシグナルは待ちを割り込まないので、待ちが戻るまで叩き続ける
     while !waited.load(Ordering::SeqCst) && !waiter.is_finished() {
         // SAFETY: スレッドはまだ join していないので、その `pthread_t` は有効である
-        assert_eq!(
-            unsafe { libc::pthread_kill(waiter.as_pthread_t(), libc::SIGUSR1) },
-            0
-        );
+        let r = unsafe { libc::pthread_kill(waiter.as_pthread_t(), libc::SIGUSR1) };
+        // 確かめた後にスレッドが抜けていれば、OS によっては ESRCH を返す
+        assert!(r == 0 || r == libc::ESRCH, "pthread_kill: {r}");
         std::thread::sleep(Duration::from_millis(5));
     }
     waiter.join().unwrap();

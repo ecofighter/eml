@@ -25,6 +25,8 @@ compile_error!("eml_io has no I/O backend for this OS");
 
 /// `d` をミリ秒へ切り上げ、`max` で切る。切り上げるので期限より早くは戻らず、`max` で切った待ちは早く戻るだけで
 /// ある (docs/spec/vm.md の「時計と driver」)。期限のない待ちは、呼ぶ側が自分の OS の値に写し、ここへは渡さない。
+// kqueue は timespec で待つので、Apple ではテストのほかに呼ぶ所がない
+#[cfg_attr(all(target_vendor = "apple", not(test)), expect(dead_code))]
 pub(crate) fn millis(d: Duration, max: u32) -> u32 {
     u32::try_from(d.as_nanos().div_ceil(1_000_000)).map_or(max, |ms| ms.min(max))
 }

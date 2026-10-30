@@ -4,10 +4,6 @@
 //! 完了型の値 (`Hold::Buffer`、`Cancel::Pending`、`Arrival::Done` と `Arrival::Cancelled`) は暫定である。今それを返すのは
 //! 核のテストの偽の backend だけで、最初の完了型の backend (IOCP のソケットか io_uring) を載せるときに形を変えてよい。
 
-// Windows の backend はソケットを扱わないので、歩と結果の値を作らない。それを作るのは、そこでは核のテストの偽の
-// backend だけである
-#![cfg_attr(all(windows, not(test)), expect(dead_code))]
-
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -17,6 +13,8 @@ use std::time::Duration;
 use eml_rt::{IoWaker, OpKey, RawBuf};
 
 /// 1つの操作の1歩。核が出し、backend は OS にその歩の1回の試みを出す。
+// Windows の backend はソケットを扱わないので、Windows ではテストのほかにこれを作る所がない
+#[cfg_attr(all(windows, not(test)), expect(dead_code))]
 pub(crate) enum Step<'a, S> {
     /// `Readable` の1歩。読めるデータか EOF があれば `Size(0)` で終わる。
     Peek {
@@ -39,6 +37,8 @@ pub(crate) enum Step<'a, S> {
     },
 }
 
+// Windows の backend はソケットを扱わないので、Windows ではテストのほかにこれを作る所がない
+#[cfg_attr(all(windows, not(test)), expect(dead_code))]
 pub(crate) enum Outcome<S> {
     Size(usize),
     Accepted { sock: S, peer: SocketAddr },
@@ -54,6 +54,8 @@ pub(crate) enum Hold {
     Buffer,
 }
 
+// Windows の backend はソケットを扱わないので、Windows ではテストのほかにこれを作る所がない
+#[cfg_attr(all(windows, not(test)), expect(dead_code))]
 pub(crate) enum Start<S> {
     Done(io::Result<Outcome<S>>),
     Pending(Hold),
@@ -62,6 +64,8 @@ pub(crate) enum Start<S> {
 /// `Done`: backend は鍵と待ち手を忘れ、OS も buffer に触れない。`Pending`: 終わりは `wait` の `Event` で届く。
 /// `Pending` は暫定で、最初の完了型の backend を載せるときに形を見直す。
 pub(crate) enum Cancel {
+    // Windows の backend はソケットを扱わないので、Windows ではテストのほかにこの値を作る所がない
+    #[cfg_attr(all(windows, not(test)), expect(dead_code))]
     Done,
     // 今これを返すのは核のテストの偽の backend だけである
     #[cfg_attr(not(test), expect(dead_code))]
@@ -71,6 +75,8 @@ pub(crate) enum Cancel {
 /// `wait` が届ける知らせ。`Done` と `Cancelled` は暫定で、最初の完了型の backend を載せるときに形を見直す。
 pub(crate) enum Arrival<S> {
     /// readiness: 同じ `Step` をもう1度 `start` せよ。余分に届いても害がない
+    // Windows の backend はソケットを扱わないので、Windows ではテストのほかにこの値を作る所がない
+    #[cfg_attr(all(windows, not(test)), expect(dead_code))]
     Retry,
     /// 完了型: OS がこの歩を終えた (暫定)
     #[cfg_attr(not(test), expect(dead_code))]
