@@ -2877,6 +2877,10 @@ fn run_extern<R: Exec>(
                 let w = ctx.bytes_make(task.raw(arg(0)), task.raw(arg(1)))?;
                 task.set(dst, w);
             }
+            Extern::BytesWithCapacity => {
+                let w = ctx.bytes_with_capacity(task.raw(arg(0)))?;
+                task.set(dst, w);
+            }
             Extern::BytesSet => {
                 let w = ctx.bytes_set(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
                 task.set(dst, w);

@@ -341,6 +341,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `truncate` | `Int -> Bytes -> <Panic> Bytes` | extern |
 | `of_string` | `String -> Bytes` | extern |
 | `make` | `Int -> Byte -> <Panic> Bytes` | extern |
+| `with_capacity` | `Int -> <Panic> Bytes` | extern |
 | `get` | `Int -> Bytes -> <Panic> Byte` | extern (バイト列を借りる) |
 | `set` | `Int -> Byte -> Bytes -> <Panic> Bytes` | extern |
 | `push` | `Byte -> Bytes -> Bytes` | extern |
@@ -360,6 +361,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `truncate n b` は、前の `n` バイトである。`0 <= n <= length b` でなければ `Panic` を起こす。`b` が一意ならその場で長さだけを書き換えて、容量を保つ。そうでなければ、前の部分を写す
 - `of_string s` は、`s` と同じバイトのバイト列である。`s` は消費する。`s` が一意なら写さずに同じブロックを使う。リテラルと共有した文字列は写す
 - `make n b` は、どのバイトも `b` の、長さ `n` のバイト列である。`n` が負なら `Panic` を起こす。`Limits::max_bytes` を超える長さは、確保の前に止める
+- `with_capacity n` は、容量が `n` バイト以上の空のバイト列である。容量は長さに出ない。一意なら、容量までの `push` と `append` はその場で伸ばす。`n` が負なら `make` と同じ `Panic` を起こし、`Limits::max_bytes` を超える容量は `make` と同じく確保の前に止める
 - `get i b` は、位置 `i` のバイトである。`0 <= i < length b` でなければ `Panic` を起こす。`b` は借りる
 - `set i x b` は、位置 `i` のバイトを `x` にしたバイト列である。`0 <= i < length b` でなければ `Panic` を起こす。`b` が一意ならその場で書き換え、そうでなければ写してから書き換える
 - `push x b` は、`b` の後ろに `x` を足したバイト列である。`b` が一意で容量が足りればその場で伸ばし、足りなければ容量を倍にして写す。空から n 回足すときに写すバイトの合計は 2n 以下で、確保は log2(n) に比例する
@@ -1402,7 +1404,7 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `Byte.of_int` の引数 | ``int `256` does not fit in `Byte` `` |
 | `Bytes.slice`、`append_slice`、`truncate` の範囲の外 | ``bytes slice 2..9 is out of range for length 3`` |
 | `Bytes.get`、`set` の範囲の外 | ``bytes index 5 is out of range for length 3`` |
-| `Bytes.make` の負の長さ | ``bytes length -1 is negative`` |
+| `Bytes.make`、`with_capacity` の負の長さ | ``bytes length -1 is negative`` |
 | `String.decode` の妥当でない UTF-8 | ``invalid UTF-8 at byte 3`` (数は最初の妥当でないバイトの位置) |
 | 配列の添字の範囲の外 (`get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |

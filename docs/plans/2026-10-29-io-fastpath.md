@@ -643,7 +643,7 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
 - 条件: いつも
 - 完了の条件
   - 共通の条件、`eml_rt` の関門
-  - `cargo nextest run -p eml_cli --test integration -E 'test(bytes_with_capacity)'` → UI の2本が通る
+  - `cargo nextest run -p eml_cli --test integration -E 'test(=ui::run) | test(=ui::run_fail)'` → 2本が通る。UI のテストはディレクトリごとに1本で、ファイルで絞れない。この2本の走査が新しい2つのファイルを含む (snapshot を受け入れる前は、どちらも新しいファイルだけで落ちる)
 - 落とし穴: Miri の `trusted::` は流さなくてよい (検証したコードだけで、信頼の部分に触れない)。`expected.txt` は手で書かず、`#[ignore]` のテストで作り直す。
 
 ### T-7: 空きを1つの読みに貸す

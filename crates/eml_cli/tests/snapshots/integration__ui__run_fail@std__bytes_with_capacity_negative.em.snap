@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/std/bytes_with_capacity_negative.em
+---
+--- stdout ---
+--- stderr ---
+--- runtime error ---
+bytes length -1 is negative
+  at run-fail/std/bytes_with_capacity_negative.em:4:40

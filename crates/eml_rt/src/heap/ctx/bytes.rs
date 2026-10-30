@@ -1017,6 +1017,51 @@ impl<M: Mode> Ctx<M> {
         Ok(w)
     }
 
+    /// `Bytes.with_capacity`。容量が `n` バイト以上の、長さ 0 の新しいバイト列を返す。誤りは `bytes_make` と同じで、
+    /// `n` が負なら `Fault::Index`、確保量の上限を超える容量は確保を試す前に `Stopped(MemoryLimit)` である
+    /// (docs/spec/object-model.md の「バイト列の操作」)。
+    pub fn bytes_with_capacity(&mut self, n: i64) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Index(_))) || r == Err::<Word, Fault>(
+                Fault::Stopped(Stop::MemoryLimit),
+            ),
+            n < 0 <==> (r matches Err(Fault::Index(_))),
+            r is Err ==> *final(self) == *old(self),
+            r matches Ok(w) ==> final(self).is_bytes(w) && final(self).text_of(w).len() == 0
+                && final(self).heap_spec().capacity(w) >= n,
+            r matches Ok(w) ==> (old(self).held_ok() ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            }),
+    {
+        let ghost s0 = *self;
+        if n < 0 {
+            return Err(Fault::Index(Box::new(IndexFault::BytesLength { len: n })));
+        }
+        let k = n as usize;
+        // 上限を確保の前に確かめる理由は `bytes_make` と同じである
+        if k > MAX_BYTES || over_budget(&self.control, k + 16) {
+            return Err(Fault::Stopped(Stop::MemoryLimit));
+        }
+        let w = self.heap.alloc_bytes_room(k);
+        proof {
+            if M::CHECKED {
+                assert(self.heap.words_kept(s0.heap));
+                self.lemma_words_kept(s0);
+            }
+            if s0.held_ok() {
+                self.lemma_made_ok(s0, w);
+            }
+        }
+        Ok(w)
+    }
+
     /// `Bytes.push`。`w` の参照を受け取り、後ろに `b` を足したバイト列の参照を返す。`w` が一意で容量が足りれば、その場で
     /// 足す (`Heap::bytes_extend`)。
     ///

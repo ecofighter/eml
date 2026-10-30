@@ -615,6 +615,7 @@ table! {
             row("Std.Bytes.find_from", &[Obj, Int, Obj], Int, Purity::Panics),
         ),
         BytesMake => row("Std.Bytes.make", &[Int, Int], Obj, Purity::Panics),
+        BytesWithCapacity => row("Std.Bytes.with_capacity", &[Int], Obj, Purity::Panics),
         BytesGet => borrowing(
             &[false, true],
             row("Std.Bytes.get", &[Int, Obj], Int, Purity::Panics),

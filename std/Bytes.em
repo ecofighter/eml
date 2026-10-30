@@ -22,6 +22,8 @@ find needle b =
 
 -- `n` バイトの、どのバイトも `b` のバイト列を返す。`n` が負なら `Panic` である
 pub extern make : Int -> Byte -> <Panic> Bytes
+-- 容量が `n` バイト以上の空のバイト列を返す。`n` が負なら `Panic` である
+pub extern with_capacity : Int -> <Panic> Bytes
 -- 位置 `i` のバイト。範囲の外は `Panic` である
 pub extern get : Int -> Bytes -> <Panic> Byte
 -- 位置 `i` のバイトを `b` にしたバイト列を返す。一意なら、その場で書き換える
