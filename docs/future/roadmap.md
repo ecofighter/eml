@@ -28,8 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `io-fastpath`: 本物の I/O の道を、終わった操作を待たない形にする。`IoDriver` の trait を1回だけ変え (呼ぶ側が振る鍵、`submit` がその場の結果を返すこと、1つの読み、刻みのない `wait`)、VM と std の約束を変える。終わった操作は perform せずに続け、空きのある buffer には1回の読みで読み、token を即値にし、`write_bytes` は buffer を返し、共有の `Bytes` を写さずに書き、足し続ける読みの容量を倍に伸ばす。`Bytes.with_capacity` を足す。本物の driver は `compio-driver` のまま新しい trait に合わせる。`eml run --stats` と `bench/net` を入れ、前と後を測る。前提: なし。設計: [非同期の設計](async.md) の「`IoDriver` と `eml_io`」
-- `io-backends`: 本物の I/O の driver を、OS ごとに自前で書く backend (Linux は epoll、Apple は kqueue、Windows は IOCP) に替え、`compio-driver` を外す。VM、std、`eml_extern`、`IoDriver` の trait には触れない。aarch64-linux を対象に足す。Windows の backend はこの段ではソケットを扱わない。前提: `io-fastpath`。設計: [非同期の設計](async.md) の「`IoDriver` と `eml_io`」
+- `io-backends`: 本物の I/O の driver を、OS ごとに自前で書く backend (Linux は epoll、Apple は kqueue、Windows は IOCP) に替え、`compio-driver` を外す。VM、std、`eml_extern`、`IoDriver` の trait には触れない。aarch64-linux を対象に足す。Windows の backend はこの段ではソケットを扱わない。前提: なし。設計: [非同期の設計](async.md) の「`IoDriver` と `eml_io`」
   - driver を、呼ぶ側の鍵で引く1つの表を持つ核と、1つの操作を1回ずつ OS に出す backend に分ける。核は OS を呼ばず、偽の backend の上で Miri で確かめる。核の続き (短い書きの残り、受けの出し直し、接続の次の番地) は核だけが出す
   - epoll と kqueue は、ソケットを作るときに1回だけ edge (`EPOLLET`、`EV_CLEAR`) で登録し、操作ごとの登録を出さない。fd ごとに読める記憶と読み・書きの列を持ち、記憶は読みの向きのブロック (`EAGAIN`) でだけ下ろす。`Readable` は記憶が立っていれば1バイトを覗いて確かめ、読み尽くした後は待つ
   - `completions` は OS を見ず、表を歩かない。`wait` は刻みを持たない。名前の解決の答えは driver の中の札で当て、使い回した鍵の操作に当てない
@@ -396,6 +395,18 @@
 - プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ。プールの32本のスレッドがすべて仕事中なら、仕事の受け付けは安全点を通らずに待つ ([VM](../spec/vm.md) の「時計と driver」)
   - 後に回した理由: 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
   - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
+- 待つ `Std.Net` の操作の確保: 操作が待つときは、継続の閉包と、再開した継続が一様な位置で受け取る組の箱 (`read_chunk` の `(Bytes, TcpStream)` と、`resume_io` が渡す `(Wake, OpId)`) を確保する。受け付けで終わった操作の道は確保しない ([VM](../spec/vm.md) の「操作の記録」)
+  - 後に回した理由: 組の箱を消すには、`await_io` の結果の型と、ランタイムが名前で呼ぶ `resume_io` の形 (`eml_extern` の表と VM) を変える必要がある。継続の閉包の数は、エフェクトの実装の形とフレームの深さで決まる。
+  - 見直す条件: 待つ読みの多いサーバで、1回の待ちの確保が計測で目立ったとき。
+- 1回の読みで貸す量の上限 (65 536 バイト) を外すこと ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)
+  - 後に回した理由: 上限を変える計測の根拠がない。`bench/net` の bulk-recv-py では、1回の `recvfrom` が貸した 65 536 バイトを使い切らない ([計測の基準](../implementation/benchmarks.md) の「34cad91 と d96346f」)。
+  - 見直す条件: 大きな buffer を渡す読みで、読みの回数が計測で目立ったとき。
+- `read_line` の buffer を、残りがなくなっても持つこと: 今は残りがなくなれば確保を放す ([VM](../spec/vm.md) の「操作の記録」)
+  - 後に回した理由: 待つだけの接続に記憶を持たせない。
+  - 見直す条件: 行ごとに往復する接続で、`Readable` と確保が計測で目立ったとき。
+- 監視のスレッドを `Machine` が run をまたいで持つこと: 今は1 run に高々1本で、REPL では入力ごとに起こして止める ([VM](../spec/vm.md) の「タスクとスケジュール」)
+  - 後に回した理由: スレッドの寿命を run にそろえれば、入力の間に残る状態がない。起こしと join の費用は、REPL の1回の入力に比べて小さい。
+  - 見直す条件: REPL の入力ごとの費用で、監視のスレッドの起こしと join が目立ったとき。
 - `compio-driver` の 0.13 の系列: `compio-driver` と `compio-buf` は、上位の crate `compio` の安定版が使うバージョンに固定している ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
   - 後に回した理由: 0.13 の系列には beta のバージョンしかない。
   - 見直す条件: 0.13 の系列が安定版になったとき。上げるときは、アーキテクチャの「外部 crate」に書いた項目をすべて確かめる。

@@ -209,8 +209,8 @@ pub data TryRecvResult a = | Got a | Empty | Drained
 
 std の非同期の操作はどれも次の3段で行う。extern は yield しないので ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)、待つのは eml の側の生の操作である。
 
-1. 受け付け (`submit_*`): buffer とハンドルを I/O の driver へ移し、`Lin` の token `OpId` を返す extern
-2. 待ち: 生の操作 `await_io` で、操作が終わるまでタスクを待たせる。token は `Wake` と組で戻る
+1. 受け付け (`submit_*`): buffer とハンドルを登録表の操作の記録へ移して driver に操作を出し、記録の番号を持つ `Lin` の即値の token `OpId` を返す extern。driver がその場で決められる操作は、受け付けで終わる
+2. 待ち: `io_wait` は、操作がもう終わっていれば perform せずに続け、終わっていなければ生の操作 `await_io` でタスクを待たせる。token は `Wake` と組で戻る
 3. 取り出し (`take_*`): token を消費して、結果 (buffer とハンドル) を返すか、操作の IO の失敗を投げる extern。取り消した後も buffer とハンドルを返す。取り消したことは `Wake` で分かる
 
 ソケット、シグナル、`Gui.next_event` ([FFI と拡張の設計](ffi.md) の「GUI」)、ブロックする呼び出しのプールの仕事は、どれもこの形で待つ。時間は `await_time` で、`compute` は join の節点のセルでの `await_cell` で待つ。
@@ -218,7 +218,7 @@ std の非同期の操作はどれも次の3段で行う。extern は yield し�
 ```haskell
 pub read_chunk : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
 read_chunk buf s =
-  let (w, op) = await_io (submit_read buf s)   -- submit_read : Bytes -> TcpStream -> <IO> OpId
+  let (w, op) = io_wait (submit_read buf s)    -- submit_read : Bytes -> TcpStream -> <IO> OpId
   let (buf, s) = take_bytes op                  -- take_bytes : OpId -> <IO> (Bytes, TcpStream)
   match w with
     | Woke -> (buf, s)
@@ -478,7 +478,7 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 
 - I/O の driver の crate: 今の本物の driver は `compio-driver` の上にある。OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) を `libc` と `windows-sys` で自前に書いて替える。mio は Windows で AFD の readiness を真似るので採らない
   - 自前の driver は、保留の操作を呼ぶ側の鍵で引く1つの表で持つ。そのため、driver を落とすときに仕事を待ちきることも、壊れた driver の鍵を漏らすことも要らない。救済の後の受け付けを、縛った worker の受け箱を通さずに別のスレッドから出す形は、`async-threads` の計測で遅れが目立ったときに考える
-  - 替える順: 先に `IoDriver` の trait と VM と std の I/O の約束を compio の上で変え、次に driver だけを自前の backend に差し替え、Windows のソケットをその後に載せる。io_uring は試作と計測で入れるかを決め、入れても、io_uring が使えない環境のために epoll の道は残す。自前の driver の syscall の周りの `unsafe` は Miri で動かせないので、4つの対象の CI と AddressSanitizer で確かめる ([ロードマップ](roadmap.md) の `io-backends`、`net-windows`、`io-uring`)
+  - 替える順: まず driver だけを自前の backend に差し替え、Windows のソケットをその後に載せる。io_uring は試作と計測で入れるかを決め、入れても、io_uring が使えない環境のために epoll の道は残す。自前の driver の syscall の周りの `unsafe` は Miri で動かせないので、4つの対象の CI と AddressSanitizer で確かめる ([ロードマップ](roadmap.md) の `io-backends`、`net-windows`、`io-uring`)
 - `Machine` と REPL のセッションを別のスレッドへ移すこと: 既定は移さない。driver は作ったスレッドから動かず、driver を持つ `Machine` もそのスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。ホストへの埋め込みなどで移す使い道が出たら、専用の実行系のスレッドが状態を持ち、`Machine` と REPL を頼みを送るハンドルにする形を考える
 - 書きの期限 (`write_within`): 取り消し、期限、データの区別は誤りの種類でなく操作の記録の状態で決める ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。`Std.Net` で書きに期限を付けるときは、この区別を書きにもそのまま当てられるかを見直す
 - 受け付けをスレッドをまたいで安全に出せる backend (IOCP、SQ を lock する io_uring) では、受け箱を通す回り道を省いてよい。既定は backend ごとに `eml_io` が決める

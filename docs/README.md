@@ -31,7 +31,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続と evidence、構文解析と名前解決の回復、リポジトリ、ソースファイルと位置、外部 crate |
 | [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt` の検証 (Verus、単体テスト、期待値の表、Miri)、`eml_vm` のテスト、UI テスト (2つのモードで流すこと、seed で流すこと)、LIR と Core IR のテキストの形、文書の引用の検査、REPL のトランスクリプト、CLI のテスト、OS ごとのテスト、性能のテスト、feature の組み合わせ、CI、よく使うコマンド |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲 (実装したもの、まだないもの)、既知の制限 |
-| [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、測り方、今の数値、所見 |
+| [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、測り方、今の数値、ネットワークの計測、所見 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
 | [future/roadmap.md](future/roadmap.md) | 将来の設計 | 段の進め方と閉じる手順、段の列、その後の項目 |
