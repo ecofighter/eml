@@ -24,7 +24,7 @@ default = ["run", "tls"]
 types = ["dep:eml_types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
 run = ["core", "dep:eml_vm", "dep:libc", "dep:rustyline", "dep:windows-sys"]
-tls = ["run", "eml_vm/tls"]
+tls = ["run", "eml_vm/tls", "dep:eml_tls"]
 
 [dependencies]
 clap.workspace = true
@@ -33,6 +33,7 @@ eml_diagnostics.workspace = true
 eml_hir.workspace = true
 eml_lir = { workspace = true, optional = true }
 eml_syntax.workspace = true
+eml_tls = { workspace = true, optional = true }
 eml_types = { workspace = true, optional = true }
 eml_vm = { workspace = true, optional = true }
 rustyline = { workspace = true, optional = true }

@@ -244,6 +244,7 @@ dependencies = [
  "eml_rt",
  "eml_syntax",
  "eml_test_support",
+ "eml_tls",
  "eml_types",
  "eml_vm",
  "insta",
