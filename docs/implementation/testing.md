@@ -479,7 +479,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 開発機の OS で組まれないコード (`cfg(windows)` や `cfg(unix)` の部分) は、`nix develop .#cross` の clippy で型を検査する。この devShell の toolchain は、ふだんと同じバージョンに `x86_64-pc-windows-msvc`、`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu` の `rust-std` を足したものである。link はできないので、流すのは clippy だけで、テストは CI の各 OS のジョブで流す。build の置き場所は `target/cross` で、ふだんの `target/` と分ける。
 
-`eml_tls` は aws-lc-sys を組み、そのために対象の C のツールチェーンが要る。`.#cross` の devShell にはないので、この clippy は `eml_tls` を除き、`tls` を外した形で流す。Linux の2つの target も同じフラグである。`tls` を外した側のコードは、feature の組み合わせの clippy の行が検査する。`eml_tls` そのものは、CI のどの OS でも clippy とテストにかける。C の暗号を組む crate を dev-dependency に持ってよいのは `eml_tls` だけで、ほかの crate のテストは、optional の依存を `cfg(feature = "tls")` の下で通して `eml_tls` に届く。
+`eml_tls` は aws-lc-sys を組み、そのために対象の C のツールチェーンが要る。`.#cross` の devShell にはないので、この clippy は `eml_tls` を除き、`tls` を外した形で流す。Linux の2つの target も同じフラグである。`tls` を外した側のコードは、feature の組み合わせの clippy の行が検査する。`eml_tls` そのものは、CI のどの OS でも clippy とテストにかける。C の暗号を組む crate を dev-dependency に持ってよいのは `eml_tls` だけで、ほかの crate のテストは、optional の依存を `cfg(feature = "tls")` の下で通して `eml_tls` に届く。CI はこの決まりを `cargo tree` で確かめる (「feature の組み合わせの確認」)。
 
 ### 新しい対象で落ちたテストの仕分け
 
@@ -573,13 +573,24 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ## feature の組み合わせの確認
 
-ワークスペースの `cargo clippy --all-targets` は、各 crate を既定の feature でしか検査しない。`eml_cli` と `eml_test_support` の feature や、feature で切り替えるコードを変えたときは、既定でない組み合わせの lib も検査する。組み合わせは、`eml_cli` の feature なし、`types`、`core` と、`eml_test_support` の feature なし、`hir`、`types`、`core` の7つで、どれも `cargo clippy -p <crate> --no-default-features [--features <feature>] -- -D warnings` で流す。テストと bin は `run` を前提にするので、`--all-targets` は付けない。上流の crate のテストが下流の crate を組み立てないことは、`cargo tree -p eml_hir -e normal,dev` と `cargo tree -p eml_types -e normal,dev` に下流の段階の crate が出ないことで確かめる。
+ワークスペースの `cargo clippy --all-targets` は、各 crate を既定の feature でしか検査しない。`eml_cli` と `eml_test_support` の feature や、feature で切り替えるコードを変えたときは、既定でない組み合わせの lib も検査する。組み合わせは、`eml_cli` の feature なし、`types`、`core` と、`eml_test_support` の feature なし、`hir`、`types`、`core` の7つに、`eml_cli` の `--no-default-features --features run` (lib、`tls` なし) と、`-p eml_io -p eml_vm --all-targets` (`tls` なし、テストも含む) を足した9つである。前の7つは `cargo clippy -p <crate> --no-default-features [--features <feature>] -- -D warnings` で流す。テストと bin は `run` を前提にするので、`--all-targets` は付けない。上流の crate のテストが下流の crate を組み立てないことは、`cargo tree -p eml_hir -e normal,dev` と `cargo tree -p eml_types -e normal,dev` に下流の段階の crate が出ないことで確かめる。
+
+`tls` は `eml_cli` の既定で有効になり、`eml_vm/tls`、`eml_io/tls` の順に伝わる。ワークスペース全体の実行では feature が統一されて `eml_io` と `eml_vm` の `tls` も有効になるが、`-p eml_io` や `-p eml_vm` で選ぶと無効になる。この2つの crate の `tls` ありのテストだけを流すには `cargo nextest run -p eml_io -p eml_vm --features eml_io/tls,eml_vm/tls` を使う。`cargo test -p eml_cli --no-default-features --features run` は対応しない。UI テストが `tls` を前提にするためである。
+
+CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で配線を守る。
+
+- `cargo tree --workspace -e features -i eml_io` に `eml_io feature "tls"` が出る。ワークスペースの実行で `eml_io` の `tls` が有効になることを守る
+- 同じく `eml_vm feature "tls"` が出る。`eml_vm` の側を守る
+- `cargo tree -p eml_vm -p eml_io -e normal,dev,build --target all` に `eml_tls`、`aws-lc`、`ring v` が出ない。`eml_vm` だけを選ぶ Miri と ASan に C の暗号が入らないことを守る
+- `.#cross` の clippy と同じ選び方 (`--workspace --exclude eml_tls --no-default-features --features eml_cli/run,eml_test_support/run`) でも同じ3つが出ない。`eml_tls` を除いた clippy が C のツールチェーンなしで組めることと、`eml_tls` 以外の crate が C の暗号を組む dev-dependency を持たないことを守る
+
+`grep -c` は0件で exit 1 を返すが、`test "$(…)"` の中では段を落とさない。
 
 ## CI
 
 `.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の5つのジョブを流す。
 
-- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の9つ) と、段「feature resolution of tls」の `cargo tree` の検査を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
@@ -660,5 +671,5 @@ nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -
 cargo verus verify -p eml_rt                                                                # Verus の証明
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')                         # eml_rt の verus! の中の書式
 bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)
-cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でない feature (なし、types、core。eml_test_support は hir も)
+cargo clippy -p eml_cli --no-default-features --features types -- -D warnings    # 既定でない feature (なし、types、core、run (tls なし)。eml_test_support は hir も。eml_io と eml_vm は --all-targets で tls なし)
 ```

@@ -9,11 +9,16 @@ autotests = false
 [lib]
 doctest = false
 
+# tls を外すと Std.Tls の腕は NotAvailable を投げる
+[features]
+tls = ["dep:eml_tls", "eml_io/tls"]
+
 [dependencies]
 eml_extern.workspace = true
 eml_lir.workspace = true
 eml_io.workspace = true
 eml_rt.workspace = true
+eml_tls = { workspace = true, optional = true }
 rustc-hash.workspace = true
 
 [target.'cfg(unix)'.dependencies]

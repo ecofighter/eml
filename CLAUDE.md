@@ -32,7 +32,7 @@ cargo nextest run -p eml_syntax --test integration parser::empty_file   # a sing
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # UI tests
 cargo insta review                   # accept snapshots
 cargo clippy --all-targets -- -D warnings && cargo fmt
-cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core; eml_test_support also hir)
+cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core, run without tls; eml_test_support also hir; eml_io + eml_vm --all-targets without tls)
 cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--stats] [--sched normal|sequential|seeded:N] <file.em> [args...] (the VM; --debug-heap is checked mode; --stats is checked mode and prints the counters of `RunStats` on stderr after a run that did not fail; --sched picks how `par` children and `Async` tasks switch, normal (a timer-driven monitor thread) by default; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--sched ...] [file.em] (the terminal REPL)
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # type-check the Windows-only code; eml_tls (C crypto) is excluded (Linux: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, same flags)
@@ -87,10 +87,10 @@ The full list, with the scaling tests, is in docs/implementation/testing.md の�
 A batch pipeline whose dependencies flow strictly top to bottom (docs/implementation/architecture.md の「crate の依存関係」):
 
 ```
-eml_cli          check / run / repl; the only pipeline driver (`Session`); stage features types < core < run
+eml_cli          check / run / repl; the only pipeline driver (`Session`); stage features types < core < run; tls (default) adds Std.Tls
 eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `par`, `Async` tasks and channels on one worker; `Machine` appends programs by name (the REPL)
 eml_io           IoDriver implementations: the real driver (an OS-free core in `driver/` over per-OS backends in `sys/`: epoll, kqueue, IOCP without sockets) and the deterministic test driver; jobs run on the core's own pool (at most 32 threads, then queued); name lookups run on its resolver threads (at most 8 live, 64 abandoned)
-eml_tls          rustls client connection, sans-IO (aws-lc-rs provider, webpki-roots); depends on no eml crate
+eml_tls          rustls client connection, sans-IO (aws-lc-rs provider, webpki-roots); depends on no eml crate; eml_vm and eml_io reach it through their feature tls
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
 eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> Perceus -> reuse, verifier

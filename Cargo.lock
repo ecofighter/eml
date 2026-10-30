@@ -297,6 +297,7 @@ name = "eml_io"
 version = "0.1.0"
 dependencies = [
  "eml_rt",
+ "eml_tls",
  "libc",
  "windows-sys 0.61.2",
 ]
@@ -372,6 +373,7 @@ dependencies = [
  "eml_lir",
  "eml_rt",
  "eml_test_support",
+ "eml_tls",
  "insta",
  "libc",
  "rustc-hash 2.1.3",

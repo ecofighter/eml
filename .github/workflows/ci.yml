@@ -67,10 +67,21 @@ jobs:
           cargo clippy -p eml_cli --no-default-features -- -D warnings
           cargo clippy -p eml_cli --no-default-features --features types -- -D warnings
           cargo clippy -p eml_cli --no-default-features --features core -- -D warnings
+          cargo clippy -p eml_cli --no-default-features --features run -- -D warnings
+          cargo clippy -p eml_io -p eml_vm --all-targets -- -D warnings
           cargo clippy -p eml_test_support --no-default-features -- -D warnings
           cargo clippy -p eml_test_support --no-default-features --features hir -- -D warnings
           cargo clippy -p eml_test_support --no-default-features --features types -- -D warnings
           cargo clippy -p eml_test_support --no-default-features --features core -- -D warnings
+      # ワークスペースの実行で eml_io と eml_vm の tls が有効になり、eml_vm だけを選ぶ Miri と ASan には eml_tls が入らず、
+      # .#cross の clippy が eml_tls なしで組めることを、feature の解決で確かめる (docs/implementation/testing.md の「feature の組み合わせの確認」)
+      - name: feature resolution of tls
+        if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
+        run: |
+          test "$(cargo tree --workspace -e features -i eml_io | grep -c 'eml_io feature "tls"')" -ge 1
+          test "$(cargo tree --workspace -e features -i eml_vm | grep -c 'eml_vm feature "tls"')" -ge 1
+          test "$(cargo tree -p eml_vm -p eml_io -e normal,dev,build --target all | grep -c -E 'eml_tls|aws-lc|ring v')" -eq 0
+          test "$(cargo tree --workspace --exclude eml_tls --no-default-features --features eml_cli/run,eml_test_support/run -e normal,dev,build --target all | grep -c -E 'eml_tls|aws-lc|ring v')" -eq 0
 
   fmt:
     runs-on: ubuntu-24.04
