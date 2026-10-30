@@ -120,9 +120,9 @@ impl Task {
         }
     }
 
-    /// `Async` のタスクのエントリの `Task`。`Task::new` と同じ根のフレームを作り、スタックは集まりから取った `stack` を
-    /// 使う。引数は動き始めるときにエントリのフレームに書く (`resume`)。深さは 0 から数え、タスクごとに `max_depth` の
-    /// すべてを使う (docs/spec/vm.md の「`Async` のタスク」)。
+    /// `Async` のタスクのエントリの `Task`。`Task::new` と同じ根のフレームを作り、スタックと scratch は集まりから取った
+    /// `spare` を使う。引数は動き始めるときにエントリのフレームに書く (`resume`)。深さは 0 から数え、タスクごとに
+    /// `max_depth` のすべてを使う (docs/spec/vm.md の「`Async` のタスク」)。
     #[expect(
         clippy::too_many_arguments,
         reason = "the parts of a task an entry starts from"
@@ -135,11 +135,12 @@ impl Task {
         cell: CellRef,
         worker: u32,
         max_depth: usize,
-        mut stack: Vec<Word>,
+        (mut stack, mut scratch): (Vec<Word>, Vec<Word>),
     ) -> Task {
         let entry = &code.functions[function as usize];
         let base = ROOT_BASE + ROOT_SIZE + 2;
         stack.clear();
+        scratch.clear();
         stack.resize(base + usize::from(entry.frame_size), Word::UNIT);
         stack[base - 2] = header(FINISH, 0, ROOT_SIZE);
         stack[base - 1] = Word::from_bits(ROOT_BASE);
@@ -149,7 +150,7 @@ impl Task {
             base,
             frame_size: usize::from(entry.frame_size),
             last_ret: FINISH,
-            scratch: Vec::new(),
+            scratch,
             stack_limit: stack_limit(max_depth),
             entry: function,
             keep_result: false,
@@ -1337,9 +1338,12 @@ fn resume<R: Exec>(
             sched.tasks[prev_id] = Some(prev);
         }
         None => {
-            // 終わったエントリの `Task` のスタックは、次のエントリの `Task` が使い回す
+            // 終わったエントリの `Task` のスタックと scratch は、次のエントリの `Task` が使い回す
             if prev.cell.is_some() {
-                sched.stacks.push(std::mem::take(&mut prev.stack));
+                sched.stacks.push((
+                    std::mem::take(&mut prev.stack),
+                    std::mem::take(&mut prev.scratch),
+                ));
             }
             sched.free_task(prev_id)
         }
@@ -1401,7 +1405,8 @@ fn collect<R: Exec>(
                 .map_err(|e| VmFault::Driver(e.to_string()))?;
         }
     }
-    let mut out = Vec::new();
+    // 集める地点は切り替えのたびに通るので、列は `Scheduler` のものを使い回す。誤りで抜けると捨てるが、run も止まる
+    let mut out = std::mem::take(&mut sched.runnables);
     sched
         .cells
         .drain(ctx, &mut *sched.driver, depth_offset, &mut out)?;
@@ -1416,10 +1421,11 @@ fn collect<R: Exec>(
         let entries = code
             .entries
             .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
-        for run in out {
+        for run in out.drain(..) {
             schedule(code, sched, entries, run)?;
         }
     }
+    sched.runnables = out;
     // ハンドラは見張りの語で保留にするか既定の動きにするかを決めるので、届けて空になった列と取り消しで外れた待ち手を
     // ここで写す (docs/spec/vm.md の「上限と割り込み」)
     sched.sync_watched();
@@ -2399,7 +2405,7 @@ fn schedule<M: Mode, P: Policy>(
         }
     };
     let worker = sched.cells.worker(cell)?;
-    let stack = sched.stacks.pop().unwrap_or_default();
+    let spare = sched.stacks.pop().unwrap_or_default();
     let task = Task::entry(
         code,
         function,
@@ -2408,7 +2414,7 @@ fn schedule<M: Mode, P: Policy>(
         cell,
         worker,
         sched.max_depth,
-        stack,
+        spare,
     );
     let id = sched.add_task(task);
     sched.ready.push_back(id);

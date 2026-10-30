@@ -21,6 +21,7 @@ many-py-1000	many.em	1000 {port}	1000 {port}	many-server 1000	many-server 1000	1
 conn-self-1	conn.em	10000 1	1000 1	-	-	10000	1000	接続
 conn-self-32	conn.em	10240 32	1024 32	-	-	10240	1024	接続
 conn-py	conn.em	10000 1 {port}	1000 1 {port}	conn-server 10000	conn-server 1000	10000	1000	接続
+busy-self	busy.em	2000	200	-	-	2000	200	往復
 py:echo	-	echo-client 20000 16 {port}	-	echo-server	-	20000	0	往復
 py:bulk	-	bulk-send 1024 64 {port}	-	sink-server	-	1024	0	MiB
 py:conn	-	conn-client 10000 {port}	-	conn-server 10000	-	10000	0	接続

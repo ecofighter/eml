@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 
 use eml_rt::{Control, IoDriver};
 
-use crate::cells::{CellRef, Registry};
+use crate::cells::{CellRef, Registry, Runnable};
 use crate::doorbell::Doorbell;
 use crate::driver::{DriverKind, ceil_ms};
 use crate::monitor::Monitor;
@@ -266,8 +266,9 @@ pub struct Scheduler<P: Policy> {
     pub(crate) shared_roots: usize,
     /// `Async` のタスクとスコープのセル。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) cells: Registry,
-    /// 終わったエントリの `Task` のスタック。次のエントリの `Task` が使い回す。
-    pub(crate) stacks: Vec<Vec<eml_rt::Word>>,
+    /// 終わったエントリの `Task` のスタックと scratch。次のエントリの `Task` が使い回す。待ちから戻るたびにエントリの
+    /// `Task` を作るので、毎回の確保を避けるためである。
+    pub(crate) stacks: Vec<(Vec<eml_rt::Word>, Vec<eml_rt::Word>)>,
     /// 時計と待ち。`Machine` が持つものを run の間だけ預かる (docs/spec/vm.md の「時計と driver」)。
     pub(crate) driver: Box<dyn IoDriver>,
     /// driver の出どころ。`Real` の run だけが OS のシグナルを待つタスクへ届ける (docs/spec/stdlib.md の
@@ -275,6 +276,8 @@ pub struct Scheduler<P: Policy> {
     pub(crate) driver_kind: DriverKind,
     /// OS を見ずに続けた `switch_away` の切り替えの数。`POLL_EVERY` に達するか、集める地点が OS を見たら 0 に戻す。
     pub(crate) since_poll: u32,
+    /// 集める地点が再開する仕事を積む列。毎回の確保を避けるために使い回し、集める地点の外ではいつも空である。
+    pub(crate) runnables: Vec<Runnable>,
     /// 監視のスレッドと、それに渡すもの。
     pub(crate) watcher: Watcher,
 }
@@ -329,6 +332,7 @@ impl<P: Policy> Scheduler<P> {
             driver,
             driver_kind: DriverKind::Virtual,
             since_poll: 0,
+            runnables: Vec::new(),
             watcher: Watcher {
                 control,
                 doorbell,
