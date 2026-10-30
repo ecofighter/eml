@@ -35,7 +35,7 @@ fn every_ca_copy_is_the_fixture() {
             }
         }
     }
-    for expected in ["run/tls/ca.pem", "run-fail/tls/ca.pem"] {
+    for expected in ["run/tls/ca.pem", "run-fail/tls/ca.pem", "run/http/ca.pem", "run-fail/http/ca.pem"] {
         assert!(found.contains(&expected.into()), "{expected} がない");
     }
 }
