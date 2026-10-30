@@ -249,6 +249,45 @@ fn a_readable_probe_stays_pending_without_data() {
     assert_eq!(driver.pending(), 0);
 }
 
+/// 読めるデータのある端の `Readable` は受け付けで終わり、完了を残さない。データは読み進めないので、続く読みが読む。
+/// 書いた直後に届いていることは OS が約束しないので、1つ目の `Readable` で届いたと分かってから2つ目を出す。
+#[cfg(unix)]
+#[test]
+fn a_probe_with_data_finishes_at_submit() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (a, b) = connection(&mut driver, &mut stash);
+    let mut data = *b"hi";
+    let write = Op::Write {
+        handle: b,
+        buf: raw(&mut data),
+    };
+    assert_eq!(
+        run_op(&mut driver, &mut stash, write).unwrap(),
+        Done::Size(2)
+    );
+    let first = submit(&mut driver, Op::Readable { handle: a });
+    complete(&mut driver, &mut stash, first).result.unwrap();
+    let probe = driver.submit(next_key(), Op::Readable { handle: a });
+    assert!(
+        matches!(probe, Submit::Done(Ok(Done::Size(0)))),
+        "{probe:?}"
+    );
+    driver.completions(&mut stash);
+    assert!(stash.is_empty());
+    assert_eq!(driver.pending(), 0);
+    let mut room = [0u8; 8];
+    let read = Op::Read {
+        handle: a,
+        buf: raw(&mut room),
+    };
+    assert_eq!(
+        run_op(&mut driver, &mut stash, read).unwrap(),
+        Done::Size(2)
+    );
+    assert_eq!(&room[..2], b"hi");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_read_after_a_probe_returns_the_bytes() {

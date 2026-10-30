@@ -58,6 +58,10 @@ const SEND_FLAGS: SendFlags = SendFlags::NOSIGNAL;
 #[cfg(not(target_os = "linux"))]
 const SEND_FLAGS: SendFlags = SendFlags::empty();
 
+/// `Readable` の覗きの旗。データを読み進めず、ソケットがブロックする設定でも待たない。
+#[cfg(unix)]
+const PEEK_FLAGS: libc::c_int = libc::MSG_PEEK | libc::MSG_DONTWAIT;
+
 type Job = Box<dyn FnOnce() -> BufResult<usize, ()> + std::marker::Send>;
 
 /// 出した操作の今の compio の鍵。1つの `OpKey` の操作は、書きの出し直し、受けの再試行、接続の次の試行で、
@@ -672,7 +676,22 @@ impl IoDriver for RealDriver {
             #[cfg(unix)]
             Op::Readable { handle } => {
                 let fd = self.fd(handle).expect("the handle is checked above");
-                self.push(PollOnce::new(fd, Interest::Readable), Slot::Readable)
+                // poll の backend の `PollOnce` は `push` の中で終わらないので、先に1バイトを覗いて確かめる。データか
+                // EOF があれば受け付けで終える。覗きはデータを読み進めず、誤りなら次の読みと同じ誤りを返す
+                // (docs/spec/vm.md の「時計と driver」)
+                let mut byte = [MaybeUninit::uninit()];
+                match SockRef::from(&fd).recv_with_flags(&mut byte, PEEK_FLAGS) {
+                    Ok(_) => Step::Done(Ok(Done::Size(0)), false),
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        self.push(PollOnce::new(fd, Interest::Readable), Slot::Readable)
+                    }
+                    Err(e) => Step::Done(Err(e), false),
+                }
             }
             #[cfg(windows)]
             Op::Readable { handle } => {
