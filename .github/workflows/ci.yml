@@ -57,6 +57,10 @@ jobs:
       - name: cargo nextest run
         id: test
         run: cargo nextest run --failure-output immediate-final
+      # 時間の検査は runner の速さをそろえるため x86_64 の Linux だけで流す。ビルドは前の手順のものを使う
+      - name: cargo nextest run --profile timing -j 1
+        if: ${{ matrix.os == 'ubuntu-24.04' && !cancelled() && steps.test.outcome != 'skipped' }}
+        run: cargo nextest run --profile timing -j 1 --failure-output immediate-final
       # テストが落ちても lint の結果は見たいので、前の手順が済んでいれば流す
       - name: cargo clippy --all-targets
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}

@@ -536,6 +536,8 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 
 nextest は2秒を超えて走るテストを `SLOW` と表示し、60 秒で止めて失敗にする。集めて流す5つのテストは 10 秒ごとに表示し、同じく 60 秒で止める。止めたテストの標準エラーは要約に出る。
 
+CI は、`.config/nextest.toml` の `timing` の profile で、テストを1つずつ流す (`cargo nextest run --profile timing -j 1`)。この profile は、`SLOW` と表示する時間 (2秒、集めて流す5つは 10 秒) を過ぎたテストを止めて失敗にする。条件を破ったテストが、誰も気づかないまま残るのを防ぐためである。時間は開発機での条件の2倍にし、runner が開発機より遅くても、条件を守るテストは通るようにする。閾値を1つの速さの runner に合わせるため、流すのは x86_64 の Linux の runner だけにする。
+
 `crates/eml_types/tests/scaling.rs` は、合成プログラムを4倍の大きさにしたときの型検査の時間の比を確かめる。形は、多相な関数の連鎖、独立した多相な関数、`data` と `match`、持ち越しの連鎖、環状の相互再帰、関数を引数に取る関数の輪 (`a_ring_of_higher_order_functions`)、局所のラムダを持つ関数の輪 (`a_ring_of_functions_with_local_lambdas`)、推論で上限が付く関数の輪 (`a_ring_of_functions_with_inferred_bounds`)、長い矢印の鎖の上を参照する多くの関数 (`many_functions_over_a_long_arrow_chain`)、1つの本体で同じ名前の `let` が続く連鎖、部分を共有する型を作る `let` の列 (`let f1 = f0 ident` の列)、その列を2本作って `if` で合わせる形、呼び出しを要素に持つリストのリテラル (`a_list_literal_of_calls`。`[id_ 0, id_ 1, …]`) である。HIR まで作ってから `eml_types::check` の時間だけを測り、各大きさで3回測った最小を使う。大きさは関数の数で、2000 と 8000 にする。最後の4つの形は関数の数を大きさにしない。同じ名前の `let` が続く連鎖は `let` の数を、部分を共有する型を作る2つの形は1本の列の長さを、リストのリテラルは要素の数を大きさにする。リストのリテラルは、持ち越しのパスが評価済みの要素を1つで代表させること ([コンパイラの構成](architecture.md) の「`eml_types` の内部」) を確かめる。比が6以下なら通る。部分を共有する型を作る2つの形は、型の深さが列の長さに比例し、書き出し、単一化、occurs の検査の再帰がその深さまで進む。テストのスレッドの既定のスタック (2 MiB) では足りないので、この2つは 64 MiB のスタックのスレッドで測る。ほかに、前の値を2つ並べた `Pair` の `let` の列の後で、型クラスの制約を1つ解く形がある。この型は木として書き下すと列の長さの指数の大きさになるので、制約の解決が同じクラスと型の組を1回だけ解くかを確かめる。列そのものの検査に列の長さの2乗の時間がかかる ([実装の現在地](status.md) の「コンパイルの時間と深さ」) ため、この形は大きさを変えた比を測らない。長さ 2000 の同じ列で、最後に制約を解く本体と解かない本体の時間を比べ、比が6以下なら通る。型が深いので、これも 64 MiB のスタックのスレッドで測る。時間を測るので `#[ignore]` を付け、release ビルドで流す。型検査の構造を変えたときに流す。
 
 `crates/eml_core_ir/tests/instances.rs` は、単相化の instance の数と名前を確かめるテスト (多相な関数の鎖を2つの型で使うと各関数の instance がちょうど2つになる、多相再帰が一様な1つの instance になる、など) をふだんの実行で流す。同じファイルに、`eml_core_ir::lower` の時間だけを測るテストが2つある。多相な関数の鎖を `Int` と `String` で使う形と、部分を共有する型を作る `let` の列を総称な関数の本体に置いて `main` から使う形である。各大きさで3回測った最小を使い、大きさ 2000 と 8000 の時間の比が6以下なら通る。後の形は型が深いので、`eml_types` の `scaling.rs` と同じく 64 MiB のスタックのスレッドで測る。どちらも `#[ignore]` を付け、release ビルドで流す。translate の instance の集め方を変えたときに流す。
@@ -577,13 +579,13 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 `.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の5つのジョブを流す。
 
-- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる。ubuntu-24.04 では、同じビルドで時間の検査 (「性能のテスト」) も流す
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 - `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::` と `signal::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
 
-CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。nextest の CI 用の profile は作らず、落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
+CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
 
 アクションは commit の SHA で固定し、バージョンの名前をコメントに書く。runner の image は名前で固定し、上げるのは手で行う。nix のストアはキャッシュしない。install-nix-action には `GITHUB_TOKEN` を渡し、`github:` の input の取得が率の制限に当たらないようにする。token は nix.conf に入ってジョブの中で動くものから読めるが、権限は `contents: read` だけで、ジョブとともに切れるので受け入れる。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
 
@@ -630,6 +632,7 @@ dev プロファイル (`cargo nextest run` と `cargo test` もこれを使う)
 cargo nextest run                                    # すべてのテスト
 cargo test                                           # 同じテストを流す (1つの crate の短いループでは cargo test -p の方が速い)
 cargo nextest run -j 1                               # ふだんの実行の条件を確かめる (1秒を超えるのは集めて流す5つだけ。性能のテスト)
+cargo nextest run --profile timing -j 1              # CI の時間の検査 (SLOW の時間を過ぎたテストを失敗にする。性能のテスト)
 cargo nextest run -p eml_syntax --test integration parser::empty_file    # 1つのテスト
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'          # UI テスト
 EML_UI_FILTER=basics/hello.em cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # 1つの UI テストだけ流す
