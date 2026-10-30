@@ -1,6 +1,6 @@
 -- `tls-cut.localhost` の終端器は close_notify を送らずに閉じる。クライアントは届いた平文を読みきった後の読みで
--- `ConnectionReset` の失敗を受ける。leaf の証明書の名前に `tls-cut.localhost` はないので、接続は `Net` で開き、
--- `tls.localhost` の名前で handshake する (docs/spec/stdlib.md の「`Std.Tls`」、docs/spec/vm.md の「時計と driver」)
+-- `ConnectionReset` の失敗を受ける。接続は `Net` で開き、`Tls.wrap_with_ca` で `tls.localhost` の名前の
+-- handshake をする (docs/spec/stdlib.md の「`Std.Tls`」、docs/spec/vm.md の「時計と driver」)
 import Async (Async)
 import Async
 import Bytes

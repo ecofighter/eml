@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/http/too_many_redirects.em
+---
+--- stdout ---
+Other
+--- stderr ---
+--- runtime error ---
+cannot follow the redirect to /again: too many redirects (the limit is 2)
+  at run-fail/http/too_many_redirects.em:37:7

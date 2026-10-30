@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/http/https_get.em
+---
+--- stdout ---
+server: GET / HTTP/1.1
+server: Host: tls.localhost:49152
+server: User-Agent: eml
+server: Connection: close
+client: 200 secure
+server: GET /plain HTTP/1.1
+server: Host: localhost:49152
+server: User-Agent: eml
+server: Connection: close
+server: GET /upgraded HTTP/1.1
+server: Host: tls.localhost:49152
+server: User-Agent: eml
+server: Connection: close
+client: 200 until close_notify
+--- stderr ---

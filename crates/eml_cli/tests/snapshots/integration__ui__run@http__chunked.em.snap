@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/http/chunked.em
+---
+--- stdout ---
+status: 200
+header: transfer-encoding: Chunked
+header: content-length: 3
+length: 100047
+head: hello, chunked! 
+tail: x and the last one, of 31 bytes.
+--- stderr ---

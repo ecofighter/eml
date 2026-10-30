@@ -69,7 +69,12 @@ fn an_ip_name_checks_the_ip_san() {
 
 #[test]
 fn the_leaf_is_valid_for_each_name() {
-    for name in ["tls.localhost", "localhost", "127.0.0.1"] {
+    for name in [
+        "tls.localhost",
+        "tls-cut.localhost",
+        "localhost",
+        "127.0.0.1",
+    ] {
         let mut c = client(name);
         let mut s = server();
         pump(&mut c, &mut s);

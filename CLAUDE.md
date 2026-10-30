@@ -48,7 +48,7 @@ cargo verus verify -p eml_rt         # Verus proofs of eml_rt
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)
 bench/rt.sh                          # eml_rt fast-mode instruction counts (macOS)
-bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ and the numeric bench/ programs against their Python versions, each row sized to ~300 ms of eml time: wall time and peak RSS (macOS)
+bench/scripts.sh                     # the scripts under tests/ui/run/scripts/, the https-get row (Std.Http against a local TLS server) and the numeric bench/ programs against their Python versions, each row sized to ~300 ms of eml time: wall time and peak RSS (macOS)
 bench/net.sh LABEL=EML[@DIR] [LABEL=EML[@DIR]] [--only REGEX] [--stats]   # Std.Net on the real driver: CPU, syscalls (strace, Linux), RSS and RunStats per case as JSONL; @DIR runs that label on the programs in DIR (an older commit's bench/net); bench/net/report.py makes the tables
 bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input, compare.sh --paths EML PY ARGS... < input)
 ```
@@ -134,6 +134,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | `Std.Chan` and `Std.Atomic` | docs/spec/stdlib.md の「`Std.Chan`」, docs/spec/stdlib.md の「`Std.Atomic`」, docs/spec/vm.md の「channel」, docs/spec/object-model.md の「論理的な worker ID」 |
 | `Std.Net` and `Std.Signal` | docs/spec/stdlib.md の「`Std.Net`」, docs/spec/stdlib.md の「`Std.Signal`」, docs/spec/vm.md の「上限と割り込み」 |
 | `Std.Tls` | docs/spec/stdlib.md の「`Std.Tls`」, docs/spec/vm.md の「時計と driver」 (the test driver's `tls.localhost`) |
+| `Std.Http` | docs/spec/stdlib.md の「`Std.Http`」 |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
 | The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |
