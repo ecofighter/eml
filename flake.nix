@@ -113,6 +113,10 @@
                 "--skip"
                 "cli::a_script_with_a_shebang_runs_directly"
               ];
+              # 他者の crate のライセンスの全文をバイナリと一緒に配る (docs/implementation/architecture.md の「外部 crate」)
+              postInstall = ''
+                install -Dm644 -t $out/share/doc/eml LICENSE.txt THIRD-PARTY-LICENSES.md
+              '';
               meta.license = pkgs.lib.licenses.mit;
             };
             default = eml;
@@ -123,6 +127,7 @@
             default = pkgs.mkShell {
               packages = [
                 devToolchain
+                pkgs.cargo-about
                 pkgs.cargo-insta
                 pkgs.cargo-nextest
               ]

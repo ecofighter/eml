@@ -72,7 +72,7 @@ $ eml check leak.em
 
 ## ビルドと実行
 
-開発環境は Nix flake で用意する。direnv を使う場合は `direnv allow` で devShell に入る。devShell には clippy、rustfmt、rust-analyzer、cargo-insta、cargo-nextest、Verus (`cargo-verus` と `verusfmt`) が入っている。nix を使わないときは、rustup が `rust-toolchain.toml` のバージョンを入れる。TLS の暗号 (aws-lc) を組むので、C のツールチェーンも要る。
+開発環境は Nix flake で用意する。direnv を使う場合は `direnv allow` で devShell に入る。devShell には clippy、rustfmt、rust-analyzer、cargo-about、cargo-insta、cargo-nextest、Verus (`cargo-verus` と `verusfmt`) が入っている。nix を使わないときは、rustup が `rust-toolchain.toml` のバージョンを入れる。TLS の暗号 (aws-lc) を組むので、C のツールチェーンも要る。
 
 ```sh
 cargo build                                  # すべての crate をビルドする
@@ -157,4 +157,4 @@ crate の依存と各 crate の中身は [docs/implementation/architecture.md](d
 
 ## ライセンス
 
-[MIT License](LICENSE.txt) で公開している。
+[MIT License](LICENSE.txt) で公開している。`eml` のバイナリには他者の crate が入る。それらの crate とライセンスの全文は [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) にまとめてあり、`nix build` はこのファイルを `LICENSE.txt` と一緒に `share/doc/eml/` に入れる。

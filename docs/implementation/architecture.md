@@ -446,3 +446,11 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `webpki-roots` | 1.0 | `eml_tls` の既定の根の証明書 |
 
 `eml` バイナリには、aws-lc、rustls、webpki-roots の根の証明書のデータが入る。どれも eml と別のライセンスに従う。aws-lc は `ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause` ほか、rustls は `Apache-2.0 OR ISC OR MIT`、webpki-roots の根のデータは `CDLA-Permissive-2.0` である。`flake.nix` の `meta.license` は eml 自身のライセンス (MIT) だけを書く。
+
+バイナリに入る他者の crate と、そのライセンスの全文は、リポジトリの直下の `THIRD-PARTY-LICENSES.md` にまとめる。このファイルは cargo-about が `about.toml` と `about.hbs` から生成するので、手では直さない。依存を変えたら `nix develop -c nix/third-party-licenses.sh` で書き直す。cargo-about は devShell に入れてあり、バージョンは `flake.lock` で決まる。
+
+- 対象は、既定の feature の `eml_cli` が CI の4つの target (x86_64 と aarch64 の Linux、aarch64 の macOS、x86_64 の Windows) で依存する crate である。dev-dependencies と build-dependencies は除く。手続きマクロとその依存はビルドの間にしか動かないが、cargo-about はこれを除けないので一覧に残る。ワークスペースの crate は eml 自身なので、`about.hbs` が除く
+- cargo-about は `--frozen` で走らせる。ClearlyDefined を引かず、crate に入っているファイルだけを読むので、出力はネットワークに左右されない。ライセンスのファイルを持たない crate には、SPDX が定めるそのライセンスの文面が入る
+- aws-lc-sys、aws-lc-rs、windows-sys、windows-link のライセンスのファイルは、自動の判定では読めない。そこで `about.toml` で、使うファイル (aws-lc-sys は切り出す範囲も) とその SHA-256 を指定する。crate を上げてファイルが変わると、cargo-about は警告を出して指定を捨てる。`nix/third-party-licenses.sh` はこの警告で止まるので、そのときは `about.toml` の範囲と SHA-256 を今のファイルに合わせる
+- CI の `licenses` ジョブが、コミットしたファイルと生成した結果を比べる ([テスト戦略](testing.md) の「CI」)
+- `nix build` は `LICENSE.txt` と `THIRD-PARTY-LICENSES.md` を `$out/share/doc/eml/` に入れる
