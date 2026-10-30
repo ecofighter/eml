@@ -225,6 +225,8 @@ src/trust.rs         ソースを読む unsafe のテスト
 - abort のテストは `driver/tests/abort.rs` に置く (A1 §5 の `driver::abort::` ではない)。
 - A1 Q3 のプールの手順は D-3 の形 (A3 の補い) に従う。
 - A4 の r1 の E1 と E3 は取り下げ済み。
+- 実行中の決定 (U3 のレビュー): `wait` は届いた完了があっても OS を timeout 0 で1回確かめる (A1 Q2 の形)。A4 Q1 の `a_wait_after_a_cancel_returns_true` の「`calls` に `Wait` がない」は「`Wait(Some(0))` の1回だけ」と読む。
+- 実行中の決定 (U3 のレビュー): 完了型の値が暫定であることのコメントは `driver/backend.rs` の trait と型に置く。`crates/eml_rt/src/driver.rs` のコメントは T-6 で D-6 の文と一緒に直す。
 
 ### 5.4 適合の基準
 
