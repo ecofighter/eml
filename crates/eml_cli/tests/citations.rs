@@ -60,21 +60,24 @@ fn is_markdown(path: &Path) -> bool {
 /// 行の折り返しと字下げをまたいで引用を読めるよう、行頭のコメントの記号を除き、空白をすべて除いてつなぐ。
 /// 日本語の文は折り返しで空白が入ったり消えたりするので、見出しとの照合も空白を除いて行う。
 fn flatten(path: &Path, text: &str) -> String {
-    text.lines()
-        .map(|line| {
-            let line = line.trim_start();
-            if is_markdown(path) {
-                line
-            } else {
-                ["///", "//!", "//", "--", "#"]
-                    .iter()
-                    .find_map(|marker| line.strip_prefix(marker))
-                    .unwrap_or(line)
-            }
-        })
-        .flat_map(str::chars)
-        .filter(|c| !c.is_whitespace())
-        .collect()
+    let markdown = is_markdown(path);
+    let mut flat = String::with_capacity(text.len());
+    for line in text.lines() {
+        let line = line.trim_start();
+        let line = if markdown {
+            line
+        } else {
+            ["///", "//!", "//", "--", "#"]
+                .iter()
+                .find_map(|marker| line.strip_prefix(marker))
+                .unwrap_or(line)
+        };
+        // 文字ごとに足すより、空白で区切った断片ごとに足すほうが速い。
+        for word in line.split_whitespace() {
+            flat.push_str(word);
+        }
+    }
+    flat
 }
 
 fn without_whitespace(text: &str) -> String {
