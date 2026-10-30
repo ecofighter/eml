@@ -441,3 +441,5 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`)。`eml_io` は unix だけで依存し、epoll と kqueue の backend のソケット、登録、待ち、起こし (`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`) と、スレッドを始める間のシグナルの塞ぎ (`spawn_masked` の `pthread_sigmask`) に使う。`eml_vm` も unix だけで依存し、自己パイプ (`Doorbell`。`pipe`、`poll`、`write`) に使う |
 | `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`)、物理メモリの大きさ (`GlobalMemoryStatusEx`)。`eml_io` は Windows だけで依存し、IOCP の backend のポートと待ちと起こし (`CreateIoCompletionPort`、`GetQueuedCompletionStatusEx`、`PostQueuedCompletionStatus`) に使う |
 | `rustyline` | 19.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
+| `rustls` | 0.23 (`aws_lc_rs`、`std`、`tls12`) | `eml_tls` の TLS の接続。provider は aws-lc-rs だけで、接続ごとに `builder_with_provider` で渡す。aws-lc-rs は rustls の既定で推奨の provider で、組むのに要るのは C のツールチェーンだけである (上の「crate の依存関係」) |
+| `webpki-roots` | 1.0 | `eml_tls` の既定の根の証明書 |

@@ -28,8 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `net-tls`: `Std.Tls` のクライアントを入れる。TLS の状態は rustls の上の crate `eml_tls` が持ち、`eml_vm` と `eml_io` の feature `tls` で結び、`eml_cli` の既定の feature で有効にする。ソケットの I/O は `Std.Net` が行い、`Tls` の eml のコードが `TcpStream` と TLS の状態の間でバイトを汲む。server は作らない。テストの相手は、テストの driver の仮想のホスト `tls.localhost` が Rust で TLS を終端し、平文を `localhost` の listener へつなぐ。暗号は aws-lc-rs、根の証明書は webpki-roots で、追加の CA は PEM で渡す。最初に `nix build` と CI で C の依存が組めることを確かめる。前提: なし。設計: [非同期の設計](async.md) の「TLS と HTTP」
-- `std-http`: `Std.Http` の HTTP/1.1 のクライアントを、`Net` と `Tls` の上に eml で書く。`Content-Length`、chunked、EOF までの本文、リダイレクトを扱い、接続は要求ごとに閉じる。速さは `bench/scripts.sh` の行で測る。前提: `net-tls`。設計: [非同期の設計](async.md) の「TLS と HTTP」
+- `std-http`: `Std.Http` の HTTP/1.1 のクライアントを、`Net` と `Tls` の上に eml で書く。`Content-Length`、chunked、EOF までの本文、リダイレクトを扱い、接続は要求ごとに閉じる。速さは `bench/scripts.sh` の行で測る。前提: なし。設計: [非同期の設計](async.md) の「TLS と HTTP」
 - `net-windows`: 自前の IOCP の backend にソケットを載せ、同じネットのテストの組を Windows で流す。`Std.Signal` の `Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写す。前提: なし。設計: [非同期の設計](async.md) の「テストと決定性」
   - 重なった I/O では、取り消した後も完了の packet が届くまで、カーネルが backend の `OVERLAPPED` に書く。長さ 0 の `WSARecv` を含む IOCP の保留をすべて `Hold::Buffer` (カーネルが記憶に触れうる) とするか、3つ目の値を足すか、IOCP の backend の `Drop` で packet を待つかを、この段の設計で決める ([コンパイラの構成](../implementation/architecture.md) の「`eml_io` の内部」)
   - 読みはブロックしない `recv` を先に試し、ブロックするなら長さ 0 の `WSARecv` で読めるまで待ってから、もう一度 `recv` する。読みの buffer をカーネルに渡さない。書きと受けも先に試し、ブロックするときだけ `WSASend` と `AcceptEx` を出す
@@ -53,9 +52,9 @@
   - 新しい配列は `Array a` とは別の型で、長さの語と連続した中身を持つ物体の仲間 (`String`、`Bytes`。[オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」) の別の種類である。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
 - `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: `raw-arrays`。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
 - `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。今は std に仕事を出す行がなく、プールの仕事は `eml_io` のテストだけが確かめるので、VM からプールの仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
-- `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。`Tls.connect_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: `net-tls`、`ffi-blocking`。設計: この項目
+- `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。`Tls.connect_with_ca` と `Tls.wrap_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: `ffi-blocking`。設計: この項目
   - テストの証明書: macOS は TLS の server の証明書の有効期間に上限 (825 日) を課すと理解しているので、期限を 2126 年にした `eml_tls` の fixtures は、本物のソケットのテストで拒まれる見込みである。段の最初に確かめ、期限の短い証明書を定期的に作り直すか、テストだけ別の検証を使うかを決める
-  - Linux の OS の検証器は、OS のファイルから根を読んで rustls で検証する。`ca-certificates` を持たない最小のコンテナ (distroless など) と nix の sandbox では根が空になり、`Tls.connect` はすべて失敗する。この使い方は `Tls.connect_with_ca` で根を渡すと spec に書く。テストは `connect_with_ca` だけで書き、既定の根に頼るテストは置かない
+  - Linux の OS の検証器は、OS のファイルから根を読んで rustls で検証する。`ca-certificates` を持たない最小のコンテナ (distroless など) と nix の sandbox では根が空になり、`Tls.connect` はすべて失敗する。この使い方は `Tls.connect_with_ca` で根を渡すと spec に書く。テストは `connect_with_ca` か `wrap_with_ca` で根を渡して書き、既定の根に頼るテストは置かない
   - 拒否の理由は OS ごとに違う。IO の失敗の文言は今の固定の文言を保ち、OS の詳細を付けない
   - Windows の検証が根をネットワークから取りに行くと、CI の結果がネットワークの状態に左右される。CI でこれをどう避けるかを、この段の設計で決める
   - 依存が OS ごとに増える (macOS の security-framework、Windows の証明書の API)。暗号の provider は aws-lc-rs のまま変えない
@@ -360,6 +359,9 @@
 - TLS の server (`Tls.accept`、SNI で証明書を選ぶこと、クライアント認証、ALPN)
   - 後に回した理由: 目標は HTTPS のクライアントで、server は作らない。テストの相手はテストの driver が Rust で終端する。
   - 見直す条件: eml で HTTPS のサーバを書くとき。
+- `Tls` の期限を持つ読み (`read_chunk_within`、`read_line_within`): `Tls` の関数は期限を持たず、期限は `Async.timeout` で付ける。期限が来ると巻き戻しが `Stream` を落とす ([標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」)
+  - 後に回した理由: 呼び出しの全体に付く期限には、eml のプログラムが読める時計 (下の `Time` のモジュールの項目) が要る。今書けるのは `Net` の読み1回ごとに期限を付け直す形だけで、期限が1行の全体に付く `Net.read_line_within` と意味が違う。
+  - 見直す条件: eml のプログラムが時計を読めるようになったとき、または期限の後も `Stream` を保つ読みが要るプログラムが出たとき。
 - close_notify なしの EOF を EOF として読む `Tls` の読み
   - 後に回した理由: 既定は IO の失敗 `ConnectionReset` にした。長さを持たない本文 (EOF までの本文) が黙って切れるのを防ぐためである。
   - 見直す条件: close_notify を送らないサーバと話す必要が出たとき。
