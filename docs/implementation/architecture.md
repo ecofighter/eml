@@ -387,7 +387,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
   - `FAILED` (16): 失敗を記録した
 - 失敗は最初の1つだけを記録し、その後の `push_tls` は何も読まず、`write_plain` は平文を捨てる。同じ `push_tls` の中で失敗の前に復号できた平文は列に残す。それを捨てるかどうかは呼ぶ側が決める。失敗の後も rustls が積んだ alert は `pull_tls` で取り出せるので、呼ぶ側は相手に失敗を伝えてから閉じられる。close_notify を受けた後も `push_tls` は何も読まず、その後ろのレコードは捨てる
 - 文言は固定である。作るときの誤り (`Error`) はそれぞれ1つの文言を持つ。証明書の拒否 (rustls の `InvalidCertificate`) は理由によらず `the server certificate was rejected` とし、rustls の詳細を付けない。ほかの TLS の誤りと `read_tls` の誤りは rustls の文言をそのまま使う
-- `send_close_notify` は rustls のものを呼ぶだけで、2度目は何もしない。致命的な alert を送った後も何もしない。close_notify を送った後の `write_plain` も、rustls は止めずにレコードを作る。そのため、呼ぶ側がソケットの送る向きを閉じた後に書くと、そのレコードはソケットまで届いてそこで失敗する
+- `send_close_notify` は rustls のものを呼ぶだけで、2度目は何もしない。致命的な alert を送った後も何もしない。close_notify を送った後の `write_plain` も、rustls は止めずにレコードを作る。そのため、呼ぶ側がソケットの送る向きを閉じた後に書くと、そのレコードはソケットまで届いてそこで失敗する。close_notify を送った後に相手の壊れたレコードが届くと、rustls は致命的な alert を積む前の `debug_assert!` で panic する。そこで workspace の `Cargo.toml` は dev の profile で rustls の debug assertions を切り、release と同じく `FAILED` になるようにしている
 - `Conn::server` と `fixtures` は、テストの driver の終端器とテストのためだけにある。`fixtures` の鍵は公開されたテスト用の定数で、何も認証しない
 
 ## ソースファイルと位置

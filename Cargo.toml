@@ -41,3 +41,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_S
 # (docs/implementation/testing.md の「よく使うコマンド」)
 [profile.dev]
 opt-level = 1
+
+# 自分が close_notify を送った後に相手から壊れたレコードが届くと、rustls は致命的な alert を
+# 積む前の debug_assert! で panic する。release では alert を積むだけなので、dev でも同じ振る舞いにする
+# (docs/implementation/architecture.md の「`eml_tls` の内部」)
+[profile.dev.package.rustls]
+debug-assertions = false

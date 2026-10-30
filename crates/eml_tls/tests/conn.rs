@@ -336,3 +336,16 @@ fn read_plain_moves_everything() {
 fn the_box_fits_alloc_foreign() {
     assert!(std::mem::align_of::<Conn>() <= 8);
 }
+
+// 自分が close_notify を送った後も、相手の壊れたレコードは panic でなく失敗になる
+#[test]
+fn a_bad_record_after_close_notify_fails() {
+    let (mut c, _s) = connected();
+    c.send_close_notify();
+    pull(&mut c);
+    let mut junk = vec![0x17, 3, 3, 0, 0x20];
+    junk.extend_from_slice(&[0x5a; 32]);
+    c.push_tls(&junk);
+    assert_eq!(c.status() & FAILED, FAILED);
+    assert!(!c.error_message().is_empty());
+}
