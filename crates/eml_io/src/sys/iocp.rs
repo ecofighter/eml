@@ -1,6 +1,6 @@
-#![allow(unsafe_code)]
 //! Windows の backend。ソケットを扱わず、IOCP のポートで起こしと時間切れだけを待つ
 //! (docs/spec/vm.md の「時計と driver」)。ソケットは docs/future/roadmap.md の `net-windows` の項目である。
+#![allow(unsafe_code)]
 
 use std::io;
 use std::net::SocketAddr;

@@ -320,6 +320,11 @@ fn the_core_walks_its_table_only_to_shut_down() {
         "slots.values",
         "slots.keys",
         "slots.drain",
+        "slots.retain",
+        "slots.extract_if",
+        "in&self.slots",
+        "in&mutself.slots",
+        "inself.slots",
     ] {
         let word: Vec<char> = word.chars().collect();
         for (at, _) in squeezed
