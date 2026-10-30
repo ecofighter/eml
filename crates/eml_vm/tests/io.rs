@@ -463,8 +463,9 @@ main () = Async.run (fn () ->
     assert_eq!(finished.stats.completions, 1);
 }
 
-/// テストの driver を包み、`wait` と `completions` の呼び出しの数と、受け付けた操作の種類を記録する driver。`quiesce`
-/// で、`submit` がその場で終えた操作の数を写す。`Machine` が driver を持つ間も、テストが記録を読めるようにする。
+/// テストの driver を包み、`wait` と `completions` の呼び出しの数と、受け付けた操作の種類、操作ごとに受け付けで
+/// 終わったか、読みに貸された大きさを記録する driver。`quiesce` で、`submit` がその場で終えた操作の数を写す。
+/// `Machine` が driver を持つ間も、テストが記録を読めるようにする。
 struct Recorder {
     inner: eml_io::TestDriver,
     log: Arc<std::sync::Mutex<Log>>,
@@ -475,6 +476,10 @@ struct Log {
     waits: usize,
     completions: usize,
     ops: Vec<&'static str>,
+    /// `ops` の操作ごとに、`submit` が `Submit::Done` を返したか。
+    at_submit: Vec<bool>,
+    /// `Op::Read` ごとの、貸された記憶のバイト数。
+    lent: Vec<usize>,
     immediate: u64,
 }
 
@@ -489,17 +494,23 @@ impl IoDriver for Recorder {
     }
 
     fn submit(&mut self, key: OpKey, op: Op) -> Submit {
+        let mut log = self.log.lock().unwrap();
         let kind = match op {
             Op::Readable { .. } => "readable",
-            Op::Read { .. } => "read",
+            Op::Read { buf, .. } => {
+                log.lent.push(buf.cap);
+                "read"
+            }
             Op::Write { .. } => "write",
             Op::Listen { .. } => "listen",
             Op::Accept { .. } => "accept",
             Op::Connect { .. } => "connect",
             _ => "other",
         };
-        self.log.lock().unwrap().ops.push(kind);
-        self.inner.submit(key, op)
+        log.ops.push(kind);
+        let submit = self.inner.submit(key, op);
+        log.at_submit.push(matches!(submit, Submit::Done(_)));
+        submit
     }
 
     fn cancel(&mut self, key: OpKey) {
@@ -766,4 +777,83 @@ spin_checked n buf a b =
             assert_eq!(parks, [parks[0]; 4], "extra {extra}, n {n}");
         }
     }
+}
+
+/// 1つのタスクが自分で待ち受け、接続し、受け、`hi` を書いてから、`buf` を buffer にして読む。返すのは出力と、
+/// `Recorder` の記録である。
+fn read_into(buf: &str) -> (String, Log) {
+    let src = format!(
+        "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let a = Net.connect \"127.0.0.1\" port
+  let (b, l) = Net.accept l
+  Net.close_listener l
+  let a = Net.write \"hi\" a
+  let (buf, b) = Net.read_chunk ({buf}) b
+  Net.close a
+  Net.close b
+  println (String.decode buf))
+"
+    );
+    let log = Arc::new(std::sync::Mutex::new(Log::default()));
+    let driver = Recorder {
+        inner: eml_io::TestDriver::new(None),
+        log: Arc::clone(&log),
+    };
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine.load(&eml_test_support::lir(src.as_str())).unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    let log = std::mem::take(&mut *log.lock().unwrap());
+    (out.contents(), log)
+}
+
+/// 一意で空きが 8 バイト以上ある buffer の読みは、読めるようになるのを待つ操作を出さず、空きを貸す読みだけを出す
+/// (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_into_room_does_not_probe() {
+    let (out, log) = read_into("Bytes.with_capacity 16");
+    assert_eq!(out, "hi\n");
+    assert_eq!(log.ops, ["listen", "connect", "accept", "write", "read"]);
+    assert!(log.lent[0] >= 16, "{log:?}");
+}
+
+/// `Bytes.of_string "> "` の空きは、確保器が長さを語に切り上げた 8 バイトより少ない余りだけである。そのため読みは、
+/// 読めるようになるのを待ってから、広げた buffer の 65 536 バイトを貸す (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_into_word_slack_probes_first() {
+    let (out, log) = read_into("Bytes.of_string \"> \"");
+    assert_eq!(out, "> hi\n");
+    assert_eq!(log.ops[3..], ["write", "readable", "read"]);
+    assert_eq!(log.lent, [65_536]);
+}
+
+/// 空の `Bytes` の読みは、読めるようになるのを待ってから読む (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_into_empty_bytes_probes_first() {
+    let (out, log) = read_into("Bytes.empty ()");
+    assert_eq!(out, "hi\n");
+    assert_eq!(log.ops[3..], ["write", "readable", "read"]);
+}
+
+/// 相手が書いた後の読みでは、読めるようになるのを待つ操作が受け付けで終わり、その場で続けて出した読みも受け付けで
+/// 終わる。driver を待たずにバイトが返る (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_probe_done_at_submit_reads_at_once() {
+    let (out, log) = read_into("Bytes.empty ()");
+    assert_eq!(out, "hi\n");
+    assert_eq!(log.ops[4..], ["readable", "read"]);
+    assert_eq!(log.at_submit[4..], [true, true]);
+    assert_eq!((log.waits, log.completions), (0, 0));
 }

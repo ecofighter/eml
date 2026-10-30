@@ -95,7 +95,8 @@ connect host port =
           fail_code code "cannot connect to \{host}:\{show port}"
 
 -- `s` から 1 バイト以上 65 536 バイト以下を読んで `b` の後ろに足し、その `Bytes` とストリームを返す。EOF では何も
--- 足さない。取り消しの地点である
+-- 足さない。`b` が一意で空きが 8 バイト以上あれば、その空きの 65 536 バイトまでに読む。なければ容量を広げて、
+-- 65 536 バイトまで読む。取り消しの地点である
 pub read_chunk : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
 read_chunk b s =
   if Async.cancel_requested () then
