@@ -104,6 +104,8 @@ def strace_counts(path):
             if n:
                 names[tid] = n.group(1)
         key = name
+        if name == "recvfrom" and "MSG_PEEK" in rest:
+            key = "recvfrom(peek)"
         if name == "read":
             fd = rest.split(",", 1)[0].strip()
             if fd in eventfds:

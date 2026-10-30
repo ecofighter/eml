@@ -377,7 +377,7 @@ C/Rust との比
 
 ## ネットワークの計測
 
-`bench/net.sh` は、`Std.Net` を本物の driver の上で動かす物差しである。release ビルドの eml で `bench/net/cases.tsv` の件を流し、1件1行の JSONL を標準出力に出す。`python3 -I bench/net/report.py` がそれを Markdown の表にする。テストではなく、CI では流さない。命令の数でなく CPU の時間と syscall の数を測るので、同じ機械で前と後を並べたときだけ意味がある。
+`bench/net.sh` は、`Std.Net` を本物の driver の上で動かす物差しである。release ビルドの eml で `bench/net/cases.tsv` の件を流し、1件1行の JSONL を標準出力に出す。`python3 -I bench/net/report.py` がそれを Markdown の表にし、strace の run があるラベルには syscall の目標の表も出す。テストではなく、CI では流さない。命令の数でなく CPU の時間と syscall の数を測るので、同じ機械で前と後を並べたときだけ意味がある。
 
 `bench.py` は `LABEL=EML` を1つ以上受け取る。2つ以上渡すと、時間の run を件ごとに交互に流す。`LABEL=EML@DIR` と書いたラベルは、件のプログラムを `DIR` から読む。`std/` の型が変わり、前のコミットの eml が今のプログラムを型検査できないときに使う。`DIR` には、そのコミットの `bench/net` を `git archive <コミット> bench/net | tar -x -C <置き場所>` で取り出したものを渡す。件の行と引数と `peer.py` は今の `bench/net` のものを使い、`@DIR` のないラベルは今のプログラムを使う。`--only REGEX` で件を絞り、`--stats` で `eml run --stats` の `RunStats` を1回取る。`--stats` の run は検査モードなので、時間には使わない。
 
@@ -404,7 +404,9 @@ eml の側は `Std.Net` で書く。相手は同じ run の中の eml のタス�
 
 主指標は、eml のプロセスの CPU (user+sys) から `base` の中央値を引き、単位で割った値である。時間の run は件ごとに 11 回流し、中央値を使う。実時間、sys、最大 RSS、`minflt`、自発と非自発の切り替えは副の指標として並べる。`-py` の件の実時間は Python の相手が律速するので、eml の違いは CPU にしか出ない。
 
-syscall の数は `strace -f` で数える (Linux のみ)。main のスレッドとほかのスレッドに分け、名前ごと、失敗の errno ごとに数え、`base` を引いて単位で割る。3回流して範囲を出す。`RunStats` は `eml run --stats` の1回から取り、床の行にある欄だけを表に出す。
+syscall の数は `strace -f` で数える (Linux のみ)。main のスレッドとほかのスレッドに分け、名前ごと、失敗の errno ごとに数え、`base` を引いて単位で割る。3回流して範囲を出す。`MSG_PEEK` 付きの `recvfrom` は `recvfrom(peek)` として別に数え、失敗は `recvfrom(peek)!EAGAIN` に入る。データのある空きなしの読みが覗きと読みの2回で済むかは、この分けで見える。`RunStats` は `eml run --stats` の1回から取り、床の行にある欄だけを表に出す。
+
+`report.py` の目標の表は、件ごとに床を引いた単位あたりの式を strace の3回それぞれで計算し、値の最小-最大と、全回が基準を満たすかの判定を出す。式は mem = `brk` + `mmap` + `munmap`、E = `recvfrom!EAGAIN` + `recvfrom(peek)!EAGAIN`、R = `recvfrom` − `recvfrom!EAGAIN`、P = `recvfrom(peek)` − `recvfrom(peek)!EAGAIN` で組む。本数によらない費用の行だけは、many-self-250 と many-self-2000 の1接続あたりの CPU (床を引いた中央値) の比を時間の run から出す。件が流れていない行は「件なし」と出る。
 
 ### 比べる規則
 
