@@ -9,7 +9,7 @@ autotests = false
 [lib]
 doctest = false
 
-# tls を使うのはテスト用 driver の終端器と名前 tls.localhost だけで、実機の driver は使わない
+# tls を使うのはテスト用 driver の終端器と名前 tls.localhost だけで、本物の driver は使わない
 # (docs/implementation/architecture.md の「crate の依存関係」)
 [features]
 tls = ["dep:eml_tls"]

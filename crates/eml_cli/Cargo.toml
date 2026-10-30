@@ -18,7 +18,9 @@ required-features = ["run"]
 
 # `eml_test_support` はこの crate でパイプラインを組むので、段階ごとに feature を分ける。各 crate のテストは自分より
 # 下流の crate を組み立てずに済む (docs/implementation/testing.md)。
-# tls は run に足す Std.Tls で、外すと Std.Tls の腕が NotAvailable を投げる。
+# tls は run に足す Std.Tls で、外すと Std.Tls の腕が NotAvailable を投げる。`dep:eml_tls` は src/ では使わず、
+# 本物のソケットの上の結合テスト (tests/tls.rs) がサーバーを立てるためにある。dev-dependency にしない理由は
+# docs/implementation/testing.md の「OS ごとのテスト」にある。
 [features]
 default = ["run", "tls"]
 types = ["dep:eml_types"]

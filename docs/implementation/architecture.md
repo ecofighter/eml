@@ -44,9 +44,9 @@ eml/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。workspace の crate では eml_extern だけに依存する
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
-    eml_io/             # I/O の driver (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存する
+    eml_io/             # I/O の driver (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存し、feature `tls` の下では eml_tls にも依存する
     eml_tls/            # rustls のクライアント接続を包む TLS の状態 (I/O を持たない)。workspace の crate には依存しない
-    eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_io、eml_rt、eml_extern だけに依存する
+    eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_io、eml_rt、eml_extern だけに依存し、feature `tls` の下では eml_tls にも依存する
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
   std/                  # 標準ライブラリ (Prelude.em、Fs.em、List.em など)。eml_hir がバイナリに埋め込む
@@ -88,8 +88,9 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 ```
 
 - 段階の連なりに `eml_rt` は入らず、`eml_vm` と `eml_io` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
-- `eml_io` は `eml_rt` だけに依存し、`eml_vm` には依存しない。依存の順は `eml_cli` > `eml_vm` > `eml_io` > `eml_rt` で、`eml_io` > `eml_tls` も feature `tls` の下で加わる。trait `IoDriver` と driver に渡す型は `eml_rt` が持ち、`eml_io` はその実装だけを持つ ([VM](../spec/vm.md) の「時計と driver」)
-- `eml_tls` は workspace のどの crate にも依存しない。`eml_vm` と `eml_io` が依存するのは feature `tls` の下だけである。rustls は aws-lc-rs の provider だけで使い、根の証明書は webpki-roots が持つ。aws-lc-sys が要るのは C のツールチェーンだけで、Windows の x86_64 では NASM を使い、NASM がなければ組み済みのオブジェクトを使う。C のツールチェーンを持たない `.#cross` の clippy が `eml_tls` を除くのはこのためである
+- `eml_io` は workspace の crate では `eml_rt` と、feature `tls` の下の `eml_tls` だけに依存し、`eml_vm` には依存しない。依存の順は `eml_cli` > `eml_vm` > `eml_io` > `eml_rt` で、feature `tls` の下では `eml_io` > `eml_tls` と `eml_vm` > `eml_tls` が加わる。trait `IoDriver` と driver に渡す型は `eml_rt` が持ち、`eml_io` はその実装だけを持つ ([VM](../spec/vm.md) の「時計と driver」)
+- `eml_tls` は workspace のどの crate にも依存しない。`eml_vm` と `eml_io` が依存するのは feature `tls` の下だけである。`eml_cli` の feature `tls` も `eml_tls` を省ける普通の依存として足す。`eml_cli` の `src/` はこれを使わず、本物のソケットの上で TLS のサーバーを立てる結合テスト (`tests/tls.rs`) が使う。rustls は aws-lc-rs の provider だけで使い、根の証明書は webpki-roots が持つ。aws-lc-sys が要るのは C のツールチェーンだけで、Windows の x86_64 では NASM を使い、NASM がなければ組み済みのオブジェクトを使う。C のツールチェーンを持たない `.#cross` の clippy が `eml_tls` を除くのはこのためである
+- aws-lc-sys は、target の C のツールチェーンだけで組めることを前提にする。対応する OS か `nix build` で、組めない、リンクできない、動かないときは、OS ごとのツールや環境変数を足さず、provider を ring に替える。ring でも同じことが起きたら、設計から決め直す
 - `eml_lir` は、workspace の crate では `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである。表 (`Extern`、`ExternType`、`ExternEffect`) は `table!` が1つの並びから変種、`ALL`、静的な行を作り、`row` は行への参照を返す。VM のコード生成は `self as usize` を行の番号に使い、VM は `ALL` で引き戻すので、並びが1つなら2つの順は食い違わない
@@ -443,3 +444,5 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `rustyline` | 19.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
 | `rustls` | 0.23 (`aws_lc_rs`、`std`、`tls12`) | `eml_tls` の TLS の接続。provider は aws-lc-rs だけで、接続ごとに `builder_with_provider` で渡す。aws-lc-rs は rustls の既定で推奨の provider で、組むのに要るのは C のツールチェーンだけである (上の「crate の依存関係」) |
 | `webpki-roots` | 1.0 | `eml_tls` の既定の根の証明書 |
+
+`eml` バイナリには、aws-lc、rustls、webpki-roots の根の証明書のデータが入る。どれも eml と別のライセンスに従う。aws-lc は `ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause` ほか、rustls は `Apache-2.0 OR ISC OR MIT`、webpki-roots の根のデータは `CDLA-Permissive-2.0` である。`flake.nix` の `meta.license` は eml 自身のライセンス (MIT) だけを書く。

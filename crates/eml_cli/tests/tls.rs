@@ -2,7 +2,7 @@
 //! ないので unix だけで流す (docs/spec/stdlib.md の「`Std.Tls`」)。
 //!
 //! `eml_tls` は `tls` の feature が足す依存で、dev-dependency にはしない。dev-dependency にすると、tls を外した
-//! ビルドの `cargo tree` にも `eml_tls` が現れる (.github/workflows/ci.yml の「feature resolution of tls」)。
+//! ビルドの `cargo tree` にも `eml_tls` が現れる (docs/implementation/testing.md の「feature の組み合わせの確認」)。
 
 use std::io::{Read, Write};
 use std::net::TcpListener;

@@ -474,6 +474,8 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 結果の整形 (`eml_cli::pretty`) も端末に依存しない純粋な関数なので、`crates/eml_cli/tests/pretty.rs` が文字列と幅を渡して確かめる。整形の規則の各項目、10,000 文字で切ること、5,000 段の入れ子の括弧を再帰なしで整えることを確かめる。
 
+`crates/eml_cli/tests/tls.rs` は、本物の driver の上で `Std.Tls` を動かす唯一のテストである。テストのスレッドがループバックに `eml_tls::Conn` のサーバーを立て、`Clock::Real` の run の `Tls.connect_with_ca` が handshake、1行の往復、close_notify の後の EOF、`Tls.close` まで進むことを確かめる。`cfg(all(unix, feature = "tls"))` の下だけで組む。Windows の本物の driver はソケットを扱わないためである。`eml_tls` には、dev-dependency でなく feature `tls` が足す依存として届く (「OS ごとのテスト」)。
+
 ## OS ごとのテスト
 
 テストは macOS、Linux (x86_64 と aarch64)、Windows の3つの OS で流す。Windows で対応する target は `x86_64-pc-windows-msvc` だけで、`x86_64-pc-windows-gnu` (MinGW) は対応せず、流さない。テストは移植できるのが既定である。Windows での違いが処理系の側にあるなら、ソースを直すかテストを移す。
@@ -599,7 +601,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 - `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::` と `signal::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
 
-CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。nextest の CI 用の profile は作らず、落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
+CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。nextest の CI 用の profile は作らず、落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
 
 アクションは commit の SHA で固定し、バージョンの名前をコメントに書く。runner の image は名前で固定し、上げるのは手で行う。nix のストアはキャッシュしない。install-nix-action には `GITHUB_TOKEN` を渡し、`github:` の input の取得が率の制限に当たらないようにする。token は nix.conf に入ってジョブの中で動くものから読めるが、権限は `contents: read` だけで、ジョブとともに切れるので受け入れる。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
 

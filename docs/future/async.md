@@ -332,9 +332,9 @@ Windows には次のものが残る。
 
 TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」に、テストの driver の TLS の終端器は [VM](../spec/vm.md) の「時計と driver」にある。ここには TLS で採った形の理由と、段 `std-http` の設計を書く ([ロードマップ](roadmap.md) の「段の列」)。
 
-- TLS はプラグインにせず、普通の std のモジュールにした。プラグインの仕組みは GUI の要求 (スレッドの固定、イベントループ) のためにあり、I/O を持たない TLS の状態はそのどれも要らない
+- TLS はプラグインでなく、普通の std のモジュールである。プラグインの仕組みは GUI の要求 (スレッドの固定、イベントループ) のためにあり、I/O を持たない TLS の状態はそのどれも要らない
 - TLS の状態は I/O を持たず、ソケットの I/O はすべて `Std.Net` が行う。driver の側に TLS のストリームを置くと、本物の driver に rustls が入り、取り消しと期限の意味が別に要る。I/O を持たない形なら、待ち、取り消し、期限が `Net` の1か所に集まる
-- 暗号の provider は aws-lc-rs にした。rustls の既定で推奨の provider だからである。ring の最後のリリースは 2025-03 で、純 Rust の provider は TLS 1.3 だけか、対応する CPU が限られる。組むのに要るのは C のツールチェーンだけである ([コンパイラの構成](../implementation/architecture.md) の「crate の依存関係」)
+- 暗号の provider は aws-lc-rs である。rustls の既定で推奨の provider だからである。ring の最後のリリースは 2025-03 で、純 Rust の provider は TLS 1.3 だけか、対応する CPU が限られる。組むのに要るのは C のツールチェーンだけである ([コンパイラの構成](../implementation/architecture.md) の「crate の依存関係」)
 - テストの相手は、テストの driver の仮想のホストが Rust で TLS を終端する。handshake はクライアントの乱数が毎回変わるので録音で再生できず、相手は生きた server でなければならない。公開の server の API もテスト専用の std のモジュールも置かないので、決定的にできる場所はテストの driver だけである
 - 期限を持つ読み (`_within`) は置かない。理由と見直す条件は [ロードマップ](roadmap.md) の「非同期」にある
 

@@ -60,6 +60,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | `eml_vm` | vm、lir、object-model |
 | `eml_rt` | object-model |
 | `eml_io` | vm |
+| `eml_tls` | [stdlib](spec/stdlib.md) の「`Std.Tls`」。crate の中は [architecture](implementation/architecture.md) の「`eml_tls` の内部」 |
 | 診断を出すすべての段階 | diagnostics |
 
 ## 文書の扱い
