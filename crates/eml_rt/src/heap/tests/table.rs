@@ -1056,7 +1056,7 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
             push("Std.Bytes.make", vec![Arg::Int(n), Arg::Int(byte)]);
         }
     }
-    for n in [-1, 0, 1, 65_536] {
+    for n in [-1, 0, 1, 65_536, i64::MAX] {
         push("Std.Bytes.with_capacity", vec![Arg::Int(n)]);
     }
     for b in BYTES {

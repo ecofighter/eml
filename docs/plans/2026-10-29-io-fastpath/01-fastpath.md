@@ -195,7 +195,7 @@ fn settle<M>(
 - `Readable` が受け付けで `Submit::Done` になれば、`submit_read` の中で `settle` が続けて貸し、`Read` を出す。
 - 一意の判定は `is_unique` で、空きは一意なときだけ `bytes_lend` で読む (検査モードは一意でない buffer の `bytes_lend` を `NotUnique` にする)。
 - `serve_rest` (読みすぎたバイトを返す道) は今どおり driver の操作を出さない。
-- 呼び手が作った空き (`Bytes.with_capacity n`、使い終えた buffer の `truncate 0`) は語の倍数なので 8 以上になる。
+- 呼び手が作った空き (`Bytes.with_capacity n`、使い終えた buffer の `truncate 0`) の大きさは容量で決まる。`Bytes.with_capacity 0` の空きは 0 で、`Readable` の道に進む。`n >= 1` で spec が約束するのは `容量 >= n` だけで、空きが 8 以上になるのは、確保器が容量を語の倍数に切り上げる実行時のふるまいである。docs には「`n >= 1` なら必ず 8 以上」と書かない。
 - `ZERO_ROOM` を消す。
 
 ### 3.2 `read_line`

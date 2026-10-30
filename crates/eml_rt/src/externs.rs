@@ -175,7 +175,7 @@ pub enum IndexFault {
     BytesIndex { index: i64, len: i64 },
     /// バイト列の範囲 (`Bytes.slice`、`append_slice`、`truncate`) がバイト列の外にある。
     BytesSlice { start: i64, end: i64, len: i64 },
-    /// `Bytes.make` に渡した負の長さ。
+    /// `Bytes.make` と `Bytes.with_capacity` に渡した負の長さ。
     BytesLength { len: i64 },
 }
 

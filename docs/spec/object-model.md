@@ -1040,7 +1040,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
   - `find_from` は、開始位置以降で探す文字列と一致する最小の位置か、なければ -1 であることを約束する (spec `found_from`)。照合は、探す文字列の先頭のバイトを T13 の `find_byte` (下の「`unsafe` の核」) で探し、見つけた位置ごとに残りのバイトを比べる。先頭のバイトがない位置では一致しないことを、`find_byte` の約束から証明する
 - 検査モードでは、引数が `String` の物体でなければ `Heap(WrongKind)` を返す。速いモードは、読めることと所有を前提にする
 
-バイト列の extern (`Bytes.empty`、`length`、`append`、`append_slice`、`slice`、`truncate`、`of_string`、`find_from`、`find_byte_from` と `Bytes` の `==`、`!=`、`compare`) も、結果を ghost のバイト列の spec で約束する。物体の本体は文字列と同じで、種類が `Bytes` であることだけが違う。
+バイト列の extern (`Bytes.empty`、`length`、`append`、`append_slice`、`slice`、`truncate`、`of_string`、`find_from`、`find_byte_from`、`with_capacity` と `Bytes` の `==`、`!=`、`compare`) も、結果を ghost のバイト列の spec で約束する。物体の本体は文字列と同じで、種類が `Bytes` であることだけが違う。
 
 - `append`、`append_slice`、`slice`、`truncate` の結果は、`text_of` が `a + b`、`dst + src[from..to]`、`s[start..end]`、`w[0..n]` に等しい。範囲の誤りは確保の前に返す
 - `find_from` は文字列の `find_from` と同じ spec `found_from` を約束し、照合も同じである。開始位置が `0 <= from <= len` でなければ `IndexFault::BytesIndex` を返す
