@@ -391,16 +391,23 @@ read_exact n r =
   let len = Bytes.length buf
   let stop = if len - pos > n then pos + n else len
   let cap = if n < prealloc_cap then n else prealloc_cap
-  fill_to n (Bytes.append_slice pos stop buf (Bytes.with_capacity (cap + 8))) conn
+  fill_to n cap (Bytes.append_slice pos stop buf (Bytes.with_capacity (cap + 8))) conn
 
-fill_to : Int -> Bytes -> Conn -> <IO, Panic, Async> (Bytes, Conn)
-fill_to n body conn =
+-- `room` は `body` の容量から 8 バイトを除いたもの。埋まったら `Std.Http` が自分で広げる。`read_chunk` に任せると
+-- 倍々に広がり、手放した古い buffer を OS に返さない確保器では、広げた世代がすべて残るためである。届いた分の
+-- 16 倍を上限にして、偽りの `Content-Length` に一度で大きな確保をしない (docs/spec/stdlib.md の「`Std.Http`」)
+fill_to : Int -> Int -> Bytes -> Conn -> <IO, Panic, Async> (Bytes, Conn)
+fill_to n room body conn =
   let before = Bytes.length body
   if before >= n then (Bytes.truncate n body, conn)
+  else if before >= room then
+    let wanted = before * 16
+    let room = if n < wanted then n else wanted
+    fill_to n room (Bytes.append_slice 0 before body (Bytes.with_capacity (room + 8))) conn
   else
     let (body, conn) = read_more body conn
     if Bytes.length body == before then closed_in_body conn
-    else fill_to n body conn
+    else fill_to n room body conn
 
 closed_in_body : Conn -> <IO> a
 closed_in_body conn =
