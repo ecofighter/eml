@@ -4,6 +4,8 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(test)]
+mod driver;
 mod flag;
 mod mask;
 mod real;

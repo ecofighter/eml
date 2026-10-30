@@ -37,7 +37,7 @@
 | 1 | 機能ごとの代表的なプログラムを `eml check` / `eml run` にかけたときにユーザーが見るもの。stdout、実行時エラー、プログラム全体が通るか落ちるか、代表的な診断の表示 | UI テスト (`tests/ui/`) |
 | 2 | 1つの段階の出力 (CST、HIR、推論したシグネチャ、Core IR、LIR) と、その段階の診断の細部 (位置、回復、端のケース) | その段階の crate の結合テスト (`crates/<段階>/tests/`)。ソースから `eml_test_support` で組み立てる |
 | 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_lir/tests/`、`eml_core_ir/tests/verify.rs`、`eml_vm/tests/`。LIR は IR のテキストで書いて `eml_lir::parse` で読み、Core IR は `eml_core_ir::parse` で読む |
-| 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープなど | `src/` の単体テスト |
+| 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープ、`eml_io` の driver の核など | `src/` の単体テスト。`eml_io` の核は `src/driver/tests/` で偽の backend の上で確かめる (「`eml_io` の検証」の「核の Miri」) |
 | 5 | lib API の流れ、CLI の終了コード、テスト補助そのもの | `eml_cli/tests/api.rs`、`eml_cli/tests/cli.rs`、`eml_test_support/tests/` |
 
 ### 重複させない
@@ -176,11 +176,11 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - extern の Host の境界 (T11) も、この module で確かめる。メモリの Host を通る `println` と `flush`、`FileIn.open`、`FileIn.read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語)、`FileIn.read_line_raw` (区切りをまたぐ行、`\r\n` で終わる行、空の行、行の終わりのない最後の行、終わり、途中の読みの誤り、UTF-8 でない行、止める語)、検証したコードが `fill` と `consume` を呼ぶバイト列の読み (1つの buffer の中の行、2回の補充をまたぐ行、行の途中の読みの誤り、`read_chunk` のその場の追記と共有のバイト列の写し、全部の読み)、buffer より大きい長さを返す読み手を断る全部の読み、`FileIn.close`、標準のストリームのハンドルの開いた印 (2つ目の `open`、`close` と `Heap` を落とすときの破棄処理が印を下ろすこと) と、書くためのハンドルが Host の buffer に書くことを流す。子のプロセスの境界では、起動、標準入力への書き込み、`close_stdin`、標準出力の全部の読み、`wait` の流れ、待たずに `Heap` を落としたときに破棄処理が子を kill して待つこと、待った子を kill しないこと、書けない書き込む端でハンドルを手放すこと、`Interrupted` で戻った書き込みを止める語が立っていなければ書き直し、立っていれば止めることを流す。Miri は本物のプロセスを起動できないので、子はメモリの Host の `MemoryHost::spawn` が代わりに作り、`kill` と `wait` を呼んだ回数を数える。`StdHost` と実際のファイルは使わない。Miri は分離を外さないと実際のファイルを開けず、テストを `cfg!(miri)` で小さくすることもしないためである
 - 実行文脈と実行の制御も、この module で確かめる。2つのスレッドのヒープが1つの `Control` に確保量を足し引きすること (T1) と、別のスレッドが `Control::interrupt()` を呼ぶと `poll` が `Stop::Interrupted` を返すことの、2つのスレッドのテストを流す。後者は、ビットを立てるスレッドと並んで `poll` を繰り返す。核の操作を1回ずつ通す T8 のテストは、基本操作も1回ずつ通し、文字列と出力の extern も通す
 - Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly を fenix の `complete` (すべての部品がそろう最新の日の nightly) から取る ([アーキテクチャ](architecture.md) の toolchain の項)
-- `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。この2回と下の `eml_vm` の4回を合わせた6つの実行は互いに独立で、同時に流してよい
+- `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。この2回と、下の `eml_vm` の4回と、`eml_io` の核の2回 (「`eml_io` の検証」の「核の Miri」) を合わせた8つの実行は互いに独立で、同時に流してよい
 - テストの大きさは `cfg!(miri)` で変えない。ページの大きさも Miri で変えない
 - Miri の予算はコマンド全体の CPU 時間 (`/usr/bin/time -p` の `user`) で決める。ビルド済みの作業ツリーで測り、Miri のビルドの時間は数えない。`eml_rt` の `trusted::` は Stacked Borrows で 180 秒以内、Tree Borrows で 220 秒以内、`eml_vm` の `miri::` は Stacked Borrows で 300 秒以内、Tree Borrows で 400 秒以内にする。`cells.rs` の `a_read` と `a_write` は小さいので、予算を置かない。1つのテストは、それを足したときにコマンドの `user` が増える分で測り、両方のモードの合計で、Tree Borrows の下で `trusted` が 5 秒以内、`miri.rs` が 10 秒以内に収める。そのテストだけを絞り込んで流した時間では測らない。絞り込んだ実行は、全体の実行で1回だけ払う費用を含み、小さいテストでも 14 秒ほどかかるためである。`miri.rs` の上限が緩いのは、LIR のテキストを Miri の下で読むためである。`miri.rs` の4つのテストは、この上限を超えることが分かっている ([ロードマップ](../future/roadmap.md) の「その後の項目」の「`miri.rs` のテストの1つあたりの Miri の費用」)。`eml_rt` の `trusted::` と `eml_vm` の `miri::` の予算は、ほかのビルドが走っていない 4 CPU の Linux のコンテナで測った時間の約3倍にしてある。2倍の退行では落ちず、数分かかるような大きさの誤りは落ちる。測った時間が予算の半分を超えたら、まずテストを削れないか見て、それでも超えるなら、ほかのビルドが走っていない機械で測り直して予算を約3倍に直す。測った数と機械はコミットのメッセージに書く。テストごとにプロセスを起こす `cargo miri nextest run` は使わない。1件あたり約 2.3 秒の起動の費用がかかり、CPU 時間が約10倍になるのに、壁時計はほとんど縮まないためである
 - 大きい物体の長さは `trusted.rs` の `LARGE_BODY` (`MAX_SMALL_WORDS * 8` バイト。両方のモードで大きい物体になる、語に揃った長さ) と、それに語に揃わない小さい残りを足した長さ (`LARGE_BODY + 3` など) にする。大きい物体のページは物体の大きさちょうどなので、この長さでページの末尾まで届く。64 KiB を超える長さは、確かめるコードに 64 KiB の単位がある所 (小さいページ、Host の `READ_CHUNK` と `BUFFER_BYTES`) だけで使う。大きい入力の期待値はデータと一緒に書くか解析で出し、素朴な1要素ずつの比べを大きい本体に走らせない
-- ほかの crate は、次の `eml_vm` を除いて Miri で流さない
+- ほかの crate は、次の `eml_vm` と、偽の backend の上の `eml_io` の核 (「`eml_io` の検証」の「核の Miri」) を除いて Miri で流さない
 - `eml_vm` は、検証していないコードから `eml_rt` の `unsafe fn` を呼ぶ。そのため、`crates/eml_vm/tests/miri.rs` (module `miri`) の小さい実行のテストを、`eml_rt` と同じ2つの設定で流す (`cargo miri test -p eml_vm --test integration miri::`)。直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用 (即値の関数からとクロージャから) と余った引数、evidence を作って引く基本操作、ヒープの文字列の extern、文字列を返すエントリの結果を写すこと (`run_shown`)、`par` のタスクの切り替え (seed の方針の横取りと join) と、右の子の中断を join の後に親で起こし直すこと (ヒープの物体を捕まえた起こし直しの閉包の移し戻しと適用) を、両方のモードで通す。確かめるのは VM が核の操作の前提を守っていることで、信頼の一覧を確かめる `trusted` とは目的が違う。テストはメモリの Host (`capture_host`) だけを使い、実際のファイルを開かない。UI テストは Miri で流さない。`miri.rs` のテストは `cargo test` でも流れるので、同じプログラムと同じ確かめを `calls.rs` などに重ねて置かない
 - `eml_vm` の `cells.rs` の単体テストのうち、名前が `a_read` か `a_write` で始まるものも、同じ2つの設定で流す (`cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write`)。選ぶのは名前の頭なので、この2つの頭は、読みの記録が空きを貸す道と書きの記録が `Bytes` の中身を貸す道を確かめるテストにだけ付ける。数は決めない。空きが足りない buffer の中身を新しい物体へ写して貸す所 (`lend_read_room`) と、行の読みがストリームの `Vec<u8>` の空きを貸す所 (`lend_line_room`) と、貸した空きに書かれたバイトを確定する所と、ストリームの buffer の残りを読みの buffer に写す所 (`serve_rest`) を Miri で通すのは、この `a_read` のテストだけである。行の読みを含むもの (`a_read_line_*` と `a_read_after_a_read_line_*`) では、stub の driver の代わりにテストが貸した位置へ書き、貸し、書き、確定の一周を通す。`a_write` のテストは、参照が2つある `Bytes` を写さずに貸して stub の driver が貸された記憶を読む所と、保留の書きの間にもう1つの参照で `Bytes.set`、`push`、`append`、`truncate` をしても写しになり、同じ物体への読みが空きを貸さず、driver が完了のときに読む中身が変わらないことを、両方のモードで通す。`miri.rs` の実行はテストの driver の上で I/O の操作を出さない。手で書いた LIR は `Std.Async` のエントリを持たず、`Std.Net` の行は `Async` の行なので、書きの貸しも `miri.rs` でなく `cells.rs` で確かめる
 
@@ -195,6 +195,9 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `unsafe_stays_in_the_listed_files` は、識別子 `unsafe` を持つファイルの集合と、`#![allow(unsafe_code)]` で始まるファイルの集合と、`UNSAFE_FILES` が等しいこと、`allow(unsafe_code)` がほかにないこと、`lib.rs` が `#![deny(unsafe_code)]` を持つことを確かめる
 - `every_source_file_is_listed` は、`src/` の `.rs` が `FILES` と `SKIPPED` の和と一致することを確かめる。新しいファイルを足したら `FILES` に1行足す
 - `the_scanner_skips_comments_and_strings` は、コメント、文字列、文字のリテラルの中の `unsafe` を数えないことと、どのファイルにも生の文字列がないことを確かめる。消し方は `eml_rt` の `trust.rs` と同じで、生の文字列を扱わないためである
+- `the_real_driver_makes_no_slices_and_leaks_nothing` は、`mem::forget` と `Box::leak` がないことと、`from_raw_parts` が `test.rs` のほかにないことを確かめる。テストの driver は貸しの規則を守って slice を作るが、driver の核と偽の backend は生のポインタのまま記憶に触れる。compio の上の `real.rs` は、compio の buffer の trait のために slice を作り、壊れたときに鍵を漏らすので、このテストと次のテストの対象から外す
+- `the_core_names_no_os` は、driver の核 (`driver/` の下で `driver/tests/` でないファイル) が `libc::`、`windows_sys::`、`Instant`、`thread::spawn`、`Builder::spawn`、`raw_os_error`、`ECANCELED`、`ECONNABORTED`、`EAGAIN` を書かず、スレッドを `backend.spawn(` でだけ作ることを確かめる
+- `the_core_walks_its_table_only_to_shut_down` は、`driver/mod.rs` の `mem::take`、`slots.iter`、`slots.values`、`slots.keys`、`slots.drain` が `quiesce` か `drop` の中にだけあることを確かめる。保留の表を歩くと、1つの接続の費用が保留の数に比例するためである
 
 ### AddressSanitizer
 
@@ -202,6 +205,21 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - nightly は Miri と同じ `nix develop .#miri` のものを使い、`-Zbuild-std` で std も計装し、`--target` をいつも書く。leak の検出は AddressSanitizer の既定のままにする
 - 開発機では build の置き場所を `target/asan` に分ける (「よく使うコマンド」)
 - 道具の不具合 (runtime がない、link、rpath、時間切れ) で緑にできない脚は、その脚だけ fenix と同じ日付に固めた rustup の nightly にし、時間の上限を 90 分にする。それでも緑にならなければ脚を外し、外した脚をこの節とロードマップの「その後の項目」に書く
+
+### 核の Miri
+
+- 本物の driver の核 (`crates/eml_io/src/driver/`) は OS を呼ばない。OS に触れるのは `Backend` の実装だけで、核の単体テスト (`src/driver/tests/`、module `driver::tests`) は偽の backend (`src/driver/tests/fake.rs`) の上で、続きの規則、取り消し、壊れた driver、`quiesce` と `Drop`、プール、名前の解決を確かめる。同じテストを Miri でも流す
+- 偽の backend は鍵ごとの台本で `start` に答え、呼ばれた順を記録する。`Recv` と `Send` の buffer には `copy_nonoverlapping` で書き、slice を作らない。そのため、短い書きの残りの位置の誤りは Miri で落ちる
+- 偽の backend の `wait` は実時間を使わない。`wait(None)` は起こしが鳴るまで待ち、10 秒鳴らなければ止まったテストとして panic する。`wait(Some(d))` は偽の時計を `d` 進めてすぐ戻る。`CANCEL_LIMIT` と `HELD_LIMIT` の 1 秒の道は、こうして実時間なしに通す。偽の backend が作ったスレッドが走っている間に `d > 0` で呼ぶと panic する。本物のスレッドを持つテストが、偽の時計の進み方に合否を預けないためである。そういうテストで使えるのは、`wait(None)` と、偽の backend の `finished` が期待の数に届いた後の `wait(Some(0))` だけである
+- Miri で流すテストの形は次のとおりである。Miri は、main が終わるときに走っているスレッドを誤りにする
+  1. 出した仕事と名前の解決は、手放したものも含めて、本体が答えを積み、核が引き取るまで進めてから driver を落とす。手放した解決は `finished` を待ってから `wait(Some(0))` を呼ぶ。`wait(None)` は保留の欄も届いた完了もないと `Ok(false)` で戻り、答えを引き取らないためである
+  2. 順は門 (`mpsc`、`Mutex` と `Condvar`) で作る。`sleep` は合否に効かない検出力のためだけに使う
+  3. 本物の時計を使わない
+  4. driver を落とした後も走るスレッドを使うテストは `tests/real.rs` に置き、Miri では流さない
+  5. 上限の振る舞いは小さな上限で確かめる。プールは上限 2 で確かめ、32 本のスレッドは Miri で起こさない
+  6. 偽の時計を進める待ちは、走るスレッドのない間だけ使う
+- `Drop` がプロセスを止める道のテスト (`driver::tests::abort`) は、テストのバイナリを子として起こすので、Miri では `ignore` にする
+- コマンドは `cargo miri test -p eml_io --lib -- driver::tests::` で、`eml_rt` と同じ2つの `MIRIFLAGS` で流す (「よく使うコマンド」)。予算は、ビルド済みの作業ツリーでのコマンドの `user` で、Stacked Borrows で 30 秒以内、Tree Borrows で 35 秒以内にする。ほかのビルドが走っていない 4 CPU の Linux のコンテナで測った時間の約3倍である。測り直しの規則は上の「Miri」と同じである
 
 ## `eml_vm` のテスト
 
@@ -561,7 +579,7 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 - `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
-- `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write` を続けて流す。借用の規則ごとにジョブを1つ立てる
+- `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 - `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::` と `signal::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
 
 CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。nextest の CI 用の profile は作らず、落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
@@ -635,6 +653,7 @@ bench/scripts/compare.sh --fixture wc                                          #
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # VM の Miri (同上)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write   # 読みと書きの記録が貸す記憶の Miri (同上)
+nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_io --lib -- driver::tests::   # eml_io の driver の核の Miri (同上。eml_io の検証)
 cargo verus verify -p eml_rt                                                                # Verus の証明
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')                         # eml_rt の verus! の中の書式
 bench/rt.sh                                                                                 # eml_rt の速いモードの命令の数 (macOS、release)

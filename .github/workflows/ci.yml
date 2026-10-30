@@ -134,6 +134,10 @@ jobs:
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
           nix develop .#miri -c cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write
+      - name: "cargo miri test -p eml_io --lib -- driver::tests::"
+        if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
+        run: |
+          nix develop .#miri -c cargo miri test -p eml_io --lib -- driver::tests::
 
   # OS を呼ぶ unsafe (eml_io の sys/) と、VM が本物の driver に貸す記憶を AddressSanitizer の下で流す。
   # Rust の ASan は Windows の msvc を対象にしないので、3つの対象で流す (docs/implementation/testing.md の「AddressSanitizer」)

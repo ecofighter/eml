@@ -41,6 +41,7 @@ nix build                            # build the eml binary (eml_cli)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri, trusted tests only; run once more with -Zmiri-tree-borrows added
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # Miri on the VM's small runs (same two settings)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write   # Miri on the read and write lends in eml_vm's op records (same two settings)
+nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_io --lib -- driver::tests::   # Miri on eml_io's driver core over a fake backend (same two settings)
 cargo verus verify -p eml_rt         # Verus proofs of eml_rt
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)

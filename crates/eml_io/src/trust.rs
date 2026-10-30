@@ -8,6 +8,17 @@ const FILES: &[(&str, &str)] = &[
     ("flag.rs", include_str!("flag.rs")),
     ("mask.rs", include_str!("mask.rs")),
     ("real.rs", include_str!("real.rs")),
+    ("driver/mod.rs", include_str!("driver/mod.rs")),
+    ("driver/backend.rs", include_str!("driver/backend.rs")),
+    ("driver/inbox.rs", include_str!("driver/inbox.rs")),
+    ("driver/pool.rs", include_str!("driver/pool.rs")),
+    ("driver/resolve.rs", include_str!("driver/resolve.rs")),
+    ("driver/tests/mod.rs", include_str!("driver/tests/mod.rs")),
+    ("driver/tests/fake.rs", include_str!("driver/tests/fake.rs")),
+    (
+        "driver/tests/abort.rs",
+        include_str!("driver/tests/abort.rs"),
+    ),
     ("resolve.rs", include_str!("resolve.rs")),
     ("test.rs", include_str!("test.rs")),
     ("test/net.rs", include_str!("test/net.rs")),
@@ -17,7 +28,11 @@ const FILES: &[(&str, &str)] = &[
 const SKIPPED: &[&str] = &["trust.rs"];
 
 /// `unsafe` を持ち、先頭に `#![allow(unsafe_code)]` を置くファイル。
-const UNSAFE_FILES: &[&str] = &["mask.rs", "test.rs", "real.rs"];
+const UNSAFE_FILES: &[&str] = &["mask.rs", "test.rs", "real.rs", "driver/tests/fake.rs"];
+
+/// `the_real_driver_makes_no_slices_and_leaks_nothing` と `the_core_names_no_os` が見ないファイル。compio の上の
+/// 本物の driver で、compio の buffer の trait のために slice を作り、壊れたときに鍵を漏らす。
+const LEGACY: &[&str] = &["real.rs"];
 
 fn is_ident(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
@@ -207,4 +222,131 @@ fn has_raw_string(text: &str) -> bool {
         let start = if i > 0 && s[i - 1] == b'b' { i - 1 } else { i };
         opens && (start == 0 || !ident(s[start - 1]))
     })
+}
+
+fn is_legacy(file: &str) -> bool {
+    LEGACY.contains(&file)
+}
+
+/// 核のファイル。OS を名指さず、偽の backend の上で Miri で流せる部分である。
+fn is_core(file: &str) -> bool {
+    file.starts_with("driver/") && !file.starts_with("driver/tests/")
+}
+
+#[test]
+fn the_real_driver_makes_no_slices_and_leaks_nothing() {
+    for (file, text) in FILES.iter().filter(|(f, _)| !is_legacy(f)) {
+        let text = prepare(text);
+        for word in ["mem::forget", "Box::leak"] {
+            assert!(!text.contains(word), "{file} has {word}");
+        }
+        // テストの driver は貸しの規則を守って slice を作る (docs/spec/vm.md の「時計と driver」)
+        if *file != "test.rs" {
+            assert!(!text.contains("from_raw_parts"), "{file} makes a slice");
+        }
+    }
+}
+
+#[test]
+fn the_core_names_no_os() {
+    let core: Vec<&(&str, &str)> = FILES.iter().filter(|(f, _)| is_core(f)).collect();
+    assert!(core.len() >= 5, "the core files are missing");
+    for (file, text) in core {
+        let text = prepare(text);
+        for word in [
+            "libc::",
+            "windows_sys::",
+            "Instant",
+            "thread::spawn",
+            "Builder::spawn",
+            "raw_os_error",
+            "ECANCELED",
+            "ECONNABORTED",
+            "EAGAIN",
+        ] {
+            assert!(!text.contains(word), "{file} names {word}");
+        }
+        // スレッドを作る道は `Backend::spawn` だけである
+        let squeezed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        for (at, _) in squeezed.match_indices(".spawn(") {
+            assert!(
+                squeezed[..at].ends_with("backend"),
+                "{file} spawns a thread outside the backend"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_core_walks_its_table_only_to_shut_down() {
+    let text = FILES.iter().find(|(f, _)| *f == "driver/mod.rs").unwrap().1;
+    let s = blank_comments_and_strings(text);
+    let prepared: String = s.iter().collect();
+    let mut found = 0;
+    for word in [
+        "mem::take",
+        "slots.iter",
+        "slots.values",
+        "slots.keys",
+        "slots.drain",
+    ] {
+        for (byte, _) in prepared.match_indices(word) {
+            let at = prepared[..byte].chars().count();
+            let name = enclosing_fn(&s, at);
+            assert!(
+                name == "quiesce" || name == "drop",
+                "driver/mod.rs: {word} in {name}"
+            );
+            found += 1;
+        }
+    }
+    // 探し方が何も見つけなくなったら、規則を確かめていない
+    assert!(found > 0, "the scan found no walk of the table");
+}
+
+/// `pos` を囲むいちばん内側の `fn` の名前。
+fn enclosing_fn(s: &[char], pos: usize) -> String {
+    let mut best: Option<String> = None;
+    for i in 0..pos {
+        if !(word_at(s, i, "fn") && s.get(i + 2).is_some_and(|c| c.is_whitespace())) {
+            continue;
+        }
+        let Some(open) = (i..s.len()).find(|&j| s[j] == '{' || s[j] == ';') else {
+            continue;
+        };
+        if s[open] == ';' || open > pos || matching(s, open) < pos {
+            continue;
+        }
+        let at = skip_space(s, i + 2);
+        let end = (at..s.len()).find(|&j| !is_ident(s[j])).unwrap_or(s.len());
+        best = Some(s[at..end].iter().collect());
+    }
+    best.expect("a use outside any fn")
+}
+
+fn matching(s: &[char], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (i, &c) in s.iter().enumerate().skip(open) {
+        if c == '{' {
+            depth += 1;
+        } else if c == '}' {
+            depth -= 1;
+            if depth == 0 {
+                return i;
+            }
+        }
+    }
+    panic!("unbalanced braces");
+}
+
+fn word_at(s: &[char], at: usize, word: &str) -> bool {
+    let mut rest = s.get(at..).unwrap_or_default().iter();
+    word.chars().all(|c| rest.next() == Some(&c)) && (at == 0 || !is_ident(s[at - 1]))
+}
+
+fn skip_space(s: &[char], mut at: usize) -> usize {
+    while at < s.len() && s[at].is_whitespace() {
+        at += 1;
+    }
+    at
 }
