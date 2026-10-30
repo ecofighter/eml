@@ -51,6 +51,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | channel と共有の数 | `Std.Chan` の `Chan a` は登録表の添字を持つ `Unr` の即値で、Kind は `a` によらず `Unr` である。channel は `close` で放す資源で、閉じて空になった時点でその場で放し、閉じないままの channel は run の終わりに放す。受け手の決まらない値 (channel の品物とタスクの結果) は、値を預かる構造の論理的な worker ID を途中の持ち主にして移す。共有して書き換える数は `Std.Atomic.Counter` だけである | [標準ライブラリ](spec/stdlib.md) の「`Std.Chan`」「`Std.Atomic`」、[VM](spec/vm.md) の「channel」、[オブジェクトモデル](spec/object-model.md) の「論理的な worker ID」 |
 | ネットワークとシグナル | `Std.Net` の `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、落とすとソケットを閉じる。待つ関数はどれも取り消しの地点で、`_within` の版は結果を `Option` に包み、`None` は期限が過ぎたことだけを表す。拒まれた接続 (`ConnectionRefused`)、reset、使用中の番地、時間切れは IO の失敗の種類で分ける。driver が受け付けで終えた操作は、待たずに続ける。読みは buffer の空きにそのまま読み、`write_bytes` は書いた `Bytes` を写さずに返す。`Std.Signal.wait` はシグナルを貯めず、同じシグナルを待つタスクをすべて起こす。待つタスクがなければ、Ctrl-C は run を止めて 130 で、SIGTERM は同じ止め方で 143 で終わる | [標準ライブラリ](spec/stdlib.md) の「`Std.Net`」「`Std.Signal`」、[VM](spec/vm.md) の「操作の記録」「上限と割り込み」 |
 | TLS | `Std.Tls` はクライアントだけを持つ。TLS の状態 `Tls.Conn` は I/O を持たない `Lin` の `Foreign` で、ソケットの読み書き、待ち、取り消し、期限は `Std.Net` のものを使い、`std/Tls.em` が両者の間でバイトを汲む。close_notify のない EOF は IO の失敗にする。信頼する根は webpki-roots の根と、渡した PEM の CA である | [標準ライブラリ](spec/stdlib.md) の「`Std.Tls`」 |
+| HTTP | `Std.Http` は `Net` と `Tls` の上に eml で書いた HTTP/1.1 のクライアントで、extern を持たない。要求ごとに `Connection: close` で接続を開いて閉じる。本文は `Transfer-Encoding`、`Content-Length`、EOF の順に区切り、1つの `Bytes` に読む。リダイレクトは回数の上限まで追い、https から http へは追わない | [標準ライブラリ](spec/stdlib.md) の「`Std.Http`」 |
 
 ### 構文
 

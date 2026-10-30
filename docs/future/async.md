@@ -330,7 +330,7 @@ Windows には次のものが残る。
 
 ### TLS と HTTP
 
-TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」に、テストの driver の TLS の終端器は [VM](../spec/vm.md) の「時計と driver」にある。ここには TLS で採った形の理由と、段 `std-http` の設計を書く ([ロードマップ](roadmap.md) の「段の列」)。
+TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」に、テストの driver の TLS の終端器は [VM](../spec/vm.md) の「時計と driver」にある。ここには TLS と HTTP で採った形の理由を書く。
 
 - TLS はプラグインでなく、普通の std のモジュールである。プラグインの仕組みは GUI の要求 (スレッドの固定、イベントループ) のためにあり、I/O を持たない TLS の状態はそのどれも要らない
 - TLS の状態は I/O を持たず、ソケットの I/O はすべて `Std.Net` が行う。driver の側に TLS のストリームを置くと、本物の driver に rustls が入り、取り消しと期限の意味が別に要る。I/O を持たない形なら、待ち、取り消し、期限が `Net` の1か所に集まる
@@ -338,29 +338,13 @@ TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ラ
 - テストの相手は、テストの driver の仮想のホストが Rust で TLS を終端する。handshake はクライアントの乱数が毎回変わるので録音で再生できず、相手は生きた server でなければならない。公開の server の API もテスト専用の std のモジュールも置かないので、決定的にできる場所はテストの driver だけである
 - 期限を持つ読み (`_within`) は置かない。理由と見直す条件は [ロードマップ](roadmap.md) の「非同期」にある
 
-`Std.Http` は `Net` と `Tls` の上に eml で書く HTTP/1.1 のクライアントで、extern を足さない。
+`Std.Http` は `Net` と `Tls` の上に eml で書く HTTP/1.1 のクライアントで、extern を足さない。面と規則は [標準ライブラリ](../spec/stdlib.md) の「`Std.Http`」にある。
 
-```haskell
-pub data Options  = | Options { headers : List (String, String), ca : String, max_redirects : Int }   -- ca: 追加の CA の PEM。"" なら既定の根
-pub data Response = | Response { status : Int, headers : List (String, String), body : Bytes }
-pub defaults : Options                                                   -- [] "" 5
-pub get          : String -> <IO, Panic, Async> Response
-pub request      : String -> String -> Bytes -> Options -> <IO, Panic, Async> Response   -- method url body options
-```
-
-- URL は `http://` と `https://` で、`host[:port]` と path?query を持つ。既定のポートは 80 と 443 である。userinfo、IDN、fragment は扱わない
-- 要求は `Host`、`Connection: close`、`User-Agent: eml` を付け、本文が空でなければ `Content-Length` を付ける。`options.headers` は末尾に足す。応答の後に stream を閉じる
-- 応答の状態行とヘッダーは `read_line` で読み、それぞれ 64 KiB までにする。ヘッダー名は大文字小文字を区別しない。本文は `Content-Length` があればそれで、なければ `Transfer-Encoding: chunked` (拡張は無視し、trailer は捨てる)、それもなければ EOF まで読む。`HEAD`、1xx、204、304 には本文がない。EOF までの本文が https で切り詰められたら、`Tls` の IO の失敗のまま伝える
-- リダイレクトは 301、302、303、307、308 を、どのメソッドでも `options.max_redirects` の回数まで追う。超えたら IO の失敗にする。301、302、303 は `GET` にして本文と呼び出し側の `Content-Length`、`Content-Type` を捨て、307 と 308 は同じメソッドと本文で送る。`Location` は絶対 URL か絶対パスにする。別のオリジン (scheme、host、port のどれかが違う) へは、呼び出し側の `Authorization`、`Cookie`、`Proxy-Authorization` を落とす。https から http は断り、http から https は許す
-- gzip、HTTP/2 と ALPN、keep-alive とプール、ストリーミングの本文、プロキシ、cookie、本文の上限、期限は持たない。期限は `Async.timeout` で書く ([ロードマップ](roadmap.md) の「非同期」)
+- 接続は要求ごとに開いて閉じる。keep-alive がなければ、本文の終わりを読み違えても次の応答に響かず、EOF までの本文も同じ形で読める
+- 行は `read_line` でなく、`read_chunk` の上に自分の buffer で切り出す。chunk の区切りを越えて読んだバイトを `read_chunk` は戻せないので本文に自分の buffer が要り、状態行とヘッダーも同じ buffer で読んで行の上限を 64 KiB にそろえる
+- 呼ぶ側に `Host`、`Connection`、`Content-Length`、`Transfer-Encoding` を書かせない。本文の区切りが2つになるのと、EOF までの本文が終わらなくなるのを防ぐためである
 - libcurl は使わない。本物のソケットが要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないので TLS の層にならない ([ロードマップ](roadmap.md) の「非同期」)
-- `Tls` の読みの道では、カーネルが書いた `Bytes` から rustls へ、rustls から `Conn` の平文の列へ、列から `Bytes` へと3回写す。`Net` の読みも毎回新しい `Bytes` に読む。この費用は下の `https-get` の行で測る
-
-テストは次のとおりである。
-
-- HTTP の UI テストは `tests/ui/run/http/` と `tests/ui/run-fail/http/` に置く。仮想のホストの上で、`Net` で書いた eml の server のタスクと、`localhost` か `tls.localhost` へつなぐ client のタスクを1つのプログラムで動かす。`tls/` と同じ理由で `async/` には置かず、seed でも流さない ([テスト戦略](../implementation/testing.md) の「UI テスト」)。https のテストは `tls/` と同じく `Fs.read_text "ca.pem"` で CA を読み、`Options` の `ca` に渡す。`ca.pem` を写す先 (`eml_tls` の `fixtures/gen.sh`) と、写しを確かめる `eml_tls` のテストに `http/` を足す
-- `run/http/` には、`Content-Length`、chunked、EOF までの本文、リダイレクトの連鎖 (POST の後の 303、オリジンが変わったときのヘッダーの除去を含む)、`tls.localhost` への https を置く。`run-fail/http/` には、リダイレクトの回数超過、https から http への格下げ、切り詰められた EOF までの https の本文を置く
-- `bench/scripts.sh` に行 `https-get` を足す。eml の `Http.get` で手元の rustls の server から 64 MiB の本文を取り、Python の `urllib.request` と比べる。CI に上限は置かず、「Python の 1.5 倍以内」という目標を目安にする
+- `Tls` の読みの道では、カーネルが書いた `Bytes` から rustls へ、rustls から `Conn` の平文の列へ、列から `Bytes` へと3回写す。`Net` の読みも毎回新しい `Bytes` に読む。この費用は [計測の基準](../implementation/benchmarks.md) の「スクリプトの計測」の `https-get` の行で測る
 
 ### 後で足すもの
 

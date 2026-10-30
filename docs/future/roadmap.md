@@ -28,7 +28,6 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `std-http`: `Std.Http` の HTTP/1.1 のクライアントを、`Net` と `Tls` の上に eml で書く。`Content-Length`、chunked、EOF までの本文、リダイレクトを扱い、接続は要求ごとに閉じる。速さは `bench/scripts.sh` の行で測る。前提: なし。設計: [非同期の設計](async.md) の「TLS と HTTP」
 - `net-windows`: 自前の IOCP の backend にソケットを載せ、同じネットのテストの組を Windows で流す。`Std.Signal` の `Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写す。前提: なし。設計: [非同期の設計](async.md) の「テストと決定性」
   - 重なった I/O では、取り消した後も完了の packet が届くまで、カーネルが backend の `OVERLAPPED` に書く。長さ 0 の `WSARecv` を含む IOCP の保留をすべて `Hold::Buffer` (カーネルが記憶に触れうる) とするか、3つ目の値を足すか、IOCP の backend の `Drop` で packet を待つかを、この段の設計で決める ([コンパイラの構成](../implementation/architecture.md) の「`eml_io` の内部」)
   - 読みはブロックしない `recv` を先に試し、ブロックするなら長さ 0 の `WSARecv` で読めるまで待ってから、もう一度 `recv` する。読みの buffer をカーネルに渡さない。書きと受けも先に試し、ブロックするときだけ `WSASend` と `AcceptEx` を出す
@@ -365,9 +364,9 @@
 - close_notify なしの EOF を EOF として読む `Tls` の読み
   - 後に回した理由: 既定は IO の失敗 `ConnectionReset` にした。長さを持たない本文 (EOF までの本文) が黙って切れるのを防ぐためである。
   - 見直す条件: close_notify を送らないサーバと話す必要が出たとき。
-- `Http` の HTTP/2 と ALPN、gzip、keep-alive の接続のプール、ストリーミングの本文、本文の大きさの上限、プロキシ
+- `Http` の HTTP/2 と ALPN、gzip、keep-alive の接続のプール、ストリーミングの本文、本文の大きさの上限、プロキシ、cookie、IPv6 のアドレスの URL
   - 後に回した理由: スクリプトの HTTPS のクライアントには、要求ごとに閉じる HTTP/1.1 で足りる。gzip は展開の extern がまだない。
-  - 見直す条件: 大きな本文を少しずつ読むプログラムか、同じホストへ多数の要求を出すプログラムが出たとき。
+  - 見直す条件: 大きな本文を少しずつ読むプログラムか、同じホストへ多数の要求を出すプログラムが出たとき。IPv6 のアドレスの URL は、IPv6 だけのホストへつなぐプログラムが出たとき。
 - libcurl の上の HTTP のクライアント: 採らない。本物のソケットが要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないのでほかのプロトコルに使える TLS の層にならない。OS ごとに違う TLS (OpenSSL、Schannel) と libcurl、zlib、pkg-config の依存も持ち込む。
   - 見直す条件: `Http` に HTTP/2、プロキシ、圧縮が要り、eml で書くより libcurl を結ぶほうが小さいと分かったとき。
 - musl で静的に結んだ Linux の配布物 (`x86_64-unknown-linux-musl`)
