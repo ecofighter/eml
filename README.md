@@ -119,6 +119,7 @@ claude plugin install ecoskills@ecoskills --scope user
 | `eml_cli` | `check` / `run` のコマンド。各段階をつなぐ |
 | `eml_vm` | LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上で実行する |
 | `eml_rt` | VM とネイティブで共有するランタイムの核 (物体、ヒープ、参照カウント、検査モード、extern)。Verus で検証する |
+| `eml_tls` | rustls の接続を包む TLS の状態 (I/O を持たない) |
 | `eml_core_ir` | 型付き HIR から Core IR (基本ブロックの列) への変換、evidence passing、LIR への変換 |
 | `eml_lir` | LIR と、`box` / `unbox` の挿入、縮約、`dup` / `decref` / `release` の挿入 |
 | `eml_types` | Kind、型、row の推論と、線形性、多重度、網羅性の検査 |

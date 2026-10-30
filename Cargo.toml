@@ -17,6 +17,7 @@ eml_core_ir = { path = "crates/eml_core_ir" }
 eml_lir = { path = "crates/eml_lir" }
 eml_rt = { path = "crates/eml_rt" }
 eml_io = { path = "crates/eml_io" }
+eml_tls = { path = "crates/eml_tls" }
 eml_vm = { path = "crates/eml_vm" }
 eml_cli = { path = "crates/eml_cli", default-features = false }
 eml_test_support = { path = "crates/eml_test_support", default-features = false }
@@ -29,7 +30,11 @@ logos = "0.16"
 rustyline = { version = "19.0.0", default-features = false, features = ["buffer-redux"] }
 rowan = "0.17"
 rustc-hash = "2.1"
+# provider は aws-lc-rs だけで、`eml_tls` が `builder_with_provider` で渡す。`logging` と `prefer-post-quantum` は使わないので既定は外す
+# (docs/implementation/architecture.md の「crate の依存関係」)
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 text-size = "1.1"
+webpki-roots = "1.0.11"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Threading"] }
 
 # テストの時間の多くはフロントエンドにあり、一部の crate だけを最適化しても縮まない。debug assertions は既定のまま有効にする

@@ -479,6 +479,8 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 開発機の OS で組まれないコード (`cfg(windows)` や `cfg(unix)` の部分) は、`nix develop .#cross` の clippy で型を検査する。この devShell の toolchain は、ふだんと同じバージョンに `x86_64-pc-windows-msvc`、`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu` の `rust-std` を足したものである。link はできないので、流すのは clippy だけで、テストは CI の各 OS のジョブで流す。build の置き場所は `target/cross` で、ふだんの `target/` と分ける。
 
+`eml_tls` は aws-lc-sys を組み、そのために対象の C のツールチェーンが要る。`.#cross` の devShell にはないので、この clippy は `eml_tls` を除き、`tls` を外した形で流す。Linux の2つの target も同じフラグである。`tls` を外した側のコードは、feature の組み合わせの clippy の行が検査する。`eml_tls` そのものは、CI のどの OS でも clippy とテストにかける。C の暗号を組む crate を dev-dependency に持ってよいのは `eml_tls` だけで、ほかの crate のテストは、optional の依存を `cfg(feature = "tls")` の下で通して `eml_tls` に届く。
+
 ### 新しい対象で落ちたテストの仕分け
 
 CI の対象 (OS、CPU、AddressSanitizer の脚) を足して落ちたテストは、1件ずつ見てから次のどれかに分ける。前もって範囲で期待値の書き直しを許すことはしない。
@@ -639,7 +641,7 @@ cargo insta review                                   # スナップショット�
 cargo insta test --test-runner nextest --accept      # テストを流し、スナップショットを受け入れる
 cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
-nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # Windows の target の clippy (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu。OS ごとのテスト)
+nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
 nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: と signal:: も。eml_io の検証)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)

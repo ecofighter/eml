@@ -1,0 +1,20 @@
+[package]
+name = "eml_tls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+# 単体テストがないので、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+rustls.workspace = true
+webpki-roots.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"
