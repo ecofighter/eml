@@ -220,7 +220,7 @@ fn a_buffered_read_line_counts_no_completion() {
 #[test]
 fn a_read_line_that_is_not_utf8_raises_not_utf8() {
     let (out, _) = connected_stats(
-        "  let a = Net.write_bytes (Bytes.append (Bytes.make 1 (Byte.wrap 255)) (Bytes.of_string \"\\n\")) a
+        "  let (_, a) = Net.write_bytes (Bytes.append (Bytes.make 1 (Byte.wrap 255)) (Bytes.of_string \"\\n\")) a
   Net.close a
   match try_io (fn () -> Net.read_line b) with
     | Ok (_, b) ->
@@ -554,8 +554,8 @@ impl IoDriver for Recorder {
 
 /// 1つのタスクが自分で待ち受け、接続し、受け、書いて読む。テストの driver はどれも受け付けの時点で終えるので、
 /// 待ちはどれも速い道で続け、driver の `wait` も `completions` も呼ばない。`parks` は `io_wait` の呼び出しの数で、
-/// `completions` は終わった操作の数である。読みは buffer に空きがないので、読めるようになるのを待つ操作と読みの2つを
-/// 出す (docs/spec/vm.md の「`RunStats`」)。
+/// `completions` は終わった操作の数である。読みは buffer に空きがあるので、その空きを貸す読みを1つだけ出す
+/// (docs/spec/vm.md の「`RunStats`」)。
 #[test]
 fn one_task_of_finished_ops_never_waits_on_the_driver() {
     let src = "\
@@ -570,8 +570,8 @@ main () = Async.run (fn () ->
   let a = Net.connect \"127.0.0.1\" port
   let (b, l) = Net.accept l
   Net.close_listener l
-  let a = Net.write_bytes (Bytes.of_string \"hi\") a
-  let (buf, b) = Net.read_chunk (Bytes.empty ()) b
+  let (_, a) = Net.write_bytes (Bytes.of_string \"hi\") a
+  let (buf, b) = Net.read_chunk (Bytes.with_capacity 16) b
   Net.close a
   Net.close b
   println (String.decode buf))
@@ -591,13 +591,55 @@ main () = Async.run (fn () ->
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "hi\n");
     let log = log.lock().unwrap();
-    assert_eq!(
-        log.ops,
-        ["listen", "connect", "accept", "write", "readable", "read"]
-    );
-    assert_eq!((log.immediate, log.waits, log.completions), (6, 0, 0));
+    assert_eq!(log.ops, ["listen", "connect", "accept", "write", "read"]);
+    assert_eq!((log.immediate, log.waits, log.completions), (5, 0, 0));
     let s = finished.stats;
-    assert_eq!((s.parks, s.completions, s.cancels), (5, 6, 0));
+    assert_eq!((s.parks, s.completions, s.cancels), (5, 5, 0));
+}
+
+/// `write_bytes` は渡した buffer をそのまま返す。返った buffer を次の往復の書きに渡し、読みの buffer を `truncate 0` で
+/// 空にして渡し直す echo は、往復ごとに buffer を確保しないので、確保の数が往復の数に比例する。読みの buffer は
+/// `Bytes.with_capacity` で作り、4 バイトの返事を1回の読みで受ける (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn write_bytes_returns_the_same_buffer() {
+    let allocations = |rounds: u64| {
+        let src = format!(
+            "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+import String
+echo : Int -> Bytes -> Bytes -> Bytes -> Net.TcpStream -> Net.TcpStream -> <IO, Panic, Async> Bytes
+echo n msg r q a b =
+  if n == 0 then
+    Net.close a
+    Net.close b
+    q
+  else
+    let (msg, a) = Net.write_bytes msg a
+    let (r, b) = Net.read_chunk (Bytes.truncate 0 r) b
+    let (r, b) = Net.write_bytes r b
+    let (q, a) = Net.read_chunk (Bytes.truncate 0 q) a
+    echo (n - 1) msg r q a b
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let a = Net.connect \"127.0.0.1\" port
+  let (b, l) = Net.accept l
+  Net.close_listener l
+  let q = echo {rounds} (Bytes.of_string \"ping\") (Bytes.with_capacity 16) (Bytes.with_capacity 16) a b
+  println (String.decode q))
+"
+        );
+        let (out, stats) = run_stats(src.as_str());
+        let s = stats.unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(out, "ping\n");
+        s.allocations
+    };
+    let (one, two, three) = (allocations(1), allocations(2), allocations(3));
+    assert_eq!(three - one, 2 * (two - one));
 }
 
 /// 2つのタスクが 20 往復の echo をする。操作が受け付けで終わるかは順で変わるが、`parks` は `io_wait` の呼び出しの数、
@@ -615,7 +657,7 @@ serve n s =
   if n == 0 then Net.close s
   else
     let (buf, s) = Net.read_chunk (Bytes.empty ()) s
-    let s = Net.write_bytes buf s
+    let (_, s) = Net.write_bytes buf s
     serve (n - 1) s
 ask : Int -> Int -> Net.TcpStream -> <IO, Panic, Async> Int
 ask n got c =

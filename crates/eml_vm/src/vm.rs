@@ -2190,8 +2190,8 @@ fn async_op<R: Exec>(
                 .take_made(ctx, task.raw(arg(0)), task.worker, listener)?;
             task.set(dst, w);
         }
-        Extern::NetTakeRead => {
-            let buf = sched.cells.take_read(ctx, task.raw(arg(0)), task.worker)?;
+        Extern::NetTakeBytes => {
+            let buf = sched.cells.take_bytes(ctx, task.raw(arg(0)), task.worker)?;
             task.set(dst, buf);
         }
         Extern::NetSubmitReadLine => {
@@ -3206,7 +3206,7 @@ fn run_extern<R: Exec>(
             | Extern::NetOpOutcome
             | Extern::NetTakeListener
             | Extern::NetTakeStream
-            | Extern::NetTakeRead
+            | Extern::NetTakeBytes
             | Extern::NetTakeLine
             | Extern::NetFinish
             | Extern::NetLocalPort

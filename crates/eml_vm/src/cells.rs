@@ -285,7 +285,8 @@ struct OpRecord {
     phase: OpPhase,
     /// 受け付けたタスクの論理的な worker ID。そのタスクの外で記録の語に触れるときは、この ID に切り替える。
     worker: u32,
-    /// 操作に貸した `Bytes`。受け付けから取り出しまで、その物体へのただ1つの参照である。
+    /// 操作に貸した `Bytes` の参照で、受け付けから取り出しまで記録が持つ。読みに貸す間はその物体へのただ1つの参照で、
+    /// 書きの物体はほかの参照と共有してよい (docs/spec/object-model.md の T10 の行)。
     buf: Option<Word>,
     /// 受け付けに渡されたストリームかリスナー (`accept`)。`op_stream` が取り戻すまで持つ。
     stream: Option<Word>,
@@ -1899,7 +1900,7 @@ impl Registry {
 
     /// `Std.Net.submit_write`。`buf` と `stream` は呼ぶ側から移ってきた参照で、記録に移す。
     /// `buf` の内容をすべて書く操作を driver に出し、token を返す。`worker` は呼んだタスクの論理的な ID で、
-    /// `depth_offset` はその深さの起点である。
+    /// `depth_offset` はその深さの起点である。共有の `Bytes` も写さずに貸し、`take_bytes` が同じ参照を返す。
     pub(crate) fn submit_write<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
@@ -1909,9 +1910,9 @@ impl Registry {
         buf: Word,
         stream: Word,
     ) -> Result<i64, CellFault> {
-        let buf = unique_bytes(ctx, buf)?;
         let handle = stream_handle(ctx, stream)?;
-        // 記録が物体を生かし、一意に保ち、取り出すまで書き換えないので、driver は完了までこの位置を読める
+        // 記録が物体を生かし、取り出すまで書き換えないので、driver は完了までこの位置を読める。一意は求めない。
+        // その場で書き換える操作はどれも一意を求め、記録が参照を1つ持つ間は写すからである
         // (docs/spec/object-model.md の T10 の行)
         let bytes = unsafe { ctx.heap().bytes(buf)? };
         let raw = RawBuf {
@@ -2568,9 +2569,10 @@ impl Registry {
         }
     }
 
-    /// `Std.Net.take_read`。token を消費して記録を放し、読んだバイトを足した buffer を返す。結果の番号が `OUTCOME_OK` の
-    /// 読みの記録だけを取り出す (docs/spec/stdlib.md の「`Std.Net`」)。
-    pub(crate) fn take_read<M: Mode>(
+    /// `Std.Net.take_bytes`。token を消費して記録を放し、記録の buffer を返す。読みなら読んだバイトを足した buffer、
+    /// 書きなら書いた buffer そのものである。結果の番号が `OUTCOME_OK` の読みか書きの記録だけを取り出す
+    /// (docs/spec/stdlib.md の「`Std.Net`」)。
+    pub(crate) fn take_bytes<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         token: i64,
@@ -2581,7 +2583,7 @@ impl Registry {
             return Err(CellFault::Internal("an op is taken after it failed"));
         }
         match taken.buf {
-            Some(buf) if matches!(taken.kind, OpKind::Read) => Ok(buf),
+            Some(buf) if matches!(taken.kind, OpKind::Read | OpKind::Write) => Ok(buf),
             _ => Err(CellFault::Internal("an op is taken as another kind of op")),
         }
     }
@@ -2868,22 +2870,6 @@ fn grow_read_room<M: Mode>(
         cap: READ_ROOM,
     };
     Ok((fresh, handle, raw))
-}
-
-/// 呼ぶ側から移ってきた `Bytes` の参照 `w` を、一意な物体の参照にする。共有か不死の物体と、ほかに参照のある物体は、
-/// 同じ中身の新しい物体に写して元を手放す。driver が読む間、ほかの参照から書き換えられないためである
-/// (docs/spec/vm.md の「操作の記録」)。
-fn unique_bytes<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<Word, CellFault> {
-    // `w` は呼ぶ側が持つ今の worker の参照で、`Ctx` の持つ語には触れない。中身は写し終えてから手放す
-    // (docs/spec/vm.md の「操作の記録」)
-    let heap = unsafe { ctx.heap_mut() };
-    if unsafe { heap.is_unique(w) }? {
-        return Ok(w);
-    }
-    let content = unsafe { &*heap.bytes(w)? }.to_vec();
-    let copy = heap.alloc_bytes(&content);
-    unsafe { heap.decref(w) }?;
-    Ok(copy)
 }
 
 /// channel の操作 (docs/spec/vm.md の「channel」)。channel の引数は `Std.Chan.Chan` の即値で、放したセルと前の run の
@@ -3424,7 +3410,8 @@ fn a_slot_retires_instead_of_wrapping_its_generation() {
 
 /// 操作を受け付けるだけで、テストが積んだ完了だけを返す driver。核の単体テストが driver の crate に頼らないための
 /// ものである。読みに貸された記憶を覚え、テストが外の書き手としてそこに書く。`finish_writes` が立っていれば、書きを
-/// 受け付けの時点で終える。
+/// 受け付けの時点で終える。書きに貸された記憶は、本物の driver と同じく、書きを終える時点 (受け付けか、その鍵の完了を
+/// 返すとき) に読んで `written` に写す。
 #[cfg(test)]
 #[derive(Default)]
 struct NoDriver {
@@ -3435,6 +3422,22 @@ struct NoDriver {
     done: Vec<Completion>,
     lent: Vec<RawBuf>,
     finish_writes: bool,
+    /// 書きに貸された記憶。受け付けの順に並ぶ。
+    writes: Vec<RawBuf>,
+    /// 保留にした書きの鍵と記憶。
+    held: Vec<(OpKey, RawBuf)>,
+    /// 書きを終えたときに貸された記憶から読んだ中身。
+    written: Vec<Vec<u8>>,
+}
+
+/// 書きに貸された記憶の中身。貸した側は書きを終えるまで記憶を生かし、書き換えない (docs/spec/vm.md の「時計と driver」の
+/// `RawBuf`)。
+#[cfg(test)]
+fn lent_content(buf: RawBuf) -> Vec<u8> {
+    if buf.cap == 0 {
+        return Vec::new();
+    }
+    unsafe { std::slice::from_raw_parts(buf.ptr, buf.cap) }.to_vec()
 }
 
 #[cfg(test)]
@@ -3462,7 +3465,16 @@ impl IoDriver for NoDriver {
         self.last_key = key;
         self.submits += 1;
         match op {
-            Op::Write { buf, .. } if self.finish_writes => Submit::Done(Ok(Done::Size(buf.cap))),
+            Op::Write { buf, .. } => {
+                self.writes.push(buf);
+                if self.finish_writes {
+                    self.written.push(lent_content(buf));
+                    Submit::Done(Ok(Done::Size(buf.cap)))
+                } else {
+                    self.held.push((key, buf));
+                    Submit::Pending
+                }
+            }
             _ => Submit::Pending,
         }
     }
@@ -3472,6 +3484,14 @@ impl IoDriver for NoDriver {
     }
 
     fn completions(&mut self, out: &mut Vec<Completion>) {
+        for completion in &self.done {
+            if let Some(at) = self.held.iter().position(|&(key, _)| key == completion.key) {
+                let (_, buf) = self.held.remove(at);
+                if completion.result.is_ok() {
+                    self.written.push(lent_content(buf));
+                }
+            }
+        }
         out.append(&mut self.done);
     }
 
@@ -3503,6 +3523,12 @@ impl IoDriver for NoDriver {
 /// 出力を捨てる Host の上の、検査モードの `Ctx`。
 #[cfg(test)]
 fn test_ctx() -> Ctx<eml_rt::Checked> {
+    mode_ctx()
+}
+
+/// 出力を捨てる Host の上の、モード `M` の `Ctx`。
+#[cfg(test)]
+fn mode_ctx<M: Mode>() -> Ctx<M> {
     let host = eml_rt::StdHost::new(
         Box::new(io::sink()),
         Box::new(io::sink()),
@@ -3930,6 +3956,83 @@ fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }
 
+/// 参照が2つある `Bytes` の書きは、写さずに同じ物体の中身を driver に貸し、`take_bytes` が同じ参照を返す。driver が
+/// 読んだ中身は、もう1つの参照から読む中身と同じである (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_write_of_a_shared_buffer_makes_no_copy() {
+    let ctx = write_of_a_shared_buffer::<eml_rt::Checked>();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    write_of_a_shared_buffer::<eml_rt::Fast>();
+}
+
+#[cfg(test)]
+fn write_of_a_shared_buffer<M: Mode>() -> Ctx<M> {
+    let mut ctx = mode_ctx::<M>();
+    let mut driver = NoDriver {
+        finish_writes: true,
+        ..NoDriver::default()
+    };
+    let mut registry = Registry::new(Vec::new());
+    let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"shared");
+    unsafe { ctx.heap_mut().dup(buf) }.unwrap();
+    let stream = net_stream(&mut ctx);
+    let token = registry
+        .submit_write(&mut ctx, &mut driver, 0, 0, buf, stream)
+        .unwrap();
+    let at = unsafe { ctx.heap().bytes(buf) }.unwrap();
+    assert_eq!(driver.writes.len(), 1);
+    assert_eq!(driver.writes[0].ptr, at.cast::<u8>().cast_mut());
+    assert_eq!(driver.written, [b"shared".to_vec()]);
+    let back = registry.take_bytes(&mut ctx, token, 0).unwrap();
+    assert!(back == buf);
+    assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"shared");
+    unsafe { ctx.heap_mut().decref(back) }.unwrap();
+    unsafe { ctx.heap_mut().decref(buf) }.unwrap();
+    ctx
+}
+
+/// driver が保留にしている書きの buffer を、もう1つの参照で書き換えても、rc が 2 なので `Bytes.set` は写してから書く。
+/// driver が完了を返すときに貸された記憶から読む中身は元のままで、書き換えた側だけが新しい中身を持つ
+/// (docs/spec/object-model.md の T10 の行)。
+#[test]
+fn a_write_held_by_the_driver_is_not_changed_by_its_alias() {
+    let ctx = held_write_and_its_alias::<eml_rt::Checked>();
+    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    held_write_and_its_alias::<eml_rt::Fast>();
+}
+
+#[cfg(test)]
+fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
+    let mut ctx = mode_ctx::<M>();
+    let mut driver = NoDriver::default();
+    let mut registry = Registry::new(Vec::new());
+    let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"abc");
+    unsafe { ctx.heap_mut().dup(buf) }.unwrap();
+    let stream = net_stream(&mut ctx);
+    let token = registry
+        .submit_write(&mut ctx, &mut driver, 0, 0, buf, stream)
+        .unwrap();
+    assert_eq!(driver.held.len(), 1);
+    let alias = unsafe { ctx.bytes_set(0, i64::from(b'z'), buf) }.unwrap();
+    assert!(alias != buf);
+    driver.done.push(Completion {
+        key: op_key(CellRef::decode(token)),
+        result: Ok(Done::Size(3)),
+        cancelled: false,
+    });
+    registry
+        .complete(&mut ctx, &mut driver, 0, &mut Vec::new())
+        .unwrap();
+    assert_eq!(driver.written, [b"abc".to_vec()]);
+    let back = registry.take_bytes(&mut ctx, token, 0).unwrap();
+    assert!(back == buf);
+    assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abc");
+    assert_eq!(unsafe { &*ctx.heap().bytes(alias).unwrap() }, b"zbc");
+    unsafe { ctx.heap_mut().decref(back) }.unwrap();
+    unsafe { ctx.heap_mut().decref(alias) }.unwrap();
+    ctx
+}
+
 /// 操作の待ちの期限は満ちても再開せずに driver に取り消しを頼み、記録に期限の印を付ける。取り消した操作の完了が
 /// `Woke` で再開し、誤りの結果は期限切れとして読める (docs/spec/vm.md の「時間の待ち」)。
 #[test]
@@ -4172,7 +4275,7 @@ fn a_deadline_cancel_ends_late() {
 
 /// 中身の buffer が空の `Std.Net.TcpStream`。
 #[cfg(test)]
-fn net_stream(ctx: &mut Ctx<eml_rt::Checked>) -> Word {
+fn net_stream<M: Mode>(ctx: &mut Ctx<M>) -> Word {
     let stream = NetStream {
         handle: 0,
         peer: ([127, 0, 0, 1], 1).into(),
@@ -4492,7 +4595,7 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
         Some(Runnable::ResumeIo { cell, wake: WOKE, .. }) if cell == next
     ));
     let stream = registry.op_stream(token, 0).unwrap();
-    let back = registry.take_read(&mut ctx, token, 0).unwrap();
+    let back = registry.take_bytes(&mut ctx, token, 0).unwrap();
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abcd");
     let s = net_rest(&ctx, stream);
     assert!(s.pending().is_empty() && s.rest.capacity() == 0);

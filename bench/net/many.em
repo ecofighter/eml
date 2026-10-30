@@ -13,7 +13,7 @@ import String
 answer : Net.TcpStream -> <IO, Panic, Async> Unit
 answer s =
   let (req, s) = Net.read_chunk (Bytes.empty ()) s
-  let s = Net.write_bytes req s
+  let (_, s) = Net.write_bytes req s
   let (_, s) = Net.read_chunk (Bytes.empty ()) s
   Net.close s
 
@@ -31,7 +31,7 @@ connect_all n port acc =
 
 ask : Net.TcpStream -> <IO, Panic, Async> Unit
 ask c =
-  let c = Net.write_bytes (Bytes.make 16 'q'u8) c
+  let (_, c) = Net.write_bytes (Bytes.make 16 'q'u8) c
   let (_, c) = Net.read_chunk (Bytes.empty ()) c
   Net.close c
 

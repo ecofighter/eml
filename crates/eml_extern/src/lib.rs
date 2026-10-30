@@ -1424,8 +1424,8 @@ table! {
             Lin,
             Purity::Effectful,
         ),
-        NetTakeRead => kinded(
-            "Std.Net.take_read",
+        NetTakeBytes => kinded(
+            "Std.Net.take_bytes",
             &[Int],
             &[Unr],
             Obj,
@@ -1556,7 +1556,7 @@ impl Extern {
                 | Extern::NetOpOutcome
                 | Extern::NetTakeListener
                 | Extern::NetTakeStream
-                | Extern::NetTakeRead
+                | Extern::NetTakeBytes
                 | Extern::NetTakeLine
                 | Extern::NetFinish
                 | Extern::NetLocalPort

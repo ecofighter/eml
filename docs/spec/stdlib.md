@@ -1291,7 +1291,7 @@ main () = Async.run (fn () ->
 | `read_line` | `TcpStream -> <IO, Panic, Async> (Option String, TcpStream)` | eml |
 | `read_line_within` | `Int -> TcpStream -> <IO, Panic, Async> (Option (Option String), TcpStream)` | eml |
 | `write` | `String -> TcpStream -> <IO, Async> TcpStream` | eml |
-| `write_bytes` | `Bytes -> TcpStream -> <IO, Async> TcpStream` | eml |
+| `write_bytes` | `Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)` | eml |
 | `write_line` | `String -> TcpStream -> <IO, Async> TcpStream` | eml |
 | `shutdown_write` | `TcpStream -> <IO> TcpStream` | extern |
 | `close` | `TcpStream -> <IO> Unit` | eml |
@@ -1309,7 +1309,7 @@ main () = Async.run (fn () ->
 - `read_line s` は `s` から1行を読み、終わりの改行 (`\n` か `\r\n`) を除いた行とストリームを返す。改行のない最後の行はそのまま返し、残りのない EOF では `None` を返す (`Stdin.read_line` と同じ形)。読んだバイトはストリームの buffer に入る。buffer にもう1行あれば driver の操作を出さずに返し、なければ改行か EOF が来るまで読みを繰り返す。buffer に空きがなければ、読む前に読めるようになるのを待つ。行の中身は 1 MiB (1 048 576 バイト) までである。中身は終わりの `\n` か `\r\n` を除いたバイトで、EOF の前の最後の行では残りのすべてである。終わりの改行は上限に数えない。中身が上限を超える行は、改行が届いたときか、改行の届く前に読んだ中身が上限を超えたときに、種類 `Other` の IO の失敗 `cannot read the stream: a line is longer than 1048576 bytes` になる。そのため結果は、バイトが読みにどう分かれて届くかによらない。UTF-8 でない行は、種類 `NotUtf8` の IO の失敗 `cannot read the stream: the line is not valid UTF-8` になる。どちらの失敗でも、包みはストリームを落としてから投げるので、ストリームは呼ぶ側に戻らない
 - `read_line_within ms s` は `read_line s` を `ms` ミリ秒の期限で区切り、結果を `Option` に包む。期限は1行の全体に付き、読みの1回ごとには付かない。`None` は期限が過ぎたことだけを表し、そのとき読んだ途中の行はストリームの buffer に残って、次の読みが続きと合わせて返す。期限と競って行がそろったときは `Some` で返す
 - `_within` の関数 (`accept_within`、`read_chunk_within`、`read_line_within`) は、期限のない関数の結果を `Option` に包んで返す。`None` は期限が過ぎたことだけを表し、リスナーかストリームは続けて使える
-- `write_bytes b s` は `b` をすべて書き、ストリームを返す。本物の driver は、短く終わった送りを出し直す。`write str s` は `str` の UTF-8 のバイトを書き、`write_line str s` は `str` と改行を書く。どれも `write_bytes` を呼ぶ
+- `write_bytes b s` は `b` をすべて書き、`b` とストリームの組を返す。返す `b` は渡した物体そのもので、共有の `Bytes` でも写さない ([VM](vm.md) の「操作の記録」)。返った `b` は次の書きにも、`truncate 0` で空にして読みにも使える。本物の driver は、短く終わった送りを出し直す。`write str s` は `str` の UTF-8 のバイトを書き、`write_line str s` は `str` と改行を書く。どれも `write_bytes` を呼ぶ
 - 書きの期限は `Async.timeout ms (fn () -> Net.write_bytes b s)` で付ける。期限が来ると、巻き戻しがストリームを閉じる
 - `local_port` と `peer_addr` は、作ったときに記録した値を読む。引数を借りて組で返し ([Core IR](core-ir.md) の「組を返す extern」)、効果を持たない。`peer_addr` は Rust の `SocketAddr` の表示の形 (`127.0.0.1:49153`、`[::1]:8080`) で返す
 - `shutdown_write s` は送る側を閉じ、相手は残りを読みきってから EOF を受ける。`set_nodelay on s` は TCP_NODELAY を設定する。どちらも driver の操作を待たない。失敗はそれぞれ IO の失敗 `cannot shut down the stream: …` と `cannot set the no-delay option: …` で、種類は次の箇条の、extern が投げる誤りと同じ規則で決める
@@ -1345,7 +1345,7 @@ main () = Async.run (fn () ->
 | `op_outcome` | `Async.OpId -> <IO> (Int, Async.OpId)` | token |
 | `take_listener` | `Async.OpId -> <IO> TcpListener` | なし |
 | `take_stream` | `Async.OpId -> <IO> TcpStream` | なし |
-| `take_read` | `Async.OpId -> <IO> Bytes` | なし |
+| `take_bytes` | `Async.OpId -> <IO> Bytes` | なし |
 | `take_line` | `Async.OpId -> <IO> String` | なし |
 | `finish` | `Async.OpId -> <IO> Unit` | なし |
 | `local_port` | `TcpListener -> (Int, TcpListener)` | リスナー |
@@ -1353,9 +1353,9 @@ main () = Async.run (fn () ->
 | `shutdown_write` | `TcpStream -> <IO> TcpStream` | なし |
 | `set_nodelay` | `Bool -> TcpStream -> <IO> TcpStream` | なし |
 
-- 受け付けの行は引数を消費して記録に移し、token を返す。`submit_listen` と `submit_connect` は `host` を写して手放し、文言の prefix を記録に持たせる。`submit_read` と `submit_write` は buffer が一意でなければ (共有、不死、ほかの参照)、同じ中身の新しい `Bytes` に写して元を手放す。driver が読み書きする間に書き換わらないためである。`submit_read` は、ストリームの buffer に `read_line` が残したバイトがあれば、それを buffer に足して、driver の操作を出さずに終わった記録を作る。`submit_read_line` はストリームだけを記録に移す
+- 受け付けの行は引数を消費して記録に移し、token を返す。`submit_listen` と `submit_connect` は `host` を写して手放し、文言の prefix を記録に持たせる。`submit_read` と `submit_write` は受け付けで buffer を写さない。`submit_read` は一意でない buffer (共有、不死、ほかの参照) を広げるときに1回だけ写し、`submit_write` は一意でない buffer もそのまま貸す。その場で書き換える操作はどれも一意を求めるので、driver が読む間に書き換わらない ([VM](vm.md) の「操作の記録」)。`submit_read` は、ストリームの buffer に `read_line` が残したバイトがあれば、それを buffer に足して、driver の操作を出さずに終わった記録を作る。`submit_read_line` はストリームだけを記録に移す
 - `op_listener` と `op_stream` は、終わった記録から受け付けに渡したものを移し出す。`op_outcome` は結果の番号を返す
-- `take_listener` と `take_stream` は token を消費して記録を放し、完了から作ったリスナーかストリームを返す。`take_read` は token を消費して記録を放し、読んだバイトを足した buffer を返す。`take_line` は token を消費して記録を放し、記録が切り出した行を終わりの改行を含めて返す。残りのない EOF では空の文字列を返し、包みがそれを `None` にする。どれも、番号が 0 でない記録では内部の誤り `an op is taken after it failed` になる
+- `take_listener` と `take_stream` は token を消費して記録を放し、完了から作ったリスナーかストリームを返す。`take_bytes` は token を消費して記録を放し、記録の buffer を返す。読みでは読んだバイトを足した buffer、書きでは書いた buffer そのものである。`take_line` は token を消費して記録を放し、記録が切り出した行を終わりの改行を含めて返す。残りのない EOF では空の文字列を返し、包みがそれを `None` にする。どれも、番号が 0 でない記録では内部の誤り `an op is taken after it failed` になる
 - `finish` は token を消費して記録を放し、記録がまだ持つもの (完了から作ったハンドルを含む) を落とす。番号 6 の誤りは、取り消しを頼んだ記録でなければ IO の失敗にする
 
 ## `Std.Signal`

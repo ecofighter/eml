@@ -229,7 +229,7 @@
   - MUST: `Read` に貸す記憶は、完了を取り出すまで生かし、一意に保ち、動かさない。`Write` に貸す記憶は、完了を取り出すまで生かし、書き換えず、動かさない。`Bytes` をその場で書き換える操作は、どれも一意 (rc が 1) を求める。
   - MUST: 読みの貸しの SAFETY とコメントだけが「一意に保ち」と書く。書きの貸しの文は「生かし、書き換えない」と書く。
 - 適合の確かめ
-  - この段 (T-8): `grep -rn "一意に保ち" crates docs` の残りが、読みの貸しを述べる所だけ。`crates/eml_vm/tests/miri.rs` の `a_held_write_is_not_changed_by_its_alias` と `a_shared_buffer_is_written_without_a_copy` が、両方のモードと Miri の2つの設定で通る。
+  - この段 (T-8): `grep -rn "一意に保ち" crates docs` の残りが、読みの貸しを述べる所だけ。`crates/eml_vm/src/cells.rs` の `a_write_held_by_the_driver_is_not_changed_by_its_alias` と `a_write_of_a_shared_buffer_makes_no_copy` が、両方のモードと Miri の2つの設定で通る (T-8 の実装で、手で書いた LIR が `Async` のエントリを持たず `Std.Net` の行を呼べないので、`miri.rs` から `cells.rs` に移した)。
   - `io-backends` (付録3): `buf.rs` の `Lent::bytes` の SAFETY が「生かし、書き換えない」、`Lent::room` の SAFETY が「一意に保ち」で、付録3の T-2 の基準に同じ grep がある。
 - リポジトリに残す所: object-model.md の T10 の行、vm.md の `RawBuf` の項、`driver.rs` の `RawBuf` の doc (T-4、T-8)。
 
@@ -667,12 +667,14 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
 - 対象: `crates/eml_vm/src/cells.rs` (`submit_write`、`unique_bytes` の削除、`take_bytes`)、`vm.rs` (`NetTakeBytes`)、`crates/eml_extern/src/lib.rs` (`NetTakeBytes`)、`std/Net.em` (付録1 の6.2節)、`bench/net/{echo,bulk,many}.em` (付録2 の8.3節)、`crates/eml_core_ir/tests/externs.rs`、`crates/eml_io/src/real.rs` と `test.rs` の SAFETY、`crates/eml_vm/tests/{io,miri}.rs`、docs (付録1 の4.2節と8.8節)
 - 作業: 付録1 の4節と6.2節のとおりにする。`bench/net` の3つのプログラムに付録2 の8.3節の差分を当てる。
 - テスト: 付録1 の7.7節。
-- 実装者に任せること: miri.rs の driver の形
+- 実装者に任せること: miri.rs の driver の形 (実装で決めたこと: 手で書いた LIR は `Async` のエントリを持たず、`Std.Net` の行がどれも `is_async` なので `Async.run` なしに呼べない。T-5 の `a_second_take_of_an_op_is_an_internal_error` と同じく、2本を `cells.rs` の単体テストにし、stub の `NoDriver` が書きに貸された記憶を、書きを終える時点で読む。Miri は `cells::a_read` の実行に `cells::a_write` を足して流す)
 - 条件: いつも
 - 完了の条件
   - 共通の条件、cross の clippy
   - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::` → 通る
   - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test -p eml_vm --test integration miri::` → 通る
+  - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write` → 10本が通る
+  - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write` → 10本が通る
   - `grep -rn "unique_bytes\|take_read" crates/eml_vm/src std` → 0行
   - `grep -rn "一意に保ち" crates docs | grep -v docs/plans` の行が、どれも読みの貸しを述べる所 (レビューで読む)
   - `cargo build --release -p eml_cli` の後、`timeout 60 ./target/release/eml run bench/net/echo.em 200 16 reuse` → `echo done 200`。`bulk.em 4 64 shared fresh` → `bulk done 4194304`。`many.em 50` → `many done 50`
@@ -749,7 +751,7 @@ T-0 → T-1 → T-2 → T-2b → T-3 → T-4 → T-5 → T-6 → T-7 → T-8 →
 - 基点の確かめ (最初の変更の前): `nix develop -c cargo nextest run` → 失敗なし。通った数を T-0 のコミットのメッセージに書く。`git log --oneline | grep 'Close async-net'` → 1行。
 - 全体の検証 (すべてのタスクの後)
   - 7 章の共通の条件、cross の clippy、`eml_rt` の関門
-  - Miri の `eml_vm miri::` の2つの設定 (T-8 のコマンド) → 通る
+  - Miri の `eml_vm miri::` と `cells::a_read cells::a_write` の2つの設定 (T-8 のコマンド) → 通る
   - `nix build` → 成功
   - `cargo nextest run -j 1` → `SLOW` の印のあるテストがない
   - `cargo nextest run -p eml_vm --test integration -E 'test(io::one_task_of_finished_ops_never_waits_on_the_driver)'` → 通る (`immediate == 5`、`wait` 0、`parks == 5`、`completions == 5`)

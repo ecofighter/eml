@@ -872,7 +872,7 @@ lines s =
 fn a_real_write_of_8_mib_arrives_whole() {
     let src = format!(
         "{REAL_CONNECTED}  let t = Async.start (fn () -> count 0 b)
-  let a = Net.write_bytes (Bytes.make 8388608 (Byte.wrap 7)) a
+  let (_, a) = Net.write_bytes (Bytes.make 8388608 (Byte.wrap 7)) a
   Net.close a
   println (show (Async.await t)))
 

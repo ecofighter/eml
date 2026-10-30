@@ -219,7 +219,7 @@ std の非同期の操作はどれも次の3段で行う。extern は yield し�
 pub read_chunk : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
 read_chunk buf s =
   let (w, op) = await_io (submit_read buf s)   -- submit_read : Bytes -> TcpStream -> <IO> OpId
-  let (buf, s) = take_read op                   -- take_read : OpId -> <IO> (Bytes, TcpStream)
+  let (buf, s) = take_bytes op                  -- take_bytes : OpId -> <IO> (Bytes, TcpStream)
   match w with
     | Woke -> (buf, s)
     | Cancelled ->
@@ -229,10 +229,10 @@ read_chunk buf s =
 
 ### 所有ごと渡す buffer
 
-- buffer は値で渡す `Bytes` である。受け付けは語を受け取る。書きの受け付けは、一意でなければ (rc ≠ 1。共有の印の付いた rc < 0 の物体を含む) 新しい一意な物体に写す。読みの受け付けは写さず、一意でない buffer は広げるときに1回だけ写す。カーネルが書くのは、参照がちょうど1つの物体だけで、その参照は登録表の操作の記録が持つ。driver は語を見ず、記録が貸す `RawBuf` だけを見る
-- 操作の記録は worker の登録表に載り、語は長さを進めて戻る。記録の語は公開しないので、共有の印が付かず、一意なまま残る
+- buffer は値で渡す `Bytes` である。受け付けは語を受け取り、読みでも書きでも受け付けでは写さない。カーネルが書くのは、参照がちょうど1つの物体だけで、その参照は登録表の操作の記録が持つ。一意でない (rc ≠ 1。共有の印の付いた rc < 0 の物体を含む) 読みの buffer は、広げるときに1回だけ写す。書きの buffer には一意を求めず、共有の物体もそのまま貸す。その場で書き換える操作はどれも一意を求めるので、記録が参照を1つ持つ間、ほかの参照からの書き換えは写しになり、貸した中身は変わらない。driver は語を見ず、記録が貸す `RawBuf` だけを見る
+- 操作の記録は worker の登録表に載り、語は長さを進めて戻る。読みの記録の語は公開しないので、共有の印が付かず、一意なまま残る
 - 読みでは、buffer が一意で長さの後ろの空きが 8 バイト以上あれば、受け付けがその空きの 64 KiB までをカーネルに渡して1回で読む。そうでなければ、受け付けは buffer を預かるだけで、容量を足すのはソケットが読めるようになってからにする。読めると分かってから、容量が `length + max(length, 64 KiB)` 以上の一意な物体に写し、`(payload + length, 64 KiB)` をカーネルに渡す。IOCP ではまず0バイトの受信を出し、それが終わってから容量を足して受信する。そのため、何も来ない接続は、呼び手が空きを渡さない限り読みの buffer を持たない
-- `write_bytes` も同じく buffer を移し (一意でなければ写す)、完了の後で放す。buffer は返さない
+- `write_bytes` も buffer を記録に移し、完了の後で同じ buffer を返す。返った buffer は次の書きにそのまま渡すか、`truncate 0` で空にして読みに渡せる
 - Perceus の reuse には頼らない。使い回す buffer の空きは呼び手が作る (`Bytes.with_capacity` か、使い終えた buffer の `truncate 0`)。空きのない buffer で上の `read_chunk` を繰り返すと、1回ごとに広げた物体を1つ確保する (`Bytes.empty ()` の容量は 0 で、extern が増やす)
 
 ### `IoDriver` と `eml_io`
@@ -482,7 +482,6 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - `Machine` と REPL のセッションを別のスレッドへ移すこと: 既定は移さない。driver は作ったスレッドから動かず、driver を持つ `Machine` もそのスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。ホストへの埋め込みなどで移す使い道が出たら、専用の実行系のスレッドが状態を持ち、`Machine` と REPL を頼みを送るハンドルにする形を考える
 - 書きの期限 (`write_within`): 取り消し、期限、データの区別は誤りの種類でなく操作の記録の状態で決める ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。`Std.Net` で書きに期限を付けるときは、この区別を書きにもそのまま当てられるかを見直す
 - 受け付けをスレッドをまたいで安全に出せる backend (IOCP、SQ を lock する io_uring) では、受け箱を通す回り道を省いてよい。既定は backend ごとに `eml_io` が決める
-- `write_bytes` が buffer を返して使い回す形: 既定は返さない。計測で確保が目立ったときに考える
 - 2つ目からの失敗をまとめて報告する形 (MultiError): 既定は最初の失敗が勝ち、ほかは数えるだけにする
 - 複数の channel の `select`: 既定は入れない。`race`、`timeout`、`merge` で書く
 - broadcast と watch の channel: 既定は作らない
