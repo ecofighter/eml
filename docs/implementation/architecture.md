@@ -391,6 +391,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 文言は固定である。作るときの誤り (`Error`) はそれぞれ1つの文言を持つ。証明書の拒否 (rustls の `InvalidCertificate`) は理由によらず `the server certificate was rejected` とし、rustls の詳細を付けない。ほかの TLS の誤りと `read_tls` の誤りは rustls の文言をそのまま使う
 - `send_close_notify` は rustls のものを呼ぶだけで、2度目は何もしない。致命的な alert を送った後も何もしない。close_notify を送った後の `write_plain` も、rustls は止めずにレコードを作る。そのため、呼ぶ側がソケットの送る向きを閉じた後に書くと、そのレコードはソケットまで届いてそこで失敗する。close_notify を送った後に相手の壊れたレコードが届くと、rustls は致命的な alert を積む前の `debug_assert!` で panic する。そこで workspace の `Cargo.toml` は dev の profile で rustls の debug assertions を切り、release と同じく `FAILED` になるようにしている
 - `Conn::server` と `fixtures` は、テストの driver の終端器とテストのためだけにある。`fixtures` の鍵は公開されたテスト用の定数で、何も認証しない
+- `examples/https_server.rs` は `bench/scripts.sh` の行 `https-get` の相手である。`Conn` を使わず、rustls の `StreamOwned` でブロックするソケットに書く。計測の相手は I/O を持たない形である必要がないためである。動き方は [計測の基準](benchmarks.md) の「スクリプトの計測」にある
 
 ## ソースファイルと位置
 
