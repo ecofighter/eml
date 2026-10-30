@@ -32,12 +32,14 @@
       systems = [
         "x86_64-linux"
         "aarch64-darwin"
+        "aarch64-linux"
       ];
 
       perSystem =
         { pkgs, system, ... }:
         let
           fenix = inputs.fenix.packages.${system};
+          hasVerus = inputs ? "verus-${system}";
           # Rust の部品は stable も nightly も fenix から取る。stable はバージョンを `rust-toolchain.toml` から取り、
           # devShell、`nix build`、Verus と、nix の外の rustup が同じバージョンを使う (docs/implementation/testing.md の「Verus」)
           pin = {
@@ -64,6 +66,7 @@
             ++ map (target: (fenix.targets.${target}.toolchainOf pin).rust-std) [
               "x86_64-pc-windows-msvc"
               "x86_64-unknown-linux-gnu"
+              "aarch64-unknown-linux-gnu"
             ]
           );
           rustPlatform = pkgs.makeRustPlatform {
@@ -112,9 +115,9 @@
               ];
               meta.license = pkgs.lib.licenses.mit;
             };
-            inherit verus verusfmt;
             default = eml;
-          };
+          }
+          // pkgs.lib.optionalAttrs hasVerus { inherit verus verusfmt; };
 
           devShells = {
             default = pkgs.mkShell {
@@ -122,6 +125,8 @@
                 devToolchain
                 pkgs.cargo-insta
                 pkgs.cargo-nextest
+              ]
+              ++ pkgs.lib.optionals hasVerus [
                 verus
                 verusfmt
               ];

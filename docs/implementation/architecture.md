@@ -62,8 +62,8 @@ eml/
 
 - `version`、`edition = "2024"`、依存する crate のバージョンは、workspace のルートの `Cargo.toml` でまとめて管理する
 - `flake.nix` は、workspace のルートの `Cargo.lock` を使って `eml_cli` だけを組み立て、`eml` バイナリを作る
-- nixpkgs は nixos-unstable を追う。Rust の toolchain は、stable も nightly も flake が fenix から取る。stable のバージョンは `rust-toolchain.toml` に書く。flake がその `channel` を読み、nix の外では rustup が同じファイルを読む。devShell の cargo は rustup を通らないので、shell の中ではファイルは効かない。ふだんの devShell、`nix build`、Verus と、ほかの target を検査する devShell (`nix develop .#cross`) が同じバージョンを使う。nightly は Miri の devShell (`nix develop .#miri`) だけが使う ([テスト戦略](testing.md) の「Miri」)
-- Verus と verusfmt は、release の archive を flake の input にし、`nix/verus.nix` と `nix/verusfmt.nix` が展開してふだんの devShell に入れる ([テスト戦略](testing.md) の「Verus」)
+- nixpkgs は nixos-unstable を追う。Rust の toolchain は、stable も nightly も flake が fenix から取る。stable のバージョンは `rust-toolchain.toml` に書く。flake がその `channel` を読み、nix の外では rustup が同じファイルを読む。devShell の cargo は rustup を通らないので、shell の中ではファイルは効かない。ふだんの devShell、`nix build`、Verus と、ほかの target を検査する devShell (`nix develop .#cross`) が同じバージョンを使う。nightly は Miri の devShell (`nix develop .#miri`) だけにあり、Miri と AddressSanitizer が使う ([テスト戦略](testing.md) の「Miri」と「AddressSanitizer」)
+- Verus と verusfmt は、release の archive を flake の input にし、`nix/verus.nix` と `nix/verusfmt.nix` が展開してふだんの devShell に入れる ([テスト戦略](testing.md) の「Verus」)。flake の対象は x86_64-linux、aarch64-linux、aarch64-darwin で、Verus の release に archive のない aarch64-linux では、Verus と verusfmt を devShell にも packages にも入れない
 - `eml_rt` は vstd に依存するので、`Cargo.lock` に vstd とその依存が入る。`eml_cli` は `eml_vm` を通して `eml_rt` に依存するので、vstd は `eml` バイナリにも入る。`eml_rt` の `verus!` の中は verusfmt で、外は `cargo fmt` で整える
 - どの devShell の shellHook も、`CARGO_HOME` を `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` にする。cargo は外部のサブコマンドを PATH より先に `$CARGO_HOME/bin` から探すので、rustup が入っていると `~/.cargo/bin` の `cargo-clippy` や `cargo-miri` (rustup のプロキシ) が fenix のものより先に当たるためである。そのため、devShell は crate の取得の置き場所を別に持ち、最初の1回は crate を取り直す
 

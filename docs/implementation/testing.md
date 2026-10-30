@@ -184,6 +184,17 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `eml_vm` は、検証していないコードから `eml_rt` の `unsafe fn` を呼ぶ。そのため、`crates/eml_vm/tests/miri.rs` (module `miri`) の小さい実行のテストを、`eml_rt` と同じ2つの設定で流す (`cargo miri test -p eml_vm --test integration miri::`)。直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用 (即値の関数からとクロージャから) と余った引数、evidence を作って引く基本操作、ヒープの文字列の extern、文字列を返すエントリの結果を写すこと (`run_shown`)、`par` のタスクの切り替え (seed の方針の横取りと join) と、右の子の中断を join の後に親で起こし直すこと (ヒープの物体を捕まえた起こし直しの閉包の移し戻しと適用) を、両方のモードで通す。確かめるのは VM が核の操作の前提を守っていることで、信頼の一覧を確かめる `trusted` とは目的が違う。テストはメモリの Host (`capture_host`) だけを使い、実際のファイルを開かない。UI テストは Miri で流さない。`miri.rs` のテストは `cargo test` でも流れるので、同じプログラムと同じ確かめを `calls.rs` などに重ねて置かない
 - `eml_vm` の `cells.rs` の単体テストのうち、名前が `a_read` か `a_write` で始まるものも、同じ2つの設定で流す (`cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write`)。選ぶのは名前の頭なので、この2つの頭は、読みの記録が空きを貸す道と書きの記録が `Bytes` の中身を貸す道を確かめるテストにだけ付ける。数は決めない。空きが足りない buffer の中身を新しい物体へ写して貸す所 (`lend_read_room`) と、行の読みがストリームの `Vec<u8>` の空きを貸す所 (`lend_line_room`) と、貸した空きに書かれたバイトを確定する所と、ストリームの buffer の残りを読みの buffer に写す所 (`serve_rest`) を Miri で通すのは、この `a_read` のテストだけである。行の読みを含むもの (`a_read_line_*` と `a_read_after_a_read_line_*`) では、stub の driver の代わりにテストが貸した位置へ書き、貸し、書き、確定の一周を通す。`a_write` のテストは、参照が2つある `Bytes` を写さずに貸して stub の driver が貸された記憶を読む所と、保留の書きの間にもう1つの参照で `Bytes.set`、`push`、`append`、`truncate` をしても写しになり、同じ物体への読みが空きを貸さず、driver が完了のときに読む中身が変わらないことを、両方のモードで通す。`miri.rs` の実行はテストの driver の上で I/O の操作を出さない。手で書いた LIR は `Std.Async` のエントリを持たず、`Std.Net` の行は `Async` の行なので、書きの貸しも `miri.rs` でなく `cells.rs` で確かめる
 
+## `eml_io` の検証
+
+`eml_io` の本物の driver は OS を呼ぶので、`eml_rt` の Verus と Miri では確かめられない。CI の各 OS の普通のテストに加えて、次のもので確かめる。
+
+### AddressSanitizer
+
+- `asan` のジョブは、`eml_io` のテストと、`eml_vm` の `api::` と `signal::` (本物の driver に記憶を貸す VM の道) を `-Zsanitizer=address` で流す。対象は `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`aarch64-apple-darwin` の3つである。Rust の AddressSanitizer は Windows の msvc を対象にしない
+- nightly は Miri と同じ `nix develop .#miri` のものを使い、`-Zbuild-std` で std も計装し、`--target` をいつも書く。leak の検出は AddressSanitizer の既定のままにする
+- 開発機では build の置き場所を `target/asan` に分ける (「よく使うコマンド」)
+- 道具の不具合 (runtime がない、link、rpath、時間切れ) で緑にできない脚は、その脚だけ fenix と同じ日付に固めた rustup の nightly にし、時間の上限を 90 分にする。それでも緑にならなければ脚を外し、外した脚をこの節とロードマップの「その後の項目」に書く
+
 ## `eml_vm` のテスト
 
 `eml_vm` ([VM](../spec/vm.md)) の結合テストは、手で書いた LIR を `eml_lir::parse` で読んで確かめる。ソースのプログラムを VM で流すテストは、UI テスト (下の「2つのモードで流す」)、`bench.rs`、`scaling.rs`、`tasks.rs`、`preempt.rs` の `Async` のテスト、`crates/eml_cli/tests/cli.rs` の `eml run` のテスト、`crates/eml_cli/tests/std_invariants.rs` である。
@@ -437,9 +448,20 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 ## OS ごとのテスト
 
-テストは macOS、Linux、Windows の3つで流す。Windows で対応する target は `x86_64-pc-windows-msvc` だけで、`x86_64-pc-windows-gnu` (MinGW) は対応せず、流さない。テストは移植できるのが既定である。Windows での違いが処理系の側にあるなら、ソースを直すかテストを移す。
+テストは macOS、Linux (x86_64 と aarch64)、Windows の3つの OS で流す。Windows で対応する target は `x86_64-pc-windows-msvc` だけで、`x86_64-pc-windows-gnu` (MinGW) は対応せず、流さない。テストは移植できるのが既定である。Windows での違いが処理系の側にあるなら、ソースを直すかテストを移す。
 
-開発機の OS で組まれないコード (`cfg(windows)` や `cfg(unix)` の部分) は、`nix develop .#cross` の clippy で型を検査する。この devShell の toolchain は、ふだんと同じバージョンに `x86_64-pc-windows-msvc` と `x86_64-unknown-linux-gnu` の `rust-std` を足したものである。link はできないので、流すのは clippy だけで、テストは CI の各 OS のジョブで流す。build の置き場所は `target/cross` で、ふだんの `target/` と分ける。
+開発機の OS で組まれないコード (`cfg(windows)` や `cfg(unix)` の部分) は、`nix develop .#cross` の clippy で型を検査する。この devShell の toolchain は、ふだんと同じバージョンに `x86_64-pc-windows-msvc`、`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu` の `rust-std` を足したものである。link はできないので、流すのは clippy だけで、テストは CI の各 OS のジョブで流す。build の置き場所は `target/cross` で、ふだんの `target/` と分ける。
+
+### 新しい対象で落ちたテストの仕分け
+
+CI の対象 (OS、CPU、AddressSanitizer の脚) を足して落ちたテストは、1件ずつ見てから次のどれかに分ける。前もって範囲で期待値の書き直しを許すことはしない。
+
+- コードの不具合: 直す。AddressSanitizer の報告はいつもこれに当たる
+- 機械に依る値 (libm の最後のビットなど): 下の「印を付けずに直すもの」で直す
+- その OS にない振る舞い: 下の「Windows で流さないテスト」と同じ考えで `cfg` の印を付ける
+- 見張りの時間切れ: その runner で測り、「性能のテスト」の 10 倍の規則で見張りを延ばす
+
+不具合のほかは、テストの変更の運用 (上の「テストの変更の運用」) の種類で扱う。
 
 ### Windows で流さないテスト
 
@@ -526,12 +548,13 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ## CI
 
-`.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の4つのジョブを流す。
+`.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の5つのジョブを流す。
 
-- `test`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write` を続けて流す。借用の規則ごとにジョブを1つ立てる
+- `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::` と `signal::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
 
 CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。nextest の CI 用の profile は作らず、落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
 
@@ -589,7 +612,8 @@ cargo insta review                                   # スナップショット�
 cargo insta test --test-runner nextest --accept      # テストを流し、スナップショットを受け入れる
 cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
-nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # Windows の target の clippy (Linux は x86_64-unknown-linux-gnu。OS ごとのテスト)
+nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # Windows の target の clippy (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu。OS ごとのテスト)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: と signal:: も。eml_io の検証)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
