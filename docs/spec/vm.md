@@ -355,6 +355,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - 物理メモリは、unix では `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` で読む。macOS と Linux のどちらもこの2つを持つ。Windows では `GlobalMemoryStatusEx` の `ullTotalPhys` で読む。`eml_cli` の `src/` の `unsafe` は、この関数と、bin の `interrupt` モジュールと、`terminal.rs` の `stdout_width` の中だけに置く
 - Linux のコンテナでは、物理メモリは cgroup の上限を反映しない。上限が cgroup より大きくなり、分かる誤りの前に OOM で殺されうる。cgroup を読むのは要るときに足す
 - VM のスタックはヒープの外にあるので `max_bytes` に数えず、`max_depth` で抑える (「スロットとスタック」)
+- `Foreign` の Rust の値が別に確保するメモリも `max_bytes` に数えない。`Std.Net.TcpStream` の `NetStream` の行の buffer (「操作の記録」) と、`Std.Tls.Conn` の平文の列、rustls の buffer、`pull_tls` が埋める `Vec` がこれに当たる。`Foreign` の物体そのものは数える。どれも読みの規則が量を抑える。`NetStream` の buffer は、残りが1行の上限 (1 048 576 バイト) を超えると読みを誤りで終える (「操作の記録」)。`Conn` の返していない平文は1つあたり 1 048 576 + 2 × 65 536 バイトまでである ([標準ライブラリ](stdlib.md) の「`Std.Tls`」)
 - 検査モードは解放したブロックを使い回さないので、`--debug-heap` の長い実行は、速いモードより先に `max_bytes` に当たりうる。暴走を止める安全網という上限の役 ([オブジェクトモデル](object-model.md) の「確保と解放」) は変わらないので、受け入れる
 - CLI のフラグ (`--max-depth` など) は足さない。要るとき (REPL など) に足す
 - `eml repl` の上限は `eml_cli::repl_limits()` が作る。確保量だけが違い、物理メモリの 40% である ([REPL の端末](repl.md) の「コマンドライン」)

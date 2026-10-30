@@ -21,6 +21,7 @@ use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
     JoinId, JoinNode, MAIN, Outcome, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
 };
+use crate::tls;
 use crate::{RunCounts, RuntimeError};
 
 // 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
@@ -2944,6 +2945,46 @@ fn run_extern<R: Exec>(
             }
             Extern::ProcCloseStdin => {
                 let w = ctx.proc_close_stdin(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            // TLS の状態の行。待たないので普通の extern で、投げるのは `client_raw` だけである
+            // (docs/spec/stdlib.md の「`Std.Tls`」)
+            Extern::TlsClientRaw => {
+                let w = tls::client_raw(ctx, task.get(arg(0)), task.get(arg(1)))?;
+                task.set(dst, w);
+            }
+            Extern::TlsPushTls => {
+                let w = tls::push_tls(ctx, task.get(arg(0)), task.get(arg(1)))?;
+                task.set(dst, w);
+            }
+            Extern::TlsWritePlain => {
+                let w = tls::write_plain(ctx, task.get(arg(0)), task.get(arg(1)))?;
+                task.set(dst, w);
+            }
+            Extern::TlsPushEof => {
+                let w = tls::push_eof(ctx, task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::TlsSendCloseNotify => {
+                let w = tls::send_close_notify(ctx, task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::TlsPullTls => {
+                let w = tls::pull_tls(ctx, task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::TlsReadPlain => {
+                let w = tls::read_plain(ctx, task.get(arg(0)), task.get(arg(1)))?;
+                task.set(dst, w);
+            }
+            Extern::TlsStatus => task.set_raw(dst, tls::status(ctx, task.get(arg(0)))?),
+            Extern::TlsErrorMessage => {
+                let w = tls::error_message(ctx, task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::TlsLineReady => task.set_raw(dst, tls::line_ready(ctx, task.get(arg(0)))?),
+            Extern::TlsTakeLine => {
+                let w = tls::take_line(ctx, task.get(arg(0)))?;
                 task.set(dst, w);
             }
             // いつも誤りを返すので、宛先には書かない。届け先は `failed` が決める (docs/spec/vm.md の「extern の中断」)

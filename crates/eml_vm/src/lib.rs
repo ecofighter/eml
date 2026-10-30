@@ -25,6 +25,7 @@ mod hosts;
 mod monitor;
 mod op;
 mod sched;
+mod tls;
 mod vm;
 
 pub use code::{CodeBase, CompileError, FnEntry};
