@@ -4,6 +4,8 @@
 //!
 //! `Proactor` は `Send` でないので、この driver も作ったスレッドから動かない。eml の側では `Send` を足さない。
 
+#![allow(unsafe_code)]
+
 use std::collections::HashMap;
 use std::io;
 use std::mem::MaybeUninit;

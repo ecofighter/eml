@@ -2,6 +2,8 @@
 //! プログラムと方針と seed で決まる。受け付けの時点で決まる操作は `submit` の中で終え、ほかの操作は `wait` の
 //! 始めにだけ決着させる (docs/spec/vm.md の「時計と driver」)。
 
+#![allow(unsafe_code)]
+
 mod net;
 
 use std::collections::VecDeque;

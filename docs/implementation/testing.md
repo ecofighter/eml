@@ -188,6 +188,14 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 `eml_io` の本物の driver は OS を呼ぶので、`eml_rt` の Verus と Miri では確かめられない。CI の各 OS の普通のテストに加えて、次のもので確かめる。
 
+### `unsafe` の一覧
+
+- `unsafe` を書いてよいファイルは `crates/eml_io/src/trust.rs` の `UNSAFE_FILES` が決める。`lib.rs` は `#![deny(unsafe_code)]` を持ち、一覧のファイルだけが先頭に `#![allow(unsafe_code)]` を置く
+- 規則の範囲は `src/` である。`tests/` の結合テストは対象に入れない (`tests/real.rs` は `pthread_sigmask` のために `unsafe` を使う)
+- `unsafe_stays_in_the_listed_files` は、識別子 `unsafe` を持つファイルの集合と、`#![allow(unsafe_code)]` で始まるファイルの集合と、`UNSAFE_FILES` が等しいこと、`allow(unsafe_code)` がほかにないこと、`lib.rs` が `#![deny(unsafe_code)]` を持つことを確かめる
+- `every_source_file_is_listed` は、`src/` の `.rs` が `FILES` と `SKIPPED` の和と一致することを確かめる。新しいファイルを足したら `FILES` に1行足す
+- `the_scanner_skips_comments_and_strings` は、コメント、文字列、文字のリテラルの中の `unsafe` を数えないことと、どのファイルにも生の文字列がないことを確かめる。消し方は `eml_rt` の `trust.rs` と同じで、生の文字列を扱わないためである
+
 ### AddressSanitizer
 
 - `asan` のジョブは、`eml_io` のテストと、`eml_vm` の `api::` と `signal::` (本物の driver に記憶を貸す VM の道) を `-Zsanitizer=address` で流す。対象は `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`aarch64-apple-darwin` の3つである。Rust の AddressSanitizer は Windows の msvc を対象にしない

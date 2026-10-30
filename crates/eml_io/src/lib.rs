@@ -2,12 +2,16 @@
 //! OS の I/O を行う `RealDriver` と、仮想の時計と仮想のネットワークで決定的に進む `TestDriver` を持つ。実行系の `Clock` が選ぶ。
 //! `eml_vm` には依存しない。
 
+#![deny(unsafe_code)]
+
 mod flag;
 mod mask;
 mod real;
 #[cfg(unix)]
 mod resolve;
 mod test;
+#[cfg(test)]
+mod trust;
 
 pub use mask::spawn_masked;
 pub use real::RealDriver;
