@@ -121,6 +121,21 @@ jobs:
           mapfile -t files < <(git ls-files 'crates/eml_rt/src/*.rs')
           nix develop -c verusfmt --verus-only --check "${files[@]}"
 
+  # eml と一緒に配る THIRD-PARTY-LICENSES.md が、Cargo.lock と about.toml から生成した結果と同じことを確かめる。
+  # cargo-about のバージョンを flake.lock で固め、出力を変えないよう、ふだんの devShell を通す (docs/implementation/testing.md の「CI」)
+  licenses:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: THIRD-PARTY-LICENSES.md is up to date
+        run: nix develop -c nix/third-party-licenses.sh --check
+
   miri:
     name: miri (${{ matrix.borrows }} borrows)
     strategy:

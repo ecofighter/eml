@@ -1,0 +1,79 @@
+# eml バイナリに入る他者の crate のライセンスを THIRD-PARTY-LICENSES.md に書き出す設定
+# (docs/implementation/architecture.md の「外部 crate」)。ClearlyDefined を引かず、出力をネットワークに左右させないよう、
+# nix/third-party-licenses.sh は --frozen で走らせる
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "ISC",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "Unicode-3.0",
+]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# aws-lc-sys の LICENSE は、取り込んだ部品ごとの著作権の表示と、使うライセンスの全文を1つのファイルにまとめている。
+# 自動の判定はこのファイルを読めず、ほかのファイルや SPDX の雛形の文面を拾うので、ファイルを切り分けてライセンスごとに渡す。
+# 切り分けた断片をつなぐと、ファイル全体になる (空白を除く)
+[aws-lc-sys.clarify]
+license = "ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)"
+
+[[aws-lc-sys.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+end = "limitations under the License.\n"
+checksum = "0d41e3d671b2acc4dd41c078dabe152d6b36134196f239a1de0ea7315612e70a"
+
+[[aws-lc-sys.clarify.files]]
+path = "LICENSE"
+license = "ISC"
+start = "ISC License\n-----------\n"
+end = "PERFORMANCE OF THIS SOFTWARE.\n"
+checksum = "dc2efe88bad4fd5c1213e58c1db986782b31dbf618b0f56a5d9888caa224b71a"
+
+[[aws-lc-sys.clarify.files]]
+path = "LICENSE"
+license = "MIT"
+start = "MIT License\n-----------\n"
+end = "DEALINGS IN THE SOFTWARE.\n"
+checksum = "8674c76edd429899af9fdac766062acfac16d7e90620363a22ed0af8c470883b"
+
+[[aws-lc-sys.clarify.files]]
+path = "LICENSE"
+license = "BSD-3-Clause"
+start = "BSD 3-Clause License\n"
+checksum = "4639528deb6490f2b9769b7d1cf66ad537ecf8b33f49ac0edc4473ad33a8df57"
+
+# aws-lc-rs の LICENSE も、Apache-2.0 と ISC の全文を1つのファイルに並べている。
+# cargo-about が式から選ぶライセンスは ISC だけなので、ファイル全体を ISC の文面として渡す
+[aws-lc-rs.clarify]
+license = "ISC AND (Apache-2.0 OR ISC)"
+
+[[aws-lc-rs.clarify.files]]
+path = "LICENSE"
+license = "ISC"
+checksum = "b50b376e7d24a0598488b730c3034ffcd0b58dd36c0913a24b9903a3cfd04bf7"
+
+# windows-sys と windows-link の license-mit は字下げしてあり、自動の判定の閾値に届かない
+[windows-sys.clarify]
+license = "MIT OR Apache-2.0"
+
+[[windows-sys.clarify.files]]
+path = "license-mit"
+license = "MIT"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+
+[windows-link.clarify]
+license = "MIT OR Apache-2.0"
+
+[[windows-link.clarify.files]]
+path = "license-mit"
+license = "MIT"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
