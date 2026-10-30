@@ -812,8 +812,8 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 | `Net.listen`、`Net.accept`、`Net.connect` (`_within` も) | 1。受けの再試行、接続の試行、名前の解決は driver の中で済ませる |
 | `Net.write_bytes` (`write`、`write_line` も) | 1。短く終わった送りの出し直しは driver の中で済ませる |
 | `Net.read_chunk` (`_within` も)、空きが 8 バイト以上の一意な buffer | 1。ストリームの buffer の残りから返したときは 0 |
-| `Net.read_chunk` (`_within` も)、ほかの buffer | 2 (読めるようになるのを待つ操作と読み)。読めるようになる前に取り消した読みと、読めるようになる前に期限が来た読みは 1。本物の driver では期限が読みの途中に来ることもあり、そのときは 2。`Net.read_chunk` がストリームの buffer の残りから返したときは 0 |
-| `Net.read_line` (`_within` も) | 読みの1周ごとに、ストリームの buffer に空きがあれば 1、なければ 2。空きのない最後の周が、読めるようになる前に取り消されたか期限が来たときは、その周は 1。ストリームの buffer にもう1行あったときは 0 |
+| `Net.read_chunk` (`_within` も)、ほかの buffer | 2 (読めるようになるのを待つ操作と読み)。読めるようになる前に取り消した読みと、読めるようになる前に期限が来た読みと、読めるようになるのを待つ操作が受け付けで誤りに終わった読み (本物の driver の覗きがリセットの誤りを返したときなど) は 1。本物の driver では期限が読みの途中に来ることもあり、そのときは 2。`Net.read_chunk` がストリームの buffer の残りから返したときは 0 |
+| `Net.read_line` (`_within` も) | 読みの1周ごとに、ストリームの buffer に空きがあれば 1、なければ 2。空きのない最後の周が、読めるようになる前に取り消されたか、期限が来たか、読めるようになるのを待つ操作が受け付けで誤りに終わったときは、その周は 1。ストリームの buffer にもう1行あったときは 0 |
 
 取り消しが届かず、channel の操作も待ちもない run では、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept`、`completions` の欄はスケジュールの方針によらない。`completions` は出した操作の数で決まり、テストの driver では seed が混ぜるのは1回の決着で終わった操作の順だけである。ただし、データのある端の `ms` が 0 以下の期限の読みは例外で、待ち始める前に読みが終わったかで `completions` も結果も変わる ([標準ライブラリ](stdlib.md) の「`Std.Net`」)。channel を使う run では、待つかどうかと、送り手が参照を持ち続けた品物の裏返しが順で変わり、仕事の回数と `parks`、`shared_objects` がそれに従う。そうした run でもスケジュールによらないのは `tasks`、`timers`、`dropped_failures`、`completions` で、`channels_swept` は次の条件のときだけである。`tasks` と `timers` はプログラムが決め (`timers` は、操作がもう終わっていた期限の待ちも数えるため)、`dropped_failures` は最初の失敗がどれかによらないので、この3つはタスクの順で変わらない。`channels_swept` は run の終わりに閉じていないか品物の残った channel の数で、どの channel が閉じずに残るか、品物が残るかがプログラムで決まるときだけ、タスクの順で変わらない。`try_send` の成否や、受け手が早く止まるかが順で変わると、残る品物も変わる。
 

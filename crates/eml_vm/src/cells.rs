@@ -3681,7 +3681,7 @@ fn op_ready_counts_a_wait_only_on_a_finished_op() {
 /// 書きの待ちは、1 に長さを 512 で割った商を足しただけ予算を使い、残りより多ければ残りをすべて使う。64 KiB の書きは
 /// 1回で予算を使い切る。読みとほかの待ちは 1 だけ使う (docs/spec/stdlib.md の「操作の予算」)。
 #[test]
-fn a_write_spends_budget_by_its_length() {
+fn writes_spend_budget_by_their_length() {
     let mut ctx = test_ctx();
     let mut driver = NoDriver {
         finish_writes: true,

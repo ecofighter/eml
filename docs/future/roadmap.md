@@ -35,6 +35,8 @@
   - 落とすときに仕事と名前の解決を待たない。プールは 32 本までで、満ちたら driver の中の列で待ち、`submit` は呼んだスレッドを止めない。壊れた driver を落とすときは、カーネルがまだ書きうる操作の終わりを 1 秒まで確かめ、終わらなければ process を abort する。`mem::forget` と `Box::leak` を書かない
   - `unsafe` は一覧のファイルに閉じ、ソースを読むテストで固定する。読みの貸しは一意に保ち、書きの貸しは生かして書き換えない。OS を呼ぶ部分は4つの対象 (Linux の x86_64 と aarch64、macOS、Windows) の CI と AddressSanitizer で確かめる
   - 目標: epoll の定常状態で、データのある読みは syscall 1回、書きは 1回、待つ読みは 3回、操作ごとの `epoll_ctl` は 0。保留が多くても1接続あたりの CPU が本数によらない (`bench/net` の many-self の 2000 本 ÷ 250 本が 1.5 以下)。閉じる前に `bench/net` で、差し替えの前の driver と比べる
+  - 閉じる前に、操作の予算の書きの重みの単位 (512 バイト。[標準ライブラリ](../spec/stdlib.md) の「操作の予算」) を、自前の driver の上と macOS で測り直す。同じ run の bulk の CPU はこの単位で大きく変わる。試した形の数字は [計測の基準](../implementation/benchmarks.md) の「34cad91 と e942eeb」にある
+  - 差し替える前の driver は、`wait` のたびに操作の表を作り直し、1往復に2回確保する ([計測の基準](../implementation/benchmarks.md) の「34cad91 と e942eeb」)。核の表は使い回す
 - `net-tls`: `Std.Tls` のクライアントを入れる。TLS の状態は rustls の上の crate `eml_tls` が持ち、`eml_vm` と `eml_io` の feature `tls` で結び、`eml_cli` の既定の feature で有効にする。ソケットの I/O は `Std.Net` が行い、`Tls` の eml のコードが `TcpStream` と TLS の状態の間でバイトを汲む。server は作らない。テストの相手は、テストの driver の仮想のホスト `tls.localhost` が Rust で TLS を終端し、平文を `localhost` の listener へつなぐ。暗号は aws-lc-rs、根の証明書は webpki-roots で、追加の CA は PEM で渡す。最初に `nix build` と CI で C の依存が組めることを確かめる。前提: なし。設計: [非同期の設計](async.md) の「TLS と HTTP」
 - `std-http`: `Std.Http` の HTTP/1.1 のクライアントを、`Net` と `Tls` の上に eml で書く。`Content-Length`、chunked、EOF までの本文、リダイレクトを扱い、接続は要求ごとに閉じる。速さは `bench/scripts.sh` の行で測る。前提: `net-tls`。設計: [非同期の設計](async.md) の「TLS と HTTP」
 - `net-windows`: 自前の IOCP の backend にソケットを載せ、同じネットのテストの組を Windows で流す。`Std.Signal` の `Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写す。前提: `io-backends`。設計: [非同期の設計](async.md) の「テストと決定性」

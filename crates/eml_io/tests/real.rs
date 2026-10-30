@@ -371,6 +371,50 @@ fn a_cancelled_probe_completes_with_an_error() {
     assert_eq!(driver.pending(), 0);
 }
 
+/// リセットされた端の `Readable` は、受け付けの覗きでリセットの誤りを返して終わる。覗きが誤りを消費するので、
+/// 誤りを `Ok(0)` にすると次の読みが EOF に見える。閉じた直後にリセットが届いていることは OS が約束しないので、
+/// 1つ目が保留なら、その完了で届いたと分かってから2つ目を出す。
+#[cfg(unix)]
+#[test]
+fn a_probe_on_a_reset_stream_fails_at_submit() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let listener = std::net::TcpListener::bind(loopback(0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connect = submit(
+        &mut driver,
+        Op::Connect {
+            host: "127.0.0.1".to_string(),
+            port,
+        },
+    );
+    let (a, _) = stream(complete(&mut driver, &mut stash, connect));
+    let (peer, _) = listener.accept().unwrap();
+    // linger 0 で閉じた端は、FIN でなく RST を送る
+    socket2::SockRef::from(&peer)
+        .set_linger(Some(Duration::ZERO))
+        .unwrap();
+    drop(peer);
+    let first = submit(&mut driver, Op::Readable { handle: a });
+    let probe = match first.done {
+        Some(result) => result,
+        None => {
+            wait_for(&mut driver, &mut stash, first.key).result.unwrap();
+            match driver.submit(next_key(), Op::Readable { handle: a }) {
+                Submit::Done(result) => result,
+                Submit::Pending => panic!("a probe on a reset stream stayed pending"),
+            }
+        }
+    };
+    match probe {
+        Err(e) => assert_eq!(e.kind(), ErrorKind::ConnectionReset, "{e}"),
+        Ok(done) => panic!("a probe on a reset stream ended with {done:?}"),
+    }
+    driver.completions(&mut stash);
+    assert!(stash.is_empty());
+    assert_eq!(driver.pending(), 0);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_closed_peer_reads_eof() {
