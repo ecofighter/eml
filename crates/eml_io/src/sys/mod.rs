@@ -1,5 +1,5 @@
 //! OS ごとの backend (docs/spec/vm.md の「時計と driver」)。Linux は epoll、Apple は kqueue で、どちらも `unix.rs` の
-//! `Unix` が fd の表と歩を持ち、OS ごとのファイルは登録と待ちと起こしだけを持つ。
+//! `Unix` が fd の表と歩を持ち、OS ごとのファイルは登録と待ちと起こしだけを持つ。Windows は IOCP で、ソケットを扱わない。
 
 // 本物の driver はまだこの backend を使わず、単体テストだけが使う
 #![allow(dead_code)]
@@ -8,6 +8,8 @@ use std::time::Duration;
 
 #[cfg(target_os = "linux")]
 mod epoll;
+#[cfg(windows)]
+mod iocp;
 #[cfg(target_vendor = "apple")]
 mod kqueue;
 #[cfg(unix)]
@@ -17,6 +19,10 @@ mod unix;
 pub(crate) type Os = unix::Unix<epoll::Epoll>;
 #[cfg(target_vendor = "apple")]
 pub(crate) type Os = unix::Unix<kqueue::Kqueue>;
+#[cfg(windows)]
+pub(crate) type Os = iocp::Iocp;
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+compile_error!("eml_io has no I/O backend for this OS");
 
 /// `d` をミリ秒へ切り上げ、`max` で切る。切り上げるので期限より早くは戻らず、`max` で切った待ちは早く戻るだけで
 /// ある (docs/spec/vm.md の「時計と driver」)。期限のない待ちは、呼ぶ側が自分の OS の値に写し、ここへは渡さない。

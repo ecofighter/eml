@@ -24,6 +24,7 @@ const FILES: &[(&str, &str)] = &[
     ("sys/unix.rs", include_str!("sys/unix.rs")),
     ("sys/epoll.rs", include_str!("sys/epoll.rs")),
     ("sys/kqueue.rs", include_str!("sys/kqueue.rs")),
+    ("sys/iocp.rs", include_str!("sys/iocp.rs")),
     ("test.rs", include_str!("test.rs")),
     ("test/net.rs", include_str!("test/net.rs")),
 ];
@@ -39,6 +40,7 @@ const UNSAFE_FILES: &[&str] = &[
     "sys/unix.rs",
     "sys/epoll.rs",
     "sys/kqueue.rs",
+    "sys/iocp.rs",
     "driver/tests/fake.rs",
 ];
 

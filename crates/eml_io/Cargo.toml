@@ -18,6 +18,9 @@ eml_rt.workspace = true
 libc.workspace = true
 socket2.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Threading"] }
+
 [[test]]
 name = "integration"
 path = "tests/main.rs"

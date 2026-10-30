@@ -340,6 +340,7 @@ dependencies = [
  "eml_rt",
  "libc",
  "socket2",
+ "windows-sys",
 ]
 
 [[package]]
