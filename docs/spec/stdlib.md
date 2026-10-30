@@ -1507,7 +1507,7 @@ main () = Async.run (fn () ->
 - 接続は、応答を返す前と、リダイレクトを追う前に閉じる。https は `Tls.close` で、http は `Net.close` で閉じる。`Std.Http` が失敗を投げるときは、close_notify を送らずに接続を落としてから投げる。`Net` と `Tls` の関数が失敗したときは、その関数がストリームを落としている
 - 取り消しの地点は `Net` と `Tls` の待つ関数で、取り消されると巻き戻しが接続を落とす。期限は `Async.timeout ms (fn () -> Http.get url)` で付ける
 - `Std.Http` が投げるのは IO の失敗だけで、`Panic` は起こさない。row の `Panic` は、使う `String` と `Bytes` の関数から来る
-- 本文の大きさの上限、gzip などの coding、HTTP/2、keep-alive、プロキシ、cookie、IPv6 のアドレスの URL はない
+- 本文の大きさの上限、ストリーミングの本文、gzip などの coding、HTTP/2、keep-alive、プロキシ、cookie、IPv6 のアドレスの URL はない
 
 失敗の種類と文言は次のとおりである。
 

@@ -343,8 +343,11 @@ TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ラ
 - 接続は要求ごとに開いて閉じる。keep-alive がなければ、本文の終わりを読み違えても次の応答に響かず、EOF までの本文も同じ形で読める
 - 行は `read_line` でなく、`read_chunk` の上に自分の buffer で切り出す。chunk の区切りを越えて読んだバイトを `read_chunk` は戻せないので本文に自分の buffer が要り、状態行とヘッダーも同じ buffer で読んで行の上限を 64 KiB にそろえる
 - 呼ぶ側に `Host`、`Connection`、`Content-Length`、`Transfer-Encoding` を書かせない。本文の区切りが2つになるのと、EOF までの本文が終わらなくなるのを防ぐためである
+- 本文の長さは、`Transfer-Encoding` を `Content-Length` より先に見て決める (RFC 9112 の 6.3)。逆の順では、両方を持つ chunked の本文を、chunk の区切りごと生のバイトとして読んでしまう。両方あっても失敗にしないのは、要求ごとに閉じるので、区切りの食い違いが次の応答に及ばないためである
+- `Content-Length` の本文は、長さと 64 MiB の小さいほうの容量を前もって取る。偽りの長さの分をそのまま取ると、1バイトも届く前に `max_bytes` に当たり、`try_io` で受けられないためである
+- `max_redirects` が 0 以下なら、リダイレクトを追わずに 3xx の応答を返す。呼ぶ側が `Location` を読めるようにするためである。301、302、303 で `HEAD` を `GET` に変えないのは、頼んでいない本文を取らないためで、RFC 9110 の 15.4.4 もこれを許す。絶対 URL は `http://` か `https://` で始まるかで見分ける。`://` を含むかで見分けると、`next?u=http://x` のような相対の `Location` を、scheme の誤りとして断ってしまう
 - libcurl は使わない。本物のソケットが要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないので TLS の層にならない ([ロードマップ](roadmap.md) の「非同期」)
-- `Tls` の読みの道では、カーネルが書いた `Bytes` から rustls へ、rustls から `Conn` の平文の列へ、列から `Bytes` へと3回写す。`Net` の読みも毎回新しい `Bytes` に読む。この費用は [計測の基準](../implementation/benchmarks.md) の「スクリプトの計測」の `https-get` の行で測る
+- `Tls` の読みの道では、カーネルが書いた `Bytes` から rustls へ、rustls から `Conn` の平文の列へ、列から `Bytes` へと3回写す。`Net` の読みは、buffer が一意で空きが 8 バイト以上あればその空きに読み、なければ広げてから読む ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。この費用は [計測の基準](../implementation/benchmarks.md) の「スクリプトの計測」の `https-get` の行で測る
 
 ### 後で足すもの
 
