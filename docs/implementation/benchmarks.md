@@ -417,9 +417,39 @@ syscall の数は `strace -f` で数える (Linux のみ)。main のスレッド
 - syscall は main のスレッドで比べ、3回のどれもが目標以下であることを見る
 - 前と後は同じ機械で、ほかに負荷のない状態で測る
 
+### driver の syscall の目標
+
+本物の driver の syscall と CPU の目標を、`report.py` が strace と時間の run から出す目標の表で確かめる。式の記号は次のとおりで、どれも main のスレッドの、床を引いた単位あたりの値である。
+
+- main: 失敗の鍵 (`名前!ERRNO`) を除いた呼び出しの計。`run.py` は失敗した呼び出しを `名前` と `名前!ERRNO` の両方で数えるためである
+- mem: `brk`、`mmap`、`munmap` の計
+- E: EAGAIN で終わった読みと覗き (`recvfrom!EAGAIN` と `recvfrom(peek)!EAGAIN`) の計
+- R: データを読んだ `recvfrom`。P: データのあった覗き (`recvfrom(peek)`)
+
+値は Intel Xeon Processor @ 2.10GHz、4 vCPU、メモリ 16477352 kB、kernel 6.18.44-fc-v185 の Linux の container で、`python3 -I bench/net/bench.py --stats` の全件の run から出した。strace の3回の範囲で、合格は3回すべてで満たすことである。
+
+| 項目 | 件 | 式 | 目標 | 今 |
+|---|---|---|---|---|
+| 書き 1 | bulk-send-py | (main − mem) ÷ 書き | ≤ 1.05 | 1.000 |
+| データのある読み (空きあり) 1 | echo-py-reuse | (main − `sendto` − mem − 2E) ÷ 往復 | ≤ 1.05 | 1.001〜1.002 |
+| 1往復 (eml が片側) | echo-py-reuse | main ÷ 往復 | ≤ 4 | 2.010〜2.036 |
+| 空きなしの読みは覗きと読みの 2 まで | bulk-recv-py | (R + P) ÷ R | ≤ 2.02 | 1.966〜1.968 |
+| 空きなしの読みは覗きと読みの 2 まで | echo-py-fresh | (R + P) ÷ R | ≤ 2.02 | 1.794〜1.952 |
+| 待つ読み 3 | echo-self-fresh | (main − `sendto` − mem) ÷ E | ≤ 3.05 (E ≥ 1.5 /往復) | 3.004 (E 2.000) |
+| 操作ごとの `epoll_ctl` 0 | echo-self-fresh、echo-py-reuse | `epoll_ctl` ÷ 往復 | ≤ 0.005 | 0.001、0.000 |
+| `epoll_ctl` の総数 | echo-py-reuse | main の `epoll_ctl` (床を引かない) | ≤ 2 (eventfd 1 と接続のソケット 1) | 2 |
+| 受けと登録 | conn-self-32 | `accept4` ÷ 接続、`epoll_ctl` ÷ 接続 | ≤ 1.05、≤ 2.005 | 1.031、2.000 |
+| 待ち1回の費用 | echo-self-fresh | (`timerfd_settime` + `read(eventfd)` + `epoll_ctl`) ÷ 待ち | ≤ 0.05 | 0.000 |
+| 本数によらない費用 | many-self-250、-2000 | 1接続あたり CPU の 2000 本 ÷ 250 本 | ≤ 1.5 | 0.886 |
+
+- 待つ読みの3回は、EAGAIN の覗き、`epoll_pwait`、読みである。辺の直後の `Readable` は、記憶が新しければ覗かずに答える ([VM](../spec/vm.md) の「時計と driver」)
+- 空きなしの読みは、短い読みの後に覗き1回と読み1回になる。P ÷ R は bulk-recv-py で 0.97、echo-py-fresh で 0.79〜0.95 である
+- 1接続あたりの CPU は many-self-250、-1000、-2000 で 96.80、84.08、85.79 µs で、本数とともに伸びない
+- 目標を外したときは不具合として扱い、`strace -f -o` で余分な呼び出しの出どころを特定する
+
 ### 34cad91 と e942eeb
 
-driver の約束を変える前 (34cad91) と後 (e942eeb) を、同じ機械で比べた。機械は Intel Xeon Processor @ 2.10GHz、4 vCPU、メモリ 16477352 kB (`/proc/meminfo` の MemTotal) の Linux の container で、kernel は 6.18.44-fc-v185 である。どちらも release の eml で、34cad91 の eml は今のプログラムを型検査できないので (`write_bytes` の型が違う)、34cad91 の `bench/net` と `bench/fib.em` を `git archive` で取り出して `before=<34cad91 の eml>@<取り出した bench/net>` で流した。`busy-self` は 34cad91 にないので `--only '^(?!busy-self$)'` で外した。driver を差し替えたら、同じ機械で列を足す。
+driver の約束を変える前 (34cad91) と後 (e942eeb) を、同じ機械で比べた。機械は Intel Xeon Processor @ 2.10GHz、4 vCPU、メモリ 16477352 kB (`/proc/meminfo` の MemTotal) の Linux の container で、kernel は 6.18.44-fc-v185 である。どちらも release の eml で、34cad91 の eml は今のプログラムを型検査できないので (`write_bytes` の型が違う)、34cad91 の `bench/net` と `bench/fib.em` を `git archive` で取り出して `before=<34cad91 の eml>@<取り出した bench/net>` で流した。`busy-self` は 34cad91 にないので `--only '^(?!busy-self$)'` で外した。
 
 CPU と実時間は床 (`base`) を引いた単位あたりの µs で、11 回の中央値である。syscall は strace の小さい run の main のスレッドの計を床を引いて単位で割った値で、3回の範囲である。`allocations` は `--stats` の1回から床を引いて単位で割った値である。判定は上の「比べる規則」による。
 
@@ -464,20 +494,6 @@ CPU と実時間は床 (`base`) を引いた単位あたりの µs で、11 回�
 - Rust の側の確保は、d96346f と同じコードの速いモードの release の eml で、echo.em の reuse を 200 往復と 2200 往復で callgrind に通し、差を 2000 で割って数えた。1往復の `malloc` は 10 回、`realloc` は 0 回である。`collect` の列とエントリの `Task` の scratch を使い回す前は、`malloc` が 12 回、`realloc` が 2 回だった。残る 10 回は、compio の `Proactor::push` の鍵の箱 (送りと受けで 2 回ずつ)、poll ごとの `polling::epoll::Events::with_capacity` (2 回)、`eml_io` の `real.rs` の操作の表 `HashMap<OpKey, Entry>` の伸び直し (2 回)、compio の `VecDeque<ErasedKey>` の伸び (2 回) である。表が伸び直すのは、`real.rs` の `reap` が `wait` のたびに `std::mem::take` で表を空の `HashMap` に替えるためである
 - 書きの重みと OS の確かめは、bulk 以外では見分けられない。d96346f と同じコードの eml と e942eeb の eml を、`--only '^(base|many-.*|echo-.*|conn-self-1)$' --runs 11 --no-strace` で同じ run に交互に流すと、9件とも差なしで、比は 0.96〜1.08 だった。上の表と d96346f の別の run の数を比べると、many-self-250、many-self-1000、many-py-1000 の中央値が 1.14〜1.25 倍に見えるが、四分位は重なり、同じ run の比べでは 1.08、1.04、0.98 である
 - 監視のスレッドを run の始めに起こす費用は、この機械では見分けられない。`base` の CPU の中央値は 27.7 ms (四分位 27〜34) から 26.0 ms (26〜29)、`compute-fib` は 15 ms (14〜16) から 14 ms (14〜15) で、四分位は重なる
-
-syscall の目標との対応は次のとおりである。数は main のスレッドの、床を引いた単位あたりの値である。
-
-| 項目 | 目標 | 34cad91 | e942eeb | 測る件と列 |
-|---|---|---|---|---|
-| 書けるソケットへの `write_bytes` | 1 | 1 | 1 | bulk-send-py の `sendto` と main の計 (16.25 と 16.26 /MiB) |
-| データのある `read_chunk` (空きあり) | 1 | 9 | 1 | echo-py-reuse の main の計から `sendto` を引く |
-| データのある `read_chunk` (空きなし) | 1 | 9 | 2 | bulk-recv-py の main の計を `recvfrom` の半分で割る。覗きと読みの2回である |
-| 待つ `read_chunk` | 3 | 9 (echo-py-fresh)、15 (echo-self-fresh) | 11 (echo-self-fresh) | echo-self-fresh の1往復の main の計から書きを引き、読みの数で割る。覗きの EAGAIN を含む。echo-py-fresh の読みは覗きで受け付けで終わり、ほとんど待たない |
-| backlog のある `accept` | `accept4` 1 と受けたソケットの登録 1 | `accept4` 1.00 (EAGAIN 0) | `accept4` 1.04 (EAGAIN 0.04) | conn-self-32 の `accept4` |
-| 空きのループの1回の待ち | 1 | 5 | 5 | `epoll_pwait` 1回あたりの `timerfd_settime`、`read(eventfd)`、`epoll_ctl` |
-| 操作ごとの `epoll_ctl` | 0 | 待つ読み1回あたり 4 | 待つ読み1回あたり 4、受け付けで終わる操作は 0 | echo-self-fresh と echo-py-reuse の `epoll_ctl` |
-| 1往復 (eml が片側) | 4 以下 | 10.02〜10.03 | 2.01〜2.19 | echo-py-reuse の main の計 |
-| many-self の 2000 本 ÷ 250 本の1接続あたり CPU | 1.5 以下 | 1.99 | 1.53 | many-self-* の単位あたり CPU |
 
 ### `POLL_EVERY` の値
 
