@@ -1394,7 +1394,7 @@ main () = Async.run (fn () ->
 | `shutdown_write` | `Stream -> <IO, Async> Stream` | eml |
 | `close` | `Stream -> <IO, Async> Unit` | eml |
 
-- `connect host port` は `Net.connect host port` で接続し、`host` を SNI と証明書の名前の照合に使って handshake まで行う。根は既定の根だけである。`connect_with_ca ca host port` は、PEM の `ca` の証明書を根に足す。`ca` が空の文字列なら `connect` と同じである。`wrap host s` は、既にある `TcpStream` の上で同じ handshake を行い、根は既定の根だけである。`wrap_with_ca ca host s` は `connect_with_ca` と同じく `ca` を根に足す。サーバーの名前と PEM の誤りは、接続を開く前に投げる
+- `connect host port` は `Net.connect host port` で接続し、`host` を SNI と証明書の名前の照合に使って handshake まで行う。根は既定の根だけである。`connect_with_ca ca host port` は、PEM の `ca` の証明書を根に足す。`ca` が空の文字列なら `connect` と同じである。`wrap host s` は、既にある `TcpStream` の上で同じ handshake を行い、根は既定の根だけである。`wrap_with_ca ca host s` は `connect_with_ca` と同じく `ca` を根に足し、`ca` が空の文字列なら `wrap` と同じである。サーバーの名前と PEM の誤りは、接続を開く前に投げる
 - どの関数も期限を持たない。期限は `Async.timeout ms (fn () -> Tls.connect host port)` のように付ける。期限が来ると巻き戻しが `Stream` を落とすので、期限の後に同じ `Stream` は使えない。`Net.read_line_within` のような、期限の後も読みを続けられる `_within` の関数はない
 - `read_chunk b s` は、平文を `b` の後ろに 1 バイト以上 65 536 バイト以下足して返す。`Conn` に平文がなければ、ソケットを読んで復号するのを平文が届くまで繰り返す。相手が close_notify で閉じた後は、何も足さずに `b` の中身のまま返す。これが EOF である。close_notify のない EOF は、届いた平文をすべて返した後で、種類 `ConnectionReset` の IO の失敗になる。TLS の誤りを見つけた押し込みで復号した平文は返さない
 - `read_line s` は1行を読み、終わりの改行を除いて返す。改行、上限、UTF-8 の扱いと文言は `Net.read_line` と同じで、行は同じ関数で切り出す (上の「`Std.Net`」)。EOF は close_notify の後だけで、改行のない最後の行はそのまま返し、残りがなければ `None` を返す。close_notify のない EOF は `read_chunk` と同じ失敗である。読みすぎた平文は `Conn` に残り、次の `read_chunk` か `read_line` が先に返す。そのため2つを混ぜても、平文は失われず、順も入れ替わらない

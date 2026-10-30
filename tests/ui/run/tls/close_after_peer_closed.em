@@ -1,5 +1,6 @@
--- 相手が close_notify を送って閉じた後でも `Tls.close` は正常に戻る。close_notify の書きが失敗しても `close` は
--- その失敗を捨てる (docs/spec/stdlib.md の「`Std.Tls`」)
+-- 相手が close_notify を送って閉じ、server のタスクが終わった後でも、`Tls.close` は正常に戻る。テストの driver の
+-- 終端器は暗号文の端を閉じずに送る側だけを閉じるので、ここでは close_notify の書きは失敗しない (docs/spec/vm.md の
+-- 「時計と driver」)
 import Async (Async)
 import Async
 import Bytes
