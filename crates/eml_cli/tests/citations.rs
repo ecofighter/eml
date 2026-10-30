@@ -2,6 +2,7 @@
 //! 文書のリンクの行き先があることと、`docs/reports/` の見出しを引いていないことを確かめる。節を移したときに、
 //! 引用だけが古いまま残るのを防ぐため (docs/implementation/testing.md の「文書の引用の検査」)。
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -80,7 +81,7 @@ fn without_whitespace(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-fn headings(path: &Path) -> Vec<String> {
+fn headings(path: &Path) -> HashSet<String> {
     fs::read_to_string(path)
         .map(|text| {
             text.lines()
@@ -149,10 +150,16 @@ fn relative(root: &Path, path: &Path) -> String {
 fn every_cited_heading_exists() {
     let root = repo_root();
     let mut broken = Vec::new();
+    // 引用は同じ文書に集まるので、行き先を引用ごとに読み直すと 1 秒を超える。行き先ごとに一度だけ読む
+    // (docs/implementation/testing.md の「性能のテスト」)。
+    let mut cache = HashMap::new();
     for file in sources(&root) {
         let text = fs::read_to_string(&file).unwrap();
         for citation in citations(&file, &root, &flatten(&file, &text)) {
-            if !headings(&citation.target).contains(&citation.heading) {
+            let found = cache
+                .entry(citation.target.clone())
+                .or_insert_with(|| headings(&citation.target));
+            if !found.contains(&citation.heading) {
                 broken.push(format!(
                     "{}: {} の「{}」",
                     relative(&root, &file),
