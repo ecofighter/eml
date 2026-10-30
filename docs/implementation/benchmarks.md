@@ -163,7 +163,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 bench/scripts.sh
 ```
 
-- 表は3つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ)、`https-get` (64 MiB の本文を https で取る) の6行である。数値計算の表は nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行である。3つ目の表は、大きい入力で Rust の実装と比べる (下の「C/Rust との比べ方」)
+- 表は3つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ)、`https-get` (600 MiB の本文を https で取る) の6行である。数値計算の表は nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行である。3つ目の表は、大きい入力で Rust の実装と比べる (下の「C/Rust との比べ方」)
 - スクリプトの入力は、`bench/scripts/gen.py` が種類 (アクセスログか CSV) と大きさごとに、種を固定して1つずつ作る。`target/bench-scripts/` に大きさを名前に入れて置き、すでにあれば作り直さない
 - 比べる Python の実装は、スクリプトが `bench/scripts/<名前>.py`、数値計算が `bench/numeric/<名前>.py` で、Python の標準ライブラリで普通に書いたものである。速さのために手で凝ったものにはしない。数値計算の実装は、浮動小数の演算を eml の実装と同じ順で行い、ビットまで同じ結果を出す
 - `https-get` の相手は `crates/eml_tls/examples/https_server.rs` で、`127.0.0.1` で待ち受け、`eml_tls` の fixtures の証明書と TLS 1.3 の `TLS13_AES_256_GCM_SHA384` だけで応える。両方のクライアントが同じ暗号を使うためである。本文は番号を振った 16 バイトの行の列で、`Content-Length` を付け、close_notify の後に書く側を閉じる。chunked にしないのは、chunk の解析でなく `Net` と `Tls` の読みの道を測るためである。名前の解決を測らないよう、URL は `https://127.0.0.1:PORT/` にする。`https_server MIB` で呼ぶと MIB MiB の本文を返す server になり、ポートを標準出力の1行目に出し、`bench/scripts.sh` が signal で止めるまで動く。`bench/scripts.sh` は server を組んで裏で起こし、比べと6回の計測で使い、最後に止める。server の CPU 時間を標準エラーに出す。両方の実装は状態、本文の長さ、最後の行を出す。eml の実装は `bench/scripts/https_get.em` にある。UI テストはテストの driver で動き、本物のソケットに届かないためである。`bench/scripts/` には、std のモジュールと大文字小文字を除いて同じ名前の `.em` を置かない。置くと `import Http` などがそのファイルを見つけて E1026 になる (上の `bench/list.em` と同じ)。目標はほかの行と同じく Python の 1.5 倍以下で、CI に上限は置かない
