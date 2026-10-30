@@ -25,7 +25,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | 7 | タスクごとの上限 | タスクの中で深さ、スタック、メモリの柔らかい上限を超えると、そのタスクの IO の失敗 `ResourceLimit` になる。メモリの硬い上限は今と同じく run 全体を止める |
 | 8 | 失敗の種類 | `IOErrorKind` は `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit`、`ConnectionRefused` を持つ。extern はこの6種類を出さず、出すのは `fail_io` だけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」) |
 | 9 | 時間 | 時間は今からの長さを `Int` のミリ秒で表す。名前を付けたスコープを期限付きで待つ関数は `Async.drain_within` である |
-| 10 | I/O | std の API は OS によらず完了型にする。buffer は所有ごと渡して返してもらい、受け付け、待ち、取り出しの3段で行う。`IoDriver` の trait を `eml_rt` に置き、`eml_io` が実装する。本物の driver は `compio-driver` の上に作り、unix は polling、Windows は IOCP を使う |
+| 10 | I/O | std の API は OS によらず完了型にする。buffer は所有ごと渡して返してもらい、受け付け、待ち、取り出しの3段で行う。`IoDriver` の trait を `eml_rt` に置き、`eml_io` が実装する。本物の driver は、OS を呼ばない核と OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) で作る |
 | 11 | ハンドルと worker | ハンドルは最初に受け付けた worker の I/O の driver に縛る。別の worker からの受け付けはその worker の受け箱を通して回す |
 | 12 | 読みの buffer | 呼び手が渡した buffer に空きがあれば、受け付けでその空きを1回の読みに貸す。空きがなければ、容量はソケットが読めるようになってから確保する。IOCP ではまず0バイトの受信を出す |
 | 13 | ブロックする呼び出し | ブロックする呼び出しのプールはヒープを持たない。`blocking` の行は型に `<IO, Async>` を要する。std の今の同期の行はタスクの中でその場で動き、非同期のファイルとパイプは I/O の driver で作る |
@@ -240,9 +240,8 @@ read_chunk buf s =
 - `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。今は `verus!` の外の安全なつなぎのコードで、`external_body` も信頼の一覧の行も持たない ([VM](../spec/vm.md) の「時計と driver」)。`eml_rt` の extern が driver を要るまでは実行系が持ち、`Ctx` には入れない。`eml_rt` の extern が I/O を持ち、`Ctx` が driver を持つときに、`external_body` と信頼の一覧の行を足す
 - 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び方 (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
 - driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM では、監視のスレッドのない run は Ctrl-C の後に起こされないので、VM が1回の待ちを 10 ms で切る。driver は内部の刻みを持たない ([VM](../spec/vm.md) の「時計と driver」)
-- 本物の driver は `compio-driver` と `compio-buf` の上に作る。unix は polling (epoll と kqueue)、Windows は IOCP を使い、io_uring は使わない。単独で使えること、スレッドごとに driver を持てること、別のスレッドから起こせる待ちを持つこと、プールの仕事の完了が待ちを起こすことは確かめた。バージョンと、上げるときに確かめることは [アーキテクチャ](../implementation/architecture.md) の「外部 crate」にある
-- compio の上位の crate (`compio-net`、`compio-fs`、`compio-process`) は使わない。どれも compio の実行系 (`compio-runtime`) を要し、実行系が持つ別の `Proactor` に操作を出すので、eml の driver の完了の列にも `quiesce` にも乗らない。eml は `compio-driver` の操作を自分の driver から直接出す
-- Windows では、ソケットを IOCP のポートに結び付けてから (`Proactor::attach`) `Recv` と `Send` を出す。今の driver は Windows でハンドルを作らないので結び付けもしない。Windows のソケットを扱うときに足す
+- 本物の driver は、OS を呼ばない核と、`libc` と `windows-sys` で自前に書いた OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) からなり、io_uring は使わない。mio は Windows で AFD の readiness を真似るので採らない。核は保留の操作を呼ぶ側の鍵で引く1つの表で持ち、プールと名前の解決のスレッドも自前で持つ。構成は [アーキテクチャ](../implementation/architecture.md) の「`eml_io` の内部」にある
+- Windows の backend は今ソケットを扱わない。ソケットを扱うときは、ソケットを IOCP のポートに結び付けてから受けと送りを出す ([ロードマップ](roadmap.md) の `net-windows`)
 - 完了は持ち主の worker の driver の完了の列に届き、集める地点で登録表の操作の記録に当てる。完了の中身は保留の表が持つ数えた参照で、ハンドルを縛った worker とタスクの worker が違えば、普通の移し替えの歩きでタスクへ渡る
 - REPL の回復は実行中の操作を取り消して完了を待ちきってから写す
 
@@ -262,7 +261,7 @@ read_chunk buf s =
 
 ### ブロックする呼び出しのプール
 
-- 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。本物の driver では、仕事は `compio-driver` の `Asyncify` で動く。プールのスレッドは driver ごとに32本までである ([VM](../spec/vm.md) の「時計と driver」)
+- 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。本物の driver では、仕事は driver が持つ自前のスレッドで動く。スレッドは driver ごとに32本までで、すべてが仕事中なら仕事は driver の中の列で待つ ([VM](../spec/vm.md) の「時計と driver」)
 - プールは各 worker の I/O の driver の一部で、仕事は driver に出す操作 (`Op::Job`) である。仕事の記録は run の登録表の操作の記録で、I/O の操作と同じ待ちの仕組みで待つ
 - プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない。std の内部の仕事は入力を写して所有して受け取り、結果を値で返す。カーネルに貸す記憶 (`RawBuf`) は driver を持つスレッドから出さないので、仕事には渡さない
 - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
@@ -322,7 +321,7 @@ main () =
 
 Windows には次のものが残る。
 
-- Windows の本物の driver はまだソケットを扱わない。Windows の `compio-driver` にあるのは IOCP の `Accept`、`Connect`、`CloseSocket` だけなので、ソケットの作成、bind、listen は `eml_io` が socket2 で書く。Windows の accept と connect の後には、それぞれ `update_context` を呼ぶ。ConnectEx はソケットが bind 済みであることを求めるので、connect の前の bind も `eml_io` で書く ([ロードマップ](roadmap.md) の `net-windows`)
+- Windows の本物の driver はソケットを扱わない。扱うときは、ソケットの作成、bind、listen、受け、接続を `eml_io` が `windows-sys` で書く。Windows の accept と connect の後には、それぞれ `update_context` を呼ぶ。ConnectEx はソケットが bind 済みであることを求めるので、connect の前の bind も `eml_io` で書く ([ロードマップ](roadmap.md) の `net-windows`)
 
 ### シグナル
 
@@ -444,8 +443,8 @@ pub request      : String -> String -> Bytes -> Options -> <IO, Panic, Async> Re
 - 非同期のファイルと子のプロセスの標準入出力は、I/O の driver の上で、`<IO, Async>` の row を持つ操作として作る。どれも受け付け、待ち、取り出しの3段で行う。子の標準入出力は driver のハンドルにする。Unix では poll できるパイプ、Windows では overlapped の名前付きパイプである
 - これで、今ブロックする std の行では書けない3つのことができる。パイプ (`.|`。子の標準出力を次の子の標準入力へ eml で汲む)、`run` と `output` の標準入力を文字列で与えること (`Proc.output_with`)、`Child` の標準エラーの pipe を読み分けることである。今の規則は [標準ライブラリ](../spec/stdlib.md) の「`Child`」にある
 - 1つのタスクがファイルを読んでも、同じ worker の別のタスクの組のやりとりは止まらない
-- compio は `Decision::Blocking` と判定した操作 (Linux のファイルの `ReadAt` と `WriteAt` など) を、`Send` を求めずにプールのスレッドへ送る。そうした操作に `RawBuf` を渡すと、driver を持つスレッドの外へ出さないという `RawBuf` の規則 ([VM](../spec/vm.md) の「時計と driver」) をコンパイラが確かめない。そのため、この操作を足すときは、`RawBuf` を `Send` にしない規則、T10 の行の別のスレッドから読ませない文 ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)、Miri のテストを見直す
-- macOS の通常のファイルの読み書きも、Linux の epoll の道と同じく、ブロックする呼び出しのプールの仕事にする。kqueue だけでは非同期にならないためである。通常のファイルの `EVFILT_READ` は、ファイルの終わりまでに残るバイト数を返すだけで、ディスクから読み終えたかは知らせない (XNU の `vnode_readable_data_count`)。compio-driver も、macOS のファイルの操作は `Decision::Blocking` としてプールで動かす
+- driver の中で通常のファイルの読み書きをプールのスレッドへ送るときは、`RawBuf` の番地を包んで渡すことになり、driver を持つスレッドの外へ出さないという `RawBuf` の規則 ([VM](../spec/vm.md) の「時計と driver」) をコンパイラが確かめない。そのため、この操作を足すときは、`RawBuf` を `Send` にしない規則、T10 の行の別のスレッドから読ませない文 ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)、Miri のテストを見直す
+- macOS の通常のファイルの読み書きも、Linux の epoll の道と同じく、ブロックする呼び出しのプールの仕事にする。kqueue だけでは非同期にならないためである。通常のファイルの `EVFILT_READ` は、ファイルの終わりまでに残るバイト数を返すだけで、ディスクから読み終えたかは知らせない (XNU の `vnode_readable_data_count`)
 - POSIX AIO は使わない。XNU が AIO の完了を kqueue に届ける `SIGEV_KEVENT` を受け付けるのは macOS 26 (xnu-12377) からで、それより前の macOS は `SIGEV_SIGNAL` と `SIGEV_NONE` しか受け付けない。macOS 26 でも、AIO はカーネルのスレッドがブロックする読み書きをする仕組みである。同時に出せる要求の数は、既定でシステム全体で 90、プロセスごとに 16 と少ない (`kern.aiomax` と `kern.aioprocmax`。XNU の `config/MASTER` の medium の値)。上限を超えた要求は `EAGAIN` で断られるので、プールの仕事に切り替える道がどのみち要る
 - GCD の `dispatch_io` も使わない。通常のファイルでは、GCD のキューのスレッドが `read` か `pread` を呼ぶので、中身はプールの仕事と同じくブロックする読み書きである (libdispatch の `src/io.c`)。そのうえ、eml の規則と次の点で食い違う
   - 読みは GCD が自分で確保した buffer に入るので、操作の記録が持つ一意な buffer へ写す手間が1回増える
@@ -476,9 +475,6 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 
 ## 未決の論点と将来の拡張
 
-- I/O の driver の crate: 今の本物の driver は `compio-driver` の上にある。OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) を `libc` と `windows-sys` で自前に書いて替える。mio は Windows で AFD の readiness を真似るので採らない
-  - 自前の driver は、保留の操作を呼ぶ側の鍵で引く1つの表で持つ。そのため、driver を落とすときに仕事を待ちきることも、壊れた driver の鍵を漏らすことも要らない。救済の後の受け付けを、縛った worker の受け箱を通さずに別のスレッドから出す形は、`async-threads` の計測で遅れが目立ったときに考える
-  - 替える順: まず driver だけを自前の backend に差し替え、Windows のソケットをその後に載せる。io_uring は試作と計測で入れるかを決め、入れても、io_uring が使えない環境のために epoll の道は残す。自前の driver の syscall の周りの `unsafe` は Miri で動かせないので、4つの対象の CI と AddressSanitizer で確かめる ([ロードマップ](roadmap.md) の `io-backends`、`net-windows`、`io-uring`)
 - `Machine` と REPL のセッションを別のスレッドへ移すこと: 既定は移さない。driver は作ったスレッドから動かず、driver を持つ `Machine` もそのスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。ホストへの埋め込みなどで移す使い道が出たら、専用の実行系のスレッドが状態を持ち、`Machine` と REPL を頼みを送るハンドルにする形を考える
 - 書きの期限 (`write_within`): 取り消し、期限、データの区別は誤りの種類でなく操作の記録の状態で決める ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。`Std.Net` で書きに期限を付けるときは、この区別を書きにもそのまま当てられるかを見直す
 - 受け付けをスレッドをまたいで安全に出せる backend (IOCP、SQ を lock する io_uring) では、受け箱を通す回り道を省いてよい。既定は backend ごとに `eml_io` が決める

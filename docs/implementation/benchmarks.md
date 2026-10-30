@@ -209,118 +209,118 @@ bench/scripts.sh
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
-- コミット: cae8e0d
+- コミット: d4a6e71
 
 | プログラム | instructions retired | 実行の分 | 実時間 (s) |
 |---|---:|---:|---:|
-| `empty` | 58274069 | | 0.00 |
-| `apply_float` | 192130762 | 133856693 | 0.00 |
-| `apply_int` | 161146033 | 102871964 | 0.00 |
-| `byte_loop` | 218732071 | 160458002 | 0.01 |
-| `bytes_loop` | 159839211 | 101565142 | 0.00 |
-| `char_loop` | 259186545 | 200912476 | 0.01 |
-| `ep_float` | 242289582 | 184015513 | 0.01 |
-| `fannkuch_by_hand` | 198704342 | 140430273 | 0.01 |
-| `fannkuch_var` | 319218403 | 260944334 | 0.01 |
-| `fib` | 144352559 | 86078490 | 0.00 |
-| `fold_state` | 119884169 | 61610100 | 0.00 |
-| `iter_generate` | 130989765 | 72715696 | 0.00 |
-| `iter_pipeline` | 237480042 | 179205973 | 0.01 |
-| `iter_pipeline_by_hand` | 238616337 | 180342268 | 0.01 |
-| `list` | 216694271 | 158420202 | 0.00 |
-| `loop` | 224317158 | 166043089 | 0.00 |
-| `mandelbrot` | 523272529 | 464998460 | 0.02 |
-| `nbody` | 234327782 | 176053713 | 0.01 |
-| `orders` | 317981589 | 259707520 | 0.01 |
-| `orders_by_hand` | 318945147 | 260671078 | 0.01 |
-| `par_tree` | 81649265 | 23375196 | 0.00 |
-| `push_fold` | 116635270 | 58361201 | 0.00 |
-| `push_fold_by_hand` | 117118201 | 58844132 | 0.00 |
-| `rbtree` | 272885938 | 214611869 | 0.01 |
-| `records` | 148329069 | 90055000 | 0.00 |
-| `records_wide` | 220728997 | 162454928 | 0.01 |
-| `sieve_by_hand` | 129861951 | 71587882 | 0.00 |
-| `sieve_var` | 184401210 | 126127141 | 0.01 |
-| `spectral_norm` | 568117431 | 509843362 | 0.02 |
-| `state` | 96074678 | 37800609 | 0.00 |
-| `state_loop` | 97692331 | 39418262 | 0.00 |
-| `state_loop_by_hand` | 95724339 | 37450270 | 0.00 |
-| `state_nested` | 109154020 | 50879951 | 0.00 |
-| `std_list` | 223093212 | 164819143 | 0.01 |
-| `std_map` | 371691867 | 313417798 | 0.01 |
-| `sum_loop` | 93590869 | 35316800 | 0.00 |
-| `tree` | 249924416 | 191650347 | 0.01 |
-| `tree_by_hand` | 249285653 | 191011584 | 0.01 |
-| `tree_map` | 197881487 | 139607418 | 0.00 |
-| `upsert` | 513458596 | 455184527 | 0.02 |
-| `upsert_by_hand` | 511866788 | 453592719 | 0.02 |
+| `empty` | 58160546 | | 0.00 |
+| `apply_float` | 191981586 | 133821040 | 0.00 |
+| `apply_int` | 160936832 | 102776286 | 0.00 |
+| `byte_loop` | 218892212 | 160731666 | 0.01 |
+| `bytes_loop` | 159819309 | 101658763 | 0.00 |
+| `char_loop` | 259470817 | 201310271 | 0.01 |
+| `ep_float` | 242335624 | 184175078 | 0.01 |
+| `fannkuch_by_hand` | 198600786 | 140440240 | 0.01 |
+| `fannkuch_var` | 319436661 | 261276115 | 0.01 |
+| `fib` | 144182444 | 86021898 | 0.00 |
+| `fold_state` | 119918271 | 61757725 | 0.00 |
+| `iter_generate` | 130882107 | 72721561 | 0.00 |
+| `iter_pipeline` | 237669876 | 179509330 | 0.01 |
+| `iter_pipeline_by_hand` | 238775520 | 180614974 | 0.01 |
+| `list` | 216426082 | 158265536 | 0.00 |
+| `loop` | 224286694 | 166126148 | 0.00 |
+| `mandelbrot` | 523269457 | 465108911 | 0.02 |
+| `nbody` | 233886052 | 175725506 | 0.01 |
+| `orders` | 317189231 | 259028685 | 0.01 |
+| `orders_by_hand` | 318645427 | 260484881 | 0.01 |
+| `par_tree` | 81540906 | 23380360 | 0.00 |
+| `push_fold` | 116486963 | 58326417 | 0.00 |
+| `push_fold_by_hand` | 116912232 | 58751686 | 0.00 |
+| `rbtree` | 272745440 | 214584894 | 0.01 |
+| `records` | 148386162 | 90225616 | 0.00 |
+| `records_wide` | 220747684 | 162587138 | 0.01 |
+| `sieve_by_hand` | 130080477 | 71919931 | 0.00 |
+| `sieve_var` | 185232827 | 127072281 | 0.01 |
+| `spectral_norm` | 568802196 | 510641650 | 0.02 |
+| `state` | 96180504 | 38019958 | 0.00 |
+| `state_loop` | 98066119 | 39905573 | 0.00 |
+| `state_loop_by_hand` | 95752347 | 37591801 | 0.00 |
+| `state_nested` | 109378390 | 51217844 | 0.00 |
+| `std_list` | 223099649 | 164939103 | 0.00 |
+| `std_map` | 371998841 | 313838295 | 0.01 |
+| `sum_loop` | 93612583 | 35452037 | 0.00 |
+| `tree` | 250205909 | 192045363 | 0.01 |
+| `tree_by_hand` | 249575408 | 191414862 | 0.01 |
+| `tree_map` | 197855875 | 139695329 | 0.00 |
+| `upsert` | 513381343 | 455220797 | 0.02 |
+| `upsert_by_hand` | 511914543 | 453753997 | 0.02 |
 
 ### `bench/rt.sh`
 
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
-- コミット: cae8e0d
+- コミット: d4a6e71
 
 `rt_bench` の計測
 
 | 計測 | instructions retired | 実時間 (s) |
 |---|---:|---:|
-| `empty` | 16935502 | 0.00 |
-| `list` | 1224123804 | 0.04 |
-| `box-list` | 3056739005 | 0.10 |
-| `dup` | 276980962 | 0.01 |
-| `free` | 1827139533 | 0.05 |
-| `map` | 1810305778 | 0.06 |
-| `map-reuse` | 610135995 | 0.02 |
-| `append` | 278371468 | 0.01 |
-| `perform` | 516948377 | 0.01 |
-| `perform-deep` | 867149450 | 0.03 |
-| `handle` | 608043813 | 0.01 |
-| `yield` | 367420918 | 0.09 |
-| `mask` | 3807477206 | 0.10 |
-| `poll` | 1117119400 | 0.04 |
+| `empty` | 16892473 | 0.00 |
+| `list` | 1224255277 | 0.04 |
+| `box-list` | 3056712417 | 0.09 |
+| `dup` | 276978719 | 0.01 |
+| `free` | 1826955980 | 0.05 |
+| `map` | 1810061290 | 0.06 |
+| `map-reuse` | 610115659 | 0.02 |
+| `append` | 278540987 | 0.01 |
+| `perform` | 516977812 | 0.01 |
+| `perform-deep` | 866964845 | 0.03 |
+| `handle` | 607922550 | 0.01 |
+| `yield` | 367035605 | 0.09 |
+| `mask` | 3807113492 | 0.10 |
+| `poll` | 1117011384 | 0.04 |
 
 extern の計測 (`rt_extern_bench`)
 
 | 計測 | instructions retired | 実時間 (s) |
 |---|---:|---:|
-| `string-eq` | 345195315 | 0.01 |
-| `string-eq-early` | 437171041 | 0.01 |
-| `compare` | 345361905 | 0.01 |
-| `concat-copy` | 2615441477 | 0.09 |
-| `show-int` | 2107282454 | 0.06 |
-| `show-int-long` | 5257738586 | 0.15 |
-| `show-string` | 3392755881 | 0.14 |
-| `show-string-dense` | 8436144882 | 0.28 |
-| `println-block` | 254211834 | 0.00 |
-| `println-line` | 11144989239 | 0.62 |
-| `read-all` | 125820567 | 0.00 |
-| `read-all-unsized` | 137318217 | 0.00 |
-| `find-byte-1mib` | 1211670674 | 0.03 |
-| `find-byte-1mib-position` | 6324569215 | 0.24 |
-| `find-bytes-1mib` | 423116527 | 0.01 |
-| `find-bytes-1mib-windows` | 3283021943 | 0.12 |
-| `find-byte` | 1307157122 | 0.04 |
-| `find-byte-swar` | 1047138374 | 0.03 |
-| `find-sub` | 2077390607 | 0.07 |
-| `find-sub-contains` | 1537267441 | 0.05 |
-| `slice-short` | 2797376516 | 0.08 |
-| `slice-short-box` | 2601050995 | 0.08 |
-| `read-all-bytes` | 422961740 | 0.04 |
-| `read-all-bytes-std` | 212979415 | 0.02 |
-| `read-line-bytes-64mib` | 657235584 | 0.02 |
-| `read-line-bytes-64mib-std` | 781929712 | 0.03 |
-| `stdout-write-line-10m` | 3028078425 | 0.10 |
+| `string-eq` | 345124159 | 0.01 |
+| `string-eq-early` | 437186745 | 0.01 |
+| `compare` | 345297326 | 0.01 |
+| `concat-copy` | 2615116876 | 0.09 |
+| `show-int` | 2107044194 | 0.06 |
+| `show-int-long` | 5257193911 | 0.15 |
+| `show-string` | 3392231261 | 0.14 |
+| `show-string-dense` | 8435026129 | 0.27 |
+| `println-block` | 254185591 | 0.00 |
+| `println-line` | 11143369201 | 0.62 |
+| `read-all` | 125656941 | 0.00 |
+| `read-all-unsized` | 137104938 | 0.00 |
+| `find-byte-1mib` | 1211450931 | 0.03 |
+| `find-byte-1mib-position` | 6323519180 | 0.23 |
+| `find-bytes-1mib` | 422936938 | 0.01 |
+| `find-bytes-1mib-windows` | 3282450074 | 0.12 |
+| `find-byte` | 1307065419 | 0.04 |
+| `find-byte-swar` | 1047043487 | 0.03 |
+| `find-sub` | 2077045279 | 0.06 |
+| `find-sub-contains` | 1537060217 | 0.05 |
+| `slice-short` | 2797086741 | 0.08 |
+| `slice-short-box` | 2600734930 | 0.08 |
+| `read-all-bytes` | 423647058 | 0.04 |
+| `read-all-bytes-std` | 212984453 | 0.02 |
+| `read-line-bytes-64mib` | 657603650 | 0.02 |
+| `read-line-bytes-64mib-std` | 780467419 | 0.03 |
+| `stdout-write-line-10m` | 3027650123 | 0.10 |
 
 eml / 参照の比 (1 MiB の2組は目標が2倍、続く4組は予算の行、最後の組は記録だけの行)
 
 | eml の計測 | 参照の計測 | 命令の数の比 | 実時間の比 |
 |---|---|---:|---:|
-| `find-byte-1mib` | `find-byte-1mib-position` | 0.19 | 0.12 |
+| `find-byte-1mib` | `find-byte-1mib-position` | 0.19 | 0.13 |
 | `find-bytes-1mib` | `find-bytes-1mib-windows` | 0.13 | 0.08 |
 | `find-byte` | `find-byte-swar` | 1.25 | 1.33 |
-| `find-sub` | `find-sub-contains` | 1.35 | 1.40 |
+| `find-sub` | `find-sub-contains` | 1.35 | 1.20 |
 | `slice-short` | `slice-short-box` | 1.08 | 1.00 |
 | `read-all-bytes` | `read-all-bytes-std` | 1.99 | 2.00 |
 | `read-line-bytes-64mib` | `read-line-bytes-64mib-std` | 0.84 | 0.67 |
@@ -333,8 +333,8 @@ eml / 参照の比 (1 MiB の2組は目標が2倍、続く4組は予算の行、
 - `read-all-bytes` は命令の数の比が 2.01 で (404,354,702 対 201,333,790 命令)、行の予算の 1.3 を超える。どちらの側も、入力の 64 MiB を組む費用を含むので、比は 1 の側に寄る。測っているのは `handle_read` の `Form::Bytes` で、UTF-8 の検査はない。差は、`Vec` に読んでからヒープへ写す2回目の写しと、`read_to_end` が空き領域を 0 で埋める費用である (「`FileIn.read_all` の読み方」)。参照の `read_to_end` は `&[u8]` から `Vec` へ1回写すだけである
   - 2倍の行への費用: 100 MB の入力で、eml の `read_all` (読み、UTF-8 の検査、写し) は 23 ms、Rust の `read_to_end` は 9〜10 ms で、差は約 13 ms である (設計のときの計測)。`wc` の Rust の実装は 0.07 s なので、2倍の目標 ([ネイティブ化の設計](../future/native.md) の「目的と範囲」の、スクリプト全体の目標で、この行の予算とは別) の余裕約 70 ms のうち、約 13 ms を読みが使う
   - `read_into` (Host の読みを一意な `Bytes` の空きに直接書く) は入れていない。入れる引き金は、ネイティブのコードで、この行が `read_to_end` の 1.3 倍を超えることで、VM の測定では判定しない ([ロードマップ](../future/roadmap.md) の「処理系」の `read_into`)。`read_into` は `Vec` からの写しを省くが、stable の Rust は `read_buf` を持たず、読む前に空きを 0 で埋めるので、ヒープへ直接読んでも得は 6〜10% に留まる。1.3 の予算に入れるには、写しを省くことに加えて、0 で埋めずに読む手段が要る
-- `read-line-bytes-64mib` (56 バイトの行の 64 MiB を `Form::Bytes` の行の読みで読む) は記録だけの行で、予算を持たない。64 KiB の `BufReader` の `read_until` で行ごとに `Vec` に読む参照に対し、命令の数の比は 0.84 である (657,235,584 対 781,929,712 命令。どちらも入力の 64 MiB を組む費用を含む)。行の読みは読み手の buffer から行を1回だけヒープへ写し、行の終わりを T13 の `find_byte` で 8 バイトずつ探す。行の終わりを1バイトずつ探すループで測ったときの比は 1.28 で、差の主な原因はそのループだった。
-- `stdout-write-line-10m` (23 バイトの行を `Stdout` のハンドルで 10,000,000 回書く) は記録だけの行で、1回の書き込みは約303命令、約 10 ns である (3,028,078,425 命令と 0.10 秒)。`println-block` の1行あたり約254命令に比べ、ハンドルの型の確かめと、ハンドルを返す分が多い。
+- `read-line-bytes-64mib` (56 バイトの行の 64 MiB を `Form::Bytes` の行の読みで読む) は記録だけの行で、予算を持たない。64 KiB の `BufReader` の `read_until` で行ごとに `Vec` に読む参照に対し、命令の数の比は 0.84 である (657,603,650 対 780,467,419 命令。どちらも入力の 64 MiB を組む費用を含む)。行の読みは読み手の buffer から行を1回だけヒープへ写し、行の終わりを T13 の `find_byte` で 8 バイトずつ探す。行の終わりを1バイトずつ探すループで測ったときの比は 1.28 で、差の主な原因はそのループだった。
+- `stdout-write-line-10m` (23 バイトの行を `Stdout` のハンドルで 10,000,000 回書く) は記録だけの行で、1回の書き込みは約303命令、約 10 ns である (3,027,650,123 命令と 0.10 秒)。`println-block` の1行あたり約254命令に比べ、ハンドルの型の確かめと、ハンドルを返す分が多い。
 
 ### `bench/scripts.sh`
 
@@ -342,42 +342,42 @@ eml / 参照の比 (1 MiB の2組は目標が2倍、続く4組は予算の行、
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
 - Python: Python 3.14.8
-- コミット: cae8e0d
+- コミット: d4a6e71
 - 入力: スクリプトの入力は bench/scripts/gen.py が作る。大きさは表の「大きさ」の欄にある
 
 スクリプト
 
 | 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
 |---|---:|---:|---:|---:|---:|---:|
-| `wc` | 9000 KiB | 0.30 | 0.03 | 10.0 | 31 | 78 |
-| `grep -n` | 70000 KiB | 0.23 | 0.26 | 0.9 | 11 | 17 |
-| `logstat` | 6700 KiB | 0.26 | 0.11 | 2.4 | 13 | 20 |
+| `wc` | 9000 KiB | 0.28 | 0.03 | 9.3 | 31 | 78 |
+| `grep -n` | 70000 KiB | 0.24 | 0.26 | 0.9 | 11 | 16 |
+| `logstat` | 6700 KiB | 0.26 | 0.11 | 2.4 | 13 | 19 |
 | `logstat --whole` | 6700 KiB | 0.24 | 0.10 | 2.4 | 38 | 53 |
-| `csv2jsonl` | 2900 KiB | 0.29 | 0.18 | 1.6 | 23 | 51 |
+| `csv2jsonl` | 2900 KiB | 0.26 | 0.18 | 1.4 | 23 | 51 |
 
 数値計算
 
 | 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
 |---|---:|---:|---:|---:|---:|---:|
 | nbody | 140000 | 0.29 | 0.64 | 0.5 | 12 | 14 |
-| spectral-norm | 510 | 0.31 | 0.87 | 0.4 | 11 | 14 |
+| spectral-norm | 510 | 0.34 | 0.86 | 0.4 | 11 | 14 |
 | mandelbrot | 480 | 0.21 | 0.30 | 0.7 | 10 | 14 |
 | fannkuch-redux | 9 | 0.52 | 0.24 | 2.2 | 12 | 14 |
-| sieve | 3500000 | 0.31 | 0.17 | 1.8 | 37 | 41 |
+| sieve | 3500000 | 0.30 | 0.17 | 1.8 | 37 | 41 |
 
 C/Rust との比
 
 | 計測 | 大きさ | eml の実時間 (s) | Rust の実時間 (s) | eml の空 (s) | Rust の空 (s) | 比 (eml / Rust) |
 |---|---:|---:|---:|---:|---:|---:|
-| `wc` | 100000 KiB | 3.42 | 0.07 | 0.00 | 0.00 | 48.9 |
-| `grep -n` | 100000 KiB | 0.32 | 0.08 | 0.00 | 0.00 | 4.0 |
-| `logstat` | 100000 KiB | 3.75 | 0.24 | 0.00 | 0.00 | 15.6 |
-| `logstat --whole` | 100000 KiB | 3.57 | 0.24 | 0.00 | 0.00 | 14.9 |
-| `csv2jsonl` | 50000 KiB | 4.62 | 0.14 | 0.00 | 0.00 | 33.0 |
+| `wc` | 100000 KiB | 3.09 | 0.07 | 0.00 | 0.00 | 44.1 |
+| `grep -n` | 100000 KiB | 0.34 | 0.08 | 0.00 | 0.00 | 4.2 |
+| `logstat` | 100000 KiB | 3.66 | 0.24 | 0.00 | 0.00 | 15.3 |
+| `logstat --whole` | 100000 KiB | 3.49 | 0.23 | 0.00 | 0.00 | 15.2 |
+| `csv2jsonl` | 50000 KiB | 4.31 | 0.15 | 0.00 | 0.00 | 28.7 |
 
 ## ネットワークの計測
 
-`bench/net.sh` は、`Std.Net` を本物の driver の上で動かす物差しである。release ビルドの eml で `bench/net/cases.tsv` の件を流し、1件1行の JSONL を標準出力に出す。`python3 -I bench/net/report.py` がそれを Markdown の表にする。テストではなく、CI では流さない。命令の数でなく CPU の時間と syscall の数を測るので、同じ機械で前と後を並べたときだけ意味がある。
+`bench/net.sh` は、`Std.Net` を本物の driver の上で動かす物差しである。release ビルドの eml で `bench/net/cases.tsv` の件を流し、1件1行の JSONL を標準出力に出す。`python3 -I bench/net/report.py` がそれを Markdown の表にし、strace の run があるラベルには syscall の目標の表も出す。テストではなく、CI では流さない。命令の数でなく CPU の時間と syscall の数を測るので、同じ機械で前と後を並べたときだけ意味がある。
 
 `bench.py` は `LABEL=EML` を1つ以上受け取る。2つ以上渡すと、時間の run を件ごとに交互に流す。`LABEL=EML@DIR` と書いたラベルは、件のプログラムを `DIR` から読む。`std/` の型が変わり、前のコミットの eml が今のプログラムを型検査できないときに使う。`DIR` には、そのコミットの `bench/net` を `git archive <コミット> bench/net | tar -x -C <置き場所>` で取り出したものを渡す。件の行と引数と `peer.py` は今の `bench/net` のものを使い、`@DIR` のないラベルは今のプログラムを使う。`--only REGEX` で件を絞り、`--stats` で `eml run --stats` の `RunStats` を1回取る。`--stats` の run は検査モードなので、時間には使わない。
 
@@ -404,7 +404,9 @@ eml の側は `Std.Net` で書く。相手は同じ run の中の eml のタス�
 
 主指標は、eml のプロセスの CPU (user+sys) から `base` の中央値を引き、単位で割った値である。時間の run は件ごとに 11 回流し、中央値を使う。実時間、sys、最大 RSS、`minflt`、自発と非自発の切り替えは副の指標として並べる。`-py` の件の実時間は Python の相手が律速するので、eml の違いは CPU にしか出ない。
 
-syscall の数は `strace -f` で数える (Linux のみ)。main のスレッドとほかのスレッドに分け、名前ごと、失敗の errno ごとに数え、`base` を引いて単位で割る。3回流して範囲を出す。`RunStats` は `eml run --stats` の1回から取り、床の行にある欄だけを表に出す。
+syscall の数は `strace -f` で数える (Linux のみ)。main のスレッドとほかのスレッドに分け、名前ごと、失敗の errno ごとに数え、`base` を引いて単位で割る。3回流して範囲を出す。`MSG_PEEK` 付きの `recvfrom` は `recvfrom(peek)` として別に数え、失敗は `recvfrom(peek)!EAGAIN` に入る。データのある空きなしの読みが覗きと読みの2回で済むかは、この分けで見える。`RunStats` は `eml run --stats` の1回から取り、床の行にある欄だけを表に出す。
+
+`report.py` の目標の表は、件ごとに床を引いた単位あたりの式を strace の3回それぞれで計算し、値の最小-最大と、全回が基準を満たすかの判定を出す。式は mem = `brk` + `mmap` + `munmap`、E = `recvfrom!EAGAIN` + `recvfrom(peek)!EAGAIN`、R = `recvfrom` − `recvfrom!EAGAIN`、P = `recvfrom(peek)` − `recvfrom(peek)!EAGAIN` で組む。本数によらない費用の行だけは、many-self-250 と many-self-2000 の1接続あたりの CPU (床を引いた中央値) の比を時間の run から出す。件が流れていない行は「件なし」と出る。
 
 ### 比べる規則
 
@@ -415,9 +417,39 @@ syscall の数は `strace -f` で数える (Linux のみ)。main のスレッド
 - syscall は main のスレッドで比べ、3回のどれもが目標以下であることを見る
 - 前と後は同じ機械で、ほかに負荷のない状態で測る
 
+### driver の syscall の目標
+
+本物の driver の syscall と CPU の目標を、`report.py` が strace と時間の run から出す目標の表で確かめる。式の記号は次のとおりで、どれも main のスレッドの、床を引いた単位あたりの値である。
+
+- main: 失敗の鍵 (`名前!ERRNO`) を除いた呼び出しの計。`run.py` は失敗した呼び出しを `名前` と `名前!ERRNO` の両方で数えるためである
+- mem: `brk`、`mmap`、`munmap` の計
+- E: EAGAIN で終わった読みと覗き (`recvfrom!EAGAIN` と `recvfrom(peek)!EAGAIN`) の計
+- R: データを読んだ `recvfrom`。P: データのあった覗き (`recvfrom(peek)`)
+
+値は Intel Xeon Processor @ 2.10GHz、4 vCPU、メモリ 16477352 kB、kernel 6.18.44-fc-v185 の Linux の container で、`python3 -I bench/net/bench.py --stats` の全件の run から出した。strace の3回の範囲で、合格は3回すべてで満たすことである。
+
+| 項目 | 件 | 式 | 目標 | 今 |
+|---|---|---|---|---|
+| 書き 1 | bulk-send-py | (main − mem) ÷ 書き | ≤ 1.05 | 1.000 |
+| データのある読み (空きあり) 1 | echo-py-reuse | (main − `sendto` − mem − 2E) ÷ 往復 | ≤ 1.05 | 1.001〜1.002 |
+| 1往復 (eml が片側) | echo-py-reuse | main ÷ 往復 | ≤ 4 | 2.010〜2.036 |
+| 空きなしの読みは覗きと読みの 2 まで | bulk-recv-py | (R + P) ÷ R | ≤ 2.02 | 1.966〜1.968 |
+| 空きなしの読みは覗きと読みの 2 まで | echo-py-fresh | (R + P) ÷ R | ≤ 2.02 | 1.794〜1.952 |
+| 待つ読み 3 | echo-self-fresh | (main − `sendto` − mem) ÷ E | ≤ 3.05 (E ≥ 1.5 /往復) | 3.004 (E 2.000) |
+| 操作ごとの `epoll_ctl` 0 | echo-self-fresh、echo-py-reuse | `epoll_ctl` ÷ 往復 | ≤ 0.005 | 0.001、0.000 |
+| `epoll_ctl` の総数 | echo-py-reuse | main の `epoll_ctl` (床を引かない) | ≤ 2 (eventfd 1 と接続のソケット 1) | 2 |
+| 受けと登録 | conn-self-32 | `accept4` ÷ 接続、`epoll_ctl` ÷ 接続 | ≤ 1.05、≤ 2.005 | 1.031、2.000 |
+| 待ち1回の費用 | echo-self-fresh | (`timerfd_settime` + `read(eventfd)` + `epoll_ctl`) ÷ 待ち | ≤ 0.05 | 0.000 |
+| 本数によらない費用 | many-self-250、-2000 | 1接続あたり CPU の 2000 本 ÷ 250 本 | ≤ 1.5 | 0.886 |
+
+- 待つ読みの3回は、EAGAIN の覗き、`epoll_pwait`、読みである。辺の直後の `Readable` は、記憶が新しければ覗かずに答える ([VM](../spec/vm.md) の「時計と driver」)
+- 空きなしの読みは、短い読みの後に覗き1回と読み1回になる。P ÷ R は bulk-recv-py で 0.97、echo-py-fresh で 0.79〜0.95 である
+- 1接続あたりの CPU は many-self-250、-1000、-2000 で 96.80、84.08、85.79 µs で、本数とともに伸びない
+- 目標を外したときは不具合として扱い、`strace -f -o` で余分な呼び出しの出どころを特定する
+
 ### 34cad91 と e942eeb
 
-driver の約束を変える前 (34cad91) と後 (e942eeb) を、同じ機械で比べた。機械は Intel Xeon Processor @ 2.10GHz、4 vCPU、メモリ 16477352 kB (`/proc/meminfo` の MemTotal) の Linux の container で、kernel は 6.18.44-fc-v185 である。どちらも release の eml で、34cad91 の eml は今のプログラムを型検査できないので (`write_bytes` の型が違う)、34cad91 の `bench/net` と `bench/fib.em` を `git archive` で取り出して `before=<34cad91 の eml>@<取り出した bench/net>` で流した。`busy-self` は 34cad91 にないので `--only '^(?!busy-self$)'` で外した。driver を差し替えたら、同じ機械で列を足す。
+driver の約束を変える前 (34cad91) と後 (e942eeb) を、同じ機械で比べた。機械は Intel Xeon Processor @ 2.10GHz、4 vCPU、メモリ 16477352 kB (`/proc/meminfo` の MemTotal) の Linux の container で、kernel は 6.18.44-fc-v185 である。どちらも release の eml で、34cad91 の eml は今のプログラムを型検査できないので (`write_bytes` の型が違う)、34cad91 の `bench/net` と `bench/fib.em` を `git archive` で取り出して `before=<34cad91 の eml>@<取り出した bench/net>` で流した。`busy-self` は 34cad91 にないので `--only '^(?!busy-self$)'` で外した。
 
 CPU と実時間は床 (`base`) を引いた単位あたりの µs で、11 回の中央値である。syscall は strace の小さい run の main のスレッドの計を床を引いて単位で割った値で、3回の範囲である。`allocations` は `--stats` の1回から床を引いて単位で割った値である。判定は上の「比べる規則」による。
 
@@ -463,20 +495,6 @@ CPU と実時間は床 (`base`) を引いた単位あたりの µs で、11 回�
 - 書きの重みと OS の確かめは、bulk 以外では見分けられない。d96346f と同じコードの eml と e942eeb の eml を、`--only '^(base|many-.*|echo-.*|conn-self-1)$' --runs 11 --no-strace` で同じ run に交互に流すと、9件とも差なしで、比は 0.96〜1.08 だった。上の表と d96346f の別の run の数を比べると、many-self-250、many-self-1000、many-py-1000 の中央値が 1.14〜1.25 倍に見えるが、四分位は重なり、同じ run の比べでは 1.08、1.04、0.98 である
 - 監視のスレッドを run の始めに起こす費用は、この機械では見分けられない。`base` の CPU の中央値は 27.7 ms (四分位 27〜34) から 26.0 ms (26〜29)、`compute-fib` は 15 ms (14〜16) から 14 ms (14〜15) で、四分位は重なる
 
-syscall の目標との対応は次のとおりである。数は main のスレッドの、床を引いた単位あたりの値である。
-
-| 項目 | 目標 | 34cad91 | e942eeb | 測る件と列 |
-|---|---|---|---|---|
-| 書けるソケットへの `write_bytes` | 1 | 1 | 1 | bulk-send-py の `sendto` と main の計 (16.25 と 16.26 /MiB) |
-| データのある `read_chunk` (空きあり) | 1 | 9 | 1 | echo-py-reuse の main の計から `sendto` を引く |
-| データのある `read_chunk` (空きなし) | 1 | 9 | 2 | bulk-recv-py の main の計を `recvfrom` の半分で割る。覗きと読みの2回である |
-| 待つ `read_chunk` | 3 | 9 (echo-py-fresh)、15 (echo-self-fresh) | 11 (echo-self-fresh) | echo-self-fresh の1往復の main の計から書きを引き、読みの数で割る。覗きの EAGAIN を含む。echo-py-fresh の読みは覗きで受け付けで終わり、ほとんど待たない |
-| backlog のある `accept` | `accept4` 1 と受けたソケットの登録 1 | `accept4` 1.00 (EAGAIN 0) | `accept4` 1.04 (EAGAIN 0.04) | conn-self-32 の `accept4` |
-| 空きのループの1回の待ち | 1 | 5 | 5 | `epoll_pwait` 1回あたりの `timerfd_settime`、`read(eventfd)`、`epoll_ctl` |
-| 操作ごとの `epoll_ctl` | 0 | 待つ読み1回あたり 4 | 待つ読み1回あたり 4、受け付けで終わる操作は 0 | echo-self-fresh と echo-py-reuse の `epoll_ctl` |
-| 1往復 (eml が片側) | 4 以下 | 10.02〜10.03 | 2.01〜2.19 | echo-py-reuse の main の計 |
-| many-self の 2000 本 ÷ 250 本の1接続あたり CPU | 1.5 以下 | 1.99 | 1.53 | many-self-* の単位あたり CPU |
-
 ### `POLL_EVERY` の値
 
 集める地点が OS を見る頻度 `POLL_EVERY` ([VM](../spec/vm.md) の「時計と driver」) は 16 である。d96346f と同じコードの release の eml で、`POLL_EVERY` を 1 にしたもの (`one`) と 16 のもの (`sixteen`) を、上と同じ機械で比べた。
@@ -492,6 +510,58 @@ syscall の目標との対応は次のとおりである。数は main のスレ
 - 1往復の約 40 ms は横取り2回分である。`--stats` では 20 往復で `preemptions` が 43、40 往復で 83 だった。横取りは1つのタスクが刻みの全体を使ったときだけ起こるので ([VM](../spec/vm.md) の「タスクとスケジュール」)、刻みの直後に切り替わった計算のタスクは2つ目の刻みまで走り、横取り1回は約 20 ms になる。往復の時間は、計算のタスクが刻みを使い切る間に、起こされた I/O のタスクが待つことで決まる
 - 走れる I/O のタスクが多い many-self でも比べた (`--only '^(base|many-self-.*)$'`)。`one` から `sixteen` の順に、1接続あたりの CPU は 250 本で 222.54 から 138.55 µs、1000 本で 454.96 から 155.61 µs、2000 本で 847.05 から 237.19 µs だったが、`minflt` の1接続あたりの値が 1 以上違うので、3件とも確保の揺れとして時間の判定から外す。syscall は、1接続あたりの `epoll_pwait` が 5.66〜6.39 から 1.19 に、main の計が 59.28〜63.67 から 32.29〜32.53 になり、16 のほうが OS を見る回数が少ない
 - 16 を保った根拠は、どちらの件の時間でもなく、many-self の syscall の数である
+
+### 書きの重みの単位
+
+操作の予算で書きが長さに応じて使う重みの単位 `WRITE_UNIT` ([標準ライブラリ](../spec/stdlib.md) の「操作の予算」) は 512 バイトである。自前の driver の上で、単位だけを 256 と 1024 に替えた release の eml を 512 と比べた。機械は Intel Xeon Processor @ 2.10GHz、4 vCPU、メモリ 16477352 kB の Linux の container で、kernel は 6.18.44-fc-v185 である。
+
+```sh
+W='^(base|bulk-(self|shared|reuse|1k|send-py|recv-py)|echo-self-(fresh|reuse)|many-self-1000)$'
+python3 -I bench/net/bench.py --only "$W" --no-strace --stats u512=<512 の eml> u256=<256 の eml>
+python3 -I bench/net/bench.py --only "$W" --no-strace --stats u512=<512 の eml> u1024=<1024 の eml>
+```
+
+候補が 512 を置き換えるのは、次の3つが成り立つときだけとした。
+
+- bulk-self、bulk-shared、bulk-reuse、bulk-1k のどれかで、候補の側に「差」がある
+- 測ったどの件にも、CPU で候補に不利な「差」がない
+- bulk-self、bulk-shared、bulk-reuse の単位あたりの sys が 1.10 倍を越えず、echo-self-fresh と echo-self-reuse の実時間の比が 1.10 以下である。単位の役目は同じ worker の読み手を起こすことで、読み手が遅れると送りの列がたまって sys が増えるためである (上の「34cad91 と e942eeb」)
+
+CPU は床を引いた単位あたりの中央値 (µs)、比は候補 ÷ 512 である。
+
+| 件 | 512 | 256 | 比 | 判定 | 512 | 1024 | 比 | 判定 |
+|---|---|---|---|---|---|---|---|---|
+| echo-self-fresh | 10.71 | 11.41 | 1.07 | 差なし | 11.51 | 11.77 | 1.02 | 差なし |
+| echo-self-reuse | 12.74 | 10.43 | 0.82 | 差なし | 11.19 | 11.14 | 1.00 | 差なし |
+| bulk-self | 276.45 | 266.77 | 0.96 | 差なし | 277.79 | 812.95 | 2.93 | 差 |
+| bulk-shared | 218.87 | 220.87 | 1.01 | 差なし | 212.85 | 649.47 | 3.05 | 差 |
+| bulk-reuse | 279.55 | 263.41 | 0.94 | 差なし | 266.48 | 698.35 | 2.62 | 差 |
+| bulk-1k | 1450.50 | 1629.17 | 1.12 | 差なし | 1310.17 | 1228.83 | 0.94 | 差なし |
+| bulk-send-py | 509.23 | 505.05 | 0.99 | 差なし | 498.43 | 508.30 | 1.02 | 差なし |
+| bulk-recv-py | 372.12 | 373.82 | 1.00 | 差なし | 360.78 | 376.54 | 1.04 | 差なし |
+| many-self-1000 | 97.25 | 89.46 | 0.92 | 差なし | 92.70 | 86.96 | 0.94 | 差なし |
+
+- 256 は、どの件にも「差」がなく、1つ目の条件を満たさない
+- 1024 は、同じ run の bulk で CPU が約3倍になり、2つ目の条件を破る。64 KiB の書きが予算を使い切らなくなり、書き手が読み手を起こさずに走り続ける
+- どちらの候補も Linux で外れるので、512 を保つ
+
+macOS でも同じ件を比べた。機械は Apple M5、10 コア、メモリ 32 GiB の macOS 27.0.1 である。macOS は loopback の接続で TIME_WAIT の port を使い直さないので、many-self-1000 を2つのラベルで11回ずつ続けて流すと、ephemeral port が尽きて `connect` が `EADDRNOTAVAIL` で落ちる。この件だけは時間の run を 4 回、4 回、3 回に分け、間で TIME_WAIT が減るのを待って流し、結果をつないだ。
+
+| 件 | 512 | 256 | 比 | 判定 | 512 | 1024 | 比 | 判定 |
+|---|---|---|---|---|---|---|---|---|
+| echo-self-fresh | 13.91 | 14.04 | 1.01 | 差なし | 13.85 | 13.90 | 1.00 | 差なし |
+| echo-self-reuse | 15.02 | 14.98 | 1.00 | 差なし | 14.97 | 14.94 | 1.00 | 差なし |
+| bulk-self | 203.06 | 203.34 | 1.00 | 差なし | 200.56 | 204.66 | 1.02 | 差なし |
+| bulk-shared | 197.52 | 195.79 | 0.99 | 差なし | 196.03 | 174.99 | 0.89 | 差 |
+| bulk-reuse | 202.56 | 201.47 | 0.99 | 差なし | 201.91 | 202.56 | 1.00 | 差なし |
+| bulk-1k | 1214.89 | 1357.45 | 1.12 | 差 | 1226.45 | 1220.84 | 1.00 | 差なし |
+| bulk-send-py | 129.54 | 125.53 | 0.97 | 差なし | 127.39 | 126.83 | 1.00 | 差なし |
+| bulk-recv-py | 98.23 | 98.62 | 1.00 | 差なし | 97.45 | 97.76 | 1.00 | 差なし |
+| many-self-1000 | 39.06 | 39.06 | 1.00 | 差なし | 38.27 | 37.57 | 0.98 | 差なし |
+
+- 256 は、bulk-1k で候補に不利な「差」があり、1つ目と2つ目の条件を満たさない
+- 1024 は、bulk-shared で候補の側に「差」があり、不利な「差」はない。単位あたりの sys の比は bulk-self 1.06、bulk-shared 0.91、bulk-reuse 1.04 で、echo-self-fresh と echo-self-reuse の実時間の比はどちらも 1.00 なので、3つの条件を満たす。それでも 512 を保つのは、Linux で2つ目の条件を破るためである
+- macOS の bulk-shared は、非自発の切り替えの中央値が 512 で 6330 回 (256 との run では 5849 回)、1024 で 114 回だった。原因は調べていない。kqueue の `EVFILT_WRITE` が ACK ごとに待ちを起こすことと関係するかも確かめていない
 
 ## 所見
 

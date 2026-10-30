@@ -143,10 +143,10 @@
 
 - driver の操作 (受け付け、待ち、取り出し) を使うのは `Std.Net` だけである。非同期のファイルとパイプはまだない。std の今の読み書きの行 (`FileIn`、`Stdin`、`Proc` など) はタスクの中でその場で動き、その間はほかのタスクも動かない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」、[ロードマップ](../future/roadmap.md) の `async-files`)
 - `Std.Net` に `resolve` と `write_within` はない。`listen` は名前を受けず、書きの期限は `Async.timeout` で付ける ([ロードマップ](../future/roadmap.md) の「非同期」)
-- 本物の driver は compio-driver の上にあり、unix は polling (epoll と kqueue)、Windows は IOCP を使う。Windows の本物の driver はまだソケットを扱わないので、`Std.Net` の `listen`、`accept`、`connect` は種類 `NotAvailable` の IO の失敗になる。Windows には `Terminate` を起こす OS の出来事がない。本物の driver の VM のテストは Rust のテスト (`eml_io` と、`crates/eml_vm/tests/` の `api.rs` と `signal.rs`) で書き、UI テストはいつもテストの driver の上で流す ([VM](../spec/vm.md) の「時計と driver」、[ロードマップ](../future/roadmap.md) の `net-windows`)
-- 本物の driver は、操作ごとに compio に登録し直し、1回の待ちで保留の操作の表を歩く。そのため待つ読みは syscall を何回も使い、保留の操作が多い run では1接続あたりの CPU が本数とともに伸びる ([計測の基準](benchmarks.md) の「ネットワークの計測」、[ロードマップ](../future/roadmap.md) の `io-backends`)
+- 本物の driver は、OS を呼ばない核と、自前の OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) からなる。Windows の backend はソケットを扱わないので、`Std.Net` の `listen`、`accept`、`connect` は種類 `NotAvailable` の IO の失敗になる。Windows には `Terminate` を起こす OS の出来事がない。本物の driver の VM のテストは Rust のテスト (`eml_io` と、`crates/eml_vm/tests/` の `api.rs` と `signal.rs`) で書き、UI テストはいつもテストの driver の上で流す ([VM](../spec/vm.md) の「時計と driver」、[ロードマップ](../future/roadmap.md) の `net-windows`)
+- 本物の driver の epoll と kqueue の backend は、ソケットを1回だけ edge で登録して以後変えない。1回の待ちは、知らせのあった操作とスレッドの答えが当たった操作にだけ触れるので、その手間は保留の操作の数によらない ([VM](../spec/vm.md) の「時計と driver」、[計測の基準](benchmarks.md) の「driver の syscall の目標」)
 - 監視のスレッドのない run では、VM が1回の待ちを 10 ms で切って止める語を読む。その run では Ctrl-C の後に driver を起こす道がないためで、眠る worker に Ctrl-C と確保量の上限が届くまで、10 ms と OS の遅れだけかかる ([VM](../spec/vm.md) の「時計と driver」)
-- 本物の driver はブロックする仕事のプール (`Op::Job`、driver ごとに32本まで) を持つが、std に仕事を出す行はなく、使うのは Rust のテストだけである ([VM](../spec/vm.md) の「時計と driver」)
+- 本物の driver はブロックする仕事のプール (`Op::Job`、driver ごとに32本まで。すべてが仕事中なら、仕事は driver の中の列で待つ) を持つが、std に仕事を出す行はなく、使うのは Rust のテストだけである ([VM](../spec/vm.md) の「時計と driver」)
 - 時間は `sleep_ms`、`timeout`、`race`、`drain_within` で扱う。`eml run` と `eml repl` はいつも本物の時計で動く。テストとライブラリの既定は仮想の時計で、すべてのタスクが待つときだけ進む ([標準ライブラリ](../spec/stdlib.md) の「時間」、[VM](../spec/vm.md) の「時計と driver」)
 - 取り消しは協調的で、取り消しの地点 (`await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` と、`Std.Chan` の `send`、`recv` と、`Std.Net` の待つ関数) でだけ届く。読み書きの extern と `par` の子は取り消しの地点でない ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
 - タスクの中で `Async.run` を入れ子に呼ぶと、中のスコープのタスクがすべて終わるまで、呼んだタスクはスタックを持ったまま待ち、その間は取り消しの地点でない。中のタスクには取り消しが届く。`shield` の中では、入れ子の `run` の根が境目になる ([VM](../spec/vm.md) の「待ちの2種類」)

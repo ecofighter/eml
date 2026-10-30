@@ -23,7 +23,7 @@ The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/`
 
 ## Commands
 
-The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable. Every Rust toolchain comes from fenix: stable is pinned in `rust-toolchain.toml` to the version Verus requires (1.99.1); the flake reads its channel and rustup reads the same file outside nix, and it serves the devShell, `nix build` and Verus; the `.#miri` shell has a nightly with miri and rust-src, and the `.#cross` shell adds the Windows msvc and Linux `rust-std` to the stable toolchain for cross-target clippy (docs/implementation/testing.md の「OS ごとのテスト」). The devShell provides clippy, rustfmt, rust-analyzer, cargo-insta, cargo-nextest, and `verus` / `cargo-verus` and `verusfmt`. Every shell sets `CARGO_HOME` to `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` so rustup's `~/.cargo/bin` proxies do not shadow fenix's `cargo-clippy` / `cargo-miri`.
+The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable. Every Rust toolchain comes from fenix: stable is pinned in `rust-toolchain.toml` to the version Verus requires (1.99.1); the flake reads its channel and rustup reads the same file outside nix, and it serves the devShell, `nix build` and Verus; the `.#miri` shell has a nightly with miri and rust-src (Miri and AddressSanitizer use it), and the `.#cross` shell adds the Windows msvc and the x86_64 and aarch64 Linux `rust-std` to the stable toolchain for cross-target clippy (docs/implementation/testing.md の「OS ごとのテスト」). The flake covers x86_64-linux, aarch64-linux and aarch64-darwin. The devShell provides clippy, rustfmt, rust-analyzer, cargo-insta, cargo-nextest, and `verus` / `cargo-verus` and `verusfmt` (x86_64-linux and aarch64-darwin only). Every shell sets `CARGO_HOME` to `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` so rustup's `~/.cargo/bin` proxies do not shadow fenix's `cargo-clippy` / `cargo-miri`.
 
 ```sh
 cargo build                          # all crates
@@ -35,11 +35,13 @@ cargo clippy --all-targets -- -D warnings && cargo fmt
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core; eml_test_support also hir)
 cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--stats] [--sched normal|sequential|seeded:N] <file.em> [args...] (the VM; --debug-heap is checked mode; --stats is checked mode and prints the counters of `RunStats` on stderr after a run that did not fail; --sched picks how `par` children and `Async` tasks switch, normal (a timer-driven monitor thread) by default; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--sched ...] [file.em] (the terminal REPL)
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
-nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # type-check the Windows-only code (Linux: x86_64-unknown-linux-gnu)
+nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # type-check the Windows-only code (Linux: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (also eml_vm --test integration -- api:: signal::; docs/implementation/testing.md の「AddressSanitizer」)
 nix build                            # build the eml binary (eml_cli)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri, trusted tests only; run once more with -Zmiri-tree-borrows added
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # Miri on the VM's small runs (same two settings)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write   # Miri on the read and write lends in eml_vm's op records (same two settings)
+nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_io --lib -- driver::tests::   # Miri on eml_io's driver core over a fake backend (same two settings)
 cargo verus verify -p eml_rt         # Verus proofs of eml_rt
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)
@@ -87,7 +89,7 @@ A batch pipeline whose dependencies flow strictly top to bottom (docs/implementa
 ```
 eml_cli          check / run / repl; the only pipeline driver (`Session`); stage features types < core < run
 eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `par`, `Async` tasks and channels on one worker; `Machine` appends programs by name (the REPL)
-eml_io           IoDriver implementations: the compio-driver real driver and the deterministic test driver; jobs run on compio's pool inside the real driver (`Asyncify`, at most 32 threads); name lookups run on the driver's resolver threads (at most 8 live, 64 abandoned)
+eml_io           IoDriver implementations: the real driver (an OS-free core in `driver/` over per-OS backends in `sys/`: epoll, kqueue, IOCP without sockets) and the deterministic test driver; jobs run on the core's own pool (at most 32 threads, then queued); name lookups run on its resolver threads (at most 8 live, 64 abandoned)
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
 eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> Perceus -> reuse, verifier
@@ -146,7 +148,7 @@ The rules are in docs/implementation/testing.md; the facts below are the ones ev
 - `eml_test_support` (dev-only) wraps `eml_cli::Session` for integration tests. Use it only from `tests/`, never from `#[cfg(test)]` in `src/`: the crate under test would be linked twice. Stages are features (`hir` < `types` < `core` < `run`); each crate enables only up to its own stage, so its tests still build while downstream crates are broken mid-refactor.
 - Core IR and LIR tests are written as IR text read by `eml_core_ir::parse` / `eml_lir::parse`; hand-written LIR tests live in `crates/eml_lir/tests` (docs/implementation/testing.md の「LIR のテキストの形」).
 - The `bench/` programs have their `RunStats` pinned by inline snapshots in `crates/eml_vm/tests/bench.rs`, so a change in work counts is an expected-value change. When a stage that touched `eml_vm`, `eml_rt`, `eml_lir`, `eml_core_ir`, `std/` or `bench/` closes, replace the three tables in docs/implementation/benchmarks.md の「今の数値」 with fresh `bench/run.sh`, `bench/rt.sh` and `bench/scripts.sh` output measured on a clean tree; the stage-by-stage history is the file's git log.
-- CI (`.github/workflows/ci.yml`) runs the tests, clippy and the feature-combo clippy on macOS, Linux and Windows, `cargo fmt --check` on Linux, and Verus, verusfmt and Miri on Linux through nix; it checks pass/fail only, never timing, and never retries (docs/implementation/testing.md の「CI」).
+- CI (`.github/workflows/ci.yml`) runs the tests, clippy and the feature-combo clippy on macOS, Linux (x86_64 and aarch64) and Windows, `cargo fmt --check` on Linux, Verus, verusfmt and Miri on Linux through nix, and `eml_io` plus the VM's real-driver tests under AddressSanitizer on x86_64 Linux, aarch64 Linux and macOS; it checks pass/fail only, never timing, and never retries (docs/implementation/testing.md の「CI」).
 - A change to `eml_rt` has a gate of its own: see `crates/eml_rt/CLAUDE.md`.
 
 ## Syntax
