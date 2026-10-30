@@ -780,8 +780,13 @@ spin_checked n buf a b =
 }
 
 /// 1つのタスクが自分で待ち受け、接続し、受け、`hi` を書いてから、`buf` を buffer にして読む。返すのは出力と、
-/// `Recorder` の記録である。
+/// `Recorder` の記録である。検査モードで流す。
 fn read_into(buf: &str) -> (String, Log) {
+    read_into_in(buf, false)
+}
+
+/// `read_into` を、`fast` なら速いモードの、そうでなければ検査モードの `Machine` で流す。
+fn read_into_in(buf: &str, fast: bool) -> (String, Log) {
     let src = format!(
         "\
 import Async
@@ -808,25 +813,45 @@ main () = Async.run (fn () ->
         log: Arc::clone(&log),
     };
     let (host, out) = capture_host(Default::default());
-    let mut machine =
-        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
-    let loaded = machine.load(&eml_test_support::lir(src.as_str())).unwrap();
-    machine
-        .run(loaded.entry)
-        .unwrap_or_else(|error| panic!("{error}"));
-    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    let program = eml_test_support::lir(src.as_str());
+    let control = RunConfig::default().control;
+    let driver = Box::new(driver);
+    if fast {
+        run_to_close(
+            Machine::<eml_rt::Fast>::new(control, host).with_driver(driver),
+            &program,
+        );
+    } else {
+        run_to_close(
+            Machine::<Checked>::new(control, host).with_driver(driver),
+            &program,
+        );
+    }
     let log = std::mem::take(&mut *log.lock().unwrap());
     (out.contents(), log)
 }
 
-/// 一意で空きが 8 バイト以上ある buffer の読みは、読めるようになるのを待つ操作を出さず、空きを貸す読みだけを出す
-/// (docs/spec/vm.md の「操作の記録」)。
+/// `machine` で `program` を流して閉じる。
+fn run_to_close<M: eml_rt::Mode>(mut machine: Machine<M>, program: &eml_lir::Program) {
+    let loaded = machine.load(program).unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// 一意で空きが 8 バイト以上ある buffer の読みは、読めるようになるのを待つ操作を出さず、空きを貸す読みだけを出す。
+/// 速いモードでは貸す道が検査の誤りでなく前提に頼るので、両方のモードで流す (docs/spec/vm.md の「操作の記録」)。
 #[test]
 fn a_read_into_room_does_not_probe() {
-    let (out, log) = read_into("Bytes.with_capacity 16");
-    assert_eq!(out, "hi\n");
-    assert_eq!(log.ops, ["listen", "connect", "accept", "write", "read"]);
-    assert!(log.lent[0] >= 16, "{log:?}");
+    for (out, log) in [
+        read_into_in("Bytes.with_capacity 16", false),
+        read_into_in("Bytes.with_capacity 16", true),
+    ] {
+        assert_eq!(out, "hi\n");
+        assert_eq!(log.ops, ["listen", "connect", "accept", "write", "read"]);
+        assert!(log.lent[0] >= 16, "{log:?}");
+    }
 }
 
 /// `Bytes.of_string "> "` の空きは、確保器が長さを語に切り上げた 8 バイトより少ない余りだけである。そのため読みは、

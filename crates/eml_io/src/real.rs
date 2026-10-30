@@ -122,9 +122,10 @@ impl IoBuf for Mem {
             return &[];
         }
         // SAFETY: `len <= cap` で、貸した側は、`submit` が `Submit::Done` を返すか完了を取り出すまで記憶を生かし、
-        // 一意に保ち、動かさない。記憶は `Bytes` の
-        // 物体の空きか、操作の記録が持つ `Foreign` の `Vec<u8>` の空きである。書きの出し直しの `RawBuf` は貸した記憶の
-        // 後ろの部分を指す。driver は貸した側と同じスレッドで動く (`RawBuf`。docs/spec/vm.md の「時計と driver」、
+        // 一意に保ち、動かさない。書きの記憶は `Bytes` の物体の中身で、`len` バイトはみな初期化してある。読みの記憶は
+        // `Bytes` の物体の空きか、操作の記録が持つ `Foreign` の `Vec<u8>` の未初期化の空きで、初期化してあるのは外が
+        // 書いた先頭の `len` バイトだけである。書きの出し直しの `RawBuf` は貸した記憶の後ろの部分を指す。driver は
+        // 貸した側と同じスレッドで動く (`RawBuf`。docs/spec/vm.md の「時計と driver」、
         // docs/spec/object-model.md の T10 の行)
         unsafe { std::slice::from_raw_parts(self.buf.ptr, self.len) }
     }
@@ -143,8 +144,9 @@ impl IoBufMut for Mem {
         if self.buf.cap == 0 {
             return &mut [];
         }
-        // SAFETY: `as_init` と同じ。読みの間は貸した側も記憶に触れない。外が書いた長さは貸した側が `bytes_commit`
-        // で確定する (docs/spec/object-model.md の T10 の行)
+        // SAFETY: `as_init` と同じ。読みの間は貸した側も記憶に触れない。空きは未初期化なので `MaybeUninit` で渡す。
+        // 外が書いた長さは貸した側が確定する。`Bytes` の空きは `bytes_commit` で、ストリームの `Vec<u8>` の空きは
+        // `set_len` で確定する (docs/spec/object-model.md の T10 の行、docs/spec/vm.md の「操作の記録」)
         unsafe { std::slice::from_raw_parts_mut(self.buf.ptr.cast(), self.buf.cap) }
     }
 }

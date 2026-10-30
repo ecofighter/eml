@@ -585,10 +585,12 @@ impl NetStream {
     /// 貸した空きのうち、driver が書いた先頭の `n` バイトを長さに確定する。残りがなければ確保を放す。
     ///
     /// # Safety
-    /// `filled` と `n` は `lend_room` が返した長さと、その記憶に driver が書き終えたバイト数で、その後 `rest` に
-    /// 触れていない。
+    /// `filled` は `lend_room` が返した長さで、その後 `rest` に触れていない。`n` は貸した記憶の `cap` 以下で、driver が
+    /// その記憶の先頭に書き終えたバイト数である。
     unsafe fn commit_room(&mut self, filled: usize, n: usize) {
-        // `filled + n` は貸した空きの内で、その前のバイトはみな初期化してある
+        debug_assert!(filled == self.rest.len());
+        debug_assert!(filled + n <= self.rest.capacity());
+        // `n <= cap` なので `filled + n` は貸した空きの内で、その前のバイトはみな初期化してある
         unsafe { self.rest.set_len(filled + n) };
         if self.rest.is_empty() {
             self.rest = Vec::new();
@@ -2822,16 +2824,16 @@ fn serve_rest<M: Mode>(
     Ok(Some((buf, n)))
 }
 
-/// 記録に移ってきた `Bytes` の参照 `buf` が一意で、長さの後ろの空きが `MIN_ROOM` バイト以上あれば、そのうち
+/// 読みの受け付けに移ってきた `Bytes` の参照 `buf` が一意で、長さの後ろの空きが `MIN_ROOM` バイト以上あれば、そのうち
 /// `READ_ROOM` バイトまでを読みに貸す。ほかは `None` で、何も変えない (docs/spec/vm.md の「操作の記録」)。
 fn spare_room<M: Mode>(ctx: &mut Ctx<M>, buf: Word) -> Result<Option<RawBuf>, CellFault> {
-    // `buf` は記録が持つ今の worker の参照で、`Ctx` の持つ語には触れない
+    // `buf` は呼ぶ側から移ってきた今の worker の参照で、この後に作る記録へ移す。`Ctx` の持つ語には触れない
     let heap = unsafe { ctx.heap_mut() };
     if !unsafe { heap.is_unique(buf) }? {
         return Ok(None);
     }
-    // 記録が物体を生かし、一意に保ち、完了を受け取るまで書き換えないので、driver はこの空きに書ける
-    // (docs/spec/object-model.md の T10 の行)
+    // 受け付けは driver に出す前に記録を作って buffer を移す。記録が物体を生かし、一意に保ち、完了を受け取るまで
+    // 書き換えないので、driver はこの空きに書ける (docs/spec/object-model.md の T10 の行)
     let raw = unsafe { heap.bytes_lend(buf)? };
     Ok((raw.cap >= MIN_ROOM).then(|| RawBuf {
         ptr: raw.ptr,
@@ -4209,7 +4211,7 @@ fn complete_op(
 /// 行の連鎖の読みを、外の書き手が `bytes` を書き終えるまで進める。周が読めるようになるのを待っていれば、その完了を
 /// 当てる。貸されたストリームの buffer の空きに外の書き手として書けるだけ書き、その長さで読みを終わらせる。空きが
 /// `bytes` より少なければ、次の周で残りを書く。返すのは、最初の周が読めるようになるのを待ったかと、最初の周に貸された
-/// 空きのバイト数である。
+/// 空きのバイト数と、周ごとに書いたバイト数である。
 #[cfg(test)]
 fn read_line_round(
     registry: &mut Registry,
@@ -4218,8 +4220,9 @@ fn read_line_round(
     op: CellRef,
     bytes: &[u8],
     out: &mut Vec<Runnable>,
-) -> (bool, usize) {
+) -> (bool, usize, Vec<usize>) {
     let mut first = None;
+    let mut reads = Vec::new();
     let mut rest = bytes;
     loop {
         let probed = matches!(registry.op_mut(op).unwrap().phase, OpPhase::Probe);
@@ -4236,9 +4239,11 @@ fn read_line_round(
         let n = raw.cap.min(rest.len());
         unsafe { std::ptr::copy_nonoverlapping(rest.as_ptr(), raw.ptr, n) };
         complete_op(registry, ctx, driver, op, Ok(Done::Size(n)), out);
+        reads.push(n);
         rest = &rest[n..];
         if rest.is_empty() {
-            return first.unwrap();
+            let (probed, room) = first.unwrap();
+            return (probed, room, reads);
         }
         assert!(out.is_empty());
     }
@@ -4270,7 +4275,7 @@ fn a_read_line_lends_the_stream_buffer_and_frees_it_when_empty() {
                 .is_none()
         );
         let mut out = Vec::new();
-        let (waited, room) =
+        let (waited, room, _) =
             read_line_round(&mut registry, &mut ctx, &mut driver, op, bytes, &mut out);
         // 2周目は、1周目に広げた buffer の残った空きを貸す
         assert_eq!(waited, probed);
@@ -4348,10 +4353,11 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
 }
 
-/// 行の連鎖を、周ごとに `chunks` の1つを外の書き手として書いて進める。最後の周の前には終わらず、最後の周で終わる
-/// ことを確かめる。返すのは、成功なら記録が写した行の文字列のバイト数、失敗なら `finish` が投げる文言である。
+/// 行の連鎖を、`chunks` を順に外の書き手として書いて進める。1つの塊は、貸された空きが足りなければ2つ以上の周に
+/// 分かれる。最後の塊の前には終わらず、最後の塊で終わることを確かめる。返すのは、成功なら記録が写した行の文字列の
+/// バイト数、失敗なら `finish` が投げる文言と、周ごとに読んだバイト数である。
 #[cfg(test)]
-fn read_line_through(chunks: &[&[u8]]) -> Result<usize, String> {
+fn read_line_through(chunks: &[&[u8]]) -> (Result<usize, String>, Vec<usize>) {
     let mut ctx = test_ctx();
     let mut driver = NoDriver::default();
     let mut registry = Registry::new(Vec::new());
@@ -4366,9 +4372,12 @@ fn read_line_through(chunks: &[&[u8]]) -> Result<usize, String> {
         .park_io(&mut driver, token, me, Word::UNIT)
         .unwrap();
     let mut out = Vec::new();
+    let mut reads = Vec::new();
     for chunk in chunks {
         assert!(out.is_empty());
-        let _ = read_line_round(&mut registry, &mut ctx, &mut driver, op, chunk, &mut out);
+        let (_, _, round) =
+            read_line_round(&mut registry, &mut ctx, &mut driver, op, chunk, &mut out);
+        reads.extend(round);
     }
     assert!(matches!(
         out.as_slice(),
@@ -4391,7 +4400,7 @@ fn read_line_through(chunks: &[&[u8]]) -> Result<usize, String> {
     };
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
     assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
-    result
+    (result, reads)
 }
 
 /// 上限の失敗の文言。
@@ -4405,11 +4414,12 @@ fn a_read_line_of_exactly_the_limit_is_accepted() {
     let chunk = vec![b'a'; READ_ROOM];
     let mut chunks = vec![&chunk[..]; LINE_LIMIT / READ_ROOM];
     chunks.extend([&b"\r"[..], b"\n"]);
-    assert_eq!(read_line_through(&chunks), Ok(LINE_LIMIT + 2));
+    assert_eq!(read_line_through(&chunks).0, Ok(LINE_LIMIT + 2));
 }
 
 /// 上限を越える読みが改行を運んできても、行の中身が `LINE_LIMIT` バイトを超えれば失敗する。結果はバイトが読みにどう
-/// 分かれて届いたかによらない (docs/spec/stdlib.md の「`Std.Net`」)。
+/// 分かれて届いたかによらない (docs/spec/stdlib.md の「`Std.Net`」)。広げ方が変わってもこの場合を確かめ続けるように、
+/// 最後の読みの前の中身が上限以内で、改行を運ぶ最後の読みが上限を越えることも確かめる。
 #[test]
 fn a_read_line_whose_newline_crosses_the_limit_fails() {
     let chunk = vec![b'a'; READ_ROOM];
@@ -4417,7 +4427,14 @@ fn a_read_line_whose_newline_crosses_the_limit_fails() {
     chunks.push(&chunk[10..]);
     let last = [&[b'a'; 20][..], b"\n"].concat();
     chunks.push(&last);
-    assert_eq!(read_line_through(&chunks), Err(TOO_LONG.to_owned()));
+    let (result, reads) = read_line_through(&chunks);
+    assert_eq!(result, Err(TOO_LONG.to_owned()));
+    let (last, before) = reads.split_last().unwrap();
+    let before: usize = before.iter().sum();
+    assert!(
+        before <= LINE_LIMIT && before + last - 1 > LINE_LIMIT,
+        "{reads:?}"
+    );
 }
 
 /// 改行のないまま中身が `LINE_LIMIT` バイトを超えた行の連鎖は、種類 `Other` の誤りで終わる
@@ -4427,7 +4444,7 @@ fn a_read_line_past_the_limit_fails() {
     let chunk = vec![b'a'; READ_ROOM];
     let mut chunks = vec![&chunk[..]; LINE_LIMIT / READ_ROOM];
     chunks.push(b"a");
-    assert_eq!(read_line_through(&chunks), Err(TOO_LONG.to_owned()));
+    assert_eq!(read_line_through(&chunks).0, Err(TOO_LONG.to_owned()));
 }
 
 /// `read_line` が読みすぎたバイトは、次の読みが driver の操作を出さずに先に返す。受け付けの時点で終わった記録は鍵の
