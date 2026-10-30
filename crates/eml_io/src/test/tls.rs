@@ -127,8 +127,8 @@ impl Terminator {
             .collect();
         let mut moved = !bytes.is_empty();
         // クライアントのバイトを受ける前にサーバーが閉じたときだけ、TLS のバイトを送らずに EOF を見せる。
-        // handshake の途中で閉じたときは、handshake を終えてから close_notify を送る。こうすると、受ける側が先に
-        // 待っていれば、結果がタスクの順によらない
+        // handshake の途中で閉じたときは、handshake を終えてから close_notify を送る。どちらになるかは受けが
+        // ClientHello を汲む前に終わるかで決まり、その順は VM のスケジュールが決めない (docs/spec/vm.md の「時計と driver」)
         if !self.stopped
             && !self.started
             && net.ends[&s].closed
