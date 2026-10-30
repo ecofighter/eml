@@ -242,7 +242,7 @@ script_row '`grep -n`' log 70000 grep -n "/api/v1/items/7 "
 script_row '`logstat`' log 6700 logstat
 script_row '`logstat --whole`' log 6700 logstat --whole
 script_row '`csv2jsonl`' csv 2900 csv2jsonl --columns id,name,score @IN @OUT
-https_row https-get 600
+https_row '`https-get`' 600
 echo
 echo "数値計算"
 echo
