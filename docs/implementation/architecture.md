@@ -374,6 +374,22 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 起こしが長い待ちを終わらせることは、結合テストが遠い期限と期限 `u64::MAX` の `wait` で確かめる
 - 結合テストは `tests/main.rs` が1つのバイナリ `integration` にまとめる。本物の driver の時計、期限までの待ち、別のスレッドからの起こしの後も待ちが動くこと、プールの仕事とその上限、unix でプールのスレッドが SIGINT と SIGTERM を塞ぐこと、仕事が走る driver を落としても仕事を待たないこと、落とした後の起こしと、待つ前の起こしが次の待ちだけを終えること、unix のループバックの TCP の上の読めるまでの待ち、読み、書き、取り消し、EOF、`quiesce` と、待ち受け、受け、接続、拒まれた接続、閉じた相手への書き、`shutdown_write`、長い書きの出し直しとその取り消し、1つのストリームで待つ読みと待つ書きが両方終わること、溜まった接続の受け、リセットで終わる待つ書き、シグナルで割り込まれた待ち、名前の解決とその2つの上限と、Windows のソケットの操作が `Unsupported` であることと、テストの driver の性質 (時計は終わる操作がないときだけ進むこと、seed が決着の組の中身を変えないこと、`HandleBin` を先に空にすること、閉じた相手への書きが `BrokenPipe` になること、まだ終わっていない操作の取り消しが次の決着で `cancelled` で終わり、すでに終わった操作は取り消しても結果のまま渡すこと、仮想のネットワークのポートの振り方と backlog と EOF) を確かめる
 
+## `eml_tls` の内部
+
+- `Conn` は rustls の接続 (`rustls::Connection`) と、復号した平文の列を持ち、I/O を持たない。暗号文は呼ぶ側が `push_tls` で渡し、`pull_tls` で受け取る。相手の EOF は `push_eof` で知らせる。provider は接続ごとに `builder_with_provider` で aws-lc-rs のものを渡し、`install_default` は呼ばない。設定も接続ごとに作り、プロセスの全体で共有する状態を持たない
+- `Conn::client` が信頼する根は、webpki-roots の根に、渡された PEM の証明書を足したものである。PEM が空なら webpki-roots の根だけになる。PEM が読めないとき、証明書を根に足せないとき、空でない入力から証明書が1つも出てこないときは `Error::CaPem` になる。受ける版は TLS 1.2 と 1.3 である
+- 作るときに `set_buffer_limit(None)` を呼び、送る側の buffer の上限を外す。上限があると、`write_plain` が平文の一部しか受け取らないことがある。受けた平文の buffer にはこの呼び出しと別の上限 (16 KiB) があり、満ちると `read_tls` が失敗する。そこで `push_tls` は `process_new_packets` を呼ぶたびに、rustls の平文を自分の列へすべて移す。移す前に読み終えた部分を詰めるが、`plaintext()` が返すバイトの並びは変わらないので、その中の位置は `push_tls` の呼び出しをまたいでも同じバイトを指す。`consume` で列が空になったら `Vec` を手放す
+- `status()` は次の5つの印の和を返す
+  - `HANDSHAKING` (1): rustls の `is_handshaking()` が真である
+  - `HAS_OUTGOING` (2): rustls の `wants_write()` が真で、`pull_tls` で出すバイトがある
+  - `PEER_CLOSED` (4): 相手の close_notify を処理した
+  - `TRUNCATED` (8): `push_eof` を受け、close_notify はまだ受けていない。handshake の途中の EOF もこれになる
+  - `FAILED` (16): 失敗を記録した
+- 失敗は最初の1つだけを記録し、その後の `push_tls` は何も読まず、`write_plain` は平文を捨てる。同じ `push_tls` の中で失敗の前に復号できた平文は列に残す。それを捨てるかどうかは呼ぶ側が決める。失敗の後も rustls が積んだ alert は `pull_tls` で取り出せるので、呼ぶ側は相手に失敗を伝えてから閉じられる。close_notify を受けた後も `push_tls` は何も読まず、その後ろのレコードは捨てる
+- 文言は固定である。作るときの誤り (`Error`) はそれぞれ1つの文言を持つ。証明書の拒否 (rustls の `InvalidCertificate`) は理由によらず `the server certificate was rejected` とし、rustls の詳細を付けない。ほかの TLS の誤りと `read_tls` の誤りは rustls の文言をそのまま使う
+- `send_close_notify` は rustls のものを呼ぶだけで、2度目は何もしない。致命的な alert を送った後も何もしない。close_notify を送った後の `write_plain` も、rustls は止めずにレコードを作る。そのため、呼ぶ側がソケットの送る向きを閉じた後に書くと、そのレコードはソケットまで届いてそこで失敗する
+- `Conn::server` と `fixtures` は、テストの driver の終端器とテストのためだけにある。`fixtures` の鍵は公開されたテスト用の定数で、何も認証しない
+
 ## ソースファイルと位置
 
 - `FileId` と `SourceFiles` (`FileId` → パスとテキスト) は `eml_diagnostics` に置く。`SourceFiles` には読み込みの段が読んだすべてのファイルが入る。`FileId` はモジュールの番号と同じ順である
