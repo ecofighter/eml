@@ -7,10 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eml_rt::{
-    Checked, Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf,
+    Checked, Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit,
 };
 use eml_test_support::{run, run_stats};
-use eml_vm::{Machine, RunConfig, capture_host};
+use eml_vm::{Machine, RunConfig, Sched, capture_host};
 
 /// `Net` のつながった2つのストリーム `a` (接続した側) と `b` (受けた側) を作る本体の頭。待ち受け、受け、接続の完了を
 /// 1つずつ受け、待ちは3つの操作と `await` の4回である。
@@ -220,7 +220,7 @@ fn a_buffered_read_line_counts_no_completion() {
 #[test]
 fn a_read_line_that_is_not_utf8_raises_not_utf8() {
     let (out, _) = connected_stats(
-        "  let a = Net.write_bytes (Bytes.append (Bytes.make 1 (Byte.wrap 255)) (Bytes.of_string \"\\n\")) a
+        "  let (_, a) = Net.write_bytes (Bytes.append (Bytes.make 1 (Byte.wrap 255)) (Bytes.of_string \"\\n\")) a
   Net.close a
   match try_io (fn () -> Net.read_line b) with
     | Ok (_, b) ->
@@ -240,7 +240,6 @@ fn a_read_line_that_is_not_utf8_raises_not_utf8() {
 /// 間に合わなかったものとして、貸された記憶に `xy` を書いて2バイトで終わる。
 #[derive(Default)]
 struct HoldingDriver {
-    next_key: OpKey,
     held: Vec<(OpKey, Option<RawBuf>)>,
     done: Vec<Completion>,
 }
@@ -260,9 +259,7 @@ impl IoDriver for HoldingDriver {
         Ok(!self.done.is_empty())
     }
 
-    fn submit(&mut self, op: Op) -> OpKey {
-        self.next_key += 1;
-        let key = self.next_key;
+    fn submit(&mut self, key: OpKey, op: Op) -> Submit {
         match op {
             Op::Readable { .. } => self.done.push(Completion {
                 key,
@@ -288,7 +285,7 @@ impl IoDriver for HoldingDriver {
             }),
             _ => self.held.push((key, None)),
         }
-        key
+        Submit::Pending
     }
 
     fn cancel(&mut self, key: OpKey) {
@@ -464,4 +461,528 @@ main () = Async.run (fn () ->
     assert_eq!(out.contents(), "waiting\n");
     // 待ち受けの完了だけが届き、受けは終わらないまま残った
     assert_eq!(finished.stats.completions, 1);
+}
+
+/// テストの driver を包み、`wait` と `completions` の呼び出しの数と、受け付けた操作の種類、操作ごとに受け付けで
+/// 終わったか、読みに貸された大きさを記録する driver。`quiesce` で、`submit` がその場で終えた操作の数を写す。
+/// `Machine` が driver を持つ間も、テストが記録を読めるようにする。
+struct Recorder {
+    inner: eml_io::TestDriver,
+    log: Arc<std::sync::Mutex<Log>>,
+}
+
+#[derive(Default, Debug)]
+struct Log {
+    waits: usize,
+    completions: usize,
+    ops: Vec<&'static str>,
+    /// `ops` の操作ごとに、`submit` が `Submit::Done` を返したか。
+    at_submit: Vec<bool>,
+    /// `Op::Read` ごとの、貸された記憶のバイト数。
+    lent: Vec<usize>,
+    immediate: u64,
+}
+
+impl IoDriver for Recorder {
+    fn now(&self) -> Duration {
+        self.inner.now()
+    }
+
+    fn wait(&mut self, deadline_ms: Option<u64>) -> io::Result<bool> {
+        self.log.lock().unwrap().waits += 1;
+        self.inner.wait(deadline_ms)
+    }
+
+    fn submit(&mut self, key: OpKey, op: Op) -> Submit {
+        let mut log = self.log.lock().unwrap();
+        let kind = match op {
+            Op::Readable { .. } => "readable",
+            Op::Read { buf, .. } => {
+                log.lent.push(buf.cap);
+                "read"
+            }
+            Op::Write { .. } => "write",
+            Op::Listen { .. } => "listen",
+            Op::Accept { .. } => "accept",
+            Op::Connect { .. } => "connect",
+            _ => "other",
+        };
+        log.ops.push(kind);
+        let submit = self.inner.submit(key, op);
+        log.at_submit.push(matches!(submit, Submit::Done(_)));
+        submit
+    }
+
+    fn cancel(&mut self, key: OpKey) {
+        self.inner.cancel(key);
+    }
+
+    fn completions(&mut self, out: &mut Vec<Completion>) {
+        self.log.lock().unwrap().completions += 1;
+        self.inner.completions(out);
+    }
+
+    fn pending(&self) -> usize {
+        self.inner.pending()
+    }
+
+    fn waker(&self) -> Arc<dyn IoWaker> {
+        self.inner.waker()
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        self.inner.bin()
+    }
+
+    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
+        self.inner.shutdown_write(handle)
+    }
+
+    fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()> {
+        self.inner.set_nodelay(handle, on)
+    }
+
+    fn close(&mut self, handle: IoHandle) {
+        self.inner.close(handle);
+    }
+
+    fn quiesce(&mut self) {
+        self.inner.quiesce();
+        self.log.lock().unwrap().immediate = self.inner.immediate();
+    }
+}
+
+/// 1つのタスクが自分で待ち受け、接続し、受け、書いて読む。テストの driver はどれも受け付けの時点で終えるので、
+/// 待ちはどれも速い道で続け、driver の `wait` も `completions` も呼ばない。`parks` は `io_wait` の呼び出しの数で、
+/// `completions` は終わった操作の数である。読みは buffer に空きがあるので、その空きを貸す読みを1つだけ出す
+/// (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn one_task_of_finished_ops_never_waits_on_the_driver() {
+    let src = "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let a = Net.connect \"127.0.0.1\" port
+  let (b, l) = Net.accept l
+  Net.close_listener l
+  let (_, a) = Net.write_bytes (Bytes.of_string \"hi\") a
+  let (buf, b) = Net.read_chunk (Bytes.with_capacity 16) b
+  Net.close a
+  Net.close b
+  println (String.decode buf))
+";
+    let log = Arc::new(std::sync::Mutex::new(Log::default()));
+    let driver = Recorder {
+        inner: eml_io::TestDriver::new(None),
+        log: Arc::clone(&log),
+    };
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "hi\n");
+    let log = log.lock().unwrap();
+    assert_eq!(log.ops, ["listen", "connect", "accept", "write", "read"]);
+    assert_eq!((log.immediate, log.waits, log.completions), (5, 0, 0));
+    let s = finished.stats;
+    assert_eq!((s.parks, s.completions, s.cancels), (5, 5, 0));
+}
+
+/// `write_bytes` は渡した buffer を写さずにそのまま返す。echo を2つの形で流す。一意の形は、返った buffer を次の往復の
+/// 書きに渡す。共有の形は、返った buffer を捨て、引数で持ち続ける同じ buffer を毎回書くので、書く buffer にはいつも
+/// もう1つの参照がある。書きは一意を求めないので、往復ごとの確保の数と写したバイトの数は2つの形で同じになる。書きが
+/// 一意でない buffer を写すと、共有の形だけ往復ごとに確保と写しが増える。読みの buffer は `Bytes.with_capacity` で作り、
+/// 4 バイトの返事を1回の読みで受ける (docs/spec/stdlib.md の「`Std.Net`」、docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn write_bytes_returns_the_same_buffer() {
+    let counts = |rounds: u64, shared: bool| {
+        let write = if shared {
+            "let (_, a) = Net.write_bytes msg a"
+        } else {
+            "let (msg, a) = Net.write_bytes msg a"
+        };
+        let src = format!(
+            "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+import String
+echo : Int -> Bytes -> Bytes -> Bytes -> Net.TcpStream -> Net.TcpStream -> <IO, Panic, Async> Bytes
+echo n msg r q a b =
+  if n == 0 then
+    Net.close a
+    Net.close b
+    q
+  else
+    {write}
+    let (r, b) = Net.read_chunk (Bytes.truncate 0 r) b
+    let (r, b) = Net.write_bytes r b
+    let (q, a) = Net.read_chunk (Bytes.truncate 0 q) a
+    echo (n - 1) msg r q a b
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let a = Net.connect \"127.0.0.1\" port
+  let (b, l) = Net.accept l
+  Net.close_listener l
+  let q = echo {rounds} (Bytes.of_string \"ping\") (Bytes.with_capacity 16) (Bytes.with_capacity 16) a b
+  println (String.decode q))
+"
+        );
+        let (out, stats) = run_stats(src.as_str());
+        let s = stats.unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(out, "ping\n");
+        (s.allocations, s.string_bytes_copied)
+    };
+    let per_round = |shared: bool| {
+        let (one, two, three) = (counts(1, shared), counts(2, shared), counts(3, shared));
+        assert_eq!(three.0 - one.0, 2 * (two.0 - one.0));
+        assert_eq!(three.1 - one.1, 2 * (two.1 - one.1));
+        (two.0 - one.0, two.1 - one.1)
+    };
+    assert_eq!(per_round(true), per_round(false));
+}
+
+/// 2つのタスクが 20 往復の echo をする。操作が受け付けで終わるかは順で変わるが、`parks` は `io_wait` の呼び出しの数、
+/// `completions` は終わった操作の数なので、どの seed でも同じである (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn echo_counts_do_not_depend_on_the_seed() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+import String
+serve : Int -> Net.TcpStream -> <IO, Panic, Async> Unit
+serve n s =
+  if n == 0 then Net.close s
+  else
+    let (buf, s) = Net.read_chunk (Bytes.empty ()) s
+    let (_, s) = Net.write_bytes buf s
+    serve (n - 1) s
+ask : Int -> Int -> Net.TcpStream -> <IO, Panic, Async> Int
+ask n got c =
+  if n == 0 then
+    Net.close c
+    got
+  else
+    let c = Net.write \"ping\" c
+    let (buf, c) = Net.read_chunk (Bytes.empty ()) c
+    ask (n - 1) (got + Bytes.length buf) c
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    serve 20 s)
+  let c = Net.connect \"127.0.0.1\" port
+  let got = ask 20 0 c
+  Async.await t
+  println (show got))
+";
+    let program = eml_test_support::lir(src);
+    let counts: Vec<_> = [1, 2, 3]
+        .into_iter()
+        .map(|seed| {
+            let config = RunConfig::default()
+                .with_debug_heap(true)
+                .with_sched(Sched::Seeded(seed));
+            let (out, stats) = eml_test_support::execute(&program, &config);
+            let s = stats.unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+            assert_eq!(out, "80\n", "seed {seed}");
+            (s.parks, s.completions)
+        })
+        .collect();
+    // 待ちは待ち受け、受け、接続、`await` と、往復ごとに両側の書きと読み。完了は読みが2つずつ
+    assert_eq!(counts, [(84, 123); 3]);
+}
+
+/// 自分の2つの端 `a` と `b` で、書きと読みを `n` 回繰り返す関数 `spin_io` と、それを呼ぶ前の本体の頭。テストの driver
+/// では、どの操作も受け付けの時点で終わる。回るたびに `counter` に1を足す。
+const SPIN_IO: &str = "\
+import Async (Async)
+import Async
+import Atomic
+import Bytes
+import Net
+spin_io : Int -> Atomic.Counter -> Bytes -> Net.TcpStream -> Net.TcpStream -> <IO, Panic, Async> Unit
+spin_io n counter buf a b =
+  if n == 0 then
+    Net.close a
+    Net.close b
+  else
+    let a = Net.write \"x\" a
+    let (buf, b) = Net.read_chunk (Bytes.truncate 0 buf) b
+    let _ = Atomic.add 1 counter
+    spin_io (n - 1) counter buf a b
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let counter = Atomic.new 0
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let a = Net.connect \"127.0.0.1\" port
+  let (b, l) = Net.accept l
+  Net.close_listener l
+";
+
+/// `Sequential` で、終わった操作だけを 300 回待つループも、操作の予算を使い切るとほかのタスクに worker を渡す。先に
+/// 始めたタスクは、ループの終わりより前に動く (docs/spec/stdlib.md の「操作の予算」)。
+#[test]
+fn a_fast_path_loop_yields_to_another_task_under_sequential() {
+    let src = format!(
+        "{SPIN_IO}  let t = Async.start (fn () -> println \"other\")
+  spin_io 300 counter (Bytes.empty ()) a b
+  println \"loop done\"
+  Async.await t)
+"
+    );
+    let (out, stats) = run_stats(src.as_str());
+    let s = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "other\nloop done\n");
+    assert_eq!(s.cancels, 0);
+}
+
+/// 速い道だけで回るタスクも、取り消すと次の `io_wait` で止まる。タスクは予算の 128 回の `io_wait` (64 周) で譲り、
+/// その間に取り消される。譲った後は待っていた読みの結果を受け取って周を終え、次の書きの前の取り消しの地点で投げる。
+/// 取り消しの後に終える操作は高々1つである (docs/spec/vm.md の「取り消しの届け方」)。
+#[test]
+fn a_cancelled_fast_path_loop_stops_at_its_next_wait() {
+    let src = format!(
+        "{SPIN_IO}  let r = try_io (fn () ->
+    Async.scope (fn s ->
+      let t = Async.start_in s (fn () -> spin_io 1000 counter (Bytes.empty ()) a b)
+      Async.yield_now ()
+      Async.cancel_scope s
+      Async.await t))
+  match r with
+    | Ok () -> println \"finished\"
+    | Err e -> println \"\\{{show e.kind}}\"
+  println (show (Atomic.load counter)))
+"
+    );
+    let (out, stats) = run_stats(src.as_str());
+    stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "Cancelled\n64\n");
+}
+
+/// 2つ目の受けは、始めたタスクの接続が先に走ったかで、受け付けで終わるか待つかが変わる。その後のループは、操作の
+/// 予算を越えるまで書き、`check_cancelled`、読みを繰り返す。`io_wait` はどの道でも待ちを1つだけ数えるので、予算の切れる
+/// 位置は `check_cancelled` が譲る `yield_now` の待ちの数に表れる。予算は操作が終わっていたかによらず待ちごとに使い、
+/// 戻す時点もプログラムで決まるので、その数も `parks` も逐次と seed の run で同じである。書きを1つ足して待ちの数の偶奇を
+/// 変えた形と、ループの書きを予算を2つ使う 1000 バイトにした形も流す (docs/spec/stdlib.md の「操作の予算」)。
+#[test]
+fn the_budget_runs_out_at_the_same_point_in_every_schedule() {
+    let writes = [
+        "let a = Net.write \"x\" a",
+        "let (_, a) = Net.write_bytes (Bytes.make 1000 'x'u8) a",
+    ];
+    for (extra, write) in [(0, writes[0]), (1, writes[0]), (0, writes[1])] {
+        for n in [61, 62, 200] {
+            let writes = "  let a = Net.write \"y\" a\n".repeat(extra);
+            let src = format!(
+                "{SPIN_IO}  let l2 = Net.listen \"127.0.0.1\" 0
+  let (port2, l2) = Net.local_port l2
+  let t = Async.start (fn () -> Net.connect \"127.0.0.1\" port2)
+  let _ = spin 40
+  let (s, l2) = Net.accept l2
+  Net.close_listener l2
+{writes}  spin_checked {n} (Bytes.empty ()) a b
+  Net.close s
+  Net.close (Async.await t))
+spin : Int -> <Panic> Int
+spin n = if n == 0 then 0 else spin (n - 1)
+spin_checked : Int -> Bytes -> Net.TcpStream -> Net.TcpStream -> <IO, Panic, Async> Unit
+spin_checked n buf a b =
+  if n == 0 then
+    Net.close a
+    Net.close b
+  else
+    {write}
+    Async.check_cancelled ()
+    let (buf, b) = Net.read_chunk (Bytes.truncate 0 buf) b
+    spin_checked (n - 1) buf a b
+"
+            );
+            let program = eml_test_support::lir(src.as_str());
+            let parks: Vec<_> = [
+                Sched::Sequential,
+                Sched::Seeded(1),
+                Sched::Seeded(2),
+                Sched::Seeded(7),
+            ]
+            .into_iter()
+            .map(|sched| {
+                let config = RunConfig::default().with_debug_heap(true).with_sched(sched);
+                let (_, stats) = eml_test_support::execute(&program, &config);
+                stats
+                    .unwrap_or_else(|error| panic!("{sched:?}: {error}"))
+                    .parks
+            })
+            .collect();
+            assert_eq!(parks, [parks[0]; 4], "extra {extra}, {write}, n {n}");
+        }
+    }
+}
+
+/// 操作の予算を使い切った終わった操作の待ちは、保留の操作があれば OS を1回見る。走れるタスクがなければ譲らずに
+/// 続け、待ちは譲るときと同じく1つ数える。受けを待つタスクが保留の操作を持つ間に、本体が速い道だけで `n` 周回る。
+/// 63 周の待ちは 126 回で予算が残り、64 周の 128 回目で使い切る。64 周の run だけ `wait` が1回多く、`parks` は
+/// 1周につき2つずつ増える (docs/spec/stdlib.md の「操作の予算」、docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_spent_budget_looks_at_the_os_and_goes_on_alone() {
+    let run = |n: u32| {
+        let src = format!(
+            "{SPIN_IO}  let l2 = Net.listen \"127.0.0.1\" 0
+  let (port2, l2) = Net.local_port l2
+  let t = Async.start (fn () ->
+    let (s, l2) = Net.accept l2
+    Net.close_listener l2
+    Net.close s)
+  Async.yield_now ()
+  spin_io {n} counter (Bytes.empty ()) a b
+  let c = Net.connect \"127.0.0.1\" port2
+  Async.await t
+  Net.close c)
+"
+        );
+        let log = Arc::new(std::sync::Mutex::new(Log::default()));
+        let driver = Recorder {
+            inner: eml_io::TestDriver::new(None),
+            log: Arc::clone(&log),
+        };
+        let (host, _) = capture_host(Default::default());
+        let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
+            .with_driver(Box::new(driver));
+        let loaded = machine.load(&eml_test_support::lir(src.as_str())).unwrap();
+        let finished = machine
+            .run(loaded.entry)
+            .unwrap_or_else(|error| panic!("{error}"));
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
+        let waits = log.lock().unwrap().waits;
+        (waits, finished.stats.parks, finished.stats.yields)
+    };
+    let (w62, p62, y62) = run(62);
+    let (w63, p63, y63) = run(63);
+    let (w64, p64, y64) = run(64);
+    assert_eq!((w63 - w62, w64 - w63), (0, 1));
+    assert_eq!((p63 - p62, p64 - p63), (2, 2));
+    // 続けた周は `reschedule` を perform しないので、yield は1周の分しか増えない
+    assert_eq!(y64 - y63, y63 - y62);
+}
+
+/// 1つのタスクが自分で待ち受け、接続し、受け、`hi` を書いてから、`buf` を buffer にして読む。返すのは出力と、
+/// `Recorder` の記録である。検査モードで流す。
+fn read_into(buf: &str) -> (String, Log) {
+    read_into_in(buf, false)
+}
+
+/// `read_into` を、`fast` なら速いモードの、そうでなければ検査モードの `Machine` で流す。
+fn read_into_in(buf: &str, fast: bool) -> (String, Log) {
+    let src = format!(
+        "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let a = Net.connect \"127.0.0.1\" port
+  let (b, l) = Net.accept l
+  Net.close_listener l
+  let a = Net.write \"hi\" a
+  let (buf, b) = Net.read_chunk ({buf}) b
+  Net.close a
+  Net.close b
+  println (String.decode buf))
+"
+    );
+    let log = Arc::new(std::sync::Mutex::new(Log::default()));
+    let driver = Recorder {
+        inner: eml_io::TestDriver::new(None),
+        log: Arc::clone(&log),
+    };
+    let (host, out) = capture_host(Default::default());
+    let program = eml_test_support::lir(src.as_str());
+    let control = RunConfig::default().control;
+    let driver = Box::new(driver);
+    if fast {
+        run_to_close(
+            Machine::<eml_rt::Fast>::new(control, host).with_driver(driver),
+            &program,
+        );
+    } else {
+        run_to_close(
+            Machine::<Checked>::new(control, host).with_driver(driver),
+            &program,
+        );
+    }
+    let log = std::mem::take(&mut *log.lock().unwrap());
+    (out.contents(), log)
+}
+
+/// `machine` で `program` を流して閉じる。
+fn run_to_close<M: eml_rt::Mode>(mut machine: Machine<M>, program: &eml_lir::Program) {
+    let loaded = machine.load(program).unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// 一意で空きが 8 バイト以上ある buffer の読みは、読めるようになるのを待つ操作を出さず、空きを貸す読みだけを出す。
+/// 速いモードでは貸す道が検査の誤りでなく前提に頼るので、両方のモードで流す (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_into_room_does_not_probe() {
+    for (out, log) in [
+        read_into_in("Bytes.with_capacity 16", false),
+        read_into_in("Bytes.with_capacity 16", true),
+    ] {
+        assert_eq!(out, "hi\n");
+        assert_eq!(log.ops, ["listen", "connect", "accept", "write", "read"]);
+        assert!(log.lent[0] >= 16, "{log:?}");
+    }
+}
+
+/// `Bytes.of_string "> "` の空きは、確保器が長さを語に切り上げた 8 バイトより少ない余りだけである。そのため読みは、
+/// 読めるようになるのを待ってから、広げた buffer の 65 536 バイトを貸す (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_into_word_slack_probes_first() {
+    let (out, log) = read_into("Bytes.of_string \"> \"");
+    assert_eq!(out, "> hi\n");
+    assert_eq!(log.ops[3..], ["write", "readable", "read"]);
+    assert_eq!(log.lent, [65_536]);
+}
+
+/// 空の `Bytes` の読みは、読めるようになるのを待ってから読む (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_into_empty_bytes_probes_first() {
+    let (out, log) = read_into("Bytes.empty ()");
+    assert_eq!(out, "hi\n");
+    assert_eq!(log.ops[3..], ["write", "readable", "read"]);
+}
+
+/// 相手が書いた後の読みでは、読めるようになるのを待つ操作が受け付けで終わり、その場で続けて出した読みも受け付けで
+/// 終わる。driver を待たずにバイトが返る (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_probe_done_at_submit_reads_at_once() {
+    let (out, log) = read_into("Bytes.empty ()");
+    assert_eq!(out, "hi\n");
+    assert_eq!(log.ops[4..], ["readable", "read"]);
+    assert_eq!(log.at_submit[4..], [true, true]);
+    assert_eq!((log.waits, log.completions), (0, 0));
 }

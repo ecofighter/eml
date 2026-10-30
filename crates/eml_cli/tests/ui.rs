@@ -319,8 +319,8 @@ fn assert_seeds_agree(
 }
 
 /// 比べる `RunStats` の欄を選ぶ。取り消しの届いた run は比べない。届いた時点で、それぞれのタスクがした仕事が
-/// 変わる。channel を使った run は、スケジュールによらない少しの欄だけを比べる (docs/implementation/testing.md の
-/// 「seed で流す」)。
+/// 変わる。channel を使った run は、スケジュールによらない少しの欄だけを比べる。driver の操作を使った run は、
+/// 仕事の回数を比べない (docs/implementation/testing.md の「seed で流す」)。
 fn compares_stats(checked: &Ran, other: &Ran) -> Compare {
     let stats = |ran: &Ran| ran.finished.map(|f| f.stats).unwrap_or_default();
     let (a, b) = (stats(checked), stats(other));
@@ -330,6 +330,8 @@ fn compares_stats(checked: &Ran, other: &Ran) -> Compare {
     let channels = |s: &RunStats| s.channel_ops != 0 || s.channel_waits != 0;
     if channels(&a) || channels(&b) {
         Compare::ChannelIndependent
+    } else if a.completions != 0 || b.completions != 0 {
+        Compare::DriverIndependent
     } else {
         Compare::ScheduleIndependent
     }
@@ -341,6 +343,7 @@ enum Compare {
     Nothing,
     ScheduleIndependent,
     ChannelIndependent,
+    DriverIndependent,
 }
 
 impl Compare {
@@ -349,6 +352,7 @@ impl Compare {
             Compare::Nothing => RunStats::default(),
             Compare::ScheduleIndependent => eml_test_support::schedule_independent(stats),
             Compare::ChannelIndependent => eml_test_support::channel_independent(stats),
+            Compare::DriverIndependent => eml_test_support::driver_independent(stats),
         }
     }
 }
@@ -387,6 +391,52 @@ fn stats_are_compared_by_cancellations_and_channels() {
     assert_eq!(compares_stats(&ran(quiet), &ran(Some((1, 3, 0)))), none);
     assert_eq!(compares_stats(&ran(Some((0, 2, 0))), &ran(quiet)), few);
     assert_eq!(compares_stats(&ran(quiet), &ran(Some((0, 0, 1)))), few);
+}
+
+/// driver の完了がある run は仕事の回数を比べない。取り消しと channel の規則が先に効く。
+#[test]
+fn stats_of_driver_runs_are_compared_without_the_work_counts() {
+    let ran = |cancels: u64, channel_ops: u64, completions: u64| {
+        let mut stats = eml_cli::RunStats::default();
+        stats.cancels = cancels;
+        stats.channel_ops = channel_ops;
+        stats.completions = completions;
+        Ran {
+            stdout: String::new(),
+            stderr: String::new(),
+            written: String::new(),
+            result: Ok(None),
+            finished: Some(Finished {
+                stats,
+                exit: None,
+                preemptions: 1,
+            }),
+        }
+    };
+    let quiet = ran(0, 0, 0);
+    assert_eq!(
+        compares_stats(&ran(0, 0, 3), &quiet),
+        Compare::DriverIndependent
+    );
+    assert_eq!(
+        compares_stats(&quiet, &ran(0, 0, 3)),
+        Compare::DriverIndependent
+    );
+    assert_eq!(
+        compares_stats(&ran(0, 2, 3), &quiet),
+        Compare::ChannelIndependent
+    );
+    assert_eq!(compares_stats(&ran(1, 0, 3), &quiet), Compare::Nothing);
+    let mut stats = eml_cli::RunStats::default();
+    stats.parks = 5;
+    stats.completions = 6;
+    stats.yields = 2;
+    stats.allocations = 70;
+    let kept = Compare::DriverIndependent.kept(stats);
+    assert_eq!(
+        (kept.parks, kept.completions, kept.yields, kept.allocations),
+        (5, 6, 0, 0)
+    );
 }
 
 /// 速いモードも同じ誤りを報告するか。漏れ、内部の誤り、ヒープの誤りは検査モードだけが見つける。これらは VM 自身の

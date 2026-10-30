@@ -8,6 +8,7 @@ use eml_lir::Program;
 use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
 use crate::cells::TaskStats;
+use crate::driver::DriverKind;
 use crate::error::KEPT_PENDING;
 use crate::vm::ExecWith;
 
@@ -59,16 +60,19 @@ pub struct RunStats {
     pub peak_stack: u64,
     /// `Async` が作ったタスクのセルの数。
     pub tasks: u64,
-    /// `Async` の待ち、`yield_now`、`sleep_ms`、`drain_within`、channel の待ち、driver の操作の待ちが、継続をランタイムに
-    /// 渡した数。
+    /// `Async` の待ち、`yield_now`、`sleep_ms`、`drain_within`、channel の待ち、driver の操作の待ち、シグナルの待ちの数。
+    /// driver の操作の待ちは `io_wait` と `io_wait_until` の呼び出しの数で、操作が終わっていて継続を渡さずに続けた待ちも
+    /// 数える。ほかの待ちは継続をランタイムに渡した数である。
     pub parks: u64,
     /// スコープの最初の失敗より後の、タスクの失敗の数。
     pub dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
-    /// `park_io`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`、真を返した
-    /// `cancel_point`、偽を返した `claim_scope` を数える (docs/spec/vm.md の「`RunStats`」)。
+    /// `park_io`、`park_io_until`、`park_signal`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで
+    /// 再開する `yield_now` (速い道が譲る `reschedule` は除く)、真を返した `cancel_point`、偽を返した `claim_scope` を
+    /// 数える (docs/spec/vm.md の「`RunStats`」)。
     pub cancels: u64,
-    /// `await_time` が時間の輪に登録した回数。
+    /// `await_time` と `await_io_until` が求めた、`ms` が正の待ちの数。待つ前に取り消しが見つかった待ちは数えない。
+    /// 操作がもう終わっていて輪に載せなかった待ちと、`io_wait_until` の速い道で続けた待ちも数える。
     pub timers: u64,
     /// `share` が rc を負にした物体の数。
     pub shared_objects: u64,
@@ -78,8 +82,41 @@ pub struct RunStats {
     pub channel_waits: u64,
     /// run の終わりに放した channel の数。閉じなかった channel と、閉じても品物の残った channel を数える。
     pub channels_swept: u64,
-    /// driver から取り出し、操作の記録に当てた完了の数。`quiesce` が捨てた完了は数えない。
+    /// 終わった driver の操作の数。受け付けで終わった操作と、driver から取り出して記録に当てた完了の和である。
+    /// `quiesce` が捨てた完了は数えない。
     pub completions: u64,
+}
+
+impl RunStats {
+    /// 欄の名前と値を宣言の順に返す。`eml run --stats` の出力はこれを並べるだけなので、欄を足したらここにも足す
+    /// (長さの型が数の食い違いを止める)。
+    pub fn fields(&self) -> [(&'static str, u64); 23] {
+        [
+            ("evidence_steps", self.evidence_steps),
+            ("yields", self.yields),
+            ("yield_frames", self.yield_frames),
+            ("unwound_frames", self.unwound_frames),
+            ("string_bytes_copied", self.string_bytes_copied),
+            ("rc_increments", self.rc_increments),
+            ("rc_decrements", self.rc_decrements),
+            ("boxes", self.boxes),
+            ("unboxes", self.unboxes),
+            ("allocations", self.allocations),
+            ("reuses", self.reuses),
+            ("peak_objects", self.peak_objects),
+            ("peak_stack", self.peak_stack),
+            ("tasks", self.tasks),
+            ("parks", self.parks),
+            ("dropped_failures", self.dropped_failures),
+            ("cancels", self.cancels),
+            ("timers", self.timers),
+            ("shared_objects", self.shared_objects),
+            ("channel_ops", self.channel_ops),
+            ("channel_waits", self.channel_waits),
+            ("channels_swept", self.channels_swept),
+            ("completions", self.completions),
+        ]
+    }
 }
 
 /// 1回の実行の結果。`exit` で終わったら、その終了コードを持つ (docs/spec/vm.md の「`RunStats`」)。
@@ -114,7 +151,8 @@ pub struct RunConfig {
     /// タイマーが使う時計。既定はすべてのタスクが待つときにだけ進む `Clock::Virtual` である。
     pub clock: Clock,
     /// 監視のスレッドを起こす自己パイプ。シグナルのハンドラと同じものを渡す。既定はなしで、監視のスレッドは刻みで
-    /// シグナルを見に行く (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// シグナルを見に行く。`Clock::Real` の run に渡すと、run の始めに監視のスレッドが起き、VM は空きの待ちを切らない。
+    /// そのため、止める語を立てる者は自己パイプも鳴らす (docs/spec/vm.md の「タスクとスケジュール」)。
     pub doorbell: Option<Arc<Doorbell>>,
     /// 仮想のシグナルの予定。既定は空で、テストのハーネスだけが使う (docs/spec/vm.md の「時間の待ち」)。
     pub signals: Vec<VirtualSignal>,
@@ -196,10 +234,10 @@ pub struct Machine<M: Mode> {
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
     /// driver が貸した記憶はヒープにあるので、`Drop` は `ctx` より先にこの欄を落とす (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
-    /// 持っている driver を `Machine` が `Clock::Real` から作ったか。`with_driver` で渡した driver は、時計の欄によらず
-    /// 偽にする。テストの driver は眠らないので、その run に OS のシグナルを待たせると空きのループが回り続けるためである
+    /// 持っている driver の出どころ。`with_driver` で渡した driver は、時計の欄によらず `Injected` にする。出どころを
+    /// 知らない driver の run には OS のシグナルを中継せず、眠る driver として空きの待ちを切る
     /// (docs/spec/vm.md の「時計と driver」)。
-    real_driver: bool,
+    driver_kind: DriverKind,
     code: CodeBase<M>,
     /// poisoned の `Machine` では、driver が貸したままの記憶を放さないように、`Drop` が落とさずに漏らす。
     ctx: ManuallyDrop<Ctx<M>>,
@@ -272,7 +310,7 @@ impl<M: Mode> Machine<M> {
             counters: Vec::new(),
             clock: Clock::Virtual,
             driver: None,
-            real_driver: false,
+            driver_kind: DriverKind::Virtual,
             doorbell: None,
             signals: Vec::new(),
         }
@@ -293,7 +331,9 @@ impl<M: Mode> Machine<M> {
         self
     }
 
-    /// 監視のスレッドを起こす自己パイプを渡す。ないときは、監視のスレッドが刻みでシグナルを見に行く。
+    /// 監視のスレッドを起こす自己パイプを渡す。ないときは、監視のスレッドが刻みでシグナルを見に行く。`Clock::Real` の
+    /// run に渡すと、run の始めに監視のスレッドが起き、VM は空きの待ちを切らない。そのため、止める語を立てる者は
+    /// 自己パイプも鳴らす (docs/spec/vm.md の「タスクとスケジュール」)。
     pub fn with_doorbell(mut self, doorbell: Arc<Doorbell>) -> Machine<M> {
         self.doorbell = Some(doorbell);
         self
@@ -306,10 +346,12 @@ impl<M: Mode> Machine<M> {
     }
 
     /// 次の run から使う driver を渡す。後の `with_clock` と `with_sched` はこれを捨てる。driver は `Machine` を使う
-    /// スレッドの上で作る (docs/spec/vm.md の「時計と driver」)。
+    /// スレッドの上で作る。渡すのは眠る driver に限る。VM はその run の空きの待ちを 10 ms ごとに切るので、期限まで
+    /// 時計を進める driver では、終わらない保留のある run がデッドロックで止まらない (docs/spec/vm.md の
+    /// 「時計と driver」)。
     pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
-        self.real_driver = false;
+        self.driver_kind = DriverKind::Injected;
         self
     }
 
@@ -461,7 +503,7 @@ impl<M: Mode> Machine<M> {
         let driver = match self.driver.take() {
             Some(driver) => driver,
             None => {
-                self.real_driver = matches!(self.clock, Clock::Real);
+                self.driver_kind = self.clock.kind();
                 self.clock.driver(self.sched.seed()).map_err(|e| {
                     code.error(
                         vm::Failure {
@@ -480,7 +522,7 @@ impl<M: Mode> Machine<M> {
             generations: std::mem::take(&mut self.generations),
             counters: std::mem::take(&mut self.counters),
             driver,
-            real_driver: self.real_driver,
+            driver_kind: self.driver_kind,
             doorbell: self.doorbell.clone(),
             signals: std::mem::take(&mut self.signals),
         };
@@ -649,7 +691,7 @@ impl<M: Mode> Machine<M> {
 
 impl<M: Mode> Drop for Machine<M> {
     fn drop(&mut self) {
-        // 本物の driver は落とすときに仕事を待ちきるので、その間はヒープを生かしておく
+        // 本物の driver には、落とすときにカーネルの書き込みの終わりを待つものがあるので、その間はヒープを生かしておく
         self.driver = None;
         if !self.poisoned {
             // `ctx` はこの後に使わない
@@ -696,8 +738,7 @@ struct Start {
     generations: Vec<u32>,
     counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
-    /// driver を `Machine` が `Clock::Real` から作ったか。
-    real_driver: bool,
+    driver_kind: DriverKind,
     doorbell: Option<Arc<Doorbell>>,
     signals: Vec<VirtualSignal>,
 }
@@ -724,12 +765,13 @@ fn run_scheduled<M: Mode, P: Policy>(
         start.generations,
     );
     sched.shared_roots = start.shared_roots;
-    sched.real_driver = start.real_driver;
+    sched.driver_kind = start.driver_kind;
     sched.cells.counters = start.counters;
     // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
     sched
         .cells
         .schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
+    sched.begin_run();
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
     // (docs/spec/vm.md の「時計と driver」)

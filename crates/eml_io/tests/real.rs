@@ -1,16 +1,68 @@
 //! 本物の driver の時計、待ち、プールの仕事、ストリーム。時間は下限だけを確かめる。
 
 use std::io::ErrorKind;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use eml_io::RealDriver;
-use eml_rt::{Completion, Done, IoDriver, Op, OpKey};
+use eml_rt::{Completion, Done, IoDriver, Op, OpKey, Submit};
 
 #[cfg(unix)]
 use eml_rt::RawBuf;
 
-/// `key` の完了が届くまで待つ。ほかの操作の完了は `stash` に残す。1 s で届かなければ落ちる。
-fn complete(driver: &mut RealDriver, stash: &mut Vec<Completion>, key: OpKey) -> Completion {
+/// テストが振る鍵。1 から数え、どの driver にも同じ鍵を2度渡さない。
+fn next_key() -> OpKey {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// 受け付けた操作。`submit` がその場で終えたら、その結果を持つ。
+struct Started {
+    key: OpKey,
+    done: Option<std::io::Result<Done>>,
+}
+
+fn submit(driver: &mut RealDriver, op: Op) -> Started {
+    let key = next_key();
+    let done = match driver.submit(key, op) {
+        Submit::Done(result) => Some(result),
+        Submit::Pending => None,
+    };
+    Started { key, done }
+}
+
+/// 受け付けで終わらない操作を出し、その鍵を返す。
+fn pending(driver: &mut RealDriver, op: Op) -> OpKey {
+    let started = submit(driver, op);
+    assert!(
+        started.done.is_none(),
+        "op {} finished at submit",
+        started.key
+    );
+    started.key
+}
+
+/// 操作の完了。受け付けで終わっていればその結果を、そうでなければ `wait_for` で待った完了を返す。
+fn complete(driver: &mut RealDriver, stash: &mut Vec<Completion>, op: Started) -> Completion {
+    match op.done {
+        Some(result) => Completion {
+            key: op.key,
+            result,
+            cancelled: false,
+        },
+        None => wait_for(driver, stash, op.key),
+    }
+}
+
+/// 操作を出して、終わった結果を返す。
+#[cfg(unix)]
+fn run_op(driver: &mut RealDriver, stash: &mut Vec<Completion>, op: Op) -> std::io::Result<Done> {
+    let started = submit(driver, op);
+    complete(driver, stash, started).result
+}
+
+/// 保留の `key` の完了が届くまで待つ。ほかの操作の完了は `stash` に残す。1 s で届かなければ落ちる。
+fn wait_for(driver: &mut RealDriver, stash: &mut Vec<Completion>, key: OpKey) -> Completion {
     let start = Instant::now();
     loop {
         driver.completions(stash);
@@ -57,7 +109,7 @@ fn a_real_clock_reaches_a_deadline() {
 fn a_timed_wait_returns_at_or_after_its_deadline() {
     let mut driver = RealDriver::new().unwrap();
     let deadline = driver.now().as_millis() as u64 + 20;
-    // 1回の `wait` は短く切られるので、期限に着くまで繰り返す
+    // `wait` は早く戻ってよいので、期限に着くまで繰り返す
     while driver.now() < Duration::from_millis(deadline) {
         assert!(driver.wait(Some(deadline)).unwrap());
     }
@@ -70,22 +122,25 @@ fn a_real_driver_without_work_or_deadline_cannot_progress() {
     assert!(!driver.wait(None).unwrap());
 }
 
-/// 保留の操作がある間に別のスレッドが waker を鳴らしても、`wait` は壊れずに戻る。1回の待ちは `IDLE_TICK` で
-/// 切れるので、起こしで戻ることそのものは `real.rs` の単体テストが確かめる。
+/// 保留の操作がある間に別のスレッドが waker を鳴らしても、`wait` は壊れずに戻る。期限のない待ちから起こしで戻る
+/// ことは、保留のない待ちで `a_wake_ends_a_wait_with_a_far_deadline` が確かめる。
 #[test]
 fn a_wake_from_another_thread_leaves_a_wait_working() {
     let mut driver = RealDriver::new().unwrap();
     #[cfg(unix)]
     let _ends = {
         let (a, b) = connection(&mut driver, &mut Vec::new());
-        driver.submit(Op::Readable { handle: a });
+        submit(&mut driver, Op::Readable { handle: a });
         (a, b)
     };
     #[cfg(windows)]
-    driver.submit(Op::Job(Box::new(|| {
-        std::thread::sleep(Duration::from_millis(200));
-        Ok(0)
-    })));
+    submit(
+        &mut driver,
+        Op::Job(Box::new(|| {
+            std::thread::sleep(Duration::from_millis(200));
+            Ok(0)
+        })),
+    );
     let waker = driver.waker();
     let ringer = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(20));
@@ -108,11 +163,14 @@ fn dropping_a_driver_waits_for_a_running_job() {
     let finished = Arc::new(AtomicBool::new(false));
     let mut driver = RealDriver::new().unwrap();
     let flag = Arc::clone(&finished);
-    driver.submit(Op::Job(Box::new(move || {
-        std::thread::sleep(Duration::from_millis(200));
-        flag.store(true, Ordering::SeqCst);
-        Ok(0)
-    })));
+    submit(
+        &mut driver,
+        Op::Job(Box::new(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            flag.store(true, Ordering::SeqCst);
+            Ok(0)
+        })),
+    );
     let start = Instant::now();
     drop(driver);
     assert!(finished.load(Ordering::SeqCst));
@@ -123,7 +181,8 @@ fn dropping_a_driver_waits_for_a_running_job() {
 fn a_job_completes_with_its_value() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let key = driver.submit(Op::Job(Box::new(|| Ok(42))));
+    let key = submit(&mut driver, Op::Job(Box::new(|| Ok(42))));
+    assert!(key.done.is_none());
     assert_eq!(driver.pending(), 1);
     let completion = complete(&mut driver, &mut stash, key);
     assert_eq!(completion.result.unwrap(), Done::Size(42));
@@ -135,12 +194,15 @@ fn a_job_completes_with_its_value() {
 fn a_job_pool_is_capped() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let keys: Vec<OpKey> = (0..33)
+    let keys: Vec<Started> = (0..33)
         .map(|i| {
-            driver.submit(Op::Job(Box::new(move || {
-                std::thread::sleep(Duration::from_millis(20));
-                Ok(i)
-            })))
+            submit(
+                &mut driver,
+                Op::Job(Box::new(move || {
+                    std::thread::sleep(Duration::from_millis(20));
+                    Ok(i)
+                })),
+            )
         })
         .collect();
     for (i, key) in keys.into_iter().enumerate() {
@@ -158,7 +220,7 @@ fn a_readable_probe_stays_pending_without_data() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (a, b) = connection(&mut driver, &mut stash);
-    let probe = driver.submit(Op::Readable { handle: a });
+    let probe = submit(&mut driver, Op::Readable { handle: a });
     let deadline = driver.now().as_millis() as u64 + 20;
     while driver.now() < Duration::from_millis(deadline) {
         assert!(driver.wait(Some(deadline)).unwrap());
@@ -169,10 +231,13 @@ fn a_readable_probe_stays_pending_without_data() {
     assert_eq!(driver.pending(), 1);
 
     let mut byte = [7u8];
-    let write = driver.submit(Op::Write {
-        handle: b,
-        buf: raw(&mut byte),
-    });
+    let write = submit(
+        &mut driver,
+        Op::Write {
+            handle: b,
+            buf: raw(&mut byte),
+        },
+    );
     assert_eq!(
         complete(&mut driver, &mut stash, write).result.unwrap(),
         Done::Size(1)
@@ -184,18 +249,60 @@ fn a_readable_probe_stays_pending_without_data() {
     assert_eq!(driver.pending(), 0);
 }
 
+/// 読めるデータのある端の `Readable` は受け付けで終わり、完了を残さない。データは読み進めないので、続く読みが読む。
+/// 書いた直後に届いていることは OS が約束しないので、1つ目の `Readable` で届いたと分かってから2つ目を出す。
+#[cfg(unix)]
+#[test]
+fn a_probe_with_data_finishes_at_submit() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (a, b) = connection(&mut driver, &mut stash);
+    let mut data = *b"hi";
+    let write = Op::Write {
+        handle: b,
+        buf: raw(&mut data),
+    };
+    assert_eq!(
+        run_op(&mut driver, &mut stash, write).unwrap(),
+        Done::Size(2)
+    );
+    let first = submit(&mut driver, Op::Readable { handle: a });
+    complete(&mut driver, &mut stash, first).result.unwrap();
+    let probe = driver.submit(next_key(), Op::Readable { handle: a });
+    assert!(
+        matches!(probe, Submit::Done(Ok(Done::Size(0)))),
+        "{probe:?}"
+    );
+    driver.completions(&mut stash);
+    assert!(stash.is_empty());
+    assert_eq!(driver.pending(), 0);
+    let mut room = [0u8; 8];
+    let read = Op::Read {
+        handle: a,
+        buf: raw(&mut room),
+    };
+    assert_eq!(
+        run_op(&mut driver, &mut stash, read).unwrap(),
+        Done::Size(2)
+    );
+    assert_eq!(&room[..2], b"hi");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_read_after_a_probe_returns_the_bytes() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (a, b) = connection(&mut driver, &mut stash);
-    let probe = driver.submit(Op::Readable { handle: a });
+    let probe = submit(&mut driver, Op::Readable { handle: a });
     let mut data = *b"hello";
-    let write = driver.submit(Op::Write {
-        handle: b,
-        buf: raw(&mut data),
-    });
+    let write = submit(
+        &mut driver,
+        Op::Write {
+            handle: b,
+            buf: raw(&mut data),
+        },
+    );
     assert_eq!(
         complete(&mut driver, &mut stash, write).result.unwrap(),
         Done::Size(5)
@@ -205,10 +312,13 @@ fn a_read_after_a_probe_returns_the_bytes() {
         Done::Size(0)
     );
     let mut room = [0u8; 16];
-    let read = driver.submit(Op::Read {
-        handle: a,
-        buf: raw(&mut room),
-    });
+    let read = submit(
+        &mut driver,
+        Op::Read {
+            handle: a,
+            buf: raw(&mut room),
+        },
+    );
     assert_eq!(
         complete(&mut driver, &mut stash, read).result.unwrap(),
         Done::Size(5)
@@ -223,19 +333,25 @@ fn a_write_is_read_by_the_peer() {
     let mut stash = Vec::new();
     let (a, b) = connection(&mut driver, &mut stash);
     let mut data = *b"from a";
-    let write = driver.submit(Op::Write {
-        handle: a,
-        buf: raw(&mut data),
-    });
+    let write = submit(
+        &mut driver,
+        Op::Write {
+            handle: a,
+            buf: raw(&mut data),
+        },
+    );
     assert_eq!(
         complete(&mut driver, &mut stash, write).result.unwrap(),
         Done::Size(6)
     );
     let mut room = [0u8; 16];
-    let read = driver.submit(Op::Read {
-        handle: b,
-        buf: raw(&mut room),
-    });
+    let read = submit(
+        &mut driver,
+        Op::Read {
+            handle: b,
+            buf: raw(&mut room),
+        },
+    );
     assert_eq!(
         complete(&mut driver, &mut stash, read).result.unwrap(),
         Done::Size(6)
@@ -249,9 +365,53 @@ fn a_cancelled_probe_completes_with_an_error() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (a, _b) = connection(&mut driver, &mut stash);
-    let probe = driver.submit(Op::Readable { handle: a });
+    let probe = pending(&mut driver, Op::Readable { handle: a });
     driver.cancel(probe);
-    assert!(complete(&mut driver, &mut stash, probe).result.is_err());
+    assert!(wait_for(&mut driver, &mut stash, probe).result.is_err());
+    assert_eq!(driver.pending(), 0);
+}
+
+/// リセットされた端の `Readable` は、受け付けの覗きでリセットの誤りを返して終わる。覗きが誤りを消費するので、
+/// 誤りを `Ok(0)` にすると次の読みが EOF に見える。閉じた直後にリセットが届いていることは OS が約束しないので、
+/// 1つ目が保留なら、その完了で届いたと分かってから2つ目を出す。
+#[cfg(unix)]
+#[test]
+fn a_probe_on_a_reset_stream_fails_at_submit() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let listener = std::net::TcpListener::bind(loopback(0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connect = submit(
+        &mut driver,
+        Op::Connect {
+            host: "127.0.0.1".to_string(),
+            port,
+        },
+    );
+    let (a, _) = stream(complete(&mut driver, &mut stash, connect));
+    let (peer, _) = listener.accept().unwrap();
+    // linger 0 で閉じた端は、FIN でなく RST を送る
+    socket2::SockRef::from(&peer)
+        .set_linger(Some(Duration::ZERO))
+        .unwrap();
+    drop(peer);
+    let first = submit(&mut driver, Op::Readable { handle: a });
+    let probe = match first.done {
+        Some(result) => result,
+        None => {
+            wait_for(&mut driver, &mut stash, first.key).result.unwrap();
+            match driver.submit(next_key(), Op::Readable { handle: a }) {
+                Submit::Done(result) => result,
+                Submit::Pending => panic!("a probe on a reset stream stayed pending"),
+            }
+        }
+    };
+    match probe {
+        Err(e) => assert_eq!(e.kind(), ErrorKind::ConnectionReset, "{e}"),
+        Ok(done) => panic!("a probe on a reset stream ended with {done:?}"),
+    }
+    driver.completions(&mut stash);
+    assert!(stash.is_empty());
     assert_eq!(driver.pending(), 0);
 }
 
@@ -261,17 +421,20 @@ fn a_closed_peer_reads_eof() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (a, b) = connection(&mut driver, &mut stash);
-    let probe = driver.submit(Op::Readable { handle: a });
+    let probe = submit(&mut driver, Op::Readable { handle: a });
     driver.close(b);
     assert_eq!(
         complete(&mut driver, &mut stash, probe).result.unwrap(),
         Done::Size(0)
     );
     let mut room = [0u8; 16];
-    let read = driver.submit(Op::Read {
-        handle: a,
-        buf: raw(&mut room),
-    });
+    let read = submit(
+        &mut driver,
+        Op::Read {
+            handle: a,
+            buf: raw(&mut room),
+        },
+    );
     assert_eq!(
         complete(&mut driver, &mut stash, read).result.unwrap(),
         Done::Size(0)
@@ -285,21 +448,31 @@ fn a_closed_peer_reads_eof() {
 fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
     let mut driver = RealDriver::new().unwrap();
     let (a, _b) = connection(&mut driver, &mut Vec::new());
-    let probe = driver.submit(Op::Readable { handle: a });
+    let probe = pending(&mut driver, Op::Readable { handle: a });
     let mut first = vec![1u8; 8 << 20];
     let mut second = vec![2u8; 8 << 20];
-    driver.submit(Op::Write {
-        handle: a,
-        buf: raw(&mut first),
-    });
-    let full = driver.submit(Op::Write {
-        handle: a,
-        buf: raw(&mut second),
-    });
-    let job = driver.submit(Op::Job(Box::new(|| {
-        std::thread::sleep(Duration::from_millis(30));
-        Ok(0)
-    })));
+    submit(
+        &mut driver,
+        Op::Write {
+            handle: a,
+            buf: raw(&mut first),
+        },
+    );
+    let full = pending(
+        &mut driver,
+        Op::Write {
+            handle: a,
+            buf: raw(&mut second),
+        },
+    );
+    let job = pending(
+        &mut driver,
+        Op::Job(Box::new(|| {
+            std::thread::sleep(Duration::from_millis(30));
+            Ok(0)
+        })),
+    );
+    look(&mut driver);
     let mut out = Vec::new();
     driver.completions(&mut out);
     let finished: Vec<OpKey> = out.iter().map(|c| c.key).collect();
@@ -316,7 +489,7 @@ fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
 fn an_op_on_an_unknown_handle_fails() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let key = driver.submit(Op::Readable { handle: 99 });
+    let key = submit(&mut driver, Op::Readable { handle: 99 });
     assert_eq!(
         complete(&mut driver, &mut stash, key)
             .result
@@ -344,9 +517,12 @@ fn pool_threads_block_interrupt_and_terminate() {
     }
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let key = driver.submit(Op::Job(Box::new(|| {
-        Ok(usize::from(blocked(libc::SIGINT) && blocked(libc::SIGTERM)))
-    })));
+    let key = submit(
+        &mut driver,
+        Op::Job(Box::new(|| {
+            Ok(usize::from(blocked(libc::SIGINT) && blocked(libc::SIGTERM)))
+        })),
+    );
     assert!(!blocked(libc::SIGINT) && !blocked(libc::SIGTERM));
     assert_eq!(
         complete(&mut driver, &mut stash, key).result.unwrap(),
@@ -363,7 +539,7 @@ fn loopback(port: u16) -> std::net::SocketAddr {
 /// `127.0.0.1` の空いているポートで待ち受け、リスナーとポートを返す。
 #[cfg(unix)]
 fn listen(driver: &mut RealDriver, stash: &mut Vec<Completion>) -> (eml_rt::IoHandle, u16) {
-    let key = driver.submit(Op::Listen { addr: loopback(0) });
+    let key = submit(driver, Op::Listen { addr: loopback(0) });
     match complete(driver, stash, key).result.unwrap() {
         Done::Listener { handle, port } => (handle, port),
         other => panic!("a listen ended with {other:?}"),
@@ -385,11 +561,14 @@ fn connection(
     stash: &mut Vec<Completion>,
 ) -> (eml_rt::IoHandle, eml_rt::IoHandle) {
     let (listener, port) = listen(driver, stash);
-    let accept = driver.submit(Op::Accept { listener });
-    let connect = driver.submit(Op::Connect {
-        host: "127.0.0.1".to_string(),
-        port,
-    });
+    let accept = submit(driver, Op::Accept { listener });
+    let connect = submit(
+        driver,
+        Op::Connect {
+            host: "127.0.0.1".to_string(),
+            port,
+        },
+    );
     let (client, _) = stream(complete(driver, stash, connect));
     let (server, _) = stream(complete(driver, stash, accept));
     driver.close(listener);
@@ -419,9 +598,12 @@ fn a_second_listener_on_the_same_port_is_addr_in_use() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (_, port) = listen(&mut driver, &mut stash);
-    let key = driver.submit(Op::Listen {
-        addr: loopback(port),
-    });
+    let key = submit(
+        &mut driver,
+        Op::Listen {
+            addr: loopback(port),
+        },
+    );
     let error = complete(&mut driver, &mut stash, key).result.unwrap_err();
     assert_eq!(error.kind(), ErrorKind::AddrInUse);
 }
@@ -432,11 +614,14 @@ fn an_accept_returns_the_connected_stream_and_its_peer() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (listener, port) = listen(&mut driver, &mut stash);
-    let accept = driver.submit(Op::Accept { listener });
-    let connect = driver.submit(Op::Connect {
-        host: "127.0.0.1".to_string(),
-        port,
-    });
+    let accept = submit(&mut driver, Op::Accept { listener });
+    let connect = submit(
+        &mut driver,
+        Op::Connect {
+            host: "127.0.0.1".to_string(),
+            port,
+        },
+    );
     let connected = complete(&mut driver, &mut stash, connect);
     assert!(!connected.cancelled);
     let (client, server_addr) = stream(connected);
@@ -446,21 +631,27 @@ fn an_accept_returns_the_connected_stream_and_its_peer() {
     assert_ne!(client_addr.port(), port);
 
     let mut data = *b"hi";
-    let write = driver.submit(Op::Write {
-        handle: client,
-        buf: raw(&mut data),
-    });
+    let write = submit(
+        &mut driver,
+        Op::Write {
+            handle: client,
+            buf: raw(&mut data),
+        },
+    );
     assert_eq!(
         complete(&mut driver, &mut stash, write).result.unwrap(),
         Done::Size(2)
     );
-    let probe = driver.submit(Op::Readable { handle: server });
+    let probe = submit(&mut driver, Op::Readable { handle: server });
     complete(&mut driver, &mut stash, probe).result.unwrap();
     let mut room = [0u8; 8];
-    let read = driver.submit(Op::Read {
-        handle: server,
-        buf: raw(&mut room),
-    });
+    let read = submit(
+        &mut driver,
+        Op::Read {
+            handle: server,
+            buf: raw(&mut room),
+        },
+    );
     assert_eq!(
         complete(&mut driver, &mut stash, read).result.unwrap(),
         Done::Size(2)
@@ -474,10 +665,13 @@ fn an_accept_returns_the_connected_stream_and_its_peer() {
 fn a_connect_to_a_closed_port_is_refused() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let key = driver.submit(Op::Connect {
-        host: "127.0.0.1".to_string(),
-        port: closed_port(),
-    });
+    let key = submit(
+        &mut driver,
+        Op::Connect {
+            host: "127.0.0.1".to_string(),
+            port: closed_port(),
+        },
+    );
     let completion = complete(&mut driver, &mut stash, key);
     assert!(!completion.cancelled);
     assert_eq!(
@@ -496,10 +690,13 @@ fn a_write_to_a_closed_peer_fails_with_reset_or_broken_pipe() {
     driver.close(server);
     let mut data = [7u8; 1024];
     for _ in 0..1000 {
-        let write = driver.submit(Op::Write {
-            handle: client,
-            buf: raw(&mut data),
-        });
+        let write = submit(
+            &mut driver,
+            Op::Write {
+                handle: client,
+                buf: raw(&mut data),
+            },
+        );
         match complete(&mut driver, &mut stash, write).result {
             Ok(_) => {}
             Err(e) => {
@@ -521,13 +718,16 @@ fn a_shutdown_write_gives_the_peer_eof() {
     let mut stash = Vec::new();
     let (server, client) = connection(&mut driver, &mut stash);
     driver.shutdown_write(client).unwrap();
-    let probe = driver.submit(Op::Readable { handle: server });
+    let probe = submit(&mut driver, Op::Readable { handle: server });
     complete(&mut driver, &mut stash, probe).result.unwrap();
     let mut room = [0u8; 8];
-    let read = driver.submit(Op::Read {
-        handle: server,
-        buf: raw(&mut room),
-    });
+    let read = submit(
+        &mut driver,
+        Op::Read {
+            handle: server,
+            buf: raw(&mut room),
+        },
+    );
     assert_eq!(
         complete(&mut driver, &mut stash, read).result.unwrap(),
         Done::Size(0)
@@ -544,9 +744,9 @@ fn a_cancelled_accept_completes_with_an_error() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (listener, _) = listen(&mut driver, &mut stash);
-    let accept = driver.submit(Op::Accept { listener });
+    let accept = pending(&mut driver, Op::Accept { listener });
     driver.cancel(accept);
-    let completion = complete(&mut driver, &mut stash, accept);
+    let completion = wait_for(&mut driver, &mut stash, accept);
     assert!(completion.result.is_err());
     assert!(completion.cancelled);
     assert_eq!(driver.pending(), 0);
@@ -561,7 +761,7 @@ fn a_long_write_completes_once_with_its_whole_length() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (listener, port) = listen(&mut driver, &mut stash);
-    let accept = driver.submit(Op::Accept { listener });
+    let accept = submit(&mut driver, Op::Accept { listener });
     let reader = std::thread::spawn(move || {
         let mut peer = std::net::TcpStream::connect(loopback(port)).unwrap();
         let mut all = Vec::new();
@@ -570,10 +770,13 @@ fn a_long_write_completes_once_with_its_whole_length() {
     });
     let (server, _) = stream(complete(&mut driver, &mut stash, accept));
     let mut data: Vec<u8> = (0..8 << 20).map(|i: u32| i as u8).collect();
-    let write = driver.submit(Op::Write {
-        handle: server,
-        buf: raw(&mut data),
-    });
+    let write = submit(
+        &mut driver,
+        Op::Write {
+            handle: server,
+            buf: raw(&mut data),
+        },
+    );
     let completion = complete(&mut driver, &mut stash, write);
     assert_eq!(completion.result.unwrap(), Done::Size(8 << 20));
     assert_eq!(driver.pending(), 0);
@@ -585,31 +788,35 @@ fn a_long_write_completes_once_with_its_whole_length() {
     assert!(reader.join().unwrap() == data);
 }
 
-/// 読まない相手への長い書きを取り消すと、出し直しをやめ、完了がちょうど1つ届く。短く終わった送りが compio の中で
-/// 終わり、まだ受け取っていない間に取り消す。期限の取り消しと同じ順 (`wait`、`cancel`、`completions`) である。
+/// 待っている長い書きを取り消すと、完了がちょうど1つ、取り消しの誤り `cancelled` で届き、その後には何も届かない。
+/// 相手が少し読んで送りの buffer が空いた後、次の `wait` より前に取り消す。期限の取り消しと同じ順 (`wait`、`cancel`、
+/// `wait`、`completions`) である。
 #[cfg(unix)]
 #[test]
-fn a_cancelled_long_write_stops_resubmitting() {
+fn a_cancelled_pending_long_write_completes_once() {
     use std::io::Read;
 
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (listener, port) = listen(&mut driver, &mut stash);
-    let accept = driver.submit(Op::Accept { listener });
+    let accept = submit(&mut driver, Op::Accept { listener });
     let mut peer = std::net::TcpStream::connect(loopback(port)).unwrap();
     let (server, _) = stream(complete(&mut driver, &mut stash, accept));
     let mut data = vec![1u8; 8 << 20];
-    let write = driver.submit(Op::Write {
-        handle: server,
-        buf: raw(&mut data),
-    });
+    let write = pending(
+        &mut driver,
+        Op::Write {
+            handle: server,
+            buf: raw(&mut data),
+        },
+    );
     poll_for(&mut driver, 5);
     driver.completions(&mut stash);
     assert!(
         stash.is_empty(),
         "a write to a peer that does not read finished"
     );
-    // 相手が少し読むと送りの buffer が空き、待っている送りが compio の中で短く終わる
+    // 相手が少し読むと送りの buffer が空き、次の `wait` で待っている送りが進められる状態になる
     peer.set_nonblocking(true).unwrap();
     let mut room = vec![0u8; 1 << 20];
     let mut drained = 0;
@@ -621,8 +828,8 @@ fn a_cancelled_long_write_stops_resubmitting() {
         }
     }
     assert!(drained > 0);
-    poll_for(&mut driver, 20);
     driver.cancel(write);
+    look(&mut driver);
     driver.completions(&mut stash);
     assert_eq!(keys(&stash), [write]);
     let completion = stash.pop().unwrap();
@@ -633,7 +840,7 @@ fn a_cancelled_long_write_stops_resubmitting() {
     assert!(stash.is_empty());
 }
 
-/// 名前の接続の試行が compio の中で拒まれ、まだ受け取っていない間に取り消すと、次の番地を試さずに終わる。
+/// 名前の接続の最初の番地の試行が終わる前に取り消すと、次の番地を試さずに終わる。
 #[cfg(unix)]
 #[test]
 fn a_cancelled_connect_does_not_try_the_next_address() {
@@ -652,23 +859,25 @@ fn a_cancelled_connect_does_not_try_the_next_address() {
     let mut driver = RealDriver::with_lookup(lookup).unwrap();
     let mut stash = Vec::new();
     let (_, port) = listen(&mut driver, &mut stash);
-    let connect = driver.submit(Op::Connect {
-        host: "two.test".to_string(),
-        port,
-    });
-    // 解決の結果が届くのを待ち、1回の `completions` で受け取って最初の番地の試行を出す。表に操作がないので、その
-    // `completions` は `poll` せず、試行は終わらない
+    let connect = pending(
+        &mut driver,
+        Op::Connect {
+            host: "two.test".to_string(),
+            port,
+        },
+    );
+    // 解決の結果が届くのを待ち、1回の `wait` で受け取って最初の番地の試行を出す
     let start = Instant::now();
     while !LOOKED_UP.load(Ordering::SeqCst) {
         assert!(start.elapsed() < Duration::from_secs(1));
         std::thread::sleep(Duration::from_millis(1));
     }
     std::thread::sleep(Duration::from_millis(5));
+    look(&mut driver);
     driver.completions(&mut stash);
     assert!(stash.is_empty());
-    // 閉じたポートへの試行を compio の中で終わらせる
-    poll_for(&mut driver, 20);
     driver.cancel(connect);
+    look(&mut driver);
     driver.completions(&mut stash);
     assert_eq!(keys(&stash), [connect]);
     let completion = stash.pop().unwrap();
@@ -677,13 +886,20 @@ fn a_cancelled_connect_does_not_try_the_next_address() {
     assert_eq!(driver.pending(), 0);
 }
 
-/// 完了を受け取らずに `ms` ミリ秒だけ `poll` する。compio の中で終わった操作は、次の `completions` まで残る。
+/// 完了を受け取らずに `ms` ミリ秒だけ待つ。その間に終わった操作は、次の `completions` まで残る。
 #[cfg(unix)]
 fn poll_for(driver: &mut RealDriver, ms: u64) {
     let deadline = driver.now().as_millis() as u64 + ms;
     while driver.now() < Duration::from_millis(deadline) {
         driver.wait(Some(deadline)).unwrap();
     }
+}
+
+/// 期限の過ぎた `wait` で、待たずに OS を1回見る。
+#[cfg(unix)]
+fn look(driver: &mut RealDriver) {
+    let now = driver.now().as_millis() as u64;
+    assert!(driver.wait(Some(now)).unwrap());
 }
 
 #[cfg(unix)]
@@ -700,12 +916,15 @@ fn quiesce_drains_a_pending_accept_and_closes_discarded_streams() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (listener, _) = listen(&mut driver, &mut stash);
-    driver.submit(Op::Accept { listener });
+    submit(&mut driver, Op::Accept { listener });
     let server = std::net::TcpListener::bind(loopback(0)).unwrap();
-    driver.submit(Op::Connect {
-        host: "127.0.0.1".to_string(),
-        port: server.local_addr().unwrap().port(),
-    });
+    submit(
+        &mut driver,
+        Op::Connect {
+            host: "127.0.0.1".to_string(),
+            port: server.local_addr().unwrap().port(),
+        },
+    );
     let (mut peer, _) = server.accept().unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
     // 接続を compio の中で終わらせ、完了は受け取らない。`quiesce` はその完了を捨て、中身のストリームを閉じる
@@ -783,11 +1002,14 @@ fn a_connect_by_name_tries_the_looked_up_addresses_in_order() {
     let mut driver = RealDriver::with_lookup(lookup).unwrap();
     let mut stash = Vec::new();
     let (listener, port) = listen(&mut driver, &mut stash);
-    let accept = driver.submit(Op::Accept { listener });
-    let connect = driver.submit(Op::Connect {
-        host: "two.test".to_string(),
-        port,
-    });
+    let accept = submit(&mut driver, Op::Accept { listener });
+    let connect = submit(
+        &mut driver,
+        Op::Connect {
+            host: "two.test".to_string(),
+            port,
+        },
+    );
     let (_, peer) = stream(complete(&mut driver, &mut stash, connect));
     assert_eq!(peer, loopback(port));
     stream(complete(&mut driver, &mut stash, accept));
@@ -801,10 +1023,13 @@ fn a_cancelled_lookup_completes_at_once() {
         GATE.lookup(host, port)
     }
     let mut driver = RealDriver::with_lookup(lookup).unwrap();
-    let key = driver.submit(Op::Connect {
-        host: "block".to_string(),
-        port: 1,
-    });
+    let key = pending(
+        &mut driver,
+        Op::Connect {
+            host: "block".to_string(),
+            port: 1,
+        },
+    );
     assert_eq!(driver.pending(), 1);
     driver.cancel(key);
     let mut out = Vec::new();
@@ -825,10 +1050,13 @@ fn quiesce_does_not_wait_for_a_lookup() {
         GATE.lookup(host, port)
     }
     let mut driver = RealDriver::with_lookup(lookup).unwrap();
-    driver.submit(Op::Connect {
-        host: "block".to_string(),
-        port: 1,
-    });
+    submit(
+        &mut driver,
+        Op::Connect {
+            host: "block".to_string(),
+            port: 1,
+        },
+    );
     GATE.wait_started(1);
     driver.quiesce();
     assert_eq!(driver.pending(), 0);
@@ -851,10 +1079,13 @@ fn live_lookups_beyond_the_limit_wait_in_order() {
     let (_, port) = listen(&mut driver, &mut stash);
     let keys: Vec<OpKey> = (0..9)
         .map(|i| {
-            driver.submit(Op::Connect {
-                host: format!("block-{i}"),
-                port,
-            })
+            pending(
+                &mut driver,
+                Op::Connect {
+                    host: format!("block-{i}"),
+                    port,
+                },
+            )
         })
         .collect();
     assert_eq!(driver.pending(), 9);
@@ -866,13 +1097,14 @@ fn live_lookups_beyond_the_limit_wait_in_order() {
     let start = Instant::now();
     while GATE.started().len() < 9 {
         assert!(start.elapsed() < Duration::from_secs(1));
-        driver.wait(None).unwrap();
+        // 9つ目の解決のスレッドが始まっても driver を起こす者はいないので、期限で戻る待ちにする
+        poll_for(&mut driver, 5);
         driver.completions(&mut stash);
     }
     assert_eq!(GATE.started()[8], "block-8");
     GATE.release(8);
     for key in keys {
-        stream(complete(&mut driver, &mut stash, key));
+        stream(wait_for(&mut driver, &mut stash, key));
     }
     assert_eq!(driver.pending(), 0);
 }
@@ -889,20 +1121,26 @@ fn abandoned_lookups_do_not_hold_the_limit() {
     let mut stash = Vec::new();
     let (_, port) = listen(&mut driver, &mut stash);
     for i in 0..8 {
-        let key = driver.submit(Op::Connect {
-            host: format!("block-{i}"),
-            port,
-        });
+        let key = pending(
+            &mut driver,
+            Op::Connect {
+                host: format!("block-{i}"),
+                port,
+            },
+        );
         driver.cancel(key);
     }
     driver.completions(&mut stash);
     assert_eq!(stash.len(), 8);
     assert!(stash.iter().all(|c| c.cancelled));
     stash.clear();
-    let key = driver.submit(Op::Connect {
-        host: "fast".to_string(),
-        port,
-    });
+    let key = submit(
+        &mut driver,
+        Op::Connect {
+            host: "fast".to_string(),
+            port,
+        },
+    );
     let (_, peer) = stream(complete(&mut driver, &mut stash, key));
     assert_eq!(peer, loopback(port));
     GATE.release(8);
@@ -920,19 +1158,25 @@ fn a_lookup_fails_while_64_abandoned_lookups_are_stuck() {
     let mut stash = Vec::new();
     let (_, port) = listen(&mut driver, &mut stash);
     for i in 0..64 {
-        let key = driver.submit(Op::Connect {
-            host: format!("block-{i}"),
-            port,
-        });
+        let key = pending(
+            &mut driver,
+            Op::Connect {
+                host: format!("block-{i}"),
+                port,
+            },
+        );
         driver.cancel(key);
     }
     driver.completions(&mut stash);
     assert_eq!(stash.len(), 64);
     stash.clear();
-    let key = driver.submit(Op::Connect {
-        host: "fast".to_string(),
-        port,
-    });
+    let key = submit(
+        &mut driver,
+        Op::Connect {
+            host: "fast".to_string(),
+            port,
+        },
+    );
     let completion = complete(&mut driver, &mut stash, key);
     assert_eq!(
         completion.result.unwrap_err().to_string(),
@@ -943,10 +1187,13 @@ fn a_lookup_fails_while_64_abandoned_lookups_are_stuck() {
     // 戻ったスレッドの結果は driver が次の受け付けで受け取るので、届くまで試し直す
     let start = Instant::now();
     loop {
-        let key = driver.submit(Op::Connect {
-            host: "fast".to_string(),
-            port,
-        });
+        let key = submit(
+            &mut driver,
+            Op::Connect {
+                host: "fast".to_string(),
+                port,
+            },
+        );
         match complete(&mut driver, &mut stash, key).result {
             Ok(done) => {
                 assert!(matches!(done, Done::Stream { .. }));
@@ -957,6 +1204,152 @@ fn a_lookup_fails_while_64_abandoned_lookups_are_stuck() {
         assert!(start.elapsed() < Duration::from_secs(1));
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+/// `Readable` が終わった後の読みはその場で読めるので、`Submit::Done` で返り、完了を残さない。書いた直後の読みが
+/// その場で終わることは OS が約束しないので、読めると分かってから読む。
+#[cfg(unix)]
+#[test]
+fn a_read_after_a_finished_probe_returns_done() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (a, b) = connection(&mut driver, &mut stash);
+    let mut data = *b"hello";
+    let write = Op::Write {
+        handle: b,
+        buf: raw(&mut data),
+    };
+    assert_eq!(
+        run_op(&mut driver, &mut stash, write).unwrap(),
+        Done::Size(5)
+    );
+    let probe = submit(&mut driver, Op::Readable { handle: a });
+    complete(&mut driver, &mut stash, probe).result.unwrap();
+    let mut room = [0u8; 16];
+    let read = driver.submit(
+        next_key(),
+        Op::Read {
+            handle: a,
+            buf: raw(&mut room),
+        },
+    );
+    assert!(matches!(read, Submit::Done(Ok(Done::Size(5)))), "{read:?}");
+    driver.completions(&mut stash);
+    assert!(stash.is_empty());
+    assert_eq!(driver.pending(), 0);
+    assert_eq!(&room[..5], b"hello");
+}
+
+/// 保留のない遠い期限の `wait` は、別のスレッドの起こしで期限より前に戻る。実時間の上限は比べない。
+#[test]
+fn a_wake_ends_a_wait_with_a_far_deadline() {
+    let mut driver = RealDriver::new().unwrap();
+    let deadline = driver.now().as_millis() as u64 + 5000;
+    let waker = driver.waker();
+    let ringer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        waker.wake();
+    });
+    assert!(driver.wait(Some(deadline)).unwrap());
+    assert!(driver.now() < Duration::from_millis(deadline));
+    ringer.join().unwrap();
+}
+
+/// 期限 `u64::MAX` は期限なしの待ちだが、保留がなくても `Ok(false)` を返さず、起こしで戻る。
+#[test]
+fn a_wait_with_no_ops_and_a_far_deadline_wakes() {
+    let mut driver = RealDriver::new().unwrap();
+    let waker = driver.waker();
+    let ringer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(20));
+        waker.wake();
+    });
+    assert!(driver.wait(Some(u64::MAX)).unwrap());
+    ringer.join().unwrap();
+}
+
+/// driver は刻みを持たないので、保留のない `wait` は期限まで眠る。時間は下限だけを比べる。
+#[test]
+fn a_wait_without_ops_sleeps_until_its_deadline() {
+    let mut driver = RealDriver::new().unwrap();
+    let deadline = driver.now().as_millis() as u64 + 200;
+    let start = Instant::now();
+    assert!(driver.wait(Some(deadline)).unwrap());
+    let elapsed = start.elapsed();
+    assert!(elapsed >= Duration::from_millis(150), "{elapsed:?}");
+}
+
+/// 完了を受け取った後の取り消しは、同じ鍵で後から出した操作に効かない。
+#[cfg(unix)]
+#[test]
+fn a_cancel_after_completion_does_not_touch_the_next_op_of_the_key() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (a, b) = connection(&mut driver, &mut stash);
+    let mut data = *b"x";
+    let write = Op::Write {
+        handle: b,
+        buf: raw(&mut data),
+    };
+    run_op(&mut driver, &mut stash, write).unwrap();
+    let key = next_key();
+    let probe = match driver.submit(key, Op::Readable { handle: a }) {
+        Submit::Done(result) => result,
+        Submit::Pending => wait_for(&mut driver, &mut stash, key).result,
+    };
+    probe.unwrap();
+    let mut room = [0u8; 4];
+    let drain = Op::Read {
+        handle: a,
+        buf: raw(&mut room),
+    };
+    assert_eq!(
+        run_op(&mut driver, &mut stash, drain).unwrap(),
+        Done::Size(1)
+    );
+    driver.cancel(key);
+    let again = driver.submit(
+        key,
+        Op::Read {
+            handle: a,
+            buf: raw(&mut room),
+        },
+    );
+    assert!(matches!(again, Submit::Pending), "{again:?}");
+    let mut more = *b"yz";
+    let write = Op::Write {
+        handle: b,
+        buf: raw(&mut more),
+    };
+    run_op(&mut driver, &mut stash, write).unwrap();
+    let completion = wait_for(&mut driver, &mut stash, key);
+    assert!(!completion.cancelled);
+    assert_eq!(completion.result.unwrap(), Done::Size(2));
+    assert_eq!(&room[..2], b"yz");
+}
+
+/// 受け付けで終わる操作だけが続いても、落とされたハンドルは次の `submit` で閉じる。`wait` も `completions` も
+/// 呼ばない run で、落としたリスナーとストリームの fd が積もらないためである。
+#[cfg(unix)]
+#[test]
+fn a_submit_closes_dropped_handles() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (listener, port) = listen(&mut driver, &mut stash);
+    driver.bin().dropped.lock().unwrap().push(listener);
+    let again = submit(&mut driver, Op::Listen { addr: loopback(0) });
+    assert!(again.done.is_some());
+    let error = std::net::TcpStream::connect(loopback(port)).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::ConnectionRefused);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a pending key is submitted again")]
+fn a_pending_key_submitted_twice_panics_in_debug() {
+    let mut driver = RealDriver::new().unwrap();
+    let key = pending(&mut driver, Op::Job(Box::new(|| Ok(0))));
+    driver.submit(key, Op::Job(Box::new(|| Ok(0))));
 }
 
 #[cfg(windows)]
@@ -975,7 +1368,7 @@ fn listen_accept_and_connect_are_unsupported() {
         },
     ];
     for op in ops {
-        let key = driver.submit(op);
+        let key = submit(&mut driver, op);
         let error = complete(&mut driver, &mut stash, key).result.unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Unsupported);
     }

@@ -33,18 +33,19 @@ cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # UI tests
 cargo insta review                   # accept snapshots
 cargo clippy --all-targets -- -D warnings && cargo fmt
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core; eml_test_support also hir)
-cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--sched normal|sequential|seeded:N] <file.em> [args...] (the VM; --debug-heap is checked mode; --sched picks how `par` children and `Async` tasks switch, normal (a timer-driven monitor thread) by default; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--sched ...] [file.em] (the terminal REPL)
+cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--stats] [--sched normal|sequential|seeded:N] <file.em> [args...] (the VM; --debug-heap is checked mode; --stats is checked mode and prints the counters of `RunStats` on stderr after a run that did not fail; --sched picks how `par` children and `Async` tasks switch, normal (a timer-driven monitor thread) by default; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--sched ...] [file.em] (the terminal REPL)
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # type-check the Windows-only code (Linux: x86_64-unknown-linux-gnu)
 nix build                            # build the eml binary (eml_cli)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri, trusted tests only; run once more with -Zmiri-tree-borrows added
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # Miri on the VM's small runs (same two settings)
-nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib cells::a_read   # Miri on the read lend in eml_vm's op records (same two settings)
+nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write   # Miri on the read and write lends in eml_vm's op records (same two settings)
 cargo verus verify -p eml_rt         # Verus proofs of eml_rt
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)
 bench/rt.sh                          # eml_rt fast-mode instruction counts (macOS)
 bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ and the numeric bench/ programs against their Python versions, each row sized to ~300 ms of eml time: wall time and peak RSS (macOS)
+bench/net.sh LABEL=EML[@DIR] [LABEL=EML[@DIR]] [--only REGEX] [--stats]   # Std.Net on the real driver: CPU, syscalls (strace, Linux), RSS and RunStats per case as JSONL; @DIR runs that label on the programs in DIR (an older commit's bench/net); bench/net/report.py makes the tables
 bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input, compare.sh --paths EML PY ARGS... < input)
 ```
 

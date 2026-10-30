@@ -1,5 +1,6 @@
 //! テストの driver。仮想の時計と仮想のネットワークで動き、操作を決まった時点でだけ決着させるので、結果は
-//! プログラムと方針と seed で決まる (docs/spec/vm.md の「時計と driver」)。
+//! プログラムと方針と seed で決まる。受け付けの時点で決まる操作は `submit` の中で終え、ほかの操作は `wait` の
+//! 始めにだけ決着させる (docs/spec/vm.md の「時計と driver」)。
 
 mod net;
 
@@ -9,7 +10,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use eml_rt::{Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf};
+use eml_rt::{Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit};
 
 use crate::flag::Flag;
 use net::{Connection, Network, check_virtual_host, no_handle};
@@ -19,7 +20,8 @@ pub struct TestDriver {
     now_ms: u64,
     /// seed の方針のときだけある擬似乱数の状態。1回の決着で終わった操作の組を混ぜる。
     rng: Option<u64>,
-    next_key: OpKey,
+    /// `submit` の中で終えた操作の数。
+    immediate: u64,
     /// まだ終わっていない操作。受け付けの順に並ぶ。
     ops: VecDeque<Pending>,
     /// 終わったが、まだ `completions` で返していない操作。
@@ -40,13 +42,18 @@ impl TestDriver {
         TestDriver {
             now_ms: 0,
             rng: seed,
-            next_key: 0,
+            immediate: 0,
             ops: VecDeque::new(),
             done: Vec::new(),
             net: Network::new(),
             bin: Arc::default(),
             waker: Arc::default(),
         }
+    }
+
+    /// `submit` が `Submit::Done` で返した操作の数。Rust のテストが、終わった操作を待たない道を確かめるために読む。
+    pub fn immediate(&self) -> u64 {
+        self.immediate
     }
 
     fn empty_bin(&mut self) {
@@ -118,8 +125,8 @@ impl TestDriver {
                 let (peer, shut) = (end.peer, end.shut);
                 match self.net.ends.get_mut(&peer) {
                     Some(peer) if !peer.closed && !shut => {
-                        // 貸した側は完了を取り出すまで記憶を生かし、書き換えない (`RawBuf`。docs/spec/vm.md の
-                        // 「時計と driver」、docs/spec/object-model.md の T10 の行)
+                        // 貸した側は、`submit` が `Submit::Done` を返すか完了を取り出すまで記憶を生かし、書き換えない
+                        // (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
                         peer.inbox.extend(unsafe { bytes(buf) });
                         done(Ok(Done::Size(buf.cap)))
                     }
@@ -141,8 +148,8 @@ impl TestDriver {
                         .inbox;
                     let n = buf.cap.min(inbox.len());
                     for (i, byte) in inbox.drain(..n).enumerate() {
-                        // 貸した側は完了を取り出すまで記憶を生かし、一意に保ち、動かさない。`i < n <= cap` である
-                        // (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
+                        // 貸した側は、`submit` が `Submit::Done` を返すか完了を取り出すまで記憶を生かし、一意に保ち、
+                        // 動かさない。`i < n <= cap` である (`RawBuf`。docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)
                         unsafe { buf.ptr.add(i).write(byte) };
                     }
                     done(Ok(Done::Size(n)))
@@ -235,15 +242,35 @@ impl IoDriver for TestDriver {
         }
     }
 
-    fn submit(&mut self, op: Op) -> OpKey {
-        let key = self.next_key;
-        self.next_key += 1;
-        self.ops.push_back(Pending {
+    fn submit(&mut self, key: OpKey, op: Op) -> Submit {
+        // 渡していない完了の鍵もまだ保留である (`IoDriver::submit`)
+        debug_assert!(
+            self.ops.iter().all(|pending| pending.key != key)
+                && self.done.iter().all(|c| c.key != key),
+            "a pending key is submitted again"
+        );
+        // 決着と同じく、落とされたハンドルを閉じた後の状態を見る
+        self.empty_bin();
+        let pending = Pending {
             key,
             op,
             cancelled: false,
-        });
-        key
+        };
+        // 仕事は決着の組に入れ、受け付けの時点では動かさない
+        if matches!(pending.op, Op::Job(_)) {
+            self.ops.push_back(pending);
+            return Submit::Pending;
+        }
+        match self.try_finish(pending) {
+            Ok(completion) => {
+                self.immediate += 1;
+                Submit::Done(completion.result)
+            }
+            Err(pending) => {
+                self.ops.push_back(pending);
+                Submit::Pending
+            }
+        }
     }
 
     fn cancel(&mut self, key: OpKey) {
@@ -255,7 +282,7 @@ impl IoDriver for TestDriver {
     }
 
     fn completions(&mut self, out: &mut Vec<Completion>) {
-        self.settle();
+        self.empty_bin();
         out.append(&mut self.done);
     }
 

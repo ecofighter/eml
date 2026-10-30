@@ -246,8 +246,8 @@ table! {
         Cell => type_row("Std.Async.Cell", Unr, Repr::Int),
         Task => generic_type_row("Std.Async.Task", Lin),
         Scope => type_row("Std.Async.Scope", Unr, Repr::Int),
-        // driver の操作の記録を指す token の `Foreign` (docs/spec/stdlib.md の「`Std.Async`」)
-        OpId => type_row("Std.Async.OpId", Lin, Repr::Obj),
+        // driver の操作の記録の番号を持つ即値。1回だけ使うことは型検査が守る (docs/spec/stdlib.md の「`Std.Async`」)
+        OpId => type_row("Std.Async.OpId", Lin, Repr::Int),
         // 登録表の添字の即値。Kind は中身の型によらない (docs/spec/stdlib.md の「`Std.Chan`」)
         Chan => handle_type_row("Std.Chan.Chan"),
         // 登録表ではなく `Machine` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
@@ -615,6 +615,7 @@ table! {
             row("Std.Bytes.find_from", &[Obj, Int, Obj], Int, Purity::Panics),
         ),
         BytesMake => row("Std.Bytes.make", &[Int, Int], Obj, Purity::Panics),
+        BytesWithCapacity => row("Std.Bytes.with_capacity", &[Int], Obj, Purity::Panics),
         BytesGet => borrowing(
             &[false, true],
             row("Std.Bytes.get", &[Int, Obj], Int, Purity::Panics),
@@ -1241,14 +1242,13 @@ table! {
                 Purity::Effectful,
             ),
         ),
-        // token は待つ間だけ記録が持ち、再開のときに継続へ返す。預かるのは継続だけである
-        // (docs/spec/vm.md の「`Async` のタスク」)
+        // token は即値で、再開のときに継続へ返す。預かるのは継続だけである (docs/spec/vm.md の「`Async` のタスク」)
         AsyncParkIo => holding(
             &[false, true],
             kinded(
                 "Std.Async.park_io",
-                &[Obj, TObj],
-                &[Lin, Lin],
+                &[Int, TObj],
+                &[Unr, Lin],
                 Unit,
                 Unr,
                 Purity::Effectful,
@@ -1259,8 +1259,8 @@ table! {
             &[false, false, true],
             kinded(
                 "Std.Async.park_io_until",
-                &[Obj, Int, TObj],
-                &[Lin, Unr, Lin],
+                &[Int, Int, TObj],
+                &[Unr, Unr, Lin],
                 Unit,
                 Unr,
                 Purity::Effectful,
@@ -1277,6 +1277,22 @@ table! {
                 Unr,
                 Purity::Effectful,
             ),
+        ),
+        // 終わった操作を待たない速い道の行。token を借りて、続けるか、待つか、先に譲るかを返す
+        // (docs/spec/vm.md の「操作の記録」)
+        AsyncOpReady => borrowing(
+            &[true, false],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Async.op_ready",
+                    &[Int, Int],
+                    &[Unr, Unr],
+                    Int,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
         ),
         // channel の行 (docs/spec/stdlib.md の「`Std.Chan`」)。channel の引数は即値で、RC を持たない
         ChanNewRaw => row("Std.Chan.new_raw", &[Int], Int, Purity::Effectful),
@@ -1306,48 +1322,48 @@ table! {
             "Std.Net.submit_listen",
             &[Obj, Int],
             &[Unr, Unr],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
         NetSubmitAccept => kinded(
             "Std.Net.submit_accept",
             &[Obj],
             &[Lin],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
         NetSubmitConnect => kinded(
             "Std.Net.submit_connect",
             &[Obj, Int],
             &[Unr, Unr],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
         NetSubmitRead => kinded(
             "Std.Net.submit_read",
             &[Obj, Obj],
             &[Unr, Lin],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
         NetSubmitReadLine => kinded(
             "Std.Net.submit_read_line",
             &[Obj],
             &[Lin],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
         NetSubmitWrite => kinded(
             "Std.Net.submit_write",
             &[Obj, Obj],
             &[Unr, Lin],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
         NetOpListener => borrowing(
@@ -1356,8 +1372,8 @@ table! {
                 with_arg: Some(0),
                 ..kinded(
                     "Std.Net.op_listener",
-                    &[Obj],
-                    &[Lin],
+                    &[Int],
+                    &[Unr],
                     Obj,
                     Lin,
                     Purity::Effectful,
@@ -1370,8 +1386,8 @@ table! {
                 with_arg: Some(0),
                 ..kinded(
                     "Std.Net.op_stream",
-                    &[Obj],
-                    &[Lin],
+                    &[Int],
+                    &[Unr],
                     Obj,
                     Lin,
                     Purity::Effectful,
@@ -1384,8 +1400,8 @@ table! {
                 with_arg: Some(0),
                 ..kinded(
                     "Std.Net.op_outcome",
-                    &[Obj],
-                    &[Lin],
+                    &[Int],
+                    &[Unr],
                     Int,
                     Unr,
                     Purity::Effectful,
@@ -1394,40 +1410,40 @@ table! {
         ),
         NetTakeListener => kinded(
             "Std.Net.take_listener",
-            &[Obj],
-            &[Lin],
+            &[Int],
+            &[Unr],
             Obj,
             Lin,
             Purity::Effectful,
         ),
         NetTakeStream => kinded(
             "Std.Net.take_stream",
-            &[Obj],
-            &[Lin],
+            &[Int],
+            &[Unr],
             Obj,
             Lin,
             Purity::Effectful,
         ),
-        NetTakeRead => kinded(
-            "Std.Net.take_read",
-            &[Obj],
-            &[Lin],
+        NetTakeBytes => kinded(
+            "Std.Net.take_bytes",
+            &[Int],
+            &[Unr],
             Obj,
             Unr,
             Purity::Effectful,
         ),
         NetTakeLine => kinded(
             "Std.Net.take_line",
-            &[Obj],
-            &[Lin],
+            &[Int],
+            &[Unr],
             Obj,
             Unr,
             Purity::Effectful,
         ),
         NetFinish => kinded(
             "Std.Net.finish",
-            &[Obj],
-            &[Lin],
+            &[Int],
+            &[Unr],
             Unit,
             Unr,
             Purity::Effectful,
@@ -1518,6 +1534,7 @@ impl Extern {
                 | Extern::AsyncParkIo
                 | Extern::AsyncParkIoUntil
                 | Extern::AsyncParkSignal
+                | Extern::AsyncOpReady
                 | Extern::ChanNewRaw
                 | Extern::ChanReserveSend
                 | Extern::ChanPushRaw
@@ -1539,7 +1556,7 @@ impl Extern {
                 | Extern::NetOpOutcome
                 | Extern::NetTakeListener
                 | Extern::NetTakeStream
-                | Extern::NetTakeRead
+                | Extern::NetTakeBytes
                 | Extern::NetTakeLine
                 | Extern::NetFinish
                 | Extern::NetLocalPort
@@ -1586,7 +1603,7 @@ impl RuntimeEntry {
         match self {
             RuntimeEntry::StartTask => &[Repr::TObj],
             RuntimeEntry::ResumeTask => &[Repr::TObj, Repr::Enum],
-            RuntimeEntry::ResumeIo => &[Repr::TObj, Repr::Enum, Repr::Obj],
+            RuntimeEntry::ResumeIo => &[Repr::TObj, Repr::Enum, Repr::Int],
         }
     }
 }

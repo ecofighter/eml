@@ -82,8 +82,8 @@ run f = run_result (run_raw (bottom f))
 -- 離れたスコープの番号と前の run の番号は、閉じたスコープとして扱う (docs/spec/stdlib.md の「スコープ」)
 pub extern data Scope
 
--- driver の操作の記録を指す token。Kind は `Lin` である。受け付けた包みが同じ呼び出しの中で取り出すので、利用者の
--- コードには渡らない (docs/spec/stdlib.md の「`Std.Async`」)
+-- driver の操作の記録の番号 `(generation << 32) | index` を持つ即値。Kind は `Lin` である。受け付けた包みが同じ
+-- 呼び出しの中で取り出すので、利用者のコードには渡らない (docs/spec/stdlib.md の「`Std.Async`」)
 pub extern data OpId
 
 -- 本体の結果、失敗、取り消しのどれで終わっても、子がすべて終わるまで待ってから戻る。最初に記録した失敗が本体の結果より
@@ -283,12 +283,26 @@ chan_wait_send c = await_send c
 pub chan_wait_recv : Cell -> <IO, Async> Wake
 chan_wait_recv c = await_recv c
 
--- `Std.Net` の待ち。`OpId` を作る公開の関数はないので、利用者が呼んでも渡せる値はない
+-- `Std.Net` の待ち。`OpId` を作る公開の関数はないので、利用者が呼んでも渡せる値はない。操作が終わっていて取り消しの
+-- 地点が投げなければ待たずに続け、予算が切れて VM が譲ると答えれば列の後ろへ回ってから続ける。回る間の取り消しは
+-- 次の地点で投げる (docs/spec/vm.md の「操作の記録」)
 pub io_wait : OpId -> <IO, Async> (Wake, OpId)
-io_wait op = await_io op
+io_wait op =
+  let (step, op) = op_ready op 0
+  if step == 0 then (Woke, op)
+  else if step == 2 then
+    let _ = reschedule ()
+    (Woke, op)
+  else await_io op
 
 pub io_wait_until : OpId -> Int -> <IO, Async> (Wake, OpId)
-io_wait_until op ms = await_io_until op ms
+io_wait_until op ms =
+  let (step, op) = op_ready op ms
+  if step == 0 then (Woke, op)
+  else if step == 2 then
+    let _ = reschedule ()
+    (Woke, op)
+  else await_io_until op ms
 
 -- `Std.Signal` の待ち。0 が `Interrupt`、1 が `Terminate` で、ほかの番号は待たずに IO の失敗にする
 -- (docs/spec/stdlib.md の「`Std.Signal`」)
@@ -339,3 +353,4 @@ extern park_recv        : Cell -> (once Wake -> <IO> Unit) -> <IO> Unit
 extern park_io          : OpId -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit
 extern park_io_until    : OpId -> Int -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit
 extern park_signal      : Int -> (once Wake -> <IO> Unit) -> <IO> Unit
+extern op_ready         : OpId -> Int -> <IO> (Int, OpId)

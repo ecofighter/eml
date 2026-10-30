@@ -1,0 +1,27 @@
+# 物差しの件。1行1件で、タブで区切る。足すのも外すのも行の足し引きで済む。
+# 名前	プログラム	時間の引数	小さい引数	相手 (時間)	相手 (小さい)	時間の単位の数	小さい単位の数	単位
+# 相手が - なら同じ run の中で両端を動かす。`py:` で始まる名前は eml でなく Python 同士の床で、時間だけを測る
+base	base.em	-	-	-	-	1	1	run
+compute-fib	../fib.em	-	-	-	-	1	1	run
+echo-self-fresh	echo.em	20000 16 fresh	2000 16 fresh	-	-	20000	2000	往復
+echo-self-reuse	echo.em	20000 16 reuse	2000 16 reuse	-	-	20000	2000	往復
+echo-py-fresh	echo.em	20000 16 fresh {port}	2000 16 fresh {port}	echo-server	echo-server	20000	2000	往復
+echo-py-reuse	echo.em	20000 16 reuse {port}	2000 16 reuse {port}	echo-server	echo-server	20000	2000	往復
+bulk-self	bulk.em	1024 64 fresh fresh	100 64 fresh fresh	-	-	1024	100	MiB
+bulk-shared	bulk.em	1024 64 shared fresh	100 64 shared fresh	-	-	1024	100	MiB
+bulk-reuse	bulk.em	1024 64 fresh reuse	100 64 fresh reuse	-	-	1024	100	MiB
+bulk-1k	bulk.em	64 1 fresh fresh	16 1 fresh fresh	-	-	64	16	MiB
+bulk-send-py	bulk.em	1024 64 fresh fresh {port}	100 64 fresh fresh {port}	sink-server	sink-server	1024	100	MiB
+bulk-recv-py	bulk.em	1024 64 fresh fresh -{port}	100 64 fresh fresh -{port}	source-server 1024 64	source-server 100 64	1024	100	MiB
+bulk-accum	bulk.em	16 64 fresh accum	16 64 fresh accum	-	-	16	16	MiB
+many-self-250	many.em	250	250	-	-	250	250	接続
+many-self-1000	many.em	1000	1000	-	-	1000	1000	接続
+many-self-2000	many.em	2000	2000	-	-	2000	2000	接続
+many-py-1000	many.em	1000 {port}	1000 {port}	many-server 1000	many-server 1000	1000	1000	接続
+conn-self-1	conn.em	10000 1	1000 1	-	-	10000	1000	接続
+conn-self-32	conn.em	10240 32	1024 32	-	-	10240	1024	接続
+conn-py	conn.em	10000 1 {port}	1000 1 {port}	conn-server 10000	conn-server 1000	10000	1000	接続
+busy-self	busy.em	2000	200	-	-	2000	200	往復
+py:echo	-	echo-client 20000 16 {port}	-	echo-server	-	20000	0	往復
+py:bulk	-	bulk-send 1024 64 {port}	-	sink-server	-	1024	0	MiB
+py:conn	-	conn-client 10000 {port}	-	conn-server 10000	-	10000	0	接続

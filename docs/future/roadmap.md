@@ -28,14 +28,31 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
+- `io-backends`: 本物の I/O の driver を、OS ごとに自前で書く backend (Linux は epoll、Apple は kqueue、Windows は IOCP) に替え、`compio-driver` を外す。VM、std、`eml_extern`、`IoDriver` の trait には触れない。aarch64-linux を対象に足す。Windows の backend はこの段ではソケットを扱わない。前提: なし。設計: [非同期の設計](async.md) の「`IoDriver` と `eml_io`」
+  - driver を、呼ぶ側の鍵で引く1つの表を持つ核と、1つの操作を1回ずつ OS に出す backend に分ける。核は OS を呼ばず、偽の backend の上で Miri で確かめる。核の続き (短い書きの残り、受けの出し直し、接続の次の番地) は核だけが出す
+  - epoll と kqueue は、ソケットを作るときに1回だけ edge (`EPOLLET`、`EV_CLEAR`) で登録し、操作ごとの登録を出さない。fd ごとに読める記憶と読み・書きの列を持ち、記憶は読みの向きのブロック (`EAGAIN`) でだけ下ろす。`Readable` は記憶が立っていれば1バイトを覗いて確かめ、読み尽くした後は待つ
+  - `completions` は OS を見ず、表を歩かない。`wait` は刻みを持たない。名前の解決の答えは driver の中の札で当て、使い回した鍵の操作に当てない
+  - 落とすときに仕事と名前の解決を待たない。プールは 32 本までで、満ちたら driver の中の列で待ち、`submit` は呼んだスレッドを止めない。壊れた driver を落とすときは、カーネルがまだ書きうる操作の終わりを 1 秒まで確かめ、終わらなければ process を abort する。`mem::forget` と `Box::leak` を書かない
+  - `unsafe` は一覧のファイルに閉じ、ソースを読むテストで固定する。読みの貸しは一意に保ち、書きの貸しは生かして書き換えない。OS を呼ぶ部分は4つの対象 (Linux の x86_64 と aarch64、macOS、Windows) の CI と AddressSanitizer で確かめる
+  - 目標: epoll の定常状態で、データのある読みは syscall 1回、書きは 1回、待つ読みは 3回、操作ごとの `epoll_ctl` は 0。保留が多くても1接続あたりの CPU が本数によらない (`bench/net` の many-self の 2000 本 ÷ 250 本が 1.5 以下)。閉じる前に `bench/net` で、差し替えの前の driver と比べる
+  - 閉じる前に、操作の予算の書きの重みの単位 (512 バイト。[標準ライブラリ](../spec/stdlib.md) の「操作の予算」) を、自前の driver の上と macOS で測り直す。同じ run の bulk の CPU はこの単位で大きく変わる。試した形の数字は [計測の基準](../implementation/benchmarks.md) の「34cad91 と e942eeb」にある
+  - 差し替える前の driver は、`wait` のたびに操作の表を作り直し、1往復に2回確保する ([計測の基準](../implementation/benchmarks.md) の「34cad91 と e942eeb」)。核の表は使い回す
 - `net-tls`: `Std.Tls` のクライアントを入れる。TLS の状態は rustls の上の crate `eml_tls` が持ち、`eml_vm` と `eml_io` の feature `tls` で結び、`eml_cli` の既定の feature で有効にする。ソケットの I/O は `Std.Net` が行い、`Tls` の eml のコードが `TcpStream` と TLS の状態の間でバイトを汲む。server は作らない。テストの相手は、テストの driver の仮想のホスト `tls.localhost` が Rust で TLS を終端し、平文を `localhost` の listener へつなぐ。暗号は aws-lc-rs、根の証明書は webpki-roots で、追加の CA は PEM で渡す。最初に `nix build` と CI で C の依存が組めることを確かめる。前提: なし。設計: [非同期の設計](async.md) の「TLS と HTTP」
 - `std-http`: `Std.Http` の HTTP/1.1 のクライアントを、`Net` と `Tls` の上に eml で書く。`Content-Length`、chunked、EOF までの本文、リダイレクトを扱い、接続は要求ごとに閉じる。速さは `bench/scripts.sh` の行で測る。前提: `net-tls`。設計: [非同期の設計](async.md) の「TLS と HTTP」
-- `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。`Std.Signal` の `Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写す。前提: なし。設計: [非同期の設計](async.md) の「テストと決定性」
+- `net-windows`: 自前の IOCP の backend にソケットを載せ、同じネットのテストの組を Windows で流す。`Std.Signal` の `Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写す。前提: `io-backends`。設計: [非同期の設計](async.md) の「テストと決定性」
+  - 読みはブロックしない `recv` を先に試し、ブロックするなら長さ 0 の `WSARecv` で読めるまで待ってから、もう一度 `recv` する。読みの buffer をカーネルに渡さない。書きと受けも先に試し、ブロックするときだけ `WSASend` と `AcceptEx` を出す
+  - 記録ごとの `OVERLAPPED` の箱は、カーネルが持つ間だけ記録に置き、カーネルが書き終えたと packet で確かめるまで放さない。確かめずに放す道に入った箱は abort する
+  - ソケットは作るときにブロックしない設定にして IOCP のポートへ結び付ける。成功のときに packet を省くモードは使わない。非 IFS の LSP の下でこのモードが効かず、放した箱を読む道を残さないためである。同期に失敗した呼び出しのほかは、結果を packet で読み、packet の誤りは `WSAGetOverlappedResult` で読んで WSA の番号にそろえる
+  - OS が取り消しの要求を断ったら、driver を壊れた状態にする。壊れた driver を落とすときは、取り消しを出して 1 秒まで終わりを確かめ、終わらなければ process を abort する
+  - 文書にない前提 (長さ 0 の `WSARecv` の振る舞い、ブロックしないソケットの重なり合わない呼び出しが packet を積まないこと、`accept` と `AcceptEx` の併用) は、コードを書く前にテストだけのコミットで Windows の CI で確かめる
+  - Windows の `SO_REUSEADDR` は立てない。ループバックへの接続では SYN を送り直さない設定を出し、拒まれた接続をすぐ誤りにする
+  - Windows で流し始める `tests/real.rs` と `eml_vm/tests/api.rs` のテストは、成否の変更として段の計画に1件ずつ挙げる
+- `io-uring`: Linux に io_uring の backend を足すかを、試作と計測で決める。最初のタスクで `Backend` の実装を1つ試作し、`bench/net` の many-self-1000、bulk-1k、echo-py で epoll と比べる。user+sys の CPU が2割以上縮む件がなければ、試作を捨て、数字を [計測の基準](../implementation/benchmarks.md) に書いて段を閉じる。続けるときは、起動時に io_uring が使えるかを調べて選び (使えなければ epoll)、環境変数 `EML_IO_BACKEND` で固定でき、CI が両方の backend で `eml_io` のテストを流す。最低の kernel は 5.11 (`EXT_ARG`)。`user_data` は backend の表の番号と、その欄を使い回すたびに進める世代にする。壊れた driver を落とすときは、取り消しを出して 1 秒まで完了を読み、終わらなければ abort してから ring を閉じる。前提: `io-backends`。設計: [非同期の設計](async.md) の「`IoDriver` と `eml_io`」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
-- `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
+- `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`、`io-backends`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
 - `async-rescue`: 詰まった worker のタスクを、空いた worker が救済する。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「救済」
 - `task-limits`: タスクごとに深さ、スタック、メモリの上限を設け、超えたタスクだけを IO の失敗 `ResourceLimit` で止める。メモリの硬い上限は今と同じく run 全体を止める。安全点と末尾でない呼び出しの位置が、巻き戻しの地点になる。前提: `async-threads`。設計: [非同期の設計](async.md) の「タスクごとの上限」
-- `async-files`: 非同期のファイルと、子のプロセスのパイプを入れる。今のブロックする std の行では書けない次の3つを書けるようにする。前提: なし。設計: [非同期の設計](async.md) の「ファイルとパイプ」
+- `async-files`: 非同期のファイルと、子のプロセスのパイプを入れる。今のブロックする std の行では書けない次の3つを書けるようにする。前提: `io-backends`。設計: [非同期の設計](async.md) の「ファイルとパイプ」
   - パイプ (`.|`): 子の標準出力を次の子の標準入力へつなぐ。今の行で eml が読んで書き写すと、2段目の標準出力を pipe にした途端に 64 KiB で詰まる。`Cmd` の列を1回の `spawn` で OS の fd でつなぐ形もある
   - `run` と `output` の標準入力を文字列で与えること: 今の行では、読みながら書く子で詰まる ([標準ライブラリ](../spec/stdlib.md) の「`Child`」の pipe の規則)。今は `spawn` で書く。Host が書きながら読む `output` を持つ形もある
   - `Child` の標準エラーの pipe (読み分け): 今の行では3本の pipe を1つのスレッドで扱うと詰まる
@@ -43,7 +60,7 @@
   - 配列の要素は一様な位置なので、今は `Array Float` と `MutArray Float` の要素が書くたびに `Float` の箱に入る。spectral-norm では、確保のほとんどがこの箱である (`RunStats` の `allocations` 4043 のうち `boxes` が 4001。[計測の基準](../implementation/benchmarks.md) の「配列の `Float` の要素の箱」)。構造体の表現もこの箱を消さない
   - 新しい配列は `Array a` とは別の型で、長さの語と連続した中身を持つ物体の仲間 (`String`、`Bytes`。[オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」) の別の種類である。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
 - `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: `raw-arrays`。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
-- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。今は std に仕事を出す行がなく、プールの仕事は `eml_io` のテストだけが確かめるので、VM からプールの仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
+- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。今は std に仕事を出す行がなく、プールの仕事は `eml_io` のテストだけが確かめるので、VM からプールの仕事までを通すテストもここで足す。前提: `ffi-c`、`io-backends`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
 - `main-pinning`: プロセスのメインスレッドをメインの worker にし、`Std.Gui` を `Gui.run_on_main` だけで作る。メインの worker のタスクとその子は、救済されず、ほかの worker に移らない。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「固定したタスク」、同じ文書の「スレッドと worker」
 - `gui-plugin`: VM の上で egui のプラグインを動かし、`Std.Gui` の残りを入れる。前提: `main-pinning`。設計: [FFI と拡張の設計](ffi.md) の「GUI」、同じ文書の「拡張」
 - `borrowed-params`: 借用パラメータを入れる。所有の引数で1バイトごとに `dup` する形をなくし、verifier が借用のブロック引数を確かめる。前提: なし。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
@@ -365,9 +382,6 @@
 - 期限のタスクを使わない待ち (`await_cell_until`): セルの待ちと期限の2つの登録を持つ生の操作で、`timeout` と `drain_within` の期限のタスクを省く。`unpark` と `wake` が、同じセルのもう一方の登録を外す
   - 後に回した理由: 期限のタスク1つで書ける。
   - 見直す条件: その費用が計測で目立つとき。
-- `write_bytes` が buffer を返して使い回す形
-  - 後に回した理由: 返さない形で、確保が目立つかをまだ測っていない。
-  - 見直す条件: 計測で確保が目立ったとき。
 - 2つ目からの失敗をまとめて報告する形 (MultiError)
   - 後に回した理由: 既定では最初の失敗が勝ち、ほかは数えるだけにする (`RunStats` の `dropped_failures`)。
   - 見直す条件: 2つ目からの失敗の中身がデバッグに要るとき。
@@ -380,17 +394,21 @@
 - `shield` の中で取り消しの要求を読む確かめ
   - 後に回した理由: `cancel_requested` は、`shield` の中では外から来た取り消しを読まない。`shield` の中の後始末が要求を知る使い道が、まだない。
   - 見直す条件: `shield` の中の後始末が、取り消されたかどうかで動きを変える必要が出たとき。
-- io_uring の backend: unix の本物の driver は polling (epoll と kqueue) を使い、io_uring を使わない ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
-  - 後に回した理由: io_uring を使わなければ、確かめていない実行時の backend の切り替えがなく、自前の操作も compio の1つの trait で書ける。
-  - 見直す条件: `Std.Net` の計測で、readiness の道が支配的になったとき。
-  - 見直すときの形: Linux だけ `compio-driver` の feature に `io-uring` を足し、`polling` と両方を有効にする (compio の fusion の driver)。fusion は起動時に io_uring の opcode を調べ、io_uring が使えない環境では polling で動く。Docker の既定の seccomp プロファイル、gVisor、sysctl の `kernel.io_uring_disabled` を 0 以外にしたホストでは io_uring が使えない。`polling` を外して io_uring だけにすると、そうした環境で `RealDriver::new` が失敗する。fusion では backend が実行時に決まるので、CI では `ProactorBuilder::driver_type` で backend を固定し、両方でテストを流す
-  - io_uring で失敗するテストと直し方: `eml_io` の `real::a_readable_probe_stays_pending_without_data`、`real::a_read_after_a_probe_returns_the_bytes`、`real::a_closed_peer_reads_eof` の3つが失敗する。io_uring の `PollOnce` (`IORING_OP_POLL_ADD`) は、`Ok(0)` でなく poll の revents で終わるためである。revents は、読めるだけなら `POLLIN` (1)、相手が閉じていれば `POLLIN | POLLHUP | POLLRDHUP` (8209) になる。`Readable` は `Ok(0)` で終わると決めている ([VM](../spec/vm.md) の「時計と driver」) ので、`RealDriver::reap` で `Slot::Readable` の `Ok` を `Ok(0)` にそろえる。VM は `Probe` の完了の `Ok` と `Err` しか見ないので、ほかに直す所はない
-- 10 ms の上限をなくすこと: 空きの worker は本物の driver の1回の待ちを `IDLE_TICK` (10 ms) で切り、止める語を読む ([VM](../spec/vm.md) の「時計と driver」)。driver の `IoWaker` を鳴らすのは解決のスレッドと監視のスレッドの中継だけで、監視のスレッドのない run では Ctrl-C の後に鳴らす者がいない。そのため、driver のどの待ちも起こしで戻るという設計 ([非同期の設計](async.md) の「`IoDriver` と `eml_io`」) を満たしていない
-  - 後に回した理由: kqueue の通知と compio の起こしの道は async-signal-safe と書かれておらず、シグナルのハンドラから呼べない。worker が1つの間は、10 ms の上限で Ctrl-C と確保量の上限が眠る worker に届く。
-  - 見直す条件: `worker-threads` で、監視のスレッドとスレッドをまたぐ知らせが worker を起こすようになったとき。または、Ctrl-C の反応の遅れか空きの CPU 使用が問題になったとき。そのときは `IDLE_TICK` を見直す。
 - プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ。プールの32本のスレッドがすべて仕事中なら、仕事の受け付けは安全点を通らずに待つ ([VM](../spec/vm.md) の「時計と driver」)
   - 後に回した理由: 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
   - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
+- 待つ `Std.Net` の操作の確保: 操作が待つときは、継続の閉包と、再開した継続が一様な位置で受け取る組の箱 (`read_chunk` の `(Bytes, TcpStream)` と、`resume_io` が渡す `(Wake, OpId)`) を確保する。受け付けで終わった操作の道は確保しない ([VM](../spec/vm.md) の「操作の記録」)
+  - 後に回した理由: 組の箱を消すには、`await_io` の結果の型と、ランタイムが名前で呼ぶ `resume_io` の形 (`eml_extern` の表と VM) を変える必要がある。継続の閉包の数は、エフェクトの実装の形とフレームの深さで決まる。
+  - 見直す条件: 待つ読みの多いサーバで、1回の待ちの確保が計測で目立ったとき。
+- 1回の読みで貸す量の上限 (65 536 バイト) を外すこと ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)
+  - 後に回した理由: 上限を変える計測の根拠がない。`bench/net` の bulk-recv-py では、1回の `recvfrom` が貸した 65 536 バイトを使い切らない ([計測の基準](../implementation/benchmarks.md) の「34cad91 と e942eeb」)。
+  - 見直す条件: 大きな buffer を渡す読みで、読みの回数が計測で目立ったとき。
+- `read_line` の buffer を、残りがなくなっても持つこと: 今は残りがなくなれば確保を放す ([VM](../spec/vm.md) の「操作の記録」)
+  - 後に回した理由: 待つだけの接続に記憶を持たせない。
+  - 見直す条件: 行ごとに往復する接続で、`Readable` と確保が計測で目立ったとき。
+- 監視のスレッドを `Machine` が run をまたいで持つこと: 今は1 run に高々1本で、REPL では入力ごとに起こして止める ([VM](../spec/vm.md) の「タスクとスケジュール」)
+  - 後に回した理由: スレッドの寿命を run にそろえれば、入力の間に残る状態がない。起こしと join の費用は、REPL の1回の入力に比べて小さい。
+  - 見直す条件: REPL の入力ごとの費用で、監視のスレッドの起こしと join が目立ったとき。
 - `compio-driver` の 0.13 の系列: `compio-driver` と `compio-buf` は、上位の crate `compio` の安定版が使うバージョンに固定している ([アーキテクチャ](../implementation/architecture.md) の「外部 crate」)
   - 後に回した理由: 0.13 の系列には beta のバージョンしかない。
   - 見直す条件: 0.13 の系列が安定版になったとき。上げるときは、アーキテクチャの「外部 crate」に書いた項目をすべて確かめる。

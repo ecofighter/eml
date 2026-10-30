@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
-    Clock, CodeBase, Control, Limits, Machine, Normal, RunConfig, RuntimeError, Sched, Stop, Task,
-    VmFault,
+    Clock, CodeBase, Control, Limits, Machine, Normal, RunConfig, RunStats, RuntimeError, Sched,
+    Stop, Task, VmFault,
 };
 
 use crate::common::parse;
@@ -380,6 +380,152 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
     assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
 }
 
+/// `wait` の1回の呼び出しの、期限と呼んだときの時刻。
+type WaitCall = (Option<u64>, u64);
+
+/// `wait` の呼び出しを `calls` に書き、期限まで自分の時計を進める driver。操作は受け付けない。
+#[derive(Default)]
+struct DeadlineRecorder {
+    now_ms: u64,
+    calls: Arc<std::sync::Mutex<Vec<WaitCall>>>,
+}
+
+struct NoWaker;
+
+impl eml_rt::IoWaker for NoWaker {
+    fn wake(&self) {}
+}
+
+impl eml_rt::IoDriver for DeadlineRecorder {
+    fn now(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.now_ms)
+    }
+
+    fn wait(&mut self, deadline_ms: Option<u64>) -> std::io::Result<bool> {
+        self.calls.lock().unwrap().push((deadline_ms, self.now_ms));
+        match deadline_ms {
+            Some(deadline) => {
+                self.now_ms = self.now_ms.max(deadline);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn submit(&mut self, _key: eml_rt::OpKey, _op: eml_rt::Op) -> eml_rt::Submit {
+        unreachable!("the program submits no ops")
+    }
+
+    fn cancel(&mut self, _key: eml_rt::OpKey) {}
+
+    fn completions(&mut self, _out: &mut Vec<eml_rt::Completion>) {}
+
+    fn pending(&self) -> usize {
+        0
+    }
+
+    fn waker(&self) -> Arc<dyn eml_rt::IoWaker> {
+        Arc::new(NoWaker)
+    }
+
+    fn bin(&self) -> Arc<eml_rt::HandleBin> {
+        Arc::new(eml_rt::HandleBin::default())
+    }
+
+    fn shutdown_write(&mut self, _handle: eml_rt::IoHandle) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn set_nodelay(&mut self, _handle: eml_rt::IoHandle, _on: bool) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn close(&mut self, _handle: eml_rt::IoHandle) {}
+
+    fn quiesce(&mut self) {}
+}
+
+/// `with_driver` で渡した driver には中継がないので、空きのループは1回の待ちを今から 10 ms 先までに切る
+/// (docs/spec/vm.md の「時計と driver」)。driver の時計で確かめ、実時間は測らない。
+#[test]
+fn an_injected_driver_waits_at_most_10_ms_at_a_time() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> Async.sleep_ms 50)
+";
+    let driver = DeadlineRecorder::default();
+    let calls = Arc::clone(&driver.calls);
+    let (host, _) = eml_vm::capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap();
+    let calls = calls.lock().unwrap();
+    assert!(calls.len() >= 5, "{calls:?}");
+    for &(deadline, now) in calls.iter() {
+        assert!(deadline.is_some_and(|d| d <= now + 10), "{calls:?}");
+    }
+}
+
+/// 自己パイプのある本物の driver の run は、タスクが1つでも run の始めから監視のスレッドを持ち、割り込みは自己パイプ
+/// から監視のスレッドの waker を通って眠る worker に届く (docs/spec/vm.md の「タスクとスケジュール」)。`cargo test`
+/// は1つのプロセスでテストを並べるので、ほかのテストの監視のスレッドを見つけて偽に通りうる。nextest の結果で確かめる。
+#[cfg(target_os = "linux")]
+#[test]
+fn a_real_run_with_a_doorbell_has_a_monitor_from_its_start() {
+    use std::time::{Duration, Instant};
+
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> Async.sleep_ms 100000)
+";
+    let program = eml_test_support::lir(src);
+    let control = Arc::new(Control::new(Limits::default()));
+    let doorbell = eml_vm::Doorbell::new().unwrap();
+    let runner = {
+        let control = Arc::clone(&control);
+        let doorbell = Arc::clone(&doorbell);
+        std::thread::spawn(move || {
+            let (host, _) = eml_vm::capture_host(Default::default());
+            let mut machine = Machine::<Checked>::new(control, host)
+                .with_clock(Clock::Real)
+                .with_sched(Sched::Sequential)
+                .with_doorbell(doorbell);
+            let loaded = machine.load(&program).unwrap();
+            machine.run(loaded.entry)
+        })
+    };
+    let has_monitor = || {
+        std::fs::read_dir("/proc/self/task").unwrap().any(|task| {
+            std::fs::read_to_string(task.unwrap().path().join("comm"))
+                .is_ok_and(|comm| comm.trim_end() == "eml-monitor")
+        })
+    };
+    // 3 秒は見つからなかったときの番犬で、そのときも割り込んで run を終わらせてから落ちる
+    let start = Instant::now();
+    let found = loop {
+        if has_monitor() {
+            break true;
+        }
+        if start.elapsed() >= Duration::from_secs(3) {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    // シグナルのハンドラと同じ手順で、止める語を立ててから自己パイプを鳴らす
+    control.interrupt();
+    doorbell.ring();
+    let result = runner.join().unwrap();
+    assert!(found, "no eml-monitor thread appeared");
+    let error = result.unwrap_err();
+    assert!(error.interrupted(), "{error:?}");
+}
+
 /// `run_real_on` の結果。出力、run の結果、閉じたときの結果 (検査モードの漏れの検査)、経過である。
 type RealRun = (
     String,
@@ -513,6 +659,137 @@ fn a_real_connection_carries_bytes_between_tasks() {
     assert_eq!(out, "> hello\n");
 }
 
+/// `ProbeRecorder` が記録する、driver の呼び出し。
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DriverCall {
+    /// 受け付けた操作の鍵、`Readable` か (偽なら `Read`)、`Submit::Done` を返したか。ほかの操作は記録しない。
+    Submit(eml_rt::OpKey, bool, bool),
+    Wait,
+    /// `completions` が返した完了の鍵。
+    Completed(eml_rt::OpKey),
+}
+
+/// 本物の driver を包み、読みの受け付けとその結果、`wait` の呼び出し、`completions` が返した鍵を順に記録する driver。
+#[cfg(unix)]
+struct ProbeRecorder {
+    inner: eml_io::RealDriver,
+    calls: Arc<std::sync::Mutex<Vec<DriverCall>>>,
+}
+
+#[cfg(unix)]
+impl eml_rt::IoDriver for ProbeRecorder {
+    fn now(&self) -> std::time::Duration {
+        self.inner.now()
+    }
+
+    fn wait(&mut self, deadline_ms: Option<u64>) -> std::io::Result<bool> {
+        self.calls.lock().unwrap().push(DriverCall::Wait);
+        self.inner.wait(deadline_ms)
+    }
+
+    fn submit(&mut self, key: eml_rt::OpKey, op: eml_rt::Op) -> eml_rt::Submit {
+        let probe = match op {
+            eml_rt::Op::Readable { .. } => Some(true),
+            eml_rt::Op::Read { .. } => Some(false),
+            _ => None,
+        };
+        let submit = self.inner.submit(key, op);
+        if let Some(probe) = probe {
+            let done = matches!(submit, eml_rt::Submit::Done(_));
+            let call = DriverCall::Submit(key, probe, done);
+            self.calls.lock().unwrap().push(call);
+        }
+        submit
+    }
+
+    fn cancel(&mut self, key: eml_rt::OpKey) {
+        self.inner.cancel(key);
+    }
+
+    fn completions(&mut self, out: &mut Vec<eml_rt::Completion>) {
+        let from = out.len();
+        self.inner.completions(out);
+        let mut calls = self.calls.lock().unwrap();
+        calls.extend(out[from..].iter().map(|c| DriverCall::Completed(c.key)));
+    }
+
+    fn pending(&self) -> usize {
+        self.inner.pending()
+    }
+
+    fn waker(&self) -> Arc<dyn eml_rt::IoWaker> {
+        self.inner.waker()
+    }
+
+    fn bin(&self) -> Arc<eml_rt::HandleBin> {
+        self.inner.bin()
+    }
+
+    fn shutdown_write(&mut self, handle: eml_rt::IoHandle) -> std::io::Result<()> {
+        self.inner.shutdown_write(handle)
+    }
+
+    fn set_nodelay(&mut self, handle: eml_rt::IoHandle, on: bool) -> std::io::Result<()> {
+        self.inner.set_nodelay(handle, on)
+    }
+
+    fn close(&mut self, handle: eml_rt::IoHandle) {
+        self.inner.close(handle);
+    }
+
+    fn quiesce(&mut self) {
+        self.inner.quiesce();
+    }
+}
+
+/// 本物の driver で、読めるようになるのを待つ操作が終わった後 (受け付けか、その鍵の完了で) に同じ鍵で出す読みは、
+/// 受け付けで終わり、その後に driver を待たない。OS が約束しない「書いた直後の読みがその場で終わる」ことは確かめない
+/// (docs/spec/vm.md の「時計と driver」)。`with_driver` の driver には中継がないが、この run は空きのループに入る前に
+/// 終わる。
+#[cfg(unix)]
+#[test]
+fn a_real_read_after_a_finished_probe_does_not_wait() {
+    let src = format!(
+        "{REAL_CONNECTED}  let a = Net.write \"hello\" a
+  let (buf, b) = Net.read_chunk (Bytes.empty ()) b
+  Net.close a
+  Net.close b
+  println (String.decode buf))
+"
+    );
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let driver = ProbeRecorder {
+        inner: eml_io::RealDriver::new().unwrap(),
+        calls: Arc::clone(&calls),
+    };
+    let (out, result, closed, _) = run_real_on(&src, None, Some(Box::new(driver)));
+    result.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert!(out.ends_with("hello\n"), "{out}");
+    let calls = calls.lock().unwrap();
+    let probe = calls
+        .iter()
+        .position(|c| matches!(c, DriverCall::Submit(_, true, _)))
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    let DriverCall::Submit(key, _, done) = calls[probe] else {
+        unreachable!("found above");
+    };
+    // 待つ操作が受け付けで終わらなければ、その鍵の完了が読みより前に届いている
+    let read = calls
+        .iter()
+        .position(|&c| matches!(c, DriverCall::Submit(k, false, _) if k == key))
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    let completed = calls[probe..read].contains(&DriverCall::Completed(key));
+    assert!(done || completed, "{calls:?}");
+    assert_eq!(
+        calls[read],
+        DriverCall::Submit(key, false, true),
+        "{calls:?}"
+    );
+    assert!(!calls[read..].contains(&DriverCall::Wait), "{calls:?}");
+}
+
 /// 本物の driver で、データのないストリームの `read_chunk_within` は期限で `None` を返し、ストリームは続けて使える。後で
 /// 相手のタスクが書いたバイトは、次の `read_chunk` が返す (docs/spec/stdlib.md の「`Std.Net`」)。
 #[cfg(unix)]
@@ -595,7 +872,7 @@ lines s =
 fn a_real_write_of_8_mib_arrives_whole() {
     let src = format!(
         "{REAL_CONNECTED}  let t = Async.start (fn () -> count 0 b)
-  let a = Net.write_bytes (Bytes.make 8388608 (Byte.wrap 7)) a
+  let (_, a) = Net.write_bytes (Bytes.make 8388608 (Byte.wrap 7)) a
   Net.close a
   println (show (Async.await t)))
 
@@ -720,4 +997,22 @@ main () =
         out,
         "NotAvailable: cannot listen on 127.0.0.1:0: unsupported\n"
     );
+}
+
+#[test]
+fn the_stats_fields_follow_the_declaration() {
+    let stats = RunStats::default();
+    // Debug の `RunStats { a: 0, b: 0, ... }` から欄の名前を宣言の順に取る
+    let debug = format!("{stats:?}");
+    let inner = debug
+        .strip_prefix("RunStats { ")
+        .unwrap()
+        .strip_suffix(" }")
+        .unwrap();
+    let declared: Vec<&str> = inner
+        .split(", ")
+        .map(|field| field.split(':').next().unwrap())
+        .collect();
+    let named: Vec<&str> = stats.fields().iter().map(|(name, _)| *name).collect();
+    assert_eq!(named, declared);
 }

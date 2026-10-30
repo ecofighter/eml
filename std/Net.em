@@ -95,7 +95,8 @@ connect host port =
           fail_code code "cannot connect to \{host}:\{show port}"
 
 -- `s` から 1 バイト以上 65 536 バイト以下を読んで `b` の後ろに足し、その `Bytes` とストリームを返す。EOF では何も
--- 足さない。取り消しの地点である
+-- 足さない。`b` が一意で空きが 8 バイト以上あれば、その空きの 65 536 バイトまでに読む。なければ容量を広げて、
+-- 65 536 バイトまで読む。取り消しの地点である
 pub read_chunk : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
 read_chunk b s =
   if Async.cancel_requested () then
@@ -111,7 +112,7 @@ read_chunk b s =
         drop s
         raise_cancelled ()
       | Async.Woke ->
-        if code == 0 then (take_read op, s)
+        if code == 0 then (take_bytes op, s)
         else
           finish op
           drop s
@@ -134,7 +135,7 @@ read_chunk_within ms b s =
         drop s
         raise_cancelled ()
       | Async.Woke ->
-        if code == 0 then (Some (take_read op), s)
+        if code == 0 then (Some (take_bytes op), s)
         else if code == 1 then
           finish op
           (None, s)
@@ -197,8 +198,8 @@ read_line_within ms s =
 line_of : String -> <Panic> Option String
 line_of line = if String.byte_length line == 0 then None else Some (String.trim_line_end line)
 
--- `b` をすべて書き、ストリームを返す。取り消しの地点である
-pub write_bytes : Bytes -> TcpStream -> <IO, Async> TcpStream
+-- `b` をすべて書き、写さずに `b` そのものとストリームを返す。返った `b` は次の書きや読みに使える。取り消しの地点である
+pub write_bytes : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
 write_bytes b s =
   if Async.cancel_requested () then
     drop s
@@ -213,9 +214,7 @@ write_bytes b s =
         drop s
         raise_cancelled ()
       | Async.Woke ->
-        if code == 0 then
-          finish op
-          s
+        if code == 0 then (take_bytes op, s)
         else
           finish op
           drop s
@@ -223,11 +222,15 @@ write_bytes b s =
 
 -- 文字列を UTF-8 のバイトで書く
 pub write : String -> TcpStream -> <IO, Async> TcpStream
-write str s = write_bytes (Bytes.of_string str) s
+write str s =
+  let (_, s) = write_bytes (Bytes.of_string str) s
+  s
 
 -- 文字列と改行を書く
 pub write_line : String -> TcpStream -> <IO, Async> TcpStream
-write_line str s = write_bytes (Bytes.of_string "\{str}\n") s
+write_line str s =
+  let (_, s) = write_bytes (Bytes.of_string "\{str}\n") s
+  s
 
 pub close : TcpStream -> <IO> Unit
 close s = drop s
@@ -271,6 +274,6 @@ extern op_stream      : Async.OpId -> <IO> (TcpStream, Async.OpId)
 extern op_outcome     : Async.OpId -> <IO> (Int, Async.OpId)
 extern take_listener  : Async.OpId -> <IO> TcpListener
 extern take_stream    : Async.OpId -> <IO> TcpStream
-extern take_read      : Async.OpId -> <IO> Bytes
+extern take_bytes     : Async.OpId -> <IO> Bytes
 extern take_line      : Async.OpId -> <IO> String
 extern finish         : Async.OpId -> <IO> Unit

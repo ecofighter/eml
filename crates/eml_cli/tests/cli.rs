@@ -218,6 +218,24 @@ fn run_in_fast_mode_prints_the_program_output() {
 }
 
 #[test]
+fn run_with_stats_prints_one_stats_line() {
+    let plain = eml(&["run", "run/basics/hello.em"]);
+    let output = eml(&["run", "--stats", "run/basics/hello.em"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.stdout, plain.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("stats: "))
+        .collect();
+    assert_eq!(lines.len(), 1, "{stderr}");
+    for name in ["parks=", "completions=", "preemptions="] {
+        assert!(lines[0].contains(name), "{}", lines[0]);
+    }
+    assert!(!String::from_utf8_lossy(&plain.stderr).contains("stats: "));
+}
+
+#[test]
 fn a_runtime_error_in_fast_mode_exits_with_one() {
     let output = eml(&["run", "run-fail/basics/division_by_zero.em"]);
     assert_eq!(output.status.code(), Some(1));

@@ -8,8 +8,9 @@ use std::sync::atomic::Ordering;
 
 use eml_rt::{Control, IoDriver};
 
-use crate::cells::{CellRef, Registry};
+use crate::cells::{CellRef, Registry, Runnable};
 use crate::doorbell::Doorbell;
+use crate::driver::{DriverKind, ceil_ms};
 use crate::monitor::Monitor;
 use crate::vm::Task;
 
@@ -181,6 +182,14 @@ pub type JoinId = usize;
 /// エントリのタスクの番号。
 pub(crate) const MAIN: TaskId = 0;
 
+/// 中継のない run で、空きのループが1回の `wait` に渡す期限の上限 (ミリ秒)。Ctrl-C と確保量の上限が眠る worker を
+/// 止めるまでの遅れの上限になる (docs/spec/vm.md の「時計と driver」)。
+const WAIT_CAP_MS: u64 = 10;
+
+/// 切り替えが続くとき、`switch_away` の頭の集める地点がこの回数に1回だけ OS を見る。driver の `completions` は
+/// OS を見ないので、見る頻度は集める地点が持つ (docs/spec/vm.md の「時計と driver」)。
+pub(crate) const POLL_EVERY: u32 = 16;
+
 /// タスクの状態。動いているタスクは VM の繰り返しが持つ。
 pub(crate) enum TaskState {
     Running,
@@ -257,13 +266,18 @@ pub struct Scheduler<P: Policy> {
     pub(crate) shared_roots: usize,
     /// `Async` のタスクとスコープのセル。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) cells: Registry,
-    /// 終わったエントリの `Task` のスタック。次のエントリの `Task` が使い回す。
-    pub(crate) stacks: Vec<Vec<eml_rt::Word>>,
+    /// 終わったエントリの `Task` のスタックと scratch。次のエントリの `Task` が使い回す。待ちから戻るたびにエントリの
+    /// `Task` を作るので、毎回の確保を避けるためである。
+    pub(crate) stacks: Vec<(Vec<eml_rt::Word>, Vec<eml_rt::Word>)>,
     /// 時計と待ち。`Machine` が持つものを run の間だけ預かる (docs/spec/vm.md の「時計と driver」)。
     pub(crate) driver: Box<dyn IoDriver>,
-    /// driver を `Machine` が `Clock::Real` から作ったか。そうした run だけが OS のシグナルを待つタスクへ届ける
-    /// (docs/spec/stdlib.md の「`Std.Signal`」)。
-    pub(crate) real_driver: bool,
+    /// driver の出どころ。`Real` の run だけが OS のシグナルを待つタスクへ届ける (docs/spec/stdlib.md の
+    /// 「`Std.Signal`」)。空きの待ちに上限を掛けるかもこれで決まる (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) driver_kind: DriverKind,
+    /// OS を見ずに続けた `switch_away` の切り替えの数。`POLL_EVERY` に達するか、集める地点が OS を見たら 0 に戻す。
+    pub(crate) since_poll: u32,
+    /// 集める地点が再開する仕事を積む列。毎回の確保を避けるために使い回し、集める地点の外ではいつも空である。
+    pub(crate) runnables: Vec<Runnable>,
     /// 監視のスレッドと、それに渡すもの。
     pub(crate) watcher: Watcher,
 }
@@ -316,7 +330,9 @@ impl<P: Policy> Scheduler<P> {
             cells: Registry::new(generations),
             stacks: Vec::new(),
             driver,
-            real_driver: false,
+            driver_kind: DriverKind::Virtual,
+            since_poll: 0,
+            runnables: Vec::new(),
             watcher: Watcher {
                 control,
                 doorbell,
@@ -326,8 +342,32 @@ impl<P: Policy> Scheduler<P> {
         }
     }
 
-    /// 監視のスレッドを1回だけ始める。横取りする方針では2つ目の仕事が走れるようになりうるときに呼ぶので、2つ目の仕事を
-    /// 持たない run はスレッドを作らない (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// run の始めに監視のスレッドを始める唯一の入口。自己パイプのある本物の driver の run では、Ctrl-C と止める語を
+    /// 眠る worker に届けるのは監視のスレッドの waker なので、run の始めから動かす (docs/spec/vm.md の
+    /// 「タスクとスケジュール」)。
+    pub(crate) fn begin_run(&mut self) {
+        if self.driver_kind == DriverKind::Real && self.watcher.doorbell.is_some() {
+            self.start_monitor();
+        }
+    }
+
+    /// 空きのループが driver の `wait` に渡す期限。眠る driver で中継のない run では、止める語を読み直すために、
+    /// 今から `WAIT_CAP_MS` 先までに切る。テストの driver は期限まで時計を進めるので切らない。切ると、終わらない
+    /// 保留のある run がデッドロックで止まらない (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn wait_deadline(&self, deadline: Option<u64>) -> Option<u64> {
+        let relayed = self.driver_kind == DriverKind::Real
+            && self.watcher.doorbell.is_some()
+            && self.watcher.monitor.is_some();
+        if relayed || self.driver_kind == DriverKind::Virtual {
+            return deadline;
+        }
+        let cap = ceil_ms(self.driver.now()).saturating_add(WAIT_CAP_MS);
+        Some(deadline.map_or(cap, |d| d.min(cap)))
+    }
+
+    /// 監視のスレッドを1回だけ始める。`begin_run` のほかに、横取りする方針で2つ目の仕事が走れるようになりうるときと、
+    /// 本物の driver の run で OS のシグナルを待つときに呼ぶ。どれにも当たらない run はスレッドを作らない
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn start_monitor(&mut self) {
         let watcher = &mut self.watcher;
         if std::mem::replace(&mut watcher.tried, true) {
@@ -345,7 +385,7 @@ impl<P: Policy> Scheduler<P> {
     /// OS のシグナルを待つタスクへ中継するか。本物の driver の上で、監視のスレッドが動いているときだけである。
     /// 仮想の driver の run では本物のシグナルは既定の動きをする (docs/spec/stdlib.md の「`Std.Signal`」)。
     pub(crate) fn relay_on(&self) -> bool {
-        self.real_driver && self.watcher.monitor.is_some()
+        self.driver_kind == DriverKind::Real && self.watcher.monitor.is_some()
     }
 
     /// 見張りの語を、待ち手の列が空でないシグナルに合わせる。`park_signal` の後と集める地点の終わりに呼ぶので、
@@ -444,5 +484,80 @@ impl<P: Policy> Scheduler<P> {
     pub(crate) fn peak_stack(&self, current: &Task) -> u64 {
         self.peak_depth
             .max(current.depth_offset + current.stack.len()) as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use eml_rt::Limits;
+
+    use super::*;
+
+    /// 出どころを `kind` にした、テストの driver の `Scheduler`。テストの driver の時計は run の外では進まない。
+    fn scheduler(kind: DriverKind, doorbell: bool) -> Scheduler<Sequential> {
+        let mut sched = Scheduler::new(
+            Sequential,
+            Box::new(eml_io::TestDriver::new(None)),
+            Arc::new(Control::new(Limits::default())),
+            doorbell.then(|| Doorbell::new().unwrap()),
+            0,
+            usize::MAX,
+            Vec::new(),
+        );
+        sched.driver_kind = kind;
+        sched
+    }
+
+    #[test]
+    fn begin_run_starts_the_monitor_only_for_a_real_run_with_a_doorbell() {
+        let cases = [
+            (DriverKind::Real, true, true),
+            (DriverKind::Real, false, false),
+            (DriverKind::Virtual, true, false),
+            (DriverKind::Injected, true, false),
+        ];
+        for (kind, doorbell, started) in cases {
+            let mut sched = scheduler(kind, doorbell);
+            sched.begin_run();
+            assert_eq!(
+                sched.watcher.monitor.is_some(),
+                started,
+                "{kind:?}, doorbell {doorbell}"
+            );
+        }
+    }
+
+    #[test]
+    fn wait_deadline_caps_only_drivers_that_sleep_without_a_relay() {
+        let mut relayed = scheduler(DriverKind::Real, true);
+        relayed.begin_run();
+        assert!(relayed.watcher.monitor.is_some());
+        for deadline in [Some(5000), None, Some(u64::MAX)] {
+            assert_eq!(relayed.wait_deadline(deadline), deadline);
+        }
+        // 監視のスレッドがあっても、自己パイプがなければ切る
+        let mut unbelled = scheduler(DriverKind::Real, false);
+        unbelled.start_monitor();
+        assert!(unbelled.watcher.monitor.is_some());
+        // 自己パイプがあっても、監視のスレッドが起きていなければ切る (起こせなかった run と同じ)
+        let unwatched = scheduler(DriverKind::Real, true);
+        assert!(unwatched.watcher.monitor.is_none());
+        for sched in [
+            scheduler(DriverKind::Real, false),
+            unbelled,
+            unwatched,
+            scheduler(DriverKind::Injected, true),
+        ] {
+            let cap = ceil_ms(sched.driver.now()) + WAIT_CAP_MS;
+            assert_eq!(cap, 10);
+            assert_eq!(sched.wait_deadline(None), Some(cap));
+            assert_eq!(sched.wait_deadline(Some(5000)), Some(5000.min(cap)));
+            assert_eq!(sched.wait_deadline(Some(u64::MAX)), Some(cap));
+            assert_eq!(sched.wait_deadline(Some(3)), Some(3));
+        }
+        let virtual_ = scheduler(DriverKind::Virtual, false);
+        for deadline in [Some(5000), None, Some(u64::MAX)] {
+            assert_eq!(virtual_.wait_deadline(deadline), deadline);
+        }
     }
 }

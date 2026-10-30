@@ -255,6 +255,17 @@ fn bytes_are_made_of_one_byte<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// `Bytes.with_capacity` は長さ 0 で、頼んだ容量を外に貸せる (docs/spec/object-model.md の「バイト列の操作」)。
+fn bytes_with_capacity_lend_their_room<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let w = ctx.bytes_with_capacity(16).unwrap();
+    assert_eq!(body(ctx.heap(), w), b"");
+    let cap = unsafe { ctx.heap_mut().bytes_lend(w) }.unwrap().cap;
+    assert!(cap >= 16, "{cap}");
+    unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// 一意のバイト列はその場で書き換え、語も容量も変えない。
 fn unique_bytes_are_changed_in_place<M: Mode>() {
     let mut ctx = ctx::<M>();
@@ -723,6 +734,7 @@ both_modes!(
     bytes_are_read_by_position,
     bytes_are_compared_in_byte_order,
     bytes_are_made_of_one_byte,
+    bytes_with_capacity_lend_their_room,
     unique_bytes_are_changed_in_place,
     shared_bytes_are_copied,
     out_of_range_writes_release_their_argument,

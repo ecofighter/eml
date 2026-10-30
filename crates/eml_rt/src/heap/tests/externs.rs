@@ -2355,6 +2355,10 @@ unsafe fn call<M: Mode>(
                 let w = ctx.bytes_make(int(0), int(1))?;
                 take_bytes(ctx, w)
             }
+            "Std.Bytes.with_capacity" => {
+                let w = ctx.bytes_with_capacity(int(0))?;
+                take_bytes(ctx, w)
+            }
             "Std.Bytes.get" => {
                 let a = args.lent_bytes(ctx, &inputs[1]);
                 Outcome::Int(ctx.bytes_get(int(0), a)?)
