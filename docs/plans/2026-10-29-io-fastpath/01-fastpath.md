@@ -169,7 +169,7 @@ fn settle<M>(
 |---|---|---|
 | `switch_away` の頭 | `false`。その後、実行待ちの列が空でなければ `since_poll += 1` とし、`since_poll >= POLL_EVERY` なら `collect(true)` を呼び直す。列が空なら空きのループに入る | 直後に `wait` が見るか、走れるタスクがある |
 | 空きのループの `wait` の後 | `false` (`since_poll = 0` にする) | 直前の `wait` が見た |
-| `preempt` の頭、`preempt` のループの `NOTICE` | `true` | 横取りの刻みは 10 ms に1回なので、計算の重いタスクが走る worker でも I/O の完了の遅れの上限は今と同じ 10 ms である |
+| `preempt` の頭、`preempt` のループの `NOTICE` | `true` | 横取りは1つのタスクが刻みの全体を使ったときだけ起こるので、計算の重いタスクが走る worker では、I/O の完了の遅れの上限は今と同じ刻み2つ分 (20 ms) である |
 | 安全点の `NOTICE` (`collect_notice`) | `true` | 同上 |
 
 - 期限は `floor_ms(now)` にする。`ceil_ms(now)` は今より最大 1 ms 先になり、compio の `poll` がその分眠りうるためである。`floor_ms` は今以前なので、`wait` は待たずに OS を1回見る。

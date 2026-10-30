@@ -598,7 +598,7 @@ cargo test -p eml_vm --test integration scaling::                              #
 cargo test -p eml_vm --test integration bench::                                # 基準のプログラムの回数 (同上)
 bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)
 bench/scripts.sh                                                               # スクリプトと数値計算のプログラムを Python と比べた実時間と常駐メモリ (大きさは eml で約 300 ms) と、大きい入力のスクリプトの Rust の実装との比 (macOS、release)
-bench/net.sh LABEL=EML [LABEL=EML] [--only REGEX] [--stats]                             # Std.Net を本物の driver の上で流した CPU、syscall (strace、Linux)、RSS、RunStats (release)
+bench/net.sh LABEL=EML[@DIR] [LABEL=EML[@DIR]] [--only REGEX] [--stats]               # Std.Net を本物の driver の上で流した CPU、syscall (strace、Linux)、RSS、RunStats (release)
 bench/scripts/compare.sh --fixture wc                                          # スクリプトの UI テストの入力で、eml と Python の実装の出力を比べる (compare.sh --paths EML PY 引数... < 入力 でも比べる)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # VM の Miri (同上)

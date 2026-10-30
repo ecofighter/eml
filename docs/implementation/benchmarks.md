@@ -379,7 +379,7 @@ C/Rust との比
 
 `bench/net.sh` は、`Std.Net` を本物の driver の上で動かす物差しである。release ビルドの eml で `bench/net/cases.tsv` の件を流し、1件1行の JSONL を標準出力に出す。`python3 -I bench/net/report.py` がそれを Markdown の表にする。テストではなく、CI では流さない。命令の数でなく CPU の時間と syscall の数を測るので、同じ機械で前と後を並べたときだけ意味がある。
 
-`bench.py` は `LABEL=EML` を1つ以上受け取る。2つ以上渡すと、時間の run を件ごとに交互に流す。`--only REGEX` で件を絞り、`--stats` で `eml run --stats` の `RunStats` を1回取る。`--stats` の run は検査モードなので、時間には使わない。
+`bench.py` は `LABEL=EML` を1つ以上受け取る。2つ以上渡すと、時間の run を件ごとに交互に流す。`LABEL=EML@DIR` と書いたラベルは、件のプログラムを `DIR` から読む。`std/` の型が変わり、前のコミットの eml が今のプログラムを型検査できないときに使う。`DIR` には、そのコミットの `bench/net` を `git archive <コミット> bench/net | tar -x -C <置き場所>` で取り出したものを渡す。件の行と引数と `peer.py` は今の `bench/net` のものを使い、`@DIR` のないラベルは今のプログラムを使う。`--only REGEX` で件を絞り、`--stats` で `eml run --stats` の `RunStats` を1回取る。`--stats` の run は検査モードなので、時間には使わない。
 
 ### 件
 

@@ -142,7 +142,7 @@
   - `completions` が OS を見ると、`switch_away` の頭の集める地点と直後の `wait` で OS を2回見る。OS を見る頻度の方針を VM に置けば、driver の契約は1つで、将来の `Worker` やネイティブの呼び手も同じ契約で呼べる。
 - 退けた案
   - 鍵を driver が振る (今): VM の側に鍵から記録への表が要る。
-  - `completions` が 16 回に1回だけ OS を見る (driver の中の頻度): VM の呼び方に driver を結合し、計算の重い worker では完了が最大 16 刻み (約 160 ms) 遅れる。
+  - `completions` が 16 回に1回だけ OS を見る (driver の中の頻度): VM の呼び方に driver を結合し、計算の重い worker では完了が最大で横取り 16 回分 (横取り1回は刻み2つ分までなので、約 320 ms) 遅れる。
   - `wait(Some(u64::MAX))` を期限なしと同じに扱い、保留がなければ `Ok(false)` を返す: シグナルを待つタスクだけの run がデッドロックの誤りで止まる。
 - 影響の範囲: `crates/eml_rt/src/driver.rs`、すべての `IoDriver` の実装、`cells.rs` の記録。
 - 見直す条件: なし (trait は凍る)。
@@ -262,7 +262,7 @@
 - 理由
   - Ctrl-C と止める語を届ける道を waker の1本にし、空の起きをなくす。自己パイプのない監視のスレッドは 100 Hz で起きるので、その run では起こさない。CLI はいつも自己パイプを渡す。
   - テストの driver は `wait(Some(d))` で時計を進めるので、上限を掛けると終わらない保留のある run がデッドロックで止まらない。`Injected` に上限を掛けないと、`with_driver` で渡す本物の driver の run が割り込みで起きない。
-  - 横取りの刻みは 10 ms に1回なので、計算の重いタスクが走る worker でも I/O の完了の遅れの上限は今と同じ 10 ms になる。
+  - 横取りは1つのタスクが刻みの全体を使ったときだけ起こるので、計算の重いタスクが走る worker では、I/O の完了の遅れの上限は今と同じ刻み2つ分 (20 ms) になる (T-9 の `busy-self` で1往復に横取り2回、各約 20 ms と確かめた)。
 - 退けた案
   - 監視のスレッドをすべての `Clock::Real` の run で起こす: 自己パイプのない run では 100 Hz で起きる。
   - `Normal` の単一タスクの run では今どおり2つ目のタスクで起こす: run の始めに起こす規則に反する。費用は T-10 で測る (10 章の Q-1)。
@@ -705,7 +705,9 @@ CI は `test` の3行 (macos-15、ubuntu-24.04、windows-2025)、`fmt`、`verus`
 - 作業: 「進め方」の9つの手順の順に行う。この段で直すものは次のとおりである。
   1. `spec/` を仕上げる。段の名前と「今は〜、後で〜」の予告が残っていないことを確かめる。
   2. 計測する。この段は `crates/eml_vm`、`crates/eml_rt`、`std/`、`bench/` を変えるので対象である。
-     - 2点目: `before=<T-2 の eml>`、`after=<T-9 の eml>` で `bench/net/bench.py --runs 11 --strace-runs 3 --stats` を T-2b と同じ機械で流し、benchmarks.md の「ネットワークの計測」に、T-2b の1点目と並べた2列の表 (列はコミット。user+sys、実時間、syscall、RSS、`allocations`)、syscall の目標の対応の表 (付録2 の7.2節の形)、T-9 の `POLL_EVERY` の比べの数字を置く。3列目は io-backends が足す。
+     - 2点目: T-8 が bench/net の echo.em、bulk.em、many.em を新しい `write_bytes` の型に直したので、T-2 の eml (34cad91) は今のプログラムを型検査できない。そこで 34cad91 の bench/net を `git archive 34cad91 bench/net | tar -x -C <scratch のディレクトリ>` で取り出し、`python3 -I bench/net/bench.py --runs 11 --strace-runs 3 --stats --only '<busy-self を除く正規表現>' before=<T-2 の eml>@<そのディレクトリ>/bench/net after=<eml-poll16>` を T-2b と同じ機械で流す。`before` は取り出した 34cad91 のプログラムを、`after` は今のプログラムを流し、時間の run は件ごとに交互になる (付録2 の4節と6節)。`busy-self` は 34cad91 の bench/net になく、1点目と2点目の比べにも入れないので、`--only` で外す。benchmarks.md の「ネットワークの計測」に、T-2b の1点目と並べた2列の表 (列はコミット。user+sys、実時間、syscall、RSS、`allocations`)、syscall の目標の対応の表 (付録2 の7.2節の形)、`POLL_EVERY` の比べの数字を置く。`POLL_EVERY` の数字は流し直さず、T-9 の生の出力 `u9-busy.jsonl` と `u9-many.jsonl` から取る。3列目は io-backends が足す。
+     - benchmarks.md に移すときは、「計測の記録」の直した文を使う (T-9 の見直しの B-4)。`busy-self` の1往復の値は床を含むこと、横取りは1往復に2回で各約 20 ms であること、`busy-self` が `POLL_EVERY` を見分けないこと、16 の根拠が Q-2 の既定と many-self の syscall の数であることを書く。段の名前 (T-2b、T-9、1点目など段に結び付いた言い方) は書かず、列はコミット (34cad91 と d96346f) で名付ける。
+     - 付録2 の6節の手順6は、印を付けるだけでなく変化を説明する (T-9 の見直しの B-5)。reuse の件では往復あたりの `completions` が減った。echo-self-reuse は 6.00 → 4.0025、echo-py-reuse は 3.00 → 2.0005 で、reuse の道が `Readable` を出さなくなったためである。`parks` は見込みどおり変わらない。
      - 監視のスレッドの費用: 同じ比べで `base` と `compute-fib` の user+sys を前後で並べる。付録2 の4節の規則で「差」が出たら、数字を benchmarks.md とコミットのメッセージに書き、利用者に報告する (10 章の Q-1)。段は D-7 のまま閉じる。
      - 「今の数値」の3つの表は macOS でしか流せないので、T-11 に回す。
   3. docs/implementation/status.md: 速い道、即値の token、`write_bytes` の型、10 ms の上限は監視のスレッドのない run だけであること。
@@ -888,7 +890,7 @@ T-2b、T-9 の数字をここに書く。T-10 が benchmarks.md に移してか�
 - `busy-self` の比べと `POLL_EVERY` (T-9): 次のとおり。`POLL_EVERY` を 16 に保つ。
   - 機械と kernel は1点目と同じである。eml は e7e0df1 の上に T-9 の変更を当てた release の eml で、`one` は `POLL_EVERY` だけを 1 にしたもの、`sixteen` は 16 のままのものである。
   - `busy.em 200` の1回の実時間は 8.1 s だった。10 s を超えないので、往復の数は 2000 と 200 のままにした。2000 往復の run は1回約 80 s かかり、`python3 -I bench/net/bench.py --only busy-self --runs 11 --strace-runs 3 one=... sixteen=...` の全体で約 30 分かかった。
-  - この run は `base` を流していないので、単位あたりの値は大きい run と小さい run の差から出している。
+  - この run は `base` を流しておらず、時間の run は 2000 往復の大きい run だけである (小さい run は strace の 200 往復だけ)。そのため、1往復の値は 2000 往復の run の中央値を 2000 で割っただけで、起動の床 (約 27 ms、1往復あたり約 13 µs) を含む。床は両方のラベルで同じなので、1 と 16 の差にはほとんど響かない。`minflt/往復` の 0.65 も、1回の run の約 1300 の `minflt` を 2000 で割った起動の床で、1往復の費用ではない。
 
   | ラベル | 実時間 s | CPU s (四分位) | 1往復の実時間 µs | 1往復の CPU µs | 1往復の sys µs | 最大 RSS MiB | minflt/往復 | 自発/非自発 |
   |---|---|---|---|---|---|---|---|---|
@@ -897,13 +899,17 @@ T-2b、T-9 の数字をここに書く。T-10 が benchmarks.md に移してか�
 
   - 比べの表: CPU の比 1.00、四分位は重なり、判定は「差なし」。実時間の比は 1.00。`minflt` は同じなので、確保の揺れの印は付かない。
   - syscall (strace -f の 200 往復の run の main のスレッド。床を引かず、総数を 200 で割った値。3 回とも同じか 0.03 以内): `one` は epoll_pwait 4.02、epoll_ctl 12.08、timerfd_settime 4.02、main の計 37.49-37.58。`sixteen` は epoll_pwait 2.01、epoll_ctl 8.06、timerfd_settime 2.01、main の計 25.42-25.43。recvfrom 4.00 と sendto 2.00 は両方で同じ。
-  - 決めた値: 1往復の実時間は 16 のほうが 20.37 µs 大きいが、50 µs に届かないので `POLL_EVERY = 16` を保つ。1往復の約 40 ms は横取りの刻み (10 ms) 約4回分で、OS を見る頻度ではほとんど変わらない (10.2 節の Q-2 の見込みどおり)。
-  - 差が出なかったので、走れる I/O のタスクが多い many-self でも 1 と 16 を比べた (`--only '^(base|many-self-.*)$' --runs 11 --strace-runs 3`)。CPU (床を引いて1接続あたり µs) は、250 本で 222.54 → 138.55 (比 0.62)、1000 本で 454.96 → 155.61 (0.34)、2000 本で 847.05 → 237.19 (0.28) で、どれも四分位が重ならない。ただし `minflt` の1接続あたりの値が 3.75 → 4.75、36.22 → 9.48、53.52 → 18.11 と 1 以上違うので、比べの規則 (付録2 の4節) では3件とも確保の揺れとして時間の判定から外す。RSS も 1000 本で 153.5 MiB → 49.3 MiB と違った。syscall は規則の外で読める: 1接続あたりの epoll_pwait は 5.66-6.39 → 1.19、epoll_ctl は 20.64-22.12 → 11.69-11.78、main の計は 59.28-63.67 → 32.29-32.53 で、16 のほうが OS を見る回数が少ない。どちらの比べも 16 を保つ判断と合う。
+  - 1往復の約 40 ms は横取り2回分である。`--stats` では、20 往復で `parks=86`、`preemptions=43`、40 往復で `parks=166`、`preemptions=83` だった (`eml-poll16 run --stats bench/net/busy.em 20` と `40`)。1往復に待ち4回、横取り2回である。横取りは1つのタスクが刻みの全体を使ったときだけ起こる (docs/spec/vm.md の「タスクとスケジュール」、`crates/eml_vm/src/monitor.rs` の `Ticker::tick`)。刻みの直後に切り替わった計算のタスクは2つ目の刻みまで走るので、横取り1回は約 20 ms になる。起こされた I/O のタスクはその後ろで待つ。
+  - `busy-self` は `POLL_EVERY` を見分けない。1往復の実時間の四分位の幅は `one` で 56.4 µs、`sixteen` で 84.1 µs (最小-最大の幅は 86 µs と 212 µs) で、run の間の揺れが D-16 の 50 µs の閾値より大きい。16 のほうが 20.37 µs 大きいという差は揺れの中にあり、判断の根拠にならない。`one` は epoll_pwait を倍にしても1往復の時間が変わらない。往復の時間は、計算のタスクが刻みを使い切る間に起こされた I/O のタスクが待つことで決まり、OS を見る頻度では決まらない (10.2 節の Q-2 の見込みどおり)。
+  - 差が出なかったので、走れる I/O のタスクが多い many-self でも 1 と 16 を比べた (`--only '^(base|many-self-.*)$' --runs 11 --strace-runs 3`)。CPU (床を引いて1接続あたり µs) は、250 本で 222.54 → 138.55 (比 0.62)、1000 本で 454.96 → 155.61 (0.34)、2000 本で 847.05 → 237.19 (0.28) で、どれも四分位が重ならない。ただし `minflt` の1接続あたりの値が 3.75 → 4.75、36.22 → 9.48、53.52 → 18.11 と 1 以上違うので、比べの規則 (付録2 の4節) では3件とも確保の揺れとして時間の判定から外す。RSS も 1000 本で 153.5 MiB → 49.3 MiB と違った。syscall は規則の外で読める: 1接続あたりの epoll_pwait は 5.66-6.39 → 1.19、epoll_ctl は 20.64-22.12 → 11.69-11.78、main の計は 59.28-63.67 → 32.29-32.53 で、16 のほうが OS を見る回数が少ない。
+  - 決めた値: `POLL_EVERY = 16` を保つ。`busy-self` は値を見分けず、many-self の CPU の数字は `minflt` の規則で外れるので、どちらも根拠にしない。根拠は Q-2 の既定 (16) と、many-self の syscall の数で 16 のほうが OS を見る回数が少ないことである。
 - echo-py-reuse の往復あたりの `allocations` (T-2b と T-9)
   - T-2b (1点目、34cad91): 40.02 (1往復あたり。床を引いた値)。
   - T-9 (e7e0df1 の上に T-9 の変更を当てた release の eml、`--stats` を1回): 21.11。T-2b の 40.02 より小さい。同じ eml の前の run では 20.85 だった。Python の相手との間で、読みが受け付けで終わるかどうかで揺れる。同じ run の echo-self-reuse は 38.05、echo-self-fresh は 43.05、echo-py-fresh は 24.31 だった。
-  - `allocations` (検査モードのヒープの確保) は T-9 の変更では動かない。40.02 からの減りは T-5 から T-8 の分である。T-9 は Rust の側の確保を減らした。速いモードの release の eml で echo.em の reuse を 200 往復と 2200 往復で callgrind に通し、差を 2000 で割ると、1往復の `malloc` は 12、`realloc` は 2 だった。`collect` の列と、エントリの `Task` の scratch (待ちから戻るたびに空の `Vec` から伸びていた。1往復 4) を使い回すと、`malloc` が 10、`realloc` が 0 になった。
-  - 残した Rust の側の確保 (1往復 10): compio の `Proactor::push` の鍵の箱 (Send と Recv で 2 ずつ)、`polling::epoll::Events::with_capacity` (poll ごと、2)、`eml_io::real` の操作の表 `HashMap<u64, Entry>` の `reserve_rehash` (2)、compio の `VecDeque<ErasedKey>` の伸び (2)。どれも compio の driver とその包みの中にあり、io-backends の差し替えで driver ごと替わるので、この段では触らない。
+  - `allocations` (検査モードのヒープの確保) は T-9 の変更では動かない。40.02 からの減りは T-5 から T-8 の分である。T-9 は Rust の側の確保を減らした。速いモードの release の eml で echo.em の reuse を 200 往復と 2200 往復で callgrind に通し、差を 2000 で割ると、1往復の `malloc` は 12、`realloc` は 2 だった。`collect` の列と、エントリの `Task` の scratch を使い回すと、`malloc` が 10、`realloc` が 0 になった。減った4回は、待ちから戻るたびに空の `Vec` から伸びていた scratch の分 (1往復 4) で数が合う。`collect` の列の使い回しは数字に表れていない。callgrind の出力は残していない。
+  - 残した Rust の側の確保 (1往復 10): compio の `Proactor::push` の鍵の箱 (Send と Recv で 2 ずつ)、`polling::epoll::Events::with_capacity` (poll ごと、2)、`eml_io::real` の操作の表 `HashMap<OpKey, Entry>` の `reserve_rehash` (2)、compio の `VecDeque<ErasedKey>` の伸び (2)。
+    - compio の中の3つ (鍵の箱、`Events`、`VecDeque`) は、io-backends の差し替えで driver ごと替わるので、この段では触らない。
+    - `HashMap` の作り直しは compio に付いてくるものではない。`crates/eml_io/src/real.rs` の `reap` が `wait` のたびに `std::mem::take(&mut self.ops)` で表を空の `HashMap` に替えるので、次の登録で伸び直す。T-9 が `collect` で直したのと同じ形の小さな直しで済むが、`eml_io` は T-9 の対象の外なので残した。io-backends で `real.rs` を書き直すときに一緒に消す。
   - 残したヒープの確保: 速い道 (受け付けで終わる操作) の std の包みは、LIR で組がすべて構造体に下りていて、確保がない。待つ道の確保は次のとおりで、どれも std の包みの局所の組ではない。(1) yield で継続を組む `compose$` と各フレームの継続の閉包。フレームの深さに比例し、エフェクトの実装の形で決まる。(2) ハンドラの節が `park_io` に渡す `$cont$` の閉包。(3) 再開した継続が一様な位置で返す `(Bytes, TcpStream)` の箱。(4) `resume_io` が継続に渡す `(Wake, OpId)` の組 (1回の待ちに1つ)。2つともスカラーだが、継続の引数は一様な位置なので箱になる。消すには `await_io` の結果の型と、ランタイムのエントリ `resume_io` の形 (`eml_extern` の表と VM) を変える必要があり、局所の組を消す範囲を超えるので残した。
 
 ## 付録の外の記録: 検討で決まったこと
@@ -923,5 +929,5 @@ T-2b、T-9 の数字をここに書く。T-10 が benchmarks.md に移してか�
   - 三段 (受け付け、待ち、取り出し) を1つの extern か VM の命令にする案: 取り消しの地点と予算の規則が VM と std に割れ、ネイティブのコードの待ちの形 (節が継続を預けて戻る) と違う道ができる。
   - `Readable` を消し、読みをいつも1つの操作にする案: 空きのない buffer の読みで、何も来ない接続に 64 KiB を持たせることになる。
   - 鍵から記録への表を登録表の中に driver の状態として置く案: 鍵を記録の番号にすれば表が要らない。
-  - `completions` が OS を見る頻度を driver が持つ案 (`POLL_EVERY` を driver の中に置く): 計算の重い worker で完了が最大 16 刻み遅れ、driver が VM の呼び方に結び付く。
+  - `completions` が OS を見る頻度を driver が持つ案 (`POLL_EVERY` を driver の中に置く): 計算の重い worker で完了が最大で横取り 16 回分遅れ、driver が VM の呼び方に結び付く。
   - `Readable` を readiness の記憶だけで答える案: 読み尽くした後の `Readable` が `Done` になり、状態の問いの契約に反し、待つ接続が 64 KiB を持つ。backend は記憶が立っていれば覗いて確かめる。

@@ -89,7 +89,7 @@ eml の側は `Std.Net` で書く。相手は同じ run の中の eml のタス�
 
 1. 同じ機械を使う。1点目と同じ形の Linux の container で、ほかに負荷のない状態にする。benchmarks.md の「ネットワークの計測」に書いた機械と kernel を確かめる。
 2. 前と後のコミットを別々の worktree に取り出し、それぞれ別の `CARGO_TARGET_DIR` で `timeout 1200 cargo build --release -p eml_cli` して、`eml-before` と `eml-after` に写す。前の eml も `--stats` を持つコミットにする (1点目は T-2 のコミット)。
-3. `python3 -I bench/net/bench.py --runs 11 --strace-runs 3 --stats before=./eml-before after=./eml-after > results.jsonl` を流す。全件を2ラベルで流すと、時間の run が約 5 分、strace と `RunStats` が約 5.5 分かかった。`--only REGEX` で件を絞れる。
+3. `python3 -I bench/net/bench.py --runs 11 --strace-runs 3 --stats before=./eml-before after=./eml-after > results.jsonl` を流す。全件を2ラベルで流すと、時間の run が約 5 分、strace と `RunStats` が約 5.5 分かかった。`--only REGEX` で件を絞れる。前の eml が今のプログラムを型検査できなければ、前のコミットの bench/net を `git archive <前のコミット> bench/net | tar -x -C <置き場所>` で取り出し、`before=./eml-before@<置き場所>/bench/net` と書く。そのラベルだけが取り出したプログラムを流し、時間の run は今までどおり交互になる。
 4. `python3 -I bench/net/report.py results.jsonl > summary.md` の「比べ」の表で、4 節の判定を読む。`minflt` の列が 1 以上違う件は「確保の揺れ」として時間の判定から外す。
 5. syscall の表で、7.2 節の各項目を対応の件と列で確かめる。3 回のどれもが目標以下であることを見る。
 6. `RunStats` の表で、`parks`、`completions`、`allocations` を往復、MiB、接続あたりで並べる。`parks` は2列で同じになる (プログラムで決まる)。`allocations` は、buffer を使い回す件で往復あたり 2 以上減ることを見る。`completions` は、受け付けで終わる操作も数えるので、io-fastpath の後も操作の数と同じである。
