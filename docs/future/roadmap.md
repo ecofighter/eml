@@ -53,6 +53,12 @@
   - 新しい配列は `Array a` とは別の型で、長さの語と連続した中身を持つ物体の仲間 (`String`、`Bytes`。[オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」) の別の種類である。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
 - `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: `raw-arrays`。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
 - `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。今は std に仕事を出す行がなく、プールの仕事は `eml_io` のテストだけが確かめるので、VM からプールの仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
+- `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。`Tls.connect_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: `net-tls`、`ffi-blocking`。設計: この項目
+  - テストの証明書: macOS は TLS の server の証明書の有効期間に上限 (825 日) を課すと理解しているので、期限を 2126 年にした `eml_tls` の fixtures は、本物のソケットのテストで拒まれる見込みである。段の最初に確かめ、期限の短い証明書を定期的に作り直すか、テストだけ別の検証を使うかを決める
+  - Linux の OS の検証器は、OS のファイルから根を読んで rustls で検証する。`ca-certificates` を持たない最小のコンテナ (distroless など) と nix の sandbox では根が空になり、`Tls.connect` はすべて失敗する。この使い方は `Tls.connect_with_ca` で根を渡すと spec に書く。テストは `connect_with_ca` だけで書き、既定の根に頼るテストは置かない
+  - 拒否の理由は OS ごとに違う。IO の失敗の文言は今の固定の文言を保ち、OS の詳細を付けない
+  - Windows の検証が根をネットワークから取りに行くと、CI の結果がネットワークの状態に左右される。CI でこれをどう避けるかを、この段の設計で決める
+  - 依存が OS ごとに増える (macOS の security-framework、Windows の証明書の API)。暗号の provider は aws-lc-rs のまま変えない
 - `main-pinning`: プロセスのメインスレッドをメインの worker にし、`Std.Gui` を `Gui.run_on_main` だけで作る。メインの worker のタスクとその子は、救済されず、ほかの worker に移らない。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「固定したタスク」、同じ文書の「スレッドと worker」
 - `gui-plugin`: VM の上で egui のプラグインを動かし、`Std.Gui` の残りを入れる。前提: `main-pinning`。設計: [FFI と拡張の設計](ffi.md) の「GUI」、同じ文書の「拡張」
 - `borrowed-params`: 借用パラメータを入れる。所有の引数で1バイトごとに `dup` する形をなくし、verifier が借用のブロック引数を確かめる。前提: なし。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
@@ -357,16 +363,13 @@
 - close_notify なしの EOF を EOF として読む `Tls` の読み
   - 後に回した理由: 既定は IO の失敗 `ConnectionReset` にした。長さを持たない本文 (EOF までの本文) が黙って切れるのを防ぐためである。
   - 見直す条件: close_notify を送らないサーバと話す必要が出たとき。
-- OS の証明書ストアで検証すること (`rustls-platform-verifier`)
-  - 後に回した理由: webpki-roots の根と `Tls.connect_with_ca` の追加の CA で足り、OS ごとの依存を増やさない。
-  - 見直す条件: OS のストアにしかない CA を使うプログラムが出たとき。
 - `Http` の HTTP/2 と ALPN、gzip、keep-alive の接続のプール、ストリーミングの本文、本文の大きさの上限、プロキシ
   - 後に回した理由: スクリプトの HTTPS のクライアントには、要求ごとに閉じる HTTP/1.1 で足りる。gzip は展開の extern がまだない。
   - 見直す条件: 大きな本文を少しずつ読むプログラムか、同じホストへ多数の要求を出すプログラムが出たとき。
 - libcurl の上の HTTP のクライアント: 採らない。本物のソケットが要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないのでほかのプロトコルに使える TLS の層にならない。OS ごとに違う TLS (OpenSSL、Schannel) と libcurl、zlib、pkg-config の依存も持ち込む。
   - 見直す条件: `Http` に HTTP/2、プロキシ、圧縮が要り、eml で書くより libcurl を結ぶほうが小さいと分かったとき。
 - musl で静的に結んだ Linux の配布物 (`x86_64-unknown-linux-musl`)
-  - 後に回した理由: TLS とは別の配布の話である。aws-lc-sys のために musl を対象にする C のツールチェーンを flake に足し、`nix build` の2つ目のパッケージと CI のジョブが要る。musl の名前の解決と確保の速さは glibc と違う。AOT の配布物は `libeml_rt.a` を同梱して利用者の `cc` で結ぶので、musl の配布物には musl 向けの `libeml_rt.a` と結び方を別に用意する必要がある。根の証明書は webpki-roots なので、静的な配布物でも OS のストアは要らない。
+  - 後に回した理由: TLS とは別の配布の話である。aws-lc-sys のために musl を対象にする C のツールチェーンを flake に足し、`nix build` の2つ目のパッケージと CI のジョブが要る。musl の名前の解決と確保の速さは glibc と違う。AOT の配布物は `libeml_rt.a` を同梱して利用者の `cc` で結ぶので、musl の配布物には musl 向けの `libeml_rt.a` と結び方を別に用意する必要がある。根の証明書は今は webpki-roots なので静的な配布物でも OS のストアは要らないが、`tls-platform-verifier` の後は OS の根のファイルが要る。
   - 見直す条件: Linux の tarball を配布するとき。既定の配布物とは別の配布物にする。
 - 時刻を扱う `Time` のモジュール
   - 後に回した理由: 待ちと期限は `Int` のミリ秒で足りる。
