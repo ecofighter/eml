@@ -8,3 +8,11 @@ fail-fast = false
 filter = 'test(=ui::run) | test(=ui::run_fail) | test(=ui::check_fail) | test(=repl::transcripts) | test(=lowering::every_program_lowers_to_the_same_text)'
 threads-required = "num-cpus"
 slow-timeout = { period = "10s", terminate-after = 6 }
+
+# CI の時間の検査。1つずつ流し、`SLOW` と表示する時間を過ぎたテストを止めて失敗にする。上の5つは名前を合わせて直す
+[profile.timing]
+slow-timeout = { period = "2s", terminate-after = 1 }
+
+[[profile.timing.overrides]]
+filter = 'test(=ui::run) | test(=ui::run_fail) | test(=ui::check_fail) | test(=repl::transcripts) | test(=lowering::every_program_lowers_to_the_same_text)'
+slow-timeout = { period = "10s", terminate-after = 1 }
