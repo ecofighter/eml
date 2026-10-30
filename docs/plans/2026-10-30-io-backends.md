@@ -39,8 +39,8 @@
 |---|---|---|---|
 | Nix と devShell (`.#miri`、`.#cross`) | Miri、ASan、cross clippy | `nix develop .#miri -c rustc -V` → `rustc 1.101.0-nightly` 系。`nix develop .#cross -c cargo -V` → 0 | 止めて利用者に聞く |
 | `strace`、`python3` | T-7、T-10 | `strace -V`、`python3 -V` → 0 | 止めて利用者に聞く |
-| push と PR の CI | T-1 以降の macOS、Windows、arm、ASan の確かめ | 利用者が push を許しているか確かめる | 許しがなければ、各タスクの CI の基準を「未確認」として報告し、Linux の基準だけで進める |
-| macOS の機械 | T-8 の 512 の macOS の計測、T-11 の `bench/*.sh` | 利用者に聞く | D-14 の退路 (512 のまま、後の項目に回す) |
+| push と PR の CI | T-1 以降の macOS、Windows、arm、ASan の確かめ | 決定: 利用者は作業中の push と PR の CI を許した (ブランチ `claude/amazing-pascal-e12enm`) | - |
+| macOS の機械 | T-8 の 512 の macOS の計測、T-11 の `bench/*.sh` | 決定: 利用者の Mac で流す (頼むときに止める) | D-14 の退路 (512 のまま、後の項目に回す) |
 | 静かな Linux の機械 (4 vCPU 以上) | T-8、T-10 の計測 | `nproc`、`uname -r` を記録する | 同じ機械で前と後を交互に流せば判定は成り立つ |
 
 ## 5. 決定
@@ -449,7 +449,7 @@ T-0 ─┬─ T-1 ─────────────┐
 
 | ID | 項目 | 影響 | 決め方と時期 | 決まらないときの既定 |
 |---|---|---|---|---|
-| Q-1 | macOS で 512 を測れるか | T-8、T-9 | T-8 の前に利用者に聞く | 512 のまま。ロードマップの「その後の項目」に足す |
+| Q-1 | macOS で 512 を測れるか | T-8、T-9 | 決定: 利用者の Mac で流す。T-8 と T-11 で止めて、手順を渡して頼む | 512 のまま。ロードマップの「その後の項目」に足す |
 | Q-2 | ASan の aarch64-linux と macOS の脚が緑になるか (fenix の nightly の runtime は x86_64 だけ確かめた) | T-1、G-17 | T-1 の CI | D-13 の退路。外した脚は計画と testing.md とロードマップに書く |
 | Q-3 | arm で落ちるテスト | T-1 | T-1 の CI の後に仕分ける | 不具合以外は1件ずつ計画に足し、承認を得てから T-6 に進む |
 | Q-4 | `eml_io` の Miri の予算 | T-3 | T-3 で測る | 120 s / 160 s |
