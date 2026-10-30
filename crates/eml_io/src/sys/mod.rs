@@ -1,0 +1,50 @@
+//! OS ごとの backend (docs/spec/vm.md の「時計と driver」)。Linux は epoll、Apple は kqueue で、どちらも `unix.rs` の
+//! `Unix` が fd の表と歩を持ち、OS ごとのファイルは登録と待ちと起こしだけを持つ。
+
+// 本物の driver はまだこの backend を使わず、単体テストだけが使う
+#![allow(dead_code)]
+
+use std::time::Duration;
+
+#[cfg(target_os = "linux")]
+mod epoll;
+#[cfg(target_vendor = "apple")]
+mod kqueue;
+#[cfg(unix)]
+mod unix;
+
+#[cfg(target_os = "linux")]
+pub(crate) type Os = unix::Unix<epoll::Epoll>;
+#[cfg(target_vendor = "apple")]
+pub(crate) type Os = unix::Unix<kqueue::Kqueue>;
+
+/// `d` をミリ秒へ切り上げ、`max` で切る。切り上げるので期限より早くは戻らず、`max` で切った待ちは早く戻るだけで
+/// ある (docs/spec/vm.md の「時計と driver」)。期限のない待ちは、呼ぶ側が自分の OS の値に写し、ここへは渡さない。
+pub(crate) fn millis(d: Duration, max: u32) -> u32 {
+    u32::try_from(d.as_nanos().div_ceil(1_000_000)).map_or(max, |ms| ms.min(max))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::millis;
+
+    #[test]
+    fn millis_round_up_and_clamp_at_the_limit() {
+        let max = 1000;
+        assert_eq!(millis(Duration::ZERO, max), 0);
+        assert_eq!(millis(Duration::from_nanos(1), max), 1);
+        assert_eq!(millis(Duration::from_millis(1), max), 1);
+        assert_eq!(
+            millis(Duration::from_millis(1) + Duration::from_nanos(1), max),
+            2
+        );
+        assert_eq!(millis(Duration::from_millis(1001), max), max);
+        assert_eq!(
+            millis(Duration::from_millis(u64::from(u32::MAX) + 1), u32::MAX),
+            u32::MAX
+        );
+        assert_eq!(millis(Duration::MAX, max), max);
+    }
+}

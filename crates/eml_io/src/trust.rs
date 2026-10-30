@@ -20,6 +20,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("driver/tests/abort.rs"),
     ),
     ("resolve.rs", include_str!("resolve.rs")),
+    ("sys/mod.rs", include_str!("sys/mod.rs")),
+    ("sys/unix.rs", include_str!("sys/unix.rs")),
+    ("sys/epoll.rs", include_str!("sys/epoll.rs")),
+    ("sys/kqueue.rs", include_str!("sys/kqueue.rs")),
     ("test.rs", include_str!("test.rs")),
     ("test/net.rs", include_str!("test/net.rs")),
 ];
@@ -28,7 +32,15 @@ const FILES: &[(&str, &str)] = &[
 const SKIPPED: &[&str] = &["trust.rs"];
 
 /// `unsafe` を持ち、先頭に `#![allow(unsafe_code)]` を置くファイル。
-const UNSAFE_FILES: &[&str] = &["mask.rs", "test.rs", "real.rs", "driver/tests/fake.rs"];
+const UNSAFE_FILES: &[&str] = &[
+    "mask.rs",
+    "test.rs",
+    "real.rs",
+    "sys/unix.rs",
+    "sys/epoll.rs",
+    "sys/kqueue.rs",
+    "driver/tests/fake.rs",
+];
 
 /// `the_real_driver_makes_no_slices_and_leaks_nothing` と `the_core_names_no_os` が見ないファイル。compio の上の
 /// 本物の driver で、compio の buffer の trait のために slice を作り、壊れたときに鍵を漏らす。
@@ -273,6 +285,27 @@ fn the_core_names_no_os() {
                 squeezed[..at].ends_with("backend"),
                 "{file} spawns a thread outside the backend"
             );
+        }
+    }
+}
+
+/// readiness の backend は `Arrival::Retry`、`Hold::None`、`Cancel::Done` だけを使う。カーネルは同期の呼び出しの間しか
+/// buffer に触れないので、暫定の完了型の値を返す理由がない。
+#[test]
+fn readiness_backends_report_only_retries() {
+    for file in ["sys/unix.rs", "sys/epoll.rs", "sys/kqueue.rs"] {
+        let (_, text) = FILES
+            .iter()
+            .find(|(f, _)| *f == file)
+            .unwrap_or_else(|| panic!("{file} is not listed"));
+        let text = prepare(text);
+        for word in [
+            "Arrival::Done",
+            "Arrival::Cancelled",
+            "Hold::Buffer",
+            "Cancel::Pending",
+        ] {
+            assert!(!text.contains(word), "{file} uses {word}");
         }
     }
 }

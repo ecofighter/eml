@@ -37,7 +37,7 @@
 | 1 | 機能ごとの代表的なプログラムを `eml check` / `eml run` にかけたときにユーザーが見るもの。stdout、実行時エラー、プログラム全体が通るか落ちるか、代表的な診断の表示 | UI テスト (`tests/ui/`) |
 | 2 | 1つの段階の出力 (CST、HIR、推論したシグネチャ、Core IR、LIR) と、その段階の診断の細部 (位置、回復、端のケース) | その段階の crate の結合テスト (`crates/<段階>/tests/`)。ソースから `eml_test_support` で組み立てる |
 | 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_lir/tests/`、`eml_core_ir/tests/verify.rs`、`eml_vm/tests/`。LIR は IR のテキストで書いて `eml_lir::parse` で読み、Core IR は `eml_core_ir::parse` で読む |
-| 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープ、`eml_io` の driver の核など | `src/` の単体テスト。`eml_io` の核は `src/driver/tests/` で偽の backend の上で確かめる (「`eml_io` の検証」の「核の Miri」) |
+| 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープ、`eml_io` の driver の核など | `src/` の単体テスト。`eml_io` の核は `src/driver/tests/` で偽の backend の上で確かめる (「`eml_io` の検証」の「核の Miri」)。epoll と kqueue の backend は `src/sys/unix.rs` の `mod tests` で本物のソケットの上で確かめ、Miri では流さない |
 | 5 | lib API の流れ、CLI の終了コード、テスト補助そのもの | `eml_cli/tests/api.rs`、`eml_cli/tests/cli.rs`、`eml_test_support/tests/` |
 
 ### 重複させない
@@ -197,6 +197,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `the_scanner_skips_comments_and_strings` は、コメント、文字列、文字のリテラルの中の `unsafe` を数えないことと、どのファイルにも生の文字列がないことを確かめる。消し方は `eml_rt` の `trust.rs` と同じで、生の文字列を扱わないためである
 - `the_real_driver_makes_no_slices_and_leaks_nothing` は、`mem::forget` と `Box::leak` がないことと、`from_raw_parts` が `test.rs` のほかにないことを確かめる。テストの driver は貸しの規則を守って slice を作るが、driver の核と偽の backend は生のポインタのまま記憶に触れる。compio の上の `real.rs` は、compio の buffer の trait のために slice を作り、壊れたときに鍵を漏らすので、このテストと次のテストの対象から外す
 - `the_core_names_no_os` は、driver の核 (`driver/` の下で `driver/tests/` でないファイル) が `libc::`、`windows_sys::`、`Instant`、`thread::spawn`、`Builder::spawn`、`raw_os_error`、`ECANCELED`、`ECONNABORTED`、`EAGAIN` を書かず、スレッドを `backend.spawn(` でだけ作ることを確かめる
+- `readiness_backends_report_only_retries` は、epoll と kqueue の backend (`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`) が暫定の完了型の値 (`Arrival::Done`、`Arrival::Cancelled`、`Hold::Buffer`、`Cancel::Pending`) を書かないことを確かめる
 - `the_core_walks_its_table_only_to_shut_down` は、`driver/mod.rs` の `mem::take`、`slots.iter`、`slots.values`、`slots.keys`、`slots.drain` が `quiesce` か `drop` の中にだけあることを確かめる。保留の表を歩くと、1つの接続の費用が保留の数に比例するためである
 
 ### AddressSanitizer

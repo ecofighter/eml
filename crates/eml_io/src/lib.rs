@@ -11,6 +11,8 @@ mod mask;
 mod real;
 #[cfg(unix)]
 mod resolve;
+#[cfg(test)]
+mod sys;
 mod test;
 #[cfg(test)]
 mod trust;
