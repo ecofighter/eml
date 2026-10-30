@@ -5,7 +5,7 @@
 // 本物の driver はまだこの核を使わず、核のテストだけが使う
 #![allow(dead_code)]
 
-mod backend;
+pub(crate) mod backend;
 mod inbox;
 mod pool;
 mod resolve;
@@ -27,7 +27,8 @@ use eml_rt::{Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey
 use backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
 use inbox::{Answer, Inbox, Ticket};
 use pool::{POOL_LIMIT, Pool};
-use resolve::{Lookup, Resolver};
+pub(crate) use resolve::Lookup;
+use resolve::Resolver;
 
 /// `quiesce` が、OS に出した取り消しの完了を待つ長さの上限。過ぎたら完了は失われたとみなし、壊れた状態にする。
 const CANCEL_LIMIT: Duration = Duration::from_secs(1);
@@ -508,7 +509,19 @@ impl<B: Backend> Driver<B> {
 
     /// プールと解決器の答えを引き取り、札で欄に当てる。外した札の答えは捨てる。
     fn receive(&mut self) {
-        self.inbox.take(&mut self.arrived);
+        // 引き取りの中で解決器が次のスレッドを始められなければ、その答えは鳴らさずに受け箱に積まれる。受け箱が空に
+        // なるまで引き取り直すので、鳴らない答えを残したまま眠らない
+        loop {
+            self.inbox.take(&mut self.arrived);
+            if self.arrived.is_empty() {
+                break;
+            }
+            self.answer_arrived();
+        }
+    }
+
+    /// 引き取った答えの束を処理しきる。
+    fn answer_arrived(&mut self) {
         while let Some((ticket, answer)) = self.arrived.pop_front() {
             if let Answer::Lookup(_) = &answer {
                 // 札を引く前に、答えたスレッドを join する。手放した解決のスレッドもここで数えから外れる
@@ -888,8 +901,12 @@ impl<B: Backend> Drop for Driver<B> {
     fn drop(&mut self) {
         self.empty_bin();
         drop(self.panic.take());
-        // 札を外すので、仕事と解決の答えは引き取っても捨てる
+        // 札を外すので、仕事と解決の答えは引き取っても捨てる。解決の列も空にするので、引き取りが新しい解決の
+        // スレッドを始めない
         self.tickets.clear();
+        self.resolver.abandon_all();
+        // 渡していない完了が残ると、待ちの `turn` が待たずに回り続ける
+        self.discard_done();
         let backend = &mut self.backend;
         for (_, slot) in self
             .slots
@@ -915,8 +932,11 @@ impl<B: Backend> Drop for Driver<B> {
                 let step = step_of(&mut slot.kind, &mut self.handles);
                 // 取り消しを断られても、届く終わりを待つ
                 match self.backend.cancel(key, step) {
-                    Ok(Cancel::Done) => drop(self.slots.remove(&key)),
                     Ok(Cancel::Pending) | Err(_) => slot.cancelled = true,
+                    Ok(Cancel::Done) => {
+                        let slot = self.slots.remove(&key).expect("the key is listed above");
+                        self.drop_kind(slot.kind);
+                    }
                 }
             }
             let started = self.backend.now();
@@ -925,6 +945,7 @@ impl<B: Backend> Drop for Driver<B> {
                 if left.is_zero() || self.turn(Some(left)).is_err() {
                     abort();
                 }
+                self.discard_done();
             }
         }
         self.discard_done();

@@ -281,7 +281,13 @@ fn the_core_names_no_os() {
 fn the_core_walks_its_table_only_to_shut_down() {
     let text = FILES.iter().find(|(f, _)| *f == "driver/mod.rs").unwrap().1;
     let s = blank_comments_and_strings(text);
-    let prepared: String = s.iter().collect();
+    // rustfmt は `self.slots.values()` を行に分けるので、空白を詰めた文で探し、元の位置で囲む関数を引く
+    let (squeezed, origin): (Vec<char>, Vec<usize>) = s
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.is_whitespace())
+        .map(|(i, c)| (*c, i))
+        .unzip();
     let mut found = 0;
     for word in [
         "mem::take",
@@ -290,9 +296,14 @@ fn the_core_walks_its_table_only_to_shut_down() {
         "slots.keys",
         "slots.drain",
     ] {
-        for (byte, _) in prepared.match_indices(word) {
-            let at = prepared[..byte].chars().count();
-            let name = enclosing_fn(&s, at);
+        let word: Vec<char> = word.chars().collect();
+        for (at, _) in squeezed
+            .windows(word.len())
+            .enumerate()
+            .filter(|(_, w)| *w == word.as_slice())
+        {
+            let name = enclosing_fn(&s, origin[at]);
+            let word: String = word.iter().collect();
             assert!(
                 name == "quiesce" || name == "drop",
                 "driver/mod.rs: {word} in {name}"
@@ -300,8 +311,8 @@ fn the_core_walks_its_table_only_to_shut_down() {
             found += 1;
         }
     }
-    // 探し方が何も見つけなくなったら、規則を確かめていない
-    assert!(found > 0, "the scan found no walk of the table");
+    // `quiesce` と `drop` の表の歩きをすべて見つけていなければ、探し方が規則を確かめていない
+    assert!(found >= 4, "the scan found {found} walks of the table");
 }
 
 /// `pos` を囲むいちばん内側の `fn` の名前。

@@ -78,7 +78,7 @@ impl Bell {
         *rung = false;
     }
 
-    fn clear(&self) {
+    pub(super) fn clear(&self) {
         *self.rung.lock().unwrap_or_else(PoisonError::into_inner) = false;
     }
 }
@@ -129,6 +129,8 @@ pub(super) struct Fake<const SOCKETS: bool = true> {
     pub next_sock: u32,
     pub sent: Vec<u8>,
     pub calls: Vec<Call>,
+    /// `close` されたソケット。driver を落とした後も読めるように分けて持つ。
+    pub closed: Arc<Mutex<Vec<u32>>>,
 }
 
 impl<const SOCKETS: bool> Fake<SOCKETS> {
@@ -147,6 +149,7 @@ impl<const SOCKETS: bool> Fake<SOCKETS> {
             next_sock: 0,
             sent: Vec::new(),
             calls: Vec::new(),
+            closed: Arc::default(),
         }
     }
 
@@ -222,6 +225,10 @@ impl<const SOCKETS: bool> Backend for Fake<SOCKETS> {
 
     fn close(&mut self, sock: FakeSock) {
         self.calls.push(Call::Close(sock.0));
+        self.closed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(sock.0);
     }
 
     fn start(&mut self, key: OpKey, step: Step<'_, FakeSock>) -> Start<FakeSock> {

@@ -7,8 +7,11 @@ mod fake;
 use std::io;
 use std::net::SocketAddr;
 use std::panic::{self, AssertUnwindSafe};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Condvar, Mutex, PoisonError};
+use std::thread;
 use std::time::Duration;
 
 use eml_rt::{Completion, Done, IoDriver, IoHandle, Op, OpKey, RawBuf, Submit};
@@ -557,6 +560,23 @@ fn a_held_buffer_completed_within_the_limit_lets_drop_return() {
 }
 
 #[test]
+fn dropping_a_driver_closes_the_socket_of_a_held_connect() {
+    let mut driver = driver();
+    driver.backend.script(1, [Reply::Pending(Hold::Buffer)]);
+    pending(driver.submit(
+        1,
+        Op::Connect {
+            host: "192.0.2.9".to_string(),
+            port: 7,
+        },
+    ));
+    let closed = Arc::clone(&driver.backend.closed);
+    // `Drop` の取り消しは偽の backend の既定の `Cancel::Done` でその場で終わる
+    drop(driver);
+    assert_eq!(*closed.lock().unwrap(), [0]);
+}
+
+#[test]
 fn a_job_panic_is_raised_on_the_driver_thread() {
     let mut driver = driver();
     pending(driver.submit(1, Op::Job(Box::new(|| panic!("boom")))));
@@ -597,18 +617,27 @@ fn a_job_whose_thread_cannot_start_completes_once_with_an_error() {
 #[test]
 fn quiesce_waits_for_a_running_job() {
     let (tx, rx) = mpsc::channel::<()>();
+    let ran = Arc::new(AtomicBool::new(false));
     let mut driver = driver();
+    let job_ran = Arc::clone(&ran);
     pending(driver.submit(
         1,
         Op::Job(Box::new(move || {
             rx.recv().unwrap();
+            job_ran.store(true, Ordering::SeqCst);
             Ok(3)
         })),
     ));
-    tx.send(()).unwrap();
+    // 門は `quiesce` が待ち始めた後に開く。遅れは検出力のためだけで、待つ driver ではいつも仕事が先に終わる
+    let opener = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(20));
+        tx.send(()).unwrap();
+    });
     driver.quiesce();
+    assert!(ran.load(Ordering::SeqCst));
     assert_eq!(driver.pending(), 0);
     assert!(completions(&mut driver).is_empty());
+    opener.join().unwrap();
 }
 
 static SLOW: Gate = Gate::new();
@@ -705,6 +734,63 @@ fn a_ninth_lookup_starts_when_an_answer_is_taken() {
     done.extend(settle(&mut driver));
     assert_eq!(done.len(), 9);
     driver.backend.finished.reach(9);
+}
+
+static STRANDED: [Gate; 9] = [const { Gate::new() }; 9];
+
+fn first_answers(host: &str, _: u16) -> io::Result<Vec<SocketAddr>> {
+    let i = host.parse::<usize>().unwrap();
+    STRANDED[i].pass();
+    if i == 0 {
+        return Ok(vec![addr("192.0.2.1:80")]);
+    }
+    Err(io::Error::new(io::ErrorKind::NotFound, host.to_string()))
+}
+
+#[test]
+fn a_lookup_that_cannot_start_while_an_answer_is_taken_completes() {
+    let mut driver = with_lookup(first_answers);
+    for i in 0..9 {
+        pending(driver.submit(
+            i,
+            Op::Connect {
+                host: i.to_string(),
+                port: 80,
+            },
+        ));
+    }
+    assert_eq!(driver.backend.spawned.get(), 8);
+    // 9本目は、1本目の答えを引き取ったときに始めようとして失敗する
+    driver.backend.spawn_error = true;
+    STRANDED[0].open();
+    driver.backend.finished.reach(1);
+    // 起こしは消費済みとする。1本目の答えは同じ引き取りの中で接続になって待つので、失敗の答えを拾わずに眠ると
+    // 何も起こさない
+    driver.backend.bell.clear();
+    let mut done = Vec::new();
+    while done.is_empty() {
+        assert!(driver.wait(None).unwrap());
+        driver.completions(&mut done);
+    }
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].key, 8);
+    assert_eq!(
+        done[0].result.as_ref().unwrap_err().to_string(),
+        "no threads"
+    );
+    assert!(
+        driver
+            .backend
+            .calls
+            .contains(&Call::Start(0, StepKind::Connect(addr("192.0.2.1:80"))))
+    );
+    driver.cancel(0);
+    for gate in &STRANDED[1..8] {
+        gate.open();
+    }
+    done.extend(settle(&mut driver));
+    assert_eq!(done.len(), 9);
+    driver.backend.finished.reach(8);
 }
 
 #[test]

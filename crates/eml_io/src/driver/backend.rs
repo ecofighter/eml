@@ -41,7 +41,8 @@ pub(crate) enum Outcome<S> {
     Connected,
 }
 
-/// `Pending` の間、カーネルが `Step` の buffer に触れうるか (暫定)。
+/// `Pending` の間、カーネルが `Step` の buffer に触れうるか。`Buffer` は暫定で、最初の完了型の backend を載せるときに
+/// 形を見直す。
 pub(crate) enum Hold {
     None,
     Buffer,
@@ -52,12 +53,14 @@ pub(crate) enum Start<S> {
     Pending(Hold),
 }
 
-/// `Done`: backend は鍵と待ち手を忘れ、OS も buffer に触れない。`Pending`: 終わりは `wait` の `Event` で届く (暫定)。
+/// `Done`: backend は鍵と待ち手を忘れ、OS も buffer に触れない。`Pending`: 終わりは `wait` の `Event` で届く。
+/// `Pending` は暫定で、最初の完了型の backend を載せるときに形を見直す。
 pub(crate) enum Cancel {
     Done,
     Pending,
 }
 
+/// `wait` が届ける知らせ。`Done` と `Cancelled` は暫定で、最初の完了型の backend を載せるときに形を見直す。
 pub(crate) enum Arrival<S> {
     /// readiness: 同じ `Step` をもう1度 `start` せよ。余分に届いても害がない
     Retry,
@@ -72,6 +75,9 @@ pub(crate) struct Event<S> {
     pub arrival: Arrival<S>,
 }
 
+/// OS の資源を持ち、核の歩を OS に出す。readiness の backend は `Arrival::Retry`、`Start::Pending(Hold::None)`、
+/// `Cancel::Done` だけを使う。完了型の値 (`Hold::Buffer`、`Cancel::Pending`、`Arrival::Done` と
+/// `Arrival::Cancelled`) は暫定で、最初の完了型の backend (IOCP のソケットか io_uring) を載せるときに形を変えてよい。
 pub(crate) trait Backend: Sized {
     /// backend が所有する OS のハンドル。核はフィールドを読まず、写しを作らず、`close` 以外で落とさない
     type Sock;
