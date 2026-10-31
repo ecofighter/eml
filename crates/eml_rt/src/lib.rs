@@ -21,6 +21,7 @@ mod host;
 mod meta;
 mod mode;
 mod rc;
+mod remote;
 mod text;
 #[cfg(test)]
 mod trust;
@@ -59,10 +60,12 @@ const _: fn() = || {
     let _ = <Ctx<Checked> as AmbiguousIfSync<_>>::some_item;
 };
 
-// `Control` はセッションのどのスレッドからも同じものを見る
+// `Control` はセッションのどのスレッドからも同じものを見る。`RemoteSink` は、ほかのスレッドがページの頭から指して
+// 解放を積む
 const _: fn() = || {
     fn send_and_sync<T: Send + Sync>() {}
     send_and_sync::<Control>();
+    send_and_sync::<remote::RemoteSink>();
 };
 
 #[cfg(test)]

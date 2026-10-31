@@ -17,6 +17,7 @@ const FILES: &[(&str, &str)] = &[
     ("meta.rs", include_str!("meta.rs")),
     ("mode.rs", include_str!("mode.rs")),
     ("rc.rs", include_str!("rc.rs")),
+    ("remote.rs", include_str!("remote.rs")),
     ("text.rs", include_str!("text.rs")),
     ("word.rs", include_str!("word.rs")),
     ("heap/mod.rs", include_str!("heap/mod.rs")),
@@ -91,7 +92,11 @@ const TRUSTED: &[(&str, &str)] = &[
     ("meta.rs: global layout u32 is size == 4, align == 4", "T6"),
     ("meta.rs: global layout i32 is size == 4, align == 4", "T6"),
     (
-        "alloc.rs: global layout PageHeader is size == 32, align == 8",
+        "alloc.rs: global layout PageHeader is size == 24, align == 8",
+        "T6",
+    ),
+    (
+        "alloc.rs: global layout PageState is size == 16, align == 8",
         "T6",
     ),
     ("alloc.rs: external_body alloc_page", "T1"),
@@ -191,6 +196,8 @@ const TRUSTED: &[(&str, &str)] = &[
     ("externs.rs: external_body float_fixed", "T12"),
     ("externs.rs: external_body float_parse", "T12"),
     ("heap/ctx/positions.rs: external_body find_byte", "T13"),
+    ("remote.rs: external_body sink_ptr", "T14"),
+    ("remote.rs: external_body page_sink_of", "T14"),
     ("alloc.rs: Drop for Pages", "T4"),
     ("heap/walk.rs: Drop for Heap", "T4"),
     ("frozen.rs: Drop for Frozen", "T4"),
@@ -492,7 +499,7 @@ fn the_trust_list_is_exactly_the_trusted_items() {
         assert!(
             [
                 "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12",
-                "T13"
+                "T13", "T14"
             ]
             .contains(number),
             "{item} has no trust row"

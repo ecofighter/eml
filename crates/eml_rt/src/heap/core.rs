@@ -15,7 +15,7 @@ use super::model::Pos;
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, lemma_indeg_pos};
 #[cfg(verus_only)]
-use crate::alloc::{FREE_META, PageHeader, header_cap, header_ok, page_base};
+use crate::alloc::{FREE_META, PageHeader, header_cap, header_ok, header_sink, page_base};
 use crate::cell::{
     rc_decref_shared, rc_dup_shared, rc_is_last, rc_load, rc_store, u32_load, u32_store,
 };
@@ -221,6 +221,7 @@ impl Core {
             header_ok(r.value(), self.pages.prefixed()),
             header_cap(r.value(), self.pages.prefixed()) == self.cap(h),
             !self.in_region(h) ==> r.value() == self.pages.page_header(page_base(h)),
+            self.in_region(h) ==> header_sink(r.value())@.addr == 0,
     {
         self.lemma_shape(h);
         if self.in_region(h) {
@@ -234,8 +235,8 @@ impl Core {
         }
     }
 
-    /// ブロック `h` は、付けた塊のブロックでなく、このヒープのブロックである。ヒープのページと塊のページは重ならない
-    /// ので、`h` のページがこのヒープのページかで見分ける。
+    /// ブロック `h` は、付けた塊のブロックでなく、このヒープのブロックである。ページの頭の `sink` が、このヒープの
+    /// ページではこのヒープの `sink`、塊のページでは null なので、その比較で見分ける。
     #[inline]
     pub(crate) fn in_heap(&self, h: *mut Header) -> (r: bool)
         requires

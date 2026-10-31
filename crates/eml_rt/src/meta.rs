@@ -560,6 +560,14 @@ impl Text {
     }
 }
 
+/// `Word` の大きさと揃え。`global` の宣言はこのファイルにあるので、ほかのファイルはこの補題で使う。
+pub(crate) proof fn lemma_word_layout()
+    ensures
+        vstd::layout::size_of::<Word>() == 8,
+        vstd::layout::align_of::<Word>() == 8,
+{
+}
+
 /// 語に揃った番地から、欄と語の揃えを導く。
 proof fn lemma_align(x: int, k: int)
     requires

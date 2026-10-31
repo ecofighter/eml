@@ -883,6 +883,30 @@ fn own_objects_read_region_words<M: Mode>() {
     assert_eq!(mortal(&heap), 0);
 }
 
+// T14: 回復は、根から届く語のブロックを、ページの頭の `sink` でこのヒープのブロックと塊のブロックに分ける。凍結した
+// 塊のページの `sink` は null で、このヒープのページの `sink` はこのヒープの `RemoteSink` を指す
+fn recovery_tells_own_blocks_from_region_blocks<M: Mode>() {
+    let (b, s, _) = super::frozen::builder::<M>();
+    let region = Arc::new(b.freeze().unwrap());
+    let mut ctx = ctx_tests::ctx::<M>();
+    unsafe {
+        ctx.heap_mut().attach(region);
+        let own = ctx.heap_mut().alloc_string("own");
+        ctx.root_set(0, own).unwrap();
+        ctx.root_set(1, s).unwrap();
+        ctx.recover().unwrap();
+        let own = ctx.root_get(0).unwrap();
+        assert_eq!(text(ctx.heap(), own), "own");
+        ctx.heap_mut().decref(own).unwrap();
+        // 塊の語は写さずにそのまま根に残る
+        assert_eq!(ctx.root_get(1), Ok(s));
+    }
+    for w in ctx.take_roots().into_iter().flatten() {
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 // 実行の制御
 // T1: 2つのスレッドのヒープが、1つの Control にページの数を足し引きする
 fn two_threads_share_one_control<M: Mode>() {
@@ -1855,6 +1879,7 @@ both_modes!(
     two_threads_read_one_region,
     chains_drop_in_any_order,
     own_objects_read_region_words,
+    recovery_tells_own_blocks_from_region_blocks,
     two_threads_share_one_control,
     println_goes_through_the_host,
     borrowed_lines_cross_the_buffer,

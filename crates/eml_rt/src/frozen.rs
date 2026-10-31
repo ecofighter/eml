@@ -13,7 +13,7 @@ use vstd::shared::Shared;
 
 use crate::alloc::{PageHeader, Pages};
 #[cfg(verus_only)]
-use crate::alloc::{header_ok, lemma_header_size, page_base, region_cap, region_ptr};
+use crate::alloc::{header_ok, header_sink, lemma_header_size, page_base, region_cap, region_ptr};
 #[cfg(verus_only)]
 use crate::heap::Env;
 #[cfg(verus_only)]
@@ -336,6 +336,7 @@ impl RegionPerms {
         &&& forall|a: usize| #[trigger]
             self.headers.contains_key(a) ==> self.headers[a].ptr()@.addr == a
                 && self.headers[a].is_init() && header_ok(self.headers[a].value(), prefixed)
+                && header_sink(self.headers[a].value())@.addr == 0
         &&& forall|h: usize| #[trigger] self.blocks.dom().contains(h) ==> self.block_wf(h, prefixed)
         &&& match self.parent {
             None => self.depth == 0,
