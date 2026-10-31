@@ -351,8 +351,11 @@ fn stop_words(n: usize) -> (r: Vec<Arc<AtomicU32>>)
 }
 
 impl Control {
-    /// `limits.workers` 個の止める語を持つ `Control`。
+    /// `limits.workers` 個の止める語を持つ `Control`。worker 0 の `Ctx` が語を1つ要るので、`limits.workers` は 1 以上で
+    /// ある。
     pub fn new(limits: Limits) -> (r: Control)
+        requires
+            limits.workers >= 1,
         ensures
             r.word_count() == limits.workers,
     {
@@ -386,7 +389,17 @@ impl Control {
     // コード生成単位の分け方が変わり、速い道が呼ぶ側に展開されなくなったので、モードによらないこの関数に置く
     // (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     pub(crate) fn unbounded() -> Arc<Control> {
-        Arc::new(Control::new(Limits::default()))
+        // `Limits::default()` と同じ値を書く。`Default` の実装は値を約束しないので、`new` の前提を示せないためである
+        Arc::new(
+            Control::new(
+                Limits {
+                    max_bytes: usize::MAX,
+                    max_depth: usize::MAX,
+                    max_evv: usize::MAX,
+                    workers: 1,
+                },
+            ),
+        )
     }
 
     pub fn limits(&self) -> Limits {

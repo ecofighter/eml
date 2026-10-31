@@ -445,10 +445,10 @@ impl eml_rt::IoDriver for DeadlineRecorder {
     fn quiesce(&mut self) {}
 }
 
-/// `with_driver` で渡した driver には中継がないので、空きのループは1回の待ちを今から 10 ms 先までに切る
-/// (docs/spec/vm.md の「時計と driver」)。driver の時計で確かめ、実時間は測らない。
+/// `with_driver` で渡した driver の run も監視のスレッドを持つので、空きのループは1回の待ちを切らず、タイマーの期限まで
+/// 待つ (docs/spec/vm.md の「時計と driver」)。driver の時計で確かめ、実時間は測らない。
 #[test]
-fn an_injected_driver_waits_at_most_10_ms_at_a_time() {
+fn an_injected_driver_waits_until_its_deadline() {
     let src = "\
 import Async
 main : Unit -> <IO, Panic> Unit
@@ -465,10 +465,7 @@ main () = Async.run (fn () -> Async.sleep_ms 50)
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close().unwrap();
     let calls = calls.lock().unwrap();
-    assert!(calls.len() >= 5, "{calls:?}");
-    for &(deadline, now) in calls.iter() {
-        assert!(deadline.is_some_and(|d| d <= now + 10), "{calls:?}");
-    }
+    assert_eq!(calls[..], [(Some(50), 0)]);
 }
 
 /// 自己パイプのある本物の driver の run は、タスクが1つでも run の始めから監視のスレッドを持ち、割り込みは自己パイプ

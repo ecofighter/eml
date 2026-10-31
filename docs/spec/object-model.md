@@ -752,14 +752,15 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `heap` | `Heap<M>` |
 | `evv` | 今の `evv`。`Ctx` が持つ参照で、空のリストは即値の `()` である |
 | `yielding` | yield の状態 (下の「yield の状態」) |
-| `control` | セッションの `Arc<Control>` (下の「実行の制御」)。安全点の確かめがヒープの中をたどらずに読めるように、ヒープとは別に持つ |
-| `max_depth`、`max_evv` | `Control` の上限の写し。`Ctx::new` が写す |
+| `control` | セッションの `Arc<Control>` (下の「実行の制御」)。確保の前の上限の確かめと Host の読み手がヒープの中をたどらずに読めるように、ヒープとは別に持つ |
+| `word` | この worker の止める語の `Arc` (`Control::word(k)`)。安全点は、この欄を読み、語を読む2回の読みで済む |
+| `max_depth`、`max_evv` | `Control` の上限の写し。`Ctx::for_worker` が写す |
 | `host` | セッションの Host (下の「extern」の「Host」)。出力とファイルは、これを通す |
 | `stats` | 仕事の回数 `CtxStats` (`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`)。`Heap` の `Stats` と同じく、検査モードだけで数える。`yields` は `yield_to` の回数で、中断は数えない |
 | `roots` | セッションの根の表 (下の「セッションの根」) |
 
 - `Ctx` は `Send` で `Sync` でない (`Heap` と同じ)。`Control` は `Send` と `Sync` である。どちらも型の assert で固定する
-- 論理的な worker ID はヒープに置く (上の「論理的な worker ID」)
+- 今の論理的な worker ID はヒープに置き、ID の表は `Control` に置く (上の「論理的な worker ID」)
 - `heap()` は安全なメソッドで、`heap_mut()` は `unsafe fn` である。安全なコードがヒープを入れ替えると、`Ctx` の持つ語が、落としたヒープを指すためである。`heap_mut()` の前提は次の5つである
   - ヒープを入れ替えない (入れ替えるのは下の「回復」の `recover` だけである)
   - `Ctx` の持つ語 (`evv` と yield の状態の語) を手放したり書き換えたりせず、そこからたどれる物体の欄も書き換えない
@@ -869,6 +870,7 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 - `poll`、`interrupt`、`terminate`、`end_run`、`clear_end`、`preempt`、`take_preempt`、`notice`、`take_notice`、`worker_bits`、シグナルの語と見張りの語の読み書き、`exit`、`exit_code`、`begin_run`、`clear` と確保量の加減と `over_budget` は、`verus!` の外の安全なコードで、値について何も約束しない。worker の止める語を作る `Control::new` と、語を写して渡す `Control::word(k)` は `verus!` の中にあり、`word(k)` と `Ctx::for_worker` は `k` が語の数より小さいことを前提に持つ。確保器が確保量を加減する関数と、`make` が確保の前に上限と比べる関数は、信頼の一覧の T1 に入る (下の「`unsafe` の核」)
 - `eml_rt` は止める語だけを持ち、シグナルのハンドラを持たない。vstd だけに依存したままにするためである。ハンドラ (unix では SIGINT と SIGTERM のハンドラ、Windows ではコンソールの handler) は `eml_cli` が入れ、`Control::interrupt()` か `Control::terminate()` を呼ぶか、シグナルを保留にする ([VM](vm.md) の「上限と割り込み」)
 - シグナルの語の読み書きは次のとおりである。`defer(b)` は保留のビットを立て、`pending_signals()` は保留のビットを返す。`claim_signals()` は、保留でまだ中継していないビットを中継済みにして返すので、1回の保留を返すのは1回だけである。`settle(b)` は届けたビットの保留と中継済みを下ろす。`take_pending()` は語を 0 にして、保留だったビットを返す。`set_watched(b)` と `watched()` は見張りの語を書いて読む
+- 1つの `Control` を同時に使う `Machine` は1つだけである。ID の表と ID ごとの数は `Control` にあり、`check_owned` はその `Control` のヒープをすべて渡されたものとして数え直すので、2つの `Machine` のヒープが1つの表を分け合うと、数が合わなくなる。`RunConfig` を写すと `Control` も分け合うので、写した設定で2つの `Machine` を同時に動かさない
 - `eml run` の上限の既定の値は、`eml_cli::default_limits()` が決める ([VM](vm.md) の「上限と割り込み」)。上の表の既定の値 (`usize::MAX`) は `Limits::default()` のもので、`RunConfig::default()` とテストが使う
 
 ### 基本操作の契約

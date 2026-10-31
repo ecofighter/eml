@@ -12,6 +12,7 @@ use crate::cells::TaskStats;
 use crate::driver::DriverKind;
 use crate::error::KEPT_PENDING;
 use crate::vm::ExecWith;
+use crate::workers::Run;
 
 mod apply;
 mod cells;
@@ -28,6 +29,7 @@ mod op;
 mod sched;
 mod tls;
 mod vm;
+mod workers;
 
 pub use code::{CodeBase, CompileError, FnEntry};
 pub use disasm::disassemble;
@@ -140,7 +142,8 @@ pub(crate) struct RunCounts {
 }
 
 /// 実行の設定。上限は `Control` が持つので、ここに上限の欄は置かない。`file_root` は Host が持つ
-/// (docs/spec/vm.md の「置き場所」)。
+/// (docs/spec/vm.md の「置き場所」)。写した設定は同じ `Control` を分け合うので、写した設定で2つの `Machine` を同時に
+/// 動かさない (docs/spec/object-model.md の「実行の制御」)。
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct RunConfig {
@@ -261,7 +264,8 @@ pub struct Loaded {
 
 /// 入力をまたいで `CodeBase` と `Ctx` を持つ実行の状態 (docs/spec/vm.md の「追記」)。`load` でプログラムを追記し、
 /// `run` でエントリの関数を実行する。モードごとの確かめは、作るときに `Machine<Fast>::new` と `Machine<Checked>::new` が
-/// 決める。
+/// 決める。渡す `Control` を同時に使う `Machine` は1つだけにする。ID の表と数が `Control` にあるためである
+/// (docs/spec/object-model.md の「実行の制御」)。
 pub struct Machine<M: Mode> {
     /// 時計と待ち。`with_driver` が渡すか、最初の run が `clock` と方針の seed から作り、run の間は `Scheduler` に
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
@@ -794,11 +798,15 @@ fn run_scheduled<M: Mode, P: Policy>(
 ) -> (Result<(), RuntimeError>, Scheduled) {
     let main_worker = ctx.heap().worker();
     task.worker = main_worker;
+    let control = Arc::clone(ctx.heap().control());
+    // run の表は run ごとに作り、監視のスレッドが止まる `Scheduler` の破棄とともに捨てる (docs/spec/vm.md の
+    // 「タスクとスケジュール」)
+    let run = Arc::new(Run::new(control.limits().workers, start.doorbell));
     let mut sched = Scheduler::new(
         policy,
         start.driver,
-        Arc::clone(ctx.heap().control()),
-        start.doorbell,
+        run,
+        control,
         main_worker,
         start.max_depth,
         start.generations,
@@ -814,8 +822,13 @@ fn run_scheduled<M: Mode, P: Policy>(
     let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
     // (docs/spec/vm.md の「時計と driver」)
-    sched.driver.quiesce();
-    let kept_pending = sched.driver.pending() > 0;
+    let kept_pending = match sched.driver.as_mut() {
+        Some(driver) => {
+            driver.quiesce();
+            driver.pending() > 0
+        }
+        None => false,
+    };
     let scheduled = Scheduled {
         preemptions: sched.preemptions(),
         peak_stack: sched.peak_stack(task),
@@ -823,7 +836,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         tasks: sched.cells.stats,
         generations: sched.cells.next_generations(),
         counters: std::mem::take(&mut sched.cells.counters),
-        driver: Some(sched.driver),
+        driver: sched.driver.take(),
         kept_pending,
     };
     (result, scheduled)

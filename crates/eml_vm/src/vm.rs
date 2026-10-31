@@ -3,6 +3,7 @@
 //! (docs/future/multicore.md の「VM の並列化の備え」の制約5)。
 
 use std::marker::PhantomData;
+use std::sync::atomic::Ordering;
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault, Raised};
@@ -19,7 +20,7 @@ use crate::driver::{DriverKind, ceil_ms, floor_ms};
 use crate::error::{KEPT_PENDING, VmFault};
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
-    JoinId, JoinNode, MAIN, Outcome, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
+    JoinId, JoinNode, MAIN, Outcome, POLL_EVERY, Policy, Scheduler, TaskId, TaskState, driver_mut,
 };
 use crate::tls;
 use crate::{RunCounts, RuntimeError};
@@ -346,10 +347,10 @@ enum Polled {
 /// `Ctx::poll` の VM での呼び方。速い道は `Ok(())` の分岐だけで、残りは `polled_stop` に置く
 /// (docs/spec/vm.md の「タスクとスケジュール」)。
 #[inline(always)]
-fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize) -> Result<Polled, VmFault> {
+fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize, k: usize) -> Result<Polled, VmFault> {
     match ctx.poll(depth) {
         Ok(()) => Ok(Polled::Continue),
-        Err(stop) => polled_stop(ctx, depth, stop),
+        Err(stop) => polled_stop(ctx, depth, stop, k),
     }
 }
 
@@ -359,8 +360,13 @@ fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize) -> Result<Polled, VmFault> {
 /// (docs/spec/vm.md の「タスクとスケジュール」)。
 #[cold]
 #[inline(never)]
-fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<Polled, VmFault> {
-    // VM の `Ctx` は worker 0 の語を読むので、下ろすのも 0 番の語である
+fn polled_stop<M: Mode>(
+    ctx: &Ctx<M>,
+    depth: usize,
+    stop: Stop,
+    k: usize,
+) -> Result<Polled, VmFault> {
+    // `Ctx` は worker `k` の語を読むので、下ろすのも `k` 番の語である
     let control = ctx.heap().control();
     match stop {
         Stop::Notice | Stop::Preempt => {}
@@ -371,20 +377,20 @@ fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<Polled
         return Ok(Polled::Continue);
     }
     if stop == Stop::Preempt {
-        control.take_preempt(0);
+        control.take_preempt(k);
         return match ctx.poll(depth) {
             // 間に立った `NOTICE` は下ろさずに残す。切り替えの前の集める地点が下ろす
             Ok(()) | Err(Stop::Preempt | Stop::Notice) => Ok(Polled::Switch),
             Err(stop) => Err(stop.into()),
         };
     }
-    control.take_notice(0);
+    control.take_notice(k);
     match ctx.poll(depth) {
         // 2回目の `poll` の前に立ち直した `NOTICE` も、集める地点が下ろす
         Ok(()) | Err(Stop::Notice) => Ok(Polled::Collect),
         // 横取りも求められていれば、`PREEMPT` を拾うときと同じく下ろしてから切り替える。下ろさないと、切り替えた先の
         // 最初の安全点がまた切り替える
-        Err(Stop::Preempt) => polled_stop(ctx, depth, Stop::Preempt),
+        Err(Stop::Preempt) => polled_stop(ctx, depth, Stop::Preempt, k),
         Err(stop) => Err(stop.into()),
     }
 }
@@ -400,7 +406,7 @@ fn safepoint<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    let polled = poll(ctx, task.stack_depth())?;
+    let polled = poll(ctx, task.stack_depth(), sched.index)?;
     let tick = sched.policy.tick();
     if polled == Polled::Collect {
         collect_notice::<R>(code, ctx, task.depth_offset, sched)?;
@@ -1278,32 +1284,18 @@ fn switch_away<R: Exec>(
             collect::<R>(code, ctx, task.depth_offset, sched, true)?;
         }
     }
-    // 走れるタスクがなければ、次の期限か driver の完了まで待って集め直す。戻るたびに止める語を読む。中継のない run
-    // では、止める語を読み直すために `wait_deadline` が1回の待ちを短く切る。`PREEMPT` は切り替える先がないので
-    // 捨てる。期限も保留の操作もないか、driver がもう何も進まないと答えたら、どのタスクも進めないデッドロックである。
-    // デッドロックは切る前の期限で決める (docs/spec/vm.md の「時計と driver」)
+    // 走れるタスクがなければ、起こされるか次の期限か driver の完了まで待って集め直す。戻るたびに止める語を読む。
+    // `PREEMPT` は切り替える先がないので捨てる。デッドロックは空きの待ちが決める (docs/spec/vm.md の「時計と driver」)
     let next = loop {
         if let Some(next) = sched.policy.pick(&mut sched.ready) {
             break next;
         }
-        let mut deadline = sched.cells.next_deadline();
-        // OS のシグナルを待つタスクがいれば、ほかに進むものがなくてもシグナルが来るまで眠る。届いたときは監視の
-        // スレッドが waker で起こす
-        if sched.listening() {
-            deadline = deadline.or(Some(u64::MAX));
-        } else if deadline.is_none() && sched.driver.pending() == 0 {
-            return Err(VmFault::Deadlock);
-        }
         // 眠る前に、ほかのスレッドから受けた解放が溜まっていれば取り込む (docs/spec/vm.md の「時計と driver」)
         ctx.reclaim_if_due();
-        match sched.driver.wait(sched.wait_deadline(deadline)) {
-            Ok(true) => {}
-            Ok(false) => return Err(VmFault::Deadlock),
-            Err(e) => return Err(VmFault::Driver(e.to_string())),
-        }
+        sched.idle_wait()?;
         // `PREEMPT` と `NOTICE` は捨てる。`NOTICE` の知らせは続く集める地点が集める。直前の `wait` が OS を見たので、
         // 集める地点は見ない
-        poll(ctx, task.stack_depth())?;
+        poll(ctx, task.stack_depth(), sched.index)?;
         sched.since_poll = 0;
         collect::<R>(code, ctx, task.depth_offset, sched, false)?;
     };
@@ -1400,14 +1392,24 @@ fn collect<R: Exec>(
     look: bool,
 ) -> Result<(), VmFault> {
     // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
-    ctx.heap().control().take_notice(0);
+    ctx.heap().control().take_notice(sched.index);
+    // ほかの worker からの知らせは、ないときは1回の読みで済ませる (docs/spec/vm.md の「タスクとスケジュール」)
+    if sched.run.slots[sched.index]
+        .has_notices
+        .load(Ordering::Acquire)
+    {
+        #[expect(clippy::never_loop, reason = "知らせの種類がまだない")]
+        for notice in sched.run.take_notices(sched.index) {
+            match notice {}
+        }
+    }
     if look {
         sched.since_poll = 0;
         if sched.cells.in_flight() > 0 {
+            let driver = driver_mut(&mut sched.driver)?;
             // 今以前の期限なので待たない。`ceil_ms` は今より先になりうるので、driver が眠りうる
-            let now = floor_ms(sched.driver.now());
-            sched
-                .driver
+            let now = floor_ms(driver.now());
+            driver
                 .wait(Some(now))
                 .map_err(|e| VmFault::Driver(e.to_string()))?;
         }
@@ -1416,13 +1418,15 @@ fn collect<R: Exec>(
     let mut out = std::mem::take(&mut sched.runnables);
     sched
         .cells
-        .drain(ctx, &mut *sched.driver, depth_offset, &mut out)?;
+        .drain(ctx, driver_mut(&mut sched.driver)?, depth_offset, &mut out)?;
     sched
         .cells
-        .complete(ctx, &mut *sched.driver, depth_offset, &mut out)?;
+        .complete(ctx, driver_mut(&mut sched.driver)?, depth_offset, &mut out)?;
     if sched.cells.next_deadline().is_some() {
-        let now = floor_ms(sched.driver.now());
-        sched.cells.expire(now, &mut *sched.driver, &mut out)?;
+        let now = floor_ms(driver_mut(&mut sched.driver)?.now());
+        sched
+            .cells
+            .expire(now, driver_mut(&mut sched.driver)?, &mut out)?;
     }
     if !out.is_empty() {
         let entries = code
@@ -1484,7 +1488,7 @@ fn preempt<R: Exec>(
         let Some(at) = resume::<R>(code, ctx, task, sched, next, Some(TaskState::Ready))? else {
             return Ok(());
         };
-        let polled = match poll(ctx, task.stack_depth()) {
+        let polled = match poll(ctx, task.stack_depth(), sched.index) {
             Ok(Polled::Collect) => {
                 collect::<R>(code, ctx, task.depth_offset, sched, true).map(|()| Polled::Collect)
             }
@@ -1753,6 +1757,9 @@ impl Outcome {
 
 /// エントリの関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。その前に、受け箱の
 /// 知らせを処理し、残った `Async` のセルを放す (docs/spec/vm.md の「`Async` のタスク」)。
+// run ごとに1回しか通らないので、VM の繰り返しに展開しない。展開すると、driver の有無を確かめる分岐で繰り返しの
+// レジスタの割り当てが変わり、`bench/loop.em` の命令の数が 4% 増えた
+#[inline(never)]
 fn finish<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1760,16 +1767,20 @@ fn finish<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let mut out = Vec::new();
-    sched
-        .cells
-        .drain(ctx, &mut *sched.driver, task.depth_offset, &mut out)?;
+    sched.cells.drain(
+        ctx,
+        driver_mut(&mut sched.driver)?,
+        task.depth_offset,
+        &mut out,
+    )?;
     if !out.is_empty() {
         return Err(VmFault::Internal("a task is left at the end"));
     }
     // driver が貸した記憶をセルが持つうちは放せないので、保留の操作を片付けてから掃く。片付かなければ放さずに driver
     // の誤りで終わる (docs/spec/vm.md の「`Async` のタスク」の「終わり」)
-    sched.driver.quiesce();
-    if sched.driver.pending() > 0 {
+    let driver = driver_mut(&mut sched.driver)?;
+    driver.quiesce();
+    if driver.pending() > 0 {
         return Err(VmFault::Driver(KEPT_PENDING.to_string()));
     }
     sched.cells.sweep_all(ctx, task.depth_offset)?;
@@ -1885,7 +1896,7 @@ fn async_op<R: Exec>(
             let ms = task.raw(arg(0));
             // 0 以下は譲りなので時計を読まない (docs/spec/vm.md の「時間の待ち」)
             let now = if ms > 0 {
-                ceil_ms(sched.driver.now())
+                ceil_ms(driver_mut(&mut sched.driver)?.now())
             } else {
                 0
             };
@@ -2091,7 +2102,10 @@ fn async_op<R: Exec>(
         Extern::AsyncParkIo => {
             let me = current_cell(task)?;
             let (token, k) = (task.raw(arg(0)), task.get(arg(1)));
-            if let Some(run) = sched.cells.park_io(&mut *sched.driver, token, me, k)? {
+            if let Some(run) = sched
+                .cells
+                .park_io(driver_mut(&mut sched.driver)?, token, me, k)?
+            {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
@@ -2101,14 +2115,14 @@ fn async_op<R: Exec>(
             let (token, ms, k) = (task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)));
             // 0 以下は過ぎた期限なので時計を読まない (docs/spec/vm.md の「時間の待ち」)
             let now = if ms > 0 {
-                ceil_ms(sched.driver.now())
+                ceil_ms(driver_mut(&mut sched.driver)?.now())
             } else {
                 0
             };
             if let Some(run) =
                 sched
                     .cells
-                    .park_io_until(&mut *sched.driver, now, ms, token, me, k)?
+                    .park_io_until(driver_mut(&mut sched.driver)?, now, ms, token, me, k)?
             {
                 schedule(code, sched, entries, run)?;
             }
@@ -2133,7 +2147,7 @@ fn async_op<R: Exec>(
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             let token = sched.cells.submit_write(
                 ctx,
-                &mut *sched.driver,
+                driver_mut(&mut sched.driver)?,
                 task.worker,
                 task.depth_offset,
                 buf,
@@ -2145,7 +2159,7 @@ fn async_op<R: Exec>(
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             let token = sched.cells.submit_read(
                 ctx,
-                &mut *sched.driver,
+                driver_mut(&mut sched.driver)?,
                 task.worker,
                 task.depth_offset,
                 buf,
@@ -2158,7 +2172,7 @@ fn async_op<R: Exec>(
             let submitted = if ext == Extern::NetSubmitListen {
                 sched.cells.submit_listen(
                     ctx,
-                    &mut *sched.driver,
+                    driver_mut(&mut sched.driver)?,
                     task.worker,
                     task.depth_offset,
                     host,
@@ -2167,7 +2181,7 @@ fn async_op<R: Exec>(
             } else {
                 sched.cells.submit_connect(
                     ctx,
-                    &mut *sched.driver,
+                    driver_mut(&mut sched.driver)?,
                     task.worker,
                     task.depth_offset,
                     host,
@@ -2190,7 +2204,7 @@ fn async_op<R: Exec>(
             let listener = task.get(arg(0));
             let token = sched.cells.submit_accept(
                 ctx,
-                &mut *sched.driver,
+                driver_mut(&mut sched.driver)?,
                 task.worker,
                 task.depth_offset,
                 listener,
@@ -2222,7 +2236,7 @@ fn async_op<R: Exec>(
             let stream = task.get(arg(0));
             let token = sched.cells.submit_read_line(
                 ctx,
-                &mut *sched.driver,
+                driver_mut(&mut sched.driver)?,
                 task.worker,
                 task.depth_offset,
                 stream,
@@ -2277,13 +2291,13 @@ fn async_op<R: Exec>(
             let handle = cells::stream_handle(ctx, stream)?;
             let (done, what) = if ext == Extern::NetShutdownWrite {
                 (
-                    sched.driver.shutdown_write(handle),
+                    driver_mut(&mut sched.driver)?.shutdown_write(handle),
                     "cannot shut down the stream",
                 )
             } else {
                 let on = task.raw(arg(0)) != 0;
                 (
-                    sched.driver.set_nodelay(handle, on),
+                    driver_mut(&mut sched.driver)?.set_nodelay(handle, on),
                     "cannot set the no-delay option",
                 )
             };
@@ -3320,11 +3334,11 @@ mod tests {
         let (host, _) = crate::capture_host(Default::default());
         let ctx = Ctx::<eml_rt::Checked>::new(Arc::clone(&control), host);
         control.notice(0);
-        assert!(poll(&ctx, 0).ok() == Some(Polled::Collect));
+        assert!(poll(&ctx, 0, 0).ok() == Some(Polled::Collect));
         assert_eq!(control.worker_bits(0), 0);
         control.notice(0);
         control.preempt(0);
-        assert!(poll(&ctx, 0).ok() == Some(Polled::Switch));
+        assert!(poll(&ctx, 0, 0).ok() == Some(Polled::Switch));
         assert_eq!(control.worker_bits(0), 0);
     }
 
@@ -3355,8 +3369,8 @@ fn f(p.0: unit) -> unit {
         let mut sched = Scheduler::new(
             crate::Sequential,
             Box::new(eml_io::TestDriver::new(None)),
+            Arc::new(crate::workers::Run::new(1, None)),
             Arc::clone(&control),
-            None,
             task.worker,
             usize::MAX,
             Vec::new(),
