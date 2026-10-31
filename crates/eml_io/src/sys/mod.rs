@@ -1,10 +1,13 @@
-//! OS ごとの backend (docs/spec/vm.md の「時計と driver」)。Linux は epoll、Apple は kqueue で、どちらも `unix.rs` の
-//! `Unix` が fd の表と歩を持ち、OS ごとのファイルは登録と待ちと起こしだけを持つ。Windows は IOCP で、`iocp.rs` が
-//! 表と歩と待ちを持つ。
+//! OS ごとの backend (docs/spec/vm.md の「時計と driver」)。Linux は epoll と io_uring、Apple は kqueue である。epoll と
+//! kqueue は `unix.rs` の `Unix` が fd の表と歩を持ち、OS ごとのファイルは登録と待ちと起こしだけを持つ。io_uring は
+//! `uring.rs` が表と歩と待ちを持ち、歩の部品は `unix.rs` と分け合う。Linux で2つのどちらを使うかは `linux.rs` が
+//! 決める。Windows は IOCP で、`iocp.rs` が表と歩と待ちを持つ。
 
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
+
+use crate::real::IoBackend;
 
 #[cfg(target_os = "linux")]
 mod epoll;
@@ -12,20 +15,44 @@ mod epoll;
 mod iocp;
 #[cfg(target_vendor = "apple")]
 mod kqueue;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(unix)]
 mod unix;
+#[cfg(target_os = "linux")]
+mod uring;
 
 // readiness 型の backend。Linux ではほかの backend と並べて選ぶので、別名で名指せるようにする
 #[cfg(target_os = "linux")]
 type Readiness = unix::Unix<epoll::Epoll>;
 #[cfg(target_vendor = "apple")]
 type Readiness = unix::Unix<kqueue::Kqueue>;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
+pub(crate) type Os = linux::Linux;
+#[cfg(target_vendor = "apple")]
 pub(crate) type Os = Readiness;
 #[cfg(windows)]
 pub(crate) type Os = iocp::Iocp;
 #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
 compile_error!("eml_io has no I/O backend for this OS");
+
+/// `b` が名指す backend を作る。値を backend に写すのはここだけである。
+#[cfg(target_os = "linux")]
+pub(crate) fn os(b: IoBackend) -> io::Result<Os> {
+    linux::Linux::pick(b, uring::Uring::new)
+}
+
+/// Linux のほかは backend が1つなので、`Auto` のほかの値は誤りにする。
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn os(b: IoBackend) -> io::Result<Os> {
+    match b {
+        IoBackend::Auto => Os::new(),
+        _ => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this OS has one I/O backend",
+        )),
+    }
+}
 
 /// `d` をミリ秒へ切り上げ、`max` で切る。切り上げるので期限より早くは戻らず、`max` で切った待ちは早く戻るだけで
 /// ある (docs/spec/vm.md の「時計と driver」)。期限のない待ちは、呼ぶ側が自分の OS の値に写し、ここへは渡さない。

@@ -4,7 +4,7 @@
 #![allow(unsafe_code)]
 
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::ptr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,6 +41,11 @@ impl EventFd {
         let fd = syscall(|| unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) })?;
         // SAFETY: `eventfd` が返したばかりの fd で、ほかに持ち主はない
         Ok(Arc::new(EventFd(unsafe { OwnedFd::from_raw_fd(fd) })))
+    }
+
+    /// 見張りに渡す fd。io_uring の backend は、これを1回きりの poll で見張る。
+    pub(super) fn fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
     }
 
     /// 鳴らした印を消す。読むものがなければ `EAGAIN` で、それも捨ててよい。

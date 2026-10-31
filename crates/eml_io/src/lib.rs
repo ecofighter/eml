@@ -15,5 +15,5 @@ mod test;
 mod trust;
 
 pub use mask::spawn_masked;
-pub use real::RealDriver;
+pub use real::{IoBackend, RealDriver};
 pub use test::TestDriver;

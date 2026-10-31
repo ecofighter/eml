@@ -447,6 +447,30 @@ pub(super) fn from_storage(s: &libc::sockaddr_storage, len: libc::socklen_t) -> 
     }
 }
 
+/// `addr` に結んで待ち受けるソケットと、待ち受けるポート。登録は呼ぶ側が決める。
+pub(super) fn listener(addr: SocketAddr) -> io::Result<(OwnedFd, u16)> {
+    let fd = stream_socket(&addr)?;
+    setsockopt_int(fd.as_fd(), libc::SOL_SOCKET, libc::SO_REUSEADDR, 1)?;
+    let raw = RawAddr::new(addr);
+    let (ptr, len) = raw.as_ptr();
+    // SAFETY: `ptr` は生きている `raw` を指し、`len` がその大きさである
+    syscall(|| unsafe { libc::bind(fd.as_raw_fd(), ptr, len) })?;
+    // SAFETY: 引数はどれも整数である
+    syscall(|| unsafe { libc::listen(fd.as_raw_fd(), BACKLOG) })?;
+    let port = name_of(fd.as_fd(), false)?.map_or(addr.port(), |local| local.port());
+    Ok((fd, port))
+}
+
+pub(super) fn shutdown_write(fd: BorrowedFd<'_>) -> io::Result<()> {
+    // SAFETY: 引数はどれも整数である
+    syscall(|| unsafe { libc::shutdown(fd.as_raw_fd(), libc::SHUT_WR) })?;
+    Ok(())
+}
+
+pub(super) fn set_nodelay(fd: BorrowedFd<'_>, on: bool) -> io::Result<()> {
+    setsockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY, c_int::from(on))
+}
+
 pub(crate) struct Unix<P> {
     poller: P,
     /// poller が作った waker の写し
@@ -624,15 +648,7 @@ impl<P: Poller> Backend for Unix<P> {
     }
 
     fn listen(&mut self, addr: SocketAddr) -> io::Result<(Sock, u16)> {
-        let fd = stream_socket(&addr)?;
-        setsockopt_int(fd.as_fd(), libc::SOL_SOCKET, libc::SO_REUSEADDR, 1)?;
-        let raw = RawAddr::new(addr);
-        let (ptr, len) = raw.as_ptr();
-        // SAFETY: `ptr` は生きている `raw` を指し、`len` がその大きさである
-        syscall(|| unsafe { libc::bind(fd.as_raw_fd(), ptr, len) })?;
-        // SAFETY: 引数はどれも整数である
-        syscall(|| unsafe { libc::listen(fd.as_raw_fd(), BACKLOG) })?;
-        let port = name_of(fd.as_fd(), false)?.map_or(addr.port(), |local| local.port());
+        let (fd, port) = listener(addr)?;
         let (row, generation) = self.rows.adopt();
         if let Err(e) = self.register_row(fd.as_fd(), row, generation, false) {
             self.rows.release(row, generation);
@@ -659,18 +675,11 @@ impl<P: Poller> Backend for Unix<P> {
     }
 
     fn shutdown_write(&mut self, sock: &mut Sock) -> io::Result<()> {
-        // SAFETY: 引数はどれも整数である
-        syscall(|| unsafe { libc::shutdown(sock.fd.as_raw_fd(), libc::SHUT_WR) })?;
-        Ok(())
+        shutdown_write(sock.fd.as_fd())
     }
 
     fn set_nodelay(&mut self, sock: &mut Sock, on: bool) -> io::Result<()> {
-        setsockopt_int(
-            sock.fd.as_fd(),
-            libc::IPPROTO_TCP,
-            libc::TCP_NODELAY,
-            c_int::from(on),
-        )
+        set_nodelay(sock.fd.as_fd(), on)
     }
 
     fn close(&mut self, sock: Sock) {
