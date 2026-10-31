@@ -37,6 +37,8 @@ pub(crate) enum ShareError {
     LinReachedTwice,
     /// すでに共有の側にある `lin` の物体に届いた。
     LinShared,
+    /// 共有の物体から局所の物体だけを通って、`lin` でも rc 1 でもない局所の物体に届いた。
+    SharedLocal,
 }
 
 // 仕様
@@ -64,6 +66,16 @@ pub open spec fn stops<N>(g: GView<N>, check_lin: bool, n: N) -> bool {
 /// 根から、すでに共有の側にある `lin` の物体に届く。`check_lin` のたどりがそこに着けば `LinShared` を返す
 pub open spec fn reaches_shared_lin<N>(g: GView<N>, root: N) -> bool {
     exists|n: N| #[trigger] reached(g, passes(g), root, n) && g.lin[n] && g.rc[n] < 0
+}
+
+/// 根から、`lin` でない共有の物体を通ってしか届かない、`lin` でない rc > 1 の局所の物体がある。検査モードの所有者だけの
+/// たどりがそこに着けば `SharedLocal` を返す。この形は `lin` の部分の不変条件 (共有の `lin` でない物体から局所の物体
+/// だけを通って届く物体は rc 1 である) に反するので、正しいヒープにはない (docs/spec/object-model.md の「`share`」)。
+/// 不変条件はモデルに入れていないので、ないことは証明していない
+pub open spec fn reaches_local_past_shared<N>(g: GView<N>, root: N) -> bool {
+    exists|n: N| #[trigger]
+        reached(g, passes(g), root, n) && g.nodes.contains(n) && g.rc[n] > 1 && !g.lin[n]
+            && !reached(g, local(g), root, n)
 }
 
 /// 届く物体がどれも生きているという前提を除いた、正しいグラフの前提。
@@ -1547,6 +1559,42 @@ proof fn lemma_finish<N>(
     }
 }
 
+/// 所有者だけのスタックから取り出した、`lin` でない rc > 1 の局所の物体は、局所の物体だけを通る道では届かない。
+/// 印付けと移し替えのスタックが空なので、そうした道で届く局所の物体は、もう印を付けたか所有を移したかである
+proof fn lemma_local_past_shared<N>(
+    g0: GView<N>,
+    g: GView<N>,
+    root: N,
+    receiver: u32,
+    check_lin: bool,
+    seen: Set<N>,
+    w: Walk<N>,
+    n: N,
+)
+    requires
+        inv(g0, g, root, receiver, check_lin, seen, w),
+        w.mark.len() == 0,
+        w.moves.len() == 0,
+        w.own.len() > 0,
+        n == w.own.last(),
+        g.rc[n] > 1,
+        !g.lin[n],
+    ensures
+        reaches_local_past_shared(g0, root),
+{
+    assert(g0.nodes.contains(n) && reached(g0, passes(g0), root, n));
+    lemma_finish(g0, g, root, receiver, check_lin, seen, w);
+    assert(node_post(g0, g, root, receiver, check_lin, n));
+    if reached(g0, local(g0), root, n) && g0.rc[n] > 0 {
+        if moves(g0, root, n) {
+            lemma_moves_rc(g0, root, n);
+        } else {
+            lemma_mark_negative(g0.rc[n]);
+        }
+    }
+    assert(g0.rc[n] == g.rc[n]);
+}
+
 /// 前提が満たせることの確かめ。満たすグラフがなければ、`share_walk` の結論は何も言わない。根 0 が局所の
 /// `lin` の子 1 を指すグラフで示す
 proof fn lemma_well_formed_is_satisfiable() {
@@ -1589,7 +1637,8 @@ proof fn lemma_well_formed_is_satisfiable() {
 /// 進み、所有者を `receiver` にする。このスタックは rc を書かず、ほかの2つのスタックに積まないので、2つのモードの rc の
 /// 変化は同じになる。
 /// 届いた物体が生きていなければ `Dead` を返す。`check_lin` なら、すでに共有の `lin` の物体に届いたときは `LinShared`、
-/// 所有を移す物体に2回届いたときは `LinReachedTwice` を返す。
+/// 所有を移す物体に2回届いたときは `LinReachedTwice`、所有者だけのスタックから `lin` でも rc 1 でもない局所の物体を
+/// 取り出したときは `SharedLocal` を返す。
 // 取り出す前のスタックに名前を付けて証明するので、`while let` でなく `loop` と `match` で書く
 #[verifier::spinoff_prover]
 pub(crate) fn share_walk<G: Graph>(
@@ -1617,11 +1666,13 @@ pub(crate) fn share_walk<G: Graph>(
             old(graph).gv(),
             root,
         ),
+        r == Err::<(), ShareError>(ShareError::SharedLocal) && sound(old(graph).gv(), root)
+            ==> check_lin && reaches_local_past_shared(old(graph).gv(), root),
         sound(old(graph).gv(), root) ==> r != Err::<(), ShareError>(ShareError::LinReachedTwice),
         well_formed(old(graph).gv(), root) && !(check_lin && reaches_shared_lin(
             old(graph).gv(),
             root,
-        )) ==> r is Ok,
+        )) && !(check_lin && reaches_local_past_shared(old(graph).gv(), root)) ==> r is Ok,
         r is Ok && sound(old(graph).gv(), root) ==> forall|n: G::Node|
             old(graph).gv().nodes.contains(n) ==> #[trigger] node_post(
                 old(graph).gv(),
@@ -1873,6 +1924,16 @@ pub(crate) fn share_walk<G: Graph>(
                     }
                 }
             }
+        } else if check_lin && on_own && rc > 1 {
+            // ここに着くのは `lin` でない rc > 1 の局所の物体である。印付けと移し替えのスタックが空なので、局所の物体
+            // だけを通って届く物体はもう印を付けたか移したかで、この物体には共有の物体を通ってしか届かない
+            // (docs/spec/object-model.md の「`share`」の `lin` の部分の不変条件)
+            proof {
+                if sound(g0, root) {
+                    lemma_local_past_shared(g0, g1, root, receiver, check_lin, s1, w0, node);
+                }
+            }
+            return Err(ShareError::SharedLocal);
         } else {
             proof {
                 if sound(g0, root) {
@@ -2172,14 +2233,15 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// `share` の前提がみな成り立ち、モデルが合っている。検査モードでは、共有の側の `lin` の物体に届かないことも
-    /// 前提である (`LinShared`)。
+    /// `share` の前提がみな成り立ち、モデルが合っている。検査モードでは、共有の側の `lin` の物体に届かないこと
+    /// (`LinShared`) と、`lin` の部分の不変条件 (`SharedReachesLocal`) も前提である。
     pub closed spec fn share_all_ok(&self, w: Word) -> bool {
         &&& self.consistent()
         &&& self.settleable()
         &&& self.readable(w)
         &&& w.is_ptr_spec() ==> self.share_ok(w)
         &&& M::CHECKED && w.is_ptr_spec() ==> !self.reaches_shared_lin_from(w)
+        &&& M::CHECKED && w.is_ptr_spec() ==> !self.reaches_local_past_shared_from(w)
     }
 
     /// `share` と `transfer_back` のたどりが見る物体のグラフ。
@@ -2201,6 +2263,11 @@ impl<M: Mode> Heap<M> {
     /// `w` から、すでに共有の側にある `lin` の物体に届く。
     pub closed spec fn reaches_shared_lin_from(&self, w: Word) -> bool {
         reaches_shared_lin(self.share_graph(), self.share_root(w))
+    }
+
+    /// `w` から、共有の物体を通ってしか届かない、`lin` でない rc > 1 の局所の物体に届く。
+    pub closed spec fn reaches_local_past_shared_from(&self, w: Word) -> bool {
+        reaches_local_past_shared(self.share_graph(), self.share_root(w))
     }
 
     /// `w` から、生きていない物体に届く。
@@ -2242,7 +2309,8 @@ impl<M: Mode> Heap<M> {
     ///
     /// # Safety
     /// `w` は即値か、このヒープか付けた塊の生きている物体を指し、そこから届く物体はどれも生きている。所有を移す物体
-    /// (局所の `lin` の物体と、その下の rc 1 の物体) には1回だけ届き、共有の側の `lin` の物体には届かない。
+    /// (局所の `lin` の物体と、その下の rc 1 の物体) には1回だけ届き、共有の側の `lin` の物体には届かない。共有の
+    /// `lin` でない物体から局所の物体だけを通って届く局所の物体は、`lin` か rc 1 である。
     #[verifier::spinoff_prover]
     pub unsafe fn share(&mut self, w: Word, receiver: u32) -> (r: Result<(), HeapError>)
         requires
@@ -2265,6 +2333,9 @@ impl<M: Mode> Heap<M> {
             w.is_ptr_spec() && old(self).share_sound(w) ==> r != Err::<(), HeapError>(
                 HeapError::LinReachedTwice,
             ),
+            w.is_ptr_spec() && old(self).share_sound(w) && r == Err::<(), HeapError>(
+                HeapError::SharedReachesLocal,
+            ) ==> old(self).reaches_local_past_shared_from(w),
     {
         let ghost pre_ok = self.share_all_ok(w);
         if !w.is_ptr() {
@@ -2363,6 +2434,7 @@ impl<M: Mode> Heap<M> {
             Err(ShareError::Dead) => Err(HeapError::UseAfterFree),
             Err(ShareError::LinReachedTwice) => Err(HeapError::LinReachedTwice),
             Err(ShareError::LinShared) => Err(HeapError::LinShared),
+            Err(ShareError::SharedLocal) => Err(HeapError::SharedReachesLocal),
         }
     }
 }

@@ -295,6 +295,35 @@ fn resending_a_shared_pair_passes_its_lin_part_to_the_second_receiver<M: Mode>()
     assert_eq!(mortal(&heap), 0);
 }
 
+/// 送る前から `lin` の物体の下にある rc > 1 の物体は、初めの `share` で印が付く。送り直しは印の付いた物体で止まるので
+/// 誤りにならない
+fn resending_after_marking_an_rc2_node_under_the_lin_part_is_ok<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let a = list(&mut heap, 1);
+    let kept = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    let pair = heap.alloc_data(0, 2, 0, false);
+    unsafe {
+        heap.dup(kept).unwrap();
+        heap.set_field(lin, 0, kept).unwrap();
+        heap.set_field(pair, 0, a).unwrap();
+        heap.set_field(pair, 1, lin).unwrap();
+        heap.share(pair, 1).unwrap();
+        assert_eq!(rc(&heap, kept), -2);
+        heap.set_worker(1);
+        heap.share(pair, 2).unwrap();
+        assert_eq!(
+            (rc(&heap, pair), rc(&heap, lin), rc(&heap, kept)),
+            (-1, 1, -2)
+        );
+        assert_owner::<M>(lin, 2);
+        heap.set_worker(2);
+        heap.decref(pair).unwrap();
+        heap.decref(kept).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 fn a_long_unique_list_under_a_lin_root_moves_without_recursion<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let l = list(&mut heap, LONG);
@@ -345,6 +374,7 @@ both_modes!(
     a_shared_node_under_a_lin_root_is_marked_with_its_unique_child,
     a_lin_object_under_a_marked_parent_moves_its_unique_descendants,
     resending_a_shared_pair_passes_its_lin_part_to_the_second_receiver,
+    resending_after_marking_an_rc2_node_under_the_lin_part_is_ok,
     a_long_unique_list_under_a_lin_root_moves_without_recursion,
     sharing_with_the_own_worker_marks_only_unr_values,
 );
@@ -503,10 +533,10 @@ fn a_shared_lin_object_reached_by_share_is_an_error() {
     drop(heap);
 }
 
-/// 送り直した `lin` の物体の下の rc > 1 の局所の物体は、送り手の持ち物のまま残る。受け手が触れると `WrongOwner` に
-/// なる (docs/spec/object-model.md の「`share`」の制限)
+/// 共有の物体から局所の物体だけを通って届く rc > 1 の物体は、`lin` の部分の不変条件を破る。送り直しの所有者だけの
+/// たどりがそこに着くと `SharedReachesLocal` になる (docs/spec/object-model.md の「`share`」)
 #[test]
-fn an_rc2_object_under_a_resent_lin_object_keeps_the_senders_owner() {
+fn an_rc2_object_under_a_resent_lin_object_is_an_error() {
     let mut heap = H::new();
     let a = list(&mut heap, 1);
     let lin = heap.alloc_data(0, 1, 0, true);
@@ -520,18 +550,9 @@ fn an_rc2_object_under_a_resent_lin_object_keeps_the_senders_owner() {
         let kept = list(&mut heap, 1);
         heap.dup(kept).unwrap();
         heap.set_field(lin, 0, kept).unwrap();
-        heap.share(pair, 2).unwrap();
-        assert_eq!(raw::prefix_first(lin), 2);
-        assert_eq!((rc(&heap, kept), raw::prefix_first(kept)), (2, 1));
-        heap.set_worker(2);
-        assert_eq!(
-            heap.dup(kept),
-            Err(HeapError::WrongOwner {
-                owner: 1,
-                worker: 2
-            })
-        );
+        assert_eq!(heap.share(pair, 2), Err(HeapError::SharedReachesLocal));
     }
+    // share が状態を変えた後の Err なので、ヒープは落とすだけにする (docs/spec/object-model.md の「検査モードの約束」)
     drop(heap);
 }
 

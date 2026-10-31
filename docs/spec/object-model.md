@@ -256,7 +256,10 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 - 所有者だけのスタックは、検査モードだけが持つ。どのスタックのたどりも、`lin` でない rc -1 の共有の物体に着くと、訪問済みの集まりに入れて、子をこのスタックに積む。このスタックから取り出した `lin` の物体と rc 1 の物体は、所有者を `receiver` に書き換え、子をこのスタックに積む。ほかの物体では止まる。訪問済みの物体にもう一度着いたときも止まる
   - 理由: 共有にした `poly` の入れ物 (`(a, FileIn)` の組や EP の継続のクロージャ) は、中に局所の `lin` の子を持つ (下の項目)。この入れ物をもう一度送ると (入れ子の `par`)、たどりは入れ物で止まるので、中の `lin` の子とその下の rc 1 の物体は前の受け手の持ち物のまま残る。すると、正しい受け手が使っても検査モードは `WrongOwner` を返す。所有者だけのたどりは、これらを新しい受け手の持ち物にする
   - このスタックは rc を書かず、印付けと移し替えのスタックに積まない。そのため、2つのモードの rc の変化と reuse の判断は同じである。速いモードでは持ち主がないので、このたどりは要らない
-  - 制限: 送り直した `lin` の子の下にある rc > 1 の局所の物体は、前の持ち主のまま残る。受け手が触れると、検査モードは `WrongOwner` を返す。速いモードでは、その物体は局所のまま2つの worker から届く。worker が1つの間は害がないが、worker のスレッドを入れると競合になる。扱いは worker のスレッドを入れるときに決める ([ロードマップ](../future/roadmap.md) の `worker-threads`)
+  - `lin` の部分の不変条件: 共有の `lin` でない物体から、局所の物体だけを通って届く局所の物体を、`lin` の部分と呼ぶ。`lin` の部分の物体に届くのは、その上の共有の物体のただ1つの参照を持つ者だけである。`share` が届く `lin` の部分の物体は、どれも rc 1 である
+    - 成り立つ理由: 初めの `share` は、`lin` の物体の下の rc > 1 の物体に印を付ける (上の項目)。共有の物体の欄は書き換えない (`set_field` の `NotWritable`)。`lin` の値と `poly` の値は `dup` できない ([LIR](lir.md) の「Kind の印の検査」)。そのため、プログラムが `lin` の部分の物体を持つには、道の上の rc -1 の物体を最後の参照として手放し、そこから取り出すしかない。取り出した物体は、もう `lin` の部分にない。手放す前に借りて読んだ値の rc が一時 2 になっても、その入れ物は同じフレームで消費されるので、`share` もほかのスレッドもそこに届かない。`transfer_back` が裏返すのは、根から rc -1 の物体だけを通って届く物体なので、新しい `lin` の部分はできない
+    - そのため、送り直しの所有者だけのたどりは、`lin` の部分のどの物体の所有者も受け手に書き換える。`lin` の部分に、ほかの worker から届く道は残らない
+    - 検査モードは、所有者だけのスタックから `lin` でも rc 1 でもない局所の物体を取り出したら、`SharedReachesLocal` を返す。速いモードは、正しいプログラムに頼る
 - `receiver` は今の worker ID でもよい。このとき、所有を移しても持ち主は変わらず、`Unr` の値には印を付けるだけである
 - `lin` ビットのない親の中に `lin` ビットの立った子があることは、ふつうに起きる。`poly` の印の `con` (`(a, FileIn)` の組の型は `poly` になる) と、EP の継続のクロージャ (印は捕まえた値の印の結び) は `lin` ビットを持たないが、中の `FileIn` はビットを持つ。このとき `share` の後は、共有の親から局所の `lin` の子が届く。そのため、共有の物体から届いてよいのは、共有か不死の物体か、`lin` ビットの立った局所の物体である
   - そうした親は、実際には `Lin` の値なので参照は1つで、所有も受け手に移っている。親の最後の参照を手放すのは受け手で、子の所有者の検査とも合う
@@ -328,7 +331,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `free_block` | | 呼ぶ側が最後の参照を持ち、子の参照はもう処理してある | rc が 1 か -1 である (`NotLast`)。種類は破棄処理を持たない (`FinalizerSkipped`) |
 | `into_token` | | 呼ぶ側が唯一の参照を持ち、子の参照はもう処理してある | token にできる種類である (`NotTokenable`)。rc が 1 である (`NotUnique`) |
 | `con_at` / `reuse_in_place` / `drop_token` | | token の箱の「残した」語 (`con_at` と `reuse_in_place` で書き直さない語) の参照を呼ぶ側が持つ | token はまだ使っていない (`StaleToken`)。`con_at` の箱は `payload_words` の物体のこのモードでの級にある (`WrongClass`。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす)。`reuse_in_place` の `meta` の tag、scan、種類は箱と同じで (`WrongMeta`)、箱が `lin` ビットを持つなら `meta` も持つ (`LinBitKept`) |
-| `share` | | | 届く物体はどれも生きている (`UseAfterFree`)。所有を移す物体 (局所の `lin` の物体と、その下の rc 1 の物体) には1回だけ届き (`LinReachedTwice`)、共有の側の `lin` の物体には届かない (`LinShared`) |
+| `share` | | | 届く物体はどれも生きている (`UseAfterFree`)。所有を移す物体 (局所の `lin` の物体と、その下の rc 1 の物体) には1回だけ届き (`LinReachedTwice`)、共有の側の `lin` の物体には届かない (`LinShared`)。共有の物体から局所の物体だけを通って届く局所の物体は、`lin` か rc 1 である (`SharedReachesLocal`) |
 | `transfer_back` | 裏返す物体 (根から rc -1 の物体だけを通って届く rc -1 の物体) を指す参照は、戻す値の中にしかない | | `from` は今の worker でない (`WrongOwner`)。届く物体はどれも生きている (`UseAfterFree`)。届いた局所の物体の持ち主は、今の worker か `from` である (`WrongOwner`) |
 | `string` | 返す位置を読むのは、物体が生きていて、`string_push` か `string_concat` でその物体を書き換えていない間だけである | | 物体は `String` である (`WrongKind`) |
 | `bytes` | 返す位置を読むのは、物体が生きていて、その物体を書き換えていない間だけである | | 物体は `Bytes` である (`WrongKind`) |
@@ -650,6 +653,7 @@ token (`Token`) はどちらのモードでも1語である。VM のレジスタ
 - `lin` ビットの立った物体への `dup` (`LinDup`)。`lin` の物体の rc は 1 なので、rc が 1 を超える誤りは、この `dup` で見つかる
 - `lin` ビットの立った共有の物体の `release` と `decref` (`LinShared`)。`share` は `lin` の物体に印を付けないので、これは印付けの誤りである。`share` のたどりが、すでに共有の `lin` の物体に届いたときも同じ誤りにする
 - `share` のたどりで、所有を移す物体に2回届くこと (`LinReachedTwice`)
+- `share` の所有者だけのたどりで、`lin` でも rc 1 でもない局所の物体に着くこと (`SharedReachesLocal`)。上の「`share`」の `lin` の部分の不変条件の違反である
 - 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`foreign_unique`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき。`transfer_back` が、今の worker でも `from` でもない所有者の局所の物体に届いたときと、`from` が今の worker のときも同じ誤りにする
 - ほかのスレッドが読みうる物体への書き込み (`NotWritable`)。`set_field` と `set_raw` は、rc が 0 以下 (不死か共有) で構築中でない物体を断る。凍結した塊の物体と、書き終えたヒープ自身の不死の物体もこれに当たる。前置きの状態は構築中と生存を分けないので、検査モードのヒープは構築中の物体の番地を持ち、それと比べて見分ける
 - token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`。rc が 1 でない物体の `foreign_unique` と `set_lin` も同じ誤りにする)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)

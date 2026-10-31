@@ -139,7 +139,6 @@
 
 - `par` の2つの子は1つの worker の上で切り替えて動くので、`par` で計算は速くならない。子を別のスレッドで動かすのは worker のスレッドを入れてからである ([ロードマップ](../future/roadmap.md) の `worker-threads` と `par-steal`)
 - 捕まえられなかった子の `Panic` の実行時エラーは、``panicked: <message> in `reperform$Prelude.Panic.panicked` `` の文言で、ソースの位置を持たない。子の `panic` を親で起こし直す関数の中で報告するためである ([VM](../spec/vm.md) の「子の誤り」)
-- 共有にした `poly` の入れ物を入れ子の `par` でもう一度送ると、その `lin` の部分の下にある rc > 1 の局所の物体は前の持ち主のまま残る。受け手がその物体に触れると、検査モードは `WrongOwner` を返す。速いモードでは worker が1つなので害はない。扱いは worker のスレッドを入れるときに決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」、[ロードマップ](../future/roadmap.md) の `worker-threads`)
 
 ### `Async`
 
