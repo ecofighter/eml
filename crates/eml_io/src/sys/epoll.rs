@@ -4,7 +4,7 @@
 #![allow(unsafe_code)]
 
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::ptr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +18,7 @@ use super::unix::{Poller, Ready, WAKE, syscall};
 const EVENTS: usize = 256;
 
 /// 起こしの eventfd。level で登録するので、鳴らした印は次の待ちが読むまで残る。
-pub(super) struct EventFd(OwnedFd);
+struct EventFd(OwnedFd);
 
 impl IoWaker for EventFd {
     fn wake(&self) {
@@ -35,21 +35,8 @@ impl IoWaker for EventFd {
 }
 
 impl EventFd {
-    /// 起こしの eventfd を作る。
-    pub(super) fn new() -> io::Result<Arc<EventFd>> {
-        // SAFETY: 引数は整数である
-        let fd = syscall(|| unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) })?;
-        // SAFETY: `eventfd` が返したばかりの fd で、ほかに持ち主はない
-        Ok(Arc::new(EventFd(unsafe { OwnedFd::from_raw_fd(fd) })))
-    }
-
-    /// 見張りに渡す fd。io_uring の backend は、これを1回きりの poll で見張る。
-    pub(super) fn fd(&self) -> BorrowedFd<'_> {
-        self.0.as_fd()
-    }
-
     /// 鳴らした印を消す。読むものがなければ `EAGAIN` で、それも捨ててよい。
-    pub(super) fn drain(&self) {
+    fn drain(&self) {
         let mut count: u64 = 0;
         // SAFETY: 局所の8バイトに書くだけである
         let _ = syscall(|| unsafe {
@@ -75,7 +62,10 @@ impl Poller for Epoll {
         let ep = syscall(|| unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) })?;
         // SAFETY: `epoll_create1` が返したばかりの fd で、ほかに持ち主はない
         let ep = unsafe { OwnedFd::from_raw_fd(ep) };
-        let wake = EventFd::new()?;
+        // SAFETY: 引数は整数である
+        let wake = syscall(|| unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) })?;
+        // SAFETY: `eventfd` が返したばかりの fd で、ほかに持ち主はない
+        let wake = Arc::new(EventFd(unsafe { OwnedFd::from_raw_fd(wake) }));
         let mut event = libc::epoll_event {
             events: libc::EPOLLIN as u32,
             u64: WAKE,

@@ -22,8 +22,6 @@ const FILES: &[(&str, &str)] = &[
     ("sys/mod.rs", include_str!("sys/mod.rs")),
     ("sys/unix.rs", include_str!("sys/unix.rs")),
     ("sys/epoll.rs", include_str!("sys/epoll.rs")),
-    ("sys/linux.rs", include_str!("sys/linux.rs")),
-    ("sys/uring.rs", include_str!("sys/uring.rs")),
     ("sys/kqueue.rs", include_str!("sys/kqueue.rs")),
     ("sys/iocp.rs", include_str!("sys/iocp.rs")),
     ("test.rs", include_str!("test.rs")),
@@ -40,7 +38,6 @@ const UNSAFE_FILES: &[&str] = &[
     "test.rs",
     "sys/unix.rs",
     "sys/epoll.rs",
-    "sys/uring.rs",
     "sys/kqueue.rs",
     "sys/iocp.rs",
     "driver/tests/fake.rs",
@@ -285,9 +282,8 @@ fn the_core_names_no_os() {
     }
 }
 
-/// 完了型の backend。OS が完了までこちらの記憶に書きうる操作を出すので、完了型の値を返し、`OVERLAPPED` の箱か
-/// io_uring の op の表を持つ。
-const COMPLETION_BACKENDS: &[&str] = &["sys/iocp.rs", "sys/uring.rs"];
+/// 完了型の backend。OS が完了までこちらの記憶に書きうる操作を出すので、完了型の値を返し、`OVERLAPPED` の箱を持つ。
+const COMPLETION_BACKENDS: &[&str] = &["sys/iocp.rs"];
 
 /// 識別子 `word` が現れる位置 (`prepare` した文の文字の位置)。`word` より長い識別子の一部は数えない。
 fn ident_positions(text: &str, word: &str) -> Vec<usize> {

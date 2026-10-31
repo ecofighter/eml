@@ -23,7 +23,7 @@ for r in rows:
         cases.append(r["case"])
 
 SYS = ["epoll_ctl", "epoll_pwait", "epoll_wait", "timerfd_settime", "read(eventfd)", "recvfrom", "recvfrom!EAGAIN", "recvfrom(peek)", "recvfrom(peek)!EAGAIN", "sendto!EAGAIN",
-       "sendto", "accept4", "accept4!EAGAIN", "connect", "epoll_pwait2", "getsockopt", "getpeername", "brk", "mmap", "munmap", "io_uring_enter"]
+       "sendto", "accept4", "accept4!EAGAIN", "connect", "epoll_pwait2", "getsockopt", "getpeername", "brk", "mmap", "munmap"]
 # 目標の表の式。床を引いた回数の辞書 v と、その件の単位の数 n から値を出す。
 # mem = brk + mmap + munmap、E = 空振りの読み、R = データを読んだ読み、P = 当たった覗き。
 # 覗きは別に数えるので、(R + P) ÷ R が空きなしの読みの「覗きと読みの2回まで」を表す。
@@ -230,29 +230,22 @@ for label in labels:
         s = r["data"][0]["stats"]
         print(f"| {c} | {r['n_small']} {r['unit']} | " + " | ".join(fmt((s[k] - bs[k]) / r["n_small"]) for k in present) + " |")
 
-# 1つ目のラベルを前とし、ほかのラベルをそれぞれ後として比べる
-for b in labels[1:]:
-    a = labels[0]
+if len(labels) >= 2:
+    a, b = labels[0], labels[1]
     print(f"\n## 比べ: {a} → {b} (CPU の中央値、床を引いて単位あたり µs)\n")
-    print(f"| 件 | {a} | {b} | 比 | 生の CPU の比 | 四分位の重なり | 判定 | minflt/単位の差 | 確保の揺れ | 実時間の比 |")
-    print("|---|---|---|---|---|---|---|---|---|---|")
+    print(f"| 件 | {a} | {b} | 比 | 四分位の重なり | 判定 | 実時間の比 |")
+    print("|---|---|---|---|---|---|---|")
     for c in cases:
         ra, rb = get.get((c, a, "time")), get.get((c, b, "time"))
-        if not ra or not rb:
+        if not ra or not rb or c == "base":
             continue
         n = ra["n_big"]
-        floor = c != "base"
-        ca, cb = st.median(cpu(x) for x in ra["data"]), st.median(cpu(x) for x in rb["data"])
-        pa = (ca - (base_med(a, cpu) if floor else 0)) / n * 1e6
-        pb = (cb - (base_med(b, cpu) if floor else 0)) / n * 1e6
+        pa = (st.median(cpu(x) for x in ra["data"]) - base_med(a, cpu)) / n * 1e6
+        pb = (st.median(cpu(x) for x in rb["data"]) - base_med(b, cpu)) / n * 1e6
         qa, qb = q([cpu(x) for x in ra["data"]]), q([cpu(x) for x in rb["data"]])
         overlap = not (qa[1] < qb[0] or qb[1] < qa[0])
         ratio = pb / pa if pa else float("nan")
         verdict = "差" if (ratio <= 0.90 or ratio >= 1.10) and not overlap else "差なし"
-        mf = lambda r, l: (st.median(x["minflt"] for x in r["data"]) - (base_med(l, lambda x: x["minflt"]) if floor else 0)) / n
-        dm = mf(rb, b) - mf(ra, a)
-        wa = st.median(x["wall"] for x in ra["data"]) - (base_med(a, lambda x: x["wall"]) if floor else 0)
-        wb = st.median(x["wall"] for x in rb["data"]) - (base_med(b, lambda x: x["wall"]) if floor else 0)
-        # 印は「比べる規則」の「確保の揺れ」で、判定を読む人が時間の判定から外す
-        print(f"| {c} | {pa:.2f} | {pb:.2f} | {ratio:.3f} | {cb / ca:.3f} | {'重なる' if overlap else '重ならない'} | {verdict} | "
-              f"{dm:.2f} | {'印' if floor and abs(dm) >= 1 else ''} | {wb / wa:.2f} |")
+        wa = st.median(x["wall"] for x in ra["data"]) - base_med(a, lambda x: x["wall"])
+        wb = st.median(x["wall"] for x in rb["data"]) - base_med(b, lambda x: x["wall"])
+        print(f"| {c} | {pa:.2f} | {pb:.2f} | {ratio:.2f} | {'重なる' if overlap else '重ならない'} | {verdict} | {wb / wa:.2f} |")

@@ -382,7 +382,7 @@ C/Rust との比
 
 `bench/net.sh` は、`Std.Net` を本物の driver の上で動かす物差しである。release ビルドの eml で `bench/net/cases.tsv` の件を流し、1件1行の JSONL を標準出力に出す。`python3 -I bench/net/report.py` がそれを Markdown の表にし、strace の run があるラベルには syscall の目標の表も出す。テストではなく、CI では流さない。命令の数でなく CPU の時間と syscall の数を測るので、同じ機械で前と後を並べたときだけ意味がある。
 
-`bench.py` は `LABEL=EML` を1つ以上受け取る。2つ以上渡すと、時間の run を件ごとに交互に流す。`LABEL=EML@DIR` と書いたラベルは、件のプログラムを `DIR` から読む。`std/` の型が変わり、前のコミットの eml が今のプログラムを型検査できないときに使う。`DIR` には、そのコミットの `bench/net` を `git archive <コミット> bench/net | tar -x -C <置き場所>` で取り出したものを渡す。件の行と引数と `peer.py` は今の `bench/net` のものを使い、`@DIR` のないラベルは今のプログラムを使う。`--only REGEX` で件を絞り、`--stats` で `eml run --stats` の `RunStats` を1回取る。`--stats` の run は検査モードなので、時間には使わない。`--env LABEL KEY=VALUE` (何度でも書ける) は、そのラベルの run (時間、strace、`--stats`) に環境変数を足し、JSONL の各行の `env` に記録する。1つの eml を、ラベルごとに違う環境で流して比べるときに使う。`report.py` は1つ目のラベルを前とし、ほかのラベルをそれぞれ後として比べる。
+`bench.py` は `LABEL=EML` を1つ以上受け取る。2つ以上渡すと、時間の run を件ごとに交互に流す。`LABEL=EML@DIR` と書いたラベルは、件のプログラムを `DIR` から読む。`std/` の型が変わり、前のコミットの eml が今のプログラムを型検査できないときに使う。`DIR` には、そのコミットの `bench/net` を `git archive <コミット> bench/net | tar -x -C <置き場所>` で取り出したものを渡す。件の行と引数と `peer.py` は今の `bench/net` のものを使い、`@DIR` のないラベルは今のプログラムを使う。`--only REGEX` で件を絞り、`--stats` で `eml run --stats` の `RunStats` を1回取る。`--stats` の run は検査モードなので、時間には使わない。
 
 ### 件
 
@@ -416,7 +416,7 @@ syscall の数は `strace -f` で数える (Linux のみ)。main のスレッド
 - 後 ÷ 前の比が 0.90 以下か 1.10 以上で、かつ生の CPU の四分位の範囲 (25% から 75%) が前と後で重ならないときだけ「差」とする。そうでなければ「差なし (この機械では見分けられない)」と書く
 - 最小値は採らない。同じ実行の道の2つの eml を比べた A/A の run では、この規則で「差」になった件がなく、最小値の比は中央値の比より広く開いた
 - CPU は固定しない。`taskset` で固定しても揺れは狭まらなかった
-- `minflt` の単位あたりの値が前と後で 1 以上違う件は「確保の揺れ」と印を付け、時間の判定から外す。1往復ごとに確保して手放す buffer が glibc のヒープの頂きを縮めて伸ばすかはバイナリの配置で変わり、物差しでは決まらない。その件の確保の違いは `RunStats` の `allocations` と syscall の `brk` で見る。`report.py` の比べの表は、この印を「確保の揺れ」の欄に付ける
+- `minflt` の単位あたりの値が前と後で 1 以上違う件は「確保の揺れ」と印を付け、時間の判定から外す。1往復ごとに確保して手放す buffer が glibc のヒープの頂きを縮めて伸ばすかはバイナリの配置で変わり、物差しでは決まらない。その件の確保の違いは `RunStats` の `allocations` と syscall の `brk` で見る
 - syscall は main のスレッドで比べ、3回のどれもが目標以下であることを見る
 - 前と後は同じ機械で、ほかに負荷のない状態で測る
 
