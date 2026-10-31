@@ -1,5 +1,5 @@
 //! Ctrl-C と SIGTERM のハンドラ (docs/spec/vm.md の「上限と割り込み」)。unix では SIGINT と SIGTERM のハンドラ、
-//! Windows ではコンソールの handler が受け、どれも static に置いた `Installed` の `respond` で何をするかを決める。
+//! Windows ではコンソールの handler が受け (SIGTERM の代わりは閉じることとシャットダウン)、どれも static に置いた `Installed` の `respond` で何をするかを決める。
 
 use std::sync::{Arc, OnceLock};
 
@@ -29,9 +29,10 @@ struct Installed {
 /// シグナルを受けたときの動き方。
 #[derive(Clone, Copy)]
 pub enum Mode {
-    /// 2回目の同じシグナルでその場で終わる。安全点に来ない処理から抜ける道である。SIGTERM も受ける。
+    /// 2回目の同じシグナルでその場で終わる。安全点に来ない処理から抜ける道である。SIGTERM と、Windows の閉じることとシャットダウンも受ける。
+    /// Windows の閉じることとシャットダウンは2回目でも終わらせず、出口は OS の待ち時間に任せる。
     Run,
-    /// Ctrl-C で終わらず、SIGTERM は受けない。抜けられない処理からは、unix では Ctrl-\、Windows では Ctrl-Break で抜ける
+    /// Ctrl-C で終わらず、SIGTERM と Windows の閉じることとシャットダウンは受けない。抜けられない処理からは、unix では Ctrl-\、Windows では Ctrl-Break で抜ける
     /// (docs/spec/repl.md の「残る制限」)。
     Repl,
 }
@@ -40,7 +41,8 @@ pub enum Mode {
 /// (docs/spec/vm.md の「上限と割り込み」)。130 は、シェルが SIGINT で終わった子に報告する値である。
 pub const INTERRUPT_EXIT_CODE: u8 = 130;
 
-/// SIGTERM で終わるときの終了コード。130 と同じく、シェルが SIGTERM で終わった子に報告する値である。
+/// SIGTERM で終わるときの終了コード。130 と同じく、シェルが SIGTERM で終わった子に報告する値である。Windows の閉じる
+/// こととシャットダウンで止まったときも、unix と見え方をそろえて同じ値にする。
 pub const TERMINATE_EXIT_CODE: u8 = 143;
 
 #[derive(Debug, PartialEq)]
