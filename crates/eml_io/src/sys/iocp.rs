@@ -132,6 +132,8 @@ enum What {
 /// OS が持つ箱の記録
 struct Lent {
     key: OpKey,
+    /// 箱を預けたときのポインタ。箱を取り戻すときは、packet の番地をこの表で確かめてから、このポインタを使う
+    over: *mut Over,
     on: SOCKET,
     /// 核が `cancel` で取り消しを頼んだ
     cancelled: bool,
@@ -144,9 +146,8 @@ pub(crate) struct Iocp {
     ext: Option<Ext>,
     /// OS が持つ箱すべてを番地で引く。packet の番地は、箱の中を読む前にここで確かめる
     boxes: HashMap<usize, Lent>,
-    /// 保留の鍵からその箱へ。`cancel` は鍵しか受け取らない。箱を預けたときのポインタをそのまま持ち、箱を取り戻す
-    /// ときもこれを使う
-    waiters: HashMap<OpKey, *mut Over>,
+    /// 保留の鍵からその箱の番地へ。`cancel` は鍵しか受け取らない
+    waiters: HashMap<OpKey, usize>,
 }
 
 /// ポートを所有する起こし。ほかのスレッドが持つ写しがポートを生かすので、driver が落ちた後の鳴らしも生きた
@@ -506,6 +507,11 @@ impl Iocp {
         error: fn(i32) -> io::Error,
         call: impl FnOnce(*mut Over) -> Result<(), i32>,
     ) -> Start<Sock> {
+        // 保留の鍵を使い回すのは核の契約の破れである。前の箱を表から失わないよう、OS を呼ばずに断る
+        if self.waiters.contains_key(&key) {
+            debug_assert!(false, "a pending key is started again");
+            return Start::Done(Err(io::Error::other("the key already has a pending op")));
+        }
         let over = Box::into_raw(Box::new(Over {
             ov: OVERLAPPED::default(),
             on,
@@ -520,12 +526,12 @@ impl Iocp {
                     over.addr(),
                     Lent {
                         key,
+                        over,
                         on,
                         cancelled: false,
                     },
                 );
-                let before = self.waiters.insert(key, over);
-                debug_assert!(before.is_none(), "a pending key is started again");
+                self.waiters.insert(key, over.addr());
                 Start::Pending(Hold::Memory)
             }
             Err(code) => {
@@ -825,14 +831,15 @@ impl Backend for Iocp {
     }
 
     fn cancel(&mut self, key: OpKey, _step: Step<'_, Sock>) -> io::Result<Cancel> {
-        let Some(&over) = self.waiters.get(&key) else {
+        let Some(&addr) = self.waiters.get(&key) else {
             debug_assert!(false, "a cancel for a key with no box");
             return Ok(Cancel::Done);
         };
         let lent = self
             .boxes
-            .get_mut(&over.addr())
+            .get_mut(&addr)
             .expect("the two tables name the same boxes");
+        let over = lent.over;
         // SAFETY: `over` は OS が持つ生きた箱で、番地は `&raw` で作り参照を作らない。OS は番地を操作の照合に使う
         let ok = unsafe { CancelIoEx(lent.on as HANDLE, &raw const (*over).ov) };
         // `ERROR_NOT_FOUND` は終わりがすでに列にあることを表し、packet は来る
@@ -873,24 +880,26 @@ impl Backend for Iocp {
                 Err(e)
             };
         }
+        // 迷った packet があっても束の残りの箱は取り戻し、確かめは束を読み終えてからにする。途中で panic すると、
+        // 取り出し済みの packet の箱が表に残り、`Drop` が abort して panic の理由が見えなくなる
+        let mut stray = None;
         for entry in &entries[..removed as usize] {
             match (entry.lpCompletionKey, entry.lpOverlapped.is_null()) {
                 // packet を取り出してから下ろす。間に来た鳴らしの答えは、核がこの後で受け箱を引き取るときに拾う
                 (WAKE, _) => self.waker.posted.store(false, Ordering::Release),
                 (SOCKET_KEY, false) => {
                     // 中を読む前に、この backend が預けた箱かを確かめる。知らない番地は放さずに捨てる
-                    let Some(lent) = self.boxes.remove(&entry.lpOverlapped.addr()) else {
-                        debug_assert!(false, "a packet names a box the backend does not hold");
+                    let addr = entry.lpOverlapped.addr();
+                    let Some(lent) = self.boxes.remove(&addr) else {
+                        stray = Some("a packet names a box the backend does not hold");
                         continue;
                     };
-                    let over = self
-                        .waiters
-                        .remove(&lent.key)
-                        .expect("the two tables name the same boxes");
-                    debug_assert_eq!(over.addr(), entry.lpOverlapped.addr());
-                    // SAFETY: `over` は `issue` が箱を預けたときのポインタで、それを名指す packet を取り出したので
-                    // OS はもう箱に書かない。2つの表から外したので、ほかに持ち主はいない
-                    let over = unsafe { Box::from_raw(over) };
+                    let waiter = self.waiters.remove(&lent.key);
+                    debug_assert_eq!(waiter, Some(addr), "the two tables name the same boxes");
+                    // SAFETY: `lent.over` は `issue` が箱を預けたときのポインタで、番地は今取り出した packet の番地と
+                    // `boxes` で照らし合わせた。packet を取り出したので OS はもう箱に書かず、表から外したので
+                    // ほかに持ち主はいない
+                    let over = unsafe { Box::from_raw(lent.over) };
                     let arrival = self.arrival(over, lent.cancelled);
                     events.push(Event {
                         key: lent.key,
@@ -898,8 +907,11 @@ impl Backend for Iocp {
                     });
                 }
                 // OVERLAPPED なしの呼び出しは packet を積まないので、来れば放さずに捨てる
-                _ => debug_assert!(false, "a packet the backend did not ask for"),
+                _ => stray = Some("a packet the backend did not ask for"),
             }
+        }
+        if let Some(what) = stray {
+            debug_assert!(false, "{what}");
         }
         Ok(())
     }
@@ -1977,7 +1989,7 @@ mod tests {
         let mut b = backend();
         let (l, s, _client) = served(&mut b);
         assert!(matches!(b.zero_read(2, &s), Start::Pending(Hold::Memory)));
-        let over = b.waiters[&2];
+        let over = b.boxes[&b.waiters[&2]].over;
         // SAFETY: `over` は backend が OS に預けた生きた箱で、番地は `&raw` で作る。OS は番地を操作の照合に使う
         let ok = unsafe { CancelIoEx(s.raw() as HANDLE, &raw const (*over).ov) };
         assert_ne!(ok, 0, "{}", io::Error::last_os_error());
