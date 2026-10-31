@@ -382,7 +382,9 @@ fn abort_is_named_only_where_memory_is_at_stake() {
         let found = ident_positions(text, "abort").len();
         match *file {
             "driver/mod.rs" => in_core = found,
-            "driver/tests/mod.rs" | "driver/tests/abort.rs" => {}
+            // 核のテストのモジュールは `mod abort;` の1行だけで名指す
+            "driver/tests/mod.rs" => assert!(found <= 1, "{file} names abort outside `mod abort;`"),
+            "driver/tests/abort.rs" => {}
             _ if COMPLETION_BACKENDS.contains(file) => {}
             _ => assert_eq!(found, 0, "{file} names abort"),
         }

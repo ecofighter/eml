@@ -560,6 +560,11 @@ impl<B: Backend> Driver<B> {
                 kind: e.kind(),
                 msg: e.to_string(),
             });
+            // backend は event を積んだ後に誤りを返さない。破られたときも、受けたソケットだけは閉じる
+            debug_assert!(
+                self.events.is_empty(),
+                "the backend failed a wait after queueing events"
+            );
             while let Some(event) = self.events.pop() {
                 if let Arrival::Done(Ok(Outcome::Accepted { sock, .. })) = event.arrival {
                     self.backend.close(sock);

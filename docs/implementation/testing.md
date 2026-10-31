@@ -200,7 +200,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `completion_values_stay_in_the_core_and_completion_backends` は、完了型の値 (`Arrival::Done`、`Arrival::Cancelled`、`Hold::Memory`、`Cancel::Pending`) を書くのが `driver/backend.rs`、`driver/mod.rs`、`driver/tests/` と `COMPLETION_BACKENDS` (今は `sys/iocp.rs`) だけであることと、`COMPLETION_BACKENDS` のファイルがどれも `UNSAFE_FILES` にあることを確かめる。readiness の backend は同期の呼び出しの間しか OS に記憶を貸さないので、これらの値を返さない
 - `the_core_reads_hold_only_to_drop` は、`driver/mod.rs` の `Hold::Memory` がどれも `drop` の中に、`Hold::None` がどれも `submit` の中にあることを確かめる。核が `Hold` を読むのは driver を落とすときだけである
 - `raw_boxes_stay_in_the_completion_backends` は、識別子 `into_raw`、`from_raw`、`OVERLAPPED` が `COMPLETION_BACKENDS` のほかにないことを確かめる。OS に渡す箱を扱うのは完了型の backend だけである
-- `abort_is_named_only_where_memory_is_at_stake` は、識別子 `abort` が `driver/mod.rs`、`driver/tests/mod.rs`、`driver/tests/abort.rs` と `COMPLETION_BACKENDS` のほかにないことを確かめる。プロセスを止めるのは、OS がこちらの記憶に書きうるまま放せないときだけである
+- `abort_is_named_only_where_memory_is_at_stake` は、識別子 `abort` が `driver/mod.rs`、`driver/tests/abort.rs`、`COMPLETION_BACKENDS` と、`driver/tests/mod.rs` の `mod abort;` の1か所のほかにないことを確かめる。プロセスを止めるのは、OS がこちらの記憶に書きうるまま放せないときだけである
 - `the_core_walks_its_table_only_to_shut_down` は、`driver/mod.rs` の `mem::take`、`slots.iter`、`slots.values`、`slots.keys`、`slots.drain` が `quiesce` か `drop` の中にだけあることを確かめる。保留の表を歩くと、1つの接続の費用が保留の数に比例するためである
 
 ### AddressSanitizer

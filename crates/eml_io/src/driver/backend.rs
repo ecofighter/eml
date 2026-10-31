@@ -112,10 +112,13 @@ pub(crate) trait Backend: Sized {
     fn socket(&mut self, peer: SocketAddr) -> io::Result<Self::Sock>;
     fn shutdown_write(&mut self, sock: &mut Self::Sock) -> io::Result<()>;
     fn set_nodelay(&mut self, sock: &mut Self::Sock, on: bool) -> io::Result<()>;
-    /// backend の表の行を放し、OS の資源を閉じる。
+    /// backend の表の行を放し、OS の資源を閉じる。核は、保留の歩があるソケットにはこれを呼ばない。
     fn close(&mut self, sock: Self::Sock);
 
+    /// 歩の1回の試みを OS に出す。核は、保留の欄の鍵を別の歩に使い回さない。
     fn start(&mut self, key: OpKey, step: Step<'_, Self::Sock>) -> Start<Self::Sock>;
+    /// 保留の歩の取り消しを OS に頼む。核が1つの欄にこれを呼ぶのは2回までである。2回目は、1回目を OS が断ったか、
+    /// 壊れた driver が OS を呼ばずに印だけを立てた欄に、driver を落とすときに出す。
     fn cancel(&mut self, key: OpKey, step: Step<'_, Self::Sock>) -> io::Result<Cancel>;
     /// `timeout` まで、起こしか event まで待つ。時間切れ、起こし、割り込みは `Ok(())` で、`events` は空のまま。
     /// `Err` は backend が壊れたことを表す。
