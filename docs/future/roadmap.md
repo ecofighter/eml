@@ -28,7 +28,6 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `io-uring`: Linux に io_uring の backend を足すかを、試作と計測で決める。最初のタスクで `Backend` の実装を1つ試作し、`bench/net` の many-self-1000、bulk-1k、echo-py で epoll と比べる。user+sys の CPU が2割以上縮む件がなければ、試作を捨て、数字を [計測の基準](../implementation/benchmarks.md) に書いて段を閉じる。続けるときは、起動時に io_uring が使えるかを調べて選び (使えなければ epoll)、環境変数 `EML_IO_BACKEND` で固定でき、CI が両方の backend で `eml_io` のテストを流す。最低の kernel は 5.11 (`EXT_ARG`)。`user_data` は backend の表の番号と、その欄を使い回すたびに進める世代にする。壊れた driver を落とすときは、取り消しを出して 1 秒まで完了を読み、終わらなければ abort してから ring を閉じる。前提: なし。設計: [非同期の設計](async.md) の「`IoDriver` と `eml_io`」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
 - `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
 - `async-rescue`: 詰まった worker のタスクを、空いた worker が救済する。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「救済」
@@ -360,6 +359,12 @@
   - 見直す条件: 大きな本文を少しずつ読むプログラムか、同じホストへ多数の要求を出すプログラムが出たとき。IPv6 のアドレスの URL は、IPv6 だけのホストへつなぐプログラムが出たとき。
 - libcurl の上の HTTP のクライアント: 採らない。本物のソケットが要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないのでほかのプロトコルに使える TLS の層にならない。OS ごとに違う TLS (OpenSSL、Schannel) と libcurl、zlib、pkg-config の依存も持ち込む。
   - 見直す条件: `Http` に HTTP/2、プロキシ、圧縮が要り、eml で書くより libcurl を結ぶほうが小さいと分かったとき。
+- macOS の `Std.Net` を Network.framework (`nw_connection_t`、`nw_listener_t`) で作ること: 採らない。macOS の backend は kqueue のままにする
+  - 後に回した理由: Network.framework は dispatch のキューのスレッドで完了の block を呼び、受けたデータを framework が確保した `dispatch_data_t` に入れる。そのため、操作が持つ一意な buffer へ写す手間が1回増え、送りで `RawBuf` を包むと driver のスレッドの外で読まれる (理由は [非同期の設計](async.md) の「ファイルとパイプ」の `dispatch_io` と同じ)。データを消費せずに読めるかを問う操作もなく、`Readable` の歩を作れない。速さは増えず、得られるのは system の proxy と VPN に沿った経路の選択、system の trust store を使う TLS、QUIC といった機能である。
+  - 見直す条件: macOS で system の proxy か VPN に沿った接続、system の trust store を使う TLS、QUIC のどれかが要るとき。または iOS を対象にするとき。
+- Linux の io_uring の backend: Linux の backend は epoll で、io_uring を入れるなら、既定になる形 (作れなければ epoll) でだけ入れる。既定にならない backend は試されない `unsafe` のコードとして残り、io_uring を拒む環境 (Docker の seccomp、gVisor、`io_uring_disabled`) も多いので、epoll を基準の backend にする。`EML_IO_BACKEND` で backend を選べる実装を試して測った数字は、[計測の基準](../implementation/benchmarks.md) の「io_uring と epoll」にある
+  - 後に回した理由: 比べた5件 (many-self-1000、echo-self-fresh、echo-py-fresh、echo-py-reuse、bulk-1k) のどれでも、2回のセッションで続けて、CPU の比が 0.800 以下で判定が「差」にはならなかった (いちばん縮んだのは `io_uring_direct` の many-self-1000 で、1回目が 0.779 で四分位が重なり、2回目が 0.940)。貸した buffer を1つだけカーネルに渡す契約の下では、io_uring で省けるのは、登録、接続の確かめ、空振りの読みの syscall に限られる。
+  - 見直す条件: ネイティブ化の後に many-self-1000 と echo-self-fresh を測り直し、減らせる syscall の分が CPU の2割に当たるとき。buffer の契約を変え、カーネルが選ぶ buffer を受け入れる設計をするとき。`async-files` で、プールの仕事の費用が計測で目立ったとき。
 - musl で静的に結んだ Linux の配布物 (`x86_64-unknown-linux-musl`)
   - 後に回した理由: TLS とは別の配布の話である。aws-lc-sys のために musl を対象にする C のツールチェーンを flake に足し、`nix build` の2つ目のパッケージと CI のジョブが要る。musl の名前の解決と確保の速さは glibc と違う。AOT の配布物は `libeml_rt.a` を同梱して利用者の `cc` で結ぶので、musl の配布物には musl 向けの `libeml_rt.a` と結び方を別に用意する必要がある。根の証明書は今は webpki-roots なので静的な配布物でも OS のストアは要らないが、`tls-platform-verifier` の後は OS の根のファイルが要る。
   - 見直す条件: Linux の tarball を配布するとき。既定の配布物とは別の配布物にする。
