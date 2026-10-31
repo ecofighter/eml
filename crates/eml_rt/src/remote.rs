@@ -14,7 +14,7 @@ use vstd::raw_ptr::PointsTo;
 use crate::alloc::{FIRST_BLOCK, FREE_META, LARGE, PageHeader, REMOTE_AT, page_of};
 #[cfg(verus_only)]
 use crate::alloc::{header_sink, page_base};
-use crate::control::Control;
+use crate::control::{Control, control_knows};
 use crate::heap::Core;
 use crate::meta::{BlockPerm, HEADER_WORDS, Header, Meta, meta_ptr, prefix_state_ptr, rc_ptr};
 
@@ -252,22 +252,27 @@ pub(crate) fn sink_pending(sink: *const RemoteSink) -> bool {
         || sink.pushing.load(Ordering::Acquire) != 0
 }
 
-/// 検査モードの歩きが読む、ほかのヒープのページのブロック `h` の前置きの状態の欄と rc と `lin` ビット。ヒープ `core`
-/// のモデルの外にあるので、値は決めない (T14)。
-pub(crate) uninterp spec fn foreign_view(core: Core, h: usize) -> (u32, i32, bool);
+/// 検査モードの歩きが読む、ほかのヒープのページのブロック `h` の値。ページが歩くヒープの `Control` の表になければ
+/// `None`、あれば前置きの状態の欄と rc と `lin` ビットである。ヒープ `core` のモデルの外にあるので、値は決めない
+/// (T14)。
+pub(crate) uninterp spec fn foreign_view(core: Core, h: usize) -> Option<(u32, i32, bool)>;
 
-/// ほかのヒープのページのブロック `h` の、前置きの状態の欄と rc と `lin` ビットを読む (T14)。検査モードの歩きが、
-/// 静止点でだけ呼ぶ。そのときはどのスレッドもヒープのページに書かないので、読む値はそのときのメモリの中身である。
-/// 権限は返さない。
+/// ほかのヒープのページのブロック `h` を読む (T14)。先に `control` のページの表を引き、なければメモリに触れずに `None`
+/// を返す。あれば前置きの状態の欄と rc と `lin` ビットを読む。検査モードの歩きが、どのスレッドもヒープのページに
+/// 書かない時点でだけ呼ぶので、読む値はそのときの表とメモリの中身である。権限は返さない。
 #[verifier::external_body]
-pub(crate) fn foreign_header(h: *mut Header, Ghost(core): Ghost<Core>) -> (r: (u32, i32, bool))
+pub(crate) fn foreign_header(control: &Control, h: *mut Header, Ghost(core): Ghost<Core>) -> (r:
+    Option<(u32, i32, bool)>)
     ensures
         r == foreign_view(core, h@.addr),
 {
+    if !control_knows(control, h.addr()) {
+        return None;
+    }
     let state = unsafe { AtomicU32::from_ptr(prefix_state_ptr(h)) }.load(Ordering::Relaxed);
     let rc = unsafe { AtomicI32::from_ptr(rc_ptr(h)) }.load(Ordering::Relaxed);
     let lin = Meta::from_bits(unsafe { meta_ptr(h).read() }).lin();
-    (state, rc, lin)
+    Some((state, rc, lin))
 }
 
 /// `out` の `old` の後ろに足したブロックは互いに違い、`old` のブロックとも違い、`core` のこのヒープのブロックである。

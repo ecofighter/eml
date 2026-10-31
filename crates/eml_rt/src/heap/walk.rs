@@ -16,10 +16,6 @@ use super::inv::{p_owner, p_word};
 #[cfg(verus_only)]
 use super::model::BlockState;
 use crate::alloc::FREE_META;
-#[cfg(verus_only)]
-use crate::alloc::page_base;
-#[cfg(verus_only)]
-use crate::control::page_registered;
 use crate::error::HeapError;
 use crate::foreign::{finalizer_of, run_finalizer};
 use crate::frozen::Frozen;
@@ -208,12 +204,17 @@ impl<M: Mode> Heap<M> {
                                 // 塊が指してよいのは塊とその祖先のブロックだけで、ほかのヒープのページの物体は、
                                 // そのヒープとともに消える (docs/spec/object-model.md の「ページの表」)
                                 let ghost core = self.core;
-                                let (state, _, _) = foreign_header(c, Ghost(core));
                                 return Err(
-                                    if state & 3 == FREED_STATE {
-                                        HeapError::UseAfterFree
-                                    } else {
-                                        HeapError::NotImmortal
+                                    match foreign_header(
+                                        self.core.pages.control_ref(),
+                                        c,
+                                        Ghost(core),
+                                    ) {
+                                        Some((state, _, _)) if state & 3 == FREED_STATE => {
+                                            HeapError::UseAfterFree
+                                        },
+                                        Some(_) => HeapError::NotImmortal,
+                                        None => HeapError::UnknownPage,
                                     },
                                 );
                             }
@@ -506,24 +507,24 @@ impl<M: Mode> Heap<M> {
         &&& self.core.state(h) != BlockState::Token
     }
 
-    /// `c` は、このヒープのブロックでも付けた塊のブロックでもなく、ページの表に登録したページ (ほかのヒープのページ)
-    /// にある。
+    /// `c` は、このヒープのブロックでも付けた塊のブロックでもなく、このヒープの `Control` の表に登録したページ
+    /// (ほかのヒープのページ) にある。
     closed spec fn foreign_child(&self, c: usize) -> bool {
         &&& !self.core.dom().contains(c)
         &&& !self.core.region_has(c)
-        &&& page_registered(page_base(c))
+        &&& foreign_view(self.core, c) is Some
     }
 
     /// ほかのヒープのページのブロック `c` の前置きの状態が、token でも解放でもない。
     closed spec fn foreign_alive(&self, c: usize) -> bool {
-        let s = foreign_view(self.core, c).0 & 3;
+        let s = (foreign_view(self.core, c)->0).0 & 3;
         s != FREED_STATE && s != TOKEN_STATE
     }
 
     /// 子 `c` の rc。ほかのヒープのページの子は、歩きが読んだ値である。
     closed spec fn child_rc(&self, c: usize) -> i32 {
         if self.foreign_child(c) {
-            foreign_view(self.core, c).1
+            (foreign_view(self.core, c)->0).1
         } else {
             self.core.rc_of(c)
         }
@@ -532,7 +533,7 @@ impl<M: Mode> Heap<M> {
     /// 子 `c` の `lin` ビット。
     closed spec fn child_lin(&self, c: usize) -> bool {
         if self.foreign_child(c) {
-            foreign_view(self.core, c).2
+            (foreign_view(self.core, c)->0).2
         } else {
             self.core.lin(c)
         }
@@ -655,8 +656,14 @@ impl<M: Mode> Heap<M> {
                                 // ほかのヒープのページの子は、そのヒープの権限を持たないので、前置きの状態と rc と
                                 // `lin` ビットを T14 の読みで読み、自分の子と同じ規則で確かめる
                                 let (cs, crc, clin) = if self.core.foreign_block(c) {
-                                    let (state, n, lin) = foreign_header(c, Ghost(core));
-                                    (state & 3, n, lin)
+                                    match foreign_header(
+                                        self.core.pages.control_ref(),
+                                        c,
+                                        Ghost(core),
+                                    ) {
+                                        Some((state, n, lin)) => (state & 3, n, lin),
+                                        None => return Err(HeapError::UnknownPage),
+                                    }
                                 } else {
                                     (
                                         self.core.prefix_state_get(c) & 3,

@@ -1291,17 +1291,16 @@ fn checked_words_cross_heaps_and_unknown_pages_are_refused() {
     assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
     assert_eq!(a.check_invariants(), Ok(()));
     assert_eq!(a.retire_worker(id), Ok(()));
-    // 落としたヒープのページを指す語
+    // 落としたヒープのページを指す語。落とした後は、同じ `Control` のどのヒープもページを取らない。取ると、同じ
+    // 番地のページがまた登録されうるためである
+    let q = a.alloc_data(0, 1, 0, false);
+    unsafe { a.share(q, 0) }.unwrap();
     let stale = {
         let mut c = Heap::<Checked>::with_control(control.clone());
         list(&mut c, 1)
     };
     assert_eq!(unsafe { a.dup(stale) }, Err(HeapError::UnknownPage));
-    let q = a.alloc_data(0, 1, 0, false);
-    unsafe {
-        a.share(q, 0).unwrap();
-        raw::set_slot(q, 0, stale);
-    }
+    unsafe { raw::set_slot(q, 0, stale) };
     assert_eq!(a.check_invariants(), Err(HeapError::UnknownPage));
     unsafe {
         raw::set_slot(q, 0, Word::UNIT);

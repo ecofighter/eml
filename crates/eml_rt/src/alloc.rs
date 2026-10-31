@@ -13,9 +13,7 @@ use std::sync::Arc;
 use vstd::prelude::*;
 use vstd::raw_ptr::{Dealloc, PointsTo, PointsToRaw, ptr_mut_write, ptr_ref};
 
-#[cfg(verus_only)]
-use crate::control::page_registered;
-use crate::control::{Control, register_page, unregister_page};
+use crate::control::{Control, Registered, forget_page, register_page, unregister_page};
 #[cfg(verus_only)]
 use crate::frozen::RegionPerms;
 use crate::heap::TOO_LARGE;
@@ -211,6 +209,8 @@ pub(crate) tracked struct PagePerm {
     tracked remote: PointsTo<Word>,
     tracked dealloc: Dealloc,
     tracked tail: PointsToRaw,
+    /// 検査モードで、ページをページの表に登録した証。速いモードでは `None` である。
+    tracked reg: Option<Registered>,
 }
 
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
@@ -333,7 +333,7 @@ proof fn take_header_perms(
         let a = keys.choose();
         let tracked page = pages.tracked_remove(a);
         let tracked mut r = take_header_perms(pages, keys.remove(a));
-        let tracked PagePerm { header, state, remote, dealloc, tail } = page;
+        let tracked PagePerm { header, .. } = page;
         r.tracked_insert(a, header);
         assert(r.dom() =~= keys);
         r
@@ -570,7 +570,8 @@ impl Pages {
         &&& perm.remote.ptr()@.addr == a + REMOTE_AT
         &&& perm.remote.ptr()@.provenance == self.page_provenance(a)
         &&& hdr.sink == self.sink
-        &&& self.prefix_words > 0 ==> page_registered(a)
+        &&& self.prefix_words > 0 ==> (perm.reg matches Some(t) && t.page() == a && t.control()
+            == self.ctl_id())
         &&& perm.dealloc.addr() == a
         &&& perm.dealloc.size() == hdr.bytes
         &&& perm.dealloc.align() == PAGE_BYTES
@@ -848,6 +849,7 @@ impl Pages {
     proof fn lemma_layout_frame(&self, s0: Pages)
         requires
             self.pages == s0.pages,
+            self.control == s0.control,
             self.count == s0.count,
             self.prefix_words == s0.prefix_words,
             self.sink == s0.sink,
@@ -1079,6 +1081,18 @@ impl Pages {
     }
 
     pub(crate) fn control(&self) -> &Arc<Control> {
+        &self.control
+    }
+
+    /// ページを数える `Control` の番号。ページの表の登録の証は、この番号の `Control` のものである。
+    pub(crate) closed spec fn ctl_id(&self) -> u64 {
+        (*self.control@).ident()
+    }
+
+    pub(crate) fn control_ref(&self) -> (r: &Control)
+        ensures
+            r.ident() == self.ctl_id(),
+    {
         &self.control
     }
 
@@ -1346,6 +1360,7 @@ impl Pages {
 
     proof fn lemma_pop(&self, s0: Pages, c: int, h: *mut Header, words: usize)
         requires
+            self.control == s0.control,
             s0.wf(),
             0 <= c < CLASSES,
             CLASS_WORDS[c] >= words + s0.prefix_words,
@@ -1497,7 +1512,7 @@ impl Pages {
         let block = st.cursor;
         let h = (block as *mut Header).with_addr(block.addr() + self.prefix_words * WORD);
         let tracked pp = self.pages.borrow_mut().tracked_remove(a);
-        let tracked PagePerm { header, state, remote, dealloc, tail } = pp;
+        let tracked PagePerm { header, state, remote, dealloc, tail, reg } = pp;
         let ghost lo = block@.addr as int;
         let tracked (raw, rest) = tail.split(Set::range(lo, lo + block_bytes));
         proof {
@@ -1508,7 +1523,7 @@ impl Pages {
         proof {
             self.pages.borrow_mut().tracked_insert(
                 a,
-                PagePerm { header, state, remote, dealloc, tail: rest },
+                PagePerm { header, state, remote, dealloc, tail: rest, reg },
             );
         }
         let mut st2 = st;
@@ -1561,6 +1576,8 @@ impl Pages {
             CLASS_WORDS[c] >= words + s0.prefix_words,
             words >= HEADER_WORDS + 1,
             s1.prefix_words == s0.prefix_words,
+            s1.control == s0.control,
+            self.control == s1.control,
             s1.in_use == s0.in_use,
             forall|b: usize| #[trigger] s0.carved_block(b) ==> s1.same_block(s0, b),
             s1.carved == s0.carved,
@@ -1576,6 +1593,7 @@ impl Pages {
                 &&& self.pages@[a].state == s1.pages@[a].state
                 &&& self.pages@[a].remote == s1.pages@[a].remote
                 &&& self.pages@[a].dealloc == s1.pages@[a].dealloc
+                &&& self.pages@[a].reg == s1.pages@[a].reg
                 &&& self.pages@[a].tail.is_range(
                     lo + CLASS_WORDS[c] * 8,
                     a + PAGE_BYTES - (lo + CLASS_WORDS[c] * 8),
@@ -1744,6 +1762,7 @@ impl Pages {
             final(self).index == old(self).index,
             final(self).free_perms == old(self).free_perms,
             final(self).free == old(self).free,
+            final(self).control == old(self).control,
             final(self).classes[class as int].page@.addr != 0,
             final(self).classes[class as int].end@.addr
                 - final(self).classes[class as int].cursor@.addr >= PAGE_BYTES - FIRST_BLOCK,
@@ -1806,9 +1825,8 @@ impl Pages {
                 }) && s1.pages@[a0].dealloc == s0.pages@[a0].dealloc && s1.pages@[a0].tail
                     == s0.pages@[a0].tail && s1.pages@[a0].header == s0.pages@[a0].header
                     && s1.pages@[a0].remote == s0.pages@[a0].remote && s1.pages@[a0].state.ptr()
-                    == s0.pages@[a0].state.ptr() && s1.pages@[a0].state.is_init() && forall|
-                    x: usize,
-                |
+                    == s0.pages@[a0].state.ptr() && s1.pages@[a0].state.is_init()
+                    && s1.pages@[a0].reg == s0.pages@[a0].reg && forall|x: usize|
                     x != a0 ==> #[trigger] s1.pages@[x] == s0.pages@[x]
                 &&& a0 == 0 ==> s1.pages == s0.pages
             }),
@@ -1843,7 +1861,9 @@ impl Pages {
             s0.list@.len() <= usize::MAX,
             self.bytes == s0.bytes + PAGE_BYTES,
             self.count@ == s0.count@.insert(p@.addr, 0),
-            s0.prefix_words > 0 ==> page_registered(p@.addr),
+            s0.prefix_words > 0 ==> (self.pages@[p@.addr].reg matches Some(t) && t.page() == p@.addr
+                && t.control() == s0.ctl_id()),
+            self.control == s0.control,
             self.carved == s0.carved,
             self.index == s0.index,
             self.free_perms == s0.free_perms,
@@ -1900,6 +1920,7 @@ impl Pages {
         assert forall|x: usize| #[trigger] self.pages@.contains_key(x) implies self.page_wf(x) by {
             if x != pa {
                 assert(s0.page_wf(x));
+                assert(self.pages@[x].reg == s0.pages@[x].reg);
             }
         }
         assert(self.count@.dom() =~= self.pages@.dom());
@@ -2050,7 +2071,9 @@ impl Pages {
             final(self).index == old(self).index,
             final(self).prefix_words == old(self).prefix_words,
             final(self).sink == old(self).sink,
-            old(self).prefix_words > 0 ==> page_registered(r.0@.addr),
+            old(self).prefix_words > 0 ==> (r.1@.reg matches Some(t) && t.page() == r.0@.addr
+                && t.control() == old(self).ctl_id()),
+            final(self).control == old(self).control,
     {
         if block_words > 0xFFFF_FFFF {
             too_many_words();
@@ -2064,10 +2087,13 @@ impl Pages {
         };
         let (base, Tracked(raw), Tracked(dealloc)) = alloc_page(bytes);
         charge_pages(&self.control, bytes);
-        if self.prefix_words > 0 {
-            // 検査モードのページは、物体の語をどこかへ渡す前に表に登録する (docs/spec/object-model.md の「ページの表」)
-            register_page(&self.control, base.addr());
-        }
+        // 検査モードのページは、物体の語をどこかへ渡す前に表に登録する (docs/spec/object-model.md の「ページの表」)
+        let reg: Tracked<Option<Registered>> = if self.prefix_words > 0 {
+            let Tracked(t) = register_page(self.control_ref(), base.addr());
+            Tracked(Some(t))
+        } else {
+            Tracked(None)
+        };
         let page = base as *mut PageHeader;
         let ghost a = base@.addr as int;
         proof {
@@ -2097,7 +2123,8 @@ impl Pages {
         }
         self.list.push(page);
         self.bytes = total;
-        (page, Tracked(PagePerm { header, state, remote, dealloc, tail }))
+        let Tracked(reg) = reg;
+        (page, Tracked(PagePerm { header, state, remote, dealloc, tail, reg }))
     }
 
     /// 大きい物体のブロックを、専用のページで取る。
@@ -2127,7 +2154,7 @@ impl Pages {
             }
         }
         let (page, Tracked(perm)) = self.fresh_page(bytes, LARGE, block_words);
-        let tracked PagePerm { header, state: mut state, remote, dealloc, tail } = perm;
+        let tracked PagePerm { header, state: mut state, remote, dealloc, tail, reg } = perm;
         let mut ps = *ptr_ref(state_ptr(page), Tracked(&state));
         ps.limit = bytes;
         ptr_mut_write(state_ptr(page), Tracked(&mut state), ps);
@@ -2148,7 +2175,7 @@ impl Pages {
         proof {
             self.pages.borrow_mut().tracked_insert(
                 page@.addr,
-                PagePerm { header, state, remote, dealloc, tail: rest },
+                PagePerm { header, state, remote, dealloc, tail: rest, reg },
             );
             self.count = Ghost(self.count@.insert(page@.addr, 1));
             self.carved = Ghost(self.carved@.insert(h@.addr));
@@ -2205,7 +2232,9 @@ impl Pages {
             s0.list@.len() <= usize::MAX,
             self.bytes == s0.bytes + FIRST_BLOCK + block_words * 8,
             self.count@ == s0.count@.insert(p@.addr, 1),
-            s0.prefix_words > 0 ==> page_registered(p@.addr),
+            s0.prefix_words > 0 ==> (self.pages@[p@.addr].reg matches Some(t) && t.page() == p@.addr
+                && t.control() == s0.ctl_id()),
+            self.control == s0.control,
             self.carved@ == s0.carved@.insert(h@.addr),
             self.index@ == s0.index@.insert(h@.addr, 0),
             self.in_use@ == s0.in_use@.insert(h@.addr),
@@ -2411,6 +2440,7 @@ impl Pages {
 
     proof fn lemma_free(&self, s0: Pages, c: int, h: *mut Header)
         requires
+            self.control == s0.control,
             s0.wf(),
             0 <= c < CLASSES,
             s0.in_use().contains(h@.addr),
@@ -2601,6 +2631,7 @@ impl Pages {
             remote: mut remote,
             dealloc,
             tail,
+            reg,
         } = pp;
         let ghost cap = s0.cap(hs);
         proof {
@@ -2616,7 +2647,8 @@ impl Pages {
             assert(raw.dom() =~= Set::range(a as int, a + bytes));
         }
         if self.prefix_words > 0 {
-            unregister_page(&self.control, page.addr());
+            let tracked t = reg.tracked_unwrap();
+            unregister_page(self.control_ref(), page.addr(), Tracked(t));
         }
         dealloc_page(page as *mut u8, bytes, Tracked(raw), Tracked(dealloc));
         if refund {
@@ -2662,6 +2694,7 @@ impl Pages {
                 &&& self.pages@[m].state.is_init()
                 &&& self.pages@[m].dealloc == s0.pages@[m].dealloc
                 &&& self.pages@[m].tail == s0.pages@[m].tail
+                &&& self.pages@[m].reg == s0.pages@[m].reg
                 &&& forall|x: usize| x != a && x != m ==> #[trigger] self.pages@[x] == s0.pages@[x]
             }),
             i == self.list@.len() ==> forall|x: usize|
@@ -2671,6 +2704,7 @@ impl Pages {
             self.carved@ == s0.carved@.remove(hs),
             self.index@ == s0.index@.remove(hs),
             self.in_use@ == s0.in_use@.remove(hs),
+            self.control == s0.control,
             self.free_perms == s0.free_perms,
             self.free == s0.free,
             self.prefix_words == s0.prefix_words,
@@ -2849,18 +2883,20 @@ impl Pages {
         self.pages@.contains_key(a)
     }
 
-    /// 検査モードで切り出したブロックのページは、ページの表に登録してある。
-    pub(crate) proof fn lemma_registered(&self, h: usize)
+    /// 検査モードで切り出したブロック `h` のページを、ページの表に登録した証を借りる。
+    pub(crate) proof fn tracked_reg(tracked &self, h: usize) -> (tracked t: &Registered)
         requires
             self.wf(),
             self.carved_block(h),
             self.prefixed(),
         ensures
-            page_registered(page_base(h)),
+            t.page() == page_base(h),
+            t.control() == self.ctl_id(),
     {
         reveal(Pages::carved_wf);
         reveal(Pages::pages_wf);
         assert(self.page_wf(page_base(h)));
+        self.pages.borrow().tracked_borrow(page_base(h)).reg.tracked_borrow()
     }
 
     /// 切り出したブロックは、持っているページにある。
@@ -3319,7 +3355,7 @@ impl Drop for Pages {
     fn drop(&mut self) {
         for page in self.list.drain(..) {
             if self.prefix_words > 0 {
-                unregister_page(&self.control, page.addr());
+                forget_page(&self.control, page.addr());
             }
             let bytes = unsafe { (*page).bytes };
             unsafe {

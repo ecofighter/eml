@@ -20,8 +20,6 @@ use crate::cell::{
     rc_decref_shared, rc_dup_shared, rc_is_last, rc_load, rc_store, u32_load, u32_store,
 };
 #[cfg(verus_only)]
-use crate::control::page_registered;
-#[cfg(verus_only)]
 use crate::meta::{BlockPerm, field_ptr};
 use crate::meta::{Header, Meta, meta_ptr, prefix_first_ptr, prefix_state_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
@@ -306,19 +304,6 @@ impl Core {
             assert(self.perms@.dom() =~= s0.perms@.dom());
             assert(self.perm(h@.addr).slots.dom() =~= s0.perm(h@.addr).slots.dom());
         }
-    }
-
-    /// 検査モードで、このヒープのブロックのページは、ページの表に登録してある。
-    pub(crate) proof fn lemma_page_registered(&self, h: usize)
-        requires
-            self.sound(),
-            self.dom().contains(h),
-            self.checked(),
-        ensures
-            page_registered(page_base(h)),
-    {
-        self.pages.lemma_in_use_carved(h);
-        self.pages.lemma_registered(h);
     }
 
     /// ブロック `h` が、ほかのヒープのページにあるか。ページの頭の `sink` が、このヒープのものでも塊の null でもない

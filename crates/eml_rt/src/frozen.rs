@@ -14,7 +14,7 @@ use vstd::shared::Shared;
 use crate::alloc::{PageHeader, Pages};
 #[cfg(verus_only)]
 use crate::alloc::{header_ok, header_sink, lemma_header_size, page_base, region_cap, region_ptr};
-use crate::control::page_known;
+use crate::control::control_knows;
 #[cfg(verus_only)]
 use crate::heap::Env;
 #[cfg(verus_only)]
@@ -500,7 +500,7 @@ pub(crate) fn region_known<M: Mode>(region: &Option<Arc<Frozen<M>>>, a: usize) -
 {
     let mut next = region.as_deref();
     while let Some(r) = next {
-        if page_known(r.pages.control(), a) {
+        if control_knows(r.pages.control(), a) {
             return true;
         }
         next = r.parent.as_deref();

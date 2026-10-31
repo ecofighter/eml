@@ -165,12 +165,16 @@ impl<M: Mode> Heap<M> {
         ensures
             r,
     {
-        proof {
-            if self.core.dom().contains(h@.addr) {
-                self.core.lemma_page_registered(h@.addr);
-            }
-        }
-        page_known(self.core.pages.control(), h.addr()) || region_known(&self.region, h.addr())
+        let tracked reg = if self.core.dom().contains(h@.addr) {
+            self.core.pages.lemma_in_use_carved(h@.addr);
+            Some(self.core.pages.tracked_reg(h@.addr))
+        } else {
+            None
+        };
+        page_known(self.core.pages.control_ref(), h.addr(), Tracked(reg)) || region_known(
+            &self.region,
+            h.addr(),
+        )
     }
 
     /// 前置きの状態が生存かを確かめる。解放した共有の物体は rc が 0 になっていて不死の物体と区別できないので、rc を

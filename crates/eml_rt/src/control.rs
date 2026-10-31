@@ -59,6 +59,10 @@ pub struct Control {
     limits: Limits,
     workers: WorkerIds,
     pages: PageMap,
+    /// ページの表の登録の証が、どの `Control` のものかを見分ける番号。
+    // 仕様だけが読む
+    #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
+    id: u64,
 }
 
 /// 検査モードの論理的な worker ID の表 (docs/spec/object-model.md の「論理的な worker ID」)。`Control` に置き、同じ
@@ -84,34 +88,68 @@ pub(crate) struct PageMap {
     top: OnceLock<Box<Node<Node<Node<Leaf>>>>>,
 }
 
-/// 検査モードのページの表に、番地 `page` のページが登録されている。証明は、このヒープのページが登録されている
-/// ことだけに使う (信頼の一覧の T15)。
-pub(crate) uninterp spec fn page_registered(page: usize) -> bool;
+/// `control` の表に番地 `page` のページを登録した証。登録したヒープの確保器がページごとに1つ持ち、ページを返す前に
+/// `unregister_page` に渡して手放す。作れるのは `register_page` だけである (信頼の一覧の T15)。
+#[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
+pub(crate) tracked struct Registered {
+    ghost page: usize,
+    ghost control: u64,
+}
 
-/// 番地 `a` のブロックのページが、`control` のページの表に登録されているか (T15)。登録してまだ外していないページには
-/// 真を返す。表だけを読み、`a` の指すメモリには触れない。
+impl Registered {
+    /// 登録したページの番地。
+    pub(crate) closed spec fn page(&self) -> usize {
+        self.page
+    }
+
+    /// 登録した `Control` の番号 (`Control::ident`)。
+    pub(crate) closed spec fn control(&self) -> u64 {
+        self.control
+    }
+}
+
+/// 番地 `a` のブロックのページが、`control` のページの表に登録されているか (T15)。表だけを読み、`a` の指すメモリには
+/// 触れない。約束は1つで、`a` のページを `control` に登録した証 `t` を渡せば真を返す。証があるうちは、そのページを
+/// 外すのは証を手放す `unregister_page` だけで、ページは確保したままなので同じ番地をほかの登録が使うこともない。
 #[verifier::external_body]
 #[inline]
-pub(crate) fn page_known(control: &Control, a: usize) -> (r: bool)
+pub(crate) fn page_known(
+    control: &Control,
+    a: usize,
+    Tracked(t): Tracked<Option<&Registered>>,
+) -> (r: bool)
     ensures
-        page_registered(page_base(a)) ==> r,
+        t matches Some(t) && t.page() == page_base(a) && t.control() == control.ident() ==> r,
 {
     control.pages.contains(a)
 }
 
-/// 番地 `page` のページを `control` のページの表に登録する (T15)。
+/// 番地 `page` のページを `control` のページの表に登録し、その証を返す (T15)。ページを確保した直後に、ページごとに
+/// 1回だけ呼ぶ。
 #[verifier::external_body]
-pub(crate) fn register_page(control: &Control, page: usize)
+pub(crate) fn register_page(control: &Control, page: usize) -> (t: Tracked<Registered>)
     ensures
-        page_registered(page),
+        t@.page() == page,
+        t@.control() == control.ident(),
 {
     control.pages.insert(page);
+    Tracked::assume_new()
 }
 
-/// 番地 `page` のページを `control` のページの表から外す (T15)。
+/// 番地 `page` のページを `control` のページの表から外し、証を手放す (T15)。ページを返す前に呼ぶ。
 #[verifier::external_body]
-pub(crate) fn unregister_page(control: &Control, page: usize) {
+pub(crate) fn unregister_page(control: &Control, page: usize, Tracked(t): Tracked<Registered>)
+    requires
+        t.page() == page,
+        t.control() == control.ident(),
+{
     control.pages.remove(page);
+}
+
+/// 新しい `Control` の番号。プロセスの中で同じ番号を2度出さない (T15)。
+#[verifier::external_body]
+fn fresh_control_id() -> u64 {
+    CONTROL_IDS.fetch_add(1, Ordering::Relaxed)
 }
 
 /// ヒープが持つ、`WorkerIds` の数の塊の写し (docs/spec/object-model.md の「論理的な worker ID」)。数を変えるたびに
@@ -272,7 +310,13 @@ impl Control {
             limits,
             workers: WorkerIds::empty_table(),
             pages: PageMap::empty_map(),
+            id: fresh_control_id(),
         }
+    }
+
+    /// この `Control` の番号。
+    pub(crate) closed spec fn ident(&self) -> u64 {
+        self.id
     }
 
     /// 上限のない新しい `Control`。
@@ -479,12 +523,14 @@ const CHUNK_IDS: usize = 64;
 
 type Chunk = [AtomicU64; CHUNK_IDS];
 
+/// 次に作る `Control` の番号。
+static CONTROL_IDS: AtomicU64 = AtomicU64::new(0);
+
 /// ページの表の上の3段の、1つの表の項目の数。
 const MAP_FAN: usize = 64;
 /// ページの表の葉の語の数。1つの葉が 2^14 個のページ (1 GiB) を受け持つ。
 // Miri では、表を作る費用が表の大きさによらないように、どの表も繰り返しの式で作る。表を落とすときは項目を1つずつ
-// 落とすので、項目の数は小さく保つ。上の2段を 256 項目、葉を 1024 語にした3段の表では、Tree Borrows の
-// `trusted::` が検査モードのテスト1本あたり約1秒遅くなった
+// 落とすので、項目の数は小さく保つ
 const LEAF_WORDS: usize = 256;
 
 type Leaf = [AtomicU64; LEAF_WORDS];
@@ -507,6 +553,16 @@ fn empty_node<T>() -> Box<Node<T>> {
 
 // 登録のビットは、ページの物体の語をほかのスレッドへ渡す前に立て、ページを返す前に下ろす。語を受けたスレッドは、
 // 語を渡したときの順序でビットを見るので、表の読み書きは Relaxed で足りる
+/// 番地 `a` のページが表にあるか。値の約束を持たない読みで、T14 の `foreign_header` が使う。
+pub(crate) fn control_knows(control: &Control, a: usize) -> bool {
+    control.pages.contains(a)
+}
+
+/// `Heap` を落とすときに、確保器の `Drop` がページを返す前に表から外す。登録の証は確保器とともに消える。
+pub(crate) fn forget_page(control: &Control, page: usize) {
+    control.pages.remove(page);
+}
+
 impl PageMap {
     fn leaf(&self, a: usize) -> Option<(&AtomicU64, u64)> {
         let ([i, j, k], word, bit) = map_slot(a)?;
