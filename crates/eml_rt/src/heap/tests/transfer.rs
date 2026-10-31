@@ -94,7 +94,7 @@ fn the_owners_of_a_list_of_the_child_are_rewritten() {
     unsafe { heap.transfer_back(l, child) }.unwrap();
     assert_eq!(owners(&heap, l), [0; 3]);
     assert_eq!((heap.owned_by(0), heap.owned_by(child)), (3, 0));
-    assert_eq!(heap.check_invariants(), Ok(()));
+    assert_eq!(super::check_all(&heap), Ok(()));
     unsafe { heap.decref(l) }.unwrap();
 }
 
@@ -262,7 +262,7 @@ fn a_value_shared_to_the_current_id_is_received_by_another_id<M: Mode>() {
         assert_eq!(raw::rc(x), 1);
         assert_eq!(owned(&heap, b), before.map(|n| n + 1));
         if let Some(heap) = (&heap as &dyn Any).downcast_ref::<H>() {
-            assert_eq!(heap.check_invariants(), Ok(()));
+            assert_eq!(super::check_all(heap), Ok(()));
         }
         assert_eq!(heap.retire_worker(a), Ok(()));
         heap.decref(x).unwrap();
@@ -318,7 +318,7 @@ fn transfer_back_from_the_current_worker_changes_nothing() {
             })
         );
         assert_eq!(rcs(&heap, l), [-1, -1]);
-        assert_eq!(heap.check_invariants(), Ok(()));
+        assert_eq!(super::check_all(&heap), Ok(()));
         heap.decref(l).unwrap();
     }
 }
@@ -354,14 +354,14 @@ fn transfer_back_moves_the_counts_to_the_current_worker() {
         // c の所有者を書き換え、共有のリストは c の下で rc -1 のまま残す
         heap.transfer_back(c, child).unwrap();
         assert_eq!((heap.owned_by(0), heap.owned_by(child)), (1, 0));
-        assert_eq!(heap.check_invariants(), Ok(()));
+        assert_eq!(super::check_all(&heap), Ok(()));
         heap.decref(c).unwrap();
         // 裏返した物体は今の worker の数に入る
         let l = list(&mut heap, 2);
         heap.share(l, child).unwrap();
         heap.transfer_back(l, child).unwrap();
         assert_eq!(heap.owned_by(0), 2);
-        assert_eq!(heap.check_invariants(), Ok(()));
+        assert_eq!(super::check_all(&heap), Ok(()));
         heap.decref(l).unwrap();
     }
     assert_eq!(heap.owned_by(0), 0);

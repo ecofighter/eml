@@ -15,8 +15,9 @@ use super::inv::{
 };
 #[cfg(verus_only)]
 use super::model::BlockState;
-use super::{Core, Env, count_owned, move_owned};
+use super::{Core, Env, move_owned};
 use crate::cell::{rc_load, rc_store, u32_load, u32_store};
+use crate::control::IdCounts;
 use crate::meta::{
     BlockPerm, Header, Meta, meta_ptr, prefix_first_ptr, prefix_state_ptr, rc_ptr, slot_ptr,
 };
@@ -567,8 +568,8 @@ pub(crate) proof fn lemma_same_frame_graph(
 pub(crate) struct Objects<M> {
     pub(crate) perms: Tracked<Map<usize, BlockPerm>>,
     /// 検査モードの ID ごとの数 (`Heap` の `owned`)。rc の符号か、rc が正の物体の持ち主が変わると数え直す。
-    /// 速いモードでは空のまま触れない。
-    pub(crate) owned: Vec<u64>,
+    /// 速いモードでは何も持たない写しのまま触れない。
+    pub(crate) owned: IdCounts,
     /// たどりが rc を負にした物体の数 (`Stats` の `shared`)。検査モードだけで数え、速いモードでは 0 のまま触れない。
     /// 証明する不変条件の外にある
     pub(crate) shared: u64,
@@ -708,9 +709,9 @@ impl<M: Mode> Graph for Objects<M> {
                 self.shared = self.shared.wrapping_add(1);
             }
             if before > 0 && rc <= 0 {
-                count_owned(&mut self.owned, owner, false);
+                self.owned.count_id(owner, false);
             } else if before <= 0 && rc > 0 {
-                count_owned(&mut self.owned, owner, true);
+                self.owned.count_id(owner, true);
             }
         }
         let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
@@ -834,7 +835,7 @@ impl<M: Mode> Graph for Objects<M> {
         rc_store(rc_ptr(h), Tracked(&mut p.rc), 1);
         if M::CHECKED {
             // rc が負の物体は数に入っていないので、前置きの古い所有者は読まずに、新しい所有者の数だけを増やす
-            count_owned(&mut self.owned, owner, true);
+            self.owned.count_id(owner, true);
             let tracked mut q = p.prefix.tracked_unwrap();
             u32_store(prefix_first_ptr(h), Tracked(&mut q.first), owner);
             proof {

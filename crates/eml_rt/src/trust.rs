@@ -198,6 +198,16 @@ const TRUSTED: &[(&str, &str)] = &[
     ("heap/ctx/positions.rs: external_body find_byte", "T13"),
     ("remote.rs: external_body sink_ptr", "T14"),
     ("remote.rs: external_body page_sink_of", "T14"),
+    ("control.rs: external_body WorkerIds", "T15"),
+    ("control.rs: external_body empty_table", "T15"),
+    ("control.rs: external_body IdCounts", "T15"),
+    ("control.rs: external_body detached", "T15"),
+    ("control.rs: external_body for_control", "T15"),
+    ("control.rs: external_body enter_id", "T15"),
+    ("control.rs: external_body count_id", "T15"),
+    ("control.rs: external_body fork_id", "T15"),
+    ("control.rs: external_body retire_id", "T15"),
+    ("control.rs: external_body reset_ids", "T15"),
     ("alloc.rs: Drop for Pages", "T4"),
     ("heap/walk.rs: Drop for Heap", "T4"),
     ("frozen.rs: Drop for Frozen", "T4"),
@@ -499,7 +509,7 @@ fn the_trust_list_is_exactly_the_trusted_items() {
         assert!(
             [
                 "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12",
-                "T13", "T14"
+                "T13", "T14", "T15"
             ]
             .contains(number),
             "{item} has no trust row"

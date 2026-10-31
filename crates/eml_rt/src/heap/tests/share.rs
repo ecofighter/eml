@@ -403,12 +403,12 @@ fn a_shared_object_reaching_a_local_one_breaks_the_invariant() {
     unsafe {
         heap.share(p, 0).unwrap();
         raw::set_slot(p, 0, c);
-        assert_eq!(heap.check_invariants(), Err(HeapError::SharedReachesLocal));
+        assert_eq!(super::check_all(&heap), Err(HeapError::SharedReachesLocal));
         raw::set_slot(p, 0, Word::UNIT);
         heap.decref(c).unwrap();
         heap.decref(p).unwrap();
     }
-    assert_eq!(heap.check_invariants(), Ok(()));
+    assert_eq!(super::check_all(&heap), Ok(()));
 }
 
 #[test]
@@ -420,7 +420,7 @@ fn an_immortal_object_reaching_a_mortal_one_breaks_the_invariant() {
     unsafe {
         heap.set_field(p, 0, c).unwrap();
         assert_eq!(
-            heap.check_invariants(),
+            super::check_all(&heap),
             Err(HeapError::ImmortalReachesMortal)
         );
         heap.set_field(p, 0, Word::UNIT).unwrap();
@@ -436,7 +436,7 @@ fn a_shared_parent_may_reach_a_local_lin_child() {
     unsafe {
         heap.set_field(p, 0, lin).unwrap();
         heap.share(p, 0).unwrap();
-        assert_eq!(heap.check_invariants(), Ok(()));
+        assert_eq!(super::check_all(&heap), Ok(()));
         heap.decref(p).unwrap();
     }
 }
@@ -570,13 +570,13 @@ fn counts_move_with_the_walk() {
         assert_eq!(heap.owned_by(0), 4);
         heap.share(lin, 7).unwrap();
         assert_eq!((heap.owned_by(0), heap.owned_by(7)), (0, 3));
-        assert_eq!(heap.check_invariants(), Ok(()));
+        assert_eq!(super::check_all(&heap), Ok(()));
         heap.decref(kept).unwrap();
         heap.set_worker(7);
         heap.decref(lin).unwrap();
     }
     assert_eq!((heap.owned_by(0), heap.owned_by(7)), (0, 0));
-    assert_eq!(heap.check_invariants(), Ok(()));
+    assert_eq!(super::check_all(&heap), Ok(()));
 }
 
 /// `share` が rc を負にした物体を1つずつ数える。すでに共有の物体は数えない。

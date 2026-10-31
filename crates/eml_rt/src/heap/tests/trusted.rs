@@ -443,7 +443,7 @@ fn every_core_operation_once_checked() {
     every_core_operation_once::<Checked>();
     let mut heap = Heap::<Checked>::new();
     let l = list(&mut heap, 3);
-    assert_eq!(heap.check_invariants(), Ok(()));
+    assert_eq!(super::check_all(&heap), Ok(()));
     assert_eq!(heap.leaks().get("Data"), Some(&3));
     unsafe { heap.decref(l) }.unwrap();
     assert!(heap.leaks().is_empty());

@@ -1082,6 +1082,10 @@ impl Pages {
         &self.control
     }
 
+    pub(crate) fn remote_sink(&self) -> &RemoteSink {
+        &self.remote_sink
+    }
+
     #[inline]
     fn header_of(&self, page: *mut PageHeader) -> (r: PageHeader)
         requires

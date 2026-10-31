@@ -41,6 +41,7 @@ pub enum HeapError {
     Unrecoverable,
     TransferLeak { worker: u32, live: u32 },
     OwnedMiscount { worker: u32 },
+    NotQuiescent,
 }
 
 } // verus!
@@ -98,6 +99,9 @@ impl fmt::Display for HeapError {
             }
             HeapError::OwnedMiscount { worker } => {
                 write!(f, "the count of live objects of worker {worker} is wrong")
+            }
+            HeapError::NotQuiescent => {
+                f.write_str("a heap is checked while frees from other threads are not taken in")
             }
         }
     }

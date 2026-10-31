@@ -276,7 +276,7 @@ fn recovery_copies_shared_strings_and_bytes_of_another_worker<M: Mode>() {
 fn checked_recovery_counts_shared_strings_of_another_worker_as_its_own() {
     let ctx = recover_shared_text_of_another_worker::<Checked>();
     assert_eq!(ctx.heap().owned_by(0), 3);
-    assert_eq!(ctx.heap().check_invariants(), Ok(()));
+    assert_eq!(super::check_all(ctx.heap()), Ok(()));
 }
 
 /// 共有の印がある `lin` の物体は、rc が負でも写せない。
@@ -391,11 +391,11 @@ fn checked_recovery_counts_its_copies() {
     }
     // holder、both、x の写し、y の2つのセル
     assert_eq!(ctx.heap().owned_by(0), 5);
-    assert_eq!(ctx.heap().check_invariants(), Ok(()));
+    assert_eq!(super::check_all(ctx.heap()), Ok(()));
     let holder = root(&mut ctx, 0);
     unsafe { ctx.heap_mut().decref(holder) }.unwrap();
     assert_eq!(ctx.heap().owned_by(0), 0);
-    assert_eq!(ctx.heap().check_invariants(), Ok(()));
+    assert_eq!(super::check_all(ctx.heap()), Ok(()));
 }
 
 /// 検査モードでは、空けた物体と token の箱に届く根も断る。速いモードでは、根が生きていない物体を指すこと自体が

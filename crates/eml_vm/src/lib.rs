@@ -283,7 +283,11 @@ impl Machine<Checked> {
         Machine::with_checks(
             control,
             host,
-            |ctx| ctx.heap().check_invariants(),
+            |ctx| {
+                let heap = ctx.heap();
+                heap.check_invariants()?;
+                heap.control().check_owned(&[heap])
+            },
             check_leaks,
         )
     }

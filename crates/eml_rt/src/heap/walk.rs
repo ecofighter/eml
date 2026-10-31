@@ -422,7 +422,7 @@ impl<M: Mode> Heap<M> {
 
 impl<M: Mode> Heap<M> {
     /// rc が正の生きている箱 (token の箱を含む) ごとの、前置きの持ち主。ID ごとの数の数え直しに使う。
-    pub(super) fn owned_entries(&self) -> (r: Vec<u32>)
+    pub(crate) fn owned_entries(&self) -> (r: Vec<u32>)
         requires
             self.wf(),
             M::CHECKED,
@@ -628,31 +628,16 @@ pub(super) fn release_region<M: Mode>(region: Option<Arc<Frozen<M>>>) {
 } // verus!
 
 impl Heap<Checked> {
-    /// 生存の列挙で見つかる不変条件の違反 (docs/spec/object-model.md の「報告する誤り」)。
-    ///
-    /// 届き方の検査の後で、ID ごとの数を数え直す。食い違う ID のうち最小のものを `OwnedMiscount` で返す。
+    /// 生存の列挙で見つかる不変条件の違反 (docs/spec/object-model.md の「報告する誤り」)。ID ごとの数は、
+    /// `Control::check_owned` が同じ `Control` のすべてのヒープについて数え直す。
     pub fn check_invariants(&self) -> Result<(), HeapError> {
-        self.check_reach()?;
-        let mut counted: BTreeMap<u32, u64> = BTreeMap::new();
-        for owner in self.owned_entries() {
-            *counted.entry(owner).or_default() += 1;
-        }
-        let in_table = (0..self.owned.len())
-            .find(|&i| self.owned[i] != counted.get(&(i as u32)).copied().unwrap_or(0))
-            .map(|i| i as u32);
-        let past_table = counted
-            .keys()
-            .copied()
-            .find(|&id| id as usize >= self.owned.len());
-        match in_table.into_iter().chain(past_table).min() {
-            Some(worker) => Err(HeapError::OwnedMiscount { worker }),
-            None => Ok(()),
-        }
+        self.check_reach()
     }
 
-    /// ID `id` の、rc が正の生きている物体の数 (docs/spec/object-model.md の「論理的な worker ID」)。
+    /// ID `id` の、rc が正の生きている物体の数。同じ `Control` のどのヒープの物体も数える
+    /// (docs/spec/object-model.md の「論理的な worker ID」)。
     pub fn owned_by(&self, id: u32) -> u64 {
-        self.owned.get(id as usize).copied().unwrap_or(0)
+        self.owned.owned_by(id)
     }
 
     /// 種類の名前ごとのリーク (docs/spec/object-model.md の「報告する誤り」)。不死の物体は外に出ている参照の数を足し、
@@ -665,6 +650,13 @@ impl Heap<Checked> {
             }
         }
         leaks
+    }
+}
+
+impl<M: Mode> Heap<M> {
+    /// ほかのスレッドから受けて、まだ取り込んでいない解放があるか。
+    pub(crate) fn remote_pending(&self) -> bool {
+        self.core.pages.remote_sink().pending()
     }
 }
 

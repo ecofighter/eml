@@ -2,7 +2,7 @@
 //! ものかは、ページの頭の `sink` で見分ける。頭のその部分はページを公開した後に書かないので、どのスレッドが読んでも
 //! 同じ値になる (docs/spec/object-model.md の「ページ」)。
 
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use vstd::prelude::*;
 use vstd::raw_ptr::PointsTo;
@@ -15,8 +15,6 @@ use crate::meta::Header;
 verus! {
 
 /// ヒープごとに1つ持つ、別のスレッドからの解放を受ける先。ページの頭の `sink` はこれを指す。
-// どの欄も読み書きする操作がないので、使わないことの警告を止める
-#[allow(dead_code)]
 pub(crate) struct RemoteSink {
     /// 受けてまだ取り込んでいない解放の数。
     count: AtomicUsize,
@@ -56,3 +54,11 @@ pub(crate) fn page_sink_of(h: *mut Header, Tracked(hdr): Tracked<&PointsTo<PageH
 }
 
 } // verus!
+
+impl RemoteSink {
+    /// 受けてまだ取り込んでいない解放があるか。`Control::check_owned` が、取り込みを終えたヒープだけを数え直すために
+    /// 読む。止まった時点で読むので、Relaxed で足りる。
+    pub(crate) fn pending(&self) -> bool {
+        self.count.load(Ordering::Relaxed) != 0 || self.large.load(Ordering::Relaxed) != 0
+    }
+}

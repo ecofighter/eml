@@ -120,7 +120,7 @@ fn own_objects_hold_region_words<M: Mode>() {
         heap.decref(pair).unwrap();
     }
     if let Some(check) = (&heap as &dyn std::any::Any).downcast_ref::<Heap<crate::Checked>>() {
-        check.check_invariants().unwrap();
+        super::check_all(check).unwrap();
     }
     assert_eq!(super::mortal(&heap), 0);
     assert_eq!(text(&heap, s), "constant");

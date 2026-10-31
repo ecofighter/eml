@@ -18,6 +18,7 @@ use super::inv::{p_code, p_init, p_owner, p_scanned, prefix_recounted};
 use super::model::{BlockState, Model, Pos};
 #[cfg(verus_only)]
 use super::{Core, Env};
+use crate::control::IdCounts;
 use crate::error::HeapError;
 #[cfg(verus_only)]
 use crate::meta::{BlockPerm, Header};
@@ -2368,7 +2369,7 @@ impl<M: Mode> Heap<M> {
                 None => None,
             };
         }
-        let mut owned = Vec::new();
+        let mut owned = IdCounts::detached();
         if M::CHECKED {
             mem::swap(&mut owned, &mut self.owned);
         }

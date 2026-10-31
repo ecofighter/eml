@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{Heap, Mode, Word};
+use crate::{Checked, Heap, HeapError, Mode, Word};
 
 /// モードを型の引数に取るテストの関数を、速いモードと検査モードの2つのテストにする。
 macro_rules! both_modes {
@@ -38,6 +38,12 @@ mod table;
 mod transfer;
 mod trusted;
 mod workers;
+
+/// 生存の列挙の検査と、ID ごとの数の数え直し。VM の検査モードが run の後に確かめるものと同じである。
+pub(super) fn check_all(heap: &Heap<Checked>) -> Result<(), HeapError> {
+    heap.check_invariants()?;
+    heap.control().check_owned(&[heap])
+}
 
 /// 解放の連鎖と `share` が再帰しないことを確かめる長さ。
 pub(super) const LONG: usize = 100_000;
