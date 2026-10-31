@@ -131,6 +131,8 @@ pub(super) struct Fake<const SOCKETS: bool = true> {
     pub calls: Vec<Call>,
     /// `close` されたソケット。driver を落とした後も読めるように分けて持つ。
     pub closed: Arc<Mutex<Vec<u32>>>,
+    /// `cancel` された鍵。`closed` と同じく、driver を落とした後も読める。
+    pub cancelled_keys: Arc<Mutex<Vec<OpKey>>>,
 }
 
 impl<const SOCKETS: bool> Fake<SOCKETS> {
@@ -150,6 +152,7 @@ impl<const SOCKETS: bool> Fake<SOCKETS> {
             sent: Vec::new(),
             calls: Vec::new(),
             closed: Arc::default(),
+            cancelled_keys: Arc::default(),
         }
     }
 
@@ -268,6 +271,10 @@ impl<const SOCKETS: bool> Backend for Fake<SOCKETS> {
 
     fn cancel(&mut self, key: OpKey, step: Step<'_, FakeSock>) -> io::Result<Cancel> {
         self.calls.push(Call::Cancel(key, kind_of(&step)));
+        self.cancelled_keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(key);
         self.cancels.pop_front().unwrap_or(Ok(Cancel::Done))
     }
 

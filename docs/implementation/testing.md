@@ -197,7 +197,10 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `the_scanner_skips_comments_and_strings` は、コメント、文字列、文字のリテラルの中の `unsafe` を数えないことと、どのファイルにも生の文字列がないことを確かめる。消し方は `eml_rt` の `trust.rs` と同じで、生の文字列を扱わないためである
 - `the_real_driver_makes_no_slices_and_leaks_nothing` は、`mem::forget` と `Box::leak` がないことと、`from_raw_parts` が `test.rs` のほかにないことを確かめる。テストの driver は貸しの規則を守って slice を作るが、本物の driver と偽の backend は生のポインタのまま記憶に触れる
 - `the_core_names_no_os` は、driver の核 (`driver/` の下で `driver/tests/` でないファイル) と、核を包む `real.rs` が `libc::`、`windows_sys::`、`Instant`、`thread::spawn`、`Builder::spawn`、`raw_os_error`、`ECANCELED`、`ECONNABORTED`、`EAGAIN` を書かず、スレッドを `backend.spawn(` でだけ作ることを確かめる
-- `readiness_backends_report_only_retries` は、epoll と kqueue の backend (`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`) が暫定の完了型の値 (`Arrival::Done`、`Arrival::Cancelled`、`Hold::Buffer`、`Cancel::Pending`) を書かないことを確かめる
+- `completion_values_stay_in_the_core_and_completion_backends` は、完了型の値 (`Arrival::Done`、`Arrival::Cancelled`、`Hold::Memory`、`Cancel::Pending`) を書くのが `driver/backend.rs`、`driver/mod.rs`、`driver/tests/` と `COMPLETION_BACKENDS` (今は `sys/iocp.rs`) だけであることと、`COMPLETION_BACKENDS` のファイルがどれも `UNSAFE_FILES` にあることを確かめる。readiness の backend は同期の呼び出しの間しか OS に記憶を貸さないので、これらの値を返さない
+- `the_core_reads_hold_only_to_drop` は、`driver/mod.rs` の `Hold::Memory` がどれも `drop` の中に、`Hold::None` がどれも `submit` の中にあることを確かめる。核が `Hold` を読むのは driver を落とすときだけである
+- `raw_boxes_stay_in_the_completion_backends` は、識別子 `into_raw`、`from_raw`、`OVERLAPPED` が `COMPLETION_BACKENDS` のほかにないことを確かめる。OS に渡す箱を扱うのは完了型の backend だけである
+- `abort_is_named_only_where_memory_is_at_stake` は、識別子 `abort` が `driver/mod.rs`、`driver/tests/mod.rs`、`driver/tests/abort.rs` と `COMPLETION_BACKENDS` のほかにないことを確かめる。プロセスを止めるのは、OS がこちらの記憶に書きうるまま放せないときだけである
 - `the_core_walks_its_table_only_to_shut_down` は、`driver/mod.rs` の `mem::take`、`slots.iter`、`slots.values`、`slots.keys`、`slots.drain` が `quiesce` か `drop` の中にだけあることを確かめる。保留の表を歩くと、1つの接続の費用が保留の数に比例するためである
 
 ### AddressSanitizer
