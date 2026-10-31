@@ -586,14 +586,17 @@ fn closed_port() -> u16 {
 /// 受け入れの列が詰まった待ち受けと、列を詰めている接続。列が詰まると Linux も macOS も SYN を黙って捨てるので、
 /// ここへの接続は拒まれもつながりもせず、進行中のまま残る。閉じたポートへの接続は、拒まれるのが速く、同じ `wait`
 /// の中で終わることがあるので、待つ接続には使えない。どちらもテストの間は生かしておく。
-#[cfg(unix)]
+/// Windows も、列が満ちた待ち受けへの `ConnectEx` を保留のまま残す(拒まない)。
 fn full_listener() -> (std::net::TcpListener, Vec<std::net::TcpStream>) {
-    use std::os::fd::AsRawFd;
     let listener = std::net::TcpListener::bind(loopback(0)).unwrap();
-    // std は backlog を選べないので、待ち受けている socket に backlog 0 で `listen` を出し直す。0 の読み方は OS で
-    // 違うので、列の長さは決め打ちせず、つながらない接続が出るまで詰める
-    // SAFETY: `listener` が生きている socket の fd を持っている
-    assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
+    // std は backlog を選べないので、unix では待ち受けている socket に backlog 0 で `listen` を出し直す。Windows は
+    // std の既定の列を詰める。0 の読み方は OS で違うので、列の長さは決め打ちせず、つながらない接続が出るまで詰める
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: `listener` が生きている socket の fd を持っている
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
+    }
     let addr = listener.local_addr().unwrap();
     let mut fillers = Vec::new();
     loop {
@@ -801,7 +804,9 @@ fn a_long_write_completes_once_with_its_whole_length() {
     assert!(reader.join().unwrap() == data);
 }
 
-/// 待っている長い書きを取り消すと、完了がちょうど1つ、取り消しの誤り `cancelled` で届き、その後には何も届かない。
+/// 待っている長い書きを取り消すと、完了がちょうど1つ届き、その後には何も届かない。完了は、取り消しの誤り `cancelled`
+/// (`cancelled == true`) か、`cancelled == false` で全長を書いた `Ok(Size(len))` のどちらか。取り消しは、すでに終わった
+/// 書きには負けうる。Windows は取り消しが効く前に、相手が読んだ分の空きで書き全体を終えることがある。
 /// 相手が少し読んで送りの buffer が空いた後、次の `wait` より前に取り消し、取り消しの完了を待つ。OS が取り消しの終わりを
 /// 後で知らせる backend もあるので、1回の `wait` では足りない。
 #[test]
@@ -837,16 +842,22 @@ fn a_cancelled_pending_long_write_completes_once() {
     driver.cancel(write);
     let completion = wait_for(&mut driver, &mut stash, write);
     assert!(stash.is_empty(), "{:?}", keys(&stash));
-    assert_eq!(completion.result.unwrap_err().to_string(), "cancelled");
-    assert!(completion.cancelled);
+    match completion.result {
+        Ok(done) => {
+            assert_eq!(done, Done::Size(PENDING_CHUNK));
+            assert!(!completion.cancelled);
+        }
+        Err(e) => {
+            assert_eq!(e.to_string(), "cancelled");
+            assert!(completion.cancelled);
+        }
+    }
     assert_eq!(driver.pending(), 0);
     driver.completions(&mut stash);
     assert!(stash.is_empty());
 }
 
-/// 名前の接続の最初の番地の試行が終わる前に取り消すと、次の番地を試さずに終わる。受けの列が詰まった待ち受けへの
-/// 接続が進行中のまま残るのは Linux と macOS で、Windows の振る舞いは確かめていないので unix だけで流す。
-#[cfg(unix)]
+/// 名前の接続の最初の番地の試行が終わる前に取り消すと、次の番地を試さずに終わる。
 #[test]
 fn a_cancelled_connect_does_not_try_the_next_address() {
     use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
@@ -1404,7 +1415,7 @@ fn reset_on_close(s: &std::net::TcpStream) {
 const PENDING_CHUNK: usize = 8 << 20;
 
 /// `write_until_pending` が出す書きの数の上限。unix では1つ目が保留になる。Windows の送りは buffer に空きがあれば
-/// 大きな書きを丸ごと受けうるので余裕を持たせた。Windows で何回目に保留になるかは測っていない。
+/// 大きな書きを丸ごと受けうるので余裕を持たせた。Windows で測ったときは、3つ目の 8 MiB の書きが初めてブロックした。
 const WRITES_UNTIL_PENDING: usize = 8;
 
 fn write_until_pending(
