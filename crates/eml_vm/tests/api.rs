@@ -527,7 +527,6 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
 }
 
 /// `run_real_on` の結果。出力、run の結果、閉じたときの結果 (検査モードの漏れの検査)、経過である。
-#[cfg(unix)]
 type RealRun = (
     String,
     Result<eml_vm::Finished, RuntimeError>,
@@ -538,13 +537,11 @@ type RealRun = (
 /// 本物の時計の検査モードの `Machine` で `src` を流し、閉じるまでの経過を測る。`interrupt_on` があれば、出力に
 /// その文字列が出たときに別のスレッドが割り込む。どの run も、3 秒たって終わらなければ見張りのスレッドが割り込むので、
 /// 止まったテストも待ち続けない。
-#[cfg(unix)]
 fn run_real(src: &str, interrupt_on: Option<&'static str>) -> RealRun {
     run_real_on(src, interrupt_on, None)
 }
 
 /// `run_real` を、`driver` があればその driver で流す。
-#[cfg(unix)]
 fn run_real_on(
     src: &str,
     interrupt_on: Option<&'static str>,
@@ -585,7 +582,6 @@ fn run_real_on(
 
 /// 本物の driver で、`listen` のポート 0 が選んだポートへの `connect` を、別のタスクの `accept` が受ける。2つの
 /// ストリームの相手の番地は、互いのポートを持つ (docs/spec/stdlib.md の「`Std.Net`」)。
-#[cfg(unix)]
 #[test]
 fn a_real_connection_is_accepted() {
     let src = "\
@@ -622,7 +618,6 @@ main () = Async.run (fn () ->
 
 /// 本物の driver の `Net` の頭。`listen` が選んだポートへ `connect` し、別のタスクの `accept` が受けたストリームを `b`、
 /// 接続した側を `a` にする。
-#[cfg(unix)]
 const REAL_CONNECTED: &str = "\
 import Async (Async)
 import Async
@@ -643,7 +638,6 @@ main () = Async.run (fn () ->
 ";
 
 /// 本物の driver の接続で、片方のストリームに書いたバイトを別のタスクが読む (docs/spec/stdlib.md の「`Std.Net`」)。
-#[cfg(unix)]
 #[test]
 fn a_real_connection_carries_bytes_between_tasks() {
     let src = format!(
@@ -663,7 +657,6 @@ fn a_real_connection_carries_bytes_between_tasks() {
 }
 
 /// `ProbeRecorder` が記録する、driver の呼び出し。
-#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DriverCall {
     /// 受け付けた操作の鍵、`Readable` か (偽なら `Read`)、`Submit::Done` を返したか。ほかの操作は記録しない。
@@ -674,13 +667,11 @@ enum DriverCall {
 }
 
 /// 本物の driver を包み、読みの受け付けとその結果、`wait` の呼び出し、`completions` が返した鍵を順に記録する driver。
-#[cfg(unix)]
 struct ProbeRecorder {
     inner: eml_io::RealDriver,
     calls: Arc<std::sync::Mutex<Vec<DriverCall>>>,
 }
 
-#[cfg(unix)]
 impl eml_rt::IoDriver for ProbeRecorder {
     fn now(&self) -> std::time::Duration {
         self.inner.now()
@@ -750,7 +741,6 @@ impl eml_rt::IoDriver for ProbeRecorder {
 /// 受け付けで終わり、その後に driver を待たない。OS が約束しない「書いた直後の読みがその場で終わる」ことは確かめない
 /// (docs/spec/vm.md の「時計と driver」)。`with_driver` の driver には中継がないが、この run は空きのループに入る前に
 /// 終わる。
-#[cfg(unix)]
 #[test]
 fn a_real_read_after_a_finished_probe_does_not_wait() {
     let src = format!(
@@ -795,7 +785,6 @@ fn a_real_read_after_a_finished_probe_does_not_wait() {
 
 /// 本物の driver で、データのないストリームの `read_chunk_within` は期限で `None` を返し、ストリームは続けて使える。後で
 /// 相手のタスクが書いたバイトは、次の `read_chunk` が返す (docs/spec/stdlib.md の「`Std.Net`」)。
-#[cfg(unix)]
 #[test]
 fn a_real_read_chunk_within_keeps_the_stream() {
     let src = format!(
@@ -823,7 +812,6 @@ fn a_real_read_chunk_within_keeps_the_stream() {
 /// 本物の driver の `read_line` は、間を置いた2回の書きにまたがる行を1行にし、1回の書きに入った2行を分け、改行のない
 /// 最後の行と EOF の `None` を返す。2本目の接続では、`read_line` が読みすぎたバイトを次の `read_chunk` が返す
 /// (docs/spec/stdlib.md の「`Std.Net`」)。
-#[cfg(unix)]
 #[test]
 fn a_real_read_line_reads_lines_split_across_writes() {
     let src = format!(
@@ -870,7 +858,6 @@ lines s =
 
 /// 本物の driver の 8 MiB の `write_bytes` は、送りの buffer を超えて短く終わる送りを driver が出し直し、1つの完了で
 /// 終わる。相手のタスクが EOF まで読んだバイトの数は、書いた数と同じである (docs/spec/vm.md の「時計と driver」)。
-#[cfg(unix)]
 #[test]
 fn a_real_write_of_8_mib_arrives_whole() {
     let src = format!(
@@ -898,7 +885,6 @@ count n s =
 /// 接続の来ないリスナーで受けを待つ run は、空きのループが割り込みを読むので、別のスレッドの割り込みで止まる。止める
 /// ときに受けの操作を取り消して待ちきるので、検査モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
 /// 割り込みは `waiting` が出てから送るので、受けの待ちの間に届く。
-#[cfg(unix)]
 #[test]
 fn an_interrupt_stops_a_run_blocked_in_a_real_accept() {
     let src = "\
@@ -925,7 +911,6 @@ main () = Async.run (fn () ->
 }
 
 /// 10 秒戻らない名前の解決。名前の解決を待たずに手放す道を確かめるので、戻る前にテストが終わる。
-#[cfg(unix)]
 fn block_10_s(_host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
     std::thread::sleep(std::time::Duration::from_secs(10));
     Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))])
@@ -933,7 +918,6 @@ fn block_10_s(_host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAdd
 
 /// 名前の解決を待つ run も、割り込みで止まる。止めるときの `quiesce` は解決を手放し、終わりを待たない
 /// (docs/spec/vm.md の「時計と driver」)。
-#[cfg(unix)]
 #[test]
 fn an_interrupt_stops_a_run_waiting_on_a_lookup() {
     let src = "\
@@ -958,7 +942,6 @@ main () = Async.run (fn () ->
 
 /// 名前の解決を待つ `connect` を `timeout` で囲むと、期限の取り消しが解決を手放し、`timeout` は `None` を返す
 /// (docs/spec/stdlib.md の「`Std.Net`」)。
-#[cfg(unix)]
 #[test]
 fn a_timeout_around_a_slow_lookup_returns_none() {
     let src = "\

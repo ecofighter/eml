@@ -55,7 +55,7 @@ import Fs
 import Tls
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
-  let s = Tls.connect_with_ca (Fs.read_text "ca.pem") "localhost" {port}
+  let s = Tls.connect_with_ca (Fs.read_text "ca.pem") "127.0.0.1" {port}
   let s = Tls.write_line "ping" s
   let (line, s) = Tls.read_line s
   match line with
