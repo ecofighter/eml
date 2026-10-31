@@ -6,13 +6,13 @@
 
 /// 塞いでいる間だけ生きる。落とすと、塞ぐ前の集合に戻す。`eml_vm::execute` の host のスレッドも、worker 0 を join
 /// する間これで塞ぐ (docs/spec/vm.md の「上限と割り込み」)。
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 pub struct Masked {
     old: libc::sigset_t,
 }
 
 // 作ると今のスレッドを塞ぐので、`Default` で黙って作れる形にしない
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 #[expect(clippy::new_without_default, reason = "creating one blocks signals")]
 impl Masked {
     #[must_use]
@@ -32,7 +32,7 @@ impl Masked {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(miri)))]
 impl Drop for Masked {
     fn drop(&mut self) {
         // SAFETY: `old` は `new` が読んだ集合で、`pthread_sigmask` は読むだけである
@@ -42,11 +42,12 @@ impl Drop for Masked {
     }
 }
 
-/// Windows のコンソールの handler は OS が作るスレッドで動くので、塞ぐものがない。
-#[cfg(not(unix))]
+/// Windows のコンソールの handler は OS が作るスレッドで動くので、塞ぐものがない。Miri は `pthread_sigmask` を
+/// 持たず、シグナルも届かないので、Miri でも塞がない。
+#[cfg(any(not(unix), miri))]
 pub struct Masked;
 
-#[cfg(not(unix))]
+#[cfg(any(not(unix), miri))]
 #[expect(
     clippy::new_without_default,
     reason = "creating one blocks signals on unix"
