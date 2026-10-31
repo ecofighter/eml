@@ -419,7 +419,7 @@ syscall の数は `strace -f` で数える (Linux のみ)。main のスレッド
 - `minflt` の単位あたりの値が前と後で 1 以上違う件は「確保の揺れ」と印を付け、時間の判定から外す。1往復ごとに確保して手放す buffer が glibc のヒープの頂きを縮めて伸ばすかはバイナリの配置で変わり、物差しでは決まらない。その件の確保の違いは `RunStats` の `allocations` と syscall の `brk` で見る
 - syscall は main のスレッドで比べ、3回のどれもが目標以下であることを見る
 - 前と後は同じ機械で、ほかに負荷のない状態で測る
-- echo-py の CPU は機械の負荷で変わる。a2dafe7 の同じ eml の echo-py-fresh は、ほかのビルドが走る負荷 (load average 約5) の下では1往復 4.67 µs (自発の切り替え 650 回、非自発 19374 回) で、負荷のない機械では 28.04 µs (19378 回、37 回) だった。echo-py を比べるときは、epoll の側で自発の切り替えが 15000 回以上、非自発が 1000 回以下であることを確かめる
+- echo-py の CPU は機械の負荷で変わる。a2dafe7 の同じ eml の echo-py-fresh は、ほかのビルドが走る負荷の下では1往復 4.67 µs (自発の切り替え 650 回、非自発 19374 回) で、負荷のない機械では 28.04 µs (19378 回、37 回) だった。echo-py を比べるときは、epoll の側で自発の切り替えが 15000 回以上、非自発が 1000 回以下であることを確かめる
 
 ### driver の syscall の目標
 
@@ -588,7 +588,7 @@ io_uring を既定にする条件は、many-self-1000、echo-self-fresh、echo-p
 | echo-py-reuse | 1.035 差なし | 0.992 差なし | 0.947 差なし | 0.965 差なし |
 | bulk-1k | 0.978 差なし | 1.015 差なし | 0.885 差なし | 0.911 差なし |
 
-busy-self を除く全件を1回流したセッション。CPU は床を引いた単位あたりの µs の中央値で、uring は `io_uring`、direct は `io_uring_direct` である。
+busy-self を除く全件を流したセッション (各件 11 回)。`base` と `compute-fib` は表から外した。CPU は床を引いた単位あたりの µs の中央値で、uring は `io_uring`、direct は `io_uring_direct` である。
 
 | 件 | epoll | uring | 比 | 判定 | direct | 比 | 判定 |
 |---|---|---|---|---|---|---|---|
@@ -614,7 +614,7 @@ busy-self を除く全件を1回流したセッション。CPU は床を引い�
 - この条件を満たした件はない。いちばん縮んだのは `io_uring_direct` の many-self-1000 の1回目の 0.779 で、四分位が重なり、2回目は 0.940 だった
 - 判定が「差」になったのは、全件のセッションの `io_uring_direct` の many-py-1000 と conn-self-32 だけで、どちらも確保の揺れの印が付いた。1.10 以上で判定が「差」の後退はない
 - 試作の前の eml と試作の epoll の A/A は、5件とも差なしで、比は 0.962 から 1.125 だった
-- syscall は減った。`eml run bench/net/many.em 1000` を `strace -f -c` で数えると、全体の回数は epoll が 17703、`io_uring` が 13145、`io_uring_direct` が 11193 で、失敗はそれぞれ 2657、1625、119 だった。減ったのは `epoll_ctl`、接続を確かめる `getsockopt` と `getpeername`、空振りの `recvfrom` と `accept4` である。CPU では、この減り方はこの機械の揺れの中に収まった
+- syscall の回数は減った。`eml run bench/net/many.em 1000` を `strace -f -c` で数えると、全体の回数は epoll が 17703、`io_uring` が 13145、`io_uring_direct` が 11193 で、失敗はそれぞれ 2657、1625、119 だった。`io_uring` では `epoll_ctl` 2002 回、`connect` 1000 回、接続を確かめる `getsockopt` と `getpeername` 1000 回ずつがなくなり、`io_uring_direct` ではさらに空振りの `recvfrom` 1000 回と `accept4` 500 回がなくなった。待ちは、epoll の `epoll_pwait` 1189 回に対して `io_uring_enter` が 2190 回と 2251 回で、接続ごとの即時の提出の分だけ増えた。CPU では、この減り方はこの機械の揺れの中に収まった
 - io_uring のカーネルの側の仕事 (io-wq のスレッドと `DEFER_TASKRUN` の task work) は eml の process の rusage に入る。試しのプログラムで、rusage は system 全体の忙しい時間の 0.95 から 0.99 だった
 - Linux の backend は epoll である ([ロードマップ](../future/roadmap.md) の「その後の項目」の「Linux の io_uring の backend」)
 
