@@ -1268,6 +1268,9 @@ fn switch_away<R: Exec>(
     // (docs/spec/vm.md の「`Async` のタスク」)。走れるタスクがなければ直後の `wait` が OS を見るので、ここでは
     // 見ない。走れるタスクが続くときは `POLL_EVERY` 回に1回だけ見る (docs/spec/vm.md の「時計と driver」)
     collect::<R>(code, ctx, task.depth_offset, sched, false)?;
+    // 切り替えるたびに、ほかのスレッドから受けた解放が溜まっていれば取り込む。溜まっていなければ2回の読みで済む
+    // (docs/spec/vm.md の「タスクとスケジュール」)
+    ctx.reclaim_if_due();
     if !sched.ready.is_empty() {
         sched.since_poll += 1;
         if sched.since_poll >= POLL_EVERY {
@@ -1509,6 +1512,8 @@ fn complete_join<R: Exec>(
     let join = sched.take_join(j);
     let at = join.ret - 1;
     let result = join_outcomes::<R>(code, ctx, task, sched, join);
+    // join の後にも、ほかのスレッドから受けた解放が溜まっていれば取り込む (docs/spec/vm.md の「子の終わりと join」)
+    ctx.reclaim_if_due();
     at_par(code, task, sched, at, result).map(|()| at)
 }
 

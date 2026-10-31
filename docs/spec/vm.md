@@ -387,6 +387,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Sched`、`Policy`、`Scheduler` は `eml_vm` の `sched.rs` に置く。別の crate は作らない。worker が1つの今は、ほかの crate と共有するものがないためである
 - 方針は `Sched` の値で選ぶ。`Normal`、`Sequential` (既定)、`Seeded(seed)` の3つで、`Copy` である。`FromStr` は `normal`、`sequential`、`seeded:<n>` (`n` は `u64` の10進数) を読み、ほかの綴りは誤りにする。誤りの文は ``expected `normal`, `sequential` or `seeded:<n>`, found `…` `` である。CLI の `--sched` はこれを読む ([標準ライブラリ](stdlib.md) の「起動」)。ライブラリの既定 (`Sched::default()`、`RunConfig::default()`、`Machine`) を `Sequential` にするのは、`RunStats` とベンチの数を時間に依らないものにするためである
 - `Policy` は4つのメソッドと定数 `PREEMPTS` を持つ。`tick` は安全点ごとに呼び、真なら横取りを試みる。`reload` は横取りを試みた後に、次の横取りまでの予算を詰め直す。`pick` は走れるタスクの列から次のタスクを取り出す。`wake` は起こしたタスクを列に入れる。`PREEMPTS` は監視のスレッドの `PREEMPT` で横取りするかで、`Normal` だけが真である。動くタスクの番号を書くのは `Scheduler::set_current` だけで、`PREEMPTS` が真なら、これが監視のスレッドと共有する切り替えの数を増やす
+- ほかのタスクに切り替えるたびに、ほかのスレッドから受けた解放が溜まっていれば `Ctx::reclaim_if_due` で取り込む ([オブジェクトモデル](object-model.md) の「別のスレッドからの解放」)。溜まっていなければ、`RemoteSink` の2つの欄を読むだけで済む
 - `Async` の仕事 (タスクを始める仕事、再開する仕事、起こした `Async.run` の待ち) は、どの方針でも走れるタスクの列の後ろに積む (FIFO)。方針の `wake` は通さない。`wake` を使うのは、join で待つ `par` の親を起こすときと、横取りしたタスクを列に戻すときである。seed の方針の `pick` は、ほかの切り替えと同じく列から乱数で選ぶ
 - `Normal` は監視のスレッドが立てる `PREEMPT` だけで横取りする。`tick` は定数の偽で、`reload` は何もしない。`pick` は列の先頭から取り、`wake` は後ろに入れる (FIFO)
 - 監視のスレッドは `Scheduler` が持ち、`eml_vm` の `monitor.rs` に置く。1 run に高々1本である。`Clock::Real` で自己パイプのある run は、方針によらず、run の始め (`Scheduler::begin_run`。最初の命令の前) に始める。ほかの run では、契機が2つある。`PREEMPTS` が真の方針では、最初のタスクを表に足すとき (`Scheduler::add_task`) に始める。本物の driver の run では、方針によらず、タスクが最初にシグナルを待つとき (`park_signal`) にも始める。横取りしない方針のスレッドは、自己パイプがあれば鳴るまで眠る。どの契機もない run はスレッドを作らない。`Scheduler` を捨てるとき (run の終わり。成功でも誤りでも) に、`Control::set_watched(0)` を呼び、`Control::take_pending` で保留のシグナルを捨て、スレッドを止めて終わるまで待つ。最後の集める地点の後に保留になったシグナルは、run が終わることで消費する。REPL では入力ごとに高々1本で、入力の間には残らない。スレッドが持つのは `Arc<Control>`、受け箱、driver の waker、自己パイプ、切り替えの数と止める旗を持つ共有の欄だけで、ヒープの語も `Ctx` も持たない
@@ -540,6 +541,7 @@ join の完了は、親の文脈と ID で次の順に行う。
 3. 左の子が中断していれば右の語を手放し、左の中断を起こし直す。左の子が値を返し、右の子が中断していれば、左の値を手放して右の中断を起こし直す。どちらも値なら、`alloc_data(tag, 2, 0, lin = false)` で組を作り、`dst` に書いて安全点に進む。組は `lin` ビットを持たない
 4. 起こし直しでは、中断した操作のエフェクト `E` と深さ d を使う。d が 0 より大きければ、`w = ctx.evv_get()`、`m = ctx.evv_mask(&[(E, 0, d)], w)`、`heap.decref(w)`、`ctx.evv_set(m)` の順に親の `evv` を mask する。コードの `mask` の包みと同じ基本操作である。その後で、起こし直しの閉包 (操作の引数を捕まえた `reperform$E.op`) に `()` を適用する。戻り先は `par` の次の位置で、結果のスロットは `par` の `dst` である。子の始まりと同じく、閉包に `()` を適用してフレームに入る形である。`reperform$E.op` は今の `evv` の最初の `E` の evidence で perform するので、子が見た d 番目の evidence の handler に届く。その perform は戻らずに `par` のフレームを抜けて handler の `prompt$` まで巻き戻し、`prompt$` が mask した `evv` を手放す。`switch_task` で mask した `evv` を入れないのは、`reperform$E.op` が戻らず、返る親の `evv` を入れ直す時がないためである
 5. 節点を捨てる
+6. ほかのスレッドから受けた解放が溜まっていれば、`Ctx::reclaim_if_due` で取り込む ([オブジェクトモデル](object-model.md) の「別のスレッドからの解放」)。誤りで止めるときも取り込む
 
 join の完了で起きた誤りと、完了の後の安全点で止まったときの誤りには、`par` の命令の関数の名前と、あれば `par` の位置を付ける。まだ始まっていない右の子に入って `g` を適用するときの誤りも同じである。どれもタスクを切り替えた後で起きるので、切り替えを始めた命令の位置は別のタスクのものでありうる。`par` の位置を付ければ、どのスケジュールで親が join に着いても、どのタスクから右の子に切り替わっても、同じ文言になる。
 

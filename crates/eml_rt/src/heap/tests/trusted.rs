@@ -937,7 +937,7 @@ fn cells<M: Mode>(heap: &Heap<M>, xs: Word) -> Vec<usize> {
     out
 }
 
-// (a) 別のスレッドが空けた小さいブロックは、持ち主の取り込みで空きリストに戻り、速いモードでは次の確保に使われる。
+// 別のスレッドが空けた小さいブロックは、持ち主の取り込みで空きリストに戻り、速いモードでは次の確保に使われる。
 // 取り込まずに落としたヒープは、`Drop` が取り込む
 fn a_remote_small_free_is_reclaimed_and_reused<M: Mode>() {
     const N: usize = 8;
@@ -974,7 +974,7 @@ fn a_remote_small_free_is_reclaimed_and_reused<M: Mode>() {
     drop(b);
 }
 
-// (b) 別のスレッドが空けた大きい物体のページは、空けたスレッドが Control のバイト数から引く。上限がちょうど大きい
+// 別のスレッドが空けた大きい物体のページは、空けたスレッドが Control のバイト数から引く。上限がちょうど大きい
 // 物体1つ分のとき、持ち主が取り込む前に2つ目を取っても上限に届かない。持ち主はページを返すときにもう一度は引かない
 fn a_remote_large_free_refunds_at_once<M: Mode>() {
     let (base, large) = {
@@ -1019,7 +1019,7 @@ fn a_remote_large_free_refunds_at_once<M: Mode>() {
     drop(b);
 }
 
-// (c) 2つのスレッドが1つのページに積む。その間、持ち主のヒープも別のスレッドへ動かす
+// 2つのスレッドが1つのページに積む。その間、持ち主のヒープも別のスレッドへ動かす
 fn two_threads_free_into_one_page<M: Mode>() {
     const N: usize = 16;
     let control = Arc::new(Control::new(Limits::default()));
@@ -1054,7 +1054,7 @@ fn two_threads_free_into_one_page<M: Mode>() {
     assert_eq!(mortal(&mut a), 0);
 }
 
-// (e) 持ち主がページを替えながら切り出す間に、別のスレッドが共有の文字列の長さと中身を読み、小さいブロックと大きい
+// 持ち主がページを替えながら切り出す間に、別のスレッドが共有の文字列の長さと中身を読み、小さいブロックと大きい
 // 物体を空ける。持ち主の次の `reclaim_if_due` は、返ってきた大きい物体のページを見て取り込み、速いモードではその後の
 // 確保はページを増やさない。数が 256 に届いて取り込むことは、スレッドを使わない単体テストで確かめる
 fn the_owner_carves_while_another_thread_reads_and_frees<M: Mode>() {

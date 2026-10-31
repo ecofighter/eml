@@ -247,6 +247,7 @@ impl<M: Mode> Heap<M> {
 
     /// 生きている物体 (token の箱、不死の物体、ダミーを含む) を列挙する。テストと検査のための列挙で、回復は使わない
     /// (docs/spec/object-model.md の「生存の列挙」)。`check_invariants` と同じ時点で呼び、先に `reclaim` で取り込む。
+    /// 積んでいる途中の解放は `NotQuiescent` で報告できないので、先に `check_invariants` で確かめる。
     pub fn live_objects(&mut self) -> (r: Vec<Word>)
         requires
             old(self).wf(),
@@ -655,6 +656,11 @@ impl Heap<Checked> {
     /// (docs/spec/object-model.md の「別のスレッドからの解放」)。
     pub fn check_invariants(&mut self) -> Result<(), HeapError> {
         self.reclaim();
+        self.check_reclaimed()
+    }
+
+    /// 取り込んだ後の `check_invariants`。取り込みを済ませた呼ぶ側 (`Ctx::check_invariants`) が使う。
+    pub(crate) fn check_reclaimed(&self) -> Result<(), HeapError> {
         if sink_pushing(self.core.pages.sink()) {
             return Err(HeapError::NotQuiescent);
         }
@@ -668,9 +674,15 @@ impl Heap<Checked> {
     }
 
     /// 種類の名前ごとのリーク (docs/spec/object-model.md の「報告する誤り」)。不死の物体は外に出ている参照の数を足し、
-    /// token の箱は `Token` で数える。`check_invariants` と同じ時点で呼び、先に `reclaim` で取り込む。
+    /// token の箱は `Token` で数える。`check_invariants` と同じ時点で呼び、先に `reclaim` で取り込む。結果が
+    /// `Result` でないので、積んでいる途中の解放は `NotQuiescent` で報告できない。先に `check_invariants` で確かめる。
     pub fn leaks(&mut self) -> BTreeMap<&'static str, u64> {
         self.reclaim();
+        self.leaks_reclaimed()
+    }
+
+    /// 取り込んだ後の `leaks`。取り込みを済ませた呼ぶ側 (`Ctx::leaks`) が使う。
+    pub(crate) fn leaks_reclaimed(&self) -> BTreeMap<&'static str, u64> {
         let mut leaks = BTreeMap::new();
         for (kind, count) in self.leak_entries() {
             if count > 0 {

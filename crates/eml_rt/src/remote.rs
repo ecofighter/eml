@@ -64,10 +64,21 @@ pub(crate) fn page_sink_of(
     unsafe { (*page_of(h)).sink }
 }
 
-/// ほかのヒープ `sink` のページの小さいブロック `h` を空け、そのページの遠隔の空きリストに積む (T14)。`h` は最後の
-/// 参照を手放した物体の箱で、子はもう手放してある。速いモードでは `meta` を種類 `Free` にする。リストのつなぎは
-/// ペイロードの先頭の語に書く。持ち主の級、ページの一覧、数、`Control` のバイト数には触れない。検査モードでは、
-/// 積んでいる間 `pushing` を数える。`perm` は手放す。
+/// 検査モードで、ほかのヒープ `sink` に返す解放を始める (T14)。`pushing` を上げてから、空けるブロックの前置きを
+/// 書き、破棄処理を呼び、積む。持ち主のページを歩く検査が、その間を積んでいる途中と見るためである。下ろすのは
+/// `remote_push` である。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn sink_enter(sink: *const RemoteSink) {
+    let sink = unsafe { &*sink };
+    sink.pushing.fetch_add(1, Ordering::Relaxed);
+}
+
+/// ほかのヒープ `sink` のページのブロック `h` を空け、そのヒープに返す (T14)。`h` は最後の参照を手放した物体の箱で、
+/// 子はもう手放してある。大きい物体のブロックは `remote_large_push` に渡す。小さいブロックはそのページの遠隔の
+/// 空きリストに積む。速いモードでは `meta` を種類 `Free` にする。リストのつなぎはペイロードの先頭の語に書く。持ち主の
+/// 級、ページの一覧、数、`Control` のバイト数には触れない。検査モードでは、呼ぶ側が `sink_enter` で上げた `pushing` を、
+/// 積み終えてから Release で下ろす。`perm` は手放す。
 #[verifier::external_body]
 pub(crate) fn remote_push(
     h: *mut Header,
@@ -81,9 +92,7 @@ pub(crate) fn remote_push(
         return;
     }
     let sink = unsafe { &*sink };
-    if checked {
-        sink.pushing.fetch_add(1, Ordering::Relaxed);
-    } else {
+    if !checked {
         unsafe { h.cast::<u32>().add(1).write(FREE_META) };
     }
     let remote = unsafe { AtomicPtr::from_ptr(remote_word(page_of(h)).cast::<*mut Header>()) };
@@ -116,9 +125,7 @@ pub(crate) fn remote_large_push(
 ) {
     let sink = unsafe { &*sink };
     let page = page_of(h);
-    if checked {
-        sink.pushing.fetch_add(1, Ordering::Relaxed);
-    } else {
+    if !checked {
         unsafe { h.cast::<u32>().add(1).write(FREE_META) };
         control.refund(unsafe { (*page).bytes });
     }

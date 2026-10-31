@@ -51,7 +51,7 @@ use crate::mode::Mode;
 use crate::rc::{self, DecrefStep, DupStep};
 #[cfg(verus_only)]
 use crate::rc::{Obj, decref_next};
-use crate::remote::{page_sink_of, remote_push, sink_pushing};
+use crate::remote::{page_sink_of, remote_push, sink_enter, sink_pushing};
 use crate::word::Word;
 use vstd::hash_set::HashSetWithView;
 use vstd::prelude::*;
@@ -3175,8 +3175,11 @@ impl<M: Mode> Heap<M> {
         proof {
             self.core.lemma_shape(h@.addr);
         }
+        let sink = page_sink_of(h, Tracked(None));
         let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
         if M::CHECKED {
+            // 前置きを書く前から、積んでいる途中であることを持ち主の検査に見せる
+            sink_enter(sink);
             let tracked mut pre = perm.prefix.tracked_unwrap();
             mark_freed(h, Tracked(&mut pre));
             proof {
@@ -3189,7 +3192,6 @@ impl<M: Mode> Heap<M> {
         if let Some(f) = finalizer {
             run_finalizer(f, Tracked(&perm));
         }
-        let sink = page_sink_of(h, Tracked(None));
         remote_push(h, sink, Tracked(perm), M::CHECKED, self.core.pages.control());
     }
 }

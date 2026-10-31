@@ -1103,8 +1103,9 @@ impl<M: Mode> Ctx<M> {
         self.reclaim_when(false);
     }
 
-    /// 受けた解放が溜まっていれば取り込み、真を返す (`Heap::reclaim_if_due`)。VM は待つ前と、run の終わりの検査の
-    /// 前に呼ぶ (docs/spec/vm.md の「時計と driver」と「誤り、止めること、終わり」)。
+    /// 受けた解放が溜まっていれば取り込み、真を返す (`Heap::reclaim_if_due`)。VM は待つ前、タスクを切り替えるとき、
+    /// join の後、run の終わりの検査の前に呼ぶ (docs/spec/vm.md の「タスクとスケジュール」「子の終わりと join」
+    /// 「時計と driver」「誤り、止めること、終わり」)。
     pub fn reclaim_if_due(&mut self) -> (r: bool)
         requires
             old(self).wf(),
@@ -3560,12 +3561,12 @@ impl Ctx<Checked> {
     /// 取り込んでから、ヒープの不変条件を確かめる (`Heap::check_invariants`)。
     pub fn check_invariants(&mut self) -> Result<(), HeapError> {
         self.reclaim();
-        self.heap.check_invariants()
+        self.heap.check_reclaimed()
     }
 
     /// 取り込んでから、ヒープのリークを数える (`Heap::leaks`)。
     pub fn leaks(&mut self) -> BTreeMap<&'static str, u64> {
         self.reclaim();
-        self.heap.leaks()
+        self.heap.leaks_reclaimed()
     }
 }

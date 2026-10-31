@@ -199,6 +199,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("heap/ctx/positions.rs: external_body find_byte", "T13"),
     ("remote.rs: external_body sink_new", "T14"),
     ("remote.rs: external_body page_sink_of", "T14"),
+    ("remote.rs: external_body sink_enter", "T14"),
     ("remote.rs: external_body remote_push", "T14"),
     ("remote.rs: external_body remote_large_push", "T14"),
     ("remote.rs: external_body remote_take", "T14"),
