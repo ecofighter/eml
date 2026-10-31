@@ -14,6 +14,6 @@ mod test;
 #[cfg(test)]
 mod trust;
 
-pub use mask::spawn_masked;
+pub use mask::{Masked, spawn_masked, spawn_scoped_masked};
 pub use real::RealDriver;
 pub use test::TestDriver;

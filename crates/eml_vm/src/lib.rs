@@ -3,6 +3,7 @@
 
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
+use std::thread;
 
 use eml_lir::Program;
 use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, IoDriver, Mode, Stats};
@@ -205,8 +206,39 @@ impl RunConfig {
     }
 }
 
-/// プログラムを1回だけ実行する。新しい `Machine` に読み込み、エントリを実行し、閉じる。
+/// VM の worker のスレッドのスタックの大きさ。VM のスタックは `Task` のデータでヒープの外にあるので、Rust の再帰の
+/// 深さだけを受け持てばよい。
+const WORKER_STACK: usize = 8 << 20;
+
+/// プログラムを1回だけ実行する。worker 0 のスレッドを作り、その上で新しい `Machine` に読み込み、エントリを実行し、
+/// 閉じる。呼んだスレッド (host) は worker 0 を join するまで SIGINT と SIGTERM を塞ぎ、2つのシグナルを worker 0 に
+/// 届ける。待っている読みに `EINTR` を返すためである (docs/spec/vm.md の「上限と割り込み」)。
 pub fn execute(
+    program: &Program,
+    config: &RunConfig,
+    host: HostRef,
+) -> Result<Finished, RuntimeError> {
+    thread::scope(|scope| {
+        let builder = thread::Builder::new()
+            .name("eml-worker-0".into())
+            .stack_size(WORKER_STACK);
+        // 塞ぐのは作った後である。新しいスレッドは作ったスレッドの塞ぎを受け継ぐので、先に塞ぐと worker 0 も塞がれる
+        let worker = builder
+            .spawn_scoped(scope, move || execute_here(program, config, host))
+            .map_err(|error| RuntimeError::Fault {
+                fault: VmFault::Driver(error.to_string()),
+                function: "<worker 0>".into(),
+                at: None,
+            })?;
+        let _blocked = eml_io::Masked::new();
+        worker
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+/// `execute` の中身。worker 0 のスレッドで動く。
+fn execute_here(
     program: &Program,
     config: &RunConfig,
     host: HostRef,

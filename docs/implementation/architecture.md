@@ -359,7 +359,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
 - `RealDriver::with_lookup(lookup)` は、名前の解決の関数を差し替えた driver を作る。テストと組み込み先のためで、テストは機械の `/etc/hosts` に頼らない。`RealDriver::new` は `sys::lookup` (std の解決器) を使う
 - driver は作ったスレッドの上でだけ使う。`eml_io` は driver の型に `unsafe impl Send` を書かない
-- `mask.rs` の `spawn_masked` は、unix で SIGINT と SIGTERM を塞いでスレッドを始める。`eml_vm` の監視のスレッドと、本物の driver のプールと解決のスレッドがこれで始まる ([VM](../spec/vm.md) の「上限と割り込み」)
+- `mask.rs` の `spawn_masked` と `spawn_scoped_masked` は、unix で SIGINT と SIGTERM を塞いでスレッドを始める。`eml_vm` の監視のスレッドと `CaptureHost` の読むスレッド、本物の driver のプールと解決のスレッドがこれで始まる。`eml_vm::execute` の host のスレッドは、worker 0 を join する間 `Masked` で塞ぐ ([VM](../spec/vm.md) の「上限と割り込み」)
 - 本物の driver のモジュール
   - `driver/mod.rs` は核である。保留の操作の表 (呼ぶ側が振った `OpKey` で引き、作り直さずに使い回す)、届いた完了、ハンドルの表 (向きごとの保留の印と閉じた印)、札から鍵への表、プール、解決器、`HandleBin`、壊れた印を持つ。続き (短い書きの残り、`ConnectionAborted` の受けの出し直し、接続の次の番地、解決の答えからの接続) を出すのは核だけで、どれも同じ `OpKey` の下で次の歩として出す。`wait`、`quiesce`、`Drop` は1回分の待ち `turn` を共有し、`turn` は受け箱の答えと backend の event が名指した欄にだけ触れる。表を歩くのは `quiesce` と `Drop` だけである。`completions` は届いた完了を移すだけである
   - `driver/backend.rs` は、核と backend の境界の trait `Backend` と、その型 (`Step`、`Outcome`、`Hold`、`Start`、`Cancel`、`Arrival`、`Event`) を持つ。backend は OS の資源と時計とスレッドの作り方を持ち、`start` 1回で歩の1回の試みだけを OS に出す。`Hold::Memory` は OS が完了まで書きうる記憶があることを表し、核は driver を落とすときだけ読む。readiness の backend は `Retry`、`Pending(Hold::None)`、`Cancel::Done` だけを使い、完了型の backend はすべての値を使う。`wait` は event を積んだ後に `Err` を返さない

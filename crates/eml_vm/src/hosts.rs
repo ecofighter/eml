@@ -289,6 +289,15 @@ impl Host for CaptureHost {
         let mut child = command.spawn()?;
         // `command` が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読むスレッドに終わりが届かない
         drop(command);
+        let (out, err) = match (out.map(drain).transpose(), err.map(drain).transpose()) {
+            (Ok(out), Ok(err)) => (out, err),
+            (Err(error), _) | (_, Err(error)) => {
+                // 読むスレッドがないと捕まえる出力が届かないので、子を残さずに起動の誤りにする
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
         let stdin = child
             .stdin
             .take()
@@ -298,8 +307,8 @@ impl Host for CaptureHost {
             stdout,
             process: Box::new(CapturedChild {
                 child,
-                out: out.map(drain),
-                err: err.map(drain),
+                out,
+                err,
                 out_capture: self.out.clone(),
                 err_capture: self.err.clone(),
             }),
@@ -326,9 +335,11 @@ fn join_child_path(prefix: Option<&Path>, real: Option<OsString>) -> io::Result<
         .map_err(io::Error::other)
 }
 
-/// `pipe` を終わりまで読むスレッド。読みの誤りは、それまでに読んだ分で終える。
-fn drain(mut pipe: PipeReader) -> JoinHandle<Vec<u8>> {
-    thread::spawn(move || {
+/// `pipe` を終わりまで読むスレッド。読みの誤りは、それまでに読んだ分で終える。SIGINT と SIGTERM を塞いで始め、2つを
+/// worker 0 に届ける (docs/spec/vm.md の「上限と割り込み」)。
+fn drain(mut pipe: PipeReader) -> io::Result<JoinHandle<Vec<u8>>> {
+    let builder = thread::Builder::new().name("eml-drain".into());
+    eml_io::spawn_masked(builder, move || {
         let mut bytes = Vec::new();
         let _ = pipe.read_to_end(&mut bytes);
         bytes
