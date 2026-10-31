@@ -501,7 +501,7 @@ CI の対象 (OS、CPU、AddressSanitizer の脚) を足して落ちたテスト
 
 ### Windows で流さないテスト
 
-印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のシェルを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットがそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
+印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のシェルを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットと、受けの列が詰まった待ち受けへの接続が進行中のまま残ること (Windows は列を広げて接続を終えることがある) がそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
 
 - Rust のテストは、`#[test]` の関数か、そうしたテストだけを持つ `mod` に `#[cfg(unix)]` を付ける。`src/` の中のテストの `mod` には `#[cfg(all(test, unix))]` を付ける。本体が `libc::kill`、`mkfifo`、`PermissionsExt`、`CommandExt::process_group` を使い、Windows でコンパイルできないので、`cfg_attr(windows, ignore)` は使えない
 - UI テストとトランスクリプトは、エントリのファイルの先頭の印の行に印を書く。`.em` は `-- windows: skip (<理由>)`、`.repl` は `# windows: skip (<理由>)` である。理由は空にしない。先頭の印の行は、shebang (`#!…`) の行があればその後ろから続く、`<leader> windows:` か `<leader> signal:` で始まる行の並びで、2種類をどの順に混ぜてもよい (シグナルの印は上の「UI テスト」)。印はエントリのファイル (1つのファイルか `main.em`、`main.repl`) にだけ書く

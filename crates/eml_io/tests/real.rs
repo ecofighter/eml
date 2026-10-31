@@ -586,17 +586,14 @@ fn closed_port() -> u16 {
 /// 受け入れの列が詰まった待ち受けと、列を詰めている接続。列が詰まると Linux も macOS も SYN を黙って捨てるので、
 /// ここへの接続は拒まれもつながりもせず、進行中のまま残る。閉じたポートへの接続は、拒まれるのが速く、同じ `wait`
 /// の中で終わることがあるので、待つ接続には使えない。どちらもテストの間は生かしておく。
-/// Windows も、列が満ちた待ち受けへの `ConnectEx` を保留のまま残す(拒まない)。
+#[cfg(unix)]
 fn full_listener() -> (std::net::TcpListener, Vec<std::net::TcpStream>) {
+    use std::os::fd::AsRawFd;
     let listener = std::net::TcpListener::bind(loopback(0)).unwrap();
-    // std は backlog を選べないので、unix では待ち受けている socket に backlog 0 で `listen` を出し直す。Windows は
-    // std の既定の列を詰める。0 の読み方は OS で違うので、列の長さは決め打ちせず、つながらない接続が出るまで詰める
-    #[cfg(unix)]
-    {
-        use std::os::fd::AsRawFd;
-        // SAFETY: `listener` が生きている socket の fd を持っている
-        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
-    }
+    // std は backlog を選べないので、待ち受けている socket に backlog 0 で `listen` を出し直す。0 の読み方は OS で
+    // 違うので、列の長さは決め打ちせず、つながらない接続が出るまで詰める
+    // SAFETY: `listener` が生きている socket の fd を持っている
+    assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
     let addr = listener.local_addr().unwrap();
     let mut fillers = Vec::new();
     loop {
@@ -857,7 +854,10 @@ fn a_cancelled_pending_long_write_completes_once() {
     assert!(stash.is_empty());
 }
 
-/// 名前の接続の最初の番地の試行が終わる前に取り消すと、次の番地を試さずに終わる。
+/// 名前の接続の最初の番地の試行が終わる前に取り消すと、次の番地を試さずに終わる。最初の番地には受けの列が詰まった
+/// 待ち受けを使い、試行を進行中のまま残す。Windows は詰まった列を広げて接続を終えることがあり、進行中のまま残る
+/// ことに頼れないので、unix だけで流す (docs/implementation/testing.md の「Windows で流さないテスト」)。
+#[cfg(unix)]
 #[test]
 fn a_cancelled_connect_does_not_try_the_next_address() {
     use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
