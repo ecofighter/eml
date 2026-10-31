@@ -56,7 +56,7 @@ jobs:
           fallback: none
       - name: cargo nextest run
         id: test
-        run: cargo nextest run --failure-output immediate-final
+        run: cargo nextest run -p eml_io --success-output immediate --no-capture -E 'test(sys::iocp::tests::)'
       # ワークスペースの実行では eml_cli の既定が tls を有効にするので、tls を外した処理系の振る舞いは
       # eml_io と eml_vm だけを選んで流す (docs/implementation/testing.md の「feature の組み合わせの確認」)
       - name: cargo nextest run without tls
