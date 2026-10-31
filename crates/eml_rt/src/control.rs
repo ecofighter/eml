@@ -28,11 +28,13 @@ pub struct Limits {
     pub max_depth: usize,
     /// `evv` の長さの上限。
     pub max_evv: usize,
+    /// worker の数。`Control` は worker ごとに止める語を1つ持つ。1 以上である。
+    pub workers: usize,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { max_bytes: usize::MAX, max_depth: usize::MAX, max_evv: usize::MAX }
+        Limits { max_bytes: usize::MAX, max_depth: usize::MAX, max_evv: usize::MAX, workers: 1 }
     }
 }
 
@@ -51,7 +53,9 @@ pub enum Stop {
 
 pub struct Control {
     stop: AtomicU32,
-    worker: AtomicU32,
+    /// worker ごとの止める語。添字が worker の番号である。`Control::new` で `limits.workers` 個作り、増やしも減らしも
+    /// しない。各 worker の `Ctx` が自分の語の `Arc` を写して持つ。
+    words: Vec<Arc<AtomicU32>>,
     end: AtomicU32,
     code: AtomicI64,
     bytes: AtomicUsize,
@@ -327,11 +331,34 @@ impl IdCounts {
     }
 }
 
+/// 0 の止める語を `n` 個作る。
+fn stop_words(n: usize) -> (r: Vec<Arc<AtomicU32>>)
+    ensures
+        r.len() == n,
+{
+    let mut words = Vec::new();
+    let mut i = 0;
+    while i < n
+        invariant
+            words.len() == i,
+            i <= n,
+        decreases n - i,
+    {
+        words.push(Arc::new(AtomicU32::new(0)));
+        i += 1;
+    }
+    words
+}
+
 impl Control {
-    pub fn new(limits: Limits) -> Control {
+    /// `limits.workers` 個の止める語を持つ `Control`。
+    pub fn new(limits: Limits) -> (r: Control)
+        ensures
+            r.word_count() == limits.workers,
+    {
         Control {
             stop: AtomicU32::new(0),
-            worker: AtomicU32::new(0),
+            words: stop_words(limits.workers),
             end: AtomicU32::new(0),
             code: AtomicI64::new(0),
             bytes: AtomicUsize::new(0),
@@ -342,6 +369,11 @@ impl Control {
             pages: PageMap::empty_map(),
             id: fresh_control_id(),
         }
+    }
+
+    /// 止める語の数。`limits.workers` である。
+    pub closed spec fn word_count(&self) -> nat {
+        self.words@.len()
     }
 
     /// この `Control` の番号。
@@ -359,6 +391,17 @@ impl Control {
 
     pub fn limits(&self) -> Limits {
         self.limits
+    }
+
+    /// worker `k` の止める語。`Ctx` が写して持ち、安全点で読む。
+    ///
+    /// # Panics
+    /// `k` が `limits.workers` 以上のとき。
+    pub fn word(&self, k: usize) -> Arc<AtomicU32>
+        requires
+            k < self.word_count(),
+    {
+        self.words[k].clone()
     }
 }
 
@@ -383,6 +426,9 @@ impl fmt::Display for Stop {
 impl Control {
     pub const INTERRUPT: u32 = 1;
     pub const MEMORY: u32 = 2;
+    /// worker の止める語にだけ立つ。run が終わったので、worker はエントリへ戻れ、という意味である。`stop` には立てない
+    /// (host の読み手が見る語を変えないため)。
+    pub const END: u32 = 4;
     pub const TERMINATE: u32 = 8;
     /// worker の止める語にだけ立つ。次の安全点で知らせを集めよ、という意味である。
     pub const NOTICE: u32 = 1 << 30;
@@ -392,10 +438,23 @@ impl Control {
     const RELAYED_SHIFT: u32 = 16;
     const PENDING_MASK: u32 = (1 << Self::RELAYED_SHIFT) - 1;
 
-    /// 止めるビットを `stop` と worker の語の両方に直接書く。worker の語へ写す仲介を置かず、止まる時点を書いた時点で決める。
+    /// 止めるビットを `stop` とすべての worker の語に直接書く。語へ写す仲介を置かず、止まる時点を書いた時点で決める。
+    /// シグナルの handler からも呼ぶので、確保も lock もしない。
     fn raise(&self, bits: u32) {
         self.stop.fetch_or(bits, Ordering::Relaxed);
-        self.worker.fetch_or(bits, Ordering::Relaxed);
+        self.raise_words(bits);
+    }
+
+    fn raise_words(&self, bits: u32) {
+        for word in &self.words {
+            word.fetch_or(bits, Ordering::Relaxed);
+        }
+    }
+
+    fn lower_words(&self, bits: u32) {
+        for word in &self.words {
+            word.fetch_and(!bits, Ordering::Relaxed);
+        }
     }
 
     pub fn interrupt(&self) {
@@ -406,24 +465,34 @@ impl Control {
         self.raise(Self::TERMINATE);
     }
 
-    /// worker に、次の安全点で切り替えるよう求める。
-    pub fn preempt(&self) {
-        self.worker.fetch_or(Self::PREEMPT, Ordering::Relaxed);
+    /// run の終わりをすべての worker に知らせる。`stop` にも終わりの欄にも書かない。
+    pub fn end_run(&self) {
+        self.raise_words(Self::END);
     }
 
-    /// 切り替えを受けたときに `PREEMPT` を下ろす。
-    pub fn take_preempt(&self) {
-        self.worker.fetch_and(!Self::PREEMPT, Ordering::Relaxed);
+    /// すべての worker の語から `END` を下ろす。
+    pub fn clear_end(&self) {
+        self.lower_words(Self::END);
     }
 
-    /// worker に、次の安全点で知らせを集めるよう求める。
-    pub fn notice(&self) {
-        self.worker.fetch_or(Self::NOTICE, Ordering::Relaxed);
+    /// worker `k` に、次の安全点で切り替えるよう求める。
+    pub fn preempt(&self, k: usize) {
+        self.words[k].fetch_or(Self::PREEMPT, Ordering::Relaxed);
     }
 
-    /// 知らせを集めるときに `NOTICE` を下ろす。
-    pub fn take_notice(&self) {
-        self.worker.fetch_and(!Self::NOTICE, Ordering::Relaxed);
+    /// worker `k` が切り替えを受けたときに `PREEMPT` を下ろす。
+    pub fn take_preempt(&self, k: usize) {
+        self.words[k].fetch_and(!Self::PREEMPT, Ordering::Relaxed);
+    }
+
+    /// worker `k` に、次の安全点で知らせを集めるよう求める。
+    pub fn notice(&self, k: usize) {
+        self.words[k].fetch_or(Self::NOTICE, Ordering::Relaxed);
+    }
+
+    /// worker `k` が知らせを集めるときに `NOTICE` を下ろす。
+    pub fn take_notice(&self, k: usize) {
+        self.words[k].fetch_and(!Self::NOTICE, Ordering::Relaxed);
     }
 
     /// シグナル `bits` (`INTERRUPT` か `TERMINATE`) を、待つタスクへ届けるまで保留にする。
@@ -468,10 +537,9 @@ impl Control {
         self.watched.load(Ordering::Relaxed)
     }
 
-    // `Ctx::poll` が読む。`stop_bits` と同じく、`#[inline]` がないとほかの crate から展開できない
-    #[inline]
-    pub fn worker_bits(&self) -> u32 {
-        self.worker.load(Ordering::Relaxed)
+    /// worker `k` の止める語の値。`Ctx::poll` は写した自分の語を直接読むので、これを通らない。
+    pub fn worker_bits(&self, k: usize) -> u32 {
+        self.words[k].load(Ordering::Relaxed)
     }
 
     /// `exit n` の終わりを書く。最初の書き手だけが `code` を書いて真を返し、後の書き手は何も変えずに偽を返す。
@@ -495,19 +563,21 @@ impl Control {
         }
     }
 
-    /// run の始めに終わりの欄を開き、`PREEMPT` と `NOTICE` を下ろす。止めるビットとシグナルの語は下ろさない。
+    /// run の始めに終わりの欄を開き、すべての worker の語から `PREEMPT`、`NOTICE`、`END` を下ろす。止めるビットと
+    /// シグナルの語は下ろさない。
     pub fn begin_run(&self) {
         self.end.store(0, Ordering::Relaxed);
-        self.worker
-            .fetch_and(!(Self::PREEMPT | Self::NOTICE), Ordering::Relaxed);
+        self.lower_words(Self::PREEMPT | Self::NOTICE | Self::END);
     }
 
-    /// 止める理由のビットとシグナルの語と見張りの語をすべて下ろし、終わりの欄を開く。確保量が上限を下回ってもビットは
-    /// 下りないので、止めるビットを下ろすのはこの関数だけである。`PREEMPT` と `NOTICE` は `take_preempt`、`take_notice`、
-    /// `begin_run` も下ろす。
+    /// 止める理由のビットと、すべての worker の語と、シグナルの語と見張りの語をすべて下ろし、終わりの欄を開く。確保量が
+    /// 上限を下回ってもビットは下りないので、止めるビットを下ろすのはこの関数だけである。`PREEMPT` と `NOTICE` は
+    /// `take_preempt`、`take_notice`、`begin_run` も下ろし、`END` は `clear_end` と `begin_run` も下ろす。
     pub fn clear(&self) {
         self.stop.store(0, Ordering::Relaxed);
-        self.worker.store(0, Ordering::Relaxed);
+        for word in &self.words {
+            word.store(0, Ordering::Relaxed);
+        }
         self.end.store(0, Ordering::Relaxed);
         self.signals.store(0, Ordering::Relaxed);
         self.watched.store(0, Ordering::Relaxed);
@@ -701,9 +771,10 @@ impl Control {
     }
 }
 
-/// 止める理由。割り込み、終了の求め (`TERMINATE`)、確保量、知らせ、切り替え、深さの順に先に報告する。ビットがどれも立っていなければ、
-/// 深さの上限で止めたとする。ビットは呼ぶ側が速い道で読んだ値を受け、読み直さない。読み直すと、その間にほかのスレッドが `clear`
-/// したとき、深さの上限を超えていなくても `DepthLimit` を返すためである。
+/// 止める理由。割り込み、終了の求め (`TERMINATE`)、確保量、run の終わり (`END`)、知らせ、切り替え、深さの順に先に
+/// 報告する。ビットがどれも立っていなければ、深さの上限で止めたとする。ビットは呼ぶ側が速い道で読んだ値を受け、
+/// 読み直さない。読み直すと、その間にほかのスレッドが `clear` したとき、深さの上限を超えていなくても `DepthLimit` を
+/// 返すためである。
 #[cold]
 pub(crate) fn stop_reason(bits: u32) -> Stop {
     if bits & Control::INTERRUPT != 0 {
@@ -712,6 +783,8 @@ pub(crate) fn stop_reason(bits: u32) -> Stop {
         Stop::Terminated
     } else if bits & Control::MEMORY != 0 {
         Stop::MemoryLimit
+    } else if bits & Control::END != 0 {
+        Stop::Ended
     } else if bits & Control::NOTICE != 0 {
         Stop::Notice
     } else if bits & Control::PREEMPT != 0 {

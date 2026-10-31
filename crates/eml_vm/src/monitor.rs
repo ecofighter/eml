@@ -114,7 +114,7 @@ impl Relay {
         let new = self.control.claim_signals();
         if new != 0 {
             self.inbox.push(Notice::Signal(new));
-            self.control.notice();
+            self.control.notice(0);
         }
         if new != 0 || self.control.stop_bits() != 0 {
             self.waker.wake();
@@ -146,7 +146,7 @@ fn watch_loop(relay: &Relay, watch: &Watch, doorbell: Option<&Doorbell>, preempt
             continue;
         }
         if preempt && ticker.tick(watch.switches.load(Ordering::Relaxed)) {
-            relay.control.preempt();
+            relay.control.preempt(0);
         }
         next += TICK;
     }
@@ -210,7 +210,7 @@ mod tests {
             "{} notices",
             notices.len()
         );
-        assert_eq!(relay.control.worker_bits(), Control::NOTICE);
+        assert_eq!(relay.control.worker_bits(0), Control::NOTICE);
         assert_eq!(waker.0.load(Ordering::Relaxed), 1);
         // 届けるまでは保留のままで、ハンドラは2回目として扱う
         assert_eq!(relay.control.pending_signals(), Control::TERMINATE);
@@ -221,7 +221,7 @@ mod tests {
         let (relay, waker) = relay();
         relay.relay();
         assert!(relay.inbox.take().is_empty());
-        assert_eq!(relay.control.worker_bits(), 0);
+        assert_eq!(relay.control.worker_bits(0), 0);
         assert_eq!(waker.0.load(Ordering::Relaxed), 0);
     }
 

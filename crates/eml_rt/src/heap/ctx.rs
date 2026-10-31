@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use vstd::prelude::*;
 
@@ -818,8 +819,10 @@ pub struct Ctx<M: Mode> {
     yielding: YieldState,
     /// セッションの根 (`roots.rs`)。空の根は `None` である。
     roots: Vec<Option<Word>>,
-    /// 安全点の確かめがヒープの中をたどらずに読めるよう、ヒープとは別に持つ。
+    /// 確保の前の上限の確かめと Host の読み手がヒープの中をたどらずに読めるよう、ヒープとは別に持つ。
     control: Arc<Control>,
+    /// この worker の止める語 (`Control::word`)。安全点は、この欄を読み、語を読む2回の読みで済む。
+    word: Arc<AtomicU32>,
     max_depth: usize,
     /// 今のタスクの深さの上限。`max_depth` から、タスクの深さの起点を引いた値である。`par` の右の子の深さは
     /// fork のときの親の深さから数えるが、引いた上限を持てば、安全点で起点を足さずに済む
@@ -1022,14 +1025,36 @@ impl<M: Mode> Ctx<M> {
         &&& !M::CHECKED ==> self.held_ok()
     }
 
-    /// `evv` が空で、yield していない文脈。ページはセッションの `control` に数え、出力とファイルは `host` を通す。
+    /// worker 0 の `Ctx` (`for_worker(control, host, 0)`)。
+    ///
+    /// # Panics
+    /// `control.limits().workers` が 0 のとき。
     pub fn new(control: Arc<Control>, host: HostRef) -> (r: Ctx<M>)
+        requires
+            control.word_count() >= 1,
+        ensures
+            r.wf(),
+            r.held_ok(),
+            r.finished(),
+    {
+        Ctx::for_worker(control, host, 0)
+    }
+
+    /// worker `k` の、`evv` が空で yield していない文脈。ページはセッションの `control` に数え、出力とファイルは `host`
+    /// を通す。安全点は `control` の `k` 番目の止める語を読む。
+    ///
+    /// # Panics
+    /// `k` が `control.limits().workers` 以上のとき。
+    pub fn for_worker(control: Arc<Control>, host: HostRef, k: usize) -> (r: Ctx<M>)
+        requires
+            k < control.word_count(),
         ensures
             r.wf(),
             r.held_ok(),
             r.finished(),
     {
         let limits = control.limits();
+        let word = control.word(k);
         let heap = Heap::with_control(control.clone());
         let r = Ctx {
             heap,
@@ -1037,6 +1062,7 @@ impl<M: Mode> Ctx<M> {
             yielding: YieldState::none(),
             roots: Vec::new(),
             control,
+            word,
             max_depth: limits.max_depth,
             depth_limit: limits.max_depth,
             max_evv: limits.max_evv,
@@ -3565,7 +3591,7 @@ impl<M: Mode> Ctx<M> {
     /// `switch_task` が上限から引いてある。
     #[inline]
     pub fn poll(&self, depth: usize) -> Result<(), Stop> {
-        let bits = self.control.worker_bits();
+        let bits = self.word.load(Ordering::Relaxed);
         if depth > self.depth_limit || bits != 0 {
             return Err(stop_reason(bits));
         }

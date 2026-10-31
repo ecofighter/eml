@@ -360,6 +360,7 @@ fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize) -> Result<Polled, VmFault> {
 #[cold]
 #[inline(never)]
 fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<Polled, VmFault> {
+    // VM の `Ctx` は worker 0 の語を読むので、下ろすのも 0 番の語である
     let control = ctx.heap().control();
     match stop {
         Stop::Notice | Stop::Preempt => {}
@@ -370,14 +371,14 @@ fn polled_stop<M: Mode>(ctx: &Ctx<M>, depth: usize, stop: Stop) -> Result<Polled
         return Ok(Polled::Continue);
     }
     if stop == Stop::Preempt {
-        control.take_preempt();
+        control.take_preempt(0);
         return match ctx.poll(depth) {
             // 間に立った `NOTICE` は下ろさずに残す。切り替えの前の集める地点が下ろす
             Ok(()) | Err(Stop::Preempt | Stop::Notice) => Ok(Polled::Switch),
             Err(stop) => Err(stop.into()),
         };
     }
-    control.take_notice();
+    control.take_notice(0);
     match ctx.poll(depth) {
         // 2回目の `poll` の前に立ち直した `NOTICE` も、集める地点が下ろす
         Ok(()) | Err(Stop::Notice) => Ok(Polled::Collect),
@@ -1399,7 +1400,7 @@ fn collect<R: Exec>(
     look: bool,
 ) -> Result<(), VmFault> {
     // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
-    ctx.heap().control().take_notice();
+    ctx.heap().control().take_notice(0);
     if look {
         sched.since_poll = 0;
         if sched.cells.in_flight() > 0 {
@@ -3318,13 +3319,13 @@ mod tests {
         let control = Arc::new(Control::new(eml_rt::Limits::default()));
         let (host, _) = crate::capture_host(Default::default());
         let ctx = Ctx::<eml_rt::Checked>::new(Arc::clone(&control), host);
-        control.notice();
+        control.notice(0);
         assert!(poll(&ctx, 0).ok() == Some(Polled::Collect));
-        assert_eq!(control.worker_bits(), 0);
-        control.notice();
-        control.preempt();
+        assert_eq!(control.worker_bits(0), 0);
+        control.notice(0);
+        control.preempt(0);
         assert!(poll(&ctx, 0).ok() == Some(Polled::Switch));
-        assert_eq!(control.worker_bits(), 0);
+        assert_eq!(control.worker_bits(0), 0);
     }
 
     /// 動いているタスクの安全点が `NOTICE` を見て集め、聞く者のいないシグナルで run を止める。逐次の方針なので、
@@ -3364,7 +3365,7 @@ fn f(p.0: unit) -> unit {
         control.defer(Control::TERMINATE);
         assert_eq!(control.claim_signals(), Control::TERMINATE);
         sched.cells.inbox.push(Notice::Signal(Control::TERMINATE));
-        control.notice();
+        control.notice(0);
         let mut counts = crate::RunCounts::default();
         let result = run::<ExecWith<eml_rt::Checked, crate::Sequential>>(
             &code,

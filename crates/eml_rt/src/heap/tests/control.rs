@@ -85,18 +85,18 @@ fn interrupt_and_clear() {
 fn preempt_reaches_only_the_worker_word() {
     let control = Arc::new(Control::new(Limits::default()));
     let ctx = Ctx::<Fast>::new(control.clone(), host(&Arc::default()));
-    control.preempt();
-    assert_eq!(control.worker_bits(), Control::PREEMPT);
+    control.preempt(0);
+    assert_eq!(control.worker_bits(0), Control::PREEMPT);
     assert_eq!(control.stop_bits(), 0);
     assert_eq!(ctx.poll(0), Err(Stop::Preempt));
-    control.take_preempt();
-    assert_eq!(control.worker_bits(), 0);
+    control.take_preempt(0);
+    assert_eq!(control.worker_bits(0), 0);
     assert_eq!(ctx.poll(0), Ok(()));
     // 割り込みは両方の語に立つ。`take_preempt` は割り込みを下ろさない
     control.interrupt();
-    control.preempt();
-    control.take_preempt();
-    assert_eq!(control.worker_bits(), Control::INTERRUPT);
+    control.preempt(0);
+    control.take_preempt(0);
+    assert_eq!(control.worker_bits(0), Control::INTERRUPT);
     assert_eq!(control.stop_bits(), Control::INTERRUPT);
 }
 
@@ -107,10 +107,10 @@ fn the_memory_limit_reaches_the_worker_word() {
         ..Limits::default()
     });
     control.charge(10);
-    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(control.worker_bits(0), 0);
     assert_eq!(control.stop_bits(), 0);
     control.charge(1);
-    assert_eq!(control.worker_bits(), Control::MEMORY);
+    assert_eq!(control.worker_bits(0), Control::MEMORY);
     assert_eq!(control.stop_bits(), Control::MEMORY);
 }
 
@@ -119,11 +119,11 @@ fn begin_run_reopens_the_end_and_lowers_preempt() {
     let control = Control::new(Limits::default());
     assert!(control.exit(7));
     control.interrupt();
-    control.preempt();
+    control.preempt(0);
     control.begin_run();
     assert_eq!(control.exit_code(), None);
     // 止めるビットは下ろさない
-    assert_eq!(control.worker_bits(), Control::INTERRUPT);
+    assert_eq!(control.worker_bits(0), Control::INTERRUPT);
     assert_eq!(control.stop_bits(), Control::INTERRUPT);
     assert!(control.exit(8));
     assert_eq!(control.exit_code(), Some(8));
@@ -133,11 +133,11 @@ fn begin_run_reopens_the_end_and_lowers_preempt() {
 fn clear_lowers_every_bit_and_the_exit() {
     let control = Control::new(Limits::default());
     control.interrupt();
-    control.preempt();
+    control.preempt(0);
     assert!(control.exit(3));
     control.clear();
     assert_eq!(control.stop_bits(), 0);
-    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(control.worker_bits(0), 0);
     assert_eq!(control.exit_code(), None);
 }
 
@@ -146,12 +146,12 @@ fn clear_lowers_every_bit_and_the_exit() {
 fn notice_reaches_only_the_worker_word() {
     let control = Arc::new(Control::new(Limits::default()));
     let ctx = Ctx::<Fast>::new(control.clone(), host(&Arc::default()));
-    control.notice();
-    assert_eq!(control.worker_bits(), Control::NOTICE);
+    control.notice(0);
+    assert_eq!(control.worker_bits(0), Control::NOTICE);
     assert_eq!(control.stop_bits(), 0);
     assert_eq!(ctx.poll(0), Err(Stop::Notice));
-    control.take_notice();
-    assert_eq!(control.worker_bits(), 0);
+    control.take_notice(0);
+    assert_eq!(control.worker_bits(0), 0);
     assert_eq!(ctx.poll(0), Ok(()));
 }
 
@@ -198,7 +198,7 @@ fn a_claimed_signal_is_returned_once_until_it_is_settled() {
     assert_eq!(control.claim_signals(), Control::INTERRUPT);
     // シグナルの語は止める語に出ない
     assert_eq!(control.stop_bits(), 0);
-    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(control.worker_bits(0), 0);
 }
 
 #[test]
@@ -232,12 +232,12 @@ fn watched_keeps_the_last_bits() {
 fn begin_run_lowers_notice_but_keeps_the_signals() {
     let control = Control::new(Limits::default());
     control.terminate();
-    control.notice();
-    control.preempt();
+    control.notice(0);
+    control.preempt(0);
     control.defer(Control::INTERRUPT);
     control.set_watched(Control::INTERRUPT);
     control.begin_run();
-    assert_eq!(control.worker_bits(), Control::TERMINATE);
+    assert_eq!(control.worker_bits(0), Control::TERMINATE);
     assert_eq!(control.stop_bits(), Control::TERMINATE);
     assert_eq!(control.pending_signals(), Control::INTERRUPT);
     assert_eq!(control.watched(), Control::INTERRUPT);
@@ -247,13 +247,13 @@ fn begin_run_lowers_notice_but_keeps_the_signals() {
 fn clear_lowers_the_signals_and_the_watched_bits() {
     let control = Control::new(Limits::default());
     control.terminate();
-    control.notice();
+    control.notice(0);
     control.defer(Control::TERMINATE);
     assert_eq!(control.claim_signals(), Control::TERMINATE);
     control.set_watched(Control::TERMINATE);
     control.clear();
     assert_eq!(control.stop_bits(), 0);
-    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(control.worker_bits(0), 0);
     assert_eq!(control.pending_signals(), 0);
     assert_eq!(control.watched(), 0);
     control.defer(Control::TERMINATE);
@@ -281,7 +281,113 @@ fn the_first_exit_is_kept() {
     assert_eq!(control.exit_code(), Some(300));
     // 終わりは止める語に出ない
     assert_eq!(control.stop_bits(), 0);
-    assert_eq!(control.worker_bits(), 0);
+    assert_eq!(control.worker_bits(0), 0);
+}
+
+/// worker を3つ持つ `Control` と、各 worker の `Ctx`。
+fn three_workers() -> (Arc<Control>, Vec<Ctx<Fast>>) {
+    let control = Arc::new(Control::new(Limits {
+        max_bytes: 10 * PAGE_BYTES,
+        workers: 3,
+        ..Limits::default()
+    }));
+    let ctxs = (0..3)
+        .map(|k| Ctx::for_worker(control.clone(), host(&Arc::default()), k))
+        .collect();
+    (control, ctxs)
+}
+
+// 止めるビットを書く側は、どれもすべての worker の語に直接書く。語から語へ写す者はいない
+#[test]
+fn every_word_sees_interrupt() {
+    let (control, ctxs) = three_workers();
+    control.interrupt();
+    for (k, ctx) in ctxs.iter().enumerate() {
+        assert_eq!(control.worker_bits(k), Control::INTERRUPT);
+        assert_eq!(ctx.poll(0), Err(Stop::Interrupted));
+    }
+    assert_eq!(control.stop_bits(), Control::INTERRUPT);
+    control.clear();
+    control.terminate();
+    for (k, ctx) in ctxs.iter().enumerate() {
+        assert_eq!(control.worker_bits(k), Control::TERMINATE);
+        assert_eq!(ctx.poll(0), Err(Stop::Terminated));
+    }
+    control.clear();
+    control.charge(11 * PAGE_BYTES);
+    for (k, ctx) in ctxs.iter().enumerate() {
+        assert_eq!(control.worker_bits(k), Control::MEMORY);
+        assert_eq!(ctx.poll(0), Err(Stop::MemoryLimit));
+    }
+    control.refund(11 * PAGE_BYTES);
+    control.clear();
+    for (k, ctx) in ctxs.iter().enumerate() {
+        assert_eq!(control.worker_bits(k), 0);
+        assert_eq!(ctx.poll(0), Ok(()));
+    }
+}
+
+// `END` は worker の語にだけ立ち、`stop` にも終わりの欄にも出ない。`clear_end` と `begin_run` が下ろす
+#[test]
+fn end_run_sets_end_in_every_word_and_stop_stays_clear() {
+    let (control, ctxs) = three_workers();
+    control.end_run();
+    for (k, ctx) in ctxs.iter().enumerate() {
+        assert_eq!(control.worker_bits(k), Control::END);
+        assert_eq!(ctx.poll(0), Err(Stop::Ended));
+    }
+    assert_eq!(control.stop_bits(), 0);
+    assert_eq!(control.exit_code(), None);
+    control.clear_end();
+    for k in 0..3 {
+        assert_eq!(control.worker_bits(k), 0);
+    }
+    // `begin_run` はすべての語から `END`、`PREEMPT`、`NOTICE` を下ろし、止めるビットを残す
+    control.end_run();
+    control.interrupt();
+    control.preempt(1);
+    control.notice(2);
+    control.begin_run();
+    for k in 0..3 {
+        assert_eq!(control.worker_bits(k), Control::INTERRUPT);
+    }
+}
+
+// `PREEMPT` と `NOTICE` は、番号で選んだ worker の語にだけ立つ
+#[test]
+fn preempt_and_notice_reach_only_their_word() {
+    let (control, ctxs) = three_workers();
+    control.preempt(1);
+    control.notice(2);
+    assert_eq!(ctxs[0].poll(0), Ok(()));
+    assert_eq!(ctxs[1].poll(0), Err(Stop::Preempt));
+    assert_eq!(ctxs[2].poll(0), Err(Stop::Notice));
+    control.take_preempt(1);
+    control.take_notice(2);
+    for ctx in &ctxs {
+        assert_eq!(ctx.poll(0), Ok(()));
+    }
+}
+
+#[test]
+fn stop_reason_puts_end_below_memory() {
+    assert_eq!(stop_reason(Control::END), Stop::Ended);
+    assert_eq!(
+        stop_reason(Control::END | Control::MEMORY),
+        Stop::MemoryLimit
+    );
+    assert_eq!(
+        stop_reason(Control::END | Control::INTERRUPT),
+        Stop::Interrupted
+    );
+    assert_eq!(
+        stop_reason(Control::END | Control::TERMINATE),
+        Stop::Terminated
+    );
+    assert_eq!(
+        stop_reason(Control::END | Control::NOTICE | Control::PREEMPT),
+        Stop::Ended
+    );
 }
 
 fn frozen_chunks_stay_counted_until_dropped<M: Mode>() {

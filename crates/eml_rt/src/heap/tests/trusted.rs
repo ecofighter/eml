@@ -1433,7 +1433,7 @@ fn a_preempt_from_another_thread_is_seen() {
     let ctx = Ctx::<Fast>::new(control.clone(), host(&Arc::default()));
     let setter = {
         let control = control.clone();
-        std::thread::spawn(move || control.preempt())
+        std::thread::spawn(move || control.preempt(0))
     };
     while ctx.poll(0).is_ok() {
         std::thread::yield_now();
@@ -1441,7 +1441,7 @@ fn a_preempt_from_another_thread_is_seen() {
     assert_eq!(ctx.poll(0), Err(crate::Stop::Preempt));
     setter.join().unwrap();
     assert_eq!(control.stop_bits(), 0);
-    control.take_preempt();
+    control.take_preempt(0);
     assert_eq!(ctx.poll(0), Ok(()));
 }
 
