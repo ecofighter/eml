@@ -416,6 +416,8 @@ T-0 ─┬─ T-1 ────────────────────�
 
 - E-6 (T-7 のレビュー): Miri の予算は、本文 6 章の「265 秒」と Q-6 の「1.2 倍」ではなく、testing.md の「Miri」の規則 (測った `user` のおよそ 3 倍) で書く。段で足した `trusted` のテストは 11 本である。T-7 で書いた値は Stacked Borrows 280 秒、Tree Borrows 365 秒である。G-S2-13 の確かめは T-6 の `a_lin_part_on_another_heaps_pages_is_walked` が受け持ち、Miri (g) (`recovery_copies_from_another_heaps_pages`) は回復と破棄の順番だけを確かめる
 
+- E-7 (T-10 のレビュー): worker の番号は、S4 の C3' と 1.2 節の `u32` でなく、どこでも `usize` にする (T-8 の `Control::word(k)` と `Ctx::for_worker` に合わせる)。`Policy::for_worker` は worker 1..N-1 にだけ使い、worker 0 は元の方針のまま動く。ドアベルを持つ監視のスレッドは、どの方針でも `running == 0` の間は眠るので、シグナルの handler でない止める書き手 (worker k の致命的な誤り、`end_run`、確保量の上限、Rust の API から呼ぶ `interrupt`) は、自分でドアベルを鳴らすか `wake_all` を呼ぶ。`Control::new` の `workers >= 1` は Verus の requires で表し、検証しない呼び手の 0 は T-14 の CLI で断る
+
 ## 10. 危険と未決の項目
 
 | ID | 項目 | 影響 | いつ誰が決めるか | 決まらないときの既定 |
