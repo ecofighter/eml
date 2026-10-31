@@ -23,7 +23,7 @@ for r in rows:
         cases.append(r["case"])
 
 SYS = ["epoll_ctl", "epoll_pwait", "epoll_wait", "timerfd_settime", "read(eventfd)", "recvfrom", "recvfrom!EAGAIN", "recvfrom(peek)", "recvfrom(peek)!EAGAIN", "sendto!EAGAIN",
-       "sendto", "accept4", "accept4!EAGAIN", "connect", "epoll_pwait2", "getsockopt", "getpeername", "brk", "mmap", "munmap"]
+       "sendto", "accept4", "accept4!EAGAIN", "connect", "epoll_pwait2", "getsockopt", "getpeername", "brk", "mmap", "munmap", "io_uring_enter"]
 # 目標の表の式。床を引いた回数の辞書 v と、その件の単位の数 n から値を出す。
 # mem = brk + mmap + munmap、E = 空振りの読み、R = データを読んだ読み、P = 当たった覗き。
 # 覗きは別に数えるので、(R + P) ÷ R が空きなしの読みの「覗きと読みの2回まで」を表す。
