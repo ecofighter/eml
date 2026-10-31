@@ -1,5 +1,6 @@
 //! Ctrl-C と SIGTERM のハンドラ (docs/spec/vm.md の「上限と割り込み」)。unix では SIGINT と SIGTERM のハンドラ、
-//! Windows ではコンソールの handler が受け (SIGTERM の代わりは閉じることとシャットダウン)、どれも static に置いた `Installed` の `respond` で何をするかを決める。
+//! Windows ではコンソールの handler が受け (SIGTERM の代わりは閉じることとシャットダウン)、どれも static に置いた
+//! `Installed` の `respond` で何をするかを決める。
 
 use std::sync::{Arc, OnceLock};
 
@@ -29,11 +30,12 @@ struct Installed {
 /// シグナルを受けたときの動き方。
 #[derive(Clone, Copy)]
 pub enum Mode {
-    /// 2回目の同じシグナルでその場で終わる。安全点に来ない処理から抜ける道である。SIGTERM と、Windows の閉じることとシャットダウンも受ける。
+    /// 2回目の同じシグナルでその場で終わる。安全点に来ない処理から抜ける道である。SIGTERM と、Windows の閉じることと
+    /// シャットダウンも受ける。
     /// Windows の閉じることとシャットダウンは2回目でも終わらせず、出口は OS の待ち時間に任せる。
     Run,
-    /// Ctrl-C で終わらず、SIGTERM と Windows の閉じることとシャットダウンは受けない。抜けられない処理からは、unix では Ctrl-\、Windows では Ctrl-Break で抜ける
-    /// (docs/spec/repl.md の「残る制限」)。
+    /// Ctrl-C で終わらず、SIGTERM と Windows の閉じることとシャットダウンは受けない。抜けられない処理からは、unix では
+    /// Ctrl-\、Windows では Ctrl-Break で抜ける (docs/spec/repl.md の「残る制限」)。
     Repl,
 }
 

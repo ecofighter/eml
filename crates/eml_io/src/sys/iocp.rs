@@ -738,7 +738,7 @@ impl Backend for Iocp {
 
     fn listen(&mut self, addr: SocketAddr) -> io::Result<(Sock, u16)> {
         // SO_REUSEADDR は使用中のポートを別のソケットに取らせ、SO_EXCLUSIVEADDRUSE は古い接続が TIME_WAIT にある間
-        // 立ち直したサーバを AddrInUse にするので、どちらも立てない (docs/spec/vm.md の「時計と driver」)
+        // 立ち上げ直したサーバーを AddrInUse にするので、どちらも立てない (docs/spec/vm.md の「時計と driver」)
         let sock = self.stream_socket(addr.is_ipv6())?;
         let s = sock.raw();
         bind_to(s, addr)?;
