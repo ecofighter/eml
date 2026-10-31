@@ -360,6 +360,9 @@
   - 見直す条件: 大きな本文を少しずつ読むプログラムか、同じホストへ多数の要求を出すプログラムが出たとき。IPv6 のアドレスの URL は、IPv6 だけのホストへつなぐプログラムが出たとき。
 - libcurl の上の HTTP のクライアント: 採らない。本物のソケットが要るので、テストの driver の仮想のホストの上の UI テストが書けず、`Net` を通らないのでほかのプロトコルに使える TLS の層にならない。OS ごとに違う TLS (OpenSSL、Schannel) と libcurl、zlib、pkg-config の依存も持ち込む。
   - 見直す条件: `Http` に HTTP/2、プロキシ、圧縮が要り、eml で書くより libcurl を結ぶほうが小さいと分かったとき。
+- macOS の `Std.Net` を Network.framework (`nw_connection_t`、`nw_listener_t`) で作ること: 採らない。macOS の backend は kqueue のままにする
+  - 後に回した理由: Network.framework は dispatch のキューのスレッドで完了の block を呼び、受けたデータを framework が確保した `dispatch_data_t` に入れる。そのため、操作が持つ一意な buffer へ写す手間が1回増え、送りで `RawBuf` を包むと driver のスレッドの外で読まれる (理由は [非同期の設計](async.md) の「ファイルとパイプ」の `dispatch_io` と同じ)。データを消費せずに読めるかを問う操作もなく、`Readable` の歩を作れない。速さは増えず、得られるのは system の proxy と VPN に沿った経路の選択、system の trust store を使う TLS、QUIC といった機能である。
+  - 見直す条件: macOS で system の proxy か VPN に沿った接続、system の trust store を使う TLS、QUIC のどれかが要るとき。または iOS を対象にするとき。
 - musl で静的に結んだ Linux の配布物 (`x86_64-unknown-linux-musl`)
   - 後に回した理由: TLS とは別の配布の話である。aws-lc-sys のために musl を対象にする C のツールチェーンを flake に足し、`nix build` の2つ目のパッケージと CI のジョブが要る。musl の名前の解決と確保の速さは glibc と違う。AOT の配布物は `libeml_rt.a` を同梱して利用者の `cc` で結ぶので、musl の配布物には musl 向けの `libeml_rt.a` と結び方を別に用意する必要がある。根の証明書は今は webpki-roots なので静的な配布物でも OS のストアは要らないが、`tls-platform-verifier` の後は OS の根のファイルが要る。
   - 見直す条件: Linux の tarball を配布するとき。既定の配布物とは別の配布物にする。
