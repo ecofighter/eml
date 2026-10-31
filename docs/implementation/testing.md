@@ -37,7 +37,7 @@
 | 1 | 機能ごとの代表的なプログラムを `eml check` / `eml run` にかけたときにユーザーが見るもの。stdout、実行時エラー、プログラム全体が通るか落ちるか、代表的な診断の表示 | UI テスト (`tests/ui/`) |
 | 2 | 1つの段階の出力 (CST、HIR、推論したシグネチャ、Core IR、LIR) と、その段階の診断の細部 (位置、回復、端のケース) | その段階の crate の結合テスト (`crates/<段階>/tests/`)。ソースから `eml_test_support` で組み立てる |
 | 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_lir/tests/`、`eml_core_ir/tests/verify.rs`、`eml_vm/tests/`。LIR は IR のテキストで書いて `eml_lir::parse` で読み、Core IR は `eml_core_ir::parse` で読む |
-| 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープ、`eml_io` の driver の核など | `src/` の単体テスト。`eml_io` の核は `src/driver/tests/` で偽の backend の上で確かめる (「`eml_io` の検証」の「核の Miri」)。epoll と kqueue の backend は `src/sys/unix.rs` の `mod tests` で本物のソケットの上で確かめ、Miri では流さない |
+| 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープ、`eml_io` の driver の核など | `src/` の単体テスト。`eml_io` の核は `src/driver/tests/` で偽の backend の上で確かめる (「`eml_io` の検証」の「核の Miri」)。epoll と kqueue の backend は `src/sys/unix.rs` の `mod tests` で本物のソケットの上で確かめ、Miri では流さない。IOCP の backend は `src/sys/iocp.rs` の `mod tests` で本物のソケットの上で確かめる。そこには、backend が頼るのに文書に書かれていない OS の振る舞い (長さ 0 の `WSARecv`、`OVERLAPPED` なしの呼び出しが packet を積まないこと、`accept` と `AcceptEx` の併用、ループバックで SYN を送り直さないこと) を確かめるテストも置く |
 | 5 | lib API の流れ、CLI の終了コード、テスト補助そのもの | `eml_cli/tests/api.rs`、`eml_cli/tests/cli.rs`、`eml_test_support/tests/` |
 
 ### 重複させない
