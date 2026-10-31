@@ -419,6 +419,7 @@ syscall の数は `strace -f` で数える (Linux のみ)。main のスレッド
 - `minflt` の単位あたりの値が前と後で 1 以上違う件は「確保の揺れ」と印を付け、時間の判定から外す。1往復ごとに確保して手放す buffer が glibc のヒープの頂きを縮めて伸ばすかはバイナリの配置で変わり、物差しでは決まらない。その件の確保の違いは `RunStats` の `allocations` と syscall の `brk` で見る
 - syscall は main のスレッドで比べ、3回のどれもが目標以下であることを見る
 - 前と後は同じ機械で、ほかに負荷のない状態で測る
+- echo-py の CPU は機械の負荷で変わる。a2dafe7 の同じ eml の echo-py-fresh は、ほかのビルドが走る負荷 (load average 約5) の下では1往復 4.67 µs (自発の切り替え 650 回、非自発 19374 回) で、負荷のない機械では 28.04 µs (19378 回、37 回) だった。echo-py を比べるときは、epoll の側で自発の切り替えが 15000 回以上、非自発が 1000 回以下であることを確かめる
 
 ### driver の syscall の目標
 
@@ -565,6 +566,57 @@ macOS でも同じ件を比べた。機械は Apple M5、10 コア、メモリ 3
 - 256 は、bulk-1k で候補に不利な「差」があり、1つ目と2つ目の条件を満たさない
 - 1024 は、bulk-shared で候補の側に「差」があり、不利な「差」はない。単位あたりの sys の比は bulk-self 1.06、bulk-shared 0.91、bulk-reuse 1.04 で、echo-self-fresh と echo-self-reuse の実時間の比はどちらも 1.00 なので、3つの条件を満たす。それでも 512 を保つのは、Linux で2つ目の条件を破るためである
 - macOS の bulk-shared は、非自発の切り替えの中央値が 512 で 6330 回 (256 との run では 5849 回)、1024 で 114 回だった。原因は調べていない。kqueue の `EVFILT_WRITE` が ACK ごとに待ちを起こすことと関係するかも確かめていない
+
+### io_uring と epoll
+
+Linux の io_uring の backend を 22fe56a で試作し、epoll と比べた。そのコミットでは、同じ release の eml を環境変数 `EML_IO_BACKEND` で3つの backend に固められる。`epoll`、`io_uring` (epoll と同じ同期の試みを先に出し、塞がれた待ちだけを ring で待つ)、`io_uring_direct` (読める印のない行では同期の `recv` と `accept4` を省き、すぐ ring に出す) の3つである。1つの eml を3つのラベルで流したので、違うのは backend だけである。機械は「34cad91 と e942eeb」と同じ型の Linux の container (Intel Xeon Processor @ 2.10GHz、4 vCPU、kernel 6.18.44-fc-v185) である。22fe56a の `bench.py` は、ラベルごとに環境変数を足す `--env` を持っていた。
+
+```sh
+G='^(base|many-self-1000|echo-self-fresh|echo-py-fresh|echo-py-reuse|bulk-1k)$'
+python3 -I bench/net/bench.py --only "$G" --runs 11 --strace-runs 3 epoll=<eml> uring=<eml> direct=<eml> --env epoll EML_IO_BACKEND=epoll --env uring EML_IO_BACKEND=io_uring --env direct EML_IO_BACKEND=io_uring_direct
+```
+
+io_uring を既定にする条件は、many-self-1000、echo-self-fresh、echo-py-fresh、echo-py-reuse、bulk-1k のどれかで、床を引いた単位あたりの CPU の比 (io_uring ÷ epoll) が 0.800 以下で判定が「差」になることが、2回のセッションで続けて成り立つこととした。確保の揺れの印は記録だけにし、判定には使っていない。
+
+5件の2回のセッション。値は比と判定である。
+
+| 件 | io_uring 1回目 | io_uring 2回目 | io_uring_direct 1回目 | io_uring_direct 2回目 |
+|---|---|---|---|---|
+| many-self-1000 | 0.812 差なし | 0.937 差なし | 0.779 差なし | 0.940 差なし |
+| echo-self-fresh | 0.956 差なし | 0.960 差なし | 0.949 差なし | 0.937 差なし |
+| echo-py-fresh | 0.982 差なし | 1.019 差なし | 1.028 差なし | 1.023 差なし |
+| echo-py-reuse | 1.035 差なし | 0.992 差なし | 0.947 差なし | 0.965 差なし |
+| bulk-1k | 0.978 差なし | 1.015 差なし | 0.885 差なし | 0.911 差なし |
+
+busy-self を除く全件を1回流したセッション。CPU は床を引いた単位あたりの µs の中央値で、uring は `io_uring`、direct は `io_uring_direct` である。
+
+| 件 | epoll | uring | 比 | 判定 | direct | 比 | 判定 |
+|---|---|---|---|---|---|---|---|
+| echo-self-fresh | 11.18 | 12.23 | 1.094 | 差なし | 10.91 | 0.976 | 差なし |
+| echo-self-reuse | 10.86 | 12.24 | 1.127 | 差なし | 10.30 | 0.948 | 差なし |
+| echo-py-fresh | 28.71 | 29.08 | 1.013 | 差なし | 29.18 | 1.016 | 差なし |
+| echo-py-reuse | 27.35 | 28.06 | 1.026 | 差なし | 28.00 | 1.024 | 差なし |
+| bulk-self | 277.04 | 303.92 | 1.097 | 差なし | 291.56 | 1.052 | 差なし |
+| bulk-shared | 206.34 | 210.85 | 1.022 | 差なし | 211.41 | 1.025 | 差なし |
+| bulk-reuse | 263.93 | 259.96 | 0.985 | 差なし | 251.04 | 0.951 | 差なし |
+| bulk-1k | 1348.72 | 1272.59 | 0.944 | 差なし | 1220.20 | 0.905 | 差なし |
+| bulk-send-py | 480.15 | 488.93 | 1.018 | 差なし | 476.73 | 0.993 | 差なし |
+| bulk-recv-py | 352.32 | 358.24 | 1.017 | 差なし | 351.16 | 0.997 | 差なし |
+| bulk-accum | 2418.00 | 2517.19 | 1.041 | 差なし | 2578.38 | 1.066 | 差なし |
+| many-self-250 | 82.10 | 114.34 | 1.393 | 差なし | 87.90 | 1.071 | 差なし |
+| many-self-1000 | 85.57 | 87.39 | 1.021 | 差なし | 88.66 | 1.036 | 差なし |
+| many-self-2000 | 82.68 | 82.85 | 1.002 | 差なし | 80.51 | 0.974 | 差なし |
+| many-py-1000 | 63.63 | 58.36 | 0.917 | 差なし | 56.74 | 0.892 | 差 |
+| conn-self-1 | 28.76 | 28.82 | 1.002 | 差なし | 27.34 | 0.951 | 差なし |
+| conn-self-32 | 33.13 | 29.83 | 0.901 | 差なし | 27.20 | 0.821 | 差 |
+| conn-py | 49.11 | 48.54 | 0.988 | 差なし | 48.74 | 0.992 | 差なし |
+
+- この条件を満たした件はない。いちばん縮んだのは `io_uring_direct` の many-self-1000 の1回目の 0.779 で、四分位が重なり、2回目は 0.940 だった
+- 判定が「差」になったのは、全件のセッションの `io_uring_direct` の many-py-1000 と conn-self-32 だけで、どちらも確保の揺れの印が付いた。1.10 以上で判定が「差」の後退はない
+- 試作の前の eml と試作の epoll の A/A は、5件とも差なしで、比は 0.962 から 1.125 だった
+- syscall は減った。`eml run bench/net/many.em 1000` を `strace -f -c` で数えると、全体の回数は epoll が 17703、`io_uring` が 13145、`io_uring_direct` が 11193 で、失敗はそれぞれ 2657、1625、119 だった。減ったのは `epoll_ctl`、接続を確かめる `getsockopt` と `getpeername`、空振りの `recvfrom` と `accept4` である。CPU では、この減り方はこの機械の揺れの中に収まった
+- io_uring のカーネルの側の仕事 (io-wq のスレッドと `DEFER_TASKRUN` の task work) は eml の process の rusage に入る。試しのプログラムで、rusage は system 全体の忙しい時間の 0.95 から 0.99 だった
+- Linux の backend は epoll である ([ロードマップ](../future/roadmap.md) の「その後の項目」の「Linux の io_uring の backend」)
 
 ## 所見
 

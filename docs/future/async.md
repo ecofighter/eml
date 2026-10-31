@@ -240,7 +240,7 @@ read_chunk buf s =
 - `IoDriver` の trait は `eml_rt` の中で `Host` の隣に置く。今は `verus!` の外の安全なつなぎのコードで、`external_body` も信頼の一覧の行も持たない ([VM](../spec/vm.md) の「時計と driver」)。`eml_rt` の extern が driver を要るまでは実行系が持ち、`Ctx` には入れない。`eml_rt` の extern が I/O を持ち、`Ctx` が driver を持つときに、`external_body` と信頼の一覧の行を足す
 - 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び方 (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
 - driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM では、監視のスレッドのない run は Ctrl-C の後に起こされないので、VM が1回の待ちを 10 ms で切る。driver は内部の刻みを持たない ([VM](../spec/vm.md) の「時計と driver」)
-- 本物の driver は、OS を呼ばない核と、`libc` と `windows-sys` で自前に書いた OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) からなり、io_uring は使わない。mio は Windows で AFD の readiness を真似るので採らない。核は保留の操作を呼ぶ側の鍵で引く1つの表で持ち、プールと名前の解決のスレッドも自前で持つ。構成は [アーキテクチャ](../implementation/architecture.md) の「`eml_io` の内部」にある
+- 本物の driver は、OS を呼ばない核と、`libc` と `windows-sys` で自前に書いた OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) からなり、io_uring は使わない (理由は [計測の基準](../implementation/benchmarks.md) の「io_uring と epoll」)。mio は Windows で AFD の readiness を真似るので採らない。核は保留の操作を呼ぶ側の鍵で引く1つの表で持ち、プールと名前の解決のスレッドも自前で持つ。構成は [アーキテクチャ](../implementation/architecture.md) の「`eml_io` の内部」にある
 - 完了は持ち主の worker の driver の完了の列に届き、集める地点で登録表の操作の記録に当てる。完了の中身は保留の表が持つ数えた参照で、ハンドルを縛った worker とタスクの worker が違えば、普通の移し替えの歩きでタスクへ渡る
 - REPL の回復は実行中の操作を取り消して完了を待ちきってから写す
 
