@@ -414,6 +414,8 @@ T-0 ─┬─ T-1 ────────────────────�
 
 - E-5 (T-5 の修正のレビュー): E-2 の `Control` の ghost の集合 `pages@` の代わりに、ページごとの登録の token (`Registered`。ページの番地と `Control` の番号を持ち、`PagePerm.reg` に置く) で `PageMap` の約束を表す。`Control` は信頼する数え手から run をまたいで一意な番号を受ける。`foreign_child` は `foreign_view(..) is Some` で定める。塊のページの token は凍結のときに捨て、塊のページは `region_known` で確かめる (E-4)
 
+- E-6 (T-7 のレビュー): Miri の予算は、本文 6 章の「265 秒」と Q-6 の「1.2 倍」ではなく、testing.md の「Miri」の規則 (測った `user` のおよそ 3 倍) で書く。段で足した `trusted` のテストは 11 本である。T-7 で書いた値は Stacked Borrows 280 秒、Tree Borrows 365 秒である。G-S2-13 の確かめは T-6 の `a_lin_part_on_another_heaps_pages_is_walked` が受け持ち、Miri (g) (`recovery_copies_from_another_heaps_pages`) は回復と破棄の順番だけを確かめる
+
 ## 10. 危険と未決の項目
 
 | ID | 項目 | 影響 | いつ誰が決めるか | 決まらないときの既定 |
