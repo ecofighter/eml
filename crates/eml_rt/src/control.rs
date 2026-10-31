@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use vstd::prelude::*;
+use vstd::raw_ptr::Dealloc;
 
 #[cfg(verus_only)]
 use crate::alloc::page_base;
@@ -89,11 +90,13 @@ pub(crate) struct PageMap {
 }
 
 /// `control` の表に番地 `page` のページを登録した証。登録したヒープの確保器がページごとに1つ持ち、ページを返す前に
-/// `unregister_page` に渡して手放す。作れるのは `register_page` だけである (信頼の一覧の T15)。
+/// `unregister_page` に渡して手放す。作れるのは `register_page` だけである (信頼の一覧の T15)。ページを返すための
+/// `Dealloc` を中に持つので、確保したページ1つにつき証は高々1つである。
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
 pub(crate) tracked struct Registered {
     ghost page: usize,
     ghost control: u64,
+    tracked dealloc: Dealloc,
 }
 
 impl Registered {
@@ -105,6 +108,11 @@ impl Registered {
     /// 登録した `Control` の番号 (`Control::ident`)。
     pub(crate) closed spec fn control(&self) -> u64 {
         self.control
+    }
+
+    /// 登録したページを返すための `Dealloc`。
+    pub(crate) closed spec fn dealloc(&self) -> Dealloc {
+        self.dealloc
     }
 }
 
@@ -124,25 +132,47 @@ pub(crate) fn page_known(
     control.pages.contains(a)
 }
 
-/// 番地 `page` のページを `control` のページの表に登録し、その証を返す (T15)。ページを確保した直後に、ページごとに
-/// 1回だけ呼ぶ。
-#[verifier::external_body]
-pub(crate) fn register_page(control: &Control, page: usize) -> (t: Tracked<Registered>)
+/// 番地 `page` のページを `control` のページの表に登録し、そのページの `Dealloc` を入れた証を返す。ページを確保した
+/// 直後に呼ぶ。`Dealloc` は確保したページに1つしかないので、証が2つできることはない。
+pub(crate) fn register_page(control: &Control, page: usize, Tracked(d): Tracked<Dealloc>) -> (t:
+    Tracked<Registered>)
+    requires
+        d.addr() == page,
     ensures
         t@.page() == page,
         t@.control() == control.ident(),
+        t@.dealloc() == d,
 {
-    control.pages.insert(page);
-    Tracked::assume_new()
+    map_insert(control, page);
+    Tracked(Registered { page, control: control.ident(), dealloc: d })
 }
 
-/// 番地 `page` のページを `control` のページの表から外し、証を手放す (T15)。ページを返す前に呼ぶ。
-#[verifier::external_body]
-pub(crate) fn unregister_page(control: &Control, page: usize, Tracked(t): Tracked<Registered>)
+/// 番地 `page` のページを `control` のページの表から外し、証を手放して中の `Dealloc` を返す。ページを返す前に呼ぶ。
+pub(crate) fn unregister_page(
+    control: &Control,
+    page: usize,
+    Tracked(t): Tracked<Registered>,
+) -> (d: Tracked<Dealloc>)
     requires
         t.page() == page,
         t.control() == control.ident(),
+    ensures
+        d@ == t.dealloc(),
 {
+    map_remove(control, page);
+    let tracked Registered { dealloc, .. } = t;
+    Tracked(dealloc)
+}
+
+/// 表にページのビットを立てる (T15)。呼ぶのは `register_page` だけである。
+#[verifier::external_body]
+fn map_insert(control: &Control, page: usize) {
+    control.pages.insert(page);
+}
+
+/// 表からページのビットを下ろす (T15)。呼ぶのは `unregister_page` だけである。
+#[verifier::external_body]
+fn map_remove(control: &Control, page: usize) {
     control.pages.remove(page);
 }
 
@@ -551,9 +581,8 @@ fn empty_node<T>() -> Box<Node<T>> {
     Box::new([const { OnceLock::new() }; MAP_FAN])
 }
 
-// 登録のビットは、ページの物体の語をほかのスレッドへ渡す前に立て、ページを返す前に下ろす。語を受けたスレッドは、
-// 語を渡したときの順序でビットを見るので、表の読み書きは Relaxed で足りる
-/// 番地 `a` のページが表にあるか。値の約束を持たない読みで、T14 の `foreign_header` が使う。
+/// 番地 `a` のページが表にあるか。値の約束を持たない読みで、T14 の `foreign_header` と `foreign_children`、T15 の
+/// `region_known` が使う。
 pub(crate) fn control_knows(control: &Control, a: usize) -> bool {
     control.pages.contains(a)
 }
@@ -563,6 +592,8 @@ pub(crate) fn forget_page(control: &Control, page: usize) {
     control.pages.remove(page);
 }
 
+// 登録のビットは、ページの物体の語をほかのスレッドへ渡す前に立て、ページを返す前に下ろす。語を受けたスレッドは、
+// 語を渡したときの順序でビットを見るので、表の読み書きは Relaxed で足りる
 impl PageMap {
     fn leaf(&self, a: usize) -> Option<(&AtomicU64, u64)> {
         let ([i, j, k], word, bit) = map_slot(a)?;

@@ -199,7 +199,8 @@ struct Class {
     end: *mut u8,
 }
 
-/// ページの権限。頭の3つの部分、返すための `Dealloc`、まだ切り出していない残り。
+/// ページの権限。頭の3つの部分、返すための `Dealloc`、まだ切り出していない残り。検査モードでは、`Dealloc` を
+/// ページの表に登録した証が持つ。
 // 仕様だけで使う型。Verus の外のビルドでも型は残るので、使わないことの警告を止める
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
 pub(crate) tracked struct PagePerm {
@@ -207,10 +208,21 @@ pub(crate) tracked struct PagePerm {
     tracked state: PointsTo<PageState>,
     /// 遠隔の空きリストの語の権限。級の空きリストのつなぎの語と同じく `Word` で持つ。
     tracked remote: PointsTo<Word>,
-    tracked dealloc: Dealloc,
+    /// 速いモードの `Dealloc`。検査モードでは `None` で、`Dealloc` は `reg` の証が持つ。
+    tracked dealloc: Option<Dealloc>,
     tracked tail: PointsToRaw,
     /// 検査モードで、ページをページの表に登録した証。速いモードでは `None` である。
     tracked reg: Option<Registered>,
+}
+
+impl PagePerm {
+    /// ページを返すための `Dealloc`。検査モードでは登録の証の中にある。
+    pub(crate) closed spec fn dealloc_of(&self) -> Dealloc {
+        match self.reg {
+            Some(t) => t.dealloc(),
+            None => self.dealloc->0,
+        }
+    }
 }
 
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
@@ -463,7 +475,7 @@ impl Pages {
     }
 
     closed spec fn page_provenance(&self, a: usize) -> vstd::raw_ptr::Provenance {
-        self.pages@[a].dealloc.provenance()
+        self.pages@[a].dealloc_of().provenance()
     }
 
     closed spec fn block_bytes_of(&self, a: usize) -> int {
@@ -572,9 +584,11 @@ impl Pages {
         &&& hdr.sink == self.sink
         &&& self.prefix_words > 0 ==> (perm.reg matches Some(t) && t.page() == a && t.control()
             == self.ctl_id())
-        &&& perm.dealloc.addr() == a
-        &&& perm.dealloc.size() == hdr.bytes
-        &&& perm.dealloc.align() == PAGE_BYTES
+        &&& self.prefix_words == 0 ==> perm.reg is None
+        &&& perm.dealloc is Some <==> perm.reg is None
+        &&& perm.dealloc_of().addr() == a
+        &&& perm.dealloc_of().size() == hdr.bytes
+        &&& perm.dealloc_of().align() == PAGE_BYTES
         &&& perm.tail.provenance() == self.page_provenance(a)
         &&& a + hdr.bytes <= usize::MAX
         &&& hdr.bytes <= MAX_PAGE_BYTES
@@ -1851,10 +1865,10 @@ impl Pages {
                 limit: FIRST_BLOCK,
             }),
             self.sink == s0.sink,
-            self.pages@[p@.addr].dealloc.addr() == p@.addr,
-            self.pages@[p@.addr].dealloc.size() == PAGE_BYTES,
-            self.pages@[p@.addr].dealloc.align() == PAGE_BYTES,
-            self.pages@[p@.addr].dealloc.provenance() == p@.provenance,
+            self.pages@[p@.addr].dealloc_of().addr() == p@.addr,
+            self.pages@[p@.addr].dealloc_of().size() == PAGE_BYTES,
+            self.pages@[p@.addr].dealloc_of().align() == PAGE_BYTES,
+            self.pages@[p@.addr].dealloc_of().provenance() == p@.provenance,
             self.pages@[p@.addr].tail.is_range(p@.addr + FIRST_BLOCK, PAGE_BYTES - FIRST_BLOCK),
             self.pages@[p@.addr].tail.provenance() == p@.provenance,
             self.list@ == s0.list@.push(p),
@@ -1863,6 +1877,8 @@ impl Pages {
             self.count@ == s0.count@.insert(p@.addr, 0),
             s0.prefix_words > 0 ==> (self.pages@[p@.addr].reg matches Some(t) && t.page() == p@.addr
                 && t.control() == s0.ctl_id()),
+            s0.prefix_words == 0 ==> self.pages@[p@.addr].reg is None,
+            self.pages@[p@.addr].dealloc is Some <==> self.pages@[p@.addr].reg is None,
             self.control == s0.control,
             self.carved == s0.carved,
             self.index == s0.index,
@@ -2052,10 +2068,10 @@ impl Pages {
             }),
             r.1@.remote.ptr()@.addr == r.0@.addr + REMOTE_AT,
             r.1@.remote.ptr()@.provenance == r.0@.provenance,
-            r.1@.dealloc.addr() == r.0@.addr,
-            r.1@.dealloc.size() == bytes,
-            r.1@.dealloc.align() == PAGE_BYTES,
-            r.1@.dealloc.provenance() == r.0@.provenance,
+            r.1@.dealloc_of().addr() == r.0@.addr,
+            r.1@.dealloc_of().size() == bytes,
+            r.1@.dealloc_of().align() == PAGE_BYTES,
+            r.1@.dealloc_of().provenance() == r.0@.provenance,
             r.1@.tail.is_range(r.0@.addr + FIRST_BLOCK, bytes - FIRST_BLOCK),
             r.1@.tail.provenance() == r.0@.provenance,
             final(self).list@ == old(self).list@.push(r.0),
@@ -2073,6 +2089,8 @@ impl Pages {
             final(self).sink == old(self).sink,
             old(self).prefix_words > 0 ==> (r.1@.reg matches Some(t) && t.page() == r.0@.addr
                 && t.control() == old(self).ctl_id()),
+            old(self).prefix_words == 0 ==> r.1@.reg is None,
+            r.1@.dealloc is Some <==> r.1@.reg is None,
             final(self).control == old(self).control,
     {
         if block_words > 0xFFFF_FFFF {
@@ -2088,11 +2106,12 @@ impl Pages {
         let (base, Tracked(raw), Tracked(dealloc)) = alloc_page(bytes);
         charge_pages(&self.control, bytes);
         // 検査モードのページは、物体の語をどこかへ渡す前に表に登録する (docs/spec/object-model.md の「ページの表」)
-        let reg: Tracked<Option<Registered>> = if self.prefix_words > 0 {
-            let Tracked(t) = register_page(self.control_ref(), base.addr());
-            Tracked(Some(t))
+        let (dealloc, reg): (Tracked<Option<Dealloc>>, Tracked<Option<Registered>>) =
+            if self.prefix_words > 0 {
+            let Tracked(t) = register_page(self.control_ref(), base.addr(), Tracked(dealloc));
+            (Tracked(None), Tracked(Some(t)))
         } else {
-            Tracked(None)
+            (Tracked(Some(dealloc)), Tracked(None))
         };
         let page = base as *mut PageHeader;
         let ghost a = base@.addr as int;
@@ -2124,6 +2143,7 @@ impl Pages {
         self.list.push(page);
         self.bytes = total;
         let Tracked(reg) = reg;
+        let Tracked(dealloc) = dealloc;
         (page, Tracked(PagePerm { header, state, remote, dealloc, tail, reg }))
     }
 
@@ -2220,10 +2240,10 @@ impl Pages {
                 limit: (FIRST_BLOCK + block_words * 8) as usize,
             }),
             self.sink == s0.sink,
-            self.pages@[p@.addr].dealloc.addr() == p@.addr,
-            self.pages@[p@.addr].dealloc.size() == FIRST_BLOCK + block_words * 8,
-            self.pages@[p@.addr].dealloc.align() == PAGE_BYTES,
-            self.pages@[p@.addr].dealloc.provenance() == p@.provenance,
+            self.pages@[p@.addr].dealloc_of().addr() == p@.addr,
+            self.pages@[p@.addr].dealloc_of().size() == FIRST_BLOCK + block_words * 8,
+            self.pages@[p@.addr].dealloc_of().align() == PAGE_BYTES,
+            self.pages@[p@.addr].dealloc_of().provenance() == p@.provenance,
             self.pages@[p@.addr].tail.is_range(p@.addr + FIRST_BLOCK + block_words * 8, 0),
             self.pages@[p@.addr].tail.provenance() == p@.provenance,
             h@.addr == p@.addr + FIRST_BLOCK + s0.prefix_words * 8,
@@ -2234,6 +2254,8 @@ impl Pages {
             self.count@ == s0.count@.insert(p@.addr, 1),
             s0.prefix_words > 0 ==> (self.pages@[p@.addr].reg matches Some(t) && t.page() == p@.addr
                 && t.control() == s0.ctl_id()),
+            s0.prefix_words == 0 ==> self.pages@[p@.addr].reg is None,
+            self.pages@[p@.addr].dealloc is Some <==> self.pages@[p@.addr].reg is None,
             self.control == s0.control,
             self.carved@ == s0.carved@.insert(h@.addr),
             self.index@ == s0.index@.insert(h@.addr, 0),
@@ -2646,10 +2668,11 @@ impl Pages {
         proof {
             assert(raw.dom() =~= Set::range(a as int, a + bytes));
         }
-        if self.prefix_words > 0 {
-            let tracked t = reg.tracked_unwrap();
-            unregister_page(self.control_ref(), page.addr(), Tracked(t));
-        }
+        let Tracked(dealloc) = if self.prefix_words > 0 {
+            unregister_page(self.control_ref(), page.addr(), Tracked(reg.tracked_unwrap()))
+        } else {
+            Tracked(dealloc.tracked_unwrap())
+        };
         dealloc_page(page as *mut u8, bytes, Tracked(raw), Tracked(dealloc));
         if refund {
             refund_pages(&self.control, bytes);

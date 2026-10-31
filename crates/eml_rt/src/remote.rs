@@ -260,12 +260,14 @@ pub(crate) fn sink_pending(sink: *const RemoteSink) -> bool {
 /// (T14)。
 pub(crate) uninterp spec fn foreign_view(core: Core, h: usize) -> Option<(u32, i32, bool)>;
 
-/// ほかのヒープのページのブロック `h` を読む (T14)。先に `control` のページの表を引き、なければメモリに触れずに `None`
-/// を返す。あれば前置きの状態の欄と rc と `lin` ビットを読む。検査モードの歩きが、どのスレッドもヒープのページに
+/// ほかのヒープのページのブロック `h` を読む (T14)。`control` は歩くヒープ `core` の `Control` である。先にその
+/// ページの表を引き、なければメモリに触れずに `None` を返す。あれば前置きの状態の欄と rc と `lin` ビットを読む。検査モードの歩きが、どのスレッドもヒープのページに
 /// 書かない時点でだけ呼ぶので、読む値はそのときの表とメモリの中身である。権限は返さない。
 #[verifier::external_body]
 pub(crate) fn foreign_header(control: &Control, h: *mut Header, Ghost(core): Ghost<Core>) -> (r:
     Option<(u32, i32, bool)>)
+    requires
+        control.ident() == core.pages.ctl_id(),
     ensures
         r == foreign_view(core, h@.addr),
 {
