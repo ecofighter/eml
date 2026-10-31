@@ -493,6 +493,8 @@ struct Mem {
 struct Entry {
     generation: u32,
     op: Option<InFlight>,
+    /// 1つ前の世代の要求の種類。届くはずのない完了が受けたソケットを運んでも、閉じられるようにする
+    last: Option<What>,
     mem: Box<Mem>,
 }
 
@@ -524,6 +526,7 @@ impl Ops {
                 self.entries.push(Entry {
                     generation: 0,
                     op: None,
+                    last: None,
                     mem: Box::new(Mem { addr, len: 0 }),
                 });
                 index
@@ -547,8 +550,17 @@ impl Ops {
         let entry = &mut self.entries[index as usize];
         let op = entry.op.take().expect("a live entry");
         entry.generation = entry.generation.wrapping_add(1);
+        entry.last = Some(op.what);
         self.free.push(index);
         op
+    }
+
+    /// `token` が、終わったばかりの1つ前の世代の受けを名指すか。
+    fn was_accept(&self, token: u64) -> bool {
+        let (index, generation) = untoken(token);
+        self.entries.get(index as usize).is_some_and(|e| {
+            e.last == Some(What::Accept) && e.generation == generation.wrapping_add(1)
+        })
     }
 
     fn in_flight(&self) -> impl Iterator<Item = &InFlight> {
@@ -652,7 +664,7 @@ impl Uring {
         let taken = loop {
             match ring.enter(ring.unsubmitted(), 0, ENTER_GETEVENTS, None) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                r => break r?,
+                r => break r.map_err(too_old)?,
             }
         };
         if taken != 1 {
@@ -846,13 +858,12 @@ impl Uring {
         if !matches!(start, Start::Pending(_)) {
             return start;
         }
-        // 接続は同期の試みを持たないので、ここで待たずに出す。`submit` が歩の1回の試みを OS に出すためである
-        // (docs/spec/vm.md の「時計と driver」)。ほかの歩は同期の試みを済ませているので、次の待ちでまとめて出す
+        // 接続は同期の試みを持たず、SYN が出るまで相手には何も見えないので、ここで待たずに出す。`submit` が歩の
+        // 1回の試みを OS に出すためである (docs/spec/vm.md の「時計と driver」)。ほかの歩は次の待ちでまとめて出す。
+        // 同期の試みを済ませたか、省いても相手が待たないためである (受けない接続は backlog で、読まないデータは受けの
+        // 列で待つ)
         let entered = loop {
-            match self
-                .ring
-                .enter(self.ring.unsubmitted(), 0, ENTER_GETEVENTS, None)
-            {
+            match self.ring.enter(self.ring.unsubmitted(), 0, 0, None) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 r => break r,
             }
@@ -892,6 +903,9 @@ impl Uring {
             token => {
                 let Some(index) = self.ops.live(token) else {
                     debug_assert!(false, "a completion names no operation");
+                    if self.ops.was_accept(token) {
+                        close_accepted(cqe.res);
+                    }
                     return;
                 };
                 let entry = &self.ops.entries[index as usize];
@@ -900,6 +914,9 @@ impl Uring {
                 let Some(r) = self.rows.live(op.row, op.row_generation) else {
                     // driver を落とすときに忘れた poll だけがここに来る。鍵はもう核にない
                     debug_assert_eq!(op.what, What::Peek);
+                    if op.what == What::Accept {
+                        close_accepted(cqe.res);
+                    }
                     return;
                 };
                 let waiter = if op.what.reads() {
@@ -965,6 +982,14 @@ impl Uring {
             self.complete(cqe, events);
         }
         self.ring.consumed(tail);
+    }
+}
+
+/// 渡す先のない受けの完了が運んだソケットを閉じる。
+fn close_accepted(res: i32) {
+    if res >= 0 {
+        // SAFETY: 受けの完了が返したばかりの fd で、ほかに持ち主はない。落とすと閉じる
+        drop(unsafe { OwnedFd::from_raw_fd(res) });
     }
 }
 
@@ -1383,6 +1408,17 @@ mod tests {
         assert_eq!(ops.live(old), None);
         assert_eq!(ops.live(new), Some(index));
         assert_eq!(ops.live(token(index + 1, 0)), None);
+        let accept = InFlight {
+            what: What::Accept,
+            ..op(3)
+        };
+        assert!(!ops.was_accept(new));
+        ops.finish(index);
+        assert!(!ops.was_accept(new));
+        let (index, newer) = ops.take(accept);
+        ops.finish(index);
+        assert!(ops.was_accept(newer));
+        assert!(!ops.was_accept(new));
     }
 
     #[test]
@@ -1772,8 +1808,10 @@ mod tests {
                 waker.wake();
             });
             let start = Instant::now();
-            u.wait(None, &mut Vec::new()).unwrap();
-            assert!(start.elapsed() >= Duration::from_millis(20));
+            u.wait(Some(LIMIT), &mut Vec::new()).unwrap();
+            let waited = start.elapsed();
+            assert!(waited >= Duration::from_millis(20));
+            assert!(waited < LIMIT, "the wake did not end the wait");
             waking.join().unwrap();
         }
     }
