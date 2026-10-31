@@ -418,3 +418,18 @@ fn checked_recovery_refuses_freed_objects_and_token_boxes() {
         ctx.take_roots();
     }
 }
+
+/// 検査モードでは、登録していないページ (ほかの `Control` のヒープのページ) を指す根を、ページの頭と前置きを読む前に
+/// 断り、根の表を変えない。
+#[test]
+fn checked_recovery_refuses_a_root_on_an_unregistered_page() {
+    let mut other = Heap::<Checked>::new();
+    let foreign = list(&mut other, 1);
+    let mut ctx = ctx::<Checked>();
+    unsafe { ctx.root_set(0, foreign) }.unwrap();
+    assert_eq!(unsafe { ctx.recover() }, Err(HeapError::UnknownPage));
+    assert_eq!(ctx.take_roots(), vec![Some(foreign)]);
+    unsafe { other.decref(foreign) }.unwrap();
+    assert_eq!(mortal(&mut other), 0);
+    assert_eq!(mortal(&mut ctx), 0);
+}

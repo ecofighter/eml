@@ -1149,6 +1149,51 @@ fn reclaim_changes_no_owner_count_and_no_work_counter() {
     drop(b);
 }
 
+// (g) 回復は、根から届くほかのヒープのページの物体を写す。ヒープ 1 のスレッドが ID `child` で作った値と共有の文字列を
+// ヒープ 0 の根に置き、ヒープ 1 はヒープ 0 の共有のリストを空けて積んだままにする。回復が先に取り込み、写した後で
+// ヒープ 1 を落としても、根は写しを指すので読める (docs/spec/object-model.md の「回復」)
+fn recovery_copies_from_another_heaps_pages<M: Mode>() {
+    let mut ctx = ctx_tests::ctx::<M>();
+    let (child, zs) = unsafe { (ctx.heap_mut().fork_worker(), shared_list(ctx.heap_mut(), 4)) };
+    let b = Heap::<M>::with_control(ctx.heap().control().clone());
+    let (b, top, s) = std::thread::spawn(move || {
+        let mut b = b;
+        unsafe { b.decref(zs) }.unwrap();
+        let s = b.alloc_string("shared on b");
+        unsafe { b.share(s, 0) }.unwrap();
+        b.set_worker(child);
+        let name = b.alloc_string("on b");
+        let xs = list(&mut b, 3);
+        let top = cons(&mut b, name, xs);
+        b.set_worker(0);
+        (b, top, s)
+    })
+    .join()
+    .unwrap();
+    unsafe {
+        ctx.heap_mut().transfer_back(top, child).unwrap();
+        ctx.root_set(0, top).unwrap();
+        ctx.root_set(1, s).unwrap();
+        ctx.recover().unwrap();
+    }
+    drop(b);
+    unsafe {
+        let top = ctx.root_get(0).unwrap();
+        let name = ctx.heap().field(top, 0).unwrap();
+        assert_eq!(text(ctx.heap(), name), "on b");
+        let xs = ctx.heap().field(top, 1).unwrap();
+        assert_eq!(cells(ctx.heap(), xs).len(), 3);
+        ctx.heap_mut().decref(top).unwrap();
+        let s = ctx.root_get(1).unwrap();
+        assert_eq!(text(ctx.heap(), s), "shared on b");
+        ctx.heap_mut().decref(s).unwrap();
+    }
+    for w in ctx.take_roots().into_iter().flatten() {
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    }
+    assert_eq!(mortal(&mut ctx), 0);
+}
+
 /// 検査モードのヒープ。速いモードなら `None`。
 fn as_checked<M: Mode>(heap: &mut Heap<M>) -> Option<&mut Heap<Checked>> {
     (heap as &mut dyn std::any::Any).downcast_mut::<Heap<Checked>>()
@@ -2324,6 +2369,7 @@ both_modes!(
     the_owner_carves_while_another_thread_reads_and_frees,
     the_receiver_rewrites_reuses_and_frees_a_moved_lin_object,
     a_lin_part_moves_to_another_thread_and_back,
+    recovery_copies_from_another_heaps_pages,
     println_goes_through_the_host,
     borrowed_lines_cross_the_buffer,
     borrowed_reads_cross_the_buffer_and_fail,

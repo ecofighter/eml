@@ -2320,7 +2320,7 @@ impl<M: Mode> Ctx<M> {
             *self == (Ctx { heap: self.heap, ..c1 }),
             self.heap.wf(),
             self.heap.reclaimed(c1.heap, held),
-            held == c0.held_set(),
+            c0.held_set().subset_of(held),
         ensures
             self.wf(),
             self.evv_spec() == c0.evv_spec(),
@@ -2334,6 +2334,7 @@ impl<M: Mode> Ctx<M> {
         assert forall|w: Word|
             w == c0.evv || w == c0.yielding.target || w == c0.yielding.clause || w
                 == c0.yielding.cont implies #[trigger] h2.word_in(w) by {
+            assert(c0.held_set().contains(w.bits_spec()));
             assert(held.contains(w.bits_spec()));
             assert(h1.core.word_ok(w));
         }
@@ -2361,6 +2362,7 @@ impl<M: Mode> Ctx<M> {
             );
             assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies c0.need(seq![], b)
                 + d(b) >= self.need(seq![], b) by {
+                assert(c0.held_set().contains(b));
                 assert(held.contains(b));
                 if h1.core.dom().contains(b) && !r.contains(b) {
                     assert(h2.core.indeg(b) <= h1.core.indeg(b));

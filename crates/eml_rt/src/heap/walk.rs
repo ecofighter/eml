@@ -836,7 +836,8 @@ impl<M: Mode> Heap<M> {
                     == self.core.block(stack@[i]@.addr),
     {
         let mut stack = stack;
-        // 取り出すたびに `seen` に新しい番地を足すか誤りを返すので、この上限には届かない。Verus に終わりを示すための数
+        // 積むのは最初の `stack` の物体と、`seen` に入れたばかりの物体の子だけで、同じ番地を `seen` に2度は入れないので、
+        // 取り出す数には限りがあり、この上限には届かない。Verus に終わりを示すための数
         let mut pops: usize = 0;
         while !stack.is_empty()
             invariant
@@ -962,6 +963,8 @@ impl<M: Mode> Heap<M> {
     }
 }
 
+// 落とすときは、ほかのヒープのページにも `RemoteSink` にも触れず、`decref` もしない。ほかのヒープを生かしたまま
+// 回復した後で、ヒープを好きな順に落とせるのはこのためである (docs/spec/object-model.md の「回復」)
 impl<M: Mode> Drop for Heap<M> {
     fn drop(&mut self) {
         // 取り込んだブロックは、空けたスレッドが破棄処理を呼んである。取り込まずに歩くと、もう一度呼んでしまう

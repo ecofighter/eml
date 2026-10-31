@@ -1127,6 +1127,23 @@ impl<M: Mode> Ctx<M> {
         ]
     }
 
+    /// 根の表の語の番地。空の項目は 0 にする。0 はどのブロックの番地でもない。
+    spec fn root_bits(&self) -> Seq<usize> {
+        self.roots@.map_values(
+            |o: Option<Word>|
+                match o {
+                    Some(w) => w.bits_spec(),
+                    None => 0,
+                },
+        )
+    }
+
+    /// `Ctx` の持つ語と根の表の語が指す物体の番地。回復は、先にほかのスレッドから受けた解放を取り込むが、この番地の
+    /// 物体は空けたことにしない。
+    pub closed spec fn kept_set(&self) -> Set<usize> {
+        self.held_set().union(self.root_bits().to_set())
+    }
+
     fn reclaim_when(&mut self, due: bool) -> (r: bool)
         requires
             old(self).wf(),
