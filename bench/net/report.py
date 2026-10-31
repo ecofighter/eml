@@ -230,22 +230,29 @@ for label in labels:
         s = r["data"][0]["stats"]
         print(f"| {c} | {r['n_small']} {r['unit']} | " + " | ".join(fmt((s[k] - bs[k]) / r["n_small"]) for k in present) + " |")
 
-if len(labels) >= 2:
-    a, b = labels[0], labels[1]
+# 1つ目のラベルを前とし、ほかのラベルをそれぞれ後として比べる
+for b in labels[1:]:
+    a = labels[0]
     print(f"\n## 比べ: {a} → {b} (CPU の中央値、床を引いて単位あたり µs)\n")
-    print(f"| 件 | {a} | {b} | 比 | 四分位の重なり | 判定 | 実時間の比 |")
-    print("|---|---|---|---|---|---|---|")
+    print(f"| 件 | {a} | {b} | 比 | 生の CPU の比 | 四分位の重なり | 判定 | minflt/単位の差 | 確保の揺れ | 実時間の比 |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     for c in cases:
         ra, rb = get.get((c, a, "time")), get.get((c, b, "time"))
-        if not ra or not rb or c == "base":
+        if not ra or not rb:
             continue
         n = ra["n_big"]
-        pa = (st.median(cpu(x) for x in ra["data"]) - base_med(a, cpu)) / n * 1e6
-        pb = (st.median(cpu(x) for x in rb["data"]) - base_med(b, cpu)) / n * 1e6
+        floor = c != "base"
+        ca, cb = st.median(cpu(x) for x in ra["data"]), st.median(cpu(x) for x in rb["data"])
+        pa = (ca - (base_med(a, cpu) if floor else 0)) / n * 1e6
+        pb = (cb - (base_med(b, cpu) if floor else 0)) / n * 1e6
         qa, qb = q([cpu(x) for x in ra["data"]]), q([cpu(x) for x in rb["data"]])
         overlap = not (qa[1] < qb[0] or qb[1] < qa[0])
         ratio = pb / pa if pa else float("nan")
         verdict = "差" if (ratio <= 0.90 or ratio >= 1.10) and not overlap else "差なし"
-        wa = st.median(x["wall"] for x in ra["data"]) - base_med(a, lambda x: x["wall"])
-        wb = st.median(x["wall"] for x in rb["data"]) - base_med(b, lambda x: x["wall"])
-        print(f"| {c} | {pa:.2f} | {pb:.2f} | {ratio:.2f} | {'重なる' if overlap else '重ならない'} | {verdict} | {wb / wa:.2f} |")
+        mf = lambda r, l: (st.median(x["minflt"] for x in r["data"]) - (base_med(l, lambda x: x["minflt"]) if floor else 0)) / n
+        dm = mf(rb, b) - mf(ra, a)
+        wa = st.median(x["wall"] for x in ra["data"]) - (base_med(a, lambda x: x["wall"]) if floor else 0)
+        wb = st.median(x["wall"] for x in rb["data"]) - (base_med(b, lambda x: x["wall"]) if floor else 0)
+        # 印は「比べる規則」の「確保の揺れ」で、判定を読む人が時間の判定から外す
+        print(f"| {c} | {pa:.2f} | {pb:.2f} | {ratio:.3f} | {cb / ca:.3f} | {'重なる' if overlap else '重ならない'} | {verdict} | "
+              f"{dm:.2f} | {'印' if floor and abs(dm) >= 1 else ''} | {wb / wa:.2f} |")
