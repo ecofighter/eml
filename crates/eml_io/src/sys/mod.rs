@@ -15,10 +15,13 @@ mod kqueue;
 #[cfg(unix)]
 mod unix;
 
+// readiness 型の backend。Linux ではほかの backend と並べて選ぶので、別名で名指せるようにする
 #[cfg(target_os = "linux")]
-pub(crate) type Os = unix::Unix<epoll::Epoll>;
+type Readiness = unix::Unix<epoll::Epoll>;
 #[cfg(target_vendor = "apple")]
-pub(crate) type Os = unix::Unix<kqueue::Kqueue>;
+type Readiness = unix::Unix<kqueue::Kqueue>;
+#[cfg(unix)]
+pub(crate) type Os = Readiness;
 #[cfg(windows)]
 pub(crate) type Os = iocp::Iocp;
 #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]

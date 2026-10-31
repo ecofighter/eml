@@ -20,16 +20,16 @@ use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Sta
 /// 起こしの識別子。行 `u32::MAX` は作らないので、どの行の識別子とも重ならない。
 pub(super) const WAKE: u64 = u64::MAX;
 
-const BACKLOG: c_int = 1024;
+pub(super) const BACKLOG: c_int = 1024;
 
 // ソケットは作るときに非ブロックにするが、旗でも重ねて守る。旗は syscall を増やさない
-const RECV: c_int = libc::MSG_DONTWAIT;
-const PEEK: c_int = libc::MSG_PEEK | libc::MSG_DONTWAIT;
+pub(super) const RECV: c_int = libc::MSG_DONTWAIT;
+pub(super) const PEEK: c_int = libc::MSG_PEEK | libc::MSG_DONTWAIT;
 #[cfg(target_os = "linux")]
-const SEND: c_int = libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT;
+pub(super) const SEND: c_int = libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT;
 // Apple はソケットに SO_NOSIGPIPE を立てる (docs/spec/vm.md の「時計と driver」)
 #[cfg(target_vendor = "apple")]
-const SEND: c_int = libc::MSG_DONTWAIT;
+pub(super) const SEND: c_int = libc::MSG_DONTWAIT;
 
 /// 1つの event が起こす向き。`fresh` は、読みの知らせが取り出した時点で読めることを poller が保証するとき真である。
 #[derive(Clone, Copy)]
@@ -57,9 +57,9 @@ pub(crate) trait Poller: Sized {
 
 /// 核が持つソケット。核は中を見ず、`fd` を閉じるのは `Backend::close` だけである。
 pub(crate) struct Sock {
-    fd: OwnedFd,
-    row: u32,
-    generation: u32,
+    pub(super) fd: OwnedFd,
+    pub(super) row: u32,
+    pub(super) generation: u32,
 }
 
 #[derive(Default)]
@@ -165,7 +165,7 @@ pub(super) fn syscall<T: Copy + PartialEq + From<i8>>(mut f: impl FnMut() -> T) 
     }
 }
 
-fn would_block(e: &io::Error) -> bool {
+pub(super) fn would_block(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::WouldBlock
 }
 
@@ -203,7 +203,7 @@ fn write_result(r: &mut Row, key: OpKey, result: io::Result<Outcome<Sock>>) -> S
 }
 
 /// 貸された記憶へ受ける。`RawBuf` のポインタを読むのはこの関数と `send_raw` だけで、slice は作らない。
-fn recv_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> {
+pub(super) fn recv_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> {
     // SAFETY: `RawBuf` の約束 (docs/spec/vm.md の「時計と driver」) により、`start` の間 `buf` は `cap` バイトの一意の
     // 記憶を指す。カーネルは `cap` バイトまでしか書かず、呼び出しは同期なので、戻った後にポインタを持たない
     let n = syscall(|| unsafe { libc::recv(fd.as_raw_fd(), buf.ptr.cast(), buf.cap, flags) })?;
@@ -211,14 +211,19 @@ fn recv_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> 
 }
 
 /// 貸された記憶から送る。
-fn send_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> {
+pub(super) fn send_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> {
     // SAFETY: `RawBuf` の約束により、`start` の間 `buf` は `cap` バイトの読める記憶を指す。カーネルは読むだけで、
     // 呼び出しは同期である
     let n = syscall(|| unsafe { libc::send(fd.as_raw_fd(), buf.ptr.cast(), buf.cap, flags) })?;
     Ok(n as usize)
 }
 
-fn setsockopt_int(fd: BorrowedFd<'_>, level: c_int, name: c_int, value: c_int) -> io::Result<()> {
+pub(super) fn setsockopt_int(
+    fd: BorrowedFd<'_>,
+    level: c_int,
+    name: c_int,
+    value: c_int,
+) -> io::Result<()> {
     // SAFETY: 値は局所の `c_int` で、その大きさを渡す。カーネルは読むだけである
     syscall(|| unsafe {
         libc::setsockopt(
@@ -249,7 +254,7 @@ fn getsockopt_int(fd: BorrowedFd<'_>, level: c_int, name: c_int) -> io::Result<c
 }
 
 /// `getsockname` か `getpeername` で読んだ番地。IP の番地でなければ `None`。
-fn name_of(fd: BorrowedFd<'_>, peer: bool) -> io::Result<Option<SocketAddr>> {
+pub(super) fn name_of(fd: BorrowedFd<'_>, peer: bool) -> io::Result<Option<SocketAddr>> {
     // SAFETY: `sockaddr_storage` は整数と配列だけの C の構造体で、すべて 0 は正しい値である
     let mut storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
     let mut len = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
@@ -265,7 +270,7 @@ fn name_of(fd: BorrowedFd<'_>, peer: bool) -> io::Result<Option<SocketAddr>> {
 
 /// ブロックせず、exec で閉じる TCP のソケット。
 #[cfg(target_os = "linux")]
-fn stream_socket(addr: &SocketAddr) -> io::Result<OwnedFd> {
+pub(super) fn stream_socket(addr: &SocketAddr) -> io::Result<OwnedFd> {
     let domain = if addr.is_ipv4() {
         libc::AF_INET
     } else {
@@ -279,7 +284,7 @@ fn stream_socket(addr: &SocketAddr) -> io::Result<OwnedFd> {
 }
 
 #[cfg(target_vendor = "apple")]
-fn stream_socket(addr: &SocketAddr) -> io::Result<OwnedFd> {
+pub(super) fn stream_socket(addr: &SocketAddr) -> io::Result<OwnedFd> {
     let domain = if addr.is_ipv4() {
         libc::AF_INET
     } else {
@@ -307,7 +312,7 @@ fn prepare(fd: BorrowedFd<'_>) -> io::Result<()> {
 
 /// 待ち行列から1本受ける。受けたソケットはブロックせず、exec で閉じる。
 #[cfg(target_os = "linux")]
-fn accept_raw(
+pub(super) fn accept_raw(
     fd: BorrowedFd<'_>,
     storage: &mut libc::sockaddr_storage,
     len: &mut libc::socklen_t,
@@ -322,7 +327,7 @@ fn accept_raw(
 }
 
 #[cfg(target_vendor = "apple")]
-fn accept_raw(
+pub(super) fn accept_raw(
     fd: BorrowedFd<'_>,
     storage: &mut libc::sockaddr_storage,
     len: &mut libc::socklen_t,
@@ -339,7 +344,7 @@ fn accept_raw(
 
 /// 来ていた接続1本だけの誤りで、accept(2) が試し直せと挙げるもの。核の受けの出し直しに乗せる。
 #[cfg(target_os = "linux")]
-fn transient(e: &io::Error) -> bool {
+pub(super) fn transient(e: &io::Error) -> bool {
     matches!(
         e.raw_os_error(),
         Some(
@@ -357,18 +362,18 @@ fn transient(e: &io::Error) -> bool {
 
 /// Apple の accept(2) はこの勧めを持たず、`ECONNABORTED` だけが一時の誤りである。
 #[cfg(target_vendor = "apple")]
-fn transient(_: &io::Error) -> bool {
+pub(super) fn transient(_: &io::Error) -> bool {
     false
 }
 
 /// C の番地の構造体。`as_ptr` の間だけ生かして OS に渡す。
-enum RawAddr {
+pub(super) enum RawAddr {
     V4(libc::sockaddr_in),
     V6(libc::sockaddr_in6),
 }
 
 impl RawAddr {
-    fn new(addr: SocketAddr) -> RawAddr {
+    pub(super) fn new(addr: SocketAddr) -> RawAddr {
         match addr {
             SocketAddr::V4(a) => {
                 // SAFETY: `sockaddr_in` は整数だけの C の構造体で、すべて 0 は正しい値である
@@ -404,7 +409,7 @@ impl RawAddr {
         }
     }
 
-    fn as_ptr(&self) -> (*const libc::sockaddr, libc::socklen_t) {
+    pub(super) fn as_ptr(&self) -> (*const libc::sockaddr, libc::socklen_t) {
         match self {
             RawAddr::V4(s) => (
                 (s as *const libc::sockaddr_in).cast(),
@@ -418,7 +423,7 @@ impl RawAddr {
     }
 }
 
-fn from_storage(s: &libc::sockaddr_storage, len: libc::socklen_t) -> Option<SocketAddr> {
+pub(super) fn from_storage(s: &libc::sockaddr_storage, len: libc::socklen_t) -> Option<SocketAddr> {
     match c_int::from(s.ss_family) {
         libc::AF_INET if len as usize >= size_of::<libc::sockaddr_in>() => {
             // SAFETY: 族が AF_INET で長さが足りる。`sockaddr_storage` は `sockaddr_in` より大きく、整列も強い
@@ -713,7 +718,7 @@ mod tests {
 
     use super::*;
 
-    type Os = crate::sys::Os;
+    type Os = crate::sys::Readiness;
 
     const LIMIT: Duration = Duration::from_secs(1);
 
