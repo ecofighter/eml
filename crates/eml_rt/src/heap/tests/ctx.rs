@@ -275,7 +275,7 @@ fn switch_task_exchanges_lists_and_workers_without_rc_work<M: Mode>() {
     }
     clear(&mut ctx);
     assert!(ctx.check_finished());
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 fn dropping_a_ctx_mid_yield<M: Mode>() {
@@ -378,7 +378,7 @@ fn clauses_states_and_outer_lists<M: Mode>() {
     }
     clear(&mut ctx);
     assert!(ctx.check_finished());
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// 操作が 255 個以上のエフェクトのエントリの表は、先頭に数の語を持つ (docs/spec/object-model.md の「物体の形」)。
@@ -395,7 +395,7 @@ fn entry_tables_with_a_count_word<M: Mode>() {
         ctx.heap_mut().decref(ev).unwrap();
     }
     clear(&mut ctx);
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// 状態が ev 自身に届く場合 (EP が出すコードでは起きないが、契約はそれに頼らない。docs/spec/object-model.md の
@@ -415,7 +415,7 @@ fn replacing_a_state_that_reaches_its_evidence<M: Mode>() {
         ctx.heap_mut().decref(ev).unwrap();
     }
     clear(&mut ctx);
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 fn bad_evidence_is_reported_in_checked_mode<M: Mode>() {
@@ -481,7 +481,7 @@ fn a_push_past_the_evv_limit_is_bad_evidence<M: Mode>() {
         ctx.heap_mut().decref(ev).unwrap();
     }
     assert!(ctx.check_finished());
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// `w` のリストの節点と evidence を先頭から並べる。節点は `field(node, 0)` が evidence、`field(node, 1)` が次である。
@@ -520,7 +520,7 @@ fn lookups_and_masks_count_the_list_nodes_they_visit<M: Mode>() {
         }
     }
     clear(&mut ctx);
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// evv は先頭から 0、1、1、0 のエフェクトの evidence である。各項目のエフェクトについて、先頭から合う evidence を
@@ -555,7 +555,7 @@ fn a_mask_skips_the_first_matches_of_each_item<M: Mode>() {
         }
     }
     clear(&mut ctx);
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// evv は先頭から 0、1、1、0、1 のエフェクトの evidence である。エフェクト 1 の先頭の1つを残し、次の1つを除く。
@@ -590,7 +590,7 @@ fn a_mask_keeps_the_first_matches_before_it_skips<M: Mode>() {
         }
     }
     clear(&mut ctx);
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// 同じエフェクトの項目が2つあれば、先の項目だけを使う。
@@ -610,7 +610,7 @@ fn a_second_item_of_the_same_effect_is_ignored<M: Mode>() {
         }
     }
     clear(&mut ctx);
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 fn a_mask_that_skips_more_evidence_than_the_list_holds<M: Mode>() {
@@ -631,10 +631,10 @@ fn a_refused_mask<M: Mode>(items: &[MaskItem]) {
     let _e1 = push(&mut ctx, 1, 1);
     unsafe {
         let list = ctx.evv_get().unwrap();
-        let before = super::mortal(ctx.heap());
+        let before = super::mortal(&mut ctx);
         assert_eq!(ctx.evv_mask(items, list).unwrap_err(), HeapError::NoHandler);
         // 確保の前に断るので、写しは残らず、たどった数も数えない
-        assert_eq!(super::mortal(ctx.heap()), before);
+        assert_eq!(super::mortal(&mut ctx), before);
         assert_eq!(ctx.stats().evidence_steps, 0);
     }
 }
@@ -683,7 +683,7 @@ fn perform_in_place<M: Mode>() {
         ctx.heap_mut().decref(ev).unwrap();
     }
     assert!(ctx.check_finished());
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// yield して継続を組み立て、再開する1往復。
@@ -712,7 +712,7 @@ fn yield_and_resume_once<M: Mode>() {
     }
     clear(&mut ctx);
     assert!(ctx.check_finished());
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// 物体でない宛先には yield できず、yield の状態はなしのままである。
@@ -762,7 +762,7 @@ fn a_refused_yield_operation_keeps_the_state<M: Mode>() {
         ctx.heap_mut().decref(other).unwrap();
     }
     assert!(ctx.check_finished());
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// evidence でない物体と、上限に達したリストには節点を足せない。確かめは確保の前なので、引数は呼ぶ側が持ったままである。
@@ -790,7 +790,7 @@ fn a_refused_push_keeps_its_arguments<M: Mode>() {
         }
     }
     clear(&mut ctx);
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// 共有にした evidence の状態の欄は書けない (docs/spec/lir.md の「evidence」)。欄は元の値のままで、物体も増減しない。
@@ -803,7 +803,7 @@ fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
     unsafe {
         ctx.ev_set_state(ev, Word::imm(5)).unwrap();
         ctx.heap_mut().share(ev, 1).unwrap();
-        let before = super::mortal(ctx.heap());
+        let before = super::mortal(&mut ctx);
         assert_eq!(ctx.ev_take_state(ev).unwrap_err(), HeapError::NotWritable);
         assert_eq!(ctx.heap().field(ev, 1), Ok(Word::imm(5)));
         assert_eq!(
@@ -811,7 +811,7 @@ fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
             HeapError::NotWritable
         );
         assert_eq!(ctx.heap().field(ev, 1), Ok(Word::imm(5)));
-        assert_eq!(super::mortal(ctx.heap()), before);
+        assert_eq!(super::mortal(&mut ctx), before);
     }
 }
 
@@ -841,7 +841,7 @@ fn taking_the_outer_list_leaves_a_retired_evidence<M: Mode>() {
         }
     }
     assert!(ctx.check_finished());
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// 共有にした evidence の外側の欄は書けない。欄は元の値のままで、物体も増減しない。
@@ -855,10 +855,10 @@ fn the_outer_list_of_a_shared_evidence_is_not_writable<M: Mode>() {
     let ev = push(&mut ctx, 1, 1);
     unsafe {
         ctx.heap_mut().share(ev, 1).unwrap();
-        let before = super::mortal(ctx.heap());
+        let before = super::mortal(&mut ctx);
         assert_eq!(ctx.ev_take_evv(ev).unwrap_err(), HeapError::NotWritable);
         assert_eq!(ctx.heap().field(ev, 2), Ok(outer));
-        assert_eq!(super::mortal(ctx.heap()), before);
+        assert_eq!(super::mortal(&mut ctx), before);
     }
 }
 
@@ -878,7 +878,7 @@ fn evv_word_reads_the_list_without_rc_work<M: Mode>() {
         ctx.heap_mut().decref(ev).unwrap();
     }
     assert!(ctx.check_finished());
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 both_modes!(

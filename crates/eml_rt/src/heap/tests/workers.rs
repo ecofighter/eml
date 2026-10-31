@@ -11,7 +11,7 @@ type H = Heap<Checked>;
 const CONS_META: Meta = Meta::new(CONS, 2, Kind::Data, false);
 
 /// 数が `expected` のとおりで、数え直しも通る。
-fn assert_owned(heap: &H, expected: &[(u32, u64)]) {
+fn assert_owned(heap: &mut H, expected: &[(u32, u64)]) {
     for &(id, n) in expected {
         assert_eq!(heap.owned_by(id), n, "worker {id}");
     }
@@ -26,17 +26,17 @@ fn the_size_of_heap_error_stays_at_twelve_bytes() {
 #[test]
 fn counts_follow_allocation_and_release() {
     let mut heap = H::new();
-    assert_owned(&heap, &[(0, 0)]);
+    assert_owned(&mut heap, &[(0, 0)]);
     let l = list(&mut heap, 3);
-    assert_owned(&heap, &[(0, 3)]);
+    assert_owned(&mut heap, &[(0, 3)]);
     let s = heap.alloc_string("a");
-    assert_owned(&heap, &[(0, 4)]);
+    assert_owned(&mut heap, &[(0, 4)]);
     unsafe {
         heap.decref(l).unwrap();
-        assert_owned(&heap, &[(0, 1)]);
+        assert_owned(&mut heap, &[(0, 1)]);
         heap.decref(s).unwrap();
     }
-    assert_owned(&heap, &[(0, 0)]);
+    assert_owned(&mut heap, &[(0, 0)]);
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn immortal_objects_are_not_counted() {
     let mut heap = H::new();
     let w = heap.alloc_string_immortal("literal");
     let _ = unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false)) };
-    assert_owned(&heap, &[(0, 0)]);
+    assert_owned(&mut heap, &[(0, 0)]);
     let _ = w;
 }
 
@@ -54,10 +54,10 @@ fn a_string_that_grows_by_copying_keeps_its_count() {
     let mut w = heap.alloc_string("a");
     for _ in 0..8 {
         w = unsafe { heap.string_push(w, "0123456789abcdef") }.unwrap();
-        assert_owned(&heap, &[(0, 1)]);
+        assert_owned(&mut heap, &[(0, 1)]);
     }
     unsafe { heap.decref(w) }.unwrap();
-    assert_owned(&heap, &[(0, 0)]);
+    assert_owned(&mut heap, &[(0, 0)]);
 }
 
 #[test]
@@ -66,13 +66,13 @@ fn objects_count_for_the_worker_that_allocated_them() {
     let a = list(&mut heap, 1);
     heap.set_worker(3);
     let b = list(&mut heap, 2);
-    assert_owned(&heap, &[(0, 1), (3, 2)]);
+    assert_owned(&mut heap, &[(0, 1), (3, 2)]);
     unsafe {
         heap.decref(b).unwrap();
         heap.set_worker(0);
         heap.decref(a).unwrap();
     }
-    assert_owned(&heap, &[(0, 0), (3, 0)]);
+    assert_owned(&mut heap, &[(0, 0), (3, 0)]);
 }
 
 /// token の間は持ち主のまま数え、使い回すと今の worker の数に移る。
@@ -82,22 +82,22 @@ fn a_token_round_trip_moves_the_count_to_the_rebuilding_worker() {
     let cell = cons(&mut heap, Word::imm(1), Word::imm(0));
     unsafe {
         let token = heap.release_reuse(cell, CONS, &[false, false]).unwrap();
-        assert_owned(&heap, &[(0, 1)]);
+        assert_owned(&mut heap, &[(0, 1)]);
         heap.set_worker(2);
         let (q, reused) = heap.con_at(token, 2, CONS_META).unwrap();
         assert!(reused);
         heap.set_field(q, 0, Word::UNIT).unwrap();
         heap.set_field(q, 1, Word::UNIT).unwrap();
-        assert_owned(&heap, &[(0, 0), (2, 1)]);
+        assert_owned(&mut heap, &[(0, 0), (2, 1)]);
         let token = heap.release_reuse(q, CONS, &[false, false]).unwrap();
         heap.set_worker(0);
         let q = heap.reuse_in_place(token, CONS_META).unwrap();
-        assert_owned(&heap, &[(0, 1), (2, 0)]);
+        assert_owned(&mut heap, &[(0, 1), (2, 0)]);
         let token = heap.into_token(q).unwrap();
-        assert_owned(&heap, &[(0, 1)]);
+        assert_owned(&mut heap, &[(0, 1)]);
         heap.drop_token(token).unwrap();
     }
-    assert_owned(&heap, &[(0, 0), (2, 0)]);
+    assert_owned(&mut heap, &[(0, 0), (2, 0)]);
 }
 
 /// 印を付けた物体は数から外れ、所有を移す物体は受け手の数に移る。
@@ -108,14 +108,14 @@ fn share_takes_marked_objects_out_and_moves_lin_objects() {
     let lin = heap.alloc_data(0, 1, 0, true);
     unsafe {
         heap.set_field(lin, 0, child).unwrap();
-        assert_owned(&heap, &[(0, 3)]);
+        assert_owned(&mut heap, &[(0, 3)]);
         heap.share(lin, 7).unwrap();
-        assert_owned(&heap, &[(0, 0), (7, 3)]);
+        assert_owned(&mut heap, &[(0, 0), (7, 3)]);
         heap.set_worker(7);
         heap.decref(lin).unwrap();
     }
-    assert_owned(&heap, &[(0, 0), (7, 0)]);
-    assert_eq!(mortal(&heap), 0);
+    assert_owned(&mut heap, &[(0, 0), (7, 0)]);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 #[test]
@@ -128,12 +128,12 @@ fn a_count_that_disagrees_with_the_heap_is_reported() {
         // 数を通さずに共有の印を付ける
         raw::set_rc(&mut heap, w, -1);
         assert_eq!(
-            super::check_all(&heap),
+            super::check_all(&mut heap),
             Err(HeapError::OwnedMiscount { worker: 4 })
         );
         raw::set_rc(&mut heap, w, 1);
     }
-    assert_eq!(super::check_all(&heap), Ok(()));
+    assert_eq!(super::check_all(&mut heap), Ok(()));
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn a_miscount_past_the_table_is_reported() {
         raw::set_prefix_first(&mut heap, w, 9);
     }
     assert_eq!(
-        super::check_all(&heap),
+        super::check_all(&mut heap),
         Err(HeapError::OwnedMiscount { worker: 9 })
     );
 }
@@ -346,7 +346,7 @@ fn a_miscount_past_every_chunk_is_reported() {
         raw::set_prefix_first(&mut heap, w, 5000);
     }
     assert_eq!(
-        super::check_all(&heap),
+        super::check_all(&mut heap),
         Err(HeapError::OwnedMiscount { worker: 5000 })
     );
 }
@@ -383,7 +383,7 @@ fn recovery_resets_the_table() {
         ctx.recover().unwrap();
     }
     assert_eq!((ctx.heap().owned_by(0), ctx.heap().owned_by(child)), (1, 0));
-    assert_eq!(super::check_all(ctx.heap()), Ok(()));
+    assert_eq!(super::check_all(&mut ctx), Ok(()));
     unsafe {
         assert_eq!(ctx.heap_mut().fork_worker(), child);
         for w in ctx.take_roots().into_iter().flatten() {

@@ -20,7 +20,7 @@ use crate::heap::TOO_LARGE;
 use crate::meta::{BlockPerm, HEADER_WORDS, Header, meta_ptr, slot_ptr};
 #[cfg(verus_only)]
 use crate::meta::{field_ptr, lemma_word_layout};
-use crate::remote::{RemoteSink, page_sink_of, sink_ptr};
+use crate::remote::{RemoteSink, page_sink_of, sink_new};
 use crate::word::Word;
 
 verus! {
@@ -102,7 +102,7 @@ exec const CLASS_OF: [u8; 129]
 }
 
 /// 大きい物体のページの級。
-const LARGE: u32 = 0xFFFF_FFFF;
+pub(crate) const LARGE: u32 = 0xFFFF_FFFF;
 
 /// `Layout` が受け付けるページの大きさの上限 (`isize::MAX` を `PAGE_BYTES` に揃えて切り下げたもの)。
 const MAX_PAGE_BYTES: usize = 0x7FFF_FFFF_FFFF_0000;
@@ -128,13 +128,13 @@ fn class_of(block_words: usize) -> (r: Option<usize>)
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct PageHeader {
-    class: u32,
+    pub(crate) class: u32,
     block_words: u32,
     /// 持ち主のヒープの `RemoteSink`。凍結した領域のページでは null である。ブロックがどのヒープのものかを、この欄の
     /// 1回の比較で見分ける。
     pub(crate) sink: *const RemoteSink,
     /// `alloc` に渡した大きさ。
-    bytes: usize,
+    pub(crate) bytes: usize,
 }
 
 global layout PageHeader is size == 24, align == 8;
@@ -180,10 +180,10 @@ pub(crate) proof fn lemma_header_size()
 const STATE_AT: usize = 24;
 
 /// 遠隔の空きリストの語の位置。
-const REMOTE_AT: usize = 40;
+pub(crate) const REMOTE_AT: usize = 40;
 
 /// 最初のブロックの位置。ページの頭の3つの部分の大きさの和である。
-const FIRST_BLOCK: usize = 48;
+pub(crate) const FIRST_BLOCK: usize = 48;
 
 /// ページの頭 `hdr` の `sink`。
 pub(crate) closed spec fn header_sink(hdr: PageHeader) -> *const RemoteSink {
@@ -219,9 +219,8 @@ pub(crate) struct Pages {
     // 計測のプログラムのコード生成単位の分け方が変わり、文字列の操作と `release` が呼ぶ側に展開されなくなったためである
     // (`Heap` の `region` の欄と同じ。docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     control: ManuallyDrop<Arc<Control>>,
-    /// 別のスレッドからの解放を受ける先。`Heap` が動いても番地が変わらないように `Box` に置く。
-    remote_sink: Box<RemoteSink>,
-    /// `remote_sink` の番地。どのページの頭にもこの値を書き、ブロックの持ち主をこの値との比較で見分ける。
+    /// 別のスレッドからの解放を受ける先 (`RemoteSink`) の番地。`sink_new` で作り、`Drop` で手放す。どのページの頭にも
+    /// この値を書き、ブロックの持ち主をこの値との比較で見分ける。
     sink: *const RemoteSink,
     list: Vec<*mut PageHeader>,
     classes: [Class; 27],
@@ -945,12 +944,10 @@ impl Pages {
             cursor: ptr::null_mut(),
             end: ptr::null_mut(),
         };
-        let remote_sink = Box::new(RemoteSink::new());
-        let sink = sink_ptr(&remote_sink);
+        let sink = sink_new();
         let r = Pages {
             prefix_words,
             control: ManuallyDrop::new(control),
-            remote_sink,
             sink,
             list: Vec::new(),
             classes: [empty;27],
@@ -1082,8 +1079,12 @@ impl Pages {
         &self.control
     }
 
-    pub(crate) fn remote_sink(&self) -> &RemoteSink {
-        &self.remote_sink
+    pub(crate) fn sink(&self) -> *const RemoteSink {
+        self.sink
+    }
+
+    pub(crate) fn prefix_words(&self) -> usize {
+        self.prefix_words
     }
 
     #[inline]
@@ -1199,7 +1200,7 @@ impl Pages {
                 ==> r,
             header_sink(hdr.value())@.addr == 0 ==> !r,
     {
-        let r = page_sink_of(h, Tracked(hdr)).addr() == self.sink.addr();
+        let r = page_sink_of(h, Tracked(Some(hdr))).addr() == self.sink.addr();
         proof {
             reveal(Pages::pages_wf);
             let a = page_base(h@.addr);
@@ -2368,7 +2369,7 @@ impl Pages {
         }
         let hdr = self.block_header(h);
         if hdr.class == LARGE {
-            self.release_large(h, Tracked(perm));
+            self.release_large(h, Tracked(perm), true);
             return;
         }
         let ghost s0 = *self;
@@ -2524,9 +2525,15 @@ impl Pages {
         }
     }
 
-    /// 大きい物体のページを OS に返す。
+    /// 大きい物体のページを OS に返す。`refund` が偽なら `Control` のバイト数から引かない。別のスレッドが解放した
+    /// ページは、解放したスレッドがもう引いてある (docs/spec/object-model.md の「別のスレッドからの解放」)。
     #[cold]
-    fn release_large(&mut self, h: *mut Header, Tracked(perm): Tracked<BlockPerm>)
+    pub(crate) fn release_large(
+        &mut self,
+        h: *mut Header,
+        Tracked(perm): Tracked<BlockPerm>,
+        refund: bool,
+    )
         requires
             old(self).wf(),
             old(self).in_use().contains(h@.addr),
@@ -2599,7 +2606,9 @@ impl Pages {
             assert(raw.dom() =~= Set::range(a as int, a + bytes));
         }
         dealloc_page(page as *mut u8, bytes, Tracked(raw), Tracked(dealloc));
-        refund_pages(&self.control, bytes);
+        if refund {
+            refund_pages(&self.control, bytes);
+        }
         proof {
             self.count = Ghost(self.count@.remove(a));
             self.carved = Ghost(self.carved@.remove(hs));
@@ -2934,6 +2943,14 @@ impl Pages {
     /// 持っているページの数。
     pub(crate) closed spec fn page_count(&self) -> nat {
         self.list@.len()
+    }
+
+    /// 一覧の i 番のページ。
+    pub(crate) fn page_at(&self, i: usize) -> *mut PageHeader
+        requires
+            i < self.page_count(),
+    {
+        self.list[i]
     }
 
     pub(crate) fn pages_len(&self) -> (r: usize)
@@ -3283,6 +3300,8 @@ impl Drop for Pages {
             }
             self.control.refund(bytes);
         }
+        // ほかのスレッドはもうこのヒープに積まない (docs/spec/object-model.md の「別のスレッドからの解放」)
+        drop(unsafe { Box::from_raw(self.sink.cast_mut()) });
         // `control` の欄はこの後で読まない
         release_control(unsafe { ManuallyDrop::take(&mut self.control) });
     }

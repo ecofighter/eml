@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{Checked, Heap, HeapError, Mode, Word};
+use crate::{Checked, Ctx, Heap, HeapError, Mode, Word};
 
 /// モードを型の引数に取るテストの関数を、速いモードと検査モードの2つのテストにする。
 macro_rules! both_modes {
@@ -29,6 +29,7 @@ mod frozen;
 mod host;
 mod raw;
 mod recover;
+mod remote;
 mod reuse;
 mod roots;
 mod script;
@@ -40,7 +41,8 @@ mod trusted;
 mod workers;
 
 /// 生存の列挙の検査と、ID ごとの数の数え直し。VM の検査モードが run の後に確かめるものと同じである。
-pub(super) fn check_all(heap: &Heap<Checked>) -> Result<(), HeapError> {
+pub(super) fn check_all<L: Live<M = Checked>>(live: &mut L) -> Result<(), HeapError> {
+    let heap = live.heap_for_walk();
     heap.check_invariants()?;
     heap.control().check_owned(&[heap])
 }
@@ -67,9 +69,30 @@ pub(super) fn list<M: Mode>(heap: &mut Heap<M>, n: usize) -> Word {
     })
 }
 
+/// ダミーのほかに生きている箱の数を数えられるもの。生存の列挙は先に取り込むので、ヒープを書き換える。
+pub(super) trait Live {
+    fn heap_for_walk(&mut self) -> &mut Heap<Self::M>;
+    type M: Mode;
+}
+
+impl<M: Mode> Live for Heap<M> {
+    type M = M;
+    fn heap_for_walk(&mut self) -> &mut Heap<M> {
+        self
+    }
+}
+
+impl<M: Mode> Live for Ctx<M> {
+    type M = M;
+    fn heap_for_walk(&mut self) -> &mut Heap<M> {
+        // 生存の列挙は、取り込みのほかにヒープを変えない
+        unsafe { self.heap_mut() }
+    }
+}
+
 /// ダミーのほかに生きている箱の数。
-pub(super) fn mortal<M: Mode>(heap: &Heap<M>) -> usize {
-    heap.live_objects().len() - 1
+pub(super) fn mortal<L: Live>(live: &mut L) -> usize {
+    live.heap_for_walk().live_objects().len() - 1
 }
 
 /// 破棄処理が呼ばれた回数を数える `Foreign` の値。

@@ -50,7 +50,7 @@ fn pages_are_aligned_and_returned<M: Mode>() {
         assert_eq!(c.bits() % 8, 0);
         unsafe { heap.decref(c) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn large_objects_get_their_own_page<M: Mode>() {
@@ -91,7 +91,7 @@ fn local_and_shared_counts_move<M: Mode>() {
         heap.decref(x).unwrap();
         heap.decref(x).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn is_last_reads_twice_only_at_minus_one<M: Mode>() {
@@ -133,7 +133,7 @@ fn share_moves_and_passes_owners<M: Mode>() {
         heap.set_worker(2);
         heap.decref(pair).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// `transfer_back` の2つのスタックと訪問済みの集まりを通す。共有のリストを裏返し、子が確保したセルの所有者を書き換え、
@@ -163,7 +163,7 @@ fn transfer_back_flips_and_rewrites<M: Mode>() {
         heap.decref(shared).unwrap();
         heap.decref(top).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 #[test]
@@ -430,7 +430,7 @@ fn every_primitive_once<M: Mode>() {
     }
     ctx_tests::clear(&mut ctx);
     assert!(ctx.check_finished());
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 #[test]
@@ -443,7 +443,7 @@ fn every_core_operation_once_checked() {
     every_core_operation_once::<Checked>();
     let mut heap = Heap::<Checked>::new();
     let l = list(&mut heap, 3);
-    assert_eq!(super::check_all(&heap), Ok(()));
+    assert_eq!(super::check_all(&mut heap), Ok(()));
     assert_eq!(heap.leaks().get("Data"), Some(&3));
     unsafe { heap.decref(l) }.unwrap();
     assert!(heap.leaks().is_empty());
@@ -474,7 +474,7 @@ fn strings_of_every_length_are_read_back<M: Mode>() {
         assert_eq!(text(&heap, w), s);
         unsafe { heap.decref(w) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn multibyte_strings_are_read_back<M: Mode>() {
@@ -507,7 +507,7 @@ fn large_strings_are_rebuilt<M: Mode>() {
     let w = unsafe { heap.string_push(w, &big) }.unwrap();
     assert_eq!(text(&heap, w).len(), 2 * big.len());
     unsafe { heap.decref(w) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn empty_strings_are_appended<M: Mode>() {
@@ -531,7 +531,7 @@ fn self_concat_under_both_borrow_models<M: Mode>() {
         assert_eq!(text(&heap, r).len(), 2 * s.len());
         unsafe { heap.decref(r) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn appending_the_text_of_another_string<M: Mode>() {
@@ -553,7 +553,7 @@ fn appending_the_text_of_another_string<M: Mode>() {
         unsafe { heap.decref(a) }.unwrap();
         unsafe { heap.decref(b) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// `write_byte` は1バイトだけを書き換え、ほかのバイトと長さを変えない。先頭、語の境目の前後、末尾と、大きい物体の
@@ -579,7 +579,7 @@ fn single_bytes_are_overwritten<M: Mode>() {
         assert_eq!(text(&heap, w).as_bytes(), &expected[..]);
         unsafe { heap.decref(w) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn reading_then_appending<M: Mode>() {
@@ -612,7 +612,7 @@ fn parts_of_a_string_are_copied<M: Mode>() {
             ctx.heap_mut().decref(s).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// T5 の `utf8_valid` は `core::str::from_utf8` で確かめる。`String.decode` が渡すのと同じく物体の中身の `&[u8]` を、
@@ -648,7 +648,7 @@ fn utf8_is_checked_by_core<M: Mode>() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// バイト列を書き換える道 (T10 の `write_byte` と、同じ物体の範囲の写し)。`src` と `dst` が同じ物体の
@@ -667,7 +667,7 @@ fn bytes_are_written_through_the_core<M: Mode>() {
         ctx.heap_mut().decref(ww).unwrap();
         ctx.heap_mut().decref(w).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 別のバイト列の範囲をその場で足す `append_part` は、`src` の中身を借りたまま `dst` に `write_bytes` で写す。
@@ -693,7 +693,7 @@ fn a_part_of_other_bytes_is_appended_in_place<M: Mode>() {
         ctx.heap_mut().decref(src).unwrap();
         ctx.heap_mut().decref(w).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 共有されたバイト列の `truncate` と `set` は、新しいブロックに写してから書く (T10 の `write_bytes` で前の部分を
@@ -721,7 +721,7 @@ fn shared_bytes_are_copied_before_writing<M: Mode>() {
             }
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `bytes_lend` の位置に外から書き、`bytes_commit` で確定する。語に揃わない長さの後ろへの書き込みと、大きい物体の
@@ -751,7 +751,7 @@ fn lent_room_is_written_and_committed<M: Mode>() {
             heap.decref(w).unwrap();
         }
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// `bytes_lend` で貸した後、外から書く前に、ほかの物体を確保して解放する (VM が完了を待つ間にほかのタスクを
@@ -782,7 +782,7 @@ fn lent_room_outlives_other_allocations<M: Mode>() {
             }
         }
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 // 凍結した領域
@@ -880,7 +880,7 @@ fn own_objects_read_region_words<M: Mode>() {
         heap.decref(pair).unwrap();
     }
     assert_eq!(text(&heap, s), "constant");
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 // T14: 回復は、根から届く語のブロックを、ページの頭の `sink` でこのヒープのブロックと塊のブロックに分ける。凍結した
@@ -904,7 +904,249 @@ fn recovery_tells_own_blocks_from_region_blocks<M: Mode>() {
     for w in ctx.take_roots().into_iter().flatten() {
         unsafe { ctx.heap_mut().decref(w) }.unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
+}
+
+// T14: 別のスレッドからの解放 (docs/spec/object-model.md の「別のスレッドからの解放」)。どのテストも、受け手の
+// ヒープを作ったスレッドから別のスレッドへ動かして使い、`RemoteSink` の番地がヒープを動かしても変わらないことを通す
+
+/// 共有の Control を持つヒープを2つ作る。
+fn two_heaps<M: Mode>(limits: Limits) -> (Heap<M>, Heap<M>) {
+    let control = Arc::new(Control::new(limits));
+    (
+        Heap::with_control(control.clone()),
+        Heap::with_control(control),
+    )
+}
+
+/// 長さ `n` の共有のリスト。
+fn shared_list<M: Mode>(heap: &mut Heap<M>, n: usize) -> Word {
+    let xs = list(heap, n);
+    unsafe { heap.share(xs, 0) }.unwrap();
+    xs
+}
+
+/// リストのセルの番地。
+fn cells<M: Mode>(heap: &Heap<M>, xs: Word) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut w = xs;
+    while w.is_ptr() {
+        out.push(w.bits());
+        w = unsafe { heap.field(w, 1) }.unwrap();
+    }
+    out
+}
+
+// (a) 別のスレッドが空けた小さいブロックは、持ち主の取り込みで空きリストに戻り、速いモードでは次の確保に使われる。
+// 取り込まずに落としたヒープは、`Drop` が取り込む
+fn a_remote_small_free_is_reclaimed_and_reused<M: Mode>() {
+    const N: usize = 8;
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let xs = shared_list(&mut a, N);
+    let freed = cells(&a, xs);
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        unsafe { b.decref(xs) }.unwrap();
+        b
+    })
+    .join()
+    .unwrap();
+    if M::CHECKED {
+        assert_eq!(b.stats().remote_frees, N as u64);
+    }
+    // 受けた数が少ないうちは取り込まない
+    assert!(!a.reclaim_if_due());
+    a.reclaim();
+    if M::CHECKED {
+        assert_eq!(a.stats().reclaimed, N as u64);
+    }
+    assert_eq!(mortal(&mut a), 0);
+    let y = cons(&mut a, Word::UNIT, Word::UNIT);
+    if !M::CHECKED {
+        assert!(freed.contains(&y.bits()));
+    }
+    unsafe { a.decref(y) }.unwrap();
+    // 積んだまま落とす
+    let ys = shared_list(&mut a, N);
+    let mut b = b;
+    unsafe { b.decref(ys) }.unwrap();
+    drop(a);
+    drop(b);
+}
+
+// (b) 別のスレッドが空けた大きい物体のページは、空けたスレッドが Control のバイト数から引く。上限がちょうど大きい
+// 物体1つ分のとき、持ち主が取り込む前に2つ目を取っても上限に届かない。持ち主はページを返すときにもう一度は引かない
+fn a_remote_large_free_refunds_at_once<M: Mode>() {
+    let (base, large) = {
+        let (mut a, b) = two_heaps::<M>(Limits::default());
+        let control = a.control().clone();
+        let base = control.bytes();
+        let big = a.alloc_data(0, 0, LARGE_BODY / 8, false);
+        let large = control.bytes() - base;
+        unsafe { a.decref(big) }.unwrap();
+        drop(b);
+        (base, large)
+    };
+    let (mut a, b) = two_heaps::<M>(Limits {
+        max_bytes: base + large,
+        ..Limits::default()
+    });
+    let control = a.control().clone();
+    let big = a.alloc_data(0, 0, LARGE_BODY / 8, false);
+    unsafe { a.share(big, 0) }.unwrap();
+    assert_eq!(control.bytes(), base + large);
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        unsafe { b.decref(big) }.unwrap();
+        b
+    })
+    .join()
+    .unwrap();
+    if M::CHECKED {
+        // 検査モードの大きい物体のページは隔離して返さない
+        assert_eq!(control.bytes(), base + large);
+        assert!(a.reclaim_if_due());
+        assert_eq!(control.bytes(), base + large);
+    } else {
+        assert_eq!(control.bytes(), base);
+        let second = a.alloc_data(0, 0, LARGE_BODY / 8, false);
+        assert_eq!(control.stop_bits(), 0);
+        assert!(a.reclaim_if_due());
+        assert_eq!(control.bytes(), base + large);
+        unsafe { a.decref(second) }.unwrap();
+    }
+    assert_eq!(mortal(&mut a), 0);
+    drop(b);
+}
+
+// (c) 2つのスレッドが1つのページに積む。その間、持ち主のヒープも別のスレッドへ動かす
+fn two_threads_free_into_one_page<M: Mode>() {
+    const N: usize = 16;
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut a = Heap::<M>::with_control(control.clone());
+    let xs = shared_list(&mut a, N);
+    let ys = shared_list(&mut a, N);
+    let freers: Vec<_> = [xs, ys]
+        .into_iter()
+        .map(|w| {
+            let b = Heap::<M>::with_control(control.clone());
+            std::thread::spawn(move || {
+                let mut b = b;
+                unsafe { b.decref(w) }.unwrap();
+                b
+            })
+        })
+        .collect();
+    let owner = std::thread::spawn(move || {
+        let mut a = a;
+        let z = list(&mut a, N);
+        unsafe { a.decref(z) }.unwrap();
+        a
+    });
+    let mut a = owner.join().unwrap();
+    for t in freers {
+        drop(t.join().unwrap());
+    }
+    a.reclaim();
+    if M::CHECKED {
+        assert_eq!(a.stats().reclaimed, 2 * N as u64);
+    }
+    assert_eq!(mortal(&mut a), 0);
+}
+
+// (e) 持ち主がページを替えながら切り出す間に、別のスレッドが共有の文字列の長さと中身を読み、小さいブロックと大きい
+// 物体を空ける。持ち主の次の `reclaim_if_due` は、返ってきた大きい物体のページを見て取り込み、速いモードではその後の
+// 確保はページを増やさない。数が 256 に届いて取り込むことは、スレッドを使わない単体テストで確かめる
+fn the_owner_carves_while_another_thread_reads_and_frees<M: Mode>() {
+    const N: usize = 16;
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let control = a.control().clone();
+    let s = a.alloc_string("shared text");
+    let xs = shared_list(&mut a, N);
+    let big = a.alloc_data(0, 0, LARGE_BODY / 8, false);
+    unsafe {
+        a.share(s, 0).unwrap();
+        a.share(big, 0).unwrap();
+    }
+    let freer = std::thread::spawn(move || {
+        let mut b = b;
+        assert_eq!(text(&b, s), "shared text");
+        unsafe {
+            b.decref(xs).unwrap();
+            b.decref(s).unwrap();
+            b.decref(big).unwrap();
+        }
+        b
+    });
+    // 1 KiB の箱でページを替えるまで切り出す (64 KiB のページに 64 個も入らない)
+    let carved: Vec<Word> = (0..70)
+        .map(|_| a.alloc_string_room(MAX_SMALL_WORDS * 8 - 64))
+        .collect();
+    let b = freer.join().unwrap();
+    for w in carved {
+        unsafe { a.decref(w) }.unwrap();
+    }
+    assert!(a.reclaim_if_due());
+    let before = control.bytes();
+    let w = list(&mut a, N);
+    if !M::CHECKED {
+        assert_eq!(control.bytes(), before);
+    }
+    unsafe { a.decref(w) }.unwrap();
+    assert_eq!(mortal(&mut a), 0);
+    drop(b);
+}
+
+// 取り込みは ID ごとの数も仕事の回数も変えない。数は空けたスレッドが減らしてある
+#[test]
+fn reclaim_changes_no_owner_count_and_no_work_counter() {
+    const N: usize = 8;
+    let (mut a, b) = two_heaps::<Checked>(Limits::default());
+    let ids: Vec<u32> = (0..3).map(|_| a.fork_worker()).collect();
+    assert_eq!(ids, [1, 2, 3]);
+    a.set_worker(3);
+    let xs = list(&mut a, N);
+    a.set_worker(0);
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        b.set_worker(3);
+        unsafe { b.decref(xs) }.unwrap();
+        b.set_worker(0);
+        b
+    })
+    .join()
+    .unwrap();
+    let counts = (a.owned_by(3), a.owned_by(0));
+    let before = a.stats();
+    a.reclaim();
+    let after = a.stats();
+    assert_eq!((a.owned_by(3), a.owned_by(0)), counts);
+    assert_eq!(counts.0, 0);
+    assert_eq!(
+        (
+            after.rc_increments,
+            after.rc_decrements,
+            after.allocations,
+            after.peak_live,
+            after.shared,
+            after.remote_frees,
+        ),
+        (
+            before.rc_increments,
+            before.rc_decrements,
+            before.allocations,
+            before.peak_live,
+            before.shared,
+            before.remote_frees,
+        )
+    );
+    assert_eq!(after.live, before.live - N as u64);
+    assert_eq!(after.reclaimed, before.reclaimed + N as u64);
+    for id in ids {
+        assert_eq!(a.retire_worker(id), Ok(()));
+    }
+    assert_eq!(super::check_all(&mut a), Ok(()));
+    drop(b);
 }
 
 // 実行の制御
@@ -975,7 +1217,7 @@ fn println_goes_through_the_host<M: Mode>() {
     }
     ctx.flush().unwrap();
     assert_eq!(memory.out(), "日本\n");
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `handle_read` でハンドルを借りて読み、読んだ中身を写して手放す。
@@ -1024,7 +1266,7 @@ fn borrowed_lines_cross_the_buffer<M: Mode>() {
         );
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// Host を通る全部の読みと行の読み。区切りをまたぐ長さと長さの見込みのない読み手、`\r\n` を残した行、空の行、行の
@@ -1079,7 +1321,7 @@ fn borrowed_reads_cross_the_buffer_and_fail<M: Mode>() {
                 assert!(read_borrowed(&mut ctx, f, read).is_err());
                 assert_eq!(raw::rc(f), 1);
                 ctx.handle_close(f, Handle::FileIn).unwrap();
-                assert_eq!(mortal(ctx.heap()), 0);
+                assert_eq!(mortal(&mut ctx), 0);
             }
             // 止める語が立った後の `Interrupted` で止まる (T11)
             let f = open(&mut ctx, "fifo");
@@ -1097,13 +1339,13 @@ fn borrowed_reads_cross_the_buffer_and_fail<M: Mode>() {
             );
             control.clear();
             ctx.handle_close(f, Handle::FileIn).unwrap();
-            assert_eq!(mortal(ctx.heap()), 0);
+            assert_eq!(mortal(&mut ctx), 0);
         }
         let f = open(&mut ctx, "lines.txt");
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), all);
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 信頼の一覧の総称の `fill` と `consume` を、`FileIn` の生のポインタで直接通す。buffer に残ったバイト、短い読みの後の
@@ -1263,7 +1505,7 @@ fn borrowed_bytes_go_through_the_host<M: Mode>() {
         assert_eq!(read(&mut ctx, f, ReadAmount::All).unwrap(), b"ab\ncd\n");
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 開くファイルの読み手が、渡した buffer より大きい長さを1回返す Host。
@@ -1311,7 +1553,7 @@ fn an_overlong_read_is_refused_by_a_whole_read() {
             ctx.handle_close(f, Handle::FileIn).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 標準入力の1行を読んで写し、手放す。
@@ -1329,7 +1571,7 @@ fn two_buffered_lines_flush_once<M: Mode>() {
     assert_eq!(stdin_line(&mut ctx), "a\n");
     assert_eq!(stdin_line(&mut ctx), "b\n");
     assert_eq!(memory.flushes(), 1);
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 2回の補充をまたぐ行は、補充の前ごとに書き出す。
@@ -1341,7 +1583,7 @@ fn a_line_across_two_refills_flushes_before_each<M: Mode>() {
     let mut ctx = ctx_tests::ctx_with::<M>(&memory);
     assert_eq!(stdin_line(&mut ctx), "abcd\n");
     assert_eq!(memory.flushes(), 2);
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 標準入力の読み手は Host の slot に戻るので、同じ Host の上の2つ目の `Ctx` は、1つ目が buffer に残した行から読む。
@@ -1349,12 +1591,12 @@ fn the_stdin_reader_survives_a_second_ctx<M: Mode>() {
     let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile::text("a\nb\n")));
     let mut first = ctx_tests::ctx_with::<M>(&memory);
     assert_eq!(stdin_line(&mut first), "a\n");
-    assert_eq!(mortal(first.heap()), 0);
+    assert_eq!(mortal(&mut first), 0);
     drop(first);
     let mut second = ctx_tests::ctx_with::<M>(&memory);
     assert_eq!(stdin_line(&mut second), "b\n");
     assert_eq!(stdin_line(&mut second), "");
-    assert_eq!(mortal(second.heap()), 0);
+    assert_eq!(mortal(&mut second), 0);
 }
 
 /// 標準入力のハンドルは、開くときに Host の slot から読み手を取り、閉じるときに buffer に残ったバイトごと返す。開いて
@@ -1390,7 +1632,7 @@ fn stdin_handles_take_and_return_the_reader<M: Mode>() {
         assert_eq!(read(&mut ctx, h).unwrap(), "");
         ctx.handle_close(h, Handle::Stdin).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
     let mut ctx = ctx_tests::ctx_with::<M>(&Arc::new(MemoryHost::default()));
     unsafe {
         let h = ctx.handle_open(Handle::Stdin).unwrap();
@@ -1405,7 +1647,7 @@ fn stdin_handles_take_and_return_the_reader<M: Mode>() {
         );
         ctx.handle_close(h, Handle::Stdin).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 標準入力のバイト列の読みは、補充の前ごとに書き出す。2回の補充をまたぐ行は2回書き出し、buffer に残ったバイトを
@@ -1444,7 +1686,7 @@ fn stdin_bytes_flush_before_each_refill<M: Mode>() {
         ctx.heap_mut().decref(w).unwrap();
         ctx.handle_close(h, Handle::Stdin).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 書き込みのハンドルは Host の buffer に書き (`host_write`)、開いた印を `HostRef` に立てる。閉じずに `Heap` ごと
@@ -1489,7 +1731,7 @@ fn stream_handles_lower_their_flags_when_dropped<M: Mode>() {
             ctx.handle_close(h, handle).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `FileOut` を `path` に `mode` で開く。
@@ -1559,7 +1801,7 @@ fn a_file_out_writes_through_its_buffer<M: Mode>() {
             ctx.heap_mut().decref(x).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 閉じない `FileOut` は、`Ctx` を落とすときの破棄処理 (`BufWriter` の drop glue) が buffer を書く。書けない書き手
@@ -1611,17 +1853,17 @@ fn a_failed_file_out_write_discards_the_rest<M: Mode>() {
             ctx.handle_write(f, Handle::FileOut, w, Write::Bytes),
             failed("a.txt")
         );
-        assert_eq!(mortal(ctx.heap()), 2);
+        assert_eq!(mortal(&mut ctx), 2);
         let f = open_out(&mut ctx, "b.txt", WriteMode::Truncate);
         let f = ctx
             .handle_write(f, Handle::FileOut, t, Write::Line)
             .unwrap();
         assert_eq!(ctx.handle_flush(f, Handle::FileOut), failed("b.txt"));
-        assert_eq!(mortal(ctx.heap()), 2);
+        assert_eq!(mortal(&mut ctx), 2);
         let out = open_out(&mut ctx, "c.txt", WriteMode::Truncate);
         let p = ctx.heap_mut().alloc_string("in.txt");
         let file = ctx.fs_open(p, Open::Read).unwrap();
-        let live = mortal(ctx.heap());
+        let live = mortal(&mut ctx);
         for handle in [Handle::FileOut, Handle::FileIn] {
             assert_eq!(
                 ctx.handle_read(out, handle, ReadAmount::All, Form::Text),
@@ -1632,14 +1874,14 @@ fn a_failed_file_out_write_discards_the_rest<M: Mode>() {
                 Err(Fault::Heap(HeapError::WrongKind))
             );
         }
-        assert_eq!(mortal(ctx.heap()), live);
+        assert_eq!(mortal(&mut ctx), live);
         assert_eq!((raw::rc(out), raw::rc(file), raw::rc(t)), (1, 1, 1));
         ctx.handle_close(out, Handle::FileOut).unwrap();
         ctx.handle_close(file, Handle::FileIn).unwrap();
         ctx.heap_mut().decref(t).unwrap();
         ctx.heap_mut().decref(w).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
     drop(ctx);
     // 書き手が受けたのは、あふれたときの "abc" と、`flush` の "abc\n" だけである
     assert_eq!(memory.received(), "abc".len() + "abc\n".len());
@@ -1674,7 +1916,7 @@ fn script_externs_go_through_the_host<M: Mode>() {
         assert_eq!(text(ctx.heap(), w), "bc");
         ctx.heap_mut().decref(w).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 子の起動、標準入力への書き込み、`close_stdin`、標準出力の全部の読み、`wait` の流れを、メモリの Host で通す。どの
@@ -1702,7 +1944,7 @@ fn a_child_goes_through_the_host<M: Mode>() {
     }
     assert_eq!(memory.child_input(), b"a\na\n\n\xff");
     assert_eq!(memory.waits_and_kills(), (1, 0));
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 待たずに `Heap` を落とすと、`Child` の破棄処理が子を kill して1回だけ待つ。
@@ -1721,7 +1963,7 @@ fn a_waited_child_is_not_killed<M: Mode>() {
     let mut ctx = ctx_tests::ctx_with::<M>(&memory);
     let c = ctx_tests::spawn(&mut ctx, "sort", &[], &[], "", (2, 2, 0)).unwrap();
     assert_eq!(unsafe { ctx.proc_wait(c) }, Ok(0));
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
     drop(ctx);
     assert_eq!(memory.waits_and_kills(), (1, 0));
 }
@@ -1742,12 +1984,12 @@ fn a_failed_child_write_releases_the_handle<M: Mode>() {
                 reason: IoReason::Other,
             })
         );
-        assert_eq!(mortal(ctx.heap()), 1);
+        assert_eq!(mortal(&mut ctx), 1);
         assert_eq!(memory.waits_and_kills(), (1, 1));
         ctx.heap_mut().decref(t).unwrap();
     }
     assert!(memory.child_input().is_empty());
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 子の標準入力への書き込みが `Interrupted` で戻ったとき、止める語が立っていなければ書き直し、立っていれば `Stopped`
@@ -1777,12 +2019,12 @@ fn an_interrupted_child_write_stops_only_when_asked<M: Mode>() {
             ctx.handle_write(c, Handle::Child, t, Write::Line),
             Err(Fault::Stopped(crate::Stop::Interrupted))
         );
-        assert_eq!(mortal(ctx.heap()), 1);
+        assert_eq!(mortal(&mut ctx), 1);
         ctx.heap_mut().decref(t).unwrap();
     }
     assert!(memory.child_input().is_empty());
     assert_eq!(memory.waits_and_kills(), (1, 1));
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 // T13
@@ -1842,7 +2084,7 @@ fn find_byte_reads_the_body_of_an_object<M: Mode>() {
         }
         ctx.heap_mut().decref(needle).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 both_modes!(
@@ -1881,6 +2123,10 @@ both_modes!(
     own_objects_read_region_words,
     recovery_tells_own_blocks_from_region_blocks,
     two_threads_share_one_control,
+    a_remote_small_free_is_reclaimed_and_reused,
+    a_remote_large_free_refunds_at_once,
+    two_threads_free_into_one_page,
+    the_owner_carves_while_another_thread_reads_and_frees,
     println_goes_through_the_host,
     borrowed_lines_cross_the_buffer,
     borrowed_reads_cross_the_buffer_and_fail,

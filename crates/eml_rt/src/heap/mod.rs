@@ -16,6 +16,7 @@ mod handover;
 pub(crate) mod inv;
 mod model;
 mod proof;
+mod reclaim;
 mod recover;
 mod release;
 mod reuse;
@@ -50,6 +51,7 @@ use crate::mode::Mode;
 use crate::rc::{self, DecrefStep, DupStep};
 #[cfg(verus_only)]
 use crate::rc::{Obj, decref_next};
+use crate::remote::{page_sink_of, remote_push, sink_pushing};
 use crate::word::Word;
 use vstd::hash_set::HashSetWithView;
 use vstd::prelude::*;
@@ -97,6 +99,11 @@ pub struct Stats {
     pub peak_live: u64,
     /// `share` が rc を負にした物体の数。すでに共有の物体は数えない。
     pub shared: u64,
+    /// このヒープが、ほかのヒープのページの物体を空けてそのヒープに返した数 (docs/spec/object-model.md の
+    /// 「別のスレッドからの解放」)。
+    pub remote_frees: u64,
+    /// ほかのスレッドが空けたこのヒープのページの物体を、取り込んだ数。
+    pub reclaimed: u64,
 }
 
 /// ヒープの証明の対象になる部分。不変条件はこの部分の上で書くので、`Heap` のほかの欄 (数の記録、作業リストなど) を
@@ -688,6 +695,8 @@ impl<M: Mode> Heap<M> {
                 live: 0,
                 peak_live: 0,
                 shared: 0,
+                remote_frees: 0,
+                reclaimed: 0,
             },
             _mode: PhantomData,
         };
@@ -907,6 +916,10 @@ impl<M: Mode> Heap<M> {
     /// 使い回せるようにする。速いモードでは何もしない。
     ///
     /// `id` は `fork_worker` が出した ID で、0 でなく、まだ退いていない。検査モードはこれを確かめ、破れば panic する。
+    ///
+    /// その ID の数を変えたどのスレッドからも、この呼び出しへ happens-before の関係がある時点で呼ぶ (`par` では、子が
+    /// 結果を Release で公開し、親が Acquire で読む join)。数は Relaxed の atomic なので、そうでなければ数え漏れを
+    /// 移し戻しの漏れと見誤る (docs/spec/object-model.md の「論理的な worker ID」)。
     pub fn retire_worker(&mut self, id: u32) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
@@ -1770,6 +1783,16 @@ impl<M: Mode> Heap<M> {
     {
         let mut b = self;
         b.settle();
+        let ghost settled = b;
+        // 凍結した塊のページはほかのスレッドから読まれるだけになるので、先に取り込む
+        // (docs/spec/object-model.md の「別のスレッドからの解放」)
+        b.reclaim();
+        proof {
+            b.lemma_reclaimed(settled, Set::empty());
+        }
+        if M::CHECKED && sink_pushing(b.core.pages.sink()) {
+            return Err(HeapError::NotQuiescent);
+        }
         let live = b.freezable()?;
         let ghost b0 = b;
         let ghost s0 = b.core;
@@ -3066,6 +3089,17 @@ impl<M: Mode> Heap<M> {
                 self.owned.count_id(owner, false);
             }
         }
+        let tracked hdr = self.core.pages.tracked_block_header(h@.addr);
+        proof {
+            self.core.pages.lemma_carved_page(h@.addr);
+        }
+        if !self.core.pages.owns(h, Tracked(hdr)) {
+            // ほかのヒープのページの物体は、そのヒープに返す (docs/spec/object-model.md の「別のスレッドからの解放」)。
+            // モデルの `dom` はこのヒープのページのブロックだけを持つので、証明の上ではこの道に来ない。来るのは、
+            // ほかのヒープの語を受けた呼び出しで、その語の前提は信頼の一覧の T14 の約束による
+            self.free_remote(h, finalizer);
+            return;
+        }
         let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
         if M::CHECKED {
             let tracked mut pre = perm.prefix.tracked_unwrap();
@@ -3124,6 +3158,39 @@ impl<M: Mode> Heap<M> {
                 }
             }
         }
+    }
+
+    /// ほかのヒープのページの物体の箱を空け、そのヒープに返す。`Foreign` なら先に破棄処理を呼ぶ。速いモードでは、
+    /// 破棄処理が panic しても二度呼ばれないように、先に `meta` を種類 `Free` にする。検査モードでは前置きを「解放」に
+    /// する。このヒープの数、隔離のバイト数、確保器には触れない。
+    // 局所の解放の道を小さく保つため、展開させない
+    #[inline(never)]
+    fn free_remote(&mut self, h: *mut Header, finalizer: Option<foreign::Finalizer>)
+        requires
+            old(self).core.sound(),
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.checked() == M::CHECKED,
+    {
+        proof {
+            self.core.lemma_shape(h@.addr);
+        }
+        let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
+        if M::CHECKED {
+            let tracked mut pre = perm.prefix.tracked_unwrap();
+            mark_freed(h, Tracked(&mut pre));
+            proof {
+                perm.prefix = Some(pre);
+            }
+            self.stats.remote_frees = self.stats.remote_frees.wrapping_add(1);
+        } else if finalizer.is_some() {
+            ptr_mut_write(meta_ptr(h), Tracked(&mut perm.meta), FREE_META);
+        }
+        if let Some(f) = finalizer {
+            run_finalizer(f, Tracked(&perm));
+        }
+        let sink = page_sink_of(h, Tracked(None));
+        remote_push(h, sink, Tracked(perm), M::CHECKED, self.core.pages.control());
     }
 }
 

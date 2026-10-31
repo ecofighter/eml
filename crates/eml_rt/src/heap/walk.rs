@@ -23,6 +23,7 @@ use crate::frozen::Frozen;
 use crate::meta::bits_kind;
 use crate::meta::{Header, Kind};
 use crate::mode::{Checked, Mode};
+use crate::remote::{sink_pending, sink_pushing};
 use crate::word::Word;
 
 verus! {
@@ -245,8 +246,26 @@ impl<M: Mode> Heap<M> {
     }
 
     /// 生きている物体 (token の箱、不死の物体、ダミーを含む) を列挙する。テストと検査のための列挙で、回復は使わない
-    /// (docs/spec/object-model.md の「生存の列挙」)。
-    pub fn live_objects(&self) -> (r: Vec<Word>)
+    /// (docs/spec/object-model.md の「生存の列挙」)。`check_invariants` と同じ時点で呼び、先に `reclaim` で取り込む。
+    pub fn live_objects(&mut self) -> (r: Vec<Word>)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            forall|i: int|
+                0 <= i < r@.len() ==> (#[trigger] r@[i]).is_ptr_spec() && final(self).word_in(r@[i])
+                    && final(self).live_block(r@[i].bits_spec()),
+            forall|h: usize|
+                #![trigger final(self).live_block(h)]
+                final(self).live_block(h) ==> exists|i: int|
+                    #![trigger r@[i]]
+                    0 <= i < r@.len() && r@[i].bits_spec() == h,
+    {
+        self.reclaim();
+        self.collect_live()
+    }
+
+    fn collect_live(&self) -> (r: Vec<Word>)
         requires
             self.wf(),
         ensures
@@ -630,7 +649,15 @@ pub(super) fn release_region<M: Mode>(region: Option<Arc<Frozen<M>>>) {
 impl Heap<Checked> {
     /// 生存の列挙で見つかる不変条件の違反 (docs/spec/object-model.md の「報告する誤り」)。ID ごとの数は、
     /// `Control::check_owned` が同じ `Control` のすべてのヒープについて数え直す。
-    pub fn check_invariants(&self) -> Result<(), HeapError> {
+    ///
+    /// ページを歩くので、ほかのスレッドがこのヒープの共有の物体の参照を持たず、このヒープのページの物体を空けている
+    /// 途中でもない時点で呼ぶ。先に `reclaim` で取り込み、積んでいる途中の解放を見つければ `NotQuiescent` を返す
+    /// (docs/spec/object-model.md の「別のスレッドからの解放」)。
+    pub fn check_invariants(&mut self) -> Result<(), HeapError> {
+        self.reclaim();
+        if sink_pushing(self.core.pages.sink()) {
+            return Err(HeapError::NotQuiescent);
+        }
         self.check_reach()
     }
 
@@ -641,8 +668,9 @@ impl Heap<Checked> {
     }
 
     /// 種類の名前ごとのリーク (docs/spec/object-model.md の「報告する誤り」)。不死の物体は外に出ている参照の数を足し、
-    /// token の箱は `Token` で数える。
-    pub fn leaks(&self) -> BTreeMap<&'static str, u64> {
+    /// token の箱は `Token` で数える。`check_invariants` と同じ時点で呼び、先に `reclaim` で取り込む。
+    pub fn leaks(&mut self) -> BTreeMap<&'static str, u64> {
+        self.reclaim();
         let mut leaks = BTreeMap::new();
         for (kind, count) in self.leak_entries() {
             if count > 0 {
@@ -656,12 +684,14 @@ impl Heap<Checked> {
 impl<M: Mode> Heap<M> {
     /// ほかのスレッドから受けて、まだ取り込んでいない解放があるか。
     pub(crate) fn remote_pending(&self) -> bool {
-        self.core.pages.remote_sink().pending()
+        sink_pending(self.core.pages.sink())
     }
 }
 
 impl<M: Mode> Drop for Heap<M> {
     fn drop(&mut self) {
+        // 取り込んだブロックは、空けたスレッドが破棄処理を呼んである。取り込まずに歩くと、もう一度呼んでしまう
+        self.reclaim();
         self.finalize_all();
         release_region(ManuallyDrop::into_inner(mem::replace(
             &mut self.region,

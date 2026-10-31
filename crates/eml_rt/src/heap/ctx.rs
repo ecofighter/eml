@@ -4,6 +4,7 @@
 //! `Ctx` は ghost の状態を持たず、`evv` のリストや evidence をヒープの上の spec の関数で表す。VM は検証しないコードで、
 //! 基本操作の合間にヒープを変えるので、ghost のリストを保ち続けられないためである。
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use vstd::prelude::*;
@@ -19,7 +20,7 @@ use crate::host::HostRef;
 use crate::meta::{Kind, Meta};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
-use crate::mode::Mode;
+use crate::mode::{Checked, Mode};
 use crate::word::Word;
 #[cfg(verus_only)]
 use crate::word::lemma_unit_bits;
@@ -1087,6 +1088,66 @@ impl<M: Mode> Ctx<M> {
 
     pub fn stats(&self) -> CtxStats {
         self.stats
+    }
+
+    /// ほかのスレッドから受けた解放を取り込む (docs/spec/object-model.md の「別のスレッドからの解放」)。先に構築中の
+    /// 物体を生きている物体にする。`Ctx` の持つ語の物体は空けたことにしない。
+    pub fn reclaim(&mut self)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+    {
+        self.reclaim_when(false);
+    }
+
+    /// 受けた解放が溜まっていれば取り込み、真を返す (`Heap::reclaim_if_due`)。VM は待つ前と、run の終わりの検査の
+    /// 前に呼ぶ (docs/spec/vm.md の「時計と driver」と「誤り、止めること、終わり」)。
+    pub fn reclaim_if_due(&mut self) -> (r: bool)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+    {
+        self.reclaim_when(true)
+    }
+
+    /// `Ctx` の持つ語が指す物体の番地。
+    spec fn held_set(&self) -> Set<usize> {
+        set![
+            self.evv.bits_spec(),
+            self.yielding.target.bits_spec(),
+            self.yielding.clause.bits_spec(),
+            self.yielding.cont.bits_spec(),
+        ]
+    }
+
+    fn reclaim_when(&mut self, due: bool) -> (r: bool)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+    {
+        let ghost c0 = *self;
+        self.heap.settle();
+        let ghost c1 = *self;
+        let ghost held = self.held_set();
+        let r = if due {
+            self.heap.reclaim_if_due_held(Ghost(held))
+        } else {
+            self.heap.reclaim_held(Ghost(held));
+            true
+        };
+        proof {
+            self.lemma_reclaimed_ctx(c1, c0, held);
+        }
+        r
     }
 
     /// yield 中か中断中なら 1、そうでなければ 0。
@@ -3491,5 +3552,20 @@ impl<M: Mode> Ctx<M> {
             return Err(stop_reason(bits));
         }
         Ok(())
+    }
+}
+
+// 検査モードの検査はヒープの `verus!` の外の検査を呼ぶだけなので、同じく外に書く
+impl Ctx<Checked> {
+    /// 取り込んでから、ヒープの不変条件を確かめる (`Heap::check_invariants`)。
+    pub fn check_invariants(&mut self) -> Result<(), HeapError> {
+        self.reclaim();
+        self.heap.check_invariants()
+    }
+
+    /// 取り込んでから、ヒープのリークを数える (`Heap::leaks`)。
+    pub fn leaks(&mut self) -> BTreeMap<&'static str, u64> {
+        self.reclaim();
+        self.heap.leaks()
     }
 }

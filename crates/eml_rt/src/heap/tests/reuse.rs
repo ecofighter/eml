@@ -18,10 +18,10 @@ fn a_unique_cell_is_reused_in_place_without_writing_fields<M: Mode>() {
         let q = heap.reuse_in_place(token, CONS_META).unwrap();
         assert_eq!(q, p);
         assert_eq!((heap.field(q, 0), heap.field(q, 1)), (Ok(a), Ok(b)));
-        assert_eq!(mortal(&heap), 3);
+        assert_eq!(mortal(&mut heap), 3);
         heap.decref(q).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_box_moves_to_another_type_of_the_same_size<M: Mode>() {
@@ -37,7 +37,7 @@ fn a_box_moves_to_another_type_of_the_same_size<M: Mode>() {
         heap.set_field(pair, 1, Word::imm(3)).unwrap();
         heap.decref(pair).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_shared_object_is_never_a_token<M: Mode>() {
@@ -55,7 +55,7 @@ fn a_shared_object_is_never_a_token<M: Mode>() {
         heap.decref(p).unwrap();
         heap.decref(q).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_shared_marked_object_is_never_a_token<M: Mode>() {
@@ -70,7 +70,7 @@ fn a_shared_marked_object_is_never_a_token<M: Mode>() {
                 .is_empty()
         );
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn drop_token_frees_the_box<M: Mode>() {
@@ -80,7 +80,7 @@ fn drop_token_frees_the_box<M: Mode>() {
         let token = heap.into_token(p).unwrap();
         heap.drop_token(token).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_heap_dropped_with_an_outstanding_token_and_large_objects_is_clean<M: Mode>() {
@@ -108,11 +108,11 @@ fn kept_fields_return_to_edges_after_con_at<M: Mode>() {
         assert_eq!((heap.field(q, 0), heap.field(q, 1)), (Ok(a), Ok(b)));
         heap.dup(a).unwrap();
         heap.decref(a).unwrap();
-        assert_eq!(mortal(&heap), 4);
+        assert_eq!(mortal(&mut heap), 4);
         // 子の参照は q の辺だけなので、q を手放すと子もみな空く
         heap.decref(q).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 both_modes!(

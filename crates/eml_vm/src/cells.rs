@@ -3640,7 +3640,8 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     let taken = registry.take_op(&mut ctx, token, 0).unwrap();
     assert!(taken.cancelling && taken.result.is_err());
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// `op_ready` はどの待ちでも予算を使い、1バイトの書きは1つ使う。受け付けで終わった記録では、取り消しの地点が
@@ -3687,7 +3688,8 @@ fn op_ready_counts_a_wait_only_on_a_finished_op() {
     registry.op_mut(CellRef::decode(pending)).unwrap().phase = OpPhase::Done(Ok(1), false);
     let taken = registry.take_op(&mut ctx, pending, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 書きの待ちは、1 に長さを 512 で割った商を足しただけ予算を使い、残りより多ければ残りをすべて使う。64 KiB の書きは
@@ -3717,7 +3719,8 @@ fn writes_spend_budget_by_their_length() {
     assert_eq!(registry.task_mut(me).unwrap().budget, 0);
     let taken = registry.take_op(&mut ctx, token, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 予算を使い切った終わった操作の待ちが譲らずに続けると、譲った待ちの再開と同じく予算を戻し、`reschedule` の代わりに
@@ -3744,7 +3747,8 @@ fn going_on_after_a_spent_budget_counts_the_wait_and_refills() {
     assert!(matches!(registry.go_on(me), Err(CellFault::Internal(_))));
     let taken = registry.take_op(&mut ctx, done, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 速い道が先に譲る `reschedule` の間に届いた取り消しは、その再開では数えず、次の取り消しの地点で1回だけ数える。
@@ -3782,7 +3786,8 @@ fn a_cancel_during_a_fast_yield_is_counted_once() {
     assert_eq!(registry.task_mut(me).unwrap().budget, BUDGET);
     let taken = registry.take_op(&mut ctx, done, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 記録に触れるのは受け付けたタスクだけである。ほかの worker のタスクが token を渡すと内部の誤りになる
@@ -3809,7 +3814,8 @@ fn an_op_used_by_another_task_is_an_internal_error() {
     ));
     let taken = registry.take_op(&mut ctx, token, 1).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 取り出した記録は放すので、同じ token の2度目の取り出しは記録を指さない。token は即値で、型検査が1回だけ使うことを
@@ -3829,7 +3835,8 @@ fn a_second_take_of_an_op_is_an_internal_error() {
         registry.take_op(&mut ctx, token, 0),
         Err(CellFault::Internal("an op names no record"))
     ));
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// run の終わりの `sweep_all` は、待つタスクが残した記録の buffer とストリームをタスクの ID の下で落としてから、
@@ -3853,7 +3860,8 @@ fn sweep_all_frees_a_waited_op_before_its_task() {
     });
     registry.sweep_all(&mut ctx, 0).unwrap();
     assert_eq!(registry.in_flight, 0);
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 完了の鍵は記録の番号で、generation まで合わなければ記録に当てない。放した記録の添字を新しい記録が使い回しても、
@@ -3996,7 +4004,8 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
         assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"ab");
         unsafe { ctx.heap_mut().decref(back) }.unwrap();
     }
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 空きのない buffer を広げた容量は、長さが `READ_ROOM` より大きければ長さの2倍以上である。貸すのは容量によらず
@@ -4027,7 +4036,8 @@ fn growing_a_full_buffer_doubles_its_length() {
     let back = registry.take_op(&mut ctx, token, 0).unwrap().buf.unwrap();
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }.len(), 200_000);
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 貸した記憶へ読んでいる間に取り消された読みも、外が書いたバイトを確定し、それを持つ buffer を返す
@@ -4067,15 +4077,17 @@ fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
     let back = taken.buf.unwrap();
     assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abxy");
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 参照が2つある `Bytes` の書きは、写さずに同じ物体の中身を driver に貸し、`take_bytes` が同じ参照を返す。driver が
 /// 読んだ中身は、もう1つの参照から読む中身と同じである (docs/spec/vm.md の「操作の記録」)。
 #[test]
 fn a_write_of_a_shared_buffer_makes_no_copy() {
-    let ctx = write_of_a_shared_buffer::<eml_rt::Checked>();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let mut ctx = write_of_a_shared_buffer::<eml_rt::Checked>();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
     write_of_a_shared_buffer::<eml_rt::Fast>();
 }
 
@@ -4111,8 +4123,9 @@ fn write_of_a_shared_buffer<M: Mode>() -> Ctx<M> {
 /// (docs/spec/object-model.md の T10 の行)。
 #[test]
 fn a_write_held_by_the_driver_is_not_changed_by_its_alias() {
-    let ctx = held_write_and_its_alias::<eml_rt::Checked>();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let mut ctx = held_write_and_its_alias::<eml_rt::Checked>();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
     held_write_and_its_alias::<eml_rt::Fast>();
 }
 
@@ -4243,7 +4256,8 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
     let taken = registry.take_op(&mut ctx, op, 0).unwrap();
     assert!(taken.timed_out && !taken.cancelling);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 期限の付いた操作の待ちは、取り消しで外れても完了で終わっても輪の項を外す。項を残すと、満期に `expire` が待たない
@@ -4302,7 +4316,8 @@ fn cancelling_or_finishing_a_timed_op_wait_removes_its_timer() {
         assert!(!taken.timed_out);
         unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     }
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 0 以下の期限は過ぎた期限なので、輪に載せずにすぐ driver に取り消しを頼み、記録に期限の印を付ける。
@@ -4336,7 +4351,8 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
     assert_eq!(registry.op_outcome(op, 0).unwrap(), OUTCOME_LATE);
     let taken = registry.take_op(&mut ctx, op, 0).unwrap();
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 正の期限は、操作がもう終わっていて輪に載せないときも `timers` に数える。終わったかどうかはスケジュールで変わるので、
@@ -4373,7 +4389,8 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
     let taken = registry.take_op(&mut ctx, token, 0).unwrap();
     assert!(matches!(taken.result, Ok(1)) && !taken.timed_out);
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 受けの記録を期限付きで待ち、期限を満たしてから `result` の完了を当てる。返すのは `op_outcome` の番号である。
@@ -4418,7 +4435,8 @@ fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
     let taken = registry.take_op(&mut ctx, op, 0).unwrap();
     assert!(taken.timed_out && taken.made.is_none() && taken.failure().is_none());
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
     code
 }
 
@@ -4565,7 +4583,8 @@ fn a_read_line_lends_the_stream_buffer_and_frees_it_when_empty() {
         assert_eq!(s.rest.capacity() == 0, left == 0);
     }
     unsafe { ctx.heap_mut().decref(stream) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 読んでいる間に取り消された行の連鎖は、外が書いたバイトをストリームの buffer に確定してから、取り消しだけで終わった
@@ -4617,7 +4636,8 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
     assert!(taken.cancelling && taken.result.is_err() && taken.failure().is_none());
     assert_eq!(net_rest(&ctx, back).pending(), b"xy");
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// 行の連鎖を、`chunks` を順に外の書き手として書いて進める。1つの塊は、貸された空きが足りなければ2つ以上の周に
@@ -4666,7 +4686,8 @@ fn read_line_through(chunks: &[&[u8]]) -> (Result<usize, String>, Vec<usize>) {
         _ => panic!("the line op ends with a line or a failure"),
     };
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
     (result, reads)
 }
 
@@ -4765,5 +4786,6 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
     assert!(s.pending().is_empty() && s.rest.capacity() == 0);
     unsafe { ctx.heap_mut().decref(back) }.unwrap();
     unsafe { ctx.heap_mut().decref(stream) }.unwrap();
-    assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }

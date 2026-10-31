@@ -44,7 +44,7 @@ fn a_shared_list_becomes_local_again<M: Mode>() {
         heap.decref(l).unwrap();
     }
     assert_eq!(heap.retire_worker(child), Ok(()));
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn shared_counts_above_one_and_immortal_objects_stop<M: Mode>() {
@@ -64,7 +64,7 @@ fn shared_counts_above_one_and_immortal_objects_stop<M: Mode>() {
         heap.decref(x).unwrap();
         heap.decref(p).unwrap();
     }
-    assert_eq!(mortal(&heap), 1);
+    assert_eq!(mortal(&mut heap), 1);
 }
 
 /// 子が確保した値は、速いモードでは何もせずに局所の値で、検査モードでは所有者を今の worker に書き換える。
@@ -80,7 +80,7 @@ fn a_list_of_the_child_comes_back_to_the_parent<M: Mode>() {
     }
     assert_eq!(heap.retire_worker(child), Ok(()));
     unsafe { heap.decref(l) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn the_owners_of_a_list_of_the_child_are_rewritten() {
     unsafe { heap.transfer_back(l, child) }.unwrap();
     assert_eq!(owners(&heap, l), [0; 3]);
     assert_eq!((heap.owned_by(0), heap.owned_by(child)), (3, 0));
-    assert_eq!(super::check_all(&heap), Ok(()));
+    assert_eq!(super::check_all(&mut heap), Ok(()));
     unsafe { heap.decref(l) }.unwrap();
 }
 
@@ -113,7 +113,7 @@ fn a_shared_object_under_a_cell_of_the_child_stays_shared<M: Mode>() {
         assert_eq!(heap.retire_worker(child), Ok(()));
         heap.decref(c).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// `lin` でない共有の組の中の `lin` の物体は、`share` で子に移っている。検査モードでは、子が返したセルから組を通って
@@ -145,7 +145,7 @@ fn a_poly_pair_with_a_file_comes_back_to_the_parent<M: Mode>() {
         heap.decref(c).unwrap();
     }
     assert_eq!(drops.load(Ordering::Relaxed), 1);
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// 子が受け取った共有の組をそのまま返す形。組とその下の rc -1 の物体を裏返し、組の中の子の持ち物の `lin` の物体は、
@@ -170,7 +170,7 @@ fn a_shared_poly_pair_returned_as_is_flips_and_its_file_comes_back<M: Mode>() {
         heap.decref(pair).unwrap();
     }
     assert_eq!(drops.load(Ordering::Relaxed), 1);
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// `lin` ビットの立った rc -1 の物体も裏返す。
@@ -187,7 +187,7 @@ fn a_shared_lin_object_is_flipped<M: Mode>() {
         assert!(heap.is_unique(lin).unwrap());
         heap.decref(lin).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_deep_shared_list_comes_back_without_recursion<M: Mode>() {
@@ -200,7 +200,7 @@ fn a_deep_shared_list_comes_back_without_recursion<M: Mode>() {
         assert!(heap.is_unique(l).unwrap());
         heap.decref(l).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_deep_list_of_the_child_comes_back_without_recursion<M: Mode>() {
@@ -212,7 +212,7 @@ fn a_deep_list_of_the_child_comes_back_without_recursion<M: Mode>() {
     unsafe { heap.transfer_back(l, child) }.unwrap();
     assert_eq!(heap.retire_worker(child), Ok(()));
     unsafe { heap.decref(l) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// 子が確保した値を移し戻さずに ID を退かせると、検査モードでは `TransferLeak` になる。
@@ -261,7 +261,7 @@ fn a_value_shared_to_the_current_id_is_received_by_another_id<M: Mode>() {
         assert_eq!(heap.transfer_back(x, a), Ok(()));
         assert_eq!(raw::rc(x), 1);
         assert_eq!(owned(&heap, b), before.map(|n| n + 1));
-        if let Some(heap) = (&heap as &dyn Any).downcast_ref::<H>() {
+        if let Some(heap) = (&mut heap as &mut dyn Any).downcast_mut::<H>() {
             assert_eq!(super::check_all(heap), Ok(()));
         }
         assert_eq!(heap.retire_worker(a), Ok(()));
@@ -318,7 +318,7 @@ fn transfer_back_from_the_current_worker_changes_nothing() {
             })
         );
         assert_eq!(rcs(&heap, l), [-1, -1]);
-        assert_eq!(super::check_all(&heap), Ok(()));
+        assert_eq!(super::check_all(&mut heap), Ok(()));
         heap.decref(l).unwrap();
     }
 }
@@ -354,14 +354,14 @@ fn transfer_back_moves_the_counts_to_the_current_worker() {
         // c の所有者を書き換え、共有のリストは c の下で rc -1 のまま残す
         heap.transfer_back(c, child).unwrap();
         assert_eq!((heap.owned_by(0), heap.owned_by(child)), (1, 0));
-        assert_eq!(super::check_all(&heap), Ok(()));
+        assert_eq!(super::check_all(&mut heap), Ok(()));
         heap.decref(c).unwrap();
         // 裏返した物体は今の worker の数に入る
         let l = list(&mut heap, 2);
         heap.share(l, child).unwrap();
         heap.transfer_back(l, child).unwrap();
         assert_eq!(heap.owned_by(0), 2);
-        assert_eq!(super::check_all(&heap), Ok(()));
+        assert_eq!(super::check_all(&mut heap), Ok(()));
         heap.decref(l).unwrap();
     }
     assert_eq!(heap.owned_by(0), 0);

@@ -43,7 +43,7 @@ fn eprintln_writes_to_the_standard_error<M: Mode>() {
     }
     assert_eq!(memory.err(), "oops\n");
     assert_eq!(memory.out(), "");
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn arguments_are_read_by_index<M: Mode>() {
@@ -64,7 +64,7 @@ fn arguments_are_read_by_index<M: Mode>() {
             })))
         );
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn an_argument_that_is_not_utf8_is_a_fault<M: Mode>() {
@@ -74,7 +74,7 @@ fn an_argument_that_is_not_utf8_is_a_fault<M: Mode>() {
         ctx.env_arg(1),
         Err(Fault::NotUtf8(Box::new(Utf8Source::Arg(1))))
     );
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn environment_variables_are_read_by_name<M: Mode>() {
@@ -104,7 +104,7 @@ fn environment_variables_are_read_by_name<M: Mode>() {
             Err(Fault::NotUtf8(Box::new(Utf8Source::EnvVar("BAD".into()))))
         );
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 1行ずつ読むと、行の終わりを含めて返し、終わりでは空の文字列になる。最後の行に `\n` がなくても1行である。
@@ -128,8 +128,8 @@ fn the_standard_input_is_read_by_lines_or_whole<M: Mode>() {
     let w = stdin_read(&mut ctx2, false).unwrap();
     assert_eq!(text(ctx2.heap(), w), "b\n");
     unsafe { ctx2.heap_mut().decref(w) }.unwrap();
-    assert_eq!(mortal(ctx.heap()), 0);
-    assert_eq!(mortal(ctx2.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
+    assert_eq!(mortal(&mut ctx2), 0);
 }
 
 /// 64 KiB の区切りより長い1行も、区切りをまたいで1行として読む。
@@ -144,7 +144,7 @@ fn a_long_line_is_read_across_chunks<M: Mode>() {
     let w = stdin_read(&mut ctx, true).unwrap();
     assert_eq!(text(ctx.heap(), w), "rest");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn the_standard_input_can_be_unavailable_or_not_utf8<M: Mode>() {
@@ -228,7 +228,7 @@ fn a_line_read_refills_once_per_64_kib<M: Mode>() {
     }
     assert_eq!(lines, count);
     assert!(reads.load(Ordering::Relaxed) <= 17, "{reads:?}");
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 読みの誤り、止めたこと、UTF-8 でない行の後も、読み手は slot に残り、次の読みは続きから読める。
@@ -271,7 +271,7 @@ fn a_failed_stdin_read_leaves_the_reader_in_the_slot<M: Mode>() {
     let w = stdin_read(&mut ctx, true).unwrap();
     assert_eq!(text(ctx.heap(), w), "ok\n");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 子の起動は、列を要素に分けて Host に渡す。空の要素も1つと数え、環境はキーと値の組にし、空の作業ディレクトリは
@@ -359,7 +359,7 @@ fn a_child_gets_its_lists_split<M: Mode>() {
             ),
         ]
     );
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 止める語が起動の前に立っていれば起動しない。子を待つ間に立てば、子が終わった後で止めたことにし、ハンドルを手放す。
@@ -378,7 +378,7 @@ fn a_child_stops_on_an_interrupt<M: Mode>() {
     }
     assert_eq!(memory.spawns().len(), 1);
     assert_eq!(memory.waits_and_kills(), (1, 0));
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `Child` の読みは標準出力の pipe を読み、UTF-8 でない出力はプログラムの名前を付けた `NotUtf8` にする。閉じた標準
@@ -433,7 +433,7 @@ fn a_child_handle_reads_writes_and_refuses<M: Mode>() {
         ctx.heap_mut().decref(t).unwrap();
     }
     assert_eq!(memory.waits_and_kills(), (2, 1));
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 書き込みのハンドルは、データを借りて Host のストリームに書き、受け取ったハンドルを返す。`Bytes` と `Text` はその
@@ -472,7 +472,7 @@ fn stream_handles_write_into_the_host_buffers<M: Mode>() {
     }
     assert_eq!(memory.out_bytes(), b"a\xff\nbb\n");
     assert_eq!(memory.err_bytes(), b"b\na\xff\n");
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// どのストリームも、生きているハンドルは高々1つで、2つ目の `open` は `InUse` である。閉じた後は開ける。標準入力を
@@ -492,7 +492,7 @@ fn a_second_open_of_a_stream_is_in_use<M: Mode>() {
             ctx.handle_close(h, handle).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 書けなければ、ハンドルを手放して `Output` を返す。借りたデータは呼ぶ側に残り、ハンドルの印は下りる。1行の書き込み
@@ -519,7 +519,7 @@ fn a_failed_write_releases_the_handle<M: Mode>() {
         ctx.heap_mut().decref(t).unwrap();
         ctx.heap_mut().decref(b).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 書き出せなければ、`flush` もハンドルを手放して `Output` を返し、ハンドルの印は下りる。
@@ -535,7 +535,7 @@ fn a_failed_flush_releases_the_handle<M: Mode>() {
         let out = ctx.handle_open(Handle::Stdout).unwrap();
         ctx.handle_close(out, Handle::Stdout).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 別のストリームのハンドルと、書き込みのハンドルの読みは、どちらのモードでも `WrongKind` で、何も書かない。
@@ -567,7 +567,7 @@ fn a_handle_of_another_stream_is_refused<M: Mode>() {
         ctx.handle_close(err, Handle::Stderr).unwrap();
     }
     assert_eq!(memory.out(), "");
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 読むためのハンドルの種類 (`FileIn`、`Stdin`) は、`handle_write` と `handle_flush` がどちらのモードでも
@@ -583,14 +583,14 @@ fn a_read_handle_is_refused_by_writes_and_flushes<M: Mode>() {
         let file = ctx.fs_open(p, crate::Open::Read).unwrap();
         let stdin = ctx.handle_open(Handle::Stdin).unwrap();
         let t = s(&mut ctx, "x");
-        let live = mortal(ctx.heap());
+        let live = mortal(&mut ctx);
         for (h, handle) in [(file, Handle::FileIn), (stdin, Handle::Stdin)] {
             assert_eq!(ctx.handle_write(h, handle, t, Write::Text), wrong);
             assert_eq!(ctx.handle_flush(h, handle), wrong);
         }
         assert_eq!(ctx.handle_flush(file, Handle::Stderr), wrong);
         assert_eq!(ctx.handle_flush(file, Handle::FileOut), wrong);
-        assert_eq!(mortal(ctx.heap()), live);
+        assert_eq!(mortal(&mut ctx), live);
         assert_eq!(
             (
                 super::raw::rc(file),
@@ -604,7 +604,7 @@ fn a_read_handle_is_refused_by_writes_and_flushes<M: Mode>() {
         ctx.handle_close(file, Handle::FileIn).unwrap();
     }
     assert_eq!(memory.written("in.txt"), None);
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 both_modes!(

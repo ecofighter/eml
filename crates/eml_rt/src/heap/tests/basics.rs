@@ -9,9 +9,9 @@ use crate::{Fast, Heap, HeapError, Kind, Meta, Mode, Word};
 fn a_cons_list_is_freed_by_one_decref<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let l = list(&mut heap, 3);
-    assert_eq!(mortal(&heap), 3);
+    assert_eq!(mortal(&mut heap), 3);
     unsafe { heap.decref(l) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_dupped_object_survives_one_decref<M: Mode>() {
@@ -22,10 +22,10 @@ fn a_dupped_object_survives_one_decref<M: Mode>() {
         assert!(!heap.is_unique(x).unwrap());
         heap.decref(x).unwrap();
         assert!(heap.is_unique(x).unwrap());
-        assert_eq!(mortal(&heap), 1);
+        assert_eq!(mortal(&mut heap), 1);
         heap.decref(x).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_long_list_with_boxed_elements_frees_with_a_short_worklist<M: Mode>() {
@@ -40,7 +40,7 @@ fn a_long_list_with_boxed_elements_frees_with_a_short_worklist<M: Mode>() {
         l = cons(&mut heap, pair, l);
     }
     unsafe { heap.decref(l) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
     // 要素を残りのリストより先に空けるので、作業リストは要素1つと残りの1つで足りる
     assert!(heap.work.capacity() <= 4, "{}", heap.work.capacity());
 }
@@ -54,7 +54,7 @@ fn a_deep_chain_does_not_overflow_the_stack<M: Mode>() {
         x = cell;
     }
     unsafe { heap.decref(x) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_big_int_is_boxed_only_outside_63_bits<M: Mode>() {
@@ -69,7 +69,7 @@ fn a_big_int_is_boxed_only_outside_63_bits<M: Mode>() {
         assert_eq!(heap.meta(big).unwrap().kind(), Kind::BigInt);
         heap.decref(big).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn the_dummy_ignores_dup_and_decref_and_unboxes_to_zero<M: Mode>() {
@@ -111,7 +111,7 @@ fn float_box_round_trips<M: Mode>() {
             heap.decref(big).unwrap();
         }
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// yield 中に返るダミーは、`float` の位置で `unbox` しても読める。ビット列 0 は `0.0` である。
@@ -137,7 +137,7 @@ fn an_extended_scan_object_frees_all_its_children<M: Mode>() {
         assert_eq!(heap.raw(x, 1 + n), Ok(7));
         heap.decref(x).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_foreign_value_is_finalized_exactly_once<M: Mode>() {
@@ -189,7 +189,7 @@ fn a_zero_sized_foreign_value_fits<M: Mode>() {
         assert_eq!(heap.foreign::<u8>(f), Err(HeapError::WrongKind));
         heap.decref(f).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn is_last_and_free_block_free_a_known_shape<M: Mode>() {
@@ -202,7 +202,7 @@ fn is_last_and_free_block_free_a_known_shape<M: Mode>() {
         heap.decref(x).unwrap();
         heap.free_block(x).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn bytes_in_use_come_back_after_a_large_object_dies<M: Mode>() {
@@ -223,7 +223,7 @@ fn immortal_objects_are_never_freed<M: Mode>() {
         heap.decref(x).unwrap();
         heap.decref(x).unwrap();
     }
-    assert_eq!(mortal(&heap), 1);
+    assert_eq!(mortal(&mut heap), 1);
 }
 
 fn the_boundary_between_small_and_large_works_in_both_modes<M: Mode>() {
@@ -235,10 +235,10 @@ fn the_boundary_between_small_and_large_works_in_both_modes<M: Mode>() {
             heap.set_raw(x, raw - 1, 9).unwrap();
             assert_eq!(heap.raw(x, raw - 1), Ok(9));
         }
-        assert_eq!(mortal(&heap), 1);
+        assert_eq!(mortal(&mut heap), 1);
         unsafe { heap.decref(x) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn mixed_sizes_keep_the_free_lists_apart<M: Mode>() {
@@ -260,12 +260,12 @@ fn mixed_sizes_keep_the_free_lists_apart<M: Mode>() {
             live.push((w, id));
         }
     }
-    assert_eq!(mortal(&heap), live.len());
+    assert_eq!(mortal(&mut heap), live.len());
     for (w, id) in live {
         assert_eq!(unsafe { heap.raw(w, 0) }, Ok(id));
         unsafe { heap.decref(w) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn walking_counts_objects_across_pages<M: Mode>() {
@@ -273,11 +273,11 @@ fn walking_counts_objects_across_pages<M: Mode>() {
     let objects: Vec<Word> = (0..2000)
         .map(|_| heap.alloc_data(0, 0, 15, false))
         .collect();
-    assert_eq!(mortal(&heap), 2000);
+    assert_eq!(mortal(&mut heap), 2000);
     for w in objects {
         unsafe { heap.decref(w) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// 語の数の和が桁あふれする大きさは、小さいブロックを取って書きあふれる前に panic する。
@@ -300,7 +300,7 @@ fn a_wrapping_size_panics_before_allocating<M: Mode>() {
             .copied()
             .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
         assert_eq!(message, Some(TOO_LARGE), "{scanned} + {raw}");
-        assert_eq!(mortal(&heap), 0);
+        assert_eq!(mortal(&mut heap), 0);
     }
 }
 

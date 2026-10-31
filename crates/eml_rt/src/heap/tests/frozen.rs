@@ -119,10 +119,12 @@ fn own_objects_hold_region_words<M: Mode>() {
         heap.decref(s).unwrap();
         heap.decref(pair).unwrap();
     }
-    if let Some(check) = (&heap as &dyn std::any::Any).downcast_ref::<Heap<crate::Checked>>() {
+    if let Some(check) =
+        (&mut heap as &mut dyn std::any::Any).downcast_mut::<Heap<crate::Checked>>()
+    {
         super::check_all(check).unwrap();
     }
-    assert_eq!(super::mortal(&heap), 0);
+    assert_eq!(super::mortal(&mut heap), 0);
     assert_eq!(text(&heap, s), "constant");
 }
 
@@ -167,7 +169,7 @@ fn chains_hold_constants_that_point_into_ancestors<M: Mode>() {
         heap.release(pair, 1, &[false, true]).unwrap();
         heap.decref(inner).unwrap();
     }
-    assert_eq!(super::mortal(&heap), 0);
+    assert_eq!(super::mortal(&mut heap), 0);
     assert_eq!(text(&heap, inner), "constant");
 }
 
@@ -192,7 +194,7 @@ fn attach_moves_to_a_descendant<M: Mode>() {
     let held = unsafe { heap.field(cell, 0) }.unwrap();
     assert_eq!(text(&heap, held), "constant");
     unsafe { heap.decref(cell) }.unwrap();
-    assert_eq!(super::mortal(&heap), 0);
+    assert_eq!(super::mortal(&mut heap), 0);
 }
 
 fn attaching_an_ancestor_panics<M: Mode>() {

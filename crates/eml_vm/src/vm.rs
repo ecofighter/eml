@@ -1290,6 +1290,8 @@ fn switch_away<R: Exec>(
         } else if deadline.is_none() && sched.driver.pending() == 0 {
             return Err(VmFault::Deadlock);
         }
+        // 眠る前に、ほかのスレッドから受けた解放が溜まっていれば取り込む (docs/spec/vm.md の「時計と driver」)
+        ctx.reclaim_if_due();
         match sched.driver.wait(sched.wait_deadline(deadline)) {
             Ok(true) => {}
             Ok(false) => return Err(VmFault::Deadlock),

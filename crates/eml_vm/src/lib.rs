@@ -248,9 +248,9 @@ pub struct Machine<M: Mode> {
     max_depth: usize,
     sched: Sched,
     /// 実行と回復の後の確かめ。検査モードではヒープの不変条件を確かめる。
-    check_heap: fn(&Ctx<M>) -> Result<(), HeapError>,
+    check_heap: fn(&mut Ctx<M>) -> Result<(), HeapError>,
     /// 閉じるときの確かめ。検査モードでは残った物体をリークとして返す。
-    at_close: fn(&Ctx<M>) -> Result<(), RuntimeError>,
+    at_close: fn(&mut Ctx<M>) -> Result<(), RuntimeError>,
     /// 回復で捨てたヒープが実行でした仕事。
     earlier: HeapWork,
     /// 今のヒープが回復で写すためにした仕事。`RunStats` は実行の仕事だけを数えるので引く。
@@ -284,8 +284,8 @@ impl Machine<Checked> {
             control,
             host,
             |ctx| {
+                ctx.check_invariants()?;
                 let heap = ctx.heap();
-                heap.check_invariants()?;
                 heap.control().check_owned(&[heap])
             },
             check_leaks,
@@ -297,8 +297,8 @@ impl<M: Mode> Machine<M> {
     fn with_checks(
         control: Arc<Control>,
         host: HostRef,
-        check_heap: fn(&Ctx<M>) -> Result<(), HeapError>,
-        at_close: fn(&Ctx<M>) -> Result<(), RuntimeError>,
+        check_heap: fn(&mut Ctx<M>) -> Result<(), HeapError>,
+        at_close: fn(&mut Ctx<M>) -> Result<(), RuntimeError>,
     ) -> Machine<M> {
         Machine {
             code: CodeBase::new(Arc::clone(&control)),
@@ -454,7 +454,7 @@ impl<M: Mode> Machine<M> {
         self.shared_roots = 0;
         self.earlier = old;
         self.copying = HeapWork::of(self.ctx.heap().stats());
-        (self.check_heap)(&self.ctx)
+        (self.check_heap)(&mut self.ctx)
     }
 
     /// `Machine` を作ってからの、実行がヒープでした仕事。
@@ -608,6 +608,8 @@ impl<M: Mode> Machine<M> {
                 &task,
             ));
         }
+        // ほかのスレッドから受けた解放を検査の前に取り込む (docs/spec/vm.md の「誤り、止めること、終わり」)
+        ctx.reclaim_if_due();
         (self.check_heap)(ctx)
             .map_err(|error| heap_fault(error, code.function_name(task.last_ret, &task)))?;
         let finished = Finished {
@@ -689,8 +691,8 @@ impl<M: Mode> Machine<M> {
             // 根の語は根が持つ参照で、ほかの語には触れないので、`heap_mut` の前提を崩さない
             unsafe { self.ctx.heap_mut().decref(root) }.map_err(close_error)?;
         }
-        (self.check_heap)(&self.ctx).map_err(close_error)?;
-        (self.at_close)(&self.ctx)
+        (self.check_heap)(&mut self.ctx).map_err(close_error)?;
+        (self.at_close)(&mut self.ctx)
     }
 }
 
@@ -892,8 +894,8 @@ fn heap_fault(error: HeapError, last_function: String) -> RuntimeError {
     }
 }
 
-fn check_leaks(ctx: &Ctx<Checked>) -> Result<(), RuntimeError> {
-    let leaks = ctx.heap().leaks();
+fn check_leaks(ctx: &mut Ctx<Checked>) -> Result<(), RuntimeError> {
+    let leaks = ctx.leaks();
     if leaks.is_empty() {
         Ok(())
     } else {

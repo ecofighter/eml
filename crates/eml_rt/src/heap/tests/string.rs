@@ -13,9 +13,9 @@ pub(super) fn text<M: Mode>(heap: &Heap<M>, w: Word) -> String {
 }
 
 /// 検査モードのリークの報告。速いモードはリークを数えないので `None` を返す。
-fn leaks<M: Mode>(heap: &Heap<M>) -> Option<BTreeMap<&'static str, u64>> {
-    (heap as &dyn Any)
-        .downcast_ref::<Heap<Checked>>()
+fn leaks<M: Mode>(heap: &mut Heap<M>) -> Option<BTreeMap<&'static str, u64>> {
+    (heap as &mut dyn Any)
+        .downcast_mut::<Heap<Checked>>()
         .map(Heap::leaks)
 }
 
@@ -38,7 +38,7 @@ fn strings_hold_their_text<M: Mode>() {
         assert_eq!(text(&heap, w), s);
         unsafe { heap.decref(w) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn immortal_strings_are_never_freed<M: Mode>() {
@@ -49,13 +49,13 @@ fn immortal_strings_are_never_freed<M: Mode>() {
     assert_eq!(text(&heap, w), "literal");
     assert!(!unsafe { heap.is_unique(w) }.unwrap());
     // 不死の物体は数が 0 なら漏れと数えない (docs/spec/object-model.md の「不死の物体の数え方」)
-    assert!(leaks(&heap).is_none_or(|l| l.is_empty()));
+    assert!(leaks(&mut heap).is_none_or(|l| l.is_empty()));
 }
 
 fn leaks_are_named_string<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let w = heap.alloc_string("left behind");
-    if let Some(l) = leaks(&heap) {
+    if let Some(l) = leaks(&mut heap) {
         assert_eq!(l.get("String"), Some(&1));
     }
     unsafe { heap.decref(w) }.unwrap();
@@ -104,7 +104,7 @@ fn push_in_place_keeps_the_box<M: Mode>() {
     assert_eq!(w2, w);
     assert_eq!(text(&heap, w2), "ab");
     unsafe { heap.decref(w2) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn push_grows_a_full_string<M: Mode>() {
@@ -118,7 +118,7 @@ fn push_grows_a_full_string<M: Mode>() {
     }
     assert_eq!(text(&heap, w), expected);
     // 古い箱は空けた
-    assert_eq!(mortal(&heap), 1);
+    assert_eq!(mortal(&mut heap), 1);
     unsafe { heap.decref(w) }.unwrap();
 }
 
@@ -138,7 +138,7 @@ fn regrowth_is_logarithmic<M: Mode>() {
     // 容量を倍にするので、作り直しは log2(n) 回 (約17回) と小さい級の刻みの分で済む
     assert!(moves <= 40, "{moves} regrowths for {n} pushes");
     unsafe { heap.decref(w) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn shared_left_is_copied<M: Mode>() {
@@ -151,7 +151,7 @@ fn shared_left_is_copied<M: Mode>() {
     assert_eq!(text(&heap, w2), "abc");
     unsafe { heap.decref(w) }.unwrap();
     unsafe { heap.decref(w2) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn immortal_left_is_copied<M: Mode>() {
@@ -163,7 +163,7 @@ fn immortal_left_is_copied<M: Mode>() {
     assert_eq!(text(&heap, w), "lit");
     assert_eq!(text(&heap, w2), "lit!");
     unsafe { heap.decref(w2) }.unwrap();
-    if let Some(l) = leaks(&heap) {
+    if let Some(l) = leaks(&mut heap) {
         assert!(l.is_empty());
     }
 }
@@ -188,7 +188,7 @@ fn large_strings_grow_across_pages<M: Mode>() {
     }
     assert_eq!(text(&heap, w), chunk.repeat(5));
     unsafe { heap.decref(w) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn concat_consumes_both_sides<M: Mode>() {
@@ -197,7 +197,7 @@ fn concat_consumes_both_sides<M: Mode>() {
     let b = heap.alloc_string("bar");
     let r = unsafe { heap.string_concat(a, b) }.unwrap();
     assert_eq!(text(&heap, r), "foobar");
-    assert_eq!(mortal(&heap), 1);
+    assert_eq!(mortal(&mut heap), 1);
     unsafe { heap.decref(r) }.unwrap();
 }
 
@@ -212,7 +212,7 @@ fn concat_of_a_string_with_itself<M: Mode>() {
         assert_eq!(text(&heap, r), format!("{s}{s}"));
         unsafe { heap.decref(r) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// 共有の側の left は一意でないので写す。rc -1 なら最後の参照なので写した後で空け、rc -2 なら参照を1つ手放して残す。
@@ -237,10 +237,10 @@ fn copy_of_a_left_on_the_shared_side<M: Mode>(concat: bool) {
             assert_eq!(text(&heap, x), "ab");
             unsafe { heap.decref(x) }.unwrap();
         }
-        assert_eq!(mortal(&heap), 1);
+        assert_eq!(mortal(&mut heap), 1);
         unsafe { heap.decref(r) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn push_copies_a_left_on_the_shared_side<M: Mode>() {
@@ -351,7 +351,7 @@ fn concat_of_an_immortal_with_itself_needs_two_references<M: Mode>() {
     assert_eq!(text(&heap, r), "litlit");
     assert_eq!(unsafe { raw::prefix_first(w) }, 0);
     unsafe { heap.decref(r) }.unwrap();
-    assert!(leaks(&heap).is_some_and(|l| l.is_empty()));
+    assert!(leaks(&mut heap).is_some_and(|l| l.is_empty()));
 }
 
 fn another_worker_cannot_push_to_a_local_left<M: Mode>() {
@@ -393,7 +393,7 @@ fn another_worker_cannot_lend_a_local_bytes<M: Mode>() {
     heap.set_worker(0);
     assert_eq!(unsafe { raw::rc(w) }, 1);
     unsafe { heap.decref(w) }.unwrap();
-    assert_eq!(super::mortal(&heap), 0);
+    assert_eq!(super::mortal(&mut heap), 0);
 }
 
 /// 容量を決めて作った空の文字列は、容量の中の追記をその場で受ける (`String.show` が1回だけ確保するため)。
@@ -409,7 +409,7 @@ fn a_room_string_takes_pushes_in_place<M: Mode>() {
         assert_eq!(text(&heap, u), "abcdefghij");
         heap.decref(u).unwrap();
     }
-    assert_eq!(super::mortal(&heap), 0);
+    assert_eq!(super::mortal(&mut heap), 0);
 }
 
 fn a_unique_foreign_value_can_be_written<M: Mode>() {
@@ -422,7 +422,7 @@ fn a_unique_foreign_value_can_be_written<M: Mode>() {
         assert_eq!(heap.foreign_unique::<String>(f), Err(HeapError::WrongKind));
         heap.decref(f).unwrap();
     }
-    assert_eq!(super::mortal(&heap), 0);
+    assert_eq!(super::mortal(&mut heap), 0);
 }
 
 /// 参照が2つある物体、共有した物体、ほかの worker の物体、手放した物体は、書き換えのために借りられない。
@@ -450,7 +450,7 @@ fn a_shared_or_foreign_workers_value_is_not_written<M: Mode>() {
         assert_eq!(heap.foreign_unique::<u64>(g), Err(HeapError::NotUnique));
         heap.decref(g).unwrap();
     }
-    assert_eq!(super::mortal(&heap), 0);
+    assert_eq!(super::mortal(&mut heap), 0);
 }
 
 both_modes!(

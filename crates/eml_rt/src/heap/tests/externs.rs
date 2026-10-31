@@ -719,7 +719,7 @@ fn strings_compare_by_bytes<M: Mode>() {
             }
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 借りる行は同じ文字列を両辺に渡されても、参照1つのまま動く。消費する行は参照を2つ持って渡す。
@@ -741,7 +741,7 @@ fn the_same_string_on_both_sides<M: Mode>() {
         assert_eq!(text(ctx.heap(), w), "abcabc");
         ctx.heap_mut().decref(w).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 写すバイトを数える。一意な左なら、その場で足しても作り直しても右の長さを、共有か不死の左なら両辺の長さを数える。
@@ -781,7 +781,7 @@ fn appending_counts_the_bytes_it_copies<M: Mode>() {
         }
     }
     // 不死の `k` だけが残る
-    assert_eq!(mortal(ctx.heap()), 1);
+    assert_eq!(mortal(&mut ctx), 1);
 }
 
 /// `Int.show` と `String.show` は、作った文字列の長さを数える。
@@ -803,7 +803,7 @@ fn shows_count_the_bytes_they_write<M: Mode>() {
         ctx.heap_mut().decref(w).unwrap();
         ctx.heap_mut().decref(a).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `char_display` が書くバイトは、Rust の `char::encode_utf8` と同じで、長さは UTF-8 の幅の境目で変わる。
@@ -828,7 +828,7 @@ fn chars_display_as_utf8<M: Mode>() {
         assert_eq!(text(ctx.heap(), w), expected);
         unsafe { ctx.heap_mut().decref(w) }.unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn ints_show_in_decimal<M: Mode>() {
@@ -848,7 +848,7 @@ fn ints_show_in_decimal<M: Mode>() {
         assert_eq!(text(ctx.heap(), w), v.to_string());
         unsafe { ctx.heap_mut().decref(w) }.unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// エスケープの規則は docs/spec/declarations.md の「Prelude のクラス」のとおりである。C1 の制御文字 (U+0080〜U+009F)
@@ -877,7 +877,7 @@ fn strings_show_with_their_escapes<M: Mode>() {
             ctx.heap_mut().decref(a).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 文字列の核はバイトの位置で読み、範囲の外と文字の境界を断る。断っても引数は借りたままで、参照の数は変わらない
@@ -944,7 +944,7 @@ fn the_string_core_reads_by_byte_positions<M: Mode>() {
         ctx.heap_mut().decref(n).unwrap();
         ctx.heap_mut().decref(a).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `slice` は写したバイトの数を数える。
@@ -961,7 +961,7 @@ fn a_slice_counts_the_bytes_it_copies<M: Mode>() {
         ctx.heap_mut().decref(w).unwrap();
         ctx.heap_mut().decref(a).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `char_at` は1から4バイトの文字を読む。文字の途中の位置と範囲の外を断り、どちらでも引数は借りたままである。
@@ -1010,7 +1010,7 @@ fn char_at_reads_a_char_at_a_byte_position<M: Mode>() {
         );
         ctx.heap_mut().decref(e).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `push` は一意な文字列をその場で伸ばし、共有の文字列は写してから足して元の中身を変えない。検査モードは、一意なら
@@ -1045,7 +1045,7 @@ fn push_appends_the_utf8_of_a_char<M: Mode>() {
         ctx.heap_mut().decref(a).unwrap();
         ctx.heap_mut().decref(b).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `char_at` と `push` も、文字列でない引数を検査モードで断り、ヒープを変えない。
@@ -1056,15 +1056,15 @@ fn char_at_and_push_refuse_a_non_string<M: Mode>() {
     let mut ctx = ctx::<M>();
     unsafe {
         let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
-        let live = mortal(ctx.heap());
+        let live = mortal(&mut ctx);
         let wrong = Fault::Heap(HeapError::WrongKind);
         assert_eq!(ctx.string_char_at(0, d).unwrap_err(), wrong);
         assert_eq!(ctx.string_push_char('a' as i64, d).unwrap_err(), wrong);
         assert_eq!(ctx.string_char_at(0, Word::imm(1)).unwrap_err(), wrong);
-        assert_eq!(mortal(ctx.heap()), live);
+        assert_eq!(mortal(&mut ctx), live);
         ctx.heap_mut().decref(d).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 文字列の核も、文字列でない引数を検査モードで断り、ヒープを変えない。
@@ -1076,7 +1076,7 @@ fn the_string_core_refuses_a_non_string<M: Mode>() {
     unsafe {
         let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
         let a = s(&mut ctx, "a");
-        let live = mortal(ctx.heap());
+        let live = mortal(&mut ctx);
         let wrong = Fault::Heap(HeapError::WrongKind);
         assert_eq!(
             ctx.string_byte_length(d),
@@ -1091,11 +1091,11 @@ fn the_string_core_refuses_a_non_string<M: Mode>() {
             Err(Fault::Heap(HeapError::WrongKind))
         );
         assert_eq!(ctx.string_find_from(a, 0, d), Err(wrong));
-        assert_eq!(mortal(ctx.heap()), live);
+        assert_eq!(mortal(&mut ctx), live);
         ctx.heap_mut().decref(a).unwrap();
         ctx.heap_mut().decref(d).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 文字列でない引数は検査モードで断る。断ったときはヒープを変えない。
@@ -1107,14 +1107,14 @@ fn a_string_extern_refuses_a_non_string<M: Mode>() {
     unsafe {
         let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
         let a = s(&mut ctx, "a");
-        let live = mortal(ctx.heap());
+        let live = mortal(&mut ctx);
         assert_eq!(ctx.string_eq(a, d), Err(Fault::Heap(HeapError::WrongKind)));
         assert_eq!(ctx.string_show(d), Err(Fault::Heap(HeapError::WrongKind)));
-        assert_eq!(mortal(ctx.heap()), live);
+        assert_eq!(mortal(&mut ctx), live);
         ctx.heap_mut().decref(a).unwrap();
         ctx.heap_mut().decref(d).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn println_writes_a_line_and_releases_its_text<M: Mode>() {
@@ -1129,7 +1129,7 @@ fn println_writes_a_line_and_releases_its_text<M: Mode>() {
     ctx.flush().unwrap();
     assert_eq!(memory.out(), "héllo\n\n");
     assert_eq!(memory.err(), "");
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 書けなくても文字列は手放す。
@@ -1143,7 +1143,7 @@ fn a_failed_write_still_releases_the_text<M: Mode>() {
             Err(Fault::Output("disk full".into()))
         );
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn println_refuses_a_non_string<M: Mode>() {
@@ -1186,7 +1186,7 @@ fn copy_string_copies_up_to_a_number_of_chars<M: Mode>() {
         let long = s(&mut ctx, &"あ".repeat(10_002));
         assert_eq!(ctx.copy_string(long, 10_001).unwrap(), "あ".repeat(10_001));
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 凍結した領域の文字列も写せる。領域の物体は数えないので、手放しても何も変わらない。
@@ -1199,7 +1199,7 @@ fn copy_string_reads_a_region_string<M: Mode>() {
         unsafe { ctx.copy_string(constant, 100) }.unwrap(),
         "constant"
     );
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn copy_string_refuses_a_non_string<M: Mode>() {
@@ -1255,7 +1255,7 @@ fn a_missing_file_is_a_fault_naming_its_path<M: Mode>() {
             })
         );
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `handle_read` でハンドルを借りて読み、読んだ中身を写して手放す。ハンドルの参照は呼ぶ側に残る。
@@ -1304,7 +1304,7 @@ fn a_borrowed_file_is_read_whole_and_closed<M: Mode>() {
         ctx.handle_close(f, Handle::FileIn).unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn an_empty_borrowed_file_reads_as_an_empty_string<M: Mode>() {
@@ -1316,7 +1316,7 @@ fn an_empty_borrowed_file_reads_as_an_empty_string<M: Mode>() {
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), "");
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 長さの見込みがなく、短い読みしか返さない読み手でも、借りたまま 64 KiB の区切りをまたいで全部読む。
@@ -1340,7 +1340,7 @@ fn a_long_unsized_borrowed_file_is_read_in_chunks<M: Mode>() {
     if M::CHECKED {
         assert_eq!(ctx.stats().string_bytes_copied, body.len() as u64);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// シグナルで中断された読みは、誤りにせず読み直す。
@@ -1359,7 +1359,7 @@ fn an_interrupted_borrowed_read_is_retried<M: Mode>() {
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), "abc");
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 読みの誤りと UTF-8 でない中身は、ハンドルを手放さず、ヒープを変えない。作りかけの文字列も残らない。
@@ -1386,7 +1386,7 @@ fn a_failed_borrowed_read_keeps_the_file<M: Mode>() {
     let mut ctx = ctx_with::<M>(&memory);
     unsafe {
         let f = open(&mut ctx, "broken.txt");
-        let objects = mortal(ctx.heap());
+        let objects = mortal(&mut ctx);
         assert_eq!(
             read_borrowed(&mut ctx, f, ReadAmount::All),
             Err(Fault::Io {
@@ -1396,7 +1396,7 @@ fn a_failed_borrowed_read_keeps_the_file<M: Mode>() {
             })
         );
         assert_eq!(super::raw::rc(f), 1);
-        assert_eq!(mortal(ctx.heap()), objects);
+        assert_eq!(mortal(&mut ctx), objects);
         assert_eq!(drops.load(Ordering::Relaxed), 0);
         ctx.handle_close(f, Handle::FileIn).unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 1);
@@ -1412,7 +1412,7 @@ fn a_failed_borrowed_read_keeps_the_file<M: Mode>() {
         ctx.handle_close(f, Handle::FileIn).unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 2);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 読む間に止める語を見る。割り込まれていれば止め、ハンドルは呼ぶ側に残る。止める語を下ろせば、同じハンドルを
@@ -1434,7 +1434,7 @@ fn a_borrowed_read_stops_on_an_interrupt<M: Mode>() {
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), "abc");
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 読みが `EINTR` で戻ったとき、止める語が立っていれば読み直さずに止める。ハンドルは呼ぶ側に残り、閉じるまで
@@ -1463,7 +1463,7 @@ fn an_interrupted_borrowed_read_stops_when_the_stop_word_is_set<M: Mode>() {
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
     assert_eq!(drops.load(Ordering::Relaxed), 1);
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// ヒープの外の読みの領域も、確保量の上限に数える。長さの見込みがあれば確保する前に比べるので、確保できないほど
@@ -1516,7 +1516,7 @@ fn a_borrowed_read_past_the_memory_limit_stops<M: Mode>() {
             }
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// FileIn でない物体、即値、参照が2つある FileIn は、借りて読めない。断ったときはヒープを変えない。
@@ -1526,7 +1526,7 @@ fn a_borrowed_read_refuses_a_non_file_or_a_shared_file<M: Mode>() {
     let mut ctx = ctx_with::<M>(&memory);
     unsafe {
         let other = ctx.heap_mut().alloc_foreign(0u64, false);
-        let objects = mortal(ctx.heap());
+        let objects = mortal(&mut ctx);
         for read in [ReadAmount::All, ReadAmount::Line] {
             assert_eq!(
                 ctx.handle_read(other, Handle::FileIn, read, Form::Text),
@@ -1537,24 +1537,24 @@ fn a_borrowed_read_refuses_a_non_file_or_a_shared_file<M: Mode>() {
                 Err(Fault::Heap(HeapError::WrongKind))
             );
         }
-        assert_eq!(mortal(ctx.heap()), objects);
+        assert_eq!(mortal(&mut ctx), objects);
         ctx.heap_mut().decref(other).unwrap();
         if M::CHECKED {
             let f = open(&mut ctx, "a.txt");
             super::raw::set_rc(ctx.heap_mut(), f, 2);
-            let objects = mortal(ctx.heap());
+            let objects = mortal(&mut ctx);
             for read in [ReadAmount::All, ReadAmount::Line] {
                 assert_eq!(
                     ctx.handle_read(f, Handle::FileIn, read, Form::Text),
                     Err(Fault::Heap(HeapError::NotUnique))
                 );
             }
-            assert_eq!(mortal(ctx.heap()), objects);
+            assert_eq!(mortal(&mut ctx), objects);
             super::raw::set_rc(ctx.heap_mut(), f, 1);
             ctx.handle_close(f, Handle::FileIn).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 借りたまま、行の終わりを含めて1行ずつ読み、終わりでは空の文字列を返す。全部の読みの後も空である。
@@ -1577,7 +1577,7 @@ fn a_borrowed_file_is_read_line_by_line<M: Mode>() {
         assert_eq!(super::raw::rc(f), 1);
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 行の読みの誤りも、ハンドルを手放さない。
@@ -1628,7 +1628,7 @@ fn a_failed_borrowed_line_read_keeps_the_file<M: Mode>() {
         ctx.handle_close(f, Handle::FileIn).unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 2);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `handle_read` でハンドルを借りてバイト列の形で読み、読んだ中身を写して手放す。ハンドルの参照は呼ぶ側に残る。
@@ -1674,7 +1674,7 @@ fn a_borrowed_file_is_read_whole_as_bytes<M: Mode>() {
         assert_eq!(super::raw::rc(f), 1);
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// バイト列の行の読みは、64 KiB の補充をまたぐ行も1つのバイト列にし、行の長さだけを数える。UTF-8 でない行も読み、
@@ -1724,7 +1724,7 @@ fn a_borrowed_file_is_read_in_byte_lines<M: Mode>() {
         assert_eq!(super::raw::rc(f), 1);
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// バイト列の行の読みが途中で誤るか止まると、途中まで読んだ行を手放し、ハンドルは呼ぶ側に残る。
@@ -1759,7 +1759,7 @@ fn a_failed_byte_line_read_releases_the_partial_line<M: Mode>() {
         );
         assert_eq!(super::raw::rc(f), 1);
         ctx.handle_close(f, Handle::FileIn).unwrap();
-        assert_eq!(mortal(ctx.heap()), 0);
+        assert_eq!(mortal(&mut ctx), 0);
         // 補充の前の確かめで止まり、読み手のバイトは次の読みに残る
         let f = open(&mut ctx, "slow.txt");
         control.interrupt();
@@ -1775,7 +1775,7 @@ fn a_failed_byte_line_read_releases_the_partial_line<M: Mode>() {
         );
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 塊の読みは、buffer に残ったバイトを、空なら1回の補充で読めたバイトを、受け取ったバイト列の後ろに足す。一意な
@@ -1821,7 +1821,7 @@ fn chunks_are_appended_to_the_given_bytes<M: Mode>() {
         assert_eq!(super::raw::rc(f), 1);
         ctx.handle_close(f, Handle::FileIn).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 塊の読みが誤ると、受け取ったバイト列を手放し、ハンドルは呼ぶ側に残る。検査モードは、バイト列でない `buf` を
@@ -1850,7 +1850,7 @@ fn a_failed_chunk_read_releases_the_bytes<M: Mode>() {
         );
         assert_eq!(super::raw::rc(f), 1);
         ctx.handle_close(f, Handle::FileIn).unwrap();
-        assert_eq!(mortal(ctx.heap()), 0);
+        assert_eq!(mortal(&mut ctx), 0);
         if M::CHECKED {
             let f = open(&mut ctx, "a.txt");
             let not_bytes = s(&mut ctx, "x");
@@ -1863,7 +1863,7 @@ fn a_failed_chunk_read_releases_the_bytes<M: Mode>() {
             ctx.handle_close(f, Handle::FileIn).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 表の場合を `eml_rt` の extern で動かすときの引数。共有した文字列の残った参照と、作った不死の物体の数を持つ
@@ -2447,7 +2447,7 @@ fn outcome<M: Mode>(name: &str, inputs: &[Arg], root: &Path) -> Outcome {
     for w in args.release {
         unsafe { ctx.heap_mut().decref(w) }.unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), args.immortals, "{name} {inputs:?}");
+    assert_eq!(mortal(&mut ctx), args.immortals, "{name} {inputs:?}");
     got
 }
 

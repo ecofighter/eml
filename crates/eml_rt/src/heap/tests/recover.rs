@@ -78,7 +78,7 @@ fn recovery_keeps_only_what_the_roots_reach<M: Mode>() {
         ctx.heap().bytes_in_use()
     );
     // shared、a、b、raw、wide、big、room の7つだけが残る
-    assert_eq!(mortal(ctx.heap()), 7);
+    assert_eq!(mortal(&mut ctx), 7);
     let b = root(&mut ctx, 0);
     let a = root(&mut ctx, 1);
     unsafe {
@@ -111,7 +111,7 @@ fn recovery_keeps_only_what_the_roots_reach<M: Mode>() {
     assert_eq!(root(&mut ctx, 6), constant);
     assert_eq!(root(&mut ctx, 7), ctx.heap().dummy());
     release_roots(&mut ctx);
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 回復は `Float` の箱を、同じビット列の新しい箱に写す。
@@ -126,7 +126,7 @@ fn recovery_copies_floats<M: Mode>() {
         }
         ctx.recover().unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 3);
+    assert_eq!(mortal(&mut ctx), 3);
     for (i, &b) in bits.iter().enumerate() {
         let w = root(&mut ctx, i as u32);
         unsafe {
@@ -135,7 +135,7 @@ fn recovery_copies_floats<M: Mode>() {
         }
     }
     release_roots(&mut ctx);
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// evv と yield の状態が残っていても、回復は空に戻し、それらの物体も消す。
@@ -149,11 +149,11 @@ fn recovery_empties_the_evv_and_the_yield_state<M: Mode>() {
         ctx.heap_mut().decref(ev).unwrap();
     }
     assert!(!ctx.check_finished());
-    assert!(mortal(ctx.heap()) > 0);
+    assert!(mortal(&mut ctx) > 0);
     unsafe { ctx.recover() }.unwrap();
     assert!(ctx.check_finished());
     assert_eq!(ctx.yielding(), 0);
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
     unsafe {
         assert_eq!(ctx.root_get(0), Ok(Word::imm(1)));
         push(&mut ctx, 0, 1);
@@ -178,9 +178,9 @@ fn recovery_refuses_what_it_cannot_copy<M: Mode>() {
             ctx.root_set(0, holder).unwrap();
             holder
         };
-        let before = mortal(ctx.heap());
+        let before = mortal(&mut ctx);
         assert_eq!(unsafe { ctx.recover() }, Err(HeapError::Unrecoverable));
-        assert_eq!(mortal(ctx.heap()), before);
+        assert_eq!(mortal(&mut ctx), before);
         assert_eq!(root(&mut ctx, 0), w);
     }
 }
@@ -203,7 +203,7 @@ fn recovery_copies_shared_objects_as_local<M: Mode>() {
         ctx.recover().unwrap();
     }
     // holder、both、x の写し、y の2つのセルだけが残る
-    assert_eq!(mortal(ctx.heap()), 5);
+    assert_eq!(mortal(&mut ctx), 5);
     let holder = root(&mut ctx, 0);
     unsafe {
         let heap = ctx.heap_mut();
@@ -227,7 +227,7 @@ fn recovery_copies_shared_objects_as_local<M: Mode>() {
         }
     }
     unsafe { ctx.heap_mut().decref(holder) }.unwrap();
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 別の worker が確保して共有にした文字列とバイト列を根に持つ ctx を回復し、写しを確かめて返す。共有の物体の前置きの
@@ -269,14 +269,14 @@ fn recovery_copies_shared_strings_and_bytes_of_another_worker<M: Mode>() {
     let mut ctx = recover_shared_text_of_another_worker::<M>();
     let holder = root(&mut ctx, 0);
     unsafe { ctx.heap_mut().decref(holder) }.unwrap();
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 #[test]
 fn checked_recovery_counts_shared_strings_of_another_worker_as_its_own() {
-    let ctx = recover_shared_text_of_another_worker::<Checked>();
+    let mut ctx = recover_shared_text_of_another_worker::<Checked>();
     assert_eq!(ctx.heap().owned_by(0), 3);
-    assert_eq!(super::check_all(ctx.heap()), Ok(()));
+    assert_eq!(super::check_all(&mut ctx), Ok(()));
 }
 
 /// 共有の印がある `lin` の物体は、rc が負でも写せない。
@@ -290,9 +290,9 @@ fn recovery_still_refuses_a_lin_object_at_a_negative_rc<M: Mode>() {
         ctx.root_set(0, holder).unwrap();
         holder
     };
-    let before = mortal(ctx.heap());
+    let before = mortal(&mut ctx);
     assert_eq!(unsafe { ctx.recover() }, Err(HeapError::Unrecoverable));
-    assert_eq!(mortal(ctx.heap()), before);
+    assert_eq!(mortal(&mut ctx), before);
     assert_eq!(root(&mut ctx, 0), w);
 }
 
@@ -391,11 +391,11 @@ fn checked_recovery_counts_its_copies() {
     }
     // holder、both、x の写し、y の2つのセル
     assert_eq!(ctx.heap().owned_by(0), 5);
-    assert_eq!(super::check_all(ctx.heap()), Ok(()));
+    assert_eq!(super::check_all(&mut ctx), Ok(()));
     let holder = root(&mut ctx, 0);
     unsafe { ctx.heap_mut().decref(holder) }.unwrap();
     assert_eq!(ctx.heap().owned_by(0), 0);
-    assert_eq!(super::check_all(ctx.heap()), Ok(()));
+    assert_eq!(super::check_all(&mut ctx), Ok(()));
 }
 
 /// 検査モードでは、空けた物体と token の箱に届く根も断る。速いモードでは、根が生きていない物体を指すこと自体が

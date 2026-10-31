@@ -36,7 +36,7 @@ fn bytes_hold_their_body<M: Mode>() {
         assert_eq!(unsafe { heap.scanned_len(w) }, Ok(0));
         unsafe { heap.decref(w) }.unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// 容量のバイト数。ブロックのペイロードの語の数から長さの1語を引く (docs/spec/object-model.md の「中身の不変条件」)。
@@ -51,14 +51,14 @@ fn a_room_bytes_object_starts_empty<M: Mode>() {
     assert_eq!(body(&heap, w), b"");
     assert!(capacity(&heap, w) >= 100, "{}", capacity(&heap, w));
     unsafe { heap.decref(w) }.unwrap();
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn leaks_are_named_bytes<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let w = heap.alloc_bytes(b"left behind");
-    if let Some(l) = (&heap as &dyn Any)
-        .downcast_ref::<Heap<Checked>>()
+    if let Some(l) = (&mut heap as &mut dyn Any)
+        .downcast_mut::<Heap<Checked>>()
         .map(Heap::leaks)
     {
         assert_eq!(l.get("Bytes"), Some(&1));
@@ -84,7 +84,7 @@ fn strings_and_bytes_are_not_read_as_each_other<M: Mode>() {
         heap.decref(s).unwrap();
         heap.decref(b).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn raw_words_of_bytes_are_refused<M: Mode>() {
@@ -134,7 +134,7 @@ fn recovery_copies_bytes<M: Mode>() {
         }
         ctx.recover().unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), n + 2);
+    assert_eq!(mortal(&mut ctx), n + 2);
     for (i, b) in samples().iter().enumerate() {
         unsafe {
             let w = ctx.root_get(i as u32).unwrap();
@@ -157,7 +157,7 @@ fn recovery_copies_bytes<M: Mode>() {
     for w in ctx.take_roots().into_iter().flatten() {
         unsafe { ctx.heap_mut().decref(w) }.unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn index(index: i64, len: i64) -> Fault {
@@ -196,7 +196,7 @@ fn bytes_are_read_by_position<M: Mode>() {
         ctx.heap_mut().decref(part).unwrap();
         ctx.heap_mut().decref(w).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 比べるのはバイトの辞書順で、短いほうが長いほうの前の部分なら短いほうが小さい。
@@ -220,7 +220,7 @@ fn bytes_are_compared_in_byte_order<M: Mode>() {
             ctx.heap_mut().decref(y).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn bytes_are_made_of_one_byte<M: Mode>() {
@@ -242,7 +242,7 @@ fn bytes_are_made_of_one_byte<M: Mode>() {
             Err(Fault::Stopped(Stop::MemoryLimit))
         );
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
     let limits = Limits {
         max_bytes: 1 << 20,
         ..Limits::default()
@@ -252,7 +252,7 @@ fn bytes_are_made_of_one_byte<M: Mode>() {
         unsafe { ctx.bytes_make(1 << 20, 0) },
         Err(Fault::Stopped(Stop::MemoryLimit))
     );
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `Bytes.with_capacity` は長さ 0 で、頼んだ容量を外に貸せる (docs/spec/object-model.md の「バイト列の操作」)。
@@ -263,7 +263,7 @@ fn bytes_with_capacity_lend_their_room<M: Mode>() {
     let cap = unsafe { ctx.heap_mut().bytes_lend(w) }.unwrap().cap;
     assert!(cap >= 16, "{cap}");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 一意のバイト列はその場で書き換え、語も容量も変えない。
@@ -284,7 +284,7 @@ fn unique_bytes_are_changed_in_place<M: Mode>() {
         assert_eq!(body(ctx.heap(), w4), [9]);
         ctx.heap_mut().decref(w4).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 共有されたバイト列は写してから書き、元の中身は変えない。
@@ -310,7 +310,7 @@ fn shared_bytes_are_copied<M: Mode>() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 範囲の外の位置は、受け取った参照を手放して誤りを返す。共有されていれば、ほかの参照の分は残る。
@@ -335,7 +335,7 @@ fn out_of_range_writes_release_their_argument<M: Mode>() {
         assert_eq!(ctx.bytes_set(0, 0, a), Ok(a));
         assert_eq!(ctx.bytes_truncate(9, a), Err(slice(0, 9, 3)));
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `append` は両方の引数の参照を受け取る (`String.append` と同じ)。
@@ -352,7 +352,7 @@ fn bytes_are_appended<M: Mode>() {
         assert_eq!(body(ctx.heap(), ww), [b'a', b'b', 0xff, b'a', b'b', 0xff]);
         ctx.heap_mut().decref(ww).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `append_part` は `src` の `from..to` を `dst` の後ろに足す。`src` は借りるだけで参照の数を変えない。
@@ -379,7 +379,7 @@ fn parts_of_bytes_are_appended<M: Mode>() {
         ctx.heap_mut().decref(w).unwrap();
         ctx.heap_mut().decref(ww).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 検査モードは、同じ物体を `src` と `dst` に渡しながら参照が1つしかない呼び出しを `NotUnique` で断り、ヒープを
@@ -399,7 +399,7 @@ fn appending_a_part_of_itself_needs_two_references<M: Mode>() {
         assert!(ctx.heap().is_unique(w).unwrap());
         ctx.heap_mut().decref(w).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 検査モードは、バイト列でない引数を断り、ヒープを変えない。
@@ -434,7 +434,7 @@ fn bytes_externs_refuse_a_string<M: Mode>() {
         ctx.heap_mut().decref(s).unwrap();
         ctx.heap_mut().decref(b).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 検査モードは、バイト列に写したバイトも `string_bytes_copied` に数える。一意な物体に足すときは足した分だけを、
@@ -488,7 +488,7 @@ fn bytes_copies_are_counted<M: Mode>() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 文字列はバイト列に写される。元の文字列の参照は手放し、共有やリテラルでも同じ結果になる。
@@ -521,7 +521,7 @@ fn strings_become_bytes<M: Mode>() {
             ctx.heap_mut().decref(b).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), literals);
+    assert_eq!(mortal(&mut ctx), literals);
 }
 
 /// 妥当な UTF-8 のバイト列は、同じバイトの文字列に写される。
@@ -553,7 +553,7 @@ fn bytes_decode_to_strings<M: Mode>() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), literals);
+    assert_eq!(mortal(&mut ctx), literals);
 }
 
 /// 妥当でないバイト列は、最初の妥当でない位置を持つ誤りになる。引数の参照は手放し、共有されていればほかの参照は残る。
@@ -585,7 +585,7 @@ fn invalid_bytes_do_not_decode<M: Mode>() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 検査モードは、種類の違う引数を断り、ヒープを変えない。
@@ -609,7 +609,7 @@ fn conversions_refuse_the_wrong_kind<M: Mode>() {
         ctx.heap_mut().decref(s).unwrap();
         ctx.heap_mut().decref(b).unwrap();
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 検査モードは、どちらの変換も写したバイトを `string_bytes_copied` に数える。一意な引数は種類だけを書き換えるので
@@ -646,7 +646,7 @@ fn conversions_are_counted<M: Mode>() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 1);
+    assert_eq!(mortal(&mut ctx), 1);
 }
 
 /// 一意な引数の変換は、その場で種類だけを書き換えて同じ語を返す。種類が変わるので、検査モードは前の種類を求める
@@ -679,7 +679,7 @@ fn unique_conversions_rewrite_the_kind<M: Mode>() {
         let b = ctx.heap_mut().alloc_bytes(&[b'a', 0xff]);
         assert_eq!(ctx.string_decode(b), Err(Fault::Utf8 { at: 1 }));
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
     if M::CHECKED {
         assert_eq!(ctx.stats().string_bytes_copied, 0);
     }
@@ -720,7 +720,7 @@ fn empty_bytes_and_a_search<M: Mode>() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 both_modes!(

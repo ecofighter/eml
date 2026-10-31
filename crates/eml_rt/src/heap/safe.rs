@@ -465,12 +465,14 @@ impl Core {
         }
     }
 
-    /// 検査モードで空ける途中のブロックを「解放」にして隔離しても、`safe_wf` は保たれる。
+    /// 検査モードで空ける途中のブロックを「解放」にして隔離しても、`safe_wf` は保たれる。別のスレッドが空けた生きている
+    /// ブロックを取り込むときも同じである。
     pub(crate) proof fn lemma_safe_freed(&self, s0: Core, h: usize)
         requires
             s0.safe_wf(),
             s0.dom().contains(h),
-            s0.state(h) == BlockState::Dying,
+            s0.state(h) == BlockState::Dying || s0.state(h) == BlockState::Live || s0.state(h)
+                == BlockState::Freed,
             self.pages == s0.pages,
             self.env == s0.env,
             self.perms@.dom() == s0.perms@.dom(),

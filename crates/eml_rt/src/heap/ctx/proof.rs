@@ -1599,6 +1599,99 @@ pub(super) proof fn lemma_settled_twice<M: Mode>(h: Heap<M>)
 {
 }
 
+/// 取り込みの変化。空けたことにした集合 `r` の物体は外の参照をみな失い、ほかの物体は外の参照の数が辺の減った分だけ
+/// 増える。
+pub(super) proof fn lemma_reclaim_moved<M: Mode>(
+    h2: Heap<M>,
+    h1: Heap<M>,
+    r: Set<usize>,
+    d: spec_fn(usize) -> int,
+)
+    requires
+        h1.wf(),
+        h1.core.model@.building is None,
+        h2.core.model@.building is None,
+        h2.dummy == h1.dummy,
+        h2.region == h1.region,
+        h2.worker == h1.worker,
+        h2.core.env == h1.core.env,
+        h2.core.dom().subset_of(h1.core.dom()),
+        forall|b: usize|
+            #![trigger h1.core.dom().contains(b)]
+            h1.core.dom().contains(b) && !r.contains(b) ==> {
+                &&& h2.core.dom().contains(b)
+                &&& h2.core.state(b) == h1.core.state(b)
+                &&& h2.core.perm(b) == h1.core.perm(b)
+                &&& h2.core.block(b) == h1.core.block(b)
+                &&& h2.core.model@.refs[b] == h1.core.model@.refs[b]
+                &&& h2.core.model@.owner[b] == h1.core.model@.owner[b]
+            },
+        forall|b: usize|
+            #![trigger r.contains(b)]
+            r.contains(b) ==> !(h2.core.has(b) && h2.core.settled_state(b) == BlockState::Live),
+        forall|b: usize|
+            #![trigger r.contains(b)]
+            r.contains(b) ==> h1.core.dom().contains(b) && (h1.core.state(b) == BlockState::Live
+                ==> h1.core.rc_of(b) != 0),
+        forall|b: usize| #[trigger]
+            d(b) == if r.contains(b) {
+                -h1.core.ext(b)
+            } else if h1.core.dom().contains(b) {
+                h2.core.ext(b) - h1.core.ext(b)
+            } else {
+                0int
+            },
+    ensures
+        moved(h2, h1, d, Set::empty()),
+{
+    assert(h1.core.settled_view() == h1.core);
+    assert(h2.core.settled_view() == h2.core);
+    assert forall|b: usize| #![trigger live(h1, b)] live(h1, b) && live(h2, b) implies same_head(
+        h2,
+        h1,
+        b,
+    ) && h2.core.perm(b).slots == h1.core.perm(b).slots by {
+        if r.contains(b) {
+            assert(!(h2.core.has(b) && h2.core.settled_state(b) == BlockState::Live));
+        }
+        if h1.core.dom().contains(b) {
+            assert(h2.core.perm(b) == h1.core.perm(b));
+        } else {
+            assert(!h2.core.dom().contains(b));
+            assert(h2.core.in_region(b) && h1.core.in_region(b));
+            assert(h2.core.region() == h1.core.region());
+            h1.core.lemma_region_at(b);
+        }
+    }
+    assert forall|b: usize|
+        #![trigger live(h1, b)]
+        live(h1, b) && (h1.core.rc_of(b) == 0 || h1.core.ext(b) + d(b) >= 1) implies {
+        &&& live(h2, b)
+        &&& h2.core.block(b) == h1.core.block(b)
+        &&& h1.core.rc_of(b) != 0 ==> h2.core.ext(b) == h1.core.ext(b) + d(b)
+    } by {
+        assert(d(b) == if r.contains(b) {
+            -h1.core.ext(b)
+        } else if h1.core.dom().contains(b) {
+            h2.core.ext(b) - h1.core.ext(b)
+        } else {
+            0int
+        });
+        if r.contains(b) {
+            assert(h1.core.state(b) == BlockState::Live);
+            assert(h1.core.rc_of(b) != 0);
+        } else if h1.core.dom().contains(b) {
+            assert(h2.core.dom().contains(b));
+            assert(h2.core.state(b) == h1.core.state(b));
+        } else {
+            assert(!h2.core.dom().contains(b));
+            assert(h2.core.in_region(b) && h1.core.in_region(b));
+            assert(h2.core.region() == h1.core.region());
+            h1.core.lemma_region_at(b);
+        }
+    }
+}
+
 /// 構築中の物体を生きている物体にするだけの変化 (`settle`)。
 pub(super) proof fn lemma_settle_moved<M: Mode>(h1: Heap<M>, h0: Heap<M>)
     requires
@@ -2214,6 +2307,70 @@ pub(super) proof fn lemma_listed_kept<M: Mode>(
 }
 
 impl<M: Mode> Ctx<M> {
+    /// `reclaim_when` の後の文脈。`c1` は `c0` のヒープの構築中の物体を生きている物体にしたもので、`self` はそこから
+    /// `Ctx` の持つ物体 (`held`) を空けたことにせずに取り込んだものである。
+    pub(super) proof fn lemma_reclaimed_ctx(&self, c1: Ctx<M>, c0: Ctx<M>, held: Set<usize>)
+        requires
+            c0.wf(),
+            c1.heap == c0.heap.settled_heap(),
+            c1.heap.wf(),
+            c1.heap.core.model@.building is None,
+            forall|w: Word| #[trigger] c1.heap.core.word_ok(w) == c0.heap.core.word_ok(w),
+            c1 == (Ctx { heap: c1.heap, ..c0 }),
+            *self == (Ctx { heap: self.heap, ..c1 }),
+            self.heap.wf(),
+            self.heap.reclaimed(c1.heap, held),
+            held == c0.held_set(),
+        ensures
+            self.wf(),
+            self.evv_spec() == c0.evv_spec(),
+            self.yield_spec() == c0.yield_spec(),
+    {
+        let h0 = c0.heap;
+        let h1 = c1.heap;
+        let h2 = self.heap;
+        let r = h2.lemma_reclaimed(h1, held);
+        assert(h2.core.model@.building is None);
+        assert forall|w: Word|
+            w == c0.evv || w == c0.yielding.target || w == c0.yielding.clause || w
+                == c0.yielding.cont implies #[trigger] h2.word_in(w) by {
+            assert(held.contains(w.bits_spec()));
+            assert(h1.core.word_ok(w));
+        }
+        if !M::CHECKED {
+            let d = |b: usize|
+                if r.contains(b) {
+                    -h1.core.ext(b)
+                } else if h1.core.dom().contains(b) {
+                    h2.core.ext(b) - h1.core.ext(b)
+                } else {
+                    0int
+                };
+            lemma_settle_moved(h1, h0);
+            lemma_reclaim_moved(h2, h1, r, d);
+            lemma_moved_chain(
+                h2,
+                h1,
+                h0,
+                |b: usize| 0int,
+                d,
+                d,
+                Set::empty(),
+                Set::empty(),
+                Set::empty(),
+            );
+            assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies c0.need(seq![], b)
+                + d(b) >= self.need(seq![], b) by {
+                assert(held.contains(b));
+                if h1.core.dom().contains(b) && !r.contains(b) {
+                    assert(h2.core.indeg(b) <= h1.core.indeg(b));
+                }
+            }
+            self.lemma_holds_moved(c0, seq![], seq![], d, Set::empty());
+            self.lemma_evv_kept(c0, d, Set::empty());
+        }
+    }
+
     /// ヒープを `moved(d, x)` で変えた後も、`evv` は同じ列の正しいリストである。`x` は空か、`evv` から読めない物体
     /// である。
     pub(super) proof fn lemma_evv_kept(&self, old: Ctx<M>, d: spec_fn(usize) -> int, x: Set<usize>)
