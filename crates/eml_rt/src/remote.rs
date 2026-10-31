@@ -16,7 +16,10 @@ use crate::alloc::{FIRST_BLOCK, FREE_META, LARGE, PageHeader, REMOTE_AT, page_of
 use crate::alloc::{header_sink, page_base};
 use crate::control::{Control, control_knows};
 use crate::heap::Core;
-use crate::meta::{BlockPerm, HEADER_WORDS, Header, Meta, meta_ptr, prefix_state_ptr, rc_ptr};
+use crate::meta::{
+    BlockPerm, HEADER_WORDS, Header, Meta, meta_ptr, prefix_state_ptr, rc_ptr, slot_ptr,
+};
+use crate::word::Word;
 
 verus! {
 
@@ -273,6 +276,35 @@ pub(crate) fn foreign_header(control: &Control, h: *mut Header, Ghost(core): Gho
     let rc = unsafe { AtomicI32::from_ptr(rc_ptr(h)) }.load(Ordering::Relaxed);
     let lin = Meta::from_bits(unsafe { meta_ptr(h).read() }).lin();
     Some((state, rc, lin))
+}
+
+/// ほかのヒープのページのブロック `h` の走査する語のうち、物体を指す語のヘッダを並べて返す (T14)。`control` は
+/// 歩くヒープ `core` の `Control` である。`foreign_header` と同じく、先にそのページの表を引き、なければメモリに
+/// 触れずに `None` を返す。検査モードの歩きが、生きていると読んだブロックについて、どのスレッドもヒープのページに
+/// 書かない時点でだけ呼ぶ。値について何も約束せず、権限も返さない。
+#[verifier::external_body]
+pub(crate) fn foreign_children(control: &Control, h: *mut Header, Ghost(core): Ghost<Core>) -> (r:
+    Option<Vec<*mut Header>>)
+    requires
+        control.ident() == core.pages.ctl_id(),
+{
+    if !control_knows(control, h.addr()) {
+        return None;
+    }
+    let m = Meta::from_bits(unsafe { meta_ptr(h).read() });
+    let (first, n) = if m.scan() == Meta::EXTENDED_SCAN {
+        (1, unsafe { slot_ptr(h, 0).read() }.bits())
+    } else {
+        (0, m.scan() as usize)
+    };
+    let mut out = Vec::new();
+    for i in first..first + n {
+        let w: Word = unsafe { slot_ptr(h, i).read() };
+        if w.is_ptr() {
+            out.push(w.as_ptr());
+        }
+    }
+    Some(out)
 }
 
 /// `out` の `old` の後ろに足したブロックは互いに違い、`old` のブロックとも違い、`core` のこのヒープのブロックである。

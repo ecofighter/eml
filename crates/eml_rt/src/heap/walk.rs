@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::mem::{self, ManuallyDrop};
 use std::sync::Arc;
 
+use vstd::hash_set::HashSetWithView;
 use vstd::prelude::*;
 
 #[cfg(verus_only)]
@@ -25,7 +26,7 @@ use crate::meta::{Header, Kind};
 use crate::mode::{Checked, Mode};
 #[cfg(verus_only)]
 use crate::remote::foreign_view;
-use crate::remote::{foreign_header, sink_pending, sink_pushing};
+use crate::remote::{foreign_children, foreign_header, sink_pending, sink_pushing};
 use crate::word::Word;
 
 verus! {
@@ -716,6 +717,186 @@ impl<M: Mode> Heap<M> {
         }
         Ok(())
     }
+
+    /// `lin` の部分の不変条件の違反 (docs/spec/object-model.md の「`share`」と「報告する誤り」)。共有の `lin` でない
+    /// 物体から局所の物体だけを通って届く局所の物体が、どれも rc 1 で、ただ1つの道で届くことを確かめる。
+    /// `check_reach` の後で呼ぶ。`lin` の部分は `transfer_back` の後にほかのヒープのページへ続くことがあるので、
+    /// その物体も T14 の読みで読んで下る。
+    pub(super) fn check_lin_parts(&self) -> (r: Result<(), HeapError>)
+        requires
+            self.wf(),
+            self.safe_settleable(),
+            M::CHECKED,
+    {
+        proof {
+            broadcast use vstd::std_specs::hash::group_hash_axioms;
+
+        }
+        let blocks = self.core.pages.blocks();
+        // 2つの道で届く物体を見つけるための集まり。ほかのヒープのページの物体もたどるので、自分のブロックの数では
+        // 歩みの数を抑えられず、この集まりで終わらせる
+        let mut seen: HashSetWithView<usize> = HashSetWithView::new();
+        let mut k: usize = 0;
+        while k < blocks.len()
+            invariant
+                self.wf(),
+                self.safe_settleable(),
+                M::CHECKED,
+                k <= blocks@.len(),
+                forall|i: int|
+                    0 <= i < blocks@.len() ==> self.core.pages.carved_block(
+                        #[trigger] blocks@[i]@.addr,
+                    ) && blocks@[i] == self.core.pages.block_ptr(blocks@[i]@.addr),
+            decreases blocks.len() - k,
+        {
+            let h = blocks[k];
+            let ghost a = h@.addr;
+            proof {
+                lemma_free_meta();
+                if self.core.dom().contains(a) {
+                    self.core.lemma_shape(a);
+                    self.core.lemma_code_state(a);
+                }
+            }
+            if self.core.carved_meta(h) != FREE_META {
+                let state = self.core.prefix_state_get(h) & 3;
+                if state != FREED_STATE && state != TOKEN_STATE && self.core.rc_get(h) < 0
+                    && !self.core.meta_get(h).lin() {
+                    let mut stack: Vec<*mut Header> = Vec::new();
+                    self.push_children(h, &mut stack);
+                    self.walk_lin_part(stack, &mut seen)?;
+                }
+            }
+            k += 1;
+        }
+        Ok(())
+    }
+
+    /// 生きている自分か付けた塊のブロック `h` の、走査する語のうち物体を指す語のヘッダを `stack` に積む。
+    fn push_children(&self, h: *mut Header, stack: &mut Vec<*mut Header>)
+        requires
+            self.wf(),
+            self.safe_settleable(),
+            M::CHECKED,
+            self.core.has(h@.addr),
+            h == self.core.block(h@.addr),
+            self.core.state(h@.addr) != BlockState::Freed,
+            forall|i: int|
+                0 <= i < old(stack)@.len() ==> self.core.has(#[trigger] old(stack)@[i]@.addr)
+                    && old(stack)@[i] == self.core.block(old(stack)@[i]@.addr),
+        ensures
+            forall|i: int|
+                0 <= i < final(stack)@.len() ==> self.core.has(#[trigger] final(stack)@[i]@.addr)
+                    && final(stack)@[i] == self.core.block(final(stack)@[i]@.addr),
+    {
+        let ghost a = h@.addr;
+        let (first, n) = self.core.scan_get(h);
+        let mut i: usize = 0;
+        while i < n
+            invariant
+                self.wf(),
+                self.safe_settleable(),
+                M::CHECKED,
+                self.core.has(a),
+                a == h@.addr,
+                h == self.core.block(a),
+                self.core.state(a) != BlockState::Freed,
+                first == super::inv::p_first(self.core.perm(a)),
+                n == super::inv::p_count(self.core.perm(a)),
+                i <= n,
+                forall|j: int|
+                    0 <= j < stack@.len() ==> self.core.has(#[trigger] stack@[j]@.addr) && stack@[j]
+                        == self.core.block(stack@[j]@.addr),
+            decreases n - i,
+        {
+            proof {
+                assert(self.core.scanned(a, (first + i) as int));
+                self.core.lemma_safe_live_slot(a, (first + i) as int);
+            }
+            let child = self.core.slot_get(h, first + i);
+            if child.is_ptr() {
+                let c = self.header_of(child);
+                stack.push(c);
+            }
+            i += 1;
+        }
+    }
+
+    /// 共有の `lin` でない物体の子を積んだ `stack` から、`lin` の部分を歩く。取り出した物体は、ページが表になければ
+    /// `UnknownPage`、空けたか token の箱なら `UseAfterFree`、rc が 0 以下 (共有の物体、不死の物体、塊の物体) なら
+    /// そこで止め、もう訪れていたか rc が 1 でなければ `SharedReachesLocal` にする。
+    fn walk_lin_part(&self, stack: Vec<*mut Header>, seen: &mut HashSetWithView<usize>) -> (r:
+        Result<(), HeapError>)
+        requires
+            self.wf(),
+            self.safe_settleable(),
+            M::CHECKED,
+            forall|i: int|
+                0 <= i < stack@.len() ==> self.core.has(#[trigger] stack@[i]@.addr) && stack@[i]
+                    == self.core.block(stack@[i]@.addr),
+    {
+        let mut stack = stack;
+        // 取り出すたびに `seen` に新しい番地を足すか誤りを返すので、この上限には届かない。Verus に終わりを示すための数
+        let mut pops: usize = 0;
+        while !stack.is_empty()
+            invariant
+                self.wf(),
+                self.safe_settleable(),
+                M::CHECKED,
+                forall|i: int|
+                    0 <= i < stack@.len() ==> self.core.has(#[trigger] stack@[i]@.addr) && stack@[i]
+                        == self.core.block(stack@[i]@.addr),
+            decreases usize::MAX - pops,
+        {
+            if pops == usize::MAX {
+                return Err(HeapError::SharedReachesLocal);
+            }
+            pops += 1;
+            let c = stack.pop().unwrap();
+            let ghost b = c@.addr;
+            proof {
+                self.core.lemma_shape(b);
+                self.core.lemma_code_state(b);
+            }
+            // 物体のメモリに触れる前に、ページが登録してあるかを確かめる (docs/spec/object-model.md の「ページの表」)
+            if !self.page_known(c) {
+                return Err(HeapError::UnknownPage);
+            }
+            if self.core.foreign_block(c) {
+                let control = self.core.pages.control_ref();
+                let ghost core = self.core;
+                let (cs, crc) = match foreign_header(control, c, Ghost(core)) {
+                    Some((state, n, _)) => (state & 3, n),
+                    None => return Err(HeapError::UnknownPage),
+                };
+                if cs == FREED_STATE || cs == TOKEN_STATE {
+                    return Err(HeapError::UseAfterFree);
+                }
+                if crc > 0 {
+                    if !seen.insert(c.addr()) || crc != 1 {
+                        return Err(HeapError::SharedReachesLocal);
+                    }
+                    match foreign_children(control, c, Ghost(core)) {
+                        Some(mut kids) => stack.append(&mut kids),
+                        None => return Err(HeapError::UnknownPage),
+                    }
+                }
+            } else {
+                let cs = self.core.prefix_state_get(c) & 3;
+                if cs == FREED_STATE || cs == TOKEN_STATE {
+                    return Err(HeapError::UseAfterFree);
+                }
+                let crc = self.core.rc_get(c);
+                if crc > 0 {
+                    if !seen.insert(c.addr()) || crc != 1 {
+                        return Err(HeapError::SharedReachesLocal);
+                    }
+                    self.push_children(c, &mut stack);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// 付けていた塊の `Arc` を手放す。`Heap` を落とすときに、後始末の後で呼ぶ。
@@ -744,7 +925,8 @@ impl Heap<Checked> {
         if sink_pushing(self.core.pages.sink()) {
             return Err(HeapError::NotQuiescent);
         }
-        self.check_reach()
+        self.check_reach()?;
+        self.check_lin_parts()
     }
 
     /// ID `id` の、rc が正の生きている物体の数。同じ `Control` のどのヒープの物体も数える

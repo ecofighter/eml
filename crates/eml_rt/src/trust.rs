@@ -211,6 +211,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("remote.rs: external_body sink_pending", "T14"),
     ("remote.rs: uninterp foreign_view", "T14"),
     ("remote.rs: external_body foreign_header", "T14"),
+    ("remote.rs: external_body foreign_children", "T14"),
     ("control.rs: external_body WorkerIds", "T15"),
     ("control.rs: external_body empty_table", "T15"),
     ("control.rs: external_body IdCounts", "T15"),

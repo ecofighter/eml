@@ -1254,6 +1254,30 @@ fn a_lin_part_moves_to_another_thread_and_back<M: Mode>() {
     drop(b);
 }
 
+/// ヒープ 0 の共有の物体の `lin` の子がヒープ 1 のページにあり、その下にもヒープ 1 の物体がある。生存の列挙は、
+/// ほかのヒープのページへ続く `lin` の部分を T14 の読みで下り、そこの rc 2 の物体を見つける
+#[test]
+fn a_lin_part_on_another_heaps_pages_is_walked() {
+    let (mut a, mut b) = two_heaps::<Checked>(Limits::default());
+    let y = list(&mut b, 1);
+    let x = b.alloc_data(0, 1, 0, true);
+    let pair = a.alloc_data(0, 1, 0, false);
+    unsafe {
+        b.set_field(x, 0, y).unwrap();
+        a.set_field(pair, 0, x).unwrap();
+        a.share(pair, 0).unwrap();
+        assert_eq!(a.check_invariants(), Ok(()));
+        b.dup(y).unwrap();
+        assert_eq!(a.check_invariants(), Err(HeapError::SharedReachesLocal));
+        b.decref(y).unwrap();
+        assert_eq!(a.check_invariants(), Ok(()));
+        a.decref(pair).unwrap();
+    }
+    b.reclaim();
+    assert_eq!(mortal(&mut a), 0);
+    assert_eq!(mortal(&mut b), 0);
+}
+
 // (f) 検査モードで、ほかのヒープのページの語を受ける。B のスレッドが ID `id` で確保した物体を A のスレッドが空け、
 // ID ごとの数は表の上で合う。A の共有の物体の子が B のページの共有の文字列でも、生存の列挙は通る。取り込む前の
 // `check_owned` は断る。落としたヒープのページとほかの `Control` のページを指す語は、メモリに触れずに断る

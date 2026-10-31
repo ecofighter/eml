@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::sync::atomic::Ordering;
 
 use super::raw;
@@ -310,6 +311,9 @@ fn resending_after_marking_an_rc2_node_under_the_lin_part_is_ok<M: Mode>() {
         heap.set_field(pair, 1, lin).unwrap();
         heap.share(pair, 1).unwrap();
         assert_eq!(rc(&heap, kept), -2);
+        if let Some(checked) = (&mut heap as &mut dyn Any).downcast_mut::<Heap<Checked>>() {
+            assert_eq!(checked.check_invariants(), Ok(()));
+        }
         heap.set_worker(1);
         heap.share(pair, 2).unwrap();
         assert_eq!(
@@ -557,6 +561,32 @@ fn an_rc2_object_under_a_resent_lin_object_is_an_error() {
     }
     // share が状態を変えた後の Err なので、ヒープは落とすだけにする (docs/spec/object-model.md の「検査モードの約束」)
     drop(heap);
+}
+
+/// 共有の `lin` でない物体から局所の物体だけを通って届く rc 2 の物体は、`share` を待たずに `check_invariants` が
+/// `lin` の部分の不変条件の違反として見つける (docs/spec/object-model.md の「報告する誤り」)
+#[test]
+fn check_invariants_finds_an_rc2_object_in_a_lin_part() {
+    let mut heap = H::new();
+    let a = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    let pair = heap.alloc_data(0, 2, 0, false);
+    unsafe {
+        heap.set_field(pair, 0, a).unwrap();
+        heap.set_field(pair, 1, lin).unwrap();
+        heap.share(pair, 1).unwrap();
+        heap.set_worker(1);
+        let kept = list(&mut heap, 1);
+        heap.dup(kept).unwrap();
+        heap.set_field(lin, 0, kept).unwrap();
+        assert_eq!(heap.check_invariants(), Err(HeapError::SharedReachesLocal));
+        raw::set_slot(lin, 0, Word::UNIT);
+        assert_eq!(heap.check_invariants(), Ok(()));
+        heap.decref(kept).unwrap();
+        heap.decref(kept).unwrap();
+        heap.decref(pair).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// 印を付けた物体は持ち主の数から外れ、所有を移した物体は受け手の数に移る。
