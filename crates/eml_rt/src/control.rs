@@ -6,10 +6,12 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::ptr;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use vstd::prelude::*;
 
+#[cfg(verus_only)]
+use crate::alloc::page_base;
 use crate::error::HeapError;
 use crate::heap::Heap;
 use crate::mode::Mode;
@@ -56,6 +58,7 @@ pub struct Control {
     watched: AtomicU32,
     limits: Limits,
     workers: WorkerIds,
+    pages: PageMap,
 }
 
 /// 検査モードの論理的な worker ID の表 (docs/spec/object-model.md の「論理的な worker ID」)。`Control` に置き、同じ
@@ -71,6 +74,46 @@ pub(crate) struct WorkerIds {
     chunks: Mutex<Vec<Arc<Chunk>>>,
 }
 
+/// 検査モードのページの表 (docs/spec/object-model.md の「ページの表」)。同じ `Control` のヒープが取ったページを、
+/// 凍結した塊のページも含めて登録する。検査モードの操作は、即値でない語をたどる前にそのページが登録されているかを
+/// 確かめる。速いモードは触れない。
+// 64 KiB のページの番号 (番地 >> 16) を、6 ビットずつの上の3段と下位 14 ビットの葉で、4段に引く基数の表である。
+// 中身は Verus に見せない (信頼の一覧の T15)
+#[verifier::external_body]
+pub(crate) struct PageMap {
+    top: OnceLock<Box<Node<Node<Node<Leaf>>>>>,
+}
+
+/// 検査モードのページの表に、番地 `page` のページが登録されている。証明は、このヒープのページが登録されている
+/// ことだけに使う (信頼の一覧の T15)。
+pub(crate) uninterp spec fn page_registered(page: usize) -> bool;
+
+/// 番地 `a` のブロックのページが、`control` のページの表に登録されているか (T15)。登録してまだ外していないページには
+/// 真を返す。表だけを読み、`a` の指すメモリには触れない。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn page_known(control: &Control, a: usize) -> (r: bool)
+    ensures
+        page_registered(page_base(a)) ==> r,
+{
+    control.pages.contains(a)
+}
+
+/// 番地 `page` のページを `control` のページの表に登録する (T15)。
+#[verifier::external_body]
+pub(crate) fn register_page(control: &Control, page: usize)
+    ensures
+        page_registered(page),
+{
+    control.pages.insert(page);
+}
+
+/// 番地 `page` のページを `control` のページの表から外す (T15)。
+#[verifier::external_body]
+pub(crate) fn unregister_page(control: &Control, page: usize) {
+    control.pages.remove(page);
+}
+
 /// ヒープが持つ、`WorkerIds` の数の塊の写し (docs/spec/object-model.md の「論理的な worker ID」)。数を変えるたびに
 /// 表の lock を取らないように、塊の `Arc` を写して持ち、写しにない ID が来たときだけ写し直す。速いモードのヒープは
 /// 何も持たない写しのまま触れない。
@@ -78,6 +121,13 @@ pub(crate) struct WorkerIds {
 pub(crate) struct IdCounts {
     control: Option<Arc<Control>>,
     chunks: Vec<Arc<Chunk>>,
+}
+
+impl PageMap {
+    #[verifier::external_body]
+    pub(crate) fn empty_map() -> PageMap {
+        PageMap { top: OnceLock::new() }
+    }
 }
 
 impl WorkerIds {
@@ -221,6 +271,7 @@ impl Control {
             watched: AtomicU32::new(0),
             limits,
             workers: WorkerIds::empty_table(),
+            pages: PageMap::empty_map(),
         }
     }
 
@@ -427,6 +478,62 @@ impl Control {
 const CHUNK_IDS: usize = 64;
 
 type Chunk = [AtomicU64; CHUNK_IDS];
+
+/// ページの表の上の3段の、1つの表の項目の数。
+const MAP_FAN: usize = 64;
+/// ページの表の葉の語の数。1つの葉が 2^14 個のページ (1 GiB) を受け持つ。
+// Miri では、表を作る費用が表の大きさによらないように、どの表も繰り返しの式で作る。表を落とすときは項目を1つずつ
+// 落とすので、項目の数は小さく保つ。上の2段を 256 項目、葉を 1024 語にした3段の表では、Tree Borrows の
+// `trusted::` が検査モードのテスト1本あたり約1秒遅くなった
+const LEAF_WORDS: usize = 256;
+
+type Leaf = [AtomicU64; LEAF_WORDS];
+type Node<T> = [OnceLock<Box<T>>; MAP_FAN];
+
+/// ページの番号を、3つの段の添字と、葉の語と、語の中のビットに分ける。番号が表の外 (番地が 2^48 以上) なら `None`。
+fn map_slot(a: usize) -> Option<([usize; 3], usize, u64)> {
+    let n = a >> 16;
+    (n >> 32 == 0).then(|| {
+        let bit = n % (LEAF_WORDS * 64);
+        let step = |k: u32| (n >> (14 + 6 * k)) % MAP_FAN;
+        ([step(2), step(1), step(0)], bit / 64, 1u64 << (bit % 64))
+    })
+}
+
+/// 項目がみな空の表。
+fn empty_node<T>() -> Box<Node<T>> {
+    Box::new([const { OnceLock::new() }; MAP_FAN])
+}
+
+// 登録のビットは、ページの物体の語をほかのスレッドへ渡す前に立て、ページを返す前に下ろす。語を受けたスレッドは、
+// 語を渡したときの順序でビットを見るので、表の読み書きは Relaxed で足りる
+impl PageMap {
+    fn leaf(&self, a: usize) -> Option<(&AtomicU64, u64)> {
+        let ([i, j, k], word, bit) = map_slot(a)?;
+        let leaf = self.top.get()?[i].get()?[j].get()?[k].get()?;
+        Some((&leaf[word], bit))
+    }
+
+    fn contains(&self, a: usize) -> bool {
+        self.leaf(a)
+            .is_some_and(|(word, bit)| word.load(Ordering::Relaxed) & bit != 0)
+    }
+
+    fn insert(&self, a: usize) {
+        let ([i, j, k], word, bit) =
+            map_slot(a).expect("a page below 2^48 for the checked-mode page map");
+        let leaf = self.top.get_or_init(empty_node)[i].get_or_init(empty_node)[j]
+            .get_or_init(empty_node)[k]
+            .get_or_init(|| Box::new([const { AtomicU64::new(0) }; LEAF_WORDS]));
+        leaf[word].fetch_or(bit, Ordering::Relaxed);
+    }
+
+    fn remove(&self, a: usize) {
+        if let Some((word, bit)) = self.leaf(a) {
+            word.fetch_and(!bit, Ordering::Relaxed);
+        }
+    }
+}
 
 // 表の lock の中では panic しないので、毒の入った lock も中身はそのまま使える
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {

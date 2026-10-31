@@ -9,7 +9,9 @@ use super::inv::{p_owner, prefix_recounted};
 #[cfg(verus_only)]
 use super::model::BlockState;
 use crate::cell::{u32_load, u32_store};
+use crate::control::page_known;
 use crate::error::HeapError;
+use crate::frozen::region_known;
 #[cfg(verus_only)]
 use crate::meta::field_ptr;
 #[cfg(verus_only)]
@@ -150,6 +152,27 @@ impl<M: Mode> Heap<M> {
         &&& self.core.rc_of(h) == 0 ==> p_owner(self.core.perm(h)) >= 2
     }
 
+    /// 検査モードで、ブロック `h` のページがページの表にあるか。ブロックのメモリに触れる前に呼ぶ
+    /// (docs/spec/object-model.md の「ページの表」)。このヒープの `Control` の表になければ、付けた塊の鎖を、塊を凍結した
+    /// `Control` の表で引く。このヒープと付けた塊のブロックでは真を返す。
+    #[inline]
+    pub(super) fn page_known(&self, h: *mut Header) -> (r: bool)
+        requires
+            self.core.sound(),
+            self.core.checked(),
+            self.core.has(h@.addr),
+            self.region_tied(),
+        ensures
+            r,
+    {
+        proof {
+            if self.core.dom().contains(h@.addr) {
+                self.core.lemma_page_registered(h@.addr);
+            }
+        }
+        page_known(self.core.pages.control(), h.addr()) || region_known(&self.region, h.addr())
+    }
+
     /// 前置きの状態が生存かを確かめる。解放した共有の物体は rc が 0 になっていて不死の物体と区別できないので、rc を
     /// 見る前に呼ぶ。
     #[inline]
@@ -159,6 +182,7 @@ impl<M: Mode> Heap<M> {
             self.core.checked() == M::CHECKED,
             self.core.has(h@.addr),
             h == self.core.block(h@.addr),
+            self.region_tied(),
         ensures
             !M::CHECKED ==> r is Ok,
             M::CHECKED ==> (r is Ok <==> (self.core.state(h@.addr) == BlockState::Live
@@ -167,6 +191,11 @@ impl<M: Mode> Heap<M> {
     {
         if !M::CHECKED {
             return Ok(());
+        }
+        if !self.page_known(h) {
+            // 前置きを読む前にページを確かめ、落としたヒープのページやほかの `Control` のページを指す語を、メモリに
+            // 触れずに断る
+            return Err(HeapError::UnknownPage);
         }
         let bits = self.core.prefix_state_get(h);
         proof {
@@ -299,6 +328,7 @@ impl<M: Mode> Heap<M> {
             self.core.checked() == M::CHECKED,
             self.core.has(h@.addr),
             h == self.core.block(h@.addr),
+            self.region_tied(),
         ensures
             r == Err::<bool, HeapError>(HeapError::UseAfterFree) ==> !(self.core.state(h@.addr)
                 == BlockState::Live || self.core.state(h@.addr) == BlockState::Building),
@@ -348,6 +378,7 @@ impl<M: Mode> Heap<M> {
             self.core.checked() == M::CHECKED,
             self.core.has(h@.addr),
             h == self.core.block(h@.addr),
+            self.region_tied(),
         ensures
             r is Err ==> chain_err(r) || r == Err::<bool, HeapError>(HeapError::UseAfterFree) && !(
             self.core.state(h@.addr) == BlockState::Live || self.core.state(h@.addr)
@@ -393,6 +424,7 @@ impl<M: Mode> Heap<M> {
             self.core.checked() == M::CHECKED,
             self.core.has(h@.addr),
             h == self.core.block(h@.addr),
+            self.region_tied(),
         ensures
             !M::CHECKED ==> r is Ok,
             M::CHECKED ==> (r is Ok <==> self.decref_twice_passes(h@.addr)),

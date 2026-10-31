@@ -16,6 +16,10 @@ use super::inv::{p_owner, p_word};
 #[cfg(verus_only)]
 use super::model::BlockState;
 use crate::alloc::FREE_META;
+#[cfg(verus_only)]
+use crate::alloc::page_base;
+#[cfg(verus_only)]
+use crate::control::page_registered;
 use crate::error::HeapError;
 use crate::foreign::{finalizer_of, run_finalizer};
 use crate::frozen::Frozen;
@@ -23,7 +27,9 @@ use crate::frozen::Frozen;
 use crate::meta::bits_kind;
 use crate::meta::{Header, Kind};
 use crate::mode::{Checked, Mode};
-use crate::remote::{sink_pending, sink_pushing};
+#[cfg(verus_only)]
+use crate::remote::foreign_view;
+use crate::remote::{foreign_header, sink_pending, sink_pushing};
 use crate::word::Word;
 
 verus! {
@@ -194,6 +200,22 @@ impl<M: Mode> Heap<M> {
                                 self.core.lemma_shape(c@.addr);
                                 self.core.lemma_code_state(c@.addr);
                                 reveal(Core::building_wf);
+                            }
+                            if !self.page_known(c) {
+                                return Err(HeapError::UnknownPage);
+                            }
+                            if self.core.foreign_block(c) {
+                                // 塊が指してよいのは塊とその祖先のブロックだけで、ほかのヒープのページの物体は、
+                                // そのヒープとともに消える (docs/spec/object-model.md の「ページの表」)
+                                let ghost core = self.core;
+                                let (state, _, _) = foreign_header(c, Ghost(core));
+                                return Err(
+                                    if state & 3 == FREED_STATE {
+                                        HeapError::UseAfterFree
+                                    } else {
+                                        HeapError::NotImmortal
+                                    },
+                                );
                             }
                             let cs = self.core.prefix_state_get(c) & 3;
                             if cs != ALIVE_STATE {
@@ -484,14 +506,48 @@ impl<M: Mode> Heap<M> {
         &&& self.core.state(h) != BlockState::Token
     }
 
-    /// 生きている物体 `b` の i 語目の子は、生存の列挙の不変条件を満たす。子は、生きている物体か付けた塊の物体である。
+    /// `c` は、このヒープのブロックでも付けた塊のブロックでもなく、ページの表に登録したページ (ほかのヒープのページ)
+    /// にある。
+    closed spec fn foreign_child(&self, c: usize) -> bool {
+        &&& !self.core.dom().contains(c)
+        &&& !self.core.region_has(c)
+        &&& page_registered(page_base(c))
+    }
+
+    /// ほかのヒープのページのブロック `c` の前置きの状態が、token でも解放でもない。
+    closed spec fn foreign_alive(&self, c: usize) -> bool {
+        let s = foreign_view(self.core, c).0 & 3;
+        s != FREED_STATE && s != TOKEN_STATE
+    }
+
+    /// 子 `c` の rc。ほかのヒープのページの子は、歩きが読んだ値である。
+    closed spec fn child_rc(&self, c: usize) -> i32 {
+        if self.foreign_child(c) {
+            foreign_view(self.core, c).1
+        } else {
+            self.core.rc_of(c)
+        }
+    }
+
+    /// 子 `c` の `lin` ビット。
+    closed spec fn child_lin(&self, c: usize) -> bool {
+        if self.foreign_child(c) {
+            foreign_view(self.core, c).2
+        } else {
+            self.core.lin(c)
+        }
+    }
+
+    /// 生きている物体 `b` の i 語目の子は、生存の列挙の不変条件を満たす。子は、生きている物体か、付けた塊の物体か、
+    /// ほかのヒープのページの生きている物体である。
     closed spec fn child_ok(&self, b: usize, i: int) -> bool {
         let w = p_word(self.core.perm(b), i);
         let c = w.bits_spec();
         w.is_ptr_spec() ==> {
-            &&& self.alive(c) || self.core.in_region(c)
-            &&& self.core.rc_of(b) == 0 ==> self.core.rc_of(c) == 0
-            &&& self.core.rc_of(b) < 0 && self.core.rc_of(c) > 0 ==> self.core.lin(c)
+            &&& self.alive(c) || self.core.in_region(c) || (self.foreign_child(c)
+                && self.foreign_alive(c))
+            &&& self.core.rc_of(b) == 0 ==> self.child_rc(c) == 0
+            &&& self.core.rc_of(b) < 0 && self.child_rc(c) > 0 ==> self.child_lin(c)
         }
     }
 
@@ -588,22 +644,39 @@ impl<M: Mode> Heap<M> {
                                     if !self.core.dom().contains(b) {
                                         self.core.lemma_region_at(b);
                                     }
+                                    assert(!self.foreign_child(b));
                                 }
-                                let cs = self.core.prefix_state_get(c) & 3;
+                                // 子のメモリに触れる前に、ページが登録してあるかを確かめる
+                                // (docs/spec/object-model.md の「ページの表」)
+                                if !self.page_known(c) {
+                                    return Err(HeapError::UnknownPage);
+                                }
+                                let ghost core = self.core;
+                                // ほかのヒープのページの子は、そのヒープの権限を持たないので、前置きの状態と rc と
+                                // `lin` ビットを T14 の読みで読み、自分の子と同じ規則で確かめる
+                                let (cs, crc, clin) = if self.core.foreign_block(c) {
+                                    let (state, n, lin) = foreign_header(c, Ghost(core));
+                                    (state & 3, n, lin)
+                                } else {
+                                    (
+                                        self.core.prefix_state_get(c) & 3,
+                                        self.core.rc_get(c),
+                                        self.core.meta_get(c).lin(),
+                                    )
+                                };
                                 if cs == FREED_STATE || cs == TOKEN_STATE {
                                     proof {
                                         assert(!self.child_ok(a, (first + i) as int));
                                     }
                                     return Err(HeapError::UseAfterFree);
                                 }
-                                let crc = self.core.rc_get(c);
                                 if rc == 0 && crc != 0 {
                                     proof {
                                         assert(!self.child_ok(a, (first + i) as int));
                                     }
                                     return Err(HeapError::ImmortalReachesMortal);
                                 }
-                                if rc < 0 && crc > 0 && !self.core.meta_get(c).lin() {
+                                if rc < 0 && crc > 0 && !clin {
                                     proof {
                                         assert(!self.child_ok(a, (first + i) as int));
                                     }

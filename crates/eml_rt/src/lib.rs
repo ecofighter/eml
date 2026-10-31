@@ -61,12 +61,14 @@ const _: fn() = || {
 };
 
 // `Control` はセッションのどのスレッドからも同じものを見る。`RemoteSink` は、ほかのスレッドがページの頭から指して
-// 解放を積む。`WorkerIds` は `Control` の中で、どの worker のヒープも同じ表で数える
+// 解放を積む。`WorkerIds` は `Control` の中で、どの worker のヒープも同じ表で数える。`PageMap` も `Control` の中で、
+// どの worker のヒープも同じ表にページを登録して引く
 const _: fn() = || {
     fn send_and_sync<T: Send + Sync>() {}
     send_and_sync::<Control>();
     send_and_sync::<remote::RemoteSink>();
     send_and_sync::<control::WorkerIds>();
+    send_and_sync::<control::PageMap>();
 };
 
 #[cfg(test)]

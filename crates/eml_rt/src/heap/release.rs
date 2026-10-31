@@ -105,6 +105,7 @@ impl<M: Mode> Heap<M> {
             self.core.checked() == M::CHECKED,
             self.core.has(h@.addr),
             h == self.core.block(h@.addr),
+            self.region_tied(),
         ensures
             !M::CHECKED ==> r is Ok,
             r is Ok && M::CHECKED ==> {
@@ -476,6 +477,7 @@ impl<M: Mode> Heap<M> {
     ) -> (r: Result<(), HeapError>)
         requires
             !M::CHECKED ==> c,
+            old(self).region_tied(),
             c ==> old(self).core.full(),
             c ==> old(self).core.draining(
                 h,
@@ -536,6 +538,7 @@ impl<M: Mode> Heap<M> {
         while i > 0
             invariant
                 !M::CHECKED ==> c,
+                self.region_tied(),
                 M::CHECKED ==> self.core.pages == old(self).core.pages,
                 M::CHECKED ==> self.core.dom() == old(self).core.dom(),
                 self.building == old(self).building,

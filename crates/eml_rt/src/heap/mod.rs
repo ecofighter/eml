@@ -403,7 +403,7 @@ impl<M: Mode> Heap<M> {
 
     /// `core` の塊の権限の写しは、付けた塊の `Arc` が指す塊の権限である。写しは `Arc` が生かすメモリを読むので、写しを
     /// 持つ間は `Arc` も持つ。
-    closed spec fn region_tied(&self) -> bool {
+    pub(crate) closed spec fn region_tied(&self) -> bool {
         match self.region@ {
             None => self.core.env@.region is None,
             Some(a) => self.core.env@.region matches Some(s) && s@ == (*a).view_perms(),
@@ -2610,6 +2610,7 @@ impl<M: Mode> Heap<M> {
             h == old(self).core.block(h@.addr),
             old(self).core.model@.building is None,
             c ==> old(self).core.state(h@.addr) == BlockState::Live,
+            old(self).region_tied(),
             c ==> (edge matches Some(e) ==> old(self).core.model@.edges.dom().contains(e) && old(
                 self,
             ).core.model@.edges[e] == h@.addr && old(self).core.state(e.0) == BlockState::Dying),
@@ -2748,6 +2749,7 @@ impl<M: Mode> Heap<M> {
     fn free_chain(&mut self, root: *mut Header, Ghost(c): Ghost<bool>) -> (r: Result<(), HeapError>)
         requires
             !M::CHECKED ==> c,
+            old(self).region_tied(),
             c ==> old(self).core.full(),
             M::CHECKED ==> old(self).core.safe_wf(),
             old(self).core.checked() == M::CHECKED,
@@ -2813,6 +2815,7 @@ impl<M: Mode> Heap<M> {
     fn drain(&mut self, work: &mut Vec<Word>, Ghost(c): Ghost<bool>) -> (r: Result<(), HeapError>)
         requires
             !M::CHECKED ==> c,
+            old(self).region_tied(),
             c ==> old(self).core.full(),
             c ==> old(self).core.work_ok(old(work)@),
             M::CHECKED ==> old(self).core.safe_wf(),
@@ -2852,6 +2855,7 @@ impl<M: Mode> Heap<M> {
         loop
             invariant
                 !M::CHECKED ==> c,
+                self.region_tied(),
                 M::CHECKED ==> self.core.dom() == old(self).core.dom(),
                 M::CHECKED ==> self.core.pages == old(self).core.pages,
                 self.building == old(self).building,
@@ -2903,6 +2907,7 @@ impl<M: Mode> Heap<M> {
             while i > 0
                 invariant
                     !M::CHECKED ==> c,
+                    self.region_tied(),
                     M::CHECKED ==> self.core.dom() == old(self).core.dom(),
                     M::CHECKED ==> self.core.pages == old(self).core.pages,
                     self.building == old(self).building,

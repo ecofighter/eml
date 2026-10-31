@@ -13,7 +13,9 @@ use std::sync::Arc;
 use vstd::prelude::*;
 use vstd::raw_ptr::{Dealloc, PointsTo, PointsToRaw, ptr_mut_write, ptr_ref};
 
-use crate::control::Control;
+#[cfg(verus_only)]
+use crate::control::page_registered;
+use crate::control::{Control, register_page, unregister_page};
 #[cfg(verus_only)]
 use crate::frozen::RegionPerms;
 use crate::heap::TOO_LARGE;
@@ -568,6 +570,7 @@ impl Pages {
         &&& perm.remote.ptr()@.addr == a + REMOTE_AT
         &&& perm.remote.ptr()@.provenance == self.page_provenance(a)
         &&& hdr.sink == self.sink
+        &&& self.prefix_words > 0 ==> page_registered(a)
         &&& perm.dealloc.addr() == a
         &&& perm.dealloc.size() == hdr.bytes
         &&& perm.dealloc.align() == PAGE_BYTES
@@ -1840,6 +1843,7 @@ impl Pages {
             s0.list@.len() <= usize::MAX,
             self.bytes == s0.bytes + PAGE_BYTES,
             self.count@ == s0.count@.insert(p@.addr, 0),
+            s0.prefix_words > 0 ==> page_registered(p@.addr),
             self.carved == s0.carved,
             self.index == s0.index,
             self.free_perms == s0.free_perms,
@@ -2046,6 +2050,7 @@ impl Pages {
             final(self).index == old(self).index,
             final(self).prefix_words == old(self).prefix_words,
             final(self).sink == old(self).sink,
+            old(self).prefix_words > 0 ==> page_registered(r.0@.addr),
     {
         if block_words > 0xFFFF_FFFF {
             too_many_words();
@@ -2059,6 +2064,10 @@ impl Pages {
         };
         let (base, Tracked(raw), Tracked(dealloc)) = alloc_page(bytes);
         charge_pages(&self.control, bytes);
+        if self.prefix_words > 0 {
+            // 検査モードのページは、物体の語をどこかへ渡す前に表に登録する (docs/spec/object-model.md の「ページの表」)
+            register_page(&self.control, base.addr());
+        }
         let page = base as *mut PageHeader;
         let ghost a = base@.addr as int;
         proof {
@@ -2196,6 +2205,7 @@ impl Pages {
             s0.list@.len() <= usize::MAX,
             self.bytes == s0.bytes + FIRST_BLOCK + block_words * 8,
             self.count@ == s0.count@.insert(p@.addr, 1),
+            s0.prefix_words > 0 ==> page_registered(p@.addr),
             self.carved@ == s0.carved@.insert(h@.addr),
             self.index@ == s0.index@.insert(h@.addr, 0),
             self.in_use@ == s0.in_use@.insert(h@.addr),
@@ -2605,6 +2615,9 @@ impl Pages {
         proof {
             assert(raw.dom() =~= Set::range(a as int, a + bytes));
         }
+        if self.prefix_words > 0 {
+            unregister_page(&self.control, page.addr());
+        }
         dealloc_page(page as *mut u8, bytes, Tracked(raw), Tracked(dealloc));
         if refund {
             refund_pages(&self.control, bytes);
@@ -2834,6 +2847,20 @@ impl Pages {
 
     pub(crate) closed spec fn has_page(&self, a: usize) -> bool {
         self.pages@.contains_key(a)
+    }
+
+    /// 検査モードで切り出したブロックのページは、ページの表に登録してある。
+    pub(crate) proof fn lemma_registered(&self, h: usize)
+        requires
+            self.wf(),
+            self.carved_block(h),
+            self.prefixed(),
+        ensures
+            page_registered(page_base(h)),
+    {
+        reveal(Pages::carved_wf);
+        reveal(Pages::pages_wf);
+        assert(self.page_wf(page_base(h)));
     }
 
     /// 切り出したブロックは、持っているページにある。
@@ -3291,6 +3318,9 @@ const _: () = assert!(MAX_PAGE_BYTES == isize::MAX as usize - (isize::MAX as usi
 impl Drop for Pages {
     fn drop(&mut self) {
         for page in self.list.drain(..) {
+            if self.prefix_words > 0 {
+                unregister_page(&self.control, page.addr());
+            }
             let bytes = unsafe { (*page).bytes };
             unsafe {
                 dealloc(

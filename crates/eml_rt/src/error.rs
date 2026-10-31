@@ -42,6 +42,7 @@ pub enum HeapError {
     TransferLeak { worker: u32, live: u32 },
     OwnedMiscount { worker: u32 },
     NotQuiescent,
+    UnknownPage,
 }
 
 } // verus!
@@ -102,6 +103,9 @@ impl fmt::Display for HeapError {
             }
             HeapError::NotQuiescent => {
                 f.write_str("a heap is checked while frees from other threads are not taken in")
+            }
+            HeapError::UnknownPage => {
+                f.write_str("a word points into a page no heap of this run has")
             }
         }
     }

@@ -20,12 +20,15 @@ use crate::cell::{
     rc_decref_shared, rc_dup_shared, rc_is_last, rc_load, rc_store, u32_load, u32_store,
 };
 #[cfg(verus_only)]
+use crate::control::page_registered;
+#[cfg(verus_only)]
 use crate::meta::{BlockPerm, field_ptr};
 use crate::meta::{Header, Meta, meta_ptr, prefix_first_ptr, prefix_state_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
 #[cfg(verus_only)]
 use crate::rc::{Obj, decref_next, dup_next, lemma_decref, lemma_dup};
+use crate::remote::page_sink_of;
 use crate::word::Word;
 
 verus! {
@@ -303,6 +306,43 @@ impl Core {
             assert(self.perms@.dom() =~= s0.perms@.dom());
             assert(self.perm(h@.addr).slots.dom() =~= s0.perm(h@.addr).slots.dom());
         }
+    }
+
+    /// 検査モードで、このヒープのブロックのページは、ページの表に登録してある。
+    pub(crate) proof fn lemma_page_registered(&self, h: usize)
+        requires
+            self.sound(),
+            self.dom().contains(h),
+            self.checked(),
+        ensures
+            page_registered(page_base(h)),
+    {
+        self.pages.lemma_in_use_carved(h);
+        self.pages.lemma_registered(h);
+    }
+
+    /// ブロック `h` が、ほかのヒープのページにあるか。ページの頭の `sink` が、このヒープのものでも塊の null でもない
+    /// ときに真を返す。ほかのヒープのブロックはモデルに入れないので、証明の上ではこのヒープか塊のブロックだけが来て、
+    /// 偽を返す。実行時にほかのヒープの語が来るのは、信頼の一覧の T14 の読み方による (docs/spec/object-model.md の
+    /// 「`unsafe` の核」)。
+    pub(crate) fn foreign_block(&self, h: *mut Header) -> (r: bool)
+        requires
+            self.sound(),
+            self.has(h@.addr),
+            h == self.block(h@.addr),
+        ensures
+            !r,
+    {
+        let tracked hdr = self.tracked_header(h@.addr);
+        proof {
+            let a = h@.addr;
+            if self.dom().contains(a) {
+                self.pages.lemma_in_use_carved(a);
+                self.pages.lemma_carved_page(a);
+            }
+        }
+        let own = self.pages.owns(h, Tracked(hdr));
+        !own && page_sink_of(h, Tracked(Some(hdr))).addr() != 0
     }
 
     /// 検査モードの前置きの状態の欄を読む。

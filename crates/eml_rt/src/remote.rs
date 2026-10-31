@@ -6,7 +6,7 @@
 //! `RemoteSink` の欄) は、持ち主の権限の値には映らない。持ち主はその値を権限を通して読まず、ここの関数で atomic に
 //! 読む。
 
-use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 
 use vstd::prelude::*;
 use vstd::raw_ptr::PointsTo;
@@ -16,7 +16,7 @@ use crate::alloc::{FIRST_BLOCK, FREE_META, LARGE, PageHeader, REMOTE_AT, page_of
 use crate::alloc::{header_sink, page_base};
 use crate::control::Control;
 use crate::heap::Core;
-use crate::meta::{BlockPerm, HEADER_WORDS, Header};
+use crate::meta::{BlockPerm, HEADER_WORDS, Header, Meta, meta_ptr, prefix_state_ptr, rc_ptr};
 
 verus! {
 
@@ -250,6 +250,24 @@ pub(crate) fn sink_pending(sink: *const RemoteSink) -> bool {
     let sink = unsafe { &*sink };
     sink.count.load(Ordering::Relaxed) != 0 || !sink.large.load(Ordering::Relaxed).is_null()
         || sink.pushing.load(Ordering::Acquire) != 0
+}
+
+/// 検査モードの歩きが読む、ほかのヒープのページのブロック `h` の前置きの状態の欄と rc と `lin` ビット。ヒープ `core`
+/// のモデルの外にあるので、値は決めない (T14)。
+pub(crate) uninterp spec fn foreign_view(core: Core, h: usize) -> (u32, i32, bool);
+
+/// ほかのヒープのページのブロック `h` の、前置きの状態の欄と rc と `lin` ビットを読む (T14)。検査モードの歩きが、
+/// 静止点でだけ呼ぶ。そのときはどのスレッドもヒープのページに書かないので、読む値はそのときのメモリの中身である。
+/// 権限は返さない。
+#[verifier::external_body]
+pub(crate) fn foreign_header(h: *mut Header, Ghost(core): Ghost<Core>) -> (r: (u32, i32, bool))
+    ensures
+        r == foreign_view(core, h@.addr),
+{
+    let state = unsafe { AtomicU32::from_ptr(prefix_state_ptr(h)) }.load(Ordering::Relaxed);
+    let rc = unsafe { AtomicI32::from_ptr(rc_ptr(h)) }.load(Ordering::Relaxed);
+    let lin = Meta::from_bits(unsafe { meta_ptr(h).read() }).lin();
+    (state, rc, lin)
 }
 
 /// `out` の `old` の後ろに足したブロックは互いに違い、`old` のブロックとも違い、`core` のこのヒープのブロックである。

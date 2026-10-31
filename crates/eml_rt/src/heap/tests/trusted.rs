@@ -1149,6 +1149,178 @@ fn reclaim_changes_no_owner_count_and_no_work_counter() {
     drop(b);
 }
 
+/// 検査モードのヒープ。速いモードなら `None`。
+fn as_checked<M: Mode>(heap: &mut Heap<M>) -> Option<&mut Heap<Checked>> {
+    (heap as &mut dyn std::any::Any).downcast_mut::<Heap<Checked>>()
+}
+
+// (d) 子のスレッドが自分のページに作った値を親へ戻す。親は移された `lin` の物体をその場で書き換え、値の箱を token に
+// して使い回し、空ける。空けたブロックはどれも子のヒープに積まれ、子のヒープの持ち主が取り込む
+fn the_receiver_rewrites_reuses_and_frees_a_moved_lin_object<M: Mode>() {
+    const CONS_META: Meta = Meta::new(CONS, 2, Kind::Data, false);
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let child = a.fork_worker();
+    let (mut b, top) = std::thread::spawn(move || {
+        let mut b = b;
+        b.set_worker(child);
+        let x = list(&mut b, 1);
+        let lin = b.alloc_data(0, 1, 0, true);
+        unsafe { b.set_field(lin, 0, x) }.unwrap();
+        let top = cons(&mut b, lin, Word::UNIT);
+        (b, top)
+    })
+    .join()
+    .unwrap();
+    unsafe {
+        a.transfer_back(top, child).unwrap();
+        let lin = a.field(top, 0).unwrap();
+        let x = a.field(lin, 0).unwrap();
+        a.set_field(lin, 0, Word::imm(7)).unwrap();
+        a.decref(x).unwrap();
+        let token = a.release_reuse(top, CONS, &[false, false]).unwrap();
+        let (y, reused) = a.con_at(token, 2, CONS_META).unwrap();
+        assert!(reused);
+        assert_eq!(y, top);
+        a.set_field(y, 0, Word::imm(1)).unwrap();
+        a.set_field(y, 1, Word::UNIT).unwrap();
+        a.decref(y).unwrap();
+    }
+    if let Some(a) = as_checked(&mut a) {
+        assert_eq!(a.stats().remote_frees, 3);
+        assert_eq!(a.retire_worker(child), Ok(()));
+    }
+    b.reclaim();
+    if let Some(b) = as_checked(&mut b) {
+        assert_eq!(b.stats().reclaimed, 3);
+    }
+    assert_eq!(mortal(&mut b), 0);
+    assert_eq!(mortal(&mut a), 0);
+}
+
+// `lin` の部分が別のスレッドへ移って戻る。A は組 (1, L) を共有にして B へ送る。L は `lin` の物体で、rc 1 の子 X と、
+// A も参照を持つ要素 S を持つ。B は組を最後の参照として受けて空け、L をその場で書き換え、S と L と X を手放す。その間
+// A は S の参照を増減し、自分の物体を確保して空ける。A のページの物体を B が空けるので、A が取り込んだ後に何も残らない
+fn a_lin_part_moves_to_another_thread_and_back<M: Mode>() {
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let receiver = a.fork_worker();
+    let x = list(&mut a, 1);
+    let s = list(&mut a, 1);
+    let l = a.alloc_data(0, 2, 0, true);
+    let c = a.alloc_data(0, 2, 0, false);
+    unsafe {
+        a.dup(s).unwrap();
+        a.set_field(l, 0, x).unwrap();
+        a.set_field(l, 1, s).unwrap();
+        a.set_field(c, 0, Word::imm(1)).unwrap();
+        a.set_field(c, 1, l).unwrap();
+        a.share(c, receiver).unwrap();
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Word>();
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        b.set_worker(receiver);
+        let c = rx.recv().unwrap();
+        unsafe {
+            assert_eq!(b.is_last(c), Ok(true));
+            let l = b.field(c, 1).unwrap();
+            b.free_block(c).unwrap();
+            let x = b.field(l, 0).unwrap();
+            let s = b.field(l, 1).unwrap();
+            b.set_field(l, 0, Word::UNIT).unwrap();
+            b.set_field(l, 1, Word::UNIT).unwrap();
+            b.decref(x).unwrap();
+            b.decref(s).unwrap();
+            b.decref(l).unwrap();
+        }
+        b
+    });
+    tx.send(c).unwrap();
+    for _ in 0..4 {
+        unsafe {
+            a.dup(s).unwrap();
+            a.decref(s).unwrap();
+        }
+        let ys = list(&mut a, 4);
+        unsafe { a.decref(ys) }.unwrap();
+    }
+    unsafe { a.decref(s) }.unwrap();
+    let b = b.join().unwrap();
+    a.reclaim();
+    if let Some(a) = as_checked(&mut a) {
+        assert_eq!(a.retire_worker(receiver), Ok(()));
+        assert_eq!(super::check_all(a), Ok(()));
+    }
+    assert_eq!(mortal(&mut a), 0);
+    drop(b);
+}
+
+// (f) 検査モードで、ほかのヒープのページの語を受ける。B のスレッドが ID `id` で確保した物体を A のスレッドが空け、
+// ID ごとの数は表の上で合う。A の共有の物体の子が B のページの共有の文字列でも、生存の列挙は通る。取り込む前の
+// `check_owned` は断る。落としたヒープのページとほかの `Control` のページを指す語は、メモリに触れずに断る
+#[test]
+fn checked_words_cross_heaps_and_unknown_pages_are_refused() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut a = Heap::<Checked>::with_control(control.clone());
+    let id = a.fork_worker();
+    let b = Heap::<Checked>::with_control(control.clone());
+    let (mut b, xs, s) = std::thread::spawn(move || {
+        let mut b = b;
+        let s = b.alloc_string("on b");
+        unsafe { b.share(s, 0) }.unwrap();
+        b.set_worker(id);
+        let xs = list(&mut b, 3);
+        b.set_worker(0);
+        (b, xs, s)
+    })
+    .join()
+    .unwrap();
+    assert_eq!(a.owned_by(id), 3);
+    assert_eq!(text(&a, s), "on b");
+    let p = cons(&mut a, s, Word::UNIT);
+    unsafe {
+        a.dup(s).unwrap();
+        a.share(p, 0).unwrap();
+        a.set_worker(id);
+        a.decref(xs).unwrap();
+        a.set_worker(0);
+    }
+    assert_eq!(a.owned_by(id), 0);
+    assert_eq!(a.stats().remote_frees, 3);
+    assert_eq!(control.check_owned(&[&a, &b]), Err(HeapError::NotQuiescent));
+    b.reclaim();
+    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
+    assert_eq!(a.check_invariants(), Ok(()));
+    assert_eq!(a.retire_worker(id), Ok(()));
+    // 落としたヒープのページを指す語
+    let stale = {
+        let mut c = Heap::<Checked>::with_control(control.clone());
+        list(&mut c, 1)
+    };
+    assert_eq!(unsafe { a.dup(stale) }, Err(HeapError::UnknownPage));
+    let q = a.alloc_data(0, 1, 0, false);
+    unsafe {
+        a.share(q, 0).unwrap();
+        raw::set_slot(q, 0, stale);
+    }
+    assert_eq!(a.check_invariants(), Err(HeapError::UnknownPage));
+    unsafe {
+        raw::set_slot(q, 0, Word::UNIT);
+        a.decref(q).unwrap();
+    }
+    // ほかの `Control` のヒープの語
+    let mut d = Heap::<Checked>::new();
+    let other = list(&mut d, 1);
+    assert_eq!(unsafe { a.dup(other) }, Err(HeapError::UnknownPage));
+    unsafe {
+        d.decref(other).unwrap();
+        a.decref(p).unwrap();
+        a.decref(s).unwrap();
+    }
+    b.reclaim();
+    assert_eq!(mortal(&mut a), 0);
+    assert_eq!(mortal(&mut b), 0);
+}
+
 // 実行の制御
 // T1: 2つのスレッドのヒープが、1つの Control にページの数を足し引きする
 fn two_threads_share_one_control<M: Mode>() {
@@ -2127,6 +2299,8 @@ both_modes!(
     a_remote_large_free_refunds_at_once,
     two_threads_free_into_one_page,
     the_owner_carves_while_another_thread_reads_and_frees,
+    the_receiver_rewrites_reuses_and_frees_a_moved_lin_object,
+    a_lin_part_moves_to_another_thread_and_back,
     println_goes_through_the_host,
     borrowed_lines_cross_the_buffer,
     borrowed_reads_cross_the_buffer_and_fail,

@@ -14,6 +14,7 @@ use vstd::shared::Shared;
 use crate::alloc::{PageHeader, Pages};
 #[cfg(verus_only)]
 use crate::alloc::{header_ok, header_sink, lemma_header_size, page_base, region_cap, region_ptr};
+use crate::control::page_known;
 #[cfg(verus_only)]
 use crate::heap::Env;
 #[cfg(verus_only)]
@@ -486,6 +487,25 @@ fn same_chunk<M: Mode>(a: &Frozen<M>, b: &Frozen<M>) -> (r: bool)
         r ==> *a == *b,
 {
     std::ptr::eq(a, b)
+}
+
+/// 番地 `a` のブロックのページが、付けた塊 `region` かその祖先のページで、その塊を凍結した `Control` のページの表に
+/// 登録してあるか (信頼の一覧の T15)。塊のページは、作り手のヒープが取ったときにその `Control` に登録し、塊を落とす
+/// まで外さないので、塊とその祖先のブロックには真を返す。鎖を先頭からたどるので、付けたヒープの `Control` の表で
+/// 見つからなかった語にだけ使う。
+#[verifier::external_body]
+pub(crate) fn region_known<M: Mode>(region: &Option<Arc<Frozen<M>>>, a: usize) -> (r: bool)
+    ensures
+        region matches Some(f) && (*f).view_perms().has(a) ==> r,
+{
+    let mut next = region.as_deref();
+    while let Some(r) = next {
+        if page_known(r.pages.control(), a) {
+            return true;
+        }
+        next = r.parent.as_deref();
+    }
+    false
 }
 
 /// 付けている塊の子孫でない塊を付けようとした。重ならないことを示せるのは鎖でつながる塊のブロックだけなので、
