@@ -802,8 +802,8 @@ fn a_long_write_completes_once_with_its_whole_length() {
 }
 
 /// 待っている長い書きを取り消すと、完了がちょうど1つ、取り消しの誤り `cancelled` で届き、その後には何も届かない。
-/// 相手が少し読んで送りの buffer が空いた後、次の `wait` より前に取り消す。期限の取り消しと同じ順 (`wait`、`cancel`、
-/// `wait`、`completions`) である。
+/// 相手が少し読んで送りの buffer が空いた後、次の `wait` より前に取り消し、取り消しの完了を待つ。OS が取り消しの終わりを
+/// 後で知らせる backend もあるので、1回の `wait` では足りない。
 #[test]
 fn a_cancelled_pending_long_write_completes_once() {
     use std::io::Read;
@@ -1397,14 +1397,14 @@ fn reset_on_close(s: &std::net::TcpStream) {
 }
 
 /// 相手が読まない端 `handle` に、`chunk` の書きを保留になるまで出し、保留の書きの鍵を返す。送りと受けの buffer の和は
-/// 有限なのでどこかで保留になり、その大きさには頼らない。`WRITES_UNTIL_PENDING` 回で保留にならなければ落ちる。保留の書きが終わるまで、
-/// 呼ぶ側が `chunk` を生かしておく。macOS は相手の窓が満ちた後にも送りの buffer を広げうるので、小さな `chunk` の保留の
+/// 有限なのでどこかで保留になり、その大きさには頼らない。`WRITES_UNTIL_PENDING` 回で保留にならなければ落ちる。
+/// 保留の書きが終わるまで、呼ぶ側が `chunk` を生かしておく。macOS は相手の窓が満ちた後にも送りの buffer を広げうるので、小さな `chunk` の保留の
 /// 書きは、相手が読まなくても少し後に終わりうる。保留のまま残ってほしいテストは `PENDING_CHUNK` を渡す。
 /// 保留の書きの残りが、広がった送りの buffer にも収まらない大きさ。
 const PENDING_CHUNK: usize = 8 << 20;
 
-/// `write_until_pending` が出す書きの数の上限。unix では1つ目が保留になり、Windows の送りは buffer に空きがあれば
-/// 大きな書きを丸ごと受けうるので、2つ目までに保留になる。
+/// `write_until_pending` が出す書きの数の上限。unix では1つ目が保留になる。Windows の送りは buffer に空きがあれば
+/// 大きな書きを丸ごと受けうるので余裕を持たせた。Windows で何回目に保留になるかは測っていない。
 const WRITES_UNTIL_PENDING: usize = 8;
 
 fn write_until_pending(
