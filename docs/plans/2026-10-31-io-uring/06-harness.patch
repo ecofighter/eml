@@ -1,0 +1,137 @@
+diff --git a/bench/net/bench.py b/bench/net/bench.py
+index 864cff0..bd88156 100644
+--- a/bench/net/bench.py
++++ b/bench/net/bench.py
+@@ -25,16 +25,16 @@ def cases():
+                    n_big=int(f[6]), n_small=int(f[7]), unit=f[8])
+ 
+ 
+-def run(extra, cmd):
++def run(extra, cmd, env):
+     r = subprocess.run([sys.executable, "-I", os.path.join(here, "run.py")] + extra + ["--"] + cmd,
+-                       capture_output=True, text=True, timeout=600)
++                       capture_output=True, text=True, timeout=600, env={**os.environ, **env})
+     if r.returncode != 0:
+         sys.exit(r.stderr or r.stdout)
+     return json.loads(r.stdout)
+ 
+ 
+ def command(case, eml, size, stats=False):
+-    eml, progs = eml
++    eml, progs, _ = eml
+     args = [] if case[size] == "-" else case[size].split()
+     if case["name"].startswith("py:"):
+         return [sys.executable, "-I", os.path.join(here, "peer.py")] + args
+@@ -49,7 +49,7 @@ def peer(case, size):
+ def main():
+     argv = sys.argv[1:]
+     runs, strace_runs, stats, only, do_time, do_strace = 11, 3, False, None, True, True
+-    emls = []
++    emls, envs = [], []
+     while argv:
+         a = argv.pop(0)
+         if a == "--runs":
+@@ -64,22 +64,31 @@ def main():
+             do_time = False
+         elif a == "--no-strace":
+             do_strace = False
++        elif a == "--env":
++            envs.append((argv.pop(0), argv.pop(0)))
+         else:
+             label, eml = a.split("=", 1)
+             eml, _, progs = eml.partition("@")
+-            emls.append((label, (os.path.abspath(eml), os.path.abspath(progs) if progs else here)))
++            emls.append((label, (os.path.abspath(eml), os.path.abspath(progs) if progs else here, {})))
+     if not emls:
+         sys.exit(__doc__)
++    named = dict(emls)
++    for label, kv in envs:
++        key, eq, value = kv.partition("=")
++        if label not in named or not eq:
++            sys.exit(f"bench.py: --env {label} {kv}: ラベルがないか KEY=VALUE でない")
++        named[label][2][key] = value
+     # `--stats` を持たない古い eml では RunStats を取らずに続ける
+-    has_stats = {label: "--stats" in subprocess.run([eml, "run", "--help"], capture_output=True, text=True).stdout
+-                 for label, (eml, _) in emls}
++    has_stats = {label: "--stats" in subprocess.run([eml, "run", "--help"], capture_output=True, text=True,
++                                                    env={**os.environ, **env}).stdout
++                 for label, (eml, _, env) in emls}
+     for label, ok in has_stats.items():
+         if stats and not ok:
+             print(f"bench.py: {label} の eml に --stats がないので、RunStats を取らない", file=sys.stderr)
+ 
+-    def emit(case, label, kind, data):
++    def emit(case, label, kind, data, env):
+         print(json.dumps({"case": case["name"], "label": label, "kind": kind, "unit": case["unit"],
+-                          "n_big": case["n_big"], "n_small": case["n_small"], "data": data}), flush=True)
++                          "n_big": case["n_big"], "n_small": case["n_small"], "env": env, "data": data}), flush=True)
+ 
+     for case in cases():
+         if only and not only.search(case["name"]):
+@@ -91,17 +100,17 @@ def main():
+             for i in range(runs):
+                 order = labels if i % 2 == 0 else labels[::-1]
+                 for label, eml in order:
+-                    got[label] += run(peer(case, "big"), command(case, eml, "big"))
+-            for label, _ in labels:
+-                emit(case, "python" if py else label, "time", got[label])
++                    got[label] += run(peer(case, "big"), command(case, eml, "big"), eml[2])
++            for label, eml in labels:
++                emit(case, "python" if py else label, "time", got[label], {} if py else eml[2])
+         if py:
+             continue
+         for label, eml in labels:
+             if do_strace and sys.platform.startswith("linux"):
+                 emit(case, label, "strace", run(peer(case, "small") + ["--strace", "--runs", str(strace_runs)],
+-                                                command(case, eml, "small")))
++                                                command(case, eml, "small"), eml[2]), eml[2])
+             if stats and has_stats[label]:
+-                emit(case, label, "stats", run(peer(case, "small"), command(case, eml, "small", stats=True)))
++                emit(case, label, "stats", run(peer(case, "small"), command(case, eml, "small", stats=True), eml[2]), eml[2])
+ 
+ 
+ main()
+diff --git a/bench/net/report.py b/bench/net/report.py
+index b740b5f..f62043d 100644
+--- a/bench/net/report.py
++++ b/bench/net/report.py
+@@ -230,22 +230,29 @@ for label in labels:
+         s = r["data"][0]["stats"]
+         print(f"| {c} | {r['n_small']} {r['unit']} | " + " | ".join(fmt((s[k] - bs[k]) / r["n_small"]) for k in present) + " |")
+ 
+-if len(labels) >= 2:
+-    a, b = labels[0], labels[1]
++# 1つ目のラベルを前とし、ほかのラベルをそれぞれ後として比べる
++for b in labels[1:]:
++    a = labels[0]
+     print(f"\n## 比べ: {a} → {b} (CPU の中央値、床を引いて単位あたり µs)\n")
+-    print(f"| 件 | {a} | {b} | 比 | 四分位の重なり | 判定 | 実時間の比 |")
+-    print("|---|---|---|---|---|---|---|")
++    print(f"| 件 | {a} | {b} | 比 | 生の CPU の比 | 四分位の重なり | 判定 | minflt/単位の差 | 確保の揺れ | 実時間の比 |")
++    print("|---|---|---|---|---|---|---|---|---|---|")
+     for c in cases:
+         ra, rb = get.get((c, a, "time")), get.get((c, b, "time"))
+-        if not ra or not rb or c == "base":
++        if not ra or not rb:
+             continue
+         n = ra["n_big"]
+-        pa = (st.median(cpu(x) for x in ra["data"]) - base_med(a, cpu)) / n * 1e6
+-        pb = (st.median(cpu(x) for x in rb["data"]) - base_med(b, cpu)) / n * 1e6
++        floor = c != "base"
++        ca, cb = st.median(cpu(x) for x in ra["data"]), st.median(cpu(x) for x in rb["data"])
++        pa = (ca - (base_med(a, cpu) if floor else 0)) / n * 1e6
++        pb = (cb - (base_med(b, cpu) if floor else 0)) / n * 1e6
+         qa, qb = q([cpu(x) for x in ra["data"]]), q([cpu(x) for x in rb["data"]])
+         overlap = not (qa[1] < qb[0] or qb[1] < qa[0])
+         ratio = pb / pa if pa else float("nan")
+         verdict = "差" if (ratio <= 0.90 or ratio >= 1.10) and not overlap else "差なし"
+-        wa = st.median(x["wall"] for x in ra["data"]) - base_med(a, lambda x: x["wall"])
+-        wb = st.median(x["wall"] for x in rb["data"]) - base_med(b, lambda x: x["wall"])
+-        print(f"| {c} | {pa:.2f} | {pb:.2f} | {ratio:.2f} | {'重なる' if overlap else '重ならない'} | {verdict} | {wb / wa:.2f} |")
++        mf = lambda r, l: (st.median(x["minflt"] for x in r["data"]) - (base_med(l, lambda x: x["minflt"]) if floor else 0)) / n
++        dm = mf(rb, b) - mf(ra, a)
++        wa = st.median(x["wall"] for x in ra["data"]) - (base_med(a, lambda x: x["wall"]) if floor else 0)
++        wb = st.median(x["wall"] for x in rb["data"]) - (base_med(b, lambda x: x["wall"]) if floor else 0)
++        # 印は「比べる規則」の「確保の揺れ」で、判定を読む人が時間の判定から外す
++        print(f"| {c} | {pa:.2f} | {pb:.2f} | {ratio:.3f} | {cb / ca:.3f} | {'重なる' if overlap else '重ならない'} | {verdict} | "
++              f"{dm:.2f} | {'印' if floor and abs(dm) >= 1 else ''} | {wb / wa:.2f} |")
