@@ -241,7 +241,6 @@ read_chunk buf s =
 - 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び方 (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
 - driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM では、監視のスレッドのない run は Ctrl-C の後に起こされないので、VM が1回の待ちを 10 ms で切る。driver は内部の刻みを持たない ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver は、OS を呼ばない核と、`libc` と `windows-sys` で自前に書いた OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) からなり、io_uring は使わない。mio は Windows で AFD の readiness を真似るので採らない。核は保留の操作を呼ぶ側の鍵で引く1つの表で持ち、プールと名前の解決のスレッドも自前で持つ。構成は [アーキテクチャ](../implementation/architecture.md) の「`eml_io` の内部」にある
-- Windows の backend は今ソケットを扱わない。ソケットを扱うときは、ソケットを IOCP のポートに結び付けてから受けと送りを出す ([ロードマップ](roadmap.md) の `net-windows`)
 - 完了は持ち主の worker の driver の完了の列に届き、集める地点で登録表の操作の記録に当てる。完了の中身は保留の表が持つ数えた参照で、ハンドルを縛った worker とタスクの worker が違えば、普通の移し替えの歩きでタスクへ渡る
 - REPL の回復は実行中の操作を取り消して完了を待ちきってから写す
 
@@ -317,16 +316,11 @@ main () =
   Async.drain_within 30000 conns
 ```
 
-`SIGTERM` が来ると `race` が accept するタスクを取り消し、`drain_within` が実行中の接続を最大 30 秒待ち、残りを取り消して終わるまで待つ。接続のスコープはその後で終わりの手順を通る。`session` を `try_all` で包まないと、1つの接続の失敗がスコープの失敗になり、サーバが止まる。
-
-Windows には次のものが残る。
-
-- Windows の本物の driver はソケットを扱わない。扱うときは、ソケットの作成、bind、listen、受け、接続を `eml_io` が `windows-sys` で書く。Windows の accept と connect の後には、それぞれ `update_context` を呼ぶ。ConnectEx はソケットが bind 済みであることを求めるので、connect の前の bind も `eml_io` で書く ([ロードマップ](roadmap.md) の `net-windows`)
+`SIGTERM` が来ると `race` が accept するタスクを取り消し、`drain_within` が実行中の接続を最大 30 秒待ち、残りを取り消して終わるまで待つ。接続のスコープはその後で終わりの手順を通る。`session` を `try_all` で包まないと、1つの接続の失敗がスコープの失敗になり、サーバが止まる。Windows でコンソールを閉じたときは OS が既定で 5 秒で終わらせるので、30 秒は待てない。
 
 ### シグナル
 
 - 2回目のシグナルでその場で終わるのは、前の同じシグナルが保留か、もう run を止めている間である (#18)。保留の間を監視の刻み1つに限る案は採らない。その形では、待つタスクがいて同期の読みで止まったプログラムを Ctrl-C で止められないためである。process manager が SIGTERM の2回目に別の意味を求めたときに見直す
-- Windows には `Terminate` を起こす OS の出来事がない。`Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写すことは、Windows のソケットと一緒に入れる ([ロードマップ](roadmap.md) の `net-windows`)
 
 ### TLS と HTTP
 
@@ -386,7 +380,7 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - `async/` の UI テストを seed で流す規則は [テスト戦略](../implementation/testing.md) の「seed で流す」にある。I/O の待ちを持つテストは、seed で完了の順を決めるテストの driver の上で流す。どの seed でも同じ出力を返すことを求めるので、ネイティブのコードでも同じになる
 - テストの driver は、仮想のホストの上の `listen` と `connect` が作るメモリの上の `TcpStream` の組を持つ。時間の待ちは `Clock` が決め、仮想の時計の規則は [VM](../spec/vm.md) の「時計と driver」にある
 - 仮想のシグナルは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` に渡す予定で起こす。UI テストは先頭の印の行 `-- signal: <interrupt|terminate> at <ms>` で予定を書く ([VM](../spec/vm.md) の「時間の待ち」、[テスト戦略](../implementation/testing.md) の「UI テスト」)
-- `Net` と `Signal` の UI テストは `tests/ui/{run,run-fail}/async/` の `net_*.em` と `signal_*.em` で、どれもテストの driver の上で流れる。本物のソケットと OS のシグナルは、Rust のテスト (`crates/eml_io/tests/real.rs`、`crates/eml_vm/tests/api.rs` と `signal.rs`、`crates/eml_cli/tests/cli.rs`) だけで試す。unix のものは `#[cfg(unix)]` にし、Windows では `listen` が `NotAvailable` になることを確かめる。ループバックでポート 0 に bind して `local_port` で読む。複数の worker の組 (N が 2 と 8) では順によらないものだけを流す。Windows の CI は同じ組を IOCP の上で流す
+- `Net` と `Signal` の UI テストは `tests/ui/{run,run-fail}/async/` の `net_*.em` と `signal_*.em` で、どれもテストの driver の上で流れる。本物のソケットと OS のシグナルは、Rust のテスト (`crates/eml_io/tests/real.rs`、`crates/eml_vm/tests/api.rs` と `signal.rs`、`crates/eml_cli/tests/cli.rs`) だけで試す。同じ組を3つの OS で流し、Windows に無い動きを確かめるものだけを `#[cfg(unix)]` にする ([テスト戦略](../implementation/testing.md) の「Windows で流さないテスト」)。ループバックでポート 0 に bind して `local_port` で読む。複数の worker の組 (N が 2 と 8) では順によらないものだけを流す
 - 意味のテスト: 取り消したタスクの `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`shield` の中の別れの `send` が取り消しの下でも終わること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
 - 救済を強いるスケジュール (`--sched rescue-always`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
 - `RunStats` は driver の完了の数 `completions` と、channel の欄 `channel_ops`、`channel_waits`、`channels_swept` を持つ。`Std.Net` のテストのスナップショットも、ほかの欄と同じく逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)

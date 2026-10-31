@@ -1,5 +1,6 @@
 //! OS ごとの backend (docs/spec/vm.md の「時計と driver」)。Linux は epoll、Apple は kqueue で、どちらも `unix.rs` の
-//! `Unix` が fd の表と歩を持ち、OS ごとのファイルは登録と待ちと起こしだけを持つ。Windows は IOCP で、ソケットを扱わない。
+//! `Unix` が fd の表と歩を持ち、OS ごとのファイルは登録と待ちと起こしだけを持つ。Windows は IOCP で、`iocp.rs` が
+//! 表と歩と待ちを持つ。
 
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};

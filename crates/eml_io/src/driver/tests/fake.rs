@@ -111,7 +111,7 @@ impl Counter {
     }
 }
 
-pub(super) struct Fake<const SOCKETS: bool = true> {
+pub(super) struct Fake {
     /// 偽の時計。`wait(Some(d))` でだけ進む。
     pub now: Duration,
     pub bell: Arc<Bell>,
@@ -131,9 +131,11 @@ pub(super) struct Fake<const SOCKETS: bool = true> {
     pub calls: Vec<Call>,
     /// `close` されたソケット。driver を落とした後も読めるように分けて持つ。
     pub closed: Arc<Mutex<Vec<u32>>>,
+    /// `cancel` された鍵。`closed` と同じく、driver を落とした後も読める。
+    pub cancelled_keys: Arc<Mutex<Vec<OpKey>>>,
 }
 
-impl<const SOCKETS: bool> Fake<SOCKETS> {
+impl Fake {
     pub(super) fn new() -> Self {
         Fake {
             now: Duration::ZERO,
@@ -150,6 +152,7 @@ impl<const SOCKETS: bool> Fake<SOCKETS> {
             sent: Vec::new(),
             calls: Vec::new(),
             closed: Arc::default(),
+            cancelled_keys: Arc::default(),
         }
     }
 
@@ -175,9 +178,8 @@ fn kind_of(step: &Step<'_, FakeSock>) -> StepKind {
     }
 }
 
-impl<const SOCKETS: bool> Backend for Fake<SOCKETS> {
+impl Backend for Fake {
     type Sock = FakeSock;
-    const SOCKETS: bool = SOCKETS;
 
     fn now(&self) -> Duration {
         self.now
@@ -268,6 +270,10 @@ impl<const SOCKETS: bool> Backend for Fake<SOCKETS> {
 
     fn cancel(&mut self, key: OpKey, step: Step<'_, FakeSock>) -> io::Result<Cancel> {
         self.calls.push(Call::Cancel(key, kind_of(&step)));
+        self.cancelled_keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(key);
         self.cancels.pop_front().unwrap_or(Ok(Cancel::Done))
     }
 

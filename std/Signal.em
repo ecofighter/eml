@@ -2,7 +2,8 @@
 -- perform できないので、待ちは `Std.Async` の `signal_wait` を通す (docs/spec/effects.md の「抽象エフェクト」)
 import Async (Async)
 
--- `Interrupt` は Ctrl-C (unix の SIGINT と Windows の `CTRL_C_EVENT`)、`Terminate` は unix の SIGTERM である
+-- `Interrupt` は Ctrl-C (unix の SIGINT と Windows の `CTRL_C_EVENT`)、`Terminate` は unix の SIGTERM と、`eml run` での
+-- Windows のコンソールを閉じることとシャットダウンである
 pub data Signal =
   | Interrupt
   | Terminate

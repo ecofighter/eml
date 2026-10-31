@@ -37,7 +37,7 @@
 | 1 | 機能ごとの代表的なプログラムを `eml check` / `eml run` にかけたときにユーザーが見るもの。stdout、実行時エラー、プログラム全体が通るか落ちるか、代表的な診断の表示 | UI テスト (`tests/ui/`) |
 | 2 | 1つの段階の出力 (CST、HIR、推論したシグネチャ、Core IR、LIR) と、その段階の診断の細部 (位置、回復、端のケース) | その段階の crate の結合テスト (`crates/<段階>/tests/`)。ソースから `eml_test_support` で組み立てる |
 | 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_lir/tests/`、`eml_core_ir/tests/verify.rs`、`eml_vm/tests/`。LIR は IR のテキストで書いて `eml_lir::parse` で読み、Core IR は `eml_core_ir::parse` で読む |
-| 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープ、`eml_io` の driver の核など | `src/` の単体テスト。`eml_io` の核は `src/driver/tests/` で偽の backend の上で確かめる (「`eml_io` の検証」の「核の Miri」)。epoll と kqueue の backend は `src/sys/unix.rs` の `mod tests` で本物のソケットの上で確かめ、Miri では流さない |
+| 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープ、`eml_io` の driver の核など | `src/` の単体テスト。`eml_io` の核は `src/driver/tests/` で偽の backend の上で確かめる (「`eml_io` の検証」の「核の Miri」)。epoll と kqueue の backend は `src/sys/unix.rs` の `mod tests` で本物のソケットの上で確かめ、Miri では流さない。IOCP の backend は `src/sys/iocp.rs` の `mod tests` で本物のソケットの上で確かめる。そこには、backend が頼るのに文書に書かれていない OS の振る舞い (長さ 0 の `WSARecv`、`OVERLAPPED` なしの呼び出しが packet を積まないこと、`accept` と `AcceptEx` の併用、ループバックで SYN を送り直さないこと) を確かめるテストも置く |
 | 5 | lib API の流れ、CLI の終了コード、テスト補助そのもの | `eml_cli/tests/api.rs`、`eml_cli/tests/cli.rs`、`eml_test_support/tests/` |
 
 ### 重複させない
@@ -191,13 +191,16 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 ### `unsafe` の一覧
 
 - `unsafe` を書いてよいファイルは `crates/eml_io/src/trust.rs` の `UNSAFE_FILES` が決める。`lib.rs` は `#![deny(unsafe_code)]` を持ち、一覧のファイルだけが先頭に `#![allow(unsafe_code)]` を置く
-- 規則の範囲は `src/` である。`tests/` の結合テストは対象に入れない (`tests/real.rs` は、シグナルの塞ぎと handler とソケットの linger の設定のために `unsafe` を使う)
+- 規則の範囲は `src/` である。`tests/` の結合テストは対象に入れない (`tests/real.rs` は、シグナルの塞ぎと handler、受けの列の長さ、ソケットの linger の設定 (unix と Windows) のために `unsafe` を使う)
 - `unsafe_stays_in_the_listed_files` は、識別子 `unsafe` を持つファイルの集合と、`#![allow(unsafe_code)]` で始まるファイルの集合と、`UNSAFE_FILES` が等しいこと、`allow(unsafe_code)` がほかにないこと、`lib.rs` が `#![deny(unsafe_code)]` を持つことを確かめる
 - `every_source_file_is_listed` は、`src/` の `.rs` が `FILES` と `SKIPPED` の和と一致することを確かめる。新しいファイルを足したら `FILES` に1行足す
 - `the_scanner_skips_comments_and_strings` は、コメント、文字列、文字のリテラルの中の `unsafe` を数えないことと、どのファイルにも生の文字列がないことを確かめる。消し方は `eml_rt` の `trust.rs` と同じで、生の文字列を扱わないためである
 - `the_real_driver_makes_no_slices_and_leaks_nothing` は、`mem::forget` と `Box::leak` がないことと、`from_raw_parts` が `test.rs` のほかにないことを確かめる。テストの driver は貸しの規則を守って slice を作るが、本物の driver と偽の backend は生のポインタのまま記憶に触れる
 - `the_core_names_no_os` は、driver の核 (`driver/` の下で `driver/tests/` でないファイル) と、核を包む `real.rs` が `libc::`、`windows_sys::`、`Instant`、`thread::spawn`、`Builder::spawn`、`raw_os_error`、`ECANCELED`、`ECONNABORTED`、`EAGAIN` を書かず、スレッドを `backend.spawn(` でだけ作ることを確かめる
-- `readiness_backends_report_only_retries` は、epoll と kqueue の backend (`sys/unix.rs`、`sys/epoll.rs`、`sys/kqueue.rs`) が暫定の完了型の値 (`Arrival::Done`、`Arrival::Cancelled`、`Hold::Buffer`、`Cancel::Pending`) を書かないことを確かめる
+- `completion_values_stay_in_the_core_and_completion_backends` は、完了型の値 (`Arrival::Done`、`Arrival::Cancelled`、`Hold::Memory`、`Cancel::Pending`) を書くのが `driver/backend.rs`、`driver/mod.rs`、`driver/tests/` と `COMPLETION_BACKENDS` (今は `sys/iocp.rs`) だけであることと、`COMPLETION_BACKENDS` のファイルがどれも `UNSAFE_FILES` にあることを確かめる。readiness の backend は同期の呼び出しの間しか OS に記憶を貸さないので、これらの値を返さない
+- `the_core_reads_hold_only_to_drop` は、`driver/mod.rs` の `Hold::Memory` がどれも `drop` の中に、`Hold::None` がどれも `submit` の中にあることを確かめる。核が `Hold` を読むのは driver を落とすときだけである
+- `raw_boxes_stay_in_the_completion_backends` は、識別子 `into_raw`、`from_raw`、`OVERLAPPED` が `COMPLETION_BACKENDS` のほかにないことを確かめる。OS に渡す箱を扱うのは完了型の backend だけである
+- `abort_is_named_only_where_memory_is_at_stake` は、識別子 `abort` が `driver/mod.rs`、`driver/tests/abort.rs`、`COMPLETION_BACKENDS` と、`driver/tests/mod.rs` の `mod abort;` の1か所のほかにないことを確かめる。プロセスを止めるのは、OS がこちらの記憶に書きうるまま放せないときだけである
 - `the_core_walks_its_table_only_to_shut_down` は、`driver/mod.rs` の `mem::take`、`slots.iter`、`slots.values`、`slots.keys`、`slots.drain` が `quiesce` か `drop` の中にだけあることを確かめる。保留の表を歩くと、1つの接続の費用が保留の数に比例するためである
 
 ### AddressSanitizer
@@ -230,7 +233,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - 実行 (`run.rs`、`calls.rs`、`data.rs`、`evidence.rs`): 手書きの LIR を `eml_lir::verify` に通してから、検査モードで実行する。期待どおりに通ったときだけ、速いモードでも実行して出力が同じことを確かめる。速いモードは前提を確かめないので、検査モードが通らなかった IR では走らせない。`run.rs` は定数、extern、直接の呼び出しと末尾呼び出し、エントリでないブロックの中の呼び出し、誤りの位置 (ヒープの誤りの位置と、位置のない誤りを含む) と flush、`FileIn` の `dup`、終わりの処理とリーク (種類が2つ以上のリークの表示を含む) を、`calls.rs` は部分適用、ちょうどの適用、余った引数の `ApplyRest`、末尾の位置の適用、`clause`、自己末尾呼び出しの深さと割り込み、深さの上限、確保量の上限を、`data.rs` は `con`、Repr ごとの `switch`、`unpack`、`release` の両方の枝、`box` と `unbox` を、`evidence.rs` は基本操作と節の呼び出しを確かめる
 - verifier が拒む LIR は、VM 自身の見張り (内部の誤りと、検査モードのヒープの誤り) を確かめるテストだけで使う。`run_unverified` で検査モードだけで走らせ、そのことをテストの doc コメントに書く。verifier が拒んだら、verifier でなくテストの LIR を直す
 - `tags.rs` は、`Bool`、`Ordering`、`IOErrorKind` のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを確かめる
-- `api.rs` は、`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)。`RunConfig` の組み立て (`with_debug_heap`、`with_control`) と、割り込みの扱いも確かめる。本物の driver を VM から通すことも、`Clock::Real` の検査モードの `Machine` で確かめる。unix の本物の接続をまたぐタスクの読み書き、本物の受けで待つ run が割り込みで止まること、Windows の `listen` が種類 `NotAvailable` になることなどである。経過は下限だけを比べる。3 秒で割り込む見張りのスレッドは、止まったテストが待ち続けないためだけにあり、上限としては比べない。割り込みのテストは、受けるタスクが本物の受けで待ってから本体が書く行を見て割り込む
+- `api.rs` は、`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)。`RunConfig` の組み立て (`with_debug_heap`、`with_control`) と、割り込みの扱いも確かめる。本物の driver を VM から通すことも、`Clock::Real` の検査モードの `Machine` で確かめる。本物の接続をまたぐタスクの読み書き、本物の受けで待つ run が割り込みで止まることなどである。経過は下限だけを比べる。3 秒で割り込む見張りのスレッドは、止まったテストが待ち続けないためだけにあり、上限としては比べない。割り込みのテストは、受けるタスクが本物の受けで待ってから本体が書く行を見て割り込む
 - `apply.rs` は、一様な `apply` と、捕まえた値の並べ方と数を確かめる。`apply` は引数の数だけを比べて語を写し、部分適用と `ApplyRest` も一様な語を写す ([VM](../spec/vm.md) の「呼び出しと戻り」)
 - `machine.rs` は、入力をまたいで `CodeBase` と `Ctx` を持つ `Machine` を確かめる。手書きの LIR のプログラムを1つの `Machine` に続けて読み込み、名前で照らした関数の番号、定数、エフェクト、位置のファイルの引き直しを見る ([VM](../spec/vm.md) の「追記」)
 - `reuse.rs` は、reuse の命令の実行を手書きの LIR で確かめる。token を出すパスがなくても、token を定義する `release`、token を受ける `con`、`drop_token` と巻き戻しの token を VM だけで確かめられる ([VM](../spec/vm.md) の「reuse」)
@@ -463,7 +466,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - Ctrl-C を待つタスクに SIGINT を送って届けた後にもう1回送り、待つタスクがもういないので run が止まり、終了コード 130 で終わることを確かめる
 - 待つタスクがいる間に本体が書き手を開いたままの標準入力を読むプログラムに、100 ms ごとに SIGINT か SIGTERM を送り続け、終了コード 130 か 143 で終わることを確かめる。worker が読みで止まっていて届けられないので、届けていない間の2回目のシグナルでハンドラが終わらせる
 
-シグナルのハンドラは、bin の `interrupt` モジュールの単体テストが確かめる。テストは static を使わず、ハンドラが static から読む値を自分で作って渡す。`mod.rs` の `respond` のテストはどの OS でも流れ、1回目が `INTERRUPT` を立てること、`eml run` の2回目は終わり、REPL の2回目は終わらないこと、`clear` の後は1回目に戻ることを確かめる。待つタスクがいればシグナルを保留にすること、保留の間の2回目は終わること、届けた後は1回目に戻ること、SIGTERM は 143 で終わること、2つの種類が互いの2回目にならないことも確かめる。Windows では `windows.rs` のテストが handler の本体の関数を直接呼ぶ。`CTRL_C_EVENT` には TRUE を返して `INTERRUPT` を立て (待つタスクがいれば保留にし)、`eml run` の2回目では終わる関数に 130 を渡すことと、ほかの事象と static を置く前の Ctrl-C には FALSE を返し、ビットを変えず終わらないことを確かめる。Windows で本当の Ctrl-C を送るテストは置かない。
+シグナルのハンドラは、bin の `interrupt` モジュールの単体テストが確かめる。テストは static を使わず、ハンドラが static から読む値を自分で作って渡す。`mod.rs` の `respond` のテストはどの OS でも流れ、1回目が `INTERRUPT` を立てること、`eml run` の2回目は終わり、REPL の2回目は終わらないこと、`clear` の後は1回目に戻ることを確かめる。待つタスクがいればシグナルを保留にすること、保留の間の2回目は終わること、届けた後は1回目に戻ること、SIGTERM は 143 で終わること、2つの種類が互いの2回目にならないことも確かめる。Windows では `windows.rs` のテストが handler の判断の関数を直接呼ぶ。`CTRL_C_EVENT` は TRUE の答えで `INTERRUPT` を立て (待つタスクがいれば保留にし)、`eml run` の2回目は 130 で終わる答えになる。`eml run` の `CTRL_CLOSE_EVENT` と `CTRL_SHUTDOWN_EVENT` は返らない答えで `TERMINATE` を立てるか保留にし、2回目も返らない答えのままビットを変えない。ほかの事象、REPL の閉じるとシャットダウン、static を置く前の事象は FALSE の答えになる。返らない答えを行う関数は、別のスレッドで動かして 50 ms 後もまだ終わっていないことを確かめる。Windows で本当の Ctrl-C や閉じる事象を送るテストは置かない。
 
 `default_limits()` のテストは `crates/eml_cli/tests/api.rs` にある。`max_depth` が 2^27 であることと、`max_bytes` の既定の値を確かめる。既定の上限まで実際に再帰するテストは、1 GiB を使うので置かない。
 
@@ -475,7 +478,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 結果の整形 (`eml_cli::pretty`) も端末に依存しない純粋な関数なので、`crates/eml_cli/tests/pretty.rs` が文字列と幅を渡して確かめる。整形の規則の各項目、10,000 文字で切ること、5,000 段の入れ子の括弧を再帰なしで整えることを確かめる。
 
-`crates/eml_cli/tests/tls.rs` は、本物の driver の上で `Std.Tls` を動かす唯一のテストである。テストのスレッドがループバックに `eml_tls::Conn` のサーバーを立て、`Clock::Real` の run の `Tls.connect_with_ca` が handshake、1行の往復、close_notify の後の EOF、`Tls.close` まで進むことを確かめる。`cfg(all(unix, feature = "tls"))` の下だけで組む。Windows の本物の driver はソケットを扱わないためである。`eml_tls` には、dev-dependency でなく feature `tls` が足す依存として届く (「OS ごとのテスト」)。
+`crates/eml_cli/tests/tls.rs` は、本物の driver の上で `Std.Tls` を動かす唯一のテストである。テストのスレッドがループバックに `eml_tls::Conn` のサーバーを立て (クライアントは `127.0.0.1` に接続し、証明書の IP の名前で照合する)、`Clock::Real` の run の `Tls.connect_with_ca` が handshake、1行の往復、close_notify の後の EOF、`Tls.close` まで進むことを確かめる。`cfg(feature = "tls")` の下で組む。`eml_tls` には、dev-dependency でなく feature `tls` が足す依存として届く (「OS ごとのテスト」)。
 
 ## OS ごとのテスト
 
@@ -498,7 +501,7 @@ CI の対象 (OS、CPU、AddressSanitizer の脚) を足して落ちたテスト
 
 ### Windows で流さないテスト
 
-印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のシェルを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットがそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
+印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のシェルを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットと、受けの列が詰まった待ち受けへの接続が進行中のまま残ること (Windows は列を広げて接続を終えることがある) がそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
 
 - Rust のテストは、`#[test]` の関数か、そうしたテストだけを持つ `mod` に `#[cfg(unix)]` を付ける。`src/` の中のテストの `mod` には `#[cfg(all(test, unix))]` を付ける。本体が `libc::kill`、`mkfifo`、`PermissionsExt`、`CommandExt::process_group` を使い、Windows でコンパイルできないので、`cfg_attr(windows, ignore)` は使えない
 - UI テストとトランスクリプトは、エントリのファイルの先頭の印の行に印を書く。`.em` は `-- windows: skip (<理由>)`、`.repl` は `# windows: skip (<理由>)` である。理由は空にしない。先頭の印の行は、shebang (`#!…`) の行があればその後ろから続く、`<leader> windows:` か `<leader> signal:` で始まる行の並びで、2種類をどの順に混ぜてもよい (シグナルの印は上の「UI テスト」)。印はエントリのファイル (1つのファイルか `main.em`、`main.repl`) にだけ書く

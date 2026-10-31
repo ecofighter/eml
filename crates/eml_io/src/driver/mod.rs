@@ -30,13 +30,13 @@ use resolve::Resolver;
 /// `quiesce` が、OS に出した取り消しの完了を待つ長さの上限。過ぎたら完了は失われたとみなし、壊れた状態にする。
 const CANCEL_LIMIT: Duration = Duration::from_secs(1);
 
-/// driver を落とすときに、カーネルが buffer を持つ操作の終わりを待つ長さの上限。過ぎたら、貸した記憶を放せないので
+/// driver を落とすときに、OS がこちらの記憶に書きうる操作の終わりを待つ長さの上限。過ぎたら、その記憶を放せないので
 /// プロセスを止める。
 const HELD_LIMIT: Duration = Duration::from_secs(1);
 
-/// 落とすときにカーネルが buffer を放さなかったときの文言。
+/// 落とすときに OS がこちらの記憶に書きうる操作が終わらなかったときの文言。
 pub(super) const HELD_ABORT: &str =
-    "eml_io: the kernel still holds a buffer of a dropped I/O driver; aborting";
+    "eml_io: the kernel may still write memory of a dropped I/O driver; aborting";
 
 /// 保留の操作の向き。1つのハンドルの1つの向きには保留を1つしか置かない。std のストリームとリスナーは `Lin` で、VM は
 /// 1つのハンドルに同時に2つの操作を出さないので、backend の待ち手は向きごとに1つで済む。
@@ -46,18 +46,9 @@ enum Dir {
     Write,
 }
 
-/// 壊れた理由。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum By {
-    Wait,
-    Cancel,
-    Timeout,
-}
-
 struct Broken {
     kind: io::ErrorKind,
     msg: String,
-    by: By,
 }
 
 impl Broken {
@@ -165,10 +156,6 @@ fn cancelled_error() -> io::Error {
 
 fn no_handle() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "no such handle")
-}
-
-fn unsupported() -> io::Error {
-    io::Error::from(io::ErrorKind::Unsupported)
 }
 
 fn busy() -> io::Error {
@@ -491,7 +478,15 @@ impl<B: Backend> Driver<B> {
         let owner = slot.kind.owner();
         let next = match arrival {
             Arrival::Retry if !slot.cancelled => self.advance(key, slot.kind),
-            Arrival::Retry | Arrival::Cancelled => {
+            Arrival::Retry => {
+                self.drop_kind(slot.kind);
+                Next::Done(Err(cancelled_error()), true)
+            }
+            Arrival::Cancelled => {
+                debug_assert!(
+                    slot.cancelled,
+                    "the backend reported a cancel the core did not ask for"
+                );
                 self.drop_kind(slot.kind);
                 Next::Done(Err(cancelled_error()), true)
             }
@@ -564,8 +559,12 @@ impl<B: Backend> Driver<B> {
             self.broken = Some(Broken {
                 kind: e.kind(),
                 msg: e.to_string(),
-                by: By::Wait,
             });
+            // backend は event を積んだ後に誤りを返さない。破られたときも、受けたソケットだけは閉じる
+            debug_assert!(
+                self.events.is_empty(),
+                "the backend failed a wait after queueing events"
+            );
             while let Some(event) = self.events.pop() {
                 if let Arrival::Done(Ok(Outcome::Accepted { sock, .. })) = event.arrival {
                     self.backend.close(sock);
@@ -648,15 +647,6 @@ impl<B: Backend> IoDriver for Driver<B> {
         if let Some(broken) = &self.broken {
             // 壊れた後は OS の資源も仕事も新しく作らない
             return Submit::Done(Err(broken.error()));
-        }
-        // ソケットを扱わない backend では、ハンドルを引く前に決まる (docs/spec/vm.md の「時計と driver」)
-        if !B::SOCKETS
-            && matches!(
-                op,
-                Op::Listen { .. } | Op::Accept { .. } | Op::Connect { .. }
-            )
-        {
-            return Submit::Done(Err(unsupported()));
         }
         match op {
             Op::Readable { handle } => {
@@ -776,7 +766,6 @@ impl<B: Backend> IoDriver for Driver<B> {
                 self.broken = Some(Broken {
                     kind: e.kind(),
                     msg: e.to_string(),
-                    by: By::Cancel,
                 });
             }
         }
@@ -805,9 +794,6 @@ impl<B: Backend> IoDriver for Driver<B> {
     }
 
     fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
-        if !B::SOCKETS {
-            return Err(unsupported());
-        }
         match self.handles.get_mut(&handle) {
             Some(entry) if !entry.closed => self.backend.shutdown_write(&mut entry.sock),
             _ => Err(no_handle()),
@@ -815,9 +801,6 @@ impl<B: Backend> IoDriver for Driver<B> {
     }
 
     fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()> {
-        if !B::SOCKETS {
-            return Err(unsupported());
-        }
         match self.handles.get_mut(&handle) {
             Some(entry) if !entry.closed => self.backend.set_nodelay(&mut entry.sock, on),
             _ => Err(no_handle()),
@@ -874,7 +857,6 @@ impl<B: Backend> IoDriver for Driver<B> {
                         self.broken = Some(Broken {
                             kind: io::ErrorKind::Other,
                             msg: "a cancelled op did not complete".to_string(),
-                            by: By::Timeout,
                         });
                         break;
                     }
@@ -892,8 +874,9 @@ impl<B: Backend> IoDriver for Driver<B> {
 }
 
 impl<B: Backend> Drop for Driver<B> {
-    /// 仕事と解決を待たない。カーネルが buffer を持ちうる操作だけ `HELD_LIMIT` まで待ち、終わらなければプロセスを
-    /// 止める。貸した記憶を放せないまま戻らないためである (docs/spec/vm.md の「時計と driver」)。
+    /// 仕事と解決を待たない。OS がこちらの記憶に書きうる操作だけ `HELD_LIMIT` まで待ち、終わらないか待ちが失敗すれば
+    /// プロセスを止める。その記憶を放せないまま戻らないためである。壊れた driver も同じ道で落とす
+    /// (docs/spec/vm.md の「時計と driver」)。
     fn drop(&mut self) {
         self.empty_bin();
         drop(self.panic.take());
@@ -906,21 +889,18 @@ impl<B: Backend> Drop for Driver<B> {
         let backend = &mut self.backend;
         for (_, slot) in self
             .slots
-            .extract_if(|_, slot| !matches!(slot.hold, Hold::Buffer))
+            .extract_if(|_, slot| !matches!(slot.hold, Hold::Memory))
         {
             if let Kind::Connect { sock, .. } = slot.kind {
                 backend.close(sock);
             }
         }
         if !self.slots.is_empty() {
-            if self.broken.as_ref().is_some_and(|b| b.by == By::Wait) {
-                // OS の終わりを読む道がない
-                abort();
-            }
+            // 印だけ立った欄 (壊れた後の `cancel` と、断られた取り消し) には、OS の取り消しがまだ出ていない
             let keys: Vec<OpKey> = self
                 .slots
                 .iter()
-                .filter(|(_, slot)| !slot.cancelled)
+                .filter(|(_, slot)| slot.cancel_sent.is_none())
                 .map(|(key, _)| *key)
                 .collect();
             for key in keys {

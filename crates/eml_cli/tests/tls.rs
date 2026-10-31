@@ -1,5 +1,4 @@
-//! 本物の driver の上で `Std.Tls` が、ローカルの TLS の server と往復する。Windows の本物の driver にはソケットが
-//! ないので unix だけで流す (docs/spec/stdlib.md の「`Std.Tls`」)。
+//! 本物の driver の上で `Std.Tls` が、ローカルの TLS の server と往復する (docs/spec/stdlib.md の「`Std.Tls`」)。
 //!
 //! `eml_tls` は `tls` の feature が足す依存で、dev-dependency にはしない。dev-dependency にすると、tls を外した
 //! ビルドの `cargo tree` にも `eml_tls` が現れる (docs/implementation/testing.md の「feature の組み合わせの確認」)。
@@ -56,7 +55,7 @@ import Fs
 import Tls
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
-  let s = Tls.connect_with_ca (Fs.read_text "ca.pem") "localhost" {port}
+  let s = Tls.connect_with_ca (Fs.read_text "ca.pem") "127.0.0.1" {port}
   let s = Tls.write_line "ping" s
   let (line, s) = Tls.read_line s
   match line with

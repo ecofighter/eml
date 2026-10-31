@@ -90,8 +90,8 @@ fn main() -> ExitCode {
             stats,
             file,
         } => {
-            // 読み込みとコンパイルの間の Ctrl-C と SIGTERM も、OS の既定の動作でプロセスが終わらずに、このハンドラが受ける。そこで立てたビットは、
-            // 実行の最初の安全点で読まれる
+            // 読み込みとコンパイルの間の Ctrl-C と `Terminate` のシグナルも、OS の既定の動作でプロセスが終わらずに、
+            // このハンドラが受ける。そこで立てたビットは、実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
             let doorbell = interrupt::doorbell();
             interrupt::install(Arc::clone(&control), doorbell.clone(), interrupt::Mode::Run);

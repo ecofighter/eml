@@ -282,25 +282,114 @@ fn the_core_names_no_os() {
     }
 }
 
-/// readiness の backend は `Arrival::Retry`、`Hold::None`、`Cancel::Done` だけを使う。カーネルは同期の呼び出しの間しか
-/// buffer に触れないので、暫定の完了型の値を返す理由がない。
+/// 完了型の backend。OS が完了までこちらの記憶に書きうる操作を出すので、完了型の値を返し、`OVERLAPPED` の箱を持つ。
+const COMPLETION_BACKENDS: &[&str] = &["sys/iocp.rs"];
+
+/// 識別子 `word` が現れる位置 (`prepare` した文の文字の位置)。`word` より長い識別子の一部は数えない。
+fn ident_positions(text: &str, word: &str) -> Vec<usize> {
+    let s: Vec<char> = prepare(text).chars().collect();
+    let len = word.chars().count();
+    (0..s.len())
+        .filter(|&i| word_at(&s, i, word) && !s.get(i + len).is_some_and(|&c| is_ident(c)))
+        .collect()
+}
+
+fn source(file: &str) -> &'static str {
+    FILES
+        .iter()
+        .find(|(f, _)| *f == file)
+        .unwrap_or_else(|| panic!("{file} is not listed"))
+        .1
+}
+
+/// 完了型の値は、核と核のテストと完了型の backend だけが名指す。readiness の backend は同期の呼び出しの間しか OS に
+/// 記憶を貸さないので、これらを返す理由がない (docs/spec/vm.md の「時計と driver」)。
 #[test]
-fn readiness_backends_report_only_retries() {
-    for file in ["sys/unix.rs", "sys/epoll.rs", "sys/kqueue.rs"] {
-        let (_, text) = FILES
-            .iter()
-            .find(|(f, _)| *f == file)
-            .unwrap_or_else(|| panic!("{file} is not listed"));
-        let text = prepare(text);
-        for word in [
+fn completion_values_stay_in_the_core_and_completion_backends() {
+    for file in COMPLETION_BACKENDS {
+        assert!(UNSAFE_FILES.contains(file), "{file} is not in UNSAFE_FILES");
+    }
+    let mut in_core = 0;
+    let mut in_tests = 0;
+    for (file, text) in FILES {
+        let found: usize = [
             "Arrival::Done",
             "Arrival::Cancelled",
-            "Hold::Buffer",
+            "Hold::Memory",
             "Cancel::Pending",
-        ] {
-            assert!(!text.contains(word), "{file} uses {word}");
+        ]
+        .iter()
+        .map(|word| ident_positions(text, word).len())
+        .sum();
+        if *file == "driver/mod.rs" {
+            in_core += found;
+        } else if file.starts_with("driver/tests/") {
+            in_tests += found;
+        } else if *file != "driver/backend.rs" && !COMPLETION_BACKENDS.contains(file) {
+            assert_eq!(found, 0, "{file} names a completion value");
         }
     }
+    // 核とそのテストで見つからなければ、探し方が規則を確かめていない
+    assert!(
+        in_core >= 4,
+        "the scan found {in_core} uses in driver/mod.rs"
+    );
+    assert!(
+        in_tests >= 4,
+        "the scan found {in_tests} uses in driver/tests"
+    );
+}
+
+/// 核が `Hold` を読むのは driver を落とすときだけで、`Hold::None` を書くのは自分で出すスレッドの操作だけである
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn the_core_reads_hold_only_to_drop() {
+    let text = source("driver/mod.rs");
+    let s = blank_comments_and_strings(text);
+    let mut found = 0;
+    for (word, owner) in [("Hold::Memory", "drop"), ("Hold::None", "submit")] {
+        for at in ident_positions(text, word) {
+            let name = enclosing_fn(&s, at);
+            assert_eq!(name, owner, "driver/mod.rs: {word} in {name}");
+            found += 1;
+        }
+    }
+    assert!(found >= 3, "the scan found {found} uses of Hold");
+}
+
+/// OS に渡した箱の生のポインタは完了型の backend だけが扱う。箱を取り戻す所を数えられるようにするためである
+/// (docs/implementation/testing.md の「`unsafe` の一覧」)。
+#[test]
+fn raw_boxes_stay_in_the_completion_backends() {
+    for (file, text) in FILES {
+        if COMPLETION_BACKENDS.contains(file) {
+            continue;
+        }
+        for word in ["into_raw", "from_raw", "OVERLAPPED"] {
+            assert!(
+                ident_positions(text, word).is_empty(),
+                "{file} names {word}"
+            );
+        }
+    }
+}
+
+/// プロセスを止めるのは、OS がこちらの記憶に書きうるまま放せないときだけである (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn abort_is_named_only_where_memory_is_at_stake() {
+    let mut in_core = 0;
+    for (file, text) in FILES {
+        let found = ident_positions(text, "abort").len();
+        match *file {
+            "driver/mod.rs" => in_core = found,
+            // 核のテストのモジュールは `mod abort;` の1行だけで名指す
+            "driver/tests/mod.rs" => assert!(found <= 1, "{file} names abort outside `mod abort;`"),
+            "driver/tests/abort.rs" => {}
+            _ if COMPLETION_BACKENDS.contains(file) => {}
+            _ => assert_eq!(found, 0, "{file} names abort"),
+        }
+    }
+    assert!(in_core >= 1, "the scan found no abort in driver/mod.rs");
 }
 
 #[test]

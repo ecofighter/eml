@@ -32,11 +32,11 @@ fn in_child(path: &str, body: impl FnOnce()) {
     assert!(stderr.contains(HELD_ABORT), "{stderr}");
 }
 
-/// カーネルが buffer を持つ読みを1つ出した driver。
+/// OS が貸した buffer に書きうる読みを1つ出した driver。
 fn holding(data: &mut [u8]) -> super::super::Driver<super::fake::Fake> {
     let mut driver = driver();
     let h = listen(&mut driver);
-    driver.backend.script(1, [Reply::Pending(Hold::Buffer)]);
+    driver.backend.script(1, [Reply::Pending(Hold::Memory)]);
     let buf: RawBuf = buf(data);
     pending(driver.submit(1, Op::Read { handle: h, buf }));
     driver
@@ -44,17 +44,20 @@ fn holding(data: &mut [u8]) -> super::super::Driver<super::fake::Fake> {
 
 #[test]
 #[cfg_attr(miri, ignore = "Miri はプロセスを起こせない")]
-fn a_broken_driver_with_a_held_buffer_aborts_on_drop() {
+fn a_broken_driver_with_a_held_op_aborts_on_drop() {
     in_child(
         concat!(
             module_path!(),
-            "::a_broken_driver_with_a_held_buffer_aborts_on_drop"
+            "::a_broken_driver_with_a_held_op_aborts_on_drop"
         ),
         || {
             let mut data = [0u8; 4];
             let mut driver = holding(&mut data);
             driver.backend.wait_error = Some(io::Error::other("the poller failed"));
             assert!(driver.wait(None).is_err());
+            // 壊れた driver も落とすときに取り消しを出して終わりを読む。待ちが失敗し続けるので止まる
+            driver.backend.cancels.push_back(Ok(Cancel::Pending));
+            driver.backend.wait_error = Some(io::Error::other("the poller failed"));
             drop(driver);
         },
     );
@@ -62,16 +65,36 @@ fn a_broken_driver_with_a_held_buffer_aborts_on_drop() {
 
 #[test]
 #[cfg_attr(miri, ignore = "Miri はプロセスを起こせない")]
-fn a_held_buffer_past_the_limit_aborts_on_drop() {
+fn a_held_op_past_the_limit_aborts_on_drop() {
     in_child(
-        concat!(
-            module_path!(),
-            "::a_held_buffer_past_the_limit_aborts_on_drop"
-        ),
+        concat!(module_path!(), "::a_held_op_past_the_limit_aborts_on_drop"),
         || {
             let mut data = [0u8; 4];
             let mut driver = holding(&mut data);
             // 取り消しの終わりが届かないので、偽の時計が `HELD_LIMIT` を越える
+            driver.backend.cancels.push_back(Ok(Cancel::Pending));
+            drop(driver);
+        },
+    );
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Miri はプロセスを起こせない")]
+fn a_refused_cancel_with_no_end_aborts_on_drop() {
+    in_child(
+        concat!(
+            module_path!(),
+            "::a_refused_cancel_with_no_end_aborts_on_drop"
+        ),
+        || {
+            let mut data = [0u8; 4];
+            let mut driver = holding(&mut data);
+            driver
+                .backend
+                .cancels
+                .push_back(Err(io::Error::other("refused")));
+            driver.cancel(1);
+            // 断られた欄には落とすときにもう1度取り消しを出す。終わりの event は届かない
             driver.backend.cancels.push_back(Ok(Cancel::Pending));
             drop(driver);
         },

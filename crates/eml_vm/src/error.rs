@@ -116,8 +116,8 @@ impl RuntimeError {
         )
     }
 
-    /// 終了の求め (unix の SIGTERM) で止まったか。`interrupted` と同じく、安全点で止めたときと、ハンドルの読みの中で
-    /// 止めたときの両方で真になる。CLI が終了コードを決めるために使う。
+    /// 終了の求め (unix の SIGTERM と、Windows のコンソールを閉じることとシャットダウン) で止まったか。
+    /// `interrupted` と同じく、安全点で止めたときと、ハンドルの読みの中で止めたときの両方で真になる。CLI が終了コードを決めるために使う。
     pub fn terminated(&self) -> bool {
         matches!(
             self,

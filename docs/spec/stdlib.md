@@ -1316,7 +1316,6 @@ main () = Async.run (fn () ->
 - 拒まれた接続は種類 `ConnectionRefused`、reset と EPIPE と ECONNABORTED は `ConnectionReset`、使用中の番地は `AddrInUse`、OS の時間切れは `TimedOut` である。この4つは包みが `fail_io` で投げる。ほかの誤りは extern が投げ、種類は最初の5つから OS の誤りで決める。解決できない名前は `NotFound`、権限のない操作 (1024 より小さいポートの `listen` など) は `PermissionDenied`、扱えない操作は `NotAvailable`、残りは `Other` である (上の「`try_io`」)
 - 文言は prefix と理由を `: ` でつないだものである。prefix は `cannot listen on {host}:{port}`、`cannot connect to {host}:{port}`、`cannot accept a connection`、`cannot read the stream`、`cannot write to the stream` のどれかである。理由は、包みが投げる4つの種類では `connection refused`、`connection reset`、`address in use`、`timed out` で、ほかは driver の誤りの表示である。テストの driver では、解決できない名前の理由は `unknown host` になり、相手が閉じたストリームへの書きは `cannot write to the stream: connection reset` (種類 `ConnectionReset`) になる
 - `listen` の `host` が IP アドレスの綴りでないときと、`listen` と `connect` の `port` が範囲の外のときは、操作を出さずに種類 `Other` の IO の失敗を起こす。理由はそれぞれ `the host is not an IP address` と `the port is out of range` である
-- Windows の本物の driver はまだソケットを扱わないので、`listen`、`accept`、`connect` は種類 `NotAvailable` の IO の失敗 (`cannot listen on 127.0.0.1:0: unsupported`) になる。テストの driver はどの OS でも同じに動く
 - 待つ関数の包みは同じ形である。取り消しの地点が投げるなら、渡すリスナーかストリームがあれば落とし、何も受け付けずに種類 `Cancelled` の失敗を投げる。そうでなければ、受け付けの行で token を作り、`Async.io_wait` (`_within` は `Async.io_wait_until`) で待つ。操作がもう終わっていて取り消しの地点が投げなければ、待たずに続ける (上の「`Std.Async`」の `io_wait`)。driver が受け付けの時点で決められる操作は、受け付けで終わる。`accept` と `accept_within` は `op_listener` でリスナーを、読みと書きは `op_stream` でストリームを取り戻す。続けて `op_outcome` で結果の番号を読む。再開の `Wake` が `Cancelled` なら、`finish` で記録を放し、リスナーかストリームがあれば落として `Cancelled` を投げる。`Woke` なら次の表で分ける。表は上の行から順に見て、最初に合う行を使う
 
 | 記録の状態 | 番号 | 包みがすること |
@@ -1552,14 +1551,15 @@ main () = Async.run (fn () ->
 | `Signal` | `Interrupt` と `Terminate` を持つ型 | eml (`deriving (Eq, Show)`) |
 | `wait` | `Signal -> <IO, Async> Unit` | eml |
 
-- `Interrupt` は Ctrl-C で、unix の SIGINT と Windows の `CTRL_C_EVENT` である。`Terminate` は unix の SIGTERM である。Windows には `Terminate` を起こす OS の出来事がない
+- `Interrupt` は Ctrl-C で、unix の SIGINT と Windows の `CTRL_C_EVENT` である。`Terminate` は unix の SIGTERM と、Windows の `CTRL_CLOSE_EVENT` と `CTRL_SHUTDOWN_EVENT` で、どれも `eml run` だけが受ける。`CTRL_LOGOFF_EVENT` は写さない。Windows では、`Terminate` を受けたプログラムは OS の待ち時間 (閉じるは既定で 5 秒) のうちに終わらなければならない。OS がシャットダウンを送るのはサービスなど一部のプロセスだけである ([VM](vm.md) の「上限と割り込み」)
 - `wait s` は、シグナル `s` が来るまでタスクを待たせる。取り消しの地点で、取り消されると IO の失敗 `Prelude.Cancelled` を投げる。取り消された待ちは待ち手から外れる。待ちは `Std.Async` の `signal_wait` を通す (上の「`Std.Async`」)
 - シグナルが来ると、そのとき同じシグナルを待つタスクをすべて、待ち始めた順に起こす。起こしたタスクは実行待ちの列の後ろに入る。シグナルは貯めない。待つタスクがなければ既定の動きをする。`Interrupt` は run を止めて終了コードを 130 にし、`Terminate` も同じ止め方で 143 にする ([VM](vm.md) の「上限と割り込み」)。起こされてから次の `wait` までに来たシグナルも既定の動きをする
-- 届ける前に同じシグナルが続けて来ると、1つにまとまる。`eml run` では、前の同じシグナルをまだ届けていない間か、それがもう run を止めている間に来たシグナルは、その場でプロセスを終わらせる。Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)` である。届けた後のシグナルは1回目として扱う。2つの種類は互いを数えない ([VM](vm.md) の「上限と割り込み」)
+- 届ける前に同じシグナルが続けて来ると、1つにまとまる。`eml run` では、前の同じシグナルをまだ届けていない間か、それがもう run を止めている間に来たシグナルは、その場でプロセスを終わらせる。unix では Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)` で、Windows の Ctrl-C は `TerminateProcess` で 130 である。Windows の閉じることとシャットダウンは続けて来ても終わらせず、OS の待ち時間に任せる。届けた後のシグナルは1回目として扱う。2つの種類は互いを数えない ([VM](vm.md) の「上限と割り込み」)
 - worker が別のタスクを動かしていても、シグナルは次の安全点で届き、待つタスクは実行待ちの列の後ろに入る。標準入力、`FileIn`、`Child` の同期の読みで worker が止まっている間に来たシグナルは、読みが戻ってから届く
-- 本物のシグナル (Ctrl-C と SIGTERM) が `wait` に届くのは、本物の driver の run だけである。シグナルを待つタスクのいる run は、ほかに進むものがなくてもデッドロックにならず、シグナルが来るまで眠る ([VM](vm.md) の「時計と driver」)。来ることのないシグナルを待つタスクも同じで、Windows と `eml repl` の `Terminate` の待ちは、ほかに進むものがなければいつまでも眠る。そのような run は Ctrl-C かプロセスを殺すことでしか終わらない
+- 本物のシグナル (Ctrl-C、SIGTERM、Windows の閉じることとシャットダウン) が `wait` に届くのは、本物の driver の run だけである。シグナルを待つタスクのいる run は、ほかに進むものがなくてもデッドロックにならず、シグナルが来るまで眠る ([VM](vm.md) の「時計と driver」)。来ることのないシグナルを待つタスクも同じで、`eml repl` の `Terminate` の待ちは、ほかに進むものがなければいつまでも眠る。そのような run は Ctrl-C かプロセスを殺すことでしか終わらない
 - テストの driver の run では、本物のシグナルはいつも既定の動きをする。そこで `wait` に届くのは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` で予定した仮想のシグナルだけである。予定は本物の driver の run でも同じに満ちる ([VM](vm.md) の「時間の待ち」)。テストの driver の run では、予定の残っていないシグナルだけを待つ run は、ほかに進むものがなければデッドロックで止まる
-- `eml repl` は SIGTERM を受けず、SIGTERM は OS の既定の動作でプロセスを終わらせる。`Signal.wait Interrupt` は REPL でも使える
+- `eml repl` は SIGTERM も Windows の閉じることとシャットダウンも受けず、OS の既定の動作でプロセスが終わる。`Signal.wait Interrupt` は REPL でも使える
+- Windows でコンソールを閉じた後は、コンソールへの書き込みと読みが失敗しうる。そのときは先に起きた誤りで run が終わる (書き込みの誤りなら終了コード 1)。出力をファイルか pipe に向けていれば、`Terminate` の後も 143 かプログラムの終了コードで終わる
 
 ## 実行時エラー
 

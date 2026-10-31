@@ -120,7 +120,7 @@ fn retry(key: OpKey) -> Event<FakeSock> {
 }
 
 /// `Wait` を除いた呼び出し。
-fn calls<const S: bool>(fake: &Fake<S>) -> Vec<&Call> {
+fn calls(fake: &Fake) -> Vec<&Call> {
     fake.calls
         .iter()
         .filter(|c| !matches!(c, Call::Wait(_)))
@@ -514,7 +514,7 @@ fn quiesce_breaks_on_a_cancel_that_never_completes() {
     let mut data = [0u8; 4];
     let mut driver = driver();
     let h = listen(&mut driver);
-    driver.backend.script(1, [Reply::Pending(Hold::Buffer)]);
+    driver.backend.script(1, [Reply::Pending(Hold::Memory)]);
     driver.backend.cancels.push_back(Ok(Cancel::Pending));
     pending(driver.submit(
         1,
@@ -539,11 +539,11 @@ fn quiesce_breaks_on_a_cancel_that_never_completes() {
 }
 
 #[test]
-fn a_held_buffer_completed_within_the_limit_lets_drop_return() {
+fn a_held_op_completed_within_the_limit_lets_drop_return() {
     let mut data = [0u8; 4];
     let mut driver = driver();
     let h = listen(&mut driver);
-    driver.backend.script(1, [Reply::Pending(Hold::Buffer)]);
+    driver.backend.script(1, [Reply::Pending(Hold::Memory)]);
     pending(driver.submit(
         1,
         Op::Read {
@@ -562,7 +562,7 @@ fn a_held_buffer_completed_within_the_limit_lets_drop_return() {
 #[test]
 fn dropping_a_driver_closes_the_socket_of_a_held_connect() {
     let mut driver = driver();
-    driver.backend.script(1, [Reply::Pending(Hold::Buffer)]);
+    driver.backend.script(1, [Reply::Pending(Hold::Memory)]);
     pending(driver.submit(
         1,
         Op::Connect {
@@ -574,6 +574,232 @@ fn dropping_a_driver_closes_the_socket_of_a_held_connect() {
     // `Drop` の取り消しは偽の backend の既定の `Cancel::Done` でその場で終わる
     drop(driver);
     assert_eq!(*closed.lock().unwrap(), [0]);
+}
+
+/// OS が貸した buffer に書きうる読みを `key` で出し、そのハンドルを返す。
+fn held_read(driver: &mut Driver<Fake>, key: OpKey, data: &mut [u8]) -> IoHandle {
+    let h = listen(driver);
+    driver.backend.script(key, [Reply::Pending(Hold::Memory)]);
+    pending(driver.submit(
+        key,
+        Op::Read {
+            handle: h,
+            buf: buf(data),
+        },
+    ));
+    h
+}
+
+fn starts(fake: &Fake) -> usize {
+    fake.calls
+        .iter()
+        .filter(|c| matches!(c, Call::Start(..)))
+        .count()
+}
+
+fn cancels(fake: &Fake) -> usize {
+    fake.calls
+        .iter()
+        .filter(|c| matches!(c, Call::Cancel(..)))
+        .count()
+}
+
+#[test]
+fn a_retry_for_a_cancelled_held_op_ends_cancelled() {
+    let mut data = [0u8; 4];
+    let mut driver = driver();
+    held_read(&mut driver, 1, &mut data);
+    driver.backend.cancels.push_back(Ok(Cancel::Pending));
+    driver.cancel(1);
+    driver.backend.events.push(retry(1));
+    let done = settle(&mut driver);
+    assert_eq!(done.len(), 1);
+    assert!(done[0].cancelled);
+    assert_eq!(
+        done[0].result.as_ref().unwrap_err().to_string(),
+        "cancelled"
+    );
+    assert_eq!(starts(&driver.backend), 1);
+}
+
+#[test]
+fn a_retry_for_a_held_op_restarts_the_step() {
+    let mut data = [0u8; 4];
+    let mut driver = driver();
+    let h = listen(&mut driver);
+    driver.backend.script(
+        1,
+        [Reply::Pending(Hold::Memory), Reply::Fill(b"ab".to_vec())],
+    );
+    pending(driver.submit(
+        1,
+        Op::Read {
+            handle: h,
+            buf: buf(&mut data),
+        },
+    ));
+    driver.backend.events.push(retry(1));
+    let done = settle(&mut driver);
+    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert_eq!(starts(&driver.backend), 2);
+    assert_eq!(&data[..2], b"ab");
+}
+
+/// 取り消しを頼んだ書きの欄に、`cap` のうち `n` バイトを書き終えた event が届いたときの完了。
+fn write_completed_after_a_cancel(n: usize) -> (Completion, usize) {
+    let mut data = [1u8; 4];
+    let mut driver = driver();
+    let h = listen(&mut driver);
+    driver.backend.script(1, [Reply::Pending(Hold::Memory)]);
+    pending(driver.submit(
+        1,
+        Op::Write {
+            handle: h,
+            buf: buf(&mut data),
+        },
+    ));
+    driver.backend.cancels.push_back(Ok(Cancel::Pending));
+    driver.cancel(1);
+    driver.backend.events.push(Event {
+        key: 1,
+        arrival: Arrival::Done(Ok(Outcome::Size(n))),
+    });
+    let mut done = settle(&mut driver);
+    assert_eq!(done.len(), 1);
+    (done.remove(0), starts(&driver.backend))
+}
+
+#[test]
+fn a_full_write_completed_after_a_cancel_succeeds() {
+    let (done, _) = write_completed_after_a_cancel(4);
+    assert_eq!(done.result.as_ref().unwrap(), &Done::Size(4));
+    assert!(!done.cancelled);
+}
+
+#[test]
+fn a_short_write_completed_after_a_cancel_ends_cancelled() {
+    let (done, starts) = write_completed_after_a_cancel(2);
+    assert!(done.cancelled);
+    // 取り消した書きは続きを出さない
+    assert_eq!(starts, 1);
+}
+
+#[test]
+fn closing_a_handle_with_a_held_op_closes_after_the_event() {
+    let mut data = [0u8; 4];
+    let mut driver = driver();
+    let h = held_read(&mut driver, 1, &mut data);
+    driver.close(h);
+    assert!(!driver.backend.calls.contains(&Call::Close(0)));
+    driver.backend.events.push(Event {
+        key: 1,
+        arrival: Arrival::Done(Ok(Outcome::Size(1))),
+    });
+    let done = settle(&mut driver);
+    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(1));
+    assert_eq!(driver.backend.calls.last(), Some(&Call::Close(0)));
+}
+
+#[test]
+fn drop_does_not_cancel_a_cancelled_held_op_twice() {
+    let mut data = [0u8; 4];
+    let mut driver = driver();
+    held_read(&mut driver, 1, &mut data);
+    driver.backend.cancels.push_back(Ok(Cancel::Pending));
+    driver.cancel(1);
+    assert_eq!(cancels(&driver.backend), 1);
+    driver.backend.events.push(Event {
+        key: 1,
+        arrival: Arrival::Cancelled,
+    });
+    let keys = Arc::clone(&driver.backend.cancelled_keys);
+    drop(driver);
+    assert_eq!(*keys.lock().unwrap(), [1]);
+}
+
+#[test]
+fn drop_after_a_broken_quiesce_cancels_every_slot_once() {
+    let mut d1 = [0u8; 4];
+    let mut d2 = [0u8; 4];
+    let mut driver = driver();
+    held_read(&mut driver, 1, &mut d1);
+    held_read(&mut driver, 2, &mut d2);
+    driver
+        .backend
+        .cancels
+        .push_back(Err(io::Error::other("refused")));
+    driver.quiesce();
+    assert_eq!(driver.pending(), 2);
+    assert_eq!(driver.wait(None).unwrap_err().to_string(), "refused");
+    // 断られた欄も、印だけ立った欄も、落とすときに1回ずつ取り消しを出す
+    driver.backend.cancels.push_back(Ok(Cancel::Pending));
+    driver.backend.cancels.push_back(Ok(Cancel::Pending));
+    for key in [1, 2] {
+        driver.backend.events.push(Event {
+            key,
+            arrival: Arrival::Cancelled,
+        });
+    }
+    let keys = Arc::clone(&driver.backend.cancelled_keys);
+    let closed = Arc::clone(&driver.backend.closed);
+    drop(driver);
+    // `quiesce` がどちらの鍵で断られたかは表の順による
+    let keys = keys.lock().unwrap().clone();
+    assert_eq!(keys.len(), 3);
+    assert!(keys.contains(&1) && keys.contains(&2));
+    let mut closed = closed.lock().unwrap().clone();
+    closed.sort();
+    assert_eq!(closed, [0, 1]);
+}
+
+#[test]
+fn a_driver_broken_by_a_failed_wait_still_reads_the_ends_on_drop() {
+    let mut data = [0u8; 4];
+    let mut driver = driver();
+    held_read(&mut driver, 1, &mut data);
+    driver.backend.wait_error = Some(io::Error::other("the poller failed"));
+    assert!(driver.wait(None).is_err());
+    driver.backend.cancels.push_back(Ok(Cancel::Pending));
+    driver.backend.events.push(Event {
+        key: 1,
+        arrival: Arrival::Cancelled,
+    });
+    drop(driver);
+}
+
+#[test]
+fn an_event_for_an_unknown_key_closes_only_an_accepted_sock() {
+    let mut driver = driver();
+    let _listener = listen(&mut driver);
+    driver.backend.events.push(Event {
+        key: 7,
+        arrival: Arrival::Done(Ok(Outcome::Accepted {
+            sock: FakeSock(9),
+            peer: addr("192.0.2.3:1"),
+        })),
+    });
+    assert!(driver.wait(Some(u64::MAX)).unwrap());
+    assert!(completions(&mut driver).is_empty());
+    assert_eq!(driver.pending(), 0);
+    let closes: Vec<&Call> = calls(&driver.backend)
+        .into_iter()
+        .filter(|c| matches!(c, Call::Close(_)))
+        .collect();
+    assert_eq!(closes, [&Call::Close(9)]);
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "the backend reported a cancel the core did not ask for")]
+fn a_cancelled_arrival_without_a_cancel_is_a_contract_violation() {
+    let mut data = [0u8; 4];
+    let mut driver = driver();
+    held_read(&mut driver, 1, &mut data);
+    driver.backend.events.push(Event {
+        key: 1,
+        arrival: Arrival::Cancelled,
+    });
+    let _ = driver.wait(None);
 }
 
 #[test]
@@ -794,42 +1020,17 @@ fn a_lookup_that_cannot_start_while_an_answer_is_taken_completes() {
 }
 
 #[test]
-fn sockets_off_rejects_before_looking_up_the_handle() {
-    let mut driver: Driver<Fake<false>> = Driver::new(Fake::new(), no_lookup);
-    let unsupported = |submit: Submit| {
-        assert_eq!(error_of(submit).kind(), io::ErrorKind::Unsupported);
-    };
-    unsupported(driver.submit(
-        1,
-        Op::Listen {
-            addr: addr("127.0.0.1:0"),
-        },
-    ));
-    unsupported(driver.submit(2, Op::Accept { listener: 0 }));
-    unsupported(driver.submit(
-        3,
-        Op::Connect {
-            host: "example".to_string(),
-            port: 80,
-        },
-    ));
-    unsupported(driver.submit(
-        4,
-        Op::Connect {
-            host: "127.0.0.1".to_string(),
-            port: 80,
-        },
-    ));
-    assert_eq!(
-        driver.shutdown_write(0).unwrap_err().kind(),
-        io::ErrorKind::Unsupported
-    );
-    assert_eq!(
-        driver.set_nodelay(0, true).unwrap_err().kind(),
-        io::ErrorKind::Unsupported
-    );
-    let e = error_of(driver.submit(5, Op::Readable { handle: 0 }));
+fn an_op_on_an_unknown_handle_reaches_no_backend() {
+    let mut driver: Driver<Fake> = Driver::new(Fake::new(), no_lookup);
+    let e = error_of(driver.submit(1, Op::Readable { handle: 0 }));
     assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+    for e in [
+        driver.shutdown_write(0).unwrap_err(),
+        driver.set_nodelay(0, true).unwrap_err(),
+    ] {
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(e.to_string(), "no such handle");
+    }
     assert!(driver.backend.calls.is_empty());
     assert_eq!(driver.backend.spawned.get(), 0);
 }
