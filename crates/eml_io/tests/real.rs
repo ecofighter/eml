@@ -1396,32 +1396,6 @@ fn a_pending_key_submitted_twice_panics_in_debug() {
     driver.submit(key, Op::Job(Box::new(|| Ok(0))));
 }
 
-#[cfg(windows)]
-#[test]
-fn listen_accept_and_connect_are_unsupported() {
-    let mut driver = RealDriver::new().unwrap();
-    let mut stash = Vec::new();
-    let ops = [
-        Op::Listen {
-            addr: std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)),
-        },
-        Op::Accept { listener: 0 },
-        Op::Connect {
-            host: "127.0.0.1".to_string(),
-            port: 80,
-        },
-    ];
-    for op in ops {
-        let key = submit(&mut driver, op);
-        let error = complete(&mut driver, &mut stash, key).result.unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Unsupported);
-    }
-    assert_eq!(
-        driver.shutdown_write(0).unwrap_err().kind(),
-        ErrorKind::Unsupported
-    );
-}
-
 /// 閉じたときに FIN でなく RST を送るよう、`s` に linger 0 を立てる。std の `TcpStream::set_linger` は安定していない。
 #[cfg(unix)]
 fn reset_on_close(s: &std::net::TcpStream) {

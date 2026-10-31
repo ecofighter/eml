@@ -120,7 +120,7 @@ fn retry(key: OpKey) -> Event<FakeSock> {
 }
 
 /// `Wait` を除いた呼び出し。
-fn calls<const S: bool>(fake: &Fake<S>) -> Vec<&Call> {
+fn calls(fake: &Fake) -> Vec<&Call> {
     fake.calls
         .iter()
         .filter(|c| !matches!(c, Call::Wait(_)))
@@ -1020,42 +1020,17 @@ fn a_lookup_that_cannot_start_while_an_answer_is_taken_completes() {
 }
 
 #[test]
-fn sockets_off_rejects_before_looking_up_the_handle() {
-    let mut driver: Driver<Fake<false>> = Driver::new(Fake::new(), no_lookup);
-    let unsupported = |submit: Submit| {
-        assert_eq!(error_of(submit).kind(), io::ErrorKind::Unsupported);
-    };
-    unsupported(driver.submit(
-        1,
-        Op::Listen {
-            addr: addr("127.0.0.1:0"),
-        },
-    ));
-    unsupported(driver.submit(2, Op::Accept { listener: 0 }));
-    unsupported(driver.submit(
-        3,
-        Op::Connect {
-            host: "example".to_string(),
-            port: 80,
-        },
-    ));
-    unsupported(driver.submit(
-        4,
-        Op::Connect {
-            host: "127.0.0.1".to_string(),
-            port: 80,
-        },
-    ));
-    assert_eq!(
-        driver.shutdown_write(0).unwrap_err().kind(),
-        io::ErrorKind::Unsupported
-    );
-    assert_eq!(
-        driver.set_nodelay(0, true).unwrap_err().kind(),
-        io::ErrorKind::Unsupported
-    );
-    let e = error_of(driver.submit(5, Op::Readable { handle: 0 }));
+fn an_op_on_an_unknown_handle_reaches_no_backend() {
+    let mut driver: Driver<Fake> = Driver::new(Fake::new(), no_lookup);
+    let e = error_of(driver.submit(1, Op::Readable { handle: 0 }));
     assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+    for e in [
+        driver.shutdown_write(0).unwrap_err(),
+        driver.set_nodelay(0, true).unwrap_err(),
+    ] {
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(e.to_string(), "no such handle");
+    }
     assert!(driver.backend.calls.is_empty());
     assert_eq!(driver.backend.spawned.get(), 0);
 }

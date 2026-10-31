@@ -1,5 +1,4 @@
-//! 本物の driver の上で `Std.Tls` が、ローカルの TLS の server と往復する。Windows の本物の driver にはソケットが
-//! ないので unix だけで流す (docs/spec/stdlib.md の「`Std.Tls`」)。
+//! 本物の driver の上で `Std.Tls` が、ローカルの TLS の server と往復する (docs/spec/stdlib.md の「`Std.Tls`」)。
 //!
 //! `eml_tls` は `tls` の feature が足す依存で、dev-dependency にはしない。dev-dependency にすると、tls を外した
 //! ビルドの `cargo tree` にも `eml_tls` が現れる (docs/implementation/testing.md の「feature の組み合わせの確認」)。

@@ -111,7 +111,7 @@ impl Counter {
     }
 }
 
-pub(super) struct Fake<const SOCKETS: bool = true> {
+pub(super) struct Fake {
     /// 偽の時計。`wait(Some(d))` でだけ進む。
     pub now: Duration,
     pub bell: Arc<Bell>,
@@ -135,7 +135,7 @@ pub(super) struct Fake<const SOCKETS: bool = true> {
     pub cancelled_keys: Arc<Mutex<Vec<OpKey>>>,
 }
 
-impl<const SOCKETS: bool> Fake<SOCKETS> {
+impl Fake {
     pub(super) fn new() -> Self {
         Fake {
             now: Duration::ZERO,
@@ -178,9 +178,8 @@ fn kind_of(step: &Step<'_, FakeSock>) -> StepKind {
     }
 }
 
-impl<const SOCKETS: bool> Backend for Fake<SOCKETS> {
+impl Backend for Fake {
     type Sock = FakeSock;
-    const SOCKETS: bool = SOCKETS;
 
     fn now(&self) -> Duration {
         self.now

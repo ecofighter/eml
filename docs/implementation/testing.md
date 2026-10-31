@@ -233,7 +233,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - 実行 (`run.rs`、`calls.rs`、`data.rs`、`evidence.rs`): 手書きの LIR を `eml_lir::verify` に通してから、検査モードで実行する。期待どおりに通ったときだけ、速いモードでも実行して出力が同じことを確かめる。速いモードは前提を確かめないので、検査モードが通らなかった IR では走らせない。`run.rs` は定数、extern、直接の呼び出しと末尾呼び出し、エントリでないブロックの中の呼び出し、誤りの位置 (ヒープの誤りの位置と、位置のない誤りを含む) と flush、`FileIn` の `dup`、終わりの処理とリーク (種類が2つ以上のリークの表示を含む) を、`calls.rs` は部分適用、ちょうどの適用、余った引数の `ApplyRest`、末尾の位置の適用、`clause`、自己末尾呼び出しの深さと割り込み、深さの上限、確保量の上限を、`data.rs` は `con`、Repr ごとの `switch`、`unpack`、`release` の両方の枝、`box` と `unbox` を、`evidence.rs` は基本操作と節の呼び出しを確かめる
 - verifier が拒む LIR は、VM 自身の見張り (内部の誤りと、検査モードのヒープの誤り) を確かめるテストだけで使う。`run_unverified` で検査モードだけで走らせ、そのことをテストの doc コメントに書く。verifier が拒んだら、verifier でなくテストの LIR を直す
 - `tags.rs` は、`Bool`、`Ordering`、`IOErrorKind` のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを確かめる
-- `api.rs` は、`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)。`RunConfig` の組み立て (`with_debug_heap`、`with_control`) と、割り込みの扱いも確かめる。本物の driver を VM から通すことも、`Clock::Real` の検査モードの `Machine` で確かめる。unix の本物の接続をまたぐタスクの読み書き、本物の受けで待つ run が割り込みで止まること、Windows の `listen` が種類 `NotAvailable` になることなどである。経過は下限だけを比べる。3 秒で割り込む見張りのスレッドは、止まったテストが待ち続けないためだけにあり、上限としては比べない。割り込みのテストは、受けるタスクが本物の受けで待ってから本体が書く行を見て割り込む
+- `api.rs` は、`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)。`RunConfig` の組み立て (`with_debug_heap`、`with_control`) と、割り込みの扱いも確かめる。本物の driver を VM から通すことも、`Clock::Real` の検査モードの `Machine` で確かめる。unix の本物の接続をまたぐタスクの読み書き、本物の受けで待つ run が割り込みで止まることなどである。経過は下限だけを比べる。3 秒で割り込む見張りのスレッドは、止まったテストが待ち続けないためだけにあり、上限としては比べない。割り込みのテストは、受けるタスクが本物の受けで待ってから本体が書く行を見て割り込む
 - `apply.rs` は、一様な `apply` と、捕まえた値の並べ方と数を確かめる。`apply` は引数の数だけを比べて語を写し、部分適用と `ApplyRest` も一様な語を写す ([VM](../spec/vm.md) の「呼び出しと戻り」)
 - `machine.rs` は、入力をまたいで `CodeBase` と `Ctx` を持つ `Machine` を確かめる。手書きの LIR のプログラムを1つの `Machine` に続けて読み込み、名前で照らした関数の番号、定数、エフェクト、位置のファイルの引き直しを見る ([VM](../spec/vm.md) の「追記」)
 - `reuse.rs` は、reuse の命令の実行を手書きの LIR で確かめる。token を出すパスがなくても、token を定義する `release`、token を受ける `con`、`drop_token` と巻き戻しの token を VM だけで確かめられる ([VM](../spec/vm.md) の「reuse」)
@@ -478,7 +478,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 結果の整形 (`eml_cli::pretty`) も端末に依存しない純粋な関数なので、`crates/eml_cli/tests/pretty.rs` が文字列と幅を渡して確かめる。整形の規則の各項目、10,000 文字で切ること、5,000 段の入れ子の括弧を再帰なしで整えることを確かめる。
 
-`crates/eml_cli/tests/tls.rs` は、本物の driver の上で `Std.Tls` を動かす唯一のテストである。テストのスレッドがループバックに `eml_tls::Conn` のサーバーを立て、`Clock::Real` の run の `Tls.connect_with_ca` が handshake、1行の往復、close_notify の後の EOF、`Tls.close` まで進むことを確かめる。`cfg(all(unix, feature = "tls"))` の下だけで組む。Windows の本物の driver はソケットを扱わないためである。`eml_tls` には、dev-dependency でなく feature `tls` が足す依存として届く (「OS ごとのテスト」)。
+`crates/eml_cli/tests/tls.rs` は、本物の driver の上で `Std.Tls` を動かす唯一のテストである。テストのスレッドがループバックに `eml_tls::Conn` のサーバーを立て、`Clock::Real` の run の `Tls.connect_with_ca` が handshake、1行の往復、close_notify の後の EOF、`Tls.close` まで進むことを確かめる。`cfg(all(unix, feature = "tls"))` の下だけで組む。`eml_tls` には、dev-dependency でなく feature `tls` が足す依存として届く (「OS ごとのテスト」)。
 
 ## OS ごとのテスト
 

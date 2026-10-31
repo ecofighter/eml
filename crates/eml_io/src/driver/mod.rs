@@ -158,10 +158,6 @@ fn no_handle() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "no such handle")
 }
 
-fn unsupported() -> io::Error {
-    io::Error::from(io::ErrorKind::Unsupported)
-}
-
 fn busy() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
@@ -647,15 +643,6 @@ impl<B: Backend> IoDriver for Driver<B> {
             // 壊れた後は OS の資源も仕事も新しく作らない
             return Submit::Done(Err(broken.error()));
         }
-        // ソケットを扱わない backend では、ハンドルを引く前に決まる (docs/spec/vm.md の「時計と driver」)
-        if !B::SOCKETS
-            && matches!(
-                op,
-                Op::Listen { .. } | Op::Accept { .. } | Op::Connect { .. }
-            )
-        {
-            return Submit::Done(Err(unsupported()));
-        }
         match op {
             Op::Readable { handle } => {
                 self.submit_io(key, handle, Dir::Read, Kind::Readable { handle })
@@ -802,9 +789,6 @@ impl<B: Backend> IoDriver for Driver<B> {
     }
 
     fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
-        if !B::SOCKETS {
-            return Err(unsupported());
-        }
         match self.handles.get_mut(&handle) {
             Some(entry) if !entry.closed => self.backend.shutdown_write(&mut entry.sock),
             _ => Err(no_handle()),
@@ -812,9 +796,6 @@ impl<B: Backend> IoDriver for Driver<B> {
     }
 
     fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()> {
-        if !B::SOCKETS {
-            return Err(unsupported());
-        }
         match self.handles.get_mut(&handle) {
             Some(entry) if !entry.closed => self.backend.set_nodelay(&mut entry.sock, on),
             _ => Err(no_handle()),

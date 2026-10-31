@@ -601,7 +601,6 @@ impl<P: Poller> Unix<P> {
 
 impl<P: Poller> Backend for Unix<P> {
     type Sock = Sock;
-    const SOCKETS: bool = true;
 
     fn now(&self) -> Duration {
         self.epoch.elapsed()

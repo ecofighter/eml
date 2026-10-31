@@ -527,6 +527,7 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
 }
 
 /// `run_real_on` の結果。出力、run の結果、閉じたときの結果 (検査モードの漏れの検査)、経過である。
+#[cfg(unix)]
 type RealRun = (
     String,
     Result<eml_vm::Finished, RuntimeError>,
@@ -537,11 +538,13 @@ type RealRun = (
 /// 本物の時計の検査モードの `Machine` で `src` を流し、閉じるまでの経過を測る。`interrupt_on` があれば、出力に
 /// その文字列が出たときに別のスレッドが割り込む。どの run も、3 秒たって終わらなければ見張りのスレッドが割り込むので、
 /// 止まったテストも待ち続けない。
+#[cfg(unix)]
 fn run_real(src: &str, interrupt_on: Option<&'static str>) -> RealRun {
     run_real_on(src, interrupt_on, None)
 }
 
 /// `run_real` を、`driver` があればその driver で流す。
+#[cfg(unix)]
 fn run_real_on(
     src: &str,
     interrupt_on: Option<&'static str>,
@@ -974,29 +977,6 @@ main () = Async.run (fn () ->
     result.unwrap_or_else(|error| panic!("{error}"));
     closed.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "None\n");
-}
-
-/// Windows の本物の driver はまだソケットを扱わないので、`listen` は種類 `NotAvailable` の IO の失敗になる
-/// (docs/spec/stdlib.md の「`Std.Net`」)。
-#[cfg(windows)]
-#[test]
-fn a_real_listen_is_not_available() {
-    let src = "\
-import Async
-import Net
-main : Unit -> <IO, Panic> Unit
-main () =
-  match try_io (fn () -> Async.run (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))) with
-    | Ok _ -> println \"listening\"
-    | Err e -> println \"\\{show e.kind}: \\{e.message}\"
-";
-    let (out, result, closed, _) = run_real(src, None);
-    result.unwrap_or_else(|error| panic!("{error}"));
-    closed.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(
-        out,
-        "NotAvailable: cannot listen on 127.0.0.1:0: unsupported\n"
-    );
 }
 
 #[test]
