@@ -407,11 +407,11 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `eml check <file>` は、診断を stderr に表示する。`eml run <file>` は、診断 (警告を含む) を先に stderr に表示し、エラーがなければ実行する。警告がプログラムの出力の後に出ないようにするため
 - `eml run` は VM の速いモードで実行し、`eml run --debug-heap` は検査モードで実行する。検査モードは、RC のリーク、解放済みの物体の使用、`lin` の物体の `dup` などを見つける ([オブジェクトモデル](../spec/object-model.md) の「報告する誤り」)
 - `eml run --stats` も検査モードで実行し、実行時エラーで終わらなかった run の後に、標準エラーに `stats: <欄>=<値> ... preemptions=<値>` の1行を出す。欄は `RunStats::fields()` が宣言の順に返す名前そのままで、最後に `Finished::preemptions` を置く。検査モードの run なので、その run の時間は物差しに使えない。REPL には足さない
-- `eml run` は、ファイルを読む前に Ctrl-C と SIGTERM のハンドラを入れ、`default_limits()` の上限で実行する ([VM](../spec/vm.md) の「上限と割り込み」)
-- 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、エントリのファイルが読めない)、130 = 割り込みで止まった、143 = SIGTERM で止まった、とする。2 は、clap が引数の誤りで返す値に合わせた。130 と 143 は、シェルが SIGINT と SIGTERM で終わった子に報告する値と同じである。import したモジュールが見つからないことは診断 (E1026) なので 1 である
+- `eml run` は、ファイルを読む前に Ctrl-C と `Terminate` のシグナル (SIGTERM と、Windows のコンソールを閉じることとシャットダウン) のハンドラを入れ、`default_limits()` の上限で実行する ([VM](../spec/vm.md) の「上限と割り込み」)
+- 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、エントリのファイルが読めない)、130 = 割り込みで止まった、143 = `Terminate` のシグナルで止まった、とする。2 は、clap が引数の誤りで返す値に合わせた。130 と 143 は、シェルが SIGINT と SIGTERM で終わった子に報告する値と同じである。import したモジュールが見つからないことは診断 (E1026) なので 1 である
 - `eml run` と `eml repl` は `--sched <normal|sequential|seeded:N>` でスケジュールの方針を選ぶ (既定は `normal`。ライブラリの既定の `Sched::default()` は `sequential` である。[VM](../spec/vm.md) の「タスクとスケジュール」)
 - `eml repl [--debug-heap] [--sched <normal|sequential|seeded:N>] [file]` は、`file` を渡すと `:load` と同じく最初の入力として読み、`repl_limits()` の上限で `eml_cli::Repl` を使う。端末の繰り返しは bin の `terminal.rs` で、行を入力にまとめるのは lib の `eml_cli::lines` である。規則は [REPL の端末](../spec/repl.md) にある。終了コードは、0 = `:quit` か EOF で終わった、1 = 検査モードのリーク、続けられない誤り、行を読めない誤り、2 = 使い方の誤り、である。入力の誤りと実行時エラーは終了コードを変えない
-- Ctrl-C と SIGTERM のハンドラは bin の `interrupt` モジュールが入れる。unix では `interrupt/unix.rs` が `libc::sigaction` で、Windows では `interrupt/windows.rs` が `SetConsoleCtrlHandler` で入れる。`src/` の `unsafe` は、`interrupt` モジュールと、`physical_memory` と、端末の列の数を読む bin の `terminal.rs` の `stdout_width` の中だけに置く
+- Ctrl-C と `Terminate` のシグナルのハンドラは bin の `interrupt` モジュールが入れる。unix では `interrupt/unix.rs` が `libc::sigaction` で、Windows では `interrupt/windows.rs` が `SetConsoleCtrlHandler` で入れる。`src/` の `unsafe` は、`interrupt` モジュールと、`physical_memory` と、端末の列の数を読む bin の `terminal.rs` の `stdout_width` の中だけに置く
 
 `eml_cli` の lib は次の API を公開する。`Session` はパイプラインを組む唯一の場所で、CLI、UI テスト、`eml_test_support` がこれを通す。UI テストはこれをプロセス内で呼ぶ。どのメソッドも読み込みの結果から計算し直し、途中の結果を持たない。途中の結果を使い回すのは、salsa でクエリ化するときに考える。`Session` は `Send + Sync` で、`crates/eml_cli/tests/api.rs` が確かめる。salsa への載せ替えと、フロントエンドの並列のコンパイルに備えるためで、実行とは関係ない。読み込みの結果が持つのは緑の木 (green tree) と `AstPtr` だけで、ノードを持たないので `Send + Sync` にできる。`Repl` は `Machine` を持つので `Send` でなく、作ったスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。
 
