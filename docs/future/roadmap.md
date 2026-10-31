@@ -28,15 +28,6 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `net-windows`: 自前の IOCP の backend にソケットを載せ、同じネットのテストの組を Windows で流す。`Std.Signal` の `Terminate` を CTRL_CLOSE_EVENT と CTRL_SHUTDOWN_EVENT に写す。前提: なし。設計: [非同期の設計](async.md) の「テストと決定性」
-  - 重なった I/O では、取り消した後も完了の packet が届くまで、カーネルが backend の `OVERLAPPED` に書く。長さ 0 の `WSARecv` を含む IOCP の保留をすべて `Hold::Buffer` (カーネルが記憶に触れうる) とするか、3つ目の値を足すか、IOCP の backend の `Drop` で packet を待つかを、この段の設計で決める ([コンパイラの構成](../implementation/architecture.md) の「`eml_io` の内部」)
-  - 読みはブロックしない `recv` を先に試し、ブロックするなら長さ 0 の `WSARecv` で読めるまで待ってから、もう一度 `recv` する。読みの buffer をカーネルに渡さない。書きと受けも先に試し、ブロックするときだけ `WSASend` と `AcceptEx` を出す
-  - 記録ごとの `OVERLAPPED` の箱は、カーネルが持つ間だけ記録に置き、カーネルが書き終えたと packet で確かめるまで放さない。確かめずに放す道に入った箱は abort する
-  - ソケットは作るときにブロックしない設定にして IOCP のポートへ結び付ける。成功のときに packet を省くモードは使わない。非 IFS の LSP の下でこのモードが効かず、放した箱を読む道を残さないためである。同期に失敗した呼び出しのほかは、結果を packet で読み、packet の誤りは `WSAGetOverlappedResult` で読んで WSA の番号にそろえる
-  - OS が取り消しの要求を断ったら、driver を壊れた状態にする。壊れた driver を落とすときは、取り消しを出して 1 秒まで終わりを確かめ、終わらなければ process を abort する
-  - 文書にない前提 (長さ 0 の `WSARecv` の振る舞い、ブロックしないソケットの重なり合わない呼び出しが packet を積まないこと、`accept` と `AcceptEx` の併用) は、コードを書く前にテストだけのコミットで Windows の CI で確かめる
-  - Windows の `SO_REUSEADDR` は立てない。ループバックへの接続では SYN を送り直さない設定を出し、拒まれた接続をすぐ誤りにする
-  - Windows で流し始める `tests/real.rs` と `eml_vm/tests/api.rs` のテストは、成否の変更として段の計画に1件ずつ挙げる
 - `io-uring`: Linux に io_uring の backend を足すかを、試作と計測で決める。最初のタスクで `Backend` の実装を1つ試作し、`bench/net` の many-self-1000、bulk-1k、echo-py で epoll と比べる。user+sys の CPU が2割以上縮む件がなければ、試作を捨て、数字を [計測の基準](../implementation/benchmarks.md) に書いて段を閉じる。続けるときは、起動時に io_uring が使えるかを調べて選び (使えなければ epoll)、環境変数 `EML_IO_BACKEND` で固定でき、CI が両方の backend で `eml_io` のテストを流す。最低の kernel は 5.11 (`EXT_ARG`)。`user_data` は backend の表の番号と、その欄を使い回すたびに進める世代にする。壊れた driver を落とすときは、取り消しを出して 1 秒まで完了を読み、終わらなければ abort してから ring を閉じる。前提: なし。設計: [非同期の設計](async.md) の「`IoDriver` と `eml_io`」
 - `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
 - `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
