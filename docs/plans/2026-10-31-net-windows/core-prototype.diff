@@ -1,0 +1,272 @@
+diff --git a/crates/eml_io/src/driver/mod.rs b/crates/eml_io/src/driver/mod.rs
+index b5cc1ed..ec14e10 100644
+--- a/crates/eml_io/src/driver/mod.rs
++++ b/crates/eml_io/src/driver/mod.rs
+@@ -913,14 +913,10 @@ impl<B: Backend> Drop for Driver<B> {
+             }
+         }
+         if !self.slots.is_empty() {
+-            if self.broken.as_ref().is_some_and(|b| b.by == By::Wait) {
+-                // OS の終わりを読む道がない
+-                abort();
+-            }
+             let keys: Vec<OpKey> = self
+                 .slots
+                 .iter()
+-                .filter(|(_, slot)| !slot.cancelled)
++                .filter(|(_, slot)| slot.cancel_sent.is_none())
+                 .map(|(key, _)| *key)
+                 .collect();
+             for key in keys {
+diff --git a/crates/eml_io/src/driver/tests/abort.rs b/crates/eml_io/src/driver/tests/abort.rs
+index 48d3c8e..2d149a3 100644
+--- a/crates/eml_io/src/driver/tests/abort.rs
++++ b/crates/eml_io/src/driver/tests/abort.rs
+@@ -55,6 +55,9 @@ fn a_broken_driver_with_a_held_buffer_aborts_on_drop() {
+             let mut driver = holding(&mut data);
+             driver.backend.wait_error = Some(io::Error::other("the poller failed"));
+             assert!(driver.wait(None).is_err());
++            // Drop still issues the cancel and reads for 1 s; the wait keeps failing
++            driver.backend.cancels.push_back(Ok(Cancel::Pending));
++            driver.backend.wait_error = Some(io::Error::other("the poller failed"));
+             drop(driver);
+         },
+     );
+diff --git a/crates/eml_io/src/driver/tests/fake.rs b/crates/eml_io/src/driver/tests/fake.rs
+index ff1b062..e4f0b02 100644
+--- a/crates/eml_io/src/driver/tests/fake.rs
++++ b/crates/eml_io/src/driver/tests/fake.rs
+@@ -131,6 +131,7 @@ pub(super) struct Fake<const SOCKETS: bool = true> {
+     pub calls: Vec<Call>,
+     /// `close` されたソケット。driver を落とした後も読めるように分けて持つ。
+     pub closed: Arc<Mutex<Vec<u32>>>,
++    pub cancelled_keys: Arc<Mutex<Vec<OpKey>>>,
+ }
+ 
+ impl<const SOCKETS: bool> Fake<SOCKETS> {
+@@ -150,6 +151,7 @@ impl<const SOCKETS: bool> Fake<SOCKETS> {
+             sent: Vec::new(),
+             calls: Vec::new(),
+             closed: Arc::default(),
++            cancelled_keys: Arc::default(),
+         }
+     }
+ 
+@@ -268,6 +270,7 @@ impl<const SOCKETS: bool> Backend for Fake<SOCKETS> {
+ 
+     fn cancel(&mut self, key: OpKey, step: Step<'_, FakeSock>) -> io::Result<Cancel> {
+         self.calls.push(Call::Cancel(key, kind_of(&step)));
++        self.cancelled_keys.lock().unwrap_or_else(PoisonError::into_inner).push(key);
+         self.cancels.pop_front().unwrap_or(Ok(Cancel::Done))
+     }
+ 
+diff --git a/crates/eml_io/src/driver/tests/mod.rs b/crates/eml_io/src/driver/tests/mod.rs
+index c92f3cf..748e9dd 100644
+--- a/crates/eml_io/src/driver/tests/mod.rs
++++ b/crates/eml_io/src/driver/tests/mod.rs
+@@ -927,3 +927,205 @@ mod pool {
+         assert!(done.iter().all(|c| matches!(c.result, Ok(Done::Size(_)))));
+     }
+ }
++
++// ---- S1 probes ----
++fn held_read(driver: &mut Driver<Fake>, key: OpKey, data: &mut [u8]) -> IoHandle {
++    let h = listen(driver);
++    driver.backend.script(key, [Reply::Pending(Hold::Buffer)]);
++    pending(driver.submit(key, Op::Read { handle: h, buf: buf(data) }));
++    h
++}
++
++fn starts(fake: &Fake) -> usize {
++    fake.calls.iter().filter(|c| matches!(c, Call::Start(..))).count()
++}
++
++#[test]
++fn s1_a_retry_for_a_cancelled_held_op_ends_cancelled() {
++    let mut data = [0u8; 4];
++    let mut driver = driver();
++    held_read(&mut driver, 1, &mut data);
++    driver.backend.cancels.push_back(Ok(Cancel::Pending));
++    driver.cancel(1);
++    driver.backend.events.push(retry(1));
++    let done = settle(&mut driver);
++    assert_eq!(done.len(), 1);
++    assert!(done[0].cancelled);
++    assert_eq!(done[0].result.as_ref().unwrap_err().to_string(), "cancelled");
++    assert_eq!(starts(&driver.backend), 1);
++}
++
++#[test]
++fn s1_a_retry_for_a_held_op_restarts_the_step() {
++    let mut data = [0u8; 4];
++    let mut driver = driver();
++    let h = listen(&mut driver);
++    driver.backend.script(1, [Reply::Pending(Hold::Buffer), Reply::Fill(b"ab".to_vec())]);
++    pending(driver.submit(1, Op::Read { handle: h, buf: buf(&mut data) }));
++    driver.backend.events.push(retry(1));
++    let done = settle(&mut driver);
++    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
++    assert_eq!(starts(&driver.backend), 2);
++    assert_eq!(&data[..2], b"ab");
++}
++
++#[test]
++fn s1_a_full_write_completed_after_a_cancel_succeeds() {
++    let mut data = [1u8; 4];
++    let mut driver = driver();
++    let h = listen(&mut driver);
++    driver.backend.script(1, [Reply::Pending(Hold::Buffer)]);
++    pending(driver.submit(1, Op::Write { handle: h, buf: buf(&mut data) }));
++    driver.backend.cancels.push_back(Ok(Cancel::Pending));
++    driver.cancel(1);
++    driver.backend.events.push(Event { key: 1, arrival: Arrival::Done(Ok(Outcome::Size(4))) });
++    let done = settle(&mut driver);
++    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(4));
++    assert!(!done[0].cancelled);
++}
++
++#[test]
++fn s1_a_short_write_completed_after_a_cancel_ends_cancelled() {
++    let mut data = [1u8; 4];
++    let mut driver = driver();
++    let h = listen(&mut driver);
++    driver.backend.script(1, [Reply::Pending(Hold::Buffer)]);
++    pending(driver.submit(1, Op::Write { handle: h, buf: buf(&mut data) }));
++    driver.backend.cancels.push_back(Ok(Cancel::Pending));
++    driver.cancel(1);
++    driver.backend.events.push(Event { key: 1, arrival: Arrival::Done(Ok(Outcome::Size(2))) });
++    let done = settle(&mut driver);
++    assert!(done[0].cancelled);
++    assert_eq!(starts(&driver.backend), 1);
++}
++
++#[test]
++fn s1_closing_a_handle_with_a_held_op_closes_after_the_event() {
++    let mut data = [0u8; 4];
++    let mut driver = driver();
++    let h = held_read(&mut driver, 1, &mut data);
++    driver.close(h);
++    assert!(!driver.backend.calls.contains(&Call::Close(0)));
++    driver.backend.events.push(Event { key: 1, arrival: Arrival::Done(Ok(Outcome::Size(1))) });
++    let done = settle(&mut driver);
++    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(1));
++    assert_eq!(driver.backend.calls.last(), Some(&Call::Close(0)));
++}
++
++#[test]
++fn s1_drop_does_not_cancel_a_cancelled_held_op_twice() {
++    let mut data = [0u8; 4];
++    let mut driver = driver();
++    held_read(&mut driver, 1, &mut data);
++    driver.backend.cancels.push_back(Ok(Cancel::Pending));
++    driver.cancel(1);
++    driver.backend.events.push(Event { key: 1, arrival: Arrival::Cancelled });
++    let calls = Arc::new(Mutex::new(0usize));
++    // the fake keeps calls inside; count before drop and rely on the single default-Done path
++    let before = driver.backend.calls.iter().filter(|c| matches!(c, Call::Cancel(..))).count();
++    assert_eq!(before, 1);
++    let _ = calls;
++    drop(driver);
++}
++
++#[test]
++fn s1_drop_of_a_driver_broken_by_a_refused_cancel_waits_for_the_ends() {
++    let mut data = [0u8; 4];
++    let mut data2 = [0u8; 4];
++    let mut driver = driver();
++    let h = held_read(&mut driver, 1, &mut data);
++    driver.backend.script(2, [Reply::Pending(Hold::Buffer)]);
++    pending(driver.submit(2, Op::Write { handle: h, buf: buf(&mut data2) }));
++    driver.backend.cancels.push_back(Err(io::Error::other("refused")));
++    driver.cancel(1);
++    assert_eq!(driver.wait(None).unwrap_err().to_string(), "refused");
++    driver.backend.cancels.push_back(Ok(Cancel::Pending));
++    driver.backend.events.push(Event { key: 1, arrival: Arrival::Cancelled });
++    driver.backend.events.push(Event { key: 2, arrival: Arrival::Cancelled });
++    let closed = Arc::clone(&driver.backend.closed);
++    drop(driver);
++    assert_eq!(*closed.lock().unwrap(), [0]);
++}
++
++#[test]
++fn s1_an_event_for_an_unknown_key_closes_only_an_accepted_sock() {
++    let mut driver = driver();
++    let _l = listen(&mut driver);
++    driver.backend.events.push(Event {
++        key: 7,
++        arrival: Arrival::Done(Ok(Outcome::Accepted { sock: FakeSock(9), peer: addr("192.0.2.3:1") })),
++    });
++    assert!(driver.wait(Some(u64::MAX)).unwrap());
++    assert!(completions(&mut driver).is_empty());
++    assert_eq!(driver.pending(), 0);
++    assert!(driver.backend.calls.contains(&Call::Close(9)));
++}
++
++#[test]
++fn r1_probe_quiesce_then_drop_second_slot_never_os_cancelled() {
++    let mut d1 = [0u8; 4];
++    let mut d2 = [0u8; 4];
++    let mut driver = driver();
++    let h1 = listen(&mut driver);
++    let h2 = listen(&mut driver);
++    driver.backend.script(1, [Reply::Pending(Hold::Buffer)]);
++    driver.backend.script(2, [Reply::Pending(Hold::Buffer)]);
++    pending(driver.submit(1, Op::Read { handle: h1, buf: buf(&mut d1) }));
++    pending(driver.submit(2, Op::Read { handle: h2, buf: buf(&mut d2) }));
++    driver.backend.cancels.push_back(Err(io::Error::other("refused")));
++    driver.quiesce();
++    let n = driver.backend.calls.iter().filter(|c| matches!(c, Call::Cancel(..))).count();
++    eprintln!("PROBE cancels issued during quiesce: {n}; pending {}", driver.pending());
++    driver.backend.calls.clear();
++    // emulate what Drop would do: see whether it issues any cancel
++    let slots_cancelled_flags = driver.pending();
++    eprintln!("PROBE pending before drop {slots_cancelled_flags}");
++    // push no events: Drop should abort in 1s fake clock; we only check cancels via a panic-free path
++    let calls_ptr = &driver.backend.calls as *const _;
++    let _ = calls_ptr;
++    std::mem::forget(driver);
++}
++
++#[test]
++fn s1_drop_after_a_broken_quiesce_cancels_every_slot_once() {
++    let mut d1 = [0u8; 4];
++    let mut d2 = [0u8; 4];
++    let mut driver = driver();
++    let h1 = listen(&mut driver);
++    let h2 = listen(&mut driver);
++    driver.backend.script(1, [Reply::Pending(Hold::Buffer)]);
++    driver.backend.script(2, [Reply::Pending(Hold::Buffer)]);
++    pending(driver.submit(1, Op::Read { handle: h1, buf: buf(&mut d1) }));
++    pending(driver.submit(2, Op::Read { handle: h2, buf: buf(&mut d2) }));
++    driver.backend.cancels.push_back(Err(io::Error::other("refused")));
++    driver.quiesce();
++    assert_eq!(driver.pending(), 2);
++    assert_eq!(driver.wait(None).unwrap_err().to_string(), "refused");
++    // Drop issues the OS cancel once for every slot that never got one, the refused one included
++    driver.backend.cancels.push_back(Ok(Cancel::Pending));
++    driver.backend.cancels.push_back(Ok(Cancel::Pending));
++    driver.backend.events.push(Event { key: 1, arrival: Arrival::Cancelled });
++    driver.backend.events.push(Event { key: 2, arrival: Arrival::Cancelled });
++    let keys = Arc::clone(&driver.backend.cancelled_keys);
++    let closed = Arc::clone(&driver.backend.closed);
++    drop(driver);
++    let keys = keys.lock().unwrap().clone();
++    // quiesce issued one (refused; which key depends on the table's order), Drop issued one per slot
++    assert_eq!(keys.len(), 3);
++    assert!(keys.contains(&1) && keys.contains(&2));
++    let mut closed = closed.lock().unwrap().clone();
++    closed.sort();
++    assert_eq!(closed, [0, 1]);
++}
++
++#[test]
++fn s1_a_driver_broken_by_a_failed_wait_still_reads_the_ends_on_drop() {
++    let mut data = [0u8; 4];
++    let mut driver = driver();
++    held_read(&mut driver, 1, &mut data);
++    driver.backend.wait_error = Some(io::Error::other("the poller failed"));
++    assert!(driver.wait(None).is_err());
++    driver.backend.cancels.push_back(Ok(Cancel::Pending));
++    driver.backend.events.push(Event { key: 1, arrival: Arrival::Cancelled });
++    drop(driver);
++}

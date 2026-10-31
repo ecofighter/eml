@@ -1,0 +1,772 @@
+diff --git a/crates/eml_cli/tests/main.rs b/crates/eml_cli/tests/main.rs
+index e1ed841..d029887 100644
+--- a/crates/eml_cli/tests/main.rs
++++ b/crates/eml_cli/tests/main.rs
+@@ -11,6 +11,6 @@ mod pretty;
+ mod repl;
+ mod std_invariants;
+ mod terminal;
+-#[cfg(all(unix, feature = "tls"))]
++#[cfg(feature = "tls")]
+ mod tls;
+ mod ui;
+diff --git a/crates/eml_cli/tests/tls.rs b/crates/eml_cli/tests/tls.rs
+index afe55f7..51a490d 100644
+--- a/crates/eml_cli/tests/tls.rs
++++ b/crates/eml_cli/tests/tls.rs
+@@ -56,7 +56,7 @@ import Fs
+ import Tls
+ main : Unit -> <IO, Panic> Unit
+ main () = Async.run (fn () ->
+-  let s = Tls.connect_with_ca (Fs.read_text "ca.pem") "localhost" {port}
++  let s = Tls.connect_with_ca (Fs.read_text "ca.pem") "127.0.0.1" {port}
+   let s = Tls.write_line "ping" s
+   let (line, s) = Tls.read_line s
+   match line with
+diff --git a/crates/eml_io/Cargo.toml b/crates/eml_io/Cargo.toml
+index 94a7943..007f388 100644
+--- a/crates/eml_io/Cargo.toml
++++ b/crates/eml_io/Cargo.toml
+@@ -22,7 +22,7 @@ eml_tls = { workspace = true, optional = true }
+ libc.workspace = true
+ 
+ [target.'cfg(windows)'.dependencies]
+-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_IO", "Win32_System_Threading"] }
++windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_System_IO", "Win32_System_Threading"] }
+ 
+ [[test]]
+ name = "integration"
+diff --git a/crates/eml_io/tests/real.rs b/crates/eml_io/tests/real.rs
+index 8407666..e165e00 100644
+--- a/crates/eml_io/tests/real.rs
++++ b/crates/eml_io/tests/real.rs
+@@ -7,9 +7,17 @@ use std::time::{Duration, Instant};
+ use eml_io::RealDriver;
+ use eml_rt::{Completion, Done, IoDriver, Op, OpKey, Submit};
+ 
+-#[cfg(unix)]
+ use eml_rt::RawBuf;
+ 
++/// リセットされた端の読みと覗きの誤りの種類。OS の誤りの写し方は docs/spec/vm.md の「時計と driver」にある。
++const RESET_READ: &[ErrorKind] = &[ErrorKind::ConnectionReset];
++
++/// 閉じた相手かリセットした相手への書きの誤りの種類。どれになるかは相手のリセットが届いた時点で変わる。
++#[cfg(unix)]
++const PEER_GONE_WRITE: &[ErrorKind] = &[ErrorKind::BrokenPipe, ErrorKind::ConnectionReset];
++#[cfg(windows)]
++const PEER_GONE_WRITE: &[ErrorKind] = &[ErrorKind::ConnectionReset, ErrorKind::ConnectionAborted];
++
+ /// テストが振る鍵。1 から数え、どの driver にも同じ鍵を2度渡さない。
+ fn next_key() -> OpKey {
+     static NEXT: AtomicU64 = AtomicU64::new(1);
+@@ -55,7 +63,6 @@ fn complete(driver: &mut RealDriver, stash: &mut Vec<Completion>, op: Started) -
+ }
+ 
+ /// 操作を出して、終わった結果を返す。
+-#[cfg(unix)]
+ fn run_op(driver: &mut RealDriver, stash: &mut Vec<Completion>, op: Op) -> std::io::Result<Done> {
+     let started = submit(driver, op);
+     complete(driver, stash, started).result
+@@ -77,7 +84,6 @@ fn wait_for(driver: &mut RealDriver, stash: &mut Vec<Completion>, key: OpKey) ->
+     }
+ }
+ 
+-#[cfg(unix)]
+ fn raw(bytes: &mut [u8]) -> RawBuf {
+     RawBuf {
+         ptr: bytes.as_mut_ptr(),
+@@ -127,20 +133,8 @@ fn a_real_driver_without_work_or_deadline_cannot_progress() {
+ #[test]
+ fn a_wake_from_another_thread_leaves_a_wait_working() {
+     let mut driver = RealDriver::new().unwrap();
+-    #[cfg(unix)]
+-    let _ends = {
+-        let (a, b) = connection(&mut driver, &mut Vec::new());
+-        submit(&mut driver, Op::Readable { handle: a });
+-        (a, b)
+-    };
+-    #[cfg(windows)]
+-    submit(
+-        &mut driver,
+-        Op::Job(Box::new(|| {
+-            std::thread::sleep(Duration::from_millis(200));
+-            Ok(0)
+-        })),
+-    );
++    let (a, _b) = connection(&mut driver, &mut Vec::new());
++    submit(&mut driver, Op::Readable { handle: a });
+     let waker = driver.waker();
+     let ringer = std::thread::spawn(move || {
+         std::thread::sleep(Duration::from_millis(20));
+@@ -254,7 +248,6 @@ fn a_job_pool_is_capped() {
+     assert_eq!(driver.pending(), 0);
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_readable_probe_stays_pending_without_data() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -291,7 +284,6 @@ fn a_readable_probe_stays_pending_without_data() {
+ 
+ /// 読めるデータのある端の `Readable` は受け付けで終わり、完了を残さない。データは読み進めないので、続く読みが読む。
+ /// 書いた直後に届いていることは OS が約束しないので、1つ目の `Readable` で届いたと分かってから2つ目を出す。
+-#[cfg(unix)]
+ #[test]
+ fn a_probe_with_data_finishes_at_submit() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -328,7 +320,6 @@ fn a_probe_with_data_finishes_at_submit() {
+     assert_eq!(&room[..2], b"hi");
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_read_after_a_probe_returns_the_bytes() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -366,7 +357,6 @@ fn a_read_after_a_probe_returns_the_bytes() {
+     assert_eq!(&room[..5], b"hello");
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_write_is_read_by_the_peer() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -399,7 +389,6 @@ fn a_write_is_read_by_the_peer() {
+     assert_eq!(&room[..6], b"from a");
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_cancelled_probe_completes_with_an_error() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -414,7 +403,6 @@ fn a_cancelled_probe_completes_with_an_error() {
+ /// リセットされた端の `Readable` は、受け付けの覗きでリセットの誤りを返して終わる。覗きが誤りを消費するので、
+ /// 誤りを `Ok(0)` にすると次の読みが EOF に見える。閉じた直後にリセットが届いていることは OS が約束しないので、
+ /// 1つ目が保留なら、その完了で届いたと分かってから2つ目を出す。
+-#[cfg(unix)]
+ #[test]
+ fn a_probe_on_a_reset_stream_fails_at_submit() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -436,16 +424,17 @@ fn a_probe_on_a_reset_stream_fails_at_submit() {
+     let first = submit(&mut driver, Op::Readable { handle: a });
+     let probe = match first.done {
+         Some(result) => result,
+-        None => {
+-            wait_for(&mut driver, &mut stash, first.key).result.unwrap();
+-            match driver.submit(next_key(), Op::Readable { handle: a }) {
++        // 完了型の backend は、待っている覗きの終わりでリセットを読みうる
++        None => match wait_for(&mut driver, &mut stash, first.key).result {
++            Err(e) => Err(e),
++            Ok(_) => match driver.submit(next_key(), Op::Readable { handle: a }) {
+                 Submit::Done(result) => result,
+                 Submit::Pending => panic!("a probe on a reset stream stayed pending"),
+-            }
+-        }
++            },
++        },
+     };
+     match probe {
+-        Err(e) => assert_eq!(e.kind(), ErrorKind::ConnectionReset, "{e}"),
++        Err(e) => assert!(RESET_READ.contains(&e.kind()), "{e}"),
+         Ok(done) => panic!("a probe on a reset stream ended with {done:?}"),
+     }
+     driver.completions(&mut stash);
+@@ -453,7 +442,6 @@ fn a_probe_on_a_reset_stream_fails_at_submit() {
+     assert_eq!(driver.pending(), 0);
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_closed_peer_reads_eof() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -481,7 +469,6 @@ fn a_closed_peer_reads_eof() {
+ 
+ /// 相手が読まない端への書きは、送りの buffer が空くまで終わらない。`quiesce` は終わらない読みと書きを取り消し、
+ /// 走っている仕事を待ちきる。
+-#[cfg(unix)]
+ #[test]
+ fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -554,13 +541,11 @@ fn pool_threads_block_interrupt_and_terminate() {
+ }
+ 
+ /// `127.0.0.1` の `port`。本物のソケットのテストは綴りだけを使い、機械の `/etc/hosts` に頼らない。
+-#[cfg(unix)]
+ fn loopback(port: u16) -> std::net::SocketAddr {
+     std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port))
+ }
+ 
+ /// `127.0.0.1` の空いているポートで待ち受け、リスナーとポートを返す。
+-#[cfg(unix)]
+ fn listen(driver: &mut RealDriver, stash: &mut Vec<Completion>) -> (eml_rt::IoHandle, u16) {
+     let key = submit(driver, Op::Listen { addr: loopback(0) });
+     match complete(driver, stash, key).result.unwrap() {
+@@ -569,7 +554,6 @@ fn listen(driver: &mut RealDriver, stash: &mut Vec<Completion>) -> (eml_rt::IoHa
+     }
+ }
+ 
+-#[cfg(unix)]
+ fn stream(completion: Completion) -> (eml_rt::IoHandle, std::net::SocketAddr) {
+     match completion.result.unwrap() {
+         Done::Stream { handle, peer } => (handle, peer),
+@@ -578,7 +562,6 @@ fn stream(completion: Completion) -> (eml_rt::IoHandle, std::net::SocketAddr) {
+ }
+ 
+ /// 待ち受けて、受けた端と接続した端を返す。
+-#[cfg(unix)]
+ fn connection(
+     driver: &mut RealDriver,
+     stash: &mut Vec<Completion>,
+@@ -599,7 +582,6 @@ fn connection(
+ }
+ 
+ /// 待ち受ける者のいないポート。
+-#[cfg(unix)]
+ fn closed_port() -> u16 {
+     let listener = std::net::TcpListener::bind(loopback(0)).unwrap();
+     listener.local_addr().unwrap().port()
+@@ -628,7 +610,6 @@ fn full_listener() -> (std::net::TcpListener, Vec<std::net::TcpStream>) {
+     }
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_listener_on_port_zero_gets_a_port() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -638,7 +619,6 @@ fn a_listener_on_port_zero_gets_a_port() {
+     assert!(std::net::TcpStream::connect(loopback(port)).is_ok());
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_second_listener_on_the_same_port_is_addr_in_use() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -654,7 +634,6 @@ fn a_second_listener_on_the_same_port_is_addr_in_use() {
+     assert_eq!(error.kind(), ErrorKind::AddrInUse);
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn an_accept_returns_the_connected_stream_and_its_peer() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -706,7 +685,6 @@ fn an_accept_returns_the_connected_stream_and_its_peer() {
+     assert!(driver.set_nodelay(client, true).is_ok());
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_connect_to_a_closed_port_is_refused() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -727,7 +705,6 @@ fn a_connect_to_a_closed_port_is_refused() {
+ }
+ 
+ /// 閉じた相手への書きは、送りの buffer に入るうちは成功し、相手の reset が届いた後に失敗する。
+-#[cfg(unix)]
+ #[test]
+ fn a_write_to_a_closed_peer_fails_with_reset_or_broken_pipe() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -746,10 +723,7 @@ fn a_write_to_a_closed_peer_fails_with_reset_or_broken_pipe() {
+         match complete(&mut driver, &mut stash, write).result {
+             Ok(_) => {}
+             Err(e) => {
+-                assert!(
+-                    matches!(e.kind(), ErrorKind::BrokenPipe | ErrorKind::ConnectionReset),
+-                    "{e}"
+-                );
++                assert!(PEER_GONE_WRITE.contains(&e.kind()), "{e}");
+                 return;
+             }
+         }
+@@ -757,7 +731,6 @@ fn a_write_to_a_closed_peer_fails_with_reset_or_broken_pipe() {
+     panic!("every write to a closed peer succeeded");
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_shutdown_write_gives_the_peer_eof() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -784,7 +757,6 @@ fn a_shutdown_write_gives_the_peer_eof() {
+     );
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_cancelled_accept_completes_with_an_error() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -799,7 +771,6 @@ fn a_cancelled_accept_completes_with_an_error() {
+ }
+ 
+ /// 長い書きは短く終わった送りを driver の中で出し直し、すべてを書いてから1つの完了で終わる。相手はスレッドで読む。
+-#[cfg(unix)]
+ #[test]
+ fn a_long_write_completes_once_with_its_whole_length() {
+     use std::io::Read;
+@@ -837,7 +808,6 @@ fn a_long_write_completes_once_with_its_whole_length() {
+ /// 待っている長い書きを取り消すと、完了がちょうど1つ、取り消しの誤り `cancelled` で届き、その後には何も届かない。
+ /// 相手が少し読んで送りの buffer が空いた後、次の `wait` より前に取り消す。期限の取り消しと同じ順 (`wait`、`cancel`、
+ /// `wait`、`completions`) である。
+-#[cfg(unix)]
+ #[test]
+ fn a_cancelled_pending_long_write_completes_once() {
+     use std::io::Read;
+@@ -848,14 +818,8 @@ fn a_cancelled_pending_long_write_completes_once() {
+     let accept = submit(&mut driver, Op::Accept { listener });
+     let mut peer = std::net::TcpStream::connect(loopback(port)).unwrap();
+     let (server, _) = stream(complete(&mut driver, &mut stash, accept));
+-    let mut data = vec![1u8; 8 << 20];
+-    let write = pending(
+-        &mut driver,
+-        Op::Write {
+-            handle: server,
+-            buf: raw(&mut data),
+-        },
+-    );
++    let mut data = vec![1u8; PENDING_CHUNK];
++    let write = write_until_pending(&mut driver, server, &mut data);
+     poll_for(&mut driver, 5);
+     driver.completions(&mut stash);
+     assert!(
+@@ -875,10 +839,8 @@ fn a_cancelled_pending_long_write_completes_once() {
+     }
+     assert!(drained > 0);
+     driver.cancel(write);
+-    look(&mut driver);
+-    driver.completions(&mut stash);
+-    assert_eq!(keys(&stash), [write]);
+-    let completion = stash.pop().unwrap();
++    let completion = wait_for(&mut driver, &mut stash, write);
++    assert!(stash.is_empty(), "{:?}", keys(&stash));
+     assert_eq!(completion.result.unwrap_err().to_string(), "cancelled");
+     assert!(completion.cancelled);
+     assert_eq!(driver.pending(), 0);
+@@ -931,7 +893,6 @@ fn a_cancelled_connect_does_not_try_the_next_address() {
+ }
+ 
+ /// 完了を受け取らずに `ms` ミリ秒だけ待つ。その間に終わった操作は、次の `completions` まで残る。
+-#[cfg(unix)]
+ fn poll_for(driver: &mut RealDriver, ms: u64) {
+     let deadline = driver.now().as_millis() as u64 + ms;
+     while driver.now() < Duration::from_millis(deadline) {
+@@ -940,19 +901,16 @@ fn poll_for(driver: &mut RealDriver, ms: u64) {
+ }
+ 
+ /// 期限の過ぎた `wait` で、待たずに OS を1回見る。
+-#[cfg(unix)]
+ fn look(driver: &mut RealDriver) {
+     let now = driver.now().as_millis() as u64;
+     assert!(driver.wait(Some(now)).unwrap());
+ }
+ 
+-#[cfg(unix)]
+ fn keys(completions: &[Completion]) -> Vec<OpKey> {
+     completions.iter().map(|c| c.key).collect()
+ }
+ 
+ /// `quiesce` は待っている受けを取り消し、捨てた完了が作ったストリームを閉じる。相手は EOF を読む。
+-#[cfg(unix)]
+ #[test]
+ fn quiesce_drains_a_pending_accept_and_closes_discarded_streams() {
+     use std::io::Read;
+@@ -980,7 +938,6 @@ fn quiesce_drains_a_pending_accept_and_closes_discarded_streams() {
+ }
+ 
+ /// テストの解決器が待つ門。`open` は通してよい解決の数である。
+-#[cfg(unix)]
+ struct Gate {
+     open: std::sync::Mutex<usize>,
+     turn: std::sync::Condvar,
+@@ -988,7 +945,6 @@ struct Gate {
+     started: std::sync::Mutex<Vec<String>>,
+ }
+ 
+-#[cfg(unix)]
+ impl Gate {
+     const fn new() -> Gate {
+         Gate {
+@@ -1034,7 +990,6 @@ impl Gate {
+     }
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_connect_by_name_tries_the_looked_up_addresses_in_order() {
+     static CLOSED: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+@@ -1059,7 +1014,6 @@ fn a_connect_by_name_tries_the_looked_up_addresses_in_order() {
+     stream(complete(&mut driver, &mut stash, accept));
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn a_cancelled_lookup_completes_at_once() {
+     static GATE: Gate = Gate::new();
+@@ -1086,7 +1040,6 @@ fn a_cancelled_lookup_completes_at_once() {
+     assert_eq!(driver.pending(), 0);
+ }
+ 
+-#[cfg(unix)]
+ #[test]
+ fn quiesce_does_not_wait_for_a_lookup() {
+     static GATE: Gate = Gate::new();
+@@ -1111,7 +1064,6 @@ fn quiesce_does_not_wait_for_a_lookup() {
+ }
+ 
+ /// 走る解決は8つまでで、9つ目は前の解決のどれかが戻ってから始まる。
+-#[cfg(unix)]
+ #[test]
+ fn live_lookups_beyond_the_limit_wait_in_order() {
+     static GATE: Gate = Gate::new();
+@@ -1154,7 +1106,6 @@ fn live_lookups_beyond_the_limit_wait_in_order() {
+ }
+ 
+ /// 手放した解決は走る解決の上限に数えないので、詰まった解決があっても新しい解決は進む。
+-#[cfg(unix)]
+ #[test]
+ fn abandoned_lookups_do_not_hold_the_limit() {
+     static GATE: Gate = Gate::new();
+@@ -1191,7 +1142,6 @@ fn abandoned_lookups_do_not_hold_the_limit() {
+ }
+ 
+ /// 手放した解決が64たまっている間は、新しい解決はその場で失敗する。詰まった解決が戻れば、また解決できる。
+-#[cfg(unix)]
+ #[test]
+ fn a_lookup_fails_while_64_abandoned_lookups_are_stuck() {
+     static GATE: Gate = Gate::new();
+@@ -1252,7 +1202,6 @@ fn a_lookup_fails_while_64_abandoned_lookups_are_stuck() {
+ 
+ /// `Readable` が終わった後の読みはその場で読めるので、`Submit::Done` で返り、完了を残さない。書いた直後の読みが
+ /// その場で終わることは OS が約束しないので、読めると分かってから読む。
+-#[cfg(unix)]
+ #[test]
+ fn a_read_after_a_finished_probe_returns_done() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -1324,7 +1273,6 @@ fn a_wait_without_ops_sleeps_until_its_deadline() {
+ }
+ 
+ /// 完了を受け取った後の取り消しは、同じ鍵で後から出した操作に効かない。
+-#[cfg(unix)]
+ #[test]
+ fn a_cancel_after_completion_does_not_touch_the_next_op_of_the_key() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -1374,7 +1322,6 @@ fn a_cancel_after_completion_does_not_touch_the_next_op_of_the_key() {
+ 
+ /// 受け付けで終わる操作だけが続いても、落とされたハンドルは次の `submit` で閉じる。`wait` も `completions` も
+ /// 呼ばない run で、落としたリスナーとストリームの fd が積もらないためである。
+-#[cfg(unix)]
+ #[test]
+ fn a_submit_closes_dropped_handles() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -1383,7 +1330,12 @@ fn a_submit_closes_dropped_handles() {
+     driver.bin().dropped.lock().unwrap().push(listener);
+     let again = submit(&mut driver, Op::Listen { addr: loopback(0) });
+     assert!(again.done.is_some());
+-    let error = std::net::TcpStream::connect(loopback(port)).unwrap_err();
++    // std の接続は Windows で拒まれた SYN を送り直して遅いので、ループバックで送り直さない driver で接続する
++    let connect = Op::Connect {
++        host: "127.0.0.1".to_string(),
++        port,
++    };
++    let error = run_op(&mut driver, &mut stash, connect).unwrap_err();
+     assert_eq!(error.kind(), ErrorKind::ConnectionRefused);
+ }
+ 
+@@ -1396,32 +1348,6 @@ fn a_pending_key_submitted_twice_panics_in_debug() {
+     driver.submit(key, Op::Job(Box::new(|| Ok(0))));
+ }
+ 
+-#[cfg(windows)]
+-#[test]
+-fn listen_accept_and_connect_are_unsupported() {
+-    let mut driver = RealDriver::new().unwrap();
+-    let mut stash = Vec::new();
+-    let ops = [
+-        Op::Listen {
+-            addr: std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 0)),
+-        },
+-        Op::Accept { listener: 0 },
+-        Op::Connect {
+-            host: "127.0.0.1".to_string(),
+-            port: 80,
+-        },
+-    ];
+-    for op in ops {
+-        let key = submit(&mut driver, op);
+-        let error = complete(&mut driver, &mut stash, key).result.unwrap_err();
+-        assert_eq!(error.kind(), ErrorKind::Unsupported);
+-    }
+-    assert_eq!(
+-        driver.shutdown_write(0).unwrap_err().kind(),
+-        ErrorKind::Unsupported
+-    );
+-}
+-
+ /// 閉じたときに FIN でなく RST を送るよう、`s` に linger 0 を立てる。std の `TcpStream::set_linger` は安定していない。
+ #[cfg(unix)]
+ fn reset_on_close(s: &std::net::TcpStream) {
+@@ -1444,21 +1370,52 @@ fn reset_on_close(s: &std::net::TcpStream) {
+     assert_eq!(r, 0, "{}", std::io::Error::last_os_error());
+ }
+ 
++#[cfg(windows)]
++fn reset_on_close(s: &std::net::TcpStream) {
++    use std::os::windows::io::AsRawSocket;
++    use windows_sys::Win32::Networking::WinSock::{
++        LINGER, SO_LINGER, SOL_SOCKET, WSAGetLastError, setsockopt,
++    };
++
++    let linger = LINGER {
++        l_onoff: 1,
++        l_linger: 0,
++    };
++    // SAFETY: `s` の socket は呼び出しの間開いている。`linger` はこの関数の局所変数で、その大きさを長さとして渡す
++    let r = unsafe {
++        setsockopt(
++            s.as_raw_socket() as usize,
++            SOL_SOCKET,
++            SO_LINGER,
++            (&raw const linger).cast(),
++            std::mem::size_of::<LINGER>() as i32,
++        )
++    };
++    assert_eq!(
++        r,
++        0,
++        "{}",
++        std::io::Error::from_raw_os_error(unsafe { WSAGetLastError() })
++    );
++}
++
+ /// 相手が読まない端 `handle` に、`chunk` の書きを保留になるまで出し、保留の書きの鍵を返す。送りと受けの buffer の和は
+-/// 有限なのでどこかで保留になり、その大きさには頼らない。4096 回で保留にならなければ落ちる。保留の書きが終わるまで、
++/// 有限なのでどこかで保留になり、その大きさには頼らない。`WRITES_UNTIL_PENDING` 回で保留にならなければ落ちる。保留の書きが終わるまで、
+ /// 呼ぶ側が `chunk` を生かしておく。macOS は相手の窓が満ちた後にも送りの buffer を広げうるので、小さな `chunk` の保留の
+ /// 書きは、相手が読まなくても少し後に終わりうる。保留のまま残ってほしいテストは `PENDING_CHUNK` を渡す。
+ /// 保留の書きの残りが、広がった送りの buffer にも収まらない大きさ。
+-#[cfg(unix)]
+ const PENDING_CHUNK: usize = 8 << 20;
+ 
+-#[cfg(unix)]
++/// `write_until_pending` が出す書きの数の上限。unix では1つ目が保留になり、Windows の送りは buffer に空きがあれば
++/// 大きな書きを丸ごと受けうるので、2つ目までに保留になる。
++const WRITES_UNTIL_PENDING: usize = 8;
++
+ fn write_until_pending(
+     driver: &mut RealDriver,
+     handle: eml_rt::IoHandle,
+     chunk: &mut [u8],
+ ) -> OpKey {
+-    for _ in 0..4096 {
++    for _ in 0..WRITES_UNTIL_PENDING {
+         let key = next_key();
+         match driver.submit(
+             key,
+@@ -1473,11 +1430,10 @@ fn write_until_pending(
+             Submit::Pending => return key,
+         }
+     }
+-    panic!("4096 writes to a peer that does not read never went pending");
++    panic!("{WRITES_UNTIL_PENDING} writes to a peer that does not read never went pending");
+ }
+ 
+ /// std のリスナーへ driver で接続し、driver の端と std の相手を返す。
+-#[cfg(unix)]
+ fn connect_to_std(
+     driver: &mut RealDriver,
+     stash: &mut Vec<Completion>,
+@@ -1498,7 +1454,6 @@ fn connect_to_std(
+ 
+ /// 相手が接続して書いた後に受けたストリームの `Readable` は、受けの前に届いていたデータで終わる。受けた後に新しい
+ /// データが来なくても、登録の時点で読めることが分かる。
+-#[cfg(unix)]
+ #[test]
+ fn a_probe_on_a_stream_that_had_data_before_accept_finishes() {
+     use std::io::Write;
+@@ -1525,7 +1480,6 @@ fn a_probe_on_a_stream_that_had_data_before_accept_finishes() {
+ 
+ /// 1つのストリームで、待つ `Readable` と待つ書きを同時に持てる。相手が書いて読めば、両方が終わる。待ち手は向きごとに
+ /// 1つずつある。
+-#[cfg(unix)]
+ #[test]
+ fn a_pending_read_and_a_pending_write_on_one_stream_both_finish() {
+     use std::io::{Read, Write};
+@@ -1564,7 +1518,6 @@ fn a_pending_read_and_a_pending_write_on_one_stream_both_finish() {
+ 
+ /// 2本つないでから受けを1つずつ2回出すと、どちらも終わる。2本が1つの event で知らされても、受けは記憶によらずに
+ /// 試す。
+-#[cfg(unix)]
+ #[test]
+ fn queued_connections_are_accepted_one_per_op() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -1581,7 +1534,6 @@ fn queued_connections_are_accepted_one_per_op() {
+ 
+ /// 閉じたポートへの接続は `ConnectionRefused` で1回だけ終わる。再試行で `connect` を出し直さないので、後から
+ /// 完了が来ない。
+-#[cfg(unix)]
+ #[test]
+ fn a_refused_connect_completes_once() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -1605,7 +1557,6 @@ fn a_refused_connect_completes_once() {
+ }
+ 
+ /// 相手がリセットすると、送りの buffer が空くのを待っていた書きは誤りで終わる。
+-#[cfg(unix)]
+ #[test]
+ fn a_reset_ends_a_pending_write_with_an_error() {
+     let mut driver = RealDriver::new().unwrap();
+@@ -1616,13 +1567,7 @@ fn a_reset_ends_a_pending_write_with_an_error() {
+     reset_on_close(&peer);
+     drop(peer);
+     let error = wait_for(&mut driver, &mut stash, write).result.unwrap_err();
+-    assert!(
+-        matches!(
+-            error.kind(),
+-            ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
+-        ),
+-        "{error}"
+-    );
++    assert!(PEER_GONE_WRITE.contains(&error.kind()), "{error}");
+     drop(chunk);
+ }
+ 
+diff --git a/crates/eml_vm/tests/api.rs b/crates/eml_vm/tests/api.rs
+index 3fac1f9..9bbcb3f 100644
+--- a/crates/eml_vm/tests/api.rs
++++ b/crates/eml_vm/tests/api.rs
+@@ -582,7 +582,6 @@ fn run_real_on(
+ 
+ /// 本物の driver で、`listen` のポート 0 が選んだポートへの `connect` を、別のタスクの `accept` が受ける。2つの
+ /// ストリームの相手の番地は、互いのポートを持つ (docs/spec/stdlib.md の「`Std.Net`」)。
+-#[cfg(unix)]
+ #[test]
+ fn a_real_connection_is_accepted() {
+     let src = "\
+@@ -619,7 +618,6 @@ main () = Async.run (fn () ->
+ 
+ /// 本物の driver の `Net` の頭。`listen` が選んだポートへ `connect` し、別のタスクの `accept` が受けたストリームを `b`、
+ /// 接続した側を `a` にする。
+-#[cfg(unix)]
+ const REAL_CONNECTED: &str = "\
+ import Async (Async)
+ import Async
+@@ -640,7 +638,6 @@ main () = Async.run (fn () ->
+ ";
+ 
+ /// 本物の driver の接続で、片方のストリームに書いたバイトを別のタスクが読む (docs/spec/stdlib.md の「`Std.Net`」)。
+-#[cfg(unix)]
+ #[test]
+ fn a_real_connection_carries_bytes_between_tasks() {
+     let src = format!(
+@@ -660,7 +657,6 @@ fn a_real_connection_carries_bytes_between_tasks() {
+ }
+ 
+ /// `ProbeRecorder` が記録する、driver の呼び出し。
+-#[cfg(unix)]
+ #[derive(Debug, Clone, Copy, PartialEq)]
+ enum DriverCall {
+     /// 受け付けた操作の鍵、`Readable` か (偽なら `Read`)、`Submit::Done` を返したか。ほかの操作は記録しない。
+@@ -671,13 +667,11 @@ enum DriverCall {
+ }
+ 
+ /// 本物の driver を包み、読みの受け付けとその結果、`wait` の呼び出し、`completions` が返した鍵を順に記録する driver。
+-#[cfg(unix)]
+ struct ProbeRecorder {
+     inner: eml_io::RealDriver,
+     calls: Arc<std::sync::Mutex<Vec<DriverCall>>>,
+ }
+ 
+-#[cfg(unix)]
+ impl eml_rt::IoDriver for ProbeRecorder {
+     fn now(&self) -> std::time::Duration {
+         self.inner.now()
+@@ -747,7 +741,6 @@ impl eml_rt::IoDriver for ProbeRecorder {
+ /// 受け付けで終わり、その後に driver を待たない。OS が約束しない「書いた直後の読みがその場で終わる」ことは確かめない
+ /// (docs/spec/vm.md の「時計と driver」)。`with_driver` の driver には中継がないが、この run は空きのループに入る前に
+ /// 終わる。
+-#[cfg(unix)]
+ #[test]
+ fn a_real_read_after_a_finished_probe_does_not_wait() {
+     let src = format!(
+@@ -792,7 +785,6 @@ fn a_real_read_after_a_finished_probe_does_not_wait() {
+ 
+ /// 本物の driver で、データのないストリームの `read_chunk_within` は期限で `None` を返し、ストリームは続けて使える。後で
+ /// 相手のタスクが書いたバイトは、次の `read_chunk` が返す (docs/spec/stdlib.md の「`Std.Net`」)。
+-#[cfg(unix)]
+ #[test]
+ fn a_real_read_chunk_within_keeps_the_stream() {
+     let src = format!(
+@@ -820,7 +812,6 @@ fn a_real_read_chunk_within_keeps_the_stream() {
+ /// 本物の driver の `read_line` は、間を置いた2回の書きにまたがる行を1行にし、1回の書きに入った2行を分け、改行のない
+ /// 最後の行と EOF の `None` を返す。2本目の接続では、`read_line` が読みすぎたバイトを次の `read_chunk` が返す
+ /// (docs/spec/stdlib.md の「`Std.Net`」)。
+-#[cfg(unix)]
+ #[test]
+ fn a_real_read_line_reads_lines_split_across_writes() {
+     let src = format!(
+@@ -867,7 +858,6 @@ lines s =
+ 
+ /// 本物の driver の 8 MiB の `write_bytes` は、送りの buffer を超えて短く終わる送りを driver が出し直し、1つの完了で
+ /// 終わる。相手のタスクが EOF まで読んだバイトの数は、書いた数と同じである (docs/spec/vm.md の「時計と driver」)。
+-#[cfg(unix)]
+ #[test]
+ fn a_real_write_of_8_mib_arrives_whole() {
+     let src = format!(
+@@ -895,7 +885,6 @@ count n s =
+ /// 接続の来ないリスナーで受けを待つ run は、空きのループが割り込みを読むので、別のスレッドの割り込みで止まる。止める
+ /// ときに受けの操作を取り消して待ちきるので、検査モードの漏れの検査も通る (docs/spec/vm.md の「時計と driver」)。
+ /// 割り込みは `waiting` が出てから送るので、受けの待ちの間に届く。
+-#[cfg(unix)]
+ #[test]
+ fn an_interrupt_stops_a_run_blocked_in_a_real_accept() {
+     let src = "\
+@@ -922,7 +911,6 @@ main () = Async.run (fn () ->
+ }
+ 
+ /// 10 秒戻らない名前の解決。名前の解決を待たずに手放す道を確かめるので、戻る前にテストが終わる。
+-#[cfg(unix)]
+ fn block_10_s(_host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
+     std::thread::sleep(std::time::Duration::from_secs(10));
+     Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))])
+@@ -930,7 +918,6 @@ fn block_10_s(_host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAdd
+ 
+ /// 名前の解決を待つ run も、割り込みで止まる。止めるときの `quiesce` は解決を手放し、終わりを待たない
+ /// (docs/spec/vm.md の「時計と driver」)。
+-#[cfg(unix)]
+ #[test]
+ fn an_interrupt_stops_a_run_waiting_on_a_lookup() {
+     let src = "\
+@@ -955,7 +942,6 @@ main () = Async.run (fn () ->
+ 
+ /// 名前の解決を待つ `connect` を `timeout` で囲むと、期限の取り消しが解決を手放し、`timeout` は `None` を返す
+ /// (docs/spec/stdlib.md の「`Std.Net`」)。
+-#[cfg(unix)]
+ #[test]
+ fn a_timeout_around_a_slow_lookup_returns_none() {
+     let src = "\
+@@ -976,29 +962,6 @@ main () = Async.run (fn () ->
+     assert_eq!(out, "None\n");
+ }
+ 
+-/// Windows の本物の driver はまだソケットを扱わないので、`listen` は種類 `NotAvailable` の IO の失敗になる
+-/// (docs/spec/stdlib.md の「`Std.Net`」)。
+-#[cfg(windows)]
+-#[test]
+-fn a_real_listen_is_not_available() {
+-    let src = "\
+-import Async
+-import Net
+-main : Unit -> <IO, Panic> Unit
+-main () =
+-  match try_io (fn () -> Async.run (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))) with
+-    | Ok _ -> println \"listening\"
+-    | Err e -> println \"\\{show e.kind}: \\{e.message}\"
+-";
+-    let (out, result, closed, _) = run_real(src, None);
+-    result.unwrap_or_else(|error| panic!("{error}"));
+-    closed.unwrap_or_else(|error| panic!("{error}"));
+-    assert_eq!(
+-        out,
+-        "NotAvailable: cannot listen on 127.0.0.1:0: unsupported\n"
+-    );
+-}
+-
+ #[test]
+ fn the_stats_fields_follow_the_declaration() {
+     let stats = RunStats::default();
