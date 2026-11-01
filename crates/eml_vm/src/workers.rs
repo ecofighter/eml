@@ -687,12 +687,15 @@ fn work<M: Mode, P: Policy>(
             ),
         "a channel reservation is held when a worker exits"
     );
-    let kept_pending = sched.retire_driver(quiet(&error));
-    if !quiet(&error) {
+    let quiet = quiet(&error);
+    if !quiet {
         run.set_fatal(error);
         control.end_run();
     }
     run.wake_all();
+    // driver の静止は取り消しの終わりを待ちうるので、誤りを書いてほかの worker を止めてから行う。`Ctx` を返す前で
+    // あればよい (docs/spec/vm.md の「時計と driver」)
+    let kept_pending = sched.retire_driver(quiet);
     Done {
         counts,
         preemptions: sched.preemptions(),
@@ -1156,6 +1159,31 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         run.set_live(2);
         let owners: Vec<u32> = (0..4).map(|_| run.next_owner()).collect();
         assert_eq!(owners, [1, 0, 1, 0]);
+    }
+
+    /// 新しいハンドルを作る操作の host は、本物の時計の run では受け付けた worker、仮想の時計の run では worker 0 である。
+    /// 本物の時計の run だけが worker の driver を基準から作る (docs/spec/vm.md の「時計と driver」)。
+    #[test]
+    fn only_the_real_clock_gives_each_worker_its_own_driver() {
+        let real = Run::new(
+            3,
+            None,
+            RunClock::Real {
+                epoch: std::time::Instant::now(),
+            },
+            Arc::default(),
+        );
+        assert_eq!(
+            (0..3).map(|k| real.io_worker(k)).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert!(matches!(real.new_driver(), Some(Ok(_))));
+        let virtual_ = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
+        assert_eq!(
+            (0..3).map(|k| virtual_.io_worker(k)).collect::<Vec<_>>(),
+            [0, 0, 0]
+        );
+        assert!(virtual_.new_driver().is_none());
     }
 
     /// まだ始めていない worker の欄を起こしても、`running` には数えない。

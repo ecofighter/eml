@@ -6172,6 +6172,143 @@ fn net_stream<M: Mode>(ctx: &mut Ctx<M>) -> Word {
     unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
 }
 
+/// 受け付けを送った先だけを覚えるテストの宛先。
+#[cfg(test)]
+#[derive(Default)]
+struct Submits(std::cell::RefCell<Vec<u32>>);
+
+#[cfg(test)]
+impl Post for Submits {
+    fn wake(&self, k: u32, _w: Woken) {
+        panic!("a wake is sent to worker {k}");
+    }
+
+    fn cancel(&self, k: u32, _cell: CellRef) {
+        panic!("a cancel is sent to worker {k}");
+    }
+
+    fn place(&self, k: u32, _cell: CellRef, _worker: u32, _closure: Word) {
+        panic!("a task is placed on worker {k}");
+    }
+
+    fn submit(&self, k: u32, _op: CellRef) {
+        self.0.borrow_mut().push(k);
+    }
+
+    fn cancel_io(&self, k: u32, _op: CellRef) {
+        panic!("an op cancel is sent to worker {k}");
+    }
+
+    fn completion(&self, k: u32, _op: CellRef) {
+        panic!("a completion is sent to worker {k}");
+    }
+}
+
+/// 本物の時計の run では、worker 1 の接続は worker 1 の driver に出し、できたストリームを worker 1 に縛る。そのストリームを
+/// 引く worker 1 の操作は `Submit` を送らずに自分の driver に出し、worker 0 のタスクの操作は host の worker 1 へ送る。
+/// host は記録が持つストリームの縛りで決まり、受け付けた worker の `here.host` では決まらない
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
+    let mut ctx = test_ctx();
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    shared.lock().set_bin(1, Arc::default());
+    let posted = Submits::default();
+    let on = |me: u32| Here {
+        me,
+        host: me,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let host_of = |token: i64| shared.lock().op_mut(CellRef::decode(token)).unwrap().host;
+    // worker 1 の接続は自分の driver に出す
+    let mut driver_1 = NoDriver::default();
+    let addr = unsafe { ctx.heap_mut() }.alloc_string("127.0.0.1");
+    let token = submit_connect(
+        &shared,
+        &on(1),
+        &mut ctx,
+        Some(&mut driver_1),
+        0,
+        0,
+        addr,
+        80,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!((host_of(token), driver_1.submits), (1, 1));
+    driver_1.done.push(Completion {
+        key: driver_1.last_key,
+        result: Ok(Done::Stream {
+            handle: 3,
+            peer: ([127, 0, 0, 1], 80).into(),
+        }),
+        cancelled: false,
+    });
+    let mut out = Vec::new();
+    complete(
+        &shared,
+        &on(1),
+        &mut ctx,
+        &mut driver_1,
+        0,
+        &mut Vec::new(),
+        &mut out,
+    )
+    .unwrap();
+    let stream = take_made(&shared, &mut ctx, token, 0, false).unwrap();
+    assert_eq!(
+        unsafe { &*ctx.heap().foreign_unique::<NetStream>(stream).unwrap() }
+            .bind
+            .host(),
+        1
+    );
+    // そのストリームを引く worker 1 の操作は、知らせを送らずに worker 1 の driver に出す
+    let buf = unsafe { ctx.heap_mut() }.alloc_bytes_room(64);
+    let read = submit_read(
+        &shared,
+        &on(1),
+        &mut ctx,
+        Some(&mut driver_1),
+        0,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap();
+    assert_eq!((host_of(read), driver_1.submits), (1, 2));
+    assert!(posted.0.borrow().is_empty());
+    // worker 1 に縛ったストリームを引く worker 0 の操作は、worker 0 の driver に出さずに worker 1 へ送る
+    let mut driver_0 = NoDriver::default();
+    let other = unsafe { ctx.heap_mut() }.alloc_foreign(
+        NetStream {
+            bind: Bind::Bound {
+                host: 1,
+                handle: 4,
+                bin: Arc::default(),
+            },
+            peer: ([127, 0, 0, 1], 1).into(),
+            rest: Vec::new(),
+            start: 0,
+        },
+        true,
+    );
+    let bytes = unsafe { ctx.heap_mut() }.alloc_bytes_room(8);
+    let write = submit_write(
+        &shared,
+        &on(0),
+        &mut ctx,
+        Some(&mut driver_0),
+        0,
+        0,
+        bytes,
+        other,
+    )
+    .unwrap();
+    assert_eq!((host_of(write), driver_0.submits), (1, 0));
+    assert_eq!(*posted.0.borrow(), [1]);
+}
+
 /// ストリーム `stream` の buffer。
 #[cfg(test)]
 fn net_rest(ctx: &Ctx<eml_rt::Checked>, stream: Word) -> &NetStream {
