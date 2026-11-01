@@ -739,7 +739,7 @@ pub(crate) enum Woken {
 pub(crate) enum Route {
     /// 持ち主が自分なので、この仕事を走らせる。
     Run(Runnable),
-    /// 持ち主はこの worker である。
+    /// 持ち主はほかの worker で、値はその番号である。起こしはその worker へ回す。
     Forward(u32),
     /// 起こしたセルはもう待っていない。
     Stale,
@@ -784,7 +784,9 @@ impl Discards {
 /// 登録表の lock を放してから行う driver の呼び出し。受け付けを並べた順に出し、その後で取り消しを頼む。
 #[derive(Default)]
 pub(crate) struct IoWork {
-    submits: Vec<(CellRef, Op)>,
+    /// 出す記録と操作と、取り出す区間で取り消しの印を読んだか。印があれば、driver が `Pending` を返したときだけ、
+    /// 出した直後に取り消しを頼む。
+    submits: Vec<(CellRef, Op, bool)>,
     cancels: Vec<CellRef>,
 }
 
@@ -1613,13 +1615,15 @@ impl Registry {
     }
 
     /// 終わったタスク `cell` の終わり方を取り出してセルを放す。値なら、その語と、呼ぶ側が受け取るときに使うタスクの ID を
-    /// 返す。失敗なら起こし直す失敗を返す。根のスコープの失敗が先の `Take::Run` では、値の語を `discards` に積む。
-    /// タスクの ID の退かせも `discards` に積むので、呼ぶ側は値を受け取ってから `discards` を行う。
+    /// 返す。失敗なら起こし直す失敗を返す。根のスコープの失敗が先の `Take::Run` では、値の語を `dropped` に積む。
+    /// タスクの ID の退かせは `retired` に積む。呼ぶ側は、値を受け取るか `dropped` を行い、ハンドルを手放してから
+    /// `retired` を行う。
     pub(crate) fn take(
         &mut self,
         cell: CellRef,
         kind: Take,
-        discards: &mut Discards,
+        dropped: &mut Discards,
+        retired: &mut Discards,
     ) -> Result<Result<(Word, u32), Raise>, CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Finished) {
@@ -1642,7 +1646,7 @@ impl Registry {
         let result = match (raised, outcome) {
             (Some(failure), outcome) => {
                 if let Outcome::Value(w) = outcome {
-                    discards.word(w, worker);
+                    dropped.word(w, worker);
                 }
                 Err(raise(failure))
             }
@@ -1650,7 +1654,7 @@ impl Registry {
             (None, Outcome::Value(w)) => Ok((w, worker)),
             (None, failure) => Err(raise(failure)),
         };
-        self.free_task(cell, discards)?;
+        self.free_task(cell, retired)?;
         Ok(result)
     }
 
@@ -2083,10 +2087,7 @@ impl Registry {
             return Err(CellFault::Internal("an op is hosted on another worker"));
         }
         let (op, cancel_now) = self.take_queued(c)?;
-        work.submits.push((c, op));
-        if cancel_now {
-            work.cancels.push(c);
-        }
+        work.submits.push((c, op, cancel_now));
         Ok(())
     }
 
@@ -2890,8 +2891,12 @@ pub(crate) fn run_io<M: Mode>(
     out: &mut Vec<Runnable>,
 ) -> Result<(), CellFault> {
     while !work.submits.is_empty() {
-        for (op, next) in std::mem::take(&mut work.submits) {
+        for (op, next, cancel_now) in std::mem::take(&mut work.submits) {
             let Submit::Done(result) = driver.submit(op_key(op), next) else {
+                // 取り出す前に取り消しが来ていた。終わった操作は取り消さない
+                if cancel_now {
+                    driver.cancel(op_key(op));
+                }
                 continue;
             };
             let bin = driver.bin();
@@ -3610,16 +3615,19 @@ pub(crate) fn take<M: Mode>(
     depth_offset: usize,
 ) -> Result<Result<Word, Raise>, CellFault> {
     let cell = handle_cell(ctx, shared, handle)?;
-    let mut discards = Discards::default();
-    let taken = shared.lock().take(cell, kind, &mut discards)?;
+    let (mut dropped, mut retired) = (Discards::default(), Discards::default());
+    let taken = shared.lock().take(cell, kind, &mut dropped, &mut retired)?;
     let result = match taken {
         Ok((w, worker)) => Ok(Depot::of(worker).receive(ctx, w)?),
-        Err(raise) => Err(raise),
+        Err(raise) => {
+            dropped.run(ctx, depth_offset)?;
+            Err(raise)
+        }
     };
     // ハンドルの参照は呼ぶ側から移ってきたもので、ここで手放す。受け取った印を先に付けるので、破棄処理は mail に
-    // 積まない
+    // 積まない。タスクの ID は、その ID の値を受け取るか落とした後で退かせる
     give_up(ctx, handle)?;
-    discards.run(ctx, depth_offset)?;
+    retired.run(ctx, depth_offset)?;
     Ok(result)
 }
 
@@ -4535,6 +4543,144 @@ fn a_cancel_and_a_submit_are_ordered_by_the_lock() {
         assert_eq!(registry.in_flight(host as usize), 0);
         assert!(registry.op_mut(op).unwrap().arrival.is_some());
     }
+}
+
+/// 取り消しと受け付けが出会う道を、持ち主の `park_io`、`park_io_until`、`expire`、`unpark` と、host の `take_queued`
+/// と `run_io` で通す。host が出す前の取り消しでは、持ち主の道は印を立てるだけで driver に頼まず、host が取り出す区間で
+/// 印を読んで、出した操作が `Pending` なら直後に取り消す。期限の印 `timed_out` も同じに読む。出した後の取り消しでは、
+/// 自分が host なら自分の driver に頼み、ほかの worker が host なら道は `Remote` になる。その場で終わった操作は取り消さない
+/// (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
+    #[derive(Debug, Clone, Copy)]
+    enum Before {
+        Cancel,
+        PastDeadline,
+        Expired,
+    }
+    for before in [Before::Cancel, Before::PastDeadline, Before::Expired] {
+        let shared = Shared::new(Registry::new(Vec::new(), 2));
+        let mut ctx = test_ctx();
+        let mut driver = NoDriver::default();
+        let scope = shared.lock().open_root(None, None).unwrap();
+        let me = running_task(&shared, scope);
+        let op = shared
+            .lock()
+            .alloc(CellKind::Op(net_record(OpKind::Accept, 0, None)));
+        let token = op.encode();
+        // 持ち主 0 が操作を置き、host 1 はまだ取り出していない
+        {
+            let mut cells = shared.lock();
+            cells.op_mut(op).unwrap().host = 1;
+            cells.queue_op(op, Op::Accept { listener: 0 }).unwrap();
+        }
+        let mut work = IoWork::default();
+        match before {
+            Before::Cancel => {
+                let mut cells = shared.lock();
+                cells.task_mut(me).unwrap().cancel = true;
+                cells.park_io(&mut work, token, me, Word::UNIT).unwrap();
+            }
+            Before::PastDeadline => {
+                let mut cells = shared.lock();
+                cells
+                    .park_io_until(&mut work, 0, 0, token, me, Word::UNIT)
+                    .unwrap();
+            }
+            Before::Expired => {
+                let mut cells = shared.lock();
+                cells
+                    .park_io_until(&mut work, 0, 50, token, me, Word::UNIT)
+                    .unwrap();
+                cells.expire(50, 0, &mut Vec::new(), &mut work).unwrap();
+                assert!(cells.op_mut(op).unwrap().timed_out);
+            }
+        }
+        assert!(work.cancels.is_empty(), "{before:?}");
+        let (next, cancel_now) = shared.lock().take_queued(op).unwrap();
+        assert!(cancel_now, "{before:?}");
+        work.submits.push((op, next, cancel_now));
+        run_io(
+            &shared,
+            &mut ctx,
+            &mut driver,
+            1,
+            0,
+            &mut work,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(driver.cancelled, [op_key(op)], "{before:?}");
+        assert_eq!(shared.lock().in_flight(1), 1);
+    }
+
+    // 出した後の取り消し。受け付けは表に入れる道で出す
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let scope = shared.lock().open_root(None, None).unwrap();
+    let me = running_task(&shared, scope);
+    let token = submit_x(&shared, &mut ctx, &mut driver, 0);
+    let op = CellRef::decode(token);
+    assert!(shared.lock().op_mut(op).unwrap().submitted);
+    assert!(
+        park_io(&shared, &mut driver, token, me, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    assert!(driver.cancelled.is_empty());
+    shared.lock().task_mut(me).unwrap().cancel = true;
+    unpark(&shared, &mut driver, me, &mut Vec::new());
+    assert_eq!(driver.cancelled, [op_key(op)]);
+    shared.lock().op_mut(op).unwrap().host = 1;
+    assert_eq!(
+        shared.lock().cancel_io(op, 0).unwrap(),
+        CancelPath::Remote(1)
+    );
+
+    // 取り出す前に期限が来ていても、その場で終わった操作は取り消さない
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let mut driver = NoDriver {
+        finish_writes: true,
+        ..NoDriver::default()
+    };
+    let op = shared
+        .lock()
+        .alloc(CellKind::Op(net_record(OpKind::Write { len: 0 }, 0, None)));
+    shared.lock().op_mut(op).unwrap().timed_out = true;
+    let mut work = IoWork::default();
+    let empty = RawBuf {
+        ptr: std::ptr::NonNull::dangling().as_ptr(),
+        cap: 0,
+    };
+    shared
+        .lock()
+        .submit_op(
+            op,
+            Op::Write {
+                handle: 0,
+                buf: empty,
+            },
+            0,
+            &mut work,
+        )
+        .unwrap();
+    run_io(
+        &shared,
+        &mut ctx,
+        &mut driver,
+        0,
+        0,
+        &mut work,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(driver.cancelled.is_empty());
+    assert!(matches!(
+        shared.lock().op_mut(op).unwrap().phase,
+        OpPhase::Done(Ok(0), false)
+    ));
+    assert_eq!(shared.lock().in_flight(0), 0);
 }
 
 /// `bytes` の読みを受け付けて待ち、端が読めるようになった完了を当てる。返すのは token と記録である。

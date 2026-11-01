@@ -1610,7 +1610,8 @@ fn collect<R: Exec>(
     {
         receive(sched);
     }
-    // driver も登録表も持たない worker 1..N-1 は、知らせのほかに集めるものがない (docs/spec/vm.md の「時計と driver」)
+    // driver を持たず `Async` のタスクも動かさない worker 1..N-1 は、知らせのほかに集めるものがない
+    // (docs/spec/vm.md の「時計と driver」)
     if sched.driver.is_none() {
         return Ok(());
     }
