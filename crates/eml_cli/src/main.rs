@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use eml_cli::{
-    Clock, Control, Finished, FsProvider, RunConfig, Sched, Session, default_limits, script_host,
+    Clock, Control, Finished, FsProvider, Limits, RunConfig, Sched, Session, default_limits,
+    script_host,
 };
 use eml_diagnostics::{has_errors, render};
 
@@ -40,6 +41,9 @@ enum Command {
         /// Run in checked mode and print the run's counters on stderr after it finishes
         #[arg(long)]
         stats: bool,
+        /// How many worker threads run `par` children: 1 or more (default: `EML_WORKERS`, else the number of available CPUs)
+        #[arg(long, value_name = "N", value_parser = parse_workers)]
+        workers: Option<usize>,
         file: PathBuf,
     },
     /// Start an interactive session
@@ -88,11 +92,23 @@ fn main() -> ExitCode {
             debug_heap,
             sched,
             stats,
+            workers,
             file,
         } => {
+            // 環境変数の誤りも、ファイルを読む前に使い方の誤りとして断る
+            let workers = match workers.map_or_else(workers_from_env, Ok) {
+                Ok(workers) => workers,
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    return ExitCode::from(2);
+                }
+            };
             // 読み込みとコンパイルの間の Ctrl-C と `Terminate` のシグナルも、OS の既定の動作でプロセスが終わらずに、
             // このハンドラが受ける。そこで立てたビットは、実行の最初の安全点で読まれる
-            let control = Arc::new(Control::new(default_limits()));
+            let control = Arc::new(Control::new(Limits {
+                workers,
+                ..default_limits()
+            }));
             let doorbell = interrupt::doorbell();
             interrupt::install(Arc::clone(&control), doorbell.clone(), interrupt::Mode::Run);
             let Some(session) = load(&file) else {
@@ -133,6 +149,26 @@ fn main() -> ExitCode {
                     ExitCode::from(code)
                 }
             }
+        }
+    }
+}
+
+/// `--workers` と `EML_WORKERS` の値。worker は1つ以上要るので、0 と数でない文字列は断る (docs/spec/stdlib.md の「起動」)。
+fn parse_workers(text: &str) -> Result<usize, String> {
+    match text.parse::<usize>() {
+        Ok(0) => Err("the number of workers must be at least 1".to_string()),
+        Ok(workers) => Ok(workers),
+        Err(_) => Err(format!("`{text}` is not a number of workers")),
+    }
+}
+
+/// `--workers` がないときの数。`EML_WORKERS` を先に見て、なければ CPU の数にする。CPU の数を読めなければ 1 である。
+fn workers_from_env() -> Result<usize, String> {
+    match std::env::var("EML_WORKERS") {
+        Ok(text) => parse_workers(&text).map_err(|message| format!("EML_WORKERS: {message}")),
+        Err(std::env::VarError::NotUnicode(_)) => Err("EML_WORKERS: not valid unicode".to_string()),
+        Err(std::env::VarError::NotPresent) => {
+            Ok(std::thread::available_parallelism().map_or(1, usize::from))
         }
     }
 }

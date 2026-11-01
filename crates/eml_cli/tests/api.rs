@@ -316,6 +316,14 @@ fn repl_limits_leave_room_for_recovery() {
     assert_eq!(repl.max_bytes * 2, run.max_bytes);
 }
 
+/// REPL は `par` の子を別の worker に置かない。取り消しと回復の規則を1つのヒープで保つためで、`--workers` も持たない
+/// (docs/spec/repl.md の「コマンドライン」)。ライブラリの既定も 1 である。
+#[test]
+fn repl_limits_run_one_worker() {
+    assert_eq!(eml_cli::repl_limits().workers, 1);
+    assert_eq!(eml_cli::default_limits().workers, 1);
+}
+
 /// 入力ごとの表示を読むための、`Repl` と出力の組。
 struct Console {
     repl: Repl,
