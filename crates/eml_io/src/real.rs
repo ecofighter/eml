@@ -17,14 +17,27 @@ pub struct RealDriver(Driver<sys::Os>);
 
 impl RealDriver {
     pub fn new() -> io::Result<RealDriver> {
-        RealDriver::with_lookup(sys::lookup)
+        RealDriver::new_at(sys::now())
+    }
+
+    /// 時計が `epoch` から数える driver。1つの run の driver は同じ `epoch` で作り、どの driver も同じ時刻を読む
+    /// (docs/spec/vm.md の「時計と driver」)。
+    pub fn new_at(epoch: sys::Epoch) -> io::Result<RealDriver> {
+        RealDriver::with_lookup_at(epoch, sys::lookup)
     }
 
     /// 名前の解決に OS の解決器の代わりに `lookup` を使う driver。テストが解決を止めたり番地を選んだりするのに使う。
     pub fn with_lookup(
         lookup: fn(&str, u16) -> io::Result<Vec<SocketAddr>>,
     ) -> io::Result<RealDriver> {
-        Ok(RealDriver(Driver::new(sys::Os::new()?, lookup)))
+        RealDriver::with_lookup_at(sys::now(), lookup)
+    }
+
+    fn with_lookup_at(
+        epoch: sys::Epoch,
+        lookup: fn(&str, u16) -> io::Result<Vec<SocketAddr>>,
+    ) -> io::Result<RealDriver> {
+        Ok(RealDriver(Driver::new(sys::Os::new(epoch)?, lookup)))
     }
 }
 

@@ -1662,3 +1662,10 @@ fn wakes_before_a_wait_end_only_that_wait() {
     let elapsed = start.elapsed();
     assert!(elapsed >= Duration::from_millis(75), "{elapsed:?}");
 }
+
+/// 時計は driver を作った時刻ではなく、渡された `epoch` から数える。
+#[test]
+fn a_driver_made_at_an_earlier_epoch_counts_from_it() {
+    let driver = RealDriver::new_at(Instant::now() - Duration::from_secs(10)).unwrap();
+    assert!(driver.now() >= Duration::from_secs(10));
+}

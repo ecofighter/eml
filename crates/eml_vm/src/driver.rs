@@ -1,10 +1,15 @@
 //! 時計の選び方 `Clock` と、時刻のミリ秒への丸め (docs/spec/vm.md の「時計と driver」)。driver そのものは `eml_io` にある。
 
 use std::io;
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use eml_io::{RealDriver, TestDriver};
 use eml_rt::{Control, IoDriver};
+
+use crate::VmFault;
+use crate::sched::NO_DRIVER;
 
 /// タイマーが使う時計の選び方。`RunConfig::with_clock` と `Machine::with_clock` で選ぶ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -17,20 +22,55 @@ pub enum Clock {
 }
 
 impl Clock {
-    /// この時計の新しい driver。`seed` は `Sched::seed` で、テストの driver が決着の組を混ぜるのに使う。driver は
-    /// 作ったスレッドの上でだけ使うので、run を行うスレッドで作る (docs/spec/vm.md の「時計と driver」)。
-    pub(crate) fn driver(self, seed: Option<u64>) -> io::Result<Box<dyn IoDriver>> {
-        Ok(match self {
-            Clock::Real => Box::new(RealDriver::new()?),
-            Clock::Virtual => Box::new(TestDriver::new(seed)),
-        })
+    /// この時計で始める run の時間の基準。本物の時計は今から数え、仮想の時計は 0 から数える。`Machine` が driver を
+    /// 作るときに1回だけ作り、その driver と同じ基準で run が時刻を読む (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn start(self) -> RunClock {
+        match self {
+            Clock::Real => RunClock::Real {
+                epoch: Instant::now(),
+            },
+            Clock::Virtual => RunClock::Virtual(Arc::new(AtomicU64::new(0))),
+        }
     }
 
-    /// この時計から `Machine` が作った driver の種類。
+    /// この時計の出どころ。
     pub(crate) fn kind(self) -> DriverKind {
         match self {
             Clock::Real => DriverKind::Real,
             Clock::Virtual => DriverKind::Virtual,
+        }
+    }
+}
+
+/// run の時間の基準。run の driver はどれもこの基準で作り、VM はここからだけ時刻を読む
+/// (docs/spec/vm.md の「時計と driver」)。
+#[derive(Debug, Clone)]
+pub(crate) enum RunClock {
+    /// `epoch` から数える本物の時計。
+    Real { epoch: Instant },
+    /// run の driver が共有する仮想の時計。ミリ秒の整数である。
+    Virtual(Arc<AtomicU64>),
+    /// `Machine::with_driver` で渡した driver の時計。基準を知らないので、時刻は driver に聞く。
+    Injected,
+}
+
+impl RunClock {
+    /// この基準の新しい driver。`seed` は `Sched::seed` で、テストの driver が決着の組を混ぜるのに使う。driver は
+    /// 作ったスレッドの上でだけ使うので、run を行うスレッドで作る。渡された driver の基準 `Injected` からは作れない。
+    pub(crate) fn driver(&self, seed: Option<u64>) -> io::Result<Box<dyn IoDriver>> {
+        Ok(match self {
+            RunClock::Real { epoch } => Box::new(RealDriver::new_at(*epoch)?),
+            RunClock::Virtual(clock) => Box::new(TestDriver::new_shared(seed, Arc::clone(clock))),
+            RunClock::Injected => unreachable!("an injected driver is not made from a clock"),
+        })
+    }
+
+    /// 基準が示す今の時刻。`Injected` だけは `driver` に聞く。
+    pub(crate) fn now(&self, driver: Option<&dyn IoDriver>) -> Result<Duration, VmFault> {
+        match self {
+            RunClock::Real { epoch } => Ok(epoch.elapsed()),
+            RunClock::Virtual(clock) => Ok(Duration::from_millis(clock.load(Ordering::SeqCst))),
+            RunClock::Injected => driver.map(|d| d.now()).ok_or(NO_DRIVER),
         }
     }
 }

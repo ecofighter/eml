@@ -10,7 +10,7 @@ use eml_rt::{Control, IoDriver};
 
 use crate::VmFault;
 use crate::cells::{CellRef, Registry, Runnable};
-use crate::driver::{DriverKind, ceil_ms};
+use crate::driver::DriverKind;
 use crate::monitor::Monitor;
 use crate::vm::Task;
 use crate::workers::{Run, Workers};
@@ -219,7 +219,7 @@ pub(crate) const PLACED: TaskId = usize::MAX;
 const WAIT_CAP_MS: u64 = 10;
 
 /// driver を持たない worker が driver に触れようとした。
-const NO_DRIVER: VmFault = VmFault::Internal("a worker without a driver");
+pub(crate) const NO_DRIVER: VmFault = VmFault::Internal("a worker without a driver");
 
 /// worker の driver。driver を持つのは worker 0 だけなので、ほかの worker では内部の誤りにする
 /// (docs/spec/vm.md の「時計と driver」)。`Scheduler` のほかの欄と同時に借りられるように、欄を受け取る関数にしてある。
@@ -481,7 +481,10 @@ impl<P: Policy> Scheduler<P> {
         if self.watcher.monitor.is_some() || self.driver_kind == DriverKind::Virtual {
             return Ok(deadline);
         }
-        let cap = ceil_ms(driver_mut(&mut self.driver)?.now()).saturating_add(WAIT_CAP_MS);
+        let cap = self
+            .run
+            .now_ms_ceil(self.driver.as_deref())?
+            .saturating_add(WAIT_CAP_MS);
         Ok(Some(deadline.map_or(cap, |d| d.min(cap))))
     }
 
@@ -612,6 +615,7 @@ mod tests {
 
     use super::*;
     use crate::doorbell::Doorbell;
+    use crate::driver::RunClock;
 
     /// 出どころを `kind` にした、テストの driver の `Scheduler`。テストの driver の時計は run の外では進まない。
     fn scheduler(kind: DriverKind, doorbell: bool, workers: usize) -> Scheduler<Sequential> {
@@ -619,10 +623,16 @@ mod tests {
             workers,
             ..Limits::default()
         }));
-        let run = Run::new(workers, doorbell.then(|| Doorbell::new().unwrap()));
+        let driver = eml_io::TestDriver::new(None);
+        // 渡された driver の run は基準を持たない。ほかは driver と同じ仮想の基準で読む
+        let clock = match kind {
+            DriverKind::Injected => RunClock::Injected,
+            _ => RunClock::Virtual(driver.clock()),
+        };
+        let run = Run::new(workers, doorbell.then(|| Doorbell::new().unwrap()), clock);
         let mut sched = Scheduler::new(
             Sequential,
-            Box::new(eml_io::TestDriver::new(None)),
+            Box::new(driver),
             Arc::new(run),
             control,
             0,

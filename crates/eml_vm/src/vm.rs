@@ -16,7 +16,6 @@ use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
-use crate::driver::{ceil_ms, floor_ms};
 use crate::error::{KEPT_PENDING, VmFault};
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
@@ -1618,9 +1617,9 @@ fn collect<R: Exec>(
     if look {
         sched.since_poll = 0;
         if sched.cells.in_flight() > 0 {
-            let driver = driver_mut(&mut sched.driver)?;
+            let now = sched.run.now_ms_floor(sched.driver.as_deref())?;
             // 今以前の期限なので待たない。`ceil_ms` は今より先になりうるので、driver が眠りうる
-            let now = floor_ms(driver.now());
+            let driver = driver_mut(&mut sched.driver)?;
             driver
                 .wait(Some(now))
                 .map_err(|e| VmFault::Driver(e.to_string()))?;
@@ -1635,7 +1634,7 @@ fn collect<R: Exec>(
         .cells
         .complete(ctx, driver_mut(&mut sched.driver)?, depth_offset, &mut out)?;
     if sched.cells.next_deadline().is_some() {
-        let now = floor_ms(driver_mut(&mut sched.driver)?.now());
+        let now = sched.run.now_ms_floor(sched.driver.as_deref())?;
         sched
             .cells
             .expire(now, driver_mut(&mut sched.driver)?, &mut out)?;
@@ -2137,7 +2136,7 @@ fn async_op<R: Exec>(
             let ms = task.raw(arg(0));
             // 0 以下は譲りなので時計を読まない (docs/spec/vm.md の「時間の待ち」)
             let now = if ms > 0 {
-                ceil_ms(driver_mut(&mut sched.driver)?.now())
+                sched.run.now_ms_ceil(sched.driver.as_deref())?
             } else {
                 0
             };
@@ -2356,7 +2355,7 @@ fn async_op<R: Exec>(
             let (token, ms, k) = (task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)));
             // 0 以下は過ぎた期限なので時計を読まない (docs/spec/vm.md の「時間の待ち」)
             let now = if ms > 0 {
-                ceil_ms(driver_mut(&mut sched.driver)?.now())
+                sched.run.now_ms_ceil(sched.driver.as_deref())?
             } else {
                 0
             };
@@ -3604,10 +3603,12 @@ fn f(p.0: unit) -> unit {
         let mut ctx = Ctx::new(Arc::clone(&control), host);
         let mut task = Task::new(&code, entry, usize::MAX);
         task.worker = ctx.heap().worker();
+        let driver = eml_io::TestDriver::new(None);
+        let clock = crate::driver::RunClock::Virtual(driver.clock());
         let mut sched = Scheduler::new(
             crate::Sequential,
-            Box::new(eml_io::TestDriver::new(None)),
-            Arc::new(crate::workers::Run::new(1, None)),
+            Box::new(driver),
+            Arc::new(crate::workers::Run::new(1, None, clock)),
             Arc::clone(&control),
             task.worker,
             usize::MAX,

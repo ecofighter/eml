@@ -211,7 +211,7 @@ mod tests {
 
     fn relay() -> (Relay, Arc<Counting>) {
         let waker = Arc::new(Counting::default());
-        let run = Run::new(1, None);
+        let run = Run::new(1, None, crate::driver::RunClock::Virtual(Arc::default()));
         let _ = run.slots[0]
             .waker
             .set(Arc::clone(&waker) as Arc<dyn IoWaker>);
@@ -258,7 +258,11 @@ mod tests {
         let mut sched = Scheduler::new(
             Normal,
             Box::new(eml_io::TestDriver::new(None)),
-            Arc::new(Run::new(1, None)),
+            Arc::new(Run::new(
+                1,
+                None,
+                crate::driver::RunClock::Virtual(Arc::default()),
+            )),
             Arc::clone(&control),
             0,
             usize::MAX,
@@ -294,7 +298,11 @@ mod tests {
     #[test]
     fn the_monitor_sleeps_while_every_worker_is_parked() {
         let control = Arc::new(Control::new(Limits::default()));
-        let run = Arc::new(Run::new(1, Some(Doorbell::new().unwrap())));
+        let run = Arc::new(Run::new(
+            1,
+            Some(Doorbell::new().unwrap()),
+            crate::driver::RunClock::Virtual(Arc::default()),
+        ));
         run.park(0);
         let monitor = Monitor::start(
             Arc::clone(&control),
@@ -319,7 +327,11 @@ mod tests {
     #[test]
     fn a_monitor_without_a_doorbell_wakes_a_parked_worker_on_a_stop_bit() {
         let control = Arc::new(Control::new(Limits::default()));
-        let run = Arc::new(Run::new(1, None));
+        let run = Arc::new(Run::new(
+            1,
+            None,
+            crate::driver::RunClock::Virtual(Arc::default()),
+        ));
         run.park(0);
         let (woke, rx) = mpsc::channel();
         let worker = {

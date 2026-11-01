@@ -9,7 +9,7 @@ use eml_lir::Program;
 use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
 use crate::cells::TaskStats;
-use crate::driver::DriverKind;
+use crate::driver::{DriverKind, RunClock};
 use crate::error::KEPT_PENDING;
 use crate::vm::{ExecWith, Exit};
 use crate::workers::{Retired, Run, Shutdown, WorkerExit, Workers, settle, spawn_workers};
@@ -291,6 +291,8 @@ pub struct Machine<M: Mode> {
     /// 知らない driver の run には OS のシグナルを中継せず、眠る driver として空きの待ちを切る
     /// (docs/spec/vm.md の「時計と driver」)。
     driver_kind: DriverKind,
+    /// `driver` と同じ時間の基準。run の `Run` に渡し、run をまたいで続く時刻を同じ driver と同じ基準で読む。
+    run_clock: RunClock,
     code: CodeBase<M>,
     /// `ctx` と同じ Host。worker 1..N-1 の `Ctx` に写す。
     host: HostRef,
@@ -378,6 +380,7 @@ impl<M: Mode> Machine<M> {
             clock: Clock::Virtual,
             driver: None,
             driver_kind: DriverKind::Virtual,
+            run_clock: Clock::Virtual.start(),
             doorbell: None,
             signals: Vec::new(),
         }
@@ -419,6 +422,7 @@ impl<M: Mode> Machine<M> {
     pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
         self.driver_kind = DriverKind::Injected;
+        self.run_clock = RunClock::Injected;
         self
     }
 
@@ -573,7 +577,8 @@ impl<M: Mode> Machine<M> {
             Some(driver) => driver,
             None => {
                 self.driver_kind = self.clock.kind();
-                self.clock.driver(self.sched.seed()).map_err(|e| {
+                self.run_clock = self.clock.start();
+                self.run_clock.driver(self.sched.seed()).map_err(|e| {
                     code.error(
                         vm::Failure {
                             fault: VmFault::Driver(e.to_string()),
@@ -593,6 +598,7 @@ impl<M: Mode> Machine<M> {
             counters: std::mem::take(&mut self.counters),
             driver,
             driver_kind: self.driver_kind,
+            run_clock: self.run_clock.clone(),
             doorbell: self.doorbell.clone(),
             signals: std::mem::take(&mut self.signals),
         };
@@ -859,6 +865,7 @@ struct Start {
     counters: Vec<i64>,
     driver: Box<dyn IoDriver>,
     driver_kind: DriverKind,
+    run_clock: RunClock,
     doorbell: Option<Arc<Doorbell>>,
     signals: Vec<VirtualSignal>,
 }
@@ -878,7 +885,11 @@ fn run_scheduled<M: Mode, P: Policy>(
     let control = Arc::clone(ctx.heap().control());
     // run の表は run ごとに作り、監視のスレッドが止まる `Scheduler` の破棄とともに捨てる (docs/spec/vm.md の
     // 「タスクとスケジュール」)
-    let run = Arc::new(Run::new(control.limits().workers, start.doorbell));
+    let run = Arc::new(Run::new(
+        control.limits().workers,
+        start.doorbell,
+        start.run_clock,
+    ));
     let mut sched = Scheduler::new(
         policy,
         start.driver,

@@ -449,7 +449,7 @@ fn status(over: &Over) -> Result<u32, i32> {
 }
 
 impl Iocp {
-    pub(crate) fn new() -> io::Result<Self> {
+    pub(crate) fn new(epoch: Instant) -> io::Result<Self> {
         startup()?;
         // SAFETY: 既存のハンドルを結び付けず、新しいポートを作るだけである。渡すポインタはなく、失敗は null で返る
         let raw = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 1) };
@@ -461,7 +461,7 @@ impl Iocp {
                 port,
                 posted: AtomicBool::new(false),
             }),
-            epoch: Instant::now(),
+            epoch,
             ext: None,
             boxes: HashMap::new(),
             waiters: HashMap::new(),
@@ -1715,7 +1715,7 @@ mod tests {
     }
 
     fn backend() -> Iocp {
-        Iocp::new().unwrap()
+        Iocp::new(Instant::now()).unwrap()
     }
 
     /// 1 秒まで待って、鍵 `key` の知らせを取り出す

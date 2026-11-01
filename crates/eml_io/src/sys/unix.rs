@@ -451,13 +451,13 @@ pub(crate) struct Unix<P> {
 }
 
 impl<P: Poller> Unix<P> {
-    pub(crate) fn new() -> io::Result<Self> {
+    pub(crate) fn new(epoch: Instant) -> io::Result<Self> {
         let (poller, waker) = P::new()?;
         Ok(Unix {
             poller,
             waker,
             rows: Rows::default(),
-            epoch: Instant::now(),
+            epoch,
         })
     }
 
@@ -722,7 +722,7 @@ mod tests {
     }
 
     fn backend() -> Os {
-        Os::new().unwrap()
+        Os::new(Instant::now()).unwrap()
     }
 
     fn buf(bytes: &mut [u8]) -> RawBuf {

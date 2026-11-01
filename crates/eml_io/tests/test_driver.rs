@@ -694,3 +694,12 @@ fn a_cancel_before_settle_marks_the_completion_cancelled() {
     assert_eq!(keys(&done), [accepted]);
     assert!(done.iter().all(|c| c.result.is_ok() && !c.cancelled));
 }
+
+/// 同じ時計で作った driver は、どれが時計を進めても同じ時刻を読む。
+#[test]
+fn test_drivers_on_one_clock_see_each_others_waits() {
+    let mut a = TestDriver::new(None);
+    let b = TestDriver::new_shared(None, a.clock());
+    assert!(a.wait(Some(7)).unwrap());
+    assert_eq!(b.now(), Duration::from_millis(7));
+}

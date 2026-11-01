@@ -9,12 +9,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, Scope, ScopedJoinHandle};
 
-use eml_rt::{Control, Ctx, HostRef, IoWaker, Mode, Stop};
+use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop};
 
 use crate::cells::TaskStats;
 use crate::code::CodeBase;
 use crate::doorbell::Doorbell;
-use crate::driver::DriverKind;
+use crate::driver::{DriverKind, RunClock, ceil_ms, floor_ms};
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, driver_mut};
 use crate::vm::{ExecWith, Task};
 use crate::{HeapWork, RunCounts, RuntimeError, VmFault, WORKER_STACK};
@@ -111,6 +111,8 @@ pub(crate) struct Run {
     pub(crate) placed: AtomicU64,
     /// 受け箱が空で待ちに入った worker の番号。重ならない。
     idle: Mutex<Vec<usize>>,
+    /// run の時間の基準。VM が時刻を読む道はこれだけである (docs/spec/vm.md の「時計と driver」)。
+    clock: RunClock,
     /// 監視のスレッドの自己パイプ。眠っていた worker が動き始めて `running` が 0 から 1 になったら鳴らし、刻まずに
     /// 眠っていた監視のスレッドを起こす。
     pub(crate) bell: Option<Arc<Doorbell>>,
@@ -134,7 +136,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Run {
     /// worker が `workers` 個の run の表。始めた worker は worker 0 だけで、動いている。まだ始めていない worker の欄は
     /// 眠っていない形にしておく。起こしても `running` に数えないためである。
-    pub(crate) fn new(workers: usize, bell: Option<Arc<Doorbell>>) -> Run {
+    pub(crate) fn new(workers: usize, bell: Option<Arc<Doorbell>>, clock: RunClock) -> Run {
         let slots = (0..workers)
             .map(|_| Slot {
                 state: Mutex::new(SlotState {
@@ -154,9 +156,20 @@ impl Run {
             in_flight: AtomicUsize::new(0),
             placed: AtomicU64::new(0),
             idle: Mutex::new(Vec::new()),
+            clock,
             bell,
             fatal: Mutex::new(None),
         }
+    }
+
+    /// 満期の判定で読む今の時刻 (ミリ秒、切り捨て)。`driver` は基準が渡された driver の `Injected` のときだけ読む。
+    pub(crate) fn now_ms_floor(&self, driver: Option<&dyn IoDriver>) -> Result<u64, VmFault> {
+        self.clock.now(driver).map(floor_ms)
+    }
+
+    /// 登録で読む今の時刻 (ミリ秒、切り上げ)。
+    pub(crate) fn now_ms_ceil(&self, driver: Option<&dyn IoDriver>) -> Result<u64, VmFault> {
+        self.clock.now(driver).map(ceil_ms)
     }
 
     /// 欄 `k` の lock の下で、眠っていれば起きた形にして `running` に数える。0 から 1 になったら監視のスレッドを起こす。
@@ -628,6 +641,7 @@ mod tests {
     use eml_rt::{Checked, Control, HeapError, Limits, Stop};
 
     use super::{Run, settle};
+    use crate::driver::RunClock;
     use crate::{Machine, RuntimeError, VmFault};
 
     fn fault(fault: VmFault) -> RuntimeError {
@@ -666,7 +680,7 @@ mod tests {
     /// 眠っている worker を起こすと `running` に数え、もう一度起こしても数は増えない。
     #[test]
     fn waking_a_parked_worker_counts_it_once() {
-        let run = Run::new(2, None);
+        let run = Run::new(2, None, RunClock::Virtual(Arc::default()));
         run.park(0);
         assert_eq!(run.running.load(Ordering::Acquire), 0);
         run.wake(0);
@@ -733,7 +747,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
     /// まだ始めていない worker の欄を起こしても、`running` には数えない。
     #[test]
     fn waking_an_unstarted_worker_counts_nothing() {
-        let run = Run::new(3, None);
+        let run = Run::new(3, None, RunClock::Virtual(Arc::default()));
         run.wake_all();
         assert_eq!(run.running.load(Ordering::Acquire), 1);
     }
