@@ -1410,6 +1410,20 @@ table! {
                 )
             },
         ),
+        NetOpDone => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Net.op_done",
+                    &[Int],
+                    &[Unr],
+                    Enum,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
         NetTakeListener => kinded(
             "Std.Net.take_listener",
             &[Int],
@@ -1479,20 +1493,20 @@ table! {
                 )
             },
         ),
-        NetShutdownWrite => kinded(
-            "Std.Net.shutdown_write",
+        NetSubmitShutdownWrite => kinded(
+            "Std.Net.submit_shutdown_write",
             &[Obj],
             &[Lin],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
-        NetSetNodelay => kinded(
-            "Std.Net.set_nodelay",
+        NetSubmitSetNodelay => kinded(
+            "Std.Net.submit_set_nodelay",
             &[Enum, Obj],
             &[Unr, Lin],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
         // TLS の状態のインターフェース (docs/spec/stdlib.md の「`Std.Tls`」)。どれも待たないので普通の extern の行で、
@@ -1668,6 +1682,7 @@ impl Extern {
                 | Extern::NetOpListener
                 | Extern::NetOpStream
                 | Extern::NetOpOutcome
+                | Extern::NetOpDone
                 | Extern::NetTakeListener
                 | Extern::NetTakeStream
                 | Extern::NetTakeBytes
@@ -1675,8 +1690,8 @@ impl Extern {
                 | Extern::NetFinish
                 | Extern::NetLocalPort
                 | Extern::NetPeerAddr
-                | Extern::NetShutdownWrite
-                | Extern::NetSetNodelay
+                | Extern::NetSubmitShutdownWrite
+                | Extern::NetSubmitSetNodelay
         )
     }
 }

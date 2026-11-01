@@ -205,7 +205,7 @@ fn a_half_close_lets_the_server_reply() {
     conn.write_plain(b"req");
     conn.send_close_notify();
     flush(&mut driver, client_end, &mut conn);
-    driver.shutdown_write(client_end).unwrap();
+    run_op(&mut driver, Op::ShutdownWrite { handle: client_end }).unwrap();
     assert_eq!(read(&mut driver, server).unwrap(), b"req");
     assert_eq!(read(&mut driver, server).unwrap(), b"");
     write(&mut driver, server, b"done").unwrap();

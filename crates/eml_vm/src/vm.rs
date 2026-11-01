@@ -20,7 +20,6 @@ use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
     JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
-    driver_mut,
 };
 use crate::tls;
 use crate::workers::{Notice, Workers};
@@ -2442,6 +2441,25 @@ fn async_op<R: Exec>(
             )?;
             task.set_raw(dst, token);
         }
+        ext @ (Extern::NetSubmitShutdownWrite | Extern::NetSubmitSetNodelay) => {
+            let (on, stream) = if ext == Extern::NetSubmitShutdownWrite {
+                (None, task.get(arg(0)))
+            } else {
+                (Some(task.raw(arg(0)) != 0), task.get(arg(1)))
+            };
+            here!(sched, post, here);
+            let token = cells::submit_control(
+                &sched.cells,
+                &here,
+                ctx,
+                sched.driver.as_deref_mut(),
+                task.worker,
+                task.depth_offset,
+                on,
+                stream,
+            )?;
+            task.set_raw(dst, token);
+        }
         Extern::NetSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             here!(sched, post, here);
@@ -2525,6 +2543,11 @@ fn async_op<R: Exec>(
                 .op_outcome(task.raw(arg(0)), task.worker)?;
             task.set_raw(dst, code);
         }
+        Extern::NetOpDone => {
+            // token は借りるだけで、組を作る後の `con` が消費する
+            let done = sched.cells.lock().op_done(task.raw(arg(0)), task.worker)?;
+            task.set_raw(dst, i64::from(done));
+        }
         ext @ (Extern::NetTakeListener | Extern::NetTakeStream) => {
             let listener = ext == Extern::NetTakeListener;
             let w = cells::take_made(&sched.cells, ctx, task.raw(arg(0)), task.worker, listener)?;
@@ -2588,38 +2611,6 @@ fn async_op<R: Exec>(
             // ストリームは借りるだけで、組を作る後の `con` が消費する
             let peer = cells::peer_addr(ctx, task.get(arg(0)))?;
             task.set(dst, peer);
-        }
-        ext @ (Extern::NetShutdownWrite | Extern::NetSetNodelay) => {
-            let stream = if ext == Extern::NetShutdownWrite {
-                task.get(arg(0))
-            } else {
-                task.get(arg(1))
-            };
-            let handle = cells::stream_handle(ctx, stream)?;
-            let (done, what) = if ext == Extern::NetShutdownWrite {
-                (
-                    driver_mut(&mut sched.driver)?.shutdown_write(handle),
-                    "cannot shut down the stream",
-                )
-            } else {
-                let on = task.raw(arg(0)) != 0;
-                (
-                    driver_mut(&mut sched.driver)?.set_nodelay(handle, on),
-                    "cannot set the no-delay option",
-                )
-            };
-            match done {
-                Ok(()) => task.set(dst, stream),
-                Err(e) => {
-                    // ストリームは呼ぶ側から移ってきた参照で、失敗では返さないので落とす
-                    unsafe { ctx.heap_mut().decref(stream) }?;
-                    let raise = Raise::Io {
-                        kind: io_kind(&e),
-                        message: format!("{what}: {e}"),
-                    };
-                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
-                }
-            }
         }
         _ => {
             return Err(VmFault::Internal(
@@ -3608,6 +3599,7 @@ fn run_extern<R: Exec>(
             | Extern::NetOpListener
             | Extern::NetOpStream
             | Extern::NetOpOutcome
+            | Extern::NetOpDone
             | Extern::NetTakeListener
             | Extern::NetTakeStream
             | Extern::NetTakeBytes
@@ -3615,8 +3607,8 @@ fn run_extern<R: Exec>(
             | Extern::NetFinish
             | Extern::NetLocalPort
             | Extern::NetPeerAddr
-            | Extern::NetShutdownWrite
-            | Extern::NetSetNodelay => {
+            | Extern::NetSubmitShutdownWrite
+            | Extern::NetSubmitSetNodelay => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

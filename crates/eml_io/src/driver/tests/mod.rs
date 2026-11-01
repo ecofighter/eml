@@ -1025,14 +1025,51 @@ fn an_op_on_an_unknown_handle_reaches_no_backend() {
     let e = error_of(driver.submit(1, Op::Readable { handle: 0 }));
     assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
     for e in [
-        driver.shutdown_write(0).unwrap_err(),
-        driver.set_nodelay(0, true).unwrap_err(),
+        error_of(driver.submit(2, Op::ShutdownWrite { handle: 0 })),
+        error_of(driver.submit(
+            3,
+            Op::SetNodelay {
+                handle: 0,
+                on: true,
+            },
+        )),
     ] {
         assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(e.to_string(), "no such handle");
     }
     assert!(driver.backend.calls.is_empty());
     assert_eq!(driver.backend.spawned.get(), 0);
+}
+
+#[test]
+fn the_stream_controls_end_at_submit_and_reach_the_backend() {
+    let mut driver = driver();
+    let h = listen(&mut driver);
+    for (key, op) in [
+        (
+            1,
+            Op::SetNodelay {
+                handle: h,
+                on: true,
+            },
+        ),
+        (2, Op::ShutdownWrite { handle: h }),
+    ] {
+        match driver.submit(key, op) {
+            Submit::Done(Ok(Done::Size(0))) => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(driver.pending(), 0);
+    assert_eq!(
+        calls(&driver.backend)[1..],
+        [&Call::SetNodelay(0, true), &Call::ShutdownWrite(0)]
+    );
+    // 閉じたハンドルには、ほかの操作と同じく backend に届かない
+    driver.close(h);
+    let e = error_of(driver.submit(3, Op::ShutdownWrite { handle: h }));
+    assert_eq!(e.to_string(), "no such handle");
+    assert_eq!(calls(&driver.backend).last(), Some(&&Call::Close(0)));
 }
 
 mod pool {

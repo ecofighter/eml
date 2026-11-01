@@ -11,7 +11,7 @@ use std::thread::{self, Scope, ScopedJoinHandle};
 
 use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop, Word};
 
-use crate::cells::{CellRef, Post, Shared, Woken};
+use crate::cells::{CellRef, HostBin, Post, Shared, Woken};
 use crate::code::CodeBase;
 use crate::counters::Counters;
 use crate::doorbell::Doorbell;
@@ -163,6 +163,9 @@ pub(crate) struct Slot {
     cv: Condvar,
     /// driver を持つ worker の driver の waker。起こすときに driver の待ちも終わらせる。
     pub(crate) waker: OnceLock<Arc<dyn IoWaker>>,
+    /// driver を持つ worker の driver の bin。ほかの worker は集める地点で印を見て、host を起こす
+    /// (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) bin: OnceLock<Arc<HostBin>>,
     /// worker が動くタスクを替えた回数。監視のスレッドが横取りの判定に読む。
     pub(crate) switches: AtomicU64,
 }
@@ -222,6 +225,7 @@ impl Run {
                 has_notices: AtomicBool::new(false),
                 cv: Condvar::new(),
                 waker: OnceLock::new(),
+                bin: OnceLock::new(),
                 switches: AtomicU64::new(0),
             })
             .collect();
@@ -305,6 +309,20 @@ impl Run {
             slot.cv.notify_one();
             if let Some(waker) = slot.waker.get() {
                 waker.wake();
+            }
+        }
+    }
+
+    /// worker `k` が、自分のほかの host の bin に積んだハンドルの印を見て、まだ誰も起こしていなければ host を起こす。
+    /// host は自分の待ちと集める地点でしか bin を空にしないためである。集める地点の終わりで、どの lock も持たずに
+    /// 呼ぶ (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn ring_hosts(&self, k: usize) {
+        for (h, slot) in self.slots.iter().enumerate() {
+            if h != k
+                && let Some(bin) = slot.bin.get()
+                && bin.take_ring()
+            {
+                self.wake(h);
             }
         }
     }

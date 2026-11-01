@@ -438,14 +438,6 @@ impl eml_rt::IoDriver for DeadlineRecorder {
         Arc::new(eml_rt::HandleBin::default())
     }
 
-    fn shutdown_write(&mut self, _handle: eml_rt::IoHandle) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    fn set_nodelay(&mut self, _handle: eml_rt::IoHandle, _on: bool) -> std::io::Result<()> {
-        Ok(())
-    }
-
     fn close(&mut self, _handle: eml_rt::IoHandle) {}
 
     fn quiesce(&mut self) {}
@@ -721,14 +713,6 @@ impl eml_rt::IoDriver for ProbeRecorder {
 
     fn bin(&self) -> Arc<eml_rt::HandleBin> {
         self.inner.bin()
-    }
-
-    fn shutdown_write(&mut self, handle: eml_rt::IoHandle) -> std::io::Result<()> {
-        self.inner.shutdown_write(handle)
-    }
-
-    fn set_nodelay(&mut self, handle: eml_rt::IoHandle, on: bool) -> std::io::Result<()> {
-        self.inner.set_nodelay(handle, on)
     }
 
     fn close(&mut self, handle: eml_rt::IoHandle) {

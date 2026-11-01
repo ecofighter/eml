@@ -74,14 +74,6 @@ impl IoDriver for RealDriver {
         self.0.bin()
     }
 
-    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
-        self.0.shutdown_write(handle)
-    }
-
-    fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()> {
-        self.0.set_nodelay(handle, on)
-    }
-
     fn close(&mut self, handle: IoHandle) {
         self.0.close(handle);
     }

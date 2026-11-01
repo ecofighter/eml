@@ -635,14 +635,6 @@ impl IoDriver for FakeDriver {
         Arc::new(HandleBin::default())
     }
 
-    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
-        Ok(())
-    }
-
     fn close(&mut self, _handle: IoHandle) {}
 
     fn quiesce(&mut self) {
@@ -822,14 +814,6 @@ impl IoDriver for StubDriver {
 
     fn bin(&self) -> Arc<HandleBin> {
         Arc::new(HandleBin::default())
-    }
-
-    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
-        Ok(())
     }
 
     fn close(&mut self, _handle: IoHandle) {}

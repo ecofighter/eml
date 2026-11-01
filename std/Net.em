@@ -254,24 +254,40 @@ fail_code code prefix =
 pub extern local_port : TcpListener -> (Int, TcpListener)
 pub extern peer_addr  : TcpStream -> (String, TcpStream)
 
--- 送る側を閉じる。相手は残りを読みきってから EOF を受ける
-pub extern shutdown_write : TcpStream -> <IO> TcpStream
+-- 送る側を閉じる。相手は残りを読みきってから EOF を受ける。取り消しの地点でない (docs/spec/stdlib.md の「`Std.Net`」)
+pub shutdown_write : TcpStream -> <IO, Async> TcpStream
+shutdown_write s = control (submit_shutdown_write s)
 
--- TCP_NODELAY を設定する
-pub extern set_nodelay : Bool -> TcpStream -> <IO> TcpStream
+-- TCP_NODELAY を設定する。取り消しの地点でない
+pub set_nodelay : Bool -> TcpStream -> <IO, Async> TcpStream
+set_nodelay on s = control (submit_set_nodelay on s)
+
+-- ストリームの設定の操作を終わらせ、ストリームを返す。driver は受け付けで終えるので、持ち主の worker の driver に
+-- 出したなら待たずに取り出す。別の worker の driver に回したときだけ、host が受け付けるまで shield の中で待つ。
+-- 取り消しの地点にも予算を使う待ちにもしないためである。誤りは種類で分けず `finish` が投げる
+control : Async.OpId -> <IO, Async> TcpStream
+control op =
+  let (done, op) = op_done op
+  let op = if done then op else Async.io_wait_shielded op
+  let (s, op) = op_stream op
+  finish op
+  s
 
 -- ランタイムのインターフェース。受け付けの行は引数を操作の記録に移して token を返す。`op_listener` と `op_stream` は
--- 終わった記録から受け付けに渡したものを取り戻し、`op_outcome` は終わった記録の結果の番号を読む。取り出しの行は結果を
--- 受け取り、`finish` は結果を受け取らずに、どちらも token を消費して記録を放す (docs/spec/vm.md の「操作の記録」)
+-- 終わった記録から受け付けに渡したものを取り戻し、`op_outcome` は終わった記録の結果の番号を読み、`op_done` は記録が
+-- 終わったかを読む。取り出しの行は結果を受け取り、`finish` は結果を受け取らずに、どちらも token を消費して記録を放す (docs/spec/vm.md の「操作の記録」)
 extern submit_listen  : String -> Int -> <IO> Async.OpId
 extern submit_accept  : TcpListener -> <IO> Async.OpId
 extern submit_connect : String -> Int -> <IO> Async.OpId
 extern submit_read    : Bytes -> TcpStream -> <IO> Async.OpId
 extern submit_read_line : TcpStream -> <IO> Async.OpId
+extern submit_shutdown_write : TcpStream -> <IO> Async.OpId
+extern submit_set_nodelay : Bool -> TcpStream -> <IO> Async.OpId
 extern submit_write   : Bytes -> TcpStream -> <IO> Async.OpId
 extern op_listener    : Async.OpId -> <IO> (TcpListener, Async.OpId)
 extern op_stream      : Async.OpId -> <IO> (TcpStream, Async.OpId)
 extern op_outcome     : Async.OpId -> <IO> (Int, Async.OpId)
+extern op_done        : Async.OpId -> <IO> (Bool, Async.OpId)
 extern take_listener  : Async.OpId -> <IO> TcpListener
 extern take_stream    : Async.OpId -> <IO> TcpStream
 extern take_bytes     : Async.OpId -> <IO> Bytes

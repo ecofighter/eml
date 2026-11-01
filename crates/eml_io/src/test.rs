@@ -142,6 +142,14 @@ impl TestDriver {
         };
         match pending.op {
             Op::Job(job) => done(job().map(Done::Size)),
+            Op::ShutdownWrite { handle } => {
+                done(self.net.shutdown_write(handle).map(|()| Done::Size(0)))
+            }
+            Op::SetNodelay { handle, .. } => done(if self.net.is_stream(handle) {
+                Ok(Done::Size(0))
+            } else {
+                Err(no_handle())
+            }),
             Op::Write { handle, buf } => {
                 let Some(end) = self.net.ends.get(&handle) else {
                     return done(Err(no_handle()));
@@ -326,18 +334,6 @@ impl IoDriver for TestDriver {
 
     fn bin(&self) -> Arc<HandleBin> {
         Arc::clone(&self.bin)
-    }
-
-    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
-        self.net.shutdown_write(handle)
-    }
-
-    fn set_nodelay(&mut self, handle: IoHandle, _on: bool) -> io::Result<()> {
-        if self.net.is_stream(handle) {
-            Ok(())
-        } else {
-            Err(no_handle())
-        }
     }
 
     fn close(&mut self, handle: IoHandle) {

@@ -323,14 +323,6 @@ impl IoDriver for HoldingDriver {
         Arc::default()
     }
 
-    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
-        Ok(())
-    }
-
     fn close(&mut self, _handle: IoHandle) {}
 
     fn quiesce(&mut self) {
@@ -505,6 +497,8 @@ impl IoDriver for Recorder {
             Op::Listen { .. } => "listen",
             Op::Accept { .. } => "accept",
             Op::Connect { .. } => "connect",
+            Op::ShutdownWrite { .. } => "shutdown_write",
+            Op::SetNodelay { .. } => "set_nodelay",
             _ => "other",
         };
         log.ops.push(kind);
@@ -532,14 +526,6 @@ impl IoDriver for Recorder {
 
     fn bin(&self) -> Arc<HandleBin> {
         self.inner.bin()
-    }
-
-    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
-        self.inner.shutdown_write(handle)
-    }
-
-    fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()> {
-        self.inner.set_nodelay(handle, on)
     }
 
     fn close(&mut self, handle: IoHandle) {
@@ -595,6 +581,104 @@ main () = Async.run (fn () ->
     assert_eq!((log.immediate, log.waits, log.completions), (5, 0, 0));
     let s = finished.stats;
     assert_eq!((s.parks, s.completions, s.cancels), (5, 5, 0));
+}
+
+/// `shutdown_write` と `set_nodelay` は、ほかの操作と同じく `submit` で driver に出す操作で、受け付けで終わる。持ち主が
+/// host なら待たずに取り出すので、`io_wait` を通らず、待ちも予算も数えず、取り消しの地点にもならない。取り消した
+/// スコープの中でも投げずに終わり、相手は EOF を読む (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_shutdown_and_nodelay_are_ops_that_end_at_submit() {
+    let src = "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let a = Net.connect \"127.0.0.1\" port
+  let (b, l) = Net.accept l
+  Net.close_listener l
+  let a = Async.scope (fn sc ->
+    Async.cancel_scope sc
+    Net.shutdown_write (Net.set_nodelay True a))
+  let (buf, b) = Net.read_chunk (Bytes.with_capacity 16) b
+  Net.close a
+  Net.close b
+  println \"\\{show (Bytes.length buf)}\")
+";
+    let log = Arc::new(std::sync::Mutex::new(Log::default()));
+    let driver = Recorder {
+        inner: eml_io::TestDriver::new(None),
+        log: Arc::clone(&log),
+    };
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "0\n");
+    let log = log.lock().unwrap();
+    assert_eq!(
+        log.ops,
+        [
+            "listen",
+            "connect",
+            "accept",
+            "set_nodelay",
+            "shutdown_write",
+            "read"
+        ]
+    );
+    assert!(log.at_submit.iter().all(|&done| done));
+    assert_eq!((log.immediate, log.waits, log.completions), (6, 0, 0));
+    let s = finished.stats;
+    // 待ちは4つの `io_wait` とスコープの閉じる待ちで、2つの設定は数えない
+    assert_eq!((s.parks, s.completions, s.cancels), (5, 6, 0));
+}
+
+/// 持ち主が host の `set_nodelay` は、予算を使わず、`parks` も数えず、譲らない。予算 (128) を超える数を続けても、
+/// 呼ばないプログラムと `parks` と `yields` が同じで、`completions` だけが呼んだ数だけ増える
+/// (docs/spec/stdlib.md の「操作の予算」)。
+#[test]
+fn many_controls_spend_no_budget() {
+    let stats = |n: u32| {
+        let src = format!(
+            "\
+import Async (Async)
+import Async
+import Net
+loop : Int -> Net.TcpStream -> <IO, Panic, Async> Net.TcpStream
+loop n s = if n == 0 then s else loop (n - 1) (Net.set_nodelay True s)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let a = loop {n} (Net.connect \"127.0.0.1\" port)
+  Net.close a
+  Net.close (Async.await t))
+"
+        );
+        let (host, _) = capture_host(Default::default());
+        let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
+        let loaded = machine.load(&eml_test_support::lir(&src)).unwrap();
+        let finished = machine
+            .run(loaded.entry)
+            .unwrap_or_else(|error| panic!("{error}"));
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
+        finished.stats
+    };
+    let (none, many) = (stats(0), stats(300));
+    assert_eq!((many.parks, many.yields), (none.parks, none.yields));
+    assert_eq!(many.completions, none.completions + 300);
 }
 
 /// `write_bytes` は渡した buffer を写さずにそのまま返す。echo を2つの形で流す。一意の形は、返った buffer を次の往復の

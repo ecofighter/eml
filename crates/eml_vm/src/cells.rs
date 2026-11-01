@@ -49,8 +49,9 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread::ThreadId;
 
 use eml_rt::{
     Completion, Control, Ctx, Done, Fault, HandleBin, HeapError, IoDriver, IoHandle, Mode, Op,
@@ -355,6 +356,9 @@ enum OpKind {
         filled: usize,
         not_utf8: bool,
     },
+    /// `Std.Net.shutdown_write` と `set_nodelay`。どちらも受け付けで終わる。
+    ShutdownWrite,
+    SetNodelay,
 }
 
 impl OpKind {
@@ -365,6 +369,8 @@ impl OpKind {
             OpKind::Write { .. } => "cannot write to the stream",
             OpKind::Listen { prefix } | OpKind::Connect { prefix } => prefix,
             OpKind::Accept => "cannot accept a connection",
+            OpKind::ShutdownWrite => "cannot shut down the stream",
+            OpKind::SetNodelay => "cannot set the no-delay option",
         }
     }
 
@@ -409,7 +415,7 @@ pub(crate) struct Taken {
 impl Taken {
     /// `op_outcome` と同じ結果の番号。
     pub(crate) fn outcome(&self) -> i64 {
-        outcome(&self.result, self.timed_out, self.cancelled)
+        outcome(&self.kind, &self.result, self.timed_out, self.cancelled)
     }
 
     /// 結果の番号が `OUTCOME_FAILED` で、取り消しを頼んでいない記録の、IO の失敗の誤りと文言 (docs/spec/stdlib.md の
@@ -442,11 +448,13 @@ const OUTCOME_FAILED: i64 = 6;
 
 /// 終わった記録の結果の番号。取り消しを頼んだ記録は包みが番号を見ないので、ここでは分けない。期限に負けたとみなすのは、
 /// 期限が来て、完了が取り消しだけで終わったときだけである。期限と競った本物の誤りは、その誤りを報告した syscall が
-/// 消費しているので、種類のまま報告する (docs/spec/stdlib.md の「`Std.Net`」)。
-fn outcome(result: &io::Result<usize>, timed_out: bool, cancelled: bool) -> i64 {
+/// 消費しているので、種類のまま報告する。ストリームの設定の誤りは種類で分けず、どれも `finish` が投げる
+/// (docs/spec/stdlib.md の「`Std.Net`」)。
+fn outcome(kind: &OpKind, result: &io::Result<usize>, timed_out: bool, cancelled: bool) -> i64 {
     match result {
         Ok(_) => OUTCOME_OK,
         Err(_) if timed_out && cancelled => OUTCOME_LATE,
+        Err(_) if matches!(kind, OpKind::ShutdownWrite | OpKind::SetNodelay) => OUTCOME_FAILED,
         Err(e) => match e.kind() {
             io::ErrorKind::ConnectionReset
             | io::ErrorKind::BrokenPipe
@@ -676,14 +684,14 @@ impl Drop for TaskHandle {
 pub(crate) struct NetListener {
     handle: IoHandle,
     port: u16,
-    bin: Arc<HandleBin>,
+    bin: Arc<HostBin>,
 }
 
 impl Drop for NetListener {
     // ヒープの `decref` の中で走るので driver に触れず、driver が次に閉じるハンドルとして積むだけにする
     // (docs/spec/vm.md の「時計と driver」)
     fn drop(&mut self) {
-        bin_push(&self.bin, self.handle);
+        self.bin.push(self.handle);
     }
 }
 
@@ -693,7 +701,7 @@ impl Drop for NetListener {
 pub(crate) struct NetStream {
     handle: IoHandle,
     peer: SocketAddr,
-    bin: Arc<HandleBin>,
+    bin: Arc<HostBin>,
     rest: Vec<u8>,
     start: usize,
 }
@@ -770,15 +778,78 @@ impl NetStream {
 impl Drop for NetStream {
     // `NetListener` と同じ
     fn drop(&mut self) {
-        bin_push(&self.bin, self.handle);
+        self.bin.push(self.handle);
     }
 }
 
-fn bin_push(bin: &HandleBin, handle: IoHandle) {
-    bin.dropped
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .push(handle);
+/// host の driver の bin と、host でない worker がそこへ積んだ印。driver が bin を空にするのは自分の待ちと集める地点
+/// だけなので、ほかの worker で落としたハンドルは、host を起こさなければ閉じないまま残りうる。そこで `Drop` は葉の
+/// lock で bin に積み、host のスレッドでなければ印を立てるだけにする。ほかの worker が集める地点で印を見て host を
+/// 起こし、host は集める地点で印を下ろして bin を空にする。host が自分で落としたときは印を立てないので、worker が
+/// 1つの run の振る舞いは変わらない (docs/spec/vm.md の「時計と driver」)。
+pub(crate) struct HostBin {
+    pub(crate) bin: Arc<HandleBin>,
+    /// host の worker のスレッド。
+    host: ThreadId,
+    /// `CLOSE_NONE`、`CLOSE_DROPPED`、`CLOSE_RUNG` のどれか。
+    state: AtomicU8,
+}
+
+/// 印がない。
+const CLOSE_NONE: u8 = 0;
+/// host でない worker が積み、まだ誰も host を起こしていない。
+const CLOSE_DROPPED: u8 = 1;
+/// ほかの worker が host を起こし、host がまだ印を下ろしていない。起こしを重ねないためにある。
+const CLOSE_RUNG: u8 = 2;
+
+impl HostBin {
+    /// 今のスレッドを host とする。host の worker が run の始めか最初の受け付けで作る。
+    pub(crate) fn new(bin: Arc<HandleBin>) -> HostBin {
+        HostBin {
+            bin,
+            host: std::thread::current().id(),
+            state: AtomicU8::new(CLOSE_NONE),
+        }
+    }
+
+    fn push(&self, handle: IoHandle) {
+        self.bin
+            .dropped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(handle);
+        // 積んだ後に立てるので、印を見て起こされた host は、bin を空にするときにこのハンドルを見る
+        if std::thread::current().id() != self.host {
+            self.state.store(CLOSE_DROPPED, Ordering::Release);
+        }
+    }
+
+    /// ほかの worker が積んで、まだ host を起こしていなければ、起こす役を取って真を返す。
+    pub(crate) fn take_ring(&self) -> bool {
+        self.state.load(Ordering::Relaxed) == CLOSE_DROPPED
+            && self
+                .state
+                .compare_exchange(
+                    CLOSE_DROPPED,
+                    CLOSE_RUNG,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+    }
+
+    /// host が印を下ろし、ほかの worker が積んでいたら真を返す。真なら host は driver に bin を空にさせる。
+    pub(crate) fn take_dropped(&self) -> bool {
+        self.state.load(Ordering::Relaxed) != CLOSE_NONE
+            && self.state.swap(CLOSE_NONE, Ordering::Acquire) != CLOSE_NONE
+    }
+}
+
+#[cfg(test)]
+impl Default for HostBin {
+    fn default() -> HostBin {
+        HostBin::new(Arc::default())
+    }
 }
 
 /// 登録表が数える仕事の回数。検査モードでなくても数えるが、`RunStats` に写すのは検査モードだけである
@@ -1013,7 +1084,7 @@ pub(crate) struct Registry {
     pub(crate) relay: bool,
     /// driver を持つ worker ごとの、その driver が閉じるハンドルの bin。持ち主が host の driver の結果から作るリスナーと
     /// ストリームは、落ちたときに host の bin に積む (docs/spec/vm.md の「操作の記録」)。
-    bins: Vec<Option<Arc<HandleBin>>>,
+    bins: Vec<Option<Arc<HostBin>>>,
 }
 
 impl Registry {
@@ -1040,8 +1111,13 @@ impl Registry {
     }
 
     /// worker `k` の driver の bin を覚える。driver を持つ worker が run の始めに1回だけ書く。
-    pub(crate) fn set_bin(&mut self, k: usize, bin: Arc<HandleBin>) {
+    pub(crate) fn set_bin(&mut self, k: usize, bin: Arc<HostBin>) {
         self.bins[k] = Some(bin);
+    }
+
+    /// host `k` の bin。run の始めに覚えていなければ、host のスレッドで driver の bin `raw` から作って覚える。
+    fn host_bin(&mut self, k: u32, raw: Arc<HandleBin>) -> Arc<HostBin> {
+        Arc::clone(self.bins[k as usize].get_or_insert_with(|| Arc::new(HostBin::new(raw))))
     }
 
     /// 予定した仮想のシグナル (期限のミリ秒とビットの組) を、並びの順に worker 0 の時間の輪へ載せる。run の始めに、
@@ -2732,7 +2808,7 @@ impl Registry {
     pub(crate) fn settle_op<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
-        bin: &Arc<HandleBin>,
+        bin: &Arc<HostBin>,
         depth_offset: usize,
         op: CellRef,
         here: &Here,
@@ -2761,7 +2837,7 @@ impl Registry {
     fn advance<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
-        bin: &Arc<HandleBin>,
+        bin: &Arc<HostBin>,
         depth_offset: usize,
         op: CellRef,
         result: io::Result<Done>,
@@ -2821,7 +2897,11 @@ impl Registry {
                 })?;
                 Ok(n)
             }
-            (OpPhase::Transfer, OpKind::Write { .. }, Ok(Done::Size(n))) => Ok(n),
+            (
+                OpPhase::Transfer,
+                OpKind::Write { .. } | OpKind::ShutdownWrite | OpKind::SetNodelay,
+                Ok(Done::Size(n)),
+            ) => Ok(n),
             // 外が書いたバイトは、取り消しを頼んだ記録でもストリームの buffer に確定する。行の途中で止めても、
             // 読んだバイトを次の読みに残すためである (docs/spec/stdlib.md の「`Std.Net`」)
             (OpPhase::Transfer, &OpKind::Line { filled, .. }, result) => {
@@ -2958,12 +3038,22 @@ impl Registry {
             .ok_or(CellFault::Internal("an op has no stream to give back"))
     }
 
+    /// `Std.Net.op_done`。借りた token の記録が終わっているか。待ちの地点を通らずに読むだけで、予算も取り消しも
+    /// 見ない。受け付けで終わる操作の包みが、持ち主が host のときに待たずに続けるためである
+    /// (docs/spec/stdlib.md の「`Std.Net`」)。
+    pub(crate) fn op_done(&mut self, token: i64, worker: u32) -> Result<bool, CellFault> {
+        let op = self.op_of(token, worker)?;
+        Ok(matches!(self.op_mut(op)?.phase, OpPhase::Done(..)))
+    }
+
     /// `Std.Net.op_outcome`。借りた token の終わった記録の結果の番号 (docs/spec/vm.md の「操作の記録」)。
     pub(crate) fn op_outcome(&mut self, token: i64, worker: u32) -> Result<i64, CellFault> {
         let op = self.op_of(token, worker)?;
         let record = self.op_mut(op)?;
         match &record.phase {
-            OpPhase::Done(result, cancelled) => Ok(outcome(result, record.timed_out, *cancelled)),
+            OpPhase::Done(result, cancelled) => {
+                Ok(outcome(&record.kind, result, record.timed_out, *cancelled))
+            }
             OpPhase::Probe | OpPhase::Transfer => {
                 Err(CellFault::Internal("an op is taken before its completion"))
             }
@@ -3281,6 +3371,30 @@ pub(crate) fn submit_connect<M: Mode>(
     )?))
 }
 
+/// `Std.Net.submit_shutdown_write` と `submit_set_nodelay`。`stream` は呼ぶ側から移ってきた参照で、記録に移す。
+/// driver を直接呼ばず、ほかの操作と同じく記録を通して host の driver に出す。持ち主が host でない worker でも、
+/// 同じ道で host に届くためである (docs/spec/vm.md の「操作の記録」)。`on` は `set_nodelay` の値で、`None` なら
+/// `shutdown_write` である。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_control<M: Mode>(
+    shared: &Shared,
+    here: &Here,
+    ctx: &mut Ctx<M>,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
+    worker: u32,
+    depth_offset: usize,
+    on: Option<bool>,
+    stream: Word,
+) -> Result<i64, CellFault> {
+    let handle = stream_handle(ctx, stream)?;
+    let (kind, op) = match on {
+        None => (OpKind::ShutdownWrite, Op::ShutdownWrite { handle }),
+        Some(on) => (OpKind::SetNodelay, Op::SetNodelay { handle, on }),
+    };
+    let record = net_record(kind, worker, Some(stream));
+    submit(shared, here, ctx, driver, depth_offset, record, Some(op))
+}
+
 /// 呼ぶ側の物体から lock の外で作った記録を表に入れ、`op` があれば driver に出して、token を返す。driver がその場で
 /// 終えた操作はここで決着させる。誤りで終わっても記録は終わった記録として残り、取り出しの行が放す
 /// (docs/spec/vm.md の「操作の記録」)。
@@ -3330,8 +3444,9 @@ pub(crate) fn run_io<M: Mode>(
                 }
                 continue;
             };
-            let bin = driver.bin();
+            let raw = driver.bin();
             let mut cells = shared.lock();
+            let bin = cells.host_bin(here.me, raw);
             settle_arrival(
                 &mut cells,
                 here,
@@ -3360,7 +3475,7 @@ fn settle_arrival<M: Mode>(
     cells: &mut Registry,
     here: &Here,
     ctx: &mut Ctx<M>,
-    bin: &Arc<HandleBin>,
+    bin: &Arc<HostBin>,
     depth_offset: usize,
     op: CellRef,
     result: io::Result<Done>,
@@ -3408,11 +3523,13 @@ pub(crate) fn complete<M: Mode>(
     if completed.is_empty() {
         return Ok(());
     }
-    let bin = driver.bin();
+    let raw = driver.bin();
     let mut work = IoWork::default();
     let mut arrivals = completed.drain(..);
+    let mut bin = None;
     loop {
         let mut cells = shared.lock();
+        let bin = &*bin.get_or_insert_with(|| cells.host_bin(here.me, Arc::clone(&raw)));
         let mut rest = true;
         for Completion {
             key,
@@ -3425,7 +3542,7 @@ pub(crate) fn complete<M: Mode>(
                 &mut cells,
                 here,
                 ctx,
-                &bin,
+                bin,
                 depth_offset,
                 op,
                 result,
@@ -4669,14 +4786,6 @@ impl IoDriver for NoDriver {
 
     fn bin(&self) -> Arc<HandleBin> {
         Arc::default()
-    }
-
-    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
-        Ok(())
     }
 
     fn close(&mut self, _handle: IoHandle) {}
@@ -6549,7 +6658,7 @@ pub(crate) fn placed_task(shared: &Shared, owner: u32) -> CellRef {
 
 /// driver のハンドル `handle` の `TcpStream` の `Foreign`。落ちたら `bin` に積む。
 #[cfg(test)]
-pub(crate) fn stream_on<M: Mode>(ctx: &mut Ctx<M>, handle: IoHandle, bin: Arc<HandleBin>) -> Word {
+pub(crate) fn stream_on<M: Mode>(ctx: &mut Ctx<M>, handle: IoHandle, bin: Arc<HostBin>) -> Word {
     let stream = NetStream {
         handle,
         peer: ([127, 0, 0, 1], 1).into(),

@@ -587,7 +587,7 @@ fn a_shutdown_write_gives_eof_and_the_peer_can_reply() {
         write(&mut driver, client, &mut data).unwrap(),
         Done::Size(2)
     );
-    driver.shutdown_write(client).unwrap();
+    run_op(&mut driver, Op::ShutdownWrite { handle: client }).unwrap();
     let mut room = [0u8; 4];
     for expected in [2, 0] {
         let read = run_op(
@@ -618,7 +618,17 @@ fn a_shutdown_write_gives_eof_and_the_peer_can_reply() {
         write(&mut driver, client, &mut data).unwrap_err().kind(),
         ErrorKind::BrokenPipe
     );
-    assert!(driver.set_nodelay(client, true).is_ok());
+    assert_eq!(
+        run_op(
+            &mut driver,
+            Op::SetNodelay {
+                handle: client,
+                on: true
+            }
+        )
+        .unwrap(),
+        Done::Size(0)
+    );
 }
 
 /// リスナーを閉じると、まだ受けていない接続の端も閉じ、接続した側は EOF を読む。ポートは空く。

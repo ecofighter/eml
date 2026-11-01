@@ -49,6 +49,12 @@ pub enum Op {
     /// `host` (IP アドレスの綴りか名前) の `port` へ TCP で接続する。名前は driver が解決し、得た番地を順に試して、
     /// 最後に試した番地の誤りを返す。`Done::Stream` で終わる。
     Connect { host: String, port: u16 },
+    /// ストリーム `handle` の書く側を閉じる。相手は残りを読みきってから EOF を受ける。いつも受け付けで終わり、
+    /// `Submit::Done(Ok(Done::Size(0)))` か `Submit::Done(Err(_))` を返す。
+    ShutdownWrite { handle: IoHandle },
+    /// ストリーム `handle` の `TCP_NODELAY` を切り替える。いつも受け付けで終わり、`Submit::Done(Ok(Done::Size(0)))` か
+    /// `Submit::Done(Err(_))` を返す。
+    SetNodelay { handle: IoHandle, on: bool },
     /// ブロックする呼び出しのプールの仕事。自分が所有する値 (所有して受け取る入力と、値で返す結果) を通してだけ
     /// 記憶に届き、ヒープにも RC にも触れない。panic しない。本物の driver は、仕事の panic を driver を持つ
     /// スレッドの上で起こし直すためである。
@@ -58,7 +64,7 @@ pub enum Op {
 /// 終わった操作の中身。
 #[derive(Debug, PartialEq, Eq)]
 pub enum Done {
-    /// `Readable`、`Read`、`Write`、`Job` の値。
+    /// `Readable`、`Read`、`Write`、`Job` の値。`ShutdownWrite` と `SetNodelay` は 0 である。
     Size(usize),
     /// `Listen` が作ったリスナーと、待ち受けるポート。
     Listener { handle: IoHandle, port: u16 },
@@ -129,10 +135,6 @@ pub trait IoDriver {
     fn pending(&self) -> usize;
     fn waker(&self) -> Arc<dyn IoWaker>;
     fn bin(&self) -> Arc<HandleBin>;
-    /// ストリームの書く側を閉じる。相手は残りを読みきってから EOF を受ける。その場で終わる。
-    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()>;
-    /// ストリームの `TCP_NODELAY` を切り替える。その場で終わる。
-    fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()>;
     /// driver の参照を落とす。保留の操作は終わるまで OS の資源を生かす。前提はない。
     fn close(&mut self, handle: IoHandle);
     /// 保留の操作をすべて取り消し、完了がすべて届くまで待って捨て、捨てた完了の中身のハンドルと `bin` のハンドルを

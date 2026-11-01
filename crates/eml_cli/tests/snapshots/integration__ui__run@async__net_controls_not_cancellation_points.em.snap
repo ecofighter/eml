@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/net_controls_not_cancellation_points.em
+---
+--- stdout ---
+configured
+Cancelled: task was cancelled
+eof
+--- stderr ---

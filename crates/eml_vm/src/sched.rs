@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use eml_rt::{Completion, Control, Ctx, IoDriver, Mode, Stop};
 
 use crate::VmFault;
-use crate::cells::{self, CellRef, Here, Hold, IoWork, Registry, Runnable, Shared, Woken};
+use crate::cells::{self, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken};
 use crate::driver::DriverKind;
 use crate::monitor::Monitor;
 use crate::vm::Task;
@@ -533,8 +533,11 @@ impl<P: Policy> Scheduler<P> {
         if let Some(driver) = &self.driver {
             // run の表は run ごとに作るので、まだ空である
             let _ = self.run.slots[self.index].waker.set(driver.waker());
-            // ほかの worker の持ち主が、この driver の結果から作ったハンドルを落とすときに積む先である
-            self.cells.lock().set_bin(self.index, driver.bin());
+            // ほかの worker の持ち主が、この driver の結果から作ったハンドルを落とすときに積む先である。欄にも置き、
+            // ほかの worker が集める地点で印を見られるようにする
+            let bin = Arc::new(HostBin::new(driver.bin()));
+            let _ = self.run.slots[self.index].bin.set(Arc::clone(&bin));
+            self.cells.lock().set_bin(self.index, bin);
         }
         if self.driver_kind != DriverKind::Virtual || self.run.slots.len() >= 2 {
             self.start_monitor();
@@ -682,8 +685,11 @@ impl<P: Policy> Scheduler<P> {
             depth_offset,
             &mut out,
         )?;
+        // ほかの worker が落としたハンドルは、driver が bin を空にするまで閉じない。完了がなくても driver に完了を
+        // 問わせて空にさせる (docs/spec/vm.md の「時計と driver」)
+        let closing = run.slots[k].bin.get().is_some_and(|bin| bin.take_dropped());
         // mail の処理は driver の数を変えない
-        if in_flight > 0 {
+        if in_flight > 0 || closing {
             cells::complete(
                 shared,
                 &here,
@@ -715,6 +721,8 @@ impl<P: Policy> Scheduler<P> {
             work.cancel_on(driver.as_deref_mut())?;
         }
         *runnables = out;
+        // この worker で落とした、ほかの worker が host のハンドルを閉じさせる。どの lock も持たずに起こす
+        run.ring_hosts(k);
         if unheard != 0 {
             return Err(unheard_fault(control, unheard));
         }
@@ -1195,7 +1203,7 @@ mod tests {
         /// 持ち主の読む端と、相手の端と、host の driver の bin。
         near: eml_rt::IoHandle,
         far: eml_rt::IoHandle,
-        bin: Arc<eml_rt::HandleBin>,
+        bin: Arc<HostBin>,
     }
 
     /// 記録の番号と重ならない、テストが driver に直に出す操作の鍵。
@@ -1230,7 +1238,7 @@ mod tests {
         else {
             panic!("the virtual accept ends at submit");
         };
-        let bin = driver.bin();
+        let bin = Arc::new(HostBin::new(driver.bin()));
         let run = Arc::new(Run::new(
             2,
             None,
@@ -1411,6 +1419,94 @@ mod tests {
         let taken = cells::take_op(&f.shared, &mut f.owner_ctx, token, worker).unwrap();
         assert!(taken.cancelling && taken.result.is_err());
         unsafe { f.owner_ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+        let leaks = f.owner_ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
+    }
+
+    /// `op_done` は記録を読むだけで、host が置いた結果を当てない。持ち主が host なら受け付けで終わった設定の操作は
+    /// 真で、別の worker に回した操作は、host が結果を置いた後も持ち主が当てるまで偽である。答えは置いた worker だけで
+    /// 決まる (docs/spec/vm.md の「操作の記録」)。
+    #[test]
+    fn op_done_reads_without_settling_a_forwarded_result() {
+        let mut f = forwarding();
+        let worker = f.owner_ctx.heap().worker();
+        cells::task_on(&f.shared, 1, worker, false);
+        let stream = cells::stream_on(&mut f.owner_ctx, f.near, Arc::clone(&f.bin));
+        let post = Mailer::new(&f.run, &f.control);
+        let here = Here {
+            me: 1,
+            host: 0,
+            mail: &f.shared.mail,
+            post: &post,
+        };
+        let token = cells::submit_control(
+            &f.shared,
+            &here,
+            &mut f.owner_ctx,
+            None,
+            worker,
+            0,
+            Some(true),
+            stream,
+        )
+        .unwrap();
+        f.host.gather(&mut f.host_ctx, 0, false).unwrap();
+        assert_eq!(cells::arrival_of(&f.shared, token), Some(false));
+        assert!(!f.shared.lock().op_done(token, worker).unwrap());
+        // 持ち主の worker の driver に出した操作は、受け付けで終わる
+        let host_worker = f.host_ctx.heap().worker();
+        cells::task_on(&f.shared, 0, host_worker, false);
+        let stream = cells::stream_on(&mut f.host_ctx, f.far, Arc::clone(&f.bin));
+        let host_post = Mailer::new(&f.run, &f.control);
+        let host_here = Here {
+            me: 0,
+            host: 0,
+            mail: &f.shared.mail,
+            post: &host_post,
+        };
+        let local = cells::submit_control(
+            &f.shared,
+            &host_here,
+            &mut f.host_ctx,
+            f.host.driver.as_deref_mut(),
+            host_worker,
+            0,
+            None,
+            stream,
+        )
+        .unwrap();
+        assert!(f.shared.lock().op_done(local, host_worker).unwrap());
+    }
+
+    /// host でない worker で落としたストリームは host の bin に積まれ、印が立つ。その worker の集める地点が、眠った
+    /// host を1回だけ起こし、host の集める地点は、保留の操作がなくても driver に bin を空にさせる。host のスレッドで
+    /// 落としたときは印を立てない (docs/spec/vm.md の「時計と driver」)。
+    #[test]
+    fn a_stream_dropped_off_its_host_wakes_the_host_to_close_it() {
+        let mut f = forwarding();
+        let raw = Arc::clone(&f.bin.bin);
+        // host のスレッドで落としたハンドルには印がない
+        let stream = cells::stream_on(&mut f.host_ctx, f.far, Arc::clone(&f.bin));
+        unsafe { f.host_ctx.heap_mut().decref(stream) }.unwrap();
+        assert!(!f.bin.take_ring());
+        raw.dropped.lock().unwrap().clear();
+        // テストのスレッドを worker 1 とするため、host のスレッドが別にある bin を作り、run の始めと同じく欄に置く
+        let bin = std::thread::spawn(move || Arc::new(HostBin::new(raw)))
+            .join()
+            .unwrap();
+        let _ = f.run.slots[0].bin.set(Arc::clone(&bin));
+        let stream = cells::stream_on(&mut f.owner_ctx, f.near, Arc::clone(&bin));
+        unsafe { f.owner_ctx.heap_mut().decref(stream) }.unwrap();
+        assert_eq!(*bin.bin.dropped.lock().unwrap(), [f.near]);
+        f.run.park(0);
+        assert_eq!(f.run.running.load(Ordering::Acquire), 0);
+        f.owner.gather(&mut f.owner_ctx, 0, false).unwrap();
+        assert_eq!(f.run.running.load(Ordering::Acquire), 1);
+        // 起こした後の集める地点は起こし直さない
+        assert!(!bin.take_ring());
+        f.host.gather(&mut f.host_ctx, 0, false).unwrap();
+        assert!(bin.bin.dropped.lock().unwrap().is_empty());
+        assert!(!bin.take_dropped());
         let leaks = f.owner_ctx.leaks();
         assert!(leaks.is_empty(), "{leaks:?}");
     }

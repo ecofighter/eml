@@ -703,6 +703,20 @@ impl<B: Backend> IoDriver for Driver<B> {
                     }
                 }
             },
+            Op::ShutdownWrite { handle } => Submit::Done(match self.handles.get_mut(&handle) {
+                Some(entry) if !entry.closed => self
+                    .backend
+                    .shutdown_write(&mut entry.sock)
+                    .map(|()| Done::Size(0)),
+                _ => Err(no_handle()),
+            }),
+            Op::SetNodelay { handle, on } => Submit::Done(match self.handles.get_mut(&handle) {
+                Some(entry) if !entry.closed => self
+                    .backend
+                    .set_nodelay(&mut entry.sock, on)
+                    .map(|()| Done::Size(0)),
+                _ => Err(no_handle()),
+            }),
             Op::Job(job) => {
                 let ticket = self.ticket(key);
                 self.slots.insert(
@@ -791,20 +805,6 @@ impl<B: Backend> IoDriver for Driver<B> {
 
     fn bin(&self) -> Arc<HandleBin> {
         Arc::clone(&self.bin)
-    }
-
-    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
-        match self.handles.get_mut(&handle) {
-            Some(entry) if !entry.closed => self.backend.shutdown_write(&mut entry.sock),
-            _ => Err(no_handle()),
-        }
-    }
-
-    fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()> {
-        match self.handles.get_mut(&handle) {
-            Some(entry) if !entry.closed => self.backend.set_nodelay(&mut entry.sock, on),
-            _ => Err(no_handle()),
-        }
     }
 
     fn close(&mut self, handle: IoHandle) {

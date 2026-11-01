@@ -678,7 +678,18 @@ fn an_accept_returns_the_connected_stream_and_its_peer() {
         Done::Size(2)
     );
     assert_eq!(&room[..2], b"hi");
-    assert!(driver.set_nodelay(client, true).is_ok());
+    assert_eq!(
+        run_op(
+            &mut driver,
+            &mut stash,
+            Op::SetNodelay {
+                handle: client,
+                on: true
+            }
+        )
+        .unwrap(),
+        Done::Size(0)
+    );
 }
 
 #[test]
@@ -732,7 +743,12 @@ fn a_shutdown_write_gives_the_peer_eof() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
     let (server, client) = connection(&mut driver, &mut stash);
-    driver.shutdown_write(client).unwrap();
+    run_op(
+        &mut driver,
+        &mut stash,
+        Op::ShutdownWrite { handle: client },
+    )
+    .unwrap();
     let probe = submit(&mut driver, Op::Readable { handle: server });
     complete(&mut driver, &mut stash, probe).result.unwrap();
     let mut room = [0u8; 8];
@@ -748,7 +764,9 @@ fn a_shutdown_write_gives_the_peer_eof() {
         Done::Size(0)
     );
     assert_eq!(
-        driver.shutdown_write(99).unwrap_err().kind(),
+        run_op(&mut driver, &mut stash, Op::ShutdownWrite { handle: 99 })
+            .unwrap_err()
+            .kind(),
         ErrorKind::InvalidInput
     );
 }
