@@ -71,6 +71,12 @@ const _: fn() = || {
     send_and_sync::<control::PageMap>();
 };
 
+// `RawBuf` は貸す側のスレッドで作り、driver を持つスレッドで使う (docs/spec/vm.md の「時計と driver」)
+const _: fn() = || {
+    fn send<T: Send>() {}
+    send::<RawBuf>();
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

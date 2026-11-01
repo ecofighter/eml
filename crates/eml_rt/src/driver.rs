@@ -15,7 +15,8 @@ pub type OpKey = u64;
 /// driver が持つハンドル (リスナー、ストリーム)。1つの driver の寿命の間は使い回さない。
 pub type IoHandle = u64;
 
-/// カーネルが読み書きする記憶。driver を持つスレッドの外へは出さないので `Send` ではない。`cap == 0` は
+/// カーネルが読み書きする記憶。貸す側のスレッドで作り、driver を持つスレッドで使うので `Send` である。
+/// 番地を持つだけで、生かし続ける責めは持たない。その責めは下の貸す側の約束が負う。`cap == 0` は
 /// 記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側は、`submit` が
 /// `Submit::Done` を返すか、その操作の完了を `completions` から取り出すまで、物体を生かし、動かさない。
 /// `Read` に貸した記憶は一意に保ち、`Write` に貸した記憶は書き換えない。
@@ -24,6 +25,12 @@ pub struct RawBuf {
     pub ptr: *mut u8,
     pub cap: usize,
 }
+
+// SAFETY: `ptr` は、貸す側のスレッドで操作の記録が持つ物体から作る。記録は、`submit` が `Submit::Done` を返すか
+// 完了を記録に当てるまで、その物体を生かし、動かさず、`Read` に貸した記憶は一意に保つ。その間 `RawBuf` を読み書きする
+// のは driver を持つスレッドだけなので、番地を別のスレッドへ移しても、貸した記憶への触れ方は変わらない
+// (docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)。
+unsafe impl Send for RawBuf {}
 
 /// driver に出す操作。
 pub enum Op {
