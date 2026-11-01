@@ -478,7 +478,11 @@ impl ChanCell {
 /// シグナルの項は監視のスレッドが積む。
 pub(crate) enum MailItem {
     HandleDropped(CellRef),
-    Cancel(CellRef),
+    /// タスク `cell` の取り消し。`owner` は積んだ worker で、タスクの持ち主である。取り出すのはその worker だけである。
+    Cancel {
+        cell: CellRef,
+        owner: u32,
+    },
     /// 監視のスレッドが中継した保留のシグナル (`Control::INTERRUPT` と `Control::TERMINATE` のビット)。
     Signal(u32),
 }
@@ -486,8 +490,18 @@ pub(crate) enum MailItem {
 #[cfg(test)]
 type Hook = Box<dyn FnOnce(&Mail) + Send>;
 
+impl MailItem {
+    /// worker `me` が取り出してよい項か。取り消しの項は持ち主だけが、ほかの項はどの worker も取り出す。
+    fn for_worker(&self, me: u32) -> bool {
+        match *self {
+            MailItem::Cancel { owner, .. } => owner == me,
+            MailItem::HandleDropped(_) | MailItem::Signal(_) => true,
+        }
+    }
+}
+
 /// run に1つの、ハンドルの破棄処理と監視のスレッドが核へ知らせる列。lock は葉で、持つ間に登録表の lock を取らない。
-/// どの worker の集める地点も処理する (docs/spec/vm.md の「セルと登録表」)。
+/// どの worker の集める地点も処理するが、取り消しの項はその持ち主だけが取り出す (docs/spec/vm.md の「セルと登録表」)。
 #[derive(Default)]
 pub(crate) struct Mail {
     items: Mutex<Vec<MailItem>>,
@@ -505,7 +519,7 @@ impl Mail {
         self.pending.store(true, Ordering::Release);
     }
 
-    /// まだ処理していない項がある。
+    /// まだ取り出していない項がある。ほかの worker の取り消しの項だけが残っていても真である。
     pub(crate) fn pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
     }
@@ -527,10 +541,26 @@ impl Mail {
         }
     }
 
-    pub(crate) fn take(&self) -> Vec<MailItem> {
+    /// worker `me` が取り出してよい項を、積んだ順に取り出す。ほかの worker の取り消しの項は順を保って残す。持ち主が
+    /// 自分のタスクの取り消しを自分で取り出すので、印を付けてから待ちを外すまでに、持ち主のほかのタスクは動かない
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
+    pub(crate) fn take(&self, me: u32) -> Vec<MailItem> {
         if !self.pending.load(Ordering::Acquire) {
             return Vec::new();
         }
+        let mut items = self.items.lock().unwrap_or_else(PoisonError::into_inner);
+        // 1つの worker の上では、どの項もその worker のものなので、列ごと取り出す
+        if items.iter().all(|item| item.for_worker(me)) {
+            self.pending.store(false, Ordering::Release);
+            return std::mem::take(&mut *items);
+        }
+        let (mine, rest): (Vec<_>, Vec<_>) = items.drain(..).partition(|item| item.for_worker(me));
+        *items = rest;
+        mine
+    }
+
+    /// 残った項をすべて取り出す。run の終わりに捨てるときに使う。
+    pub(crate) fn take_all(&self) -> Vec<MailItem> {
         let mut items = self.items.lock().unwrap_or_else(PoisonError::into_inner);
         self.pending.store(false, Ordering::Release);
         std::mem::take(&mut *items)
@@ -1958,7 +1988,10 @@ impl Registry {
     fn send_cancel(&mut self, here: &Here, t: CellRef) -> Result<(), CellFault> {
         let owner = self.task_mut(t)?.owner;
         if owner == here.me {
-            here.mail.push(MailItem::Cancel(t));
+            here.mail.push(MailItem::Cancel {
+                cell: t,
+                owner: here.me,
+            });
         } else {
             here.post.cancel(owner, t);
         }
@@ -2054,10 +2087,10 @@ impl Registry {
         Ok(())
     }
 
-    /// mail の項を1つ処理する。どの worker が処理してもよい。取り消しで待ちを外したタスクの起こしを `out` に、driver への
-    /// 取り消しを `work` に、放したセルの値と ID を `discards` に積み、保留から下ろすシグナルのビットを返す。ほかの
-    /// worker のタスクの取り消しは、その持ち主に送る。処理が新しい項を mail に積むことがある
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// mail の項を1つ処理する。落ちたハンドルとシグナルの項はどの worker が処理してもよく、取り消しの項は持ち主の
+    /// 項だけを受け取る (`Mail::take`)。取り消しで待ちを外したタスクの起こしを `out` に、driver への取り消しを `work` に、
+    /// 放したセルの値と ID を `discards` に積み、保留から下ろすシグナルのビットを返す。処理が新しい項を mail に積むことが
+    /// ある (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn receive_mail(
         &mut self,
         here: &Here,
@@ -2068,7 +2101,10 @@ impl Registry {
     ) -> Result<u32, CellFault> {
         match item {
             MailItem::HandleDropped(cell) => self.let_go(here, cell, true, discards)?,
-            MailItem::Cancel(cell) => self.cancel_task(cell, here, out, work)?,
+            MailItem::Cancel { cell, owner } => {
+                debug_assert_eq!(owner, here.me, "a cancel is taken by another worker");
+                self.cancel_task(cell, here, out, work)?;
+            }
             MailItem::Signal(bits) => {
                 self.deliver(bits, out)?;
                 return Ok(bits);
@@ -3783,8 +3819,8 @@ pub(crate) fn finish<M: Mode>(
 }
 
 /// mail の項を処理し、取り消しで待ちを外したタスクを worker `here.me` で再開する仕事を `out` に積む。どの worker も
-/// 呼んでよく、最初に集めた worker が処理する。項は葉の lock の下でまとめて取り出してから処理し、処理が新しい項を積む
-/// ので、mail が空になるまで繰り返す。項ごとに短い lock の区間で処理し、lock を放してから、その項の driver への
+/// 呼んでよく、落ちたハンドルとシグナルの項は最初に集めた worker が、取り消しの項はその持ち主が処理する。項は葉の
+/// lock の下でまとめて取り出してから処理し、処理が新しい項を積むので、取り出す項がなくなるまで繰り返す。項ごとに短い lock の区間で処理し、lock を放してから、その項の driver への
 /// 取り消し、語の破棄と ID の退かせ、シグナルを保留から下ろすことを行う。破棄の破棄処理が積む項は、それより後に積まれた
 /// 項より先に処理する (docs/spec/vm.md の「セルと登録表」)。項を1つでも処理したら真を返す。
 pub(crate) fn drain<M: Mode>(
@@ -3798,7 +3834,7 @@ pub(crate) fn drain<M: Mode>(
     let (mut work, mut discards, mut woken) = (IoWork::default(), Discards::default(), Vec::new());
     let mut drained = false;
     loop {
-        let items = shared.mail.take();
+        let items = shared.mail.take(here.me);
         if items.is_empty() {
             return Ok(drained);
         }
@@ -3904,7 +3940,7 @@ pub(crate) fn sweep_all<M: Mode>(
     let mut discards = Discards::default();
     shared.lock().sweep_all(&mut discards)?;
     discards.run(ctx, depth_offset)?;
-    drop(shared.mail.take());
+    drop(shared.mail.take_all());
     Ok(())
 }
 
@@ -5777,12 +5813,12 @@ fn a_handle_dropped_under_the_registry_lock_does_not_deadlock() {
         let _cells = shared.lock();
         unsafe { ctx.heap_mut().decref(handle) }.unwrap();
     }
-    assert!(matches!(shared.mail.take()[..], [MailItem::HandleDropped(c)] if c == cell));
+    assert!(matches!(shared.mail.take(0)[..], [MailItem::HandleDropped(c)] if c == cell));
 }
 
 /// 持ち主が自分のタスクの取り消しは、落ちたハンドルとシグナルと同じ mail に積んだ順に出る。持ち主がほかの worker の
-/// タスクの取り消しは、印を付けたときも mail で受けたときも、待ちを外さずに持ち主の受け箱へ送る
-/// (docs/spec/vm.md の「取り消しの届け方」)。
+/// タスクの取り消しは、mail に積まずに持ち主の受け箱へ送る。ほかの worker は、持ち主の取り消しの項を順を保って残し、
+/// ほかの項だけを取り出す (docs/spec/vm.md の「取り消しの届け方」)。
 #[test]
 fn mail_keeps_arrival_order() {
     let shared = Shared::new(Registry::new(Vec::new(), 2));
@@ -5795,46 +5831,48 @@ fn mail_keeps_arrival_order() {
         post: &posted,
     };
     let mut discards = Discards::default();
+    let order = |items: &[MailItem]| -> Vec<String> {
+        items
+            .iter()
+            .map(|item| match *item {
+                MailItem::HandleDropped(c) => format!("dropped {}", c.encode()),
+                MailItem::Cancel { cell, owner } => format!("cancel {} of {owner}", cell.encode()),
+                MailItem::Signal(bits) => format!("signal {bits}"),
+            })
+            .collect()
+    };
     shared.mail.push(MailItem::HandleDropped(a));
     shared
         .lock()
         .let_go(&here(0), b, true, &mut discards)
         .unwrap();
     shared.mail.push(MailItem::Signal(Control::TERMINATE));
-    let items = shared.mail.take();
-    assert!(
-        matches!(
-            items[..],
-            [
-                MailItem::HandleDropped(x),
-                MailItem::Cancel(y),
-                MailItem::Signal(Control::TERMINATE),
-            ] if x == a && y == b
-        ),
-        "{} items",
-        items.len()
-    );
-    // worker 1 が worker 0 のタスクに印を付ける
+    let expected = [
+        format!("dropped {}", a.encode()),
+        format!("cancel {} of 0", b.encode()),
+        format!("signal {}", Control::TERMINATE),
+    ];
+    assert_eq!(order(&shared.mail.take(0)), expected);
+    assert!(!shared.mail.pending());
+    // worker 1 が worker 0 のタスクに印を付けると、持ち主の受け箱へ送る
     shared
         .lock()
         .let_go(&here(1), a, true, &mut discards)
         .unwrap();
-    assert!(shared.mail.take().is_empty());
-    // worker 1 が mail で受けた worker 0 のタスクの取り消しも送り直す
-    let (mut woken, mut work) = (Vec::new(), IoWork::default());
-    let bits = shared
-        .lock()
-        .receive_mail(
-            &here(1),
-            MailItem::Cancel(b),
-            &mut woken,
-            &mut work,
-            &mut discards,
-        )
-        .unwrap();
-    assert_eq!(bits, 0);
-    assert!(woken.is_empty() && work.cancels.is_empty());
-    assert_eq!(*posted.cancels.borrow(), [(0, a), (0, b)]);
+    assert!(!shared.mail.pending());
+    assert_eq!(*posted.cancels.borrow(), [(0, a)]);
+    // 同じ3つの項を積み直すと、worker 1 は取り消しの項を残してほかを取り出す
+    shared.mail.push(MailItem::HandleDropped(a));
+    shared.mail.push(MailItem::Cancel { cell: b, owner: 0 });
+    shared.mail.push(MailItem::Signal(Control::TERMINATE));
+    assert_eq!(
+        order(&shared.mail.take(1)),
+        [expected[0].clone(), expected[2].clone()]
+    );
+    assert!(shared.mail.pending());
+    assert!(shared.mail.take(1).is_empty());
+    assert_eq!(order(&shared.mail.take(0)), [expected[1].clone()]);
+    assert!(!shared.mail.pending());
     assert!(posted.wakes.borrow().is_empty());
 }
 
@@ -5865,55 +5903,33 @@ pub(crate) fn member_task(shared: &Shared, scope: CellRef, worker: u32) -> CellR
     cell
 }
 
-/// ほかの worker が mail から取り消しを取って持ち主へ送り直す間に、印を付けたタスクがほかの起こしで再開しても、
-/// 起こしは1回だけで、後から届いた取り消しは何もせず、タスクは次の取り消しの地点で投げる
-/// (docs/spec/vm.md の「取り消しの届け方」)。
+/// 持ち主が自分のタスクに付けた取り消しは mail で持ち主を待つ。ほかの worker の集める地点はそれを取らないので、
+/// 持ち主の次の集める地点が待ちを外し、`Cancelled` で再開する。その後の満期には外したタイマーが残らず、起こしは
+/// 重ならない (docs/spec/vm.md の「取り消しの届け方」)。
 #[test]
-fn a_cancel_forwarded_after_a_wake_is_seen_at_the_next_cancel_point() {
+fn a_cancel_in_the_mail_waits_for_its_owner() {
     let shared = Shared::new(Registry::new(Vec::new(), 2));
-    let posted = Posted::default();
     let here = |me| Here {
         me,
         mail: &shared.mail,
-        post: &posted,
+        post: &Unposted,
     };
     let cell = sleeping_task(&shared, 0, 5);
-    // worker 0 のタスクが印を付け、持ち主が自分なので mail に積む
     shared
         .lock()
         .let_go(&here(0), cell, true, &mut Discards::default())
         .unwrap();
-    // worker 1 が mail を取り、持ち主へ送り直す
-    let items = shared.mail.take();
-    let (mut woken, mut work, mut discards) = (Vec::new(), IoWork::default(), Discards::default());
-    for item in items {
-        shared
-            .lock()
-            .receive_mail(&here(1), item, &mut woken, &mut work, &mut discards)
-            .unwrap();
-    }
-    assert!(woken.is_empty());
-    assert_eq!(*posted.cancels.borrow(), [(0, cell)]);
-    // 送り直した取り消しが届く前に、満期がタスクを起こす
+    // worker 1 の集める地点は、worker 0 の取り消しを取らない
+    let mut ctx = test_ctx();
     let mut out = Vec::new();
+    assert!(!drain(&shared, &here(1), &mut ctx, None, 0, &mut out).unwrap());
+    assert!(out.is_empty() && shared.mail.pending());
+    // 持ち主の次の集める地点が、満期より先に待ちを外す
+    assert!(drain(&shared, &here(0), &mut ctx, None, 0, &mut out).unwrap());
+    assert_eq!(resumed_cells(&out), [(cell, CANCELLED)]);
+    assert!(!shared.mail.pending());
+    out.clear();
     expire(&shared, &mut NoDriver::default(), 0, 5, &mut out).unwrap();
-    assert_eq!(resumed_cells(&out), [(cell, WOKE)]);
-    // 届いた取り消しは、もう待っていないタスクに何もしない
-    {
-        let mut cells = shared.lock();
-        cells
-            .cancel_task(cell, &here(0), &mut woken, &mut work)
-            .unwrap();
-        assert!(woken.is_empty() && work.cancels.is_empty());
-        assert!(cells.task_mut(cell).unwrap().k.is_none());
-        // 再開したタスクは、次の取り消しの地点で投げる
-        assert_eq!(cells.resumed(cell, WOKE, false).unwrap(), WOKE);
-        assert!(cells.cancel_point(Some(cell)).unwrap());
-        // 動いているタスクに遅れて届いた取り消しも何もしない
-        cells
-            .cancel_task(cell, &here(0), &mut woken, &mut work)
-            .unwrap();
-        assert!(woken.is_empty());
-    }
-    assert!(posted.wakes.borrow().is_empty());
+    assert!(out.is_empty());
+    assert!(shared.lock().task_mut(cell).unwrap().k.is_none());
 }

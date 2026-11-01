@@ -243,7 +243,7 @@ mod tests {
         relay.control.defer(Control::TERMINATE);
         relay.relay();
         relay.relay();
-        let notices = relay.shared.mail.take();
+        let notices = relay.shared.mail.take(0);
         assert!(
             matches!(notices[..], [MailItem::Signal(Control::TERMINATE)]),
             "{} notices",
@@ -259,7 +259,7 @@ mod tests {
     fn nothing_pending_relays_nothing() {
         let (relay, waker) = relay();
         relay.relay();
-        assert!(relay.shared.mail.take().is_empty());
+        assert!(relay.shared.mail.take(0).is_empty());
         assert_eq!(relay.control.worker_bits(0), 0);
         assert_eq!(waker.0.load(Ordering::Relaxed), 0);
     }

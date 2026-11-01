@@ -891,7 +891,10 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             );
             if hook {
                 sched.cells.mail.set_hook(|mail| {
-                    mail.push(MailItem::Cancel(CellRef::decode(0)));
+                    mail.push(MailItem::Cancel {
+                        cell: CellRef::decode(0),
+                        owner: 0,
+                    });
                 });
             }
             let verdict = sched.idle_wait();

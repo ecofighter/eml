@@ -1017,6 +1017,30 @@ mod tests {
         control.check_owned(&[home.heap(), ctx.heap()]).unwrap();
     }
 
+    /// worker 0 が自分のタスクに付けた取り消しの項は、worker 1 の集める地点が取らずに mail に残す。待ちは外さず、
+    /// worker 0 の受け箱にも送らない。worker 0 が次の集める地点で自分で外すためである (docs/spec/vm.md の
+    /// 「取り消しの届け方」)。
+    #[test]
+    fn worker_1_leaves_a_cancel_of_worker_0_in_the_mail() {
+        let Worker1 {
+            run,
+            shared,
+            mut sched,
+            mut ctx,
+            ..
+        } = worker_1();
+        let cell = cells::sleeping_task(&shared, 0, 5);
+        shared.mail.push(MailItem::Cancel { cell, owner: 0 });
+        sched.gather(&mut ctx, 0, false).unwrap();
+        assert!(sched.runnables.is_empty());
+        assert!(run.take_notices(0).is_empty());
+        assert!(shared.mail.pending());
+        assert!(matches!(
+            shared.mail.take(0)[..],
+            [MailItem::Cancel { cell: c, owner: 0 }] if c == cell
+        ));
+    }
+
     /// 待ち手のいないシグナルを worker 1 が届けると、止めるビットをすべての worker の語に立てて止まる。
     #[test]
     fn an_unheard_signal_drained_by_worker_1_raises_every_word() {
