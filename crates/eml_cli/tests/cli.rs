@@ -671,7 +671,7 @@ fn sched_flag_is_accepted_and_rejected() {
 fn workers_flag_is_accepted_and_rejected() {
     let dir = temp_project("cli-workers", &[("main.em", SHOW_ARGS)]);
     // (引数, 環境変数 EML_WORKERS, 終了コード, 標準出力)
-    let cases: [(&[&str], Option<&str>, i32, &str); 13] = [
+    let cases: [(&[&str], Option<&str>, i32, &str); 14] = [
         (&["run", "--workers", "1", "main.em"], None, 0, "[]\n"),
         (
             &["run", "--workers", "2", "main.em", "a"],
@@ -698,6 +698,7 @@ fn workers_flag_is_accepted_and_rejected() {
         (&["run", "--workers", "0", "main.em"], None, 2, ""),
         (&["run", "--workers", "many", "main.em"], None, 2, ""),
         (&["run", "--workers", "-1", "main.em"], None, 2, ""),
+        (&["run", "--workers", "1025", "main.em"], None, 2, ""),
         (&["run", "main.em"], Some("0"), 2, ""),
         (&["run", "main.em"], Some("many"), 2, ""),
         (&["repl", "--workers", "2"], None, 2, ""),

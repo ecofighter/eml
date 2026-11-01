@@ -401,7 +401,7 @@ main () =
 }
 
 /// worker が2つの run で、右の子が worker 1 で回り続け、worker 0 は join で眠る。割り込みは worker 1 が自分の語で
-/// 読み、抜けるときに worker 0 を起こす。
+/// 読んで抜け、worker 0 も止まる。worker 0 を起こすのは、止めるビットを見た監視のスレッドか、抜ける worker 1 である。
 #[test]
 fn an_interrupt_stops_a_run_on_two_workers() {
     let src = "\

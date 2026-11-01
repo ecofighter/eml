@@ -91,7 +91,7 @@ A batch pipeline whose dependencies flow strictly top to bottom (docs/implementa
 
 ```
 eml_cli          check / run / repl; the only pipeline driver (`Session`); stage features types < core < run; tls (default) adds Std.Tls
-eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `eml run` on a worker-0 thread, `par` right children placed on idle workers 1..N-1 (started at the first fork, no I/O driver); `Async` tasks and channels on worker 0; `Machine` appends programs by name (the REPL, one worker)
+eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `eml run` on a worker-0 thread; a `par` right child goes to an idle worker (worker 0 included; workers 1..N-1 start at the first fork and have no I/O driver), else runs on its parent's worker; `Async` tasks, channels and the I/O driver on worker 0; `Machine` appends programs by name (`eml run` with N workers, the REPL with one)
 eml_io           IoDriver implementations: the real driver (an OS-free core in `driver/` over per-OS backends in `sys/`: epoll, kqueue, IOCP) and the deterministic test driver; jobs run on the core's own pool (at most 32 threads, then queued); name lookups run on its resolver threads (at most 8 live, 64 abandoned)
 eml_tls          rustls client connection, sans-IO (aws-lc-rs provider, webpki-roots); depends on no eml crate; eml_vm and eml_io reach it through their feature tls, and eml_cli's tls adds it for its real-socket test
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
@@ -114,7 +114,7 @@ These invariants hold across crates; keep them when you change anything:
 - Later stages add types only through `TypeStore::substitute`; `TypeStore::intern` is crate-private.
 - Two IR layers with separate types: Core IR is the semantic layer, LIR is Core IR after evidence passing with RC, boxing and tail calls explicit. Each crate's `pipeline.rs` knows only its own pass order. Verifiers and linearity checks run in debug builds after the passes, so a pass that breaks an IR rule fails loudly there.
 - A function's name fixes its code and ABI: instance names depend only on type arguments, optimize's copies are keyed and named by what they specialize, `internal` marks the ABI by name, and the REPL appends code by name under "same name, same code". Do not make a function's code depend on the rest of the program.
-- The VM runs `par` right children on worker threads, each with its own `Ctx` and heap; everything else stays on worker 0. Keep the constraints that let it spread further (docs/future/multicore.md の「VM の並列化の備え」, docs/spec/vm.md の「タスクとスケジュール」).
+- The VM runs a `par` right child on an idle worker (worker 0 included), or on its parent's worker when none is idle; each worker has its own `Ctx` and heap, and a right child's nested `par` runs its left child on that child's worker. Only `Async` tasks, channels and the I/O driver are pinned to worker 0. Keep the constraints that let it spread further (docs/future/multicore.md の「VM の並列化の備え」, docs/spec/vm.md の「タスクとスケジュール」).
 - Diagnostic codes are defined in a per-stage `codes` module (e.g. `eml_syntax::codes`, E0xxx). E0004 (not yet supported) means the same at every stage, so it lives in `eml_diagnostics` (`NOT_YET_SUPPORTED`, `Diagnostic::not_yet_supported`).
 
 The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics that span crates:

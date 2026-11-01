@@ -279,8 +279,8 @@ main () =
     interrupted(&src, |config| config);
 }
 
-/// 左の子はすぐに終わり、worker 0 は join で右の子を待って眠る。割り込みは worker 1 が読み、抜けるときにすべての
-/// worker を起こすので、眠っている worker 0 も止まる。
+/// 左の子はすぐに終わり、worker 0 は join で右の子を待って眠る。割り込みで worker 1 が抜け、眠っている worker 0 も
+/// 止まる。worker 0 を起こすのは、止めるビットを見た監視のスレッドか、抜ける worker 1 で、このテストはどちらかを区別しない。
 #[test]
 fn an_interrupt_reaches_worker_0_parked_in_join_wait() {
     let src = format!(

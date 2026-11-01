@@ -153,23 +153,30 @@ fn main() -> ExitCode {
     }
 }
 
+/// worker の数の上限。run は worker ごとに止める語と欄を確保し、起こすときはすべての欄をたどるので、
+/// 大きすぎる数は確保の失敗や遅い run でなく使い方の誤りにする (docs/spec/stdlib.md の「起動」)。
+const MAX_WORKERS: usize = 1024;
+
 /// `--workers` と `EML_WORKERS` の値。worker は1つ以上要るので、0 と数でない文字列は断る (docs/spec/stdlib.md の「起動」)。
 fn parse_workers(text: &str) -> Result<usize, String> {
     match text.parse::<usize>() {
         Ok(0) => Err("the number of workers must be at least 1".to_string()),
+        Ok(workers) if workers > MAX_WORKERS => Err(format!(
+            "the number of workers must be at most {MAX_WORKERS}"
+        )),
         Ok(workers) => Ok(workers),
         Err(_) => Err(format!("`{text}` is not a number of workers")),
     }
 }
 
-/// `--workers` がないときの数。`EML_WORKERS` を先に見て、なければ CPU の数にする。CPU の数を読めなければ 1 である。
+/// `--workers` がないときの数。`EML_WORKERS` を先に見て、なければ CPU の数にする。CPU の数を読めなければ 1 で、
+/// 上限を超える CPU の数は上限に切る。
 fn workers_from_env() -> Result<usize, String> {
     match std::env::var("EML_WORKERS") {
         Ok(text) => parse_workers(&text).map_err(|message| format!("EML_WORKERS: {message}")),
         Err(std::env::VarError::NotUnicode(_)) => Err("EML_WORKERS: not valid unicode".to_string()),
-        Err(std::env::VarError::NotPresent) => {
-            Ok(std::thread::available_parallelism().map_or(1, usize::from))
-        }
+        Err(std::env::VarError::NotPresent) => Ok(std::thread::available_parallelism()
+            .map_or(1, |cpus| usize::from(cpus).min(MAX_WORKERS))),
     }
 }
 

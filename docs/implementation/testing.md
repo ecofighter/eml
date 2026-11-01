@@ -51,7 +51,7 @@
 - `ui.rs` と `repl.rs` の、ファイルの分け方の自己テストの組。UI のディレクトリには同じ拡張子のモジュールがあり、トランスクリプトは深い所の `.repl` を断るので、規則が違う
 - `eml_vm` の `structs.rs` の逆アセンブラのテストは、`dup s` と `(boxes, unboxes)` を確かめる。`miri.rs` の同じプログラムは、この事実を持たない
 - `eml_cli` の `api.rs` の `Outcome::Rejected` のテストは、トランスクリプトに出ない結果を固定する
-- `RunStats` がスケジュールによらないことは3か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムと、`exit` で終わらない `run/async/` のプログラムで生成したコードを確かめる。`run/par/` の N = 2 と 8 の run (下の「seed で流す」) は、worker をまたいで足した数が N = 1 と同じことを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
+- `RunStats` がスケジュールによらないことは4か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムと、`exit` で終わらない `run/async/` のプログラムで生成したコードを確かめる。`run/par/` の N = 2 と 8 の run (下の「seed で流す」) は、worker をまたいで足した数が N = 1 と同じことを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
 - シグナルを届ける道は3か所で確かめる。`run/async/` と `run-fail/async/` の `signal_*.em` は、仮想のシグナルの予定で `Std.Signal` の意味の筋書きを確かめる。`eml_vm` の `signal.rs` は、ハンドラの代わりにテストのスレッドが `Control` と自己パイプを書き、本物の driver の上の監視のスレッドの中継と、集める地点で届けることを確かめる。`eml_cli` の `cli.rs` のシグナルのテストは、OS のシグナルを `eml run` に送り、ハンドラと終了コード、届けていない間の2回目の強制の終わりを確かめる
 - `par` の子の誤りの規則は、`par.rs` の手書きの LIR のテストと `par::source` の組で確かめる。右の子の誤りを左の子が終わった後で報告する順序は、左の子が出力する LIR で書いた子 (`noisy`) だけが確かめる。ソースの子は出力できないので、ソースでは順序が見えない。`par::source` は、生成した `fork$` と `reperform$` を通っても、左の中断で右の誤りを救わないことと、左の誤りが先であることを確かめる
 
