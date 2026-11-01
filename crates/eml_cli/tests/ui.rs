@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eml_cli::{
-    CaptureHost, Control, Finished, FsProvider, RunConfig, RunStats, RuntimeError, Sched, Session,
-    Signal, VirtualSignal, VmFault, default_limits, execute,
+    CaptureHost, Control, Finished, FsProvider, Limits, RunConfig, RunStats, RuntimeError, Sched,
+    Session, Signal, VirtualSignal, VmFault, default_limits, execute,
 };
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
@@ -183,12 +183,16 @@ fn execute_in(
     signals: &[VirtualSignal],
     debug_heap: bool,
     sched: Sched,
+    workers: usize,
 ) -> Ran {
     let host = host_for(path, root);
     let (out, err, files) = (host.output(), host.errors(), host.written());
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
-        .with_control(Arc::new(Control::new(default_limits())))
+        .with_control(Arc::new(Control::new(Limits {
+            workers,
+            ..default_limits()
+        })))
         .with_sched(sched)
         .with_signals(signals.to_vec());
     let outcome = execute(program, &config, host.into_ref());
@@ -263,12 +267,62 @@ fn assert_fast_mode_agrees(
     signals: &[VirtualSignal],
     checked: &Ran,
 ) {
-    let fast = execute_in(program, path, root, signals, false, Sched::Normal);
+    let fast = execute_in(program, path, root, signals, false, Sched::Normal, 1);
     assert_agrees(suffix, "the fast mode", &fast, checked, Compare::Nothing);
 }
 
 /// seed の方針で流すテストの seed (docs/implementation/testing.md の「seed で流す」)。
 const SEEDS: [u64; 2] = [1, 2026];
+
+/// `par/` を流す worker の数。N = 1 の run がスナップショットと比べる基準である (docs/implementation/testing.md の
+/// 「seed で流す」)。
+const WORKER_COUNTS: [usize; 2] = [2, 8];
+
+/// 複数の worker で流すのは `par/` だけである。`Async` のタスクと driver は worker 0 の上だけで動くので、`async/` を
+/// N >= 2 で流しても確かめることがない。
+fn workers_run(suffix: &str) -> bool {
+    suffix.starts_with("par/")
+}
+
+fn workers_label(workers: usize, signals: &[VirtualSignal]) -> String {
+    let marks = if signals.is_empty() {
+        ""
+    } else {
+        " with the signal marks of the file"
+    };
+    format!("`eml run --debug-heap --workers {workers}` on the virtual driver{marks}")
+}
+
+/// 逐次の N = 1 の検査モードの結果を、N = 2 と 8 の検査モードの run と比べる。方針は逐次のままで、横取りは
+/// 求めない。比べる欄は seed の run と同じである。
+fn assert_workers_agree(
+    suffix: &str,
+    program: &eml_lir::Program,
+    path: &Path,
+    root: &Path,
+    signals: &[VirtualSignal],
+    checked: &Ran,
+) {
+    for workers in WORKER_COUNTS {
+        let ran = execute_in(
+            program,
+            path,
+            root,
+            signals,
+            true,
+            Sched::Sequential,
+            workers,
+        );
+        let compare = compares_stats(checked, &ran);
+        assert_agrees(
+            suffix,
+            &workers_label(workers, signals),
+            &ran,
+            checked,
+            compare,
+        );
+    }
+}
 
 /// seed の方針でも流すのは `par/` と `async/` の分類だけである。`par` も `Async` のタスクもないプログラムは
 /// 切り替えないので、流しても確かめることがない。
@@ -302,7 +356,7 @@ fn assert_seeds_agree(
 ) {
     let compare_stats = !(suffix.starts_with("async/") && matches!(checked.result, Ok(Some(_))));
     for seed in SEEDS {
-        let ran = execute_in(program, path, root, signals, true, Sched::Seeded(seed));
+        let ran = execute_in(program, path, root, signals, true, Sched::Seeded(seed), 1);
         let compare = if compare_stats {
             compares_stats(checked, &ran)
         } else {
@@ -463,7 +517,7 @@ fn run() {
             return;
         };
         let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential);
+        let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential, 1);
         assert!(ran.result.is_ok(), "{:?}\n{diagnostics}", ran.result);
         let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
         let exit = match ran.result {
@@ -479,6 +533,9 @@ fn run() {
         if seeded(&suffix) {
             assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
         }
+        if workers_run(&suffix) {
+            assert_workers_agree(&suffix, &program, path, &root, signals, &ran);
+        }
     });
 }
 
@@ -489,7 +546,7 @@ fn run_fail() {
             return;
         };
         let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential);
+        let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential, 1);
         let Err(error) = &ran.result else {
             panic!("expected a runtime error");
         };
@@ -504,6 +561,9 @@ fn run_fail() {
             assert_fast_mode_agrees(&suffix, &program, path, &root, signals, &ran);
             if seeded(&suffix) {
                 assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
+            }
+            if workers_run(&suffix) {
+                assert_workers_agree(&suffix, &program, path, &root, signals, &ran);
             }
         }
     });
@@ -557,6 +617,17 @@ fn seeded_runs_cover_par_and_async() {
 }
 
 #[test]
+fn workers_runs_cover_par_only() {
+    assert!(workers_run("par/x.em"));
+    assert!(workers_run("par/dir"));
+    assert!(!workers_run("async/x.em"));
+    assert!(!workers_run("async/dir"));
+    assert!(!workers_run("panic/x.em"));
+    assert!(!workers_run("parse/x.em"));
+    assert_eq!(WORKER_COUNTS, [2, 8]);
+}
+
+#[test]
 #[should_panic(expected = "--sched seeded:7")]
 fn a_seeded_mismatch_names_the_seed() {
     let ran = |stdout: &str| Ran {
@@ -584,7 +655,7 @@ fn a_par_file_that_is_never_preempted_fails() {
     let program = session.compile().program.expect("the program compiles");
     let root = ui_root().join("run/par");
     let path = root.join("short.em");
-    let checked = execute_in(&program, &path, &root, &[], true, Sched::Sequential);
+    let checked = execute_in(&program, &path, &root, &[], true, Sched::Sequential, 1);
     assert_seeds_agree("par/short.em", &program, &path, &root, &[], &checked);
 }
 
