@@ -287,20 +287,25 @@ impl Run {
     }
 
     /// worker `k` の受け箱に知らせを積む。欄の lock の下で積んで `k` を動いている形にし、`NOTICE` を立ててから、
-    /// 条件変数と driver の waker で起こす。lock が知らせの中身の Release と Acquire になる
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 眠っていた相手だけを条件変数と driver の waker で起こす。lock が知らせの中身の Release と Acquire になる
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。眠っていない相手は、眠る前に欄の lock の下で受け箱を見るので、
+    /// 起こさなくても知らせを取りこぼさない。登録表の lock の下から送る知らせが、たいていは syscall を伴わないためである。
     pub(crate) fn send(&self, control: &Control, k: usize, notice: Notice) {
         let slot = &self.slots[k];
-        {
+        let parked = {
             let mut state = lock(&slot.state);
             state.notices.push(notice);
             slot.has_notices.store(true, Ordering::Release);
+            let parked = state.parked;
             self.unpark_locked(&mut state);
-        }
+            parked
+        };
         control.notice(k);
-        slot.cv.notify_one();
-        if let Some(waker) = slot.waker.get() {
-            waker.wake();
+        if parked {
+            slot.cv.notify_one();
+            if let Some(waker) = slot.waker.get() {
+                waker.wake();
+            }
         }
     }
 

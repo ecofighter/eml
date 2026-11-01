@@ -32,10 +32,11 @@ fn unheard_fault(control: &Control, bits: u32) -> VmFault {
 }
 
 /// 受け箱から取った `Async` のタスクと driver の操作の知らせを、登録表の1回の区間で届いた順に処理する。走らせる仕事を
-/// `out` に、lock を放してから driver に出す操作と取り消しを `work` に積む。持ち主の知らせ (`Place`、`Wake`、`Cancel`、
-/// `Completion`) は、セルの今の持ち主がほかの worker ならその worker へ送り直す。host の知らせ (`Submit`、`CancelIo`)
-/// は自分の driver の分である。ほかの worker から届いた起こしと結果は、持ち主の道がもう再開か当てを済ませていれば捨てる
-/// (docs/spec/vm.md の「タスクとスケジュール」「操作の記録」)。
+/// `out` に、lock を放してから driver に出す操作と取り消しを `work` に積む。`Place`、`Wake`、`Cancel` は、セルの今の
+/// 持ち主がほかの worker ならその worker へ送り直す。`Completion` は記録の持ち主の自分が当てる。host の知らせ (`Submit`、
+/// `CancelIo`) は自分の driver の分で、結果を置いた後に届いた `CancelIo` だけは何もしない。もう待っていないセルへの
+/// 起こしと、結果のない記録への `Completion` は内部の誤りである (docs/spec/vm.md の「タスクとスケジュール」
+/// 「操作の記録」)。
 fn take_async<M: Mode>(
     cells: &mut Registry,
     notices: Vec<Notice>,
@@ -48,11 +49,7 @@ fn take_async<M: Mode>(
     let mut woken = Vec::new();
     for notice in notices {
         match notice {
-            Notice::Wake(w) => {
-                // 前の知らせが外した待ちを先に積み、届いた順を保つ
-                cells.route(&mut woken, here, out)?;
-                cells.route_sent(w, here, out)?;
-            }
+            Notice::Wake(w) => woken.push(w),
             Notice::Cancel(cell) => cells.cancel_task(cell, here, &mut woken, work)?,
             Notice::Place {
                 cell,
@@ -66,9 +63,9 @@ fn take_async<M: Mode>(
                 }
             }
             Notice::Submit(op) => cells.take_submit(op, here.me, work)?,
-            Notice::CancelIo(op) => cells.cancel_hosted(op, here.me, work),
+            Notice::CancelIo(op) => cells.cancel_hosted(op, here.me, work)?,
             Notice::Completion(op) => {
-                woken.extend(cells.settle_arrived(ctx, depth_offset, op, here, work)?);
+                woken.extend(cells.take_completion(ctx, depth_offset, op, here, work)?);
             }
             Notice::Child(_) | Notice::Joined { .. } => {
                 return Err(VmFault::Internal("a par notice is left for the registry"));
@@ -529,8 +526,9 @@ impl<P: Policy> Scheduler<P> {
     /// run の始めの準備。driver の waker を自分の欄に置き、眠る driver の run と worker を2つ以上持てる run では監視の
     /// スレッドを始める。眠る worker に Ctrl-C と止める語を届けるのは監視のスレッドの起こしなので、run の始めから
     /// 動かす。続けて worker 1..N-1 を作るかを決める。作るのは、worker を2つ以上持て、監視のスレッドが動き、
-    /// セッションに根がなく、読み込んだコードが根に触れない (`roots_free`) run だけである
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// セッションに根がなく、読み込んだコードが根に触れない (`roots_free`) run だけである。渡された driver の run
+    /// (`Injected`) は作らない。時刻をその driver に聞くので、driver を持たない worker は時刻を読めないためである
+    /// (docs/spec/vm.md の「タスクとスケジュール」「時計と driver」)。
     pub(crate) fn begin_run(&mut self, roots_free: bool) {
         if let Some(driver) = &self.driver {
             // run の表は run ごとに作るので、まだ空である
@@ -541,7 +539,10 @@ impl<P: Policy> Scheduler<P> {
         if self.driver_kind != DriverKind::Virtual || self.run.slots.len() >= 2 {
             self.start_monitor();
         }
-        self.workers = if self.run.slots.len() >= 2 && self.watcher.monitor.is_some() && roots_free
+        self.workers = if self.run.slots.len() >= 2
+            && self.watcher.monitor.is_some()
+            && roots_free
+            && self.driver_kind != DriverKind::Injected
         {
             Workers::Wanted
         } else {

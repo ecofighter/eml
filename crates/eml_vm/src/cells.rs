@@ -1198,23 +1198,6 @@ impl Registry {
         Ok(())
     }
 
-    /// ほかの worker の受け箱から届いた起こし `w` を worker `here.me` で受け取る。`route` と同じく走らせるか持ち主へ
-    /// 送り直すが、もう待っていないセルへの起こしは捨てる。送った区間の後に、持ち主の道がセルを先に再開しうるからである
-    /// (docs/spec/vm.md の「セルと登録表」)。
-    pub(crate) fn route_sent(
-        &mut self,
-        w: Woken,
-        here: &Here,
-        out: &mut Vec<Runnable>,
-    ) -> Result<(), CellFault> {
-        match self.take_wake(&w, here.me)? {
-            Route::Run(run) => out.push(run),
-            Route::Forward(owner) => here.post.wake(owner, w),
-            Route::Stale => {}
-        }
-        Ok(())
-    }
-
     /// 受け箱の起こし `w` を worker `me` が受け取れば、走らせる仕事になるか。継続は取り出さない。run の終わりに残った
     /// 知らせを数えるために使う (docs/spec/vm.md の「誤り、止めること、終わり」)。
     pub(crate) fn would_run(&mut self, w: &Woken, me: u32) -> bool {
@@ -1232,15 +1215,13 @@ impl Registry {
         }
     }
 
-    /// 成功した run の `main` の `Finish` で、終わっていないタスクか、driver に出したままか置いたままか結果を当てて
-    /// いない操作の記録が残っているか。どれかがあれば、タスクが残ったまま run が終わる (docs/spec/vm.md の
-    /// 「誤り、止めること、終わり」)。
+    /// 成功した run の `main` の `Finish` で、終わっていないタスクか、driver に出したままか置いたままの操作の記録が
+    /// 残っているか。どれかがあれば、タスクが残ったまま run が終わる。結果を置いただけの記録は残ってよく、`sweep_all`
+    /// が語を落とす (docs/spec/vm.md の「誤り、止めること、終わり」)。
     pub(crate) fn left_at_end(&self) -> bool {
         self.slots.iter().any(|(_, kind)| match kind {
             Some(CellKind::Task(task)) => !matches!(task.phase, Phase::Finished),
-            Some(CellKind::Op(record)) => {
-                record.submitted || record.pending_op.is_some() || record.arrival.is_some()
-            }
+            Some(CellKind::Op(record)) => record.submitted || record.pending_op.is_some(),
             _ => false,
         })
     }
@@ -2515,19 +2496,45 @@ impl Registry {
     }
 
     /// host `me` が、受け箱の `CancelIo` を受ける。記録がまだ driver に出したままなら、lock を放してから自分の driver に
-    /// 取り消しを頼むよう `work` に積む。結果をもう置いた記録と放した記録には何もしない。取り消しより先に完了が届いた
-    /// だけだからである。
-    pub(crate) fn cancel_hosted(&mut self, op: CellRef, me: u32, work: &mut IoWork) {
-        if let Some(CellKind::Op(record)) = self.live(op)
-            && record.submitted
-            && record.host == me
-        {
-            work.cancels.push(op);
+    /// 取り消しを頼むよう `work` に積む。結果をもう置いた記録と放した記録には何もしない。持ち主が送った区間の後に、
+    /// driver の完了が先に届きうるからである。host でない worker への `CancelIo` は内部の誤りである。
+    pub(crate) fn cancel_hosted(
+        &mut self,
+        op: CellRef,
+        me: u32,
+        work: &mut IoWork,
+    ) -> Result<(), CellFault> {
+        if let Some(CellKind::Op(record)) = self.live(op) {
+            if record.host != me {
+                return Err(CellFault::Internal("an op cancel is sent to another host"));
+            }
+            if record.submitted {
+                work.cancels.push(op);
+            }
         }
+        Ok(())
+    }
+
+    /// 持ち主 `here.me` が、受け箱の `Completion` を受けて記録 `op` の結果を当てる。host は待つタスクがいるときだけ
+    /// 送り、待つタスクは結果を受けるまで止まっているので、結果は `Completion` だけが当てる。生きていない記録と結果の
+    /// ない記録は内部の誤りである (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn take_completion<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        depth_offset: usize,
+        op: CellRef,
+        here: &Here,
+        work: &mut IoWork,
+    ) -> Result<Option<Woken>, CellFault> {
+        match self.live(op) {
+            Some(CellKind::Op(record)) if record.arrival.is_some() => {}
+            _ => return Err(CellFault::Internal("a completion names no arrived op")),
+        }
+        self.settle_arrived(ctx, depth_offset, op, here, work)
     }
 
     /// 持ち主 `here.me` が、記録 `op` に置かれた結果があれば当てる。当てて記録が終われば、待つタスクの起こしを返す。
-    /// 結果を置いていない記録と放した記録には何もしない。ほかの道がもう当てたからである (docs/spec/vm.md の「操作の記録」)。
+    /// 結果を置いていない記録には何もしない (docs/spec/vm.md の「操作の記録」)。
     pub(crate) fn settle_arrived<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
@@ -2536,10 +2543,11 @@ impl Registry {
         here: &Here,
         work: &mut IoWork,
     ) -> Result<Option<Woken>, CellFault> {
-        let host = match self.live(op) {
-            Some(CellKind::Op(record)) if record.arrival.is_some() => record.host,
-            _ => return Ok(None),
-        };
+        let record = self.op_mut(op)?;
+        if record.arrival.is_none() {
+            return Ok(None);
+        }
+        let host = record.host;
         let bin = self
             .bins
             .get(host as usize)
