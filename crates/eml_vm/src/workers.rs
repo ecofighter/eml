@@ -556,6 +556,13 @@ fn work<M: Mode, P: Policy>(
     );
     let mut counts = RunCounts::default();
     let (error, peak_stack) = crate::vm::work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts);
+    // 止める語は安全点か空きの待ちでだけ読み、予約と確定の間に安全点はないので、そうして抜ける worker は予約を持たない。
+    // 予約の間の誤りで抜けた worker は、品物の語を持ったまま `Scheduler` ごと捨て、回復がヒープを片付ける
+    // (docs/spec/vm.md の「channel」)
+    debug_assert!(
+        sched.hold.is_none() || !at_safepoint(&error),
+        "a channel reservation is held when a worker exits"
+    );
     if !quiet(&error) {
         run.set_fatal(error);
         control.end_run();
@@ -566,6 +573,20 @@ fn work<M: Mode, P: Policy>(
         preemptions: sched.preemptions(),
         peak_stack,
     }
+}
+
+/// 安全点か空きの待ちで止める語を読んで抜けた誤り。確保の上限は確保の途中でも起きるので含めない。
+fn at_safepoint(error: &RuntimeError) -> bool {
+    matches!(
+        error,
+        RuntimeError::Fault {
+            fault: VmFault::Stopped(Stop::Interrupted | Stop::Terminated | Stop::Ended)
+                | VmFault::Extern(eml_rt::Fault::Stopped(
+                    Stop::Interrupted | Stop::Terminated | Stop::Ended
+                )),
+            ..
+        }
+    )
 }
 
 /// worker 1..N-1 が何も書かずに抜ける誤り。止めるビットと `END` で、どれも worker 0 が自分の語で読む。

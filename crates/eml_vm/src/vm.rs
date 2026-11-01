@@ -1443,6 +1443,10 @@ fn switch_away<R: Exec>(
     sched: &mut Scheduler<R::P>,
     keep: Option<TaskState>,
 ) -> Result<(), VmFault> {
+    debug_assert!(
+        sched.hold.is_none(),
+        "a channel reservation is held at a switch"
+    );
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)。走れるタスクがなければ直後の `wait` が OS を見るので、ここでは
     // 見ない。走れるタスクが続くときは `POLL_EVERY` 回に1回だけ見る (docs/spec/vm.md の「時計と driver」)
@@ -1598,6 +1602,10 @@ fn preempt<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
+    debug_assert!(
+        sched.hold.is_none(),
+        "a channel reservation is held at a switch"
+    );
     // 横取りの刻みごとに OS を見るので、計算の重いタスクが走る worker でも I/O の完了の遅れは刻みの長さまでである
     // (docs/spec/vm.md の「時計と driver」)
     collect::<R>(code, ctx, task.depth_offset, sched, true)?;
@@ -1942,6 +1950,11 @@ fn finish<R: Exec>(
     if driver.pending() > 0 {
         return Err(VmFault::Driver(KEPT_PENDING.to_string()));
     }
+    // 予約と確定の間に安全点はないので、`Finish` に来た worker は予約を持たない (docs/spec/vm.md の「channel」)
+    debug_assert!(
+        sched.hold.is_none(),
+        "a channel reservation is held at the end"
+    );
     cells::sweep_all(&sched.cells, ctx, task.depth_offset)?;
     if sched.has_children() {
         return Err(VmFault::Internal("a task is left at the end"));
@@ -2211,41 +2224,60 @@ fn async_op<R: Exec>(
             {
                 here!(sched, post, here);
                 let mut cells = sched.cells.lock();
-                let mut woken = Vec::new();
                 let run = if ext == Extern::AsyncParkSend {
-                    cells.park_send(c, me, k, &mut woken)?
+                    cells.park_send(c, me, k, &mut sched.woken)?
                 } else {
-                    cells.park_recv(c, me, k, &mut woken)?
+                    cells.park_recv(c, me, k, &mut sched.woken)?
                 };
                 runs.extend(run);
-                cells.route(&mut woken, &here, &mut runs)?;
+                cells.route(&mut sched.woken, &here, &mut runs)?;
             }
             for run in runs {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
         }
-        // channel の行は、待ちのほかは今のタスクのセルを使わないので、タスクの外でも動く (docs/spec/vm.md の「命令」)
+        // channel の行は、待ちのほかは今のタスクのセルを使わないので、タスクの外でも動く (docs/spec/vm.md の「命令」)。
+        // どの行も登録表の lock を1区間だけ取り、預かり先の操作 (`open`、`publish`、`receive`、`close`) は lock の
+        // 外で行う。予約から確定までに要るものは worker の `hold` が持つ (docs/spec/vm.md の「channel」)
         Extern::ChanNewRaw => {
-            let c = sched.cells.lock().new_chan(ctx, task.raw(arg(0)));
+            let depot = cells::Depot::open(ctx);
+            let c = sched.cells.lock().new_chan(task.raw(arg(0)), depot);
             task.set_raw(dst, c);
         }
-        ext @ (Extern::ChanReserveSend | Extern::ChanReserveRecv) => {
+        Extern::ChanReserveSend => {
             let (c, yields) = (task.raw(arg(0)), task.raw(arg(1)) != 0);
-            let r = if ext == Extern::ChanReserveSend {
-                sched.cells.lock().reserve_send(c, task.cell, yields)?
-            } else {
-                sched.cells.lock().reserve_recv(c, task.cell, yields)?
+            let r = sched
+                .cells
+                .lock()
+                .reserve_send(c, task.cell, yields, &mut sched.hold)?;
+            task.set_raw(dst, r);
+        }
+        Extern::ChanReserveRecv => {
+            let (c, yields) = (task.raw(arg(0)), task.raw(arg(1)) != 0);
+            let mut runs = Vec::new();
+            let r = {
+                here!(sched, post, here);
+                let mut cells = sched.cells.lock();
+                let r =
+                    cells.reserve_recv(c, task.cell, yields, &mut sched.hold, &mut sched.woken)?;
+                cells.route(&mut sched.woken, &here, &mut runs)?;
+                r
             };
+            for run in runs {
+                schedule(code, sched, entries, run)?;
+            }
             task.set_raw(dst, r);
         }
         Extern::ChanPushRaw => {
+            let (chan, mut depot) = cells::Hold::take_send(&mut sched.hold, task.raw(arg(1)))?;
+            let x = depot.publish(ctx, task.get(arg(0)))?;
             let mut runs = Vec::new();
             {
                 here!(sched, post, here);
                 let mut cells = sched.cells.lock();
-                let woken = cells.push_raw(ctx, task.get(arg(0)), task.raw(arg(1)))?;
-                cells.route(&mut woken.into_iter().collect(), &here, &mut runs)?;
+                cells.push_raw(chan, x, &mut sched.woken)?;
+                cells.route(&mut sched.woken, &here, &mut runs)?;
             }
             for run in runs {
                 schedule(code, sched, entries, run)?;
@@ -2253,26 +2285,27 @@ fn async_op<R: Exec>(
             task.set(dst, Word::UNIT);
         }
         Extern::ChanPopRaw => {
-            let mut runs = Vec::new();
-            let x = {
-                here!(sched, post, here);
-                let mut cells = sched.cells.lock();
-                let (x, woken) = cells.pop_raw(ctx, task.raw(arg(0)))?;
-                cells.route(&mut woken.into_iter().collect(), &here, &mut runs)?;
-                x
-            };
-            for run in runs {
-                schedule(code, sched, entries, run)?;
+            let (chan, mut depot, item) =
+                cells::Hold::take_recv(&mut sched.hold, task.raw(arg(0)))?;
+            // 品物は予約で列から取ったので、ほかに参照がない
+            let x = depot.receive(ctx, item)?;
+            let gone = sched.cells.lock().pop_raw(chan)?;
+            if let Some(gone) = gone {
+                gone.close(ctx)?;
             }
             task.set(dst, x);
         }
         Extern::ChanCloseRaw => {
             let mut runs = Vec::new();
-            {
+            let gone = {
                 here!(sched, post, here);
                 let mut cells = sched.cells.lock();
-                let mut woken = cells.close_raw(ctx, task.raw(arg(0)))?;
-                cells.route(&mut woken, &here, &mut runs)?;
+                let gone = cells.close_raw(task.raw(arg(0)), &mut sched.woken)?;
+                cells.route(&mut sched.woken, &here, &mut runs)?;
+                gone
+            };
+            if let Some(gone) = gone {
+                gone.close(ctx)?;
             }
             for run in runs {
                 schedule(code, sched, entries, run)?;

@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use eml_rt::{Completion, Control, Ctx, IoDriver, Mode, Stop};
 
 use crate::VmFault;
-use crate::cells::{self, CellRef, Here, IoWork, Runnable, Shared};
+use crate::cells::{self, CellRef, Here, Hold, IoWork, Runnable, Shared, Woken};
 use crate::driver::DriverKind;
 use crate::monitor::Monitor;
 use crate::vm::Task;
@@ -354,6 +354,11 @@ pub struct Scheduler<P: Policy> {
     pub(crate) since_poll: u32,
     /// 集める地点が再開する仕事を積む列。毎回の確保を避けるために使い回し、集める地点の外ではいつも空である。
     pub(crate) runnables: Vec<Runnable>,
+    /// channel の予約から確定までに要るもの。予約と確定の間には安全点も切り替えもないので、安全点ではいつも空である
+    /// (docs/spec/vm.md の「channel」)。
+    pub(crate) hold: Option<Hold>,
+    /// channel の行が起こした待ち手を積む列。毎回の確保を避けるために使い回し、行の外ではいつも空である。
+    pub(crate) woken: Vec<Woken>,
     /// 監視のスレッドと、それに渡すもの。
     pub(crate) watcher: Watcher,
 }
@@ -437,6 +442,8 @@ impl<P: Policy> Scheduler<P> {
             driver_kind: DriverKind::Virtual,
             since_poll: 0,
             runnables: Vec::new(),
+            hold: None,
+            woken: Vec::new(),
             watcher: Watcher {
                 control,
                 monitor: None,

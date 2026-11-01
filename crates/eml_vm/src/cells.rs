@@ -4,8 +4,9 @@
 //!
 //! 登録表 `Registry` は run に1つで、`Shared` の lock の下にあり、run のすべての `Scheduler` が同じものを持つ。lock の
 //! 下では `Ctx` も `Heap` も driver も呼ばない。例外は `start` の `fork_worker` と `share`、`settle_op` と `advance` が
-//! `with_worker` の下で行う確保、channel の行である。捨てる語と退かせる ID は `Discards`、driver に出す操作と取り消しは
-//! `IoWork` に並べ、lock を放してから並べた順に行う (docs/spec/vm.md の「セルと登録表」)。
+//! `with_worker` の下で行う確保である。捨てる語と退かせる ID は `Discards`、driver に出す操作と取り消しは `IoWork` に
+//! 並べ、lock を放してから並べた順に行う。channel の預かり先の操作は、実行系が lock の外で行う
+//! (docs/spec/vm.md の「セルと登録表」)。
 //!
 //! セルが持つ語は数えた参照で、VM が1回入れて1回出す。`Registry` はヒープに触れる `Drop` を持たないので、誤りで終わった
 //! run と捨てた run では、触れずに捨てる。
@@ -24,8 +25,9 @@
 //! 待つ側はハンドルを持つので、待つ相手のセルはその `take` の前に放されない。
 //!
 //! channel の不変条件: タスクが `senders` か `receivers` にあるのは、そのタスクが止まっていて
-//! `wait == Some(Cell(その channel))` のときだけで、1回だけ現れる。`closed` の後、両方の列はいつも空である。
-//! channel のセルを放すのは `settle` と `sweep_all` だけである。品物があるのに受け手が待っている状態は、受け手を起こす
+//! `wait == Some(Cell(その channel))` のときだけで、1回だけ現れる。`closed` の後に列に待ち手がいるのは、送りの予約
+//! `sends` が残っていて受け手が待つときだけである。予約 (`sends`、`recvs`) の残る channel は放さず、channel のセルを
+//! 放すのは `settle` と `sweep_all` だけである。品物があるのに受け手が待っている状態は、受け手を起こす
 //! 仕事が実行待ちにあるときにだけありうる。積めるのに送り手が待っている状態も同じである。起こす側は枠も品物も取って
 //! おかないので、起こされたタスクが速い道をやり直す (docs/spec/vm.md の「channel」)。
 //!
@@ -459,6 +461,10 @@ struct ChanCell {
     closed: bool,
     /// 積んだ品物。語は数えた参照で、`depot.publish` で預けたもの。
     items: VecDeque<Word>,
+    /// `reserve_send` が 0 を返し、まだ `push_raw` していない送りの数。
+    sends: usize,
+    /// `reserve_recv` が列から取り、まだ `pop_raw` していない品物の数。
+    recvs: usize,
     /// 待っている送り手。項はいつも生きていて、`wait == Some(Wait::Cell(このセル))` である。
     senders: VecDeque<CellRef>,
     /// 待っている受け手。同上。
@@ -468,9 +474,65 @@ struct ChanCell {
 }
 
 impl ChanCell {
-    /// 積めるか。待っている受け手1人につき枠が1つ開くので、容量 0 でも受け手が待っていれば積める。
+    /// 積めるか。待っている受け手1人につき枠が1つ開くので、容量 0 でも受け手が待っていれば積める。予約した送りは
+    /// 枠を1つずつ取っておく。
     fn can_send(&self) -> bool {
-        self.items.len() < self.cap as usize + self.receivers.len()
+        self.items.len() + self.sends < self.cap as usize + self.receivers.len()
+    }
+
+    /// 受け手にとって、もう品物が来ないか。閉じても、予約した送りは後から積むので、それを待つ。
+    fn drained(&self) -> bool {
+        self.closed && self.sends == 0
+    }
+
+    /// 放してよいか。予約が残る間は、預かる ID への `publish` と `receive` が lock の外で続くので放さない。
+    fn released(&self) -> bool {
+        self.drained() && self.items.is_empty() && self.recvs == 0
+    }
+}
+
+/// channel の予約から確定までの間、worker が持つもの。予約と確定の間には安全点も切り替えも捕まえる失敗もないので、
+/// worker に1つで足り、ほかのタスクに渡らない (docs/spec/vm.md の「channel」)。
+pub(crate) enum Hold {
+    /// 送りの予約。`depot` は channel の預かる ID である。
+    Send { chan: CellRef, depot: u32 },
+    /// 受け取りの予約。`item` は予約で列から取った品物で、ほかに参照を持たない。
+    Recv {
+        chan: CellRef,
+        depot: u32,
+        item: Word,
+    },
+}
+
+impl Hold {
+    /// `push_raw` が channel `c` の送りの予約を取り出す。
+    pub(crate) fn take_send(
+        hold: &mut Option<Hold>,
+        c: i64,
+    ) -> Result<(CellRef, Depot), CellFault> {
+        match hold.take() {
+            Some(Hold::Send { chan, depot }) if chan == CellRef::decode(c) => {
+                Ok((chan, Depot::of(depot)))
+            }
+            _ => Err(CellFault::Internal(
+                "an item is pushed without a reserved send",
+            )),
+        }
+    }
+
+    /// `pop_raw` が channel `c` の受け取りの予約を取り出す。
+    pub(crate) fn take_recv(
+        hold: &mut Option<Hold>,
+        c: i64,
+    ) -> Result<(CellRef, Depot, Word), CellFault> {
+        match hold.take() {
+            Some(Hold::Recv { chan, depot, item }) if chan == CellRef::decode(c) => {
+                Ok((chan, Depot::of(depot), item))
+            }
+            _ => Err(CellFault::Internal(
+                "an item is popped without a reserved receive",
+            )),
+        }
     }
 }
 
@@ -3421,16 +3483,19 @@ impl Registry {
         }
     }
 
-    /// 容量 `cap` の channel を作る。容量は `0..=u32::MAX` に収める。
-    pub(crate) fn new_chan<M: Mode>(&mut self, ctx: &mut Ctx<M>, cap: i64) -> i64 {
+    /// 容量 `cap` の channel を作る。容量は `0..=u32::MAX` に収める。預かり先 `depot` は、呼ぶ側が lock の外で
+    /// `Depot::open` で開いたものである。
+    pub(crate) fn new_chan(&mut self, cap: i64, depot: Depot) -> i64 {
         let cap = cap.clamp(0, i64::from(u32::MAX)) as u32;
         self.alloc(CellKind::Chan(ChanCell {
             cap,
             closed: false,
             items: VecDeque::new(),
+            sends: 0,
+            recvs: 0,
             senders: VecDeque::new(),
             receivers: VecDeque::new(),
-            depot: Depot::open(ctx),
+            depot,
         }))
         .encode()
     }
@@ -3443,113 +3508,141 @@ impl Registry {
         }
     }
 
-    /// 送りの速い道。0 なら `push_raw` で積んでよく、1 なら待ち、2 なら閉じていて、3 なら先に譲る。
+    /// 送りの速い道。0 なら枠を1つ予約して `hold` に置き、続く `push_raw` が確定する。1 なら待ち、2 なら閉じていて、
+    /// 3 なら先に譲る。
     pub(crate) fn reserve_send(
         &mut self,
         c: i64,
         me: Option<CellRef>,
         yields: bool,
+        hold: &mut Option<Hold>,
     ) -> Result<i64, CellFault> {
         if self.spend(me, yields)? {
             return Ok(3);
         }
-        Ok(match self.chan_mut(CellRef::decode(c)) {
+        let chan = CellRef::decode(c);
+        Ok(match self.chan_mut(chan) {
             None => 2,
-            Some(chan) if chan.closed => 2,
-            Some(chan) if chan.can_send() => 0,
+            Some(cell) if cell.closed => 2,
+            Some(cell) if cell.can_send() => {
+                debug_assert!(hold.is_none(), "a channel reservation is made over another");
+                cell.sends += 1;
+                *hold = Some(Hold::Send {
+                    chan,
+                    depot: cell.depot.worker,
+                });
+                0
+            }
             Some(_) => 1,
         })
     }
 
-    /// 受け取りの速い道。0 なら `pop_raw` で取ってよく、1 なら待ち、2 なら閉じて空で、3 なら先に譲る。
+    /// 受け取りの速い道。0 なら先頭の品物を列から取って `hold` に置き、続く `pop_raw` が確定する。積めるようになれば
+    /// 待っている送り手の先頭を1つ起こして `out` に積む。1 なら待ち、2 なら閉じて空で、3 なら先に譲る。
     pub(crate) fn reserve_recv(
         &mut self,
         c: i64,
         me: Option<CellRef>,
         yields: bool,
+        hold: &mut Option<Hold>,
+        out: &mut Vec<Woken>,
     ) -> Result<i64, CellFault> {
         if self.spend(me, yields)? {
             return Ok(3);
         }
-        Ok(match self.chan_mut(CellRef::decode(c)) {
-            None => 2,
-            Some(chan) if !chan.items.is_empty() => 0,
-            Some(chan) if chan.closed => 2,
-            Some(_) => 1,
-        })
-    }
-
-    /// 0 を返した `reserve_send` の直後に、品物 `x` を預けて積む。待っている受け手がいれば先頭を1つ起こす。`x` は呼ぶ側
-    /// から移ってきた参照である。
-    pub(crate) fn push_raw<M: Mode>(
-        &mut self,
-        ctx: &mut Ctx<M>,
-        x: Word,
-        c: i64,
-    ) -> Result<Option<Woken>, CellFault> {
-        let cell = CellRef::decode(c);
-        let chan = self
-            .chan_mut(cell)
-            .ok_or(CellFault::Internal("an item is pushed to a freed channel"))?;
-        let x = chan.depot.publish(ctx, x)?;
-        chan.items.push_back(x);
-        let receiver = chan.receivers.pop_front();
-        self.stats.channel_ops += 1;
-        receiver.map(|r| self.wake(r, cell)).transpose()
-    }
-
-    /// 0 を返した `reserve_recv` の直後に、先頭の品物を取って受け取る。積めるようになれば待っている送り手の先頭を1つ
-    /// 起こし、閉じて空になれば channel を放す。
-    pub(crate) fn pop_raw<M: Mode>(
-        &mut self,
-        ctx: &mut Ctx<M>,
-        c: i64,
-    ) -> Result<(Word, Option<Woken>), CellFault> {
-        let cell = CellRef::decode(c);
-        let chan = self.chan_mut(cell).ok_or(CellFault::Internal(
-            "an item is popped from a freed channel",
-        ))?;
-        let x = chan.items.pop_front().ok_or(CellFault::Internal(
-            "an item is popped from an empty channel",
-        ))?;
-        let x = chan.depot.receive(ctx, x)?;
-        let sender = if chan.can_send() {
-            chan.senders.pop_front()
+        let chan = CellRef::decode(c);
+        let Some(cell) = self.chan_mut(chan) else {
+            return Ok(2);
+        };
+        let Some(item) = cell.items.pop_front() else {
+            return Ok(if cell.drained() { 2 } else { 1 });
+        };
+        debug_assert!(hold.is_none(), "a channel reservation is made over another");
+        cell.recvs += 1;
+        *hold = Some(Hold::Recv {
+            chan,
+            depot: cell.depot.worker,
+            item,
+        });
+        let sender = if cell.can_send() {
+            cell.senders.pop_front()
         } else {
             None
         };
-        self.stats.channel_ops += 1;
-        let run = sender.map(|s| self.wake(s, cell)).transpose()?;
-        self.settle(ctx, cell)?;
-        Ok((x, run))
+        if let Some(s) = sender {
+            out.push(self.wake(s, chan)?);
+        }
+        Ok(0)
     }
 
-    /// 閉じる。待っている受け手と送り手をすべて起こし、空なら放す。放したか閉じた channel には何もしない。同じ
-    /// channel で受け手と送り手が同時に待つことはないので、起こす順は列ごとの FIFO だけで決まる。
-    pub(crate) fn close_raw<M: Mode>(
+    /// 送りの予約を確定する。品物 `x` は呼ぶ側が lock の外で預けたもので、列の後ろに積む。閉じていて予約がなくなれば
+    /// 待っている受け手をすべて、そうでなければ先頭を1つ起こして `out` に積む。
+    pub(crate) fn push_raw(
         &mut self,
-        ctx: &mut Ctx<M>,
-        c: i64,
-    ) -> Result<Vec<Woken>, CellFault> {
-        let cell = CellRef::decode(c);
-        let Some(chan) = self.chan_mut(cell) else {
-            return Ok(Vec::new());
-        };
-        if chan.closed {
-            return Ok(Vec::new());
+        chan: CellRef,
+        x: Word,
+        out: &mut Vec<Woken>,
+    ) -> Result<(), CellFault> {
+        let cell = self
+            .chan_mut(chan)
+            .ok_or(CellFault::Internal("an item is pushed to a freed channel"))?;
+        cell.sends = cell.sends.checked_sub(1).ok_or(CellFault::Internal(
+            "an item is pushed without a reserved send",
+        ))?;
+        cell.items.push_back(x);
+        let all = cell.drained();
+        self.stats.channel_ops += 1;
+        while let Some(r) = self
+            .chan_mut(chan)
+            .and_then(|cell| cell.receivers.pop_front())
+        {
+            out.push(self.wake(r, chan)?);
+            if !all {
+                break;
+            }
         }
-        chan.closed = true;
-        let waiters: Vec<CellRef> = chan
-            .receivers
-            .drain(..)
-            .chain(chan.senders.drain(..))
-            .collect();
-        let woken = waiters
-            .into_iter()
-            .map(|t| self.wake(t, cell))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.settle(ctx, cell)?;
-        Ok(woken)
+        Ok(())
+    }
+
+    /// 受け取りの予約を確定する。品物は呼ぶ側が lock の外で受け取った。放した channel の預かり先を返すので、呼ぶ側は
+    /// lock を放してから閉じる。
+    pub(crate) fn pop_raw(&mut self, chan: CellRef) -> Result<Option<Depot>, CellFault> {
+        let cell = self.chan_mut(chan).ok_or(CellFault::Internal(
+            "an item is popped from a freed channel",
+        ))?;
+        cell.recvs = cell.recvs.checked_sub(1).ok_or(CellFault::Internal(
+            "an item is popped without a reserved receive",
+        ))?;
+        self.stats.channel_ops += 1;
+        self.settle(chan)
+    }
+
+    /// 閉じる。待っている受け手と送り手をすべて起こして `out` に積み、放せるなら放して預かり先を返す。放したか閉じた
+    /// channel には何もしない。送りの予約がなければ、同じ channel で受け手と送り手が同時に待つことはないので、起こす順は
+    /// 列ごとの FIFO だけで決まる。
+    pub(crate) fn close_raw(
+        &mut self,
+        c: i64,
+        out: &mut Vec<Woken>,
+    ) -> Result<Option<Depot>, CellFault> {
+        let chan = CellRef::decode(c);
+        match self.chan_mut(chan) {
+            Some(cell) if !cell.closed => cell.closed = true,
+            _ => return Ok(None),
+        }
+        while let Some(t) = self
+            .chan_mut(chan)
+            .and_then(|cell| cell.receivers.pop_front())
+        {
+            out.push(self.wake(t, chan)?);
+        }
+        while let Some(t) = self
+            .chan_mut(chan)
+            .and_then(|cell| cell.senders.pop_front())
+        {
+            out.push(self.wake(t, chan)?);
+        }
+        self.settle(chan)
     }
 
     /// channel の待ち手 `t` を起こす。列から外した後に呼ぶ。枠も品物も取っておかず、起こされたタスクが速い道を
@@ -3576,7 +3669,7 @@ impl Registry {
         self.park_chan(c, me, k, Side::Send, out)
     }
 
-    /// タスク `me` が、継続 `k` で channel `c` に品物が来るか閉じるまで待つ。
+    /// タスク `me` が、継続 `k` で channel `c` に品物が来るか、閉じて送りの予約がなくなるまで待つ。
     pub(crate) fn park_recv(
         &mut self,
         c: i64,
@@ -3609,17 +3702,14 @@ impl Registry {
                 wake: CANCELLED,
             }));
         }
-        // 生きた channel でない値は、閉じて空の channel として扱う。閉じているか進める channel の道は、1つの worker では
-        // 速い道が確かめた状態のまま待ちに来るので届かない守りである
+        // 生きた channel でない値は、閉じて空の channel として扱う。ほかの worker が速い道と待ちの間に channel を
+        // 変えうるので、ここで確かめ直す。1つの worker では速い道が確かめた状態のまま待ちに来るので届かない
         let ready = match self.chan_mut(cell) {
             None => true,
-            Some(chan) => {
-                chan.closed
-                    || match side {
-                        Side::Send => chan.can_send(),
-                        Side::Recv => !chan.items.is_empty(),
-                    }
-            }
+            Some(chan) => match side {
+                Side::Send => chan.closed || chan.can_send(),
+                Side::Recv => !chan.items.is_empty() || chan.drained(),
+            },
         };
         if ready {
             return Ok(Some(Runnable::Resume {
@@ -3654,22 +3744,30 @@ impl Registry {
         Ok(None)
     }
 
-    /// 閉じて空の channel を放す。品物は残っていないので、預かる ID を退かせるだけである。
-    fn settle<M: Mode>(&mut self, ctx: &mut Ctx<M>, cell: CellRef) -> Result<(), CellFault> {
-        if self
-            .chan_mut(cell)
-            .is_some_and(|chan| chan.closed && chan.items.is_empty())
-        {
-            let chan = self.take_chan(cell)?;
-            chan.depot.close(ctx)?;
+    /// 閉じて空で予約のない channel を放し、預かり先を返す。品物は残っていないので、呼ぶ側は lock を放してから預かる
+    /// ID を退かせるだけである。予約はどれも、その `publish` か `receive` の後に lock の下で下ろすので、退かせるのは
+    /// それらすべての後になる (docs/spec/object-model.md の「論理的な worker ID」)。
+    fn settle(&mut self, cell: CellRef) -> Result<Option<Depot>, CellFault> {
+        if self.chan_mut(cell).is_some_and(|chan| chan.released()) {
+            return Ok(Some(self.take_chan(cell)?.depot));
         }
-        Ok(())
+        Ok(None)
     }
 
     /// run の終わりに残った channel を放す。残った品物を預かる ID の下で落としてから ID を退かせることを `discards` に
-    /// 積む。
+    /// 積む。`sweep_all` は成功した run の終わりにだけ呼び、予約と確定の間に切り替えはないので、予約は残っていない。
     fn free_chan(&mut self, cell: CellRef, discards: &mut Discards) -> Result<(), CellFault> {
-        let ChanCell { items, depot, .. } = self.take_chan(cell)?;
+        let ChanCell {
+            items,
+            depot,
+            sends,
+            recvs,
+            ..
+        } = self.take_chan(cell)?;
+        debug_assert!(
+            sends == 0 && recvs == 0,
+            "a channel is swept with a reservation"
+        );
         for item in items {
             discards.word(item, depot.worker);
         }
@@ -3960,14 +4058,14 @@ pub(crate) struct Depot {
 }
 
 impl Depot {
-    /// 新しい預かる ID を出す。`new_chan` が1回呼ぶ。
+    /// 新しい預かる ID を出す。`new_raw` の行が、`new_chan` の前に登録表の lock の外で1回呼ぶ。
     pub(crate) fn open<M: Mode>(ctx: &mut Ctx<M>) -> Depot {
         Depot {
             worker: unsafe { ctx.heap_mut() }.fork_worker(),
         }
     }
 
-    /// ほかで出した ID (タスクのセルの ID) を預かる ID として使う。`close` は呼ぶ側が ID を退かせる所で呼ぶ。
+    /// ほかで出した ID (タスクのセルの ID と、channel の予約が覚えた ID) を預かる ID として使う。`close` は呼ぶ側が ID を退かせる所で呼ぶ。
     pub(crate) fn of(worker: u32) -> Depot {
         Depot { worker }
     }
@@ -5932,4 +6030,422 @@ fn a_cancel_in_the_mail_waits_for_its_owner() {
     expire(&shared, &mut NoDriver::default(), 0, 5, &mut out).unwrap();
     assert!(out.is_empty());
     assert!(shared.lock().task_mut(cell).unwrap().k.is_none());
+}
+
+/// 持ち主 `owner` で動いているタスクのセル。持ち主の違う場合をスレッドなしで作るためである。
+#[cfg(test)]
+fn owned_task(shared: &Shared, owner: u32) -> CellRef {
+    let scope = shared.lock().open_root(None, None).unwrap();
+    let cell = running_task(shared, scope);
+    shared.lock().task_mut(cell).unwrap().owner = owner;
+    cell
+}
+
+/// 預かる ID を開かない channel。品物は即値だけを使い、預かり先を閉じないテストで使う。
+#[cfg(test)]
+fn test_chan(shared: &Shared, cap: i64) -> i64 {
+    shared.lock().new_chan(cap, Depot::of(0))
+}
+
+/// ほかの worker の送りを表す。予約して、同じ worker が即値 `n` を積んで確定する。起こした待ち手を返す。
+#[cfg(test)]
+fn send_now(shared: &Shared, c: i64, n: i64) -> Vec<Woken> {
+    let mut hold = None;
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_send(c, None, false, &mut hold)
+            .unwrap(),
+        0
+    );
+    let (chan, _) = Hold::take_send(&mut hold, c).unwrap();
+    let mut out = Vec::new();
+    shared
+        .lock()
+        .push_raw(chan, Word::imm(n), &mut out)
+        .unwrap();
+    out
+}
+
+/// 予約した送りを、即値 `n` を積んで確定する。起こした待ち手を返す。
+#[cfg(test)]
+fn push_held(shared: &Shared, hold: &mut Option<Hold>, c: i64, n: i64) -> Vec<Woken> {
+    let (chan, _) = Hold::take_send(hold, c).unwrap();
+    let mut out = Vec::new();
+    shared
+        .lock()
+        .push_raw(chan, Word::imm(n), &mut out)
+        .unwrap();
+    out
+}
+
+/// タスク `me` を channel `c` の受け手として待たせる。
+#[cfg(test)]
+fn park_receiver(shared: &Shared, c: i64, me: CellRef) {
+    let mut out = Vec::new();
+    let run = shared
+        .lock()
+        .park_recv(c, me, Word::UNIT, &mut out)
+        .unwrap();
+    assert!(run.is_none() && out.is_empty());
+}
+
+#[cfg(test)]
+fn reserve_send_on(shared: &Shared, c: i64) -> i64 {
+    shared
+        .lock()
+        .reserve_send(c, None, false, &mut None)
+        .unwrap()
+}
+
+/// 持ち主 `me` が取り消しの印の付いたタスク `cell` の待ちを外し、再開する仕事を返す。
+#[cfg(test)]
+fn cancel_on(shared: &Shared, cell: CellRef, me: u32) -> Vec<Runnable> {
+    let mut cells = shared.lock();
+    cells.task_mut(cell).unwrap().cancel = true;
+    let mut woken = Vec::new();
+    let mut work = IoWork::default();
+    cells.unpark(cell, me, &mut woken, &mut work).unwrap();
+    let here = Here {
+        me,
+        mail: &shared.mail,
+        post: &Unposted,
+    };
+    let mut out = Vec::new();
+    cells.route(&mut woken, &here, &mut out).unwrap();
+    out
+}
+
+#[cfg(test)]
+fn woken_cells(out: &[Woken]) -> Vec<CellRef> {
+    out.iter()
+        .map(|w| match *w {
+            Woken::Task { cell, wake, op } => {
+                assert!(wake == WOKE && op.is_none());
+                cell
+            }
+            Woken::Token { .. } => panic!("expected a task"),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+fn chan_state(shared: &Shared, c: i64) -> (usize, usize, usize, usize) {
+    let mut cells = shared.lock();
+    let chan = cells.chan_mut(CellRef::decode(c)).unwrap();
+    (
+        chan.items.len(),
+        chan.sends,
+        chan.recvs,
+        chan.receivers.len(),
+    )
+}
+
+/// 予約した送りは確定するまで枠を取っておき、ほかの送りはその枠を使えない (docs/spec/vm.md の「channel」)。
+#[test]
+fn a_reserved_send_holds_its_room_until_the_push() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let c = test_chan(&shared, 1);
+    let mut held = None;
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_send(c, None, false, &mut held)
+            .unwrap(),
+        0
+    );
+    assert!(matches!(held, Some(Hold::Send { chan, .. }) if chan == CellRef::decode(c)));
+    let mut other = None;
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_send(c, None, false, &mut other)
+            .unwrap(),
+        1
+    );
+    assert!(other.is_none());
+    assert!(push_held(&shared, &mut held, c, 7).is_empty());
+    assert_eq!(reserve_send_on(&shared, c), 1);
+    let mut taken = None;
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_recv(c, None, false, &mut taken, &mut Vec::new())
+            .unwrap(),
+        0
+    );
+    assert!(matches!(taken, Some(Hold::Recv { item, .. }) if item == Word::imm(7)));
+    assert_eq!(shared.lock().stats.channel_ops, 1);
+}
+
+/// 受け取りの予約は先頭の品物を列から取り出し、確定するまで取り出した数に数える。
+#[test]
+fn a_reserved_receive_takes_the_item_out_of_the_queue() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let c = test_chan(&shared, 2);
+    send_now(&shared, c, 1);
+    send_now(&shared, c, 2);
+    let mut held = None;
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_recv(c, None, false, &mut held, &mut Vec::new())
+            .unwrap(),
+        0
+    );
+    assert!(matches!(held, Some(Hold::Recv { item, .. }) if item == Word::imm(1)));
+    assert_eq!(chan_state(&shared, c), (1, 0, 1, 0));
+    let (chan, _, item) = Hold::take_recv(&mut held, c).unwrap();
+    assert!(item == Word::imm(1));
+    assert!(shared.lock().pop_raw(chan).unwrap().is_none());
+    assert_eq!(chan_state(&shared, c), (1, 0, 0, 0));
+}
+
+/// 予約のない確定は、標準ライブラリが予約と確定の組を崩したときだけ起きるので、内部の誤りにする。
+#[test]
+fn a_commit_without_a_reservation_is_an_internal_error() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let c = test_chan(&shared, 1);
+    let chan = CellRef::decode(c);
+    let pushed = shared.lock().push_raw(chan, Word::imm(1), &mut Vec::new());
+    assert!(matches!(
+        pushed,
+        Err(CellFault::Internal(
+            "an item is pushed without a reserved send"
+        ))
+    ));
+    assert!(matches!(
+        shared.lock().pop_raw(chan),
+        Err(CellFault::Internal(
+            "an item is popped without a reserved receive"
+        ))
+    ));
+    assert!(matches!(
+        Hold::take_send(&mut None, c),
+        Err(CellFault::Internal(
+            "an item is pushed without a reserved send"
+        ))
+    ));
+    assert!(matches!(
+        Hold::take_recv(&mut None, c),
+        Err(CellFault::Internal(
+            "an item is popped without a reserved receive"
+        ))
+    ));
+}
+
+/// 閉じる前に予約した送りは閉じた後に積まれ、受け手はそれを待って受け取る。受け取った後は閉じて空になる
+/// (docs/spec/stdlib.md の「`Std.Chan`」)。
+#[test]
+fn a_close_before_a_reserved_push_keeps_receivers_waiting_for_the_item() {
+    let mut ctx = test_ctx();
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let c = shared.lock().new_chan(1, Depot::open(&mut ctx));
+    let mut held = None;
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_send(c, None, false, &mut held)
+            .unwrap(),
+        0
+    );
+    let mut out = Vec::new();
+    assert!(shared.lock().close_raw(c, &mut out).unwrap().is_none());
+    assert!(out.is_empty());
+    let mut taken = None;
+    let reserve_recv = |taken: &mut Option<Hold>| {
+        shared
+            .lock()
+            .reserve_recv(c, None, false, taken, &mut Vec::new())
+            .unwrap()
+    };
+    assert_eq!(reserve_recv(&mut taken), 1);
+    assert!(push_held(&shared, &mut held, c, 5).is_empty());
+    assert_eq!(reserve_recv(&mut taken), 0);
+    let (chan, _, _) = Hold::take_recv(&mut taken, c).unwrap();
+    let depot = shared.lock().pop_raw(chan).unwrap().unwrap();
+    depot.close(&mut ctx).unwrap();
+    assert_eq!(reserve_recv(&mut taken), 2);
+}
+
+/// 閉じた channel に予約した送りが残る間は受け手が待ち、最後の送りが積まれると、待っている受け手をすべて起こす。
+/// 起こしは持ち主によらず、宛先は受け取る worker の `take_wake` が決める。
+#[test]
+fn the_last_reserved_push_into_a_closed_channel_wakes_every_receiver() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let c = test_chan(&shared, 2);
+    let (mut a, mut b) = (None, None);
+    assert_eq!(
+        shared.lock().reserve_send(c, None, false, &mut a).unwrap(),
+        0
+    );
+    assert_eq!(
+        shared.lock().reserve_send(c, None, false, &mut b).unwrap(),
+        0
+    );
+    assert!(
+        shared
+            .lock()
+            .close_raw(c, &mut Vec::new())
+            .unwrap()
+            .is_none()
+    );
+    let r1 = owned_task(&shared, 0);
+    let (r2, r3) = (owned_task(&shared, 1), owned_task(&shared, 1));
+    for r in [r1, r2, r3] {
+        park_receiver(&shared, c, r);
+    }
+    assert_eq!(woken_cells(&push_held(&shared, &mut a, c, 1)), [r1]);
+    assert_eq!(woken_cells(&push_held(&shared, &mut b, c, 2)), [r2, r3]);
+    for r in [r2, r3] {
+        assert_eq!(shared.lock().task_mut(r).unwrap().owner, 1);
+    }
+    assert_eq!(chan_state(&shared, c), (2, 0, 0, 0));
+}
+
+/// 受け取りの予約が残る間は、閉じて空でも channel を放さない。確定した区間で放し、預かり先を返す。
+#[test]
+fn a_channel_is_released_only_after_the_last_reserved_receive() {
+    let mut ctx = test_ctx();
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let c = shared.lock().new_chan(1, Depot::open(&mut ctx));
+    send_now(&shared, c, 1);
+    let mut held = None;
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_recv(c, None, false, &mut held, &mut Vec::new())
+            .unwrap(),
+        0
+    );
+    assert!(
+        shared
+            .lock()
+            .close_raw(c, &mut Vec::new())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(chan_state(&shared, c), (0, 0, 1, 0));
+    let (chan, _, _) = Hold::take_recv(&mut held, c).unwrap();
+    let depot = shared.lock().pop_raw(chan).unwrap().unwrap();
+    depot.close(&mut ctx).unwrap();
+    assert!(shared.lock().chan_mut(chan).is_none());
+}
+
+/// ほかの worker が持ち主の受け手を起こすと、待ちの登録だけを外し、継続はセルに残す。継続を取り出すのは持ち主の
+/// `take_wake` だけで、ほかの worker は持ち主へ回す (docs/spec/vm.md の「セルと登録表」)。
+#[test]
+fn a_wake_for_another_owner_leaves_the_continuation_in_the_cell() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let c = test_chan(&shared, 0);
+    let r = owned_task(&shared, 1);
+    park_receiver(&shared, c, r);
+    let out = send_now(&shared, c, 4);
+    assert_eq!(woken_cells(&out), [r]);
+    {
+        let mut cells = shared.lock();
+        let task = cells.task_mut(r).unwrap();
+        assert!(matches!(task.phase, Phase::Parked));
+        assert!(task.wait.is_none() && task.k.is_some());
+    }
+    let w = &out[0];
+    assert!(matches!(
+        shared.lock().take_wake(w, 0).unwrap(),
+        Route::Forward(1)
+    ));
+    assert!(matches!(
+        shared.lock().take_wake(w, 1).unwrap(),
+        Route::Run(Runnable::Resume { cell, wake: WOKE, .. }) if cell == r
+    ));
+}
+
+/// 起こされた後に届いた取り消しは待ちを外さない。待ちの登録を先に下ろした側が勝つので、受け手は `Woke` で再開して
+/// 速い道をやり直す (docs/spec/vm.md の「取り消しの届け方」)。
+#[test]
+fn a_cancel_after_the_wake_leaves_the_task_woken() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let c = test_chan(&shared, 0);
+    let r = owned_task(&shared, 1);
+    park_receiver(&shared, c, r);
+    let out = send_now(&shared, c, 4);
+    let cancels = shared.lock().stats.cancels;
+    assert!(cancel_on(&shared, r, 1).is_empty());
+    assert_eq!(shared.lock().stats.cancels, cancels);
+    assert!(matches!(
+        shared.lock().take_wake(&out[0], 1).unwrap(),
+        Route::Run(Runnable::Resume { cell, wake: WOKE, .. }) if cell == r
+    ));
+}
+
+/// 起こされる前の取り消しは受け手を列から外すので、容量 0 の channel の枠も閉じる。
+#[test]
+fn a_cancel_before_the_wake_takes_the_receiver_out_of_the_queue() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let c = test_chan(&shared, 0);
+    let r = owned_task(&shared, 0);
+    park_receiver(&shared, c, r);
+    assert_eq!(resumed_cells(&cancel_on(&shared, r, 0)), [(r, CANCELLED)]);
+    assert_eq!(chan_state(&shared, c), (0, 0, 0, 0));
+    assert_eq!(reserve_send_on(&shared, c), 1);
+}
+
+/// 容量 0 の枠を開いた受け手が、送りの予約の後に取り消されても、品物は積まれる。次の受け手が取るまで、channel は
+/// 容量と待っている受け手の数の和を超えて持ち、ほかの送りは積めない (docs/spec/stdlib.md の「`Std.Chan`」)。
+#[test]
+fn a_receiver_cancelled_after_a_reserved_send_overfills_the_channel_until_the_next_receive() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let c = test_chan(&shared, 0);
+    let r = owned_task(&shared, 0);
+    park_receiver(&shared, c, r);
+    let mut held = None;
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_send(c, None, false, &mut held)
+            .unwrap(),
+        0
+    );
+    assert_eq!(resumed_cells(&cancel_on(&shared, r, 0)), [(r, CANCELLED)]);
+    assert!(push_held(&shared, &mut held, c, 9).is_empty());
+    assert_eq!(chan_state(&shared, c), (1, 0, 0, 0));
+    assert_eq!(reserve_send_on(&shared, c), 1);
+    let mut taken = None;
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_recv(c, None, false, &mut taken, &mut Vec::new())
+            .unwrap(),
+        0
+    );
+    let (chan, _, item) = Hold::take_recv(&mut taken, c).unwrap();
+    assert!(item == Word::imm(9));
+    assert!(shared.lock().pop_raw(chan).unwrap().is_none());
+    assert_eq!(reserve_send_on(&shared, c), 1);
+    park_receiver(&shared, c, owned_task(&shared, 0));
+    assert_eq!(reserve_send_on(&shared, c), 0);
+}
+
+/// 速い道が待つと答えた後に、ほかの worker が品物を積むと、`park_recv` は登録せずに `Woke` で戻る。待ちには数える。
+#[test]
+fn park_returns_at_once_when_another_worker_changed_the_channel() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let c = test_chan(&shared, 1);
+    let me = owned_task(&shared, 0);
+    assert_eq!(
+        shared
+            .lock()
+            .reserve_recv(c, Some(me), false, &mut None, &mut Vec::new())
+            .unwrap(),
+        1
+    );
+    assert!(send_now(&shared, c, 3).is_empty());
+    let mut out = Vec::new();
+    let run = shared
+        .lock()
+        .park_recv(c, me, Word::UNIT, &mut out)
+        .unwrap();
+    assert_eq!(resumed_cells(&Vec::from_iter(run)), [(me, WOKE)]);
+    assert!(out.is_empty());
+    assert_eq!(shared.lock().stats.channel_waits, 1);
+    assert_eq!(chan_state(&shared, c), (1, 0, 0, 0));
 }
