@@ -68,7 +68,7 @@ eml_rt         語の単位の操作 (share、移し戻し、範囲のプリミ�
 ## スレッドと worker
 
 - OS のスレッド1つが worker 1つである。worker はどれも自分の `Ctx<M>` (自分の `Heap`、`evv`、yield の状態、統計、worker の止める語) を持ち、共有の `CodeBase`、`Arc<Control>`、`Arc<dyn Host>` の上で動く。セッションの根は worker 0 の `Ctx` に置く
-- `eml run` の worker の数 N の既定は `available_parallelism` で、`--workers` と `EML_WORKERS` で変えられる ([標準ライブラリ](../spec/stdlib.md) の「起動」)。ライブラリと UI テストの既定は N = 1 で、`par/` の UI テストは N = 2 と 8 でも流す (下の「テスト」)
+- `eml run` の worker の数 N の既定は `available_parallelism` で、`--workers` と `EML_WORKERS` で変えられる ([標準ライブラリ](../spec/stdlib.md) の「起動」)。ライブラリと UI テストの既定は N = 1 で、`par/` と `async/` の UI テストは N = 2 と 8 でも流す (下の「テスト」)
 - worker 1..N-1 は、run の最初の `par` の fork か、`Async` のタスクを置く最初の `start` で worker 0 が一度に作り、run の終わりに join する。`par` も `start` もない run と、セッションの根を持つか根の基本操作に届くコードの run は、worker を作らずに worker 0 だけで動く。REPL のセッションは根を持つので、いつも worker 1つで動く。成功した run の後にも、ほかの worker のヒープのページに物体が残りうるので、ヒープは worker 0 が join してから確かめて落とす。worker とヒープは run の間ずっと生きる ([VM](../spec/vm.md) の「タスクとスケジュール」)
 - worker 0 は `main` のタスクを動かす。プロセスのメインスレッドでなく、別に作るスレッドである。VM の worker のスタックは 8 MiB で、ネイティブのコードは driver の求める大きさのスタック (既定は 1 GiB の予約。[ネイティブ化の設計](native.md) の「安全点とスタック」) で作る。ほかの worker のスレッドも worker 0 と同じ大きさで作る
 - host のスレッドはプロセスのメインスレッドである。`Session::run` の実行系を動かして worker 0 を作り、worker 0 を join するまで待つ。シグナルの handler はどのスレッドでも動くが、SIGINT と SIGTERM を塞がないのは worker 0 だけなので、unix では worker 0 のスレッドで動く (下の「VM の並列化の備え」)。止める手順の後半 (worker を待つこと、ヒープを確かめて落とすこと。下の「止める手順」) は worker 0 が行う。I/O の driver を空にし、プールの仕事を待つのは、driver を持つ worker のスレッドである

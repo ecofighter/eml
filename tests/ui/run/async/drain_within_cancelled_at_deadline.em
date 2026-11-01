@@ -1,3 +1,4 @@
+-- workers: skip (同じ期限の2つのタイマーで起きたタスクの順に頼る。N = 8 で "m: done" が "m: Cancelled" になった)
 -- `drain_within` で待つタスクが、期限と同じ時刻に外から取り消される。取り消された呼び手は `s` に触れないので、
 -- `s` のタスクは最後まで動く (docs/spec/stdlib.md の「時間」)。
 import Async (Async)
