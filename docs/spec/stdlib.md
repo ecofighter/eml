@@ -896,7 +896,7 @@ main () =
 | `par` | `(Unit -> <never e> a) -> (Unit -> <never e> b) -> <e> (a, b)` | extern (呼び出しは `par` の命令) |
 | `both` | `(Unit -> <e> a) -> (Unit -> <e> b) -> <e> (a, b)` | eml |
 
-- `par f g` は、`f ()` と `g ()` を2つの子として動かし、両方が終わるのを待って結果の組を返す。今の VM は、2つの子を1つの worker の上で切り替えて動かす ([VM](vm.md) の「`par` の fork と join」)。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」にある
+- `par f g` は、`f ()` と `g ()` を2つの子として動かし、両方が終わるのを待って結果の組を返す。VM は、空いている worker があれば右の子をその worker で動かし、なければ2つの子を同じ worker の上で切り替えて動かす ([VM](vm.md) の「`par` の fork と join」)。`par` の意味は [マルチコア対応の設計](../future/multicore.md) の「`par` の意味」にある
 - 子の row の上限は `never` である ([型と Kind](types.md) の「row 変数の多重度の上限」)。子が起こせるのは、`Panic` と、どの操作も `never` のエフェクトだけである。`IO` (`println` や `exit`)、`var` のエフェクト、`once` か `multi` の操作を持つエフェクトを子が起こしうる呼び出しは E2020 になる。子が `never` の操作だけを起こしても、そのエフェクトが `once` の操作を持てば E2020 である。上限は `par` の型にあるので、`par` を値として渡した先の呼び出しも同じく確かめる
 - 子が `never` の操作で中断すると、両方の子が終わった後で、親がその操作を起こし直す。両方の子が中断すれば左の子の操作を起こし直し、もう一方の結果は捨てる。子の中の handler と `try_panic` は、子の中の操作を子の中で捕まえる
 - 子の実行時エラーは評価を止め、ほかの子の結果では救わない。両方の子が誤りなら左の誤りを報告する ([VM](vm.md) の「子の誤り」)。捕まえられなかった子の `Panic` は親で起こし直した `panic` の実行時エラーになり、文言はソースの位置を持たない ([実装の現在地](../implementation/status.md) の「`par`」)
@@ -1255,7 +1255,7 @@ body () =
 | `load` | `Counter -> <IO> Int` | extern |
 | `store` | `Int -> Counter -> <IO> Unit` | extern |
 
-- `Counter` は、run をまたいで `Machine` が持つ表の添字を持つ `Unr` の即値である。`add n c` は足した後の値を返し、64 ビットで巻き戻る。`Counter` は放さない。数の少ない共有の状態のためのものである。worker のスレッドを入れるときは、表を `SeqCst` の atomic にする
+- `Counter` は、run をまたいで `Machine` が持つ表の添字を持つ `Unr` の即値である。`add n c` は足した後の値を返し、64 ビットで巻き戻る。`Counter` は放さない。数の少ない共有の状態のためのものである。`Async` のタスクが複数の worker で動くときは、表を `SeqCst` の atomic にする
 - 行は `Async` の命令で動くので、`Std.Atomic` は `Std.Async` を読み込む。row は `IO` だけで、タスクの外でも、REPL の入力をまたいでも使え、実行時エラーで捨てた run の `add` も残る
 
 ## `Std.Net`

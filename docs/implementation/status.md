@@ -32,8 +32,8 @@
 - `Float` (IEEE 754 の倍精度) のリテラル、算術、比較と、Python の `repr` の形の表示。変換と数学の関数は `Std.Float` にある ([宣言](../spec/declarations.md) の「Prelude のクラス」、[標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」)
 - 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)
 - 連想配列と集合: キーの順の `Map k v` (`Std.Map`) と `Set a` (`Std.Set`)。どちらも釣り合いを取った木で、キーと要素は `Unr` に限る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」)
-- 2つの計算の組: `Std.Par` の `par` は2つの子を動かして両方を待ち、子の `never` の操作を親で起こし直す。子の row の上限は `never` で、`IO` や `var` を使う子は E2020 になる。`both` は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Par`」)。`eml run` と `eml repl` の `--sched` で、子を切り替える方針を普通の方針 (`normal`。既定。監視のスレッドの刻みで横取りする)、逐次 (`sequential`)、seed で決まる横取り (`seeded:N`) から選ぶ ([標準ライブラリ](../spec/stdlib.md) の「起動」)
-- 非同期のタスク: `Std.Async` の `run` が根のスコープを開いて本体をタスクとして動かし、`start` と `spawn` が今のスコープにタスクを足し、`await` がタスクの値を受け取るか失敗を起こし直す。`run` はスコープのすべてのタスクを待ってから戻る。`scope` が名前付きのスコープを開き、`start_in` と `spawn_in` がそこにタスクを足す。`cancel` と `cancel_scope` がタスクとスコープを取り消し、`shield` が取り消しの地点を守り、`check_cancelled` と `cancel_requested` が待たないループの中で取り消しを確かめる。ほかに `yield_now`、`try_all`、`Failure` と、時間を扱う `sleep_ms`、`timeout`、`race`、`drain_within` がある。タスクは `par` の子と同じく1つの worker の上で切り替えて動き、`--sched` の方針に従う ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」、[VM](../spec/vm.md) の「`Async` のタスク」)
+- 2つの計算の組: `Std.Par` の `par` は2つの子を動かして両方を待ち、子の `never` の操作を親で起こし直す。子の row の上限は `never` で、`IO` や `var` を使う子は E2020 になる。`both` は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Par`」)。`eml run` と `eml repl` の `--sched` で、子を切り替える方針を普通の方針 (`normal`。既定。監視のスレッドの刻みで横取りする)、逐次 (`sequential`)、seed で決まる横取り (`seeded:N`) から選ぶ。`eml run` の `--workers` で worker のスレッドの数を選び、右の子は空いている worker で動く ([標準ライブラリ](../spec/stdlib.md) の「起動」)
+- 非同期のタスク: `Std.Async` の `run` が根のスコープを開いて本体をタスクとして動かし、`start` と `spawn` が今のスコープにタスクを足し、`await` がタスクの値を受け取るか失敗を起こし直す。`run` はスコープのすべてのタスクを待ってから戻る。`scope` が名前付きのスコープを開き、`start_in` と `spawn_in` がそこにタスクを足す。`cancel` と `cancel_scope` がタスクとスコープを取り消し、`shield` が取り消しの地点を守り、`check_cancelled` と `cancel_requested` が待たないループの中で取り消しを確かめる。ほかに `yield_now`、`try_all`、`Failure` と、時間を扱う `sleep_ms`、`timeout`、`race`、`drain_within` がある。タスクは worker 0 の上で切り替えて動き、`--sched` の方針に従う ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」、[VM](../spec/vm.md) の「`Async` のタスク」)
 - タスクの間の channel と共有の数: `Std.Chan` の channel (`send`、`recv`、`try_send`、`try_recv`、`close`、`merge`) と、`Std.Atomic` の `Counter` がある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Chan`」と「`Std.Atomic`」、[VM](../spec/vm.md) の「channel」)
 - TCP: `Std.Net` の `listen`、`accept`、`connect`、読み書き、`read_line` が、macOS と Linux の本物の driver とテストの driver の上で動く。`connect` は名前を driver の解決のスレッドで解決する。誤りは IO の失敗で、拒まれた接続、reset、使用中の番地、時間切れを種類で分ける ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。driver が受け付けの時点で終えた操作は、待たずに続ける。操作の token `OpId` はヒープの物体を持たない即値である ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」、[VM](../spec/vm.md) の「操作の記録」)。空きのある buffer への読みは、driver の操作1つで済む。空きは `Bytes.with_capacity` で作れる。`write_bytes` は書いた `Bytes` とストリームの組を返し、共有の `Bytes` も写さずに書く
 - TLS: `Std.Tls` のクライアントが、`Std.Net` のストリームの上で handshake し、暗号にして読み書きする。TLS の状態は I/O を持たない crate `eml_tls` が持ち、ソケットの I/O は `std/Tls.em` が `Std.Net` で行う。暗号は aws-lc-rs、既定の根は webpki-roots で、根に足す CA を PEM で渡せる。テストの driver の `tls.localhost` が TLS を終端する ([標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」)
@@ -137,7 +137,8 @@
 
 ### `par`
 
-- `par` の2つの子は1つの worker の上で切り替えて動くので、`par` で計算は速くならない。子を別のスレッドで動かすのは worker のスレッドを入れてからである ([ロードマップ](../future/roadmap.md) の `worker-threads` と `par-steal`)
+- `par` の右の子をほかの worker で動かすのは、空いている worker があるときだけである。fork は右の子を空いている worker の受け箱に置き、なければ親の worker の上で切り替えて動かす。盗みはなく、置く粒度の下限もない ([VM](../spec/vm.md) の「`par` の fork と join」、[ロードマップ](../future/roadmap.md) の「マルチコア対応」)
+- REPL と、セッションの根を持つ run は worker 1つで動くので、そこでは `par` で計算は速くならない。ライブラリの既定も worker 1つである ([VM](../spec/vm.md) の「タスクとスケジュール」)
 - 捕まえられなかった子の `Panic` の実行時エラーは、``panicked: <message> in `reperform$Prelude.Panic.panicked` `` の文言で、ソースの位置を持たない。子の `panic` を親で起こし直す関数の中で報告するためである ([VM](../spec/vm.md) の「子の誤り」)
 
 ### `Async`

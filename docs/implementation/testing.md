@@ -51,7 +51,7 @@
 - `ui.rs` と `repl.rs` の、ファイルの分け方の自己テストの組。UI のディレクトリには同じ拡張子のモジュールがあり、トランスクリプトは深い所の `.repl` を断るので、規則が違う
 - `eml_vm` の `structs.rs` の逆アセンブラのテストは、`dup s` と `(boxes, unboxes)` を確かめる。`miri.rs` の同じプログラムは、この事実を持たない
 - `eml_cli` の `api.rs` の `Outcome::Rejected` のテストは、トランスクリプトに出ない結果を固定する
-- `RunStats` がスケジュールによらないことは3か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムと、`exit` で終わらない `run/async/` のプログラムで生成したコードを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
+- `RunStats` がスケジュールによらないことは3か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムと、`exit` で終わらない `run/async/` のプログラムで生成したコードを確かめる。`run/par/` の N = 2 と 8 の run (下の「seed で流す」) は、worker をまたいで足した数が N = 1 と同じことを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
 - シグナルを届ける道は3か所で確かめる。`run/async/` と `run-fail/async/` の `signal_*.em` は、仮想のシグナルの予定で `Std.Signal` の意味の筋書きを確かめる。`eml_vm` の `signal.rs` は、ハンドラの代わりにテストのスレッドが `Control` と自己パイプを書き、本物の driver の上の監視のスレッドの中継と、集める地点で届けることを確かめる。`eml_cli` の `cli.rs` のシグナルのテストは、OS のシグナルを `eml run` に送り、ハンドラと終了コード、届けていない間の2回目の強制の終わりを確かめる
 - `par` の子の誤りの規則は、`par.rs` の手書きの LIR のテストと `par::source` の組で確かめる。右の子の誤りを左の子が終わった後で報告する順序は、左の子が出力する LIR で書いた子 (`noisy`) だけが確かめる。ソースの子は出力できないので、ソースでは順序が見えない。`par::source` は、生成した `fork$` と `reperform$` を通っても、左の中断で右の誤りを救わないことと、左の誤りが先であることを確かめる
 
@@ -226,7 +226,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 ### ThreadSanitizer
 
 - `tsan` のジョブは、worker のスレッドの間で共有する記憶に data race がないことを `-Zsanitizer=thread` で確かめる。流すのは `eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::` の2手順で、対象は `x86_64-unknown-linux-gnu` だけである。Miri は複数のスレッドの interleaving を網羅しないので、スレッドをまたぐ `unsafe` の核 (`eml_rt` の remote 解放の経路と、`eml_vm` の起こしの語や run の表) は、実際に走るスレッドの上で ThreadSanitizer が見る
-- nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。std の `Mutex` と `Condvar` も計装して流すので、std 側の同期を race と誤って報告することがない
+- nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。2つの手順は、この形で報告なしに通っている
 - 合否は終了コードで決める。`TSAN_OPTIONS=halt_on_error=1` で、警告が1件でも出たらテストのプロセスが止まる。警告は抑制せず、`suppressions` も書かない。報告が出たら、コードの不具合か、`eml_rt` の `unsafe` が前提にしている順序の誤りとして直す
 - 開発機では build の置き場所を `target/tsan` に分ける (「よく使うコマンド」)
 - 道具の不具合で緑にできないときは、「AddressSanitizer」と同じく、fenix と同じ日付に固めた rustup の nightly にする。それでも緑にならなければ、ジョブを外し、外したことをこの節とロードマップの「その後の項目」に書く
@@ -386,7 +386,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `strings/`: 文字列の表示、補間、複数行、生の文字列、パターン
   - `unwind/`: 中断と巻き戻し。`exit` と `abort` がハンドラやファイルを抜けるときの後始末
   - `var/`: `var` の変数。配列の添字、スコープ、中断との組み合わせ
-  - `par/`: `Std.Par.par` の fork と join。子と handler の組み合わせ。逐次のほかに2つの seed でも流す (下の「seed で流す」)
+  - `par/`: `Std.Par.par` の fork と join。子と handler の組み合わせ。逐次のほかに2つの seed と、worker の数 N = 2 と 8 でも流す (下の「seed で流す」)
   - `async/`: `Std.Async` のタスク。始めること、待つこと、スコープの終わり、失敗の起こし直し、`Lin` の結果、取り消し、名前付きのスコープ、`shield`、`shield` の境目、`timeout`、`sleep_ms`、`race`、`drain_within`、全員が待って止まるデッドロック、`Std.Net` の driver の操作 (`net_*.em`)、`Std.Signal` の待ちと仮想のシグナル (`signal_*.em`)。逐次のほかに2つの seed でも流す (下の「seed で流す」)。driver の操作の UI テストはいつもテストの driver (`Clock::Virtual`) の上で流す。本物の driver の振る舞いは OS で変わるので、Rust のテストで確かめる。`_within` の期限は正の値か、データのないストリームの 0 以下の値で書く。データのあるストリームの 0 以下の期限は、待ち始める前に読みが終わったかで結果と `completions` が seed によって変わる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)
   - `tls/`: `Std.Tls` のクライアント。相手はテストの driver の `tls.localhost` と `tls-cut.localhost` の終端器で、平文の側はプログラムの中の `Net` の server のタスクである ([VM](../spec/vm.md) の「時計と driver」)。終端器の証明書は `eml_tls` の `fixtures` にあり、その CA は `fixtures/gen.sh` が `tls/` と `http/` の分類 (`run/` と `run-fail/`) の `ca.pem` に写す。プログラムは `Fs.read_text "ca.pem"` で読み、`Tls.connect_with_ca` か `Tls.wrap_with_ca` に渡す。`par/` や `async/` と違って seed では流さない。seed で流す run は `completions` を比べるが (下の「seed で流す」)、終端器が1回に汲む平文の量は決着の順で変わり、TLS のレコードの切れ目、`Net` の読みの回数、`completions` がそれに従うためである。出力は、どのスケジュールでも同じになるように書く。閉じる server のタスクは、閉じる前にその接続で読むか書くかする。そうしないと、クライアントが handshake の途中で EOF を読むかどうかがスケジュールで決まる。読みも書きもせずに閉じるテストは、受けと閉じを1つのタスクで書く ([VM](../spec/vm.md) の「時計と driver」)
   - `http/`: `Std.Http` のクライアント。相手はプログラムの中の `Net` の server のタスクで、https は `tls/` と同じく `tls.localhost` と `tls-cut.localhost` の終端器を通る。https のテストは `Fs.read_text "ca.pem"` を `Options` の `ca` に渡す。`tls/` と同じ理由で seed では流さない。server のタスクは要求を読んでから応答を書いて閉じ、印字は応答を書く前だけにする。クライアントは要求が返ってから印字するので、出力の順はスケジュールによらない。エントリのファイルを `http.em` にしない (上の `std/` と同じく、`import Http` が E1026 になる)
@@ -514,7 +514,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 CI の対象 (OS、CPU、AddressSanitizer の脚) を足して落ちたテストは、1件ずつ見てから次のどれかに分ける。前もって範囲で期待値の書き直しを許すことはしない。
 
-- コードの不具合: 直す。AddressSanitizer の報告はいつもこれに当たる
+- コードの不具合: 直す。AddressSanitizer と ThreadSanitizer の報告はいつもこれに当たる
 - 機械に依る値 (libm の最後のビットなど): 下の「印を付けずに直すもの」で直す
 - その OS にない振る舞い: 下の「Windows で流さないテスト」と同じ考えで `cfg` の印を付ける
 - 見張りの時間切れ: その runner で測り、「性能のテスト」の 10 倍の規則で見張りを延ばす

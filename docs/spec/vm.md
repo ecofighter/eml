@@ -389,7 +389,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ## タスクとスケジュール
 
-- `Sched`、`Policy`、`Scheduler` は `eml_vm` の `sched.rs` に置く。別の crate は作らない。worker が1つの今は、ほかの crate と共有するものがないためである
+- `Sched`、`Policy`、`Scheduler` は `eml_vm` の `sched.rs` に置く。別の crate は作らない。実行系が VM だけで、ほかの crate と共有するものがないためである
 - 方針は `Sched` の値で選ぶ。`Normal`、`Sequential` (既定)、`Seeded(seed)` の3つで、`Copy` である。`FromStr` は `normal`、`sequential`、`seeded:<n>` (`n` は `u64` の10進数) を読み、ほかの綴りは誤りにする。誤りの文は ``expected `normal`, `sequential` or `seeded:<n>`, found `…` `` である。CLI の `--sched` はこれを読む ([標準ライブラリ](stdlib.md) の「起動」)。ライブラリの既定 (`Sched::default()`、`RunConfig::default()`、`Machine`) を `Sequential` にするのは、`RunStats` とベンチの数を時間に依らないものにするためである
 - `Policy` は5つのメソッドと定数 `PREEMPTS` を持つ。`tick` は安全点ごとに呼び、真なら横取りを試みる。`reload` は横取りを試みた後に、次の横取りまでの予算を詰め直す。`pick` は走れるタスクの列から次のタスクを取り出す。`wake` は起こしたタスクを列に入れる。`for_worker(k)` は worker `k` (`k` ≥ 1) の `Scheduler` が使う方針を返す。worker 0 は run の方針をそのまま使い、`for_worker(0)` は呼ばない。`Seeded` は作ったときの seed を覚えていて、`Seeded::new(splitmix64(seed ^ k))` を返す。同じ seed の run で、どの worker も同じ乱数の列を引かないためである。ほかの方針は自分の写しを返す。`PREEMPTS` は監視のスレッドの `PREEMPT` で横取りするかで、`Normal` だけが真である。動くタスクの番号を書くのは `Scheduler::set_current` だけで、`PREEMPTS` が真なら、これが run の表の自分の欄にある切り替えの数を増やす
 - ほかのタスクに切り替えるたびに、ほかのスレッドから受けた解放が溜まっていれば `Ctx::reclaim_if_due` で取り込む ([オブジェクトモデル](object-model.md) の「別のスレッドからの解放」)。溜まっていなければ、`RemoteSink` の2つの欄を読むだけで済む
@@ -817,7 +817,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 - `rc_decrements`: 参照の数を減らした回数。`decref`、`drop`、解放の連鎖で子を手放した分を数える。`release` と `free_block` は、持ち主を空けるときにも1つ足す。出どころは `Heap` の `Stats` である
 - `boxes`: VM が実行した `box` (`BoxInt`、`BoxEnum`、`BoxFloat`、`BoxConst`) の数。語の値の表現では確保しうる変換なので数える
 - `unboxes`: VM が実行した `unbox` の数。数える理由は `boxes` と同じである
-- `allocations`: ヒープが物体を確保した回数。検査モードで数える `Heap` の `Stats` の `allocations` をそのまま写す ([オブジェクトモデル](object-model.md) の「仕事の回数」)。速いモードは数えず 0 である。回復の確保は数えない。
+- `allocations`: ヒープが物体を確保した回数。検査モードで数える `Heap` の `Stats` の `allocations` を写す ([オブジェクトモデル](object-model.md) の「仕事の回数」)。速いモードは数えず 0 である。回復の確保は数えない。worker `k` (`k` ≥ 1) のヒープが `Ctx` を作るときに確保するダミーの物体も数えない (下の、worker が複数ある run の段落)。
 - `reuses`: token を受ける `con` が、空でない token の箱を使った回数 (「reuse」)。空の token で確保した `con` は数えず、その確保は `allocations` に入る。VM が数える
 - `peak_objects`: 同時に生きていたヒープの物体の数の最大 (`Heap` の `Stats` の `peak_live`)。ヒープごとのダミーの物体を1つ含む。フレームはスタックにあり、凍結した領域の物体も数えないので、どちらも含まない
 - `peak_stack`: タスクのスタックで同時に使った語の数の最大。タスクごとの `depth_offset + stack.len()` (「`par` の fork と join」の「深さ」) の最大を `Scheduler` が取る。スタックの `Vec` の長さは縮めないので、`Task::reserve` が伸ばした長さがそのままそのタスクの最大になり、タスクが動くのをやめるときと実行の終わりに `stack.len()` を読むだけで済む。タスクごとの値はそのタスクの動きだけで決まるので、スケジュールによらない。フレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの欄で見つける
@@ -856,11 +856,11 @@ worker が複数ある run では、`RunStats` は run が作ったすべての 
 
 ## 並列化への備え
 
-この形の VM は、VM の並列化とスレッドをまたぐキューを後から入れることを妨げない。
+この形の VM は、`par` の右の子をほかの worker で動かす。`Async` のタスクを複数の worker で動かすことと、スレッドをまたぐキューを入れることも妨げない。
 
 - 実行の状態は、ワーカーごとの `Ctx` と、タスクごとの `Task` に分かれる (「スロットとスタック」)。`CodeBase` は読むだけなので、全 worker で共有しても競合しない
 - evidence passing により、`perform` で止まったタスクの続きは、ヒープ上の継続のクロージャになる。このタスクはスタックを持たず、別の worker へ移すことはクロージャの語を1つ渡すことと同じである。まだ始まっていないタスク (`spawn` に渡す閉包、`par` の右の子) も同じである
-- 一方、安全点で切り替えたタスク (`par` と `Async` のスケジューラ。[マルチコア対応の設計](../future/multicore.md) の「1つの worker での実行」) と、`join` で子を待つ親は、スタックの途中で止まっているので、`Task` ごとスタックを持ち続ける。`join` で子を待つ親の数は `par` の入れ子の深さで抑えられる
+- 一方、安全点で切り替えたタスク (「タスクとスケジュール」) と、`join` で子を待つ親は、スタックの途中で止まっているので、`Task` ごとスタックを持ち続ける。`join` で子を待つ親の数は `par` の入れ子の深さで抑えられる
 
 VM は次の4つを守る。
 
@@ -873,4 +873,4 @@ VM は次の4つを守る。
 
 スレッドをまたぐキューのうち、ランタイムのキュー (work stealing の deque、スケジューラの実行待ち) は、スケジューラが `eml_rt` の上に持つ Rust の構造で、数えた参照で語を持つ。deque の `par` の子は fork で印を付けた閉包で、実行待ちの待った継続には救済のほかでは印を付けない ([マルチコア対応の設計](../future/multicore.md) の「印付けの表」)。言語のキュー (channel など) も、Rust の構造が数えた参照で語を持つ形にする。その形は、[マルチコア対応の設計](../future/multicore.md) の「Rust の側が持つ語」にある。
 
-`Registry` は1つの worker が持ち、channel のセルもその中にある。worker のスレッドを入れるときは、登録表を run の lock の下に置き (スコープの一覧を mutex で守る予定と同じ)、送り手は lock の下で積む。待ち手を起こすときは、その項を列から外し、そのタスクのセルの持ち主の worker の受け箱へ `Wake` の知らせを送る。継続 `k` を取り出すのは持ち主である。`reserve_*` と `push_raw`、`pop_raw` の間は lock の外になるので、そのときに枠と品物の予約の数を `ChanCell` に足す。ハンドルは添字の即値のまま変わらない。ロックフリーのキューに替えるときは `ChanCell` の中身だけを替える。
+`Registry` は worker 0 が持ち、channel のセルもその中にある。`Async` のタスクを複数の worker で動かすときは、登録表を run の lock の下に置き (スコープの一覧を mutex で守る予定と同じ)、送り手は lock の下で積む。待ち手を起こすときは、その項を列から外し、そのタスクのセルの持ち主の worker の受け箱へ `Wake` の知らせを送る。継続 `k` を取り出すのは持ち主である。`reserve_*` と `push_raw`、`pop_raw` の間は lock の外になるので、そのときに枠と品物の予約の数を `ChanCell` に足す。ハンドルは添字の即値のまま変わらない。ロックフリーのキューに替えるときは `ChanCell` の中身だけを替える。

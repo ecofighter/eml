@@ -207,8 +207,8 @@ main () =
 }
 
 /// 右の子をほかの worker に置いても、`RunStats` の数はすべての worker の和で、worker が1つの run と同じになる。
-/// 山は最大を取るので、`peak_stack` も同じである。`par` の木は子を worker 1..7 に散らすので、どの worker の
-/// 仕事も足し漏れていれば数が減る。
+/// 山は最大を取るので、`peak_stack` も同じである。少なくとも1つの子をほかの worker に置いたこと (`placed`) を
+/// 確かめるので、その worker の仕事を足し漏らしていれば数が減る。どの worker に置くかはスレッドの順で決まる。
 #[test]
 fn stats_at_two_workers_equal_one_worker() {
     let src = "\
