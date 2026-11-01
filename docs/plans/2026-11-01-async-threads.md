@@ -279,6 +279,13 @@ A0 → A1 → A2 → A3 → A4 → A5 → A6 → A7 → A8 → A9 → A10 → A1
 | R-8 | `next_place` = 1 の起動の費用 (A9) | `start` が1回のプログラムが遅くなる | 費用を測ってコミットのメッセージに書く | 後で考える |
 | R-9 | std を変えて予約と確定の間に命令が入る (A6 以降) | hold が安全点で空でなくなる | hold の debug assert (切り替え、worker を抜けるとき、`sweep_all` の前) | — |
 
+K2-d を当てたファイル (段の全体で5本まで。今 2 本):
+
+| ファイル | 単位 | 見えた違い | 扱い |
+|---|---|---|---|
+| `tests/ui/run/async/drain_within_cancelled_at_deadline.em` | A10 | N = 8 の 200 回のうち 10 回。`m: Cancelled` / `drainer: returned` (7 回) と `drainer: Cancelled` / `m: Cancelled` (3 回)。同じ期限のタイマーは worker ごとに満ちるため | 印 |
+| `tests/ui/run/async/drain_within_deadline_coincides.em` | A10 | N = 8 の 200 回のうち 4 回。`a: Cancelled` / `drained` / `after: done`。同じ理由 | 印 |
+
 ## 実行中の決定
 
 実行の途中で利用者と決めたことを書く。付録と食い違うときは、ここが優先する。
