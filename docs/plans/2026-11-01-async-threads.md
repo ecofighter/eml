@@ -287,6 +287,7 @@ A0 → A1 → A2 → A3 → A4 → A5 → A6 → A7 → A8 → A9 → A10 → A1
 - E-2 (2026-11-01、利用者): G-A6 の「1回の集める地点で登録表の lock は1区間」を、「今の処理の順を保つ短い区間に分けてよい。区間の中では `Ctx`、`Heap` (G-A6 の例外を除く)、driver を呼ばない」に改める。1区間にまとめると、取り消しと受け付け直しの順が変わり、N = 1 の実行待ちの順が変わって G-A5 を破るためである。G-A5 を優先する。`Discards` は、捨てる語と `retire_worker` を今と同じ順に並べた列にする
 - E-3 (2026-11-01): channel の extern のヒープの呼び出しは、A3 では lock の下に残してよい。A6 が lock の外に出す
 - E-4 (2026-11-01、利用者): A8 と A9 の間に単位 A8b を足す。中身と完了の条件は付録 [a8b-net-controls.md](2026-11-01-async-threads/a8b-net-controls.md) の 2 章と 3 章にある。(1) `Std.Net.shutdown_write` と `set_nodelay` を、受け付けですぐ終わる転送の操作 (`Op::ShutdownWrite`、`Op::SetNodelay`、`Submit::Done`) にし、std の型を `<IO, Async>` にする。今はタスクのスレッドで driver を直接呼んでいて、別の worker に置いたタスクでは動かないためである。`IoDriver` の2つのメソッドは消す。`eml_rt` の関門、eml_io の `driver::tests::` の Miri と ASan、Windows の cross clippy を通す。(2) 持ち主でない worker でソケットを落としたら、host の worker を起こす (worker ごとの atomic の旗を `Drop` が立て、各 worker がループの地点で見て、lock の外で起こす)。今は host が起きず、ソケットが閉じられないままになりうる。(3) 2つの操作は取り消しの地点にしない (利用者)。N = 1 の振る舞いを変えないためである。A9 の完了の条件に `git grep driver_mut crates/eml_vm/src/vm.rs` → 出力なし を足す
+- E-5 (2026-11-01): E-4 (3) を守るため、2つの操作の std の包みは `write_bytes` の形 (`io_wait`) にしない。`io_wait` は受け付けで終わった操作でも取り消しの地点になり、予算と `parks` を使うためである。借りるだけの extern `Std.Net.op_done : OpId -> (Bool, OpId)` を1行足し (表の行と std の宣言と spec の1文)、受け付けで終わっていれば待たずに取り出し、終わっていないとき (別の worker の driver に回したとき) だけ `Async.shield` の中で待つ。N = 1 の振る舞いは今と同じになる
 
 ## 付録: レビューで変わった主なこと
 
