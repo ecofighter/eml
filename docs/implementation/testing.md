@@ -223,6 +223,14 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - 開発機では build の置き場所を `target/asan` に分ける (「よく使うコマンド」)
 - 道具の不具合 (runtime がない、link、rpath、時間切れ) で緑にできない脚は、その脚だけ fenix と同じ日付に固めた rustup の nightly にし、時間の上限を 90 分にする。それでも緑にならなければ脚を外し、外した脚をこの節とロードマップの「その後の項目」に書く
 
+### ThreadSanitizer
+
+- `tsan` のジョブは、worker のスレッドの間で共有する記憶に data race がないことを `-Zsanitizer=thread` で確かめる。流すのは `eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::` の2手順で、対象は `x86_64-unknown-linux-gnu` だけである。Miri は複数のスレッドの interleaving を網羅しないので、スレッドをまたぐ `unsafe` の核 (`eml_rt` の remote 解放の経路と、`eml_vm` の起こしの語や run の表) は、実際に走るスレッドの上で ThreadSanitizer が見る
+- nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。std の `Mutex` と `Condvar` も計装して流すので、std 側の同期を race と誤って報告することがない
+- 合否は終了コードで決める。`TSAN_OPTIONS=halt_on_error=1` で、警告が1件でも出たらテストのプロセスが止まる。警告は抑制せず、`suppressions` も書かない。報告が出たら、コードの不具合か、`eml_rt` の `unsafe` が前提にしている順序の誤りとして直す
+- 開発機では build の置き場所を `target/tsan` に分ける (「よく使うコマンド」)
+- 道具の不具合で緑にできないときは、「AddressSanitizer」と同じく、fenix と同じ日付に固めた rustup の nightly にする。それでも緑にならなければ、ジョブを外し、外したことをこの節とロードマップの「その後の項目」に書く
+
 ### 核の Miri
 
 - 本物の driver の核 (`crates/eml_io/src/driver/`) は OS を呼ばない。OS に触れるのは `Backend` の実装だけで、核の単体テスト (`src/driver/tests/`、module `driver::tests`) は偽の backend (`src/driver/tests/fake.rs`) の上で、続きの規則、取り消し、壊れた driver、`quiesce` と `Drop`、プール、名前の解決を確かめる。同じテストを Miri でも流す
@@ -613,7 +621,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 
 ## CI
 
-`.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の6つのジョブを流す。
+`.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の7つのジョブを流す。
 
 - `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls` を外した `tls_off::` のテスト、既定でない feature の clippy (「feature の組み合わせの確認」の9つ) と、段「feature resolution of tls」の `cargo tree` の検査を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる。ubuntu-24.04 では、同じビルドで時間の検査 (「性能のテスト」) も流す
 - `fmt`: Linux で `cargo fmt --check` を流す
@@ -621,6 +629,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 - `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::` と `signal::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
+- `tsan`: x86_64 の Linux で、`eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::` を ThreadSanitizer の下で流す (下の「ThreadSanitizer」)
 
 CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
 
@@ -682,6 +691,7 @@ cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
 nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: と signal:: も。eml_io の検証)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: preempt::。ThreadSanitizer)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
