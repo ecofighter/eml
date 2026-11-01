@@ -755,6 +755,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `control` | セッションの `Arc<Control>` (下の「実行の制御」)。確保の前の上限の確かめと Host の読み手がヒープの中をたどらずに読めるように、ヒープとは別に持つ |
 | `word` | この worker の止める語の `Arc` (`Control::word(k)`)。安全点は、この欄を読み、語を読む2回の読みで済む |
 | `max_depth`、`max_evv` | `Control` の上限の写し。`Ctx::for_worker` が写す |
+| `depth_limit` | 今のタスクの深さの上限。`max_depth` からタスクの深さの起点を引いた値で、起点が `max_depth` を超えれば 0 である。`switch_task` が書き、安全点の `poll` が読む |
 | `host` | セッションの Host (下の「extern」の「Host」)。出力とファイルは、これを通す |
 | `stats` | 仕事の回数 `CtxStats` (`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`)。`Heap` の `Stats` と同じく、検査モードだけで数える。`yields` は `yield_to` の回数で、中断は数えない |
 | `roots` | セッションの根の表 (下の「セッションの根」) |

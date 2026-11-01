@@ -29,3 +29,4 @@ mod tasks;
 #[cfg(not(feature = "tls"))]
 mod tls_off;
 mod variants;
+mod workers;

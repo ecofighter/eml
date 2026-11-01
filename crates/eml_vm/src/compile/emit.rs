@@ -702,8 +702,12 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 dst,
                 index: self.constants.empty_mut_array(),
             },
-            Prim::RootGet(root) => Op::RootGet { dst, root: *root },
+            Prim::RootGet(root) => {
+                self.out.uses_roots = true;
+                Op::RootGet { dst, root: *root }
+            }
             Prim::RootSet(root) => {
+                self.out.uses_roots = true;
                 let at = self.out.operands([*root, u32::from(a[0])]);
                 Op::RootSet { dst, at }
             }

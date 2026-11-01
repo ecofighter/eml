@@ -13,7 +13,7 @@ use crate::cells::{CellRef, Registry, Runnable};
 use crate::driver::{DriverKind, ceil_ms};
 use crate::monitor::Monitor;
 use crate::vm::Task;
-use crate::workers::Run;
+use crate::workers::{Run, Workers};
 
 /// スケジュールの方針の選び方。CLI の `--sched` と `RunConfig::with_sched` で選ぶ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -319,6 +319,8 @@ pub struct Scheduler<P: Policy> {
     pub(crate) run: Arc<Run>,
     /// この `Scheduler` の worker の番号。止める語と `run` の欄の添字である。
     pub(crate) index: usize,
+    /// worker 1..N-1 を作るか、作ったか。worker 0 だけが読み書きする。
+    pub(crate) workers: Workers,
     /// driver の出どころ。`Real` の run だけが OS のシグナルを待つタスクへ届ける (docs/spec/stdlib.md の
     /// 「`Std.Signal`」)。空きの待ちに上限を掛けるかもこれで決まる (docs/spec/vm.md の「時計と driver」)。
     pub(crate) driver_kind: DriverKind,
@@ -333,7 +335,7 @@ pub struct Scheduler<P: Policy> {
 /// `Scheduler` が持つ監視のスレッド。`Scheduler` を捨てるとき (成功でも誤りでも) に止める。`Scheduler` は run の後に
 /// driver を取り出すので、`Drop` はこの欄に置く (docs/spec/vm.md の「タスクとスケジュール」)。
 pub(crate) struct Watcher {
-    control: Arc<Control>,
+    pub(crate) control: Arc<Control>,
     pub(crate) monitor: Option<Monitor>,
     /// 始めるのは1回だけで、始められなかったときも試し直さない。
     tried: bool,
@@ -379,6 +381,7 @@ impl<P: Policy> Scheduler<P> {
             driver: Some(driver),
             run,
             index: 0,
+            workers: Workers::Denied,
             driver_kind: DriverKind::Virtual,
             since_poll: 0,
             runnables: Vec::new(),
@@ -392,8 +395,10 @@ impl<P: Policy> Scheduler<P> {
 
     /// run の始めの準備。driver の waker を自分の欄に置き、眠る driver の run と worker を2つ以上持てる run では監視の
     /// スレッドを始める。眠る worker に Ctrl-C と止める語を届けるのは監視のスレッドの起こしなので、run の始めから
-    /// 動かす (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) fn begin_run(&mut self) {
+    /// 動かす。続けて worker 1..N-1 を作るかを決める。作るのは、worker を2つ以上持て、監視のスレッドが動き、
+    /// セッションに根がなく、読み込んだコードが根に触れない (`roots_free`) run だけである
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn begin_run(&mut self, roots_free: bool) {
         if let Some(driver) = &self.driver {
             // run の表は run ごとに作るので、まだ空である
             let _ = self.run.slots[self.index].waker.set(driver.waker());
@@ -401,6 +406,12 @@ impl<P: Policy> Scheduler<P> {
         if self.driver_kind != DriverKind::Virtual || self.run.slots.len() >= 2 {
             self.start_monitor();
         }
+        self.workers = if self.run.slots.len() >= 2 && self.watcher.monitor.is_some() && roots_free
+        {
+            Workers::Wanted
+        } else {
+            Workers::Denied
+        };
     }
 
     /// 空きのループが driver の `wait` に渡す期限。監視のスレッドのない run で眠る driver なら、止める語を読み直すために、
@@ -415,9 +426,8 @@ impl<P: Policy> Scheduler<P> {
         Ok(Some(deadline.map_or(cap, |d| d.min(cap))))
     }
 
-    /// 監視のスレッドを1回だけ始める。`begin_run` のほかに、横取りする方針で2つ目の仕事が走れるようになりうるときと、
-    /// 本物の driver の run で OS のシグナルを待つときに呼ぶ。どれにも当たらない run はスレッドを作らない
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 監視のスレッドを1回だけ始める。`begin_run` のほかに、横取りする方針で2つ目の仕事が走れるようになりうるときに
+    /// 呼ぶ。どれにも当たらない run はスレッドを作らない (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn start_monitor(&mut self) {
         let watcher = &mut self.watcher;
         if std::mem::replace(&mut watcher.tried, true) {
@@ -578,7 +588,7 @@ mod tests {
         ];
         for (kind, doorbell, workers, started) in cases {
             let mut sched = scheduler(kind, doorbell, workers);
-            sched.begin_run();
+            sched.begin_run(true);
             assert_eq!(
                 sched.watcher.monitor.is_some(),
                 started,
@@ -596,7 +606,7 @@ mod tests {
             (DriverKind::Injected, false),
         ] {
             let mut watched = scheduler(kind, doorbell, 1);
-            watched.begin_run();
+            watched.begin_run(true);
             assert!(watched.watcher.monitor.is_some());
             for deadline in [Some(5000), None, Some(u64::MAX)] {
                 assert_eq!(watched.wait_deadline(deadline), Ok(deadline));

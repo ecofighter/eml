@@ -16,13 +16,14 @@ use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
-use crate::driver::{DriverKind, ceil_ms, floor_ms};
+use crate::driver::{ceil_ms, floor_ms};
 use crate::error::{KEPT_PENDING, VmFault};
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
     JoinId, JoinNode, MAIN, Outcome, POLL_EVERY, Policy, Scheduler, TaskId, TaskState, driver_mut,
 };
 use crate::tls;
+use crate::workers::Workers;
 use crate::{RunCounts, RuntimeError};
 
 // 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
@@ -440,13 +441,29 @@ pub(crate) fn run<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     counts: &mut RunCounts,
-) -> Result<(), RuntimeError> {
-    let result = run_tasks::<R>(code, ctx, task, sched, counts);
-    if result.is_err() {
-        // 検査モードの前提は `wf` と `()` だけで、誤りの後でも成り立つ
-        let _abandoned = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
+) -> Result<Exit, RuntimeError> {
+    match run_tasks::<R>(code, ctx, task, sched, counts) {
+        Ok(()) => Ok(Exit::Finished),
+        Err(RuntimeError::Fault {
+            fault: SPAWN_WORKERS,
+            ..
+        }) => Ok(Exit::Spawn),
+        Err(error) => {
+            // 検査モードの前提は `wf` と `()` だけで、誤りの後でも成り立つ
+            let _abandoned = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
+            Err(error)
+        }
     }
-    result
+}
+
+/// `run` が誤りなしに戻った理由。
+#[derive(Debug)]
+pub(crate) enum Exit {
+    /// エントリのタスクが `Finish` に着いた。
+    Finished,
+    /// 最初の `par` の fork が worker 1..N-1 を求めた。命令の位置はその `par` に戻してあるので、worker を作った後に
+    /// もう一度 `run` を呼ぶと、同じ fork から続く (docs/spec/vm.md の「タスクとスケジュール」)。
+    Spawn,
 }
 
 fn run_tasks<R: Exec>(
@@ -1050,6 +1067,9 @@ fn unwind<R: Exec>(
 /// join が見つけた子の誤りを `Scheduler::failed` に置いたことを、実行の繰り返しに伝える印。外には出ない。
 const CHILD_FAILED: VmFault = VmFault::Internal("a child failure is waiting in the scheduler");
 
+/// `par` の fork が worker 1..N-1 を作るよう求めたことを、実行の繰り返しに伝える印。外には出ない。
+const SPAWN_WORKERS: VmFault = VmFault::Internal("the first fork waits for the workers");
+
 /// `par` の fork。親の文脈で、右の子に ID を出して閉包と子の `evv` に印を付け、右の子をまだ始めずに列に入れ、左の子を
 /// 親のスタックの上で始める。mask は evidence passing の包みがすでに当てている。
 #[inline(never)]
@@ -1061,6 +1081,11 @@ fn par<R: Exec>(
     dst: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
+    // worker は run の最初の fork で作る。`Scheduler` に `thread::scope` を持たせないように、何にも触れずに戻り、
+    // worker を作った `run_scheduled` がこの fork をやり直す (docs/spec/vm.md の「タスクとスケジュール」)
+    if sched.workers == Workers::Wanted {
+        return Err(SPAWN_WORKERS);
+    }
     let o = &code.tables.operands[at as usize..];
     // 2つの閉包は `par` が消費する、VM の持つ参照である
     let (f, g) = (task.get(o[0] as Slot), task.get(o[1] as Slot));
@@ -1683,6 +1708,16 @@ fn task_failed<R: Exec>(
     sched: &mut Scheduler<R::P>,
     mut failure: Failure,
 ) -> Result<(), RuntimeError> {
+    // worker を求めた fork は誤りでなく、位置をその `par` に戻して実行の繰り返しを抜ける。印をここで見るのは、
+    // 繰り返しの命令の列を変えないためである (docs/spec/vm.md の「タスクとスケジュール」)
+    if failure.fault == SPAWN_WORKERS {
+        task.pc = failure.pc;
+        return Err(RuntimeError::Fault {
+            fault: SPAWN_WORKERS,
+            function: String::new(),
+            at: None,
+        });
+    }
     loop {
         let error = match sched.failed.take() {
             Some(error) => error,
@@ -2130,10 +2165,6 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncParkSignal => {
             let me = current_cell(task)?;
-            // 本物の driver では、OS のシグナルを中継する監視のスレッドが要る (docs/spec/vm.md の「タスクとスケジュール」)
-            if sched.driver_kind == DriverKind::Real {
-                sched.start_monitor();
-            }
             if let Some(run) = sched
                 .cells
                 .park_signal(task.raw(arg(0)), me, task.get(arg(1)))?
