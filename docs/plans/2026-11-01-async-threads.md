@@ -286,6 +286,7 @@ A0 → A1 → A2 → A3 → A4 → A5 → A6 → A7 → A8 → A9 → A10 → A1
 - E-1 (2026-11-01): A7 (`RawBuf` を `Send` にする) を A3 の前に行う。A3 が `OpRecord.pending_op: Option<Op>` を足すと、`Op` が `RawBuf` を持つので `Registry` が `Send` でなくなり、`Arc<Shared>` を worker 1..N-1 のスレッドに渡せないためである。A7 は A3〜A6 に依らない。順は A1 → A2 → A7 → A3 → A4 → A5 → A6 → A8 → … になる
 - E-2 (2026-11-01、利用者): G-A6 の「1回の集める地点で登録表の lock は1区間」を、「今の処理の順を保つ短い区間に分けてよい。区間の中では `Ctx`、`Heap` (G-A6 の例外を除く)、driver を呼ばない」に改める。1区間にまとめると、取り消しと受け付け直しの順が変わり、N = 1 の実行待ちの順が変わって G-A5 を破るためである。G-A5 を優先する。`Discards` は、捨てる語と `retire_worker` を今と同じ順に並べた列にする
 - E-3 (2026-11-01): channel の extern のヒープの呼び出しは、A3 では lock の下に残してよい。A6 が lock の外に出す
+- E-4 (2026-11-01、利用者): A8 と A9 の間に単位 A8b を足す。中身と完了の条件は付録 [a8b-net-controls.md](2026-11-01-async-threads/a8b-net-controls.md) の 2 章と 3 章にある。(1) `Std.Net.shutdown_write` と `set_nodelay` を、受け付けですぐ終わる転送の操作 (`Op::ShutdownWrite`、`Op::SetNodelay`、`Submit::Done`) にし、std の型を `<IO, Async>` にする。今はタスクのスレッドで driver を直接呼んでいて、別の worker に置いたタスクでは動かないためである。`IoDriver` の2つのメソッドは消す。`eml_rt` の関門、eml_io の `driver::tests::` の Miri と ASan、Windows の cross clippy を通す。(2) 持ち主でない worker でソケットを落としたら、host の worker を起こす (worker ごとの atomic の旗を `Drop` が立て、各 worker がループの地点で見て、lock の外で起こす)。今は host が起きず、ソケットが閉じられないままになりうる。(3) 2つの操作は取り消しの地点にしない (利用者)。N = 1 の振る舞いを変えないためである。A9 の完了の条件に `git grep driver_mut crates/eml_vm/src/vm.rs` → 出力なし を足す
 
 ## 付録: レビューで変わった主なこと
 
