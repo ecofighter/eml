@@ -6,13 +6,13 @@ use std::sync::Arc;
 use std::thread;
 
 use eml_lir::Program;
-use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, IoDriver, Mode, Stats};
+use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
 use crate::cells::TaskStats;
 use crate::driver::DriverKind;
 use crate::error::KEPT_PENDING;
 use crate::vm::{ExecWith, Exit};
-use crate::workers::{Run, Shutdown, WorkerExit, Workers, settle, spawn_workers};
+use crate::workers::{Retired, Run, Shutdown, WorkerExit, Workers, settle, spawn_workers};
 
 mod apply;
 mod cells;
@@ -144,6 +144,16 @@ pub(crate) struct RunCounts {
     pub(crate) boxes: u64,
     pub(crate) unboxes: u64,
     pub(crate) reuses: u64,
+}
+
+impl RunCounts {
+    /// ほかの worker の回数を足す (docs/spec/vm.md の「`RunStats`」)。
+    fn add(&mut self, other: &RunCounts) {
+        self.unwound_frames += other.unwound_frames;
+        self.boxes += other.boxes;
+        self.unboxes += other.unboxes;
+        self.reuses += other.reuses;
+    }
 }
 
 /// 実行の設定。上限は `Control` が持つので、ここに上限の欄は置かない。`file_root` は Host が持つ
@@ -302,6 +312,10 @@ pub struct Machine<M: Mode> {
     at_run_end: fn(&mut [Ctx<M>]) -> Result<(), RuntimeError>,
     /// 閉じるときの確かめ。検査モードでは残った物体をリークとして返す。
     at_close: fn(&mut Ctx<M>) -> Result<(), RuntimeError>,
+    /// ほかの worker のヒープが、これまでの run でした仕事の和。worker 0 の `ctx` の積算と同じく、`Machine` を作って
+    /// からの値である (docs/spec/vm.md の「`RunStats`」)。
+    others_ctx: CtxStats,
+    others_heap: HeapWork,
     /// 回復で捨てたヒープが実行でした仕事。
     earlier: HeapWork,
     /// 今のヒープが回復で写すためにした仕事。`RunStats` は実行の仕事だけを数えるので引く。
@@ -354,6 +368,8 @@ impl<M: Mode> Machine<M> {
             check_heap,
             at_run_end,
             at_close,
+            others_ctx: CtxStats::default(),
+            others_heap: HeapWork::default(),
             earlier: HeapWork::default(),
             copying: HeapWork::default(),
             shared_roots: 0,
@@ -590,6 +606,13 @@ impl<M: Mode> Machine<M> {
             }
         };
         self.shared_roots = scheduled.shared_roots;
+        // 誤りで終わる run の分も積算に入れる。ほかのヒープは回復で落ちるので、落ちる前に足す
+        let o = &scheduled.others_ctx;
+        self.others_ctx.evidence_steps += o.evidence_steps;
+        self.others_ctx.yields += o.yields;
+        self.others_ctx.yield_frames += o.yield_frames;
+        self.others_ctx.string_bytes_copied += o.string_bytes_copied;
+        self.others_heap.add(&scheduled.others_heap);
         // ほかの worker のヒープは、確かめるか回復するまで `Machine` が持つ。poisoned になる道でも落とさない
         self.others.append(&mut scheduled.others);
         self.generations = std::mem::take(&mut scheduled.generations);
@@ -691,13 +714,15 @@ impl<M: Mode> Machine<M> {
     /// `Machine` を作ってからの積算の `RunStats`。`peak_stack` と、登録表が数える `tasks`、`parks`、`dropped_failures` だけがこの実行の値である (docs/spec/vm.md の「追記」)。
     fn run_stats(&self, counts: &RunCounts, scheduled: &Scheduled<M>) -> RunStats {
         let c = self.ctx.stats();
-        let h = self.heap_work();
+        let o = &self.others_ctx;
+        let mut h = self.heap_work();
+        h.add(&self.others_heap);
         RunStats {
-            evidence_steps: c.evidence_steps,
-            yields: c.yields,
-            yield_frames: c.yield_frames,
+            evidence_steps: c.evidence_steps + o.evidence_steps,
+            yields: c.yields + o.yields,
+            yield_frames: c.yield_frames + o.yield_frames,
             unwound_frames: counts.unwound_frames,
-            string_bytes_copied: c.string_bytes_copied,
+            string_bytes_copied: c.string_bytes_copied + o.string_bytes_copied,
             rc_increments: h.rc_increments,
             rc_decrements: h.rc_decrements,
             boxes: counts.boxes,
@@ -806,6 +831,9 @@ struct Scheduled<M: Mode> {
     peak_stack: u64,
     shared_roots: usize,
     tasks: TaskStats,
+    /// ほかの worker の `Ctx` が数えた回数の和と、ヒープの仕事の和。
+    others_ctx: CtxStats,
+    others_heap: HeapWork,
     generations: Vec<u32>,
     counters: Vec<i64>,
     /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
@@ -919,9 +947,28 @@ fn run_scheduled<M: Mode, P: Policy>(
     }
     let mut others = Vec::with_capacity(exits.len());
     let mut panic = None;
+    // ほかの worker の仕事を worker 0 の数に足す。数は足し、山は最大を取る (docs/spec/vm.md の「`RunStats`」)
+    let mut preemptions = sched.preemptions();
+    let mut peak_stack = sched.peak_stack(task);
+    let mut tasks = sched.cells.stats;
+    let mut bases = Vec::with_capacity(exits.len());
     for exit in exits {
         match exit {
-            Ok(other) => others.push(other),
+            Ok(Retired {
+                ctx: other,
+                counts: worker_counts,
+                tasks: worker_tasks,
+                preemptions: worker_preemptions,
+                peak_stack: worker_peak,
+                base,
+            }) => {
+                counts.add(&worker_counts);
+                tasks.add(&worker_tasks);
+                preemptions += worker_preemptions;
+                peak_stack = peak_stack.max(worker_peak);
+                bases.push(base);
+                others.push(other);
+            }
             Err(payload) => {
                 panic.get_or_insert(payload);
             }
@@ -933,6 +980,17 @@ fn run_scheduled<M: Mode, P: Policy>(
     if workers > 0 {
         reclaim_all(ctx, &mut others);
     }
+    // ほかのヒープの統計は、取り込みの後に読む。`Machine` が `others` を落とす前だからである
+    let mut others_ctx = CtxStats::default();
+    let mut others_heap = HeapWork::default();
+    for (other, base) in others.iter().zip(&bases) {
+        let c = other.stats();
+        others_ctx.evidence_steps += c.evidence_steps;
+        others_ctx.yields += c.yields;
+        others_ctx.yield_frames += c.yield_frames;
+        others_ctx.string_bytes_copied += c.string_bytes_copied;
+        others_heap.add(&HeapWork::of(other.heap().stats()).since(base));
+    }
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
     // (docs/spec/vm.md の「時計と driver」)
     let kept_pending = match sched.driver.as_mut() {
@@ -943,10 +1001,12 @@ fn run_scheduled<M: Mode, P: Policy>(
         None => false,
     };
     let scheduled = Scheduled {
-        preemptions: sched.preemptions(),
-        peak_stack: sched.peak_stack(task),
+        preemptions,
+        peak_stack,
         shared_roots: sched.shared_roots,
-        tasks: sched.cells.stats,
+        tasks,
+        others_ctx,
+        others_heap,
         generations: sched.cells.next_generations(),
         counters: std::mem::take(&mut sched.cells.counters),
         driver: sched.driver.take(),
@@ -961,7 +1021,7 @@ fn run_scheduled<M: Mode, P: Policy>(
 
 /// `RunStats` に入るヒープの仕事の数 (docs/spec/vm.md の「`RunStats`」)。
 #[derive(Debug, Clone, Copy, Default)]
-struct HeapWork {
+pub(crate) struct HeapWork {
     rc_increments: u64,
     rc_decrements: u64,
     allocations: u64,
@@ -970,7 +1030,27 @@ struct HeapWork {
 }
 
 impl HeapWork {
-    fn of(stats: Stats) -> HeapWork {
+    /// ほかのヒープの仕事を足す。回数は足し、物体の数の最大は大きい方を取る。
+    fn add(&mut self, other: &HeapWork) {
+        self.rc_increments += other.rc_increments;
+        self.rc_decrements += other.rc_decrements;
+        self.allocations += other.allocations;
+        self.peak_objects = self.peak_objects.max(other.peak_objects);
+        self.shared_objects += other.shared_objects;
+    }
+
+    /// `base` を起点にした仕事。物体の数の最大は、起点を引かずにそのまま残す。
+    fn since(self, base: &HeapWork) -> HeapWork {
+        HeapWork {
+            rc_increments: self.rc_increments - base.rc_increments,
+            rc_decrements: self.rc_decrements - base.rc_decrements,
+            allocations: self.allocations - base.allocations,
+            peak_objects: self.peak_objects,
+            shared_objects: self.shared_objects - base.shared_objects,
+        }
+    }
+
+    pub(crate) fn of(stats: Stats) -> HeapWork {
         HeapWork {
             rc_increments: stats.rc_increments,
             rc_decrements: stats.rc_decrements,

@@ -11,12 +11,13 @@ use std::thread::{self, Scope, ScopedJoinHandle};
 
 use eml_rt::{Control, Ctx, HostRef, IoWaker, Mode, Stop};
 
+use crate::cells::TaskStats;
 use crate::code::CodeBase;
 use crate::doorbell::Doorbell;
 use crate::driver::DriverKind;
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, driver_mut};
 use crate::vm::{ExecWith, Task};
-use crate::{RunCounts, RuntimeError, VmFault, WORKER_STACK};
+use crate::{HeapWork, RunCounts, RuntimeError, VmFault, WORKER_STACK};
 
 // 4つの型はどれも、スレッドをまたいで渡すか共有する (docs/spec/vm.md の「タスクとスケジュール」)
 const _: () = {
@@ -59,7 +60,23 @@ impl Workers {
 }
 
 /// worker のスレッドの結果。panic したら、その中身を worker 0 に運ぶ。`Ctx` は漏らしてある。
-pub(crate) type WorkerExit<M> = Result<Ctx<M>, Box<dyn Any + Send>>;
+pub(crate) type WorkerExit<M> = Result<Retired<M>, Box<dyn Any + Send>>;
+
+/// 抜けた worker が worker 0 に返すもの。`Ctx` のほかに、`RunStats` に足す worker の仕事を運ぶ
+/// (docs/spec/vm.md の「`RunStats`」)。
+pub(crate) struct Retired<M: Mode> {
+    pub(crate) ctx: Ctx<M>,
+    /// VM が数える回数。
+    pub(crate) counts: RunCounts,
+    /// worker の登録表が数える回数。
+    pub(crate) tasks: TaskStats,
+    pub(crate) preemptions: u64,
+    /// worker のタスクのスタックで同時に使った語の数の最大。
+    pub(crate) peak_stack: u64,
+    /// `Ctx` を作った直後のヒープの仕事。ヒープごとのダミーの物体の確保は実行の仕事ではないので、`RunStats` から引く
+    /// (docs/spec/vm.md の「`RunStats`」)。
+    pub(crate) base: HeapWork,
+}
 
 /// worker の受け箱の lock の下にある状態。
 struct SlotState {
@@ -401,19 +418,32 @@ fn run_worker<M: Mode, P: Policy>(
     max_depth: usize,
 ) -> WorkerExit<M> {
     let mut slot: Option<ManuallyDrop<Ctx<M>>> = None;
+    let mut done: Option<Done> = None;
+    let mut base = HeapWork::default();
     let body = std::panic::catch_unwind(AssertUnwindSafe(|| {
         let ctx = slot.insert(ManuallyDrop::new(Ctx::<M>::for_worker(
             Arc::clone(&control),
             host,
             k,
         )));
-        work::<M, P>(code, ctx, policy, &run, &control, k, max_depth);
+        base = HeapWork::of(ctx.heap().stats());
+        done = Some(work::<M, P>(
+            code, ctx, policy, &run, &control, k, max_depth,
+        ));
     }));
     match body {
         Ok(()) => {
             run.exit_worker(k);
             let ctx = slot.expect("a worker that returns has built its Ctx");
-            Ok(ManuallyDrop::into_inner(ctx))
+            let done = done.expect("a worker that returns has finished its loop");
+            Ok(Retired {
+                ctx: ManuallyDrop::into_inner(ctx),
+                counts: done.counts,
+                tasks: done.tasks,
+                preemptions: done.preemptions,
+                peak_stack: done.peak_stack,
+                base,
+            })
         }
         Err(payload) => {
             run.set_fatal(RuntimeError::Fault {
@@ -429,6 +459,14 @@ fn run_worker<M: Mode, P: Policy>(
     }
 }
 
+/// `work` が返す、worker の `Scheduler` と実行の繰り返しが数えた仕事。
+struct Done {
+    counts: RunCounts,
+    tasks: TaskStats,
+    preemptions: u64,
+    peak_stack: u64,
+}
+
 /// worker `k` の実行。眠った形で始め、置かれた右の子を自分の `Scheduler` で動かす。抜けるのは止めるビットか `END` を
 /// 見たときと、致命的な誤りのときである。止めるビットと `END` では何も書かずに、ほかの worker を起こしてから抜ける。
 /// 眠っている worker に止める語を読ませ、自分の確保で立てた `MEMORY` も worker 0 に届けるためである。致命的な誤りは
@@ -441,7 +479,7 @@ fn work<M: Mode, P: Policy>(
     control: &Arc<Control>,
     k: usize,
     max_depth: usize,
-) {
+) -> Done {
     run.park_wait(k);
     let mut sched = Scheduler::worker(
         policy,
@@ -452,12 +490,18 @@ fn work<M: Mode, P: Policy>(
         max_depth,
     );
     let mut counts = RunCounts::default();
-    let error = crate::vm::work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts);
+    let (error, peak_stack) = crate::vm::work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts);
     if !quiet(&error) {
         run.set_fatal(error);
         control.end_run();
     }
     run.wake_all();
+    Done {
+        counts,
+        tasks: sched.cells.stats,
+        preemptions: sched.preemptions(),
+        peak_stack,
+    }
 }
 
 /// worker 1..N-1 が何も書かずに抜ける誤り。止めるビットと `END` で、どれも worker 0 が自分の語で読む。

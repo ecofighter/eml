@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 use eml_rt::{Checked, Fault};
 use eml_vm::{Clock, Control, Finished, Limits, Machine, RunConfig, RuntimeError, VmFault};
 
+use eml_test_support::schedule_independent;
+
 use crate::common::parse;
 
 /// `par` の両方の子が値を返し、親が和を表示する。
@@ -191,12 +193,47 @@ main () =
 ";
     let (alone, result) = run(src, 1);
     assert_eq!(alone, "5051\n");
-    assert_eq!(result.unwrap().placed, 0);
+    let one = result.unwrap();
+    assert_eq!(one.placed, 0);
     let (out, result) = run(src, 2);
     assert_eq!(out, alone);
     let finished = result.unwrap();
     assert_eq!(finished.workers, 1);
     assert!(finished.placed >= 1, "{finished:?}");
+    assert_eq!(
+        schedule_independent(finished.stats),
+        schedule_independent(one.stats)
+    );
+}
+
+/// 右の子をほかの worker に置いても、`RunStats` の数はすべての worker の和で、worker が1つの run と同じになる。
+/// 山は最大を取るので、`peak_stack` も同じである。`par` の木は子を worker 1..7 に散らすので、どの worker の
+/// 仕事も足し漏れていれば数が減る。
+#[test]
+fn stats_at_two_workers_equal_one_worker() {
+    let src = "\
+import Std.Par
+tree : Int -> <Panic> Int
+tree d = if d == 0 then 1 else
+  let (a, b) = Par.par (fn () -> tree (d - 1)) (fn () -> tree (d - 1))
+  a + b
+main : Unit -> <IO, Panic> Unit
+main () = println (show (tree 3))
+";
+    let (alone, result) = run(src, 1);
+    let one = result.unwrap();
+    assert_ne!(one.stats, Default::default());
+    for workers in [2, 8] {
+        let (out, result) = run(src, workers);
+        assert_eq!(out, alone);
+        let finished = result.unwrap();
+        assert!(finished.placed >= 1, "{finished:?}");
+        assert_eq!(
+            schedule_independent(finished.stats),
+            schedule_independent(one.stats),
+            "workers {workers}"
+        );
+    }
 }
 
 /// 表示する run でも worker を作る。結果の文字列は右の子が worker 1 のヒープに作ったもので、写して手放すと

@@ -505,22 +505,34 @@ pub(crate) fn work<R: Exec>(
     ctx: &mut Ctx<R::M>,
     sched: &mut Scheduler<R::P>,
     counts: &mut RunCounts,
-) -> RuntimeError {
+) -> (RuntimeError, u64) {
     let mut task = Task::idle();
+    let error = work_loop::<R>(code, ctx, &mut task, sched, counts);
+    // 2つ目は、この worker のタスクのスタックで同時に使った語の数の最大。worker 0 が `RunStats` に最大を取る
+    (error, sched.peak_stack(&task))
+}
+
+fn work_loop<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    counts: &mut RunCounts,
+) -> RuntimeError {
     // 動くタスクのない `Task` は `MAIN` の欄に退避し、その番号をどのタスクにも振らない
-    if let Err(fault) = switch_away::<R>(code, ctx, &mut task, sched, Some(TaskState::Ready)) {
+    if let Err(fault) = switch_away::<R>(code, ctx, task, sched, Some(TaskState::Ready)) {
         let pc = task.pc;
-        if let Err(error) = task_failed::<R>(code, ctx, &mut task, sched, Failure { fault, pc }) {
+        if let Err(error) = task_failed::<R>(code, ctx, task, sched, Failure { fault, pc }) {
             return error;
         }
     }
-    match run_tasks::<R>(code, ctx, &mut task, sched, counts) {
+    match run_tasks::<R>(code, ctx, task, sched, counts) {
         Ok(()) => code.error(
             Failure {
                 fault: VmFault::Internal("a placed child reached the end of a run"),
                 pc: task.pc,
             },
-            &task,
+            task,
         ),
         Err(error) => error,
     }

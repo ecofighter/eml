@@ -639,6 +639,21 @@ pub(crate) struct TaskStats {
     pub(crate) completions: u64,
 }
 
+impl TaskStats {
+    /// ほかの worker の登録表が数えた回数を足す (docs/spec/vm.md の「`RunStats`」)。
+    pub(crate) fn add(&mut self, other: &TaskStats) {
+        self.tasks += other.tasks;
+        self.parks += other.parks;
+        self.dropped_failures += other.dropped_failures;
+        self.cancels += other.cancels;
+        self.timers += other.timers;
+        self.channel_ops += other.channel_ops;
+        self.channel_waits += other.channel_waits;
+        self.channels_swept += other.channels_swept;
+        self.completions += other.completions;
+    }
+}
+
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
 pub(crate) struct Registry {
     /// 添字ごとの generation と中身。空いた添字の generation は、次に出す番号のものである。

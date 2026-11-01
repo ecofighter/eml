@@ -1170,10 +1170,13 @@ fn recovery_copies_from_another_heaps_pages<M: Mode>() {
     })
     .join()
     .unwrap();
+    let mut b = b;
     unsafe {
         ctx.heap_mut().transfer_back(top, child).unwrap();
         ctx.root_set(0, top).unwrap();
         ctx.root_set(1, s).unwrap();
+        // VM は回復の前にすべてのヒープの解放を取り込み、回復の後にほかのヒープを落とす
+        b.reclaim();
         ctx.recover().unwrap();
     }
     drop(b);

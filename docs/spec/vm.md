@@ -804,7 +804,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 ## `RunStats`
 
-`Machine::run`、`run_shown`、`eml_vm::execute` は、成功すると `Finished { stats, exit, preemptions, workers }` を返す。`stats` は下の `RunStats` で、`exit` は `exit` で終わったときの終了コード (`Option<i64>`。終わりの欄から読む。「`exit`」)、`preemptions` は方針が始めた切り替えの数、`workers` はその run が作った worker の数 (どちらも「タスクとスケジュール」) である。
+`Machine::run`、`run_shown`、`eml_vm::execute` は、成功すると `Finished { stats, exit, preemptions, workers, placed }` を返す。`stats` は下の `RunStats` で、`exit` は `exit` で終わったときの終了コード (`Option<i64>`。終わりの欄から読む。「`exit`」)、`preemptions` は方針が始めた切り替えの数、`workers` はその run が作った worker の数、`placed` はほかの worker に置いた `par` の右の子の数 (どれも「タスクとスケジュール」) である。
 
 `RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の23で、`peak_objects` と `peak_stack` 以外が仕事の回数である。
 
@@ -848,6 +848,8 @@ driver の操作を使う run では、仕事の回数 (`evidence_steps`、`yiel
 
 回復 (「追記」) の仕事 (写すための確保と `dup`) は数えない。回復はヒープを入れ替えるので、`Machine` は、捨てる古いヒープが実行でした仕事を積算に足し、新しいヒープが写すためにした仕事を起点にして引く。`peak_objects` は、積算の最大と新しいヒープの最大の大きい方である。写している間の、古いヒープと新しいヒープを合わせた物体の数は数えない。
 
+worker が複数ある run では、`RunStats` は run が作ったすべての worker の合算である。回数は worker 0 と、抜けた worker が worker 0 に返した値をすべて足し、`peak_objects` と `peak_stack` は最大を取る。`preemptions` は足す。worker `k` (`k` ≥ 1) のヒープが `Ctx` を作るときに確保するダミーの物体は実行の仕事ではないので、`allocations` に入れない。こうして、スケジュールによらない欄 (上) は、worker の数によらず worker が1つの run と同じになる。`Finished` の `workers` と `placed` は `RunStats` の欄ではなく、`--stats` にも出さない。
+
 どの回数も時間ではなく、仕事か物体か語を数える。そのため、2乗の時間にならないことと、ループがフレームを積まないことを、ふだんのテストで確かめられる ([テスト戦略](../implementation/testing.md) の「性能のテスト」)。
 
 前のインタプリタの数え方の `rc_increments`、`rc_decrements`、`peak_objects` の値は、VM の値とは違う。
@@ -858,7 +860,7 @@ driver の操作を使う run では、仕事の回数 (`evidence_steps`、`yiel
 
 - 実行の状態は、ワーカーごとの `Ctx` と、タスクごとの `Task` に分かれる (「スロットとスタック」)。`CodeBase` は読むだけなので、全 worker で共有しても競合しない
 - evidence passing により、`perform` で止まったタスクの続きは、ヒープ上の継続のクロージャになる。このタスクはスタックを持たず、別の worker へ移すことはクロージャの語を1つ渡すことと同じである。まだ始まっていないタスク (`spawn` に渡す閉包、`par` の右の子) も同じである
-- 一方、安全点で切り替えたタスク (1つの worker で動かす `par` と `Async` のスケジューラ。[マルチコア対応の設計](../future/multicore.md) の「1つの worker での実行」) と、`join` で子を待つ親は、スタックの途中で止まっているので、`Task` ごとスタックを持ち続ける。`join` で子を待つ親の数は `par` の入れ子の深さで抑えられる
+- 一方、安全点で切り替えたタスク (`par` と `Async` のスケジューラ。[マルチコア対応の設計](../future/multicore.md) の「1つの worker での実行」) と、`join` で子を待つ親は、スタックの途中で止まっているので、`Task` ごとスタックを持ち続ける。`join` で子を待つ親の数は `par` の入れ子の深さで抑えられる
 
 VM は次の4つを守る。
 
