@@ -8,7 +8,6 @@ use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, Scope, ScopedJoinHandle};
-use std::time::{Duration, Instant};
 
 use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop, Word};
 
@@ -145,6 +144,9 @@ pub(crate) struct Retired<M: Mode> {
     /// 最後の集める地点で、この worker が走らせるはずの知らせ (`Child`、`Place`、`Wake`) が受け箱に残っていた。成功した
     /// run でも、タスクを残したまま終わったことになる (docs/spec/vm.md の「誤り、止めること、終わり」)。
     pub(crate) left: bool,
+    /// この worker の driver が、静止させた後にも保留の操作を残した。run の `Machine` を poisoned にする
+    /// (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) kept_pending: bool,
 }
 
 /// worker の受け箱の lock の下にある状態。
@@ -264,10 +266,24 @@ impl Run {
         (self.next_place.fetch_add(1, Ordering::Relaxed) % live) as u32
     }
 
-    /// worker `k` のタスクの driver の操作を受け付ける worker (host)。driver を持つのは worker 0 だけなので、どの worker の
-    /// 操作も worker 0 が driver に出し、結果は持ち主が当てる (docs/spec/vm.md の「時計と driver」)。
-    pub(crate) fn io_worker(&self, _k: usize) -> usize {
-        0
+    /// worker `k` のタスクが新しいハンドルを作る操作を受け付ける worker (host)。本物の時計の run では各 worker が自分の
+    /// driver を持つので `k` である。テストの driver の仮想のネットワークは driver ごとにあるので、ほかの run では driver を
+    /// worker 0 の1つに集め、どの worker の操作も worker 0 が driver に出す (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn io_worker(&self, k: usize) -> usize {
+        match self.clock {
+            RunClock::Real { .. } => k,
+            RunClock::Virtual(_) | RunClock::Injected => 0,
+        }
+    }
+
+    /// 本物の時計の run で、worker `k` (`k` ≥ 1) が最初に要るときに作る driver。run の時間の基準から作るので、どの
+    /// worker の driver も同じ時刻を読む。ほかの run では作らず `None` である。渡された driver の run (`Injected`) は
+    /// worker を作らないので、基準から driver を作る道を通らない (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn new_driver(&self) -> Option<std::io::Result<Box<dyn IoDriver>>> {
+        match self.clock {
+            RunClock::Real { .. } => Some(self.clock.driver(None)),
+            RunClock::Virtual(_) | RunClock::Injected => None,
+        }
     }
 
     /// 満期の判定で読む今の時刻 (ミリ秒、切り捨て)。`driver` は基準が渡された driver の `Injected` のときだけ読む。
@@ -414,48 +430,27 @@ impl Run {
         self.leave_idle(k);
     }
 
-    /// worker `k` (`k` ≥ 1) が眠った形で起こされるのを待つ。届いた知らせは受け箱に残し、続く集める地点が取る。`until`
-    /// があれば、その時刻に自分で起きた形に戻る。
-    fn park_wait(&self, k: usize, until: Option<Instant>) {
+    /// worker `k` (`k` ≥ 1) が眠った形で起こされるのを待つ。届いた知らせは受け箱に残し、続く集める地点が取る。
+    fn park_wait(&self, k: usize) {
         let slot = &self.slots[k];
         let mut state = lock(&slot.state);
         while state.parked {
-            let Some(until) = until else {
-                state = slot.cv.wait(state).unwrap_or_else(PoisonError::into_inner);
-                continue;
-            };
-            let now = Instant::now();
-            if now >= until {
-                self.unpark_locked(&mut state);
-                break;
-            }
-            state = slot
-                .cv
-                .wait_timeout(state, until - now)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
+            state = slot.cv.wait(state).unwrap_or_else(PoisonError::into_inner);
         }
         state.woken = false;
         drop(state);
         self.leave_idle(k);
     }
 
-    /// worker `k` (`k` ≥ 1) の空きの待ち。受け箱が空なら空きの集まりに入って眠り、起こされたら戻る。最後に眠った
-    /// worker は worker 0 を起こす。worker 0 が、ほかの worker が動いている間は仮想の時計を進めずに待つためである
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
-    fn idle_wait(&self, control: &Control, k: usize, until: Option<Instant>) {
-        if self.park_idle(control, k) {
-            self.park_wait(k, until)
+    /// worker `k` (`k` ≥ 1) が driver の待ちから戻った。起こされていなければ自分で起きた形に戻し、空きの集まりから
+    /// 外れる。
+    fn driver_waited(&self, k: usize) {
+        {
+            let mut state = lock(&self.slots[k].state);
+            self.unpark_locked(&mut state);
+            state.woken = false;
         }
-    }
-
-    /// 本物の時計の run の始めの時刻。ほかの時計では `None` である。満期の判定は始めから経た時間を切り捨てて読むので、
-    /// 始めから期限のミリ秒だけ後に起きれば、期限が来ている。
-    pub(crate) fn real_epoch(&self) -> Option<Instant> {
-        match &self.clock {
-            RunClock::Real { epoch } => Some(*epoch),
-            RunClock::Virtual(_) | RunClock::Injected => None,
-        }
+        self.leave_idle(k);
     }
 
     /// worker `k` (`k` ≥ 1) の空きの待ちの前半。眠ってよければ眠った形にして真を返し、知らせか起こしか止める語が
@@ -621,6 +616,7 @@ fn run_worker<M: Mode, P: Policy>(
                 peak_stack: done.peak_stack,
                 base,
                 left: done.left,
+                kept_pending: done.kept_pending,
             })
         }
         Err(payload) => {
@@ -643,6 +639,7 @@ struct Done {
     preemptions: u64,
     peak_stack: u64,
     left: bool,
+    kept_pending: bool,
 }
 
 /// worker `k` の実行。眠った形で始め、置かれた右の子を自分の `Scheduler` で動かす。抜けるのは止めるビットか `END` を
@@ -660,7 +657,7 @@ fn work<M: Mode, P: Policy>(
     k: usize,
     max_depth: usize,
 ) -> Done {
-    run.park_wait(k, None);
+    run.park_wait(k);
     let mut sched = Scheduler::worker(
         policy,
         Arc::clone(run),
@@ -690,8 +687,7 @@ fn work<M: Mode, P: Policy>(
             ),
         "a channel reservation is held when a worker exits"
     );
-    // driver を持つのは worker 0 だけなので、静止させて落とす driver はない (docs/spec/vm.md の「時計と driver」)
-    debug_assert!(sched.driver.is_none(), "a worker other than 0 has a driver");
+    let kept_pending = sched.retire_driver(quiet(&error));
     if !quiet(&error) {
         run.set_fatal(error);
         control.end_run();
@@ -702,6 +698,7 @@ fn work<M: Mode, P: Policy>(
         preemptions: sched.preemptions(),
         peak_stack,
         left,
+        kept_pending,
     }
 }
 
@@ -747,21 +744,8 @@ impl<P: Policy> Scheduler<P> {
     pub(crate) fn idle_wait(&mut self) -> Result<(), VmFault> {
         let run = Arc::clone(&self.run);
         let k = self.index;
-        // worker 1..N-1 は driver を持たないので、起こされるまで眠るだけである。デッドロックと仮想の時計は worker 0 が
-        // 受け持つ。本物の時計では、自分の区画のいちばん早い期限に自分で起きる。worker 0 は自分の区画の期限でしか
-        // 起きないためである (docs/spec/vm.md の「時計と driver」)
         if k != 0 {
-            // ほかの時計では登録表を読まない。`par` だけの run の空きの待ちに lock を足さないためである
-            let until = match run.real_epoch() {
-                Some(epoch) => self
-                    .cells
-                    .lock()
-                    .next_deadline(k)
-                    .and_then(|deadline| epoch.checked_add(Duration::from_millis(deadline))),
-                None => None,
-            };
-            run.idle_wait(&self.watcher.control, k, until);
-            return Ok(());
+            return self.peer_wait();
         }
         if run.take_wake(k) {
             return Ok(());
@@ -782,7 +766,7 @@ impl<P: Policy> Scheduler<P> {
             run.running.fetch_sub(1, Ordering::AcqRel) - 1
         };
         // (c)
-        let (d_all, d_own, elsewhere, pending, listening) = {
+        let (d_all, d_own, elsewhere, pending, own_pending, listening) = {
             let cells = self.cells.lock();
             let mut d_all: Option<u64> = None;
             let mut elsewhere = false;
@@ -795,6 +779,7 @@ impl<P: Policy> Scheduler<P> {
                 cells.next_deadline(k),
                 elsewhere,
                 cells.in_flight_all(),
+                cells.in_flight(k),
                 cells.relay && cells.signal_bits() != 0,
             )
         };
@@ -829,14 +814,21 @@ impl<P: Policy> Scheduler<P> {
             }
         }
         let virtual_ = self.driver_kind == DriverKind::Virtual;
-        // 本物の時計では、ほかの worker は自分の区画の期限に自分で起きるので、worker 0 は自分の区画の期限まで待つ
-        let deadline = if virtual_ { deadline } else { listen(d_own) };
+        // 本物の時計では、ほかの worker は自分の区画の期限と自分の driver の完了で自分で起きるので、worker 0 は自分の
+        // 区画の期限と自分の driver の操作だけを待つ。期限がなくても条件変数でなく driver で眠る。自分で落とした
+        // ハンドルは driver が待ちの始めに閉じるので、ほかの worker の相手が EOF を待つ間に閉じずに眠らないためである。
+        // 仮想の時計では、driver を持つのは worker 0 だけなので、どの操作も自分の driver にある
+        let deadline = match self.driver_kind {
+            DriverKind::Virtual => deadline,
+            DriverKind::Real => d_own.or(Some(u64::MAX)),
+            DriverKind::Injected => listen(d_own),
+        };
         // 仮想の時計を進めてよいのは、どの worker も動いておらず、どの受け箱にも知らせがないときだけである。進める先は
         // すべての区画のいちばん早い期限である
-        let waited = if virtual_ && others == 0 && (deadline.is_some() || pending > 0) {
+        let waited = if virtual_ && others == 0 && (deadline.is_some() || own_pending > 0) {
             drop(state);
             Some(driver_mut(&mut self.driver)?.wait(deadline))
-        } else if (virtual_ && others > 0) || (deadline.is_none() && pending == 0) {
+        } else if (virtual_ && others > 0) || (deadline.is_none() && own_pending == 0) {
             while state.parked {
                 state = slot.cv.wait(state).unwrap_or_else(PoisonError::into_inner);
             }
@@ -852,7 +844,7 @@ impl<P: Policy> Scheduler<P> {
             Some(waited) => {
                 run.unpark(k);
                 // ほかの worker の区画の満期は、その持ち主が自分の集める地点で外す。仮想の時計を進めるのは worker 0
-                // だけなので、期限が来た区画の持ち主を起こす
+                // だけで、ほかの worker は driver を持たずに眠っているので、期限が来た区画の持ち主を起こす
                 if virtual_ && elsewhere {
                     self.wake_due_owners()?;
                 }
@@ -873,6 +865,55 @@ impl<P: Policy> Scheduler<P> {
         };
         run.leave_idle(k);
         result
+    }
+
+    /// worker `k` (`k` ≥ 1) の空きの待ち。受け箱が空なら空きの集まりに入って眠り、起こされたら戻る。最後に眠った
+    /// worker は worker 0 を起こす。worker 0 が、ほかの worker が動いている間は仮想の時計を進めずに待つためである。
+    /// デッドロックと仮想の時計は worker 0 が受け持つ。本物の時計の run では、自分の区画に期限があれば driver を作り、
+    /// driver を持てば driver で待つ。期限は最後の集める地点が読んだもので、ここでは登録表の lock を取らない。
+    /// 待つ間にほかの worker の取り消しが項を外しても、早く起きて集め直すだけである (docs/spec/vm.md の
+    /// 「タスクとスケジュール」「時計と driver」)。
+    fn peer_wait(&mut self) -> Result<(), VmFault> {
+        let k = self.index;
+        let deadline = self.own_deadline.filter(|_| self.run.io_worker(k) == k);
+        if deadline.is_some() {
+            // waker を置いてから眠った形にするので、作った直後の起こしも driver の待ちを終わらせる
+            self.own_driver()?;
+        }
+        if !self.run.park_idle(&self.watcher.control, k) {
+            return Ok(());
+        }
+        // driver を持てば、期限がなくても driver で眠る。自分で落としたハンドルは driver が待ちの始めに閉じるので、
+        // ほかの worker の相手が EOF を待つ間に閉じずに眠らないためである
+        let Some(driver) = self.driver.as_deref_mut() else {
+            self.run.park_wait(k);
+            return Ok(());
+        };
+        // 眠った形にした後に起こされても、waker は鳴った印を残すので、driver の待ちはすぐ戻る
+        let waited = driver.wait(deadline.or(Some(u64::MAX)));
+        self.run.driver_waited(k);
+        match waited {
+            Ok(_) => Ok(()),
+            Err(e) => Err(VmFault::Driver(e.to_string())),
+        }
+    }
+
+    /// worker `k` (`k` ≥ 1) が抜ける前に、自分の driver を静止させ、`record` なら driver に出したままの記録に、driver が
+    /// 返した完了を置く。記録に置くだけで、ヒープには触れない。driver は自分のスレッドで落とし、静止させた後にも保留の
+    /// 操作が残っていたかを返す。`Ctx` を返す前に行うので、カーネルとプールのスレッドがヒープに書く操作は残らない
+    /// (docs/spec/vm.md の「誤り、止めること、終わり」「時計と driver」)。
+    fn retire_driver(&mut self, record: bool) -> bool {
+        let Some(mut driver) = self.driver.take() else {
+            return false;
+        };
+        driver.quiesce();
+        let k = self.index;
+        if record && self.cells.lock().in_flight(k) > 0 {
+            let mut completed = Vec::new();
+            driver.completions(&mut completed);
+            self.cells.lock().quiesced(k, &mut completed);
+        }
+        driver.pending() > 0
     }
 
     /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、この worker が走らせるはずの仕事があるかを

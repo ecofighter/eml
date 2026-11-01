@@ -1,7 +1,8 @@
 //! `Std.Net` の操作の記録と driver の完了 (docs/spec/vm.md の「操作の記録」)。完了の数はテストの driver
 //! (`Clock::Virtual`) の上で、取り消しの道は書きを取り消すまで終わらせない driver の上で確かめる。テストの driver の
 //! 書きは次の集める地点でいつも終わるので、待っている間の取り消しに届かないためである。worker が2つの run では、
-//! worker 1 に置いたタスクの操作を driver を持つ worker 0 が受け付け、持ち主が結果を当てる道も確かめる。
+//! 仮想の時計で worker 1 に置いたタスクの操作を driver を持つ worker 0 が受け付け、持ち主が結果を当てる道と、本物の
+//! 時計で各 worker が自分の driver で受け付ける道も確かめる。
 
 use std::io;
 use std::sync::Arc;
@@ -1182,10 +1183,9 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }
 
-/// 本物の時計で、worker 1 に置いたクライアントが書いて閉じたストリームを、worker 0 の host が閉じ、worker 0 のサーバーが
-/// EOF まで読む。ハンドルを落とした worker 1 が、driver の待ちで眠る host を起こすためである (docs/spec/vm.md の
-/// 「操作の記録」)。普通の方針で流す。横取りしない方針では、閉じるのは落とした worker の次の集める地点まで遅れうる。
-/// 3 秒は止まりの見張りで、時間は確かめない。
+/// 本物の時計で、worker 1 に置いたクライアントが自分の driver で接続し、書いて閉じたストリームを、worker 0 のサーバーが
+/// EOF まで読む。落とした worker 1 はそのストリームの host なので、空きで自分の driver に眠るときに閉じる
+/// (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りで、時間は確かめない。
 #[test]
 fn a_stream_closed_on_worker_1_reaches_its_peer() {
     let src = "\
@@ -1227,5 +1227,103 @@ main () = Async.run (fn () ->
         .recv_timeout(Duration::from_secs(3))
         .expect("the peer did not read to the end");
     assert_eq!(out, "3\n");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、worker 1 に置いたタスクが worker 0 のリスナーで受けたストリームは worker 0 の driver に縛られ、
+/// worker 1 が書いて閉じると、worker 0 の相手が EOF まで読む。ハンドルを落とした worker 1 が、driver の待ちで眠る
+/// host の worker 0 を起こすためである (docs/spec/vm.md の「操作の記録」)。普通の方針で流す。横取りしない方針では、
+/// 閉じるのは落とした worker の次の集める地点まで遅れうる。3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn a_stream_closed_on_worker_1_wakes_its_host() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+drain : Net.TcpStream -> Int -> <IO, Panic, Async> Int
+drain s n =
+  let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else drain s (n + k)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let c = Async.start (fn () ->
+    let (b, l) = Net.accept l
+    Net.close_listener l
+    let b = Net.write \"abc\" b
+    Net.close b)
+  let a = Net.connect \"127.0.0.1\" port
+  let n = drain a 0
+  Async.await c
+  println (show n))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let config = RunConfig::default()
+            .with_clock(eml_vm::Clock::Real)
+            .with_sched(Sched::Normal);
+        let _ = done.send(run_on(src, 2, config));
+    });
+    let (out, finished) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the peer did not read to the end");
+    assert_eq!(out, "3\n");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、worker 1 に置いたクライアントが自分の driver で接続し、worker 0 の `main` が受けて返したバイトを読む。
+/// 各 worker が自分の driver を持つので、クライアントの接続と読み書きは worker 1 が、受けと読み書きは worker 0 が driver に
+/// 出す (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn an_echo_between_two_workers_completes() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+import String
+drain : Bytes -> Net.TcpStream -> <IO, Panic, Async> (Bytes, Net.TcpStream)
+drain buf s =
+  let n = Bytes.length buf
+  let (buf, s) = Net.read_chunk buf s
+  if Bytes.length buf == n then (buf, s) else drain buf s
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let c = Async.start (fn () ->
+    let a = Net.connect \"127.0.0.1\" port
+    let a = Net.shutdown_write (Net.write \"ping\" a)
+    let (buf, a) = drain (Bytes.empty ()) a
+    Net.close a
+    String.decode buf)
+  let (s, l) = Net.accept l
+  Net.close_listener l
+  let (buf, s) = drain (Bytes.of_string \"echo: \") s
+  let (_, s) = Net.write_bytes buf s
+  Net.close s
+  println (Async.await c))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let real = || {
+            RunConfig::default()
+                .with_clock(eml_vm::Clock::Real)
+                .with_sched(Sched::Normal)
+        };
+        let _ = done.send((run_on(src, 1, real()), run_on(src, 2, real())));
+    });
+    let ((alone, _), (out, finished)) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the echo did not complete");
+    assert_eq!(alone, "echo: ping\n");
+    assert_eq!(out, alone);
+    assert_eq!(finished.workers, 1, "{finished:?}");
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }

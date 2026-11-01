@@ -282,8 +282,9 @@ const WAIT_CAP_MS: u64 = 10;
 /// driver を持たない worker が driver に触れようとした。
 pub(crate) const NO_DRIVER: VmFault = VmFault::Internal("a worker without a driver");
 
-/// worker の driver。driver を持つのは worker 0 だけなので、ほかの worker では内部の誤りにする
-/// (docs/spec/vm.md の「時計と driver」)。`Scheduler` のほかの欄と同時に借りられるように、欄を受け取る関数にしてある。
+/// worker の driver。仮想の時計の run では worker 0 だけが持ち、本物の時計の run の worker `k` (`k` ≥ 1) は最初に
+/// 要るときに作るので、持たない worker では内部の誤りにする (docs/spec/vm.md の「時計と driver」)。`Scheduler` の
+/// ほかの欄と同時に借りられるように、欄を受け取る関数にしてある。
 pub(crate) fn driver_mut(
     driver: &mut Option<Box<dyn IoDriver>>,
 ) -> Result<&mut (dyn IoDriver + 'static), VmFault> {
@@ -382,9 +383,14 @@ pub struct Scheduler<P: Policy> {
     /// 終わったエントリの `Task` のスタックと scratch。次のエントリの `Task` が使い回す。待ちから戻るたびにエントリの
     /// `Task` を作るので、毎回の確保を避けるためである。
     pub(crate) stacks: Vec<(Vec<eml_rt::Word>, Vec<eml_rt::Word>)>,
-    /// 時計と待ち。worker 0 だけが持ち、`Machine` が持つものを run の間だけ預かる (docs/spec/vm.md の「時計と driver」)。
-    /// 触れるときは `driver_mut` を通す。
+    /// 時計と待ち。worker 0 は `Machine` が持つものを run の間だけ預かる。本物の時計の run の worker `k` (`k` ≥ 1) は、
+    /// 最初に要るときに自分のスレッドで作り、抜けるときに落とす (docs/spec/vm.md の「時計と driver」)。触れるときは
+    /// `driver_mut` を通す。
     pub(crate) driver: Option<Box<dyn IoDriver>>,
+    /// 最後の集める地点が登録表から読んだ、自分の区画のいちばん早い期限。本物の時計の worker `k` (`k` ≥ 1) の空きの
+    /// 待ちが、登録表の lock を取らずに期限を知るためにある。区画に項を足すのはその持ち主だけで、足した後は眠る前に
+    /// 集める地点を通るので、今の期限より遅くはならない (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) own_deadline: Option<u64>,
     /// この run の worker が共有する表。
     pub(crate) run: Arc<Run>,
     /// この `Scheduler` の worker の番号。止める語と `run` の欄の添字である。
@@ -481,6 +487,7 @@ impl<P: Policy> Scheduler<P> {
             completed: Vec::new(),
             stacks: Vec::new(),
             driver,
+            own_deadline: None,
             run,
             index: 0,
             workers: Workers::Denied,
@@ -498,8 +505,9 @@ impl<P: Policy> Scheduler<P> {
         }
     }
 
-    /// worker `index` (`index` ≥ 1) の `Scheduler`。driver も監視のスレッドも持たない。登録表は run のものを共有する。
-    /// worker を作る判断はせず、空いた worker があれば右の子を置く (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// worker `index` (`index` ≥ 1) の `Scheduler`。監視のスレッドは持たず、driver は本物の時計の run で最初に要るときに
+    /// 作る。登録表は run のものを共有する。worker を作る判断はせず、空いた worker があれば右の子を置く
+    /// (docs/spec/vm.md の「タスクとスケジュール」「時計と driver」)。
     pub(crate) fn worker(
         policy: P,
         run: Arc<Run>,
@@ -510,12 +518,10 @@ impl<P: Policy> Scheduler<P> {
         cells: Arc<Shared>,
     ) -> Scheduler<P> {
         let mut sched = Scheduler::build(policy, None, run, control, main_worker, max_depth, cells);
-        // driver を持たないので、操作はどれも host へ転送する (docs/spec/vm.md の「時計と driver」)
-        debug_assert_ne!(
-            sched.run.io_worker(index),
-            index,
-            "a worker without a driver hosts ops"
-        );
+        // 自分で受け付ける worker の driver は、本物の時計から作る (docs/spec/vm.md の「時計と driver」)
+        if sched.run.io_worker(index) == index {
+            sched.driver_kind = DriverKind::Real;
+        }
         sched.index = index;
         sched.workers = Workers::Peer;
         sched.watcher.tried = true;
@@ -530,15 +536,7 @@ impl<P: Policy> Scheduler<P> {
     /// (`Injected`) は作らない。時刻をその driver に聞くので、driver を持たない worker は時刻を読めないためである
     /// (docs/spec/vm.md の「タスクとスケジュール」「時計と driver」)。
     pub(crate) fn begin_run(&mut self, roots_free: bool) {
-        if let Some(driver) = &self.driver {
-            // run の表は run ごとに作るので、まだ空である
-            let _ = self.run.slots[self.index].waker.set(driver.waker());
-            // ほかの worker の持ち主が、この driver の結果から作ったハンドルを落とすときに積む先である。欄にも置き、
-            // ほかの worker が集める地点で印を見られるようにする
-            let bin = Arc::new(HostBin::new(driver.bin()));
-            let _ = self.run.slots[self.index].bin.set(Arc::clone(&bin));
-            self.cells.lock().set_bin(self.index, bin);
-        }
+        self.publish_driver();
         if self.driver_kind != DriverKind::Virtual || self.run.slots.len() >= 2 {
             self.start_monitor();
         }
@@ -555,6 +553,34 @@ impl<P: Policy> Scheduler<P> {
         // 登録表に写す (docs/spec/vm.md の「上限と割り込み」)
         let relay = self.relay_on();
         self.cells.lock().relay = relay;
+    }
+
+    /// 持っている driver の waker と bin を、自分の欄と登録表に置く。run の表は run ごとに作り、driver は worker ごとに
+    /// 1つなので、run に1回だけ書く。bin は、ほかの worker の持ち主がこの driver の結果から作ったハンドルを落とすときに
+    /// 積む先で、欄にも置くのは、ほかの worker が集める地点で印を見て起こすためである (docs/spec/vm.md の「時計と driver」)。
+    fn publish_driver(&mut self) {
+        if let Some(driver) = &self.driver {
+            let _ = self.run.slots[self.index].waker.set(driver.waker());
+            let bin = Arc::new(HostBin::new(driver.bin()));
+            let _ = self.run.slots[self.index].bin.set(Arc::clone(&bin));
+            self.cells.lock().set_bin(self.index, bin);
+        }
+    }
+
+    /// 本物の時計の run の worker `k` (`k` ≥ 1) が、まだ driver を持たなければ、自分のスレッドで run の時間の基準から
+    /// 作る。自分で受け付ける操作 (`listen` と `connect`) を出す前と、期限のある空きの待ちの前に呼ぶ。waker は眠った形に
+    /// なる前に置くので、作った後の起こしを取りこぼさない。ほかの run とほかの worker では何もしない
+    /// (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn own_driver(&mut self) -> Result<(), VmFault> {
+        if self.driver.is_some() || self.run.io_worker(self.index) != self.index {
+            return Ok(());
+        }
+        let Some(made) = self.run.new_driver() else {
+            return Ok(());
+        };
+        self.driver = Some(made.map_err(|e| VmFault::Driver(e.to_string()))?);
+        self.publish_driver();
+        Ok(())
     }
 
     /// 空きのループが driver の `wait` に渡す期限。監視のスレッドのない run で眠る driver なら、止める語を読み直すために、
@@ -623,13 +649,14 @@ impl<P: Policy> Scheduler<P> {
             completed,
             runnables,
             since_poll,
+            own_deadline,
             ..
         } = self;
         let control = &*watcher.control;
-        // driver を持つのは worker 0 だけである (docs/spec/vm.md の「時計と driver」)
+        // 仮想の時計の run では、driver を持つのは worker 0 だけである (docs/spec/vm.md の「時計と driver」)
         debug_assert!(
-            k == 0 || driver.is_none(),
-            "a worker other than 0 has a driver"
+            k == 0 || run.io_worker(k) == k || driver.is_none(),
+            "a worker that hosts no I/O has a driver"
         );
         let post = Mailer::new(run, control);
         let here = Here {
@@ -655,7 +682,8 @@ impl<P: Policy> Scheduler<P> {
                 )?;
             }
             cells.watch(control);
-            (cells.in_flight(k), cells.next_deadline(k), cells.unheard)
+            *own_deadline = cells.next_deadline(k);
+            (cells.in_flight(k), *own_deadline, cells.unheard)
         };
         // host として受けた操作を driver に出し、取り消しを頼む。driver がその場で終えた操作は短い区間で結果を置く
         cells::run_io(
@@ -712,6 +740,7 @@ impl<P: Policy> Scheduler<P> {
                 let mut woken = Vec::new();
                 cells.expire(now, k, &here, &mut woken, &mut work)?;
                 cells.route(&mut woken, &here, &mut out)?;
+                *own_deadline = cells.next_deadline(k);
             }
             // ハンドラは見張りの語で保留にするか既定の動きにするかを決めるので、届けて空になった列と取り消しで外れた
             // 待ち手をここで写す (docs/spec/vm.md の「上限と割り込み」)

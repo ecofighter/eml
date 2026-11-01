@@ -104,7 +104,7 @@ impl Signal {
     }
 }
 
-/// 仮想のシグナルの予定の1項。`at_ms` は driver を作ったときからのミリ秒で、driver の時計で数える。テストの
+/// 仮想のシグナルの予定の1項。`at_ms` は run の時間の基準の始まりからのミリ秒で、run の時計で数える。テストの
 /// ハーネスが `RunConfig::with_signals` と `Machine::with_signals` で渡す (docs/spec/vm.md の「時間の待ち」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VirtualSignal {

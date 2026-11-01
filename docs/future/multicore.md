@@ -485,7 +485,7 @@ run の終わり方は `main` の正常な終わり、`exit`、致命的な誤�
 
 - VM とネイティブは共通ランタイム `eml_rt` と `eml_sched` を使う ([オブジェクトモデル](../spec/object-model.md))。共有の印方式の RC (上の「スレッドをまたぐ RC」) は、`eml_rt` に入れ、両方で使う。実行時の検査は、`eml_rt` の検査モードが受け持つ
 - VM とネイティブのコードは混ぜない。VM は参照の実装で、検査モードを持つ唯一の実行系である ([ネイティブ化の設計](native.md) の「確定した設計判断」)
-- VM は worker のスレッドの上で `par` の右の子と `Async` のタスクを動かす。タスクは `start` のときに worker を順に回って置き、そこから動かない。driver の操作は driver を持つ worker 0 が受け付け、結果はタスクの持ち主の worker が当てる
+- VM は worker のスレッドの上で `par` の右の子と `Async` のタスクを動かす。タスクは `start` のときに worker を順に回って置き、そこから動かない。本物の時計の run では各 worker が自分の driver を持ち、ソケットは作った driver に縛る。driver の操作はソケットを縛った worker (仮想の時計の run では driver を持つ worker 0) が受け付け、結果はタスクの持ち主の worker が当てる
 
 ### VM も並列にする理由
 

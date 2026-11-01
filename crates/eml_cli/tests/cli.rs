@@ -1109,6 +1109,81 @@ fn an_unheard_interrupt_stops_a_program_with_a_task_on_worker_1_with_130() {
     an_unheard_signal_stops_a_program_with_a_task_on_worker_1("cli-sigint-worker-1", sigint, 130);
 }
 
+/// 4つの worker の `eml run` (既定の方針と本物の時計) で、16 の計算のタスクと、ループバックのリスナーのタスクが
+/// worker に散り、クライアントとの1往復を終える。各 worker が自分の driver を持つ run である (docs/spec/vm.md の
+/// 「時計と driver」)。締め切りは止まりの見張りで、時間は確かめない。
+#[cfg(unix)]
+#[test]
+fn eml_run_spreads_tasks_over_four_workers() {
+    use std::io::Read;
+    use std::time::Instant;
+
+    let text = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+import String
+
+fib : Int -> <Panic> Int
+fib n = if n < 2 then n else fib (n - 1) + fib (n - 2)
+
+start_all : Int -> <IO, Panic, Async> List (Async.Task Int)
+start_all n = if n == 0 then [] else Async.start (fn () -> fib (n + 4)) :: start_all (n - 1)
+
+sum_all : List (Async.Task Int) -> Int -> <IO, Panic, Async> Int
+sum_all ts acc = match ts with
+  | [] -> acc
+  | t :: rest -> sum_all rest (acc + Async.await t)
+
+drain : Bytes -> Net.TcpStream -> <IO, Panic, Async> (Bytes, Net.TcpStream)
+drain buf s =
+  let n = Bytes.length buf
+  let (buf, s) = Net.read_chunk buf s
+  if Bytes.length buf == n then (buf, s) else drain buf s
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let server = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    let (buf, s) = drain (Bytes.of_string \"echo: \") s
+    let (_, s) = Net.write_bytes buf s
+    Net.close s)
+  let ts = start_all 16
+  let a = Net.connect \"127.0.0.1\" port
+  let a = Net.shutdown_write (Net.write \"ping\" a)
+  let (buf, a) = drain (Bytes.empty ()) a
+  Net.close a
+  Async.await server
+  println (show (sum_all ts 0))
+  println (String.decode buf))
+";
+    let dir = temp_project("cli-four-workers", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .args(["run", "--workers", "4", "main.em"])
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = wait_for_exit(&mut child, deadline);
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    let stderr = stderr_of(&mut child);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    assert_eq!(stdout, "17703\necho: ping\n", "{stderr}");
+}
+
 /// 標準入力の読みの中で待つプログラムも SIGTERM で止まり、終了コードは 143 である。読みに入る直前に届いた SIGTERM は
 /// 読みを止めないが、2回目の SIGTERM でハンドラがその場で終わらせ、終了コードは同じく 143 である。そのため、終わるまで
 /// 100 ms ごとに送り続ける (`repeated_interrupts_end_a_program_waiting_for_the_standard_input_with_130` と同じ)。

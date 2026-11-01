@@ -2484,6 +2484,8 @@ fn async_op<R: Exec>(
         }
         ext @ (Extern::NetSubmitListen | Extern::NetSubmitConnect) => {
             let (host, port) = (task.get(arg(0)), task.raw(arg(1)));
+            // 新しいハンドルは、本物の時計の run では自分の driver に作る (docs/spec/vm.md の「時計と driver」)
+            sched.own_driver()?;
             here!(sched, post, here);
             let submitted = if ext == Extern::NetSubmitListen {
                 cells::submit_listen(

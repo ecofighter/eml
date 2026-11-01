@@ -680,18 +680,46 @@ impl Drop for TaskHandle {
     }
 }
 
+/// リスナーとストリームが、どの worker の driver のハンドルかを表す。ハンドルを引く操作はその worker (host) が driver に
+/// 出す。`listen` と `connect` の結果は受け付けた worker の driver に、`accept` の結果は受けたリスナーの host の driver に
+/// 縛る (docs/spec/vm.md の「操作の記録」)。
+pub(crate) enum Bind {
+    /// worker `host` の driver のハンドル `handle`。落ちたら、その driver の bin `bin` に積む。
+    Bound {
+        host: u32,
+        handle: IoHandle,
+        bin: Arc<HostBin>,
+    },
+}
+
+impl Bind {
+    fn host(&self) -> u32 {
+        let Bind::Bound { host, .. } = self;
+        *host
+    }
+
+    fn handle(&self) -> IoHandle {
+        let Bind::Bound { handle, .. } = self;
+        *handle
+    }
+
+    /// ヒープの `decref` の中で走るので driver に触れず、driver が次に閉じるハンドルとして積むだけにする
+    /// (docs/spec/vm.md の「時計と driver」)。
+    fn close(&self) {
+        let Bind::Bound { handle, bin, .. } = self;
+        bin.push(*handle);
+    }
+}
+
 /// `Std.Net.TcpListener` の `Foreign` の中身。driver のハンドルと、待ち受けるポートを持つ。
 pub(crate) struct NetListener {
-    handle: IoHandle,
+    bind: Bind,
     port: u16,
-    bin: Arc<HostBin>,
 }
 
 impl Drop for NetListener {
-    // ヒープの `decref` の中で走るので driver に触れず、driver が次に閉じるハンドルとして積むだけにする
-    // (docs/spec/vm.md の「時計と driver」)
     fn drop(&mut self) {
-        self.bin.push(self.handle);
+        self.bind.close();
     }
 }
 
@@ -699,9 +727,8 @@ impl Drop for NetListener {
 /// 持つ。buffer は `read_line` が読んでまだ返していないバイトで、`rest[start..]` が残りである。`read_line` で読まない
 /// ストリームでは空のままで、確保も持たない (docs/spec/stdlib.md の「`Std.Net`」)。
 pub(crate) struct NetStream {
-    handle: IoHandle,
+    bind: Bind,
     peer: SocketAddr,
-    bin: Arc<HostBin>,
     rest: Vec<u8>,
     start: usize,
 }
@@ -776,9 +803,8 @@ impl NetStream {
 }
 
 impl Drop for NetStream {
-    // `NetListener` と同じ
     fn drop(&mut self) {
-        self.bin.push(self.handle);
+        self.bind.close();
     }
 }
 
@@ -961,7 +987,8 @@ pub(crate) trait Post {
 
 /// 登録表を触る worker と、取り消しと起こしの宛先。持ち主が自分なら取り消しは mail に積み、起こしはその場で走らせる。
 /// ほかの worker なら `post` で持ち主の受け箱に送る (docs/spec/vm.md の「タスクとスケジュール」)。`host` は、この
-/// worker のタスクの driver の操作を受け付ける worker である (docs/spec/vm.md の「時計と driver」)。
+/// worker のタスクが新しいハンドルを作る操作を受け付ける worker である。既にあるハンドルを引く操作は、ハンドルを
+/// 縛った worker が受け付ける (docs/spec/vm.md の「時計と driver」)。
 #[derive(Clone, Copy)]
 pub(crate) struct Here<'a> {
     pub(crate) me: u32,
@@ -2454,9 +2481,9 @@ impl Registry {
         Ok(op)
     }
 
-    /// 記録を表に入れ、記録の番号を token として返す。持ち主は worker `here.me`、host は `here.host` である。`op` が
-    /// あれば記録に置き、host が自分ならすぐ取り出して `work` に積み、ほかの worker なら host へ `Submit` を送る。
-    /// driver の操作を出さずに終わった記録は `op` を持たない (docs/spec/vm.md の「操作の記録」)。
+    /// 記録を表に入れ、記録の番号を token として返す。持ち主は worker `here.me` で、host は呼ぶ側が記録に書いてある。
+    /// `op` があれば記録に置き、host が自分ならすぐ取り出して `work` に積み、ほかの worker なら host へ `Submit` を
+    /// 送る。driver の操作を出さずに終わった記録は `op` を持たない (docs/spec/vm.md の「操作の記録」)。
     fn record(
         &mut self,
         mut record: OpRecord,
@@ -2465,7 +2492,6 @@ impl Registry {
         work: &mut IoWork,
     ) -> Result<i64, CellFault> {
         record.owner = here.me;
-        record.host = here.host;
         let cell = self.alloc(CellKind::Op(record));
         if let Some(op) = op {
             self.submit_op(cell, op, here, work)?;
@@ -2975,9 +3001,12 @@ impl Registry {
             // `finish` が落とすと、ハンドルは bin を通して閉じる (docs/spec/vm.md の「操作の記録」)
             (OpPhase::Transfer, OpKind::Listen { .. }, Ok(Done::Listener { handle, port })) => {
                 let listener = NetListener {
-                    handle,
+                    bind: Bind::Bound {
+                        host: record.host,
+                        handle,
+                        bin: Arc::clone(bin),
+                    },
                     port,
-                    bin: Arc::clone(bin),
                 };
                 made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
                     // 確保するだけで、`Ctx` の持つ語には触れない。`TcpListener` は `Lin` である
@@ -2991,9 +3020,12 @@ impl Registry {
                 Ok(Done::Stream { handle, peer }),
             ) => {
                 let stream = NetStream {
-                    handle,
+                    bind: Bind::Bound {
+                        host: record.host,
+                        handle,
+                        bin: Arc::clone(bin),
+                    },
                     peer,
-                    bin: Arc::clone(bin),
                     rest: Vec::new(),
                     start: 0,
                 };
@@ -3342,7 +3374,11 @@ pub(crate) fn submit_accept<M: Mode>(
     listener: Word,
 ) -> Result<i64, CellFault> {
     // リスナーは `TcpListener` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`TcpListener` は `Lin`)
-    let handle = unsafe { (*ctx.heap().foreign_unique::<NetListener>(listener)?).handle };
+    let handle = unsafe {
+        (*ctx.heap().foreign_unique::<NetListener>(listener)?)
+            .bind
+            .handle()
+    };
     let op = Op::Accept { listener: handle };
     let record = net_record(OpKind::Accept, worker, Some(listener));
     submit(shared, here, ctx, driver, depth_offset, record, Some(op))
@@ -3416,9 +3452,13 @@ fn submit<M: Mode>(
     ctx: &mut Ctx<M>,
     driver: Option<&mut (dyn IoDriver + 'static)>,
     depth_offset: usize,
-    record: OpRecord,
+    mut record: OpRecord,
     op: Option<Op>,
 ) -> Result<i64, CellFault> {
+    record.host = match record.stream {
+        Some(w) => bound_host(ctx, &record.kind, w)?,
+        None => here.host,
+    };
     let mut work = IoWork::default();
     let token = shared.lock().record(record, op, here, &mut work)?;
     let mut out = Vec::new();
@@ -3642,7 +3682,24 @@ pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word,
 /// 落とす。
 pub(crate) fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
     // ストリームは持ち主のただ1つの参照である (`TcpStream` は `Lin`。docs/spec/vm.md の「操作の記録」)
-    Ok(unsafe { (*ctx.heap().foreign_unique::<NetStream>(stream)?).handle })
+    Ok(unsafe {
+        (*ctx.heap().foreign_unique::<NetStream>(stream)?)
+            .bind
+            .handle()
+    })
+}
+
+/// 記録が持つリスナーかストリーム `w` を縛った worker。そのハンドルを引く操作は、その worker が host である。新しい
+/// ハンドルを作る操作 (`listen` と `connect`) は物体を持たず、持ち主の I/O を受け付ける worker が host になる
+/// (docs/spec/vm.md の「操作の記録」)。
+fn bound_host<M: Mode>(ctx: &Ctx<M>, kind: &OpKind, w: Word) -> Result<u32, CellFault> {
+    // どちらも記録が持つ唯一の参照である (`TcpListener` と `TcpStream` は `Lin`)
+    Ok(unsafe {
+        match kind {
+            OpKind::Accept => (*ctx.heap().foreign_unique::<NetListener>(w)?).bind.host(),
+            _ => (*ctx.heap().foreign_unique::<NetStream>(w)?).bind.host(),
+        }
+    })
 }
 
 /// 1回の読みに貸す空きのバイト数の上限で、広げたときに貸すバイト数 (docs/spec/vm.md の「操作の記録」)。
@@ -3726,7 +3783,7 @@ fn lend_line_room<M: Mode>(
     // ストリームは記録が持つ唯一の参照である (docs/spec/vm.md の「操作の記録」)
     let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
     let lent = s.lend_room(grow);
-    Ok((s.handle, lent))
+    Ok((s.bind.handle(), lent))
 }
 
 /// ストリーム `stream` の残りの先頭 `n` バイトの行を、UTF-8 なら新しい文字列に1回だけ写し、返したことにする。UTF-8 で
@@ -3772,7 +3829,7 @@ fn line_step<M: Mode>(
     } else if s.open_line_len() > LINE_LIMIT {
         LineStep::TooLong
     } else {
-        LineStep::Again(s.handle)
+        LineStep::Again(s.bind.handle())
     })
 }
 
@@ -6032,9 +6089,12 @@ fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
     let scope = registry.lock().open_root(None, None).unwrap();
     let me = running_task(&registry, scope);
     let listener = NetListener {
-        handle: 0,
+        bind: Bind::Bound {
+            host: 0,
+            handle: 0,
+            bin: Arc::default(),
+        },
         port: 1,
-        bin: Arc::default(),
     };
     let listener = unsafe { ctx.heap_mut() }.alloc_foreign(listener, true);
     let token = submit_accept(
@@ -6100,9 +6160,12 @@ fn a_deadline_cancel_ends_late() {
 #[cfg(test)]
 fn net_stream<M: Mode>(ctx: &mut Ctx<M>) -> Word {
     let stream = NetStream {
-        handle: 0,
+        bind: Bind::Bound {
+            host: 0,
+            handle: 0,
+            bin: Arc::default(),
+        },
         peer: ([127, 0, 0, 1], 1).into(),
-        bin: Arc::default(),
         rest: Vec::new(),
         start: 0,
     };
@@ -6692,13 +6755,16 @@ pub(crate) fn placed_task(shared: &Shared, owner: u32) -> CellRef {
     cell
 }
 
-/// driver のハンドル `handle` の `TcpStream` の `Foreign`。落ちたら `bin` に積む。
+/// worker 0 の driver のハンドル `handle` の `TcpStream` の `Foreign`。落ちたら `bin` に積む。
 #[cfg(test)]
 pub(crate) fn stream_on<M: Mode>(ctx: &mut Ctx<M>, handle: IoHandle, bin: Arc<HostBin>) -> Word {
     let stream = NetStream {
-        handle,
+        bind: Bind::Bound {
+            host: 0,
+            handle,
+            bin,
+        },
         peer: ([127, 0, 0, 1], 1).into(),
-        bin,
         rest: Vec::new(),
         start: 0,
     };

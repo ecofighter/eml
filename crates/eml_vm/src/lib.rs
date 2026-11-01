@@ -414,7 +414,7 @@ impl<M: Mode> Machine<M> {
         self
     }
 
-    /// 次の run で時間の輪に載せる仮想のシグナルの予定を渡す。期限は driver を作ったときからのミリ秒である。
+    /// 次の run で時間の輪に載せる仮想のシグナルの予定を渡す。期限は run の時間の基準の始まりからのミリ秒である。
     pub fn with_signals(mut self, signals: Vec<VirtualSignal>) -> Machine<M> {
         self.signals = signals;
         self
@@ -849,7 +849,7 @@ struct Scheduled<M: Mode> {
     generations: Vec<u32>,
     /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
     driver: Option<Box<dyn IoDriver>>,
-    /// worker を join した後の `quiesce` の後にも、driver が保留の操作を残した。
+    /// どれかの worker の driver が、静止させた後にも保留の操作を残した。
     kept_pending: bool,
     /// worker 1..N-1 の `Ctx`。join の後に worker 0 へ返ってきたもの。
     others: Vec<Ctx<M>>,
@@ -975,6 +975,7 @@ fn run_scheduled<M: Mode, P: Policy>(
     let mut peak_stack = sched.peak_stack(task);
     let mut bases = Vec::with_capacity(exits.len());
     let mut left = false;
+    let mut kept_pending = false;
     for exit in exits {
         match exit {
             Ok(Retired {
@@ -984,6 +985,7 @@ fn run_scheduled<M: Mode, P: Policy>(
                 peak_stack: worker_peak,
                 base,
                 left: worker_left,
+                kept_pending: worker_kept,
             }) => {
                 counts.add(&worker_counts);
                 preemptions += worker_preemptions;
@@ -991,6 +993,7 @@ fn run_scheduled<M: Mode, P: Policy>(
                 bases.push(base);
                 others.push(other);
                 left |= worker_left;
+                kept_pending |= worker_kept;
             }
             Err(payload) => {
                 panic.get_or_insert(payload);
@@ -999,10 +1002,10 @@ fn run_scheduled<M: Mode, P: Policy>(
     }
     let result = settle(result, sched.run.take_fatal());
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に driver を静止させる。どの worker も
-    // もう受け付けを送らないので、join の後に行う。成功した run では、静止させた driver が返した完了を記録に置く。
-    // 集める地点と同じく、driver に出した操作がなければ完了を読まない (docs/spec/vm.md の「時計と driver」
-    // 「誤り、止めること、終わり」)
-    let kept_pending = match sched.driver.as_mut() {
+    // もう受け付けを送らないので、join の後に行う。ほかの worker の driver は、その worker が抜ける前に静止させてある。
+    // 成功した run では、静止させた driver が返した完了を記録に置く。集める地点と同じく、driver に出した操作がなければ
+    // 完了を読まない (docs/spec/vm.md の「時計と driver」「誤り、止めること、終わり」)
+    kept_pending |= match sched.driver.as_mut() {
         Some(driver) => {
             driver.quiesce();
             let in_flight = sched.cells.lock().in_flight(sched.index);
