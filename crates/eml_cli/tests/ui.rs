@@ -563,33 +563,42 @@ fn run() {
 
 #[test]
 fn run_fail() {
-    for_each_file(&ui_root().join("run-fail"), "em", true, |path, marks| {
-        let signals = &marks.signals;
-        let Entry::Test(suffix) = classify(path, "run-fail") else {
-            return;
-        };
-        let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential, 1);
-        let Err(error) = &ran.result else {
-            panic!("expected a runtime error");
-        };
-        let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
-        snapshot_settings(path, &suffix).bind(|| {
-            insta::assert_snapshot!(format!(
+    for_each_file(&ui_root().join("run-fail"), "em", true, run_fail_file);
+}
+
+/// `run-fail/` の1つのファイルを流す。worker の印の分類は、プログラムを流す前に確かめる。VM の誤りで終わるファイルは
+/// 速いモードからあとの run を流さないので、そこで確かめると、ほかの分類の印が黙って通ってしまう。
+fn run_fail_file(path: &Path, marks: &Marks) {
+    let signals = &marks.signals;
+    let Entry::Test(suffix) = classify(path, "run-fail") else {
+        return;
+    };
+    let workers = workers_run(&suffix, marks.workers_skip);
+    let (program, root, diagnostics) = compile(path, &suffix);
+    let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential, 1);
+    let Err(error) = &ran.result else {
+        panic!("expected a runtime error");
+    };
+    let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
+    // insta は名前のないスナップショットを囲む関数の名前で呼ぶので、テストの名前 `run_fail` を書く
+    snapshot_settings(path, &suffix).bind(|| {
+        insta::assert_snapshot!(
+            "run_fail",
+            format!(
                 "--- stdout ---\n{stdout}--- stderr ---\n{diagnostics}{stderr}--- runtime error ---\n{error}\n{written}"
-            ));
-        });
-        // VM の誤りの文言は worker ID を含みうる。ID はスケジュールで変わるので、seed の run とも比べない
-        if fast_mode_reports(error) {
-            assert_fast_mode_agrees(&suffix, &program, path, &root, signals, &ran);
-            if seeded(&suffix) {
-                assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
-            }
-            if workers_run(&suffix, marks.workers_skip) {
-                assert_workers_agree(&suffix, &program, path, &root, signals, &ran);
-            }
-        }
+            )
+        );
     });
+    // VM の誤りの文言は worker ID を含みうる。ID はスケジュールで変わるので、seed の run とも比べない
+    if fast_mode_reports(error) {
+        assert_fast_mode_agrees(&suffix, &program, path, &root, signals, &ran);
+        if seeded(&suffix) {
+            assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
+        }
+        if workers {
+            assert_workers_agree(&suffix, &program, path, &root, signals, &ran);
+        }
+    }
 }
 
 #[test]
@@ -661,6 +670,18 @@ fn workers_runs_cover_par_and_async() {
 #[should_panic(expected = "the workers mark is only for par/ and async/")]
 fn a_workers_mark_outside_par_and_async_fails() {
     workers_run("io/x.em", true);
+}
+
+/// `run-fail/` のほかの分類の印は、プログラムを流す前に落ちる。そのため、速いモードが報告しない誤り (漏れや内部の
+/// 誤り) で終わるファイルでも通らない。ファイルを読む前に落ちるので、無いファイルの名前で確かめる。
+#[test]
+#[should_panic(expected = "io/no_such_file.em: the workers mark is only for par/ and async/")]
+fn a_workers_mark_in_another_run_fail_category_fails_before_running() {
+    let marks = Marks {
+        workers_skip: true,
+        ..Marks::default()
+    };
+    run_fail_file(&ui_root().join("run-fail/io/no_such_file.em"), &marks);
 }
 
 #[test]
