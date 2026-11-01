@@ -28,7 +28,8 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `async-threads`: worker をまたいで `Async` のタスクを動かす。登録表を run の lock の下に置き、`Counter` の表を atomic にする。worker 1..N-1 の I/O の driver は、そこに置いたタスクが最初に使うときにそのスレッドで作る。スレッドをまたぐ受け箱の知らせ (`Wake`、`Place`、`Cancel`、`Completion`、`Submit`)、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、`async/` の UI テストを N = 2 と 8 でも流し、worker の数に応じて速くなることを測る。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
+- `async-threads`: worker をまたいで `Async` のタスクを動かす。登録表を run の lock の下に置き、`Counter` の表を atomic にする。worker 1..N-1 の I/O の driver は、そこに置いたタスクが最初に使うときにそのスレッドで作る。スレッドをまたぐ受け箱の知らせ (`Wake`、`Place`、`Cancel`、`Completion`、`Submit`)、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan` を入れ、`async/` の UI テストを N = 2 と 8 でも流し、worker の数に応じて速くなることを測る。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」
+- `async-compute`: タスクから CPU を使う仕事を子が1つの `par` の仕事として出し、終わるまでそのタスクだけを待たせる `Async.compute` を入れる。待つ間、worker はほかのタスクを動かす。前提: `async-threads`。設計: [非同期の設計](async.md) の「`compute`」
 - `async-rescue`: 詰まった worker のタスクを、空いた worker が救済する。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「救済」
 - `task-limits`: タスクごとに深さ、スタック、メモリの上限を設け、超えたタスクだけを IO の失敗 `ResourceLimit` で止める。メモリの硬い上限は今と同じく run 全体を止める。安全点と末尾でない呼び出しの位置が、巻き戻しの地点になる。前提: `async-threads`。設計: [非同期の設計](async.md) の「タスクごとの上限」
 - `async-files`: 非同期のファイルと、子のプロセスのパイプを入れる。今のブロックする std の行では書けない次の3つを書けるようにする。前提: なし。設計: [非同期の設計](async.md) の「ファイルとパイプ」
