@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, Scope, ScopedJoinHandle};
 
-use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop};
+use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop, Word};
 
 use crate::cells::{CellRef, Post, Shared, Woken};
 use crate::code::CodeBase;
@@ -31,16 +31,30 @@ const _: () = {
 };
 
 /// ほかの worker から受け箱に届く知らせ (docs/spec/vm.md の「`par` の fork と join」「タスクとスケジュール」)。
-/// 語を運ぶのは `Child` と `Joined` だけで、`Async` のタスクの知らせはセルの番号しか持たない。
+/// 語を運ぶのは `Child`、`Joined`、`Place` だけで、ほかの `Async` のタスクの知らせはセルの番号しか持たない。driver の
+/// 操作は記録が持ち、知らせは運ばない (docs/spec/vm.md の「操作の記録」)。
 pub(crate) enum Notice {
     /// fork がこの worker に置いた右の子。受けた worker が自分のタスクの番号を振り、走れるタスクの列の後ろに入れる。
     Child(Task),
     /// この worker が置いた右の子の終わり。`join` はこの worker の join の番号で、`outcome` の語は子が残した参照である。
     Joined { join: JoinId, outcome: Outcome },
+    /// `start` がこの worker を持ち主にしたタスク。`closure` はタスクの論理的な ID `worker` に印を付けた閉包で、
+    /// 知らせが参照を1つ持つ。受けた worker が始める仕事にする。
+    Place {
+        cell: CellRef,
+        worker: u32,
+        closure: Word,
+    },
     /// この worker が持ち主のタスクか待つ `Task` の起こし。継続はセルにあり、受けた worker が取り出す。
     Wake(Woken),
     /// この worker が持ち主のタスクの取り消し。受けた worker が待ちを外す。
     Cancel(CellRef),
+    /// この worker が host の記録に、持ち主が操作を置いた。受けた worker が取り出して自分の driver に出す。
+    Submit(CellRef),
+    /// この worker が host の記録の、driver に出した操作の取り消し。
+    CancelIo(CellRef),
+    /// この worker が持ち主の記録に、host が結果を置いた。受けた worker が当てて段階を進める。
+    Completion(CellRef),
 }
 
 /// 登録表の lock の下から、ほかの worker の受け箱に `Async` のタスクの知らせを積む道 (docs/spec/vm.md の
@@ -64,6 +78,29 @@ impl Post for Mailer<'_> {
     fn cancel(&self, k: u32, cell: CellRef) {
         self.run
             .send(self.control, k as usize, Notice::Cancel(cell));
+    }
+
+    fn place(&self, k: u32, cell: CellRef, worker: u32, closure: Word) {
+        let notice = Notice::Place {
+            cell,
+            worker,
+            closure,
+        };
+        self.run.send(self.control, k as usize, notice);
+    }
+
+    fn submit(&self, k: u32, op: CellRef) {
+        self.run.send(self.control, k as usize, Notice::Submit(op));
+    }
+
+    fn cancel_io(&self, k: u32, op: CellRef) {
+        self.run
+            .send(self.control, k as usize, Notice::CancelIo(op));
+    }
+
+    fn completion(&self, k: u32, op: CellRef) {
+        self.run
+            .send(self.control, k as usize, Notice::Completion(op));
     }
 }
 
@@ -104,6 +141,9 @@ pub(crate) struct Retired<M: Mode> {
     /// `Ctx` を作った直後のヒープの仕事。ヒープごとのダミーの物体の確保は実行の仕事ではないので、`RunStats` から引く
     /// (docs/spec/vm.md の「`RunStats`」)。
     pub(crate) base: HeapWork,
+    /// 最後の集める地点で、この worker が走らせるはずの知らせ (`Child`、`Place`、`Wake`) が受け箱に残っていた。成功した
+    /// run でも、タスクを残したまま終わったことになる (docs/spec/vm.md の「誤り、止めること、終わり」)。
+    pub(crate) left: bool,
 }
 
 /// worker の受け箱の lock の下にある状態。
@@ -196,6 +236,12 @@ impl Run {
             fatal: Mutex::new(None),
             counters,
         }
+    }
+
+    /// worker `k` のタスクの driver の操作を受け付ける worker (host)。driver を持つのは worker 0 だけなので、どの worker の
+    /// 操作も worker 0 が driver に出し、結果は持ち主が当てる (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn io_worker(&self, _k: usize) -> usize {
+        0
     }
 
     /// 満期の判定で読む今の時刻 (ミリ秒、切り捨て)。`driver` は基準が渡された driver の `Injected` のときだけ読む。
@@ -506,6 +552,7 @@ fn run_worker<M: Mode, P: Policy>(
                 preemptions: done.preemptions,
                 peak_stack: done.peak_stack,
                 base,
+                left: done.left,
             })
         }
         Err(payload) => {
@@ -527,6 +574,7 @@ struct Done {
     counts: RunCounts,
     preemptions: u64,
     peak_stack: u64,
+    left: bool,
 }
 
 /// worker `k` の実行。眠った形で始め、置かれた右の子を自分の `Scheduler` で動かす。抜けるのは止めるビットか `END` を
@@ -556,6 +604,10 @@ fn work<M: Mode, P: Policy>(
     );
     let mut counts = RunCounts::default();
     let (error, peak_stack) = crate::vm::work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts);
+    // 止めるビットと `END` は安全点か空きの待ちでだけ見るので、ここに来た worker は集める地点の途中で抜けておらず、
+    // lock の外で行う破棄も終えている。その後に受け箱に届いた知らせを最後に1回だけ見て、走らせるはずの仕事が残って
+    // いれば数える (docs/spec/vm.md の「誤り、止めること、終わり」)
+    let left = quiet(&error) && sched.left_notices();
     // 予約と確定の間には安全点も切り替えも失敗しうる命令もないので、worker が抜けるときの hold は空である。例外は、
     // 予約を書いた `reserve_recv` の行が、続く起こしの処理 (`route` と `schedule`) の内部の誤りで抜けたときだけで、
     // そのときは品物の語を持ったまま `Scheduler` ごと捨て、回復がヒープを片付ける (docs/spec/vm.md の「channel」)
@@ -570,6 +622,8 @@ fn work<M: Mode, P: Policy>(
             ),
         "a channel reservation is held when a worker exits"
     );
+    // driver を持つのは worker 0 だけなので、静止させて落とす driver はない (docs/spec/vm.md の「時計と driver」)
+    debug_assert!(sched.driver.is_none(), "a worker other than 0 has a driver");
     if !quiet(&error) {
         run.set_fatal(error);
         control.end_run();
@@ -579,7 +633,21 @@ fn work<M: Mode, P: Policy>(
         counts,
         preemptions: sched.preemptions(),
         peak_stack,
+        left,
     }
+}
+
+/// 成功した run の、worker を join した後の確かめ。driver が静止させた後にも保留の操作を残していれば driver の誤り、
+/// どれかの worker の受け箱に走らせるはずの知らせが残っていれば内部の誤りである (docs/spec/vm.md の
+/// 「誤り、止めること、終わり」)。
+pub(crate) fn end_check(kept_pending: bool, left: bool) -> Result<(), VmFault> {
+    if kept_pending {
+        return Err(VmFault::Driver(crate::error::KEPT_PENDING.to_string()));
+    }
+    if left {
+        return Err(VmFault::Internal("a task is left at the end"));
+    }
+    Ok(())
 }
 
 /// worker 1..N-1 が何も書かずに抜ける誤り。止めるビットと `END` で、どれも worker 0 が自分の語で読む。
@@ -729,6 +797,36 @@ impl<P: Policy> Scheduler<P> {
         result
     }
 
+    /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、この worker が走らせるはずの仕事があるかを
+    /// 返す。右の子 (`Child`)、持ち主が自分のタスクの `Place`、継続を取り出せる `Wake` を数え、`Joined`、`Cancel`、
+    /// `Submit`、`CancelIo`、`Completion` と、もう待っていないセルへの起こしは数えない。登録表は書き換えず、知らせの語は
+    /// 手放さない。数えたら run は誤りで終わり、回復がヒープを捨てるからである (docs/spec/vm.md の
+    /// 「誤り、止めること、終わり」)。
+    pub(crate) fn left_notices(&mut self) -> bool {
+        let notices = self.run.take_notices(self.index);
+        if notices.is_empty() {
+            return false;
+        }
+        let me = self.me();
+        let mut cells = self.cells.lock();
+        let mut left = false;
+        for notice in &notices {
+            left |= match notice {
+                Notice::Child(_) => true,
+                Notice::Place { cell, worker, .. } => {
+                    cells.placed_owner(*cell, *worker).ok() == Some(me)
+                }
+                Notice::Wake(w) => cells.would_run(w, me),
+                Notice::Joined { .. }
+                | Notice::Cancel(_)
+                | Notice::Submit(_)
+                | Notice::CancelIo(_)
+                | Notice::Completion(_) => false,
+            };
+        }
+        left
+    }
+
     /// 期限が今までに来た区画の持ち主 (worker 0 を除く) を起こす。
     fn wake_due_owners(&self) -> Result<(), VmFault> {
         let now = self.run.now_ms_floor(self.driver.as_deref())?;
@@ -772,7 +870,7 @@ mod tests {
 
     use eml_rt::{Checked, Control, HeapError, Limits, Stop};
 
-    use super::{Run, settle};
+    use super::{Notice, Run, settle};
     use crate::cells::{CellRef, MailItem, Registry, Shared};
     use crate::driver::RunClock;
     use crate::sched::{Scheduler, Sequential};
@@ -876,6 +974,55 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             machine.ctx.heap().stats()
         );
         machine.close().unwrap();
+    }
+
+    /// `END` の後、worker 1 が最後に受け箱を見る前に届いた `Place` は、走らせるはずの仕事として数える。数えた run は
+    /// 成功しても `a task is left at the end` で終わる。結果を当てる知らせ (`Completion`) は数えない
+    /// (docs/spec/vm.md の「誤り、止めること、終わり」)。スレッドは作らず、worker 1 の抜ける手順を手で動かす。
+    #[test]
+    fn a_notice_after_the_last_collect_is_counted_as_left() {
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            ..Limits::default()
+        }));
+        let run = Arc::new(Run::new(
+            2,
+            None,
+            RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        ));
+        let shared = Arc::new(Shared::new(Registry::new(Vec::new(), 2)));
+        let mut sched = Scheduler::worker(
+            Sequential,
+            Arc::clone(&run),
+            Arc::clone(&control),
+            1,
+            0,
+            usize::MAX,
+            Arc::clone(&shared),
+        );
+        let placed = crate::cells::placed_task(&shared, 1);
+        control.end_run();
+        // 結果を当てる知らせだけなら、残った仕事はない
+        run.send(&control, 1, Notice::Completion(placed));
+        assert!(!sched.left_notices());
+        run.send(&control, 1, Notice::Completion(placed));
+        run.send(
+            &control,
+            1,
+            Notice::Place {
+                cell: placed,
+                worker: 0,
+                closure: eml_rt::Word::UNIT,
+            },
+        );
+        assert!(sched.left_notices());
+        assert!(run.take_notices(1).is_empty());
+        assert_eq!(
+            super::end_check(false, true),
+            Err(VmFault::Internal("a task is left at the end"))
+        );
+        assert_eq!(super::end_check(false, false), Ok(()));
     }
 
     /// まだ始めていない worker の欄を起こしても、`running` には数えない。

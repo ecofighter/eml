@@ -16,7 +16,7 @@ use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
-use crate::error::{KEPT_PENDING, VmFault};
+use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
     JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
@@ -33,6 +33,7 @@ macro_rules! here {
         let $post = crate::workers::Mailer::new(&$sched.run, &$sched.watcher.control);
         let $here = cells::Here {
             me: $sched.index as u32,
+            host: $sched.run.io_worker($sched.index) as u32,
             mail: &$sched.cells.mail,
             post: &$post,
         };
@@ -1917,8 +1918,10 @@ impl Outcome {
     }
 }
 
-/// エントリの関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。その前に、mail の
-/// 項を処理し、残った `Async` のセルを放す (docs/spec/vm.md の「`Async` のタスク」)。
+/// エントリの関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。その前に、自分の
+/// 受け箱の知らせと mail の項を処理し、登録表の lock の下で、終わっていないタスクも driver に出したままの操作も
+/// ないことを確かめる。driver の静止と残ったセルの片付けは、worker を join した後に `run_scheduled` が行う。ほかの
+/// worker がまだ host へ受け付けを送りうるからである (docs/spec/vm.md の「`Async` のタスク」の「終わり」)。
 // run ごとに1回しか通らないので、VM の繰り返しに展開しない。展開すると、driver の有無を確かめる分岐で繰り返しの
 // レジスタの割り当てが変わり、`bench/loop.em` の命令の数が 4% 増えた
 #[inline(never)]
@@ -1929,6 +1932,7 @@ fn finish<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let mut out = Vec::new();
+    sched.take_slot(ctx, task.depth_offset, &mut out)?;
     {
         here!(sched, post, here);
         cells::drain(
@@ -1940,22 +1944,14 @@ fn finish<R: Exec>(
             &mut out,
         )?;
     }
-    if !out.is_empty() {
+    if !out.is_empty() || sched.cells.lock().left_at_end() {
         return Err(VmFault::Internal("a task is left at the end"));
-    }
-    // driver が貸した記憶をセルが持つうちは放せないので、保留の操作を片付けてから掃く。片付かなければ放さずに driver
-    // の誤りで終わる (docs/spec/vm.md の「`Async` のタスク」の「終わり」)
-    let driver = driver_mut(&mut sched.driver)?;
-    driver.quiesce();
-    if driver.pending() > 0 {
-        return Err(VmFault::Driver(KEPT_PENDING.to_string()));
     }
     // 予約と確定の間に安全点はないので、`Finish` に来た worker は予約を持たない (docs/spec/vm.md の「channel」)
     debug_assert!(
         sched.hold.is_none(),
         "a channel reservation is held at the end"
     );
-    cells::sweep_all(&sched.cells, ctx, task.depth_offset)?;
     if sched.has_children() {
         return Err(VmFault::Internal("a task is left at the end"));
     }
@@ -2006,10 +2002,15 @@ fn async_op<R: Exec>(
         Extern::AsyncStartRaw => {
             let cell = current_cell(task)?;
             let scope = sched.cells.lock().current_of(cell)?;
-            let (handle, run) = start_task::<R>(ctx, task, sched, scope, task.get(arg(0)))?
+            // タスクは呼んだ worker に置く (docs/spec/vm.md の「`Async` のタスク」)
+            let owner = sched.me();
+            let (handle, run) = start_task::<R>(ctx, task, sched, scope, owner, task.get(arg(0)))?
                 .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
             task.set(dst, handle);
-            schedule(code, sched, entries, run)?;
+            // ほかの worker に置いたタスクは、`Place` を受けた持ち主が始める
+            if let Some(run) = run {
+                schedule(code, sched, entries, run)?;
+            }
         }
         Extern::AsyncRunRaw => {
             // 呼んだ `Task` はスタックを持ったまま、根のスコープが閉じるのを待つ
@@ -2021,9 +2022,11 @@ fn async_op<R: Exec>(
                 };
                 cells.open_root(parent, task.cell)?
             };
-            let (handle, run) = start_task::<R>(ctx, task, sched, root, task.get(arg(0)))?
-                .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
+            // 根のタスクは呼んだ worker に置く (docs/spec/vm.md の「`Async` のタスク」)
             let me = sched.me();
+            let (handle, run) = start_task::<R>(ctx, task, sched, root, me, task.get(arg(0)))?
+                .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
+            let run = run.ok_or(VmFault::Internal("a root task is placed elsewhere"))?;
             sched
                 .cells
                 .lock()
@@ -2117,8 +2120,10 @@ fn async_op<R: Exec>(
             current_cell(task)?;
             let g = task.get(arg(1));
             let scope = sched.cells.lock().scope_cell(task.raw(arg(0)));
+            // `start_raw` と同じく、タスクは呼んだ worker に置く
+            let owner = sched.me();
             let started = match scope {
-                Some(scope) => start_task::<R>(ctx, task, sched, scope, g)?,
+                Some(scope) => start_task::<R>(ctx, task, sched, scope, owner, g)?,
                 None => None,
             };
             let Some((handle, run)) = started else {
@@ -2128,7 +2133,9 @@ fn async_op<R: Exec>(
                 return raise_again::<R>(code, ctx, task, dst, raise, Extern::AsyncStartInRaw);
             };
             task.set(dst, handle);
-            schedule(code, sched, entries, run)?;
+            if let Some(run) = run {
+                schedule(code, sched, entries, run)?;
+            }
         }
         Extern::AsyncOpenScope => {
             let me = current_cell(task)?;
@@ -2334,10 +2341,16 @@ fn async_op<R: Exec>(
         Extern::AsyncOpReady => {
             // token は借りるだけで、組を作る後の `con` が返す
             let me = current_cell(task)?;
-            let mut step = sched
-                .cells
-                .lock()
-                .op_ready(task.raw(arg(0)), task.raw(arg(1)), me)?;
+            let token = task.raw(arg(0));
+            // host が置いた結果は、決める区間と同じ区間で先に当てる (docs/spec/vm.md の「操作の記録」)
+            let mut work = cells::IoWork::default();
+            let mut step = {
+                here!(sched, post, here);
+                let mut cells = sched.cells.lock();
+                cells.settle_token(ctx, task.depth_offset, token, me, &here, &mut work)?;
+                cells.op_ready(token, task.raw(arg(1)), me)?
+            };
+            work.cancel_on(sched.driver.as_deref_mut())?;
             // 予算を使い切った終わった操作の待ちは、OS を1回見て集める。受け付けで終わる書きを続ける書き手が、OS を
             // 見ないと起きない同じ worker の読み手の先へ走り続けないためである。走れるタスクがなければ譲らずに続ける
             // (docs/spec/stdlib.md の「操作の予算」、docs/spec/vm.md の「時計と driver」)
@@ -2352,7 +2365,19 @@ fn async_op<R: Exec>(
         Extern::AsyncParkIo => {
             let me = current_cell(task)?;
             let (token, k) = (task.raw(arg(0)), task.get(arg(1)));
-            let run = cells::park_io(&sched.cells, driver_mut(&mut sched.driver)?, token, me, k)?;
+            let run = {
+                here!(sched, post, here);
+                cells::park_io(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.depth_offset,
+                    token,
+                    me,
+                    k,
+                )?
+            };
             if let Some(run) = run {
                 schedule(code, sched, entries, run)?;
             }
@@ -2367,15 +2392,21 @@ fn async_op<R: Exec>(
             } else {
                 0
             };
-            let run = cells::park_io_until(
-                &sched.cells,
-                driver_mut(&mut sched.driver)?,
-                now,
-                ms,
-                token,
-                me,
-                k,
-            )?;
+            let run = {
+                here!(sched, post, here);
+                cells::park_io_until(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.depth_offset,
+                    now,
+                    ms,
+                    token,
+                    me,
+                    k,
+                )?
+            };
             if let Some(run) = run {
                 schedule(code, sched, entries, run)?;
             }
@@ -2398,11 +2429,12 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitWrite => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
+            here!(sched, post, here);
             let token = cells::submit_write(
                 &sched.cells,
+                &here,
                 ctx,
-                driver_mut(&mut sched.driver)?,
-                sched.index as u32,
+                sched.driver.as_deref_mut(),
                 task.worker,
                 task.depth_offset,
                 buf,
@@ -2412,11 +2444,12 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
+            here!(sched, post, here);
             let token = cells::submit_read(
                 &sched.cells,
+                &here,
                 ctx,
-                driver_mut(&mut sched.driver)?,
-                sched.index as u32,
+                sched.driver.as_deref_mut(),
                 task.worker,
                 task.depth_offset,
                 buf,
@@ -2426,12 +2459,13 @@ fn async_op<R: Exec>(
         }
         ext @ (Extern::NetSubmitListen | Extern::NetSubmitConnect) => {
             let (host, port) = (task.get(arg(0)), task.raw(arg(1)));
+            here!(sched, post, here);
             let submitted = if ext == Extern::NetSubmitListen {
                 cells::submit_listen(
                     &sched.cells,
+                    &here,
                     ctx,
-                    driver_mut(&mut sched.driver)?,
-                    sched.index as u32,
+                    sched.driver.as_deref_mut(),
                     task.worker,
                     task.depth_offset,
                     host,
@@ -2440,9 +2474,9 @@ fn async_op<R: Exec>(
             } else {
                 cells::submit_connect(
                     &sched.cells,
+                    &here,
                     ctx,
-                    driver_mut(&mut sched.driver)?,
-                    sched.index as u32,
+                    sched.driver.as_deref_mut(),
                     task.worker,
                     task.depth_offset,
                     host,
@@ -2463,11 +2497,12 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitAccept => {
             let listener = task.get(arg(0));
+            here!(sched, post, here);
             let token = cells::submit_accept(
                 &sched.cells,
+                &here,
                 ctx,
-                driver_mut(&mut sched.driver)?,
-                sched.index as u32,
+                sched.driver.as_deref_mut(),
                 task.worker,
                 task.depth_offset,
                 listener,
@@ -2501,11 +2536,12 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitReadLine => {
             let stream = task.get(arg(0));
+            here!(sched, post, here);
             let token = cells::submit_read_line(
                 &sched.cells,
+                &here,
                 ctx,
-                driver_mut(&mut sched.driver)?,
-                sched.index as u32,
+                sched.driver.as_deref_mut(),
                 task.worker,
                 task.depth_offset,
                 stream,
@@ -2641,20 +2677,24 @@ fn raise_again<R: Exec>(
     }
 }
 
-/// 今の `Task` から、スコープ `scope` に新しいタスクを置く。閉包 `g` とまだ印のない根に、新しいタスクの ID で印を付ける。
+/// 今の `Task` から、スコープ `scope` に worker `owner` を持ち主とする新しいタスクを置く。閉包 `g` とまだ印のない根に、
+/// 新しいタスクの ID で印を付ける。返す仕事は、持ち主が自分のときだけある。
 fn start_task<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &Task,
     sched: &mut Scheduler<R::P>,
     scope: CellRef,
+    owner: u32,
     g: Word,
-) -> Result<Option<(Word, Runnable)>, VmFault> {
+) -> Result<Option<(Word, Option<Runnable>)>, VmFault> {
     let roots = unshared_roots(ctx, sched);
-    let me = sched.me();
-    let started = sched
-        .cells
-        .lock()
-        .start(ctx, scope, task.worker, me, g, &roots)?;
+    let started = {
+        here!(sched, post, here);
+        sched
+            .cells
+            .lock()
+            .start(ctx, &here, scope, task.worker, owner, g, &roots)?
+    };
     Ok(started.map(|(cell, run)| (cells::task_handle(ctx, &sched.cells, cell), run)))
 }
 

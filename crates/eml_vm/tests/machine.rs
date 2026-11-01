@@ -679,8 +679,8 @@ fn main() -> unit {{
     assert_eq!(out.contents(), "ran\n");
 }
 
-/// `main` の `Finish` に届かない誤りの run でも、`vm::run` の直後と回復の前に driver を空にする。成功した run と違い
-/// `Finish` の `quiesce` を通らないので、2回はこの2か所の分である (docs/spec/vm.md の「時計と driver」)。
+/// `main` の `Finish` に届かない誤りの run でも、worker を join した後と回復の前に driver を空にする。2回はこの2か所の
+/// 分である (docs/spec/vm.md の「時計と driver」)。
 #[test]
 fn a_failed_run_quiesces_its_driver_before_recovery() {
     let (driver, quiesces) = FakeDriver::new(true);

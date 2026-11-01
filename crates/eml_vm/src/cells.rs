@@ -33,7 +33,9 @@
 //!
 //! 操作の記録の不変条件: driver の鍵は記録の番号 (`CellRef`) で、記録は受け付けから取り出しまで1つの番号を持つ。
 //! 記録の状態は、操作のない `Idle`、`pending_op` に操作を置いた `Queued`、host が driver に出した `InDriver`
-//! (`submitted`)、結果を `arrival` に置いた `Arrived` で、持ち主が結果を当てて段階を進める。区画 `k` の `in_flight` は、
+//! (`submitted`)、結果を `arrival` に置いた `Arrived` で、持ち主 (`owner`) が結果を当てて段階を進める。host は操作を
+//! driver に出し入れするだけで語に触れず、持ち主がほかの worker なら `Submit`、`CancelIo`、`Completion` の知らせで
+//! 受け渡す。`Arrived` の記録は、持ち主が `Completion` を受けるか、次に待つか続けるときに当てる。区画 `k` の `in_flight` は、
 //! worker `k` が host で `InDriver` にある記録の数である。記録の `waiter` が `t` を指して完了が
 //! まだなら、`t` の `wait` は `Some(Io(その記録))` である。1つの token に記録は1つで、1つのタスクの待ちの登録は1つである。
 //! 記録を放すのは、受け付けたタスクの `take_op` と `sweep_all` だけである。
@@ -296,6 +298,8 @@ enum CellKind {
 /// driver に出した操作の記録 (docs/spec/vm.md の「操作の記録」)。driver は語を見ないので、操作に貸した記憶の物体と
 /// ストリームは記録が持つ。語は `Depot` で公開せず、受け付けたタスクの ID `worker` の物体のまま持つ。
 struct OpRecord {
+    /// 受け付けたタスクの持ち主の worker。段階を進めて結果を当てるのはこの worker だけである。
+    owner: u32,
     /// driver を持ち、操作を driver に出し入れする worker。語には触れない。
     host: u32,
     /// host が driver に出して、まだ結果を `arrival` に置いていない。`cancelling` と同じく登録表の lock の区間の中でだけ
@@ -873,13 +877,24 @@ pub(crate) trait Post {
     fn wake(&self, k: u32, w: Woken);
     /// worker `k` に、持ち主としてタスク `cell` の取り消しを届ける。
     fn cancel(&self, k: u32, cell: CellRef);
+    /// worker `k` に、持ち主としてタスク `cell` を始めさせる。`closure` は `start` が論理的な ID `worker` に印を付けた
+    /// 閉包で、知らせが参照を1つ持つ。
+    fn place(&self, k: u32, cell: CellRef, worker: u32, closure: Word);
+    /// worker `k` に、host として記録 `op` に置いた操作を driver に出させる。
+    fn submit(&self, k: u32, op: CellRef);
+    /// worker `k` に、host として記録 `op` の driver の操作を取り消させる。
+    fn cancel_io(&self, k: u32, op: CellRef);
+    /// worker `k` に、持ち主として記録 `op` に置いた結果を当てさせる。
+    fn completion(&self, k: u32, op: CellRef);
 }
 
 /// 登録表を触る worker と、取り消しと起こしの宛先。持ち主が自分なら取り消しは mail に積み、起こしはその場で走らせる。
-/// ほかの worker なら `post` で持ち主の受け箱に送る (docs/spec/vm.md の「タスクとスケジュール」)。
+/// ほかの worker なら `post` で持ち主の受け箱に送る (docs/spec/vm.md の「タスクとスケジュール」)。`host` は、この
+/// worker のタスクの driver の操作を受け付ける worker である (docs/spec/vm.md の「時計と driver」)。
 #[derive(Clone, Copy)]
 pub(crate) struct Here<'a> {
     pub(crate) me: u32,
+    pub(crate) host: u32,
     pub(crate) mail: &'a Mail,
     pub(crate) post: &'a dyn Post,
 }
@@ -957,6 +972,17 @@ impl IoWork {
     }
 }
 
+/// `arrive` の答え。結果を当てるのは記録の持ち主だけである (docs/spec/vm.md の「操作の記録」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Arrival {
+    /// 持ち主が自分なので、同じ区間で当てる。
+    Settle,
+    /// 持ち主はほかの worker で、待つタスクがいる。値はその番号で、持ち主へ `Completion` を送る。
+    Send(u32),
+    /// 持ち主はほかの worker で、まだ待っていない。持ち主が次に待つか続けるかを決めるときに当てる。
+    Leave,
+}
+
 /// `cancel_io` の答え。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancelPath {
@@ -985,6 +1011,9 @@ pub(crate) struct Registry {
     /// worker のどれでもよいが、中継を決める監視のスレッドは worker 0 だけが持つので、ここに置く
     /// (docs/spec/vm.md の「上限と割り込み」)。
     pub(crate) relay: bool,
+    /// driver を持つ worker ごとの、その driver が閉じるハンドルの bin。持ち主が host の driver の結果から作るリスナーと
+    /// ストリームは、落ちたときに host の bin に積む (docs/spec/vm.md の「操作の記録」)。
+    bins: Vec<Option<Arc<HandleBin>>>,
 }
 
 impl Registry {
@@ -1006,7 +1035,13 @@ impl Registry {
             signal_waiters: [Vec::new(), Vec::new()],
             unheard: 0,
             relay: false,
+            bins: vec![None; workers.max(1)],
         }
+    }
+
+    /// worker `k` の driver の bin を覚える。driver を持つ worker が run の始めに1回だけ書く。
+    pub(crate) fn set_bin(&mut self, k: usize, bin: Arc<HandleBin>) {
+        self.bins[k] = Some(bin);
     }
 
     /// 予定した仮想のシグナル (期限のミリ秒とビットの組) を、並びの順に worker 0 の時間の輪へ載せる。run の始めに、
@@ -1054,6 +1089,7 @@ impl Registry {
         &mut self,
         now_ms: u64,
         k: usize,
+        here: &Here,
         out: &mut Vec<Woken>,
         work: &mut IoWork,
     ) -> Result<(), CellFault> {
@@ -1081,7 +1117,7 @@ impl Registry {
                 }
                 record.timer = None;
                 record.timed_out = true;
-                self.cancel_op(op, owner, work)?;
+                self.cancel_op(op, here, work)?;
                 continue;
             }
             if !parked || !matches!(task.wait, Some(Wait::Time(k)) if k == key) {
@@ -1160,6 +1196,73 @@ impl Registry {
             }
         }
         Ok(())
+    }
+
+    /// ほかの worker の受け箱から届いた起こし `w` を worker `here.me` で受け取る。`route` と同じく走らせるか持ち主へ
+    /// 送り直すが、もう待っていないセルへの起こしは捨てる。送った区間の後に、持ち主の道がセルを先に再開しうるからである
+    /// (docs/spec/vm.md の「セルと登録表」)。
+    pub(crate) fn route_sent(
+        &mut self,
+        w: Woken,
+        here: &Here,
+        out: &mut Vec<Runnable>,
+    ) -> Result<(), CellFault> {
+        match self.take_wake(&w, here.me)? {
+            Route::Run(run) => out.push(run),
+            Route::Forward(owner) => here.post.wake(owner, w),
+            Route::Stale => {}
+        }
+        Ok(())
+    }
+
+    /// 受け箱の起こし `w` を worker `me` が受け取れば、走らせる仕事になるか。継続は取り出さない。run の終わりに残った
+    /// 知らせを数えるために使う (docs/spec/vm.md の「誤り、止めること、終わり」)。
+    pub(crate) fn would_run(&mut self, w: &Woken, me: u32) -> bool {
+        match *w {
+            Woken::Token { owner, .. } => owner == me,
+            Woken::Task { cell, .. } => match self.live(cell) {
+                Some(CellKind::Task(task)) => {
+                    task.owner == me
+                        && matches!(task.phase, Phase::Parked)
+                        && task.wait.is_none()
+                        && task.k.is_some()
+                }
+                _ => false,
+            },
+        }
+    }
+
+    /// 成功した run の `main` の `Finish` で、終わっていないタスクか、driver に出したままか置いたままか結果を当てて
+    /// いない操作の記録が残っているか。どれかがあれば、タスクが残ったまま run が終わる (docs/spec/vm.md の
+    /// 「誤り、止めること、終わり」)。
+    pub(crate) fn left_at_end(&self) -> bool {
+        self.slots.iter().any(|(_, kind)| match kind {
+            Some(CellKind::Task(task)) => !matches!(task.phase, Phase::Finished),
+            Some(CellKind::Op(record)) => {
+                record.submitted || record.pending_op.is_some() || record.arrival.is_some()
+            }
+            _ => false,
+        })
+    }
+
+    /// worker `k` の driver を静止させた後に、driver が返した完了を記録に置き、`k` が host の操作の数を 0 にする。
+    /// 静止させた driver はもう記憶に触れないので、置いた結果は当てずに `sweep_all` が記録ごと捨てる
+    /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
+    pub(crate) fn quiesced(&mut self, k: usize, completed: &mut Vec<Completion>) {
+        for Completion {
+            key,
+            result,
+            cancelled,
+        } in completed.drain(..)
+        {
+            if let Some(CellKind::Op(record)) = self.live(CellRef::decode(key as i64))
+                && record.submitted
+            {
+                record.submitted = false;
+                record.arrival = Some((result, cancelled));
+            }
+        }
+        self.parts[k].in_flight = 0;
     }
 
     /// 見張りの語を、待ち手の列が空でないシグナルに合わせる。中継しない run では 0 にする。登録表の lock の下で書くので、
@@ -1338,19 +1441,22 @@ impl Registry {
         Ok(s)
     }
 
-    /// スコープ `scope` に新しいタスクを置き、セルと始める仕事を返す。ハンドルは呼ぶ側が lock を放してから `task_handle`
-    /// で作る。`spawner` は呼んだタスクの論理的な ID で、`owner` はタスクを動かす worker、`g` はエントリに渡す閉包である。
+    /// スコープ `scope` に新しいタスクを置き、セルと、持ち主が自分なら始める仕事を返す。持ち主がほかの worker なら、
+    /// 同じ区間でその受け箱に `Place` を送り、仕事は返さない。ハンドルは呼ぶ側が lock を放してから `task_handle` で作る。
+    /// `spawner` は呼んだタスクの論理的な ID で、`owner` はタスクを動かす worker、`g` はエントリに渡す閉包である。
     /// 新しい ID に渡す前に、`g` とまだ印のないセッションの根 `roots` に共有の印を付ける (`par` の fork と同じ。
     /// docs/spec/vm.md の「`Async` のタスク」)。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
+        here: &Here,
         scope: CellRef,
         spawner: u32,
         owner: u32,
         g: Word,
         roots: &[Word],
-    ) -> Result<Option<(CellRef, Runnable)>, CellFault> {
+    ) -> Result<Option<(CellRef, Option<Runnable>)>, CellFault> {
         let s = self.scope_mut(scope)?;
         if s.closed {
             return Ok(None);
@@ -1385,7 +1491,22 @@ impl Registry {
         }));
         self.scope_mut(scope)?.members.push(cell);
         self.stats.tasks += 1;
-        Ok(Some((cell, Runnable::Start { cell, closure: g })))
+        if owner != here.me {
+            here.post.place(owner, cell, worker, g);
+            return Ok(Some((cell, None)));
+        }
+        Ok(Some((cell, Some(Runnable::Start { cell, closure: g }))))
+    }
+
+    /// 受け箱の `Place` が名指すタスクの今の持ち主。受けた worker は、自分なら始める仕事にし、ほかの worker ならその
+    /// 持ち主へ送り直す。置いたタスクは始まるまで放されないので、始まるのを待っていないセルは内部の誤りである
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn placed_owner(&mut self, cell: CellRef, worker: u32) -> Result<u32, CellFault> {
+        let task = self.task_mut(cell)?;
+        if !matches!(task.phase, Phase::Placed) || task.worker != worker {
+            return Err(CellFault::Internal("a placed task is not waiting to start"));
+        }
+        Ok(task.owner)
     }
 
     /// 始める仕事を実行系が動かし始めた。始めたタスクの ID を返す。実行系は、その ID から閉包を `transfer_back` する。
@@ -2076,7 +2197,7 @@ impl Registry {
             here.post.cancel(task.owner, cell);
             return Ok(());
         }
-        self.unpark(cell, here.me, out, work)
+        self.unpark(cell, here, out, work)
     }
 
     /// 取り消しの項を受けたタスクの待ちを外す。タスクとスコープの待ち手の項は残し、起こす側が `wait` で見分ける。
@@ -2086,10 +2207,11 @@ impl Registry {
     fn unpark(
         &mut self,
         cell: CellRef,
-        me: u32,
+        here: &Here,
         out: &mut Vec<Woken>,
         work: &mut IoWork,
     ) -> Result<(), CellFault> {
+        let me = here.me;
         let Some(CellKind::Task(task)) = self.live(cell) else {
             return Ok(());
         };
@@ -2119,7 +2241,7 @@ impl Registry {
                 let (timed_out, timer) = (record.timed_out, record.timer.take());
                 // 期限がもう取り消しを頼んでいれば、頼み直さない
                 if !timed_out {
-                    self.cancel_op(op, owner, work)?;
+                    self.cancel_op(op, here, work)?;
                 }
                 // 輪の項を残すと、満期に `expire` が取り消した記録に期限が来た印を付ける
                 if let Some(key) = timer {
@@ -2263,38 +2385,46 @@ impl Registry {
         Ok(op)
     }
 
-    /// 記録を表に入れ、記録の番号を token として返す。`op` があれば、worker `me` を host にして記録に置き、自分が host
-    /// なのですぐ取り出して `work` に積む。driver の操作を出さずに終わった記録は `op` を持たない
-    /// (docs/spec/vm.md の「操作の記録」)。
+    /// 記録を表に入れ、記録の番号を token として返す。持ち主は worker `here.me`、host は `here.host` である。`op` が
+    /// あれば記録に置き、host が自分ならすぐ取り出して `work` に積み、ほかの worker なら host へ `Submit` を送る。
+    /// driver の操作を出さずに終わった記録は `op` を持たない (docs/spec/vm.md の「操作の記録」)。
     fn record(
         &mut self,
         mut record: OpRecord,
         op: Option<Op>,
-        me: u32,
+        here: &Here,
         work: &mut IoWork,
     ) -> Result<i64, CellFault> {
-        record.host = me;
+        record.owner = here.me;
+        record.host = here.host;
         let cell = self.alloc(CellKind::Op(record));
         if let Some(op) = op {
-            self.submit_op(cell, op, me, work)?;
+            self.submit_op(cell, op, here, work)?;
         }
         Ok(cell.encode())
     }
 
-    /// 持ち主 `me` が作った操作 `op` を記録 `c` に置き、host が自分なら取り出して `work` に積む。
+    /// 持ち主 `here.me` が作った操作 `op` を記録 `c` に置く。host が自分なら取り出して `work` に積み、ほかの worker
+    /// なら同じ区間で host の受け箱に `Submit` を送る。
     fn submit_op(
         &mut self,
         c: CellRef,
         op: Op,
-        me: u32,
+        here: &Here,
         work: &mut IoWork,
     ) -> Result<(), CellFault> {
         self.queue_op(c, op)?;
-        if self.op_mut(c)?.host != me {
-            return Err(CellFault::Internal("an op is hosted on another worker"));
+        let record = self.op_mut(c)?;
+        if record.owner != here.me {
+            return Err(CellFault::Internal("an op is submitted by another worker"));
         }
-        let (op, cancel_now) = self.take_queued(c)?;
-        work.submits.push((c, op, cancel_now));
+        let host = record.host;
+        if host == here.me {
+            let (op, cancel_now) = self.take_queued(c)?;
+            work.submits.push((c, op, cancel_now));
+        } else {
+            here.post.submit(host, c);
+        }
         Ok(())
     }
 
@@ -2321,29 +2451,28 @@ impl Registry {
         Ok((op, cancel_now))
     }
 
-    /// host `me` が、driver から受け取った記録 `c` の結果を置く。待つタスクの持ち主がほかの worker なら、その番号を返す。
-    /// 記録は driver に出したもので、まだ結果を置いていない。そうでない鍵の結果は内部の誤りである。
+    /// host `me` が、driver から受け取った記録 `c` の結果を置く。記録は driver に出したもので、まだ結果を置いていない。
+    /// そうでない鍵の結果は内部の誤りである。結果を当てるのは持ち主なので、持ち主がほかの worker なら、待つタスクが
+    /// いるときだけ `Completion` を送らせ、いなければ持ち主が次に待つか続けるときに当てる (docs/spec/vm.md の「操作の記録」)。
     pub(crate) fn arrive(
         &mut self,
         c: CellRef,
         result: io::Result<Done>,
         cancelled: bool,
         me: u32,
-    ) -> Result<Option<u32>, CellFault> {
+    ) -> Result<Arrival, CellFault> {
         let record = match self.live(c) {
             Some(CellKind::Op(record)) if record.submitted => record,
             _ => return Err(CellFault::Internal("a completion names no op")),
         };
         record.submitted = false;
         record.arrival = Some((result, cancelled));
-        let (host, waiter) = (record.host, record.waiter);
+        let (host, owner, waiting) = (record.host, record.owner, record.waiter.is_some());
         self.parts[host as usize].in_flight -= 1;
-        Ok(match waiter {
-            Some(t) => {
-                let owner = self.task_mut(t)?.owner;
-                (owner != me).then_some(owner)
-            }
-            None => None,
+        Ok(match (owner == me, waiting) {
+            (true, _) => Arrival::Settle,
+            (false, true) => Arrival::Send(owner),
+            (false, false) => Arrival::Leave,
         })
     }
 
@@ -2358,16 +2487,87 @@ impl Registry {
         })
     }
 
-    /// 持ち主 `me` が、記録 `op` の取り消しを頼む。自分が host なら `work` に積む。
-    fn cancel_op(&mut self, op: CellRef, me: u32, work: &mut IoWork) -> Result<(), CellFault> {
-        match self.cancel_io(op, me)? {
+    /// 持ち主 `here.me` が、記録 `op` の取り消しを頼む。自分が host なら `work` に積み、ほかの worker なら同じ区間で
+    /// host の受け箱に `CancelIo` を送る。
+    fn cancel_op(&mut self, op: CellRef, here: &Here, work: &mut IoWork) -> Result<(), CellFault> {
+        match self.cancel_io(op, here.me)? {
             CancelPath::Flag => {}
             CancelPath::Local => work.cancels.push(op),
-            CancelPath::Remote(_) => {
-                return Err(CellFault::Internal("an op is hosted on another worker"));
-            }
+            CancelPath::Remote(host) => here.post.cancel_io(host, op),
         }
         Ok(())
+    }
+
+    /// host `me` が、受け箱の `Submit` を受ける。持ち主が置いた操作を取り出し、lock を放してから driver に出すよう
+    /// `work` に積む (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn take_submit(
+        &mut self,
+        op: CellRef,
+        me: u32,
+        work: &mut IoWork,
+    ) -> Result<(), CellFault> {
+        if self.op_mut(op)?.host != me {
+            return Err(CellFault::Internal("an op is submitted to another host"));
+        }
+        let (next, cancel_now) = self.take_queued(op)?;
+        work.submits.push((op, next, cancel_now));
+        Ok(())
+    }
+
+    /// host `me` が、受け箱の `CancelIo` を受ける。記録がまだ driver に出したままなら、lock を放してから自分の driver に
+    /// 取り消しを頼むよう `work` に積む。結果をもう置いた記録と放した記録には何もしない。取り消しより先に完了が届いた
+    /// だけだからである。
+    pub(crate) fn cancel_hosted(&mut self, op: CellRef, me: u32, work: &mut IoWork) {
+        if let Some(CellKind::Op(record)) = self.live(op)
+            && record.submitted
+            && record.host == me
+        {
+            work.cancels.push(op);
+        }
+    }
+
+    /// 持ち主 `here.me` が、記録 `op` に置かれた結果があれば当てる。当てて記録が終われば、待つタスクの起こしを返す。
+    /// 結果を置いていない記録と放した記録には何もしない。ほかの道がもう当てたからである (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn settle_arrived<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        depth_offset: usize,
+        op: CellRef,
+        here: &Here,
+        work: &mut IoWork,
+    ) -> Result<Option<Woken>, CellFault> {
+        let host = match self.live(op) {
+            Some(CellKind::Op(record)) if record.arrival.is_some() => record.host,
+            _ => return Ok(None),
+        };
+        let bin = self
+            .bins
+            .get(host as usize)
+            .cloned()
+            .flatten()
+            .ok_or(CellFault::Internal("an op has a host without a driver"))?;
+        self.settle_op(ctx, &bin, depth_offset, op, here, work)
+    }
+
+    /// タスク `me` が token `token` の操作を待つか続けるかを決める前に、host が置いた結果があれば当てる。決める区間と
+    /// 同じ区間で当てるので、結果の置かれた記録を終わっていないと見て待ち、`Completion` を受けずに止まることはない
+    /// (docs/spec/vm.md の「操作の記録」)。
+    pub(crate) fn settle_token<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        depth_offset: usize,
+        token: i64,
+        me: CellRef,
+        here: &Here,
+        work: &mut IoWork,
+    ) -> Result<(), CellFault> {
+        let worker = self.task_mut(me)?.worker;
+        let op = self.op_of(token, worker)?;
+        // 待つタスクはまだいないので、当てても起こしはない
+        match self.settle_arrived(ctx, depth_offset, op, here, work)? {
+            Some(_) => Err(CellFault::Internal("an op is awaited twice")),
+            None => Ok(()),
+        }
     }
 
     /// 速い道の `Std.Async.op_ready`。タスク `me` が token `token` の操作を待たずに続けてよいかを答える。どの待ちでも
@@ -2424,19 +2624,22 @@ impl Registry {
     /// いなくても、記録に取り消しを頼んだ印を付ける。
     pub(crate) fn park_io(
         &mut self,
+        here: &Here,
         work: &mut IoWork,
         token: i64,
         me: CellRef,
         k: Word,
     ) -> Result<Option<Runnable>, CellFault> {
-        self.park_op(work, token, me, k, None)
+        self.park_op(here, work, token, me, k, None)
     }
 
     /// `park_io` に `ms` ミリ秒の期限を付けた待ち。`now_ms` は切り上げて読んだ今の時刻で、`ms` が 0 以下なら読まない。
     /// 期限は実際に待つときだけ付ける。0 以下は過ぎた期限なので、すぐ driver への取り消しを積む。期限が来ても再開せず、
     /// 取り消した操作の完了が `Woke` で再開する (docs/spec/vm.md の「時間の待ち」)。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn park_io_until(
         &mut self,
+        here: &Here,
         work: &mut IoWork,
         now_ms: u64,
         ms: i64,
@@ -2444,11 +2647,12 @@ impl Registry {
         me: CellRef,
         k: Word,
     ) -> Result<Option<Runnable>, CellFault> {
-        self.park_op(work, token, me, k, Some((now_ms, ms)))
+        self.park_op(here, work, token, me, k, Some((now_ms, ms)))
     }
 
     fn park_op(
         &mut self,
+        here: &Here,
         work: &mut IoWork,
         token: i64,
         me: CellRef,
@@ -2459,6 +2663,9 @@ impl Registry {
             let task = self.task_mut(me)?;
             (task.worker, task.owner)
         };
+        if owner != here.me {
+            return Err(CellFault::Internal("a task waits on another worker"));
+        }
         let op = self.op_of(token, worker)?;
         if self.op_mut(op)?.waiter.is_some() {
             return Err(CellFault::Internal("an op is awaited twice"));
@@ -2489,12 +2696,12 @@ impl Registry {
         }
         record.waiter = Some(me);
         if cancelled {
-            self.cancel_op(op, owner, work)?;
+            self.cancel_op(op, here, work)?;
         }
         match until {
             Some((_, ms)) if !cancelled && ms <= 0 => {
                 self.op_mut(op)?.timed_out = true;
-                self.cancel_op(op, owner, work)?;
+                self.cancel_op(op, here, work)?;
             }
             Some((now_ms, ms)) if !cancelled => {
                 // 期限は `park_time` と同じく飽和させる
@@ -2510,28 +2717,32 @@ impl Registry {
         Ok(None)
     }
 
-    /// 持ち主 `me` が、記録 `op` に置かれた結果を当てる。読みの `Probe` の結果は、buffer を貸して `Transfer` の操作を
-    /// 同じ鍵で出し直し、その操作を `work` に積む。終わった記録に待つタスクがいれば、その起こしを返す。記録の語は
-    /// 受け付けたタスクの物体なので、今のタスクが誰でも、その ID に切り替えてから触れる。`bin` は lock の前に driver から
-    /// 受け取った、作ったハンドルを閉じる bin である。
+    /// 持ち主 `here.me` が、記録 `op` に置かれた結果を当てる。読みの `Probe` の結果は、buffer を貸して `Transfer` の
+    /// 操作を同じ鍵で出し直す。host が自分ならその操作を `work` に積み、ほかの worker なら host へ送る。終わった記録に
+    /// 待つタスクがいれば、その起こしを返す。記録の語は受け付けたタスクの物体なので、今のタスクが誰でも、その ID に
+    /// 切り替えてから触れる。`bin` は host の driver の、作ったハンドルを閉じる bin である。
     pub(crate) fn settle_op<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         bin: &Arc<HandleBin>,
         depth_offset: usize,
         op: CellRef,
-        me: u32,
+        here: &Here,
         work: &mut IoWork,
     ) -> Result<Option<Woken>, CellFault> {
-        let (result, cancelled) = self
-            .op_mut(op)?
+        let record = self.op_mut(op)?;
+        // 記録の語に触れて段階を進めるのは持ち主だけである (docs/spec/vm.md の「操作の記録」)
+        if record.owner != here.me {
+            return Err(CellFault::Internal("an op is settled by another worker"));
+        }
+        let (result, cancelled) = record
             .arrival
             .take()
             .ok_or(CellFault::Internal("an op settles without a result"))?;
         self.stats.completions += 1;
         match self.advance(ctx, bin, depth_offset, op, result, cancelled)? {
             Some(next) => {
-                self.submit_op(op, next, me, work)?;
+                self.submit_op(op, next, here, work)?;
                 Ok(None)
             }
             None => self.wake_op(op),
@@ -2872,9 +3083,9 @@ pub(crate) fn take_line<M: Mode>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn submit_write<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     buf: Word,
@@ -2896,7 +3107,7 @@ pub(crate) fn submit_write<M: Mode>(
     let mut record = net_record(OpKind::Write { len: raw.cap }, worker, Some(stream));
     record.buf = Some(buf);
     let op = Op::Write { handle, buf: raw };
-    submit(shared, ctx, driver, me, depth_offset, record, Some(op))
+    submit(shared, here, ctx, driver, depth_offset, record, Some(op))
 }
 
 /// `Std.Net.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移す。buffer が一意で空きが
@@ -2906,9 +3117,9 @@ pub(crate) fn submit_write<M: Mode>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn submit_read<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     buf: Word,
@@ -2929,7 +3140,7 @@ pub(crate) fn submit_read<M: Mode>(
     let mut record = net_record(OpKind::Read, worker, Some(stream));
     record.buf = Some(buf);
     record.phase = phase;
-    submit(shared, ctx, driver, me, depth_offset, record, op)
+    submit(shared, here, ctx, driver, depth_offset, record, op)
 }
 
 /// `Std.Net.submit_read_line`。`stream` は呼ぶ側から移ってきた参照で、記録に移す。ストリームの buffer の残りに改行が
@@ -2937,9 +3148,9 @@ pub(crate) fn submit_read<M: Mode>(
 /// あればそれを貸して読み、なければストリームが読めるようになるのを待つ (docs/spec/vm.md の「操作の記録」)。
 pub(crate) fn submit_read_line<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     stream: Word,
@@ -2967,7 +3178,7 @@ pub(crate) fn submit_read_line<M: Mode>(
     let mut record = net_record(kind, worker, Some(stream));
     record.phase = phase;
     record.made = made;
-    submit(shared, ctx, driver, me, depth_offset, record, op)
+    submit(shared, here, ctx, driver, depth_offset, record, op)
 }
 
 /// `Std.Net.submit_listen`。`host` と `port` は呼ぶ側から移ってきた参照と即値で、`host` は読んでから手放す。
@@ -2976,9 +3187,9 @@ pub(crate) fn submit_read_line<M: Mode>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn submit_listen<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     host: Word,
@@ -3001,9 +3212,9 @@ pub(crate) fn submit_listen<M: Mode>(
     let record = net_record(kind, worker, None);
     Ok(Ok(submit(
         shared,
+        here,
         ctx,
         driver,
-        me,
         depth_offset,
         record,
         Some(op),
@@ -3013,9 +3224,9 @@ pub(crate) fn submit_listen<M: Mode>(
 /// `Std.Net.submit_accept`。リスナー `listener` は呼ぶ側から移ってきた参照で、記録に移す。
 pub(crate) fn submit_accept<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     listener: Word,
@@ -3024,7 +3235,7 @@ pub(crate) fn submit_accept<M: Mode>(
     let handle = unsafe { (*ctx.heap().foreign_unique::<NetListener>(listener)?).handle };
     let op = Op::Accept { listener: handle };
     let record = net_record(OpKind::Accept, worker, Some(listener));
-    submit(shared, ctx, driver, me, depth_offset, record, Some(op))
+    submit(shared, here, ctx, driver, depth_offset, record, Some(op))
 }
 
 /// `Std.Net.submit_connect`。`submit_listen` と同じく `host` を読んで手放す。`host` は名前でもよく、driver が解決する。
@@ -3032,9 +3243,9 @@ pub(crate) fn submit_accept<M: Mode>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn submit_connect<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     host: Word,
@@ -3053,9 +3264,9 @@ pub(crate) fn submit_connect<M: Mode>(
     let record = net_record(kind, worker, None);
     Ok(Ok(submit(
         shared,
+        here,
         ctx,
         driver,
-        me,
         depth_offset,
         record,
         Some(op),
@@ -3067,17 +3278,17 @@ pub(crate) fn submit_connect<M: Mode>(
 /// (docs/spec/vm.md の「操作の記録」)。
 fn submit<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
     depth_offset: usize,
     record: OpRecord,
     op: Option<Op>,
 ) -> Result<i64, CellFault> {
     let mut work = IoWork::default();
-    let token = shared.lock().record(record, op, me, &mut work)?;
+    let token = shared.lock().record(record, op, here, &mut work)?;
     let mut out = Vec::new();
-    run_io(shared, ctx, driver, me, depth_offset, &mut work, &mut out)?;
+    run_io(shared, here, ctx, driver, depth_offset, &mut work, &mut out)?;
     // 待つタスクはまだいないので、再開の仕事はできない
     if !out.is_empty() {
         return Err(CellFault::Internal("a new op has a waiting task"));
@@ -3085,18 +3296,23 @@ fn submit<M: Mode>(
     Ok(token)
 }
 
-/// 登録表の lock の外で、`work` に並べた受け付けを順に driver に出し、その後で取り消しを頼む。driver がその場で終えた
-/// 操作は、1回ごとに短い lock の区間で結果を置いて当てる。当てた結果が次の操作を出せば、それも続けて出す。終わった
-/// 操作の待つタスクを再開する仕事を `out` に積む (docs/spec/vm.md の「操作の記録」)。
+/// 登録表の lock の外で、`work` に並べた受け付けを順に host の driver に出し、その後で取り消しを頼む。driver がその場で
+/// 終えた操作は、1回ごとに短い lock の区間で結果を置く。持ち主が自分ならその区間で当て、当てた結果が次の操作を出せば、
+/// それも続けて出す。持ち主がほかの worker なら、待つタスクがいるときに `Completion` を送る。終わった操作の待つ
+/// 自分のタスクを再開する仕事を `out` に積む (docs/spec/vm.md の「操作の記録」)。driver を持たない worker は自分で
+/// 受け付けないので、出す操作も取り消しもないときだけ `driver` が `None` でよい。
 pub(crate) fn run_io<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
     depth_offset: usize,
     work: &mut IoWork,
     out: &mut Vec<Runnable>,
 ) -> Result<(), CellFault> {
+    let Some(driver) = driver else {
+        return work.cancel_on(None);
+    };
     while !work.submits.is_empty() {
         for (op, next, cancel_now) in std::mem::take(&mut work.submits) {
             let Submit::Done(result) = driver.submit(op_key(op), next) else {
@@ -3110,13 +3326,13 @@ pub(crate) fn run_io<M: Mode>(
             let mut cells = shared.lock();
             settle_arrival(
                 &mut cells,
+                here,
                 ctx,
                 &bin,
                 depth_offset,
                 op,
                 result,
                 false,
-                me,
                 work,
                 out,
             )?;
@@ -3128,27 +3344,33 @@ pub(crate) fn run_io<M: Mode>(
     Ok(())
 }
 
-/// lock の区間の中で、host でも持ち主でもある `me` が、記録 `op` の結果を置いて当てる。待つタスクの起こしは同じ区間で
-/// 走らせる仕事にして `out` に積む。
+/// lock の区間の中で、host の `here.me` が記録 `op` の結果を置く。持ち主も自分なら同じ区間で当て、待つタスクの起こしを
+/// 走らせる仕事にして `out` に積む。持ち主がほかの worker なら、待つタスクがいるときだけ持ち主へ `Completion` を送る。
+/// host は記録の語に触れない (docs/spec/vm.md の「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
 fn settle_arrival<M: Mode>(
     cells: &mut Registry,
+    here: &Here,
     ctx: &mut Ctx<M>,
     bin: &Arc<HandleBin>,
     depth_offset: usize,
     op: CellRef,
     result: io::Result<Done>,
     cancelled: bool,
-    me: u32,
     work: &mut IoWork,
     out: &mut Vec<Runnable>,
 ) -> Result<(), CellFault> {
-    if cells.arrive(op, result, cancelled, me)?.is_some() {
-        return Err(CellFault::Internal("an op is awaited on another worker"));
+    match cells.arrive(op, result, cancelled, here.me)? {
+        Arrival::Settle => {}
+        Arrival::Send(owner) => {
+            here.post.completion(owner, op);
+            return Ok(());
+        }
+        Arrival::Leave => return Ok(()),
     }
-    // 持ち主が自分であることは `arrive` が確かめたので、送り直す起こしはない
-    if let Some(woken) = cells.settle_op(ctx, bin, depth_offset, op, me, work)? {
-        match cells.take_wake(&woken, me)? {
+    // 待つタスクは記録の持ち主のタスクで、持ち主は自分なので、送り直す起こしはない
+    if let Some(woken) = cells.settle_op(ctx, bin, depth_offset, op, here, work)? {
+        match cells.take_wake(&woken, here.me)? {
             Route::Run(run) => out.push(run),
             Route::Forward(_) => {
                 return Err(CellFault::Internal("an op is awaited on another worker"));
@@ -3159,15 +3381,17 @@ fn settle_arrival<M: Mode>(
     Ok(())
 }
 
-/// 集める地点で、worker `me` の driver の完了を driver の順に記録へ当て、待つタスクを再開する仕事を `out` に積む。
-/// driver に出した操作があるときだけ呼ぶ。数は集める地点がほかの読みと同じ区間で読む。完了は1つの lock の区間で続けて当て、当てた結果が次の操作を出す
-/// ときだけ lock を放して出す。出した操作がその場で終われば、次の完了より先に当てる (docs/spec/vm.md の「操作の記録」)。
+/// 集める地点で、host の `here.me` の driver の完了を driver の順に記録へ置き、自分が持ち主の記録は当てて、待つタスクを
+/// 再開する仕事を `out` に積む。ほかの worker が持ち主の記録は、その持ち主へ `Completion` を送る。driver に出した操作が
+/// あるときだけ呼ぶ。数は集める地点がほかの読みと同じ区間で読む。完了は1つの lock の区間で続けて置き、当てた結果が
+/// 次の操作を出すときだけ lock を放して出す。出した操作がその場で終われば、次の完了より先に当てる
+/// (docs/spec/vm.md の「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn complete<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    driver: &mut (dyn IoDriver + 'static),
     depth_offset: usize,
     completed: &mut Vec<Completion>,
     out: &mut Vec<Runnable>,
@@ -3191,13 +3415,13 @@ pub(crate) fn complete<M: Mode>(
             let op = CellRef::decode(key as i64);
             settle_arrival(
                 &mut cells,
+                here,
                 ctx,
                 &bin,
                 depth_offset,
                 op,
                 result,
                 cancelled,
-                me,
                 &mut work,
                 out,
             )?;
@@ -3210,7 +3434,15 @@ pub(crate) fn complete<M: Mode>(
         if rest {
             return Ok(());
         }
-        run_io(shared, ctx, driver, me, depth_offset, &mut work, out)?;
+        run_io(
+            shared,
+            here,
+            ctx,
+            Some(&mut *driver),
+            depth_offset,
+            &mut work,
+            out,
+        )?;
     }
 }
 
@@ -3221,9 +3453,10 @@ fn op_key(op: CellRef) -> OpKey {
 }
 
 /// `Std.Net` の操作の記録。buffer を持たない操作はどれも driver が記憶を使わないので、段階は `Transfer` から始める。
-/// host は表に入れるときに決める。
+/// 持ち主と host は表に入れるときに決める。
 fn net_record(kind: OpKind, worker: u32, stream: Option<Word>) -> OpRecord {
     OpRecord {
+        owner: 0,
         host: 0,
         submitted: false,
         pending_op: None,
@@ -3969,12 +4202,13 @@ fn expire(
     {
         let mut cells = shared.lock();
         let mut woken = Vec::new();
-        cells.expire(now_ms, me as usize, &mut woken, &mut work)?;
         let here = Here {
             me,
+            host: me,
             mail: &shared.mail,
             post: &Unposted,
         };
+        cells.expire(now_ms, me as usize, &here, &mut woken, &mut work)?;
         cells.route(&mut woken, &here, out)?;
     }
     work.cancel_all(driver);
@@ -3994,26 +4228,67 @@ impl Post for Unposted {
     fn cancel(&self, k: u32, _cell: CellRef) {
         panic!("a cancel is sent to worker {k}");
     }
+
+    fn place(&self, k: u32, _cell: CellRef, _worker: u32, _closure: Word) {
+        panic!("a task is placed on worker {k}");
+    }
+
+    fn submit(&self, k: u32, _op: CellRef) {
+        panic!("an op is submitted to worker {k}");
+    }
+
+    fn cancel_io(&self, k: u32, _op: CellRef) {
+        panic!("an op cancel is sent to worker {k}");
+    }
+
+    fn completion(&self, k: u32, _op: CellRef) {
+        panic!("a completion is sent to worker {k}");
+    }
 }
 
-/// `Registry::park_io` を lock の下で行い、lock を放してから取り消しを driver に頼む。
-pub(crate) fn park_io(
+/// worker 0 だけの run の、ほかの worker へ何も送らない `Here`。driver の操作は worker 0 が受け付ける。
+#[cfg(test)]
+pub(crate) fn solo(shared: &Shared) -> Here<'_> {
+    Here {
+        me: 0,
+        host: 0,
+        mail: &shared.mail,
+        post: &Unposted,
+    }
+}
+
+/// 持ち主 `here.me` のタスク `me` が token `token` の操作を待つ。1つの lock の区間で、host が置いた結果があれば先に
+/// 当ててから `Registry::park_io` を行い、lock を放してから自分の driver への取り消しを頼む。ほかの worker が host の
+/// 操作の取り消しと出し直しは、その区間で host へ送る (docs/spec/vm.md の「操作の記録」)。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn park_io<M: Mode>(
     shared: &Shared,
-    driver: &mut dyn IoDriver,
+    here: &Here,
+    ctx: &mut Ctx<M>,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
+    depth_offset: usize,
     token: i64,
     me: CellRef,
     k: Word,
 ) -> Result<Option<Runnable>, CellFault> {
     let mut work = IoWork::default();
-    let run = shared.lock().park_io(&mut work, token, me, k)?;
-    work.cancel_all(driver);
+    let run = {
+        let mut cells = shared.lock();
+        cells.settle_token(ctx, depth_offset, token, me, here, &mut work)?;
+        cells.park_io(here, &mut work, token, me, k)?
+    };
+    work.cancel_on(driver)?;
     Ok(run)
 }
 
-/// `Registry::park_io_until` を lock の下で行い、lock を放してから取り消しを driver に頼む。
-pub(crate) fn park_io_until(
+/// `park_io` に期限を付けた待ち。区間と取り消しの扱いは `park_io` と同じである。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn park_io_until<M: Mode>(
     shared: &Shared,
-    driver: &mut dyn IoDriver,
+    here: &Here,
+    ctx: &mut Ctx<M>,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
+    depth_offset: usize,
     now_ms: u64,
     ms: i64,
     token: i64,
@@ -4021,10 +4296,12 @@ pub(crate) fn park_io_until(
     k: Word,
 ) -> Result<Option<Runnable>, CellFault> {
     let mut work = IoWork::default();
-    let run = shared
-        .lock()
-        .park_io_until(&mut work, now_ms, ms, token, me, k)?;
-    work.cancel_all(driver);
+    let run = {
+        let mut cells = shared.lock();
+        cells.settle_token(ctx, depth_offset, token, me, here, &mut work)?;
+        cells.park_io_until(here, &mut work, now_ms, ms, token, me, k)?
+    };
+    work.cancel_on(driver)?;
     Ok(run)
 }
 
@@ -4170,12 +4447,8 @@ fn unpark(registry: &Shared, driver: &mut dyn IoDriver, cell: CellRef, out: &mut
     {
         let mut cells = registry.lock();
         let mut woken = Vec::new();
-        cells.unpark(cell, 0, &mut woken, &mut work).unwrap();
-        let here = Here {
-            me: 0,
-            mail: &registry.mail,
-            post: &Unposted,
-        };
+        let here = solo(registry);
+        cells.unpark(cell, &here, &mut woken, &mut work).unwrap();
         cells.route(&mut woken, &here, out).unwrap();
     }
     work.cancel_all(driver);
@@ -4424,6 +4697,52 @@ fn mode_ctx<M: Mode>() -> Ctx<M> {
     )
 }
 
+/// 1つの worker の run で、タスク `me` が token `token` の操作を待つ。継続は即値である。
+#[cfg(test)]
+fn park_on<M: Mode>(
+    registry: &Shared,
+    ctx: &mut Ctx<M>,
+    driver: &mut NoDriver,
+    token: i64,
+    me: CellRef,
+) -> Result<Option<Runnable>, CellFault> {
+    park_io(
+        registry,
+        &solo(registry),
+        ctx,
+        Some(driver),
+        0,
+        token,
+        me,
+        Word::UNIT,
+    )
+}
+
+/// `park_on` に、今の時刻 `now_ms` から `ms` ミリ秒の期限を付けた待ち。
+#[cfg(test)]
+fn park_until_on<M: Mode>(
+    registry: &Shared,
+    ctx: &mut Ctx<M>,
+    driver: &mut NoDriver,
+    now_ms: u64,
+    ms: i64,
+    token: i64,
+    me: CellRef,
+) -> Result<Option<Runnable>, CellFault> {
+    park_io_until(
+        registry,
+        &solo(registry),
+        ctx,
+        Some(driver),
+        0,
+        now_ms,
+        ms,
+        token,
+        me,
+        Word::UNIT,
+    )
+}
+
 /// `b"x"` を書く操作を受け付け、token を返す。
 #[cfg(test)]
 fn submit_x(
@@ -4446,7 +4765,17 @@ fn submit_bytes(
 ) -> i64 {
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes(bytes);
     let stream = net_stream(ctx);
-    submit_write(registry, ctx, driver, 0, worker, 0, buf, stream).unwrap()
+    submit_write(
+        registry,
+        &solo(registry),
+        ctx,
+        Some(&mut *driver),
+        worker,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap()
 }
 
 /// 取り消しの地点で、もう終わった操作を待つと `Cancelled` で再開し、記録に取り消しの印を付ける。印がないと、取り出しの
@@ -4464,7 +4793,7 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     registry.lock().op_mut(op).unwrap().phase =
         OpPhase::Done(Err(io::Error::from(io::ErrorKind::BrokenPipe)), false);
     registry.lock().task_mut(me).unwrap().cancel = true;
-    let run = park_io(&registry, &mut driver, token, me, Word::UNIT).unwrap();
+    let run = park_on(&registry, &mut ctx, &mut driver, token, me).unwrap();
     assert!(matches!(
         run,
         Some(Runnable::ResumeIo { cell, wake: CANCELLED, .. }) if cell == me
@@ -4697,7 +5026,7 @@ fn sweep_all_frees_a_waited_op_before_its_task() {
     registry.lock().task_mut(me).unwrap().worker = worker;
     with_worker(&mut ctx, worker, 0, |ctx| {
         let token = submit_x(&registry, ctx, &mut driver, worker);
-        let run = park_io(&registry, &mut driver, token, me, Word::UNIT).unwrap();
+        let run = park_on(&registry, ctx, &mut driver, token, me).unwrap();
         assert!(run.is_none());
     });
     sweep_all(&registry, &mut ctx, 0).unwrap();
@@ -4723,9 +5052,9 @@ fn a_completion_with_a_stale_generation_names_no_op() {
     let mut out = Vec::new();
     complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut out,
@@ -4744,9 +5073,9 @@ fn a_completion_with_a_stale_generation_names_no_op() {
     });
     let fault = complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut out,
@@ -4854,20 +5183,24 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
             Before::Cancel => {
                 let mut cells = shared.lock();
                 cells.task_mut(me).unwrap().cancel = true;
-                cells.park_io(&mut work, token, me, Word::UNIT).unwrap();
+                cells
+                    .park_io(&solo(&shared), &mut work, token, me, Word::UNIT)
+                    .unwrap();
             }
             Before::PastDeadline => {
                 let mut cells = shared.lock();
                 cells
-                    .park_io_until(&mut work, 0, 0, token, me, Word::UNIT)
+                    .park_io_until(&solo(&shared), &mut work, 0, 0, token, me, Word::UNIT)
                     .unwrap();
             }
             Before::Expired => {
                 let mut cells = shared.lock();
                 cells
-                    .park_io_until(&mut work, 0, 50, token, me, Word::UNIT)
+                    .park_io_until(&solo(&shared), &mut work, 0, 50, token, me, Word::UNIT)
                     .unwrap();
-                cells.expire(50, 0, &mut Vec::new(), &mut work).unwrap();
+                cells
+                    .expire(50, 0, &solo(&shared), &mut Vec::new(), &mut work)
+                    .unwrap();
                 assert!(cells.op_mut(op).unwrap().timed_out);
             }
         }
@@ -4875,11 +5208,17 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
         let (next, cancel_now) = shared.lock().take_queued(op).unwrap();
         assert!(cancel_now, "{before:?}");
         work.submits.push((op, next, cancel_now));
+        let host = Here {
+            me: 1,
+            host: 1,
+            mail: &shared.mail,
+            post: &Unposted,
+        };
         run_io(
             &shared,
+            &host,
             &mut ctx,
-            &mut driver,
-            1,
+            Some(&mut driver),
             0,
             &mut work,
             &mut Vec::new(),
@@ -4899,7 +5238,7 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
     let op = CellRef::decode(token);
     assert!(shared.lock().op_mut(op).unwrap().submitted);
     assert!(
-        park_io(&shared, &mut driver, token, me, Word::UNIT)
+        park_on(&shared, &mut ctx, &mut driver, token, me)
             .unwrap()
             .is_none()
     );
@@ -4936,15 +5275,15 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
                 handle: 0,
                 buf: empty,
             },
-            0,
+            &solo(&shared),
             &mut work,
         )
         .unwrap();
     run_io(
         &shared,
+        &solo(&shared),
         &mut ctx,
-        &mut driver,
-        0,
+        Some(&mut driver),
         0,
         &mut work,
         &mut Vec::new(),
@@ -4968,10 +5307,20 @@ fn probed_read(
     buf: Word,
 ) -> (i64, CellRef) {
     let stream = net_stream(ctx);
-    let token = submit_read(registry, ctx, driver, 0, 0, 0, buf, stream).unwrap();
+    let token = submit_read(
+        registry,
+        &solo(registry),
+        ctx,
+        Some(&mut *driver),
+        0,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap();
     let op = CellRef::decode(token);
     assert!(
-        park_io(registry, driver, token, me, Word::UNIT)
+        park_on(registry, ctx, &mut *driver, token, me)
             .unwrap()
             .is_none()
     );
@@ -4982,7 +5331,16 @@ fn probed_read(
         cancelled: false,
     });
     let mut out = Vec::new();
-    complete(registry, ctx, driver, 0, 0, &mut Vec::new(), &mut out).unwrap();
+    complete(
+        registry,
+        &solo(registry),
+        ctx,
+        driver,
+        0,
+        &mut Vec::new(),
+        &mut out,
+    )
+    .unwrap();
     // 読めるようになっただけでは再開せず、貸した記憶への読みを同じ鍵で待つ
     assert!(out.is_empty());
     assert!(matches!(
@@ -5017,8 +5375,17 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
         let submits = driver.submits;
         let (token, op) = if in_place {
             let stream = net_stream(&mut ctx);
-            let token =
-                submit_read(&registry, &mut ctx, &mut driver, 0, 0, 0, buf, stream).unwrap();
+            let token = submit_read(
+                &registry,
+                &solo(&registry),
+                &mut ctx,
+                Some(&mut driver),
+                0,
+                0,
+                buf,
+                stream,
+            )
+            .unwrap();
             let op = CellRef::decode(token);
             // 読めるようになるのを待つ操作を出さず、読みだけを出す
             assert_eq!(driver.submits, submits + 1);
@@ -5049,9 +5416,9 @@ fn a_read_lends_a_roomy_buffer_in_place_and_grows_a_short_one() {
         let mut out = Vec::new();
         complete(
             &registry,
+            &solo(&registry),
             &mut ctx,
             &mut driver,
-            0,
             0,
             &mut Vec::new(),
             &mut out,
@@ -5126,9 +5493,9 @@ fn a_read_cancelled_during_its_transfer_commits_the_bytes_it_got() {
     });
     complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut out,
@@ -5168,7 +5535,17 @@ fn write_of_a_shared_buffer<M: Mode>() -> Ctx<M> {
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"shared");
     unsafe { ctx.heap_mut().dup(buf) }.unwrap();
     let stream = net_stream(&mut ctx);
-    let token = submit_write(&registry, &mut ctx, &mut driver, 0, 0, 0, buf, stream).unwrap();
+    let token = submit_write(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap();
     let at = unsafe { ctx.heap().bytes(buf) }.unwrap();
     assert_eq!(driver.writes.len(), 1);
     assert_eq!(driver.writes[0].ptr, at.cast::<u8>().cast_mut());
@@ -5206,7 +5583,17 @@ fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
     };
     unsafe { ctx.heap_mut().dup(buf) }.unwrap();
     let stream = net_stream(&mut ctx);
-    let token = submit_write(&registry, &mut ctx, &mut driver, 0, 0, 0, buf, stream).unwrap();
+    let token = submit_write(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap();
     assert_eq!(driver.held.len(), 1);
     let lent = driver.held[0].1;
     let alias = unsafe { ctx.bytes_set(0, i64::from(b'z'), buf) }.unwrap();
@@ -5233,7 +5620,17 @@ fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
     dup(&mut ctx);
     let reads = driver.lent.len();
     let other = net_stream(&mut ctx);
-    let read = submit_read(&registry, &mut ctx, &mut driver, 0, 0, 0, buf, other).unwrap();
+    let read = submit_read(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        buf,
+        other,
+    )
+    .unwrap();
     assert_eq!(driver.lent.len(), reads);
     assert!(matches!(
         registry.lock().op_mut(CellRef::decode(read)).unwrap().phase,
@@ -5246,9 +5643,9 @@ fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
     });
     complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut Vec::new(),
@@ -5266,9 +5663,9 @@ fn held_write_and_its_alias<M: Mode>() -> Ctx<M> {
     });
     complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut Vec::new(),
@@ -5295,7 +5692,7 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
     let me = running_task(&registry, scope);
     let token = submit_x(&registry, &mut ctx, &mut driver, 0);
     let key = driver.last_key;
-    let run = park_io_until(&registry, &mut driver, 3, 50, token, me, Word::UNIT).unwrap();
+    let run = park_until_on(&registry, &mut ctx, &mut driver, 3, 50, token, me).unwrap();
     assert!(run.is_none());
     assert_eq!(
         {
@@ -5316,9 +5713,9 @@ fn an_expired_op_wait_cancels_the_op_and_resumes_on_its_completion() {
     });
     complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut out,
@@ -5356,8 +5753,8 @@ fn cancelling_or_finishing_a_timed_op_wait_removes_its_timer() {
     let k1 = driver.last_key;
     let t2 = submit_x(&registry, &mut ctx, &mut driver, 0);
     let k2 = driver.last_key;
-    park_io_until(&registry, &mut driver, 0, 50, t1, first, Word::UNIT).unwrap();
-    park_io_until(&registry, &mut driver, 0, 60, t2, second, Word::UNIT).unwrap();
+    park_until_on(&registry, &mut ctx, &mut driver, 0, 50, t1, first).unwrap();
+    park_until_on(&registry, &mut ctx, &mut driver, 0, 60, t2, second).unwrap();
     registry.lock().task_mut(first).unwrap().cancel = true;
     let mut out = Vec::new();
     unpark(&registry, &mut driver, first, &mut out);
@@ -5376,9 +5773,9 @@ fn cancelling_or_finishing_a_timed_op_wait_removes_its_timer() {
     });
     complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut out,
@@ -5415,7 +5812,7 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
     let me = running_task(&registry, scope);
     let token = submit_x(&registry, &mut ctx, &mut driver, 0);
     let key = driver.last_key;
-    let run = park_io_until(&registry, &mut driver, 0, 0, token, me, Word::UNIT).unwrap();
+    let run = park_until_on(&registry, &mut ctx, &mut driver, 0, 0, token, me).unwrap();
     assert!(run.is_none());
     assert_eq!(driver.cancelled, [key]);
     let cells = registry.lock();
@@ -5429,9 +5826,9 @@ fn a_past_deadline_cancels_the_op_without_a_timer() {
     let mut out = Vec::new();
     complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut out,
@@ -5466,16 +5863,16 @@ fn a_deadline_on_a_finished_op_counts_a_timer_without_one_on_the_wheel() {
     let mut out = Vec::new();
     complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut out,
     )
     .unwrap();
     assert!(out.is_empty());
-    let run = park_io_until(&registry, &mut driver, 0, 50, token, me, Word::UNIT).unwrap();
+    let run = park_until_on(&registry, &mut ctx, &mut driver, 0, 50, token, me).unwrap();
     assert!(matches!(
         run,
         Some(Runnable::ResumeIo { cell, wake: WOKE, .. }) if cell == me
@@ -5507,9 +5904,18 @@ fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
         bin: Arc::default(),
     };
     let listener = unsafe { ctx.heap_mut() }.alloc_foreign(listener, true);
-    let token = submit_accept(&registry, &mut ctx, &mut driver, 0, 0, 0, listener).unwrap();
+    let token = submit_accept(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        listener,
+    )
+    .unwrap();
     let key = driver.last_key;
-    let run = park_io_until(&registry, &mut driver, 0, 50, token, me, Word::UNIT).unwrap();
+    let run = park_until_on(&registry, &mut ctx, &mut driver, 0, 50, token, me).unwrap();
     assert!(run.is_none());
     let mut out = Vec::new();
     expire(&registry, &mut driver, 0, 50, &mut out).unwrap();
@@ -5521,9 +5927,9 @@ fn expired_accept_outcome(result: io::Error, cancelled: bool) -> i64 {
     });
     complete(
         &registry,
+        &solo(&registry),
         &mut ctx,
         &mut driver,
-        0,
         0,
         &mut Vec::new(),
         &mut out,
@@ -5592,7 +5998,16 @@ fn complete_op(
         result,
         cancelled: false,
     });
-    complete(registry, ctx, driver, 0, 0, &mut Vec::new(), out).unwrap();
+    complete(
+        registry,
+        &solo(registry),
+        ctx,
+        driver,
+        0,
+        &mut Vec::new(),
+        out,
+    )
+    .unwrap();
 }
 
 /// 行の連鎖の読みを、外の書き手が `bytes` を書き終えるまで進める。周が読めるようになるのを待っていれば、その完了を
@@ -5651,10 +6066,19 @@ fn a_read_line_lends_the_stream_buffer_and_frees_it_when_empty() {
         [(&b"ab\ncd"[..], "ab\n", 2, true), (b"\n", "cd\n", 0, false)]
     {
         let me = running_task(&registry, scope);
-        let token = submit_read_line(&registry, &mut ctx, &mut driver, 0, 0, 0, stream).unwrap();
+        let token = submit_read_line(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            Some(&mut driver),
+            0,
+            0,
+            stream,
+        )
+        .unwrap();
         let op = CellRef::decode(token);
         assert!(
-            park_io(&registry, &mut driver, token, me, Word::UNIT)
+            park_on(&registry, &mut ctx, &mut driver, token, me)
                 .unwrap()
                 .is_none()
         );
@@ -5696,9 +6120,18 @@ fn a_read_line_cancelled_during_its_transfer_keeps_the_bytes() {
     let scope = registry.lock().open_root(None, None).unwrap();
     let me = running_task(&registry, scope);
     let stream = net_stream(&mut ctx);
-    let token = submit_read_line(&registry, &mut ctx, &mut driver, 0, 0, 0, stream).unwrap();
+    let token = submit_read_line(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        stream,
+    )
+    .unwrap();
     let op = CellRef::decode(token);
-    park_io(&registry, &mut driver, token, me, Word::UNIT).unwrap();
+    park_on(&registry, &mut ctx, &mut driver, token, me).unwrap();
     let mut out = Vec::new();
     complete_op(
         &registry,
@@ -5746,9 +6179,18 @@ fn read_line_through(chunks: &[&[u8]]) -> (Result<usize, String>, Vec<usize>) {
     let scope = registry.lock().open_root(None, None).unwrap();
     let me = running_task(&registry, scope);
     let stream = net_stream(&mut ctx);
-    let token = submit_read_line(&registry, &mut ctx, &mut driver, 0, 0, 0, stream).unwrap();
+    let token = submit_read_line(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        stream,
+    )
+    .unwrap();
     let op = CellRef::decode(token);
-    park_io(&registry, &mut driver, token, me, Word::UNIT).unwrap();
+    park_on(&registry, &mut ctx, &mut driver, token, me).unwrap();
     let mut out = Vec::new();
     let mut reads = Vec::new();
     for chunk in chunks {
@@ -5835,9 +6277,18 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
     let scope = registry.lock().open_root(None, None).unwrap();
     let me = running_task(&registry, scope);
     let stream = net_stream(&mut ctx);
-    let token = submit_read_line(&registry, &mut ctx, &mut driver, 0, 0, 0, stream).unwrap();
+    let token = submit_read_line(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        stream,
+    )
+    .unwrap();
     let op = CellRef::decode(token);
-    park_io(&registry, &mut driver, token, me, Word::UNIT).unwrap();
+    park_on(&registry, &mut ctx, &mut driver, token, me).unwrap();
     let mut out = Vec::new();
     let _ = read_line_round(&registry, &mut ctx, &mut driver, op, b"ab\ncd", &mut out);
     let stream = registry.lock().op_stream(token, 0).unwrap();
@@ -5845,11 +6296,21 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
     unsafe { ctx.heap_mut().decref(line) }.unwrap();
     let submitted = driver.submits;
     let buf = bytes_ab(&mut ctx, 0);
-    let token = submit_read(&registry, &mut ctx, &mut driver, 0, 0, 0, buf, stream).unwrap();
+    let token = submit_read(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap();
     assert_eq!(driver.submits, submitted);
     assert_eq!(registry.lock().parts[0].in_flight, 0);
     let next = running_task(&registry, scope);
-    let run = park_io(&registry, &mut driver, token, next, Word::UNIT).unwrap();
+    let run = park_on(&registry, &mut ctx, &mut driver, token, next).unwrap();
     assert!(matches!(
         run,
         Some(Runnable::ResumeIo { cell, wake: WOKE, .. }) if cell == next
@@ -5885,6 +6346,22 @@ impl Post for Posted {
 
     fn cancel(&self, k: u32, cell: CellRef) {
         self.cancels.borrow_mut().push((k, cell));
+    }
+
+    fn place(&self, k: u32, _cell: CellRef, _worker: u32, _closure: Word) {
+        panic!("a task is placed on worker {k}");
+    }
+
+    fn submit(&self, k: u32, _op: CellRef) {
+        panic!("an op is submitted to worker {k}");
+    }
+
+    fn cancel_io(&self, k: u32, _op: CellRef) {
+        panic!("an op cancel is sent to worker {k}");
+    }
+
+    fn completion(&self, k: u32, _op: CellRef) {
+        panic!("a completion is sent to worker {k}");
     }
 }
 
@@ -5925,6 +6402,7 @@ fn mail_keeps_arrival_order() {
     let posted = Posted::default();
     let here = |me| Here {
         me,
+        host: me,
         mail: &shared.mail,
         post: &posted,
     };
@@ -6009,6 +6487,7 @@ fn a_cancel_in_the_mail_waits_for_its_owner() {
     let shared = Shared::new(Registry::new(Vec::new(), 2));
     let here = |me| Here {
         me,
+        host: me,
         mail: &shared.mail,
         post: &Unposted,
     };
@@ -6039,6 +6518,46 @@ fn owned_task(shared: &Shared, owner: u32) -> CellRef {
     let cell = running_task(shared, scope);
     shared.lock().task_mut(cell).unwrap().owner = owner;
     cell
+}
+
+/// worker `owner` が持ち主で、論理的な ID が `worker` の、動いているタスクのセル。`cancel` なら取り消しの印を付ける。
+#[cfg(test)]
+pub(crate) fn task_on(shared: &Shared, owner: u32, worker: u32, cancel: bool) -> CellRef {
+    let cell = owned_task(shared, owner);
+    let mut cells = shared.lock();
+    let task = cells.task_mut(cell).unwrap();
+    task.worker = worker;
+    task.cancel = cancel;
+    cell
+}
+
+/// worker `owner` が持ち主の、`start` が置いてまだ始まっていないタスクのセル。論理的な ID は 0 である。
+#[cfg(test)]
+pub(crate) fn placed_task(shared: &Shared, owner: u32) -> CellRef {
+    let cell = owned_task(shared, owner);
+    shared.lock().task_mut(cell).unwrap().phase = Phase::Placed;
+    cell
+}
+
+/// driver のハンドル `handle` の `TcpStream` の `Foreign`。落ちたら `bin` に積む。
+#[cfg(test)]
+pub(crate) fn stream_on<M: Mode>(ctx: &mut Ctx<M>, handle: IoHandle, bin: Arc<HandleBin>) -> Word {
+    let stream = NetStream {
+        handle,
+        peer: ([127, 0, 0, 1], 1).into(),
+        bin,
+        rest: Vec::new(),
+        start: 0,
+    };
+    unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
+}
+
+/// 記録 `token` に host が置いた、まだ当てていない結果の、取り消しだけで終わったかの印。置いていなければ `None` である。
+#[cfg(test)]
+pub(crate) fn arrival_of(shared: &Shared, token: i64) -> Option<bool> {
+    let mut cells = shared.lock();
+    let record = cells.op_mut(CellRef::decode(token)).unwrap();
+    record.arrival.as_ref().map(|&(_, cancelled)| cancelled)
 }
 
 /// 預かる ID を開かない channel。品物は即値だけを使い、預かり先を閉じないテストで使う。
@@ -6105,12 +6624,13 @@ fn cancel_on(shared: &Shared, cell: CellRef, me: u32) -> Vec<Runnable> {
     cells.task_mut(cell).unwrap().cancel = true;
     let mut woken = Vec::new();
     let mut work = IoWork::default();
-    cells.unpark(cell, me, &mut woken, &mut work).unwrap();
     let here = Here {
         me,
+        host: me,
         mail: &shared.mail,
         post: &Unposted,
     };
+    cells.unpark(cell, &here, &mut woken, &mut work).unwrap();
     let mut out = Vec::new();
     cells.route(&mut woken, &here, &mut out).unwrap();
     out

@@ -844,7 +844,7 @@ struct Scheduled<M: Mode> {
     generations: Vec<u32>,
     /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
     driver: Option<Box<dyn IoDriver>>,
-    /// run の直後の `quiesce` の後にも、driver が保留の操作を残した。
+    /// worker を join した後の `quiesce` の後にも、driver が保留の操作を残した。
     kept_pending: bool,
     /// worker 1..N-1 の `Ctx`。join の後に worker 0 へ返ってきたもの。
     others: Vec<Ctx<M>>,
@@ -964,8 +964,8 @@ fn run_scheduled<M: Mode, P: Policy>(
     // ほかの worker の仕事を worker 0 の数に足す。数は足し、山は最大を取る (docs/spec/vm.md の「`RunStats`」)
     let mut preemptions = sched.preemptions();
     let mut peak_stack = sched.peak_stack(task);
-    let tasks = sched.cells.lock().stats;
     let mut bases = Vec::with_capacity(exits.len());
+    let mut left = false;
     for exit in exits {
         match exit {
             Ok(Retired {
@@ -974,12 +974,14 @@ fn run_scheduled<M: Mode, P: Policy>(
                 preemptions: worker_preemptions,
                 peak_stack: worker_peak,
                 base,
+                left: worker_left,
             }) => {
                 counts.add(&worker_counts);
                 preemptions += worker_preemptions;
                 peak_stack = peak_stack.max(worker_peak);
                 bases.push(base);
                 others.push(other);
+                left |= worker_left;
             }
             Err(payload) => {
                 panic.get_or_insert(payload);
@@ -987,6 +989,45 @@ fn run_scheduled<M: Mode, P: Policy>(
         }
     }
     let result = settle(result, sched.run.take_fatal());
+    // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に driver を静止させる。どの worker も
+    // もう受け付けを送らないので、join の後に行う。成功した run では、静止させた driver が返した完了を記録に置く。
+    // 集める地点と同じく、driver に出した操作がなければ完了を読まない (docs/spec/vm.md の「時計と driver」
+    // 「誤り、止めること、終わり」)
+    let kept_pending = match sched.driver.as_mut() {
+        Some(driver) => {
+            driver.quiesce();
+            let in_flight = sched.cells.lock().in_flight(sched.index);
+            if result.is_ok() && in_flight > 0 {
+                let mut completed = Vec::new();
+                driver.completions(&mut completed);
+                sched.cells.lock().quiesced(sched.index, &mut completed);
+            }
+            driver.pending() > 0
+        }
+        None => false,
+    };
+    // 成功した run だけが、残った知らせと保留の操作を確かめてから、残ったセルを片付ける。誤りと `exit` の run の登録表は、
+    // 触れずに `Scheduler` と一緒に落とす。誤りには `Finish` の位置を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)
+    let result = result.and_then(|()| {
+        let at_finish = |fault: VmFault| {
+            code.error(
+                vm::Failure {
+                    fault,
+                    pc: task.pc - 1,
+                },
+                task,
+            )
+        };
+        workers::end_check(kept_pending, left).map_err(at_finish)?;
+        // 予約と確定の間に安全点はないので、`Finish` に来た worker 0 は予約を持たない (docs/spec/vm.md の「channel」)
+        debug_assert!(
+            sched.hold.is_none(),
+            "a channel reservation is held at the end"
+        );
+        cells::sweep_all(&sched.cells, ctx, task.depth_offset)
+            .map_err(|fault| at_finish(fault.into()))
+    });
+    let tasks = sched.cells.lock().stats;
     // join の後に、ほかのスレッドが積んだ解放をすべてのヒープで取り込む。この後はどのスレッドも解放を積まない
     // (docs/spec/vm.md の「誤り、止めること、終わり」)
     if workers > 0 {
@@ -1003,15 +1044,6 @@ fn run_scheduled<M: Mode, P: Policy>(
         others_ctx.string_bytes_copied += c.string_bytes_copied;
         others_heap.add(&HeapWork::of(other.heap().stats()).since(base));
     }
-    // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
-    // (docs/spec/vm.md の「時計と driver」)
-    let kept_pending = match sched.driver.as_mut() {
-        Some(driver) => {
-            driver.quiesce();
-            driver.pending() > 0
-        }
-        None => false,
-    };
     let generations = sched.cells.lock().next_generations();
     let scheduled = Scheduled {
         preemptions,
