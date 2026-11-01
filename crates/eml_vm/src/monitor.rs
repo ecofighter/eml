@@ -1,7 +1,7 @@
-//! 監視のスレッド (docs/spec/vm.md の「タスクとスケジュール」)。`Scheduler` が持つ。保留のシグナルを受け箱へ中継して
+//! 監視のスレッド (docs/spec/vm.md の「タスクとスケジュール」)。`Scheduler` が持つ。保留のシグナルを run の mail へ中継して
 //! worker 0 の語に `NOTICE` を立て、止めるビットや知らせのときにすべての worker を起こす。横取りする方針では、worker
 //! ごとに、刻みの間に動くタスクが替わらなければその worker の語に `PREEMPT` も立てる。スレッドが持つのは
-//! `Arc<Control>`、受け箱、run の表 `Run`、`Arc<Watch>` だけで、ヒープの語も `Ctx` も持たない。ヒープに触れるのは
+//! `Arc<Control>`、mail を持つ `Shared`、run の表 `Run`、`Arc<Watch>` だけで、ヒープの語も `Ctx` も持たない。ヒープに触れるのは
 //! worker のスレッドだけにするためである (docs/future/multicore.md の「スレッドと worker」)。
 
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use eml_rt::Control;
 
-use crate::cells::{Inbox, Notice};
+use crate::cells::{MailItem, Shared};
 use crate::doorbell::Doorbell;
 use crate::workers::Run;
 
@@ -31,7 +31,8 @@ pub(crate) struct Watch {
 /// 監視のスレッドが中継に使うもの。
 struct Relay {
     control: Arc<Control>,
-    inbox: Arc<Inbox>,
+    /// run の登録表と mail。触れるのは mail だけで、登録表の lock は取らない。
+    shared: Arc<Shared>,
     run: Arc<Run>,
 }
 
@@ -48,7 +49,7 @@ impl Monitor {
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn start(
         control: Arc<Control>,
-        inbox: Arc<Inbox>,
+        cells: Arc<Shared>,
         run: Arc<Run>,
         preempt: bool,
     ) -> Option<Monitor> {
@@ -59,7 +60,7 @@ impl Monitor {
         let doorbell = run.bell.clone();
         let relay = Relay {
             control,
-            inbox,
+            shared: cells,
             run,
         };
         let builder = thread::Builder::new()
@@ -103,14 +104,14 @@ impl Ticker {
 }
 
 impl Relay {
-    /// まだ中継していない保留のシグナルを受け箱に積み、`NOTICE` を立てる。知らせを積んでからビットを立てるので、
-    /// ビットを見た worker は集める地点で知らせを見つける。止めるビットが立っていてもすべての worker を起こし、眠って
+    /// まだ中継していない保留のシグナルを mail に積み、`NOTICE` を立てる。項を積んでからビットを立てるので、
+    /// ビットを見た worker は集める地点で項を見つける。止めるビットが立っていてもすべての worker を起こし、眠って
     /// いる worker に止める語を読ませる (docs/spec/vm.md の「タスクとスケジュール」)。
     fn relay(&self) {
         let new = self.control.claim_signals();
         if new != 0 {
-            // シグナルを届ける登録表は worker 0 が持つ
-            self.inbox.push(Notice::Signal(new));
+            // mail を集めて登録表に届けるのは worker 0 だけである
+            self.shared.mail.push(MailItem::Signal(new));
             self.control.notice(0);
         }
         if new != 0 || self.control.stop_bits() != 0 {
@@ -180,7 +181,7 @@ mod tests {
     use eml_rt::{Control, IoWaker, Limits};
 
     use super::{Monitor, Relay, Ticker, bell_timeout};
-    use crate::cells::{Inbox, Notice};
+    use crate::cells::{MailItem, Registry, Shared};
     use crate::doorbell::Doorbell;
     use crate::sched::{Normal, Scheduler};
     use crate::workers::Run;
@@ -209,6 +210,11 @@ mod tests {
         }
     }
 
+    /// worker が1つの run の、空の登録表と mail。
+    fn shared() -> Arc<Shared> {
+        Arc::new(Shared::new(Registry::new(Vec::new(), 1)))
+    }
+
     fn relay() -> (Relay, Arc<Counting>) {
         let waker = Arc::new(Counting::default());
         let run = Run::new(1, None, crate::driver::RunClock::Virtual(Arc::default()));
@@ -217,7 +223,7 @@ mod tests {
             .set(Arc::clone(&waker) as Arc<dyn IoWaker>);
         let relay = Relay {
             control: Arc::new(Control::new(Limits::default())),
-            inbox: Arc::new(Inbox::default()),
+            shared: shared(),
             run: Arc::new(run),
         };
         (relay, waker)
@@ -230,9 +236,9 @@ mod tests {
         relay.control.defer(Control::TERMINATE);
         relay.relay();
         relay.relay();
-        let notices = relay.inbox.take();
+        let notices = relay.shared.mail.take();
         assert!(
-            matches!(notices[..], [Notice::Signal(Control::TERMINATE)]),
+            matches!(notices[..], [MailItem::Signal(Control::TERMINATE)]),
             "{} notices",
             notices.len()
         );
@@ -246,7 +252,7 @@ mod tests {
     fn nothing_pending_relays_nothing() {
         let (relay, waker) = relay();
         relay.relay();
-        assert!(relay.inbox.take().is_empty());
+        assert!(relay.shared.mail.take().is_empty());
         assert_eq!(relay.control.worker_bits(0), 0);
         assert_eq!(waker.0.load(Ordering::Relaxed), 0);
     }
@@ -266,7 +272,7 @@ mod tests {
             Arc::clone(&control),
             0,
             usize::MAX,
-            Vec::new(),
+            shared(),
         );
         sched.start_monitor();
         sched.start_monitor();
@@ -304,13 +310,8 @@ mod tests {
             crate::driver::RunClock::Virtual(Arc::default()),
         ));
         run.park(0);
-        let monitor = Monitor::start(
-            Arc::clone(&control),
-            Arc::new(Inbox::default()),
-            Arc::clone(&run),
-            true,
-        )
-        .expect("the monitor started");
+        let monitor = Monitor::start(Arc::clone(&control), shared(), Arc::clone(&run), true)
+            .expect("the monitor started");
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(control.worker_bits(0) & Control::PREEMPT, 0);
         run.wake(0);
@@ -341,13 +342,8 @@ mod tests {
                 woke.send(()).unwrap();
             })
         };
-        let monitor = Monitor::start(
-            Arc::clone(&control),
-            Arc::new(Inbox::default()),
-            Arc::clone(&run),
-            false,
-        )
-        .expect("the monitor started");
+        let monitor = Monitor::start(Arc::clone(&control), shared(), Arc::clone(&run), false)
+            .expect("the monitor started");
         control.interrupt();
         assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok(), "not woken");
         worker.join().unwrap();

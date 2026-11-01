@@ -11,7 +11,7 @@ use std::thread::{self, Scope, ScopedJoinHandle};
 
 use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop};
 
-use crate::cells::TaskStats;
+use crate::cells::Shared;
 use crate::code::CodeBase;
 use crate::doorbell::Doorbell;
 use crate::driver::{DriverKind, RunClock, ceil_ms, floor_ms};
@@ -68,8 +68,6 @@ pub(crate) struct Retired<M: Mode> {
     pub(crate) ctx: Ctx<M>,
     /// VM が数える回数。
     pub(crate) counts: RunCounts,
-    /// worker の登録表が数える回数。
-    pub(crate) tasks: TaskStats,
     pub(crate) preemptions: u64,
     /// worker のタスクのスタックで同時に使った語の数の最大。
     pub(crate) peak_stack: u64,
@@ -386,12 +384,14 @@ pub(crate) fn settle(
 /// worker 1..N-1 を作る。作るのは worker 0 で、最初の `par` の fork のときに1回だけである。どの worker も眠って
 /// 空いている形で始める。worker `k` を作れなければ、それより後は作らず、作れた worker だけを使う
 /// (docs/spec/vm.md の「タスクとスケジュール」)。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
     scope: &'scope Scope<'scope, '_>,
     code: &'scope CodeBase<M>,
     policy: &P,
     run: &Arc<Run>,
     control: &Arc<Control>,
+    cells: &Arc<Shared>,
     host: &HostRef,
     max_depth: usize,
 ) -> Vec<ScopedJoinHandle<'scope, WorkerExit<M>>> {
@@ -402,11 +402,14 @@ pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
             .name(format!("eml-worker-{k}"))
             .stack_size(WORKER_STACK);
         let (run_k, control_k, host_k) = (Arc::clone(run), Arc::clone(control), host.clone());
+        let cells_k = Arc::clone(cells);
         // worker 0 は run の方針をそのまま使い、worker 1..N-1 は worker ごとの方針を使う
         let policy_k = policy.for_worker(k);
         // worker 0 のほかの worker は SIGINT と SIGTERM を塞ぐ (docs/spec/vm.md の「上限と割り込み」)
         match eml_io::spawn_scoped_masked(scope, builder, move || {
-            run_worker::<M, P>(code, policy_k, run_k, control_k, host_k, k, max_depth)
+            run_worker::<M, P>(
+                code, policy_k, run_k, control_k, cells_k, host_k, k, max_depth,
+            )
         }) {
             Ok(handle) => handles.push(handle),
             Err(_) => {
@@ -421,11 +424,13 @@ pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
 /// worker `k` (`k` ≥ 1) のスレッドの本体。自分のスレッドで `Ctx` を作り、run の終わりに worker 0 へ返す。`Ctx` を
 /// 作るところから `catch_unwind` の中で動き、panic は `fatal` に書いてすべての worker に終わりを知らせる。そのときの
 /// `Ctx` は、途中の状態のヒープを落とさないように漏らす。
+#[allow(clippy::too_many_arguments)]
 fn run_worker<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     policy: P,
     run: Arc<Run>,
     control: Arc<Control>,
+    cells: Arc<Shared>,
     host: HostRef,
     k: usize,
     max_depth: usize,
@@ -441,7 +446,7 @@ fn run_worker<M: Mode, P: Policy>(
         )));
         base = HeapWork::of(ctx.heap().stats());
         done = Some(work::<M, P>(
-            code, ctx, policy, &run, &control, k, max_depth,
+            code, ctx, policy, &run, &control, cells, k, max_depth,
         ));
     }));
     match body {
@@ -452,7 +457,6 @@ fn run_worker<M: Mode, P: Policy>(
             Ok(Retired {
                 ctx: ManuallyDrop::into_inner(ctx),
                 counts: done.counts,
-                tasks: done.tasks,
                 preemptions: done.preemptions,
                 peak_stack: done.peak_stack,
                 base,
@@ -475,7 +479,6 @@ fn run_worker<M: Mode, P: Policy>(
 /// `work` が返す、worker の `Scheduler` と実行の繰り返しが数えた仕事。
 struct Done {
     counts: RunCounts,
-    tasks: TaskStats,
     preemptions: u64,
     peak_stack: u64,
 }
@@ -484,12 +487,14 @@ struct Done {
 /// 見たときと、致命的な誤りのときである。止めるビットと `END` では何も書かずに、ほかの worker を起こしてから抜ける。
 /// 眠っている worker に止める語を読ませ、自分の確保で立てた `MEMORY` も worker 0 に届けるためである。致命的な誤りは
 /// run の `fatal` に書き、`END` をすべての語に立ててから同じく起こす (docs/spec/vm.md の「子の誤り」)。
+#[allow(clippy::too_many_arguments)]
 fn work<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     policy: P,
     run: &Arc<Run>,
     control: &Arc<Control>,
+    cells: Arc<Shared>,
     k: usize,
     max_depth: usize,
 ) -> Done {
@@ -501,6 +506,7 @@ fn work<M: Mode, P: Policy>(
         k,
         ctx.heap().worker(),
         max_depth,
+        cells,
     );
     let mut counts = RunCounts::default();
     let (error, peak_stack) = crate::vm::work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts);
@@ -511,7 +517,6 @@ fn work<M: Mode, P: Policy>(
     run.wake_all();
     Done {
         counts,
-        tasks: sched.cells.stats,
         preemptions: sched.preemptions(),
         peak_stack,
     }
@@ -547,7 +552,7 @@ impl<P: Policy> Scheduler<P> {
         if run.take_wake(k) {
             return Ok(());
         }
-        let mut deadline = self.cells.next_deadline();
+        let mut deadline = self.cells.lock().next_deadline(k);
         // OS のシグナルを待つタスクがいれば、ほかに進むものがなくてもシグナルが来るまで眠る。届いたときは監視の
         // スレッドが起こす
         if self.listening() {

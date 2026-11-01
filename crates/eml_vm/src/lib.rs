@@ -8,7 +8,7 @@ use std::thread;
 use eml_lir::Program;
 use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
-use crate::cells::TaskStats;
+use crate::cells::{Registry, Shared, TaskStats};
 use crate::driver::{DriverKind, RunClock};
 use crate::error::KEPT_PENDING;
 use crate::vm::{ExecWith, Exit};
@@ -71,7 +71,7 @@ pub struct RunStats {
     /// スコープの最初の失敗より後の、タスクの失敗の数。
     pub dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
-    /// `park_io`、`park_io_until`、`park_signal`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで
+    /// `park_io`、`park_io_until`、`park_signal`、mail の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで
     /// 再開する `yield_now` (速い道が譲る `reschedule` は除く)、真を返した `cancel_point`、偽を返した `claim_scope` を
     /// 数える (docs/spec/vm.md の「`RunStats`」)。
     pub cancels: u64,
@@ -885,11 +885,14 @@ fn run_scheduled<M: Mode, P: Policy>(
     let control = Arc::clone(ctx.heap().control());
     // run の表は run ごとに作り、監視のスレッドが止まる `Scheduler` の破棄とともに捨てる (docs/spec/vm.md の
     // 「タスクとスケジュール」)
-    let run = Arc::new(Run::new(
-        control.limits().workers,
-        start.doorbell,
-        start.run_clock,
-    ));
+    let workers = control.limits().workers;
+    let run = Arc::new(Run::new(workers, start.doorbell, start.run_clock));
+    // 登録表も run ごとに1つ作り、worker 0 と、後で作る worker 1..N-1 のすべての `Scheduler` に配る
+    // (docs/spec/vm.md の「セルと登録表」)
+    let mut registry = Registry::new(start.generations, workers);
+    registry.counters = start.counters;
+    // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
+    registry.schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
     let mut sched = Scheduler::new(
         policy,
         start.driver,
@@ -897,15 +900,10 @@ fn run_scheduled<M: Mode, P: Policy>(
         control,
         main_worker,
         start.max_depth,
-        start.generations,
+        Arc::new(Shared::new(registry)),
     );
     sched.shared_roots = start.shared_roots;
     sched.driver_kind = start.driver_kind;
-    sched.cells.counters = start.counters;
-    // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
-    sched
-        .cells
-        .schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
     // 根は REPL のコードだけが作るので、根に触れるコードを読み込んだ `Machine` は worker を作らない。成功した run の後に
     // 根が、落としたほかの worker のヒープを指しうるためである (docs/spec/vm.md の「タスクとスケジュール」)
     sched.begin_run(!code.tables.uses_roots && ctx.roots().len() == 0);
@@ -927,6 +925,7 @@ fn run_scheduled<M: Mode, P: Policy>(
                         &sched.policy,
                         &sched.run,
                         &sched.watcher.control,
+                        &sched.cells,
                         &host,
                         start.max_depth,
                     );
@@ -961,20 +960,18 @@ fn run_scheduled<M: Mode, P: Policy>(
     // ほかの worker の仕事を worker 0 の数に足す。数は足し、山は最大を取る (docs/spec/vm.md の「`RunStats`」)
     let mut preemptions = sched.preemptions();
     let mut peak_stack = sched.peak_stack(task);
-    let mut tasks = sched.cells.stats;
+    let tasks = sched.cells.lock().stats;
     let mut bases = Vec::with_capacity(exits.len());
     for exit in exits {
         match exit {
             Ok(Retired {
                 ctx: other,
                 counts: worker_counts,
-                tasks: worker_tasks,
                 preemptions: worker_preemptions,
                 peak_stack: worker_peak,
                 base,
             }) => {
                 counts.add(&worker_counts);
-                tasks.add(&worker_tasks);
                 preemptions += worker_preemptions;
                 peak_stack = peak_stack.max(worker_peak);
                 bases.push(base);
@@ -1011,6 +1008,13 @@ fn run_scheduled<M: Mode, P: Policy>(
         }
         None => false,
     };
+    let (generations, counters) = {
+        let mut cells = sched.cells.lock();
+        (
+            cells.next_generations(),
+            std::mem::take(&mut cells.counters),
+        )
+    };
     let scheduled = Scheduled {
         preemptions,
         peak_stack,
@@ -1018,8 +1022,8 @@ fn run_scheduled<M: Mode, P: Policy>(
         tasks,
         others_ctx,
         others_heap,
-        generations: sched.cells.next_generations(),
-        counters: std::mem::take(&mut sched.cells.counters),
+        generations,
+        counters,
         driver: sched.driver.take(),
         kept_pending,
         others,

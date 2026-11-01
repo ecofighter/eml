@@ -6,10 +6,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use eml_rt::{Control, IoDriver};
+use eml_rt::{Completion, Control, IoDriver};
 
 use crate::VmFault;
-use crate::cells::{CellRef, Registry, Runnable};
+use crate::cells::{CellRef, Runnable, Shared};
 use crate::driver::DriverKind;
 use crate::monitor::Monitor;
 use crate::vm::Task;
@@ -313,8 +313,11 @@ pub struct Scheduler<P: Policy> {
     pub(crate) failed: Option<crate::RuntimeError>,
     /// 根の表のうち、この番号より前の根はどれも印が付いている。`Machine` が実行をまたいで持つ値を受け取って返す。
     pub(crate) shared_roots: usize,
-    /// `Async` のタスクとスコープのセル。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
-    pub(crate) cells: Registry,
+    /// `Async` のタスクとスコープのセル。run に1つで、run のすべての `Scheduler` が同じものを持つ
+    /// (docs/spec/vm.md の「セルと登録表」)。
+    pub(crate) cells: Arc<Shared>,
+    /// 集める地点が driver から完了を受ける列。集めるたびに作らないように使い回す。
+    pub(crate) completed: Vec<Completion>,
     /// 終わったエントリの `Task` のスタックと scratch。次のエントリの `Task` が使い回す。待ちから戻るたびにエントリの
     /// `Task` を作るので、毎回の確保を避けるためである。
     pub(crate) stacks: Vec<(Vec<eml_rt::Word>, Vec<eml_rt::Word>)>,
@@ -372,7 +375,7 @@ impl<P: Policy> Scheduler<P> {
         control: Arc<Control>,
         main_worker: u32,
         max_depth: usize,
-        generations: Vec<u32>,
+        cells: Arc<Shared>,
     ) -> Scheduler<P> {
         Scheduler::build(
             policy,
@@ -381,7 +384,7 @@ impl<P: Policy> Scheduler<P> {
             control,
             main_worker,
             max_depth,
-            generations,
+            cells,
         )
     }
 
@@ -392,7 +395,7 @@ impl<P: Policy> Scheduler<P> {
         control: Arc<Control>,
         main_worker: u32,
         max_depth: usize,
-        generations: Vec<u32>,
+        cells: Arc<Shared>,
     ) -> Scheduler<P> {
         Scheduler {
             policy,
@@ -408,7 +411,8 @@ impl<P: Policy> Scheduler<P> {
             max_depth,
             failed: None,
             shared_roots: 0,
-            cells: Registry::new(generations),
+            cells,
+            completed: Vec::new(),
             stacks: Vec::new(),
             driver,
             run,
@@ -426,7 +430,7 @@ impl<P: Policy> Scheduler<P> {
         }
     }
 
-    /// worker `index` (`index` ≥ 1) の `Scheduler`。driver も監視のスレッドも持たず、登録表は空のまま読まない。
+    /// worker `index` (`index` ≥ 1) の `Scheduler`。driver も監視のスレッドも持たない。登録表は run のものを共有する。
     /// worker を作る判断はせず、空いた worker があれば右の子を置く (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn worker(
         policy: P,
@@ -435,16 +439,9 @@ impl<P: Policy> Scheduler<P> {
         index: usize,
         main_worker: u32,
         max_depth: usize,
+        cells: Arc<Shared>,
     ) -> Scheduler<P> {
-        let mut sched = Scheduler::build(
-            policy,
-            None,
-            run,
-            control,
-            main_worker,
-            max_depth,
-            Vec::new(),
-        );
+        let mut sched = Scheduler::build(policy, None, run, control, main_worker, max_depth, cells);
         sched.index = index;
         sched.workers = Workers::Peer;
         sched.watcher.tried = true;
@@ -497,7 +494,7 @@ impl<P: Policy> Scheduler<P> {
         }
         watcher.monitor = Monitor::start(
             Arc::clone(&watcher.control),
-            Arc::clone(&self.cells.inbox),
+            Arc::clone(&self.cells),
             Arc::clone(&self.run),
             P::PREEMPTS,
         );
@@ -513,7 +510,7 @@ impl<P: Policy> Scheduler<P> {
     /// 中継する間は、待つタスクのいる種類がいつも語に立っている (docs/spec/vm.md の「上限と割り込み」)。
     pub(crate) fn sync_watched(&self) {
         let bits = if self.relay_on() {
-            self.cells.signal_bits()
+            self.cells.lock().signal_bits()
         } else {
             0
         };
@@ -523,7 +520,12 @@ impl<P: Policy> Scheduler<P> {
     /// 空きのループが OS のシグナルを待つか。待つなら、ほかに進むものがなくてもデッドロックにしない
     /// (docs/spec/vm.md の「時計と driver」)。
     pub(crate) fn listening(&self) -> bool {
-        self.relay_on() && self.cells.signal_bits() != 0
+        self.relay_on() && self.cells.lock().signal_bits() != 0
+    }
+
+    /// この `Scheduler` の worker の番号。登録表のセルの持ち主と区画の添字である。
+    pub(crate) fn me(&self) -> u32 {
+        self.index as u32
     }
 
     pub(crate) fn add_task(&mut self, task: Task) -> TaskId {
@@ -614,6 +616,7 @@ mod tests {
     use eml_rt::Limits;
 
     use super::*;
+    use crate::cells::Registry;
     use crate::doorbell::Doorbell;
     use crate::driver::RunClock;
 
@@ -637,7 +640,7 @@ mod tests {
             control,
             0,
             usize::MAX,
-            Vec::new(),
+            Arc::new(Shared::new(Registry::new(Vec::new(), workers))),
         );
         sched.driver_kind = kind;
         sched
