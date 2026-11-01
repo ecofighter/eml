@@ -99,7 +99,7 @@
 
 - 決定: `workers::Notice` を `Child(Task)`、`Joined`、`Place{cell, worker, closure}`、`Wake(Woken)`、`Cancel(CellRef)`、`Submit(CellRef)`、`CancelIo(CellRef)`、`Completion(CellRef)` にする。`cells::Mail` は run に1つで葉の lock を持ち、`MailItem::{HandleDropped, Signal, Cancel}` を運ぶ。最初に集めた worker が登録表の lock の下で処理する。`mark` は、持ち主が自分なら `Cancel` を mail に、そうでなければ持ち主の受け箱に送る。こうすると、N = 1 の `Cancel`、`HandleDropped`、`Signal` の順は今の1つの FIFO と同じになる
 - 宛先が自分の `Wake` と `Place` は受け箱を通さず、その場で処理する。`Wake` は継続を持たず、持ち主がセルから `k` を取り出す。`Place` が運ぶ語は、`start` で印を付けた閉包だけである
-- 1回の集める地点で取る lock は、slot の lock 1回 (知らせを取る) と、登録表の lock 1回 (知らせ、mail、自分の driver の結果、自分の区画の時間の輪) と、driver が受け付けの場で終えた操作ごとの短い区間である。`schedule` は登録表の lock を放してから行う
+- 1回の集める地点で取る登録表の lock は、今の処理の順 (取り消しの `driver.cancel` を完了を読む前に呼ぶこと、すぐ終わる受け付け直しを次の完了より先に片付けることなど) を保つ短い区間に分けてよい。どの区間の中でも、`Ctx` と `Heap` (G-A6 の例外を除く) と driver を呼ばず、捨てる語と `retire_worker` は lock を放してから、今と同じ順に行う。`schedule` は登録表の lock を放してから行う (実行中の決定 E-2 で、1区間にまとめる元の決めを改めた)
 - 実行待ちの列は今のまま (`Scheduler.ready: VecDeque<TaskId>`、`Policy` も同じ) にする。救済で盗む形は、まだフレームを持たないエントリの `Task` である
 - 理由: 救済は、持ち主の受け箱と実行待ちにある、まだ始まっていない継続を見つけられればよい。継続を知らせに入れないので、知らせの中を探さずに済む。自分宛てをその場で処理するのは、N = 1 の実行待ちの順と `RunStats` を変えないためである
 - 却下した案: `Wake` に継続を入れる案。自分宛ても受け箱を通す案 (N = 1 の順が変わる)。実行待ちを `Ready::{Task, Run}` にする案 (`Policy` の trait とタスクの番号の振り方が変わる)
@@ -278,6 +278,14 @@ A0 → A1 → A2 → A3 → A4 → A5 → A6 → A7 → A8 → A9 → A10 → A1
 | R-7 | A14 で IOCP がソケットを結び付けずに受けられない (S1 の A4) | Windows で縛らずに受けられない | Windows では受け付けた host に縛る形に戻し、spec に1文書く | その形 |
 | R-8 | `next_place` = 1 の起動の費用 (A9) | `start` が1回のプログラムが遅くなる | 費用を測ってコミットのメッセージに書く | 後で考える |
 | R-9 | std を変えて予約と確定の間に命令が入る (A6 以降) | hold が安全点で空でなくなる | hold の debug assert (切り替え、worker を抜けるとき、`sweep_all` の前) | — |
+
+## 実行中の決定
+
+実行の途中で利用者と決めたことを書く。付録と食い違うときは、ここが優先する。
+
+- E-1 (2026-11-01): A7 (`RawBuf` を `Send` にする) を A3 の前に行う。A3 が `OpRecord.pending_op: Option<Op>` を足すと、`Op` が `RawBuf` を持つので `Registry` が `Send` でなくなり、`Arc<Shared>` を worker 1..N-1 のスレッドに渡せないためである。A7 は A3〜A6 に依らない。順は A1 → A2 → A7 → A3 → A4 → A5 → A6 → A8 → … になる
+- E-2 (2026-11-01、利用者): G-A6 の「1回の集める地点で登録表の lock は1区間」を、「今の処理の順を保つ短い区間に分けてよい。区間の中では `Ctx`、`Heap` (G-A6 の例外を除く)、driver を呼ばない」に改める。1区間にまとめると、取り消しと受け付け直しの順が変わり、N = 1 の実行待ちの順が変わって G-A5 を破るためである。G-A5 を優先する。`Discards` は、捨てる語と `retire_worker` を今と同じ順に並べた列にする
+- E-3 (2026-11-01): channel の extern のヒープの呼び出しは、A3 では lock の下に残してよい。A6 が lock の外に出す
 
 ## 付録: レビューで変わった主なこと
 
