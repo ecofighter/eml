@@ -1,6 +1,7 @@
 //! `Std.Net` の操作の記録と driver の完了 (docs/spec/vm.md の「操作の記録」)。完了の数はテストの driver
 //! (`Clock::Virtual`) の上で、取り消しの道は書きを取り消すまで終わらせない driver の上で確かめる。テストの driver の
-//! 書きは次の集める地点でいつも終わるので、待っている間の取り消しに届かないためである。
+//! 書きは次の集める地点でいつも終わるので、待っている間の取り消しに届かないためである。worker が2つの run では、
+//! worker 1 に置いたタスクの操作を driver を持つ worker 0 が受け付け、持ち主が結果を当てる道も確かめる。
 
 use std::io;
 use std::sync::Arc;
@@ -1069,4 +1070,162 @@ fn a_probe_done_at_submit_reads_at_once() {
     assert_eq!(log.ops[4..], ["readable", "read"]);
     assert_eq!(log.at_submit[4..], [true, true]);
     assert_eq!((log.waits, log.completions), (0, 0));
+}
+
+/// 検査モードで、worker を `workers` 個まで持てる run を1回行う。`config` は時計と方針を決める。
+fn run_on(src: &str, workers: usize, config: RunConfig) -> (String, eml_vm::Finished) {
+    let control = Arc::new(eml_vm::Control::new(eml_vm::Limits {
+        workers,
+        ..eml_vm::Limits::default()
+    }));
+    let config = config.with_debug_heap(true).with_control(control);
+    let (host, out) = capture_host(Default::default());
+    let finished = eml_vm::execute(&eml_test_support::lir(src), &config, host)
+        .unwrap_or_else(|error| panic!("{error}"));
+    (out.contents(), finished)
+}
+
+/// worker 1 に置いたタスクの受けと読みは、driver を持つ worker 0 が受け付けて結果を置き、持ち主の worker 1 が当てる。
+/// 仮想の時計の run の driver は worker 0 だけが持つので、読めたことが転送の道を通ったことを示す
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_forwarded_submit_is_settled_by_its_host() {
+    let src = "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+    Net.close s
+    String.decode buf)
+  let a = Net.connect \"127.0.0.1\" port
+  let a = Net.write \"hello\" a
+  let got = Async.await t
+  Net.close a
+  println got)
+";
+    let (alone, _) = run_on(src, 1, RunConfig::default());
+    assert_eq!(alone, "hello\n");
+    let (out, finished) = run_on(src, 2, RunConfig::default());
+    assert_eq!(out, alone);
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// worker 1 に置いたタスクの `set_nodelay` と `shutdown_write` も、ほかの操作と同じく host の worker 0 が driver に出す。
+/// 書いたバイトの後に、worker 0 の相手が EOF を読む (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_shutdown_on_worker_1_is_done_by_its_host() {
+    let src = "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    let s = Net.set_nodelay True s
+    let s = Net.write \"bye\" s
+    Net.shutdown_write s)
+  let a = Net.connect \"127.0.0.1\" port
+  let (buf, a) = Net.read_chunk (Bytes.with_capacity 16) a
+  let (rest, a) = Net.read_chunk (Bytes.with_capacity 16) a
+  Net.close a
+  Net.close (Async.await t)
+  println \"\\{String.decode buf} \\{show (Bytes.length rest)}\")
+";
+    let (alone, _) = run_on(src, 1, RunConfig::default());
+    assert_eq!(alone, "bye 0\n");
+    let (out, finished) = run_on(src, 2, RunConfig::default());
+    assert_eq!(out, alone);
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 別の worker の driver に回した設定の操作は、host が受け付けるまで取り消しを見ずに待つ。取り消したスコープの中でも
+/// 投げずに終わり、相手は EOF を読む (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_forwarded_control_in_a_cancelled_scope_completes() {
+    let src = "\
+import Async
+import Bytes
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    Async.scope (fn sc ->
+      Async.cancel_scope sc
+      Net.shutdown_write (Net.set_nodelay True s)))
+  let a = Net.connect \"127.0.0.1\" port
+  let (buf, a) = Net.read_chunk (Bytes.with_capacity 16) a
+  Net.close a
+  Net.close (Async.await t)
+  println (show (Bytes.length buf)))
+";
+    let (alone, _) = run_on(src, 1, RunConfig::default());
+    assert_eq!(alone, "0\n");
+    let (out, finished) = run_on(src, 2, RunConfig::default());
+    assert_eq!(out, alone);
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、worker 1 に置いたクライアントが書いて閉じたストリームを、worker 0 の host が閉じ、worker 0 のサーバーが
+/// EOF まで読む。ハンドルを落とした worker 1 が、driver の待ちで眠る host を起こすためである (docs/spec/vm.md の
+/// 「操作の記録」)。普通の方針で流す。横取りしない方針では、閉じるのは落とした worker の次の集める地点まで遅れうる。
+/// 3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn a_stream_closed_on_worker_1_reaches_its_peer() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+drain : Net.TcpStream -> Int -> <IO, Panic, Async> Int
+drain s n =
+  let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else drain s (n + k)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let c = Async.start (fn () ->
+    let a = Net.connect \"127.0.0.1\" port
+    let a = Net.write \"abc\" a
+    Net.close a)
+  let s = Async.start (fn () ->
+    let (b, l) = Net.accept l
+    Net.close_listener l
+    drain b 0)
+  Async.await c
+  println (show (Async.await s)))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let config = RunConfig::default()
+            .with_clock(eml_vm::Clock::Real)
+            .with_sched(Sched::Normal);
+        let _ = done.send(run_on(src, 2, config));
+    });
+    let (out, finished) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the peer did not read to the end");
+    assert_eq!(out, "3\n");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
 }

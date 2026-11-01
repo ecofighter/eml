@@ -137,6 +137,9 @@ pub struct Finished {
     /// この run がほかの worker に置いた `par` の右の子の数。どの worker の fork も数える
     /// (docs/spec/vm.md の「`par` の fork と join」)。
     pub placed: u64,
+    /// この run が、`start` を実行した worker と違う worker に置いた `Async` のタスクの数
+    /// (docs/spec/vm.md の「`Async` のタスク」)。
+    pub placed_tasks: u64,
 }
 
 /// VM だけが知る仕事の回数。検査モードだけで数える。
@@ -688,6 +691,7 @@ impl<M: Mode> Machine<M> {
                 preemptions: scheduled.preemptions,
                 workers: scheduled.workers,
                 placed: scheduled.placed,
+                placed_tasks: scheduled.placed_tasks,
             };
             return Ok(Ran::Abandoned(finished, cause));
         }
@@ -714,6 +718,7 @@ impl<M: Mode> Machine<M> {
             preemptions: scheduled.preemptions,
             workers: scheduled.workers,
             placed: scheduled.placed,
+            placed_tasks: scheduled.placed_tasks,
         };
         Ok(Ran::Done(finished, text))
     }
@@ -852,6 +857,8 @@ struct Scheduled<M: Mode> {
     workers: usize,
     /// ほかの worker に置いた右の子の数。
     placed: u64,
+    /// ほかの worker に置いた `Async` のタスクの数。
+    placed_tasks: u64,
     /// worker 1..N-1 の panic。最初のものを worker 0 で起こし直す。
     panic: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -934,6 +941,8 @@ fn run_scheduled<M: Mode, P: Policy>(
                         start.max_depth,
                     );
                     shutdown.armed = !handles.is_empty();
+                    // タスクを置くのは作れた worker だけである
+                    sched.run.set_live(handles.len() + 1);
                     // 1つも作れなければ worker 0 だけで続ける
                     sched.workers = match handles.len() {
                         0 => Workers::Denied,
@@ -1027,7 +1036,10 @@ fn run_scheduled<M: Mode, P: Policy>(
         cells::sweep_all(&sched.cells, ctx, task.depth_offset)
             .map_err(|fault| at_finish(fault.into()))
     });
-    let tasks = sched.cells.lock().stats;
+    let (tasks, placed_tasks) = {
+        let cells = sched.cells.lock();
+        (cells.stats, cells.placed_tasks)
+    };
     // join の後に、ほかのスレッドが積んだ解放をすべてのヒープで取り込む。この後はどのスレッドも解放を積まない
     // (docs/spec/vm.md の「誤り、止めること、終わり」)
     if workers > 0 {
@@ -1058,6 +1070,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         others,
         workers,
         placed: sched.run.placed.load(std::sync::atomic::Ordering::Relaxed),
+        placed_tasks,
         panic,
     };
     (result, scheduled)

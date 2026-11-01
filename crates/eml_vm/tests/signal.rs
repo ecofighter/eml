@@ -334,8 +334,8 @@ main () = Async.run (fn () -> Signal.wait Signal.Terminate)
     assert!(matches!(error, eml_vm::RuntimeError::Deadlock), "{error:?}");
 }
 
-/// worker が2つの run でも、保留のシグナルは worker 0 の待つタスクに届く。先に `par` で worker を作り、右の子は
-/// worker 1 で動く。
+/// worker が2つの run でも、保留のシグナルは待つタスクに届く。先に `par` で worker を作り、右の子は worker 1 で動く。
+/// 待つタスクは、置く最初のタスクなので worker 1 に置く。
 #[test]
 fn a_pending_signal_reaches_a_waiter_on_two_workers() {
     let src = "\
@@ -357,6 +357,38 @@ main () =
         assert!(run.poked, "{sched:?}: no task waited");
         assert!(run.result.is_ok(), "{sched:?}: {:?}", run.result);
         assert_eq!(run.stdout, "3\n", "{sched:?}");
+        assert!(run.closed.is_ok(), "{sched:?}: {:?}", run.closed);
+    }
+}
+
+/// worker を作るのが最初の `start` でも、保留のシグナルは worker 1 に置いた待つタスクに届く。集めた worker が mail の
+/// シグナルを届け、待ち手の持ち主の worker 1 が再開する (docs/spec/vm.md の「上限と割り込み」)。
+#[test]
+fn a_pending_signal_reaches_a_waiter_on_worker_1() {
+    let src = "\
+import Async
+import Signal
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start (fn () ->
+      Signal.wait Signal.Terminate
+      println \"got\")
+    Async.await t)
+";
+    for sched in [Sched::Sequential, Sched::Normal, Sched::Seeded(1)] {
+        let run = run_real_on(2, src, sched, Vec::new(), terminate_when_watched);
+        assert!(run.poked, "{sched:?}: no task waited");
+        let finished = run
+            .result
+            .unwrap_or_else(|error| panic!("{sched:?}: {error:?}"));
+        assert_eq!(
+            (finished.workers, finished.placed_tasks),
+            (1, 1),
+            "{sched:?}"
+        );
+        assert_eq!(run.stdout, "got\n", "{sched:?}");
         assert!(run.closed.is_ok(), "{sched:?}: {:?}", run.closed);
     }
 }

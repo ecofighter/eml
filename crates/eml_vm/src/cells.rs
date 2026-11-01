@@ -1071,6 +1071,9 @@ pub(crate) struct Registry {
     slots: Vec<(u32, Option<CellKind>)>,
     free: Vec<u32>,
     pub(crate) stats: TaskStats,
+    /// 持ち主を `start` を実行した worker と違う worker にしたタスクの数。両方のモードで数え、`RunStats` には入れない
+    /// (docs/spec/vm.md の「`Async` のタスク」)。
+    pub(crate) placed_tasks: u64,
     /// worker ごとの区画。添字が worker の番号である。
     parts: Vec<Part>,
     /// シグナルの番号ごとの、待ち始めた順の待ち手。項はいつも生きていて、`wait == Some(Wait::Signal(その番号))` である。
@@ -1102,6 +1105,7 @@ impl Registry {
             slots: generations.into_iter().map(|g| (g, None)).collect(),
             free,
             stats: TaskStats::default(),
+            placed_tasks: 0,
             parts: (0..workers.max(1)).map(|_| Part::new()).collect(),
             signal_waiters: [Vec::new(), Vec::new()],
             unheard: 0,
@@ -1115,9 +1119,16 @@ impl Registry {
         self.bins[k] = Some(bin);
     }
 
-    /// host `k` の bin。run の始めに覚えていなければ、host のスレッドで driver の bin `raw` から作って覚える。
-    fn host_bin(&mut self, k: u32, raw: Arc<HandleBin>) -> Arc<HostBin> {
-        Arc::clone(self.bins[k as usize].get_or_insert_with(|| Arc::new(HostBin::new(raw))))
+    /// host `k` の bin。driver を持つ worker は run の始めに bin を覚え、run の表の欄にも置く。ほかの worker はその欄の
+    /// 印を見て host を起こすので、欄にない bin を作ると、落としたハンドルを閉じさせる起こしが届かない
+    /// (docs/spec/vm.md の「操作の記録」)。run の始めを通らない単体テストだけは、ここで driver の bin `raw` から作る。
+    fn host_bin(&mut self, k: u32, raw: Arc<HandleBin>) -> Result<Arc<HostBin>, CellFault> {
+        let bin = &mut self.bins[k as usize];
+        if bin.is_none() && cfg!(test) {
+            *bin = Some(Arc::new(HostBin::new(raw)));
+        }
+        bin.clone()
+            .ok_or(CellFault::Internal("a host has no bin for its handles"))
     }
 
     /// 予定した仮想のシグナル (期限のミリ秒とビットの組) を、並びの順に worker 0 の時間の輪へ載せる。run の始めに、
@@ -1549,6 +1560,7 @@ impl Registry {
         self.scope_mut(scope)?.members.push(cell);
         self.stats.tasks += 1;
         if owner != here.me {
+            self.placed_tasks += 1;
             here.post.place(owner, cell, worker, g);
             return Ok(Some((cell, None)));
         }
@@ -3446,7 +3458,7 @@ pub(crate) fn run_io<M: Mode>(
             };
             let raw = driver.bin();
             let mut cells = shared.lock();
-            let bin = cells.host_bin(here.me, raw);
+            let bin = cells.host_bin(here.me, raw)?;
             settle_arrival(
                 &mut cells,
                 here,
@@ -3506,7 +3518,8 @@ fn settle_arrival<M: Mode>(
 
 /// 集める地点で、host の `here.me` の driver の完了を driver の順に記録へ置き、自分が持ち主の記録は当てて、待つタスクを
 /// 再開する仕事を `out` に積む。ほかの worker が持ち主の記録は、その持ち主へ `Completion` を送る。driver に出した操作が
-/// あるときだけ呼ぶ。数は集める地点がほかの読みと同じ区間で読む。完了は1つの lock の区間で続けて置き、当てた結果が
+/// あるときと、ほかの worker が落としたハンドルを driver に閉じさせるときだけ呼ぶ。driver は完了を問われたときに bin を
+/// 空にするためである。数は集める地点がほかの読みと同じ区間で読む。完了は1つの lock の区間で続けて置き、当てた結果が
 /// 次の操作を出すときだけ lock を放して出す。出した操作がその場で終われば、次の完了より先に当てる
 /// (docs/spec/vm.md の「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
@@ -3529,7 +3542,10 @@ pub(crate) fn complete<M: Mode>(
     let mut bin = None;
     loop {
         let mut cells = shared.lock();
-        let bin = &*bin.get_or_insert_with(|| cells.host_bin(here.me, Arc::clone(&raw)));
+        let bin = &*match &mut bin {
+            Some(bin) => bin,
+            slot => slot.insert(cells.host_bin(here.me, Arc::clone(&raw))?),
+        };
         let mut rest = true;
         for Completion {
             key,
@@ -6508,6 +6524,26 @@ fn a_handle_dropped_under_the_registry_lock_does_not_deadlock() {
     assert!(matches!(shared.mail.take(0)[..], [MailItem::HandleDropped(c)] if c == cell));
 }
 
+/// 登録表の lock を持ったまま、host のスレッドでないスレッドでストリームを落としても、破棄処理は host の bin の葉の
+/// lock だけを取るので止まらない。落としたハンドルは bin に積まれ、host を起こす印が立つ (docs/spec/vm.md の
+/// 「セルと登録表」「操作の記録」)。
+#[test]
+fn a_stream_dropped_under_the_registry_lock_does_not_deadlock() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let mut ctx = test_ctx();
+    // テストのスレッドを host でない worker とするため、host のスレッドが別にある bin を作る
+    let bin = std::thread::spawn(|| Arc::new(HostBin::new(Arc::default())))
+        .join()
+        .unwrap();
+    let stream = stream_on(&mut ctx, 7, Arc::clone(&bin));
+    {
+        let _cells = shared.lock();
+        unsafe { ctx.heap_mut().decref(stream) }.unwrap();
+    }
+    assert_eq!(*bin.bin.dropped.lock().unwrap(), [7]);
+    assert!(bin.take_ring());
+}
+
 /// 持ち主が自分のタスクの取り消しは、落ちたハンドルとシグナルと同じ mail に積んだ順に出る。持ち主がほかの worker の
 /// タスクの取り消しは、mail に積まずに持ち主の受け箱へ送る。ほかの worker は、持ち主の取り消しの項を順を保って残し、
 /// ほかの項だけを取り出す (docs/spec/vm.md の「取り消しの届け方」)。
@@ -6677,15 +6713,29 @@ pub(crate) fn arrival_of(shared: &Shared, token: i64) -> Option<bool> {
     record.arrival.as_ref().map(|&(_, cancelled)| cancelled)
 }
 
+/// タスク `cell` に取り消しの印を付ける。待ちは外さない。
+#[cfg(test)]
+pub(crate) fn flag_cancel(shared: &Shared, cell: CellRef) {
+    shared.lock().task_mut(cell).unwrap().cancel = true;
+}
+
+/// 記録 `token` が、`main` の `Finish` で残ったタスクとみなす状態 (driver に出したままか置いたまま) か。
+#[cfg(test)]
+pub(crate) fn op_left(shared: &Shared, token: i64) -> bool {
+    let mut cells = shared.lock();
+    let record = cells.op_mut(CellRef::decode(token)).unwrap();
+    record.submitted || record.pending_op.is_some()
+}
+
 /// 預かる ID を開かない channel。品物は即値だけを使い、預かり先を閉じないテストで使う。
 #[cfg(test)]
-fn test_chan(shared: &Shared, cap: i64) -> i64 {
+pub(crate) fn test_chan(shared: &Shared, cap: i64) -> i64 {
     shared.lock().new_chan(cap, Depot::of(0))
 }
 
 /// ほかの worker の送りを表す。予約して、同じ worker が即値 `n` を積んで確定する。起こした待ち手を返す。
 #[cfg(test)]
-fn send_now(shared: &Shared, c: i64, n: i64) -> Vec<Woken> {
+pub(crate) fn send_now(shared: &Shared, c: i64, n: i64) -> Vec<Woken> {
     let mut hold = None;
     assert_eq!(
         shared
@@ -6717,7 +6767,7 @@ fn push_held(shared: &Shared, hold: &mut Option<Hold>, c: i64, n: i64) -> Vec<Wo
 
 /// タスク `me` を channel `c` の受け手として待たせる。
 #[cfg(test)]
-fn park_receiver(shared: &Shared, c: i64, me: CellRef) {
+pub(crate) fn park_receiver(shared: &Shared, c: i64, me: CellRef) {
     let mut out = Vec::new();
     let run = shared
         .lock()

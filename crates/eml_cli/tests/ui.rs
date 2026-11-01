@@ -278,8 +278,7 @@ const SEEDS: [u64; 2] = [1, 2026];
 /// 「seed で流す」)。
 const WORKER_COUNTS: [usize; 2] = [2, 8];
 
-/// 複数の worker で流すのは `par/` だけである。`Async` のタスクと driver は worker 0 の上だけで動くので、`async/` を
-/// N >= 2 で流しても確かめることがない。
+/// 複数の worker で流すのは `par/` だけである (docs/implementation/testing.md の「seed で流す」)。
 fn workers_run(suffix: &str) -> bool {
     suffix.starts_with("par/")
 }
@@ -425,6 +424,7 @@ fn stats_are_compared_by_cancellations_and_channels() {
                 preemptions: 1,
                 workers: 0,
                 placed: 0,
+                placed_tasks: 0,
             }
         });
         Ran {
@@ -468,6 +468,7 @@ fn stats_of_driver_runs_are_compared_without_the_work_counts() {
                 preemptions: 1,
                 workers: 0,
                 placed: 0,
+                placed_tasks: 0,
             }),
         }
     };

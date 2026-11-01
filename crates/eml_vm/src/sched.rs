@@ -1511,6 +1511,85 @@ mod tests {
         assert!(leaks.is_empty(), "{leaks:?}");
     }
 
+    /// worker 1 のタスクの読みに host が結果を置き、持ち主が当てる前に run が終わる。結果を置いただけの記録は driver に
+    /// 出したままでも置いたままでもないので終わりの確かめを通り、worker 0 の `sweep_all` が、worker 1 のヒープの buffer
+    /// とストリームを記録の ID の下で落とす。取り込んだ後はどちらのヒープにも漏れがない (docs/spec/vm.md の
+    /// 「誤り、止めること、終わり」)。
+    #[test]
+    fn an_op_record_left_on_worker_1_is_swept() {
+        let mut f = forwarding();
+        let worker = unsafe { f.owner_ctx.heap_mut() }.fork_worker();
+        cells::task_on(&f.shared, 1, worker, false);
+        let post = Mailer::new(&f.run, &f.control);
+        let here = Here {
+            me: 1,
+            host: 0,
+            mail: &f.shared.mail,
+            post: &post,
+        };
+        let (shared, near, bin) = (&f.shared, f.near, &f.bin);
+        let token = cells::with_worker(&mut f.owner_ctx, worker, 0, |ctx| {
+            let buf = unsafe { ctx.heap_mut() }.alloc_bytes_room(64);
+            let stream = cells::stream_on(ctx, near, Arc::clone(bin));
+            cells::submit_read(shared, &here, ctx, None, worker, 0, buf, stream).unwrap()
+        });
+        f.host.gather(&mut f.host_ctx, 0, false).unwrap();
+        f.write_far(b"ab");
+        f.host.gather(&mut f.host_ctx, 0, true).unwrap();
+        // 結果は置いたが、持ち主はまだ当てていない
+        assert_eq!(cells::arrival_of(&f.shared, token), Some(false));
+        assert_eq!(f.shared.lock().in_flight(0), 0);
+        assert!(!cells::op_left(&f.shared, token));
+        cells::sweep_all(&f.shared, &mut f.host_ctx, 0).unwrap();
+        f.owner_ctx.reclaim();
+        f.host_ctx.reclaim();
+        let leaks = f.owner_ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
+        let leaks = f.host_ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
+    }
+
+    /// worker 1 が持ち主の、channel の受けで待つタスクに、ほかの worker の送りが起こしを、取り消しが取り消しを送る。
+    /// 送りが先に待ちを下ろしたので、持ち主の受け箱に2つがどの順で届いても、集める地点は誤りにせず、タスクを `Woke` で
+    /// 再開する (docs/spec/vm.md の「取り消しの届け方」)。
+    #[test]
+    fn a_channel_wake_and_a_cancel_for_one_task_agree_in_either_order() {
+        for wake_first in [true, false] {
+            let Worker1 {
+                control,
+                run,
+                shared,
+                mut sched,
+                mut ctx,
+            } = worker_1();
+            let c = cells::test_chan(&shared, 0);
+            let r = cells::task_on(&shared, 1, 0, false);
+            cells::park_receiver(&shared, c, r);
+            let mut out = cells::send_now(&shared, c, 4);
+            assert_eq!(out.len(), 1);
+            let wake = Notice::Wake(out.remove(0));
+            cells::flag_cancel(&shared, r);
+            let cancel = Notice::Cancel(r);
+            let notices = if wake_first {
+                [wake, cancel]
+            } else {
+                [cancel, wake]
+            };
+            for notice in notices {
+                run.send(&control, 1, notice);
+            }
+            sched.gather(&mut ctx, 0, false).unwrap();
+            assert!(
+                matches!(
+                    sched.runnables[..],
+                    [Runnable::Resume { cell, wake: cells::WOKE, .. }] if cell == r
+                ),
+                "wake first: {wake_first}"
+            );
+            sched.runnables.clear();
+        }
+    }
+
     /// 待ち手のいないシグナルを worker 1 が届けると、止めるビットをすべての worker の語に立てて止まる。
     #[test]
     fn an_unheard_signal_drained_by_worker_1_raises_every_word() {

@@ -8,6 +8,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, Scope, ScopedJoinHandle};
+use std::time::{Duration, Instant};
 
 use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop, Word};
 
@@ -108,19 +109,19 @@ impl Post for Mailer<'_> {
 /// いつも `Peer` を持つ (docs/spec/vm.md の「タスクとスケジュール」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Workers {
-    /// 起動の条件を満たしている。最初の `par` の fork で作る。worker 0 だけが持つ。
+    /// 起動の条件を満たしている。最初の `par` の fork か、タスクを置く最初の `start` で作る。worker 0 だけが持つ。
     Wanted,
     /// 作った。数は worker 0 を除く。
     Started(usize),
     /// 作らない。条件を満たさないか、1つも作れなかった。
     Denied,
-    /// worker 1..N-1 の `Scheduler`。worker を作る判断はせず、右の子を置くことだけをする。作り直しの印 (`Wanted`) を
-    /// 持たないので、worker を作るために戻る先のない実行の繰り返しが、fork から抜けることはない。
+    /// worker 1..N-1 の `Scheduler`。worker を作る判断はせず、右の子とタスクを置くことだけをする。作り直しの印
+    /// (`Wanted`) を持たないので、worker を作るために戻る先のない実行の繰り返しが、fork や `start` から抜けることはない。
     Peer,
 }
 
 impl Workers {
-    /// 右の子をほかの worker に置いてよいか。
+    /// 右の子と `Async` のタスクをほかの worker に置いてよいか。
     pub(crate) fn places(self) -> bool {
         matches!(self, Workers::Started(_) | Workers::Peer)
     }
@@ -180,6 +181,12 @@ pub(crate) struct Run {
     pub(crate) in_flight: AtomicUsize,
     /// ほかの worker に置いた右の子の数。どの worker の fork も足す。
     pub(crate) placed: AtomicU64,
+    /// 次に置く `Async` のタスクの持ち主を決める数。1 から始め、`start` のたびに1つ進めて、作った worker の数で割った
+    /// 余りを持ち主にする (docs/spec/vm.md の「`Async` のタスク」)。
+    next_place: AtomicUsize,
+    /// 作った worker の数で、worker 0 を含む。worker を作った worker 0 が、作り直した命令をやり直す前に1回だけ書く。
+    /// 作れなかった worker の欄には置かないためである。
+    live: AtomicUsize,
     /// 受け箱が空で待ちに入った worker の番号。重ならない。
     idle: Mutex<Vec<usize>>,
     /// run の時間の基準。VM が時刻を読む道はこれだけである (docs/spec/vm.md の「時計と driver」)。
@@ -234,12 +241,27 @@ impl Run {
             running: AtomicUsize::new(1),
             in_flight: AtomicUsize::new(0),
             placed: AtomicU64::new(0),
+            next_place: AtomicUsize::new(1),
+            live: AtomicUsize::new(1),
             idle: Mutex::new(Vec::new()),
             clock,
             bell,
             fatal: Mutex::new(None),
             counters,
         }
+    }
+
+    /// worker 1..N-1 を作った後に、作れた数 (worker 0 を含む) を書く。
+    pub(crate) fn set_live(&self, n: usize) {
+        self.live.store(n, Ordering::Release);
+    }
+
+    /// 次に始める `Async` のタスクの持ち主。作った worker を 1 から順に回る。数えるだけの数なので Relaxed で足し、
+    /// 作った数は worker 0 が書いた後の知らせを受けてから読むので、Acquire で足りる (docs/spec/vm.md の
+    /// 「`Async` のタスク」)。
+    pub(crate) fn next_owner(&self) -> u32 {
+        let live = self.live.load(Ordering::Acquire);
+        (self.next_place.fetch_add(1, Ordering::Relaxed) % live) as u32
     }
 
     /// worker `k` のタスクの driver の操作を受け付ける worker (host)。driver を持つのは worker 0 だけなので、どの worker の
@@ -392,12 +414,26 @@ impl Run {
         self.leave_idle(k);
     }
 
-    /// worker `k` (`k` ≥ 1) が眠った形で起こされるのを待つ。届いた知らせは受け箱に残し、続く集める地点が取る。
-    fn park_wait(&self, k: usize) {
+    /// worker `k` (`k` ≥ 1) が眠った形で起こされるのを待つ。届いた知らせは受け箱に残し、続く集める地点が取る。`until`
+    /// があれば、その時刻に自分で起きた形に戻る。
+    fn park_wait(&self, k: usize, until: Option<Instant>) {
         let slot = &self.slots[k];
         let mut state = lock(&slot.state);
         while state.parked {
-            state = slot.cv.wait(state).unwrap_or_else(PoisonError::into_inner);
+            let Some(until) = until else {
+                state = slot.cv.wait(state).unwrap_or_else(PoisonError::into_inner);
+                continue;
+            };
+            let now = Instant::now();
+            if now >= until {
+                self.unpark_locked(&mut state);
+                break;
+            }
+            state = slot
+                .cv
+                .wait_timeout(state, until - now)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
         }
         state.woken = false;
         drop(state);
@@ -407,9 +443,18 @@ impl Run {
     /// worker `k` (`k` ≥ 1) の空きの待ち。受け箱が空なら空きの集まりに入って眠り、起こされたら戻る。最後に眠った
     /// worker は worker 0 を起こす。worker 0 が、ほかの worker が動いている間は仮想の時計を進めずに待つためである
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
-    fn idle_wait(&self, control: &Control, k: usize) {
+    fn idle_wait(&self, control: &Control, k: usize, until: Option<Instant>) {
         if self.park_idle(control, k) {
-            self.park_wait(k)
+            self.park_wait(k, until)
+        }
+    }
+
+    /// 本物の時計の run の始めの時刻。ほかの時計では `None` である。満期の判定は始めから経た時間を切り捨てて読むので、
+    /// 始めから期限のミリ秒だけ後に起きれば、期限が来ている。
+    pub(crate) fn real_epoch(&self) -> Option<Instant> {
+        match &self.clock {
+            RunClock::Real { epoch } => Some(*epoch),
+            RunClock::Virtual(_) | RunClock::Injected => None,
         }
     }
 
@@ -496,9 +541,9 @@ pub(crate) fn settle(
     }
 }
 
-/// worker 1..N-1 を作る。作るのは worker 0 で、最初の `par` の fork のときに1回だけである。どの worker も眠って
-/// 空いている形で始める。worker `k` を作れなければ、それより後は作らず、作れた worker だけを使う
-/// (docs/spec/vm.md の「タスクとスケジュール」)。
+/// worker 1..N-1 を作る。作るのは worker 0 で、最初の `par` の fork か、タスクを置く最初の `start` のときに1回だけ
+/// である。どの worker も眠って空いている形で始める。worker `k` を作れなければ、それより後は作らず、作れた worker
+/// だけを使う (docs/spec/vm.md の「タスクとスケジュール」)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
     scope: &'scope Scope<'scope, '_>,
@@ -615,7 +660,7 @@ fn work<M: Mode, P: Policy>(
     k: usize,
     max_depth: usize,
 ) -> Done {
-    run.park_wait(k);
+    run.park_wait(k, None);
     let mut sched = Scheduler::worker(
         policy,
         Arc::clone(run),
@@ -703,9 +748,19 @@ impl<P: Policy> Scheduler<P> {
         let run = Arc::clone(&self.run);
         let k = self.index;
         // worker 1..N-1 は driver を持たないので、起こされるまで眠るだけである。デッドロックと仮想の時計は worker 0 が
-        // 受け持つ
+        // 受け持つ。本物の時計では、自分の区画のいちばん早い期限に自分で起きる。worker 0 は自分の区画の期限でしか
+        // 起きないためである (docs/spec/vm.md の「時計と driver」)
         if k != 0 {
-            run.idle_wait(&self.watcher.control, k);
+            // ほかの時計では登録表を読まない。`par` だけの run の空きの待ちに lock を足さないためである
+            let until = match run.real_epoch() {
+                Some(epoch) => self
+                    .cells
+                    .lock()
+                    .next_deadline(k)
+                    .and_then(|deadline| epoch.checked_add(Duration::from_millis(deadline))),
+                None => None,
+            };
+            run.idle_wait(&self.watcher.control, k, until);
             return Ok(());
         }
         if run.take_wake(k) {
@@ -727,7 +782,7 @@ impl<P: Policy> Scheduler<P> {
             run.running.fetch_sub(1, Ordering::AcqRel) - 1
         };
         // (c)
-        let (d_all, elsewhere, pending, listening) = {
+        let (d_all, d_own, elsewhere, pending, listening) = {
             let cells = self.cells.lock();
             let mut d_all: Option<u64> = None;
             let mut elsewhere = false;
@@ -737,6 +792,7 @@ impl<P: Policy> Scheduler<P> {
             }
             (
                 d_all,
+                cells.next_deadline(k),
                 elsewhere,
                 cells.in_flight_all(),
                 cells.relay && cells.signal_bits() != 0,
@@ -746,11 +802,8 @@ impl<P: Policy> Scheduler<P> {
         self.cells.mail.run_hook();
         // OS のシグナルを待つタスクがいれば、ほかに進むものがなくてもシグナルが来るまで眠る。届いたときは監視の
         // スレッドが起こす
-        let deadline = if listening {
-            d_all.or(Some(u64::MAX))
-        } else {
-            d_all
-        };
+        let listen = |d: Option<u64>| if listening { d.or(Some(u64::MAX)) } else { d };
+        let deadline = listen(d_all);
         let mut state = lock(&slot.state);
         // (d) ほかの worker は mail を処理して知らせを送ってから眠り、監視のスレッドは mail に積んで `NOTICE` を立ててから
         // 起こすので、その途中の run をデッドロックにしない
@@ -776,6 +829,8 @@ impl<P: Policy> Scheduler<P> {
             }
         }
         let virtual_ = self.driver_kind == DriverKind::Virtual;
+        // 本物の時計では、ほかの worker は自分の区画の期限に自分で起きるので、worker 0 は自分の区画の期限まで待つ
+        let deadline = if virtual_ { deadline } else { listen(d_own) };
         // 仮想の時計を進めてよいのは、どの worker も動いておらず、どの受け箱にも知らせがないときだけである。進める先は
         // すべての区画のいちばん早い期限である
         let waited = if virtual_ && others == 0 && (deadline.is_some() || pending > 0) {
@@ -796,9 +851,9 @@ impl<P: Policy> Scheduler<P> {
             None => Ok(()),
             Some(waited) => {
                 run.unpark(k);
-                // ほかの worker の区画の満期は、その持ち主が自分の集める地点で外す。driver を持たない持ち主は自分では
-                // 起きないので、期限が来た区画の持ち主を起こす
-                if elsewhere {
+                // ほかの worker の区画の満期は、その持ち主が自分の集める地点で外す。仮想の時計を進めるのは worker 0
+                // だけなので、期限が来た区画の持ち主を起こす
+                if virtual_ && elsewhere {
                     self.wake_due_owners()?;
                 }
                 match waited {
@@ -1046,6 +1101,20 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             Err(VmFault::Internal("a task is left at the end"))
         );
         assert_eq!(super::end_check(false, false), Ok(()));
+    }
+
+    /// `start` は作った worker を worker 1 から順に回って持ち主にする。3つの worker では 1、2、0 を繰り返す。作れた
+    /// worker が少なければ、その数で回る (docs/spec/vm.md の「`Async` のタスク」)。
+    #[test]
+    fn placement_rotates_over_every_worker() {
+        let run = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
+        run.set_live(3);
+        let owners: Vec<u32> = (0..6).map(|_| run.next_owner()).collect();
+        assert_eq!(owners, [1, 2, 0, 1, 2, 0]);
+        let run = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
+        run.set_live(2);
+        let owners: Vec<u32> = (0..4).map(|_| run.next_owner()).collect();
+        assert_eq!(owners, [1, 0, 1, 0]);
     }
 
     /// まだ始めていない worker の欄を起こしても、`running` には数えない。

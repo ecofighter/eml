@@ -555,8 +555,8 @@ fn work_loop<R: Exec>(
 pub(crate) enum Exit {
     /// エントリのタスクが `Finish` に着いた。
     Finished,
-    /// 最初の `par` の fork が worker 1..N-1 を求めた。命令の位置はその `par` に戻してあるので、worker を作った後に
-    /// もう一度 `run` を呼ぶと、同じ fork から続く (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 最初の `par` の fork か `start` が worker 1..N-1 を求めた。命令の位置はその命令に戻してあるので、worker を作った
+    /// 後にもう一度 `run` を呼ぶと、同じ命令から続く (docs/spec/vm.md の「タスクとスケジュール」)。
     Spawn,
 }
 
@@ -1161,7 +1161,7 @@ fn unwind<R: Exec>(
 /// join が見つけた子の誤りを `Scheduler::failed` に置いたことを、実行の繰り返しに伝える印。外には出ない。
 const CHILD_FAILED: VmFault = VmFault::Internal("a child failure is waiting in the scheduler");
 
-/// `par` の fork が worker 1..N-1 を作るよう求めたことを、実行の繰り返しに伝える印。外には出ない。
+/// `par` の fork か、タスクを置く `start` が worker 1..N-1 を作るよう求めたことを、実行の繰り返しに伝える印。外には出ない。
 const SPAWN_WORKERS: VmFault = VmFault::Internal("the first fork waits for the workers");
 
 /// `par` の fork。親の文脈で、右の子に ID を出して閉包と子の `evv` に印を付け、右の子をまだ始めずに列に入れ、左の子を
@@ -1816,7 +1816,7 @@ fn task_failed<R: Exec>(
     sched: &mut Scheduler<R::P>,
     mut failure: Failure,
 ) -> Result<(), RuntimeError> {
-    // worker を求めた fork は誤りでなく、位置をその `par` に戻して実行の繰り返しを抜ける。印をここで見るのは、
+    // worker を求めた fork と `start` は誤りでなく、位置をその命令に戻して実行の繰り返しを抜ける。印をここで見るのは、
     // 繰り返しの命令の列を変えないためである (docs/spec/vm.md の「タスクとスケジュール」)
     if failure.fault == SPAWN_WORKERS {
         task.pc = failure.pc;
@@ -1999,10 +1999,14 @@ fn async_op<R: Exec>(
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、行がそれを預かる
     match Extern::ALL[o[0] as usize] {
         Extern::AsyncStartRaw => {
+            // 置く `start` も `par` の fork と同じく、何も読まずに worker を求めて、作った後にやり直す
+            // (docs/spec/vm.md の「タスクとスケジュール」)
+            if sched.workers == Workers::Wanted {
+                return Err(SPAWN_WORKERS);
+            }
             let cell = current_cell(task)?;
             let scope = sched.cells.lock().current_of(cell)?;
-            // タスクは呼んだ worker に置く (docs/spec/vm.md の「`Async` のタスク」)
-            let owner = sched.me();
+            let owner = place_owner(sched);
             let (handle, run) = start_task::<R>(ctx, task, sched, scope, owner, task.get(arg(0)))?
                 .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
             task.set(dst, handle);
@@ -2116,11 +2120,14 @@ fn async_op<R: Exec>(
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncStartInRaw => {
+            // `start_raw` と同じく、worker を求めるときは何も読まずにやり直す
+            if sched.workers == Workers::Wanted {
+                return Err(SPAWN_WORKERS);
+            }
             current_cell(task)?;
             let g = task.get(arg(1));
             let scope = sched.cells.lock().scope_cell(task.raw(arg(0)));
-            // `start_raw` と同じく、タスクは呼んだ worker に置く
-            let owner = sched.me();
+            let owner = place_owner(sched);
             let started = match scope {
                 Some(scope) => start_task::<R>(ctx, task, sched, scope, owner, g)?,
                 None => None,
@@ -2668,6 +2675,15 @@ fn raise_again<R: Exec>(
     }
 }
 
+/// `start` が新しいタスクを置く worker。worker を作った run では、作った worker を worker 1 から順に回り、作らない
+/// run では呼んだ worker である。タスクは置いた worker から動かない (docs/spec/vm.md の「`Async` のタスク」)。
+fn place_owner<P: Policy>(sched: &Scheduler<P>) -> u32 {
+    match sched.workers.places() {
+        true => sched.run.next_owner(),
+        false => sched.me(),
+    }
+}
+
 /// 今の `Task` から、スコープ `scope` に worker `owner` を持ち主とする新しいタスクを置く。閉包 `g` とまだ印のない根に、
 /// 新しいタスクの ID で印を付ける。返す仕事は、持ち主が自分のときだけある。
 fn start_task<R: Exec>(
@@ -2815,6 +2831,11 @@ fn entry_finish<R: Exec>(
             ctx.evv_set(Word::UNIT)?;
         }
         cells::end_with_exit(ctx.heap().control(), n);
+        // ほかの worker の `exit` は、worker 0 に止まらせるために `END` を立てる。抜けるときにすべての worker を起こすので、
+        // 眠っている worker 0 もそれを読む (docs/spec/vm.md の「誤り、止めること、終わり」)
+        if sched.index != 0 {
+            ctx.heap().control().end_run();
+        }
         return Err(VmFault::Stopped(Stop::Ended));
     }
     if ctx.yielding() != 0 || !task.boundaries.is_empty() {
