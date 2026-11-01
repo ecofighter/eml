@@ -85,8 +85,22 @@ fn run_real(
     signals: Vec<VirtualSignal>,
     poke: fn(&Control, &Doorbell) -> bool,
 ) -> Real {
+    run_real_on(1, src, sched, signals, poke)
+}
+
+/// `run_real` を、worker を `workers` 個まで持てる `Control` で流す。
+fn run_real_on(
+    workers: usize,
+    src: &str,
+    sched: Sched,
+    signals: Vec<VirtualSignal>,
+    poke: fn(&Control, &Doorbell) -> bool,
+) -> Real {
     let program = eml_test_support::lir(src);
-    let control = Arc::new(Control::new(Limits::default()));
+    let control = Arc::new(Control::new(Limits {
+        workers,
+        ..Limits::default()
+    }));
     let doorbell = Doorbell::new().unwrap();
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host)
@@ -318,4 +332,96 @@ main () = Async.run (fn () -> Signal.wait Signal.Terminate)
     watchdog.join().unwrap();
     let error = result.unwrap_err();
     assert!(matches!(error, eml_vm::RuntimeError::Deadlock), "{error:?}");
+}
+
+/// worker が2つの run でも、保留のシグナルは worker 0 の待つタスクに届く。先に `par` で worker を作り、右の子は
+/// worker 1 で動く。
+#[test]
+fn a_pending_signal_reaches_a_waiter_on_two_workers() {
+    let src = "\
+import Async
+import Signal
+import Std.Par
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (a, b) = Par.par (fn () -> 1) (fn () -> 2)
+  Async.run (fn () ->
+    let t = Async.start (fn () ->
+      Signal.wait Signal.Terminate
+      println (show (a + b)))
+    Async.await t)
+";
+    for sched in [Sched::Sequential, Sched::Normal, Sched::Seeded(1)] {
+        let run = run_real_on(2, src, sched, Vec::new(), terminate_when_watched);
+        assert!(run.poked, "{sched:?}: no task waited");
+        assert!(run.result.is_ok(), "{sched:?}: {:?}", run.result);
+        assert_eq!(run.stdout, "3\n", "{sched:?}");
+        assert!(run.closed.is_ok(), "{sched:?}: {:?}", run.closed);
+    }
+}
+
+/// worker が2つの run で、届けた後の2つ目の `Terminate` が run を止める。`a_busy_worker_collects_a_signal_and_a_second_one_stops_it`
+/// の前に `par` を置いて worker を作る。
+#[test]
+fn a_second_terminate_stops_a_run_on_two_workers() {
+    let src = "\
+import Async
+import Signal
+import Std.Par
+
+spin : Int -> <Panic> Unit
+spin n = spin (n + 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (a, b) = Par.par (fn () -> 1) (fn () -> 2)
+  Async.run (fn () ->
+    Async.spawn (fn () ->
+      Signal.wait Signal.Terminate
+      println (show (a + b)))
+    Async.yield_now ()
+    spin 0)
+";
+    fn poke(control: &Control, doorbell: &Doorbell) -> bool {
+        if !terminate_when_watched(control, doorbell) {
+            return false;
+        }
+        if !until(|| control.watched() == 0) {
+            return false;
+        }
+        control.terminate();
+        doorbell.ring();
+        true
+    }
+    let run = run_real_on(2, src, Sched::Sequential, Vec::new(), poke);
+    assert!(run.poked, "the signal was not collected");
+    let error = run.result.unwrap_err();
+    assert!(error.terminated(), "{error:?}");
+}
+
+/// worker が2つの run で、右の子が worker 1 で回り続け、worker 0 は join で眠る。割り込みは worker 1 が自分の語で
+/// 読み、抜けるときに worker 0 を起こす。
+#[test]
+fn an_interrupt_stops_a_run_on_two_workers() {
+    let src = "\
+import Std.Par
+
+spin : Int -> <Panic> Int
+spin n = spin (n + 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (a, b) = Par.par (fn () -> 1) (fn () -> spin 0)
+  println (show (a + b))
+";
+    fn poke(control: &Control, doorbell: &Doorbell) -> bool {
+        thread::sleep(Duration::from_millis(20));
+        control.interrupt();
+        doorbell.ring();
+        true
+    }
+    let run = run_real_on(2, src, Sched::Sequential, Vec::new(), poke);
+    let error = run.result.unwrap_err();
+    assert!(error.interrupted(), "{error:?}");
 }

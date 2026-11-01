@@ -20,10 +20,11 @@ use crate::driver::{ceil_ms, floor_ms};
 use crate::error::{KEPT_PENDING, VmFault};
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
-    JoinId, JoinNode, MAIN, Outcome, POLL_EVERY, Policy, Scheduler, TaskId, TaskState, driver_mut,
+    JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
+    driver_mut,
 };
 use crate::tls;
-use crate::workers::Workers;
+use crate::workers::{Notice, Workers};
 use crate::{RunCounts, RuntimeError};
 
 // 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
@@ -81,6 +82,18 @@ pub struct Task {
     /// `finish_*` が預けたタスクの終わり方。エントリの `Task` の `Finish` が核の `finish` に渡す。タスクの ID の物体が
     /// すべて片付く前に待ち手を起こさないためである (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) outcome: Option<cells::Outcome>,
+    /// ほかの worker に置いた右の子の、親の側の記録。join の節点は親の worker にあるので、子の終わりと誤りは
+    /// `home` へ知らせで送る (docs/spec/vm.md の「`par` の fork と join」)。
+    pub(crate) placed: Option<Placed>,
+}
+
+/// 置いた右の子が親について知ること。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Placed {
+    /// 親の worker の番号。
+    pub(crate) home: usize,
+    /// fork した `par` の命令の位置。子を始めるときの誤りに付ける。
+    pub(crate) at: Pc,
 }
 
 /// 誤りと、それが起きた命令の位置。
@@ -120,6 +133,7 @@ impl Task {
             state: TaskState::Running,
             cell: None,
             outcome: None,
+            placed: None,
         }
     }
 
@@ -169,6 +183,7 @@ impl Task {
             },
             cell: Some(cell),
             outcome: None,
+            placed: None,
         }
     }
 
@@ -207,6 +222,32 @@ impl Task {
             state: TaskState::Unstarted(g),
             cell: None,
             outcome: None,
+            placed: None,
+        }
+    }
+
+    /// worker 1..N-1 で、動くタスクのない間に VM の繰り返しが持つ `Task`。スタックも語も持たず、最初の切り替えで
+    /// 表の `MAIN` の欄に退避したまま、二度と動かさない。
+    fn idle() -> Task {
+        Task {
+            stack: Vec::new(),
+            pc: FINISH,
+            base: 0,
+            frame_size: 0,
+            last_ret: FINISH,
+            scratch: Vec::new(),
+            stack_limit: 0,
+            entry: 0,
+            keep_result: false,
+            exit: None,
+            evv: Word::UNIT,
+            worker: 0,
+            depth_offset: 0,
+            boundaries: Vec::new(),
+            state: TaskState::Running,
+            cell: None,
+            outcome: None,
+            placed: None,
         }
     }
 
@@ -453,6 +494,35 @@ pub(crate) fn run<R: Exec>(
             let _abandoned = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
             Err(error)
         }
+    }
+}
+
+/// worker `k` (`k` ≥ 1) の実行の繰り返し。動くタスクのない `Task` から始め、置かれた右の子に切り替えて動かす。
+/// 右の子は `Finish` に着かないので、戻るのは run を止める誤りのときだけで、その誤りを返す。止めた後のタスクは
+/// 巻き戻さずに捨てる (docs/spec/vm.md の「タスクとスケジュール」)。
+pub(crate) fn work<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    sched: &mut Scheduler<R::P>,
+    counts: &mut RunCounts,
+) -> RuntimeError {
+    let mut task = Task::idle();
+    // 動くタスクのない `Task` は `MAIN` の欄に退避し、その番号をどのタスクにも振らない
+    if let Err(fault) = switch_away::<R>(code, ctx, &mut task, sched, Some(TaskState::Ready)) {
+        let pc = task.pc;
+        if let Err(error) = task_failed::<R>(code, ctx, &mut task, sched, Failure { fault, pc }) {
+            return error;
+        }
+    }
+    match run_tasks::<R>(code, ctx, &mut task, sched, counts) {
+        Ok(()) => code.error(
+            Failure {
+                fault: VmFault::Internal("a placed child reached the end of a run"),
+                pc: task.pc,
+            },
+            &task,
+        ),
+        Err(error) => error,
     }
 }
 
@@ -1119,8 +1189,9 @@ fn par<R: Exec>(
         right_outcome: None,
         ret,
         dst,
+        orphan: false,
     });
-    let right = Task::right_child(
+    let mut right = Task::right_child(
         task.entry,
         child,
         fork_evv,
@@ -1129,13 +1200,46 @@ fn par<R: Exec>(
         j,
         g,
     );
-    let right = sched.add_task(right);
-    sched.join(j).right = right;
+    // 空いている worker があれば右の子をその受け箱に置き、なければこの worker の列に入れる
+    // (docs/spec/vm.md の「fork」)
+    let home = match sched.workers.places() {
+        true => sched.run.pop_idle(),
+        false => None,
+    };
+    let local = match home {
+        Some(k) => {
+            // 根に印を付けるのは worker 0 の fork だけなので、置く子が読む根にはもう印が付いている
+            // (docs/spec/object-model.md の「セッションの根」)
+            if <R::M as Mode>::CHECKED && sched.shared_roots != ctx.roots().len() {
+                return Err(VmFault::Internal(
+                    "a placed child may read an unshared root",
+                ));
+            }
+            right.placed = Some(Placed {
+                home: sched.index,
+                at: ret - 1,
+            });
+            sched.join(j).right = PLACED;
+            // 終わりの知らせを受け取るまで、worker 0 はデッドロックを決めない
+            sched.run.in_flight.fetch_add(1, Ordering::AcqRel);
+            sched.run.placed.fetch_add(1, Ordering::Relaxed);
+            let control = std::sync::Arc::clone(&sched.watcher.control);
+            sched.run.send(&control, k, Notice::Child(right));
+            None
+        }
+        None => {
+            let right = sched.add_task(right);
+            sched.join(j).right = right;
+            Some(right)
+        }
+    };
     let base = task.push_frame(ret, dst, BOUNDARY_SIZE);
     task.stack[base + 1] = Word::from_bits(j);
     task.boundaries.push(j);
     apply_to_unit::<R>(code, ctx, task, f, CHILD_DONE, 0)?;
-    sched.ready.push_back(right);
+    if let Some(right) = local {
+        sched.ready.push_back(right);
+    }
     safepoint::<R>(code, ctx, task, sched)
 }
 
@@ -1250,6 +1354,12 @@ fn child_done<R: Exec>(
     let j = task.get(1).bits();
     let open = task.boundaries.pop();
     debug_assert_eq!(open, Some(j), "the innermost boundary is the one that ends");
+    // 置いた右の子の join は親の worker にあるので、この worker の表を引かない
+    if task.boundaries.is_empty()
+        && let Some(placed) = task.placed
+    {
+        return placed_done::<R>(code, ctx, task, sched, placed, j, outcome);
+    }
     if sched.current == sched.join(j).right {
         let join = sched.join(j);
         join.right_outcome = Some(outcome);
@@ -1274,6 +1384,58 @@ fn child_done<R: Exec>(
         at_par(code, task, sched, at, result)
     } else {
         switch_away::<R>(code, ctx, task, sched, Some(TaskState::Waiting(j)))
+    }
+}
+
+/// 置いた右の子が終わった。残りの参照を子の ID のまま手放し、ヒープの worker を戻してから、結果を親の worker へ
+/// 送る。親は知らせを受けた後に join で子の ID を退かせるので、手放すのを公開より先にして、子の ID の物体を残さない
+/// (docs/spec/vm.md の「子の終わりと join」)。
+fn placed_done<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    placed: Placed,
+    j: JoinId,
+    outcome: Outcome,
+) -> Result<(), VmFault> {
+    let rest = unsafe { ctx.switch_task(Word::UNIT, task.worker, task.depth_offset) };
+    unsafe { ctx.heap_mut().decref(rest) }?;
+    // `()` を入れ替えるだけで、返る語も `()` である
+    let _unit = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
+    let control = std::sync::Arc::clone(&sched.watcher.control);
+    sched
+        .run
+        .send(&control, placed.home, Notice::Joined { join: j, outcome });
+    switch_away::<R>(code, ctx, task, sched, None)
+}
+
+/// ほかの worker から届いた知らせを処理する。置かれた右の子はこの worker の番号を振って列の後ろに入れ、置いた子の
+/// 終わりは join の節点に記録して親を起こす。親を失った節点なら、結果に触れずに節点を捨てる。どちらでも
+/// `in_flight` から引くのは受け取った後なので、受け取っていない終わりの知らせがある間は 0 にならない
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
+#[cold]
+#[inline(never)]
+fn receive<P: Policy>(sched: &mut Scheduler<P>) {
+    for notice in sched.run.take_notices(sched.index) {
+        match notice {
+            Notice::Child(task) => {
+                let id = sched.add_task(task);
+                sched.ready.push_back(id);
+            }
+            Notice::Joined { join, outcome } => {
+                let node = sched.join(join);
+                if node.orphan {
+                    // 語は捨てる。誤りで終わる run のヒープは回復で丸ごと捨てる
+                    drop(sched.take_join(join));
+                    drop(outcome);
+                } else {
+                    node.right_outcome = Some(outcome);
+                    wake_parent(sched, join);
+                }
+                sched.run.in_flight.fetch_sub(1, Ordering::Release);
+            }
+        }
     }
 }
 
@@ -1312,6 +1474,15 @@ fn switch_away<R: Exec>(
     // 走れるタスクがなければ、起こされるか次の期限か driver の完了まで待って集め直す。戻るたびに止める語を読む。
     // `PREEMPT` は切り替える先がないので捨てる。デッドロックは空きの待ちが決める (docs/spec/vm.md の「時計と driver」)
     let next = loop {
+        // 置いた右の子の終わりは知らせで届く。待とうとする親はまだ表にいないので、集めた知らせが親の join に
+        // 終わりを届けても起こされない。そのときは待たずにここで join を完了する (docs/spec/vm.md の「子の終わりと join」)
+        if let Some(TaskState::Waiting(j)) = keep
+            && sched.join(j).right_outcome.is_some()
+        {
+            let at = complete_join::<R>(code, ctx, task, sched, j)?;
+            let result = safepoint::<R>(code, ctx, task, sched);
+            return at_par(code, task, sched, at, result);
+        }
         if let Some(next) = sched.policy.pick(&mut sched.ready) {
             break next;
         }
@@ -1376,7 +1547,10 @@ fn resume<R: Exec>(
         TaskState::Unstarted(g) => {
             // 始めたばかりの子はまだ命令を実行していないので、誤りには fork した `par` の命令の位置を付ける。
             // 横取りされたタスクの位置を付けると、文言がスケジュールで変わる
-            let at = sched.join(task.boundaries[0]).ret - 1;
+            let at = match task.placed {
+                Some(placed) => placed.at,
+                None => sched.join(task.boundaries[0]).ret - 1,
+            };
             let result = apply_to_unit::<R>(code, ctx, task, g, CHILD_DONE, 0);
             at_par(code, task, sched, at, result).map(|()| None)
         }
@@ -1423,10 +1597,11 @@ fn collect<R: Exec>(
         .has_notices
         .load(Ordering::Acquire)
     {
-        #[expect(clippy::never_loop, reason = "知らせの種類がまだない")]
-        for notice in sched.run.take_notices(sched.index) {
-            match notice {}
-        }
+        receive(sched);
+    }
+    // driver も登録表も持たない worker 1..N-1 は、知らせのほかに集めるものがない (docs/spec/vm.md の「時計と driver」)
+    if sched.driver.is_none() {
+        return Ok(());
     }
     if look {
         sched.since_poll = 0;
@@ -1734,8 +1909,21 @@ fn task_failed<R: Exec>(
             cancel(sched, inner);
         }
         let j = boundaries[0];
-        sched.join(j).right_outcome = Some(Outcome::Error(error));
-        wake_parent(sched, j);
+        match task.placed {
+            // 置いた右の子の join は親の worker にあるので、誤りを知らせで送る
+            Some(placed) => {
+                let control = std::sync::Arc::clone(&sched.watcher.control);
+                let joined = Notice::Joined {
+                    join: j,
+                    outcome: Outcome::Error(error),
+                };
+                sched.run.send(&control, placed.home, joined);
+            }
+            None => {
+                sched.join(j).right_outcome = Some(Outcome::Error(error));
+                wake_parent(sched, j);
+            }
+        }
         match switch_away::<R>(code, ctx, task, sched, None) {
             Ok(()) => return Ok(()),
             Err(fault) => failure = Failure { fault, pc: task.pc },
@@ -1764,6 +1952,12 @@ fn stops_the_run(error: &RuntimeError) -> bool {
 fn cancel<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
     let mut pending = vec![j];
     while let Some(j) = pending.pop() {
+        let node = sched.join(j);
+        // 置いた右の子はほかの worker で走り続け、終わりの知らせが必ず届く。届くまで番号を取っておく
+        if node.right == PLACED && node.right_outcome.is_none() {
+            node.orphan = true;
+            continue;
+        }
         let join = sched.take_join(j);
         if join.right_outcome.is_some() {
             continue;
@@ -3355,6 +3549,7 @@ mod tests {
             state: TaskState::Running,
             cell: None,
             outcome: None,
+            placed: None,
         }
     }
 

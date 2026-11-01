@@ -370,6 +370,7 @@ fn stats_are_compared_by_cancellations_and_channels() {
                 exit: None,
                 preemptions: 1,
                 workers: 0,
+                placed: 0,
             }
         });
         Ran {
@@ -412,6 +413,7 @@ fn stats_of_driver_runs_are_compared_without_the_work_counts() {
                 exit: None,
                 preemptions: 1,
                 workers: 0,
+                placed: 0,
             }),
         }
     };

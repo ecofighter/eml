@@ -208,8 +208,11 @@ impl Policy for Seeded {
 /// join の節点の番号。境目のフレームの slot 1 に生の語で置く。
 pub type JoinId = usize;
 
-/// エントリのタスクの番号。
+/// エントリのタスクの番号。worker 1..N-1 では、動くタスクのない間の `Task` を退避する欄で、どのタスクにも振らない。
 pub(crate) const MAIN: TaskId = 0;
+
+/// ほかの worker に置いた右の子を表す、join の節点の `right`。置いた子はこの worker の表にない。
+pub(crate) const PLACED: TaskId = usize::MAX;
 
 /// 監視のスレッドのない run で、空きのループが1回の `wait` に渡す期限の上限 (ミリ秒)。Ctrl-C と確保量の上限が眠る
 /// worker を止めるまでの遅れの上限になる (docs/spec/vm.md の「時計と driver」)。
@@ -279,6 +282,9 @@ pub(crate) struct JoinNode {
     /// `par` の命令の次の位置と、組を書くスロット。
     pub(crate) ret: crate::op::Pc,
     pub(crate) dst: crate::op::Slot,
+    /// 親が誤りで止まった後も、置いた右の子の終わりの知らせを待つ。知らせが届いたら結果に触れずに節点を捨てる
+    /// (docs/spec/vm.md の「子の誤り」)。
+    pub(crate) orphan: bool,
 }
 
 /// 1回の実行のタスクを方針 `P` で切り替える。`Machine` が実行ごとに作り、実行が終わると捨てる。`Scheduler`、`Task`、
@@ -319,7 +325,8 @@ pub struct Scheduler<P: Policy> {
     pub(crate) run: Arc<Run>,
     /// この `Scheduler` の worker の番号。止める語と `run` の欄の添字である。
     pub(crate) index: usize,
-    /// worker 1..N-1 を作るか、作ったか。worker 0 だけが読み書きする。
+    /// worker 1..N-1 を作るか、作ったか。worker 0 は run の始めに決め、worker 1..N-1 はいつも `Peer` である。
+    /// 右の子をほかの worker に置くのは `Started` と `Peer` の `Scheduler` だけである。
     pub(crate) workers: Workers,
     /// driver の出どころ。`Real` の run だけが OS のシグナルを待つタスクへ届ける (docs/spec/stdlib.md の
     /// 「`Std.Signal`」)。空きの待ちに上限を掛けるかもこれで決まる (docs/spec/vm.md の「時計と driver」)。
@@ -337,13 +344,18 @@ pub struct Scheduler<P: Policy> {
 pub(crate) struct Watcher {
     pub(crate) control: Arc<Control>,
     pub(crate) monitor: Option<Monitor>,
-    /// 始めるのは1回だけで、始められなかったときも試し直さない。
+    /// 始めるのは1回だけで、始められなかったときも試し直さない。worker 1..N-1 は始めない。
     tried: bool,
+    /// worker 0 の `Watcher`。見張りの語と保留のシグナルは worker 0 のものなので、片付けるのも worker 0 だけである。
+    home: bool,
 }
 
 impl Drop for Watcher {
     // run の後に待つタスクはいない。最後の集める地点の後に保留になったシグナルは、run が終わることで消費する
     fn drop(&mut self) {
+        if !self.home {
+            return;
+        }
         self.control.set_watched(0);
         self.control.take_pending();
         if let Some(monitor) = self.monitor.take() {
@@ -356,6 +368,26 @@ impl<P: Policy> Scheduler<P> {
     pub(crate) fn new(
         policy: P,
         driver: Box<dyn IoDriver>,
+        run: Arc<Run>,
+        control: Arc<Control>,
+        main_worker: u32,
+        max_depth: usize,
+        generations: Vec<u32>,
+    ) -> Scheduler<P> {
+        Scheduler::build(
+            policy,
+            Some(driver),
+            run,
+            control,
+            main_worker,
+            max_depth,
+            generations,
+        )
+    }
+
+    fn build(
+        policy: P,
+        driver: Option<Box<dyn IoDriver>>,
         run: Arc<Run>,
         control: Arc<Control>,
         main_worker: u32,
@@ -378,7 +410,7 @@ impl<P: Policy> Scheduler<P> {
             shared_roots: 0,
             cells: Registry::new(generations),
             stacks: Vec::new(),
-            driver: Some(driver),
+            driver,
             run,
             index: 0,
             workers: Workers::Denied,
@@ -389,8 +421,35 @@ impl<P: Policy> Scheduler<P> {
                 control,
                 monitor: None,
                 tried: false,
+                home: true,
             },
         }
+    }
+
+    /// worker `index` (`index` ≥ 1) の `Scheduler`。driver も監視のスレッドも持たず、登録表は空のまま読まない。
+    /// worker を作る判断はせず、空いた worker があれば右の子を置く (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn worker(
+        policy: P,
+        run: Arc<Run>,
+        control: Arc<Control>,
+        index: usize,
+        main_worker: u32,
+        max_depth: usize,
+    ) -> Scheduler<P> {
+        let mut sched = Scheduler::build(
+            policy,
+            None,
+            run,
+            control,
+            main_worker,
+            max_depth,
+            Vec::new(),
+        );
+        sched.index = index;
+        sched.workers = Workers::Peer;
+        sched.watcher.tried = true;
+        sched.watcher.home = false;
+        sched
     }
 
     /// run の始めの準備。driver の waker を自分の欄に置き、眠る driver の run と worker を2つ以上持てる run では監視の

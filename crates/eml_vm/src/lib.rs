@@ -132,6 +132,9 @@ pub struct Finished {
     pub preemptions: u64,
     /// この run が作った worker の数。worker 0 は数えない (docs/spec/vm.md の「タスクとスケジュール」)。
     pub workers: usize,
+    /// この run がほかの worker に置いた `par` の右の子の数。どの worker の fork も数える
+    /// (docs/spec/vm.md の「`par` の fork と join」)。
+    pub placed: u64,
 }
 
 /// VM だけが知る仕事の回数。検査モードだけで数える。
@@ -158,8 +161,9 @@ pub struct RunConfig {
     /// タイマーが使う時計。既定はすべてのタスクが待つときにだけ進む `Clock::Virtual` である。
     pub clock: Clock,
     /// 監視のスレッドを起こす自己パイプ。シグナルのハンドラと同じものを渡す。既定はなしで、監視のスレッドは刻みで
-    /// シグナルを見に行く。`Clock::Real` の run に渡すと、run の始めに監視のスレッドが起き、VM は空きの待ちを切らない。
-    /// そのため、止める語を立てる者は自己パイプも鳴らす (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// シグナルを見に行く。`Clock::Real` の run と worker を2つ以上持てる run に渡すと、run の始めに監視のスレッドが
+    /// 起き、VM は空きの待ちを切らない。そのため、止める語を立てる者は時計によらず自己パイプも鳴らす
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub doorbell: Option<Arc<Doorbell>>,
     /// 仮想のシグナルの予定。既定は空で、テストのハーネスだけが使う (docs/spec/vm.md の「時間の待ち」)。
     pub signals: Vec<VirtualSignal>,
@@ -282,13 +286,20 @@ pub struct Machine<M: Mode> {
     host: HostRef,
     /// poisoned の `Machine` では、driver が貸したままの記憶を放さないように、`Drop` が落とさずに漏らす。
     ctx: ManuallyDrop<Ctx<M>>,
+    /// worker 1..N-1 が run の終わりに返した `Ctx`。成功した run では終わりの検査の後に落とし、ほかの道では回復の
+    /// 後に落とす。回復はほかのヒープのページから写しうるためである。回復しなかった誤りの後は `Drop` まで残す
+    /// (docs/spec/object-model.md の「回復」)。
+    others: Vec<Ctx<M>>,
     /// `quiesce` の後にも driver が保留の操作を残した。この後の run、回復、`close` はヒープに触れずに driver の誤りを
     /// 返す (docs/spec/vm.md の「時計と driver」)。
     poisoned: bool,
     max_depth: usize,
     sched: Sched,
-    /// 実行と回復の後の確かめ。検査モードではヒープの不変条件を確かめる。
-    check_heap: fn(&mut Ctx<M>) -> Result<(), HeapError>,
+    /// 実行と回復の後の確かめ。2つ目の引数はほかの worker の `Ctx` である。検査モードではどのヒープの不変条件も
+    /// 確かめ、すべてのヒープで ID ごとの数を数え直す。
+    check_heap: CheckHeap<M>,
+    /// 成功した run の終わりに、ほかの worker のヒープに残った物体を確かめる。検査モードではリークとして返す。
+    at_run_end: fn(&mut [Ctx<M>]) -> Result<(), RuntimeError>,
     /// 閉じるときの確かめ。検査モードでは残った物体をリークとして返す。
     at_close: fn(&mut Ctx<M>) -> Result<(), RuntimeError>,
     /// 回復で捨てたヒープが実行でした仕事。
@@ -314,22 +325,13 @@ pub struct Machine<M: Mode> {
 
 impl Machine<Fast> {
     pub fn new(control: Arc<Control>, host: HostRef) -> Machine<Fast> {
-        Machine::with_checks(control, host, |_| Ok(()), |_| Ok(()))
+        Machine::with_checks(control, host, |_, _| Ok(()), |_| Ok(()), |_| Ok(()))
     }
 }
 
 impl Machine<Checked> {
     pub fn new(control: Arc<Control>, host: HostRef) -> Machine<Checked> {
-        Machine::with_checks(
-            control,
-            host,
-            |ctx| {
-                ctx.check_invariants()?;
-                let heap = ctx.heap();
-                heap.control().check_owned(&[heap])
-            },
-            check_leaks,
-        )
+        Machine::with_checks(control, host, check_heaps, check_others, check_leaks)
     }
 }
 
@@ -337,7 +339,8 @@ impl<M: Mode> Machine<M> {
     fn with_checks(
         control: Arc<Control>,
         host: HostRef,
-        check_heap: fn(&mut Ctx<M>) -> Result<(), HeapError>,
+        check_heap: CheckHeap<M>,
+        at_run_end: fn(&mut [Ctx<M>]) -> Result<(), RuntimeError>,
         at_close: fn(&mut Ctx<M>) -> Result<(), RuntimeError>,
     ) -> Machine<M> {
         Machine {
@@ -345,9 +348,11 @@ impl<M: Mode> Machine<M> {
             max_depth: control.limits().max_depth,
             host: host.clone(),
             ctx: ManuallyDrop::new(Ctx::new(control, host)),
+            others: Vec::new(),
             poisoned: false,
             sched: Sched::Sequential,
             check_heap,
+            at_run_end,
             at_close,
             earlier: HeapWork::default(),
             copying: HeapWork::default(),
@@ -378,8 +383,8 @@ impl<M: Mode> Machine<M> {
     }
 
     /// 監視のスレッドを起こす自己パイプを渡す。ないときは、監視のスレッドが刻みでシグナルを見に行く。`Clock::Real` の
-    /// run に渡すと、run の始めに監視のスレッドが起き、VM は空きの待ちを切らない。そのため、止める語を立てる者は
-    /// 自己パイプも鳴らす (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// run と worker を2つ以上持てる run に渡すと、run の始めに監視のスレッドが起き、VM は空きの待ちを切らない。
+    /// そのため、止める語を立てる者は時計によらず自己パイプも鳴らす (docs/spec/vm.md の「タスクとスケジュール」)。
     pub fn with_doorbell(mut self, doorbell: Arc<Doorbell>) -> Machine<M> {
         self.doorbell = Some(doorbell);
         self
@@ -489,13 +494,15 @@ impl<M: Mode> Machine<M> {
 
     fn recover_heap(&mut self) -> Result<(), HeapError> {
         let old = self.heap_work();
-        // 根の語は根が持つ参照で、根から届く物体は失敗した実行が書き換えないので、`recover` の前提を守る
+        // 根の語は根が持つ参照で、根から届く物体は失敗した実行が書き換えないので、`recover` の前提を守る。ほかの
+        // worker のヒープは取り込みを終えて生きていて、どのスレッドも触れない (docs/spec/object-model.md の「回復」)
         unsafe { self.ctx.recover() }?;
+        self.others.clear();
         // 回復は共有の根を局所の物体として写すので、次の fork はどの根にも印を付け直す
         self.shared_roots = 0;
         self.earlier = old;
         self.copying = HeapWork::of(self.ctx.heap().stats());
-        (self.check_heap)(&mut self.ctx)
+        (self.check_heap)(&mut self.ctx, &mut [])
     }
 
     /// `Machine` を作ってからの、実行がヒープでした仕事。
@@ -583,6 +590,8 @@ impl<M: Mode> Machine<M> {
             }
         };
         self.shared_roots = scheduled.shared_roots;
+        // ほかの worker のヒープは、確かめるか回復するまで `Machine` が持つ。poisoned になる道でも落とさない
+        self.others.append(&mut scheduled.others);
         self.generations = std::mem::take(&mut scheduled.generations);
         self.counters = std::mem::take(&mut scheduled.counters);
         // 誤りで返る道でも driver を失わないように、run の直後に戻す
@@ -620,6 +629,11 @@ impl<M: Mode> Machine<M> {
             }
             _ => None,
         };
+        // 写して手放した結果は、ほかの worker のヒープの物体でありうる。手放しがそのヒープに積んだ解放を、統計と
+        // 検査の前に取り込む (docs/spec/vm.md の「誤り、止めること、終わり」)
+        if copied.is_some() && scheduled.workers > 0 {
+            reclaim_all(ctx, &mut self.others);
+        }
         // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
         let flushed = ctx.flush();
         if let Err(
@@ -643,6 +657,7 @@ impl<M: Mode> Machine<M> {
                 exit: Some(code),
                 preemptions: scheduled.preemptions,
                 workers: scheduled.workers,
+                placed: scheduled.placed,
             };
             return Ok(Ran::Abandoned(finished, cause));
         }
@@ -651,24 +666,24 @@ impl<M: Mode> Machine<M> {
             .transpose()
             .map_err(|fault| after(fault.into(), &task))?;
         flushed.map_err(|fault| after(fault.into(), &task))?;
-        if !ctx.check_finished() {
+        if !ctx.check_finished() || !self.others.iter().all(Ctx::check_finished) {
             return Err(after(
                 VmFault::Internal("the evidence list or a yield is left at the end"),
                 &task,
             ));
         }
-        // ほかのスレッドから受けた解放を検査の前に取り込む (docs/spec/vm.md の「誤り、止めること、終わり」)
-        ctx.reclaim_if_due();
-        (self.check_heap)(ctx)
+        // 検査はどのヒープも先にすべて取り込む。ほかの worker のヒープは検査の後に落とす
+        // (docs/spec/vm.md の「誤り、止めること、終わり」)
+        (self.check_heap)(ctx, &mut self.others)
             .map_err(|error| heap_fault(error, code.function_name(task.last_ret, &task)))?;
-        // ほかの worker のヒープは join の後に返ってきたもので、検査の後に落とす。ほかの道では `scheduled` とともに
-        // 落ちる (docs/spec/vm.md の「タスクとスケジュール」)
-        drop(std::mem::take(&mut scheduled.others));
+        (self.at_run_end)(&mut self.others)?;
+        self.others.clear();
         let finished = Finished {
             stats: self.run_stats(&counts, &scheduled),
             exit,
             preemptions: scheduled.preemptions,
             workers: scheduled.workers,
+            placed: scheduled.placed,
         };
         Ok(Ran::Done(finished, text))
     }
@@ -744,7 +759,8 @@ impl<M: Mode> Machine<M> {
             // 根の語は根が持つ参照で、ほかの語には触れないので、`heap_mut` の前提を崩さない
             unsafe { self.ctx.heap_mut().decref(root) }.map_err(close_error)?;
         }
-        (self.check_heap)(&mut self.ctx).map_err(close_error)?;
+        (self.check_heap)(&mut self.ctx, &mut self.others).map_err(close_error)?;
+        self.others.clear();
         (self.at_close)(&mut self.ctx)
     }
 }
@@ -753,7 +769,11 @@ impl<M: Mode> Drop for Machine<M> {
     fn drop(&mut self) {
         // 本物の driver には、落とすときにカーネルの書き込みの終わりを待つものがあるので、その間はヒープを生かしておく
         self.driver = None;
-        if !self.poisoned {
+        if self.poisoned {
+            // ほかの worker のヒープの物体も driver に貸されうるので、`ctx` と同じく漏らす
+            std::mem::forget(std::mem::take(&mut self.others));
+        } else {
+            self.others.clear();
             // `ctx` はこの後に使わない
             unsafe { ManuallyDrop::drop(&mut self.ctx) }
         }
@@ -768,6 +788,9 @@ fn poisoned_fault(function: &str) -> RuntimeError {
         at: None,
     }
 }
+
+/// 実行と回復の後のヒープの確かめ。2つ目の引数はほかの worker の `Ctx` である。
+type CheckHeap<M> = fn(&mut Ctx<M>, &mut [Ctx<M>]) -> Result<(), HeapError>;
 
 /// `run_entry` の結果。
 enum Ran {
@@ -793,6 +816,8 @@ struct Scheduled<M: Mode> {
     others: Vec<Ctx<M>>,
     /// 作った worker の数。
     workers: usize,
+    /// ほかの worker に置いた右の子の数。
+    placed: u64,
     /// worker 1..N-1 の panic。最初のものを worker 0 で起こし直す。
     panic: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -857,7 +882,15 @@ fn run_scheduled<M: Mode, P: Policy>(
             match vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts) {
                 Ok(Exit::Finished) => break Ok(()),
                 Ok(Exit::Spawn) => {
-                    handles = spawn_workers::<M>(scope, &sched.run, &sched.watcher.control, &host);
+                    handles = spawn_workers::<M, P>(
+                        scope,
+                        code,
+                        &sched.policy,
+                        &sched.run,
+                        &sched.watcher.control,
+                        &host,
+                        start.max_depth,
+                    );
                     shutdown.armed = !handles.is_empty();
                     // 1つも作れなければ worker 0 だけで続ける
                     sched.workers = match handles.len() {
@@ -879,7 +912,7 @@ fn run_scheduled<M: Mode, P: Policy>(
     });
     let workers = match sched.workers {
         Workers::Started(n) => n,
-        Workers::Wanted | Workers::Denied => 0,
+        Workers::Wanted | Workers::Denied | Workers::Peer => 0,
     };
     if workers > 0 {
         sched.watcher.control.clear_end();
@@ -895,6 +928,11 @@ fn run_scheduled<M: Mode, P: Policy>(
         }
     }
     let result = settle(result, sched.run.take_fatal());
+    // join の後に、ほかのスレッドが積んだ解放をすべてのヒープで取り込む。この後はどのスレッドも解放を積まない
+    // (docs/spec/vm.md の「誤り、止めること、終わり」)
+    if workers > 0 {
+        reclaim_all(ctx, &mut others);
+    }
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
     // (docs/spec/vm.md の「時計と driver」)
     let kept_pending = match sched.driver.as_mut() {
@@ -915,6 +953,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         kept_pending,
         others,
         workers,
+        placed: sched.run.placed.load(std::sync::atomic::Ordering::Relaxed),
         panic,
     };
     (result, scheduled)
@@ -1015,6 +1054,33 @@ fn heap_fault(error: HeapError, last_function: String) -> RuntimeError {
         function: last_function,
         at: None,
     }
+}
+
+/// worker 0 とほかの worker のヒープで、ほかのスレッドから受けた解放をすべて取り込む。
+fn reclaim_all<M: Mode>(ctx: &mut Ctx<M>, others: &mut [Ctx<M>]) {
+    ctx.reclaim();
+    for other in others {
+        other.reclaim();
+    }
+}
+
+/// 検査モードの `check_heap`。どのヒープの不変条件も確かめてから (どれも先に取り込む)、すべてのヒープで ID ごとの
+/// 数を数え直す。数え直しは取り込みを終えたヒープにしか使えない (docs/spec/object-model.md の「論理的な worker ID」)。
+fn check_heaps(ctx: &mut Ctx<Checked>, others: &mut [Ctx<Checked>]) -> Result<(), HeapError> {
+    ctx.check_invariants()?;
+    for other in others.iter_mut() {
+        other.check_invariants()?;
+    }
+    let heaps: Vec<_> = std::iter::once(ctx.heap())
+        .chain(others.iter().map(Ctx::heap))
+        .collect();
+    ctx.heap().control().check_owned(&heaps)
+}
+
+/// 検査モードの `at_run_end`。成功した run の後のほかの worker のヒープには、生きている物体が残らない。根を持つ
+/// セッションは worker を作らず、どの子の結果も親が手放しているためである。
+fn check_others(others: &mut [Ctx<Checked>]) -> Result<(), RuntimeError> {
+    others.iter_mut().try_for_each(check_leaks)
 }
 
 fn check_leaks(ctx: &mut Ctx<Checked>) -> Result<(), RuntimeError> {
