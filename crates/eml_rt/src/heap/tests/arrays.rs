@@ -42,7 +42,7 @@ fn make_get_set_round_trip<M: Mode>() {
         assert_eq!(ctx.array_length(b), Ok(3));
         release(&mut ctx, b);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn elements_are_counted_references<M: Mode>() {
@@ -60,7 +60,7 @@ fn elements_are_counted_references<M: Mode>() {
         let a = ctx.array_set(a, 0, u).unwrap();
         release(&mut ctx, a);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn set_copies_a_shared_array<M: Mode>() {
@@ -82,7 +82,7 @@ fn set_copies_a_shared_array<M: Mode>() {
         release(&mut ctx, a);
         release(&mut ctx, b);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn extended_arrays_index_past_the_count_word<M: Mode>() {
@@ -109,7 +109,7 @@ fn extended_arrays_index_past_the_count_word<M: Mode>() {
         release(&mut ctx, a);
         release(&mut ctx, b);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn out_of_range_and_negative_length_fault<M: Mode>() {
@@ -129,7 +129,7 @@ fn out_of_range_and_negative_length_fault<M: Mode>() {
         let t = ctx.heap_mut().alloc_string("y");
         assert_eq!(ctx.array_set(a, 3, t), Err(array_fault(3, 3)));
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn empty_and_zero_length_arrays<M: Mode>() {
@@ -147,7 +147,7 @@ fn empty_and_zero_length_arrays<M: Mode>() {
         assert_eq!(ctx.array_length(a), Ok(0));
         release(&mut ctx, a);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn freeze_and_thaw_flip_the_lin_bit<M: Mode>() {
@@ -175,7 +175,7 @@ fn freeze_and_thaw_flip_the_lin_bit<M: Mode>() {
         release(&mut ctx, a);
         release(&mut ctx, m);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// `MutArray` はいつも一意なので、共有の物体の `freeze` は検査モードでは誤りである。速いモードは写す。
@@ -196,7 +196,7 @@ fn freezing_a_shared_array<M: Mode>() {
         }
         release(&mut ctx, a);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 長さ 1 の `make` は、受け取った `x` の参照をそのまま入れ、`dup` しない。`lin` の物体も入る。
@@ -206,10 +206,10 @@ fn make_one_stores_x_without_a_dup<M: Mode>() {
         let x = ctx.heap_mut().alloc_data(0, 0, 0, true);
         let a = ctx.array_make(1, x, false).unwrap();
         assert_eq!(ctx.array_length(a), Ok(1));
-        assert_eq!(mortal(ctx.heap()), 2);
+        assert_eq!(mortal(&mut ctx), 2);
         release(&mut ctx, a);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 検査モードは、`lin` の物体を2つ以上の要素に入れる `make` を、確保の前に `LinDup` で断る。
@@ -224,10 +224,10 @@ fn checked_mode_refuses_a_lin_element_before_allocating<M: Mode>() {
             ctx.array_make(2, x, false),
             Err(Fault::Heap(HeapError::LinDup))
         );
-        assert_eq!(mortal(ctx.heap()), 1);
+        assert_eq!(mortal(&mut ctx), 1);
         release(&mut ctx, x);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 確保器が作れない長さと、確保量の上限を超える長さの `make` は、何も確保せずに `x` を手放して止まる。
@@ -238,7 +238,7 @@ fn oversized_make_stops_before_allocating<M: Mode>() {
         let s = ctx.heap_mut().alloc_string("x");
         assert_eq!(ctx.array_make(i64::MAX, s, false), stopped);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
     let limits = Limits {
         max_bytes: 1 << 20,
         ..Limits::default()
@@ -247,11 +247,11 @@ fn oversized_make_stops_before_allocating<M: Mode>() {
     unsafe {
         let s = ctx.heap_mut().alloc_string("x");
         assert_eq!(ctx.array_make((1 << 20) / 8 + 1, s, true), stopped);
-        assert_eq!(mortal(ctx.heap()), 0);
+        assert_eq!(mortal(&mut ctx), 0);
         let a = ctx.array_make(10, int(1), false).unwrap();
         release(&mut ctx, a);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 /// 数の語を持つ配列の `thaw` と `freeze` の写しも、要素を同じ位置に並べる。
@@ -286,7 +286,7 @@ fn relin_copies_of_extended_arrays<M: Mode>() {
         release(&mut ctx, a);
         release(&mut ctx, m);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 fn checked_mode_rejects_a_lin_dup_of_a_mut_array<M: Mode>() {
@@ -299,7 +299,7 @@ fn checked_mode_rejects_a_lin_dup_of_a_mut_array<M: Mode>() {
         assert_eq!(ctx.heap_mut().dup(m), Err(HeapError::LinDup));
         release(&mut ctx, m);
     }
-    assert_eq!(mortal(ctx.heap()), 0);
+    assert_eq!(mortal(&mut ctx), 0);
 }
 
 both_modes!(

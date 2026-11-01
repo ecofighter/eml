@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::sync::atomic::Ordering;
 
 use super::raw;
@@ -22,7 +23,7 @@ fn sharing_a_list_marks_every_cell<M: Mode>() {
         assert!(heap.is_last(l).unwrap());
         heap.decref(l).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn shared_counts_go_through_the_atomic_path<M: Mode>() {
@@ -37,7 +38,7 @@ fn shared_counts_go_through_the_atomic_path<M: Mode>() {
         assert!(heap.is_last(x).unwrap());
         heap.decref(x).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn share_stops_at_immortal_objects<M: Mode>() {
@@ -52,7 +53,7 @@ fn share_stops_at_immortal_objects<M: Mode>() {
         assert_eq!(rc(&heap, parent), -1);
         heap.decref(parent).unwrap();
     }
-    assert_eq!(mortal(&heap), 1);
+    assert_eq!(mortal(&mut heap), 1);
 }
 
 fn share_walks_a_cycle_once<M: Mode>() {
@@ -71,7 +72,7 @@ fn share_walks_a_cycle_once<M: Mode>() {
         heap.decref(a).unwrap();
         heap.decref(a).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_lin_object_moves_to_the_receiver_and_its_unique_children_move_with_it<M: Mode>() {
@@ -91,7 +92,7 @@ fn a_lin_object_moves_to_the_receiver_and_its_unique_children_move_with_it<M: Mo
         heap.set_worker(7);
         heap.decref(lin).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn releasing_a_shared_parent_takes_its_lin_child_without_dup<M: Mode>() {
@@ -106,11 +107,11 @@ fn releasing_a_shared_parent_takes_its_lin_child_without_dup<M: Mode>() {
         heap.share(parent, 0).unwrap();
         // 検査モードでは、file を dup すると LinDup になる
         heap.release(parent, 0, &[true, false]).unwrap();
-        assert_eq!(mortal(&heap), 1);
+        assert_eq!(mortal(&mut heap), 1);
         heap.decref(file).unwrap();
     }
     assert_eq!(drops.load(Ordering::Relaxed), 1);
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_deep_list_is_shared_without_recursion<M: Mode>() {
@@ -120,7 +121,7 @@ fn a_deep_list_is_shared_without_recursion<M: Mode>() {
         heap.share(l, 0).unwrap();
         heap.decref(l).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn releasing_a_unique_object_hands_over_the_kept_fields<M: Mode>() {
@@ -132,11 +133,11 @@ fn releasing_a_unique_object_hands_over_the_kept_fields<M: Mode>() {
         heap.set_field(p, 0, a).unwrap();
         heap.set_field(p, 1, b).unwrap();
         heap.release(p, 3, &[true, false]).unwrap();
-        assert_eq!(mortal(&heap), 1);
+        assert_eq!(mortal(&mut heap), 1);
         assert!(heap.is_unique(a).unwrap());
         heap.decref(a).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn releasing_a_shared_object_dups_the_kept_fields<M: Mode>() {
@@ -150,11 +151,11 @@ fn releasing_a_shared_object_dups_the_kept_fields<M: Mode>() {
         heap.dup(p).unwrap();
         heap.release(p, 3, &[true, false]).unwrap();
         assert_eq!(rc(&heap, a), 2);
-        assert_eq!(mortal(&heap), 3);
+        assert_eq!(mortal(&mut heap), 3);
         heap.decref(p).unwrap();
         heap.decref(a).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn the_expanded_release_matches_the_general_one<M: Mode>() {
@@ -181,12 +182,12 @@ fn the_expanded_release_matches_the_general_one<M: Mode>() {
                     heap.dup(a).unwrap();
                     heap.decref(p).unwrap();
                 }
-                let live = mortal(&heap);
+                let live = mortal(&mut heap);
                 if shared {
                     heap.decref(p).unwrap();
                 }
                 heap.decref(a).unwrap();
-                assert_eq!(mortal(&heap), 0);
+                assert_eq!(mortal(&mut heap), 0);
                 live
             }
         };
@@ -220,7 +221,7 @@ fn unique_descendants_of_a_lin_root_move<M: Mode>() {
         assert!(heap.is_unique(l).unwrap());
         heap.decref(lin).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_shared_node_under_a_lin_root_is_marked_with_its_unique_child<M: Mode>() {
@@ -242,7 +243,7 @@ fn a_shared_node_under_a_lin_root_is_marked_with_its_unique_child<M: Mode>() {
         heap.set_worker(7);
         heap.decref(lin).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_lin_object_under_a_marked_parent_moves_its_unique_descendants<M: Mode>() {
@@ -263,7 +264,7 @@ fn a_lin_object_under_a_marked_parent_moves_its_unique_descendants<M: Mode>() {
         heap.set_worker(7);
         heap.decref(parent).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// `poly` の組 (`(a, FileIn)` の形) を、共有にした後でもう一度送る。`lin` の部分とその下の rc 1 の物体は、検査モードで
@@ -292,7 +293,39 @@ fn resending_a_shared_pair_passes_its_lin_part_to_the_second_receiver<M: Mode>()
         heap.set_worker(2);
         heap.decref(pair).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
+}
+
+/// 送る前から `lin` の物体の下にある rc > 1 の物体は、初めの `share` で印が付く。送り直しは印の付いた物体で止まるので
+/// 誤りにならない
+fn resending_after_marking_an_rc2_node_under_the_lin_part_is_ok<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let a = list(&mut heap, 1);
+    let kept = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    let pair = heap.alloc_data(0, 2, 0, false);
+    unsafe {
+        heap.dup(kept).unwrap();
+        heap.set_field(lin, 0, kept).unwrap();
+        heap.set_field(pair, 0, a).unwrap();
+        heap.set_field(pair, 1, lin).unwrap();
+        heap.share(pair, 1).unwrap();
+        assert_eq!(rc(&heap, kept), -2);
+        if let Some(checked) = (&mut heap as &mut dyn Any).downcast_mut::<Heap<Checked>>() {
+            assert_eq!(checked.check_invariants(), Ok(()));
+        }
+        heap.set_worker(1);
+        heap.share(pair, 2).unwrap();
+        assert_eq!(
+            (rc(&heap, pair), rc(&heap, lin), rc(&heap, kept)),
+            (-1, 1, -2)
+        );
+        assert_owner::<M>(lin, 2);
+        heap.set_worker(2);
+        heap.decref(pair).unwrap();
+        heap.decref(kept).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 fn a_long_unique_list_under_a_lin_root_moves_without_recursion<M: Mode>() {
@@ -306,7 +339,7 @@ fn a_long_unique_list_under_a_lin_root_moves_without_recursion<M: Mode>() {
         assert!(heap.is_unique(l).unwrap());
         heap.decref(lin).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// 受け手が今の worker なら、`Unr` の値には印を付けるだけで、`lin` の物体は局所のまま持ち主も変わらない。
@@ -327,7 +360,7 @@ fn sharing_with_the_own_worker_marks_only_unr_values<M: Mode>() {
         heap.decref(l).unwrap();
         heap.decref(lin).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 both_modes!(
@@ -345,6 +378,7 @@ both_modes!(
     a_shared_node_under_a_lin_root_is_marked_with_its_unique_child,
     a_lin_object_under_a_marked_parent_moves_its_unique_descendants,
     resending_a_shared_pair_passes_its_lin_part_to_the_second_receiver,
+    resending_after_marking_an_rc2_node_under_the_lin_part_is_ok,
     a_long_unique_list_under_a_lin_root_moves_without_recursion,
     sharing_with_the_own_worker_marks_only_unr_values,
 );
@@ -373,12 +407,15 @@ fn a_shared_object_reaching_a_local_one_breaks_the_invariant() {
     unsafe {
         heap.share(p, 0).unwrap();
         raw::set_slot(p, 0, c);
-        assert_eq!(heap.check_invariants(), Err(HeapError::SharedReachesLocal));
+        assert_eq!(
+            super::check_all(&mut heap),
+            Err(HeapError::SharedReachesLocal)
+        );
         raw::set_slot(p, 0, Word::UNIT);
         heap.decref(c).unwrap();
         heap.decref(p).unwrap();
     }
-    assert_eq!(heap.check_invariants(), Ok(()));
+    assert_eq!(super::check_all(&mut heap), Ok(()));
 }
 
 #[test]
@@ -390,7 +427,7 @@ fn an_immortal_object_reaching_a_mortal_one_breaks_the_invariant() {
     unsafe {
         heap.set_field(p, 0, c).unwrap();
         assert_eq!(
-            heap.check_invariants(),
+            super::check_all(&mut heap),
             Err(HeapError::ImmortalReachesMortal)
         );
         heap.set_field(p, 0, Word::UNIT).unwrap();
@@ -406,7 +443,7 @@ fn a_shared_parent_may_reach_a_local_lin_child() {
     unsafe {
         heap.set_field(p, 0, lin).unwrap();
         heap.share(p, 0).unwrap();
-        assert_eq!(heap.check_invariants(), Ok(()));
+        assert_eq!(super::check_all(&mut heap), Ok(()));
         heap.decref(p).unwrap();
     }
 }
@@ -503,10 +540,10 @@ fn a_shared_lin_object_reached_by_share_is_an_error() {
     drop(heap);
 }
 
-/// 送り直した `lin` の物体の下の rc > 1 の局所の物体は、送り手の持ち物のまま残る。受け手が触れると `WrongOwner` に
-/// なる (docs/spec/object-model.md の「`share`」の制限)
+/// 共有の物体から局所の物体だけを通って届く rc > 1 の物体は、`lin` の部分の不変条件を破る。送り直しの所有者だけの
+/// たどりがそこに着くと `SharedReachesLocal` になる (docs/spec/object-model.md の「`share`」)
 #[test]
-fn an_rc2_object_under_a_resent_lin_object_keeps_the_senders_owner() {
+fn an_rc2_object_under_a_resent_lin_object_is_an_error() {
     let mut heap = H::new();
     let a = list(&mut heap, 1);
     let lin = heap.alloc_data(0, 1, 0, true);
@@ -520,19 +557,36 @@ fn an_rc2_object_under_a_resent_lin_object_keeps_the_senders_owner() {
         let kept = list(&mut heap, 1);
         heap.dup(kept).unwrap();
         heap.set_field(lin, 0, kept).unwrap();
-        heap.share(pair, 2).unwrap();
-        assert_eq!(raw::prefix_first(lin), 2);
-        assert_eq!((rc(&heap, kept), raw::prefix_first(kept)), (2, 1));
-        heap.set_worker(2);
-        assert_eq!(
-            heap.dup(kept),
-            Err(HeapError::WrongOwner {
-                owner: 1,
-                worker: 2
-            })
-        );
+        assert_eq!(heap.share(pair, 2), Err(HeapError::SharedReachesLocal));
     }
+    // share が状態を変えた後の Err なので、ヒープは落とすだけにする (docs/spec/object-model.md の「検査モードの約束」)
     drop(heap);
+}
+
+/// 共有の `lin` でない物体から局所の物体だけを通って届く rc 2 の物体は、`share` を待たずに `check_invariants` が
+/// `lin` の部分の不変条件の違反として見つける (docs/spec/object-model.md の「報告する誤り」)
+#[test]
+fn check_invariants_finds_an_rc2_object_in_a_lin_part() {
+    let mut heap = H::new();
+    let a = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 1, 0, true);
+    let pair = heap.alloc_data(0, 2, 0, false);
+    unsafe {
+        heap.set_field(pair, 0, a).unwrap();
+        heap.set_field(pair, 1, lin).unwrap();
+        heap.share(pair, 1).unwrap();
+        heap.set_worker(1);
+        let kept = list(&mut heap, 1);
+        heap.dup(kept).unwrap();
+        heap.set_field(lin, 0, kept).unwrap();
+        assert_eq!(heap.check_invariants(), Err(HeapError::SharedReachesLocal));
+        raw::set_slot(lin, 0, Word::UNIT);
+        assert_eq!(heap.check_invariants(), Ok(()));
+        heap.decref(kept).unwrap();
+        heap.decref(kept).unwrap();
+        heap.decref(pair).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 /// 印を付けた物体は持ち主の数から外れ、所有を移した物体は受け手の数に移る。
@@ -549,13 +603,13 @@ fn counts_move_with_the_walk() {
         assert_eq!(heap.owned_by(0), 4);
         heap.share(lin, 7).unwrap();
         assert_eq!((heap.owned_by(0), heap.owned_by(7)), (0, 3));
-        assert_eq!(heap.check_invariants(), Ok(()));
+        assert_eq!(super::check_all(&mut heap), Ok(()));
         heap.decref(kept).unwrap();
         heap.set_worker(7);
         heap.decref(lin).unwrap();
     }
     assert_eq!((heap.owned_by(0), heap.owned_by(7)), (0, 0));
-    assert_eq!(heap.check_invariants(), Ok(()));
+    assert_eq!(super::check_all(&mut heap), Ok(()));
 }
 
 /// `share` が rc を負にした物体を1つずつ数える。すでに共有の物体は数えない。
@@ -621,5 +675,5 @@ fn fork_marking_lets_the_child_touch_what_the_closure_reaches() {
         heap.decref(c).unwrap();
         heap.decref(c).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(&mut heap), 0);
 }

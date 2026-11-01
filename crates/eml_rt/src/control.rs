@@ -1,11 +1,21 @@
 //! 実行の制御。セッションに1つあり、CLI と、どの worker のヒープも `Arc` で同じものを見る。実行を止める理由の語と、
-//! セッションのヒープが OS から取ったページのバイト数と、上限を持つ (docs/spec/object-model.md の「実行の制御」)。
+//! セッションのヒープが OS から取ったページのバイト数と、上限と、検査モードの論理的な worker ID の表を持つ
+//! (docs/spec/object-model.md の「実行の制御」「論理的な worker ID」)。
 
+use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU32, AtomicUsize, Ordering};
+use std::ptr;
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use vstd::prelude::*;
+use vstd::raw_ptr::Dealloc;
+
+#[cfg(verus_only)]
+use crate::alloc::page_base;
+use crate::error::HeapError;
+use crate::heap::Heap;
+use crate::mode::Mode;
 
 verus! {
 
@@ -18,11 +28,13 @@ pub struct Limits {
     pub max_depth: usize,
     /// `evv` の長さの上限。
     pub max_evv: usize,
+    /// worker の数。`Control` は worker ごとに止める語を1つ持つ。1 以上である。
+    pub workers: usize,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { max_bytes: usize::MAX, max_depth: usize::MAX, max_evv: usize::MAX }
+        Limits { max_bytes: usize::MAX, max_depth: usize::MAX, max_evv: usize::MAX, workers: 1 }
     }
 }
 
@@ -41,27 +53,335 @@ pub enum Stop {
 
 pub struct Control {
     stop: AtomicU32,
-    worker: AtomicU32,
+    /// worker ごとの止める語。添字が worker の番号である。`Control::new` で `limits.workers` 個作り、増やしも減らしも
+    /// しない。各 worker の `Ctx` が自分の語の `Arc` を写して持つ。
+    words: Vec<Arc<AtomicU32>>,
     end: AtomicU32,
     code: AtomicI64,
     bytes: AtomicUsize,
     signals: AtomicU32,
     watched: AtomicU32,
     limits: Limits,
+    workers: WorkerIds,
+    pages: PageMap,
+    /// ページの表の登録の証が、どの `Control` のものかを見分ける番号。
+    // 仕様だけが読む
+    #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
+    id: u64,
+}
+
+/// 検査モードの論理的な worker ID の表 (docs/spec/object-model.md の「論理的な worker ID」)。`Control` に置き、同じ
+/// `Control` のどのヒープも同じ表で数える。回復だけが消し、run ごとには消さない。
+// 中身は Verus に見せない (信頼の一覧の T15)。数は証明の対象にせず、`Control::check_owned` が数え直して確かめる
+#[verifier::external_body]
+pub(crate) struct WorkerIds {
+    /// まだ出していない最小の ID。0 は基の ID なので 1 から始める。
+    next: AtomicU32,
+    /// 退いて使い回せる ID。最後に退いたものが末尾にある。
+    free: Mutex<Vec<u32>>,
+    /// ID ごとの、rc が正の生きている物体の数。`CHUNK_IDS` 個ずつの塊に分け、塊を `Arc` で各ヒープの写しと分け合う。
+    chunks: Mutex<Vec<Arc<Chunk>>>,
+}
+
+/// 検査モードのページの表 (docs/spec/object-model.md の「ページの表」)。同じ `Control` のヒープが取ったページを、
+/// 凍結した塊のページも含めて登録する。検査モードの操作は、即値でない語をたどる前にそのページが登録されているかを
+/// 確かめる。速いモードは触れない。
+// 64 KiB のページの番号 (番地 >> 16) を、6 ビットずつの上の3段と下位 14 ビットの葉で、4段に引く基数の表である。
+// 中身は Verus に見せない (信頼の一覧の T15)
+#[verifier::external_body]
+pub(crate) struct PageMap {
+    top: OnceLock<Box<Node<Node<Node<Leaf>>>>>,
+}
+
+/// `control` の表に番地 `page` のページを登録した証。登録したヒープの確保器がページごとに1つ持ち、ページを返す前に
+/// `unregister_page` に渡して手放す。作れるのは `register_page` だけである (信頼の一覧の T15)。ページを返すための
+/// `Dealloc` を中に持つので、確保したページ1つにつき証は高々1つである。
+#[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
+pub(crate) tracked struct Registered {
+    ghost page: usize,
+    ghost control: u64,
+    tracked dealloc: Dealloc,
+}
+
+impl Registered {
+    /// 登録したページの番地。
+    pub(crate) closed spec fn page(&self) -> usize {
+        self.page
+    }
+
+    /// 登録した `Control` の番号 (`Control::ident`)。
+    pub(crate) closed spec fn control(&self) -> u64 {
+        self.control
+    }
+
+    /// 登録したページを返すための `Dealloc`。
+    pub(crate) closed spec fn dealloc(&self) -> Dealloc {
+        self.dealloc
+    }
+}
+
+/// 番地 `a` のブロックのページが、`control` のページの表に登録されているか (T15)。表だけを読み、`a` の指すメモリには
+/// 触れない。約束は1つで、`a` のページを `control` に登録した証 `t` を渡せば真を返す。証があるうちは、そのページを
+/// 外すのは証を手放す `unregister_page` だけで、ページは確保したままなので同じ番地をほかの登録が使うこともない。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn page_known(
+    control: &Control,
+    a: usize,
+    Tracked(t): Tracked<Option<&Registered>>,
+) -> (r: bool)
+    ensures
+        t matches Some(t) && t.page() == page_base(a) && t.control() == control.ident() ==> r,
+{
+    control.pages.contains(a)
+}
+
+/// 番地 `page` のページを `control` のページの表に登録し、そのページの `Dealloc` を入れた証を返す。ページを確保した
+/// 直後に呼ぶ。`Dealloc` は確保したページに1つしかないので、証が2つできることはない。
+pub(crate) fn register_page(control: &Control, page: usize, Tracked(d): Tracked<Dealloc>) -> (t:
+    Tracked<Registered>)
+    requires
+        d.addr() == page,
+    ensures
+        t@.page() == page,
+        t@.control() == control.ident(),
+        t@.dealloc() == d,
+{
+    map_insert(control, page);
+    Tracked(Registered { page, control: control.ident(), dealloc: d })
+}
+
+/// 番地 `page` のページを `control` のページの表から外し、証を手放して中の `Dealloc` を返す。ページを返す前に呼ぶ。
+pub(crate) fn unregister_page(
+    control: &Control,
+    page: usize,
+    Tracked(t): Tracked<Registered>,
+) -> (d: Tracked<Dealloc>)
+    requires
+        t.page() == page,
+        t.control() == control.ident(),
+    ensures
+        d@ == t.dealloc(),
+{
+    map_remove(control, page);
+    let tracked Registered { dealloc, .. } = t;
+    Tracked(dealloc)
+}
+
+/// 表にページのビットを立てる (T15)。呼ぶのは `register_page` だけである。
+#[verifier::external_body]
+fn map_insert(control: &Control, page: usize) {
+    control.pages.insert(page);
+}
+
+/// 表からページのビットを下ろす (T15)。呼ぶのは `unregister_page` だけである。
+#[verifier::external_body]
+fn map_remove(control: &Control, page: usize) {
+    control.pages.remove(page);
+}
+
+/// 新しい `Control` の番号。プロセスの中で同じ番号を2度出さない (T15)。
+#[verifier::external_body]
+fn fresh_control_id() -> u64 {
+    CONTROL_IDS.fetch_add(1, Ordering::Relaxed)
+}
+
+/// ヒープが持つ、`WorkerIds` の数の塊の写し (docs/spec/object-model.md の「論理的な worker ID」)。数を変えるたびに
+/// 表の lock を取らないように、塊の `Arc` を写して持ち、写しにない ID が来たときだけ写し直す。速いモードのヒープは
+/// 何も持たない写しのまま触れない。
+#[verifier::external_body]
+pub(crate) struct IdCounts {
+    control: Option<Arc<Control>>,
+    chunks: Vec<Arc<Chunk>>,
+}
+
+impl PageMap {
+    #[verifier::external_body]
+    pub(crate) fn empty_map() -> PageMap {
+        PageMap { top: OnceLock::new() }
+    }
+}
+
+impl WorkerIds {
+    #[verifier::external_body]
+    pub(crate) fn empty_table() -> WorkerIds {
+        WorkerIds {
+            next: AtomicU32::new(1),
+            free: Mutex::new(Vec::new()),
+            chunks: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+// どの関数も値について何も約束しない (T15)。`fork_id` と `retire_id` は前提が破れていれば状態を変えずに `None` を返し、
+// 呼ぶ側が T5 の関数で止める
+impl IdCounts {
+    /// 何も持たない写し。速いモードのヒープと、`share` と `transfer_back` が写しをヒープから取り出している間の
+    /// 置き場が使う。
+    #[verifier::external_body]
+    pub(crate) fn detached() -> IdCounts {
+        IdCounts { control: None, chunks: Vec::new() }
+    }
+
+    /// `control` の表の写し。基の ID 0 を使っている ID にする。
+    #[verifier::external_body]
+    pub(crate) fn for_control(control: &Arc<Control>) -> IdCounts {
+        let mut counts = IdCounts { control: Some(Arc::clone(control)), chunks: Vec::new() };
+        counts.enter_id(0);
+        counts
+    }
+
+    /// `id` を使っている ID にする。まだ出していない ID からも退いた ID からも外し、数の塊を `id` まで伸ばす。
+    #[verifier::external_body]
+    pub(crate) fn enter_id(&mut self, id: u32) {
+        if let Some(control) = &self.control {
+            let ids = &control.workers;
+            let mut free = lock(&ids.free);
+            ids.next.fetch_max(id.saturating_add(1), Ordering::Relaxed);
+            if let Some(i) = free.iter().position(|f| *f == id) {
+                free.remove(i);
+            }
+            drop(free);
+            self.chunks = ids.grow(id);
+        }
+    }
+
+    /// `id` の数を1つ増やすか減らす。どのヒープも使っていない ID は数えない。壊れた前置きの所有者を読んでも大きな
+    /// 表を確保せず、数え直しがその ID の `OwnedMiscount` を返すためである。
+    // 数は証明の対象にしないので、桁あふれで panic する道を作らないように wrapping で数える (`fetch_add` は回る)
+    #[verifier::external_body]
+    pub(crate) fn count_id(&mut self, id: u32, up: bool) {
+        let (c, i) = (id as usize / CHUNK_IDS, id as usize % CHUNK_IDS);
+        if c >= self.chunks.len() {
+            match &self.control {
+                Some(control) => self.chunks = lock(&control.workers.chunks).clone(),
+                None => return,
+            }
+            if c >= self.chunks.len() {
+                return;
+            }
+        }
+        let n = &self.chunks[c][i];
+        if up {
+            n.fetch_add(1, Ordering::Relaxed);
+        } else {
+            n.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// 最後に退いた ID か、なければまだ出していない最小の ID を出す。ID が `u32` の上限に届いていれば `None` を返す。
+    #[verifier::external_body]
+    pub(crate) fn fork_id(&mut self) -> Option<u32> {
+        let control = self.control.as_ref()?;
+        let ids = &control.workers;
+        let mut free = lock(&ids.free);
+        let id = match free.pop() {
+            Some(id) => id,
+            None => {
+                let id = ids.next.load(Ordering::Relaxed);
+                if id == u32::MAX {
+                    return None;
+                }
+                ids.next.store(id + 1, Ordering::Relaxed);
+                id
+            },
+        };
+        drop(free);
+        self.chunks = ids.grow(id);
+        Some(id)
+    }
+
+    /// `id` を退かせる。`id` が 0 か、出していないか、もう退いていれば `None` を返す。そうでなければ `id` の数を返し、
+    /// 数が 0 のときだけ `id` を使い回せるようにする。
+    ///
+    /// 呼ぶ前に、ID を出してから `id` の数を変えたどのスレッドの書き込みも、この呼び出しより前に起きていること
+    /// (happens-before) を、呼ぶ側が保つ。数は Relaxed で数えるので、この表は順序を作らない。`par` では、子が結果を
+    /// Release で公開し、親が Acquire で読んでから `transfer_back` とこの呼び出しをする
+    /// (docs/spec/object-model.md の「論理的な worker ID」)。
+    #[verifier::external_body]
+    pub(crate) fn retire_id(&self, id: u32) -> Option<u64> {
+        let control = self.control.as_ref()?;
+        let ids = &control.workers;
+        let mut free = lock(&ids.free);
+        if id == 0 || id >= ids.next.load(Ordering::Relaxed) || free.contains(&id) {
+            return None;
+        }
+        let live = ids.live(id);
+        if live == 0 {
+            free.push(id);
+        }
+        Some(live)
+    }
+
+    /// 表を消す。数をすべて 0 にし、出した ID と退いた ID を忘れる。回復が写す前に呼ぶ
+    /// (docs/spec/object-model.md の「回復」)。
+    #[verifier::external_body]
+    pub(crate) fn reset_ids(&self) {
+        if let Some(control) = &self.control {
+            let ids = &control.workers;
+            let mut free = lock(&ids.free);
+            free.clear();
+            ids.next.store(1, Ordering::Relaxed);
+            for chunk in lock(&ids.chunks).iter() {
+                for n in chunk.iter() {
+                    n.store(0, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+}
+
+/// 0 の止める語を `n` 個作る。
+fn stop_words(n: usize) -> (r: Vec<Arc<AtomicU32>>)
+    ensures
+        r.len() == n,
+{
+    let mut words = Vec::new();
+    let mut i = 0;
+    while i < n
+        invariant
+            words.len() == i,
+            i <= n,
+        decreases n - i,
+    {
+        words.push(Arc::new(AtomicU32::new(0)));
+        i += 1;
+    }
+    words
 }
 
 impl Control {
-    pub fn new(limits: Limits) -> Control {
+    /// `limits.workers` 個の止める語を持つ `Control`。worker 0 の `Ctx` が語を1つ要るので、`limits.workers` は 1 以上で
+    /// ある。
+    pub fn new(limits: Limits) -> (r: Control)
+        requires
+            limits.workers >= 1,
+        ensures
+            r.word_count() == limits.workers,
+    {
         Control {
             stop: AtomicU32::new(0),
-            worker: AtomicU32::new(0),
+            words: stop_words(limits.workers),
             end: AtomicU32::new(0),
             code: AtomicI64::new(0),
             bytes: AtomicUsize::new(0),
             signals: AtomicU32::new(0),
             watched: AtomicU32::new(0),
             limits,
+            workers: WorkerIds::empty_table(),
+            pages: PageMap::empty_map(),
+            id: fresh_control_id(),
         }
+    }
+
+    /// 止める語の数。`limits.workers` である。
+    pub closed spec fn word_count(&self) -> nat {
+        self.words@.len()
+    }
+
+    /// この `Control` の番号。
+    pub(crate) closed spec fn ident(&self) -> u64 {
+        self.id
     }
 
     /// 上限のない新しい `Control`。
@@ -69,11 +389,32 @@ impl Control {
     // コード生成単位の分け方が変わり、速い道が呼ぶ側に展開されなくなったので、モードによらないこの関数に置く
     // (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     pub(crate) fn unbounded() -> Arc<Control> {
-        Arc::new(Control::new(Limits::default()))
+        // `Limits::default()` と同じ値を書く。`Default` の実装は値を約束しないので、`new` の前提を示せないためである
+        Arc::new(
+            Control::new(
+                Limits {
+                    max_bytes: usize::MAX,
+                    max_depth: usize::MAX,
+                    max_evv: usize::MAX,
+                    workers: 1,
+                },
+            ),
+        )
     }
 
     pub fn limits(&self) -> Limits {
         self.limits
+    }
+
+    /// worker `k` の止める語。`Ctx` が写して持ち、安全点で読む。
+    ///
+    /// # Panics
+    /// `k` が `limits.workers` 以上のとき。
+    pub fn word(&self, k: usize) -> Arc<AtomicU32>
+        requires
+            k < self.word_count(),
+    {
+        self.words[k].clone()
     }
 }
 
@@ -98,6 +439,9 @@ impl fmt::Display for Stop {
 impl Control {
     pub const INTERRUPT: u32 = 1;
     pub const MEMORY: u32 = 2;
+    /// worker の止める語にだけ立つ。run が終わったので、worker はエントリへ戻れ、という意味である。`stop` には立てない
+    /// (host の読み手が見る語を変えないため)。
+    pub const END: u32 = 4;
     pub const TERMINATE: u32 = 8;
     /// worker の止める語にだけ立つ。次の安全点で知らせを集めよ、という意味である。
     pub const NOTICE: u32 = 1 << 30;
@@ -107,10 +451,23 @@ impl Control {
     const RELAYED_SHIFT: u32 = 16;
     const PENDING_MASK: u32 = (1 << Self::RELAYED_SHIFT) - 1;
 
-    /// 止めるビットを `stop` と worker の語の両方に直接書く。worker の語へ写す仲介を置かず、止まる時点を書いた時点で決める。
+    /// 止めるビットを `stop` とすべての worker の語に直接書く。語へ写す仲介を置かず、止まる時点を書いた時点で決める。
+    /// シグナルの handler からも呼ぶので、確保も lock もしない。
     fn raise(&self, bits: u32) {
         self.stop.fetch_or(bits, Ordering::Relaxed);
-        self.worker.fetch_or(bits, Ordering::Relaxed);
+        self.raise_words(bits);
+    }
+
+    fn raise_words(&self, bits: u32) {
+        for word in &self.words {
+            word.fetch_or(bits, Ordering::Relaxed);
+        }
+    }
+
+    fn lower_words(&self, bits: u32) {
+        for word in &self.words {
+            word.fetch_and(!bits, Ordering::Relaxed);
+        }
     }
 
     pub fn interrupt(&self) {
@@ -121,24 +478,34 @@ impl Control {
         self.raise(Self::TERMINATE);
     }
 
-    /// worker に、次の安全点で切り替えるよう求める。
-    pub fn preempt(&self) {
-        self.worker.fetch_or(Self::PREEMPT, Ordering::Relaxed);
+    /// run の終わりをすべての worker に知らせる。`stop` にも終わりの欄にも書かない。
+    pub fn end_run(&self) {
+        self.raise_words(Self::END);
     }
 
-    /// 切り替えを受けたときに `PREEMPT` を下ろす。
-    pub fn take_preempt(&self) {
-        self.worker.fetch_and(!Self::PREEMPT, Ordering::Relaxed);
+    /// すべての worker の語から `END` を下ろす。
+    pub fn clear_end(&self) {
+        self.lower_words(Self::END);
     }
 
-    /// worker に、次の安全点で知らせを集めるよう求める。
-    pub fn notice(&self) {
-        self.worker.fetch_or(Self::NOTICE, Ordering::Relaxed);
+    /// worker `k` に、次の安全点で切り替えるよう求める。
+    pub fn preempt(&self, k: usize) {
+        self.words[k].fetch_or(Self::PREEMPT, Ordering::Relaxed);
     }
 
-    /// 知らせを集めるときに `NOTICE` を下ろす。
-    pub fn take_notice(&self) {
-        self.worker.fetch_and(!Self::NOTICE, Ordering::Relaxed);
+    /// worker `k` が切り替えを受けたときに `PREEMPT` を下ろす。
+    pub fn take_preempt(&self, k: usize) {
+        self.words[k].fetch_and(!Self::PREEMPT, Ordering::Relaxed);
+    }
+
+    /// worker `k` に、次の安全点で知らせを集めるよう求める。
+    pub fn notice(&self, k: usize) {
+        self.words[k].fetch_or(Self::NOTICE, Ordering::Relaxed);
+    }
+
+    /// worker `k` が知らせを集めるときに `NOTICE` を下ろす。
+    pub fn take_notice(&self, k: usize) {
+        self.words[k].fetch_and(!Self::NOTICE, Ordering::Relaxed);
     }
 
     /// シグナル `bits` (`INTERRUPT` か `TERMINATE`) を、待つタスクへ届けるまで保留にする。
@@ -183,10 +550,9 @@ impl Control {
         self.watched.load(Ordering::Relaxed)
     }
 
-    // `Ctx::poll` が読む。`stop_bits` と同じく、`#[inline]` がないとほかの crate から展開できない
-    #[inline]
-    pub fn worker_bits(&self) -> u32 {
-        self.worker.load(Ordering::Relaxed)
+    /// worker `k` の止める語の値。`Ctx::poll` は写した自分の語を直接読むので、これを通らない。
+    pub fn worker_bits(&self, k: usize) -> u32 {
+        self.words[k].load(Ordering::Relaxed)
     }
 
     /// `exit n` の終わりを書く。最初の書き手だけが `code` を書いて真を返し、後の書き手は何も変えずに偽を返す。
@@ -210,19 +576,21 @@ impl Control {
         }
     }
 
-    /// run の始めに終わりの欄を開き、`PREEMPT` と `NOTICE` を下ろす。止めるビットとシグナルの語は下ろさない。
+    /// run の始めに終わりの欄を開き、すべての worker の語から `PREEMPT`、`NOTICE`、`END` を下ろす。止めるビットと
+    /// シグナルの語は下ろさない。
     pub fn begin_run(&self) {
         self.end.store(0, Ordering::Relaxed);
-        self.worker
-            .fetch_and(!(Self::PREEMPT | Self::NOTICE), Ordering::Relaxed);
+        self.lower_words(Self::PREEMPT | Self::NOTICE | Self::END);
     }
 
-    /// 止める理由のビットとシグナルの語と見張りの語をすべて下ろし、終わりの欄を開く。確保量が上限を下回ってもビットは
-    /// 下りないので、止めるビットを下ろすのはこの関数だけである。`PREEMPT` と `NOTICE` は `take_preempt`、`take_notice`、
-    /// `begin_run` も下ろす。
+    /// 止める理由のビットと、すべての worker の語と、シグナルの語と見張りの語をすべて下ろし、終わりの欄を開く。確保量が
+    /// 上限を下回ってもビットは下りないので、止めるビットを下ろすのはこの関数だけである。`PREEMPT` と `NOTICE` は
+    /// `take_preempt`、`take_notice`、`begin_run` も下ろし、`END` は `clear_end` と `begin_run` も下ろす。
     pub fn clear(&self) {
         self.stop.store(0, Ordering::Relaxed);
-        self.worker.store(0, Ordering::Relaxed);
+        for word in &self.words {
+            word.store(0, Ordering::Relaxed);
+        }
         self.end.store(0, Ordering::Relaxed);
         self.signals.store(0, Ordering::Relaxed);
         self.watched.store(0, Ordering::Relaxed);
@@ -261,9 +629,165 @@ impl Control {
     }
 }
 
-/// 止める理由。割り込み、終了の求め (`TERMINATE`)、確保量、知らせ、切り替え、深さの順に先に報告する。ビットがどれも立っていなければ、
-/// 深さの上限で止めたとする。ビットは呼ぶ側が速い道で読んだ値を受け、読み直さない。読み直すと、その間にほかのスレッドが `clear`
-/// したとき、深さの上限を超えていなくても `DepthLimit` を返すためである。
+/// 数の塊1つが受け持つ ID の数。
+// Miri では、塊の大きさに比例して数える費用が増える。1024 個にすると、検査モードの `trusted` のテスト1本が
+// Tree Borrows で2倍の時間になったので、小さく保つ
+const CHUNK_IDS: usize = 64;
+
+type Chunk = [AtomicU64; CHUNK_IDS];
+
+/// 次に作る `Control` の番号。
+static CONTROL_IDS: AtomicU64 = AtomicU64::new(0);
+
+/// ページの表の上の3段の、1つの表の項目の数。
+const MAP_FAN: usize = 64;
+/// ページの表の葉の語の数。1つの葉が 2^14 個のページ (1 GiB) を受け持つ。
+// Miri では、表を作る費用が表の大きさによらないように、どの表も繰り返しの式で作る。表を落とすときは項目を1つずつ
+// 落とすので、項目の数は小さく保つ
+const LEAF_WORDS: usize = 256;
+
+type Leaf = [AtomicU64; LEAF_WORDS];
+type Node<T> = [OnceLock<Box<T>>; MAP_FAN];
+
+/// ページの番号を、3つの段の添字と、葉の語と、語の中のビットに分ける。番号が表の外 (番地が 2^48 以上) なら `None`。
+fn map_slot(a: usize) -> Option<([usize; 3], usize, u64)> {
+    let n = a >> 16;
+    (n >> 32 == 0).then(|| {
+        let bit = n % (LEAF_WORDS * 64);
+        let step = |k: u32| (n >> (14 + 6 * k)) % MAP_FAN;
+        ([step(2), step(1), step(0)], bit / 64, 1u64 << (bit % 64))
+    })
+}
+
+/// 項目がみな空の表。
+fn empty_node<T>() -> Box<Node<T>> {
+    Box::new([const { OnceLock::new() }; MAP_FAN])
+}
+
+/// 番地 `a` のページが表にあるか。値の約束を持たない読みで、T14 の `foreign_header` と `foreign_children`、T15 の
+/// `region_known` が使う。
+pub(crate) fn control_knows(control: &Control, a: usize) -> bool {
+    control.pages.contains(a)
+}
+
+/// `Heap` を落とすときに、確保器の `Drop` がページを返す前に表から外す。登録の証は確保器とともに消える。
+pub(crate) fn forget_page(control: &Control, page: usize) {
+    control.pages.remove(page);
+}
+
+// 登録のビットは、ページの物体の語をほかのスレッドへ渡す前に立て、ページを返す前に下ろす。語を受けたスレッドは、
+// 語を渡したときの順序でビットを見るので、表の読み書きは Relaxed で足りる
+impl PageMap {
+    fn leaf(&self, a: usize) -> Option<(&AtomicU64, u64)> {
+        let ([i, j, k], word, bit) = map_slot(a)?;
+        let leaf = self.top.get()?[i].get()?[j].get()?[k].get()?;
+        Some((&leaf[word], bit))
+    }
+
+    fn contains(&self, a: usize) -> bool {
+        self.leaf(a)
+            .is_some_and(|(word, bit)| word.load(Ordering::Relaxed) & bit != 0)
+    }
+
+    fn insert(&self, a: usize) {
+        let ([i, j, k], word, bit) =
+            map_slot(a).expect("a page below 2^48 for the checked-mode page map");
+        let leaf = self.top.get_or_init(empty_node)[i].get_or_init(empty_node)[j]
+            .get_or_init(empty_node)[k]
+            .get_or_init(|| Box::new([const { AtomicU64::new(0) }; LEAF_WORDS]));
+        leaf[word].fetch_or(bit, Ordering::Relaxed);
+    }
+
+    fn remove(&self, a: usize) {
+        if let Some((word, bit)) = self.leaf(a) {
+            word.fetch_and(!bit, Ordering::Relaxed);
+        }
+    }
+}
+
+// 表の lock の中では panic しないので、毒の入った lock も中身はそのまま使える
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl WorkerIds {
+    /// 数の塊を `id` まで伸ばし、塊の一覧の写しを返す。
+    fn grow(&self, id: u32) -> Vec<Arc<Chunk>> {
+        let mut chunks = lock(&self.chunks);
+        while chunks.len() <= id as usize / CHUNK_IDS {
+            chunks.push(Arc::new(std::array::from_fn(|_| AtomicU64::new(0))));
+        }
+        chunks.clone()
+    }
+
+    fn live(&self, id: u32) -> u64 {
+        lock(&self.chunks)
+            .get(id as usize / CHUNK_IDS)
+            .map_or(0, |chunk| {
+                chunk[id as usize % CHUNK_IDS].load(Ordering::Relaxed)
+            })
+    }
+}
+
+impl IdCounts {
+    /// ID `id` の、rc が正の生きている物体の数。
+    pub(crate) fn owned_by(&self, id: u32) -> u64 {
+        self.control
+            .as_ref()
+            .map_or(0, |control| control.workers.live(id))
+    }
+}
+
+impl Control {
+    /// ID ごとの数を、`heaps` のページの rc が正の生きている物体の所有者から数え直して確かめる。食い違う ID のうち最小の
+    /// ものを `OwnedMiscount` で返す。速いモードでは何もしない (docs/spec/object-model.md の「論理的な worker ID」)。
+    ///
+    /// 数え直す前に、この `Control` のすべてのヒープを渡し、どのヒープもほかのスレッドからの解放を取り込み終えていて、
+    /// 呼んでいる間どのスレッドもヒープに触れないこと。この関数は取り込めないので、検査モードでは、受けて取り込んで
+    /// いない解放の残るヒープがあれば `NotQuiescent` を返す。
+    ///
+    /// # Panics
+    /// ほかの `Control` のヒープを渡したとき。
+    pub fn check_owned<M: Mode>(&self, heaps: &[&Heap<M>]) -> Result<(), HeapError> {
+        assert!(
+            heaps.iter().all(|heap| ptr::eq(&**heap.control(), self)),
+            "check_owned over a heap of another Control"
+        );
+        if !M::CHECKED {
+            return Ok(());
+        }
+        if heaps.iter().any(|heap| heap.remote_pending()) {
+            return Err(HeapError::NotQuiescent);
+        }
+        let mut counted: BTreeMap<u32, u64> = BTreeMap::new();
+        for heap in heaps {
+            for owner in heap.owned_entries() {
+                *counted.entry(owner).or_default() += 1;
+            }
+        }
+        let chunks = lock(&self.workers.chunks);
+        let table = chunks.len() * CHUNK_IDS;
+        let in_table = (0..table).find(|&i| {
+            chunks[i / CHUNK_IDS][i % CHUNK_IDS].load(Ordering::Relaxed)
+                != counted.get(&(i as u32)).copied().unwrap_or(0)
+        });
+        let past_table = counted
+            .keys()
+            .map(|&id| id as usize)
+            .find(|&id| id >= table);
+        match in_table.into_iter().chain(past_table).min() {
+            Some(worker) => Err(HeapError::OwnedMiscount {
+                worker: worker as u32,
+            }),
+            None => Ok(()),
+        }
+    }
+}
+
+/// 止める理由。割り込み、終了の求め (`TERMINATE`)、確保量、run の終わり (`END`)、知らせ、切り替え、深さの順に先に
+/// 報告する。ビットがどれも立っていなければ、深さの上限で止めたとする。ビットは呼ぶ側が速い道で読んだ値を受け、
+/// 読み直さない。読み直すと、その間にほかのスレッドが `clear` したとき、深さの上限を超えていなくても `DepthLimit` を
+/// 返すためである。
 #[cold]
 pub(crate) fn stop_reason(bits: u32) -> Stop {
     if bits & Control::INTERRUPT != 0 {
@@ -272,6 +796,8 @@ pub(crate) fn stop_reason(bits: u32) -> Stop {
         Stop::Terminated
     } else if bits & Control::MEMORY != 0 {
         Stop::MemoryLimit
+    } else if bits & Control::END != 0 {
+        Stop::Ended
     } else if bits & Control::NOTICE != 0 {
         Stop::Notice
     } else if bits & Control::PREEMPT != 0 {

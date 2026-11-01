@@ -4,7 +4,9 @@
 //! `Ctx` は ghost の状態を持たず、`evv` のリストや evidence をヒープの上の spec の関数で表す。VM は検証しないコードで、
 //! 基本操作の合間にヒープを変えるので、ghost のリストを保ち続けられないためである。
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use vstd::prelude::*;
 
@@ -19,7 +21,7 @@ use crate::host::HostRef;
 use crate::meta::{Kind, Meta};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
-use crate::mode::Mode;
+use crate::mode::{Checked, Mode};
 use crate::word::Word;
 #[cfg(verus_only)]
 use crate::word::lemma_unit_bits;
@@ -817,8 +819,10 @@ pub struct Ctx<M: Mode> {
     yielding: YieldState,
     /// セッションの根 (`roots.rs`)。空の根は `None` である。
     roots: Vec<Option<Word>>,
-    /// 安全点の確かめがヒープの中をたどらずに読めるよう、ヒープとは別に持つ。
+    /// 確保の前の上限の確かめと Host の読み手がヒープの中をたどらずに読めるよう、ヒープとは別に持つ。
     control: Arc<Control>,
+    /// この worker の止める語 (`Control::word`)。安全点は、この欄を読み、語を読む2回の読みで済む。
+    word: Arc<AtomicU32>,
     max_depth: usize,
     /// 今のタスクの深さの上限。`max_depth` から、タスクの深さの起点を引いた値である。`par` の右の子の深さは
     /// fork のときの親の深さから数えるが、引いた上限を持てば、安全点で起点を足さずに済む
@@ -1021,14 +1025,36 @@ impl<M: Mode> Ctx<M> {
         &&& !M::CHECKED ==> self.held_ok()
     }
 
-    /// `evv` が空で、yield していない文脈。ページはセッションの `control` に数え、出力とファイルは `host` を通す。
+    /// worker 0 の `Ctx` (`for_worker(control, host, 0)`)。
+    ///
+    /// # Panics
+    /// `control.limits().workers` が 0 のとき。
     pub fn new(control: Arc<Control>, host: HostRef) -> (r: Ctx<M>)
+        requires
+            control.word_count() >= 1,
+        ensures
+            r.wf(),
+            r.held_ok(),
+            r.finished(),
+    {
+        Ctx::for_worker(control, host, 0)
+    }
+
+    /// worker `k` の、`evv` が空で yield していない文脈。ページはセッションの `control` に数え、出力とファイルは `host`
+    /// を通す。安全点は `control` の `k` 番目の止める語を読む。
+    ///
+    /// # Panics
+    /// `k` が `control.limits().workers` 以上のとき。
+    pub fn for_worker(control: Arc<Control>, host: HostRef, k: usize) -> (r: Ctx<M>)
+        requires
+            k < control.word_count(),
         ensures
             r.wf(),
             r.held_ok(),
             r.finished(),
     {
         let limits = control.limits();
+        let word = control.word(k);
         let heap = Heap::with_control(control.clone());
         let r = Ctx {
             heap,
@@ -1036,6 +1062,7 @@ impl<M: Mode> Ctx<M> {
             yielding: YieldState::none(),
             roots: Vec::new(),
             control,
+            word,
             max_depth: limits.max_depth,
             depth_limit: limits.max_depth,
             max_evv: limits.max_evv,
@@ -1087,6 +1114,84 @@ impl<M: Mode> Ctx<M> {
 
     pub fn stats(&self) -> CtxStats {
         self.stats
+    }
+
+    /// ほかのスレッドから受けた解放を取り込む (docs/spec/object-model.md の「別のスレッドからの解放」)。先に構築中の
+    /// 物体を生きている物体にする。`Ctx` の持つ語の物体は空けたことにしない。
+    pub fn reclaim(&mut self)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+    {
+        self.reclaim_when(false);
+    }
+
+    /// 受けた解放が溜まっていれば取り込み、真を返す (`Heap::reclaim_if_due`)。VM は待つ前、タスクを切り替えるとき、
+    /// join の後、run の終わりの検査の前に呼ぶ (docs/spec/vm.md の「タスクとスケジュール」「子の終わりと join」
+    /// 「時計と driver」「誤り、止めること、終わり」)。
+    pub fn reclaim_if_due(&mut self) -> (r: bool)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+    {
+        self.reclaim_when(true)
+    }
+
+    /// `Ctx` の持つ語が指す物体の番地。
+    spec fn held_set(&self) -> Set<usize> {
+        set![
+            self.evv.bits_spec(),
+            self.yielding.target.bits_spec(),
+            self.yielding.clause.bits_spec(),
+            self.yielding.cont.bits_spec(),
+        ]
+    }
+
+    /// 根の表の語の番地。空の項目は 0 にする。0 はどのブロックの番地でもない。
+    spec fn root_bits(&self) -> Seq<usize> {
+        self.roots@.map_values(
+            |o: Option<Word>|
+                match o {
+                    Some(w) => w.bits_spec(),
+                    None => 0,
+                },
+        )
+    }
+
+    /// `Ctx` の持つ語と根の表の語が指す物体の番地。回復は、先にほかのスレッドから受けた解放を取り込むが、この番地の
+    /// 物体は空けたことにしない。
+    pub closed spec fn kept_set(&self) -> Set<usize> {
+        self.held_set().union(self.root_bits().to_set())
+    }
+
+    fn reclaim_when(&mut self, due: bool) -> (r: bool)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+    {
+        let ghost c0 = *self;
+        self.heap.settle();
+        let ghost c1 = *self;
+        let ghost held = self.held_set();
+        let r = if due {
+            self.heap.reclaim_if_due_held(Ghost(held))
+        } else {
+            self.heap.reclaim_held(Ghost(held));
+            true
+        };
+        proof {
+            self.lemma_reclaimed_ctx(c1, c0, held);
+        }
+        r
     }
 
     /// yield 中か中断中なら 1、そうでなければ 0。
@@ -3486,10 +3591,25 @@ impl<M: Mode> Ctx<M> {
     /// `switch_task` が上限から引いてある。
     #[inline]
     pub fn poll(&self, depth: usize) -> Result<(), Stop> {
-        let bits = self.control.worker_bits();
+        let bits = self.word.load(Ordering::Relaxed);
         if depth > self.depth_limit || bits != 0 {
             return Err(stop_reason(bits));
         }
         Ok(())
+    }
+}
+
+// 検査モードの検査はヒープの `verus!` の外の検査を呼ぶだけなので、同じく外に書く
+impl Ctx<Checked> {
+    /// 取り込んでから、ヒープの不変条件を確かめる (`Heap::check_invariants`)。
+    pub fn check_invariants(&mut self) -> Result<(), HeapError> {
+        self.reclaim();
+        self.heap.check_reclaimed()
+    }
+
+    /// 取り込んでから、ヒープのリークを数える (`Heap::leaks`)。
+    pub fn leaks(&mut self) -> BTreeMap<&'static str, u64> {
+        self.reclaim();
+        self.heap.leaks_reclaimed()
     }
 }

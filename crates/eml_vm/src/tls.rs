@@ -444,7 +444,8 @@ mod on_tests {
         assert!(chunk.starts_with(b"efxx"));
 
         unsafe { ctx.heap_mut().decref(client) }.unwrap();
-        assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+        let leaks = ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
     }
 
     #[test]
@@ -455,7 +456,8 @@ mod on_tests {
         assert!(unsafe { &*ctx.heap().bytes(out).unwrap() }.is_empty());
         unsafe { ctx.heap_mut().decref(out) }.unwrap();
         unsafe { ctx.heap_mut().decref(client) }.unwrap();
-        assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+        let leaks = ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
     }
 
     /// 設定の誤りは種類 `Other` で、文言は固定である。誤りでは何も確保しない。
@@ -484,6 +486,7 @@ mod on_tests {
             assert_eq!(raised.kind, externs::IO_OTHER);
             assert_eq!(&*raised.message, message);
         }
-        assert!(ctx.heap().leaks().is_empty(), "{:?}", ctx.heap().leaks());
+        let leaks = ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
     }
 }

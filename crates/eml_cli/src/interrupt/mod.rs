@@ -228,7 +228,7 @@ mod tests {
         installed.control.set_watched(INTERRUPT);
         assert_eq!(installed.respond(TERMINATE), Response::Handled);
         assert_eq!(installed.control.stop_bits(), TERMINATE);
-        assert_eq!(installed.control.worker_bits(), TERMINATE);
+        assert_eq!(installed.control.worker_bits(0), TERMINATE);
         assert_eq!(installed.control.pending_signals(), 0);
     }
 

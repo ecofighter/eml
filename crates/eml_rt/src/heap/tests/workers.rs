@@ -1,18 +1,21 @@
 //! 論理的な worker ID の割り当てと、ID ごとの数 (docs/spec/object-model.md の「論理的な worker ID」)。
 
+use std::sync::Arc;
+
+use super::ctx::ctx;
 use super::{CONS, cons, list, mortal, raw};
-use crate::{Checked, Heap, HeapError, Kind, Meta, Mode, Word};
+use crate::{Checked, Control, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
 
 type H = Heap<Checked>;
 
 const CONS_META: Meta = Meta::new(CONS, 2, Kind::Data, false);
 
 /// 数が `expected` のとおりで、数え直しも通る。
-fn assert_owned(heap: &H, expected: &[(u32, u64)]) {
+fn assert_owned(heap: &mut H, expected: &[(u32, u64)]) {
     for &(id, n) in expected {
         assert_eq!(heap.owned_by(id), n, "worker {id}");
     }
-    assert_eq!(heap.check_invariants(), Ok(()));
+    assert_eq!(super::check_all(heap), Ok(()));
 }
 
 #[test]
@@ -23,17 +26,17 @@ fn the_size_of_heap_error_stays_at_twelve_bytes() {
 #[test]
 fn counts_follow_allocation_and_release() {
     let mut heap = H::new();
-    assert_owned(&heap, &[(0, 0)]);
+    assert_owned(&mut heap, &[(0, 0)]);
     let l = list(&mut heap, 3);
-    assert_owned(&heap, &[(0, 3)]);
+    assert_owned(&mut heap, &[(0, 3)]);
     let s = heap.alloc_string("a");
-    assert_owned(&heap, &[(0, 4)]);
+    assert_owned(&mut heap, &[(0, 4)]);
     unsafe {
         heap.decref(l).unwrap();
-        assert_owned(&heap, &[(0, 1)]);
+        assert_owned(&mut heap, &[(0, 1)]);
         heap.decref(s).unwrap();
     }
-    assert_owned(&heap, &[(0, 0)]);
+    assert_owned(&mut heap, &[(0, 0)]);
 }
 
 #[test]
@@ -41,7 +44,7 @@ fn immortal_objects_are_not_counted() {
     let mut heap = H::new();
     let w = heap.alloc_string_immortal("literal");
     let _ = unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false)) };
-    assert_owned(&heap, &[(0, 0)]);
+    assert_owned(&mut heap, &[(0, 0)]);
     let _ = w;
 }
 
@@ -51,10 +54,10 @@ fn a_string_that_grows_by_copying_keeps_its_count() {
     let mut w = heap.alloc_string("a");
     for _ in 0..8 {
         w = unsafe { heap.string_push(w, "0123456789abcdef") }.unwrap();
-        assert_owned(&heap, &[(0, 1)]);
+        assert_owned(&mut heap, &[(0, 1)]);
     }
     unsafe { heap.decref(w) }.unwrap();
-    assert_owned(&heap, &[(0, 0)]);
+    assert_owned(&mut heap, &[(0, 0)]);
 }
 
 #[test]
@@ -63,13 +66,13 @@ fn objects_count_for_the_worker_that_allocated_them() {
     let a = list(&mut heap, 1);
     heap.set_worker(3);
     let b = list(&mut heap, 2);
-    assert_owned(&heap, &[(0, 1), (3, 2)]);
+    assert_owned(&mut heap, &[(0, 1), (3, 2)]);
     unsafe {
         heap.decref(b).unwrap();
         heap.set_worker(0);
         heap.decref(a).unwrap();
     }
-    assert_owned(&heap, &[(0, 0), (3, 0)]);
+    assert_owned(&mut heap, &[(0, 0), (3, 0)]);
 }
 
 /// token の間は持ち主のまま数え、使い回すと今の worker の数に移る。
@@ -79,22 +82,22 @@ fn a_token_round_trip_moves_the_count_to_the_rebuilding_worker() {
     let cell = cons(&mut heap, Word::imm(1), Word::imm(0));
     unsafe {
         let token = heap.release_reuse(cell, CONS, &[false, false]).unwrap();
-        assert_owned(&heap, &[(0, 1)]);
+        assert_owned(&mut heap, &[(0, 1)]);
         heap.set_worker(2);
         let (q, reused) = heap.con_at(token, 2, CONS_META).unwrap();
         assert!(reused);
         heap.set_field(q, 0, Word::UNIT).unwrap();
         heap.set_field(q, 1, Word::UNIT).unwrap();
-        assert_owned(&heap, &[(0, 0), (2, 1)]);
+        assert_owned(&mut heap, &[(0, 0), (2, 1)]);
         let token = heap.release_reuse(q, CONS, &[false, false]).unwrap();
         heap.set_worker(0);
         let q = heap.reuse_in_place(token, CONS_META).unwrap();
-        assert_owned(&heap, &[(0, 1), (2, 0)]);
+        assert_owned(&mut heap, &[(0, 1), (2, 0)]);
         let token = heap.into_token(q).unwrap();
-        assert_owned(&heap, &[(0, 1)]);
+        assert_owned(&mut heap, &[(0, 1)]);
         heap.drop_token(token).unwrap();
     }
-    assert_owned(&heap, &[(0, 0), (2, 0)]);
+    assert_owned(&mut heap, &[(0, 0), (2, 0)]);
 }
 
 /// 印を付けた物体は数から外れ、所有を移す物体は受け手の数に移る。
@@ -105,14 +108,14 @@ fn share_takes_marked_objects_out_and_moves_lin_objects() {
     let lin = heap.alloc_data(0, 1, 0, true);
     unsafe {
         heap.set_field(lin, 0, child).unwrap();
-        assert_owned(&heap, &[(0, 3)]);
+        assert_owned(&mut heap, &[(0, 3)]);
         heap.share(lin, 7).unwrap();
-        assert_owned(&heap, &[(0, 0), (7, 3)]);
+        assert_owned(&mut heap, &[(0, 0), (7, 3)]);
         heap.set_worker(7);
         heap.decref(lin).unwrap();
     }
-    assert_owned(&heap, &[(0, 0), (7, 0)]);
-    assert_eq!(mortal(&heap), 0);
+    assert_owned(&mut heap, &[(0, 0), (7, 0)]);
+    assert_eq!(mortal(&mut heap), 0);
 }
 
 #[test]
@@ -125,12 +128,12 @@ fn a_count_that_disagrees_with_the_heap_is_reported() {
         // 数を通さずに共有の印を付ける
         raw::set_rc(&mut heap, w, -1);
         assert_eq!(
-            heap.check_invariants(),
+            super::check_all(&mut heap),
             Err(HeapError::OwnedMiscount { worker: 4 })
         );
         raw::set_rc(&mut heap, w, 1);
     }
-    assert_eq!(heap.check_invariants(), Ok(()));
+    assert_eq!(super::check_all(&mut heap), Ok(()));
 }
 
 #[test]
@@ -144,7 +147,7 @@ fn a_miscount_past_the_table_is_reported() {
         raw::set_prefix_first(&mut heap, w, 9);
     }
     assert_eq!(
-        heap.check_invariants(),
+        super::check_all(&mut heap),
         Err(HeapError::OwnedMiscount { worker: 9 })
     );
 }
@@ -264,4 +267,127 @@ fn retiring_an_id_twice_panics() {
     let child = heap.fork_worker();
     heap.retire_worker(child).unwrap();
     let _ = heap.retire_worker(child);
+}
+
+/// 同じ `Control` のヒープは1つの表で ID を出し、数える。
+fn two_heaps() -> (H, H) {
+    let control = Arc::new(Control::new(Limits::default()));
+    (
+        H::with_control(Arc::clone(&control)),
+        H::with_control(control),
+    )
+}
+
+#[test]
+fn heaps_of_one_control_hand_out_ids_from_one_table() {
+    let (mut a, mut b) = two_heaps();
+    assert_eq!(
+        [a.fork_worker(), b.fork_worker(), a.fork_worker()],
+        [1, 2, 3]
+    );
+    b.retire_worker(2).unwrap();
+    assert_eq!(a.fork_worker(), 2);
+    b.set_worker(9);
+    assert_eq!(a.fork_worker(), 10);
+}
+
+/// 数は物体のあるヒープによらず ID ごとに足し、`check_owned` はすべてのヒープの物体から数え直す。
+#[test]
+fn check_owned_counts_every_heap_of_the_control() {
+    let (mut a, mut b) = two_heaps();
+    let child = a.fork_worker();
+    b.set_worker(child);
+    let x = list(&mut a, 2);
+    let y = list(&mut b, 3);
+    assert_eq!((a.owned_by(0), b.owned_by(0)), (2, 2));
+    assert_eq!((a.owned_by(child), b.owned_by(child)), (3, 3));
+    let control = Arc::clone(a.control());
+    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
+    // 1つのヒープだけでは、もう1つのヒープの物体の数が合わない
+    assert_eq!(
+        control.check_owned(&[&a]),
+        Err(HeapError::OwnedMiscount { worker: child })
+    );
+    assert_eq!(
+        control.check_owned(&[&b]),
+        Err(HeapError::OwnedMiscount { worker: 0 })
+    );
+    unsafe {
+        a.decref(x).unwrap();
+        b.decref(y).unwrap();
+    }
+    b.set_worker(0);
+    assert_eq!(a.retire_worker(child), Ok(()));
+    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
+}
+
+/// 表は ID を 64 個ずつの塊で持つ。ほかのヒープが伸ばした塊も、数えるときに写し直して数える。
+#[test]
+fn a_count_past_the_first_chunk_reaches_every_heap() {
+    let (mut a, mut b) = two_heaps();
+    a.set_worker(3000);
+    b.set_worker(3000);
+    let x = list(&mut b, 1);
+    assert_eq!(a.owned_by(3000), 1);
+    let control = Arc::clone(a.control());
+    assert_eq!(control.check_owned(&[&a, &b]), Ok(()));
+    unsafe { b.decref(x) }.unwrap();
+    assert_eq!(a.owned_by(3000), 0);
+}
+
+#[test]
+fn a_miscount_past_every_chunk_is_reported() {
+    let mut heap = H::new();
+    let w = list(&mut heap, 1);
+    unsafe {
+        heap.share(w, 0).unwrap();
+        // どのヒープも使っていない塊の ID の物体を、数を通さずに局所に戻す
+        raw::set_rc(&mut heap, w, 1);
+        raw::set_prefix_first(&mut heap, w, 5000);
+    }
+    assert_eq!(
+        super::check_all(&mut heap),
+        Err(HeapError::OwnedMiscount { worker: 5000 })
+    );
+}
+
+#[test]
+#[should_panic(expected = "check_owned over a heap of another Control")]
+fn check_owned_refuses_a_heap_of_another_control() {
+    let heap = H::new();
+    let _ = Control::new(Limits::default()).check_owned(&[&heap]);
+}
+
+#[test]
+fn check_owned_does_nothing_in_fast_mode() {
+    let mut heap = Heap::<Fast>::new();
+    let _ = list(&mut heap, 2);
+    let control = Arc::clone(heap.control());
+    assert_eq!(control.check_owned(&[&heap]), Ok(()));
+}
+
+/// 回復は表を消してから写す。捨てたヒープの ID と数は残らず、写した物体だけを数える。
+#[test]
+fn recovery_resets_the_table() {
+    let mut ctx = ctx::<Checked>();
+    let child;
+    unsafe {
+        let heap = ctx.heap_mut();
+        child = heap.fork_worker();
+        assert_eq!(heap.fork_worker(), child + 1);
+        heap.set_worker(child);
+        let _lost = list(heap, 2);
+        heap.set_worker(0);
+        let kept = list(heap, 1);
+        ctx.root_set(0, kept).unwrap();
+        ctx.recover().unwrap();
+    }
+    assert_eq!((ctx.heap().owned_by(0), ctx.heap().owned_by(child)), (1, 0));
+    assert_eq!(super::check_all(&mut ctx), Ok(()));
+    unsafe {
+        assert_eq!(ctx.heap_mut().fork_worker(), child);
+        for w in ctx.take_roots().into_iter().flatten() {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
 }

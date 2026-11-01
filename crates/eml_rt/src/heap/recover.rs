@@ -16,6 +16,7 @@ use super::model::{BlockState, lemma_indeg_insert};
 use crate::error::HeapError;
 use crate::meta::{Header, Kind};
 use crate::mode::Mode;
+use crate::remote::foreign_header;
 use crate::word::Word;
 
 verus! {
@@ -579,7 +580,14 @@ impl<M: Mode> Heap<M> {
         }
         let a = w.bits();
         let h = self.header_of(w);
-        if !self.core.in_heap(h) {
+        // ページの頭と前置きを読む前に、ページが登録してあるかを確かめる。落としたヒープのページを指す語は、メモリに
+        // 触れずに断る (docs/spec/object-model.md の「ページの表」)
+        if M::CHECKED && !self.page_known(h) {
+            return Err(HeapError::UnknownPage);
+        }
+        let own = self.core.in_heap(h);
+        // `sink` が null のページは付けた塊で、null でなければこのヒープかほかのヒープのページなので写す
+        if !own && !self.core.foreign_block(h) {
             // 付けた塊の物体である。写し先も同じ塊を付けているので、そのまま使う
             proof {
                 assert(self.core.region_has(a));
@@ -607,21 +615,33 @@ impl<M: Mode> Heap<M> {
                 self.core.lemma_at(a);
             }
         }
-        if M::CHECKED {
-            // 生存の状態でない箱 (空けた箱、token の箱、空ける途中の箱) は写さない
-            if self.core.prefix_state_get(h) & 3 != 1 {
+        // 生存の状態でない箱 (空けた箱、token の箱、空ける途中の箱) は写さない。ほかのヒープのページの箱は、検査モード
+        // では前置きの状態と rc と `lin` ビットを T14 の読みで読む。中身は自分の箱と同じコードで読む
+        // (docs/spec/object-model.md の「回復」)
+        let (rc, lin) = if own || !M::CHECKED {
+            if M::CHECKED && self.core.prefix_state_get(h) & 3 != 1 {
                 return Err(HeapError::Unrecoverable);
             }
-        }
-        proof {
-            reveal(Core::building_wf);
-            if M::CHECKED {
-                assert(self.core.state(a) == BlockState::Live);
-            } else {
+            proof {
+                reveal(Core::building_wf);
                 assert(self.core.state(a) == BlockState::Live);
             }
+            (self.core.rc_get(h), self.core.meta_get(h).lin())
+        } else {
+            match foreign_header(self.core.pages.control_ref(), h, Ghost(self.core)) {
+                Some((state, rc, lin)) => {
+                    if state & 3 != 1 {
+                        return Err(HeapError::Unrecoverable);
+                    }
+                    (rc, lin)
+                },
+                None => return Err(HeapError::UnknownPage),
+            }
+        };
+        proof {
+            reveal(Core::building_wf);
+            assert(self.core.state(a) == BlockState::Live);
         }
-        let rc = self.core.rc_get(h);
         if rc == 0 {
             if a == self.dummy.bits() {
                 let d = new.dummy();
@@ -642,7 +662,7 @@ impl<M: Mode> Heap<M> {
             return Err(HeapError::Unrecoverable);
         }
         let m = self.core.meta_get(h);
-        if m.lin() {
+        if lin {
             return Err(HeapError::Unrecoverable);
         }
         match done.get(&a) {

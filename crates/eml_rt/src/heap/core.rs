@@ -15,7 +15,7 @@ use super::model::Pos;
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, lemma_indeg_pos};
 #[cfg(verus_only)]
-use crate::alloc::{FREE_META, PageHeader, header_cap, header_ok, page_base};
+use crate::alloc::{FREE_META, PageHeader, header_cap, header_ok, header_sink, page_base};
 use crate::cell::{
     rc_decref_shared, rc_dup_shared, rc_is_last, rc_load, rc_store, u32_load, u32_store,
 };
@@ -26,6 +26,7 @@ use crate::meta::{Header, Meta, meta_ptr, prefix_first_ptr, prefix_state_ptr, rc
 use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
 #[cfg(verus_only)]
 use crate::rc::{Obj, decref_next, dup_next, lemma_decref, lemma_dup};
+use crate::remote::page_sink_of;
 use crate::word::Word;
 
 verus! {
@@ -221,6 +222,7 @@ impl Core {
             header_ok(r.value(), self.pages.prefixed()),
             header_cap(r.value(), self.pages.prefixed()) == self.cap(h),
             !self.in_region(h) ==> r.value() == self.pages.page_header(page_base(h)),
+            self.in_region(h) ==> header_sink(r.value())@.addr == 0,
     {
         self.lemma_shape(h);
         if self.in_region(h) {
@@ -234,8 +236,8 @@ impl Core {
         }
     }
 
-    /// ブロック `h` は、付けた塊のブロックでなく、このヒープのブロックである。ヒープのページと塊のページは重ならない
-    /// ので、`h` のページがこのヒープのページかで見分ける。
+    /// ブロック `h` は、付けた塊のブロックでなく、このヒープのブロックである。ページの頭の `sink` が、このヒープの
+    /// ページではこのヒープの `sink`、塊のページでは null なので、その比較で見分ける。
     #[inline]
     pub(crate) fn in_heap(&self, h: *mut Header) -> (r: bool)
         requires
@@ -302,6 +304,30 @@ impl Core {
             assert(self.perms@.dom() =~= s0.perms@.dom());
             assert(self.perm(h@.addr).slots.dom() =~= s0.perm(h@.addr).slots.dom());
         }
+    }
+
+    /// ブロック `h` が、ほかのヒープのページにあるか。ページの頭の `sink` が、このヒープのものでも塊の null でもない
+    /// ときに真を返す。ほかのヒープのブロックはモデルに入れないので、証明の上ではこのヒープか塊のブロックだけが来て、
+    /// 偽を返す。実行時にほかのヒープの語が来るのは、信頼の一覧の T14 の読み方による (docs/spec/object-model.md の
+    /// 「`unsafe` の核」)。
+    pub(crate) fn foreign_block(&self, h: *mut Header) -> (r: bool)
+        requires
+            self.sound(),
+            self.has(h@.addr),
+            h == self.block(h@.addr),
+        ensures
+            !r,
+    {
+        let tracked hdr = self.tracked_header(h@.addr);
+        proof {
+            let a = h@.addr;
+            if self.dom().contains(a) {
+                self.pages.lemma_in_use_carved(a);
+                self.pages.lemma_carved_page(a);
+            }
+        }
+        let own = self.pages.owns(h, Tracked(hdr));
+        !own && page_sink_of(h, Tracked(Some(hdr))).addr() != 0
     }
 
     /// 検査モードの前置きの状態の欄を読む。

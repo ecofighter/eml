@@ -14,12 +14,12 @@ fn a_root_keeps_its_value_until_taken<M: Mode>() {
             assert_eq!(got, s);
             ctx.heap_mut().decref(got).unwrap();
         }
-        assert_eq!(super::mortal(ctx.heap()), 1);
+        assert_eq!(super::mortal(&mut ctx), 1);
         let roots = ctx.take_roots();
         assert_eq!(roots, vec![Some(s)]);
         ctx.heap_mut().decref(s).unwrap();
     }
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
     assert!(ctx.take_roots().is_empty());
 }
 
@@ -66,7 +66,7 @@ fn a_root_is_set_once<M: Mode>() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 /// `roots` は根の表を番号の順に読むだけで、参照の数を変えない。
@@ -86,7 +86,7 @@ fn roots_reads_the_table_in_order<M: Mode>() {
             ctx.heap_mut().decref(w).unwrap();
         }
     }
-    assert_eq!(super::mortal(ctx.heap()), 0);
+    assert_eq!(super::mortal(&mut ctx), 0);
 }
 
 both_modes!(

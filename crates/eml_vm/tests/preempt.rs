@@ -85,17 +85,17 @@ fn run_raising(
 /// 走れるタスクがなければ、`PREEMPT` は切り替えずにビットを下ろすだけである。
 #[test]
 fn a_preempt_without_a_ready_task_only_lowers_the_bit() {
-    let (control, result) = run_raising(Control::preempt);
+    let (control, result) = run_raising(|control| control.preempt(0));
     let finished = result.expect("the run ends normally");
     assert_eq!(finished.preemptions, 0);
-    assert_eq!(control.worker_bits() & Control::PREEMPT, 0);
+    assert_eq!(control.worker_bits(0) & Control::PREEMPT, 0);
 }
 
 /// `PREEMPT` と一緒に立った止めるビットは、切り替えより先に勝つ。
 #[test]
 fn a_stop_raised_with_preempt_wins() {
     let (_, result) = run_raising(|control| {
-        control.preempt();
+        control.preempt(0);
         control.interrupt();
     });
     assert!(
@@ -131,7 +131,7 @@ main () =
         inner,
         raise: Box::new(move |line| {
             if line == "a" {
-                raiser.preempt();
+                raiser.preempt(0);
             }
         }),
     };

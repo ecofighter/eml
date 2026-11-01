@@ -895,12 +895,13 @@ impl Core {
         }
     }
 
-    /// 速いモードで、空ける途中のブロック `h` を確保器に返した後の状態。
+    /// 速いモードで、空ける途中か空けたブロック `h` を確保器に返した後の状態。空けたブロックは、別のスレッドからの
+    /// 解放を取り込むときに返す。
     pub(crate) proof fn lemma_block_released(&self, s0: Core, h: usize)
         requires
             s0.full(),
             s0.dom().contains(h),
-            s0.state(h) == BlockState::Dying,
+            s0.state(h) == BlockState::Dying || s0.state(h) == BlockState::Freed,
             s0.indeg(h) == 0,
             forall|j: int| !(#[trigger] s0.model@.edges.dom().contains((h, j))),
             self.env == s0.env,

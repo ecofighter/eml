@@ -28,8 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
-- `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
+- `async-threads`: worker をまたいで `Async` のタスクを動かす。登録表を run の lock の下に置き、`Counter` の表を atomic にする。worker 1..N-1 の I/O の driver は、そこに置いたタスクが最初に使うときにそのスレッドで作る。スレッドをまたぐ受け箱の知らせ (`Wake`、`Place`、`Cancel`、`Completion`、`Submit`)、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、`async/` の UI テストを N = 2 と 8 でも流し、worker の数に応じて速くなることを測る。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
 - `async-rescue`: 詰まった worker のタスクを、空いた worker が救済する。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「救済」
 - `task-limits`: タスクごとに深さ、スタック、メモリの上限を設け、超えたタスクだけを IO の失敗 `ResourceLimit` で止める。メモリの硬い上限は今と同じく run 全体を止める。安全点と末尾でない呼び出しの位置が、巻き戻しの地点になる。前提: `async-threads`。設計: [非同期の設計](async.md) の「タスクごとの上限」
 - `async-files`: 非同期のファイルと、子のプロセスのパイプを入れる。今のブロックする std の行では書けない次の3つを書けるようにする。前提: なし。設計: [非同期の設計](async.md) の「ファイルとパイプ」
@@ -62,7 +61,7 @@
 - `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`task-limits`、`async-rescue`、`async-files`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
 - `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 のエントリの stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
 - `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の実装の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`、`raw-arrays`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
-- `par-steal`: VM の `par` の子を別の worker で動かす。worker ごとの deque、盗み、スレッドをまたぐ join の待ちを入れる。前提: `worker-threads`。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
+- `par-steal`: VM の `par` の右の子を、空いている worker の受け箱に置く形から、worker ごとの Chase-Lev の deque と盗みに替える。join の待ちと、子の終わりを親の worker へ知らせる道は、今のものをそのまま使う。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
 - `std-par`: `std/Par` のデータ並列の集まりの関数と、添字の範囲のプリミティブを入れる。前提: `par-steal`、`raw-arrays`。設計: [マルチコア対応の設計](multicore.md) の「データ並列での使い勝手」
 - `native-par`: ネイティブのコードで、join で待つ worker が手伝う fork / join を動かす。前提: `native-inline`、`std-par`、`jit-effects`。設計: [ネイティブ化の設計](native.md) の「並列の実行」
 
@@ -252,6 +251,7 @@
 - `miri.rs` のテストの1つあたりの Miri の費用: `crates/eml_vm/tests/miri.rs` の `par_switches_between_tasks`、`shared_struct_boxes_with_scalar_leaves`、`multi_value_returns`、`an_immediate_clause_reads_and_writes_the_state_of_its_evidence` の4つは、1つのテストの上限 (Tree Borrows の下で 10 秒) を超える ([テスト戦略](../implementation/testing.md) の「Miri」)。上限に収めるには、1回の実行ごとの準備を安くする必要がある
   - 後に回した理由: コマンド全体の `user` は予算に収まっている。4つはどれも、VM が核の操作の前提を守ることを別の道 (`par` の切り替え、構造体と箱の変換、共有の箱の葉、節の状態の読み書き) で確かめるので、削れない。テストの大きさは `cfg!(miri)` で変えない。
   - 見直す条件: `miri.rs` にテストを足すとき。または、`eml_vm` の `miri::` のコマンド全体の `user` が予算の半分を超えたとき。
+  - 右の子を worker 1 に置く `par` の run (`--workers 2`) は `miri.rs` にない。足すと、Tree Borrows の下で `miri::` のコマンド全体の `user` が 15 秒増え、1つのテストの上限を超えた。worker をまたぐ道は、`eml_rt` の `trusted` の2つのスレッドのテストと ThreadSanitizer ([テスト戦略](../implementation/testing.md) の「ThreadSanitizer」) と、検査モードの N = 2 と 8 の UI テストで確かめる。1回の実行ごとの準備を安くしたときに、足すかを決め直す
 
 ### REPL
 
@@ -310,6 +310,21 @@
 - Ctrl-C のハンドラで、ビットの確かめと立てを不可分にすること: Windows の handler は `INTERRUPT` が立っているかを確かめてから立てる。そのため、同時に動いた2回の handler がどちらも1回目として扱うことがある ([VM](../spec/vm.md) の「上限と割り込み」)
   - 後に回した理由: `Control` が前のビットを返す必要があり、`eml_rt` の変更になる。
   - 見直す条件: `TERMINATE` がビットごとの操作を `Control` に足すとき。
+- REPL の複数の worker: REPL は worker 1つで動く。セッションの根を持つ run と、根の基本操作に届くコードの run は、worker を作らない ([VM](../spec/vm.md) の「タスクとスケジュール」)
+  - 後に回した理由: 移し戻しは物体を写さないので、`par` の後に置いた根が、ほかの worker のヒープのページの物体を指しうる。run の終わりにそのヒープを落とすには、入力の間もヒープを生かす静止の手順か、run の終わりに根から届く物体を写すことが要る。
+  - 見直す条件: REPL の中の `par` を並列に動かしたいとき。
+- `eml_sched` の crate: worker の表、受け箱、待ち、監視のスレッドは `eml_vm` の `workers.rs`、`sched.rs`、`monitor.rs` にある ([マルチコア対応の設計](multicore.md) の「層の構成」)
+  - 後に回した理由: 実行系が VM だけで、`Exec` の trait に実装が1つしかない。
+  - 見直す条件: `eml_native` が同じスケジューラを使うとき。
+- `par` の右の子を置く粒度: fork は、空いている worker があればいつも右の子をそこに置く ([VM](../spec/vm.md) の「`par` の fork と join」)。小さい子を置かずに親の worker で動かす下限を持たない
+  - 後に回した理由: 粒度は `std-par` の集まりの関数が持つ (1024 要素。[マルチコア対応の設計](multicore.md) の「データ並列での使い勝手」)。
+  - 見直す条件: `bench/par_tree.em` を `--workers 2` で動かすと `--workers 1` より遅いと計測したとき。
+- 遠隔の解放のあったページの列: 持ち主の取り込みは、ヒープのページの一覧をすべて歩き、ページごとに遠隔のリストの語を1回読む ([オブジェクトモデル](../spec/object-model.md) の「別のスレッドからの解放」)。解放を受けたページだけを積む列を持つ形がある
+  - 後に回した理由: 列には、1つのページを2回積まないための2つ目の並行の手順が要る。2回積むとページのつなぎが壊れ、輪になりうる。歩く費用は、256 回の遠隔の解放か大きい物体1つの取り込みにならされる。
+  - 見直す条件: `async-threads` の後、channel を多く使うプログラムのプロファイルに取り込みの歩きが見えたとき。
+- `eml_rt` の並行の証明 (`rt-concurrent-proofs`): Verus の証明は1つのヒープの逐次の模型で、スレッドをまたぐ所は信頼の一覧の T0、T2、T14、T15 に置いてある ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)。これを並行の証明に置き換え、ほかのヒープの物体を証明の模型に入れる ([マルチコア対応の設計](multicore.md) の「テスト」)
+  - 後に回した理由: vstd の atomic は SeqCst だけを扱い、今の証明は逐次の模型なので、並行の証明は証明の作り直しになる。1つのヒープの逐次の証明は、ほかのヒープが持つ物体の ghost の状態を今の値に保てないので、ほかのヒープの物体を貸し出しの token で模型に入れても、信頼は ghost の形に写るだけで減らない。T0 と T14 は、Miri の2つのスレッドのテスト、ThreadSanitizer、検査モードの N = 2 と 8 の UI テストで確かめる。
+  - 見直す条件: ネイティブのコードが `eml_rt` を共有する前。または、ThreadSanitizer か Miri が T0 か T14 の誤りを見つけたとき。
 
 ### 非同期
 
@@ -326,7 +341,7 @@
   - 見直す条件: actor の形では遅すぎるとき。
 - `Counter` の表を縮めること: `Counter` は放さず、`Machine` の表は伸び続ける ([標準ライブラリ](../spec/stdlib.md) の「`Std.Atomic`」)
   - 後に回した理由: `Counter` は数の少ない共有の状態のためのもので、表の項は作った `Counter` の数だけである。
-  - 見直す条件: `Counter` を大量に作るプログラムが出たとき。worker のスレッドを入れるときは、表を `SeqCst` の atomic にする。
+  - 見直す条件: `Counter` を大量に作るプログラムが出たとき。`Async` のタスクが複数の worker で動くときは、表を `SeqCst` の atomic にする。
 - 最後のハンドルで放す channel: 今の channel は `close` で放し、閉じないままの channel は run の終わりまで残る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Chan`」)。戻す形は [非同期の設計](async.md) の「未決の論点と将来の拡張」の「`Lin` の closer token」にある
   - 後に回した理由: `Chan a` を `Unr` の `Foreign` にして最後のハンドルで放す形は、初めての `Unr` の `Foreign` になる。回復で `Foreign` を移す信頼の一覧の行 (T3。[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」) と、Verus と Miri の作業を `eml_rt` に要し、送受信のたびにハンドルの `dup`、`decref` と表の照らし合わせが入る。品物が自分の channel のハンドルを持つ輪では最後のハンドルが落ちないので、放す保証はどちらの形でも「閉じるか run の終わり」になる。ネイティブ化の簡潔さと速さを優先し、即値にした。
   - 見直す条件: 接続やリクエストごとに channel を作り、取り消しの巻き戻しで `close` を飛ばす形のサーバが実際に書かれ、長く走る run で登録表の slot が増え続けると測れたとき (`RunStats.channels_swept` か、検査モードの終わりの数で)。

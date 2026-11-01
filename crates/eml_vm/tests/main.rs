@@ -21,6 +21,7 @@ mod roots;
 mod run;
 mod scaling;
 mod signal;
+mod spawns;
 mod structs;
 mod tags;
 mod tasks;
@@ -28,3 +29,4 @@ mod tasks;
 #[cfg(not(feature = "tls"))]
 mod tls_off;
 mod variants;
+mod workers;

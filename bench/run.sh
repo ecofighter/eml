@@ -16,6 +16,9 @@ runs=3
 
 cargo build --release -p eml_cli --manifest-path "$root/Cargo.toml" >&2
 eml="$root/target/release/eml"
+# worker の数を 1 に固める。`eml run` の既定は CPU の数で、`instructions retired` はプロセスのすべてのスレッドを
+# 数えるので、`par_tree` の値が機械の CPU の数とスレッドの順で変わるためである
+export EML_WORKERS=1
 
 # `runs` 個の値の中央値
 median() {

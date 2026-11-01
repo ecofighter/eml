@@ -51,7 +51,7 @@
 - `ui.rs` と `repl.rs` の、ファイルの分け方の自己テストの組。UI のディレクトリには同じ拡張子のモジュールがあり、トランスクリプトは深い所の `.repl` を断るので、規則が違う
 - `eml_vm` の `structs.rs` の逆アセンブラのテストは、`dup s` と `(boxes, unboxes)` を確かめる。`miri.rs` の同じプログラムは、この事実を持たない
 - `eml_cli` の `api.rs` の `Outcome::Rejected` のテストは、トランスクリプトに出ない結果を固定する
-- `RunStats` がスケジュールによらないことは3か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムと、`exit` で終わらない `run/async/` のプログラムで生成したコードを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
+- `RunStats` がスケジュールによらないことは4か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムと、`exit` で終わらない `run/async/` のプログラムで生成したコードを確かめる。`run/par/` の N = 2 と 8 の run (下の「seed で流す」) は、worker をまたいで足した数が N = 1 と同じことを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
 - シグナルを届ける道は3か所で確かめる。`run/async/` と `run-fail/async/` の `signal_*.em` は、仮想のシグナルの予定で `Std.Signal` の意味の筋書きを確かめる。`eml_vm` の `signal.rs` は、ハンドラの代わりにテストのスレッドが `Control` と自己パイプを書き、本物の driver の上の監視のスレッドの中継と、集める地点で届けることを確かめる。`eml_cli` の `cli.rs` のシグナルのテストは、OS のシグナルを `eml run` に送り、ハンドラと終了コード、届けていない間の2回目の強制の終わりを確かめる
 - `par` の子の誤りの規則は、`par.rs` の手書きの LIR のテストと `par::source` の組で確かめる。右の子の誤りを左の子が終わった後で報告する順序は、左の子が出力する LIR で書いた子 (`noisy`) だけが確かめる。ソースの子は出力できないので、ソースでは順序が見えない。`par::source` は、生成した `fork$` と `reperform$` を通っても、左の中断で右の誤りを救わないことと、左の誤りが先であることを確かめる
 
@@ -101,14 +101,14 @@
 1. メモリの安全: 生のポインタの読み書きは、どれもヒープが持つ権限 (vstd の `PointsTo`) で行う。解放の後の使用、二重の解放、ブロックの外の読み書き、書いていない語の読み込みは起きない
 2. ヒープの形の不変条件: ページの一覧、級ごとの空きリスト、切り出しの位置、各ブロックの権限が食い違わない。ブロックの番地の下位 16 ビットを落とすと、そのブロックを含むページの頭になる。`Heap` の閉じた述語 `wf` が持ち、公開のどの操作も保つ
 3. RC の正しさ: 各物体の rc は、モデルの参照の数 (ヒープの中の辺と、外の参照の数の和) と対応する。物体を空けるのは、張り付いていない物体の参照がなくなったときだけで、そのときは必ず空ける。RC の遷移の関数 (`dup_step`、`decref_step`、`mark_step`) は、理想のモデル (rc、本当の参照の数、張り付きの旗) との対応を保つ
-4. `share` と `transfer_back`: `share_walk` と `transfer_walk` を `Graph` trait のメソッドの約束の上で任意のグラフについて証明し、ヒープの上の `Graph` の実装と結ぶ。検査モードで `Dead` と `LinReachedTwice` を返すのは、その違反があったときだけである (`transfer_walk` の `Dead` は、根からたどりの展開する物体だけを通って生きていない物体に届いたとき)。`transfer_walk` は、`Ok` なら根から rc -1 の物体だけを通って届く rc -1 の物体がちょうど rc 1 になることと、所有者が変わるのは裏返した物体と書き換えた物体だけであることを示す
+4. `share` と `transfer_back`: `share_walk` と `transfer_walk` を `Graph` trait のメソッドの約束の上で任意のグラフについて証明し、ヒープの上の `Graph` の実装と結ぶ。検査モードで `Dead`、`LinReachedTwice`、`SharedReachesLocal` を返すのは、その違反があったときだけである (`transfer_walk` の `Dead` は、根からたどりの展開する物体だけを通って生きていない物体に届いたとき)。`transfer_walk` は、`Ok` なら根から rc -1 の物体だけを通って届く rc -1 の物体がちょうど rc 1 になることと、所有者が変わるのは裏返した物体と書き換えた物体だけであることを示す
 5. `release` と reuse: `release` と `release_reuse` の結果を、モデルの遷移で書く。部品を並べた展開 (`is_last` と `free_block`) の遷移を合わせたものが `release` の遷移に等しいことを、モデルの上の補題で示す
 6. 検査モード: [オブジェクトモデル](../spec/object-model.md) の「検査モードの約束」の性質。安全の前提だけで `safe_wf` を保ち、モデルが合っていて前提がすべて成り立つなら `Ok` を返して速いモードと同じ遷移になる
 7. ヘッダの詰め方と即値: `Meta` は Verus の型の不変条件 (正しい形であること) を持ち、メモリの `meta` が正しい形であることはヒープの不変条件が持つ。そのため `Kind::from_bits` の `unreachable!` の枝には届かない。即値の判定と値の取り出しは、63 ビットの範囲の整数で元に戻る
 8. 文字列: `string_push` と `string_concat` を、ほかの核の操作と同じく抽象のモデルの遷移で書く。`string_push` は「left の参照を1つ消費し、結果の参照を1つ作る」遷移で、その場で足す枝、作り直す枝、写す枝のすべてを含む。ghost のバイト列が連結になること、UTF-8 が保たれること、容量の計算、不変条件の長さの条件を保つことも証明する ([オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」)。`raw` と `set_raw` が不透明なペイロードを断ることも、Verus が確かめる。ただし、ほかの検証した書き込みが文字列のバイト列の語に届かないことは確かめない。ブロックの不変条件が ghost のバイト列と結ぶのは長さの語だけで、その後ろの語とは結ばないためである。この性質は T10 の前提である ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)
 9. extern: 整数の extern の結果を vstd の `checked_*`、`rust_div`、`rust_rem` の spec で、文字列の extern の結果をバイト列の spec (`lex`、`decimal`、`escape`) で約束する。I/O の extern は、メモリの安全と RC のモデルでの増減と、誤りのときの約束を証明し、OS とのやりとりの中身は約束しない ([オブジェクトモデル](../spec/object-model.md) の「extern」)
 
-信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T13) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
+信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T15) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
 
 - テストでないコード (`#[cfg(test)]` の module と `heap/tests/` を除く) から、Verus に確かめさせない項目を表す語 (`external_body`、`verifier::external`、`assume_specification`、`global`、`assume(`、`Tracked::assume_new` など) を探す。見つけた項目 (ファイル、語、それを含む関数か型の名前) が、表の番号を付けた一覧と同じであることを確かめる。属性や仮定が一覧の外に増えると、証明が空になっても検証は通ってしまうためである
 - `verus!` の外のコードに `unsafe` がないことを確かめる。除くのは `Word`、`Heap`、`Frozen` の `unsafe impl Send` と `Sync` と、T4 の `Drop` だけである
@@ -133,9 +133,9 @@ rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中�
   - 確保器: 級ごとの確保と解放、大きい物体の確保と即時の返却 (ページの一覧から外れること)、ページをまたぐ量、空きリストの使い回し (速いモード)、解放したブロックを使い回さないこと (検査モード)、今のページを替えた後と替える前の両方での生存の列挙、`Heap` を落とすときの `Foreign` の破棄処理、使っているメモリのバイト数
   - RC: 局所の上限、共有の2つの境目のそれぞれの前後、不死、不死の物体の数え方 (子を持つ不死の物体を作ること、借りた子の `dup` と `decref`、数が 0 の `decref` の誤り、ダミーを数えないこと)
   - 解放の連鎖: 長いリスト (要素が即値のものと、要素が物体のもの。作業リストの長さが定数に収まる)、深い木、`scan` が 255 の物体、`Foreign` の破棄処理が1回だけ呼ばれること、同じ子を2回指す親を空けると2回目が `UseAfterFree` になり破棄処理が1回だけ呼ばれること
-  - `share`: 輪のあるグラフ、`lin` の物体の子のたどり、`lin` ビットのない親の中の `lin` の子、不死と共有の物体で止まること、`share` の後の共有の側の `dup` と `decref` と最後の解放、rc -1 の親の `release` が `lin` の子を `dup` しないこと。`lin` の物体の下の rc 1 の物体の所有の移し替えと rc > 1 の物体からの印付け、共有にした入れ物の送り直しで所有者だけのたどりが `lin` の部分を新しい受け手に移すことと、その下の rc > 1 の物体が前の持ち主に残ること、fork の印付けで子が閉包から届く物体に触れられること
+  - `share`: 輪のあるグラフ、`lin` の物体の子のたどり、`lin` ビットのない親の中の `lin` の子、不死と共有の物体で止まること、`share` の後の共有の側の `dup` と `decref` と最後の解放、rc -1 の親の `release` が `lin` の子を `dup` しないこと。`lin` の物体の下の rc 1 の物体の所有の移し替えと rc > 1 の物体からの印付け、共有にした入れ物の送り直しで所有者だけのたどりが `lin` の部分を新しい受け手に移すこと、その下の rc > 1 の局所の物体が `SharedReachesLocal` になること、`lin` の部分の rc > 1 の局所の物体を `check_invariants` も `SharedReachesLocal` で見つけること、印を付けた rc > 1 の物体が送り直しで誤りにならないこと、fork の印付けで子が閉包から届く物体に触れられること
   - `transfer_back` (`heap/tests/transfer.rs`): 共有のリストを裏返して一意にすること、rc -2 以下の物体と不死の物体で止まること、子が確保した値は速いモードでは何もせず検査モードでは所有者を書き換えること、子のセルの下の共有の物体が共有のまま残ること、共有の組の中の `lin` の物体を親に戻すこと (組を子のセルに入れて返す形と、組をそのまま返して裏返す形)、`lin` ビットの立った rc -1 の物体も裏返すこと、第三の ID の物体と `from` が今の worker であることの `WrongOwner`、解放した物体の `UseAfterFree`、ID ごとの数の移り方、長いリストを再帰せずにたどること。移し戻さずに子の ID を退かせると `TransferLeak` になることも確かめる
-  - 論理的な worker ID (`heap/tests/workers.rs`): ID の割り当てと使い回し、確保、解放、文字列の作り直し、token の往復、`share` の印付けと所有の移し替えに合わせた ID ごとの数と、その数え直し (`OwnedMiscount`)、`TransferLeak`、`HeapError` が 12 バイトであること。回復の後の数も確かめる (`heap/tests/recover.rs`)
+  - 論理的な worker ID (`heap/tests/workers.rs`): ID の割り当てと使い回し、確保、解放、文字列の作り直し、token の往復、`share` の印付けと所有の移し替えに合わせた ID ごとの数と、その数え直し (`Control::check_owned` の `OwnedMiscount`)、`TransferLeak`、`HeapError` が 12 バイトであること。同じ `Control` の2つのヒープが1つの表で ID を出して数えること、最初の塊の外の ID、ほかの `Control` のヒープを断ること、回復が表を消すことも確かめる。回復の後の数も確かめる (`heap/tests/recover.rs`)
   - `release` と `release_reuse`: 一意な場合、rc -1 の場合、共有の場合、`keep` の組み合わせ。部品を並べた展開 (`is_last` と `free_block`) でも同じ場合を流し、汎用の関数と同じ結果になることを確かめる
   - reuse の列: 手で組んだ「解放して、同じ箱でコンストラクタを作る」列を2種類流す。同じコンストラクタでフィールドを書かずに使い回す列と、型の違う同じ大きさの箱に移る列である。生きている箱の数と RC の釣り合いを確かめ、共有の物体が token にならないことも確かめる
   - 文字列: 空の文字列、級の境目と 128 語の境目をまたぐ長さ、一意な左辺のその場の追記、容量が足りないときの作り直し、共有と不死の左辺、容量に収まる長さと語を埋める長さの `x ++ x`、`Err` の後にヒープが変わっていないこと。一意な左辺へ 1 バイトずつ n 回足すループで、作り直しの回数 (`string_push` が返す語が左辺と違った回数) が log n で抑えられることも確かめる。容量を読む操作やテストのためだけの欄は足さない
@@ -143,6 +143,7 @@ rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中�
   - 検査モードの誤り: [オブジェクトモデル](../spec/object-model.md) の「報告する誤り」の各項目。token の ABA の形、解放した共有の物体の使用、強めた範囲の検査 (`field` と `set_field` の生の語、`raw` と `set_raw` の走査する語と、ペイロードが不透明な `Foreign` と `String` の物体)、塊の物体、書き終えた不死の物体、共有の物体への `set_field` と `set_raw` の `NotWritable`、`string`、`string_push`、`string_concat` の `WrongKind` を含む
   - 実行文脈 (`heap/tests/ctx.rs`): 19個の基本操作のそれぞれ、EP が出す形を並べた筋書き (handle の中で `perform` してその場で戻る、`mask` が合う evidence を飛ばす、yield して継続を組み立てて再開する1往復。`mask` の筋書きは、n が正の項目が先頭の n 個を残して続く m 個を除き、残りのリストを共有することと、同じエフェクトの項目が2つあれば先の項目だけを使うことも確かめる。`perform` と yield の筋書きは終わりに `check_finished` が通ることを、`mask` の筋書きは生きている物体が残らないことを確かめる)、検査モードの `BadEvidence`、`NoHandler` (合う evidence が項目の n + m 個に足りない `evv_mask` を含む)、`YieldMisuse` と、断った操作が引数と yield の状態を変えないこと、共有にした evidence の状態の欄への `NotWritable`、輪になった `evv` が小さい `max_evv` で `BadEvidence` になって止まること、エントリの欄が 255 個以上の表、仕事の回数の数え方を固定するテスト3つ ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。空でない κ とエントリには、物体か `Word::imm(1)` 以上の即値を使う。関数 0 の値は `()` と同じ語になるためである
   - extern (`heap/tests/externs.rs` と `host.rs`): 整数の端の値、文字列の比較と `++` と `show` の端の場合、検査モードの誤り (`WrongKind`、`FileIn` の読みの `NotUnique` と `WrongOwner`、`read_chunk` のバイト列でない `buf`)、物体が残らないこと。誤りのときの所有も確かめる。`FileIn` の読み (`handle_read`) が読みの誤り、UTF-8 でない中身、止めたときも `FileIn` を手放さず、閉じるまで破棄処理が走らないこと、バイト列の行の読みが途中まで読んだ行を、`read_chunk` が受け取ったバイト列を手放すこと、`println` が書き込みの誤りでも文字列を手放すこと、引数を確かめる検査モードの `Heap(_)` (`read_chunk` の `buf` の確かめを含む) でヒープが変わらず、Host を呼ばないことである。ほかに、止める語を立てた `Control` と小さい `max_bytes` での `FileIn.read_all` の `Stopped` (長さの見込みがある読み手、確保できないほど大きい見込み、見込みのない読み手)、仕事の回数 `string_bytes_copied`、`StdHost` の `Line` と `Block` の書き方、`flush`、poisoned のロック、標準エラー、`file_root` と絶対パスを確かめる。Host を通るテストは、メモリの Host (`heap/tests/host.rs` の `MemoryHost`) を使う。子のプロセスは、`heap/tests/script.rs` が起動の列の分け方と起動の誤り、止める語、`Child` の読み書きと断る操作を、`externs.rs` が子の誤りの文言と `try_io` での扱いを、`host.rs` が `StdHost` の本物の子 (pipe、`2>&1`、kill した子の終了コード、作業ディレクトリ、環境変数) を確かめる。浮動小数の演算と書式 (T12) もここで確かめる。特別な値 (負の NaN を含む) の組で、算術が Rust の演算と同じビット列 (NaN の結果は `f64::NAN`) を返し、`float_compare` が `total_cmp` と同じ答えを返すことを流す。変換、数学の関数、書式、読みも同じ値で流し、`float_repr` の結果を `float_parse` が同じビット列に読み戻すことを確かめる。バイト列の走査 (T13) では `find_byte` を種を固定した疑似乱数の入力で素朴なループと比べ、`find_from` の照合を `windows` で1つずつ比べた位置と比べる
+  - 別のスレッドからの解放 (`heap/tests/remote.rs`): `Control` を分け合う2つのヒープを1つのスレッドで使い、もう一方のヒープのページの物体を空けて積む。取り込みが仕事の回数を変えないこと、受けた数が `REMOTE_RECLAIM` に届くまで `reclaim_if_due` が取り込まないこと、取り込んでいないヒープを `Control::check_owned` が `NotQuiescent` で断ること、`leaks` と `check_invariants` が先に取り込むこと。スレッドをまたぐ形は下の「Miri」にある
   - 実行の制御 (`heap/tests/control.rs` と `ctx.rs`): `poll` が割り込み、深さの上限、確保量の上限のそれぞれで `Stop` を返すことと、重なったときに割り込み、確保量、深さの順に報告すること、確保量が上限にちょうど等しいときはビットを立てないこと、`Control::clear` で戻ること、2つのヒープのページが1つの `Control` に足し合わされること、凍結した塊のページが塊を落とすまで数に残ること。`Ctx` が `Send` で `Sync` でないことと、`Control` が `Send` と `Sync` であることは、型の assert で固定する
 - `is_last` の2回の読み込みとその順序は、Verus では確かめない (T2)。単体テストと Miri で確かめる
 
@@ -173,12 +174,24 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - 凍結した領域 (T0 と T4) も、この module で確かめる。2つのスレッドが同じ塊を付けたそれぞれのヒープで同じ定数を読み、`dup` と `decref` を繰り返すこと、塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れないこと、ヒープの物体が領域の語を持つときの読み書き (T8) を、2つの借用の規則で流す
 - バイト列の読み書き (T10) も、この module で確かめる。語に揃わない位置への追記、1バイトの書き換え、大きい物体のページの末尾まで続く長さ、大きい左辺からの作り直し、大きい物体の長さの `x ++ x` (大きい物体のページを返す道)、ほかの文字列の中身を指す `s` の追記などを、2つの借用の規則で流す
 - バイト列の走査 (T13) も、この module で確かめる。物体の中身を借りた `&[u8]` を `find_byte` が読むことを、空、1語に収まる長さ、語の境目の前後、大きい物体のページの末尾で終わる長さ、語に揃わない残りで終わる長さで流す。素朴なループと `windows` との比べは上の「単体テスト」の extern の項目に置く
+- ほかのヒープのページ (T14) も、この module で確かめる。凍結した塊を付けたヒープの回復が、根から届くヒープの文字列を写し、塊の文字列をそのまま根に残すことを流す。回復はこの2つをページの頭の `sink` で見分けるので、`sink` を読む `page_sink_of` をこのテストが通る。N 個のヒープの回復も流す ([オブジェクトモデル](../spec/object-model.md) の「回復」)。別のスレッドのヒープが作った値と共有の文字列を根に置き、そのヒープが持ち主のヒープの共有のリストを空けて積んだままにする。回復が先に取り込み、ほかのヒープのページの物体を写した後でそのヒープを落としても、根が読めること
+- 別のスレッドからの解放 (T14) も、この module で確かめる ([オブジェクトモデル](../spec/object-model.md) の「別のスレッドからの解放」)。どのテストも、`Control` を分け合う2つのヒープを使い、受け手のヒープを作ったスレッドから別のスレッドへ動かす。`RemoteSink` の番地がヒープを動かしても変わらないことを通すためである。流すのは次の5つである
+  - 別のスレッドが空けた小さいブロックを持ち主が取り込み、速いモードでは次の確保が同じ番地を使うこと。受けた数が少ないうちは `reclaim_if_due` が取り込まないこと。積んだまま持ち主のヒープを落とすこと。検査モードでは、空けたヒープの `remote_frees` と持ち主の `reclaimed` がどちらも空けた数になること
+  - 大きい物体のページのバイト数を、速いモードでは空けたスレッドがすぐ引き、確保量の上限がちょうど大きい物体1つ分のときも、持ち主が取り込む前に2つ目を取れること。持ち主が取り込んでも引き直さないこと
+  - 2つのスレッドが1つのページに積む間に、持ち主のヒープを別のスレッドへ動かして確保すること
+  - 持ち主がページを替えながら切り出す間に、別のスレッドが共有の文字列の長さと中身を読み、小さいブロックと大きい物体を空けること。返ってきた大きい物体のページを見て、次の `reclaim_if_due` が取り込み、速いモードではその後の確保がページを増やさないこと
+  - 検査モードで、取り込みが ID ごとの数と仕事の回数を変えず、生きている箱の数を減らして `reclaimed` を足すこと
+- ほかのヒープのページの物体を受け付けること (T14 と T15) も、この module で確かめる ([オブジェクトモデル](../spec/object-model.md) の「核の操作」と「ページの表」)。流すのは次の4つである
+  - 子のスレッドが自分のページに作った値を親が `transfer_back` で受け、移された `lin` の物体をその場で書き換え、値の箱を token にして `con_at` で使い回し、空けること。空けたブロックはどれも子のヒープに積まれ、子のヒープの持ち主が取り込む
+  - `lin` の部分が別のスレッドへ移って戻ること。共有にした組を別のスレッドが最後の参照として受けて空け、`lin` の物体を書き換えて子と一緒に手放す間に、持ち主は共有の要素の参照を増減し、自分の物体を確保して空ける
+  - 検査モードで、別のスレッドが ID を付けて確保した物体を空けても ID ごとの数が合うこと、共有の物体の子がほかのヒープのページの共有の文字列でも生存の列挙が通ること、取り込む前の `check_owned` が断ること、落としたヒープのページとほかの `Control` のページを指す語を `UnknownPage` で断ること
+  - 検査モードで、共有の物体の `lin` の子がほかのヒープのページにあり、その下もそのヒープの物体であるとき、生存の列挙が `foreign_children` で下って、下の物体の rc が 1 なら通し、2 なら `SharedReachesLocal` を返すこと
 - extern の Host の境界 (T11) も、この module で確かめる。メモリの Host を通る `println` と `flush`、`FileIn.open`、`FileIn.read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語)、`FileIn.read_line_raw` (区切りをまたぐ行、`\r\n` で終わる行、空の行、行の終わりのない最後の行、終わり、途中の読みの誤り、UTF-8 でない行、止める語)、検証したコードが `fill` と `consume` を呼ぶバイト列の読み (1つの buffer の中の行、2回の補充をまたぐ行、行の途中の読みの誤り、`read_chunk` のその場の追記と共有のバイト列の写し、全部の読み)、buffer より大きい長さを返す読み手を断る全部の読み、`FileIn.close`、標準のストリームのハンドルの開いた印 (2つ目の `open`、`close` と `Heap` を落とすときの破棄処理が印を下ろすこと) と、書くためのハンドルが Host の buffer に書くことを流す。子のプロセスの境界では、起動、標準入力への書き込み、`close_stdin`、標準出力の全部の読み、`wait` の流れ、待たずに `Heap` を落としたときに破棄処理が子を kill して待つこと、待った子を kill しないこと、書けない書き込む端でハンドルを手放すこと、`Interrupted` で戻った書き込みを止める語が立っていなければ書き直し、立っていれば止めることを流す。Miri は本物のプロセスを起動できないので、子はメモリの Host の `MemoryHost::spawn` が代わりに作り、`kill` と `wait` を呼んだ回数を数える。`StdHost` と実際のファイルは使わない。Miri は分離を外さないと実際のファイルを開けず、テストを `cfg!(miri)` で小さくすることもしないためである
 - 実行文脈と実行の制御も、この module で確かめる。2つのスレッドのヒープが1つの `Control` に確保量を足し引きすること (T1) と、別のスレッドが `Control::interrupt()` を呼ぶと `poll` が `Stop::Interrupted` を返すことの、2つのスレッドのテストを流す。後者は、ビットを立てるスレッドと並んで `poll` を繰り返す。核の操作を1回ずつ通す T8 のテストは、基本操作も1回ずつ通し、文字列と出力の extern も通す
 - Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly を fenix の `complete` (すべての部品がそろう最新の日の nightly) から取る ([アーキテクチャ](architecture.md) の toolchain の項)
 - `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。この2回と、下の `eml_vm` の4回と、`eml_io` の核の2回 (「`eml_io` の検証」の「核の Miri」) を合わせた8つの実行は互いに独立で、同時に流してよい
 - テストの大きさは `cfg!(miri)` で変えない。ページの大きさも Miri で変えない
-- Miri の予算はコマンド全体の CPU 時間 (`/usr/bin/time -p` の `user`) で決める。ビルド済みの作業ツリーで測り、Miri のビルドの時間は数えない。`eml_rt` の `trusted::` は Stacked Borrows で 180 秒以内、Tree Borrows で 220 秒以内、`eml_vm` の `miri::` は Stacked Borrows で 300 秒以内、Tree Borrows で 400 秒以内にする。`cells.rs` の `a_read` と `a_write` は小さいので、予算を置かない。1つのテストは、それを足したときにコマンドの `user` が増える分で測り、両方のモードの合計で、Tree Borrows の下で `trusted` が 5 秒以内、`miri.rs` が 10 秒以内に収める。そのテストだけを絞り込んで流した時間では測らない。絞り込んだ実行は、全体の実行で1回だけ払う費用を含み、小さいテストでも 14 秒ほどかかるためである。`miri.rs` の上限が緩いのは、LIR のテキストを Miri の下で読むためである。`miri.rs` の4つのテストは、この上限を超えることが分かっている ([ロードマップ](../future/roadmap.md) の「その後の項目」の「`miri.rs` のテストの1つあたりの Miri の費用」)。`eml_rt` の `trusted::` と `eml_vm` の `miri::` の予算は、ほかのビルドが走っていない 4 CPU の Linux のコンテナで測った時間の約3倍にしてある。2倍の退行では落ちず、数分かかるような大きさの誤りは落ちる。測った時間が予算の半分を超えたら、まずテストを削れないか見て、それでも超えるなら、ほかのビルドが走っていない機械で測り直して予算を約3倍に直す。測った数と機械はコミットのメッセージに書く。テストごとにプロセスを起こす `cargo miri nextest run` は使わない。1件あたり約 2.3 秒の起動の費用がかかり、CPU 時間が約10倍になるのに、壁時計はほとんど縮まないためである
+- Miri の予算はコマンド全体の CPU 時間 (`/usr/bin/time -p` の `user`) で決める。ビルド済みの作業ツリーで測り、Miri のビルドの時間は数えない。`eml_rt` の `trusted::` は Stacked Borrows で 280 秒以内、Tree Borrows で 365 秒以内、`eml_vm` の `miri::` は Stacked Borrows で 300 秒以内、Tree Borrows で 400 秒以内にする。`cells.rs` の `a_read` と `a_write` は小さいので、予算を置かない。1つのテストは、それを足したときにコマンドの `user` が増える分で測り、両方のモードの合計で、Tree Borrows の下で `trusted` が 5 秒以内、`miri.rs` が 10 秒以内に収める。そのテストだけを絞り込んで流した時間では測らない。絞り込んだ実行は、全体の実行で1回だけ払う費用を含み、小さいテストでも 14 秒ほどかかるためである。`miri.rs` の上限が緩いのは、LIR のテキストを Miri の下で読むためである。`miri.rs` の4つのテストは、この上限を超えることが分かっている ([ロードマップ](../future/roadmap.md) の「その後の項目」の「`miri.rs` のテストの1つあたりの Miri の費用」)。`eml_rt` の `trusted::` と `eml_vm` の `miri::` の予算は、ほかのビルドが走っていない 4 CPU の Linux のコンテナで測った時間の約3倍にしてある。2倍の退行では落ちず、数分かかるような大きさの誤りは落ちる。測った時間が予算の半分を超えたら、まずテストを削れないか見て、それでも超えるなら、ほかのビルドが走っていない機械で測り直して予算を約3倍に直す。測った数と機械はコミットのメッセージに書く。テストごとにプロセスを起こす `cargo miri nextest run` は使わない。1件あたり約 2.3 秒の起動の費用がかかり、CPU 時間が約10倍になるのに、壁時計はほとんど縮まないためである
 - 大きい物体の長さは `trusted.rs` の `LARGE_BODY` (`MAX_SMALL_WORDS * 8` バイト。両方のモードで大きい物体になる、語に揃った長さ) と、それに語に揃わない小さい残りを足した長さ (`LARGE_BODY + 3` など) にする。大きい物体のページは物体の大きさちょうどなので、この長さでページの末尾まで届く。64 KiB を超える長さは、確かめるコードに 64 KiB の単位がある所 (小さいページ、Host の `READ_CHUNK` と `BUFFER_BYTES`) だけで使う。大きい入力の期待値はデータと一緒に書くか解析で出し、素朴な1要素ずつの比べを大きい本体に走らせない
 - ほかの crate は、次の `eml_vm` と、偽の backend の上の `eml_io` の核 (「`eml_io` の検証」の「核の Miri」) を除いて Miri で流さない
 - `eml_vm` は、検証していないコードから `eml_rt` の `unsafe fn` を呼ぶ。そのため、`crates/eml_vm/tests/miri.rs` (module `miri`) の小さい実行のテストを、`eml_rt` と同じ2つの設定で流す (`cargo miri test -p eml_vm --test integration miri::`)。直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用 (即値の関数からとクロージャから) と余った引数、evidence を作って引く基本操作、ヒープの文字列の extern、文字列を返すエントリの結果を写すこと (`run_shown`)、`par` のタスクの切り替え (seed の方針の横取りと join) と、右の子の中断を join の後に親で起こし直すこと (ヒープの物体を捕まえた起こし直しの閉包の移し戻しと適用) を、両方のモードで通す。確かめるのは VM が核の操作の前提を守っていることで、信頼の一覧を確かめる `trusted` とは目的が違う。テストはメモリの Host (`capture_host`) だけを使い、実際のファイルを開かない。UI テストは Miri で流さない。`miri.rs` のテストは `cargo test` でも流れるので、同じプログラムと同じ確かめを `calls.rs` などに重ねて置かない
@@ -209,6 +222,14 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - nightly は Miri と同じ `nix develop .#miri` のものを使い、`-Zbuild-std` で std も計装し、`--target` をいつも書く。leak の検出は AddressSanitizer の既定のままにする
 - 開発機では build の置き場所を `target/asan` に分ける (「よく使うコマンド」)
 - 道具の不具合 (runtime がない、link、rpath、時間切れ) で緑にできない脚は、その脚だけ fenix と同じ日付に固めた rustup の nightly にし、時間の上限を 90 分にする。それでも緑にならなければ脚を外し、外した脚をこの節とロードマップの「その後の項目」に書く
+
+### ThreadSanitizer
+
+- `tsan` のジョブは、worker のスレッドの間で共有する記憶に data race がないことを `-Zsanitizer=thread` で確かめる。流すのは `eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::` の2手順で、対象は `x86_64-unknown-linux-gnu` だけである。Miri は複数のスレッドの interleaving を網羅しないので、スレッドをまたぐ `unsafe` の核 (`eml_rt` の remote 解放の経路と、`eml_vm` の起こしの語や run の表) は、実際に走るスレッドの上で ThreadSanitizer が見る
+- nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。2つの手順は、この形で報告なしに通っている
+- 合否は終了コードで決める。`TSAN_OPTIONS=halt_on_error=1` で、警告が1件でも出たらテストのプロセスが止まる。警告は抑制せず、`suppressions` も書かない。報告が出たら、コードの不具合か、`eml_rt` の `unsafe` が前提にしている順序の誤りとして直す
+- 開発機では build の置き場所を `target/tsan` に分ける (「よく使うコマンド」)
+- 道具の不具合で緑にできないときは、「AddressSanitizer」と同じく、fenix と同じ日付に固めた rustup の nightly にする。それでも緑にならなければ、ジョブを外し、外したことをこの節とロードマップの「その後の項目」に書く
 
 ### 核の Miri
 
@@ -365,7 +386,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `strings/`: 文字列の表示、補間、複数行、生の文字列、パターン
   - `unwind/`: 中断と巻き戻し。`exit` と `abort` がハンドラやファイルを抜けるときの後始末
   - `var/`: `var` の変数。配列の添字、スコープ、中断との組み合わせ
-  - `par/`: `Std.Par.par` の fork と join。子と handler の組み合わせ。逐次のほかに2つの seed でも流す (下の「seed で流す」)
+  - `par/`: `Std.Par.par` の fork と join。子と handler の組み合わせ。逐次のほかに2つの seed と、worker の数 N = 2 と 8 でも流す (下の「seed で流す」)
   - `async/`: `Std.Async` のタスク。始めること、待つこと、スコープの終わり、失敗の起こし直し、`Lin` の結果、取り消し、名前付きのスコープ、`shield`、`shield` の境目、`timeout`、`sleep_ms`、`race`、`drain_within`、全員が待って止まるデッドロック、`Std.Net` の driver の操作 (`net_*.em`)、`Std.Signal` の待ちと仮想のシグナル (`signal_*.em`)。逐次のほかに2つの seed でも流す (下の「seed で流す」)。driver の操作の UI テストはいつもテストの driver (`Clock::Virtual`) の上で流す。本物の driver の振る舞いは OS で変わるので、Rust のテストで確かめる。`_within` の期限は正の値か、データのないストリームの 0 以下の値で書く。データのあるストリームの 0 以下の期限は、待ち始める前に読みが終わったかで結果と `completions` が seed によって変わる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)
   - `tls/`: `Std.Tls` のクライアント。相手はテストの driver の `tls.localhost` と `tls-cut.localhost` の終端器で、平文の側はプログラムの中の `Net` の server のタスクである ([VM](../spec/vm.md) の「時計と driver」)。終端器の証明書は `eml_tls` の `fixtures` にあり、その CA は `fixtures/gen.sh` が `tls/` と `http/` の分類 (`run/` と `run-fail/`) の `ca.pem` に写す。プログラムは `Fs.read_text "ca.pem"` で読み、`Tls.connect_with_ca` か `Tls.wrap_with_ca` に渡す。`par/` や `async/` と違って seed では流さない。seed で流す run は `completions` を比べるが (下の「seed で流す」)、終端器が1回に汲む平文の量は決着の順で変わり、TLS のレコードの切れ目、`Net` の読みの回数、`completions` がそれに従うためである。出力は、どのスケジュールでも同じになるように書く。閉じる server のタスクは、閉じる前にその接続で読むか書くかする。そうしないと、クライアントが handshake の途中で EOF を読むかどうかがスケジュールで決まる。読みも書きもせずに閉じるテストは、受けと閉じを1つのタスクで書く ([VM](../spec/vm.md) の「時計と driver」)
   - `http/`: `Std.Http` のクライアント。相手はプログラムの中の `Net` の server のタスクで、https は `tls/` と同じく `tls.localhost` と `tls-cut.localhost` の終端器を通る。https のテストは `Fs.read_text "ca.pem"` を `Options` の `ca` に渡す。`tls/` と同じ理由で seed では流さない。server のタスクは要求を読んでから応答を書いて閉じ、印字は応答を書く前だけにする。クライアントは要求が返ってから印字するので、出力の順はスケジュールによらない。エントリのファイルを `http.em` にしない (上の `std/` と同じく、`import Http` が E1026 になる)
@@ -393,6 +414,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 - `par/` と `async/` の分類 (`run/` と `run-fail/` の両方) のファイルは、逐次の検査モードの run とスナップショット、速いモードとの比べの後で、seed 1 と 2026 の方針 (`Sched::Seeded`) でも検査モードで流す ([VM](../spec/vm.md) の「タスクとスケジュール」)。`ui::run` と `ui::run_fail` の中で流し、ファイルを集めるテストは増やさない。ほかの分類は seed で流さない。`par` も `Async` のタスクもないプログラムはタスクを切り替えないためである。対象を決める規則は `seeded_runs_cover_par_and_async` が確かめる
 - 比べるのは、標準出力、標準エラー、書いたファイル、終わり方 (終了コードか誤りの文言) である。`run/par/` と `run/async/` では、スケジュールによらない `RunStats` (`eml_test_support::schedule_independent` を通したもの) も比べる。ただし `run/async/` の run が `exit` で終わったときは `RunStats` を比べない。タスクの `exit` はほかのタスクをスケジュールで決まる位置で捨て、`Finished.stats` はその時点の数だからである。`run/par/` は `exit` で終わっても比べる。逐次か seed のどちらかの run の `cancels` が 0 でなければ、`RunStats` を比べない。取り消しが届くと、届いた時点からそのタスクの仕事が変わるためである。`cancels` は、`Cancelled` の再開のほかに、取り消しの地点が投げると答えた `cancel_point` と、偽を返した `claim_scope` も数える。そのため `cancels` が 0 の run では、どのタスクも取り消しを受けず、本体を最後まで動かした。どちらかの run の `channel_ops` か `channel_waits` が 0 でなければ、`tasks`、`timers`、`dropped_failures`、`channels_swept` だけを比べる (`eml_test_support::channel_independent`)。channel を使う run では、待つかどうかと、送り手が参照を持ち続けた品物の裏返しが順で変わり、ほかの欄がそれに従うためである。代わりに、channel を使うプログラムでは仕事の回数の食い違いが見えなくなる。`try_send` と `try_recv` の成否が順で変わるので、`channel_ops` も比べない。channel を使わず、どちらかの run の `completions` が 0 でなければ、`tasks`、`parks`、`timers`、`dropped_failures`、`shared_objects`、`channels_swept`、`completions` だけを比べる (`eml_test_support::driver_independent`)。操作が受け付けで終わって待ちを省くかはスケジュールで変わり、終わった操作の待ちは perform も切り替えもしないので、VM の仕事の回数と `peak_stack` がそれに従うためである。残す欄は、どれも操作が受け付けで終わったかによらない (下の一覧)。`par/` の run と driver の操作のない run は、今までどおりすべての欄を比べる。`run-fail/` の run は `RunStats` を返さないので、出力と終わり方だけを比べる。食い違えば、`` `eml run --debug-heap --sched seeded:N` on the virtual driver `` を含む文言で落ちる (`a_seeded_mismatch_names_the_seed`)。スケジュールは seed とプログラムと入力だけで決まるので、このコマンドで同じ run を再現できる
+- `par/` の分類 (`run/` と `run-fail/`) は、seed の run の後で worker の数 N = 2 と 8 でも流す。`Limits.workers` を変えるだけで、検査モード、逐次の方針、仮想の時計は N = 1 の run と同じである。比べるものは seed の run と同じで、標準出力、標準エラー、書いたファイル、終わり方と、`run/par/` ではスケジュールによらない `RunStats` である。`RunStats` は worker の和と最大で、N = 1 の値と一致しなければならない ([VM](../spec/vm.md) の「`RunStats`」)。逐次の run が VM の誤りで終われば、誤りの文言に worker ID が入りうるので流さない。N = 1 のスナップショットは変えず、N ごとのスナップショットは作らない。`async/` は N = 2 以上では流さない。`Async` のタスクは worker 0 の上だけで動き、driver も worker 0 だけが持つためである。対象を決める規則は `workers_runs_cover_par_only` が確かめる
 - 速いモードでは seed で流さない。スケジューラの誤りが速いモードで未定義の動作になると、同じプロセスで流すほかのファイルのテストを壊すためである
 - 逐次の run が VM の誤り (`fast_mode_reports` を満たさない誤り) で終われば、seed では流さない。誤りの文言は worker ID を含みうるが、ID はタスクが fork と join をする順で変わるためである。誤りはスナップショットがすでに記録している
 - `run/par/` と `run/async/` の各ファイルは、`exit` で終わる run も含めて、seed ごとに少なくとも1回横取りされなければならない (`Finished.preemptions > 0`)。横取りがなければ、逐次と同じ順で流しただけになるためである。安全点は [VM](../spec/vm.md) の「呼び出しと戻り」の一覧のとおりである。seed の方針の予算は 1 から 16 の安全点で、予算が尽きても yield の途中なら切り替えず、次の安全点でまた試す ([VM](../spec/vm.md) の「タスクとスケジュール」)。そのため、どれかの `par` の左の子が yield の途中でない安全点を 16 以上通れば、どの seed でも横取りが起きる。最適化が小さい関数を inline しないよう、各ファイルは再帰する補助の関数 `spin` を持ち、少なくとも1つの左の子で `spin 40` を走らせる。短いファイルを例外にする印は作らない。`run-fail/par/` の run は誤りで終わって `Finished` を持たないので、横取りを確かめられない。そのため、`run-fail/par/` のファイルは作りで横取りを起こす。少なくとも1つの左の子で `spin 40` を走らせ、右の子より長く動かす
@@ -492,7 +514,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 CI の対象 (OS、CPU、AddressSanitizer の脚) を足して落ちたテストは、1件ずつ見てから次のどれかに分ける。前もって範囲で期待値の書き直しを許すことはしない。
 
-- コードの不具合: 直す。AddressSanitizer の報告はいつもこれに当たる
+- コードの不具合: 直す。AddressSanitizer と ThreadSanitizer の報告はいつもこれに当たる
 - 機械に依る値 (libm の最後のビットなど): 下の「印を付けずに直すもの」で直す
 - その OS にない振る舞い: 下の「Windows で流さないテスト」と同じ考えで `cfg` の印を付ける
 - 見張りの時間切れ: その runner で測り、「性能のテスト」の 10 倍の規則で見張りを延ばす
@@ -599,7 +621,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 
 ## CI
 
-`.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の6つのジョブを流す。
+`.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の7つのジョブを流す。
 
 - `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls` を外した `tls_off::` のテスト、既定でない feature の clippy (「feature の組み合わせの確認」の9つ) と、段「feature resolution of tls」の `cargo tree` の検査を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる。ubuntu-24.04 では、同じビルドで時間の検査 (「性能のテスト」) も流す
 - `fmt`: Linux で `cargo fmt --check` を流す
@@ -607,6 +629,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 - `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::` と `signal::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
+- `tsan`: x86_64 の Linux で、`eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::` を ThreadSanitizer の下で流す (下の「ThreadSanitizer」)
 
 CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
 
@@ -668,6 +691,7 @@ cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
 nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: と signal:: も。eml_io の検証)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: preempt::。ThreadSanitizer)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)

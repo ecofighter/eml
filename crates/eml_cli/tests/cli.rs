@@ -665,6 +665,75 @@ fn sched_flag_is_accepted_and_rejected() {
     }
 }
 
+/// `--workers` は `run` だけのフラグで、`EML_WORKERS` より先に読む。0 と数でない値は、フラグでも環境変数でも
+/// 使い方の誤りである (docs/spec/stdlib.md の「起動」)。
+#[test]
+fn workers_flag_is_accepted_and_rejected() {
+    let dir = temp_project("cli-workers", &[("main.em", SHOW_ARGS)]);
+    // (引数, 環境変数 EML_WORKERS, 終了コード, 標準出力)
+    let cases: [(&[&str], Option<&str>, i32, &str); 14] = [
+        (&["run", "--workers", "1", "main.em"], None, 0, "[]\n"),
+        (
+            &["run", "--workers", "2", "main.em", "a"],
+            None,
+            0,
+            "[\"a\"]\n",
+        ),
+        (&["run", "--workers=8", "main.em"], None, 0, "[]\n"),
+        (
+            &["run", "--debug-heap", "--workers", "3", "main.em"],
+            None,
+            0,
+            "[]\n",
+        ),
+        (&["main.em"], Some("2"), 0, "[]\n"),
+        // フラグが環境変数に勝つ
+        (&["run", "--workers", "1", "main.em"], Some("0"), 0, "[]\n"),
+        (
+            &["run", "main.em", "--workers", "0"],
+            None,
+            0,
+            "[\"--workers\", \"0\"]\n",
+        ),
+        (&["run", "--workers", "0", "main.em"], None, 2, ""),
+        (&["run", "--workers", "many", "main.em"], None, 2, ""),
+        (&["run", "--workers", "-1", "main.em"], None, 2, ""),
+        (&["run", "--workers", "1025", "main.em"], None, 2, ""),
+        (&["run", "main.em"], Some("0"), 2, ""),
+        (&["run", "main.em"], Some("many"), 2, ""),
+        (&["repl", "--workers", "2"], None, 2, ""),
+    ];
+    let dir_ref = &dir;
+    let outputs: Vec<Output> = std::thread::scope(|scope| {
+        let handles: Vec<_> = cases
+            .iter()
+            .map(|(args, env, _, _)| {
+                scope.spawn(move || {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_eml"));
+                    command
+                        .args(*args)
+                        .current_dir(dir_ref)
+                        .env_remove("EML_WORKERS");
+                    if let Some(value) = env {
+                        command.env("EML_WORKERS", value);
+                    }
+                    command.output().unwrap()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+    for ((args, env, code, stdout), output) in cases.iter().zip(&outputs) {
+        let what = format!("{args:?} EML_WORKERS={env:?}: {output:?}");
+        assert_eq!(output.status.code(), Some(*code), "{what}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), *stdout, "{what}");
+    }
+}
+
 /// `run` が持たないフラグも、ファイルより後ろならそのままスクリプトに渡す (docs/spec/stdlib.md の「起動」)。
 #[test]
 fn flags_after_the_file_go_to_the_script() {

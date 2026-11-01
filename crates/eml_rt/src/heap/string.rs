@@ -1078,6 +1078,7 @@ impl<M: Mode> Heap<M> {
             self.core.checked() == M::CHECKED,
             self.core.has(h@.addr),
             h == self.core.block(h@.addr),
+            self.region_tied(),
             kind.has_body(),
         ensures
             !M::CHECKED ==> r is Ok,

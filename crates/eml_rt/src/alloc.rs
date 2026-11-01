@@ -13,13 +13,14 @@ use std::sync::Arc;
 use vstd::prelude::*;
 use vstd::raw_ptr::{Dealloc, PointsTo, PointsToRaw, ptr_mut_write, ptr_ref};
 
-use crate::control::Control;
+use crate::control::{Control, Registered, forget_page, register_page, unregister_page};
 #[cfg(verus_only)]
 use crate::frozen::RegionPerms;
 use crate::heap::TOO_LARGE;
-#[cfg(verus_only)]
-use crate::meta::field_ptr;
 use crate::meta::{BlockPerm, HEADER_WORDS, Header, meta_ptr, slot_ptr};
+#[cfg(verus_only)]
+use crate::meta::{field_ptr, lemma_word_layout};
+use crate::remote::{RemoteSink, page_sink_of, sink_new};
 use crate::word::Word;
 
 verus! {
@@ -101,7 +102,7 @@ exec const CLASS_OF: [u8; 129]
 }
 
 /// 大きい物体のページの級。
-const LARGE: u32 = 0xFFFF_FFFF;
+pub(crate) const LARGE: u32 = 0xFFFF_FFFF;
 
 /// `Layout` が受け付けるページの大きさの上限 (`isize::MAX` を `PAGE_BYTES` に揃えて切り下げたもの)。
 const MAX_PAGE_BYTES: usize = 0x7FFF_FFFF_FFFF_0000;
@@ -122,31 +123,72 @@ fn class_of(block_words: usize) -> (r: Option<usize>)
     }
 }
 
+/// ページの頭の、作った後は書かない部分。ほかのスレッドもこの部分だけを読むので、持ち主が書き換える欄と分けて置く
+/// (docs/spec/object-model.md の「ページ」)。
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct PageHeader {
-    class: u32,
+    pub(crate) class: u32,
     block_words: u32,
+    /// 持ち主のヒープの `RemoteSink`。凍結した領域のページでは null である。ブロックがどのヒープのものかを、この欄の
+    /// 1回の比較で見分ける。
+    pub(crate) sink: *const RemoteSink,
+    /// `alloc` に渡した大きさ。
+    pub(crate) bytes: usize,
+}
+
+global layout PageHeader is size == 24, align == 8;
+
+/// ページの頭の、持ち主のスレッドだけが読み書きする部分。
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct PageState {
     /// `Pages::list` の中の添字。大きい物体のページを `swap_remove` で外すときに、移ってきたページの添字を直す。
     index: usize,
     /// 切り出した終わりの位置 (ページの先頭からのバイト数)。今のページではヒープの欄だけが正しく、ページを替える
     /// ときに書き戻す。
     limit: usize,
-    /// `alloc` に渡した大きさ。
-    bytes: usize,
 }
 
-global layout PageHeader is size == 32, align == 8;
+global layout PageState is size == 16, align == 8;
 
-/// ページの頭の大きさ。
+/// ページの頭の3つの部分を合わせて見た値。証明の中で、ページの形を1つの値で扱うために使う。
+#[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
+pub(crate) ghost struct PageView {
+    class: u32,
+    block_words: u32,
+    sink: *const RemoteSink,
+    bytes: usize,
+    index: usize,
+    limit: usize,
+}
+
+/// ページの頭の部分の大きさ。
 pub(crate) proof fn lemma_header_size()
     ensures
-        vstd::layout::size_of::<PageHeader>() == 32,
+        vstd::layout::size_of::<PageHeader>() == 24,
+        vstd::layout::size_of::<PageState>() == 16,
+        vstd::layout::align_of::<PageHeader>() == 8,
+        vstd::layout::align_of::<PageState>() == 8,
+        vstd::layout::size_of::<Word>() == 8,
+        vstd::layout::align_of::<Word>() == 8,
 {
+    lemma_word_layout();
 }
 
-/// 最初のブロックの位置。ページの頭の大きさを語に揃えたもの。
-const FIRST_BLOCK: usize = 32;
+/// `PageState` の位置 (ページの先頭からのバイト数)。
+const STATE_AT: usize = 24;
+
+/// 遠隔の空きリストの語の位置。
+pub(crate) const REMOTE_AT: usize = 40;
+
+/// 最初のブロックの位置。ページの頭の3つの部分の大きさの和である。
+pub(crate) const FIRST_BLOCK: usize = 48;
+
+/// ページの頭 `hdr` の `sink`。
+pub(crate) closed spec fn header_sink(hdr: PageHeader) -> *const RemoteSink {
+    hdr.sink
+}
 
 #[derive(Clone, Copy)]
 struct Class {
@@ -157,13 +199,30 @@ struct Class {
     end: *mut u8,
 }
 
-/// ページの権限。頭、返すための `Dealloc`、まだ切り出していない残り。
+/// ページの権限。頭の3つの部分、返すための `Dealloc`、まだ切り出していない残り。検査モードでは、`Dealloc` を
+/// ページの表に登録した証が持つ。
 // 仕様だけで使う型。Verus の外のビルドでも型は残るので、使わないことの警告を止める
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
 pub(crate) tracked struct PagePerm {
     tracked header: PointsTo<PageHeader>,
-    tracked dealloc: Dealloc,
+    tracked state: PointsTo<PageState>,
+    /// 遠隔の空きリストの語の権限。級の空きリストのつなぎの語と同じく `Word` で持つ。
+    tracked remote: PointsTo<Word>,
+    /// 速いモードの `Dealloc`。検査モードでは `None` で、`Dealloc` は `reg` の証が持つ。
+    tracked dealloc: Option<Dealloc>,
     tracked tail: PointsToRaw,
+    /// 検査モードで、ページをページの表に登録した証。速いモードでは `None` である。
+    tracked reg: Option<Registered>,
+}
+
+impl PagePerm {
+    /// ページを返すための `Dealloc`。検査モードでは登録の証の中にある。
+    pub(crate) closed spec fn dealloc_of(&self) -> Dealloc {
+        match self.reg {
+            Some(t) => t.dealloc(),
+            None => self.dealloc->0,
+        }
+    }
 }
 
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
@@ -174,6 +233,9 @@ pub(crate) struct Pages {
     // 計測のプログラムのコード生成単位の分け方が変わり、文字列の操作と `release` が呼ぶ側に展開されなくなったためである
     // (`Heap` の `region` の欄と同じ。docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     control: ManuallyDrop<Arc<Control>>,
+    /// 別のスレッドからの解放を受ける先 (`RemoteSink`) の番地。`sink_new` で作り、`Drop` で手放す。どのページの頭にも
+    /// この値を書き、ブロックの持ち主をこの値との比較で見分ける。
+    sink: *const RemoteSink,
     list: Vec<*mut PageHeader>,
     classes: [Class; 27],
     bytes: usize,
@@ -283,7 +345,7 @@ proof fn take_header_perms(
         let a = keys.choose();
         let tracked page = pages.tracked_remove(a);
         let tracked mut r = take_header_perms(pages, keys.remove(a));
-        let tracked PagePerm { header, dealloc, tail } = page;
+        let tracked PagePerm { header, .. } = page;
         r.tracked_insert(a, header);
         assert(r.dom() =~= keys);
         r
@@ -323,8 +385,61 @@ proof fn pages_apart(
     }
 }
 
+/// ページ `page` の頭の、持ち主だけが書く部分の位置。
 #[inline]
-fn page_of(h: *mut Header) -> (p: *mut PageHeader)
+fn state_ptr(page: *mut PageHeader) -> (p: *mut PageState)
+    requires
+        page@.addr + STATE_AT <= usize::MAX,
+    ensures
+        p@.addr == page@.addr + STATE_AT,
+        p@.provenance == page@.provenance,
+{
+    (page as *mut PageState).with_addr(page.addr() + STATE_AT)
+}
+
+/// ページ `a` の全体の権限を、頭の3つの部分と残りに分ける。
+proof fn split_head(tracked raw: PointsToRaw, a: int, bytes: int) -> (tracked r: (
+    PointsToRaw,
+    PointsToRaw,
+    PointsToRaw,
+    PointsToRaw,
+))
+    requires
+        raw.is_range(a, bytes),
+        FIRST_BLOCK < bytes,
+    ensures
+        r.0.is_range(a, STATE_AT as int),
+        r.1.is_range(a + STATE_AT, (REMOTE_AT - STATE_AT) as int),
+        r.2.is_range(a + REMOTE_AT, (FIRST_BLOCK - REMOTE_AT) as int),
+        r.3.is_range(a + FIRST_BLOCK, bytes - FIRST_BLOCK),
+        r.0.provenance() == raw.provenance(),
+        r.1.provenance() == raw.provenance(),
+        r.2.provenance() == raw.provenance(),
+        r.3.provenance() == raw.provenance(),
+{
+    let tracked (head, tail) = raw.split(Set::range(a, a + FIRST_BLOCK));
+    assert(tail.dom() =~= Set::range(a + FIRST_BLOCK, a + bytes));
+    let tracked (hp, rest) = head.split(Set::range(a, a + STATE_AT));
+    assert(rest.dom() =~= Set::range(a + STATE_AT, a + FIRST_BLOCK));
+    let tracked (sp, rp) = rest.split(Set::range(a + STATE_AT, a + REMOTE_AT));
+    assert(rp.dom() =~= Set::range(a + REMOTE_AT, a + FIRST_BLOCK));
+    (hp, sp, rp, tail)
+}
+
+/// ページ `page` の頭の、遠隔の空きリストの語の位置。
+#[inline]
+fn remote_ptr(page: *mut PageHeader) -> (p: *mut Word)
+    requires
+        page@.addr + REMOTE_AT <= usize::MAX,
+    ensures
+        p@.addr == page@.addr + REMOTE_AT,
+        p@.provenance == page@.provenance,
+{
+    (page as *mut Word).with_addr(page.addr() + REMOTE_AT)
+}
+
+#[inline]
+pub(crate) fn page_of(h: *mut Header) -> (p: *mut PageHeader)
     ensures
         p@.addr == page_base(h@.addr),
         p@.provenance == h@.provenance,
@@ -345,12 +460,22 @@ impl Pages {
         self.in_use@
     }
 
-    closed spec fn hdr(&self, a: usize) -> PageHeader {
-        self.pages@[a].header.value()
+    /// ページ `a` の頭の3つの部分を合わせた値。
+    closed spec fn hdr(&self, a: usize) -> PageView {
+        let h = self.pages@[a].header.value();
+        let st = self.pages@[a].state.value();
+        PageView {
+            class: h.class,
+            block_words: h.block_words,
+            sink: h.sink,
+            bytes: h.bytes,
+            index: st.index,
+            limit: st.limit,
+        }
     }
 
     closed spec fn page_provenance(&self, a: usize) -> vstd::raw_ptr::Provenance {
-        self.pages@[a].dealloc.provenance()
+        self.pages@[a].dealloc_of().provenance()
     }
 
     closed spec fn block_bytes_of(&self, a: usize) -> int {
@@ -413,6 +538,7 @@ impl Pages {
 
     pub(crate) closed spec fn wf(&self) -> bool {
         &&& self.prefix_words <= 1
+        &&& self.sink@.addr != 0
         &&& self.list_wf()
         &&& self.pages_wf()
         &&& self.classes_wf()
@@ -450,9 +576,19 @@ impl Pages {
         &&& perm.header.ptr()@.addr == a
         &&& perm.header.ptr()@.provenance == self.page_provenance(a)
         &&& perm.header.is_init()
-        &&& perm.dealloc.addr() == a
-        &&& perm.dealloc.size() == hdr.bytes
-        &&& perm.dealloc.align() == PAGE_BYTES
+        &&& perm.state.ptr()@.addr == a + STATE_AT
+        &&& perm.state.ptr()@.provenance == self.page_provenance(a)
+        &&& perm.state.is_init()
+        &&& perm.remote.ptr()@.addr == a + REMOTE_AT
+        &&& perm.remote.ptr()@.provenance == self.page_provenance(a)
+        &&& hdr.sink == self.sink
+        &&& self.prefix_words > 0 ==> (perm.reg matches Some(t) && t.page() == a && t.control()
+            == self.ctl_id())
+        &&& self.prefix_words == 0 ==> perm.reg is None
+        &&& perm.dealloc is Some <==> perm.reg is None
+        &&& perm.dealloc_of().addr() == a
+        &&& perm.dealloc_of().size() == hdr.bytes
+        &&& perm.dealloc_of().align() == PAGE_BYTES
         &&& perm.tail.provenance() == self.page_provenance(a)
         &&& a + hdr.bytes <= usize::MAX
         &&& hdr.bytes <= MAX_PAGE_BYTES
@@ -611,14 +747,13 @@ impl Pages {
         &&& self.carved_block(b)
     }
 
-    /// ページ `a` の頭の値 `hdr` は、級、ブロックの語の数、バイト数、一覧の添字が今のページの頭と同じで、切り出した
-    /// 終わりは今の位置である。凍結した領域のページの頭は、この形で自分のページを表す。
+    /// ページ `a` の頭の値 `hdr` は、級、ブロックの語の数、バイト数が今のページの頭と同じで、`sink` が null である。
+    /// 凍結した領域のページの頭は、この形で自分のページを表す。
     pub(crate) closed spec fn describes(&self, a: usize, hdr: PageHeader) -> bool {
         &&& hdr.class == self.hdr(a).class
         &&& hdr.block_words == self.hdr(a).block_words
         &&& hdr.bytes == self.hdr(a).bytes
-        &&& hdr.index == self.hdr(a).index
-        &&& hdr.limit == self.limit_of(a)
+        &&& hdr.sink@.addr == 0
     }
 
     // 補題
@@ -728,8 +863,10 @@ impl Pages {
     proof fn lemma_layout_frame(&self, s0: Pages)
         requires
             self.pages == s0.pages,
+            self.control == s0.control,
             self.count == s0.count,
             self.prefix_words == s0.prefix_words,
+            self.sink == s0.sink,
             forall|c: int|
                 0 <= c < CLASSES ==> #[trigger] self.classes[c].page == s0.classes[c].page
                     && self.classes[c].cursor == s0.classes[c].cursor,
@@ -826,9 +963,11 @@ impl Pages {
             cursor: ptr::null_mut(),
             end: ptr::null_mut(),
         };
+        let sink = sink_new();
         let r = Pages {
             prefix_words,
             control: ManuallyDrop::new(control),
+            sink,
             list: Vec::new(),
             classes: [empty;27],
             bytes: 0,
@@ -851,8 +990,9 @@ impl Pages {
         r
     }
 
-    /// 各級の今のページの切り出しの位置をページの頭に書き戻してから、ページの頭の権限を取り出す。凍結した領域はブロックの
-    /// 位置と大きさをページの頭から読むためである。この後の `Pages` は、ページを返す `Drop` にだけ使う。
+    /// どのページの頭の `sink` も null にしてから、ページの頭の権限を取り出す。凍結した領域のブロックを、ヒープの
+    /// ブロックと `sink` で見分けるためである。凍結した領域はブロックの大きさをページの頭から読む。この後の `Pages` は、
+    /// ページを返す `Drop` にだけ使う。
     pub(crate) fn take_headers(&mut self) -> (r: Tracked<Map<usize, PointsTo<PageHeader>>>)
         requires
             old(self).wf(),
@@ -869,19 +1009,20 @@ impl Pages {
                     &&& r@[a].is_init()
                     &&& old(self).describes(a, r@[a].value())
                     &&& header_ok(r@[a].value(), old(self).prefixed())
+                    &&& header_sink(r@[a].value())@.addr == 0
                 },
     {
         let ghost s0 = *self;
         proof {
             reveal(Pages::pages_wf);
-            reveal(Pages::classes_wf);
+            reveal(Pages::list_wf);
         }
-        let mut c: usize = 0;
-        while c < CLASSES
+        let mut i: usize = 0;
+        while i < self.list.len()
             invariant
                 s0.wf(),
-                c <= CLASSES,
-                self.classes == s0.classes,
+                i <= self.list@.len(),
+                self.list@ == s0.list@,
                 self.pages@.dom() == s0.pages@.dom(),
                 forall|a: usize| #[trigger]
                     self.pages@.contains_key(a) ==> {
@@ -891,38 +1032,36 @@ impl Pages {
                         &&& hdr.class == s0.hdr(a).class
                         &&& hdr.block_words == s0.hdr(a).block_words
                         &&& hdr.bytes == s0.hdr(a).bytes
-                        &&& hdr.index == s0.hdr(a).index
-                        &&& hdr.limit == if (s0.hdr(a).class as int) < c && s0.classes[s0.hdr(
-                            a,
-                        ).class as int].page@.addr == a {
-                            s0.limit_of(a)
-                        } else {
-                            s0.hdr(a).limit as int
-                        }
+                        &&& s0.hdr(a).index < i ==> hdr.sink@.addr == 0
                     },
-            decreases CLASSES - c,
+            decreases self.list@.len() - i,
         {
-            let st = self.classes[c];
+            let page = self.list[i];
+            let ghost a = page@.addr;
             proof {
                 reveal(Pages::pages_wf);
-                reveal(Pages::classes_wf);
-                assert(s0.class_wf(c as int));
+                reveal(Pages::list_wf);
+                assert(s0.pages@.contains_key(s0.list@[i as int]@.addr));
+                assert(s0.list@[i as int] == s0.pages@[a].header.ptr());
+                assert(s0.hdr(a).index == i);
             }
-            if st.page.addr() != 0 {
-                let ghost a = st.page@.addr;
-                proof {
-                    assert(s0.page_wf(a));
-                }
-                let mut hdr = self.header_of(st.page);
-                hdr.limit = st.cursor.addr() - st.page.addr();
-                let tracked mut perm = self.pages.borrow_mut().tracked_remove(a);
-                ptr_mut_write(st.page, Tracked(&mut perm.header), hdr);
-                proof {
-                    self.pages.borrow_mut().tracked_insert(a, perm);
-                    assert(self.pages@.dom() =~= s0.pages@.dom());
+            let mut hdr = self.header_of(page);
+            hdr.sink = ptr::null();
+            let tracked mut perm = self.pages.borrow_mut().tracked_remove(a);
+            ptr_mut_write(page, Tracked(&mut perm.header), hdr);
+            proof {
+                self.pages.borrow_mut().tracked_insert(a, perm);
+                assert(self.pages@.dom() =~= s0.pages@.dom());
+                assert forall|x: usize| #[trigger]
+                    self.pages@.contains_key(x) && x != a && s0.hdr(x).index < i + 1 implies s0.hdr(
+                    x,
+                ).index < i by {
+                    if s0.hdr(x).index == i {
+                        assert(s0.list@[s0.hdr(x).index as int]@.addr == x);
+                    }
                 }
             }
-            c += 1;
+            i += 1;
         }
         proof {
             assert forall|h: usize| #[trigger] s0.carved_block(h) implies s0.pages@.contains_key(
@@ -931,8 +1070,7 @@ impl Pages {
                 s0.lemma_block(h);
             }
             assert forall|a: usize| #[trigger]
-                s0.pages@.contains_key(a) implies self.pages@[a].header.value().limit
-                == s0.limit_of(a) by {
+                s0.pages@.contains_key(a) implies self.pages@[a].header.value().sink@.addr == 0 by {
                 assert(s0.page_wf(a));
             }
         }
@@ -960,6 +1098,26 @@ impl Pages {
         &self.control
     }
 
+    /// ページを数える `Control` の番号。ページの表の登録の証は、この番号の `Control` のものである。
+    pub(crate) closed spec fn ctl_id(&self) -> u64 {
+        (*self.control@).ident()
+    }
+
+    pub(crate) fn control_ref(&self) -> (r: &Control)
+        ensures
+            r.ident() == self.ctl_id(),
+    {
+        &self.control
+    }
+
+    pub(crate) fn sink(&self) -> *const RemoteSink {
+        self.sink
+    }
+
+    pub(crate) fn prefix_words(&self) -> usize {
+        self.prefix_words
+    }
+
     #[inline]
     fn header_of(&self, page: *mut PageHeader) -> (r: PageHeader)
         requires
@@ -967,10 +1125,29 @@ impl Pages {
             self.pages@[page@.addr].header.ptr() == page,
             self.pages@[page@.addr].header.is_init(),
         ensures
-            r == self.hdr(page@.addr),
+            r == self.pages@[page@.addr].header.value(),
+            r.class == self.hdr(page@.addr).class,
+            r.block_words == self.hdr(page@.addr).block_words,
+            r.bytes == self.hdr(page@.addr).bytes,
     {
         let tracked perm = self.pages.borrow().tracked_borrow(page@.addr);
         *ptr_ref(page, Tracked(&perm.header))
+    }
+
+    /// ページの頭の、持ち主だけが書く部分を読む。
+    #[inline]
+    fn state_of(&self, page: *mut PageHeader) -> (r: PageState)
+        requires
+            self.pages@.contains_key(page@.addr),
+            self.page_wf(page@.addr),
+            page@.provenance == self.page_provenance(page@.addr),
+        ensures
+            r == self.pages@[page@.addr].state.value(),
+            r.index == self.hdr(page@.addr).index,
+            r.limit == self.hdr(page@.addr).limit,
+    {
+        let tracked perm = self.pages.borrow().tracked_borrow(page@.addr);
+        *ptr_ref(state_ptr(page), Tracked(&perm.state))
     }
 
     /// ブロックの頭を読む。
@@ -981,7 +1158,10 @@ impl Pages {
             self.carved_block(h@.addr),
             h == self.block_ptr(h@.addr),
         ensures
-            r == self.hdr(page_base(h@.addr)),
+            r == self.pages@[page_base(h@.addr)].header.value(),
+            r.class == self.hdr(page_base(h@.addr)).class,
+            r.block_words == self.hdr(page_base(h@.addr)).block_words,
+            r.bytes == self.hdr(page_base(h@.addr)).bytes,
     {
         let page = page_of(h);
         proof {
@@ -1036,36 +1216,27 @@ impl Pages {
         &self.pages.borrow().tracked_borrow(page_base(h)).header
     }
 
-    /// ページの頭 `hdr` のページ `page_base(h)` は、この確保器のページである。頭の `index` は持ち主の一覧の添字なので、
-    /// 一覧のその項がこのページならこの確保器のページである。凍結した塊のページの `index` は、塊を作ったヒープの一覧の
-    /// 添字なので、この一覧の項は別のページになる。ブロックを並べずに、ヒープのブロックと塊のブロックを見分けるのに使う。
+    /// ページの頭 `hdr` のページ `page_base(h)` は、この確保器のページである。ページの頭の `sink` がこの確保器の
+    /// `sink` と同じかで見分ける。凍結した塊のページの `sink` は null である。ブロックを並べずに、ヒープのブロックと
+    /// 塊のブロックを見分けるのに使う。
     #[inline]
     pub(crate) fn owns(&self, h: *mut Header, Tracked(hdr): Tracked<&PointsTo<PageHeader>>) -> (r:
         bool)
         requires
             self.wf(),
             hdr.ptr()@.addr == page_base(h@.addr),
-            hdr.ptr()@.provenance == h@.provenance,
             hdr.is_init(),
         ensures
-            r ==> self.has_page(page_base(h@.addr)),
             self.has_page(page_base(h@.addr)) && hdr.value() == self.page_header(page_base(h@.addr))
                 ==> r,
+            header_sink(hdr.value())@.addr == 0 ==> !r,
     {
+        let r = page_sink_of(h, Tracked(Some(hdr))).addr() == self.sink.addr();
         proof {
-            reveal(Pages::list_wf);
-        }
-        let page = page_of(h);
-        let i = ptr_ref(page, Tracked(hdr)).index;
-        let r = i < self.list.len() && self.list[i].addr() == page.addr();
-        proof {
+            reveal(Pages::pages_wf);
             let a = page_base(h@.addr);
-            if r {
-                assert(self.pages@.contains_key(self.list@[i as int]@.addr));
-            }
-            if self.has_page(a) && hdr.value() == self.page_header(a) {
-                assert(self.pages@.contains_key(a));
-                assert(self.list@[self.hdr(a).index as int]@.addr == a);
+            if self.has_page(a) {
+                assert(self.page_wf(a));
             }
         }
         r
@@ -1203,6 +1374,7 @@ impl Pages {
 
     proof fn lemma_pop(&self, s0: Pages, c: int, h: *mut Header, words: usize)
         requires
+            self.control == s0.control,
             s0.wf(),
             0 <= c < CLASSES,
             CLASS_WORDS[c] >= words + s0.prefix_words,
@@ -1214,6 +1386,7 @@ impl Pages {
             self.list == s0.list,
             self.bytes == s0.bytes,
             self.prefix_words == s0.prefix_words,
+            self.sink == s0.sink,
             self.carved == s0.carved,
             self.count == s0.count,
             self.index == s0.index,
@@ -1353,7 +1526,7 @@ impl Pages {
         let block = st.cursor;
         let h = (block as *mut Header).with_addr(block.addr() + self.prefix_words * WORD);
         let tracked pp = self.pages.borrow_mut().tracked_remove(a);
-        let tracked PagePerm { header, dealloc, tail } = pp;
+        let tracked PagePerm { header, state, remote, dealloc, tail, reg } = pp;
         let ghost lo = block@.addr as int;
         let tracked (raw, rest) = tail.split(Set::range(lo, lo + block_bytes));
         proof {
@@ -1362,7 +1535,10 @@ impl Pages {
         let ghost cap = (CLASS_WORDS[class as int] - self.prefix_words - HEADER_WORDS) as nat;
         let tracked perm = BlockPerm::from_raw(raw, h, cap, self.prefix_words == 1);
         proof {
-            self.pages.borrow_mut().tracked_insert(a, PagePerm { header, dealloc, tail: rest });
+            self.pages.borrow_mut().tracked_insert(
+                a,
+                PagePerm { header, state, remote, dealloc, tail: rest, reg },
+            );
         }
         let mut st2 = st;
         st2.cursor = block.with_addr(block.addr() + block_bytes);
@@ -1414,6 +1590,8 @@ impl Pages {
             CLASS_WORDS[c] >= words + s0.prefix_words,
             words >= HEADER_WORDS + 1,
             s1.prefix_words == s0.prefix_words,
+            s1.control == s0.control,
+            self.control == s1.control,
             s1.in_use == s0.in_use,
             forall|b: usize| #[trigger] s0.carved_block(b) ==> s1.same_block(s0, b),
             s1.carved == s0.carved,
@@ -1426,7 +1604,10 @@ impl Pages {
                 &&& h@.provenance == s1.classes[c].cursor@.provenance
                 &&& self.pages@.dom() == s1.pages@.dom()
                 &&& self.pages@[a].header == s1.pages@[a].header
+                &&& self.pages@[a].state == s1.pages@[a].state
+                &&& self.pages@[a].remote == s1.pages@[a].remote
                 &&& self.pages@[a].dealloc == s1.pages@[a].dealloc
+                &&& self.pages@[a].reg == s1.pages@[a].reg
                 &&& self.pages@[a].tail.is_range(
                     lo + CLASS_WORDS[c] * 8,
                     a + PAGE_BYTES - (lo + CLASS_WORDS[c] * 8),
@@ -1446,6 +1627,7 @@ impl Pages {
             self.list == s1.list,
             self.bytes == s1.bytes,
             self.prefix_words == s1.prefix_words,
+            self.sink == s1.sink,
             self.free == s1.free,
             self.free_perms == s1.free_perms,
             self.in_use@ == s1.in_use@.insert(h@.addr),
@@ -1588,11 +1770,13 @@ impl Pages {
         ensures
             final(self).wf(),
             final(self).prefix_words == old(self).prefix_words,
+            final(self).sink == old(self).sink,
             final(self).in_use == old(self).in_use,
             final(self).carved == old(self).carved,
             final(self).index == old(self).index,
             final(self).free_perms == old(self).free_perms,
             final(self).free == old(self).free,
+            final(self).control == old(self).control,
             final(self).classes[class as int].page@.addr != 0,
             final(self).classes[class as int].end@.addr
                 - final(self).classes[class as int].cursor@.addr >= PAGE_BYTES - FIRST_BLOCK,
@@ -1610,10 +1794,10 @@ impl Pages {
             proof {
                 assert(self.page_wf(st.page@.addr));
             }
-            let mut hdr = self.header_of(st.page);
-            hdr.limit = st.cursor.addr() - st.page.addr();
+            let mut ps = self.state_of(st.page);
+            ps.limit = st.cursor.addr() - st.page.addr();
             let tracked mut perm = self.pages.borrow_mut().tracked_remove(st.page@.addr);
-            ptr_mut_write(st.page, Tracked(&mut perm.header), hdr);
+            ptr_mut_write(state_ptr(st.page), Tracked(&mut perm.state), ps);
             proof {
                 self.pages.borrow_mut().tracked_insert(st.page@.addr, perm);
             }
@@ -1649,14 +1833,14 @@ impl Pages {
             CLASS_WORDS[c] >= s0.prefix_words + HEADER_WORDS + 1,
             ({
                 let a0 = s0.classes[c].page@.addr;
-                &&& a0 != 0 ==> s1.pages@.dom() == s0.pages@.dom() && s1.hdr(a0) == (PageHeader {
+                &&& a0 != 0 ==> s1.pages@.dom() == s0.pages@.dom() && s1.hdr(a0) == (PageView {
                     limit: (s0.classes[c].cursor@.addr - a0) as usize,
                     ..s0.hdr(a0)
                 }) && s1.pages@[a0].dealloc == s0.pages@[a0].dealloc && s1.pages@[a0].tail
-                    == s0.pages@[a0].tail && s1.pages@[a0].header.ptr()
-                    == s0.pages@[a0].header.ptr() && s1.pages@[a0].header.is_init() && forall|
-                    x: usize,
-                |
+                    == s0.pages@[a0].tail && s1.pages@[a0].header == s0.pages@[a0].header
+                    && s1.pages@[a0].remote == s0.pages@[a0].remote && s1.pages@[a0].state.ptr()
+                    == s0.pages@[a0].state.ptr() && s1.pages@[a0].state.is_init()
+                    && s1.pages@[a0].reg == s0.pages@[a0].reg && forall|x: usize|
                     x != a0 ==> #[trigger] s1.pages@[x] == s0.pages@[x]
                 &&& a0 == 0 ==> s1.pages == s0.pages
             }),
@@ -1667,23 +1851,35 @@ impl Pages {
             self.pages@ == s1.pages@.insert(p@.addr, self.pages@[p@.addr]),
             self.pages@[p@.addr].header.ptr() == p,
             self.pages@[p@.addr].header.is_init(),
-            self.hdr(p@.addr) == (PageHeader {
+            self.pages@[p@.addr].state.ptr()@.addr == p@.addr + STATE_AT,
+            self.pages@[p@.addr].state.ptr()@.provenance == p@.provenance,
+            self.pages@[p@.addr].state.is_init(),
+            self.pages@[p@.addr].remote.ptr()@.addr == p@.addr + REMOTE_AT,
+            self.pages@[p@.addr].remote.ptr()@.provenance == p@.provenance,
+            self.hdr(p@.addr) == (PageView {
                 class: c as u32,
                 block_words: CLASS_WORDS[c] as u32,
+                sink: s0.sink,
+                bytes: PAGE_BYTES,
                 index: s0.list@.len() as usize,
                 limit: FIRST_BLOCK,
-                bytes: PAGE_BYTES,
             }),
-            self.pages@[p@.addr].dealloc.addr() == p@.addr,
-            self.pages@[p@.addr].dealloc.size() == PAGE_BYTES,
-            self.pages@[p@.addr].dealloc.align() == PAGE_BYTES,
-            self.pages@[p@.addr].dealloc.provenance() == p@.provenance,
+            self.sink == s0.sink,
+            self.pages@[p@.addr].dealloc_of().addr() == p@.addr,
+            self.pages@[p@.addr].dealloc_of().size() == PAGE_BYTES,
+            self.pages@[p@.addr].dealloc_of().align() == PAGE_BYTES,
+            self.pages@[p@.addr].dealloc_of().provenance() == p@.provenance,
             self.pages@[p@.addr].tail.is_range(p@.addr + FIRST_BLOCK, PAGE_BYTES - FIRST_BLOCK),
             self.pages@[p@.addr].tail.provenance() == p@.provenance,
             self.list@ == s0.list@.push(p),
             s0.list@.len() <= usize::MAX,
             self.bytes == s0.bytes + PAGE_BYTES,
             self.count@ == s0.count@.insert(p@.addr, 0),
+            s0.prefix_words > 0 ==> (self.pages@[p@.addr].reg matches Some(t) && t.page() == p@.addr
+                && t.control() == s0.ctl_id()),
+            s0.prefix_words == 0 ==> self.pages@[p@.addr].reg is None,
+            self.pages@[p@.addr].dealloc is Some <==> self.pages@[p@.addr].reg is None,
+            self.control == s0.control,
             self.carved == s0.carved,
             self.index == s0.index,
             self.free_perms == s0.free_perms,
@@ -1740,6 +1936,7 @@ impl Pages {
         assert forall|x: usize| #[trigger] self.pages@.contains_key(x) implies self.page_wf(x) by {
             if x != pa {
                 assert(s0.page_wf(x));
+                assert(self.pages@[x].reg == s0.pages@[x].reg);
             }
         }
         assert(self.count@.dom() =~= self.pages@.dom());
@@ -1838,6 +2035,7 @@ impl Pages {
 
     /// 新しいページを OS から取り、頭を書いて一覧に足す。権限はまだ `pages` に入れずに返す。
     #[cold]
+    #[verifier::spinoff_prover]
     fn fresh_page(&mut self, bytes: usize, class: u32, block_words: usize) -> (r: (
         *mut PageHeader,
         Tracked<PagePerm>,
@@ -1858,14 +2056,22 @@ impl Pages {
             r.1@.header.value() == (PageHeader {
                 class,
                 block_words: block_words as u32,
-                index: old(self).list@.len() as usize,
-                limit: FIRST_BLOCK,
+                sink: old(self).sink,
                 bytes,
             }),
-            r.1@.dealloc.addr() == r.0@.addr,
-            r.1@.dealloc.size() == bytes,
-            r.1@.dealloc.align() == PAGE_BYTES,
-            r.1@.dealloc.provenance() == r.0@.provenance,
+            r.1@.state.ptr()@.addr == r.0@.addr + STATE_AT,
+            r.1@.state.ptr()@.provenance == r.0@.provenance,
+            r.1@.state.is_init(),
+            r.1@.state.value() == (PageState {
+                index: old(self).list@.len() as usize,
+                limit: FIRST_BLOCK,
+            }),
+            r.1@.remote.ptr()@.addr == r.0@.addr + REMOTE_AT,
+            r.1@.remote.ptr()@.provenance == r.0@.provenance,
+            r.1@.dealloc_of().addr() == r.0@.addr,
+            r.1@.dealloc_of().size() == bytes,
+            r.1@.dealloc_of().align() == PAGE_BYTES,
+            r.1@.dealloc_of().provenance() == r.0@.provenance,
             r.1@.tail.is_range(r.0@.addr + FIRST_BLOCK, bytes - FIRST_BLOCK),
             r.1@.tail.provenance() == r.0@.provenance,
             final(self).list@ == old(self).list@.push(r.0),
@@ -1880,6 +2086,12 @@ impl Pages {
             final(self).count == old(self).count,
             final(self).index == old(self).index,
             final(self).prefix_words == old(self).prefix_words,
+            final(self).sink == old(self).sink,
+            old(self).prefix_words > 0 ==> (r.1@.reg matches Some(t) && t.page() == r.0@.addr
+                && t.control() == old(self).ctl_id()),
+            old(self).prefix_words == 0 ==> r.1@.reg is None,
+            r.1@.dealloc is Some <==> r.1@.reg is None,
+            final(self).control == old(self).control,
     {
         if block_words > 0xFFFF_FFFF {
             too_many_words();
@@ -1893,25 +2105,34 @@ impl Pages {
         };
         let (base, Tracked(raw), Tracked(dealloc)) = alloc_page(bytes);
         charge_pages(&self.control, bytes);
+        // 検査モードのページは、物体の語をどこかへ渡す前に表に登録する (docs/spec/object-model.md の「ページの表」)
+        let (dealloc, reg): (Tracked<Option<Dealloc>>, Tracked<Option<Registered>>) =
+            if self.prefix_words > 0 {
+            let Tracked(t) = register_page(self.control_ref(), base.addr(), Tracked(dealloc));
+            (Tracked(None), Tracked(Some(t)))
+        } else {
+            (Tracked(Some(dealloc)), Tracked(None))
+        };
         let page = base as *mut PageHeader;
         let ghost a = base@.addr as int;
-        let tracked (head, tail) = raw.split(Set::range(a, a + FIRST_BLOCK));
         proof {
-            assert(tail.dom() =~= Set::range(a + FIRST_BLOCK, a + bytes));
             assert(a % 8 == 0) by (nonlinear_arith)
                 requires
                     a % 0x1_0000 == 0,
             ;
+            lemma_header_size();
+            assert((a + STATE_AT) % 8 == 0);
+            assert((a + REMOTE_AT) % 8 == 0);
         }
+        let tracked (head, st, rw, tail) = split_head(raw, a, bytes as int);
         let tracked mut header = head.into_typed::<PageHeader>(base@.addr);
-        let hdr = PageHeader {
-            class,
-            block_words: block_words as u32,
-            index: self.list.len(),
-            limit: FIRST_BLOCK,
-            bytes,
-        };
+        let hdr = PageHeader { class, block_words: block_words as u32, sink: self.sink, bytes };
         ptr_mut_write(page, Tracked(&mut header), hdr);
+        let tracked mut state = st.into_typed::<PageState>((base@.addr + STATE_AT) as usize);
+        let ps = PageState { index: self.list.len(), limit: FIRST_BLOCK };
+        ptr_mut_write(state_ptr(page), Tracked(&mut state), ps);
+        let tracked mut remote = rw.into_typed::<Word>((base@.addr + REMOTE_AT) as usize);
+        ptr_mut_write(remote_ptr(page), Tracked(&mut remote), Word::from_bits(0));
         proof {
             // ほかのページの頭の権限と同じ番地にはならない
             if self.pages@.contains_key(page@.addr) {
@@ -1921,7 +2142,9 @@ impl Pages {
         }
         self.list.push(page);
         self.bytes = total;
-        (page, Tracked(PagePerm { header, dealloc, tail }))
+        let Tracked(reg) = reg;
+        let Tracked(dealloc) = dealloc;
+        (page, Tracked(PagePerm { header, state, remote, dealloc, tail, reg }))
     }
 
     /// 大きい物体のブロックを、専用のページで取る。
@@ -1951,10 +2174,10 @@ impl Pages {
             }
         }
         let (page, Tracked(perm)) = self.fresh_page(bytes, LARGE, block_words);
-        let tracked PagePerm { header: mut header, dealloc, tail } = perm;
-        let mut hdr = *ptr_ref(page, Tracked(&header));
-        hdr.limit = bytes;
-        ptr_mut_write(page, Tracked(&mut header), hdr);
+        let tracked PagePerm { header, state: mut state, remote, dealloc, tail, reg } = perm;
+        let mut ps = *ptr_ref(state_ptr(page), Tracked(&state));
+        ps.limit = bytes;
+        ptr_mut_write(state_ptr(page), Tracked(&mut state), ps);
         let h = (page as *mut Header).with_addr(
             page.addr() + FIRST_BLOCK + self.prefix_words * WORD,
         );
@@ -1972,7 +2195,7 @@ impl Pages {
         proof {
             self.pages.borrow_mut().tracked_insert(
                 page@.addr,
-                PagePerm { header, dealloc, tail: rest },
+                PagePerm { header, state, remote, dealloc, tail: rest, reg },
             );
             self.count = Ghost(self.count@.insert(page@.addr, 1));
             self.carved = Ghost(self.carved@.insert(h@.addr));
@@ -2003,17 +2226,24 @@ impl Pages {
             self.pages@ == s0.pages@.insert(p@.addr, self.pages@[p@.addr]),
             self.pages@[p@.addr].header.ptr() == p,
             self.pages@[p@.addr].header.is_init(),
-            self.hdr(p@.addr) == (PageHeader {
+            self.pages@[p@.addr].state.ptr()@.addr == p@.addr + STATE_AT,
+            self.pages@[p@.addr].state.ptr()@.provenance == p@.provenance,
+            self.pages@[p@.addr].state.is_init(),
+            self.pages@[p@.addr].remote.ptr()@.addr == p@.addr + REMOTE_AT,
+            self.pages@[p@.addr].remote.ptr()@.provenance == p@.provenance,
+            self.hdr(p@.addr) == (PageView {
                 class: LARGE,
                 block_words: block_words as u32,
+                sink: s0.sink,
+                bytes: (FIRST_BLOCK + block_words * 8) as usize,
                 index: s0.list@.len() as usize,
                 limit: (FIRST_BLOCK + block_words * 8) as usize,
-                bytes: (FIRST_BLOCK + block_words * 8) as usize,
             }),
-            self.pages@[p@.addr].dealloc.addr() == p@.addr,
-            self.pages@[p@.addr].dealloc.size() == FIRST_BLOCK + block_words * 8,
-            self.pages@[p@.addr].dealloc.align() == PAGE_BYTES,
-            self.pages@[p@.addr].dealloc.provenance() == p@.provenance,
+            self.sink == s0.sink,
+            self.pages@[p@.addr].dealloc_of().addr() == p@.addr,
+            self.pages@[p@.addr].dealloc_of().size() == FIRST_BLOCK + block_words * 8,
+            self.pages@[p@.addr].dealloc_of().align() == PAGE_BYTES,
+            self.pages@[p@.addr].dealloc_of().provenance() == p@.provenance,
             self.pages@[p@.addr].tail.is_range(p@.addr + FIRST_BLOCK + block_words * 8, 0),
             self.pages@[p@.addr].tail.provenance() == p@.provenance,
             h@.addr == p@.addr + FIRST_BLOCK + s0.prefix_words * 8,
@@ -2022,6 +2252,11 @@ impl Pages {
             s0.list@.len() <= usize::MAX,
             self.bytes == s0.bytes + FIRST_BLOCK + block_words * 8,
             self.count@ == s0.count@.insert(p@.addr, 1),
+            s0.prefix_words > 0 ==> (self.pages@[p@.addr].reg matches Some(t) && t.page() == p@.addr
+                && t.control() == s0.ctl_id()),
+            s0.prefix_words == 0 ==> self.pages@[p@.addr].reg is None,
+            self.pages@[p@.addr].dealloc is Some <==> self.pages@[p@.addr].reg is None,
+            self.control == s0.control,
             self.carved@ == s0.carved@.insert(h@.addr),
             self.index@ == s0.index@.insert(h@.addr, 0),
             self.in_use@ == s0.in_use@.insert(h@.addr),
@@ -2195,7 +2430,7 @@ impl Pages {
         }
         let hdr = self.block_header(h);
         if hdr.class == LARGE {
-            self.release_large(h, Tracked(perm));
+            self.release_large(h, Tracked(perm), true);
             return;
         }
         let ghost s0 = *self;
@@ -2227,6 +2462,7 @@ impl Pages {
 
     proof fn lemma_free(&self, s0: Pages, c: int, h: *mut Header)
         requires
+            self.control == s0.control,
             s0.wf(),
             0 <= c < CLASSES,
             s0.in_use().contains(h@.addr),
@@ -2237,6 +2473,7 @@ impl Pages {
             self.list == s0.list,
             self.bytes == s0.bytes,
             self.prefix_words == s0.prefix_words,
+            self.sink == s0.sink,
             self.carved == s0.carved,
             self.count == s0.count,
             self.index == s0.index,
@@ -2350,9 +2587,15 @@ impl Pages {
         }
     }
 
-    /// 大きい物体のページを OS に返す。
+    /// 大きい物体のページを OS に返す。`refund` が偽なら `Control` のバイト数から引かない。別のスレッドが解放した
+    /// ページは、解放したスレッドがもう引いてある (docs/spec/object-model.md の「別のスレッドからの解放」)。
     #[cold]
-    fn release_large(&mut self, h: *mut Header, Tracked(perm): Tracked<BlockPerm>)
+    pub(crate) fn release_large(
+        &mut self,
+        h: *mut Header,
+        Tracked(perm): Tracked<BlockPerm>,
+        refund: bool,
+    )
         requires
             old(self).wf(),
             old(self).in_use().contains(h@.addr),
@@ -2376,7 +2619,7 @@ impl Pages {
         }
         let page = page_of(h);
         let hdr = self.header_of(page);
-        let index = hdr.index;
+        let index = self.state_of(page).index;
         let bytes = hdr.bytes;
         let ghost a = page@.addr;
         proof {
@@ -2394,29 +2637,46 @@ impl Pages {
                 assert(s0.hdr(moved@.addr).index == last);
                 assert(moved@.addr != a);
             }
-            let mut mh = self.header_of(moved);
-            mh.index = index;
+            let mut ms = self.state_of(moved);
+            ms.index = index;
             let tracked mut mp = self.pages.borrow_mut().tracked_remove(moved@.addr);
-            ptr_mut_write(moved, Tracked(&mut mp.header), mh);
+            ptr_mut_write(state_ptr(moved), Tracked(&mut mp.state), ms);
             proof {
                 self.pages.borrow_mut().tracked_insert(moved@.addr, mp);
             }
         }
         self.bytes -= bytes;
         let tracked pp = self.pages.borrow_mut().tracked_remove(a);
-        let tracked PagePerm { header: mut header, dealloc, tail } = pp;
+        let tracked PagePerm {
+            header: mut header,
+            state: mut state,
+            remote: mut remote,
+            dealloc,
+            tail,
+            reg,
+        } = pp;
         let ghost cap = s0.cap(hs);
         proof {
             header.leak_contents();
+            state.leak_contents();
+            remote.leak_contents();
+            lemma_header_size();
         }
-        let tracked head = header.into_raw();
+        let tracked head = header.into_raw().join(state.into_raw()).join(remote.into_raw());
         let tracked block = perm.into_raw(h, cap, s0.prefixed());
         let tracked raw = head.join(block).join(tail);
         proof {
             assert(raw.dom() =~= Set::range(a as int, a + bytes));
         }
+        let Tracked(dealloc) = if self.prefix_words > 0 {
+            unregister_page(self.control_ref(), page.addr(), Tracked(reg.tracked_unwrap()))
+        } else {
+            Tracked(dealloc.tracked_unwrap())
+        };
         dealloc_page(page as *mut u8, bytes, Tracked(raw), Tracked(dealloc));
-        refund_pages(&self.control, bytes);
+        if refund {
+            refund_pages(&self.control, bytes);
+        }
         proof {
             self.count = Ghost(self.count@.remove(a));
             self.carved = Ghost(self.carved@.remove(hs));
@@ -2450,11 +2710,14 @@ impl Pages {
             self.pages@.dom() == s0.pages@.dom().remove(a),
             i < self.list@.len() ==> ({
                 let m = s0.list@.last()@.addr;
-                &&& self.hdr(m) == (PageHeader { index: i as usize, ..s0.hdr(m) })
-                &&& self.pages@[m].header.ptr() == s0.pages@[m].header.ptr()
-                &&& self.pages@[m].header.is_init()
+                &&& self.hdr(m) == (PageView { index: i as usize, ..s0.hdr(m) })
+                &&& self.pages@[m].header == s0.pages@[m].header
+                &&& self.pages@[m].remote == s0.pages@[m].remote
+                &&& self.pages@[m].state.ptr() == s0.pages@[m].state.ptr()
+                &&& self.pages@[m].state.is_init()
                 &&& self.pages@[m].dealloc == s0.pages@[m].dealloc
                 &&& self.pages@[m].tail == s0.pages@[m].tail
+                &&& self.pages@[m].reg == s0.pages@[m].reg
                 &&& forall|x: usize| x != a && x != m ==> #[trigger] self.pages@[x] == s0.pages@[x]
             }),
             i == self.list@.len() ==> forall|x: usize|
@@ -2464,9 +2727,11 @@ impl Pages {
             self.carved@ == s0.carved@.remove(hs),
             self.index@ == s0.index@.remove(hs),
             self.in_use@ == s0.in_use@.remove(hs),
+            self.control == s0.control,
             self.free_perms == s0.free_perms,
             self.free == s0.free,
             self.prefix_words == s0.prefix_words,
+            self.sink == s0.sink,
             self.classes == s0.classes,
         ensures
             self.wf(),
@@ -2634,11 +2899,27 @@ impl Pages {
     /// ページの頭 `a` の権限を持つ。
     /// 持っているページ `a` の頭の値。
     pub(crate) closed spec fn page_header(&self, a: usize) -> PageHeader {
-        self.hdr(a)
+        self.pages@[a].header.value()
     }
 
     pub(crate) closed spec fn has_page(&self, a: usize) -> bool {
         self.pages@.contains_key(a)
+    }
+
+    /// 検査モードで切り出したブロック `h` のページを、ページの表に登録した証を借りる。
+    pub(crate) proof fn tracked_reg(tracked &self, h: usize) -> (tracked t: &Registered)
+        requires
+            self.wf(),
+            self.carved_block(h),
+            self.prefixed(),
+        ensures
+            t.page() == page_base(h),
+            t.control() == self.ctl_id(),
+    {
+        reveal(Pages::carved_wf);
+        reveal(Pages::pages_wf);
+        assert(self.page_wf(page_base(h)));
+        self.pages.borrow().tracked_borrow(page_base(h)).reg.tracked_borrow()
     }
 
     /// 切り出したブロックは、持っているページにある。
@@ -2750,6 +3031,14 @@ impl Pages {
         self.list@.len()
     }
 
+    /// 一覧の i 番のページ。
+    pub(crate) fn page_at(&self, i: usize) -> *mut PageHeader
+        requires
+            i < self.page_count(),
+    {
+        self.list[i]
+    }
+
     pub(crate) fn pages_len(&self) -> (r: usize)
         ensures
             r == self.page_count(),
@@ -2845,7 +3134,7 @@ impl Pages {
                 }
                 self.classes[class].cursor.addr() - page.addr()
             } else {
-                hdr.limit
+                self.state_of(page).limit
             };
             let block_bytes = hdr.block_words as usize * WORD;
             let mut offset = FIRST_BLOCK;
@@ -3079,13 +3368,18 @@ fn bad_page_layout() -> ! {
 
 } // verus!
 
-const _: () = assert!(FIRST_BLOCK == size_of::<PageHeader>().next_multiple_of(WORD));
+const _: () = assert!(STATE_AT == size_of::<PageHeader>());
+const _: () = assert!(REMOTE_AT == STATE_AT + size_of::<PageState>());
+const _: () = assert!(FIRST_BLOCK == REMOTE_AT + size_of::<usize>());
 const _: () = assert!(PAGE_BYTES == 1 << 16);
 const _: () = assert!(MAX_PAGE_BYTES == isize::MAX as usize - (isize::MAX as usize % PAGE_BYTES));
 
 impl Drop for Pages {
     fn drop(&mut self) {
         for page in self.list.drain(..) {
+            if self.prefix_words > 0 {
+                forget_page(&self.control, page.addr());
+            }
             let bytes = unsafe { (*page).bytes };
             unsafe {
                 dealloc(
@@ -3095,6 +3389,8 @@ impl Drop for Pages {
             }
             self.control.refund(bytes);
         }
+        // ほかのスレッドはもうこのヒープに積まない (docs/spec/object-model.md の「別のスレッドからの解放」)
+        drop(unsafe { Box::from_raw(self.sink.cast_mut()) });
         // `control` の欄はこの後で読まない
         release_control(unsafe { ManuallyDrop::take(&mut self.control) });
     }

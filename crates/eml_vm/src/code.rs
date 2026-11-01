@@ -108,6 +108,9 @@ pub(crate) struct Tables {
     pub(crate) locations: Vec<(Pc, Loc)>,
     /// 巻き戻しの表。地点の命令の次の位置の昇順。
     pub(crate) unwinds: Vec<(Pc, Unwind)>,
+    /// 読み込んだコードがセッションの根を読み書きする。一度立てたら下ろさない。立っている `Machine` の run は worker を
+    /// 作らない (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) uses_roots: bool,
 }
 
 impl Tables {
@@ -119,6 +122,7 @@ impl Tables {
             mask_lists: Vec::new(),
             locations: Vec::new(),
             unwinds: Vec::new(),
+            uses_roots: false,
         }
     }
 
