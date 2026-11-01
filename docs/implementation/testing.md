@@ -111,7 +111,7 @@
 信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T15) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
 
 - テストでないコード (`#[cfg(test)]` の module と `heap/tests/` を除く) から、Verus に確かめさせない項目を表す語 (`external_body`、`verifier::external`、`assume_specification`、`global`、`assume(`、`Tracked::assume_new` など) を探す。見つけた項目 (ファイル、語、それを含む関数か型の名前) が、表の番号を付けた一覧と同じであることを確かめる。属性や仮定が一覧の外に増えると、証明が空になっても検証は通ってしまうためである
-- `verus!` の外のコードに `unsafe` がないことを確かめる。除くのは `Word`、`Heap`、`Frozen` の `unsafe impl Send` と `Sync` と、T4 の `Drop` だけである
+- `verus!` の外のコードに `unsafe` がないことを確かめる。除くのは `Word`、`Heap`、`Frozen` の `unsafe impl Send` と `Sync`、`RawBuf` の `unsafe impl Send` と、T4 の `Drop` だけである
 - `src/` のテストでないファイルが、どれも調べる一覧に載っていることを確かめる
 - 探し方の規則 (コメントと文字列を除くこと、`#[cfg(test)]` の module の見分け方) は、同じファイルの小さいテストで確かめる
 
