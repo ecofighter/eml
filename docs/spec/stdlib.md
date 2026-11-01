@@ -1255,7 +1255,7 @@ body () =
 | `load` | `Counter -> <IO> Int` | extern |
 | `store` | `Int -> Counter -> <IO> Unit` | extern |
 
-- `Counter` は、run をまたいで `Machine` が持つ表の添字を持つ `Unr` の即値である。`add n c` は足した後の値を返し、64 ビットで巻き戻る。`Counter` は放さない。数の少ない共有の状態のためのものである。`Async` のタスクが複数の worker で動くときは、表を `SeqCst` の atomic にする
+- `Counter` は、run をまたいで `Machine` が持つ表の添字を持つ `Unr` の即値である。表の項は `SeqCst` の atomic で、どの worker のタスクも lock を取らずに `add`、`load`、`store` を行う。`add n c` は `fetch_add` で足して、足した後の値を返し、64 ビットで巻き戻る。`Counter` は放さない。数の少ない共有の状態のためのものである
 - 行は `Async` の命令で動くので、`Std.Atomic` は `Std.Async` を読み込む。row は `IO` だけで、タスクの外でも、REPL の入力をまたいでも使え、実行時エラーで捨てた run の `add` も残る
 
 ## `Std.Net`

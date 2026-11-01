@@ -13,6 +13,7 @@ use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop};
 
 use crate::cells::{CellRef, Post, Shared, Woken};
 use crate::code::CodeBase;
+use crate::counters::Counters;
 use crate::doorbell::Doorbell;
 use crate::driver::{DriverKind, RunClock, ceil_ms, floor_ms};
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, driver_mut};
@@ -145,6 +146,8 @@ pub(crate) struct Run {
     pub(crate) bell: Option<Arc<Doorbell>>,
     /// worker 1..N-1 の致命的な誤り。最初に書いたものだけを残し、worker 0 の結果より優先する。
     fatal: Mutex<Option<RuntimeError>>,
+    /// `Std.Atomic.Counter` の表。`Machine` が持ち、run が終わっても残る。lock を取らずに読み書きする。
+    pub(crate) counters: Arc<Counters>,
 }
 
 /// worker `k` の語に止めるビットか `END` が立っている。眠る直前に読み、立っていれば眠らずに戻る。監視のスレッドは
@@ -163,7 +166,12 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Run {
     /// worker が `workers` 個の run の表。始めた worker は worker 0 だけで、動いている。まだ始めていない worker の欄は
     /// 眠っていない形にしておく。起こしても `running` に数えないためである。
-    pub(crate) fn new(workers: usize, bell: Option<Arc<Doorbell>>, clock: RunClock) -> Run {
+    pub(crate) fn new(
+        workers: usize,
+        bell: Option<Arc<Doorbell>>,
+        clock: RunClock,
+        counters: Arc<Counters>,
+    ) -> Run {
         let slots = (0..workers)
             .map(|_| Slot {
                 state: Mutex::new(SlotState {
@@ -186,6 +194,7 @@ impl Run {
             clock,
             bell,
             fatal: Mutex::new(None),
+            counters,
         }
     }
 
@@ -791,7 +800,7 @@ mod tests {
     /// 眠っている worker を起こすと `running` に数え、もう一度起こしても数は増えない。
     #[test]
     fn waking_a_parked_worker_counts_it_once() {
-        let run = Run::new(2, None, RunClock::Virtual(Arc::default()));
+        let run = Run::new(2, None, RunClock::Virtual(Arc::default()), Arc::default());
         run.park(0);
         assert_eq!(run.running.load(Ordering::Acquire), 0);
         run.wake(0);
@@ -858,7 +867,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
     /// まだ始めていない worker の欄を起こしても、`running` には数えない。
     #[test]
     fn waking_an_unstarted_worker_counts_nothing() {
-        let run = Run::new(3, None, RunClock::Virtual(Arc::default()));
+        let run = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
         run.wake_all();
         assert_eq!(run.running.load(Ordering::Acquire), 1);
     }
@@ -870,7 +879,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         let idle = |hook: bool| {
             let control = Arc::new(Control::new(Limits::default()));
             let driver = eml_io::TestDriver::new(None);
-            let run = Run::new(1, None, RunClock::Virtual(driver.clock()));
+            let run = Run::new(1, None, RunClock::Virtual(driver.clock()), Arc::default());
             let mut sched = Scheduler::new(
                 Sequential,
                 Box::new(driver),
@@ -906,7 +915,12 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         }));
         let driver = eml_io::TestDriver::new(None);
         let clock = driver.clock();
-        let run = Arc::new(Run::new(2, None, RunClock::Virtual(Arc::clone(&clock))));
+        let run = Arc::new(Run::new(
+            2,
+            None,
+            RunClock::Virtual(Arc::clone(&clock)),
+            Arc::default(),
+        ));
         let shared = Arc::new(Shared::new(Registry::new(Vec::new(), 2)));
         let mut sched = Scheduler::new(
             Sequential,

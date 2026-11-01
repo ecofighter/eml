@@ -250,7 +250,7 @@ table! {
         OpId => type_row("Std.Async.OpId", Lin, Repr::Int),
         // 登録表の添字の即値。Kind は中身の型によらない (docs/spec/stdlib.md の「`Std.Chan`」)
         Chan => handle_type_row("Std.Chan.Chan"),
-        // 登録表ではなく `Machine` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
+        // 登録表ではなく、run をまたいで `Machine` が持つ `Counters` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
         Counter => type_row("Std.Atomic.Counter", Unr, Repr::Int),
         // driver のリスナーとストリームのハンドルを持つ `Foreign` (docs/spec/stdlib.md の「`Std.Net`」)
         NetTcpListener => type_row("Std.Net.TcpListener", Lin, Repr::Obj),

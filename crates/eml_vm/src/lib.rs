@@ -9,6 +9,7 @@ use eml_lir::Program;
 use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
 use crate::cells::{Registry, Shared, TaskStats};
+use crate::counters::Counters;
 use crate::driver::{DriverKind, RunClock};
 use crate::error::KEPT_PENDING;
 use crate::vm::{ExecWith, Exit};
@@ -18,6 +19,7 @@ mod apply;
 mod cells;
 mod code;
 mod compile;
+mod counters;
 mod data;
 mod disasm;
 mod doorbell;
@@ -328,7 +330,7 @@ pub struct Machine<M: Mode> {
     /// 次の run の登録表の、添字ごとの generation (docs/spec/vm.md の「セルと登録表」)。
     generations: Vec<u32>,
     /// `Std.Atomic.Counter` の表。run をまたぎ、REPL の入力をまたいで残る (docs/spec/vm.md の「セルと登録表」)。
-    counters: Vec<i64>,
+    counters: Arc<Counters>,
     /// driver を作るときの時計。
     clock: Clock,
     /// 実行ごとの `Scheduler` に渡す自己パイプ。1つの自己パイプは1つの `Machine` だけに渡す
@@ -376,7 +378,7 @@ impl<M: Mode> Machine<M> {
             copying: HeapWork::default(),
             shared_roots: 0,
             generations: Vec::new(),
-            counters: Vec::new(),
+            counters: Arc::default(),
             clock: Clock::Virtual,
             driver: None,
             driver_kind: DriverKind::Virtual,
@@ -595,7 +597,7 @@ impl<M: Mode> Machine<M> {
             max_depth: self.max_depth,
             shared_roots: self.shared_roots,
             generations: std::mem::take(&mut self.generations),
-            counters: std::mem::take(&mut self.counters),
+            counters: Arc::clone(&self.counters),
             driver,
             driver_kind: self.driver_kind,
             run_clock: self.run_clock.clone(),
@@ -622,7 +624,6 @@ impl<M: Mode> Machine<M> {
         // ほかの worker のヒープは、確かめるか回復するまで `Machine` が持つ。poisoned になる道でも落とさない
         self.others.append(&mut scheduled.others);
         self.generations = std::mem::take(&mut scheduled.generations);
-        self.counters = std::mem::take(&mut scheduled.counters);
         // 誤りで返る道でも driver を失わないように、run の直後に戻す
         self.driver = scheduled.driver.take();
         if let Some(panic) = scheduled.panic.take() {
@@ -841,7 +842,6 @@ struct Scheduled<M: Mode> {
     others_ctx: CtxStats,
     others_heap: HeapWork,
     generations: Vec<u32>,
-    counters: Vec<i64>,
     /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
     driver: Option<Box<dyn IoDriver>>,
     /// run の直後の `quiesce` の後にも、driver が保留の操作を残した。
@@ -862,7 +862,7 @@ struct Start {
     max_depth: usize,
     shared_roots: usize,
     generations: Vec<u32>,
-    counters: Vec<i64>,
+    counters: Arc<Counters>,
     driver: Box<dyn IoDriver>,
     driver_kind: DriverKind,
     run_clock: RunClock,
@@ -886,11 +886,15 @@ fn run_scheduled<M: Mode, P: Policy>(
     // run の表は run ごとに作り、監視のスレッドが止まる `Scheduler` の破棄とともに捨てる (docs/spec/vm.md の
     // 「タスクとスケジュール」)
     let workers = control.limits().workers;
-    let run = Arc::new(Run::new(workers, start.doorbell, start.run_clock));
+    let run = Arc::new(Run::new(
+        workers,
+        start.doorbell,
+        start.run_clock,
+        start.counters,
+    ));
     // 登録表も run ごとに1つ作り、worker 0 と、後で作る worker 1..N-1 のすべての `Scheduler` に配る
     // (docs/spec/vm.md の「セルと登録表」)
     let mut registry = Registry::new(start.generations, workers);
-    registry.counters = start.counters;
     // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
     registry.schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
     let mut sched = Scheduler::new(
@@ -1008,13 +1012,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         }
         None => false,
     };
-    let (generations, counters) = {
-        let mut cells = sched.cells.lock();
-        (
-            cells.next_generations(),
-            std::mem::take(&mut cells.counters),
-        )
-    };
+    let generations = sched.cells.lock().next_generations();
     let scheduled = Scheduled {
         preemptions,
         peak_stack,
@@ -1023,7 +1021,6 @@ fn run_scheduled<M: Mode, P: Policy>(
         others_ctx,
         others_heap,
         generations,
-        counters,
         driver: sched.driver.take(),
         kept_pending,
         others,

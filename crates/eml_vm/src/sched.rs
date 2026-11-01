@@ -794,7 +794,12 @@ mod tests {
             DriverKind::Injected => RunClock::Injected,
             _ => RunClock::Virtual(driver.clock()),
         };
-        let run = Run::new(workers, doorbell.then(|| Doorbell::new().unwrap()), clock);
+        let run = Run::new(
+            workers,
+            doorbell.then(|| Doorbell::new().unwrap()),
+            clock,
+            Arc::default(),
+        );
         let mut sched = Scheduler::new(
             Sequential,
             Box::new(driver),
@@ -897,7 +902,12 @@ mod tests {
             workers: 2,
             ..Limits::default()
         }));
-        let run = Arc::new(Run::new(2, None, RunClock::Virtual(Arc::default())));
+        let run = Arc::new(Run::new(
+            2,
+            None,
+            RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        ));
         let shared = Arc::new(Shared::new(Registry::new(Vec::new(), 2)));
         let sched = Scheduler::worker(
             Sequential,

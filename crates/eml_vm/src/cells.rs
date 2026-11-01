@@ -882,8 +882,6 @@ pub(crate) struct Registry {
     slots: Vec<(u32, Option<CellKind>)>,
     free: Vec<u32>,
     pub(crate) stats: TaskStats,
-    /// `Std.Atomic.Counter` の表。添字は `Machine` が run をまたいで持つので、回復でも戻さない。
-    pub(crate) counters: Vec<i64>,
     /// worker ごとの区画。添字が worker の番号である。
     parts: Vec<Part>,
     /// シグナルの番号ごとの、待ち始めた順の待ち手。項はいつも生きていて、`wait == Some(Wait::Signal(その番号))` である。
@@ -912,7 +910,6 @@ impl Registry {
             slots: generations.into_iter().map(|g| (g, None)).collect(),
             free,
             stats: TaskStats::default(),
-            counters: Vec::new(),
             parts: (0..workers.max(1)).map(|_| Part::new()).collect(),
             signal_waiters: [Vec::new(), Vec::new()],
             unheard: 0,
@@ -1147,14 +1144,6 @@ impl Registry {
     /// タスクの論理的な worker ID。
     pub(crate) fn worker(&mut self, cell: CellRef) -> Result<u32, CellFault> {
         Ok(self.task_mut(cell)?.worker)
-    }
-
-    /// 表の中の `Counter`。添字が表の外なのは、検査を通ったプログラムからは起きない。
-    pub(crate) fn counter(&mut self, i: i64) -> Result<&mut i64, CellFault> {
-        usize::try_from(i)
-            .ok()
-            .and_then(|i| self.counters.get_mut(i))
-            .ok_or(CellFault::Internal("a counter index is out of range"))
     }
 
     /// 次の run の `generations`。添字ごとに、この run までに出したどの generation よりも大きい。誤りで止まった run は

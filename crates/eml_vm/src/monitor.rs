@@ -219,7 +219,12 @@ mod tests {
 
     fn relay() -> (Relay, Arc<Counting>) {
         let waker = Arc::new(Counting::default());
-        let run = Run::new(1, None, crate::driver::RunClock::Virtual(Arc::default()));
+        let run = Run::new(
+            1,
+            None,
+            crate::driver::RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        );
         let _ = run.slots[0]
             .waker
             .set(Arc::clone(&waker) as Arc<dyn IoWaker>);
@@ -270,6 +275,7 @@ mod tests {
                 1,
                 None,
                 crate::driver::RunClock::Virtual(Arc::default()),
+                Arc::default(),
             )),
             Arc::clone(&control),
             0,
@@ -310,6 +316,7 @@ mod tests {
             1,
             Some(Doorbell::new().unwrap()),
             crate::driver::RunClock::Virtual(Arc::default()),
+            Arc::default(),
         ));
         run.park(0);
         let monitor = Monitor::start(Arc::clone(&control), shared(), Arc::clone(&run), true)
@@ -334,6 +341,7 @@ mod tests {
             1,
             None,
             crate::driver::RunClock::Virtual(Arc::default()),
+            Arc::default(),
         ));
         run.park(0);
         let (woke, rx) = mpsc::channel();

@@ -195,7 +195,8 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - 大きい物体の長さは `trusted.rs` の `LARGE_BODY` (`MAX_SMALL_WORDS * 8` バイト。両方のモードで大きい物体になる、語に揃った長さ) と、それに語に揃わない小さい残りを足した長さ (`LARGE_BODY + 3` など) にする。大きい物体のページは物体の大きさちょうどなので、この長さでページの末尾まで届く。64 KiB を超える長さは、確かめるコードに 64 KiB の単位がある所 (小さいページ、Host の `READ_CHUNK` と `BUFFER_BYTES`) だけで使う。大きい入力の期待値はデータと一緒に書くか解析で出し、素朴な1要素ずつの比べを大きい本体に走らせない
 - ほかの crate は、次の `eml_vm` と、偽の backend の上の `eml_io` の核 (「`eml_io` の検証」の「核の Miri」) を除いて Miri で流さない
 - `eml_vm` は、検証していないコードから `eml_rt` の `unsafe fn` を呼ぶ。そのため、`crates/eml_vm/tests/miri.rs` (module `miri`) の小さい実行のテストを、`eml_rt` と同じ2つの設定で流す (`cargo miri test -p eml_vm --test integration miri::`)。直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用 (即値の関数からとクロージャから) と余った引数、evidence を作って引く基本操作、ヒープの文字列の extern、文字列を返すエントリの結果を写すこと (`run_shown`)、`par` のタスクの切り替え (seed の方針の横取りと join) と、右の子の中断を join の後に親で起こし直すこと (ヒープの物体を捕まえた起こし直しの閉包の移し戻しと適用) を、両方のモードで通す。確かめるのは VM が核の操作の前提を守っていることで、信頼の一覧を確かめる `trusted` とは目的が違う。テストはメモリの Host (`capture_host`) だけを使い、実際のファイルを開かない。UI テストは Miri で流さない。`miri.rs` のテストは `cargo test` でも流れるので、同じプログラムと同じ確かめを `calls.rs` などに重ねて置かない
-- `eml_vm` の `cells.rs` の単体テストのうち、名前が `a_read` か `a_write` で始まるものも、同じ2つの設定で流す (`cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write`)。選ぶのは名前の頭なので、この2つの頭は、読みの記録が空きを貸す道と書きの記録が `Bytes` の中身を貸す道を確かめるテストにだけ付ける。数は決めない。空きが足りない buffer の中身を新しい物体へ写して貸す所 (`lend_read_room`) と、行の読みがストリームの `Vec<u8>` の空きを貸す所 (`lend_line_room`) と、貸した空きに書かれたバイトを確定する所と、ストリームの buffer の残りを読みの buffer に写す所 (`serve_rest`) を Miri で通すのは、この `a_read` のテストだけである。行の読みを含むもの (`a_read_line_*` と `a_read_after_a_read_line_*`) では、stub の driver の代わりにテストが貸した位置へ書き、貸し、書き、確定の一周を通す。`a_write` のテストは、参照が2つある `Bytes` を写さずに貸して stub の driver が貸された記憶を読む所と、保留の書きの間にもう1つの参照で `Bytes.set`、`push`、`append`、`truncate` をしても写しになり、同じ物体への読みが空きを貸さず、driver が完了のときに読む中身が変わらないことを、両方のモードで通す。`miri.rs` の実行はテストの driver の上で I/O の操作を出さない。手で書いた LIR は `Std.Async` のエントリを持たず、`Std.Net` の行は `Async` の行なので、書きの貸しも `miri.rs` でなく `cells.rs` で確かめる
+- `eml_vm` の `counters.rs` の単体テスト (`counters::`) も、同じ2つの設定で流す。`Counter` の表の塊を複数のスレッドから作って読み書きするテストを含む。
+- `eml_vm` の `cells.rs` の単体テストのうち、名前が `a_read` か `a_write` で始まるものも、同じ2つの設定で流す (`cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write counters::`)。選ぶのは名前の頭なので、この2つの頭は、読みの記録が空きを貸す道と書きの記録が `Bytes` の中身を貸す道を確かめるテストにだけ付ける。数は決めない。空きが足りない buffer の中身を新しい物体へ写して貸す所 (`lend_read_room`) と、行の読みがストリームの `Vec<u8>` の空きを貸す所 (`lend_line_room`) と、貸した空きに書かれたバイトを確定する所と、ストリームの buffer の残りを読みの buffer に写す所 (`serve_rest`) を Miri で通すのは、この `a_read` のテストだけである。行の読みを含むもの (`a_read_line_*` と `a_read_after_a_read_line_*`) では、stub の driver の代わりにテストが貸した位置へ書き、貸し、書き、確定の一周を通す。`a_write` のテストは、参照が2つある `Bytes` を写さずに貸して stub の driver が貸された記憶を読む所と、保留の書きの間にもう1つの参照で `Bytes.set`、`push`、`append`、`truncate` をしても写しになり、同じ物体への読みが空きを貸さず、driver が完了のときに読む中身が変わらないことを、両方のモードで通す。`miri.rs` の実行はテストの driver の上で I/O の操作を出さない。手で書いた LIR は `Std.Async` のエントリを持たず、`Std.Net` の行は `Async` の行なので、書きの貸しも `miri.rs` でなく `cells.rs` で確かめる
 
 ## `eml_io` の検証
 
@@ -225,8 +226,8 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 ### ThreadSanitizer
 
-- `tsan` のジョブは、worker のスレッドの間で共有する記憶に data race がないことを `-Zsanitizer=thread` で確かめる。流すのは `eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::` の2手順で、対象は `x86_64-unknown-linux-gnu` だけである。Miri は複数のスレッドの interleaving を網羅しないので、スレッドをまたぐ `unsafe` の核 (`eml_rt` の remote 解放の経路と、`eml_vm` の起こしの語や run の表) は、実際に走るスレッドの上で ThreadSanitizer が見る
-- nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。2つの手順は、この形で報告なしに通っている
+- `tsan` のジョブは、worker のスレッドの間で共有する記憶に data race がないことを `-Zsanitizer=thread` で確かめる。流すのは `eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、`eml_vm` の lib の `counters::` の3手順で、対象は `x86_64-unknown-linux-gnu` だけである。Miri は複数のスレッドの interleaving を網羅しないので、スレッドをまたぐ `unsafe` の核 (`eml_rt` の remote 解放の経路と、`eml_vm` の起こしの語、run の表、`Counter` の atomic) は、実際に走るスレッドの上で ThreadSanitizer が見る
+- nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。3つの手順は、この形で報告なしに通っている
 - 合否は終了コードで決める。`TSAN_OPTIONS=halt_on_error=1` で、警告が1件でも出たらテストのプロセスが止まる。警告は抑制せず、`suppressions` も書かない。報告が出たら、コードの不具合か、`eml_rt` の `unsafe` が前提にしている順序の誤りとして直す
 - 開発機では build の置き場所を `target/tsan` に分ける (「よく使うコマンド」)
 - 道具の不具合で緑にできないときは、「AddressSanitizer」と同じく、fenix と同じ日付に固めた rustup の nightly にする。それでも緑にならなければ、ジョブを外し、外したことをこの節とロードマップの「その後の項目」に書く
@@ -627,9 +628,9 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
-- `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
+- `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write` と `counters::`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 - `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::` と `signal::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
-- `tsan`: x86_64 の Linux で、`eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::` を ThreadSanitizer の下で流す (下の「ThreadSanitizer」)
+- `tsan`: x86_64 の Linux で、`eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、lib の `counters::` を ThreadSanitizer の下で流す (下の「ThreadSanitizer」)
 
 CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
 
@@ -691,7 +692,7 @@ cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
 nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: と signal:: も。eml_io の検証)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: preempt::。ThreadSanitizer)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: preempt:: と -p eml_vm --lib counters::。ThreadSanitizer)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
@@ -704,7 +705,7 @@ bench/net.sh LABEL=EML[@DIR] [LABEL=EML[@DIR]] [--only REGEX] [--stats]         
 bench/scripts/compare.sh --fixture wc                                          # スクリプトの UI テストの入力で、eml と Python の実装の出力を比べる (compare.sh --paths EML PY 引数... < 入力 でも比べる)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # VM の Miri (同上)
-nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write   # 読みと書きの記録が貸す記憶の Miri (同上)
+nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write counters::   # 読みと書きの記録が貸す記憶と Counter の表の Miri (同上)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_io --lib -- driver::tests::   # eml_io の driver の核の Miri (同上。eml_io の検証)
 cargo verus verify -p eml_rt                                                                # Verus の証明
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')                         # eml_rt の verus! の中の書式

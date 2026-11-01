@@ -2280,26 +2280,22 @@ fn async_op<R: Exec>(
             task.set(dst, Word::UNIT);
         }
         Extern::AtomicNew => {
-            let mut cells = sched.cells.lock();
-            cells.counters.push(task.raw(arg(0)));
-            let i = cells.counters.len() as i64 - 1;
+            let i = sched.run.counters.push(task.raw(arg(0)))?;
             task.set_raw(dst, i);
         }
         Extern::AtomicAdd => {
-            let n = task.raw(arg(0));
-            let mut cells = sched.cells.lock();
-            let v = cells.counter(task.raw(arg(1)))?;
-            *v = v.wrapping_add(n);
-            let v = *v;
+            let v = sched.run.counters.add(task.raw(arg(1)), task.raw(arg(0)))?;
             task.set_raw(dst, v);
         }
         Extern::AtomicLoad => {
-            let v = *sched.cells.lock().counter(task.raw(arg(0)))?;
+            let v = sched.run.counters.load(task.raw(arg(0)))?;
             task.set_raw(dst, v);
         }
         Extern::AtomicStore => {
-            let n = task.raw(arg(0));
-            *sched.cells.lock().counter(task.raw(arg(1)))? = n;
+            sched
+                .run
+                .counters
+                .store(task.raw(arg(1)), task.raw(arg(0)))?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncOpReady => {
@@ -3631,7 +3627,7 @@ fn f(p.0: unit) -> unit {
         let mut sched = Scheduler::new(
             crate::Sequential,
             Box::new(driver),
-            Arc::new(crate::workers::Run::new(1, None, clock)),
+            Arc::new(crate::workers::Run::new(1, None, clock, Arc::default())),
             Arc::clone(&control),
             task.worker,
             usize::MAX,
