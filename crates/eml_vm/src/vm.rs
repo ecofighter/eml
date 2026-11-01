@@ -26,7 +26,6 @@ use crate::tls;
 use crate::workers::{Notice, Workers};
 use crate::{RunCounts, RuntimeError};
 
-// 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
 /// 登録表を触るときの宛先 `cells::Here` を、`Scheduler` の欄から作る。欄ごとに借りるので、同じ関数の中で driver の
 /// 欄を可変で借りられる。
 macro_rules! here {
@@ -40,6 +39,7 @@ macro_rules! here {
     };
 }
 
+// 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
 const _: () = assert!(cells::WOKE == eml_lir::WAKE_WOKE as i64);
 const _: () = assert!(cells::CANCELLED == eml_lir::WAKE_CANCELLED as i64);
 const _: () = assert!(cells::IO_CANCELLED == eml_lir::IO_CANCELLED as i64);

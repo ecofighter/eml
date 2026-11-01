@@ -330,12 +330,20 @@ impl Run {
     /// worker は worker 0 を起こす。worker 0 が、ほかの worker が動いている間は仮想の時計を進めずに待つためである
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
     fn idle_wait(&self, control: &Control, k: usize) {
+        if self.park_idle(control, k) {
+            self.park_wait(k)
+        }
+    }
+
+    /// worker `k` (`k` ≥ 1) の空きの待ちの前半。眠ってよければ眠った形にして真を返し、知らせか起こしか止める語が
+    /// あれば眠らずに偽を返す。
+    fn park_idle(&self, control: &Control, k: usize) -> bool {
         let slot = &self.slots[k];
         {
             let mut state = lock(&slot.state);
             if state.woken || !state.notices.is_empty() {
                 state.woken = false;
-                return;
+                return false;
             }
         }
         self.join_idle(k);
@@ -345,7 +353,7 @@ impl Run {
                 state.woken = false;
                 drop(state);
                 self.leave_idle(k);
-                return;
+                return false;
             }
             state.parked = true;
             self.running.fetch_sub(1, Ordering::AcqRel)
@@ -353,7 +361,7 @@ impl Run {
         if previous == 1 {
             self.wake(0);
         }
-        self.park_wait(k)
+        true
     }
 
     /// worker `k` が抜ける。動いていれば眠った形にして `running` から引き、空きの集まりから外す。
@@ -568,13 +576,20 @@ fn quiet(error: &RuntimeError) -> bool {
 
 impl<P: Policy> Scheduler<P> {
     /// worker 0 の空きの待ち。走れるタスクがないときに呼び、起こされるか driver の待ちが戻ったら `Ok` で戻る。呼ぶ側は
-    /// 戻るたびに止める語を読んで集め直す。デッドロックを決めるのは worker 0 だけで、受け箱も mail も空で `NOTICE` が
-    /// 立たず、ほかの worker がどれも眠り、期限も保留の操作も送った子もないときだけである (docs/spec/vm.md の
-    /// 「タスクとスケジュール」「時計と driver」)。
+    /// 戻るたびに止める語を読んで集め直す (docs/spec/vm.md の「タスクとスケジュール」「時計と driver」)。
+    ///
+    /// 手順は4つである。(a) 欄の lock の下で眠った形にして `running` から引く。(b) ほかの worker が動いていれば、
+    /// 起こされるまで待つ。最後に眠った worker が worker 0 を起こす。(c) 登録表の1回の区間で、すべての区画の
+    /// いちばん早い期限、driver に出した操作の数の和、OS のシグナルを待つタスクがいるかを読む。(d) ほかの worker が
+    /// どれも眠っていれば、欄の lock の下で、受け箱、起こされた印、`running`、mail、`NOTICE`、止める語を読み直す。
+    /// どれかがあれば起きた形に戻して集め直す。どれもなく、期限も保留の操作も送った子もなければデッドロックである。
+    /// 先に眠った形にするので、(c) の後に眠ったほかの worker は worker 0 を起こすか (d) で `running` に見え、
+    /// その前に登録表に足したタイマーは (c) が読む。
     pub(crate) fn idle_wait(&mut self) -> Result<(), VmFault> {
         let run = Arc::clone(&self.run);
         let k = self.index;
-        // worker 1..N-1 は driver も時計も持たないので、起こされるまで眠るだけである。デッドロックは worker 0 が決める
+        // worker 1..N-1 は driver を持たないので、起こされるまで眠るだけである。デッドロックと仮想の時計は worker 0 が
+        // 受け持つ
         if k != 0 {
             run.idle_wait(&self.watcher.control, k);
             return Ok(());
@@ -582,56 +597,73 @@ impl<P: Policy> Scheduler<P> {
         if run.take_wake(k) {
             return Ok(());
         }
-        let (mut deadline, listening) = {
+        run.join_idle(k);
+        let slot = &run.slots[k];
+        let control = Arc::clone(&self.watcher.control);
+        // (a)
+        let others = {
+            let mut state = lock(&slot.state);
+            if state.woken || !state.notices.is_empty() || stopping(&control, k) {
+                state.woken = false;
+                drop(state);
+                run.leave_idle(k);
+                return Ok(());
+            }
+            state.parked = true;
+            run.running.fetch_sub(1, Ordering::AcqRel) - 1
+        };
+        // (c)
+        let (d_all, elsewhere, pending, listening) = {
             let cells = self.cells.lock();
+            let mut d_all: Option<u64> = None;
+            let mut elsewhere = false;
+            for (owner, deadline) in cells.deadlines() {
+                d_all = Some(d_all.map_or(deadline, |d| d.min(deadline)));
+                elsewhere |= owner != k;
+            }
             (
-                cells.next_deadline(k),
+                d_all,
+                elsewhere,
+                cells.in_flight_all(),
                 cells.relay && cells.signal_bits() != 0,
             )
         };
-        // OS のシグナルを待つタスクがいれば、ほかに進むものがなくてもシグナルが来るまで眠る。届いたときは監視の
-        // スレッドが起こす
-        if listening {
-            deadline = deadline.or(Some(u64::MAX));
-        }
-        let pending = driver_mut(&mut self.driver)?.pending();
         #[cfg(test)]
         self.cells.mail.run_hook();
-        run.join_idle(k);
-        let slot = &run.slots[k];
+        // OS のシグナルを待つタスクがいれば、ほかに進むものがなくてもシグナルが来るまで眠る。届いたときは監視の
+        // スレッドが起こす
+        let deadline = if listening {
+            d_all.or(Some(u64::MAX))
+        } else {
+            d_all
+        };
         let mut state = lock(&slot.state);
-        // 登録表を読んだ後に、欄の lock の下で読み直す。ほかの worker は mail を処理して知らせを送ってから眠り、監視の
-        // スレッドは mail に積んで `NOTICE` を立ててから起こすので、その途中の run をデッドロックにしない
-        // (docs/spec/vm.md の「タスクとスケジュール」)
-        if state.woken
-            || !state.notices.is_empty()
-            || self.cells.mail.pending()
-            || self.watcher.control.worker_bits(k) & Control::NOTICE != 0
-        {
-            state.woken = false;
-            drop(state);
-            run.leave_idle(k);
-            return Ok(());
+        // (d) ほかの worker は mail を処理して知らせを送ってから眠り、監視のスレッドは mail に積んで `NOTICE` を立ててから
+        // 起こすので、その途中の run をデッドロックにしない
+        if others == 0 {
+            if state.woken
+                || !state.notices.is_empty()
+                || run.running.load(Ordering::Acquire) != 0
+                || self.cells.mail.pending()
+                || control.worker_bits(k) & Control::NOTICE != 0
+                || stopping(&control, k)
+            {
+                state.woken = false;
+                run.unpark_locked(&mut state);
+                drop(state);
+                run.leave_idle(k);
+                return Ok(());
+            }
+            if deadline.is_none() && pending == 0 && run.in_flight.load(Ordering::Acquire) == 0 {
+                run.unpark_locked(&mut state);
+                drop(state);
+                run.leave_idle(k);
+                return Err(VmFault::Deadlock);
+            }
         }
-        // 動いている worker は自分だけである
-        if deadline.is_none()
-            && pending == 0
-            && run.in_flight.load(Ordering::Acquire) == 0
-            && run.running.load(Ordering::Acquire) == 1
-        {
-            drop(state);
-            run.leave_idle(k);
-            return Err(VmFault::Deadlock);
-        }
-        if stopping(&self.watcher.control, k) {
-            drop(state);
-            run.leave_idle(k);
-            return Ok(());
-        }
-        state.parked = true;
-        let others = run.running.fetch_sub(1, Ordering::AcqRel) - 1;
         let virtual_ = self.driver_kind == DriverKind::Virtual;
-        // 仮想の時計を進めてよいのは、どの worker も動いておらず、どの受け箱にも知らせがないときだけである
+        // 仮想の時計を進めてよいのは、どの worker も動いておらず、どの受け箱にも知らせがないときだけである。進める先は
+        // すべての区画のいちばん早い期限である
         let waited = if virtual_ && others == 0 && (deadline.is_some() || pending > 0) {
             drop(state);
             Some(driver_mut(&mut self.driver)?.wait(deadline))
@@ -650,6 +682,11 @@ impl<P: Policy> Scheduler<P> {
             None => Ok(()),
             Some(waited) => {
                 run.unpark(k);
+                // ほかの worker の区画の満期は、その持ち主が自分の集める地点で外す。driver を持たない持ち主は自分では
+                // 起きないので、期限が来た区画の持ち主を起こす
+                if elsewhere {
+                    self.wake_due_owners()?;
+                }
                 match waited {
                     Ok(true) => Ok(()),
                     // 送った子の終わりか知らせが残っていれば、driver が何も進まないと答えてもまだ進みうる
@@ -667,6 +704,22 @@ impl<P: Policy> Scheduler<P> {
         };
         run.leave_idle(k);
         result
+    }
+
+    /// 期限が今までに来た区画の持ち主 (worker 0 を除く) を起こす。
+    fn wake_due_owners(&self) -> Result<(), VmFault> {
+        let now = self.run.now_ms_floor(self.driver.as_deref())?;
+        let due: Vec<usize> = self
+            .cells
+            .lock()
+            .deadlines()
+            .filter(|&(owner, deadline)| owner != self.index && deadline <= now)
+            .map(|(owner, _)| owner)
+            .collect();
+        for owner in due {
+            self.run.wake(owner);
+        }
+        Ok(())
     }
 }
 
@@ -839,5 +892,52 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         };
         assert_eq!(idle(false), (Err(VmFault::Deadlock), false));
         assert_eq!(idle(true), (Ok(()), true));
+    }
+
+    /// worker 0 が登録表を読んだ後、読み直す前に、動いていた worker 1 が自分の区画にタイマーを足して眠っても、
+    /// デッドロックにしない。worker 0 は先に眠った形になっているので、最後に眠った worker 1 が worker 0 を起こす。
+    /// 次の空きの待ちはすべての区画のいちばん早い期限まで仮想の時計を進め、期限の来た区画の持ち主を起こす
+    /// (docs/spec/vm.md の「時計と driver」)。スレッドは作らず、worker 1 の手順をテストの差し込みで行う。
+    #[test]
+    fn a_timer_added_by_worker_1_before_it_parks_is_not_a_deadlock() {
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            ..Limits::default()
+        }));
+        let driver = eml_io::TestDriver::new(None);
+        let clock = driver.clock();
+        let run = Arc::new(Run::new(2, None, RunClock::Virtual(Arc::clone(&clock))));
+        let shared = Arc::new(Shared::new(Registry::new(Vec::new(), 2)));
+        let mut sched = Scheduler::new(
+            Sequential,
+            Box::new(driver),
+            Arc::clone(&run),
+            Arc::clone(&control),
+            0,
+            usize::MAX,
+            Arc::clone(&shared),
+        );
+        // worker 1 は始めてあり、動いている
+        run.prepare(&control, 1);
+        run.wake(1);
+        // worker 1 は起こされた印を下ろして動き始めた
+        assert!(run.take_wake(1));
+        assert_eq!(run.running.load(Ordering::Acquire), 2);
+        {
+            let (shared, run, control) =
+                (Arc::clone(&shared), Arc::clone(&run), Arc::clone(&control));
+            shared.clone().mail.set_hook(move |_| {
+                crate::cells::sleeping_task(&shared, 1, 5);
+                assert!(run.park_idle(&control, 1));
+            });
+        }
+        // worker 1 が眠って worker 0 を起こしたので、待たずに戻る
+        assert_eq!(sched.idle_wait(), Ok(()));
+        assert!(run.take_wake(0));
+        // 次の空きの待ちは、worker 1 の区画の期限まで時計を進め、worker 1 を起こす
+        assert_eq!(sched.idle_wait(), Ok(()));
+        assert_eq!(clock.load(Ordering::SeqCst), 5);
+        assert!(run.take_wake(1));
+        assert_eq!(run.running.load(Ordering::Acquire), 2);
     }
 }

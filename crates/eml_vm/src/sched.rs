@@ -944,7 +944,6 @@ mod tests {
             matches!(
                 notices[..],
                 [Notice::Wake(Woken::Task {
-                    owner: 0,
                     cell: c,
                     wake: cells::WOKE,
                     op: None,
@@ -957,6 +956,55 @@ mod tests {
         assert_eq!(shared.lock().unheard, 0);
         assert_eq!(control.watched(), 0);
         assert_eq!(control.pending_signals(), 0);
+    }
+
+    /// worker 1 が mail で、worker 0 が持ち主の終わったタスクの落ちたハンドルを受けると、自分の `Ctx` でそのタスクの
+    /// ID に替えて値を落とし、ID を退かせる。値は worker 0 のヒープの物体なので別のスレッドからの解放になり、取り込んだ後に
+    /// 漏れも数の食い違いも残らない (docs/spec/vm.md の「セルと登録表」)。
+    #[test]
+    fn worker_1_frees_the_value_of_a_finished_task_of_worker_0() {
+        let Worker1 {
+            control,
+            run,
+            shared,
+            mut sched,
+            mut ctx,
+        } = worker_1();
+        let (host, _) = crate::capture_host(Default::default());
+        let mut home = Ctx::<eml_rt::Checked>::new(Arc::clone(&control), host);
+        let x = unsafe { home.heap_mut() }.fork_worker();
+        let value = cells::with_worker(&mut home, x, 0, |ctx| ctx.fresh_string("left"));
+        let scope = shared.lock().open_root(None, None).unwrap();
+        let cell = cells::member_task(&shared, scope, x);
+        {
+            let post = Mailer::new(&run, &control);
+            let here = Here {
+                me: 0,
+                mail: &shared.mail,
+                post: &post,
+            };
+            let mut discards = cells::Discards::default();
+            shared
+                .lock()
+                .finish(
+                    &here,
+                    cell,
+                    cells::Outcome::Value(value),
+                    &mut Vec::new(),
+                    &mut discards,
+                )
+                .unwrap();
+        }
+        shared.mail.push(MailItem::HandleDropped(cell));
+        sched.gather(&mut ctx, 0, false).unwrap();
+        assert!(sched.runnables.is_empty());
+        assert!(!shared.mail.pending());
+        home.reclaim();
+        ctx.reclaim();
+        assert!(home.heap().stats().reclaimed >= 1);
+        let leaks = home.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
+        control.check_owned(&[home.heap(), ctx.heap()]).unwrap();
     }
 
     /// 待ち手のいないシグナルを worker 1 が届けると、止めるビットをすべての worker の語に立てて止まる。

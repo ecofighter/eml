@@ -753,7 +753,6 @@ impl Part {
 pub(crate) enum Woken {
     /// タスク `cell` を `wake` で再開する。`op` は操作の待ちからの再開のときの記録である。
     Task {
-        owner: u32,
         cell: CellRef,
         wake: i64,
         op: Option<CellRef>,
@@ -935,6 +934,21 @@ impl Registry {
         self.parts[k].in_flight
     }
 
+    /// driver に出してまだ結果を受け取っていない操作の、すべての区画の和。driver の約束から、host ごとの数はその
+    /// driver の `pending()` に等しい (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) fn in_flight_all(&self) -> usize {
+        self.parts.iter().map(|part| part.in_flight).sum()
+    }
+
+    /// 輪が空でない区画ごとの、持ち主の番号といちばん早い期限。
+    pub(crate) fn deadlines(&self) -> impl Iterator<Item = (usize, u64)> + '_ {
+        self.parts.iter().enumerate().filter_map(|(owner, part)| {
+            part.timers
+                .first_key_value()
+                .map(|(key, _)| (owner, key.deadline))
+        })
+    }
+
     /// worker `k` の区画のいちばん早いタイマーの期限。輪が空なら `None` である。
     pub(crate) fn next_deadline(&self, k: usize) -> Option<u64> {
         self.parts[k]
@@ -1002,12 +1016,7 @@ impl Registry {
             return Ok(None);
         }
         task.wait = None;
-        Ok(Some(Woken::Task {
-            owner: task.owner,
-            cell,
-            wake,
-            op,
-        }))
+        Ok(Some(Woken::Task { cell, wake, op }))
     }
 
     /// 起こし `w` を worker `me` が受け取る。持ち主が自分なら、セルから継続を取り出して走らせる仕事を返す。
@@ -1018,18 +1027,11 @@ impl Registry {
             } else {
                 Route::Forward(owner)
             }),
-            Woken::Task {
-                owner,
-                cell,
-                wake,
-                op,
-            } => {
+            Woken::Task { cell, wake, op } => {
                 let Some(CellKind::Task(task)) = self.live(cell) else {
                     return Ok(Route::Stale);
                 };
-                // 宛先はセルが今持つ持ち主で決める。起こしを作った後に持ち主が変わっても取り残さない。持ち主を書くのは
-                // 今は `start` だけなので、作ったときの持ち主と同じである
-                debug_assert_eq!(owner, task.owner, "a task changed its owner");
+                // 宛先はセルが今持つ持ち主で決める。起こしを作った後に持ち主が変わっても取り残さない
                 if task.owner != me {
                     return Ok(Route::Forward(task.owner));
                 }
@@ -5844,5 +5846,85 @@ fn mail_keeps_arrival_order() {
     assert_eq!(bits, 0);
     assert!(woken.is_empty() && work.cancels.is_empty());
     assert_eq!(*posted.cancels.borrow(), [(0, a), (0, b)]);
+    assert!(posted.wakes.borrow().is_empty());
+}
+
+/// 持ち主 `owner` で、今から `ms` ミリ秒の時間を待って止まっているタスクのセル。継続は即値である。
+#[cfg(test)]
+pub(crate) fn sleeping_task(shared: &Shared, owner: u32, ms: i64) -> CellRef {
+    let scope = shared.lock().open_root(None, None).unwrap();
+    let cell = running_task(shared, scope);
+    shared.lock().task_mut(cell).unwrap().owner = owner;
+    let run = shared.lock().park_time(0, ms, cell, Word::UNIT).unwrap();
+    assert!(run.is_none());
+    cell
+}
+
+/// スコープ `scope` に属し、論理的な ID `worker` で動いている、worker 0 が持ち主のタスクのセル。`finish` で終えられる。
+#[cfg(test)]
+pub(crate) fn member_task(shared: &Shared, scope: CellRef, worker: u32) -> CellRef {
+    let cell = running_task(shared, scope);
+    let mut cells = shared.lock();
+    let at = {
+        let s = cells.scope_mut(scope).unwrap();
+        s.members.push(cell);
+        s.members.len() as u32 - 1
+    };
+    let task = cells.task_mut(cell).unwrap();
+    task.member_at = at;
+    task.worker = worker;
+    cell
+}
+
+/// ほかの worker が mail から取り消しを取って持ち主へ送り直す間に、印を付けたタスクがほかの起こしで再開しても、
+/// 起こしは1回だけで、後から届いた取り消しは何もせず、タスクは次の取り消しの地点で投げる
+/// (docs/spec/vm.md の「取り消しの届け方」)。
+#[test]
+fn a_cancel_forwarded_after_a_wake_is_seen_at_the_next_cancel_point() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let posted = Posted::default();
+    let here = |me| Here {
+        me,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let cell = sleeping_task(&shared, 0, 5);
+    // worker 0 のタスクが印を付け、持ち主が自分なので mail に積む
+    shared
+        .lock()
+        .let_go(&here(0), cell, true, &mut Discards::default())
+        .unwrap();
+    // worker 1 が mail を取り、持ち主へ送り直す
+    let items = shared.mail.take();
+    let (mut woken, mut work, mut discards) = (Vec::new(), IoWork::default(), Discards::default());
+    for item in items {
+        shared
+            .lock()
+            .receive_mail(&here(1), item, &mut woken, &mut work, &mut discards)
+            .unwrap();
+    }
+    assert!(woken.is_empty());
+    assert_eq!(*posted.cancels.borrow(), [(0, cell)]);
+    // 送り直した取り消しが届く前に、満期がタスクを起こす
+    let mut out = Vec::new();
+    expire(&shared, &mut NoDriver::default(), 0, 5, &mut out).unwrap();
+    assert_eq!(resumed_cells(&out), [(cell, WOKE)]);
+    // 届いた取り消しは、もう待っていないタスクに何もしない
+    {
+        let mut cells = shared.lock();
+        cells
+            .cancel_task(cell, &here(0), &mut woken, &mut work)
+            .unwrap();
+        assert!(woken.is_empty() && work.cancels.is_empty());
+        assert!(cells.task_mut(cell).unwrap().k.is_none());
+        // 再開したタスクは、次の取り消しの地点で投げる
+        assert_eq!(cells.resumed(cell, WOKE, false).unwrap(), WOKE);
+        assert!(cells.cancel_point(Some(cell)).unwrap());
+        // 動いているタスクに遅れて届いた取り消しも何もしない
+        cells
+            .cancel_task(cell, &here(0), &mut woken, &mut work)
+            .unwrap();
+        assert!(woken.is_empty());
+    }
     assert!(posted.wakes.borrow().is_empty());
 }
