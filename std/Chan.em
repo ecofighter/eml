@@ -74,8 +74,8 @@ merge srcs =
       Async.spawn (fn () -> close_after srcs out done)
   out
 
--- 予約と確定の間は `Int` の比べだけにする。間に安全点も失敗の地点も置かず、予約と hold を持ったまま切り替えたり
--- 抜けたりしないためである (docs/spec/vm.md の「channel」)。起こされた後のやり直しは、予算を使っても譲らず、
+-- 予約と確定の間には安全点も切り替えも失敗しうる命令も置かない (`Int` の比べと品物の箱詰めはよい)。hold を持った
+-- まま切り替えたり抜けたりしないためである (docs/spec/vm.md の「channel」)。起こされた後のやり直しは、予算を使っても譲らず、
 -- 取り消しも確かめない。品物か枠があれば、先に操作を終えるためである (docs/spec/stdlib.md の「取り消し」)
 send_loop : a -> Chan a -> Bool -> <IO, Async> SendResult a
 send_loop x c yields =

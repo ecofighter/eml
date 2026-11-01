@@ -6389,10 +6389,12 @@ fn a_cancel_before_the_wake_takes_the_receiver_out_of_the_queue() {
     assert_eq!(reserve_send_on(&shared, c), 1);
 }
 
-/// 容量 0 の枠を開いた受け手が、送りの予約の後に取り消されても、品物は積まれる。次の受け手が取るまで、channel は
-/// 容量と待っている受け手の数の和を超えて持ち、ほかの送りは積めない (docs/spec/stdlib.md の「`Std.Chan`」)。
+/// 待っている受け手が開いた枠を送りが予約した後に、その受け手が取り消されても、品物は積まれる。容量によらず、次の
+/// 受け手が取るまで、channel は容量と待っている受け手の数の和を超えて持ち、ほかの送りは積めない。ここでは容量 0 で
+/// 確かめる (docs/spec/stdlib.md の「`Std.Chan`」)。
 #[test]
-fn a_receiver_cancelled_after_a_reserved_send_overfills_the_channel_until_the_next_receive() {
+fn receivers_cancelled_after_sends_reserved_their_room_overfill_the_channel_until_the_next_receive()
+{
     let shared = Shared::new(Registry::new(Vec::new(), 1));
     let c = test_chan(&shared, 0);
     let r = owned_task(&shared, 0);
