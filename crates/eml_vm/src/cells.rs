@@ -36,11 +36,11 @@
 //! まだなら、`t` の `wait` は `Some(Io(その記録))` である。1つの token に記録は1つで、1つのタスクの待ちの登録は1つである。
 //! 記録を放すのは、受け付けたタスクの `take_op` と `sweep_all` だけである。
 //!
-//! 取り消しは、印を付ける `mark` と mail の処理 `drain` が待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
-//! 仕事をほかのタスクのために作るのは、`drain` と、取り消しを頼んだ操作の結果を当てる `settle_op` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
+//! 取り消しは、印を付ける `mark` と、持ち主が mail か受け箱の `Cancel` の知らせを処理して待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
+//! 仕事をほかのタスクのために作るのは、`unpark` と、取り消しを頼んだ操作の結果を当てる `settle_op` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
 //! `cancel`、`flag`、`cancel_new` はどのタスクの操作からも書く。`current` と `run` は持ち主だけが書き、印を付ける
 //! 操作が読む。スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
-//! そのタスクを動かすか mail を処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
+//! そのタスクを動かすか取り消しを処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
@@ -81,7 +81,7 @@ impl CellRef {
         (i64::from(self.generation) << 32) | i64::from(self.index)
     }
 
-    fn decode(c: i64) -> CellRef {
+    pub(crate) fn decode(c: i64) -> CellRef {
         CellRef {
             index: c as u32,
             generation: (c >> 32) as u32,
@@ -474,7 +474,8 @@ impl ChanCell {
     }
 }
 
-/// mail の項。落ちたハンドルの項はハンドルの `Drop` が、取り消しの項は `mark` が、シグナルの項は監視のスレッドが積む。
+/// mail の項。落ちたハンドルの項はハンドルの `Drop` が、取り消しの項は持ち主が自分のタスクに印を付けた `mark` が、
+/// シグナルの項は監視のスレッドが積む。
 pub(crate) enum MailItem {
     HandleDropped(CellRef),
     Cancel(CellRef),
@@ -482,13 +483,19 @@ pub(crate) enum MailItem {
     Signal(u32),
 }
 
-/// run に1つの、ハンドルの破棄処理と監視のスレッドが核へ知らせる列。lock は葉で、持つ間に登録表の lock を取らない
-/// (docs/spec/vm.md の「セルと登録表」)。
+#[cfg(test)]
+type Hook = Box<dyn FnOnce(&Mail) + Send>;
+
+/// run に1つの、ハンドルの破棄処理と監視のスレッドが核へ知らせる列。lock は葉で、持つ間に登録表の lock を取らない。
+/// どの worker の集める地点も処理する (docs/spec/vm.md の「セルと登録表」)。
 #[derive(Default)]
 pub(crate) struct Mail {
     items: Mutex<Vec<MailItem>>,
-    /// 項がある。集める地点が lock を取らずに1回の読みで確かめるためにある。
+    /// 項がある。集める地点とデッドロックの判定が lock を取らずに1回の読みで確かめるためにある。
     pending: AtomicBool,
+    /// デッドロックの判定が登録表を読んだ後、欄を読み直す前に1回だけ呼ぶ。その間に項が積まれる順序をテストで作る。
+    #[cfg(test)]
+    hook: Mutex<Option<Hook>>,
 }
 
 impl Mail {
@@ -496,6 +503,28 @@ impl Mail {
         let mut items = self.items.lock().unwrap_or_else(PoisonError::into_inner);
         items.push(item);
         self.pending.store(true, Ordering::Release);
+    }
+
+    /// まだ処理していない項がある。
+    pub(crate) fn pending(&self) -> bool {
+        self.pending.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_hook(&self, hook: impl FnOnce(&Mail) + Send + 'static) {
+        *self.hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn run_hook(&self) {
+        let hook = self
+            .hook
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(hook) = hook {
+            hook(self);
+        }
     }
 
     pub(crate) fn take(&self) -> Vec<MailItem> {
@@ -745,6 +774,25 @@ pub(crate) enum Route {
     Stale,
 }
 
+/// ほかの worker の受け箱へ知らせを積む道。登録表の lock の下で呼び、持ち主を読んだのと同じ区間で積む。持ち主が
+/// 変わる前に積んだ知らせを、受けた worker が今の持ち主へ回せるようにするためである (docs/spec/vm.md の
+/// 「セルと登録表」)。実行系が実装する。このファイルは worker の表を知らないからである。
+pub(crate) trait Post {
+    /// worker `k` に、持ち主として起こしを受け取らせる。
+    fn wake(&self, k: u32, w: Woken);
+    /// worker `k` に、持ち主としてタスク `cell` の取り消しを届ける。
+    fn cancel(&self, k: u32, cell: CellRef);
+}
+
+/// 登録表を触る worker と、取り消しと起こしの宛先。持ち主が自分なら取り消しは mail に積み、起こしはその場で走らせる。
+/// ほかの worker なら `post` で持ち主の受け箱に送る (docs/spec/vm.md の「タスクとスケジュール」)。
+#[derive(Clone, Copy)]
+pub(crate) struct Here<'a> {
+    pub(crate) me: u32,
+    pub(crate) mail: &'a Mail,
+    pub(crate) post: &'a dyn Post,
+}
+
 /// 登録表の lock を放してから並べた順に行う、語の破棄と ID の退かせ (docs/spec/vm.md の「セルと登録表」)。
 #[derive(Default)]
 pub(crate) struct Discards(Vec<Discard>);
@@ -798,6 +846,24 @@ impl IoWork {
             driver.cancel(op_key(op));
         }
     }
+
+    /// `cancel_all` を、driver を持たないかもしれない worker が呼ぶ。取り消しを積むのは host の worker だけなので、
+    /// driver がないのに取り消しがあれば内部の誤りである。
+    pub(crate) fn cancel_on(
+        &mut self,
+        driver: Option<&mut (dyn IoDriver + 'static)>,
+    ) -> Result<(), CellFault> {
+        match driver {
+            Some(driver) => self.cancel_all(driver),
+            None if self.cancels.is_empty() && self.submits.is_empty() => {}
+            None => {
+                return Err(CellFault::Internal(
+                    "a worker without a driver cancels an op",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `cancel_io` の答え。
@@ -826,6 +892,10 @@ pub(crate) struct Registry {
     /// 届けたときに待つタスクのいなかったシグナルのビット。集める地点の後で run を止める
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) unheard: u32,
+    /// OS のシグナルを待つタスクへ中継する run か。worker 0 が run の始めに1回だけ書く。見張りの語を書くのは集める
+    /// worker のどれでもよいが、中継を決める監視のスレッドは worker 0 だけが持つので、ここに置く
+    /// (docs/spec/vm.md の「上限と割り込み」)。
+    pub(crate) relay: bool,
 }
 
 impl Registry {
@@ -847,6 +917,7 @@ impl Registry {
             parts: (0..workers.max(1)).map(|_| Part::new()).collect(),
             signal_waiters: [Vec::new(), Vec::new()],
             unheard: 0,
+            relay: false,
         }
     }
 
@@ -899,6 +970,8 @@ impl Registry {
             let parked = matches!(task.phase, Phase::Parked);
             if let (true, Some(Wait::Io(op))) = (parked, &task.wait) {
                 let (op, owner) = (*op, task.owner);
+                // 区画 `k` の項は、持ち主 `k` のタスクのものだけである
+                debug_assert_eq!(owner as usize, k, "a timer is in another worker's part");
                 let record = self.op_mut(op)?;
                 if record.timer != Some(key) {
                     return Err(CellFault::Internal("a timer names no waiting task"));
@@ -945,11 +1018,18 @@ impl Registry {
             } else {
                 Route::Forward(owner)
             }),
-            Woken::Task { cell, wake, op, .. } => {
+            Woken::Task {
+                owner,
+                cell,
+                wake,
+                op,
+            } => {
                 let Some(CellKind::Task(task)) = self.live(cell) else {
                     return Ok(Route::Stale);
                 };
-                // 宛先はセルが今持つ持ち主で決める。起こしを作った後に持ち主が変わっても取り残さない
+                // 宛先はセルが今持つ持ち主で決める。起こしを作った後に持ち主が変わっても取り残さない。持ち主を書くのは
+                // 今は `start` だけなので、作ったときの持ち主と同じである
+                debug_assert_eq!(owner, task.owner, "a task changed its owner");
                 if task.owner != me {
                     return Ok(Route::Forward(task.owner));
                 }
@@ -972,29 +1052,29 @@ impl Registry {
         }
     }
 
-    /// 起こしをすべて worker `me` で受け取り、走らせる仕事を `out` に積む。起こしは同じ区間で作ったもので、持ち主はみな
-    /// 自分なので、ほかの worker への起こしと古い起こしは内部の誤りである。
+    /// 起こしをすべて worker `here.me` で受け取る。持ち主が自分のものは走らせる仕事にして `out` に積み、ほかの worker の
+    /// ものは同じ区間でその持ち主の受け箱に送る。宛先は起こしを作ったときでなく、セルが今持つ持ち主で決める
+    /// (docs/spec/vm.md の「セルと登録表」)。もう待っていないセルへの起こしは内部の誤りである。
     pub(crate) fn route(
         &mut self,
         woken: &mut Vec<Woken>,
-        me: u32,
+        here: &Here,
         out: &mut Vec<Runnable>,
     ) -> Result<(), CellFault> {
         for w in woken.drain(..) {
-            let (Woken::Task { owner, .. } | Woken::Token { owner, .. }) = w;
-            if owner != me {
-                return Err(CellFault::Internal("a wake names a task of another worker"));
-            }
-            match self.take_wake(&w, me)? {
+            match self.take_wake(&w, here.me)? {
                 Route::Run(run) => out.push(run),
-                Route::Forward(owner) => {
-                    debug_assert_ne!(owner, me, "a wake is forwarded to its own worker");
-                    return Err(CellFault::Internal("a wake names a task of another worker"));
-                }
+                Route::Forward(owner) => here.post.wake(owner, w),
                 Route::Stale => return Err(CellFault::Internal("a wake names no waiting task")),
             }
         }
         Ok(())
+    }
+
+    /// 見張りの語を、待ち手の列が空でないシグナルに合わせる。中継しない run では 0 にする。登録表の lock の下で書くので、
+    /// 複数の worker が書いても、最後に書いた値が列の今の形に合う (docs/spec/vm.md の「上限と割り込み」)。
+    pub(crate) fn watch(&self, control: &Control) {
+        control.set_watched(if self.relay { self.signal_bits() } else { 0 });
     }
 
     /// 待っていたタスク `cell` の持ち主の区画。
@@ -1520,7 +1600,7 @@ impl Registry {
     /// 値の破棄と ID の退かせを `discards` に積む。
     pub(crate) fn finish(
         &mut self,
-        mail: &Mail,
+        here: &Here,
         cell: CellRef,
         outcome: Outcome,
         out: &mut Vec<Woken>,
@@ -1546,7 +1626,7 @@ impl Registry {
             } else {
                 self.stats.dropped_failures += 1;
             }
-            self.mark(mail, Mark::Scope(scope))?;
+            self.mark(here, Mark::Scope(scope))?;
         }
         let s = self.scope_mut(scope)?;
         if s.members.is_empty() {
@@ -1662,7 +1742,7 @@ impl Registry {
     /// する。
     pub(crate) fn let_go(
         &mut self,
-        mail: &Mail,
+        here: &Here,
         cell: CellRef,
         cancel: bool,
         discards: &mut Discards,
@@ -1673,7 +1753,7 @@ impl Registry {
         }
         task.detached = true;
         if cancel {
-            self.mark(mail, Mark::Task(cell))?;
+            self.mark(here, Mark::Task(cell))?;
         }
         Ok(())
     }
@@ -1760,11 +1840,11 @@ impl Registry {
     }
 
     /// `cancel_scope`。閉じたスコープには何もしない。
-    pub(crate) fn cancel_scope(&mut self, mail: &Mail, s: i64) -> Result<(), CellFault> {
+    pub(crate) fn cancel_scope(&mut self, here: &Here, s: i64) -> Result<(), CellFault> {
         if let Some(cell) = self.scope_cell(s)
             && !self.scope_mut(cell)?.closed
         {
-            self.mark(mail, Mark::Scope(cell))?;
+            self.mark(here, Mark::Scope(cell))?;
         }
         Ok(())
     }
@@ -1774,7 +1854,7 @@ impl Registry {
     /// (docs/spec/vm.md の「命令」)。
     pub(crate) fn claim_scope(
         &mut self,
-        mail: &Mail,
+        here: &Here,
         s: i64,
         me: CellRef,
     ) -> Result<bool, CellFault> {
@@ -1784,14 +1864,14 @@ impl Registry {
             self.stats.cancels += 1;
             return Ok(false);
         }
-        self.cancel_scope(mail, s)?;
+        self.cancel_scope(here, s)?;
         Ok(true)
     }
 
     /// `s` に属するタスクをそれぞれ取り消し、`s` が空になるまで加わるタスクも取り消す。`s` の旗は立てないので、`s` の
     /// 本体は取り消さない。印は一覧を読む前に立て、間に加わるタスクを取りこぼさない
     /// (docs/spec/vm.md の「取り消しの届け方」)。
-    pub(crate) fn cancel_members(&mut self, mail: &Mail, s: i64) -> Result<(), CellFault> {
+    pub(crate) fn cancel_members(&mut self, here: &Here, s: i64) -> Result<(), CellFault> {
         if let Some(cell) = self.scope_cell(s)
             && !self.scope_mut(cell)?.closed
         {
@@ -1799,7 +1879,7 @@ impl Registry {
             scope.cancel_new = !scope.members.is_empty();
             let members = scope.members.clone();
             for m in members {
-                self.mark(mail, Mark::Task(m))?;
+                self.mark(here, Mark::Task(m))?;
             }
         }
         Ok(())
@@ -1808,7 +1888,7 @@ impl Registry {
     /// `scope` の本体の失敗を記録し、子をすべて取り消す。種類 `Cancelled` は記録しない。
     pub(crate) fn fail_scope(
         &mut self,
-        mail: &Mail,
+        here: &Here,
         s: i64,
         failure: Outcome,
     ) -> Result<(), CellFault> {
@@ -1823,11 +1903,11 @@ impl Registry {
                 self.stats.dropped_failures += 1;
             }
         }
-        self.mark(mail, Mark::Scope(cell))
+        self.mark(here, Mark::Scope(cell))
     }
 
-    /// 取り消しの印を付ける。ビットと旗を立てて mail に積むだけで、待ちは外さない。作業の列でたどる。
-    fn mark(&mut self, mail: &Mail, first: Mark) -> Result<(), CellFault> {
+    /// 取り消しの印を付ける。ビットと旗を立てて取り消しを届けるだけで、待ちは外さない。作業の列でたどる。
+    fn mark(&mut self, here: &Here, first: Mark) -> Result<(), CellFault> {
         let mut work = vec![first];
         while let Some(m) = work.pop() {
             match m {
@@ -1854,7 +1934,7 @@ impl Registry {
                     }
                     let cut = chain.iter().rposition(|&(_, b)| b).map_or(0, |i| i + 1);
                     work.extend(chain[cut..].iter().map(|&(c, _)| Mark::Scope(c)));
-                    mail.push(MailItem::Cancel(t));
+                    self.send_cancel(here, t)?;
                 }
                 Mark::Scope(s) => {
                     let scope = self.scope_mut(s)?;
@@ -1873,12 +1953,44 @@ impl Registry {
                     let scope = self.scope_mut(s)?;
                     // 本体のタスクにはビットを立てず、届けるだけにする。外すかは `unpark` が持ち主の側で規則を確かめて決める
                     if let Some(o) = scope.opener {
-                        mail.push(MailItem::Cancel(o));
+                        self.send_cancel(here, o)?;
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    /// タスク `t` の取り消しを持ち主に届ける。持ち主が自分なら mail に積み、ほかの worker ならその受け箱に送る。1つの
+    /// worker の上では、取り消しも落ちたハンドルもシグナルも1つの mail に積んだ順に処理する (docs/spec/vm.md の
+    /// 「取り消しの届け方」)。
+    fn send_cancel(&mut self, here: &Here, t: CellRef) -> Result<(), CellFault> {
+        let owner = self.task_mut(t)?.owner;
+        if owner == here.me {
+            here.mail.push(MailItem::Cancel(t));
+        } else {
+            here.post.cancel(owner, t);
+        }
+        Ok(())
+    }
+
+    /// 届いた取り消しを処理する。持ち主が自分なら待ちを外し、ほかの worker なら、外さずにその持ち主へ送り直す。待ちを
+    /// 外すことと操作の取り消しは持ち主だけが行うからである (docs/spec/vm.md の「セルと登録表」)。
+    pub(crate) fn cancel_task(
+        &mut self,
+        cell: CellRef,
+        here: &Here,
+        out: &mut Vec<Woken>,
+        work: &mut IoWork,
+    ) -> Result<(), CellFault> {
+        let Some(CellKind::Task(task)) = self.live(cell) else {
+            return Ok(());
+        };
+        if task.owner != here.me {
+            here.post.cancel(task.owner, cell);
+            return Ok(());
+        }
+        self.unpark(cell, here.me, out, work)
     }
 
     /// 取り消しの項を受けたタスクの待ちを外す。タスクとスコープの待ち手の項は残し、起こす側が `wait` で見分ける。
@@ -1888,12 +2000,16 @@ impl Registry {
     fn unpark(
         &mut self,
         cell: CellRef,
+        me: u32,
         out: &mut Vec<Woken>,
         work: &mut IoWork,
     ) -> Result<(), CellFault> {
         let Some(CellKind::Task(task)) = self.live(cell) else {
             return Ok(());
         };
+        if task.owner != me {
+            return Err(CellFault::Internal("a task is unparked by another worker"));
+        }
         if !matches!(task.phase, Phase::Parked)
             || !matches!(
                 task.wait,
@@ -1906,7 +2022,7 @@ impl Registry {
             Some(Wait::Io(op)) => Some(op),
             _ => None,
         };
-        let owner = task.owner;
+        let owner = me;
         if !self.point(cell)? {
             return Ok(());
         }
@@ -1947,19 +2063,21 @@ impl Registry {
         Ok(())
     }
 
-    /// mail の項を1つ処理する。取り消しで待ちを外したタスクの起こしを `out` に、driver への取り消しを `work` に、放した
-    /// セルの値と ID を `discards` に積み、保留から下ろすシグナルのビットを返す。処理が新しい項を mail に積むことがある。
+    /// mail の項を1つ処理する。どの worker が処理してもよい。取り消しで待ちを外したタスクの起こしを `out` に、driver への
+    /// 取り消しを `work` に、放したセルの値と ID を `discards` に積み、保留から下ろすシグナルのビットを返す。ほかの
+    /// worker のタスクの取り消しは、その持ち主に送る。処理が新しい項を mail に積むことがある
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn receive_mail(
         &mut self,
-        mail: &Mail,
+        here: &Here,
         item: MailItem,
         out: &mut Vec<Woken>,
         work: &mut IoWork,
         discards: &mut Discards,
     ) -> Result<u32, CellFault> {
         match item {
-            MailItem::HandleDropped(cell) => self.let_go(mail, cell, true, discards)?,
-            MailItem::Cancel(cell) => self.unpark(cell, out, work)?,
+            MailItem::HandleDropped(cell) => self.let_go(here, cell, true, discards)?,
+            MailItem::Cancel(cell) => self.cancel_task(cell, here, out, work)?,
             MailItem::Signal(bits) => {
                 self.deliver(bits, out)?;
                 return Ok(bits);
@@ -2939,14 +3057,21 @@ fn settle_arrival<M: Mode>(
     if cells.arrive(op, result, cancelled, me)?.is_some() {
         return Err(CellFault::Internal("an op is awaited on another worker"));
     }
+    // 持ち主が自分であることは `arrive` が確かめたので、送り直す起こしはない
     if let Some(woken) = cells.settle_op(ctx, bin, depth_offset, op, me, work)? {
-        cells.route(&mut vec![woken], me, out)?;
+        match cells.take_wake(&woken, me)? {
+            Route::Run(run) => out.push(run),
+            Route::Forward(_) => {
+                return Err(CellFault::Internal("an op is awaited on another worker"));
+            }
+            Route::Stale => return Err(CellFault::Internal("a wake names no waiting task")),
+        }
     }
     Ok(())
 }
 
 /// 集める地点で、worker `me` の driver の完了を driver の順に記録へ当て、待つタスクを再開する仕事を `out` に積む。
-/// driver に出した操作がなければ driver に触れない。完了は1つの lock の区間で続けて当て、当てた結果が次の操作を出す
+/// driver に出した操作があるときだけ呼ぶ。数は集める地点がほかの読みと同じ区間で読む。完了は1つの lock の区間で続けて当て、当てた結果が次の操作を出す
 /// ときだけ lock を放して出す。出した操作がその場で終われば、次の完了より先に当てる (docs/spec/vm.md の「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn complete<M: Mode>(
@@ -2958,9 +3083,6 @@ pub(crate) fn complete<M: Mode>(
     completed: &mut Vec<Completion>,
     out: &mut Vec<Runnable>,
 ) -> Result<(), CellFault> {
-    if shared.lock().in_flight(me as usize) == 0 {
-        return Ok(());
-    }
     driver.completions(completed);
     if completed.is_empty() {
         return Ok(());
@@ -3634,6 +3756,7 @@ pub(crate) fn take<M: Mode>(
 /// `detach` と `cancel_raw`。ハンドルを手放し、終わったタスクのセルを放すか、持ち手のないタスクにする。
 pub(crate) fn detach<M: Mode>(
     shared: &Arc<Shared>,
+    here: &Here,
     ctx: &mut Ctx<M>,
     handle: Word,
     cancel: bool,
@@ -3642,20 +3765,19 @@ pub(crate) fn detach<M: Mode>(
     let cell = handle_cell(ctx, shared, handle)?;
     give_up(ctx, handle)?;
     let mut discards = Discards::default();
-    shared
-        .lock()
-        .let_go(&shared.mail, cell, cancel, &mut discards)?;
+    shared.lock().let_go(here, cell, cancel, &mut discards)?;
     discards.run(ctx, depth_offset)
 }
 
-/// タスク `cell` を `outcome` で終え、worker `me` で走らせる起こしを `out` に積む。ハンドルがもう落ちていれば、lock を
-/// 放してから値を落とし、タスクの ID を退かせる。`depth_offset` は呼んだ実行系のタスクの深さの起点である。
+/// タスク `cell` を `outcome` で終え、worker `here.me` で走らせる起こしを `out` に積み、ほかの worker の起こしを送る。
+/// ハンドルがもう落ちていれば、lock を放してから値を落とし、タスクの ID を退かせる。`depth_offset` は呼んだ実行系の
+/// タスクの深さの起点である。
 pub(crate) fn finish<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
     cell: CellRef,
     outcome: Outcome,
-    me: u32,
     depth_offset: usize,
     out: &mut Vec<Runnable>,
 ) -> Result<(), CellFault> {
@@ -3663,39 +3785,41 @@ pub(crate) fn finish<M: Mode>(
     {
         let mut cells = shared.lock();
         let mut woken = Vec::new();
-        cells.finish(&shared.mail, cell, outcome, &mut woken, &mut discards)?;
-        cells.route(&mut woken, me, out)?;
+        cells.finish(here, cell, outcome, &mut woken, &mut discards)?;
+        cells.route(&mut woken, here, out)?;
     }
     discards.run(ctx, depth_offset)
 }
 
-/// mail の項を処理し、取り消しで待ちを外したタスクを worker `me` で再開する仕事を `out` に積む。処理が新しい項を積む
+/// mail の項を処理し、取り消しで待ちを外したタスクを worker `here.me` で再開する仕事を `out` に積む。どの worker も
+/// 呼んでよく、最初に集めた worker が処理する。項は葉の lock の下でまとめて取り出してから処理し、処理が新しい項を積む
 /// ので、mail が空になるまで繰り返す。項ごとに短い lock の区間で処理し、lock を放してから、その項の driver への
 /// 取り消し、語の破棄と ID の退かせ、シグナルを保留から下ろすことを行う。破棄の破棄処理が積む項は、それより後に積まれた
-/// 項より先に処理する (docs/spec/vm.md の「セルと登録表」)。
+/// 項より先に処理する (docs/spec/vm.md の「セルと登録表」)。項を1つでも処理したら真を返す。
 pub(crate) fn drain<M: Mode>(
     shared: &Shared,
+    here: &Here,
     ctx: &mut Ctx<M>,
-    driver: &mut dyn IoDriver,
-    me: u32,
+    mut driver: Option<&mut (dyn IoDriver + 'static)>,
     depth_offset: usize,
     out: &mut Vec<Runnable>,
-) -> Result<(), CellFault> {
+) -> Result<bool, CellFault> {
     let (mut work, mut discards, mut woken) = (IoWork::default(), Discards::default(), Vec::new());
+    let mut drained = false;
     loop {
         let items = shared.mail.take();
         if items.is_empty() {
-            return Ok(());
+            return Ok(drained);
         }
+        drained = true;
         for item in items {
             let settled = {
                 let mut cells = shared.lock();
-                let bits =
-                    cells.receive_mail(&shared.mail, item, &mut woken, &mut work, &mut discards)?;
-                cells.route(&mut woken, me, out)?;
+                let bits = cells.receive_mail(here, item, &mut woken, &mut work, &mut discards)?;
+                cells.route(&mut woken, here, out)?;
                 bits
             };
-            work.cancel_all(driver);
+            work.cancel_on(driver.as_deref_mut())?;
             discards.run(ctx, depth_offset)?;
             // 届けたので保留から下ろし、次の同じシグナルをハンドラが1回目として扱うようにする
             // (docs/spec/vm.md の「上限と割り込み」)
@@ -3707,8 +3831,9 @@ pub(crate) fn drain<M: Mode>(
 }
 
 /// worker `me` の区画で期限が `now_ms` までのタイマーを外し、再開する仕事を `out` に積む。操作の待ちの期限の取り消しは
-/// lock を放してから driver に頼む。
-pub(crate) fn expire(
+/// lock を放してから driver に頼む。集める地点はこの区間を見張りの語の書き込みとまとめて自分で行う。
+#[cfg(test)]
+fn expire(
     shared: &Shared,
     driver: &mut dyn IoDriver,
     me: u32,
@@ -3720,10 +3845,30 @@ pub(crate) fn expire(
         let mut cells = shared.lock();
         let mut woken = Vec::new();
         cells.expire(now_ms, me as usize, &mut woken, &mut work)?;
-        cells.route(&mut woken, me, out)?;
+        let here = Here {
+            me,
+            mail: &shared.mail,
+            post: &Unposted,
+        };
+        cells.route(&mut woken, &here, out)?;
     }
     work.cancel_all(driver);
     Ok(())
+}
+
+/// ほかの worker へ何も送らないはずのテストの宛先。送れば失敗にする。
+#[cfg(test)]
+struct Unposted;
+
+#[cfg(test)]
+impl Post for Unposted {
+    fn wake(&self, k: u32, _w: Woken) {
+        panic!("a wake is sent to worker {k}");
+    }
+
+    fn cancel(&self, k: u32, _cell: CellRef) {
+        panic!("a cancel is sent to worker {k}");
+    }
 }
 
 /// `Registry::park_io` を lock の下で行い、lock を放してから取り消しを driver に頼む。
@@ -3900,8 +4045,13 @@ fn unpark(registry: &Shared, driver: &mut dyn IoDriver, cell: CellRef, out: &mut
     {
         let mut cells = registry.lock();
         let mut woken = Vec::new();
-        cells.unpark(cell, &mut woken, &mut work).unwrap();
-        cells.route(&mut woken, 0, out).unwrap();
+        cells.unpark(cell, 0, &mut woken, &mut work).unwrap();
+        let here = Here {
+            me: 0,
+            mail: &registry.mail,
+            post: &Unposted,
+        };
+        cells.route(&mut woken, &here, out).unwrap();
     }
     work.cancel_all(driver);
 }
@@ -5588,4 +5738,111 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
     unsafe { ctx.heap_mut().decref(stream) }.unwrap();
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// 送った知らせを覚えるテストの宛先。
+#[cfg(test)]
+#[derive(Default)]
+struct Posted {
+    wakes: std::cell::RefCell<Vec<(u32, CellRef)>>,
+    cancels: std::cell::RefCell<Vec<(u32, CellRef)>>,
+}
+
+#[cfg(test)]
+impl Post for Posted {
+    fn wake(&self, k: u32, w: Woken) {
+        let cell = match w {
+            Woken::Task { cell, .. } => cell,
+            Woken::Token { .. } => panic!("a token is sent to worker {k}"),
+        };
+        self.wakes.borrow_mut().push((k, cell));
+    }
+
+    fn cancel(&self, k: u32, cell: CellRef) {
+        self.cancels.borrow_mut().push((k, cell));
+    }
+}
+
+/// worker 0 が持ち主で、`Terminate` を待って止まっているタスクのセル。継続は即値で、誰も取り出さない。
+#[cfg(test)]
+pub(crate) fn terminate_waiter(shared: &Shared) -> CellRef {
+    let scope = shared.lock().open_root(None, None).unwrap();
+    let cell = running_task(shared, scope);
+    let run = shared.lock().park_signal(1, cell, Word::UNIT).unwrap();
+    assert!(run.is_none());
+    cell
+}
+
+/// 登録表の lock を持ったままハンドルを落としても、破棄処理は mail の葉の lock だけを取るので止まらない
+/// (docs/spec/vm.md の「セルと登録表」)。
+#[test]
+fn a_handle_dropped_under_the_registry_lock_does_not_deadlock() {
+    let shared = Arc::new(Shared::new(Registry::new(Vec::new(), 1)));
+    let mut ctx = test_ctx();
+    let scope = shared.lock().open_root(None, None).unwrap();
+    let cell = running_task(&shared, scope);
+    let handle = task_handle(&mut ctx, &shared, cell);
+    {
+        let _cells = shared.lock();
+        unsafe { ctx.heap_mut().decref(handle) }.unwrap();
+    }
+    assert!(matches!(shared.mail.take()[..], [MailItem::HandleDropped(c)] if c == cell));
+}
+
+/// 持ち主が自分のタスクの取り消しは、落ちたハンドルとシグナルと同じ mail に積んだ順に出る。持ち主がほかの worker の
+/// タスクの取り消しは、印を付けたときも mail で受けたときも、待ちを外さずに持ち主の受け箱へ送る
+/// (docs/spec/vm.md の「取り消しの届け方」)。
+#[test]
+fn mail_keeps_arrival_order() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let scope = shared.lock().open_root(None, None).unwrap();
+    let (a, b) = (running_task(&shared, scope), running_task(&shared, scope));
+    let posted = Posted::default();
+    let here = |me| Here {
+        me,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let mut discards = Discards::default();
+    shared.mail.push(MailItem::HandleDropped(a));
+    shared
+        .lock()
+        .let_go(&here(0), b, true, &mut discards)
+        .unwrap();
+    shared.mail.push(MailItem::Signal(Control::TERMINATE));
+    let items = shared.mail.take();
+    assert!(
+        matches!(
+            items[..],
+            [
+                MailItem::HandleDropped(x),
+                MailItem::Cancel(y),
+                MailItem::Signal(Control::TERMINATE),
+            ] if x == a && y == b
+        ),
+        "{} items",
+        items.len()
+    );
+    // worker 1 が worker 0 のタスクに印を付ける
+    shared
+        .lock()
+        .let_go(&here(1), a, true, &mut discards)
+        .unwrap();
+    assert!(shared.mail.take().is_empty());
+    // worker 1 が mail で受けた worker 0 のタスクの取り消しも送り直す
+    let (mut woken, mut work) = (Vec::new(), IoWork::default());
+    let bits = shared
+        .lock()
+        .receive_mail(
+            &here(1),
+            MailItem::Cancel(b),
+            &mut woken,
+            &mut work,
+            &mut discards,
+        )
+        .unwrap();
+    assert_eq!(bits, 0);
+    assert!(woken.is_empty() && work.cancels.is_empty());
+    assert_eq!(*posted.cancels.borrow(), [(0, a), (0, b)]);
+    assert!(posted.wakes.borrow().is_empty());
 }

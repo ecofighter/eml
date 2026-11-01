@@ -11,7 +11,7 @@ use std::thread::{self, Scope, ScopedJoinHandle};
 
 use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop};
 
-use crate::cells::Shared;
+use crate::cells::{CellRef, Post, Shared, Woken};
 use crate::code::CodeBase;
 use crate::doorbell::Doorbell;
 use crate::driver::{DriverKind, RunClock, ceil_ms, floor_ms};
@@ -29,12 +29,41 @@ const _: () = {
     send::<Notice>();
 };
 
-/// ほかの worker から受け箱に届く知らせ (docs/spec/vm.md の「`par` の fork と join」)。
+/// ほかの worker から受け箱に届く知らせ (docs/spec/vm.md の「`par` の fork と join」「タスクとスケジュール」)。
+/// 語を運ぶのは `Child` と `Joined` だけで、`Async` のタスクの知らせはセルの番号しか持たない。
 pub(crate) enum Notice {
     /// fork がこの worker に置いた右の子。受けた worker が自分のタスクの番号を振り、走れるタスクの列の後ろに入れる。
     Child(Task),
     /// この worker が置いた右の子の終わり。`join` はこの worker の join の番号で、`outcome` の語は子が残した参照である。
     Joined { join: JoinId, outcome: Outcome },
+    /// この worker が持ち主のタスクか待つ `Task` の起こし。継続はセルにあり、受けた worker が取り出す。
+    Wake(Woken),
+    /// この worker が持ち主のタスクの取り消し。受けた worker が待ちを外す。
+    Cancel(CellRef),
+}
+
+/// 登録表の lock の下から、ほかの worker の受け箱に `Async` のタスクの知らせを積む道 (docs/spec/vm.md の
+/// 「タスクとスケジュール」)。欄の lock は登録表の lock の内側なので、持ったまま積める。
+pub(crate) struct Mailer<'a> {
+    run: &'a Run,
+    control: &'a Control,
+}
+
+impl<'a> Mailer<'a> {
+    pub(crate) fn new(run: &'a Run, control: &'a Control) -> Mailer<'a> {
+        Mailer { run, control }
+    }
+}
+
+impl Post for Mailer<'_> {
+    fn wake(&self, k: u32, w: Woken) {
+        self.run.send(self.control, k as usize, Notice::Wake(w));
+    }
+
+    fn cancel(&self, k: u32, cell: CellRef) {
+        self.run
+            .send(self.control, k as usize, Notice::Cancel(cell));
+    }
 }
 
 /// run の worker 1..N-1 の状態。worker 0 の `Scheduler` は run の始めに決め、worker 1..N-1 の `Scheduler` は
@@ -539,8 +568,9 @@ fn quiet(error: &RuntimeError) -> bool {
 
 impl<P: Policy> Scheduler<P> {
     /// worker 0 の空きの待ち。走れるタスクがないときに呼び、起こされるか driver の待ちが戻ったら `Ok` で戻る。呼ぶ側は
-    /// 戻るたびに止める語を読んで集め直す。デッドロックを決めるのは、受け箱が空で、期限も保留の操作も送った子もない
-    /// ときだけである (docs/spec/vm.md の「タスクとスケジュール」「時計と driver」)。
+    /// 戻るたびに止める語を読んで集め直す。デッドロックを決めるのは worker 0 だけで、受け箱も mail も空で `NOTICE` が
+    /// 立たず、ほかの worker がどれも眠り、期限も保留の操作も送った子もないときだけである (docs/spec/vm.md の
+    /// 「タスクとスケジュール」「時計と driver」)。
     pub(crate) fn idle_wait(&mut self) -> Result<(), VmFault> {
         let run = Arc::clone(&self.run);
         let k = self.index;
@@ -552,23 +582,43 @@ impl<P: Policy> Scheduler<P> {
         if run.take_wake(k) {
             return Ok(());
         }
-        let mut deadline = self.cells.lock().next_deadline(k);
+        let (mut deadline, listening) = {
+            let cells = self.cells.lock();
+            (
+                cells.next_deadline(k),
+                cells.relay && cells.signal_bits() != 0,
+            )
+        };
         // OS のシグナルを待つタスクがいれば、ほかに進むものがなくてもシグナルが来るまで眠る。届いたときは監視の
         // スレッドが起こす
-        if self.listening() {
+        if listening {
             deadline = deadline.or(Some(u64::MAX));
         }
         let pending = driver_mut(&mut self.driver)?.pending();
+        #[cfg(test)]
+        self.cells.mail.run_hook();
         run.join_idle(k);
         let slot = &run.slots[k];
         let mut state = lock(&slot.state);
-        if state.woken || !state.notices.is_empty() {
+        // 登録表を読んだ後に、欄の lock の下で読み直す。ほかの worker は mail を処理して知らせを送ってから眠り、監視の
+        // スレッドは mail に積んで `NOTICE` を立ててから起こすので、その途中の run をデッドロックにしない
+        // (docs/spec/vm.md の「タスクとスケジュール」)
+        if state.woken
+            || !state.notices.is_empty()
+            || self.cells.mail.pending()
+            || self.watcher.control.worker_bits(k) & Control::NOTICE != 0
+        {
             state.woken = false;
             drop(state);
             run.leave_idle(k);
             return Ok(());
         }
-        if deadline.is_none() && pending == 0 && run.in_flight.load(Ordering::Acquire) == 0 {
+        // 動いている worker は自分だけである
+        if deadline.is_none()
+            && pending == 0
+            && run.in_flight.load(Ordering::Acquire) == 0
+            && run.running.load(Ordering::Acquire) == 1
+        {
             drop(state);
             run.leave_idle(k);
             return Err(VmFault::Deadlock);
@@ -605,7 +655,8 @@ impl<P: Policy> Scheduler<P> {
                     // 送った子の終わりか知らせが残っていれば、driver が何も進まないと答えてもまだ進みうる
                     Ok(false)
                         if run.in_flight.load(Ordering::Acquire) == 0
-                            && !slot.has_notices.load(Ordering::Acquire) =>
+                            && !slot.has_notices.load(Ordering::Acquire)
+                            && !self.cells.mail.pending() =>
                     {
                         Err(VmFault::Deadlock)
                     }
@@ -646,7 +697,9 @@ mod tests {
     use eml_rt::{Checked, Control, HeapError, Limits, Stop};
 
     use super::{Run, settle};
+    use crate::cells::{CellRef, MailItem, Registry, Shared};
     use crate::driver::RunClock;
+    use crate::sched::{Scheduler, Sequential};
     use crate::{Machine, RuntimeError, VmFault};
 
     fn fault(fault: VmFault) -> RuntimeError {
@@ -755,5 +808,36 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         let run = Run::new(3, None, RunClock::Virtual(Arc::default()));
         run.wake_all();
         assert_eq!(run.running.load(Ordering::Acquire), 1);
+    }
+
+    /// 期限も保留の操作もなく、知らせも mail もない worker 0 の空きの待ちはデッドロックを決める。登録表を読んだ後、欄を
+    /// 読み直す前に mail に項が積まれれば、決めずに戻って集め直す (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[test]
+    fn a_mail_item_pending_at_the_deadlock_check_defers_the_verdict() {
+        let idle = |hook: bool| {
+            let control = Arc::new(Control::new(Limits::default()));
+            let driver = eml_io::TestDriver::new(None);
+            let run = Run::new(1, None, RunClock::Virtual(driver.clock()));
+            let mut sched = Scheduler::new(
+                Sequential,
+                Box::new(driver),
+                Arc::new(run),
+                control,
+                0,
+                usize::MAX,
+                Arc::new(Shared::new(Registry::new(Vec::new(), 1))),
+            );
+            if hook {
+                sched.cells.mail.set_hook(|mail| {
+                    mail.push(MailItem::Cancel(CellRef::decode(0)));
+                });
+            }
+            let verdict = sched.idle_wait();
+            // 戻るときは眠っていない
+            assert_eq!(sched.run.running.load(Ordering::Acquire), 1);
+            (verdict, sched.cells.mail.pending())
+        };
+        assert_eq!(idle(false), (Err(VmFault::Deadlock), false));
+        assert_eq!(idle(true), (Ok(()), true));
     }
 }

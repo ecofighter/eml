@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::{
-    Control, Ctx, Form, Handle, MaskItem, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write,
+    Ctx, Form, Handle, MaskItem, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write,
     WriteMode,
 };
 
@@ -27,6 +27,19 @@ use crate::workers::{Notice, Workers};
 use crate::{RunCounts, RuntimeError};
 
 // 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
+/// 登録表を触るときの宛先 `cells::Here` を、`Scheduler` の欄から作る。欄ごとに借りるので、同じ関数の中で driver の
+/// 欄を可変で借りられる。
+macro_rules! here {
+    ($sched:expr, $post:ident, $here:ident) => {
+        let $post = crate::workers::Mailer::new(&$sched.run, &$sched.watcher.control);
+        let $here = cells::Here {
+            me: $sched.index as u32,
+            mail: &$sched.cells.mail,
+            post: &$post,
+        };
+    };
+}
+
 const _: () = assert!(cells::WOKE == eml_lir::WAKE_WOKE as i64);
 const _: () = assert!(cells::CANCELLED == eml_lir::WAKE_CANCELLED as i64);
 const _: () = assert!(cells::IO_CANCELLED == eml_lir::IO_CANCELLED as i64);
@@ -1378,7 +1391,7 @@ fn child_done<R: Exec>(
         // 子の残りの `evv` を、子の ID のまま手放す
         let rest = unsafe { ctx.switch_task(Word::UNIT, right_worker, task.depth_offset) };
         unsafe { ctx.heap_mut().decref(rest) }?;
-        wake_parent(sched, j);
+        sched.wake_parent(j);
         return switch_away::<R>(code, ctx, task, sched, None);
     }
     let join = sched.join(j);
@@ -1419,45 +1432,6 @@ fn placed_done<R: Exec>(
         .run
         .send(&control, placed.home, Notice::Joined { join: j, outcome });
     switch_away::<R>(code, ctx, task, sched, None)
-}
-
-/// ほかの worker から届いた知らせを処理する。置かれた右の子はこの worker の番号を振って列の後ろに入れ、置いた子の
-/// 終わりは join の節点に記録して親を起こす。親を失った節点なら、結果に触れずに節点を捨てる。どちらでも
-/// `in_flight` から引くのは受け取った後なので、受け取っていない終わりの知らせがある間は 0 にならない
-/// (docs/spec/vm.md の「タスクとスケジュール」)。
-#[cold]
-#[inline(never)]
-fn receive<P: Policy>(sched: &mut Scheduler<P>) {
-    for notice in sched.run.take_notices(sched.index) {
-        match notice {
-            Notice::Child(task) => {
-                let id = sched.add_task(task);
-                sched.ready.push_back(id);
-            }
-            Notice::Joined { join, outcome } => {
-                let node = sched.join(join);
-                if node.orphan {
-                    // 語は捨てる。誤りで終わる run のヒープは回復で丸ごと捨てる
-                    drop(sched.take_join(join));
-                    drop(outcome);
-                } else {
-                    node.right_outcome = Some(outcome);
-                    wake_parent(sched, join);
-                }
-                sched.run.in_flight.fetch_sub(1, Ordering::Release);
-            }
-        }
-    }
-}
-
-/// 右の子が終わった join の親が、その join を待っていれば起こす。
-fn wake_parent<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
-    let parent = sched.join(j).parent;
-    if let Some(task) = &sched.tasks[parent]
-        && matches!(task.state, TaskState::Waiting(w) if w == j)
-    {
-        sched.policy.wake(&mut sched.ready, parent);
-    }
 }
 
 /// 方針が選ぶ次のタスクに切り替える。`keep` が `None` なら、今のタスクは終わったので捨てる。次のタスクが join を
@@ -1589,11 +1563,8 @@ fn resume<R: Exec>(
     }
 }
 
-/// 集める地点。mail を処理し、driver の完了を操作の記録に当て、満ちたタイマーを外して、待ちを外したタスクを再開する
-/// 仕事を列の後ろに積む。`look` なら、先に driver の `wait` に今を渡して OS を1回見る。driver の `completions` は
-/// OS を見ないためである。タイマーのない run は時計を読まず、保留の操作のない run は driver に触れない
-/// (docs/spec/vm.md の「時計と driver」)。聞く者のいなかったシグナルがあれば、その後で run を止める
-/// (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 集める地点。登録表とほかの worker の知らせを `Scheduler::gather` が集め、待ちを外したタスクを再開する仕事を列の
+/// 後ろに積む。聞く者のいなかったシグナルの誤りも、仕事を積んでから返す (docs/spec/vm.md の「タスクとスケジュール」)。
 fn collect<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1601,96 +1572,18 @@ fn collect<R: Exec>(
     sched: &mut Scheduler<R::P>,
     look: bool,
 ) -> Result<(), VmFault> {
-    // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
-    ctx.heap().control().take_notice(sched.index);
-    // ほかの worker からの知らせは、ないときは1回の読みで済ませる (docs/spec/vm.md の「タスクとスケジュール」)
-    if sched.run.slots[sched.index]
-        .has_notices
-        .load(Ordering::Acquire)
-    {
-        receive(sched);
-    }
-    // driver を持たず `Async` のタスクも動かさない worker 1..N-1 は、知らせのほかに集めるものがない
-    // (docs/spec/vm.md の「時計と driver」)
-    if sched.driver.is_none() {
-        return Ok(());
-    }
-    let me = sched.me();
-    if look {
-        sched.since_poll = 0;
-        if sched.cells.lock().in_flight(sched.index) > 0 {
-            let now = sched.run.now_ms_floor(sched.driver.as_deref())?;
-            // 今以前の期限なので待たない。`ceil_ms` は今より先になりうるので、driver が眠りうる
-            let driver = driver_mut(&mut sched.driver)?;
-            driver
-                .wait(Some(now))
-                .map_err(|e| VmFault::Driver(e.to_string()))?;
-        }
-    }
-    // 集める地点は切り替えのたびに通るので、列は `Scheduler` のものを使い回す。誤りで抜けると捨てるが、run も止まる。
-    // 登録表の lock は、mail の項、完了、満期のそれぞれで今の順を保つ短い区間に分けて取り、driver の呼び出しと語の
-    // 破棄はどれも lock の外で行う (docs/spec/vm.md の「セルと登録表」)
-    let mut out = std::mem::take(&mut sched.runnables);
-    cells::drain(
-        &sched.cells,
-        ctx,
-        driver_mut(&mut sched.driver)?,
-        me,
-        depth_offset,
-        &mut out,
-    )?;
-    cells::complete(
-        &sched.cells,
-        ctx,
-        driver_mut(&mut sched.driver)?,
-        me,
-        depth_offset,
-        &mut sched.completed,
-        &mut out,
-    )?;
-    let due = sched.cells.lock().next_deadline(sched.index).is_some();
-    if due {
-        let now = sched.run.now_ms_floor(sched.driver.as_deref())?;
-        cells::expire(
-            &sched.cells,
-            driver_mut(&mut sched.driver)?,
-            me,
-            now,
-            &mut out,
-        )?;
-    }
-    if !out.is_empty() {
+    let gathered = sched.gather(ctx, depth_offset, look);
+    if !sched.runnables.is_empty() {
         let entries = code
             .entries
             .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
+        let mut out = std::mem::take(&mut sched.runnables);
         for run in out.drain(..) {
             schedule(code, sched, entries, run)?;
         }
+        sched.runnables = out;
     }
-    sched.runnables = out;
-    // ハンドラは見張りの語で保留にするか既定の動きにするかを決めるので、届けて空になった列と取り消しで外れた待ち手を
-    // ここで写す (docs/spec/vm.md の「上限と割り込み」)
-    sched.sync_watched();
-    let bits = sched.cells.lock().unheard;
-    if bits != 0 {
-        return Err(unheard(ctx.heap().control(), bits));
-    }
-    Ok(())
-}
-
-/// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを止める語に
-/// 立てるので、`eml run` の次の同じシグナルはその場で終わらせる (docs/spec/vm.md の「上限と割り込み」)。
-#[cold]
-#[inline(never)]
-fn unheard(control: &Control, bits: u32) -> VmFault {
-    if bits & Control::TERMINATE != 0 {
-        control.terminate();
-    }
-    if bits & Control::INTERRUPT != 0 {
-        control.interrupt();
-        return VmFault::Stopped(Stop::Interrupted);
-    }
-    VmFault::Stopped(Stop::Terminated)
+    gathered
 }
 
 /// 方針か `PREEMPT` が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す (`PREEMPT` は
@@ -1953,7 +1846,7 @@ fn task_failed<R: Exec>(
             }
             None => {
                 sched.join(j).right_outcome = Some(Outcome::Error(error));
-                wake_parent(sched, j);
+                sched.wake_parent(j);
             }
         }
         match switch_away::<R>(code, ctx, task, sched, None) {
@@ -2028,15 +1921,17 @@ fn finish<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let mut out = Vec::new();
-    let me = sched.me();
-    cells::drain(
-        &sched.cells,
-        ctx,
-        driver_mut(&mut sched.driver)?,
-        me,
-        task.depth_offset,
-        &mut out,
-    )?;
+    {
+        here!(sched, post, here);
+        cells::drain(
+            &sched.cells,
+            &here,
+            ctx,
+            sched.driver.as_deref_mut(),
+            task.depth_offset,
+            &mut out,
+        )?;
+    }
     if !out.is_empty() {
         return Err(VmFault::Internal("a task is left at the end"));
     }
@@ -2194,8 +2089,10 @@ fn async_op<R: Exec>(
         }
         ext @ (Extern::AsyncDetach | Extern::AsyncCancelRaw) => {
             let cancel = ext == Extern::AsyncCancelRaw;
+            here!(sched, post, here);
             cells::detach(
                 &sched.cells,
+                &here,
                 ctx,
                 task.get(arg(0)),
                 cancel,
@@ -2240,16 +2137,16 @@ fn async_op<R: Exec>(
             }
         }
         Extern::AsyncCancelScopeRaw => {
-            let shared = &*sched.cells;
-            shared.lock().cancel_scope(&shared.mail, task.raw(arg(0)))?;
+            here!(sched, post, here);
+            sched.cells.lock().cancel_scope(&here, task.raw(arg(0)))?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncFailScopeIo => {
             let message = unsafe { ctx.copy_string(task.get(arg(2)), usize::MAX) }?;
             let kind = task.raw(arg(1));
-            let shared = &*sched.cells;
-            shared.lock().fail_scope(
-                &shared.mail,
+            here!(sched, post, here);
+            sched.cells.lock().fail_scope(
+                &here,
                 task.raw(arg(0)),
                 cells::Outcome::Io { kind, message },
             )?;
@@ -2257,9 +2154,9 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncFailScopePanic => {
             let message = unsafe { ctx.copy_string(task.get(arg(1)), usize::MAX) }?;
-            let shared = &*sched.cells;
-            shared.lock().fail_scope(
-                &shared.mail,
+            here!(sched, post, here);
+            sched.cells.lock().fail_scope(
+                &here,
                 task.raw(arg(0)),
                 cells::Outcome::Panic(message),
             )?;
@@ -2276,10 +2173,11 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncClaimScope => {
             let me = current_cell(task)?;
-            let shared = &*sched.cells;
-            let won = shared
+            here!(sched, post, here);
+            let won = sched
+                .cells
                 .lock()
-                .claim_scope(&shared.mail, task.raw(arg(0)), me)?;
+                .claim_scope(&here, task.raw(arg(0)), me)?;
             task.set_raw(dst, i64::from(won));
         }
         Extern::AsyncParkDrain => {
@@ -2292,10 +2190,8 @@ fn async_op<R: Exec>(
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncCancelMembers => {
-            let shared = &*sched.cells;
-            shared
-                .lock()
-                .cancel_members(&shared.mail, task.raw(arg(0)))?;
+            here!(sched, post, here);
+            sched.cells.lock().cancel_members(&here, task.raw(arg(0)))?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncShieldEnter => {
@@ -2313,6 +2209,7 @@ fn async_op<R: Exec>(
             let (c, k) = (task.raw(arg(0)), task.get(arg(1)));
             let mut runs = Vec::new();
             {
+                here!(sched, post, here);
                 let mut cells = sched.cells.lock();
                 let mut woken = Vec::new();
                 let run = if ext == Extern::AsyncParkSend {
@@ -2321,7 +2218,7 @@ fn async_op<R: Exec>(
                     cells.park_recv(c, me, k, &mut woken)?
                 };
                 runs.extend(run);
-                cells.route(&mut woken, sched.index as u32, &mut runs)?;
+                cells.route(&mut woken, &here, &mut runs)?;
             }
             for run in runs {
                 schedule(code, sched, entries, run)?;
@@ -2345,13 +2242,10 @@ fn async_op<R: Exec>(
         Extern::ChanPushRaw => {
             let mut runs = Vec::new();
             {
+                here!(sched, post, here);
                 let mut cells = sched.cells.lock();
                 let woken = cells.push_raw(ctx, task.get(arg(0)), task.raw(arg(1)))?;
-                cells.route(
-                    &mut woken.into_iter().collect(),
-                    sched.index as u32,
-                    &mut runs,
-                )?;
+                cells.route(&mut woken.into_iter().collect(), &here, &mut runs)?;
             }
             for run in runs {
                 schedule(code, sched, entries, run)?;
@@ -2361,13 +2255,10 @@ fn async_op<R: Exec>(
         Extern::ChanPopRaw => {
             let mut runs = Vec::new();
             let x = {
+                here!(sched, post, here);
                 let mut cells = sched.cells.lock();
                 let (x, woken) = cells.pop_raw(ctx, task.raw(arg(0)))?;
-                cells.route(
-                    &mut woken.into_iter().collect(),
-                    sched.index as u32,
-                    &mut runs,
-                )?;
+                cells.route(&mut woken.into_iter().collect(), &here, &mut runs)?;
                 x
             };
             for run in runs {
@@ -2378,9 +2269,10 @@ fn async_op<R: Exec>(
         Extern::ChanCloseRaw => {
             let mut runs = Vec::new();
             {
+                here!(sched, post, here);
                 let mut cells = sched.cells.lock();
                 let mut woken = cells.close_raw(ctx, task.raw(arg(0)))?;
-                cells.route(&mut woken, sched.index as u32, &mut runs)?;
+                cells.route(&mut woken, &here, &mut runs)?;
             }
             for run in runs {
                 schedule(code, sched, entries, run)?;
@@ -2462,14 +2354,17 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncParkSignal => {
             let me = current_cell(task)?;
-            let run = sched
-                .cells
-                .lock()
-                .park_signal(task.raw(arg(0)), me, task.get(arg(1)))?;
+            // 見張りの語は待ち手の列と同じ区間で書く。ほかの worker の集める地点が書く値と順序を保つためである
+            // (docs/spec/vm.md の「上限と割り込み」)
+            let run = {
+                let mut cells = sched.cells.lock();
+                let run = cells.park_signal(task.raw(arg(0)), me, task.get(arg(1)))?;
+                cells.watch(&sched.watcher.control);
+                run
+            };
             if let Some(run) = run {
                 schedule(code, sched, entries, run)?;
             }
-            sched.sync_watched();
             task.set(dst, Word::UNIT);
         }
         Extern::NetSubmitWrite => {
@@ -2875,15 +2770,18 @@ fn entry_finish<R: Exec>(
             .entries
             .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
         let mut out = Vec::new();
-        cells::finish(
-            &sched.cells,
-            ctx,
-            cell,
-            outcome,
-            sched.me(),
-            task.depth_offset,
-            &mut out,
-        )?;
+        {
+            here!(sched, post, here);
+            cells::finish(
+                &sched.cells,
+                &here,
+                ctx,
+                cell,
+                outcome,
+                task.depth_offset,
+                &mut out,
+            )?;
+        }
         for run in out {
             schedule(code, sched, entries, run)?;
         }
@@ -3662,6 +3560,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use eml_rt::Control;
+
     use crate::cells::{MailItem, Registry, Shared};
 
     fn empty_task(max_depth: usize) -> Task {

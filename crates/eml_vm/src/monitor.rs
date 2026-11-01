@@ -1,5 +1,5 @@
 //! 監視のスレッド (docs/spec/vm.md の「タスクとスケジュール」)。`Scheduler` が持つ。保留のシグナルを run の mail へ中継して
-//! worker 0 の語に `NOTICE` を立て、止めるビットや知らせのときにすべての worker を起こす。横取りする方針では、worker
+//! すべての worker の語に `NOTICE` を立て、止めるビットや知らせのときにすべての worker を起こす。横取りする方針では、worker
 //! ごとに、刻みの間に動くタスクが替わらなければその worker の語に `PREEMPT` も立てる。スレッドが持つのは
 //! `Arc<Control>`、mail を持つ `Shared`、run の表 `Run`、`Arc<Watch>` だけで、ヒープの語も `Ctx` も持たない。ヒープに触れるのは
 //! worker のスレッドだけにするためである (docs/future/multicore.md の「スレッドと worker」)。
@@ -104,15 +104,17 @@ impl Ticker {
 }
 
 impl Relay {
-    /// まだ中継していない保留のシグナルを mail に積み、`NOTICE` を立てる。項を積んでからビットを立てるので、
-    /// ビットを見た worker は集める地点で項を見つける。止めるビットが立っていてもすべての worker を起こし、眠って
-    /// いる worker に止める語を読ませる (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// まだ中継していない保留のシグナルを mail に積み、すべての worker の語に `NOTICE` を立てる。項を積んでから
+    /// ビットを立てるので、ビットを見た worker は集める地点で項を見つける。mail はどの worker が処理してもよいので、
+    /// 最初に集めた worker が届ける。止めるビットが立っていてもすべての worker を起こし、眠っている worker に止める語を
+    /// 読ませる (docs/spec/vm.md の「タスクとスケジュール」)。
     fn relay(&self) {
         let new = self.control.claim_signals();
         if new != 0 {
-            // mail を集めて登録表に届けるのは worker 0 だけである
             self.shared.mail.push(MailItem::Signal(new));
-            self.control.notice(0);
+            for k in 0..self.run.slots.len() {
+                self.control.notice(k);
+            }
         }
         if new != 0 || self.control.stop_bits() != 0 {
             self.run.wake_all();

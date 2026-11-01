@@ -6,14 +6,30 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use eml_rt::{Completion, Control, IoDriver};
+use eml_rt::{Completion, Control, Ctx, IoDriver, Mode, Stop};
 
 use crate::VmFault;
-use crate::cells::{CellRef, Runnable, Shared};
+use crate::cells::{self, CellRef, Here, IoWork, Runnable, Shared};
 use crate::driver::DriverKind;
 use crate::monitor::Monitor;
 use crate::vm::Task;
-use crate::workers::{Run, Workers};
+use crate::workers::{Mailer, Notice, Run, Workers};
+
+/// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを、すべての
+/// worker の止める語に立てるので、`eml run` の次の同じシグナルはその場で終わらせ、どの worker も次の安全点で止まる
+/// (docs/spec/vm.md の「上限と割り込み」)。
+#[cold]
+#[inline(never)]
+fn unheard_fault(control: &Control, bits: u32) -> VmFault {
+    if bits & Control::TERMINATE != 0 {
+        control.terminate();
+    }
+    if bits & Control::INTERRUPT != 0 {
+        control.interrupt();
+        return VmFault::Stopped(Stop::Interrupted);
+    }
+    VmFault::Stopped(Stop::Terminated)
+}
 
 /// スケジュールの方針の選び方。CLI の `--sched` と `RunConfig::with_sched` で選ぶ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -468,6 +484,10 @@ impl<P: Policy> Scheduler<P> {
         } else {
             Workers::Denied
         };
+        // 中継するかは監視のスレッドを始めた後で決まり、run の間は変わらない。集めるのはどの worker でもよいので、
+        // 登録表に写す (docs/spec/vm.md の「上限と割り込み」)
+        let relay = self.relay_on();
+        self.cells.lock().relay = relay;
     }
 
     /// 空きのループが driver の `wait` に渡す期限。監視のスレッドのない run で眠る driver なら、止める語を読み直すために、
@@ -502,25 +522,167 @@ impl<P: Policy> Scheduler<P> {
 
     /// OS のシグナルを待つタスクへ中継するか。本物の driver の上で、監視のスレッドが動いているときだけである。
     /// 仮想の driver の run では本物のシグナルは既定の動きをする (docs/spec/stdlib.md の「`Std.Signal`」)。
-    pub(crate) fn relay_on(&self) -> bool {
+    fn relay_on(&self) -> bool {
         self.driver_kind == DriverKind::Real && self.watcher.monitor.is_some()
     }
 
-    /// 見張りの語を、待ち手の列が空でないシグナルに合わせる。`park_signal` の後と集める地点の終わりに呼ぶので、
-    /// 中継する間は、待つタスクのいる種類がいつも語に立っている (docs/spec/vm.md の「上限と割り込み」)。
-    pub(crate) fn sync_watched(&self) {
-        let bits = if self.relay_on() {
-            self.cells.lock().signal_bits()
-        } else {
-            0
+    /// 集める地点の、登録表とほかの worker の知らせの側。どの worker も同じ形で集める。受け箱の知らせを取り、mail を
+    /// 処理し、driver の完了を記録に当て、満ちたタイマーを外し、見張りの語を書いて、再開する仕事を `runnables` に積む。
+    /// `look` なら、先に driver の `wait` に今を渡して OS を1回見る。driver の `completions` は OS を見ないためである。
+    /// 登録表の lock は、何もない集める地点では1回だけ取り、mail の項、完了、満期では今の順を保つ短い区間に分ける。
+    /// driver の呼び出しと語の破棄はどれも lock の外で行う (docs/spec/vm.md の「セルと登録表」「時計と driver」)。
+    /// 聞く者のいなかったシグナルがあれば、仕事を積んだ後で止める語を立てて誤りを返す
+    /// (docs/spec/vm.md の「上限と割り込み」)。
+    pub(crate) fn gather<M: Mode>(
+        &mut self,
+        ctx: &mut Ctx<M>,
+        depth_offset: usize,
+        look: bool,
+    ) -> Result<(), VmFault> {
+        let k = self.index;
+        // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
+        self.watcher.control.take_notice(k);
+        // ほかの worker からの知らせは、ないときは1回の読みで済ませる (docs/spec/vm.md の「タスクとスケジュール」)
+        let mut notices = Vec::new();
+        if self.run.slots[k].has_notices.load(Ordering::Acquire) {
+            self.receive(&mut notices);
+        }
+        let Scheduler {
+            run,
+            cells: shared,
+            watcher,
+            driver,
+            completed,
+            runnables,
+            since_poll,
+            ..
+        } = self;
+        let control = &*watcher.control;
+        let post = Mailer::new(run, control);
+        let here = Here {
+            me: k as u32,
+            mail: &shared.mail,
+            post: &post,
         };
-        self.watcher.control.set_watched(bits);
+        // 列は `Scheduler` のものを使い回す。誤りで抜けると捨てるが、run も止まる
+        let mut out = std::mem::take(runnables);
+        let mut work = IoWork::default();
+        let (in_flight, deadline, mut unheard) = {
+            let mut cells = shared.lock();
+            if !notices.is_empty() {
+                let mut woken = Vec::new();
+                for notice in notices {
+                    match notice {
+                        Notice::Wake(w) => woken.push(w),
+                        Notice::Cancel(cell) => {
+                            cells.cancel_task(cell, &here, &mut woken, &mut work)?;
+                        }
+                        Notice::Child(_) | Notice::Joined { .. } => {
+                            return Err(VmFault::Internal("a par notice is left for the registry"));
+                        }
+                    }
+                }
+                cells.route(&mut woken, &here, &mut out)?;
+            }
+            cells.watch(control);
+            (cells.in_flight(k), cells.next_deadline(k), cells.unheard)
+        };
+        work.cancel_on(driver.as_deref_mut())?;
+        if look {
+            *since_poll = 0;
+            if in_flight > 0 {
+                let now = run.now_ms_floor(driver.as_deref())?;
+                // 今以前の期限なので待たない。`ceil_ms` は今より先になりうるので、driver が眠りうる
+                driver_mut(driver)?
+                    .wait(Some(now))
+                    .map_err(|e| VmFault::Driver(e.to_string()))?;
+            }
+        }
+        let drained = cells::drain(
+            shared,
+            &here,
+            ctx,
+            driver.as_deref_mut(),
+            depth_offset,
+            &mut out,
+        )?;
+        // mail の処理は driver の数を変えない
+        if in_flight > 0 {
+            cells::complete(
+                shared,
+                ctx,
+                driver_mut(driver)?,
+                here.me,
+                depth_offset,
+                completed,
+                &mut out,
+            )?;
+        }
+        // 最初の区間の後に登録表を変えたときだけ、満期と見張りの語のためにもう1回取る。タイマーのない run は時計を
+        // 読まない
+        if drained || in_flight > 0 || deadline.is_some() {
+            let now = match deadline {
+                Some(_) => Some(run.now_ms_floor(driver.as_deref())?),
+                None => None,
+            };
+            let mut cells = shared.lock();
+            if let Some(now) = now {
+                let mut woken = Vec::new();
+                cells.expire(now, k, &mut woken, &mut work)?;
+                cells.route(&mut woken, &here, &mut out)?;
+            }
+            // ハンドラは見張りの語で保留にするか既定の動きにするかを決めるので、届けて空になった列と取り消しで外れた
+            // 待ち手をここで写す (docs/spec/vm.md の「上限と割り込み」)
+            cells.watch(control);
+            unheard = cells.unheard;
+            drop(cells);
+            work.cancel_on(driver.as_deref_mut())?;
+        }
+        *runnables = out;
+        if unheard != 0 {
+            return Err(unheard_fault(control, unheard));
+        }
+        Ok(())
     }
 
-    /// 空きのループが OS のシグナルを待つか。待つなら、ほかに進むものがなくてもデッドロックにしない
-    /// (docs/spec/vm.md の「時計と driver」)。
-    pub(crate) fn listening(&self) -> bool {
-        self.relay_on() && self.cells.lock().signal_bits() != 0
+    /// ほかの worker から届いた知らせを取り出す。置かれた右の子はこの worker の番号を振って列の後ろに入れ、置いた子の
+    /// 終わりは join の節点に記録して親を起こす。親を失った節点なら、結果に触れずに節点を捨てる。どちらでも
+    /// `in_flight` から引くのは受け取った後なので、受け取っていない終わりの知らせがある間は 0 にならない。`Async` の
+    /// タスクの知らせは `rest` に残し、集める地点が登録表の区間で処理する (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[cold]
+    #[inline(never)]
+    fn receive(&mut self, rest: &mut Vec<Notice>) {
+        for notice in self.run.take_notices(self.index) {
+            match notice {
+                Notice::Child(task) => {
+                    let id = self.add_task(task);
+                    self.ready.push_back(id);
+                }
+                Notice::Joined { join, outcome } => {
+                    let node = self.join(join);
+                    if node.orphan {
+                        // 語は捨てる。誤りで終わる run のヒープは回復で丸ごと捨てる
+                        drop(self.take_join(join));
+                        drop(outcome);
+                    } else {
+                        node.right_outcome = Some(outcome);
+                        self.wake_parent(join);
+                    }
+                    self.run.in_flight.fetch_sub(1, Ordering::Release);
+                }
+                notice @ (Notice::Wake(_) | Notice::Cancel(_)) => rest.push(notice),
+            }
+        }
+    }
+
+    /// 右の子が終わった join の親が、その join を待っていれば起こす。
+    pub(crate) fn wake_parent(&mut self, j: JoinId) {
+        let parent = self.join(j).parent;
+        if let Some(task) = &self.tasks[parent]
+            && matches!(task.state, TaskState::Waiting(w) if w == j)
+        {
+            self.policy.wake(&mut self.ready, parent);
+        }
     }
 
     /// この `Scheduler` の worker の番号。登録表のセルの持ち主と区画の添字である。
@@ -616,7 +778,7 @@ mod tests {
     use eml_rt::Limits;
 
     use super::*;
-    use crate::cells::Registry;
+    use crate::cells::{MailItem, Registry, Woken};
     use crate::doorbell::Doorbell;
     use crate::driver::RunClock;
 
@@ -718,5 +880,102 @@ mod tests {
         assert_eq!(base.for_worker(3).seed, splitmix64(7 ^ 3));
         assert!(Normal.for_worker(2).pick(&mut VecDeque::from([4])) == Some(4));
         assert!(Sequential.for_worker(2).pick(&mut VecDeque::from([4])) == Some(4));
+    }
+
+    /// worker が2つの run の表と登録表と、worker 1 の `Scheduler` とその `Ctx`。スレッドは作らず、worker 1 の集める
+    /// 地点を手で動かす。
+    struct Worker1 {
+        control: Arc<Control>,
+        run: Arc<Run>,
+        shared: Arc<Shared>,
+        sched: Scheduler<Sequential>,
+        ctx: Ctx<eml_rt::Checked>,
+    }
+
+    fn worker_1() -> Worker1 {
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            ..Limits::default()
+        }));
+        let run = Arc::new(Run::new(2, None, RunClock::Virtual(Arc::default())));
+        let shared = Arc::new(Shared::new(Registry::new(Vec::new(), 2)));
+        let sched = Scheduler::worker(
+            Sequential,
+            Arc::clone(&run),
+            Arc::clone(&control),
+            1,
+            0,
+            usize::MAX,
+            Arc::clone(&shared),
+        );
+        let (host, _) = crate::capture_host(Default::default());
+        let ctx = Ctx::for_worker(Arc::clone(&control), host, 1);
+        Worker1 {
+            control,
+            run,
+            shared,
+            sched,
+            ctx,
+        }
+    }
+
+    /// mail のシグナルは最初に集めた worker が届ける。worker 1 が届けた待ち手は worker 0 のタスクなので、起こしを
+    /// worker 0 の受け箱に送り、待ち手の列が空になった見張りの語を書く (docs/spec/vm.md の「上限と割り込み」)。
+    #[test]
+    fn a_signal_drained_by_worker_1_wakes_a_waiter_owned_by_worker_0() {
+        let Worker1 {
+            control,
+            run,
+            shared,
+            mut sched,
+            mut ctx,
+        } = worker_1();
+        let cell = cells::terminate_waiter(&shared);
+        shared.lock().relay = true;
+        // 待ち手が待ち始めたときに書いた語と、監視のスレッドの中継
+        control.set_watched(Control::TERMINATE);
+        control.defer(Control::TERMINATE);
+        assert_eq!(control.claim_signals(), Control::TERMINATE);
+        shared.mail.push(MailItem::Signal(Control::TERMINATE));
+        sched.gather(&mut ctx, 0, false).unwrap();
+        assert!(sched.runnables.is_empty());
+        let notices = run.take_notices(0);
+        assert!(
+            matches!(
+                notices[..],
+                [Notice::Wake(Woken::Task {
+                    owner: 0,
+                    cell: c,
+                    wake: cells::WOKE,
+                    op: None,
+                })] if c == cell
+            ),
+            "{} notices",
+            notices.len()
+        );
+        assert_ne!(control.worker_bits(0) & Control::NOTICE, 0);
+        assert_eq!(shared.lock().unheard, 0);
+        assert_eq!(control.watched(), 0);
+        assert_eq!(control.pending_signals(), 0);
+    }
+
+    /// 待ち手のいないシグナルを worker 1 が届けると、止めるビットをすべての worker の語に立てて止まる。
+    #[test]
+    fn an_unheard_signal_drained_by_worker_1_raises_every_word() {
+        let Worker1 {
+            control,
+            shared,
+            mut sched,
+            mut ctx,
+            ..
+        } = worker_1();
+        shared.mail.push(MailItem::Signal(Control::TERMINATE));
+        assert_eq!(
+            sched.gather(&mut ctx, 0, false),
+            Err(VmFault::Stopped(Stop::Terminated))
+        );
+        for k in 0..2 {
+            assert_ne!(control.worker_bits(k) & Control::TERMINATE, 0, "worker {k}");
+        }
     }
 }
