@@ -87,7 +87,9 @@ mod tests {
     #[test]
     fn locate_numbers_every_slot_once() {
         let mut next = (0, 0);
-        for i in 0..100_000 {
+        // 先頭の5つの塊 (64、128、256、512、1024 項) の境目をまたぐだけの数にする。Miri でも流すので
+        // (docs/implementation/testing.md の「Miri」)、それより大きくしない
+        for i in 0..2_000 {
             let (b, o) = locate(i).unwrap();
             assert_eq!((b, o), next, "index {i}");
             next = if o + 1 == FIRST << b {
