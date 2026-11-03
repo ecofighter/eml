@@ -2,7 +2,7 @@
 //! fork か、`Async` のタスクを置く最初の `start` か、最初の `fork_job` で作り、run の終わりに join する。根に触れる `Machine` は worker を
 //! 作らない。
 
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use eml_rt::{Checked, Fault};
@@ -798,4 +798,296 @@ main () = Async.run (fn () -> println (show (sum_all (start_all 16) 0)))
         assert_eq!(out.contents(), alone);
         assert!(finished.placed_tasks >= 1, "{finished:?}");
     }
+}
+
+/// 検査モードで、方針 `sched` と worker を `workers` 個まで持てる run を1回行う。ファイルは `root` から読む。
+fn run_sched_in(
+    src: &str,
+    workers: usize,
+    sched: Sched,
+    root: std::path::PathBuf,
+) -> (String, Result<Finished, RuntimeError>) {
+    let (host, out) = eml_vm::capture_host(root);
+    let config = RunConfig::default()
+        .with_debug_heap(true)
+        .with_sched(sched)
+        .with_control(limits(workers));
+    let result = eml_vm::execute(&eml_test_support::lir(src), &config, host);
+    (out.contents(), result)
+}
+
+fn run_sched(src: &str, workers: usize, sched: Sched) -> (String, Result<Finished, RuntimeError>) {
+    run_sched_in(src, workers, sched, Default::default())
+}
+
+/// 根のタスクが 12 のタスクを始めて、すべての結果を足す。
+const MANY_TASKS: &str = "\
+import Async (Async)
+import Async
+spin : Int -> <Panic> Int
+spin n = if n == 0 then 0 else spin (n - 1)
+start_all : Int -> <IO, Panic, Async> List (Async.Task Int)
+start_all n = if n == 0 then [] else Async.start (fn () -> spin 20 + n) :: start_all (n - 1)
+sum_all : List (Async.Task Int) -> Int -> <IO, Panic, Async> Int
+sum_all ts acc = match ts with
+  | [] -> acc
+  | t :: rest -> sum_all rest (acc + Async.await t)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> println (show (sum_all (start_all 12) 0)))
+";
+
+/// 救済を強いる方針では、worker を作った後に始めたタスクはどれも、動く前にほかの worker へ移る。worker を作る前に
+/// 始まる根のタスクだけが移らずに始まる。4つの worker では、始めた worker 0、置いた持ち主、救済する次の worker が
+/// みな違う。印を付けずに移しても、検査モードの持ち主の検査と漏れの検査が通る (docs/spec/vm.md の「救済」)。
+#[test]
+fn rescue_always_rescues_every_started_task() {
+    let (alone, _) = run(MANY_TASKS, 1);
+    assert_eq!(alone, "78\n");
+    for workers in [2, 4] {
+        let (out, result) = run_sched(MANY_TASKS, workers, Sched::RescueAlways);
+        assert_eq!(out, alone, "{workers} workers");
+        let finished = result.unwrap_or_else(|error| panic!("{workers} workers: {error}"));
+        assert!(finished.rescues >= 1, "{finished:?}");
+        assert!(finished.rescued + 1 >= finished.stats.tasks, "{finished:?}");
+    }
+}
+
+/// 救済したタスクが `FileIn` と唯一の `Bytes` を持ったまま、譲りと channel の待ちをくぐって終わる。印を付けずに移した
+/// 物体を新しい worker の上で使い、手放しても、検査モードの持ち主の検査と漏れの検査が通る (docs/spec/vm.md の「救済」)。
+#[test]
+fn a_rescued_task_holding_a_lin_resource_passes_the_checks() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Chan
+import FileIn
+reader : Chan.Chan Int -> <IO, Panic, Async> Int
+reader c =
+  let f = FileIn.open \"a.txt\"
+  let (b, f) = FileIn.read_all_bytes f
+  Async.yield_now ()
+  let n = match Chan.recv c with
+    | Some x -> x
+    | None -> 0
+  FileIn.close f
+  Bytes.length b + n
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let c = Chan.new 1
+  let t = Async.start (fn () -> reader c)
+  Async.sleep_ms 5
+  match Chan.send 4 c with
+    | Chan.Sent -> ()
+    | Chan.Rejected _ -> println \"rejected\"
+  println (show (Async.await t)))
+";
+    let root = std::env::temp_dir().join(format!("eml-vm-rescued-lin-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.txt"), "abc").unwrap();
+    let (alone, one) = run_sched_in(src, 1, Sched::Sequential, root.clone());
+    let (out, two) = run_sched_in(src, 2, Sched::RescueAlways, root.clone());
+    std::fs::remove_dir_all(&root).unwrap();
+    one.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(alone, "7\n");
+    assert_eq!(out, alone);
+    let finished = two.unwrap_or_else(|error| panic!("{error}"));
+    // 読み手は始める仕事、譲りの後、受けの後の3回とも、動く前に救済で移る。後の2回は物体を持ったまま移る
+    assert!(finished.rescued >= 3, "{finished:?}");
+}
+
+/// 逐次の方針は、worker が2つでも救済しない (docs/spec/vm.md の「タスクとスケジュール」)。
+#[test]
+fn sequential_never_rescues() {
+    let (out, result) = run_sched(MANY_TASKS, 2, Sched::Sequential);
+    assert_eq!(out, "78\n");
+    let finished = result.unwrap();
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+    assert_eq!((finished.rescues, finished.rescued), (0, 0));
+}
+
+/// worker が1つの run では、救済を強いる方針は最後まで逐次の方針と同じに動き、`RunStats` も同じである
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
+#[test]
+fn rescue_always_at_one_worker_is_sequential() {
+    for src in [
+        MANY_TASKS,
+        include_str!("../../../tests/ui/run/async/chan_many.em"),
+    ] {
+        let (expected, sequential) = run_sched(src, 1, Sched::Sequential);
+        let (out, rescue) = run_sched(src, 1, Sched::RescueAlways);
+        let (sequential, rescue) = (sequential.unwrap(), rescue.unwrap());
+        assert_eq!(out, expected);
+        assert_eq!(rescue.stats, sequential.stats);
+        assert_eq!(rescue.exit, sequential.exit);
+        assert_eq!((rescue.rescues, rescue.rescued), (0, 0));
+    }
+}
+
+/// 救済で受けたタスクは、新しい worker の上で眠り、channel の品物を待って受け取る。時間の区画と待ち手の列は新しい
+/// 持ち主で引くので、出力は worker が1つの run と同じである (docs/spec/vm.md の「救済」)。
+#[test]
+fn rescued_tasks_sleep_and_take_from_a_channel_on_their_new_worker() {
+    let src = "\
+import Async (Async)
+import Async
+import Chan
+receiver : Chan.Chan Int -> <IO, Async> Int
+receiver c =
+  Async.sleep_ms 5
+  match Chan.recv c with
+    | Some x -> x
+    | None -> 0
+sender : Chan.Chan Int -> <IO, Async> Int
+sender c =
+  Async.sleep_ms 10
+  match Chan.send 7 c with
+    | Chan.Sent -> 1
+    | Chan.Rejected _ -> 2
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let c = Chan.new 1
+  let a = Async.start (fn () -> receiver c)
+  let b = Async.start (fn () -> sender c)
+  let x = Async.await a
+  let y = Async.await b
+  println \"\\{show x} \\{show y}\")
+";
+    let (alone, _) = run(src, 1);
+    assert_eq!(alone, "7 1\n");
+    let (out, result) = run_sched(src, 2, Sched::RescueAlways);
+    assert_eq!(out, alone);
+    let finished = result.unwrap();
+    assert!(finished.rescued >= 2, "{finished:?}");
+}
+
+/// 救済で受けて眠っているタスクにも取り消しが届く。`timeout` の期限が本体の眠りより先に来て、`None` を返す
+/// (docs/spec/vm.md の「救済」「取り消しの届け方」)。
+#[test]
+fn a_cancel_reaches_a_rescued_waiting_task() {
+    let src = "\
+import Async (Async)
+import Async
+sleepy : Unit -> <IO, Panic, Async> Option Int
+sleepy () = Async.timeout 20 (fn () ->
+  Async.sleep_ms 1000
+  1)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start sleepy
+  println (show (Async.await t)))
+";
+    let (alone, _) = run(src, 1);
+    assert_eq!(alone, "None\n");
+    let (out, result) = run_sched(src, 2, Sched::RescueAlways);
+    assert_eq!(out, alone);
+    let finished = result.unwrap();
+    assert!(finished.rescued >= 1, "{finished:?}");
+    assert!(finished.stats.cancels >= 1, "{finished:?}");
+}
+
+/// 入れ子の `Async.run` の根のタスクが救済で移ると、呼んだ `Task` が待ちに入る前に根のスコープが閉じうる。そのときは
+/// 待たずに続け、出力は worker が1つの run と同じである (docs/spec/vm.md の「`Async` のタスク」)。
+#[test]
+fn a_nested_run_closed_before_its_caller_waits_goes_on() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () -> Async.run (fn () -> 20) + 1)
+  println (show (Async.await t)))
+";
+    let (alone, _) = run(src, 1);
+    assert_eq!(alone, "21\n");
+    for workers in [2, 8] {
+        let (out, result) = run_sched(src, workers, Sched::RescueAlways);
+        assert_eq!(out, alone, "{workers} workers");
+        let finished = result.unwrap_or_else(|error| panic!("{workers} workers: {error}"));
+        assert!(finished.rescued >= 2, "{finished:?}");
+    }
+}
+
+/// 行 "a" の書き込みを、別のスレッドが "b" を書くまで止める Host。lock は持たずに条件変数で待ち、10 秒で自分から抜ける。
+/// ほかは中の `CaptureHost` に任せる。
+struct BlockingHost {
+    inner: eml_vm::CaptureHost,
+    /// "a" が `write_line` に入った時刻と、"b" を書いた時刻。
+    times: Mutex<(Option<Instant>, Option<Instant>)>,
+    wrote_b: Condvar,
+}
+
+impl BlockingHost {
+    fn times(&self) -> MutexGuard<'_, (Option<Instant>, Option<Instant>)> {
+        self.times.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl eml_rt::Host for BlockingHost {
+    fn write_line(&self, stream: eml_rt::Stream, line: &str) -> std::io::Result<()> {
+        if line == "a" {
+            let mut times = self.times();
+            times.0 = Some(Instant::now());
+            let (times, _) = self
+                .wrote_b
+                .wait_timeout_while(times, Duration::from_secs(10), |times| times.1.is_none())
+                .unwrap_or_else(PoisonError::into_inner);
+            drop(times);
+            self.inner.write_line(stream, line)
+        } else {
+            let written = self.inner.write_line(stream, line);
+            self.times().1 = Some(Instant::now());
+            self.wrote_b.notify_all();
+            written
+        }
+    }
+    fn write(&self, stream: eml_rt::Stream, bytes: &[u8]) -> std::io::Result<()> {
+        self.inner.write(stream, bytes)
+    }
+    fn flush(&self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+    fn open(&self, path: &str) -> std::io::Result<eml_rt::Opened> {
+        self.inner.open(path)
+    }
+}
+
+/// extern の中で止まった worker の仕事は、監視のスレッドが 3 刻み以内に別の worker へ移す。worker 1 のタスク T1 が
+/// `println "a"` で止まり、同じ worker の T2 の `println "b"` が先に出る (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 刻みの 10 ms に頼るので、release で流す。
+#[test]
+#[ignore = "depends on the monitor's 10 ms tick"]
+fn the_monitor_rescues_a_worker_blocked_in_an_extern() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t1 = Async.start (fn () -> println \"a\")
+  let x = Async.start (fn () -> ())
+  let t2 = Async.start (fn () -> println \"b\")
+  Async.await t1
+  Async.await x
+  Async.await t2)
+";
+    let inner = eml_vm::CaptureHost::new(Default::default());
+    let out = inner.output();
+    let host = Arc::new(BlockingHost {
+        inner,
+        times: Default::default(),
+        wrote_b: Default::default(),
+    });
+    let config = RunConfig::default()
+        .with_clock(Clock::Real)
+        .with_sched(Sched::Normal)
+        .with_control(limits(2));
+    let finished = eml_vm::execute(
+        &eml_test_support::lir(src),
+        &config,
+        eml_rt::HostRef::new(Arc::clone(&host) as Arc<dyn eml_rt::Host>),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "b\na\n");
+    assert!(finished.rescues >= 1, "{finished:?}");
+    let (entered, wrote) = *host.times();
+    let delay = wrote.unwrap() - entered.unwrap();
+    assert!(delay < Duration::from_millis(50), "{delay:?}");
 }

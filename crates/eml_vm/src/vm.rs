@@ -14,15 +14,16 @@ use eml_rt::{
 
 use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
-use crate::code::{AsyncEntries, CodeBase, ForkTable};
+use crate::code::{CodeBase, ForkTable};
 use crate::data;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
-    JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
+    JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Rescue, Scheduler, TaskId,
+    TaskState,
 };
 use crate::tls;
-use crate::workers::{Notice, Workers};
+use crate::workers::{Entry, EntryKind, Notice, Ready, Workers};
 use crate::{RunCounts, RuntimeError};
 
 /// 登録表を触るときの宛先 `cells::Here` を、`Scheduler` の欄から作る。欄ごとに借りるので、同じ関数の中で driver の
@@ -487,7 +488,7 @@ fn safepoint<R: Exec>(
     let polled = poll(ctx, task.stack_depth(), sched.index)?;
     let tick = sched.policy.tick();
     if polled == Polled::Collect {
-        collect_notice::<R>(code, ctx, task.depth_offset, sched)?;
+        collect_notice::<R>(ctx, task.depth_offset, sched)?;
     }
     if (polled == Polled::Switch || tick) && ctx.yielding() == 0 {
         preempt::<R>(code, ctx, task, sched)?;
@@ -500,12 +501,11 @@ fn safepoint<R: Exec>(
 #[cold]
 #[inline(never)]
 fn collect_notice<R: Exec>(
-    code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     depth_offset: usize,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    collect::<R>(code, ctx, depth_offset, sched, true)
+    collect::<R>(ctx, depth_offset, sched, true)
 }
 
 /// タスクを実行する。`task` はエントリのタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときはエントリの
@@ -1264,7 +1264,7 @@ fn par<R: Exec>(
     task.boundaries.push(j);
     apply_to_unit::<R>(code, ctx, task, f, CHILD_DONE, 0)?;
     if let Some(right) = local {
-        sched.ready.push_back(right);
+        sched.run.push_ready(sched.index, Ready::Task(right));
     }
     safepoint::<R>(code, ctx, task, sched)
 }
@@ -1512,16 +1512,13 @@ fn job_done<R: Exec>(
     unsafe { ctx.heap_mut().decref(rest) }?;
     // `()` を入れ替えるだけで、返る語も `()` である
     let _unit = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
-    let entries = code
-        .entries
-        .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
     let mut out = Vec::new();
     {
         here!(sched, post, here);
         cells::finish_job(&sched.cells, &here, job.cell, end, &mut out)?;
     }
     for run in out {
-        schedule(code, sched, entries, run)?;
+        schedule(sched, run)?;
     }
     switch_away::<R>(code, ctx, task, sched, None)
 }
@@ -1539,17 +1536,21 @@ fn switch_away<R: Exec>(
         sched.hold.is_none(),
         "a channel reservation is held at a switch"
     );
+    debug_assert!(
+        !sched.current_woken,
+        "a wake of the current task is left from an earlier switch"
+    );
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)。走れるタスクがなければ直後の `wait` が OS を見るので、ここでは
     // 見ない。走れるタスクが続くときは `POLL_EVERY` 回に1回だけ見る (docs/spec/vm.md の「時計と driver」)
-    collect::<R>(code, ctx, task.depth_offset, sched, false)?;
+    collect::<R>(ctx, task.depth_offset, sched, false)?;
     // 切り替えるたびに、ほかのスレッドから受けた解放が溜まっていれば取り込む。溜まっていなければ2回の読みで済む
     // (docs/spec/vm.md の「タスクとスケジュール」)
     ctx.reclaim_if_due();
-    if !sched.ready.is_empty() {
+    if !sched.run.ready_is_empty(sched.index) {
         sched.since_poll += 1;
         if sched.since_poll >= POLL_EVERY {
-            collect::<R>(code, ctx, task.depth_offset, sched, true)?;
+            collect::<R>(ctx, task.depth_offset, sched, true)?;
         }
     }
     // 走れるタスクがなければ、起こされるか次の期限か driver の完了まで待って集め直す。戻るたびに止める語を読む。
@@ -1564,17 +1565,31 @@ fn switch_away<R: Exec>(
             let result = safepoint::<R>(code, ctx, task, sched);
             return at_par(code, task, sched, at, result);
         }
-        if let Some(next) = sched.policy.pick(&mut sched.ready) {
-            break next;
+        // 根のスコープも、待とうとするタスクが表に入る前に閉じうる。そのときは待たずに `Async` の命令の次から続ける
+        if let Some(TaskState::WaitingCell(root)) = keep
+            && std::mem::take(&mut sched.current_woken)
+        {
+            debug_assert!(
+                sched.cells.lock().closed(root).unwrap_or(false),
+                "a run wakes before its scope closes"
+            );
+            return Ok(());
+        }
+        if let Some(item) = sched.run.pick_ready(sched.index, &mut sched.policy) {
+            break ready_task(code, sched, item)?;
         }
         // 眠る前に、ほかのスレッドから受けた解放が溜まっていれば取り込む (docs/spec/vm.md の「時計と driver」)
         ctx.reclaim_if_due();
+        debug_assert!(
+            sched.left.is_empty(),
+            "an entry is left unsettled before a worker sleeps"
+        );
         sched.idle_wait()?;
         // `PREEMPT` と `NOTICE` は捨てる。`NOTICE` の知らせは続く集める地点が集める。直前の `wait` が OS を見たので、
         // 集める地点は見ない
         poll(ctx, task.stack_depth(), sched.index)?;
         sched.since_poll = 0;
-        collect::<R>(code, ctx, task.depth_offset, sched, false)?;
+        collect::<R>(ctx, task.depth_offset, sched, false)?;
     };
     match resume::<R>(code, ctx, task, sched, next, keep)? {
         Some(at) => {
@@ -1664,7 +1679,6 @@ fn resume<R: Exec>(
 /// 集める地点。登録表とほかの worker の知らせを `Scheduler::gather` が集め、待ちを外したタスクを再開する仕事を列の
 /// 後ろに積む。聞く者のいなかったシグナルの誤りも、仕事を積んでから返す (docs/spec/vm.md の「タスクとスケジュール」)。
 fn collect<R: Exec>(
-    code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     depth_offset: usize,
     sched: &mut Scheduler<R::P>,
@@ -1672,14 +1686,24 @@ fn collect<R: Exec>(
 ) -> Result<(), VmFault> {
     let gathered = sched.gather(ctx, depth_offset, look);
     if !sched.runnables.is_empty() {
-        let entries = code
-            .entries
-            .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
         let mut out = std::mem::take(&mut sched.runnables);
         for run in out.drain(..) {
-            schedule(code, sched, entries, run)?;
+            schedule(sched, run)?;
         }
         sched.runnables = out;
+    }
+    // 救済で盗んだ仕事は、lock をすべて放した後に自分の仕事の後ろに積む (docs/spec/vm.md の「救済」)
+    if !sched.stolen.is_empty() {
+        let mut stolen = std::mem::take(&mut sched.stolen);
+        for run in stolen.drain(..) {
+            enqueue(sched, run, true)?;
+        }
+        sched.stolen = stolen;
+    }
+    // 自分で頼む方針は、この集める地点が積んだ項まで見てから頼む。lock はもうどれも持っていない
+    // (docs/spec/vm.md の「タスクとスケジュール」)
+    if R::P::RESCUE == Rescue::Always {
+        sched.ask_rescue();
     }
     gathered
 }
@@ -1702,22 +1726,25 @@ fn preempt<R: Exec>(
     );
     // 横取りの刻みごとに OS を見るので、計算の重いタスクが走る worker でも I/O の完了の遅れは刻みの長さまでである
     // (docs/spec/vm.md の「時計と driver」)
-    collect::<R>(code, ctx, task.depth_offset, sched, true)?;
+    collect::<R>(ctx, task.depth_offset, sched, true)?;
     loop {
-        let next = sched.policy.pick(&mut sched.ready);
+        let next = sched.run.pick_ready(sched.index, &mut sched.policy);
         sched.policy.reload();
         let Some(next) = next else {
             return Ok(());
         };
+        let next = ready_task(code, sched, next)?;
         let current = sched.current;
-        sched.policy.wake(&mut sched.ready, current);
+        sched
+            .run
+            .wake_ready(sched.index, &mut sched.policy, current);
         sched.count_preemption();
         let Some(at) = resume::<R>(code, ctx, task, sched, next, Some(TaskState::Ready))? else {
             return Ok(());
         };
         let polled = match poll(ctx, task.stack_depth(), sched.index) {
             Ok(Polled::Collect) => {
-                collect::<R>(code, ctx, task.depth_offset, sched, true).map(|()| Polled::Collect)
+                collect::<R>(ctx, task.depth_offset, sched, true).map(|()| Polled::Collect)
             }
             polled => polled,
         };
@@ -2009,7 +2036,10 @@ fn cancel<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
             continue;
         }
         let right = join.right;
-        sched.ready.retain(|&id| id != right);
+        sched.run.retain_ready(
+            sched.index,
+            |item| !matches!(item, Ready::Task(id) if *id == right),
+        );
         if let Some(task) = sched.tasks[right].take() {
             sched.free_task(right);
             pending.extend_from_slice(&task.boundaries[1..]);
@@ -2106,9 +2136,9 @@ fn async_op<R: Exec>(
 ) -> Result<(), VmFault> {
     let o = &code.tables.operands[at as usize..];
     let arg = |i: usize| o[2 + i] as Slot;
-    let entries = code
-        .entries
-        .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
+    if code.entries.is_none() {
+        return Err(VmFault::Internal("the Async entries are not loaded"));
+    }
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、行がそれを預かる
     match Extern::ALL[o[0] as usize] {
         Extern::AsyncStartRaw => {
@@ -2125,7 +2155,7 @@ fn async_op<R: Exec>(
             task.set(dst, handle);
             // ほかの worker に置いたタスクは、`Place` を受けた持ち主が始める
             if let Some(run) = run {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
         }
         Extern::AsyncRunRaw => {
@@ -2148,7 +2178,7 @@ fn async_op<R: Exec>(
                 .lock()
                 .wait(root, WaitToken(sched.current as u64), me)?;
             task.set(dst, handle);
-            schedule(code, sched, entries, run)?;
+            schedule(sched, run)?;
             switch_away::<R>(code, ctx, task, sched, Some(TaskState::WaitingCell(root)))?;
         }
         Extern::AsyncFinishOk => {
@@ -2186,7 +2216,7 @@ fn async_op<R: Exec>(
             let k = task.get(arg(1));
             let run = sched.cells.lock().park(task.raw(arg(0)), me, k)?;
             if let Some(run) = run {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set(dst, Word::UNIT);
         }
@@ -2204,14 +2234,14 @@ fn async_op<R: Exec>(
                 .lock()
                 .park_time(now, ms, me, task.get(arg(1)))?;
             if let Some(run) = run {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncReady => {
             let me = current_cell(task)?;
             let run = sched.cells.lock().ready(me, task.get(arg(0)))?;
-            schedule(code, sched, entries, run)?;
+            schedule(sched, run)?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncTaskCell => {
@@ -2252,7 +2282,7 @@ fn async_op<R: Exec>(
                 }
                 None => {
                     let id = sched.add_task(job);
-                    sched.ready.push_back(id);
+                    sched.run.push_ready(sched.index, Ready::Task(id));
                 }
             }
             task.set_raw(dst, cell.encode());
@@ -2317,7 +2347,7 @@ fn async_op<R: Exec>(
             };
             task.set(dst, handle);
             if let Some(run) = run {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
         }
         Extern::AsyncOpenScope => {
@@ -2388,7 +2418,7 @@ fn async_op<R: Exec>(
             let k = task.get(arg(1));
             let run = sched.cells.lock().park_drain(task.raw(arg(0)), me, k)?;
             if let Some(run) = run {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set(dst, Word::UNIT);
         }
@@ -2423,7 +2453,7 @@ fn async_op<R: Exec>(
                 cells.route(&mut sched.woken, &here, &mut runs)?;
             }
             for run in runs {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set(dst, Word::UNIT);
         }
@@ -2455,7 +2485,7 @@ fn async_op<R: Exec>(
                 r
             };
             for run in runs {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set_raw(dst, r);
         }
@@ -2470,7 +2500,7 @@ fn async_op<R: Exec>(
                 cells.route(&mut sched.woken, &here, &mut runs)?;
             }
             for run in runs {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set(dst, Word::UNIT);
         }
@@ -2498,7 +2528,7 @@ fn async_op<R: Exec>(
                 gone.close(ctx)?;
             }
             for run in runs {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set(dst, Word::UNIT);
         }
@@ -2538,8 +2568,8 @@ fn async_op<R: Exec>(
             // 見ないと起きない同じ worker の読み手の先へ走り続けないためである。走れるタスクがなければ譲らずに続ける
             // (docs/spec/stdlib.md の「操作の予算」、docs/spec/vm.md の「時計と driver」)
             if step == cells::FAST_YIELD {
-                collect::<R>(code, ctx, task.depth_offset, sched, true)?;
-                if sched.ready.is_empty() {
+                collect::<R>(ctx, task.depth_offset, sched, true)?;
+                if sched.run.ready_is_empty(sched.index) {
                     step = sched.cells.lock().go_on(me)?;
                 }
             }
@@ -2562,7 +2592,7 @@ fn async_op<R: Exec>(
                 )?
             };
             if let Some(run) = run {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set(dst, Word::UNIT);
         }
@@ -2591,7 +2621,7 @@ fn async_op<R: Exec>(
                 )?
             };
             if let Some(run) = run {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set(dst, Word::UNIT);
         }
@@ -2606,7 +2636,7 @@ fn async_op<R: Exec>(
                 run
             };
             if let Some(run) = run {
-                schedule(code, sched, entries, run)?;
+                schedule(sched, run)?;
             }
             task.set(dst, Word::UNIT);
         }
@@ -2913,35 +2943,63 @@ fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), VmFault> {
 }
 
 /// 核が返した仕事を実行待ちの列の後ろに積む。どの方針でも FIFO である (docs/spec/vm.md の「タスクとスケジュール」)。
-/// 始める仕事と再開する仕事は、集まりのスタックでエントリの `Task` にする。token は待っている `Task` の番号である。
-fn schedule<M: Mode, P: Policy>(
-    code: &CodeBase<M>,
+/// 始める仕事と再開する仕事はフレームを持たない `Entry` のまま積み、持ち主が `pick` で取ったときにエントリの `Task` に
+/// する。token は待っている `Task` の番号である。
+fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), VmFault> {
+    enqueue(sched, run, false)
+}
+
+/// `schedule` の本体。`rescued` は救済で受けた仕事の印で、その項を `pick` するまでもう一度盗まない
+/// (docs/spec/vm.md の「救済」)。
+fn enqueue<P: Policy>(
     sched: &mut Scheduler<P>,
-    entries: AsyncEntries,
     run: Runnable,
+    rescued: bool,
 ) -> Result<(), VmFault> {
-    let (function, args, argc, cell) = match run {
-        Runnable::Start { cell, closure } => {
-            (entries.start, [closure, Word::UNIT, Word::UNIT], 1, cell)
-        }
-        Runnable::Resume { cell, k, wake } => (
-            entries.resume,
-            [k, Word::from_bits(wake as usize), Word::UNIT],
-            2,
+    let entry = match run {
+        Runnable::Start {
             cell,
-        ),
-        Runnable::ResumeIo { cell, k, wake, op } => (
-            entries.resume_io,
-            [
-                k,
-                Word::from_bits(wake as usize),
-                Word::from_bits(op as usize),
-            ],
-            3,
+            worker,
+            closure,
+        } => Entry {
             cell,
-        ),
+            worker,
+            kind: EntryKind::Start,
+            word: closure,
+            rescued,
+        },
+        Runnable::Resume {
+            cell,
+            worker,
+            k,
+            wake,
+        } => Entry {
+            cell,
+            worker,
+            kind: EntryKind::Resume { wake },
+            word: k,
+            rescued,
+        },
+        Runnable::ResumeIo {
+            cell,
+            worker,
+            k,
+            wake,
+            op,
+        } => Entry {
+            cell,
+            worker,
+            kind: EntryKind::ResumeIo { wake, op },
+            word: k,
+            rescued,
+        },
         Runnable::Token(WaitToken(token)) => {
             let id = token as TaskId;
+            // 動いているタスクの欄は空である。待とうとしている今のタスクへの起こしは `switch_away` が受ける
+            if id == sched.current && matches!(sched.tasks.get(id), Some(None)) {
+                sched.current_woken = true;
+                return Ok(());
+            }
             match sched.tasks.get(id) {
                 Some(Some(Task {
                     state: TaskState::WaitingCell(_),
@@ -2951,25 +3009,62 @@ fn schedule<M: Mode, P: Policy>(
                     return Err(VmFault::Internal("a woken token names no waiting task"));
                 }
             }
-            sched.ready.push_back(id);
+            sched.run.push_ready(sched.index, Ready::Task(id));
             return Ok(());
         }
     };
-    let worker = sched.cells.lock().worker(cell)?;
+    // 横取りする方針では、2つ目の仕事が走れるようになったので監視のスレッドを始める。エントリの `Task` を作るのは
+    // `pick` のときなので、`add_task` を待つと、今のタスクが走り続ける間は横取りされない
+    if P::PREEMPTS {
+        sched.start_monitor();
+    }
+    sched.run.push_ready(sched.index, Ready::Entry(entry));
+    Ok(())
+}
+
+/// 実行待ちの列から取った項を、表にあるタスクの番号にする。`Entry` はここで、集まりのスタックを使うエントリの `Task` に
+/// する (docs/spec/vm.md の「`Async` のタスク」)。
+fn ready_task<M: Mode, P: Policy>(
+    code: &CodeBase<M>,
+    sched: &mut Scheduler<P>,
+    item: Ready,
+) -> Result<TaskId, VmFault> {
+    let entry = match item {
+        Ready::Task(id) => return Ok(id),
+        Ready::Entry(entry) => entry,
+    };
+    let entries = code
+        .entries
+        .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
+    let (function, args, argc) = match entry.kind {
+        EntryKind::Start => (entries.start, [entry.word, Word::UNIT, Word::UNIT], 1),
+        EntryKind::Resume { wake } => (
+            entries.resume,
+            [entry.word, Word::from_bits(wake as usize), Word::UNIT],
+            2,
+        ),
+        EntryKind::ResumeIo { wake, op } => (
+            entries.resume_io,
+            [
+                entry.word,
+                Word::from_bits(wake as usize),
+                Word::from_bits(op as usize),
+            ],
+            3,
+        ),
+    };
     let spare = sched.stacks.pop().unwrap_or_default();
     let task = Task::entry(
         code,
         function,
         args,
         argc,
-        cell,
-        worker,
+        entry.cell,
+        entry.worker,
         sched.max_depth,
         spare,
     );
-    let id = sched.add_task(task);
-    sched.ready.push_back(id);
-    Ok(())
+    Ok(sched.add_task(task))
 }
 
 /// エントリの `Task` が動き始める。始める仕事なら、閉包を始めたタスクの ID から今の ID へ戻す (`par` の join の
@@ -3043,9 +3138,6 @@ fn entry_finish<R: Exec>(
     let rest = unsafe { ctx.switch_task(Word::UNIT, task.worker, task.depth_offset) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     if let Some(outcome) = task.outcome.take() {
-        let entries = code
-            .entries
-            .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
         let mut out = Vec::new();
         {
             here!(sched, post, here);
@@ -3060,8 +3152,12 @@ fn entry_finish<R: Exec>(
             )?;
         }
         for run in out {
-            schedule(code, sched, entries, run)?;
+            schedule(sched, run)?;
         }
+    } else {
+        // 待ちに入ったタスクのフレームはここで終わった。持ち主の次の集める地点が `entries` を減らす
+        // (docs/spec/vm.md の「救済」)
+        sched.left.push(cell);
     }
     switch_away::<R>(code, ctx, task, sched, None)
 }

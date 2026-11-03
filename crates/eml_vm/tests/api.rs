@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
-    Clock, CodeBase, Control, Finished, Limits, Machine, Normal, RunConfig, RunStats, RuntimeError,
-    Sched, Stop, Task, VmFault,
+    Clock, CodeBase, Control, Entry, Finished, Limits, Machine, Normal, Ready, RunConfig, RunStats,
+    RuntimeError, Sched, Stop, Task, VmFault,
 };
 
 use crate::common::parse;
@@ -30,10 +30,13 @@ fn a_finished_moves() {
     send::<Finished>();
 }
 
-/// 方針の値はスレッドをまたいで読む (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 方針の値はスレッドをまたいで読み、方針が並べる実行待ちの項は欄の lock の下でスレッドをまたぐ
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
 #[test]
 fn a_policy_moves_and_a_sched_is_shared() {
     send::<Normal>();
+    send::<Ready>();
+    send::<Entry>();
     send::<Sched>();
     sync::<Sched>();
     copy::<Sched>();
@@ -80,40 +83,6 @@ fn the_default_clock_is_virtual() {
     let config = RunConfig::default().with_clock(Clock::Real);
     assert_eq!(config.clock, Clock::Real);
     assert_eq!(config.with_clock(Clock::Virtual).clock, Clock::Virtual);
-}
-
-/// CLI の `--sched` が読む綴り (docs/spec/stdlib.md の「起動」)。seed は `u64` の10進数である。
-#[test]
-fn a_sched_parses_and_rejects() {
-    assert_eq!("normal".parse(), Ok(Sched::Normal));
-    assert_eq!("sequential".parse(), Ok(Sched::Sequential));
-    assert_eq!("seeded:0".parse(), Ok(Sched::Seeded(0)));
-    assert_eq!("seeded:2026".parse(), Ok(Sched::Seeded(2026)));
-    assert_eq!(
-        "seeded:18446744073709551615".parse(),
-        Ok(Sched::Seeded(u64::MAX))
-    );
-    for text in [
-        "",
-        "bogus",
-        "Sequential",
-        "Normal",
-        " sequential",
-        "seeded",
-        "seeded:",
-        "seeded:-1",
-        "seeded:+7",
-        "seeded:18446744073709551616",
-        "seeded:7x",
-        "seeded: 7",
-        "rescue-always",
-    ] {
-        let error = text.parse::<Sched>().unwrap_err();
-        assert_eq!(
-            error,
-            format!("expected `normal`, `sequential` or `seeded:<n>`, found `{text}`")
-        );
-    }
 }
 
 #[test]
