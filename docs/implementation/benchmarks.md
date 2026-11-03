@@ -718,6 +718,16 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 - 数値: 腕を1つ足すと `list` +5.56%、`free` +3.25%、`map` +3.70%。腕を除くと 0.25% 以内に戻った。M4、8b98876 に未コミットの変更を足した木。コミットからは再現できない
 - 根拠にしている所: `crates/eml_rt/src/meta.rs` の `has_finalizer` のコメント、[オブジェクトモデル](../spec/object-model.md) の「種類」
 
+### 局所の解放の費用とコード生成単位
+
+- 主張: 速いモードの `free_box` は、持ち主の確かめ (ページの頭の `sink` と自分の `sink` の比べ) を先に置き、破棄処理を呼ぶ物体と検査モードを `free_box_slow` に分ける。破棄処理のない局所の解放は、関数を呼ばない葉の道になる。破棄処理を確かめの前に求めて呼び出しをまたいで持つと、退避するレジスタが1組増える。`rt_bench` の合計はコード生成単位の分け方で1回の解放あたり5〜6命令動くので、局所の解放の道の費用は、合計でなく `free_box` の1回分の命令を数えて確かめる
+- 数値:
+  - `free` の1回の繰り返しを lldb で1命令ずつ数えると、`free_box` は今の形で22命令、破棄処理を先に求めて呼び出しをまたいで持つ形で30命令、持ち主の確かめのない形で25命令だった。M5、5bb8493 と、それに変更を足した木
+  - 既定のビルドの `rt_bench` は、持ち主の確かめのない形 (90147ff) と比べて `free` +1.6% (1回あたり約 +3)、`list` +1.6%、`map-reuse` +13%、`handle` +5.2%、`mask` +2.9%。`mask` の1回分では `alloc_data` +6、`free_chain` +4、`drain` +2、`evv_mask` +2 で、どれもソースは同じである。リンカの map では、`Ctx::evv_mask` が `alloc_data` と別の単位に入っていた。`CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` では、今の形が持ち主の確かめのない形より `free` で1回あたり約2命令少ない (1,806,927,060 対 1,827,774,762)
+  - `alloc_data` に `#[inline]` を付けると `rt_bench` の差は消えた (`free` 1,807,205,471、`mask` 3,367,405,994) が、`bench/run.sh` の実行の分が +0.8%〜+5.2% 増えた (`par_tree` +5.18%、`fib` +4.68%、`list` +4.06%)。そのため付けない
+  - 数え方: lldb の Python API で ASLR を切って起動し、`main` で止まってから、数える関数 (`free` では `Heap::free_chain`、`mask` では `Ctx::evv_mask`) の番地に breakpoint を置く。起動前に置いた番地の breakpoint では止まらない。止まったら外し、同じ番地に戻るまで `StepInstruction` で進め、PC ごとの関数名で数える。単位の割り当ては `-C link-arg=-Wl,-map,<file>` の map で見る
+- 根拠にしている所: `crates/eml_rt/src/heap/mod.rs` の `free_box` のコメント、[オブジェクトモデル](../spec/object-model.md) の「別のスレッドからの解放」
+
 ### `eml_rt` のインライン化
 
 - 主張: `eml_rt` の速い道は、呼ぶ側に展開されていることを `-C remark=inline` の「definition is unavailable」で確かめる。展開されないと、`map-reuse` と `append` の命令の数が倍を超える。原因はどれも、総称な関数の実体が呼ぶ側と別のコード生成単位に入ることか、総称でない関数が crate をまたいで展開されないことだった。次の置き方はそのためである
