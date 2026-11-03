@@ -13,7 +13,7 @@
 //!
 //! 不変条件: スコープの `members` と `nested` の項は、いつも生きているセルを指す。`waiters` の項は古くてもよく、
 //! `wake_waiter` が `wait` で確かめる。`k.is_some()` と、`wait` が `Some(Cell(_))`、`Some(Time(_))`、`Some(Io(_))`、
-//! `Some(Signal(_))` のどれかであることは同値である (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項
+//! `Some(Signal(_))`、`Some(Job(_))` のどれかであることは同値である (`Ready` の継続は列に積んだ仕事が持つ)。`timers` の項
 //! `key → Due::Task(t)` があるのは、`t` の `wait` が `Some(Time(key))` のときか、`Some(Io(op))` で記録 `op` の
 //! `timer` が `Some(key)` のときだけで、時間の待ちの登録と記録が覚えた鍵には、いつも項がある。タスクがシグナルの
 //! 待ち手の列にあるのは、止まっていて `wait == Some(Signal(その番号))` のときだけで、1回だけ現れる。タスクの今のスコープ `current` から親へたどる列は、そのタスクが開いたスコープだけからなり、加わったスコープ `scope` で終わる。入れ子の `run` の根の
@@ -39,6 +39,12 @@
 //! worker `k` が host で `InDriver` にある記録の数である。記録の `waiter` が `t` を指して完了が
 //! まだなら、`t` の `wait` は `Some(Io(その記録))` である。1つの token に記録は1つで、1つのタスクの待ちの登録は1つである。
 //! 記録を放すのは、受け付けたタスクの `take_op` と `sweep_all` だけである。
+//!
+//! 仕事のセルの不変条件: 仕事の `waiter` が `t` を指すのは、仕事がまだ終わっていないときだけで、`t` は仕事を出した
+//! `submitter` であり、`t` の `wait` は `Some(Job(その仕事))` である。仕事を待てるのは出したタスクだけである。
+//! 仕事のセルを放すのは、`take_job` と `drop_job` の行が呼ぶ `take_job` と、run の終わりの `sweep_all` だけである。
+//! park したタスクを途中で捨てる仕組みは、捨てるタスクを `submitter` に持つ仕事のセルを、`with_worker(仕事の ID)` と
+//! `retire_worker` の下で落とさなければならない (docs/spec/vm.md の「セルと登録表」)。
 //!
 //! 取り消しは、印を付ける `mark` と、持ち主が mail か受け箱の `Cancel` の知らせを処理して待ちを外す `unpark` の2段で行う。`CANCELLED` で再開する
 //! 仕事をほかのタスクのために作るのは、`unpark` と、取り消しを頼んだ操作の結果を当てる `settle_op` だけである。外からの印付けは `shield` の境目 `boundary` で止まる。
@@ -82,7 +88,7 @@ pub(crate) struct CellRef {
 
 impl CellRef {
     /// `Std.Async.Cell` の即値 `(generation << 32) | index` (docs/spec/stdlib.md の「`Std.Async`」)。
-    fn encode(self) -> i64 {
+    pub(crate) fn encode(self) -> i64 {
         (i64::from(self.generation) << 32) | i64::from(self.index)
     }
 
@@ -205,6 +211,8 @@ enum Wait {
     Io(CellRef),
     /// シグナルを待つ。値はシグナルの番号 (0 が `Interrupt`、1 が `Terminate`) で、タスクはその番号の待ち手の列にいる。
     Signal(usize),
+    /// 出した仕事が終わるのを待つ。仕事のセルの `waiter` がこのタスクを指す。
+    Job(CellRef),
 }
 
 /// 時間の輪の項の値。語を持たない (docs/spec/vm.md の「時間の待ち」)。
@@ -253,6 +261,10 @@ struct TaskCell {
     budget: u32,
     /// 終わった操作の速い道が予算を使い切って、続く `reschedule` で譲るところである。その再開は取り消しを数えない。
     fast_yield: bool,
+    /// 仕事の終わりがこのタスクを起こすか、終わった仕事への park がすぐ再開の項 (`Runnable::Resume`) を返した。`resumed` だけが取り、
+    /// 実行待ちからの再開と同じく取り消しの地点の規則で `Cancelled` に替えるかを決める (docs/spec/vm.md の
+    /// 「取り消しの届け方」)。
+    woke_from_job: bool,
     /// 入れ子の `run` で待っている根。
     run: Option<CellRef>,
     detached: bool,
@@ -294,6 +306,41 @@ enum CellKind {
     Scope(ScopeCell),
     Chan(ChanCell),
     Op(OpRecord),
+    Job(JobCell),
+}
+
+/// `compute` の仕事のセル (docs/spec/vm.md の「セルと登録表」)。受け箱の番号を持たないので、仕事を動かす worker が
+/// 替わっても、終わりは `submitter` の今の持ち主に route される。
+struct JobCell {
+    /// 仕事の論理的な ID。終わりの語はこの ID の物体で、取り出す側が `transfer_back` してから退かせる。
+    worker: u32,
+    /// 仕事を出したタスク。待てるのも取り出せるのもこのタスクだけである。
+    submitter: CellRef,
+    end: Option<JobEnd>,
+    /// 終わりを待つタスク。いれば `submitter` で、その `wait` は `Some(Job(このセル))` である。
+    waiter: Option<CellRef>,
+}
+
+/// 仕事の終わり方。仕事の実行時エラーはその場で run を止めるので、誤りの変種はない
+/// (docs/spec/vm.md の「`compute` の仕事」)。
+pub(crate) enum JobEnd {
+    /// 仕事の結果。仕事の ID の物体で、セルが参照を1つ持つ。
+    Value(Word),
+    /// never だけのエフェクトの中断。`clause` は `reperform$` の閉包で、セルが参照を1つ持つ。
+    Abort {
+        effect: u16,
+        depth: u32,
+        clause: Word,
+    },
+}
+
+impl JobEnd {
+    /// 終わりが持つ語。
+    pub(crate) fn word(&self) -> Word {
+        match *self {
+            JobEnd::Value(w) | JobEnd::Abort { clause: w, .. } => w,
+        }
+    }
 }
 
 /// driver に出した操作の記録 (docs/spec/vm.md の「操作の記録」)。driver は語を見ないので、操作に貸した記憶の物体と
@@ -1362,6 +1409,8 @@ impl Registry {
         self.slots.iter().any(|(_, kind)| match kind {
             Some(CellKind::Task(task)) => !matches!(task.phase, Phase::Finished),
             Some(CellKind::Op(record)) => record.submitted || record.pending_op.is_some(),
+            // 出したタスクは仕事を必ず取るか落とすので、成功した run の終わりに残る仕事のセルはない
+            Some(CellKind::Job(_)) => true,
             _ => false,
         })
     }
@@ -1442,18 +1491,27 @@ impl Registry {
     fn task_mut(&mut self, cell: CellRef) -> Result<&mut TaskCell, CellFault> {
         match self.cell_mut(cell)? {
             CellKind::Task(task) => Ok(task),
-            CellKind::Scope(_) | CellKind::Chan(_) | CellKind::Op(_) => Err(CellFault::Internal(
-                "a task cell reference names another kind of cell",
-            )),
+            CellKind::Scope(_) | CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => Err(
+                CellFault::Internal("a task cell reference names another kind of cell"),
+            ),
         }
     }
 
     fn scope_mut(&mut self, cell: CellRef) -> Result<&mut ScopeCell, CellFault> {
         match self.cell_mut(cell)? {
             CellKind::Scope(scope) => Ok(scope),
-            CellKind::Task(_) | CellKind::Chan(_) | CellKind::Op(_) => Err(CellFault::Internal(
-                "a scope cell reference names another kind of cell",
-            )),
+            CellKind::Task(_) | CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => Err(
+                CellFault::Internal("a scope cell reference names another kind of cell"),
+            ),
+        }
+    }
+
+    fn job_mut(&mut self, cell: CellRef) -> Result<&mut JobCell, CellFault> {
+        match self.cell_mut(cell)? {
+            CellKind::Job(job) => Ok(job),
+            CellKind::Task(_) | CellKind::Scope(_) | CellKind::Chan(_) | CellKind::Op(_) => Err(
+                CellFault::Internal("a job cell reference names another kind of cell"),
+            ),
         }
     }
 
@@ -1607,6 +1665,7 @@ impl Registry {
             shield: 0,
             budget: BUDGET,
             fast_yield: false,
+            woke_from_job: false,
             run: None,
             detached: false,
         }));
@@ -1646,7 +1705,9 @@ impl Registry {
     /// `Cancelled` に替える。操作の待ち (`io`) からの再開では、その待ちが予算を使い切ったときだけ予算を戻す。待ちが
     /// park するかは操作が受け付けで終わったかでスケジュールに依るので、park したかで戻すと予算の切れる位置と `parks`
     /// もスケジュールに依る (docs/spec/stdlib.md の「操作の予算」)。速い道の `reschedule` からの再開は取り消しを
-    /// 数えない。std の包みはその `Wake` を見ず、次の取り消しの地点が数えて投げるためである。
+    /// 数えない。std の包みはその `Wake` を見ず、次の取り消しの地点が数えて投げるためである。仕事の待ちからの再開は、
+    /// 実行待ちからの再開と同じ規則で替える。仕事の待ちは取り消しで外れないので、取り消しは仕事が終わってから届く
+    /// (docs/spec/vm.md の「取り消しの届け方」)。
     pub(crate) fn resumed(&mut self, cell: CellRef, wake: i64, io: bool) -> Result<i64, CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Parked) {
@@ -1657,8 +1718,9 @@ impl Registry {
             task.budget = BUDGET;
         }
         let fast = std::mem::take(&mut task.fast_yield);
+        let from_job = std::mem::take(&mut task.woke_from_job);
         let ready = matches!(task.wait.take(), Some(Wait::Ready));
-        if ready && !fast && wake == WOKE && self.point(cell)? {
+        if (ready || from_job) && !fast && wake == WOKE && self.point(cell)? {
             self.stats.cancels += 1;
             return Ok(CANCELLED);
         }
@@ -1686,10 +1748,13 @@ impl Registry {
         k: Word,
     ) -> Result<Option<Runnable>, CellFault> {
         let target = CellRef::decode(c);
+        if let CellKind::Job(_) = self.cell_mut(target)? {
+            return self.park_job(target, me, k);
+        }
         let done = match self.cell_mut(target)? {
             CellKind::Task(task) => matches!(task.phase, Phase::Finished),
             CellKind::Scope(scope) => scope.closed,
-            CellKind::Chan(_) | CellKind::Op(_) => {
+            CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => {
                 return Err(CellFault::Internal("a cell of the wrong kind"));
             }
         };
@@ -1716,11 +1781,44 @@ impl Registry {
         let waiters = match self.cell_mut(target)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
-            CellKind::Chan(_) | CellKind::Op(_) => {
+            CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => {
                 return Err(CellFault::Internal("a cell of the wrong kind"));
             }
         };
         waiters.push(Waiter::Task(me));
+        Ok(None)
+    }
+
+    /// `park` の仕事の枝。取り消しの地点を先に見ない。仕事は取り消せず、取り消しは仕事が終わってから `resumed` が
+    /// 届けるからである。終わった仕事では待ち手を登録せず、すぐ再開の項を返す (docs/spec/vm.md の
+    /// 「取り消しの届け方」)。
+    fn park_job(
+        &mut self,
+        target: CellRef,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        let job = self.job_mut(target)?;
+        if job.submitter != me {
+            return Err(CellFault::Internal(
+                "a task waits for the job of another task",
+            ));
+        }
+        let done = job.end.is_some();
+        self.suspend(me)?;
+        self.stats.parks += 1;
+        let task = self.task_mut(me)?;
+        if done {
+            task.woke_from_job = true;
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                k,
+                wake: WOKE,
+            }));
+        }
+        task.k = Some(k);
+        task.wait = Some(Wait::Job(target));
+        self.job_mut(target)?.waiter = Some(me);
         Ok(None)
     }
 
@@ -1912,7 +2010,7 @@ impl Registry {
         let waiters = match self.cell_mut(cell)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
-            CellKind::Chan(_) | CellKind::Op(_) => {
+            CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => {
                 return Err(CellFault::Internal("a cell of the wrong kind"));
             }
         };
@@ -2386,7 +2484,7 @@ impl Registry {
                 }
             }
             Some(Wait::Signal(index)) => self.signal_waiters[index].retain(|&t| t != cell),
-            Some(Wait::Ready | Wait::Io(_)) | None => {}
+            Some(Wait::Ready | Wait::Io(_) | Wait::Job(_)) | None => {}
         }
         self.stats.cancels += 1;
         out.extend(self.wake_cell(cell, CANCELLED, None)?);
@@ -2452,6 +2550,7 @@ impl Registry {
                 Some(CellKind::Task(_)) => self.free_task(cell, discards)?,
                 Some(CellKind::Scope(_)) => self.release(cell.index),
                 Some(CellKind::Chan(_)) => self.free_chan(cell, discards)?,
+                Some(CellKind::Job(_)) => self.free_job(cell, discards)?,
                 Some(CellKind::Op(_)) | None => {}
             }
         }
@@ -2479,6 +2578,77 @@ impl Registry {
     }
 }
 
+/// `compute` の仕事のセル (docs/spec/vm.md の「`compute` の仕事」)。`fork_job` の行が作り、仕事の終わりが
+/// `finish_job` で終わりを置いて待ち手を起こし、出したタスクの `take_job` か `drop_job` の行が放す。
+impl Registry {
+    /// タスク `submitter` が出した、論理的な ID `worker` で動く仕事のセルを作る。
+    pub(crate) fn new_job(&mut self, worker: u32, submitter: CellRef) -> CellRef {
+        self.alloc(CellKind::Job(JobCell {
+            worker,
+            submitter,
+            end: None,
+            waiter: None,
+        }))
+    }
+
+    /// 仕事 `cell` の終わり `end` を置き、待っているタスクがいれば起こしを `out` に積む。
+    pub(crate) fn finish_job(
+        &mut self,
+        cell: CellRef,
+        end: JobEnd,
+        out: &mut Vec<Woken>,
+    ) -> Result<(), CellFault> {
+        let job = self.job_mut(cell)?;
+        if job.end.is_some() {
+            return Err(CellFault::Internal("a job ends twice"));
+        }
+        job.end = Some(end);
+        let Some(t) = job.waiter.take() else {
+            return Ok(());
+        };
+        let task = self.task_mut(t)?;
+        if !matches!(task.wait, Some(Wait::Job(c)) if c == cell) {
+            return Err(CellFault::Internal(
+                "a job wakes a task that does not wait for it",
+            ));
+        }
+        task.woke_from_job = true;
+        out.extend(self.wake_cell(t, WOKE, None)?);
+        Ok(())
+    }
+
+    /// タスク `me` が token `raw` の終わった仕事を取り出し、セルを放す。仕事の ID と終わりを返す。終わりの語は仕事の ID
+    /// の物体なので、呼ぶ側が lock を放してから `transfer_back` し、ID を退かせる。
+    pub(crate) fn take_job(&mut self, raw: i64, me: CellRef) -> Result<(u32, JobEnd), CellFault> {
+        let cell = CellRef::decode(raw);
+        let job = self.job_mut(cell)?;
+        if job.submitter != me {
+            return Err(CellFault::Internal("a task takes the job of another task"));
+        }
+        if job.end.is_none() {
+            return Err(CellFault::Internal("a job is taken before it ends"));
+        }
+        let Some(CellKind::Job(job)) = self.slots[cell.index as usize].1.take() else {
+            unreachable!("the job cell is live");
+        };
+        self.release(cell.index);
+        let end = job.end.expect("the end is checked above");
+        Ok((job.worker, end))
+    }
+
+    /// run の終わりに残った仕事のセルを放す。終わりの語を仕事の ID の下で落とし、ID を退かせることを `discards` に積む。
+    fn free_job(&mut self, cell: CellRef, discards: &mut Discards) -> Result<(), CellFault> {
+        let job = self.job_mut(cell)?;
+        let (worker, end) = (job.worker, job.end.take());
+        if let Some(end) = end {
+            discards.word(end.word(), worker);
+        }
+        discards.retire(worker);
+        self.release(cell.index);
+        Ok(())
+    }
+}
+
 /// driver の操作の記録 (docs/spec/vm.md の「操作の記録」)。受け付けの行が buffer とストリームを記録に移して
 /// token を返し、`park_io` が待ち、結果を当てる `settle_op` が再開し、取り出しの行が記録を放す。driver の結果は、
 /// 受け付けでその場で終わったものと集める地点の完了の2つの道から届き、どちらも host が `arrive` で記録に置いてから
@@ -2487,9 +2657,9 @@ impl Registry {
     fn op_mut(&mut self, op: CellRef) -> Result<&mut OpRecord, CellFault> {
         match self.cell_mut(op)? {
             CellKind::Op(record) => Ok(record),
-            CellKind::Task(_) | CellKind::Scope(_) | CellKind::Chan(_) => Err(CellFault::Internal(
-                "an op reference names another kind of cell",
-            )),
+            CellKind::Task(_) | CellKind::Scope(_) | CellKind::Chan(_) | CellKind::Job(_) => Err(
+                CellFault::Internal("an op reference names another kind of cell"),
+            ),
         }
     }
 
@@ -4469,6 +4639,21 @@ pub(crate) fn finish<M: Mode>(
     discards.run(ctx, depth_offset)
 }
 
+/// 仕事 `cell` を `end` で終え、待っていたタスクの起こしを worker `here.me` で走らせる仕事にして `out` に積むか、
+/// ほかの worker の持ち主へ送る。語には触れないので、lock の下では `Ctx` もヒープも呼ばない。
+pub(crate) fn finish_job(
+    shared: &Shared,
+    here: &Here,
+    cell: CellRef,
+    end: JobEnd,
+    out: &mut Vec<Runnable>,
+) -> Result<(), CellFault> {
+    let mut cells = shared.lock();
+    let mut woken = Vec::new();
+    cells.finish_job(cell, end, &mut woken)?;
+    cells.route(&mut woken, here, out)
+}
+
 /// mail の項を処理し、取り消しで待ちを外したタスクを worker `here.me` で再開する仕事を `out` に積む。どの worker も
 /// 呼んでよく、落ちたハンドルとシグナルの項は最初に集めた worker が、取り消しの項はその持ち主が処理する。項は葉の
 /// lock の下でまとめて取り出してから処理し、処理が新しい項を積むので、取り出す項がなくなるまで繰り返す。項ごとに短い lock の区間で処理し、lock を放してから、その項の driver への
@@ -4755,6 +4940,7 @@ fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
         shield: 0,
         budget: BUDGET,
         fast_yield: false,
+        woke_from_job: false,
         run: None,
         detached: false,
     }))
@@ -4831,6 +5017,105 @@ fn unparking_a_sleeping_task_removes_its_timer() {
     out.clear();
     expire(&registry, &mut NoDriver::default(), 0, 50, &mut out).unwrap();
     assert_eq!(resumed_cells(&out), [(second, WOKE)]);
+}
+
+/// 仕事の待ちは取り消しで外れない。待つタスクは継続だけになって登録表にあり、取り消しは仕事が終わってからの再開で
+/// 1回だけ数える (docs/spec/vm.md の「取り消しの届け方」)。
+#[test]
+fn a_cancel_leaves_a_task_parked_on_a_job() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let job = registry.lock().new_job(1, me);
+    assert!(
+        registry
+            .lock()
+            .park(job.encode(), me, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    {
+        let mut cells = registry.lock();
+        let task = cells.task_mut(me).unwrap();
+        assert!(task.k.is_some());
+        assert!(matches!(task.wait, Some(Wait::Job(c)) if c == job));
+    }
+    registry.lock().task_mut(me).unwrap().cancel = true;
+    let mut woken = Vec::new();
+    let mut work = IoWork::default();
+    registry
+        .lock()
+        .cancel_task(me, &solo(&registry), &mut woken, &mut work)
+        .unwrap();
+    assert!(woken.is_empty());
+    assert_eq!(registry.lock().stats.cancels, 0);
+    let mut out = Vec::new();
+    finish_job(
+        &registry,
+        &solo(&registry),
+        job,
+        JobEnd::Value(Word::UNIT),
+        &mut out,
+    )
+    .unwrap();
+    assert_eq!(resumed_cells(&out), [(me, WOKE)]);
+    assert_eq!(registry.lock().resumed(me, WOKE, false).unwrap(), CANCELLED);
+    assert_eq!(registry.lock().stats.cancels, 1);
+    let (worker, end) = registry.lock().take_job(job.encode(), me).unwrap();
+    assert_eq!(worker, 1);
+    assert!(matches!(end, JobEnd::Value(_)));
+}
+
+/// 終わった仕事への park は待ち手を登録せず、すぐ再開の項を返す。待ちは数える。
+#[test]
+fn a_task_parked_on_a_finished_job_resumes_at_once() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let job = registry.lock().new_job(1, me);
+    let mut out = Vec::new();
+    finish_job(
+        &registry,
+        &solo(&registry),
+        job,
+        JobEnd::Value(Word::UNIT),
+        &mut out,
+    )
+    .unwrap();
+    assert!(out.is_empty());
+    let run = registry.lock().park(job.encode(), me, Word::UNIT).unwrap();
+    assert!(matches!(
+        run,
+        Some(Runnable::Resume { cell, wake: WOKE, .. }) if cell == me
+    ));
+    assert_eq!(registry.lock().stats.parks, 1);
+    assert!(registry.lock().job_mut(job).unwrap().waiter.is_none());
+    assert_eq!(registry.lock().resumed(me, WOKE, false).unwrap(), WOKE);
+    registry.lock().take_job(job.encode(), me).unwrap();
+}
+
+/// 仕事を待てるのも取り出せるのも、出したタスクだけである (docs/spec/vm.md の「セルと登録表」)。
+#[test]
+fn a_job_of_another_task_is_an_internal_error() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let other = running_task(&registry, scope);
+    let job = registry.lock().new_job(1, me);
+    assert!(matches!(
+        registry.lock().park(job.encode(), other, Word::UNIT),
+        Err(CellFault::Internal(
+            "a task waits for the job of another task"
+        ))
+    ));
+    assert!(matches!(
+        registry.lock().take_job(job.encode(), other),
+        Err(CellFault::Internal("a task takes the job of another task"))
+    ));
+    assert!(matches!(
+        registry.lock().take_job(job.encode(), me),
+        Err(CellFault::Internal("a job is taken before it ends"))
+    ));
 }
 
 #[test]

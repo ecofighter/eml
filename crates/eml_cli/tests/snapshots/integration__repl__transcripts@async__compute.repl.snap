@@ -1,0 +1,27 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/async/compute.repl
+---
+> import Async (Async)
+> import Fail (Fail(..))
+> import List
+> effect Stop where
+.   never stop : Unit -> a
+.
+> let xs = [1, 2, 3]
+> Async.run (fn () -> Async.compute (fn () -> 40 + 2))
+42
+> Async.run (fn () -> handle Async.compute (fn () -> stop ()) with | ctl stop () -> 0)
+0
+> Async.run (fn () -> Async.compute (fn () -> List.length xs))
+3
+> effect Stop2 where
+.   never stop2 : Int -> a
+.
+> Async.run (fn () -> handle Async.compute (fn () -> stop2 7 + 1) with | ctl stop2 n -> n * 2)
+14
+> Async.run (fn () -> Fail.to_result (fn () -> Async.compute (fn () -> Fail.fail "no")))
+Err "no"
+--- close ---
+no leaks

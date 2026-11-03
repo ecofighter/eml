@@ -275,6 +275,10 @@ pub(crate) const MAIN: TaskId = 0;
 /// ほかの worker に置いた右の子を表す、join の節点の `right`。置いた子はこの worker の表にない。
 pub(crate) const PLACED: TaskId = usize::MAX;
 
+/// `compute` の仕事の `Task` の `boundaries[0]` と境目のフレームの slot 1 に置く番兵の join。仕事は join の節点を
+/// 持たず、終わりを仕事のセルに置く (docs/spec/vm.md の「`compute` の仕事」)。
+pub(crate) const JOB: JoinId = usize::MAX;
+
 /// 監視のスレッドのない run で、空きのループが1回の `wait` に渡す期限の上限 (ミリ秒)。Ctrl-C と確保量の上限が眠る
 /// worker を止めるまでの遅れの上限になる (docs/spec/vm.md の「時計と driver」)。
 const WAIT_CAP_MS: u64 = 10;

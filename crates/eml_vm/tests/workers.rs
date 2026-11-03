@@ -398,6 +398,44 @@ main () =
     assert_eq!(placed.to_string(), alone.to_string());
 }
 
+/// `compute` の仕事の深さの上限は、`Panic` でない実行時エラーなので、その場で run を止める。文言は worker の数によらない
+/// (docs/spec/vm.md の「`compute` の仕事」)。
+#[test]
+fn a_depth_error_in_a_job_stops_the_run() {
+    let src = "\
+import Async
+deep : Int -> <Panic> Int
+deep n = if n == 0 then 0 else 1 + deep (n - 1)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let d = Async.start (fn () -> ())
+  Async.await d
+  Async.sleep_ms 1
+  println \"before\"
+  println (show (Async.compute (fn () -> deep 100000))))
+";
+    let program = eml_test_support::lir(src);
+    let depth = |workers| {
+        Arc::new(Control::new(Limits {
+            workers,
+            max_depth: 4096,
+            ..Limits::default()
+        }))
+    };
+    let (alone_out, alone) = run_program(&program, depth(1));
+    let (out, other) = run_program(&program, depth(2));
+    let (alone, other) = (alone.unwrap_err(), other.unwrap_err());
+    assert_eq!(alone_out, "before\n");
+    assert_eq!(out, "before\n");
+    assert!(
+        alone
+            .to_string()
+            .starts_with("the call depth limit is exceeded"),
+        "{alone}"
+    );
+    assert_eq!(other.to_string(), alone.to_string());
+}
+
 /// 置いた右の子の誤りの後、`Machine` は2つのヒープを回復して続ける。worker 1 のヒープは回復の後に落ちる。同じ
 /// `Machine` の次の run も worker を作り、閉じるときのリークの確かめも通る。
 #[test]

@@ -334,7 +334,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 - `left` と `right` は2つの引数、`pair` は `tuple_layout(2)` の `TUPLE` の構築子、`at` は `par` の名前の位置である。結果は組の型の変数 (`obj` か構造体) にそのまま束ねる。構造体なら、box の挿入が `obj` からの `unbox` を足す ([LIR](lir.md) の「box の挿入」)。タプルの配置の欄はどれも `tobj` なので (上の「translate の配置」)、構造体の箱は VM が作る組と同じ形である
 - `mask` は、型検査が最後の矢印 (2つ目の引数の矢印) に記録したものである。`par` の結果の row は開いた `<e>` なので、`foo : (Unit -> <never e> Int) -> <Fail String | e> (Int, Int)` の本体の `Par.par h h` は `mask [Std.Fail.Fail] par (,) #0(h.0, h.0)` になる。`h` が起こす `Fail` は、`foo` の `Fail` を飛ばして呼んだ側の handler に届く
 - 部分適用 (`Par.par f`) と値として使う `Par.par` は、ほかの extern と同じく `$externN` で包む (上の「変換の規則」)。包む関数の本体も同じ `par` の呼び出しを、同じ関数 (`ProgramBuilder::extern_call`) で作る。本体は最後の矢印の呼び出しでないので `mask` を持たず、`mask` は包む関数を呼ぶ `apply` が持つ。結果は組で関数でないので、`par` に余る引数はない
-- 最適化は `par` をほかの文と同じく扱う。yield の地点でなく、handler に触れず (下の「handler への特殊化」)、到達の解析は2つの子をたどる。never だけのエフェクトの handler は最適化で消えないので、子の中断を起こし直すとき、親はいつもその evidence を持つ。handle を消すのは handler への特殊化だけで、それは操作がどれも `never` のエフェクトを断り、展開は `handle` を持つ関数を断るためである
+- 最適化は `par` をほかの文と同じく扱う。yield の地点でなく、handler に触れず (下の「handler への特殊化」)、到達の解析は2つの子をたどる。never だけのエフェクトの handler は最適化で消えないので、子の中断を起こし直すとき、親はいつもその evidence を持つ。`compute` の仕事の中断を起こし直すときも同じである。handle を消すのは handler への特殊化だけで、それは操作がどれも `never` のエフェクトを断り、展開は `handle` を持つ関数を断るためである
 
 ### ローカル関数の持ち上げ
 
@@ -1084,6 +1084,7 @@ b_fast:
   - 本体は `ev_lookup[E]`、`ev_clause[E.op]`、`clause` で操作を起こす。普通の `perform` と同じく、今の `evv` の最初の `E` の evidence で起こす
   - `Prelude.Panic` は `extern Prelude.panic(a_1)` で起こし直す。位置は持たない。`try_panic` がなければ、`panic` と同じく実行時エラーになる
 - 実行系は、親の文脈で `reperform$E.op` を呼ぶ前に、子の操作が届いた handler の evidence が `evv` の最初の `E` の evidence になるように `evv` を整える。`reperform$` は深さを受け取らず、整えた `evv` の最初の `E` の evidence で起こす。fork と join の手順と、子の evidence の作り方は VM の側が決める ([VM](vm.md) の「`par` の fork と join」)
+- `Std.Async.compute` の仕事も同じ fork evidence で中断する。仕事の操作は、仕事が終わった後で、出したタスクの `take_job` が同じ `reperform$E.op` で起こし直す ([VM](vm.md) の「`compute` の仕事」)
 
 ## Core IR から LIR への変換
 

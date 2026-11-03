@@ -166,6 +166,17 @@ shield f =
       shield_leave ()
       reraise e
 
+-- `f ()` を子が1つの `par` と同じ仕事として動かし、呼んだタスクだけが待つ。仕事の後でだけ働く取り消しの地点で、
+-- 取り消されていれば結果を落として投げる (docs/spec/stdlib.md の「`compute`」)
+pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
+compute f =
+  let (c, j) = job_cell (fork_job f)
+  match await_cell c with
+    | Woke -> take_job j
+    | Cancelled ->
+      drop_job j
+      raise_cancelled ()
+
 -- `ms` ミリ秒待つ取り消しの地点。0 以下なら実行待ちの列の後ろへ回るだけである (docs/spec/stdlib.md の「時間」)
 pub sleep_ms : Int -> <IO, Async> Unit
 sleep_ms ms =
@@ -329,7 +340,7 @@ signal_wait s =
 resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit
 resume_io k w op = k (w, op)
 
--- ランタイムのインターフェース。生の行を `pub` にせず、結果の型の `a` は `start`、`start_in`、`run`、`await` のシグネチャだけが結ぶ。
+-- ランタイムのインターフェース。生の行を `pub` にせず、結果の型の `a` は `start`、`start_in`、`run`、`await`、`compute` のシグネチャだけが結ぶ。
 -- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`run_raw`、`ready`、`finish_ok`、
 -- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`park_drain`、`park_send`、
 -- `park_recv`、`park_io`、`park_signal`、`start_in_raw` の2つ目の引数、`park_io_until` の3つ目の引数、`task_cell` の引数
