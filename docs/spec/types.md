@@ -58,7 +58,7 @@ data Iter <e> a =
 
 ### row 変数の多重度の上限
 
-次の2つは、並列の API の `par` ([マルチコア対応の設計](../future/multicore.md)) と、非同期の API の `compute` ([非同期の設計](../future/async.md)) のシグネチャである。`par` は `Std.Par` の extern の関数である ([標準ライブラリ](stdlib.md) の「`Std.Par`」)。`compute` は `Std.Async` の関数である ([標準ライブラリ](stdlib.md) の「`compute`」)。
+次の2つは、並列の API の `par` ([マルチコア対応の設計](../future/multicore.md)) と、非同期の API の `compute` ([標準ライブラリ](stdlib.md) の「`compute`」) のシグネチャである。`par` は `Std.Par` の extern の関数である ([標準ライブラリ](stdlib.md) の「`Std.Par`」)。`compute` は `Std.Async` の関数である ([標準ライブラリ](stdlib.md) の「`compute`」)。
 
 ```haskell
 par     : (Unit -> <never e> a) -> (Unit -> <never e> b) -> <e> (a, b)

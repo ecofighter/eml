@@ -28,7 +28,6 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `async-compute`: タスクから CPU を使う仕事を子が1つの `par` の仕事として出し、終わるまでそのタスクだけを待たせる `Async.compute` を入れる。待つ間、worker はほかのタスクを動かす。前提: なし。設計: [非同期の設計](async.md) の「`compute`」
 - `async-rescue`: 詰まった worker のタスクを、空いた worker が救済する。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「救済」、同じ文書の「`Async` のタスク」
 - `task-limits`: タスクごとに深さ、スタック、メモリの上限を設け、超えたタスクだけを IO の失敗 `ResourceLimit` で止める。メモリの硬い上限は今と同じく run 全体を止める。安全点と末尾でない呼び出しの位置が、巻き戻しの地点になる。前提: なし。設計: [非同期の設計](async.md) の「タスクごとの上限」
 - `async-files`: 非同期のファイルと、子のプロセスのパイプを入れる。今のブロックする std の行では書けない次の3つを書けるようにする。前提: なし。設計: [非同期の設計](async.md) の「ファイルとパイプ」
@@ -61,7 +60,7 @@
 - `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`task-limits`、`async-rescue`、`async-files`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
 - `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 のエントリの stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
 - `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の実装の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`、`raw-arrays`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
-- `par-steal`: VM の `par` の右の子を、空いている worker の受け箱に置く形から、worker ごとの Chase-Lev の deque と盗みに替える。join の待ちと、子の終わりを親の worker へ知らせる道は、今のものをそのまま使う。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
+- `par-steal`: VM の `par` の右の子を、空いている worker の受け箱に置く形から、worker ごとの Chase-Lev の deque と盗みに替える。join の待ちと、子の終わりを親の worker へ知らせる道は、今のものをそのまま使う。呼んだ worker に積んだ `compute` の仕事も、右の子と同じく盗まれる。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
 - `std-par`: `std/Par` のデータ並列の集まりの関数と、添字の範囲のプリミティブを入れる。前提: `par-steal`、`raw-arrays`。設計: [マルチコア対応の設計](multicore.md) の「データ並列での使い勝手」
 - `native-par`: ネイティブのコードで、join で待つ worker が手伝う fork / join を動かす。前提: `native-inline`、`std-par`、`jit-effects`。設計: [ネイティブ化の設計](native.md) の「並列の実行」
 
@@ -262,6 +261,9 @@
 - `IO` 以外のエフェクトを既定の handler で許すか。許すなら、handler のない操作の yield を REPL が受け取る
 - セッションの値への連結は、RC が 2 以上になるので、いつも写しになる
 - 定義し直した `let` の古い根を手放す順序。今は古い根を `close` まで手放さない ([オブジェクトモデル](../spec/object-model.md) の「セッションの根」)
+- REPL の入力が、前の読み込みで翻訳したコードを通してだけ `fork_job` や `par` に届くとき、その間に宣言した never だけのエフェクトには fork の表がなく、内部の誤り `a never-only evidence of a par parent has no fork table` で止まりうる。`compute` の REPL のトランスクリプトでは再現していない
+  - 後に回した理由: 再現する入力が見つかっていない。
+  - 見直す条件: この誤りで止まる REPL の入力が見つかったとき。
 - 凍結のときに生きている物体を詰め直して、塊のページを減らすこと。塊は使う大きさの級ごとに少なくとも1ページを持つので、新しい定数を持つ入力ごとに塊を作ると、使うメモリは入力の数に比例して増える ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)。トップレベルの値の1回だけの評価 (上の「言語機能と構文」) を入れると、塊はさらに増える。困ったときに入れる
 - 入力ごとにセッション全体を検査し直すので、セッションが大きくなるほど入力ごとの時間が延びる。困ったら増分の lowering に移る。名前が同じ関数はいつも同じコードになる規則 ([Core IR](../spec/core-ir.md) の「変換の規則」) があるので、後から移れる
 

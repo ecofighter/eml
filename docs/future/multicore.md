@@ -113,6 +113,7 @@ worker のループは、ほかに仕事がなくなるまで次の順に見る�
 
 - `par` の fork と join は実行系 (VM ではタスクと join の節点を持つ `eml_vm`) が行い、印付けと移し戻しは `eml_rt` の `share` と `transfer_back` を呼ぶ ([VM](../spec/vm.md) の「`par` の fork と join」)。fork はまだ始まっていない右の子を自分の deque に積み、左の子を自分で動かす。空いた worker は deque の上から盗む
 - deque を入れるまでの VM では、fork は空いている worker があれば右の子をその受け箱に置き、なければ自分の実行待ちに積む。置いた子の終わりは、結果ごと親の worker の受け箱に知らせる ([VM](../spec/vm.md) の「`par` の fork と join」)。`Async` のタスクは、`start` のときに置ける worker を順に回して置き、`Place` の知らせで運ぶ (下の「`Async` のタスク」)
+- `compute` の仕事は join するフレームを持たない fork の子で、`par-steal` では deque の項になり、終わりで仕事のセルを終える ([VM](../spec/vm.md) の「`compute` の仕事」)
 - VM では、join で待つ親の `Task` は join の節点で待ち、worker のループはほかの仕事 (先に `par` の子、次に `Async` のタスク) を動かす。待つ `Task` はデータなので、待つ費用はない。子が終わると、親は横取りした VM のタスクのキューに戻る
 - ネイティブのコードはスタックを切り替えられないので、join で待つ worker は待たずに手伝う。手伝えるのは、待つ join より深い fork の子だけで、ほかに手伝えるものがなければ join の節点で待つ ([ネイティブ化の設計](native.md) の「並列の実行」)。これで待ちが輪になることはない。まだ始まっていない子のうち最も浅いものを深さ d の c とすると、c を fork した親は動いているか、深さ d - 1 の自分の join で待っていて c を取れる。盗まれた子を待つ worker は動いている worker を待っている。`par` の子は有限である
 - 専用の worker は盗まず、自分の join だけを手伝う
@@ -412,7 +413,7 @@ handler の節が `k v` を末尾で1回だけ呼ぶ場合、継続を取り出�
 - タスクは中断の境目である。IO の失敗と `Panic` はタスクの底で止まり、`exit` は下の「止める手順」で run を終える ([非同期の設計](async.md) の「失敗と `exit`」)
 - ユーザー定義のエフェクトはタスクのクロージャの中で handle し終えている必要がある (OCaml 5 の Eio と同じ扱い)。`Heap h` は閉じた row によって除外される
 - 並行処理のための新しい構文は追加しない。ラムダと `use` で書ける ([式](../spec/expressions.md) の「並行処理」)
-- CPU を多く使う仕事は `compute` で `par` の仕事にして、呼んだタスクを待たせる ([非同期の設計](async.md) の「`compute`」)
+- CPU を多く使う仕事は `compute` で `par` の仕事にして、呼んだタスクを待たせる ([標準ライブラリ](../spec/stdlib.md) の「`compute`」)
 
 ## 継続の移動と不変条件
 
