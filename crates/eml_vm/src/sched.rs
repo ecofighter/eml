@@ -911,9 +911,11 @@ impl<P: Policy> Scheduler<P> {
             *own_deadline = cells.next_deadline(k);
             let read = (cells.in_flight(k), *own_deadline, cells.unheard);
             drop(cells);
-            run.slots[k]
-                .settled
-                .fetch_add(settled as u64, Ordering::Relaxed);
+            if settled > 0 {
+                run.slots[k]
+                    .settled
+                    .fetch_add(settled as u64, Ordering::Relaxed);
+            }
             read
         };
         // host として受けた操作を driver に出し、取り消しを頼む。driver がその場で終えた操作は短い区間で結果を置く
@@ -1005,7 +1007,7 @@ impl<P: Policy> Scheduler<P> {
             // 頼みは同じ集める地点で盗むので、処理していない頼みがあるうちに次の頼みは届かない
             debug_assert!(
                 P::RESCUE != Rescue::Always,
-                "a rescue-always request arrives while another is pending"
+                "a RescueAlways request arrives while another is pending"
             );
             return;
         }

@@ -3442,6 +3442,8 @@ impl Registry {
     /// から落とす。取り出すのは受け付けたタスク (`worker`) だけである。
     fn take_op(&mut self, token: i64, worker: u32) -> Result<(Taken, Option<Word>), CellFault> {
         let op = self.op_of(token, worker)?;
+        // 記録の持ち主 (`owner`) はわざと確かめない。救済で移った譲りのタスクは、元の worker を持ち主にした終わった記録を
+        // 持ったまま、救済した worker で取り出すためである (docs/spec/vm.md の「救済」)
         let record = self.op_mut(op)?;
         if !matches!(record.phase, OpPhase::Done(..)) {
             return Err(CellFault::Internal("an op is taken before its completion"));

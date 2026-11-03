@@ -1237,8 +1237,9 @@ fn wait_for_exit(
 }
 
 /// `eml run` では、SIGTERM は `Signal.wait Terminate` で待つタスクに届き、run は続く (docs/spec/stdlib.md の
-/// 「`Std.Signal`」)。逐次の方針では、`yield_now` で待つタスクが待ちに入ってから `ready` を書く。worker を1つに固め、
-/// `yield_now` で待ち手に順を渡す。
+/// 「`Std.Signal`」)。`eml run` の普通の方針で worker を1つに固め、`yield_now` で待ち手に順を渡すので、待ち手が
+/// 待ちに入ってから `ready` を書く。待ち手が `Signal.wait` に着く前に監視のスレッドが横取りすると順が崩れるが、
+/// そうなるのは、その数命令の間にプロセスが1刻み (10 ms) 以上止まったときだけである。
 #[cfg(unix)]
 #[test]
 fn a_terminate_reaches_a_waiting_task() {
@@ -1276,7 +1277,8 @@ main () = Async.run (fn () ->
 }
 
 /// 届けた後のシグナルは1回目として扱う。待つタスクがもういないので、2回目の Ctrl-C は run を止め、終了コードは 130 で
-/// ある (docs/spec/vm.md の「上限と割り込み」)。worker を1つに固め、`yield_now` で待ち手に順を渡す。
+/// ある (docs/spec/vm.md の「上限と割り込み」)。worker を1つに固め、`yield_now` で待ち手に順を渡す。順が崩れうるのは、
+/// `a_terminate_reaches_a_waiting_task` と同じく、待ち手が待ちに入る前にプロセスが1刻み以上止まったときだけである。
 #[cfg(unix)]
 #[test]
 fn an_interrupt_after_a_delivered_one_ends_the_program_with_130() {
@@ -1328,7 +1330,8 @@ main () = Async.run (fn () ->
 
 /// 待つタスクがいても、worker が標準入力の読みで止まっていれば、シグナルは読みが戻るまで届かない。届けていない間の
 /// 2回目のシグナルは、ハンドラがその場で終わらせる (docs/spec/vm.md の「上限と割り込み」)。worker を1つに固め、
-/// `yield_now` で待ち手に順を渡す。
+/// `yield_now` で待ち手に順を渡す。横取りで待ち手が待ちに入る前に `ready` を書いても、worker は読みで止まって
+/// 1回目のシグナルを聞けないので、終わり方は変わらない。
 #[cfg(unix)]
 fn a_second_signal_ends_a_program_whose_waiter_cannot_be_reached(
     name: &str,

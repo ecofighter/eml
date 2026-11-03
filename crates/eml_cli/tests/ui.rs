@@ -339,13 +339,12 @@ fn assert_workers_agree(
         } else {
             compares_stats(checked, &ran)
         };
-        assert_agrees(
-            suffix,
-            &workers_label(workers, sched, signals),
-            &ran,
-            checked,
-            compare,
+        let label = format!(
+            "{}; {}",
+            workers_label(workers, sched, signals),
+            rerun_hint(path)
         );
+        assert_agrees(suffix, &label, &ran, checked, compare);
         // `run-fail/` の run は誤りで終わるので `finished` を持たない
         if suffix.starts_with("async/")
             && let Some(finished) = ran.finished
@@ -368,7 +367,6 @@ fn seeded(suffix: &str) -> bool {
     suffix.starts_with("par/") || suffix.starts_with("async/")
 }
 
-/// 食い違ったときの文言に、同じ実行を再現するコマンドを書く。スケジュールは seed とプログラムと入力だけで決まる。
 /// シグナルの印は CLI で書けないので、印のあるファイルではそのことを添える。
 fn seeded_label(seed: u64, signals: &[VirtualSignal]) -> String {
     let marks = if signals.is_empty() {
@@ -376,8 +374,19 @@ fn seeded_label(seed: u64, signals: &[VirtualSignal]) -> String {
     } else {
         " with the signal marks of the file"
     };
+    format!("seed {seed} in checked mode on the virtual driver{marks}")
+}
+
+/// 食い違ったときの文言に、`path` の run を流し直すコマンドを書く。seed と worker の方針の run は CLI で選べないので、
+/// ファイルを流すテストごと流し直す。テストの名前は `path` の上の階層 (`run/` か `run-fail/`) で決まる。
+fn rerun_hint(path: &Path) -> String {
+    let test = if path.starts_with(ui_root().join("run-fail")) {
+        "run_fail"
+    } else {
+        "run"
+    };
     format!(
-        "seed {seed} in checked mode on the virtual driver; rerun with `EML_UI_FILTER=<file> cargo nextest run -p eml_cli --test integration -E 'test(=ui::run)'`{marks}"
+        "rerun with `EML_UI_FILTER=<file> cargo nextest run -p eml_cli --test integration -E 'test(=ui::{test})'`"
     )
 }
 
@@ -402,7 +411,8 @@ fn assert_seeds_agree(
         } else {
             Compare::Nothing
         };
-        assert_agrees(suffix, &seeded_label(seed, signals), &ran, checked, compare);
+        let label = format!("{}; {}", seeded_label(seed, signals), rerun_hint(path));
+        assert_agrees(suffix, &label, &ran, checked, compare);
         if let Some(finished) = ran.finished {
             assert!(
                 finished.preemptions > 0,
