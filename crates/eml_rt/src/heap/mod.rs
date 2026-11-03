@@ -3024,12 +3024,112 @@ impl<M: Mode> Heap<M> {
         Ok(())
     }
 
-    /// 箱を空ける。`Foreign` なら破棄処理を呼ぶ。破棄処理が panic しても同じ値を二度破棄しないように、箱を先に
-    /// 死んだことにしてから呼ぶ (箱は漏れてよい)。検査モードは箱を使い回さず、前置きを「解放」にして隔離する。
+    /// 箱を空ける。ほかのヒープのページの物体はそのヒープに返す。速いモードで破棄処理のない局所の物体は、空きリストに
+    /// 積むだけで済ませる。破棄処理を呼ぶ物体と検査モードは `free_box_slow` に任せる。
     // 展開すると `release` と `release_reuse` が大きくなり、呼ぶ側に展開されなくなる。そうなると、呼ぶ側が渡す `keep`
-    // の定数で枝を畳めない
+    // の定数で枝を畳めない。速いモードの局所の道は関数を呼ばない葉の道に保ち、退避するレジスタを持たせない
+    // (docs/implementation/benchmarks.md の「局所の解放の費用とコード生成単位」)
     #[inline(never)]
     fn free_box(&mut self, h: *mut Header, Ghost(c): Ghost<bool>)
+        requires
+            !M::CHECKED ==> c,
+            c ==> old(self).core.full(),
+            c ==> forall|j: int|
+                !(#[trigger] old(self).core.model@.edges.dom().contains((h@.addr, j))),
+            M::CHECKED ==> old(self).core.safe_wf(),
+            old(self).core.checked() == M::CHECKED,
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.state(h@.addr) == BlockState::Dying,
+        ensures
+            final(self).building == old(self).building,
+            M::CHECKED ==> final(self).core.pages == old(self).core.pages,
+            final(self).core.model@.tokens == old(self).core.model@.tokens,
+            final(self).tokens == old(self).tokens,
+            c ==> final(self).core.full(),
+            M::CHECKED ==> final(self).core.safe_wf(),
+            c ==> final(self).core.boxed_off(old(self).core, h@.addr),
+            final(self).core.env == old(self).core.env,
+            final(self).core.active() == old(self).core.active().remove(h@.addr),
+            forall|b: usize|
+                b != h@.addr && old(self).core.dom().contains(b)
+                    ==> final(self).core.dom().contains(b) && #[trigger] final(self).core.perms@[b]
+                    == old(self).core.perms@[b],
+            forall|b: usize|
+                b != h@.addr ==> #[trigger] final(self).core.state(b) == old(self).core.state(b),
+            forall|w: Word|
+                old(self).core.word_ok(w) && (w.is_ptr_spec() ==> w.bits_spec() != h@.addr)
+                    ==> #[trigger] final(self).core.word_ok(w),
+            M::CHECKED ==> final(self).core.dom() == old(self).core.dom(),
+            M::CHECKED ==> forall|w: Word| #[trigger]
+                final(self).core.word_ok(w) == old(self).core.word_ok(w),
+            final(self).core.model@.building == old(self).core.model@.building,
+            old(self).core.model@.building is None ==> final(self).core.kept_live(old(self).core),
+            final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
+            final(self).worker == old(self).worker,
+    {
+        let ghost s0 = self.core;
+        proof {
+            s0.lemma_shape(h@.addr);
+            if c {
+                s0.lemma_at(h@.addr);
+                reveal(Core::refs_wf);
+                assert(s0.counted_wf(h@.addr));
+            }
+        }
+        if M::CHECKED {
+            // 局所の物体の最後の `decref` は rc を 1 のまま残す。共有の物体は数から外してあるので、rc が 0 か負で届く
+            if self.core.rc_get(h) > 0 {
+                let owner = self.core.prefix_first_get(h);
+                self.owned.count_id(owner, false);
+            }
+        }
+        let tracked hdr = self.core.pages.tracked_block_header(h@.addr);
+        proof {
+            self.core.pages.lemma_carved_page(h@.addr);
+        }
+        if !self.core.pages.owns(h, Tracked(hdr)) {
+            // ほかのヒープのページの物体は、そのヒープに返す (docs/spec/object-model.md の「別のスレッドからの解放」)。
+            // モデルの `dom` はこのヒープのページのブロックだけを持つので、証明の上ではこの道に来ない。来るのは、
+            // ほかのヒープの語を受けた呼び出しで、その語の前提は信頼の一覧の T14 の約束による
+            self.free_remote(h);
+            return;
+        }
+        if M::CHECKED || self.core.meta_get(h).has_finalizer() {
+            self.free_box_slow(h, Ghost(c));
+            return;
+        }
+        let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
+        proof {
+            self.core.model = Ghost(
+                Model {
+                    state: s0.model@.state.remove(h@.addr),
+                    refs: s0.model@.refs.remove(h@.addr),
+                    stuck: s0.model@.stuck.remove(h@.addr),
+                    owner: s0.model@.owner.remove(h@.addr),
+                    written: s0.model@.written.remove(h@.addr),
+                    ..s0.model@
+                },
+            );
+        }
+        self.core.pages.free(h, Tracked(perm));
+        proof {
+            self.core.lemma_block_released(s0, h@.addr);
+            assert(self.core.active() =~= s0.active().remove(h@.addr));
+            assert(self.core.dom() =~= s0.dom().remove(h@.addr));
+            if s0.model@.building is None {
+                self.core.lemma_kept_live_at(s0, h@.addr);
+            }
+        }
+    }
+
+    /// `free_box` の残りの道。`Foreign` なら破棄処理を呼ぶ。破棄処理が panic しても同じ値を二度破棄しないように、箱を
+    /// 先に死んだことにしてから呼ぶ (箱は漏れてよい)。検査モードは箱を使い回さず、前置きを「解放」にして隔離する。
+    /// 検査モードの持ち主の数は `free_box` が直してある。
+    #[cold]
+    #[inline(never)]
+    fn free_box_slow(&mut self, h: *mut Header, Ghost(c): Ghost<bool>)
         requires
             !M::CHECKED ==> c,
             c ==> old(self).core.full(),
@@ -3086,24 +3186,6 @@ impl<M: Mode> Heap<M> {
                 reveal(Core::refs_wf);
                 assert(s0.counted_wf(h@.addr));
             }
-        }
-        if M::CHECKED {
-            // 局所の物体の最後の `decref` は rc を 1 のまま残す。共有の物体は数から外してあるので、rc が 0 か負で届く
-            if self.core.rc_get(h) > 0 {
-                let owner = self.core.prefix_first_get(h);
-                self.owned.count_id(owner, false);
-            }
-        }
-        let tracked hdr = self.core.pages.tracked_block_header(h@.addr);
-        proof {
-            self.core.pages.lemma_carved_page(h@.addr);
-        }
-        if !self.core.pages.owns(h, Tracked(hdr)) {
-            // ほかのヒープのページの物体は、そのヒープに返す (docs/spec/object-model.md の「別のスレッドからの解放」)。
-            // モデルの `dom` はこのヒープのページのブロックだけを持つので、証明の上ではこの道に来ない。来るのは、
-            // ほかのヒープの語を受けた呼び出しで、その語の前提は信頼の一覧の T14 の約束による
-            self.free_remote(h, finalizer);
-            return;
         }
         let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
         if M::CHECKED {
@@ -3170,7 +3252,7 @@ impl<M: Mode> Heap<M> {
     /// する。このヒープの数、隔離のバイト数、確保器には触れない。
     // 局所の解放の道を小さく保つため、展開させない
     #[inline(never)]
-    fn free_remote(&mut self, h: *mut Header, finalizer: Option<foreign::Finalizer>)
+    fn free_remote(&mut self, h: *mut Header)
         requires
             old(self).core.sound(),
             old(self).core.dom().contains(h@.addr),
@@ -3180,6 +3262,13 @@ impl<M: Mode> Heap<M> {
         proof {
             self.core.lemma_shape(h@.addr);
         }
+        let meta = self.core.meta_get(h);
+        let finalizer = if meta.has_finalizer() {
+            let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
+            Some(finalizer_of(h, Tracked(p)))
+        } else {
+            None
+        };
         let sink = page_sink_of(h, Tracked(None));
         let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
         if M::CHECKED {
