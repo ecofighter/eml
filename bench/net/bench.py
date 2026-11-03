@@ -1,11 +1,13 @@
 """本物の I/O の物差しを流し、1行1件の JSON (JSONL) を標準出力に出す。
 
-python3 -I bench.py [--runs 11] [--strace-runs 3] [--stats] [--only REGEX] [--no-time] [--no-strace] LABEL=EML[@DIR] ...
+python3 -I bench.py [--runs 11] [--strace-runs 3] [--stats] [--only REGEX] [--no-time] [--no-strace] [--workers 1,2,4] LABEL=EML[@DIR] ...
 
 LABEL=EML@DIR のラベルは、件のプログラムを DIR から読む。前のコミットの eml が今のプログラムを型検査できないとき、
 そのコミットの bench/net を取り出して渡すためである。件の行、引数、相手 (peer.py) はこのディレクトリのものを使う。
 @DIR がなければ、このディレクトリのプログラムを使う。LABEL=EML を2つ以上渡すと、時間の run は件ごとに交互に (1回目は A B、2回目は B A、…) 流す。機械の揺れを片方に
 寄せないためである。--stats は `EML run --stats` (検査モード) を1回流して RunStats を取る。件は cases.tsv の行である。
+--workers はどの run にも `EML run --workers N` を渡す。省くと 1 で、ラベルはそのままである。与えると、どのラベルも各 N で
+流し、ラベルを `LABEL:wN` にする。`Async` のタスクを置く worker の数が、機械の CPU の数で変わらないように固めるためである。
 """
 import json
 import os
@@ -34,11 +36,12 @@ def run(extra, cmd):
 
 
 def command(case, eml, size, stats=False):
-    eml, progs = eml
+    eml, progs, workers = eml
     args = [] if case[size] == "-" else case[size].split()
     if case["name"].startswith("py:"):
         return [sys.executable, "-I", os.path.join(here, "peer.py")] + args
-    return [eml, "run"] + (["--stats"] if stats else []) + [os.path.join(progs, case["prog"])] + args
+    return ([eml, "run", "--workers", str(workers)] + (["--stats"] if stats else []) +
+            [os.path.join(progs, case["prog"])] + args)
 
 
 def peer(case, size):
@@ -49,7 +52,7 @@ def peer(case, size):
 def main():
     argv = sys.argv[1:]
     runs, strace_runs, stats, only, do_time, do_strace = 11, 3, False, None, True, True
-    emls = []
+    emls, workers = [], None
     while argv:
         a = argv.pop(0)
         if a == "--runs":
@@ -64,15 +67,21 @@ def main():
             do_time = False
         elif a == "--no-strace":
             do_strace = False
+        elif a == "--workers":
+            workers = [int(n) for n in argv.pop(0).split(",")]
         else:
             label, eml = a.split("=", 1)
             eml, _, progs = eml.partition("@")
             emls.append((label, (os.path.abspath(eml), os.path.abspath(progs) if progs else here)))
     if not emls:
         sys.exit(__doc__)
+    if workers:
+        emls = [(f"{label}:w{n}", (eml, progs, n)) for label, (eml, progs) in emls for n in workers]
+    else:
+        emls = [(label, (eml, progs, 1)) for label, (eml, progs) in emls]
     # `--stats` を持たない古い eml では RunStats を取らずに続ける
     has_stats = {label: "--stats" in subprocess.run([eml, "run", "--help"], capture_output=True, text=True).stdout
-                 for label, (eml, _) in emls}
+                 for label, (eml, _, _) in emls}
     for label, ok in has_stats.items():
         if stats and not ok:
             print(f"bench.py: {label} の eml に --stats がないので、RunStats を取らない", file=sys.stderr)

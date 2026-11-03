@@ -6,8 +6,12 @@ strace の run があるラベルには、syscall の目標の表も出す (docs
 
 比べる規則 (docs/implementation/benchmarks.md の「ネットワークの計測」): 主指標は eml のプロセスの CPU (user+sys) を床を引いて単位で割った値の中央値。後÷前の比が
 0.90 以下か 1.10 以上で、かつ生の CPU の四分位の範囲 (25%-75%) が重ならないときだけ「差」とする。
+
+`X:wN` の形のラベル (bench.py --workers) には、X ごとに worker の数を並べる表も出す。比は床を引いた単位あたりの実時間の
+中央値で、判定は同じ規則を生の実時間の四分位に当てる。
 """
 import json
+import re
 import statistics as st
 import sys
 
@@ -249,3 +253,38 @@ if len(labels) >= 2:
         wa = st.median(x["wall"] for x in ra["data"]) - base_med(a, lambda x: x["wall"])
         wb = st.median(x["wall"] for x in rb["data"]) - base_med(b, lambda x: x["wall"])
         print(f"| {c} | {pa:.2f} | {pb:.2f} | {ratio:.2f} | {'重なる' if overlap else '重ならない'} | {verdict} | {wb / wa:.2f} |")
+
+
+# worker の数の表。ラベル X:wN を X ごとにまとめ、N = 1 に対する比を出す
+groups = {}
+for label in labels:
+    m = re.fullmatch(r"(.*):w([0-9]+)", label)
+    if m:
+        groups.setdefault(m.group(1), {})[int(m.group(2))] = label
+for x, by_n in groups.items():
+    ns = sorted(by_n)
+    others = [n for n in ns if n != 1]
+    print(f"\n## worker の数: {x} (実時間の中央値、床を引いて単位あたり µs。判定は生の実時間)\n")
+    print("| 件 | 単位 | " + " | ".join(f"w{n}" for n in ns) + " | " + " | ".join(f"w{n}÷w1" for n in others) + " | " +
+          " | ".join(f"判定 w{n}" for n in others) + " |")
+    print("|---|---|" + "---|" * (len(ns) + 2 * len(others)))
+    for c in cases:
+        rs = {n: get.get((c, by_n[n], "time")) for n in ns}
+        if c == "base" or not all(rs.values()):
+            continue
+        r1 = rs[ns[0]]
+        per = {n: (st.median(x["wall"] for x in rs[n]["data"]) - base_med(by_n[n], lambda x: x["wall"])) / r1["n_big"] * 1e6
+               for n in ns}
+        ratios, verdicts = [], []
+        for n in others:
+            if 1 not in rs:
+                ratios.append("-")
+                verdicts.append("-")
+                continue
+            ratio = per[n] / per[1] if per[1] else float("nan")
+            q1, qn = q([x["wall"] for x in rs[1]["data"]]), q([x["wall"] for x in rs[n]["data"]])
+            overlap = not (q1[1] < qn[0] or qn[1] < q1[0])
+            ratios.append(f"{ratio:.2f}")
+            verdicts.append("差" if (ratio <= 0.90 or ratio >= 1.10) and not overlap else "差なし")
+        print(f"| {c} | {r1['n_big']} {r1['unit']} | " + " | ".join(f"{per[n]:.2f}" for n in ns) + " | " +
+              " | ".join(ratios) + " | " + " | ".join(verdicts) + " |")
