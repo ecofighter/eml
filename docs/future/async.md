@@ -370,8 +370,8 @@ TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ラ
 - 仮想のシグナルは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` に渡す予定で起こす。UI テストは先頭の印の行 `-- signal: <interrupt|terminate> at <ms>` で予定を書く ([VM](../spec/vm.md) の「時間の待ち」、[テスト戦略](../implementation/testing.md) の「UI テスト」)
 - `Net` と `Signal` の UI テストは `tests/ui/{run,run-fail}/async/` の `net_*.em` と `signal_*.em` で、どれもテストの driver の上で流れる。本物のソケットと OS のシグナルは、Rust のテスト (`crates/eml_io/tests/real.rs`、`crates/eml_vm/tests/api.rs` と `signal.rs`、`crates/eml_cli/tests/cli.rs`) だけで試す。同じ組を3つの OS で流し、Windows に無い動きを確かめるものだけを `#[cfg(unix)]` にする ([テスト戦略](../implementation/testing.md) の「Windows で流さないテスト」)。ループバックでポート 0 に bind して `local_port` で読む。UI テストは worker の数 N が 2 と 8 でも流し、順に頼るファイルは印で外す ([テスト戦略](../implementation/testing.md) の「seed で流す」)
 - 意味のテスト: 取り消したタスクの `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`shield` の中の別れの `send` が取り消しの下でも終わること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
-- 救済を強いるスケジュール (`--sched rescue-always`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
-- `RunStats` は driver の完了の数 `completions` と、channel の欄 `channel_ops`、`channel_waits`、`channels_swept` を持つ。`Std.Net` のテストのスナップショットも、ほかの欄と同じく逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
+- 救済を強いるスケジュール (`RescueAlways`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
+- `RunStats` は driver の完了の数 `completions` と、channel の欄 `channel_ops`、`channel_waits`、`channels_swept` を持つ。`Std.Net` のテストのスナップショットも、ほかの欄と同じく逐次のスケジュール (`Sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
 
 ## 未決の論点と将来の拡張
 

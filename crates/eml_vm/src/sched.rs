@@ -2,7 +2,6 @@
 //! 逐次の方針の安全点は、方針を持たない繰り返しと同じ機械語になる。
 
 use std::collections::VecDeque;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -76,7 +75,7 @@ fn take_async<M: Mode>(
     Ok(())
 }
 
-/// スケジュールの方針の選び方。CLI の `--sched` と `RunConfig::with_sched` で選ぶ。
+/// スケジュールの方針の選び方。`RunConfig::with_sched` で選ぶ。`eml run` と `eml repl` はいつも `Normal` で動く。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sched {
     /// 監視のスレッドの `PREEMPT` で横取りする。
@@ -95,27 +94,6 @@ impl Sched {
             Sched::Seeded(seed) => Some(seed),
             Sched::Normal | Sched::Sequential => None,
         }
-    }
-}
-
-impl FromStr for Sched {
-    type Err = String;
-
-    /// `normal`、`sequential`、`seeded:<n>` のどれかを読む。`n` は `u64` の10進数である。
-    fn from_str(text: &str) -> Result<Sched, String> {
-        match text {
-            "normal" => return Ok(Sched::Normal),
-            "sequential" => return Ok(Sched::Sequential),
-            _ => {}
-        }
-        // `u64::from_str` は先頭の `+` も読むので、数字だけの綴りに限る
-        text.strip_prefix("seeded:")
-            .filter(|seed| seed.bytes().all(|b| b.is_ascii_digit()))
-            .and_then(|seed| seed.parse().ok())
-            .map(Sched::Seeded)
-            .ok_or_else(|| {
-                format!("expected `normal`, `sequential` or `seeded:<n>`, found `{text}`")
-            })
     }
 }
 

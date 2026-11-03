@@ -357,7 +357,9 @@ fn seeded_label(seed: u64, signals: &[VirtualSignal]) -> String {
     } else {
         " with the signal marks of the file"
     };
-    format!("`eml run --debug-heap --sched seeded:{seed}` on the virtual driver{marks}")
+    format!(
+        "seed {seed} in checked mode on the virtual driver; rerun with `EML_UI_FILTER=<file> cargo nextest run -p eml_cli --test integration -E 'test(=ui::run)'`{marks}"
+    )
 }
 
 /// 逐次の検査モードの結果を、seed ごとの検査モードの run と比べる。成功した run は、スケジュールによらない
@@ -385,7 +387,7 @@ fn assert_seeds_agree(
         if let Some(finished) = ran.finished {
             assert!(
                 finished.preemptions > 0,
-                "{suffix}: never preempted under `--sched seeded:{seed}`; give a par left child, or an Async task while another task is ready, 16 or more safepoints (docs/implementation/testing.md の「seed で流す」)"
+                "{suffix}: never preempted under seed {seed}; give a par left child, or an Async task while another task is ready, 16 or more safepoints (docs/implementation/testing.md の「seed で流す」)"
             );
         }
     }
@@ -747,7 +749,7 @@ fn an_async_file_that_places_no_task_fails() {
 }
 
 #[test]
-#[should_panic(expected = "--sched seeded:7")]
+#[should_panic(expected = "seed 7 in checked mode on the virtual driver")]
 fn a_seeded_mismatch_names_the_seed() {
     let ran = |stdout: &str| Ran {
         stdout: stdout.to_string(),
@@ -767,7 +769,7 @@ fn a_seeded_mismatch_names_the_seed() {
 
 /// 左の子が短い `par` は seed で横取りされず、ハーネスがそのファイルを落とす。
 #[test]
-#[should_panic(expected = "never preempted under `--sched seeded:")]
+#[should_panic(expected = "never preempted under seed ")]
 fn a_par_file_that_is_never_preempted_fails() {
     let source = "import Std.Par\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = Par.par (fn () -> 1) (fn () -> 2)\n  println (show (a + b))\n";
     let session = Session::load("run/par/short.em", source, &eml_cli::MemorySource(&[]));

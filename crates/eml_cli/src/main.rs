@@ -31,13 +31,6 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
-        /// How tasks are scheduled: `normal` preempts on a timer, `sequential` never preempts, `seeded:N` preempts at points chosen by the seed N
-        #[arg(
-            long,
-            value_name = "normal|sequential|seeded:N",
-            default_value = "normal"
-        )]
-        sched: Sched,
         /// Run in checked mode and print the run's counters on stderr after it finishes
         #[arg(long)]
         stats: bool,
@@ -51,13 +44,6 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
-        /// How tasks are scheduled: `normal` preempts on a timer, `sequential` never preempts, `seeded:N` preempts at points chosen by the seed N
-        #[arg(
-            long,
-            value_name = "normal|sequential|seeded:N",
-            default_value = "normal"
-        )]
-        sched: Sched,
         /// A file to load first, as with `:load`
         file: Option<PathBuf>,
     },
@@ -83,14 +69,9 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        Command::Repl {
-            debug_heap,
-            sched,
-            file,
-        } => terminal::run(debug_heap, sched, file),
+        Command::Repl { debug_heap, file } => terminal::run(debug_heap, file),
         Command::Run {
             debug_heap,
-            sched,
             stats,
             workers,
             file,
@@ -116,7 +97,7 @@ fn main() -> ExitCode {
             };
             let mut config = RunConfig::default()
                 .with_debug_heap(debug_heap || stats)
-                .with_sched(sched)
+                .with_sched(Sched::Normal)
                 .with_clock(Clock::Real)
                 .with_control(control);
             if let Some(doorbell) = doorbell {
@@ -210,7 +191,7 @@ fn with_run(mut argv: Vec<OsString>) -> Vec<OsString> {
 
 /// `run` のファイルより後ろの引数を clap に渡さずに切り離す (docs/spec/stdlib.md の「起動」)。clap に読ませると、ファイルの直後の
 /// `--debug-heap` や `--help` や `--` をスクリプトの引数にできない。ファイルは `run` の後の、値を取るフラグの値でない、`-` で
-/// 始まらない最初の引数である。値を取るフラグと同じ引数は次の引数も取り、`--sched=seeded:7` のような引数は自分だけを取る。
+/// 始まらない最初の引数である。値を取るフラグと同じ引数は次の引数も取り、`--workers=2` のような引数は自分だけを取る。
 fn split_script_args(mut argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>) {
     if argv.get(1).is_none_or(|command| command != "run") {
         return (argv, Vec::new());
@@ -231,7 +212,7 @@ fn split_script_args(mut argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>) 
     (argv, Vec::new())
 }
 
-/// `run` の値を取るフラグの長い名前 (`--sched`)。clap の定義から読むので、フラグを足しても分け方の規則を直さずに済む。
+/// `run` の値を取るフラグの長い名前 (`--workers`)。clap の定義から読むので、フラグを足しても分け方の規則を直さずに済む。
 fn run_value_flags() -> Vec<String> {
     let cli = Cli::command();
     let Some(run) = cli.find_subcommand("run") else {
