@@ -575,7 +575,7 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 1. 合否が機械の速さに左右されない
 2. dev プロファイルで1つずつ流して (`cargo nextest run -j 1`)、開発機で1秒以内に終わる
 
-本物の時計を使うテストは、時間の下限 (「以上」) と終わることだけを確かめる。上限は確かめず、止まらないときのための見張りだけを置く。見張りの長さは、測った時間の 10 倍以上にする。刻みに依って合否が決まるテストは、ふだんの実行にない (普通の方針を使う速いモードの run と `an_interrupt_stops_a_par_program_with_130` は、横取りが起きたかによらず合否が決まる)。監視のスレッドが長い子を横取りさせることを数えるテストだけが、刻みに依るので `#[ignore]` である。
+本物の時計を使うテストは、時間の下限 (「以上」) と終わることだけを確かめる。上限は確かめず、止まらないときのための見張りだけを置く。見張りの長さは、測った時間の 10 倍以上にする。刻みに依って合否が決まるテストは、ふだんの実行にない (普通の方針を使う速いモードの run と `an_interrupt_stops_a_par_program_with_130` は、横取りが起きたかによらず合否が決まる)。監視のスレッドが長い子を横取りさせることを数えるテスト (`the_monitor_preempts_a_long_par_child`) と、extern の中で止まった worker の仕事を3刻み以内に救済することを確かめるテスト (`the_monitor_rescues_a_worker_blocked_in_an_extern`) だけが、刻みに依るので `#[ignore]` である。救済の判定そのものは、`monitor.rs` の単体テストが刻みの数をテストの側で数えて確かめる。
 
 ファイルを集めて流す5つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`、`repl::transcripts`、`lowering::every_program_lowers_to_the_same_text`) は、1つのファイルが1秒以内で、テスト全体が5秒以内であればよい。この5つはテストの中でファイルを並べて流すので、`.config/nextest.toml` で単独で流し、ほかのテストとコアを取り合わないようにする。テストの中に壁時計の上限を置くのは、止まったことを見つけるためだけにする。上限は測った時間の10倍以上にする。2つの条件に当たらないテストには `#[ignore = "<理由>"]` を付ける。流すコマンドを「よく使うコマンド」に書き、流す時 (何を変えたときか) をそのテストを説明する節に書く。
 
@@ -710,6 +710,7 @@ cargo nextest run --release -p eml_types --test integration --run-ignored ignore
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_vm --test integration --run-ignored ignored-only the_monitor_preempts_a_long_par_child   # 監視のスレッドの横取り (性能のテスト)
+cargo nextest run --release -p eml_vm --test integration --run-ignored ignored-only the_monitor_rescues_a_worker_blocked_in_an_extern   # 監視のスレッドの救済 (性能のテスト)
 cargo test -p eml_vm --test integration scaling::                              # VM の仕事の回数とスタックの語の数 (ふだんの実行にも入る)
 cargo test -p eml_vm --test integration bench::                                # 基準のプログラムの回数 (同上)
 bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)

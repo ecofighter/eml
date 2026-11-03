@@ -2,7 +2,7 @@
 //! fork か、`Async` のタスクを置く最初の `start` か、最初の `fork_job` で作り、run の終わりに join する。根に触れる `Machine` は worker を
 //! 作らない。
 
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use eml_rt::{Checked, Fault};
@@ -1005,4 +1005,89 @@ main () = Async.run (fn () ->
         let finished = result.unwrap_or_else(|error| panic!("{workers} workers: {error}"));
         assert!(finished.rescued >= 2, "{finished:?}");
     }
+}
+
+/// 行 "a" の書き込みを、別のスレッドが "b" を書くまで止める Host。lock は持たずに条件変数で待ち、10 秒で自分から抜ける。
+/// ほかは中の `CaptureHost` に任せる。
+struct BlockingHost {
+    inner: eml_vm::CaptureHost,
+    /// "a" が `write_line` に入った時刻と、"b" を書いた時刻。
+    times: Mutex<(Option<Instant>, Option<Instant>)>,
+    wrote_b: Condvar,
+}
+
+impl BlockingHost {
+    fn times(&self) -> MutexGuard<'_, (Option<Instant>, Option<Instant>)> {
+        self.times.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl eml_rt::Host for BlockingHost {
+    fn write_line(&self, stream: eml_rt::Stream, line: &str) -> std::io::Result<()> {
+        if line == "a" {
+            let mut times = self.times();
+            times.0 = Some(Instant::now());
+            let (times, _) = self
+                .wrote_b
+                .wait_timeout_while(times, Duration::from_secs(10), |times| times.1.is_none())
+                .unwrap_or_else(PoisonError::into_inner);
+            drop(times);
+            self.inner.write_line(stream, line)
+        } else {
+            let written = self.inner.write_line(stream, line);
+            self.times().1 = Some(Instant::now());
+            self.wrote_b.notify_all();
+            written
+        }
+    }
+    fn write(&self, stream: eml_rt::Stream, bytes: &[u8]) -> std::io::Result<()> {
+        self.inner.write(stream, bytes)
+    }
+    fn flush(&self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+    fn open(&self, path: &str) -> std::io::Result<eml_rt::Opened> {
+        self.inner.open(path)
+    }
+}
+
+/// extern の中で止まった worker の仕事は、監視のスレッドが 3 刻み以内に別の worker へ移す。worker 1 のタスク T1 が
+/// `println "a"` で止まり、同じ worker の T2 の `println "b"` が先に出る (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 刻みの 10 ms に頼るので、release で流す。
+#[test]
+#[ignore = "depends on the monitor's 10 ms tick"]
+fn the_monitor_rescues_a_worker_blocked_in_an_extern() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t1 = Async.start (fn () -> println \"a\")
+  let x = Async.start (fn () -> ())
+  let t2 = Async.start (fn () -> println \"b\")
+  Async.await t1
+  Async.await x
+  Async.await t2)
+";
+    let inner = eml_vm::CaptureHost::new(Default::default());
+    let out = inner.output();
+    let host = Arc::new(BlockingHost {
+        inner,
+        times: Default::default(),
+        wrote_b: Default::default(),
+    });
+    let config = RunConfig::default()
+        .with_clock(Clock::Real)
+        .with_sched(Sched::Normal)
+        .with_control(limits(2));
+    let finished = eml_vm::execute(
+        &eml_test_support::lir(src),
+        &config,
+        eml_rt::HostRef::new(Arc::clone(&host) as Arc<dyn eml_rt::Host>),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "b\na\n");
+    assert!(finished.rescues >= 1, "{finished:?}");
+    let (entered, wrote) = *host.times();
+    let delay = wrote.unwrap() - entered.unwrap();
+    assert!(delay < Duration::from_millis(50), "{delay:?}");
 }

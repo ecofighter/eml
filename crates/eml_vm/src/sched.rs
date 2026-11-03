@@ -821,6 +821,7 @@ impl<P: Policy> Scheduler<P> {
             Arc::clone(&self.cells),
             Arc::clone(&self.run),
             P::PREEMPTS,
+            P::RESCUE == Rescue::Watched,
         );
     }
 

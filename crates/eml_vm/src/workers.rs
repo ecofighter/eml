@@ -628,6 +628,14 @@ impl Run {
         lock(&self.idle).pop()
     }
 
+    /// 空いている worker のうち、`victim` でなく `live` 未満のいちばん新しいものを1つ取り出す。救済を頼む側が使う。
+    /// `idle` の lock (末端の lock) だけを取る。取り出した worker には、頼む側が `Rescue` を1つ送る。
+    pub(crate) fn pop_idle_except(&self, victim: usize, live: usize) -> Option<usize> {
+        let mut idle = lock(&self.idle);
+        let at = idle.iter().rposition(|&r| r != victim && r < live)?;
+        Some(idle.remove(at))
+    }
+
     /// すべての worker を起こす。止めるビットを眠っている worker に読ませるときに呼ぶ。
     pub(crate) fn wake_all(&self) {
         for k in 0..self.slots.len() {
@@ -1249,6 +1257,11 @@ impl Run {
             .iter()
             .filter(|item| item.counted())
             .count()
+    }
+
+    /// 空いている worker の並びを、古い順に `workers` へ置き換える。
+    pub(crate) fn set_idle(&self, workers: &[usize]) {
+        *lock(&self.idle) = workers.to_vec();
     }
 
     /// worker `k` を眠った形にする。空きの待ちが眠るときと同じく、欄の lock の下で `running` から引く。
