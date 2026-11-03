@@ -14,7 +14,7 @@ use crate::cells::{
 use crate::driver::DriverKind;
 use crate::monitor::Monitor;
 use crate::vm::Task;
-use crate::workers::{EntryKind, Mailer, Notice, Ready, Run, Workers, rescuable};
+use crate::workers::{EntryKind, Mailer, Notice, Ready, Run, Workers, rescuable, stopping};
 
 /// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを、すべての
 /// worker の止める語に立てるので、`eml run` の次の同じシグナルはその場で終わらせ、どの worker も次の安全点で止まる
@@ -72,7 +72,7 @@ fn take_async<M: Mode>(
             Notice::Completion(op) => {
                 woken.extend(cells.take_completion(ctx, depth_offset, op, here, work)?);
             }
-            Notice::Child(_) | Notice::Joined { .. } => {
+            Notice::Child(_) | Notice::Joined { .. } | Notice::Rescue { .. } => {
                 return Err(VmFault::Internal("a par notice is left for the registry"));
             }
         }
@@ -83,7 +83,6 @@ fn take_async<M: Mode>(
 
 /// 1回の救済の結果。`taken` は盗んだタスクの数で、`truncated` は実行待ちか受け箱が走査の上限より長かったかである。
 pub(crate) struct StealResult {
-    #[cfg_attr(not(test), expect(dead_code, reason = "after_steal reads no result"))]
     pub victim: usize,
     pub taken: usize,
     pub truncated: bool,
@@ -192,6 +191,22 @@ pub(crate) fn steal(
     Ok(result)
 }
 
+/// 誰が救済を頼むか (docs/spec/vm.md の「タスクとスケジュール」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rescue {
+    /// 救済しない。
+    Never,
+    /// 監視のスレッドが、仕事の溜まった worker を見て空いた worker に頼む。
+    Watched,
+    /// 盗めるものを持つ worker が自分で頼む。
+    Always,
+}
+
+/// 目安 `h` の項を持つ worker に対する救済の予算。半分を切り上げ、1 以上とする。
+fn rescue_budget(h: usize) -> usize {
+    h.div_ceil(2).max(1)
+}
+
 /// スケジュールの方針の選び方。`RunConfig::with_sched` で選ぶ。`eml run` と `eml repl` はいつも `Normal` で動く。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sched {
@@ -222,6 +237,8 @@ pub trait Policy: Send {
     /// 監視のスレッドの `PREEMPT` で横取りするか。真なら、`Scheduler` は最初のタスクで監視のスレッドを始め、切り替えを
     /// 監視のスレッドに数えさせる。
     const PREEMPTS: bool;
+    /// 救済を頼む者。
+    const RESCUE: Rescue;
     /// 安全点ごとに1回呼ぶ。真を返したら、横取りを試みる。
     fn tick(&mut self) -> bool;
     /// 横取りを試みた後に、次の横取りまでの予算を詰め直す。
@@ -245,6 +262,7 @@ pub struct Normal;
 
 impl Policy for Normal {
     const PREEMPTS: bool = true;
+    const RESCUE: Rescue = Rescue::Watched;
 
     // 横取りは監視のスレッドの `PREEMPT` が求めるので、安全点に分岐を残さない
     #[inline(always)]
@@ -273,6 +291,7 @@ pub struct Sequential;
 
 impl Policy for Sequential {
     const PREEMPTS: bool = false;
+    const RESCUE: Rescue = Rescue::Never;
 
     // 定数の偽に畳まれ、安全点に分岐を残さない
     #[inline(always)]
@@ -335,6 +354,7 @@ fn splitmix64(state: u64) -> u64 {
 
 impl Policy for Seeded {
     const PREEMPTS: bool = false;
+    const RESCUE: Rescue = Rescue::Never;
 
     // 予算が 0 になっても yield の途中なら切り替えないので、詰め直すのは横取りを試みたときだけにする
     fn tick(&mut self) -> bool {
@@ -510,6 +530,12 @@ pub struct Scheduler<P: Policy> {
     pub(crate) stolen: Vec<Runnable>,
     /// 最後の救済の結果。区間の後で `after_steal` が読む。
     pub(crate) steal_result: Option<StealResult>,
+    /// 頼みを受けたときに読んだ、元の worker の `(ready_entries, inbox_work, settled)`。盗んでも取れなかったときに、
+    /// 空振りの印の鍵として元の worker の欄に書く。
+    rescue_key: (usize, usize, u64),
+    /// 1つ以上を盗んだ救済の数と、救済で移した項の数。
+    pub(crate) rescues: u64,
+    pub(crate) rescued: u64,
     /// 待ちに入って `Finish` したエントリの `Task` のセル。次の集める地点の最初の区間で、登録表の `leave` に渡して空にする
     /// (docs/spec/vm.md の「救済」)。
     pub(crate) left: Vec<CellRef>,
@@ -604,6 +630,9 @@ impl<P: Policy> Scheduler<P> {
             rescue: None,
             stolen: Vec::new(),
             steal_result: None,
+            rescue_key: (0, 0, 0),
+            rescues: 0,
+            rescued: 0,
             left: Vec::new(),
             hold: None,
             woken: Vec::new(),
@@ -892,14 +921,47 @@ impl<P: Policy> Scheduler<P> {
         Ok(())
     }
 
-    /// worker `victim` の救済の頼みを受ける。今は何もしない (docs/spec/vm.md の「救済」)。
-    #[expect(dead_code, reason = "no notice asks for a rescue")]
+    /// worker `victim` の救済の頼みを受ける。止める印が立っているか、前の頼みがまだ処理されていなければ捨てる。そうでなければ、
+    /// `victim` の3つの数を盗む前にここで読んで覚え、予算を決めて、次の集める地点の最初の区間で盗ませる
+    /// (docs/spec/vm.md の「救済」)。
     pub(crate) fn request_rescue(&mut self, victim: usize) {
-        let _ = victim;
+        if stopping(&self.watcher.control, self.index) || self.rescue.is_some() {
+            return;
+        }
+        let slot = &self.run.slots[victim];
+        let ready = slot.ready_entries.load(Ordering::Relaxed);
+        let inbox = slot.inbox_work.load(Ordering::Relaxed);
+        let settled = slot.settled.load(Ordering::Relaxed);
+        self.rescue_key = (ready, inbox, settled);
+        let budget = match P::RESCUE {
+            Rescue::Always => usize::MAX,
+            Rescue::Never | Rescue::Watched => rescue_budget(ready + inbox),
+        };
+        self.rescue = Some((victim, budget));
     }
 
-    /// 救済の区間の後に、どの lock も持たずに `steal_result` を読む。今は何もしない。
-    fn after_steal(&mut self) {}
+    /// 救済の区間の後に、どの lock も持たずに結果を数え、元の worker の空振りの印を直す。盗めた救済と走査が切れた救済は
+    /// 印を下ろす。何も取れず、走査も切れなかった `Watched` の救済は、頼みを受けたときの鍵を書いてから印を立てる
+    /// (docs/spec/vm.md の「救済」)。
+    fn after_steal(&mut self) {
+        let Some(result) = self.steal_result.take() else {
+            return;
+        };
+        let slot = &self.run.slots[result.victim];
+        if result.taken >= 1 {
+            self.rescues += 1;
+            self.rescued += result.taken as u64;
+            slot.futile.store(false, Ordering::Release);
+        } else if result.truncated {
+            slot.futile.store(false, Ordering::Release);
+        } else if P::RESCUE == Rescue::Watched {
+            let (ready, inbox, settled) = self.rescue_key;
+            slot.futile_ready.store(ready, Ordering::Relaxed);
+            slot.futile_inbox.store(inbox, Ordering::Relaxed);
+            slot.futile_settled.store(settled, Ordering::Relaxed);
+            slot.futile.store(true, Ordering::Release);
+        }
+    }
 
     /// ほかの worker から届いた知らせを取り出す。置かれた右の子と仕事はこの worker の番号を振って列の後ろに入れ、置いた子の
     /// 終わりは join の節点に記録して親を起こす。親を失った節点なら、結果に触れずに節点を捨てる。どちらでも
@@ -926,6 +988,7 @@ impl<P: Policy> Scheduler<P> {
                     }
                     self.run.in_flight.fetch_sub(1, Ordering::Release);
                 }
+                Notice::Rescue { victim } => self.request_rescue(victim as usize),
                 notice @ (Notice::Place { .. }
                 | Notice::Wake(_)
                 | Notice::Cancel(_)
@@ -953,6 +1016,8 @@ impl<P: Policy> Scheduler<P> {
         }
         let mut notices = Vec::new();
         self.receive(&mut notices);
+        // 終わりに受けた頼みは捨てる。盗む集める地点はもうない
+        self.rescue = None;
         if notices.is_empty() {
             return Ok(());
         }
@@ -1797,17 +1862,22 @@ mod tests {
 
     /// worker 0 (元の worker) と worker 1 (救済する worker) の2つの `Scheduler` と、それぞれの `Ctx`。スレッドは作らず、
     /// 両方の集める地点を手で動かす。
-    struct Pair {
+    struct Pair<P: Policy = Sequential> {
         control: Arc<Control>,
         run: Arc<Run>,
         shared: Arc<Shared>,
         victim: Scheduler<Sequential>,
         victim_ctx: Ctx<eml_rt::Checked>,
-        rescuer: Scheduler<Sequential>,
+        rescuer: Scheduler<P>,
         rescuer_ctx: Ctx<eml_rt::Checked>,
     }
 
     fn pair() -> Pair {
+        pair_with(Sequential)
+    }
+
+    /// 救済する worker 1 の方針が `rescuer` の `Pair`。
+    fn pair_with<P: Policy>(rescuer: P) -> Pair<P> {
         let control = Arc::new(Control::new(Limits {
             workers: 2,
             ..Limits::default()
@@ -1830,7 +1900,7 @@ mod tests {
             Arc::clone(&shared),
         );
         let rescuer = Scheduler::worker(
-            Sequential,
+            rescuer,
             Arc::clone(&run),
             Arc::clone(&control),
             1,
@@ -1852,7 +1922,7 @@ mod tests {
         }
     }
 
-    impl Pair {
+    impl<P: Policy> Pair<P> {
         /// worker 1 が、集める地点と同じく登録表の lock の下で、予算 `budget` で worker 0 から盗む。結果と盗んだ仕事を
         /// 返す。
         fn rescue(&mut self, budget: usize) -> (StealResult, Vec<Runnable>) {
@@ -1921,6 +1991,7 @@ mod tests {
                 Notice::Submit(op) => format!("submit {}", op.encode()),
                 Notice::CancelIo(op) => format!("cancel_io {}", op.encode()),
                 Notice::Completion(op) => format!("completion {}", op.encode()),
+                Notice::Rescue { victim } => format!("rescue {victim}"),
             })
             .collect();
         for notice in notices {
@@ -2280,5 +2351,83 @@ mod tests {
         sched.gather(&mut ctx, 0, false).unwrap();
         assert_eq!(run.slots[1].settled.load(Ordering::Relaxed), 3);
         assert_eq!(run.slots[0].settled.load(Ordering::Relaxed), 0);
+    }
+
+    /// 救済の予算は目安の半分を切り上げた数で、少なくとも 1 である (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn rescue_budget_takes_half_rounded_up_and_at_least_one() {
+        let budgets = [0, 1, 2, 3, 5].map(rescue_budget);
+        assert_eq!(budgets, [1, 1, 1, 2, 3]);
+    }
+
+    /// 盗めるものがない元の worker への救済は何も取れず、走査も切れない。頼みを受けたときの鍵で空振りの印を立て、
+    /// 救済の数には数えない。`ResumeIo` の項は `ready_entries` に数えないので、鍵の1つ目は 0 である
+    /// (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn a_rescue_that_finds_nothing_marks_the_victim_futile() {
+        let mut p = pair_with(Normal);
+        let io = cells::task_on(&p.shared, 0, 0, false);
+        p.push_entry(
+            io,
+            EntryKind::ResumeIo {
+                wake: cells::WOKE,
+                op: 9,
+            },
+            false,
+        );
+        p.run.slots[0].settled.store(3, Ordering::Relaxed);
+        p.run.send(&p.control, 1, Notice::Rescue { victim: 0 });
+        p.rescuer.gather(&mut p.rescuer_ctx, 0, false).unwrap();
+        let slot = &p.run.slots[0];
+        assert!(slot.futile.load(Ordering::Acquire));
+        let key = (
+            slot.futile_ready.load(Ordering::Relaxed),
+            slot.futile_inbox.load(Ordering::Relaxed),
+            slot.futile_settled.load(Ordering::Relaxed),
+        );
+        assert_eq!(key, (0, 0, 3));
+        assert_eq!((p.rescuer.rescues, p.rescuer.rescued), (0, 0));
+        assert!(p.rescuer.steal_result.is_none() && p.rescuer.rescue.is_none());
+    }
+
+    /// 走査が上限で切れた救済は、取れなかったときも印を立てず、立っていた印は下ろす。上限の先に盗めるものが
+    /// あるかもしれないためである (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn a_truncated_rescue_never_marks_the_victim_futile() {
+        let mut p = pair_with(Normal);
+        let io = cells::task_on(&p.shared, 0, 0, false);
+        for _ in 0..=STEAL_SCAN {
+            p.push_entry(
+                io,
+                EntryKind::ResumeIo {
+                    wake: cells::WOKE,
+                    op: 9,
+                },
+                false,
+            );
+        }
+        let start = cells::placed_task(&p.shared, 0);
+        p.push_entry(start, EntryKind::Start, false);
+        p.run.slots[0].futile.store(true, Ordering::Release);
+        p.run.send(&p.control, 1, Notice::Rescue { victim: 0 });
+        p.rescuer.gather(&mut p.rescuer_ctx, 0, false).unwrap();
+        assert!(!p.run.slots[0].futile.load(Ordering::Acquire));
+        assert_eq!((p.rescuer.rescues, p.rescuer.rescued), (0, 0));
+        assert_eq!(cells::owner_of(&p.shared, start), 0);
+    }
+
+    /// 止めるビットか `END` が立った後の頼みは捨てる。受けた worker は盗まない (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn a_rescue_request_after_the_end_is_dropped() {
+        let mut p = pair_with(Normal);
+        let start = cells::placed_task(&p.shared, 0);
+        p.push_entry(start, EntryKind::Start, false);
+        p.control.end_run();
+        p.run.send(&p.control, 1, Notice::Rescue { victim: 0 });
+        p.rescuer.gather(&mut p.rescuer_ctx, 0, false).unwrap();
+        assert!(p.rescuer.rescue.is_none());
+        assert!(p.rescuer.stolen.is_empty() && p.rescuer.steal_result.is_none());
+        assert_eq!(cells::owner_of(&p.shared, start), 0);
+        assert_eq!(queue(&p.run, 0).len(), 1);
     }
 }

@@ -111,6 +111,20 @@ pub(crate) enum Notice {
     CancelIo(CellRef),
     /// この worker が持ち主の記録に、host が結果を置いた。受けた worker が当てて段階を進める。
     Completion(CellRef),
+    /// 救済の頼み。`victim` の仕事を盗めと、空いていた worker か `RescueAlways` の前の worker が頼む。語を持たず、
+    /// `in_flight` に数えない。run の終わりでは仕事に数えず、捨てる (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[cfg_attr(not(test), expect(dead_code, reason = "no sender asks for a rescue"))]
+    Rescue { victim: u32 },
+}
+
+impl Notice {
+    /// 救済が受け箱から外せるかもしれない知らせか。`Place` と、`op` を持たない `Wake` である。
+    fn stealable(&self) -> bool {
+        matches!(
+            self,
+            Notice::Place { .. } | Notice::Wake(Woken::Task { op: None, .. })
+        )
+    }
 }
 
 /// 登録表の lock の下から、ほかの worker の受け箱に `Async` のタスクの知らせを積む道 (docs/spec/vm.md の
@@ -193,6 +207,9 @@ pub(crate) struct Retired<M: Mode> {
     /// VM が数える回数。
     pub(crate) counts: RunCounts,
     pub(crate) preemptions: u64,
+    /// 1つ以上を盗んだ救済の数と、救済で移した項の数 (docs/spec/vm.md の「`RunStats`」)。
+    pub(crate) rescues: u64,
+    pub(crate) rescued: u64,
     /// worker のタスクのスタックで同時に使った語の数の最大。
     pub(crate) peak_stack: u64,
     /// `Ctx` を作った直後のヒープの仕事。ヒープごとのダミーの物体の確保は実行の仕事ではないので、`RunStats` から引く
@@ -234,9 +251,15 @@ pub(crate) struct Slot {
     pub(crate) ready_entries: AtomicUsize,
     /// 持ち主が待ちの後始末を終えたタスクのセルの数。単調に増える。
     pub(crate) settled: AtomicU64,
-    /// 受け箱の知らせのうち、救済で盗めるかもしれないもの (`Place` と、`op` を持たない `Wake`) の数。救済が受け箱から
-    /// 外すときに、欄の lock の下で減らす。
+    /// 受け箱の知らせのうち、救済で盗めるかもしれないもの (`Place` と、`op` を持たない `Wake`) の数。知らせを積むとき、
+    /// 取り出すとき、救済が受け箱から外すときに、欄の lock の下で書く。
     pub(crate) inbox_work: AtomicUsize,
+    /// 救済が空振りに終わった。立っている間は、下の3つの数が変わるまで、監視のスレッドはこの worker を飛ばす。
+    /// 3つの数を書いてから Release で立て、読む側は Acquire で読む (docs/spec/vm.md の「救済」)。
+    pub(crate) futile: AtomicBool,
+    pub(crate) futile_ready: AtomicUsize,
+    pub(crate) futile_inbox: AtomicUsize,
+    pub(crate) futile_settled: AtomicU64,
 }
 
 /// 1回の run で worker が共有する表。run ごとに作り、run の終わりに捨てる。
@@ -272,7 +295,7 @@ pub(crate) struct Run {
 
 /// worker `k` の語に止めるビットか `END` が立っている。眠る直前に読み、立っていれば眠らずに戻る。監視のスレッドは
 /// 動く worker のない間は眠りうるので、自分で立てたビット (確保量の上限など) に眠った後で気づく道がないためである。
-fn stopping(control: &Control, k: usize) -> bool {
+pub(crate) fn stopping(control: &Control, k: usize) -> bool {
     control.worker_bits(k)
         & (Control::INTERRUPT | Control::TERMINATE | Control::MEMORY | Control::END)
         != 0
@@ -308,6 +331,10 @@ impl Run {
                 ready_entries: AtomicUsize::new(0),
                 settled: AtomicU64::new(0),
                 inbox_work: AtomicUsize::new(0),
+                futile: AtomicBool::new(false),
+                futile_ready: AtomicUsize::new(0),
+                futile_inbox: AtomicUsize::new(0),
+                futile_settled: AtomicU64::new(0),
             })
             .collect();
         Run {
@@ -414,6 +441,9 @@ impl Run {
         let slot = &self.slots[k];
         let parked = {
             let mut state = lock(&slot.state);
+            if notice.stealable() {
+                slot.inbox_work.fetch_add(1, Ordering::Relaxed);
+            }
             state.notices.push(notice);
             slot.has_notices.store(true, Ordering::Release);
             let parked = state.parked;
@@ -610,6 +640,7 @@ impl Run {
         let slot = &self.slots[k];
         let mut state = lock(&slot.state);
         slot.has_notices.store(false, Ordering::Relaxed);
+        slot.inbox_work.store(0, Ordering::Relaxed);
         std::mem::take(&mut state.notices)
     }
 
@@ -833,6 +864,8 @@ fn run_worker<M: Mode, P: Policy>(
                 ctx: ManuallyDrop::into_inner(ctx),
                 counts: done.counts,
                 preemptions: done.preemptions,
+                rescues: done.rescues,
+                rescued: done.rescued,
                 peak_stack: done.peak_stack,
                 base,
                 left: done.left,
@@ -857,6 +890,8 @@ fn run_worker<M: Mode, P: Policy>(
 struct Done {
     counts: RunCounts,
     preemptions: u64,
+    rescues: u64,
+    rescued: u64,
     peak_stack: u64,
     left: bool,
     kept_pending: bool,
@@ -924,6 +959,8 @@ fn work<M: Mode, P: Policy>(
     Done {
         counts,
         preemptions: sched.preemptions(),
+        rescues: sched.rescues,
+        rescued: sched.rescued,
         peak_stack,
         left,
         kept_pending,
@@ -1146,7 +1183,7 @@ impl<P: Policy> Scheduler<P> {
 
     /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、この worker が走らせるはずの仕事があるかを
     /// 返す。実行待ちの列に残った `Entry`、右の子と仕事 (`Child`)、持ち主が自分のタスクの `Place`、継続を取り出せる
-    /// `Wake` を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion` と、もう待っていないセルへの起こしは数えない。
+    /// `Wake` を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`、`Rescue` と、もう待っていないセルへの起こしは数えない。
     /// 登録表は書き換えず、列の項と知らせの語は手放さない。数えたら run は誤りで終わり、回復がヒープを捨てるからである
     /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
     pub(crate) fn left_notices(&mut self) -> bool {
@@ -1172,7 +1209,8 @@ impl<P: Policy> Scheduler<P> {
                 | Notice::Cancel(_)
                 | Notice::Submit(_)
                 | Notice::CancelIo(_)
-                | Notice::Completion(_) => false,
+                | Notice::Completion(_)
+                | Notice::Rescue { .. } => false,
             };
         }
         left
@@ -1230,7 +1268,7 @@ mod tests {
     use eml_rt::{Checked, Control, HeapError, Limits, Stop};
 
     use super::{Entry, EntryKind, Notice, Ready, Run, settle};
-    use crate::cells::{CellRef, MailItem, Registry, Shared};
+    use crate::cells::{CellRef, MailItem, Registry, Shared, Woken};
     use crate::driver::RunClock;
     use crate::sched::{Scheduler, Sequential};
     use crate::{Machine, RuntimeError, VmFault};
@@ -1457,6 +1495,50 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             Err(VmFault::Internal("a task is left at the end"))
         );
         assert_eq!(super::end_check(false, false), Ok(()));
+    }
+
+    /// `inbox_work` は、受け箱に積んだ `Place` と `op` を持たない `Wake` の数だけ増え、ほかの知らせでは増えない。
+    /// 受け箱を取り出すと 0 に戻る (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[test]
+    fn inbox_work_counts_places_and_plain_wakes() {
+        let control = Control::new(Limits {
+            workers: 2,
+            ..Limits::default()
+        });
+        let run = Run::new(2, None, RunClock::Virtual(Arc::default()), Arc::default());
+        let shared = Shared::new(Registry::new(Vec::new(), 2));
+        let cell = crate::cells::placed_task(&shared, 1);
+        let work = || run.slots[1].inbox_work.load(Ordering::Relaxed);
+        let task = |op| Notice::Wake(Woken::Task { cell, wake: 0, op });
+        run.send(
+            &control,
+            1,
+            Notice::Place {
+                cell,
+                worker: 0,
+                closure: eml_rt::Word::UNIT,
+            },
+        );
+        assert_eq!(work(), 1);
+        run.send(&control, 1, task(None));
+        assert_eq!(work(), 2);
+        run.send(&control, 1, task(Some(cell)));
+        run.send(
+            &control,
+            1,
+            Notice::Wake(Woken::Token {
+                owner: 1,
+                token: crate::cells::WaitToken(0),
+            }),
+        );
+        run.send(&control, 1, Notice::Cancel(cell));
+        run.send(&control, 1, Notice::Submit(cell));
+        run.send(&control, 1, Notice::CancelIo(cell));
+        run.send(&control, 1, Notice::Completion(cell));
+        run.send(&control, 1, Notice::Rescue { victim: 0 });
+        assert_eq!(work(), 2);
+        assert_eq!(run.take_notices(1).len(), 9);
+        assert_eq!(work(), 0);
     }
 
     /// `start` は作った worker を worker 1 から順に回って持ち主にする。3つの worker では 1、2、0 を繰り返す。作れた
