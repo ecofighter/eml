@@ -274,9 +274,28 @@ fn assert_fast_mode_agrees(
 /// seed の方針で流すテストの seed (docs/implementation/testing.md の「seed で流す」)。
 const SEEDS: [u64; 2] = [1, 2026];
 
-/// `par/` と `async/` を流す worker の数。スナップショットと比べるのは N = 1 の run で、これらの run はその結果と
-/// 比べる (docs/implementation/testing.md の「seed で流す」)。
-const WORKER_COUNTS: [usize; 2] = [2, 8];
+/// `par/` と `async/` を流す worker の数と方針。スナップショットと比べるのは N = 1 の run で、これらの run はその
+/// 結果と比べる。`par/` のファイルは `Async` のタスクを始めないので、救済を強いる方針で流しても確かめることがない
+/// (docs/implementation/testing.md の「seed で流す」)。
+const WORKER_RUNS: [(&str, &[(usize, Sched)]); 2] = [
+    ("par/", &[(2, Sched::Sequential), (8, Sched::Sequential)]),
+    (
+        "async/",
+        &[
+            (2, Sched::Sequential),
+            (2, Sched::RescueAlways),
+            (8, Sched::RescueAlways),
+        ],
+    ),
+];
+
+/// 分類 `suffix` の worker の run。
+fn worker_runs(suffix: &str) -> &'static [(usize, Sched)] {
+    WORKER_RUNS
+        .iter()
+        .find(|(category, _)| suffix.starts_with(category))
+        .map_or(&[], |(_, runs)| runs)
+}
 
 /// 複数の worker で流すのは、`par/` と `async/` のうち印 `-- workers: skip (<理由>)` のないファイルである。印は
 /// この2つの分類でしか意味がないので、ほかの分類の印は誤りにする (docs/implementation/testing.md の「seed で流す」)。
@@ -289,19 +308,22 @@ fn workers_run(suffix: &str, skip: bool) -> bool {
     category && !skip
 }
 
-fn workers_label(workers: usize, signals: &[VirtualSignal]) -> String {
+fn workers_label(workers: usize, sched: Sched, signals: &[VirtualSignal]) -> String {
     let marks = if signals.is_empty() {
         ""
     } else {
         " with the signal marks of the file"
     };
-    format!("`eml run --debug-heap --workers {workers}` on the virtual driver{marks}")
+    format!(
+        "{workers} workers under `Sched::{sched:?}` in checked mode on the virtual driver{marks}"
+    )
 }
 
-/// 逐次の N = 1 の検査モードの結果を、N = 2 と 8 の検査モードの run と比べる。方針は逐次のままで、横取りは
-/// 求めない。`par/` で比べる欄は seed の run と同じである。`async/` は、タスクを置く worker がスケジュールで決まる
-/// ので `RunStats` を比べず、代わりにタスクを始めた worker と違う worker に置いたことを確かめる。置かなければ
-/// worker 0 の上だけで流したことになる (docs/implementation/testing.md の「seed で流す」)。
+/// 逐次の N = 1 の検査モードの結果を、`WORKER_RUNS` の検査モードの run と比べる。どの方針も横取りは求めない。
+/// `par/` で比べる欄は seed の run と同じである。`async/` は、タスクを置く worker がスケジュールで決まるので
+/// `RunStats` を比べず、代わりにタスクを始めた worker と違う worker に置いたことを確かめる。置かなければ worker 0 の
+/// 上だけで流したことになる。`run/async/` の救済を強いる run では、救済でタスクを移したことも確かめる。移さなければ
+/// 救済の道を通っていない (docs/implementation/testing.md の「seed で流す」)。
 fn assert_workers_agree(
     suffix: &str,
     program: &eml_lir::Program,
@@ -310,16 +332,8 @@ fn assert_workers_agree(
     signals: &[VirtualSignal],
     checked: &Ran,
 ) {
-    for workers in WORKER_COUNTS {
-        let ran = execute_in(
-            program,
-            path,
-            root,
-            signals,
-            true,
-            Sched::Sequential,
-            workers,
-        );
+    for &(workers, sched) in worker_runs(suffix) {
+        let ran = execute_in(program, path, root, signals, true, sched, workers);
         let compare = if suffix.starts_with("async/") {
             Compare::Nothing
         } else {
@@ -327,17 +341,22 @@ fn assert_workers_agree(
         };
         assert_agrees(
             suffix,
-            &workers_label(workers, signals),
+            &workers_label(workers, sched, signals),
             &ran,
             checked,
             compare,
         );
+        // `run-fail/` の run は誤りで終わるので `finished` を持たない
         if suffix.starts_with("async/")
             && let Some(finished) = ran.finished
         {
             assert!(
                 finished.workers >= 1 && finished.placed_tasks > 0,
-                "{suffix}: placed no task on another worker under `--workers {workers}`; start a task (docs/implementation/testing.md の「seed で流す」)"
+                "{suffix}: placed no task on another worker with {workers} workers; start a task (docs/implementation/testing.md の「seed で流す」)"
+            );
+            assert!(
+                sched != Sched::RescueAlways || finished.rescued > 0,
+                "{suffix}: rescued no task with {workers} workers under `Sched::RescueAlways`; start a task after the workers start (docs/implementation/testing.md の「seed で流す」)"
             );
         }
     }
@@ -671,7 +690,19 @@ fn workers_runs_cover_par_and_async() {
     assert!(!workers_run("panic/x.em", false));
     assert!(!workers_run("parse/x.em", false));
     assert!(!workers_run("tls/x.em", false));
-    assert_eq!(WORKER_COUNTS, [2, 8]);
+    assert_eq!(
+        worker_runs("par/x.em"),
+        [(2, Sched::Sequential), (8, Sched::Sequential)]
+    );
+    assert_eq!(
+        worker_runs("async/x.em"),
+        [
+            (2, Sched::Sequential),
+            (2, Sched::RescueAlways),
+            (8, Sched::RescueAlways),
+        ]
+    );
+    assert!(worker_runs("io/x.em").is_empty());
 }
 
 #[test]

@@ -1160,6 +1160,51 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }
 
+/// 救済を強いる方針の2つの worker で、20 往復の echo をする。救済で持ち主が替わったタスクの操作も、仮想の時計の
+/// driver を持つ worker 0 が host として受け付け、出力は worker が1つの run と同じである (docs/spec/vm.md の「救済」)。
+#[test]
+fn a_rescued_task_does_io_through_its_host() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+serve : Int -> Net.TcpStream -> <IO, Panic, Async> Unit
+serve n s =
+  if n == 0 then Net.close s
+  else
+    let (buf, s) = Net.read_chunk (Bytes.empty ()) s
+    let (_, s) = Net.write_bytes buf s
+    serve (n - 1) s
+ask : Int -> Int -> Net.TcpStream -> <IO, Panic, Async> Int
+ask n got c =
+  if n == 0 then
+    Net.close c
+    got
+  else
+    let c = Net.write \"ping\" c
+    let (buf, c) = Net.read_chunk (Bytes.empty ()) c
+    ask (n - 1) (got + Bytes.length buf) c
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    serve 20 s)
+  let c = Net.connect \"127.0.0.1\" port
+  let got = ask 20 0 c
+  Async.await t
+  println (show got))
+";
+    let (alone, _) = run_on(src, 1, RunConfig::default());
+    assert_eq!(alone, "80\n");
+    let (out, finished) = run_on(src, 2, RunConfig::default().with_sched(Sched::RescueAlways));
+    assert_eq!(out, alone);
+    assert!(finished.rescued >= 1, "{finished:?}");
+}
+
 /// 別の worker の driver に回した設定の操作は、host が受け付けるまで取り消しを見ずに待つ。取り消したスコープの中でも
 /// 投げずに終わり、相手は EOF を読む (docs/spec/stdlib.md の「`Std.Net`」)。
 #[test]

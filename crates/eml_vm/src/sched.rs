@@ -217,6 +217,9 @@ pub enum Sched {
     Sequential,
     /// seed で決まる擬似乱数で、横取りする安全点と次のタスクを選ぶ。
     Seeded(u64),
+    /// 横取りせず、worker を作った後は始める仕事と再開する仕事をどれも救済でほかの worker へ移す。救済の道を確かめる
+    /// テストのための方針である。
+    RescueAlways,
 }
 
 impl Sched {
@@ -224,7 +227,7 @@ impl Sched {
     pub fn seed(self) -> Option<u64> {
         match self {
             Sched::Seeded(seed) => Some(seed),
-            Sched::Normal | Sched::Sequential => None,
+            Sched::Normal | Sched::Sequential | Sched::RescueAlways => None,
         }
     }
 }
@@ -247,8 +250,15 @@ pub trait Policy: Send {
     fn pick(&mut self, ready: &mut VecDeque<Ready>) -> Option<Ready>;
     /// 起こしたタスクを、走れるタスクの列に入れる。列の lock の下で呼ぶ。
     fn wake(&mut self, ready: &mut VecDeque<Ready>, task: TaskId);
-    /// この worker の仕事を救済してよいかを受け取る。`Scheduler` を作るときに1回だけ呼ぶ。
+    /// この worker の仕事を救済してよいかを受け取る。worker 1..N-1 は `Scheduler` を作るときに、worker 0 は
+    /// worker 1..N-1 を作った後に1回だけ受け取る。1つも作れなかった worker 0 は受け取らない。
     fn set_rescuable(&mut self, _rescuable: bool) {}
+    /// worker 0 が worker 1..N-1 を作り、作れた数を書いた直後に1回呼ぶ。
+    fn workers_started(&mut self) {}
+    /// 救済のために実行待ちの項を予約しているか。真の間は、集める地点の終わりに自分で救済を頼む。
+    fn reserves(&self) -> bool {
+        false
+    }
     /// worker `k` の `Scheduler` が使う方針。seed を持つ方針は worker ごとに別の擬似乱数の列にする。同じ seed の run は
     /// どの worker でも同じ列を引かないためである。
     fn for_worker(&self, k: usize) -> Self
@@ -311,6 +321,60 @@ impl Policy for Sequential {
 
     fn for_worker(&self, _k: usize) -> Sequential {
         *self
+    }
+}
+
+/// 救済の道を確かめるテストのための方針。横取りと `wake` は `Sequential` と同じである。worker 1..N-1 を作った後
+/// (`active`) で、この worker を救済してよいとき (`rescuable`) だけ、救済で受けていない始める仕事と再開する仕事を
+/// 予約し、`pick` はそれを飛ばす。予約した項は集める地点の終わりの頼みで次の worker が盗む。ほかのときは
+/// `Sequential` と同じに動く (docs/spec/vm.md の「タスクとスケジュール」)。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RescueAlways {
+    active: bool,
+    rescuable: bool,
+}
+
+impl Policy for RescueAlways {
+    const PREEMPTS: bool = false;
+    const RESCUE: Rescue = Rescue::Always;
+
+    #[inline(always)]
+    fn tick(&mut self) -> bool {
+        false
+    }
+
+    fn reload(&mut self) {}
+
+    fn pick(&mut self, ready: &mut VecDeque<Ready>) -> Option<Ready> {
+        if !self.reserves() {
+            return ready.pop_front();
+        }
+        let index = ready.iter().position(|item| !item.counted())?;
+        ready.remove(index)
+    }
+
+    fn wake(&mut self, ready: &mut VecDeque<Ready>, task: TaskId) {
+        ready.push_front(Ready::Task(task));
+    }
+
+    fn set_rescuable(&mut self, rescuable: bool) {
+        self.rescuable = rescuable;
+    }
+
+    fn workers_started(&mut self) {
+        self.active = true;
+    }
+
+    fn reserves(&self) -> bool {
+        self.active && self.rescuable
+    }
+
+    // worker 1..N-1 は作れたときにだけあるので、始めから働く
+    fn for_worker(&self, k: usize) -> RescueAlways {
+        RescueAlways {
+            active: k >= 1,
+            rescuable: false,
+        }
     }
 }
 
@@ -480,6 +544,10 @@ pub struct Scheduler<P: Policy> {
     free_tasks: Vec<TaskId>,
     /// 動いているタスクの番号。
     pub(crate) current: TaskId,
+    /// 根のスコープを待とうとして切り替える途中の今のタスクに、スコープが閉じた起こしが届いた。そのタスクはまだ表に
+    /// いないので、列に入れずにここに覚え、`switch_away` が待たずに続ける。根のタスクがほかの worker に救済されると、
+    /// 切り替えの集める地点より先に閉じうる (docs/spec/vm.md の「`Async` のタスク」)。
+    pub(crate) current_woken: bool,
     pub(crate) joins: Vec<Option<JoinNode>>,
     free_joins: Vec<JoinId>,
     /// 方針が安全点で始めた切り替えの数。
@@ -608,6 +676,7 @@ impl<P: Policy> Scheduler<P> {
             tasks: vec![None],
             free_tasks: Vec::new(),
             current: MAIN,
+            current_woken: false,
             joins: Vec::new(),
             free_joins: Vec::new(),
             preemptions: 0,
@@ -663,6 +732,8 @@ impl<P: Policy> Scheduler<P> {
             sched.driver_kind = DriverKind::Real;
         }
         sched.index = index;
+        let rescuable = rescuable(&sched.run, index);
+        sched.policy.set_rescuable(rescuable);
         sched.workers = Workers::Peer;
         sched.watcher.tried = true;
         sched.watcher.home = false;
@@ -922,13 +993,26 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// worker `victim` の救済の頼みを受ける。止める印が立っているか、前の頼みがまだ処理されていなければ捨てる。そうでなければ、
-    /// `victim` の3つの数を盗む前にここで読んで覚え、予算を決めて、次の集める地点の最初の区間で盗ませる
-    /// (docs/spec/vm.md の「救済」)。
+    /// `Always` では `victim` の頼んだ印を下ろし、`victim` の3つの数を盗む前にここで読んで覚え、予算を決めて、次の
+    /// 集める地点の最初の区間で盗ませる (docs/spec/vm.md の「救済」「タスクとスケジュール」)。
     pub(crate) fn request_rescue(&mut self, victim: usize) {
-        if stopping(&self.watcher.control, self.index) || self.rescue.is_some() {
+        if stopping(&self.watcher.control, self.index) {
+            return;
+        }
+        if self.rescue.is_some() {
+            // `Always` の頼みは、頼んだ印が下りるまで次が送られない。印を下ろすのはこの後の受け付けだけで、受け付けた
+            // 頼みは同じ集める地点で盗むので、処理していない頼みがあるうちに次の頼みは届かない
+            debug_assert!(
+                P::RESCUE != Rescue::Always,
+                "a rescue-always request arrives while another is pending"
+            );
             return;
         }
         let slot = &self.run.slots[victim];
+        // 盗む lock の前に下ろす。持ち主はこの後に積んだ項を、下りた印の `swap` で見つけてまた頼む
+        if P::RESCUE == Rescue::Always {
+            slot.asked.store(false, Ordering::Release);
+        }
         let ready = slot.ready_entries.load(Ordering::Relaxed);
         let inbox = slot.inbox_work.load(Ordering::Relaxed);
         let settled = slot.settled.load(Ordering::Relaxed);
@@ -938,6 +1022,30 @@ impl<P: Policy> Scheduler<P> {
             Rescue::Never | Rescue::Watched => rescue_budget(ready + inbox),
         };
         self.rescue = Some((victim, budget));
+    }
+
+    /// `RescueAlways` の集める地点の終わりの頼み。予約した項が列にあり、頼んだ印が下りていれば、印を立ててから次の
+    /// worker `(k + 1) % live` に `Rescue` を送る。どの lock も持たずに呼ぶ。印が立っている間は頼まないので、頼みは
+    /// 1つずつしか届かない (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn ask_rescue(&self) {
+        if !self.policy.reserves() {
+            return;
+        }
+        let k = self.index;
+        let slot = &self.run.slots[k];
+        if slot.ready_entries.load(Ordering::Relaxed) == 0
+            || slot.asked.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        let rescuer = (k + 1) % self.run.live();
+        self.run.send(
+            &self.watcher.control,
+            rescuer,
+            Notice::Rescue { victim: k as u32 },
+        );
     }
 
     /// 救済の区間の後に、どの lock も持たずに結果を数え、元の worker の空振りの印を直す。盗めた救済と走査が切れた救済は
@@ -1862,11 +1970,11 @@ mod tests {
 
     /// worker 0 (元の worker) と worker 1 (救済する worker) の2つの `Scheduler` と、それぞれの `Ctx`。スレッドは作らず、
     /// 両方の集める地点を手で動かす。
-    struct Pair<P: Policy = Sequential> {
+    struct Pair<P: Policy = Sequential, V: Policy = Sequential> {
         control: Arc<Control>,
         run: Arc<Run>,
         shared: Arc<Shared>,
-        victim: Scheduler<Sequential>,
+        victim: Scheduler<V>,
         victim_ctx: Ctx<eml_rt::Checked>,
         rescuer: Scheduler<P>,
         rescuer_ctx: Ctx<eml_rt::Checked>,
@@ -1878,6 +1986,11 @@ mod tests {
 
     /// 救済する worker 1 の方針が `rescuer` の `Pair`。
     fn pair_with<P: Policy>(rescuer: P) -> Pair<P> {
+        pair_of(Sequential, rescuer)
+    }
+
+    /// 元の worker 0 の方針が `victim`、救済する worker 1 の方針が `rescuer` の `Pair`。
+    fn pair_of<V: Policy, P: Policy>(victim: V, rescuer: P) -> Pair<P, V> {
         let control = Arc::new(Control::new(Limits {
             workers: 2,
             ..Limits::default()
@@ -1891,7 +2004,7 @@ mod tests {
         ));
         let shared = Arc::new(Shared::new(Registry::new(Vec::new(), 2)));
         let victim = Scheduler::new(
-            Sequential,
+            victim,
             Box::new(driver),
             Arc::clone(&run),
             Arc::clone(&control),
@@ -1922,7 +2035,7 @@ mod tests {
         }
     }
 
-    impl<P: Policy> Pair<P> {
+    impl<P: Policy, V: Policy> Pair<P, V> {
         /// worker 1 が、集める地点と同じく登録表の lock の下で、予算 `budget` で worker 0 から盗む。結果と盗んだ仕事を
         /// 返す。
         fn rescue(&mut self, budget: usize) -> (StealResult, Vec<Runnable>) {
@@ -2429,5 +2542,154 @@ mod tests {
         assert!(p.rescuer.stolen.is_empty() && p.rescuer.steal_result.is_none());
         assert_eq!(cells::owner_of(&p.shared, start), 0);
         assert_eq!(queue(&p.run, 0).len(), 1);
+    }
+
+    /// 救済を強いる方針の2つの worker。worker 1 は作ったときから働き、worker 0 は作れた数を書いた後に働き始める。
+    fn rescue_always_pair() -> Pair<RescueAlways, RescueAlways> {
+        let mut p = pair_of(
+            RescueAlways::default(),
+            RescueAlways::default().for_worker(1),
+        );
+        p.run.set_live(2);
+        p.victim.policy.set_rescuable(rescuable(&p.run, 0));
+        p.victim.policy.workers_started();
+        p
+    }
+
+    /// 作った worker が `live` 個の run の、救済を強いる方針の worker `k` (`k` ≥ 1) の `Scheduler`。
+    fn rescue_always_worker(
+        k: usize,
+        live: usize,
+    ) -> (Arc<Control>, Arc<Run>, Arc<Shared>, Scheduler<RescueAlways>) {
+        let control = Arc::new(Control::new(Limits {
+            workers: live,
+            ..Limits::default()
+        }));
+        let run = Arc::new(Run::new(
+            live,
+            None,
+            RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        ));
+        run.set_live(live);
+        let shared = Arc::new(Shared::new(Registry::new(Vec::new(), live)));
+        let sched = Scheduler::worker(
+            RescueAlways::default().for_worker(k),
+            Arc::clone(&run),
+            Arc::clone(&control),
+            k,
+            0,
+            usize::MAX,
+            Arc::clone(&shared),
+        );
+        (control, run, shared, sched)
+    }
+
+    /// 持ち主 `owner` の、まだ始めていないタスクを始める仕事の項。
+    fn start_entry(shared: &Shared, owner: u32, rescued: bool) -> Ready {
+        Ready::Entry(Entry {
+            cell: cells::placed_task(shared, owner),
+            worker: owner,
+            kind: EntryKind::Start,
+            word: Word::UNIT,
+            rescued,
+        })
+    }
+
+    /// 予約した項を持つ worker 1 は、次の worker 2 に自分の救済を1回だけ頼む。頼みが受け付けられて印が下りるまでは、
+    /// 集める地点の終わりが来ても頼まない (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[test]
+    fn rescue_always_asks_its_successor_once() {
+        let (control, run, shared, sched) = rescue_always_worker(1, 3);
+        sched.ask_rescue();
+        assert!(inbox(&run, &control, 2).is_empty());
+        run.push_ready(1, start_entry(&shared, 1, false));
+        sched.ask_rescue();
+        assert!(run.slots[1].asked.load(Ordering::Acquire));
+        assert_eq!(inbox(&run, &control, 2), ["rescue 1".to_string()]);
+        sched.ask_rescue();
+        assert_eq!(inbox(&run, &control, 2), ["rescue 1".to_string()]);
+        assert!(inbox(&run, &control, 0).is_empty());
+    }
+
+    /// 働く間の `pick` は、予約した項 (救済で受けていない始める仕事と再開する仕事) を飛ばして次の項を取る。働く前と、
+    /// 救済で受けた項は、`Sequential` と同じく先頭から取る (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[test]
+    fn rescue_always_pick_skips_reserved_entries() {
+        let shared = Shared::new(Registry::new(Vec::new(), 2));
+        let queue = |rescued| VecDeque::from([start_entry(&shared, 0, rescued), Ready::Task(5)]);
+        let mut policy = RescueAlways::default();
+        policy.set_rescuable(true);
+        assert!(matches!(
+            policy.pick(&mut queue(false)),
+            Some(Ready::Entry(_))
+        ));
+        policy.workers_started();
+        let mut ready = queue(false);
+        assert!(matches!(policy.pick(&mut ready), Some(Ready::Task(5))));
+        assert!(policy.pick(&mut ready).is_none());
+        assert_eq!(ready.len(), 1);
+        assert!(matches!(
+            policy.pick(&mut queue(true)),
+            Some(Ready::Entry(_))
+        ));
+        let mut peer = RescueAlways::default().for_worker(1);
+        peer.set_rescuable(true);
+        assert!(matches!(peer.pick(&mut queue(false)), Some(Ready::Task(5))));
+    }
+
+    /// 救済してはいけない worker では、働く間も何も予約せず、`pick` は項をそのまま取り、救済を頼まない
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[test]
+    fn rescue_always_reserves_nothing_on_an_unrescuable_worker() {
+        let (control, run, shared, mut sched) = rescue_always_worker(1, 3);
+        sched.policy.set_rescuable(false);
+        run.push_ready(1, start_entry(&shared, 1, false));
+        sched.ask_rescue();
+        assert!(!run.slots[1].asked.load(Ordering::Acquire));
+        assert!(inbox(&run, &control, 2).is_empty());
+        let picked = run.pick_ready(1, &mut sched.policy);
+        assert!(matches!(picked, Some(Ready::Entry(_))));
+        assert!(run.ready_is_empty(1));
+    }
+
+    /// 救済を強いる方針の頼みは予算を限らず、予約した項をすべて盗む。`Watched` の予算なら半分の 2 である
+    /// (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn a_rescue_always_request_takes_every_reserved_entry() {
+        let mut p = rescue_always_pair();
+        for _ in 0..3 {
+            p.run.push_ready(0, start_entry(&p.shared, 0, false));
+        }
+        p.rescuer.request_rescue(0);
+        assert_eq!(p.rescuer.rescue, Some((0, usize::MAX)));
+        p.rescuer.gather(&mut p.rescuer_ctx, 0, false).unwrap();
+        assert_eq!((p.rescuer.rescues, p.rescuer.rescued), (1, 3));
+        assert!(queue(&p.run, 0).is_empty());
+        assert_eq!(p.rescuer.stolen.len(), 3);
+    }
+
+    /// 頼まれた worker は盗む前に頼んだ印を下ろすので、盗んだ後に積まれた項は持ち主の次の頼みで盗まれる。頼みを
+    /// 受け付けずに捨てるのは止める印が立った後だけで、run の終わりの `take_slot` で捨てる頼みも印は下ろす
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[test]
+    fn a_rescue_always_victim_asks_again_after_each_rescue() {
+        let mut p = rescue_always_pair();
+        for round in 1..=2 {
+            p.run.push_ready(0, start_entry(&p.shared, 0, false));
+            p.victim.ask_rescue();
+            assert_eq!(inbox(&p.run, &p.control, 1), ["rescue 0".to_string()]);
+            p.rescuer.gather(&mut p.rescuer_ctx, 0, false).unwrap();
+            assert!(!p.run.slots[0].asked.load(Ordering::Acquire));
+            assert_eq!(p.rescuer.rescued, round);
+            assert!(queue(&p.run, 0).is_empty());
+        }
+        p.run.slots[1].asked.store(true, Ordering::Release);
+        p.run.send(&p.control, 0, Notice::Rescue { victim: 1 });
+        p.victim
+            .take_slot(&mut p.victim_ctx, 0, &mut Vec::new())
+            .unwrap();
+        assert!(p.victim.rescue.is_none());
+        assert!(!p.run.slots[1].asked.load(Ordering::Acquire));
     }
 }

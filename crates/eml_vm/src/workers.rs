@@ -64,7 +64,7 @@ pub(crate) enum EntryKind {
 
 impl Ready {
     /// 欄の `ready_entries` に数える項か。救済で受けていない、始める仕事と `resume_task` で再開する仕事である。
-    fn counted(&self) -> bool {
+    pub(crate) fn counted(&self) -> bool {
         matches!(
             self,
             Ready::Entry(Entry {
@@ -113,7 +113,6 @@ pub(crate) enum Notice {
     Completion(CellRef),
     /// 救済の頼み。`victim` の仕事を盗めと、空いていた worker か `RescueAlways` の前の worker が頼む。語を持たず、
     /// `in_flight` に数えない。run の終わりでは仕事に数えず、捨てる (docs/spec/vm.md の「タスクとスケジュール」)。
-    #[cfg_attr(not(test), expect(dead_code, reason = "no sender asks for a rescue"))]
     Rescue { victim: u32 },
 }
 
@@ -260,6 +259,9 @@ pub(crate) struct Slot {
     pub(crate) futile_ready: AtomicUsize,
     pub(crate) futile_inbox: AtomicUsize,
     pub(crate) futile_settled: AtomicU64,
+    /// `RescueAlways` の頼んだ印。持ち主が `Rescue` を送る前に立て、頼まれた worker が盗む前に下ろす
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) asked: AtomicBool,
 }
 
 /// 1回の run で worker が共有する表。run ごとに作り、run の終わりに捨てる。
@@ -335,6 +337,7 @@ impl Run {
                 futile_ready: AtomicUsize::new(0),
                 futile_inbox: AtomicUsize::new(0),
                 futile_settled: AtomicU64::new(0),
+                asked: AtomicBool::new(false),
             })
             .collect();
         Run {
@@ -358,11 +361,16 @@ impl Run {
         self.live.store(n, Ordering::Release);
     }
 
+    /// 作った worker の数で、worker 0 を含む。worker 0 が書いた後に動き始めた worker と、その知らせを受けた worker が読む。
+    pub(crate) fn live(&self) -> usize {
+        self.live.load(Ordering::Acquire)
+    }
+
     /// 次に始める `Async` のタスクの持ち主。作った worker を 1 から順に回る。数えるだけの数なので Relaxed で足し、
     /// 作った数は worker 0 が書いた後の知らせを受けてから読むので、Acquire で足りる (docs/spec/vm.md の
     /// 「`Async` のタスク」)。
     pub(crate) fn next_owner(&self) -> u32 {
-        let live = self.live.load(Ordering::Acquire);
+        let live = self.live();
         (self.next_place.fetch_add(1, Ordering::Relaxed) % live) as u32
     }
 

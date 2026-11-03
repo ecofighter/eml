@@ -19,7 +19,8 @@ use crate::data;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
-    JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
+    JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Rescue, Scheduler, TaskId,
+    TaskState,
 };
 use crate::tls;
 use crate::workers::{Entry, EntryKind, Notice, Ready, Workers};
@@ -1535,6 +1536,10 @@ fn switch_away<R: Exec>(
         sched.hold.is_none(),
         "a channel reservation is held at a switch"
     );
+    debug_assert!(
+        !sched.current_woken,
+        "a wake of the current task is left from an earlier switch"
+    );
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)。走れるタスクがなければ直後の `wait` が OS を見るので、ここでは
     // 見ない。走れるタスクが続くときは `POLL_EVERY` 回に1回だけ見る (docs/spec/vm.md の「時計と driver」)
@@ -1559,6 +1564,16 @@ fn switch_away<R: Exec>(
             let at = complete_join::<R>(code, ctx, task, sched, j)?;
             let result = safepoint::<R>(code, ctx, task, sched);
             return at_par(code, task, sched, at, result);
+        }
+        // 根のスコープも、待とうとするタスクが表に入る前に閉じうる。そのときは待たずに `Async` の命令の次から続ける
+        if let Some(TaskState::WaitingCell(root)) = keep
+            && std::mem::take(&mut sched.current_woken)
+        {
+            debug_assert!(
+                sched.cells.lock().closed(root).unwrap_or(false),
+                "a run wakes before its scope closes"
+            );
+            return Ok(());
         }
         if let Some(item) = sched.run.pick_ready(sched.index, &mut sched.policy) {
             break ready_task(code, sched, item)?;
@@ -1684,6 +1699,11 @@ fn collect<R: Exec>(
             enqueue(sched, run, true)?;
         }
         sched.stolen = stolen;
+    }
+    // 自分で頼む方針は、この集める地点が積んだ項まで見てから頼む。lock はもうどれも持っていない
+    // (docs/spec/vm.md の「タスクとスケジュール」)
+    if R::P::RESCUE == Rescue::Always {
+        sched.ask_rescue();
     }
     gathered
 }
@@ -2975,6 +2995,11 @@ fn enqueue<P: Policy>(
         },
         Runnable::Token(WaitToken(token)) => {
             let id = token as TaskId;
+            // 動いているタスクの欄は空である。待とうとしている今のタスクへの起こしは `switch_away` が受ける
+            if id == sched.current && matches!(sched.tasks.get(id), Some(None)) {
+                sched.current_woken = true;
+                return Ok(());
+            }
             match sched.tasks.get(id) {
                 Some(Some(Task {
                     state: TaskState::WaitingCell(_),

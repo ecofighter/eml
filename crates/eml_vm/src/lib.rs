@@ -13,7 +13,9 @@ use crate::counters::Counters;
 use crate::driver::{DriverKind, RunClock};
 use crate::error::KEPT_PENDING;
 use crate::vm::{ExecWith, Exit};
-use crate::workers::{Retired, Run, Shutdown, WorkerExit, Workers, settle, spawn_workers};
+use crate::workers::{
+    Retired, Run, Shutdown, WorkerExit, Workers, rescuable, settle, spawn_workers,
+};
 
 mod apply;
 mod cells;
@@ -40,7 +42,7 @@ pub use driver::{Clock, Signal, VirtualSignal};
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
-pub use sched::{Normal, Policy, Rescue, Sched, Scheduler, Seeded, Sequential};
+pub use sched::{Normal, Policy, Rescue, RescueAlways, Sched, Scheduler, Seeded, Sequential};
 pub use vm::Task;
 pub use workers::{Entry, Ready};
 
@@ -623,6 +625,14 @@ impl<M: Mode> Machine<M> {
             Sched::Seeded(seed) => {
                 run_scheduled(code, ctx, &mut task, Seeded::new(seed), start, &mut counts)
             }
+            Sched::RescueAlways => run_scheduled(
+                code,
+                ctx,
+                &mut task,
+                RescueAlways::default(),
+                start,
+                &mut counts,
+            ),
         };
         self.shared_roots = scheduled.shared_roots;
         // 誤りで終わる run の分も積算に入れる。ほかのヒープは回復で落ちるので、落ちる前に足す
@@ -961,10 +971,14 @@ fn run_scheduled<M: Mode, P: Policy>(
                     shutdown.armed = !handles.is_empty();
                     // タスクを置くのは作れた worker だけである
                     sched.run.set_live(handles.len() + 1);
-                    // 1つも作れなければ worker 0 だけで続ける
+                    // 1つも作れなければ worker 0 だけで続ける。救済を強いる方針は、救済する worker がいるときだけ働く
                     sched.workers = match handles.len() {
                         0 => Workers::Denied,
-                        n => Workers::Started(n),
+                        n => {
+                            sched.policy.set_rescuable(rescuable(&sched.run, 0));
+                            sched.policy.workers_started();
+                            Workers::Started(n)
+                        }
                     };
                 }
                 Err(error) => break Err(error),
