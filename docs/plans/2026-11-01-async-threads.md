@@ -286,6 +286,8 @@ A13 の計測の決定 (2026-11-03、Linux の 4 CPU の KVM、release、`089dcc
 - `chan_pingpong` は t(4) が t(1) の 12.4 倍なので、C で roadmap の「ロックフリーの受け箱と channel」の見直す条件を書き換える
 - `spread_par` の伸びは N = 2 と 4 でどちらも 1.94 なので、C で `par` の頭打ちの文を roadmap に足す
 
+- E-6 (2026-11-03、利用者): A14 で `eml_io` の核のテスト3本の期待値が変わった。`an_aborted_accept_is_retried_under_the_same_key` (`Done::Accepted` を期待する)、`quiesce_closes_the_stream_of_a_discarded_accept` と `an_event_for_an_unknown_key_closes_only_an_accepted_sock` (閉じたことを偽の `Call::Close` でなく pipe で確かめる。受けたソケットは driver に登録されないので、driver の close の呼び出しが出ない)。どれも目的は変わらず、計画で決めた `Done::Accepted` の API から来る種類2の変更として、利用者が受け入れた。あわせて、テストの driver は受け付けを `Done::Stream` で終えたままにする (仮想のネットワークは driver に1つで、仮想の時計ではどの I/O も worker 0 が受け付けるため、縛り先は同じになる)。Windows の仮の形は使わず、IOCP のポートへの結び付けを `adopt` に移した
+
 K2-d を当てたファイル (段の全体で5本まで。今 2 本):
 
 | ファイル | 単位 | 見えた違い | 扱い |
