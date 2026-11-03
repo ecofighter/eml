@@ -557,6 +557,18 @@ fn stream(completion: Completion) -> (eml_rt::IoHandle, std::net::SocketAddr) {
     }
 }
 
+/// 受け `op` の完了を待ち、受けたソケットを `driver` に取り込んで、そのハンドルと相手の番地を返す。
+fn accepted(
+    driver: &mut RealDriver,
+    stash: &mut Vec<Completion>,
+    op: Started,
+) -> (eml_rt::IoHandle, std::net::SocketAddr) {
+    match complete(driver, stash, op).result.unwrap() {
+        Done::Accepted { sock, peer } => (driver.adopt(sock).unwrap(), peer),
+        other => panic!("an accept ended with {other:?}"),
+    }
+}
+
 /// 待ち受けて、受けた端と接続した端を返す。
 fn connection(
     driver: &mut RealDriver,
@@ -572,7 +584,7 @@ fn connection(
         },
     );
     let (client, _) = stream(complete(driver, stash, connect));
-    let (server, _) = stream(complete(driver, stash, accept));
+    let (server, _) = accepted(driver, stash, accept);
     driver.close(listener);
     (server, client)
 }
@@ -646,7 +658,7 @@ fn an_accept_returns_the_connected_stream_and_its_peer() {
     let connected = complete(&mut driver, &mut stash, connect);
     assert!(!connected.cancelled);
     let (client, server_addr) = stream(connected);
-    let (server, client_addr) = stream(complete(&mut driver, &mut stash, accept));
+    let (server, client_addr) = accepted(&mut driver, &mut stash, accept);
     assert_eq!(server_addr, loopback(port));
     assert!(client_addr.ip().is_loopback());
     assert_ne!(client_addr.port(), port);
@@ -799,7 +811,7 @@ fn a_long_write_completes_once_with_its_whole_length() {
         peer.read_to_end(&mut all).unwrap();
         all
     });
-    let (server, _) = stream(complete(&mut driver, &mut stash, accept));
+    let (server, _) = accepted(&mut driver, &mut stash, accept);
     let mut data: Vec<u8> = (0..8 << 20).map(|i: u32| i as u8).collect();
     let write = submit(
         &mut driver,
@@ -833,7 +845,7 @@ fn a_cancelled_pending_long_write_completes_once() {
     let (listener, port) = listen(&mut driver, &mut stash);
     let accept = submit(&mut driver, Op::Accept { listener });
     let mut peer = std::net::TcpStream::connect(loopback(port)).unwrap();
-    let (server, _) = stream(complete(&mut driver, &mut stash, accept));
+    let (server, _) = accepted(&mut driver, &mut stash, accept);
     let mut data = vec![1u8; PENDING_CHUNK];
     let write = write_until_pending(&mut driver, server, &mut data);
     poll_for(&mut driver, 5);
@@ -1037,7 +1049,7 @@ fn a_connect_by_name_tries_the_looked_up_addresses_in_order() {
     );
     let (_, peer) = stream(complete(&mut driver, &mut stash, connect));
     assert_eq!(peer, loopback(port));
-    stream(complete(&mut driver, &mut stash, accept));
+    accepted(&mut driver, &mut stash, accept);
 }
 
 #[test]
@@ -1490,7 +1502,7 @@ fn a_probe_on_a_stream_that_had_data_before_accept_finishes() {
     let mut peer = std::net::TcpStream::connect(loopback(port)).unwrap();
     peer.write_all(b"x").unwrap();
     let accept = submit(&mut driver, Op::Accept { listener });
-    let (server, _) = stream(complete(&mut driver, &mut stash, accept));
+    let (server, _) = accepted(&mut driver, &mut stash, accept);
     let probe = submit(&mut driver, Op::Readable { handle: server });
     complete(&mut driver, &mut stash, probe).result.unwrap();
     let mut room = [0u8; 4];
@@ -1553,7 +1565,7 @@ fn queued_connections_are_accepted_one_per_op() {
     let _second = std::net::TcpStream::connect(loopback(port)).unwrap();
     for _ in 0..2 {
         let accept = submit(&mut driver, Op::Accept { listener });
-        stream(complete(&mut driver, &mut stash, accept));
+        accepted(&mut driver, &mut stash, accept);
     }
     assert_eq!(driver.pending(), 0);
 }
@@ -1686,4 +1698,79 @@ fn wakes_before_a_wait_end_only_that_wait() {
 fn a_driver_made_at_an_earlier_epoch_counts_from_it() {
     let driver = RealDriver::new_at(Instant::now() - Duration::from_secs(10)).unwrap();
     assert!(driver.now() >= Duration::from_secs(10));
+}
+
+/// 受けたソケットはどの driver にも登録しないので、別のスレッドの driver が取り込んで読み書きできる。
+#[test]
+fn an_accepted_socket_is_used_by_the_driver_of_another_thread() {
+    use std::io::{Read, Write};
+
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (listener, port) = listen(&mut driver, &mut stash);
+    let accept = submit(&mut driver, Op::Accept { listener });
+    let mut peer = std::net::TcpStream::connect(loopback(port)).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    let Done::Accepted { sock, .. } = complete(&mut driver, &mut stash, accept).result.unwrap()
+    else {
+        panic!("an accept ended without a socket");
+    };
+    peer.write_all(b"ping").unwrap();
+    std::thread::spawn(move || {
+        let mut other = RealDriver::new().unwrap();
+        let mut stash = Vec::new();
+        let handle = other.adopt(sock).unwrap();
+        let mut got = Vec::new();
+        while got.len() < 4 {
+            let mut data = [0u8; 4];
+            let read = submit(
+                &mut other,
+                Op::Read {
+                    handle,
+                    buf: raw(&mut data),
+                },
+            );
+            let Done::Size(n) = complete(&mut other, &mut stash, read).result.unwrap() else {
+                panic!("a read ended without a size");
+            };
+            assert!(n > 0, "the peer closed early");
+            got.extend_from_slice(&data[..n]);
+        }
+        assert_eq!(got, b"ping");
+        let mut data = *b"pong";
+        let write = submit(
+            &mut other,
+            Op::Write {
+                handle,
+                buf: raw(&mut data),
+            },
+        );
+        assert_eq!(
+            complete(&mut other, &mut stash, write).result.unwrap(),
+            Done::Size(4)
+        );
+    })
+    .join()
+    .unwrap();
+    let mut answer = [0u8; 4];
+    peer.read_exact(&mut answer).unwrap();
+    assert_eq!(&answer, b"pong");
+}
+
+/// 取り込まずに落とした受けたソケットは閉じ、相手は EOF を読む。
+#[test]
+fn a_dropped_accepted_socket_is_closed() {
+    use std::io::Read;
+
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let (listener, port) = listen(&mut driver, &mut stash);
+    let accept = submit(&mut driver, Op::Accept { listener });
+    let mut peer = std::net::TcpStream::connect(loopback(port)).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    let completion = complete(&mut driver, &mut stash, accept);
+    assert!(matches!(completion.result, Ok(Done::Accepted { .. })));
+    drop(completion);
+    let mut rest = Vec::new();
+    assert_eq!(peer.read_to_end(&mut rest).unwrap(), 0);
 }

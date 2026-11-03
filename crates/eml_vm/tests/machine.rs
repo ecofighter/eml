@@ -637,6 +637,10 @@ impl IoDriver for FakeDriver {
 
     fn close(&mut self, _handle: IoHandle) {}
 
+    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
     fn quiesce(&mut self) {
         self.quiesces.fetch_add(1, Ordering::SeqCst);
         if self.drains {
@@ -817,6 +821,10 @@ impl IoDriver for StubDriver {
     }
 
     fn close(&mut self, _handle: IoHandle) {}
+
+    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 
     fn quiesce(&mut self) {
         self.note(format!("quiesce {}", self.pending()));

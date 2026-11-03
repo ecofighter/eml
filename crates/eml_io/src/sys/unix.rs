@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use eml_rt::{IoWaker, OpKey, RawBuf};
+use eml_rt::{IoWaker, OpKey, RawBuf, RawSocket};
 use libc::c_int;
 
 use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
@@ -122,7 +122,7 @@ impl Rows {
     }
 
     /// 1つの event を行に写し、その向きの待ち手に `Retry` を出す。待ち手は忘れない。
-    fn deliver(&mut self, token: u64, ready: Ready, events: &mut Vec<Event<Sock>>) {
+    fn deliver(&mut self, token: u64, ready: Ready, events: &mut Vec<Event>) {
         let (row, generation) = untoken(token);
         let Some(r) = self.rows.get_mut(row as usize) else {
             return;
@@ -169,12 +169,12 @@ fn would_block(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::WouldBlock
 }
 
-fn pending() -> Start<Sock> {
+fn pending() -> Start {
     Start::Pending(Hold::None)
 }
 
 /// 読みの向きの1回の試みの結果を行に写す。
-fn read_result(r: &mut Row, key: OpKey, result: io::Result<Outcome<Sock>>) -> Start<Sock> {
+fn read_result(r: &mut Row, key: OpKey, result: io::Result<Outcome>) -> Start {
     match result {
         Err(e) if would_block(&e) => {
             r.ready = false;
@@ -189,7 +189,7 @@ fn read_result(r: &mut Row, key: OpKey, result: io::Result<Outcome<Sock>>) -> St
 }
 
 /// 書きの向きの1回の試みの結果を行に写す。書きの記憶は持たない。
-fn write_result(r: &mut Row, key: OpKey, result: io::Result<Outcome<Sock>>) -> Start<Sock> {
+fn write_result(r: &mut Row, key: OpKey, result: io::Result<Outcome>) -> Start {
     match result {
         Err(e) if would_block(&e) => {
             r.write = Some(key);
@@ -461,7 +461,7 @@ impl<P: Poller> Unix<P> {
         })
     }
 
-    /// ソケットを登録する唯一の所。`listen`、`Accept`、`Connect` が呼び、以後 `close` まで登録を変えない。
+    /// ソケットを登録する唯一の所。`listen`、`adopt`、`Connect` が呼び、以後 `close` まで登録を変えない。
     fn register_row(
         &mut self,
         fd: BorrowedFd<'_>,
@@ -472,7 +472,7 @@ impl<P: Poller> Unix<P> {
         self.poller.register(fd, token(row, generation), write)
     }
 
-    fn peek(&mut self, key: OpKey, sock: &Sock) -> Start<Sock> {
+    fn peek(&mut self, key: OpKey, sock: &Sock) -> Start {
         let r = self.rows.of(sock);
         if !r.ready {
             r.read = Some(key);
@@ -494,19 +494,19 @@ impl<P: Poller> Unix<P> {
         read_result(self.rows.of(sock), key, result)
     }
 
-    fn recv(&mut self, key: OpKey, sock: &Sock, buf: RawBuf) -> Start<Sock> {
+    fn recv(&mut self, key: OpKey, sock: &Sock, buf: RawBuf) -> Start {
         // 記憶によらず必ず試すので、データのある読みは1回の syscall で終わる
         self.rows.of(sock).fresh = false;
         let result = recv_raw(sock.fd.as_fd(), buf, RECV).map(Outcome::Size);
         read_result(self.rows.of(sock), key, result)
     }
 
-    fn send(&mut self, key: OpKey, sock: &Sock, buf: RawBuf) -> Start<Sock> {
+    fn send(&mut self, key: OpKey, sock: &Sock, buf: RawBuf) -> Start {
         let result = send_raw(sock.fd.as_fd(), buf, SEND).map(Outcome::Size);
         write_result(self.rows.of(sock), key, result)
     }
 
-    fn accept(&mut self, key: OpKey, listener: &Sock) -> Start<Sock> {
+    fn accept(&mut self, key: OpKey, listener: &Sock) -> Start {
         self.rows.of(listener).fresh = false;
         // SAFETY: `sockaddr_storage` は整数と配列だけの C の構造体で、すべて 0 は正しい値である
         let mut storage: libc::sockaddr_storage = unsafe { mem::zeroed() };
@@ -529,22 +529,14 @@ impl<P: Poller> Unix<P> {
         let Some(peer) = from_storage(&storage, len) else {
             return Start::Done(Err(io::Error::other("the peer has no IP address")));
         };
-        let (row, generation) = self.rows.adopt();
-        if let Err(e) = self.register_row(fd.as_fd(), row, generation, true) {
-            self.rows.release(row, generation);
-            return Start::Done(Err(e));
-        }
+        // 登録は最初に使う worker の driver が `adopt` で行う (docs/spec/vm.md の「時計と driver」)
         Start::Done(Ok(Outcome::Accepted {
-            sock: Sock {
-                fd,
-                row,
-                generation,
-            },
+            sock: RawSocket::new(fd),
             peer,
         }))
     }
 
-    fn connect(&mut self, key: OpKey, sock: &Sock, peer: SocketAddr) -> Start<Sock> {
+    fn connect(&mut self, key: OpKey, sock: &Sock, peer: SocketAddr) -> Start {
         if !self.rows.of(sock).connecting {
             let addr = RawAddr::new(peer);
             let (ptr, len) = addr.as_ptr();
@@ -673,7 +665,21 @@ impl<P: Poller> Backend for Unix<P> {
         drop(sock.fd);
     }
 
-    fn start(&mut self, key: OpKey, step: Step<'_, Sock>) -> Start<Sock> {
+    fn adopt(&mut self, sock: RawSocket) -> io::Result<Sock> {
+        let fd = sock.into_inner();
+        let (row, generation) = self.rows.adopt();
+        if let Err(e) = self.register_row(fd.as_fd(), row, generation, true) {
+            self.rows.release(row, generation);
+            return Err(e);
+        }
+        Ok(Sock {
+            fd,
+            row,
+            generation,
+        })
+    }
+
+    fn start(&mut self, key: OpKey, step: Step<'_, Sock>) -> Start {
         match step {
             Step::Peek { sock } => self.peek(key, sock),
             Step::Recv { sock, buf } => self.recv(key, sock, buf),
@@ -698,7 +704,7 @@ impl<P: Poller> Backend for Unix<P> {
         Ok(Cancel::Done)
     }
 
-    fn wait(&mut self, timeout: Option<Duration>, events: &mut Vec<Event<Sock>>) -> io::Result<()> {
+    fn wait(&mut self, timeout: Option<Duration>, events: &mut Vec<Event>) -> io::Result<()> {
         let rows = &mut self.rows;
         self.poller
             .poll(timeout, |token, ready| rows.deliver(token, ready, events))
@@ -747,14 +753,14 @@ mod tests {
         }
     }
 
-    fn done(start: Start<Sock>) -> Outcome<Sock> {
+    fn done(start: Start) -> Outcome {
         match start {
             Start::Done(result) => result.unwrap(),
             Start::Pending(_) => panic!("the step is pending"),
         }
     }
 
-    fn is_pending(start: &Start<Sock>) -> bool {
+    fn is_pending(start: &Start) -> bool {
         matches!(start, Start::Pending(Hold::None))
     }
 
@@ -774,7 +780,7 @@ mod tests {
             start = backend.start(key, Step::Accept { listener });
         }
         match done(start) {
-            Outcome::Accepted { sock, .. } => sock,
+            Outcome::Accepted { sock, .. } => backend.adopt(sock).unwrap(),
             _ => panic!("not an accepted socket"),
         }
     }

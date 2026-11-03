@@ -29,7 +29,8 @@ mod word;
 
 pub use control::{Control, Limits, Stop};
 pub use driver::{
-    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit,
+    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, OsSocket, RawBuf,
+    RawSocket, Submit,
 };
 pub use error::HeapError;
 pub use externs::{
@@ -71,10 +72,12 @@ const _: fn() = || {
     send_and_sync::<control::PageMap>();
 };
 
-// `RawBuf` は貸す側のスレッドで作り、driver を持つスレッドで使う (docs/spec/vm.md の「時計と driver」)
+// `RawBuf` は貸す側のスレッドで作り、driver を持つスレッドで使う。`RawSocket` は受けた driver のスレッドから、
+// 最初に使う worker のスレッドへ移る (docs/spec/vm.md の「時計と driver」)
 const _: fn() = || {
     fn send<T: Send>() {}
     send::<RawBuf>();
+    send::<RawSocket>();
 };
 
 #[cfg(test)]

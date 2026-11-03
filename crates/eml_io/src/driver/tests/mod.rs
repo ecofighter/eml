@@ -18,7 +18,7 @@ use eml_rt::{Completion, Done, IoDriver, IoHandle, Op, OpKey, RawBuf, Submit};
 
 use super::Driver;
 use super::backend::{Arrival, Cancel, Event, Hold, Outcome};
-use fake::{Call, Fake, FakeSock, Reply, StepKind};
+use fake::{Call, Fake, Reply, StepKind, accepted};
 
 /// 開くまで通さない門。`fn` の解決器は値を捕まえられないので、テストごとに `static` に置く。
 struct Gate {
@@ -112,7 +112,7 @@ fn pending(submit: Submit) {
     assert!(matches!(submit, Submit::Pending), "{submit:?}");
 }
 
-fn retry(key: OpKey) -> Event<FakeSock> {
+fn retry(key: OpKey) -> Event {
     Event {
         key,
         arrival: Arrival::Retry,
@@ -163,15 +163,13 @@ fn an_aborted_accept_is_retried_under_the_same_key() {
     let peer = addr("192.0.2.7:5000");
     let mut driver = driver();
     let listener = listen(&mut driver);
+    let (sock, _probe) = accepted();
     driver.backend.script(
         1,
         [
             Reply::Pending(Hold::None),
             Reply::Done(Err(io::ErrorKind::ConnectionAborted.into())),
-            Reply::Done(Ok(Outcome::Accepted {
-                sock: FakeSock(7),
-                peer,
-            })),
+            Reply::Done(Ok(Outcome::Accepted { sock, peer })),
         ],
     );
     pending(driver.submit(1, Op::Accept { listener }));
@@ -179,10 +177,7 @@ fn an_aborted_accept_is_retried_under_the_same_key() {
     let done = settle(&mut driver);
     assert_eq!(done.len(), 1);
     match done[0].result.as_ref().unwrap() {
-        Done::Stream { handle, peer: got } => {
-            assert_ne!(*handle, listener);
-            assert_eq!(*got, peer);
-        }
+        Done::Accepted { peer: got, .. } => assert_eq!(*got, peer),
         other => panic!("{other:?}"),
     }
     let accepts = calls(&driver.backend)
@@ -448,25 +443,21 @@ fn closing_a_handle_with_a_pending_op_closes_after_the_op() {
 fn quiesce_closes_the_stream_of_a_discarded_accept() {
     let mut driver = driver();
     let listener = listen(&mut driver);
+    let (sock, mut probe) = accepted();
     pending(driver.submit(1, Op::Accept { listener }));
     driver.backend.events.push(Event {
         key: 1,
         arrival: Arrival::Done(Ok(Outcome::Accepted {
-            sock: FakeSock(9),
+            sock,
             peer: addr("192.0.2.3:1"),
         })),
     });
     assert!(driver.wait(None).unwrap());
     assert_eq!(driver.pending(), 1);
+    assert!(!probe.closed());
     driver.quiesce();
     assert_eq!(driver.pending(), 0);
-    let closes = driver
-        .backend
-        .calls
-        .iter()
-        .filter(|c| **c == Call::Close(9))
-        .count();
-    assert_eq!(closes, 1);
+    assert!(probe.closed());
 }
 
 #[test]
@@ -771,21 +762,23 @@ fn a_driver_broken_by_a_failed_wait_still_reads_the_ends_on_drop() {
 fn an_event_for_an_unknown_key_closes_only_an_accepted_sock() {
     let mut driver = driver();
     let _listener = listen(&mut driver);
+    let (sock, mut probe) = accepted();
     driver.backend.events.push(Event {
         key: 7,
         arrival: Arrival::Done(Ok(Outcome::Accepted {
-            sock: FakeSock(9),
+            sock,
             peer: addr("192.0.2.3:1"),
         })),
     });
     assert!(driver.wait(Some(u64::MAX)).unwrap());
     assert!(completions(&mut driver).is_empty());
     assert_eq!(driver.pending(), 0);
+    assert!(probe.closed());
     let closes: Vec<&Call> = calls(&driver.backend)
         .into_iter()
         .filter(|c| matches!(c, Call::Close(_)))
         .collect();
-    assert_eq!(closes, [&Call::Close(9)]);
+    assert!(closes.is_empty(), "{closes:?}");
 }
 
 #[test]
@@ -1164,4 +1157,51 @@ mod pool {
         assert_eq!(done.len(), 2);
         assert!(done.iter().all(|c| matches!(c.result, Ok(Done::Size(_)))));
     }
+}
+
+#[test]
+fn an_adopted_socket_is_a_handle_of_the_adopting_driver() {
+    let mut driver = driver();
+    let (sock, _probe) = accepted();
+    let handle = driver.adopt(sock).unwrap();
+    // 取り込んだソケットは、ほかのハンドルと同じく読みに使える
+    driver.backend.script(1, [Reply::Fill(b"hi".to_vec())]);
+    let mut data = [0u8; 4];
+    match driver.submit(
+        1,
+        Op::Read {
+            handle,
+            buf: buf(&mut data),
+        },
+    ) {
+        Submit::Done(Ok(Done::Size(2))) => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(&data[..2], b"hi");
+    driver.close(handle);
+    assert_eq!(
+        calls(&driver.backend),
+        [
+            &Call::Adopt(0),
+            &Call::Start(1, StepKind::Recv),
+            &Call::Close(0)
+        ]
+    );
+}
+
+#[test]
+fn a_broken_driver_adopts_nothing_and_closes_the_socket() {
+    let mut driver = driver();
+    driver.backend.wait_error = Some(io::Error::other("the poller failed"));
+    assert!(driver.wait(Some(0)).is_err());
+    let (sock, mut probe) = accepted();
+    assert!(driver.adopt(sock).is_err());
+    assert!(probe.closed());
+    assert!(
+        !driver
+            .backend
+            .calls
+            .iter()
+            .any(|c| matches!(c, Call::Adopt(_)))
+    );
 }

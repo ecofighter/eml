@@ -568,9 +568,9 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// 本物の時計の run の worker `k` (`k` ≥ 1) が、まだ driver を持たなければ、自分のスレッドで run の時間の基準から
-    /// 作る。自分で受け付ける操作 (`listen` と `connect`) を出す前と、期限のある空きの待ちの前に呼ぶ。waker は眠った形に
-    /// なる前に置くので、作った後の起こしを取りこぼさない。ほかの run とほかの worker では何もしない
-    /// (docs/spec/vm.md の「時計と driver」)。
+    /// 作る。自分で受け付ける操作 (`listen` と `connect`、縛っていないストリームの操作) を出す前と、期限のある空きの
+    /// 待ちの前に呼ぶ。waker は眠った形になる前に置くので、作った後の起こしを取りこぼさない。ほかの run とほかの
+    /// worker では何もしない (docs/spec/vm.md の「時計と driver」)。
     pub(crate) fn own_driver(&mut self) -> Result<(), VmFault> {
         if self.driver.is_some() || self.run.io_worker(self.index) != self.index {
             return Ok(());

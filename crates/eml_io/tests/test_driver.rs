@@ -713,3 +713,15 @@ fn test_drivers_on_one_clock_see_each_others_waits() {
     assert!(a.wait(Some(7)).unwrap());
     assert_eq!(b.now(), Duration::from_millis(7));
 }
+
+/// 仮想のネットワークの端は driver の外に出ないので、テストの driver は OS のソケットを取り込まない。
+#[test]
+fn the_test_driver_adopts_no_socket() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let _near = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (far, _) = listener.accept().unwrap();
+    let sock = eml_rt::RawSocket::new(eml_rt::OsSocket::from(far));
+    let mut driver = TestDriver::new(None);
+    let e = driver.adopt(sock).unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::Unsupported);
+}

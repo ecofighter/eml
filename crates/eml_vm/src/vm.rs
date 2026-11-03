@@ -2435,6 +2435,7 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitWrite => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
+            bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
             let token = cells::submit_write(
                 &sched.cells,
@@ -2454,6 +2455,7 @@ fn async_op<R: Exec>(
             } else {
                 (Some(task.raw(arg(0)) != 0), task.get(arg(1)))
             };
+            bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
             let token = cells::submit_control(
                 &sched.cells,
@@ -2469,6 +2471,7 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
+            bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
             let token = cells::submit_read(
                 &sched.cells,
@@ -2568,6 +2571,7 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitReadLine => {
             let stream = task.get(arg(0));
+            bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
             let token = cells::submit_read_line(
                 &sched.cells,
@@ -2639,6 +2643,19 @@ fn io_kind(e: &std::io::Error) -> i64 {
         std::io::ErrorKind::Unsupported => externs::IO_NOT_AVAILABLE,
         _ => externs::IO_OTHER,
     }
+}
+
+/// ストリーム `stream` の操作を受け付ける前に、ストリームが受けたまま縛っていなければ自分の driver を用意する。
+/// 受け付けがストリームを自分の driver に取り込むためである (docs/spec/vm.md の「時計と driver」)。
+fn bind_here<M: Mode, P: Policy>(
+    sched: &mut Scheduler<P>,
+    ctx: &Ctx<M>,
+    stream: Word,
+) -> Result<(), VmFault> {
+    if cells::stream_unbound(ctx, stream)? {
+        sched.own_driver()?;
+    }
+    Ok(())
 }
 
 /// 今の `Task` のタスクのセル。`main` と `par` の右の子は `Async` の操作を実行しない。

@@ -440,6 +440,10 @@ impl eml_rt::IoDriver for DeadlineRecorder {
 
     fn close(&mut self, _handle: eml_rt::IoHandle) {}
 
+    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<eml_rt::IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
     fn quiesce(&mut self) {}
 }
 
@@ -717,6 +721,10 @@ impl eml_rt::IoDriver for ProbeRecorder {
 
     fn close(&mut self, handle: eml_rt::IoHandle) {
         self.inner.close(handle);
+    }
+
+    fn adopt(&mut self, sock: eml_rt::RawSocket) -> std::io::Result<eml_rt::IoHandle> {
+        self.inner.adopt(sock)
     }
 
     fn quiesce(&mut self) {

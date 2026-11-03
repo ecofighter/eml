@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use eml_rt::{Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit};
+use eml_rt::{
+    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, RawSocket, Submit,
+};
 
 use crate::flag::Flag;
 use net::{Connection, Network, check_virtual_host, no_handle};
@@ -338,6 +340,16 @@ impl IoDriver for TestDriver {
 
     fn close(&mut self, handle: IoHandle) {
         self.net.close(handle);
+    }
+
+    /// 仮想のネットワークは driver ごとにあり、その端は driver の外に出せない。そのため受けは `Done::Stream` で終え、
+    /// `Done::Accepted` のソケットを作らない。渡されたソケットは OS のもので、この driver のネットワークにないので断る
+    /// (docs/spec/vm.md の「時計と driver」)。
+    fn adopt(&mut self, _sock: RawSocket) -> io::Result<IoHandle> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the test driver adopts no sockets",
+        ))
     }
 
     fn quiesce(&mut self) {

@@ -55,7 +55,7 @@ use std::thread::ThreadId;
 
 use eml_rt::{
     Completion, Control, Ctx, Done, Fault, HandleBin, HeapError, IoDriver, IoHandle, Mode, Op,
-    OpKey, RawBuf, Submit, Word,
+    OpKey, RawBuf, RawSocket, Submit, Word,
 };
 
 /// 再開するタスクに渡す `Std.Async.Wake` の `Woke` のタグ (docs/spec/stdlib.md の「`Std.Async`」)。
@@ -681,8 +681,8 @@ impl Drop for TaskHandle {
 }
 
 /// リスナーとストリームが、どの worker の driver のハンドルかを表す。ハンドルを引く操作はその worker (host) が driver に
-/// 出す。`listen` と `connect` の結果は受け付けた worker の driver に、`accept` の結果は受けたリスナーの host の driver に
-/// 縛る (docs/spec/vm.md の「操作の記録」)。
+/// 出す。`listen` と `connect` の結果は受け付けた worker の driver に縛る。`accept` が `Done::Accepted` で返したソケットは
+/// 縛らずに持ち、最初に操作を受け付ける worker の driver に縛る (docs/spec/vm.md の「操作の記録」)。
 pub(crate) enum Bind {
     /// worker `host` の driver のハンドル `handle`。落ちたら、その driver の bin `bin` に積む。
     Bound {
@@ -690,24 +690,35 @@ pub(crate) enum Bind {
         handle: IoHandle,
         bin: Arc<HostBin>,
     },
+    /// まだどの driver にも取り込んでいない、受けたソケット。落ちたらその場で閉じる。
+    Unbound(RawSocket),
+    /// 取り込みを driver が断った。ソケットはそのときに閉じた。
+    Lost,
 }
 
 impl Bind {
-    fn host(&self) -> u32 {
-        let Bind::Bound { host, .. } = self;
-        *host
+    fn host(&self) -> Option<u32> {
+        match self {
+            Bind::Bound { host, .. } => Some(*host),
+            Bind::Unbound(_) | Bind::Lost => None,
+        }
     }
 
-    fn handle(&self) -> IoHandle {
-        let Bind::Bound { handle, .. } = self;
-        *handle
+    fn handle(&self) -> Result<IoHandle, CellFault> {
+        match self {
+            Bind::Bound { handle, .. } => Ok(*handle),
+            Bind::Unbound(_) | Bind::Lost => {
+                Err(CellFault::Internal("a stream is used before it is bound"))
+            }
+        }
     }
 
     /// ヒープの `decref` の中で走るので driver に触れず、driver が次に閉じるハンドルとして積むだけにする
-    /// (docs/spec/vm.md の「時計と driver」)。
+    /// (docs/spec/vm.md の「時計と driver」)。縛っていないソケットは driver の外にあるので、欄と一緒に落ちて閉じる。
     fn close(&self) {
-        let Bind::Bound { handle, bin, .. } = self;
-        bin.push(*handle);
+        if let Bind::Bound { handle, bin, .. } = self {
+            bin.push(*handle);
+        }
     }
 }
 
@@ -3035,6 +3046,21 @@ impl Registry {
                 }));
                 Ok(0)
             }
+            // 受けたソケットは縛らずにストリームにする。最初に操作を受け付ける worker が自分の driver に取り込む
+            // (docs/spec/vm.md の「操作の記録」)
+            (OpPhase::Transfer, OpKind::Accept, Ok(Done::Accepted { sock, peer })) => {
+                let stream = NetStream {
+                    bind: Bind::Unbound(sock),
+                    peer,
+                    rest: Vec::new(),
+                    start: 0,
+                };
+                made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
+                    // `NetListener` と同じ。`TcpStream` は `Lin` である
+                    unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
+                }));
+                Ok(0)
+            }
             (OpPhase::Transfer, _, Err(e)) => Err(e),
             (OpPhase::Probe | OpPhase::Transfer, _, Ok(_)) => {
                 return Err(CellFault::Internal(
@@ -3227,13 +3253,13 @@ pub(crate) fn submit_write<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
-    driver: Option<&mut (dyn IoDriver + 'static)>,
+    mut driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     buf: Word,
     stream: Word,
 ) -> Result<i64, CellFault> {
-    let handle = stream_handle(ctx, stream)?;
+    let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
     // 記録が物体を生かし、取り出すまで書き換えないので、driver は完了までこの位置を読める。一意は求めない。
     // その場で書き換える操作はどれも一意を求め、記録が参照を1つ持つ間は写すからである
     // (docs/spec/object-model.md の T10 の行)
@@ -3248,8 +3274,14 @@ pub(crate) fn submit_write<M: Mode>(
     };
     let mut record = net_record(OpKind::Write { len: raw.cap }, worker, Some(stream));
     record.buf = Some(buf);
-    let op = Op::Write { handle, buf: raw };
-    submit(shared, here, ctx, driver, depth_offset, record, Some(op))
+    let op = match bound {
+        Ok(handle) => Some(Op::Write { handle, buf: raw }),
+        Err(e) => {
+            record.phase = OpPhase::Done(Err(e), false);
+            None
+        }
+    };
+    submit(shared, here, ctx, driver, depth_offset, record, op)
 }
 
 /// `Std.Net.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移す。buffer が一意で空きが
@@ -3261,23 +3293,22 @@ pub(crate) fn submit_read<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
-    driver: Option<&mut (dyn IoDriver + 'static)>,
+    mut driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     buf: Word,
     stream: Word,
 ) -> Result<i64, CellFault> {
+    let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
     // 一意でない buffer はここで写さず、広げるときに1回だけ写す。`read_line` が読みすぎたバイトがあれば、driver の
     // 操作を出さずにそれを返す (docs/spec/stdlib.md の「`Std.Net`」)
-    let (buf, phase, op) = match serve_rest(ctx, buf, stream)? {
-        Some((buf, n)) => (buf, OpPhase::Done(Ok(n), false), None),
-        None => {
-            let handle = stream_handle(ctx, stream)?;
-            match spare_room(ctx, buf)? {
-                Some(raw) => (buf, OpPhase::Transfer, Some(Op::Read { handle, buf: raw })),
-                None => (buf, OpPhase::Probe, Some(Op::Readable { handle })),
-            }
-        }
+    let (buf, phase, op) = match (serve_rest(ctx, buf, stream)?, bound) {
+        (Some((buf, n)), _) => (buf, OpPhase::Done(Ok(n), false), None),
+        (None, Err(e)) => (buf, OpPhase::Done(Err(e), false), None),
+        (None, Ok(handle)) => match spare_room(ctx, buf)? {
+            Some(raw) => (buf, OpPhase::Transfer, Some(Op::Read { handle, buf: raw })),
+            None => (buf, OpPhase::Probe, Some(Op::Readable { handle })),
+        },
     };
     let mut record = net_record(OpKind::Read, worker, Some(stream));
     record.buf = Some(buf);
@@ -3292,11 +3323,12 @@ pub(crate) fn submit_read_line<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
-    driver: Option<&mut (dyn IoDriver + 'static)>,
+    mut driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     stream: Word,
 ) -> Result<i64, CellFault> {
+    let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
     // ストリームは `TcpStream` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`TcpStream` は `Lin`)
     let s = unsafe { &*ctx.heap().foreign_unique::<NetStream>(stream)? };
     let found = s.find_line(0, false);
@@ -3307,12 +3339,15 @@ pub(crate) fn submit_read_line<M: Mode>(
             (None, OpPhase::Done(Ok(0), false))
         }
         Some(_) => (None, OpPhase::Done(Err(line_too_long()), false)),
-        None => match lend_line_room(ctx, stream, false)? {
-            (handle, Some((at, raw))) => {
-                filled = at;
-                (Some(Op::Read { handle, buf: raw }), OpPhase::Transfer)
-            }
-            (handle, None) => (Some(Op::Readable { handle }), OpPhase::Probe),
+        None => match bound {
+            Err(e) => (None, OpPhase::Done(Err(e), false)),
+            Ok(_) => match lend_line_room(ctx, stream, false)? {
+                (handle, Some((at, raw))) => {
+                    filled = at;
+                    (Some(Op::Read { handle, buf: raw }), OpPhase::Transfer)
+                }
+                (handle, None) => (Some(Op::Readable { handle }), OpPhase::Probe),
+            },
         },
     };
     let not_utf8 = matches!(found, Some(Found::Line(_))) && made.is_none();
@@ -3377,7 +3412,7 @@ pub(crate) fn submit_accept<M: Mode>(
     let handle = unsafe {
         (*ctx.heap().foreign_unique::<NetListener>(listener)?)
             .bind
-            .handle()
+            .handle()?
     };
     let op = Op::Accept { listener: handle };
     let record = net_record(OpKind::Accept, worker, Some(listener));
@@ -3428,19 +3463,27 @@ pub(crate) fn submit_control<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
-    driver: Option<&mut (dyn IoDriver + 'static)>,
+    mut driver: Option<&mut (dyn IoDriver + 'static)>,
     worker: u32,
     depth_offset: usize,
     on: Option<bool>,
     stream: Word,
 ) -> Result<i64, CellFault> {
-    let handle = stream_handle(ctx, stream)?;
-    let (kind, op) = match on {
-        None => (OpKind::ShutdownWrite, Op::ShutdownWrite { handle }),
-        Some(on) => (OpKind::SetNodelay, Op::SetNodelay { handle, on }),
+    let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
+    let kind = match on {
+        None => OpKind::ShutdownWrite,
+        Some(_) => OpKind::SetNodelay,
     };
-    let record = net_record(kind, worker, Some(stream));
-    submit(shared, here, ctx, driver, depth_offset, record, Some(op))
+    let mut record = net_record(kind, worker, Some(stream));
+    let op = match (bound, on) {
+        (Ok(handle), None) => Some(Op::ShutdownWrite { handle }),
+        (Ok(handle), Some(on)) => Some(Op::SetNodelay { handle, on }),
+        (Err(e), _) => {
+            record.phase = OpPhase::Done(Err(e), false);
+            None
+        }
+    };
+    submit(shared, here, ctx, driver, depth_offset, record, op)
 }
 
 /// 呼ぶ側の物体から lock の外で作った記録を表に入れ、`op` があれば driver に出して、token を返す。driver がその場で
@@ -3455,8 +3498,9 @@ fn submit<M: Mode>(
     mut record: OpRecord,
     op: Option<Op>,
 ) -> Result<i64, CellFault> {
+    // 縛ったハンドルを引く操作だけが、縛った worker を host にする。取り込みに失敗したストリームの記録は driver に出さない
     record.host = match record.stream {
-        Some(w) => bound_host(ctx, &record.kind, w)?,
+        Some(w) => bound_host(ctx, &record.kind, w)?.unwrap_or(here.host),
         None => here.host,
     };
     let mut work = IoWork::default();
@@ -3682,17 +3726,79 @@ pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word,
 /// 落とす。
 pub(crate) fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
     // ストリームは持ち主のただ1つの参照である (`TcpStream` は `Lin`。docs/spec/vm.md の「操作の記録」)
-    Ok(unsafe {
+    unsafe {
         (*ctx.heap().foreign_unique::<NetStream>(stream)?)
             .bind
             .handle()
+    }
+}
+
+/// ストリーム `stream` が、受けたまままだ縛っていないか。そのストリームの操作を受け付ける worker は、先に自分の driver を
+/// 持つ (docs/spec/vm.md の「時計と driver」)。
+pub(crate) fn stream_unbound<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<bool, CellFault> {
+    // ストリームは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpStream` は `Lin`)
+    Ok(unsafe {
+        matches!(
+            (*ctx.heap().foreign_unique::<NetStream>(stream)?).bind,
+            Bind::Unbound(_)
+        )
     })
+}
+
+/// 受けたまま縛っていないストリーム `stream` を、持ち主 `here.me` の driver に取り込んで縛り、ハンドルを返す。縛った
+/// ストリームはそのハンドルを返す。取り込みを driver が断れば、ソケットは閉じ、ストリームは以後どの操作も誤りで終える
+/// (docs/spec/vm.md の「操作の記録」)。driver はストリームのハンドルを引く `submit_*` が受け取ったもので、取り込みは
+/// 持ち主のスレッドで行う。
+fn bind_stream<M: Mode>(
+    shared: &Shared,
+    here: &Here,
+    ctx: &mut Ctx<M>,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
+    stream: Word,
+) -> Result<io::Result<IoHandle>, CellFault> {
+    // ストリームは呼ぶ側から移ってきた唯一の参照である (`TcpStream` は `Lin`)
+    let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
+    match &s.bind {
+        Bind::Bound { handle, .. } => return Ok(Ok(*handle)),
+        Bind::Lost => return Ok(Err(lost_stream())),
+        Bind::Unbound(_) => {}
+    }
+    // 受けを `Done::Accepted` で終える driver は本物の driver だけで、本物の時計の run ではどの worker も自分の I/O を
+    // 受け付ける。仮想の時計のテストの driver は `Done::Stream` を返すので、縛っていないストリームはない
+    if here.host != here.me {
+        return Err(CellFault::Internal(
+            "an unbound stream is used on a worker that hosts no I/O",
+        ));
+    }
+    let driver = driver.ok_or(CellFault::Internal("a worker without a driver"))?;
+    let Bind::Unbound(sock) = std::mem::replace(&mut s.bind, Bind::Lost) else {
+        unreachable!("the stream is unbound");
+    };
+    let handle = match driver.adopt(sock) {
+        Ok(handle) => handle,
+        Err(e) => return Ok(Err(e)),
+    };
+    let bin = shared.lock().host_bin(here.me, driver.bin())?;
+    s.bind = Bind::Bound {
+        host: here.me,
+        handle,
+        bin,
+    };
+    Ok(Ok(handle))
+}
+
+/// 取り込みに失敗したストリームの、2回目からの操作の誤り。
+fn lost_stream() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotConnected,
+        "the stream was closed when a driver failed to take it",
+    )
 }
 
 /// 記録が持つリスナーかストリーム `w` を縛った worker。そのハンドルを引く操作は、その worker が host である。新しい
 /// ハンドルを作る操作 (`listen` と `connect`) は物体を持たず、持ち主の I/O を受け付ける worker が host になる
 /// (docs/spec/vm.md の「操作の記録」)。
-fn bound_host<M: Mode>(ctx: &Ctx<M>, kind: &OpKind, w: Word) -> Result<u32, CellFault> {
+fn bound_host<M: Mode>(ctx: &Ctx<M>, kind: &OpKind, w: Word) -> Result<Option<u32>, CellFault> {
     // どちらも記録が持つ唯一の参照である (`TcpListener` と `TcpStream` は `Lin`)
     Ok(unsafe {
         match kind {
@@ -3783,7 +3889,7 @@ fn lend_line_room<M: Mode>(
     // ストリームは記録が持つ唯一の参照である (docs/spec/vm.md の「操作の記録」)
     let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
     let lent = s.lend_room(grow);
-    Ok((s.bind.handle(), lent))
+    Ok((s.bind.handle()?, lent))
 }
 
 /// ストリーム `stream` の残りの先頭 `n` バイトの行を、UTF-8 なら新しい文字列に1回だけ写し、返したことにする。UTF-8 で
@@ -3829,7 +3935,7 @@ fn line_step<M: Mode>(
     } else if s.open_line_len() > LINE_LIMIT {
         LineStep::TooLong
     } else {
-        LineStep::Again(s.bind.handle())
+        LineStep::Again(s.bind.handle()?)
     })
 }
 
@@ -4782,6 +4888,10 @@ struct NoDriver {
     held: Vec<(OpKey, RawBuf)>,
     /// 書きを終えたときに貸された記憶から読んだ中身。
     written: Vec<Vec<u8>>,
+    /// 取り込んだソケットの数。取り込んだソケットには 100 から順にハンドルを振る。
+    adopted: u64,
+    /// 立っていれば、取り込みを断る。
+    refuse_adopt: bool,
 }
 
 /// 書きに貸された記憶の中身。貸した側は書きを終えるまで記憶を生かし、書き換えない (docs/spec/vm.md の「時計と driver」の
@@ -4862,6 +4972,14 @@ impl IoDriver for NoDriver {
     }
 
     fn close(&mut self, _handle: IoHandle) {}
+
+    fn adopt(&mut self, _sock: RawSocket) -> io::Result<IoHandle> {
+        if self.refuse_adopt {
+            return Err(io::Error::other("the driver refused the socket"));
+        }
+        self.adopted += 1;
+        Ok(99 + self.adopted)
+    }
 
     fn quiesce(&mut self) {}
 }
@@ -6261,7 +6379,7 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
         unsafe { &*ctx.heap().foreign_unique::<NetStream>(stream).unwrap() }
             .bind
             .host(),
-        1
+        Some(1)
     );
     // そのストリームを引く worker 1 の操作は、知らせを送らずに worker 1 の driver に出す
     let buf = unsafe { ctx.heap_mut() }.alloc_bytes_room(64);
@@ -6307,6 +6425,160 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
     .unwrap();
     assert_eq!((host_of(write), driver_0.submits), (1, 0));
     assert_eq!(*posted.0.borrow(), [1]);
+}
+
+/// ループバックで受けた、どの driver にも取り込んでいない OS のソケットと、その相手。
+#[cfg(test)]
+fn accepted_socket() -> (RawSocket, std::net::TcpStream) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let near = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (far, _) = listener.accept().unwrap();
+    (RawSocket::new(eml_rt::OsSocket::from(far)), near)
+}
+
+/// worker 0 が受けた記録の完了 `Done::Accepted` を当てて、縛っていないストリームを取り出す。
+#[cfg(test)]
+fn accept_unbound(shared: &Shared, ctx: &mut Ctx<eml_rt::Checked>, sock: RawSocket) -> Word {
+    let mut driver_0 = NoDriver::default();
+    let listener = unsafe { ctx.heap_mut() }.alloc_foreign(
+        NetListener {
+            bind: Bind::Bound {
+                host: 0,
+                handle: 0,
+                bin: Arc::default(),
+            },
+            port: 1,
+        },
+        true,
+    );
+    let token = submit_accept(
+        shared,
+        &solo(shared),
+        ctx,
+        Some(&mut driver_0),
+        0,
+        0,
+        listener,
+    )
+    .unwrap();
+    driver_0.done.push(Completion {
+        key: driver_0.last_key,
+        result: Ok(Done::Accepted {
+            sock,
+            peer: ([127, 0, 0, 1], 80).into(),
+        }),
+        cancelled: false,
+    });
+    complete(
+        shared,
+        &solo(shared),
+        ctx,
+        &mut driver_0,
+        0,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let stream = take_made(shared, ctx, token, 0, false).unwrap();
+    assert!(stream_unbound(ctx, stream).unwrap());
+    stream
+}
+
+/// 本物の時計の run で、worker 0 のリスナーで受けたストリームは縛らずに持ち主へ渡り、最初に操作を受け付けた worker 1 の
+/// driver に取り込まれる。その操作も後の操作も、知らせを送らずに worker 1 の driver に出す (docs/spec/vm.md の
+/// 「操作の記録」)。
+#[test]
+fn an_accepted_stream_is_hosted_by_the_worker_that_uses_it_first() {
+    let mut ctx = test_ctx();
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    shared.lock().set_bin(1, Arc::default());
+    let posted = Submits::default();
+    let on = |me: u32| Here {
+        me,
+        host: me,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let host_of = |token: i64| shared.lock().op_mut(CellRef::decode(token)).unwrap().host;
+    let (sock, _peer) = accepted_socket();
+    let stream = accept_unbound(&shared, &mut ctx, sock);
+    let mut driver_1 = NoDriver::default();
+    let buf = unsafe { ctx.heap_mut() }.alloc_bytes_room(64);
+    let read = submit_read(
+        &shared,
+        &on(1),
+        &mut ctx,
+        Some(&mut driver_1),
+        0,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap();
+    assert_eq!(
+        (host_of(read), driver_1.adopted, driver_1.submits),
+        (1, 1, 1)
+    );
+    assert!(posted.0.borrow().is_empty());
+    // 縛ったストリームの次の操作は、取り込み直さずに同じハンドルで worker 1 の driver に出す
+    let s = unsafe { &*ctx.heap().foreign_unique::<NetStream>(stream).unwrap() };
+    assert_eq!((s.bind.host(), s.bind.handle().unwrap()), (Some(1), 100));
+}
+
+/// 取り込みを driver が断ったストリームは、その操作もそれから後の操作も、driver に出さずに失敗で終わる
+/// (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_stream_that_a_driver_refuses_fails_every_op() {
+    let mut ctx = test_ctx();
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let (sock, _peer) = accepted_socket();
+    let stream = accept_unbound(&shared, &mut ctx, sock);
+    let mut driver = NoDriver {
+        refuse_adopt: true,
+        ..NoDriver::default()
+    };
+    let bytes = unsafe { ctx.heap_mut() }.alloc_bytes_room(8);
+    let write = submit_write(
+        &shared,
+        &solo(&shared),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        bytes,
+        stream,
+    )
+    .unwrap();
+    assert_eq!(driver.submits, 0);
+    assert_eq!(shared.lock().op_outcome(write, 0).unwrap(), OUTCOME_FAILED);
+    let stream = shared.lock().op_stream(write, 0).unwrap();
+    let taken = take_op(&shared, &mut ctx, write, 0).unwrap();
+    let (_, message) = taken.failure().unwrap();
+    assert_eq!(
+        message,
+        "cannot write to the stream: the driver refused the socket"
+    );
+    for w in [taken.buf, taken.made].into_iter().flatten() {
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    }
+    let line = submit_read_line(
+        &shared,
+        &solo(&shared),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        stream,
+    )
+    .unwrap();
+    assert_eq!(driver.submits, 0);
+    let stream = shared.lock().op_stream(line, 0).unwrap();
+    let taken = take_op(&shared, &mut ctx, line, 0).unwrap();
+    let (e, _) = taken.failure().unwrap();
+    assert_eq!(e.kind(), io::ErrorKind::NotConnected);
+    unsafe { ctx.heap_mut().decref(stream) }.unwrap();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// ストリーム `stream` の buffer。
