@@ -8,8 +8,9 @@ use std::thread;
 use eml_lir::Program;
 use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
-use crate::cells::TaskStats;
-use crate::driver::DriverKind;
+use crate::cells::{Registry, Shared, TaskStats};
+use crate::counters::Counters;
+use crate::driver::{DriverKind, RunClock};
 use crate::error::KEPT_PENDING;
 use crate::vm::{ExecWith, Exit};
 use crate::workers::{Retired, Run, Shutdown, WorkerExit, Workers, settle, spawn_workers};
@@ -18,6 +19,7 @@ mod apply;
 mod cells;
 mod code;
 mod compile;
+mod counters;
 mod data;
 mod disasm;
 mod doorbell;
@@ -71,7 +73,7 @@ pub struct RunStats {
     /// スコープの最初の失敗より後の、タスクの失敗の数。
     pub dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
-    /// `park_io`、`park_io_until`、`park_signal`、受け箱の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで
+    /// `park_io`、`park_io_until`、`park_signal`、mail の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで
     /// 再開する `yield_now` (速い道が譲る `reschedule` は除く)、真を返した `cancel_point`、偽を返した `claim_scope` を
     /// 数える (docs/spec/vm.md の「`RunStats`」)。
     pub cancels: u64,
@@ -135,6 +137,9 @@ pub struct Finished {
     /// この run がほかの worker に置いた `par` の右の子の数。どの worker の fork も数える
     /// (docs/spec/vm.md の「`par` の fork と join」)。
     pub placed: u64,
+    /// この run が、`start` を実行した worker と違う worker に置いた `Async` のタスクの数
+    /// (docs/spec/vm.md の「`Async` のタスク」)。
+    pub placed_tasks: u64,
 }
 
 /// VM だけが知る仕事の回数。検査モードだけで数える。
@@ -291,6 +296,8 @@ pub struct Machine<M: Mode> {
     /// 知らない driver の run には OS のシグナルを中継せず、眠る driver として空きの待ちを切る
     /// (docs/spec/vm.md の「時計と driver」)。
     driver_kind: DriverKind,
+    /// `driver` と同じ時間の基準。run の `Run` に渡し、run をまたいで続く時刻を同じ driver と同じ基準で読む。
+    run_clock: RunClock,
     code: CodeBase<M>,
     /// `ctx` と同じ Host。worker 1..N-1 の `Ctx` に写す。
     host: HostRef,
@@ -326,7 +333,7 @@ pub struct Machine<M: Mode> {
     /// 次の run の登録表の、添字ごとの generation (docs/spec/vm.md の「セルと登録表」)。
     generations: Vec<u32>,
     /// `Std.Atomic.Counter` の表。run をまたぎ、REPL の入力をまたいで残る (docs/spec/vm.md の「セルと登録表」)。
-    counters: Vec<i64>,
+    counters: Arc<Counters>,
     /// driver を作るときの時計。
     clock: Clock,
     /// 実行ごとの `Scheduler` に渡す自己パイプ。1つの自己パイプは1つの `Machine` だけに渡す
@@ -374,10 +381,11 @@ impl<M: Mode> Machine<M> {
             copying: HeapWork::default(),
             shared_roots: 0,
             generations: Vec::new(),
-            counters: Vec::new(),
+            counters: Arc::default(),
             clock: Clock::Virtual,
             driver: None,
             driver_kind: DriverKind::Virtual,
+            run_clock: Clock::Virtual.start(),
             doorbell: None,
             signals: Vec::new(),
         }
@@ -406,7 +414,7 @@ impl<M: Mode> Machine<M> {
         self
     }
 
-    /// 次の run で時間の輪に載せる仮想のシグナルの予定を渡す。期限は driver を作ったときからのミリ秒である。
+    /// 次の run で時間の輪に載せる仮想のシグナルの予定を渡す。期限は run の時間の基準の始まりからのミリ秒である。
     pub fn with_signals(mut self, signals: Vec<VirtualSignal>) -> Machine<M> {
         self.signals = signals;
         self
@@ -419,6 +427,7 @@ impl<M: Mode> Machine<M> {
     pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
         self.driver_kind = DriverKind::Injected;
+        self.run_clock = RunClock::Injected;
         self
     }
 
@@ -573,7 +582,8 @@ impl<M: Mode> Machine<M> {
             Some(driver) => driver,
             None => {
                 self.driver_kind = self.clock.kind();
-                self.clock.driver(self.sched.seed()).map_err(|e| {
+                self.run_clock = self.clock.start();
+                self.run_clock.driver(self.sched.seed()).map_err(|e| {
                     code.error(
                         vm::Failure {
                             fault: VmFault::Driver(e.to_string()),
@@ -590,9 +600,10 @@ impl<M: Mode> Machine<M> {
             max_depth: self.max_depth,
             shared_roots: self.shared_roots,
             generations: std::mem::take(&mut self.generations),
-            counters: std::mem::take(&mut self.counters),
+            counters: Arc::clone(&self.counters),
             driver,
             driver_kind: self.driver_kind,
+            run_clock: self.run_clock.clone(),
             doorbell: self.doorbell.clone(),
             signals: std::mem::take(&mut self.signals),
         };
@@ -616,7 +627,6 @@ impl<M: Mode> Machine<M> {
         // ほかの worker のヒープは、確かめるか回復するまで `Machine` が持つ。poisoned になる道でも落とさない
         self.others.append(&mut scheduled.others);
         self.generations = std::mem::take(&mut scheduled.generations);
-        self.counters = std::mem::take(&mut scheduled.counters);
         // 誤りで返る道でも driver を失わないように、run の直後に戻す
         self.driver = scheduled.driver.take();
         if let Some(panic) = scheduled.panic.take() {
@@ -681,6 +691,7 @@ impl<M: Mode> Machine<M> {
                 preemptions: scheduled.preemptions,
                 workers: scheduled.workers,
                 placed: scheduled.placed,
+                placed_tasks: scheduled.placed_tasks,
             };
             return Ok(Ran::Abandoned(finished, cause));
         }
@@ -707,6 +718,7 @@ impl<M: Mode> Machine<M> {
             preemptions: scheduled.preemptions,
             workers: scheduled.workers,
             placed: scheduled.placed,
+            placed_tasks: scheduled.placed_tasks,
         };
         Ok(Ran::Done(finished, text))
     }
@@ -835,10 +847,9 @@ struct Scheduled<M: Mode> {
     others_ctx: CtxStats,
     others_heap: HeapWork,
     generations: Vec<u32>,
-    counters: Vec<i64>,
     /// run の間 `Scheduler` に預けた driver。`Machine` に戻すときに取り出す。
     driver: Option<Box<dyn IoDriver>>,
-    /// run の直後の `quiesce` の後にも、driver が保留の操作を残した。
+    /// どれかの worker の driver が、静止させた後にも保留の操作を残した。
     kept_pending: bool,
     /// worker 1..N-1 の `Ctx`。join の後に worker 0 へ返ってきたもの。
     others: Vec<Ctx<M>>,
@@ -846,6 +857,8 @@ struct Scheduled<M: Mode> {
     workers: usize,
     /// ほかの worker に置いた右の子の数。
     placed: u64,
+    /// ほかの worker に置いた `Async` のタスクの数。
+    placed_tasks: u64,
     /// worker 1..N-1 の panic。最初のものを worker 0 で起こし直す。
     panic: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -856,9 +869,10 @@ struct Start {
     max_depth: usize,
     shared_roots: usize,
     generations: Vec<u32>,
-    counters: Vec<i64>,
+    counters: Arc<Counters>,
     driver: Box<dyn IoDriver>,
     driver_kind: DriverKind,
+    run_clock: RunClock,
     doorbell: Option<Arc<Doorbell>>,
     signals: Vec<VirtualSignal>,
 }
@@ -878,7 +892,18 @@ fn run_scheduled<M: Mode, P: Policy>(
     let control = Arc::clone(ctx.heap().control());
     // run の表は run ごとに作り、監視のスレッドが止まる `Scheduler` の破棄とともに捨てる (docs/spec/vm.md の
     // 「タスクとスケジュール」)
-    let run = Arc::new(Run::new(control.limits().workers, start.doorbell));
+    let workers = control.limits().workers;
+    let run = Arc::new(Run::new(
+        workers,
+        start.doorbell,
+        start.run_clock,
+        start.counters,
+    ));
+    // 登録表も run ごとに1つ作り、worker 0 と、後で作る worker 1..N-1 のすべての `Scheduler` に配る
+    // (docs/spec/vm.md の「セルと登録表」)
+    let mut registry = Registry::new(start.generations, workers);
+    // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
+    registry.schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
     let mut sched = Scheduler::new(
         policy,
         start.driver,
@@ -886,15 +911,10 @@ fn run_scheduled<M: Mode, P: Policy>(
         control,
         main_worker,
         start.max_depth,
-        start.generations,
+        Arc::new(Shared::new(registry)),
     );
     sched.shared_roots = start.shared_roots;
     sched.driver_kind = start.driver_kind;
-    sched.cells.counters = start.counters;
-    // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
-    sched
-        .cells
-        .schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
     // 根は REPL のコードだけが作るので、根に触れるコードを読み込んだ `Machine` は worker を作らない。成功した run の後に
     // 根が、落としたほかの worker のヒープを指しうるためである (docs/spec/vm.md の「タスクとスケジュール」)
     sched.begin_run(!code.tables.uses_roots && ctx.roots().len() == 0);
@@ -916,10 +936,13 @@ fn run_scheduled<M: Mode, P: Policy>(
                         &sched.policy,
                         &sched.run,
                         &sched.watcher.control,
+                        &sched.cells,
                         &host,
                         start.max_depth,
                     );
                     shutdown.armed = !handles.is_empty();
+                    // タスクを置くのは作れた worker だけである
+                    sched.run.set_live(handles.len() + 1);
                     // 1つも作れなければ worker 0 だけで続ける
                     sched.workers = match handles.len() {
                         0 => Workers::Denied,
@@ -950,24 +973,27 @@ fn run_scheduled<M: Mode, P: Policy>(
     // ほかの worker の仕事を worker 0 の数に足す。数は足し、山は最大を取る (docs/spec/vm.md の「`RunStats`」)
     let mut preemptions = sched.preemptions();
     let mut peak_stack = sched.peak_stack(task);
-    let mut tasks = sched.cells.stats;
     let mut bases = Vec::with_capacity(exits.len());
+    let mut left = false;
+    let mut kept_pending = false;
     for exit in exits {
         match exit {
             Ok(Retired {
                 ctx: other,
                 counts: worker_counts,
-                tasks: worker_tasks,
                 preemptions: worker_preemptions,
                 peak_stack: worker_peak,
                 base,
+                left: worker_left,
+                kept_pending: worker_kept,
             }) => {
                 counts.add(&worker_counts);
-                tasks.add(&worker_tasks);
                 preemptions += worker_preemptions;
                 peak_stack = peak_stack.max(worker_peak);
                 bases.push(base);
                 others.push(other);
+                left |= worker_left;
+                kept_pending |= worker_kept;
             }
             Err(payload) => {
                 panic.get_or_insert(payload);
@@ -975,6 +1001,48 @@ fn run_scheduled<M: Mode, P: Policy>(
         }
     }
     let result = settle(result, sched.run.take_fatal());
+    // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に driver を静止させる。どの worker も
+    // もう受け付けを送らないので、join の後に行う。ほかの worker の driver は、その worker が抜ける前に静止させてある。
+    // 成功した run では、静止させた driver が返した完了を記録に置く。集める地点と同じく、driver に出した操作がなければ
+    // 完了を読まない (docs/spec/vm.md の「時計と driver」「誤り、止めること、終わり」)
+    kept_pending |= match sched.driver.as_mut() {
+        Some(driver) => {
+            driver.quiesce();
+            let in_flight = sched.cells.lock().in_flight(sched.index);
+            if result.is_ok() && in_flight > 0 {
+                let mut completed = Vec::new();
+                driver.completions(&mut completed);
+                sched.cells.lock().quiesced(sched.index, &mut completed);
+            }
+            driver.pending() > 0
+        }
+        None => false,
+    };
+    // 成功した run だけが、残った知らせと保留の操作を確かめてから、残ったセルを片付ける。誤りと `exit` の run の登録表は、
+    // 触れずに `Scheduler` と一緒に落とす。誤りには `Finish` の位置を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)
+    let result = result.and_then(|()| {
+        let at_finish = |fault: VmFault| {
+            code.error(
+                vm::Failure {
+                    fault,
+                    pc: task.pc - 1,
+                },
+                task,
+            )
+        };
+        workers::end_check(kept_pending, left).map_err(at_finish)?;
+        // 予約と確定の間に安全点はないので、`Finish` に来た worker 0 は予約を持たない (docs/spec/vm.md の「channel」)
+        debug_assert!(
+            sched.hold.is_none(),
+            "a channel reservation is held at the end"
+        );
+        cells::sweep_all(&sched.cells, ctx, task.depth_offset)
+            .map_err(|fault| at_finish(fault.into()))
+    });
+    let (tasks, placed_tasks) = {
+        let cells = sched.cells.lock();
+        (cells.stats, cells.placed_tasks)
+    };
     // join の後に、ほかのスレッドが積んだ解放をすべてのヒープで取り込む。この後はどのスレッドも解放を積まない
     // (docs/spec/vm.md の「誤り、止めること、終わり」)
     if workers > 0 {
@@ -991,15 +1059,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         others_ctx.string_bytes_copied += c.string_bytes_copied;
         others_heap.add(&HeapWork::of(other.heap().stats()).since(base));
     }
-    // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に片付ける
-    // (docs/spec/vm.md の「時計と driver」)
-    let kept_pending = match sched.driver.as_mut() {
-        Some(driver) => {
-            driver.quiesce();
-            driver.pending() > 0
-        }
-        None => false,
-    };
+    let generations = sched.cells.lock().next_generations();
     let scheduled = Scheduled {
         preemptions,
         peak_stack,
@@ -1007,13 +1067,13 @@ fn run_scheduled<M: Mode, P: Policy>(
         tasks,
         others_ctx,
         others_heap,
-        generations: sched.cells.next_generations(),
-        counters: std::mem::take(&mut sched.cells.counters),
+        generations,
         driver: sched.driver.take(),
         kept_pending,
         others,
         workers,
         placed: sched.run.placed.load(std::sync::atomic::Ordering::Relaxed),
+        placed_tasks,
         panic,
     };
     (result, scheduled)

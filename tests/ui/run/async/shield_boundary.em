@@ -52,7 +52,7 @@ body () =
     | Err e -> println "inner flag: \{show e.kind}"
   bit_first (fn () ->
     Async.shield (fn () ->
-      Async.yield_now ()
+      Async.sleep_ms 10
       Async.scope (fn _ ->
         Async.check_cancelled ()
         Async.scope (fn _ ->

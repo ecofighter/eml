@@ -16,7 +16,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use eml_rt::{IoWaker, OpKey, RawBuf};
+use eml_rt::{IoWaker, OpKey, RawBuf, RawSocket};
 use windows_sys::Win32::Foundation::{
     ERROR_NOT_FOUND, FALSE, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
     SetHandleInformation, WAIT_TIMEOUT,
@@ -449,7 +449,7 @@ fn status(over: &Over) -> Result<u32, i32> {
 }
 
 impl Iocp {
-    pub(crate) fn new() -> io::Result<Self> {
+    pub(crate) fn new(epoch: Instant) -> io::Result<Self> {
         startup()?;
         // SAFETY: 既存のハンドルを結び付けず、新しいポートを作るだけである。渡すポインタはなく、失敗は null で返る
         let raw = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, ptr::null_mut(), 0, 1) };
@@ -461,14 +461,14 @@ impl Iocp {
                 port,
                 posted: AtomicBool::new(false),
             }),
-            epoch: Instant::now(),
+            epoch,
             ext: None,
             boxes: HashMap::new(),
             waiters: HashMap::new(),
         })
     }
 
-    /// ソケットをポートに結び付ける。受けたソケットはリスナーの結び付けを受け継がないので、それぞれ結び付ける
+    /// ソケットをポートに結び付ける。受けたソケットはリスナーの結び付けを受け継がず、取り込む driver の `adopt` が結び付ける
     fn associate(&self, s: SOCKET) -> io::Result<()> {
         // SAFETY: `s` は呼ぶ側が開いたまま持つソケットで、ポートは `waker` が持っていて開いている。渡すポインタはない
         let r = unsafe {
@@ -490,7 +490,8 @@ impl Iocp {
         Ok(Sock { s, v6 })
     }
 
-    /// 拡張関数。歩を受けるソケットはどれもこの backend が作ったので、もう読んである
+    /// 拡張関数。呼ぶのはリスナーの受け (`AcceptEx`) と接続 (`ConnectEx`) の歩だけで、どちらのソケットもこの backend が
+    /// 作ったので、もう読んである。`adopt` で取り込んだソケットは作っていないが、拡張関数を使う歩を受けない
     fn ext(&self) -> Ext {
         self.ext
             .expect("the extension functions are read with the first socket")
@@ -506,7 +507,7 @@ impl Iocp {
         what: What,
         error: fn(i32) -> io::Error,
         call: impl FnOnce(*mut Over) -> Result<(), i32>,
-    ) -> Start<Sock> {
+    ) -> Start {
         // 保留の鍵を使い回すのは核の契約の破れである。前の箱を表から失わないよう、OS を呼ばずに断る
         if self.waiters.contains_key(&key) {
             debug_assert!(false, "a pending key is started again");
@@ -544,7 +545,7 @@ impl Iocp {
     }
 
     /// 長さ 0 の `WSARecv` で、読めるデータか EOF か誤りを待つ。読みの buffer は OS に渡さない
-    fn zero_read(&mut self, key: OpKey, sock: &Sock) -> Start<Sock> {
+    fn zero_read(&mut self, key: OpKey, sock: &Sock) -> Start {
         let s = sock.raw();
         self.issue(key, s, What::Zero, stream_error, |over| {
             let buf = WSABUF {
@@ -570,7 +571,7 @@ impl Iocp {
     }
 
     /// 塞がれた書きを `WSASend` で出す。貸された `Write` の記憶をそのまま OS に渡し、`Hold::Memory` が覆う
-    fn send_ex(&mut self, key: OpKey, sock: &Sock, buf: RawBuf) -> Start<Sock> {
+    fn send_ex(&mut self, key: OpKey, sock: &Sock, buf: RawBuf) -> Start {
         let s = sock.raw();
         self.issue(key, s, What::Send, stream_error, |over| {
             let wsabuf = WSABUF {
@@ -586,7 +587,7 @@ impl Iocp {
     }
 
     /// 塞がれた受けを AcceptEx で出す。受けのソケットは箱の中に置き、結び付けない。packet はリスナーを通って来る
-    fn accept_ex(&mut self, key: OpKey, listener: &Sock) -> Start<Sock> {
+    fn accept_ex(&mut self, key: OpKey, listener: &Sock) -> Start {
         let sock = match self.stream_socket(listener.v6) {
             Ok(sock) => sock,
             Err(e) => return Start::Done(Err(e)),
@@ -616,7 +617,7 @@ impl Iocp {
     }
 
     /// AcceptEx の成功の後処理。どの失敗でも受けたソケットは閉じる。相手が読めない失敗だけを受け直しにする
-    fn accepted(&self, listener: SOCKET, sock: Sock) -> io::Result<Outcome<Sock>> {
+    fn accepted(&self, listener: SOCKET, sock: Sock) -> io::Result<Outcome> {
         let s = sock.raw();
         setsockopt_bytes(
             s,
@@ -625,13 +626,16 @@ impl Iocp {
             &listener.to_ne_bytes(),
         )?;
         nonblocking(s)?;
-        self.associate(s)?;
         let peer = name_of(s, true).map_err(gone)?;
-        Ok(Outcome::Accepted { sock, peer })
+        // ポートへの結び付けは最初に使う worker の driver が `adopt` で行う (docs/spec/vm.md の「時計と driver」)
+        Ok(Outcome::Accepted {
+            sock: RawSocket::new(sock.s),
+            peer,
+        })
     }
 
     /// 取り戻した箱の終わりを核の知らせにする (docs/spec/vm.md の「時計と driver」)
-    fn arrival(&self, over: Box<Over>, cancelled: bool) -> Arrival<Sock> {
+    fn arrival(&self, over: Box<Over>, cancelled: bool) -> Arrival {
         let status = status(&over);
         let Over { on, what, .. } = *over;
         match (what, status) {
@@ -657,7 +661,7 @@ impl Iocp {
         }
     }
 
-    fn accept(&mut self, key: OpKey, listener: &Sock) -> Start<Sock> {
+    fn accept(&mut self, key: OpKey, listener: &Sock) -> Start {
         let mut storage = SOCKADDR_STORAGE::default();
         let mut n = size_of::<SOCKADDR_STORAGE>() as i32;
         // SAFETY: `storage` と `n` は局所変数で、`n` は `storage` の大きさである。OS が書くのは戻るまでの間だけである
@@ -677,7 +681,7 @@ impl Iocp {
     }
 
     /// `accept` で受けたソケットの後処理。どの失敗もそのまま返し、受けたソケットは閉じる
-    fn prepare(&self, sock: Sock, peer: &SOCKADDR_STORAGE) -> io::Result<Outcome<Sock>> {
+    fn prepare(&self, sock: Sock, peer: &SOCKADDR_STORAGE) -> io::Result<Outcome> {
         let s = sock.raw();
         nonblocking(s)?;
         // `accept` のソケットは、リスナーの継承しない設定を受け継がない
@@ -685,12 +689,14 @@ impl Iocp {
         if unsafe { SetHandleInformation(s as HANDLE, HANDLE_FLAG_INHERIT, 0) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        self.associate(s)?;
         let peer = from_storage(peer).ok_or_else(no_ip)?;
-        Ok(Outcome::Accepted { sock, peer })
+        Ok(Outcome::Accepted {
+            sock: RawSocket::new(sock.s),
+            peer,
+        })
     }
 
-    fn connect(&mut self, key: OpKey, sock: &Sock, peer: SocketAddr) -> Start<Sock> {
+    fn connect(&mut self, key: OpKey, sock: &Sock, peer: SocketAddr) -> Start {
         let (addr, n) = sockaddr(peer);
         let connect_ex = self.ext().connect_ex;
         let s = sock.raw();
@@ -769,6 +775,15 @@ impl Backend for Iocp {
         Ok(sock)
     }
 
+    fn adopt(&mut self, sock: RawSocket) -> io::Result<Sock> {
+        let s = sock.into_inner();
+        let raw = s.as_raw_socket() as SOCKET;
+        // 受けたソケットはどのポートにも結び付けずに返したので、ここで初めて結び付ける
+        self.associate(raw)?;
+        let v6 = name_of(raw, false)?.is_ipv6();
+        Ok(Sock { s, v6 })
+    }
+
     fn shutdown_write(&mut self, sock: &mut Sock) -> io::Result<()> {
         // SAFETY: 引数はどれも整数である
         check(unsafe { shutdown(sock.raw(), SD_SEND) })
@@ -792,7 +807,7 @@ impl Backend for Iocp {
         drop(sock);
     }
 
-    fn start(&mut self, key: OpKey, step: Step<'_, Sock>) -> Start<Sock> {
+    fn start(&mut self, key: OpKey, step: Step<'_, Sock>) -> Start {
         match step {
             Step::Peek { sock } => {
                 let mut b = 0u8;
@@ -853,7 +868,7 @@ impl Backend for Iocp {
         Ok(Cancel::Pending)
     }
 
-    fn wait(&mut self, timeout: Option<Duration>, events: &mut Vec<Event<Sock>>) -> io::Result<()> {
+    fn wait(&mut self, timeout: Option<Duration>, events: &mut Vec<Event>) -> io::Result<()> {
         // 保留の鍵ごとに、OS が持つ箱がちょうど1つある
         debug_assert_eq!(self.boxes.len(), self.waiters.len());
         let mut entries = [OVERLAPPED_ENTRY::default(); ENTRIES];
@@ -1715,11 +1730,11 @@ mod tests {
     }
 
     fn backend() -> Iocp {
-        Iocp::new().unwrap()
+        Iocp::new(Instant::now()).unwrap()
     }
 
     /// 1 秒まで待って、鍵 `key` の知らせを取り出す
-    fn arrival_of(b: &mut Iocp, key: OpKey) -> Arrival<Sock> {
+    fn arrival_of(b: &mut Iocp, key: OpKey) -> Arrival {
         let start = Instant::now();
         let mut events = Vec::new();
         loop {
@@ -1733,9 +1748,9 @@ mod tests {
         }
     }
 
-    fn accepted(r: io::Result<Outcome<Sock>>) -> Sock {
+    fn accepted(b: &mut Iocp, r: io::Result<Outcome>) -> Sock {
         match r {
-            Ok(Outcome::Accepted { sock, .. }) => sock,
+            Ok(Outcome::Accepted { sock, .. }) => b.adopt(sock).unwrap(),
             Ok(_) => panic!("not an accept"),
             Err(e) => panic!("accept: {e}"),
         }
@@ -1750,9 +1765,9 @@ mod tests {
     /// 来た接続を backend で1つ受ける。その場で受けても、AcceptEx で受けてもよい
     fn accept_one(b: &mut Iocp, key: OpKey, l: &mut Sock) -> Sock {
         match b.start(key, Step::Accept { listener: l }) {
-            Start::Done(r) => accepted(r),
+            Start::Done(r) => accepted(b, r),
             Start::Pending(_) => match arrival_of(b, key) {
-                Arrival::Done(r) => accepted(r),
+                Arrival::Done(r) => accepted(b, r),
                 _ => panic!("the accept did not end"),
             },
         }
@@ -1794,7 +1809,7 @@ mod tests {
         let _c1 = TcpStream::connect(addr).unwrap();
         wait_acceptable(l.raw());
         let by_accept = match b.start(1, Step::Accept { listener: &mut l }) {
-            Start::Done(r) => accepted(r),
+            Start::Done(r) => accepted(&mut b, r),
             Start::Pending(_) => panic!("a queued connection was not accepted at once"),
         };
         assert!(matches!(
@@ -1803,7 +1818,7 @@ mod tests {
         ));
         let _c2 = TcpStream::connect(addr).unwrap();
         let by_accept_ex = match arrival_of(&mut b, 2) {
-            Arrival::Done(r) => accepted(r),
+            Arrival::Done(r) => accepted(&mut b, r),
             _ => panic!("the AcceptEx did not end"),
         };
         let connecting = b.socket(addr).unwrap();

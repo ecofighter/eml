@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::{
-    Control, Ctx, Form, Handle, MaskItem, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write,
+    Ctx, Form, Handle, MaskItem, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write,
     WriteMode,
 };
 
@@ -16,16 +16,28 @@ use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
 use crate::code::{AsyncEntries, CodeBase, ForkTable};
 use crate::data;
-use crate::driver::{ceil_ms, floor_ms};
-use crate::error::{KEPT_PENDING, VmFault};
+use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
     JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
-    driver_mut,
 };
 use crate::tls;
 use crate::workers::{Notice, Workers};
 use crate::{RunCounts, RuntimeError};
+
+/// 登録表を触るときの宛先 `cells::Here` を、`Scheduler` の欄から作る。欄ごとに借りるので、同じ関数の中で driver の
+/// 欄を可変で借りられる。
+macro_rules! here {
+    ($sched:expr, $post:ident, $here:ident) => {
+        let $post = crate::workers::Mailer::new(&$sched.run, &$sched.watcher.control);
+        let $here = cells::Here {
+            me: $sched.index as u32,
+            host: $sched.run.io_worker($sched.index) as u32,
+            mail: &$sched.cells.mail,
+            post: &$post,
+        };
+    };
+}
 
 // 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
 const _: () = assert!(cells::WOKE == eml_lir::WAKE_WOKE as i64);
@@ -543,8 +555,8 @@ fn work_loop<R: Exec>(
 pub(crate) enum Exit {
     /// エントリのタスクが `Finish` に着いた。
     Finished,
-    /// 最初の `par` の fork が worker 1..N-1 を求めた。命令の位置はその `par` に戻してあるので、worker を作った後に
-    /// もう一度 `run` を呼ぶと、同じ fork から続く (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 最初の `par` の fork か `start` が worker 1..N-1 を求めた。命令の位置はその命令に戻してあるので、worker を作った
+    /// 後にもう一度 `run` を呼ぶと、同じ命令から続く (docs/spec/vm.md の「タスクとスケジュール」)。
     Spawn,
 }
 
@@ -1149,7 +1161,7 @@ fn unwind<R: Exec>(
 /// join が見つけた子の誤りを `Scheduler::failed` に置いたことを、実行の繰り返しに伝える印。外には出ない。
 const CHILD_FAILED: VmFault = VmFault::Internal("a child failure is waiting in the scheduler");
 
-/// `par` の fork が worker 1..N-1 を作るよう求めたことを、実行の繰り返しに伝える印。外には出ない。
+/// `par` の fork か、タスクを置く `start` が worker 1..N-1 を作るよう求めたことを、実行の繰り返しに伝える印。外には出ない。
 const SPAWN_WORKERS: VmFault = VmFault::Internal("the first fork waits for the workers");
 
 /// `par` の fork。親の文脈で、右の子に ID を出して閉包と子の `evv` に印を付け、右の子をまだ始めずに列に入れ、左の子を
@@ -1379,7 +1391,7 @@ fn child_done<R: Exec>(
         // 子の残りの `evv` を、子の ID のまま手放す
         let rest = unsafe { ctx.switch_task(Word::UNIT, right_worker, task.depth_offset) };
         unsafe { ctx.heap_mut().decref(rest) }?;
-        wake_parent(sched, j);
+        sched.wake_parent(j);
         return switch_away::<R>(code, ctx, task, sched, None);
     }
     let join = sched.join(j);
@@ -1422,45 +1434,6 @@ fn placed_done<R: Exec>(
     switch_away::<R>(code, ctx, task, sched, None)
 }
 
-/// ほかの worker から届いた知らせを処理する。置かれた右の子はこの worker の番号を振って列の後ろに入れ、置いた子の
-/// 終わりは join の節点に記録して親を起こす。親を失った節点なら、結果に触れずに節点を捨てる。どちらでも
-/// `in_flight` から引くのは受け取った後なので、受け取っていない終わりの知らせがある間は 0 にならない
-/// (docs/spec/vm.md の「タスクとスケジュール」)。
-#[cold]
-#[inline(never)]
-fn receive<P: Policy>(sched: &mut Scheduler<P>) {
-    for notice in sched.run.take_notices(sched.index) {
-        match notice {
-            Notice::Child(task) => {
-                let id = sched.add_task(task);
-                sched.ready.push_back(id);
-            }
-            Notice::Joined { join, outcome } => {
-                let node = sched.join(join);
-                if node.orphan {
-                    // 語は捨てる。誤りで終わる run のヒープは回復で丸ごと捨てる
-                    drop(sched.take_join(join));
-                    drop(outcome);
-                } else {
-                    node.right_outcome = Some(outcome);
-                    wake_parent(sched, join);
-                }
-                sched.run.in_flight.fetch_sub(1, Ordering::Release);
-            }
-        }
-    }
-}
-
-/// 右の子が終わった join の親が、その join を待っていれば起こす。
-fn wake_parent<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
-    let parent = sched.join(j).parent;
-    if let Some(task) = &sched.tasks[parent]
-        && matches!(task.state, TaskState::Waiting(w) if w == j)
-    {
-        sched.policy.wake(&mut sched.ready, parent);
-    }
-}
-
 /// 方針が選ぶ次のタスクに切り替える。`keep` が `None` なら、今のタスクは終わったので捨てる。次のタスクが join を
 /// 完了したら、`par` の後の安全点に進む。
 fn switch_away<R: Exec>(
@@ -1470,6 +1443,10 @@ fn switch_away<R: Exec>(
     sched: &mut Scheduler<R::P>,
     keep: Option<TaskState>,
 ) -> Result<(), VmFault> {
+    debug_assert!(
+        sched.hold.is_none(),
+        "a channel reservation is held at a switch"
+    );
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)。走れるタスクがなければ直後の `wait` が OS を見るので、ここでは
     // 見ない。走れるタスクが続くときは `POLL_EVERY` 回に1回だけ見る (docs/spec/vm.md の「時計と driver」)
@@ -1581,7 +1558,7 @@ fn resume<R: Exec>(
         // `Async.run` の待ちは、書いた `Async` の命令の次から続ける。起こすのは根のスコープが閉じたときだけである
         TaskState::WaitingCell(root) => {
             debug_assert!(
-                sched.cells.closed(root).unwrap_or(false),
+                sched.cells.lock().closed(root).unwrap_or(false),
                 "a run wakes before its scope closes"
             );
             Ok(None)
@@ -1590,11 +1567,8 @@ fn resume<R: Exec>(
     }
 }
 
-/// 集める地点。受け箱を処理し、driver の完了を操作の記録に当て、満ちたタイマーを外して、待ちを外したタスクを再開する
-/// 仕事を列の後ろに積む。`look` なら、先に driver の `wait` に今を渡して OS を1回見る。driver の `completions` は
-/// OS を見ないためである。タイマーのない run は時計を読まず、保留の操作のない run は driver に触れない
-/// (docs/spec/vm.md の「時計と driver」)。聞く者のいなかったシグナルがあれば、その後で run を止める
-/// (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 集める地点。登録表とほかの worker の知らせを `Scheduler::gather` が集め、待ちを外したタスクを再開する仕事を列の
+/// 後ろに積む。聞く者のいなかったシグナルの誤りも、仕事を積んでから返す (docs/spec/vm.md の「タスクとスケジュール」)。
 fn collect<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1602,75 +1576,18 @@ fn collect<R: Exec>(
     sched: &mut Scheduler<R::P>,
     look: bool,
 ) -> Result<(), VmFault> {
-    // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
-    ctx.heap().control().take_notice(sched.index);
-    // ほかの worker からの知らせは、ないときは1回の読みで済ませる (docs/spec/vm.md の「タスクとスケジュール」)
-    if sched.run.slots[sched.index]
-        .has_notices
-        .load(Ordering::Acquire)
-    {
-        receive(sched);
-    }
-    // driver も登録表も持たない worker 1..N-1 は、知らせのほかに集めるものがない (docs/spec/vm.md の「時計と driver」)
-    if sched.driver.is_none() {
-        return Ok(());
-    }
-    if look {
-        sched.since_poll = 0;
-        if sched.cells.in_flight() > 0 {
-            let driver = driver_mut(&mut sched.driver)?;
-            // 今以前の期限なので待たない。`ceil_ms` は今より先になりうるので、driver が眠りうる
-            let now = floor_ms(driver.now());
-            driver
-                .wait(Some(now))
-                .map_err(|e| VmFault::Driver(e.to_string()))?;
-        }
-    }
-    // 集める地点は切り替えのたびに通るので、列は `Scheduler` のものを使い回す。誤りで抜けると捨てるが、run も止まる
-    let mut out = std::mem::take(&mut sched.runnables);
-    sched
-        .cells
-        .drain(ctx, driver_mut(&mut sched.driver)?, depth_offset, &mut out)?;
-    sched
-        .cells
-        .complete(ctx, driver_mut(&mut sched.driver)?, depth_offset, &mut out)?;
-    if sched.cells.next_deadline().is_some() {
-        let now = floor_ms(driver_mut(&mut sched.driver)?.now());
-        sched
-            .cells
-            .expire(now, driver_mut(&mut sched.driver)?, &mut out)?;
-    }
-    if !out.is_empty() {
+    let gathered = sched.gather(ctx, depth_offset, look);
+    if !sched.runnables.is_empty() {
         let entries = code
             .entries
             .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
+        let mut out = std::mem::take(&mut sched.runnables);
         for run in out.drain(..) {
             schedule(code, sched, entries, run)?;
         }
+        sched.runnables = out;
     }
-    sched.runnables = out;
-    // ハンドラは見張りの語で保留にするか既定の動きにするかを決めるので、届けて空になった列と取り消しで外れた待ち手を
-    // ここで写す (docs/spec/vm.md の「上限と割り込み」)
-    sched.sync_watched();
-    if sched.cells.unheard != 0 {
-        return Err(unheard(ctx.heap().control(), sched.cells.unheard));
-    }
-    Ok(())
-}
-
-/// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを止める語に
-/// 立てるので、`eml run` の次の同じシグナルはその場で終わらせる (docs/spec/vm.md の「上限と割り込み」)。
-#[cold]
-#[inline(never)]
-fn unheard(control: &Control, bits: u32) -> VmFault {
-    if bits & Control::TERMINATE != 0 {
-        control.terminate();
-    }
-    if bits & Control::INTERRUPT != 0 {
-        control.interrupt();
-        return VmFault::Stopped(Stop::Interrupted);
-    }
-    VmFault::Stopped(Stop::Terminated)
+    gathered
 }
 
 /// 方針か `PREEMPT` が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す (`PREEMPT` は
@@ -1685,6 +1602,10 @@ fn preempt<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
+    debug_assert!(
+        sched.hold.is_none(),
+        "a channel reservation is held at a switch"
+    );
     // 横取りの刻みごとに OS を見るので、計算の重いタスクが走る worker でも I/O の完了の遅れは刻みの長さまでである
     // (docs/spec/vm.md の「時計と driver」)
     collect::<R>(code, ctx, task.depth_offset, sched, true)?;
@@ -1895,7 +1816,7 @@ fn task_failed<R: Exec>(
     sched: &mut Scheduler<R::P>,
     mut failure: Failure,
 ) -> Result<(), RuntimeError> {
-    // worker を求めた fork は誤りでなく、位置をその `par` に戻して実行の繰り返しを抜ける。印をここで見るのは、
+    // worker を求めた fork と `start` は誤りでなく、位置をその命令に戻して実行の繰り返しを抜ける。印をここで見るのは、
     // 繰り返しの命令の列を変えないためである (docs/spec/vm.md の「タスクとスケジュール」)
     if failure.fault == SPAWN_WORKERS {
         task.pc = failure.pc;
@@ -1933,7 +1854,7 @@ fn task_failed<R: Exec>(
             }
             None => {
                 sched.join(j).right_outcome = Some(Outcome::Error(error));
-                wake_parent(sched, j);
+                sched.wake_parent(j);
             }
         }
         match switch_away::<R>(code, ctx, task, sched, None) {
@@ -1996,8 +1917,10 @@ impl Outcome {
     }
 }
 
-/// エントリの関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。その前に、受け箱の
-/// 知らせを処理し、残った `Async` のセルを放す (docs/spec/vm.md の「`Async` のタスク」)。
+/// エントリの関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。その前に、自分の
+/// 受け箱の知らせと mail の項を処理し、登録表の lock の下で、終わっていないタスクも driver に出したままの操作も
+/// ないことを確かめる。driver の静止と残ったセルの片付けは、worker を join した後に `run_scheduled` が行う。ほかの
+/// worker がまだ host へ受け付けを送りうるからである (docs/spec/vm.md の「`Async` のタスク」の「終わり」)。
 // run ごとに1回しか通らないので、VM の繰り返しに展開しない。展開すると、driver の有無を確かめる分岐で繰り返しの
 // レジスタの割り当てが変わり、`bench/loop.em` の命令の数が 4% 増えた
 #[inline(never)]
@@ -2008,23 +1931,26 @@ fn finish<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let mut out = Vec::new();
-    sched.cells.drain(
-        ctx,
-        driver_mut(&mut sched.driver)?,
-        task.depth_offset,
-        &mut out,
-    )?;
-    if !out.is_empty() {
+    sched.take_slot(ctx, task.depth_offset, &mut out)?;
+    {
+        here!(sched, post, here);
+        cells::drain(
+            &sched.cells,
+            &here,
+            ctx,
+            sched.driver.as_deref_mut(),
+            task.depth_offset,
+            &mut out,
+        )?;
+    }
+    if !out.is_empty() || sched.cells.lock().left_at_end() {
         return Err(VmFault::Internal("a task is left at the end"));
     }
-    // driver が貸した記憶をセルが持つうちは放せないので、保留の操作を片付けてから掃く。片付かなければ放さずに driver
-    // の誤りで終わる (docs/spec/vm.md の「`Async` のタスク」の「終わり」)
-    let driver = driver_mut(&mut sched.driver)?;
-    driver.quiesce();
-    if driver.pending() > 0 {
-        return Err(VmFault::Driver(KEPT_PENDING.to_string()));
-    }
-    sched.cells.sweep_all(ctx, task.depth_offset)?;
+    // 予約と確定の間に安全点はないので、`Finish` に来た worker は予約を持たない (docs/spec/vm.md の「channel」)
+    debug_assert!(
+        sched.hold.is_none(),
+        "a channel reservation is held at the end"
+    );
     if sched.has_children() {
         return Err(VmFault::Internal("a task is left at the end"));
     }
@@ -2073,23 +1999,41 @@ fn async_op<R: Exec>(
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、行がそれを預かる
     match Extern::ALL[o[0] as usize] {
         Extern::AsyncStartRaw => {
+            // 置く `start` も `par` の fork と同じく、何も読まずに worker を求めて、作った後にやり直す
+            // (docs/spec/vm.md の「タスクとスケジュール」)
+            if sched.workers == Workers::Wanted {
+                return Err(SPAWN_WORKERS);
+            }
             let cell = current_cell(task)?;
-            let scope = sched.cells.current_of(cell)?;
-            let (handle, run) = start_task::<R>(ctx, task, sched, scope, task.get(arg(0)))?
+            let scope = sched.cells.lock().current_of(cell)?;
+            let owner = place_owner(sched);
+            let (handle, run) = start_task::<R>(ctx, task, sched, scope, owner, task.get(arg(0)))?
                 .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
             task.set(dst, handle);
-            schedule(code, sched, entries, run)?;
+            // ほかの worker に置いたタスクは、`Place` を受けた持ち主が始める
+            if let Some(run) = run {
+                schedule(code, sched, entries, run)?;
+            }
         }
         Extern::AsyncRunRaw => {
             // 呼んだ `Task` はスタックを持ったまま、根のスコープが閉じるのを待つ
-            let parent = match task.cell {
-                Some(cell) => Some(sched.cells.current_of(cell)?),
-                None => None,
+            let root = {
+                let mut cells = sched.cells.lock();
+                let parent = match task.cell {
+                    Some(cell) => Some(cells.current_of(cell)?),
+                    None => None,
+                };
+                cells.open_root(parent, task.cell)?
             };
-            let root = sched.cells.open_root(parent, task.cell)?;
-            let (handle, run) = start_task::<R>(ctx, task, sched, root, task.get(arg(0)))?
+            // 根のタスクは呼んだ worker に置く (docs/spec/vm.md の「`Async` のタスク」)
+            let me = sched.me();
+            let (handle, run) = start_task::<R>(ctx, task, sched, root, me, task.get(arg(0)))?
                 .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
-            sched.cells.wait(root, WaitToken(sched.current as u64))?;
+            let run = run.ok_or(VmFault::Internal("a root task is placed elsewhere"))?;
+            sched
+                .cells
+                .lock()
+                .wait(root, WaitToken(sched.current as u64), me)?;
             task.set(dst, handle);
             schedule(code, sched, entries, run)?;
             switch_away::<R>(code, ctx, task, sched, Some(TaskState::WaitingCell(root)))?;
@@ -2119,7 +2063,7 @@ fn async_op<R: Exec>(
                 Take::Task
             };
             let handle = task.get(arg(0));
-            match sched.cells.take(ctx, handle, kind, task.depth_offset)? {
+            match cells::take(&sched.cells, ctx, handle, kind, task.depth_offset)? {
                 Ok(value) => task.set(dst, value),
                 Err(raise) => return raise_again::<R>(code, ctx, task, dst, raise, ext),
             }
@@ -2127,7 +2071,8 @@ fn async_op<R: Exec>(
         Extern::AsyncPark => {
             let me = current_cell(task)?;
             let k = task.get(arg(1));
-            if let Some(run) = sched.cells.park(task.raw(arg(0)), me, k)? {
+            let run = sched.cells.lock().park(task.raw(arg(0)), me, k)?;
+            if let Some(run) = run {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
@@ -2137,38 +2082,54 @@ fn async_op<R: Exec>(
             let ms = task.raw(arg(0));
             // 0 以下は譲りなので時計を読まない (docs/spec/vm.md の「時間の待ち」)
             let now = if ms > 0 {
-                ceil_ms(driver_mut(&mut sched.driver)?.now())
+                sched.run.now_ms_ceil(sched.driver.as_deref())?
             } else {
                 0
             };
-            if let Some(run) = sched.cells.park_time(now, ms, me, task.get(arg(1)))? {
+            let run = sched
+                .cells
+                .lock()
+                .park_time(now, ms, me, task.get(arg(1)))?;
+            if let Some(run) = run {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncReady => {
             let me = current_cell(task)?;
-            let run = sched.cells.ready(me, task.get(arg(0)))?;
+            let run = sched.cells.lock().ready(me, task.get(arg(0)))?;
             schedule(code, sched, entries, run)?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncTaskCell => {
             // ハンドルは借りるだけで、組を作る後の `con` が消費する (docs/spec/core-ir.md の「組を返す extern」)
-            let c = sched.cells.cell_of(ctx, task.get(arg(0)))?;
+            let c = cells::cell_of(ctx, &sched.cells, task.get(arg(0)))?;
             task.set_raw(dst, c);
         }
         ext @ (Extern::AsyncDetach | Extern::AsyncCancelRaw) => {
             let cancel = ext == Extern::AsyncCancelRaw;
-            sched
-                .cells
-                .detach(ctx, task.get(arg(0)), cancel, task.depth_offset)?;
+            here!(sched, post, here);
+            cells::detach(
+                &sched.cells,
+                &here,
+                ctx,
+                task.get(arg(0)),
+                cancel,
+                task.depth_offset,
+            )?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncStartInRaw => {
+            // `start_raw` と同じく、worker を求めるときは何も読まずにやり直す
+            if sched.workers == Workers::Wanted {
+                return Err(SPAWN_WORKERS);
+            }
             current_cell(task)?;
             let g = task.get(arg(1));
-            let started = match sched.cells.scope_cell(task.raw(arg(0))) {
-                Some(scope) => start_task::<R>(ctx, task, sched, scope, g)?,
+            let scope = sched.cells.lock().scope_cell(task.raw(arg(0)));
+            let owner = place_owner(sched);
+            let started = match scope {
+                Some(scope) => start_task::<R>(ctx, task, sched, scope, owner, g)?,
                 None => None,
             };
             let Some((handle, run)) = started else {
@@ -2178,20 +2139,23 @@ fn async_op<R: Exec>(
                 return raise_again::<R>(code, ctx, task, dst, raise, Extern::AsyncStartInRaw);
             };
             task.set(dst, handle);
-            schedule(code, sched, entries, run)?;
+            if let Some(run) = run {
+                schedule(code, sched, entries, run)?;
+            }
         }
         Extern::AsyncOpenScope => {
             let me = current_cell(task)?;
-            let s = sched.cells.open_scope(me)?;
+            let s = sched.cells.lock().open_scope(me)?;
             task.set_raw(dst, s);
         }
         Extern::AsyncCloseScope => {
-            let c = sched.cells.close_scope(task.raw(arg(0)))?;
+            let c = sched.cells.lock().close_scope(task.raw(arg(0)))?;
             task.set_raw(dst, c);
         }
         Extern::AsyncLeaveScope => {
             let me = current_cell(task)?;
-            match sched.cells.leave_scope(task.raw(arg(0)), me)? {
+            let left = sched.cells.lock().leave_scope(task.raw(arg(0)), me)?;
+            match left {
                 None => task.set(dst, Word::UNIT),
                 Some(raise) => {
                     return raise_again::<R>(code, ctx, task, dst, raise, Extern::AsyncLeaveScope);
@@ -2199,143 +2163,207 @@ fn async_op<R: Exec>(
             }
         }
         Extern::AsyncCancelScopeRaw => {
-            sched.cells.cancel_scope(task.raw(arg(0)))?;
+            here!(sched, post, here);
+            sched.cells.lock().cancel_scope(&here, task.raw(arg(0)))?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncFailScopeIo => {
             let message = unsafe { ctx.copy_string(task.get(arg(2)), usize::MAX) }?;
             let kind = task.raw(arg(1));
-            sched
-                .cells
-                .fail_scope(task.raw(arg(0)), cells::Outcome::Io { kind, message })?;
+            here!(sched, post, here);
+            sched.cells.lock().fail_scope(
+                &here,
+                task.raw(arg(0)),
+                cells::Outcome::Io { kind, message },
+            )?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncFailScopePanic => {
             let message = unsafe { ctx.copy_string(task.get(arg(1)), usize::MAX) }?;
-            sched
-                .cells
-                .fail_scope(task.raw(arg(0)), cells::Outcome::Panic(message))?;
+            here!(sched, post, here);
+            sched.cells.lock().fail_scope(
+                &here,
+                task.raw(arg(0)),
+                cells::Outcome::Panic(message),
+            )?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncCancelPoint => {
-            let b = sched.cells.cancel_point(task.cell)?;
+            let b = sched.cells.lock().cancel_point(task.cell)?;
             task.set_raw(dst, i64::from(b));
         }
         Extern::AsyncSpendBudget => {
             let me = current_cell(task)?;
-            let b = sched.cells.spend_budget(me, 1)?;
+            let b = sched.cells.lock().spend_budget(me, 1)?;
             task.set_raw(dst, i64::from(b));
         }
         Extern::AsyncClaimScope => {
             let me = current_cell(task)?;
-            let won = sched.cells.claim_scope(task.raw(arg(0)), me)?;
+            here!(sched, post, here);
+            let won = sched
+                .cells
+                .lock()
+                .claim_scope(&here, task.raw(arg(0)), me)?;
             task.set_raw(dst, i64::from(won));
         }
         Extern::AsyncParkDrain => {
             let me = current_cell(task)?;
             let k = task.get(arg(1));
-            if let Some(run) = sched.cells.park_drain(task.raw(arg(0)), me, k)? {
+            let run = sched.cells.lock().park_drain(task.raw(arg(0)), me, k)?;
+            if let Some(run) = run {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncCancelMembers => {
-            sched.cells.cancel_members(task.raw(arg(0)))?;
+            here!(sched, post, here);
+            sched.cells.lock().cancel_members(&here, task.raw(arg(0)))?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncShieldEnter => {
             let me = current_cell(task)?;
-            sched.cells.shield_enter(me)?;
+            sched.cells.lock().shield_enter(me)?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncShieldLeave => {
             let me = current_cell(task)?;
-            sched.cells.shield_leave(me)?;
+            sched.cells.lock().shield_leave(me)?;
             task.set(dst, Word::UNIT);
         }
         ext @ (Extern::AsyncParkSend | Extern::AsyncParkRecv) => {
             let me = current_cell(task)?;
             let (c, k) = (task.raw(arg(0)), task.get(arg(1)));
-            let run = if ext == Extern::AsyncParkSend {
-                sched.cells.park_send(c, me, k)?
-            } else {
-                sched.cells.park_recv(c, me, k)?
-            };
-            if let Some(run) = run {
+            let mut runs = Vec::new();
+            {
+                here!(sched, post, here);
+                let mut cells = sched.cells.lock();
+                let run = if ext == Extern::AsyncParkSend {
+                    cells.park_send(c, me, k, &mut sched.woken)?
+                } else {
+                    cells.park_recv(c, me, k, &mut sched.woken)?
+                };
+                runs.extend(run);
+                cells.route(&mut sched.woken, &here, &mut runs)?;
+            }
+            for run in runs {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
         }
-        // channel の行は、待ちのほかは今のタスクのセルを使わないので、タスクの外でも動く (docs/spec/vm.md の「命令」)
+        // channel の行は、待ちのほかは今のタスクのセルを使わないので、タスクの外でも動く (docs/spec/vm.md の「命令」)。
+        // どの行も登録表の lock を1区間だけ取り、預かり先の操作 (`open`、`publish`、`receive`、`close`) は lock の
+        // 外で行う。予約から確定までに要るものは worker の `hold` が持つ (docs/spec/vm.md の「channel」)
         Extern::ChanNewRaw => {
-            let c = sched.cells.new_chan(ctx, task.raw(arg(0)));
+            let depot = cells::Depot::open(ctx);
+            let c = sched.cells.lock().new_chan(task.raw(arg(0)), depot);
             task.set_raw(dst, c);
         }
-        ext @ (Extern::ChanReserveSend | Extern::ChanReserveRecv) => {
+        Extern::ChanReserveSend => {
             let (c, yields) = (task.raw(arg(0)), task.raw(arg(1)) != 0);
-            let r = if ext == Extern::ChanReserveSend {
-                sched.cells.reserve_send(c, task.cell, yields)?
-            } else {
-                sched.cells.reserve_recv(c, task.cell, yields)?
+            let r = sched
+                .cells
+                .lock()
+                .reserve_send(c, task.cell, yields, &mut sched.hold)?;
+            task.set_raw(dst, r);
+        }
+        Extern::ChanReserveRecv => {
+            let (c, yields) = (task.raw(arg(0)), task.raw(arg(1)) != 0);
+            let mut runs = Vec::new();
+            let r = {
+                here!(sched, post, here);
+                let mut cells = sched.cells.lock();
+                let r =
+                    cells.reserve_recv(c, task.cell, yields, &mut sched.hold, &mut sched.woken)?;
+                cells.route(&mut sched.woken, &here, &mut runs)?;
+                r
             };
+            for run in runs {
+                schedule(code, sched, entries, run)?;
+            }
             task.set_raw(dst, r);
         }
         Extern::ChanPushRaw => {
-            if let Some(run) = sched
-                .cells
-                .push_raw(ctx, task.get(arg(0)), task.raw(arg(1)))?
+            let (chan, mut depot) = cells::Hold::take_send(&mut sched.hold, task.raw(arg(1)))?;
+            let x = depot.publish(ctx, task.get(arg(0)))?;
+            let mut runs = Vec::new();
             {
+                here!(sched, post, here);
+                let mut cells = sched.cells.lock();
+                cells.push_raw(chan, x, &mut sched.woken)?;
+                cells.route(&mut sched.woken, &here, &mut runs)?;
+            }
+            for run in runs {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
         }
         Extern::ChanPopRaw => {
-            let (x, run) = sched.cells.pop_raw(ctx, task.raw(arg(0)))?;
-            if let Some(run) = run {
-                schedule(code, sched, entries, run)?;
+            let (chan, mut depot, item) =
+                cells::Hold::take_recv(&mut sched.hold, task.raw(arg(0)))?;
+            // 品物は予約で列から取ったので、ほかに参照がない
+            let x = depot.receive(ctx, item)?;
+            let gone = sched.cells.lock().pop_raw(chan)?;
+            if let Some(gone) = gone {
+                gone.close(ctx)?;
             }
             task.set(dst, x);
         }
         Extern::ChanCloseRaw => {
-            for run in sched.cells.close_raw(ctx, task.raw(arg(0)))? {
+            let mut runs = Vec::new();
+            let gone = {
+                here!(sched, post, here);
+                let mut cells = sched.cells.lock();
+                let gone = cells.close_raw(task.raw(arg(0)), &mut sched.woken)?;
+                cells.route(&mut sched.woken, &here, &mut runs)?;
+                gone
+            };
+            if let Some(gone) = gone {
+                gone.close(ctx)?;
+            }
+            for run in runs {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
         }
         Extern::AtomicNew => {
-            sched.cells.counters.push(task.raw(arg(0)));
-            let i = sched.cells.counters.len() as i64 - 1;
+            let i = sched.run.counters.push(task.raw(arg(0)))?;
             task.set_raw(dst, i);
         }
         Extern::AtomicAdd => {
-            let n = task.raw(arg(0));
-            let v = sched.cells.counter(task.raw(arg(1)))?;
-            *v = v.wrapping_add(n);
-            let v = *v;
+            let v = sched.run.counters.add(task.raw(arg(1)), task.raw(arg(0)))?;
             task.set_raw(dst, v);
         }
         Extern::AtomicLoad => {
-            let v = *sched.cells.counter(task.raw(arg(0)))?;
+            let v = sched.run.counters.load(task.raw(arg(0)))?;
             task.set_raw(dst, v);
         }
         Extern::AtomicStore => {
-            let n = task.raw(arg(0));
-            *sched.cells.counter(task.raw(arg(1)))? = n;
+            sched
+                .run
+                .counters
+                .store(task.raw(arg(1)), task.raw(arg(0)))?;
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncOpReady => {
             // token は借りるだけで、組を作る後の `con` が返す
             let me = current_cell(task)?;
-            let mut step = sched
-                .cells
-                .op_ready(task.raw(arg(0)), task.raw(arg(1)), me)?;
+            let token = task.raw(arg(0));
+            // host が置いた結果は、決める区間と同じ区間で先に当てる (docs/spec/vm.md の「操作の記録」)
+            let mut work = cells::IoWork::default();
+            let mut step = {
+                here!(sched, post, here);
+                let mut cells = sched.cells.lock();
+                cells.settle_token(ctx, task.depth_offset, token, me, &here, &mut work)?;
+                cells.op_ready(token, task.raw(arg(1)), me)?
+            };
+            work.cancel_on(sched.driver.as_deref_mut())?;
             // 予算を使い切った終わった操作の待ちは、OS を1回見て集める。受け付けで終わる書きを続ける書き手が、OS を
             // 見ないと起きない同じ worker の読み手の先へ走り続けないためである。走れるタスクがなければ譲らずに続ける
             // (docs/spec/stdlib.md の「操作の予算」、docs/spec/vm.md の「時計と driver」)
             if step == cells::FAST_YIELD {
                 collect::<R>(code, ctx, task.depth_offset, sched, true)?;
                 if sched.ready.is_empty() {
-                    step = sched.cells.go_on(me)?;
+                    step = sched.cells.lock().go_on(me)?;
                 }
             }
             task.set_raw(dst, step);
@@ -2343,10 +2371,20 @@ fn async_op<R: Exec>(
         Extern::AsyncParkIo => {
             let me = current_cell(task)?;
             let (token, k) = (task.raw(arg(0)), task.get(arg(1)));
-            if let Some(run) = sched
-                .cells
-                .park_io(driver_mut(&mut sched.driver)?, token, me, k)?
-            {
+            let run = {
+                here!(sched, post, here);
+                cells::park_io(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.depth_offset,
+                    token,
+                    me,
+                    k,
+                )?
+            };
+            if let Some(run) = run {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
@@ -2356,35 +2394,54 @@ fn async_op<R: Exec>(
             let (token, ms, k) = (task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)));
             // 0 以下は過ぎた期限なので時計を読まない (docs/spec/vm.md の「時間の待ち」)
             let now = if ms > 0 {
-                ceil_ms(driver_mut(&mut sched.driver)?.now())
+                sched.run.now_ms_ceil(sched.driver.as_deref())?
             } else {
                 0
             };
-            if let Some(run) =
-                sched
-                    .cells
-                    .park_io_until(driver_mut(&mut sched.driver)?, now, ms, token, me, k)?
-            {
+            let run = {
+                here!(sched, post, here);
+                cells::park_io_until(
+                    &sched.cells,
+                    &here,
+                    ctx,
+                    sched.driver.as_deref_mut(),
+                    task.depth_offset,
+                    now,
+                    ms,
+                    token,
+                    me,
+                    k,
+                )?
+            };
+            if let Some(run) = run {
                 schedule(code, sched, entries, run)?;
             }
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncParkSignal => {
             let me = current_cell(task)?;
-            if let Some(run) = sched
-                .cells
-                .park_signal(task.raw(arg(0)), me, task.get(arg(1)))?
-            {
+            // 見張りの語は待ち手の列と同じ区間で書く。ほかの worker の集める地点が書く値と順序を保つためである
+            // (docs/spec/vm.md の「上限と割り込み」)
+            let run = {
+                let mut cells = sched.cells.lock();
+                let run = cells.park_signal(task.raw(arg(0)), me, task.get(arg(1)))?;
+                cells.watch(&sched.watcher.control);
+                run
+            };
+            if let Some(run) = run {
                 schedule(code, sched, entries, run)?;
             }
-            sched.sync_watched();
             task.set(dst, Word::UNIT);
         }
         Extern::NetSubmitWrite => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
-            let token = sched.cells.submit_write(
+            bind_here(sched, ctx, stream)?;
+            here!(sched, post, here);
+            let token = cells::submit_write(
+                &sched.cells,
+                &here,
                 ctx,
-                driver_mut(&mut sched.driver)?,
+                sched.driver.as_deref_mut(),
                 task.worker,
                 task.depth_offset,
                 buf,
@@ -2392,11 +2449,35 @@ fn async_op<R: Exec>(
             )?;
             task.set_raw(dst, token);
         }
+        ext @ (Extern::NetSubmitShutdownWrite | Extern::NetSubmitSetNodelay) => {
+            let (on, stream) = if ext == Extern::NetSubmitShutdownWrite {
+                (None, task.get(arg(0)))
+            } else {
+                (Some(task.raw(arg(0)) != 0), task.get(arg(1)))
+            };
+            bind_here(sched, ctx, stream)?;
+            here!(sched, post, here);
+            let token = cells::submit_control(
+                &sched.cells,
+                &here,
+                ctx,
+                sched.driver.as_deref_mut(),
+                task.worker,
+                task.depth_offset,
+                on,
+                stream,
+            )?;
+            task.set_raw(dst, token);
+        }
         Extern::NetSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
-            let token = sched.cells.submit_read(
+            bind_here(sched, ctx, stream)?;
+            here!(sched, post, here);
+            let token = cells::submit_read(
+                &sched.cells,
+                &here,
                 ctx,
-                driver_mut(&mut sched.driver)?,
+                sched.driver.as_deref_mut(),
                 task.worker,
                 task.depth_offset,
                 buf,
@@ -2406,19 +2487,26 @@ fn async_op<R: Exec>(
         }
         ext @ (Extern::NetSubmitListen | Extern::NetSubmitConnect) => {
             let (host, port) = (task.get(arg(0)), task.raw(arg(1)));
+            // 新しいハンドルは、本物の時計の run では自分の driver に作る (docs/spec/vm.md の「時計と driver」)
+            sched.own_driver()?;
+            here!(sched, post, here);
             let submitted = if ext == Extern::NetSubmitListen {
-                sched.cells.submit_listen(
+                cells::submit_listen(
+                    &sched.cells,
+                    &here,
                     ctx,
-                    driver_mut(&mut sched.driver)?,
+                    sched.driver.as_deref_mut(),
                     task.worker,
                     task.depth_offset,
                     host,
                     port,
                 )?
             } else {
-                sched.cells.submit_connect(
+                cells::submit_connect(
+                    &sched.cells,
+                    &here,
                     ctx,
-                    driver_mut(&mut sched.driver)?,
+                    sched.driver.as_deref_mut(),
                     task.worker,
                     task.depth_offset,
                     host,
@@ -2439,9 +2527,12 @@ fn async_op<R: Exec>(
         }
         Extern::NetSubmitAccept => {
             let listener = task.get(arg(0));
-            let token = sched.cells.submit_accept(
+            here!(sched, post, here);
+            let token = cells::submit_accept(
+                &sched.cells,
+                &here,
                 ctx,
-                driver_mut(&mut sched.driver)?,
+                sched.driver.as_deref_mut(),
                 task.worker,
                 task.depth_offset,
                 listener,
@@ -2450,49 +2541,64 @@ fn async_op<R: Exec>(
         }
         Extern::NetOpListener | Extern::NetOpStream => {
             // token は借りるだけで、組を作る後の `con` が消費する
-            let w = sched.cells.op_stream(task.raw(arg(0)), task.worker)?;
+            let w = sched
+                .cells
+                .lock()
+                .op_stream(task.raw(arg(0)), task.worker)?;
             task.set(dst, w);
         }
         Extern::NetOpOutcome => {
             // token は借りるだけで、組を作る後の `con` が消費する
-            let code = sched.cells.op_outcome(task.raw(arg(0)), task.worker)?;
+            let code = sched
+                .cells
+                .lock()
+                .op_outcome(task.raw(arg(0)), task.worker)?;
             task.set_raw(dst, code);
+        }
+        Extern::NetOpDone => {
+            // token は借りるだけで、組を作る後の `con` が消費する
+            let done = sched.cells.lock().op_done(task.raw(arg(0)), task.worker)?;
+            task.set_raw(dst, i64::from(done));
         }
         ext @ (Extern::NetTakeListener | Extern::NetTakeStream) => {
             let listener = ext == Extern::NetTakeListener;
-            let w = sched
-                .cells
-                .take_made(ctx, task.raw(arg(0)), task.worker, listener)?;
+            let w = cells::take_made(&sched.cells, ctx, task.raw(arg(0)), task.worker, listener)?;
             task.set(dst, w);
         }
         Extern::NetTakeBytes => {
-            let buf = sched.cells.take_bytes(ctx, task.raw(arg(0)), task.worker)?;
+            let buf = cells::take_bytes(&sched.cells, ctx, task.raw(arg(0)), task.worker)?;
             task.set(dst, buf);
         }
         Extern::NetSubmitReadLine => {
             let stream = task.get(arg(0));
-            let token = sched.cells.submit_read_line(
+            bind_here(sched, ctx, stream)?;
+            here!(sched, post, here);
+            let token = cells::submit_read_line(
+                &sched.cells,
+                &here,
                 ctx,
-                driver_mut(&mut sched.driver)?,
+                sched.driver.as_deref_mut(),
                 task.worker,
                 task.depth_offset,
                 stream,
             )?;
             task.set_raw(dst, token);
         }
-        Extern::NetTakeLine => match sched.cells.take_line(ctx, task.raw(arg(0)), task.worker)? {
-            Ok(line) => task.set(dst, line),
-            // `Stdin.read_line` と同じく、UTF-8 でない行は種類 `NotUtf8` にする (docs/spec/stdlib.md の「`Std.Net`」)
-            Err(message) => {
-                let raise = Raise::Io {
-                    kind: externs::IO_NOT_UTF8,
-                    message,
-                };
-                return raise_again::<R>(code, ctx, task, dst, raise, Extern::NetTakeLine);
+        Extern::NetTakeLine => {
+            match cells::take_line(&sched.cells, ctx, task.raw(arg(0)), task.worker)? {
+                Ok(line) => task.set(dst, line),
+                // `Stdin.read_line` と同じく、UTF-8 でない行は種類 `NotUtf8` にする (docs/spec/stdlib.md の「`Std.Net`」)
+                Err(message) => {
+                    let raise = Raise::Io {
+                        kind: externs::IO_NOT_UTF8,
+                        message,
+                    };
+                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::NetTakeLine);
+                }
             }
-        },
+        }
         Extern::NetFinish => {
-            let taken = sched.cells.take_op(ctx, task.raw(arg(0)), task.worker)?;
+            let taken = cells::take_op(&sched.cells, ctx, task.raw(arg(0)), task.worker)?;
             // 記録が持っていたものは受け付けたタスクの ID の物体で、操作は終わっているので driver はもう触れない。
             // 作ったハンドルは落とすと bin を通して閉じる (docs/spec/vm.md の「操作の記録」)
             for w in [taken.buf, taken.made].into_iter().flatten() {
@@ -2519,38 +2625,6 @@ fn async_op<R: Exec>(
             let peer = cells::peer_addr(ctx, task.get(arg(0)))?;
             task.set(dst, peer);
         }
-        ext @ (Extern::NetShutdownWrite | Extern::NetSetNodelay) => {
-            let stream = if ext == Extern::NetShutdownWrite {
-                task.get(arg(0))
-            } else {
-                task.get(arg(1))
-            };
-            let handle = cells::stream_handle(ctx, stream)?;
-            let (done, what) = if ext == Extern::NetShutdownWrite {
-                (
-                    driver_mut(&mut sched.driver)?.shutdown_write(handle),
-                    "cannot shut down the stream",
-                )
-            } else {
-                let on = task.raw(arg(0)) != 0;
-                (
-                    driver_mut(&mut sched.driver)?.set_nodelay(handle, on),
-                    "cannot set the no-delay option",
-                )
-            };
-            match done {
-                Ok(()) => task.set(dst, stream),
-                Err(e) => {
-                    // ストリームは呼ぶ側から移ってきた参照で、失敗では返さないので落とす
-                    unsafe { ctx.heap_mut().decref(stream) }?;
-                    let raise = Raise::Io {
-                        kind: io_kind(&e),
-                        message: format!("{what}: {e}"),
-                    };
-                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
-                }
-            }
-        }
         _ => {
             return Err(VmFault::Internal(
                 "a row outside Std.Async, Std.Chan, Std.Atomic and Std.Net reached the Async instruction",
@@ -2569,6 +2643,19 @@ fn io_kind(e: &std::io::Error) -> i64 {
         std::io::ErrorKind::Unsupported => externs::IO_NOT_AVAILABLE,
         _ => externs::IO_OTHER,
     }
+}
+
+/// ストリーム `stream` の操作を受け付ける前に、ストリームが受けたまま縛っていなければ自分の driver を用意する。
+/// 受け付けがストリームを自分の driver に取り込むためである (docs/spec/vm.md の「時計と driver」)。
+fn bind_here<M: Mode, P: Policy>(
+    sched: &mut Scheduler<P>,
+    ctx: &Ctx<M>,
+    stream: Word,
+) -> Result<(), VmFault> {
+    if cells::stream_unbound(ctx, stream)? {
+        sched.own_driver()?;
+    }
+    Ok(())
 }
 
 /// 今の `Task` のタスクのセル。`main` と `par` の右の子は `Async` の操作を実行しない。
@@ -2607,16 +2694,34 @@ fn raise_again<R: Exec>(
     }
 }
 
-/// 今の `Task` から、スコープ `scope` に新しいタスクを置く。閉包 `g` とまだ印のない根に、新しいタスクの ID で印を付ける。
+/// `start` が新しいタスクを置く worker。worker を作った run では、作った worker を worker 1 から順に回り、作らない
+/// run では呼んだ worker である。タスクは置いた worker から動かない (docs/spec/vm.md の「`Async` のタスク」)。
+fn place_owner<P: Policy>(sched: &Scheduler<P>) -> u32 {
+    match sched.workers.places() {
+        true => sched.run.next_owner(),
+        false => sched.me(),
+    }
+}
+
+/// 今の `Task` から、スコープ `scope` に worker `owner` を持ち主とする新しいタスクを置く。閉包 `g` とまだ印のない根に、
+/// 新しいタスクの ID で印を付ける。返す仕事は、持ち主が自分のときだけある。
 fn start_task<R: Exec>(
     ctx: &mut Ctx<R::M>,
     task: &Task,
     sched: &mut Scheduler<R::P>,
     scope: CellRef,
+    owner: u32,
     g: Word,
-) -> Result<Option<(Word, Runnable)>, VmFault> {
+) -> Result<Option<(Word, Option<Runnable>)>, VmFault> {
     let roots = unshared_roots(ctx, sched);
-    Ok(sched.cells.start(ctx, scope, task.worker, g, &roots)?)
+    let started = {
+        here!(sched, post, here);
+        sched
+            .cells
+            .lock()
+            .start(ctx, &here, scope, task.worker, owner, g, &roots)?
+    };
+    Ok(started.map(|(cell, run)| (cells::task_handle(ctx, &sched.cells, cell), run)))
 }
 
 /// `finish_*` の終わり方をエントリの `Task` に預ける。核に渡すのは `Task` の `Finish` で、そのときにはタスクの ID の物体は
@@ -2673,7 +2778,7 @@ fn schedule<M: Mode, P: Policy>(
             return Ok(());
         }
     };
-    let worker = sched.cells.worker(cell)?;
+    let worker = sched.cells.lock().worker(cell)?;
     let spare = sched.stacks.pop().unwrap_or_default();
     let task = Task::entry(
         code,
@@ -2705,13 +2810,14 @@ fn enter<R: Exec>(
         .cell
         .ok_or(VmFault::Internal("an Async entry task has no cell"))?;
     if argc == 1 {
-        let spawner = sched.cells.started(cell)?;
+        let spawner = sched.cells.lock().started(cell)?;
         // 閉包は始めたタスクが印を付けて渡した参照で、このタスクだけが持つ
         unsafe { ctx.heap_mut().transfer_back(args[0], spawner) }?;
     } else {
         // 引数が3つのエントリは `resume_io` で、操作の待ちからの再開である
         let wake = sched
             .cells
+            .lock()
             .resumed(cell, args[1].bits() as i64, argc == 3)?;
         args[1] = Word::from_bits(wake as usize);
     }
@@ -2744,6 +2850,11 @@ fn entry_finish<R: Exec>(
             ctx.evv_set(Word::UNIT)?;
         }
         cells::end_with_exit(ctx.heap().control(), n);
+        // ほかの worker の `exit` は、worker 0 に止まらせるために `END` を立てる。抜けるときにすべての worker を起こすので、
+        // 眠っている worker 0 もそれを読む (docs/spec/vm.md の「誤り、止めること、終わり」)
+        if sched.index != 0 {
+            ctx.heap().control().end_run();
+        }
         return Err(VmFault::Stopped(Stop::Ended));
     }
     if ctx.yielding() != 0 || !task.boundaries.is_empty() {
@@ -2759,9 +2870,18 @@ fn entry_finish<R: Exec>(
             .entries
             .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
         let mut out = Vec::new();
-        sched
-            .cells
-            .finish(ctx, cell, outcome, task.depth_offset, &mut out)?;
+        {
+            here!(sched, post, here);
+            cells::finish(
+                &sched.cells,
+                &here,
+                ctx,
+                cell,
+                outcome,
+                task.depth_offset,
+                &mut out,
+            )?;
+        }
         for run in out {
             schedule(code, sched, entries, run)?;
         }
@@ -3519,6 +3639,7 @@ fn run_extern<R: Exec>(
             | Extern::NetOpListener
             | Extern::NetOpStream
             | Extern::NetOpOutcome
+            | Extern::NetOpDone
             | Extern::NetTakeListener
             | Extern::NetTakeStream
             | Extern::NetTakeBytes
@@ -3526,8 +3647,8 @@ fn run_extern<R: Exec>(
             | Extern::NetFinish
             | Extern::NetLocalPort
             | Extern::NetPeerAddr
-            | Extern::NetShutdownWrite
-            | Extern::NetSetNodelay => {
+            | Extern::NetSubmitShutdownWrite
+            | Extern::NetSubmitSetNodelay => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }
@@ -3540,7 +3661,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::cells::Notice;
+    use eml_rt::Control;
+
+    use crate::cells::{MailItem, Registry, Shared};
 
     fn empty_task(max_depth: usize) -> Task {
         Task {
@@ -3604,19 +3727,21 @@ fn f(p.0: unit) -> unit {
         let mut ctx = Ctx::new(Arc::clone(&control), host);
         let mut task = Task::new(&code, entry, usize::MAX);
         task.worker = ctx.heap().worker();
+        let driver = eml_io::TestDriver::new(None);
+        let clock = crate::driver::RunClock::Virtual(driver.clock());
         let mut sched = Scheduler::new(
             crate::Sequential,
-            Box::new(eml_io::TestDriver::new(None)),
-            Arc::new(crate::workers::Run::new(1, None)),
+            Box::new(driver),
+            Arc::new(crate::workers::Run::new(1, None, clock, Arc::default())),
             Arc::clone(&control),
             task.worker,
             usize::MAX,
-            Vec::new(),
+            Arc::new(Shared::new(Registry::new(Vec::new(), 1))),
         );
         // 監視のスレッドの中継と同じことをする
         control.defer(Control::TERMINATE);
         assert_eq!(control.claim_signals(), Control::TERMINATE);
-        sched.cells.inbox.push(Notice::Signal(Control::TERMINATE));
+        sched.cells.mail.push(MailItem::Signal(Control::TERMINATE));
         control.notice(0);
         let mut counts = crate::RunCounts::default();
         let result = run::<ExecWith<eml_rt::Checked, crate::Sequential>>(

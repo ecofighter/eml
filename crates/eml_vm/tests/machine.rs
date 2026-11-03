@@ -635,15 +635,11 @@ impl IoDriver for FakeDriver {
         Arc::new(HandleBin::default())
     }
 
-    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
-        Ok(())
-    }
-
     fn close(&mut self, _handle: IoHandle) {}
+
+    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 
     fn quiesce(&mut self) {
         self.quiesces.fetch_add(1, Ordering::SeqCst);
@@ -679,8 +675,8 @@ fn main() -> unit {{
     assert_eq!(out.contents(), "ran\n");
 }
 
-/// `main` の `Finish` に届かない誤りの run でも、`vm::run` の直後と回復の前に driver を空にする。成功した run と違い
-/// `Finish` の `quiesce` を通らないので、2回はこの2か所の分である (docs/spec/vm.md の「時計と driver」)。
+/// `main` の `Finish` に届かない誤りの run でも、worker を join した後と回復の前に driver を空にする。2回はこの2か所の
+/// 分である (docs/spec/vm.md の「時計と driver」)。
 #[test]
 fn a_failed_run_quiesces_its_driver_before_recovery() {
     let (driver, quiesces) = FakeDriver::new(true);
@@ -824,15 +820,11 @@ impl IoDriver for StubDriver {
         Arc::new(HandleBin::default())
     }
 
-    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
-        Ok(())
-    }
-
     fn close(&mut self, _handle: IoHandle) {}
+
+    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 
     fn quiesce(&mut self) {
         self.note(format!("quiesce {}", self.pending()));

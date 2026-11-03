@@ -18,7 +18,7 @@ eml run --workers 4 wc.em -l input.txt
 - `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--sched`、`--workers`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--stats`、`--sched=seeded:7`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
 - ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap`、`--stats`、`--sched`、`--workers` はファイルより前にだけ書ける。`eml run main.em --sched bogus` は、スクリプトに `--sched` と `bogus` を渡す
 - `--sched <normal|sequential|seeded:N>` は、タスクを切り替える方針を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。既定は `normal` で、監視のスレッドの刻みで横取りする。`sequential` は横取りしない。`seeded:N` は `u64` の seed `N` で横取りの位置を決める。ほかの値と、2回書いた `--sched` は使い方の誤り (終了コード 2) である。`run` と `repl` が持ち、`check` は持たない。環境変数では選べない
-- `--workers <N>` は、`par` の右の子を走らせる worker のスレッドの数 (worker 0 を含む) を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。`N` は 1 以上 1024 以下の整数である。run は worker ごとに止める語と欄を確保するので、上限を置いて、大きすぎる数を確保の失敗でなく使い方の誤りにする。`--workers` がなければ環境変数 `EML_WORKERS` を同じ規則で読み、それもなければ `available_parallelism()` の値にする (読めなければ 1、1024 を超えれば 1024)。0 と 1024 を超える数と数でない値は、フラグでも `EML_WORKERS` でも使い方の誤り (終了コード 2) で、2回書いた `--workers` も同じである。`run` だけが持ち、`repl` と `check` は持たない。`repl` は常に 1 である ([REPL の端末](repl.md) の「コマンドライン」)。ライブラリの `Limits::default()` と `eml_cli::default_limits()` も 1 で、UI テストは 1 で走らせる。`par/` の UI テストだけは 2 と 8 でも走らせる ([テスト戦略](../implementation/testing.md) の「seed で流す」)
+- `--workers <N>` は、`par` の右の子と `Async` のタスクを走らせる worker のスレッドの数 (worker 0 を含む) を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。`N` は 1 以上 1024 以下の整数である。run は worker ごとに止める語と欄を確保するので、上限を置いて、大きすぎる数を確保の失敗でなく使い方の誤りにする。`--workers` がなければ環境変数 `EML_WORKERS` を同じ規則で読み、それもなければ `available_parallelism()` の値にする (読めなければ 1、1024 を超えれば 1024)。0 と 1024 を超える数と数でない値は、フラグでも `EML_WORKERS` でも使い方の誤り (終了コード 2) で、2回書いた `--workers` も同じである。`run` だけが持ち、`repl` と `check` は持たない。`repl` は常に 1 である ([REPL の端末](repl.md) の「コマンドライン」)。ライブラリの `Limits::default()` と `eml_cli::default_limits()` も 1 で、UI テストは 1 で走らせる。`par/` の UI テストだけは 2 と 8 でも走らせる ([テスト戦略](../implementation/testing.md) の「seed で流す」)
 - `Env.args ()` は、ファイルより後ろの引数を返す。`eml` とスクリプトのパスは含めない
 - shebang は `#!/usr/bin/env eml` と書く。Linux の `env` は `#!` の行の残りを1つの引数として渡すので、`#!/usr/bin/env eml run` は動かない
 - ファイルの相対パスと子のプロセスの作業ディレクトリは、プロセスの今のディレクトリである
@@ -907,7 +907,7 @@ main () =
 
 ## `Std.Async`
 
-`Std.Async` は1つの worker の上でタスクを動かすモジュールである。
+`Std.Async` は複数の worker の上でタスクを動かすモジュールである。タスクは `start` のときに置く worker を決め、そこから動かない ([VM](vm.md) の「`Async` のタスク」)。
 
 ```haskell
 import Async (Async)
@@ -1036,6 +1036,7 @@ pub data Failure =
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
 - `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のためのインターフェースで、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
 - `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.Net` のためのインターフェースで、同じ理由で `pub` である。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.Net`」)。どちらも先に `op_ready` を呼ぶ。0 なら perform せずに `(Woke, op)` を返し、2 なら `reschedule ()` で列の後ろへ回ってから、その `Wake` を見ずに `(Woke, op)` を返す。1 のときだけ `await_io` か `await_io_until` を perform して待つ。回る間に届いた取り消しは、次の取り消しの地点で投げる
+- `io_wait_shielded` (`OpId -> <IO, Async> OpId`) も `Std.Net` のためのインターフェースである。`shield` と同じ深さの印の中で `io_wait` を呼び、`Wake` を捨てて token を返す。中の待ちは外の取り消しで外れず、いつも操作が終わってから戻る。`shield` は本体の行に `Panic` を求めるので、`Panic` を持たない `Std.Net` の包みのためにこの形にする
 - `signal_wait` (`Int -> <IO, Async> Wake`) は `Std.Signal` のためのインターフェースで、同じ理由で `pub` である。0 と 1 のほかの番号は、待たずに種類 `NotAvailable` の IO の失敗 (`no such signal`) にする。利用者が呼んでも、`Signal.wait` と同じ待ちになるだけである (下の「`Std.Signal`」)
 
 ### スコープ
@@ -1081,7 +1082,7 @@ body () =
 
 待たずに済む速い道は、タスクごとの予算を1つずつ使う。予算は 128 である。予算を使い切った速い道は、`yield_now` でほかのタスクに worker を渡す。`Std.Net` の待ちの渡し方は次の段落に書く。予算を使うのは、`check_cancelled` と、`Std.Chan` の `send`、`recv`、`try_send`、`try_recv` の速い道と、`Std.Net` の待ち (`Async.io_wait` と `io_wait_until`) である。
 
-`Std.Net` の待ちは、操作がもう終わっていて待たずに続けるときも、終わっていなくて park するときも、1回ごとに予算を使う。読みとほかの待ちは1つ使う。書きの待ちは、1 に、プログラムが渡した長さを 512 で割った商を足した数を使い、残りより多ければ残りをすべて使う。64 KiB の書きは1回で予算を使い切る。読めた量はスケジュールで変わるが、書く長さはプログラムが決めるので、書きだけを重くする。予算を使い切った待ちは譲る。終わっていない操作の待ちは park して譲る。終わった操作の待ちは、まず OS を1回見て、届いた完了を集める ([VM](vm.md) の「時計と driver」)。そのうえで走れるタスクがあれば `reschedule ()` で譲り、その `Wake` を見ない。操作の結果を受け取ってから、次の取り消しの地点で投げるためである。走れるタスクがなければ、譲らずに予算を戻して続ける。譲るか続けるかはスケジュールで変わるが、どちらでも予算を戻し、待ちを1つ数えるので、予算の切れる位置と `RunStats.parks` は変わらない。同じ worker の上で書き手の書きが受け付けで終わり続けると、読み手は OS を見るまで起きず、書いたバイトが送りの列にたまって、読むときの写しが重くなる。書きの重みと OS の確かめで、書き手は 64 KiB ごとに読み手を起こす。予算は、タスクが始まるときと、操作の待ちでない再開のときと、予算を使い切った操作の待ちからの再開のときと、予算を使い切った待ちが譲らずに続けるときに 128 に戻す。予算の残る操作の待ちからの再開では戻さない。操作の待ちが park するかは、操作が受け付けで終わったかでスケジュールによって変わる。そこで予算を戻したり、終わった操作の待ちだけで予算を使ったりすると、予算の切れる位置と `RunStats.parks` もスケジュールで変わるためである。`parks` は、どの `Std.Net` の待ちも1つずつ数える。
+`Std.Net` の待ちは、操作がもう終わっていて待たずに続けるときも、終わっていなくて park するときも、1回ごとに予算を使う。`shutdown_write` と `set_nodelay` は、別の worker の driver に回して待つときだけ予算を使う (下の「`Std.Net`」)。読みとほかの待ちは1つ使う。書きの待ちは、1 に、プログラムが渡した長さを 512 で割った商を足した数を使い、残りより多ければ残りをすべて使う。64 KiB の書きは1回で予算を使い切る。読めた量はスケジュールで変わるが、書く長さはプログラムが決めるので、書きだけを重くする。予算を使い切った待ちは譲る。終わっていない操作の待ちは park して譲る。終わった操作の待ちは、まず OS を1回見て、届いた完了を集める ([VM](vm.md) の「時計と driver」)。そのうえで走れるタスクがあれば `reschedule ()` で譲り、その `Wake` を見ない。操作の結果を受け取ってから、次の取り消しの地点で投げるためである。走れるタスクがなければ、譲らずに予算を戻して続ける。譲るか続けるかはスケジュールで変わるが、どちらでも予算を戻し、待ちを1つ数えるので、予算の切れる位置と `RunStats.parks` は変わらない。同じ worker の上で書き手の書きが受け付けで終わり続けると、読み手は OS を見るまで起きず、書いたバイトが送りの列にたまって、読むときの写しが重くなる。書きの重みと OS の確かめで、書き手は 64 KiB ごとに読み手を起こす。予算は、タスクが始まるときと、操作の待ちでない再開のときと、予算を使い切った操作の待ちからの再開のときと、予算を使い切った待ちが譲らずに続けるときに 128 に戻す。予算の残る操作の待ちからの再開では戻さない。操作の待ちが park するかは、操作が受け付けで終わったかでスケジュールによって変わる。そこで予算を戻したり、終わった操作の待ちだけで予算を使ったりすると、予算の切れる位置と `RunStats.parks` もスケジュールで変わるためである。`parks` は、どの `Std.Net` の待ちも1つずつ数える。
 
 `try_send` と `try_recv` の row は `Async` を持たないので、予算を使うだけで譲らず、次に予算を見る `send`、`recv`、`check_cancelled` が譲る。待ちから起こされた直後のやり直しは、予算を使っても譲らない。譲った後のやり直しは予算をもう1つ使う。`cancel_requested` は予算を使わない。予算は横取りの予算と別で、横取りでは戻さない。戻す時点は上のとおりプログラムだけで決まるので、channel を使わない run では `RunStats.parks` はスケジュールによらず、横取りのないネイティブのコードでも同じに動く。予算はタスクのセルに持ち、`Ctx` には置かない。予算を使う行はどれも登録表に触れるので、`eml_rt` を変えずに済むためである。
 
@@ -1144,7 +1145,7 @@ pub try_all : (Unit -> <IO, Panic | e> a) -> <IO | e> Result Failure a
 
 ## `Std.Chan`
 
-`Std.Chan` はタスクの間で値を受け渡す channel のモジュールである。1つの型で、送り手と受け手をいくつでも持てる。
+`Std.Chan` はタスクの間で値を受け渡す channel のモジュールである。1つの型で、送り手と受け手をいくつでも持てる。送り手と受け手は別の worker で動いてよい。
 
 ```haskell
 import Async (Async)
@@ -1177,6 +1178,8 @@ body () =
 - `send x c` は、積めれば積んで `Sent` を返し、積めなければ枠が空くか閉じるまで待つ。閉じていれば `x` を `Rejected x` で返す。`recv c` は、品物があれば取って `Some` で返し、なければ品物が来るか閉じるまで待つ。閉じて空なら `None` を返す
 - `try_send` と `try_recv` は待たない。`try_send` は、積めれば `Accepted`、満ちていれば `Full x`、閉じていれば `Refused x` を返す。`try_recv` は、品物があれば `Got x`、空なら `Empty`、閉じて空なら `Drained` を返す。どちらも row に `Async` を持たないので、タスクの外でも呼べる
 - `close c` は何度呼んでもよく、2回目からは何もしない。待っている受け手と送り手をすべて起こす (同じ channel で両方が待つことはない)。積んであった品物は閉じた後も順に取れ、取り切ると `recv` は `None` を返す。起こされた送り手は `Rejected` を受け取る
+- 閉じる前に枠を確かめた送りは、閉じた後に積まれることがある。そのとき受け手は閉じて空とせずに待ち、品物を受け取る
+- 待っている受け手が開いた枠を送りが予約した後に、その受け手が取り消されると、品物は積まれて、次の受け手が取るまで channel に残る。容量によらず、その間 channel は容量を超えて品物を持つことがあり、ほかの送りは積めない
 - 待ち手は側ごとに FIFO で起こす。起こされたタスクより先に速い道のタスクが品物や枠を取ることがあり、そのときは列の後ろで待ち直す。約束する順は起こす順だけである
 - `send` と `recv` は取り消しの地点である (上の「取り消し」)。取り消しの巻き戻しは `close` を飛ばす。取り消されうるタスクで作った channel は、`try_all` の handler か `shield` の中で `close` する
 - 品物の値は、積むときに送り手が印を付け、取るときに受け手が受け取る ([オブジェクトモデル](object-model.md) の「論理的な worker ID」)。断られた値と、待っている間に取り消された送り手の値は channel に入らない。送り手の値のまま戻るか、巻き戻しが落とす
@@ -1196,8 +1199,8 @@ body () =
 | `pop_raw` | `Chan a -> <IO> a` | なし |
 | `close_raw` | `Chan a -> <IO> Unit` | なし |
 
-- `reserve_send` と `reserve_recv` は、0 (確定してよい)、1 (待つ)、2 (閉じている。受け取りでは閉じて空)、3 (先に譲る。2つ目の引数が真のときだけ) を返す
-- `push_raw` と `pop_raw` は、0 を返した `reserve_*` の直後に、`Int` を比べるほかは呼び出しを挟まずに呼ぶ。標準ライブラリがこの形を保ち、処理系は確かめない
+- `reserve_send` と `reserve_recv` は、0 (予約した。続けて確定する)、1 (待つ)、2 (閉じている。受け取りでは閉じて空)、3 (先に譲る。2つ目の引数が真のときだけ) を返す
+- `reserve_*` が 0 を返すと、枠か品物を1つ予約し、続く `push_raw` か `pop_raw` が確定する。間には安全点も、タスクの切り替えも、失敗しうる命令も置かない (`Int` の比べと分岐と、積む品物の箱詰めは置いてよい)。予約を持ったまま切り替えたり抜けたりしないためである。標準ライブラリがこの形を保ち、処理系は予約があることだけを確かめる ([VM](vm.md) の「channel」)
 - 待ちは `Std.Async` の `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) を通す
 
 ```haskell
@@ -1255,7 +1258,7 @@ body () =
 | `load` | `Counter -> <IO> Int` | extern |
 | `store` | `Int -> Counter -> <IO> Unit` | extern |
 
-- `Counter` は、run をまたいで `Machine` が持つ表の添字を持つ `Unr` の即値である。`add n c` は足した後の値を返し、64 ビットで巻き戻る。`Counter` は放さない。数の少ない共有の状態のためのものである。`Async` のタスクが複数の worker で動くときは、表を `SeqCst` の atomic にする
+- `Counter` は、run をまたいで `Machine` が持つ表の添字を持つ `Unr` の即値である。表の項は `SeqCst` の atomic で、どの worker のタスクも lock を取らずに `add`、`load`、`store` を行う。`add n c` は `fetch_add` で足して、足した後の値を返し、64 ビットで巻き戻る。`Counter` は放さない。数の少ない共有の状態のためのものである
 - 行は `Async` の命令で動くので、`Std.Atomic` は `Std.Async` を読み込む。row は `IO` だけで、タスクの外でも、REPL の入力をまたいでも使え、実行時エラーで捨てた run の `add` も残る
 
 ## `Std.Net`
@@ -1295,10 +1298,10 @@ main () = Async.run (fn () ->
 | `write` | `String -> TcpStream -> <IO, Async> TcpStream` | eml |
 | `write_bytes` | `Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)` | eml |
 | `write_line` | `String -> TcpStream -> <IO, Async> TcpStream` | eml |
-| `shutdown_write` | `TcpStream -> <IO> TcpStream` | extern |
+| `shutdown_write` | `TcpStream -> <IO, Async> TcpStream` | eml |
 | `close` | `TcpStream -> <IO> Unit` | eml |
 | `peer_addr` | `TcpStream -> (String, TcpStream)` | extern |
-| `set_nodelay` | `Bool -> TcpStream -> <IO> TcpStream` | extern |
+| `set_nodelay` | `Bool -> TcpStream -> <IO, Async> TcpStream` | eml |
 
 - `TcpListener` と `TcpStream` の Repr は `obj` である。落としたハンドルは、driver が次の待ち、完了の取り出し、`quiesce` のどれかのときに閉じる。`close s` と `close_listener l` は落とすだけである
 - `listen host port` の `host` は IP アドレスの綴り (`0.0.0.0`、`127.0.0.1`、`::`、`::1` など) で、名前は受け付けない。`port` は 0 から 65535 で、0 なら空いているポートを使う。使ったポートは `local_port` で読む
@@ -1314,7 +1317,7 @@ main () = Async.run (fn () ->
 - `write_bytes b s` は `b` をすべて書き、`b` とストリームの組を返す。返す `b` は渡した物体そのもので、共有の `Bytes` でも写さない ([VM](vm.md) の「操作の記録」)。返った `b` は次の書きにも、`truncate 0` で空にして読みにも使える。本物の driver は、短く終わった送りを出し直す。`write str s` は `str` の UTF-8 のバイトを書き、`write_line str s` は `str` と改行を書く。どれも `write_bytes` を呼ぶ
 - 書きの期限は `Async.timeout ms (fn () -> Net.write_bytes b s)` で付ける。期限が来ると、巻き戻しがストリームを閉じる
 - `local_port` と `peer_addr` は、作ったときに記録した値を読む。引数を借りて組で返し ([Core IR](core-ir.md) の「組を返す extern」)、効果を持たない。`peer_addr` は Rust の `SocketAddr` の表示の形 (`127.0.0.1:49153`、`[::1]:8080`) で返す
-- `shutdown_write s` は送る側を閉じ、相手は残りを読みきってから EOF を受ける。`set_nodelay on s` は TCP_NODELAY を設定する。どちらも driver の操作を待たない。失敗はそれぞれ IO の失敗 `cannot shut down the stream: …` と `cannot set the no-delay option: …` で、種類は次の箇条の、extern が投げる誤りと同じ規則で決める
+- `shutdown_write s` は送る側を閉じ、相手は残りを読みきってから EOF を受ける。`set_nodelay on s` は TCP_NODELAY を設定する。どちらも driver の操作で、driver は受け付けで終える。包みは `submit_shutdown_write` か `submit_set_nodelay` で token を作り、`op_done` で記録が終わったかを読む。持ち主の worker が host なら受け付けで終わっていて `op_done` が真なので、待たずに `op_stream` でストリームを取り戻し、`finish` で記録を放す。このときは操作の予算を使わず、`parks` も数えない。別の worker の driver に回したときだけ、host が受け付けるまで `Async.io_wait_shielded` で待ってから同じく取り戻し、そのときだけ予算を使う。待つかどうかはタスクを置いた worker で決まり、スケジュールでは変わらない。待ちが park して `parks` を数えるかは、host が結果を置くのが待ちの前か後かで決まる。`op_done` は host が置いた結果を当てずに読むためである ([VM](vm.md) の「操作の記録」)。どちらも取り消しの地点でなく、host が受け付けるまでの待ちも外の取り消しで外れない。届いていた取り消しは、呼んだ後の最初の取り消しの地点で投げる。失敗はそれぞれ IO の失敗 `cannot shut down the stream: …` と `cannot set the no-delay option: …` で、誤りの種類によらず `finish` が投げる。種類は次の箇条の、extern が投げる誤りと同じ規則で決める
 - 拒まれた接続は種類 `ConnectionRefused`、reset と EPIPE と ECONNABORTED は `ConnectionReset`、使用中の番地は `AddrInUse`、OS の時間切れは `TimedOut` である。この4つは包みが `fail_io` で投げる。ほかの誤りは extern が投げ、種類は最初の5つから OS の誤りで決める。解決できない名前は `NotFound`、権限のない操作 (1024 より小さいポートの `listen` など) は `PermissionDenied`、扱えない操作は `NotAvailable`、残りは `Other` である (上の「`try_io`」)
 - 文言は prefix と理由を `: ` でつないだものである。prefix は `cannot listen on {host}:{port}`、`cannot connect to {host}:{port}`、`cannot accept a connection`、`cannot read the stream`、`cannot write to the stream` のどれかである。理由は、包みが投げる4つの種類では `connection refused`、`connection reset`、`address in use`、`timed out` で、ほかは driver の誤りの表示である。テストの driver では、解決できない名前の理由は `unknown host` になり、相手が閉じたストリームへの書きは `cannot write to the stream: connection reset` (種類 `ConnectionReset`) になる
 - `listen` の `host` が IP アドレスの綴りでないときと、`listen` と `connect` の `port` が範囲の外のときは、操作を出さずに種類 `Other` の IO の失敗を起こす。理由はそれぞれ `the host is not an IP address` と `the port is out of range` である
@@ -1331,7 +1334,7 @@ main () = Async.run (fn () ->
 | ほかの誤り | 6 | `finish` が、driver の誤りの種類を最初の5つに写して投げる |
 
 - 期限と競った本物の誤りは、期限に負けたとせずに報告する。誤りはそれを報告した syscall が消費するので、後の操作は同じ誤りを見られない。番号 1 は期限があるときだけ出るので、見るのは `_within` の包みだけである
-- extern の行は次の18行である。`local_port`、`peer_addr`、`shutdown_write`、`set_nodelay` のほかは `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の19行である。`local_port` と `peer_addr` のほかは `pub` でない。VM は `Std.Async` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
 | 行 | 型 | 借りる引数 |
 |---|---|---|
@@ -1341,9 +1344,12 @@ main () = Async.run (fn () ->
 | `submit_read` | `Bytes -> TcpStream -> <IO> Async.OpId` | なし |
 | `submit_read_line` | `TcpStream -> <IO> Async.OpId` | なし |
 | `submit_write` | `Bytes -> TcpStream -> <IO> Async.OpId` | なし |
+| `submit_shutdown_write` | `TcpStream -> <IO> Async.OpId` | なし |
+| `submit_set_nodelay` | `Bool -> TcpStream -> <IO> Async.OpId` | なし |
 | `op_listener` | `Async.OpId -> <IO> (TcpListener, Async.OpId)` | token |
 | `op_stream` | `Async.OpId -> <IO> (TcpStream, Async.OpId)` | token |
 | `op_outcome` | `Async.OpId -> <IO> (Int, Async.OpId)` | token |
+| `op_done` | `Async.OpId -> <IO> (Bool, Async.OpId)` | token |
 | `take_listener` | `Async.OpId -> <IO> TcpListener` | なし |
 | `take_stream` | `Async.OpId -> <IO> TcpStream` | なし |
 | `take_bytes` | `Async.OpId -> <IO> Bytes` | なし |
@@ -1351,11 +1357,9 @@ main () = Async.run (fn () ->
 | `finish` | `Async.OpId -> <IO> Unit` | なし |
 | `local_port` | `TcpListener -> (Int, TcpListener)` | リスナー |
 | `peer_addr` | `TcpStream -> (String, TcpStream)` | ストリーム |
-| `shutdown_write` | `TcpStream -> <IO> TcpStream` | なし |
-| `set_nodelay` | `Bool -> TcpStream -> <IO> TcpStream` | なし |
 
 - 受け付けの行は引数を消費して記録に移し、token を返す。`submit_listen` と `submit_connect` は `host` を写して手放し、文言の prefix を記録に持たせる。`submit_read` と `submit_write` は受け付けで buffer を写さない。`submit_read` は一意でない buffer (共有、不死、ほかの参照) を広げるときに1回だけ写し、`submit_write` は一意でない buffer もそのまま貸す。その場で書き換える操作はどれも一意を求めるので、driver が読む間に書き換わらない ([VM](vm.md) の「操作の記録」)。`submit_read` は、ストリームの buffer に `read_line` が残したバイトがあれば、それを buffer に足して、driver の操作を出さずに終わった記録を作る。`submit_read_line` はストリームだけを記録に移す
-- `op_listener` と `op_stream` は、終わった記録から受け付けに渡したものを移し出す。`op_outcome` は結果の番号を返す
+- `op_listener` と `op_stream` は、終わった記録から受け付けに渡したものを移し出す。`op_outcome` は結果の番号を返す。`op_done` は記録が終わったかを返し、予算を使わず、取り消しの地点も読まない
 - `take_listener` と `take_stream` は token を消費して記録を放し、完了から作ったリスナーかストリームを返す。`take_bytes` は token を消費して記録を放し、記録の buffer を返す。読みでは読んだバイトを足した buffer、書きでは書いた buffer そのものである。`take_line` は token を消費して記録を放し、記録が切り出した行を終わりの改行を含めて返す。残りのない EOF では空の文字列を返し、包みがそれを `None` にする。どれも、番号が 0 でない記録では内部の誤り `an op is taken after it failed` になる
 - `finish` は token を消費して記録を放し、記録がまだ持つもの (完了から作ったハンドルを含む) を落とす。番号 6 の誤りは、取り消しを頼んだ記録でなければ IO の失敗にする
 
@@ -1557,7 +1561,7 @@ main () = Async.run (fn () ->
 - `wait s` は、シグナル `s` が来るまでタスクを待たせる。取り消しの地点で、取り消されると IO の失敗 `Prelude.Cancelled` を投げる。取り消された待ちは待ち手から外れる。待ちは `Std.Async` の `signal_wait` を通す (上の「`Std.Async`」)
 - シグナルが来ると、そのとき同じシグナルを待つタスクをすべて、待ち始めた順に起こす。起こしたタスクは実行待ちの列の後ろに入る。シグナルは貯めない。待つタスクがなければ既定の動きをする。`Interrupt` は run を止めて終了コードを 130 にし、`Terminate` も同じ止め方で 143 にする ([VM](vm.md) の「上限と割り込み」)。起こされてから次の `wait` までに来たシグナルも既定の動きをする
 - 届ける前に同じシグナルが続けて来ると、1つにまとまる。`eml run` では、前の同じシグナルをまだ届けていない間か、それがもう run を止めている間に来たシグナルは、その場でプロセスを終わらせる。unix では Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)` で、Windows の Ctrl-C は `TerminateProcess` で 130 である。Windows の閉じることとシャットダウンは続けて来ても終わらせず、OS の待ち時間に任せる。届けた後のシグナルは1回目として扱う。2つの種類は互いを数えない ([VM](vm.md) の「上限と割り込み」)
-- worker が別のタスクを動かしていても、シグナルは次の安全点で届き、待つタスクは実行待ちの列の後ろに入る。標準入力、`FileIn`、`Child` の同期の読みで worker が止まっている間に来たシグナルは、読みが戻ってから届く
+- worker が別のタスクを動かしていても、シグナルは次の安全点で届く。届けるのは最初に安全点に着くか起こされた worker で、待つタスクはそのタスクを動かす worker の実行待ちの列の後ろに入る。どの worker も標準入力、`FileIn`、`Child` の同期の読みで止まっている間に来たシグナルは、読みが戻ってから届く
 - 本物のシグナル (Ctrl-C、SIGTERM、Windows の閉じることとシャットダウン) が `wait` に届くのは、本物の driver の run だけである。シグナルを待つタスクのいる run は、ほかに進むものがなくてもデッドロックにならず、シグナルが来るまで眠る ([VM](vm.md) の「時計と driver」)。来ることのないシグナルを待つタスクも同じで、`eml repl` の `Terminate` の待ちは、ほかに進むものがなければいつまでも眠る。そのような run は Ctrl-C かプロセスを殺すことでしか終わらない
 - テストの driver の run では、本物のシグナルはいつも既定の動きをする。そこで `wait` に届くのは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` で予定した仮想のシグナルだけである。予定は本物の driver の run でも同じに満ちる ([VM](vm.md) の「時間の待ち」)。テストの driver の run では、予定の残っていないシグナルだけを待つ run は、ほかに進むものがなければデッドロックで止まる
 - `eml repl` は SIGTERM も Windows の閉じることとシャットダウンも受けず、OS の既定の動作でプロセスが終わる。`Signal.wait Interrupt` は REPL でも使える

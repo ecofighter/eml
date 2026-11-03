@@ -1,11 +1,12 @@
 //! worker 1..N-1 の起動と止める手順 (docs/spec/vm.md の「タスクとスケジュール」)。worker は run の最初の `par` の
-//! fork で作り、run の終わりに join する。根に触れる `Machine` は worker を作らない。
+//! fork か、`Async` のタスクを置く最初の `start` で作り、run の終わりに join する。根に触れる `Machine` は worker を
+//! 作らない。
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eml_rt::{Checked, Fault};
-use eml_vm::{Clock, Control, Finished, Limits, Machine, RunConfig, RuntimeError, VmFault};
+use eml_vm::{Clock, Control, Finished, Limits, Machine, RunConfig, RuntimeError, Sched, VmFault};
 
 use eml_test_support::schedule_independent;
 
@@ -310,8 +311,9 @@ main () =
     interrupted(src, |config| config.with_clock(Clock::Real));
 }
 
-/// 右の子が worker 1 で回り続ける間に、別のタスクの `exit` が run を捨てる。worker 1 は `END` を読んで抜け、run は
-/// `exit` の終了コードで終わる。捨てた run のヒープは2つとも回復が片付けるので、検査モードの確かめも通る。
+/// worker 1 に置いたタスクとその `par` の子が動く間に、別のタスクの `exit` が run を捨てる。worker 1 は `END` を読んで
+/// 抜け、run は `exit` の終了コードで終わる。置いたタスクも、それが fork した子も捨てる。捨てた run のヒープは2つとも
+/// 回復が片付けるので、検査モードの確かめも通る。
 #[test]
 fn exit_abandons_a_child_on_another_worker() {
     let src = format!(
@@ -331,7 +333,7 @@ main () = Async.run body
     assert_eq!(out, "");
     let finished = result.unwrap();
     assert_eq!(finished.exit, Some(3));
-    assert_eq!((finished.workers, finished.placed), (1, 1));
+    assert_eq!((finished.workers, finished.placed_tasks), (1, 1));
 }
 
 /// 置いた右の子が同じ物体を2回手放す。検査モードのヒープの誤りは worker 1 の上で起き、run の致命的な誤りの欄に
@@ -423,7 +425,9 @@ main () =
 }
 
 /// worker 0 のタスクのタイマーと worker 1 の右の子。仮想の時計は、どの worker も動かないときだけ進むので、子が
-/// 終わるまでタイマーは満ちない。出力は worker が1つの run と同じである。
+/// 終わるまでタイマーは満ちない。出力は worker が1つの run と同じである。最初の `start` は worker 1 に置くので、
+/// 何もしないタスクを先に置いて待つ。続く `sleep_ms` は、どの worker も眠ったときにだけ戻るので、fork のときには
+/// worker 1 が空いていて、タイマーのタスクは worker 0 に、右の子は worker 1 に置く。
 #[test]
 fn a_timer_on_worker_0_and_a_child_on_worker_1_agree() {
     let src = "\
@@ -433,6 +437,9 @@ count : Int -> Int -> <Panic> Int
 count n acc = if n == 0 then acc else count (n - 1) (acc + 1)
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
+  let d = Async.start (fn () -> ())
+  Async.await d
+  Async.sleep_ms 1
   let t = Async.start (fn () ->
     Async.sleep_ms 5
     println \"timer\")
@@ -445,7 +452,9 @@ main () = Async.run (fn () ->
     result.unwrap();
     let (out, result) = run(src, 2);
     assert_eq!(out, alone);
-    assert_eq!(result.unwrap().placed, 1);
+    let finished = result.unwrap();
+    assert_eq!(finished.placed, 1);
+    assert_eq!(finished.placed_tasks, 1);
 }
 
 /// 深さ 3 の `par` の木は 7 回 fork する。worker が8つあれば、空いている worker はいつも残るので、どの fork も
@@ -467,4 +476,190 @@ main () = println (show (tree 3))
     assert_eq!(out, alone);
     let finished = result.unwrap();
     assert_eq!((finished.workers, finished.placed), (7, 7));
+}
+
+/// 最初の `start` が worker 1..N-1 をすべて作り、同じ `start` をやり直す。最初に置くタスクは worker 1 に置くので、
+/// タスクを1つしか始めないプログラムでもほかの worker で動く。出力は worker が1つの run と同じである。
+#[test]
+fn the_first_start_starts_the_workers() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () -> 20 + 1)
+  println (show (Async.await t)))
+";
+    let (alone, result) = run(src, 1);
+    assert_eq!(alone, "21\n");
+    let one = result.unwrap();
+    assert_eq!((one.workers, one.placed_tasks), (0, 0));
+    let (out, result) = run(src, 4);
+    assert_eq!(out, alone);
+    let finished = result.unwrap();
+    assert_eq!((finished.workers, finished.placed_tasks), (3, 1));
+}
+
+/// 入れ子の `Async.run` から戻ったタスクの `start` も worker を作る。入れ子の run の根のタスクは呼んだ worker に置き、
+/// worker を求めない。
+#[test]
+fn a_start_after_a_nested_run_starts_the_workers() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let a = Async.run (fn () -> 1)
+  let t = Async.start (fn () -> a + 1)
+  println (show (Async.await t)))
+";
+    let (alone, _) = run(src, 1);
+    assert_eq!(alone, "2\n");
+    let (out, result) = run(src, 2);
+    assert_eq!(out, alone);
+    let finished = result.unwrap();
+    assert_eq!((finished.workers, finished.placed_tasks), (1, 1));
+}
+
+/// worker 1 に置いたタスクの `exit` は、run を捨てて `END` を立て、すべての worker を起こす。`await` で眠る worker 0
+/// も止まり、run は `exit` の終了コードで終わる (docs/spec/vm.md の「誤り、止めること、終わり」)。
+#[test]
+fn exit_in_a_task_on_another_worker() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () -> (exit 7 : Unit))
+  Async.await t
+  println \"unreachable\")
+";
+    let (out, result) = run(src, 2);
+    assert_eq!(out, "");
+    let finished = result.unwrap();
+    assert_eq!(finished.exit, Some(7));
+    assert_eq!((finished.workers, finished.placed_tasks), (1, 1));
+}
+
+/// worker 1 のタスクのタイマーも仮想の時計を進める。時計を進めるのは worker 0 で、すべての worker が眠ったときに、
+/// すべての区画のいちばん早い期限まで進めて、期限の来た区画の持ち主を起こす (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_timer_on_worker_1_advances_the_virtual_clock() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () ->
+    Async.sleep_ms 5
+    println \"timer\")
+  Async.await t
+  println \"done\")
+";
+    let (alone, _) = run(src, 1);
+    assert_eq!(alone, "timer\ndone\n");
+    let (out, result) = run(src, 2);
+    assert_eq!(out, alone);
+    assert_eq!(result.unwrap().placed_tasks, 1);
+}
+
+/// 本物の時計でも、worker 1 のタスクのタイマーは満ちる。worker 1 は自分の区画のいちばん早い期限に自分で起き、
+/// worker 0 は自分の区画の期限でしか起きない (docs/spec/vm.md の「時計と driver」)。時間は確かめない。
+#[test]
+fn a_timer_on_worker_1_fires_on_the_real_clock() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () ->
+    Async.sleep_ms 5
+    println \"timer\")
+  Async.await t
+  println \"done\")
+";
+    for sched in [Sched::Sequential, Sched::Normal] {
+        let (host, out) = eml_vm::capture_host(Default::default());
+        let config = RunConfig::default()
+            .with_debug_heap(true)
+            .with_clock(Clock::Real)
+            .with_sched(sched)
+            .with_control(limits(2));
+        let result = eml_vm::execute(&eml_test_support::lir(src), &config, host);
+        assert_eq!(out.contents(), "timer\ndone\n", "{sched:?}");
+        assert_eq!(result.unwrap().placed_tasks, 1, "{sched:?}");
+    }
+}
+
+/// 4つの worker に置いた親のタスクが、子のハンドルを1つはすぐに、1つは譲った後に落とす。落としたハンドルは mail に
+/// 積まれ、最初に集めた worker が処理するので、どの worker が処理しても子のセルを1回だけ放す。子の `Lin` の結果も
+/// 落とすので、検査モードの漏れの検査が通る (docs/spec/vm.md の「タスクとスケジュール」)。
+#[test]
+fn handles_dropped_on_every_worker_are_freed_once() {
+    let src = "\
+import Async (Async)
+import Async
+import MutArray
+spin : Int -> <Panic> Int
+spin n = if n == 0 then 0 else spin (n - 1)
+child : Unit -> <IO, Panic, Async> MutArray Int
+child () =
+  let _ = spin 200
+  Async.yield_now ()
+  MutArray.make 2 0
+parent : Unit -> <IO, Panic, Async> Unit
+parent () =
+  let a = Async.start child
+  let b = Async.start child
+  drop a
+  Async.yield_now ()
+  drop b
+start_all : Int -> <IO, Panic, Async> List (Async.Task Unit)
+start_all n = if n == 0 then [] else Async.start parent :: start_all (n - 1)
+await_all : List (Async.Task Unit) -> <IO, Panic, Async> Unit
+await_all ts = match ts with
+  | [] -> ()
+  | t :: rest ->
+    Async.await t
+    await_all rest
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  await_all (start_all 16)
+  println \"done\")
+";
+    let (out, result) = run(src, 4);
+    assert_eq!(out, "done\n");
+    let finished = result.unwrap();
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 速いモードの普通の方針で、4つの worker にタスクを置く。どのプログラムも、検査モードの worker が1つの逐次の run と
+/// 同じ出力で終わり、少なくとも1つのタスクをほかの worker に置く。速いモードは UI テストを N = 2 以上で流さないので、
+/// ここで確かめる。
+#[test]
+fn the_fast_mode_runs_tasks_on_four_workers() {
+    let fib = "\
+import Async (Async)
+import Async
+fib : Int -> <Panic> Int
+fib n = if n < 2 then n else fib (n - 1) + fib (n - 2)
+start_all : Int -> <IO, Panic, Async> List (Async.Task Int)
+start_all n = if n == 0 then [] else Async.start (fn () -> fib (n + 4)) :: start_all (n - 1)
+sum_all : List (Async.Task Int) -> Int -> <IO, Panic, Async> Int
+sum_all ts acc = match ts with
+  | [] -> acc
+  | t :: rest -> sum_all rest (acc + Async.await t)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> println (show (sum_all (start_all 16) 0)))
+";
+    let cancel = include_str!("../../../tests/ui/run/async/cancel.em");
+    let echo = include_str!("../../../tests/ui/run/async/net_echo.em");
+    for src in [fib, cancel, echo] {
+        let program = eml_test_support::lir(src);
+        let (alone, result) = run_program(&program, limits(1));
+        result.unwrap_or_else(|error| panic!("{error}"));
+        let (host, out) = eml_vm::capture_host(Default::default());
+        let config = RunConfig::default()
+            .with_sched(Sched::Normal)
+            .with_control(limits(4));
+        let finished =
+            eml_vm::execute(&program, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(out.contents(), alone);
+        assert!(finished.placed_tasks >= 1, "{finished:?}");
+    }
 }

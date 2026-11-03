@@ -587,7 +587,7 @@ fn a_shutdown_write_gives_eof_and_the_peer_can_reply() {
         write(&mut driver, client, &mut data).unwrap(),
         Done::Size(2)
     );
-    driver.shutdown_write(client).unwrap();
+    run_op(&mut driver, Op::ShutdownWrite { handle: client }).unwrap();
     let mut room = [0u8; 4];
     for expected in [2, 0] {
         let read = run_op(
@@ -618,7 +618,17 @@ fn a_shutdown_write_gives_eof_and_the_peer_can_reply() {
         write(&mut driver, client, &mut data).unwrap_err().kind(),
         ErrorKind::BrokenPipe
     );
-    assert!(driver.set_nodelay(client, true).is_ok());
+    assert_eq!(
+        run_op(
+            &mut driver,
+            Op::SetNodelay {
+                handle: client,
+                on: true
+            }
+        )
+        .unwrap(),
+        Done::Size(0)
+    );
 }
 
 /// リスナーを閉じると、まだ受けていない接続の端も閉じ、接続した側は EOF を読む。ポートは空く。
@@ -693,4 +703,25 @@ fn a_cancel_before_settle_marks_the_completion_cancelled() {
     let done = settle(&mut driver);
     assert_eq!(keys(&done), [accepted]);
     assert!(done.iter().all(|c| c.result.is_ok() && !c.cancelled));
+}
+
+/// 同じ時計で作った driver は、どれが時計を進めても同じ時刻を読む。
+#[test]
+fn test_drivers_on_one_clock_see_each_others_waits() {
+    let mut a = TestDriver::new(None);
+    let b = TestDriver::new_shared(None, a.clock());
+    assert!(a.wait(Some(7)).unwrap());
+    assert_eq!(b.now(), Duration::from_millis(7));
+}
+
+/// 仮想のネットワークの端は driver の外に出ないので、テストの driver は OS のソケットを取り込まない。
+#[test]
+fn the_test_driver_adopts_no_socket() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let _near = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (far, _) = listener.accept().unwrap();
+    let sock = eml_rt::RawSocket::new(eml_rt::OsSocket::from(far));
+    let mut driver = TestDriver::new(None);
+    let e = driver.adopt(sock).unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::Unsupported);
 }

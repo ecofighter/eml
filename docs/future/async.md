@@ -33,7 +33,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | 15 | 共有の状態 | 共有の状態は持ち主のタスクの後ろに `Chan` を置く形 (actor) で書く。利用者に見せる atomic な操作は `Atomic.Counter` だけである |
 | 16 | 受け手の決まらない `Lin` の値 | MPMC の `Chan` と `Task` の結果で送る `Lin` の値は、途中の持ち主の ID を付けて送る |
 | 17 | Rust の側が持つ語 | channel の buffer、タスクのセルの結果、スコープの失敗の欄、join の節点、プールの仕事の記録は、run の登録表に載せる |
-| 18 | シグナル | シグナルの handler は `Control` のビットを立て、自己パイプで監視のスレッドを起こす。監視のスレッドは、`Signal.wait` で待つタスクのセルの持ち主の受け箱へ知らせを積み、worker が次の安全点で集めるように `NOTICE` を立てて、driver の waker を鳴らす。待つタスクがなければ、`INTERRUPT` は run を止めて 130 で終わり、`TERMINATE` は同じ止め方で 143 で終わる。`eml run` で、前の同じシグナルをまだ届けていない間か、それがもう run を止めている間に来たシグナルは、その場でプロセスを終わらせる。Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)` である |
+| 18 | シグナル | シグナルの handler は `Control` のビットを立て、自己パイプで監視のスレッドを起こす。監視のスレッドは、シグナルを run の mail に積み、worker が次の安全点で集めるようにすべての worker の語に `NOTICE` を立てて、driver の waker を鳴らす。最初に集めた worker が `Signal.wait` で待つタスクに届ける。待つタスクがなければ、`INTERRUPT` は run を止めて 130 で終わり、`TERMINATE` は同じ止め方で 143 で終わる。`eml run` で、前の同じシグナルをまだ届けていない間か、それがもう run を止めている間に来たシグナルは、その場でプロセスを終わらせる。Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)` である |
 | 19 | `Net` のハンドル | `TcpListener` と `TcpStream` は `Lin` の `Foreign` で、破棄処理がソケットを閉じる |
 | 20 | 決定性 | `Async` の UI テストはどの seed でも同じ出力を返す |
 | 21 | 操作の予算 | 待たずに済む速い道と `Std.Net` の待ちが 128 の予算を使い切ったら、タスクはほかのタスクに worker を渡す。書きの待ちは長さに応じて多く使う。終わった操作の待ちは OS を1回見て、走れるタスクがなければ予算を戻して続ける |
@@ -69,8 +69,8 @@ pub data Wake = | Woke | Cancelled
 `run`、`start`、`spawn`、`await`、`yield_now`、名前付きのスコープ (`scope`、`start_in`、`spawn_in`、`cancel_scope`)、`cancel` と `Task a` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」と「スコープ」にあり、セルの形は [VM](../spec/vm.md) の「セルと登録表」にある。ここには、複数の worker とネイティブのコードのために足すものを書く。
 
 - タスクの閉じた row `<IO, Panic, Async>` は `Heap h` も除く
-- 複数の worker では、タスクのセルは今の持ち主の worker を持つ。取り消しのビットとスコープの旗は atomic にし、スコープの属するタスクと入れ子のスコープの一覧は mutex で守る。表現を替えるだけで、印を付ける手順と受け箱の処理の呼び出しは変えない ([VM](../spec/vm.md) の「取り消しの届け方」、[マルチコア対応の設計](multicore.md) の「`Async` のタスク」)
-- `cancel`、`drop`、スコープの取り消しは、取り消しの知らせをタスクのセルの持ち主の worker の受け箱へ送る。`Task a` はほかの `Lin` の値と同じく `Chan` で送れる
+- 複数の worker では、タスクのセルは今の持ち主の worker を持つ。取り消しのビット、スコープの旗、スコープの属するタスクと入れ子のスコープの一覧は、どれも run の登録表の lock の下で読み書きする。印を付ける手順は1つの worker のときと同じで、届け方だけが持ち主で分かれる ([VM](../spec/vm.md) の「取り消しの届け方」、[マルチコア対応の設計](multicore.md) の「`Async` のタスク」)
+- `cancel` とスコープの取り消しは、取り消しをタスクのセルの持ち主の worker へ届ける。印を付けた worker が持ち主なら run の mail に積み、ほかの worker なら持ち主の受け箱に知らせを送る。`Task a` の `drop` は run の mail に項を積み、それを処理した worker が同じ形で届ける。`Task a` はほかの `Lin` の値と同じく `Chan` で送れる
 - ネイティブのコードでは、`Async.run` はマシンのスタックの上で worker のループを入れ子にする。呼んだ側が完了の後に再開するという約束は VM と同じである ([VM](../spec/vm.md) の「待ちの2種類」、[ネイティブ化の設計](native.md) の「並列の実行」)
 - ハンドルにスコープの型引数は付けない。付けると `run_heap` のようなランク2の特別な形が要るためである。スコープの外へ出た `Task a` は、取り消されたものでもありうる
 
@@ -122,11 +122,11 @@ probe_all hosts =
 
 ### 待ちを外す
 
-取り消しで再開する前に、ランタイムは待ちの理由ごとに待ちを外す。外すのは、取り消しを処理するときのタスクのセルの持ち主の worker で、その受け箱の lock の下で行う。救済で持ち主が変わると、外す務めも新しい持ち主へ移る ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。セルの待ち、実行待ち、時間の待ちの外し方は [VM](../spec/vm.md) の「取り消しの届け方」にある。
+取り消しで再開する前に、ランタイムは待ちの理由ごとに待ちを外す。外すのは、取り消しを処理するときのタスクのセルの持ち主の worker で、run の登録表の lock の下で行う。救済で持ち主が変わると、外す務めも新しい持ち主へ移る ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。セルの待ち、実行待ち、時間の待ちの外し方は [VM](../spec/vm.md) の「取り消しの届け方」にある。
 
-待つ継続はどの待ちでも待つタスクのセルが持ち、待ちの登録 (時間の輪、channel の待ち手、I/O の操作の記録、プールの仕事の記録) はタスクのセルの番号だけを持つ。タスクのセルの待ちの欄は、何を待っているかを名指す。核の持たない登録の待ちでは、受け箱の処理が待ちの種類を実行系に返し、実行系は自分の登録を外してから、タスクのセルから継続を取り出して `Cancelled` で再開する。時間と channel の待ちではすぐに取り出し、I/O の操作とプールの仕事の待ちでは完了の後に取り出す。取り消し中の状態は、待ちの欄が残ったまま取り消しのビットが立っている形で表し、状態の種類は足さない。
+待つ継続はどの待ちでも待つタスクのセルが持ち、待ちの登録 (時間の輪、channel の待ち手、I/O の操作の記録、プールの仕事の記録) はタスクのセルの番号だけを持つ。タスクのセルの待ちの欄は、何を待っているかを名指す。核の持たない登録の待ちでは、取り消しの処理 (mail か受け箱の知らせ) が待ちの種類を実行系に返し、実行系は自分の登録を外してから、タスクのセルから継続を取り出して `Cancelled` で再開する。時間と channel の待ちではすぐに取り出し、I/O の操作とプールの仕事の待ちでは完了の後に取り出す。取り消し中の状態は、待ちの欄が残ったまま取り消しのビットが立っている形で表し、状態の種類は足さない。
 
-- 時間の待ち: 時間の輪は核の登録表にあるので、受け箱の処理が実行系を通さずに輪の項を消す ([VM](../spec/vm.md) の「時間の待ち」)
+- 時間の待ち: 時間の輪は run の登録表の持ち主の区画にあるので、取り消しの処理が実行系を通さずに輪の項を消す ([VM](../spec/vm.md) の「時間の待ち」)
 - channel の待ち: channel の lock の下で、待つ側の項をその channel の待ち手の列から外す ([VM](../spec/vm.md) の「channel」)。外した項は起こさない。待ち合わせの `send` の値は送り手のフレームに残り、巻き戻しが落とす。これは後始末で、漏れではない
 - I/O の操作の待ち: タスクを取り消し中の状態にし、ハンドルを縛った worker の I/O の driver に操作の取り消しを頼む (`CancelIoEx`、io_uring の `ASYNC_CANCEL`、epoll と kqueue では登録を外す)。完了 (取り消した状態か、競合したときはデータ) が届いてから `Cancelled` で再開する。取り出しは buffer とハンドルを返し、巻き戻しがそれを落とす。カーネルが書きうる間は buffer を放さない。取り消し中のタスクは完了の前に再開しない
 - プールの仕事の待ち: 仕事は止められないので、I/O の操作と同じく完了を待ってから再開する (下の「I/O の driver」の表)
@@ -135,12 +135,12 @@ channel の待ちでも、外すことと、すでに出た起こしが競合し
 
 ### スコープの取り消し
 
-- 費用は属するタスクの数に比例する。worker をまたぐのは受け箱を通る知らせだけで、ヒープの語は渡らない。「失敗した時点で」は相手の worker の受け箱の遅れの分だけ遅れる
+- 費用は属するタスクの数に比例する。worker をまたぐのは受け箱を通る `Cancel` の知らせだけで、ヒープの語は渡らない。「失敗した時点で」は相手の worker が知らせを集めるまでの遅れの分だけ遅れる
 - `scope` の本体を動かすタスクが I/O の driver の操作 (`accept` など) で待っていれば、その操作を取り消してから再開する。そのため、接続のタスクが失敗した、待つだけのサーバもすぐに止まる。接続のタスクを `try_all` で包めば止まらない
 
 ### 強い取り消し
 
-- 継続を捨てる強い取り消しは `exit`、致命的な誤り、run の終わりに待ちのまま残ったタスク、回復のときだけにする。そのときは run を止める手順で全 worker が止まり、ヒープを落とす。受け箱、待ちの集まり、I/O の driver の表にある継続の語はヒープとともに放され、ファイナライザがファイルとソケットを閉じる
+- 継続を捨てる強い取り消しは `exit`、致命的な誤り、run の終わりに待ちのまま残ったタスク、回復のときだけにする。そのときは run を止める手順で全 worker が止まり、ヒープを落とす。タスクのセルと実行待ちにある継続の語は、run の登録表ごとヒープに触れずに捨て、ヒープとともに放され、ファイナライザがファイルとソケットを閉じる
 - I/O の driver の操作の `Lin` の token は、std の包みが受け付けから取り出しまで手放さない。取り出す前に token を落とすのは内部の誤りである。強い取り消しで run を止めるときは、各 worker が自分の driver の操作を取り消し、完了がすべて届くまで待ってから buffer を放す。待つ時間に上限はない。driver が壊れて待てないときは、貸した buffer を放さずに残す
 
 ### 却下した案
@@ -155,7 +155,7 @@ channel の待ちでも、外すことと、すでに出た起こしが競合し
 `sleep_ms`、`timeout`、`race`、`drain_within` は [標準ライブラリ](../spec/stdlib.md) の「時間」にある。ここには I/O の期限を書く。
 
 - 時間は今からの長さを表す `Int` のミリ秒である。`sleep_ms`、`timeout`、`_within` の関数、生の操作の `await_time` と `await_io_until` はどれもこれを受ける。時刻を扱う `Time` のモジュールは後で足す
-- 時間の待ちは、worker ごとの核の登録表にある時間の輪に登録し、満期は driver の時計で見る ([VM](../spec/vm.md) の「時間の待ち」)。テストでは仮想の時計を使う (下の「テストと決定性」)
+- 時間の待ちは、run の登録表の worker ごとの区画にある時間の輪に登録し、満期は run の時間の基準で見る ([VM](../spec/vm.md) の「時間の待ち」)。テストでは仮想の時計を使う (下の「テストと決定性」)
 - 期限付きの読み (`_within` の付く関数) は、期限が来ても接続を閉じない。受け付けた後に `await_io_until` で待つと、ランタイムは待つときに時間を登録し、期限で操作を取り消す。ここでの取り消しはタスクの取り消しではない。完了が届いたら `Woke` で再開し、完了の状態が `TimedOut` なら取り出しは `None` とハンドルを返す
 
 ```haskell
@@ -195,7 +195,7 @@ pub data TryRecvResult a = | Got a | Empty | Drained
 - 受け手の決まらない `Lin` の値 (MPMC の `Chan` と `Task` の結果) は、途中の持ち主の ID を付けて送る ([マルチコア対応の設計](multicore.md) の「`Lin` の物体の所有者の移し替え」)。送り手は、値を預かる構造の ID (タスクの結果はタスクの ID、channel の品物は channel のセルの ID) を途中の持ち主にして移し替えをする。この ID は `fork_worker` で出し、構造とともに退かせる。`lin` の物体から rc がすべて 1 の道で届く物体だけが途中の持ち主になり、最初の rc > 1 の物体から下は印付け (rc < 0) に切り替える。受け手の歩きは、rc > 0 で持ち主が途中の ID の物体を受け取って (持ち主を受け手にして) 下り、rc == -1 の物体は今までどおり裏返し、ほかのものでは止まる。持ち主の ID は検査モードにだけある ([マルチコア対応の設計](multicore.md) の「論理的な worker ID」)。速いモードでも送り手の印付けは行い、受け手の裏返しの歩きは変わらない
 - 検査モードでは、`par` の子と同じく、タスクごとに新しい論理的な worker ID を割り当てる。run 全体の生きている数の表はタスクとともに大きくなる。速いモードには影響しない
 - channel は `close` で放す資源で、閉じて空になった時点でその場で放す。閉じないままの channel と、閉じても品物の残った channel は run の終わりに放し、残った品物をそのとき落とす ([標準ライブラリ](../spec/stdlib.md) の「`Std.Chan`」)。落とした継続が捕まえた `Lin` の値と同じく、これは後始末で、飛ばした後始末ではない
-- channel の物体は数えた参照を持つ Rust の構造で、run の登録表に載る。漏れの検査と回復は登録表をたどる。キューはまず mutex の MPMC にし、ロックフリーのキューには後でランタイムの中だけで替える。送り手は直接積み、待っている側はその worker の受け箱を通して起こす
+- channel の物体は数えた参照を持つ Rust の構造で、run の登録表に載る。漏れの検査は run の終わりに登録表を空にしてから行い、回復は誤りの run の登録表をヒープに触れずに捨ててから行う ([オブジェクトモデル](../spec/object-model.md) の「回復」)。キューはまず mutex の MPMC にし、ロックフリーのキューには後でランタイムの中だけで替える。送り手は直接積み、待っている側はその worker の受け箱を通して起こす
 - 容量付きなので、送り手は満ちたときに待つ (back-pressure)。上限のない channel は大きな容量で作る
 - `send` と `recv` は取り消しの地点である。速い道 (`try_*` と、`send` と `recv` の中の速い道) は extern で、操作の予算を数える。待つ道は `Std.Async` の `chan_wait_send` と `chan_wait_recv` を通す
 - 接続の数の上限は容量 n の `Chan Unit` で書く。`send` で枠を取り (満ちていれば待つ)、`try_recv` で枠を返す (下の「ネットワークとシグナル」の例)
@@ -213,7 +213,7 @@ std の非同期の操作はどれも次の3段で行う。extern は yield し�
 2. 待ち: `io_wait` は、操作がもう終わっていれば perform せずに続け、終わっていなければ生の操作 `await_io` でタスクを待たせる。token は `Wake` と組で戻る
 3. 取り出し (`take_*`): token を消費して、結果 (buffer とハンドル) を返すか、操作の IO の失敗を投げる extern。取り消した後も buffer とハンドルを返す。取り消したことは `Wake` で分かる
 
-ソケット、シグナル、`Gui.next_event` ([FFI と拡張の設計](ffi.md) の「GUI」)、ブロックする呼び出しのプールの仕事は、どれもこの形で待つ。時間は `await_time` で、`compute` は join の節点のセルでの `await_cell` で待つ。
+ソケット、シグナル、`Gui.next_event` ([FFI と拡張の設計](ffi.md) の「GUI」)、ブロックする呼び出しのプールの仕事は、どれもこの形で待つ。例外は `Std.Net` のストリームの設定 (`shutdown_write`、`set_nodelay`) で、取り消しの地点にしないために `io_wait` を通さない。記録が終わったかを `op_done` で読み、受け付けで終わっていれば待たずに取り出し、別の worker の driver に回したときだけ `Async.io_wait_shielded` で host の受け付けを待つ ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。時間は `await_time` で、`compute` は join の節点のセルでの `await_cell` で待つ。
 
 ```haskell
 pub read_chunk : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
@@ -230,7 +230,7 @@ read_chunk buf s =
 ### 所有ごと渡す buffer
 
 - buffer は値で渡す `Bytes` である。受け付けは語を受け取り、読みでも書きでも受け付けでは写さない。カーネルが書くのは、参照がちょうど1つの物体だけで、その参照は登録表の操作の記録が持つ。一意でない (rc ≠ 1。共有の印の付いた rc < 0 の物体を含む) 読みの buffer は、広げるときに1回だけ写す。書きの buffer には一意を求めず、共有の物体もそのまま貸す。その場で書き換える操作はどれも一意を求めるので、記録が参照を1つ持つ間、ほかの参照からの書き換えは写しになり、貸した中身は変わらない。driver は語を見ず、記録が貸す `RawBuf` だけを見る
-- 操作の記録は worker の登録表に載り、語は長さを進めて戻る。読みの記録の語は公開しないので、共有の印が付かず、一意なまま残る
+- 操作の記録は run の登録表に載り、語は長さを進めて戻る。読みの記録の語は公開しないので、共有の印が付かず、一意なまま残る
 - 読みでは、buffer が一意で長さの後ろの空きが 8 バイト以上あれば、受け付けがその空きの 64 KiB までをカーネルに渡して1回で読む。そうでなければ、受け付けは buffer を預かるだけで、容量を足すのはソケットが読めるようになってからにする。読めると分かってから、容量が `length + max(length, 64 KiB)` 以上の一意な物体に写し、`(payload + length, 64 KiB)` をカーネルに渡す。IOCP ではまず0バイトの受信を出し、それが終わってから容量を足して受信する。そのため、何も来ない接続は、呼び手が空きを渡さない限り読みの buffer を持たない
 - `write_bytes` も buffer を記録に移し、完了の後で同じ buffer を返す。返った buffer は次の書きにそのまま渡すか、`truncate 0` で空にして読みに渡せる
 - Perceus の reuse には頼らない。使い回す buffer の空きは呼び手が作る (`Bytes.with_capacity` か、使い終えた buffer の `truncate 0`)。空きのない buffer で上の `read_chunk` を繰り返すと、1回ごとに広げた物体を1つ確保する (`Bytes.empty ()` の容量は 0 で、extern が増やす)
@@ -241,13 +241,13 @@ read_chunk buf s =
 - 新しい crate `eml_io` が実装する。本物の driver は worker ごとに1つで、その worker の待ちと起こしを受け持つ。テストの driver は仮想の時計、メモリの上のストリーム、seed で決まる完了の順を持つ。どちらも同じ trait の後ろにあり、時計の選び方 (`Clock`) で選ぶ。driver は作ったスレッドから動かないので、`Session::run` は driver そのものでなく、`Copy + Send` の `Clock` と seed を渡し、各 worker が自分のスレッドの上で driver を作る
 - driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM では、監視のスレッドを始められなかった run は Ctrl-C の後に起こされないので、VM が1回の待ちを 10 ms で切る。driver は内部の刻みを持たない ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver は、OS を呼ばない核と、`libc` と `windows-sys` で自前に書いた OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) からなり、io_uring は使わない (理由は [計測の基準](../implementation/benchmarks.md) の「io_uring と epoll」)。mio は Windows で AFD の readiness を真似るので採らない。核は保留の操作を呼ぶ側の鍵で引く1つの表で持ち、プールと名前の解決のスレッドも自前で持つ。構成は [アーキテクチャ](../implementation/architecture.md) の「`eml_io` の内部」にある
-- 完了は持ち主の worker の driver の完了の列に届き、集める地点で登録表の操作の記録に当てる。完了の中身は保留の表が持つ数えた参照で、ハンドルを縛った worker とタスクの worker が違えば、普通の移し替えの歩きでタスクへ渡る
+- 完了は、ハンドルを縛った worker (host) の driver の完了の列に届き、host が集める地点で登録表の操作の記録に結果を置く。host がタスクのセルの持ち主でなければ、持ち主へ `Completion` を送り、持ち主が自分の `Ctx` で結果を記録に当てて歩を進める。host は driver の操作を出し入れするだけで、語には触れない。記録の語はタスクの論理的な ID のままで、印は付けない
 - REPL の回復は実行中の操作を取り消して完了を待ちきってから写す
 
 ### ハンドルと worker
 
-- 利用者から見える規則はない。ランタイムはハンドルを最初に受け付けた worker の I/O の driver にそのハンドルを縛る。`accept` が返したソケットは縛らずに作り、子のタスクが最初に読む worker に縛る。そのため、`spawn` から最初の操作までの間にタスクが動いても費用はない
-- 救済でタスクが別の worker に動いた後の受け付けは、縛った worker の受け箱を通して回し、完了はタスクのセルの持ち主へ届ける ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。これは正しさのために要る
+- 利用者から見える規則はない。ランタイムはハンドルを最初に受け付けた worker の I/O の driver にそのハンドルを縛る。`accept` が返したソケットは縛らずに作り、そのソケットの操作 (読み、書き、設定) を最初に受け付ける worker の driver に縛る。そのため、`spawn` から最初の操作までの間にタスクが動いても費用はない。仮想の時計の run では host はいつも worker 0 なので、テストの driver は受けたソケットを受けた host に縛る
+- host でない worker のタスクの受け付けは、host の受け箱へ `Submit` で回し、完了はタスクのセルの持ち主へ `Completion` で届ける ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。ハンドルを channel か捕まえた値で別の worker のタスクに渡したときと、救済でタスクが別の worker に動いた後がこれに当たる。これは正しさのために要る。`Clock::Virtual` の run では driver は worker 0 の1つだけなので、host はいつも worker 0 である
 - 救済は回した受け付けを処理しない。縛った worker の driver が要るためである。詰まった worker へ回した受け付けは、その worker が戻るまで待つ。これは遅れで、正しさの問題ではない
 - 待っている間にタスクが救済されたときは、操作の記録が持つ論理的な worker ID を救済した worker のものに書き換え、記録の語の持ち主を所有ごと移す (`transfer_back` と同じ形)。`share` の印は付けない。driver に貸す buffer は一意でなければならないためである ([マルチコア対応の設計](multicore.md) の「印付けの表」の I/O の buffer の行)
 - 1つの listener の accept は1つのタスクで行う。`SO_REUSEPORT` で複数のタスクが accept する形は後で足す
@@ -262,10 +262,10 @@ read_chunk buf s =
 
 - 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。本物の driver では、仕事は driver が持つ自前のスレッドで動く。スレッドは driver ごとに32本までで、すべてが仕事中なら仕事は driver の中の列で待つ ([VM](../spec/vm.md) の「時計と driver」)
 - プールは各 worker の I/O の driver の一部で、仕事は driver に出す操作 (`Op::Job`) である。仕事の記録は run の登録表の操作の記録で、I/O の操作と同じ待ちの仕組みで待つ
-- プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない。std の内部の仕事は入力を写して所有して受け取り、結果を値で返す。カーネルに貸す記憶 (`RawBuf`) は driver を持つスレッドから出さないので、仕事には渡さない
+- プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない。std の内部の仕事は入力を写して所有して受け取り、結果を値で返す。カーネルに貸す記憶 (`RawBuf`) を使ってよいのは driver を持つスレッドだけなので ([VM](../spec/vm.md) の「時計と driver」)、仕事には渡さない
 - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
 - プールは入力の中身を読み、移した `Mut*Array` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
-- 完了は持ち主の worker の driver の完了の列を通して届く。これがプールの書き込みと持ち主の読みの順を決める
+- 完了は仕事を受け付けた driver の完了の列を通して届き、host が結果を記録に置く。host が持ち主でなければ、持ち主が `Completion` の知らせを受けて当てる。driver の完了の列と、知らせと登録表の lock が、プールの書き込みと持ち主の読みの順を決める
 - `connect` の中の名前の解決はプールの仕事にせず、本物の driver の中の解決のスレッドで行う。プールの仕事は終わる前に手放せないが、名前の解決は取り消し、期限、`quiesce`、Ctrl-C で手放せるようにするためである ([VM](../spec/vm.md) の「時計と driver」)
 - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し戻しで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
 - 場合ごとの扱いは次のとおりである
@@ -355,12 +355,12 @@ TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ラ
 - 非同期のファイルと子のプロセスの標準入出力は、I/O の driver の上で、`<IO, Async>` の row を持つ操作として作る。どれも受け付け、待ち、取り出しの3段で行う。子の標準入出力は driver のハンドルにする。Unix では poll できるパイプ、Windows では overlapped の名前付きパイプである
 - これで、今ブロックする std の行では書けない3つのことができる。パイプ (`.|`。子の標準出力を次の子の標準入力へ eml で汲む)、`run` と `output` の標準入力を文字列で与えること (`Proc.output_with`)、`Child` の標準エラーの pipe を読み分けることである。今の規則は [標準ライブラリ](../spec/stdlib.md) の「`Child`」にある
 - 1つのタスクがファイルを読んでも、同じ worker の別のタスクの組のやりとりは止まらない
-- driver の中で通常のファイルの読み書きをプールのスレッドへ送るときは、`RawBuf` の番地を包んで渡すことになり、driver を持つスレッドの外へ出さないという `RawBuf` の規則 ([VM](../spec/vm.md) の「時計と driver」) をコンパイラが確かめない。そのため、この操作を足すときは、`RawBuf` を `Send` にしない規則、T10 の行の別のスレッドから読ませない文 ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)、Miri のテストを見直す
+- driver の中で通常のファイルの読み書きをプールのスレッドへ送るときは、貸した記憶をプールのスレッドが使うことになる。今の規則は、貸した記憶を使ってよいスレッドを driver を持つスレッドに限っている ([VM](../spec/vm.md) の「時計と driver」、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の T10 の行)。`RawBuf` は `Send` なので、この規則をコンパイラは確かめない。そのため、この操作を足すときは、この2つの規則と Miri のテストを見直す
 - macOS の通常のファイルの読み書きも、Linux の epoll の道と同じく、ブロックする呼び出しのプールの仕事にする。kqueue だけでは非同期にならないためである。通常のファイルの `EVFILT_READ` は、ファイルの終わりまでに残るバイト数を返すだけで、ディスクから読み終えたかは知らせない (XNU の `vnode_readable_data_count`)
 - POSIX AIO は使わない。XNU が AIO の完了を kqueue に届ける `SIGEV_KEVENT` を受け付けるのは macOS 26 (xnu-12377) からで、それより前の macOS は `SIGEV_SIGNAL` と `SIGEV_NONE` しか受け付けない。macOS 26 でも、AIO はカーネルのスレッドがブロックする読み書きをする仕組みである。同時に出せる要求の数は、既定でシステム全体で 90、プロセスごとに 16 と少ない (`kern.aiomax` と `kern.aioprocmax`。XNU の `config/MASTER` の medium の値)。上限を超えた要求は `EAGAIN` で断られるので、プールの仕事に切り替える道がどのみち要る
 - GCD の `dispatch_io` も使わない。通常のファイルでは、GCD のキューのスレッドが `read` か `pread` を呼ぶので、中身はプールの仕事と同じくブロックする読み書きである (libdispatch の `src/io.c`)。そのうえ、eml の規則と次の点で食い違う
   - 読みは GCD が自分で確保した buffer に入るので、操作の記録が持つ一意な buffer へ写す手間が1回増える
-  - 書きで `RawBuf` を写さずに `dispatch_data_t` に包むと、GCD のスレッドがその記憶を読み、`RawBuf` を driver のスレッドから出さない規則 ([VM](../spec/vm.md) の「時計と driver」) を破る
+  - 書きで `RawBuf` を写さずに `dispatch_data_t` に包むと、GCD のスレッドがその記憶を読み、貸した記憶を使ってよいのを driver を持つスレッドに限る規則 ([VM](../spec/vm.md) の「時計と driver」) を破る
   - 完了の handler は GCD のスレッドで動くので、driver を起こす道が別に要る
 
 ## `compute`
@@ -380,7 +380,7 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - `async/` の UI テストを seed で流す規則は [テスト戦略](../implementation/testing.md) の「seed で流す」にある。I/O の待ちを持つテストは、seed で完了の順を決めるテストの driver の上で流す。どの seed でも同じ出力を返すことを求めるので、ネイティブのコードでも同じになる
 - テストの driver は、仮想のホストの上の `listen` と `connect` が作るメモリの上の `TcpStream` の組を持つ。時間の待ちは `Clock` が決め、仮想の時計の規則は [VM](../spec/vm.md) の「時計と driver」にある
 - 仮想のシグナルは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` に渡す予定で起こす。UI テストは先頭の印の行 `-- signal: <interrupt|terminate> at <ms>` で予定を書く ([VM](../spec/vm.md) の「時間の待ち」、[テスト戦略](../implementation/testing.md) の「UI テスト」)
-- `Net` と `Signal` の UI テストは `tests/ui/{run,run-fail}/async/` の `net_*.em` と `signal_*.em` で、どれもテストの driver の上で流れる。本物のソケットと OS のシグナルは、Rust のテスト (`crates/eml_io/tests/real.rs`、`crates/eml_vm/tests/api.rs` と `signal.rs`、`crates/eml_cli/tests/cli.rs`) だけで試す。同じ組を3つの OS で流し、Windows に無い動きを確かめるものだけを `#[cfg(unix)]` にする ([テスト戦略](../implementation/testing.md) の「Windows で流さないテスト」)。ループバックでポート 0 に bind して `local_port` で読む。複数の worker の組 (N が 2 と 8) では順によらないものだけを流す
+- `Net` と `Signal` の UI テストは `tests/ui/{run,run-fail}/async/` の `net_*.em` と `signal_*.em` で、どれもテストの driver の上で流れる。本物のソケットと OS のシグナルは、Rust のテスト (`crates/eml_io/tests/real.rs`、`crates/eml_vm/tests/api.rs` と `signal.rs`、`crates/eml_cli/tests/cli.rs`) だけで試す。同じ組を3つの OS で流し、Windows に無い動きを確かめるものだけを `#[cfg(unix)]` にする ([テスト戦略](../implementation/testing.md) の「Windows で流さないテスト」)。ループバックでポート 0 に bind して `local_port` で読む。UI テストは worker の数 N が 2 と 8 でも流し、順に頼るファイルは印で外す ([テスト戦略](../implementation/testing.md) の「seed で流す」)
 - 意味のテスト: 取り消したタスクの `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`shield` の中の別れの `send` が取り消しの下でも終わること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
 - 救済を強いるスケジュール (`--sched rescue-always`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
 - `RunStats` は driver の完了の数 `completions` と、channel の欄 `channel_ops`、`channel_waits`、`channels_swept` を持つ。`Std.Net` のテストのスナップショットも、ほかの欄と同じく逐次のスケジュール (`--sched sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
@@ -396,6 +396,6 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - `Counter` のほかの `Atomic`: 既定は作らない
 - タスクを置く worker を選ぶ API (`spawn_here` など): 既定は作らない。スレッドに縛られた仕事は `Gui.run_on_main` で書く ([FFI と拡張の設計](ffi.md) の「GUI」)
 - channel のキュー: 既定は mutex で、ロックフリーには後でランタイムの中だけで替える
-- `Lin` の closer token: 既定は作らない。`Chan.owned : Int -> <IO> (Chan a, ChanOwner)` のように `Lin` の `Foreign` の `ChanOwner` を足し、その `Drop` が受け箱に閉じる知らせを積む形である。`TaskHandle` と同じ仕組みなので、`eml_rt` は変わらず、送受信に費用を足さない。これで足りなければ、`Chan a` を `Unr` の `Foreign` のハンドルにする。channel の Rust の構造は変わらず、ハンドルの読みと放す引き金だけが変わる ([ロードマップ](roadmap.md) の「非同期」)
+- `Lin` の closer token: 既定は作らない。`Chan.owned : Int -> <IO> (Chan a, ChanOwner)` のように `Lin` の `Foreign` の `ChanOwner` を足し、その `Drop` が run の mail に閉じる項を積む形である。`TaskHandle` の `Drop` と同じ仕組みなので、`eml_rt` は変わらず、送受信に費用を足さない。これで足りなければ、`Chan a` を `Unr` の `Foreign` のハンドルにする。channel の Rust の構造は変わらず、ハンドルの読みと放す引き金だけが変わる ([ロードマップ](roadmap.md) の「非同期」)
 - `Time` のモジュール: 上の「時間」にある
 - UDP、`SO_REUSEPORT`、非同期の名前の解決、`Net.resolve`、Happy Eyeballs: 上の「ネットワークとシグナル」の「後で足すもの」にある

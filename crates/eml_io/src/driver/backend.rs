@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use eml_rt::{IoWaker, OpKey, RawBuf};
+use eml_rt::{IoWaker, OpKey, RawBuf, RawSocket};
 
 /// 1つの操作の1歩。核が出し、backend は OS にその歩の1回の試みを出す。
 pub(crate) enum Step<'a, S> {
@@ -32,9 +32,13 @@ pub(crate) enum Step<'a, S> {
     },
 }
 
-pub(crate) enum Outcome<S> {
+pub(crate) enum Outcome {
     Size(usize),
-    Accepted { sock: S, peer: SocketAddr },
+    /// 受けたソケット。backend は登録も結び付けもせずに返し、`adopt` した driver が自分の表に入れる。
+    Accepted {
+        sock: RawSocket,
+        peer: SocketAddr,
+    },
     Connected,
 }
 
@@ -51,9 +55,9 @@ pub(crate) enum Hold {
     Memory,
 }
 
-pub(crate) enum Start<S> {
+pub(crate) enum Start {
     /// 歩はその場で終わった。この歩を名指す event は届かない。
-    Done(io::Result<Outcome<S>>),
+    Done(io::Result<Outcome>),
     /// 歩は OS に出た。`cancel` が `Done` を返さない限り、この鍵を名指す event がちょうど1つ届く。
     Pending(Hold),
 }
@@ -71,23 +75,23 @@ pub(crate) enum Cancel {
 }
 
 /// `wait` が届ける知らせ。
-pub(crate) enum Arrival<S> {
+pub(crate) enum Arrival {
     /// 同じ `Step` をもう1度 `start` せよ。readiness の知らせと、IOCP の長さ 0 の `WSARecv` の成功の packet。
     /// 余分に届いても害がない。
     Retry,
     /// OS がこの歩を終えた結果。取り消しを頼んだ後に届くこともある。長さ 0 の `WSARecv` の誤りの packet もこれで届く。
     // 完了型の backend は IOCP だけなので、Windows とテストのほかにこの値を作る所がない
     #[cfg_attr(not(any(windows, test)), expect(dead_code))]
-    Done(io::Result<Outcome<S>>),
+    Done(io::Result<Outcome>),
     /// 核が `cancel` で頼んだ取り消しで終わった。結果はない。`cancel` が `Pending` を返した鍵にだけ届く。
     // 完了型の backend は IOCP だけなので、Windows とテストのほかにこの値を作る所がない
     #[cfg_attr(not(any(windows, test)), expect(dead_code))]
     Cancelled,
 }
 
-pub(crate) struct Event<S> {
+pub(crate) struct Event {
     pub key: OpKey,
-    pub arrival: Arrival<S>,
+    pub arrival: Arrival,
 }
 
 /// OS の資源を持ち、核の歩を OS に出す。readiness の backend は `Arrival::Retry`、`Start::Pending(Hold::None)`、
@@ -114,17 +118,16 @@ pub(crate) trait Backend: Sized {
     fn set_nodelay(&mut self, sock: &mut Self::Sock, on: bool) -> io::Result<()>;
     /// backend の表の行を放し、OS の資源を閉じる。核は、保留の歩があるソケットにはこれを呼ばない。
     fn close(&mut self, sock: Self::Sock);
+    /// ほかの backend が受けたかもしれないソケットを、`listen` と同じく登録まで済ませた自分のソケットにする。失敗すれば
+    /// ソケットは閉じる。
+    fn adopt(&mut self, sock: RawSocket) -> io::Result<Self::Sock>;
 
     /// 歩の1回の試みを OS に出す。核は、保留の欄の鍵を別の歩に使い回さない。
-    fn start(&mut self, key: OpKey, step: Step<'_, Self::Sock>) -> Start<Self::Sock>;
+    fn start(&mut self, key: OpKey, step: Step<'_, Self::Sock>) -> Start;
     /// 保留の歩の取り消しを OS に頼む。核が1つの欄にこれを呼ぶのは2回までである。2回目は、1回目を OS が断ったか、
     /// 壊れた driver が OS を呼ばずに印だけを立てた欄に、driver を落とすときに出す。
     fn cancel(&mut self, key: OpKey, step: Step<'_, Self::Sock>) -> io::Result<Cancel>;
     /// `timeout` まで、起こしか event まで待つ。時間切れ、起こし、割り込みは `Ok(())` で、`events` は空のまま。
     /// `Err` は backend が壊れたことを表す。
-    fn wait(
-        &mut self,
-        timeout: Option<Duration>,
-        events: &mut Vec<Event<Self::Sock>>,
-    ) -> io::Result<()>;
+    fn wait(&mut self, timeout: Option<Duration>, events: &mut Vec<Event>) -> io::Result<()>;
 }

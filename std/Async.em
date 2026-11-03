@@ -295,6 +295,15 @@ io_wait op =
     (Woke, op)
   else await_io op
 
+-- 外の取り消しで外れない `io_wait`。`wait_closed` と同じく shield の中で待つので、いつも `Woke` で戻る。`shield` は
+-- 本体の行に `Panic` を求めるので、`Std.Net` の `<IO, Async>` の包みのためにここで包む (docs/spec/stdlib.md の「`Std.Net`」)
+pub io_wait_shielded : OpId -> <IO, Async> OpId
+io_wait_shielded op =
+  shield_enter ()
+  let (_, op) = io_wait op
+  shield_leave ()
+  op
+
 pub io_wait_until : OpId -> Int -> <IO, Async> (Wake, OpId)
 io_wait_until op ms =
   let (step, op) = op_ready op ms

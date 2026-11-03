@@ -1060,6 +1060,130 @@ main () =
     );
 }
 
+/// 2つの worker の `eml run` で、worker 1 に置いたタスクが眠る間に届いた、待つタスクのないシグナルは run を止める。
+/// 終了コードはシグナルの種類で決まり、置き方によらない (docs/spec/vm.md の「上限と割り込み」)。
+#[cfg(unix)]
+fn an_unheard_signal_stops_a_program_with_a_task_on_worker_1(
+    name: &str,
+    send: fn(&std::process::Child),
+    code: i32,
+) {
+    use std::time::Instant;
+
+    let text = "\
+import Async
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () ->
+    eprintln \"ready\"
+    Async.sleep_ms 600000)
+  Async.await t)
+";
+    let dir = temp_project(name, &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .args(["run", "--workers", "2", "main.em"])
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let lines = read_after_ready(&mut child);
+    send(&child);
+    let status = wait_for_exit(&mut child, deadline);
+    let rest: Vec<String> = lines.iter().collect();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(code), "{rest:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unheard_terminate_stops_a_program_with_a_task_on_worker_1_with_143() {
+    an_unheard_signal_stops_a_program_with_a_task_on_worker_1("cli-sigterm-worker-1", sigterm, 143);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unheard_interrupt_stops_a_program_with_a_task_on_worker_1_with_130() {
+    an_unheard_signal_stops_a_program_with_a_task_on_worker_1("cli-sigint-worker-1", sigint, 130);
+}
+
+/// 4つの worker の `eml run` (既定の方針と本物の時計) で、16 の計算のタスクと、ループバックのリスナーのタスクが
+/// worker に散り、クライアントとの1往復を終える。各 worker が自分の driver を持つ run である (docs/spec/vm.md の
+/// 「時計と driver」)。締め切りは止まりの見張りで、時間は確かめない。
+#[cfg(unix)]
+#[test]
+fn eml_run_spreads_tasks_over_four_workers() {
+    use std::io::Read;
+    use std::time::Instant;
+
+    let text = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+import String
+
+fib : Int -> <Panic> Int
+fib n = if n < 2 then n else fib (n - 1) + fib (n - 2)
+
+start_all : Int -> <IO, Panic, Async> List (Async.Task Int)
+start_all n = if n == 0 then [] else Async.start (fn () -> fib (n + 4)) :: start_all (n - 1)
+
+sum_all : List (Async.Task Int) -> Int -> <IO, Panic, Async> Int
+sum_all ts acc = match ts with
+  | [] -> acc
+  | t :: rest -> sum_all rest (acc + Async.await t)
+
+drain : Bytes -> Net.TcpStream -> <IO, Panic, Async> (Bytes, Net.TcpStream)
+drain buf s =
+  let n = Bytes.length buf
+  let (buf, s) = Net.read_chunk buf s
+  if Bytes.length buf == n then (buf, s) else drain buf s
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let server = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    let (buf, s) = drain (Bytes.of_string \"echo: \") s
+    let (_, s) = Net.write_bytes buf s
+    Net.close s)
+  let ts = start_all 16
+  let a = Net.connect \"127.0.0.1\" port
+  let a = Net.shutdown_write (Net.write \"ping\" a)
+  let (buf, a) = drain (Bytes.empty ()) a
+  Net.close a
+  Async.await server
+  println (show (sum_all ts 0))
+  println (String.decode buf))
+";
+    let dir = temp_project("cli-four-workers", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .args(["run", "--workers", "4", "main.em"])
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = wait_for_exit(&mut child, deadline);
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .unwrap();
+    let stderr = stderr_of(&mut child);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(0), "{stderr}");
+    assert_eq!(stdout, "17703\necho: ping\n", "{stderr}");
+}
+
 /// 標準入力の読みの中で待つプログラムも SIGTERM で止まり、終了コードは 143 である。読みに入る直前に届いた SIGTERM は
 /// 読みを止めないが、2回目の SIGTERM でハンドラがその場で終わらせ、終了コードは同じく 143 である。そのため、終わるまで
 /// 100 ms ごとに送り続ける (`repeated_interrupts_end_a_program_waiting_for_the_standard_input_with_130` と同じ)。
@@ -1149,7 +1273,8 @@ fn wait_for_exit(
 }
 
 /// `eml run` では、SIGTERM は `Signal.wait Terminate` で待つタスクに届き、run は続く (docs/spec/stdlib.md の
-/// 「`Std.Signal`」)。逐次の方針では、`yield_now` で待つタスクが待ちに入ってから `ready` を書く。
+/// 「`Std.Signal`」)。逐次の方針では、`yield_now` で待つタスクが待ちに入ってから `ready` を書く。worker を1つに固め、
+/// `yield_now` で待ち手に順を渡す。
 #[cfg(unix)]
 #[test]
 fn a_terminate_reaches_a_waiting_task() {
@@ -1171,7 +1296,7 @@ main () = Async.run (fn () ->
     let dir = temp_project("cli-sigterm-wait", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
-        .args(["run", "--sched", "sequential", "main.em"])
+        .args(["run", "--workers", "1", "--sched", "sequential", "main.em"])
         .current_dir(&dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -1187,7 +1312,7 @@ main () = Async.run (fn () ->
 }
 
 /// 届けた後のシグナルは1回目として扱う。待つタスクがもういないので、2回目の Ctrl-C は run を止め、終了コードは 130 で
-/// ある (docs/spec/vm.md の「上限と割り込み」)。
+/// ある (docs/spec/vm.md の「上限と割り込み」)。worker を1つに固め、`yield_now` で待ち手に順を渡す。
 #[cfg(unix)]
 #[test]
 fn an_interrupt_after_a_delivered_one_ends_the_program_with_130() {
@@ -1210,7 +1335,7 @@ main () = Async.run (fn () ->
     let dir = temp_project("cli-sigint-delivered", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
-        .args(["run", "--sched", "sequential", "main.em"])
+        .args(["run", "--workers", "1", "--sched", "sequential", "main.em"])
         .current_dir(&dir)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -1238,7 +1363,8 @@ main () = Async.run (fn () ->
 }
 
 /// 待つタスクがいても、worker が標準入力の読みで止まっていれば、シグナルは読みが戻るまで届かない。届けていない間の
-/// 2回目のシグナルは、ハンドラがその場で終わらせる (docs/spec/vm.md の「上限と割り込み」)。
+/// 2回目のシグナルは、ハンドラがその場で終わらせる (docs/spec/vm.md の「上限と割り込み」)。worker を1つに固め、
+/// `yield_now` で待ち手に順を渡す。
 #[cfg(unix)]
 fn a_second_signal_ends_a_program_whose_waiter_cannot_be_reached(
     name: &str,
@@ -1267,7 +1393,7 @@ main () = Async.run (fn () ->
     let dir = temp_project(name, &[("main.em", &text)]);
     let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
-        .args(["run", "--sched", "sequential", "main.em"])
+        .args(["run", "--workers", "1", "--sched", "sequential", "main.em"])
         .current_dir(&dir)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())

@@ -250,7 +250,7 @@ table! {
         OpId => type_row("Std.Async.OpId", Lin, Repr::Int),
         // 登録表の添字の即値。Kind は中身の型によらない (docs/spec/stdlib.md の「`Std.Chan`」)
         Chan => handle_type_row("Std.Chan.Chan"),
-        // 登録表ではなく `Machine` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
+        // 登録表ではなく、run をまたいで `Machine` が持つ `Counters` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
         Counter => type_row("Std.Atomic.Counter", Unr, Repr::Int),
         // driver のリスナーとストリームのハンドルを持つ `Foreign` (docs/spec/stdlib.md の「`Std.Net`」)
         NetTcpListener => type_row("Std.Net.TcpListener", Lin, Repr::Obj),
@@ -1410,6 +1410,20 @@ table! {
                 )
             },
         ),
+        NetOpDone => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Net.op_done",
+                    &[Int],
+                    &[Unr],
+                    Enum,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
         NetTakeListener => kinded(
             "Std.Net.take_listener",
             &[Int],
@@ -1479,20 +1493,20 @@ table! {
                 )
             },
         ),
-        NetShutdownWrite => kinded(
-            "Std.Net.shutdown_write",
+        NetSubmitShutdownWrite => kinded(
+            "Std.Net.submit_shutdown_write",
             &[Obj],
             &[Lin],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
-        NetSetNodelay => kinded(
-            "Std.Net.set_nodelay",
+        NetSubmitSetNodelay => kinded(
+            "Std.Net.submit_set_nodelay",
             &[Enum, Obj],
             &[Unr, Lin],
-            Obj,
-            Lin,
+            Int,
+            Unr,
             Purity::Effectful,
         ),
         // TLS の状態のインターフェース (docs/spec/stdlib.md の「`Std.Tls`」)。どれも待たないので普通の extern の行で、
@@ -1668,6 +1682,7 @@ impl Extern {
                 | Extern::NetOpListener
                 | Extern::NetOpStream
                 | Extern::NetOpOutcome
+                | Extern::NetOpDone
                 | Extern::NetTakeListener
                 | Extern::NetTakeStream
                 | Extern::NetTakeBytes
@@ -1675,8 +1690,8 @@ impl Extern {
                 | Extern::NetFinish
                 | Extern::NetLocalPort
                 | Extern::NetPeerAddr
-                | Extern::NetShutdownWrite
-                | Extern::NetSetNodelay
+                | Extern::NetSubmitShutdownWrite
+                | Extern::NetSubmitSetNodelay
         )
     }
 }

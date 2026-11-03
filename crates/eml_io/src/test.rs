@@ -12,16 +12,20 @@ use std::collections::VecDeque;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use eml_rt::{Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit};
+use eml_rt::{
+    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, RawSocket, Submit,
+};
 
 use crate::flag::Flag;
 use net::{Connection, Network, check_virtual_host, no_handle};
 
 /// 終わる操作がないときにだけ、期限まで進む仮想の時計の driver。時計は 0 から始まり、ミリ秒の整数で進む。
 pub struct TestDriver {
-    now_ms: u64,
+    /// run の driver が共有する時計。ミリ秒の整数で、どの driver の `wait` で進めても、ほかの driver が同じ時刻を読む。
+    now_ms: Arc<AtomicU64>,
     /// seed の方針のときだけある擬似乱数の状態。1回の決着で終わった操作の組を混ぜる。
     rng: Option<u64>,
     /// `submit` の中で終えた操作の数。
@@ -46,8 +50,14 @@ struct Pending {
 
 impl TestDriver {
     pub fn new(seed: Option<u64>) -> TestDriver {
+        TestDriver::new_shared(seed, Arc::new(AtomicU64::new(0)))
+    }
+
+    /// 時計を `clock` と共有する driver。1つの run の driver は同じ `clock` で作り、時計は1つの数として進む
+    /// (docs/spec/vm.md の「時計と driver」)。
+    pub fn new_shared(seed: Option<u64>, clock: Arc<AtomicU64>) -> TestDriver {
         TestDriver {
-            now_ms: 0,
+            now_ms: clock,
             rng: seed,
             immediate: 0,
             ops: VecDeque::new(),
@@ -58,6 +68,11 @@ impl TestDriver {
             bin: Arc::default(),
             waker: Arc::default(),
         }
+    }
+
+    /// この driver が読み書きする時計。同じ run の別の driver を `new_shared` で作るのに渡す。
+    pub fn clock(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.now_ms)
     }
 
     /// `submit` が `Submit::Done` で返した操作の数。Rust のテストが、終わった操作を待たない道を確かめるために読む。
@@ -129,6 +144,14 @@ impl TestDriver {
         };
         match pending.op {
             Op::Job(job) => done(job().map(Done::Size)),
+            Op::ShutdownWrite { handle } => {
+                done(self.net.shutdown_write(handle).map(|()| Done::Size(0)))
+            }
+            Op::SetNodelay { handle, .. } => done(if self.net.is_stream(handle) {
+                Ok(Done::Size(0))
+            } else {
+                Err(no_handle())
+            }),
             Op::Write { handle, buf } => {
                 let Some(end) = self.net.ends.get(&handle) else {
                     return done(Err(no_handle()));
@@ -241,7 +264,7 @@ fn splitmix64(state: &mut u64) -> u64 {
 
 impl IoDriver for TestDriver {
     fn now(&self) -> Duration {
-        Duration::from_millis(self.now_ms)
+        Duration::from_millis(self.now_ms.load(Ordering::SeqCst))
     }
 
     fn wait(&mut self, deadline_ms: Option<u64>) -> io::Result<bool> {
@@ -252,7 +275,7 @@ impl IoDriver for TestDriver {
         match deadline_ms {
             // 時計は戻らないので、過ぎた期限では進めない
             Some(deadline_ms) => {
-                self.now_ms = self.now_ms.max(deadline_ms);
+                self.now_ms.fetch_max(deadline_ms, Ordering::SeqCst);
                 Ok(true)
             }
             None => Ok(false),
@@ -315,20 +338,18 @@ impl IoDriver for TestDriver {
         Arc::clone(&self.bin)
     }
 
-    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
-        self.net.shutdown_write(handle)
-    }
-
-    fn set_nodelay(&mut self, handle: IoHandle, _on: bool) -> io::Result<()> {
-        if self.net.is_stream(handle) {
-            Ok(())
-        } else {
-            Err(no_handle())
-        }
-    }
-
     fn close(&mut self, handle: IoHandle) {
         self.net.close(handle);
+    }
+
+    /// 仮想のネットワークは driver ごとにあり、その端は driver の外に出せない。そのため受けは `Done::Stream` で終え、
+    /// `Done::Accepted` のソケットを作らない。渡されたソケットは OS のもので、この driver のネットワークにないので断る
+    /// (docs/spec/vm.md の「時計と driver」)。
+    fn adopt(&mut self, _sock: RawSocket) -> io::Result<IoHandle> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the test driver adopts no sockets",
+        ))
     }
 
     fn quiesce(&mut self) {

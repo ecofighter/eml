@@ -16,7 +16,7 @@ use eml_rt::Fault;
 
 use crate::common::{
     Marks, assert_filter_matches, for_each_file, is_entry, leading_marks, marks_of, run_all,
-    temp_project, windows_skip,
+    temp_project, windows_skip, workers_skip,
 };
 
 fn ui_root() -> PathBuf {
@@ -274,14 +274,19 @@ fn assert_fast_mode_agrees(
 /// seed の方針で流すテストの seed (docs/implementation/testing.md の「seed で流す」)。
 const SEEDS: [u64; 2] = [1, 2026];
 
-/// `par/` を流す worker の数。N = 1 の run がスナップショットと比べる基準である (docs/implementation/testing.md の
-/// 「seed で流す」)。
+/// `par/` と `async/` を流す worker の数。スナップショットと比べるのは N = 1 の run で、これらの run はその結果と
+/// 比べる (docs/implementation/testing.md の「seed で流す」)。
 const WORKER_COUNTS: [usize; 2] = [2, 8];
 
-/// 複数の worker で流すのは `par/` だけである。`Async` のタスクと driver は worker 0 の上だけで動くので、`async/` を
-/// N >= 2 で流しても確かめることがない。
-fn workers_run(suffix: &str) -> bool {
-    suffix.starts_with("par/")
+/// 複数の worker で流すのは、`par/` と `async/` のうち印 `-- workers: skip (<理由>)` のないファイルである。印は
+/// この2つの分類でしか意味がないので、ほかの分類の印は誤りにする (docs/implementation/testing.md の「seed で流す」)。
+fn workers_run(suffix: &str, skip: bool) -> bool {
+    let category = suffix.starts_with("par/") || suffix.starts_with("async/");
+    assert!(
+        category || !skip,
+        "{suffix}: the workers mark is only for par/ and async/"
+    );
+    category && !skip
 }
 
 fn workers_label(workers: usize, signals: &[VirtualSignal]) -> String {
@@ -294,7 +299,9 @@ fn workers_label(workers: usize, signals: &[VirtualSignal]) -> String {
 }
 
 /// 逐次の N = 1 の検査モードの結果を、N = 2 と 8 の検査モードの run と比べる。方針は逐次のままで、横取りは
-/// 求めない。比べる欄は seed の run と同じである。
+/// 求めない。`par/` で比べる欄は seed の run と同じである。`async/` は、タスクを置く worker がスケジュールで決まる
+/// ので `RunStats` を比べず、代わりにタスクを始めた worker と違う worker に置いたことを確かめる。置かなければ
+/// worker 0 の上だけで流したことになる (docs/implementation/testing.md の「seed で流す」)。
 fn assert_workers_agree(
     suffix: &str,
     program: &eml_lir::Program,
@@ -313,7 +320,11 @@ fn assert_workers_agree(
             Sched::Sequential,
             workers,
         );
-        let compare = compares_stats(checked, &ran);
+        let compare = if suffix.starts_with("async/") {
+            Compare::Nothing
+        } else {
+            compares_stats(checked, &ran)
+        };
         assert_agrees(
             suffix,
             &workers_label(workers, signals),
@@ -321,6 +332,14 @@ fn assert_workers_agree(
             checked,
             compare,
         );
+        if suffix.starts_with("async/")
+            && let Some(finished) = ran.finished
+        {
+            assert!(
+                finished.workers >= 1 && finished.placed_tasks > 0,
+                "{suffix}: placed no task on another worker under `--workers {workers}`; start a task (docs/implementation/testing.md の「seed で流す」)"
+            );
+        }
     }
 }
 
@@ -425,6 +444,7 @@ fn stats_are_compared_by_cancellations_and_channels() {
                 preemptions: 1,
                 workers: 0,
                 placed: 0,
+                placed_tasks: 0,
             }
         });
         Ran {
@@ -468,6 +488,7 @@ fn stats_of_driver_runs_are_compared_without_the_work_counts() {
                 preemptions: 1,
                 workers: 0,
                 placed: 0,
+                placed_tasks: 0,
             }),
         }
     };
@@ -512,7 +533,8 @@ fn fast_mode_reports(error: &RuntimeError) -> bool {
 
 #[test]
 fn run() {
-    for_each_file(&ui_root().join("run"), "em", true, |path, signals| {
+    for_each_file(&ui_root().join("run"), "em", true, |path, marks| {
+        let signals = &marks.signals;
         let Entry::Test(suffix) = classify(path, "run") else {
             return;
         };
@@ -533,7 +555,7 @@ fn run() {
         if seeded(&suffix) {
             assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
         }
-        if workers_run(&suffix) {
+        if workers_run(&suffix, marks.workers_skip) {
             assert_workers_agree(&suffix, &program, path, &root, signals, &ran);
         }
     });
@@ -541,32 +563,42 @@ fn run() {
 
 #[test]
 fn run_fail() {
-    for_each_file(&ui_root().join("run-fail"), "em", true, |path, signals| {
-        let Entry::Test(suffix) = classify(path, "run-fail") else {
-            return;
-        };
-        let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential, 1);
-        let Err(error) = &ran.result else {
-            panic!("expected a runtime error");
-        };
-        let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
-        snapshot_settings(path, &suffix).bind(|| {
-            insta::assert_snapshot!(format!(
+    for_each_file(&ui_root().join("run-fail"), "em", true, run_fail_file);
+}
+
+/// `run-fail/` の1つのファイルを流す。worker の印の分類は、プログラムを流す前に確かめる。VM の誤りで終わるファイルは
+/// 速いモードからあとの run を流さないので、そこで確かめると、ほかの分類の印が黙って通ってしまう。
+fn run_fail_file(path: &Path, marks: &Marks) {
+    let signals = &marks.signals;
+    let Entry::Test(suffix) = classify(path, "run-fail") else {
+        return;
+    };
+    let workers = workers_run(&suffix, marks.workers_skip);
+    let (program, root, diagnostics) = compile(path, &suffix);
+    let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential, 1);
+    let Err(error) = &ran.result else {
+        panic!("expected a runtime error");
+    };
+    let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
+    // insta は名前のないスナップショットを囲む関数の名前で呼ぶので、テストの名前 `run_fail` を書く
+    snapshot_settings(path, &suffix).bind(|| {
+        insta::assert_snapshot!(
+            "run_fail",
+            format!(
                 "--- stdout ---\n{stdout}--- stderr ---\n{diagnostics}{stderr}--- runtime error ---\n{error}\n{written}"
-            ));
-        });
-        // VM の誤りの文言は worker ID を含みうる。ID はスケジュールで変わるので、seed の run とも比べない
-        if fast_mode_reports(error) {
-            assert_fast_mode_agrees(&suffix, &program, path, &root, signals, &ran);
-            if seeded(&suffix) {
-                assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
-            }
-            if workers_run(&suffix) {
-                assert_workers_agree(&suffix, &program, path, &root, signals, &ran);
-            }
-        }
+            )
+        );
     });
+    // VM の誤りの文言は worker ID を含みうる。ID はスケジュールで変わるので、seed の run とも比べない
+    if fast_mode_reports(error) {
+        assert_fast_mode_agrees(&suffix, &program, path, &root, signals, &ran);
+        if seeded(&suffix) {
+            assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
+        }
+        if workers {
+            assert_workers_agree(&suffix, &program, path, &root, signals, &ran);
+        }
+    }
 }
 
 #[test]
@@ -617,14 +649,99 @@ fn seeded_runs_cover_par_and_async() {
 }
 
 #[test]
-fn workers_runs_cover_par_only() {
-    assert!(workers_run("par/x.em"));
-    assert!(workers_run("par/dir"));
-    assert!(!workers_run("async/x.em"));
-    assert!(!workers_run("async/dir"));
-    assert!(!workers_run("panic/x.em"));
-    assert!(!workers_run("parse/x.em"));
+fn workers_runs_cover_par_and_async() {
+    assert!(workers_run("par/x.em", false));
+    assert!(workers_run("par/dir", false));
+    assert!(workers_run("async/x.em", false));
+    assert!(workers_run("async/dir", false));
+    assert!(workers_run("async/net_x.em", false));
+    assert!(workers_run("async/chan_x.em", false));
+    assert!(workers_run("async/counter.em", false));
+    assert!(workers_run("async/signal_x.em", false));
+    assert!(!workers_run("par/x.em", true));
+    assert!(!workers_run("async/x.em", true));
+    assert!(!workers_run("panic/x.em", false));
+    assert!(!workers_run("parse/x.em", false));
+    assert!(!workers_run("tls/x.em", false));
     assert_eq!(WORKER_COUNTS, [2, 8]);
+}
+
+#[test]
+#[should_panic(expected = "the workers mark is only for par/ and async/")]
+fn a_workers_mark_outside_par_and_async_fails() {
+    workers_run("io/x.em", true);
+}
+
+/// `run-fail/` のほかの分類の印は、プログラムを流す前に落ちる。そのため、速いモードが報告しない誤り (漏れや内部の
+/// 誤り) で終わるファイルでも通らない。ファイルを読む前に落ちるので、無いファイルの名前で確かめる。
+#[test]
+#[should_panic(expected = "io/no_such_file.em: the workers mark is only for par/ and async/")]
+fn a_workers_mark_in_another_run_fail_category_fails_before_running() {
+    let marks = Marks {
+        workers_skip: true,
+        ..Marks::default()
+    };
+    run_fail_file(&ui_root().join("run-fail/io/no_such_file.em"), &marks);
+}
+
+#[test]
+#[should_panic(expected = "workers marks are not supported here")]
+fn a_workers_mark_in_a_transcript_fails() {
+    marks_of("x.repl", "# workers: skip (x)\n> 1\n", "#", false);
+}
+
+#[test]
+fn the_workers_mark_needs_a_reason() {
+    assert_eq!(
+        workers_skip("-- workers: skip (同じ期限のタイマーの順に頼る)", "--"),
+        Ok(true)
+    );
+    assert_eq!(workers_skip("-- workers: skip (x)", "--"), Ok(true));
+    assert_eq!(workers_skip("-- 説明", "--"), Ok(false));
+    assert_eq!(workers_skip("-- windows: skip (x)", "--"), Ok(false));
+    for wrong in [
+        "-- workers: skip",
+        "-- workers: skip ()",
+        "-- workers: skip ( )",
+        "-- workers:skip (x)",
+    ] {
+        assert_eq!(
+            workers_skip(wrong, "--"),
+            Err(format!(
+                "the workers mark is `-- workers: skip (<reason>)`, not `{wrong}`"
+            )),
+            "{wrong}"
+        );
+        assert!(leading_marks(wrong, "--").is_err(), "{wrong}");
+    }
+    let marks = leading_marks(
+        "#!/usr/bin/env eml\n-- workers: skip (x)\n-- signal: interrupt at 5\n-- windows: skip (y)\nmain () = ()\n",
+        "--",
+    );
+    assert_eq!(
+        marks,
+        Ok(Marks {
+            windows_skip: true,
+            workers_skip: true,
+            signals: vec![VirtualSignal {
+                at_ms: 5,
+                signal: Signal::Interrupt
+            }],
+        })
+    );
+}
+
+/// `Async.run` だけのプログラムはタスクを置かず、ハーネスが落とす。
+#[test]
+#[should_panic(expected = "placed no task on another worker")]
+fn an_async_file_that_places_no_task_fails() {
+    let source = "import Async\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Async.run (fn () -> 1)))\n";
+    let session = Session::load("run/async/short.em", source, &eml_cli::MemorySource(&[]));
+    let program = session.compile().program.expect("the program compiles");
+    let root = ui_root().join("run/async");
+    let path = root.join("short.em");
+    let checked = execute_in(&program, &path, &root, &[], true, Sched::Sequential, 1);
+    assert_workers_agree("async/short.em", &program, &path, &root, &[], &checked);
 }
 
 #[test]
@@ -748,6 +865,7 @@ fn signal_marks_are_parsed_in_order() {
         marks,
         Ok(Marks {
             windows_skip: false,
+            workers_skip: false,
             signals: vec![at(100, Signal::Terminate), at(5, Signal::Interrupt)],
         })
     );

@@ -438,15 +438,11 @@ impl eml_rt::IoDriver for DeadlineRecorder {
         Arc::new(eml_rt::HandleBin::default())
     }
 
-    fn shutdown_write(&mut self, _handle: eml_rt::IoHandle) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    fn set_nodelay(&mut self, _handle: eml_rt::IoHandle, _on: bool) -> std::io::Result<()> {
-        Ok(())
-    }
-
     fn close(&mut self, _handle: eml_rt::IoHandle) {}
+
+    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<eml_rt::IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 
     fn quiesce(&mut self) {}
 }
@@ -723,16 +719,12 @@ impl eml_rt::IoDriver for ProbeRecorder {
         self.inner.bin()
     }
 
-    fn shutdown_write(&mut self, handle: eml_rt::IoHandle) -> std::io::Result<()> {
-        self.inner.shutdown_write(handle)
-    }
-
-    fn set_nodelay(&mut self, handle: eml_rt::IoHandle, on: bool) -> std::io::Result<()> {
-        self.inner.set_nodelay(handle, on)
-    }
-
     fn close(&mut self, handle: eml_rt::IoHandle) {
         self.inner.close(handle);
+    }
+
+    fn adopt(&mut self, sock: eml_rt::RawSocket) -> std::io::Result<eml_rt::IoHandle> {
+        self.inner.adopt(sock)
     }
 
     fn quiesce(&mut self) {

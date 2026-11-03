@@ -74,9 +74,9 @@ merge srcs =
       Async.spawn (fn () -> close_after srcs out done)
   out
 
--- 予約と確定の間は `Int` の比べだけにする。間に呼び出しを置くと、ほかのタスクが確かめた後の channel を変えうるため
--- である (docs/spec/vm.md の「channel」)。起こされた後のやり直しは、予算を使っても譲らず、取り消しも確かめない。
--- 品物か枠があれば、先に操作を終えるためである (docs/spec/stdlib.md の「取り消し」)
+-- 予約と確定の間には安全点も切り替えも失敗しうる命令も置かない (`Int` の比べと品物の箱詰めはよい)。hold を持った
+-- まま切り替えたり抜けたりしないためである (docs/spec/vm.md の「channel」)。起こされた後のやり直しは、予算を使っても譲らず、
+-- 取り消しも確かめない。品物か枠があれば、先に操作を終えるためである (docs/spec/stdlib.md の「取り消し」)
 send_loop : a -> Chan a -> Bool -> <IO, Async> SendResult a
 send_loop x c yields =
   let r = reserve_send c yields
@@ -142,8 +142,8 @@ raise_cancelled () = fail_io Prelude.Cancelled "task was cancelled"
 
 -- ランタイムのインターフェース。生の行を `pub` にせず、品物の型の `a` は包む関数のシグネチャが結ぶ。`push_raw` の1つ目の引数は
 -- 預かる引数で、`pop_raw` がそれを1回返す (docs/spec/declarations.md の「`extern`」)。`reserve_send` と
--- `reserve_recv` は、0 なら確定してよく、1 なら待ち、2 なら閉じている (受け取りは閉じて空)、3 なら先に譲る。3 は
--- 2つ目の引数が真のときだけ返す
+-- `reserve_recv` は、0 なら予約したので続けて確定し、1 なら待ち、2 なら閉じている (受け取りは閉じて空)、3 なら
+-- 先に譲る。3 は2つ目の引数が真のときだけ返す
 extern new_raw      : Int -> <IO> Chan a
 extern chan_cell    : Chan a -> Async.Cell
 extern reserve_send : Chan a -> Bool -> <IO> Int

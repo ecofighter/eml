@@ -15,7 +15,8 @@ pub type OpKey = u64;
 /// driver が持つハンドル (リスナー、ストリーム)。1つの driver の寿命の間は使い回さない。
 pub type IoHandle = u64;
 
-/// カーネルが読み書きする記憶。driver を持つスレッドの外へは出さないので `Send` ではない。`cap == 0` は
+/// カーネルが読み書きする記憶。貸す側のスレッドで作り、driver を持つスレッドで使うので `Send` である。
+/// 番地を持つだけで、生かし続ける責めは持たない。その責めは下の貸す側の約束が負う。`cap == 0` は
 /// 記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側は、`submit` が
 /// `Submit::Done` を返すか、その操作の完了を `completions` から取り出すまで、物体を生かし、動かさない。
 /// `Read` に貸した記憶は一意に保ち、`Write` に貸した記憶は書き換えない。
@@ -24,6 +25,12 @@ pub struct RawBuf {
     pub ptr: *mut u8,
     pub cap: usize,
 }
+
+// SAFETY: `ptr` は、貸す側のスレッドで操作の記録が持つ物体から作る。記録は、`submit` が `Submit::Done` を返すか
+// 完了を記録に当てるまで、その物体を生かし、動かさず、`Read` に貸した記憶は一意に保つ。その間 `RawBuf` を読み書きする
+// のは driver を持つスレッドだけなので、番地を別のスレッドへ移しても、貸した記憶への触れ方は変わらない
+// (docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)。
+unsafe impl Send for RawBuf {}
 
 /// driver に出す操作。
 pub enum Op {
@@ -37,11 +44,17 @@ pub enum Op {
     Write { handle: IoHandle, buf: RawBuf },
     /// `addr` で TCP の接続を待ち受ける。`Done::Listener` で終わる。ポートが 0 なら空いているポートを使う。
     Listen { addr: SocketAddr },
-    /// リスナー `listener` に来た接続を1つ受ける。`Done::Stream` で終わる。
+    /// リスナー `listener` に来た接続を1つ受ける。`Done::Accepted` か `Done::Stream` で終わる。
     Accept { listener: IoHandle },
     /// `host` (IP アドレスの綴りか名前) の `port` へ TCP で接続する。名前は driver が解決し、得た番地を順に試して、
     /// 最後に試した番地の誤りを返す。`Done::Stream` で終わる。
     Connect { host: String, port: u16 },
+    /// ストリーム `handle` の書く側を閉じる。相手は残りを読みきってから EOF を受ける。いつも受け付けで終わり、
+    /// `Submit::Done(Ok(Done::Size(0)))` か `Submit::Done(Err(_))` を返す。
+    ShutdownWrite { handle: IoHandle },
+    /// ストリーム `handle` の `TCP_NODELAY` を切り替える。いつも受け付けで終わり、`Submit::Done(Ok(Done::Size(0)))` か
+    /// `Submit::Done(Err(_))` を返す。
+    SetNodelay { handle: IoHandle, on: bool },
     /// ブロックする呼び出しのプールの仕事。自分が所有する値 (所有して受け取る入力と、値で返す結果) を通してだけ
     /// 記憶に届き、ヒープにも RC にも触れない。panic しない。本物の driver は、仕事の panic を driver を持つ
     /// スレッドの上で起こし直すためである。
@@ -51,13 +64,59 @@ pub enum Op {
 /// 終わった操作の中身。
 #[derive(Debug, PartialEq, Eq)]
 pub enum Done {
-    /// `Readable`、`Read`、`Write`、`Job` の値。
+    /// `Readable`、`Read`、`Write`、`Job` の値。`ShutdownWrite` と `SetNodelay` は 0 である。
     Size(usize),
     /// `Listen` が作ったリスナーと、待ち受けるポート。
     Listener { handle: IoHandle, port: u16 },
     /// `Accept` か `Connect` が作ったストリームと、相手の番地。
     Stream { handle: IoHandle, peer: SocketAddr },
+    /// `Accept` が受けて、まだどの driver にも結び付けていないソケットと、相手の番地。`adopt` した driver の
+    /// ハンドルになる。
+    Accepted { sock: RawSocket, peer: SocketAddr },
 }
+
+/// OS のソケットの持ち主の型。
+#[cfg(unix)]
+pub type OsSocket = std::os::fd::OwnedFd;
+#[cfg(windows)]
+pub type OsSocket = std::os::windows::io::OwnedSocket;
+
+/// どの driver にも登録も結び付けもしていない OS のソケット。driver の外の値なので、どのスレッドへ移しても、そこで
+/// 落としてもよい。落とせばソケットを閉じる。`adopt` した driver だけがそのハンドルとして使う
+/// (docs/spec/vm.md の「時計と driver」)。
+#[derive(Debug)]
+pub struct RawSocket(OsSocket);
+
+impl RawSocket {
+    pub fn new(sock: OsSocket) -> RawSocket {
+        RawSocket(sock)
+    }
+
+    pub fn into_inner(self) -> OsSocket {
+        self.0
+    }
+
+    #[cfg(unix)]
+    fn raw(&self) -> u64 {
+        use std::os::fd::AsRawFd;
+        self.0.as_raw_fd() as u64
+    }
+
+    #[cfg(windows)]
+    fn raw(&self) -> u64 {
+        use std::os::windows::io::AsRawSocket;
+        self.0.as_raw_socket()
+    }
+}
+
+// 開いている間は記述子の番号がソケットを決めるので、同じソケットを指すかで比べる
+impl PartialEq for RawSocket {
+    fn eq(&self, other: &RawSocket) -> bool {
+        self.raw() == other.raw()
+    }
+}
+
+impl Eq for RawSocket {}
 
 /// `submit` の結果。
 #[derive(Debug)]
@@ -122,12 +181,11 @@ pub trait IoDriver {
     fn pending(&self) -> usize;
     fn waker(&self) -> Arc<dyn IoWaker>;
     fn bin(&self) -> Arc<HandleBin>;
-    /// ストリームの書く側を閉じる。相手は残りを読みきってから EOF を受ける。その場で終わる。
-    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()>;
-    /// ストリームの `TCP_NODELAY` を切り替える。その場で終わる。
-    fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()>;
     /// driver の参照を落とす。保留の操作は終わるまで OS の資源を生かす。前提はない。
     fn close(&mut self, handle: IoHandle);
+    /// `Done::Accepted` のソケットを自分に登録するか結び付け、そのハンドルを返す。ソケットはどの driver が受けたもの
+    /// でもよい。失敗すればソケットは閉じる。ソケットを外に出さない driver と壊れた driver は `Err` を返す。
+    fn adopt(&mut self, sock: RawSocket) -> io::Result<IoHandle>;
     /// 保留の操作をすべて取り消し、完了がすべて届くまで待って捨て、捨てた完了の中身のハンドルと `bin` のハンドルを
     /// 閉じる。仕事は上限なしに待ちきり、仕事の panic は待ちきった後で起こし直す。名前の解決は待たない。OS に出した
     /// 取り消しの終わりが上限までに届かなければ壊れた状態にする。driver が壊れているときは保留を残して戻る

@@ -19,7 +19,9 @@ use std::process;
 use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
-use eml_rt::{Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit};
+use eml_rt::{
+    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, RawSocket, Submit,
+};
 
 use backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
 use inbox::{Answer, Inbox, Ticket};
@@ -139,7 +141,7 @@ pub(crate) struct Driver<B: Backend> {
     next_ticket: Ticket,
     inbox: Arc<Inbox>,
     arrived: VecDeque<(Ticket, Answer)>,
-    events: Vec<Event<B::Sock>>,
+    events: Vec<Event>,
     /// `HandleBin` から引き取ったハンドル。使い回して、引き取りのたびに確保しない。
     binned: Vec<IoHandle>,
     pool: Pool,
@@ -248,7 +250,8 @@ impl<B: Backend> Driver<B> {
         ticket
     }
 
-    fn adopt(&mut self, sock: B::Sock) -> IoHandle {
+    /// 登録まで済んだソケットに、新しいハンドルを振る。
+    fn insert(&mut self, sock: B::Sock) -> IoHandle {
         let handle = self.next_handle;
         self.next_handle += 1;
         self.handles.insert(
@@ -312,7 +315,7 @@ impl<B: Backend> Driver<B> {
     fn settle(
         &mut self,
         kind: Kind<B::Sock>,
-        result: io::Result<Outcome<B::Sock>>,
+        result: io::Result<Outcome>,
         cancelled: bool,
     ) -> Flow<B::Sock> {
         let stop = || Flow::Finish(Err(cancelled_error()), true);
@@ -343,9 +346,10 @@ impl<B: Backend> Driver<B> {
                     })
                 }
             }
+            // 受けたソケットはどの driver にも入れずに返す。最初に使う worker の driver が `adopt` する
+            // (docs/spec/vm.md の「時計と driver」)
             (Kind::Accept { .. }, Ok(Outcome::Accepted { sock, peer })) => {
-                let handle = self.adopt(sock);
-                Flow::Finish(Ok(Done::Stream { handle, peer }), false)
+                Flow::Finish(Ok(Done::Accepted { sock, peer }), false)
             }
             // 相手が受ける前に捨てた接続。次の接続を待つ
             (Kind::Accept { listener }, Err(e)) if e.kind() == io::ErrorKind::ConnectionAborted => {
@@ -356,7 +360,7 @@ impl<B: Backend> Driver<B> {
                 }
             }
             (Kind::Connect { sock, peer, .. }, Ok(Outcome::Connected)) => {
-                let handle = self.adopt(sock);
+                let handle = self.insert(sock);
                 Flow::Finish(Ok(Done::Stream { handle, peer }), false)
             }
             (Kind::Connect { sock, rest, .. }, Err(e)) => {
@@ -371,11 +375,8 @@ impl<B: Backend> Driver<B> {
                 self.drop_kind(kind);
                 Flow::Finish(Err(e), false)
             }
-            (kind, Ok(outcome)) => {
+            (kind, Ok(_)) => {
                 self.drop_kind(kind);
-                if let Outcome::Accepted { sock, .. } = outcome {
-                    self.backend.close(sock);
-                }
                 panic!("the I/O backend answered a step with an outcome of another step");
             }
         }
@@ -459,20 +460,15 @@ impl<B: Backend> Driver<B> {
     }
 
     /// backend の event を、名指しされた欄に当てる。欄がなければ捨てる。
-    fn arrive(&mut self, event: Event<B::Sock>) {
+    fn arrive(&mut self, event: Event) {
         let Event { key, arrival } = event;
+        // 当たる欄のない event の受けたソケットは、`arrival` と一緒に落ちて閉じる
         let Some(slot) = self.slots.remove(&key) else {
-            if let Arrival::Done(Ok(Outcome::Accepted { sock, .. })) = arrival {
-                self.backend.close(sock);
-            }
             return;
         };
         if matches!(slot.kind, Kind::Lookup { .. } | Kind::Job) {
             // スレッドの操作は札で終わる。使い回した鍵に古い event が来ても触れない
             self.slots.insert(key, slot);
-            if let Arrival::Done(Ok(Outcome::Accepted { sock, .. })) = arrival {
-                self.backend.close(sock);
-            }
             return;
         }
         let owner = slot.kind.owner();
@@ -560,16 +556,12 @@ impl<B: Backend> Driver<B> {
                 kind: e.kind(),
                 msg: e.to_string(),
             });
-            // backend は event を積んだ後に誤りを返さない。破られたときも、受けたソケットだけは閉じる
+            // backend は event を積んだ後に誤りを返さない。破られたときも、受けたソケットは event と一緒に落ちて閉じる
             debug_assert!(
                 self.events.is_empty(),
                 "the backend failed a wait after queueing events"
             );
-            while let Some(event) = self.events.pop() {
-                if let Arrival::Done(Ok(Outcome::Accepted { sock, .. })) = event.arrival {
-                    self.backend.close(sock);
-                }
-            }
+            self.events.clear();
             return Err(e);
         }
         // 1つの束の中の順は意味を持たない
@@ -580,7 +572,7 @@ impl<B: Backend> Driver<B> {
         Ok(())
     }
 
-    /// 捨てる完了の中身のハンドルを閉じる。
+    /// 捨てる完了の中身のハンドルを閉じる。受けたソケットは完了と一緒に落ちて閉じる。
     fn discard_done(&mut self) {
         while let Some(completion) = self.done.pop() {
             if let Ok(Done::Listener { handle, .. } | Done::Stream { handle, .. }) =
@@ -670,7 +662,7 @@ impl<B: Backend> IoDriver for Driver<B> {
             }
             Op::Listen { addr } => match self.backend.listen(addr) {
                 Ok((sock, port)) => {
-                    let handle = self.adopt(sock);
+                    let handle = self.insert(sock);
                     Submit::Done(Ok(Done::Listener { handle, port }))
                 }
                 Err(e) => Submit::Done(Err(e)),
@@ -703,6 +695,20 @@ impl<B: Backend> IoDriver for Driver<B> {
                     }
                 }
             },
+            Op::ShutdownWrite { handle } => Submit::Done(match self.handles.get_mut(&handle) {
+                Some(entry) if !entry.closed => self
+                    .backend
+                    .shutdown_write(&mut entry.sock)
+                    .map(|()| Done::Size(0)),
+                _ => Err(no_handle()),
+            }),
+            Op::SetNodelay { handle, on } => Submit::Done(match self.handles.get_mut(&handle) {
+                Some(entry) if !entry.closed => self
+                    .backend
+                    .set_nodelay(&mut entry.sock, on)
+                    .map(|()| Done::Size(0)),
+                _ => Err(no_handle()),
+            }),
             Op::Job(job) => {
                 let ticket = self.ticket(key);
                 self.slots.insert(
@@ -793,20 +799,6 @@ impl<B: Backend> IoDriver for Driver<B> {
         Arc::clone(&self.bin)
     }
 
-    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
-        match self.handles.get_mut(&handle) {
-            Some(entry) if !entry.closed => self.backend.shutdown_write(&mut entry.sock),
-            _ => Err(no_handle()),
-        }
-    }
-
-    fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()> {
-        match self.handles.get_mut(&handle) {
-            Some(entry) if !entry.closed => self.backend.set_nodelay(&mut entry.sock, on),
-            _ => Err(no_handle()),
-        }
-    }
-
     fn close(&mut self, handle: IoHandle) {
         let Some(entry) = self.handles.get_mut(&handle) else {
             return;
@@ -817,6 +809,15 @@ impl<B: Backend> IoDriver for Driver<B> {
         } else if let Some(entry) = self.handles.remove(&handle) {
             self.backend.close(entry.sock);
         }
+    }
+
+    fn adopt(&mut self, sock: RawSocket) -> io::Result<IoHandle> {
+        if let Some(broken) = &self.broken {
+            // 壊れた後は OS の資源を新しく登録しない。ソケットはここで落ちて閉じる
+            return Err(broken.error());
+        }
+        let sock = self.backend.adopt(sock)?;
+        Ok(self.insert(sock))
     }
 
     fn quiesce(&mut self) {

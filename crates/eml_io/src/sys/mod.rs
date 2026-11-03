@@ -4,7 +4,16 @@
 
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// driver の時計の始まり。単調な時計の時刻で、OS の時計を読むのは backend の側だけにするため、核はこの別名と
+/// `now` を通してだけ扱う (docs/implementation/architecture.md の「`eml_io` の内部」)。
+pub type Epoch = Instant;
+
+/// 今の時刻。`RealDriver::new` が時計の始まりにする。
+pub(crate) fn now() -> Epoch {
+    Instant::now()
+}
 
 #[cfg(target_os = "linux")]
 mod epoll;

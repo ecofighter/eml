@@ -1,6 +1,8 @@
 //! `Std.Net` の操作の記録と driver の完了 (docs/spec/vm.md の「操作の記録」)。完了の数はテストの driver
 //! (`Clock::Virtual`) の上で、取り消しの道は書きを取り消すまで終わらせない driver の上で確かめる。テストの driver の
-//! 書きは次の集める地点でいつも終わるので、待っている間の取り消しに届かないためである。
+//! 書きは次の集める地点でいつも終わるので、待っている間の取り消しに届かないためである。worker が2つの run では、
+//! 仮想の時計で worker 1 に置いたタスクの操作を driver を持つ worker 0 が受け付け、持ち主が結果を当てる道と、本物の
+//! 時計で各 worker が自分の driver で受け付ける道も確かめる。
 
 use std::io;
 use std::sync::Arc;
@@ -323,15 +325,11 @@ impl IoDriver for HoldingDriver {
         Arc::default()
     }
 
-    fn shutdown_write(&mut self, _handle: IoHandle) -> io::Result<()> {
-        Ok(())
-    }
-
-    fn set_nodelay(&mut self, _handle: IoHandle, _on: bool) -> io::Result<()> {
-        Ok(())
-    }
-
     fn close(&mut self, _handle: IoHandle) {}
+
+    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
 
     fn quiesce(&mut self) {
         self.held.clear();
@@ -505,6 +503,8 @@ impl IoDriver for Recorder {
             Op::Listen { .. } => "listen",
             Op::Accept { .. } => "accept",
             Op::Connect { .. } => "connect",
+            Op::ShutdownWrite { .. } => "shutdown_write",
+            Op::SetNodelay { .. } => "set_nodelay",
             _ => "other",
         };
         log.ops.push(kind);
@@ -534,16 +534,12 @@ impl IoDriver for Recorder {
         self.inner.bin()
     }
 
-    fn shutdown_write(&mut self, handle: IoHandle) -> io::Result<()> {
-        self.inner.shutdown_write(handle)
-    }
-
-    fn set_nodelay(&mut self, handle: IoHandle, on: bool) -> io::Result<()> {
-        self.inner.set_nodelay(handle, on)
-    }
-
     fn close(&mut self, handle: IoHandle) {
         self.inner.close(handle);
+    }
+
+    fn adopt(&mut self, sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+        self.inner.adopt(sock)
     }
 
     fn quiesce(&mut self) {
@@ -595,6 +591,104 @@ main () = Async.run (fn () ->
     assert_eq!((log.immediate, log.waits, log.completions), (5, 0, 0));
     let s = finished.stats;
     assert_eq!((s.parks, s.completions, s.cancels), (5, 5, 0));
+}
+
+/// `shutdown_write` と `set_nodelay` は、ほかの操作と同じく `submit` で driver に出す操作で、受け付けで終わる。持ち主が
+/// host なら待たずに取り出すので、`io_wait` を通らず、待ちも予算も数えず、取り消しの地点にもならない。取り消した
+/// スコープの中でも投げずに終わり、相手は EOF を読む (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_shutdown_and_nodelay_are_ops_that_end_at_submit() {
+    let src = "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let a = Net.connect \"127.0.0.1\" port
+  let (b, l) = Net.accept l
+  Net.close_listener l
+  let a = Async.scope (fn sc ->
+    Async.cancel_scope sc
+    Net.shutdown_write (Net.set_nodelay True a))
+  let (buf, b) = Net.read_chunk (Bytes.with_capacity 16) b
+  Net.close a
+  Net.close b
+  println \"\\{show (Bytes.length buf)}\")
+";
+    let log = Arc::new(std::sync::Mutex::new(Log::default()));
+    let driver = Recorder {
+        inner: eml_io::TestDriver::new(None),
+        log: Arc::clone(&log),
+    };
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "0\n");
+    let log = log.lock().unwrap();
+    assert_eq!(
+        log.ops,
+        [
+            "listen",
+            "connect",
+            "accept",
+            "set_nodelay",
+            "shutdown_write",
+            "read"
+        ]
+    );
+    assert!(log.at_submit.iter().all(|&done| done));
+    assert_eq!((log.immediate, log.waits, log.completions), (6, 0, 0));
+    let s = finished.stats;
+    // 待ちは4つの `io_wait` とスコープの閉じる待ちで、2つの設定は数えない
+    assert_eq!((s.parks, s.completions, s.cancels), (5, 6, 0));
+}
+
+/// 持ち主が host の `set_nodelay` は、予算を使わず、`parks` も数えず、譲らない。予算 (128) を超える数を続けても、
+/// 呼ばないプログラムと `parks` と `yields` が同じで、`completions` だけが呼んだ数だけ増える
+/// (docs/spec/stdlib.md の「操作の予算」)。
+#[test]
+fn many_controls_spend_no_budget() {
+    let stats = |n: u32| {
+        let src = format!(
+            "\
+import Async (Async)
+import Async
+import Net
+loop : Int -> Net.TcpStream -> <IO, Panic, Async> Net.TcpStream
+loop n s = if n == 0 then s else loop (n - 1) (Net.set_nodelay True s)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    s)
+  let a = loop {n} (Net.connect \"127.0.0.1\" port)
+  Net.close a
+  Net.close (Async.await t))
+"
+        );
+        let (host, _) = capture_host(Default::default());
+        let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
+        let loaded = machine.load(&eml_test_support::lir(&src)).unwrap();
+        let finished = machine
+            .run(loaded.entry)
+            .unwrap_or_else(|error| panic!("{error}"));
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
+        finished.stats
+    };
+    let (none, many) = (stats(0), stats(300));
+    assert_eq!((many.parks, many.yields), (none.parks, none.yields));
+    assert_eq!(many.completions, none.completions + 300);
 }
 
 /// `write_bytes` は渡した buffer を写さずにそのまま返す。echo を2つの形で流す。一意の形は、返った buffer を次の往復の
@@ -985,4 +1079,537 @@ fn a_probe_done_at_submit_reads_at_once() {
     assert_eq!(log.ops[4..], ["readable", "read"]);
     assert_eq!(log.at_submit[4..], [true, true]);
     assert_eq!((log.waits, log.completions), (0, 0));
+}
+
+/// 検査モードで、worker を `workers` 個まで持てる run を1回行う。`config` は時計と方針を決める。
+fn run_on(src: &str, workers: usize, config: RunConfig) -> (String, eml_vm::Finished) {
+    let control = Arc::new(eml_vm::Control::new(eml_vm::Limits {
+        workers,
+        ..eml_vm::Limits::default()
+    }));
+    let config = config.with_debug_heap(true).with_control(control);
+    let (host, out) = capture_host(Default::default());
+    let finished = eml_vm::execute(&eml_test_support::lir(src), &config, host)
+        .unwrap_or_else(|error| panic!("{error}"));
+    (out.contents(), finished)
+}
+
+/// worker 1 に置いたタスクの受けと読みは、driver を持つ worker 0 が受け付けて結果を置き、持ち主の worker 1 が当てる。
+/// 仮想の時計の run の driver は worker 0 だけが持つので、読めたことが転送の道を通ったことを示す
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_forwarded_submit_is_settled_by_its_host() {
+    let src = "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+    Net.close s
+    String.decode buf)
+  let a = Net.connect \"127.0.0.1\" port
+  let a = Net.write \"hello\" a
+  let got = Async.await t
+  Net.close a
+  println got)
+";
+    let (alone, _) = run_on(src, 1, RunConfig::default());
+    assert_eq!(alone, "hello\n");
+    let (out, finished) = run_on(src, 2, RunConfig::default());
+    assert_eq!(out, alone);
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// worker 1 に置いたタスクの `set_nodelay` と `shutdown_write` も、ほかの操作と同じく host の worker 0 が driver に出す。
+/// 書いたバイトの後に、worker 0 の相手が EOF を読む (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_shutdown_on_worker_1_is_done_by_its_host() {
+    let src = "\
+import Async
+import Bytes
+import Net
+import String
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    let s = Net.set_nodelay True s
+    let s = Net.write \"bye\" s
+    Net.shutdown_write s)
+  let a = Net.connect \"127.0.0.1\" port
+  let (buf, a) = Net.read_chunk (Bytes.with_capacity 16) a
+  let (rest, a) = Net.read_chunk (Bytes.with_capacity 16) a
+  Net.close a
+  Net.close (Async.await t)
+  println \"\\{String.decode buf} \\{show (Bytes.length rest)}\")
+";
+    let (alone, _) = run_on(src, 1, RunConfig::default());
+    assert_eq!(alone, "bye 0\n");
+    let (out, finished) = run_on(src, 2, RunConfig::default());
+    assert_eq!(out, alone);
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 別の worker の driver に回した設定の操作は、host が受け付けるまで取り消しを見ずに待つ。取り消したスコープの中でも
+/// 投げずに終わり、相手は EOF を読む (docs/spec/stdlib.md の「`Std.Net`」)。
+#[test]
+fn a_forwarded_control_in_a_cancelled_scope_completes() {
+    let src = "\
+import Async
+import Bytes
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let t = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    Async.scope (fn sc ->
+      Async.cancel_scope sc
+      Net.shutdown_write (Net.set_nodelay True s)))
+  let a = Net.connect \"127.0.0.1\" port
+  let (buf, a) = Net.read_chunk (Bytes.with_capacity 16) a
+  Net.close a
+  Net.close (Async.await t)
+  println (show (Bytes.length buf)))
+";
+    let (alone, _) = run_on(src, 1, RunConfig::default());
+    assert_eq!(alone, "0\n");
+    let (out, finished) = run_on(src, 2, RunConfig::default());
+    assert_eq!(out, alone);
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、worker 1 に置いたクライアントが自分の driver で接続し、書いて閉じたストリームを、worker 0 のサーバーが
+/// EOF まで読む。落とした worker 1 はそのストリームの host なので、空きで自分の driver に眠るときに閉じる
+/// (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn a_stream_closed_on_worker_1_reaches_its_peer() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+drain : Net.TcpStream -> Int -> <IO, Panic, Async> Int
+drain s n =
+  let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else drain s (n + k)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let c = Async.start (fn () ->
+    let a = Net.connect \"127.0.0.1\" port
+    let a = Net.write \"abc\" a
+    Net.close a)
+  let s = Async.start (fn () ->
+    let (b, l) = Net.accept l
+    Net.close_listener l
+    drain b 0)
+  Async.await c
+  println (show (Async.await s)))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let config = RunConfig::default()
+            .with_clock(eml_vm::Clock::Real)
+            .with_sched(Sched::Normal);
+        let _ = done.send(run_on(src, 2, config));
+    });
+    let (out, finished) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the peer did not read to the end");
+    assert_eq!(out, "3\n");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、worker 1 に置いたタスクが worker 0 のリスナーで受けたストリームは、最初に書いた worker 1 の driver に
+/// 縛られ、worker 1 が書いて閉じると、worker 0 の相手が EOF まで読む (docs/spec/vm.md の「操作の記録」)。落とした
+/// worker が host でないときの起こしは `a_stream_bound_on_worker_0_and_closed_on_worker_1_wakes_its_host` が確かめる。
+/// 3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn a_stream_accepted_and_closed_on_worker_1_reaches_its_peer() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+drain : Net.TcpStream -> Int -> <IO, Panic, Async> Int
+drain s n =
+  let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else drain s (n + k)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let c = Async.start (fn () ->
+    let (b, l) = Net.accept l
+    Net.close_listener l
+    let b = Net.write \"abc\" b
+    Net.close b)
+  let a = Net.connect \"127.0.0.1\" port
+  let n = drain a 0
+  Async.await c
+  println (show n))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let config = RunConfig::default()
+            .with_clock(eml_vm::Clock::Real)
+            .with_sched(Sched::Normal);
+        let _ = done.send(run_on(src, 2, config));
+    });
+    let (out, finished) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the peer did not read to the end");
+    assert_eq!(out, "3\n");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、worker 0 の `main` が接続して書き、自分で閉じたストリームを、worker 1 に置いたサーバーが EOF まで
+/// 読む。閉じた後の worker 0 は driver に出した操作のない計算のタスクだけを走らせ、driver で眠らないので、閉じるのは
+/// 集める地点である (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn a_stream_closed_by_its_busy_host_reaches_its_peer_on_worker_1() {
+    let src = "\
+import Async (Async)
+import Async
+import Atomic
+import Bytes
+import Net
+echo : Net.TcpStream -> Int -> <IO, Panic, Async> Int
+echo s n =
+  let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else
+    let (_, s) = Net.write_bytes buf s
+    echo s (n + k)
+read_back : Bytes -> Net.TcpStream -> <IO, Panic, Async> (Bytes, Net.TcpStream)
+read_back buf s =
+  if Bytes.length buf >= 3 then (buf, s)
+  else
+    let (buf, s) = Net.read_chunk buf s
+    read_back buf s
+fib : Int -> <Panic> Int
+fib k = if k < 2 then k else fib (k - 1) + fib (k - 2)
+spin : Atomic.Counter -> <IO, Panic> Unit
+spin flag =
+  if Atomic.load flag != 0 then ()
+  else
+    let _ = fib 15
+    spin flag
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let flag = Atomic.new 0
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let server = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    echo s 0)
+  let busy = Async.start (fn () -> spin flag)
+  let c = Net.write \"abc\" (Net.connect \"127.0.0.1\" port)
+  let (_, c) = read_back (Bytes.empty ()) c
+  Net.close c
+  let n = Async.await server
+  Atomic.store 1 flag
+  Async.await busy
+  println (show n))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let config = RunConfig::default()
+            .with_clock(eml_vm::Clock::Real)
+            .with_sched(Sched::Normal);
+        let _ = done.send(run_on(src, 2, config));
+    });
+    let (out, finished) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the peer did not read to the end");
+    assert_eq!(out, "3\n");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、worker 1 に置いたクライアントが自分の driver で接続し、worker 0 の `main` が受けて返したバイトを読む。
+/// 各 worker が自分の driver を持つので、クライアントの接続と読み書きは worker 1 が、受けと読み書きは worker 0 が driver に
+/// 出す (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn an_echo_between_two_workers_completes() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+import String
+drain : Bytes -> Net.TcpStream -> <IO, Panic, Async> (Bytes, Net.TcpStream)
+drain buf s =
+  let n = Bytes.length buf
+  let (buf, s) = Net.read_chunk buf s
+  if Bytes.length buf == n then (buf, s) else drain buf s
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let c = Async.start (fn () ->
+    let a = Net.connect \"127.0.0.1\" port
+    let a = Net.shutdown_write (Net.write \"ping\" a)
+    let (buf, a) = drain (Bytes.empty ()) a
+    Net.close a
+    String.decode buf)
+  let (s, l) = Net.accept l
+  Net.close_listener l
+  let (buf, s) = drain (Bytes.of_string \"echo: \") s
+  let (_, s) = Net.write_bytes buf s
+  Net.close s
+  println (Async.await c))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let real = || {
+            RunConfig::default()
+                .with_clock(eml_vm::Clock::Real)
+                .with_sched(Sched::Normal)
+        };
+        let _ = done.send((run_on(src, 1, real()), run_on(src, 2, real())));
+    });
+    let ((alone, _), (out, finished)) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the echo did not complete");
+    assert_eq!(alone, "echo: ping\n");
+    assert_eq!(out, alone);
+    assert_eq!(finished.workers, 1, "{finished:?}");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、worker 0 のリスナーで受けたストリームを worker 1 に置いたタスクが読んで返す。受けたストリームは縛らずに
+/// 渡り、最初に読んだ worker 1 の driver に取り込まれるので、読み書きは worker 1 が自分の driver に出す
+/// (docs/spec/vm.md の「操作の記録」)。どの worker が host かは `cells` の単体テストが確かめる。3 秒は止まりの見張りで、
+/// 時間は確かめない。
+#[test]
+fn an_accepted_stream_is_used_on_the_worker_of_its_first_task() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+import String
+drain : Bytes -> Net.TcpStream -> <IO, Panic, Async> (Bytes, Net.TcpStream)
+drain buf s =
+  let n = Bytes.length buf
+  let (buf, s) = Net.read_chunk buf s
+  if Bytes.length buf == n then (buf, s) else drain buf s
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let server = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    let (buf, s) = drain (Bytes.of_string \"echo: \") s
+    let (_, s) = Net.write_bytes buf s
+    Net.close s)
+  let a = Net.connect \"127.0.0.1\" port
+  let a = Net.shutdown_write (Net.write \"ping\" a)
+  let (buf, a) = drain (Bytes.empty ()) a
+  Net.close a
+  Async.await server
+  println (String.decode buf))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let real = || {
+            RunConfig::default()
+                .with_clock(eml_vm::Clock::Real)
+                .with_sched(Sched::Normal)
+        };
+        let _ = done.send((run_on(src, 1, real()), run_on(src, 2, real())));
+    });
+    let ((alone, _), (out, finished)) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the echo did not complete");
+    assert_eq!(alone, "echo: ping\n");
+    assert_eq!(out, alone);
+    assert_eq!(finished.workers, 1, "{finished:?}");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、worker 0 が受けて設定したストリームは worker 0 の driver に縛られる。それを持たせて worker 1 に置いた
+/// タスクが書いて閉じると、worker 0 の相手が EOF まで読む。ハンドルを落とした worker 1 が、driver の待ちで眠る host の
+/// worker 0 を起こすためである (docs/spec/vm.md の「操作の記録」)。普通の方針で流す。横取りしない方針では、閉じるのは
+/// 落とした worker の次の集める地点まで遅れうる。3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn a_stream_bound_on_worker_0_and_closed_on_worker_1_wakes_its_host() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+drain : Net.TcpStream -> Int -> <IO, Panic, Async> Int
+drain s n =
+  let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else drain s (n + k)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let a = Net.connect \"127.0.0.1\" port
+  let (b, l) = Net.accept l
+  Net.close_listener l
+  let b = Net.set_nodelay True b
+  let c = Async.start (fn () ->
+    let b = Net.write \"abc\" b
+    Net.close b)
+  let n = drain a 0
+  Async.await c
+  println (show n))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let config = RunConfig::default()
+            .with_clock(eml_vm::Clock::Real)
+            .with_sched(Sched::Normal);
+        let _ = done.send(run_on(src, 2, config));
+    });
+    let (out, finished) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the peer did not read to the end");
+    assert_eq!(out, "3\n");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、受けたストリームを操作を出さずに閉じると、まだどの driver にも取り込んでいないソケットをその場で閉じ、
+/// 相手が EOF を読む。worker 1 に置いたタスクが受けて閉じる (docs/spec/vm.md の「操作の記録」)。3 秒は止まりの
+/// 見張りで、時間は確かめない。
+#[test]
+fn an_accepted_stream_closed_before_any_op_reaches_its_peer() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+drain : Net.TcpStream -> Int -> <IO, Panic, Async> Int
+drain s n =
+  let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else drain s (n + k)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let c = Async.start (fn () ->
+    let (b, l) = Net.accept l
+    Net.close_listener l
+    Net.close b)
+  let a = Net.connect \"127.0.0.1\" port
+  let n = drain a 0
+  Async.await c
+  println (show n))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let real = || {
+            RunConfig::default()
+                .with_clock(eml_vm::Clock::Real)
+                .with_sched(Sched::Normal)
+        };
+        let _ = done.send((run_on(src, 1, real()), run_on(src, 2, real())));
+    });
+    let ((alone, _), (out, finished)) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the peer did not read to the end");
+    assert_eq!(alone, "0\n");
+    assert_eq!(out, alone);
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、受けたまま操作を出していないストリームを持ったまま `exit` で run が終わっても、ヒープを落とすときに
+/// ソケットを閉じ、外の相手が EOF を読む (docs/spec/vm.md の「操作の記録」)。相手はテストのスレッドの std のストリーム
+/// で、待ち受けはポート 0 で行い、プログラムが標準エラーに書いたポートへ繋ぐ。3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn an_accepted_stream_left_at_an_exit_is_closed() {
+    use std::io::Read;
+
+    let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  eprintln (show port)
+  let (b, l) = Net.accept l
+  (exit 3 : Unit)
+  Net.close b
+  Net.close_listener l)
+";
+    let host = eml_vm::CaptureHost::new(Default::default());
+    let (out, errors) = (host.output(), host.errors());
+    let host = host.into_ref();
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let control = Arc::new(eml_vm::Control::new(eml_vm::Limits {
+            workers: 2,
+            ..eml_vm::Limits::default()
+        }));
+        let config = RunConfig::default()
+            .with_clock(eml_vm::Clock::Real)
+            .with_sched(Sched::Normal)
+            .with_debug_heap(true)
+            .with_control(control);
+        let finished = eml_vm::execute(&eml_test_support::lir(src), &config, host)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let _ = done.send(finished);
+    });
+    // プログラムがポートを書くまで待つ
+    let start = std::time::Instant::now();
+    let port: u16 = loop {
+        if let Ok(port) = errors.contents().trim().parse() {
+            break port;
+        }
+        assert!(start.elapsed() < Duration::from_secs(3), "no port written");
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut peer = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500))
+        .expect("the listener is already open");
+    let finished = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the run did not end");
+    assert_eq!(
+        (out.contents(), errors.contents()),
+        (String::new(), format!("{port}\n"))
+    );
+    assert_eq!(finished.exit, Some(3));
+    peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    let mut rest = Vec::new();
+    assert_eq!(peer.read_to_end(&mut rest).unwrap(), 0);
 }

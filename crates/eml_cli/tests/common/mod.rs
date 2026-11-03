@@ -56,8 +56,8 @@ pub fn assert_filter_matches(filter: &str) {
 }
 
 /// `root` の下の `.<extension>` を名前の順に集め、`EML_UI_FILTER` の部分文字列がワークスペースからの相対パスに
-/// 含まれるものだけを `run_all` で流す。`test` にはファイルとその先頭の印のシグナルの予定を渡す。シグナルの印を
-/// 許すのは `signals` が真のときだけである (docs/implementation/testing.md の「UI テスト」)。
+/// 含まれるものだけを `run_all` で流す。`test` にはファイルとその先頭の印を渡す。シグナルの印と worker の印を
+/// 許すのは、`run_entry` が真のときのエントリだけである (docs/implementation/testing.md の「UI テスト」)。
 ///
 /// insta の `glob!` は失敗の数をプロセスで1つのスタック (insta 1.49 の `GLOB_STACK`) に数える。並んで走ると、
 /// ほかのテストの失敗を自分の失敗として報告する。そのため UI テストとトランスクリプトのファイルは、`glob!` を使わずに
@@ -65,8 +65,8 @@ pub fn assert_filter_matches(filter: &str) {
 pub fn for_each_file(
     root: &Path,
     extension: &str,
-    signals: bool,
-    test: impl Fn(&Path, &[VirtualSignal]) + Sync,
+    run_entry: bool,
+    test: impl Fn(&Path, &Marks) + Sync,
 ) {
     let mut files = Vec::new();
     collect(root, extension, &mut files);
@@ -88,7 +88,7 @@ pub fn for_each_file(
                 &shown(&path),
                 &fs::read_to_string(&path).unwrap(),
                 leader,
-                signals && is_entry(root, &path, extension),
+                run_entry && is_entry(root, &path, extension),
             );
             (path, marks)
         })
@@ -100,7 +100,7 @@ pub fn for_each_file(
             .iter()
             .find(|(p, _)| p == path)
             .expect("a file to run was collected");
-        test(path, &marks.signals);
+        test(path, marks);
     });
 }
 
@@ -108,12 +108,14 @@ pub fn for_each_file(
 #[derive(Debug, Default, PartialEq)]
 pub struct Marks {
     pub windows_skip: bool,
+    /// worker の数 N = 2 以上の run から外す (docs/implementation/testing.md の「seed で流す」)。
+    pub workers_skip: bool,
     /// 行の順のシグナルの予定。
     pub signals: Vec<VirtualSignal>,
 }
 
 /// テストのエントリか。分類の直下のファイルか、ディレクトリのテストの `main.<extension>` である。ディレクトリの
-/// テストのほかのファイルは import するモジュールで、シグナルの印を書けない (docs/implementation/testing.md の「UI テスト」)。
+/// テストのほかのファイルは import するモジュールで、シグナルの印も worker の印も書けない (docs/implementation/testing.md の「UI テスト」)。
 pub fn is_entry(root: &Path, path: &Path, extension: &str) -> bool {
     let depth = path
         .strip_prefix(root)
@@ -124,17 +126,21 @@ pub fn is_entry(root: &Path, path: &Path, extension: &str) -> bool {
             .is_some_and(|name| name.to_string_lossy() == format!("main.{extension}"))
 }
 
-/// `leading_marks` の誤りと、許さない場所のシグナルの印で panic する。`shown` は文言に出すファイルの名前である。
-pub fn marks_of(shown: &str, text: &str, leader: &str, signals: bool) -> Marks {
+/// `leading_marks` の誤りと、許さない場所のシグナルの印と worker の印で panic する。`shown` は文言に出すファイルの
+/// 名前である。この2つの印を許すのは、`run_entry` が真のとき (`run/` と `run-fail/` のエントリ) だけである。
+pub fn marks_of(shown: &str, text: &str, leader: &str, run_entry: bool) -> Marks {
     let marks = leading_marks(text, leader).unwrap_or_else(|message| panic!("{shown}: {message}"));
-    if !signals && !marks.signals.is_empty() {
+    if !run_entry && !marks.signals.is_empty() {
         panic!("{shown}: signal marks are not supported here");
+    }
+    if !run_entry && marks.workers_skip {
+        panic!("{shown}: workers marks are not supported here");
     }
     marks
 }
 
-/// 先頭の印の行を読む。印の行は、shebang の行があればその後ろから続く、`<leader> windows:` か `<leader> signal:` で
-/// 始まる行の並びで、2種類をどの順に混ぜてもよい。shebang は1行目にしか書けないので、印はその後ろに置く。
+/// 先頭の印の行を読む。印の行は、shebang の行があればその後ろから続く、`<leader> windows:`、`<leader> signal:`、
+/// `<leader> workers:` で始まる行の並びで、3種類をどの順に混ぜてもよい。shebang は1行目にしか書けないので、印はその後ろに置く。
 pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
     let mut lines = text.lines().peekable();
     let _shebang = lines.next_if(|line| line.starts_with("#!"));
@@ -146,6 +152,8 @@ pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
     for line in lines {
         if starts(line, " windows:") {
             marks.windows_skip |= windows_skip(line, leader)?;
+        } else if starts(line, " workers:") {
+            marks.workers_skip |= workers_skip(line, leader)?;
         } else if starts(line, " signal:") {
             marks.signals.push(signal_mark(line, leader)?);
         } else {
@@ -158,21 +166,34 @@ pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
 /// 先頭の印の行の1つが `<leader> windows: skip (<理由>)` なら Windows で流さない (docs/implementation/testing.md の「OS ごとのテスト」)。
 /// 綴りを誤った印が黙ってテストを流し続けないよう、`<leader> windows:` で始まる行は正しい形でなければ誤りにする。
 pub fn windows_skip(line: &str, leader: &str) -> Result<bool, String> {
+    skip_mark(line, leader, "windows").ok_or_else(|| {
+        format!("the Windows mark is `{leader} windows: skip (<reason>)`, not `{line}`")
+    })
+}
+
+/// 先頭の印の行の1つが `<leader> workers: skip (<理由>)` なら worker の数 N = 2 以上で流さない
+/// (docs/implementation/testing.md の「seed で流す」)。綴りの誤りは `windows_skip` と同じく誤りにする。
+pub fn workers_skip(line: &str, leader: &str) -> Result<bool, String> {
+    skip_mark(line, leader, "workers").ok_or_else(|| {
+        format!("the workers mark is `{leader} workers: skip (<reason>)`, not `{line}`")
+    })
+}
+
+/// `<leader> <kind>: skip (<理由>)` を読む。`<leader> <kind>:` で始まらない行は `Some(false)`、始まるのに形が
+/// 違うか理由が空なら `None` である。
+fn skip_mark(line: &str, leader: &str, kind: &str) -> Option<bool> {
     let Some(rest) = line
         .strip_prefix(leader)
-        .and_then(|rest| rest.strip_prefix(" windows:"))
+        .and_then(|rest| rest.strip_prefix(' '))
+        .and_then(|rest| rest.strip_prefix(kind))
+        .and_then(|rest| rest.strip_prefix(':'))
     else {
-        return Ok(false);
+        return Some(false);
     };
-    match rest
-        .strip_prefix(" skip (")
+    rest.strip_prefix(" skip (")
         .and_then(|reason| reason.strip_suffix(')'))
-    {
-        Some(reason) if !reason.trim().is_empty() => Ok(true),
-        _ => Err(format!(
-            "the Windows mark is `{leader} windows: skip (<reason>)`, not `{line}`"
-        )),
-    }
+        .filter(|reason| !reason.trim().is_empty())
+        .map(|_| true)
 }
 
 /// `<leader> signal: <interrupt|terminate> at <ms>` の印を読む。`ms` は10進の数字だけで、空白は1つずつである。

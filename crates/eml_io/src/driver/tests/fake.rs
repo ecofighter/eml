@@ -12,7 +12,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use eml_rt::{IoWaker, OpKey};
+use eml_rt::{IoWaker, OpKey, RawSocket};
 
 use crate::driver::backend::{Backend, Cancel, Event, Hold, Outcome, Start, Step};
 
@@ -23,7 +23,7 @@ pub(super) struct FakeSock(pub u32);
 /// `start` の1回分の台本。台本が空なら `Pending(Hold::None)` で答える。
 pub(super) enum Reply {
     Pending(Hold),
-    Done(io::Result<Outcome<FakeSock>>),
+    Done(io::Result<Outcome>),
     /// `Recv` の buffer の先頭へ写して `Size(len)` で終わる。
     Fill(Vec<u8>),
     /// `Send` の buffer の先頭 n バイトを `sent` へ写して `Size(n)` で終わる。
@@ -45,6 +45,8 @@ pub(super) enum Call {
     Listen(SocketAddr),
     Socket(SocketAddr),
     Close(u32),
+    /// 受けたソケットを取り込み、この番号の行にした。
+    Adopt(u32),
     ShutdownWrite(u32),
     SetNodelay(u32, bool),
     Start(OpKey, StepKind),
@@ -122,7 +124,7 @@ pub(super) struct Fake {
     /// 空なら `Ok(Cancel::Done)` で答える。
     pub cancels: VecDeque<io::Result<Cancel>>,
     /// 次の `wait` で全部を渡す。
-    pub events: Vec<Event<FakeSock>>,
+    pub events: Vec<Event>,
     pub wait_error: Option<io::Error>,
     pub spawn_error: bool,
     pub listen_port: u16,
@@ -165,6 +167,58 @@ impl Fake {
         let sock = FakeSock(self.next_sock);
         self.next_sock += 1;
         sock
+    }
+}
+
+/// 受けたソケットの代わりの OS の記述子と、それが閉じたかを確かめる相手の端。偽の backend は OS のソケットを
+/// 作らないので、unix ではパイプの読む端を使う。Miri もパイプを扱える。
+#[cfg(unix)]
+pub(super) fn accepted() -> (RawSocket, Probe) {
+    let (read, write) = std::io::pipe().expect("a pipe");
+    (RawSocket::new(read.into()), Probe(write))
+}
+
+/// Windows では、ループバックの接続の受けた側を使う。
+#[cfg(windows)]
+pub(super) fn accepted() -> (RawSocket, Probe) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let near =
+        std::net::TcpStream::connect(listener.local_addr().expect("a port")).expect("a connect");
+    let (far, _) = listener.accept().expect("an accept");
+    (RawSocket::new(far.into()), Probe(near))
+}
+
+#[cfg(unix)]
+pub(super) struct Probe(std::io::PipeWriter);
+#[cfg(windows)]
+pub(super) struct Probe(std::net::TcpStream);
+
+impl Probe {
+    /// 相手の記述子が閉じたか。
+    #[cfg(unix)]
+    pub(super) fn closed(&mut self) -> bool {
+        use std::io::Write;
+        // 読む端が閉じたパイプへの書きは `BrokenPipe` になる。Rust のプロセスは SIGPIPE を無視する
+        match self.0.write_all(b"x") {
+            Ok(_) => false,
+            Err(e) => {
+                assert_eq!(e.kind(), io::ErrorKind::BrokenPipe, "{e}");
+                true
+            }
+        }
+    }
+
+    /// 相手のソケットが閉じたか。閉じていれば読みは EOF で、開いていれば塞がれる。
+    #[cfg(windows)]
+    pub(super) fn closed(&mut self) -> bool {
+        use std::io::Read;
+        self.0.set_nonblocking(true).expect("a non-blocking socket");
+        let mut byte = [0u8; 1];
+        match self.0.read(&mut byte) {
+            Ok(0) => true,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => false,
+            other => panic!("{other:?}"),
+        }
     }
 }
 
@@ -233,7 +287,15 @@ impl Backend for Fake {
             .push(sock.0);
     }
 
-    fn start(&mut self, key: OpKey, step: Step<'_, FakeSock>) -> Start<FakeSock> {
+    fn adopt(&mut self, sock: RawSocket) -> io::Result<FakeSock> {
+        // 偽のソケットの行だけを作り、OS のソケットはここで閉じる
+        drop(sock);
+        let sock = self.sock();
+        self.calls.push(Call::Adopt(sock.0));
+        Ok(sock)
+    }
+
+    fn start(&mut self, key: OpKey, step: Step<'_, FakeSock>) -> Start {
         self.calls.push(Call::Start(key, kind_of(&step)));
         let reply = self.starts.get_mut(&key).and_then(VecDeque::pop_front);
         match reply {
@@ -277,11 +339,7 @@ impl Backend for Fake {
         self.cancels.pop_front().unwrap_or(Ok(Cancel::Done))
     }
 
-    fn wait(
-        &mut self,
-        timeout: Option<Duration>,
-        events: &mut Vec<Event<FakeSock>>,
-    ) -> io::Result<()> {
+    fn wait(&mut self, timeout: Option<Duration>, events: &mut Vec<Event>) -> io::Result<()> {
         self.calls.push(Call::Wait(timeout));
         if let Some(e) = self.wait_error.take() {
             return Err(e);
