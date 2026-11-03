@@ -94,7 +94,7 @@
 #### D-1: 盗めるのはフレームを持たない仕事だけで、実行待ちの列は欄の lock の下の1本にする
 
 - 決めたこと:
-  - `Scheduler.ready` をやめ、`Run` の欄に `Slot.ready: Mutex<VecDeque<Ready>>` を置く。受け箱 (`Slot.state`) とは別の mutex にする。workers.rs に `pub(crate)` で次を置く。
+  - `Scheduler.ready` をやめ、`Run` の欄に `Slot.ready: Mutex<VecDeque<Ready>>` を置く。受け箱 (`Slot.state`) とは別の mutex にする。workers.rs に次を置く。`Ready` と `Entry` は、公開の `Policy` の引数に出るので (`private_interfaces`)、`pub` にして lib.rs から再公開する。`Entry` の欄と `EntryKind` は `pub(crate)` のままにする (実装の中で決めた)。
     ```rust
     pub(crate) enum Ready { Task(TaskId), Entry(Entry) }
     pub(crate) struct Entry { pub cell: CellRef, pub worker: u32, pub kind: EntryKind, pub word: Word, pub rescued: bool }
