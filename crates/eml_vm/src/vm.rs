@@ -1183,19 +1183,7 @@ fn par<R: Exec>(
     let o = &code.tables.operands[at as usize..];
     // 2つの閉包は `par` が消費する、VM の持つ参照である
     let (f, g) = (task.get(o[0] as Slot), task.get(o[1] as Slot));
-    // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
-    // 触れない
-    let child = unsafe { ctx.heap_mut() }.fork_worker();
-    // 右の子は REPL の束縛を `root_get` で読むので、根にも印を付ける。印は回復まで残るので、まだ印のない根にだけ
-    // 付ける。根の物体を `share` しても `heap_mut` の前提は崩れない (docs/spec/object-model.md の「セッションの根」)
-    for r in unshared_roots(ctx, sched) {
-        unsafe { ctx.heap_mut().share(r, child) }?;
-    }
-    // 値から届く evidence は退いたものだけなので、`g` の `share` は親がその場で書き換える evidence に届かない
-    // (docs/spec/object-model.md の「evidence の3つの物体」)
-    unsafe { ctx.heap_mut().share(g, child) }?;
-    let parent = ctx.evv_word();
-    let fork_evv = fork_evv::<R>(code, ctx, parent)?;
+    let (child, fork_evv) = fork_child::<R>(code, ctx, sched, g)?;
     // 2つの子が1つずつ参照を持つ。左の子は `Ctx` に入れ、右の子はタスクに退避する。入れ替えで出る親の `evv` の参照は
     // join の節点に移す
     let parent_evv = unsafe {
@@ -1226,19 +1214,9 @@ fn par<R: Exec>(
     );
     // 空いている worker があれば右の子をその受け箱に置き、なければこの worker の列に入れる
     // (docs/spec/vm.md の「fork」)
-    let home = match sched.workers.places() {
-        true => sched.run.pop_idle(),
-        false => None,
-    };
+    let home = idle_home::<R>(ctx, sched)?;
     let local = match home {
         Some(k) => {
-            // 根に印を付けるのは worker 0 の fork だけなので、置く子が読む根にはもう印が付いている
-            // (docs/spec/object-model.md の「セッションの根」)
-            if <R::M as Mode>::CHECKED && sched.shared_roots != ctx.roots().len() {
-                return Err(VmFault::Internal(
-                    "a placed child may read an unshared root",
-                ));
-            }
             right.placed = Some(Placed {
                 home: sched.index,
                 at: ret - 1,
@@ -1265,6 +1243,48 @@ fn par<R: Exec>(
         sched.ready.push_back(right);
     }
     safepoint::<R>(code, ctx, task, sched)
+}
+
+/// 右の子の worker ID を出し、子が読む語に印を付ける。`g` の後で子の `evv` を作って返すが、その印は呼び手が付ける。
+fn fork_child<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    sched: &mut Scheduler<R::P>,
+    g: Word,
+) -> Result<(u32, Word), VmFault> {
+    // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
+    // 触れない
+    let child = unsafe { ctx.heap_mut() }.fork_worker();
+    // 右の子は REPL の束縛を `root_get` で読むので、根にも印を付ける。印は回復まで残るので、まだ印のない根にだけ
+    // 付ける。根の物体を `share` しても `heap_mut` の前提は崩れない (docs/spec/object-model.md の「セッションの根」)
+    for r in unshared_roots(ctx, sched) {
+        unsafe { ctx.heap_mut().share(r, child) }?;
+    }
+    // 値から届く evidence は退いたものだけなので、`g` の `share` は親がその場で書き換える evidence に届かない
+    // (docs/spec/object-model.md の「evidence の3つの物体」)
+    unsafe { ctx.heap_mut().share(g, child) }?;
+    let parent = ctx.evv_word();
+    let fork_evv = fork_evv::<R>(code, ctx, parent)?;
+    Ok((child, fork_evv))
+}
+
+/// 右の子を置く、空いている worker の添字。置かないときは `None`。
+fn idle_home<R: Exec>(
+    ctx: &Ctx<R::M>,
+    sched: &mut Scheduler<R::P>,
+) -> Result<Option<usize>, VmFault> {
+    let home = match sched.workers.places() {
+        true => sched.run.pop_idle(),
+        false => None,
+    };
+    // 根に印を付けるのは worker 0 の fork だけなので、置く子が読む根にはもう印が付いている
+    // (docs/spec/object-model.md の「セッションの根」)
+    if home.is_some() && <R::M as Mode>::CHECKED && sched.shared_roots != ctx.roots().len() {
+        return Err(VmFault::Internal(
+            "a placed child may read an unshared root",
+        ));
+    }
+    Ok(home)
 }
 
 /// まだ印のない根。印は回復まで残るので、返した根はこの後の fork とタスクの始まりで印を付け直さない。
@@ -1743,6 +1763,19 @@ fn join_outcomes<R: Exec>(
             "a join raises again something other than an abort",
         ));
     };
+    reraise::<R>(code, ctx, task, (effect, depth, clause), join.ret, join.dst)
+}
+
+/// 中断した子の handler の節を、親の `evv` を mask してから起こし直す。
+fn reraise<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    abort: (u16, u32, Word),
+    ret: Pc,
+    dst: Slot,
+) -> Result<(), VmFault> {
+    let (effect, depth, clause) = abort;
     // 子が見た `depth` 番目の evidence に届くように、親の `evv` を mask する。`reperform$` は今の `evv` の最初の
     // evidence で perform して戻らないので、mask した `evv` は handler の `prompt$` が手放す
     // (docs/spec/core-ir.md の「`par` の子の中断」)
@@ -1759,7 +1792,7 @@ fn join_outcomes<R: Exec>(
             ctx.evv_set(m)?;
         }
     }
-    apply_to_unit::<R>(code, ctx, task, clause, join.ret, join.dst)
+    apply_to_unit::<R>(code, ctx, task, clause, ret, dst)
 }
 
 /// `prim child_abort(ev, c)`。fork evidence `ev` からエフェクトと深さを読み、子の境目まで巻き戻す。`ev` は借りる。
