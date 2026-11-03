@@ -594,7 +594,7 @@ join の完了で起きた誤りと、完了の後の安全点で止まったと
 
 ## `Async` のタスク
 
-`Std.Async` のタスク ([標準ライブラリ](stdlib.md) の「`Std.Async`」) は、`start` のときに置く worker を決め、そこから動かない。worker 1..N-1 を作った run (`Workers` が `Started` か `Peer`) では、`start_raw` と `start_in_raw` が run の表の数 `next_place` に1を足し、足す前の値を作った worker の数 (worker 0 を含む) で割った余りを持ち主にする。数は 1 から始めるので、最初に置くタスクは worker 1 に置き、3つの worker では 1、2、0、1、… の順に回る。タスクを1つしか始めないプログラムでも、ほかの worker で動かすためである。worker を作らない run では、呼んだ worker を持ち主にする。`Async.run` の根のタスクは、いつも呼んだ worker に置く。持ち主を `start` を実行した worker と違う worker にしたタスクの数は `Finished.placed_tasks` に数える (「タスクとスケジュール」)。どの worker がどのタスクを持つかはスケジュールで決まるので、N = 2 以上の run の出力の順と `RunStats` は seed では再現しない。タスクとスコープの意味は `eml_vm` の `cells.rs` の核が持ち、VM の命令 `Async` は核を呼んで、返った仕事を VM の `Task` にする。タスクとスコープの意味は `eml_vm` の `cells.rs` の核が持ち、VM の命令 `Async` は核を呼んで、返った仕事を VM の `Task` にする。
+`Std.Async` のタスク ([標準ライブラリ](stdlib.md) の「`Std.Async`」) は、`start` のときに置く worker を決め、そこから動かない。worker 1..N-1 を作った run (`Workers` が `Started` か `Peer`) では、`start_raw` と `start_in_raw` が run の表の数 `next_place` に1を足し、足す前の値を作った worker の数 (worker 0 を含む) で割った余りを持ち主にする。数は 1 から始めるので、最初に置くタスクは worker 1 に置き、3つの worker では 1、2、0、1、… の順に回る。タスクを1つしか始めないプログラムでも、ほかの worker で動かすためである。worker を作らない run では、呼んだ worker を持ち主にする。`Async.run` の根のタスクは、いつも呼んだ worker に置く。持ち主を `start` を実行した worker と違う worker にしたタスクの数は `Finished.placed_tasks` に数える (「タスクとスケジュール」)。どの worker がどのタスクを持つかはスケジュールで決まるので、N = 2 以上の run の出力の順と `RunStats` は seed では再現しない。タスクとスコープの意味は `eml_vm` の `cells.rs` の核が持ち、VM の命令 `Async` は核を呼んで、返った仕事を VM の `Task` にする。
 
 ### 核と実行系
 

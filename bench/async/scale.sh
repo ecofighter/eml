@@ -94,5 +94,10 @@ def machine():
 
 
 print()
+# 伸びの比の判定は丸めた表でなく生の中央値から計算する (docs/implementation/benchmarks.md の「ネットワークの計測」)
+print("生の中央値 (ms):")
+for name, _ in MEASURES:
+    print(f"  {name}: " + "、".join(f"t({n}) {st.median(times[(name, n)]):.1f}" for n in NS))
+print()
 print(f"{machine()}。中央値は {rounds} 回の生の実時間、S(N) = t(1) / t(N)")
 PY

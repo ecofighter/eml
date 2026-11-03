@@ -1486,51 +1486,61 @@ main () = Async.run (fn () ->
 
 /// 本物の時計で、受けたまま操作を出していないストリームを持ったまま `exit` で run が終わっても、ヒープを落とすときに
 /// ソケットを閉じ、外の相手が EOF を読む (docs/spec/vm.md の「操作の記録」)。相手はテストのスレッドの std のストリーム
-/// で、待ち受けのポートはテストが空いているものを選んで渡す。3 秒は止まりの見張りで、時間は確かめない。
+/// で、待ち受けはポート 0 で行い、プログラムが標準エラーに書いたポートへ繋ぐ。3 秒は止まりの見張りで、時間は確かめない。
 #[test]
 fn an_accepted_stream_left_at_an_exit_is_closed() {
     use std::io::Read;
 
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let src = format!(
-        "\
+    let src = "\
 import Async
 import Net
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
-  let l = Net.listen \"127.0.0.1\" {port}
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  eprintln (show port)
   let (b, l) = Net.accept l
   (exit 3 : Unit)
   Net.close b
   Net.close_listener l)
-"
-    );
+";
+    let host = eml_vm::CaptureHost::new(Default::default());
+    let (out, errors) = (host.output(), host.errors());
+    let host = host.into_ref();
     let (done, ran) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        let control = Arc::new(eml_vm::Control::new(eml_vm::Limits {
+            workers: 2,
+            ..eml_vm::Limits::default()
+        }));
         let config = RunConfig::default()
             .with_clock(eml_vm::Clock::Real)
-            .with_sched(Sched::Normal);
-        let _ = done.send(run_on(&src, 2, config));
+            .with_sched(Sched::Normal)
+            .with_debug_heap(true)
+            .with_control(control);
+        let finished = eml_vm::execute(&eml_test_support::lir(src), &config, host)
+            .unwrap_or_else(|error| panic!("{error}"));
+        let _ = done.send(finished);
     });
-    // 待ち受けができるまで接続を試し直す
+    // プログラムがポートを書くまで待つ
     let start = std::time::Instant::now();
-    let mut peer = loop {
-        match std::net::TcpStream::connect(("127.0.0.1", port)) {
-            Ok(peer) => break peer,
-            Err(e) => {
-                assert!(start.elapsed() < Duration::from_secs(3), "{e}");
-                std::thread::sleep(Duration::from_millis(1));
-            }
+    let port: u16 = loop {
+        if let Ok(port) = errors.contents().trim().parse() {
+            break port;
         }
+        assert!(start.elapsed() < Duration::from_secs(3), "no port written");
+        std::thread::sleep(Duration::from_millis(1));
     };
-    let (out, finished) = ran
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut peer = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500))
+        .expect("the listener is already open");
+    let finished = ran
         .recv_timeout(Duration::from_secs(3))
         .expect("the run did not end");
-    assert_eq!(out, "");
+    assert_eq!(
+        (out.contents(), errors.contents()),
+        (String::new(), format!("{port}\n"))
+    );
     assert_eq!(finished.exit, Some(3));
     peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
     let mut rest = Vec::new();

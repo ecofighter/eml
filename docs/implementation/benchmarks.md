@@ -637,7 +637,7 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 python3 -I bench/net/report.py at-net.jsonl > at-net.md
 ```
 
-`scale.sh` は2回流した。下の表は2回目で、生の中央値も標準エラーに書くようにだけ変えた写しで流した。表の形は元のスクリプトと同じである。伸びの比は表の丸めた値でなく、同じ run の生の中央値から計算した。
+`scale.sh` は2回流した。下の表は2回目である。スクリプトは丸めた表のあとに、生の中央値 (ms、小数第1位) も書く。伸びの比は表の丸めた値でなく、同じ run の生の中央値から計算した。
 
 | 物差し | t(1) ms | t(2) | t(4) | S(2) | S(4) |
 |---|---|---|---|---|---|
@@ -669,7 +669,7 @@ python3 -I bench/net/report.py at-net.jsonl > at-net.md
 
 受けたストリームの縛り方を変えるかは、`conn-self-32` が伸びて `serve-self-32` が伸びないか、`echo-self-fresh` が N = 2 で 10% 以上遅くなるかで決める。`conn-self-32` の w4÷w1 は 1.58 で伸びていないので、前の条件には当たらない。`echo-self-fresh` の w2÷w1 は 2.02 で判定が差なので、後の条件に当たる。そのため、受けたストリームを、最初に使うタスクの worker の driver に縛る ([非同期の設計](../future/async.md) の「ハンドルと worker」)。
 
-縛り方を変えた後に、同じ機械で、3dfd225 と同じコード (違うのは引数の `mut` の書き方とコメントだけ) の release の eml で、`scale.sh` (生の中央値も書く同じ写し) と次の `net.sh` を流し直した。
+縛り方を変えた後に、同じ機械で、3dfd225 と同じコード (違うのは引数の `mut` の書き方とコメントだけ) の release の eml で、`scale.sh` と次の `net.sh` を流し直した。
 
 ```sh
 bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
