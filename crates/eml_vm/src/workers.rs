@@ -13,7 +13,7 @@ use std::thread::{self, Scope, ScopedJoinHandle};
 
 use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop, Word};
 
-use crate::cells::{CellRef, HostBin, Post, Shared, Woken};
+use crate::cells::{CellRef, HostBin, Post, Runnable, Shared, Woken};
 use crate::code::CodeBase;
 use crate::counters::Counters;
 use crate::doorbell::Doorbell;
@@ -76,15 +76,13 @@ impl Ready {
     }
 }
 
-/// worker `victim` の仕事を救済してよいか。今はいつも真である (docs/spec/vm.md の「タスクとスケジュール」)。
-#[expect(dead_code, reason = "no caller asks for a rescue")]
+/// worker `victim` の仕事を救済してよいか。今はいつも真である (docs/spec/vm.md の「救済」)。
 pub(crate) fn rescuable(run: &Run, victim: usize) -> bool {
     let _ = (run, victim);
     true
 }
 
 /// 1回の救済で見る項の数の上限。実行待ちと受け箱のそれぞれに掛かる。
-#[expect(dead_code, reason = "no caller asks for a rescue")]
 pub(crate) const STEAL_SCAN: usize = 1024;
 
 /// ほかの worker から受け箱に届く知らせ (docs/spec/vm.md の「`par` の fork と join」「タスクとスケジュール」)。
@@ -235,8 +233,10 @@ pub(crate) struct Slot {
     /// 列の項のうち `Ready::counted` に当たるものの数。列の操作が列の lock の下で書く。
     pub(crate) ready_entries: AtomicUsize,
     /// 持ち主が待ちの後始末を終えたタスクのセルの数。単調に増える。
-    #[expect(dead_code, reason = "no rescue reads it")]
     pub(crate) settled: AtomicU64,
+    /// 受け箱の知らせのうち、救済で盗めるかもしれないもの (`Place` と、`op` を持たない `Wake`) の数。救済が受け箱から
+    /// 外すときに、欄の lock の下で減らす。
+    pub(crate) inbox_work: AtomicUsize,
 }
 
 /// 1回の run で worker が共有する表。run ごとに作り、run の終わりに捨てる。
@@ -307,6 +307,7 @@ impl Run {
                 ready: Mutex::new(VecDeque::new()),
                 ready_entries: AtomicUsize::new(0),
                 settled: AtomicU64::new(0),
+                inbox_work: AtomicUsize::new(0),
             })
             .collect();
         Run {
@@ -488,6 +489,100 @@ impl Run {
 
     pub(crate) fn ready_is_empty(&self, k: usize) -> bool {
         lock(&self.slots[k].ready).is_empty()
+    }
+
+    /// 救済が worker `victim` の実行待ちの列から盗む。列の lock の下で、先頭から `STEAL_SCAN` 個までの項を2回の走査で
+    /// 見る。1回目は、`take` が仕事を返した項の位置を `budget` 個まで覚え、仕事を順に `out` へ積む。2回目は、覚えた
+    /// 項を列から外し、`ready_entries` を外した分だけ減らす。最後に覚えた項より先には触れない。`take` が誤りを返したら
+    /// 列を変えずにすぐ返す。返すのは外した数と、列が上限より長かったかである (docs/spec/vm.md の「救済」)。
+    pub(crate) fn steal_ready<E>(
+        &self,
+        victim: usize,
+        budget: usize,
+        mut take: impl FnMut(&Ready) -> Result<Option<Runnable>, E>,
+        out: &mut Vec<Runnable>,
+    ) -> Result<(usize, bool), E> {
+        let slot = &self.slots[victim];
+        let mut ready = lock(&slot.ready);
+        let truncated = ready.len() > STEAL_SCAN;
+        let mut chosen = Vec::new();
+        for (i, item) in ready.iter().take(STEAL_SCAN).enumerate() {
+            if chosen.len() == budget {
+                break;
+            }
+            if let Some(run) = take(item)? {
+                chosen.push(i);
+                out.push(run);
+            }
+        }
+        let Some(&last) = chosen.last() else {
+            return Ok((0, truncated));
+        };
+        // 覚えた項までの前の部分だけを外し、残す項を元の順で前に戻す。列の全体を詰め直さないためである
+        let prefix: Vec<Ready> = ready.drain(..=last).collect();
+        let mut counted = 0;
+        let mut marks = chosen.iter().copied().peekable();
+        let mut kept = Vec::with_capacity(prefix.len() - chosen.len());
+        for (i, item) in prefix.into_iter().enumerate() {
+            if marks.next_if_eq(&i).is_some() {
+                if item.counted() {
+                    counted += 1;
+                }
+            } else {
+                kept.push(item);
+            }
+        }
+        for item in kept.into_iter().rev() {
+            ready.push_front(item);
+        }
+        slot.ready_entries.fetch_sub(counted, Ordering::Relaxed);
+        Ok((chosen.len(), truncated))
+    }
+
+    /// 救済が worker `victim` の受け箱から盗む。受け箱の lock の下で、先頭から `STEAL_SCAN` 個までの知らせを
+    /// `steal_ready` と同じ2回の走査で見る。外した数だけ `inbox_work` を減らし、受け箱が空になれば `has_notices` を
+    /// 下ろす。ほかの知らせは順を保って残す (docs/spec/vm.md の「救済」)。
+    pub(crate) fn steal_inbox<E>(
+        &self,
+        victim: usize,
+        budget: usize,
+        mut take: impl FnMut(&Notice) -> Result<Option<Runnable>, E>,
+        out: &mut Vec<Runnable>,
+    ) -> Result<(usize, bool), E> {
+        let slot = &self.slots[victim];
+        let mut state = lock(&slot.state);
+        let notices = &mut state.notices;
+        let truncated = notices.len() > STEAL_SCAN;
+        let mut chosen = Vec::new();
+        for (i, notice) in notices.iter().take(STEAL_SCAN).enumerate() {
+            if chosen.len() == budget {
+                break;
+            }
+            if let Some(run) = take(notice)? {
+                chosen.push(i);
+                out.push(run);
+            }
+        }
+        let Some(&last) = chosen.last() else {
+            return Ok((0, truncated));
+        };
+        let mut marks = chosen.iter().copied().peekable();
+        let mut i = 0;
+        // 外す知らせは `Place` と `Wake` だけで、語は `out` の仕事に移してある
+        notices.retain(|_| {
+            let keep = i > last || marks.next_if_eq(&i).is_none();
+            i += 1;
+            keep
+        });
+        let work = slot.inbox_work.fetch_sub(chosen.len(), Ordering::Relaxed);
+        debug_assert!(
+            work >= chosen.len(),
+            "the inbox has more stealable notices than it counts"
+        );
+        if notices.is_empty() {
+            slot.has_notices.store(false, Ordering::Relaxed);
+        }
+        Ok((chosen.len(), truncated))
     }
 
     /// 空いている worker を1つ取り出す。取り出した worker には、置く側が `Child` を1つ送る。
@@ -794,6 +889,11 @@ fn work<M: Mode, P: Policy>(
     );
     let mut counts = RunCounts::default();
     let (error, peak_stack) = crate::vm::work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts);
+    // `Finish` の後にはいつも集める地点が続き、その最初の区間が `left` を空にする (docs/spec/vm.md の「救済」)
+    debug_assert!(
+        sched.left.is_empty(),
+        "an entry is left unsettled when a worker exits"
+    );
     // 止めるビットと `END` は安全点か空きの待ちでだけ見るので、ここに来た worker は集める地点の途中で抜けておらず、
     // lock の外で行う破棄も終えている。その後に受け箱に届いた知らせを最後に1回だけ見て、走らせるはずの仕事が残って
     // いれば数える (docs/spec/vm.md の「誤り、止めること、終わり」)

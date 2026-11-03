@@ -8,11 +8,13 @@ use std::sync::atomic::Ordering;
 use eml_rt::{Completion, Control, Ctx, IoDriver, Mode, Stop};
 
 use crate::VmFault;
-use crate::cells::{self, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken};
+use crate::cells::{
+    self, CellFault, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken,
+};
 use crate::driver::DriverKind;
 use crate::monitor::Monitor;
 use crate::vm::Task;
-use crate::workers::{Mailer, Notice, Ready, Run, Workers};
+use crate::workers::{EntryKind, Mailer, Notice, Ready, Run, Workers, rescuable};
 
 /// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを、すべての
 /// worker の止める語に立てるので、`eml run` の次の同じシグナルはその場で終わらせ、どの worker も次の安全点で止まる
@@ -77,6 +79,117 @@ fn take_async<M: Mode>(
     }
     cells.route(&mut woken, here, out)?;
     Ok(())
+}
+
+/// 1回の救済の結果。`taken` は盗んだタスクの数で、`truncated` は実行待ちか受け箱が走査の上限より長かったかである。
+pub(crate) struct StealResult {
+    #[cfg_attr(not(test), expect(dead_code, reason = "after_steal reads no result"))]
+    pub victim: usize,
+    pub taken: usize,
+    pub truncated: bool,
+}
+
+/// 救済する worker `here.me` が、worker `victim` の実行待ちと受け箱から盗めるものを古い順に高々 `budget` 個取り、
+/// それぞれのタスクのセルの持ち主を自分にして、走らせる仕事として `out` の末尾に積む。呼ぶ側は登録表の lock を持ち、
+/// 欄の lock を持たない。欄の lock は実行待ち、受け箱の順に1つずつ取り、同時に2つは持たない。語はそのまま移し、RC にも
+/// ヒープにも触れない。helper が誤りを返したらすぐ返し、run はそこで終わる (docs/spec/vm.md の「救済」)。
+pub(crate) fn steal(
+    cells: &mut Registry,
+    run: &Run,
+    here: &Here,
+    victim: usize,
+    budget: usize,
+    out: &mut Vec<Runnable>,
+) -> Result<StealResult, CellFault> {
+    if victim >= run.slots.len() || victim == here.me as usize {
+        return Err(CellFault::Internal("a worker rescues itself or no worker"));
+    }
+    let mut result = StealResult {
+        victim,
+        taken: 0,
+        truncated: false,
+    };
+    if !rescuable(run, victim) {
+        return Ok(result);
+    }
+    let (from, me) = (victim as u32, here.me);
+    // フレームを持たない、救済で受けていない始める仕事と再開する仕事だけを見る。`resume_io` の仕事は記録の持ち主に
+    // 縛られるので盗まない
+    let (taken, truncated) = run.steal_ready(
+        victim,
+        budget,
+        |item| -> Result<_, CellFault> {
+            let Ready::Entry(entry) = item else {
+                return Ok(None);
+            };
+            if entry.rescued {
+                return Ok(None);
+            }
+            let (cell, worker, word) = (entry.cell, entry.worker, entry.word);
+            Ok(match entry.kind {
+                EntryKind::Start => cells
+                    .steal_start(cell, from, me)?
+                    .then_some(Runnable::Start {
+                        cell,
+                        worker,
+                        closure: word,
+                    }),
+                EntryKind::Resume { wake } => {
+                    cells
+                        .steal_resume(cell, from, me)?
+                        .then_some(Runnable::Resume {
+                            cell,
+                            worker,
+                            k: word,
+                            wake,
+                        })
+                }
+                EntryKind::ResumeIo { .. } => None,
+            })
+        },
+        out,
+    )?;
+    result.taken = taken;
+    result.truncated = truncated;
+    if taken == budget {
+        return Ok(result);
+    }
+    let (taken, truncated) = run.steal_inbox(
+        victim,
+        budget - taken,
+        |notice| -> Result<_, CellFault> {
+            match *notice {
+                Notice::Place {
+                    cell,
+                    worker,
+                    closure,
+                } => Ok(cells
+                    .steal_start(cell, from, me)?
+                    .then_some(Runnable::Start {
+                        cell,
+                        worker,
+                        closure,
+                    })),
+                Notice::Wake(Woken::Task {
+                    cell,
+                    wake,
+                    op: None,
+                }) => Ok(cells
+                    .steal_wake(cell, from, me)?
+                    .map(|(k, worker)| Runnable::Resume {
+                        cell,
+                        worker,
+                        k,
+                        wake,
+                    })),
+                _ => Ok(None),
+            }
+        },
+        out,
+    )?;
+    result.taken += taken;
+    result.truncated |= truncated;
+    Ok(result)
 }
 
 /// スケジュールの方針の選び方。`RunConfig::with_sched` で選ぶ。`eml run` と `eml repl` はいつも `Normal` で動く。
@@ -391,6 +504,15 @@ pub struct Scheduler<P: Policy> {
     pub(crate) since_poll: u32,
     /// 集める地点が再開する仕事を積む列。毎回の確保を避けるために使い回し、集める地点の外ではいつも空である。
     pub(crate) runnables: Vec<Runnable>,
+    /// 次の集める地点で行う救済の、元の worker と予算 (盗むタスクの数)。
+    pub(crate) rescue: Option<(usize, usize)>,
+    /// 集める地点が救済で盗んだ仕事を積む列。`runnables` と同じく、集める地点の外ではいつも空である。
+    pub(crate) stolen: Vec<Runnable>,
+    /// 最後の救済の結果。区間の後で `after_steal` が読む。
+    pub(crate) steal_result: Option<StealResult>,
+    /// 待ちに入って `Finish` したエントリの `Task` のセル。次の集める地点の最初の区間で、登録表の `leave` に渡して空にする
+    /// (docs/spec/vm.md の「救済」)。
+    pub(crate) left: Vec<CellRef>,
     /// channel の予約から確定までに要るもの。予約と確定の間には安全点も切り替えもないので、安全点ではいつも空である
     /// (docs/spec/vm.md の「channel」)。
     pub(crate) hold: Option<Hold>,
@@ -479,6 +601,10 @@ impl<P: Policy> Scheduler<P> {
             driver_kind: DriverKind::Virtual,
             since_poll: 0,
             runnables: Vec::new(),
+            rescue: None,
+            stolen: Vec::new(),
+            steal_result: None,
+            left: Vec::new(),
             hold: None,
             woken: Vec::new(),
             watcher: Watcher {
@@ -607,6 +733,8 @@ impl<P: Policy> Scheduler<P> {
     /// 集める地点の、登録表とほかの worker の知らせの側。どの worker も同じ形で集める。受け箱の知らせを取り、host として
     /// 受けた操作を driver に出し、mail を処理し、driver の完了を記録に置き (持ち主が自分なら当て、ほかの worker なら
     /// `Completion` を送る)、満ちたタイマーを外し、見張りの語を書いて、再開する仕事を `runnables` に積む。
+    /// 最初の登録表の区間では、始めに `left` のセルの `entries` を減らし、救済を頼まれていれば受け箱の知らせの後に盗んで、
+    /// 盗んだ仕事を `stolen` に積む (docs/spec/vm.md の「救済」)。
     /// `look` なら、先に driver の `wait` に今を渡して OS を1回見る。driver の `completions` は OS を見ないためである。
     /// 登録表の lock は、何もない集める地点では1回だけ取り、mail の項、完了、満期では今の順を保つ短い区間に分ける。
     /// driver の呼び出しと語の破棄はどれも lock の外で行う (docs/spec/vm.md の「セルと登録表」「時計と driver」)。
@@ -635,6 +763,10 @@ impl<P: Policy> Scheduler<P> {
             runnables,
             since_poll,
             own_deadline,
+            rescue,
+            stolen,
+            steal_result,
+            left,
             ..
         } = self;
         let control = &*watcher.control;
@@ -655,6 +787,8 @@ impl<P: Policy> Scheduler<P> {
         let mut work = IoWork::default();
         let (in_flight, deadline, mut unheard) = {
             let mut cells = shared.lock();
+            // 盗む前に減らす。後にすると、同じ区間で盗めるようになった項を見落とす (docs/spec/vm.md の「救済」)
+            let settled = cells.leave(left)?;
             if !notices.is_empty() {
                 take_async(
                     &mut cells,
@@ -666,9 +800,20 @@ impl<P: Policy> Scheduler<P> {
                     &mut work,
                 )?;
             }
+            if let Some((victim, budget)) = rescue.take() {
+                let before = out.len();
+                let result = steal(&mut cells, run, &here, victim, budget, &mut out)?;
+                stolen.extend(out.drain(before..));
+                *steal_result = Some(result);
+            }
             cells.watch(control);
             *own_deadline = cells.next_deadline(k);
-            (cells.in_flight(k), *own_deadline, cells.unheard)
+            let read = (cells.in_flight(k), *own_deadline, cells.unheard);
+            drop(cells);
+            run.slots[k]
+                .settled
+                .fetch_add(settled as u64, Ordering::Relaxed);
+            read
         };
         // host として受けた操作を driver に出し、取り消しを頼む。driver がその場で終えた操作は短い区間で結果を置く
         cells::run_io(
@@ -737,11 +882,24 @@ impl<P: Policy> Scheduler<P> {
         *runnables = out;
         // この worker で落とした、ほかの worker が host のハンドルを閉じさせる。どの lock も持たずに起こす
         run.ring_hosts(k);
+        // 救済の後始末は lock を持たずに行う
+        if self.steal_result.is_some() {
+            self.after_steal();
+        }
         if unheard != 0 {
-            return Err(unheard_fault(control, unheard));
+            return Err(unheard_fault(&self.watcher.control, unheard));
         }
         Ok(())
     }
+
+    /// worker `victim` の救済の頼みを受ける。今は何もしない (docs/spec/vm.md の「救済」)。
+    #[expect(dead_code, reason = "no notice asks for a rescue")]
+    pub(crate) fn request_rescue(&mut self, victim: usize) {
+        let _ = victim;
+    }
+
+    /// 救済の区間の後に、どの lock も持たずに `steal_result` を読む。今は何もしない。
+    fn after_steal(&mut self) {}
 
     /// ほかの worker から届いた知らせを取り出す。置かれた右の子と仕事はこの worker の番号を振って列の後ろに入れ、置いた子の
     /// 終わりは join の節点に記録して親を起こす。親を失った節点なら、結果に触れずに節点を捨てる。どちらでも
@@ -943,6 +1101,7 @@ mod tests {
     use crate::cells::{CancelPath, MailItem, Registry, Woken};
     use crate::doorbell::Doorbell;
     use crate::driver::RunClock;
+    use crate::workers::{Entry, STEAL_SCAN};
     use eml_rt::Word;
 
     /// 出どころを `kind` にした、テストの driver の `Scheduler`。テストの driver の時計は run の外では進まない。
@@ -1634,5 +1793,492 @@ mod tests {
         for k in 0..2 {
             assert_ne!(control.worker_bits(k) & Control::TERMINATE, 0, "worker {k}");
         }
+    }
+
+    /// worker 0 (元の worker) と worker 1 (救済する worker) の2つの `Scheduler` と、それぞれの `Ctx`。スレッドは作らず、
+    /// 両方の集める地点を手で動かす。
+    struct Pair {
+        control: Arc<Control>,
+        run: Arc<Run>,
+        shared: Arc<Shared>,
+        victim: Scheduler<Sequential>,
+        victim_ctx: Ctx<eml_rt::Checked>,
+        rescuer: Scheduler<Sequential>,
+        rescuer_ctx: Ctx<eml_rt::Checked>,
+    }
+
+    fn pair() -> Pair {
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            ..Limits::default()
+        }));
+        let driver = eml_io::TestDriver::new(None);
+        let run = Arc::new(Run::new(
+            2,
+            None,
+            RunClock::Virtual(driver.clock()),
+            Arc::default(),
+        ));
+        let shared = Arc::new(Shared::new(Registry::new(Vec::new(), 2)));
+        let victim = Scheduler::new(
+            Sequential,
+            Box::new(driver),
+            Arc::clone(&run),
+            Arc::clone(&control),
+            0,
+            usize::MAX,
+            Arc::clone(&shared),
+        );
+        let rescuer = Scheduler::worker(
+            Sequential,
+            Arc::clone(&run),
+            Arc::clone(&control),
+            1,
+            0,
+            usize::MAX,
+            Arc::clone(&shared),
+        );
+        let (host, _) = crate::capture_host(Default::default());
+        let victim_ctx = Ctx::new(Arc::clone(&control), host.clone());
+        let rescuer_ctx = Ctx::for_worker(Arc::clone(&control), host, 1);
+        Pair {
+            control,
+            run,
+            shared,
+            victim,
+            victim_ctx,
+            rescuer,
+            rescuer_ctx,
+        }
+    }
+
+    impl Pair {
+        /// worker 1 が、集める地点と同じく登録表の lock の下で、予算 `budget` で worker 0 から盗む。結果と盗んだ仕事を
+        /// 返す。
+        fn rescue(&mut self, budget: usize) -> (StealResult, Vec<Runnable>) {
+            let post = Mailer::new(&self.run, &self.control);
+            let here = Here {
+                me: 1,
+                host: self.run.io_worker(1) as u32,
+                mail: &self.shared.mail,
+                post: &post,
+            };
+            let mut stolen = Vec::new();
+            let result = steal(
+                &mut self.shared.lock(),
+                &self.run,
+                &here,
+                0,
+                budget,
+                &mut stolen,
+            )
+            .unwrap();
+            assert_eq!(result.victim, 0);
+            (result, stolen)
+        }
+
+        /// worker 0 の実行待ちの列に、論理的な ID 0 の、即値を語にした `Entry` を積む。
+        fn push_entry(&self, cell: CellRef, kind: EntryKind, rescued: bool) {
+            let entry = Entry {
+                cell,
+                worker: 0,
+                kind,
+                word: Word::UNIT,
+                rescued,
+            };
+            self.run.push_ready(0, Ready::Entry(entry));
+        }
+    }
+
+    /// worker `k` の実行待ちの列の項を、列の順に書き出す。
+    fn queue(run: &Run, k: usize) -> Vec<String> {
+        let mut items = Vec::new();
+        run.retain_ready(k, |item| {
+            items.push(match item {
+                Ready::Task(id) => format!("task {id}"),
+                Ready::Entry(e) => format!("{:?} {} {}", e.kind, e.cell.encode(), e.rescued),
+            });
+            true
+        });
+        items
+    }
+
+    /// worker `k` の受け箱の知らせの種類を、届いた順に書き出す。取り出した知らせは同じ順に積み直す。
+    fn inbox(run: &Run, control: &Control, k: usize) -> Vec<String> {
+        let notices = run.take_notices(k);
+        let kinds = notices
+            .iter()
+            .map(|notice| match notice {
+                Notice::Child(_) => "child".to_string(),
+                Notice::Joined { .. } => "joined".to_string(),
+                Notice::Place { cell, .. } => format!("place {}", cell.encode()),
+                Notice::Wake(Woken::Task { cell, op: None, .. }) => {
+                    format!("wake {}", cell.encode())
+                }
+                Notice::Wake(Woken::Task { cell, .. }) => format!("wake io {}", cell.encode()),
+                Notice::Wake(Woken::Token { token, .. }) => format!("token {}", token.0),
+                Notice::Cancel(cell) => format!("cancel {}", cell.encode()),
+                Notice::Submit(op) => format!("submit {}", op.encode()),
+                Notice::CancelIo(op) => format!("cancel_io {}", op.encode()),
+                Notice::Completion(op) => format!("completion {}", op.encode()),
+            })
+            .collect();
+        for notice in notices {
+            run.send(control, k, notice);
+        }
+        kinds
+    }
+
+    /// 動いているタスク `cell` を譲らせ、実行待ちの再開の形 (`Wait::Ready`、継続は仕事が持つ) にする。
+    fn yielded(shared: &Shared, cell: CellRef) {
+        let run = shared.lock().ready(cell, Word::UNIT).unwrap();
+        assert!(matches!(run, Runnable::Resume { cell: c, .. } if c == cell));
+    }
+
+    /// 持ち主 `owner` の、channel の受けで待って品物で起こされたタスク。継続はセルにあり、始めたエントリの `Task` は
+    /// `leave` で後始末を終えてある。返すのはセルと、受け箱に送る起こしである。
+    fn woken_task(shared: &Shared, owner: u32) -> (CellRef, Woken) {
+        let cell = cells::placed_task(shared, owner);
+        shared.lock().started(cell).unwrap();
+        let c = cells::test_chan(shared, 0);
+        cells::park_receiver(shared, c, cell);
+        let mut woken = cells::send_now(shared, c, 4);
+        assert_eq!(woken.len(), 1);
+        assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+        (cell, woken.remove(0))
+    }
+
+    /// 受け箱の `Place` を救済する worker が盗むと、セルの持ち主が替わり、新しい持ち主が始める。元の worker の受け箱は
+    /// 空になる (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn steal_takes_a_place_and_the_new_owner_starts_it() {
+        let mut p = pair();
+        let cell = cells::placed_task(&p.shared, 0);
+        let place = Notice::Place {
+            cell,
+            worker: 0,
+            closure: Word::UNIT,
+        };
+        p.run.send(&p.control, 0, place);
+        p.run.slots[0].inbox_work.store(1, Ordering::Relaxed);
+        let (result, stolen) = p.rescue(usize::MAX);
+        assert_eq!((result.taken, result.truncated), (1, false));
+        assert!(matches!(
+            stolen[..],
+            [Runnable::Start { cell: c, worker: 0, closure }] if c == cell && closure == Word::UNIT
+        ));
+        assert!(!p.run.slots[0].has_notices.load(Ordering::Acquire));
+        assert!(inbox(&p.run, &p.control, 0).is_empty());
+        assert_eq!(cells::owner_of(&p.shared, cell), 1);
+        assert_eq!(p.shared.lock().placed_owner(cell, 0).unwrap(), 1);
+        assert_eq!(p.shared.lock().started(cell).unwrap(), 0);
+        assert_eq!(cells::entries_of(&p.shared, cell), 1);
+        p.victim.gather(&mut p.victim_ctx, 0, false).unwrap();
+        assert!(p.victim.runnables.is_empty() && p.victim.stolen.is_empty());
+    }
+
+    /// 起こしの継続を持つタスクは、そのタスクのエントリの `Task` がみな後始末を終えるまで盗まない。終えた後は、継続を
+    /// セルから取り出して再開する仕事にする (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn steal_takes_a_wake_only_when_no_entry_of_its_task_is_live() {
+        let mut p = pair();
+        let cell = cells::placed_task(&p.shared, 0);
+        p.shared.lock().started(cell).unwrap();
+        let c = cells::test_chan(&p.shared, 0);
+        cells::park_receiver(&p.shared, c, cell);
+        let mut woken = cells::send_now(&p.shared, c, 4);
+        p.run.send(&p.control, 0, Notice::Wake(woken.remove(0)));
+        p.run.slots[0].inbox_work.store(1, Ordering::Relaxed);
+        let (result, stolen) = p.rescue(usize::MAX);
+        assert_eq!(result.taken, 0);
+        assert!(stolen.is_empty());
+        assert_eq!(
+            inbox(&p.run, &p.control, 0),
+            [format!("wake {}", cell.encode())]
+        );
+        assert_eq!(cells::owner_of(&p.shared, cell), 0);
+        assert_eq!(p.shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+        let (result, stolen) = p.rescue(usize::MAX);
+        assert_eq!(result.taken, 1);
+        assert!(matches!(
+            stolen[..],
+            [Runnable::Resume { cell: c, worker: 0, k, wake: cells::WOKE }]
+                if c == cell && k == Word::UNIT
+        ));
+        assert_eq!(cells::owner_of(&p.shared, cell), 1);
+        assert!(inbox(&p.run, &p.control, 0).is_empty());
+        assert_eq!(
+            p.shared.lock().resumed(cell, cells::WOKE, false).unwrap(),
+            cells::WOKE
+        );
+    }
+
+    /// 実行待ちの列の始める仕事と再開する仕事を、列の順に予算の数だけ盗む。VM の `Task` と予算の先の項は残り、順も
+    /// 変わらない (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn steal_takes_start_and_resume_entries_in_queue_order_within_the_budget() {
+        let mut p = pair();
+        let a = cells::placed_task(&p.shared, 0);
+        // 空のスコープへの待ちはすぐ再開する仕事を返し、待ちの登録を持たない
+        let b = cells::task_on(&p.shared, 0, 0, false);
+        let empty = p.shared.lock().open_root(None, None).unwrap();
+        let run = p
+            .shared
+            .lock()
+            .park_drain(empty.encode(), b, Word::UNIT)
+            .unwrap();
+        assert!(matches!(run, Some(Runnable::Resume { cell, .. }) if cell == b));
+        let c = cells::placed_task(&p.shared, 0);
+        p.push_entry(a, EntryKind::Start, false);
+        p.run.push_ready(0, Ready::Task(7));
+        p.push_entry(b, EntryKind::Resume { wake: cells::WOKE }, false);
+        p.push_entry(c, EntryKind::Start, false);
+        assert_eq!(p.run.slots[0].ready_entries.load(Ordering::Relaxed), 3);
+        let (result, stolen) = p.rescue(2);
+        assert_eq!((result.taken, result.truncated), (2, false));
+        assert!(matches!(
+            stolen[..],
+            [Runnable::Start { cell: x, .. }, Runnable::Resume { cell: y, wake: cells::WOKE, .. }]
+                if x == a && y == b
+        ));
+        assert_eq!(
+            queue(&p.run, 0),
+            ["task 7".to_string(), format!("Start {} false", c.encode())]
+        );
+        assert_eq!(p.run.slots[0].ready_entries.load(Ordering::Relaxed), 1);
+        assert_eq!(p.run.count_entries(0), 1);
+        let owners = [a, b, c].map(|cell| cells::owner_of(&p.shared, cell));
+        assert_eq!(owners, [1, 1, 0]);
+    }
+
+    /// 譲った (`ready`) タスクの再開も盗む。新しい持ち主が再開し、取り消しのないタスクには `Woke` を渡す
+    /// (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn steal_takes_a_yielded_resume() {
+        let mut p = pair();
+        let cell = cells::task_on(&p.shared, 0, 0, false);
+        yielded(&p.shared, cell);
+        p.push_entry(cell, EntryKind::Resume { wake: cells::WOKE }, false);
+        let (result, stolen) = p.rescue(usize::MAX);
+        assert_eq!(result.taken, 1);
+        assert!(matches!(stolen[..], [Runnable::Resume { cell: c, .. }] if c == cell));
+        assert_eq!(cells::owner_of(&p.shared, cell), 1);
+        assert!(queue(&p.run, 0).is_empty());
+        assert_eq!(
+            p.shared.lock().resumed(cell, cells::WOKE, false).unwrap(),
+            cells::WOKE
+        );
+        assert_eq!(cells::entries_of(&p.shared, cell), 1);
+    }
+
+    /// 盗まないもの (VM の `Task`、`resume_io` の仕事、救済で受けた項、token の起こし、操作の起こし、ほかの知らせ) は、
+    /// どれも元の構造に順を保って残り、セルの持ち主も変わらない (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn steal_leaves_resume_io_rescued_entries_tokens_and_par_tasks() {
+        let mut p = pair();
+        let io = cells::task_on(&p.shared, 0, 0, false);
+        let rescued = cells::placed_task(&p.shared, 0);
+        let (op_woken, _) = woken_task(&p.shared, 0);
+        p.run.push_ready(0, Ready::Task(3));
+        p.push_entry(
+            io,
+            EntryKind::ResumeIo {
+                wake: cells::WOKE,
+                op: 9,
+            },
+            false,
+        );
+        p.push_entry(rescued, EntryKind::Start, true);
+        let notices = [
+            Notice::Wake(Woken::Token {
+                owner: 0,
+                token: cells::WaitToken(5),
+            }),
+            Notice::Wake(Woken::Task {
+                cell: op_woken,
+                wake: cells::WOKE,
+                op: Some(io),
+            }),
+            Notice::Cancel(io),
+            Notice::Submit(io),
+            Notice::CancelIo(io),
+            Notice::Completion(io),
+        ];
+        for notice in notices {
+            p.run.send(&p.control, 0, notice);
+        }
+        let queued = queue(&p.run, 0);
+        let received = inbox(&p.run, &p.control, 0);
+        assert_eq!(received.len(), 6);
+        assert_eq!(p.run.slots[0].ready_entries.load(Ordering::Relaxed), 0);
+        let (result, stolen) = p.rescue(usize::MAX);
+        assert_eq!((result.taken, result.truncated), (0, false));
+        assert!(stolen.is_empty());
+        assert_eq!(queue(&p.run, 0), queued);
+        assert_eq!(inbox(&p.run, &p.control, 0), received);
+        assert_eq!(p.run.slots[0].ready_entries.load(Ordering::Relaxed), 0);
+        for cell in [io, rescued, op_woken] {
+            assert_eq!(cells::owner_of(&p.shared, cell), 0);
+        }
+    }
+
+    /// 盗んだ分だけ、元の worker の `ready_entries` と `inbox_work` が減る。受け箱が空になれば `has_notices` も下りる
+    /// (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn steal_decrements_inbox_work_and_ready_entries() {
+        let mut p = pair();
+        let placed = cells::placed_task(&p.shared, 0);
+        let (woken, wake) = woken_task(&p.shared, 0);
+        let start = cells::placed_task(&p.shared, 0);
+        let resume = cells::task_on(&p.shared, 0, 0, false);
+        yielded(&p.shared, resume);
+        let place = Notice::Place {
+            cell: placed,
+            worker: 0,
+            closure: Word::UNIT,
+        };
+        p.run.send(&p.control, 0, place);
+        p.run.send(&p.control, 0, Notice::Wake(wake));
+        p.run.slots[0].inbox_work.store(2, Ordering::Relaxed);
+        p.push_entry(start, EntryKind::Start, false);
+        p.push_entry(resume, EntryKind::Resume { wake: cells::WOKE }, false);
+        assert_eq!(p.run.slots[0].ready_entries.load(Ordering::Relaxed), 2);
+        let (result, stolen) = p.rescue(usize::MAX);
+        assert_eq!((result.taken, result.truncated), (4, false));
+        // 実行待ちの項が先で、受け箱の知らせが後である
+        let order: Vec<CellRef> = stolen
+            .iter()
+            .map(|run| match *run {
+                Runnable::Start { cell, .. } | Runnable::Resume { cell, .. } => cell,
+                _ => panic!("a stolen run is neither a start nor a resume"),
+            })
+            .collect();
+        assert_eq!(order, [start, resume, placed, woken]);
+        assert_eq!(p.run.slots[0].ready_entries.load(Ordering::Relaxed), 0);
+        assert_eq!(p.run.count_entries(0), 0);
+        assert_eq!(p.run.slots[0].inbox_work.load(Ordering::Relaxed), 0);
+        assert!(!p.run.slots[0].has_notices.load(Ordering::Acquire));
+        assert!(inbox(&p.run, &p.control, 0).is_empty());
+    }
+
+    /// 実行待ちの列が走査の上限より長いと、上限の先の項には触れずに、走査が切れたことを返す
+    /// (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn steal_reports_truncation_past_the_scan_cap() {
+        let mut p = pair();
+        let io = cells::task_on(&p.shared, 0, 0, false);
+        for _ in 0..=STEAL_SCAN {
+            p.push_entry(
+                io,
+                EntryKind::ResumeIo {
+                    wake: cells::WOKE,
+                    op: 9,
+                },
+                false,
+            );
+        }
+        let start = cells::placed_task(&p.shared, 0);
+        p.push_entry(start, EntryKind::Start, false);
+        let (result, stolen) = p.rescue(usize::MAX);
+        assert_eq!((result.taken, result.truncated), (0, true));
+        assert!(stolen.is_empty());
+        assert_eq!(cells::owner_of(&p.shared, start), 0);
+        assert_eq!(queue(&p.run, 0).len(), STEAL_SCAN + 2);
+        assert_eq!(p.run.slots[0].ready_entries.load(Ordering::Relaxed), 1);
+    }
+
+    /// 盗んだ後に元の worker の mail に残った取り消しは、元の worker の集める地点が今の持ち主の受け箱へ回す。新しい
+    /// 持ち主はそれを自分の知らせとして処理する (docs/spec/vm.md の「救済」「取り消しの届け方」)。
+    #[test]
+    fn a_stale_cancel_in_the_victim_mail_reaches_the_new_owner() {
+        let mut p = pair();
+        let cell = cells::task_on(&p.shared, 0, 0, false);
+        yielded(&p.shared, cell);
+        p.push_entry(cell, EntryKind::Resume { wake: cells::WOKE }, false);
+        let (result, _) = p.rescue(usize::MAX);
+        assert_eq!(result.taken, 1);
+        p.shared.mail.push(MailItem::Cancel { cell, owner: 0 });
+        p.victim.gather(&mut p.victim_ctx, 0, false).unwrap();
+        assert!(!p.shared.mail.pending());
+        assert!(p.victim.runnables.is_empty());
+        assert_eq!(
+            inbox(&p.run, &p.control, 1),
+            [format!("cancel {}", cell.encode())]
+        );
+        p.rescuer.gather(&mut p.rescuer_ctx, 0, false).unwrap();
+        assert!(inbox(&p.run, &p.control, 1).is_empty());
+        assert!(inbox(&p.run, &p.control, 0).is_empty());
+    }
+
+    /// 継続が印のない局所の物体を持つ待ったタスクを worker 1 が盗み、タスクの論理的な ID のまま worker 1 で再開して
+    /// 物体を手放す。印を付けなくても、持ち主の検査と漏れの検査が通る (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn a_rescued_task_runs_under_its_own_id() {
+        let mut p = pair();
+        let x = unsafe { p.victim_ctx.heap_mut() }.fork_worker();
+        let k = cells::with_worker(&mut p.victim_ctx, x, 0, |ctx| ctx.fresh_string("k"));
+        let cell = cells::task_on(&p.shared, 0, x, false);
+        let run = p.shared.lock().ready(cell, k).unwrap();
+        assert!(matches!(run, Runnable::Resume { k: w, .. } if w == k));
+        let entry = Entry {
+            cell,
+            worker: x,
+            kind: EntryKind::Resume { wake: cells::WOKE },
+            word: k,
+            rescued: false,
+        };
+        p.run.push_ready(0, Ready::Entry(entry));
+        let (result, stolen) = p.rescue(usize::MAX);
+        assert_eq!(result.taken, 1);
+        let [Runnable::Resume { worker, k: got, .. }] = stolen[..] else {
+            panic!("the rescue takes one resume");
+        };
+        assert_eq!((worker, got), (x, k));
+        assert_eq!(
+            p.shared.lock().resumed(cell, cells::WOKE, false).unwrap(),
+            cells::WOKE
+        );
+        cells::with_worker(&mut p.rescuer_ctx, x, 0, |ctx| unsafe {
+            ctx.heap_mut().decref(got)
+        })
+        .unwrap();
+        p.rescuer_ctx.reclaim();
+        p.victim_ctx.reclaim();
+        let leaks = p.victim_ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
+        let leaks = p.rescuer_ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
+        p.control
+            .check_owned(&[p.victim_ctx.heap(), p.rescuer_ctx.heap()])
+            .unwrap();
+    }
+
+    /// 集める地点は、待ちに入って終えたエントリの `Task` のセルの `entries` を減らし、0 になったセルの数を欄の
+    /// `settled` に足す (docs/spec/vm.md の「救済」)。
+    #[test]
+    fn a_flush_adds_settled_cells_to_the_slot() {
+        let Worker1 {
+            run,
+            shared,
+            mut sched,
+            mut ctx,
+            ..
+        } = worker_1();
+        let [a, b, c] = [(); 3].map(|()| cells::placed_task(&shared, 1));
+        for cell in [a, b, c] {
+            shared.lock().started(cell).unwrap();
+        }
+        yielded(&shared, c);
+        shared.lock().resumed(c, cells::WOKE, false).unwrap();
+        sched.left = vec![a, b, c];
+        sched.gather(&mut ctx, 0, false).unwrap();
+        assert!(sched.left.is_empty());
+        assert_eq!(run.slots[1].settled.load(Ordering::Relaxed), 2);
+        let entries = [a, b, c].map(|cell| cells::entries_of(&shared, cell));
+        assert_eq!(entries, [0, 0, 1]);
+        sched.left.push(c);
+        sched.gather(&mut ctx, 0, false).unwrap();
+        assert_eq!(run.slots[1].settled.load(Ordering::Relaxed), 3);
+        assert_eq!(run.slots[0].settled.load(Ordering::Relaxed), 0);
     }
 }

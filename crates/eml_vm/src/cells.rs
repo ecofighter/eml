@@ -245,8 +245,12 @@ struct TimerKey {
 }
 
 struct TaskCell {
-    /// タスクを動かす物理的な worker。`start` が1回だけ書く (docs/spec/vm.md の「セルと登録表」)。
+    /// タスクを動かす物理的な worker。`start` と救済が登録表の lock の下で書く (docs/spec/vm.md の「セルと登録表」
+    /// 「救済」)。
     owner: u32,
+    /// このタスクのエントリの `Task` のうち、まだ `Finish` していないものの数。0 の間だけ救済で動かせる
+    /// (docs/spec/vm.md の「救済」)。
+    entries: u32,
     phase: Phase,
     outcome: Option<Outcome>,
     /// 加わったスコープ。作るときに決まり、`members` の一覧と失敗の記録の先になる。
@@ -1663,6 +1667,7 @@ impl Registry {
         unsafe { heap.share(g, worker) }?;
         let cell = self.alloc(CellKind::Task(TaskCell {
             owner,
+            entries: 0,
             phase: Phase::Placed,
             outcome: None,
             scope,
@@ -1716,6 +1721,7 @@ impl Registry {
             return Err(CellFault::Internal("a task starts twice"));
         }
         task.phase = Phase::Running;
+        task.entries += 1;
         task.budget = BUDGET;
         Ok(task.spawner)
     }
@@ -1733,6 +1739,7 @@ impl Registry {
             return Err(CellFault::Internal("a task resumes without waiting"));
         }
         task.phase = Phase::Running;
+        task.entries += 1;
         if !io || task.budget == 0 {
             task.budget = BUDGET;
         }
@@ -1744,6 +1751,92 @@ impl Registry {
             return Ok(CANCELLED);
         }
         Ok(wake)
+    }
+
+    /// 待ちに入って `Finish` したエントリの `Task` の分だけ、セルごとに `entries` を1つ減らし、`cells` を空にする。
+    /// 返すのは 0 になったセルの数である。持ち主が次の集める地点の最初の区間で呼ぶ。0 のセルを減らすのは内部の誤り
+    /// である。もう放したセルは飛ばす。待ちに入ったエントリの `Task` が `Finish` に着く前に、同じタスクの次のエントリの
+    /// `Task` がタスクを終え、ハンドルの `take` がセルを放しうるためである (docs/spec/vm.md の「救済」)。
+    pub(crate) fn leave(&mut self, cells: &mut Vec<CellRef>) -> Result<usize, CellFault> {
+        let mut settled = 0;
+        for cell in cells.drain(..) {
+            if self.live(cell).is_none() {
+                continue;
+            }
+            let task = self.task_mut(cell)?;
+            task.entries = task.entries.checked_sub(1).ok_or(CellFault::Internal(
+                "a task leaves an entry it has not entered",
+            ))?;
+            if task.entries == 0 {
+                settled += 1;
+            }
+        }
+        Ok(settled)
+    }
+
+    /// 救済する worker `me` が、worker `victim` の始める仕事のタスク `cell` を引き取る。まだ始まっておらず持ち主が
+    /// `victim` なら、持ち主を `me` にして真を返す (docs/spec/vm.md の「救済」)。
+    pub(crate) fn steal_start(
+        &mut self,
+        cell: CellRef,
+        victim: u32,
+        me: u32,
+    ) -> Result<bool, CellFault> {
+        let task = self.task_mut(cell)?;
+        if !matches!(task.phase, Phase::Placed) || task.owner != victim {
+            return Ok(false);
+        }
+        debug_assert_eq!(task.entries, 0, "a placed task has a live entry");
+        task.owner = me;
+        Ok(true)
+    }
+
+    /// 救済する worker `me` が、worker `victim` の実行待ちにある再開する仕事のタスク `cell` を引き取る。継続は仕事が
+    /// 持つので、セルは継続も待ちの登録 (実行待ちのほか) も持たない。生きたエントリの `Task` がなく持ち主が `victim`
+    /// なら、持ち主を `me` にして真を返す (docs/spec/vm.md の「救済」)。
+    pub(crate) fn steal_resume(
+        &mut self,
+        cell: CellRef,
+        victim: u32,
+        me: u32,
+    ) -> Result<bool, CellFault> {
+        let task = self.task_mut(cell)?;
+        if !matches!(task.phase, Phase::Parked)
+            || !matches!(task.wait, None | Some(Wait::Ready))
+            || task.k.is_some()
+            || task.entries != 0
+            || task.owner != victim
+        {
+            return Ok(false);
+        }
+        debug_assert_eq!(task.entries, 0, "a task with a live entry is rescued");
+        task.owner = me;
+        Ok(true)
+    }
+
+    /// 救済する worker `me` が、worker `victim` の受け箱の起こしのタスク `cell` を引き取る。起こされて継続をセルに
+    /// 持ち、生きたエントリの `Task` がなく持ち主が `victim` なら、持ち主を `me` にして、取り出した継続とタスクの
+    /// 論理的な ID を返す (docs/spec/vm.md の「救済」)。
+    pub(crate) fn steal_wake(
+        &mut self,
+        cell: CellRef,
+        victim: u32,
+        me: u32,
+    ) -> Result<Option<(Word, u32)>, CellFault> {
+        let task = self.task_mut(cell)?;
+        if !matches!(task.phase, Phase::Parked)
+            || task.wait.is_some()
+            || task.entries != 0
+            || task.owner != victim
+        {
+            return Ok(None);
+        }
+        let Some(k) = task.k.take() else {
+            return Ok(None);
+        };
+        debug_assert_eq!(task.entries, 0, "a task with a live entry is rescued");
+        task.owner = me;
+        Ok(Some((k, task.worker)))
     }
 
     /// 取り消しの地点の規則。`shield` の中では、いちばん内側の `shield` の中で自分が開いたスコープの旗だけを見る
@@ -4958,6 +5051,7 @@ pub(crate) fn end_with_exit(control: &Control, n: i64) -> bool {
 fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
     registry.lock().alloc(CellKind::Task(TaskCell {
         owner: 0,
+        entries: 0,
         phase: Phase::Running,
         outcome: None,
         scope,
@@ -7945,4 +8039,136 @@ fn park_returns_at_once_when_another_worker_changed_the_channel() {
     assert!(out.is_empty());
     assert_eq!(shared.lock().stats.channel_waits, 1);
     assert_eq!(chan_state(&shared, c), (1, 0, 0, 0));
+}
+
+/// タスク `cell` の、まだ `Finish` していないエントリの `Task` の数。
+#[cfg(test)]
+pub(crate) fn entries_of(shared: &Shared, cell: CellRef) -> u32 {
+    shared.lock().task_mut(cell).unwrap().entries
+}
+
+/// タスク `cell` の今の持ち主。
+#[cfg(test)]
+pub(crate) fn owner_of(shared: &Shared, cell: CellRef) -> u32 {
+    shared.lock().task_mut(cell).unwrap().owner
+}
+
+/// `entries` は始めるときと再開するときに1つ増え、待ちに入ったエントリの `Task` の後始末 (`leave`) で1つ減る。
+/// すぐ戻る待ちでは減らない。0 のセルを減らすのは内部の誤りである (docs/spec/vm.md の「救済」)。
+#[test]
+fn an_entry_count_follows_start_park_resume_and_finish() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let cell = placed_task(&shared, 0);
+    shared.lock().started(cell).unwrap();
+    assert_eq!(entries_of(&shared, cell), 1);
+    assert!(
+        shared
+            .lock()
+            .park_time(0, 5, cell, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(entries_of(&shared, cell), 1);
+    assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+    assert_eq!(entries_of(&shared, cell), 0);
+    let mut out = Vec::new();
+    expire(&shared, &mut NoDriver::default(), 0, 5, &mut out).unwrap();
+    assert_eq!(resumed_cells(&out), [(cell, WOKE)]);
+    shared.lock().resumed(cell, WOKE, false).unwrap();
+    assert_eq!(entries_of(&shared, cell), 1);
+    // 譲りはすぐ戻る仕事を返し、前のエントリの `Task` はまだ終わっていない
+    let run = shared.lock().ready(cell, Word::UNIT).unwrap();
+    assert!(matches!(run, Runnable::Resume { cell: c, .. } if c == cell));
+    assert_eq!(entries_of(&shared, cell), 1);
+    let mut left = vec![cell];
+    assert_eq!(shared.lock().leave(&mut left).unwrap(), 1);
+    assert!(left.is_empty());
+    shared.lock().resumed(cell, WOKE, false).unwrap();
+    assert_eq!(entries_of(&shared, cell), 1);
+    assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+    assert!(matches!(
+        shared.lock().leave(&mut vec![cell]),
+        Err(CellFault::Internal(_))
+    ));
+}
+
+/// すぐ再開する待ちでは、前のエントリの `Task` が残る間に次のエントリの `Task` が動き始める。2つとも後始末を終えるまで、
+/// 待ったタスクの起こしは盗めない (docs/spec/vm.md の「救済」)。
+#[test]
+fn two_live_entries_keep_a_parked_task_unstealable() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let cell = placed_task(&shared, 0);
+    shared.lock().started(cell).unwrap();
+    let run = shared.lock().ready(cell, Word::UNIT).unwrap();
+    assert!(matches!(run, Runnable::Resume { .. }));
+    shared.lock().resumed(cell, WOKE, false).unwrap();
+    assert_eq!(entries_of(&shared, cell), 2);
+    let c = test_chan(&shared, 0);
+    park_receiver(&shared, c, cell);
+    assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 0);
+    assert_eq!(entries_of(&shared, cell), 1);
+    assert_eq!(send_now(&shared, c, 4).len(), 1);
+    assert!(shared.lock().steal_wake(cell, 0, 1).unwrap().is_none());
+    assert_eq!(shared.lock().task_mut(cell).unwrap().owner, 0);
+    assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+    assert!(matches!(
+        shared.lock().steal_wake(cell, 0, 1).unwrap(),
+        Some((k, 0)) if k == Word::UNIT
+    ));
+    let mut cells = shared.lock();
+    let task = cells.task_mut(cell).unwrap();
+    assert_eq!(task.owner, 1);
+    assert!(task.k.is_none());
+}
+
+/// 救済の helper は、持ち主が元の worker のセルだけを引き取る。ほかの worker のセルは、引き取れる状態でも持ち主を
+/// 変えない (docs/spec/vm.md の「救済」)。
+#[test]
+fn steal_helpers_refuse_a_cell_owned_by_a_third_worker() {
+    let shared = Shared::new(Registry::new(Vec::new(), 3));
+    let placed = placed_task(&shared, 2);
+    let yielded = owned_task(&shared, 2);
+    shared.lock().ready(yielded, Word::UNIT).unwrap();
+    let woken = owned_task(&shared, 2);
+    let c = test_chan(&shared, 0);
+    park_receiver(&shared, c, woken);
+    assert_eq!(send_now(&shared, c, 4).len(), 1);
+    let mut cells = shared.lock();
+    assert!(!cells.steal_start(placed, 0, 1).unwrap());
+    assert!(!cells.steal_resume(yielded, 0, 1).unwrap());
+    assert!(cells.steal_wake(woken, 0, 1).unwrap().is_none());
+    for cell in [placed, yielded, woken] {
+        assert_eq!(cells.task_mut(cell).unwrap().owner, 2);
+    }
+    assert!(cells.task_mut(woken).unwrap().k.is_some());
+    // 元の worker が持ち主なら、同じ3つを引き取る
+    assert!(cells.steal_start(placed, 2, 1).unwrap());
+    assert!(cells.steal_resume(yielded, 2, 1).unwrap());
+    assert!(cells.steal_wake(woken, 2, 1).unwrap().is_some());
+    for cell in [placed, yielded, woken] {
+        assert_eq!(cells.task_mut(cell).unwrap().owner, 1);
+    }
+}
+
+/// 後始末の前に放したタスクのセルは、`leave` が飛ばして数えない。生きているが種類の違うセルは内部の誤りである
+/// (docs/spec/vm.md の「救済」)。
+#[test]
+fn leave_skips_a_released_cell() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let cell = placed_task(&shared, 0);
+    shared.lock().started(cell).unwrap();
+    shared.lock().release(cell.index);
+    // 放した添字は次のセル (ここでは次のタスクの根のスコープ) が使うが、古い番号は generation で見分ける
+    let next = placed_task(&shared, 0);
+    assert!(shared.lock().scope_cell(cell.encode()).is_none());
+    shared.lock().started(next).unwrap();
+    let mut left = vec![cell];
+    assert_eq!(shared.lock().leave(&mut left).unwrap(), 0);
+    assert!(left.is_empty());
+    assert_eq!(entries_of(&shared, next), 1);
+    let scope = shared.lock().open_root(None, None).unwrap();
+    assert!(matches!(
+        shared.lock().leave(&mut vec![scope]),
+        Err(CellFault::Internal(_))
+    ));
 }

@@ -1565,6 +1565,10 @@ fn switch_away<R: Exec>(
         }
         // 眠る前に、ほかのスレッドから受けた解放が溜まっていれば取り込む (docs/spec/vm.md の「時計と driver」)
         ctx.reclaim_if_due();
+        debug_assert!(
+            sched.left.is_empty(),
+            "an entry is left unsettled before a worker sleeps"
+        );
         sched.idle_wait()?;
         // `PREEMPT` と `NOTICE` は捨てる。`NOTICE` の知らせは続く集める地点が集める。直前の `wait` が OS を見たので、
         // 集める地点は見ない
@@ -1672,6 +1676,14 @@ fn collect<R: Exec>(
             schedule(sched, run)?;
         }
         sched.runnables = out;
+    }
+    // 救済で盗んだ仕事は、lock をすべて放した後に自分の仕事の後ろに積む (docs/spec/vm.md の「救済」)
+    if !sched.stolen.is_empty() {
+        let mut stolen = std::mem::take(&mut sched.stolen);
+        for run in stolen.drain(..) {
+            enqueue(sched, run, true)?;
+        }
+        sched.stolen = stolen;
     }
     gathered
 }
@@ -2914,6 +2926,16 @@ fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), VmFault> {
 /// 始める仕事と再開する仕事はフレームを持たない `Entry` のまま積み、持ち主が `pick` で取ったときにエントリの `Task` に
 /// する。token は待っている `Task` の番号である。
 fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), VmFault> {
+    enqueue(sched, run, false)
+}
+
+/// `schedule` の本体。`rescued` は救済で受けた仕事の印で、その項を `pick` するまでもう一度盗まない
+/// (docs/spec/vm.md の「救済」)。
+fn enqueue<P: Policy>(
+    sched: &mut Scheduler<P>,
+    run: Runnable,
+    rescued: bool,
+) -> Result<(), VmFault> {
     let entry = match run {
         Runnable::Start {
             cell,
@@ -2924,7 +2946,7 @@ fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), Vm
             worker,
             kind: EntryKind::Start,
             word: closure,
-            rescued: false,
+            rescued,
         },
         Runnable::Resume {
             cell,
@@ -2936,7 +2958,7 @@ fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), Vm
             worker,
             kind: EntryKind::Resume { wake },
             word: k,
-            rescued: false,
+            rescued,
         },
         Runnable::ResumeIo {
             cell,
@@ -2949,7 +2971,7 @@ fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), Vm
             worker,
             kind: EntryKind::ResumeIo { wake, op },
             word: k,
-            rescued: false,
+            rescued,
         },
         Runnable::Token(WaitToken(token)) => {
             let id = token as TaskId;
@@ -3107,6 +3129,10 @@ fn entry_finish<R: Exec>(
         for run in out {
             schedule(sched, run)?;
         }
+    } else {
+        // 待ちに入ったタスクのフレームはここで終わった。持ち主の次の集める地点が `entries` を減らす
+        // (docs/spec/vm.md の「救済」)
+        sched.left.push(cell);
     }
     switch_away::<R>(code, ctx, task, sched, None)
 }
