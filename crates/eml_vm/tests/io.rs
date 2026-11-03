@@ -1285,6 +1285,73 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }
 
+/// 本物の時計で、worker 0 の `main` が接続して書き、自分で閉じたストリームを、worker 1 に置いたサーバーが EOF まで
+/// 読む。閉じた後の worker 0 は driver に出した操作のない計算のタスクだけを走らせ、driver で眠らないので、閉じるのは
+/// 集める地点である (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn a_stream_closed_by_its_busy_host_reaches_its_peer_on_worker_1() {
+    let src = "\
+import Async (Async)
+import Async
+import Atomic
+import Bytes
+import Net
+echo : Net.TcpStream -> Int -> <IO, Panic, Async> Int
+echo s n =
+  let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else
+    let (_, s) = Net.write_bytes buf s
+    echo s (n + k)
+read_back : Bytes -> Net.TcpStream -> <IO, Panic, Async> (Bytes, Net.TcpStream)
+read_back buf s =
+  if Bytes.length buf >= 3 then (buf, s)
+  else
+    let (buf, s) = Net.read_chunk buf s
+    read_back buf s
+fib : Int -> <Panic> Int
+fib k = if k < 2 then k else fib (k - 1) + fib (k - 2)
+spin : Atomic.Counter -> <IO, Panic> Unit
+spin flag =
+  if Atomic.load flag != 0 then ()
+  else
+    let _ = fib 15
+    spin flag
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let flag = Atomic.new 0
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let server = Async.start (fn () ->
+    let (s, l) = Net.accept l
+    Net.close_listener l
+    echo s 0)
+  let busy = Async.start (fn () -> spin flag)
+  let c = Net.write \"abc\" (Net.connect \"127.0.0.1\" port)
+  let (_, c) = read_back (Bytes.empty ()) c
+  Net.close c
+  let n = Async.await server
+  Atomic.store 1 flag
+  Async.await busy
+  println (show n))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let config = RunConfig::default()
+            .with_clock(eml_vm::Clock::Real)
+            .with_sched(Sched::Normal);
+        let _ = done.send(run_on(src, 2, config));
+    });
+    let (out, finished) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the peer did not read to the end");
+    assert_eq!(out, "3\n");
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
 /// 本物の時計で、worker 1 に置いたクライアントが自分の driver で接続し、worker 0 の `main` が受けて返したバイトを読む。
 /// 各 worker が自分の driver を持つので、クライアントの接続と読み書きは worker 1 が、受けと読み書きは worker 0 が driver に
 /// 出す (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りで、時間は確かめない。

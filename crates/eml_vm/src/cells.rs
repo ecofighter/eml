@@ -819,16 +819,20 @@ impl Drop for NetStream {
     }
 }
 
-/// host の driver の bin と、host でない worker がそこへ積んだ印。driver が bin を空にするのは自分の待ちと集める地点
-/// だけなので、ほかの worker で落としたハンドルは、host を起こさなければ閉じないまま残りうる。そこで `Drop` は葉の
-/// lock で bin に積み、host のスレッドでなければ印を立てるだけにする。ほかの worker が集める地点で印を見て host を
-/// 起こし、host は集める地点で印を下ろして bin を空にする。host が自分で落としたときは印を立てないので、worker が
-/// 1つの run の振る舞いは変わらない (docs/spec/vm.md の「時計と driver」)。
+/// host の driver の bin と、そこへ積んだ印。driver が bin を空にするのは自分の待ちと集める地点だけなので、ほかの
+/// worker で落としたハンドルは、host を起こさなければ閉じないまま残りうる。そこで `Drop` は葉の lock で bin に積み、
+/// host のスレッドでなければ印を立てるだけにする。ほかの worker が集める地点で印を見て host を起こし、host は集める
+/// 地点で印を下ろして bin を空にする。host が自分で落としたハンドルも、driver に操作を出していない host の集める地点は
+/// 閉じないので、ほかの worker の driver で EOF を待つ相手が止まったままになる。そのため `close_own` の bin では、host
+/// も印を立てる。立てるのは各 worker が自分の driver を持つ run だけなので、worker が1つの run の振る舞いは変わらない
+/// (docs/spec/vm.md の「時計と driver」)。
 pub(crate) struct HostBin {
     pub(crate) bin: Arc<HandleBin>,
     /// host の worker のスレッド。
     host: ThreadId,
-    /// `CLOSE_NONE`、`CLOSE_DROPPED`、`CLOSE_RUNG` のどれか。
+    /// host が自分で落としたときも印を立てる。
+    close_own: bool,
+    /// `CLOSE_NONE`、`CLOSE_DROPPED`、`CLOSE_RUNG`、`CLOSE_OWN` のどれか。
     state: AtomicU8,
 }
 
@@ -838,13 +842,16 @@ const CLOSE_NONE: u8 = 0;
 const CLOSE_DROPPED: u8 = 1;
 /// ほかの worker が host を起こし、host がまだ印を下ろしていない。起こしを重ねないためにある。
 const CLOSE_RUNG: u8 = 2;
+/// host が自分で積んだ。host は動いているので、誰も起こさない。
+const CLOSE_OWN: u8 = 3;
 
 impl HostBin {
     /// 今のスレッドを host とする。host の worker が run の始めか最初の受け付けで作る。
-    pub(crate) fn new(bin: Arc<HandleBin>) -> HostBin {
+    pub(crate) fn new(bin: Arc<HandleBin>, close_own: bool) -> HostBin {
         HostBin {
             bin,
             host: std::thread::current().id(),
+            close_own,
             state: AtomicU8::new(CLOSE_NONE),
         }
     }
@@ -858,6 +865,14 @@ impl HostBin {
         // 積んだ後に立てるので、印を見て起こされた host は、bin を空にするときにこのハンドルを見る
         if std::thread::current().id() != self.host {
             self.state.store(CLOSE_DROPPED, Ordering::Release);
+        } else if self.close_own {
+            // ほかの worker の印は残す。host はどの印でも bin を空にする
+            let _ = self.state.compare_exchange(
+                CLOSE_NONE,
+                CLOSE_OWN,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
         }
     }
 
@@ -875,7 +890,7 @@ impl HostBin {
                 .is_ok()
     }
 
-    /// host が印を下ろし、ほかの worker が積んでいたら真を返す。真なら host は driver に bin を空にさせる。
+    /// host が印を下ろし、印があれば真を返す。真なら host は driver に bin を空にさせる。
     pub(crate) fn take_dropped(&self) -> bool {
         self.state.load(Ordering::Relaxed) != CLOSE_NONE
             && self.state.swap(CLOSE_NONE, Ordering::Acquire) != CLOSE_NONE
@@ -885,7 +900,7 @@ impl HostBin {
 #[cfg(test)]
 impl Default for HostBin {
     fn default() -> HostBin {
-        HostBin::new(Arc::default())
+        HostBin::new(Arc::default(), false)
     }
 }
 
@@ -1163,7 +1178,7 @@ impl Registry {
     fn host_bin(&mut self, k: u32, raw: Arc<HandleBin>) -> Result<Arc<HostBin>, CellFault> {
         let bin = &mut self.bins[k as usize];
         if bin.is_none() && cfg!(test) {
-            *bin = Some(Arc::new(HostBin::new(raw)));
+            *bin = Some(Arc::new(HostBin::new(raw, false)));
         }
         bin.clone()
             .ok_or(CellFault::Internal("a host has no bin for its handles"))
@@ -7005,7 +7020,7 @@ fn a_stream_dropped_under_the_registry_lock_does_not_deadlock() {
     let shared = Shared::new(Registry::new(Vec::new(), 1));
     let mut ctx = test_ctx();
     // テストのスレッドを host でない worker とするため、host のスレッドが別にある bin を作る
-    let bin = std::thread::spawn(|| Arc::new(HostBin::new(Arc::default())))
+    let bin = std::thread::spawn(|| Arc::new(HostBin::new(Arc::default(), false)))
         .join()
         .unwrap();
     let stream = stream_on(&mut ctx, 7, Arc::clone(&bin));

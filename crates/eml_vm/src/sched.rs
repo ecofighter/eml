@@ -561,7 +561,7 @@ impl<P: Policy> Scheduler<P> {
     fn publish_driver(&mut self) {
         if let Some(driver) = &self.driver {
             let _ = self.run.slots[self.index].waker.set(driver.waker());
-            let bin = Arc::new(HostBin::new(driver.bin()));
+            let bin = Arc::new(HostBin::new(driver.bin(), self.run.hosts_apart()));
             let _ = self.run.slots[self.index].bin.set(Arc::clone(&bin));
             self.cells.lock().set_bin(self.index, bin);
         }
@@ -713,8 +713,8 @@ impl<P: Policy> Scheduler<P> {
             depth_offset,
             &mut out,
         )?;
-        // ほかの worker が落としたハンドルは、driver が bin を空にするまで閉じない。完了がなくても driver に完了を
-        // 問わせて空にさせる (docs/spec/vm.md の「時計と driver」)
+        // bin に印のあるハンドルは、driver が bin を空にするまで閉じない。完了がなくても driver に完了を問わせて空に
+        // させる (docs/spec/vm.md の「時計と driver」)
         let closing = run.slots[k].bin.get().is_some_and(|bin| bin.take_dropped());
         // mail の処理は driver の数を変えない
         if in_flight > 0 || closing {
@@ -1267,7 +1267,7 @@ mod tests {
         else {
             panic!("the virtual accept ends at submit");
         };
-        let bin = Arc::new(HostBin::new(driver.bin()));
+        let bin = Arc::new(HostBin::new(driver.bin(), false));
         let run = Arc::new(Run::new(
             2,
             None,
@@ -1520,7 +1520,7 @@ mod tests {
         assert!(!f.bin.take_ring());
         raw.dropped.lock().unwrap().clear();
         // テストのスレッドを worker 1 とするため、host のスレッドが別にある bin を作り、run の始めと同じく欄に置く
-        let bin = std::thread::spawn(move || Arc::new(HostBin::new(raw)))
+        let bin = std::thread::spawn(move || Arc::new(HostBin::new(raw, false)))
             .join()
             .unwrap();
         let _ = f.run.slots[0].bin.set(Arc::clone(&bin));

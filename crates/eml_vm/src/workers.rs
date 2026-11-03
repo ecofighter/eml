@@ -276,6 +276,11 @@ impl Run {
         }
     }
 
+    /// worker が2つ以上あり、各 worker が自分の driver の host になる run か。
+    pub(crate) fn hosts_apart(&self) -> bool {
+        self.slots.len() > 1 && matches!(self.clock, RunClock::Real { .. })
+    }
+
     /// 本物の時計の run で、worker `k` (`k` ≥ 1) が最初に要るときに作る driver。run の時間の基準から作るので、どの
     /// worker の driver も同じ時刻を読む。ほかの run では作らず `None` である。渡された driver の run (`Injected`) は
     /// worker を作らないので、基準から driver を作る道を通らない (docs/spec/vm.md の「時計と driver」)。
