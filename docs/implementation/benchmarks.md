@@ -627,7 +627,11 @@ busy-self を除く全件を流したセッション (各件 11 回)。`base` �
 
 ### worker の数と実時間
 
-089dcc9 の release の eml で、worker の数 N = 1、2、4 の実時間を測った。機械は KVM の上の Linux で、`lscpu` は Intel(R) Xeon(R) Processor @ 2.80GHz、CPU(s) 4、Thread(s) per core 1、Core(s) per socket 4、Socket(s) 1 である。メモリは 16477348 kB、kernel は 6.18.44-fc-v230 である。ほかに負荷のない状態で、次の順に流した。
+worker の数 N = 1、2、4 の実時間を、同じ機械で2つのコミットの release の eml で測った。089dcc9 は受けたストリームを受けた待ち受けの host に縛り、3dfd225 は最初に使うタスクの worker の driver に縛る。機械は KVM の上の Linux で、`lscpu` は Intel(R) Xeon(R) Processor @ 2.80GHz、CPU(s) 4、Thread(s) per core 1、Core(s) per socket 4、Socket(s) 1 である。メモリは 16477348 kB、kernel は 6.18.44-fc-v230 である。どちらもほかに負荷のない状態で流した。
+
+#### 089dcc9
+
+次の順に流した。
 
 ```sh
 cargo build --release -p eml_cli
@@ -662,14 +666,16 @@ python3 -I bench/net/report.py at-net.jsonl > at-net.md
 | busy-self | 2000 往復 | 40039.43 | 30044.59 | 100.70 | 0.75 | 0.00 | 差 | 差 |
 | serve-self-32 | 20480 往復 | 18.05 | 23.96 | 31.27 | 1.33 | 1.73 | 差なし | 差 |
 
-- `echo-self-fresh`: N = 2 と 4 で1往復が約2倍かかる。サーバーのタスクは worker 1 に置かれたが、この木では受けたストリームが待ち受けの host の worker 0 に縛られたので、サーバーの読み書きはどれも worker 0 へ転送になった
+- `echo-self-fresh`: N = 2 と 4 で1往復が約2倍かかる。サーバーのタスクは worker 1 に置かれたが、089dcc9 では受けたストリームが待ち受けの host の worker 0 に縛られたので、サーバーの読み書きはどれも worker 0 へ転送になった
 - `conn-self-32`: N = 2 で 1.67 倍、N = 4 で 1.58 倍遅くなり、worker を増やしても縮まない
 - `busy-self`: N = 2 では計算のタスクが `main` と同じ worker 0 に置かれ、往復は横取りの刻みを待つので、0.75 倍にしか縮まない。N = 4 では計算のタスクがほかの worker に置かれ、1往復が 100.70 µs になる
-- `serve-self-32`: N = 2 では差なしだが、N = 4 では 1.73 倍遅くなる。この木では受けたストリームがどれも待ち受けの host の worker 0 に縛られ、ほかの worker のサーバーのタスクの読み書きは worker 0 へ転送になった
+- `serve-self-32`: N = 2 では差なしだが、N = 4 では 1.73 倍遅くなる。089dcc9 では受けたストリームがどれも待ち受けの host の worker 0 に縛られ、ほかの worker のサーバーのタスクの読み書きは worker 0 へ転送になった
 
-受けたストリームの縛り方を変えるかは、`conn-self-32` が伸びて `serve-self-32` が伸びないか、`echo-self-fresh` が N = 2 で 10% 以上遅くなるかで決める。`conn-self-32` の w4÷w1 は 1.58 で伸びていないので、前の条件には当たらない。`echo-self-fresh` の w2÷w1 は 2.02 で判定が差なので、後の条件に当たる。そのため、受けたストリームを、最初に使うタスクの worker の driver に縛る ([非同期の設計](../future/async.md) の「ハンドルと worker」)。
+受けたストリームの縛り方を変えるかは、`conn-self-32` が伸びて `serve-self-32` が伸びないか、`echo-self-fresh` が N = 2 で 10% 以上遅くなるかで決めた。`conn-self-32` の w4÷w1 は 1.58 で伸びていないので、1つ目の条件には当たらない。`echo-self-fresh` の w2÷w1 は 2.02 で判定が差なので、2つ目の条件に当たる。そのため、受けたストリームを、最初に使うタスクの worker の driver に縛ることにした ([非同期の設計](../future/async.md) の「ハンドルと worker」)。
 
-縛り方を変えた後に、同じ機械で、3dfd225 と同じコード (違うのは引数の `mut` の書き方とコメントだけ) の release の eml で、`scale.sh` と次の `net.sh` を流し直した。
+#### 3dfd225
+
+3dfd225 と同じコード (違うのは引数の `mut` の書き方とコメントだけ) の release の eml で、`scale.sh` と次の `net.sh` を流した。
 
 ```sh
 bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
@@ -683,7 +689,7 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 | 床 (別プロセス) | 798 | 460 | 277 | 1.73 | 2.88 |
 | chan_pingpong | 317 | 733 | 4057 | 0.43 | 0.08 |
 
-この run の床の伸びは、生の中央値から N = 2 で 1.734、N = 4 で 2.885 で、前の run より小さいが、比べる前提 (1.6 以上と 2.4 以上) は満たす。`spread` の伸びは N = 2 で 1.742、N = 4 で 2.830 で、0.80 × S_hw の 1.387 と 2.308 を超えるので、基準を満たす。`spread_par` は N = 2 で 1.85 倍、N = 4 で 1.97 倍で、前の run と同じく N = 4 で伸びない。`chan_pingpong` の t(4) は t(1) の 12.8 倍である。
+この run の床の伸びは、生の中央値から N = 2 で 1.734、N = 4 で 2.885 で、089dcc9 の run より小さいが、比べる前提 (1.6 以上と 2.4 以上) は満たす。`spread` の伸びは N = 2 で 1.742、N = 4 で 2.830 で、0.80 × S_hw の 1.387 と 2.308 を超えるので、基準を満たす。`spread_par` は N = 2 で 1.85 倍、N = 4 で 1.97 倍で、089dcc9 の run と同じく N = 4 で伸びない。`chan_pingpong` の t(4) は t(1) の 12.8 倍である。
 
 | 件 | 単位 | w1 | w2 | w4 | w2÷w1 | w4÷w1 | 判定 w2 | 判定 w4 |
 |---|---|---|---|---|---|---|---|---|
@@ -691,8 +697,8 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 | serve-self-32 | 20480 往復 | 16.56 | 19.93 | 18.91 | 1.20 | 1.14 | 差なし | 差なし |
 
 - `base` はどの N でも worker 1..N-1 を作らないので、N = 4 の `base` にも worker のスレッドを起こす費用は入らない。`base` の実時間の中央値は、N = 1、2、4 で 28.8、30.3、30.2 ms だった
-- `echo-self-fresh`: N = 2 の1往復は、w1 の 2.02 倍から 1.23 倍になった。worker 1 のサーバーのタスクは、受けたストリームを自分の driver で読み書きするので、転送はなくなった。残る差は、worker 0 のクライアントと worker 1 のサーバーの往復がスレッドをまたぐことから来る。この run の自発の切り替えは、run あたり w1 で 33188 回、w2 で 44261 回だった。前の表の run の w2 は 87170 回で、ほぼ半分になった
-- `serve-self-32`: N = 2 で 1.20 倍、N = 4 で 1.14 倍で、どちらも差なしになった。前の表の N = 4 の 1.73 倍は、読み書きの転送が worker 0 に集まったためだった
+- `echo-self-fresh`: N = 2 の1往復は、w1 の 2.02 倍から 1.23 倍になった。worker 1 のサーバーのタスクは、受けたストリームを自分の driver で読み書きするので、転送はなくなった。残る差は、worker 0 のクライアントと worker 1 のサーバーの往復がスレッドをまたぐことから来る。この run の自発の切り替えは、run あたり w1 で 33188 回、w2 で 44261 回だった。089dcc9 の run の w2 は 87170 回で、ほぼ半分になった
+- `serve-self-32`: N = 2 で 1.20 倍、N = 4 で 1.14 倍で、どちらも差なしになった。089dcc9 の N = 4 の 1.73 倍は、読み書きの転送が worker 0 に集まったためだった
 
 `chan_pingpong` の t(4) は t(1) より遅い。worker をまたぐ容量 0 の channel の往復は、1つの worker の上の往復より費用が大きい。これは [ロードマップ](../future/roadmap.md) の「マルチコア対応」の「ロックフリーの受け箱と channel」を見直す材料である。
 
