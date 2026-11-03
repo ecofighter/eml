@@ -34,7 +34,8 @@ const _: () = {
 /// 語を運ぶのは `Child`、`Joined`、`Place` だけで、ほかの `Async` のタスクの知らせはセルの番号しか持たない。driver の
 /// 操作は記録が持ち、知らせは運ばない (docs/spec/vm.md の「操作の記録」)。
 pub(crate) enum Notice {
-    /// fork がこの worker に置いた右の子。受けた worker が自分のタスクの番号を振り、走れるタスクの列の後ろに入れる。
+    /// fork がこの worker に置いた右の子か、`fork_job` が置いた `compute` の仕事。受けた worker が自分のタスクの番号を
+    /// 振り、走れるタスクの列の後ろに入れる。
     Child(Task),
     /// この worker が置いた右の子の終わり。`join` はこの worker の join の番号で、`outcome` の語は子が残した参照である。
     Joined { join: JoinId, outcome: Outcome },
@@ -108,19 +109,20 @@ impl Post for Mailer<'_> {
 /// いつも `Peer` を持つ (docs/spec/vm.md の「タスクとスケジュール」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Workers {
-    /// 起動の条件を満たしている。最初の `par` の fork か、タスクを置く最初の `start` で作る。worker 0 だけが持つ。
+    /// 起動の条件を満たしている。最初の `par` の fork か、タスクを置く最初の `start` か、最初の `fork_job` で作る。worker 0 だけが持つ。
     Wanted,
     /// 作った。数は worker 0 を除く。
     Started(usize),
     /// 作らない。条件を満たさないか、1つも作れなかった。
     Denied,
-    /// worker 1..N-1 の `Scheduler`。worker を作る判断はせず、右の子とタスクを置くことだけをする。作り直しの印
-    /// (`Wanted`) を持たないので、worker を作るために戻る先のない実行の繰り返しが、fork や `start` から抜けることはない。
+    /// worker 1..N-1 の `Scheduler`。worker を作る判断はせず、右の子とタスクと仕事を置くことだけをする。作り直しの印
+    /// (`Wanted`) を持たないので、worker を作るために戻る先のない実行の繰り返しが、fork や `start` や `fork_job` から
+    /// 抜けることはない。
     Peer,
 }
 
 impl Workers {
-    /// 右の子と `Async` のタスクをほかの worker に置いてよいか。
+    /// 右の子と `Async` のタスクと `compute` の仕事をほかの worker に置いてよいか。
     pub(crate) fn places(self) -> bool {
         matches!(self, Workers::Started(_) | Workers::Peer)
     }
@@ -183,6 +185,8 @@ pub(crate) struct Run {
     pub(crate) in_flight: AtomicUsize,
     /// ほかの worker に置いた右の子の数。どの worker の fork も足す。
     pub(crate) placed: AtomicU64,
+    /// ほかの worker に置いた `compute` の仕事の数。どの worker の `fork_job` も足す。
+    pub(crate) placed_jobs: AtomicU64,
     /// 次に置く `Async` のタスクの持ち主を決める数。1 から始め、`start` のたびに1つ進めて、作った worker の数で割った
     /// 余りを持ち主にする (docs/spec/vm.md の「`Async` のタスク」)。
     next_place: AtomicUsize,
@@ -243,6 +247,7 @@ impl Run {
             running: AtomicUsize::new(1),
             in_flight: AtomicUsize::new(0),
             placed: AtomicU64::new(0),
+            placed_jobs: AtomicU64::new(0),
             next_place: AtomicUsize::new(1),
             live: AtomicUsize::new(1),
             idle: Mutex::new(Vec::new()),
@@ -647,7 +652,7 @@ struct Done {
     kept_pending: bool,
 }
 
-/// worker `k` の実行。眠った形で始め、置かれた右の子を自分の `Scheduler` で動かす。抜けるのは止めるビットか `END` を
+/// worker `k` の実行。眠った形で始め、置かれた右の子と仕事を自分の `Scheduler` で動かす。抜けるのは止めるビットか `END` を
 /// 見たときと、致命的な誤りのときである。止めるビットと `END` では何も書かずに、ほかの worker を起こしてから抜ける。
 /// 眠っている worker に止める語を読ませ、自分の確保で立てた `MEMORY` も worker 0 に届けるためである。致命的な誤りは
 /// run の `fatal` に書き、`END` をすべての語に立ててから同じく起こす (docs/spec/vm.md の「子の誤り」)。
@@ -925,7 +930,7 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、この worker が走らせるはずの仕事があるかを
-    /// 返す。右の子 (`Child`)、持ち主が自分のタスクの `Place`、継続を取り出せる `Wake` を数え、`Joined`、`Cancel`、
+    /// 返す。右の子と仕事 (`Child`)、持ち主が自分のタスクの `Place`、継続を取り出せる `Wake` を数え、`Joined`、`Cancel`、
     /// `Submit`、`CancelIo`、`Completion` と、もう待っていないセルへの起こしは数えない。登録表は書き換えず、知らせの語は
     /// 手放さない。数えたら run は誤りで終わり、回復がヒープを捨てるからである (docs/spec/vm.md の
     /// 「誤り、止めること、終わり」)。

@@ -400,7 +400,7 @@ pub struct Scheduler<P: Policy> {
     /// この `Scheduler` の worker の番号。止める語と `run` の欄の添字である。
     pub(crate) index: usize,
     /// worker 1..N-1 を作るか、作ったか。worker 0 は run の始めに決め、worker 1..N-1 はいつも `Peer` である。
-    /// 右の子をほかの worker に置くのは `Started` と `Peer` の `Scheduler` だけである。
+    /// 右の子と仕事をほかの worker に置くのは `Started` と `Peer` の `Scheduler` だけである。
     pub(crate) workers: Workers,
     /// driver の出どころ。`Real` の run だけが OS のシグナルを待つタスクへ届ける (docs/spec/stdlib.md の
     /// 「`Std.Signal`」)。空きの待ちに上限を掛けるかもこれで決まる (docs/spec/vm.md の「時計と driver」)。
@@ -510,7 +510,7 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// worker `index` (`index` ≥ 1) の `Scheduler`。監視のスレッドは持たず、driver は本物の時計の run で最初に要るときに
-    /// 作る。登録表は run のものを共有する。worker を作る判断はせず、空いた worker があれば右の子を置く
+    /// 作る。登録表は run のものを共有する。worker を作る判断はせず、空いた worker があれば右の子と仕事を置く
     /// (docs/spec/vm.md の「タスクとスケジュール」「時計と driver」)。
     pub(crate) fn worker(
         policy: P,
@@ -762,7 +762,7 @@ impl<P: Policy> Scheduler<P> {
         Ok(())
     }
 
-    /// ほかの worker から届いた知らせを取り出す。置かれた右の子はこの worker の番号を振って列の後ろに入れ、置いた子の
+    /// ほかの worker から届いた知らせを取り出す。置かれた右の子と仕事はこの worker の番号を振って列の後ろに入れ、置いた子の
     /// 終わりは join の節点に記録して親を起こす。親を失った節点なら、結果に触れずに節点を捨てる。どちらでも
     /// `in_flight` から引くのは受け取った後なので、受け取っていない終わりの知らせがある間は 0 にならない。`Async` の
     /// タスクの知らせは `rest` に残し、集める地点が登録表の区間で処理する (docs/spec/vm.md の「タスクとスケジュール」)。

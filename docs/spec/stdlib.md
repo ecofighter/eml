@@ -18,7 +18,7 @@ eml run --workers 4 wc.em -l input.txt
 - `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--sched`、`--workers`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--stats`、`--sched=seeded:7`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
 - ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap`、`--stats`、`--sched`、`--workers` はファイルより前にだけ書ける。`eml run main.em --sched bogus` は、スクリプトに `--sched` と `bogus` を渡す
 - `--sched <normal|sequential|seeded:N>` は、タスクを切り替える方針を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。既定は `normal` で、監視のスレッドの刻みで横取りする。`sequential` は横取りしない。`seeded:N` は `u64` の seed `N` で横取りの位置を決める。ほかの値と、2回書いた `--sched` は使い方の誤り (終了コード 2) である。`run` と `repl` が持ち、`check` は持たない。環境変数では選べない
-- `--workers <N>` は、`par` の右の子と `Async` のタスクを走らせる worker のスレッドの数 (worker 0 を含む) を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。`N` は 1 以上 1024 以下の整数である。run は worker ごとに止める語と欄を確保するので、上限を置いて、大きすぎる数を確保の失敗でなく使い方の誤りにする。`--workers` がなければ環境変数 `EML_WORKERS` を同じ規則で読み、それもなければ `available_parallelism()` の値にする (読めなければ 1、1024 を超えれば 1024)。0 と 1024 を超える数と数でない値は、フラグでも `EML_WORKERS` でも使い方の誤り (終了コード 2) で、2回書いた `--workers` も同じである。`run` だけが持ち、`repl` と `check` は持たない。`repl` は常に 1 である ([REPL の端末](repl.md) の「コマンドライン」)。ライブラリの `Limits::default()` と `eml_cli::default_limits()` も 1 で、UI テストは 1 で走らせる。`par/` の UI テストだけは 2 と 8 でも走らせる ([テスト戦略](../implementation/testing.md) の「seed で流す」)
+- `--workers <N>` は、`par` の右の子と `Async` のタスクと `compute` の仕事を走らせる worker のスレッドの数 (worker 0 を含む) を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。`N` は 1 以上 1024 以下の整数である。run は worker ごとに止める語と欄を確保するので、上限を置いて、大きすぎる数を確保の失敗でなく使い方の誤りにする。`--workers` がなければ環境変数 `EML_WORKERS` を同じ規則で読み、それもなければ `available_parallelism()` の値にする (読めなければ 1、1024 を超えれば 1024)。0 と 1024 を超える数と数でない値は、フラグでも `EML_WORKERS` でも使い方の誤り (終了コード 2) で、2回書いた `--workers` も同じである。`run` だけが持ち、`repl` と `check` は持たない。`repl` は常に 1 である ([REPL の端末](repl.md) の「コマンドライン」)。ライブラリの `Limits::default()` と `eml_cli::default_limits()` も 1 で、UI テストは 1 で走らせる。`par/` の UI テストだけは 2 と 8 でも走らせる ([テスト戦略](../implementation/testing.md) の「seed で流す」)
 - `Env.args ()` は、ファイルより後ろの引数を返す。`eml` とスクリプトのパスは含めない
 - shebang は `#!/usr/bin/env eml` と書く。Linux の `env` は `#!` の行の残りを1つの引数として渡すので、`#!/usr/bin/env eml run` は動かない
 - ファイルの相対パスと子のプロセスの作業ディレクトリは、プロセスの今のディレクトリである
@@ -1042,7 +1042,7 @@ pub data Failure =
 - `op_ready op ms` は token を借りて、待たずに続けてよいかを 0 (続ける)、1 (待つ)、2 (先に譲る) で返し、宣言の型では結果と token の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。どの呼び出しも、操作が終わっていたかによらず操作の予算を使い、書きの操作は長さに応じて多く使う (下の「操作の予算」)。記録が終わっていて取り消しの地点が投げなければ、予算が残れば待ちを1つ数えて 0 を返す。切れれば OS を1回見て集め、走れるタスクがあれば数えずに 2 を返し、なければ予算を戻し、待ちを1つ数えて 0 を返す。2 の待ちは、続く `reschedule ()` が数える。ほかは 1 で、何も数えない。待つ側の `await_io` が数える ([VM](vm.md) の「操作の記録」)
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
 - `job_cell` は token を借りてセルを返し、宣言の型ではセルと token の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。`fork_job` は引数の閉包を預からない
-- `fork_job f` は `f` を仕事として呼んだ worker の実行待ちに積み、仕事の token を返す。閉包は仕事として動き、`fork_job` が消費する。`take_job j` は token を消費して、終わった仕事の結果を返すか、仕事の中断を起こし直す。`drop_job j` は token を消費して、終わった仕事の終わりを落とす。どちらも、仕事を出したタスクが仕事の終わった後に呼ぶ。std の `compute` は `job_cell` で借りたセルを `await_cell` で待ってから呼ぶ ([VM](vm.md) の「`compute` の仕事」)
+- `fork_job f` は `f` を仕事として、空いている worker の受け箱か呼んだ worker の実行待ちに置き、仕事の token を返す。閉包は仕事として動き、`fork_job` が消費する。`take_job j` は token を消費して、終わった仕事の結果を返すか、仕事の中断を起こし直す。`drop_job j` は token を消費して、終わった仕事の終わりを落とす。どちらも、仕事を出したタスクが仕事の終わった後に呼ぶ。std の `compute` は `job_cell` で借りたセルを `await_cell` で待ってから呼ぶ ([VM](vm.md) の「`compute` の仕事」)
 - `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のためのインターフェースで、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
 - `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.Net` のためのインターフェースで、同じ理由で `pub` である。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.Net`」)。どちらも先に `op_ready` を呼ぶ。0 なら perform せずに `(Woke, op)` を返し、2 なら `reschedule ()` で列の後ろへ回ってから、その `Wake` を見ずに `(Woke, op)` を返す。1 のときだけ `await_io` か `await_io_until` を perform して待つ。回る間に届いた取り消しは、次の取り消しの地点で投げる
 - `io_wait_shielded` (`OpId -> <IO, Async> OpId`) も `Std.Net` のためのインターフェースである。`shield` と同じ深さの印の中で `io_wait` を呼び、`Wake` を捨てて token を返す。中の待ちは外の取り消しで外れず、いつも操作が終わってから戻る。`shield` は本体の行に `Panic` を求めるので、`Panic` を持たない `Std.Net` の包みのためにこの形にする
@@ -1155,7 +1155,7 @@ body () =
 ```
 
 - `compute f` は `f ()` を、子が1つの `par` と同じ仕事として動かし、仕事が終わるまで呼んだタスクだけを待たせる。待つタスクは継続だけになり、その間 worker はほかのタスクと仕事を動かす。仕事の結果は呼んだタスクに返る
-- 仕事は呼んだ worker の実行待ちの列の後ろに積み、その worker で動かす ([VM](vm.md) の「`compute` の仕事」)
+- 仕事は `par` の右の子と同じく、空いている worker があればその受け箱に置いてその worker で動かし、なければ呼んだ worker の実行待ちの列の後ろに積む ([VM](vm.md) の「`compute` の仕事」)。worker が1つの run (REPL、`--workers 1`) では、仕事はその worker のほかのタスクと交互に動く
 - `f` の row の上限は `never` である。`par` の子と同じく、`IO`、`Async`、`var` のエフェクト、`once` か `multi` の操作を持つエフェクトを `f` が起こしうる呼び出しは E2020 になる (上の「`Std.Par`」)。`f` は `Lin` の値を捕まえて消費でき、`Lin` の値を返してもよい
 - 仕事が `never` の操作で中断すると、仕事が終わった後で、呼んだタスクがその操作を起こし直す。起こし直す先は、仕事の中の操作が届いた handler で、`compute` の周りの `mask` も守る。仕事の中の handler と `try_panic` は、仕事の中の操作を仕事の中で捕まえる。仕事の中で捕まえない `Panic` も、呼んだタスクで起こし直す。呼んだタスクの `try_panic` か `try_all` が捕まえ、捕まえなければタスクの失敗 `Panicked` になる
 - 仕事の中の、`Panic` でない実行時エラー (呼び出しの深さの上限など) は、その場で run を止める。呼んだタスクの `try_all` も捕まえない

@@ -533,8 +533,8 @@ pub(crate) fn run<R: Exec>(
     }
 }
 
-/// worker `k` (`k` ≥ 1) の実行の繰り返し。動くタスクのない `Task` から始め、置かれた右の子に切り替えて動かす。
-/// 右の子は `Finish` に着かないので、戻るのは run を止める誤りのときだけで、その誤りを返す。止めた後のタスクは
+/// worker `k` (`k` ≥ 1) の実行の繰り返し。動くタスクのない `Task` から始め、置かれた右の子と仕事に切り替えて動かす。
+/// 右の子と仕事は `Finish` に着かないので、戻るのは run を止める誤りのときだけで、その誤りを返す。止めた後のタスクは
 /// 巻き戻さずに捨てる (docs/spec/vm.md の「タスクとスケジュール」)。
 pub(crate) fn work<R: Exec>(
     code: &CodeBase<R::M>,
@@ -1292,7 +1292,7 @@ fn fork_child<R: Exec>(
     Ok((child, fork_evv))
 }
 
-/// 右の子を置く、空いている worker の添字。置かないときは `None`。
+/// 右の子か `compute` の仕事を置く、空いている worker の添字。置かないときは `None`。
 fn idle_home<R: Exec>(
     ctx: &Ctx<R::M>,
     sched: &mut Scheduler<R::P>,
@@ -1586,7 +1586,7 @@ fn switch_away<R: Exec>(
 }
 
 /// タスク `next` に切り替える。`evv` と worker は `Ctx::switch_task` の1回で替え、RC に触れない
-/// (docs/spec/object-model.md の「タスクの切り替え」)。まだ始まっていない右の子は、その ID に替えた後で閉包を呼ぶ。
+/// (docs/spec/object-model.md の「タスクの切り替え」)。まだ始まっていない右の子と仕事は、その ID に替えた後で閉包を呼ぶ。
 /// 閉包を手放すと、子の ID の物体を解放しうるためである。待っていた親は join を完了し、そのときは `par` の命令の
 /// 位置を返す。`par` の後の安全点は呼ぶ側が行い、その誤りにもこの位置を付ける (`at_par`)。ここで安全点に進むと、横取りが `preempt` と `resume` を Rust の再帰で重ねる
 /// ためである (docs/spec/vm.md の「並列化への備え」)。
@@ -1910,7 +1910,8 @@ fn child_abort<R: Exec>(
     child_done::<R>(code, ctx, task, sched, outcome)
 }
 
-/// 実行時エラーの後。すぐに実行を止める誤りと、エントリのタスクの誤り (左の子の誤りを含む) は実行の誤りにする。右の子の
+/// 実行時エラーの後。すぐに実行を止める誤りと、エントリのタスクの誤り (左の子の誤りを含む) と、`compute` の仕事の誤りは
+/// 実行の誤りにする。右の子の
 /// 誤りは join に記録し、右のタスクはスタックを巻き戻さずに捨てて、ほかのタスクに切り替える。止めたスタックは
 /// 巻き戻しの表のない位置で止まっていて解放できない。記録した誤りは join が必ず報告するので、実行は誤りで終わる
 /// (docs/spec/vm.md の「`par` の fork と join」)。
@@ -2241,8 +2242,19 @@ fn async_op<R: Exec>(
                 JobRef { cell, at },
                 g,
             );
-            let id = sched.add_task(job);
-            sched.ready.push_back(id);
+            // `par` の右の子と同じく、空いた worker の受け箱に置き、なければこの worker の列に入れる。終わりは
+            // 仕事のセルを通って出したタスクを起こすので、`in_flight` には数えない (docs/spec/vm.md の「`compute` の仕事」)
+            match idle_home::<R>(ctx, sched)? {
+                Some(k) => {
+                    sched.run.placed_jobs.fetch_add(1, Ordering::Relaxed);
+                    let control = std::sync::Arc::clone(&sched.watcher.control);
+                    sched.run.send(&control, k, Notice::Child(job));
+                }
+                None => {
+                    let id = sched.add_task(job);
+                    sched.ready.push_back(id);
+                }
+            }
             task.set_raw(dst, cell.encode());
         }
         ext @ (Extern::AsyncTakeJob | Extern::AsyncDropJob) => {
@@ -2823,7 +2835,7 @@ fn bind_here<M: Mode, P: Policy>(
     Ok(())
 }
 
-/// 今の `Task` のタスクのセル。`main` と `par` の右の子は `Async` の操作を実行しない。
+/// 今の `Task` のタスクのセル。`main`、`par` の右の子、`compute` の仕事は `Async` の操作を実行しない。
 fn current_cell(task: &Task) -> Result<CellRef, VmFault> {
     task.cell
         .ok_or(VmFault::Internal("an Async operation runs outside a task"))

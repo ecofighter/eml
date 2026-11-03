@@ -1,5 +1,5 @@
 //! worker 1..N-1 の起動と止める手順 (docs/spec/vm.md の「タスクとスケジュール」)。worker は run の最初の `par` の
-//! fork か、`Async` のタスクを置く最初の `start` で作り、run の終わりに join する。根に触れる `Machine` は worker を
+//! fork か、`Async` のタスクを置く最初の `start` か、最初の `fork_job` で作り、run の終わりに join する。根に触れる `Machine` は worker を
 //! 作らない。
 
 use std::sync::Arc;
@@ -434,6 +434,104 @@ main () = Async.run (fn () ->
         "{alone}"
     );
     assert_eq!(other.to_string(), alone.to_string());
+}
+
+/// `compute` の仕事は `par` の右の子と同じく空いた worker に置く。空きの作り方は
+/// `a_timer_on_worker_0_and_a_child_on_worker_1_agree` と同じで、`fork_job` のときには worker 1 が空いている。
+/// 仕事は worker 1 のヒープにリストを作って返し、出したタスクが worker 0 でたどってから手放す。検査モードは、
+/// `take_job` が受け取った物体の持ち主の取り違えと漏れを見つける。仕事は `par` の右の子でないので `placed` は増えず、
+/// `placed_jobs` だけが増える (docs/spec/vm.md の「`compute` の仕事」)。
+#[test]
+fn a_job_is_placed_on_an_idle_worker() {
+    let src = "\
+import Async
+build : Int -> <Panic> List Int
+build n = if n == 0 then [] else n :: build (n - 1)
+total : List Int -> <Panic> Int
+total xs = match xs with
+  | [] -> 0
+  | y :: ys -> y + total ys
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let d = Async.start (fn () -> ())
+  Async.await d
+  Async.sleep_ms 1
+  println (show (total (Async.compute (fn () -> build 200)))))
+";
+    let (alone, result) = run(src, 1);
+    assert_eq!(alone, "20100\n");
+    assert_eq!(result.unwrap().placed_jobs, 0);
+    let (out, result) = run(src, 2);
+    assert_eq!(out, alone);
+    let finished = result.unwrap();
+    assert_eq!(
+        (
+            finished.workers,
+            finished.placed_tasks,
+            finished.placed,
+            finished.placed_jobs
+        ),
+        (1, 1, 0, 1)
+    );
+}
+
+/// 止まらない仕事がほかの worker で動いている run も `exit` で終わる。空きを作った後の `spawn` は worker 0 に置くので、
+/// そのタスクの `fork_job` は仕事を空いた worker 1 に置く。出したタスクは仕事を待って park したまま、worker 0 の本体が
+/// `exit` する。仕事と待つタスクは捨て、回復が2つのヒープを片付ける。
+#[test]
+fn exit_abandons_a_job_on_another_worker() {
+    let src = format!(
+        "import Async (Async)\n{SPIN}\
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let d = Async.start (fn () -> ())
+  Async.await d
+  Async.sleep_ms 1
+  Async.spawn (fn () -> println (show (Async.compute (fn () -> spin 0))))
+  Async.yield_now ()
+  (exit 3 : Unit)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    );
+    let (out, result) = run(&src, 2);
+    assert_eq!(out, "");
+    let finished = result.unwrap();
+    assert_eq!(finished.exit, Some(3));
+    assert_eq!((finished.workers, finished.placed_jobs), (1, 1));
+}
+
+/// ほかの worker に置いた仕事でも、取り消しは仕事が終わってから出したタスクに1回だけ届く。仕事の終わりは worker 1
+/// から、出したタスクのいる worker 0 へ起こしを送る (docs/spec/vm.md の「取り消しの届け方」)。
+#[test]
+fn a_cancelled_job_on_another_worker_counts_one_cancel() {
+    let src = "\
+import Async (Async)
+import Async
+import MutArray
+spin : Int -> <Panic> Int
+spin n = if n == 0 then 0 else spin (n - 1)
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let d = Async.start (fn () -> ())
+    Async.await d
+    Async.sleep_ms 1
+    let t = Async.start (fn () ->
+      Async.scope (fn s ->
+        Async.cancel_scope s
+        match try_io (fn () -> Async.compute (fn () -> MutArray.make 2 (spin 40))) with
+          | Ok a ->
+            drop a
+            println \"done\"
+          | Err e -> println \"job: \\{show e.kind}\"))
+    Async.await t)
+";
+    let (out, result) = run(src, 2);
+    assert_eq!(out, "job: Cancelled\n");
+    let finished = result.unwrap();
+    assert_eq!(finished.stats.cancels, 1);
+    assert_eq!(finished.placed_jobs, 1);
 }
 
 /// 置いた右の子の誤りの後、`Machine` は2つのヒープを回復して続ける。worker 1 のヒープは回復の後に落ちる。同じ
