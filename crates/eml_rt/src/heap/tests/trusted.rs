@@ -974,6 +974,33 @@ fn a_remote_small_free_is_reclaimed_and_reused<M: Mode>() {
     drop(b);
 }
 
+// 別のスレッドが最後の参照を手放した `Foreign` の値は、そのスレッドで1回だけ破棄され、箱は持ち主が取り込む
+fn a_foreign_value_freed_remotely_is_finalized_once<M: Mode>() {
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let (value, drops) = probe();
+    let f = a.alloc_foreign(value, false);
+    unsafe { a.share(f, 0) }.unwrap();
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        unsafe { b.decref(f) }.unwrap();
+        b
+    })
+    .join()
+    .unwrap();
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+    if M::CHECKED {
+        assert_eq!(b.stats().remote_frees, 1);
+    }
+    a.reclaim();
+    if M::CHECKED {
+        assert_eq!(a.stats().reclaimed, 1);
+    }
+    assert_eq!(mortal(&mut a), 0);
+    drop(a);
+    drop(b);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
 // 別のスレッドが空けた大きい物体のページは、空けたスレッドが Control のバイト数から引く。上限がちょうど大きい
 // 物体1つ分のとき、持ち主が取り込む前に2つ目を取っても上限に届かない。持ち主はページを返すときにもう一度は引かない
 fn a_remote_large_free_refunds_at_once<M: Mode>() {
@@ -2367,6 +2394,7 @@ both_modes!(
     recovery_tells_own_blocks_from_region_blocks,
     two_threads_share_one_control,
     a_remote_small_free_is_reclaimed_and_reused,
+    a_foreign_value_freed_remotely_is_finalized_once,
     a_remote_large_free_refunds_at_once,
     two_threads_free_into_one_page,
     the_owner_carves_while_another_thread_reads_and_frees,
