@@ -1,5 +1,5 @@
 //! `par` の子の中断に使う関数 `fork$E.op` と `reperform$E.op` (docs/spec/core-ir.md の「`par` の子の中断」)。
-//! プログラムが `par` を走らせうるときだけ、fork の関数を持つエフェクトの操作ごとに1組作る。`fork$` はプログラムの
+//! プログラムが子を fork しうるときだけ、fork の関数を持つエフェクトの操作ごとに1組作る。`fork$` はプログラムの
 //! どこからも参照されず、VM が名前で引く。`reperform$` は、`fork$` が `child_abort` に渡す閉包として値で参照される。
 //! 中身は操作の表の行だけで決まるので、名前が同じならコードも同じである。
 
@@ -11,7 +11,7 @@ use eml_lir::{Atom, FnIdx, Mark, Prim, Repr, VarId, VarInfo};
 use super::{captured_mark, dummy};
 
 pub(super) fn forks(program: &mut Program) {
-    if !may_run_par(program) {
+    if !may_fork(program) {
         return;
     }
     let effects: Vec<u32> = eml_lir::fork_effects(&program.effects).collect();
@@ -27,8 +27,8 @@ pub(super) fn forks(program: &mut Program) {
     }
 }
 
-/// `eml_lir::Program::may_run_par` の Core IR の写し。`to_lir` は命令を 1 対 1 に写すので、2つは同じ答えになる。
-fn may_run_par(program: &Program) -> bool {
+/// `eml_lir::Program::may_fork` の Core IR の写し。`to_lir` は命令を 1 対 1 に写すので、2つは同じ答えになる。
+fn may_fork(program: &Program) -> bool {
     program
         .functions
         .iter()
@@ -40,6 +40,9 @@ fn may_run_par(program: &Program) -> bool {
                 Stmt::Let {
                     rhs: Rhs::Call {
                         call: Call::Par { .. },
+                        ..
+                    } | Rhs::Extern {
+                        ext: Extern::AsyncForkJob,
                         ..
                     } | Rhs::Prim(Prim::RootGet(_), _),
                     ..

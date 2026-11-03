@@ -1254,10 +1254,9 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         CompileError::MultiValueEntry { function } => {
             ("an entry function returns more than one value", function)
         }
-        CompileError::MissingFork { function } => (
-            "a program that may run a par lacks a fork function",
-            function,
-        ),
+        CompileError::MissingFork { function } => {
+            ("a program that may fork lacks a fork function", function)
+        }
         CompileError::MissingEntry { function } => (
             "a program that runs Async tasks lacks a runtime entry",
             function,

@@ -174,11 +174,11 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     })
 }
 
-/// `par` を走らせうるプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を持つ
+/// 子を fork しうるプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を持つ
 /// `fork$E.op` と `reperform$E.op` を持つ。VM は子の evidence をこの名前で作るためである
 /// (docs/spec/core-ir.md の「`par` の子の中断」)。関数の形は、ほかの関数と同じく本体の検査が確かめる。
 fn forks(program: &Program) -> Result<(), VerifyError> {
-    if !program.may_run_par() {
+    if !program.may_fork() {
         return Ok(());
     }
     let find = |name: &str| {
@@ -193,7 +193,7 @@ fn forks(program: &Program) -> Result<(), VerifyError> {
             let missing = |kind: &str, name: String| VerifyError {
                 function: name,
                 message: format!(
-                    "`{}` has no {kind} entry, but the program may run par",
+                    "`{}` has no {kind} entry, but the program may fork",
                     operation_text(&program.effects, effect, op)
                 ),
             };

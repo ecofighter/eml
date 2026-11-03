@@ -220,7 +220,7 @@ pub enum CompileError {
     /// 結果が複数の値のエントリの関数。エントリの `ret` は値1つで、`Finish` は値を1つだけ受ける
     /// (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
     MultiValueEntry { function: String },
-    /// `par` を走らせうるプログラムで、`fork$` の関数が名前で引けない。evidence passing はそのプログラムに fork の
+    /// 子を fork しうるプログラムで、`fork$` の関数が名前で引けない。evidence passing はそのプログラムに fork の
     /// 関数をすべて作るので、正しいプログラムでは起きない (docs/spec/vm.md の「`par` の fork と join」)。
     MissingFork { function: String },
     /// `Async` の命令を持つプログラムで、ランタイムが名前で呼ぶエントリの関数が引けない。translate は `Std.Async` を

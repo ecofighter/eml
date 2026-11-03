@@ -3686,7 +3686,7 @@ fn child_abort_takes_an_obj_evidence_and_a_closure() {
     );
 }
 
-/// `par` を走らせうるプログラムの、fork の関数を持つエフェクト `Fail` とその fork の関数。`main` の本体と、fork の
+/// 子を fork しうるプログラムの、fork の関数を持つエフェクト `Fail` とその fork の関数。`main` の本体と、fork の
 /// 関数のうち書くものを選ぶ。`reperform$` を書かないとき、`fork$` は代わりに `main` を渡す。
 fn forking(main: &str, fork: bool, clause: bool, reperform: bool) -> String {
     let mut text = format!(
@@ -3726,14 +3726,14 @@ fn forking(main: &str, fork: bool, clause: bool, reperform: bool) -> String {
 /// `par` か `root_get` を含むプログラムは、fork の関数を持つエフェクトの操作ごとに、その操作の `clause` の印を
 /// 持つ `fork$` と、`reperform$` を持つ (docs/spec/lir.md の「verifier」)。どちらも含まないプログラムには求めない。
 #[test]
-fn a_program_that_may_run_par_has_every_fork_entry() {
+fn a_program_that_may_fork_has_every_fork_entry() {
     const PAR: &str = "  let t.2: obj = par (,) #0(a.0, b.1)\n  return t.2\n";
     const ROOT: &str = "  decref a.0\n  decref b.1\n  let r.2: tobj = prim root_get[0]()\n  decref r.2\n  let d.3: obj = prim dummy()\n  return d.3\n";
     const NEITHER: &str =
         "  decref a.0\n  decref b.1\n  let d.2: obj = prim dummy()\n  return d.2\n";
     assert_eq!(check(&forking(PAR, true, true, true)), Ok(()));
     assert_eq!(check(&forking(NEITHER, false, false, false)), Ok(()));
-    let missing = "`Fail.fail` has no fork entry, but the program may run par in `fork$Fail.fail`";
+    let missing = "`Fail.fail` has no fork entry, but the program may fork in `fork$Fail.fail`";
     for main in [PAR, ROOT] {
         for program in [
             forking(main, false, false, true),
@@ -3750,7 +3750,7 @@ fn a_program_that_may_run_par_has_every_fork_entry() {
     assert_eq!(
         check(&forking(ROOT, true, true, false)),
         Err(
-            "`Fail.fail` has no reperform entry, but the program may run par in `reperform$Fail.fail`"
+            "`Fail.fail` has no reperform entry, but the program may fork in `reperform$Fail.fail`"
                 .to_string()
         )
     );

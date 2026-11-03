@@ -11,8 +11,8 @@ use eml_rt::{Control, Frozen, Heap, Kind, Meta, Mode, Word};
 use super::Links;
 use crate::code::{CompileError, ForkTable, Forks, Index};
 
-/// 読み込んだプログラムのエフェクトのうち、まだ表のないものの表を作る。名前は前のロードの関数からも引く。`par` を
-/// 走らせうるプログラムで名前が引けなければ、コード生成の誤りにする (docs/spec/core-ir.md の「`par` の子の中断」)。
+/// 読み込んだプログラムのエフェクトのうち、まだ表のないものの表を作る。名前は前のロードの関数からも引く。
+/// fork しうるプログラムで名前が引けなければ、コード生成の誤りにする (docs/spec/core-ir.md の「`par` の子の中断」)。
 pub(crate) fn extend<M: Mode>(
     program: &Program,
     links: &Links,
@@ -25,7 +25,7 @@ pub(crate) fn extend<M: Mode>(
         index.effects.len().max(forks.tables.len()),
         ForkTable::Missing,
     );
-    let mut may_run_par = None;
+    let mut may_fork = None;
     let mut builder: Option<Heap<M>> = None;
     for (e, info) in program.effects.iter().enumerate() {
         let number = links.effects[e];
@@ -45,7 +45,7 @@ pub(crate) fn extend<M: Mode>(
             let name = eml_lir::fork_name(&program.effects, e as u32, op);
             match index.functions.get(&name) {
                 Some(&f) => entries.push(f),
-                None if *may_run_par.get_or_insert_with(|| program.may_run_par()) => {
+                None if *may_fork.get_or_insert_with(|| program.may_fork()) => {
                     return Err(CompileError::MissingFork { function: name });
                 }
                 None => break,
