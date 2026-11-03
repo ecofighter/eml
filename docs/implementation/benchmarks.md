@@ -625,6 +625,52 @@ busy-self を除く全件を流したセッション (各件 11 回)。`base` �
 - io_uring のカーネルの側の仕事 (io-wq のスレッドと `DEFER_TASKRUN` の task work) は eml の process の rusage に入る。試しのプログラムで、rusage は system 全体の忙しい時間の 0.95 から 0.99 だった
 - Linux の backend は epoll である ([ロードマップ](../future/roadmap.md) の「その後の項目」の「Linux の io_uring の backend」)
 
+### worker の数と実時間
+
+089dcc9 の release の eml で、worker の数 N = 1、2、4 の実時間を測った。機械は KVM の上の Linux で、`lscpu` は Intel(R) Xeon(R) Processor @ 2.80GHz、CPU(s) 4、Thread(s) per core 1、Core(s) per socket 4、Socket(s) 1 である。メモリは 16477348 kB、kernel は 6.18.44-fc-v230 である。ほかに負荷のない状態で、次の順に流した。
+
+```sh
+cargo build --release -p eml_cli
+bench/async/scale.sh > at-scale.md
+bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
+  --only '^(base|serve-self-32|conn-self-32|busy-self|echo-self-fresh)$' > at-net.jsonl
+python3 -I bench/net/report.py at-net.jsonl > at-net.md
+```
+
+`scale.sh` は2回流した。下の表は2回目で、伸びの比は表の丸めた値でなく、同じ run の生の中央値から計算した。
+
+| 物差し | t(1) ms | t(2) | t(4) | S(2) | S(4) |
+|---|---|---|---|---|---|
+| spread | 770 | 411 | 233 | 1.87 | 3.31 |
+| spread_par | 797 | 412 | 411 | 1.94 | 1.94 |
+| 床 (別プロセス) | 806 | 411 | 254 | 1.96 | 3.17 |
+| chan_pingpong | 314 | 932 | 3893 | 0.34 | 0.08 |
+
+- `spread`: `Async` のタスクに分けた計算は、N = 2 で 1.87 倍、N = 4 で 3.31 倍速くなる。1回目の run では 1.96 倍と 3.38 倍だった
+- `spread_par`: 同じ計算を `par` で分けると、N = 2 で 1.94 倍になるが、N = 4 では 1.94 倍のままで伸びない。1回目の run でも 1.99 倍と 2.08 倍だった
+- `床 (別プロセス)`: 機械そのものは N = 2 で 1.96 倍、N = 4 で 3.17 倍に伸びる。1回目の run では 1.92 倍と 3.29 倍だった
+- `chan_pingpong`: worker を増やすと遅くなり、N = 2 で 2.97 倍、N = 4 で 12.4 倍の時間がかかる。1回目の run では t(2) が 694 ms、t(4) が 3845 ms だった
+
+`spread` の伸びは、床の伸びの 0.80 倍という基準を N = 2 と 4 のどちらでも超える。生の中央値から計算すると、N = 2 では S_spread = 1.873 に対して 0.80 × S_hw = 1.568 で、N = 4 では S_spread = 3.308 に対して 0.80 × S_hw = 2.537 である。比べる前提として、床が N = 2 で 1.6 以上、N = 4 で 2.4 以上に伸びることを求める。この run の床は 1.960 と 3.171 で、前提を満たす。
+
+`net.sh` の worker の数の表は次のとおりである。値は実時間の中央値から `base` を引いた単位あたりの µs で、判定は生の実時間に「比べる規則」を当てる。`base` は同じ N で流すので、N = 4 の `base` には worker のスレッドを起こす費用も入る。`base` の実時間の中央値は、N = 1、2、4 で 30.1、30.3、30.5 ms だった。
+
+| 件 | 単位 | w1 | w2 | w4 | w2÷w1 | w4÷w1 | 判定 w2 | 判定 w4 |
+|---|---|---|---|---|---|---|---|---|
+| echo-self-fresh | 20000 往復 | 62.46 | 126.34 | 126.77 | 2.02 | 2.03 | 差 | 差 |
+| conn-self-32 | 10240 接続 | 49.36 | 82.20 | 77.94 | 1.67 | 1.58 | 差 | 差 |
+| busy-self | 2000 往復 | 40039.43 | 30044.59 | 100.70 | 0.75 | 0.00 | 差 | 差 |
+| serve-self-32 | 20480 往復 | 18.05 | 23.96 | 31.27 | 1.33 | 1.73 | 差なし | 差 |
+
+- `echo-self-fresh`: N = 2 と 4 で1往復が約2倍かかる。サーバーのタスクは worker 1 に置かれるが、受けたストリームは待ち受けの host の worker 0 に縛られるので、サーバーの読み書きはどれも worker 0 へ転送になる
+- `conn-self-32`: N = 2 で 1.67 倍、N = 4 で 1.58 倍遅くなり、worker を増やしても縮まない
+- `busy-self`: N = 2 では計算のタスクが `main` と同じ worker 0 に置かれ、往復は横取りの刻みを待つので、0.75 倍にしか縮まない。N = 4 では計算のタスクがほかの worker に置かれ、1往復が 100.70 µs になる
+- `serve-self-32`: N = 2 では差なしだが、N = 4 では 1.73 倍遅くなる。受けたストリームはどれも待ち受けの host の worker 0 に縛られ、ほかの worker のサーバーのタスクの読み書きは worker 0 へ転送になる
+
+受けたストリームの縛り方を変えるかは、`conn-self-32` が伸びて `serve-self-32` が伸びないか、`echo-self-fresh` が N = 2 で 10% 以上遅くなるかで決める。`conn-self-32` の w4÷w1 は 1.58 で伸びていないので、前の条件には当たらない。`echo-self-fresh` の w2÷w1 は 2.02 で判定が差なので、後の条件に当たる。そのため、受けたストリームを、最初に使うタスクの worker の driver に縛る ([非同期の設計](../future/async.md) の「ハンドルと worker」)。
+
+`chan_pingpong` の t(4) は t(1) より遅い。worker をまたぐ容量 0 の channel の往復は、1つの worker の上の往復より費用が大きい。これは [ロードマップ](../future/roadmap.md) の「マルチコア対応」の「ロックフリーの受け箱と channel」を見直す材料である。
+
 ## 所見
 
 機種の M4 は Mac16,1 (Apple M4)、M5 は Mac17,2 (Apple M5) である。OS はどれも macOS 27.0.1 (26A434)、rustc は 1.98.1 で、「`decref` が一意な物体を空ける道」だけ 1.95.0 である。
