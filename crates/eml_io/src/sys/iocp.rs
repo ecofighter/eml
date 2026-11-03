@@ -490,7 +490,8 @@ impl Iocp {
         Ok(Sock { s, v6 })
     }
 
-    /// 拡張関数。歩を受けるソケットはどれもこの backend が作ったので、もう読んである
+    /// 拡張関数。呼ぶのはリスナーの受け (`AcceptEx`) と接続 (`ConnectEx`) の歩だけで、どちらのソケットもこの backend が
+    /// 作ったので、もう読んである。`adopt` で取り込んだソケットは作っていないが、拡張関数を使う歩を受けない
     fn ext(&self) -> Ext {
         self.ext
             .expect("the extension functions are read with the first socket")

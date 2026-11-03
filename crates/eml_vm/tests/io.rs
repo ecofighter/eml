@@ -1243,7 +1243,7 @@ main () = Async.run (fn () ->
 /// worker が host でないときの起こしは `a_stream_bound_on_worker_0_and_closed_on_worker_1_wakes_its_host` が確かめる。
 /// 3 秒は止まりの見張りで、時間は確かめない。
 #[test]
-fn a_stream_closed_on_worker_1_wakes_its_host() {
+fn a_stream_accepted_and_closed_on_worker_1_reaches_its_peer() {
     let src = "\
 import Async (Async)
 import Async
@@ -1434,4 +1434,105 @@ main () = Async.run (fn () ->
         .expect("the peer did not read to the end");
     assert_eq!(out, "3\n");
     assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、受けたストリームを操作を出さずに閉じると、まだどの driver にも取り込んでいないソケットをその場で閉じ、
+/// 相手が EOF を読む。worker 1 に置いたタスクが受けて閉じる (docs/spec/vm.md の「操作の記録」)。3 秒は止まりの
+/// 見張りで、時間は確かめない。
+#[test]
+fn an_accepted_stream_closed_before_any_op_reaches_its_peer() {
+    let src = "\
+import Async (Async)
+import Async
+import Bytes
+import Net
+drain : Net.TcpStream -> Int -> <IO, Panic, Async> Int
+drain s n =
+  let (buf, s) = Net.read_chunk (Bytes.with_capacity 16) s
+  let k = Bytes.length buf
+  if k == 0 then
+    Net.close s
+    n
+  else drain s (n + k)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let c = Async.start (fn () ->
+    let (b, l) = Net.accept l
+    Net.close_listener l
+    Net.close b)
+  let a = Net.connect \"127.0.0.1\" port
+  let n = drain a 0
+  Async.await c
+  println (show n))
+";
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let real = || {
+            RunConfig::default()
+                .with_clock(eml_vm::Clock::Real)
+                .with_sched(Sched::Normal)
+        };
+        let _ = done.send((run_on(src, 1, real()), run_on(src, 2, real())));
+    });
+    let ((alone, _), (out, finished)) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the peer did not read to the end");
+    assert_eq!(alone, "0\n");
+    assert_eq!(out, alone);
+    assert!(finished.placed_tasks >= 1, "{finished:?}");
+}
+
+/// 本物の時計で、受けたまま操作を出していないストリームを持ったまま `exit` で run が終わっても、ヒープを落とすときに
+/// ソケットを閉じ、外の相手が EOF を読む (docs/spec/vm.md の「操作の記録」)。相手はテストのスレッドの std のストリーム
+/// で、待ち受けのポートはテストが空いているものを選んで渡す。3 秒は止まりの見張りで、時間は確かめない。
+#[test]
+fn an_accepted_stream_left_at_an_exit_is_closed() {
+    use std::io::Read;
+
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let src = format!(
+        "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" {port}
+  let (b, l) = Net.accept l
+  (exit 3 : Unit)
+  Net.close b
+  Net.close_listener l)
+"
+    );
+    let (done, ran) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let config = RunConfig::default()
+            .with_clock(eml_vm::Clock::Real)
+            .with_sched(Sched::Normal);
+        let _ = done.send(run_on(&src, 2, config));
+    });
+    // 待ち受けができるまで接続を試し直す
+    let start = std::time::Instant::now();
+    let mut peer = loop {
+        match std::net::TcpStream::connect(("127.0.0.1", port)) {
+            Ok(peer) => break peer,
+            Err(e) => {
+                assert!(start.elapsed() < Duration::from_secs(3), "{e}");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    };
+    let (out, finished) = ran
+        .recv_timeout(Duration::from_secs(3))
+        .expect("the run did not end");
+    assert_eq!(out, "");
+    assert_eq!(finished.exit, Some(3));
+    peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    let mut rest = Vec::new();
+    assert_eq!(peer.read_to_end(&mut rest).unwrap(), 0);
 }

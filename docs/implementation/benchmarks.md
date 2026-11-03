@@ -669,7 +669,7 @@ python3 -I bench/net/report.py at-net.jsonl > at-net.md
 
 受けたストリームの縛り方を変えるかは、`conn-self-32` が伸びて `serve-self-32` が伸びないか、`echo-self-fresh` が N = 2 で 10% 以上遅くなるかで決める。`conn-self-32` の w4÷w1 は 1.58 で伸びていないので、前の条件には当たらない。`echo-self-fresh` の w2÷w1 は 2.02 で判定が差なので、後の条件に当たる。そのため、受けたストリームを、最初に使うタスクの worker の driver に縛る ([非同期の設計](../future/async.md) の「ハンドルと worker」)。
 
-縛り方を変えた後に、同じ機械で、8e6ad2e にその変更を足した木の release の eml で、`scale.sh` (生の中央値も書く同じ写し) と次の `net.sh` を流し直した。
+縛り方を変えた後に、同じ機械で、3dfd225 と同じコード (違うのは引数の `mut` の書き方とコメントだけ) の release の eml で、`scale.sh` (生の中央値も書く同じ写し) と次の `net.sh` を流し直した。
 
 ```sh
 bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
@@ -691,7 +691,7 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 | serve-self-32 | 20480 往復 | 16.56 | 19.93 | 18.91 | 1.20 | 1.14 | 差なし | 差なし |
 
 - `base` はどの N でも worker 1..N-1 を作らないので、N = 4 の `base` にも worker のスレッドを起こす費用は入らない。`base` の実時間の中央値は、N = 1、2、4 で 28.8、30.3、30.2 ms だった
-- `echo-self-fresh`: N = 2 の1往復は、w1 の 2.02 倍から 1.23 倍になった。worker 1 のサーバーのタスクは、受けたストリームを自分の driver で読み書きするので、転送はなくなった。残る差は、worker 0 のクライアントと worker 1 のサーバーの往復がスレッドをまたぐことから来る。自発の切り替えは、run あたり 33188 回から 44261 回に増えた
+- `echo-self-fresh`: N = 2 の1往復は、w1 の 2.02 倍から 1.23 倍になった。worker 1 のサーバーのタスクは、受けたストリームを自分の driver で読み書きするので、転送はなくなった。残る差は、worker 0 のクライアントと worker 1 のサーバーの往復がスレッドをまたぐことから来る。この run の自発の切り替えは、run あたり w1 で 33188 回、w2 で 44261 回だった。前の表の run の w2 は 87170 回で、ほぼ半分になった
 - `serve-self-32`: N = 2 で 1.20 倍、N = 4 で 1.14 倍で、どちらも差なしになった。前の表の N = 4 の 1.73 倍は、読み書きの転送が worker 0 に集まったためだった
 
 `chan_pingpong` の t(4) は t(1) より遅い。worker をまたぐ容量 0 の channel の往復は、1つの worker の上の往復より費用が大きい。これは [ロードマップ](../future/roadmap.md) の「マルチコア対応」の「ロックフリーの受け箱と channel」を見直す材料である。

@@ -3771,6 +3771,8 @@ fn bind_stream<M: Mode>(
         ));
     }
     let driver = driver.ok_or(CellFault::Internal("a worker without a driver"))?;
+    // bin は取り込む前に引く。取り込んだ後に失敗して、driver にハンドルを残さないためである
+    let bin = shared.lock().host_bin(here.me, driver.bin())?;
     let Bind::Unbound(sock) = std::mem::replace(&mut s.bind, Bind::Lost) else {
         unreachable!("the stream is unbound");
     };
@@ -3778,7 +3780,6 @@ fn bind_stream<M: Mode>(
         Ok(handle) => handle,
         Err(e) => return Ok(Err(e)),
     };
-    let bin = shared.lock().host_bin(here.me, driver.bin())?;
     s.bind = Bind::Bound {
         host: here.me,
         handle,

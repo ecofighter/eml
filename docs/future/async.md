@@ -246,7 +246,7 @@ read_chunk buf s =
 
 ### ハンドルと worker
 
-- 利用者から見える規則はない。ランタイムはハンドルを最初に受け付けた worker の I/O の driver にそのハンドルを縛る。`accept` が返したソケットは縛らずに作り、そのソケットの操作 (読み、書き、設定) を最初に受け付ける worker の driver に縛る。仮想の時計の run では host はいつも worker 0 なので、テストの driver は受けたソケットを受けた host に縛る。そのため、`spawn` から最初の操作までの間にタスクが動いても費用はない
+- 利用者から見える規則はない。ランタイムはハンドルを最初に受け付けた worker の I/O の driver にそのハンドルを縛る。`accept` が返したソケットは縛らずに作り、そのソケットの操作 (読み、書き、設定) を最初に受け付ける worker の driver に縛る。そのため、`spawn` から最初の操作までの間にタスクが動いても費用はない。仮想の時計の run では host はいつも worker 0 なので、テストの driver は受けたソケットを受けた host に縛る
 - host でない worker のタスクの受け付けは、host の受け箱へ `Submit` で回し、完了はタスクのセルの持ち主へ `Completion` で届ける ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。ハンドルを channel か捕まえた値で別の worker のタスクに渡したときと、救済でタスクが別の worker に動いた後がこれに当たる。これは正しさのために要る。`Clock::Virtual` の run では driver は worker 0 の1つだけなので、host はいつも worker 0 である
 - 救済は回した受け付けを処理しない。縛った worker の driver が要るためである。詰まった worker へ回した受け付けは、その worker が戻るまで待つ。これは遅れで、正しさの問題ではない
 - 待っている間にタスクが救済されたときは、操作の記録が持つ論理的な worker ID を救済した worker のものに書き換え、記録の語の持ち主を所有ごと移す (`transfer_back` と同じ形)。`share` の印は付けない。driver に貸す buffer は一意でなければならないためである ([マルチコア対応の設計](multicore.md) の「印付けの表」の I/O の buffer の行)
