@@ -248,6 +248,9 @@ table! {
         Scope => type_row("Std.Async.Scope", Unr, Repr::Int),
         // driver の操作の記録の番号を持つ即値。1回だけ使うことは型検査が守る (docs/spec/stdlib.md の「`Std.Async`」)
         OpId => type_row("Std.Async.OpId", Lin, Repr::Int),
+        // 仕事の token の即値。`Chan` と同じハンドルの型だが、1回だけ使うことは型検査が守るので `Lin` で、Kind は
+        // 結果の型によらない (docs/spec/stdlib.md の「`Std.Async`」)
+        Job => TypeRow { linearity: Lin, ..handle_type_row("Std.Async.Job") },
         // 登録表の添字の即値。Kind は中身の型によらない (docs/spec/stdlib.md の「`Std.Chan`」)
         Chan => handle_type_row("Std.Chan.Chan"),
         // 登録表ではなく、run をまたいで `Machine` が持つ `Counters` の表の添字の即値 (docs/spec/stdlib.md の「`Std.Atomic`」)
@@ -284,7 +287,8 @@ const fn type_row(name: &'static str, linearity: Linearity, repr: Repr) -> TypeR
     }
 }
 
-/// 型引数を1つ持つが、その Kind に引数が効かない `Unr` のハンドル。値は登録表の添字の即値である。
+/// 型引数を1つ持つが、その Kind に引数が効かないハンドル。値は登録表の添字の即値で、既定の Kind は `Unr` である。
+/// 線形性を変えたい行は `linearity` を上書きする。
 const fn handle_type_row(name: &'static str) -> TypeRow {
     TypeRow {
         params: 1,
@@ -1296,6 +1300,12 @@ table! {
                 )
             },
         ),
+        // 仕事の行 (docs/spec/stdlib.md の「`Std.Async`」)。token は即値で、RC を持たない。`fork_job` は引数の閉包を
+        // 預からない
+        AsyncForkJob => kinded("Std.Async.fork_job", &[TObj], &[Poly], Int, Unr, Purity::Effectful),
+        AsyncJobCell => borrowing(&[true], FunctionRow { with_arg: Some(0), ..row("Std.Async.job_cell", &[Int], Int, Purity::Pure) }),
+        AsyncTakeJob => kinded("Std.Async.take_job", &[Int], &[Unr], TObj, Poly, Purity::Effectful),
+        AsyncDropJob => row("Std.Async.drop_job", &[Int], Unit, Purity::Effectful),
         // channel の行 (docs/spec/stdlib.md の「`Std.Chan`」)。channel の引数は即値で、RC を持たない
         ChanNewRaw => row("Std.Chan.new_raw", &[Int], Int, Purity::Effectful),
         ChanToCell => row("Std.Chan.chan_cell", &[Int], Int, Purity::Pure),
@@ -1625,8 +1635,9 @@ table! {
 }
 
 impl Extern {
-    /// `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net` の行。VM はこれらの行を
+    /// `job_cell` を除く `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net` の行。VM はこれらの行を
     /// 汎用の extern の命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
+    /// `job_cell` と `chan_cell` は即値を写すだけの普通の extern である。
     pub fn is_async(self) -> bool {
         matches!(
             self,
@@ -1663,6 +1674,9 @@ impl Extern {
                 | Extern::AsyncParkIoUntil
                 | Extern::AsyncParkSignal
                 | Extern::AsyncOpReady
+                | Extern::AsyncForkJob
+                | Extern::AsyncTakeJob
+                | Extern::AsyncDropJob
                 | Extern::ChanNewRaw
                 | Extern::ChanReserveSend
                 | Extern::ChanPushRaw

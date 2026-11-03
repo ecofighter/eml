@@ -86,6 +86,10 @@ pub extern data Scope
 -- 呼び出しの中で取り出すので、利用者のコードには渡らない (docs/spec/stdlib.md の「`Std.Async`」)
 pub extern data OpId
 
+-- 仕事の token の即値 `(generation << 32) | index` を持つ。Kind は `a` によらず `Lin` で、型の引数は `Unr` に固定しない。
+-- 1回だけ使うことは型検査が守る (docs/spec/stdlib.md の「`Std.Async`」)
+pub extern data Job a
+
 -- 本体の結果、失敗、取り消しのどれで終わっても、子がすべて終わるまで待ってから戻る。最初に記録した失敗が本体の結果より
 -- 先になる (docs/spec/stdlib.md の「スコープ」)
 pub scope : (Scope -> <IO, Panic, Async> a) -> <IO, Panic, Async> a
@@ -363,3 +367,7 @@ extern park_io          : OpId -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit
 extern park_io_until    : OpId -> Int -> (once (Wake, OpId) -> <IO> Unit) -> <IO> Unit
 extern park_signal      : Int -> (once Wake -> <IO> Unit) -> <IO> Unit
 extern op_ready         : OpId -> Int -> <IO> (Int, OpId)
+extern fork_job         : (Unit -> <never e> a) -> <IO> Job a
+extern job_cell         : Job a -> (Cell, Job a)
+extern take_job         : Job a -> <IO> a
+extern drop_job         : Job a -> <IO> Unit

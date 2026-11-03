@@ -75,6 +75,9 @@ probe_counter c = c
 probe_op : Async.OpId -> Async.OpId
 probe_op o = o
 
+probe_job : Async.Job Int -> Async.Job Int
+probe_job j = j
+
 probe_tcp_listener : Net.TcpListener -> Net.TcpListener
 probe_tcp_listener l = l
 
@@ -118,6 +121,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Chan => "probe_chan",
         ExternType::Counter => "probe_counter",
         ExternType::OpId => "probe_op",
+        ExternType::Job => "probe_job",
         ExternType::NetTcpListener => "probe_tcp_listener",
         ExternType::NetTcpStream => "probe_tcp_stream",
         ExternType::TlsConn => "probe_tls_conn",
@@ -280,7 +284,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 }
 
 /// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`、
-/// `Std.Async.op_ready`、
+/// `Std.Async.op_ready`、`Std.Async.job_cell`、
 /// `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr` と、`Std.Tls` の6つの行と、
 /// `Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.Tls` の `push_tls` と `write_plain` は
 /// データを借りて `Conn` を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
@@ -296,6 +300,7 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Std.MutArray.read" => (&[true, false], Some(0)),
             "Std.Async.task_cell" => (&[true], Some(0)),
             "Std.Async.op_ready" => (&[true, false], Some(0)),
+            "Std.Async.job_cell" => (&[true], Some(0)),
             "Std.Net.op_listener"
             | "Std.Net.op_stream"
             | "Std.Net.op_outcome"
@@ -499,7 +504,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
-/// `Std.Par.par`、`Std.Async` の18行、`Std.Chan` の2行、`Std.Net` の12行、`Std.Tls` の11行以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の20行、`Std.Chan` の2行、`Std.Net` の12行、`Std.Tls` の11行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -564,6 +569,8 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Async.take_result" | "Std.Async.run_result" => (&[Lin], Poly),
             "Std.Async.detach" | "Std.Async.cancel_raw" => (&[Lin], Unr),
             "Std.Async.start_in_raw" => (&[Unr, Poly], Lin),
+            "Std.Async.fork_job" => (&[Poly], Unr),
+            "Std.Async.take_job" => (&[Unr], Poly),
             "Std.Chan.push_raw" => (&[Poly, Unr], Unr),
             "Std.Chan.pop_raw" => (&[Unr], Poly),
             "Std.Async.park_send" | "Std.Async.park_recv" => (&[Unr, Lin], Unr),

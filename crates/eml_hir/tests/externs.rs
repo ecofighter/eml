@@ -155,7 +155,9 @@ fn every_extern_function_is_declared_once_in_std() {
                         effects.is_empty() || held_arrows.contains(&id)
                     }
                     RowRef::Open { effects, tail, .. } => {
-                        effects.is_empty() && Some(*tail) == shared_tail
+                        effects.is_empty()
+                            && (Some(*tail) == shared_tail
+                                || signature.generics.row_vars[*tail].never.is_some())
                     }
                     RowRef::Error => false,
                 };

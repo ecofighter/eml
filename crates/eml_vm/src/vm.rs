@@ -3055,7 +3055,7 @@ fn run_extern<R: Exec>(
                 task.set(dst, Word::UNIT);
             }
             // channel の即値をそのまま `Cell` の即値にする (docs/spec/vm.md の「命令」)
-            Extern::ChanToCell => task.set_raw(dst, task.raw(arg(0))),
+            Extern::ChanToCell | Extern::AsyncJobCell => task.set_raw(dst, task.raw(arg(0))),
             Extern::Open | Extern::FileOutCreate | Extern::FileOutAppend => {
                 let open = match ext {
                     Extern::Open => Open::Read,
@@ -3620,6 +3620,9 @@ fn run_extern<R: Exec>(
             | Extern::AsyncParkIoUntil
             | Extern::AsyncParkSignal
             | Extern::AsyncOpReady
+            | Extern::AsyncForkJob
+            | Extern::AsyncTakeJob
+            | Extern::AsyncDropJob
             | Extern::ChanNewRaw
             | Extern::ChanReserveSend
             | Extern::ChanPushRaw
