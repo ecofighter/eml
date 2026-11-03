@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
-    Clock, CodeBase, Control, Finished, Limits, Machine, Normal, RunConfig, RunStats, RuntimeError,
-    Sched, Stop, Task, VmFault,
+    Clock, CodeBase, Control, Entry, Finished, Limits, Machine, Normal, Ready, RunConfig, RunStats,
+    RuntimeError, Sched, Stop, Task, VmFault,
 };
 
 use crate::common::parse;
@@ -30,10 +30,13 @@ fn a_finished_moves() {
     send::<Finished>();
 }
 
-/// 方針の値はスレッドをまたいで読む (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 方針の値はスレッドをまたいで読み、方針が並べる実行待ちの項は欄の lock の下でスレッドをまたぐ
+/// (docs/spec/vm.md の「タスクとスケジュール」)。
 #[test]
 fn a_policy_moves_and_a_sched_is_shared() {
     send::<Normal>();
+    send::<Ready>();
+    send::<Entry>();
     send::<Sched>();
     sync::<Sched>();
     copy::<Sched>();

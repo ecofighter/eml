@@ -12,7 +12,7 @@ use crate::cells::{self, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnabl
 use crate::driver::DriverKind;
 use crate::monitor::Monitor;
 use crate::vm::Task;
-use crate::workers::{Mailer, Notice, Run, Workers};
+use crate::workers::{Mailer, Notice, Ready, Run, Workers};
 
 /// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを、すべての
 /// worker の止める語に立てるので、`eml run` の次の同じシグナルはその場で終わらせ、どの worker も次の安全点で止まる
@@ -57,7 +57,11 @@ fn take_async<M: Mode>(
             } => {
                 cells.route(&mut woken, here, out)?;
                 match cells.placed_owner(cell, worker)? {
-                    owner if owner == here.me => out.push(Runnable::Start { cell, closure }),
+                    owner if owner == here.me => out.push(Runnable::Start {
+                        cell,
+                        worker,
+                        closure,
+                    }),
                     owner => here.post.place(owner, cell, worker, closure),
                 }
             }
@@ -109,10 +113,12 @@ pub trait Policy: Send {
     fn tick(&mut self) -> bool;
     /// 横取りを試みた後に、次の横取りまでの予算を詰め直す。
     fn reload(&mut self);
-    /// 走れるタスクの列から、次に動かすタスクを取り出す。
-    fn pick(&mut self, ready: &mut VecDeque<TaskId>) -> Option<TaskId>;
-    /// 起こしたタスクを、走れるタスクの列に入れる。
-    fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId);
+    /// 走れるタスクの列から、次に動かす項を取り出す。列の lock の下で呼ぶので、列のほかに触れない。
+    fn pick(&mut self, ready: &mut VecDeque<Ready>) -> Option<Ready>;
+    /// 起こしたタスクを、走れるタスクの列に入れる。列の lock の下で呼ぶ。
+    fn wake(&mut self, ready: &mut VecDeque<Ready>, task: TaskId);
+    /// この worker の仕事を救済してよいかを受け取る。`Scheduler` を作るときに1回だけ呼ぶ。
+    fn set_rescuable(&mut self, _rescuable: bool) {}
     /// worker `k` の `Scheduler` が使う方針。seed を持つ方針は worker ごとに別の擬似乱数の列にする。同じ seed の run は
     /// どの worker でも同じ列を引かないためである。
     fn for_worker(&self, k: usize) -> Self
@@ -135,12 +141,12 @@ impl Policy for Normal {
 
     fn reload(&mut self) {}
 
-    fn pick(&mut self, ready: &mut VecDeque<TaskId>) -> Option<TaskId> {
+    fn pick(&mut self, ready: &mut VecDeque<Ready>) -> Option<Ready> {
         ready.pop_front()
     }
 
-    fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId) {
-        ready.push_back(task);
+    fn wake(&mut self, ready: &mut VecDeque<Ready>, task: TaskId) {
+        ready.push_back(Ready::Task(task));
     }
 
     fn for_worker(&self, _k: usize) -> Normal {
@@ -163,12 +169,12 @@ impl Policy for Sequential {
 
     fn reload(&mut self) {}
 
-    fn pick(&mut self, ready: &mut VecDeque<TaskId>) -> Option<TaskId> {
+    fn pick(&mut self, ready: &mut VecDeque<Ready>) -> Option<Ready> {
         ready.pop_front()
     }
 
-    fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId) {
-        ready.push_front(task);
+    fn wake(&mut self, ready: &mut VecDeque<Ready>, task: TaskId) {
+        ready.push_front(Ready::Task(task));
     }
 
     fn for_worker(&self, _k: usize) -> Sequential {
@@ -227,7 +233,7 @@ impl Policy for Seeded {
         self.budget = 1 + self.next() % 16;
     }
 
-    fn pick(&mut self, ready: &mut VecDeque<TaskId>) -> Option<TaskId> {
+    fn pick(&mut self, ready: &mut VecDeque<Ready>) -> Option<Ready> {
         if ready.is_empty() {
             return None;
         }
@@ -235,8 +241,8 @@ impl Policy for Seeded {
         ready.remove(index)
     }
 
-    fn wake(&mut self, ready: &mut VecDeque<TaskId>, task: TaskId) {
-        ready.push_back(task);
+    fn wake(&mut self, ready: &mut VecDeque<Ready>, task: TaskId) {
+        ready.push_back(Ready::Task(task));
     }
 
     fn for_worker(&self, k: usize) -> Seeded {
@@ -341,8 +347,6 @@ pub struct Scheduler<P: Policy> {
     free_tasks: Vec<TaskId>,
     /// 動いているタスクの番号。
     pub(crate) current: TaskId,
-    /// 走れるタスク。
-    pub(crate) ready: VecDeque<TaskId>,
     pub(crate) joins: Vec<Option<JoinNode>>,
     free_joins: Vec<JoinId>,
     /// 方針が安全点で始めた切り替えの数。
@@ -456,7 +460,6 @@ impl<P: Policy> Scheduler<P> {
             tasks: vec![None],
             free_tasks: Vec::new(),
             current: MAIN,
-            ready: VecDeque::new(),
             joins: Vec::new(),
             free_joins: Vec::new(),
             preemptions: 0,
@@ -751,7 +754,7 @@ impl<P: Policy> Scheduler<P> {
             match notice {
                 Notice::Child(task) => {
                     let id = self.add_task(task);
-                    self.ready.push_back(id);
+                    self.run.push_ready(self.index, Ready::Task(id));
                 }
                 Notice::Joined { join, outcome } => {
                     let node = self.join(join);
@@ -838,7 +841,7 @@ impl<P: Policy> Scheduler<P> {
         if let Some(task) = &self.tasks[parent]
             && matches!(task.state, TaskState::Waiting(w) if w == j)
         {
-            self.policy.wake(&mut self.ready, parent);
+            self.run.wake_ready(self.index, &mut self.policy, parent);
         }
     }
 
@@ -903,9 +906,11 @@ impl<P: Policy> Scheduler<P> {
         join
     }
 
-    /// エントリのタスクのほかにタスクか join が残っているか。
+    /// エントリのタスクのほかにタスクか join が残っているか。実行待ちの列の `Entry` もまだ表にないタスクとして数える。
     pub(crate) fn has_children(&self) -> bool {
-        self.tasks.iter().any(Option::is_some) || self.joins.iter().any(Option::is_some)
+        self.tasks.iter().any(Option::is_some)
+            || self.joins.iter().any(Option::is_some)
+            || !self.run.ready_is_empty(self.index)
     }
 
     pub(crate) fn count_preemption(&mut self) {
@@ -1041,8 +1046,18 @@ mod tests {
         assert_eq!(draws(1), draws(1));
         assert_ne!(draws(0), draws(1));
         assert_eq!(base.for_worker(3).seed, splitmix64(7 ^ 3));
-        assert!(Normal.for_worker(2).pick(&mut VecDeque::from([4])) == Some(4));
-        assert!(Sequential.for_worker(2).pick(&mut VecDeque::from([4])) == Some(4));
+        assert!(matches!(
+            Normal
+                .for_worker(2)
+                .pick(&mut VecDeque::from([Ready::Task(4)])),
+            Some(Ready::Task(4))
+        ));
+        assert!(matches!(
+            Sequential
+                .for_worker(2)
+                .pick(&mut VecDeque::from([Ready::Task(4)])),
+            Some(Ready::Task(4))
+        ));
     }
 
     /// worker が2つの run の表と登録表と、worker 1 の `Scheduler` とその `Ctx`。スレッドは作らず、worker 1 の集める

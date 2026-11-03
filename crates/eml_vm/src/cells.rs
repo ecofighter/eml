@@ -104,16 +104,27 @@ impl CellRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct WaitToken(pub u64);
 
-/// 核が実行系に渡す仕事。
+/// 核が実行系に渡す仕事。`worker` はどの腕でもタスクの論理的な ID で、セルを触る区間で読んでおく。実行系が仕事を積むときに
+/// 登録表を読み直さないためである。
 pub(crate) enum Runnable {
     /// タスク `cell` を始める。`closure` はエントリ `start_task` に渡す閉包で、仕事が参照を1つ持つ。
-    Start { cell: CellRef, closure: Word },
+    Start {
+        cell: CellRef,
+        worker: u32,
+        closure: Word,
+    },
     /// 待っていたタスク `cell` を、継続 `k` に `wake` を渡して再開する。`k` は仕事が参照を1つ持つ。
-    Resume { cell: CellRef, k: Word, wake: i64 },
+    Resume {
+        cell: CellRef,
+        worker: u32,
+        k: Word,
+        wake: i64,
+    },
     /// driver の操作を待っていたタスク `cell` を、継続 `k` に `wake` と token `op` を渡して再開する。`k` は仕事が参照を
     /// 1つ持ち、`op` は記録の番号の即値である。
     ResumeIo {
         cell: CellRef,
+        worker: u32,
         k: Word,
         wake: i64,
         op: i64,
@@ -1354,9 +1365,15 @@ impl Registry {
                     return Ok(Route::Stale);
                 };
                 Ok(Route::Run(match op {
-                    None => Runnable::Resume { cell, k, wake },
+                    None => Runnable::Resume {
+                        cell,
+                        worker: task.worker,
+                        k,
+                        wake,
+                    },
                     Some(op) => Runnable::ResumeIo {
                         cell,
+                        worker: task.worker,
                         k,
                         wake,
                         op: op.encode(),
@@ -1515,11 +1532,6 @@ impl Registry {
         }
     }
 
-    /// タスクの論理的な worker ID。
-    pub(crate) fn worker(&mut self, cell: CellRef) -> Result<u32, CellFault> {
-        Ok(self.task_mut(cell)?.worker)
-    }
-
     /// 次の run の `generations`。添字ごとに、この run までに出したどの generation よりも大きい。誤りで止まった run は
     /// セルを残すので、残ったセルの generation も1つ進める。`slots` は run の間に縮まない。
     pub(crate) fn next_generations(&self) -> Vec<u32> {
@@ -1676,7 +1688,14 @@ impl Registry {
             here.post.place(owner, cell, worker, g);
             return Ok(Some((cell, None)));
         }
-        Ok(Some((cell, Some(Runnable::Start { cell, closure: g }))))
+        Ok(Some((
+            cell,
+            Some(Runnable::Start {
+                cell,
+                worker,
+                closure: g,
+            }),
+        )))
     }
 
     /// 受け箱の `Place` が名指すタスクの今の持ち主。受けた worker は、自分なら始める仕事にし、ほかの worker ならその
@@ -1758,12 +1777,13 @@ impl Registry {
                 return Err(CellFault::Internal("a cell of the wrong kind"));
             }
         };
-        self.suspend(me)?;
+        let worker = self.suspend(me)?;
         self.stats.parks += 1;
         if self.point(me)? {
             self.stats.cancels += 1;
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: CANCELLED,
             }));
@@ -1771,6 +1791,7 @@ impl Registry {
         if done {
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: WOKE,
             }));
@@ -1805,13 +1826,14 @@ impl Registry {
             ));
         }
         let done = job.end.is_some();
-        self.suspend(me)?;
+        let worker = self.suspend(me)?;
         self.stats.parks += 1;
         let task = self.task_mut(me)?;
         if done {
             task.woke_from_job = true;
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: WOKE,
             }));
@@ -1837,12 +1859,13 @@ impl Registry {
             }
             None => None,
         };
-        self.suspend(me)?;
+        let worker = self.suspend(me)?;
         self.stats.parks += 1;
         if self.point(me)? {
             self.stats.cancels += 1;
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: CANCELLED,
             }));
@@ -1850,6 +1873,7 @@ impl Registry {
         let Some(target) = target else {
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: WOKE,
             }));
@@ -1880,11 +1904,12 @@ impl Registry {
 
     /// タスク `me` が、継続 `k` で実行待ちの列の後ろへ回る。
     pub(crate) fn ready(&mut self, me: CellRef, k: Word) -> Result<Runnable, CellFault> {
-        self.suspend(me)?;
+        let worker = self.suspend(me)?;
         self.stats.parks += 1;
         self.task_mut(me)?.wait = Some(Wait::Ready);
         Ok(Runnable::Resume {
             cell: me,
+            worker,
             k,
             wake: WOKE,
         })
@@ -1899,12 +1924,13 @@ impl Registry {
         me: CellRef,
         k: Word,
     ) -> Result<Option<Runnable>, CellFault> {
-        self.suspend(me)?;
+        let worker = self.suspend(me)?;
         self.stats.parks += 1;
         if self.point(me)? {
             self.stats.cancels += 1;
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: CANCELLED,
             }));
@@ -1913,6 +1939,7 @@ impl Registry {
             self.task_mut(me)?.wait = Some(Wait::Ready);
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: WOKE,
             }));
@@ -1941,12 +1968,13 @@ impl Registry {
             .ok()
             .filter(|&i| i < SIGNAL_BITS.len())
             .ok_or(CellFault::Internal("a signal number is out of range"))?;
-        self.suspend(me)?;
+        let worker = self.suspend(me)?;
         self.stats.parks += 1;
         if self.point(me)? {
             self.stats.cancels += 1;
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: CANCELLED,
             }));
@@ -1991,13 +2019,14 @@ impl Registry {
         Ok(())
     }
 
-    fn suspend(&mut self, me: CellRef) -> Result<(), CellFault> {
+    /// 動いているタスク `me` を止め、その論理的な ID を返す。すぐ再開する仕事はこの ID を持って戻る。
+    fn suspend(&mut self, me: CellRef) -> Result<u32, CellFault> {
         let task = self.task_mut(me)?;
         if !matches!(task.phase, Phase::Running) {
             return Err(CellFault::Internal("a task waits without running"));
         }
         task.phase = Phase::Parked;
-        Ok(())
+        Ok(task.worker)
     }
 
     /// `cell` が終わるか閉じるまで、worker `owner` の token で待つ。
@@ -3007,6 +3036,7 @@ impl Registry {
             let wake = if cancelled { CANCELLED } else { WOKE };
             return Ok(Some(Runnable::ResumeIo {
                 cell: me,
+                worker,
                 k,
                 wake,
                 op: token,
@@ -4414,13 +4444,14 @@ impl Registry {
         out: &mut Vec<Woken>,
     ) -> Result<Option<Runnable>, CellFault> {
         let cell = CellRef::decode(c);
-        self.suspend(me)?;
+        let worker = self.suspend(me)?;
         self.stats.parks += 1;
         self.stats.channel_waits += 1;
         if self.point(me)? {
             self.stats.cancels += 1;
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: CANCELLED,
             }));
@@ -4437,6 +4468,7 @@ impl Registry {
         if ready {
             return Ok(Some(Runnable::Resume {
                 cell: me,
+                worker,
                 k,
                 wake: WOKE,
             }));

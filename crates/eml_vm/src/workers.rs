@@ -1,8 +1,10 @@
 //! run ごとに worker の間で共有する表 `Run` と、worker の空きの待ち (docs/spec/vm.md の「タスクとスケジュール」
-//! 「時計と driver」)。`Run` が持つのは atomic の数と lock の下の小さな状態だけで、ヒープの語も `Ctx` も持たない。
-//! ヒープに触れるのはその持ち主の worker のスレッドだけにするためである (docs/future/multicore.md の「スレッドと worker」)。
+//! 「時計と driver」)。`Run` が持つのは atomic の数と lock の下の小さな状態だけで、`Ctx` もヒープも持たない。ヒープの語を
+//! 持つのは欄の lock の下の受け箱と実行待ちの列だけで、`Run` はその語に触れずに運ぶ。ヒープに触れるのはその持ち主の
+//! worker のスレッドだけにするためである (docs/future/multicore.md の「スレッドと worker」)。
 
 use std::any::Any;
+use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -16,11 +18,11 @@ use crate::code::CodeBase;
 use crate::counters::Counters;
 use crate::doorbell::Doorbell;
 use crate::driver::{DriverKind, RunClock, ceil_ms, floor_ms};
-use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, driver_mut};
+use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
 use crate::{HeapWork, RunCounts, RuntimeError, VmFault, WORKER_STACK};
 
-// 4つの型はどれも、スレッドをまたいで渡すか共有する (docs/spec/vm.md の「タスクとスケジュール」)
+// 6つの型はどれも、スレッドをまたいで渡すか共有する (docs/spec/vm.md の「タスクとスケジュール」)
 const _: () = {
     const fn sync<T: Sync>() {}
     const fn send<T: Send>() {}
@@ -28,7 +30,62 @@ const _: () = {
     send::<JoinNode>();
     send::<Outcome>();
     send::<Notice>();
+    send::<Ready>();
+    send::<Entry>();
 };
+
+/// worker の実行待ちの列の項 (docs/spec/vm.md の「タスクとスケジュール」)。
+pub enum Ready {
+    /// この worker の表にある VM の `Task`。`par` の右の子、横取りしたタスク、join で待つ親、`Async.run` で待つ `Task`
+    /// で、フレームを持つ。
+    Task(TaskId),
+    /// フレームを持たない `Async` の仕事。持ち主が `pick` で取ったときにエントリの `Task` にする。
+    Entry(Entry),
+}
+
+/// フレームを持たない `Async` の仕事。セル、タスクの論理的な ID、種類と語を1つずつ持ち、ほかの状態は登録表にある。
+pub struct Entry {
+    pub(crate) cell: CellRef,
+    pub(crate) worker: u32,
+    pub(crate) kind: EntryKind,
+    /// 始める仕事では閉包、再開する仕事では継続で、項が参照を1つ持つ。
+    pub(crate) word: Word,
+    /// 救済で受けた項。その間はもう一度盗まない。
+    pub(crate) rescued: bool,
+}
+
+/// `Entry` が入るエントリの関数と、語のほかに渡す即値。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryKind {
+    Start,
+    Resume { wake: i64 },
+    ResumeIo { wake: i64, op: i64 },
+}
+
+impl Ready {
+    /// 欄の `ready_entries` に数える項か。救済で受けていない、始める仕事と `resume_task` で再開する仕事である。
+    fn counted(&self) -> bool {
+        matches!(
+            self,
+            Ready::Entry(Entry {
+                rescued: false,
+                kind: EntryKind::Start | EntryKind::Resume { .. },
+                ..
+            })
+        )
+    }
+}
+
+/// worker `victim` の仕事を救済してよいか。今はいつも真である (docs/spec/vm.md の「タスクとスケジュール」)。
+#[expect(dead_code, reason = "no caller asks for a rescue")]
+pub(crate) fn rescuable(run: &Run, victim: usize) -> bool {
+    let _ = (run, victim);
+    true
+}
+
+/// 1回の救済で見る項の数の上限。実行待ちと受け箱のそれぞれに掛かる。
+#[expect(dead_code, reason = "no caller asks for a rescue")]
+pub(crate) const STEAL_SCAN: usize = 1024;
 
 /// ほかの worker から受け箱に届く知らせ (docs/spec/vm.md の「`par` の fork と join」「タスクとスケジュール」)。
 /// 語を運ぶのは `Child`、`Joined`、`Place` だけで、ほかの `Async` のタスクの知らせはセルの番号しか持たない。driver の
@@ -173,6 +230,13 @@ pub(crate) struct Slot {
     pub(crate) bin: OnceLock<Arc<HostBin>>,
     /// worker が動くタスクを替えた回数。監視のスレッドが横取りの判定に読む。
     pub(crate) switches: AtomicU64,
+    /// 走れるタスクの列。受け箱とは別の lock で、持つ間はほかの lock を取らない。触れるのは `Run` の列の操作だけである。
+    ready: Mutex<VecDeque<Ready>>,
+    /// 列の項のうち `Ready::counted` に当たるものの数。列の操作が列の lock の下で書く。
+    pub(crate) ready_entries: AtomicUsize,
+    /// 持ち主が待ちの後始末を終えたタスクのセルの数。単調に増える。
+    #[expect(dead_code, reason = "no rescue reads it")]
+    pub(crate) settled: AtomicU64,
 }
 
 /// 1回の run で worker が共有する表。run ごとに作り、run の終わりに捨てる。
@@ -240,6 +304,9 @@ impl Run {
                 waker: OnceLock::new(),
                 bin: OnceLock::new(),
                 switches: AtomicU64::new(0),
+                ready: Mutex::new(VecDeque::new()),
+                ready_entries: AtomicUsize::new(0),
+                settled: AtomicU64::new(0),
             })
             .collect();
         Run {
@@ -373,6 +440,54 @@ impl Run {
                 self.wake(h);
             }
         }
+    }
+
+    /// worker `k` の実行待ちの列の後ろに積む。
+    pub(crate) fn push_ready(&self, k: usize, item: Ready) {
+        let slot = &self.slots[k];
+        let mut ready = lock(&slot.ready);
+        if item.counted() {
+            slot.ready_entries.fetch_add(1, Ordering::Relaxed);
+        }
+        ready.push_back(item);
+    }
+
+    /// worker `k` の実行待ちの列から、方針 `policy` が選ぶ項を取り出す。
+    pub(crate) fn pick_ready<P: Policy>(&self, k: usize, policy: &mut P) -> Option<Ready> {
+        let slot = &self.slots[k];
+        let mut ready = lock(&slot.ready);
+        let item = policy.pick(&mut ready)?;
+        if item.counted() {
+            slot.ready_entries.fetch_sub(1, Ordering::Relaxed);
+        }
+        Some(item)
+    }
+
+    /// 起こしたタスク `id` を、方針 `policy` が決める位置で worker `k` の実行待ちの列に入れる。
+    pub(crate) fn wake_ready<P: Policy>(&self, k: usize, policy: &mut P, id: TaskId) {
+        policy.wake(&mut lock(&self.slots[k].ready), id);
+    }
+
+    /// worker `k` の実行待ちの列のうち、`keep` が真を返す項だけを順に残す。`keep` は列の lock の下で呼ぶので、項を
+    /// 見るほかに何もしない。
+    pub(crate) fn retain_ready(&self, k: usize, mut keep: impl FnMut(&Ready) -> bool) {
+        let slot = &self.slots[k];
+        let mut ready = lock(&slot.ready);
+        let mut removed = 0;
+        ready.retain(|item| {
+            let kept = keep(item);
+            if !kept && item.counted() {
+                removed += 1;
+            }
+            kept
+        });
+        if removed > 0 {
+            slot.ready_entries.fetch_sub(removed, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn ready_is_empty(&self, k: usize) -> bool {
+        lock(&self.slots[k].ready).is_empty()
     }
 
     /// 空いている worker を1つ取り出す。取り出した worker には、置く側が `Child` を1つ送る。
@@ -930,18 +1045,22 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、この worker が走らせるはずの仕事があるかを
-    /// 返す。右の子と仕事 (`Child`)、持ち主が自分のタスクの `Place`、継続を取り出せる `Wake` を数え、`Joined`、`Cancel`、
-    /// `Submit`、`CancelIo`、`Completion` と、もう待っていないセルへの起こしは数えない。登録表は書き換えず、知らせの語は
-    /// 手放さない。数えたら run は誤りで終わり、回復がヒープを捨てるからである (docs/spec/vm.md の
-    /// 「誤り、止めること、終わり」)。
+    /// 返す。実行待ちの列に残った `Entry`、右の子と仕事 (`Child`)、持ち主が自分のタスクの `Place`、継続を取り出せる
+    /// `Wake` を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion` と、もう待っていないセルへの起こしは数えない。
+    /// 登録表は書き換えず、列の項と知らせの語は手放さない。数えたら run は誤りで終わり、回復がヒープを捨てるからである
+    /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
     pub(crate) fn left_notices(&mut self) -> bool {
+        let mut left = false;
+        self.run.retain_ready(self.index, |item| {
+            left |= matches!(item, Ready::Entry(_));
+            true
+        });
         let notices = self.run.take_notices(self.index);
         if notices.is_empty() {
-            return false;
+            return left;
         }
         let me = self.me();
         let mut cells = self.cells.lock();
-        let mut left = false;
         for notice in &notices {
             left |= match notice {
                 Notice::Child(_) => true,
@@ -978,6 +1097,14 @@ impl<P: Policy> Scheduler<P> {
 
 #[cfg(test)]
 impl Run {
+    /// worker `k` の実行待ちの列のうち、`ready_entries` に数える項の数を数え直す。
+    pub(crate) fn count_entries(&self, k: usize) -> usize {
+        lock(&self.slots[k].ready)
+            .iter()
+            .filter(|item| item.counted())
+            .count()
+    }
+
     /// worker `k` を眠った形にする。空きの待ちが眠るときと同じく、欄の lock の下で `running` から引く。
     pub(crate) fn park(&self, k: usize) {
         let mut state = lock(&self.slots[k].state);
@@ -1002,7 +1129,7 @@ mod tests {
 
     use eml_rt::{Checked, Control, HeapError, Limits, Stop};
 
-    use super::{Notice, Run, settle};
+    use super::{Entry, EntryKind, Notice, Ready, Run, settle};
     use crate::cells::{CellRef, MailItem, Registry, Shared};
     use crate::driver::RunClock;
     use crate::sched::{Scheduler, Sequential};
@@ -1039,6 +1166,81 @@ mod tests {
             assert_eq!(settle(result(i), Some(heap())), Err(heap()));
             assert_eq!(settle(result(i), None), result(i));
         }
+    }
+
+    /// 欄の `ready_entries` は、列の `Entry` のうち救済で受けていない始める仕事と `resume_task` の再開の数で、積む、
+    /// 取る、残すのどれの後も数え直した値と等しい。`ResumeIo`、救済で受けた項、`Ready::Task` は数えない
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    #[test]
+    fn ready_entries_follows_push_pick_and_retain() {
+        let run = Run::new(1, None, RunClock::Virtual(Arc::default()), Arc::default());
+        let entry = |index: i64, kind: EntryKind, rescued: bool| {
+            Ready::Entry(Entry {
+                cell: CellRef::decode(index),
+                worker: 1,
+                kind,
+                word: eml_rt::Word::UNIT,
+                rescued,
+            })
+        };
+        let counts = |run: &Run| {
+            let counted = run.slots[0].ready_entries.load(Ordering::Relaxed);
+            assert_eq!(counted, run.count_entries(0));
+            counted
+        };
+        assert!(run.ready_is_empty(0));
+        run.push_ready(0, Ready::Task(5));
+        run.push_ready(0, entry(1, EntryKind::Start, false));
+        run.push_ready(0, entry(2, EntryKind::Resume { wake: 0 }, false));
+        run.push_ready(0, entry(3, EntryKind::ResumeIo { wake: 0, op: 7 }, false));
+        run.push_ready(0, entry(4, EntryKind::Start, true));
+        run.push_ready(0, entry(5, EntryKind::Resume { wake: 0 }, true));
+        assert_eq!(counts(&run), 2);
+        let mut policy = Sequential;
+        assert!(matches!(
+            run.pick_ready(0, &mut policy),
+            Some(Ready::Task(5))
+        ));
+        assert_eq!(counts(&run), 2);
+        assert!(matches!(
+            run.pick_ready(0, &mut policy),
+            Some(Ready::Entry(Entry {
+                kind: EntryKind::Start,
+                rescued: false,
+                ..
+            }))
+        ));
+        assert_eq!(counts(&run), 1);
+        // 起こしたタスクは数を変えない。`Sequential` は列の前に入れる
+        run.wake_ready(0, &mut policy, 6);
+        assert_eq!(counts(&run), 1);
+        // 数えない項を外しても数は変わらず、数える項を外すと減る
+        run.retain_ready(0, |item| {
+            !matches!(
+                item,
+                Ready::Entry(Entry {
+                    kind: EntryKind::ResumeIo { .. },
+                    ..
+                })
+            )
+        });
+        assert_eq!(counts(&run), 1);
+        run.retain_ready(
+            0,
+            |item| !matches!(item, Ready::Entry(e) if e.cell == CellRef::decode(2)),
+        );
+        assert_eq!(counts(&run), 0);
+        assert!(matches!(
+            run.pick_ready(0, &mut policy),
+            Some(Ready::Task(6))
+        ));
+        // 救済で受けた2つの項は数えずに残る
+        assert!(!run.ready_is_empty(0));
+        assert!(run.pick_ready(0, &mut policy).is_some());
+        assert!(run.pick_ready(0, &mut policy).is_some());
+        assert_eq!(counts(&run), 0);
+        assert!(run.ready_is_empty(0));
+        assert!(run.pick_ready(0, &mut policy).is_none());
     }
 
     /// 眠っている worker を起こすと `running` に数え、もう一度起こしても数は増えない。
