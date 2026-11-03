@@ -249,7 +249,7 @@ read_chunk buf s =
 - 利用者から見える規則はない。ランタイムはハンドルを最初に受け付けた worker の I/O の driver にそのハンドルを縛る。`accept` が返したソケットは縛らずに作り、そのソケットの操作 (読み、書き、設定) を最初に受け付ける worker の driver に縛る。そのため、`spawn` から最初の操作までの間にタスクが動いても費用はない。仮想の時計の run では host はいつも worker 0 なので、テストの driver は受けたソケットを受けた host に縛る
 - host でない worker のタスクの受け付けは、host の受け箱へ `Submit` で回し、完了はタスクのセルの持ち主へ `Completion` で届ける ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。ハンドルを channel か捕まえた値で別の worker のタスクに渡したときと、救済でタスクが別の worker に動いた後がこれに当たる。これは正しさのために要る。`Clock::Virtual` の run では driver は worker 0 の1つだけなので、host はいつも worker 0 である
 - 救済は回した受け付けを処理しない。縛った worker の driver が要るためである。詰まった worker へ回した受け付けは、その worker が戻るまで待つ。これは遅れで、正しさの問題ではない
-- 待っている間にタスクが救済されたときは、操作の記録が持つ論理的な worker ID を救済した worker のものに書き換え、記録の語の持ち主を所有ごと移す (`transfer_back` と同じ形)。`share` の印は付けない。driver に貸す buffer は一意でなければならないためである ([マルチコア対応の設計](multicore.md) の「印付けの表」の I/O の buffer の行)
+- 操作を待つタスクは救済しない。操作の記録の持ち主はタスクについて動かず、`resume_io` で再開する項も引き取らない ([VM](../spec/vm.md) の「救済」、[ロードマップ](roadmap.md) の「マルチコア対応」)
 - 1つの listener の accept は1つのタスクで行う。`SO_REUSEPORT` で複数のタスクが accept する形は後で足す
 
 ### その場で動く同期の行
@@ -274,7 +274,7 @@ read_chunk buf s =
 |---|---|---|
 | 普通の完了 | 登録表の仕事の記録 | 完了がタスクのセルの持ち主へ届き、取り出しが語を戻して記録を放す |
 | 仕事の途中でタスクが取り消された | 記録 | 仕事は止められない。タスクは完了を待ってから取り消しで再開し、巻き戻しが戻った語を落とす |
-| 待っている間にタスクが救済された | 記録。待ちの理由から届く | 救済する worker は、元の worker の lock の下で、記録の語を継続と同じく扱う。記録が持つ印のない `Unr` の語には、ここで元の worker を送り手として印を付け、`Lin` の語は移し替えにする。変わるのはヘッダだけで、プールは中身にだけ触れるので競合しない |
+| 待っている間の救済 | 記録 | この待ちのタスクは救済しない ([VM](../spec/vm.md) の「救済」) |
 | `exit` か致命的な誤り | 記録 | host のスレッドが実行中の仕事を待ってからヒープを落とす。2回目の Ctrl-C は今と同じく 130 で終わる |
 | REPL の回復 | 記録 | 回復は I/O の driver を空にするときと同じく実行中の仕事を待ってから写す |
 | 持ち主が入力をその場で書き換える | なし | 起きない。記録が印のない参照を持つので rc が 2 以上になり、`is_unique` が成り立たないので、書き込みは写す |
@@ -370,7 +370,7 @@ TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ラ
 - 仮想のシグナルは、テストのハーネスが `RunConfig::with_signals` か `Machine::with_signals` に渡す予定で起こす。UI テストは先頭の印の行 `-- signal: <interrupt|terminate> at <ms>` で予定を書く ([VM](../spec/vm.md) の「時間の待ち」、[テスト戦略](../implementation/testing.md) の「UI テスト」)
 - `Net` と `Signal` の UI テストは `tests/ui/{run,run-fail}/async/` の `net_*.em` と `signal_*.em` で、どれもテストの driver の上で流れる。本物のソケットと OS のシグナルは、Rust のテスト (`crates/eml_io/tests/real.rs`、`crates/eml_vm/tests/api.rs` と `signal.rs`、`crates/eml_cli/tests/cli.rs`) だけで試す。同じ組を3つの OS で流し、Windows に無い動きを確かめるものだけを `#[cfg(unix)]` にする ([テスト戦略](../implementation/testing.md) の「Windows で流さないテスト」)。ループバックでポート 0 に bind して `local_port` で読む。UI テストは worker の数 N が 2 と 8 でも流し、順に頼るファイルは印で外す ([テスト戦略](../implementation/testing.md) の「seed で流す」)
 - 意味のテスト: 取り消したタスクの `TcpStream` が閉じること (検査モードの漏れの検査で確かめる)、失敗した子がほかのタスクと `accept` で待つタスクをすぐに取り消すこと、`try_all` で `Panic` を分けたサーバが動き続けること、`shield` の中の別れの `send` が取り消しの下でも終わること、テストの driver で取り消した読みが投げる前に buffer を返すこと、`read_chunk_within` が使えるストリームとともに `(None, s)` を返すこと、`Signal.wait Interrupt` が試しの Ctrl-C を取り消しに変えること
-- 救済を強いるスケジュール (`RescueAlways`。N は 2 以上) で、検査モードの漏れと所有者の検査を流す
+- `async/` の UI テストは、救済を強いる方針 (`RescueAlways`) の N = 2 と 8 の run でも、検査モードの漏れと所有者の検査を流す ([テスト戦略](../implementation/testing.md) の「seed で流す」)
 - `RunStats` は driver の完了の数 `completions` と、channel の欄 `channel_ops`、`channel_waits`、`channels_swept` を持つ。`Std.Net` のテストのスナップショットも、ほかの欄と同じく逐次のスケジュール (`Sequential`) で固定する ([VM](../spec/vm.md) の「`RunStats`」)
 
 ## 未決の論点と将来の拡張

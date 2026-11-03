@@ -28,7 +28,6 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `async-rescue`: 詰まった worker のタスクを、空いた worker が救済する。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「救済」、同じ文書の「`Async` のタスク」
 - `task-limits`: タスクごとに深さ、スタック、メモリの上限を設け、超えたタスクだけを IO の失敗 `ResourceLimit` で止める。メモリの硬い上限は今と同じく run 全体を止める。安全点と末尾でない呼び出しの位置が、巻き戻しの地点になる。前提: なし。設計: [非同期の設計](async.md) の「タスクごとの上限」
 - `async-files`: 非同期のファイルと、子のプロセスのパイプを入れる。今のブロックする std の行では書けない次の3つを書けるようにする。前提: なし。設計: [非同期の設計](async.md) の「ファイルとパイプ」
   - パイプ (`.|`): 子の標準出力を次の子の標準入力へつなぐ。今の行で eml が読んで書き写すと、2段目の標準出力を pipe にした途端に 64 KiB で詰まる。`Cmd` の列を1回の `spawn` で OS の fd でつなぐ形もある
@@ -57,10 +56,10 @@
 - `rt-layout`: `eml_rt` に、物体のペイロードの先頭 (走査する語の数から決まる数の語の有無と、走査の始まり) を求めるインターフェースを足し、`eml_vm` の `data::count_word` が写して持つ同じ規則を消す。インターフェースの性質は、ヘッダの規則と同じく Verus で証明する。ネイティブのコード生成もこのインターフェースを使い、規則の写しを持たない。前提: なし。設計: [オブジェクトモデル](../spec/object-model.md) の「ヘッダ」
 - `jit-core`: `eml_native` に、一階の部分 (スカラー、データ、呼び出し、末尾呼び出し、クロージャと `apply`、RC) を CLIF にするコード生成を作り、`eml run --native` で動かす。AAPCS64 と x86_64 の SysV の `eml_enter` と `eml_fatal`、安全点、ネイティブのコードが読む `Ctx` の欄の配置、利用者の C の行をネイティブのコードから呼ぶことを入れる。扱わない形は E0004 で断り、UI テストの印 `// native: skip` を導入する。前提: `borrowed-params`、`ffi-c`、`rt-layout`。設計: [ネイティブ化の設計](native.md) の「確定した設計判断」、同じ文書の「呼び出し規約とエントリ」
 - `jit-externs`: すべての extern とプラグインの行を、ネイティブのコードから呼ぶ。包みと VM の腕を表から作り、extern の失敗を `Ctx.fault` で返す。前提: `jit-core`。設計: [ネイティブ化の設計](native.md) の「extern のエントリ」
-- `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`task-limits`、`async-rescue`、`async-files`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
+- `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`task-limits`、`async-files`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
 - `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 のエントリの stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
 - `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の実装の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`、`raw-arrays`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
-- `par-steal`: VM の `par` の右の子を、空いている worker の受け箱に置く形から、worker ごとの Chase-Lev の deque と盗みに替える。join の待ちと、子の終わりを親の worker へ知らせる道は、今のものをそのまま使う。呼んだ worker に積んだ `compute` の仕事も、右の子と同じく盗まれる。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
+- `par-steal`: VM の `par` の右の子を、空いている worker の受け箱に置く形から、worker ごとの Chase-Lev の deque と盗みに替える。join の待ちと、子の終わりを親の worker へ知らせる道は、今のものをそのまま使う。呼んだ worker に積んだ `compute` の仕事も、右の子と同じく盗まれる。今の実行待ちは、`par` の子と `Async` の仕事が混ざる worker ごとに1本の mutex の列で、切り替えのたびにその lock を取る ([VM](../spec/vm.md) の「タスクとスケジュール」、[計測の基準](../implementation/benchmarks.md) の「実行待ちの列の lock」)。`par` の子を deque に移した後に残る列の形も、この段で決め直す。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
 - `std-par`: `std/Par` のデータ並列の集まりの関数と、添字の範囲のプリミティブを入れる。前提: `par-steal`、`raw-arrays`。設計: [マルチコア対応の設計](multicore.md) の「データ並列での使い勝手」
 - `native-par`: ネイティブのコードで、join で待つ worker が手伝う fork / join を動かす。前提: `native-inline`、`std-par`、`jit-effects`。設計: [ネイティブ化の設計](native.md) の「並列の実行」
 
@@ -334,6 +333,12 @@
 - 遠隔の解放のあったページの列: 持ち主の取り込みは、ヒープのページの一覧をすべて歩き、ページごとに遠隔のリストの語を1回読む ([オブジェクトモデル](../spec/object-model.md) の「別のスレッドからの解放」)。解放を受けたページだけを積む列を持つ形がある
   - 後に回した理由: 列には、1つのページを2回積まないための2つ目の並行の手順が要る。2回積むとページのつなぎが壊れ、輪になりうる。歩く費用は、256 回の遠隔の解放か大きい物体1つの取り込みにならされる。
   - 見直す条件: channel を多く使うプログラムのプロファイルに取り込みの歩きが見えたとき。
+- 操作か仕事を待つタスクの救済: 救済は、操作の待ち (`Wait::Io`) と仕事の待ち (`Wait::Job`) のタスク、`resume_io` で再開する項、host から持ち主へ届く `Completion` を引き取らない ([VM](../spec/vm.md) の「救済」)。引き取るには、操作の記録の持ち主 (`OpRecord.owner`) をタスクに付けて新しい持ち主へ移す必要がある
+  - 後に回した理由: 記録の持ち主と `Completion` の道を変えずに、始める仕事と待ちの登録のない再開だけを盗む形で、CPU を使い続ける worker にたまる仕事は救える。操作の待ちを救済するには、記録の持ち主に加えて、`resume_io` の項と `Completion` の届け先も移す必要がある。
+  - 見直す条件: `bench/net` で、詰まった worker に `resume_io` の項がたまると示されたとき。または本物の時計の server の計測で、持ち主と host が違う接続の遅れが見えたとき。
+- 救済で受けて実行待ちにある項の盗み直し: 救済で受けた項には印が付き、受けた worker が `pick` するまでほかの worker は盗まない ([VM](../spec/vm.md) の「救済」)。受けた worker が CPU を使うタスクで塞がると、受けた項は次の横取り (1刻み以内) まで待つ
+  - 後に回した理由: 普通の方針で盗み直すには、盗む手順が方針を知る必要がある。
+  - 見直す条件: `bench/async/scale.sh` と同じ仕事を worker 4 つで動かした run で、救済で移した項の数が少ないのに、救済した worker の実行待ちの項が多いままのとき。救済で移した項の数は `--stats` に出ないので、`crates/eml_vm/tests/workers.rs` のテストと同じく、ライブラリの API が返す `Finished.rescued` で読む ([VM](../spec/vm.md) の「`RunStats`」)。
 - `eml_rt` の並行の証明 (`rt-concurrent-proofs`): Verus の証明は1つのヒープの逐次の模型で、スレッドをまたぐ所は信頼の一覧の T0、T2、T14、T15 に置いてある ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)。これを並行の証明に置き換え、ほかのヒープの物体を証明の模型に入れる ([マルチコア対応の設計](multicore.md) の「テスト」)
   - 後に回した理由: vstd の atomic は SeqCst だけを扱い、今の証明は逐次の模型なので、並行の証明は証明の作り直しになる。1つのヒープの逐次の証明は、ほかのヒープが持つ物体の ghost の状態を今の値に保てないので、ほかのヒープの物体を貸し出しの token で模型に入れても、信頼は ghost の形に写るだけで減らない。T0 と T14 は、Miri の2つのスレッドのテスト、ThreadSanitizer、検査モードの N = 2 と 8 の UI テストで確かめる。
   - 見直す条件: ネイティブのコードが `eml_rt` を共有する前。または、ThreadSanitizer か Miri が T0 か T14 の誤りを見つけたとき。
