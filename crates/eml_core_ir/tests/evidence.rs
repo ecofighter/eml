@@ -1616,6 +1616,23 @@ fn a_program_with_root_get_gets_the_forks() {
     );
 }
 
+/// `fork_job` も子を fork するので、`par` も `root_get` もなくても、それを含むプログラムは fork の関数を持つ。
+#[test]
+fn a_program_with_fork_job_gets_the_forks() {
+    let text = format!(
+        "{FORK_EFFECTS}fn main(f.0: tobj) -> int {{\n  let j.1: int = extern Std.Async.fork_job(f.0)\n  return j.1\n}}\n"
+    );
+    let program = evidence_program(&text);
+    assert_eq!(
+        names_with_prefix(&program, "fork$"),
+        [
+            "fork$Prelude.Panic.panicked",
+            "fork$One.one",
+            "fork$Two.two"
+        ]
+    );
+}
+
 /// fork の関数は LIR のパスをすべて通る。`ev` は節のエントリの引数としてエントリが持ち、`child_abort` は借りるだけなので、
 /// Perceus は `ev` の `decref` を `child_abort` の後に置く。そこへは実行が届かず、`ev` は `child_abort` の巻き戻しの
 /// 地点が持つ値として、巻き戻しが手放す (docs/spec/core-ir.md の「`par` の子の中断」)。

@@ -19,7 +19,7 @@ use crate::data;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
-    JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
+    JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
 };
 use crate::tls;
 use crate::workers::{Notice, Workers};
@@ -88,8 +88,8 @@ pub struct Task {
     /// 開いている子の境目の join。内側が最後に来る。右の子の先頭は、自分が右の子である join である。
     pub(crate) boundaries: Vec<JoinId>,
     pub(crate) state: TaskState,
-    /// `Async` のタスクのセル。エントリの `Task` だけが持ち、`main` と `par` の右の子は `None` である。`resume_task` の
-    /// エントリの `Task` は、待っていたタスクのセルを持つ (docs/spec/vm.md の「`Async` のタスク」)。
+    /// `Async` のタスクのセル。エントリの `Task` だけが持ち、`main`、`par` の右の子、`compute` の仕事は `None` である。
+    /// `resume_task` のエントリの `Task` は、待っていたタスクのセルを持つ (docs/spec/vm.md の「`Async` のタスク」)。
     pub(crate) cell: Option<CellRef>,
     /// `finish_*` が預けたタスクの終わり方。エントリの `Task` の `Finish` が核の `finish` に渡す。タスクの ID の物体が
     /// すべて片付く前に待ち手を起こさないためである (docs/spec/vm.md の「`Async` のタスク」)。
@@ -97,6 +97,17 @@ pub struct Task {
     /// ほかの worker に置いた右の子の、親の側の記録。join の節点は親の worker にあるので、子の終わりと誤りは
     /// `home` へ知らせで送る (docs/spec/vm.md の「`par` の fork と join」)。
     pub(crate) placed: Option<Placed>,
+    /// `compute` の仕事の `Task` の、仕事のセルと `fork_job` の位置。仕事は join の節点を持たず、終わりを仕事のセルに
+    /// 置く (docs/spec/vm.md の「`compute` の仕事」)。
+    pub(crate) job: Option<JobRef>,
+}
+
+/// 仕事の `Task` が自分の仕事について知ること。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct JobRef {
+    pub(crate) cell: CellRef,
+    /// `fork_job` の命令の位置。仕事を始めるときの誤りに付ける。
+    pub(crate) at: Pc,
 }
 
 /// 置いた右の子が親について知ること。
@@ -146,6 +157,7 @@ impl Task {
             cell: None,
             outcome: None,
             placed: None,
+            job: None,
         }
     }
 
@@ -196,6 +208,7 @@ impl Task {
             cell: Some(cell),
             outcome: None,
             placed: None,
+            job: None,
         }
     }
 
@@ -235,6 +248,16 @@ impl Task {
             cell: None,
             outcome: None,
             placed: None,
+            job: None,
+        }
+    }
+
+    /// まだ始まっていない `compute` の仕事。右の子と同じ形で、境目の join は番兵 `JOB` である。深さはエントリの `Task`
+    /// と同じく 0 から数える (docs/spec/vm.md の「`compute` の仕事」)。
+    fn job(entry: u32, worker: u32, evv: Word, max_depth: usize, job: JobRef, g: Word) -> Task {
+        Task {
+            job: Some(job),
+            ..Task::right_child(entry, worker, evv, 0, max_depth, JOB, g)
         }
     }
 
@@ -260,6 +283,7 @@ impl Task {
             cell: None,
             outcome: None,
             placed: None,
+            job: None,
         }
     }
 
@@ -509,8 +533,8 @@ pub(crate) fn run<R: Exec>(
     }
 }
 
-/// worker `k` (`k` ≥ 1) の実行の繰り返し。動くタスクのない `Task` から始め、置かれた右の子に切り替えて動かす。
-/// 右の子は `Finish` に着かないので、戻るのは run を止める誤りのときだけで、その誤りを返す。止めた後のタスクは
+/// worker `k` (`k` ≥ 1) の実行の繰り返し。動くタスクのない `Task` から始め、置かれた右の子と仕事に切り替えて動かす。
+/// 右の子と仕事は `Finish` に着かないので、戻るのは run を止める誤りのときだけで、その誤りを返す。止めた後のタスクは
 /// 巻き戻さずに捨てる (docs/spec/vm.md の「タスクとスケジュール」)。
 pub(crate) fn work<R: Exec>(
     code: &CodeBase<R::M>,
@@ -1183,19 +1207,7 @@ fn par<R: Exec>(
     let o = &code.tables.operands[at as usize..];
     // 2つの閉包は `par` が消費する、VM の持つ参照である
     let (f, g) = (task.get(o[0] as Slot), task.get(o[1] as Slot));
-    // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
-    // 触れない
-    let child = unsafe { ctx.heap_mut() }.fork_worker();
-    // 右の子は REPL の束縛を `root_get` で読むので、根にも印を付ける。印は回復まで残るので、まだ印のない根にだけ
-    // 付ける。根の物体を `share` しても `heap_mut` の前提は崩れない (docs/spec/object-model.md の「セッションの根」)
-    for r in unshared_roots(ctx, sched) {
-        unsafe { ctx.heap_mut().share(r, child) }?;
-    }
-    // 値から届く evidence は退いたものだけなので、`g` の `share` は親がその場で書き換える evidence に届かない
-    // (docs/spec/object-model.md の「evidence の3つの物体」)
-    unsafe { ctx.heap_mut().share(g, child) }?;
-    let parent = ctx.evv_word();
-    let fork_evv = fork_evv::<R>(code, ctx, parent)?;
+    let (child, fork_evv) = fork_child::<R>(code, ctx, sched, g)?;
     // 2つの子が1つずつ参照を持つ。左の子は `Ctx` に入れ、右の子はタスクに退避する。入れ替えで出る親の `evv` の参照は
     // join の節点に移す
     let parent_evv = unsafe {
@@ -1226,19 +1238,9 @@ fn par<R: Exec>(
     );
     // 空いている worker があれば右の子をその受け箱に置き、なければこの worker の列に入れる
     // (docs/spec/vm.md の「fork」)
-    let home = match sched.workers.places() {
-        true => sched.run.pop_idle(),
-        false => None,
-    };
+    let home = idle_home::<R>(ctx, sched)?;
     let local = match home {
         Some(k) => {
-            // 根に印を付けるのは worker 0 の fork だけなので、置く子が読む根にはもう印が付いている
-            // (docs/spec/object-model.md の「セッションの根」)
-            if <R::M as Mode>::CHECKED && sched.shared_roots != ctx.roots().len() {
-                return Err(VmFault::Internal(
-                    "a placed child may read an unshared root",
-                ));
-            }
             right.placed = Some(Placed {
                 home: sched.index,
                 at: ret - 1,
@@ -1265,6 +1267,48 @@ fn par<R: Exec>(
         sched.ready.push_back(right);
     }
     safepoint::<R>(code, ctx, task, sched)
+}
+
+/// 右の子の worker ID を出し、子が読む語に印を付ける。`g` の後で子の `evv` を作って返すが、その印は呼び手が付ける。
+fn fork_child<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    sched: &mut Scheduler<R::P>,
+    g: Word,
+) -> Result<(u32, Word), VmFault> {
+    // 印付けは右の子が読む前に、送り手の ID のまま行う (docs/future/multicore.md の「印付けの表」)。`Ctx` の持つ語には
+    // 触れない
+    let child = unsafe { ctx.heap_mut() }.fork_worker();
+    // 右の子は REPL の束縛を `root_get` で読むので、根にも印を付ける。印は回復まで残るので、まだ印のない根にだけ
+    // 付ける。根の物体を `share` しても `heap_mut` の前提は崩れない (docs/spec/object-model.md の「セッションの根」)
+    for r in unshared_roots(ctx, sched) {
+        unsafe { ctx.heap_mut().share(r, child) }?;
+    }
+    // 値から届く evidence は退いたものだけなので、`g` の `share` は親がその場で書き換える evidence に届かない
+    // (docs/spec/object-model.md の「evidence の3つの物体」)
+    unsafe { ctx.heap_mut().share(g, child) }?;
+    let parent = ctx.evv_word();
+    let fork_evv = fork_evv::<R>(code, ctx, parent)?;
+    Ok((child, fork_evv))
+}
+
+/// 右の子か `compute` の仕事を置く、空いている worker の添字。置かないときは `None`。
+fn idle_home<R: Exec>(
+    ctx: &Ctx<R::M>,
+    sched: &mut Scheduler<R::P>,
+) -> Result<Option<usize>, VmFault> {
+    let home = match sched.workers.places() {
+        true => sched.run.pop_idle(),
+        false => None,
+    };
+    // 根に印を付けるのは worker 0 の fork だけなので、置く子が読む根にはもう印が付いている
+    // (docs/spec/object-model.md の「セッションの根」)
+    if home.is_some() && <R::M as Mode>::CHECKED && sched.shared_roots != ctx.roots().len() {
+        return Err(VmFault::Internal(
+            "a placed child may read an unshared root",
+        ));
+    }
+    Ok(home)
 }
 
 /// まだ印のない根。印は回復まで残るので、返した根はこの後の fork とタスクの始まりで印を付け直さない。
@@ -1378,6 +1422,12 @@ fn child_done<R: Exec>(
     let j = task.get(1).bits();
     let open = task.boundaries.pop();
     debug_assert_eq!(open, Some(j), "the innermost boundary is the one that ends");
+    // 仕事の境目は番兵の join なので、表を引かずに仕事のセルを終える
+    if task.boundaries.is_empty()
+        && let Some(job) = task.job
+    {
+        return job_done::<R>(code, ctx, task, sched, job, outcome);
+    }
     // 置いた右の子の join は親の worker にあるので、この worker の表を引かない
     if task.boundaries.is_empty()
         && let Some(placed) = task.placed
@@ -1431,6 +1481,48 @@ fn placed_done<R: Exec>(
     sched
         .run
         .send(&control, placed.home, Notice::Joined { join: j, outcome });
+    switch_away::<R>(code, ctx, task, sched, None)
+}
+
+/// `compute` の仕事が終わった。残りの `evv` を仕事の ID のまま手放し、ヒープの worker を戻してから、仕事のセルに
+/// 終わりを置いて出したタスクの起こしを route する。route を切り替えより先に行うのは、起こしが届く前に worker 0 が
+/// デッドロックを決めないためである (docs/spec/vm.md の「`compute` の仕事」)。
+fn job_done<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    job: JobRef,
+    outcome: Outcome,
+) -> Result<(), VmFault> {
+    let end = match outcome {
+        Outcome::Value(w) => cells::JobEnd::Value(w),
+        Outcome::Abort {
+            effect,
+            depth,
+            clause,
+        } => cells::JobEnd::Abort {
+            effect,
+            depth,
+            clause,
+        },
+        Outcome::Error(_) => return Err(VmFault::Internal("a job ends with an error")),
+    };
+    let rest = unsafe { ctx.switch_task(Word::UNIT, task.worker, task.depth_offset) };
+    unsafe { ctx.heap_mut().decref(rest) }?;
+    // `()` を入れ替えるだけで、返る語も `()` である
+    let _unit = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
+    let entries = code
+        .entries
+        .ok_or(VmFault::Internal("the Async entries are not loaded"))?;
+    let mut out = Vec::new();
+    {
+        here!(sched, post, here);
+        cells::finish_job(&sched.cells, &here, job.cell, end, &mut out)?;
+    }
+    for run in out {
+        schedule(code, sched, entries, run)?;
+    }
     switch_away::<R>(code, ctx, task, sched, None)
 }
 
@@ -1494,7 +1586,7 @@ fn switch_away<R: Exec>(
 }
 
 /// タスク `next` に切り替える。`evv` と worker は `Ctx::switch_task` の1回で替え、RC に触れない
-/// (docs/spec/object-model.md の「タスクの切り替え」)。まだ始まっていない右の子は、その ID に替えた後で閉包を呼ぶ。
+/// (docs/spec/object-model.md の「タスクの切り替え」)。まだ始まっていない右の子と仕事は、その ID に替えた後で閉包を呼ぶ。
 /// 閉包を手放すと、子の ID の物体を解放しうるためである。待っていた親は join を完了し、そのときは `par` の命令の
 /// 位置を返す。`par` の後の安全点は呼ぶ側が行い、その誤りにもこの位置を付ける (`at_par`)。ここで安全点に進むと、横取りが `preempt` と `resume` を Rust の再帰で重ねる
 /// ためである (docs/spec/vm.md の「並列化への備え」)。
@@ -1536,9 +1628,11 @@ fn resume<R: Exec>(
         TaskState::Unstarted(g) => {
             // 始めたばかりの子はまだ命令を実行していないので、誤りには fork した `par` の命令の位置を付ける。
             // 横取りされたタスクの位置を付けると、文言がスケジュールで変わる
-            let at = match task.placed {
-                Some(placed) => placed.at,
-                None => sched.join(task.boundaries[0]).ret - 1,
+            // 仕事の境目は番兵の join で表にないので、`job` を先に見る
+            let at = match (task.job, task.placed) {
+                (Some(job), _) => job.at,
+                (None, Some(placed)) => placed.at,
+                (None, None) => sched.join(task.boundaries[0]).ret - 1,
             };
             let result = apply_to_unit::<R>(code, ctx, task, g, CHILD_DONE, 0);
             at_par(code, task, sched, at, result).map(|()| None)
@@ -1743,6 +1837,19 @@ fn join_outcomes<R: Exec>(
             "a join raises again something other than an abort",
         ));
     };
+    reraise::<R>(code, ctx, task, (effect, depth, clause), join.ret, join.dst)
+}
+
+/// 中断した子の handler の節を、親の `evv` を mask してから起こし直す。
+fn reraise<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    abort: (u16, u32, Word),
+    ret: Pc,
+    dst: Slot,
+) -> Result<(), VmFault> {
+    let (effect, depth, clause) = abort;
     // 子が見た `depth` 番目の evidence に届くように、親の `evv` を mask する。`reperform$` は今の `evv` の最初の
     // evidence で perform して戻らないので、mask した `evv` は handler の `prompt$` が手放す
     // (docs/spec/core-ir.md の「`par` の子の中断」)
@@ -1759,7 +1866,7 @@ fn join_outcomes<R: Exec>(
             ctx.evv_set(m)?;
         }
     }
-    apply_to_unit::<R>(code, ctx, task, clause, join.ret, join.dst)
+    apply_to_unit::<R>(code, ctx, task, clause, ret, dst)
 }
 
 /// `prim child_abort(ev, c)`。fork evidence `ev` からエフェクトと深さを読み、子の境目まで巻き戻す。`ev` は借りる。
@@ -1803,7 +1910,8 @@ fn child_abort<R: Exec>(
     child_done::<R>(code, ctx, task, sched, outcome)
 }
 
-/// 実行時エラーの後。すぐに実行を止める誤りと、エントリのタスクの誤り (左の子の誤りを含む) は実行の誤りにする。右の子の
+/// 実行時エラーの後。すぐに実行を止める誤りと、エントリのタスクの誤り (左の子の誤りを含む) と、`compute` の仕事の誤りは
+/// 実行の誤りにする。右の子の
 /// 誤りは join に記録し、右のタスクはスタックを巻き戻さずに捨てて、ほかのタスクに切り替える。止めたスタックは
 /// 巻き戻しの表のない位置で止まっていて解放できない。記録した誤りは join が必ず報告するので、実行は誤りで終わる
 /// (docs/spec/vm.md の「`par` の fork と join」)。
@@ -1832,8 +1940,13 @@ fn task_failed<R: Exec>(
             None => code.error(failure, task),
         };
         // `Async` のタスクの失敗は底の `try_all` が捕まえるので、ここに来るのは捕まえられない誤りで、run を止める
-        // (docs/spec/vm.md の「`Async` のタスク」)
-        if sched.current == MAIN || task.cell.is_some() || stops_the_run(&error) {
+        // (docs/spec/vm.md の「`Async` のタスク」)。仕事のセルは誤りを持たないので、仕事の誤りもその場で run を止める
+        // (docs/spec/vm.md の「`compute` の仕事」)
+        if sched.current == MAIN
+            || task.cell.is_some()
+            || task.job.is_some()
+            || stops_the_run(&error)
+        {
             return Err(error);
         }
         let boundaries = std::mem::take(&mut task.boundaries);
@@ -2105,6 +2218,70 @@ fn async_op<R: Exec>(
             // ハンドルは借りるだけで、組を作る後の `con` が消費する (docs/spec/core-ir.md の「組を返す extern」)
             let c = cells::cell_of(ctx, &sched.cells, task.get(arg(0)))?;
             task.set_raw(dst, c);
+        }
+        Extern::AsyncForkJob => {
+            // `par` の fork と同じく、何も読まずに worker を求めて、作った後にやり直す
+            // (docs/spec/vm.md の「タスクとスケジュール」)
+            if sched.workers == Workers::Wanted {
+                return Err(SPAWN_WORKERS);
+            }
+            let me = current_cell(task)?;
+            // 閉包は `fork_job` が消費する、VM の持つ参照で、仕事として動く
+            let g = task.get(arg(0));
+            let (child, evv) = fork_child::<R>(code, ctx, sched, g)?;
+            // 子の `evv` の持ち手は仕事の `Task` だけなので、`par` と違って `dup` しない。`Ctx` の `evv` には触れない
+            // (docs/spec/vm.md の「`compute` の仕事」)
+            unsafe { ctx.heap_mut().share(evv, child) }?;
+            let cell = sched.cells.lock().new_job(child, me);
+            let at = task.pc - 1;
+            let job = Task::job(
+                task.entry,
+                child,
+                evv,
+                sched.max_depth,
+                JobRef { cell, at },
+                g,
+            );
+            // `par` の右の子と同じく、空いた worker の受け箱に置き、なければこの worker の列に入れる。終わりは
+            // 仕事のセルを通って出したタスクを起こすので、`in_flight` には数えない (docs/spec/vm.md の「`compute` の仕事」)
+            match idle_home::<R>(ctx, sched)? {
+                Some(k) => {
+                    sched.run.placed_jobs.fetch_add(1, Ordering::Relaxed);
+                    let control = std::sync::Arc::clone(&sched.watcher.control);
+                    sched.run.send(&control, k, Notice::Child(job));
+                }
+                None => {
+                    let id = sched.add_task(job);
+                    sched.ready.push_back(id);
+                }
+            }
+            task.set_raw(dst, cell.encode());
+        }
+        ext @ (Extern::AsyncTakeJob | Extern::AsyncDropJob) => {
+            let me = current_cell(task)?;
+            let (worker, end) = sched.cells.lock().take_job(task.raw(arg(0)), me)?;
+            // 終わりの語は仕事のセルが持っていた、仕事の ID の物体である。登録表の lock を放してから今の ID へ戻し、
+            // その後で仕事の ID を退かせる (docs/spec/object-model.md の「`transfer_back`」)
+            let w = end.word();
+            let heap = unsafe { ctx.heap_mut() };
+            unsafe { heap.transfer_back(w, worker) }?;
+            heap.retire_worker(worker)?;
+            ctx.reclaim_if_due();
+            match end {
+                // 取り消されたタスクは結果を受け取らない。中断も起こし直さずに落とす
+                _ if ext == Extern::AsyncDropJob => {
+                    unsafe { ctx.heap_mut().decref(w) }?;
+                    task.set(dst, Word::UNIT);
+                }
+                cells::JobEnd::Value(w) => task.set(dst, w),
+                // join の起こし直しと同じく、次の命令を戻り先にして呼んだタスクのフレームで起こし直す
+                // (docs/spec/vm.md の「`compute` の仕事」)
+                cells::JobEnd::Abort {
+                    effect,
+                    depth,
+                    clause,
+                } => return reraise::<R>(code, ctx, task, (effect, depth, clause), task.pc, dst),
+            }
         }
         ext @ (Extern::AsyncDetach | Extern::AsyncCancelRaw) => {
             let cancel = ext == Extern::AsyncCancelRaw;
@@ -2658,7 +2835,7 @@ fn bind_here<M: Mode, P: Policy>(
     Ok(())
 }
 
-/// 今の `Task` のタスクのセル。`main` と `par` の右の子は `Async` の操作を実行しない。
+/// 今の `Task` のタスクのセル。`main`、`par` の右の子、`compute` の仕事は `Async` の操作を実行しない。
 fn current_cell(task: &Task) -> Result<CellRef, VmFault> {
     task.cell
         .ok_or(VmFault::Internal("an Async operation runs outside a task"))
@@ -3055,7 +3232,7 @@ fn run_extern<R: Exec>(
                 task.set(dst, Word::UNIT);
             }
             // channel の即値をそのまま `Cell` の即値にする (docs/spec/vm.md の「命令」)
-            Extern::ChanToCell => task.set_raw(dst, task.raw(arg(0))),
+            Extern::ChanToCell | Extern::AsyncJobCell => task.set_raw(dst, task.raw(arg(0))),
             Extern::Open | Extern::FileOutCreate | Extern::FileOutAppend => {
                 let open = match ext {
                     Extern::Open => Open::Read,
@@ -3620,6 +3797,9 @@ fn run_extern<R: Exec>(
             | Extern::AsyncParkIoUntil
             | Extern::AsyncParkSignal
             | Extern::AsyncOpReady
+            | Extern::AsyncForkJob
+            | Extern::AsyncTakeJob
+            | Extern::AsyncDropJob
             | Extern::ChanNewRaw
             | Extern::ChanReserveSend
             | Extern::ChanPushRaw
@@ -3685,6 +3865,7 @@ mod tests {
             cell: None,
             outcome: None,
             placed: None,
+            job: None,
         }
     }
 

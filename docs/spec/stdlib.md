@@ -18,7 +18,7 @@ eml run --workers 4 wc.em -l input.txt
 - `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--sched`、`--workers`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--stats`、`--sched=seeded:7`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
 - ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap`、`--stats`、`--sched`、`--workers` はファイルより前にだけ書ける。`eml run main.em --sched bogus` は、スクリプトに `--sched` と `bogus` を渡す
 - `--sched <normal|sequential|seeded:N>` は、タスクを切り替える方針を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。既定は `normal` で、監視のスレッドの刻みで横取りする。`sequential` は横取りしない。`seeded:N` は `u64` の seed `N` で横取りの位置を決める。ほかの値と、2回書いた `--sched` は使い方の誤り (終了コード 2) である。`run` と `repl` が持ち、`check` は持たない。環境変数では選べない
-- `--workers <N>` は、`par` の右の子と `Async` のタスクを走らせる worker のスレッドの数 (worker 0 を含む) を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。`N` は 1 以上 1024 以下の整数である。run は worker ごとに止める語と欄を確保するので、上限を置いて、大きすぎる数を確保の失敗でなく使い方の誤りにする。`--workers` がなければ環境変数 `EML_WORKERS` を同じ規則で読み、それもなければ `available_parallelism()` の値にする (読めなければ 1、1024 を超えれば 1024)。0 と 1024 を超える数と数でない値は、フラグでも `EML_WORKERS` でも使い方の誤り (終了コード 2) で、2回書いた `--workers` も同じである。`run` だけが持ち、`repl` と `check` は持たない。`repl` は常に 1 である ([REPL の端末](repl.md) の「コマンドライン」)。ライブラリの `Limits::default()` と `eml_cli::default_limits()` も 1 で、UI テストは 1 で走らせる。`par/` の UI テストだけは 2 と 8 でも走らせる ([テスト戦略](../implementation/testing.md) の「seed で流す」)
+- `--workers <N>` は、`par` の右の子と `Async` のタスクと `compute` の仕事を走らせる worker のスレッドの数 (worker 0 を含む) を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。`N` は 1 以上 1024 以下の整数である。run は worker ごとに止める語と欄を確保するので、上限を置いて、大きすぎる数を確保の失敗でなく使い方の誤りにする。`--workers` がなければ環境変数 `EML_WORKERS` を同じ規則で読み、それもなければ `available_parallelism()` の値にする (読めなければ 1、1024 を超えれば 1024)。0 と 1024 を超える数と数でない値は、フラグでも `EML_WORKERS` でも使い方の誤り (終了コード 2) で、2回書いた `--workers` も同じである。`run` だけが持ち、`repl` と `check` は持たない。`repl` は常に 1 である ([REPL の端末](repl.md) の「コマンドライン」)。ライブラリの `Limits::default()` と `eml_cli::default_limits()` も 1 で、UI テストは 1 で走らせる。`par/` と `async/` の UI テストは 2 と 8 でも走らせる ([テスト戦略](../implementation/testing.md) の「seed で流す」)
 - `Env.args ()` は、ファイルより後ろの引数を返す。`eml` とスクリプトのパスは含めない
 - shebang は `#!/usr/bin/env eml` と書く。Linux の `env` は `#!` の行の残りを1つの引数として渡すので、`#!/usr/bin/env eml run` は動かない
 - ファイルの相対パスと子のプロセスの作業ディレクトリは、プロセスの今のディレクトリである
@@ -941,6 +941,7 @@ main () = println (show (Async.run body))
 | `cancel` | `Task a -> <IO> Unit` | eml |
 | `cancel_scope` | `Scope -> <IO> Unit` | eml |
 | `shield` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` | eml |
+| `compute` | `(Unit -> <never e> a) -> <IO, Async \| e> a` | eml |
 | `try_all` | `(Unit -> <IO, Panic \| e> a) -> <IO \| e> Result Failure a` | eml |
 | `Failure` | `IOFailed IOError` と `Panicked String` を持つ型 | eml (`deriving (Show)`) |
 
@@ -977,6 +978,7 @@ pub extern data Cell
 pub extern data Task a
 pub extern data Scope
 pub extern data OpId
+pub extern data Job a
 
 pub data Failure =
   | IOFailed IOError
@@ -988,9 +990,10 @@ pub data Failure =
 - `Wake` は、ランタイムが待たせたタスクを再開するときに渡す値である。ランタイムは配置の表を見ずに、宣言の順のタグ (`Woke` = 0、`Cancelled` = 1。`eml_lir::WAKE_WOKE`、`WAKE_CANCELLED`) で作る。タグと宣言の順が合うことはテストで確かめる。ランタイムは取り消したタスクを `Cancelled` で再開する
 - `Cell` は登録表の添字 `(generation << 32) | index` を持つ即値で、Kind は `Unr`、Repr は `int` である。`Scope` は `Cell` と同じ形の即値で、Kind は `Unr`、Repr は `int` である。`Task a` はランタイムのタスクのハンドルを中身に持つ `Foreign` で、Kind は型引数によらず `Lin` である
 - `OpId` は driver に出した操作の記録の番号 `(generation << 32) | index` を持つ token の即値で、Kind は `Lin`、Repr は `int` である。受け付けの行が作り、取り出しの行が消費する。即値なので RC を持たず、1回だけ使うことは型検査が守る。待つ間は継続だけをランタイムが預かり、再開のときに token を継続へ返す。受け付けから取り出しまでを1つの包みの関数の中で行うので、利用者のコードは `OpId` を持たず、`Chan` でも送れない。記録に触れるのは受け付けたタスクだけで、ほかのタスクが token を渡すと内部の誤り `an op is used by another task` になる。放した記録の古い token と、2度目の取り出しは内部の誤り `an op names no record` になる。std の包みからはどちらも起きない ([VM](vm.md) の「操作の記録」)
+- `Job a` は仕事の token の即値 `(generation << 32) | index` を持つ型で、Kind は `a` によらず `Lin`、Repr は `int` である。`Chan a` と同じく型引数は `Unr` に固定しないが、`Chan a` と違って `Lin` なので、1回だけ使うことは型検査が守る
 - ランタイムが名前で呼ぶエントリは、std の3つの関数 `start_task : (Unit -> <IO, Async> Unit) -> <IO> Unit`、`resume_task : (once Wake -> <IO> Unit) -> Wake -> <IO> Unit`、`resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit` である (`eml_extern::RuntimeEntry`)。どれも単相なので、名前で ABI が決まり、instance の名前が正式な名前のままになる。`start_task` はタスクの本体に handler をかぶせ、`await_cell` の節は継続を `park` に、`reschedule` の節は継続を `ready` に、`await_time` の節は継続を `park_time` に、`await_drain` の節は継続を `park_drain` に、`await_send` の節は継続を `park_send` に、`await_recv` の節は継続を `park_recv` に、`await_io` の節は token と継続を `park_io` に、`await_io_until` の節は token と期限と継続を `park_io_until` に、`await_signal` の節はシグナルの番号と継続を `park_signal` に預けて戻る。`resume_task k w` は預けた継続 `k` に `w` を渡す。`resume_io k w op` は `k` に組 `(w, op)` を渡す。extern は組を作らない ([Core IR](core-ir.md) の「translate の配置」) ので、組は eml のエントリが作る。`Panic` はタスクの底で捕まえるので、継続の row は `<IO>` である。3つのエントリが単相の std の関数であることもテストで確かめる
 - タスクの底 (`bottom`) は、`try_all` で本体の失敗を捕まえ、成功した結果を `finish_ok` に、IO の失敗を種類と文言のまま `finish_io` に、`Panic` を文言のまま `finish_panic` に渡す
-- extern の行は次の33行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+- extern の行は次の37行である。どれも `pub` でない。VM はこれらの行を汎用の extern の命令でなく、`Scheduler` を受ける `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)。ただし `job_cell` は、`chan_cell` と同じく即値を写すだけの普通の extern である
 
 | 行 | 型 | 預かる引数 |
 |---|---|---|
@@ -1027,13 +1030,19 @@ pub data Failure =
 | `claim_scope` | `Scope -> <IO> Bool` | なし |
 | `cancel_members` | `Scope -> <IO> Unit` | なし |
 | `op_ready` | `OpId -> Int -> <IO> (Int, OpId)` | なし (token を借りる) |
+| `fork_job` | `(Unit -> <never e> a) -> <IO> Job a` | なし |
+| `job_cell` | `Job a -> (Cell, Job a)` | なし (token を借りる) |
+| `take_job` | `Job a -> <IO> a` | なし |
+| `drop_job` | `Job a -> <IO> Unit` | なし |
 
 - タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
-- `take_result` と `run_result` が返す値の型が、`finish_ok` に預けた値の型と合うことは、処理系は確かめない。生の行を `pub` にせず、`start`、`start_in`、`run`、`await` のシグネチャだけが本体の結果の型 `a` とハンドルの `Task a` を結ぶことで、標準ライブラリが保つ
+- `take_result` と `run_result` が返す値の型が、`finish_ok` に預けた値の型と合うことは、処理系は確かめない。生の行を `pub` にせず、`start`、`start_in`、`run`、`await` のシグネチャだけが本体の結果の型 `a` とハンドルの `Task a` を結ぶことで、標準ライブラリが保つ。`take_job` が返す値の型が `fork_job` に渡した閉包の結果の型と合うことも、同じく `compute` のシグネチャが保つ
 - 預かる引数の矢印 (`start_raw`、`run_raw`、`start_in_raw` の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`park_signal`、`ready` の継続) には、閉じた row を書く。ランタイムはそれを呼ばず、エントリの `start_task`、`resume_task`、`resume_io` が呼ぶので、row はエントリの型が決める
 - `park_io` と `park_io_until` は継続だけを預かり、token は預からずに消費する。token は即値の番号なので、再開の仕事が記録の番号から作り直して `resume_io` に渡す
 - `op_ready op ms` は token を借りて、待たずに続けてよいかを 0 (続ける)、1 (待つ)、2 (先に譲る) で返し、宣言の型では結果と token の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。どの呼び出しも、操作が終わっていたかによらず操作の予算を使い、書きの操作は長さに応じて多く使う (下の「操作の予算」)。記録が終わっていて取り消しの地点が投げなければ、予算が残れば待ちを1つ数えて 0 を返す。切れれば OS を1回見て集め、走れるタスクがあれば数えずに 2 を返し、なければ予算を戻し、待ちを1つ数えて 0 を返す。2 の待ちは、続く `reschedule ()` が数える。ほかは 1 で、何も数えない。待つ側の `await_io` が数える ([VM](vm.md) の「操作の記録」)
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
+- `job_cell` は token を借りてセルを返し、宣言の型ではセルと token の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。`fork_job` は引数の閉包を預からない
+- `fork_job f` は `f` を仕事として、空いている worker の受け箱か呼んだ worker の実行待ちに置き、仕事の token を返す。閉包は仕事として動き、`fork_job` が消費する。`take_job j` は token を消費して、終わった仕事の結果を返すか、仕事の中断を起こし直す。`drop_job j` は token を消費して、終わった仕事の終わりを落とす。どちらも、仕事を出したタスクが仕事の終わった後に呼ぶ。std の `compute` は `job_cell` で借りたセルを `await_cell` で待ってから呼ぶ ([VM](vm.md) の「`compute` の仕事」)
 - `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のためのインターフェースで、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
 - `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.Net` のためのインターフェースで、同じ理由で `pub` である。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.Net`」)。どちらも先に `op_ready` を呼ぶ。0 なら perform せずに `(Woke, op)` を返し、2 なら `reschedule ()` で列の後ろへ回ってから、その `Wake` を見ずに `(Woke, op)` を返す。1 のときだけ `await_io` か `await_io_until` を perform して待つ。回る間に届いた取り消しは、次の取り消しの地点で投げる
 - `io_wait_shielded` (`OpId -> <IO, Async> OpId`) も `Std.Net` のためのインターフェースである。`shield` と同じ深さの印の中で `io_wait` を呼び、`Wake` を捨てて token を返す。中の待ちは外の取り消しで外れず、いつも操作が終わってから戻る。`shield` は本体の行に `Panic` を求めるので、`Panic` を持たない `Std.Net` の包みのためにこの形にする
@@ -1061,7 +1070,7 @@ body () =
 - 取り消しは2つの所から来る。タスクの取り消しのビットは、`cancel t`、`drop t`、属するスコープの取り消し、取り消したスコープに加えることで立つ。スコープの取り消しの旗は、`cancel_scope`、スコープのタスクの失敗、`scope` の本体の失敗、親のスコープの取り消しで立ち、開くときに親の旗を写す (`shield` の境目は写さない。下の `shield` の箇条)。どちらも一度立てたら下ろさない
 - タスクにビットが立つと、そのタスクが開いているスコープと、入れ子の `run` で待っている根にも旗が立つ。ただし `shield` の中で開いたスコープには立たない。ビットが立った後に `shield` の外で開くスコープと、ビットが立った後に `shield` の外で呼ぶ入れ子の `run` の根も、開くときに旗を立てる
 - `scope` の本体を動かすタスクは、そのスコープの中にいる間だけ旗で取り消される (ビットは立てない)。スコープを出た後は、外の旗かビットが立っていなければ取り消されていない
-- 取り消しの地点は `await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` と、`Std.Chan` の `send` と `recv` と、`Std.Net` の待つ関数である。取り消しの地点は、`shield` の外では、タスクのビットかタスクの今のスコープの旗が立っていれば (`shield` の中の規則は下の `shield` の箇条にある)、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる
+- 取り消しの地点は `await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled`、`compute` と、`Std.Chan` の `send` と `recv` と、`Std.Net` の待つ関数である。取り消しの地点は、`shield` の外では、タスクのビットかタスクの今のスコープの旗が立っていれば (`shield` の中の規則は下の `shield` の箇条にある)、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる。`compute` はこの規則の例外である。仕事の前や途中に立った取り消しは待ちを外さず、仕事が終わって起こされた後、再開するまでに立った取り消しでも、`compute` は結果を落として投げる (下の「`compute`」)
 - `send` と `recv` は、待つ前と待っている間に取り消しが立てば投げる。起こされた後は、`await` と同じく、まず操作をやり直し (枠か品物があれば送るか受け取る)、次の取り消しの地点が投げる。やり直しで待ち直すときは、待つ前の規則で投げる
 - `Std.Net` の待つ関数は、待つ前に取り消しが立っていれば、何も受け付けずにストリームかリスナーを落として投げる。待っている間に立てば、driver に取り消しを頼み、操作の完了を待ってから、完了が作ったハンドル、記録の buffer、渡したストリームかリスナーを落として投げる。driver が buffer を使い終わるまで返せないためである (下の「`Std.Net`」)
 - 失敗したタスクを同じスコープの中から `await` で待つタスクは、失敗が記録されたときにもう待っていればその失敗を受け取り、まだ待っていなければスコープの取り消しを受けて `Cancelled` を受け取る。どちらになるかはスケジュールで決まる。スコープの最初の失敗はどちらでも同じなので、`run` と `scope` が起こし直す失敗は変わらない。相手のスコープを `shield` の外で開いたときは、`await` を `shield` で囲めば、待つ相手の失敗を確かに受け取る
@@ -1132,6 +1141,27 @@ body () =
 | 期限より前に呼んだタスクが取り消される | `s` に触れずに `Cancelled` を投げる |
 | 期限が、`s` が空になるか呼んだタスクが取り消されるのと同じ時刻に来る | どちらが先かはスケジュールで決まる。どちらでも、戻った後に期限が `s` に触れることはない |
 | 呼んだタスクが `s` に属する | 自分の終わりも待つ。`shield` の外なら、期限で自分も取り消される。`shield` の中では戻らず、ほかに進むタスクも満ちるタイマーもなくなると、実行時エラー `deadlock` で止まる ([VM](vm.md) の「時計と driver」) |
+
+### `compute`
+
+```haskell
+count : Int -> Int -> <Panic> Int
+count n acc = if n == 0 then acc else count (n - 1) (acc + 1)
+
+body : Unit -> <IO, Panic, Async> Int
+body () =
+  let t = Async.start (fn () -> 1)
+  Async.compute (fn () -> count 1000000 0) + Async.await t
+```
+
+- `compute f` は `f ()` を、子が1つの `par` と同じ仕事として動かし、仕事が終わるまで呼んだタスクだけを待たせる。待つタスクは継続だけになり、その間 worker はほかのタスクと仕事を動かす。仕事の結果は呼んだタスクに返る
+- 仕事は `par` の右の子と同じく、空いている worker があればその受け箱に置いてその worker で動かし、なければ呼んだ worker の実行待ちの列の後ろに積む ([VM](vm.md) の「`compute` の仕事」)。worker が1つの run (REPL、`--workers 1`) では、仕事はその worker のほかのタスクと交互に動く
+- `f` の row の上限は `never` である。`par` の子と同じく、`IO`、`Async`、`var` のエフェクト、`once` か `multi` の操作を持つエフェクトを `f` が起こしうる呼び出しは E2020 になる (上の「`Std.Par`」)。`f` は `Lin` の値を捕まえて消費でき、`Lin` の値を返してもよい
+- 仕事が `never` の操作で中断すると、仕事が終わった後で、呼んだタスクがその操作を起こし直す。起こし直す先は、仕事の中の操作が届いた handler で、`compute` の周りの `mask` も守る。仕事の中の handler と `try_panic` は、仕事の中の操作を仕事の中で捕まえる。仕事の中で捕まえない `Panic` も、呼んだタスクで起こし直す。呼んだタスクの `try_panic` か `try_all` が捕まえ、捕まえなければタスクの失敗 `Panicked` になる
+- 仕事の中の、`Panic` でない実行時エラー (呼び出しの深さの上限など) は、その場で run を止める。呼んだタスクの `try_all` も捕まえない
+- `compute` は取り消しの地点だが、取り消しは仕事が終わってからでないと届かない。仕事の前や途中に立った取り消しは、仕事を止めない。仕事が終わった後、呼んだタスクが再開するときに取り消しの地点の規則 (上の「取り消し」) を満たしていれば、`compute` は仕事の結果を落として `Cancelled` を投げる。仕事が終わってから再開するまでに立った取り消しも、この規則で届く。`shield` の中では外の取り消しが届かないので、結果を返す
+- そのため、`timeout` で囲んだ `compute` は、期限が過ぎても仕事が終わるまで戻らず、仕事の後で `None` を返す。`race` で負けた腕の仕事も最後まで動く
+- `compute` 1回で `RunStats.parks` を1つ数え、`RunStats.tasks` は数えない ([VM](vm.md) の「`RunStats`」)
 
 ### `Failure` と `try_all`
 

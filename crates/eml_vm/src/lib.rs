@@ -140,6 +140,9 @@ pub struct Finished {
     /// この run が、`start` を実行した worker と違う worker に置いた `Async` のタスクの数
     /// (docs/spec/vm.md の「`Async` のタスク」)。
     pub placed_tasks: u64,
+    /// この run がほかの worker に置いた `compute` の仕事の数。どの worker の `fork_job` も数える
+    /// (docs/spec/vm.md の「`compute` の仕事」)。
+    pub placed_jobs: u64,
 }
 
 /// VM だけが知る仕事の回数。検査モードだけで数える。
@@ -692,6 +695,7 @@ impl<M: Mode> Machine<M> {
                 workers: scheduled.workers,
                 placed: scheduled.placed,
                 placed_tasks: scheduled.placed_tasks,
+                placed_jobs: scheduled.placed_jobs,
             };
             return Ok(Ran::Abandoned(finished, cause));
         }
@@ -719,6 +723,7 @@ impl<M: Mode> Machine<M> {
             workers: scheduled.workers,
             placed: scheduled.placed,
             placed_tasks: scheduled.placed_tasks,
+            placed_jobs: scheduled.placed_jobs,
         };
         Ok(Ran::Done(finished, text))
     }
@@ -859,6 +864,8 @@ struct Scheduled<M: Mode> {
     placed: u64,
     /// ほかの worker に置いた `Async` のタスクの数。
     placed_tasks: u64,
+    /// ほかの worker に置いた `compute` の仕事の数。
+    placed_jobs: u64,
     /// worker 1..N-1 の panic。最初のものを worker 0 で起こし直す。
     panic: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -1074,6 +1081,10 @@ fn run_scheduled<M: Mode, P: Policy>(
         workers,
         placed: sched.run.placed.load(std::sync::atomic::Ordering::Relaxed),
         placed_tasks,
+        placed_jobs: sched
+            .run
+            .placed_jobs
+            .load(std::sync::atomic::Ordering::Relaxed),
         panic,
     };
     (result, scheduled)
@@ -1254,10 +1265,9 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         CompileError::MultiValueEntry { function } => {
             ("an entry function returns more than one value", function)
         }
-        CompileError::MissingFork { function } => (
-            "a program that may run a par lacks a fork function",
-            function,
-        ),
+        CompileError::MissingFork { function } => {
+            ("a program that may fork lacks a fork function", function)
+        }
         CompileError::MissingEntry { function } => (
             "a program that runs Async tasks lacks a runtime entry",
             function,

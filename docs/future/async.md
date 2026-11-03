@@ -7,7 +7,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 ## 目的と範囲
 
 - 目的: 多数の接続を1つのプロセスで受けるネットワークのサーバを eml で書けるようにする。接続ごとにタスクを1つ作り、1つの接続の失敗 (IO の失敗、`Panic`、タスクごとの上限) をその接続の中にとどめる
-- 範囲: `Async` のエフェクト、スコープとタスク、失敗と `exit`、取り消し、時間、channel と共有の状態、I/O の driver、`Net` と `Signal`、非同期のファイルとパイプ、`compute`、テスト
+- 範囲: `Async` のエフェクト、スコープとタスク、失敗と `exit`、取り消し、時間、channel と共有の状態、I/O の driver、`Net` と `Signal`、非同期のファイルとパイプ、テスト
 - 範囲の外: worker のループ、受け箱、救済、横取り、スレッドをまたぐ RC、データ並列の `par`。worker のループ、受け箱、救済、横取りは [マルチコア対応の設計](multicore.md) の「スケジューラ」に、スレッドをまたぐ RC は [マルチコア対応の設計](multicore.md) の「スレッドをまたぐ RC」に、`par` は [マルチコア対応の設計](multicore.md) の「並列と並行の API」にある
 - 範囲の外: 時刻。下の「未決の論点と将来の拡張」に、後で足す形を書く。TLS と HTTP は下の「TLS と HTTP」にある
 - 並行処理のための新しい構文は足さない。タスクはラムダと `use` で書く
@@ -118,7 +118,7 @@ probe_all hosts =
 - I/O の待ちでは、ランタイムは預かった token と組にした `Cancelled` を継続に渡し、完了が届いてから再開する (下の「待ちを外す」)。待ちを外すのも、取り消しの地点でビットと旗を読むのも、セルの持ち主の worker の上である
 - 待たない後始末 (数を減らす、`Chan.close`、`try_send`、`eprintln`、ハンドルを閉じる) は、`try_all` の handler の中でそのまま走る。待つ必要のある後始末 (満ちた channel で登録の actor に知らせる、別れの書き込み) は `Async.shield` で包む。`shield` は利用者が終わりを約束する範囲で、スコープはそれを待つ
 - `finally` も、利用者が定義する破棄処理も置かない。破棄処理は eml のコードを動かさない ([線形性](../spec/linearity.md) の「破棄処理」)。`Lin` の規則と `try_all` と `shield` で、サーバの後始末 (接続の数を減らす、channel を閉じる、登録の更新) は書ける
-- 取り消しは協調的で、CPU を使い続けるコードを止めない。`compute` の周りの `timeout` は `par` の仕事が終わったときに戻る (`par` の取り消しは後で足す。[マルチコア対応の設計](multicore.md) の「未決の論点と将来の拡張」)。サーバでは CPU を多く使う仕事を `compute` に入れる。`compute` はタスクを待たせるので、worker はほかの接続を受け続ける。待たずに `compute` も使わないネイティブのタスクは、終わるまで worker を持ち続ける。そのときは、監視のスレッドが詰まりを見つけた後で、空いた worker が同じ worker のほかのタスクを救済する
+- 取り消しは協調的で、CPU を使い続けるコードを止めない。サーバでは CPU を多く使う仕事を `compute` に入れる ([標準ライブラリ](../spec/stdlib.md) の「`compute`」)。`compute` はタスクを待たせるので、worker はほかの接続を受け続ける。待たずに `compute` も使わないネイティブのタスクは、終わるまで worker を持ち続ける。そのときは、監視のスレッドが詰まりを見つけた後で、空いた worker が同じ worker のほかのタスクを救済する
 
 ### 待ちを外す
 
@@ -213,7 +213,7 @@ std の非同期の操作はどれも次の3段で行う。extern は yield し�
 2. 待ち: `io_wait` は、操作がもう終わっていれば perform せずに続け、終わっていなければ生の操作 `await_io` でタスクを待たせる。token は `Wake` と組で戻る
 3. 取り出し (`take_*`): token を消費して、結果 (buffer とハンドル) を返すか、操作の IO の失敗を投げる extern。取り消した後も buffer とハンドルを返す。取り消したことは `Wake` で分かる
 
-ソケット、シグナル、`Gui.next_event` ([FFI と拡張の設計](ffi.md) の「GUI」)、ブロックする呼び出しのプールの仕事は、どれもこの形で待つ。例外は `Std.Net` のストリームの設定 (`shutdown_write`、`set_nodelay`) で、取り消しの地点にしないために `io_wait` を通さない。記録が終わったかを `op_done` で読み、受け付けで終わっていれば待たずに取り出し、別の worker の driver に回したときだけ `Async.io_wait_shielded` で host の受け付けを待つ ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。時間は `await_time` で、`compute` は join の節点のセルでの `await_cell` で待つ。
+ソケット、シグナル、`Gui.next_event` ([FFI と拡張の設計](ffi.md) の「GUI」)、ブロックする呼び出しのプールの仕事は、どれもこの形で待つ。例外は `Std.Net` のストリームの設定 (`shutdown_write`、`set_nodelay`) で、取り消しの地点にしないために `io_wait` を通さない。記録が終わったかを `op_done` で読み、受け付けで終わっていれば待たずに取り出し、別の worker の driver に回したときだけ `Async.io_wait_shielded` で host の受け付けを待つ ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。時間は `await_time` で待つ。
 
 ```haskell
 pub read_chunk : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
@@ -362,18 +362,6 @@ TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ラ
   - 読みは GCD が自分で確保した buffer に入るので、操作の記録が持つ一意な buffer へ写す手間が1回増える
   - 書きで `RawBuf` を写さずに `dispatch_data_t` に包むと、GCD のスレッドがその記憶を読み、貸した記憶を使ってよいのを driver を持つスレッドに限る規則 ([VM](../spec/vm.md) の「時計と driver」) を破る
   - 完了の handler は GCD のスレッドで動くので、driver を起こす道が別に要る
-
-## `compute`
-
-```haskell
-pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
-```
-
-- `compute f` は `f` を、子が1つの `par` の仕事として動かし、終わるまで呼んだタスクを待たせる。その間、worker はほかのタスクを動かす。仕事は `par` の盗みと手伝いのもとで動く
-- 子の row は `<never e>` である ([マルチコア対応の設計](multicore.md) の「row の Kind」)。結果の row が `e` を持つので、子の `never` の操作 (`Never` のラベルの `Panic` と `Fail x` を含む) は、join の後で呼んだタスクの中で起こし直す。`par` が親で起こし直すのと同じである
-- 中身は子が1つの `par` の節点、join の節点のセルでの `await_cell` (持ち主の受け箱での起こし)、結果の移し替えの歩き、子が中断したときの起こし直しである
-- 取り消しは join の後で届く。`par` の取り消しを入れるまで、`compute` の周りの `timeout` は仕事が終わってから戻る
-- タスクの中の `Par.map` などは今までどおり普通の手伝いで動き、タスクを待たせない
 
 ## テストと決定性
 

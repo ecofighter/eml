@@ -64,9 +64,9 @@ impl Program {
         self.layouts.get(id.0 as usize)
     }
 
-    /// プログラムが `par` を走らせうるか。`par` を含むか、REPL の根を読むときである。根の閉包は前の入力の `par` を
-    /// 走らせうる。真なら fork の関数がそろっていなければならない (docs/spec/core-ir.md の「`par` の子の中断」)。
-    pub fn may_run_par(&self) -> bool {
+    /// プログラムが子を fork しうるか。`par` か `fork_job` を含むか、REPL の根を読むときである。根の閉包は前の入力の
+    /// `par` か `fork_job` を実行することがある。真なら fork の関数がそろっていなければならない (docs/spec/core-ir.md の「`par` の子の中断」)。
+    pub fn may_fork(&self) -> bool {
         self.functions
             .iter()
             .flat_map(|function| &function.blocks)
@@ -75,7 +75,12 @@ impl Program {
                 matches!(
                     stmt,
                     Stmt::Let {
-                        rhs: Rhs::Call(Call::Par { .. }) | Rhs::Prim(Prim::RootGet(_), _),
+                        rhs: Rhs::Call(Call::Par { .. })
+                            | Rhs::Extern {
+                                ext: Extern::AsyncForkJob,
+                                ..
+                            }
+                            | Rhs::Prim(Prim::RootGet(_), _),
                         ..
                     }
                 )
@@ -1106,21 +1111,24 @@ mod tests {
         );
     }
 
-    /// `par` か `root_get` があれば `par` を走らせうる。根を書くだけの `root_set` は当たらない。
+    /// `par`、`fork_job`、`root_get` のどれかがあれば fork しうる。根を書くだけの `root_set` は当たらない。
     #[test]
-    fn a_program_may_run_par_with_a_par_or_a_root_get() {
-        let may_run_par = |body: &str| {
+    fn a_program_may_fork_with_a_par_a_fork_job_or_a_root_get() {
+        let may_fork = |body: &str| {
             parse(&format!("layout (,) {{ (,)(tobj, tobj) }}\nfn f(a.0: tobj, b.1: tobj) -> unit {{\n{body}  return ()\n}}\n"))
                 .unwrap_or_else(|error| panic!("{error}"))
-                .may_run_par()
+                .may_fork()
         };
-        assert!(may_run_par(
+        assert!(may_fork(
             "  let t.2: obj = par (,) #0(a.0, b.1)\n  decref t.2\n"
         ));
-        assert!(may_run_par(
+        assert!(may_fork(
+            "  let j.2: int = extern Std.Async.fork_job(a.0)\n  decref b.1\n"
+        ));
+        assert!(may_fork(
             "  let r.2: tobj = prim root_get[0]()\n  decref r.2\n  decref a.0\n  decref b.1\n"
         ));
-        assert!(!may_run_par(
+        assert!(!may_fork(
             "  let u.2: unit = prim root_set[0](a.0)\n  decref b.1\n"
         ));
     }

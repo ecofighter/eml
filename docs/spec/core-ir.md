@@ -73,7 +73,7 @@
 
 - 構造体の型の `con` は `struct(S)` の変数を束縛する。引数は形のフィールドの Repr と比べる正確な位置で、配置の宣言した Repr とは比べない
 - 構造体の値を分けるのは、いつも `unpack` である。束縛するフィールドの Repr と印は、形のものになる。構造体の変数はタグの `switch` の scrutinee にならない
-- `with_arg` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`、`Std.Async.task_cell`、`op_ready`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
+- `with_arg` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
 - エントリの関数 `entry$<名前>` の `ret` は値1つにする。エントリの値の型が構造体なら `ret` を `obj` にし、box の挿入が箱に入れる。VM の `Finish` は値を1つだけ受けるためである ([VM](vm.md) の「誤り、止めること、終わり」)
 - 型から決める構造体 (`StructTypes`) と、型を持たない組 (`with_arg` の組と、`optimize` の状態を渡す形の複製が返す組) は、同じ語の数と `unit` の条件 (`MAX_STRUCT_WORDS`) で決める。型を持たない組の形は `tuple_struct` が作る
 
@@ -210,6 +210,8 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Async.take_result`、`run_result` | `Lin` | `poly` |
   | `Std.Async.detach`、`cancel_raw` | `Lin` | `Unr` |
   | `Std.Async.start_in_raw` | `Unr`、`poly` | `Lin` (`Task a`) |
+  | `Std.Async.fork_job` | `poly` | `Unr` |
+  | `Std.Async.take_job` | `Unr` | `poly` |
   | `Std.Async.park_io` | `Unr`、`Lin` | `Unr` |
   | `Std.Async.park_io_until` | `Unr`、`Unr`、`Lin` | `Unr` |
   | `Std.Chan.push_raw` | `poly`、`Unr` | `Unr` |
@@ -229,7 +231,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Tls.error_message`、`take_line` | `Lin` | `Unr` (`String`) |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
-  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.Async.task_cell`、`op_ready`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
+  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
 - 基本操作の表の印の列は [LIR](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
 - 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
@@ -247,6 +249,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 - `Std.MutArray.length` と `read` は、宣言の型では結果と配列の組を返す (`MutArray a -> Int -> <Panic> (a, MutArray a)`)。extern は借りない引数を消費するので、組を作る extern にすると、読むたびに組を確保する。そこで行は配列を借り (`FunctionRow::borrowed`)、要素だけを返し、`with_arg: Some(0)` を持つ ([LIR](lir.md) の「extern の借用」)
 - `Std.FileIn`、`Std.Stdin`、`Std.Proc` の読み (`read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) も同じ形である。宣言の型は読んだ結果とハンドル (`FileIn`、`Stdin`、`Child`) の組を返し (`FileIn -> <IO> (String, FileIn)`)、行はハンドルを借りて結果だけを返す。`with_arg` はハンドルの位置で、`read_chunk : Bytes -> FileIn -> <IO> (Bytes, FileIn)` (`Stdin` と `Child` も同じ形) だけは `Some(1)`、ほかは `Some(0)` である
 - `Std.Async.task_cell : Task a -> (Cell, Task a)` も同じ形で、ハンドルを借りてセル (`int`) だけを返し、`with_arg: Some(0)` を持つ。ハンドルは `Lin` なので行の引数の印は `lin` で、この引数は借りたうえで預かる引数でもある ([宣言](declarations.md) の「`extern`」)
+- `Std.Async.job_cell : Job a -> (Cell, Job a)` も同じ形で、token を借りてセル (`int`) だけを返し、`with_arg: Some(0)` を持ち、引数を預からない。`Job a` は即値なので RC を持たない ([標準ライブラリ](stdlib.md) の「`Std.Async`」)
 - `Std.Async.op_ready : OpId -> Int -> <IO> (Int, OpId)` も token を借りて結果の番号 (`int`) だけを返し、`with_arg: Some(0)` を持ち、引数を預からない ([標準ライブラリ](stdlib.md) の「`Std.Async`」)
 - `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done` も token を借りてリスナー、ストリーム、結果の番号 (`int`)、終わったか (`Bool`) だけを返し、`local_port : TcpListener -> (Int, TcpListener)` と `peer_addr : TcpStream -> (String, TcpStream)` はハンドルを借りてポートと番地だけを返す。どれも `with_arg: Some(0)` を持ち、引数を預からない。`local_port` と `peer_addr` の行は `Std.MutArray.length` と同じく `Pure` である ([標準ライブラリ](stdlib.md) の「`Std.Net`」)
 - `Std.Tls` の `pull_tls`、`status`、`error_message`、`line_ready`、`take_line` は `Conn` を借りて結果 (`Bytes`、`int`、`String`) だけを返し、`with_arg: Some(0)` を持つ。`read_plain : Bytes -> Conn -> <IO> (Bytes, Conn)` は `Std.FileIn.read_chunk` と同じ形で、`Some(1)` を持つ。どれも引数を預からない ([標準ライブラリ](stdlib.md) の「`Std.Tls`」)。`push_tls` と `write_plain` は、下の書き込みと同じ形である
@@ -331,7 +334,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 - `left` と `right` は2つの引数、`pair` は `tuple_layout(2)` の `TUPLE` の構築子、`at` は `par` の名前の位置である。結果は組の型の変数 (`obj` か構造体) にそのまま束ねる。構造体なら、box の挿入が `obj` からの `unbox` を足す ([LIR](lir.md) の「box の挿入」)。タプルの配置の欄はどれも `tobj` なので (上の「translate の配置」)、構造体の箱は VM が作る組と同じ形である
 - `mask` は、型検査が最後の矢印 (2つ目の引数の矢印) に記録したものである。`par` の結果の row は開いた `<e>` なので、`foo : (Unit -> <never e> Int) -> <Fail String | e> (Int, Int)` の本体の `Par.par h h` は `mask [Std.Fail.Fail] par (,) #0(h.0, h.0)` になる。`h` が起こす `Fail` は、`foo` の `Fail` を飛ばして呼んだ側の handler に届く
 - 部分適用 (`Par.par f`) と値として使う `Par.par` は、ほかの extern と同じく `$externN` で包む (上の「変換の規則」)。包む関数の本体も同じ `par` の呼び出しを、同じ関数 (`ProgramBuilder::extern_call`) で作る。本体は最後の矢印の呼び出しでないので `mask` を持たず、`mask` は包む関数を呼ぶ `apply` が持つ。結果は組で関数でないので、`par` に余る引数はない
-- 最適化は `par` をほかの文と同じく扱う。yield の地点でなく、handler に触れず (下の「handler への特殊化」)、到達の解析は2つの子をたどる。never だけのエフェクトの handler は最適化で消えないので、子の中断を起こし直すとき、親はいつもその evidence を持つ。handle を消すのは handler への特殊化だけで、それは操作がどれも `never` のエフェクトを断り、展開は `handle` を持つ関数を断るためである
+- 最適化は `par` をほかの文と同じく扱う。yield の地点でなく、handler に触れず (下の「handler への特殊化」)、到達の解析は2つの子をたどる。never だけのエフェクトの handler は最適化で消えないので、子の中断を起こし直すとき、親はいつもその evidence を持つ。`compute` の仕事の中断を起こし直すときも同じである。handle を消すのは handler への特殊化だけで、それは操作がどれも `never` のエフェクトを断り、展開は `handle` を持つ関数を断るためである
 
 ### ローカル関数の持ち上げ
 
@@ -861,7 +864,7 @@ EP は、使うときだけ次の関数をプログラムに1つずつ足す。�
 
 補助の関数の中の `apply` (κ、c、`ret`、節の本体を呼ぶもの) は、どれも `yields` の印を立てる。`apply` はどれも一様で、呼ばれる関数の `split` 以降の一様な位置と合う ([LIR](lir.md) の「関数の ABI」)。
 
-`par` を走らせうるプログラムには、EP は最後に `fork$E.op` と `reperform$E.op` も足す。この2つは上の表の関数と違って `yields` の印を立てず、使うかどうかによらずエフェクトの操作ごとに作る (下の「`par` の子の中断」)。
+fork しうるプログラムには、EP は最後に `fork$E.op` と `reperform$E.op` も足す。この2つは上の表の関数と違って `yields` の印を立てず、使うかどうかによらずエフェクトの操作ごとに作る (下の「`par` の子の中断」)。
 
 #### yield の地点
 
@@ -1069,7 +1072,7 @@ b_fast:
 
 `par` の子が起こせるのは `never` の操作だけである。子の中で起きた操作は子の中で中断し、両方の子が終わった後に親で起こし直す。そのために EP は、エフェクトの操作ごとに `fork$E.op` と `reperform$E.op` の2つの関数を作る。
 
-- 作るのは、プログラムが `par` を走らせうるときだけである。`Call::Par` か `prim root_get` を含むプログラムがこれに当たる (`eml_lir::Program::may_run_par`)。REPL の束縛は前の入力の `par` を走らせる閉包を持てるので、`root_get` も条件に入れる。どちらも含まないプログラムでは、EP の出力は変わらない
+- 作るのは、プログラムが fork しうるときだけである。`Call::Par`、`extern Std.Async.fork_job`、`prim root_get` のどれかを含むプログラムがこれに当たる (`eml_lir::Program::may_fork`)。REPL の束縛は前の入力の `par` を走らせる閉包を持てるので、`root_get` も条件に入れる。どれも含まないプログラムでは、EP の出力は変わらない
 - 作る対象のエフェクト (`eml_lir::fork_effects`) は、操作を1つ以上持ち、`EffectInfo::never_only` が真のものすべてである。`never_only` は、どの操作も `never` のエフェクトで真になり、操作のないエフェクトでも真である。extern のエフェクトだけは、操作でなく `eml_extern` の表の行の多重度で決める ([型と Kind](types.md) の「Kind」)。そのため `Prelude.Panic` は入り、操作の `io_failed` が `never` でも多重度が `Once` の `Prelude.IO` は入らない
 - 操作のないエフェクトは never-only だが、作る関数がない。VM が子の evidence のために持つ表は、操作のないものを含めて never-only のエフェクトすべてを覆い、操作のないエフェクトの表は空である。子の `evv` が親の never-only の evidence と同じ数の evidence を持ち、子の中の `mask` が飛ばす数がそろうためである
 - 名前は、エフェクトの表の名前と操作の名前から `fork$E.op`、`reperform$E.op` とする (`fork$Prelude.Panic.panicked`)。REPL のセッションのエフェクトはバージョンを持つ名前なので、名前にバージョンも入る (`fork$E#2.op`)。中身は操作の表の行だけで決まるので、名前が同じ関数はいつも同じコードになる。VM はこの名前で関数を引く
@@ -1081,6 +1084,7 @@ b_fast:
   - 本体は `ev_lookup[E]`、`ev_clause[E.op]`、`clause` で操作を起こす。普通の `perform` と同じく、今の `evv` の最初の `E` の evidence で起こす
   - `Prelude.Panic` は `extern Prelude.panic(a_1)` で起こし直す。位置は持たない。`try_panic` がなければ、`panic` と同じく実行時エラーになる
 - 実行系は、親の文脈で `reperform$E.op` を呼ぶ前に、子の操作が届いた handler の evidence が `evv` の最初の `E` の evidence になるように `evv` を整える。`reperform$` は深さを受け取らず、整えた `evv` の最初の `E` の evidence で起こす。fork と join の手順と、子の evidence の作り方は VM の側が決める ([VM](vm.md) の「`par` の fork と join」)
+- `Std.Async.compute` の仕事も同じ fork evidence で中断する。仕事の操作は、仕事が終わった後で、出したタスクの `take_job` が同じ `reperform$E.op` で起こし直す ([VM](vm.md) の「`compute` の仕事」)
 
 ## Core IR から LIR への変換
 

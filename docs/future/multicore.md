@@ -113,6 +113,7 @@ worker のループは、ほかに仕事がなくなるまで次の順に見る�
 
 - `par` の fork と join は実行系 (VM ではタスクと join の節点を持つ `eml_vm`) が行い、印付けと移し戻しは `eml_rt` の `share` と `transfer_back` を呼ぶ ([VM](../spec/vm.md) の「`par` の fork と join」)。fork はまだ始まっていない右の子を自分の deque に積み、左の子を自分で動かす。空いた worker は deque の上から盗む
 - deque を入れるまでの VM では、fork は空いている worker があれば右の子をその受け箱に置き、なければ自分の実行待ちに積む。置いた子の終わりは、結果ごと親の worker の受け箱に知らせる ([VM](../spec/vm.md) の「`par` の fork と join」)。`Async` のタスクは、`start` のときに置ける worker を順に回して置き、`Place` の知らせで運ぶ (下の「`Async` のタスク」)
+- `compute` の仕事は join するフレームを持たない fork の子で、`par-steal` では deque の項になり、終わりで仕事のセルを終える ([VM](../spec/vm.md) の「`compute` の仕事」)
 - VM では、join で待つ親の `Task` は join の節点で待ち、worker のループはほかの仕事 (先に `par` の子、次に `Async` のタスク) を動かす。待つ `Task` はデータなので、待つ費用はない。子が終わると、親は横取りした VM のタスクのキューに戻る
 - ネイティブのコードはスタックを切り替えられないので、join で待つ worker は待たずに手伝う。手伝えるのは、待つ join より深い fork の子だけで、ほかに手伝えるものがなければ join の節点で待つ ([ネイティブ化の設計](native.md) の「並列の実行」)。これで待ちが輪になることはない。まだ始まっていない子のうち最も浅いものを深さ d の c とすると、c を fork した親は動いているか、深さ d - 1 の自分の join で待っていて c を取れる。盗まれた子を待つ worker は動いている worker を待っている。`par` の子は有限である
 - 専用の worker は盗まず、自分の join だけを手伝う
@@ -375,7 +376,7 @@ both : (Unit -> <e> a) -> (Unit -> <e> b) -> <e> (a, b)        -- 逐次の関�
 - 止めるビットを見て止まった子は、それを自分の誤りとして join に記録せず、そのまま止める手順に入る。この規則が順序づけないのは、子が起こしたのでない run 全体の止め方 (割り込み、`TERMINATE`、メモリの硬い上限) だけで、それは起きた時点ですべての worker の止める語にビットとして立ち、worker 0 がそれを見て run を終える (下の「止める手順」)
 - 捨てる側の子の結果が `Lin` の場合、`par` は型について多相なので、実行時にオブジェクトの記述子から破棄処理を引いて drop する。`eml_rt` の記述子は破棄処理を持たなければならない。今の `eml_rt` は型ごとの記述子の表を持たず、破棄処理をヘッダの種類で表す ([オブジェクトモデル](../spec/object-model.md) の「ヘッダ」)
 - `par` は実行系の核のプリミティブ (fork / join の節点) で、std の `Par.par` から呼ぶ。子の `never` の操作が `par` から抜けるのを、次の形で親に渡す
-  - evidence passing は、`par` を走らせうるプログラムの `never` の操作 `E.op` ごとに、`fork$E.op` と `reperform$E.op` を作る ([Core IR](../spec/core-ir.md) の「`par` の子の中断」)。`fork$E.op` は操作の引数を捕まえた閉包 `c = closure reperform$E.op(a_1, .., a_k)` を作り、`prim child_abort(ev, c)` を呼んで子を中断する。`reperform$E.op(a_1, .., a_k, u)` は `()` を受けて `E.op` を普通に perform する
+  - evidence passing は、fork しうるプログラムの `never` の操作 `E.op` ごとに、`fork$E.op` と `reperform$E.op` を作る ([Core IR](../spec/core-ir.md) の「`par` の子の中断」)。`fork$E.op` は操作の引数を捕まえた閉包 `c = closure reperform$E.op(a_1, .., a_k)` を作り、`prim child_abort(ev, c)` を呼んで子を中断する。`reperform$E.op(a_1, .., a_k, u)` は `()` を受けて `E.op` を普通に perform する
   - 子の `evv` は空でなく、親の `evv` の鏡である。親の `evv` の `never` だけのエフェクトの evidence ごとに、そのエフェクトの何番目かの深さを持つ fork evidence を同じ順に並べ、`Panic` の fork evidence を末尾に置く。子の中の `mask` は数で evidence を飛ばすので、親と同じ形の列にすれば `ev_lookup` と `evv_mask` に手を入れずに済む。fork evidence の節は `fork$E.op` である。エフェクトごとの表と末尾はロードで凍結し、鏡の節点だけを fork ごとに作る ([VM](../spec/vm.md) の「`par` の fork と join」)
   - 子の中の extern の `Panic` も、ほかの `never` の操作と同じく、子の中の `try_panic` か末尾の fork evidence の `fork$Prelude.Panic.panicked` に届く。extern のエフェクトは mask されないので、`Panic` の fork evidence は深さ 0 の1つで足りる
   - join の節点は起こし直しの閉包を持つ。両方の子が終わった後、親はいちばん左のものに `()` を適用する。深さが 0 でなければ、親の `evv` をその深さまで mask してから呼ぶ。それは親の文脈で親の evidence を使って perform するので、`prompt$` は普通に動く。`par` の呼び出しの位置は巻き戻しの地点である ([Core IR](../spec/core-ir.md) の「`never` の中断」、[VM](../spec/vm.md) の「巻き戻し」)
@@ -412,7 +413,7 @@ handler の節が `k v` を末尾で1回だけ呼ぶ場合、継続を取り出�
 - タスクは中断の境目である。IO の失敗と `Panic` はタスクの底で止まり、`exit` は下の「止める手順」で run を終える ([非同期の設計](async.md) の「失敗と `exit`」)
 - ユーザー定義のエフェクトはタスクのクロージャの中で handle し終えている必要がある (OCaml 5 の Eio と同じ扱い)。`Heap h` は閉じた row によって除外される
 - 並行処理のための新しい構文は追加しない。ラムダと `use` で書ける ([式](../spec/expressions.md) の「並行処理」)
-- CPU を多く使う仕事は `compute` で `par` の仕事にして、呼んだタスクを待たせる ([非同期の設計](async.md) の「`compute`」)
+- CPU を多く使う仕事は `compute` で `par` の仕事にして、呼んだタスクを待たせる ([標準ライブラリ](../spec/stdlib.md) の「`compute`」)
 
 ## 継続の移動と不変条件
 

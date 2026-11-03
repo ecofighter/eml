@@ -1,0 +1,18 @@
+# `compute` は REPL でも動く。worker が1つなので、仕事はその worker のタスクと交互に動く。仕事の never の操作は、
+# 前の入力で宣言したエフェクトでも、`compute` を使った後で宣言したエフェクトでも、呼んだタスクの handler に届く。
+# 仕事は前の入力の `let` の束縛を読める (docs/spec/stdlib.md の「`compute`」、docs/spec/modules.md の「REPL のセッション」)
+> import Async (Async)
+> import Fail (Fail(..))
+> import List
+> effect Stop where
+.   never stop : Unit -> a
+.
+> let xs = [1, 2, 3]
+> Async.run (fn () -> Async.compute (fn () -> 40 + 2))
+> Async.run (fn () -> handle Async.compute (fn () -> stop ()) with | ctl stop () -> 0)
+> Async.run (fn () -> Async.compute (fn () -> List.length xs))
+> effect Stop2 where
+.   never stop2 : Int -> a
+.
+> Async.run (fn () -> handle Async.compute (fn () -> stop2 7 + 1) with | ctl stop2 n -> n * 2)
+> Async.run (fn () -> Fail.to_result (fn () -> Async.compute (fn () -> Fail.fail "no")))

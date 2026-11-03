@@ -597,3 +597,146 @@ fn drain_within_waits_until_the_scope_has_no_task() {
         assert_eq!((s.tasks, s.parks, s.timers, s.cancels), counts, "{src}");
     }
 }
+
+/// `compute` で待つタスクは継続だけになって park し、その間に worker はほかのタスクと仕事を動かす。`compute` 1回で
+/// `parks` が1つ増え、`tasks` は増えない (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn a_task_parked_on_a_job_lets_the_worker_run_other_tasks() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start (fn () -> println \"t\")
+    println (show (Async.compute (fn () -> 41)))
+    Async.await t)
+";
+    assert_eq!(run_both(src), "t\n41\n");
+    let (_, stats) = run_stats(src);
+    let s = stats.expect("the checked run");
+    assert_eq!((s.tasks, s.parks, s.cancels), (2, 2, 0));
+}
+
+/// 仕事を待つタスクへの取り消しは、仕事が終わってから届く。`drop_job` は終わった仕事の `Lin` の結果を落とすので、
+/// 検査モードで漏れが出ない (docs/spec/vm.md の「取り消しの届け方」)。
+#[test]
+fn a_cancel_reaches_a_task_parked_on_a_job_only_after_the_job() {
+    let src = "\
+import Async (Async)
+import Async
+import MutArray
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    Async.scope (fn s ->
+      Async.spawn_in s (fn () ->
+        match try_io (fn () -> Async.compute (fn () -> MutArray.make 2 7)) with
+          | Ok a ->
+            drop a
+            println \"job: done\"
+          | Err e -> println \"job: \\{show e.kind}\")
+      Async.yield_now ()
+      Async.cancel_scope s)
+    println \"after\")
+";
+    let (out, stats) = run_stats(src);
+    let s = stats.unwrap_or_else(|error| panic!("the checked run failed: {error}"));
+    assert_eq!(out, "job: Cancelled\nafter\n");
+    assert_eq!(s.cancels, 1);
+}
+
+/// 自分のスコープを取り消してから `compute` を呼ぶと、仕事は最後まで動き、仕事の後で取り消しが1回だけ届く。どの
+/// スケジュールでも出力と `parks` は逐次と同じである。
+#[test]
+fn a_cancelled_compute_counts_one_park_and_one_cancel_under_every_schedule() {
+    let src = |job: &str| {
+        format!(
+            "\
+import Async (Async)
+import Async
+import MutArray
+spin : Int -> <Panic> Int
+spin n = if n == 0 then 0 else spin (n - 1)
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start (fn () ->
+      Async.scope (fn s ->
+        Async.cancel_scope s
+        match try_io (fn () -> {job}) with
+          | Ok a ->
+            drop a
+            println \"done\"
+          | Err e -> println \"job: \\{{show e.kind}}\"))
+    Async.await t)
+"
+        )
+    };
+    let program = lir(src("Async.compute (fn () -> MutArray.make 2 (spin 40))").as_str());
+    // 同じプログラムで `compute` を呼ばずに配列を作る run と比べ、`compute` の待ちが `parks` をちょうど1つ足すことを確かめる
+    let (_, without) = execute(
+        &lir(src("MutArray.make 2 (spin 40)").as_str()),
+        &RunConfig::default().with_debug_heap(true),
+    );
+    let without = without.unwrap_or_else(|error| panic!("the run without compute: {error}"));
+    let checked = |sched| RunConfig::default().with_debug_heap(true).with_sched(sched);
+    let (out, sequential) = execute(&program, &checked(Sched::Sequential));
+    let sequential = sequential.unwrap_or_else(|error| panic!("the sequential run: {error}"));
+    assert_eq!(out, "job: Cancelled\n");
+    assert_eq!(sequential.cancels, 1);
+    assert_eq!(sequential.parks, without.parks + 1);
+    for seed in [1, 2026] {
+        let (seeded_out, seeded) = execute(&program, &checked(Sched::Seeded(seed)));
+        let seeded = seeded.unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+        assert_eq!(seeded_out, out, "seed {seed}");
+        assert_eq!(
+            (seeded.parks, seeded.cancels),
+            (sequential.parks, 1),
+            "seed {seed}"
+        );
+    }
+}
+
+/// 仕事の `evv` は、never だけの handler がなければ凍結した末尾で、あれば鏡の evidence を持つ新しい節点である。どちらも
+/// 仕事の終わりが手放すので、検査モードで RC のずれも漏れも出ない (docs/spec/vm.md の「`compute` の仕事」)。
+#[test]
+fn a_job_releases_its_fork_evv() {
+    let bare = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> println (show (Async.compute (fn () -> 1))))
+";
+    assert_eq!(run_both(bare), "1\n");
+    let mirrored = "\
+import Async
+import Fail (Fail(..))
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let r = Fail.to_result (fn () -> Async.compute (fn () -> if 1 == 1 then 1 else Fail.fail \"no\"))
+    println (show r))
+";
+    assert_eq!(run_both(mirrored), "Ok 1\n");
+}
+
+/// 実行待ちに積んだままの仕事があっても、`exit` は run を捨てて終わる。
+#[test]
+fn exit_abandons_a_queued_job() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    Async.spawn (fn () -> println (show (Async.compute (fn () -> 1))))
+    Async.yield_now ()
+    (exit 3 : Unit))
+";
+    let (host, out) = eml_vm::capture_host(Default::default());
+    let config = RunConfig::default()
+        .with_debug_heap(true)
+        .with_sched(Sched::Sequential);
+    let finished = eml_vm::execute(&lir(src), &config, host).unwrap();
+    assert_eq!(out.contents(), "");
+    assert_eq!(finished.exit, Some(3));
+    assert_eq!(finished.stats.parks, 2);
+}

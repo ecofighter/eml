@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/compute_panic_caught.em
+---
+--- stdout ---
+Err (Panicked "division by zero")
+Err "boom"
+0
+--- stderr ---

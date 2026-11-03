@@ -328,7 +328,7 @@ uniform from 1 fn reperform$Fail.fail(a.0: tobj poly, u.1: unit) -> tobj poly {
   tail clause Fail.fail c.3(ev.2, a.0)
 }
 ";
-    assert!(parse(second).may_run_par());
+    assert!(parse(second).may_fork());
     assert_eq!(run_two(first, second), "kept\n");
 }
 
