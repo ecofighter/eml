@@ -595,11 +595,23 @@ fn closed_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
-/// 受け入れの列が詰まった待ち受けと、列を詰めている接続。列が詰まると Linux も macOS も SYN を黙って捨てるので、
-/// ここへの接続は拒まれもつながりもせず、進行中のまま残る。閉じたポートへの接続は、拒まれるのが速く、同じ `wait`
-/// の中で終わることがあるので、待つ接続には使えない。どちらもテストの間は生かしておく。
-#[cfg(unix)]
-fn full_listener() -> (std::net::TcpListener, Vec<std::net::TcpStream>) {
+/// 接続が拒まれもつながりもせず、進行中のまま残る番地と、テストの間生かしておくもの。閉じたポートへの接続は、
+/// 拒まれるのが速く、同じ `wait` の中で終わることがあるので、待つ接続には使えない。
+///
+/// macOS は lo0 に `127.0.0.1` しか持たず、`127.0.0.2` への SYN には誰も答えないので、そこへの接続が進行中のまま
+/// 残る。受けの列が詰まった待ち受けは使えない。macOS 27 は詰まった列への接続をすぐにリセットするためである。
+#[cfg(target_os = "macos")]
+fn unanswered_addr() -> (std::net::SocketAddr, ()) {
+    (std::net::SocketAddr::from(([127, 0, 0, 2], 9)), ())
+}
+
+/// `unanswered_addr` の macOS 以外の版。Linux は `127.0.0.0/8` のどの番地にも答えるので、受けの列を詰めた待ち受けを使う。列が詰まると Linux は SYN を
+/// 黙って捨てるので、そこへの接続は進行中のまま残る。生かしておくのは、待ち受けと列を詰めている接続である。
+#[cfg(all(unix, not(target_os = "macos")))]
+fn unanswered_addr() -> (
+    std::net::SocketAddr,
+    (std::net::TcpListener, Vec<std::net::TcpStream>),
+) {
     use std::os::fd::AsRawFd;
     let listener = std::net::TcpListener::bind(loopback(0)).unwrap();
     // std は backlog を選べないので、待ち受けている socket に backlog 0 で `listen` を出し直す。0 の読み方は OS で
@@ -612,7 +624,7 @@ fn full_listener() -> (std::net::TcpListener, Vec<std::net::TcpStream>) {
         assert!(fillers.len() < 1024, "the accept queue never filled");
         match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(50)) {
             Ok(filler) => fillers.push(filler),
-            Err(e) if e.kind() == ErrorKind::TimedOut => return (listener, fillers),
+            Err(e) if e.kind() == ErrorKind::TimedOut => return (addr, (listener, fillers)),
             Err(e) => panic!("{e}"),
         }
     }
@@ -884,22 +896,24 @@ fn a_cancelled_pending_long_write_completes_once() {
     assert!(stash.is_empty());
 }
 
-/// 名前の接続の最初の番地の試行が終わる前に取り消すと、次の番地を試さずに終わる。最初の番地には受けの列が詰まった
-/// 待ち受けを使い、試行を進行中のまま残す。Windows は詰まった列を広げて接続を終えることがあり、進行中のまま残る
-/// ことに頼れないので、unix だけで流す (docs/implementation/testing.md の「Windows で流さないテスト」)。
+/// 名前の接続の最初の番地の試行が終わる前に取り消すと、次の番地を試さずに終わる。最初の番地には誰も答えない番地
+/// (`unanswered_addr`) を使い、試行を進行中のまま残す。Windows は `127.0.0.0/8` のどの番地にも答え、詰まった
+/// 受けの列は広げて接続を終えることがあり、進行中のまま残ることに頼れないので、unix だけで流す
+/// (docs/implementation/testing.md の「Windows で流さないテスト」)。
 #[cfg(unix)]
 #[test]
 fn a_cancelled_connect_does_not_try_the_next_address() {
-    use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    static FULL: AtomicU16 = AtomicU16::new(0);
+    static UNANSWERED: OnceLock<std::net::SocketAddr> = OnceLock::new();
     static LOOKED_UP: AtomicBool = AtomicBool::new(false);
     fn lookup(_host: &str, port: u16) -> std::io::Result<Vec<std::net::SocketAddr>> {
         LOOKED_UP.store(true, Ordering::SeqCst);
-        Ok(vec![loopback(FULL.load(Ordering::SeqCst)), loopback(port)])
+        Ok(vec![*UNANSWERED.get().unwrap(), loopback(port)])
     }
-    let (full, _fillers) = full_listener();
-    FULL.store(full.local_addr().unwrap().port(), Ordering::SeqCst);
+    let (unanswered, _keep) = unanswered_addr();
+    UNANSWERED.set(unanswered).unwrap();
     let mut driver = RealDriver::with_lookup(lookup).unwrap();
     let mut stash = Vec::new();
     let (_, port) = listen(&mut driver, &mut stash);
