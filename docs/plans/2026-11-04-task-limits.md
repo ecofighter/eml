@@ -125,7 +125,7 @@
 - 見直す条件: ネイティブで `stack_limit` を同じ形で毒にできないと分かったとき
 - 適合の確かめ:
   - MUST: `git diff 837b0fe9 -- crates/eml_rt/src/heap/ctx.rs` で `fn poll` の中が変わっていない。`control.rs` の `stop_reason` (788-809) も変わっていない
-  - MUST: `depth_limit` の書き手は `switch_task` と `set_depth_limit` だけ。`crates/eml_vm/src` のテストでないコードで `switch_task(` を呼ぶ所は1つ (包み `switch_to`) だけで、それはその後で `Task.limit` を当て直す。`grep -n "switch_task(" crates/eml_vm/src/*.rs` で確かめる
+  - MUST: `depth_limit` の書き手は `switch_task` と `set_depth_limit` だけ。`crates/eml_vm/src` のテストでないコードで `switch_task(` を呼ぶ所は、包み `switch_to` (その後で `Task.limit` を当て直す) と、`cells::with_worker` の行きと帰りの2つだけにする。`with_worker` は切り替える前に `Ctx::depth_limit()` (検証済みの読み手。T-4 で足す) で今の値を取っておき、帰りの `switch_task` の後で `set_depth_limit` で戻す。`grep -n "switch_task(" crates/eml_vm/src/*.rs` で確かめる (実行の途中で、計画が `with_worker` の2つを数えていなかったと分かり、この形に直した)
   - MUST: `bench/run.sh` の `fib` と `empty` の命令の数が docs/implementation/benchmarks.md の値の揺れの範囲に入る
 - リポジトリに残す所: object-model.md の「タスクの切り替え」と `Ctx` の欄の表 (T-3)、vm.md の「タスクの上限」 (T-4)
 
@@ -357,7 +357,8 @@
 - 完了の条件:
   - `cargo nextest run -p eml_vm` → すべて通る
   - `cargo nextest run -p eml_vm -E 'test(calls::) | test(par::) | test(workers::) | test(scaling::)'` → 期待値を変えずに通る
-  - `grep -n "switch_task(" crates/eml_vm/src/*.rs` → テストでない呼び出しが1か所
+  - `grep -n "switch_task(" crates/eml_vm/src/*.rs` → テストでない呼び出しは `switch_to` の1か所と `cells::with_worker` の2か所だけで、`with_worker` は帰りの後で取っておいた `depth_limit` を `set_depth_limit` で戻す
+  - `cargo verus verify -p eml_rt` → `0 errors` (`Ctx::depth_limit()` を足すため)
   - `cargo clippy --all-targets -- -D warnings && cargo fmt --check` → 終了コード 0
 - 落とし穴: `par` の worker ID の切り替えも同じ `Task` で `switch_task` を呼ぶので、`switch_to` を通さないと `Pending` と `Aborting` が消える。`Ret` が続く間は保留のまま冷たい道を通るが、着地が `real` より深いときだけで、次の `Call` で起きる
 
