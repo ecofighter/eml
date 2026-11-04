@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eml_cli::{
-    CaptureHost, Control, Finished, FsProvider, Limits, RunConfig, RunStats, RuntimeError, Sched,
-    Session, Signal, VirtualSignal, VmFault, default_limits, execute,
+    CaptureHost, Clock, Control, Finished, FsProvider, Limits, RunConfig, RunStats, RuntimeError,
+    Sched, Session, Signal, VirtualSignal, VmFault, default_limits, execute,
 };
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
@@ -202,6 +202,11 @@ fn execute_in(
         })))
         .with_sched(sched)
         .with_signals(marks.signals.clone());
+    let config = if marks.real_clock {
+        config.with_clock(Clock::Real)
+    } else {
+        config
+    };
     let outcome = execute(program, &config, host.into_ref());
     let finished = outcome.as_ref().ok().copied();
     let result = outcome.map(|finished| finished.exit);
@@ -365,6 +370,36 @@ fn assert_workers_agree(
                 "{suffix}: rescued no task with {workers} workers under `Sched::RescueAlways`; start a task after the workers start (docs/implementation/testing.md の「seed で流す」)"
             );
         }
+    }
+}
+
+/// 検査モードと速いモードのほかに流す run (docs/implementation/testing.md の「seed で流す」)。
+#[derive(Debug, PartialEq)]
+struct ExtraRuns {
+    seeds: bool,
+    workers: bool,
+}
+
+/// 本物の時計の印のあるファイルは、子のプロセスが終わる順が seed や worker の数で決まらないので、seed の run も
+/// worker の run も流さない。シグナルの予定は仮想の時計でしか進まないので、一緒に書くと誤りにする。
+fn extra_runs(suffix: &str, marks: &Marks) -> ExtraRuns {
+    if marks.real_clock {
+        assert!(
+            suffix.starts_with("async/"),
+            "{suffix}: the clock mark is only for async/"
+        );
+        assert!(
+            marks.signals.is_empty(),
+            "{suffix}: signal marks need the virtual clock"
+        );
+        return ExtraRuns {
+            seeds: false,
+            workers: false,
+        };
+    }
+    ExtraRuns {
+        seeds: seeded(suffix),
+        workers: workers_run(suffix, marks.workers_skip),
     }
 }
 
@@ -585,6 +620,7 @@ fn run() {
         let Entry::Test(suffix) = classify(path, "run") else {
             return;
         };
+        let extra = extra_runs(&suffix, marks);
         let (program, root, diagnostics) = compile(path, &suffix);
         let ran = execute_in(&program, path, &root, marks, true, Sched::Sequential, 1);
         assert!(ran.result.is_ok(), "{:?}\n{diagnostics}", ran.result);
@@ -599,10 +635,10 @@ fn run() {
             ));
         });
         assert_fast_mode_agrees(&suffix, &program, path, &root, marks, &ran);
-        if seeded(&suffix) {
+        if extra.seeds {
             assert_seeds_agree(&suffix, &program, path, &root, marks, &ran);
         }
-        if workers_run(&suffix, marks.workers_skip) {
+        if extra.workers {
             assert_workers_agree(&suffix, &program, path, &root, marks, &ran);
         }
     });
@@ -619,7 +655,7 @@ fn run_fail_file(path: &Path, marks: &Marks) {
     let Entry::Test(suffix) = classify(path, "run-fail") else {
         return;
     };
-    let workers = workers_run(&suffix, marks.workers_skip);
+    let extra = extra_runs(&suffix, marks);
     let (program, root, diagnostics) = compile(path, &suffix);
     let ran = execute_in(&program, path, &root, marks, true, Sched::Sequential, 1);
     let Err(error) = &ran.result else {
@@ -638,10 +674,10 @@ fn run_fail_file(path: &Path, marks: &Marks) {
     // VM の誤りの文言は worker ID を含みうる。ID はスケジュールで変わるので、seed の run とも比べない
     if fast_mode_reports(error) {
         assert_fast_mode_agrees(&suffix, &program, path, &root, marks, &ran);
-        if seeded(&suffix) {
+        if extra.seeds {
             assert_seeds_agree(&suffix, &program, path, &root, marks, &ran);
         }
-        if workers {
+        if extra.workers {
             assert_workers_agree(&suffix, &program, path, &root, marks, &ran);
         }
     }
@@ -730,6 +766,88 @@ fn a_workers_mark_outside_par_and_async_fails() {
     workers_run("io/x.em", true);
 }
 
+#[test]
+fn the_clock_mark_needs_a_reason() {
+    assert!(leading_marks("-- clock: real ()\n", "--").is_err());
+    assert!(leading_marks("-- clock: real\n", "--").is_err());
+    assert!(leading_marks("-- clock: virtual (x)\n", "--").is_err());
+    let marks = leading_marks("-- clock: real (spawns eml)\n", "--").unwrap();
+    assert!(marks.real_clock);
+}
+
+#[test]
+#[should_panic(expected = "the clock mark is only for async/")]
+fn a_clock_mark_outside_async_fails() {
+    let marked = Marks {
+        real_clock: true,
+        ..Default::default()
+    };
+    extra_runs("io/x.em", &marked);
+}
+
+#[test]
+#[should_panic(expected = "signal marks need the virtual clock")]
+fn a_clock_mark_with_signals_fails() {
+    let marked = Marks {
+        real_clock: true,
+        signals: vec![VirtualSignal {
+            at_ms: 5,
+            signal: Signal::Interrupt,
+        }],
+        ..Default::default()
+    };
+    extra_runs("async/x.em", &marked);
+}
+
+#[test]
+fn a_real_clock_file_has_no_seed_or_workers_runs() {
+    let marked = Marks {
+        real_clock: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        extra_runs("async/x.em", &marked),
+        ExtraRuns {
+            seeds: false,
+            workers: false
+        }
+    );
+    assert_eq!(
+        extra_runs("async/x.em", &Marks::default()),
+        ExtraRuns {
+            seeds: true,
+            workers: true
+        }
+    );
+}
+
+/// 本物の時計の上では、時間に頼る API を使うと結果が機械の速さで変わる (docs/implementation/testing.md の「UI テスト」)。
+#[test]
+fn a_real_clock_file_does_not_wait_on_time() {
+    const TIME_BOUND: [&str; 4] = ["sleep_ms", "timeout", "_within", "drain_within"];
+    for top in ["run", "run-fail"] {
+        for_each_file(&ui_root().join(top), "em", true, |path, marks| {
+            if !marks.real_clock {
+                return;
+            }
+            let text = fs::read_to_string(path).unwrap();
+            for word in TIME_BOUND {
+                assert!(
+                    !text.contains(word),
+                    "{}: a clock: real file must not use `{word}`",
+                    path.display()
+                );
+            }
+        });
+    }
+}
+
+#[test]
+#[should_panic(expected = "clock marks are not supported here")]
+fn a_clock_mark_in_a_transcript_fails() {
+    marks_of("x.repl", "# clock: real (x)\n> 1\n", "#", false);
+}
+
 /// `run-fail/` のほかの分類の印は、プログラムを流す前に落ちる。そのため、速いモードが報告しない誤り (漏れや内部の
 /// 誤り) で終わるファイルでも通らない。ファイルを読む前に落ちるので、無いファイルの名前で確かめる。
 #[test]
@@ -781,6 +899,7 @@ fn the_workers_mark_needs_a_reason() {
         Ok(Marks {
             windows_skip: true,
             workers_skip: true,
+            real_clock: false,
             signals: vec![VirtualSignal {
                 at_ms: 5,
                 signal: Signal::Interrupt
@@ -956,6 +1075,7 @@ fn signal_marks_are_parsed_in_order() {
         Ok(Marks {
             windows_skip: false,
             workers_skip: false,
+            real_clock: false,
             signals: vec![at(100, Signal::Terminate), at(5, Signal::Interrupt)],
             max_depth: None,
             max_bytes: None,

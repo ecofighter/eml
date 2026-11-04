@@ -45,7 +45,7 @@ impl Host for RaisingHost {
     fn open_write(&self, path: &str, mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
         self.inner.open_write(path, mode)
     }
-    fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
+    fn spawn(&self, spawn: Spawn<'_>) -> io::Result<Spawned> {
         self.inner.spawn(spawn)
     }
 }

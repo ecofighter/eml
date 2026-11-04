@@ -1,5 +1,6 @@
-//! Apple の登録、待ち、起こし (docs/spec/vm.md の「時計と driver」)。ソケットは `EV_CLEAR` の filter で1回だけ登録し、
-//! 起こしは `EVFILT_USER` の `NOTE_TRIGGER` である。
+//! Apple の登録、待ち、起こし (docs/spec/vm.md の「時計と driver」)。ソケットとパイプは `EV_CLEAR` の filter で1回
+//! だけ登録し、子の終わりは `EVFILT_PROC` の `NOTE_EXIT` を1回だけ登録する。起こしは `EVFILT_USER` の
+//! `NOTE_TRIGGER` である。
 
 #![allow(unsafe_code)]
 
@@ -12,7 +13,7 @@ use std::time::Duration;
 use eml_rt::IoWaker;
 use libc::c_int;
 
-use super::unix::{Poller, Ready, WAKE, syscall};
+use super::unix::{Interest, Poller, Ready, WAKE, syscall};
 
 /// 1回の待ちで取り出す event の数。
 const EVENTS: usize = 256;
@@ -96,15 +97,34 @@ impl Poller for Kqueue {
         Ok((poller, Arc::new(User(kq))))
     }
 
-    fn register(&mut self, fd: BorrowedFd<'_>, token: u64, write: bool) -> io::Result<()> {
+    fn register(&mut self, fd: BorrowedFd<'_>, token: u64, interest: Interest) -> io::Result<()> {
         let ident = fd.as_raw_fd() as usize;
         let flags = libc::EV_ADD | libc::EV_CLEAR;
-        let changes = [
-            change(ident, libc::EVFILT_READ, flags, 0, token),
-            change(ident, libc::EVFILT_WRITE, flags, 0, token),
-        ];
-        let n = if write { 2 } else { 1 };
-        apply(self.kq.as_fd(), &changes[..n])
+        let read = change(ident, libc::EVFILT_READ, flags, 0, token);
+        let write = change(ident, libc::EVFILT_WRITE, flags, 0, token);
+        match interest {
+            Interest::Read => apply(self.kq.as_fd(), &[read]),
+            Interest::Write => apply(self.kq.as_fd(), &[write]),
+            Interest::Both => apply(self.kq.as_fd(), &[read, write]),
+        }
+    }
+
+    fn watch_exit(&mut self, pid: i32, token: u64) -> io::Result<()> {
+        let flags = libc::EV_ADD | libc::EV_ONESHOT;
+        let exit = change(
+            pid as usize,
+            libc::EVFILT_PROC,
+            flags,
+            libc::NOTE_EXIT,
+            token,
+        );
+        apply(self.kq.as_fd(), &[exit])
+    }
+
+    fn unwatch_exit(&mut self, pid: i32, token: u64) {
+        // 知らせが届いた登録は `EV_ONESHOT` で消えているので、`ENOENT` は捨ててよい
+        let exit = change(pid as usize, libc::EVFILT_PROC, libc::EV_DELETE, 0, token);
+        let _ = apply(self.kq.as_fd(), &[exit]);
     }
 
     fn poll(
@@ -154,6 +174,12 @@ impl Poller for Kqueue {
                 libc::EVFILT_WRITE => Ready {
                     read: false,
                     write: true,
+                    fresh: false,
+                },
+                // 子の終わり。待ちの行の読みの向きを起こす
+                libc::EVFILT_PROC => Ready {
+                    read: true,
+                    write: false,
                     fresh: false,
                 },
                 _ => continue,

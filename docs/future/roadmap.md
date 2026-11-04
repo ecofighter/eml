@@ -28,15 +28,11 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `async-files`: 非同期のファイルと、子のプロセスのパイプを入れる。今のブロックする std の行では書けない次の3つを書けるようにする。前提: なし。設計: [非同期の設計](async.md) の「ファイルとパイプ」
-  - パイプ (`.|`): 子の標準出力を次の子の標準入力へつなぐ。今の行で eml が読んで書き写すと、2段目の標準出力を pipe にした途端に 64 KiB で詰まる。`Cmd` の列を1回の `spawn` で OS の fd でつなぐ形もある
-  - `run` と `output` の標準入力を文字列で与えること: 今の行では、読みながら書く子で詰まる ([標準ライブラリ](../spec/stdlib.md) の「`Child`」の pipe の規則)。今は `spawn` で書く。Host が書きながら読む `output` を持つ形もある
-  - `Child` の標準エラーの pipe (読み分け): 今の行では3本の pipe を1つのスレッドで扱うと詰まる
 - `raw-arrays`: `Float` と `Int` の要素を生の 8 バイトで並べる配列 (`Std.FloatArray`、`Std.MutFloatArray`、`Std.IntArray`、`Std.MutIntArray`) を、新しい物体の種類 `Raw` で入れる。配列の要素の数をいつも長さの語に持つ形も、この段で入れる。前提: なし。設計: [ネイティブ化の設計](native.md) の「生の要素の配列」
   - 配列の要素は一様な位置なので、今は `Array Float` と `MutArray Float` の要素が書くたびに `Float` の箱に入る。spectral-norm では、確保のほとんどがこの箱である (`RunStats` の `allocations` 4043 のうち `boxes` が 4001。[計測の基準](../implementation/benchmarks.md) の「配列の `Float` の要素の箱」)。構造体の表現もこの箱を消さない
   - 新しい配列は `Array a` とは別の型で、長さの語と連続した中身を持つ物体の仲間 (`String`、`Bytes`。[オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」) の別の種類である。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
 - `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: `raw-arrays`。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
-- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。今は std に仕事を出す行がなく、プールの仕事は `eml_io` のテストだけが確かめるので、VM からプールの仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
+- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。std がプールに出す仕事は `Std.Stream` のファイルの読み書きだけで、`Op::Job` の仕事は `eml_io` のテストだけが確かめるので、VM から `Op::Job` の仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
 - `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。`Tls.connect_with_ca` と `Tls.wrap_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: `ffi-blocking`。設計: この項目
   - テストの証明書: macOS は TLS の server の証明書の有効期間に上限 (825 日) を課すと理解しているので、期限を 2126 年にした `eml_tls` の fixtures は、本物のソケットのテストで拒まれる見込みである。段の最初に確かめ、期限の短い証明書を定期的に作り直すか、テストだけ別の検証を使うかを決める
   - Linux の OS の検証器は、OS のファイルから根を読んで rustls で検証する。`ca-certificates` を持たない最小のコンテナ (distroless など) と nix の sandbox では根が空になり、`Tls.connect` はすべて失敗する。この使い方は `Tls.connect_with_ca` で根を渡すと spec に書く。テストは `connect_with_ca` か `wrap_with_ca` で根を渡して書き、既定の根に頼るテストは置かない
@@ -55,7 +51,7 @@
 - `rt-layout`: `eml_rt` に、物体のペイロードの先頭 (走査する語の数から決まる数の語の有無と、走査の始まり) を求めるインターフェースを足し、`eml_vm` の `data::count_word` が写して持つ同じ規則を消す。インターフェースの性質は、ヘッダの規則と同じく Verus で証明する。ネイティブのコード生成もこのインターフェースを使い、規則の写しを持たない。前提: なし。設計: [オブジェクトモデル](../spec/object-model.md) の「ヘッダ」
 - `jit-core`: `eml_native` に、一階の部分 (スカラー、データ、呼び出し、末尾呼び出し、クロージャと `apply`、RC) を CLIF にするコード生成を作り、`eml run --native` で動かす。AAPCS64 と x86_64 の SysV の `eml_enter` と `eml_fatal`、安全点、ネイティブのコードが読む `Ctx` の欄の配置、利用者の C の行をネイティブのコードから呼ぶことを入れる。扱わない形は E0004 で断り、UI テストの印 `// native: skip` を導入する。前提: `borrowed-params`、`ffi-c`、`rt-layout`。設計: [ネイティブ化の設計](native.md) の「確定した設計判断」、同じ文書の「呼び出し規約とエントリ」
 - `jit-externs`: すべての extern とプラグインの行を、ネイティブのコードから呼ぶ。包みと VM の腕を表から作り、extern の失敗を `Ctx.fault` で返す。前提: `jit-core`。設計: [ネイティブ化の設計](native.md) の「extern のエントリ」
-- `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`async-files`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
+- `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
 - `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 のエントリの stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
 - `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の実装の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`、`raw-arrays`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
 - `par-steal`: VM の `par` の右の子を、空いている worker の受け箱に置く形から、worker ごとの Chase-Lev の deque と盗みに替える。join の待ちと、子の終わりを親の worker へ知らせる道は、今のものをそのまま使う。呼んだ worker に積んだ `compute` の仕事も、右の子と同じく盗まれる。今の実行待ちは、`par` の子と `Async` の仕事が混ざる worker ごとに1本の mutex の列で、切り替えのたびにその lock を取る ([VM](../spec/vm.md) の「タスクとスケジュール」、[計測の基準](../implementation/benchmarks.md) の「実行待ちの列の lock」)。`par` の子を deque に移した後に残る列の形も、この段で決め直す。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
@@ -164,12 +160,9 @@
 - `Fs.append_text`: パスで1回に済む、末尾に足す書き込み
   - 後に回した理由: `FileOut.append` と `write` と `close` の1行で書ける。
   - 見直す条件: 同じ1行の定義が、スクリプトの2か所以上に現れたとき。
-- 標準入力と標準出力のファイルへのリダイレクト (`< in`、`> out`)
-  - 後に回した理由: Host の側は `Stdio::from(File)` で済むが、Prelude に向きの型と `Cmd` のフィールド、`spawn_raw` の引数、開けないときの誤りの形が要る。`FileIn`、`FileOut` と `spawn`、`output` で書ける。
-  - 見直す条件: メモリに収まらない出力をファイルに流すスクリプトが出たとき。`Cmd` に `stdin`、`stdout` のフィールドを足す形にし、`StderrMode` と同じ道をとる。
-- 標準エラーを別の文字列に取ること
-  - 後に回した理由: extern は組を1つしか作れず、Host が2本の pipe を同時に読む仕組みが要る。
-  - 見直す条件: `merge_stderr` で分けられない例が出たとき。
+- `Proc` で標準エラーを別の文字列に取ること: `Std.Exec` は `pipe_stderr` と `stderr` で読み分けられる
+  - 後に回した理由: `Proc` の extern は組を1つしか作れず、Host が2本の pipe を同時に読む仕組みが要る。
+  - 見直す条件: `merge_stderr` で分けられず、`Exec` を使えない例が出たとき。
 - 環境変数の削除と全消し
   - 後に回した理由: 上書きで足りる例しかない。
   - 見直す条件: `env -i` に当たる用途が出たとき。
@@ -413,7 +406,7 @@
   - 見直す条件: macOS で system の proxy か VPN に沿った接続、system の trust store を使う TLS、QUIC のどれかが要るとき。または iOS を対象にするとき。
 - Linux の io_uring の backend: Linux の backend は epoll で、io_uring を入れるなら、既定になる形 (作れなければ epoll) でだけ入れる。既定にならない backend は試されない `unsafe` のコードとして残り、io_uring を拒む環境 (Docker の seccomp、gVisor、`io_uring_disabled`) も多いので、epoll を基準の backend にする。`EML_IO_BACKEND` で backend を選べる実装を試して測った数字は、[計測の基準](../implementation/benchmarks.md) の「io_uring と epoll」にある
   - 後に回した理由: 比べた5件 (many-self-1000、echo-self-fresh、echo-py-fresh、echo-py-reuse、bulk-1k) のどれでも、2回のセッションで続けて、CPU の比が 0.800 以下で判定が「差」にはならなかった (いちばん縮んだのは `io_uring_direct` の many-self-1000 で、1回目が 0.779 で四分位が重なり、2回目が 0.940)。貸した buffer を1つだけカーネルに渡す契約の下では、io_uring で省けるのは、登録、接続の確かめ、空振りの読みの syscall に限られる。
-  - 見直す条件: ネイティブ化の後に many-self-1000 と echo-self-fresh を測り直し、減らせる syscall の分が CPU の2割に当たるとき。buffer の契約を変え、カーネルが選ぶ buffer を受け入れる設計をするとき。`async-files` で、プールの仕事の費用が計測で目立ったとき。
+  - 見直す条件: ネイティブ化の後に many-self-1000 と echo-self-fresh を測り直し、減らせる syscall の分が CPU の2割に当たるとき。buffer の契約を変え、カーネルが選ぶ buffer を受け入れる設計をするとき。`Std.Stream` のファイルの仕事で、プールの費用が計測で目立ったとき。
 - musl で静的に結んだ Linux の配布物 (`x86_64-unknown-linux-musl`)
   - 後に回した理由: TLS とは別の配布の話である。aws-lc-sys のために musl を対象にする C のツールチェーンを flake に足し、`nix build` の2つ目のパッケージと CI のジョブが要る。musl の名前の解決と確保の速さは glibc と違う。AOT の配布物は `libeml_rt.a` を同梱して利用者の `cc` で結ぶので、musl の配布物には musl 向けの `libeml_rt.a` と結び方を別に用意する必要がある。根の証明書は今は webpki-roots なので静的な配布物でも OS のストアは要らないが、`tls-platform-verifier` の後は OS の根のファイルが要る。
   - 見直す条件: Linux の tarball を配布するとき。既定の配布物とは別の配布物にする。
@@ -436,7 +429,7 @@
   - 後に回した理由: `cancel_requested` は、`shield` の中では外から来た取り消しを読まない。`shield` の中の後始末が要求を知る使い道が、まだない。
   - 見直す条件: `shield` の中の後始末が、取り消されたかどうかで動きを変える必要が出たとき。
 - プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ ([VM](../spec/vm.md) の「時計と driver」)
-  - 後に回した理由: 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
+  - 後に回した理由: std がプールに出す仕事は `Std.Stream` の通常のファイルの読み書きだけで、どれもディスクが答えれば終わる。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
   - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
 - 1つのハンドルの1つの向きに、保留の操作を2つ以上置くこと: 今の本物の driver は、読みと書きのそれぞれに保留を1つしか置かず、2つ目を `InvalidInput` で断る ([VM](../spec/vm.md) の「時計と driver」)
   - 後に回した理由: std のストリームとリスナーは `Lin` なので、VM は同じ向きに2つの操作を出さない。backend の fd ごとの状態を最小にできる。
@@ -462,6 +455,33 @@
 - 上限の近くで待ちに入ったタスクの再開の深さ: 再開は、捕まえた利用者のフレーム1段ごとに `compose$` のフレームを積み直すので、再開の後の深さは、待ちに入る前の深さに `compose$` のフレームと利用者のフレームの大きさの比を掛けたほどになる。深さが `real + LIMIT_HEADROOM` を超えるとタスクの失敗でなく run の誤りで止まり、`real` との間なら、論理的な深さが上限に届いていなくても `the call depth limit is exceeded` の `ResourceLimit` が起きる ([VM](../spec/vm.md) の「タスクの上限」)
   - 後に回した理由: 猶予 `LIMIT_HEADROOM` は巻き戻しの途中の暴走を止める硬い限度でもあり、変えずに残す。比は測っていない。
   - 見直す条件: 上限の近くで待ちに入ったタスクの再開が、run の誤りか見かけの深さの超過で止まる事例が出てきたとき。
+- バッファを持つ非同期の `Writer` と `flush`: `Std.Stream` の `Writer` は buffer を持たず、書くたびに1回の操作を出す ([標準ライブラリ](../spec/stdlib.md) の「`Std.Stream`」)
+  - 後に回した理由: 小さい書きを何度も出す使い方が、今のスクリプトにない。buffer を持つと、手放したときの書き出しの失敗を届ける道が要る。
+  - 見直す条件: 行ごとに書く非同期のプログラムで、書きの操作の費用が計測で目立ったとき。
+- `Std.Stream` の `_within` の読み: 期限は `Async.timeout` で付けるが、期限が来ると `Reader` を失う
+  - 後に回した理由: 期限の後も読み手を保つ使い方がまだない。
+  - 見直す条件: 期限の後も同じ `Reader` で読み続けたいプログラムが出たとき。
+- `Exec.output_err`: 標準出力と標準エラーを1回で読む `Cmd -> <IO, Panic, Async> (String, String, Int)`
+  - 後に回した理由: 標準出力と標準エラーを1回で読む便利な関数で、この段の3つの目的に入らない。読み分けは `Exec.stdout` と `Exec.stderr` を2つのタスクで読めば書ける。
+  - 見直す条件: 同じ読み分けの定義が、スクリプトの2か所以上に現れたとき。
+- パイプラインの途中の段の標準エラーを読むこと: 今は最後の段の `pipe_stderr` だけが読め、途中の段は起動の誤りである
+  - 後に回した理由: 段ごとに `Child` が持つ pipe の端の数と取り出す関数を増やす設計が要る。
+  - 見直す条件: 途中の段の診断を取りたいスクリプトが出たとき。
+- 非同期の `Fs` の関数、`Std.Stream` の seek、位置を指定する読み書き、読み書き両用の開き方
+  - 後に回した理由: 非同期のファイルを使う目的は、ファイルを読み書きしながらほかのタスクを進めることで、順に読み書きする `Stream` で足りる。
+  - 見直す条件: 大きなファイルを途中から読むか、書き直すプログラムが出たとき。
+- pidfd のない Linux (5.3 より前のカーネル) の `Exec.wait`: 今は種類 `NotAvailable` で失敗する
+  - 後に回した理由: 対象の Linux は pidfd のある版で、代わりの待ち方 (`SIGCHLD` や待つスレッド) は別の仕組みを足す。
+  - 見直す条件: 5.3 より前のカーネルで `Exec` を動かす必要が出たとき。
+- パイプラインの全段の環境変数を一度に設定すること: `Proc.env` は設定した段の環境だけを変える
+  - 後に回した理由: 既定は最後の段だけに当てる決めで、全段に当てるかどうかは、同じ変数を全段に設定する例を見て決める。
+  - 見直す条件: 同じ変数を全段に設定するスクリプトが出たとき。
+- 非同期の `Stdin` と `Stdout`: 今の `Stdin` と `Stdout` はその場で動く同期の行である
+  - 後に回した理由: Windows のコンソールの標準入力は overlapped にできず、`Std.Stream` と `Std.Exec` の目的にも入らない。
+  - 見直す条件: 標準入力を読みながらほかのタスクを進めたいプログラムが出たとき。
+- Windows で子の pipe を読むタスクの Ctrl-C を確かめるテスト: unix では `crates/eml_cli/tests/cli.rs` が `Exec.wait` の待ちの Ctrl-C (終了コード 130) を確かめる
+  - 後に回した理由: `crates/eml_cli/tests/cli.rs` にコンソールのイベントを送る仕組みがない。
+  - 見直す条件: Windows のコンソールの Ctrl-C を送る仕組みを cli.rs に足すとき。または、Windows で `Std.Exec` の待ちが Ctrl-C で止まらない報告が出たとき。
 
 ### ネイティブ化
 

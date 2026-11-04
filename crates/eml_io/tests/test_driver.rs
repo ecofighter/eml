@@ -722,6 +722,209 @@ fn the_test_driver_adopts_no_socket() {
     let (far, _) = listener.accept().unwrap();
     let sock = eml_rt::RawSocket::new(eml_rt::OsSocket::from(far));
     let mut driver = TestDriver::new(None);
-    let e = driver.adopt(sock).unwrap_err();
+    let e = driver.adopt(eml_rt::RawResource::Socket(sock)).unwrap_err();
     assert_eq!(e.kind(), ErrorKind::Unsupported);
+}
+
+/// 一時ファイルの道。テストごとの名前で、プロセスの id を付ける。
+fn scratch_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("eml-io-test-{}-{name}", std::process::id()))
+}
+
+fn adopt_file(driver: &mut TestDriver, file: std::fs::File) -> IoHandle {
+    let res = eml_rt::RawResource::File(eml_rt::RawFile::new(file.into()));
+    match run_op(driver, Op::Adopt { res }) {
+        Ok(Done::Handle(handle)) => handle,
+        other => panic!("an adopt ended with {other:?}"),
+    }
+}
+
+/// ファイルの読みは受け付けでは動かず、`wait` の決着で動く。
+#[test]
+fn a_file_read_settles_at_wait() {
+    let path = scratch_path("settles-at-wait");
+    std::fs::write(&path, b"settled").unwrap();
+    let mut driver = TestDriver::new(None);
+    let file = adopt_file(&mut driver, std::fs::File::open(&path).unwrap());
+    let mut room = [0u8; 16];
+    let read = pending(
+        &mut driver,
+        Op::Read {
+            handle: file,
+            buf: raw(&mut room),
+        },
+    );
+    assert!(collect(&mut driver).is_empty());
+    assert_eq!(room, [0u8; 16]);
+    let done = settle(&mut driver);
+    assert_eq!(keys(&done), [read]);
+    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(7));
+    assert_eq!(&room[..7], b"settled");
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// ファイルの読み書きは仕事と同じく取り消せない。取り消しても動き、`cancelled` は立たない。
+#[test]
+fn a_cancelled_file_read_still_delivers_its_bytes() {
+    let path = scratch_path("cancelled-read");
+    std::fs::write(&path, b"still here").unwrap();
+    let mut driver = TestDriver::new(None);
+    let file = adopt_file(&mut driver, std::fs::File::open(&path).unwrap());
+    let mut room = [0u8; 16];
+    let read = pending(
+        &mut driver,
+        Op::Read {
+            handle: file,
+            buf: raw(&mut room),
+        },
+    );
+    driver.cancel(read);
+    let done = settle(&mut driver);
+    assert_eq!(keys(&done), [read]);
+    assert!(!done[0].cancelled);
+    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(10));
+    assert_eq!(&room[..10], b"still here");
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// 静止させるときは、保留のファイルの書きも動かしきる。結果は捨てる。
+#[test]
+fn quiesce_runs_a_pending_file_write() {
+    let path = scratch_path("quiesce-write");
+    let mut driver = TestDriver::new(None);
+    let file = adopt_file(&mut driver, std::fs::File::create(&path).unwrap());
+    let mut data = *b"written at quiesce";
+    pending(
+        &mut driver,
+        Op::Write {
+            handle: file,
+            buf: raw(&mut data),
+        },
+    );
+    assert!(std::fs::read(&path).unwrap().is_empty());
+    driver.quiesce();
+    assert_eq!(std::fs::read(&path).unwrap(), b"written at quiesce");
+    assert_eq!(driver.pending(), 0);
+    assert!(collect(&mut driver).is_empty());
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// bin に入れたファイルのハンドルは閉じ、それからの操作は誤りで終わる。
+#[test]
+fn a_binned_file_handle_is_closed() {
+    let path = scratch_path("binned");
+    std::fs::write(&path, b"closed").unwrap();
+    let mut driver = TestDriver::new(None);
+    let file = adopt_file(&mut driver, std::fs::File::open(&path).unwrap());
+    driver.bin().dropped.lock().unwrap().push(file);
+    let mut room = [0u8; 8];
+    let result = run_op(
+        &mut driver,
+        Op::Read {
+            handle: file,
+            buf: raw(&mut room),
+        },
+    );
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    assert_eq!(room, [0u8; 8]);
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// 同じファイルへの2つの読みは受け付けの順に動くので、seed は完了の順だけを変え、読んだ中身は変えない。
+#[test]
+fn a_seed_does_not_change_what_a_file_read_returns() {
+    let path = scratch_path("seeded-reads");
+    std::fs::write(&path, b"abcdefgh").unwrap();
+    for seed in [None, Some(1), Some(2), Some(3)] {
+        let mut driver = TestDriver::new(seed);
+        let file = adopt_file(&mut driver, std::fs::File::open(&path).unwrap());
+        let (mut first, mut second) = ([0u8; 4], [0u8; 4]);
+        let a = pending(
+            &mut driver,
+            Op::Read {
+                handle: file,
+                buf: raw(&mut first),
+            },
+        );
+        let b = pending(
+            &mut driver,
+            Op::Read {
+                handle: file,
+                buf: raw(&mut second),
+            },
+        );
+        let mut done = settle(&mut driver);
+        done.sort_by_key(|c| c.key);
+        assert_eq!(keys(&done), [a, b]);
+        assert_eq!((&first, &second), (b"abcd", b"efgh"), "seed {seed:?}");
+    }
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// 決着待ちの書きがあるハンドルを bin に入れても、書きは決着で動き、その後でハンドルが閉じる。
+#[test]
+fn a_binned_handle_keeps_its_queued_file_write() {
+    let path = scratch_path("binned-write");
+    let mut driver = TestDriver::new(None);
+    let file = adopt_file(&mut driver, std::fs::File::create(&path).unwrap());
+    let mut data = *b"kept until settled";
+    let write = pending(
+        &mut driver,
+        Op::Write {
+            handle: file,
+            buf: raw(&mut data),
+        },
+    );
+    driver.bin().dropped.lock().unwrap().push(file);
+    let done = settle(&mut driver);
+    assert_eq!(keys(&done), [write]);
+    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(18));
+    assert_eq!(std::fs::read(&path).unwrap(), b"kept until settled");
+    let mut room = [0u8; 4];
+    let after = run_op(
+        &mut driver,
+        Op::Read {
+            handle: file,
+            buf: raw(&mut room),
+        },
+    );
+    assert_eq!(after.unwrap_err().kind(), ErrorKind::InvalidInput);
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// 子のプロセスは仮想にできないので、テストの driver はパイプも、パイプの取り込みも、子の終わりの待ちも断る
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn the_test_driver_has_no_pipes() {
+    let mut driver = TestDriver::new(None);
+    let no_processes = |e: std::io::Error| {
+        assert_eq!(e.kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(e.to_string(), "the test driver has no processes");
+    };
+    no_processes(driver.pipe(true).unwrap_err());
+    let (read, write) = std::io::pipe().unwrap();
+    for res in [
+        eml_rt::RawResource::PipeRead(eml_rt::RawPipe::new(read.into())),
+        eml_rt::RawResource::PipeWrite(eml_rt::RawPipe::new(write.into())),
+    ] {
+        no_processes(driver.adopt(res).unwrap_err());
+    }
+    match driver.submit(1, Op::Wait { process: process() }) {
+        Submit::Done(Err(e)) => no_processes(e),
+        other => panic!("a wait ended with {other:?}"),
+    }
+    assert_eq!(driver.pending(), 0);
+}
+
+/// 待つ子の代わり。テストの driver は中を見ない。
+#[cfg(unix)]
+fn process() -> eml_rt::RawProcess {
+    eml_rt::RawProcess(std::process::id() as i32)
+}
+
+/// Windows ではプロセスのハンドルの代わりに、テストの driver が見ないパイプの端を渡す。
+#[cfg(windows)]
+fn process() -> eml_rt::RawProcess {
+    let (read, _write) = std::io::pipe().unwrap();
+    eml_rt::RawProcess(read.into())
 }

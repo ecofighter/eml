@@ -6,61 +6,58 @@
 use super::proof::*;
 use super::*;
 use crate::externs::Fault;
-use crate::host::{Child, child_close_stdin, child_wait, host_spawn};
+use crate::host::{
+    Child, child_close_stdin, child_stage_count, child_wait, child_wait_stage, host_spawn,
+};
 
 verus! {
 
 impl<M: Mode> Ctx<M> {
-    /// 文字列 `a`、`b`、`c`、`d` を受ける extern の前提。呼ぶ側がそれぞれの参照を1つずつ持つ (同じ物体なら、渡した数
-    /// だけ持つ)。
-    pub open spec fn holds_texts(&self, a: Word, b: Word, c: Word, d: Word) -> bool {
+    /// 文字列 `a`、`b`、`c` を受ける extern の前提。呼ぶ側がそれぞれの参照を1つずつ持つ (同じ物体なら、渡した数だけ
+    /// 持つ)。
+    pub open spec fn holds_texts(&self, a: Word, b: Word, c: Word) -> bool {
         &&& self.is_string(a)
         &&& self.is_string(b)
         &&& self.is_string(c)
-        &&& self.is_string(d)
-        &&& self.holds_args(seq![a, b, c, d])
+        &&& self.holds_args(seq![a, b, c])
     }
 
-    /// `Proc.spawn_raw`。プログラム `program` を、引数の列 `args`、環境の列 `env`、作業ディレクトリ `cwd` (空なら設定
-    /// しない) と、`stdin`、`stdout`、`stderr` の向きで Host に起動させ、`lin` ビットを立てた `Child` の物体を返す。列と
-    /// 向きの値は信頼の関数 `host_spawn` が読む。4つの文字列の参照を受け取り、起動できたかどうかによらず手放す。起動
-    /// できたときは、`fs_open` と同じく、`Child` を作ってから文字列を手放す。
+    /// `Proc.spawn_raw`。段の列 `stages` を、標準入力の向き `stdin` とその中身 `stdin_payload`、標準出力の向き
+    /// `stdout` とそのパス `stdout_path` で Host に起動させ、`lin` ビットを立てた `Child` の物体を返す。列と向きの値は
+    /// 信頼の関数 `host_spawn` が読む。3つの文字列の参照を受け取り、起動できたかどうかによらず手放す。起動できたときは、
+    /// `fs_open` と同じく、`Child` を作ってから文字列を手放す。
     ///
     /// # Safety
-    /// `heap_mut` の前提を守っている。4つの語は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がそれぞれの
+    /// `heap_mut` の前提を守っている。3つの語は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がそれぞれの
     /// 参照を1つ持つ (同じ物体なら、渡した数だけ持つ)。速いモードでは、どれも文字列である。検査モードは、Host を呼ぶ前に
     /// 種類と `decref` の前提を1つずつ確かめ、違えば何も起動せずに `WrongKind` などを返す。同じ物体を呼ぶ側の持つ数より
     /// 多く渡したことは、手放すときに見つかる。そのときは、作った `Child` も手放してから `Heap(_)` を返す。
-    #[expect(clippy::too_many_arguments, reason = "the seven arguments of `spawn_raw`")]
     pub unsafe fn proc_spawn(
         &mut self,
-        program: Word,
-        args: Word,
-        env: Word,
-        cwd: Word,
+        stages: Word,
         stdin: i64,
+        stdin_payload: Word,
         stdout: i64,
-        stderr: i64,
+        stdout_path: Word,
     ) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
-            old(self).heap_spec().word_in(program),
-            old(self).heap_spec().word_in(args),
-            old(self).heap_spec().word_in(env),
-            old(self).heap_spec().word_in(cwd),
-            !M::CHECKED ==> old(self).holds_texts(program, args, env, cwd),
+            old(self).heap_spec().word_in(stages),
+            old(self).heap_spec().word_in(stdin_payload),
+            old(self).heap_spec().word_in(stdout_path),
+            !M::CHECKED ==> old(self).holds_texts(stages, stdin_payload, stdout_path),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
-            old(self).held_ok() && old(self).holds_texts(program, args, env, cwd) && !(
+            old(self).held_ok() && old(self).holds_texts(stages, stdin_payload, stdout_path) && !(
             r matches Err(Fault::Heap(_))) ==> {
                 &&& final(self).held_ok()
                 &&& final(self).evolved_by(
                     *old(self),
                     |x: usize|
-                        -points(program, x) - points(args, x) - points(env, x) - points(cwd, x),
+                        -points(stages, x) - points(stdin_payload, x) - points(stdout_path, x),
                     Set::empty(),
                 )
                 &&& r matches Ok(w) ==> {
@@ -71,59 +68,48 @@ impl<M: Mode> Ctx<M> {
             },
     {
         let ghost s0 = *self;
-        let ghost ws = seq![program, args, env, cwd];
-        let ghost c = s0.held_ok() && s0.holds_texts(program, args, env, cwd);
-        if M::CHECKED && !(program.is_ptr() && args.is_ptr() && env.is_ptr() && cwd.is_ptr()) {
+        let ghost ws = seq![stages, stdin_payload, stdout_path];
+        let ghost c = s0.held_ok() && s0.holds_texts(stages, stdin_payload, stdout_path);
+        if M::CHECKED && !(stages.is_ptr() && stdin_payload.is_ptr() && stdout_path.is_ptr()) {
             return Err(Fault::Heap(HeapError::WrongKind));
         }
         self.heap.settle();
         let ghost h1 = self.heap;
-        let hp = self.heap.header_of(program);
-        let ha = self.heap.header_of(args);
-        let he = self.heap.header_of(env);
-        let hc = self.heap.header_of(cwd);
+        let hs = self.heap.header_of(stages);
+        let hi = self.heap.header_of(stdin_payload);
+        let ho = self.heap.header_of(stdout_path);
         proof {
             lemma_settled_twice(s0.heap);
             assert(h1.words_kept(s0.heap));
-            h1.lemma_text_spec(program);
-            h1.lemma_text_spec(args);
-            h1.lemma_text_spec(env);
-            h1.lemma_text_spec(cwd);
-            s0.heap.lemma_text_spec(program);
-            s0.heap.lemma_text_spec(args);
-            s0.heap.lemma_text_spec(env);
-            s0.heap.lemma_text_spec(cwd);
+            h1.lemma_text_spec(stages);
+            h1.lemma_text_spec(stdin_payload);
+            h1.lemma_text_spec(stdout_path);
+            s0.heap.lemma_text_spec(stages);
+            s0.heap.lemma_text_spec(stdin_payload);
+            s0.heap.lemma_text_spec(stdout_path);
             if c {
                 s0.lemma_holds_one(ws, 0);
                 s0.lemma_holds_one(ws, 1);
                 s0.lemma_holds_one(ws, 2);
-                s0.lemma_holds_one(ws, 3);
-                s0.lemma_settled_body(h1, program, Kind::String);
-                s0.lemma_settled_body(h1, args, Kind::String);
-                s0.lemma_settled_body(h1, env, Kind::String);
-                s0.lemma_settled_body(h1, cwd, Kind::String);
+                s0.lemma_settled_body(h1, stages, Kind::String);
+                s0.lemma_settled_body(h1, stdin_payload, Kind::String);
+                s0.lemma_settled_body(h1, stdout_path, Kind::String);
             }
         }
         // 確かめはどれも Host を呼ぶ前に済ませ、誤りなら何も起動しない
-        if let Err(e) = self.heap.checked_body(hp, Kind::String) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
             return Err(Fault::Heap(e));
         }
-        if let Err(e) = self.heap.checked_body(ha, Kind::String) {
+        if let Err(e) = self.heap.checked_body(hi, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
             return Err(Fault::Heap(e));
         }
-        if let Err(e) = self.heap.checked_body(he, Kind::String) {
-            proof {
-                self.lemma_words_kept(s0);
-            }
-            return Err(Fault::Heap(e));
-        }
-        if let Err(e) = self.heap.checked_body(hc, Kind::String) {
+        if let Err(e) = self.heap.checked_body(ho, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -132,13 +118,11 @@ impl<M: Mode> Ctx<M> {
         let spawned = host_spawn(
             &self.host,
             &self.control,
-            self.heap.string_text(program),
-            self.heap.string_text(args),
-            self.heap.string_text(env),
-            self.heap.string_text(cwd),
+            self.heap.string_text(stages),
             stdin,
+            self.heap.string_text(stdin_payload),
             stdout,
-            stderr,
+            self.heap.string_text(stdout_path),
         );
         match spawned {
             Ok(child) => {
@@ -168,7 +152,7 @@ impl<M: Mode> Ctx<M> {
                         self.lemma_args_kept(s0, ws);
                     }
                 }
-                let released = unsafe { self.release_texts(program, args, env, cwd) };
+                let released = unsafe { self.release_texts(stages, stdin_payload, stdout_path) };
                 if let Err(e) = released {
                     // 検査モードだけが来る。作った `Child` も手放し、破棄処理が子を片づける
                     let _ = unsafe { self.release_handle(w) };
@@ -176,7 +160,7 @@ impl<M: Mode> Ctx<M> {
                 }
                 proof {
                     if c {
-                        self.lemma_spawned(s0, h1, h2, w, program, args, env, cwd);
+                        self.lemma_spawned(s0, h1, h2, w, stages, stdin_payload, stdout_path);
                     }
                 }
                 Ok(w)
@@ -188,7 +172,7 @@ impl<M: Mode> Ctx<M> {
                         self.lemma_args_kept(s0, ws);
                     }
                 }
-                let released = unsafe { self.release_texts(program, args, env, cwd) };
+                let released = unsafe { self.release_texts(stages, stdin_payload, stdout_path) };
                 released?;
                 proof {
                     if c {
@@ -198,13 +182,13 @@ impl<M: Mode> Ctx<M> {
                             s0.heap,
                             |x: usize| 0int,
                             |x: usize|
-                                -points(program, x) - points(args, x) - points(env, x) - points(
-                                    cwd,
+                                -points(stages, x) - points(stdin_payload, x) - points(
+                                    stdout_path,
                                     x,
                                 ),
                             |x: usize|
-                                -points(program, x) - points(args, x) - points(env, x) - points(
-                                    cwd,
+                                -points(stages, x) - points(stdin_payload, x) - points(
+                                    stdout_path,
                                     x,
                                 ),
                             Set::empty(),
@@ -218,23 +202,21 @@ impl<M: Mode> Ctx<M> {
         }
     }
 
-    /// `proc_spawn` が読んだ文字列 `a`、`b`、`c`、`d` を、この順に手放す。検査モードは手放すたびに `decref` の前提を
+    /// `proc_spawn` が読んだ文字列 `a`、`b`、`c` を、この順に手放す。検査モードは手放すたびに `decref` の前提を
     /// 確かめるので、同じ物体を呼ぶ側の持つ数より多く渡せば、そこで `Heap(_)` を返す。
     ///
     /// # Safety
     /// `proc_spawn` と同じである。
-    unsafe fn release_texts(&mut self, a: Word, b: Word, c: Word, d: Word) -> (r: Result<(), Fault>)
+    unsafe fn release_texts(&mut self, a: Word, b: Word, c: Word) -> (r: Result<(), Fault>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(a),
             old(self).heap_spec().word_in(b),
             old(self).heap_spec().word_in(c),
-            old(self).heap_spec().word_in(d),
             a.is_ptr_spec(),
             b.is_ptr_spec(),
             c.is_ptr_spec(),
-            d.is_ptr_spec(),
-            !M::CHECKED ==> old(self).holds_args(seq![a, b, c, d]),
+            !M::CHECKED ==> old(self).holds_args(seq![a, b, c]),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -242,23 +224,22 @@ impl<M: Mode> Ctx<M> {
             r is Ok || (r matches Err(Fault::Heap(_))),
             !M::CHECKED ==> r is Ok,
             M::CHECKED ==> final(self).heap_spec().words_kept(old(self).heap_spec()),
-            old(self).held_ok() && old(self).holds_args(seq![a, b, c, d]) && r is Ok ==> {
+            old(self).held_ok() && old(self).holds_args(seq![a, b, c]) && r is Ok ==> {
                 &&& final(self).held_ok()
                 &&& moved(
                     final(self).heap,
                     old(self).heap,
-                    |x: usize| -points(a, x) - points(b, x) - points(c, x) - points(d, x),
+                    |x: usize| -points(a, x) - points(b, x) - points(c, x),
                     Set::empty(),
                 )
             },
     {
         let ghost s0 = *self;
-        let ghost ws = seq![a, b, c, d];
+        let ghost ws = seq![a, b, c];
         let ghost k = s0.held_ok() && s0.holds_args(ws);
         let ghost d1 = |x: usize| -points(a, x);
         let ghost d2 = |x: usize| -points(a, x) - points(b, x);
         let ghost d3 = |x: usize| -points(a, x) - points(b, x) - points(c, x);
-        let ghost d4 = |x: usize| -points(a, x) - points(b, x) - points(c, x) - points(d, x);
         proof {
             if k {
                 s0.lemma_holds_one(ws, 0);
@@ -314,7 +295,6 @@ impl<M: Mode> Ctx<M> {
             }
             return Err(e);
         }
-        let ghost s3 = *self;
         proof {
             if M::CHECKED {
                 lemma_words_trans(self.heap, s2.heap, s0.heap);
@@ -327,36 +307,6 @@ impl<M: Mode> Ctx<M> {
                     d2,
                     |x: usize| -points(c, x),
                     d3,
-                    Set::empty(),
-                    Set::empty(),
-                    Set::empty(),
-                );
-                assert forall|x: usize| #[trigger] points_in(ws, x) + d3(x) >= points(ws[3], x) by {
-                    lemma_points_in(ws, x);
-                }
-                self.lemma_kept_one(s0, ws, 3, d3);
-            }
-        }
-        if let Err(e) = unsafe { self.release_handle(d) } {
-            proof {
-                if M::CHECKED {
-                    lemma_words_trans(self.heap, s3.heap, s0.heap);
-                }
-            }
-            return Err(e);
-        }
-        proof {
-            if M::CHECKED {
-                lemma_words_trans(self.heap, s3.heap, s0.heap);
-            }
-            if k {
-                lemma_moved_chain(
-                    self.heap,
-                    s3.heap,
-                    s0.heap,
-                    d3,
-                    |x: usize| -points(d, x),
-                    d4,
                     Set::empty(),
                     Set::empty(),
                     Set::empty(),
@@ -442,6 +392,67 @@ impl<M: Mode> Ctx<M> {
                 unsafe { child_close_stdin(p) };
                 Ok(h)
             },
+            Err(e) => Err(Fault::Heap(e)),
+        }
+    }
+
+    /// `Proc.stage_count`。`Child` のハンドル `h` を借り、パイプラインの段の数を返す。ヒープは変わらない。
+    ///
+    /// # Safety
+    /// `proc_wait` と同じである。
+    pub unsafe fn proc_stage_count(&mut self, h: Word) -> (r: Result<i64, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(h),
+            !M::CHECKED ==> old(self).holds(h) && old(self).heap_spec().rc_value(h) == 1,
+        ensures
+            *final(self) == *old(self),
+            r is Ok || (r matches Err(Fault::Heap(_))),
+            !M::CHECKED && r is Err ==> r == Err::<i64, Fault>(Fault::Heap(HeapError::WrongKind)),
+    {
+        let ghost s0 = *self;
+        if !h.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        proof {
+            if s0.held_ok() && s0.holds(h) {
+                s0.lemma_held_arg(h);
+            }
+        }
+        match unsafe { self.heap.foreign_unique::<Child>(h) } {
+            Ok(p) => Ok(unsafe { child_stage_count(p) }),
+            Err(e) => Err(Fault::Heap(e)),
+        }
+    }
+
+    /// `Proc.wait_stage`。`Child` のハンドル `h` を借り、標準入力を閉じてから段 0 から段 `k` までを先頭から待ち、段
+    /// `k` の終了コードを返す。ヒープは変わらず、`h` の参照は呼ぶ側に残る。待った段の破棄処理は kill しない。待つ間に
+    /// 止める語が立てば、段が終わった後で `Stopped` を返す。
+    ///
+    /// # Safety
+    /// `proc_wait` と同じである。
+    pub unsafe fn proc_wait_stage(&mut self, h: Word, k: i64) -> (r: Result<i64, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(h),
+            !M::CHECKED ==> old(self).holds(h) && old(self).heap_spec().rc_value(h) == 1,
+        ensures
+            *final(self) == *old(self),
+            !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<i64, Fault>(
+                Fault::Heap(HeapError::WrongKind),
+            ),
+    {
+        let ghost s0 = *self;
+        if !h.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        proof {
+            if s0.held_ok() && s0.holds(h) {
+                s0.lemma_held_arg(h);
+            }
+        }
+        match unsafe { self.heap.foreign_unique::<Child>(h) } {
+            Ok(p) => unsafe { child_wait_stage(p, k, &self.control) },
             Err(e) => Err(Fault::Heap(e)),
         }
     }
@@ -533,7 +544,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// `proc_spawn` の、起動できた道でモデルが合っている道。`h1` は `settle` の後、`h2` は `Child` の物体 `w` を作った
-    /// 後で、その後に4つの文字列を手放した。
+    /// 後で、その後に3つの文字列を手放した。
     proof fn lemma_spawned(
         &self,
         s0: Ctx<M>,
@@ -543,7 +554,6 @@ impl<M: Mode> Ctx<M> {
         a: Word,
         b: Word,
         c: Word,
-        d: Word,
     )
         requires
             s0.held_ok(),
@@ -552,7 +562,6 @@ impl<M: Mode> Ctx<M> {
             live(h1, a.bits_spec()),
             live(h1, b.bits_spec()),
             live(h1, c.bits_spec()),
-            live(h1, d.bits_spec()),
             h2.made(h1, w),
             h2.owned(w),
             h2.kind_of(w) == Kind::Foreign,
@@ -560,7 +569,7 @@ impl<M: Mode> Ctx<M> {
             moved(
                 self.heap,
                 h2,
-                |x: usize| -points(a, x) - points(b, x) - points(c, x) - points(d, x),
+                |x: usize| -points(a, x) - points(b, x) - points(c, x),
                 Set::empty(),
             ),
             self.held_ok(),
@@ -569,7 +578,7 @@ impl<M: Mode> Ctx<M> {
         ensures
             self.evolved_by(
                 s0,
-                |x: usize| -points(a, x) - points(b, x) - points(c, x) - points(d, x),
+                |x: usize| -points(a, x) - points(b, x) - points(c, x),
                 Set::empty(),
             ),
             self.holds(w),
@@ -578,14 +587,14 @@ impl<M: Mode> Ctx<M> {
     {
         let h0 = s0.heap;
         let z = |x: usize| 0int;
-        let d4 = |x: usize| -points(a, x) - points(b, x) - points(c, x) - points(d, x);
+        let d3 = |x: usize| -points(a, x) - points(b, x) - points(c, x);
         let none = Set::<usize>::empty();
         lemma_settle_moved(h1, h0);
         lemma_alloc_moved(h2, h1, w);
         lemma_moved_chain(h2, h1, h0, z, z, z, none, none, none);
-        lemma_moved_chain(self.heap, h2, h0, z, d4, d4, none, none, none);
-        assert(d4(w.bits_spec()) == 0);
-        lemma_arg_moved(self.heap, h2, d4, none, w);
+        lemma_moved_chain(self.heap, h2, h0, z, d3, d3, none, none, none);
+        assert(d3(w.bits_spec()) == 0);
+        lemma_arg_moved(self.heap, h2, d3, none, w);
         lemma_view_live(self.heap, w.bits_spec());
         assert(!live(h0, w.bits_spec()));
         self.lemma_fresh_holds(s0, w);

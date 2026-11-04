@@ -564,7 +564,10 @@ fn accepted(
     op: Started,
 ) -> (eml_rt::IoHandle, std::net::SocketAddr) {
     match complete(driver, stash, op).result.unwrap() {
-        Done::Accepted { sock, peer } => (driver.adopt(sock).unwrap(), peer),
+        Done::Accepted { sock, peer } => (
+            driver.adopt(eml_rt::RawResource::Socket(sock)).unwrap(),
+            peer,
+        ),
         other => panic!("an accept ended with {other:?}"),
     }
 }
@@ -1733,7 +1736,7 @@ fn an_accepted_socket_is_used_by_the_driver_of_another_thread() {
     std::thread::spawn(move || {
         let mut other = RealDriver::new().unwrap();
         let mut stash = Vec::new();
-        let handle = other.adopt(sock).unwrap();
+        let handle = other.adopt(eml_rt::RawResource::Socket(sock)).unwrap();
         let mut got = Vec::new();
         while got.len() < 4 {
             let mut data = [0u8; 4];
@@ -1787,4 +1790,326 @@ fn a_dropped_accepted_socket_is_closed() {
     drop(completion);
     let mut rest = Vec::new();
     assert_eq!(peer.read_to_end(&mut rest).unwrap(), 0);
+}
+
+/// `file` を `Op::Adopt` で取り込み、そのハンドルを返す。
+fn adopt_file(driver: &mut RealDriver, file: impl Into<eml_rt::OsHandle>) -> eml_rt::IoHandle {
+    let res = eml_rt::RawResource::File(eml_rt::RawFile::new(file.into()));
+    match driver.submit(next_key(), Op::Adopt { res }) {
+        Submit::Done(Ok(Done::Handle(handle))) => handle,
+        other => panic!("an adopt ended with {other:?}"),
+    }
+}
+
+/// 書いたファイルを別のハンドルで開き直して読む。どちらの仕事もプールのスレッドで貸された記憶を使う。
+#[test]
+fn a_file_is_written_and_read_through_the_pool() {
+    let path = std::env::temp_dir().join(format!(
+        "eml-io-real-{}-written-and-read",
+        std::process::id()
+    ));
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let writer = adopt_file(&mut driver, std::fs::File::create(&path).unwrap());
+    let mut data = *b"through the pool";
+    let write = pending(
+        &mut driver,
+        Op::Write {
+            handle: writer,
+            buf: raw(&mut data),
+        },
+    );
+    assert_eq!(
+        wait_for(&mut driver, &mut stash, write).result.unwrap(),
+        Done::Size(16)
+    );
+    driver.close(writer);
+    let reader = adopt_file(&mut driver, std::fs::File::open(&path).unwrap());
+    let mut got = [0u8; 32];
+    let read = pending(
+        &mut driver,
+        Op::Read {
+            handle: reader,
+            buf: raw(&mut got),
+        },
+    );
+    let Done::Size(n) = wait_for(&mut driver, &mut stash, read).result.unwrap() else {
+        panic!("a file read ended without a size");
+    };
+    assert_eq!(&got[..n], b"through the pool");
+    driver.close(reader);
+    drop(driver);
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// 落とす driver は、走っているファイルの仕事が終わるまで待ってから戻る。止まる読みを作るため、ファイルの代わりに
+/// 同期のパイプの読む端を取り込む。unix の driver はファイルの種類を確かめないので、これを受ける。Windows の driver は
+/// `FILE_TYPE_DISK` でないハンドルを取り込みで断り (docs/spec/vm.md の「時計と driver」)、止まるディスクのファイルの
+/// 読みも作れないので、unix だけで流す。Windows では、待つ規則を核の偽の backend のテストが確かめ、本物の仕事を
+/// `a_file_is_written_and_read_through_the_pool` が流す。
+#[cfg(unix)]
+#[test]
+fn dropping_a_driver_waits_for_a_running_file_job() {
+    use std::io::Write;
+
+    let (read_end, mut write_end) = std::io::pipe().unwrap();
+    let mut driver = RealDriver::new().unwrap();
+    let handle = adopt_file(&mut driver, read_end);
+    let mut got = [0u8; 4];
+    pending(
+        &mut driver,
+        Op::Read {
+            handle,
+            buf: raw(&mut got),
+        },
+    );
+    let writer = std::thread::spawn(move || {
+        // 遅れは、書く前に driver が落ち始めるようにして検出力を上げるためだけにある。合否には効かない
+        std::thread::sleep(Duration::from_millis(50));
+        write_end.write_all(b"late").unwrap();
+    });
+    drop(driver);
+    // 待たずに落ちたなら、書き手はまだ眠っていて、貸した記憶は埋まっていない
+    assert_eq!(&got, b"late");
+    writer.join().unwrap();
+}
+
+/// これがあればテストのバイナリは子として `child_main` の動きをする。中身はその動きの名前である。
+const CHILD: &str = "EML_IO_CHILD";
+
+/// 子が標準エラーに書く文。libtest は標準出力に書くので、標準エラーには子の書いた分だけが流れる。
+const CHILD_TEXT: &[u8] = b"written by the child\n";
+
+/// パイプと子の終わりの待ちのテストの子。テストのバイナリをこのテストだけで起こし直して使う。変数がなければすぐ戻る。
+#[test]
+fn child_main() {
+    use std::io::Write;
+
+    let Some(mode) = std::env::var_os(CHILD) else {
+        return;
+    };
+    match mode.to_str() {
+        Some("write") => {
+            std::io::stderr().write_all(CHILD_TEXT).unwrap();
+            std::process::exit(0);
+        }
+        Some("exit") => std::process::exit(0),
+        // 親が kill するまで眠る。親が kill しそこねても、いつかは終わる
+        Some("sleep") => {
+            std::thread::sleep(Duration::from_secs(30));
+            std::process::exit(0);
+        }
+        other => panic!("an unknown child mode {other:?}"),
+    }
+}
+
+/// 落とすときに kill して回収する子。テストが途中で落ちても子を残さない。
+struct Kid(std::process::Child);
+
+impl Drop for Kid {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl Kid {
+    /// `mode` の動きをする子を起こす。標準入出力は `set` が変えなければ null である。`Command` はここで落とすので、
+    /// 子に渡した端を親は持たない。
+    fn spawn(mode: &str, set: impl FnOnce(&mut std::process::Command)) -> Kid {
+        use std::process::Stdio;
+
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "real::child_main",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, mode)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        set(&mut command);
+        // 同じプロセスのほかのテストのスレッドが Apple の `pipe` と `FD_CLOEXEC` の間に作った端を受け継がないよう、
+        // eml の起動と同じく `SPAWN_LOCK` の中で起動する。lock の外のスレッドの起動はその端を受け継ぎうる
+        // (docs/spec/object-model.md の「子のプロセス」)
+        let spawning = eml_rt::SPAWN_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let kid = Kid(command.spawn().unwrap());
+        drop(spawning);
+        kid
+    }
+
+    #[cfg(unix)]
+    fn process(&self) -> eml_rt::RawProcess {
+        eml_rt::RawProcess(self.0.id() as i32)
+    }
+
+    /// Windows の `RawProcess` はハンドルを持つので、Host と同じく子のハンドルを写して渡す
+    #[cfg(windows)]
+    fn process(&self) -> eml_rt::RawProcess {
+        use std::os::windows::io::AsHandle;
+
+        eml_rt::RawProcess(self.0.as_handle().try_clone_to_owned().unwrap())
+    }
+}
+
+/// `handle` から EOF まで読む。
+fn read_to_end(
+    driver: &mut RealDriver,
+    stash: &mut Vec<Completion>,
+    handle: eml_rt::IoHandle,
+) -> Vec<u8> {
+    let mut got = Vec::new();
+    loop {
+        let mut data = [0u8; 64];
+        let read = submit(
+            driver,
+            Op::Read {
+                handle,
+                buf: raw(&mut data),
+            },
+        );
+        let Done::Size(n) = complete(driver, stash, read).result.unwrap() else {
+            panic!("a read ended without a size");
+        };
+        if n == 0 {
+            return got;
+        }
+        got.extend_from_slice(&data[..n]);
+    }
+}
+
+/// 子が書いて終わり、書く端を持つ者がいなくなると、親の読みは EOF を読む。
+#[test]
+fn a_pipe_reports_eof_after_the_child_exits() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let eml_rt::PipePair { parent, child } = driver.pipe(true).unwrap();
+    let mut kid = Kid::spawn("write", |c| {
+        c.stderr(child);
+    });
+    let handle = driver.adopt(eml_rt::RawResource::PipeRead(parent)).unwrap();
+    assert_eq!(read_to_end(&mut driver, &mut stash, handle), CHILD_TEXT);
+    assert!(kid.0.wait().unwrap().success());
+}
+
+/// 読む子が終わったパイプへの書きは、シグナルでなく `BrokenPipe` の誤りで終わる。
+#[test]
+fn a_pipe_write_after_the_reader_exited_is_broken() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let eml_rt::PipePair { parent, child } = driver.pipe(false).unwrap();
+    let mut kid = Kid::spawn("exit", |c| {
+        c.stdin(child);
+    });
+    assert!(kid.0.wait().unwrap().success());
+    let handle = driver
+        .adopt(eml_rt::RawResource::PipeWrite(parent))
+        .unwrap();
+    let mut data = *b"late";
+    let e = run_op(
+        &mut driver,
+        &mut stash,
+        Op::Write {
+            handle,
+            buf: raw(&mut data),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(e.kind(), ErrorKind::BrokenPipe, "{e}");
+}
+
+#[test]
+fn a_pipe_read_is_cancelled_at_once() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let eml_rt::PipePair { parent, child } = driver.pipe(true).unwrap();
+    let handle = driver.adopt(eml_rt::RawResource::PipeRead(parent)).unwrap();
+    let mut data = [0u8; 4];
+    let read = pending(
+        &mut driver,
+        Op::Read {
+            handle,
+            buf: raw(&mut data),
+        },
+    );
+    driver.cancel(read);
+    let completion = wait_for(&mut driver, &mut stash, read);
+    assert!(completion.cancelled);
+    assert!(completion.result.is_err());
+    drop(child);
+}
+
+/// driver は子を回収しないので、知らせの後も Host の待ちが終わりのコードを読める。
+#[test]
+fn a_wait_on_an_exited_child_ends() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let mut kid = Kid::spawn("exit", |_| {});
+    let process = kid.process();
+    assert_eq!(
+        run_op(&mut driver, &mut stash, Op::Wait { process }).unwrap(),
+        Done::Size(0)
+    );
+    assert!(kid.0.wait().unwrap().success());
+}
+
+#[test]
+fn a_wait_on_a_running_child_is_cancelled_at_once() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let kid = Kid::spawn("sleep", |_| {});
+    let wait = pending(
+        &mut driver,
+        Op::Wait {
+            process: kid.process(),
+        },
+    );
+    driver.cancel(wait);
+    let completion = wait_for(&mut driver, &mut stash, wait);
+    assert!(completion.cancelled);
+    assert!(completion.result.is_err());
+    assert_eq!(driver.pending(), 0);
+}
+
+#[test]
+fn a_wait_on_a_killed_child_ends() {
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let mut kid = Kid::spawn("sleep", |_| {});
+    let wait = pending(
+        &mut driver,
+        Op::Wait {
+            process: kid.process(),
+        },
+    );
+    kid.0.kill().unwrap();
+    let completion = wait_for(&mut driver, &mut stash, wait);
+    assert!(!completion.cancelled);
+    assert_eq!(completion.result.unwrap(), Done::Size(0));
+    assert!(!kid.0.wait().unwrap().success());
+}
+
+/// パイプの親の端はどの driver にも登録しないので、作った driver と別のスレッドの driver が取り込んで読める。
+#[test]
+fn a_pipe_end_is_used_by_the_driver_of_another_thread() {
+    use std::io::Write;
+
+    let mut driver = RealDriver::new().unwrap();
+    let eml_rt::PipePair { parent, child } = driver.pipe(true).unwrap();
+    let mut child = std::fs::File::from(child);
+    child.write_all(b"ping").unwrap();
+    drop(child);
+    std::thread::spawn(move || {
+        let mut other = RealDriver::new().unwrap();
+        let mut stash = Vec::new();
+        let handle = other.adopt(eml_rt::RawResource::PipeRead(parent)).unwrap();
+        assert_eq!(read_to_end(&mut other, &mut stash, handle), b"ping");
+    })
+    .join()
+    .unwrap();
 }

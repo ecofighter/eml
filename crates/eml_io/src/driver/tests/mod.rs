@@ -14,7 +14,10 @@ use std::sync::{Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use eml_rt::{Completion, Done, IoDriver, IoHandle, Op, OpKey, RawBuf, Submit};
+use eml_rt::{
+    Completion, Done, IoDriver, IoHandle, Op, OpKey, RawBuf, RawFile, RawPipe, RawProcess,
+    RawResource, Submit,
+};
 
 use super::Driver;
 use super::backend::{Arrival, Cancel, Event, Hold, Outcome};
@@ -1163,7 +1166,7 @@ mod pool {
 fn an_adopted_socket_is_a_handle_of_the_adopting_driver() {
     let mut driver = driver();
     let (sock, _probe) = accepted();
-    let handle = driver.adopt(sock).unwrap();
+    let handle = driver.adopt(RawResource::Socket(sock)).unwrap();
     // 取り込んだソケットは、ほかのハンドルと同じく読みに使える
     driver.backend.script(1, [Reply::Fill(b"hi".to_vec())]);
     let mut data = [0u8; 4];
@@ -1195,7 +1198,7 @@ fn a_broken_driver_adopts_nothing_and_closes_the_socket() {
     driver.backend.wait_error = Some(io::Error::other("the poller failed"));
     assert!(driver.wait(Some(0)).is_err());
     let (sock, mut probe) = accepted();
-    assert!(driver.adopt(sock).is_err());
+    assert!(driver.adopt(RawResource::Socket(sock)).is_err());
     assert!(probe.closed());
     assert!(
         !driver
@@ -1203,5 +1206,313 @@ fn a_broken_driver_adopts_nothing_and_closes_the_socket() {
             .calls
             .iter()
             .any(|c| matches!(c, Call::Adopt(_)))
+    );
+}
+
+/// 偽の backend はファイルを開かないので、取り込むファイルの代わりに OS のパイプの読む端を渡す。偽の backend は
+/// 受け取った資源をすぐ閉じ、仕事は偽のファイルの中身に読み書きする。Miri もパイプを扱える。
+fn file() -> RawResource {
+    let (read, _write) = fake::os_pipe();
+    RawResource::File(RawFile::new(read.into()))
+}
+
+/// ファイルを `Op::Adopt` で取り込み、そのハンドルを返す。
+fn adopted_file(driver: &mut Driver<Fake>) -> IoHandle {
+    match driver.submit(900, Op::Adopt { res: file() }) {
+        Submit::Done(Ok(Done::Handle(handle))) => handle,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// 次のファイルの仕事を、返す送り手で開くまで止める。
+fn gate_next_file_job(driver: &Driver<Fake>) -> mpsc::Sender<()> {
+    let (open, gate) = mpsc::channel();
+    *driver.backend.file_gate.lock().unwrap() = Some(gate);
+    open
+}
+
+#[test]
+fn the_adopt_op_answers_at_submit_with_a_handle() {
+    let mut driver = driver();
+    let handle = adopted_file(&mut driver);
+    assert_eq!(driver.pending(), 0);
+    driver.close(handle);
+    assert_eq!(calls(&driver.backend), [&Call::Adopt(0), &Call::Close(0)]);
+}
+
+#[test]
+fn a_file_read_job_fills_the_lent_room() {
+    let mut driver = driver();
+    let handle = adopted_file(&mut driver);
+    driver
+        .backend
+        .file
+        .lock()
+        .unwrap()
+        .extend_from_slice(b"hello");
+    let mut data = [0u8; 8];
+    pending(driver.submit(
+        1,
+        Op::Read {
+            handle,
+            buf: buf(&mut data),
+        },
+    ));
+    let done = settle(&mut driver);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(5));
+    assert!(!done[0].cancelled);
+    assert_eq!(&data[..5], b"hello");
+    // ファイルの読みは backend の歩を出さない
+    assert_eq!(starts(&driver.backend), 0);
+}
+
+#[test]
+fn a_file_write_job_reads_the_lent_bytes() {
+    let mut driver = driver();
+    let handle = adopted_file(&mut driver);
+    let mut data = *b"written";
+    pending(driver.submit(
+        1,
+        Op::Write {
+            handle,
+            buf: buf(&mut data),
+        },
+    ));
+    // `quiesce` はファイルの仕事も取り消さずに待ちきる
+    driver.quiesce();
+    assert_eq!(driver.pending(), 0);
+    assert_eq!(*driver.backend.file.lock().unwrap(), b"written");
+}
+
+#[test]
+fn a_dropped_driver_waits_for_a_file_job() {
+    let mut driver = driver();
+    // `Drop` の期限つきの待ちを、門で止まったプールのスレッドと並べて通す
+    driver.backend.ring_while_threads_run = true;
+    let open = gate_next_file_job(&driver);
+    let file = Arc::clone(&driver.backend.file);
+    let handle = adopted_file(&mut driver);
+    let mut data = *b"late";
+    pending(driver.submit(
+        1,
+        Op::Write {
+            handle,
+            buf: buf(&mut data),
+        },
+    ));
+    // 門は `Drop` が待ち始めた後に開く。遅れは検出力のためだけで、待つ `Drop` ではいつも仕事が先に終わる
+    let opener = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(20));
+        open.send(()).unwrap();
+    });
+    drop(driver);
+    // 待たずに欄を捨てた `Drop` なら、仕事はまだ門で止まっていて、何も書いていない
+    assert_eq!(*file.lock().unwrap(), b"late");
+    opener.join().unwrap();
+}
+
+#[test]
+fn a_cancel_does_not_end_a_file_job() {
+    let mut driver = driver();
+    let open = gate_next_file_job(&driver);
+    let handle = adopted_file(&mut driver);
+    let mut data = [0u8; 4];
+    pending(driver.submit(
+        1,
+        Op::Read {
+            handle,
+            buf: buf(&mut data),
+        },
+    ));
+    driver.cancel(1);
+    assert_eq!(driver.pending(), 1);
+    assert!(completions(&mut driver).is_empty());
+    driver.backend.file.lock().unwrap().extend_from_slice(b"ab");
+    open.send(()).unwrap();
+    let done = settle(&mut driver);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert!(!done[0].cancelled);
+    assert_eq!(&data[..2], b"ab");
+    assert_eq!(cancels(&driver.backend), 0);
+}
+
+#[test]
+fn a_closed_file_waits_for_its_running_job() {
+    let mut driver = driver();
+    let open = gate_next_file_job(&driver);
+    let handle = adopted_file(&mut driver);
+    let mut data = [0u8; 4];
+    pending(driver.submit(
+        1,
+        Op::Read {
+            handle,
+            buf: buf(&mut data),
+        },
+    ));
+    driver.close(handle);
+    assert!(!driver.backend.calls.contains(&Call::Close(0)));
+    open.send(()).unwrap();
+    let done = settle(&mut driver);
+    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(0));
+    assert_eq!(calls(&driver.backend).last(), Some(&&Call::Close(0)));
+}
+
+#[test]
+fn a_socket_op_on_a_file_is_invalid_input() {
+    let mut driver = driver();
+    let handle = adopted_file(&mut driver);
+    for (key, op) in [
+        (1, Op::Readable { handle }),
+        (2, Op::ShutdownWrite { handle }),
+        (3, Op::SetNodelay { handle, on: true }),
+    ] {
+        let e = error_of(driver.submit(key, op));
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(e.to_string(), "the handle is not a socket");
+    }
+    assert_eq!(calls(&driver.backend), [&Call::Adopt(0)]);
+}
+
+/// 親が読む端を `Op::Adopt` で取り込み、そのハンドルを返す。偽の backend は受け取った資源をすぐ閉じる。
+fn adopted_pipe(driver: &mut Driver<Fake>) -> IoHandle {
+    let (read, _write) = fake::os_pipe();
+    let res = RawResource::PipeRead(RawPipe::new(read.into()));
+    match driver.submit(900, Op::Adopt { res }) {
+        Submit::Done(Ok(Done::Handle(handle))) => handle,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_pipe_takes_reads_and_writes_as_steps() {
+    let mut driver = driver();
+    let handle = adopted_pipe(&mut driver);
+    driver.backend.script(1, [Reply::Fill(b"hi".to_vec())]);
+    let mut data = [0u8; 4];
+    match driver.submit(
+        1,
+        Op::Read {
+            handle,
+            buf: buf(&mut data),
+        },
+    ) {
+        Submit::Done(Ok(Done::Size(2))) => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(&data[..2], b"hi");
+    driver.backend.script(2, [Reply::Take(2)]);
+    match driver.submit(
+        2,
+        Op::Write {
+            handle,
+            buf: buf(&mut data[..2]),
+        },
+    ) {
+        Submit::Done(Ok(Done::Size(2))) => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(driver.backend.sent, b"hi");
+    assert_eq!(
+        calls(&driver.backend),
+        [
+            &Call::Adopt(0),
+            &Call::Start(1, StepKind::Recv),
+            &Call::Start(2, StepKind::Send)
+        ]
+    );
+}
+
+#[test]
+fn a_socket_op_on_a_pipe_is_invalid_input() {
+    let mut driver = driver();
+    let handle = adopted_pipe(&mut driver);
+    for (key, op) in [
+        (1, Op::Readable { handle }),
+        (2, Op::Accept { listener: handle }),
+        (3, Op::ShutdownWrite { handle }),
+        (4, Op::SetNodelay { handle, on: true }),
+    ] {
+        let e = error_of(driver.submit(key, op));
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(e.to_string(), "the handle is not a socket");
+    }
+    assert_eq!(calls(&driver.backend), [&Call::Adopt(0)]);
+}
+
+#[test]
+fn a_pipe_is_made_by_the_backend_unbound() {
+    let mut driver = driver();
+    let pair = driver.pipe(true).unwrap();
+    assert_eq!(calls(&driver.backend), [&Call::Pipe(true)]);
+    // 作った端は核のハンドルにならない。取り込むのは最初に使う driver である
+    assert_eq!(driver.pending(), 0);
+    assert!(driver.handles.is_empty());
+    drop(pair);
+}
+
+#[test]
+fn a_broken_driver_makes_no_pipe() {
+    let mut driver = driver();
+    driver.backend.wait_error = Some(io::Error::other("the poller failed"));
+    assert!(driver.wait(Some(0)).is_err());
+    assert!(driver.pipe(false).is_err());
+    assert!(!driver.backend.calls.contains(&Call::Pipe(false)));
+}
+
+/// 待つ子の代わり。偽の backend は中を見ない。
+#[cfg(unix)]
+fn process() -> RawProcess {
+    RawProcess(std::process::id() as i32)
+}
+
+/// Windows ではプロセスのハンドルの代わりに、偽の backend が見ないパイプの端を渡す。
+#[cfg(windows)]
+fn process() -> RawProcess {
+    let (read, _write) = fake::os_pipe();
+    RawProcess(read.into())
+}
+
+#[test]
+fn a_wait_ends_after_its_retry_with_size_zero() {
+    let mut driver = driver();
+    driver.backend.script(
+        1,
+        [
+            Reply::Pending(Hold::None),
+            Reply::Done(Ok(Outcome::Size(0))),
+        ],
+    );
+    pending(driver.submit(1, Op::Wait { process: process() }));
+    driver.backend.events.push(retry(1));
+    let done = settle(&mut driver);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(0));
+    assert!(!done[0].cancelled);
+    assert_eq!(
+        calls(&driver.backend),
+        [
+            &Call::Start(1, StepKind::Wait),
+            &Call::Start(1, StepKind::Wait)
+        ]
+    );
+}
+
+#[test]
+fn a_cancelled_wait_ends_at_once_through_the_backend() {
+    let mut driver = driver();
+    pending(driver.submit(1, Op::Wait { process: process() }));
+    driver.cancel(1);
+    let done = completions(&mut driver);
+    assert_eq!(done.len(), 1);
+    assert!(done[0].cancelled);
+    assert_eq!(driver.pending(), 0);
+    assert_eq!(
+        calls(&driver.backend),
+        [
+            &Call::Start(1, StepKind::Wait),
+            &Call::Cancel(1, StepKind::Wait)
+        ]
     );
 }

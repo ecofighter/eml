@@ -1,21 +1,25 @@
 //! epoll と kqueue に共通の backend (docs/spec/vm.md の「時計と driver」)。fd ごとの状態 (読みの記憶、向きごとの
-//! 待ち手、接続中の印、世代) を行の表に持ち、`start` 1回で歩の1回の試みだけを OS に出す。ソケットはどれも非ブロックで
-//! 作り、1回だけ edge で登録して以後変えない。OS ごとのファイルは `Poller` の登録、待ち、起こしだけを持つ。
+//! 待ち手、接続中の印、世代) を行の表に持ち、`start` 1回で歩の1回の試みだけを OS に出す。ソケットとパイプの親の端は
+//! どれも非ブロックで、1回だけ edge で登録して以後変えない。子の終わりの待ちは核のハンドルを持たない行に置く。OS ごとの
+//! ファイルは `Poller` の登録、待ち、起こしだけを持つ。
 
 #![allow(unsafe_code)]
 
+use std::collections::HashMap;
 use std::io;
 use std::mem::{self, MaybeUninit};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
-use std::sync::Arc;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use std::sync::{Arc, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use eml_rt::{IoWaker, OpKey, RawBuf, RawSocket};
+use eml_rt::{
+    IoWaker, OpKey, PipePair, RawBuf, RawPipe, RawProcess, RawResource, RawSocket, SPAWN_LOCK,
+};
 use libc::c_int;
 
-use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
+use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
 
 /// 起こしの識別子。行 `u32::MAX` は作らないので、どの行の識別子とも重ならない。
 pub(super) const WAKE: u64 = u64::MAX;
@@ -39,13 +43,28 @@ pub(crate) struct Ready {
     pub(crate) fresh: bool,
 }
 
+/// 登録する向き。ソケットは両方、リスナーとパイプの読む端は読みだけ、パイプの書く端は書きだけである。
+#[derive(Clone, Copy)]
+pub(crate) enum Interest {
+    Read,
+    Write,
+    Both,
+}
+
 /// OS ごとの登録、待ち、起こし。`pub(super)` にすると `Unix` の実装の境界が `private_bounds` に当たるので
 /// `pub(crate)` にする。`mod unix` が private なので外へは出ない。
 pub(crate) trait Poller: Sized {
     /// poller と、鳴らす OS の物体を自ら持つ waker。waker の登録もここで済ませる。
     fn new() -> io::Result<(Self, Arc<dyn IoWaker>)>;
-    /// `fd` を edge で1回だけ登録する。`write` が偽ならリスナーで、読みの関心だけを登録する。
-    fn register(&mut self, fd: BorrowedFd<'_>, token: u64, write: bool) -> io::Result<()>;
+    /// `fd` を edge で1回だけ登録する。
+    fn register(&mut self, fd: BorrowedFd<'_>, token: u64, interest: Interest) -> io::Result<()>;
+    /// 子 `pid` の終わりを1回だけ知らせる登録。知らせは `token` の読みの向きに届く。子がもういなければ `ESRCH` の
+    /// 誤りを返す。
+    #[cfg(target_vendor = "apple")]
+    fn watch_exit(&mut self, pid: i32, token: u64) -> io::Result<()>;
+    /// `watch_exit` の登録を外す。知らせがすでに届いて消えた登録には何もしない。
+    #[cfg(target_vendor = "apple")]
+    fn unwatch_exit(&mut self, pid: i32, token: u64);
     /// `timeout` まで待ち、届いた event を `deliver` に渡す。起こしの印はここで消費し、渡さない。時間切れ、起こし、
     /// 割り込みは `Ok(())` である。
     fn poll(
@@ -55,11 +74,23 @@ pub(crate) trait Poller: Sized {
     ) -> io::Result<()>;
 }
 
-/// 核が持つソケット。核は中を見ず、`fd` を閉じるのは `Backend::close` だけである。
+/// 核が持つソケット、パイプの親の端、ファイル。核は中を見ず、`fd` を閉じるのは `Backend::close` だけである。
 pub(crate) struct Sock {
     fd: OwnedFd,
     row: u32,
     generation: u32,
+    /// パイプの端。ソケットの `recv` と `send` の代わりに `read(2)` と `write(2)` で読み書きする
+    pipe: bool,
+}
+
+/// 子の終わりを待つ行。核のハンドルを持たず、知らせは行の読みの向きに `Retry` として届く。
+struct Waiting {
+    row: u32,
+    generation: u32,
+    pid: i32,
+    /// Linux の pidfd。落とすと閉じ、epoll の登録も消える
+    #[cfg(target_os = "linux")]
+    _pidfd: OwnedFd,
 }
 
 #[derive(Default)]
@@ -216,6 +247,123 @@ fn send_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> 
     // 呼び出しは同期である
     let n = syscall(|| unsafe { libc::send(fd.as_raw_fd(), buf.ptr.cast(), buf.cap, flags) })?;
     Ok(n as usize)
+}
+
+/// パイプの端から貸された記憶へ1回読む。
+fn read_raw(fd: BorrowedFd<'_>, buf: RawBuf) -> io::Result<usize> {
+    let len = buf.cap.min(FILE_IO_LIMIT);
+    // SAFETY: `recv_raw` と同じく、`start` の間 `buf` は `cap` バイトの一意の記憶を指す。カーネルは `len <= cap`
+    // バイトまでしか書かず、呼び出しは同期である
+    let n = syscall(|| unsafe { libc::read(fd.as_raw_fd(), buf.ptr.cast(), len) })?;
+    Ok(n as usize)
+}
+
+/// 貸された記憶からパイプの端へ1回書く。読む側が閉じていれば `EPIPE` で、プロセスは SIGPIPE を無視するので
+/// シグナルでなく `BrokenPipe` の誤りになる (docs/spec/vm.md の「時計と driver」)。
+fn write_raw(fd: BorrowedFd<'_>, buf: RawBuf) -> io::Result<usize> {
+    let len = buf.cap.min(FILE_IO_LIMIT);
+    // SAFETY: `send_raw` と同じく、`start` の間 `buf` は `cap` バイトの読める記憶を指す。カーネルは読むだけで、
+    // 呼び出しは同期である
+    let n = syscall(|| unsafe { libc::write(fd.as_raw_fd(), buf.ptr.cast(), len) })?;
+    Ok(n as usize)
+}
+
+/// exec で閉じるパイプの両端。読む端、書く端の順である。
+#[cfg(target_os = "linux")]
+fn cloexec_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0 as c_int; 2];
+    // SAFETY: 書き先は局所の2つの `c_int` である
+    syscall(|| unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) })?;
+    // SAFETY: `pipe2` が返したばかりの fd で、ほかに持ち主はない
+    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+/// Apple には `pipe2` がないので、作った後で `FD_CLOEXEC` を立てる。その間に eml のほかの起動が fork しないよう、
+/// 呼び手が `SPAWN_LOCK` を持つ。
+#[cfg(target_vendor = "apple")]
+fn cloexec_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0 as c_int; 2];
+    // SAFETY: 書き先は局所の2つの `c_int` である
+    syscall(|| unsafe { libc::pipe(fds.as_mut_ptr()) })?;
+    // SAFETY: `pipe` が返したばかりの fd で、ほかに持ち主はない。以後の失敗では `OwnedFd` の drop が閉じる
+    let ends = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+    for fd in [&ends.0, &ends.1] {
+        // SAFETY: 引数はどれも整数である
+        syscall(|| unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) })?;
+    }
+    Ok(ends)
+}
+
+/// `fd` の開いたファイルの記述にだけ `O_NONBLOCK` を立てる。パイプの2つの端は記述が別なので、子の端はブロックのまま
+/// である。
+fn set_nonblocking(fd: BorrowedFd<'_>) -> io::Result<()> {
+    // SAFETY: 引数はどれも整数である
+    let flags = syscall(|| unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) })?;
+    // SAFETY: 引数はどれも整数である
+    syscall(|| unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) })?;
+    Ok(())
+}
+
+/// 子 `pid` の pidfd。古いカーネル (5.3 より前) にはないので、`ENOSYS` を `Unsupported` にする。
+#[cfg(target_os = "linux")]
+fn pidfd_open(pid: i32) -> io::Result<OwnedFd> {
+    // SAFETY: 引数はどれも整数である
+    let fd = syscall(|| unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) }).map_err(|e| {
+        if e.raw_os_error() == Some(libc::ENOSYS) {
+            io::Error::new(io::ErrorKind::Unsupported, e)
+        } else {
+            e
+        }
+    })?;
+    // SAFETY: `pidfd_open` が返したばかりの fd で、ほかに持ち主はない。fd の番号は `c_int` に収まる
+    Ok(unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
+}
+
+/// 子 `pid` がもう終わったか。回収せずに覗く (`WNOWAIT`)。回収は Host の `Process::wait` が行う。
+#[cfg(target_vendor = "apple")]
+fn has_exited(pid: i32) -> io::Result<bool> {
+    // SAFETY: `siginfo_t` は整数とポインタだけの C の構造体で、すべて 0 は正しい値である
+    let mut info: libc::siginfo_t = unsafe { mem::zeroed() };
+    let options = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
+    // SAFETY: 書き先は局所の `siginfo_t` である
+    syscall(|| unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &raw mut info, options) })?;
+    // 終わった子がなければ、`WNOHANG` の `waitid` は `si_pid` を 0 のままにする
+    Ok(info.si_pid != 0)
+}
+
+/// 1回の `read(2)` と `write(2)` に渡す長さの上限。Apple の OS は `INT_MAX` を超える長さを `EINVAL` で断るので、
+/// std と同じく切り詰め、短い数として返す。
+#[cfg(target_vendor = "apple")]
+const FILE_IO_LIMIT: usize = c_int::MAX as usize - 1;
+#[cfg(not(target_vendor = "apple"))]
+const FILE_IO_LIMIT: usize = isize::MAX as usize;
+
+/// ファイルの読みの仕事の本体。プールのスレッドの上で、貸された記憶に1回読む。
+fn read_file(fd: RawFd, buf: RawBuf) -> io::Result<usize> {
+    let len = buf.cap.min(FILE_IO_LIMIT);
+    // SAFETY: `RawBuf` の約束により、仕事が答えるまで `buf` は `cap` バイトの一意の記憶を指し、核は仕事が終わるまで
+    // `fd` を閉じない。仕事はプールの列の mutex を通ってこのスレッドへ来て、答えは受け箱の mutex を通って戻るので、
+    // 貸す側の読みと確定はこの書きの後になる (docs/spec/vm.md の「時計と driver」)。カーネルは `len <= cap` バイトまで書く
+    let n = syscall(|| unsafe { libc::read(fd, buf.ptr.cast(), len) })?;
+    Ok(n as usize)
+}
+
+/// ファイルの書きの仕事の本体。プールのスレッドの上で、貸された記憶の `cap` バイトをすべて書く。
+fn write_file(fd: RawFd, buf: RawBuf) -> io::Result<usize> {
+    let mut written = 0;
+    while written < buf.cap {
+        // 残りの位置は貸した記憶の中にあり、指すだけで読み書きしない
+        let at = buf.ptr.wrapping_add(written);
+        let len = (buf.cap - written).min(FILE_IO_LIMIT);
+        // SAFETY: `read_file` と同じく、仕事が答えるまで `buf` は `cap` バイトの読める記憶を指し、`fd` は開いている。
+        // `at` から `len <= cap - written` バイトはその中にある。カーネルは読むだけである
+        let n = syscall(|| unsafe { libc::write(fd, at.cast(), len) })?;
+        if n == 0 {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        written += n as usize;
+    }
+    Ok(buf.cap)
 }
 
 fn setsockopt_int(fd: BorrowedFd<'_>, level: c_int, name: c_int, value: c_int) -> io::Result<()> {
@@ -447,6 +595,8 @@ pub(crate) struct Unix<P> {
     /// poller が作った waker の写し
     waker: Arc<dyn IoWaker>,
     rows: Rows,
+    /// 子の終わりを待つ鍵の行。知らせの後の歩か取り消しで外す
+    waits: HashMap<OpKey, Waiting>,
     epoch: Instant,
 }
 
@@ -457,19 +607,100 @@ impl<P: Poller> Unix<P> {
             poller,
             waker,
             rows: Rows::default(),
+            waits: HashMap::new(),
             epoch,
         })
     }
 
-    /// ソケットを登録する唯一の所。`listen`、`adopt`、`Connect` が呼び、以後 `close` まで登録を変えない。
+    /// fd を登録する唯一の所。`listen`、`adopt`、`Connect` と子の終わりの待ちが呼び、以後 `close` まで登録を変えない。
     fn register_row(
         &mut self,
         fd: BorrowedFd<'_>,
         row: u32,
         generation: u32,
-        write: bool,
+        interest: Interest,
     ) -> io::Result<()> {
-        self.poller.register(fd, token(row, generation), write)
+        self.poller.register(fd, token(row, generation), interest)
+    }
+
+    /// 子の終わりの待ちの1歩。待ちの行がある鍵の歩は、知らせの後の出し直しなので、行を放して終える。
+    fn wait_exit(&mut self, key: OpKey, process: &RawProcess) -> Start {
+        if let Some(waiting) = self.waits.remove(&key) {
+            self.rows.release(waiting.row, waiting.generation);
+            return Start::Done(Ok(Outcome::Size(0)));
+        }
+        // kqueue は1つの子の登録を pid で1つしか持てず、2つ目の登録が1つ目を上書きする。そのため1つの driver に
+        // 保留の待ちは子ごとに1つまでと決めてある (docs/spec/vm.md の「時計と driver」)
+        debug_assert!(
+            self.waits.values().all(|w| w.pid != process.0),
+            "a second pending wait on one child"
+        );
+        let (row, generation) = self.rows.adopt();
+        match self.watch(row, generation, process.0) {
+            Ok(Some(waiting)) => {
+                self.rows.rows[row as usize].read = Some(key);
+                self.waits.insert(key, waiting);
+                pending()
+            }
+            Ok(None) => {
+                self.rows.release(row, generation);
+                Start::Done(Ok(Outcome::Size(0)))
+            }
+            Err(e) => {
+                self.rows.release(row, generation);
+                Start::Done(Err(e))
+            }
+        }
+    }
+
+    /// 子の終わりを poller に登録する。`None` は子がもう終わっていたことを表す。Linux では、終わって回収していない子の
+    /// pidfd は登録した時点で読めるので、その知らせが届く。もういない子 (`ESRCH`) は、Apple と同じく終わったものとする。
+    #[cfg(target_os = "linux")]
+    fn watch(&mut self, row: u32, generation: u32, pid: i32) -> io::Result<Option<Waiting>> {
+        let pidfd = match pidfd_open(pid) {
+            Err(e) if e.raw_os_error() == Some(libc::ESRCH) => return Ok(None),
+            result => result?,
+        };
+        self.register_row(pidfd.as_fd(), row, generation, Interest::Read)?;
+        Ok(Some(Waiting {
+            row,
+            generation,
+            pid,
+            _pidfd: pidfd,
+        }))
+    }
+
+    /// 登録の前に終わった子の知らせは来ないことがあるので、登録の後で回収せずに覗く。登録の前の終わりは覗きが見つけ、
+    /// 後の終わりは知らせが届く。
+    #[cfg(target_vendor = "apple")]
+    fn watch(&mut self, row: u32, generation: u32, pid: i32) -> io::Result<Option<Waiting>> {
+        let token = token(row, generation);
+        match self.poller.watch_exit(pid, token) {
+            Err(e) if e.raw_os_error() == Some(libc::ESRCH) => return Ok(None),
+            result => result?,
+        }
+        match has_exited(pid) {
+            Ok(false) => Ok(Some(Waiting {
+                row,
+                generation,
+                pid,
+            })),
+            exited => {
+                self.poller.unwatch_exit(pid, token);
+                exited.map(|_| None)
+            }
+        }
+    }
+
+    /// 待ちの行を外す。Linux は pidfd を閉じれば登録が消え、Apple は登録を外す。
+    fn unwatch(&mut self, key: OpKey) {
+        let Some(waiting) = self.waits.remove(&key) else {
+            return;
+        };
+        #[cfg(target_vendor = "apple")]
+        self.poller
+            .unwatch_exit(waiting.pid, token(waiting.row, waiting.generation));
+        self.rows.release(waiting.row, waiting.generation);
     }
 
     fn peek(&mut self, key: OpKey, sock: &Sock) -> Start {
@@ -497,13 +728,21 @@ impl<P: Poller> Unix<P> {
     fn recv(&mut self, key: OpKey, sock: &Sock, buf: RawBuf) -> Start {
         // 記憶によらず必ず試すので、データのある読みは1回の syscall で終わる
         self.rows.of(sock).fresh = false;
-        let result = recv_raw(sock.fd.as_fd(), buf, RECV).map(Outcome::Size);
-        read_result(self.rows.of(sock), key, result)
+        let result = if sock.pipe {
+            read_raw(sock.fd.as_fd(), buf)
+        } else {
+            recv_raw(sock.fd.as_fd(), buf, RECV)
+        };
+        read_result(self.rows.of(sock), key, result.map(Outcome::Size))
     }
 
     fn send(&mut self, key: OpKey, sock: &Sock, buf: RawBuf) -> Start {
-        let result = send_raw(sock.fd.as_fd(), buf, SEND).map(Outcome::Size);
-        write_result(self.rows.of(sock), key, result)
+        let result = if sock.pipe {
+            write_raw(sock.fd.as_fd(), buf)
+        } else {
+            send_raw(sock.fd.as_fd(), buf, SEND)
+        };
+        write_result(self.rows.of(sock), key, result.map(Outcome::Size))
     }
 
     fn accept(&mut self, key: OpKey, listener: &Sock) -> Start {
@@ -553,7 +792,9 @@ impl<P: Poller> Unix<P> {
                 }
             };
             // 前に登録すると余分な event が来るので、`connect` の直後に登録する
-            if let Err(e) = self.register_row(sock.fd.as_fd(), sock.row, sock.generation, true) {
+            if let Err(e) =
+                self.register_row(sock.fd.as_fd(), sock.row, sock.generation, Interest::Both)
+            {
                 return Start::Done(Err(e));
             }
             if connected {
@@ -621,7 +862,7 @@ impl<P: Poller> Backend for Unix<P> {
         syscall(|| unsafe { libc::listen(fd.as_raw_fd(), BACKLOG) })?;
         let port = name_of(fd.as_fd(), false)?.map_or(addr.port(), |local| local.port());
         let (row, generation) = self.rows.adopt();
-        if let Err(e) = self.register_row(fd.as_fd(), row, generation, false) {
+        if let Err(e) = self.register_row(fd.as_fd(), row, generation, Interest::Read) {
             self.rows.release(row, generation);
             return Err(e);
         }
@@ -630,6 +871,7 @@ impl<P: Poller> Backend for Unix<P> {
                 fd,
                 row,
                 generation,
+                pipe: false,
             },
             port,
         ))
@@ -642,6 +884,7 @@ impl<P: Poller> Backend for Unix<P> {
             fd,
             row,
             generation,
+            pipe: false,
         })
     }
 
@@ -665,10 +908,19 @@ impl<P: Poller> Backend for Unix<P> {
         drop(sock.fd);
     }
 
-    fn adopt(&mut self, sock: RawSocket) -> io::Result<Sock> {
-        let fd = sock.into_inner();
+    fn adopt(&mut self, res: RawResource) -> io::Result<Sock> {
+        let (fd, interest, pipe) = match res {
+            RawResource::Socket(sock) => (sock.into_inner(), Some(Interest::Both), false),
+            // 親の端は `pipe` が作ったときからブロックしない
+            RawResource::PipeRead(end) => (end.into_inner(), Some(Interest::Read), true),
+            RawResource::PipeWrite(end) => (end.into_inner(), Some(Interest::Write), true),
+            // 通常のファイルは poller に readiness を持たないので登録しない。行は `close` を1つの形に保つためだけに取る
+            RawResource::File(file) => (file.into_inner(), None, false),
+        };
         let (row, generation) = self.rows.adopt();
-        if let Err(e) = self.register_row(fd.as_fd(), row, generation, true) {
+        if let Some(interest) = interest
+            && let Err(e) = self.register_row(fd.as_fd(), row, generation, interest)
+        {
             self.rows.release(row, generation);
             return Err(e);
         }
@@ -676,16 +928,54 @@ impl<P: Poller> Backend for Unix<P> {
             fd,
             row,
             generation,
+            pipe,
         })
+    }
+
+    fn pipe(&mut self, parent_reads: bool) -> io::Result<PipePair> {
+        // 作ってから旗を立て終えるまで、eml のほかの起動を待たせる。Apple では `FD_CLOEXEC` を立てる前の端を、同時に
+        // 起動する子が受け継がないためである (docs/spec/object-model.md の「子のプロセス」)
+        let spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let (read, write) = cloexec_pipe()?;
+        let (parent, child) = if parent_reads {
+            (read, write)
+        } else {
+            (write, read)
+        };
+        set_nonblocking(parent.as_fd())?;
+        drop(spawning);
+        Ok(PipePair {
+            parent: RawPipe::new(parent),
+            child,
+        })
+    }
+
+    fn file_job(&self, sock: &Sock, write: bool, buf: RawBuf) -> Job {
+        // 仕事が走る間、核はファイルを閉じない。そのため番号だけを渡してよい
+        let fd = sock.fd.as_raw_fd();
+        if write {
+            Box::new(move || write_file(fd, buf))
+        } else {
+            Box::new(move || read_file(fd, buf))
+        }
     }
 
     fn start(&mut self, key: OpKey, step: Step<'_, Sock>) -> Start {
         match step {
+            // 核はパイプに readiness の問いを出さない。覗きはソケットにしかない
+            Step::Peek { sock } if sock.pipe => {
+                debug_assert!(false, "a Readable on a pipe");
+                Start::Done(Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the handle is not a socket",
+                )))
+            }
             Step::Peek { sock } => self.peek(key, sock),
             Step::Recv { sock, buf } => self.recv(key, sock, buf),
             Step::Send { sock, buf } => self.send(key, sock, buf),
             Step::Accept { listener } => self.accept(key, listener),
             Step::Connect { sock, peer } => self.connect(key, sock, peer),
+            Step::Wait { process } => self.wait_exit(key, process),
         }
     }
 
@@ -695,6 +985,10 @@ impl<P: Poller> Backend for Unix<P> {
                 (sock, true)
             }
             Step::Send { sock, .. } | Step::Connect { sock, .. } => (sock, false),
+            Step::Wait { .. } => {
+                self.unwatch(key);
+                return Ok(Cancel::Done);
+            }
         };
         let r = self.rows.of(sock);
         let waiter = if read { &mut r.read } else { &mut r.write };
@@ -780,7 +1074,7 @@ mod tests {
             start = backend.start(key, Step::Accept { listener });
         }
         match done(start) {
-            Outcome::Accepted { sock, .. } => backend.adopt(sock).unwrap(),
+            Outcome::Accepted { sock, .. } => backend.adopt(RawResource::Socket(sock)).unwrap(),
             _ => panic!("not an accepted socket"),
         }
     }
@@ -981,6 +1275,109 @@ mod tests {
             assert!(fd_flags & libc::FD_CLOEXEC != 0);
             assert!(fl_flags & libc::O_NONBLOCK != 0);
         }
+    }
+
+    fn fd_flags(fd: BorrowedFd<'_>) -> (c_int, c_int) {
+        // SAFETY: 引数はどれも整数である
+        unsafe {
+            (
+                libc::fcntl(fd.as_raw_fd(), libc::F_GETFD),
+                libc::fcntl(fd.as_raw_fd(), libc::F_GETFL),
+            )
+        }
+    }
+
+    #[test]
+    fn a_pipe_parent_end_is_nonblocking_and_the_child_end_is_not() {
+        let mut backend = backend();
+        for parent_reads in [true, false] {
+            let pair = backend.pipe(parent_reads).unwrap();
+            let parent = pair.parent.into_inner();
+            let (_, parent_fl) = fd_flags(parent.as_fd());
+            let (_, child_fl) = fd_flags(pair.child.as_fd());
+            assert!(parent_fl & libc::O_NONBLOCK != 0);
+            assert!(child_fl & libc::O_NONBLOCK == 0);
+            // 親が読むなら、親の端は読む端である
+            let access = if parent_reads {
+                libc::O_RDONLY
+            } else {
+                libc::O_WRONLY
+            };
+            assert_eq!(parent_fl & libc::O_ACCMODE, access);
+        }
+    }
+
+    #[test]
+    fn a_pipe_end_is_close_on_exec() {
+        let mut backend = backend();
+        let pair = backend.pipe(true).unwrap();
+        let parent = pair.parent.into_inner();
+        for fd in [parent.as_fd(), pair.child.as_fd()] {
+            let (fd_flags, _) = fd_flags(fd);
+            assert!(fd_flags & libc::FD_CLOEXEC != 0);
+        }
+    }
+
+    /// `pid` の子が終わるまで、回収せずに待つ。
+    fn wait_until_exited(pid: i32) {
+        let start = Instant::now();
+        loop {
+            // SAFETY: `siginfo_t` は整数とポインタだけの C の構造体で、すべて 0 は正しい値である
+            let mut info: libc::siginfo_t = unsafe { mem::zeroed() };
+            let options = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
+            // SAFETY: 書き先は局所の `siginfo_t` である
+            let status =
+                unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &raw mut info, options) };
+            assert_eq!(status, 0, "{}", io::Error::last_os_error());
+            // SAFETY: `waitid` が書いた `siginfo_t` の番号を読む
+            if unsafe { info.si_pid() } != 0 {
+                return;
+            }
+            assert!(start.elapsed() < LIMIT, "the child never exited");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn a_wait_on_an_unreaped_zombie_ends_at_once() {
+        let mut backend = backend();
+        // 同じバイナリのほかのテストが作る pipe の端を受け継がないよう、eml の起動と同じく lock の中で起動する
+        // (docs/spec/object-model.md の「子のプロセス」)
+        let spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        drop(spawning);
+        let pid = child.id() as i32;
+        wait_until_exited(pid);
+        let process = RawProcess(pid);
+        let key = 1;
+        let mut start = backend.start(key, Step::Wait { process: &process });
+        if is_pending(&start) {
+            wait_for(&mut backend, key);
+            start = backend.start(key, Step::Wait { process: &process });
+        }
+        assert!(matches!(done(start), Outcome::Size(0)));
+        assert!(backend.waits.is_empty());
+        // backend は回収しないので、Host の待ちが終わりのコードを読める
+        assert!(child.wait().unwrap().success());
+    }
+
+    /// 回収した子はもういないので、待ちは登録せずにその場で終わる。
+    #[test]
+    fn a_wait_on_a_reaped_child_ends_at_once() {
+        let mut backend = backend();
+        let spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        drop(spawning);
+        let pid = child.id() as i32;
+        assert!(child.wait().unwrap().success());
+        let start = backend.start(
+            1,
+            Step::Wait {
+                process: &RawProcess(pid),
+            },
+        );
+        assert!(matches!(done(start), Outcome::Size(0)));
+        assert!(backend.waits.is_empty());
     }
 
     #[cfg(target_vendor = "apple")]

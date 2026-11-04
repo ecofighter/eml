@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/async/exec_needs_the_real_driver.em
+---
+--- stdout ---
+--- stderr ---
+--- runtime error ---
+cannot run `eml`: the test driver has no processes
+  at <std>/Async.em:75:9

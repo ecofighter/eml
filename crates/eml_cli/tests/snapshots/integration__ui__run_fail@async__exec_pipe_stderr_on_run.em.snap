@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/async/exec_pipe_stderr_on_run.em
+---
+--- stdout ---
+Other: cannot run `eml-first`: the standard error pipe needs `Exec.spawn` on the last stage
+--- stderr ---
+--- runtime error ---
+cannot run `eml-only`: the standard error pipe needs `Exec.spawn` on the last stage
+  at <std>/Async.em:75:9

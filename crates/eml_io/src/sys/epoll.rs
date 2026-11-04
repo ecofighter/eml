@@ -1,5 +1,6 @@
-//! Linux の登録、待ち、起こし (docs/spec/vm.md の「時計と driver」)。ソケットは edge で1回だけ登録し、起こしは level
-//! で登録した eventfd である。`epoll_ctl` を出すのは driver を作るときの eventfd と、ソケットごとの登録だけである。
+//! Linux の登録、待ち、起こし (docs/spec/vm.md の「時計と driver」)。ソケット、パイプ、子の pidfd は edge で1回だけ
+//! 登録し、起こしは level で登録した eventfd である。`epoll_ctl` を出すのは driver を作るときの eventfd と、fd ごとの
+//! 登録だけである。
 
 #![allow(unsafe_code)]
 
@@ -12,7 +13,7 @@ use std::time::Duration;
 use eml_rt::IoWaker;
 use libc::c_int;
 
-use super::unix::{Poller, Ready, WAKE, syscall};
+use super::unix::{Interest, Poller, Ready, WAKE, syscall};
 
 /// 1回の待ちで取り出す event の数。
 const EVENTS: usize = 256;
@@ -87,11 +88,15 @@ impl Poller for Epoll {
         Ok((poller, wake))
     }
 
-    fn register(&mut self, fd: BorrowedFd<'_>, token: u64, write: bool) -> io::Result<()> {
-        let mut flags = libc::EPOLLIN | libc::EPOLLRDHUP | libc::EPOLLET;
-        if write {
-            flags |= libc::EPOLLOUT;
-        }
+    fn register(&mut self, fd: BorrowedFd<'_>, token: u64, interest: Interest) -> io::Result<()> {
+        // `EPOLLHUP` と `EPOLLERR` はいつも届くので、パイプの書く端も読む側が閉じたことを知らされる
+        let read = libc::EPOLLIN | libc::EPOLLRDHUP;
+        let flags = libc::EPOLLET
+            | match interest {
+                Interest::Read => read,
+                Interest::Write => libc::EPOLLOUT,
+                Interest::Both => read | libc::EPOLLOUT,
+            };
         let mut event = libc::epoll_event {
             events: flags as u32,
             u64: token,

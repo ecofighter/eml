@@ -137,6 +137,60 @@ fn run_opens_an_absolute_path_as_is() {
     );
 }
 
+/// Windows の std の metadata は名前付きパイプを通常のファイルと見うるが、`Stream.open` はプールの仕事を出す前に
+/// 通常のファイルでないと断る (docs/spec/stdlib.md の「`Std.Stream`」、docs/spec/vm.md の「時計と driver」)。
+/// パイプのサーバーの端はこのテストが作り、`eml run` が同じ名前を読むために開く。
+#[cfg(windows)]
+#[test]
+fn stream_open_refuses_a_named_pipe() {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_OUTBOUND;
+    use windows_sys::Win32::System::Pipes::{
+        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+    };
+
+    let name = format!("\\\\.\\pipe\\eml-cli-test-{}", std::process::id());
+    let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+    // SAFETY: `wide` は 0 で終わる UTF-16 で、OS は戻るまでの間だけ読む。`SECURITY_ATTRIBUTES` は null である
+    let raw = unsafe {
+        CreateNamedPipeW(
+            wide.as_ptr(),
+            PIPE_ACCESS_OUTBOUND,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            1,
+            4096,
+            4096,
+            0,
+            std::ptr::null(),
+        )
+    };
+    assert_ne!(
+        raw,
+        INVALID_HANDLE_VALUE,
+        "{}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: `raw` は今作ったパイプで、ほかに所有者がいない
+    let server = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let dir = std::env::temp_dir().join(format!("eml-cli-pipe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let program = dir.join("pipe.em");
+    let source = format!(
+        "import Async (Async)\nimport Stream\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () ->\n  match try_io (fn () -> Stream.close (Stream.open \"{}\")) with\n    | Ok _ -> println \"opened\"\n    | Err e -> println \"\\{{show e.kind}}: \\{{e.message}}\")\n",
+        name.replace('\\', "\\\\")
+    );
+    std::fs::write(&program, source).unwrap();
+    let output = eml(&["run", "--debug-heap", program.to_str().unwrap()]);
+    drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("NotAvailable: cannot open `{name}`: not a regular file\n")
+    );
+}
+
 #[test]
 fn exit_ends_with_its_code_modulo_256() {
     let output = eml(&["run", "--debug-heap", "run/io/exit_code.em"]);
@@ -837,6 +891,47 @@ fn a_script_with_a_shebang_runs_directly() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "[\"1\", \"-2\"]\n");
 }
 
+/// `eml run` の Host (`StdHost`) は、パイプラインの段を OS の pipe でつないで起動する。最後の段の標準出力は、`capture`
+/// では pipe に、`run` では eml の標準出力にそのまま出る (docs/spec/stdlib.md の「`Proc`」)。
+#[test]
+fn a_pipeline_runs_through_the_real_host() {
+    let text = "import Env\n\
+import Proc ((.|))
+import Stdin
+import String
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  match Env.args () with
+    | [\"tag\"] -> tag (Stdin.open ())
+    | _ ->
+      let tag = `eml pipe.em tag`
+      println (String.trim (Proc.capture (Proc.stdin_text \"a\\nb\\n\" (tag .| tag))))
+      println (show (Proc.run (Proc.stdin_text \"c\\n\" (tag .| tag .| tag))))
+
+tag : Stdin.Stdin -> <IO, Panic> Unit
+tag h =
+  match Stdin.read_line h with
+    | (Some line, h) ->
+      println \"> \\{line}\"
+      tag h
+    | (None, h) -> Stdin.close h
+";
+    let dir = temp_project("cli-pipeline", &[("pipe.em", text)]);
+    let output = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .arg("pipe.em")
+        .env("PATH", path_with_eml())
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "> > a\n> > b\n> > > c\n0\n"
+    );
+}
+
 /// UTF-8 でない引数と環境変数の値は、読んだときに実行時エラーにする。
 #[test]
 fn arguments_and_variables_that_are_not_utf8_are_runtime_errors() {
@@ -919,6 +1014,47 @@ main () = println (show (Proc.run `sh -c 'echo started >&2; exec sleep 30'`))
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130), "{rest}");
     assert!(rest.starts_with("runtime error: interrupted\n"), "{rest}");
+}
+
+/// `Exec.wait` で待つプログラムは、SIGINT を eml だけに送っても、次の安全点で止まり、終了コード 130 で終わる。待ちは
+/// driver の中にあり、タスクのスレッドは OS の中で止まらないためである。巻き戻しが落とす子は kill するので、30 秒
+/// 眠る子を待たない。子が標準エラーに書いた行を読んで、子が動いてから送る (docs/spec/stdlib.md の「`Std.Exec`」)。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_program_waiting_in_exec_wait_with_130() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::time::{Duration, Instant};
+
+    let text = "\
+import Async (Async)
+import Async
+import Exec
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (Async.run (fn () -> Exec.run `sh -c 'echo started >&2; exec sleep 30'`)))
+";
+    let dir = temp_project("cli-sigint-exec", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut started = String::new();
+    stderr.read_line(&mut started).unwrap();
+    assert_eq!(started, "started\n");
+    sigint(&child);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not stop");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut rest = String::new();
+    stderr.read_to_string(&mut rest).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{rest}");
+    assert!(rest.starts_with("runtime error: interrupted"), "{rest}");
 }
 
 /// 標準入力の読みの中で待つプログラムも、`FileIn.read_all` と同じく SIGINT で止まり、終了コードは 130 である。読みに入る

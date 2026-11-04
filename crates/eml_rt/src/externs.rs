@@ -6,7 +6,7 @@ use std::fmt;
 
 use crate::control::Stop;
 use crate::error::HeapError;
-use crate::host::WriteMode;
+use crate::host::{LaunchCause, WriteMode};
 use crate::word::Word;
 #[cfg(verus_only)]
 use vstd::arithmetic::div_mod::{rust_div, rust_rem};
@@ -188,6 +188,15 @@ pub struct Raised {
     pub message: Box<str>,
 }
 
+/// 子の標準入出力のファイルで起きた起動の誤り (`Fault::Launch`)。
+#[derive(Debug, PartialEq, Eq)]
+pub struct Launch {
+    /// そのファイルを使う段のプログラムの名前。
+    pub program: Box<str>,
+    pub cause: LaunchCause,
+    pub reason: IoReason,
+}
+
 /// extern の誤り。位置は VM が付けるので持たない。24 バイトに収めるため (`faults_stay_small`)、まれな誤りの中身は
 /// `Box` に入れる。
 #[derive(Debug, PartialEq, Eq)]
@@ -198,6 +207,8 @@ pub enum Fault {
     Output(Box<str>),
     /// `name` は extern に渡されたままのパスか、`Run` ならプログラムの名前である。
     Io { op: IoOp, name: Box<str>, reason: IoReason },
+    /// 子の標準入力の一時ファイルを作れないか、リダイレクトのファイルを開けず、子を起動しなかった。
+    Launch(Box<Launch>),
     /// 標準入力の読みの誤り。
     Stdin(IoReason),
     NotUtf8(Box<Utf8Source>),
@@ -218,6 +229,7 @@ impl Fault {
     pub fn io_error_kind(&self) -> Option<i64> {
         match self {
             Fault::Io { op: _, name: _, reason } => Some(reason_kind(*reason)),
+            Fault::Launch(launch) => Some(reason_kind(launch.reason)),
             Fault::Stdin(reason) => Some(reason_kind(*reason)),
             Fault::NotUtf8(_) => Some(IO_NOT_UTF8),
             Fault::Raised(r) => Some(r.kind),
@@ -241,6 +253,7 @@ impl Fault {
             Fault::Heap(_)
             | Fault::Output(_)
             | Fault::Io { op: _, name: _, reason: _ }
+            | Fault::Launch(_)
             | Fault::Stdin(_)
             | Fault::NotUtf8(_)
             | Fault::Stopped(_)
@@ -1278,6 +1291,24 @@ impl fmt::Display for Fault {
                     IoOp::Wait => "wait for",
                 };
                 write!(f, "cannot {verb} `{name}`: {reason}")
+            }
+            Fault::Launch(launch) => {
+                let Launch {
+                    program,
+                    cause,
+                    reason,
+                } = &**launch;
+                match cause {
+                    LaunchCause::StdinText => write!(
+                        f,
+                        "cannot run `{program}`: cannot make the standard input file: {reason}"
+                    ),
+                    LaunchCause::Open(path) => {
+                        write!(f, "cannot run `{program}`: cannot open `{path}`: {reason}")
+                    }
+                    // `launch` は `Io { op: Run, .. }` にするので作らないが、文言はそれと同じにする
+                    LaunchCause::Spawn => write!(f, "cannot run `{program}`: {reason}"),
+                }
             }
             Fault::Stdin(reason) => write!(f, "cannot read the standard input: {reason}"),
             Fault::NotUtf8(source) => match &**source {

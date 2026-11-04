@@ -785,6 +785,34 @@ fn lent_room_outlives_other_allocations<M: Mode>() {
     assert_eq!(mortal(&mut heap), 0);
 }
 
+/// `bytes_lend` の空きに、別のスレッドが生の位置から書く (driver のプールのスレッドがファイルを読む形)。join が
+/// happens-before の辺になり、貸した側はその後で `bytes_commit` で確定して読み戻す。大きい物体のページの末尾まで
+/// 語に揃わない長さで埋める。
+fn a_lent_room_is_written_by_another_thread<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let room = LARGE_BODY + 3;
+    unsafe {
+        let w = heap.alloc_bytes_room(room);
+        let b = heap.bytes_lend(w).unwrap();
+        assert!(b.cap >= room);
+        let n = room;
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                // 欄ごとに捕まえると生のポインタだけが移り、閉包が `Send` でなくなるので、`RawBuf` ごと移す
+                let b = b;
+                for i in 0..n {
+                    b.ptr.add(i).write(i as u8);
+                }
+            });
+        });
+        heap.bytes_commit(w, n).unwrap();
+        let expected: Vec<u8> = (0..n).map(|i| i as u8).collect();
+        assert_eq!(&*heap.bytes(w).unwrap(), &expected[..]);
+        heap.decref(w).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
 // 凍結した領域
 fn frozen_pages_are_returned<M: Mode>() {
     let (b, _, _) = super::frozen::builder::<M>();
@@ -2227,6 +2255,32 @@ fn a_dropped_child_is_killed_and_waited<M: Mode>() {
     assert_eq!(memory.waits_and_kills(), (1, 1));
 }
 
+/// パイプラインの `Child` は段の数を返し、段 `k` までを先頭から待つ。待たずに `Heap` を落とすと、破棄処理がまだ待って
+/// いない段をすべて kill して1回ずつ待ち、待った段は kill しない。
+fn a_dropped_pipeline_kills_and_waits_every_stage<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    let none = ctx_tests::fields(&[]);
+    let stages = [&["-r"][..], &[], &["-c", "x"]]
+        .iter()
+        .map(|args| ctx_tests::stage("sort", &ctx_tests::fields(args), &none, "", 0))
+        .collect::<String>();
+    unsafe {
+        let s = ctx.heap_mut().alloc_string(&stages);
+        let i = ctx.heap_mut().alloc_string("");
+        let o = ctx.heap_mut().alloc_string("");
+        let c = ctx.proc_spawn(s, 2, i, 2, o).unwrap();
+        assert_eq!(ctx.proc_stage_count(c), Ok(3));
+        assert_eq!(ctx.proc_wait_stage(c, 1), Ok(0));
+        assert_eq!(ctx.proc_wait_stage(c, 0), Ok(1));
+        assert_eq!(memory.waits_and_kills(), (2, 0));
+        assert_eq!(raw::rc(c), 1);
+    }
+    assert_eq!(memory.spawns().len(), 3);
+    drop(ctx);
+    assert_eq!(memory.waits_and_kills(), (3, 1));
+}
+
 /// 待った子の `Child` を手放しても、kill せず、もう待たない。
 fn a_waited_child_is_not_killed<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
@@ -2403,6 +2457,7 @@ both_modes!(
     shared_bytes_are_copied_before_writing,
     lent_room_is_written_and_committed,
     lent_room_outlives_other_allocations,
+    a_lent_room_is_written_by_another_thread,
     frozen_pages_are_returned,
     two_threads_read_one_region,
     chains_drop_in_any_order,
@@ -2433,6 +2488,7 @@ both_modes!(
     script_externs_go_through_the_host,
     a_child_goes_through_the_host,
     a_dropped_child_is_killed_and_waited,
+    a_dropped_pipeline_kills_and_waits_every_stage,
     a_waited_child_is_not_killed,
     a_failed_child_write_releases_the_handle,
     an_interrupted_child_write_stops_only_when_asked,

@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/proc_pipeline_show.em
+---
+--- stdout ---
+Cmd { program = "uniq", args = ["-c"], cwd = None, env = [], stdin = StdinFrom Cmd { program = "sort", args = ["-r"], cwd = None, env = [], stdin = DefaultStdin, stdout = DefaultStdout, stderr = InheritStderr }, stdout = DefaultStdout, stderr = DiscardStderr }
+cat a.txt | sort -r | uniq -c
+Cmd { program = "b", args = [], cwd = None, env = [], stdin = StdinFrom Cmd { program = "a", args = [], cwd = None, env = [], stdin = StdinText "x", stdout = DefaultStdout, stderr = InheritStderr }, stdout = DefaultStdout, stderr = InheritStderr }
+True
+True
+--- stderr ---

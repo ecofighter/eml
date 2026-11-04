@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    Host, HostRef, Opened, Process, Spawn, Spawned, StderrMode, StdinSlot, Stdio, Stream, WriteMode,
+    Host, HostRef, LaunchError, Opened, Process, Spawn, Spawned, StderrSpec, StdinSlot, StdinSpec,
+    StdoutSpec, Stream, WriteMode,
 };
 
 /// メモリの上のファイル。読み手の振る舞い (1回に返すバイト数、途中の誤り、中断) を決められる。
@@ -134,7 +135,23 @@ pub(super) struct Started {
     pub(super) args: Vec<String>,
     pub(super) env: Vec<(String, String)>,
     pub(super) cwd: Option<String>,
-    pub(super) stdio: (Stdio, Stdio, StderrMode),
+    pub(super) stdio: (Stdio, Stdio, Stderr),
+}
+
+/// `MemoryHost::spawn` が受ける標準入力と標準出力の向き。ファイルと端を使う向きは断るので、残りの3つである。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stdio {
+    Inherit,
+    Null,
+    Pipe,
+}
+
+/// `MemoryHost::spawn` が受ける段の標準エラーの向き。端を使う向きは断るので、残りの3つである。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stderr {
+    Inherit,
+    ToStdout,
+    Null,
 }
 
 impl MemoryHost {
@@ -302,25 +319,78 @@ impl Host for MemoryHost {
             received: self.received.clone(),
         }))
     }
-    /// プロセスを起動せず、受けた設定を覚える。`missing` は見つからないプログラムである。pipe の標準入力は
-    /// `child_input` に写し (`fail_write` があれば書くたびにその文言で失敗する)、pipe の標準出力は `child_output` を
-    /// 読ませる。子の `wait` は引数の数を終了コードにする
-    fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
-        if spawn.program == "missing" {
-            return Err(io::Error::from(io::ErrorKind::NotFound));
+    /// プロセスを起動せず、段ごとに受けた設定を覚える。`missing` は見つからないプログラムで、それより前の段を kill して
+    /// 待ってから、その段の誤りを返す。段の間は pipe とみなす。pipe の標準入力は `child_input` に写し (`fail_write`
+    /// があれば書くたびにその文言で失敗する)、pipe の標準出力は `child_output` を読ませる。段の `wait` は引数の数を終了
+    /// コードにする。ファイルを使う向き (文字列の標準入力とリダイレクト) は OS のファイルが要るので `Unsupported` で断る
+    fn spawn(&self, spawn: Spawn<'_>) -> io::Result<Spawned> {
+        let last = spawn
+            .stages
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let unsupported = || io::Error::from(io::ErrorKind::Unsupported);
+        let stdin = match spawn.stdin {
+            StdinSpec::Inherit => Stdio::Inherit,
+            StdinSpec::Null => Stdio::Null,
+            StdinSpec::Pipe => Stdio::Pipe,
+            StdinSpec::Given(_) | StdinSpec::Text(_) | StdinSpec::File(_) => {
+                return Err(unsupported());
+            }
+        };
+        let stdout = match spawn.stdout {
+            StdoutSpec::Inherit => Stdio::Inherit,
+            StdoutSpec::Null => Stdio::Null,
+            StdoutSpec::Pipe => Stdio::Pipe,
+            StdoutSpec::Given(_) | StdoutSpec::File { .. } => return Err(unsupported()),
+        };
+        let stderrs = spawn
+            .stages
+            .iter()
+            .map(|stage| match stage.stderr {
+                StderrSpec::Inherit => Ok(Stderr::Inherit),
+                StderrSpec::ToStdout => Ok(Stderr::ToStdout),
+                StderrSpec::Null => Ok(Stderr::Null),
+                StderrSpec::Given(_) => Err(unsupported()),
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let mut processes: Vec<Box<dyn Process>> = Vec::new();
+        for (k, (stage, stderr)) in spawn.stages.iter().zip(stderrs).enumerate() {
+            if stage.program == "missing" {
+                for process in &mut processes {
+                    process.kill()?;
+                }
+                for process in &mut processes {
+                    process.wait()?;
+                }
+                return Err(LaunchError::spawning(
+                    k,
+                    io::Error::from(io::ErrorKind::NotFound),
+                ));
+            }
+            self.spawns.lock().unwrap().push(Started {
+                program: stage.program.to_string(),
+                args: stage.args.iter().map(|a| a.to_string()).collect(),
+                env: stage
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                cwd: stage.cwd.map(str::to_string),
+                stdio: (
+                    if k == 0 { stdin } else { Stdio::Pipe },
+                    if k == last { stdout } else { Stdio::Pipe },
+                    stderr,
+                ),
+            });
+            processes.push(Box::new(MemoryProcess {
+                code: stage.args.len() as i32,
+                waits: self.waits.clone(),
+                kills: self.kills.clone(),
+                interrupt: self.interrupt_run.clone(),
+            }));
         }
-        self.spawns.lock().unwrap().push(Started {
-            program: spawn.program.to_string(),
-            args: spawn.args.iter().map(|a| a.to_string()).collect(),
-            env: spawn
-                .env
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            cwd: spawn.cwd.map(str::to_string),
-            stdio: (spawn.stdin, spawn.stdout, spawn.stderr),
-        });
-        let stdin = (spawn.stdin == Stdio::Pipe).then(|| {
+        let stdin = (stdin == Stdio::Pipe).then(|| {
             Box::new(ChildInput {
                 bytes: self.child_input.clone(),
                 fail: self.fail_write,
@@ -328,17 +398,12 @@ impl Host for MemoryHost {
                 interrupt: self.interrupt_run.clone(),
             }) as Box<dyn Write + Send>
         });
-        let stdout = (spawn.stdout == Stdio::Pipe)
+        let stdout = (stdout == Stdio::Pipe)
             .then(|| Box::new(Cursor::new(self.child_output.clone())) as Box<dyn Read + Send>);
         Ok(Spawned {
             stdin,
             stdout,
-            process: Box::new(MemoryProcess {
-                code: spawn.args.len() as i32,
-                waits: self.waits.clone(),
-                kills: self.kills.clone(),
-                interrupt: self.interrupt_run.clone(),
-            }),
+            processes,
         })
     }
 }
@@ -454,7 +519,7 @@ mod std_host {
     use std::path::PathBuf;
 
     use super::Shared;
-    use crate::{Buffering, Control, Host, Limits, StdHost, Stream, WriteMode};
+    use crate::{Buffering, Control, Host, Limits, OpenMode, StdHost, Stream, WriteMode};
 
     fn std_host(mode: Buffering) -> (StdHost, Shared, Shared) {
         let (out, err) = (Shared::default(), Shared::default());
@@ -524,19 +589,22 @@ mod std_host {
     #[cfg(unix)]
     #[test]
     fn a_spawned_child_talks_through_pipes() {
-        use crate::{Spawn, StderrMode, Stdio};
+        use crate::{Spawn, Stage, StderrSpec, StdinSpec, StdoutSpec};
         let (host, out, _) = std_host(Buffering::Block);
         host.write_line(Stream::Out, "before").unwrap();
-        let spawn = Spawn {
+        let stage = Stage {
             program: "sh",
             args: &["-c", "cat; echo err >&2; exit 3"],
             env: &[],
             cwd: None,
-            stdin: Stdio::Pipe,
-            stdout: Stdio::Pipe,
-            stderr: StderrMode::ToStdout,
+            stderr: StderrSpec::ToStdout,
         };
-        let mut child = host.spawn(&spawn).unwrap();
+        let spawn = Spawn {
+            stages: vec![stage],
+            stdin: StdinSpec::Pipe,
+            stdout: StdoutSpec::Pipe,
+        };
+        let mut child = host.spawn(spawn).unwrap();
         assert_eq!(out.text(), "before\n");
         child.stdin.take().unwrap().write_all(b"in\n").unwrap();
         let mut read = String::new();
@@ -547,24 +615,38 @@ mod std_host {
             .read_to_string(&mut read)
             .unwrap();
         assert_eq!(read, "in\nerr\n");
-        assert_eq!(child.process.wait().unwrap(), 3);
-        let sleeper = Spawn {
+        assert_eq!(child.processes[0].wait().unwrap(), 3);
+        let sleeper = Stage {
+            program: "sh",
             args: &["-c", "sleep 10"],
-            stdin: Stdio::Null,
-            stdout: Stdio::Null,
-            stderr: StderrMode::Null,
-            ..spawn
+            env: &[],
+            cwd: None,
+            stderr: StderrSpec::Null,
         };
-        let mut child = host.spawn(&sleeper).unwrap();
+        let mut child = host
+            .spawn(Spawn {
+                stages: vec![sleeper],
+                stdin: StdinSpec::Null,
+                stdout: StdoutSpec::Null,
+            })
+            .unwrap();
         assert!(child.stdin.is_none() && child.stdout.is_none());
-        child.process.kill().unwrap();
-        assert_eq!(child.process.wait().unwrap(), 128 + 9);
-        let missing = Spawn {
+        child.processes[0].kill().unwrap();
+        assert_eq!(child.processes[0].wait().unwrap(), 128 + 9);
+        let missing = Stage {
             program: "eml-no-such-program",
-            ..sleeper
+            args: &["-c", "sleep 10"],
+            env: &[],
+            cwd: None,
+            stderr: StderrSpec::Null,
+        };
+        let missing = Spawn {
+            stages: vec![missing],
+            stdin: StdinSpec::Null,
+            stdout: StdoutSpec::Null,
         };
         assert_eq!(
-            host.spawn(&missing).err().map(|e| e.kind()),
+            host.spawn(missing).err().map(|e| e.kind()),
             Some(io::ErrorKind::NotFound)
         );
     }
@@ -576,7 +658,7 @@ mod std_host {
     fn a_spawned_child_runs_in_its_directory() {
         use std::os::unix::fs::PermissionsExt;
 
-        use crate::{Spawn, StderrMode, Stdio};
+        use crate::{Spawn, Stage, StderrSpec, StdinSpec, StdoutSpec};
         let dir = std::env::temp_dir().join(format!("eml_rt-spawn-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let script = dir.join("sub").join("run.sh");
@@ -590,15 +672,17 @@ mod std_host {
             Buffering::Line,
         );
         let spawn = Spawn {
-            program: "./run.sh",
-            args: &[],
-            env: &[("FOO", "a"), ("FOO", "b")],
-            cwd: Some("sub"),
-            stdin: Stdio::Null,
-            stdout: Stdio::Pipe,
-            stderr: StderrMode::Inherit,
+            stages: vec![Stage {
+                program: "./run.sh",
+                args: &[],
+                env: &[("FOO", "a"), ("FOO", "b")],
+                cwd: Some("sub"),
+                stderr: StderrSpec::Inherit,
+            }],
+            stdin: StdinSpec::Null,
+            stdout: StdoutSpec::Pipe,
         };
-        let mut child = host.spawn(&spawn).unwrap();
+        let mut child = host.spawn(spawn).unwrap();
         let mut read = String::new();
         child
             .stdout
@@ -607,7 +691,7 @@ mod std_host {
             .read_to_string(&mut read)
             .unwrap();
         assert_eq!(read, "b hi\n");
-        assert_eq!(child.process.wait().unwrap(), 0);
+        assert_eq!(child.processes[0].wait().unwrap(), 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -739,5 +823,241 @@ mod std_host {
             Some(io::ErrorKind::IsADirectory)
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `open_raw` は、ディレクトリを読む向きでも作る向きでも、どの OS でも `NOT_REGULAR` で断る。種類は `Unsupported`
+    /// で、IO の失敗の種類は `NotAvailable` になる (docs/spec/stdlib.md の「`Std.Stream`」)。
+    #[test]
+    fn a_raw_open_refuses_a_directory_as_not_a_regular_file() {
+        let root = fixture("raw-dir");
+        let host = StdHost::new(
+            Box::new(io::sink()),
+            Box::new(io::sink()),
+            root.clone(),
+            Buffering::Line,
+        );
+        for mode in [OpenMode::Read, OpenMode::Create, OpenMode::Append] {
+            let e = host.open_raw(".", mode).err().unwrap();
+            assert_eq!(e.kind(), io::ErrorKind::Unsupported, "{mode:?}");
+            assert!(crate::is_not_regular(&e), "{mode:?}: {e}");
+            assert_eq!(e.to_string(), crate::NOT_REGULAR);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// ないファイルを読む向きで開くと `NotFound` で、作る向きなら作って開く。
+    #[test]
+    fn a_raw_open_of_a_missing_file_is_not_found() {
+        let root = fixture("raw-missing");
+        let host = StdHost::new(
+            Box::new(io::sink()),
+            Box::new(io::sink()),
+            root.clone(),
+            Buffering::Line,
+        );
+        let e = host.open_raw("missing.txt", OpenMode::Read).err().unwrap();
+        assert_eq!(e.kind(), io::ErrorKind::NotFound);
+        assert!(!crate::is_not_regular(&e));
+        assert!(host.open_raw("made.txt", OpenMode::Create).is_ok());
+        assert!(root.join("made.txt").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 文字列の標準入力の一時ファイルは、書いた中身を先頭から読ませる。unix では作ってすぐ消すので、一時ディレクトリに
+    /// 名前が残らない。
+    #[test]
+    fn a_here_file_reads_back_its_bytes_and_has_no_name() {
+        let bytes = "日本語\n".repeat(1000);
+        let mut file = crate::here_file(bytes.as_bytes()).unwrap();
+        let mut read = String::new();
+        file.read_to_string(&mut read).unwrap();
+        assert_eq!(read, bytes);
+        #[cfg(unix)]
+        {
+            let prefix = format!("eml-stdin-{}-", std::process::id());
+            let left = std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(&prefix));
+            assert!(!left);
+        }
+    }
+
+    /// リダイレクトのファイルを開けなければ、子を起動せず、ファイルを使う段のプログラムとパスを誤りに出す。理由は
+    /// 開けなかった誤りの種類の語である。
+    #[test]
+    fn a_launch_error_names_the_file_it_could_not_open() {
+        use std::sync::Arc;
+
+        use super::super::ctx::{fields, stage};
+        use crate::{Fault, HostRef, IoReason, Launch, LaunchCause, launch};
+        let root = fixture("launch");
+        let host = StdHost::new(
+            Box::new(io::sink()),
+            Box::new(io::sink()),
+            root.clone(),
+            Buffering::Line,
+        );
+        let host = HostRef::new(Arc::new(host));
+        let control = Control::new(Limits::default());
+        let stages = stage("eml-no-such-program", &fields(&[]), &fields(&[]), "", 0);
+        let failed = |stdin, payload, stdout, path| {
+            launch(&host, &control, &stages, stdin, payload, stdout, path, None).err()
+        };
+        let launch_fault = |path: &str, reason| {
+            Some(Fault::Launch(Box::new(Launch {
+                program: "eml-no-such-program".into(),
+                cause: LaunchCause::Open(path.into()),
+                reason,
+            })))
+        };
+        let missing = failed(4, "nope.txt", 0, "");
+        assert_eq!(missing, launch_fault("nope.txt", IoReason::NotFound));
+        assert_eq!(
+            missing.unwrap().to_string(),
+            "cannot run `eml-no-such-program`: cannot open `nope.txt`: not found"
+        );
+        assert_eq!(failed(0, "", 3, "."), launch_fault(".", IoReason::Other));
+        assert_eq!(failed(4, ".", 0, ""), launch_fault(".", IoReason::Other));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 段を起動できなければ、それより前に起動した段を kill して待ってから、その段の `LaunchError` を返す。kill しな
+    /// ければ、`sleep 30` を待つので戻らない。
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_stage_kills_the_stages_before_it() {
+        use crate::{LaunchCause, LaunchError, Spawn, Stage, StderrSpec, StdinSpec, StdoutSpec};
+        let (host, _, _) = std_host(Buffering::Line);
+        let sleeper = || Stage {
+            program: "sleep",
+            args: &["30"],
+            env: &[],
+            cwd: None,
+            stderr: StderrSpec::Null,
+        };
+        let missing = Stage {
+            program: "eml-no-such-program",
+            args: &[],
+            ..sleeper()
+        };
+        let started = std::time::Instant::now();
+        let error = host
+            .spawn(Spawn {
+                stages: vec![sleeper(), sleeper(), missing],
+                stdin: StdinSpec::Null,
+                stdout: StdoutSpec::Pipe,
+            })
+            .err()
+            .unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        let inner = error
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<LaunchError>());
+        assert!(
+            matches!(
+                inner,
+                Some(LaunchError {
+                    stage: 2,
+                    cause: LaunchCause::Spawn
+                })
+            ),
+            "{inner:?}"
+        );
+    }
+
+    /// 起動できなかった段の誤りは、その段のプログラムの名前の `Io { op: Run, .. }` になる。Host を呼ぶ前に断る誤りは、
+    /// 最後の段の名前である。
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_stage_names_its_program() {
+        use std::sync::Arc;
+
+        use super::super::ctx::{fields, stage};
+        use crate::{Fault, HostRef, IoOp, IoReason, launch};
+        let (host, _, _) = std_host(Buffering::Line);
+        let host = HostRef::new(Arc::new(host));
+        let control = Control::new(Limits::default());
+        let none = fields(&[]);
+        let run = |stages: &[(&str, i64)]| {
+            let stages: String = stages
+                .iter()
+                .map(|&(program, stderr)| stage(program, &none, &none, "", stderr))
+                .collect();
+            launch(&host, &control, &stages, 1, "", 1, "", None).err()
+        };
+        let not_found = |name: &str, reason| {
+            Some(Fault::Io {
+                op: IoOp::Run,
+                name: name.into(),
+                reason,
+            })
+        };
+        assert_eq!(
+            run(&[("true", 0), ("eml-missing-second", 0), ("true", 0)]),
+            not_found("eml-missing-second", IoReason::NotFound)
+        );
+        assert_eq!(
+            run(&[("eml-missing-first", 0), ("true", 0)]),
+            not_found("eml-missing-first", IoReason::NotFound)
+        );
+        assert_eq!(
+            run(&[("eml-first", 0), ("eml-last", 9)]),
+            not_found("eml-last", IoReason::Other)
+        );
+    }
+
+    /// 標準エラーの pipe (3) は、`pipes` を渡した最後の段だけが使える。`pipes` は標準入力、標準出力、標準エラーの順に
+    /// 呼ばれ、標準エラーの子の端が子の標準エラーになる。ほかの段の 3 と、`pipes` のない 3 は、`pipes` を呼ぶ前に
+    /// 起動の誤りにする。
+    #[cfg(unix)]
+    #[test]
+    fn a_stderr_pipe_is_given_to_the_last_stage_only() {
+        use std::sync::Arc;
+
+        use super::super::ctx::{fields, stage};
+        use crate::{Fault, HostRef, IoOp, IoReason, OsHandle, PipeEnd, launch};
+        let (host, _, _) = std_host(Buffering::Line);
+        let host = HostRef::new(Arc::new(host));
+        let control = Control::new(Limits::default());
+        let none = fields(&[]);
+        let talk = fields(&["-c", "echo out; echo err >&2"]);
+        let mut ends = Vec::new();
+        let mut readers = Vec::new();
+        let mut pipes = |end: PipeEnd| -> io::Result<OsHandle> {
+            ends.push(end);
+            let (reader, writer) = io::pipe()?;
+            // 書く端を閉じるので、子の標準入力はすぐに終わる
+            if end == PipeEnd::Stdin {
+                return Ok(OsHandle::from(reader));
+            }
+            readers.push(reader);
+            Ok(OsHandle::from(writer))
+        };
+        let invalid = Some(Fault::Io {
+            op: IoOp::Run,
+            name: "sh".into(),
+            reason: IoReason::Other,
+        });
+        let first = stage("sh", &talk, &none, "", 3) + &stage("sh", &talk, &none, "", 0);
+        let error = launch(&host, &control, &first, 1, "", 1, "", Some(&mut pipes)).err();
+        assert_eq!(error, invalid);
+        let last = stage("sh", &talk, &none, "", 3);
+        assert_eq!(
+            launch(&host, &control, &last, 1, "", 1, "", None).err(),
+            invalid
+        );
+        let launched = launch(&host, &control, &last, 2, "", 2, "", Some(&mut pipes));
+        let mut processes = launched.unwrap().spawned.processes;
+        assert_eq!(processes[0].wait().unwrap(), 0);
+        assert_eq!(ends, [PipeEnd::Stdin, PipeEnd::Stdout, PipeEnd::Stderr]);
+        let read = |reader: &mut io::PipeReader| {
+            let mut text = String::new();
+            reader.read_to_string(&mut text).unwrap();
+            text
+        };
+        assert_eq!(read(&mut readers[0]), "out\n");
+        assert_eq!(read(&mut readers[1]), "err\n");
     }
 }

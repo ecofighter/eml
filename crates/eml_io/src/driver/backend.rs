@@ -7,7 +7,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use eml_rt::{IoWaker, OpKey, RawBuf, RawSocket};
+use eml_rt::{IoWaker, OpKey, PipePair, RawBuf, RawProcess, RawResource, RawSocket};
+
+/// プールの仕事。`Op::Job` の中身と、backend が作るファイルの読み書きである。
+pub(crate) type Job = Box<dyn FnOnce() -> io::Result<usize> + Send + 'static>;
 
 /// 1つの操作の1歩。核が出し、backend は OS にその歩の1回の試みを出す。
 pub(crate) enum Step<'a, S> {
@@ -29,6 +32,10 @@ pub(crate) enum Step<'a, S> {
     Connect {
         sock: &'a mut S,
         peer: SocketAddr,
+    },
+    /// 子の終わりの知らせを待つ1歩。終わっていれば `Size(0)` で終わる。子を回収しない。
+    Wait {
+        process: &'a RawProcess,
     },
 }
 
@@ -118,9 +125,16 @@ pub(crate) trait Backend: Sized {
     fn set_nodelay(&mut self, sock: &mut Self::Sock, on: bool) -> io::Result<()>;
     /// backend の表の行を放し、OS の資源を閉じる。核は、保留の歩があるソケットにはこれを呼ばない。
     fn close(&mut self, sock: Self::Sock);
-    /// ほかの backend が受けたかもしれないソケットを、`listen` と同じく登録まで済ませた自分のソケットにする。失敗すれば
-    /// ソケットは閉じる。
-    fn adopt(&mut self, sock: RawSocket) -> io::Result<Self::Sock>;
+    /// ほかの backend が受けたかもしれないソケットとパイプの親の端を、`listen` と同じく登録まで済ませた自分のハンドルに
+    /// する。ファイルは登録も結び付けもせずに持つ。失敗すれば資源は閉じる。
+    fn adopt(&mut self, res: RawResource) -> io::Result<Self::Sock>;
+    /// 子と親をつなぐパイプを1組作る。`SPAWN_LOCK` を持つ間に作って旗を立て、親の端は登録せずに返す
+    /// (docs/spec/vm.md の「時計と driver」)。
+    fn pipe(&mut self, parent_reads: bool) -> io::Result<PipePair>;
+    /// ファイル `sock` の読み (`write` が偽) か書きの、プールのスレッドで走る仕事。読みは `buf.ptr[0..cap]` に1回読んで
+    /// 読んだ長さを返し、書きは `cap` バイトをすべて書いて `cap` を返す。番地は OS の呼び出しの中でだけ使い、slice を
+    /// 作らない (docs/spec/vm.md の「時計と driver」)。核は、仕事が終わるまでファイルを閉じず、`buf` を貸したままにする。
+    fn file_job(&self, sock: &Self::Sock, write: bool, buf: RawBuf) -> Job;
 
     /// 歩の1回の試みを OS に出す。核は、保留の欄の鍵を別の歩に使い回さない。
     fn start(&mut self, key: OpKey, step: Step<'_, Self::Sock>) -> Start;

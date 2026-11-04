@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/exec_wait_all.em
+---
+--- stdout ---
+copied one
+wait_all [3, 0]
+output "" exit 0
+--- stderr ---
+--- written: out.txt ---
+copied two

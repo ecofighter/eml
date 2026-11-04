@@ -6,14 +6,14 @@ use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::ctx::{ctx_with, fields, spawn, stdin_read};
-use super::host::{MemoryFile, MemoryHost, Started};
+use super::ctx::{ctx_with, fields, spawn, stage, stdin_read};
+use super::host::{MemoryFile, MemoryHost, Started, Stderr, Stdio};
 use super::mortal;
 use super::string::text;
 use crate::externs::{FALSE, IndexFault, IoOp, IoReason, TRUE, Utf8Source};
 use crate::{
-    Control, Ctx, Fault, Form, Handle, HeapError, Limits, Mode, ReadAmount, StdStream, StderrMode,
-    Stdio, Stop, Stream, Word, Write,
+    Control, Ctx, Fault, Form, Handle, HeapError, Limits, Mode, ReadAmount, StdStream, Stop,
+    Stream, Word, Write,
 };
 
 fn s<M: Mode>(ctx: &mut Ctx<M>, x: &str) -> Word {
@@ -305,17 +305,16 @@ fn a_child_gets_its_lists_split<M: Mode>() {
             ("5\0ab".to_string(), String::new(), (0, 0, 0)),
             ("x\0".to_string(), String::new(), (0, 0, 0)),
             (String::new(), fields(&["K"]), (0, 0, 0)),
-            (String::new(), String::new(), (3, 0, 0)),
+            (String::new(), String::new(), (5, 0, 0)),
             (String::new(), String::new(), (0, -1, 0)),
             (String::new(), String::new(), (0, 0, 3)),
         ];
         for (args, env, (i, o, e)) in bad {
-            let p = s(&mut ctx, "rsync");
-            let a = s(&mut ctx, &args);
-            let v = s(&mut ctx, &env);
-            let d = s(&mut ctx, "");
+            let stages = s(&mut ctx, &stage("rsync", &args, &env, "", e));
+            let payload = s(&mut ctx, "");
+            let path = s(&mut ctx, "");
             assert_eq!(
-                ctx.proc_spawn(p, a, v, d, i, o, e),
+                ctx.proc_spawn(stages, i, payload, o, path),
                 run_fault("rsync", IoReason::Other)
             );
         }
@@ -324,11 +323,10 @@ fn a_child_gets_its_lists_split<M: Mode>() {
             run_fault("missing", IoReason::NotFound)
         );
         // 同じ物体を2つの引数に渡しても、渡した数だけ手放す
-        let p = s(&mut ctx, "rsync");
+        let p = s(&mut ctx, &stage("rsync", "", "", "", 0));
         let empty = s(&mut ctx, "");
         ctx.heap_mut().dup(empty).unwrap();
-        ctx.heap_mut().dup(empty).unwrap();
-        let c = ctx.proc_spawn(p, empty, empty, empty, 0, 0, 0).unwrap();
+        let c = ctx.proc_spawn(p, 0, empty, 0, empty).unwrap();
         assert_eq!(ctx.proc_wait(c), Ok(0));
     }
     let started = |args: &[&str], env: &[(&str, &str)], cwd, stdio| Started {
@@ -348,14 +346,14 @@ fn a_child_gets_its_lists_split<M: Mode>() {
                 &["-a", "", "x y"],
                 &[("K", "v"), ("K", "w")],
                 Some("sub".to_string()),
-                (Stdio::Inherit, Stdio::Null, StderrMode::ToStdout)
+                (Stdio::Inherit, Stdio::Null, Stderr::ToStdout)
             ),
-            started(&[], &[], None, (Stdio::Null, Stdio::Pipe, StderrMode::Null)),
+            started(&[], &[], None, (Stdio::Null, Stdio::Pipe, Stderr::Null)),
             started(
                 &[],
                 &[],
                 None,
-                (Stdio::Inherit, Stdio::Inherit, StderrMode::Inherit)
+                (Stdio::Inherit, Stdio::Inherit, Stderr::Inherit)
             ),
         ]
     );

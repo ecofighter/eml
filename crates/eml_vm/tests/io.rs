@@ -2,7 +2,9 @@
 //! (`Clock::Virtual`) の上で、取り消しの道は書きを取り消すまで終わらせない driver の上で確かめる。テストの driver の
 //! 書きは次の集める地点でいつも終わるので、待っている間の取り消しに届かないためである。worker が2つの run では、
 //! 仮想の時計で worker 1 に置いたタスクの操作を driver を持つ worker 0 が受け付け、持ち主が結果を当てる道と、本物の
-//! 時計で各 worker が自分の driver で受け付ける道も確かめる。
+//! 時計で各 worker が自分の driver で受け付ける道も確かめる。`Std.Stream` の開くことの記録を待つ間に取り消した
+//! タスクがファイルを残さないことは、取り込みの完了を取り消しまで返さない driver の上で確かめる。`Std.Exec` の子の
+//! pipe と待ちが worker をまたぐ道は、本物の時計と `StdHost` の上で確かめる。
 
 use std::io;
 use std::sync::Arc;
@@ -12,7 +14,7 @@ use eml_rt::{
     Checked, Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, Submit,
 };
 use eml_test_support::{run, run_stats};
-use eml_vm::{Machine, RunConfig, Sched, capture_host};
+use eml_vm::{Clock, Control, Finished, Limits, Machine, RunConfig, Sched, capture_host};
 
 /// `Net` のつながった2つのストリーム `a` (接続した側) と `b` (受けた側) を作る本体の頭。待ち受け、受け、接続の完了を
 /// 1つずつ受け、待ちは3つの操作と `await` の4回である。
@@ -327,7 +329,11 @@ impl IoDriver for HoldingDriver {
 
     fn close(&mut self, _handle: IoHandle) {}
 
-    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+    fn adopt(&mut self, _res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    fn pipe(&mut self, _parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
@@ -538,8 +544,12 @@ impl IoDriver for Recorder {
         self.inner.close(handle);
     }
 
-    fn adopt(&mut self, sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
-        self.inner.adopt(sock)
+    fn adopt(&mut self, res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
+        self.inner.adopt(res)
+    }
+
+    fn pipe(&mut self, parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        self.inner.pipe(parent_reads)
     }
 
     fn quiesce(&mut self) {
@@ -1657,4 +1667,359 @@ main () = Async.run (fn () ->
     peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
     let mut rest = Vec::new();
     assert_eq!(peer.read_to_end(&mut rest).unwrap(), 0);
+}
+
+/// テストの driver に操作を渡し、`hold` なら `Op::Adopt` だけはテストの driver に取り込ませた後、その完了を操作の
+/// 取り消しを頼まれるまで返さない。開くタスクを `open` の `io_wait` で待たせたまま取り消すためである。静止させた
+/// 後のテストの driver の開いたファイルの数を `log` に残す。
+struct FileWatch {
+    inner: eml_io::TestDriver,
+    hold: bool,
+    /// 返していない取り込みの完了と、その取り消しを頼まれたか。
+    held: Vec<(Completion, bool)>,
+    log: Arc<std::sync::Mutex<FileLog>>,
+}
+
+#[derive(Default, Debug)]
+struct FileLog {
+    adopts: usize,
+    /// 完了を返す前に取り消しを頼まれた取り込みの数。
+    cancelled_while_held: usize,
+    open_at_quiesce: Option<usize>,
+}
+
+impl FileWatch {
+    fn new(hold: bool) -> (FileWatch, Arc<std::sync::Mutex<FileLog>>) {
+        let log = Arc::new(std::sync::Mutex::new(FileLog::default()));
+        let driver = FileWatch {
+            inner: eml_io::TestDriver::new(None),
+            hold,
+            held: Vec::new(),
+            log: Arc::clone(&log),
+        };
+        (driver, log)
+    }
+}
+
+impl IoDriver for FileWatch {
+    fn now(&self) -> Duration {
+        self.inner.now()
+    }
+
+    fn wait(&mut self, deadline_ms: Option<u64>) -> io::Result<bool> {
+        if self.held.iter().any(|(_, asked)| *asked) {
+            return Ok(true);
+        }
+        self.inner.wait(deadline_ms)
+    }
+
+    fn submit(&mut self, key: OpKey, op: Op) -> Submit {
+        match op {
+            Op::Adopt { res } => {
+                self.log.lock().unwrap().adopts += 1;
+                if !self.hold {
+                    return self.inner.submit(key, Op::Adopt { res });
+                }
+                let result = self.inner.adopt(res).map(Done::Handle);
+                let completion = Completion {
+                    key,
+                    result,
+                    cancelled: false,
+                };
+                self.held.push((completion, false));
+                Submit::Pending
+            }
+            op => self.inner.submit(key, op),
+        }
+    }
+
+    fn cancel(&mut self, key: OpKey) {
+        match self.held.iter_mut().find(|(c, _)| c.key == key) {
+            Some((_, asked)) => {
+                *asked = true;
+                self.log.lock().unwrap().cancelled_while_held += 1;
+            }
+            None => self.inner.cancel(key),
+        }
+    }
+
+    fn completions(&mut self, out: &mut Vec<Completion>) {
+        let (asked, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held)
+            .into_iter()
+            .partition(|(_, asked)| *asked);
+        self.held = kept;
+        out.extend(asked.into_iter().map(|(c, _)| c));
+        self.inner.completions(out);
+    }
+
+    fn pending(&self) -> usize {
+        self.held.len() + self.inner.pending()
+    }
+
+    fn waker(&self) -> Arc<dyn IoWaker> {
+        self.inner.waker()
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        self.inner.bin()
+    }
+
+    fn close(&mut self, handle: IoHandle) {
+        self.inner.close(handle);
+    }
+
+    fn adopt(&mut self, res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
+        self.inner.adopt(res)
+    }
+
+    fn pipe(&mut self, parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        self.inner.pipe(parent_reads)
+    }
+
+    fn quiesce(&mut self) {
+        self.inner.quiesce();
+        self.log.lock().unwrap().open_at_quiesce = Some(self.inner.open_files());
+    }
+}
+
+/// `driver` の上で `src` を検査モードで流し、出力を返す。
+fn run_on_watch(src: &str, driver: FileWatch) -> String {
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    out.contents()
+}
+
+/// `Stream.create` の `io_wait` で待つ間に取り消されたタスクの記録も、取り込みの完了からストリームを作る。包みの
+/// `finish` がそれを落とし、ファイルは bin を通して閉じるので、`quiesce` の後のテストの driver にファイルは残らない
+/// (docs/spec/vm.md の「操作の記録」、docs/spec/stdlib.md の「`Std.Stream`」)。
+#[test]
+fn an_open_cancelled_while_it_waits_closes_its_file() {
+    let src = "\
+import Async (Async)
+import Async
+import Stream
+opener : Unit -> <IO, Async> Unit
+opener () =
+  match try_io (fn () -> Stream.close_writer (Stream.create \"out.txt\")) with
+    | Ok _ -> println \"opened\"
+    | Err e -> println \"\\{show e.kind}: \\{e.message}\"
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start opener
+  Async.yield_now ()
+  Async.cancel t)
+";
+    let (driver, log) = FileWatch::new(true);
+    let out = run_on_watch(src, driver);
+    assert_eq!(out, "Cancelled: task was cancelled\n");
+    let log = log.lock().unwrap();
+    assert_eq!(
+        (log.adopts, log.cancelled_while_held, log.open_at_quiesce),
+        (1, 1, Some(0))
+    );
+}
+
+/// 取り込みが受け付けで終わる driver でも、開いては閉じるのを続けるタスクを取り消した run は、`quiesce` の後の
+/// テストの driver にファイルを残さない (docs/spec/stdlib.md の「`Std.Stream`」)。
+#[test]
+fn a_cancelled_reopening_task_leaves_no_file_open() {
+    let src = "\
+import Async (Async)
+import Async
+import Stream
+reopen : Unit -> <IO, Async> Unit
+reopen () =
+  Stream.close_writer (Stream.create \"out.txt\")
+  reopen ()
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start reopen
+    Async.yield_now ()
+    Async.yield_now ()
+    Async.cancel t)
+  println \"after run\"
+";
+    let (driver, log) = FileWatch::new(false);
+    let out = run_on_watch(src, driver);
+    assert_eq!(out, "after run\n");
+    let log = log.lock().unwrap();
+    assert!(log.adopts > 0, "{log:?}");
+    assert_eq!(log.open_at_quiesce, Some(0));
+}
+
+/// これがあればテストのバイナリは `Std.Exec` のテストの子として `child_main` の動きをする。中身はその動きの名前である。
+const EXEC_CHILD: &str = "EML_VM_EXEC_CHILD";
+
+/// `Std.Exec` のテストの子。テストのバイナリをこのテストだけで起こし直して使う。変数がなければすぐ戻る。libtest は
+/// 子の標準出力に自分の行も書くので、親は子の書いた行だけを探す。
+#[test]
+fn child_main() {
+    use std::io::{Read, Write};
+
+    let Some(mode) = std::env::var_os(EXEC_CHILD) else {
+        return;
+    };
+    match mode.to_str() {
+        Some("count") => {
+            let mut input = Vec::new();
+            std::io::stdin().read_to_end(&mut input).unwrap();
+            println!("child read {}", input.len());
+            std::io::stdout().flush().unwrap();
+            std::process::exit(0);
+        }
+        Some("exit7") => std::process::exit(7),
+        // 親が kill するまで眠る。親が kill しそこねても、いつかは終わる
+        Some("hold") => {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            std::process::exit(0);
+        }
+        _ => panic!("unknown child mode {mode:?}"),
+    }
+}
+
+/// `src` の後ろに、`Std.Exec` のテストの子を動き `mode` で起動する `Cmd` を返す関数 `child` を置く。`src` は
+/// `Proc` を import する。
+fn with_exec_child(src: &str) -> String {
+    let exe = std::env::current_exe().unwrap();
+    let exe = exe.to_str().unwrap();
+    format!(
+        "{src}\
+child : String -> Cmd
+child mode = Proc.env \"{EXEC_CHILD}\" mode `\\{{exe ()}} --exact io::child_main --nocapture --test-threads=1`
+exe : Unit -> String
+exe () = r#\"{exe}\"#
+"
+    )
+}
+
+/// 子を起こす `src` を、本物の時計の検査モードで、worker を `workers` 個まで持ち、方針 `sched` で流す。Host は
+/// 本物の環境を受け継ぐ `StdHost` である。標準出力と run の結果を返す。
+fn run_exec(src: &str, workers: usize, sched: Sched) -> (String, Finished) {
+    let control = Arc::new(Control::new(Limits {
+        workers,
+        ..Limits::default()
+    }));
+    let out = eml_vm::Capture::default();
+    let host = eml_rt::StdHost::new(
+        Box::new(out.clone()),
+        Box::new(std::io::sink()),
+        std::env::temp_dir(),
+        eml_rt::Buffering::Block,
+    );
+    let config = RunConfig::default()
+        .with_clock(Clock::Real)
+        .with_debug_heap(true)
+        .with_sched(sched)
+        .with_control(control);
+    let finished = eml_vm::execute(
+        &eml_test_support::lir(&with_exec_child(src)),
+        &config,
+        eml_rt::HostRef::new(Arc::new(host)),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    (out.contents(), finished)
+}
+
+/// worker 0 が起動した子の pipe の端を、ほかの worker に置いたタスクが使う。端は縛らずに子が持ち、最初に操作を出した
+/// worker の driver が取り込む (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_child_pipe_is_adopted_by_another_worker() {
+    let src = "\
+import Async (Async)
+import Async
+import Exec
+import Proc
+import Stream
+import String
+writer : Stream.Writer -> Unit -> <IO, Async> Unit
+writer w () =
+  let w = Stream.write \"hello\\n\" w
+  Stream.close_writer w
+reader : Stream.Reader -> Unit -> <IO, Async> String
+reader r () =
+  let (text, r) = Stream.read_all r
+  Stream.close r
+  text
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let c = Exec.spawn (child \"count\")
+  let (w, c) = Exec.stdin c
+  let (r, c) = Exec.stdout c
+  let t = Async.start (writer w)
+  let u = Async.start (reader r)
+  Async.await t
+  let text = Async.await u
+  println \"read 6: \\{show (String.contains \"child read 6\" text)}\"
+  println \"exit \\{show (Exec.wait c)}\")
+";
+    let (out, finished) = run_exec(src, 4, Sched::Sequential);
+    assert_eq!(out, "read 6: True\nexit 0\n");
+    assert!(finished.placed_tasks >= 2, "{finished:?}");
+}
+
+/// 救済で動かした worker 2 のタスクが子を待つ。待つタスクは救済されないので、`Wait` の記録の持ち主は host のまま
+/// 動かない (docs/spec/vm.md の「救済」)。
+#[test]
+fn a_wait_from_a_task_placed_on_worker_2_ends_under_rescue_always() {
+    let src = "\
+import Async (Async)
+import Async
+import Exec
+import Proc
+spin : Int -> <Panic> Int
+spin n = if n == 0 then 0 else spin (n - 1)
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () -> spin 40)
+  let u = Async.start (fn () -> Exec.run (child \"exit7\"))
+  let _ = Async.await t
+  println \"exit \\{show (Async.await u)}\")
+";
+    let (out, finished) = run_exec(src, 4, Sched::RescueAlways);
+    assert_eq!(out, "exit 7\n");
+    assert!(finished.rescued > 0, "{finished:?}");
+}
+
+/// 子を待つタスクを取り消すと、driver の待ちを取り消し、巻き戻しが落とす子を kill して待つ。子は 10 秒眠るので、
+/// kill しなければ run は 10 秒かかる (docs/spec/stdlib.md の「`Std.Exec`」)。
+#[test]
+fn a_cancelled_exec_wait_kills_the_child() {
+    let src = "\
+import Async (Async)
+import Async
+import Chan
+import Exec
+import Proc
+holder : Chan.Chan Unit -> Unit -> <IO, Panic, Async> Unit
+holder ready () =
+  let c = Exec.spawn (child \"hold\")
+  match Chan.send () ready with
+    | Chan.Sent -> ()
+    | Chan.Rejected _ -> println \"unreachable\"
+  println \"unreachable \\{show (Exec.wait c)}\"
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let ready = Chan.new 1
+  let t = Async.start (holder ready)
+  match Chan.recv ready with
+    | Some () -> ()
+    | None -> println \"unreachable\"
+  Async.cancel t)
+";
+    for workers in [1, 4] {
+        let start = std::time::Instant::now();
+        let (out, _) = run_exec(src, workers, Sched::Sequential);
+        assert_eq!(out, "", "{workers} workers");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "{workers} workers: the child was not killed"
+        );
+    }
 }

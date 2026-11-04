@@ -22,8 +22,13 @@ pub(super) fn fields(xs: &[&str]) -> String {
     xs.iter().map(|x| format!("{}\0{x}", x.len())).collect()
 }
 
+/// `Proc.spawn_raw` の段の列の、1つの段。`args` と `env` は列にし、標準エラーの向き `stderr` は十進にする。
+pub(super) fn stage(program: &str, args: &str, env: &str, cwd: &str, stderr: i64) -> String {
+    fields(&[program, args, env, cwd, &stderr.to_string()])
+}
+
 /// `program` を、`args` の引数と `env` の環境と作業ディレクトリ `cwd` と `modes` の向き (標準入力、標準出力、
-/// 標準エラー) で `proc_spawn` に起動させる。
+/// 標準エラー) で `proc_spawn` に起動させる。標準入力の中身と標準出力のパスは空である。
 pub(super) fn spawn<M: Mode>(
     ctx: &mut Ctx<M>,
     program: &str,
@@ -33,11 +38,11 @@ pub(super) fn spawn<M: Mode>(
     modes: (i64, i64, i64),
 ) -> Result<Word, Fault> {
     unsafe {
-        let p = ctx.heap_mut().alloc_string(program);
-        let a = ctx.heap_mut().alloc_string(&fields(args));
-        let e = ctx.heap_mut().alloc_string(&fields(env));
-        let c = ctx.heap_mut().alloc_string(cwd);
-        ctx.proc_spawn(p, a, e, c, modes.0, modes.1, modes.2)
+        let stages = stage(program, &fields(args), &fields(env), cwd, modes.2);
+        let s = ctx.heap_mut().alloc_string(&stages);
+        let i = ctx.heap_mut().alloc_string("");
+        let o = ctx.heap_mut().alloc_string("");
+        ctx.proc_spawn(s, modes.0, i, modes.1, o)
     }
 }
 

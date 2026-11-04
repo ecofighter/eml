@@ -3,23 +3,29 @@
 #![allow(unsafe_code)]
 
 use std::collections::HashMap;
+use std::hash::{BuildHasher, Hasher, RandomState};
 use std::io;
 use std::mem::size_of;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::os::windows::io::{
-    AsRawHandle, AsRawSocket, FromRawSocket, HandleOrNull, OwnedHandle, OwnedSocket,
+    AsRawHandle, AsRawSocket, FromRawSocket, HandleOrInvalid, HandleOrNull, OwnedHandle,
+    OwnedSocket,
 };
 use std::process;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use eml_rt::{IoWaker, OpKey, RawBuf, RawSocket};
+use eml_rt::{
+    IoWaker, NOT_REGULAR, OpKey, PipePair, RawBuf, RawPipe, RawProcess, RawResource, RawSocket,
+    SPAWN_LOCK,
+};
 use windows_sys::Win32::Foundation::{
-    ERROR_NOT_FOUND, FALSE, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-    SetHandleInformation, WAIT_TIMEOUT,
+    ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_NOT_FOUND,
+    ERROR_PIPE_BUSY, FALSE, GENERIC_READ, GENERIC_WRITE, HANDLE, HANDLE_FLAG_INHERIT,
+    INVALID_HANDLE_VALUE, SetHandleInformation, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Networking::WinSock::{
     AF_INET, AF_INET6, FIONBIO, INVALID_SOCKET, IPPROTO_TCP, LPFN_ACCEPTEX, LPFN_CONNECTEX,
@@ -32,19 +38,34 @@ use windows_sys::Win32::Networking::WinSock::{
     WSASocketW, WSAStartup, accept, bind, getpeername, getsockname, ioctlsocket, listen, recv,
     send, setsockopt, shutdown,
 };
-use windows_sys::Win32::System::IO::{
-    CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatusEx, OVERLAPPED, OVERLAPPED_ENTRY,
-    PostQueuedCompletionStatus,
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_TYPE_DISK, GetFileType,
+    OPEN_EXISTING, PIPE_ACCESS_INBOUND, PIPE_ACCESS_OUTBOUND, ReadFile, WriteFile,
 };
-use windows_sys::Win32::System::Threading::INFINITE;
+use windows_sys::Win32::System::IO::{
+    CancelIoEx, CreateIoCompletionPort, GetOverlappedResult, GetQueuedCompletionStatusEx,
+    OVERLAPPED, OVERLAPPED_ENTRY, PostQueuedCompletionStatus,
+};
+use windows_sys::Win32::System::Pipes::{
+    CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+};
+use windows_sys::Win32::System::Threading::{
+    INFINITE, RegisterWaitForSingleObject, UnregisterWaitEx, WT_EXECUTEONLYONCE,
+};
 use windows_sys::core::GUID;
 
-use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
+use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
 
 /// 起こしの packet の completion key
 const WAKE: usize = 0;
 /// ソケットを結び付けるときの completion key。この key の packet は `OVERLAPPED` の箱を名指す
 const SOCKET_KEY: usize = 1;
+/// パイプの親の端を結び付けるときの completion key。packet はソケットと同じく箱を名指す
+const PIPE_KEY: usize = 2;
+/// パイプの1つの向きの buffer の大きさ
+const PIPE_BUFFER: u32 = 65_536;
+/// 名前がぶつかったパイプを作り直す回数の上限
+const PIPE_TRIES: u32 = 8;
 /// 1回の `GetQueuedCompletionStatusEx` で受け取る packet の数
 const ENTRIES: usize = 64;
 /// 起こしの packet を積めなかったとき、出し直すまでの間
@@ -60,16 +81,49 @@ const ERROR_CONNECTION_REFUSED: i32 = 1225;
 const ERROR_CONNECTION_ABORTED: i32 = 1236;
 const BOX_ABORT: &str =
     "eml_io: an OVERLAPPED box of a dropped I/O driver is still held by the kernel; aborting";
+const WAIT_ABORT: &str =
+    "eml_io: a child-exit wait could not be unregistered, so its callback may still run; aborting";
 
 /// ポートに結び付けたソケットと、そのアドレスの族。AcceptEx の受けのソケットはリスナーと同じ族で作る
-pub(crate) struct Sock {
+pub(crate) struct Net {
     s: OwnedSocket,
     v6: bool,
 }
 
-impl Sock {
+impl Net {
     fn raw(&self) -> SOCKET {
         self.s.as_raw_socket() as SOCKET
+    }
+}
+
+/// 核が持つ資源。パイプの親の端は重なった読み書きのためにポートに結び付ける。通常のファイルはポートに結び付けず、
+/// 同期のハンドルのままプールの仕事が読み書きする (docs/spec/vm.md の「時計と driver」)。
+pub(crate) enum Sock {
+    Net(Net),
+    Pipe(OwnedHandle),
+    File(OwnedHandle),
+}
+
+impl Sock {
+    /// 核はソケットの歩とソケットの設定に、パイプとファイルを渡さない
+    fn net(&self) -> &Net {
+        match self {
+            Sock::Net(net) => net,
+            Sock::Pipe(_) | Sock::File(_) => unreachable!("only a socket reaches a socket step"),
+        }
+    }
+
+    fn raw(&self) -> SOCKET {
+        self.net().raw()
+    }
+
+    /// 重なった呼び出しを出す相手の値。箱の記録 `Lent::on` と同じ値で、ファイルには重なった呼び出しを出さない
+    fn overlapped_on(&self) -> Option<SOCKET> {
+        match self {
+            Sock::Net(net) => Some(net.raw()),
+            Sock::Pipe(end) => Some(end.as_raw_handle() as SOCKET),
+            Sock::File(_) => None,
+        }
     }
 }
 
@@ -106,7 +160,7 @@ struct Ext {
 struct Over {
     /// 先頭に置くので、packet が名指す番地は箱の番地と同じである
     ov: OVERLAPPED,
-    /// 呼び出しを出したソケット。AcceptEx ではリスナーである
+    /// 呼び出しを出したソケットかパイプの端の値。AcceptEx ではリスナーである
     on: SOCKET,
     /// `WSARecv` の lpFlags
     flags: u32,
@@ -124,9 +178,13 @@ enum What {
     Send,
     /// AcceptEx。受けのソケットは成功の packet でだけ箱を出て、ほかの終わりでは箱と一緒に閉じる
     Accept {
-        sock: Sock,
+        sock: Net,
     },
     Connect,
+    /// パイプの `ReadFile`。貸された読みの記憶に OS が書く
+    PipeRead,
+    /// パイプの `WriteFile`
+    PipeWrite,
 }
 
 /// OS が持つ箱の記録
@@ -148,6 +206,63 @@ pub(crate) struct Iocp {
     boxes: HashMap<usize, Lent>,
     /// 保留の鍵からその箱の番地へ。`cancel` は鍵しか受け取らない
     waiters: HashMap<OpKey, usize>,
+    /// 子の終わりの callback が鍵を積む列
+    exited: Arc<Exited>,
+    /// 登録した子の終わりの待ち。鍵で引く
+    watches: HashMap<OpKey, Watch>,
+}
+
+/// 子の終わりの知らせの列。backend が持ち、OS のスレッドプールで走る callback と分け合う。callback は鍵を積んで
+/// ポートを起こし、`wait` が列を空にして知らせにする (docs/spec/vm.md の「時計と driver」)。
+struct Exited {
+    keys: Mutex<Vec<OpKey>>,
+    waker: Arc<PortWaker>,
+}
+
+/// callback の文脈。`RegisterWaitForSingleObject` に番地を渡し、待ちを外し終えるまで放さない
+struct Context {
+    exited: Arc<Exited>,
+    key: OpKey,
+}
+
+/// 登録した待ち1つ。文脈とプロセスのハンドルの写しは、`UnregisterWaitEx` が戻った後でだけ放す
+struct Watch {
+    wait: HANDLE,
+    context: *mut Context,
+    /// backend が自分で写したハンドル。核が `RawProcess` を先に落としても、登録の下のハンドルは閉じない
+    process: OwnedHandle,
+}
+
+impl Watch {
+    /// 待ちを外してから文脈とハンドルを放す。発火した待ちも、取り消した待ちも、backend を落とすときもここを通る
+    fn release(self) {
+        // `INVALID_HANDLE_VALUE` を渡すと、走っている callback が戻るまで待ってから戻る。callback は鍵の列の mutex を
+        // 取ってポートを起こすだけで、呼ぶ側のスレッドはどちらも持たずに呼ぶので、待ちは詰まらない
+        // SAFETY: `wait` は `RegisterWaitForSingleObject` が返し、まだ外していない待ちのハンドルである
+        if unsafe { UnregisterWaitEx(self.wait, INVALID_HANDLE_VALUE) } == 0 {
+            // 外せたか分からない待ちの文脈は放せず、callback がまだ読みうるので、放さずにプロセスごと終える
+            eprintln!("{WAIT_ABORT}");
+            process::abort();
+        }
+        // SAFETY: `context` は `watch` が `Box::into_raw` で作り、待ちを外したので callback はもう読まない。表から
+        // 外した `Watch` だけがこの番地を持つ
+        drop(unsafe { Box::from_raw(self.context) });
+        drop(self.process);
+    }
+}
+
+/// 子の終わりの callback。OS のスレッドプールのスレッドで、登録1つにつき1回だけ走る (`WT_EXECUTEONLYONCE`)。
+unsafe extern "system" fn on_exit(context: *mut core::ffi::c_void, _timed_out: bool) {
+    // SAFETY: `context` は `watch` が登録した `Context` の番地で、`Watch::release` が待ちを外し終えるまで放さない。
+    // 文脈を書き換える者はいないので、共有の参照で読む
+    let context = unsafe { &*context.cast::<Context>() };
+    context
+        .exited
+        .keys
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(context.key);
+    context.exited.waker.wake();
 }
 
 /// ポートを所有する起こし。ほかのスレッドが持つ写しがポートを生かすので、driver が落ちた後の鳴らしも生きた
@@ -227,6 +342,25 @@ fn accept_error(code: i32) -> io::Error {
     gone(os_error(code))
 }
 
+/// パイプの読みの終わり。書く端がすべて閉じたパイプの読みは `ERROR_BROKEN_PIPE` で終わるので、EOF にする
+fn pipe_read_end(r: io::Result<Outcome>) -> io::Result<Outcome> {
+    match r {
+        Err(e) if e.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) => Ok(Outcome::Size(0)),
+        r => r,
+    }
+}
+
+/// パイプの書きの誤り。読む端が閉じたパイプへの書きは、閉じ方によって `ERROR_BROKEN_PIPE` か `ERROR_NO_DATA` で、
+/// unix の EPIPE と同じく `BrokenPipe` にする
+fn pipe_write_error(code: i32) -> io::Error {
+    let e = io::Error::from_raw_os_error(code);
+    if code == ERROR_BROKEN_PIPE as i32 || code == ERROR_NO_DATA as i32 {
+        io::Error::new(io::ErrorKind::BrokenPipe, e)
+    } else {
+        e
+    }
+}
+
 /// 受ける前か受けた直後に相手がいなくなった接続を `ConnectionAborted` にする。核はそれだけを受け直す
 fn gone(e: io::Error) -> io::Error {
     match e.kind() {
@@ -255,6 +389,17 @@ fn issued(failed: bool) -> Result<(), i32> {
     match last() {
         WSA_IO_PENDING => Ok(()),
         code => Err(code),
+    }
+}
+
+/// `issued` のパイプの版。`ReadFile` と `WriteFile` は誤りを Winsock でなく Win32 の番号で残す
+fn file_issued(failed: bool) -> Result<(), i32> {
+    if !failed {
+        return Ok(());
+    }
+    match io::Error::last_os_error().raw_os_error() {
+        Some(code) if code == ERROR_IO_PENDING as i32 => Ok(()),
+        code => Err(code.unwrap_or(0)),
     }
 }
 
@@ -438,14 +583,156 @@ fn len(cap: usize) -> i32 {
     i32::try_from(cap).unwrap_or(i32::MAX)
 }
 
+/// ファイルの読みの仕事の本体。プールのスレッドの上で、同期のハンドルから貸された記憶に1回読む。重なった
+/// ファイルの I/O は使わないので、`OVERLAPPED` は渡さない。
+fn read_file(handle: HANDLE, buf: RawBuf) -> io::Result<usize> {
+    let mut n = 0u32;
+    // SAFETY: `RawBuf` の約束により、仕事が答えるまで `buf` は `cap` バイトの一意の記憶を指し、核は仕事が終わるまで
+    // ハンドルを閉じない。仕事はプールの列の mutex を通ってこのスレッドへ来て、答えは受け箱の mutex を通って戻るので、
+    // 貸す側の読みと確定はこの書きの後になる (docs/spec/vm.md の「時計と driver」)。同期の呼び出しなので、OS が
+    // `buf` と `n` に書くのは戻るまでの間だけである
+    let ok = unsafe {
+        ReadFile(
+            handle,
+            buf.ptr,
+            u32::try_from(buf.cap).unwrap_or(u32::MAX),
+            &mut n,
+            ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(n as usize)
+}
+
+/// ファイルの書きの仕事の本体。プールのスレッドの上で、貸された記憶の `cap` バイトをすべて書く。
+fn write_file(handle: HANDLE, buf: RawBuf) -> io::Result<usize> {
+    let mut written = 0;
+    while written < buf.cap {
+        // 残りの位置は貸した記憶の中にあり、指すだけで読み書きしない
+        let at = buf.ptr.wrapping_add(written);
+        let mut n = 0u32;
+        // SAFETY: `read_file` と同じく、仕事が答えるまで `buf` は `cap` バイトの読める記憶を指し、ハンドルは開いている。
+        // `at` から `cap - written` バイトはその中にある。OS は読むだけで、`n` に書くのは戻るまでの間だけである
+        let ok = unsafe {
+            WriteFile(
+                handle,
+                at,
+                u32::try_from(buf.cap - written).unwrap_or(u32::MAX),
+                &mut n,
+                ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if n == 0 {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        written += n as usize;
+    }
+    Ok(buf.cap)
+}
+
 /// 取り戻した箱の操作の結果。`Ok` は運んだバイト数、`Err` は誤りの番号
 fn status(over: &Over) -> Result<u32, i32> {
     let mut bytes = 0;
+    if let What::PipeRead | What::PipeWrite = over.what {
+        // SAFETY: `status` のソケットの場合と同じく、OS はもう箱に書かない。`on` は箱と一緒に核が開いたまま持つパイプの
+        // 端である
+        let ok = unsafe { GetOverlappedResult(over.on as HANDLE, &over.ov, &mut bytes, FALSE) };
+        return if ok != 0 {
+            Ok(bytes)
+        } else {
+            Err(io::Error::last_os_error().raw_os_error().unwrap_or(0))
+        };
+    }
     let mut flags = 0;
     // SAFETY: 箱は packet を取り出して取り戻したので、OS はもう書かない。`bytes` と `flags` は局所変数で、待たない
     // (`FALSE`) ので戻るまでの間だけ書かれる
     let ok = unsafe { WSAGetOverlappedResult(over.on, &over.ov, &mut bytes, FALSE, &mut flags) };
     if ok != 0 { Ok(bytes) } else { Err(last()) }
+}
+
+/// 親の端の名前。ほかのプロセスが先に同じ名前を作って `pipe` を断らせないよう、std の無名のパイプと同じく
+/// 推し量れない数を入れる。`FILE_FLAG_FIRST_PIPE_INSTANCE` は同じ名前のパイプがあれば作らずに断る
+fn pipe_name() -> Vec<u16> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u64(NEXT.fetch_add(1, Ordering::Relaxed));
+    format!(
+        "\\\\.\\pipe\\eml-{}-{:016x}",
+        process::id(),
+        hasher.finish()
+    )
+    .encode_utf16()
+    .chain([0])
+    .collect()
+}
+
+/// 名前がぶつかったか、作った端にほかのプロセスが先につないだ。名前を変えて作り直せる
+fn pipe_taken(e: &io::Error) -> bool {
+    e.raw_os_error()
+        .is_some_and(|code| code == ERROR_ACCESS_DENIED as i32 || code == ERROR_PIPE_BUSY as i32)
+}
+
+/// ディスクのファイルの handle だけを通す。Windows の std の metadata は名前付きパイプやデバイスも通常のファイルと
+/// 見うるので、どちらの driver もファイルを取り込む前にここで確かめる (docs/spec/vm.md の「時計と driver」)
+pub(super) fn disk_file(file: OwnedHandle) -> io::Result<OwnedHandle> {
+    // SAFETY: `file` は開いたハンドルで、OS は種類を返すだけである
+    if unsafe { GetFileType(file.as_raw_handle()) } == FILE_TYPE_DISK {
+        Ok(file)
+    } else {
+        Err(io::Error::new(io::ErrorKind::Unsupported, NOT_REGULAR))
+    }
+}
+
+/// 名前付きパイプを1組作る。親の端は重なった呼び出しを受け、子の端は同期のまま開く。呼び手が `SPAWN_LOCK` を持つ
+fn named_pipe(parent_reads: bool) -> io::Result<PipePair> {
+    let name = pipe_name();
+    let (access, child_access) = if parent_reads {
+        (PIPE_ACCESS_INBOUND, GENERIC_WRITE)
+    } else {
+        (PIPE_ACCESS_OUTBOUND, GENERIC_READ)
+    };
+    // SAFETY: `name` は 0 で終わる UTF-16 で、OS は戻るまでの間だけ読む。`SECURITY_ATTRIBUTES` は null で、端は
+    // 受け継がれない。失敗は `INVALID_HANDLE_VALUE` で返る
+    let raw = unsafe {
+        CreateNamedPipeW(
+            name.as_ptr(),
+            access | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            1,
+            PIPE_BUFFER,
+            PIPE_BUFFER,
+            0,
+            ptr::null(),
+        )
+    };
+    // SAFETY: `raw` は今作った端か `INVALID_HANDLE_VALUE` で、ほかに所有者がいない
+    let parent = OwnedHandle::try_from(unsafe { HandleOrInvalid::from_raw_handle(raw) })
+        .map_err(|_| io::Error::last_os_error())?;
+    // 子の端は同期のまま開く。子は重なった呼び出しを知らずに読み書きする
+    // SAFETY: `name` は上と同じで、`SECURITY_ATTRIBUTES` は null である。失敗は `INVALID_HANDLE_VALUE` で返る
+    let raw = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            child_access,
+            0,
+            ptr::null(),
+            OPEN_EXISTING,
+            0,
+            ptr::null_mut(),
+        )
+    };
+    // SAFETY: `raw` は今開いた端か `INVALID_HANDLE_VALUE` で、ほかに所有者がいない
+    let child = OwnedHandle::try_from(unsafe { HandleOrInvalid::from_raw_handle(raw) })
+        .map_err(|_| io::Error::last_os_error())?;
+    Ok(PipePair {
+        parent: RawPipe::new(parent),
+        child,
+    })
 }
 
 impl Iocp {
@@ -456,24 +743,30 @@ impl Iocp {
         // SAFETY: `raw` は今作ったポートか null で、ほかに所有者がいない
         let port = OwnedHandle::try_from(unsafe { HandleOrNull::from_raw_handle(raw) })
             .map_err(|_| io::Error::last_os_error())?;
+        let waker = Arc::new(PortWaker {
+            port,
+            posted: AtomicBool::new(false),
+        });
         Ok(Iocp {
-            waker: Arc::new(PortWaker {
-                port,
-                posted: AtomicBool::new(false),
+            exited: Arc::new(Exited {
+                keys: Mutex::new(Vec::new()),
+                waker: Arc::clone(&waker),
             }),
+            waker,
             epoch,
             ext: None,
             boxes: HashMap::new(),
             waiters: HashMap::new(),
+            watches: HashMap::new(),
         })
     }
 
-    /// ソケットをポートに結び付ける。受けたソケットはリスナーの結び付けを受け継がず、取り込む driver の `adopt` が結び付ける
-    fn associate(&self, s: SOCKET) -> io::Result<()> {
-        // SAFETY: `s` は呼ぶ側が開いたまま持つソケットで、ポートは `waker` が持っていて開いている。渡すポインタはない
-        let r = unsafe {
-            CreateIoCompletionPort(s as HANDLE, self.waker.port.as_raw_handle(), SOCKET_KEY, 0)
-        };
+    /// ソケットかパイプの端をポートに結び付ける。受けたソケットはリスナーの結び付けを受け継がず、取り込む driver の
+    /// `adopt` が結び付ける
+    fn associate(&self, h: HANDLE, key: usize) -> io::Result<()> {
+        // SAFETY: `h` は呼ぶ側が開いたまま持つソケットかパイプの端で、ポートは `waker` が持っていて開いている。渡す
+        // ポインタはない
+        let r = unsafe { CreateIoCompletionPort(h, self.waker.port.as_raw_handle(), key, 0) };
         if r.is_null() {
             Err(io::Error::last_os_error())
         } else {
@@ -482,12 +775,12 @@ impl Iocp {
     }
 
     /// 結び付ける前のソケット。拡張関数は、最初に作ったソケットで読む
-    fn stream_socket(&mut self, v6: bool) -> io::Result<Sock> {
+    fn stream_socket(&mut self, v6: bool) -> io::Result<Net> {
         let s = new_socket(v6)?;
         if self.ext.is_none() {
             self.ext = Some(extensions(s.as_raw_socket() as SOCKET)?);
         }
-        Ok(Sock { s, v6 })
+        Ok(Net { s, v6 })
     }
 
     /// 拡張関数。呼ぶのはリスナーの受け (`AcceptEx`) と接続 (`ConnectEx`) の歩だけで、どちらのソケットもこの backend が
@@ -545,7 +838,7 @@ impl Iocp {
     }
 
     /// 長さ 0 の `WSARecv` で、読めるデータか EOF か誤りを待つ。読みの buffer は OS に渡さない
-    fn zero_read(&mut self, key: OpKey, sock: &Sock) -> Start {
+    fn zero_read(&mut self, key: OpKey, sock: &Net) -> Start {
         let s = sock.raw();
         self.issue(key, s, What::Zero, stream_error, |over| {
             let buf = WSABUF {
@@ -571,7 +864,7 @@ impl Iocp {
     }
 
     /// 塞がれた書きを `WSASend` で出す。貸された `Write` の記憶をそのまま OS に渡し、`Hold::Memory` が覆う
-    fn send_ex(&mut self, key: OpKey, sock: &Sock, buf: RawBuf) -> Start {
+    fn send_ex(&mut self, key: OpKey, sock: &Net, buf: RawBuf) -> Start {
         let s = sock.raw();
         self.issue(key, s, What::Send, stream_error, |over| {
             let wsabuf = WSABUF {
@@ -587,7 +880,7 @@ impl Iocp {
     }
 
     /// 塞がれた受けを AcceptEx で出す。受けのソケットは箱の中に置き、結び付けない。packet はリスナーを通って来る
-    fn accept_ex(&mut self, key: OpKey, listener: &Sock) -> Start {
+    fn accept_ex(&mut self, key: OpKey, listener: &Net) -> Start {
         let sock = match self.stream_socket(listener.v6) {
             Ok(sock) => sock,
             Err(e) => return Start::Done(Err(e)),
@@ -617,7 +910,7 @@ impl Iocp {
     }
 
     /// AcceptEx の成功の後処理。どの失敗でも受けたソケットは閉じる。相手が読めない失敗だけを受け直しにする
-    fn accepted(&self, listener: SOCKET, sock: Sock) -> io::Result<Outcome> {
+    fn accepted(&self, listener: SOCKET, sock: Net) -> io::Result<Outcome> {
         let s = sock.raw();
         setsockopt_bytes(
             s,
@@ -658,10 +951,17 @@ impl Iocp {
                 .map(|()| Outcome::Connected),
             ),
             (What::Connect, Err(code)) => Arrival::Done(Err(os_error(code))),
+            (What::PipeRead | What::PipeWrite, Ok(n)) => {
+                Arrival::Done(Ok(Outcome::Size(n as usize)))
+            }
+            (What::PipeRead, Err(code)) => {
+                Arrival::Done(pipe_read_end(Err(io::Error::from_raw_os_error(code))))
+            }
+            (What::PipeWrite, Err(code)) => Arrival::Done(Err(pipe_write_error(code))),
         }
     }
 
-    fn accept(&mut self, key: OpKey, listener: &Sock) -> Start {
+    fn accept(&mut self, key: OpKey, listener: &Net) -> Start {
         let mut storage = SOCKADDR_STORAGE::default();
         let mut n = size_of::<SOCKADDR_STORAGE>() as i32;
         // SAFETY: `storage` と `n` は局所変数で、`n` は `storage` の大きさである。OS が書くのは戻るまでの間だけである
@@ -672,7 +972,7 @@ impl Iocp {
                 code => Start::Done(Err(accept_error(code))),
             };
         }
-        let sock = Sock {
+        let sock = Net {
             // SAFETY: `s` は今受けたソケットで、ほかに所有者がいない
             s: unsafe { OwnedSocket::from_raw_socket(s as _) },
             v6: listener.v6,
@@ -681,7 +981,7 @@ impl Iocp {
     }
 
     /// `accept` で受けたソケットの後処理。どの失敗もそのまま返し、受けたソケットは閉じる
-    fn prepare(&self, sock: Sock, peer: &SOCKADDR_STORAGE) -> io::Result<Outcome> {
+    fn prepare(&self, sock: Net, peer: &SOCKADDR_STORAGE) -> io::Result<Outcome> {
         let s = sock.raw();
         nonblocking(s)?;
         // `accept` のソケットは、リスナーの継承しない設定を受け継がない
@@ -696,7 +996,7 @@ impl Iocp {
         })
     }
 
-    fn connect(&mut self, key: OpKey, sock: &Sock, peer: SocketAddr) -> Start {
+    fn connect(&mut self, key: OpKey, sock: &Net, peer: SocketAddr) -> Start {
         let (addr, n) = sockaddr(peer);
         let connect_ex = self.ext().connect_ex;
         let s = sock.raw();
@@ -718,6 +1018,123 @@ impl Iocp {
             };
             issued(ok == 0)
         })
+    }
+
+    /// パイプの読みを重なった `ReadFile` で出す。貸された記憶をそのまま OS に渡し、`Hold::Memory` が覆う。長さ 0 の
+    /// 覗きは使わない
+    fn pipe_read(&mut self, key: OpKey, end: &OwnedHandle, buf: RawBuf) -> Start {
+        let h = end.as_raw_handle();
+        let error = io::Error::from_raw_os_error;
+        let start = self.issue(key, h as SOCKET, What::PipeRead, error, |over| {
+            // SAFETY: `over` は `issue` が作った生きた箱で、番地は `&raw` で作る。`buf` の記憶は貸した側が操作の完了を
+            // 取り出すまで生かし、`cap` バイトまで OS が書ける。重なった呼び出しなので読んだ長さは箱の終わりで読む
+            let ok = unsafe {
+                ReadFile(
+                    h,
+                    buf.ptr,
+                    u32::try_from(buf.cap).unwrap_or(u32::MAX),
+                    ptr::null_mut(),
+                    &raw mut (*over).ov,
+                )
+            };
+            file_issued(ok == 0)
+        });
+        match start {
+            Start::Done(r) => Start::Done(pipe_read_end(r)),
+            pending => pending,
+        }
+    }
+
+    /// パイプの書きを重なった `WriteFile` で出す。短い書きの残りは核が出し直す
+    fn pipe_write(&mut self, key: OpKey, end: &OwnedHandle, buf: RawBuf) -> Start {
+        let h = end.as_raw_handle();
+        self.issue(
+            key,
+            h as SOCKET,
+            What::PipeWrite,
+            pipe_write_error,
+            |over| {
+                // SAFETY: `pipe_read` と同じく、箱は生きていて、`buf` の記憶は完了を取り出すまで生きる。OS は読むだけである
+                let ok = unsafe {
+                    WriteFile(
+                        h,
+                        buf.ptr,
+                        u32::try_from(buf.cap).unwrap_or(u32::MAX),
+                        ptr::null_mut(),
+                        &raw mut (*over).ov,
+                    )
+                };
+                file_issued(ok == 0)
+            },
+        )
+    }
+
+    /// 子の終わりを `RegisterWaitForSingleObject` で待つ。登録するのは backend が写したハンドルで、核の持つ
+    /// `RawProcess` がいつ落ちても登録の下のハンドルは開いたままである (docs/spec/vm.md の「時計と driver」)
+    fn watch(&mut self, key: OpKey, process: &RawProcess) -> Start {
+        if self.watches.contains_key(&key) {
+            debug_assert!(false, "a pending key is started again");
+            return Start::Done(Err(io::Error::other("the key already has a pending op")));
+        }
+        let process = match process.0.try_clone() {
+            Ok(process) => process,
+            Err(e) => return Start::Done(Err(e)),
+        };
+        let context = Box::into_raw(Box::new(Context {
+            exited: Arc::clone(&self.exited),
+            key,
+        }));
+        let mut wait = ptr::null_mut();
+        // SAFETY: `wait` は局所変数で、OS は戻るまでの間だけ書く。`process` は上で写して開いている。`context` は
+        // 生きた箱で、登録できれば `Watch::release` が待ちを外し終えるまで放さない
+        let ok = unsafe {
+            RegisterWaitForSingleObject(
+                &mut wait,
+                process.as_raw_handle(),
+                Some(on_exit),
+                context.cast_const().cast(),
+                INFINITE,
+                WT_EXECUTEONLYONCE,
+            )
+        };
+        if ok == 0 {
+            let e = io::Error::last_os_error();
+            // SAFETY: 登録できなかったので callback は走らず、`context` を持つ者はほかにいない
+            drop(unsafe { Box::from_raw(context) });
+            return Start::Done(Err(e));
+        }
+        self.watches.insert(
+            key,
+            Watch {
+                wait,
+                context,
+                process,
+            },
+        );
+        Start::Pending(Hold::None)
+    }
+
+    /// callback が積んだ鍵の待ちを外して、終わりの知らせにする。鍵の列の mutex は待ちを外す前に放す
+    fn drain_exited(&mut self, events: &mut Vec<Event>) {
+        let fired = std::mem::take(
+            &mut *self
+                .exited
+                .keys
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        for key in fired {
+            // 取り消した待ちは、待ちを外してから列の鍵を除くので、ここには来ない
+            let Some(watch) = self.watches.remove(&key) else {
+                debug_assert!(false, "a fired wait is not in the table");
+                continue;
+            };
+            watch.release();
+            events.push(Event {
+                key,
+                arrival: Arrival::Done(Ok(Outcome::Size(0))),
+            });
+        }
     }
 }
 
@@ -752,8 +1169,8 @@ impl Backend for Iocp {
         check(unsafe { listen(s, BACKLOG) })?;
         let port = name_of(s, false)?.port();
         nonblocking(s)?;
-        self.associate(s)?;
-        Ok((sock, port))
+        self.associate(s as HANDLE, SOCKET_KEY)?;
+        Ok((Sock::Net(sock), port))
     }
 
     fn socket(&mut self, peer: SocketAddr) -> io::Result<Sock> {
@@ -771,17 +1188,52 @@ impl Backend for Iocp {
             let _ = no_syn_retransmissions(s);
         }
         nonblocking(s)?;
-        self.associate(s)?;
-        Ok(sock)
+        self.associate(s as HANDLE, SOCKET_KEY)?;
+        Ok(Sock::Net(sock))
     }
 
-    fn adopt(&mut self, sock: RawSocket) -> io::Result<Sock> {
+    fn adopt(&mut self, res: RawResource) -> io::Result<Sock> {
+        let sock = match res {
+            RawResource::Socket(sock) => sock,
+            RawResource::PipeRead(end) | RawResource::PipeWrite(end) => {
+                let end = end.into_inner();
+                self.associate(end.as_raw_handle(), PIPE_KEY)?;
+                return Ok(Sock::Pipe(end));
+            }
+            // ファイルの読み書きは同期のハンドルへのプールの仕事なので、ポートに結び付けない
+            RawResource::File(file) => return Ok(Sock::File(super::regular_handle(file)?)),
+        };
         let s = sock.into_inner();
         let raw = s.as_raw_socket() as SOCKET;
         // 受けたソケットはどのポートにも結び付けずに返したので、ここで初めて結び付ける
-        self.associate(raw)?;
+        self.associate(raw as HANDLE, SOCKET_KEY)?;
         let v6 = name_of(raw, false)?.is_ipv6();
-        Ok(Sock { s, v6 })
+        Ok(Sock::Net(Net { s, v6 }))
+    }
+
+    fn pipe(&mut self, parent_reads: bool) -> io::Result<PipePair> {
+        // どちらの端も受け継がせずに作るので、lock がなくても子は端を受け継がない。作り方を OS によらず1つにする
+        // ため、unix と同じく lock の中で作る (docs/spec/object-model.md の「子のプロセス」)
+        let _spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut tries = 0;
+        loop {
+            match named_pipe(parent_reads) {
+                Err(e) if pipe_taken(&e) && tries < PIPE_TRIES => tries += 1,
+                made => return made,
+            }
+        }
+    }
+    fn file_job(&self, sock: &Sock, write: bool, buf: RawBuf) -> Job {
+        let Sock::File(file) = sock else {
+            unreachable!("the core gives file jobs only files");
+        };
+        // 仕事が走る間、核はファイルを閉じない。`HANDLE` は `Send` でないので、番号として渡す
+        let handle = file.as_raw_handle() as usize;
+        if write {
+            Box::new(move || write_file(handle as HANDLE, buf))
+        } else {
+            Box::new(move || read_file(handle as HANDLE, buf))
+        }
     }
 
     fn shutdown_write(&mut self, sock: &mut Sock) -> io::Result<()> {
@@ -801,7 +1253,8 @@ impl Backend for Iocp {
     fn close(&mut self, sock: Sock) {
         // 核は保留の歩があるソケットを閉じない (docs/spec/vm.md の「時計と driver」)
         debug_assert!(
-            self.boxes.values().all(|l| l.on != sock.raw()),
+            sock.overlapped_on()
+                .is_none_or(|on| self.boxes.values().all(|l| l.on != on)),
             "a socket is closed with a box the kernel holds"
         );
         drop(sock);
@@ -809,12 +1262,29 @@ impl Backend for Iocp {
 
     fn start(&mut self, key: OpKey, step: Step<'_, Sock>) -> Start {
         match step {
+            Step::Peek {
+                sock: Sock::Pipe(_),
+            } => {
+                debug_assert!(false, "a pipe is never peeked");
+                Start::Done(Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "a pipe has no readiness probe",
+                )))
+            }
+            Step::Recv {
+                sock: Sock::Pipe(end),
+                buf,
+            } => self.pipe_read(key, end, buf),
+            Step::Send {
+                sock: Sock::Pipe(end),
+                buf,
+            } => self.pipe_write(key, end, buf),
             Step::Peek { sock } => {
                 let mut b = 0u8;
                 // SAFETY: `b` は局所変数で、長さは 1 である。OS が書くのは戻るまでの間だけである
                 match unsafe { recv(sock.raw(), &mut b, 1, MSG_PEEK) } {
                     SOCKET_ERROR => match last() {
-                        WSAEWOULDBLOCK => self.zero_read(key, sock),
+                        WSAEWOULDBLOCK => self.zero_read(key, sock.net()),
                         code => Start::Done(Err(stream_error(code))),
                     },
                     _ => Start::Done(Ok(Outcome::Size(0))),
@@ -824,7 +1294,7 @@ impl Backend for Iocp {
                 // SAFETY: `buf` は貸された記憶で、`cap` バイトまで書ける。OS が書くのは戻るまでの間だけである
                 match unsafe { recv(sock.raw(), buf.ptr, len(buf.cap), 0) } {
                     SOCKET_ERROR => match last() {
-                        WSAEWOULDBLOCK => self.zero_read(key, sock),
+                        WSAEWOULDBLOCK => self.zero_read(key, sock.net()),
                         code => Start::Done(Err(stream_error(code))),
                     },
                     n => Start::Done(Ok(Outcome::Size(n as usize))),
@@ -834,18 +1304,33 @@ impl Backend for Iocp {
                 // SAFETY: `buf` は貸された記憶で、`cap` バイトまで読める。OS が読むのは戻るまでの間だけである
                 match unsafe { send(sock.raw(), buf.ptr, len(buf.cap), 0) } {
                     SOCKET_ERROR => match last() {
-                        WSAEWOULDBLOCK => self.send_ex(key, sock, buf),
+                        WSAEWOULDBLOCK => self.send_ex(key, sock.net(), buf),
                         code => Start::Done(Err(stream_error(code))),
                     },
                     n => Start::Done(Ok(Outcome::Size(n as usize))),
                 }
             }
-            Step::Accept { listener } => self.accept(key, listener),
-            Step::Connect { sock, peer } => self.connect(key, sock, peer),
+            Step::Accept { listener } => self.accept(key, listener.net()),
+            Step::Connect { sock, peer } => self.connect(key, sock.net(), peer),
+            Step::Wait { process } => self.watch(key, process),
         }
     }
 
-    fn cancel(&mut self, key: OpKey, _step: Step<'_, Sock>) -> io::Result<Cancel> {
+    fn cancel(&mut self, key: OpKey, step: Step<'_, Sock>) -> io::Result<Cancel> {
+        if let Step::Wait { .. } = step {
+            let Some(watch) = self.watches.remove(&key) else {
+                debug_assert!(false, "a cancel for a key with no wait");
+                return Ok(Cancel::Done);
+            };
+            // 待ちを外し終えると callback はもう鍵を積まない。外す前に積んだ鍵はここで除き、知らせを出さない
+            watch.release();
+            self.exited
+                .keys
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .retain(|&k| k != key);
+            return Ok(Cancel::Done);
+        }
         let Some(&addr) = self.waiters.get(&key) else {
             debug_assert!(false, "a cancel for a key with no box");
             return Ok(Cancel::Done);
@@ -889,11 +1374,10 @@ impl Backend for Iocp {
         if ok == 0 {
             let e = io::Error::last_os_error();
             // std は `TimedOut` にほかの誤りも写すので、時間切れは番号で見分ける
-            return if e.raw_os_error() == Some(WAIT_TIMEOUT as i32) {
-                Ok(())
-            } else {
-                Err(e)
-            };
+            if e.raw_os_error() != Some(WAIT_TIMEOUT as i32) {
+                return Err(e);
+            }
+            removed = 0;
         }
         // 迷った packet があっても束の残りの箱は取り戻し、確かめは束を読み終えてからにする。途中で panic すると、
         // 取り出し済みの packet の箱が表に残り、`Drop` が abort して panic の理由が見えなくなる
@@ -902,7 +1386,7 @@ impl Backend for Iocp {
             match (entry.lpCompletionKey, entry.lpOverlapped.is_null()) {
                 // packet を取り出してから下ろす。間に来た鳴らしの答えは、核がこの後で受け箱を引き取るときに拾う
                 (WAKE, _) => self.waker.posted.store(false, Ordering::Release),
-                (SOCKET_KEY, false) => {
+                (SOCKET_KEY | PIPE_KEY, false) => {
                     // 中を読む前に、この backend が預けた箱かを確かめる。知らない番地は放さずに捨てる
                     let addr = entry.lpOverlapped.addr();
                     let Some(lent) = self.boxes.remove(&addr) else {
@@ -928,12 +1412,18 @@ impl Backend for Iocp {
         if let Some(what) = stray {
             debug_assert!(false, "{what}");
         }
+        // 鍵を積んだ callback の起こしは上の packet で届く。時間切れの後も、積まれた鍵を残さず拾う
+        self.drain_exited(events);
         Ok(())
     }
 }
 
 impl Drop for Iocp {
     fn drop(&mut self) {
+        // 核は保留の待ちを取り消さずに落としうる。callback が文脈を読み終えるまで待ちを外してから放す
+        for (_, watch) in self.watches.drain() {
+            watch.release();
+        }
         // OS が書きうる箱を放すと、解放した記憶に OS が書く。核は箱が残るうちは backend を落とさないので、ここに
         // 来るのは核の待ちが尽きたときだけである (docs/spec/vm.md の「時計と driver」)
         if !self.boxes.is_empty() {
@@ -1750,7 +2240,7 @@ mod tests {
 
     fn accepted(b: &mut Iocp, r: io::Result<Outcome>) -> Sock {
         match r {
-            Ok(Outcome::Accepted { sock, .. }) => b.adopt(sock).unwrap(),
+            Ok(Outcome::Accepted { sock, .. }) => b.adopt(RawResource::Socket(sock)).unwrap(),
             Ok(_) => panic!("not an accept"),
             Err(e) => panic!("accept: {e}"),
         }
@@ -1853,7 +2343,10 @@ mod tests {
         let (l, mut s, mut client) = served(&mut b);
         client.write_all(b"ab").unwrap();
         wait_readable(s.raw());
-        assert!(matches!(b.zero_read(2, &s), Start::Pending(Hold::Memory)));
+        assert!(matches!(
+            b.zero_read(2, s.net()),
+            Start::Pending(Hold::Memory)
+        ));
         assert!(matches!(
             b.cancel(2, Step::Peek { sock: &mut s }),
             Ok(Cancel::Pending)
@@ -1888,7 +2381,7 @@ mod tests {
         };
         // 空のストリームへの書きは同期に終わるが、それでも packet で読む
         assert!(matches!(
-            b.send_ex(2, &s, buf),
+            b.send_ex(2, s.net(), buf),
             Start::Pending(Hold::Memory)
         ));
         assert!(matches!(
@@ -2003,7 +2496,10 @@ mod tests {
     fn an_abort_nobody_asked_for_is_other() {
         let mut b = backend();
         let (l, s, _client) = served(&mut b);
-        assert!(matches!(b.zero_read(2, &s), Start::Pending(Hold::Memory)));
+        assert!(matches!(
+            b.zero_read(2, s.net()),
+            Start::Pending(Hold::Memory)
+        ));
         let over = b.boxes[&b.waiters[&2]].over;
         // SAFETY: `over` は backend が OS に預けた生きた箱で、番地は `&raw` で作る。OS は番地を操作の照合に使う
         let ok = unsafe { CancelIoEx(s.raw() as HANDLE, &raw const (*over).ov) };
@@ -2014,6 +2510,166 @@ mod tests {
         }
         b.close(s);
         b.close(l);
+    }
+
+    #[test]
+    fn a_pipe_child_end_is_not_inheritable() {
+        let mut b = backend();
+        for parent_reads in [true, false] {
+            let PipePair { parent, child } = b.pipe(parent_reads).unwrap();
+            let parent = parent.into_inner();
+            for end in [&parent, &child] {
+                assert!(!inherits(end.as_raw_handle() as SOCKET), "{parent_reads}");
+            }
+        }
+    }
+
+    /// 親の端が重なった呼び出しを受けるなら、データのないパイプの読みは待たずに `ERROR_IO_PENDING` で戻る。同期の端なら
+    /// 読みはデータが来るまで戻らないので、別のスレッドで出して戻りを 1 秒まで待つ
+    #[test]
+    fn a_pipe_parent_end_is_overlapped() {
+        let mut b = backend();
+        let PipePair { parent, child } = b.pipe(true).unwrap();
+        let parent = parent.into_inner();
+        // `HANDLE` は `Send` でないので、番号として渡す
+        let h = parent.as_raw_handle() as usize;
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let h = h as HANDLE;
+            let mut ov = OVERLAPPED::default();
+            let mut byte = 0u8;
+            // SAFETY: `ov` と `byte` はこのスレッドの局所変数で、取り消しの終わりを待ってから戻るので、OS が書く間も
+            // 生きている。端は親のスレッドが答えを受け取るまで閉じない
+            let code = unsafe {
+                if ReadFile(h, &mut byte, 1, ptr::null_mut(), &mut ov) != 0 {
+                    0
+                } else {
+                    let code = io::Error::last_os_error().raw_os_error();
+                    if code == Some(ERROR_IO_PENDING as i32) {
+                        CancelIoEx(h, &ov);
+                        let mut n = 0;
+                        GetOverlappedResult(h, &ov, &mut n, 1);
+                    }
+                    code.unwrap_or(0)
+                }
+            };
+            tx.send(code).unwrap();
+        });
+        let code = rx
+            .recv_timeout(LIMIT)
+            .expect("a read on the parent end did not return within 1 s");
+        assert_eq!(code, ERROR_IO_PENDING as i32);
+        drop(child);
+        drop(parent);
+    }
+
+    /// ディスクのファイルでない handle (パイプの端と NUL のデバイス) は、プールの仕事を出す前に取り込みで断る
+    #[test]
+    fn a_handle_that_is_not_a_disk_file_is_not_adopted_as_a_file() {
+        let mut b = backend();
+        let PipePair { child, .. } = b.pipe(true).unwrap();
+        let nul = std::fs::File::open("NUL").unwrap();
+        for handle in [child, nul.into()] {
+            let e = match b.adopt(RawResource::File(eml_rt::RawFile::new(handle))) {
+                Ok(_) => panic!("a handle that is not a disk file was adopted"),
+                Err(e) => e,
+            };
+            assert!(eml_rt::is_not_regular(&e), "{e}");
+        }
+    }
+
+    /// すぐ終わる子。このテストのバイナリを、どのテストにも当たらない名前で起こし直す
+    fn exiting_child() -> process::Child {
+        use process::Stdio;
+
+        // eml の起動と同じく `SPAWN_LOCK` の中で起動する (docs/spec/object-model.md の「子のプロセス」)
+        let _spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "no test has this name"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn process_of(child: &process::Child) -> RawProcess {
+        use std::os::windows::io::AsHandle;
+
+        RawProcess(child.as_handle().try_clone_to_owned().unwrap())
+    }
+
+    /// 文脈の `Arc` の写しがすべて放されたか。backend の分の1つだけが残る
+    fn contexts_freed(b: &Iocp) -> bool {
+        Arc::strong_count(&b.exited) == 1
+    }
+
+    /// callback が鍵を積んだ後でも、取り消しは待ちを外してその場で終わり、知らせは届かない
+    #[test]
+    fn an_unregistered_wait_after_its_callback_ran_is_done() {
+        let mut b = backend();
+        let mut child = exiting_child();
+        let process = process_of(&child);
+        assert!(child.wait().unwrap().success());
+        assert!(matches!(
+            b.start(1, Step::Wait { process: &process }),
+            Start::Pending(Hold::None)
+        ));
+        let start = Instant::now();
+        while !b.exited.keys.lock().unwrap().contains(&1) {
+            assert!(
+                start.elapsed() < LIMIT,
+                "the callback did not run within 1 s"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(matches!(
+            b.cancel(1, Step::Wait { process: &process }),
+            Ok(Cancel::Done)
+        ));
+        assert!(b.exited.keys.lock().unwrap().is_empty());
+        assert!(b.watches.is_empty());
+        assert!(contexts_freed(&b));
+        let mut events = Vec::new();
+        b.wait(Some(Duration::ZERO), &mut events).unwrap();
+        assert!(events.is_empty());
+    }
+
+    /// 発火した待ちは、知らせにするときに外してから文脈を放す。外した後は backend に何も残らない
+    #[test]
+    fn a_fired_wait_is_unregistered_before_its_context_is_freed() {
+        let mut b = backend();
+        let mut child = exiting_child();
+        let process = process_of(&child);
+        assert!(matches!(
+            b.start(1, Step::Wait { process: &process }),
+            Start::Pending(Hold::None)
+        ));
+        // 核は登録の後で `RawProcess` を落としうる。登録は backend が写したハンドルの上にある
+        drop(process);
+        assert!(matches!(
+            arrival_of(&mut b, 1),
+            Arrival::Done(Ok(Outcome::Size(0)))
+        ));
+        assert!(b.watches.is_empty());
+        assert!(contexts_freed(&b));
+        assert!(child.wait().unwrap().success());
+    }
+
+    /// 取り消さずに backend を落としても、待ちを外してから文脈を放す
+    #[test]
+    fn a_dropped_backend_unregisters_its_waits() {
+        let mut b = backend();
+        let mut child = exiting_child();
+        let process = process_of(&child);
+        assert!(matches!(
+            b.start(1, Step::Wait { process: &process }),
+            Start::Pending(Hold::None)
+        ));
+        let exited = Arc::clone(&b.exited);
+        drop(b);
+        assert_eq!(Arc::strong_count(&exited), 1);
+        assert!(child.wait().unwrap().success());
     }
 
     #[test]

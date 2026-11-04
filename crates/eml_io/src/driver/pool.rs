@@ -2,23 +2,19 @@
 //! 待つ。`submit` は列に積むだけで、呼んだスレッドを止めない。安全点を通らない待ちを作らないためである。
 
 use std::collections::{HashSet, VecDeque};
-use std::io;
 use std::mem;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle, ThreadId};
 use std::time::Duration;
 
-use super::backend::Backend;
+use super::backend::{Backend, Job};
 use super::inbox::{Answer, Inbox, Ticket};
 
 /// スレッドの数の上限。
 pub(crate) const POOL_LIMIT: usize = 32;
 /// 空いたスレッドが抜けるまでの長さ。
 pub(crate) const POOL_IDLE: Duration = Duration::from_secs(10);
-
-/// `Op::Job` の中身。
-pub(crate) type Job = Box<dyn FnOnce() -> io::Result<usize> + Send + 'static>;
 
 struct Shared {
     state: Mutex<State>,

@@ -29,19 +29,21 @@ mod word;
 
 pub use control::{Control, Limits, Stop};
 pub use driver::{
-    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, OsSocket, RawBuf,
-    RawSocket, Submit,
+    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, OsHandle, OsSocket,
+    PipePair, RawBuf, RawFile, RawPipe, RawProcess, RawResource, RawSocket, Submit,
 };
 pub use error::HeapError;
 pub use externs::{
-    ArithFault, Fault, Form, Handle, IndexFault, IoOp, IoReason, Open, Raised, ReadAmount,
+    ArithFault, Fault, Form, Handle, IndexFault, IoOp, IoReason, Launch, Open, Raised, ReadAmount,
     StdStream, Utf8Source, Write,
 };
 pub use frozen::Frozen;
 pub use heap::{Ctx, CtxStats, Heap, MaskItem, Stats, Token};
 pub use host::{
-    Buffering, Host, HostRef, Opened, Process, Spawn, Spawned, StdHost, StderrMode, StdinSlot,
-    Stdio, Stream, WriteMode, exit_code,
+    Buffering, Host, HostRef, LaunchCause, LaunchError, Launched, NOT_REGULAR, OpenMode, Opened,
+    PipeEnd, Process, SPAWN_LOCK, Spawn, Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec,
+    StdoutSpec, Stream, WriteMode, exit_code, here_file, io_reason, is_not_regular, last_program,
+    launch, open_regular, raw_process, redirect_file, regular_file,
 };
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};
@@ -72,12 +74,16 @@ const _: fn() = || {
     send_and_sync::<control::PageMap>();
 };
 
-// `RawBuf` は貸す側のスレッドで作り、driver を持つスレッドで使う。`RawSocket` は受けた driver のスレッドから、
-// 最初に使う worker のスレッドへ移る (docs/spec/vm.md の「時計と driver」)
+// `RawBuf` は貸す側のスレッドで作り、driver を持つスレッドとそのプールのスレッドで使う。`RawSocket` は受けた driver の
+// スレッドから、最初に使う worker のスレッドへ移る。`RawFile` は開いたタスクのスレッドから、取り込む driver のスレッドへ
+// 移る。`RawPipe` は作った worker のスレッドから、最初に使う worker のスレッドへ移る (docs/spec/vm.md の「時計と driver」)
 const _: fn() = || {
     fn send<T: Send>() {}
     send::<RawBuf>();
     send::<RawSocket>();
+    send::<RawPipe>();
+    send::<RawProcess>();
+    send::<RawResource>();
 };
 
 #[cfg(test)]
