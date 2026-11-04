@@ -1065,7 +1065,7 @@ impl<M: Mode> Ctx<M> {
     {
         let limits = control.limits();
         let word = control.word(k);
-        let heap = Heap::with_control(control.clone());
+        let heap = Heap::for_worker(control.clone(), k);
         let r = Ctx {
             heap,
             evv: Word::UNIT,

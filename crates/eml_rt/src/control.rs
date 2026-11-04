@@ -24,6 +24,8 @@ verus! {
 pub struct Limits {
     /// セッションのヒープが OS から取るページのバイト数の上限。
     pub max_bytes: usize,
+    /// 確保量の柔らかい上限。超えると、確保の多いタスクに `ResourceLimit` を起こさせる。`usize::MAX` なら置かない。
+    pub soft_bytes: usize,
     /// 深さの上限。VM のタスクのスタックの語の数で数える。
     pub max_depth: usize,
     /// `evv` の長さの上限。
@@ -34,7 +36,13 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { max_bytes: usize::MAX, max_depth: usize::MAX, max_evv: usize::MAX, workers: 1 }
+        Limits {
+            max_bytes: usize::MAX,
+            soft_bytes: usize::MAX,
+            max_depth: usize::MAX,
+            max_evv: usize::MAX,
+            workers: 1,
+        }
     }
 }
 
@@ -59,6 +67,8 @@ pub struct Control {
     end: AtomicU32,
     code: AtomicI64,
     bytes: AtomicUsize,
+    taken: Vec<AtomicUsize>,
+    next: AtomicUsize,
     signals: AtomicU32,
     watched: AtomicU32,
     limits: Limits,
@@ -331,6 +341,25 @@ impl IdCounts {
     }
 }
 
+/// 0 の数を `n` 個作る。
+fn byte_counters(n: usize) -> (r: Vec<AtomicUsize>)
+    ensures
+        r.len() == n,
+{
+    let mut counters = Vec::new();
+    let mut i = 0;
+    while i < n
+        invariant
+            counters.len() == i,
+            i <= n,
+        decreases n - i,
+    {
+        counters.push(AtomicUsize::new(0));
+        i += 1;
+    }
+    counters
+}
+
 /// 0 の止める語を `n` 個作る。
 fn stop_words(n: usize) -> (r: Vec<Arc<AtomicU32>>)
     ensures
@@ -365,6 +394,8 @@ impl Control {
             end: AtomicU32::new(0),
             code: AtomicI64::new(0),
             bytes: AtomicUsize::new(0),
+            taken: byte_counters(limits.workers),
+            next: AtomicUsize::new(limits.soft_bytes),
             signals: AtomicU32::new(0),
             watched: AtomicU32::new(0),
             limits,
@@ -394,6 +425,7 @@ impl Control {
             Control::new(
                 Limits {
                     max_bytes: usize::MAX,
+                    soft_bytes: usize::MAX,
                     max_depth: usize::MAX,
                     max_evv: usize::MAX,
                     workers: 1,
@@ -436,6 +468,9 @@ impl fmt::Display for Stop {
 
 // 止める語が伝えるのは「止めよ」のビットだけで、確保量の数が伝えるのもその値だけである。シグナルの語と見張りの語も
 // ビットだけを伝える。どれにも、ほかのメモリへの書き込みを公開する役はない。そのため、どの読み書きも Relaxed で足りる
+/// 柔らかい上限を越えた後の、閾値の間隔の下限。
+const MIN_GAP: usize = 1 << 16;
+
 impl Control {
     pub const INTERRUPT: u32 = 1;
     pub const MEMORY: u32 = 2;
@@ -594,6 +629,7 @@ impl Control {
         self.end.store(0, Ordering::Relaxed);
         self.signals.store(0, Ordering::Relaxed);
         self.watched.store(0, Ordering::Relaxed);
+        self.next.store(self.rearm(self.bytes()), Ordering::Relaxed);
     }
 
     // `Ctx::poll` は VM の呼び出しと戻りごとにこれを読む。総称でない関数は、`#[inline]` がないとほかの crate から
@@ -608,15 +644,67 @@ impl Control {
         self.bytes.load(Ordering::Relaxed)
     }
 
-    /// ページを取った分を足し、上限を超えたら `MEMORY` を立てる。
-    pub(crate) fn charge(&self, bytes: usize) {
-        let total = self
-            .bytes
-            .fetch_add(bytes, Ordering::Relaxed)
-            .saturating_add(bytes);
+    /// ページを取った分を worker `slot` の数と確保量に足す。硬い上限を超えたら `MEMORY` を立て、そうでなく柔らかい上限の
+    /// 閾値 `next` を越えたら、課金した worker の語にだけ `NOTICE` を立てる (docs/spec/object-model.md の「実行の制御」)。
+    pub(crate) fn charge(&self, slot: usize, bytes: usize) {
+        let old = self.bytes.fetch_add(bytes, Ordering::Relaxed);
+        let total = old.saturating_add(bytes);
+        if let Some(t) = self.taken.get(slot) {
+            t.fetch_add(bytes, Ordering::Relaxed);
+        }
         if total > self.limits.max_bytes {
             self.raise(Self::MEMORY);
+            return;
         }
+        let next = self.next.load(Ordering::Relaxed);
+        if old <= next && next < total && slot < self.words.len() {
+            self.notice(slot);
+        }
+    }
+
+    /// worker `k` のヒープが取ったページのバイト数の合計。単調に増え、払い戻しでは減らない。範囲の外の `k` は 0。
+    pub fn taken(&self, k: usize) -> usize {
+        self.taken.get(k).map_or(0, |t| t.load(Ordering::Relaxed))
+    }
+
+    /// 確保量 `b` のときの次の閾値。柔らかい上限の下なら上限そのもの、上なら残りの余裕の 1/4 (最小 `MIN_GAP`) だけ
+    /// 先に置くので、閾値は尽きない。
+    fn rearm(&self, b: usize) -> usize {
+        let soft = self.limits.soft_bytes;
+        if b < soft {
+            soft
+        } else {
+            b.saturating_add(MIN_GAP.max(self.limits.max_bytes.saturating_sub(b) / 4))
+        }
+    }
+
+    /// 確保量 `bytes` が閾値 `next` を越えていれば `Some((next, bytes))`。そうでなく確保量が柔らかい上限を下回り、
+    /// 閾値がそれより上にあるなら、閾値を柔らかい上限に戻して `None`。
+    pub fn pressure(&self) -> Option<(usize, usize)> {
+        let soft = self.limits.soft_bytes;
+        let next = self.next.load(Ordering::Relaxed);
+        let bytes = self.bytes();
+        if bytes > next {
+            return Some((next, bytes));
+        }
+        if bytes < soft && soft < next {
+            let _ = self
+                .next
+                .compare_exchange(next, soft, Ordering::Relaxed, Ordering::Relaxed);
+        }
+        None
+    }
+
+    /// 閾値を `next` から `rearm(bytes)` へ進める。ほかが先に動かしていれば何もせず偽を返す。
+    pub fn claim_pressure(&self, next: usize, bytes: usize) -> bool {
+        self.next
+            .compare_exchange(
+                next,
+                self.rearm(bytes),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            )
+            .is_ok()
     }
 
     /// 今の確保量に `bytes` を足すと上限を超えるか。確保より前に大きさが分かるとき、確保を試す前に止めるのに使う。

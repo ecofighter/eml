@@ -361,6 +361,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 |---|---|---|
 | `max_depth` | 2^27 語 (1 GiB 分のスタック) | OCaml 5 のスタックの既定の上限 (128M 語) と同じ量である。1段が 8 語なら、約 1600 万段まで入る |
 | `max_bytes` | 物理メモリの 80% | GHC がスタックの上限 (`-K`) の既定を物理メモリの 80% にしているのに倣う。ヒープの上限としての前例ではなく、「機械を使い切る前に、分かる誤りで止める」という考え方を借りる。物理メモリを読めない OS では上限なし (`usize::MAX`) にする |
+| `soft_bytes` | `max_bytes` の 7/8 (`max_bytes / 8 * 7`) | 硬い上限に当たる前に、確保の多いタスクを `ResourceLimit` で止める余裕を残す。`max_bytes` がなければ置かない。割合は `eml_cli` の方針で、`eml_rt` は値だけを受け取る ([オブジェクトモデル](object-model.md) の「実行の制御」) |
 | `max_evv` | 上限なし | `evv` はヒープの物体なので、確保量の上限で抑えられる |
 
 - 物理メモリは、unix では `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` で読む。macOS と Linux のどちらもこの2つを持つ。Windows では `GlobalMemoryStatusEx` の `ullTotalPhys` で読む。`eml_cli` の `src/` の `unsafe` は、この関数と、bin の `interrupt` モジュールと、`terminal.rs` の `stdout_width` の中だけに置く
@@ -369,7 +370,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `Foreign` の Rust の値が別に確保するメモリも `max_bytes` に数えない。`Std.Net.TcpStream` の `NetStream` の行の buffer (「操作の記録」) と、`Std.Tls.Conn` の平文の列、rustls の buffer、`pull_tls` が埋める `Vec` がこれに当たる。`Foreign` の物体そのものは数える。どれも読みの規則が量を抑える。`NetStream` の buffer は、残りが1行の上限 (1 048 576 バイト) を超えると読みを誤りで終える (「操作の記録」)。`Conn` の返していない平文は1つあたり 1 048 576 + 2 × 65 536 バイトまでである ([標準ライブラリ](stdlib.md) の「`Std.Tls`」)
 - 検査モードは解放したブロックを使い回さないので、`--debug-heap` の長い実行は、速いモードより先に `max_bytes` に当たりうる。暴走を止める安全網という上限の役 ([オブジェクトモデル](object-model.md) の「確保と解放」) は変わらないので、受け入れる
 - CLI のフラグ (`--max-depth` など) は足さない。要るとき (REPL など) に足す
-- `eml repl` の上限は `eml_cli::repl_limits()` が作る。確保量だけが違い、物理メモリの 40% である ([REPL の端末](repl.md) の「コマンドライン」)
+- `eml repl` の上限は `eml_cli::repl_limits()` が作る。確保量だけが違い、物理メモリの 40% である (柔らかい上限もその 7/8) ([REPL の端末](repl.md) の「コマンドライン」)
 - 深さか確保量の上限で止まったときは ``the call depth limit is exceeded in `f` `` か ``the memory limit is exceeded in `f` `` と表示し、終了コードは 1 である
 - `Async` のタスクの深さの上限は、タスクごとに `max_depth` を自分の深さの起点から数える。`par` の子の外で超えても run は止めず、そのタスクに種類 `ResourceLimit` の IO の失敗を起こす。文言は、起こすときに深さが本当に限度を超えていれば `the call depth limit is exceeded`、そうでなく旗だけなら `the memory soft limit is exceeded` である。どちらも位置を持たない (「`Async` のタスク」の「タスクの上限」)。捕まえられなかった失敗は、ほかのタスクの IO の失敗と同じく、`Async.run` が `run_result` の位置で起こし直す
 

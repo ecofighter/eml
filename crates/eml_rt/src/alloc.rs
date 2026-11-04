@@ -236,6 +236,8 @@ pub(crate) struct Pages {
     /// 別のスレッドからの解放を受ける先 (`RemoteSink`) の番地。`sink_new` で作り、`Drop` で手放す。どのページの頭にも
     /// この値を書き、ブロックの持ち主をこの値との比較で見分ける。
     sink: *const RemoteSink,
+    /// ページの数を足す worker の番号。
+    slot: usize,
     list: Vec<*mut PageHeader>,
     classes: [Class; 27],
     bytes: usize,
@@ -949,7 +951,7 @@ impl Pages {
     }
 
     // 実行
-    pub(crate) fn new(prefix_words: usize, control: Arc<Control>) -> (r: Pages)
+    pub(crate) fn new(prefix_words: usize, control: Arc<Control>, slot: usize) -> (r: Pages)
         requires
             prefix_words <= 1,
         ensures
@@ -968,6 +970,7 @@ impl Pages {
             prefix_words,
             control: ManuallyDrop::new(control),
             sink,
+            slot,
             list: Vec::new(),
             classes: [empty;27],
             bytes: 0,
@@ -1096,6 +1099,10 @@ impl Pages {
 
     pub(crate) fn control(&self) -> &Arc<Control> {
         &self.control
+    }
+
+    pub(crate) fn slot(&self) -> usize {
+        self.slot
     }
 
     /// ページを数える `Control` の番号。ページの表の登録の証は、この番号の `Control` のものである。
@@ -2104,7 +2111,7 @@ impl Pages {
             None => too_large(),
         };
         let (base, Tracked(raw), Tracked(dealloc)) = alloc_page(bytes);
-        charge_pages(&self.control, bytes);
+        charge_pages(&self.control, self.slot, bytes);
         // 検査モードのページは、物体の語をどこかへ渡す前に表に登録する (docs/spec/object-model.md の「ページの表」)
         let (dealloc, reg): (Tracked<Option<Dealloc>>, Tracked<Option<Registered>>) =
             if self.prefix_words > 0 {
@@ -3332,8 +3339,8 @@ fn dealloc_page(
 
 // セッションのページの数の加減 (信頼の一覧の T1)。値について何も約束しないので、検証には何も持ち込まない
 #[verifier::external_body]
-fn charge_pages(control: &Control, bytes: usize) {
-    control.charge(bytes)
+fn charge_pages(control: &Control, slot: usize, bytes: usize) {
+    control.charge(slot, bytes)
 }
 
 #[verifier::external_body]
@@ -3419,6 +3426,7 @@ mod tests {
         Pages::new(
             prefix_words,
             Arc::new(Control::new(crate::Limits::default())),
+            0,
         )
     }
 
