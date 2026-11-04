@@ -286,6 +286,9 @@ struct TaskCell {
     /// タスクの上限の旗。共有で、lock の下で誰でも立て、`ResourceLimit` を起こした実行系が `clear_limit` で下ろす
     /// (docs/spec/vm.md の「タスクの上限」)。
     limit: bool,
+    /// 待ちをまたぐタスクの数 (取ったページのバイト数)。持ち主だけが書き、`leave` が終わったエントリの分を足し、
+    /// `clear_limit` が 0 に戻す (docs/spec/vm.md の「セルと登録表」)。
+    bytes: usize,
 }
 
 /// エントリの `Task` が動き始めるときにセルから受け取る、タスクの上限の印 (docs/spec/vm.md の「タスクの上限」)。
@@ -293,6 +296,8 @@ struct TaskCell {
 pub(crate) struct TaskMarks {
     /// 旗が立っている。実行系はエントリの `Task` を保留にする。
     pub(crate) limit: bool,
+    /// 前のエントリまでのタスクの数。エントリの `Task` はここから数え始める。
+    pub(crate) bytes: usize,
 }
 
 struct ScopeCell {
@@ -1718,6 +1723,7 @@ impl Registry {
             run: None,
             detached: false,
             limit: false,
+            bytes: 0,
         }));
         self.scope_mut(scope)?.members.push(cell);
         self.stats.tasks += 1;
@@ -1757,7 +1763,11 @@ impl Registry {
         task.phase = Phase::Running;
         task.entries += 1;
         task.budget = BUDGET;
-        Ok((task.spawner, TaskMarks { limit: task.limit }))
+        let marks = TaskMarks {
+            limit: task.limit,
+            bytes: task.bytes,
+        };
+        Ok((task.spawner, marks))
     }
 
     /// 再開する仕事を実行系が動かし始めた。渡す `Wake` を返す。実行待ちから再開するタスクが取り消されていれば
@@ -1782,7 +1792,10 @@ impl Registry {
         if !io || task.budget == 0 {
             task.budget = BUDGET;
         }
-        let marks = TaskMarks { limit: task.limit };
+        let marks = TaskMarks {
+            limit: task.limit,
+            bytes: task.bytes,
+        };
         let fast = std::mem::take(&mut task.fast_yield);
         let from_job = std::mem::take(&mut task.woke_from_job);
         let ready = matches!(task.wait.take(), Some(Wait::Ready));
@@ -1793,13 +1806,15 @@ impl Registry {
         Ok((wake, marks))
     }
 
-    /// タスクの上限の旗を下ろす。`ResourceLimit` を起こした実行系が呼ぶ。もう放したセルは何もしない。旗を見る者が
-    /// もういないためである (docs/spec/vm.md の「タスクの上限」)。
+    /// タスクの上限の旗を下ろし、タスクの数を 0 に戻す。`ResourceLimit` を起こした実行系が呼ぶ。もう放したセルは
+    /// 何もしない。旗を見る者がもういないためである (docs/spec/vm.md の「タスクの上限」)。
     pub(crate) fn clear_limit(&mut self, cell: CellRef) -> Result<(), CellFault> {
         if self.live(cell).is_none() {
             return Ok(());
         }
-        self.task_mut(cell)?.limit = false;
+        let task = self.task_mut(cell)?;
+        task.limit = false;
+        task.bytes = 0;
         Ok(())
     }
 
@@ -1833,13 +1848,13 @@ impl Registry {
         }
     }
 
-    /// 待ちに入って `Finish` したエントリの `Task` の分だけ、セルごとに `entries` を1つ減らし、`cells` を空にする。
-    /// 返すのは 0 になったセルの数である。持ち主が次の集める地点の最初の区間で呼ぶ。0 のセルを減らすのは内部の誤り
+    /// 待ちに入って `Finish` したエントリの `Task` の分だけ、セルごとに `entries` を1つ減らしてそのエントリの数を
+    /// `bytes` に足し、`cells` を空にする。返すのは 0 になったセルの数である。持ち主が次の集める地点の最初の区間で呼ぶ。0 のセルを減らすのは内部の誤り
     /// である。もう放したセルは飛ばす。待ちに入ったエントリの `Task` が `Finish` に着く前に、同じタスクの次のエントリの
     /// `Task` がタスクを終え、ハンドルの `take` がセルを放しうるためである (docs/spec/vm.md の「救済」)。
-    pub(crate) fn leave(&mut self, cells: &mut Vec<CellRef>) -> Result<usize, CellFault> {
+    pub(crate) fn leave(&mut self, cells: &mut Vec<(CellRef, usize)>) -> Result<usize, CellFault> {
         let mut settled = 0;
-        for cell in cells.drain(..) {
+        for (cell, added) in cells.drain(..) {
             if self.live(cell).is_none() {
                 continue;
             }
@@ -1847,6 +1862,7 @@ impl Registry {
             task.entries = task.entries.checked_sub(1).ok_or(CellFault::Internal(
                 "a task leaves an entry it has not entered",
             ))?;
+            task.bytes = task.bytes.saturating_add(added);
             if task.entries == 0 {
                 settled += 1;
             }
@@ -5172,6 +5188,7 @@ fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
         run: None,
         detached: false,
         limit: false,
+        bytes: 0,
     }))
 }
 
@@ -7731,13 +7748,25 @@ fn a_limit_on_a_waiting_task_waits_for_its_entry() {
     let parked = sleeping_task(&shared, 0, 5);
     assert_eq!(limit_task(&shared, parked), None);
     let (_, marks) = shared.lock().resumed(parked, WOKE, false).unwrap();
-    assert_eq!(marks, TaskMarks { limit: true });
+    assert_eq!(
+        marks,
+        TaskMarks {
+            limit: true,
+            bytes: 0
+        }
+    );
     shared.lock().clear_limit(parked).unwrap();
     assert!(!shared.lock().task_mut(parked).unwrap().limit);
     let placed = placed_task(&shared, 0);
     assert_eq!(limit_task(&shared, placed), None);
     let (_, marks) = shared.lock().started(placed).unwrap();
-    assert_eq!(marks, TaskMarks { limit: true });
+    assert_eq!(
+        marks,
+        TaskMarks {
+            limit: true,
+            bytes: 0
+        }
+    );
     let finished = owned_task(&shared, 0);
     shared.lock().task_mut(finished).unwrap().phase = Phase::Finished;
     assert_eq!(limit_task(&shared, finished), None);
@@ -8330,7 +8359,7 @@ fn an_entry_count_follows_start_park_resume_and_finish() {
             .is_none()
     );
     assert_eq!(entries_of(&shared, cell), 1);
-    assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+    assert_eq!(shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 1);
     assert_eq!(entries_of(&shared, cell), 0);
     let mut out = Vec::new();
     expire(&shared, &mut NoDriver::default(), 0, 5, &mut out).unwrap();
@@ -8341,14 +8370,14 @@ fn an_entry_count_follows_start_park_resume_and_finish() {
     let run = shared.lock().ready(cell, Word::UNIT).unwrap();
     assert!(matches!(run, Runnable::Resume { cell: c, .. } if c == cell));
     assert_eq!(entries_of(&shared, cell), 1);
-    let mut left = vec![cell];
+    let mut left = vec![(cell, 0)];
     assert_eq!(shared.lock().leave(&mut left).unwrap(), 1);
     assert!(left.is_empty());
     shared.lock().resumed(cell, WOKE, false).unwrap();
     assert_eq!(entries_of(&shared, cell), 1);
-    assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+    assert_eq!(shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 1);
     assert!(matches!(
-        shared.lock().leave(&mut vec![cell]),
+        shared.lock().leave(&mut vec![(cell, 0)]),
         Err(CellFault::Internal(_))
     ));
 }
@@ -8366,12 +8395,12 @@ fn two_live_entries_keep_a_parked_task_unstealable() {
     assert_eq!(entries_of(&shared, cell), 2);
     let c = test_chan(&shared, 0);
     park_receiver(&shared, c, cell);
-    assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 0);
+    assert_eq!(shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 0);
     assert_eq!(entries_of(&shared, cell), 1);
     assert_eq!(send_now(&shared, c, 4).len(), 1);
     assert!(shared.lock().steal_wake(cell, 0, 1).unwrap().is_none());
     assert_eq!(shared.lock().task_mut(cell).unwrap().owner, 0);
-    assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+    assert_eq!(shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 1);
     assert!(matches!(
         shared.lock().steal_wake(cell, 0, 1).unwrap(),
         Some((k, 0)) if k == Word::UNIT
@@ -8423,13 +8452,64 @@ fn leave_skips_a_released_cell() {
     let next = placed_task(&shared, 0);
     assert!(shared.lock().scope_cell(cell.encode()).is_none());
     shared.lock().started(next).unwrap();
-    let mut left = vec![cell];
+    let mut left = vec![(cell, 0)];
     assert_eq!(shared.lock().leave(&mut left).unwrap(), 0);
     assert!(left.is_empty());
     assert_eq!(entries_of(&shared, next), 1);
     let scope = shared.lock().open_root(None, None).unwrap();
     assert!(matches!(
-        shared.lock().leave(&mut vec![scope]),
+        shared.lock().leave(&mut vec![(scope, 0)]),
         Err(CellFault::Internal(_))
     ));
+}
+
+/// 待ちに入って `Finish` したエントリの数は `leave` がセルに足し、次の `started` か `resumed` が返す。数は待ちをまたいで
+/// 足し続け、放したセルの分は捨てる (docs/spec/vm.md の「セルと登録表」)。
+#[test]
+fn leave_adds_the_bytes_and_resumed_returns_them() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let cell = placed_task(&shared, 0);
+    let (_, marks) = shared.lock().started(cell).unwrap();
+    assert_eq!(marks.bytes, 0);
+    for (now, added, total) in [(0, 100, 100), (5, 50, 150)] {
+        assert!(
+            shared
+                .lock()
+                .park_time(now, 5, cell, Word::UNIT)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(shared.lock().leave(&mut vec![(cell, added)]).unwrap(), 1);
+        let mut out = Vec::new();
+        expire(&shared, &mut NoDriver::default(), 0, now + 5, &mut out).unwrap();
+        assert_eq!(resumed_cells(&out), [(cell, WOKE)]);
+        let (_, marks) = shared.lock().resumed(cell, WOKE, false).unwrap();
+        assert_eq!(marks.bytes, total);
+    }
+    let gone = placed_task(&shared, 0);
+    shared.lock().started(gone).unwrap();
+    shared.lock().release(gone.index);
+    assert_eq!(shared.lock().leave(&mut vec![(gone, 7)]).unwrap(), 0);
+}
+
+/// 旗で `ResourceLimit` を起こした実行系の `clear_limit` は、旗と一緒にタスクの数も 0 に戻す。次のエントリは 0 から
+/// 数える (docs/spec/vm.md の「タスクの上限」)。
+#[test]
+fn clear_limit_zeroes_the_bytes() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let parked = sleeping_task(&shared, 0, 5);
+    shared.lock().task_mut(parked).unwrap().bytes = 4096;
+    assert_eq!(limit_task(&shared, parked), None);
+    let (_, marks) = shared.lock().resumed(parked, WOKE, false).unwrap();
+    assert_eq!(
+        marks,
+        TaskMarks {
+            limit: true,
+            bytes: 4096
+        }
+    );
+    shared.lock().clear_limit(parked).unwrap();
+    let mut cells = shared.lock();
+    let task = cells.task_mut(parked).unwrap();
+    assert_eq!((task.limit, task.bytes), (false, 0));
 }

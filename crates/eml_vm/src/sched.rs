@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{Ordering, fence};
 
 use eml_rt::{Completion, Control, Ctx, IoDriver, Mode, Stop};
 
@@ -14,7 +14,9 @@ use crate::cells::{
 use crate::driver::DriverKind;
 use crate::monitor::Monitor;
 use crate::vm::Task;
-use crate::workers::{EntryKind, Mailer, Notice, Ready, Run, Workers, rescuable, stopping};
+use crate::workers::{
+    EntryKind, Mailer, NO_CELL, Notice, Ready, Run, Workers, cell_word, rescuable, stopping,
+};
 
 /// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを、すべての
 /// worker の止める語に立てるので、`eml run` の次の同じシグナルはその場で終わらせ、どの worker も次の安全点で止まる
@@ -116,6 +118,7 @@ pub(crate) fn steal(
         return Ok(result);
     }
     let (from, me) = (victim as u32, here.me);
+    let start = out.len();
     // フレームを持たない、救済で受けていない始める仕事と再開する仕事だけを見る。`resume_io` の仕事は記録の持ち主に
     // 縛られるので盗まない
     let (taken, truncated) = run.steal_ready(
@@ -152,6 +155,13 @@ pub(crate) fn steal(
         },
         out,
     )?;
+    // 盗んだタスクはもう元の worker の実行待ちにないので、元の `top` からも消す (docs/spec/vm.md の
+    // 「タスクとスケジュール」)
+    for stolen in &out[start..] {
+        if let Runnable::Resume { cell, .. } | Runnable::ResumeIo { cell, .. } = stolen {
+            run.clear_top(victim, *cell);
+        }
+    }
     result.taken = taken;
     result.truncated = truncated;
     if taken == budget {
@@ -611,9 +621,17 @@ pub struct Scheduler<P: Policy> {
     /// 1つ以上を盗んだ救済の数と、救済で移した項の数。
     pub(crate) rescues: u64,
     pub(crate) rescued: u64,
-    /// 待ちに入って `Finish` したエントリの `Task` のセル。次の集める地点の最初の区間で、登録表の `leave` に渡して空にする
-    /// (docs/spec/vm.md の「救済」)。
-    pub(crate) left: Vec<CellRef>,
+    /// 待ちに入って `Finish` したエントリの `Task` のセルと、そのエントリが数えた分。次の集める地点の最初の区間で、
+    /// 登録表の `leave` に渡して空にする (docs/spec/vm.md の「救済」「セルと登録表」)。
+    pub(crate) left: Vec<(CellRef, usize)>,
+    /// 今の区間の始めに読んだ、この worker のヒープの `Control::taken`。区間は切り替えの地点と、エントリの `Task` が
+    /// 動き始める地点と、旗で `ResourceLimit` を起こした地点で区切る (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) mark: usize,
+    /// 今のタスクが自分の再開を実行待ちに積んだ (`yield_now`、`sleep 0`、速い道の譲り)。そのタスクは待ちに入っても
+    /// `top` に残す。切り替えで下ろす。
+    pub(crate) yielded: bool,
+    /// 欄に最後に書いた `(current, bytes, mark)` の写し。変わらない書き込みを飛ばす。
+    published: (u64, usize, usize),
     /// channel の予約から確定までに要るもの。予約と確定の間には安全点も切り替えもないので、安全点ではいつも空である
     /// (docs/spec/vm.md の「channel」)。
     pub(crate) hold: Option<Hold>,
@@ -711,6 +729,9 @@ impl<P: Policy> Scheduler<P> {
             rescues: 0,
             rescued: 0,
             left: Vec::new(),
+            mark: 0,
+            yielded: false,
+            published: (NO_CELL, 0, 0),
             hold: None,
             woken: Vec::new(),
             watcher: Watcher {
@@ -1267,6 +1288,85 @@ impl<P: Policy> Scheduler<P> {
 
     pub(crate) fn preemptions(&self) -> u64 {
         self.preemptions
+    }
+
+    /// 区間を閉じる。`Async` のタスクの区間なら、区間の始めからこの worker のヒープが取ったページのバイト数を、
+    /// そのタスクの数 (`counted`) とこのエントリの分 (`added`) に足す。`par` の右の子、`compute` の仕事、`main` は
+    /// セルを持たないので、どのタスクにも数えない (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn end_slice(&mut self, task: &mut Task) {
+        let now = self.watcher.control.taken(self.index);
+        if task.cell.is_some() {
+            let slice = now.saturating_sub(self.mark);
+            task.counted = task.counted.saturating_add(slice);
+            task.added = task.added.saturating_add(slice);
+        }
+        self.mark = now;
+    }
+
+    /// 動いているタスク `task` を欄に公開する。動き始めた `Async` のタスクならそのセルと数を、そうでなければ
+    /// `NO_CELL` を書く。`bytes` と `mark` を書く間は `current` を `NO_CELL` にしておき、読み手が `current` を前後で
+    /// 2回読んで組を確かめられるようにする (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn publish(&mut self, task: &Task) {
+        let slot = &self.run.slots[self.index];
+        match task.cell {
+            Some(cell) if !matches!(task.state, TaskState::Entry { .. }) => {
+                let want = (cell_word(cell), task.counted, self.mark);
+                if self.published == want {
+                    return;
+                }
+                slot.current.store(NO_CELL, Ordering::Relaxed);
+                fence(Ordering::Release);
+                slot.bytes.store(task.counted, Ordering::Relaxed);
+                slot.mark.store(self.mark, Ordering::Relaxed);
+                slot.current.store(want.0, Ordering::Release);
+                self.published = want;
+            }
+            _ => self.unpublish(),
+        }
+    }
+
+    /// 動いているタスクがないことを欄に公開する。
+    fn unpublish(&mut self) {
+        if self.published.0 != NO_CELL {
+            self.run.slots[self.index]
+                .current
+                .store(NO_CELL, Ordering::Release);
+            self.published.0 = NO_CELL;
+        }
+    }
+
+    /// 公開した今のタスクのセルが `cell` なら、その今の数。
+    pub(crate) fn published_count(&self, cell: CellRef) -> Option<usize> {
+        let (current, bytes, mark) = self.published;
+        (current == cell_word(cell)).then(|| {
+            let now = self.watcher.control.taken(self.index);
+            bytes.saturating_add(now.saturating_sub(mark))
+        })
+    }
+
+    pub(crate) fn offer_top(&self, cell: CellRef, count: usize) {
+        self.run.offer_top(self.index, cell, count);
+    }
+
+    pub(crate) fn clear_top(&self, cell: CellRef) {
+        self.run.clear_top(self.index, cell);
+    }
+
+    /// 待ちに入ったエントリの `Task` が `Finish` した。持ち主の次の集める地点が `entries` を減らし、このエントリの数
+    /// `added` をセルに足す。自分の再開を積んだタスクは実行待ちにいるので `top` に残し、本当に待つタスクは消す
+    /// (docs/spec/vm.md の「救済」「タスクとスケジュール」)。
+    pub(crate) fn left_entry(&mut self, cell: CellRef, added: usize) {
+        self.left.push((cell, added));
+        if !self.yielded {
+            self.clear_top(cell);
+        }
+    }
+
+    /// 走れるタスクがなく眠る。動いているタスクも実行待ちもないので、どちらも消す (docs/spec/vm.md の
+    /// 「タスクとスケジュール」)。
+    pub(crate) fn publish_idle(&mut self) {
+        self.unpublish();
+        self.run.drop_top(self.index);
     }
 
     /// 動くのをやめるタスクが使った語の数を覚える。スタックの長さは縮めないので、タスクの長さがそのままそのタスクの
@@ -2146,7 +2246,7 @@ mod tests {
         cells::park_receiver(shared, c, cell);
         let mut woken = cells::send_now(shared, c, 4);
         assert_eq!(woken.len(), 1);
-        assert_eq!(shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+        assert_eq!(shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 1);
         (cell, woken.remove(0))
     }
 
@@ -2199,7 +2299,7 @@ mod tests {
             [format!("wake {}", cell.encode())]
         );
         assert_eq!(cells::owner_of(&p.shared, cell), 0);
-        assert_eq!(p.shared.lock().leave(&mut vec![cell]).unwrap(), 1);
+        assert_eq!(p.shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 1);
         let (result, stolen) = p.rescue(usize::MAX);
         assert_eq!(result.taken, 1);
         assert!(matches!(
@@ -2472,13 +2572,13 @@ mod tests {
         }
         yielded(&shared, c);
         shared.lock().resumed(c, cells::WOKE, false).unwrap();
-        sched.left = vec![a, b, c];
+        sched.left = vec![(a, 0), (b, 0), (c, 0)];
         sched.gather(&mut ctx, 0, false).unwrap();
         assert!(sched.left.is_empty());
         assert_eq!(run.slots[1].settled.load(Ordering::Relaxed), 2);
         let entries = [a, b, c].map(|cell| cells::entries_of(&shared, cell));
         assert_eq!(entries, [0, 0, 1]);
-        sched.left.push(c);
+        sched.left.push((c, 0));
         sched.gather(&mut ctx, 0, false).unwrap();
         assert_eq!(run.slots[1].settled.load(Ordering::Relaxed), 3);
         assert_eq!(run.slots[0].settled.load(Ordering::Relaxed), 0);

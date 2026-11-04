@@ -270,6 +270,26 @@ pub(crate) struct Slot {
     /// `RescueAlways` の頼んだ印。持ち主が `Rescue` を送る前に立て、頼まれた worker が盗む前に下ろす
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) asked: AtomicBool,
+    /// 動いている `Async` のタスクのセルの符号 (`cell_word`)。なければ `NO_CELL`。持ち主の worker が切り替えの地点で
+    /// 書き、監視のスレッドが lock なしで読む。`bytes` と `mark` を書く間は `NO_CELL` にしておくので、前後で同じ値を
+    /// 読めた読み手の3つの値は組になっている (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) current: AtomicU64,
+    /// `current` のタスクの今の区間より前の数と、区間の始めの `Control::taken`。動いているタスクの数は
+    /// `bytes + taken(k) - mark` である。
+    pub(crate) bytes: AtomicUsize,
+    pub(crate) mark: AtomicUsize,
+    /// この worker の実行待ちのうち、数のいちばん大きいタスクのセルの符号とその数。なければ `NO_CELL`。持ち主が
+    /// 書き、救済した worker は盗んだタスクの分を `NO_CELL` に戻す。
+    pub(crate) top: AtomicU64,
+    pub(crate) top_bytes: AtomicUsize,
+}
+
+/// `Slot::current` と `Slot::top` の、タスクのないことを表す値。
+pub(crate) const NO_CELL: u64 = u64::MAX;
+
+/// `Slot::current` と `Slot::top` に置くセルの符号。
+pub(crate) fn cell_word(cell: CellRef) -> u64 {
+    cell.encode() as u64
 }
 
 /// 1回の run で worker が共有する表。run ごとに作り、run の終わりに捨てる。
@@ -346,6 +366,11 @@ impl Run {
                 futile_inbox: AtomicUsize::new(0),
                 futile_settled: AtomicU64::new(0),
                 asked: AtomicBool::new(false),
+                current: AtomicU64::new(NO_CELL),
+                bytes: AtomicUsize::new(0),
+                mark: AtomicUsize::new(0),
+                top: AtomicU64::new(NO_CELL),
+                top_bytes: AtomicUsize::new(0),
             })
             .collect();
         Run {
@@ -531,6 +556,34 @@ impl Run {
         if removed > 0 {
             slot.ready_entries.fetch_sub(removed, Ordering::Relaxed);
         }
+    }
+
+    /// worker `k` の実行待ちのタスク `cell` (数 `count`) を、今の `top` より大きいか同じなら `top` にする。同じセルなら
+    /// 数を書き直す。数を先に書くので、読み手が新しいセルと古い数の組を見るのは数を書き直したときだけである
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn offer_top(&self, k: usize, cell: CellRef, count: usize) {
+        let slot = &self.slots[k];
+        let word = cell_word(cell);
+        let top = slot.top.load(Ordering::Relaxed);
+        if top == NO_CELL || top == word || count >= slot.top_bytes.load(Ordering::Relaxed) {
+            slot.top_bytes.store(count, Ordering::Relaxed);
+            slot.top.store(word, Ordering::Release);
+        }
+    }
+
+    /// worker `k` の `top` が `cell` なら消す。ほかのセルに替わっていれば残す。
+    pub(crate) fn clear_top(&self, k: usize, cell: CellRef) {
+        let _ = self.slots[k].top.compare_exchange(
+            cell_word(cell),
+            NO_CELL,
+            Ordering::Release,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// worker `k` の `top` を消す。実行待ちが空になったときに持ち主が呼ぶ。
+    pub(crate) fn drop_top(&self, k: usize) {
+        self.slots[k].top.store(NO_CELL, Ordering::Release);
     }
 
     pub(crate) fn ready_is_empty(&self, k: usize) -> bool {

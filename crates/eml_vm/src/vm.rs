@@ -103,6 +103,11 @@ pub struct Task {
     pub(crate) job: Option<JobRef>,
     /// 深さの超過とタスクの旗をどう扱うか。`Ctx` の深さの上限の値と組で決まる (docs/spec/vm.md の「タスクの上限」)。
     pub(crate) limit: Limit,
+    /// `Async` のタスクの今の区間より前の数 (取ったページのバイト数)。エントリの `Task` はセルが返した値から数え始める
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) counted: usize,
+    /// このエントリの `Task` が数えた分。待ちに入って `Finish` したら、`leave` がセルの数に足す。
+    pub(crate) added: usize,
 }
 
 /// タスクごとの上限の状態。状態ごとに `Ctx` の深さの上限を決まった値にしておき、安全点の速い道は変えない
@@ -202,6 +207,8 @@ impl Task {
             placed: None,
             job: None,
             limit: Limit::Stops,
+            counted: 0,
+            added: 0,
         }
     }
 
@@ -254,6 +261,8 @@ impl Task {
             placed: None,
             job: None,
             limit: Limit::Task,
+            counted: 0,
+            added: 0,
         }
     }
 
@@ -300,6 +309,8 @@ impl Task {
             placed: None,
             job: None,
             limit,
+            counted: 0,
+            added: 0,
         }
     }
 
@@ -336,6 +347,8 @@ impl Task {
             placed: None,
             job: None,
             limit: Limit::Stops,
+            counted: 0,
+            added: 0,
         }
     }
 
@@ -644,6 +657,7 @@ fn limit_hit<R: Exec>(
     if !code.tables.unwind_at(task.pc).is_some_and(|row| row.entry) {
         return Ok(());
     }
+    let was_pending = task.limit == Limit::Pending;
     let real = real_limit(ctx, task.depth_offset);
     let real_over = task.stack_depth() > real;
     let message = if real_over {
@@ -675,6 +689,13 @@ fn limit_hit<R: Exec>(
     // evidence のない間の安全点ごとに lock を取らないためである。セルがもう死んでいれば、旗を見る者もいない
     if let Some(cell) = task.cell {
         sched.cells.lock().clear_limit(cell)?;
+        // 旗で起こしたら、タスクの数をここから数え直す (docs/spec/vm.md の「タスクとスケジュール」)
+        if was_pending {
+            task.counted = 0;
+            task.added = 0;
+            sched.mark = ctx.heap().control().taken(sched.index);
+            sched.publish(task);
+        }
     }
     Ok(())
 }
@@ -1859,6 +1880,7 @@ fn switch_away<R: Exec>(
         }
         // 眠る前に、ほかのスレッドから受けた解放が溜まっていれば取り込む (docs/spec/vm.md の「時計と driver」)
         ctx.reclaim_if_due();
+        sched.publish_idle();
         debug_assert!(
             sched.left.is_empty(),
             "an entry is left unsettled before a worker sleeps"
@@ -1903,6 +1925,7 @@ fn resume<R: Exec>(
         "a task to resume is not in the scheduler",
     ))?;
     let evv = std::mem::replace(&mut incoming.evv, Word::UNIT);
+    sched.end_slice(task);
     let saved = unsafe {
         switch_to(
             ctx,
@@ -1915,9 +1938,22 @@ fn resume<R: Exec>(
     let mut prev = std::mem::replace(task, incoming);
     let prev_id = sched.current;
     sched.set_current(next);
+    // 入るタスクを公開し、実行待ちを離れたので `top` から消す。まだ動いていないエントリの `Task` は `enter` が公開する
+    // (docs/spec/vm.md の「タスクとスケジュール」)
+    sched.yielded = false;
+    sched.publish(task);
+    if let Some(cell) = task.cell
+        && !matches!(task.state, TaskState::Entry { .. })
+    {
+        sched.clear_top(cell);
+    }
     sched.note_depth(&prev);
     match keep {
         Some(state) => {
+            // フレームを持ったまま横取りされたタスクは実行待ちに入る
+            if let (Some(cell), TaskState::Ready) = (prev.cell, &state) {
+                sched.offer_top(cell, prev.counted);
+            }
             prev.evv = saved;
             prev.state = state;
             sched.tasks[prev_id] = Some(prev);
@@ -3261,6 +3297,14 @@ fn enqueue<P: Policy>(
     run: Runnable,
     rescued: bool,
 ) -> Result<(), VmFault> {
+    // 今のタスクが自分の再開を積んだ。待ちに入っても実行待ちにいるので、今の数で `top` に出す
+    // (docs/spec/vm.md の「タスクとスケジュール」)
+    if let Runnable::Resume { cell, .. } | Runnable::ResumeIo { cell, .. } = run
+        && let Some(count) = sched.published_count(cell)
+    {
+        sched.offer_top(cell, count);
+        sched.yielded = true;
+    }
     let entry = match run {
         Runnable::Start {
             cell,
@@ -3404,6 +3448,12 @@ fn enter<R: Exec>(
     if marks.limit {
         mark_pending(ctx, task);
     }
+    // タスクの数は待ちをまたいでセルが持ち、このエントリはそこから数え始める (docs/spec/vm.md の「タスクとスケジュール」)
+    task.counted = marks.bytes;
+    task.added = 0;
+    sched.mark = ctx.heap().control().taken(sched.index);
+    sched.publish(task);
+    sched.clear_top(cell);
     let argc = usize::from(argc);
     let base = task.base;
     task.stack[base..base + argc].copy_from_slice(&args[..argc]);
@@ -3445,6 +3495,7 @@ fn entry_finish<R: Exec>(
             "an Async task ends in the middle of a yield or a par",
         ));
     }
+    sched.end_slice(task);
     // タスクの残りの `evv` を、タスクの ID のまま手放す
     let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
@@ -3465,10 +3516,9 @@ fn entry_finish<R: Exec>(
         for run in out {
             schedule(sched, run)?;
         }
+        sched.clear_top(cell);
     } else {
-        // 待ちに入ったタスクのフレームはここで終わった。持ち主の次の集める地点が `entries` を減らす
-        // (docs/spec/vm.md の「救済」)
-        sched.left.push(cell);
+        sched.left_entry(cell, task.added);
     }
     switch_away::<R>(code, ctx, task, sched, None)
 }
@@ -4257,6 +4307,7 @@ mod tests {
     use eml_rt::Control;
 
     use crate::cells::{MailItem, Registry, Shared};
+    use crate::workers::{NO_CELL, cell_word};
 
     fn empty_task(max_depth: usize) -> Task {
         Task {
@@ -4280,6 +4331,8 @@ mod tests {
             placed: None,
             job: None,
             limit: Limit::Stops,
+            counted: 0,
+            added: 0,
         }
     }
 
@@ -4890,5 +4943,143 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
         let end = task.stack_limit + 100;
         task.reserve(end);
         assert_eq!((task.stack.len(), task.stack.capacity()), (end, end));
+    }
+
+    /// worker 0 のヒープにページを取らせ、`Control::taken` が増えた分を返す。
+    fn take_pages(ctx: &mut Ctx<eml_rt::Checked>) -> usize {
+        let before = ctx.heap().control().taken(0);
+        let word = ctx.fresh_string(&"x".repeat(1 << 17));
+        unsafe { ctx.heap_mut().decref(word) }.unwrap();
+        let grown = ctx.heap().control().taken(0) - before;
+        assert!(grown > 0, "a large string takes no page");
+        grown
+    }
+
+    /// `end_slice` は区間の始めから取ったページの分を `Async` のタスクの `counted` と `added` に足し、区間の始めを
+    /// 進める。セルを持たないタスクには数えない。
+    #[test]
+    fn end_slice_adds_the_slice_to_counted_and_added() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.cell = Some(cell);
+        task.counted = 1000;
+        sched.mark = ctx.heap().control().taken(0);
+        let grown = take_pages(&mut ctx);
+        sched.end_slice(&mut task);
+        assert_eq!((task.counted, task.added), (1000 + grown, grown));
+        assert_eq!(sched.mark, ctx.heap().control().taken(0));
+        let mut outside = Task::new(&code, function(&code, "main"), DEPTH);
+        take_pages(&mut ctx);
+        sched.end_slice(&mut outside);
+        assert_eq!((outside.counted, outside.added), (0, 0));
+        assert_eq!(sched.mark, ctx.heap().control().taken(0));
+    }
+
+    /// フレームを持ったまま横取りされたタスクはその数で `top` に出し、入るタスクは `current` に公開する。横取りされた
+    /// タスクに戻ると、`current` がそのタスクになり、`top` から消える。
+    #[test]
+    fn a_preempted_task_is_offered_as_top_and_cleared_when_resumed() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let slot = |sched: &Scheduler<crate::Sequential>| {
+            let slot = &sched.run.slots[0];
+            (
+                slot.current.load(Ordering::Relaxed),
+                slot.bytes.load(Ordering::Relaxed),
+                slot.top.load(Ordering::Relaxed),
+                slot.top_bytes.load(Ordering::Relaxed),
+            )
+        };
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.counted = 500;
+        sched.mark = ctx.heap().control().taken(0);
+        sched.publish(&task);
+        assert_eq!(slot(&sched), (cell_word(cell), 500, NO_CELL, 0));
+        let mut other = Task::new(&code, function(&code, "main"), DEPTH);
+        other.worker = ctx.heap().worker();
+        other.state = TaskState::Ready;
+        let other_id = sched.add_task(other);
+        let grown = take_pages(&mut ctx);
+        let mine = sched.current;
+        resume::<Checked>(
+            &code,
+            &mut ctx,
+            &mut task,
+            &mut sched,
+            other_id,
+            Some(TaskState::Ready),
+        )
+        .unwrap();
+        assert_eq!(slot(&sched), (NO_CELL, 500, cell_word(cell), 500 + grown));
+        resume::<Checked>(
+            &code,
+            &mut ctx,
+            &mut task,
+            &mut sched,
+            mine,
+            Some(TaskState::Ready),
+        )
+        .unwrap();
+        assert_eq!(task.cell, Some(cell));
+        assert_eq!(
+            slot(&sched),
+            (cell_word(cell), 500 + grown, NO_CELL, 500 + grown)
+        );
+    }
+
+    /// 自分の再開を積んだタスクは今の数で `top` に出し、待ちに入っても残す。本当に待つタスクは `top` から消す。どちらも
+    /// このエントリの数を `left` に積む。
+    #[test]
+    fn a_self_yield_offers_top_and_a_real_wait_clears_it() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.cell = Some(cell);
+        task.counted = 300;
+        sched.mark = ctx.heap().control().taken(0);
+        sched.publish(&task);
+        let grown = take_pages(&mut ctx);
+        let top = |sched: &Scheduler<crate::Sequential>| {
+            let slot = &sched.run.slots[0];
+            (
+                slot.top.load(Ordering::Relaxed),
+                slot.top_bytes.load(Ordering::Relaxed),
+            )
+        };
+        let wake = Runnable::Resume {
+            cell,
+            worker: 0,
+            k: Word::UNIT,
+            wake: cells::WOKE,
+        };
+        enqueue(&mut sched, wake, false).unwrap();
+        assert!(sched.yielded);
+        assert_eq!(top(&sched), (cell_word(cell), 300 + grown));
+        sched.end_slice(&mut task);
+        sched.left_entry(cell, task.added);
+        assert_eq!(top(&sched), (cell_word(cell), 300 + grown));
+        // 次の区間で本当に待つ
+        sched.yielded = false;
+        sched.offer_top(cell, 300 + grown);
+        task.added = 0;
+        sched.end_slice(&mut task);
+        sched.left_entry(cell, task.added);
+        assert_eq!(top(&sched).0, NO_CELL);
+        assert_eq!(sched.left, [(cell, grown), (cell, 0)]);
+        // ほかのセルの再開は今のタスクの譲りでない
+        let other = cells::task_on(&sched.cells, 0, 0, false);
+        let wake = Runnable::Resume {
+            cell: other,
+            worker: 0,
+            k: Word::UNIT,
+            wake: cells::WOKE,
+        };
+        enqueue(&mut sched, wake, false).unwrap();
+        assert!(!sched.yielded);
+        assert_eq!(top(&sched).0, NO_CELL);
+        sched.left.clear();
     }
 }
