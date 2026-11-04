@@ -16,7 +16,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use eml_rt::{IoWaker, OpKey, RawBuf, RawResource, RawSocket};
+use eml_rt::{IoWaker, OpKey, PipePair, RawBuf, RawResource, RawSocket};
 use windows_sys::Win32::Foundation::{
     ERROR_NOT_FOUND, FALSE, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
     SetHandleInformation, WAIT_TIMEOUT,
@@ -795,6 +795,11 @@ impl Iocp {
     }
 }
 
+/// この backend は子のパイプを扱わない (docs/spec/vm.md の「時計と driver」)。
+fn no_pipes() -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, "the IOCP backend has no pipes")
+}
+
 impl Backend for Iocp {
     type Sock = Sock;
 
@@ -854,6 +859,7 @@ impl Backend for Iocp {
             RawResource::Socket(sock) => sock,
             // ファイルの読み書きは同期のハンドルへのプールの仕事なので、ポートに結び付けない
             RawResource::File(file) => return Ok(Sock::File(file.into_inner())),
+            RawResource::PipeRead(_) | RawResource::PipeWrite(_) => return Err(no_pipes()),
         };
         let s = sock.into_inner();
         let raw = s.as_raw_socket() as SOCKET;
@@ -861,6 +867,10 @@ impl Backend for Iocp {
         self.associate(raw)?;
         let v6 = name_of(raw, false)?.is_ipv6();
         Ok(Sock::Net(Net { s, v6 }))
+    }
+
+    fn pipe(&mut self, _parent_reads: bool) -> io::Result<PipePair> {
+        Err(no_pipes())
     }
 
     fn file_job(&self, sock: &Sock, write: bool, buf: RawBuf) -> Job {
@@ -934,6 +944,10 @@ impl Backend for Iocp {
             }
             Step::Accept { listener } => self.accept(key, listener.net()),
             Step::Connect { sock, peer } => self.connect(key, sock.net(), peer),
+            Step::Wait { .. } => Start::Done(Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the IOCP backend has no child-exit waits",
+            ))),
         }
     }
 

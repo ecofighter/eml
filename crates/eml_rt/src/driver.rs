@@ -66,12 +66,15 @@ pub enum Op {
     /// どの driver にも縛っていない OS の資源を取り込み、`Done::Handle` で返す。いつも受け付けで終わり、受けた
     /// driver の `adopt` と同じ規則で `Submit::Done` を返す。
     Adopt { res: RawResource },
+    /// 子のプロセス `process` が終わるまで待ち、`Done::Size(0)` で終わる。driver は子を回収しない。回収は Host の
+    /// `Process::wait` が行う。すでに終わって回収していない子なら、その場か次の `wait` で終わる。
+    Wait { process: RawProcess },
 }
 
 /// 終わった操作の中身。
 #[derive(Debug, PartialEq, Eq)]
 pub enum Done {
-    /// `Readable`、`Read`、`Write`、`Job` の値。`ShutdownWrite` と `SetNodelay` は 0 である。
+    /// `Readable`、`Read`、`Write`、`Job` の値。`ShutdownWrite`、`SetNodelay`、`Wait` は 0 である。
     Size(usize),
     /// `Listen` が作ったリスナーと、待ち受けるポート。
     Listener { handle: IoHandle, port: u16 },
@@ -84,7 +87,7 @@ pub enum Done {
     Handle(IoHandle),
 }
 
-/// OS のハンドルの持ち主の型。ファイル (と、後で子のパイプ) を driver と Host の間で受け渡す。
+/// OS のハンドルの持ち主の型。ファイルと子のパイプを driver と Host の間で受け渡す。
 #[cfg(unix)]
 pub type OsHandle = std::os::fd::OwnedFd;
 #[cfg(windows)]
@@ -105,10 +108,45 @@ impl RawFile {
     }
 }
 
-/// `adopt` に渡す、どの driver にも縛っていない OS の資源。
+/// `IoDriver::pipe` が作った、親の側のパイプの端。どの driver にも縛っていないので、どのスレッドへ移しても、そこで
+/// 落としてもよい。backend が使えるように用意してある (unix はブロックしない)。最初に操作を出す worker の driver が
+/// `adopt` で取り込む (docs/spec/vm.md の「時計と driver」)。
+#[derive(Debug)]
+pub struct RawPipe(OsHandle);
+
+impl RawPipe {
+    pub fn new(handle: OsHandle) -> RawPipe {
+        RawPipe(handle)
+    }
+
+    pub fn into_inner(self) -> OsHandle {
+        self.0
+    }
+}
+
+/// `Op::Wait` が待つ子のプロセス。unix はプロセスの番号で、持ち主は Host の子である。
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawProcess(pub i32);
+/// Windows は Host が写したプロセスのハンドルである。
+#[cfg(windows)]
+#[derive(Debug)]
+pub struct RawProcess(pub OsHandle);
+
+/// `IoDriver::pipe` の結果。`child` は子に渡す端で、ブロックし、子のプロセスに受け継がれない (unix は
+/// close-on-exec、Windows は継承しない設定)。起動が子のためにだけ受け継がせる。
+#[derive(Debug)]
+pub struct PipePair {
+    pub parent: RawPipe,
+    pub child: OsHandle,
+}
+
+/// `adopt` に渡す、どの driver にも縛っていない OS の資源。`PipeRead` は親が読む端、`PipeWrite` は親が書く端である。
 #[derive(Debug)]
 pub enum RawResource {
     Socket(RawSocket),
+    PipeRead(RawPipe),
+    PipeWrite(RawPipe),
     File(RawFile),
 }
 
@@ -220,11 +258,15 @@ pub trait IoDriver {
     fn bin(&self) -> Arc<HandleBin>;
     /// driver の参照を落とす。保留の操作は終わるまで OS の資源を生かす。前提はない。
     fn close(&mut self, handle: IoHandle);
-    /// 資源を自分のハンドルにして返す。`Done::Accepted` のソケットは自分に登録するか結び付ける。どの driver が受けた
-    /// ものでもよい。ファイルは登録も結び付けもせず、読み書きをプールの仕事にする。失敗すれば資源は閉じる。ソケットを
-    /// 外に出さない driver はソケットに、ファイルを扱わない driver はファイルに `Err` を返し、壊れた driver はどちらにも
-    /// `Err` を返す。
+    /// 資源を自分のハンドルにして返す。`Done::Accepted` のソケットとパイプの端は自分に登録するか結び付ける。どの
+    /// driver が受けたものでもよい。ファイルは登録も結び付けもせず、読み書きをプールの仕事にする。失敗すれば資源は
+    /// 閉じる。ソケットを外に出さない driver はソケットに、パイプやファイルを扱わない driver はそれに `Err` を返し、
+    /// 壊れた driver はどれにも `Err` を返す。
     fn adopt(&mut self, res: RawResource) -> io::Result<IoHandle>;
+    /// 子と親をつなぐパイプを1組作る。`parent_reads` が真なら親が読み、子が書く。`SPAWN_LOCK` を持つ間に作って旗を
+    /// 立てるので、同時に起動するほかの子は子の端を受け継がない。親の端はどの driver にも縛らずに返す。パイプを扱わない
+    /// driver と壊れた driver は `Err` を返す (docs/spec/vm.md の「時計と driver」)。
+    fn pipe(&mut self, parent_reads: bool) -> io::Result<PipePair>;
     /// 保留の操作をすべて取り消し、完了がすべて届くまで待って捨て、捨てた完了の中身のハンドルと `bin` のハンドルを
     /// 閉じる。仕事は上限なしに待ちきり、仕事の panic は待ちきった後で起こし直す。名前の解決は待たない。OS に出した
     /// 取り消しの終わりが上限までに届かなければ壊れた状態にする。driver が壊れているときは保留を残して戻る

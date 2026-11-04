@@ -30,7 +30,7 @@ mod word;
 pub use control::{Control, Limits, Stop};
 pub use driver::{
     Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, OsHandle, OsSocket,
-    RawBuf, RawFile, RawResource, RawSocket, Submit,
+    PipePair, RawBuf, RawFile, RawPipe, RawProcess, RawResource, RawSocket, Submit,
 };
 pub use error::HeapError;
 pub use externs::{
@@ -76,11 +76,13 @@ const _: fn() = || {
 
 // `RawBuf` は貸す側のスレッドで作り、driver を持つスレッドとそのプールのスレッドで使う。`RawSocket` は受けた driver の
 // スレッドから、最初に使う worker のスレッドへ移る。`RawFile` は開いたタスクのスレッドから、取り込む driver のスレッドへ
-// 移る (docs/spec/vm.md の「時計と driver」)
+// 移る。`RawPipe` は作った worker のスレッドから、最初に使う worker のスレッドへ移る (docs/spec/vm.md の「時計と driver」)
 const _: fn() = || {
     fn send<T: Send>() {}
     send::<RawBuf>();
     send::<RawSocket>();
+    send::<RawPipe>();
+    send::<RawProcess>();
     send::<RawResource>();
 };
 

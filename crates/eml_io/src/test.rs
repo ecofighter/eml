@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use eml_rt::{
-    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, RawResource,
-    Submit,
+    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, PipePair, RawBuf,
+    RawResource, Submit,
 };
 
 use crate::flag::Flag;
@@ -176,6 +176,7 @@ impl TestDriver {
         match pending.op {
             Op::Job(job) => done(job().map(Done::Size)),
             Op::Adopt { res } => done(self.adopt(res).map(Done::Handle)),
+            Op::Wait { .. } => done(Err(no_processes())),
             Op::Read { handle, buf } if self.files.contains_key(&handle) => {
                 done(self.file_io(handle, buf, false).map(Done::Size))
             }
@@ -303,6 +304,15 @@ impl TestDriver {
     }
 }
 
+/// テストの driver は子のプロセスを仮想にできないので、パイプも子の終わりの待ちも持たない
+/// (docs/spec/vm.md の「時計と driver」)。
+fn no_processes() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "the test driver has no processes",
+    )
+}
+
 /// 仮想のホストの `port`。仮想のホストの番地はいつも `127.0.0.1` と書く。
 fn localhost(port: u16) -> SocketAddr {
     SocketAddr::from((Ipv4Addr::LOCALHOST, port))
@@ -421,12 +431,17 @@ impl IoDriver for TestDriver {
                 io::ErrorKind::Unsupported,
                 "the test driver adopts no sockets",
             )),
+            RawResource::PipeRead(_) | RawResource::PipeWrite(_) => Err(no_processes()),
             RawResource::File(file) => {
                 let handle = self.net.handle();
                 self.files.insert(handle, fs::File::from(file.into_inner()));
                 Ok(handle)
             }
         }
+    }
+
+    fn pipe(&mut self, _parent_reads: bool) -> io::Result<PipePair> {
+        Err(no_processes())
     }
 
     fn quiesce(&mut self) {

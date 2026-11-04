@@ -891,3 +891,40 @@ fn a_binned_handle_keeps_its_queued_file_write() {
     assert_eq!(after.unwrap_err().kind(), ErrorKind::InvalidInput);
     std::fs::remove_file(&path).unwrap();
 }
+
+/// 子のプロセスは仮想にできないので、テストの driver はパイプも、パイプの取り込みも、子の終わりの待ちも断る
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn the_test_driver_has_no_pipes() {
+    let mut driver = TestDriver::new(None);
+    let no_processes = |e: std::io::Error| {
+        assert_eq!(e.kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(e.to_string(), "the test driver has no processes");
+    };
+    no_processes(driver.pipe(true).unwrap_err());
+    let (read, write) = std::io::pipe().unwrap();
+    for res in [
+        eml_rt::RawResource::PipeRead(eml_rt::RawPipe::new(read.into())),
+        eml_rt::RawResource::PipeWrite(eml_rt::RawPipe::new(write.into())),
+    ] {
+        no_processes(driver.adopt(res).unwrap_err());
+    }
+    match driver.submit(1, Op::Wait { process: process() }) {
+        Submit::Done(Err(e)) => no_processes(e),
+        other => panic!("a wait ended with {other:?}"),
+    }
+    assert_eq!(driver.pending(), 0);
+}
+
+/// 待つ子の代わり。テストの driver は中を見ない。
+#[cfg(unix)]
+fn process() -> eml_rt::RawProcess {
+    eml_rt::RawProcess(std::process::id() as i32)
+}
+
+/// Windows ではプロセスのハンドルの代わりに、テストの driver が見ないパイプの端を渡す。
+#[cfg(windows)]
+fn process() -> eml_rt::RawProcess {
+    let (read, _write) = std::io::pipe().unwrap();
+    eml_rt::RawProcess(read.into())
+}

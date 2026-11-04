@@ -413,6 +413,10 @@ impl eml_rt::IoDriver for DeadlineRecorder {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
+    fn pipe(&mut self, _parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
     fn quiesce(&mut self) {}
 }
 
@@ -694,6 +698,10 @@ impl eml_rt::IoDriver for ProbeRecorder {
 
     fn adopt(&mut self, res: eml_rt::RawResource) -> std::io::Result<eml_rt::IoHandle> {
         self.inner.adopt(res)
+    }
+
+    fn pipe(&mut self, parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        self.inner.pipe(parent_reads)
     }
 
     fn quiesce(&mut self) {

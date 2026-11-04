@@ -2,7 +2,7 @@
 //! 起こせないので、Miri では流さない (docs/implementation/testing.md の「核の Miri」)。
 
 use std::io;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use eml_rt::{IoDriver, Op, RawBuf};
 
@@ -22,11 +22,19 @@ fn in_child(path: &str, body: impl FnOnce()) {
     }
     // libtest のテストの道は crate の名前を含まない
     let name = path.strip_prefix("eml_io::").expect("a path in eml_io");
-    let out = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args(["--exact", name, "--nocapture", "--test-threads=1"])
         .env(CHILD, "1")
-        .output()
-        .unwrap();
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // ほかのテストが作るパイプの端を受け継がないよう、`SPAWN_LOCK` の中で起動する (fake.rs の `os_pipe`)
+    let spawning = eml_rt::SPAWN_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let child = command.spawn().unwrap();
+    drop(spawning);
+    let out = child.wait_with_output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "the child did not abort: {stderr}");
     assert!(stderr.contains(HELD_ABORT), "{stderr}");

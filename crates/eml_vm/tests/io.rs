@@ -332,6 +332,10 @@ impl IoDriver for HoldingDriver {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
+    fn pipe(&mut self, _parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
     fn quiesce(&mut self) {
         self.held.clear();
         self.done.clear();
@@ -541,6 +545,10 @@ impl IoDriver for Recorder {
 
     fn adopt(&mut self, res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
         self.inner.adopt(res)
+    }
+
+    fn pipe(&mut self, parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        self.inner.pipe(parent_reads)
     }
 
     fn quiesce(&mut self) {
@@ -1761,6 +1769,10 @@ impl IoDriver for FileWatch {
 
     fn adopt(&mut self, res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
         self.inner.adopt(res)
+    }
+
+    fn pipe(&mut self, parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        self.inner.pipe(parent_reads)
     }
 
     fn quiesce(&mut self) {

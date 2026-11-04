@@ -641,6 +641,10 @@ impl IoDriver for FakeDriver {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
+    fn pipe(&mut self, _parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
     fn quiesce(&mut self) {
         self.quiesces.fetch_add(1, Ordering::SeqCst);
         if self.drains {
@@ -823,6 +827,10 @@ impl IoDriver for StubDriver {
     fn close(&mut self, _handle: IoHandle) {}
 
     fn adopt(&mut self, _res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    fn pipe(&mut self, _parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 

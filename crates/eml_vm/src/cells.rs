@@ -5778,6 +5778,10 @@ impl IoDriver for NoDriver {
         Ok(99 + self.adopted)
     }
 
+    fn pipe(&mut self, _parent_reads: bool) -> io::Result<eml_rt::PipePair> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
     fn quiesce(&mut self) {}
 }
 

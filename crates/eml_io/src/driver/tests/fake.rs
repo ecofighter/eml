@@ -13,7 +13,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use eml_rt::{IoWaker, OpKey, RawBuf, RawResource, RawSocket};
+use eml_rt::{IoWaker, OpKey, PipePair, RawBuf, RawPipe, RawResource, RawSocket};
 
 use crate::driver::backend::{Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
 
@@ -38,6 +38,7 @@ pub(super) enum StepKind {
     Send,
     Accept,
     Connect(SocketAddr),
+    Wait,
 }
 
 /// 呼ばれた順の記録。
@@ -48,6 +49,8 @@ pub(super) enum Call {
     Close(u32),
     /// 受けたソケットを取り込み、この番号の行にした。
     Adopt(u32),
+    /// パイプを作った。中身は `parent_reads` である。
+    Pipe(bool),
     ShutdownWrite(u32),
     SetNodelay(u32, bool),
     Start(OpKey, StepKind),
@@ -182,11 +185,21 @@ impl Fake {
     }
 }
 
+/// OS のパイプ。同じバイナリのテストは子を起こすので、`SPAWN_LOCK` の中で作る。Apple の std は `pipe` の後で
+/// close-on-exec を立てるので、その間に起動した子が端を受け継ぐと、閉じたはずの端が開いたまま見えるためである
+/// (docs/spec/object-model.md の「子のプロセス」)。
+pub(super) fn os_pipe() -> (std::io::PipeReader, std::io::PipeWriter) {
+    let _spawning = eml_rt::SPAWN_LOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    std::io::pipe().expect("a pipe")
+}
+
 /// 受けたソケットの代わりの OS の記述子と、それが閉じたかを確かめる相手の端。偽の backend は OS のソケットを
 /// 作らないので、unix ではパイプの読む端を使う。Miri もパイプを扱える。
 #[cfg(unix)]
 pub(super) fn accepted() -> (RawSocket, Probe) {
-    let (read, write) = std::io::pipe().expect("a pipe");
+    let (read, write) = os_pipe();
     (RawSocket::new(read.into()), Probe(write))
 }
 
@@ -241,6 +254,7 @@ fn kind_of(step: &Step<'_, FakeSock>) -> StepKind {
         Step::Send { .. } => StepKind::Send,
         Step::Accept { .. } => StepKind::Accept,
         Step::Connect { peer, .. } => StepKind::Connect(*peer),
+        Step::Wait { .. } => StepKind::Wait,
     }
 }
 
@@ -305,6 +319,20 @@ impl Backend for Fake {
         let sock = self.sock();
         self.calls.push(Call::Adopt(sock.0));
         Ok(sock)
+    }
+
+    fn pipe(&mut self, parent_reads: bool) -> io::Result<PipePair> {
+        self.calls.push(Call::Pipe(parent_reads));
+        let (read, write) = os_pipe();
+        let (parent, child) = if parent_reads {
+            (read.into(), write.into())
+        } else {
+            (write.into(), read.into())
+        };
+        Ok(PipePair {
+            parent: RawPipe::new(parent),
+            child,
+        })
     }
 
     fn file_job(&self, _sock: &FakeSock, write: bool, buf: RawBuf) -> Job {

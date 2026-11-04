@@ -21,8 +21,8 @@ use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use eml_rt::{
-    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, RawResource,
-    Submit,
+    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, PipePair, RawBuf,
+    RawProcess, RawResource, Submit,
 };
 
 use backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
@@ -61,14 +61,16 @@ impl Broken {
     }
 }
 
-/// ハンドルの種類。ソケットの読み書きは backend の歩で進め、ファイルの読み書きはプールの仕事にする。
+/// ハンドルの種類。ソケットとパイプの読み書きは backend の歩で進め、ファイルの読み書きはプールの仕事にする。
+/// パイプに出せるのは読みと書きだけである。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Class {
     Socket,
+    Pipe,
     File,
 }
 
-/// driver が持つソケットかファイル。保留の操作がある間は、`close` されても閉じずに残す。
+/// driver が持つソケット、パイプ、ファイル。保留の操作がある間は、`close` されても閉じずに残す。
 struct Handle<S> {
     sock: S,
     class: Class,
@@ -120,6 +122,10 @@ enum Kind<S> {
     FileWrite {
         handle: IoHandle,
     },
+    /// 子の終わりの知らせ。ハンドルを引かないので向きを占めない。
+    Wait {
+        process: RawProcess,
+    },
 }
 
 impl<S> Kind<S> {
@@ -131,7 +137,7 @@ impl<S> Kind<S> {
             }
             Kind::Accept { listener } => Some((listener, Dir::Read)),
             Kind::Write { handle, .. } | Kind::FileWrite { handle } => Some((handle, Dir::Write)),
-            Kind::Connect { .. } | Kind::Lookup { .. } | Kind::Job => None,
+            Kind::Connect { .. } | Kind::Lookup { .. } | Kind::Job | Kind::Wait { .. } => None,
         }
     }
 
@@ -234,6 +240,7 @@ fn step_of<'a, S>(
             listener: sock(handles, *listener),
         },
         Kind::Connect { sock, peer, .. } => Step::Connect { sock, peer: *peer },
+        Kind::Wait { process } => Step::Wait { process },
         Kind::Lookup { .. } | Kind::Job | Kind::FileRead { .. } | Kind::FileWrite { .. } => {
             unreachable!("a thread's op has no step")
         }
@@ -357,6 +364,7 @@ impl<B: Backend> Driver<B> {
         match (kind, result) {
             (Kind::Readable { .. }, Ok(Outcome::Size(_))) => Flow::Finish(Ok(Done::Size(0)), false),
             (Kind::Read { .. }, Ok(Outcome::Size(n))) => Flow::Finish(Ok(Done::Size(n)), false),
+            (Kind::Wait { .. }, Ok(Outcome::Size(_))) => Flow::Finish(Ok(Done::Size(0)), false),
             (
                 Kind::Write {
                     handle,
@@ -627,16 +635,22 @@ impl<B: Backend> Driver<B> {
         }
     }
 
-    fn is_file(&self, handle: IoHandle) -> bool {
-        self.handles
-            .get(&handle)
-            .is_some_and(|entry| entry.class == Class::File)
+    fn class(&self, handle: IoHandle) -> Option<Class> {
+        self.handles.get(&handle).map(|entry| entry.class)
     }
 
-    /// ソケットを引く操作を受け付ける。
+    fn is_file(&self, handle: IoHandle) -> bool {
+        self.class(handle) == Some(Class::File)
+    }
+
+    /// ハンドルを引く歩の操作を受け付ける。ファイルの読み書きはここへ来ない。パイプには読みと書きだけを出せる。
+    /// パイプには readiness の問いと受けがなく、ファイルには歩がないためである (docs/spec/vm.md の「時計と driver」)。
     fn submit_io(&mut self, key: OpKey, handle: IoHandle, dir: Dir, kind: Kind<B::Sock>) -> Submit {
-        if self.is_file(handle) {
-            return Submit::Done(Err(not_a_socket()));
+        let transfer = matches!(kind, Kind::Read { .. } | Kind::Write { .. });
+        match self.class(handle) {
+            Some(Class::File) => return Submit::Done(Err(not_a_socket())),
+            Some(Class::Pipe) if !transfer => return Submit::Done(Err(not_a_socket())),
+            _ => {}
         }
         match self.claim(handle, dir) {
             Ok(()) => self.begin(key, Some((handle, dir)), Flow::Again(kind)),
@@ -804,6 +818,7 @@ impl<B: Backend> IoDriver for Driver<B> {
                 Submit::Pending
             }
             Op::Adopt { res } => Submit::Done(self.adopt(res).map(Done::Handle)),
+            Op::Wait { process } => self.begin(key, None, Flow::Again(Kind::Wait { process })),
         }
     }
 
@@ -905,10 +920,19 @@ impl<B: Backend> IoDriver for Driver<B> {
         }
         let class = match res {
             RawResource::Socket(_) => Class::Socket,
+            RawResource::PipeRead(_) | RawResource::PipeWrite(_) => Class::Pipe,
             RawResource::File(_) => Class::File,
         };
         let sock = self.backend.adopt(res)?;
         Ok(self.insert(sock, class))
+    }
+
+    fn pipe(&mut self, parent_reads: bool) -> io::Result<PipePair> {
+        if let Some(broken) = &self.broken {
+            // 壊れた後は OS の資源を新しく作らない
+            return Err(broken.error());
+        }
+        self.backend.pipe(parent_reads)
     }
 
     fn quiesce(&mut self) {
