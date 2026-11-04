@@ -80,7 +80,11 @@ impl<M: Mode> CodeBase<M> {
             cfg!(debug_assertions) || links.functions[i as usize] as usize >= known
         })
         .into_iter()
-        .map(|points| points.and_then(Result::ok).unwrap_or_default())
+        .map(|unwinds| {
+            unwinds
+                .and_then(Result::ok)
+                .map_or_else(Vec::new, |unwinds| unwinds.points)
+        })
         .collect();
         let mut result = Ok(());
         for (i, function) in program.functions.iter().enumerate() {

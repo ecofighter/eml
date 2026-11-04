@@ -34,7 +34,7 @@ use crate::check::{
 use crate::liveness;
 use crate::reuse;
 use crate::syntax::{layout_text, operation_text, prim_text, repr_text, rets_text};
-use crate::unwind::{self, UnwindPoint};
+use crate::unwind::{self, UnwindPoint, Unwinds};
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, LirFn, Mark, OpRet, Prim, Program, Repr,
     Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
@@ -76,12 +76,11 @@ enum Level {
 }
 
 /// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points`)。
-/// 表と「中断しうる」の不動点は、プログラムに1回だけ求める。`wanted` でない関数はたどらずに `None` にする。
+/// 検査の表は、プログラムに1回だけ求める。`wanted` でない関数はたどらずに `None` にする。
 pub(crate) fn unwind_points(
     program: &Program,
     wanted: impl Fn(FnIdx) -> bool,
-) -> Vec<Option<Result<Vec<UnwindPoint>, VerifyError>>> {
-    let aborts = unwind::may_abort(program);
+) -> Vec<Option<Result<Unwinds, VerifyError>>> {
     with_tables(program, |tables| {
         program
             .functions
@@ -96,7 +95,7 @@ pub(crate) fn unwind_points(
                         let mut checker =
                             Checker::new(program, tables, function, Level::Ownership, dominators);
                         checker.unwind = Some(Recorder {
-                            aborts: &aborts,
+                            entry: Vec::new(),
                             points: Vec::new(),
                         });
                         checker.run()
@@ -451,12 +450,12 @@ struct Checker<'a> {
     /// 定義されるので (R5)、関数に1つの表にする。
     unboxed: Vec<bool>,
     /// 巻き戻しの地点ごとの所有を書き留める先。`unwind_points` だけが与える。
-    unwind: Option<Recorder<'a>>,
+    unwind: Option<Recorder>,
 }
 
-/// 巻き戻しの地点を決める関数ごとの「中断しうる」(`unwind::may_abort`) と、書き留めた地点。
-struct Recorder<'a> {
-    aborts: &'a [bool],
+/// 書き留めたエントリの行と地点。
+struct Recorder {
+    entry: Vec<(VarId, u32)>,
     points: Vec<UnwindPoint>,
 }
 
@@ -486,7 +485,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn run(mut self) -> Result<Option<Vec<UnwindPoint>>, String> {
+    fn run(mut self) -> Result<Option<Unwinds>, String> {
         let function = self.function;
         self.clause_values()?;
         for (index, block) in function.blocks.iter().enumerate() {
@@ -505,7 +504,10 @@ impl<'a> Checker<'a> {
             }
             self.check_block(index, block, owned)?;
         }
-        Ok(self.unwind.map(|recorder| recorder.points))
+        Ok(self.unwind.map(|recorder| Unwinds {
+            entry: recorder.entry,
+            points: recorder.points,
+        }))
     }
 
     /// `clause` の印の関数の値の使いを確かめる (`Context::clause_values`)。
@@ -543,14 +545,23 @@ impl<'a> Checker<'a> {
 
     fn check_block(&mut self, index: u32, block: &Block, mut owned: Owned) -> Result<(), String> {
         let function = self.function;
+        if index == 0
+            && let Some(recorder) = &mut self.unwind
+        {
+            recorder.entry = owned
+                .iter()
+                .filter(|&(&var, _)| function.repr(var).is_rc())
+                .map(|(&var, _)| (var, 1))
+                .collect();
+        }
         for (at, stmt) in block.stmts.iter().enumerate() {
             self.cx.at = Site {
                 block: index,
                 index: at as i64,
             };
             self.check_stmt(&mut owned, stmt)?;
-            if let Some(Recorder { aborts, points }) = &mut self.unwind
-                && let Some((vars, landing)) = unwind::point(stmt, aborts)
+            if let Some(Recorder { entry: _, points }) = &mut self.unwind
+                && let Some((vars, landing)) = unwind::point(stmt)
             {
                 // 束縛した変数は命令が戻ってから現れるので、巻き戻しで手放すものに入れない
                 let (tokens, owned): (Vec<_>, Vec<_>) = owned

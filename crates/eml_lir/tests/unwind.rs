@@ -1,11 +1,11 @@
 //! 巻き戻しの点 (`eml_lir::unwind::points`)。入力は所有の段の verifier を通る、Perceus の後の LIR のテキストである
 //! (docs/spec/vm.md の「巻き戻しの表」)。
 
-use eml_lir::unwind::{UnwindPoint, may_abort, points};
+use eml_lir::unwind::{UnwindPoint, Unwinds, points};
 use eml_lir::{BlockId, VarId, parse, verify};
 
-/// `name` の関数の巻き戻しの点。入力が所有の段の verifier を通ることも確かめる。
-fn points_of(text: &str, name: &str) -> Vec<UnwindPoint> {
+/// `name` の関数の巻き戻しの表。入力が所有の段の verifier を通ることも確かめる。
+fn unwinds_of(text: &str, name: &str) -> Unwinds {
     let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
     if let Err(error) = verify(&program) {
         panic!("the input must verify: {error}\n{text}");
@@ -21,6 +21,20 @@ fn points_of(text: &str, name: &str) -> Vec<UnwindPoint> {
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
+/// `name` の関数の巻き戻しの地点。
+fn points_of(text: &str, name: &str) -> Vec<UnwindPoint> {
+    unwinds_of(text, name).points
+}
+
+/// `name` の関数のエントリの行。
+fn entry_of(text: &str, name: &str) -> Vec<(u32, u32)> {
+    unwinds_of(text, name)
+        .entry
+        .into_iter()
+        .map(|(var, count)| (var.0, count))
+        .collect()
+}
+
 fn point(block: u32, stmt: usize, owned: &[(u32, u32)], landing: Option<u32>) -> UnwindPoint {
     UnwindPoint {
         block: BlockId(block),
@@ -32,17 +46,6 @@ fn point(block: u32, stmt: usize, owned: &[(u32, u32)], landing: Option<u32>) ->
         tokens: Vec::new(),
         landing: landing.map(VarId),
     }
-}
-
-/// `name` の関数が中断しうるか。
-fn aborts(text: &str, name: &str) -> bool {
-    let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
-    let index = program
-        .functions
-        .iter()
-        .position(|function| function.name == name)
-        .unwrap_or_else(|| panic!("no `{name}`"));
-    may_abort(&program)[index]
 }
 
 #[test]
@@ -231,87 +234,8 @@ fn f(x.0: obj) -> obj {
     );
 }
 
-/// 中断しない関数の呼び出しは、巻き戻しの地点にならない (docs/spec/lir.md の「巻き戻しの地点」)。
-#[test]
-fn call_to_pure_function_is_not_a_point() {
-    let text = "\
-fn g(x.0: obj) -> obj {
-  return x.0
-}
-fn f(a.0: obj, b.1: obj) -> obj {
-  let r.2: obj = call g(a.0)
-  decref r.2
-  return b.1
-}
-";
-    assert_eq!(points_of(text, "f"), []);
-    assert!(!aborts(text, "g"));
-    assert!(!aborts(text, "f"));
-}
-
-#[test]
-fn call_to_function_that_calls_an_effectful_extern_is_a_point() {
-    let text = "\
-fn g(x.0: obj) -> obj {
-  dup x.0
-  let u.1: unit = extern Prelude.println(x.0)
-  return x.0
-}
-fn f(a.0: obj, b.1: obj) -> obj {
-  let r.2: obj = call g(a.0)
-  decref r.2
-  return b.1
-}
-";
-    assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);
-    assert!(aborts(text, "g"));
-    assert!(aborts(text, "f"));
-}
-
-/// 末尾の呼び出しも中断を伝える。`f` は `g` を末尾で呼ぶだけだが、`g` の `+` が `Panic` を起こしうるので、`f` を
-/// 末尾でなく呼ぶ `h` の呼び出しは地点である。
-#[test]
-fn tail_call_propagates_abort() {
-    let text = "\
-fn g(n.0: int) -> int {
-  let m.1: int = extern \"Prelude.Num Int.+\"(n.0, 1)
-  return m.1
-}
-fn f(n.0: int) -> int {
-  tail call g(n.0)
-}
-fn h(n.0: int, s.1: obj) -> obj {
-  let m.2: int = call f(n.0)
-  return s.1
-}
-";
-    assert!(aborts(text, "f"));
-    assert_eq!(points_of(text, "f"), []);
-    assert_eq!(points_of(text, "h"), [point(0, 0, &[(1, 1)], None)]);
-}
-
-/// 最小の不動点なので、中断する文を持たない相互再帰は中断しない。
-#[test]
-fn recursive_pure_functions_do_not_abort() {
-    let text = "\
-fn even(n.0: int) -> int {
-  let r.1: int = call odd(n.0)
-  return r.1
-}
-fn odd(n.0: int) -> int {
-  let r.1: int = call even(n.0)
-  return r.1
-}
-";
-    assert!(!aborts(text, "even"));
-    assert!(!aborts(text, "odd"));
-    assert_eq!(points_of(text, "even"), []);
-    assert_eq!(points_of(text, "odd"), []);
-}
-
-/// `apply` は、呼ぶ関数が中断しなくても地点である。すぐに再開する節は操作を起こしたフレームの上でその場で動くので、
-/// どの閉包の呼び出しにも中断が通りうる (docs/spec/lir.md の「巻き戻しの地点」)。末尾の `apply` も関数を中断しうる
-/// ものにする。
+/// `apply` は、呼ぶ関数によらず地点である。すぐに再開する節は操作を起こしたフレームの上でその場で動くので、
+/// どの閉包の呼び出しにも中断が通りうる (docs/spec/lir.md の「巻き戻しの地点」)。末尾の `apply` は地点にならない。
 #[test]
 fn apply_is_always_a_point() {
     let text = "\
@@ -328,16 +252,13 @@ fn h(c.0: tobj) -> tobj {
 }
 ";
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);
-    assert!(!aborts(text, "g"));
-    assert!(aborts(text, "f"));
-    assert!(aborts(text, "h"));
+    assert_eq!(points_of(text, "h"), []);
 }
 
 #[test]
 fn leaves_of_a_multi_value_call_are_not_owned() {
     // 複数の値を返す呼び出しの結果は、呼び出しが戻らなければまだないので、どの葉も数えない
-    // (docs/spec/vm.md の「巻き戻しの表」)。`f` が中断しうるのは
-    // この呼び出しだけによる
+    // (docs/spec/vm.md の「巻き戻しの表」)
     let text = "\
 fn g(x.0: obj) -> (obj, obj) {
   let z.1: obj = extern Prelude.exit(1)
@@ -350,7 +271,6 @@ fn f(a.0: obj, b.1: obj) -> obj {
   return b.1
 }
 ";
-    assert!(aborts(text, "f"));
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);
 }
 
@@ -374,6 +294,34 @@ fn g(e.0: obj, c.1: tobj poly) -> obj poly {
 ";
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
     assert_eq!(points_of(text, "g"), [point(0, 0, &[(0, 1)], None)]);
-    assert!(aborts(text, "f"));
-    assert!(aborts(text, "g"));
+}
+
+/// 呼ばれる側が中断するかを問わず、末尾でない呼び出しはすべて地点である (docs/spec/lir.md の「巻き戻しの地点」)。
+#[test]
+fn every_direct_call_is_a_point() {
+    let text = "\
+fn g(x.0: obj) -> obj {
+  return x.0
+}
+fn f(a.0: obj, b.1: obj) -> obj {
+  let r.2: obj = call g(a.0)
+  decref r.2
+  return b.1
+}
+";
+    assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);
+    assert_eq!(points_of(text, "g"), []);
+}
+
+/// エントリの行は、RC の表現を持つ引数だけを数 1 で持つ (docs/spec/lir.md の「巻き戻しの地点」)。
+#[test]
+fn the_entry_row_owns_the_rc_parameters() {
+    let text = "\
+fn f(a.0: obj, n.1: int, t.2: tobj) -> int {
+  decref a.0
+  decref t.2
+  return n.1
+}
+";
+    assert_eq!(entry_of(text, "f"), [(0, 1), (2, 1)]);
 }

@@ -1568,7 +1568,7 @@ fn unwind_point_count(program: &eml_lir::Program) -> usize {
     eml_lir::unwind::points(program, |_| true)
         .iter()
         .filter_map(|points| points.as_ref()?.as_ref().ok())
-        .map(Vec::len)
+        .map(|unwinds| unwinds.points.len())
         .sum()
 }
 
@@ -1588,7 +1588,7 @@ fn unwind_points() {
         ));
     }
     insta::assert_snapshot!(lines.join("\n"), @"
-    apply_float: 9
+    apply_float: 11
     apply_int: 13
     byte_loop: 7
     bytes_loop: 7
@@ -1606,12 +1606,12 @@ fn unwind_points() {
     loop: 4
     mandelbrot: 29
     nbody: 93
-    orders: 12
-    orders_by_hand: 12
+    orders: 13
+    orders_by_hand: 13
     par_tree: 37
     push_fold: 4
     push_fold_by_hand: 4
-    rbtree: 12
+    rbtree: 15
     records: 9
     records_wide: 13
     sieve_by_hand: 14
@@ -1622,18 +1622,18 @@ fn unwind_points() {
     state_loop_by_hand: 4
     state_nested: 5
     std_list: 13
-    std_map: 20
+    std_map: 29
     sum_loop: 4
-    tree: 15
-    tree_by_hand: 15
+    tree: 18
+    tree_by_hand: 18
     tree_map: 20
-    upsert: 23
-    upsert_by_hand: 23
-    scripts/wc: 46
+    upsert: 31
+    upsert_by_hand: 31
+    scripts/wc: 56
     scripts/grep: 61
-    scripts/logstat: 106
-    scripts/csv2jsonl: 112
-    scripts/deploy: 110
+    scripts/logstat: 119
+    scripts/csv2jsonl: 118
+    scripts/deploy: 127
     ");
 }
 
