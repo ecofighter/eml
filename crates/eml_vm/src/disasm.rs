@@ -13,12 +13,19 @@ pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
     let view = View::of(code);
     let mut out = String::new();
     for f in &code.functions {
-        writeln!(
+        write!(
             out,
             "fn {} (arity {}, frame {})",
             f.name, f.arity, f.frame_size
         )
         .unwrap();
+        if let Some(entry) = view.tables.unwind_at(f.start)
+            && entry.entry
+            && !entry.slots.is_empty()
+        {
+            write!(out, " entry unwind [{}]", unwind_slots(&entry.slots)).unwrap();
+        }
+        out.push('\n');
         for pc in f.start..f.end {
             writeln!(out, "  {pc:>4}  {}", view.line(pc, 0)).unwrap();
         }
@@ -55,6 +62,18 @@ fn mask_item(item: &MaskItem) -> String {
         write!(text, "*{}", item.skip).unwrap();
     }
     text
+}
+
+/// 巻き戻しの行の所有のスロット。参照が2つ以上ならその数を `*n` で添える。
+fn unwind_slots(slots: &[(u16, u32)]) -> String {
+    slots
+        .iter()
+        .map(|&(slot, count)| match count {
+            1 => format!("s{slot}"),
+            n => format!("s{slot}*{n}"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn slots(list: &[u32]) -> String {
@@ -369,19 +388,13 @@ impl<'a> View<'a> {
                 args(at, 2)
             ),
         };
+        // エントリの行は直前の関数の最後の命令の次の位置で引けてしまうので、見出しの行にだけ書く。
         // 手放すものも token も着地もない行は書かない。どの命令に行があるかは命令の種類で決まるので、書かなくても失うものはない
         if let Some(entry) = self.tables.unwind_at(pc + 1)
+            && !entry.entry
             && (!entry.slots.is_empty() || !entry.tokens.is_empty() || entry.landing.is_some())
         {
-            let slots: Vec<String> = entry
-                .slots
-                .iter()
-                .map(|&(slot, count)| match count {
-                    1 => format!("s{slot}"),
-                    n => format!("s{slot}*{n}"),
-                })
-                .collect();
-            write!(text, " unwind [{}]", slots.join(", ")).unwrap();
+            write!(text, " unwind [{}]", unwind_slots(&entry.slots)).unwrap();
             if !entry.tokens.is_empty() {
                 let tokens: Vec<u32> = entry.tokens.iter().map(|&slot| slot.into()).collect();
                 write!(text, " tokens [{}]", self::slots(&tokens)).unwrap();

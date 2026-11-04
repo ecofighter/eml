@@ -1,7 +1,7 @@
 //! 関数ごとの命令の生成 (docs/spec/vm.md の「命令ごとの実行」)。定数の atom は、命令の前に一時のスロットへ読み込む。
 
 use eml_extern::Extern;
-use eml_lir::unwind::UnwindPoint;
+use eml_lir::unwind::{UnwindPoint, Unwinds};
 use eml_lir::{
     Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Stmt,
     Term, VarId,
@@ -18,13 +18,14 @@ pub(crate) fn function<M: Mode>(
     program: &Program,
     index: FnIdx,
     function: &LirFn,
-    points: &[UnwindPoint],
+    unwinds: &Unwinds,
     links: &Links,
     constants: &mut Constants<'_, M>,
     out: &mut Tables,
 ) -> Result<FnEntry, CompileError> {
     let slots = allocate(function)?;
     let start = out.pc();
+    let unwinds_len = out.unwinds.len();
     let mut emitter = Emitter {
         program,
         function,
@@ -41,8 +42,9 @@ pub(crate) fn function<M: Mode>(
         self_tail_patches: Vec::new(),
         used: used_vars(function),
         elided: elided_decrefs(function),
-        points: points.iter().peekable(),
+        points: unwinds.points.iter().peekable(),
     };
+    emitter.entry_unwind(&unwinds.entry);
     for block in 0..function.blocks.len() {
         emitter.block_pcs[block] = emitter.out.pc();
         emitter.block(BlockId(block as u32))?;
@@ -50,6 +52,12 @@ pub(crate) fn function<M: Mode>(
     debug_assert!(
         emitter.points.next().is_none(),
         "every unwind point is a statement of the function"
+    );
+    debug_assert!(
+        emitter.out.unwinds[unwinds_len.saturating_sub(1)..]
+            .windows(2)
+            .all(|rows| rows[0].0 < rows[1].0),
+        "the positions of the unwind rows increase"
     );
     emitter.patch();
     for &at in &emitter.self_tail_patches {
@@ -384,6 +392,23 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 .collect(),
             tokens: point.tokens.iter().map(|&var| self.slot(var)).collect(),
             landing: point.landing.map(|var| self.slot(var)),
+            entry: false,
+        };
+        let pc = self.out.pc();
+        self.out.unwinds.push((pc, entry));
+    }
+
+    /// 関数のエントリの行を足す。エントリの位置は最初の命令の位置で、呼び出しの行は命令の次の位置なので重ならない
+    /// (docs/spec/vm.md の「巻き戻しの表」)。
+    fn entry_unwind(&mut self, owned: &[(VarId, u32)]) {
+        let entry = Unwind {
+            slots: owned
+                .iter()
+                .map(|&(var, count)| (self.slot(var), count))
+                .collect(),
+            tokens: Vec::new(),
+            landing: None,
+            entry: true,
         };
         let pc = self.out.pc();
         self.out.unwinds.push((pc, entry));

@@ -36,6 +36,8 @@ pub(crate) struct Unwind {
     pub(crate) tokens: Vec<Slot>,
     /// `apply` の着地の印の evidence のスロット。
     pub(crate) landing: Option<Slot>,
+    /// 関数のエントリの行。位置は関数の最初の命令で、`slots` は所有している引数である。
+    pub(crate) entry: bool,
 }
 
 /// 組み込みの命令 `Finish`、`ApplyRest`、`ChildDone`。関数の命令はこの後に並ぶ。
