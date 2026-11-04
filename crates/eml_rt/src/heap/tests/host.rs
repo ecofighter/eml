@@ -135,7 +135,7 @@ pub(super) struct Started {
     pub(super) args: Vec<String>,
     pub(super) env: Vec<(String, String)>,
     pub(super) cwd: Option<String>,
-    pub(super) stdio: (Stdio, Stdio, StderrSpec),
+    pub(super) stdio: (Stdio, Stdio, Stderr),
 }
 
 /// `MemoryHost::spawn` が受ける標準入力と標準出力の向き。ファイルと端を使う向きは断るので、残りの3つである。
@@ -144,6 +144,14 @@ pub(super) enum Stdio {
     Inherit,
     Null,
     Pipe,
+}
+
+/// `MemoryHost::spawn` が受ける段の標準エラーの向き。端を使う向きは断るので、残りの3つである。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stderr {
+    Inherit,
+    ToStdout,
+    Null,
 }
 
 impl MemoryHost {
@@ -336,8 +344,18 @@ impl Host for MemoryHost {
             StdoutSpec::Pipe => Stdio::Pipe,
             StdoutSpec::Given(_) | StdoutSpec::File { .. } => return Err(unsupported()),
         };
+        let stderrs = spawn
+            .stages
+            .iter()
+            .map(|stage| match stage.stderr {
+                StderrSpec::Inherit => Ok(Stderr::Inherit),
+                StderrSpec::ToStdout => Ok(Stderr::ToStdout),
+                StderrSpec::Null => Ok(Stderr::Null),
+                StderrSpec::Given(_) => Err(unsupported()),
+            })
+            .collect::<io::Result<Vec<_>>>()?;
         let mut processes: Vec<Box<dyn Process>> = Vec::new();
-        for (k, stage) in spawn.stages.iter().enumerate() {
+        for (k, (stage, stderr)) in spawn.stages.iter().zip(stderrs).enumerate() {
             if stage.program == "missing" {
                 for process in &mut processes {
                     process.kill()?;
@@ -362,7 +380,7 @@ impl Host for MemoryHost {
                 stdio: (
                     if k == 0 { stdin } else { Stdio::Pipe },
                     if k == last { stdout } else { Stdio::Pipe },
-                    stage.stderr,
+                    stderr,
                 ),
             });
             processes.push(Box::new(MemoryProcess {
@@ -582,7 +600,7 @@ mod std_host {
             stderr: StderrSpec::ToStdout,
         };
         let spawn = Spawn {
-            stages: &[stage],
+            stages: vec![stage],
             stdin: StdinSpec::Pipe,
             stdout: StdoutSpec::Pipe,
         };
@@ -599,13 +617,15 @@ mod std_host {
         assert_eq!(read, "in\nerr\n");
         assert_eq!(child.processes[0].wait().unwrap(), 3);
         let sleeper = Stage {
+            program: "sh",
             args: &["-c", "sleep 10"],
+            env: &[],
+            cwd: None,
             stderr: StderrSpec::Null,
-            ..stage
         };
         let mut child = host
             .spawn(Spawn {
-                stages: &[sleeper],
+                stages: vec![sleeper],
                 stdin: StdinSpec::Null,
                 stdout: StdoutSpec::Null,
             })
@@ -615,10 +635,13 @@ mod std_host {
         assert_eq!(child.processes[0].wait().unwrap(), 128 + 9);
         let missing = Stage {
             program: "eml-no-such-program",
-            ..sleeper
+            args: &["-c", "sleep 10"],
+            env: &[],
+            cwd: None,
+            stderr: StderrSpec::Null,
         };
         let missing = Spawn {
-            stages: &[missing],
+            stages: vec![missing],
             stdin: StdinSpec::Null,
             stdout: StdoutSpec::Null,
         };
@@ -649,7 +672,7 @@ mod std_host {
             Buffering::Line,
         );
         let spawn = Spawn {
-            stages: &[Stage {
+            stages: vec![Stage {
                 program: "./run.sh",
                 args: &[],
                 env: &[("FOO", "a"), ("FOO", "b")],
@@ -906,7 +929,7 @@ mod std_host {
     fn a_failed_stage_kills_the_stages_before_it() {
         use crate::{LaunchCause, LaunchError, Spawn, Stage, StderrSpec, StdinSpec, StdoutSpec};
         let (host, _, _) = std_host(Buffering::Line);
-        let sleeper = Stage {
+        let sleeper = || Stage {
             program: "sleep",
             args: &["30"],
             env: &[],
@@ -916,12 +939,12 @@ mod std_host {
         let missing = Stage {
             program: "eml-no-such-program",
             args: &[],
-            ..sleeper
+            ..sleeper()
         };
         let started = std::time::Instant::now();
         let error = host
             .spawn(Spawn {
-                stages: &[sleeper, sleeper, missing],
+                stages: vec![sleeper(), sleeper(), missing],
                 stdin: StdinSpec::Null,
                 stdout: StdoutSpec::Pipe,
             })
@@ -983,5 +1006,58 @@ mod std_host {
             run(&[("eml-first", 0), ("eml-last", 9)]),
             not_found("eml-last", IoReason::Other)
         );
+    }
+
+    /// 標準エラーの pipe (3) は、`pipes` を渡した最後の段だけが使える。`pipes` は標準入力、標準出力、標準エラーの順に
+    /// 呼ばれ、標準エラーの子の端が子の標準エラーになる。ほかの段の 3 と、`pipes` のない 3 は、`pipes` を呼ぶ前に
+    /// 起動の誤りにする。
+    #[cfg(unix)]
+    #[test]
+    fn a_stderr_pipe_is_given_to_the_last_stage_only() {
+        use std::sync::Arc;
+
+        use super::super::ctx::{fields, stage};
+        use crate::{Fault, HostRef, IoOp, IoReason, OsHandle, PipeEnd, launch};
+        let (host, _, _) = std_host(Buffering::Line);
+        let host = HostRef::new(Arc::new(host));
+        let control = Control::new(Limits::default());
+        let none = fields(&[]);
+        let talk = fields(&["-c", "echo out; echo err >&2"]);
+        let mut ends = Vec::new();
+        let mut readers = Vec::new();
+        let mut pipes = |end: PipeEnd| -> io::Result<OsHandle> {
+            ends.push(end);
+            let (reader, writer) = io::pipe()?;
+            // 書く端を閉じるので、子の標準入力はすぐに終わる
+            if end == PipeEnd::Stdin {
+                return Ok(OsHandle::from(reader));
+            }
+            readers.push(reader);
+            Ok(OsHandle::from(writer))
+        };
+        let invalid = Some(Fault::Io {
+            op: IoOp::Run,
+            name: "sh".into(),
+            reason: IoReason::Other,
+        });
+        let first = stage("sh", &talk, &none, "", 3) + &stage("sh", &talk, &none, "", 0);
+        let error = launch(&host, &control, &first, 1, "", 1, "", Some(&mut pipes)).err();
+        assert_eq!(error, invalid);
+        let last = stage("sh", &talk, &none, "", 3);
+        assert_eq!(
+            launch(&host, &control, &last, 1, "", 1, "", None).err(),
+            invalid
+        );
+        let launched = launch(&host, &control, &last, 2, "", 2, "", Some(&mut pipes));
+        let mut processes = launched.unwrap().spawned.processes;
+        assert_eq!(processes[0].wait().unwrap(), 0);
+        assert_eq!(ends, [PipeEnd::Stdin, PipeEnd::Stdout, PipeEnd::Stderr]);
+        let read = |reader: &mut io::PipeReader| {
+            let mut text = String::new();
+            reader.read_to_string(&mut text).unwrap();
+            text
+        };
+        assert_eq!(read(&mut readers[0]), "out\n");
+        assert_eq!(read(&mut readers[1]), "err\n");
     }
 }

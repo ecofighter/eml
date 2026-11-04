@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/std/proc_stage_redirect.em
 --- stderr ---
 --- runtime error ---
 cannot run `eml-first`: the standard output of a stage that is not last is redirected
-  at <std>/Proc.em:147:8
+  at <std>/Proc.em:151:5

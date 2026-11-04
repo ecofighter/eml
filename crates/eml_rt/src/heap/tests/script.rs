@@ -7,13 +7,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::ctx::{ctx_with, fields, spawn, stage, stdin_read};
-use super::host::{MemoryFile, MemoryHost, Started, Stdio};
+use super::host::{MemoryFile, MemoryHost, Started, Stderr, Stdio};
 use super::mortal;
 use super::string::text;
 use crate::externs::{FALSE, IndexFault, IoOp, IoReason, TRUE, Utf8Source};
 use crate::{
-    Control, Ctx, Fault, Form, Handle, HeapError, Limits, Mode, ReadAmount, StdStream, StderrSpec,
-    Stop, Stream, Word, Write,
+    Control, Ctx, Fault, Form, Handle, HeapError, Limits, Mode, ReadAmount, StdStream, Stop,
+    Stream, Word, Write,
 };
 
 fn s<M: Mode>(ctx: &mut Ctx<M>, x: &str) -> Word {
@@ -346,14 +346,14 @@ fn a_child_gets_its_lists_split<M: Mode>() {
                 &["-a", "", "x y"],
                 &[("K", "v"), ("K", "w")],
                 Some("sub".to_string()),
-                (Stdio::Inherit, Stdio::Null, StderrSpec::ToStdout)
+                (Stdio::Inherit, Stdio::Null, Stderr::ToStdout)
             ),
-            started(&[], &[], None, (Stdio::Null, Stdio::Pipe, StderrSpec::Null)),
+            started(&[], &[], None, (Stdio::Null, Stdio::Pipe, Stderr::Null)),
             started(
                 &[],
                 &[],
                 None,
-                (Stdio::Inherit, Stdio::Inherit, StderrSpec::Inherit)
+                (Stdio::Inherit, Stdio::Inherit, Stderr::Inherit)
             ),
         ]
     );

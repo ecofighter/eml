@@ -3278,7 +3278,7 @@ fn async_op<R: Exec>(
             let mut parents = Vec::new();
             let launched = {
                 let mut pipes = |end: PipeEnd| {
-                    driver.pipe(end == PipeEnd::Stdout).map(|pair| {
+                    driver.pipe(end != PipeEnd::Stdin).map(|pair| {
                         parents.push((end, pair.parent));
                         pair.child
                     })
@@ -3302,18 +3302,19 @@ fn async_op<R: Exec>(
                     return failed::<R>(code, ctx, task, dst, fault, Purity::Effectful);
                 }
             };
-            let (mut stdin, mut stdout) = (None, None);
+            let (mut stdin, mut stdout, mut stderr) = (None, None, None);
             for (end, parent) in parents {
                 match end {
                     PipeEnd::Stdin => stdin = Some(RawResource::PipeWrite(parent)),
                     PipeEnd::Stdout => stdout = Some(RawResource::PipeRead(parent)),
+                    PipeEnd::Stderr => stderr = Some(RawResource::PipeRead(parent)),
                 }
             }
             let programs = launched.programs;
             let processes = launched.spawned.processes;
             let fits = !processes.is_empty() && processes.len() == programs.len();
             let last = programs.last().cloned().unwrap_or_default();
-            let child = cells::ExecChild::new(programs, processes, stdin, stdout);
+            let child = cells::ExecChild::new(programs, processes, stdin, stdout, stderr);
             // 段と子の数が合わない Host の結果は、`Proc.spawn_raw` と同じく子を片づけてから起動の誤りにする
             if !fits {
                 drop(child);
@@ -3328,11 +3329,11 @@ fn async_op<R: Exec>(
             let w = unsafe { ctx.heap_mut() }.alloc_foreign(child, true);
             task.set(dst, w);
         }
-        ext @ (Extern::ExecStdin | Extern::ExecStdout) => {
-            let pipe = if ext == Extern::ExecStdin {
-                cells::ChildPipe::Stdin
-            } else {
-                cells::ChildPipe::Stdout
+        ext @ (Extern::ExecStdin | Extern::ExecStdout | Extern::ExecStderr) => {
+            let pipe = match ext {
+                Extern::ExecStdin => cells::ChildPipe::Stdin,
+                Extern::ExecStdout => cells::ChildPipe::Stdout,
+                _ => cells::ChildPipe::Stderr,
             };
             // 子は借りるだけで、組を作る後の `con` が消費する
             match cells::exec_take(ctx, task.get(arg(0)), pipe)? {
@@ -4525,6 +4526,7 @@ fn run_extern<R: Exec>(
             | Extern::ExecSpawnRaw
             | Extern::ExecStdin
             | Extern::ExecStdout
+            | Extern::ExecStderr
             | Extern::ExecStageCount
             | Extern::ExecSubmitWait
             | Extern::ExecOpChild

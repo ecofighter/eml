@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/io/try_io_pipe_stderr_on_proc.em
+---
+--- stdout ---
+Other: cannot run `eml-only`: the standard error pipe needs `Exec.spawn` on the last stage
+--- stderr ---

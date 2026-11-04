@@ -463,8 +463,8 @@ enum Prefix {
     Net,
     /// `Std.Stream` のファイルで、値は開いたパスである。`` cannot read `p` `` と `` cannot write to `p` `` である。
     File(Arc<str>),
-    /// `Std.Exec` の子の pipe で、値は端のつながる段のプログラムである。`` cannot read the output of `p` `` と
-    /// `` cannot write to `p` `` である。
+    /// `Std.Exec` の子の pipe で、値は端のつながる段のプログラムである。`` cannot read the output of `p` ``、
+    /// `` cannot read the errors of `p` `` と `` cannot write to `p` `` である。
     Child(Arc<str>, ChildPipe),
 }
 
@@ -901,7 +901,8 @@ enum Origin {
     Peer(SocketAddr),
     /// `Std.Stream` が開いた通常のファイル。値は開いたときに渡されたままのパスである。
     File(Arc<str>),
-    /// `Std.Exec` の子の pipe。`program` は端のつながる段 (標準入力なら先頭、標準出力なら最後) のプログラムである。
+    /// `Std.Exec` の子の pipe。`program` は端のつながる段 (標準入力なら先頭、標準出力と標準エラーなら最後) の
+    /// プログラムである。
     Child { program: Arc<str>, pipe: ChildPipe },
 }
 
@@ -912,6 +913,8 @@ pub(crate) enum ChildPipe {
     Stdin,
     /// 最後の段の標準出力で、親が読む。
     Stdout,
+    /// 最後の段の標準エラーで、親が読む。
+    Stderr,
 }
 
 impl ChildPipe {
@@ -920,6 +923,7 @@ impl ChildPipe {
         match self {
             ChildPipe::Stdin => "the input of",
             ChildPipe::Stdout => "the output of",
+            ChildPipe::Stderr => "the errors of",
         }
     }
 }
@@ -1020,6 +1024,7 @@ pub(crate) struct ExecChild {
     stages: Vec<ExecStage>,
     stdin: Option<Bind>,
     stdout: Option<Bind>,
+    stderr: Option<Bind>,
 }
 
 /// `ExecChild` の段の1つ。
@@ -1031,13 +1036,14 @@ struct ExecStage {
 }
 
 impl ExecChild {
-    /// `Std.Exec.spawn_raw` が起動した子。`programs` と `processes` は段ごとに先頭から並び、数が同じである。`stdin` と
-    /// `stdout` は driver の `pipe` が作った親の端である。
+    /// `Std.Exec.spawn_raw` が起動した子。`programs` と `processes` は段ごとに先頭から並び、数が同じである。`stdin`、
+    /// `stdout`、`stderr` は driver の `pipe` が作った親の端である。
     pub(crate) fn new(
         programs: Vec<Box<str>>,
         processes: Vec<Box<dyn Process>>,
         stdin: Option<RawResource>,
         stdout: Option<RawResource>,
+        stderr: Option<RawResource>,
     ) -> ExecChild {
         ExecChild {
             stages: programs
@@ -1051,6 +1057,7 @@ impl ExecChild {
                 .collect(),
             stdin: stdin.map(Bind::Unbound),
             stdout: stdout.map(Bind::Unbound),
+            stderr: stderr.map(Bind::Unbound),
         }
     }
 
@@ -1071,7 +1078,7 @@ impl ExecChild {
 /// のは、標準入力を読む子に EOF を届け、kill の前に終われるようにするためである (docs/spec/stdlib.md の「`Std.Exec`」)。
 impl Drop for ExecChild {
     fn drop(&mut self) {
-        for bind in [self.stdin.take(), self.stdout.take()]
+        for bind in [self.stdin.take(), self.stdout.take(), self.stderr.take()]
             .into_iter()
             .flatten()
         {
@@ -4479,7 +4486,7 @@ pub(crate) fn stream_source<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<W
     Ok(ctx.fresh_string(&name))
 }
 
-/// `Std.Exec.stdin` と `stdout`。借りた子 `child` から、まだ取り出していない pipe の端を移し、縛っていないまま
+/// `Std.Exec.stdin`、`stdout`、`stderr`。借りた子 `child` から、まだ取り出していない pipe の端を移し、縛っていないまま
 /// `Stream.Writer` か `Stream.Reader` の新しい物体にする。端がなければ (2回目か、pipe にしなかった向き)、IO の失敗の
 /// 文言を返す (docs/spec/stdlib.md の「`Std.Exec`」)。
 pub(crate) fn exec_take<M: Mode>(
@@ -4492,6 +4499,7 @@ pub(crate) fn exec_take<M: Mode>(
     let (end, stage, what) = match pipe {
         ChildPipe::Stdin => (c.stdin.take(), c.stages.first(), "the standard input"),
         ChildPipe::Stdout => (c.stdout.take(), c.stages.last(), "the output"),
+        ChildPipe::Stderr => (c.stderr.take(), c.stages.last(), "the errors"),
     };
     let program = stage
         .map(|s| Arc::clone(&s.program))
@@ -9422,6 +9430,7 @@ fn fake_child<M: Mode>(ctx: &mut Ctx<M>, programs: &[&str], raw: bool) -> (Word,
         processes,
         None,
         None,
+        None,
     );
     let w = unsafe { ctx.heap_mut() }.alloc_foreign(child, true);
     (w, kills, waits)
@@ -9649,6 +9658,57 @@ fn a_read_of_a_pipe_grows_at_submit() {
     let (_, message) = taken.failure().unwrap();
     assert_eq!(message, "cannot read the output of `eml`: gone");
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// 標準エラーの pipe は1回だけ取り出せ、読みの誤りの文言は最後の段の標準エラーを名指す (docs/spec/stdlib.md の
+/// 「`Std.Exec`」)。
+#[test]
+fn a_stderr_pipe_names_the_errors_of_the_last_stage() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let (child, _, _) = fake_child(&mut ctx, &["head", "tail"], true);
+    unsafe { &mut *ctx.heap().foreign_unique::<ExecChild>(child).unwrap() }.stderr =
+        Some(Bind::Bound {
+            host: 0,
+            handle: 0,
+            bin: Arc::default(),
+        });
+    let reader = exec_take(&mut ctx, child, ChildPipe::Stderr)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        exec_take(&mut ctx, child, ChildPipe::Stderr).unwrap(),
+        Err("cannot take the errors of `tail`: not available".to_string())
+    );
+    let buf = bytes_ab(&mut ctx, 0);
+    let token = submit_read(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        buf,
+        reader,
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    complete_op(
+        &registry,
+        &mut ctx,
+        &mut driver,
+        CellRef::decode(token),
+        Err(io::Error::other("gone")),
+        &mut out,
+    );
+    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let (_, message) = taken.failure().unwrap();
+    assert_eq!(message, "cannot read the errors of `tail`: gone");
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    unsafe { ctx.heap_mut().decref(child) }.unwrap();
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
 }

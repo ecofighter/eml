@@ -336,9 +336,10 @@ impl Host for CaptureHost {
         let mut next_stdin: Option<PipeReader> = None;
         let mut stdout = None;
         let mut failed = None;
-        for (k, (stage, mut command)) in spawn.stages.iter().zip(commands).enumerate() {
+        for (k, (stage, mut command)) in spawn.stages.into_iter().zip(commands).enumerate() {
             let mut out = None;
             let mut err = None;
+            let merged = matches!(stage.stderr, StderrSpec::ToStdout);
             let child = (|| {
                 command.stdin(match next_stdin.take() {
                     Some(reader) => Stdio::from(reader),
@@ -346,7 +347,7 @@ impl Host for CaptureHost {
                 });
                 if k < last {
                     let (reader, writer) = io::pipe()?;
-                    if stage.stderr == StderrSpec::ToStdout {
+                    if merged {
                         command.stderr(writer.try_clone()?);
                     }
                     command.stdout(writer);
@@ -355,25 +356,25 @@ impl Host for CaptureHost {
                     match last_out.take().unwrap_or(LastOut::Null) {
                         LastOut::Null => {
                             command.stdout(Stdio::null());
-                            if stage.stderr == StderrSpec::ToStdout {
+                            if merged {
                                 command.stderr(Stdio::null());
                             }
                         }
                         LastOut::File(file) => {
-                            if stage.stderr == StderrSpec::ToStdout {
+                            if merged {
                                 command.stderr(file.try_clone()?);
                             }
                             command.stdout(file);
                         }
                         LastOut::Given(handle) => {
-                            if stage.stderr == StderrSpec::ToStdout {
+                            if merged {
                                 command.stderr(handle.try_clone()?);
                             }
                             command.stdout(handle);
                         }
                         pipe @ (LastOut::Pipe | LastOut::Capture) => {
                             let (reader, writer) = io::pipe()?;
-                            if stage.stderr == StderrSpec::ToStdout {
+                            if merged {
                                 command.stderr(writer.try_clone()?);
                             }
                             command.stdout(writer);
@@ -393,6 +394,9 @@ impl Host for CaptureHost {
                     }
                     StderrSpec::Null => {
                         command.stderr(Stdio::null());
+                    }
+                    StderrSpec::Given(handle) => {
+                        command.stderr(handle);
                     }
                     StderrSpec::ToStdout => {}
                 }
@@ -637,7 +641,7 @@ mod tests {
             stderr,
         };
         host.spawn(Spawn {
-            stages: &[stage],
+            stages: vec![stage],
             stdin: StdinSpec::Null,
             stdout,
         })

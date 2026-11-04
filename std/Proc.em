@@ -122,12 +122,13 @@ piped c = c.stdout == DefaultStdout
 -- `spawn_raw` の5つの引数 (段の列、標準入力の向きと中身、標準出力の向きとパス) にする。`DefaultStdin` と
 -- `DefaultStdout` は、渡した `stdin` と `stdout` の向きにする。向きの値は、標準入力が 0 受け継ぐ、1 空、2 pipe、
 -- 3 文字列、4 ファイル、標準出力が 0 受け継ぐ、1 空、2 pipe、3 ファイルに書く、4 ファイルに足す、である。`Bool` は
--- 最後の段が標準エラーを pipe にしてよいかで、今は使わない。最後でない段の標準出力を設定していれば、起動の誤りにする
+-- 最後の段が標準エラーを pipe にしてよいか (`Exec.spawn` だけが `True`) である。最後でない段の標準出力の設定と、
+-- 許さない段の `PipeStderr` は、起動の誤りにする
 pub launch_args : Int -> Int -> Bool -> Cmd -> <IO> (String, Int, String, Int, String)
-launch_args stdin stdout _ c =
+launch_args stdin stdout pipe_stderr c =
   let (si, payload) = stdin_code stdin c.stdin
   let (so, path) = stdout_code stdout c.stdout
-  (stages (chain c Nil) "", si, payload, so, path)
+  (stages pipe_stderr (chain c Nil) "", si, payload, so, path)
 
 -- パイプラインの段を先頭から並べる
 chain : Cmd -> List Cmd -> List Cmd
@@ -138,13 +139,22 @@ chain_from (StdinFrom prev) acc = chain prev acc
 chain_from _ acc = acc
 
 -- 段の列。段ごとに、プログラム、引数の列、環境の列、作業ディレクトリ (空なら設定なし)、標準エラーの向きを並べる。
--- 最後でない段の標準出力は次の段への pipe なので、ほかの向きは黙って捨てずに誤りにする
-stages : List Cmd -> String -> <IO> String
-stages Nil acc = acc
-stages (c :: Nil) acc = stage c acc
-stages (c :: rest) acc =
-  if c.stdout == DefaultStdout then stages rest (stage c acc)
-  else fail_io Other "cannot run `\{c.program}`: the standard output of a stage that is not last is redirected"
+-- 最後でない段の標準出力は次の段への pipe なので、ほかの向きは黙って捨てずに誤りにする。`PipeStderr` は、
+-- `pipe_stderr` が `True` のときの最後の段のほかは誤りにする
+stages : Bool -> List Cmd -> String -> <IO> String
+stages _ Nil acc = acc
+stages pipe_stderr (c :: Nil) acc =
+  if c.stderr == PipeStderr && not pipe_stderr then needs_exec_spawn c.program
+  else stage c acc
+stages pipe_stderr (c :: rest) acc =
+  if c.stdout != DefaultStdout then
+    fail_io Other "cannot run `\{c.program}`: the standard output of a stage that is not last is redirected"
+  else if c.stderr == PipeStderr then needs_exec_spawn c.program
+  else stages pipe_stderr rest (stage c acc)
+
+needs_exec_spawn : String -> <IO> a
+needs_exec_spawn program =
+  fail_io Other "cannot run `\{program}`: the standard error pipe needs `Exec.spawn` on the last stage"
 
 stage : Cmd -> String -> String
 stage c acc =
@@ -172,6 +182,7 @@ stderr_code : StderrMode -> String
 stderr_code InheritStderr = "0"
 stderr_code MergeStderr = "1"
 stderr_code DiscardStderr = "2"
+stderr_code PipeStderr = "3"
 
 -- 長さを先に置くので、本文が NUL を含んでも区切りを取り違えない
 field : String -> String -> String

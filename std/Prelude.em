@@ -266,11 +266,13 @@ pub data StdoutMode =
   | StdoutAppend String
   deriving (Eq, Show)
 
--- 標準エラーの向き。`Proc.merge_stderr`、`discard_stderr` が設定し、利用者がコンストラクタを書く必要はない
+-- 標準エラーの向き。`Proc.merge_stderr`、`discard_stderr`、`Exec.pipe_stderr` が設定し、利用者がコンストラクタを書く
+-- 必要はない。`PipeStderr` は `Exec.spawn` の最後の段だけが使える
 pub data StderrMode =
   | InheritStderr
   | MergeStderr
   | DiscardStderr
+  | PipeStderr
   deriving (Eq, Show)
 
 -- コマンドリテラルの値。コマンドリテラルと `Std.Proc` の関数で組む (docs/spec/expressions.md の「コマンドリテラル」)

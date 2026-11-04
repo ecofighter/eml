@@ -7,23 +7,24 @@ import List
 import Proc
 import Stream
 
--- 段ごとの子のプロセスと、まだ取り出していない標準入力と標準出力の pipe の端を中身に持つ。Kind は `Lin` で、落とすと
--- 取り出していない端を閉じ、まだ待っていない段を kill してから待つ
+-- 段ごとの子のプロセスと、まだ取り出していない標準入力、標準出力、標準エラーの pipe の端を中身に持つ。Kind は `Lin`
+-- で、落とすと取り出していない端を閉じ、まだ待っていない段を kill してから待つ
 pub extern data Child
 
--- 標準入力と標準出力を pipe にして起動する。端は `stdin` と `stdout` で取り出す。取り消しの地点である
+-- 標準入力と標準出力を pipe にして起動する。端は `stdin` と `stdout` で取り出す。最後の段に `pipe_stderr` を
+-- 設定していれば、標準エラーも pipe にして `stderr` で取り出す。取り消しの地点である
 pub spawn : Cmd -> <IO, Async> Child
-spawn c = launch 2 2 c
+spawn c = launch True 2 2 c
 
 -- 標準入出力を受け継いで起動し、すべての段を待って最後の段の終了コードを返す。取り消しの地点である
 pub run : Cmd -> <IO, Async> Int
-run c = wait (launch 0 0 c)
+run c = wait (launch False 0 0 c)
 
 -- 標準出力を終わりまで読んで文字列にし、待った終了コードと組で返す。標準入力は空である。標準出力をリダイレクトした
 -- ときは、`Proc.output` と同じく何も読まずに空の文字列を返す
 pub output : Cmd -> <IO, Async> (String, Int)
 output c =
-  let ch = launch 1 2 c
+  let ch = launch False 1 2 c
   if c.stdout == DefaultStdout then
     let (r, ch) = stdout ch
     let (s, r) = Stream.read_all r
@@ -33,7 +34,7 @@ output c =
 
 pub output_bytes : Cmd -> <IO, Async> (Bytes, Int)
 output_bytes c =
-  let ch = launch 1 2 c
+  let ch = launch False 1 2 c
   if c.stdout == DefaultStdout then
     let (r, ch) = stdout ch
     let (b, r) = Stream.read_all_bytes r
@@ -55,13 +56,18 @@ capture_bytes c =
 exited : String -> Int -> <IO> a
 exited program code = fail_io Other "command `\{program}` exited with code \{show code}"
 
--- `DefaultStdin` と `DefaultStdout` を向き `stdin` と `stdout` にして起動する。取り消しが立っていれば起動しない
-launch : Int -> Int -> Cmd -> <IO, Async> Child
-launch stdin stdout c =
+-- `DefaultStdin` と `DefaultStdout` を向き `stdin` と `stdout` にして起動する。`pipe_stderr` は最後の段の
+-- `PipeStderr` を許すかである。取り消しが立っていれば起動しない
+launch : Bool -> Int -> Int -> Cmd -> <IO, Async> Child
+launch pipe_stderr stdin stdout c =
   if Async.cancel_requested () then raise_cancelled ()
   else
-    let (stages, si, payload, so, path) = Proc.launch_args stdin stdout False c
+    let (stages, si, payload, so, path) = Proc.launch_args stdin stdout pipe_stderr c
     spawn_raw stages si payload so path
+
+-- 最後の段の標準エラーを pipe にする。使えるのは `spawn` だけで、ほかの起動の形と `Proc` では起動の誤りである
+pub pipe_stderr : Cmd -> Cmd
+pipe_stderr c = { c | stderr = PipeStderr }
 
 -- 標準入力を閉じてから、すべての段を先頭から待ち、最後の段の終了コードを返す。シグナルで終わった段は 128 + 番号で
 -- ある。取り消しの地点である
@@ -121,10 +127,11 @@ wait_stage k c =
           drop c
           fail_code code prefix
 
--- 標準入力の pipe の書く端と、最後の段の標準出力の pipe の読む端を取り出す。2回目と、pipe にしなかった端は
--- `NotAvailable` の失敗である
+-- 標準入力の pipe の書く端と、最後の段の標準出力と標準エラーの pipe の読む端を取り出す。2回目と、pipe にしなかった
+-- 端は `NotAvailable` の失敗である
 pub extern stdin  : Child -> <IO> (Stream.Writer, Child)
 pub extern stdout : Child -> <IO> (Stream.Reader, Child)
+pub extern stderr : Child -> <IO> (Stream.Reader, Child)
 
 -- `Std.Async` の取り消しの地点と同じ失敗 (docs/spec/stdlib.md の「取り消し」)
 raise_cancelled : Unit -> <IO> a

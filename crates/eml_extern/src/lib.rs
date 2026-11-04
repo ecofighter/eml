@@ -1742,6 +1742,20 @@ table! {
                 )
             },
         ),
+        ExecStderr => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Exec.stderr",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
         ExecStageCount => borrowing(
             &[true],
             FunctionRow {
@@ -2033,6 +2047,7 @@ impl Extern {
                 | Extern::ExecSpawnRaw
                 | Extern::ExecStdin
                 | Extern::ExecStdout
+                | Extern::ExecStderr
                 | Extern::ExecStageCount
                 | Extern::ExecSubmitWait
                 | Extern::ExecOpChild

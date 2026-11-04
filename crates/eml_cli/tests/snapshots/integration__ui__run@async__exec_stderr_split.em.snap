@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 633
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/exec_stderr_split.em
+---
+--- stdout ---
+stdout: 2048 lines
+out 2047 0123456789abcdef0123456789abcdef0123456789abcdef0123456
+stderr: 2048 lines
+err 2047 0123456789abcdef0123456789abcdef0123456789abcdef0123456
+exit 0
+--- stderr ---

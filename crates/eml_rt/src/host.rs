@@ -1109,7 +1109,7 @@ pub enum StdoutSpec<'a> {
 }
 
 /// 子の標準エラーの向き。段ごとに決める。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum StderrSpec {
     /// eml のものを受け継ぐ。
     Inherit,
@@ -1117,10 +1117,12 @@ pub enum StderrSpec {
     ToStdout,
     /// 捨てる (`2>/dev/null`)。
     Null,
+    /// この端を渡す。`StdinSpec::Given` と同じく Host は読まない。
+    Given(OsHandle),
 }
 
 /// 起動する段の1つ。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Stage<'a> {
     /// `/` を含まなければ `PATH` から探す。`/` を含む相対パスは作業ディレクトリに対して解決する (`program_path`)。
     pub program: &'a str,
@@ -1154,10 +1156,10 @@ impl Stage<'_> {
 }
 
 /// `Host::spawn` に渡す、起動する子の設定。段を先頭から並べ、標準入力は先頭の段に、標準出力は最後の段に当てる。
-/// `Given` の端は Host が受け取り、子に渡した後で閉じる。
+/// `Given` の端は Host が受け取り、子に渡した後で閉じる。段の標準エラーも端を持ちうるので、段の列も `Spawn` が持つ。
 #[derive(Debug)]
 pub struct Spawn<'a> {
-    pub stages: &'a [Stage<'a>],
+    pub stages: Vec<Stage<'a>>,
     pub stdin: StdinSpec<'a>,
     pub stdout: StdoutSpec<'a>,
 }
@@ -1448,6 +1450,8 @@ pub enum PipeEnd {
     Stdin,
     /// 最後の段の標準出力。親が読む。
     Stdout,
+    /// 最後の段の標準エラー。親が読む。
+    Stderr,
 }
 
 /// `launch` が起動した子。`programs` は段ごとのプログラムの名前を先頭から並べる。
@@ -1460,14 +1464,16 @@ pub struct Launched {
 /// 環境の列、作業ディレクトリ、標準エラーの向き) を並べた列である。向きの番号は、`stdin` が 0 (受け継ぐ)、1 (空)、
 /// 2 (pipe)、3 (`stdin_payload` の文字列)、4 (`stdin_payload` のパスのファイル)、`stdout` が 0 (受け継ぐ)、1 (空)、
 /// 2 (pipe)、3 (`stdout_path` に書く)、4 (`stdout_path` に足す)、標準エラーが 0 (受け継ぐ)、1 (標準出力に合わせる)、
-/// 2 (捨てる) である。
+/// 2 (捨てる)、3 (pipe) である。
 ///
 /// 読めない列、NUL を含む要素、空か `=` を含む環境変数の名前、範囲の外の向きは、Host を呼ばずに起動の誤り
 /// (`InvalidInput`) にする。止める語が起動の前に立っていれば起動しない (docs/spec/object-model.md の「実行の制御」)。
 /// 段の数は1つ以上である。誤りの名前は、`LaunchError` を持つ誤りならその段の、ほかは最後の段のプログラムである。
 ///
 /// `pipes` があれば、pipe の向き (2) は Host の pipe でなく、`pipes` が作った子の端を `Given` で渡す (`Std.Exec`)。
-/// 呼ぶのは列と向きを確かめた後で、標準入力、標準出力の順である。`pipes` の誤りは、その端の段の起動の誤りにする。
+/// 標準エラーの pipe (3) は、`pipes` を渡したときの最後の段だけが使え、ほかは起動の誤り (`InvalidInput`) にする。
+/// `Spawned` は標準エラーの読み手を持たないためである。`pipes` を呼ぶのは列と向きを確かめた後で、標準入力、標準出力、
+/// 標準エラーの順である。`pipes` の誤りは、その端の段の起動の誤りにする。
 /// `launch` は `SPAWN_LOCK` を持たないので、`pipes` と `Host::spawn` は順にそれを取る (docs/spec/object-model.md の
 /// 「子のプロセス」)。
 #[allow(clippy::too_many_arguments)]
@@ -1497,6 +1503,8 @@ pub fn launch(
             return Err(invalid());
         }
         let mut parsed = Vec::new();
+        // 段ごとの標準エラーの向き。`None` は pipe (3) で、その端は標準入力と標準出力の端の後で作る
+        let mut stderrs = Vec::new();
         for stage in decoded.chunks(5) {
             let &[program, args, env, cwd, stderr] = stage else {
                 return Err(invalid());
@@ -1514,29 +1522,24 @@ pub fn launch(
             {
                 return Err(invalid());
             }
-            let stderr = match stderr {
-                "0" => StderrSpec::Inherit,
-                "1" => StderrSpec::ToStdout,
-                "2" => StderrSpec::Null,
+            stderrs.push(match stderr {
+                "0" => Some(StderrSpec::Inherit),
+                "1" => Some(StderrSpec::ToStdout),
+                "2" => Some(StderrSpec::Null),
+                "3" => None,
                 _ => return Err(invalid()),
-            };
+            });
             let cwd = (!cwd.is_empty()).then_some(cwd);
-            parsed.push((program, args, env, cwd, stderr));
+            parsed.push((program, args, env, cwd));
         }
-        let stages: Vec<Stage<'_>> = parsed
-            .iter()
-            .map(|(program, args, env, cwd, stderr)| Stage {
-                program,
-                args,
-                env,
-                cwd: *cwd,
-                stderr: *stderr,
-            })
-            .collect();
         if !(0..=4).contains(&stdin) || !(0..=4).contains(&stdout) {
             return Err(invalid());
         }
-        let last = stages.len() - 1;
+        let last = parsed.len() - 1;
+        if stderrs[..last].iter().any(Option::is_none) || stderrs[last].is_none() && pipes.is_none()
+        {
+            return Err(invalid());
+        }
         let mut given = |end: PipeEnd, stage: usize| -> io::Result<Option<OsHandle>> {
             match pipes.as_mut() {
                 Some(pipes) => pipes(end)
@@ -1565,8 +1568,24 @@ pub fn launch(
                 mode: WriteMode::Append,
             },
         };
+        if stderrs[last].is_none() {
+            stderrs[last] = given(PipeEnd::Stderr, last)?.map(StderrSpec::Given);
+        }
+        let stages = parsed
+            .iter()
+            .zip(stderrs)
+            .map(|((program, args, env, cwd), stderr)| {
+                Ok(Stage {
+                    program,
+                    args,
+                    env,
+                    cwd: *cwd,
+                    stderr: stderr.ok_or_else(invalid)?,
+                })
+            })
+            .collect::<io::Result<_>>()?;
         host.host.spawn(Spawn {
-            stages: &stages,
+            stages,
             stdin,
             stdout,
         })
@@ -1922,7 +1941,7 @@ impl Host for StdHost {
         let mut next_stdin = None;
         let mut shared = None;
         let mut failed = None;
-        for (k, (stage, mut command)) in spawn.stages.iter().zip(commands).enumerate() {
+        for (k, (stage, mut command)) in spawn.stages.into_iter().zip(commands).enumerate() {
             let started = (|| {
                 command.stdin(match (next_stdin.take(), first_stdin.take()) {
                     (Some(reader), _) => process::Stdio::from(reader),
@@ -1935,6 +1954,7 @@ impl Host for StdHost {
                         StderrSpec::Inherit => command.stderr(process::Stdio::inherit()),
                         StderrSpec::ToStdout => command.stderr(writer.try_clone()?),
                         StderrSpec::Null => command.stderr(process::Stdio::null()),
+                        StderrSpec::Given(handle) => command.stderr(handle),
                     };
                     command.stdout(writer);
                     next_stdin = Some(reader);
@@ -2031,6 +2051,11 @@ fn last_stdout(
             command
                 .stdout(os_stdout(stdout, root, last)?)
                 .stderr(process::Stdio::null());
+        }
+        (stdout, StderrSpec::Given(handle)) => {
+            command
+                .stdout(os_stdout(stdout, root, last)?)
+                .stderr(handle);
         }
     }
     Ok(None)
