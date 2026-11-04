@@ -1843,7 +1843,11 @@ fn a_file_is_written_and_read_through_the_pool() {
 }
 
 /// 落とす driver は、走っているファイルの仕事が終わるまで待ってから戻る。止まる読みを作るため、ファイルの代わりに
-/// 同期のパイプの読む端を取り込む。driver はファイルの種類を確かめない (確かめるのは開く Host である)。
+/// 同期のパイプの読む端を取り込む。unix の driver はファイルの種類を確かめないので、これを受ける。Windows の driver は
+/// `FILE_TYPE_DISK` でないハンドルを取り込みで断り (docs/spec/vm.md の「時計と driver」)、止まるディスクのファイルの
+/// 読みも作れないので、unix だけで流す。Windows では、待つ規則を核の偽の backend のテストが確かめ、本物の仕事を
+/// `a_file_is_written_and_read_through_the_pool` が流す。
+#[cfg(unix)]
 #[test]
 fn dropping_a_driver_waits_for_a_running_file_job() {
     use std::io::Write;
