@@ -133,7 +133,8 @@
 
 - 決めたこと:
   - `main`、`compute` の仕事、タスクの外の `par` の子は `Stops` で、今と同じく `VmFault::Stopped(Stop::DepthLimit)` と今の文で止まる。右の子は親の種類を受け継ぐ (`Stops` なら `Stops`、それ以外なら `Task`)。子が `Pending` か `Aborting` になって始まることはない
-  - IO の evidence がないとき: 本当の深さの超過なら `DepthLimit` で run を止める。旗だけなら旗を捨て、状態を戻して続ける
+  - IO の evidence がないとき: 本当の深さの超過なら `DepthLimit` で run を止める。旗だけなら旗を捨てず `Pending` のまま続け、evidence のある所 (`par` の子から親に戻った後など) の次のエントリで起こす
+  - `par` の子 (左も右も) の row は `never e` で IO を断るので、子の evv に IO の evidence はない。そのため、タスクの中でも `par` の子の深さの超過は `compute` の仕事と同じく run を止める (実行の途中で分かり、利用者が 2026-11-04 にこの扱いに決めた。roadmap の「その後の項目」に、親で起こし直す道を見直す条件とともに書く)
   - `abort_to` (IO と Panic のすべての中断) は、エントリで `Pending` を `Aborting { pending: true }` に変える。節のエントリの中では旗で失敗しない
   - `vm::unwind` が `Ok` で戻るすべての所 (`exit` の `FINISH`、`CHILD_DONE`、着地) で `landed` を呼ぶ。`Aborting { pending: true }` は `Pending` (毒あり) に、`Aborting { pending: false }` は `Task` (本当の限度) に戻す
   - yield の途中 (`ctx.yielding() != 0`) の超過は保留のままにする
@@ -336,7 +337,7 @@
     4. `real_over = task.stack_depth() > real`。文を D-10 で決める。`was_pending = task.limit == Pending`
     5. `task.limit = Aborting { pending: false }; ctx.set_depth_limit(real.saturating_add(LIMIT_HEADROOM))`。`was_pending` で `task.cell == Some(c)` なら、lock の下で `clear_limit(c)` (死んだセルは無視)
     6. `caught = abort_to(code, ctx, task, 0, ExternEffect::Io, IO_FAILED, |ctx| [Word::from_bits(IO_RESOURCE_LIMIT), ctx.fresh_string(msg)])?`
-    7. `!caught`: `task.limit = Task; ctx.set_depth_limit(real)`。`real_over` なら `Err(Stopped(DepthLimit))`、そうでなければ `Ok(())`
+    7. `!caught`: `real_over` なら `task.limit = Task; ctx.set_depth_limit(real)` にして `Err(Stopped(DepthLimit))`。そうでなければ (旗だけ) `task.limit = Pending; ctx.set_depth_limit(0)` に戻し、手順5で下ろしたセルの旗も立て直して `Ok(())` (旗を捨てない)
   - `abort_to` の始めで `if task.limit == Pending { task.limit = Aborting { pending: true }; ctx.set_depth_limit(real + LIMIT_HEADROOM) }`
   - `unwind` の `Ok(())` で戻る直前のすべての所で `landed(ctx, task)` を呼ぶ (D-4)
   - `apply_limit(ctx, task)`: `Pending` → 0、`Aborting { .. }` → `real + LIMIT_HEADROOM`、ほかは何もしない (`switch_task` が本当の限度を書いた後なので)。`switch_to` と `enter` が呼ぶ
@@ -344,11 +345,11 @@
   - `TaskCell.limit: bool` (共有の種類。lock の下で誰でも立て、起こした側が `Registry::clear_limit` で下ろす) を足す。`started`/`resumed` はセルの `limit` を返す (後で T-8 が `bytes` を足すので、`struct TaskMarks { limit: bool }` の形にしておく)。`enter` は立っていれば `task.limit = Pending; apply_limit`
   - `crates/eml_lir/src/lib.rs` に `pub const IO_RESOURCE_LIMIT: u32 = 9;`
   - 起こす道の確かめ (実装の参考): 呼び手 `f` の戻りの `pc` を `r` とする。`call` は `g` のフレームを見出し `(ret = r, dst, f.frame_size)` で積み、`task.pc = g.start` にする。安全点で `Polled::Limit` → `limit_hit` → エントリの行 → `Aborting` → `abort_to` が節のフレームを見出し `(ret = g.start, dst = 0, g.frame_size)` で積む (apply.rs:113-128 は節の関数自身のフレームの大きさを使う)。節のエントリは `yield_abort` を実行し、`unwind` が節のフレームを外して `task.pc = g.start` に戻す (vm.rs:387-393)。`unwind_at(g.start)` がエントリの行なので `g` の RC の引数を減らして外し、`task.pc = r` で `f` の呼び出しの行に進み、`try_io` の着地まで続く。節のフレームの `dst = 0` は読まれない
-  - spec: vm.md の「呼び出しと戻り」(エントリでだけ起こす規則)、「巻き戻しの手順」(エントリのフレームはエントリの行で放す)、「中断と実行時エラーの分担」(タスクの深さの上限と旗は中断。タスクの外は実行時エラーのまま)、「上限と割り込み」(タスクごとの段落と2つの文)、「`Async` のタスク」の下に新しい「タスクの上限」(`Limit` の状態、猶予、着地で戻すこと、evidence のないとき、yield の途中、`par` の子、入れ子の `run`、取り消しとの競合、残る危険 R1 と R2)、「深さ」(タスクの中の右の子は印の evidence を通って起こす)。stdlib.md の「`try_io`」(「深さの上限を捕まえない」に条件を付ける)、「`Std.Async`」(タスクの上限、`ResourceLimit`、文)、「実行時エラー」、「取り消し」(`shield` は後に回さない)、「`compute`」(変わらないことを書く)。object-model.md の「実行の制御」(`DepthLimit` は「深さか保留のタスクの上限」、poll は変わらない)。status.md:171
+  - spec: vm.md の「呼び出しと戻り」(エントリでだけ起こす規則)、「巻き戻しの手順」(エントリのフレームはエントリの行で放す)、「中断と実行時エラーの分担」(タスクの深さの上限と旗は中断。タスクの外は実行時エラーのまま)、「上限と割り込み」(タスクごとの段落と2つの文)、「`Async` のタスク」の下に新しい「タスクの上限」(`Limit` の状態、猶予、着地で戻すこと、evidence のないとき、yield の途中、`par` の子、入れ子の `run`、取り消しとの競合、残る危険 R1 と R2)、「深さ」(タスクの中でも `par` の子の深さの超過は run を止める。子の evv に IO の evidence がないため)。stdlib.md の「`try_io`」(「深さの上限を捕まえない」に条件を付ける)、「`Std.Async`」(タスクの上限、`ResourceLimit`、文)、「実行時エラー」、「取り消し」(`shield` は後に回さない)、「`compute`」(変わらないことを書く)。object-model.md の「実行の制御」(`DepthLimit` は「深さか保留のタスクの上限」、poll は変わらない)。status.md:171
 - テスト (手で書いた LIR を `eml_lir::parse` で読み、`a_running_task_collects_a_notice_at_its_safepoint` (vm.rs:3984) の `Ctx`/`Scheduler` の用意を使う):
   - T-A `Stops` で `depth_limit = 0` → `limit_hit` が `Err(Stopped(DepthLimit))`
   - T-B `Task` で `Ret` の `pc` (エントリでない) に `depth_limit = 0` → `Ok(())`、状態は変わらず、限度は 0 のまま
-  - T-C IO の handler のないプログラムで、`TailSelf` の先頭で `Pending` → `Ok(())`、状態は `Task`、`depth_limit == real`
+  - T-C IO の handler のないプログラムで、`TailSelf` の先頭で `Pending` → `Ok(())`、状態は `Pending` のまま、`depth_limit == 0` (旗は捨てない)
   - T-D `Aborting { .. }` で `DepthLimit` の poll → `Err(Stopped(DepthLimit))`
   - T-E `Pending` の後で Panic の `abort_to` (`try_panic` の handler を LIR で書く) → `Aborting { pending: true }`。`landed` の後 → `Pending` で `depth_limit == 0`
   - T-F `Pending` の親の `right_child` は `Limit::Task`、`Stops` の親の子は `Stops`
@@ -394,7 +395,7 @@
     - U-1 `tests/ui/run/async/limit_depth_caught.em`: 始めたタスクが1段ごとに `String` を持って `try_all` の下で再帰し、`ResourceLimit: the call depth limit is exceeded` を出す (checked mode の漏れの確かめが行の正しさを確かめる)
     - U-2 `tests/ui/run/async/limit_depth_fails_scope.em`: spawn したタスクが超え、`main` の `try_io (fn () -> Async.run body)` が種類と文を出す
     - U-3 `tests/ui/run-fail/async/limit_depth_uncaught.em`: `--- runtime error ---`、`the call depth limit is exceeded`、`run_result` の位置 (insta が固定)。終了コード 1
-    - U-4 `tests/ui/run/async/limit_depth_par_child.em`: タスクの中の `par` の右の子が再帰し、タスクの `try_all` が捕まえる (2 と 8 worker でも)
+    - U-4 `tests/ui/run-fail/async/limit_depth_par_child.em`: タスクの中の `par` の右の子が再帰し、`try_all` があっても run が深さの上限の実行時エラーで止まる (2 と 8 worker でも。子の evv に IO の evidence がないため)
     - U-5 `tests/ui/run/async/limit_depth_nested_run.em`: タスクの中の入れ子の `Async.run` の本体が再帰し、外のタスクで捕まえる
     - U-6 `tests/ui/run/async/limit_depth_repeated.em`: 1つのタスクが3回続けて捕まえ、`1 2 3` を出す
     - U-7 `tests/ui/run/async/limit_depth_in_shield.em`: `Async.shield` の中の再帰が起こし、`shield` の `reraise` が外の `try_all` に届ける
@@ -556,7 +557,7 @@
   - status.md の範囲と制限
   - docs/future/async.md:104-112 と multicore.md:170-172 を、実装した形 (worker ごとの数を切り替えで帰属、閾値の規則、テストの方針での `Gathered`) に合わせるか、spec へ移った所を消す
   - native.md:73-75 と 81-88 に D-6 (`limit_class`、毒、猶予) と、ネイティブのスケジューラが同じ slot の値を公開することを書く
-  - roadmap からこの段の項目を消し、「その後の項目」に RS1、RS2、RS6、U3 (下の表) を「後に回した理由」と「見直す条件」(柔らかい上限が実際に違うタスクを選んだとき、など) を添えて書く。`jit-effects` の「前提」の `task-limits` を項目の名前に直す
+  - roadmap からこの段の項目を消し、「その後の項目」に RS1、RS2、RS6、U3、R7 (下の表) を「後に回した理由」と「見直す条件」(柔らかい上限が実際に違うタスクを選んだとき、など) を添えて書く。`jit-effects` の「前提」の `task-limits` を項目の名前に直す
   - overview.md の表と README.md の「文書の地図」を、変わった所だけ直す
   - CLAUDE.md は、規則か道しるべが変わったときだけ直す (UI テストの印を CLAUDE.md の Testing に足すかを確かめる)
   - `docs/plans/2026-11-04-task-limits.md` と `docs/plans/2026-11-04-task-limits/` を消す。消す前に、この文書の決めがすべて `docs/` に残っていることを確かめる
@@ -607,7 +608,8 @@ T-3 → T-7 ─────────────────┤
 |---|---|---|---|---|
 | Q-1 | 決定的な方針では worker が旗を立てる (D-12)。D-5 の「監視のスレッドが立てる」からの例外である | T-9 | 決定済み (2026-11-04、利用者が承認) | 例外を受け入れる |
 | R1 | 取り消しと上限の順: 先に来た地点が先に巻き戻す。旗の立ったタスクが取り消されると、`Cancelled` でなく `ResourceLimit` (スコープの失敗) で終わりうる | 利用者に見える結果 | 受け入れる。vm.md の「タスクの上限」に書く (T-4) | - |
-| R2 | IO の evidence のない所 (`start_task`/`bottom` の `try_all` の外、`try_all` が返った後) で見た旗は捨てる | 旗が1回無駄になる | 受け入れる。次の閾値で、まだ増えていればまた立つ (RS4) | - |
+| R2 | IO の evidence のない所 (`start_task`/`bottom` の `try_all` の外、`try_all` が返った後、`par` の子の中) で見た旗は、捨てずに `Pending` のまま残し、evidence のある所の次のエントリで起こす。保留の間は安全点ごとに冷たい道を通る | 遅れと、保留の間の費用 | 受け入れる。vm.md の「タスクの上限」に書く (T-4) | - |
+| R7 | タスクの中でも `par` の子の深さの超過は run を止める (子の evv に IO の evidence がない) | サーバの中の並列の計算は守られない | roadmap の「その後の項目」に書く (T-11)。見直す条件: タスクの中の `par` で深さの上限に届く使い方が出てきたとき | - |
 | U3 | 右の子が別の worker で動く親への旗は、合流の後に親で起きる (子の `Task` はセルを持たない)。子の深さの超過は子で起きる | メモリの旗が遅れる | roadmap の「その後の項目」に書く (T-11) | - |
 | RS1 | 本当の待ちから起きてまだ動いていないタスクは、動くまで候補にならない。待ちのタスクは候補にならない (前提) | 選び方 | roadmap に書く (T-11) | - |
 | RS2 | `par` の右の子と `compute` の仕事はどのタスクにも数えない。左の子は数える。P-2 と P-3 が固定する | そのような増え方は硬い上限に届く | roadmap に書く (T-11) | - |
