@@ -3,10 +3,12 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Cursor, PipeReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 
 use eml_rt::{
@@ -39,51 +41,106 @@ impl Write for Capture {
     }
 }
 
-/// `CaptureHost` が書いたファイル。パスの順に並ぶ。中身は UTF-8 とは限らない。
+/// `CaptureHost` が書いたファイル。パスの順に並ぶ。中身は UTF-8 とは限らない。中身は一時ディレクトリの本物のファイルで、
+/// 最後の写しを落とすと、ディレクトリごと消える (docs/implementation/testing.md の「UI テスト」)。`ui.rs` は Host を
+/// 落とした後で読むので、Host ではなくこの写しが寿命を決める。
 #[derive(Clone, Default)]
-pub struct Written(Arc<Mutex<BTreeMap<String, Vec<u8>>>>);
+pub struct Written(Arc<Store>);
+
+#[derive(Default)]
+struct Store {
+    /// パスから、`dir` の下のファイルの番号への表。パスは `/` や無い親ディレクトリを含みうるので、平らな番号で置く。
+    files: Mutex<BTreeMap<String, usize>>,
+    /// 最初の書き込みで作る。何も書かない run がディスクに触れないようにするためである。
+    dir: OnceLock<PathBuf>,
+    next: AtomicUsize,
+}
 
 impl Written {
     pub fn files(&self) -> Vec<(String, Vec<u8>)> {
-        let files = self.lock();
+        let files = self.0.lock();
         files
             .iter()
-            .map(|(path, bytes)| (path.clone(), bytes.clone()))
+            .map(|(path, &n)| {
+                let bytes = fs::read(self.0.file(n)).expect("a written file is readable");
+                (path.clone(), bytes)
+            })
             .collect()
     }
 
-    fn get(&self, path: &str) -> Option<Vec<u8>> {
-        self.lock().get(path).cloned()
+    /// 書いたファイルを読み直す。なければ `None`。
+    fn open(&self, path: &str) -> io::Result<Option<(File, u64)>> {
+        let files = self.0.lock();
+        let Some(&n) = files.get(path) else {
+            return Ok(None);
+        };
+        let file = File::open(self.0.file(n))?;
+        let size = file.metadata()?.len();
+        Ok(Some((file, size)))
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Vec<u8>>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    /// `Truncate` はそのパスを空にし、`Append` は今の中身を残す。
+    fn open_write(&self, path: &str, mode: WriteMode) -> io::Result<File> {
+        let mut files = self.0.lock();
+        self.0.make_dir()?;
+        let mut options = OpenOptions::new();
+        options.create(true);
+        match mode {
+            WriteMode::Truncate => options.write(true).truncate(true),
+            WriteMode::Append => options.append(true),
+        };
+        if let Some(&n) = files.get(path) {
+            return options.open(self.0.file(n));
+        }
+        let n = self.0.next.fetch_add(1, Ordering::Relaxed);
+        let file = options.open(self.0.file(n))?;
+        files.insert(path.to_string(), n);
+        Ok(file)
     }
 }
 
-/// `CaptureHost::open_write` が返す書き手。書き込みごとに表の lock を1つだけ取り、`path` の中身に足す。
-struct WrittenFile {
-    files: Written,
-    path: String,
-}
-
-impl Write for WrittenFile {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.files
-            .lock()
-            .entry(self.path.clone())
-            .or_default()
-            .extend_from_slice(buf);
-        Ok(buf.len())
+impl Store {
+    fn lock(&self) -> MutexGuard<'_, BTreeMap<String, usize>> {
+        self.files.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    /// `make_dir` の後でだけ呼ぶ。
+    fn file(&self, n: usize) -> PathBuf {
+        let dir = self.dir.get().expect("the directory is made before a file");
+        dir.join(n.to_string())
+    }
+
+    /// 呼び手が `files` の lock を持つので、2つのスレッドが同時に作ることはない。
+    fn make_dir(&self) -> io::Result<()> {
+        if self.dir.get().is_some() {
+            return Ok(());
+        }
+        static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
+        let pid = process::id();
+        let dir = loop {
+            let n = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("eml-written-{pid}-{n}"));
+            match fs::create_dir(&dir) {
+                Ok(()) => break dir,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        };
+        let _ = self.dir.set(dir);
         Ok(())
     }
 }
 
+impl Drop for Store {
+    fn drop(&mut self) {
+        if let Some(dir) = self.dir.get() {
+            let _ = fs::remove_dir_all(dir);
+        }
+    }
+}
+
 /// テストの Host。標準出力と標準エラーを、それぞれメモリに捕まえる。引数、標準入力、環境変数は与えたものだけで、本物の
-/// 環境は読まない。テストの結果を実行する場所によらないものにするためである。`FileOut` はディスクに書かずに覚え、同じ
+/// 環境は読まない。テストの結果を実行する場所によらないものにするためである。`FileOut` は一時ディレクトリに書き、同じ
 /// パスの `FileIn.open` はそれを読む。リポジトリの中にファイルを作らないためである。子のプロセスは本物を起動し、その
 /// 標準出力と標準エラーも捕まえる (docs/implementation/testing.md の「UI テスト」)。
 pub struct CaptureHost {
@@ -183,14 +240,11 @@ impl Host for CaptureHost {
     }
 
     fn open(&self, path: &str) -> io::Result<Opened> {
-        match self.written.get(path) {
-            Some(bytes) => {
-                let size = bytes.len() as u64;
-                Ok(Opened {
-                    reader: Box::new(Cursor::new(bytes)),
-                    size: Some(size),
-                })
-            }
+        match self.written.open(path)? {
+            Some((file, size)) => Ok(Opened {
+                reader: Box::new(file),
+                size: Some(size),
+            }),
             None => self.inner.open(path),
         }
     }
@@ -210,17 +264,8 @@ impl Host for CaptureHost {
         self.stdin.clone()
     }
 
-    /// `Truncate` は開いた時点でそのパスを空にし、`Append` は今の中身を残す。
     fn open_write(&self, path: &str, mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
-        let mut files = self.written.lock();
-        let bytes = files.entry(path.to_string()).or_default();
-        if mode == WriteMode::Truncate {
-            bytes.clear();
-        }
-        Ok(Box::new(WrittenFile {
-            files: self.written.clone(),
-            path: path.to_string(),
-        }))
+        Ok(Box::new(self.written.open_write(path, mode)?))
     }
 
     /// 子の環境は、与えた表、本物の `PATH` (`with_path_prefix` のディレクトリが前に付く)、Windows では本物の
@@ -522,5 +567,84 @@ mod path_tests {
         // 含む項を `"` で囲んで受け入れる
         let prefix = if cfg!(windows) { "eml\"bin" } else { "eml:bin" };
         assert!(join_child_path(Some(Path::new(prefix)), None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use std::fs;
+    use std::io::{Read, Write};
+    use std::path::PathBuf;
+
+    use eml_rt::{Host, WriteMode};
+
+    use super::CaptureHost;
+
+    fn write(host: &CaptureHost, path: &str, mode: WriteMode, bytes: &[u8]) {
+        let mut file = host.open_write(path, mode).unwrap();
+        file.write_all(bytes).unwrap();
+    }
+
+    #[test]
+    fn written_files_keep_the_path_order() {
+        let host = CaptureHost::new(PathBuf::new());
+        write(&host, "b", WriteMode::Truncate, b"2");
+        write(&host, "a", WriteMode::Truncate, b"1");
+        write(&host, "c", WriteMode::Truncate, b"3");
+        let paths: Vec<String> = host.written().files().into_iter().map(|f| f.0).collect();
+        assert_eq!(paths, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn a_path_with_missing_directories_is_written() {
+        let host = CaptureHost::new(PathBuf::new());
+        write(&host, "no/such/dir/out.txt", WriteMode::Truncate, b"x");
+        assert_eq!(
+            host.written().files(),
+            [("no/such/dir/out.txt".to_string(), b"x".to_vec())]
+        );
+    }
+
+    #[test]
+    fn a_truncate_after_an_append_starts_empty() {
+        let host = CaptureHost::new(PathBuf::new());
+        write(&host, "f", WriteMode::Append, b"one");
+        write(&host, "f", WriteMode::Append, b"two");
+        assert_eq!(host.written().files()[0].1, b"onetwo");
+        write(&host, "f", WriteMode::Truncate, b"");
+        assert_eq!(host.written().files()[0].1, b"");
+    }
+
+    #[test]
+    fn a_written_file_is_read_back_by_open() {
+        let host = CaptureHost::new(PathBuf::new());
+        write(&host, "f", WriteMode::Truncate, b"hello");
+        let opened = host.open("f").unwrap();
+        assert_eq!(opened.size, Some(5));
+        let mut read = String::new();
+        let mut reader = opened.reader;
+        reader.read_to_string(&mut read).unwrap();
+        assert_eq!(read, "hello");
+    }
+
+    #[test]
+    fn the_directory_is_made_on_the_first_write_only() {
+        let host = CaptureHost::new(PathBuf::new());
+        let written = host.written();
+        assert!(written.0.dir.get().is_none());
+        write(&host, "f", WriteMode::Truncate, b"x");
+        assert!(written.0.dir.get().unwrap().is_dir());
+    }
+
+    #[test]
+    fn the_directory_is_removed_when_the_last_view_drops() {
+        let host = CaptureHost::new(PathBuf::new());
+        write(&host, "f", WriteMode::Truncate, b"x");
+        let written = host.written();
+        let dir = written.0.dir.get().unwrap().clone();
+        drop(host);
+        assert!(dir.is_dir());
+        drop(written);
+        assert!(!fs::exists(&dir).unwrap());
     }
 }
