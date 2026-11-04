@@ -270,9 +270,12 @@ pub(crate) struct Slot {
     /// `RescueAlways` の頼んだ印。持ち主が `Rescue` を送る前に立て、頼まれた worker が盗む前に下ろす
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) asked: AtomicBool,
+    /// `current`、`bytes`、`mark` の版の数。持ち主が3つを書く前に奇数に、書いた後に偶数に進める。読み手は前後で同じ
+    /// 偶数を読めたときだけ3つを組として使う。同じセルを数え直して公開し直すことがあるので、`current` を2回比べる
+    /// 形では古い組を受け入れてしまう (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) seq: AtomicU64,
     /// 動いている `Async` のタスクのセルの符号 (`cell_word`)。なければ `NO_CELL`。持ち主の worker が切り替えの地点で
-    /// 書き、監視のスレッドが lock なしで読む。`bytes` と `mark` を書く間は `NO_CELL` にしておくので、前後で同じ値を
-    /// 読めた読み手の3つの値は組になっている (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 書き、監視のスレッドが lock なしで読む。
     pub(crate) current: AtomicU64,
     /// `current` のタスクの今の区間より前の数と、区間の始めの `Control::taken`。動いているタスクの数は
     /// `bytes + taken(k) - mark` である。
@@ -366,6 +369,7 @@ impl Run {
                 futile_inbox: AtomicUsize::new(0),
                 futile_settled: AtomicU64::new(0),
                 asked: AtomicBool::new(false),
+                seq: AtomicU64::new(0),
                 current: AtomicU64::new(NO_CELL),
                 bytes: AtomicUsize::new(0),
                 mark: AtomicUsize::new(0),
@@ -559,8 +563,9 @@ impl Run {
     }
 
     /// worker `k` の実行待ちのタスク `cell` (数 `count`) を、今の `top` より大きいか同じなら `top` にする。同じセルなら
-    /// 数を書き直す。数を先に書くので、読み手が新しいセルと古い数の組を見るのは数を書き直したときだけである
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 数を書き直す。`top` と `top_bytes` は組として読めないので、読み手は古いセルと新しい数の組を見うる (救済が `top`
+    /// を消した直後に持ち主がより小さい数を書いたときなど)。旗はそれでも生きたセルへ行き、数は選び方を変えるだけなので
+    /// 害はない (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn offer_top(&self, k: usize, cell: CellRef, count: usize) {
         let slot = &self.slots[k];
         let word = cell_word(cell);

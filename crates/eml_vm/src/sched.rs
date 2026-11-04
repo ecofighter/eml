@@ -1304,35 +1304,50 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// 動いているタスク `task` を欄に公開する。動き始めた `Async` のタスクならそのセルと数を、そうでなければ
-    /// `NO_CELL` を書く。`bytes` と `mark` を書く間は `current` を `NO_CELL` にしておき、読み手が `current` を前後で
-    /// 2回読んで組を確かめられるようにする (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// `NO_CELL` を書く (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn publish(&mut self, task: &Task) {
-        let slot = &self.run.slots[self.index];
         match task.cell {
             Some(cell) if !matches!(task.state, TaskState::Entry { .. }) => {
-                let want = (cell_word(cell), task.counted, self.mark);
-                if self.published == want {
-                    return;
-                }
-                slot.current.store(NO_CELL, Ordering::Relaxed);
-                fence(Ordering::Release);
-                slot.bytes.store(task.counted, Ordering::Relaxed);
-                slot.mark.store(self.mark, Ordering::Relaxed);
-                slot.current.store(want.0, Ordering::Release);
-                self.published = want;
+                self.write_published((cell_word(cell), task.counted, self.mark));
             }
             _ => self.unpublish(),
         }
     }
 
-    /// 動いているタスクがないことを欄に公開する。
-    fn unpublish(&mut self) {
-        if self.published.0 != NO_CELL {
-            self.run.slots[self.index]
-                .current
-                .store(NO_CELL, Ordering::Release);
-            self.published.0 = NO_CELL;
+    /// 動いているタスクがないことを欄に公開する。待ちに入るか終わったエントリの `Task` も、切り替えの前の集める地点で
+    /// 選ばれないようにここで外す (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn unpublish(&mut self) {
+        let (current, bytes, mark) = self.published;
+        if current != NO_CELL {
+            // `current` が `NO_CELL` の間の `bytes` と `mark` は読まれないので、前の値のままにする
+            self.write_published((NO_CELL, bytes, mark));
         }
+    }
+
+    /// 欄の `current`、`bytes`、`mark` を版の数 `seq` で囲んで書く。書き手は持ち主だけなので、`seq` は読んで書けば
+    /// よい。手元の写しと同じ値は書かない。
+    fn write_published(&mut self, want: (u64, usize, usize)) {
+        if self.published == want {
+            return;
+        }
+        let slot = &self.run.slots[self.index];
+        let seq = slot.seq.load(Ordering::Relaxed);
+        slot.seq.store(seq.wrapping_add(1), Ordering::Relaxed);
+        // 奇数の版を3つの書き込みより前に見せる。読み手の Acquire の fence と組になる
+        fence(Ordering::Release);
+        slot.current.store(want.0, Ordering::Relaxed);
+        slot.bytes.store(want.1, Ordering::Relaxed);
+        slot.mark.store(want.2, Ordering::Relaxed);
+        slot.seq.store(seq.wrapping_add(2), Ordering::Release);
+        self.published = want;
+    }
+
+    /// 今のタスクが切り替えずに動き続ける。区間を閉じてから公開し直す。走れるタスクがなく眠った後で、`par` の join や
+    /// 根のスコープの終わりがそのまま届いたときに使う。眠る前に `current` を消したためである
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn keep_running(&mut self, task: &mut Task) {
+        self.end_slice(task);
+        self.publish(task);
     }
 
     /// 公開した今のタスクのセルが `cell` なら、その今の数。
