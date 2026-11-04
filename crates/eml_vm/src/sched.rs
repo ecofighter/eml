@@ -12,7 +12,7 @@ use crate::cells::{
     self, CellFault, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken,
 };
 use crate::driver::DriverKind;
-use crate::monitor::Monitor;
+use crate::monitor::{self, Monitor};
 use crate::vm::Task;
 use crate::workers::{
     EntryKind, Mailer, NO_CELL, Notice, Ready, Run, Workers, cell_word, rescuable, stopping,
@@ -216,6 +216,15 @@ pub enum Rescue {
     Always,
 }
 
+/// 誰がメモリの柔らかい上限を見て、タスクに上限の旗を立てるか (docs/spec/vm.md の「タスクとスケジュール」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Memory {
+    /// 監視のスレッドが刻みごとに見る。
+    Watched,
+    /// 各 worker が集める地点の始めに見る。壁時計の監視のスレッドに頼らず、旗の地点をスケジュールで決めるためである。
+    Gathered,
+}
+
 /// 目安 `h` の項を持つ worker に対する救済の予算。半分を切り上げ、1 以上とする。
 fn rescue_budget(h: usize) -> usize {
     h.div_ceil(2).max(1)
@@ -256,6 +265,8 @@ pub trait Policy: Send {
     const PREEMPTS: bool;
     /// 救済を頼む者。
     const RESCUE: Rescue;
+    /// メモリの柔らかい上限を見る者。
+    const MEMORY: Memory;
     /// 安全点ごとに1回呼ぶ。真を返したら、横取りを試みる。
     fn tick(&mut self) -> bool;
     /// 横取りを試みた後に、次の横取りまでの予算を詰め直す。
@@ -287,6 +298,7 @@ pub struct Normal;
 impl Policy for Normal {
     const PREEMPTS: bool = true;
     const RESCUE: Rescue = Rescue::Watched;
+    const MEMORY: Memory = Memory::Watched;
 
     // 横取りは監視のスレッドの `PREEMPT` が求めるので、安全点に分岐を残さない
     #[inline(always)]
@@ -316,6 +328,7 @@ pub struct Sequential;
 impl Policy for Sequential {
     const PREEMPTS: bool = false;
     const RESCUE: Rescue = Rescue::Never;
+    const MEMORY: Memory = Memory::Gathered;
 
     // 定数の偽に畳まれ、安全点に分岐を残さない
     #[inline(always)]
@@ -351,6 +364,7 @@ pub struct RescueAlways {
 impl Policy for RescueAlways {
     const PREEMPTS: bool = false;
     const RESCUE: Rescue = Rescue::Always;
+    const MEMORY: Memory = Memory::Gathered;
 
     #[inline(always)]
     fn tick(&mut self) -> bool {
@@ -433,6 +447,7 @@ fn splitmix64(state: u64) -> u64 {
 impl Policy for Seeded {
     const PREEMPTS: bool = false;
     const RESCUE: Rescue = Rescue::Never;
+    const MEMORY: Memory = Memory::Gathered;
 
     // 予算が 0 になっても yield の途中なら切り替えないので、詰め直すのは横取りを試みたときだけにする
     fn tick(&mut self) -> bool {
@@ -851,6 +866,7 @@ impl<P: Policy> Scheduler<P> {
             Arc::clone(&self.run),
             P::PREEMPTS,
             P::RESCUE == Rescue::Watched,
+            P::MEMORY == Memory::Watched,
         );
     }
 
@@ -879,6 +895,11 @@ impl<P: Policy> Scheduler<P> {
         let k = self.index;
         // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
         self.watcher.control.take_notice(k);
+        // 決定的な方針では監視のスレッドの代わりにここで柔らかい上限を見る。積んだ旗の項は、この集める地点の mail の
+        // 処理が取る (docs/spec/vm.md の「タスクとスケジュール」)
+        if P::MEMORY == Memory::Gathered {
+            monitor::pressure_tick(&self.watcher.control, &self.cells, &self.run);
+        }
         // ほかの worker からの知らせは、ないときは1回の読みで済ませる (docs/spec/vm.md の「タスクとスケジュール」)
         let mut notices = Vec::new();
         if self.run.slots[k].has_notices.load(Ordering::Acquire) {
@@ -1408,6 +1429,15 @@ mod tests {
     use crate::driver::RunClock;
     use crate::workers::{Entry, STEAL_SCAN};
     use eml_rt::Word;
+
+    /// 監視のスレッドでメモリを見るのは `Normal` だけで、決定的な方針は集める地点で見る。
+    #[test]
+    fn only_normal_watches_memory() {
+        assert_eq!(Normal::MEMORY, Memory::Watched);
+        assert_eq!(Sequential::MEMORY, Memory::Gathered);
+        assert_eq!(Seeded::MEMORY, Memory::Gathered);
+        assert_eq!(RescueAlways::MEMORY, Memory::Gathered);
+    }
 
     /// 出どころを `kind` にした、テストの driver の `Scheduler`。テストの driver の時計は run の外では進まない。
     fn scheduler(kind: DriverKind, doorbell: bool, workers: usize) -> Scheduler<Sequential> {

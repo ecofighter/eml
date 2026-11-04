@@ -1,19 +1,20 @@
 //! 監視のスレッド (docs/spec/vm.md の「タスクとスケジュール」)。`Scheduler` が持つ。保留のシグナルを run の mail へ中継して
 //! すべての worker の語に `NOTICE` を立て、止めるビットや知らせのときにすべての worker を起こす。横取りする方針では、worker
-//! ごとに、刻みの間に動くタスクが替わらなければその worker の語に `PREEMPT` も立てる。スレッドが持つのは
+//! ごとに、刻みの間に動くタスクが替わらなければその worker の語に `PREEMPT` も立てる。メモリを見張る方針では、確保量が
+//! 柔らかい上限の閾値を越えたら、数のいちばん大きいタスクに上限の旗を立てる。スレッドが持つのは
 //! `Arc<Control>`、mail を持つ `Shared`、run の表 `Run`、`Arc<Watch>` だけで、ヒープの語も `Ctx` も持たない。ヒープに触れるのは
 //! worker のスレッドだけにするためである (docs/future/multicore.md の「スレッドと worker」)。
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering, fence};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use eml_rt::Control;
 
-use crate::cells::{MailItem, Shared};
+use crate::cells::{CellRef, MailItem, Shared};
 use crate::doorbell::Doorbell;
-use crate::workers::{Notice, Run};
+use crate::workers::{NO_CELL, Notice, Run};
 
 /// 監視の刻み。自己パイプのない監視は、この刻みでシグナルと止めるビットを見に行く。
 const TICK: Duration = Duration::from_millis(10);
@@ -52,14 +53,16 @@ pub(crate) struct Monitor {
 
 impl Monitor {
     /// 監視のスレッドを始める。自己パイプは `run` のものを待つ。`preempt` は刻みごとの横取りを求めるか、`rescue` は
-    /// 刻みごとに救済の判定をするかである。始められなければ `None` を返し、呼ぶ側は監視なしで続ける。そのときの
-    /// 振る舞いは FIFO の逐次と同じで、誤りにはしない (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 刻みごとに救済の判定をするか、`pressure` は刻みごとにメモリの柔らかい上限を見るかである。始められなければ
+    /// `None` を返し、呼ぶ側は監視なしで続ける。そのときの振る舞いは FIFO の逐次と同じで、誤りにはしない。柔らかい
+    /// 上限もなくなる (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn start(
         control: Arc<Control>,
         cells: Arc<Shared>,
         run: Arc<Run>,
         preempt: bool,
         rescue: bool,
+        pressure: bool,
     ) -> Option<Monitor> {
         let watch = Arc::new(Watch {
             stop: AtomicBool::new(false),
@@ -77,7 +80,7 @@ impl Monitor {
         // SIGINT と SIGTERM が監視のスレッドに届くと、VM のスレッドの待っている読みに `EINTR` が来なくなる
         // (docs/spec/vm.md の「上限と割り込み」)
         let thread = eml_io::spawn_masked(builder, move || {
-            watch_loop(&relay, &shared, preempt, rescue)
+            watch_loop(&relay, &shared, preempt, rescue, pressure)
         })
         .ok()?;
         Some(Monitor {
@@ -183,13 +186,62 @@ impl Relay {
     }
 }
 
-/// 自己パイプで眠るときの待ちの長さ。横取りする方針でも、動いている worker がなければ刻まずに鳴るまで眠る。動き
-/// 始めた worker が自己パイプを鳴らすので、刻みを取りこぼさない (docs/spec/vm.md の「タスクとスケジュール」)。
-fn bell_timeout(preempt: bool, running: usize, until_next: Duration) -> Option<Duration> {
-    (preempt && running > 0).then_some(until_next)
+/// 柔らかい上限の旗を立てるタスクを、worker が公開した値から選ぶ。slot を番号の順に見て、動いているタスク
+/// (`current`) と実行待ちのいちばん大きいタスク (`top`) を候補にし、数が前の最良より真に大きく 0 より大きいものだけを
+/// 残す。そのため同点なら番号の小さい worker が、同じ worker なら動いているタスクが勝つ。`current`、`bytes`、`mark` は
+/// 版の数 `seq` を前後で読み、同じ偶数のときだけ組として使う (docs/spec/vm.md の「タスクとスケジュール」)。
+pub(crate) fn choose(run: &Run, taken: impl Fn(usize) -> usize) -> Option<CellRef> {
+    let mut best: Option<(usize, u64)> = None;
+    let mut offer = |count: usize, word: u64| {
+        if count > best.map_or(0, |(most, _)| most) {
+            best = Some((count, word));
+        }
+    };
+    for (k, slot) in run.slots.iter().enumerate() {
+        let seq = slot.seq.load(Ordering::Acquire);
+        if seq % 2 == 0 {
+            let current = slot.current.load(Ordering::Relaxed);
+            let bytes = slot.bytes.load(Ordering::Relaxed);
+            let mark = slot.mark.load(Ordering::Relaxed);
+            // 3つの読みを2回目の `seq` の読みより前に置く。書き手の奇数の版の後の Release の fence と組になる
+            fence(Ordering::Acquire);
+            if current != NO_CELL && slot.seq.load(Ordering::Relaxed) == seq {
+                offer(bytes.saturating_add(taken(k).saturating_sub(mark)), current);
+            }
+        }
+        let top = slot.top.load(Ordering::Acquire);
+        if top != NO_CELL {
+            offer(slot.top_bytes.load(Ordering::Relaxed), top);
+        }
+    }
+    best.map(|(_, word)| CellRef::decode(word as i64))
 }
 
-fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, rescue: bool) {
+/// 確保量が柔らかい上限の閾値を越えていれば、`choose` で選んだタスクに上限の旗を立てる。候補があるときだけ閾値を
+/// 進め、進めた者だけが旗を1回送る。候補がなければ閾値を進めず、次の呼び出しでまた探す。旗は mail に積んでから
+/// すべての worker の語に `NOTICE` を立てるので、ビットを見た worker は集める地点で項を見つける。立てたセルを返す
+/// (docs/spec/vm.md の「タスクの上限」)。
+pub(crate) fn pressure_tick(control: &Control, shared: &Shared, run: &Run) -> Option<CellRef> {
+    let (next, bytes) = control.pressure()?;
+    let cell = choose(run, |k| control.taken(k))?;
+    if !control.claim_pressure(next, bytes) {
+        return None;
+    }
+    shared.mail.push(MailItem::Limit(cell));
+    for k in 0..run.slots.len() {
+        control.notice(k);
+    }
+    Some(cell)
+}
+
+/// 自己パイプで眠るときの待ちの長さ。刻む務め (横取りかメモリの見張り) があっても、動いている worker がなければ刻まずに
+/// 鳴るまで眠る。動き始めた worker が自己パイプを鳴らすので、刻みを取りこぼさない。動く worker のない間は確保も
+/// ない (docs/spec/vm.md の「タスクとスケジュール」)。
+fn bell_timeout(ticks: bool, running: usize, until_next: Duration) -> Option<Duration> {
+    (ticks && running > 0).then_some(until_next)
+}
+
+fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, rescue: bool, pressure: bool) {
     let run = &*relay.run;
     let mut tickers: Vec<Ticker> = run
         .slots
@@ -208,8 +260,11 @@ fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, rescue: bool) {
         match run.bell.as_deref() {
             // 鳴ったかどうかによらず、保留のシグナルを見に行く
             Some(doorbell) => {
-                let timeout =
-                    bell_timeout(preempt, run.running.load(Ordering::Acquire), until_next);
+                let timeout = bell_timeout(
+                    preempt || pressure,
+                    run.running.load(Ordering::Acquire),
+                    until_next,
+                );
                 doorbell.wait(timeout);
                 // 刻まずに眠った後は、起きた時から刻み直す。遅れた刻みをまとめて取り戻さないためである
                 if timeout.is_none() {
@@ -236,6 +291,9 @@ fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, rescue: bool) {
         if rescue && run.live() >= 2 {
             relay.rescue_tick(&mut tickers, &mut cursor);
         }
+        if pressure {
+            pressure_tick(&relay.control, &relay.shared, run);
+        }
         next += TICK;
     }
 }
@@ -248,11 +306,13 @@ mod tests {
 
     use eml_rt::{Control, IoWaker, Limits};
 
-    use super::{Monitor, OVERLOAD, Relay, Ticker, bell_timeout};
-    use crate::cells::{MailItem, Registry, Shared};
+    use eml_rt::{Checked, Ctx, Word};
+
+    use super::{Monitor, OVERLOAD, Relay, Ticker, bell_timeout, choose, pressure_tick};
+    use crate::cells::{self, CellRef, MailItem, Registry, Shared};
     use crate::doorbell::Doorbell;
     use crate::sched::{Normal, Scheduler};
-    use crate::workers::{Notice, Run};
+    use crate::workers::{NO_CELL, Notice, Run, cell_word};
 
     #[test]
     fn a_tick_without_a_switch_asks_for_a_switch() {
@@ -542,6 +602,179 @@ mod tests {
         assert_eq!(Arc::strong_count(&control), 1);
     }
 
+    /// slot が `workers` 個で、何も公開していない run の表。
+    fn table(workers: usize) -> Run {
+        Run::new(
+            workers,
+            None,
+            crate::driver::RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        )
+    }
+
+    /// worker `k` が動いているタスク `cell` を、数 `bytes` と区間の始め `mark` で公開した形にする。
+    fn publish(run: &Run, k: usize, cell: CellRef, bytes: usize, mark: usize) {
+        let slot = &run.slots[k];
+        slot.bytes.store(bytes, Ordering::Relaxed);
+        slot.mark.store(mark, Ordering::Relaxed);
+        slot.current.store(cell_word(cell), Ordering::Relaxed);
+    }
+
+    fn offer(run: &Run, k: usize, cell: CellRef, count: usize) {
+        run.slots[k].top_bytes.store(count, Ordering::Relaxed);
+        run.slots[k].top.store(cell_word(cell), Ordering::Relaxed);
+    }
+
+    /// 動いているタスクの数は `bytes + taken(k) - mark` で、実行待ちの数は `top_bytes` である。いちばん大きいものを選び、
+    /// 同点なら番号の小さい worker、同じ worker なら動いているタスクが勝つ。数が 0 のものと `NO_CELL` は選ばない。
+    /// 書いている途中の版 (奇数) の slot は動いているタスクを飛ばす。
+    #[test]
+    fn choose_picks_the_largest_count() {
+        let [a, b, c, d] = [1, 2, 3, 4].map(CellRef::decode);
+        let run = table(3);
+        assert_eq!(choose(&run, |_| 0), None);
+        publish(&run, 0, a, 0, 0);
+        offer(&run, 1, b, 0);
+        assert_eq!(choose(&run, |_| 0), None);
+        publish(&run, 0, a, 100, 50);
+        offer(&run, 1, b, 120);
+        assert_eq!(choose(&run, |k| [80, 0, 0][k]), Some(a));
+        assert_eq!(choose(&run, |k| [60, 0, 0][k]), Some(b));
+        // 同点: 番号の小さい worker、同じ worker なら `current`
+        assert_eq!(choose(&run, |k| [70, 0, 0][k]), Some(a));
+        publish(&run, 2, c, 200, 0);
+        offer(&run, 2, d, 200);
+        assert_eq!(choose(&run, |_| 0), Some(c));
+        offer(&run, 2, d, 201);
+        assert_eq!(choose(&run, |_| 0), Some(d));
+        run.slots[2].seq.store(1, Ordering::Relaxed);
+        offer(&run, 2, d, 0);
+        assert_eq!(choose(&run, |_| 0), Some(b));
+        run.slots[0].current.store(NO_CELL, Ordering::Relaxed);
+        run.slots[1].top.store(NO_CELL, Ordering::Relaxed);
+        assert_eq!(choose(&run, |_| 0), None);
+    }
+
+    /// 柔らかい上限 64 KiB、硬い上限 64 MiB、worker 2つの `Control` と、worker 0 の検査モードの `Ctx`。
+    fn pressured() -> (Arc<Control>, Ctx<Checked>) {
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            max_bytes: 64 << 20,
+            soft_bytes: 64 << 10,
+            ..Limits::default()
+        }));
+        let (host, _) = crate::capture_host(Default::default());
+        let ctx = Ctx::new(Arc::clone(&control), host);
+        (control, ctx)
+    }
+
+    /// `bytes` バイトの文字列を確保して持つ。
+    fn grow(ctx: &mut Ctx<Checked>, bytes: usize) -> Word {
+        ctx.fresh_string(&"x".repeat(bytes))
+    }
+
+    fn release(ctx: &mut Ctx<Checked>, words: Vec<Word>) {
+        for word in words {
+            unsafe { ctx.heap_mut().decref(word) }.unwrap();
+        }
+    }
+
+    fn limits_in(shared: &Shared) -> Vec<CellRef> {
+        shared
+            .mail
+            .take(0)
+            .into_iter()
+            .map(|item| match item {
+                MailItem::Limit(cell) => cell,
+                _ => panic!("not a limit"),
+            })
+            .collect()
+    }
+
+    /// 閾値を越えた後の1回目の呼び出しだけが旗を立てて mail に積み、すべての worker の語に `NOTICE` を立てる。2回目は
+    /// 閾値が進んでいるので何もしない。進んだ閾値を越えるとまた立てる。
+    #[test]
+    fn pressure_tick_flags_once_per_threshold() {
+        let (control, mut ctx) = pressured();
+        let shared = shared();
+        let run = table(2);
+        let cell = cells::task_on(&shared, 0, 0, false);
+        publish(&run, 0, cell, 0, 0);
+        let mut held = vec![grow(&mut ctx, 200 << 10)];
+        control.take_notice(0);
+        assert_eq!(pressure_tick(&control, &shared, &run), Some(cell));
+        assert_eq!(limits_in(&shared), [cell]);
+        for k in 0..2 {
+            assert_eq!(control.worker_bits(k), Control::NOTICE, "worker {k}");
+            control.take_notice(k);
+        }
+        assert_eq!(pressure_tick(&control, &shared, &run), None);
+        assert!(limits_in(&shared).is_empty());
+        assert_eq!(control.worker_bits(1), 0);
+        held.push(grow(&mut ctx, 17 << 20));
+        assert_eq!(pressure_tick(&control, &shared, &run), Some(cell));
+        assert_eq!(limits_in(&shared), [cell]);
+        release(&mut ctx, held);
+    }
+
+    /// 候補がなければ閾値を進めないので、候補が公開された後の呼び出しが旗を立てる。
+    #[test]
+    fn pressure_tick_without_a_candidate_keeps_the_threshold() {
+        let (control, mut ctx) = pressured();
+        let shared = shared();
+        let run = table(2);
+        let held = vec![grow(&mut ctx, 200 << 10)];
+        control.take_notice(0);
+        assert_eq!(pressure_tick(&control, &shared, &run), None);
+        assert!(limits_in(&shared).is_empty());
+        assert_eq!(control.worker_bits(0), 0);
+        assert!(control.pressure().is_some());
+        let cell = cells::task_on(&shared, 0, 0, false);
+        publish(&run, 1, cell, 1, 0);
+        assert_eq!(pressure_tick(&control, &shared, &run), Some(cell));
+        assert_eq!(limits_in(&shared), [cell]);
+        release(&mut ctx, held);
+    }
+
+    /// 本番の道: 監視のスレッドが刻みで柔らかい上限を見て、公開されたタスクに旗を立てる。立つことは 5 秒まで待つ。
+    #[test]
+    fn the_monitor_thread_flags_the_published_task() {
+        let tick = super::TICK;
+        assert_eq!(bell_timeout(true, 1, tick), Some(tick));
+        let control = Arc::new(Control::new(Limits {
+            max_bytes: 64 << 20,
+            soft_bytes: 64 << 10,
+            ..Limits::default()
+        }));
+        let (host, _) = crate::capture_host(Default::default());
+        let mut ctx = Ctx::<Checked>::new(Arc::clone(&control), host);
+        let shared = shared();
+        let run = Arc::new(table(1));
+        let cell = cells::task_on(&shared, 0, 0, false);
+        publish(&run, 0, cell, 0, 0);
+        let held = vec![grow(&mut ctx, 200 << 10)];
+        control.take_notice(0);
+        let monitor = Monitor::start(
+            Arc::clone(&control),
+            Arc::clone(&shared),
+            Arc::clone(&run),
+            false,
+            false,
+            true,
+        )
+        .expect("the monitor started");
+        let start = Instant::now();
+        let mut flagged = Vec::new();
+        while flagged.is_empty() || control.worker_bits(0) & Control::NOTICE == 0 {
+            assert!(start.elapsed() < Duration::from_secs(5), "no flag");
+            std::thread::sleep(Duration::from_millis(1));
+            flagged.extend(limits_in(&shared));
+        }
+        monitor.stop();
+        assert_eq!(flagged, [cell]);
+        release(&mut ctx, held);
+    }
+
     #[test]
     fn a_monitor_with_a_doorbell_ticks_only_while_a_worker_runs() {
         let tick = super::TICK;
@@ -567,6 +800,7 @@ mod tests {
             shared(),
             Arc::clone(&run),
             true,
+            false,
             false,
         )
         .expect("the monitor started");
@@ -605,6 +839,7 @@ mod tests {
             Arc::clone(&control),
             shared(),
             Arc::clone(&run),
+            false,
             false,
             false,
         )

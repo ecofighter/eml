@@ -1755,6 +1755,9 @@ fn child_done<R: Exec>(
         let result = safepoint::<R>(code, ctx, task, sched);
         at_par(code, task, sched, at, result)
     } else {
+        // 待つ親を切り替えの前の集める地点で候補にしない。そのまま動き続けるときは `keep_running` が公開し直す
+        // (docs/spec/vm.md の「タスクとスケジュール」)
+        sched.unpublish();
         switch_away::<R>(code, ctx, task, sched, Some(TaskState::Waiting(j)))
     }
 }
@@ -2520,6 +2523,8 @@ fn async_op<R: Exec>(
                 .wait(root, WaitToken(sched.current as u64), me)?;
             task.set(dst, handle);
             schedule(sched, run)?;
+            // 根のスコープを待つタスクも、待つ親と同じく切り替えの前に公開から外す
+            sched.unpublish();
             switch_away::<R>(code, ctx, task, sched, Some(TaskState::WaitingCell(root)))?;
         }
         Extern::AsyncFinishOk => {
@@ -4432,11 +4437,24 @@ fn f(p.0: unit) -> unit {
         Ctx<eml_rt::Checked>,
         Scheduler<P>,
     ) {
-        let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
         let limits = eml_rt::Limits {
             max_depth: DEPTH,
             ..eml_rt::Limits::default()
         };
+        fixture_with_limits(text, policy, limits)
+    }
+
+    /// `limit_fixture_with` の、上限を選べる形。
+    fn fixture_with_limits<P: Policy>(
+        text: &str,
+        policy: P,
+        limits: eml_rt::Limits,
+    ) -> (
+        CodeBase<eml_rt::Checked>,
+        Ctx<eml_rt::Checked>,
+        Scheduler<P>,
+    ) {
+        let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
         let control = Arc::new(Control::new(limits));
         let mut code = CodeBase::<eml_rt::Checked>::new(Arc::clone(&control));
         code.load(&program).unwrap();
@@ -4876,6 +4894,75 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             (cell_word(cell), 40 + grown, ctx.heap().control().taken(0))
         );
         assert_eq!(slot.seq.load(Ordering::Relaxed) % 2, 0);
+    }
+
+    /// 柔らかい上限 64 KiB、硬い上限 64 MiB の、逐次の方針の用意。
+    fn soft_fixture() -> (
+        CodeBase<eml_rt::Checked>,
+        Ctx<eml_rt::Checked>,
+        Scheduler<crate::Sequential>,
+    ) {
+        let limits = eml_rt::Limits {
+            max_depth: DEPTH,
+            max_bytes: 64 << 20,
+            soft_bytes: 64 << 10,
+            ..eml_rt::Limits::default()
+        };
+        fixture_with_limits(CALL, crate::Sequential, limits)
+    }
+
+    /// 決定的な方針では、集める地点が柔らかい上限を見て、公開された今のタスクに旗を立てる。旗の項は同じ集める地点が
+    /// 取り、今のタスクを保留にする。閾値は進む。
+    #[test]
+    fn a_gathered_policy_flags_in_gather() {
+        let (code, mut ctx, mut sched) = soft_fixture();
+        let control = Arc::clone(ctx.heap().control());
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        sched.mark = control.taken(0);
+        sched.publish(&task);
+        let held = ctx.fresh_string(&"x".repeat(200 << 10));
+        assert!(control.pressure().is_some());
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(ctx.depth_limit(), 0);
+        assert!(control.pressure().is_none(), "the threshold does not move");
+        assert!(sched.cells.mail.take(0).is_empty());
+        unsafe { ctx.heap_mut().decref(held) }.unwrap();
+    }
+
+    /// 待ちに入ったエントリの `Task` は、`Finish` の切り替えの前の集める地点で候補にならない。区間を閉じた直後に公開を
+    /// 外すためである。候補がないので閾値も進まない。
+    #[test]
+    fn an_entry_that_waits_is_not_chosen_in_the_gather_of_its_switch() {
+        let (code, mut ctx, mut sched) = soft_fixture();
+        let control = Arc::clone(ctx.heap().control());
+        let cell = cells::placed_task(&sched.cells, 0);
+        sched.cells.lock().started(cell).unwrap();
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        let mut other = Task::new(&code, function(&code, "main"), DEPTH);
+        other.worker = ctx.heap().worker();
+        other.state = TaskState::Ready;
+        let other_id = sched.add_task(other);
+        sched.run.push_ready(0, Ready::Task(other_id));
+        sched.mark = control.taken(0);
+        sched.publish(&task);
+        let held = ctx.fresh_string(&"x".repeat(200 << 10));
+        assert!(control.pressure().is_some());
+        entry_finish::<Checked>(&code, &mut ctx, &mut task, &mut sched).unwrap();
+        assert!(
+            task.cell.is_none(),
+            "the switch does not reach the other task"
+        );
+        assert!(control.pressure().is_some(), "a waiting task is chosen");
+        assert_eq!(sched.run.slots[0].current.load(Ordering::Relaxed), NO_CELL);
+        unsafe { ctx.heap_mut().decref(held) }.unwrap();
     }
 
     /// `par` の右の子は、タスクの外の親からは `Stops` を、タスクの中の親からは保留も猶予もない `Task` を受け継ぐ。

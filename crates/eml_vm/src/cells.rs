@@ -638,8 +638,6 @@ pub(crate) enum MailItem {
     Signal(u32),
     /// タスク `cell` への上限の旗。監視のスレッドは登録表の lock を取らないので、lock なしで読んだ古い番号のこともある
     /// (docs/spec/vm.md の「タスクの上限」)。
-    // 積む側の監視のスレッドの務めはまだなく、今はテストだけが積む
-    #[cfg_attr(not(test), expect(dead_code))]
     Limit(CellRef),
 }
 

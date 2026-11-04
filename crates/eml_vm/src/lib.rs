@@ -42,7 +42,9 @@ pub use driver::{Clock, Signal, VirtualSignal};
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
-pub use sched::{Normal, Policy, Rescue, RescueAlways, Sched, Scheduler, Seeded, Sequential};
+pub use sched::{
+    Memory, Normal, Policy, Rescue, RescueAlways, Sched, Scheduler, Seeded, Sequential,
+};
 pub use vm::Task;
 pub use workers::{Entry, Ready};
 
