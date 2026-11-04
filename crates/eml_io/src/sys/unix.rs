@@ -7,15 +7,15 @@
 use std::io;
 use std::mem::{self, MaybeUninit};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use eml_rt::{IoWaker, OpKey, RawBuf, RawSocket};
+use eml_rt::{IoWaker, OpKey, RawBuf, RawResource, RawSocket};
 use libc::c_int;
 
-use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
+use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
 
 /// 起こしの識別子。行 `u32::MAX` は作らないので、どの行の識別子とも重ならない。
 pub(super) const WAKE: u64 = u64::MAX;
@@ -216,6 +216,41 @@ fn send_raw(fd: BorrowedFd<'_>, buf: RawBuf, flags: c_int) -> io::Result<usize> 
     // 呼び出しは同期である
     let n = syscall(|| unsafe { libc::send(fd.as_raw_fd(), buf.ptr.cast(), buf.cap, flags) })?;
     Ok(n as usize)
+}
+
+/// 1回の `read(2)` と `write(2)` に渡す長さの上限。Apple の OS は `INT_MAX` を超える長さを `EINVAL` で断るので、
+/// std と同じく切り詰め、短い数として返す。
+#[cfg(target_vendor = "apple")]
+const FILE_IO_LIMIT: usize = c_int::MAX as usize - 1;
+#[cfg(not(target_vendor = "apple"))]
+const FILE_IO_LIMIT: usize = isize::MAX as usize;
+
+/// ファイルの読みの仕事の本体。プールのスレッドの上で、貸された記憶に1回読む。
+fn read_file(fd: RawFd, buf: RawBuf) -> io::Result<usize> {
+    let len = buf.cap.min(FILE_IO_LIMIT);
+    // SAFETY: `RawBuf` の約束により、仕事が答えるまで `buf` は `cap` バイトの一意の記憶を指し、核は仕事が終わるまで
+    // `fd` を閉じない。仕事はプールの列の mutex を通ってこのスレッドへ来て、答えは受け箱の mutex を通って戻るので、
+    // 貸す側の読みと確定はこの書きの後になる (docs/spec/vm.md の「時計と driver」)。カーネルは `len <= cap` バイトまで書く
+    let n = syscall(|| unsafe { libc::read(fd, buf.ptr.cast(), len) })?;
+    Ok(n as usize)
+}
+
+/// ファイルの書きの仕事の本体。プールのスレッドの上で、貸された記憶の `cap` バイトをすべて書く。
+fn write_file(fd: RawFd, buf: RawBuf) -> io::Result<usize> {
+    let mut written = 0;
+    while written < buf.cap {
+        // 残りの位置は貸した記憶の中にあり、指すだけで読み書きしない
+        let at = buf.ptr.wrapping_add(written);
+        let len = (buf.cap - written).min(FILE_IO_LIMIT);
+        // SAFETY: `read_file` と同じく、仕事が答えるまで `buf` は `cap` バイトの読める記憶を指し、`fd` は開いている。
+        // `at` から `len <= cap - written` バイトはその中にある。カーネルは読むだけである
+        let n = syscall(|| unsafe { libc::write(fd, at.cast(), len) })?;
+        if n == 0 {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        written += n as usize;
+    }
+    Ok(buf.cap)
 }
 
 fn setsockopt_int(fd: BorrowedFd<'_>, level: c_int, name: c_int, value: c_int) -> io::Result<()> {
@@ -665,10 +700,14 @@ impl<P: Poller> Backend for Unix<P> {
         drop(sock.fd);
     }
 
-    fn adopt(&mut self, sock: RawSocket) -> io::Result<Sock> {
-        let fd = sock.into_inner();
+    fn adopt(&mut self, res: RawResource) -> io::Result<Sock> {
+        let (fd, register) = match res {
+            RawResource::Socket(sock) => (sock.into_inner(), true),
+            // 通常のファイルは poller に readiness を持たないので登録しない。行は `close` を1つの形に保つためだけに取る
+            RawResource::File(file) => (file.into_inner(), false),
+        };
         let (row, generation) = self.rows.adopt();
-        if let Err(e) = self.register_row(fd.as_fd(), row, generation, true) {
+        if register && let Err(e) = self.register_row(fd.as_fd(), row, generation, true) {
             self.rows.release(row, generation);
             return Err(e);
         }
@@ -677,6 +716,16 @@ impl<P: Poller> Backend for Unix<P> {
             row,
             generation,
         })
+    }
+
+    fn file_job(&self, sock: &Sock, write: bool, buf: RawBuf) -> Job {
+        // 仕事が走る間、核はファイルを閉じない。そのため番号だけを渡してよい
+        let fd = sock.fd.as_raw_fd();
+        if write {
+            Box::new(move || write_file(fd, buf))
+        } else {
+            Box::new(move || read_file(fd, buf))
+        }
     }
 
     fn start(&mut self, key: OpKey, step: Step<'_, Sock>) -> Start {
@@ -780,7 +829,7 @@ mod tests {
             start = backend.start(key, Step::Accept { listener });
         }
         match done(start) {
-            Outcome::Accepted { sock, .. } => backend.adopt(sock).unwrap(),
+            Outcome::Accepted { sock, .. } => backend.adopt(RawResource::Socket(sock)).unwrap(),
             _ => panic!("not an accepted socket"),
         }
     }

@@ -564,7 +564,10 @@ fn accepted(
     op: Started,
 ) -> (eml_rt::IoHandle, std::net::SocketAddr) {
     match complete(driver, stash, op).result.unwrap() {
-        Done::Accepted { sock, peer } => (driver.adopt(sock).unwrap(), peer),
+        Done::Accepted { sock, peer } => (
+            driver.adopt(eml_rt::RawResource::Socket(sock)).unwrap(),
+            peer,
+        ),
         other => panic!("an accept ended with {other:?}"),
     }
 }
@@ -1733,7 +1736,7 @@ fn an_accepted_socket_is_used_by_the_driver_of_another_thread() {
     std::thread::spawn(move || {
         let mut other = RealDriver::new().unwrap();
         let mut stash = Vec::new();
-        let handle = other.adopt(sock).unwrap();
+        let handle = other.adopt(eml_rt::RawResource::Socket(sock)).unwrap();
         let mut got = Vec::new();
         while got.len() < 4 {
             let mut data = [0u8; 4];
@@ -1787,4 +1790,82 @@ fn a_dropped_accepted_socket_is_closed() {
     drop(completion);
     let mut rest = Vec::new();
     assert_eq!(peer.read_to_end(&mut rest).unwrap(), 0);
+}
+
+/// `file` を `Op::Adopt` で取り込み、そのハンドルを返す。
+fn adopt_file(driver: &mut RealDriver, file: impl Into<eml_rt::OsHandle>) -> eml_rt::IoHandle {
+    let res = eml_rt::RawResource::File(eml_rt::RawFile::new(file.into()));
+    match driver.submit(next_key(), Op::Adopt { res }) {
+        Submit::Done(Ok(Done::Handle(handle))) => handle,
+        other => panic!("an adopt ended with {other:?}"),
+    }
+}
+
+/// 書いたファイルを別のハンドルで開き直して読む。どちらの仕事もプールのスレッドで貸された記憶を使う。
+#[test]
+fn a_file_is_written_and_read_through_the_pool() {
+    let path = std::env::temp_dir().join(format!(
+        "eml-io-real-{}-written-and-read",
+        std::process::id()
+    ));
+    let mut driver = RealDriver::new().unwrap();
+    let mut stash = Vec::new();
+    let writer = adopt_file(&mut driver, std::fs::File::create(&path).unwrap());
+    let mut data = *b"through the pool";
+    let write = pending(
+        &mut driver,
+        Op::Write {
+            handle: writer,
+            buf: raw(&mut data),
+        },
+    );
+    assert_eq!(
+        wait_for(&mut driver, &mut stash, write).result.unwrap(),
+        Done::Size(16)
+    );
+    driver.close(writer);
+    let reader = adopt_file(&mut driver, std::fs::File::open(&path).unwrap());
+    let mut got = [0u8; 32];
+    let read = pending(
+        &mut driver,
+        Op::Read {
+            handle: reader,
+            buf: raw(&mut got),
+        },
+    );
+    let Done::Size(n) = wait_for(&mut driver, &mut stash, read).result.unwrap() else {
+        panic!("a file read ended without a size");
+    };
+    assert_eq!(&got[..n], b"through the pool");
+    driver.close(reader);
+    drop(driver);
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// 落とす driver は、走っているファイルの仕事が終わるまで待ってから戻る。止まる読みを作るため、ファイルの代わりに
+/// 同期のパイプの読む端を取り込む。driver はファイルの種類を確かめない (確かめるのは開く Host である)。
+#[test]
+fn dropping_a_driver_waits_for_a_running_file_job() {
+    use std::io::Write;
+
+    let (read_end, mut write_end) = std::io::pipe().unwrap();
+    let mut driver = RealDriver::new().unwrap();
+    let handle = adopt_file(&mut driver, read_end);
+    let mut got = [0u8; 4];
+    pending(
+        &mut driver,
+        Op::Read {
+            handle,
+            buf: raw(&mut got),
+        },
+    );
+    let writer = std::thread::spawn(move || {
+        // 遅れは、書く前に driver が落ち始めるようにして検出力を上げるためだけにある。合否には効かない
+        std::thread::sleep(Duration::from_millis(50));
+        write_end.write_all(b"late").unwrap();
+    });
+    drop(driver);
+    // 待たずに落ちたなら、書き手はまだ眠っていて、貸した記憶は埋まっていない
+    assert_eq!(&got, b"late");
+    writer.join().unwrap();
 }

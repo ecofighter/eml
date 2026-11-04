@@ -15,10 +15,10 @@ pub type OpKey = u64;
 /// driver が持つハンドル (リスナー、ストリーム)。1つの driver の寿命の間は使い回さない。
 pub type IoHandle = u64;
 
-/// カーネルが読み書きする記憶。貸す側のスレッドで作り、driver を持つスレッドで使うので `Send` である。
-/// 番地を持つだけで、生かし続ける責めは持たない。その責めは下の貸す側の約束が負う。`cap == 0` は
-/// 記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側は、`submit` が
-/// `Submit::Done` を返すか、その操作の完了を `completions` から取り出すまで、物体を生かし、動かさない。
+/// カーネルとプールのスレッドが読み書きする記憶。貸す側のスレッドで作り、driver を持つスレッドと、その driver の
+/// プールのスレッドで使うので `Send` である。番地を持つだけで、生かし続ける責めは持たない。その責めは下の貸す側の
+/// 約束が負う。`cap == 0` は記憶がないことを表し、`ptr` は空でない任意の番地で、読みも書きもしない。貸した側は、
+/// `submit` が `Submit::Done` を返すか、その操作の完了を `completions` から取り出すまで、物体を生かし、動かさない。
 /// `Read` に貸した記憶は一意に保ち、`Write` に貸した記憶は書き換えない。
 #[derive(Clone, Copy)]
 pub struct RawBuf {
@@ -28,7 +28,9 @@ pub struct RawBuf {
 
 // SAFETY: `ptr` は、貸す側のスレッドで操作の記録が持つ物体から作る。記録は、`submit` が `Submit::Done` を返すか
 // 完了を記録に当てるまで、その物体を生かし、動かさず、`Read` に貸した記憶は一意に保つ。その間 `RawBuf` を読み書きする
-// のは driver を持つスレッドだけなので、番地を別のスレッドへ移しても、貸した記憶への触れ方は変わらない
+// のは、driver を持つスレッドと、その操作のファイルの仕事を走らせるプールのスレッドだけである。仕事はプールの列の
+// mutex を通ってプールのスレッドへ渡り、答えは受け箱の mutex と `wait` と `completions` を通って戻るので、どちらの
+// 受け渡しも happens-before の辺になり、貸す側が完了の後に読むか確定するのは仕事の書きの後になる
 // (docs/spec/vm.md の「時計と driver」、docs/spec/object-model.md の T10 の行)。
 unsafe impl Send for RawBuf {}
 
@@ -38,9 +40,11 @@ pub enum Op {
     /// 辺ではない。受け付けたときにその状態なら、その場で終わってよい。
     Readable { handle: IoHandle },
     /// `buf.ptr[0..cap]` に1回読む。読めるデータか EOF があればその場で読み、なければ読めるようになるまで
-    /// 待ってから読む。`Ok(n)` で終わり、n == 0 は EOF である。`cap` は 1 以上。
+    /// 待ってから読む。`Ok(n)` で終わり、n == 0 は EOF である。`cap` は 1 以上。ファイルのハンドルでは
+    /// プールの仕事が読み、いつも `Submit::Pending` を返す。
     Read { handle: IoHandle, buf: RawBuf },
     /// `buf.ptr[0..cap]` をすべて書き、`Ok(cap)` で終わる。短く終わった書きは driver が続きを出し直す。
+    /// ファイルのハンドルではプールの仕事が書き、いつも `Submit::Pending` を返す。
     Write { handle: IoHandle, buf: RawBuf },
     /// `addr` で TCP の接続を待ち受ける。`Done::Listener` で終わる。ポートが 0 なら空いているポートを使う。
     Listen { addr: SocketAddr },
@@ -59,6 +63,9 @@ pub enum Op {
     /// 記憶に届き、ヒープにも RC にも触れない。panic しない。本物の driver は、仕事の panic を driver を持つ
     /// スレッドの上で起こし直すためである。
     Job(Box<dyn FnOnce() -> io::Result<usize> + Send + 'static>),
+    /// どの driver にも縛っていない OS の資源を取り込み、`Done::Handle` で返す。いつも受け付けで終わり、受けた
+    /// driver の `adopt` と同じ規則で `Submit::Done` を返す。
+    Adopt { res: RawResource },
 }
 
 /// 終わった操作の中身。
@@ -73,6 +80,36 @@ pub enum Done {
     /// `Accept` が受けて、まだどの driver にも結び付けていないソケットと、相手の番地。`adopt` した driver の
     /// ハンドルになる。
     Accepted { sock: RawSocket, peer: SocketAddr },
+    /// `Adopt` が取り込んだ資源のハンドル。
+    Handle(IoHandle),
+}
+
+/// OS のハンドルの持ち主の型。ファイル (と、後で子のパイプ) を driver と Host の間で受け渡す。
+#[cfg(unix)]
+pub type OsHandle = std::os::fd::OwnedFd;
+#[cfg(windows)]
+pub type OsHandle = std::os::windows::io::OwnedHandle;
+
+/// Host が開いた、同期の通常のファイル。どの driver にも縛っていないので、どのスレッドへ移しても、そこで落としても
+/// よい。落とせばファイルを閉じる。driver はその読み書きをプールの仕事にする (docs/spec/vm.md の「時計と driver」)。
+#[derive(Debug)]
+pub struct RawFile(OsHandle);
+
+impl RawFile {
+    pub fn new(handle: OsHandle) -> RawFile {
+        RawFile(handle)
+    }
+
+    pub fn into_inner(self) -> OsHandle {
+        self.0
+    }
+}
+
+/// `adopt` に渡す、どの driver にも縛っていない OS の資源。
+#[derive(Debug)]
+pub enum RawResource {
+    Socket(RawSocket),
+    File(RawFile),
 }
 
 /// OS のソケットの持ち主の型。
@@ -150,9 +187,9 @@ pub struct HandleBin {
 /// worker ごとの時計と I/O の待ち。driver は作ったスレッドの上でだけ使うので、`Send` も `Sync` も求めない。
 /// スレッドをまたぐインターフェースは `IoWaker` だけである (docs/spec/vm.md の「時計と driver」)。
 ///
-/// driver を落とすときは、仕事も名前の解決も待たない。OS がこちらの記憶 (貸した buffer か driver の記録) に書きうる
-/// 操作だけ終わりを待ち、上限までに終わらないか待ちが失敗すればプロセスを止める。その記憶を放せないまま戻らないため
-/// である。
+/// driver を落とすときは、仕事も名前の解決も待たない。OS かプールのスレッドがこちらの記憶 (貸した buffer か driver の
+/// 記録) に書きうる操作 (ファイルの読み書きを含む) だけ終わりを待ち、上限までに終わらないか待ちが失敗すればプロセスを
+/// 止める。その記憶を放せないまま戻らないためである。
 pub trait IoDriver {
     /// 作ったときからの単調な経過時間。
     fn now(&self) -> Duration;
@@ -172,7 +209,7 @@ pub trait IoDriver {
     /// 出した操作に効いてはならない (取り消しを後で OS に出す driver は、出す時点で同じ操作であることを確かめる)。
     /// 保留の操作の完了は、取り消しで終わったか自分で着いた結果で、それでも1回届く。ブロックしない。OS が取り消しを
     /// 断れば driver は壊れた状態になる。壊れた driver では完了が届かないことがあり、そのとき `quiesce` は保留を残して
-    /// 戻る。`Op::Job` には何もしない。
+    /// 戻る。`Op::Job` とファイルの読み書きには何もしない。
     fn cancel(&mut self, key: OpKey);
     /// `wait` (と `cancel` の即時の取り消し) が届けた完了をすべて `out` に移す。OS を見ず、保留の表を歩かない。
     /// 順は driver が決め、呼ぶ側は鍵で記録を引く。
@@ -183,9 +220,11 @@ pub trait IoDriver {
     fn bin(&self) -> Arc<HandleBin>;
     /// driver の参照を落とす。保留の操作は終わるまで OS の資源を生かす。前提はない。
     fn close(&mut self, handle: IoHandle);
-    /// `Done::Accepted` のソケットを自分に登録するか結び付け、そのハンドルを返す。ソケットはどの driver が受けたもの
-    /// でもよい。失敗すればソケットは閉じる。ソケットを外に出さない driver と壊れた driver は `Err` を返す。
-    fn adopt(&mut self, sock: RawSocket) -> io::Result<IoHandle>;
+    /// 資源を自分のハンドルにして返す。`Done::Accepted` のソケットは自分に登録するか結び付ける。どの driver が受けた
+    /// ものでもよい。ファイルは登録も結び付けもせず、読み書きをプールの仕事にする。失敗すれば資源は閉じる。ソケットを
+    /// 外に出さない driver はソケットに、ファイルを扱わない driver はファイルに `Err` を返し、壊れた driver はどちらにも
+    /// `Err` を返す。
+    fn adopt(&mut self, res: RawResource) -> io::Result<IoHandle>;
     /// 保留の操作をすべて取り消し、完了がすべて届くまで待って捨て、捨てた完了の中身のハンドルと `bin` のハンドルを
     /// 閉じる。仕事は上限なしに待ちきり、仕事の panic は待ちきった後で起こし直す。名前の解決は待たない。OS に出した
     /// 取り消しの終わりが上限までに届かなければ壊れた状態にする。driver が壊れているときは保留を残して戻る

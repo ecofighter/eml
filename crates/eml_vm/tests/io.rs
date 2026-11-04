@@ -327,7 +327,7 @@ impl IoDriver for HoldingDriver {
 
     fn close(&mut self, _handle: IoHandle) {}
 
-    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+    fn adopt(&mut self, _res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
@@ -538,8 +538,8 @@ impl IoDriver for Recorder {
         self.inner.close(handle);
     }
 
-    fn adopt(&mut self, sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
-        self.inner.adopt(sock)
+    fn adopt(&mut self, res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
+        self.inner.adopt(res)
     }
 
     fn quiesce(&mut self) {

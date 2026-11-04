@@ -722,6 +722,6 @@ fn the_test_driver_adopts_no_socket() {
     let (far, _) = listener.accept().unwrap();
     let sock = eml_rt::RawSocket::new(eml_rt::OsSocket::from(far));
     let mut driver = TestDriver::new(None);
-    let e = driver.adopt(sock).unwrap_err();
+    let e = driver.adopt(eml_rt::RawResource::Socket(sock)).unwrap_err();
     assert_eq!(e.kind(), ErrorKind::Unsupported);
 }

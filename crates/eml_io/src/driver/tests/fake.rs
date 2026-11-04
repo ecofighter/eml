@@ -1,5 +1,6 @@
-//! 核のテストの偽の backend。鍵ごとの台本で `start` に答え、呼ばれた順を記録する。`RawBuf` への読み書きはカーネルの
-//! 代わりに貸された記憶に触れるので、このファイルは `unsafe` を持つ (docs/implementation/testing.md の「核の Miri」)。
+//! 核のテストの偽の backend。鍵ごとの台本で `start` に答え、呼ばれた順を記録する。`RawBuf` への読み書きはカーネルと
+//! ファイルの仕事の代わりに貸された記憶に触れるので、このファイルは `unsafe` を持つ。ファイルの仕事は本物のプールの
+//! スレッドで走り、偽のファイルの中身に読み書きする (docs/implementation/testing.md の「核の Miri」)。
 //! slice は作らず、生のポインタの写しだけで触れる。
 
 #![allow(unsafe_code)]
@@ -8,13 +9,13 @@ use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::SocketAddr;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use eml_rt::{IoWaker, OpKey, RawSocket};
+use eml_rt::{IoWaker, OpKey, RawBuf, RawResource, RawSocket};
 
-use crate::driver::backend::{Backend, Cancel, Event, Hold, Outcome, Start, Step};
+use crate::driver::backend::{Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
 
 /// 行番号だけを持つ。`Clone` も `Copy` もしないので、核がソケットを写せないことを型で守る。
 #[derive(Debug, PartialEq, Eq)]
@@ -135,6 +136,14 @@ pub(super) struct Fake {
     pub closed: Arc<Mutex<Vec<u32>>>,
     /// `cancel` された鍵。`closed` と同じく、driver を落とした後も読める。
     pub cancelled_keys: Arc<Mutex<Vec<OpKey>>>,
+    /// ファイルの仕事が読み書きする偽のファイルの中身。読みは先頭から取り去り、書きは後ろに足す。仕事はプールの
+    /// スレッドで走るので、mutex の下に置く。
+    pub file: Arc<Mutex<Vec<u8>>>,
+    /// 次に作るファイルの仕事が、走り始めてから中身に触れる前に待つ門。
+    pub file_gate: Mutex<Option<mpsc::Receiver<()>>>,
+    /// 真なら、作ったスレッドが走る間の期限つきの待ちは、時計を進めずに起こしが鳴るまで待つ。偽なら panic する。
+    /// driver を落とすときの期限つきの待ちを、ファイルの仕事を走らせるプールのスレッドと並べて通すためにだけ立てる
+    pub ring_while_threads_run: bool,
 }
 
 impl Fake {
@@ -155,6 +164,9 @@ impl Fake {
             calls: Vec::new(),
             closed: Arc::default(),
             cancelled_keys: Arc::default(),
+            file: Arc::default(),
+            file_gate: Mutex::new(None),
+            ring_while_threads_run: false,
         }
     }
 
@@ -287,12 +299,48 @@ impl Backend for Fake {
             .push(sock.0);
     }
 
-    fn adopt(&mut self, sock: RawSocket) -> io::Result<FakeSock> {
-        // 偽のソケットの行だけを作り、OS のソケットはここで閉じる
-        drop(sock);
+    fn adopt(&mut self, res: RawResource) -> io::Result<FakeSock> {
+        // 偽のソケットの行だけを作り、OS の資源はここで閉じる
+        drop(res);
         let sock = self.sock();
         self.calls.push(Call::Adopt(sock.0));
         Ok(sock)
+    }
+
+    fn file_job(&self, _sock: &FakeSock, write: bool, buf: RawBuf) -> Job {
+        let file = Arc::clone(&self.file);
+        let gate = self
+            .file_gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        Box::new(move || {
+            // 欄ごとに捕まえると生のポインタだけが移り、閉包が `Send` でなくなるので、`RawBuf` ごと移す
+            let buf = buf;
+            if let Some(gate) = gate {
+                gate.recv().expect("the test opens the gate");
+            }
+            let mut file = file.lock().unwrap_or_else(PoisonError::into_inner);
+            if write {
+                let len = file.len();
+                file.reserve(buf.cap);
+                // SAFETY: 貸した側は完了まで `buf.ptr[0..cap]` を生かし、書き換えない (`RawBuf`)。仕事はプールの列の
+                // mutex を通ってこのスレッドに来た。`file` は `reserve` で `len + cap` まで空きがあり、貸した記憶とは
+                // 別の確保なので重ならない。写した後で長さを確定する
+                unsafe {
+                    std::ptr::copy_nonoverlapping(buf.ptr, file.as_mut_ptr().add(len), buf.cap);
+                    file.set_len(len + buf.cap);
+                }
+                Ok(buf.cap)
+            } else {
+                let n = buf.cap.min(file.len());
+                // SAFETY: 貸した側は完了まで `buf.ptr[0..cap]` を生かし、一意に保つ (`RawBuf`)。写すのは cap 以下で、
+                // `file` は別の確保なので重ならない。答えは受け箱の mutex を通って driver のスレッドへ戻る
+                unsafe { std::ptr::copy_nonoverlapping(file.as_ptr(), buf.ptr, n) };
+                file.drain(..n);
+                Ok(n)
+            }
+        })
     }
 
     fn start(&mut self, key: OpKey, step: Step<'_, FakeSock>) -> Start {
@@ -353,6 +401,11 @@ impl Backend for Fake {
             Some(d) => {
                 // 本物のスレッドが走る間に偽の時計を進めると、合否がスケジュールに依る
                 let running = self.spawned.get() - self.finished.get();
+                if self.ring_while_threads_run && running > 0 && !d.is_zero() {
+                    // 時計を進めず、スレッドの答えの起こしを待つ。止まらなかった起こしは 10 秒で落ちる
+                    self.bell.wait();
+                    return Ok(());
+                }
                 assert!(
                     d.is_zero() || running == 0,
                     "a timed fake wait while a thread runs"

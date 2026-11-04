@@ -227,17 +227,18 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 ### ThreadSanitizer
 
-- `tsan` のジョブは、worker のスレッドの間で共有する記憶に data race がないことを `-Zsanitizer=thread` で確かめる。流すのは `eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、`io::`、`chan::`、`eml_vm` の lib の `counters::` の3手順で、対象は `x86_64-unknown-linux-gnu` だけである。Miri は複数のスレッドの interleaving を網羅しないので、スレッドをまたぐ `unsafe` の核 (`eml_rt` の remote 解放の経路と、`eml_vm` の起こしの語、run の表、run の登録表と mail、ほかの worker への操作の転送、`Counter` の atomic、worker をまたぐ channel) は、実際に走るスレッドの上で ThreadSanitizer が見る
-- nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。3つの手順は、この形で報告なしに通っている
+- `tsan` のジョブは、worker のスレッドの間で共有する記憶に data race がないことを `-Zsanitizer=thread` で確かめる。流すのは `eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、`io::`、`chan::`、`eml_vm` の lib の `counters::`、`eml_io` の lib の `driver::tests::` の4手順で、対象は `x86_64-unknown-linux-gnu` だけである。Miri は複数のスレッドの interleaving を網羅しないので、スレッドをまたぐ `unsafe` の核 (`eml_rt` の remote 解放の経路と、`eml_vm` の起こしの語、run の表、run の登録表と mail、ほかの worker への操作の転送、`Counter` の atomic、worker をまたぐ channel、`eml_io` の driver のプールのスレッドが貸された記憶に書くファイルの仕事) は、実際に走るスレッドの上で ThreadSanitizer が見る
+- nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。`eml_rt` と `eml_vm` の3つの手順は、この形で報告なしに通っている
 - 合否は終了コードで決める。`TSAN_OPTIONS=halt_on_error=1` で、警告が1件でも出たらテストのプロセスが止まる。警告は抑制せず、`suppressions` も書かない。報告が出たら、コードの不具合か、`eml_rt` の `unsafe` が前提にしている順序の誤りとして直す
 - 開発機では build の置き場所を `target/tsan` に分ける (「よく使うコマンド」)
 - 道具の不具合で緑にできないときは、「AddressSanitizer」と同じく、fenix と同じ日付に固めた rustup の nightly にする。それでも緑にならなければ、ジョブを外し、外したことをこの節とロードマップの「その後の項目」に書く
 
 ### 核の Miri
 
-- 本物の driver の核 (`crates/eml_io/src/driver/`) は OS を呼ばない。OS に触れるのは `Backend` の実装だけで、核の単体テスト (`src/driver/tests/`、module `driver::tests`) は偽の backend (`src/driver/tests/fake.rs`) の上で、続きの規則、取り消し、壊れた driver、受けたソケットの取り込みと捨てた完了の受けたソケットが閉じること、`quiesce` と `Drop`、プール、名前の解決を確かめる。同じテストを Miri でも流す
+- 本物の driver の核 (`crates/eml_io/src/driver/`) は OS を呼ばない。OS に触れるのは `Backend` の実装だけで、核の単体テスト (`src/driver/tests/`、module `driver::tests`) は偽の backend (`src/driver/tests/fake.rs`) の上で、続きの規則、取り消し、壊れた driver、受けたソケットの取り込みと捨てた完了の受けたソケットが閉じること、`quiesce` と `Drop`、プール、名前の解決、ファイルの取り込みとファイルの読み書きの仕事を確かめる。同じテストを Miri でも流す
 - 偽の backend は鍵ごとの台本で `start` に答え、呼ばれた順を記録する。`Recv` と `Send` の buffer には `copy_nonoverlapping` で書き、slice を作らない。そのため、短い書きの残りの位置の誤りは Miri で落ちる
-- 偽の backend の `wait` は実時間を使わない。`wait(None)` は起こしが鳴るまで待ち、10 秒鳴らなければ止まったテストとして panic する。`wait(Some(d))` は偽の時計を `d` 進めてすぐ戻る。`CANCEL_LIMIT` と `HELD_LIMIT` の 1 秒の道は、こうして実時間なしに通す。偽の backend が作ったスレッドが走っている間に `d > 0` で呼ぶと panic する。本物のスレッドを持つテストが、偽の時計の進み方に合否を預けないためである。そういうテストで使えるのは、`wait(None)` と、偽の backend の `finished` が期待の数に届いた後の `wait(Some(0))` だけである
+- 偽の backend のファイルの仕事は、本物のプールのスレッドの上で、mutex の下の偽のファイルの中身と貸された記憶の間を `copy_nonoverlapping` で写す。貸す側のスレッドと別のスレッドが貸された記憶に書き、核が受け箱から答えを引き取った後に貸す側が読むので、プールの列と受け箱の mutex がつくる happens-before の辺を Miri が確かめる。仕事は門で止められ、取り消しが仕事を終わらせないこと、閉じたハンドルが仕事の後で閉じること、`quiesce` が仕事を待ちきること、driver を落とすときに門で止まった仕事の欄を残して終わりを待つことを、門を開く順で確かめる
+- 偽の backend の `wait` は実時間を使わない。`wait(None)` は起こしが鳴るまで待ち、10 秒鳴らなければ止まったテストとして panic する。`wait(Some(d))` は偽の時計を `d` 進めてすぐ戻る。`CANCEL_LIMIT` と `HELD_LIMIT` の 1 秒の道は、こうして実時間なしに通す。偽の backend が作ったスレッドが走っている間に `d > 0` で呼ぶと panic する。本物のスレッドを持つテストが、偽の時計の進み方に合否を預けないためである。そういうテストで使えるのは、`wait(None)` と、偽の backend の `finished` が期待の数に届いた後の `wait(Some(0))` だけである。例外は、driver を落とすときの期限つきの待ちを、ファイルの仕事を走らせるプールのスレッドと並べて通すテストである。偽の backend の `ring_while_threads_run` を立てると、スレッドが走る間の `wait(Some(d))` は時計を進めずに `wait(None)` と同じく起こしを待つ。時計が進まないので、合否はスケジュールに依らない
 - Miri で流すテストの形は次のとおりである。Miri は、main が終わるときに走っているスレッドを誤りにする
   1. 出した仕事と名前の解決は、手放したものも含めて、本体が答えを積み、核が引き取るまで進めてから driver を落とす。手放した解決は `finished` を待ってから `wait(Some(0))` を呼ぶ。`wait(None)` は保留の欄も届いた完了もないと `Ok(false)` で戻り、答えを引き取らないためである
   2. 順は門 (`mpsc`、`Mutex` と `Condvar`) で作る。`sleep` は合否に効かない検出力のためだけに使う
@@ -246,7 +247,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
   5. 上限の振る舞いは小さな上限で確かめる。プールは上限 2 で確かめ、32 本のスレッドは Miri で起こさない
   6. 偽の時計を進める待ちは、走るスレッドのない間だけ使う
 - `Drop` がプロセスを止める道のテスト (`driver::tests::abort`) は、テストのバイナリを子として起こすので、Miri では `ignore` にする
-- コマンドは `cargo miri test -p eml_io --lib -- driver::tests::` で、`eml_rt` と同じ2つの `MIRIFLAGS` で流す (「よく使うコマンド」)。予算は、ビルド済みの作業ツリーでのコマンドの `user` で、Stacked Borrows で 30 秒以内、Tree Borrows で 35 秒以内にする。ほかのビルドが走っていない 4 CPU の Linux のコンテナで測った時間の約3倍である。測り直しの規則は上の「Miri」と同じである
+- コマンドは `cargo miri test -p eml_io --lib -- driver::tests::` で、`eml_rt` と同じ2つの `MIRIFLAGS` で流す (「よく使うコマンド」)。予算は、ビルド済みの作業ツリーでのコマンドの `user` で、Stacked Borrows で 30 秒以内、Tree Borrows で 35 秒以内にする。ほかのビルドが走っていない 4 CPU の Linux のコンテナで測った時間の約3倍である。aarch64-darwin の開発機で測った `user` は、Stacked Borrows で 6.1 秒、Tree Borrows で 6.9 秒である。測り直しの規則は上の「Miri」と同じである
 
 ## `eml_vm` のテスト
 
@@ -646,7 +647,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write` と `counters::`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 - `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::`、`signal::`、`io::`、`workers::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
-- `tsan`: x86_64 の Linux で、`eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、`io::`、`chan::`、lib の `counters::` を ThreadSanitizer の下で流す (下の「ThreadSanitizer」)
+- `tsan`: x86_64 の Linux で、`eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、`io::`、`chan::`、lib の `counters::` と、`eml_io` の lib の `driver::tests::` を ThreadSanitizer の下で流す (下の「ThreadSanitizer」)
 
 CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
 
@@ -708,7 +709,7 @@ cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
 nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: signal:: io:: workers:: も。eml_io の検証)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: preempt:: io:: chan:: と -p eml_vm --lib counters::。ThreadSanitizer)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: preempt:: io:: chan:: と -p eml_vm --lib counters::、eml_io は -p eml_io --lib -- driver::tests::。ThreadSanitizer)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)

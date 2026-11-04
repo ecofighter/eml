@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eml_rt::{Completion, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawSocket, Submit};
+use eml_rt::{Completion, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawResource, Submit};
 
 use crate::driver::Driver;
 use crate::sys;
@@ -78,8 +78,8 @@ impl IoDriver for RealDriver {
         self.0.close(handle);
     }
 
-    fn adopt(&mut self, sock: RawSocket) -> io::Result<IoHandle> {
-        self.0.adopt(sock)
+    fn adopt(&mut self, res: RawResource) -> io::Result<IoHandle> {
+        self.0.adopt(res)
     }
 
     fn quiesce(&mut self) {

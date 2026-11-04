@@ -1,5 +1,6 @@
 //! 本物の driver の核 (docs/spec/vm.md の「時計と driver」)。OS を呼ばず、操作の表と続きの規則 (短い書きの残り、
-//! 中止された受けの出し直し、接続の次の番地、解決の答えからの接続) を持つ。OS に触れるのは `Backend` だけである。
+//! 中止された受けの出し直し、接続の次の番地、解決の答えからの接続、ファイルの読み書きのプールへの回し方) を持つ。
+//! OS に触れるのは `Backend` だけである。
 //! 核のテストは偽の backend の上で Miri でも流す (docs/implementation/testing.md の「核の Miri」)。
 
 pub(crate) mod backend;
@@ -20,7 +21,8 @@ use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use eml_rt::{
-    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, RawSocket, Submit,
+    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, RawResource,
+    Submit,
 };
 
 use backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
@@ -59,9 +61,17 @@ impl Broken {
     }
 }
 
-/// driver が持つソケット。保留の操作がある間は、`close` されても閉じずに残す。
+/// ハンドルの種類。ソケットの読み書きは backend の歩で進め、ファイルの読み書きはプールの仕事にする。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Socket,
+    File,
+}
+
+/// driver が持つソケットかファイル。保留の操作がある間は、`close` されても閉じずに残す。
 struct Handle<S> {
     sock: S,
+    class: Class,
     reading: bool,
     writing: bool,
     closed: bool,
@@ -102,17 +112,35 @@ enum Kind<S> {
     },
     /// 仕事の答えは札で欄に当たり、仕事は取り消せないので、欄は札を持たない。
     Job,
+    /// ファイルの読みと書きのプールの仕事。`Job` と同じく札で答えが当たり、取り消せない。仕事が終わるまで、
+    /// プールのスレッドが貸された記憶を読み書きし、ハンドルの向きを占める。
+    FileRead {
+        handle: IoHandle,
+    },
+    FileWrite {
+        handle: IoHandle,
+    },
 }
 
 impl<S> Kind<S> {
     /// 操作が占めるハンドルの向き。
     fn owner(&self) -> Option<(IoHandle, Dir)> {
         match *self {
-            Kind::Readable { handle } | Kind::Read { handle, .. } => Some((handle, Dir::Read)),
+            Kind::Readable { handle } | Kind::Read { handle, .. } | Kind::FileRead { handle } => {
+                Some((handle, Dir::Read))
+            }
             Kind::Accept { listener } => Some((listener, Dir::Read)),
-            Kind::Write { handle, .. } => Some((handle, Dir::Write)),
+            Kind::Write { handle, .. } | Kind::FileWrite { handle } => Some((handle, Dir::Write)),
             Kind::Connect { .. } | Kind::Lookup { .. } | Kind::Job => None,
         }
+    }
+
+    /// 札で答えが当たるスレッドの操作か。backend の歩も event もない。
+    fn on_a_thread(&self) -> bool {
+        matches!(
+            self,
+            Kind::Lookup { .. } | Kind::Job | Kind::FileRead { .. } | Kind::FileWrite { .. }
+        )
     }
 }
 
@@ -160,6 +188,10 @@ fn no_handle() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "no such handle")
 }
 
+fn not_a_socket() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, "the handle is not a socket")
+}
+
 fn busy() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidInput,
@@ -202,7 +234,9 @@ fn step_of<'a, S>(
             listener: sock(handles, *listener),
         },
         Kind::Connect { sock, peer, .. } => Step::Connect { sock, peer: *peer },
-        Kind::Lookup { .. } | Kind::Job => unreachable!("a thread's op has no step"),
+        Kind::Lookup { .. } | Kind::Job | Kind::FileRead { .. } | Kind::FileWrite { .. } => {
+            unreachable!("a thread's op has no step")
+        }
     }
 }
 
@@ -250,14 +284,15 @@ impl<B: Backend> Driver<B> {
         ticket
     }
 
-    /// 登録まで済んだソケットに、新しいハンドルを振る。
-    fn insert(&mut self, sock: B::Sock) -> IoHandle {
+    /// 登録まで済んだソケットか取り込んだファイルに、新しいハンドルを振る。
+    fn insert(&mut self, sock: B::Sock, class: Class) -> IoHandle {
         let handle = self.next_handle;
         self.next_handle += 1;
         self.handles.insert(
             handle,
             Handle {
                 sock,
+                class,
                 reading: false,
                 writing: false,
                 closed: false,
@@ -360,7 +395,7 @@ impl<B: Backend> Driver<B> {
                 }
             }
             (Kind::Connect { sock, peer, .. }, Ok(Outcome::Connected)) => {
-                let handle = self.insert(sock);
+                let handle = self.insert(sock, Class::Socket);
                 Flow::Finish(Ok(Done::Stream { handle, peer }), false)
             }
             (Kind::Connect { sock, rest, .. }, Err(e)) => {
@@ -466,7 +501,7 @@ impl<B: Backend> Driver<B> {
         let Some(slot) = self.slots.remove(&key) else {
             return;
         };
-        if matches!(slot.kind, Kind::Lookup { .. } | Kind::Job) {
+        if slot.kind.on_a_thread() {
             // スレッドの操作は札で終わる。使い回した鍵に古い event が来ても触れない
             self.slots.insert(key, slot);
             return;
@@ -517,7 +552,9 @@ impl<B: Backend> Driver<B> {
             let Some(key) = self.tickets.remove(&ticket) else {
                 continue;
             };
-            self.slots.remove(&key);
+            // ファイルの仕事が占めた向きを放す。閉じたハンドルは、仕事が終わったここで閉じる
+            let owner = self.slots.remove(&key).and_then(|slot| slot.kind.owner());
+            self.release(owner);
             match answer {
                 Answer::Job(Ok(result)) => self.done.push(Completion {
                     key,
@@ -590,8 +627,17 @@ impl<B: Backend> Driver<B> {
         }
     }
 
+    fn is_file(&self, handle: IoHandle) -> bool {
+        self.handles
+            .get(&handle)
+            .is_some_and(|entry| entry.class == Class::File)
+    }
+
     /// ソケットを引く操作を受け付ける。
     fn submit_io(&mut self, key: OpKey, handle: IoHandle, dir: Dir, kind: Kind<B::Sock>) -> Submit {
+        if self.is_file(handle) {
+            return Submit::Done(Err(not_a_socket()));
+        }
         match self.claim(handle, dir) {
             Ok(()) => self.begin(key, Some((handle, dir)), Flow::Again(kind)),
             Err(e) => Submit::Done(Err(e)),
@@ -640,6 +686,38 @@ impl<B: Backend> IoDriver for Driver<B> {
             // 壊れた後は OS の資源も仕事も新しく作らない
             return Submit::Done(Err(broken.error()));
         }
+        let file = match &op {
+            Op::Read { handle, buf } => Some((*handle, Dir::Read, *buf)),
+            Op::Write { handle, buf } => Some((*handle, Dir::Write, *buf)),
+            _ => None,
+        }
+        .filter(|&(handle, ..)| self.is_file(handle));
+        if let Some((handle, dir, buf)) = file {
+            // 通常のファイルには readiness がないので、読み書きはどの OS でもプールの仕事にする。仕事は貸された記憶を
+            // OS の呼び出しの中で直に使う (docs/spec/vm.md の「時計と driver」)
+            if let Err(e) = self.claim(handle, dir) {
+                return Submit::Done(Err(e));
+            }
+            let (kind, write) = match dir {
+                Dir::Read => (Kind::FileRead { handle }, false),
+                Dir::Write => (Kind::FileWrite { handle }, true),
+            };
+            let job = self
+                .backend
+                .file_job(&self.handles[&handle].sock, write, buf);
+            let ticket = self.ticket(key);
+            self.slots.insert(
+                key,
+                Slot {
+                    kind,
+                    cancelled: false,
+                    hold: Hold::None,
+                    cancel_sent: None,
+                },
+            );
+            self.pool.submit(&self.backend, ticket, job);
+            return Submit::Pending;
+        }
         match op {
             Op::Readable { handle } => {
                 self.submit_io(key, handle, Dir::Read, Kind::Readable { handle })
@@ -662,7 +740,7 @@ impl<B: Backend> IoDriver for Driver<B> {
             }
             Op::Listen { addr } => match self.backend.listen(addr) {
                 Ok((sock, port)) => {
-                    let handle = self.insert(sock);
+                    let handle = self.insert(sock, Class::Socket);
                     Submit::Done(Ok(Done::Listener { handle, port }))
                 }
                 Err(e) => Submit::Done(Err(e)),
@@ -696,17 +774,19 @@ impl<B: Backend> IoDriver for Driver<B> {
                 }
             },
             Op::ShutdownWrite { handle } => Submit::Done(match self.handles.get_mut(&handle) {
-                Some(entry) if !entry.closed => self
+                Some(entry) if !entry.closed && entry.class == Class::Socket => self
                     .backend
                     .shutdown_write(&mut entry.sock)
                     .map(|()| Done::Size(0)),
+                Some(entry) if !entry.closed => Err(not_a_socket()),
                 _ => Err(no_handle()),
             }),
             Op::SetNodelay { handle, on } => Submit::Done(match self.handles.get_mut(&handle) {
-                Some(entry) if !entry.closed => self
+                Some(entry) if !entry.closed && entry.class == Class::Socket => self
                     .backend
                     .set_nodelay(&mut entry.sock, on)
                     .map(|()| Done::Size(0)),
+                Some(entry) if !entry.closed => Err(not_a_socket()),
                 _ => Err(no_handle()),
             }),
             Op::Job(job) => {
@@ -723,6 +803,7 @@ impl<B: Backend> IoDriver for Driver<B> {
                 self.pool.submit(&self.backend, ticket, job);
                 Submit::Pending
             }
+            Op::Adopt { res } => Submit::Done(self.adopt(res).map(Done::Handle)),
         }
     }
 
@@ -731,7 +812,13 @@ impl<B: Backend> IoDriver for Driver<B> {
         let Some(slot) = self.slots.get_mut(&key) else {
             return;
         };
-        if slot.cancelled || matches!(slot.kind, Kind::Job) {
+        // プールの仕事は取り消せないので、届く答えで終わる
+        if slot.cancelled
+            || matches!(
+                slot.kind,
+                Kind::Job | Kind::FileRead { .. } | Kind::FileWrite { .. }
+            )
+        {
             return;
         }
         if broken {
@@ -811,13 +898,17 @@ impl<B: Backend> IoDriver for Driver<B> {
         }
     }
 
-    fn adopt(&mut self, sock: RawSocket) -> io::Result<IoHandle> {
+    fn adopt(&mut self, res: RawResource) -> io::Result<IoHandle> {
         if let Some(broken) = &self.broken {
-            // 壊れた後は OS の資源を新しく登録しない。ソケットはここで落ちて閉じる
+            // 壊れた後は OS の資源を新しく登録しない。資源はここで落ちて閉じる
             return Err(broken.error());
         }
-        let sock = self.backend.adopt(sock)?;
-        Ok(self.insert(sock))
+        let class = match res {
+            RawResource::Socket(_) => Class::Socket,
+            RawResource::File(_) => Class::File,
+        };
+        let sock = self.backend.adopt(res)?;
+        Ok(self.insert(sock, class))
     }
 
     fn quiesce(&mut self) {
@@ -875,33 +966,41 @@ impl<B: Backend> IoDriver for Driver<B> {
 }
 
 impl<B: Backend> Drop for Driver<B> {
-    /// 仕事と解決を待たない。OS がこちらの記憶に書きうる操作だけ `HELD_LIMIT` まで待ち、終わらないか待ちが失敗すれば
-    /// プロセスを止める。その記憶を放せないまま戻らないためである。壊れた driver も同じ道で落とす
-    /// (docs/spec/vm.md の「時計と driver」)。
+    /// 仕事と解決を待たない。OS かプールのスレッドがこちらの記憶に書きうる操作 (ファイルの仕事を含む) だけ
+    /// `HELD_LIMIT` まで待ち、終わらないか待ちが失敗すればプロセスを止める。その記憶を放せないまま戻らないためである。
+    /// 壊れた driver も同じ道で落とす (docs/spec/vm.md の「時計と driver」)。
     fn drop(&mut self) {
         self.empty_bin();
         drop(self.panic.take());
-        // 札を外すので、仕事と解決の答えは引き取っても捨てる。解決の列も空にするので、引き取りが新しい解決の
-        // スレッドを始めない
-        self.tickets.clear();
+        // 終わるまで核の外 (カーネルかプールのスレッド) がこちらの記憶を使いうる欄。判定はここの1つだけで、落とす
+        // ときはこの欄の終わりを待つ。ファイルの仕事は `Hold` でなく種類で見分ける。核が `Hold::Memory` を書くのは
+        // `drop` の中だけと決めてあり (docs/implementation/testing.md の「`unsafe` の一覧」)、ファイルの仕事の欄は
+        // `submit` が作るためである
+        let lends_memory = |slot: &Slot<B::Sock>| {
+            matches!(slot.hold, Hold::Memory)
+                || matches!(slot.kind, Kind::FileRead { .. } | Kind::FileWrite { .. })
+        };
+        // 札を外すので、仕事と解決の答えは引き取っても捨てる。記憶を使いうる欄の札だけは残し、その答えで欄を放す。
+        // 解決の列も空にするので、引き取りが新しい解決のスレッドを始めない
+        let slots = &self.slots;
+        self.tickets
+            .retain(|_, key| slots.get(key).is_some_and(lends_memory));
         self.resolver.abandon_all();
         // 渡していない完了が残ると、待ちの `turn` が待たずに回り続ける
         self.discard_done();
         let backend = &mut self.backend;
-        for (_, slot) in self
-            .slots
-            .extract_if(|_, slot| !matches!(slot.hold, Hold::Memory))
-        {
+        for (_, slot) in self.slots.extract_if(|_, slot| !lends_memory(slot)) {
             if let Kind::Connect { sock, .. } = slot.kind {
                 backend.close(sock);
             }
         }
         if !self.slots.is_empty() {
-            // 印だけ立った欄 (壊れた後の `cancel` と、断られた取り消し) には、OS の取り消しがまだ出ていない
+            // 印だけ立った欄 (壊れた後の `cancel` と、断られた取り消し) には、OS の取り消しがまだ出ていない。
+            // スレッドの操作には取り消す歩がないので、答えを待つだけである
             let keys: Vec<OpKey> = self
                 .slots
                 .iter()
-                .filter(|(_, slot)| slot.cancel_sent.is_none())
+                .filter(|(_, slot)| slot.cancel_sent.is_none() && !slot.kind.on_a_thread())
                 .map(|(key, _)| *key)
                 .collect();
             for key in keys {

@@ -637,7 +637,7 @@ impl IoDriver for FakeDriver {
 
     fn close(&mut self, _handle: IoHandle) {}
 
-    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+    fn adopt(&mut self, _res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
@@ -822,7 +822,7 @@ impl IoDriver for StubDriver {
 
     fn close(&mut self, _handle: IoHandle) {}
 
-    fn adopt(&mut self, _sock: eml_rt::RawSocket) -> std::io::Result<IoHandle> {
+    fn adopt(&mut self, _res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 

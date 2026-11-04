@@ -61,7 +61,7 @@ use std::thread::ThreadId;
 
 use eml_rt::{
     Completion, Control, Ctx, Done, Fault, HandleBin, HeapError, IoDriver, IoHandle, Mode, Op,
-    OpKey, RawBuf, RawSocket, Submit, Word,
+    OpKey, RawBuf, RawResource, Submit, Word,
 };
 
 /// 再開するタスクに渡す `Std.Async.Wake` の `Woke` のタグ (docs/spec/stdlib.md の「`Std.Async`」)。
@@ -770,9 +770,9 @@ pub(crate) enum Bind {
         handle: IoHandle,
         bin: Arc<HostBin>,
     },
-    /// まだどの driver にも取り込んでいない、受けたソケット。落ちたらその場で閉じる。
-    Unbound(RawSocket),
-    /// 取り込みを driver が断った。ソケットはそのときに閉じた。
+    /// まだどの driver にも取り込んでいない、資源 (受けたソケット)。落ちたらその場で閉じる。
+    Unbound(RawResource),
+    /// 取り込みを driver が断った。資源はそのときに閉じた。
     Lost,
 }
 
@@ -3455,7 +3455,7 @@ impl Registry {
             // (docs/spec/vm.md の「操作の記録」)
             (OpPhase::Transfer, OpKind::Accept, Ok(Done::Accepted { sock, peer })) => {
                 let stream = NetStream {
-                    bind: Bind::Unbound(sock),
+                    bind: Bind::Unbound(RawResource::Socket(sock)),
                     peer,
                     rest: Vec::new(),
                     start: 0,
@@ -4180,10 +4180,10 @@ fn bind_stream<M: Mode>(
     let driver = driver.ok_or(CellFault::Internal("a worker without a driver"))?;
     // bin は取り込む前に引く。取り込んだ後に失敗して、driver にハンドルを残さないためである
     let bin = shared.lock().host_bin(here.me, driver.bin())?;
-    let Bind::Unbound(sock) = std::mem::replace(&mut s.bind, Bind::Lost) else {
+    let Bind::Unbound(res) = std::mem::replace(&mut s.bind, Bind::Lost) else {
         unreachable!("the stream is unbound");
     };
-    let handle = match driver.adopt(sock) {
+    let handle = match driver.adopt(res) {
         Ok(handle) => handle,
         Err(e) => return Ok(Err(e)),
     };
@@ -5521,7 +5521,7 @@ impl IoDriver for NoDriver {
 
     fn close(&mut self, _handle: IoHandle) {}
 
-    fn adopt(&mut self, _sock: RawSocket) -> io::Result<IoHandle> {
+    fn adopt(&mut self, _res: RawResource) -> io::Result<IoHandle> {
         if self.refuse_adopt {
             return Err(io::Error::other("the driver refused the socket"));
         }
@@ -6981,16 +6981,20 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
 
 /// ループバックで受けた、どの driver にも取り込んでいない OS のソケットと、その相手。
 #[cfg(test)]
-fn accepted_socket() -> (RawSocket, std::net::TcpStream) {
+fn accepted_socket() -> (eml_rt::RawSocket, std::net::TcpStream) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let near = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (far, _) = listener.accept().unwrap();
-    (RawSocket::new(eml_rt::OsSocket::from(far)), near)
+    (eml_rt::RawSocket::new(eml_rt::OsSocket::from(far)), near)
 }
 
 /// worker 0 が受けた記録の完了 `Done::Accepted` を当てて、縛っていないストリームを取り出す。
 #[cfg(test)]
-fn accept_unbound(shared: &Shared, ctx: &mut Ctx<eml_rt::Checked>, sock: RawSocket) -> Word {
+fn accept_unbound(
+    shared: &Shared,
+    ctx: &mut Ctx<eml_rt::Checked>,
+    sock: eml_rt::RawSocket,
+) -> Word {
     let mut driver_0 = NoDriver::default();
     let listener = unsafe { ctx.heap_mut() }.alloc_foreign(
         NetListener {

@@ -785,6 +785,34 @@ fn lent_room_outlives_other_allocations<M: Mode>() {
     assert_eq!(mortal(&mut heap), 0);
 }
 
+/// `bytes_lend` の空きに、別のスレッドが生の位置から書く (driver のプールのスレッドがファイルを読む形)。join が
+/// happens-before の辺になり、貸した側はその後で `bytes_commit` で確定して読み戻す。大きい物体のページの末尾まで
+/// 語に揃わない長さで埋める。
+fn a_lent_room_is_written_by_another_thread<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let room = LARGE_BODY + 3;
+    unsafe {
+        let w = heap.alloc_bytes_room(room);
+        let b = heap.bytes_lend(w).unwrap();
+        assert!(b.cap >= room);
+        let n = room;
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                // 欄ごとに捕まえると生のポインタだけが移り、閉包が `Send` でなくなるので、`RawBuf` ごと移す
+                let b = b;
+                for i in 0..n {
+                    b.ptr.add(i).write(i as u8);
+                }
+            });
+        });
+        heap.bytes_commit(w, n).unwrap();
+        let expected: Vec<u8> = (0..n).map(|i| i as u8).collect();
+        assert_eq!(&*heap.bytes(w).unwrap(), &expected[..]);
+        heap.decref(w).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
 // 凍結した領域
 fn frozen_pages_are_returned<M: Mode>() {
     let (b, _, _) = super::frozen::builder::<M>();
@@ -2429,6 +2457,7 @@ both_modes!(
     shared_bytes_are_copied_before_writing,
     lent_room_is_written_and_committed,
     lent_room_outlives_other_allocations,
+    a_lent_room_is_written_by_another_thread,
     frozen_pages_are_returned,
     two_threads_read_one_region,
     chains_drop_in_any_order,

@@ -16,7 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use eml_rt::{
-    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, RawSocket, Submit,
+    Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, RawBuf, RawResource,
+    Submit,
 };
 
 use crate::flag::Flag;
@@ -144,6 +145,7 @@ impl TestDriver {
         };
         match pending.op {
             Op::Job(job) => done(job().map(Done::Size)),
+            Op::Adopt { res } => done(self.adopt(res).map(Done::Handle)),
             Op::ShutdownWrite { handle } => {
                 done(self.net.shutdown_write(handle).map(|()| Done::Size(0)))
             }
@@ -343,13 +345,14 @@ impl IoDriver for TestDriver {
     }
 
     /// 仮想のネットワークは driver ごとにあり、その端は driver の外に出せない。そのため受けは `Done::Stream` で終え、
-    /// `Done::Accepted` のソケットを作らない。渡されたソケットは OS のもので、この driver のネットワークにないので断る
-    /// (docs/spec/vm.md の「時計と driver」)。
-    fn adopt(&mut self, _sock: RawSocket) -> io::Result<IoHandle> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "the test driver adopts no sockets",
-        ))
+    /// `Done::Accepted` のソケットを作らない。渡されたソケットは OS のもので、この driver のネットワークにないので断る。
+    /// ファイルも断る (docs/spec/vm.md の「時計と driver」)。
+    fn adopt(&mut self, res: RawResource) -> io::Result<IoHandle> {
+        let what = match res {
+            RawResource::Socket(_) => "the test driver adopts no sockets",
+            RawResource::File(_) => "the test driver adopts no files",
+        };
+        Err(io::Error::new(io::ErrorKind::Unsupported, what))
     }
 
     fn quiesce(&mut self) {
