@@ -78,7 +78,8 @@ impl Network {
         }
     }
 
-    fn handle(&mut self) -> IoHandle {
+    /// 端、リスナー、取り込んだファイルが分け合うハンドルの空間から、次の番号を取る。
+    pub(super) fn handle(&mut self) -> IoHandle {
         let handle = self.next_handle;
         self.next_handle += 1;
         handle
