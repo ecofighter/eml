@@ -241,3 +241,50 @@ main () =
     assert_eq!(out, "ok 5003\nheld 100000\n");
     result.unwrap_or_else(|error| panic!("{error}"));
 }
+
+/// 待っているタスクのセルに立った旗は、再開の後にそのタスクの `try_io` が捕まえる。数の大きい `a` が `yield_now` で
+/// 列に戻っている間に数の小さい `b` が閾値を越えるので、旗は待っている `a` のセルに立つ。再開の途中にある EP の補助の
+/// 関数のエントリで起こすと、`a` の `try_io` でなく底の `try_all` に届いてしまう (docs/spec/vm.md の「タスクの上限」)。
+#[test]
+fn a_flag_delivered_to_a_parked_task_is_caught_by_its_own_try_io() {
+    let src = program(
+        "\
+hold : Int -> List Int -> <IO, Panic, Async> Int
+hold n acc =
+  if n == 0 then count acc 0
+  else
+    Async.yield_now ()
+    hold (n - 1) (1 :: acc)
+
+churn : Int -> List Int -> <IO, Panic, Async> Int
+churn n acc =
+  if n == 0 then count acc 0
+  else
+    Async.yield_now ()
+    churn (n - 1) (build 200 acc)
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let a = Async.start (fn () ->
+    match try_io (fn () -> hold 400 (build 40000 [])) with
+      | Ok n -> println \"a ok \\{show n}\"
+      | Err e -> println \"a caught: \\{show e.kind}: \\{e}\")
+  let b = Async.start (fn () ->
+    match try_io (fn () -> churn 400 []) with
+      | Ok n -> println \"b ok \\{show n}\"
+      | Err e -> println \"b caught: \\{show e.kind}: \\{e}\")
+  Async.await a
+  Async.await b
+  println \"done\"
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+",
+    );
+    let (out, result) = run(&src, 1, Sched::Sequential, 64 * MIB, 2 * MIB);
+    assert_eq!(
+        out,
+        "a caught: ResourceLimit: the memory soft limit is exceeded\nb ok 80000\ndone\n"
+    );
+    result.unwrap_or_else(|error| panic!("{error}"));
+}

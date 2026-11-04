@@ -1029,6 +1029,23 @@ pub const IO_OTHER: u32 = 4;
 pub const IO_CANCELLED: u32 = 5;
 pub const IO_RESOURCE_LIMIT: u32 = 9;
 
+/// EP が作る補助の関数の名前 (docs/spec/core-ir.md の「EP が作る補助の関数」)。`mask$[..]` は飛ばす項目ごとに
+/// 1つあるので、名前の頭だけを持つ。EP が関数を作るときも、VM がエントリの行の種類を決めるときもこれを使う。
+pub const EP_ID: &str = "id$";
+pub const EP_COMPOSE: &str = "compose$";
+pub const EP_PROMPT: &str = "prompt$";
+pub const EP_RESUME: &str = "resume$";
+pub const EP_REWIND: &str = "rewind$";
+pub const EP_MASK_PREFIX: &str = "mask$[";
+
+/// `name` が EP の補助の関数か。そのエントリの `evv` は利用者のプログラムのどの地点の `evv` でもないので、VM は
+/// タスクの上限をそこでは起こさない (docs/spec/vm.md の「タスクの上限」)。名前は `$` を含み利用者が書けないので、
+/// 名前だけで決まる。
+pub fn ep_helper(name: &str) -> bool {
+    [EP_ID, EP_COMPOSE, EP_PROMPT, EP_RESUME, EP_REWIND].contains(&name)
+        || name.starts_with(EP_MASK_PREFIX)
+}
+
 /// `Std.Async` の `Wake` のタグ。ランタイムが待たせたタスクを再開するときに、配置の表を見ずに作る
 /// (docs/spec/stdlib.md の「`Std.Async`」。`eml_core_ir` の `tests/externs.rs` が宣言の順と照らし合わせる)。
 pub const WAKE_WOKE: u32 = 0;

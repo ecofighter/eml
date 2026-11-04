@@ -14,7 +14,7 @@ use eml_rt::{
 
 use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
-use crate::code::{CodeBase, ForkTable};
+use crate::code::{CodeBase, ForkTable, UnwindEntry};
 use crate::data;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
@@ -638,7 +638,9 @@ fn limit_safepoint<R: Exec>(
 
 /// 安全点の `poll` が深さの上限を超えたと返した。タスクの外と猶予の間は run を止める。タスクの中では、関数のエントリの
 /// 安全点で `ResourceLimit` の IO の失敗を起こし、それ以外の位置では保留のまま続ける。エントリのフレームは RC の対象の
-/// 引数をすべて持ち、借りた値を持たないので、エントリの行だけで巻き戻せるためである (docs/spec/vm.md の「タスクの上限」)。
+/// 引数をすべて持ち、借りた値を持たないので、エントリの行だけで巻き戻せるためである。EP の補助の関数のエントリでも
+/// 保留のまま続ける。どのエントリでも、深さが本当の限度と猶予の和を超えていれば run を止める
+/// (docs/spec/vm.md の「タスクの上限」)。
 #[cold]
 #[inline(never)]
 fn limit_hit<R: Exec>(
@@ -654,10 +656,23 @@ fn limit_hit<R: Exec>(
     if ctx.yielding() != 0 {
         return Ok(());
     }
-    if !code.tables.unwind_at(task.pc).is_some_and(|row| row.entry) {
+    let Some(row) = code
+        .tables
+        .unwind_at(task.pc)
+        .filter(|row| row.entry != UnwindEntry::No)
+    else {
+        return Ok(());
+    };
+    let real = real_limit(ctx, task.depth_offset);
+    // 補助の関数のエントリで延ばしても深さの限度がなくならないよう、延ばす前に確かめる
+    if task.stack_depth() > real.saturating_add(LIMIT_HEADROOM) {
+        return Err(VmFault::Stopped(Stop::DepthLimit));
+    }
+    // 補助の関数のエントリの `evv` は利用者のプログラムのどの地点のものでもなく、起こすとプログラムに見えない
+    // handler に届く
+    if row.entry == UnwindEntry::Defers {
         return Ok(());
     }
-    let real = real_limit(ctx, task.depth_offset);
     let real_over = task.stack_depth() > real;
     let message = if real_over {
         "the call depth limit is exceeded"
@@ -4519,7 +4534,7 @@ fn leaks(a.0: obj) -> unit {
         ] {
             let start = code.functions[function(&code, name) as usize].start;
             let row = code.tables.unwind_at(start).expect(name);
-            assert!(row.entry, "{name}");
+            assert_ne!(row.entry, UnwindEntry::No, "{name}");
             assert_eq!(row.slots, slots, "{name}");
         }
     }
@@ -4547,7 +4562,7 @@ fn leaks(a.0: obj) -> unit {
             .tables
             .unwinds
             .iter()
-            .find(|(pc, row)| *pc > main && !row.entry)
+            .find(|(pc, row)| *pc > main && row.entry == UnwindEntry::No)
             .unwrap();
         let mut task = Task::new(&code, function(&code, "main"), DEPTH);
         task.limit = Limit::Task;
@@ -4594,6 +4609,105 @@ b2:
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(task.limit, Limit::Pending);
         assert_eq!(ctx.depth_limit(), 0);
+    }
+
+    /// `main` が `compose$` を、`compose$` が `prompt$` を呼ぶ。名前だけが EP の補助の関数のもので、本体は空に近い。
+    const HELPERS: &str = "\
+fn main() -> unit {
+  let u.0: unit = call \"compose$\"(())
+  return u.0
+}
+fn \"compose$\"(p.0: unit) -> unit {
+  let u.1: unit = call \"prompt$\"(p.0)
+  return u.1
+}
+fn \"prompt$\"(p.0: unit) -> unit {
+  return p.0
+}
+";
+
+    /// EP の補助の関数のエントリでは、旗でも本当の深さの超過でも起こさず、状態を変えずに保留のまま続ける。そこの `evv`
+    /// はプログラムの地点の `evv` でないためである (docs/spec/vm.md の「タスクの上限」)。
+    #[test]
+    fn a_hit_at_a_helper_entry_stays_pending() {
+        let (code, mut ctx, mut sched) = limit_fixture(HELPERS);
+        for name in ["compose$", "prompt$"] {
+            let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+            task.worker = ctx.heap().worker();
+            task.pc = code.functions[function(&code, name) as usize].start;
+            task.limit = Limit::Pending;
+            ctx.set_depth_limit(0);
+            let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+            assert!(result.is_ok(), "{name}: {result:?}");
+            assert_eq!(task.limit, Limit::Pending, "{name}");
+            assert_eq!(ctx.depth_limit(), 0, "{name}");
+        }
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.pc = code.functions[function(&code, "compose$") as usize].start;
+        task.limit = Limit::Task;
+        // 起点を上げて本当の超過にする
+        task.depth_offset = DEPTH - 1;
+        assert!(task.stack_depth() > real_limit(&ctx, task.depth_offset));
+        ctx.set_depth_limit(0);
+        let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(task.limit, Limit::Task);
+        assert_eq!(ctx.depth_limit(), 0);
+    }
+
+    /// 補助の関数のエントリでも、深さが本当の限度と猶予の和を超えていれば run を止める。起こすのを延ばしても限度は
+    /// なくならない。起こすエントリ (`main`) でも、起こさずに run を止める (docs/spec/vm.md の「タスクの上限」)。
+    #[test]
+    fn a_helper_entry_beyond_the_headroom_stops_the_run() {
+        let (code, mut ctx, mut sched) = limit_fixture(HELPERS);
+        for name in ["compose$", "main"] {
+            for limit in [Limit::Task, Limit::Pending] {
+                let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+                task.worker = ctx.heap().worker();
+                task.pc = code.functions[function(&code, name) as usize].start;
+                task.limit = limit;
+                task.base = DEPTH + LIMIT_HEADROOM;
+                ctx.set_depth_limit(0);
+                let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+                assert!(
+                    matches!(result, Err(VmFault::Stopped(Stop::DepthLimit))),
+                    "{name}, {limit:?}: {result:?}"
+                );
+            }
+        }
+    }
+
+    /// エントリの行が起こすのを延ばすのは、EP の補助の関数の6つの名前 (`mask$[..]` は項目の並びごとに1つ) だけである。
+    /// 名前の似たほかの関数のエントリは起こす (docs/spec/vm.md の「巻き戻しの表」)。
+    #[test]
+    fn only_the_ep_helpers_defer() {
+        let defers = [
+            "id$",
+            "compose$",
+            "prompt$",
+            "resume$",
+            "rewind$",
+            "mask$[State]",
+            "mask$[Yield@1]",
+        ];
+        let raises = ["f", "$cont$@[X]", "fork$E.op", "compose$x"];
+        let text: String = defers
+            .iter()
+            .chain(&raises)
+            .map(|name| format!("fn \"{name}\"(p.0: unit) -> unit {{\n  return p.0\n}}\n"))
+            .collect();
+        let (code, _, _) = limit_fixture(&text);
+        for (names, kind) in [
+            (&defers[..], UnwindEntry::Defers),
+            (&raises[..], UnwindEntry::Raises),
+        ] {
+            for name in names {
+                let start = code.functions[function(&code, name) as usize].start;
+                let row = code.tables.unwind_at(start).expect(name);
+                assert_eq!(row.entry, kind, "{name}");
+            }
+        }
     }
 
     /// 猶予の間に深さの上限を超えたら、安全点が run を止める。
@@ -5000,7 +5114,7 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             .tables
             .unwinds
             .iter()
-            .find(|(pc, row)| *pc > main && !row.entry)
+            .find(|(pc, row)| *pc > main && row.entry == UnwindEntry::No)
             .unwrap();
         let mut task = Task::new(&code, function(&code, "main"), DEPTH);
         task.worker = ctx.heap().worker();
@@ -5026,7 +5140,7 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             .tables
             .unwinds
             .iter()
-            .find(|(pc, row)| *pc > main && !row.entry)
+            .find(|(pc, row)| *pc > main && row.entry == UnwindEntry::No)
             .unwrap();
         let mut task = Task::new(&code, function(&code, "main"), DEPTH);
         task.worker = ctx.heap().worker();

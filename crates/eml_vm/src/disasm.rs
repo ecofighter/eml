@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use eml_extern::Extern;
 use eml_rt::{MaskItem, Mode};
 
-use crate::code::{CodeBase, FnEntry, Tables};
+use crate::code::{CodeBase, FnEntry, Tables, UnwindEntry};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP};
 
 pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
@@ -20,7 +20,7 @@ pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
         )
         .unwrap();
         if let Some(entry) = view.tables.unwind_at(f.start)
-            && entry.entry
+            && entry.entry != UnwindEntry::No
             && !entry.slots.is_empty()
         {
             write!(out, " entry unwind [{}]", unwind_slots(&entry.slots)).unwrap();
@@ -391,7 +391,7 @@ impl<'a> View<'a> {
         // エントリの行は直前の関数の最後の命令の次の位置で引けてしまうので、見出しの行にだけ書く。
         // 手放すものも token も着地もない行は書かない。どの命令に行があるかは命令の種類で決まるので、書かなくても失うものはない
         if let Some(entry) = self.tables.unwind_at(pc + 1)
-            && !entry.entry
+            && entry.entry == UnwindEntry::No
             && (!entry.slots.is_empty() || !entry.tokens.is_empty() || entry.landing.is_some())
         {
             write!(text, " unwind [{}]", unwind_slots(&entry.slots)).unwrap();

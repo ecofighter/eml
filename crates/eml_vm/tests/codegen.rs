@@ -733,3 +733,36 @@ fn unwind_pcs_are_unique() {
     }
     assert!(programs > 30, "{programs} programs");
 }
+
+/// EP の補助の関数は決まった名前でコンパイルされ、ほかの名前の写しを持たない。VM はエントリでタスクの上限を起こすかを
+/// この名前で決めるので、`compose$$uniform` のような写しができると、その写しのエントリで起こしてしまう
+/// (docs/spec/vm.md の「タスクの上限」)。
+#[test]
+fn the_ep_helpers_are_compiled_under_their_names() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/ui/run/effects/mask_multi.em");
+    let text = std::fs::read_to_string(path).unwrap();
+    let code = compile(&eml_test_support::lir(&text)).unwrap_or_else(|error| panic!("{error:?}"));
+    let mut helpers: Vec<&str> = code
+        .functions()
+        .iter()
+        .map(|f| f.name.as_str())
+        .filter(|name| {
+            ["id$", "compose$", "prompt$", "resume$", "rewind$", "mask$["]
+                .iter()
+                .any(|helper| name.contains(helper))
+        })
+        .collect();
+    helpers.sort_unstable();
+    assert_eq!(
+        helpers,
+        [
+            "compose$",
+            "id$",
+            "mask$[Name]",
+            "prompt$",
+            "resume$",
+            "rewind$"
+        ]
+    );
+}

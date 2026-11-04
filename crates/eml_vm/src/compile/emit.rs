@@ -11,7 +11,7 @@ use eml_rt::{MaskItem, Mode};
 use super::Links;
 use super::constants::Constants;
 use super::slots::{Slots, allocate};
-use crate::code::{CompileError, FnEntry, Tables, Unwind};
+use crate::code::{CompileError, FnEntry, Tables, Unwind, UnwindEntry};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP, Slot};
 
 pub(crate) fn function<M: Mode>(
@@ -44,7 +44,7 @@ pub(crate) fn function<M: Mode>(
         elided: elided_decrefs(function),
         points: unwinds.points.iter().peekable(),
     };
-    emitter.entry_unwind(&unwinds.entry);
+    emitter.entry_unwind(&unwinds.entry, eml_lir::ep_helper(&function.name));
     for block in 0..function.blocks.len() {
         emitter.block_pcs[block] = emitter.out.pc();
         emitter.block(BlockId(block as u32))?;
@@ -61,7 +61,10 @@ pub(crate) fn function<M: Mode>(
     );
     // 中断は関数の先頭で止まったフレームも通るので、どの関数もエントリの行を持つ (docs/spec/vm.md の「巻き戻しの表」)
     debug_assert!(
-        emitter.out.unwind_at(start).is_some_and(|row| row.entry),
+        emitter
+            .out
+            .unwind_at(start)
+            .is_some_and(|row| row.entry != UnwindEntry::No),
         "every function has an entry unwind row"
     );
     emitter.patch();
@@ -397,15 +400,16 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 .collect(),
             tokens: point.tokens.iter().map(|&var| self.slot(var)).collect(),
             landing: point.landing.map(|var| self.slot(var)),
-            entry: false,
+            entry: UnwindEntry::No,
         };
         let pc = self.out.pc();
         self.out.unwinds.push((pc, entry));
     }
 
     /// 関数のエントリの行を足す。エントリの位置は最初の命令の位置で、呼び出しの行は命令の次の位置なので重ならない
-    /// (docs/spec/vm.md の「巻き戻しの表」)。
-    fn entry_unwind(&mut self, owned: &[(VarId, u32)]) {
+    /// (docs/spec/vm.md の「巻き戻しの表」)。`defers` は EP の補助の関数で、そのエントリではタスクの上限を起こさない
+    /// (docs/spec/vm.md の「タスクの上限」)。
+    fn entry_unwind(&mut self, owned: &[(VarId, u32)], defers: bool) {
         let entry = Unwind {
             slots: owned
                 .iter()
@@ -413,7 +417,11 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 .collect(),
             tokens: Vec::new(),
             landing: None,
-            entry: true,
+            entry: if defers {
+                UnwindEntry::Defers
+            } else {
+                UnwindEntry::Raises
+            },
         };
         let pc = self.out.pc();
         self.out.unwinds.push((pc, entry));

@@ -8,7 +8,8 @@ use crate::builder::FnBuilder;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::syntax::mask_text;
 use eml_lir::{
-    Atom, BlockId, Case, CasePattern, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
+    Atom, BlockId, Case, CasePattern, EP_COMPOSE, EP_ID, EP_MASK_PREFIX, EP_PROMPT, EP_RESUME,
+    EP_REWIND, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
 };
 
 use super::{captured_mark, direct, dummy, yield_switch};
@@ -18,7 +19,7 @@ pub(super) fn id() -> CoreFn {
     let mut b = FnBuilder::new();
     let x = b.param(VarInfo::new("x", Repr::TObj, Mark::Poly));
     b.terminate(Term::Return(Atom::Var(x)));
-    b.finish("id$".to_string(), false, true, Repr::TObj, Mark::Poly)
+    b.finish(EP_ID.to_string(), false, true, Repr::TObj, Mark::Poly)
 }
 
 /// `compose$(κ, c, x)`。κ を先に呼び、その結果で c を呼ぶ。κ が yield したら、取り出した κ' と c で作り直す。
@@ -38,7 +39,7 @@ pub(super) fn compose(compose: FnIdx) -> CoreFn {
     b.reopen(fast);
     let t = apply(&mut b, "t", c, vec![Atom::Var(r)]);
     b.terminate(Term::Return(Atom::Var(t)));
-    b.finish("compose$".to_string(), false, true, Repr::TObj, Mark::Poly)
+    b.finish(EP_COMPOSE.to_string(), false, true, Repr::TObj, Mark::Poly)
 }
 
 /// `prompt$(ev, ret, x)`。`ev` の外側の `evv` を `ev_take_evv` で取り出して `evv` に戻し、`yield_status(ev)` で4つに
@@ -132,7 +133,7 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
         ],
     );
     yield_dummy(&mut b, rebuilt);
-    b.finish("prompt$".to_string(), false, true, Repr::TObj, Mark::Poly)
+    b.finish(EP_PROMPT.to_string(), false, true, Repr::TObj, Mark::Poly)
 }
 
 /// `resume$(ev, ret, κ, v, s)`。状態 `s` の新しい evidence を今の `evv` の先頭に足してから κ を再開し、その結果を
@@ -178,7 +179,7 @@ pub(super) fn resume(prompt: FnIdx) -> CoreFn {
         ),
     );
     b.terminate(Term::Return(Atom::Var(r)));
-    b.finish("resume$".to_string(), false, true, Repr::TObj, Mark::Poly)
+    b.finish(EP_RESUME.to_string(), false, true, Repr::TObj, Mark::Poly)
 }
 
 /// `rewind$(ev, ret, s, κ, v)`。外側のフレームの yield で handler の外へ出たときに `prompt$` が取り出した状態 `s` で、
@@ -201,12 +202,12 @@ pub(super) fn rewind(resume: FnIdx) -> CoreFn {
         ),
     );
     b.terminate(Term::Return(Atom::Var(r)));
-    b.finish("rewind$".to_string(), false, true, Repr::TObj, Mark::Poly)
+    b.finish(EP_REWIND.to_string(), false, true, Repr::TObj, Mark::Poly)
 }
 
 /// `mask$[items]` の名前。項目をテキストの形で書く。
 pub(super) fn mask_name(program: &Program, items: &[MaskItem]) -> String {
-    format!("mask$[{}]", mask_text(&program.effects, items))
+    format!("{EP_MASK_PREFIX}{}]", mask_text(&program.effects, items))
 }
 
 /// `mask$[items](κ, v)`。再開されたときに `evv` から `items` の項目を飛ばしてから κ を呼び、戻ったら `evv` を戻す。
