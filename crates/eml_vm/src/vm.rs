@@ -121,7 +121,9 @@ pub(crate) enum Limit {
 }
 
 impl Limit {
-    /// `par` の右の子が受け継ぐ状態。子は保留も猶予も持たずに始まる。
+    /// `par` の右の子が受け継ぐ状態。子は保留も猶予も持たずに始まる。子の `evv` に `IO` の evidence はないので、
+    /// `Task` の子の深さの超過も `limit_hit` の手順の終わりで run を止め、`Stops` の子と結果は変わらない。右の子は
+    /// セルを持たず旗も受けないので、`Task` はタスクの中の子であることの印である (docs/spec/vm.md の「深さ」)。
     fn inherit(self) -> Limit {
         match self {
             Limit::Stops => Limit::Stops,
@@ -566,7 +568,10 @@ fn safepoint<R: Exec>(
 ) -> Result<(), VmFault> {
     let polled = poll(ctx, task.stack_depth(), sched.index)?;
     if let Polled::Limit { collect, switch } = polled {
-        return limit_safepoint::<R>(code, ctx, task, sched, collect, switch);
+        if limit_safepoint::<R>(code, ctx, task, sched, collect, switch)? {
+            preempt::<R>(code, ctx, task, sched)?;
+        }
+        return Ok(());
     }
     let tick = sched.policy.tick();
     if polled == Polled::Collect {
@@ -578,9 +583,11 @@ fn safepoint<R: Exec>(
     Ok(())
 }
 
-/// 深さの上限を超えた安全点。`poll` し直す前に下ろした `NOTICE` の知らせを先に集め、`limit_hit` の後で下ろした
-/// `PREEMPT` を果たす。中断を起こしたばかりなら切り替えずに `PREEMPT` を立て直し、着地の後の安全点に任せる。どちらも
-/// 捨てると、ビットを見た worker が知らせを集めないまま、または横取りされないまま動き続ける
+/// 深さの上限を超えた安全点。`poll` し直す前に下ろした `NOTICE` の知らせを先に集め、`limit_hit` の後で方針の
+/// `tick` を数える。横取りを試みるか (下ろした `PREEMPT` か `tick` が求め、yield の途中でも中断を起こしたばかりでもない)
+/// を返し、試みるのは呼び手である。`preempt` の繰り返しが Rust の再帰を重ねないためである。試みないときは、下ろした
+/// `PREEMPT` を立て直して着地の後の安全点に任せる。どちらのビットも捨てると、ビットを見た worker が知らせを集めないまま、
+/// または横取りされないまま動き続ける。`tick` を飛ばすと、予算で横取りする方針が保留のタスクを切り替えなくなる
 /// (docs/spec/vm.md の「タスクの上限」)。
 #[cold]
 #[inline(never)]
@@ -591,19 +598,19 @@ fn limit_safepoint<R: Exec>(
     sched: &mut Scheduler<R::P>,
     collect: bool,
     switch: bool,
-) -> Result<(), VmFault> {
+) -> Result<bool, VmFault> {
     if collect {
         collect_notice::<R>(ctx, task.depth_offset, sched)?;
     }
     limit_hit::<R>(code, ctx, task, sched)?;
-    if switch {
-        if ctx.yielding() == 0 && !matches!(task.limit, Limit::Aborting { .. }) {
-            preempt::<R>(code, ctx, task, sched)?;
-        } else {
-            ctx.heap().control().preempt(sched.index);
-        }
+    let tick = sched.policy.tick();
+    if (switch || tick) && ctx.yielding() == 0 && !matches!(task.limit, Limit::Aborting { .. }) {
+        return Ok(true);
     }
-    Ok(())
+    if switch {
+        ctx.heap().control().preempt(sched.index);
+    }
+    Ok(false)
 }
 
 /// 安全点の `poll` が深さの上限を超えたと返した。タスクの外と猶予の間は run を止める。タスクの中では、関数のエントリの
@@ -636,11 +643,6 @@ fn limit_hit<R: Exec>(
     };
     task.limit = Limit::Aborting { pending: false };
     ctx.set_depth_limit(real.saturating_add(LIMIT_HEADROOM));
-    // 起こすことで、本当の超過で起こすときも、まだ `Task` に届いていない旗も消費する。セルがもう死んでいれば、旗を
-    // 見る者もいない
-    if let Some(cell) = task.cell {
-        sched.cells.lock().clear_limit(cell)?;
-    }
     let caught = abort_to::<R, _>(code, ctx, task, 0, ExternEffect::Io, IO_FAILED, |ctx| {
         [
             Word::from_bits(eml_lir::IO_RESOURCE_LIMIT as usize),
@@ -648,12 +650,21 @@ fn limit_hit<R: Exec>(
         ]
     })?;
     if !caught {
-        // IO の evidence がない。本当の超過なら run を止め、旗だけなら旗を捨てて続ける
-        task.limit = Limit::Task;
-        ctx.set_depth_limit(real);
+        // IO の evidence がない (`par` の子の中、底の `try_all` の外)。本当の超過なら run を止める。旗だけなら捨てずに
+        // 保留へ戻し、evidence のある所の次のエントリで起こす。旗はまだ下ろしていないので、セルにも立ったままである
         if real_over {
+            task.limit = Limit::Task;
+            ctx.set_depth_limit(real);
             return Err(VmFault::Stopped(Stop::DepthLimit));
         }
+        task.limit = Limit::Pending;
+        ctx.set_depth_limit(0);
+        return Ok(());
+    }
+    // 起こしたので、本当の超過で起こすときも、まだ `Task` に届いていない旗も消費する。下ろすのを起こせたときに限るのは、
+    // evidence のない間の安全点ごとに lock を取らないためである。セルがもう死んでいれば、旗を見る者もいない
+    if let Some(cell) = task.cell {
+        sched.cells.lock().clear_limit(cell)?;
     }
     Ok(())
 }
@@ -2003,8 +2014,11 @@ fn preempt<R: Exec>(
                 collect::<R>(ctx, task.depth_offset, sched, true).map(|()| Polled::Collect)
             }
             Ok(Polled::Limit { collect, switch }) => {
-                let result = limit_safepoint::<R>(code, ctx, task, sched, collect, switch);
-                return at_par(code, task, sched, at, result);
+                match limit_safepoint::<R>(code, ctx, task, sched, collect, switch) {
+                    Ok(true) => continue,
+                    Ok(false) => return Ok(()),
+                    Err(fault) => return at_par(code, task, sched, at, Err(fault)),
+                }
             }
             polled => polled,
         };
@@ -4321,6 +4335,18 @@ fn f(p.0: unit) -> unit {
         Ctx<eml_rt::Checked>,
         Scheduler<crate::Sequential>,
     ) {
+        limit_fixture_with(text, crate::Sequential)
+    }
+
+    /// `limit_fixture` の、方針を選べる形。
+    fn limit_fixture_with<P: Policy>(
+        text: &str,
+        policy: P,
+    ) -> (
+        CodeBase<eml_rt::Checked>,
+        Ctx<eml_rt::Checked>,
+        Scheduler<P>,
+    ) {
         let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
         let limits = eml_rt::Limits {
             max_depth: DEPTH,
@@ -4334,7 +4360,7 @@ fn f(p.0: unit) -> unit {
         let driver = eml_io::TestDriver::new(None);
         let clock = crate::driver::RunClock::Virtual(driver.clock());
         let sched = Scheduler::new(
-            crate::Sequential,
+            policy,
             Box::new(driver),
             Arc::new(crate::workers::Run::new(1, None, clock, Arc::default())),
             control,
@@ -4430,9 +4456,10 @@ fn leaks(a.0: obj) -> unit {
         assert_eq!(ctx.depth_limit(), 0);
     }
 
-    /// 自己末尾呼び出しの先頭は関数のエントリなので起こすが、IO の handler がなければ旗を捨てて続ける。
+    /// 自己末尾呼び出しの先頭は関数のエントリなので起こそうとするが、IO の handler がなければ旗を捨てずに保留のまま
+    /// 続ける。
     #[test]
-    fn a_pending_task_without_an_io_handler_drops_the_flag() {
+    fn a_pending_task_without_an_io_handler_keeps_the_flag() {
         let text = "\
 fn main() -> int {
   let n.0: int = call spin(3)
@@ -4462,8 +4489,8 @@ b2:
         ctx.set_depth_limit(0);
         let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
         assert!(result.is_ok(), "{result:?}");
-        assert_eq!(task.limit, Limit::Task);
-        assert_eq!(ctx.depth_limit(), DEPTH);
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(ctx.depth_limit(), 0);
     }
 
     /// 猶予の間に深さの上限を超えたら、安全点が run を止める。
@@ -4654,6 +4681,36 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
         assert!(result.is_err(), "the unheard signal stops the run");
         assert_eq!(control.pending_signals(), 0);
         assert_eq!(control.worker_bits(0) & Control::NOTICE, 0);
+    }
+
+    /// 予算で横取りする方針は、深さの上限を超えたままの安全点でも予算を数え、使い切れば横取りを求める。
+    #[test]
+    fn a_pending_task_still_spends_the_preemption_budget() {
+        let (code, mut ctx, mut sched) = limit_fixture_with(CALL, crate::Seeded::new(1));
+        let main = code.functions[function(&code, "main") as usize].start;
+        let &(after_call, _) = code
+            .tables
+            .unwinds
+            .iter()
+            .find(|(pc, row)| *pc > main && !row.entry)
+            .unwrap();
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.limit = Limit::Pending;
+        task.pc = after_call;
+        ctx.set_depth_limit(0);
+        type Seeded = ExecWith<eml_rt::Checked, crate::Seeded>;
+        let switches = (0..16)
+            .map(|_| {
+                limit_safepoint::<Seeded>(&code, &mut ctx, &mut task, &mut sched, false, false)
+                    .unwrap()
+            })
+            .position(|switch| switch);
+        assert!(
+            switches.is_some(),
+            "the budget of at most 16 safepoints runs out"
+        );
+        assert_eq!(task.limit, Limit::Pending);
     }
 
     /// 旗を受けると、`Task` は保留になり、中断の間は着地の後に保留へ戻す印だけが付いて猶予の上限は変わらない。
