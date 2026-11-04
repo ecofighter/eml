@@ -862,7 +862,7 @@ EP は、使うときだけ次の関数をプログラムに1つずつ足す。�
 | `rewind$` | `ev`、`ret`、`s`、`κ`、`v` | `resume$(ev, ret, κ, v, s)` を末尾で呼ぶ |
 | `mask$[items]` | `κ`、`v` | 下の「`mask` の包み」。`mask` の項目の並びごとに1つ作り、名前に項目を書く (`mask$[State]`、`mask$[Yield@1]`) |
 
-名前は `eml_lir` の定数 (`EP_ID` などと、`mask$[` の頭の `EP_MASK_PREFIX`) で、補助の関数かは `eml_lir::ep_helper` が名前だけで決める。これらの関数のエントリの `evv` は、利用者のプログラムのどの地点の `evv` でもない。そのため、VM のタスクの上限はそこでは起こさない ([VM](vm.md) の「タスクの上限」)。
+名前は `eml_lir` の定数 (`EP_ID` などと、`mask$[` の頭の `EP_MASK_PREFIX`) で、補助の関数かは `eml_lir::ep_helper` が名前だけで決める。これらの関数のエントリの `evv` は、利用者のプログラムのどの地点の `evv` でもない。そのため、VM のタスクの上限はそこでは起こさない ([VM](vm.md) の「タスクの上限」)。名前だけで決めるので、エントリの `evv` がプログラムの地点のものでない関数を EP に足すときは、その名前を定数と `ep_helper` に足す。どのパスも補助の関数を別の名前で写してはいけない。`compose$$uniform` のような写しは上限を起こす関数に分類され、そのエントリで起こしてしまう。今は補助の関数がどれも一様な `tobj` を返すので、box の挿入は写しを作らない。名前の組と写しのないことは `crates/eml_vm/tests/codegen.rs` の `the_ep_helpers_are_compiled_under_their_names` が確かめる。
 
 補助の関数の中の `apply` (κ、c、`ret`、節の本体を呼ぶもの) は、どれも `yields` の印を立てる。`apply` はどれも一様で、呼ばれる関数の `split` 以降の一様な位置と合う ([LIR](lir.md) の「関数の ABI」)。
 

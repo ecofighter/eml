@@ -250,7 +250,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 ## `eml_vm` のテスト
 
-`eml_vm` ([VM](../spec/vm.md)) の結合テストは、手で書いた LIR を `eml_lir::parse` で読んで確かめる。ソースのプログラムを VM で流すテストは、UI テスト (下の「2つのモードで流す」)、`bench.rs`、`scaling.rs`、`tasks.rs`、`preempt.rs` の `Async` のテスト、`crates/eml_cli/tests/cli.rs` の `eml run` のテスト、`crates/eml_cli/tests/std_invariants.rs` である。
+`eml_vm` ([VM](../spec/vm.md)) の結合テストは、手で書いた LIR を `eml_lir::parse` で読んで確かめる。ソースのプログラムを VM で流すテストは、UI テスト (下の「2つのモードで流す」)、`bench.rs`、`scaling.rs`、`tasks.rs`、`preempt.rs` の `Async` のテスト、`memory.rs` のメモリの柔らかい上限のテスト (決定的な方針で、旗を立てるタスクの選び方と、捕まえる `try_io` を確かめる)、`crates/eml_cli/tests/cli.rs` の `eml run` のテスト、`crates/eml_cli/tests/std_invariants.rs` である。
 
 - コード生成 (`codegen.rs`): 手書きの LIR を `CodeBase` に変換し、逆アセンブラの出力をインラインスナップショットで固定する。スロットの割り当て (重ならない値のスロットの共有、使われない呼び出しの結果、scrutinee とフィールドの干渉)、入れ替えになるブロック引数の作業用のスロット、`jump` の定数の読み込みの順、`#N` の行き先の `decref` を出さないこと、`release` の展開、同じ広い定数を表に1つだけ置くこと、3つの `switch` (`switch_enum`、`switch_int`、`switch_string`) の表、case のない `switch` を `goto` にすることを確かめる。番号 65535 のエフェクトをコード生成が panic で断ることは、`src/compile/emit.rs` の単体テストで確かめる。そのエフェクトを持つプログラムは 65536 個のエフェクトを宣言するので、統合テストでは遅いためである
 - 実行 (`run.rs`、`calls.rs`、`data.rs`、`evidence.rs`): 手書きの LIR を `eml_lir::verify` に通してから、検査モードで実行する。期待どおりに通ったときだけ、速いモードでも実行して出力が同じことを確かめる。速いモードは前提を確かめないので、検査モードが通らなかった IR では走らせない。`run.rs` は定数、extern、直接の呼び出しと末尾呼び出し、エントリでないブロックの中の呼び出し、誤りの位置 (ヒープの誤りの位置と、位置のない誤りを含む) と flush、`FileIn` の `dup`、終わりの処理とリーク (種類が2つ以上のリークの表示を含む) を、`calls.rs` は部分適用、ちょうどの適用、余った引数の `ApplyRest`、末尾の位置の適用、`clause`、自己末尾呼び出しの深さと割り込み、深さの上限、確保量の上限を、`data.rs` は `con`、Repr ごとの `switch`、`unpack`、`release` の両方の枝、`box` と `unbox` を、`evidence.rs` は基本操作と節の呼び出しを確かめる

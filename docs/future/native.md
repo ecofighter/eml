@@ -72,20 +72,28 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 
 ### タスクごとの上限
 
-タスクごとの深さ、スタック、メモリの柔らかい上限を入れると、すべての安全点と、末尾でないすべての呼び出しの位置が巻き戻しの地点になる。タスクの中で深さかスタックの上限を安全点で超えたとき、またはメモリの柔らかい上限で選ばれたときは、そのタスクの IO の失敗 `ResourceLimit` を起こし、上の戻り値の道で巻き戻す。ネイティブのコードでは yield の地点でない末尾でない呼び出しの位置ごとに、旗の確かめが1つ増える。この費用は受け入れる。メモリの硬い上限は今と同じく評価全体を止める。
+タスクごとの上限の規則は VM と同じにする ([VM](../spec/vm.md) の「タスクの上限」)。すべての関数のエントリと、末尾でないすべての呼び出しの位置が巻き戻しの地点になる。タスクの中でスタックの上限を超えたとき、またはメモリの柔らかい上限で選ばれたときは、そのタスクの IO の失敗 `ResourceLimit` を起こし、上の戻り値の道で巻き戻す。ネイティブのコードでは yield の地点でない末尾でない呼び出しの位置ごとに、確かめが1つ増える。この費用は受け入れる。メモリの硬い上限は評価全体を止める。
+
+- タスクごとの状態は `#[repr(C)]` の欄 `Ctx.limit_class: u32` に置く。値は 0 (`Stops`)、1 (`Task`)、2 (`Pending`)、3 (`Aborting`) で、VM の `Limit` と同じ意味である。タスクを切り替えるたびに、`stack_limit` と一緒に書く。`Pending` では `stack_limit` に毒 (SP がいつも下回る値) を入れるので、次の安全点が冷たいブロックへ進む。`Aborting` の間の限度は、本当の限度から `LIMIT_HEADROOM_BYTES` を引いた値である
+- `stack_limit` に毒が入っている間も本当の限度と比べられるように、`Ctx` は本当の限度 (か `stack_base`) を2つ目の `#[repr(C)]` の欄に持つ
+- エントリの冷たいブロックは、コード生成の時点で関数の種類で選ぶ。VM と同じく、EP の補助の関数 (`eml_lir::ep_helper` が名前で決める。[Core IR](../spec/core-ir.md) の「EP が作る補助の関数」) かどうかで分かれる。どちらのブロックも、まず `limit_class` で分岐する
+  - 補助の関数でない関数: `Stops` と `Aborting` なら `eml_fatal(DepthLimit)` を呼ぶ。`Task` と `Pending` なら、関数のエントリでもループの戻りの辺でも、戻り値の道で `ResourceLimit` を起こす
+  - 補助の関数: `Stops` と `Aborting` なら同じく `eml_fatal(DepthLimit)` を呼ぶ。`Task` と `Pending` では `ResourceLimit` を起こさず、SP を本当の限度から `LIMIT_HEADROOM_BYTES` を引いた値と比べる。下回れば `eml_fatal(DepthLimit)` を呼び、そうでなければ続ける。VM の `limit_hit` が `Stops` と `Aborting` を先に止め、硬い限度を確かめてから補助の関数のエントリで延ばすのと同じ順である。補助の関数にループはないので、戻りの辺の安全点に変種は要らない
+- 囲みと着地の規則 (中断の間は `Aborting`、着地で元に戻す) は VM と同じにする。戻りの位置の安全点も、`Control` のタスクごとの語も要らない
+- メモリの数は `eml_rt` の確保器が worker ごとに足すので、ネイティブでもそのまま使える。ネイティブのスケジューラは、切り替えの地点で数をタスクに帰属させ、VM と同じ値 (動いているタスクの `current`、`bytes`、`mark` と版の数 `seq`、実行待ちの `top` と `top_bytes`) を run の表の自分の欄に公開する ([VM](../spec/vm.md) の「タスクとスケジュール」)
 
 `Wake.Cancelled` で取り消しを受けたタスク ([VM](../spec/vm.md) の「取り消しの届け方」) は、普通の起こしと同じエントリからネイティブのエントリの stub を通って再開する。止めるビットも longjmp も使わない。
 
 ## 安全点とスタック
 
 - 安全点は関数のエントリとループの後ろ向きの辺に置く。worker の止める語 ([マルチコア対応の設計](multicore.md) の「スレッドと worker」) とスタックの限度を読み、止めるビットが立っているか、SP が限度より下なら冷たいブロックへ分岐する。SP は CLIF の `get_stack_pointer` で読む
-- 冷たいブロックは止めるビットなら `eml_fatal` を呼ぶ。スタックの限度を超えたときは、`Async` のタスクの中ならその安全点でタスクの IO の失敗 `ResourceLimit` を起こし、戻り値の道で巻き戻す (上の「タスクごとの上限」)。タスクの外では評価全体を止める `DepthLimit` として `eml_fatal` を呼ぶ
+- 冷たいブロックは止めるビットなら `eml_fatal` を呼ぶ。SP が `stack_limit` を下回ったとき (`Pending` の毒を含む) は、`limit_class` と関数の種類で、`ResourceLimit` を起こすか、`eml_fatal(DepthLimit)` を呼ぶか、続けるかを決める (上の「タスクごとの上限」)
 - `PREEMPT` は、ネイティブの確かめでは定数の AND で隠す。ネイティブのタスクは `Async` の操作でだけ切り替わり、安全点はスタックと止めるビットのためにあって、時間の配分のためにはない。VM は `PREEMPT` を、タスクを渡すときに消す。`Control`、SIGINT、EINTR の扱いは VM と同じである ([VM](../spec/vm.md) の「上限と割り込み」)
 - eml のコードを動かすスレッドは、スタックを明示して予約する。worker のスレッド (worker 0 と、別に作るスレッドの専用の worker を含む) は既定で 1 GiB の仮想の予約で、`--stack-size` で変えられる。Linux で `vm.overcommit_memory=2` のときは小さい値を使うよう文書に書く。`main` のタスクはプロセスのメインスレッドの 8 MiB のスタックでなく、大きいスタックで作る worker 0 のスレッドで動く。例外はメインの worker ([マルチコア対応の設計](multicore.md) の「スレッドと worker」) で、OS の既定のスタックで動き、下の限度で深い再帰を止める。ブロックする呼び出しのプールのスレッドは eml のコードを動かさないので、OS の既定のスタックで足りる
 - 限度は `ctx.stack_limit = stack_base + 1 MiB` である。eml のフレームの大きさは LIR の verifier のフレームの上限 (VM では `u16::MAX` 語 = 512 KiB。ネイティブのフレームはこれより大きくならない) で抑えられ、`eml_rt` の Rust の extern はスタックで再帰しない (解放は明示したワークリストで行う) ので、1 MiB で eml のフレーム1つと任意の extern が収まる
 - ページより大きいフレームにはその場で stack probe を入れる (`probestack_strategy=inline`)。Windows で要り、ほかの OS でも害がない
 - ネイティブでは `max_depth` を使わず、スタックの限度で深さを止める。タスクの外で止めるときの誤りの文は `DepthLimit` のままにする
-- `Ctx` は、ネイティブのコードが決まったオフセットで読む `#[repr(C)]` の欄を持つ。`yielding` (今もある)、`fault`、worker の止める語へのポインタ、`stack_limit`、`jmp: *mut JmpBuf`、`worker` である。オフセットは今の `YieldState` と同じくテストで確かめる
+- `Ctx` は、ネイティブのコードが決まったオフセットで読む `#[repr(C)]` の欄を持つ。`yielding` (今もある)、`fault`、worker の止める語へのポインタ、`stack_limit`、本当のスタックの限度 (か `stack_base`)、`limit_class`、`jmp: *mut JmpBuf`、`worker` である。オフセットは今の `YieldState` と同じくテストで確かめる
 
 ## extern のエントリ
 

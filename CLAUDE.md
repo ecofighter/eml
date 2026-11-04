@@ -132,7 +132,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | Translate, instance names, optimize | docs/spec/core-ir.md の「変換の規則」, docs/spec/core-ir.md の「最適化」 |
 | Evidence passing | docs/spec/core-ir.md の「evidence passing」 |
 | Reprs, marks, the LIR passes, verifiers | docs/spec/lir.md の「値の表現」, docs/spec/lir.md の「Kind の印」, docs/spec/lir.md の「パスの順番」, docs/spec/lir.md の「verifier」 |
-| `Std.Async` tasks | docs/spec/stdlib.md の「`Std.Async`」, docs/spec/stdlib.md の「取り消し」, docs/spec/stdlib.md の「時間」, docs/spec/stdlib.md の「`compute`」, docs/spec/vm.md の「`Async` のタスク」, docs/spec/vm.md の「`compute` の仕事」, docs/spec/vm.md の「取り消しの届け方」, docs/spec/vm.md の「救済」, docs/spec/vm.md の「時計と driver」, docs/spec/declarations.md の「`extern`」 (held arguments) |
+| `Std.Async` tasks | docs/spec/stdlib.md の「`Std.Async`」, docs/spec/stdlib.md の「取り消し」, docs/spec/stdlib.md の「時間」, docs/spec/stdlib.md の「`compute`」, docs/spec/stdlib.md の「タスクの上限」, docs/spec/vm.md の「`Async` のタスク」, docs/spec/vm.md の「`compute` の仕事」, docs/spec/vm.md の「タスクの上限」, docs/spec/vm.md の「取り消しの届け方」, docs/spec/vm.md の「救済」, docs/spec/vm.md の「時計と driver」, docs/spec/declarations.md の「`extern`」 (held arguments) |
 | `Std.Chan` and `Std.Atomic` | docs/spec/stdlib.md の「`Std.Chan`」, docs/spec/stdlib.md の「`Std.Atomic`」, docs/spec/vm.md の「channel」, docs/spec/object-model.md の「論理的な worker ID」 |
 | `Std.Net` and `Std.Signal` | docs/spec/stdlib.md の「`Std.Net`」, docs/spec/stdlib.md の「`Std.Signal`」, docs/spec/vm.md の「上限と割り込み」 |
 | `Std.Tls` | docs/spec/stdlib.md の「`Std.Tls`」, docs/spec/vm.md の「時計と driver」 (the test driver's `tls.localhost`) |

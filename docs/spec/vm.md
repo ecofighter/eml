@@ -869,7 +869,7 @@ route を切り替えより先に行うのは、起こしを受け箱に積ん�
 
 ### タスクの上限
 
-`Async` のタスクの中で深さの上限を超えると、run を止めずに、そのタスクだけに種類 `ResourceLimit` の IO の失敗を起こす ([標準ライブラリ](stdlib.md) の「`Std.Async`」)。1つの接続のタスクが上限に届いても、サーバ全体は止まらない。ただし、起こすには `IO` の evidence が要る。タスクの外 (`main`、`compute` の仕事) と、タスクの中でも `par` の子 (左も右も。子の `evv` に `IO` の evidence はない。「`par` の fork と join」の「深さ」) の超過は、今までどおり run を止める実行時エラーである (「上限と割り込み」)。
+`Async` のタスクの中で深さの上限を超えると、run を止めずに、そのタスクだけに種類 `ResourceLimit` の IO の失敗を起こす ([標準ライブラリ](stdlib.md) の「`Std.Async`」)。1つの接続のタスクが上限に届いても、サーバ全体は止まらない。ただし、起こすには `IO` の evidence が要る。タスクの外 (`main`、`compute` の仕事) と、タスクの中でも `par` の子 (左も右も。子の `evv` に `IO` の evidence はない。「`par` の fork と join」の「深さ」) の超過は、run を止める実行時エラーである (「上限と割り込み」)。
 
 VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの上限を決まった値にする。`real` は `max_depth` からタスクの深さの起点 `depth_offset` を引いた値で、`switch_task` が書く値と同じである ([オブジェクトモデル](object-model.md) の「タスクの切り替え」)。
 
@@ -881,7 +881,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 | `Aborting { pending }` | `real + LIMIT_HEADROOM` | `abort_to` から着地まで。`pending` は着地の後に保留へ戻すか |
 
 - `LIMIT_HEADROOM` は 2^18 語 (2 MiB) である。巻き戻しの途中の節のエントリが深くなってもすぐには止めず、それでも暴走すれば猶予の先で止める。`Task` と `Pending` でも、関数のエントリの安全点で深さが `real + LIMIT_HEADROOM` を超えていれば run を止める。補助の関数のエントリでは起こすのを延ばすので、この限度がないと、補助の関数のエントリが続く間は深さを止めるものがないためである
-- 状態を上限の値で表すので、`Ctx::poll`、`stop_reason`、`vm::poll` の `Ok` の枝は変わらない。安全点の速い道は2つの比較のままである。`poll` の `DepthLimit` は「深さが今の上限を超えた」を表し、本当の超過か、保留か、猶予の超過かは冷たい道が決める。`polled_stop` は最初の `poll` と2つの `poll` し直しの `DepthLimit` を `Polled::Limit { collect, switch }` にし、安全点は `limit_hit` を呼んでから方針の `tick` を数える。横取りの後の `par` の安全点も同じである。`poll` し直す前に `NOTICE` か `PREEMPT` を下ろしていれば、`collect` か `switch` が立つ。安全点は `limit_hit` の前に知らせを集め、`limit_hit` の後で、`switch` か `tick` が求めれば横取りを試みる。中断を起こしたばかりか yield の途中なら、横取りせずに、下ろした `PREEMPT` を立て直す。どちらのビットも捨てると、ビットを見た worker が知らせを集めないまま、または横取りされないまま、タスクが切り替わるまで動き続ける。`tick` を飛ばすと、予算で横取りする方針 (`Seeded`) が保留のタスクを切り替えなくなる。横取りの後の `par` の安全点が横取りを求めたときは、`preempt` の繰り返しがそのまま次のタスクへ進み、Rust の再帰を重ねない。空きの待ちの後の `poll` は関数のエントリでないので、`Stops` か `Aborting` のときだけ run を止め、ほかは保留のまま次の安全点に任せる
+- 状態を上限の値で表すので、`Ctx::poll`、`stop_reason`、`vm::poll` の `Ok` の枝はタスクの上限の状態を知らない。安全点の速い道は2つの比較のままである。`poll` の `DepthLimit` は「深さが今の上限を超えた」を表し、本当の超過か、保留か、猶予の超過かは冷たい道が決める。`polled_stop` は最初の `poll` と2つの `poll` し直しの `DepthLimit` を `Polled::Limit { collect, switch }` にし、安全点は `limit_hit` を呼んでから方針の `tick` を数える。横取りの後の `par` の安全点も同じである。`poll` し直す前に `NOTICE` か `PREEMPT` を下ろしていれば、`collect` か `switch` が立つ。安全点は `limit_hit` の前に知らせを集め、`limit_hit` の後で、`switch` か `tick` が求めれば横取りを試みる。中断を起こしたばかりか yield の途中なら、横取りせずに、下ろした `PREEMPT` を立て直す。どちらのビットも捨てると、ビットを見た worker が知らせを集めないまま、または横取りされないまま、タスクが切り替わるまで動き続ける。`tick` を飛ばすと、予算で横取りする方針 (`Seeded`) が保留のタスクを切り替えなくなる。横取りの後の `par` の安全点が横取りを求めたときは、`preempt` の繰り返しがそのまま次のタスクへ進み、Rust の再帰を重ねない。空きの待ちの後の `poll` は関数のエントリでないので、`Stops` か `Aborting` のときだけ run を止め、ほかは保留のまま次の安全点に任せる
 - 作るとき: `Task::new` (`main`) と `compute` の仕事は `Stops`、エントリの `Task` は `Task` である。`par` の右の子は、親が `Stops` なら `Stops`、それ以外なら `Task` で始まる。子が `Pending` か `Aborting` で始まることはない
 - タスクの上限の旗はタスクのセルの欄 `limit` にあり、lock の下で立て、起こした実行系が `clear_limit` で下ろす。始める仕事と再開する仕事が動き始めるとき、`started` と `resumed` は旗を `TaskMarks` で返し、立っていればエントリの `Task` に旗を付ける
 - 旗を届ける道: 監視のスレッドは登録表の lock を取らないので、旗を立てるタスクのセルの番号を mail の項 `MailItem::Limit(cell)` に積み、すべての worker の語に `NOTICE` を立てる。番号は lock なしで読んだもので、古いことがある。項はどの worker も取り出し、取り出した worker が登録表の lock の下で `Registry::limit_task` を呼ぶ。`limit_task` は、死んだセルと終わったセルでは何もしない。それ以外では旗を立て、届け先を決める。動いているタスクで持ち主がほかの worker なら、持ち主の受け箱へ `Notice::Limit(cell)` を回す。横取りされてフレームを持ったまま待つタスクも動いている状態のままで、その `Task` を持つのは持ち主だからである。持ち主が自分なら、セルを集める地点に返す。置いたタスクと待っているタスクは VM の `Task` を持たないので旗だけを残し、次の `started` か `resumed` が返す。旗を立てるのは `limit_task` だけである
@@ -890,7 +890,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - 旗を受けた後の状態は、どの所でも `Limit::flagged` で決める。`Task` は `Pending` に、`Aborting` は `Aborting { pending: true }` にする。`Pending` はそのままで、`Stops` のタスクはセルを持たないので旗は届かない。上限の値は旗を付ける所で分かれる。今動いているタスク (`enter` のエントリの `Task` と、集める地点の今のタスク) は `mark_pending` を通り、`Task` から `Pending` に変わったときだけ上限を 0 にする。`Aborting` の上限は猶予のまま変えない。中断の途中で上限を 0 にすると、節のエントリの中の安全点が失敗するためである。表に退いたタスクは状態だけを変え、上限は切り替えで入るときに `switch_to` が当てる
 - 切り替え: `switch_task` は上限を `real` に書き直すので、VM は `switch_task` を包み `switch_to` からだけ呼び、その後で状態の値を当て直す (`Pending` は 0、`Aborting` は `real + LIMIT_HEADROOM`)。`resume`、`par` の fork と join の worker ID の切り替え、子の終わり、エントリの `Task` の `Finish`、誤りの後にエントリのタスクへ戻すことも、どれもこれを通る。通さないと保留と猶予が切り替えで消える。核の `with_worker` (ほかのタスクの ID の物体を扱う一時の切り替え) は、切り替える前の上限を `Ctx::depth_limit` で読み、戻した後に `set_depth_limit` で元の値に戻す
 - `limit_hit` は次の順に決める
-  1. `Stops` か `Aborting` なら、`Stopped(Stop::DepthLimit)` で run を止める。文言は今までどおり ``the call depth limit is exceeded in `f` `` である
+  1. `Stops` か `Aborting` なら、`Stopped(Stop::DepthLimit)` で run を止める。文言は ``the call depth limit is exceeded in `f` `` である
   2. yield の途中 (`ctx.yielding() != 0`) なら保留のまま続ける。中断は `Ctx` が1つだけ持つ yield の状態を使うためである
   3. `Tables::unwind_at(pc)` の行がエントリの行 (`Raises` か `Defers`) でなければ、保留のまま続ける
   4. 深さが `real + LIMIT_HEADROOM` を超えていれば、`Stopped(Stop::DepthLimit)` で run を止める (硬い限度)。次の手順で延ばす前に確かめるので、補助の関数のエントリでも効く。`Pending` の上限は 0 なので、`Pending` の間はどの安全点も `limit_hit` に来て、エントリの安全点ではこの手順まで進む
