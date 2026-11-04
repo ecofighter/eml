@@ -79,7 +79,7 @@ try_io action =
 - `try_io action` は `action ()` を呼び、IO の失敗がなければ `Ok` に包んで返す。IO の失敗があれば、そこで `action` の実行を止め、途中のフレームが持っていた値を後始末して `Err` を返す
 - 捕まえるのは、いちばん内側の `try_io` である。`IO` は `mask` に入らないので、row の上の位置でなく、実行の時点で外側にある最も近い `try_io` が捕まえる。例外と同じ動きである。たとえば `wrap : (Unit -> <e> a) -> <IO | e> Result IOError a` が、受け取ったコールバックを `try_io` の中で呼ぶと、コールバックの IO の失敗も `wrap` の `try_io` が捕まえる。ほかのエフェクトなら `mask` がコールバックの操作を外側へ通すが、`IO` ではそうしない
 - handler の節は handle の外側の `evv` で動く ([エフェクトと handler](effects.md) の「健全性」)。そのため、handle の本体の中にある `try_io` は、その handler の節の中で起きた IO の失敗を捕まえない。handle より外側の `try_io` が捕まえる
-- `try_io` は、`exit`、書き出しの失敗、`Panic` (算術の誤り、位置の範囲の誤り、`panic`)、割り込み、確保量の上限、`Async` のタスクの外と `par` の子の中の深さの上限、検査モードのヒープの誤りを捕まえない。`Async` のタスクの中 (`par` の子の外) の深さの上限は、種類 `ResourceLimit` の IO の失敗になり、`try_io` が捕まえる (下の「`Std.Async`」)
+- `try_io` は、`exit`、書き出しの失敗、`Panic` (算術の誤り、位置の範囲の誤り、`panic`)、割り込み、確保量の上限、`Async` のタスクの外と `par` の子の中の深さの上限、検査モードのヒープの誤りを捕まえない。`Async` のタスクの中 (`par` の子の外) の深さの上限とメモリの柔らかい上限は、種類 `ResourceLimit` の IO の失敗になり、`try_io` が捕まえる (下の「`Std.Async`」)
 
 `IOErrorKind` の構築子は11個で、タグは宣言の順の 0 から 10 である。この実装の extern の誤りが出すのは、最初の5つ (`NotFound` から `Other`) だけである。残りの6つは `fail_io` が出し、`fail_io` は11個のどれでも出せる。`Cancelled` は、非同期の `Wake` の構築子 `Cancelled` と名前が重なる。修飾しない名前は自分のモジュールと import を Prelude より先に引くので ([モジュールと名前解決](modules.md) の「名前の解決」)、`Wake(..)` を import したモジュールでは、種類のほうを `Prelude.Cancelled` と書く。
 
@@ -1070,7 +1070,7 @@ body () =
 - ただし、`par` の子 (左も右も) の中の超過は、タスクの中でも run を止める実行時エラーで、捕まえられない。子の row は `IO` を含められず、失敗を起こす先がないためである (上の「`Std.Par`」)
 - 投げるのは普通の IO の失敗なので、タスクのフレームを巻き戻して `Lin` の値を落とし、`try_io` と `try_all` が捕まえる。捕まえれば、同じタスクはそのまま続けられ、もう一度超えればまた投げる。捕まえなければタスクの失敗になり、スコープの失敗として `run` と `scope` が起こし直す。`main` でも捕まえなければ、ほかの IO の失敗と同じく `run_result` の位置の実行時エラーになり、終了コードは 1 である
 - 失敗は関数に入るところでだけ起きる。戻りの途中で深さが上限を超えたままなら、次の呼び出しで起きる。継続の再開と handler の出入りのために処理系が足した補助の関数に入るところでは起きず、その後の次の関数で起きる
-- 処理系がタスクに上限の印を付けたときも、同じ種類で文言 `the memory soft limit is exceeded` の IO の失敗が起きる。起きる所と捕まえ方は深さの上限と同じである
+- 確保量が柔らかい上限 `soft_bytes` の閾値を越えると、処理系は確保の数がいちばん大きいタスクを選んで上限の印を付け、そのタスクに種類 `ResourceLimit`、文言 `the memory soft limit is exceeded` の IO の失敗を起こさせる。run は止まらない。起きる所と捕まえ方は深さの上限と同じで、捕まえれば同じタスクは続けられ、`main` でも捕まえなければ `run_result` の位置の実行時エラーになる。印を付けるのは確保の数で選んだ1つのタスクで、そのタスクが確保を手放して小さくしたかは見ない。タスクの外の `main`、`par` の右の子、`compute` の仕事の確保はどのタスクの数にも入らない。それでも閾値を越えれば、そのときの数のいちばん大きいタスクに印が付く。印を付けるタスクが1つもなければ (`Async` のタスクのない run など)、硬い上限 `max_bytes` だけが run を止める ([VM](vm.md) の「上限と割り込み」)
 - タスクの外 (`main` の本体、`compute` の仕事、タスクの外の `par` の子) の深さの上限は、今までどおり run を止める実行時エラーで、捕まえられない
 - 上限の印を受けたときに `IO` の失敗を起こせない所 (`par` の子の中と、タスクの始めと終わりの std のコード) にいれば、印は捨てずに残り、起こせる所に戻った後の次の呼び出しで失敗が起きる
 
@@ -1611,7 +1611,7 @@ main () = Async.run (fn () ->
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`Async` のタスクの中の深さの上限は、種類 `ResourceLimit` の IO の失敗 `the call depth limit is exceeded` (上の「`Std.Async`」の「タスクの上限」) で、捕まえなければ `Async.run` の `run_result` の位置の実行時エラーになる。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルと、`Async.start_in` と `spawn_in` の閉じたスコープは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`Async` のタスクの中の深さの上限は、種類 `ResourceLimit` の IO の失敗 `the call depth limit is exceeded` で、メモリの柔らかい上限も同じ種類の IO の失敗 `the memory soft limit is exceeded` である (どちらも上の「`Std.Async`」の「タスクの上限」)。捕まえなければ `Async.run` の `run_result` の位置の実行時エラーになる。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルと、`Async.start_in` と `spawn_in` の閉じたスコープは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|

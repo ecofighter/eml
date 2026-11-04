@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/limit_memory_after_catch.em
+---
+--- stdout ---
+ResourceLimit: the memory soft limit is exceeded
+1000
+done
+--- stderr ---

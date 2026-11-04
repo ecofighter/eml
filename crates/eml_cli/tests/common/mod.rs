@@ -114,6 +114,8 @@ pub struct Marks {
     pub signals: Vec<VirtualSignal>,
     /// 深さの上限 (VM のスタックの語の数)。無ければ既定の上限を使う。
     pub max_depth: Option<usize>,
+    /// 確保量の上限 (hard, soft)。無ければ既定の上限を使う。
+    pub max_bytes: Option<(usize, usize)>,
 }
 
 /// テストのエントリか。分類の直下のファイルか、ディレクトリのテストの `main.<extension>` である。ディレクトリの
@@ -128,8 +130,8 @@ pub fn is_entry(root: &Path, path: &Path, extension: &str) -> bool {
             .is_some_and(|name| name.to_string_lossy() == format!("main.{extension}"))
 }
 
-/// `leading_marks` の誤りと、許さない場所のシグナルの印と worker の印と深さの印で panic する。`shown` は文言に出す
-/// ファイルの名前である。この3つの印を許すのは、`run_entry` が真のとき (`run/` と `run-fail/` のエントリ) だけである。
+/// `leading_marks` の誤りと、許さない場所のシグナルの印と worker の印と深さの印と確保量の印で panic する。`shown` は
+/// 文言に出すファイルの名前である。この4つの印を許すのは、`run_entry` が真のとき (`run/` と `run-fail/` のエントリ) だけである。
 pub fn marks_of(shown: &str, text: &str, leader: &str, run_entry: bool) -> Marks {
     let marks = leading_marks(text, leader).unwrap_or_else(|message| panic!("{shown}: {message}"));
     if !run_entry && !marks.signals.is_empty() {
@@ -141,11 +143,16 @@ pub fn marks_of(shown: &str, text: &str, leader: &str, run_entry: bool) -> Marks
     if !run_entry && marks.max_depth.is_some() {
         panic!("{shown}: max-depth marks are not supported here");
     }
+    if !run_entry && marks.max_bytes.is_some() {
+        panic!("{shown}: max-bytes marks are not supported here");
+    }
     marks
 }
 
 /// 先頭の印の行を読む。印の行は、shebang の行があればその後ろから続く、`<leader> windows:`、`<leader> signal:`、
-/// `<leader> workers:`、`<leader> max-depth:` で始まる行の並びで、4種類をどの順に混ぜてもよい。shebang は1行目にしか書けないので、印はその後ろに置く。
+/// `<leader> workers:`、`<leader> max-depth:`、`<leader> max-bytes:` で始まる行の並びで、5種類をどの順に混ぜてもよい。
+/// 深さの印と確保量の印は1つずつしか書けない。後ろの印が黙って前の印を上書きしないよう、重ねて書くと誤りにする。
+/// shebang は1行目にしか書けないので、印はその後ろに置く。
 pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
     let mut lines = text.lines().peekable();
     let _shebang = lines.next_if(|line| line.starts_with("#!"));
@@ -162,7 +169,15 @@ pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
         } else if starts(line, " signal:") {
             marks.signals.push(signal_mark(line, leader)?);
         } else if starts(line, " max-depth:") {
-            marks.max_depth = Some(max_depth_mark(line, leader)?);
+            let words = max_depth_mark(line, leader)?;
+            if marks.max_depth.replace(words).is_some() {
+                return Err(format!("the max-depth mark is written twice, at `{line}`"));
+            }
+        } else if starts(line, " max-bytes:") {
+            let bytes = max_bytes_mark(line, leader)?;
+            if marks.max_bytes.replace(bytes).is_some() {
+                return Err(format!("the max-bytes mark is written twice, at `{line}`"));
+            }
         } else {
             break;
         }
@@ -238,6 +253,28 @@ pub fn max_depth_mark(line: &str, leader: &str) -> Result<usize, String> {
         .and_then(|words| words.parse().ok())
         .filter(|&words| words > 0)
         .ok_or_else(|| format!("the max-depth mark is `{leader} max-depth: <words>`, not `{line}`"))
+}
+
+/// `<leader> max-bytes: <bytes> soft <bytes>` の印を読む。2つの数は正の10進の数字だけで、空白は1つずつ、soft は
+/// hard より小さい。綴りを誤った印が黙って既定の上限に戻らないよう、`<leader> max-bytes:` で始まる行は正しい形でなければ誤りにする。
+pub fn max_bytes_mark(line: &str, leader: &str) -> Result<(usize, usize), String> {
+    let number = |text: &str| {
+        text.bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| text.parse::<usize>().ok())
+            .flatten()
+            .filter(|&n| n > 0)
+    };
+    line.strip_prefix(leader)
+        .and_then(|rest| rest.strip_prefix(" max-bytes: "))
+        .and_then(|rest| rest.split_once(" soft "))
+        .and_then(|(hard, soft)| Some((number(hard)?, number(soft)?)))
+        .filter(|(hard, soft)| soft < hard)
+        .ok_or_else(|| {
+            format!(
+                "the max-bytes mark is `{leader} max-bytes: <bytes> soft <bytes>`, not `{line}`"
+            )
+        })
 }
 
 /// 失敗したファイルをすべて挙げるため、ファイルごとの panic を捕まえて最後まで流し、終わりに1回だけ panic する。
