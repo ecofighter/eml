@@ -168,7 +168,7 @@
 - 操作の予算を使うのは、`check_cancelled` と、`Std.Chan` の速い道と、`Std.Net` の待ちである。`Std.Net` の待ちは操作が終わっていたかによらず1回ごとに使い、書きの待ちは長さに応じて多く使う。64 KiB の書きは1回で予算を使い切る。`try_send` と `try_recv` は使うだけで譲らない ([標準ライブラリ](../spec/stdlib.md) の「操作の予算」)
 - 閉じない channel は run の終わりまで登録表に残り、残った品物もそのときまで落とさない (`RunStats.channels_swept`。[ロードマップ](../future/roadmap.md) の「非同期」)
 - `Counter` の表は `Machine` が持ち、放さない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Atomic`」、[ロードマップ](../future/roadmap.md) の「非同期」)
-- `IOErrorKind` の `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit`、`ConnectionRefused` を出すのは `fail_io` だけで、extern の誤りはこれらの種類を出さない ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」)
+- `IOErrorKind` の `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit`、`ConnectionRefused` を出すのは `fail_io` と、`Async` のタスクの上限の `ResourceLimit` だけで、extern の誤りはこれらの種類を出さない ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「タスクの上限」)
 
 ### 子のプロセス
 

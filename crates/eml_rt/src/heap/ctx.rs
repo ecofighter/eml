@@ -905,6 +905,11 @@ impl<M: Mode> Ctx<M> {
         }
     }
 
+    /// 今のタスクの深さの上限。
+    pub closed spec fn depth_limit_spec(&self) -> usize {
+        self.depth_limit
+    }
+
     /// 今のタスクの深さの上限だけを `limit` にした文脈。
     pub closed spec fn with_depth_limit(&self, limit: usize) -> Ctx<M> {
         Ctx { depth_limit: limit, ..*self }
@@ -1783,6 +1788,15 @@ impl<M: Mode> Ctx<M> {
                 assert(self.held_ok());
             }
         }
+    }
+
+    /// 今のタスクの深さの上限を読む。一時の切り替えの後で `set_depth_limit` で戻すために使う
+    /// (docs/spec/object-model.md の「タスクの切り替え」)。
+    pub fn depth_limit(&self) -> (r: usize)
+        ensures
+            r == self.depth_limit_spec(),
+    {
+        self.depth_limit
     }
 
     /// 今の `evv` の語を読む。参照は `Ctx` に残り、RC に触れない。fork が子の `evv` を作る間に親の `evv` を読むための

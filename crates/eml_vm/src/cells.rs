@@ -283,6 +283,16 @@ struct TaskCell {
     /// 入れ子の `run` で待っている根。
     run: Option<CellRef>,
     detached: bool,
+    /// タスクの上限の旗。共有で、lock の下で誰でも立て、`ResourceLimit` を起こした実行系が `clear_limit` で下ろす
+    /// (docs/spec/vm.md の「タスクの上限」)。
+    limit: bool,
+}
+
+/// エントリの `Task` が動き始めるときにセルから受け取る、タスクの上限の印 (docs/spec/vm.md の「タスクの上限」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TaskMarks {
+    /// 旗が立っている。実行系はエントリの `Task` を保留にする。
+    pub(crate) limit: bool,
 }
 
 struct ScopeCell {
@@ -1685,6 +1695,7 @@ impl Registry {
             woke_from_job: false,
             run: None,
             detached: false,
+            limit: false,
         }));
         self.scope_mut(scope)?.members.push(cell);
         self.stats.tasks += 1;
@@ -1714,8 +1725,9 @@ impl Registry {
         Ok(task.owner)
     }
 
-    /// 始める仕事を実行系が動かし始めた。始めたタスクの ID を返す。実行系は、その ID から閉包を `transfer_back` する。
-    pub(crate) fn started(&mut self, cell: CellRef) -> Result<u32, CellFault> {
+    /// 始める仕事を実行系が動かし始めた。始めたタスクの ID とタスクの上限の印を返す。実行系は、その ID から閉包を
+    /// `transfer_back` する。
+    pub(crate) fn started(&mut self, cell: CellRef) -> Result<(u32, TaskMarks), CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Placed) {
             return Err(CellFault::Internal("a task starts twice"));
@@ -1723,7 +1735,7 @@ impl Registry {
         task.phase = Phase::Running;
         task.entries += 1;
         task.budget = BUDGET;
-        Ok(task.spawner)
+        Ok((task.spawner, TaskMarks { limit: task.limit }))
     }
 
     /// 再開する仕事を実行系が動かし始めた。渡す `Wake` を返す。実行待ちから再開するタスクが取り消されていれば
@@ -1733,7 +1745,12 @@ impl Registry {
     /// 数えない。std の包みはその `Wake` を見ず、次の取り消しの地点が数えて投げるためである。仕事の待ちからの再開は、
     /// 実行待ちからの再開と同じ規則で替える。仕事の待ちは取り消しで外れないので、取り消しは仕事が終わってから届く
     /// (docs/spec/vm.md の「取り消しの届け方」)。
-    pub(crate) fn resumed(&mut self, cell: CellRef, wake: i64, io: bool) -> Result<i64, CellFault> {
+    pub(crate) fn resumed(
+        &mut self,
+        cell: CellRef,
+        wake: i64,
+        io: bool,
+    ) -> Result<(i64, TaskMarks), CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Parked) {
             return Err(CellFault::Internal("a task resumes without waiting"));
@@ -1743,14 +1760,25 @@ impl Registry {
         if !io || task.budget == 0 {
             task.budget = BUDGET;
         }
+        let marks = TaskMarks { limit: task.limit };
         let fast = std::mem::take(&mut task.fast_yield);
         let from_job = std::mem::take(&mut task.woke_from_job);
         let ready = matches!(task.wait.take(), Some(Wait::Ready));
         if (ready || from_job) && !fast && wake == WOKE && self.point(cell)? {
             self.stats.cancels += 1;
-            return Ok(CANCELLED);
+            return Ok((CANCELLED, marks));
         }
-        Ok(wake)
+        Ok((wake, marks))
+    }
+
+    /// タスクの上限の旗を下ろす。`ResourceLimit` を起こした実行系が呼ぶ。もう放したセルは何もしない。旗を見る者が
+    /// もういないためである (docs/spec/vm.md の「タスクの上限」)。
+    pub(crate) fn clear_limit(&mut self, cell: CellRef) -> Result<(), CellFault> {
+        if self.live(cell).is_none() {
+            return Ok(());
+        }
+        self.task_mut(cell)?.limit = false;
+        Ok(())
     }
 
     /// 待ちに入って `Finish` したエントリの `Task` の分だけ、セルごとに `entries` を1つ減らし、`cells` を空にする。
@@ -5023,7 +5051,7 @@ impl Depot {
 }
 
 /// ほかのタスクの ID の物体を放すときの切り替え。`evv` を空にして ID `id` に替え、`f` の後で元の `evv`、worker、
-/// 深さの起点 `depth_offset` に戻す。RC には触れない (docs/spec/object-model.md の「タスクの切り替え」)。
+/// 深さの起点 `depth_offset`、深さの上限に戻す。RC には触れない (docs/spec/object-model.md の「タスクの切り替え」)。
 pub(crate) fn with_worker<M: Mode, T>(
     ctx: &mut Ctx<M>,
     id: u32,
@@ -5031,10 +5059,14 @@ pub(crate) fn with_worker<M: Mode, T>(
     f: impl FnOnce(&mut Ctx<M>) -> T,
 ) -> T {
     let prev = ctx.heap().worker();
+    // 実行系はタスクの上限の状態 (保留と猶予) を深さの上限の値で表すので、`switch_task` が書き直した値を元に戻す
+    // (docs/spec/vm.md の「タスクの上限」)
+    let limit = ctx.depth_limit();
     // 入れる `()` は即値で、取り出した `evv` は戻すときにそのまま返すので、参照の数は変わらない
     let evv = unsafe { ctx.switch_task(Word::UNIT, id, 0) };
     let result = f(ctx);
     let _unit = unsafe { ctx.switch_task(evv, prev, depth_offset) };
+    ctx.set_depth_limit(limit);
     result
 }
 
@@ -5071,6 +5103,7 @@ fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
         woke_from_job: false,
         run: None,
         detached: false,
+        limit: false,
     }))
 }
 
@@ -5187,7 +5220,10 @@ fn a_cancel_leaves_a_task_parked_on_a_job() {
     )
     .unwrap();
     assert_eq!(resumed_cells(&out), [(me, WOKE)]);
-    assert_eq!(registry.lock().resumed(me, WOKE, false).unwrap(), CANCELLED);
+    assert_eq!(
+        registry.lock().resumed(me, WOKE, false).unwrap().0,
+        CANCELLED
+    );
     assert_eq!(registry.lock().stats.cancels, 1);
     let (worker, end) = registry.lock().take_job(job.encode(), me).unwrap();
     assert_eq!(worker, 1);
@@ -5218,7 +5254,7 @@ fn a_task_parked_on_a_finished_job_resumes_at_once() {
     ));
     assert_eq!(registry.lock().stats.parks, 1);
     assert!(registry.lock().job_mut(job).unwrap().waiter.is_none());
-    assert_eq!(registry.lock().resumed(me, WOKE, false).unwrap(), WOKE);
+    assert_eq!(registry.lock().resumed(me, WOKE, false).unwrap().0, WOKE);
     registry.lock().take_job(job.encode(), me).unwrap();
 }
 
@@ -5678,7 +5714,7 @@ fn a_cancel_during_a_fast_yield_is_counted_once() {
     assert_eq!(registry.lock().op_ready(done, 0, me).unwrap(), FAST_YIELD);
     registry.lock().ready(me, Word::UNIT).unwrap();
     registry.lock().task_mut(me).unwrap().cancel = true;
-    assert_eq!(registry.lock().resumed(me, WOKE, false).unwrap(), WOKE);
+    assert_eq!(registry.lock().resumed(me, WOKE, false).unwrap().0, WOKE);
     assert_eq!(registry.lock().stats.cancels, 0);
     assert_eq!(registry.lock().task_mut(me).unwrap().budget, BUDGET);
     // 次の取り消しの地点が1回だけ数える
@@ -5688,7 +5724,7 @@ fn a_cancel_during_a_fast_yield_is_counted_once() {
     // 予算の残る操作の待ちからの再開は予算を戻さない
     registry.lock().task_mut(me).unwrap().budget = 5;
     registry.lock().task_mut(me).unwrap().phase = Phase::Parked;
-    assert_eq!(registry.lock().resumed(me, WOKE, true).unwrap(), WOKE);
+    assert_eq!(registry.lock().resumed(me, WOKE, true).unwrap().0, WOKE);
     assert_eq!(registry.lock().task_mut(me).unwrap().budget, 5);
     registry.lock().task_mut(me).unwrap().budget = 0;
     registry.lock().task_mut(me).unwrap().phase = Phase::Parked;

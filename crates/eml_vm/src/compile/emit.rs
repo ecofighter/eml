@@ -59,6 +59,11 @@ pub(crate) fn function<M: Mode>(
             .all(|rows| rows[0].0 < rows[1].0),
         "the positions of the unwind rows increase"
     );
+    // 中断は関数の先頭で止まったフレームも通るので、どの関数もエントリの行を持つ (docs/spec/vm.md の「巻き戻しの表」)
+    debug_assert!(
+        emitter.out.unwind_at(start).is_some_and(|row| row.entry),
+        "every function has an entry unwind row"
+    );
     emitter.patch();
     for &at in &emitter.self_tail_patches {
         emitter.out.operands[at] = start;

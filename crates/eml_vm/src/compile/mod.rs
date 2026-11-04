@@ -73,9 +73,9 @@ impl<M: Mode> CodeBase<M> {
         let strings: Vec<u32> = strings.iter().map(|text| pool.string(text)).collect();
         let links = Links { strings, ..links };
         let known = functions.len();
-        // verifier の拒む関数は表を持たず、その関数のフレームを通る中断は内部の誤りになる。VM 自身の見張りを
-        // 確かめるテストが、verifier を通さない IR を読み込むためである。表を作るのは変換する関数だけで、debug
-        // ビルドではすでにある関数も変換し直して比べる
+        // verifier の拒む関数は空のエントリの行だけを持ち、地点の行を持たない。その関数の地点で止まったフレームを
+        // 通る中断は内部の誤りになる。VM 自身の見張りを確かめるテストが、verifier を通さない IR を読み込むためである。
+        // 表を作るのは変換する関数だけで、debug ビルドではすでにある関数も変換し直して比べる
         let unwinds: Vec<Unwinds> = eml_lir::unwind::points(program, |FnIdx(i)| {
             cfg!(debug_assertions) || links.functions[i as usize] as usize >= known
         })

@@ -2158,7 +2158,7 @@ mod tests {
         assert!(inbox(&p.run, &p.control, 0).is_empty());
         assert_eq!(cells::owner_of(&p.shared, cell), 1);
         assert_eq!(p.shared.lock().placed_owner(cell, 0).unwrap(), 1);
-        assert_eq!(p.shared.lock().started(cell).unwrap(), 0);
+        assert_eq!(p.shared.lock().started(cell).unwrap().0, 0);
         assert_eq!(cells::entries_of(&p.shared, cell), 1);
         p.victim.gather(&mut p.victim_ctx, 0, false).unwrap();
         assert!(p.victim.runnables.is_empty() && p.victim.stolen.is_empty());
@@ -2195,7 +2195,7 @@ mod tests {
         assert_eq!(cells::owner_of(&p.shared, cell), 1);
         assert!(inbox(&p.run, &p.control, 0).is_empty());
         assert_eq!(
-            p.shared.lock().resumed(cell, cells::WOKE, false).unwrap(),
+            p.shared.lock().resumed(cell, cells::WOKE, false).unwrap().0,
             cells::WOKE
         );
     }
@@ -2252,7 +2252,7 @@ mod tests {
         assert_eq!(cells::owner_of(&p.shared, cell), 1);
         assert!(queue(&p.run, 0).is_empty());
         assert_eq!(
-            p.shared.lock().resumed(cell, cells::WOKE, false).unwrap(),
+            p.shared.lock().resumed(cell, cells::WOKE, false).unwrap().0,
             cells::WOKE
         );
         assert_eq!(cells::entries_of(&p.shared, cell), 1);
@@ -2422,7 +2422,7 @@ mod tests {
         };
         assert_eq!((worker, got), (x, k));
         assert_eq!(
-            p.shared.lock().resumed(cell, cells::WOKE, false).unwrap(),
+            p.shared.lock().resumed(cell, cells::WOKE, false).unwrap().0,
             cells::WOKE
         );
         cells::with_worker(&mut p.rescuer_ctx, x, 0, |ctx| unsafe {
