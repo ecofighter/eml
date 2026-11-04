@@ -3001,7 +3001,7 @@ fn async_op<R: Exec>(
             }
             task.set(dst, Word::UNIT);
         }
-        Extern::NetSubmitWrite => {
+        Extern::NetSubmitWrite | Extern::StreamSubmitWrite => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
@@ -3037,7 +3037,7 @@ fn async_op<R: Exec>(
             )?;
             task.set_raw(dst, token);
         }
-        Extern::NetSubmitRead => {
+        Extern::NetSubmitRead | Extern::StreamSubmitRead => {
             let (buf, stream) = (task.get(arg(0)), task.get(arg(1)));
             bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
@@ -3107,7 +3107,10 @@ fn async_op<R: Exec>(
             )?;
             task.set_raw(dst, token);
         }
-        Extern::NetOpListener | Extern::NetOpStream => {
+        Extern::NetOpListener
+        | Extern::NetOpStream
+        | Extern::StreamOpReader
+        | Extern::StreamOpWriter => {
             // token は借りるだけで、組を作る後の `con` が消費する
             let w = sched
                 .cells
@@ -3115,7 +3118,7 @@ fn async_op<R: Exec>(
                 .op_stream(task.raw(arg(0)), task.worker)?;
             task.set(dst, w);
         }
-        Extern::NetOpOutcome => {
+        Extern::NetOpOutcome | Extern::StreamOpOutcome => {
             // token は借りるだけで、組を作る後の `con` が消費する
             let code = sched
                 .cells
@@ -3128,16 +3131,24 @@ fn async_op<R: Exec>(
             let done = sched.cells.lock().op_done(task.raw(arg(0)), task.worker)?;
             task.set_raw(dst, i64::from(done));
         }
-        ext @ (Extern::NetTakeListener | Extern::NetTakeStream) => {
-            let listener = ext == Extern::NetTakeListener;
-            let w = cells::take_made(&sched.cells, ctx, task.raw(arg(0)), task.worker, listener)?;
+        ext @ (Extern::NetTakeListener
+        | Extern::NetTakeStream
+        | Extern::StreamTakeReader
+        | Extern::StreamTakeWriter) => {
+            let made = match ext {
+                Extern::NetTakeListener => cells::Made::Listener,
+                Extern::NetTakeStream => cells::Made::Stream,
+                Extern::StreamTakeReader => cells::Made::Reader,
+                _ => cells::Made::Writer,
+            };
+            let w = cells::take_made(&sched.cells, ctx, task.raw(arg(0)), task.worker, made)?;
             task.set(dst, w);
         }
-        Extern::NetTakeBytes => {
+        Extern::NetTakeBytes | Extern::StreamTakeBytes => {
             let buf = cells::take_bytes(&sched.cells, ctx, task.raw(arg(0)), task.worker)?;
             task.set(dst, buf);
         }
-        Extern::NetSubmitReadLine => {
+        Extern::NetSubmitReadLine | Extern::StreamSubmitReadLine => {
             let stream = task.get(arg(0));
             bind_here(sched, ctx, stream)?;
             here!(sched, post, here);
@@ -3152,7 +3163,7 @@ fn async_op<R: Exec>(
             )?;
             task.set_raw(dst, token);
         }
-        Extern::NetTakeLine => {
+        ext @ (Extern::NetTakeLine | Extern::StreamTakeLine) => {
             match cells::take_line(&sched.cells, ctx, task.raw(arg(0)), task.worker)? {
                 Ok(line) => task.set(dst, line),
                 // `Stdin.read_line` と同じく、UTF-8 でない行は種類 `NotUtf8` にする (docs/spec/stdlib.md の「`Std.Net`」)
@@ -3161,11 +3172,15 @@ fn async_op<R: Exec>(
                         kind: externs::IO_NOT_UTF8,
                         message,
                     };
-                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::NetTakeLine);
+                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
                 }
             }
         }
-        Extern::NetFinish => {
+        Extern::StreamTakeLineBytes => {
+            let line = cells::take_line_bytes(&sched.cells, ctx, task.raw(arg(0)), task.worker)?;
+            task.set(dst, line);
+        }
+        ext @ (Extern::NetFinish | Extern::StreamFinish) => {
             let taken = cells::take_op(&sched.cells, ctx, task.raw(arg(0)), task.worker)?;
             // 記録が持っていたものは受け付けたタスクの ID の物体で、操作は終わっているので driver はもう触れない。
             // 作ったハンドルは落とすと bin を通して閉じる (docs/spec/vm.md の「操作の記録」)
@@ -3179,7 +3194,7 @@ fn async_op<R: Exec>(
                     kind: io_kind(e),
                     message,
                 };
-                return raise_again::<R>(code, ctx, task, dst, raise, Extern::NetFinish);
+                return raise_again::<R>(code, ctx, task, dst, raise, ext);
             }
             task.set(dst, Word::UNIT);
         }
@@ -3193,9 +3208,51 @@ fn async_op<R: Exec>(
             let peer = cells::peer_addr(ctx, task.get(arg(0)))?;
             task.set(dst, peer);
         }
+        Extern::StreamSubmitOpen => {
+            let (path, mode) = (task.get(arg(0)), task.raw(arg(1)));
+            // 取り込みは、本物の時計の run では自分の driver が行う (docs/spec/vm.md の「時計と driver」)
+            sched.own_driver()?;
+            here!(sched, post, here);
+            let submitted = cells::submit_open(
+                &sched.cells,
+                &here,
+                ctx,
+                sched.driver.as_deref_mut(),
+                task.worker,
+                task.depth_offset,
+                path,
+                mode,
+            )?;
+            match submitted {
+                Ok(token) => task.set_raw(dst, token),
+                // 開けなかったファイルは、記録を作らずに `FileIn.open` と同じ種類で投げる
+                // (docs/spec/stdlib.md の「`Std.Stream`」)
+                Err((e, message)) => {
+                    let raise = Raise::Io {
+                        kind: io_kind(&e),
+                        message,
+                    };
+                    return raise_again::<R>(code, ctx, task, dst, raise, Extern::StreamSubmitOpen);
+                }
+            }
+        }
+        Extern::StreamOpPrefix => {
+            // token は借りるだけで、組を作る後の `con` が消費する
+            let prefix = sched
+                .cells
+                .lock()
+                .op_prefix(task.raw(arg(0)), task.worker)?;
+            let w = ctx.fresh_string(&prefix);
+            task.set(dst, w);
+        }
+        Extern::StreamSource => {
+            // 読み手は借りるだけで、組を作る後の `con` が消費する
+            let name = cells::stream_source(ctx, task.get(arg(0)))?;
+            task.set(dst, name);
+        }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async, Std.Chan, Std.Atomic and Std.Net reached the Async instruction",
+                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net and Std.Stream reached the Async instruction",
             ));
         }
     }
@@ -4318,7 +4375,22 @@ fn run_extern<R: Exec>(
             | Extern::NetLocalPort
             | Extern::NetPeerAddr
             | Extern::NetSubmitShutdownWrite
-            | Extern::NetSubmitSetNodelay => {
+            | Extern::NetSubmitSetNodelay
+            | Extern::StreamSubmitOpen
+            | Extern::StreamSubmitRead
+            | Extern::StreamSubmitReadLine
+            | Extern::StreamSubmitWrite
+            | Extern::StreamOpReader
+            | Extern::StreamOpWriter
+            | Extern::StreamOpOutcome
+            | Extern::StreamOpPrefix
+            | Extern::StreamTakeReader
+            | Extern::StreamTakeWriter
+            | Extern::StreamTakeBytes
+            | Extern::StreamTakeLine
+            | Extern::StreamTakeLineBytes
+            | Extern::StreamFinish
+            | Extern::StreamSource => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

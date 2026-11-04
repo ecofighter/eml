@@ -36,7 +36,7 @@
   - 配列の要素は一様な位置なので、今は `Array Float` と `MutArray Float` の要素が書くたびに `Float` の箱に入る。spectral-norm では、確保のほとんどがこの箱である (`RunStats` の `allocations` 4043 のうち `boxes` が 4001。[計測の基準](../implementation/benchmarks.md) の「配列の `Float` の要素の箱」)。構造体の表現もこの箱を消さない
   - 新しい配列は `Array a` とは別の型で、長さの語と連続した中身を持つ物体の仲間 (`String`、`Bytes`。[オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」) の別の種類である。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
 - `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: `raw-arrays`。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
-- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。今は std に仕事を出す行がなく、プールの仕事は `eml_io` のテストだけが確かめるので、VM からプールの仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
+- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。std がプールに出す仕事は `Std.Stream` のファイルの読み書きだけで、`Op::Job` の仕事は `eml_io` のテストだけが確かめるので、VM から `Op::Job` の仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
 - `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。`Tls.connect_with_ca` と `Tls.wrap_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: `ffi-blocking`。設計: この項目
   - テストの証明書: macOS は TLS の server の証明書の有効期間に上限 (825 日) を課すと理解しているので、期限を 2126 年にした `eml_tls` の fixtures は、本物のソケットのテストで拒まれる見込みである。段の最初に確かめ、期限の短い証明書を定期的に作り直すか、テストだけ別の検証を使うかを決める
   - Linux の OS の検証器は、OS のファイルから根を読んで rustls で検証する。`ca-certificates` を持たない最小のコンテナ (distroless など) と nix の sandbox では根が空になり、`Tls.connect` はすべて失敗する。この使い方は `Tls.connect_with_ca` で根を渡すと spec に書く。テストは `connect_with_ca` か `wrap_with_ca` で根を渡して書き、既定の根に頼るテストは置かない
@@ -436,7 +436,7 @@
   - 後に回した理由: `cancel_requested` は、`shield` の中では外から来た取り消しを読まない。`shield` の中の後始末が要求を知る使い道が、まだない。
   - 見直す条件: `shield` の中の後始末が、取り消されたかどうかで動きを変える必要が出たとき。
 - プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ ([VM](../spec/vm.md) の「時計と driver」)
-  - 後に回した理由: 今は std に仕事を出す行がなく、プールは Rust のテストだけが使う。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
+  - 後に回した理由: std がプールに出す仕事は `Std.Stream` の通常のファイルの読み書きだけで、どれもディスクが答えれば終わる。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
   - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
 - 1つのハンドルの1つの向きに、保留の操作を2つ以上置くこと: 今の本物の driver は、読みと書きのそれぞれに保留を1つしか置かず、2つ目を `InvalidInput` で断る ([VM](../spec/vm.md) の「時計と driver」)
   - 後に回した理由: std のストリームとリスナーは `Lin` なので、VM は同じ向きに2つの操作を出さない。backend の fd ごとの状態を最小にできる。

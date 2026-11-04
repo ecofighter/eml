@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use vstd::prelude::*;
 
 use crate::control::{Control, Stop, stop_reason};
+use crate::driver::RawFile;
 use crate::externs::{Fault, Form, IndexFault, IoOp, IoReason, Launch, StdStream, Utf8Source};
 use crate::heap::find_byte;
 #[cfg(verus_only)]
@@ -1059,6 +1060,19 @@ pub trait Host: Send + Sync {
     fn spawn(&self, _spawn: &Spawn<'_>) -> io::Result<Spawned> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
     }
+    /// `path` の通常のファイルを `mode` で開き、driver が取り込む `RawFile` にする (`Std.Stream`)。通常のファイルで
+    /// なければ `NOT_REGULAR` で断る (docs/spec/stdlib.md の「`Std.Stream`」)。
+    fn open_raw(&self, _path: &str, _mode: OpenMode) -> io::Result<RawFile> {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
+impl HostRef {
+    /// Host の `open_raw`。`Ctx` を通さずに VM が呼ぶ。開いたファイルはヒープの物体でなく、driver に渡すためである
+    /// (docs/spec/object-model.md の「`unsafe` の核」の T11)。
+    pub fn open_raw(&self, path: &str, mode: OpenMode) -> io::Result<RawFile> {
+        self.host.open_raw(path, mode)
+    }
 }
 
 /// 子の標準入力の向き。パイプラインでは先頭の段のものである。
@@ -1320,6 +1334,82 @@ pub fn redirect_file(root: &Path, path: &str, mode: Option<WriteMode>) -> io::Re
         return Err(io::Error::from(io::ErrorKind::IsADirectory));
     }
     Ok(file)
+}
+
+/// `Std.Stream` の `open`、`create`、`append` がファイルを開く向き (docs/spec/stdlib.md の「`Std.Stream`」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenMode {
+    /// 読むために開く。
+    Read,
+    /// 作るか、切り詰めて書くために開く。
+    Create,
+    /// 作るか、末尾に足す形で書くために開く。
+    Append,
+}
+
+/// `Host::open_raw` が通常のファイルでないものを断るときの理由。誤りの種類は `Unsupported` で、IO の失敗の種類は
+/// `NotAvailable` になる (docs/spec/stdlib.md の「`Std.Stream`」)。
+pub const NOT_REGULAR: &str = "not a regular file";
+
+// FIFO を開いても止まらないよう `O_NONBLOCK` を、端末を開いても制御端末にしないよう `O_NOCTTY` を付ける。値は OS の
+// ヘッダーのもので、`libc` に頼らない。通常のファイルの読み書きは `O_NONBLOCK` で変わらないので、付けたままにする
+// (docs/spec/stdlib.md の「`Std.Stream`」)
+#[cfg(target_os = "linux")]
+const O_NONBLOCK: i32 = 0o4000;
+#[cfg(target_os = "linux")]
+const O_NOCTTY: i32 = 0o400;
+#[cfg(target_vendor = "apple")]
+const O_NONBLOCK: i32 = 0x0004;
+#[cfg(target_vendor = "apple")]
+const O_NOCTTY: i32 = 0x0002_0000;
+#[cfg(all(unix, not(any(target_os = "linux", target_vendor = "apple"))))]
+compile_error!("open_regular knows the open flags of Linux and Apple only");
+
+/// `root` の下の `path` を `mode` で開き、通常のファイルなら driver に渡す `RawFile` にする。あるのに通常のファイルで
+/// ないもの (ディレクトリ、FIFO、端末、ソケット、デバイス) は、開けたかどうか、どの OS か、どの向きかによらず
+/// `NOT_REGULAR` で断る。開けたものは閉じてから断るので、プールの仕事を止めたままにするファイルは driver に届かない
+/// (docs/spec/stdlib.md の「`Std.Stream`」)。std の `open` は close-on-exec で開く。
+pub fn open_regular(root: &Path, path: &str, mode: OpenMode) -> io::Result<RawFile> {
+    let path = root.join(path);
+    let mut options = fs::OpenOptions::new();
+    match mode {
+        OpenMode::Read => options.read(true),
+        OpenMode::Create => options.write(true).create(true).truncate(true),
+        OpenMode::Append => options.append(true).create(true),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(O_NONBLOCK | O_NOCTTY);
+    }
+    let file = options.open(&path).map_err(|e| {
+        // 読み手のない FIFO を書くために開くと ENXIO、ソケットのファイルは ENXIO か EOPNOTSUPP で、開く前に断られる
+        if fs::metadata(&path).is_ok_and(|m| !m.is_file()) {
+            not_regular()
+        } else {
+            e
+        }
+    })?;
+    regular_file(file)
+}
+
+/// 開いた `file` が通常のファイルなら `RawFile` にし、そうでなければ閉じて `NOT_REGULAR` で断る。
+pub fn regular_file(file: fs::File) -> io::Result<RawFile> {
+    // Windows のデバイスの handle は metadata を返さないことがある。通常のファイルと確かめられないものはすべて断る
+    if !file.metadata().is_ok_and(|m| m.is_file()) {
+        return Err(not_regular());
+    }
+    Ok(RawFile::new(file.into()))
+}
+
+fn not_regular() -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, NOT_REGULAR)
+}
+
+/// `open_raw` の誤りが `NOT_REGULAR` か。
+pub fn is_not_regular(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::Unsupported
+        && e.get_ref().is_some_and(|r| r.to_string() == NOT_REGULAR)
 }
 
 /// `launch` が起動した子。`programs` は段ごとのプログラムの名前を先頭から並べる。
@@ -1724,6 +1814,10 @@ impl Host for StdHost {
         ))
     }
 
+    fn open_raw(&self, path: &str, mode: OpenMode) -> io::Result<RawFile> {
+        open_regular(&self.file_root, path, mode)
+    }
+
     /// 標準出力を書き出してから `SPAWN_LOCK` を取り、標準入出力のファイルと段の間の pipe を作って段を先頭から起動し、
     /// 段ごとに `Command` を落とす。最後の段が戻ってから放す (docs/spec/object-model.md の「子のプロセス」)。段 `k` を
     /// 起動できなければ、それより前の段を kill して待ち、段 `k` の誤りを返す。
@@ -1875,9 +1969,9 @@ fn directory_error(path: &Path, error: io::Error) -> io::Error {
 }
 
 /// I/O の誤りの理由 (`read_text`、`open_write`、`FileOut` の書き込み、`spawn` の失敗を `Fault` の理由に
-/// する)。止める語が立った後の `Interrupted` は `fill` と `read_all` が止めたことにし、立っていない `Interrupted` は
+/// する。VM は `open_raw` の失敗の文言にも使う)。止める語が立った後の `Interrupted` は `fill` と `read_all` が止めたことにし、立っていない `Interrupted` は
 /// 読み直す。読み以外の `Interrupted` は止める語と関係なく、ここで `Other` になる。
-fn io_reason(e: &io::Error) -> IoReason {
+pub fn io_reason(e: &io::Error) -> IoReason {
     match e.kind() {
         io::ErrorKind::NotFound => IoReason::NotFound,
         io::ErrorKind::PermissionDenied => IoReason::PermissionDenied,

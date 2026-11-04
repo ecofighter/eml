@@ -783,7 +783,7 @@ eml は1度に1本の pipe しか読み書きしない。pipe の buffer は OS 
 | `wait`、`wait_all`、`run`、`output`、`output_bytes`、`capture`、`capture_bytes` | 子を待てない (`Io { op: Wait, name: program, .. }`。``cannot wait for `sort`: I/O error``)。起動の誤りと違い、子は起動している | `IO` |
 | `wait`、`wait_all`、読み、書き込み | 割り込み。子が終わった後に `Stopped` になる | 位置を付けた実行時エラー |
 
-- 起動の誤り (``cannot run `<program>`: …``。一時ファイルとリダイレクトの形を含み、最後でない段の標準出力の誤りを除く) の理由は、`not found`、`permission denied`、`not available`、`I/O error` の4つの語のどれかで、OS の文言を出さない。理由の語が誤りの種類 (`try_io` の `kind`) を決める
+- 起動の誤り (``cannot run `<program>`: …``。一時ファイルとリダイレクトの形を含み、最後でない段の標準出力の誤りを除く) の理由は、`not found`、`permission denied`、`not available`、`I/O error` の4つの語のどれかで、OS の文言を出さない。理由の語が誤りの種類 (`try_io` の `kind`) を決める。driver で読み書きする `Std.Stream` の読みと書きの失敗は、`Std.Net` と同じく OS の文言を保つ (下の「`Std.Stream`」)
 - `Child` の書き込みの失敗を、`Stdout` と違って `try_io` で捕まえるのは、`Child` が自分の pipe に直に書き、共有の buffer を持たないためである (`FileOut` と同じ理由)
 - 書き込みが失敗すると、ハンドルを手放すので、破棄処理が子を kill する。子の終了コードは失われる
 
@@ -1105,9 +1105,9 @@ body () =
 - 取り消しは2つの所から来る。タスクの取り消しのビットは、`cancel t`、`drop t`、属するスコープの取り消し、取り消したスコープに加えることで立つ。スコープの取り消しの旗は、`cancel_scope`、スコープのタスクの失敗、`scope` の本体の失敗、親のスコープの取り消しで立ち、開くときに親の旗を写す (`shield` の境目は写さない。下の `shield` の箇条)。どちらも一度立てたら下ろさない
 - タスクにビットが立つと、そのタスクが開いているスコープと、入れ子の `run` で待っている根にも旗が立つ。ただし `shield` の中で開いたスコープには立たない。ビットが立った後に `shield` の外で開くスコープと、ビットが立った後に `shield` の外で呼ぶ入れ子の `run` の根も、開くときに旗を立てる
 - `scope` の本体を動かすタスクは、そのスコープの中にいる間だけ旗で取り消される (ビットは立てない)。スコープを出た後は、外の旗かビットが立っていなければ取り消されていない
-- 取り消しの地点は `await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled`、`compute` と、`Std.Chan` の `send` と `recv` と、`Std.Net` の待つ関数である。取り消しの地点は、`shield` の外では、タスクのビットかタスクの今のスコープの旗が立っていれば (`shield` の中の規則は下の `shield` の箇条にある)、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる。`compute` はこの規則の例外である。仕事の前や途中に立った取り消しは待ちを外さず、仕事が終わって起こされた後、再開するまでに立った取り消しでも、`compute` は結果を落として投げる (下の「`compute`」)
+- 取り消しの地点は `await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled`、`compute` と、`Std.Chan` の `send` と `recv` と、`Std.Net` と `Std.Stream` の待つ関数である。取り消しの地点は、`shield` の外では、タスクのビットかタスクの今のスコープの旗が立っていれば (`shield` の中の規則は下の `shield` の箇条にある)、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる。`compute` はこの規則の例外である。仕事の前や途中に立った取り消しは待ちを外さず、仕事が終わって起こされた後、再開するまでに立った取り消しでも、`compute` は結果を落として投げる (下の「`compute`」)
 - `send` と `recv` は、待つ前と待っている間に取り消しが立てば投げる。起こされた後は、`await` と同じく、まず操作をやり直し (枠か品物があれば送るか受け取る)、次の取り消しの地点が投げる。やり直しで待ち直すときは、待つ前の規則で投げる
-- `Std.Net` の待つ関数は、待つ前に取り消しが立っていれば、何も受け付けずにストリームかリスナーを落として投げる。待っている間に立てば、driver に取り消しを頼み、操作の完了を待ってから、完了が作ったハンドル、記録の buffer、渡したストリームかリスナーを落として投げる。driver が buffer を使い終わるまで返せないためである (下の「`Std.Net`」)
+- `Std.Net` の待つ関数は、待つ前に取り消しが立っていれば、何も受け付けずにストリームかリスナーを落として投げる。待っている間に立てば、driver に取り消しを頼み、操作の完了を待ってから、完了が作ったハンドル、記録の buffer、渡したストリームかリスナーを落として投げる。driver が buffer を使い終わるまで返せないためである (下の「`Std.Net`」)。`Std.Stream` の待つ関数も同じで、走っているファイルの仕事は取り消せないので、仕事の完了を待つ (下の「`Std.Stream`」)
 - 失敗したタスクを同じスコープの中から `await` で待つタスクは、失敗が記録されたときにもう待っていればその失敗を受け取り、まだ待っていなければスコープの取り消しを受けて `Cancelled` を受け取る。どちらになるかはスケジュールで決まる。スコープの最初の失敗はどちらでも同じなので、`run` と `scope` が起こし直す失敗は変わらない。相手のスコープを `shield` の外で開いたときは、`await` を `shield` で囲めば、待つ相手の失敗を確かに受け取る
 - 取り消しは協調的で、取り消しの地点を通らないコードは止まらない。待たないループを取り消せるようにするには、ループの中で `check_cancelled ()` を呼ぶ
 - `cancel_requested ()` は、取り消しの地点が投げるときだけ真を返す。`shield` の中では、今のスコープを今の `shield` の中で自分が開いたときだけ、その旗を読む。タスクの外では偽である。`await` から出た `Cancelled` を捕まえたタスクは、`cancel_requested ()` で自分が取り消されたかを確かめられる
@@ -1429,6 +1429,77 @@ main () = Async.run (fn () ->
 - `take_listener` と `take_stream` は token を消費して記録を放し、完了から作ったリスナーかストリームを返す。`take_bytes` は token を消費して記録を放し、記録の buffer を返す。読みでは読んだバイトを足した buffer、書きでは書いた buffer そのものである。`take_line` は token を消費して記録を放し、記録が切り出した行を終わりの改行を含めて返す。残りのない EOF では空の文字列を返し、包みがそれを `None` にする。どれも、番号が 0 でない記録では内部の誤り `an op is taken after it failed` になる
 - `finish` は token を消費して記録を放し、記録がまだ持つもの (完了から作ったハンドルを含む) を落とす。番号 6 の誤りは、取り消しを頼んだ記録でなければ IO の失敗にする
 
+## `Std.Stream`
+
+`Std.Stream` は、driver で読み書きする通常のファイルのモジュールである。`Reader` と `Writer` は `Lin` の `Foreign` で、落とすとファイルを閉じる。待つ関数はどれも取り消しの地点で、`Std.Net` と同じく受け付け、待ち、取り出しの3段で動く ([VM](vm.md) の「操作の記録」)。ファイルの読み書きは driver のプールの仕事なので、タスクがファイルを待っても、同じ worker のほかのタスクは止まらない。`Async.run` の外で読み書きするときは、ブロックする `FileIn`、`FileOut`、`Fs` を使う。2つの組はハンドルの型を共有しない。
+
+```haskell
+import Async
+import Stream
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let w = Stream.create "out.txt"
+  let w = Stream.write_line "hello" w
+  Stream.close_writer w
+  let r = Stream.open "out.txt"
+  let (text, r) = Stream.read_all r
+  Stream.close r
+  println text)
+```
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `Reader` | `Lin` の `Foreign` の型 | extern |
+| `Writer` | `Lin` の `Foreign` の型 | extern |
+| `open` | `String -> <IO, Async> Reader` | eml |
+| `create` | `String -> <IO, Async> Writer` | eml |
+| `append` | `String -> <IO, Async> Writer` | eml |
+| `read_chunk` | `Bytes -> Reader -> <IO, Async> (Bytes, Reader)` | eml |
+| `read_line` | `Reader -> <IO, Panic, Async> (Option String, Reader)` | eml |
+| `read_line_bytes` | `Reader -> <IO, Panic, Async> (Option Bytes, Reader)` | eml |
+| `read_all` | `Reader -> <IO, Async> (String, Reader)` | eml |
+| `read_all_bytes` | `Reader -> <IO, Async> (Bytes, Reader)` | eml |
+| `write` | `String -> Writer -> <IO, Async> Writer` | eml |
+| `write_bytes` | `Bytes -> Writer -> <IO, Async> (Bytes, Writer)` | eml |
+| `write_line` | `String -> Writer -> <IO, Async> Writer` | eml |
+| `close` | `Reader -> <IO> Unit` | eml |
+| `close_writer` | `Writer -> <IO> Unit` | eml |
+
+- `Reader` と `Writer` の Repr は `obj` である。落としたハンドルは、`Std.Net` のハンドルと同じく、driver が次の待ち、完了の取り出し、`quiesce` のどれかのときに閉じる。`close r` と `close_writer w` は落とすだけである。`Writer` は書きの buffer を持たないので、書き出すものはなく、`flush` もない
+- `open path` は読むために、`create path` は作るか切り詰めて、`append path` は作るか末尾に足す形で書くために開く。パスは `FileIn.open` と同じく `file_root` からの相対パスか絶対パスである。開くのは Host で ([オブジェクトモデル](object-model.md) の「Host」)、開いたファイルは開いたタスクの I/O を受け付ける worker の driver に取り込む。それから後の読み書きは、その driver のプールの仕事になる ([VM](vm.md) の「時計と driver」)
+- 開くのは通常のファイルだけである。あるのに通常のファイルでないもの (ディレクトリ、FIFO、端末、`/dev/stdin`、ソケット、デバイス) は、どの向きでも、どの OS でも、種類 `NotAvailable` の IO の失敗 ``cannot open `<path>`: not a regular file`` になる。読み手のない FIFO を書くために開くときやソケットのファイルのように、OS が開くこと自体を断るときも、この失敗にする。FIFO を開く呼び出しは止まらず (unix の `O_NONBLOCK`)、開けたものは通常のファイルでないと分かったら閉じるので、プールのスレッドを止めたままにするファイルは driver に届かない。こうしたファイルはブロックする `FileIn` と `FileOut` で読み書きする。応答しないネットワークのファイルシステムは、ブロックする行と同じく仕事を止めうる。そのとき `quiesce` は仕事が終わるまで待つ
+- 開けないファイルは、`FileIn.open` と `FileOut.create` と同じ種類と文言の IO の失敗になる (``cannot open `missing.txt`: not found``)。この失敗は driver に何も出さずに起きる
+- `read_chunk b r` は `Net.read_chunk` と同じ形で、1回の読みで 1 バイト以上 65 536 バイト以下を `b` の後ろに足し、その `Bytes` と読み手を返す。EOF のときだけ何も足さない。`b` が一意で空きが 8 バイト以上あれば、その空きの 65 536 バイトまでに読む。なければ、受け付けで容量を `長さ + max(長さ, 65 536)` 以上に広げて、65 536 バイトまで読む。ソケットと違い、読めるようになるのを待ってから広げることはない ([VM](vm.md) の「操作の記録」)
+- `read_line r` は `Net.read_line` と同じ形で、終わりの改行を除いた行を返し、残りのない EOF では `None` を返す。行の中身の上限 (1 MiB) も同じで、上限を超える行は種類 `Other` の IO の失敗 ``cannot read `<path>`: a line is longer than 1048576 bytes``、UTF-8 でない行は種類 `NotUtf8` の ``cannot read `<path>`: the line is not valid UTF-8`` になる。読みすぎたバイトは読み手の buffer に残り、次の `read_chunk` か `read_line` が先に返す
+- `read_line_bytes r` は `read_line` と同じ1行を、`FileIn.read_line_bytes` と同じく終わりの改行を除いたバイト列で返す。UTF-8 でない行も失敗にしない。上限と読みすぎたバイトの扱いは `read_line` と同じである
+- `read_all_bytes r` は `read_chunk` を1つの `Bytes` に繰り返し、何も足さない読みで終える。`read_all r` はそれを UTF-8 の文字列にし、UTF-8 でなければ読み手を落として、種類 `NotUtf8` の IO の失敗 ``cannot read `<path>`: the text is not valid UTF-8`` にする
+- `write_bytes b w` は `b` をすべて書き、`b` と書き手の組を返す。返す `b` は渡した物体そのもので、共有の `Bytes` でも写さない。`write s w` は `s` の UTF-8 のバイトを書き、`write_line s w` は `s` と改行を書く。どれも1回の操作ですべてを書き、書いた後のファイルは、同じ run のほかの読み手からすぐ読める
+- 走り出したファイルの仕事は取り消せない。読みか書きを待つタスクが取り消されると、そのタスクは仕事が終わるまで待ち、終わってから読み手か書き手を落として種類 `Cancelled` の失敗を投げる。読みの仕事が読んだバイトは確定してから捨てる。`Async.timeout ms (fn () -> Stream.read_chunk b r)` も、期限が来たときに仕事が走っていれば、仕事が終わってから戻る。テストの driver は待ちの区切りでファイルの仕事を終え、仮想の時計はそれを待ってから進むので、仮想の時計の期限が走っている仕事より先に来ることはない ([VM](vm.md) の「時計と driver」)
+- 待つ関数の包みは `Std.Net` と同じ形で、結果の番号も同じ 0 から 6 である (上の「`Std.Net`」の表)。番号 2 (OS の誤りの種類が ConnectionReset、BrokenPipe、ConnectionAborted) は、種類 `ConnectionReset` の ``<prefix>: broken pipe`` にする。番号 3 から 5 は `Std.Net` と同じ種類と文言である。番号 6 は `finish` が投げ、種類は `Std.Net` と同じく OS の誤りから最初の5つに写す。文言は prefix と OS の誤りの表示を `: ` でつないだもので、OS の文言を保つ。そのため、ディスクの満杯や読み取り専用の書き先は `Other`、書く権限のないファイルは `PermissionDenied` である。prefix は、開くことでは ``cannot open `<path>` ``、読みでは ``cannot read `<path>` ``、書きでは ``cannot write to `<path>` `` で、パスは開いたときに渡したままのものである。番号 2 から 5 の文言の prefix は、包みが `op_prefix` で記録から読む
+- extern の行は次の15行で、どれも `pub` でない。VM は `Std.Net` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+
+| 行 | 型 | 借りる引数 |
+|---|---|---|
+| `submit_open` | `String -> Int -> <IO> Async.OpId` | なし |
+| `submit_read` | `Bytes -> Reader -> <IO> Async.OpId` | なし |
+| `submit_read_line` | `Reader -> <IO> Async.OpId` | なし |
+| `submit_write` | `Bytes -> Writer -> <IO> Async.OpId` | なし |
+| `op_reader` | `Async.OpId -> <IO> (Reader, Async.OpId)` | token |
+| `op_writer` | `Async.OpId -> <IO> (Writer, Async.OpId)` | token |
+| `op_outcome` | `Async.OpId -> <IO> (Int, Async.OpId)` | token |
+| `op_prefix` | `Async.OpId -> <IO> (String, Async.OpId)` | token |
+| `take_reader` | `Async.OpId -> <IO> Reader` | なし |
+| `take_writer` | `Async.OpId -> <IO> Writer` | なし |
+| `take_bytes` | `Async.OpId -> <IO> Bytes` | なし |
+| `take_line` | `Async.OpId -> <IO> String` | なし |
+| `take_line_bytes` | `Async.OpId -> <IO> Bytes` | なし |
+| `finish` | `Async.OpId -> <IO> Unit` | なし |
+| `source` | `Reader -> (String, Reader)` | 読み手 |
+
+- `submit_open path mode` は、`mode` が 0 なら読むために、1 なら作るか切り詰めて、2 なら作るか末尾に足す形で開く。開けなければ記録を作らずに失敗を投げる。開けたファイルの取り込みは host の driver が受け付けで終えるので、開くタスクが待つのは、host がほかの worker のとき (仮想の時計の worker 1 以降) の知らせの往復の間だけである
+- `op_reader` と `op_writer` は `Std.Net.op_stream` と同じく、終わった記録から受け付けに渡した読み手か書き手を移し出す。`op_prefix` は終わった記録の誤りの文言の prefix を返す。`take_reader` と `take_writer` は、`open` と、`create` か `append` の記録から作った読み手か書き手を返す。`take_line_bytes` は、`take_line` と同じ行の記録から、行を UTF-8 かどうかによらず `Bytes` で返す。ほかの行は `Std.Net` の同じ名前の行と同じである。`source` は、読み手を開いたパスを `` ` `` で囲んだ文字列を返し、`read_all` が UTF-8 の失敗の文言に使う。借りて組で返し、効果を持たない
+
 ## `Std.Tls`
 
 `Std.Tls` は TLS のクライアントのモジュールである。`Conn` は rustls の接続と、復号してまだ返していない平文の列を持つ `Lin` の `Foreign` で、I/O を持たない。`Stream` は `Conn` と `Net.TcpStream` の組の eml のデータで、`std/Tls.em` のコードが両者の間でバイトを汲む。ソケットの読み書き、待ち、取り消し、期限はすべて `Std.Net` のもので、`Std.Tls` は何も足さない。暗号は aws-lc-rs、既定の根は webpki-roots の根で、OS の証明書ストアは使わない。根に足す CA は PEM で渡す。TLS 1.2 と 1.3 を受ける。server の側の API はない。
@@ -1635,7 +1706,7 @@ main () = Async.run (fn () ->
 
 ## 実行時エラー
 
-標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。
+標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。ただし `Std.Net` と `Std.Stream` の driver の誤りは、OS の誤りの表示を理由にする。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。
 
 I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`Async` のタスクの中の深さの上限は、種類 `ResourceLimit` の IO の失敗 `the call depth limit is exceeded` で、メモリの柔らかい上限も同じ種類の IO の失敗 `the memory soft limit is exceeded` である (どちらも上の「`Std.Async`」の「タスクの上限」)。捕まえなければ `Async.run` の `run_result` の位置の実行時エラーになる。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルと、`Async.start_in` と `spawn_in` の閉じたスコープは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
@@ -1657,6 +1728,11 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
 | `FileOut.create`、`append` | ``cannot open `out.txt`: permission denied`` |
 | `FileOut.write`、`write_bytes`、`write_line`、`flush`、`close` | ``cannot write to `out.txt`: I/O error`` |
+| `Stream.open`、`create`、`append` | ``cannot open `in.txt`: not found`` |
+| `Stream.open`、`create`、`append` の通常のファイルでないもの | ``cannot open `.`: not a regular file`` |
+| `Stream` の読み (`read_chunk`、`read_line`、`read_all`、`read_all_bytes`) | ``cannot read `in.txt`: `` と OS の誤りの表示 |
+| UTF-8 でない `Stream.read_all` と `read_line` | ``cannot read `in.txt`: the text is not valid UTF-8`` (`read_line` は `the line is not valid UTF-8`) |
+| `Stream` の書き (`write`、`write_bytes`、`write_line`) | ``cannot write to `out.txt`: `` と OS の誤りの表示 |
 | `Proc` の起動 (`run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn`) | ``cannot run `rsync`: not found`` |
 | `Proc` の起動の `stdin_text` の一時ファイル | ``cannot run `sort`: cannot make the standard input file: I/O error`` |
 | `Proc` の起動のリダイレクトのファイル | ``cannot run `sort`: cannot open `in.txt`: not found`` |

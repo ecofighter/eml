@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/stream_open_special.em
+---
+--- stdout ---
+NotAvailable: cannot open `.`: not a regular file
+NotAvailable: cannot open `.`: not a regular file
+NotAvailable: cannot open `.`: not a regular file
+NotFound: cannot open `missing.txt`: not found
+0
+--- stderr ---

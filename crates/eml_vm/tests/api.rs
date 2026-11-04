@@ -926,6 +926,116 @@ main () = Async.run (fn () ->
     assert_eq!(out, "None\n");
 }
 
+/// `root` の下のファイルを開く `StdHost` の上で、本物の時計の検査モードの run を、worker を `workers` 個まで持って行う。
+/// 標準出力を返す。
+fn run_on_files(src: &str, root: &std::path::Path, workers: usize) -> String {
+    let control = Arc::new(Control::new(Limits {
+        workers,
+        ..Limits::default()
+    }));
+    let out = eml_vm::Capture::default();
+    let host = eml_rt::StdHost::new(
+        Box::new(out.clone()),
+        Box::new(std::io::sink()),
+        root.to_path_buf(),
+        eml_rt::Buffering::Block,
+    );
+    let config = RunConfig::default()
+        .with_clock(Clock::Real)
+        .with_debug_heap(true)
+        .with_control(control);
+    eml_vm::execute(
+        &eml_test_support::lir(src),
+        &config,
+        eml_rt::HostRef::new(Arc::new(host)),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    out.contents()
+}
+
+/// テストごとの空の一時ディレクトリ。
+fn fresh_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("eml_vm-api-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// 本物の driver で、ほかの worker に置いたタスクが `Std.Stream` で本物のファイルを書き、読み直す。読みと書きは
+/// 開いたタスクの I/O の host の driver のプールの仕事で、貸した記憶にプールのスレッドが読み書きする
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_real_file_is_written_and_read_back() {
+    let src = "\
+import Async (Async)
+import Async
+import Stream
+writer : Unit -> <IO, Panic, Async> String
+writer () =
+  let w = Stream.create \"out.txt\"
+  let w = Stream.write_line \"alpha\" w
+  Stream.close_writer w
+  let w = Stream.append \"out.txt\"
+  let w = Stream.write_line \"beta\" w
+  Stream.close_writer w
+  let r = Stream.open \"out.txt\"
+  let (text, r) = Stream.read_all r
+  Stream.close r
+  text
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start writer
+  println (Async.await t))
+";
+    for workers in [1, 4] {
+        let root = fresh_dir(&format!("file-{workers}"));
+        let out = run_on_files(src, &root, workers);
+        assert_eq!(out, "alpha\nbeta\n\n", "{workers} workers");
+        assert_eq!(
+            std::fs::read_to_string(root.join("out.txt")).unwrap(),
+            "alpha\nbeta\n"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+/// FIFO は読むために開いても止まらず (`O_NONBLOCK`)、書くために開けば読み手がないので開く前に断られる。ソケットの
+/// ファイルは開けない。どれも通常のファイルでないので、どの向きでもプールの仕事を出す前に同じ失敗になる
+/// (docs/spec/stdlib.md の「`Std.Stream`」)。
+#[cfg(unix)]
+#[test]
+fn a_stream_open_of_a_fifo_or_a_socket_fails_at_once() {
+    let root = fresh_dir("fifo");
+    let fifo =
+        std::ffi::CString::new(root.join("pipe").into_os_string().into_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+    let _socket = std::os::unix::net::UnixListener::bind(root.join("sock")).unwrap();
+    let src = "\
+import Async (Async)
+import Stream
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  show_open (fn () -> Stream.close (Stream.open \"pipe\"))
+  show_open (fn () -> Stream.close_writer (Stream.create \"pipe\"))
+  show_open (fn () -> Stream.close_writer (Stream.append \"pipe\"))
+  show_open (fn () -> Stream.close (Stream.open \"sock\"))
+  show_open (fn () -> Stream.close_writer (Stream.create \"sock\"))
+  show_open (fn () -> Stream.close_writer (Stream.append \"sock\")))
+show_open : (Unit -> <IO, Async> Unit) -> <IO, Async> Unit
+show_open f =
+  match try_io f with
+    | Ok _ -> println \"opened\"
+    | Err e -> println \"\\{show e.kind}: \\{e.message}\"
+";
+    let out = run_on_files(src, &root, 1);
+    let refused = |p: &str| format!("NotAvailable: cannot open `{p}`: not a regular file\n");
+    assert_eq!(
+        out,
+        [refused("pipe").repeat(3), refused("sock").repeat(3)].concat()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn the_stats_fields_follow_the_declaration() {
     let stats = RunStats::default();

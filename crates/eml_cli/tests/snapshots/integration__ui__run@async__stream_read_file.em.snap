@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/stream_read_file.em
+---
+--- stdout ---
+first line
+chunk: 23 bytes
+rest: 0 bytes
+(eof)
+all: 34 bytes
+--- stderr ---

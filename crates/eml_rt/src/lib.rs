@@ -40,9 +40,10 @@ pub use externs::{
 pub use frozen::Frozen;
 pub use heap::{Ctx, CtxStats, Heap, MaskItem, Stats, Token};
 pub use host::{
-    Buffering, Host, HostRef, LaunchCause, LaunchError, Launched, Opened, Process, SPAWN_LOCK,
-    Spawn, Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec, StdoutSpec, Stream,
-    WriteMode, exit_code, here_file, launch, redirect_file,
+    Buffering, Host, HostRef, LaunchCause, LaunchError, Launched, NOT_REGULAR, OpenMode, Opened,
+    Process, SPAWN_LOCK, Spawn, Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec,
+    StdoutSpec, Stream, WriteMode, exit_code, here_file, io_reason, is_not_regular, launch,
+    open_regular, redirect_file, regular_file,
 };
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};

@@ -258,6 +258,9 @@ table! {
         // driver のリスナーとストリームのハンドルを持つ `Foreign` (docs/spec/stdlib.md の「`Std.Net`」)
         NetTcpListener => type_row("Std.Net.TcpListener", Lin, Repr::Obj),
         NetTcpStream => type_row("Std.Net.TcpStream", Lin, Repr::Obj),
+        // driver のファイルのハンドルを持つ `Foreign`。読む側と書く側で型を分ける (docs/spec/stdlib.md の「`Std.Stream`」)
+        StreamReader => type_row("Std.Stream.Reader", Lin, Repr::Obj),
+        StreamWriter => type_row("Std.Stream.Writer", Lin, Repr::Obj),
         // rustls の接続と平文の列を持つ `Foreign`。I/O は持たない (docs/spec/stdlib.md の「`Std.Tls`」)
         TlsConn => type_row("Std.Tls.Conn", Lin, Repr::Obj),
     }
@@ -1546,6 +1549,159 @@ table! {
             Unr,
             Purity::Effectful,
         ),
+        // ファイルの操作の記録のインターフェース (docs/spec/stdlib.md の「`Std.Stream`」)。形は `Std.Net` の行と同じで、
+        // `op_prefix` は終わった記録の誤りの文言の前に付ける語を読む
+        StreamSubmitOpen => kinded(
+            "Std.Stream.submit_open",
+            &[Obj, Int],
+            &[Unr, Unr],
+            Int,
+            Unr,
+            Purity::Effectful,
+        ),
+        StreamSubmitRead => kinded(
+            "Std.Stream.submit_read",
+            &[Obj, Obj],
+            &[Unr, Lin],
+            Int,
+            Unr,
+            Purity::Effectful,
+        ),
+        StreamSubmitReadLine => kinded(
+            "Std.Stream.submit_read_line",
+            &[Obj],
+            &[Lin],
+            Int,
+            Unr,
+            Purity::Effectful,
+        ),
+        StreamSubmitWrite => kinded(
+            "Std.Stream.submit_write",
+            &[Obj, Obj],
+            &[Unr, Lin],
+            Int,
+            Unr,
+            Purity::Effectful,
+        ),
+        StreamOpReader => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Stream.op_reader",
+                    &[Int],
+                    &[Unr],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        StreamOpWriter => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Stream.op_writer",
+                    &[Int],
+                    &[Unr],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        StreamOpOutcome => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Stream.op_outcome",
+                    &[Int],
+                    &[Unr],
+                    Int,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        StreamOpPrefix => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Stream.op_prefix",
+                    &[Int],
+                    &[Unr],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        StreamTakeReader => kinded(
+            "Std.Stream.take_reader",
+            &[Int],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        StreamTakeWriter => kinded(
+            "Std.Stream.take_writer",
+            &[Int],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        StreamTakeBytes => kinded(
+            "Std.Stream.take_bytes",
+            &[Int],
+            &[Unr],
+            Obj,
+            Unr,
+            Purity::Effectful,
+        ),
+        StreamTakeLine => kinded(
+            "Std.Stream.take_line",
+            &[Int],
+            &[Unr],
+            Obj,
+            Unr,
+            Purity::Effectful,
+        ),
+        StreamTakeLineBytes => kinded(
+            "Std.Stream.take_line_bytes",
+            &[Int],
+            &[Unr],
+            Obj,
+            Unr,
+            Purity::Effectful,
+        ),
+        StreamFinish => kinded(
+            "Std.Stream.finish",
+            &[Int],
+            &[Unr],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        // 開いたときのパスを読むだけなので、`Std.Net.peer_addr` と同じく借りるだけの効果のない行にする
+        StreamSource => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Stream.source",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Unr,
+                    Purity::Pure,
+                )
+            },
+        ),
         // TLS の状態のインターフェース (docs/spec/stdlib.md の「`Std.Tls`」)。どれも待たないので普通の extern の行で、
         // 投げるのは `client_raw` だけである。組を返す行は `Conn` を借りる
         TlsClientRaw => kinded(
@@ -1662,7 +1818,7 @@ table! {
 }
 
 impl Extern {
-    /// `job_cell` を除く `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net` の行。VM はこれらの行を
+    /// `job_cell` を除く `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net`、`Std.Stream` の行。VM はこれらの行を
     /// 汎用の extern の命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
     /// `job_cell` と `chan_cell` は即値を写すだけの普通の extern である。
     pub fn is_async(self) -> bool {
@@ -1733,6 +1889,21 @@ impl Extern {
                 | Extern::NetPeerAddr
                 | Extern::NetSubmitShutdownWrite
                 | Extern::NetSubmitSetNodelay
+                | Extern::StreamSubmitOpen
+                | Extern::StreamSubmitRead
+                | Extern::StreamSubmitReadLine
+                | Extern::StreamSubmitWrite
+                | Extern::StreamOpReader
+                | Extern::StreamOpWriter
+                | Extern::StreamOpOutcome
+                | Extern::StreamOpPrefix
+                | Extern::StreamTakeReader
+                | Extern::StreamTakeWriter
+                | Extern::StreamTakeBytes
+                | Extern::StreamTakeLine
+                | Extern::StreamTakeLineBytes
+                | Extern::StreamFinish
+                | Extern::StreamSource
         )
     }
 }

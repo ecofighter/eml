@@ -2,7 +2,8 @@
 //! (`Clock::Virtual`) の上で、取り消しの道は書きを取り消すまで終わらせない driver の上で確かめる。テストの driver の
 //! 書きは次の集める地点でいつも終わるので、待っている間の取り消しに届かないためである。worker が2つの run では、
 //! 仮想の時計で worker 1 に置いたタスクの操作を driver を持つ worker 0 が受け付け、持ち主が結果を当てる道と、本物の
-//! 時計で各 worker が自分の driver で受け付ける道も確かめる。
+//! 時計で各 worker が自分の driver で受け付ける道も確かめる。`Std.Stream` の開くことの記録を待つ間に取り消した
+//! タスクがファイルを残さないことは、取り込みの完了を取り消しまで返さない driver の上で確かめる。
 
 use std::io;
 use std::sync::Arc;
@@ -1657,4 +1658,185 @@ main () = Async.run (fn () ->
     peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
     let mut rest = Vec::new();
     assert_eq!(peer.read_to_end(&mut rest).unwrap(), 0);
+}
+
+/// テストの driver に操作を渡し、`hold` なら `Op::Adopt` だけはテストの driver に取り込ませた後、その完了を操作の
+/// 取り消しを頼まれるまで返さない。開くタスクを `open` の `io_wait` で待たせたまま取り消すためである。静止させた
+/// 後のテストの driver の開いたファイルの数を `log` に残す。
+struct FileWatch {
+    inner: eml_io::TestDriver,
+    hold: bool,
+    /// 返していない取り込みの完了と、その取り消しを頼まれたか。
+    held: Vec<(Completion, bool)>,
+    log: Arc<std::sync::Mutex<FileLog>>,
+}
+
+#[derive(Default, Debug)]
+struct FileLog {
+    adopts: usize,
+    /// 完了を返す前に取り消しを頼まれた取り込みの数。
+    cancelled_while_held: usize,
+    open_at_quiesce: Option<usize>,
+}
+
+impl FileWatch {
+    fn new(hold: bool) -> (FileWatch, Arc<std::sync::Mutex<FileLog>>) {
+        let log = Arc::new(std::sync::Mutex::new(FileLog::default()));
+        let driver = FileWatch {
+            inner: eml_io::TestDriver::new(None),
+            hold,
+            held: Vec::new(),
+            log: Arc::clone(&log),
+        };
+        (driver, log)
+    }
+}
+
+impl IoDriver for FileWatch {
+    fn now(&self) -> Duration {
+        self.inner.now()
+    }
+
+    fn wait(&mut self, deadline_ms: Option<u64>) -> io::Result<bool> {
+        if self.held.iter().any(|(_, asked)| *asked) {
+            return Ok(true);
+        }
+        self.inner.wait(deadline_ms)
+    }
+
+    fn submit(&mut self, key: OpKey, op: Op) -> Submit {
+        match op {
+            Op::Adopt { res } => {
+                self.log.lock().unwrap().adopts += 1;
+                if !self.hold {
+                    return self.inner.submit(key, Op::Adopt { res });
+                }
+                let result = self.inner.adopt(res).map(Done::Handle);
+                let completion = Completion {
+                    key,
+                    result,
+                    cancelled: false,
+                };
+                self.held.push((completion, false));
+                Submit::Pending
+            }
+            op => self.inner.submit(key, op),
+        }
+    }
+
+    fn cancel(&mut self, key: OpKey) {
+        match self.held.iter_mut().find(|(c, _)| c.key == key) {
+            Some((_, asked)) => {
+                *asked = true;
+                self.log.lock().unwrap().cancelled_while_held += 1;
+            }
+            None => self.inner.cancel(key),
+        }
+    }
+
+    fn completions(&mut self, out: &mut Vec<Completion>) {
+        let (asked, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held)
+            .into_iter()
+            .partition(|(_, asked)| *asked);
+        self.held = kept;
+        out.extend(asked.into_iter().map(|(c, _)| c));
+        self.inner.completions(out);
+    }
+
+    fn pending(&self) -> usize {
+        self.held.len() + self.inner.pending()
+    }
+
+    fn waker(&self) -> Arc<dyn IoWaker> {
+        self.inner.waker()
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        self.inner.bin()
+    }
+
+    fn close(&mut self, handle: IoHandle) {
+        self.inner.close(handle);
+    }
+
+    fn adopt(&mut self, res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
+        self.inner.adopt(res)
+    }
+
+    fn quiesce(&mut self) {
+        self.inner.quiesce();
+        self.log.lock().unwrap().open_at_quiesce = Some(self.inner.open_files());
+    }
+}
+
+/// `driver` の上で `src` を検査モードで流し、出力を返す。
+fn run_on_watch(src: &str, driver: FileWatch) -> String {
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    out.contents()
+}
+
+/// `Stream.create` の `io_wait` で待つ間に取り消されたタスクの記録も、取り込みの完了からストリームを作る。包みの
+/// `finish` がそれを落とし、ファイルは bin を通して閉じるので、`quiesce` の後のテストの driver にファイルは残らない
+/// (docs/spec/vm.md の「操作の記録」、docs/spec/stdlib.md の「`Std.Stream`」)。
+#[test]
+fn an_open_cancelled_while_it_waits_closes_its_file() {
+    let src = "\
+import Async (Async)
+import Async
+import Stream
+opener : Unit -> <IO, Async> Unit
+opener () =
+  match try_io (fn () -> Stream.close_writer (Stream.create \"out.txt\")) with
+    | Ok _ -> println \"opened\"
+    | Err e -> println \"\\{show e.kind}: \\{e.message}\"
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start opener
+  Async.yield_now ()
+  Async.cancel t)
+";
+    let (driver, log) = FileWatch::new(true);
+    let out = run_on_watch(src, driver);
+    assert_eq!(out, "Cancelled: task was cancelled\n");
+    let log = log.lock().unwrap();
+    assert_eq!(
+        (log.adopts, log.cancelled_while_held, log.open_at_quiesce),
+        (1, 1, Some(0))
+    );
+}
+
+/// 取り込みが受け付けで終わる driver でも、開いては閉じるのを続けるタスクを取り消した run は、`quiesce` の後の
+/// テストの driver にファイルを残さない (docs/spec/stdlib.md の「`Std.Stream`」)。
+#[test]
+fn a_cancelled_reopening_task_leaves_no_file_open() {
+    let src = "\
+import Async (Async)
+import Async
+import Stream
+reopen : Unit -> <IO, Async> Unit
+reopen () =
+  Stream.close_writer (Stream.create \"out.txt\")
+  reopen ()
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run (fn () ->
+    let t = Async.start reopen
+    Async.yield_now ()
+    Async.yield_now ()
+    Async.cancel t)
+  println \"after run\"
+";
+    let (driver, log) = FileWatch::new(false);
+    let out = run_on_watch(src, driver);
+    assert_eq!(out, "after run\n");
+    let log = log.lock().unwrap();
+    assert!(log.adopts > 0, "{log:?}");
+    assert_eq!(log.open_at_quiesce, Some(0));
 }

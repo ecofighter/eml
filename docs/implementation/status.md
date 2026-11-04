@@ -144,7 +144,7 @@
 
 ### `Async`
 
-- driver の操作 (受け付け、待ち、取り出し) を使うのは `Std.Net` だけである。非同期のファイルとパイプはまだない。std の今の読み書きの行 (`FileIn`、`Stdin`、`Proc` など) はタスクの中でその場で動き、終わるまで worker を持ち続ける。その間、同じ worker のほかのタスクは、監視のスレッドが詰まりを見つけた後で、救済できるものだけがほかの worker で動く ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」、[ロードマップ](../future/roadmap.md) の `async-files`)
+- driver の操作 (受け付け、待ち、取り出し) を使うのは `Std.Net` と `Std.Stream` だけである。`Std.Stream` が開くのは通常のファイルだけで、非同期のパイプと子のプロセスはまだない。std の今の読み書きの行 (`FileIn`、`Stdin`、`Proc` など) はタスクの中でその場で動き、終わるまで worker を持ち続ける。その間、同じ worker のほかのタスクは、監視のスレッドが詰まりを見つけた後で、救済できるものだけがほかの worker で動く ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」、[ロードマップ](../future/roadmap.md) の `async-files`)
 - `Std.Net` に `resolve` と `write_within` はない。`listen` は名前を受けず、書きの期限は `Async.timeout` で付ける ([ロードマップ](../future/roadmap.md) の「非同期」)
 - `Std.Tls` に期限を持つ読み (`_within`)、server の API、OS の証明書ストアはない。期限は `Async.timeout` で付け、期限が来ると `Stream` を失う。信頼する根は webpki-roots の根と、渡した PEM の CA だけである ([標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」、[ロードマップ](../future/roadmap.md) の「非同期」、[ロードマップ](../future/roadmap.md) の `tls-platform-verifier`)
 - `Std.Http` に keep-alive、HTTP/2、gzip などの coding、プロキシ、cookie、ストリーミングの本文、本文の大きさの上限、IPv6 のアドレスの URL はない。ヘッダーと trailer の行の数にも上限がなく、期限は `Async.timeout` で付ける。本文を書き終える前に閉じた相手の応答は読めない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Http`」、[ロードマップ](../future/roadmap.md) の「非同期」)
@@ -152,9 +152,9 @@
 - Windows の `eml` は `rustyline` が使う `clipboard-win` を通して user32.dll を link する (ソースで確かめた。実行ファイルの import は確かめていない)。user32.dll を読み込んだプロセスには、Windows 10 までは OS がログオフとシャットダウンの事象を送らないので、`Terminate` を起こすのはコンソールを閉じることだけである。本物の閉じる事象を送るテストはなく、handler の判断の関数と返らないことを単体テストで確かめる ([VM](../spec/vm.md) の「上限と割り込み」)
 - 本物の driver の epoll と kqueue の backend は、ソケットを1回だけ edge で登録して以後変えない。1回の待ちは、知らせのあった操作とスレッドの答えが当たった操作にだけ触れるので、その手間は保留の操作の数によらない ([VM](../spec/vm.md) の「時計と driver」、[計測の基準](benchmarks.md) の「driver の syscall の目標」)
 - 監視のスレッドを始められなかった眠る driver の run では、VM が1回の待ちを 10 ms で切って止める語を読む。その run では Ctrl-C の後に driver を起こす道がないためで、眠る worker に Ctrl-C と確保量の上限が届くまで、10 ms と OS の遅れだけかかる ([VM](../spec/vm.md) の「時計と driver」)
-- 本物の driver はブロックする仕事のプール (`Op::Job`、driver ごとに32本まで。すべてが仕事中なら、仕事は driver の中の列で待つ) を持つが、std に仕事を出す行はなく、使うのは Rust のテストだけである ([VM](../spec/vm.md) の「時計と driver」)
+- 本物の driver はブロックする仕事のプール (`Op::Job`、driver ごとに32本まで。すべてが仕事中なら、仕事は driver の中の列で待つ) を持つ。std からは `Std.Stream` のファイルの読み書きだけがプールで動き、`Op::Job` を使うのは Rust のテストだけである ([VM](../spec/vm.md) の「時計と driver」)
 - 時間は `sleep_ms`、`timeout`、`race`、`drain_within` で扱う。`eml run` と `eml repl` はいつも本物の時計で動く。テストとライブラリの既定は仮想の時計で、すべてのタスクが待つときだけ進む ([標準ライブラリ](../spec/stdlib.md) の「時間」、[VM](../spec/vm.md) の「時計と driver」)
-- 取り消しは協調的で、取り消しの地点 (`await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` と、`Std.Chan` の `send`、`recv` と、`Std.Net` の待つ関数と、仕事が終わってから届く `compute`) でだけ届く。読み書きの extern と `par` の子は取り消しの地点でない ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
+- 取り消しは協調的で、取り消しの地点 (`await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` と、`Std.Chan` の `send`、`recv` と、`Std.Net` と `Std.Stream` の待つ関数と、仕事が終わってから届く `compute`) でだけ届く。読み書きの extern と `par` の子は取り消しの地点でない ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
 - `compute` の仕事は、空いた worker があるときだけほかの worker で動く。呼んだ worker の実行待ちに積んだ仕事は、後でほかの worker が空いても動かない。`par` の右の子と同じ制限で、盗みを入れる段で解く ([VM](../spec/vm.md) の「`compute` の仕事」、[ロードマップ](../future/roadmap.md) の `par-steal`)
 - `compute` の仕事は取り消せない。取り消しは仕事が終わってから届くので、`timeout` で囲んだ `compute` は期限が過ぎても仕事が終わるまで戻らず、仕事の後で `None` を返す。`race` で負けた腕の仕事も最後まで動く ([標準ライブラリ](../spec/stdlib.md) の「`compute`」)
 - `compute` の仕事の中の、`Panic` でない実行時エラーは、呼んだタスクの `try_all` も捕まえず、その場で run を止める。捕まえない `Panic` は、呼んだタスクの `Panicked` になる ([標準ライブラリ](../spec/stdlib.md) の「`compute`」)

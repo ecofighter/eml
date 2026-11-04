@@ -491,7 +491,7 @@ mod std_host {
     use std::path::PathBuf;
 
     use super::Shared;
-    use crate::{Buffering, Control, Host, Limits, StdHost, Stream, WriteMode};
+    use crate::{Buffering, Control, Host, Limits, OpenMode, StdHost, Stream, WriteMode};
 
     fn std_host(mode: Buffering) -> (StdHost, Shared, Shared) {
         let (out, err) = (Shared::default(), Shared::default());
@@ -789,6 +789,44 @@ mod std_host {
                 .map(|e| e.kind()),
             Some(io::ErrorKind::IsADirectory)
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `open_raw` は、ディレクトリを読む向きでも作る向きでも、どの OS でも `NOT_REGULAR` で断る。種類は `Unsupported`
+    /// で、IO の失敗の種類は `NotAvailable` になる (docs/spec/stdlib.md の「`Std.Stream`」)。
+    #[test]
+    fn a_raw_open_refuses_a_directory_as_not_a_regular_file() {
+        let root = fixture("raw-dir");
+        let host = StdHost::new(
+            Box::new(io::sink()),
+            Box::new(io::sink()),
+            root.clone(),
+            Buffering::Line,
+        );
+        for mode in [OpenMode::Read, OpenMode::Create, OpenMode::Append] {
+            let e = host.open_raw(".", mode).err().unwrap();
+            assert_eq!(e.kind(), io::ErrorKind::Unsupported, "{mode:?}");
+            assert!(crate::is_not_regular(&e), "{mode:?}: {e}");
+            assert_eq!(e.to_string(), crate::NOT_REGULAR);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// ないファイルを読む向きで開くと `NotFound` で、作る向きなら作って開く。
+    #[test]
+    fn a_raw_open_of_a_missing_file_is_not_found() {
+        let root = fixture("raw-missing");
+        let host = StdHost::new(
+            Box::new(io::sink()),
+            Box::new(io::sink()),
+            root.clone(),
+            Buffering::Line,
+        );
+        let e = host.open_raw("missing.txt", OpenMode::Read).err().unwrap();
+        assert_eq!(e.kind(), io::ErrorKind::NotFound);
+        assert!(!crate::is_not_regular(&e));
+        assert!(host.open_raw("made.txt", OpenMode::Create).is_ok());
+        assert!(root.join("made.txt").is_file());
         std::fs::remove_dir_all(root).unwrap();
     }
 

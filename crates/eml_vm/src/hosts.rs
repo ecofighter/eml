@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 
 use eml_rt::{
-    Buffering, Host, HostRef, LaunchCause, LaunchError, Opened, Process, SPAWN_LOCK, Spawn,
-    Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec, StdoutSpec, Stream, WriteMode,
-    exit_code, here_file, redirect_file,
+    Buffering, Host, HostRef, LaunchCause, LaunchError, NOT_REGULAR, OpenMode, Opened, Process,
+    RawFile, SPAWN_LOCK, Spawn, Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec,
+    StdoutSpec, Stream, WriteMode, exit_code, here_file, redirect_file, regular_file,
 };
 
 /// 書いたバイト列を覚える書き込み先。テストが出力を読むために使う。
@@ -267,6 +267,26 @@ impl Host for CaptureHost {
 
     fn open_write(&self, path: &str, mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
         Ok(Box::new(self.written.open_write(path, mode)?))
+    }
+
+    /// `FileIn.open` と `FileOut` と同じ置き場を使う。読む向きは、このテストの Host が書いたファイルを先に引き、なければ
+    /// `file_root` の下を開く。書く向きは一時ディレクトリのファイルを開き、`--- written:` に加わる。あるのに通常のファイルで
+    /// ないものは表に入れずに断る (docs/implementation/testing.md の「UI テスト」、docs/spec/stdlib.md の「`Std.Stream`」)。
+    fn open_raw(&self, path: &str, mode: OpenMode) -> io::Result<RawFile> {
+        let write = match mode {
+            OpenMode::Read => {
+                return match self.written.open(path)? {
+                    Some((file, _)) => regular_file(file),
+                    None => self.inner.open_raw(path, mode),
+                };
+            }
+            OpenMode::Create => WriteMode::Truncate,
+            OpenMode::Append => WriteMode::Append,
+        };
+        if fs::metadata(self.file_root.join(path)).is_ok_and(|m| !m.is_file()) {
+            return Err(io::Error::new(io::ErrorKind::Unsupported, NOT_REGULAR));
+        }
+        regular_file(self.written.open_write(path, write)?)
     }
 
     /// 子の環境は、与えた表、本物の `PATH` (`with_path_prefix` のディレクトリが前に付く)、Windows では本物の

@@ -52,6 +52,7 @@
 //! 操作が読む。スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
 //! そのタスクを動かすか取り消しを処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -61,7 +62,7 @@ use std::thread::ThreadId;
 
 use eml_rt::{
     Completion, Control, Ctx, Done, Fault, HandleBin, HeapError, IoDriver, IoHandle, Mode, Op,
-    OpKey, RawBuf, RawResource, Submit, Word,
+    OpKey, OpenMode, RawBuf, RawResource, Submit, Word,
 };
 
 /// 再開するタスクに渡す `Std.Async.Wake` の `Woke` のタグ (docs/spec/stdlib.md の「`Std.Async`」)。
@@ -397,7 +398,7 @@ struct OpRecord {
     buf: Option<Word>,
     /// 受け付けに渡されたストリームかリスナー (`accept`)。`op_stream` が取り戻すまで持つ。
     stream: Option<Word>,
-    /// 完了の中身から集める地点で作った `NetListener` か `NetStream` の `Foreign`。取り出しの行が受け取るまで持つ。
+    /// 完了の中身から集める地点で作った `NetListener` か `IoStream` の `Foreign`。取り出しの行が受け取るまで持つ。
     made: Option<Word>,
     /// 待っているタスク。
     waiter: Option<CellRef>,
@@ -412,10 +413,14 @@ struct OpRecord {
 
 /// 記録の操作の種類。読みの `Transfer` の完了だけが、外の書いた長さを buffer に確定する。
 enum OpKind {
-    Read,
+    /// `prefix` は受け付けたストリームの、誤りの文言の前に付ける語である。
+    Read {
+        prefix: Prefix,
+    },
     /// `len` はプログラムが渡した buffer の長さで、待ちの予算の重みになる。
     Write {
         len: usize,
+        prefix: Prefix,
     },
     /// `prefix` は誤りの文言の前に付ける `cannot listen on {host}:{port}` である。
     Listen {
@@ -426,28 +431,76 @@ enum OpKind {
     Connect {
         prefix: Box<str>,
     },
-    /// `Std.Net.read_line` の行の連鎖。`filled` は `Transfer` の間だけ意味を持ち、空きを貸す前のストリームの buffer の
-    /// 長さである。行を見つけて終わった記録は、終わりの改行を含む行を文字列に写して `made` に持つ。`not_utf8` は、
-    /// 見つけた行が UTF-8 でなく、文字列にしなかったことである。`take_line` がその失敗を返す。
+    /// `read_line` の行の連鎖。`filled` は `Transfer` の間だけ意味を持ち、空きを貸す前のストリームの buffer の長さで
+    /// ある。行を見つけて終わった記録は、終わりの改行を含む行を写して `made` に持つ。`not_utf8` は、見つけた行が
+    /// UTF-8 でなく、文字列ではなく `Bytes` に写したことである。`take_line` はその失敗を返し、`take_line_bytes` は
+    /// その `Bytes` を返す。
     Line {
         filled: usize,
         not_utf8: bool,
+        prefix: Prefix,
     },
     /// `Std.Net.shutdown_write` と `set_nodelay`。どちらも受け付けで終わる。
     ShutdownWrite,
     SetNodelay,
+    /// `Std.Stream` の `open`、`create`、`append`。Host が開いたファイルを host の driver に取り込み、`connect` と
+    /// 同じく完了の中身からストリームを作る。`write` は書き手として開いたことである (docs/spec/vm.md の「操作の記録」)。
+    Open {
+        path: Arc<str>,
+        write: bool,
+    },
+}
+
+/// 読みと書きの記録が、誤りの文言の前に付ける語の元。受け付けたストリームの `Origin` で決まる。
+enum Prefix {
+    /// TCP のストリーム。`cannot read the stream` と `cannot write to the stream` である。
+    Net,
+    /// `Std.Stream` のファイルで、値は開いたパスである。`` cannot read `p` `` と `` cannot write to `p` `` である。
+    File(Arc<str>),
 }
 
 impl OpKind {
-    /// `finish` が投げる IO の失敗の文言の前に付ける語 (docs/spec/stdlib.md の「`Std.Net`」)。
-    fn prefix(&self) -> &str {
+    /// `finish` が投げる IO の失敗と `op_prefix` の文言の前に付ける語 (docs/spec/stdlib.md の「`Std.Net`」、
+    /// docs/spec/stdlib.md の「`Std.Stream`」)。
+    fn prefix(&self) -> Cow<'_, str> {
         match self {
-            OpKind::Read | OpKind::Line { .. } => "cannot read the stream",
-            OpKind::Write { .. } => "cannot write to the stream",
-            OpKind::Listen { prefix } | OpKind::Connect { prefix } => prefix,
-            OpKind::Accept => "cannot accept a connection",
-            OpKind::ShutdownWrite => "cannot shut down the stream",
-            OpKind::SetNodelay => "cannot set the no-delay option",
+            OpKind::Read {
+                prefix: Prefix::Net,
+            }
+            | OpKind::Line {
+                prefix: Prefix::Net,
+                ..
+            } => "cannot read the stream".into(),
+            OpKind::Read {
+                prefix: Prefix::File(path),
+            }
+            | OpKind::Line {
+                prefix: Prefix::File(path),
+                ..
+            } => format!("cannot read `{path}`").into(),
+            OpKind::Write {
+                prefix: Prefix::Net,
+                ..
+            } => "cannot write to the stream".into(),
+            OpKind::Write {
+                prefix: Prefix::File(path),
+                ..
+            } => format!("cannot write to `{path}`").into(),
+            OpKind::Listen { prefix } | OpKind::Connect { prefix } => (&**prefix).into(),
+            OpKind::Accept => "cannot accept a connection".into(),
+            OpKind::ShutdownWrite => "cannot shut down the stream".into(),
+            OpKind::SetNodelay => "cannot set the no-delay option".into(),
+            OpKind::Open { path, .. } => format!("cannot open `{path}`").into(),
+        }
+    }
+
+    /// 行の連鎖の記録の `filled` と `not_utf8` を書き換える。prefix は受け付けたときのままにする。
+    fn set_line(&mut self, at: usize, bad: bool) {
+        if let OpKind::Line {
+            filled, not_utf8, ..
+        } = self
+        {
+            (*filled, *not_utf8) = (at, bad);
         }
     }
 
@@ -455,7 +508,7 @@ impl OpKind {
     /// よらない。読めた量はスケジュールで変わるので、読みは重くしない (docs/spec/stdlib.md の「操作の予算」)。
     fn cost(&self) -> u32 {
         match self {
-            OpKind::Write { len } => u32::try_from(len / WRITE_UNIT)
+            OpKind::Write { len, .. } => u32::try_from(len / WRITE_UNIT)
                 .unwrap_or(u32::MAX)
                 .saturating_add(1),
             _ => 1,
@@ -814,17 +867,39 @@ impl Drop for NetListener {
     }
 }
 
-/// `Std.Net.TcpStream` の `Foreign` の中身。driver のハンドルと、作ったときの相手の番地と、ストリームの読みの buffer を
-/// 持つ。buffer は `read_line` が読んでまだ返していないバイトで、`rest[start..]` が残りである。`read_line` で読まない
-/// ストリームでは空のままで、確保も持たない (docs/spec/stdlib.md の「`Std.Net`」)。
-pub(crate) struct NetStream {
+/// `Std.Net.TcpStream`、`Std.Stream.Reader`、`Std.Stream.Writer` の `Foreign` の中身。driver のハンドルと、何を開いたか
+/// と、ストリームの読みの buffer を持つ。buffer は `read_line` が読んでまだ返していないバイトで、`rest[start..]` が残り
+/// である。`read_line` で読まないストリームでは空のままで、確保も持たない (docs/spec/stdlib.md の「`Std.Net`」、
+/// docs/spec/vm.md の「操作の記録」)。
+pub(crate) struct IoStream {
     bind: Bind,
-    peer: SocketAddr,
+    origin: Origin,
     rest: Vec<u8>,
     start: usize,
 }
 
-impl NetStream {
+/// ストリームが何を開いたものか。読みの受け付けの形と、誤りの文言の前に付ける語がこれで決まる。
+enum Origin {
+    /// TCP のソケット。値は作ったときの相手の番地である。
+    Peer(SocketAddr),
+    /// `Std.Stream` が開いた通常のファイル。値は開いたときに渡されたままのパスである。
+    File(Arc<str>),
+}
+
+impl IoStream {
+    /// ソケットか。ソケットの読みだけが、空きのない buffer で読めるようになるのを待つ (docs/spec/vm.md の「操作の記録」)。
+    fn is_socket(&self) -> bool {
+        matches!(self.origin, Origin::Peer(_))
+    }
+
+    /// このストリームの読みと書きの記録が、誤りの文言の前に付ける語。
+    fn prefix(&self) -> Prefix {
+        match &self.origin {
+            Origin::Peer(_) => Prefix::Net,
+            Origin::File(path) => Prefix::File(Arc::clone(path)),
+        }
+    }
+
     fn pending(&self) -> &[u8] {
         &self.rest[self.start..]
     }
@@ -893,7 +968,7 @@ impl NetStream {
     }
 }
 
-impl Drop for NetStream {
+impl Drop for IoStream {
     fn drop(&mut self) {
         self.bind.close();
     }
@@ -3320,10 +3395,7 @@ impl Registry {
                 let (filled, raw) =
                     lent.ok_or(CellFault::Internal("a grown buffer has no room"))?;
                 let record = self.op_mut(op)?;
-                record.kind = OpKind::Line {
-                    filled,
-                    not_utf8: false,
-                };
+                record.kind.set_line(filled, false);
                 record.phase = OpPhase::Transfer;
                 return Ok(Some(Op::Read { handle, buf: raw }));
             }
@@ -3341,7 +3413,7 @@ impl Registry {
                 return Ok(Some(Op::Read { handle, buf: raw }));
             }
             // 取り消しを頼んだ読みも、外が書いたバイトは確定してから buffer を返す
-            (OpPhase::Transfer, OpKind::Read, Ok(Done::Size(n))) => {
+            (OpPhase::Transfer, OpKind::Read { .. }, Ok(Done::Size(n))) => {
                 let (worker, buf) = (record.worker, record.buf);
                 let buf = buf.ok_or(CellFault::Internal("a read op has no buffer"))?;
                 // 記録は貸した後も buffer の唯一の参照を持ち、書き換えていない。driver は `Ok(n)` で `n` バイトを
@@ -3375,7 +3447,8 @@ impl Registry {
                     line_step(ctx, stream, filled, got, stopped)
                 })?;
                 match (step, result) {
-                    // 次の周も、ストリームの buffer に空きが残っていれば待たずに貸す
+                    // 次の周も、ストリームの buffer に空きが残っていれば待たずに貸す。ソケットでないストリームは
+                    // 空きがなければ広げて貸す
                     (LineStep::Again(handle), _) => {
                         let (_, lent) = with_worker(ctx, worker, depth_offset, |ctx| {
                             lend_line_room(ctx, stream, false)
@@ -3383,24 +3456,19 @@ impl Registry {
                         let record = self.op_mut(op)?;
                         return Ok(Some(match lent {
                             Some((filled, raw)) => {
-                                record.kind = OpKind::Line {
-                                    filled,
-                                    not_utf8: false,
-                                };
+                                record.kind.set_line(filled, false);
                                 Op::Read { handle, buf: raw }
                             }
+                            // 貸さないのはソケットだけである (`lend_line_room`)
                             None => {
                                 record.phase = OpPhase::Probe;
                                 Op::Readable { handle }
                             }
                         }));
                     }
-                    (LineStep::Line(line), _) => {
-                        made = line;
-                        self.op_mut(op)?.kind = OpKind::Line {
-                            filled: 0,
-                            not_utf8: line.is_none(),
-                        };
+                    (LineStep::Line(line, text), _) => {
+                        made = Some(line);
+                        self.op_mut(op)?.kind.set_line(0, !text);
                         Ok(0)
                     }
                     // 取り消しか期限で止めた行は、取り消しだけで終わった完了と同じに扱う。読んだバイトは
@@ -3435,13 +3503,13 @@ impl Registry {
                 OpKind::Accept | OpKind::Connect { .. },
                 Ok(Done::Stream { handle, peer }),
             ) => {
-                let stream = NetStream {
+                let stream = IoStream {
                     bind: Bind::Bound {
                         host: record.host,
                         handle,
                         bin: Arc::clone(bin),
                     },
-                    peer,
+                    origin: Origin::Peer(peer),
                     rest: Vec::new(),
                     start: 0,
                 };
@@ -3454,14 +3522,33 @@ impl Registry {
             // 受けたソケットは縛らずにストリームにする。最初に操作を受け付ける worker が自分の driver に取り込む
             // (docs/spec/vm.md の「操作の記録」)
             (OpPhase::Transfer, OpKind::Accept, Ok(Done::Accepted { sock, peer })) => {
-                let stream = NetStream {
+                let stream = IoStream {
                     bind: Bind::Unbound(RawResource::Socket(sock)),
-                    peer,
+                    origin: Origin::Peer(peer),
                     rest: Vec::new(),
                     start: 0,
                 };
                 made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
                     // `NetListener` と同じ。`TcpStream` は `Lin` である
+                    unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
+                }));
+                Ok(0)
+            }
+            // 取り込んだファイルも `connect` の結果と同じく host に縛ったストリームにする。取り消しを頼んだ記録でも
+            // 作り、包みの `finish` が落とすとハンドルは host の bin に積まれる (docs/spec/vm.md の「操作の記録」)
+            (OpPhase::Transfer, OpKind::Open { path, .. }, Ok(Done::Handle(handle))) => {
+                let stream = IoStream {
+                    bind: Bind::Bound {
+                        host: record.host,
+                        handle,
+                        bin: Arc::clone(bin),
+                    },
+                    origin: Origin::File(Arc::clone(path)),
+                    rest: Vec::new(),
+                    start: 0,
+                };
+                made = Some(with_worker(ctx, record.worker, depth_offset, |ctx| {
+                    // `NetListener` と同じ。`Reader` と `Writer` は `Lin` である
                     unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
                 }));
                 Ok(0)
@@ -3535,6 +3622,17 @@ impl Registry {
         }
     }
 
+    /// `Std.Stream.op_prefix`。借りた token の終わった記録が、誤りの文言の前に付ける語。包みは番号 2 から 5 の失敗の
+    /// 文言にこれを使う (docs/spec/stdlib.md の「`Std.Stream`」)。
+    pub(crate) fn op_prefix(&mut self, token: i64, worker: u32) -> Result<String, CellFault> {
+        let op = self.op_of(token, worker)?;
+        let record = self.op_mut(op)?;
+        if !matches!(record.phase, OpPhase::Done(..)) {
+            return Err(CellFault::Internal("an op is taken before its completion"));
+        }
+        Ok(record.kind.prefix().into_owned())
+    }
+
     /// token を消費して終わった記録を放し、結果と、記録が持っていたストリームを返す。ストリームは呼ぶ側が lock を放して
     /// から落とす。取り出すのは受け付けたタスク (`worker`) だけである。
     fn take_op(&mut self, token: i64, worker: u32) -> Result<(Taken, Option<Word>), CellFault> {
@@ -3582,23 +3680,38 @@ pub(crate) fn take_op<M: Mode>(
     Ok(taken)
 }
 
-/// `Std.Net.take_listener` と `take_stream`。token を消費して記録を放し、完了の中身から作った `Foreign` を返す。
-/// 結果の番号が `OUTCOME_OK` の記録だけを取り出す。`listener` はリスナーを作る操作 (`listen`) の記録を求める。
+/// 取り出しの行が受け取る、完了の中身から作った `Foreign` の種類。
+#[derive(Clone, Copy)]
+pub(crate) enum Made {
+    /// `Std.Net.take_listener`。
+    Listener,
+    /// `Std.Net.take_stream`。
+    Stream,
+    /// `Std.Stream.take_reader`。
+    Reader,
+    /// `Std.Stream.take_writer`。
+    Writer,
+}
+
+/// `Std.Net.take_listener`、`take_stream`、`Std.Stream.take_reader`、`take_writer`。token を消費して記録を放し、
+/// 完了の中身から作った `Foreign` を返す。結果の番号が `OUTCOME_OK` の記録だけを取り出す。`made` は求める記録の種類で、
+/// 違う種類の記録は内部の誤りである。
 pub(crate) fn take_made<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
     worker: u32,
-    listener: bool,
+    made: Made,
 ) -> Result<Word, CellFault> {
     let taken = take_op(shared, ctx, token, worker)?;
     if taken.outcome() != OUTCOME_OK {
         return Err(CellFault::Internal("an op is taken after it failed"));
     }
-    let kind_matches = if listener {
-        matches!(taken.kind, OpKind::Listen { .. })
-    } else {
-        matches!(taken.kind, OpKind::Accept | OpKind::Connect { .. })
+    let kind_matches = match made {
+        Made::Listener => matches!(taken.kind, OpKind::Listen { .. }),
+        Made::Stream => matches!(taken.kind, OpKind::Accept | OpKind::Connect { .. }),
+        Made::Reader => matches!(taken.kind, OpKind::Open { write: false, .. }),
+        Made::Writer => matches!(taken.kind, OpKind::Open { write: true, .. }),
     };
     match taken.made {
         Some(made) if kind_matches => Ok(made),
@@ -3620,34 +3733,60 @@ pub(crate) fn take_bytes<M: Mode>(
         return Err(CellFault::Internal("an op is taken after it failed"));
     }
     match taken.buf {
-        Some(buf) if matches!(taken.kind, OpKind::Read | OpKind::Write { .. }) => Ok(buf),
+        Some(buf) if matches!(taken.kind, OpKind::Read { .. } | OpKind::Write { .. }) => Ok(buf),
         _ => Err(CellFault::Internal("an op is taken as another kind of op")),
     }
 }
 
 /// `Std.Net.take_line`。token を消費して記録を放し、完了の時点で写した行 (終わりの改行を含み、残りのない EOF なら空)
-/// の文字列を返す。行が UTF-8 でなければ、IO の失敗の文言を返す。結果の番号が `OUTCOME_OK` の行の記録だけを取り出す
-/// (docs/spec/stdlib.md の「`Std.Net`」)。
+/// の文字列を返す。行が UTF-8 でなければ、写した `Bytes` を落として IO の失敗の文言を返す。結果の番号が `OUTCOME_OK`
+/// の行の記録だけを取り出す (docs/spec/stdlib.md の「`Std.Net`」)。
 pub(crate) fn take_line<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
     worker: u32,
 ) -> Result<Result<Word, String>, CellFault> {
+    let (line, text, prefix) = take_line_op(shared, ctx, token, worker)?;
+    if text {
+        return Ok(Ok(line));
+    }
+    // 写した `Bytes` は取り出した記録が持っていた唯一の参照で、今の worker の物体である
+    unsafe { ctx.heap_mut().decref(line) }?;
+    Ok(Err(format!("{prefix}: the line is not valid UTF-8")))
+}
+
+/// `Std.Stream.take_line_bytes`。`take_line` と同じ行を、UTF-8 かどうかによらず `Bytes` で返す
+/// (docs/spec/stdlib.md の「`Std.Stream`」)。
+pub(crate) fn take_line_bytes<M: Mode>(
+    shared: &Shared,
+    ctx: &mut Ctx<M>,
+    token: i64,
+    worker: u32,
+) -> Result<Word, CellFault> {
+    let (line, text, _) = take_line_op(shared, ctx, token, worker)?;
+    if !text {
+        return Ok(line);
+    }
+    // 文字列は記録が持っていた唯一の参照なので、`bytes_of_string` はその場で `Bytes` に変えられる
+    Ok(unsafe { ctx.bytes_of_string(line) }?)
+}
+
+/// 行の記録を取り出し、写した行の物体、それが文字列であること、誤りの文言の前に付ける語を返す。
+fn take_line_op<M: Mode>(
+    shared: &Shared,
+    ctx: &mut Ctx<M>,
+    token: i64,
+    worker: u32,
+) -> Result<(Word, bool, String), CellFault> {
     let taken = take_op(shared, ctx, token, worker)?;
     if taken.outcome() != OUTCOME_OK {
         return Err(CellFault::Internal("an op is taken after it failed"));
     }
-    match (taken.kind, taken.made) {
-        (OpKind::Line { not_utf8: true, .. }, None) => Ok(Err(
-            "cannot read the stream: the line is not valid UTF-8".to_owned(),
-        )),
-        (
-            OpKind::Line {
-                not_utf8: false, ..
-            },
-            Some(line),
-        ) => Ok(Ok(line)),
+    match (&taken.kind, taken.made) {
+        (OpKind::Line { not_utf8, .. }, Some(line)) => {
+            Ok((line, !*not_utf8, taken.kind.prefix().into_owned()))
+        }
         _ => Err(CellFault::Internal("an op is taken as another kind of op")),
     }
 }
@@ -3679,7 +3818,11 @@ pub(crate) fn submit_write<M: Mode>(
         },
         cap: bytes.len(),
     };
-    let mut record = net_record(OpKind::Write { len: raw.cap }, worker, Some(stream));
+    let kind = OpKind::Write {
+        len: raw.cap,
+        prefix: stream_prefix(ctx, stream)?,
+    };
+    let mut record = net_record(kind, worker, Some(stream));
     record.buf = Some(buf);
     let op = match bound {
         Ok(handle) => Some(Op::Write { handle, buf: raw }),
@@ -3709,15 +3852,25 @@ pub(crate) fn submit_read<M: Mode>(
     let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
     // 一意でない buffer はここで写さず、広げるときに1回だけ写す。`read_line` が読みすぎたバイトがあれば、driver の
     // 操作を出さずにそれを返す (docs/spec/stdlib.md の「`Std.Net`」)
+    // 読めるようになるのを待つのはソケットだけで、ほかのストリームは受け付けで広げて貸す。ファイルの読みは
+    // プールの仕事なので、読めるかを問う操作がない (docs/spec/vm.md の「操作の記録」)
+    let socket = unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).is_socket() };
     let (buf, phase, op) = match (serve_rest(ctx, buf, stream)?, bound) {
         (Some((buf, n)), _) => (buf, OpPhase::Done(Ok(n), false), None),
         (None, Err(e)) => (buf, OpPhase::Done(Err(e), false), None),
         (None, Ok(handle)) => match spare_room(ctx, buf)? {
             Some(raw) => (buf, OpPhase::Transfer, Some(Op::Read { handle, buf: raw })),
-            None => (buf, OpPhase::Probe, Some(Op::Readable { handle })),
+            None if socket => (buf, OpPhase::Probe, Some(Op::Readable { handle })),
+            None => {
+                let (buf, handle, raw) = grow_read_room(ctx, buf, stream)?;
+                (buf, OpPhase::Transfer, Some(Op::Read { handle, buf: raw }))
+            }
         },
     };
-    let mut record = net_record(OpKind::Read, worker, Some(stream));
+    let kind = OpKind::Read {
+        prefix: stream_prefix(ctx, stream)?,
+    };
+    let mut record = net_record(kind, worker, Some(stream));
     record.buf = Some(buf);
     record.phase = phase;
     submit(shared, here, ctx, driver, depth_offset, record, op)
@@ -3737,12 +3890,13 @@ pub(crate) fn submit_read_line<M: Mode>(
 ) -> Result<i64, CellFault> {
     let bound = bind_stream(shared, here, ctx, driver.as_deref_mut(), stream)?;
     // ストリームは `TcpStream` の `Foreign` で、呼ぶ側から移ってきた唯一の参照である (`TcpStream` は `Lin`)
-    let s = unsafe { &*ctx.heap().foreign_unique::<NetStream>(stream)? };
+    let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream)? };
     let found = s.find_line(0, false);
-    let (mut filled, mut made) = (0, None);
+    let (mut filled, mut made, mut not_utf8) = (0, None, false);
     let (op, phase) = match found {
         Some(Found::Line(n)) => {
-            made = take_line_text(ctx, stream, n)?;
+            let (line, text) = take_line_text(ctx, stream, n)?;
+            (made, not_utf8) = (Some(line), !text);
             (None, OpPhase::Done(Ok(0), false))
         }
         Some(_) => (None, OpPhase::Done(Err(line_too_long()), false)),
@@ -3753,12 +3907,16 @@ pub(crate) fn submit_read_line<M: Mode>(
                     filled = at;
                     (Some(Op::Read { handle, buf: raw }), OpPhase::Transfer)
                 }
+                // 貸さないのはソケットだけである (`lend_line_room`)
                 (handle, None) => (Some(Op::Readable { handle }), OpPhase::Probe),
             },
         },
     };
-    let not_utf8 = matches!(found, Some(Found::Line(_))) && made.is_none();
-    let kind = OpKind::Line { filled, not_utf8 };
+    let kind = OpKind::Line {
+        filled,
+        not_utf8,
+        prefix: stream_prefix(ctx, stream)?,
+    };
     let mut record = net_record(kind, worker, Some(stream));
     record.phase = phase;
     record.made = made;
@@ -3848,6 +4006,63 @@ pub(crate) fn submit_connect<M: Mode>(
     let op = Op::Connect { host, port };
     let kind = OpKind::Connect {
         prefix: prefix.into(),
+    };
+    let record = net_record(kind, worker, None);
+    Ok(Ok(submit(
+        shared,
+        here,
+        ctx,
+        driver,
+        depth_offset,
+        record,
+        Some(op),
+    )?))
+}
+
+/// `Std.Stream.submit_open`。`path` は呼ぶ側から移ってきた参照で、読んでから手放す。`mode` は 0 が読み、1 が作る、2 が
+/// 足すである。Host が呼んだ worker の上でファイルを開き、開けなければ記録を作らずに、誤りと IO の失敗の文言を返す。
+/// 開けたファイルは `Op::Adopt` で呼んだタスクの I/O の host の driver に取り込み、`connect` と同じく完了から
+/// ストリームを作る (docs/spec/vm.md の「操作の記録」)。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_open<M: Mode>(
+    shared: &Shared,
+    here: &Here,
+    ctx: &mut Ctx<M>,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
+    worker: u32,
+    depth_offset: usize,
+    path: Word,
+    mode: i64,
+) -> Result<Result<i64, (io::Error, String)>, CellFault> {
+    let path = take_string(ctx, path)?;
+    let mode = match mode {
+        0 => OpenMode::Read,
+        1 => OpenMode::Create,
+        2 => OpenMode::Append,
+        _ => return Err(CellFault::Internal("a file is opened in an unknown mode")),
+    };
+    let file = match ctx.host().open_raw(&path, mode) {
+        Ok(file) => file,
+        Err(e) => {
+            let message = if eml_rt::is_not_regular(&e) {
+                format!("cannot open `{path}`: {}", eml_rt::NOT_REGULAR)
+            } else {
+                Fault::Io {
+                    op: eml_rt::IoOp::Open,
+                    name: path.into(),
+                    reason: eml_rt::io_reason(&e),
+                }
+                .to_string()
+            };
+            return Ok(Err((e, message)));
+        }
+    };
+    let kind = OpKind::Open {
+        path: path.into(),
+        write: mode != OpenMode::Read,
+    };
+    let op = Op::Adopt {
+        res: RawResource::File(file),
     };
     let record = net_record(kind, worker, None);
     Ok(Ok(submit(
@@ -4125,8 +4340,29 @@ pub(crate) fn local_port<M: Mode>(ctx: &Ctx<M>, listener: Word) -> Result<i64, C
 /// `Std.Net.peer_addr`。借りたストリームの相手の番地を、Rust の `SocketAddr` の表示の形の新しい文字列にする。
 pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
     // ストリームは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpStream` は `Lin`)
-    let peer = unsafe { (*ctx.heap().foreign_unique::<NetStream>(stream)?).peer };
+    let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream)? };
+    let Origin::Peer(peer) = s.origin else {
+        return Err(CellFault::Internal("a file stream has no peer"));
+    };
     Ok(ctx.fresh_string(&peer.to_string()))
+}
+
+/// `Std.Stream.source`。借りた読み手を開いたパスを、引用符で囲んだ新しい文字列にする。包みが読みの誤りの文言に使う
+/// (docs/spec/stdlib.md の「`Std.Stream`」)。
+pub(crate) fn stream_source<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
+    // 読み手は呼ぶ側が持つ唯一の参照で、借りて読むだけである (`Reader` は `Lin`)
+    let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream)? };
+    let Origin::File(path) = &s.origin else {
+        return Err(CellFault::Internal("a socket stream has no path"));
+    };
+    let name = format!("`{path}`");
+    Ok(ctx.fresh_string(&name))
+}
+
+/// 受け付けに移ってきたストリーム `stream` の記録が、誤りの文言の前に付ける語の元。
+fn stream_prefix<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<Prefix, CellFault> {
+    // ストリームは呼ぶ側から移ってきた唯一の参照である (`TcpStream`、`Reader`、`Writer` は `Lin`)
+    Ok(unsafe { (*ctx.heap().foreign_unique::<IoStream>(stream)?).prefix() })
 }
 
 /// ストリーム `stream` の driver のハンドル。ストリームは呼ぶ側から移ってきた参照か記録が持つ参照で、持ち主が返すか
@@ -4134,7 +4370,7 @@ pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word,
 pub(crate) fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
     // ストリームは持ち主のただ1つの参照である (`TcpStream` は `Lin`。docs/spec/vm.md の「操作の記録」)
     unsafe {
-        (*ctx.heap().foreign_unique::<NetStream>(stream)?)
+        (*ctx.heap().foreign_unique::<IoStream>(stream)?)
             .bind
             .handle()
     }
@@ -4146,7 +4382,7 @@ pub(crate) fn stream_unbound<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<bool
     // ストリームは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpStream` は `Lin`)
     Ok(unsafe {
         matches!(
-            (*ctx.heap().foreign_unique::<NetStream>(stream)?).bind,
+            (*ctx.heap().foreign_unique::<IoStream>(stream)?).bind,
             Bind::Unbound(_)
         )
     })
@@ -4164,7 +4400,7 @@ fn bind_stream<M: Mode>(
     stream: Word,
 ) -> Result<io::Result<IoHandle>, CellFault> {
     // ストリームは呼ぶ側から移ってきた唯一の参照である (`TcpStream` は `Lin`)
-    let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
+    let s = unsafe { &mut *ctx.heap().foreign_unique::<IoStream>(stream)? };
     match &s.bind {
         Bind::Bound { handle, .. } => return Ok(Ok(*handle)),
         Bind::Lost => return Ok(Err(lost_stream())),
@@ -4211,7 +4447,7 @@ fn bound_host<M: Mode>(ctx: &Ctx<M>, kind: &OpKind, w: Word) -> Result<Option<u3
     Ok(unsafe {
         match kind {
             OpKind::Accept => (*ctx.heap().foreign_unique::<NetListener>(w)?).bind.host(),
-            _ => (*ctx.heap().foreign_unique::<NetStream>(w)?).bind.host(),
+            _ => (*ctx.heap().foreign_unique::<IoStream>(w)?).bind.host(),
         }
     })
 }
@@ -4277,8 +4513,8 @@ pub(crate) fn open_line_len(pending: &[u8]) -> usize {
 enum LineStep {
     /// 行も EOF もまだなく、上限にも届いていない。このハンドルで、もう一度読む。
     Again(IoHandle),
-    /// 切り出した行を写した新しい文字列。行が UTF-8 でなければ `None` である。
-    Line(Option<Word>),
+    /// 切り出した行を写した新しい物体と、それが文字列であること (`take_line_text`)。
+    Line(Word, bool),
     /// 取り消しか期限で止めた。
     Stopped,
     /// 行の中身が `LINE_LIMIT` バイトを超えた。
@@ -4287,33 +4523,41 @@ enum LineStep {
     Failed,
 }
 
-/// ストリーム `stream` の buffer に空きがあれば貸す。`grow` なら、空きが足りないときに広げてから貸す。返すのは
-/// ハンドルと、`NetStream::lend_room` が返す貸す前の長さと貸した記憶である。記録の worker ID に切り替えた下で呼ぶ。
+/// ストリーム `stream` の buffer に空きがあれば貸す。`grow` か、ストリームがソケットでなければ、空きが足りないときに
+/// 広げてから貸す。読めるようになるのを待つのはソケットだけだからである (docs/spec/vm.md の「操作の記録」)。返すのは
+/// ハンドルと、`IoStream::lend_room` が返す貸す前の長さと貸した記憶である。記録の worker ID に切り替えた下で呼ぶ。
 fn lend_line_room<M: Mode>(
     ctx: &mut Ctx<M>,
     stream: Word,
     grow: bool,
 ) -> Result<(IoHandle, Option<(usize, RawBuf)>), CellFault> {
     // ストリームは記録が持つ唯一の参照である (docs/spec/vm.md の「操作の記録」)
-    let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
-    let lent = s.lend_room(grow);
+    let s = unsafe { &mut *ctx.heap().foreign_unique::<IoStream>(stream)? };
+    let lent = s.lend_room(grow || !s.is_socket());
     Ok((s.bind.handle()?, lent))
 }
 
-/// ストリーム `stream` の残りの先頭 `n` バイトの行を、UTF-8 なら新しい文字列に1回だけ写し、返したことにする。UTF-8 で
-/// なければ文字列を作らずに `None` を返す (docs/spec/stdlib.md の「`Std.Net`」)。
+/// ストリーム `stream` の残りの先頭 `n` バイトの行を新しい物体に1回だけ写し、返したことにする。UTF-8 なら文字列に、
+/// UTF-8 でなければ `Bytes` に写し、文字列に写したかを添えて返す。UTF-8 でない行も `Std.Stream.read_line_bytes`
+/// が読めるように残す (docs/spec/stdlib.md の「`Std.Stream`」)。
 fn take_line_text<M: Mode>(
     ctx: &mut Ctx<M>,
     stream: Word,
     n: usize,
-) -> Result<Option<Word>, CellFault> {
-    // ストリームは呼ぶ側か記録が持つ唯一の参照である。行のバイトは `Vec` 自身の確保の中にあり、文字列を作っても動かない
-    let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
-    let text = std::str::from_utf8(&s.pending()[..n])
-        .ok()
-        .map(|line| ctx.fresh_string(line));
+) -> Result<(Word, bool), CellFault> {
+    // ストリームは呼ぶ側か記録が持つ唯一の参照である。行のバイトは `Vec` 自身の確保の中にあり、物体を作っても動かない
+    let s = unsafe { &mut *ctx.heap().foreign_unique::<IoStream>(stream)? };
+    let line = &s.pending()[..n];
+    let made = match std::str::from_utf8(line) {
+        Ok(text) => (ctx.fresh_string(text), true),
+        Err(_) => {
+            let empty = ctx.bytes_empty()?;
+            // 新しい `Bytes` は一意で、写すバイトはヒープの物体と重ならない
+            (unsafe { ctx.heap_mut().bytes_extend(empty, line)? }, false)
+        }
+    };
     s.consume(n);
-    Ok(text)
+    Ok(made)
 }
 
 /// 行の連鎖の読みの完了を、ストリーム `stream` の buffer に確定して次の段階を決める。`got` は読んだバイト数で、誤りなら
@@ -4326,7 +4570,7 @@ fn line_step<M: Mode>(
     stopped: bool,
 ) -> Result<LineStep, CellFault> {
     // ストリームは記録が持つ唯一の参照で、driver は完了で書き終えている (docs/spec/vm.md の「操作の記録」)
-    let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
+    let s = unsafe { &mut *ctx.heap().foreign_unique::<IoStream>(stream)? };
     unsafe { s.commit_room(filled, got.unwrap_or(0)) };
     let Some(n) = got else {
         return Ok(LineStep::Failed);
@@ -4334,7 +4578,10 @@ fn line_step<M: Mode>(
     // 空きを貸すときに返したバイトを詰めたので、残りは buffer の先頭から始まる。新しく読んだバイトだけを探す。前の
     // バイトには改行がなかった
     match s.find_line(filled, n == 0) {
-        Some(Found::Line(n)) => return Ok(LineStep::Line(take_line_text(ctx, stream, n)?)),
+        Some(Found::Line(n)) => {
+            let (line, text) = take_line_text(ctx, stream, n)?;
+            return Ok(LineStep::Line(line, text));
+        }
         Some(Found::TooLong) => return Ok(LineStep::TooLong),
         None => {}
     }
@@ -4360,7 +4607,7 @@ fn serve_rest<M: Mode>(
     stream: Word,
 ) -> Result<Option<(Word, usize)>, CellFault> {
     // ストリームは呼ぶ側から移ってきた唯一の参照である (`TcpStream` は `Lin`)
-    let s = unsafe { &mut *ctx.heap().foreign_unique::<NetStream>(stream)? };
+    let s = unsafe { &mut *ctx.heap().foreign_unique::<IoStream>(stream)? };
     let n = s.pending().len().min(READ_ROOM);
     if n == 0 {
         return Ok(None);
@@ -5477,6 +5724,8 @@ impl IoDriver for NoDriver {
         self.last_key = key;
         self.submits += 1;
         match op {
+            // 本物の driver と同じく、取り込みは受け付けで終える
+            Op::Adopt { res } => Submit::Done(self.adopt(res).map(Done::Handle)),
             Op::Write { buf, .. } => {
                 self.writes.push(buf);
                 if self.finish_writes {
@@ -6114,9 +6363,14 @@ fn a_cancel_and_a_submit_meet_on_the_owner_and_host_paths() {
         finish_writes: true,
         ..NoDriver::default()
     };
-    let op = shared
-        .lock()
-        .alloc(CellKind::Op(net_record(OpKind::Write { len: 0 }, 0, None)));
+    let op = shared.lock().alloc(CellKind::Op(net_record(
+        OpKind::Write {
+            len: 0,
+            prefix: Prefix::Net,
+        },
+        0,
+        None,
+    )));
     shared.lock().op_mut(op).unwrap().timed_out = true;
     let mut work = IoWork::default();
     let empty = RawBuf {
@@ -6825,13 +7079,13 @@ fn a_deadline_cancel_ends_late() {
 /// 中身の buffer が空の `Std.Net.TcpStream`。
 #[cfg(test)]
 fn net_stream<M: Mode>(ctx: &mut Ctx<M>) -> Word {
-    let stream = NetStream {
+    let stream = IoStream {
         bind: Bind::Bound {
             host: 0,
             handle: 0,
             bin: Arc::default(),
         },
-        peer: ([127, 0, 0, 1], 1).into(),
+        origin: Origin::Peer(([127, 0, 0, 1], 1).into()),
         rest: Vec::new(),
         start: 0,
     };
@@ -6926,9 +7180,9 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
         &mut out,
     )
     .unwrap();
-    let stream = take_made(&shared, &mut ctx, token, 0, false).unwrap();
+    let stream = take_made(&shared, &mut ctx, token, 0, Made::Stream).unwrap();
     assert_eq!(
-        unsafe { &*ctx.heap().foreign_unique::<NetStream>(stream).unwrap() }
+        unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream).unwrap() }
             .bind
             .host(),
         Some(1)
@@ -6951,13 +7205,13 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
     // worker 1 に縛ったストリームを引く worker 0 の操作は、worker 0 の driver に出さずに worker 1 へ送る
     let mut driver_0 = NoDriver::default();
     let other = unsafe { ctx.heap_mut() }.alloc_foreign(
-        NetStream {
+        IoStream {
             bind: Bind::Bound {
                 host: 1,
                 handle: 4,
                 bin: Arc::default(),
             },
-            peer: ([127, 0, 0, 1], 1).into(),
+            origin: Origin::Peer(([127, 0, 0, 1], 1).into()),
             rest: Vec::new(),
             start: 0,
         },
@@ -6977,6 +7231,343 @@ fn a_stream_connected_on_worker_1_is_hosted_by_worker_1() {
     .unwrap();
     assert_eq!((host_of(write), driver_0.submits), (1, 0));
     assert_eq!(*posted.0.borrow(), [1]);
+}
+
+/// `Std.Stream` が開いた、ファイル `f.txt` の縛ったストリーム。
+#[cfg(test)]
+fn file_stream<M: Mode>(ctx: &mut Ctx<M>) -> Word {
+    let stream = IoStream {
+        bind: Bind::Bound {
+            host: 0,
+            handle: 0,
+            bin: Arc::default(),
+        },
+        origin: Origin::File("f.txt".into()),
+        rest: Vec::new(),
+        start: 0,
+    };
+    unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)
+}
+
+/// ファイルの読みは、空きの少ない buffer でも読めるようになるのを待たない。受け付けで中身を写した新しい物体を作り、
+/// その空きを `READ_ROOM` バイト貸して、読みを1つだけ出す (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_of_a_file_grows_at_submit() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let buf = bytes_ab(&mut ctx, 0);
+    let stream = file_stream(&mut ctx);
+    let token = submit_read(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap();
+    let op = CellRef::decode(token);
+    assert_eq!(driver.submits, 1);
+    assert!(matches!(
+        registry.lock().op_mut(op).unwrap().phase,
+        OpPhase::Transfer
+    ));
+    let raw = driver.lent.pop().unwrap();
+    assert_eq!(raw.cap, READ_ROOM);
+    unsafe { std::ptr::copy_nonoverlapping(b"cd".as_ptr(), raw.ptr, 2) };
+    let mut out = Vec::new();
+    complete_op(
+        &registry,
+        &mut ctx,
+        &mut driver,
+        op,
+        Ok(Done::Size(2)),
+        &mut out,
+    );
+    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let back = taken.buf.unwrap();
+    assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abcd");
+    unsafe { ctx.heap_mut().decref(back) }.unwrap();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// ファイルの行の連鎖は、受け付けでも、行のない周の後でも、空きがなければストリームの buffer を広げて貸す。読めるように
+/// なるのを待つ操作は出さない (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_line_of_a_file_grows_at_submit() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let stream = file_stream(&mut ctx);
+    let token = submit_read_line(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        stream,
+    )
+    .unwrap();
+    let op = CellRef::decode(token);
+    assert_eq!(driver.submits, 1);
+    let raw = driver.lent.pop().unwrap();
+    assert_eq!(raw.cap, READ_ROOM);
+    // 貸した空きを改行なしで埋めると、次の周は空きのない buffer を広げて貸す
+    let filler = vec![b'a'; READ_ROOM];
+    unsafe { std::ptr::copy_nonoverlapping(filler.as_ptr(), raw.ptr, READ_ROOM) };
+    let mut out = Vec::new();
+    complete_op(
+        &registry,
+        &mut ctx,
+        &mut driver,
+        op,
+        Ok(Done::Size(READ_ROOM)),
+        &mut out,
+    );
+    assert_eq!(driver.submits, 2);
+    assert!(matches!(
+        registry.lock().op_mut(op).unwrap().phase,
+        OpPhase::Transfer
+    ));
+    assert!(driver.lent.pop().unwrap().cap >= MIN_ROOM);
+    complete_op(
+        &registry,
+        &mut ctx,
+        &mut driver,
+        op,
+        Ok(Done::Size(0)),
+        &mut out,
+    );
+    let line = take_line(&registry, &mut ctx, token, 0).unwrap().unwrap();
+    assert_eq!(
+        unsafe { (&*ctx.heap().string(line).unwrap()).len() },
+        READ_ROOM
+    );
+    unsafe { ctx.heap_mut().decref(line) }.unwrap();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// 共有の buffer のファイルの読みは、受け付けで1回だけ写した新しい物体に読む。元の物体はほかの参照から見て変わらない
+/// (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_of_a_shared_buffer_on_a_file_copies_once() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let buf = bytes_ab(&mut ctx, 2 * READ_ROOM);
+    unsafe { ctx.heap_mut().dup(buf) }.unwrap();
+    let stream = file_stream(&mut ctx);
+    let token = submit_read(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap();
+    let op = CellRef::decode(token);
+    assert_eq!(driver.submits, 1);
+    let lent = registry.lock().op_mut(op).unwrap().buf.unwrap();
+    assert_ne!(lent, buf);
+    let raw = driver.lent.pop().unwrap();
+    assert_eq!(raw.cap, READ_ROOM);
+    unsafe { std::ptr::copy_nonoverlapping(b"cd".as_ptr(), raw.ptr, 2) };
+    let mut out = Vec::new();
+    complete_op(
+        &registry,
+        &mut ctx,
+        &mut driver,
+        op,
+        Ok(Done::Size(2)),
+        &mut out,
+    );
+    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let back = taken.buf.unwrap();
+    assert_eq!(back, lent);
+    assert_eq!(unsafe { &*ctx.heap().bytes(back).unwrap() }, b"abcd");
+    assert_eq!(unsafe { &*ctx.heap().bytes(buf).unwrap() }, b"ab");
+    for w in [back, buf] {
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    }
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// 受け付けと完了の知らせを覚えるテストの宛先。
+#[cfg(test)]
+#[derive(Default)]
+struct OpMail {
+    submits: std::cell::RefCell<Vec<(u32, CellRef)>>,
+    completions: std::cell::RefCell<Vec<(u32, CellRef)>>,
+}
+
+#[cfg(test)]
+impl Post for OpMail {
+    fn wake(&self, k: u32, _w: Woken) {
+        panic!("a wake is sent to worker {k}");
+    }
+
+    fn cancel(&self, k: u32, _cell: CellRef) {
+        panic!("a cancel is sent to worker {k}");
+    }
+
+    fn place(&self, k: u32, _cell: CellRef, _worker: u32, _closure: Word) {
+        panic!("a task is placed on worker {k}");
+    }
+
+    fn submit(&self, k: u32, op: CellRef) {
+        self.submits.borrow_mut().push((k, op));
+    }
+
+    fn cancel_io(&self, k: u32, _op: CellRef) {
+        panic!("an op cancel is sent to worker {k}");
+    }
+
+    fn completion(&self, k: u32, op: CellRef) {
+        self.completions.borrow_mut().push((k, op));
+    }
+
+    fn limit(&self, k: u32, _cell: CellRef) {
+        panic!("a limit is sent to worker {k}");
+    }
+}
+
+/// worker 1 のタスクが、このクレートの `Cargo.toml` を `Std.Stream.open` で開く記録を出す。
+#[cfg(test)]
+fn open_on_worker_1(
+    shared: &Shared,
+    here: &Here,
+    ctx: &mut Ctx<eml_rt::Checked>,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
+) -> i64 {
+    let path =
+        unsafe { ctx.heap_mut() }.alloc_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+    submit_open(shared, here, ctx, driver, 0, 0, path, 0)
+        .unwrap()
+        .unwrap()
+}
+
+/// worker 0 が host として、受け箱の `Submit` の記録 `op` を自分の driver に出す。
+#[cfg(test)]
+fn host_takes_submit(
+    shared: &Shared,
+    here: &Here,
+    ctx: &mut Ctx<eml_rt::Checked>,
+    driver: &mut NoDriver,
+    op: CellRef,
+) {
+    let mut work = IoWork::default();
+    shared.lock().take_submit(op, here.me, &mut work).unwrap();
+    let mut out = Vec::new();
+    run_io(shared, here, ctx, Some(driver), 0, &mut work, &mut out).unwrap();
+    assert!(out.is_empty());
+}
+
+/// ファイルは開くときに、開いたタスクの I/O の host の driver に縛る。仮想の時計では worker 1 の記録を worker 0 が
+/// 取り込み、ストリームは worker 0 に縛る。本物の時計では worker 1 が自分の driver に取り込み、受け付けで終える
+/// (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn an_open_record_binds_the_file_to_the_openers_host() {
+    let mut ctx = test_ctx();
+    let host_of = |ctx: &Ctx<eml_rt::Checked>, stream: Word| {
+        unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream).unwrap() }
+            .bind
+            .host()
+    };
+    // 仮想の時計: worker 1 の I/O の host は worker 0 である
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let posted = OpMail::default();
+    let on = |me: u32, host: u32| Here {
+        me,
+        host,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let token = open_on_worker_1(&shared, &on(1, 0), &mut ctx, None);
+    let op = CellRef::decode(token);
+    assert_eq!(*posted.submits.borrow(), [(0, op)]);
+    let mut driver_0 = NoDriver::default();
+    host_takes_submit(&shared, &on(0, 0), &mut ctx, &mut driver_0, op);
+    assert_eq!((driver_0.submits, driver_0.adopted), (1, 1));
+    // 待つタスクのいない記録には `Completion` を送らず、持ち主が次に読むときに当てる
+    assert!(posted.completions.borrow().is_empty());
+    let woken = shared
+        .lock()
+        .settle_arrived(&mut ctx, 0, op, &on(1, 0), &mut IoWork::default())
+        .unwrap();
+    assert!(woken.is_none());
+    let reader = take_made(&shared, &mut ctx, token, 0, Made::Reader).unwrap();
+    assert_eq!(host_of(&ctx, reader), Some(0));
+    unsafe { ctx.heap_mut().decref(reader) }.unwrap();
+    // 本物の時計: worker 1 は自分の driver に取り込む
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let posted = OpMail::default();
+    let here = Here {
+        me: 1,
+        host: 1,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let mut driver_1 = NoDriver::default();
+    let token = open_on_worker_1(&shared, &here, &mut ctx, Some(&mut driver_1));
+    assert!(posted.submits.borrow().is_empty());
+    assert_eq!((driver_1.submits, driver_1.adopted), (1, 1));
+    let reader = take_made(&shared, &mut ctx, token, 0, Made::Reader).unwrap();
+    assert_eq!(host_of(&ctx, reader), Some(1));
+    unsafe { ctx.heap_mut().decref(reader) }.unwrap();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// host の取り込みを待つ間に取り消された開く記録も、`connect` と同じく完了からストリームを作る。包みの `finish` が
+/// それを落とすと、ハンドルは host の bin に積まれる (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn an_open_cancelled_after_adoption_bins_its_handle() {
+    let mut ctx = test_ctx();
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let posted = OpMail::default();
+    let on = |me: u32| Here {
+        me,
+        host: 0,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let me = task_on(&shared, 1, 0, false);
+    let token = open_on_worker_1(&shared, &on(1), &mut ctx, None);
+    let op = CellRef::decode(token);
+    // 待ち始めたタスクに取り消しが届く。host はまだ受け付けていないので、印だけを付ける
+    shared.lock().task_mut(me).unwrap().cancel = true;
+    let run = park_io(&shared, &on(1), &mut ctx, None, 0, token, me, Word::UNIT).unwrap();
+    assert!(run.is_none());
+    assert!(shared.lock().op_mut(op).unwrap().cancelling);
+    let mut driver_0 = NoDriver::default();
+    host_takes_submit(&shared, &on(0), &mut ctx, &mut driver_0, op);
+    assert_eq!(driver_0.adopted, 1);
+    assert_eq!(*posted.completions.borrow(), [(1, op)]);
+    let woken = shared
+        .lock()
+        .take_completion(&mut ctx, 0, op, &on(1), &mut IoWork::default())
+        .unwrap();
+    assert!(woken.is_some());
+    // `finish` と同じく記録を放し、作ったストリームを落とす
+    let taken = take_op(&shared, &mut ctx, token, 0).unwrap();
+    assert!(taken.cancelling);
+    assert_eq!(taken.outcome(), OUTCOME_OK);
+    let made = taken.made.unwrap();
+    unsafe { ctx.heap_mut().decref(made) }.unwrap();
+    let bin = shared.lock().host_bin(0, Arc::default()).unwrap();
+    assert_eq!(*bin.bin.dropped.lock().unwrap(), [100]);
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }
 
 /// ループバックで受けた、どの driver にも取り込んでいない OS のソケットと、その相手。
@@ -7035,7 +7626,7 @@ fn accept_unbound(
         &mut Vec::new(),
     )
     .unwrap();
-    let stream = take_made(shared, ctx, token, 0, false).unwrap();
+    let stream = take_made(shared, ctx, token, 0, Made::Stream).unwrap();
     assert!(stream_unbound(ctx, stream).unwrap());
     stream
 }
@@ -7077,7 +7668,7 @@ fn an_accepted_stream_is_hosted_by_the_worker_that_uses_it_first() {
     );
     assert!(posted.0.borrow().is_empty());
     // 縛ったストリームの次の操作は、取り込み直さずに同じハンドルで worker 1 の driver に出す
-    let s = unsafe { &*ctx.heap().foreign_unique::<NetStream>(stream).unwrap() };
+    let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream).unwrap() };
     assert_eq!((s.bind.host(), s.bind.handle().unwrap()), (Some(1), 100));
 }
 
@@ -7139,8 +7730,8 @@ fn a_stream_that_a_driver_refuses_fails_every_op() {
 
 /// ストリーム `stream` の buffer。
 #[cfg(test)]
-fn net_rest(ctx: &Ctx<eml_rt::Checked>, stream: Word) -> &NetStream {
-    unsafe { &*ctx.heap().foreign_unique::<NetStream>(stream).unwrap() }
+fn net_rest(ctx: &Ctx<eml_rt::Checked>, stream: Word) -> &IoStream {
+    unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream).unwrap() }
 }
 
 /// 記録 `op` の今の鍵の操作を `result` で終わらせ、集める地点で当てる。
@@ -7879,13 +8470,13 @@ pub(crate) fn placed_task(shared: &Shared, owner: u32) -> CellRef {
 /// worker 0 の driver のハンドル `handle` の `TcpStream` の `Foreign`。落ちたら `bin` に積む。
 #[cfg(test)]
 pub(crate) fn stream_on<M: Mode>(ctx: &mut Ctx<M>, handle: IoHandle, bin: Arc<HostBin>) -> Word {
-    let stream = NetStream {
+    let stream = IoStream {
         bind: Bind::Bound {
             host: 0,
             handle,
             bin,
         },
-        peer: ([127, 0, 0, 1], 1).into(),
+        origin: Origin::Peer(([127, 0, 0, 1], 1).into()),
         rest: Vec::new(),
         start: 0,
     };

@@ -88,6 +88,12 @@ impl TestDriver {
         self.immediate
     }
 
+    /// 取り込んだファイルのうち、まだ `File` を落としていないものの数。閉じられて読み書きの決着を待つものも数える。
+    /// Rust のテストが、`quiesce` の後にファイルが残らないことを確かめるために読む。
+    pub fn open_files(&self) -> usize {
+        self.files.len()
+    }
+
     fn empty_bin(&mut self) {
         let dropped = std::mem::take(
             &mut *self

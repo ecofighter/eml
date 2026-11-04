@@ -1102,6 +1102,12 @@ impl<M: Mode> Ctx<M> {
         &self.heap
     }
 
+    /// この文脈の Host。VM が driver に渡すファイルを開くために読む。ヒープに触れない (docs/spec/object-model.md の
+    /// 「`unsafe` の核」の T11)。
+    pub fn host(&self) -> &HostRef {
+        &self.host
+    }
+
     /// # Safety
     /// ヒープを入れ替えない。`Ctx` が持つ語 (`evv` と yield の状態) を手放したり書き換えたりせず、それらの語からたどれる
     /// 物体の欄も書き換えない。`set_worker` を呼ばない (worker は `switch_task` で替える)。それらの語から届く物体の
