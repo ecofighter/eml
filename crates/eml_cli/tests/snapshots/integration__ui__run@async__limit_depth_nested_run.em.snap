@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/limit_depth_nested_run.em
+---
+--- stdout ---
+outer task caught: ResourceLimit: the call depth limit is exceeded
+done
+--- stderr ---

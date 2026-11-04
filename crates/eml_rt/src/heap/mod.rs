@@ -659,8 +659,33 @@ impl<M: Mode> Heap<M> {
         Self::with_control(Control::unbounded())
     }
 
+    /// `with_control` と同じ空のヒープで、ページを worker `slot` の数にも足す。
+    pub fn for_worker(control: Arc<Control>, slot: usize) -> (r: Heap<M>)
+        ensures
+            r.wf(),
+            r.consistent(),
+            r.settled(),
+            r.region_spec() is None,
+            r.worker_spec() == 0,
+            r.unused(),
+    {
+        Self::with_slot(control, slot)
+    }
+
     /// `new` と同じ空のヒープで、ページをセッションの `control` に数える。
     pub fn with_control(control: Arc<Control>) -> (r: Heap<M>)
+        ensures
+            r.wf(),
+            r.consistent(),
+            r.settled(),
+            r.region_spec() is None,
+            r.worker_spec() == 0,
+            r.unused(),
+    {
+        Self::with_slot(control, 0)
+    }
+
+    fn with_slot(control: Arc<Control>, slot: usize) -> (r: Heap<M>)
         ensures
             r.wf(),
             r.consistent(),
@@ -675,7 +700,7 @@ impl<M: Mode> Heap<M> {
             IdCounts::detached()
         };
         let mut heap = Heap {
-            core: Self::empty_core(control),
+            core: Self::empty_core(control, slot),
             region: ManuallyDrop::new(None),
             worker: 0,
             owned,
@@ -705,7 +730,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// ブロックを持たない `Core`。
-    fn empty_core(control: Arc<Control>) -> (r: Core)
+    fn empty_core(control: Arc<Control>, slot: usize) -> (r: Core)
         ensures
             r.full(),
             r.safe_wf(),
@@ -723,6 +748,7 @@ impl<M: Mode> Heap<M> {
                     0
                 },
                 control,
+                slot,
             ),
             perms: Tracked(Map::tracked_empty()),
             model: Ghost(
@@ -839,7 +865,7 @@ impl<M: Mode> Heap<M> {
         if M::CHECKED {
             self.owned.reset_ids();
         }
-        let mut r = Heap::with_control(self.control().clone());
+        let mut r = Heap::for_worker(self.control().clone(), self.core.pages.slot());
         r.set_worker(self.worker);
         if let Some(a) = &*self.region {
             let c = a.clone();
@@ -1850,7 +1876,7 @@ impl<M: Mode> Heap<M> {
         }
         // `Heap` は `Drop` を持つので、中身を空の中身と入れ替えてから落とす。落とすときの後始末は、ダミーを持ち不変条件を
         // 満たすヒープを求める
-        let mut core = Self::empty_core(b.core.pages.control().clone());
+        let mut core = Self::empty_core(b.core.pages.control().clone(), b.core.pages.slot());
         mem::swap(&mut b.core, &mut core);
         // 作り手が付けていた塊は、新しい塊の親になる。凍結する物体は、その塊とその祖先の物体を指してよい
         let mut parent = ManuallyDrop::new(None);

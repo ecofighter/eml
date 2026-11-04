@@ -36,6 +36,20 @@ pub(crate) struct Unwind {
     pub(crate) tokens: Vec<Slot>,
     /// `apply` の着地の印の evidence のスロット。
     pub(crate) landing: Option<Slot>,
+    /// 行の種類。呼び出しの行か、エントリの行ならそこでタスクの上限を起こすか延ばすかを表す。エントリの行の位置は
+    /// 関数の最初の命令で、`slots` は所有している引数である。
+    pub(crate) entry: UnwindEntry,
+}
+
+/// 巻き戻しの行がエントリの行か。エントリの行なら、そこでタスクの上限を起こすか (docs/spec/vm.md の「巻き戻しの表」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnwindEntry {
+    /// 呼び出しの行。
+    No,
+    /// エントリで上限を `ResourceLimit` にする。
+    Raises,
+    /// EP の補助の関数のエントリ。上限は保留のまま、次の `Raises` のエントリまで延ばす。
+    Defers,
 }
 
 /// 組み込みの命令 `Finish`、`ApplyRest`、`ChildDone`。関数の命令はこの後に並ぶ。

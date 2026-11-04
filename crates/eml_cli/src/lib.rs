@@ -226,12 +226,25 @@ impl Session {
 /// `eml run` の既定の上限。深さは 2^27 語 (1 GiB 分のスタック) で、OCaml 5 のスタックの既定の上限と同じ量である。
 /// 確保量は物理メモリの 80% で、機械を使い切る前に分かる誤りで止める。物理メモリを読めない OS では上限を置かない。
 /// `evv` はヒープの物体なので、確保量の上限で抑えられる (docs/spec/object-model.md の「実行の制御」)。
+/// 柔らかい上限は確保量の上限の 7/8 である (docs/spec/vm.md の「上限と割り込み」)。
 #[cfg(feature = "run")]
 pub fn default_limits() -> Limits {
+    let max_bytes = physical_memory().map_or(usize::MAX, |bytes| bytes / 5 * 4);
     Limits {
         max_depth: 1 << 27,
-        max_bytes: physical_memory().map_or(usize::MAX, |bytes| bytes / 5 * 4),
+        max_bytes,
+        soft_bytes: soft_of(max_bytes),
         ..Limits::default()
+    }
+}
+
+/// 確保量の上限 `max_bytes` の 7/8。上限がなければ柔らかい上限も置かない。`eml_rt` は割合を知らず、方針はここに置く。
+#[cfg(feature = "run")]
+fn soft_of(max_bytes: usize) -> usize {
+    if max_bytes == usize::MAX {
+        usize::MAX
+    } else {
+        max_bytes / 8 * 7
     }
 }
 
@@ -239,8 +252,10 @@ pub fn default_limits() -> Limits {
 /// 写しを同時に持つので、合わせて `eml run` と同じ 80% に収める (docs/spec/repl.md の「コマンドライン」)。
 #[cfg(feature = "run")]
 pub fn repl_limits() -> Limits {
+    let max_bytes = physical_memory().map_or(usize::MAX, |bytes| bytes / 5 * 2);
     Limits {
-        max_bytes: physical_memory().map_or(usize::MAX, |bytes| bytes / 5 * 2),
+        max_bytes,
+        soft_bytes: soft_of(max_bytes),
         ..default_limits()
     }
 }

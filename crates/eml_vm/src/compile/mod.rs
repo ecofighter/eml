@@ -9,7 +9,7 @@ mod slots;
 use std::sync::Arc;
 
 use eml_extern::RuntimeEntry;
-use eml_lir::unwind::UnwindPoint;
+use eml_lir::unwind::Unwinds;
 use eml_lir::{FnIdx, Program, Rhs, Stmt};
 use eml_rt::{Control, Mode};
 
@@ -73,14 +73,19 @@ impl<M: Mode> CodeBase<M> {
         let strings: Vec<u32> = strings.iter().map(|text| pool.string(text)).collect();
         let links = Links { strings, ..links };
         let known = functions.len();
-        // verifier の拒む関数は表を持たず、その関数のフレームを通る中断は内部の誤りになる。VM 自身の見張りを
-        // 確かめるテストが、verifier を通さない IR を読み込むためである。表を作るのは変換する関数だけで、debug
-        // ビルドではすでにある関数も変換し直して比べる
-        let points: Vec<Vec<UnwindPoint>> = eml_lir::unwind::points(program, |FnIdx(i)| {
+        // verifier の拒む関数は空のエントリの行だけを持ち、地点の行を持たない。その関数の地点で止まったフレームを
+        // 通る中断は内部の誤りになる。VM 自身の見張りを確かめるテストが、verifier を通さない IR を読み込むためである。
+        // 表を作るのは変換する関数だけで、debug ビルドではすでにある関数も変換し直して比べる
+        let unwinds: Vec<Unwinds> = eml_lir::unwind::points(program, |FnIdx(i)| {
             cfg!(debug_assertions) || links.functions[i as usize] as usize >= known
         })
         .into_iter()
-        .map(|points| points.and_then(Result::ok).unwrap_or_default())
+        .map(|unwinds| {
+            unwinds.and_then(Result::ok).unwrap_or(Unwinds {
+                entry: Vec::new(),
+                points: Vec::new(),
+            })
+        })
         .collect();
         let mut result = Ok(());
         for (i, function) in program.functions.iter().enumerate() {
@@ -89,7 +94,7 @@ impl<M: Mode> CodeBase<M> {
                     program,
                     FnIdx(i as u32),
                     function,
-                    &points[i],
+                    &unwinds[i],
                     &links,
                     &mut pool,
                     out,
@@ -104,7 +109,7 @@ impl<M: Mode> CodeBase<M> {
         }
         if result.is_ok() && cfg!(debug_assertions) {
             result = check_known(
-                program, &points, &links, functions, known, files, &mut pool, out,
+                program, &unwinds, &links, functions, known, files, &mut pool, out,
             );
         }
         let frozen = pool.freeze();
@@ -222,7 +227,7 @@ fn async_entries(program: &Program, index: &Index) -> Result<Option<AsyncEntries
 )]
 fn check_known<M: Mode>(
     program: &Program,
-    points: &[Vec<UnwindPoint>],
+    unwinds: &[Unwinds],
     links: &Links,
     functions: &[FnEntry],
     known: usize,
@@ -240,7 +245,7 @@ fn check_known<M: Mode>(
             program,
             FnIdx(i as u32),
             function,
-            &points[i],
+            &unwinds[i],
             links,
             pool,
             out,

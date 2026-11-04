@@ -114,6 +114,10 @@ pub(crate) enum Notice {
     /// 救済の頼み。`victim` の仕事を盗めと、空いていた worker か `RescueAlways` の前の worker が頼む。語を持たず、
     /// `in_flight` に数えない。run の終わりでは仕事に数えず、捨てる (docs/spec/vm.md の「タスクとスケジュール」)。
     Rescue { victim: u32 },
+    /// この worker が持ち主の、動いているタスク `cell` への上限の旗。受けた worker が登録表の lock の下で旗がまだ
+    /// 立っているかを確かめ、立っていればその VM の `Task` に旗を付ける。語を持たず、`in_flight` に数えず、救済で
+    /// 外さない。run の終わりでは仕事に数えず、捨てる (docs/spec/vm.md の「タスクとスケジュール」「タスクの上限」)。
+    Limit(CellRef),
 }
 
 impl Notice {
@@ -170,6 +174,10 @@ impl Post for Mailer<'_> {
     fn completion(&self, k: u32, op: CellRef) {
         self.run
             .send(self.control, k as usize, Notice::Completion(op));
+    }
+
+    fn limit(&self, k: u32, cell: CellRef) {
+        self.run.send(self.control, k as usize, Notice::Limit(cell));
     }
 }
 
@@ -262,6 +270,29 @@ pub(crate) struct Slot {
     /// `RescueAlways` の頼んだ印。持ち主が `Rescue` を送る前に立て、頼まれた worker が盗む前に下ろす
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) asked: AtomicBool,
+    /// `current`、`bytes`、`mark` の版の数。持ち主が3つを書く前に奇数に、書いた後に偶数に進める。読み手は前後で同じ
+    /// 偶数を読めたときだけ3つを組として使う。同じセルを数え直して公開し直すことがあるので、`current` を2回比べる
+    /// 形では古い組を受け入れてしまう (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) seq: AtomicU64,
+    /// 動いている `Async` のタスクのセルの符号 (`cell_word`)。なければ `NO_CELL`。持ち主の worker が切り替えの地点で
+    /// 書き、監視のスレッドが lock なしで読む。
+    pub(crate) current: AtomicU64,
+    /// `current` のタスクの今の区間より前の数と、区間の始めの `Control::taken`。動いているタスクの数は
+    /// `bytes + taken(k) - mark` である。
+    pub(crate) bytes: AtomicUsize,
+    pub(crate) mark: AtomicUsize,
+    /// この worker の実行待ちのうち、数のいちばん大きいタスクのセルの符号とその数。なければ `NO_CELL`。持ち主が
+    /// 書き、救済した worker は盗んだタスクの分を `NO_CELL` に戻す。
+    pub(crate) top: AtomicU64,
+    pub(crate) top_bytes: AtomicUsize,
+}
+
+/// `Slot::current` と `Slot::top` の、タスクのないことを表す値。
+pub(crate) const NO_CELL: u64 = u64::MAX;
+
+/// `Slot::current` と `Slot::top` に置くセルの符号。
+pub(crate) fn cell_word(cell: CellRef) -> u64 {
+    cell.encode() as u64
 }
 
 /// 1回の run で worker が共有する表。run ごとに作り、run の終わりに捨てる。
@@ -338,6 +369,12 @@ impl Run {
                 futile_inbox: AtomicUsize::new(0),
                 futile_settled: AtomicU64::new(0),
                 asked: AtomicBool::new(false),
+                seq: AtomicU64::new(0),
+                current: AtomicU64::new(NO_CELL),
+                bytes: AtomicUsize::new(0),
+                mark: AtomicUsize::new(0),
+                top: AtomicU64::new(NO_CELL),
+                top_bytes: AtomicUsize::new(0),
             })
             .collect();
         Run {
@@ -523,6 +560,35 @@ impl Run {
         if removed > 0 {
             slot.ready_entries.fetch_sub(removed, Ordering::Relaxed);
         }
+    }
+
+    /// worker `k` の実行待ちのタスク `cell` (数 `count`) を、今の `top` より大きいか同じなら `top` にする。同じセルなら
+    /// 数を書き直す。`top` と `top_bytes` は組として読めないので、読み手は古いセルと新しい数の組を見うる (救済が `top`
+    /// を消した直後に持ち主がより小さい数を書いたときなど)。旗はそれでも生きたセルへ行き、数は選び方を変えるだけなので
+    /// 害はない (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) fn offer_top(&self, k: usize, cell: CellRef, count: usize) {
+        let slot = &self.slots[k];
+        let word = cell_word(cell);
+        let top = slot.top.load(Ordering::Relaxed);
+        if top == NO_CELL || top == word || count >= slot.top_bytes.load(Ordering::Relaxed) {
+            slot.top_bytes.store(count, Ordering::Relaxed);
+            slot.top.store(word, Ordering::Release);
+        }
+    }
+
+    /// worker `k` の `top` が `cell` なら消す。ほかのセルに替わっていれば残す。
+    pub(crate) fn clear_top(&self, k: usize, cell: CellRef) {
+        let _ = self.slots[k].top.compare_exchange(
+            cell_word(cell),
+            NO_CELL,
+            Ordering::Release,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// worker `k` の `top` を消す。実行待ちが空になったときに持ち主が呼ぶ。
+    pub(crate) fn drop_top(&self, k: usize) {
+        self.slots[k].top.store(NO_CELL, Ordering::Release);
     }
 
     pub(crate) fn ready_is_empty(&self, k: usize) -> bool {
@@ -1199,7 +1265,7 @@ impl<P: Policy> Scheduler<P> {
 
     /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、この worker が走らせるはずの仕事があるかを
     /// 返す。実行待ちの列に残った `Entry`、右の子と仕事 (`Child`)、持ち主が自分のタスクの `Place`、継続を取り出せる
-    /// `Wake` を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`、`Rescue` と、もう待っていないセルへの起こしは数えない。
+    /// `Wake` を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`、`Rescue`、`Limit` と、もう待っていないセルへの起こしは数えない。
     /// 登録表は書き換えず、列の項と知らせの語は手放さない。数えたら run は誤りで終わり、回復がヒープを捨てるからである
     /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
     pub(crate) fn left_notices(&mut self) -> bool {
@@ -1226,7 +1292,8 @@ impl<P: Policy> Scheduler<P> {
                 | Notice::Submit(_)
                 | Notice::CancelIo(_)
                 | Notice::Completion(_)
-                | Notice::Rescue { .. } => false,
+                | Notice::Rescue { .. }
+                | Notice::Limit(_) => false,
             };
         }
         left

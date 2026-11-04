@@ -316,6 +316,15 @@ fn repl_limits_leave_room_for_recovery() {
     assert_eq!(repl.max_bytes * 2, run.max_bytes);
 }
 
+/// 柔らかい上限は、確保量の上限の 7/8 である。`eml run` も REPL も、自分の上限から求める。
+#[test]
+fn default_limits_put_the_soft_limit_at_seven_eighths() {
+    for limits in [eml_cli::default_limits(), eml_cli::repl_limits()] {
+        assert_eq!(limits.soft_bytes, limits.max_bytes / 8 * 7);
+        assert!(limits.soft_bytes < limits.max_bytes);
+    }
+}
+
 /// REPL は `par` の子を別の worker に置かない。取り消しと回復の規則を1つのヒープで保つためで、`--workers` も持たない
 /// (docs/spec/repl.md の「コマンドライン」)。ライブラリの既定も 1 である。
 #[test]

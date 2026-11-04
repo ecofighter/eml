@@ -905,6 +905,16 @@ impl<M: Mode> Ctx<M> {
         }
     }
 
+    /// 今のタスクの深さの上限。
+    pub closed spec fn depth_limit_spec(&self) -> usize {
+        self.depth_limit
+    }
+
+    /// 今のタスクの深さの上限だけを `limit` にした文脈。
+    pub closed spec fn with_depth_limit(&self, limit: usize) -> Ctx<M> {
+        Ctx { depth_limit: limit, ..*self }
+    }
+
     /// 仕事の回数 (`CtxStats`)、セッションの根、上限、今のタスクの深さの上限が `old` と同じである。
     pub closed spec fn same_rest(&self, old: Ctx<M>) -> bool {
         &&& self.stats == old.stats
@@ -1055,7 +1065,7 @@ impl<M: Mode> Ctx<M> {
     {
         let limits = control.limits();
         let word = control.word(k);
-        let heap = Heap::with_control(control.clone());
+        let heap = Heap::for_worker(control.clone(), k);
         let r = Ctx {
             heap,
             evv: Word::UNIT,
@@ -1750,6 +1760,43 @@ impl<M: Mode> Ctx<M> {
             }
         }
         r
+    }
+
+    /// 今のタスクの深さの上限を書く。VM がタスクごとの上限の保留と猶予に使う
+    /// (docs/spec/object-model.md の「タスクの切り替え」)。
+    #[verifier::spinoff_prover]
+    pub fn set_depth_limit(&mut self, limit: usize)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            *final(self) == old(self).with_depth_limit(limit),
+    {
+        self.depth_limit = limit;
+        proof {
+            let s0 = *old(self);
+            assert(self.heap == s0.heap);
+            assert(self.evv == s0.evv);
+            assert(self.yielding == s0.yielding);
+            assert(self.max_evv == s0.max_evv);
+            assert(self.heap.core.settled_view() == s0.heap.core.settled_view());
+            assert forall|b: usize| #[trigger] self.need(seq![], b) == s0.need(seq![], b) by {}
+            if s0.holds_args(seq![]) {
+                assert(self.holds_args(seq![]));
+            }
+            if s0.held_ok() {
+                assert(self.held_ok());
+            }
+        }
+    }
+
+    /// 今のタスクの深さの上限を読む。一時の切り替えの後で `set_depth_limit` で戻すために使う
+    /// (docs/spec/object-model.md の「タスクの切り替え」)。
+    pub fn depth_limit(&self) -> (r: usize)
+        ensures
+            r == self.depth_limit_spec(),
+    {
+        self.depth_limit
     }
 
     /// 今の `evv` の語を読む。参照は `Ctx` に残り、RC に触れない。fork が子の `evv` を作る間に親の `evv` を読むための

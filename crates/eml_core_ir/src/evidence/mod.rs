@@ -12,7 +12,8 @@ mod tests;
 
 use crate::{Call, CoreFn, Program, Rhs, Term};
 use eml_lir::{
-    Atom, BlockId, Case, CasePattern, FloatBits, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
+    Atom, BlockId, Case, CasePattern, EP_COMPOSE, EP_ID, EP_PROMPT, EP_RESUME, EP_REWIND,
+    FloatBits, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
 };
 use rustc_hash::FxHashMap;
 
@@ -70,14 +71,14 @@ impl Helpers {
     }
 
     pub(crate) fn id(&mut self, program: &mut Program) -> FnIdx {
-        self.get_or_build(program, |h| &mut h.id, "id$", |_, _, _| helpers::id())
+        self.get_or_build(program, |h| &mut h.id, EP_ID, |_, _, _| helpers::id())
     }
 
     pub(crate) fn compose(&mut self, program: &mut Program) -> FnIdx {
         self.get_or_build(
             program,
             |h| &mut h.compose,
-            "compose$",
+            EP_COMPOSE,
             |_, _, compose| helpers::compose(compose),
         )
     }
@@ -86,7 +87,7 @@ impl Helpers {
         self.get_or_build(
             program,
             |h| &mut h.prompt,
-            "prompt$",
+            EP_PROMPT,
             |h, program, _| {
                 let resume = h.resume(program);
                 let rewind = h.rewind(program);
@@ -99,7 +100,7 @@ impl Helpers {
         self.get_or_build(
             program,
             |h| &mut h.resume,
-            "resume$",
+            EP_RESUME,
             |h, program, _| helpers::resume(h.prompt(program)),
         )
     }
@@ -108,7 +109,7 @@ impl Helpers {
         self.get_or_build(
             program,
             |h| &mut h.rewind,
-            "rewind$",
+            EP_REWIND,
             |h, program, _| helpers::rewind(h.resume(program)),
         )
     }

@@ -174,27 +174,34 @@ fn host_for(path: &Path, root: &Path) -> CaptureHost {
 }
 
 /// `eml run` と同じ既定の上限で流す。止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい
-/// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。`signals` はファイルの
-/// シグナルの印の予定で、どの run にも同じものを渡す (docs/implementation/testing.md の「UI テスト」)。
+/// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。`marks` はファイルの
+/// 先頭の印で、シグナルの予定と深さと確保量の上限をどの run にも同じように当てる (docs/implementation/testing.md の「UI テスト」)。
 fn execute_in(
     program: &eml_lir::Program,
     path: &Path,
     root: &Path,
-    signals: &[VirtualSignal],
+    marks: &Marks,
     debug_heap: bool,
     sched: Sched,
     workers: usize,
 ) -> Ran {
     let host = host_for(path, root);
     let (out, err, files) = (host.output(), host.errors(), host.written());
+    let defaults = default_limits();
+    let (max_bytes, soft_bytes) = marks
+        .max_bytes
+        .unwrap_or((defaults.max_bytes, defaults.soft_bytes));
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(Limits {
             workers,
-            ..default_limits()
+            max_depth: marks.max_depth.unwrap_or(defaults.max_depth),
+            max_bytes,
+            soft_bytes,
+            ..defaults
         })))
         .with_sched(sched)
-        .with_signals(signals.to_vec());
+        .with_signals(marks.signals.clone());
     let outcome = execute(program, &config, host.into_ref());
     let finished = outcome.as_ref().ok().copied();
     let result = outcome.map(|finished| finished.exit);
@@ -264,10 +271,10 @@ fn assert_fast_mode_agrees(
     program: &eml_lir::Program,
     path: &Path,
     root: &Path,
-    signals: &[VirtualSignal],
+    marks: &Marks,
     checked: &Ran,
 ) {
-    let fast = execute_in(program, path, root, signals, false, Sched::Normal, 1);
+    let fast = execute_in(program, path, root, marks, false, Sched::Normal, 1);
     assert_agrees(suffix, "the fast mode", &fast, checked, Compare::Nothing);
 }
 
@@ -329,11 +336,11 @@ fn assert_workers_agree(
     program: &eml_lir::Program,
     path: &Path,
     root: &Path,
-    signals: &[VirtualSignal],
+    marks: &Marks,
     checked: &Ran,
 ) {
     for &(workers, sched) in worker_runs(suffix) {
-        let ran = execute_in(program, path, root, signals, true, sched, workers);
+        let ran = execute_in(program, path, root, marks, true, sched, workers);
         let compare = if suffix.starts_with("async/") {
             Compare::Nothing
         } else {
@@ -341,7 +348,7 @@ fn assert_workers_agree(
         };
         let label = format!(
             "{}; {}",
-            workers_label(workers, sched, signals),
+            workers_label(workers, sched, &marks.signals),
             rerun_hint(path)
         );
         assert_agrees(suffix, &label, &ran, checked, compare);
@@ -400,18 +407,22 @@ fn assert_seeds_agree(
     program: &eml_lir::Program,
     path: &Path,
     root: &Path,
-    signals: &[VirtualSignal],
+    marks: &Marks,
     checked: &Ran,
 ) {
     let compare_stats = !(suffix.starts_with("async/") && matches!(checked.result, Ok(Some(_))));
     for seed in SEEDS {
-        let ran = execute_in(program, path, root, signals, true, Sched::Seeded(seed), 1);
+        let ran = execute_in(program, path, root, marks, true, Sched::Seeded(seed), 1);
         let compare = if compare_stats {
             compares_stats(checked, &ran)
         } else {
             Compare::Nothing
         };
-        let label = format!("{}; {}", seeded_label(seed, signals), rerun_hint(path));
+        let label = format!(
+            "{}; {}",
+            seeded_label(seed, &marks.signals),
+            rerun_hint(path)
+        );
         assert_agrees(suffix, &label, &ran, checked, compare);
         if let Some(finished) = ran.finished {
             assert!(
@@ -571,12 +582,11 @@ fn fast_mode_reports(error: &RuntimeError) -> bool {
 #[test]
 fn run() {
     for_each_file(&ui_root().join("run"), "em", true, |path, marks| {
-        let signals = &marks.signals;
         let Entry::Test(suffix) = classify(path, "run") else {
             return;
         };
         let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential, 1);
+        let ran = execute_in(&program, path, &root, marks, true, Sched::Sequential, 1);
         assert!(ran.result.is_ok(), "{:?}\n{diagnostics}", ran.result);
         let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
         let exit = match ran.result {
@@ -588,12 +598,12 @@ fn run() {
                 "--- stdout ---\n{stdout}--- stderr ---\n{diagnostics}{stderr}{written}{exit}"
             ));
         });
-        assert_fast_mode_agrees(&suffix, &program, path, &root, signals, &ran);
+        assert_fast_mode_agrees(&suffix, &program, path, &root, marks, &ran);
         if seeded(&suffix) {
-            assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
+            assert_seeds_agree(&suffix, &program, path, &root, marks, &ran);
         }
         if workers_run(&suffix, marks.workers_skip) {
-            assert_workers_agree(&suffix, &program, path, &root, signals, &ran);
+            assert_workers_agree(&suffix, &program, path, &root, marks, &ran);
         }
     });
 }
@@ -606,13 +616,12 @@ fn run_fail() {
 /// `run-fail/` の1つのファイルを流す。worker の印の分類は、プログラムを流す前に確かめる。VM の誤りで終わるファイルは
 /// 速いモードからあとの run を流さないので、そこで確かめると、ほかの分類の印が黙って通ってしまう。
 fn run_fail_file(path: &Path, marks: &Marks) {
-    let signals = &marks.signals;
     let Entry::Test(suffix) = classify(path, "run-fail") else {
         return;
     };
     let workers = workers_run(&suffix, marks.workers_skip);
     let (program, root, diagnostics) = compile(path, &suffix);
-    let ran = execute_in(&program, path, &root, signals, true, Sched::Sequential, 1);
+    let ran = execute_in(&program, path, &root, marks, true, Sched::Sequential, 1);
     let Err(error) = &ran.result else {
         panic!("expected a runtime error");
     };
@@ -628,12 +637,12 @@ fn run_fail_file(path: &Path, marks: &Marks) {
     });
     // VM の誤りの文言は worker ID を含みうる。ID はスケジュールで変わるので、seed の run とも比べない
     if fast_mode_reports(error) {
-        assert_fast_mode_agrees(&suffix, &program, path, &root, signals, &ran);
+        assert_fast_mode_agrees(&suffix, &program, path, &root, marks, &ran);
         if seeded(&suffix) {
-            assert_seeds_agree(&suffix, &program, path, &root, signals, &ran);
+            assert_seeds_agree(&suffix, &program, path, &root, marks, &ran);
         }
         if workers {
-            assert_workers_agree(&suffix, &program, path, &root, signals, &ran);
+            assert_workers_agree(&suffix, &program, path, &root, marks, &ran);
         }
     }
 }
@@ -776,6 +785,8 @@ fn the_workers_mark_needs_a_reason() {
                 at_ms: 5,
                 signal: Signal::Interrupt
             }],
+            max_depth: None,
+            max_bytes: None,
         })
     );
 }
@@ -789,8 +800,23 @@ fn an_async_file_that_places_no_task_fails() {
     let program = session.compile().program.expect("the program compiles");
     let root = ui_root().join("run/async");
     let path = root.join("short.em");
-    let checked = execute_in(&program, &path, &root, &[], true, Sched::Sequential, 1);
-    assert_workers_agree("async/short.em", &program, &path, &root, &[], &checked);
+    let checked = execute_in(
+        &program,
+        &path,
+        &root,
+        &Marks::default(),
+        true,
+        Sched::Sequential,
+        1,
+    );
+    assert_workers_agree(
+        "async/short.em",
+        &program,
+        &path,
+        &root,
+        &Marks::default(),
+        &checked,
+    );
 }
 
 #[test]
@@ -821,8 +847,23 @@ fn a_par_file_that_is_never_preempted_fails() {
     let program = session.compile().program.expect("the program compiles");
     let root = ui_root().join("run/par");
     let path = root.join("short.em");
-    let checked = execute_in(&program, &path, &root, &[], true, Sched::Sequential, 1);
-    assert_seeds_agree("par/short.em", &program, &path, &root, &[], &checked);
+    let checked = execute_in(
+        &program,
+        &path,
+        &root,
+        &Marks::default(),
+        true,
+        Sched::Sequential,
+        1,
+    );
+    assert_seeds_agree(
+        "par/short.em",
+        &program,
+        &path,
+        &root,
+        &Marks::default(),
+        &checked,
+    );
 }
 
 #[test]
@@ -916,6 +957,8 @@ fn signal_marks_are_parsed_in_order() {
             windows_skip: false,
             workers_skip: false,
             signals: vec![at(100, Signal::Terminate), at(5, Signal::Interrupt)],
+            max_depth: None,
+            max_bytes: None,
         })
     );
 }
@@ -979,4 +1022,164 @@ fn a_signal_mark_in_a_module_file_panics() {
         "--",
         is_entry(&root, &module, "em"),
     );
+}
+
+#[test]
+fn the_max_depth_mark_sets_the_limit() {
+    let marks = leading_marks("-- max-depth: 4096\nmain () = ()\n", "--").unwrap();
+    assert_eq!(marks.max_depth, Some(4096));
+    assert_eq!(
+        leading_marks("main () = ()\n", "--").unwrap().max_depth,
+        None
+    );
+    let mixed = leading_marks(
+        "#!/usr/bin/env eml\n-- signal: interrupt at 5\n-- max-depth: 8192\n-- windows: skip (x)\n",
+        "--",
+    )
+    .unwrap();
+    assert_eq!((mixed.max_depth, mixed.windows_skip), (Some(8192), true));
+
+    let program = {
+        let source = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (deep 100000))\n\ndeep : Int -> <Panic> Int\ndeep n = if n == 0 then 0 else 1 + deep (n - 1)\n";
+        let session = Session::load("run/basics/deep.em", source, &eml_cli::MemorySource(&[]));
+        session.compile().program.expect("the program compiles")
+    };
+    let root = ui_root().join("run/basics");
+    let path = root.join("deep.em");
+    let limited = Marks {
+        max_depth: Some(1024),
+        ..Marks::default()
+    };
+    let ran = execute_in(&program, &path, &root, &limited, true, Sched::Sequential, 1);
+    assert!(ran.result.is_err(), "the mark did not lower the limit");
+    let free = execute_in(
+        &program,
+        &path,
+        &root,
+        &Marks::default(),
+        true,
+        Sched::Sequential,
+        1,
+    );
+    assert!(free.result.is_ok(), "{:?}", free.result);
+}
+
+#[test]
+fn a_malformed_max_depth_mark_panics() {
+    for wrong in [
+        "-- max-depth: 0",
+        "-- max-depth: +5",
+        "-- max-depth: -5",
+        "-- max-depth: 5 ",
+        "-- max-depth:5",
+        "-- max-depth: ",
+        "-- max-depth: 4k",
+    ] {
+        let message = leading_marks(wrong, "--").expect_err(wrong);
+        assert_eq!(
+            message,
+            format!("the max-depth mark is `-- max-depth: <words>`, not `{wrong}`")
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "x.repl: max-depth marks are not supported here")]
+fn a_max_depth_mark_in_a_transcript_panics() {
+    marks_of("x.repl", "# max-depth: 4096\n> 1\n", "#", false);
+}
+
+#[test]
+fn a_repeated_max_depth_or_max_bytes_mark_panics() {
+    assert_eq!(
+        leading_marks("-- max-depth: 4096\n-- max-depth: 8192\n", "--").unwrap_err(),
+        "the max-depth mark is written twice, at `-- max-depth: 8192`"
+    );
+    let twice = "-- max-bytes: 8 soft 4\n-- signal: interrupt at 5\n-- max-bytes: 16 soft 4\n";
+    assert_eq!(
+        leading_marks(twice, "--").unwrap_err(),
+        "the max-bytes mark is written twice, at `-- max-bytes: 16 soft 4`"
+    );
+}
+
+#[test]
+fn the_max_bytes_mark_sets_both_limits() {
+    let marks =
+        leading_marks("-- max-bytes: 268435456 soft 4194304\nmain () = ()\n", "--").unwrap();
+    assert_eq!(marks.max_bytes, Some((268435456, 4194304)));
+    assert_eq!(
+        leading_marks("main () = ()\n", "--").unwrap().max_bytes,
+        None
+    );
+    let mixed = leading_marks(
+        "#!/usr/bin/env eml\n-- max-depth: 4096\n-- max-bytes: 100 soft 50\n-- windows: skip (x)\n",
+        "--",
+    )
+    .unwrap();
+    assert_eq!(
+        (mixed.max_depth, mixed.max_bytes, mixed.windows_skip),
+        (Some(4096), Some((100, 50)), true)
+    );
+
+    // 1 MiB の柔らかい上限と 64 MiB の上限の下で、標準の上限なら通るプログラムを流す
+    let program = {
+        let source = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (length (build 3000000 [])))\n\nbuild : Int -> List Int -> <Panic> List Int\nbuild n acc = if n == 0 then acc else build (n - 1) (n :: acc)\n\nlength : List Int -> <Panic> Int\nlength xs = count xs 0\n\ncount : List Int -> Int -> <Panic> Int\ncount xs n = match xs with\n  | [] -> n\n  | _ :: rest -> count rest (n + 1)\n";
+        let session = Session::load("run/basics/big.em", source, &eml_cli::MemorySource(&[]));
+        session.compile().program.expect("the program compiles")
+    };
+    let root = ui_root().join("run/basics");
+    let path = root.join("big.em");
+    let limited = Marks {
+        max_bytes: Some((8 << 20, 1 << 20)),
+        ..Marks::default()
+    };
+    let ran = execute_in(
+        &program,
+        &path,
+        &root,
+        &limited,
+        false,
+        Sched::Sequential,
+        1,
+    );
+    assert!(ran.result.is_err(), "the mark did not lower the hard limit");
+    let free = execute_in(
+        &program,
+        &path,
+        &root,
+        &Marks::default(),
+        false,
+        Sched::Sequential,
+        1,
+    );
+    assert!(free.result.is_ok(), "{:?}", free.result);
+}
+
+#[test]
+fn a_malformed_max_bytes_mark_panics() {
+    for wrong in [
+        "-- max-bytes: 100",
+        "-- max-bytes: 100 soft",
+        "-- max-bytes: 100 soft ",
+        "-- max-bytes: 100 soft 100",
+        "-- max-bytes: 100 soft 200",
+        "-- max-bytes: 100 soft 0",
+        "-- max-bytes: 0 soft 0",
+        "-- max-bytes: 1k soft 5",
+        "-- max-bytes: 100 soft +5",
+        "-- max-bytes: 100  soft 5",
+        "-- max-bytes:100 soft 5",
+    ] {
+        let message = leading_marks(wrong, "--").expect_err(wrong);
+        assert_eq!(
+            message,
+            format!("the max-bytes mark is `-- max-bytes: <bytes> soft <bytes>`, not `{wrong}`")
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "x.repl: max-bytes marks are not supported here")]
+fn a_max_bytes_mark_in_a_transcript_panics() {
+    marks_of("x.repl", "# max-bytes: 100 soft 50\n> 1\n", "#", false);
 }

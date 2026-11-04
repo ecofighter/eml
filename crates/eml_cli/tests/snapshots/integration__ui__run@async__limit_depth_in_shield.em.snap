@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/limit_depth_in_shield.em
+---
+--- stdout ---
+io failed: ResourceLimit: the call depth limit is exceeded
+--- stderr ---

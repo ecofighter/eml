@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/async/limit_depth_uncaught.em
+---
+--- stdout ---
+before
+--- stderr ---
+--- runtime error ---
+the call depth limit is exceeded
+  at <std>/Async.em:75:9

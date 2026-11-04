@@ -14,7 +14,7 @@ use eml_rt::{
 
 use crate::apply;
 use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
-use crate::code::{CodeBase, ForkTable};
+use crate::code::{CodeBase, ForkTable, UnwindEntry};
 use crate::data;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
@@ -101,7 +101,54 @@ pub struct Task {
     /// `compute` の仕事の `Task` の、仕事のセルと `fork_job` の位置。仕事は join の節点を持たず、終わりを仕事のセルに
     /// 置く (docs/spec/vm.md の「`compute` の仕事」)。
     pub(crate) job: Option<JobRef>,
+    /// 深さの超過とタスクの旗をどう扱うか。`Ctx` の深さの上限の値と組で決まる (docs/spec/vm.md の「タスクの上限」)。
+    pub(crate) limit: Limit,
+    /// `Async` のタスクの今の区間より前の数 (取ったページのバイト数)。エントリの `Task` はセルが返した値から数え始める
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
+    pub(crate) counted: usize,
+    /// このエントリの `Task` が数えた分。待ちに入って `Finish` したら、`leave` がセルの数に足す。
+    pub(crate) added: usize,
 }
+
+/// タスクごとの上限の状態。状態ごとに `Ctx` の深さの上限を決まった値にしておき、安全点の速い道は変えない
+/// (docs/spec/vm.md の「タスクの上限」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Limit {
+    /// タスクの外 (`main`、`compute` の仕事、タスクの外の `par` の子)。上限は本当の限度で、超えたら run を止める。
+    Stops,
+    /// `Async` のタスクの中で、保留はない。上限は本当の限度である。
+    Task,
+    /// 超過か旗を見て、次の関数のエントリで `ResourceLimit` を起こす。上限は 0 で、どの安全点も冷たい道に入る。
+    Pending,
+    /// 中断を始めてから着地するまで。上限は本当の限度に `LIMIT_HEADROOM` を足した値で、超えたら run を止める。
+    /// `pending` が立っていれば、着地の後に保留へ戻す。
+    Aborting { pending: bool },
+}
+
+impl Limit {
+    /// `par` の右の子が受け継ぐ状態。子は保留も猶予も持たずに始まる。子の `evv` に `IO` の evidence はないので、
+    /// `Task` の子の深さの超過も `limit_hit` の手順の終わりで run を止め、`Stops` の子と結果は変わらない。右の子は
+    /// セルを持たず旗も受けないので、`Task` はタスクの中の子であることの印である (docs/spec/vm.md の「深さ」)。
+    fn inherit(self) -> Limit {
+        match self {
+            Limit::Stops => Limit::Stops,
+            _ => Limit::Task,
+        }
+    }
+
+    /// 上限の旗を受けた後の状態。`Task` は保留に、中断の間は着地の後に保留へ戻す印だけを付ける。`Pending` はそのままで、
+    /// `Stops` のタスクはセルを持たないので旗を受けない。上限の値は呼び手が当てる (docs/spec/vm.md の「タスクの上限」)。
+    fn flagged(self) -> Limit {
+        match self {
+            Limit::Task => Limit::Pending,
+            Limit::Aborting { .. } => Limit::Aborting { pending: true },
+            Limit::Pending | Limit::Stops => self,
+        }
+    }
+}
+
+/// 巻き戻しの間に本当の限度へ足す猶予の語の数 (2 MiB)。節のエントリが暴走しても、この先で止まる。
+const LIMIT_HEADROOM: usize = 1 << 18;
 
 /// 仕事の `Task` が自分の仕事について知ること。
 #[derive(Debug, Clone, Copy)]
@@ -159,6 +206,9 @@ impl Task {
             outcome: None,
             placed: None,
             job: None,
+            limit: Limit::Stops,
+            counted: 0,
+            added: 0,
         }
     }
 
@@ -193,7 +243,7 @@ impl Task {
             frame_size: usize::from(entry.frame_size),
             last_ret: FINISH,
             scratch,
-            stack_limit: stack_limit(max_depth),
+            stack_limit: task_stack_limit(max_depth, Limit::Task),
             entry: function,
             keep_result: false,
             exit: None,
@@ -210,12 +260,19 @@ impl Task {
             outcome: None,
             placed: None,
             job: None,
+            limit: Limit::Task,
+            counted: 0,
+            added: 0,
         }
     }
 
     /// まだ始まっていない右の子。いちばん下のフレームが子の境目のフレームで、始めるときに閉包 `g` をその上で呼ぶ。
     /// 境目のフレームの戻り先は `Finish` だが、`ChildDone` がフレームを外さずにタスクを捨てるので、戻ることはない
-    /// (docs/spec/vm.md の「`par` の fork と join」)。
+    /// (docs/spec/vm.md の「`par` の fork と join」)。`limit` は親の状態から `Limit::inherit` で決める。
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the parts of a child a fork starts from"
+    )]
     fn right_child(
         entry: u32,
         worker: u32,
@@ -224,6 +281,7 @@ impl Task {
         max_depth: usize,
         j: JoinId,
         g: Word,
+        limit: Limit,
     ) -> Task {
         let base = ROOT_BASE + ROOT_SIZE + 2;
         let mut stack = vec![Word::UNIT; base + BOUNDARY_SIZE];
@@ -237,7 +295,7 @@ impl Task {
             frame_size: BOUNDARY_SIZE,
             last_ret: FINISH,
             scratch: Vec::new(),
-            stack_limit: stack_limit(max_depth.saturating_sub(depth_offset)),
+            stack_limit: task_stack_limit(max_depth.saturating_sub(depth_offset), limit),
             entry,
             keep_result: false,
             exit: None,
@@ -250,6 +308,9 @@ impl Task {
             outcome: None,
             placed: None,
             job: None,
+            limit,
+            counted: 0,
+            added: 0,
         }
     }
 
@@ -258,7 +319,7 @@ impl Task {
     fn job(entry: u32, worker: u32, evv: Word, max_depth: usize, job: JobRef, g: Word) -> Task {
         Task {
             job: Some(job),
-            ..Task::right_child(entry, worker, evv, 0, max_depth, JOB, g)
+            ..Task::right_child(entry, worker, evv, 0, max_depth, JOB, g, Limit::Stops)
         }
     }
 
@@ -285,6 +346,9 @@ impl Task {
             outcome: None,
             placed: None,
             job: None,
+            limit: Limit::Stops,
+            counted: 0,
+            added: 0,
         }
     }
 
@@ -393,12 +457,23 @@ impl Task {
     }
 }
 
-/// スタックの容量の上限。深さが `max_depth` を超えると次の安全点で止まり、安全点の前には通常、1つの枠と見出し
+/// スタックの容量の上限。深さが `max_depth` を超えると次の安全点で止まるか中断を起こし (中断の間の猶予は
+/// `task_stack_limit` が足す)、安全点の前には通常、1つの枠と見出し
 /// (`u16::MAX + 2` 語) までを積むので、それより大きい容量は見込まない。余る引数の適用は呼ばれる側の枠と同じ安全点の
 /// 前に `ApplyRest` の枠も積むので、求める長さが上限を超えうる。`reserve` は求める長さを下回らないので、そのときも足りる
 /// (docs/spec/vm.md の「スロットとスタック」)。
 fn stack_limit(max_depth: usize) -> usize {
     max_depth.saturating_add(usize::from(u16::MAX) + 2)
+}
+
+/// 状態が `limit` で始まるタスクのスタックの容量の上限。`Stops` でないタスクは中断の間 (`Aborting`) だけ深さの上限が
+/// `LIMIT_HEADROOM` だけ高いので、容量の上限にも同じだけ足す。足さないと、猶予の間は積むたびに `reserve` が容量を
+/// 長さちょうどに伸ばし直す (docs/spec/vm.md の「スロットとスタック」「タスクの上限」)。
+fn task_stack_limit(real: usize, limit: Limit) -> usize {
+    match limit {
+        Limit::Stops => stack_limit(real),
+        _ => stack_limit(real).saturating_add(LIMIT_HEADROOM),
+    }
 }
 
 /// 見出しの1語目。戻り先、結果を書くスロット、呼び出し元の枠の大きさを1つの生の語に詰める
@@ -421,6 +496,12 @@ enum Polled {
     Switch,
     /// 切り替えずに知らせを集める。
     Collect,
+    /// 深さが今の上限を超えた。本当の超過か、保留のタスクの上限か、猶予の超過かは `limit_hit` が決める。
+    /// `poll` し直す前に下ろした `NOTICE` と `PREEMPT` を `collect` と `switch` で持ち、安全点がそれも果たす。
+    Limit {
+        collect: bool,
+        switch: bool,
+    },
 }
 
 /// `Ctx::poll` の VM での呼び方。速い道は `Ok(())` の分岐だけで、残りは `polled_stop` に置く
@@ -433,10 +514,11 @@ fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize, k: usize) -> Result<Polled, VmFault
     }
 }
 
-/// `poll` が止める理由を返したときの扱い。`Preempt` と `Notice` 以外は誤りとして返す。2つは、yield の途中でなければ
+/// `poll` が止める理由を返したときの扱い。`DepthLimit` は `Polled::Limit` にして安全点に任せ、`Preempt` と `Notice`
+/// 以外は誤りとして返す。2つは、yield の途中でなければ
 /// ビットを下ろしてからもう一度 `poll` する。間に命令がないので、深さの上限は正確で、同時に立った止めるビットは切り替えと
 /// 集めることより先に勝つ。`NOTICE` だけでは切り替えないので、`Sequential` は `NOTICE` では切り替えない
-/// (docs/spec/vm.md の「タスクとスケジュール」)。
+/// (docs/spec/vm.md の「タスクとスケジュール」「タスクの上限」)。
 #[cold]
 #[inline(never)]
 fn polled_stop<M: Mode>(
@@ -449,6 +531,12 @@ fn polled_stop<M: Mode>(
     let control = ctx.heap().control();
     match stop {
         Stop::Notice | Stop::Preempt => {}
+        Stop::DepthLimit => {
+            return Ok(Polled::Limit {
+                collect: false,
+                switch: false,
+            });
+        }
         _ => return Err(stop.into()),
     }
     // yield の途中では切り替えも集めることもしない。ビットは立てたままにして、次の yield のない安全点で拾う
@@ -460,6 +548,11 @@ fn polled_stop<M: Mode>(
         return match ctx.poll(depth) {
             // 間に立った `NOTICE` は下ろさずに残す。切り替えの前の集める地点が下ろす
             Ok(()) | Err(Stop::Preempt | Stop::Notice) => Ok(Polled::Switch),
+            // 下ろした `PREEMPT` は、安全点が `limit_hit` の後で果たす
+            Err(Stop::DepthLimit) => Ok(Polled::Limit {
+                collect: false,
+                switch: true,
+            }),
             Err(stop) => Err(stop.into()),
         };
     }
@@ -469,7 +562,18 @@ fn polled_stop<M: Mode>(
         Ok(()) | Err(Stop::Notice) => Ok(Polled::Collect),
         // 横取りも求められていれば、`PREEMPT` を拾うときと同じく下ろしてから切り替える。下ろさないと、切り替えた先の
         // 最初の安全点がまた切り替える
-        Err(Stop::Preempt) => polled_stop(ctx, depth, Stop::Preempt, k),
+        Err(Stop::Preempt) => match polled_stop(ctx, depth, Stop::Preempt, k)? {
+            Polled::Limit { switch, .. } => Ok(Polled::Limit {
+                collect: true,
+                switch,
+            }),
+            polled => Ok(polled),
+        },
+        // 下ろした `NOTICE` の知らせは、安全点が `limit_hit` の前に集める
+        Err(Stop::DepthLimit) => Ok(Polled::Limit {
+            collect: true,
+            switch: false,
+        }),
         Err(stop) => Err(stop.into()),
     }
 }
@@ -486,14 +590,212 @@ fn safepoint<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let polled = poll(ctx, task.stack_depth(), sched.index)?;
+    if let Polled::Limit { collect, switch } = polled {
+        if limit_safepoint::<R>(code, ctx, task, sched, collect, switch)? {
+            preempt::<R>(code, ctx, task, sched)?;
+        }
+        return Ok(());
+    }
     let tick = sched.policy.tick();
     if polled == Polled::Collect {
-        collect_notice::<R>(ctx, task.depth_offset, sched)?;
+        collect_notice::<R>(ctx, task, sched)?;
     }
     if (polled == Polled::Switch || tick) && ctx.yielding() == 0 {
         preempt::<R>(code, ctx, task, sched)?;
     }
     Ok(())
+}
+
+/// 深さの上限を超えた安全点。`poll` し直す前に下ろした `NOTICE` の知らせを先に集め、`limit_hit` の後で方針の
+/// `tick` を数える。横取りを試みるか (下ろした `PREEMPT` か `tick` が求め、yield の途中でも中断を起こしたばかりでもない)
+/// を返し、試みるのは呼び手である。`preempt` の繰り返しが Rust の再帰を重ねないためである。試みないときは、下ろした
+/// `PREEMPT` を立て直して着地の後の安全点に任せる。どちらのビットも捨てると、ビットを見た worker が知らせを集めないまま、
+/// または横取りされないまま動き続ける。`tick` を飛ばすと、予算で横取りする方針が保留のタスクを切り替えなくなる
+/// (docs/spec/vm.md の「タスクの上限」)。
+#[cold]
+#[inline(never)]
+fn limit_safepoint<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    collect: bool,
+    switch: bool,
+) -> Result<bool, VmFault> {
+    if collect {
+        collect_notice::<R>(ctx, task, sched)?;
+    }
+    limit_hit::<R>(code, ctx, task, sched)?;
+    let tick = sched.policy.tick();
+    if (switch || tick) && ctx.yielding() == 0 && !matches!(task.limit, Limit::Aborting { .. }) {
+        return Ok(true);
+    }
+    if switch {
+        ctx.heap().control().preempt(sched.index);
+    }
+    Ok(false)
+}
+
+/// 安全点の `poll` が深さの上限を超えたと返した。タスクの外と猶予の間は run を止める。タスクの中では、関数のエントリの
+/// 安全点で `ResourceLimit` の IO の失敗を起こし、それ以外の位置では保留のまま続ける。エントリのフレームは RC の対象の
+/// 引数をすべて持ち、借りた値を持たないので、エントリの行だけで巻き戻せるためである。EP の補助の関数のエントリでも
+/// 保留のまま続ける。どのエントリでも、深さが本当の限度と猶予の和を超えていれば run を止める
+/// (docs/spec/vm.md の「タスクの上限」)。
+#[cold]
+#[inline(never)]
+fn limit_hit<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+) -> Result<(), VmFault> {
+    if matches!(task.limit, Limit::Stops | Limit::Aborting { .. }) {
+        return Err(VmFault::Stopped(Stop::DepthLimit));
+    }
+    // yield の途中の状態は `Ctx` が1つだけ持ち、中断はそれを使うので、yield を終えるまで待つ
+    if ctx.yielding() != 0 {
+        return Ok(());
+    }
+    let Some(row) = code
+        .tables
+        .unwind_at(task.pc)
+        .filter(|row| row.entry != UnwindEntry::No)
+    else {
+        return Ok(());
+    };
+    let real = real_limit(ctx, task.depth_offset);
+    // 補助の関数のエントリで延ばしても深さの限度がなくならないよう、延ばす前に確かめる
+    if task.stack_depth() > real.saturating_add(LIMIT_HEADROOM) {
+        return Err(VmFault::Stopped(Stop::DepthLimit));
+    }
+    // 補助の関数のエントリの `evv` は利用者のプログラムのどの地点のものでもなく、起こすとプログラムに見えない
+    // handler に届く
+    if row.entry == UnwindEntry::Defers {
+        return Ok(());
+    }
+    let real_over = task.stack_depth() > real;
+    let message = if real_over {
+        "the call depth limit is exceeded"
+    } else {
+        "the memory soft limit is exceeded"
+    };
+    task.limit = Limit::Aborting { pending: false };
+    ctx.set_depth_limit(real.saturating_add(LIMIT_HEADROOM));
+    let caught = abort_to::<R, _>(code, ctx, task, 0, ExternEffect::Io, IO_FAILED, |ctx| {
+        [
+            Word::from_bits(eml_lir::IO_RESOURCE_LIMIT as usize),
+            ctx.fresh_string(message),
+        ]
+    })?;
+    if !caught {
+        // IO の evidence がない (`par` の子の中、底の `try_all` の外)。本当の超過なら run を止める。旗だけなら捨てずに
+        // 保留へ戻し、evidence のある所の次のエントリで起こす。旗はまだ下ろしていないので、セルにも立ったままである
+        if real_over {
+            task.limit = Limit::Task;
+            ctx.set_depth_limit(real);
+            return Err(VmFault::Stopped(Stop::DepthLimit));
+        }
+        task.limit = Limit::Pending;
+        ctx.set_depth_limit(0);
+        return Ok(());
+    }
+    // 起こしたので、本当の超過で起こすときも、まだ `Task` に届いていない旗も消費する。下ろすのを起こせたときに限るのは、
+    // evidence のない間の安全点ごとに lock を取らないためである。セルがもう死んでいれば、旗を見る者もいない
+    if let Some(cell) = task.cell {
+        sched.cells.lock().clear_limit(cell)?;
+        // `clear_limit` はセルの数を 0 にするので、タスクの数もここから数え直す。旗で起こしたときも本当の超過で
+        // 起こしたときも同じにして、セルとタスクの数をずらさない (docs/spec/vm.md の「タスクとスケジュール」)
+        task.counted = 0;
+        task.added = 0;
+        sched.mark = ctx.heap().control().taken(sched.index);
+        sched.publish(task);
+    }
+    Ok(())
+}
+
+/// 深さの起点が `depth_offset` のタスクの本当の深さの限度。`switch_task` が `Ctx` の上限に書く値と同じである
+/// (docs/spec/object-model.md の「タスクの切り替え」)。
+fn real_limit<M: Mode>(ctx: &Ctx<M>, depth_offset: usize) -> usize {
+    ctx.heap()
+        .control()
+        .limits()
+        .max_depth
+        .saturating_sub(depth_offset)
+}
+
+/// `Ctx` の深さの上限を、`switch_task` が書いた本当の限度から `limit` の状態の値に直す
+/// (docs/spec/vm.md の「タスクの上限」)。
+fn apply_limit<M: Mode>(ctx: &mut Ctx<M>, limit: Limit, depth_offset: usize) {
+    match limit {
+        Limit::Stops | Limit::Task => {}
+        Limit::Pending => ctx.set_depth_limit(0),
+        Limit::Aborting { .. } => {
+            let headroom = real_limit(ctx, depth_offset).saturating_add(LIMIT_HEADROOM);
+            ctx.set_depth_limit(headroom);
+        }
+    }
+}
+
+/// `Ctx::switch_task` の唯一の呼び口。`switch_task` は上限を本当の限度に書き直すので、続けて `limit` の状態を
+/// 当て直す。通さないと保留と猶予が切り替えで消える (docs/spec/vm.md の「タスクの上限」)。
+///
+/// # Safety
+/// `Ctx::switch_task` と同じ。
+unsafe fn switch_to<M: Mode>(
+    ctx: &mut Ctx<M>,
+    evv: Word,
+    worker: u32,
+    depth_offset: usize,
+    limit: Limit,
+) -> Word {
+    let saved = unsafe { ctx.switch_task(evv, worker, depth_offset) };
+    apply_limit(ctx, limit, depth_offset);
+    saved
+}
+
+/// 今動いているタスクに上限の旗が届いた。状態は `Limit::flagged` で決め、`Task` から保留に変わったときだけ上限を 0 に
+/// する。中断の間は着地の後に保留へ戻す印だけが付き、上限は猶予のままである。表に退いたタスクはこれを通らず、
+/// `mark_limited` が状態だけを変え、上限は入るときに `switch_to` が当てる (docs/spec/vm.md の「タスクの上限」)。
+fn mark_pending<M: Mode>(ctx: &mut Ctx<M>, task: &mut Task) {
+    let before = task.limit;
+    task.limit = before.flagged();
+    if before == Limit::Task {
+        apply_limit(ctx, task.limit, task.depth_offset);
+    }
+}
+
+/// 集める地点が受けた上限の旗を、そのセルの VM の `Task` に付ける。今のタスクは `mark_pending` で上限まで直す。表に
+/// 退いたタスクは状態だけを変え、上限は切り替えで入るときに `switch_to` が当てる。同じセルの `Task` は、待ちに入った
+/// 後で `Finish` へ戻る前のエントリの `Task` と次のエントリの `Task` の2つがありうるので、すべてに付ける。前のほうは
+/// 底の `try_all` の外にいて IO の evidence がないので、旗では起こさない。どれもなければ何もしない。`Finish` に着いた
+/// エントリの `Task` で、旗は次の `started` か `resumed` が返すか、セルと一緒に消える (docs/spec/vm.md の「タスクの上限」)。
+#[cold]
+#[inline(never)]
+fn mark_limited<P: Policy, M: Mode>(ctx: &mut Ctx<M>, task: &mut Task, sched: &mut Scheduler<P>) {
+    for cell in std::mem::take(&mut sched.limited) {
+        if task.cell == Some(cell) {
+            mark_pending(ctx, task);
+        }
+        for waiting in sched.tasks.iter_mut().flatten() {
+            if waiting.cell == Some(cell) {
+                waiting.limit = waiting.limit.flagged();
+            }
+        }
+    }
+}
+
+/// 巻き戻しが着地した。猶予を外し、起こす前に保留だったタスクは保留へ戻す (docs/spec/vm.md の「タスクの上限」)。
+fn landed<M: Mode>(ctx: &mut Ctx<M>, task: &mut Task) {
+    if let Limit::Aborting { pending } = task.limit {
+        if pending {
+            task.limit = Limit::Pending;
+            ctx.set_depth_limit(0);
+        } else {
+            task.limit = Limit::Task;
+            let real = real_limit(ctx, task.depth_offset);
+            ctx.set_depth_limit(real);
+        }
+    }
 }
 
 /// 安全点で `NOTICE` を見たときの集める地点。安全点の速い道に残さないように分けてある。計算の重いタスクが走る
@@ -502,10 +804,10 @@ fn safepoint<R: Exec>(
 #[inline(never)]
 fn collect_notice<R: Exec>(
     ctx: &mut Ctx<R::M>,
-    depth_offset: usize,
+    task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    collect::<R>(ctx, depth_offset, sched, true)
+    collect::<R>(ctx, task, sched, true)
 }
 
 /// タスクを実行する。`task` はエントリのタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときはエントリの
@@ -527,7 +829,8 @@ pub(crate) fn run<R: Exec>(
         }) => Ok(Exit::Spawn),
         Err(error) => {
             // 検査モードの前提は `wf` と `()` だけで、誤りの後でも成り立つ
-            let _abandoned = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
+            let _abandoned =
+                unsafe { switch_to(ctx, Word::UNIT, sched.main_worker, 0, Limit::Stops) };
             Err(error)
         }
     }
@@ -1107,6 +1410,7 @@ fn not_received() -> VmFault {
 /// 状態を手放し、表のスロットを手放して外す。
 /// 巻き戻しの間は物体を作らず、`target` は着地するフレームが所有し続けるので、解放した物体の番地が `target` と
 /// 取り違えられることはない。安全点を置かないのは、仕事が外すフレームの数で終わるためである。
+/// `Ok` で戻る所はどれも着地なので、そこでタスクの上限の猶予を外す (docs/spec/vm.md の「タスクの上限」)。
 fn unwind<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1118,11 +1422,17 @@ fn unwind<R: Exec>(
     let mut dst = None;
     loop {
         match task.pc {
-            FINISH if task.exit.is_some() => return Ok(()),
+            FINISH if task.exit.is_some() => {
+                landed(ctx, task);
+                return Ok(());
+            }
             FINISH => return Err(VmFault::Internal("an abort reached the bottom of the task")),
             // 子の中の handler は子の中に着地するので、子の境目に着くのは `child_abort` の巻き戻しだけである。宛先は
             // 不死のダミーで、どの着地の印とも合わない
-            CHILD_DONE if task.exit.is_none() && target == ctx.heap().dummy() => return Ok(()),
+            CHILD_DONE if task.exit.is_none() && target == ctx.heap().dummy() => {
+                landed(ctx, task);
+                return Ok(());
+            }
             CHILD_DONE => {
                 return Err(VmFault::Internal(
                     "an abort reached the boundary of a par child",
@@ -1150,6 +1460,7 @@ fn unwind<R: Exec>(
                         && ev == target
                     {
                         task.set(dst, ctx.heap().dummy());
+                        landed(ctx, task);
                         return Ok(());
                     }
                     // 外す handler の状態を、ここで取り出して手放す。状態は値なので退いた evidence にしか届かず、
@@ -1213,7 +1524,7 @@ fn par<R: Exec>(
     let parent_evv = unsafe {
         ctx.heap_mut().dup(fork_evv)?;
         ctx.heap_mut().share(fork_evv, child)?;
-        ctx.switch_task(fork_evv, task.worker, task.depth_offset)
+        switch_to(ctx, fork_evv, task.worker, task.depth_offset, task.limit)
     };
     let ret = task.pc;
     let j = sched.add_join(JoinNode {
@@ -1235,6 +1546,7 @@ fn par<R: Exec>(
         sched.max_depth,
         j,
         g,
+        task.limit.inherit(),
     );
     // 空いている worker があれば右の子をその受け箱に置き、なければこの worker の列に入れる
     // (docs/spec/vm.md の「fork」)
@@ -1439,7 +1751,8 @@ fn child_done<R: Exec>(
         join.right_outcome = Some(outcome);
         let right_worker = join.right_worker;
         // 子の残りの `evv` を、子の ID のまま手放す
-        let rest = unsafe { ctx.switch_task(Word::UNIT, right_worker, task.depth_offset) };
+        let rest =
+            unsafe { switch_to(ctx, Word::UNIT, right_worker, task.depth_offset, task.limit) };
         unsafe { ctx.heap_mut().decref(rest) }?;
         sched.wake_parent(j);
         return switch_away::<R>(code, ctx, task, sched, None);
@@ -1450,13 +1763,16 @@ fn child_done<R: Exec>(
     let right_done = join.right_outcome.is_some();
     // 境目のフレームを外す。組か起こし直しの結果は join が `par` の結果のスロットに書く
     task.pop_frame();
-    let rest = unsafe { ctx.switch_task(parent_evv, task.worker, task.depth_offset) };
+    let rest = unsafe { switch_to(ctx, parent_evv, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     if right_done {
         let at = complete_join::<R>(code, ctx, task, sched, j)?;
         let result = safepoint::<R>(code, ctx, task, sched);
         at_par(code, task, sched, at, result)
     } else {
+        // 待つ親を切り替えの前の集める地点で候補にしない。そのまま動き続けるときは `keep_running` が公開し直す
+        // (docs/spec/vm.md の「タスクとスケジュール」)
+        sched.unpublish();
         switch_away::<R>(code, ctx, task, sched, Some(TaskState::Waiting(j)))
     }
 }
@@ -1473,10 +1789,10 @@ fn placed_done<R: Exec>(
     j: JoinId,
     outcome: Outcome,
 ) -> Result<(), VmFault> {
-    let rest = unsafe { ctx.switch_task(Word::UNIT, task.worker, task.depth_offset) };
+    let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     // `()` を入れ替えるだけで、返る語も `()` である
-    let _unit = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
+    let _unit = unsafe { switch_to(ctx, Word::UNIT, sched.main_worker, 0, Limit::Stops) };
     let control = std::sync::Arc::clone(&sched.watcher.control);
     sched
         .run
@@ -1508,10 +1824,10 @@ fn job_done<R: Exec>(
         },
         Outcome::Error(_) => return Err(VmFault::Internal("a job ends with an error")),
     };
-    let rest = unsafe { ctx.switch_task(Word::UNIT, task.worker, task.depth_offset) };
+    let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     // `()` を入れ替えるだけで、返る語も `()` である
-    let _unit = unsafe { ctx.switch_task(Word::UNIT, sched.main_worker, 0) };
+    let _unit = unsafe { switch_to(ctx, Word::UNIT, sched.main_worker, 0, Limit::Stops) };
     let mut out = Vec::new();
     {
         here!(sched, post, here);
@@ -1543,14 +1859,14 @@ fn switch_away<R: Exec>(
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)。走れるタスクがなければ直後の `wait` が OS を見るので、ここでは
     // 見ない。走れるタスクが続くときは `POLL_EVERY` 回に1回だけ見る (docs/spec/vm.md の「時計と driver」)
-    collect::<R>(ctx, task.depth_offset, sched, false)?;
+    collect::<R>(ctx, task, sched, false)?;
     // 切り替えるたびに、ほかのスレッドから受けた解放が溜まっていれば取り込む。溜まっていなければ2回の読みで済む
     // (docs/spec/vm.md の「タスクとスケジュール」)
     ctx.reclaim_if_due();
     if !sched.run.ready_is_empty(sched.index) {
         sched.since_poll += 1;
         if sched.since_poll >= POLL_EVERY {
-            collect::<R>(ctx, task.depth_offset, sched, true)?;
+            collect::<R>(ctx, task, sched, true)?;
         }
     }
     // 走れるタスクがなければ、起こされるか次の期限か driver の完了まで待って集め直す。戻るたびに止める語を読む。
@@ -1561,6 +1877,7 @@ fn switch_away<R: Exec>(
         if let Some(TaskState::Waiting(j)) = keep
             && sched.join(j).right_outcome.is_some()
         {
+            sched.keep_running(task);
             let at = complete_join::<R>(code, ctx, task, sched, j)?;
             let result = safepoint::<R>(code, ctx, task, sched);
             return at_par(code, task, sched, at, result);
@@ -1573,6 +1890,7 @@ fn switch_away<R: Exec>(
                 sched.cells.lock().closed(root).unwrap_or(false),
                 "a run wakes before its scope closes"
             );
+            sched.keep_running(task);
             return Ok(());
         }
         if let Some(item) = sched.run.pick_ready(sched.index, &mut sched.policy) {
@@ -1580,16 +1898,24 @@ fn switch_away<R: Exec>(
         }
         // 眠る前に、ほかのスレッドから受けた解放が溜まっていれば取り込む (docs/spec/vm.md の「時計と driver」)
         ctx.reclaim_if_due();
+        sched.publish_idle();
         debug_assert!(
             sched.left.is_empty(),
             "an entry is left unsettled before a worker sleeps"
         );
         sched.idle_wait()?;
         // `PREEMPT` と `NOTICE` は捨てる。`NOTICE` の知らせは続く集める地点が集める。直前の `wait` が OS を見たので、
-        // 集める地点は見ない
-        poll(ctx, task.stack_depth(), sched.index)?;
+        // 集める地点は見ない。ここは関数のエントリでないので、タスクの中の上限は保留のまま次の安全点に任せる
+        // (docs/spec/vm.md の「タスクの上限」)
+        if matches!(
+            poll(ctx, task.stack_depth(), sched.index)?,
+            Polled::Limit { .. }
+        ) && matches!(task.limit, Limit::Stops | Limit::Aborting { .. })
+        {
+            return Err(VmFault::Stopped(Stop::DepthLimit));
+        }
         sched.since_poll = 0;
-        collect::<R>(ctx, task.depth_offset, sched, false)?;
+        collect::<R>(ctx, task, sched, false)?;
     };
     match resume::<R>(code, ctx, task, sched, next, keep)? {
         Some(at) => {
@@ -1617,13 +1943,35 @@ fn resume<R: Exec>(
         "a task to resume is not in the scheduler",
     ))?;
     let evv = std::mem::replace(&mut incoming.evv, Word::UNIT);
-    let saved = unsafe { ctx.switch_task(evv, incoming.worker, incoming.depth_offset) };
+    sched.end_slice(task);
+    let saved = unsafe {
+        switch_to(
+            ctx,
+            evv,
+            incoming.worker,
+            incoming.depth_offset,
+            incoming.limit,
+        )
+    };
     let mut prev = std::mem::replace(task, incoming);
     let prev_id = sched.current;
     sched.set_current(next);
+    // 入るタスクを公開し、実行待ちを離れたので `top` から消す。まだ動いていないエントリの `Task` は `enter` が公開する
+    // (docs/spec/vm.md の「タスクとスケジュール」)
+    sched.yielded = false;
+    sched.publish(task);
+    if let Some(cell) = task.cell
+        && !matches!(task.state, TaskState::Entry { .. })
+    {
+        sched.clear_top(cell);
+    }
     sched.note_depth(&prev);
     match keep {
         Some(state) => {
+            // フレームを持ったまま横取りされたタスクは実行待ちに入る
+            if let (Some(cell), TaskState::Ready) = (prev.cell, &state) {
+                sched.offer_top(cell, prev.counted);
+            }
             prev.evv = saved;
             prev.state = state;
             sched.tasks[prev_id] = Some(prev);
@@ -1677,14 +2025,18 @@ fn resume<R: Exec>(
 }
 
 /// 集める地点。登録表とほかの worker の知らせを `Scheduler::gather` が集め、待ちを外したタスクを再開する仕事を列の
-/// 後ろに積む。聞く者のいなかったシグナルの誤りも、仕事を積んでから返す (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 後ろに積み、受けた上限の旗を VM の `Task` に付ける。`task` は今動いているタスクである。聞く者のいなかった
+/// シグナルの誤りも、仕事を積んで旗を付けてから返す (docs/spec/vm.md の「タスクとスケジュール」)。
 fn collect<R: Exec>(
     ctx: &mut Ctx<R::M>,
-    depth_offset: usize,
+    task: &mut Task,
     sched: &mut Scheduler<R::P>,
     look: bool,
 ) -> Result<(), VmFault> {
-    let gathered = sched.gather(ctx, depth_offset, look);
+    let gathered = sched.gather(ctx, task.depth_offset, look);
+    if !sched.limited.is_empty() {
+        mark_limited(ctx, task, sched);
+    }
     if !sched.runnables.is_empty() {
         let mut out = std::mem::take(&mut sched.runnables);
         for run in out.drain(..) {
@@ -1726,7 +2078,7 @@ fn preempt<R: Exec>(
     );
     // 横取りの刻みごとに OS を見るので、計算の重いタスクが走る worker でも I/O の完了の遅れは刻みの長さまでである
     // (docs/spec/vm.md の「時計と driver」)
-    collect::<R>(ctx, task.depth_offset, sched, true)?;
+    collect::<R>(ctx, task, sched, true)?;
     loop {
         let next = sched.run.pick_ready(sched.index, &mut sched.policy);
         sched.policy.reload();
@@ -1743,8 +2095,13 @@ fn preempt<R: Exec>(
             return Ok(());
         };
         let polled = match poll(ctx, task.stack_depth(), sched.index) {
-            Ok(Polled::Collect) => {
-                collect::<R>(ctx, task.depth_offset, sched, true).map(|()| Polled::Collect)
+            Ok(Polled::Collect) => collect::<R>(ctx, task, sched, true).map(|()| Polled::Collect),
+            Ok(Polled::Limit { collect, switch }) => {
+                match limit_safepoint::<R>(code, ctx, task, sched, collect, switch) {
+                    Ok(true) => continue,
+                    Ok(false) => return Ok(()),
+                    Err(fault) => return at_par(code, task, sched, at, Err(fault)),
+                }
             }
             polled => polled,
         };
@@ -2077,6 +2434,7 @@ fn finish<R: Exec>(
     sched.take_slot(ctx, task.depth_offset, &mut out)?;
     {
         here!(sched, post, here);
+        // 終わりでは動くタスクがないので、旗を付ける `Task` もない
         cells::drain(
             &sched.cells,
             &here,
@@ -2084,6 +2442,7 @@ fn finish<R: Exec>(
             sched.driver.as_deref_mut(),
             task.depth_offset,
             &mut out,
+            &mut Vec::new(),
         )?;
     }
     if !out.is_empty() || sched.cells.lock().left_at_end() {
@@ -2179,6 +2538,8 @@ fn async_op<R: Exec>(
                 .wait(root, WaitToken(sched.current as u64), me)?;
             task.set(dst, handle);
             schedule(sched, run)?;
+            // 根のスコープを待つタスクも、待つ親と同じく切り替えの前に公開から外す
+            sched.unpublish();
             switch_away::<R>(code, ctx, task, sched, Some(TaskState::WaitingCell(root)))?;
         }
         Extern::AsyncFinishOk => {
@@ -2568,7 +2929,7 @@ fn async_op<R: Exec>(
             // 見ないと起きない同じ worker の読み手の先へ走り続けないためである。走れるタスクがなければ譲らずに続ける
             // (docs/spec/stdlib.md の「操作の予算」、docs/spec/vm.md の「時計と driver」)
             if step == cells::FAST_YIELD {
-                collect::<R>(ctx, task.depth_offset, sched, true)?;
+                collect::<R>(ctx, task, sched, true)?;
                 if sched.run.ready_is_empty(sched.index) {
                     step = sched.cells.lock().go_on(me)?;
                 }
@@ -2956,6 +3317,14 @@ fn enqueue<P: Policy>(
     run: Runnable,
     rescued: bool,
 ) -> Result<(), VmFault> {
+    // 今のタスクが自分の再開を積んだ。待ちに入っても実行待ちにいるので、今の数で `top` に出す
+    // (docs/spec/vm.md の「タスクとスケジュール」)
+    if let Runnable::Resume { cell, .. } | Runnable::ResumeIo { cell, .. } = run
+        && let Some(count) = sched.published_count(cell)
+    {
+        sched.offer_top(cell, count);
+        sched.yielded = true;
+    }
     let entry = match run {
         Runnable::Start {
             cell,
@@ -3068,7 +3437,8 @@ fn ready_task<M: Mode, P: Policy>(
 }
 
 /// エントリの `Task` が動き始める。始める仕事なら、閉包を始めたタスクの ID から今の ID へ戻す (`par` の join の
-/// `transfer_back` と同じ形)。引数をエントリのフレームの slot 0.. に書いてエントリの先頭へ進む。
+/// `transfer_back` と同じ形)。引数をエントリのフレームの slot 0.. に書いてエントリの先頭へ進む。セルにタスクの上限の
+/// 旗が立っていれば、保留にする (docs/spec/vm.md の「タスクの上限」)。
 fn enter<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -3081,18 +3451,29 @@ fn enter<R: Exec>(
     let cell = task
         .cell
         .ok_or(VmFault::Internal("an Async entry task has no cell"))?;
-    if argc == 1 {
-        let spawner = sched.cells.lock().started(cell)?;
+    let marks = if argc == 1 {
+        let (spawner, marks) = sched.cells.lock().started(cell)?;
         // 閉包は始めたタスクが印を付けて渡した参照で、このタスクだけが持つ
         unsafe { ctx.heap_mut().transfer_back(args[0], spawner) }?;
+        marks
     } else {
         // 引数が3つのエントリは `resume_io` で、操作の待ちからの再開である
-        let wake = sched
+        let (wake, marks) = sched
             .cells
             .lock()
             .resumed(cell, args[1].bits() as i64, argc == 3)?;
         args[1] = Word::from_bits(wake as usize);
+        marks
+    };
+    if marks.limit {
+        mark_pending(ctx, task);
     }
+    // タスクの数は待ちをまたいでセルが持ち、このエントリはそこから数え始める (docs/spec/vm.md の「タスクとスケジュール」)
+    task.counted = marks.bytes;
+    task.added = 0;
+    sched.mark = ctx.heap().control().taken(sched.index);
+    sched.publish(task);
+    sched.clear_top(cell);
     let argc = usize::from(argc);
     let base = task.base;
     task.stack[base..base + argc].copy_from_slice(&args[..argc]);
@@ -3134,8 +3515,10 @@ fn entry_finish<R: Exec>(
             "an Async task ends in the middle of a yield or a par",
         ));
     }
+    sched.end_slice(task);
+    sched.unpublish();
     // タスクの残りの `evv` を、タスクの ID のまま手放す
-    let rest = unsafe { ctx.switch_task(Word::UNIT, task.worker, task.depth_offset) };
+    let rest = unsafe { switch_to(ctx, Word::UNIT, task.worker, task.depth_offset, task.limit) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     if let Some(outcome) = task.outcome.take() {
         let mut out = Vec::new();
@@ -3154,10 +3537,9 @@ fn entry_finish<R: Exec>(
         for run in out {
             schedule(sched, run)?;
         }
+        sched.clear_top(cell);
     } else {
-        // 待ちに入ったタスクのフレームはここで終わった。持ち主の次の集める地点が `entries` を減らす
-        // (docs/spec/vm.md の「救済」)
-        sched.left.push(cell);
+        sched.left_entry(cell, task.added);
     }
     switch_away::<R>(code, ctx, task, sched, None)
 }
@@ -3277,6 +3659,12 @@ fn abort_to<R: Exec, const N: usize>(
     let Some(ev) = (unsafe { ctx.ev_find(number) })? else {
         return Ok(false);
     };
+    // 保留のタスクが着地までの節のエントリで旗によって失敗しないように、猶予に替えて保留を覚えておく
+    // (docs/spec/vm.md の「タスクの上限」)
+    if task.limit == Limit::Pending {
+        task.limit = Limit::Aborting { pending: true };
+        apply_limit(ctx, task.limit, task.depth_offset);
+    }
     // `ev_find` が `dup` した evidence を、節のエントリの引数として渡す。`ev_clause` はそれを借りる
     let clause = unsafe { ctx.ev_clause(ev, op) }?;
     let args = args(ctx);
@@ -3940,6 +4328,7 @@ mod tests {
     use eml_rt::Control;
 
     use crate::cells::{MailItem, Registry, Shared};
+    use crate::workers::{NO_CELL, cell_word};
 
     fn empty_task(max_depth: usize) -> Task {
         Task {
@@ -3962,6 +4351,9 @@ mod tests {
             outcome: None,
             placed: None,
             job: None,
+            limit: Limit::Stops,
+            counted: 0,
+            added: 0,
         }
     }
 
@@ -4035,6 +4427,915 @@ fn f(p.0: unit) -> unit {
         assert_eq!(sched.preemptions(), 0);
     }
 
+    type Checked = ExecWith<eml_rt::Checked, crate::Sequential>;
+
+    /// タスクの上限のテストの深さの上限。
+    const DEPTH: usize = 4096;
+
+    /// `text` を読み込み、深さの上限が `DEPTH` の `Ctx` と逐次の `Scheduler` を用意する。
+    fn limit_fixture(
+        text: &str,
+    ) -> (
+        CodeBase<eml_rt::Checked>,
+        Ctx<eml_rt::Checked>,
+        Scheduler<crate::Sequential>,
+    ) {
+        limit_fixture_with(text, crate::Sequential)
+    }
+
+    /// `limit_fixture` の、方針を選べる形。
+    fn limit_fixture_with<P: Policy>(
+        text: &str,
+        policy: P,
+    ) -> (
+        CodeBase<eml_rt::Checked>,
+        Ctx<eml_rt::Checked>,
+        Scheduler<P>,
+    ) {
+        let limits = eml_rt::Limits {
+            max_depth: DEPTH,
+            ..eml_rt::Limits::default()
+        };
+        fixture_with_limits(text, policy, limits)
+    }
+
+    /// `limit_fixture_with` の、上限を選べる形。
+    fn fixture_with_limits<P: Policy>(
+        text: &str,
+        policy: P,
+        limits: eml_rt::Limits,
+    ) -> (
+        CodeBase<eml_rt::Checked>,
+        Ctx<eml_rt::Checked>,
+        Scheduler<P>,
+    ) {
+        let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+        let control = Arc::new(Control::new(limits));
+        let mut code = CodeBase::<eml_rt::Checked>::new(Arc::clone(&control));
+        code.load(&program).unwrap();
+        let (host, _) = crate::capture_host(Default::default());
+        let ctx = Ctx::new(Arc::clone(&control), host);
+        let driver = eml_io::TestDriver::new(None);
+        let clock = crate::driver::RunClock::Virtual(driver.clock());
+        let sched = Scheduler::new(
+            policy,
+            Box::new(driver),
+            Arc::new(crate::workers::Run::new(1, None, clock, Arc::default())),
+            control,
+            ctx.heap().worker(),
+            DEPTH,
+            Arc::new(Shared::new(Registry::new(Vec::new(), 1))),
+        );
+        (code, ctx, sched)
+    }
+
+    fn function(code: &CodeBase<eml_rt::Checked>, name: &str) -> u32 {
+        code.index.functions[name]
+    }
+
+    const CALL: &str = "\
+fn main() -> unit {
+  let u.0: unit = call f(())
+  return u.0
+}
+fn f(p.0: unit) -> unit {
+  return p.0
+}
+";
+
+    /// どの関数も、先頭の位置にエントリの行を持つ。RC の対象の引数を持たない関数と、verifier の拒む関数の行は空である
+    /// (docs/spec/vm.md の「巻き戻しの表」)。
+    #[test]
+    fn every_function_has_an_entry_row_at_its_start() {
+        let text = "\
+fn main() -> unit {
+  let n.0: int = call count(3)
+  return ()
+}
+fn count(n.0: int) -> int {
+  return n.0
+}
+fn keep(a.0: obj, n.1: int) -> unit {
+  decref a.0
+  return ()
+}
+fn leaks(a.0: obj) -> unit {
+  return ()
+}
+";
+        let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+        assert!(eml_lir::verify(&program).is_err(), "`leaks` is rejected");
+        let (code, _, _) = limit_fixture(text);
+        for (name, slots) in [
+            ("main", vec![]),
+            ("count", vec![]),
+            ("keep", vec![(0, 1)]),
+            ("leaks", vec![]),
+        ] {
+            let start = code.functions[function(&code, name) as usize].start;
+            let row = code.tables.unwind_at(start).expect(name);
+            assert_ne!(row.entry, UnwindEntry::No, "{name}");
+            assert_eq!(row.slots, slots, "{name}");
+        }
+    }
+
+    /// タスクの外で深さの上限を超えたら、run を止める。
+    #[test]
+    fn a_depth_hit_outside_a_task_stops_the_run() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.pc = code.functions[function(&code, "f") as usize].start;
+        ctx.set_depth_limit(0);
+        let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+        assert!(
+            matches!(result, Err(VmFault::Stopped(Stop::DepthLimit))),
+            "{result:?}"
+        );
+    }
+
+    /// 呼び出しの行の位置 (戻りの後) はエントリでないので、タスクの中の超過は保留のまま続ける。
+    #[test]
+    fn a_hit_after_a_return_stays_pending() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let main = code.functions[function(&code, "main") as usize].start;
+        let &(after_call, _) = code
+            .tables
+            .unwinds
+            .iter()
+            .find(|(pc, row)| *pc > main && row.entry == UnwindEntry::No)
+            .unwrap();
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.limit = Limit::Task;
+        task.pc = after_call;
+        ctx.set_depth_limit(0);
+        let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(task.limit, Limit::Task);
+        assert_eq!(ctx.depth_limit(), 0);
+    }
+
+    /// 自己末尾呼び出しの先頭は関数のエントリなので起こそうとするが、IO の handler がなければ旗を捨てずに保留のまま
+    /// 続ける。
+    #[test]
+    fn a_pending_task_without_an_io_handler_keeps_the_flag() {
+        let text = "\
+fn main() -> int {
+  let n.0: int = call spin(3)
+  return n.0
+}
+fn spin(n.0: int) -> int {
+  switch n.0 { 0 -> b1, _ -> b2 }
+b1:
+  return 0
+b2:
+  let m.1: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  tail call spin(m.1)
+}
+";
+        let (code, mut ctx, mut sched) = limit_fixture(text);
+        let spin = function(&code, "spin");
+        assert!(
+            code.tables
+                .code
+                .iter()
+                .any(|op| matches!(op, Op::TailSelf { .. })),
+            "`spin` jumps back to its start"
+        );
+        let mut task = Task::new(&code, spin, DEPTH);
+        assert_eq!(task.pc, code.functions[spin as usize].start);
+        task.limit = Limit::Pending;
+        ctx.set_depth_limit(0);
+        let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(ctx.depth_limit(), 0);
+    }
+
+    /// `main` が `compose$` を、`compose$` が `prompt$` を呼ぶ。名前だけが EP の補助の関数のもので、本体は空に近い。
+    const HELPERS: &str = "\
+fn main() -> unit {
+  let u.0: unit = call \"compose$\"(())
+  return u.0
+}
+fn \"compose$\"(p.0: unit) -> unit {
+  let u.1: unit = call \"prompt$\"(p.0)
+  return u.1
+}
+fn \"prompt$\"(p.0: unit) -> unit {
+  return p.0
+}
+";
+
+    /// EP の補助の関数のエントリでは、旗でも本当の深さの超過でも起こさず、状態を変えずに保留のまま続ける。そこの `evv`
+    /// はプログラムの地点の `evv` でないためである (docs/spec/vm.md の「タスクの上限」)。
+    #[test]
+    fn a_hit_at_a_helper_entry_stays_pending() {
+        let (code, mut ctx, mut sched) = limit_fixture(HELPERS);
+        for name in ["compose$", "prompt$"] {
+            let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+            task.worker = ctx.heap().worker();
+            task.pc = code.functions[function(&code, name) as usize].start;
+            task.limit = Limit::Pending;
+            ctx.set_depth_limit(0);
+            let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+            assert!(result.is_ok(), "{name}: {result:?}");
+            assert_eq!(task.limit, Limit::Pending, "{name}");
+            assert_eq!(ctx.depth_limit(), 0, "{name}");
+        }
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.pc = code.functions[function(&code, "compose$") as usize].start;
+        task.limit = Limit::Task;
+        // 起点を上げて本当の超過にする
+        task.depth_offset = DEPTH - 1;
+        assert!(task.stack_depth() > real_limit(&ctx, task.depth_offset));
+        ctx.set_depth_limit(0);
+        let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(task.limit, Limit::Task);
+        assert_eq!(ctx.depth_limit(), 0);
+    }
+
+    /// 補助の関数のエントリでも、深さが本当の限度と猶予の和を超えていれば run を止める。起こすのを延ばしても限度は
+    /// なくならない。起こすエントリ (`main`) でも、起こさずに run を止める (docs/spec/vm.md の「タスクの上限」)。
+    #[test]
+    fn a_helper_entry_beyond_the_headroom_stops_the_run() {
+        let (code, mut ctx, mut sched) = limit_fixture(HELPERS);
+        for name in ["compose$", "main"] {
+            for limit in [Limit::Task, Limit::Pending] {
+                let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+                task.worker = ctx.heap().worker();
+                task.pc = code.functions[function(&code, name) as usize].start;
+                task.limit = limit;
+                task.base = DEPTH + LIMIT_HEADROOM;
+                ctx.set_depth_limit(0);
+                let result = limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+                assert!(
+                    matches!(result, Err(VmFault::Stopped(Stop::DepthLimit))),
+                    "{name}, {limit:?}: {result:?}"
+                );
+            }
+        }
+    }
+
+    /// エントリの行が起こすのを延ばすのは、EP の補助の関数の6つの名前 (`mask$[..]` は項目の並びごとに1つ) だけである。
+    /// 名前の似たほかの関数のエントリは起こす (docs/spec/vm.md の「巻き戻しの表」)。
+    #[test]
+    fn only_the_ep_helpers_defer() {
+        let defers = [
+            "id$",
+            "compose$",
+            "prompt$",
+            "resume$",
+            "rewind$",
+            "mask$[State]",
+            "mask$[Yield@1]",
+        ];
+        let raises = ["f", "$cont$@[X]", "fork$E.op", "compose$x"];
+        let text: String = defers
+            .iter()
+            .chain(&raises)
+            .map(|name| format!("fn \"{name}\"(p.0: unit) -> unit {{\n  return p.0\n}}\n"))
+            .collect();
+        let (code, _, _) = limit_fixture(&text);
+        for (names, kind) in [
+            (&defers[..], UnwindEntry::Defers),
+            (&raises[..], UnwindEntry::Raises),
+        ] {
+            for name in names {
+                let start = code.functions[function(&code, name) as usize].start;
+                let row = code.tables.unwind_at(start).expect(name);
+                assert_eq!(row.entry, kind, "{name}");
+            }
+        }
+    }
+
+    /// 猶予の間に深さの上限を超えたら、安全点が run を止める。
+    #[test]
+    fn a_depth_hit_while_aborting_stops_the_run() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.pc = code.functions[function(&code, "f") as usize].start;
+        task.limit = Limit::Aborting { pending: true };
+        ctx.set_depth_limit(0);
+        let result = safepoint::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+        assert!(
+            matches!(result, Err(VmFault::Stopped(Stop::DepthLimit))),
+            "{result:?}"
+        );
+    }
+
+    /// `Panic` の `try_panic` と `prompt$` を evidence passing の出力の形で書いたプログラム。`boom` が `panic` する。
+    const CAUGHT_PANIC: &str = "\
+effect Prelude.Panic { never panicked(obj) -> never }
+fn main() -> unit {
+  let c.0: tobj = box 42
+  let r.1: tobj = call try_panic(&boom, c.0)
+  decref r.1
+  return ()
+}
+fn boom(p.0: unit) -> tobj {
+  let m.1: obj = const \"boom\"
+  let r.2: tobj = extern Prelude.panic(m.1)
+  return r.2
+}
+fn try_panic(f.0: tobj, c.1: tobj) -> tobj {
+  let w.2: tobj = prim evv_get()
+  dup w.2
+  let ev.3: obj = prim ev_new[Prelude.Panic](c.1, w.2)
+  let u.4: unit = prim ev_set_clause[Prelude.Panic.panicked](ev.3, &panicked$entry)
+  dup ev.3
+  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let u.6: unit = prim evv_set(w.5)
+  let x.7: tobj poly = yields apply f.0(()) prompt ev.3
+  tail call prompt$(ev.3, &return$, x.7)
+}
+clause Prelude.Panic.panicked fn panicked$entry(e.0: obj, m.1: obj) -> obj poly {
+  decref m.1
+  let u.2: unit = prim yield_abort(e.0, &panicked$clause)
+  let d.3: obj poly = prim dummy()
+  return d.3
+}
+fn panicked$clause(c.0: tobj) -> tobj {
+  return c.0
+}
+yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: tobj = prim ev_take_evv(ev.0)
+  let u.4: unit = prim evv_set(w.3)
+  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
+b1:
+  let st.6: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply ret.1(x.2, st.6)
+b2:
+  let u.8: unit = drop x.2
+  let k.9: tobj poly = prim yield_cont_take()
+  let c.10: tobj poly = prim yield_finish()
+  let st.11: tobj poly = prim ev_take_state(ev.0)
+  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  tail yields apply c.10(k.12, st.11)
+b3:
+  let u.14: unit = drop ret.1
+  let u.15: unit = drop x.2
+  let c.16: tobj poly = prim yield_finish()
+  let st.17: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply c.16(st.17)
+b4:
+  let u.19: unit = drop x.2
+  let st.20: tobj poly = prim ev_take_state(ev.0)
+  let k.21: tobj poly = prim yield_cont_take()
+  let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+  let u.23: unit = prim yield_cont_set(k.22)
+  let d.24: obj poly = prim dummy()
+  return d.24
+}
+yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: obj = prim ev_renew(ev.0, s.4)
+  decref ev.0
+  let w.6: tobj = prim evv_get()
+  dup e.5
+  let w.7: tobj = prim evv_push(w.6, e.5)
+  let u.8: unit = prim evv_set(w.7)
+  let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
+  tail call prompt$(e.5, ret.1, x.9)
+}
+yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+}
+fn return$(r.0: tobj, s.1: unit) -> tobj {
+  return r.0
+}
+";
+
+    /// 保留のタスクの `Panic` の中断は猶予に替わり、着地すると保留と毒の上限に戻る。
+    #[test]
+    fn a_pending_task_returns_to_pending_after_a_panic_lands() {
+        let program = eml_lir::parse(CAUGHT_PANIC).unwrap_or_else(|error| panic!("{error}"));
+        eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+        let (code, mut ctx, mut sched) = limit_fixture(CAUGHT_PANIC);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.limit = Limit::Task;
+        let mut counts = crate::RunCounts::default();
+        let mut step_until = |task: &mut Task,
+                              ctx: &mut Ctx<eml_rt::Checked>,
+                              done: &dyn Fn(&Task) -> bool| {
+            for _ in 0..1000 {
+                if done(task) {
+                    return;
+                }
+                let pc = task.pc;
+                if let Err(fault) = step::<Checked>(&code, ctx, task, &mut sched, &mut counts, pc) {
+                    panic!("{fault:?}");
+                }
+            }
+            panic!("the program does not reach the expected state");
+        };
+        let boom = code.functions[function(&code, "boom") as usize].start;
+        step_until(&mut task, &mut ctx, &|task| task.pc == boom);
+        task.limit = Limit::Pending;
+        ctx.set_depth_limit(0);
+        step_until(&mut task, &mut ctx, &|task| task.limit != Limit::Pending);
+        assert_eq!(task.limit, Limit::Aborting { pending: true });
+        assert_eq!(ctx.depth_limit(), DEPTH + LIMIT_HEADROOM);
+        step_until(&mut task, &mut ctx, &|task| {
+            !matches!(task.limit, Limit::Aborting { .. })
+        });
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(ctx.depth_limit(), 0);
+    }
+
+    const CAUGHT_IO: &str = "\
+effect Prelude.IO { never io_failed(enum, obj) -> never }
+fn main() -> unit {
+  let c.0: tobj = box 42
+  let r.1: tobj = call try_io(&boom, c.0)
+  decref r.1
+  return ()
+}
+fn boom(p.0: unit) -> tobj {
+  let r.1: tobj = call leaf(())
+  return r.1
+}
+fn leaf(p.0: unit) -> tobj {
+  let b.1: tobj = box 1
+  return b.1
+}
+fn try_io(f.0: tobj, c.1: tobj) -> tobj {
+  let w.2: tobj = prim evv_get()
+  dup w.2
+  let ev.3: obj = prim ev_new[Prelude.IO](c.1, w.2)
+  let u.4: unit = prim ev_set_clause[Prelude.IO.io_failed](ev.3, &io_failed$entry)
+  dup ev.3
+  let w.5: tobj = prim evv_push(w.2, ev.3)
+  let u.6: unit = prim evv_set(w.5)
+  let x.7: tobj poly = yields apply f.0(()) prompt ev.3
+  tail call prompt$(ev.3, &return$, x.7)
+}
+clause Prelude.IO.io_failed fn io_failed$entry(e.0: obj, k.1: enum, m.2: obj) -> obj poly {
+  decref m.2
+  let u.3: unit = prim yield_abort(e.0, &io_failed$clause)
+  let d.4: obj poly = prim dummy()
+  return d.4
+}
+fn io_failed$clause(c.0: tobj) -> tobj {
+  return c.0
+}
+yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: tobj = prim ev_take_evv(ev.0)
+  let u.4: unit = prim evv_set(w.3)
+  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
+b1:
+  let st.6: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply ret.1(x.2, st.6)
+b2:
+  let u.8: unit = drop x.2
+  let k.9: tobj poly = prim yield_cont_take()
+  let c.10: tobj poly = prim yield_finish()
+  let st.11: tobj poly = prim ev_take_state(ev.0)
+  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  tail yields apply c.10(k.12, st.11)
+b3:
+  let u.14: unit = drop ret.1
+  let u.15: unit = drop x.2
+  let c.16: tobj poly = prim yield_finish()
+  let st.17: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply c.16(st.17)
+b4:
+  let u.19: unit = drop x.2
+  let st.20: tobj poly = prim ev_take_state(ev.0)
+  let k.21: tobj poly = prim yield_cont_take()
+  let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+  let u.23: unit = prim yield_cont_set(k.22)
+  let d.24: obj poly = prim dummy()
+  return d.24
+}
+yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: obj = prim ev_renew(ev.0, s.4)
+  decref ev.0
+  let w.6: tobj = prim evv_get()
+  dup e.5
+  let w.7: tobj = prim evv_push(w.6, e.5)
+  let u.8: unit = prim evv_set(w.7)
+  let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
+  tail call prompt$(e.5, ret.1, x.9)
+}
+yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+}
+fn return$(r.0: tobj, s.1: unit) -> tobj {
+  return r.0
+}
+";
+
+    /// 本当の超過で `ResourceLimit` を起こしても、セルの数と一緒にタスクの数を 0 に戻し、区間の始めを進めて公開し直す。
+    /// 旗で起こしたときと同じにして、セルとタスクの数をずらさない。
+    #[test]
+    fn a_raise_for_a_real_overrun_resets_the_count() {
+        let program = eml_lir::parse(CAUGHT_IO).unwrap_or_else(|error| panic!("{error}"));
+        eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+        let (code, mut ctx, mut sched) = limit_fixture(CAUGHT_IO);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        let mut counts = crate::RunCounts::default();
+        let leaf = code.functions[function(&code, "leaf") as usize].start;
+        for _ in 0..1000 {
+            if task.pc == leaf {
+                break;
+            }
+            let pc = task.pc;
+            if let Err(fault) =
+                step::<Checked>(&code, &mut ctx, &mut task, &mut sched, &mut counts, pc)
+            {
+                panic!("{fault:?}");
+            }
+        }
+        assert_eq!(task.pc, leaf, "the program does not reach `leaf`");
+        take_pages(&mut ctx);
+        task.counted = 700;
+        task.added = 70;
+        sched.mark = 0;
+        sched.publish(&task);
+        // セルに旗が立っていても `Task` にはまだ届いていない。起こすとこの旗も消費する
+        assert_eq!(cells::limit_task(&sched.cells, cell), Some(cell));
+        // 起点を上げて本当の超過にする
+        task.depth_offset = DEPTH - 1;
+        limit_hit::<Checked>(&code, &mut ctx, &mut task, &mut sched).unwrap();
+        assert_eq!(task.limit, Limit::Aborting { pending: false });
+        let now = ctx.heap().control().taken(0);
+        assert_eq!((task.counted, task.added, sched.mark), (0, 0, now));
+        let slot = &sched.run.slots[0];
+        assert_eq!(
+            (
+                slot.current.load(Ordering::Relaxed),
+                slot.bytes.load(Ordering::Relaxed),
+                slot.mark.load(Ordering::Relaxed),
+            ),
+            (cell_word(cell), 0, now)
+        );
+    }
+
+    /// 眠った後で同じタスクが動き続けるときは、区間を閉じて公開し直す。眠る前に `current` を消したためである。
+    #[test]
+    fn a_task_that_keeps_running_after_a_sleep_is_published_again() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.cell = Some(cell);
+        task.counted = 40;
+        sched.mark = ctx.heap().control().taken(0);
+        sched.publish(&task);
+        sched.publish_idle();
+        assert_eq!(sched.run.slots[0].current.load(Ordering::Relaxed), NO_CELL);
+        let grown = take_pages(&mut ctx);
+        sched.keep_running(&mut task);
+        let slot = &sched.run.slots[0];
+        assert_eq!(
+            (
+                slot.current.load(Ordering::Relaxed),
+                slot.bytes.load(Ordering::Relaxed),
+                slot.mark.load(Ordering::Relaxed),
+            ),
+            (cell_word(cell), 40 + grown, ctx.heap().control().taken(0))
+        );
+        assert_eq!(slot.seq.load(Ordering::Relaxed) % 2, 0);
+    }
+
+    /// 柔らかい上限 64 KiB、硬い上限 64 MiB の、逐次の方針の用意。
+    fn soft_fixture() -> (
+        CodeBase<eml_rt::Checked>,
+        Ctx<eml_rt::Checked>,
+        Scheduler<crate::Sequential>,
+    ) {
+        let limits = eml_rt::Limits {
+            max_depth: DEPTH,
+            max_bytes: 64 << 20,
+            soft_bytes: 64 << 10,
+            ..eml_rt::Limits::default()
+        };
+        fixture_with_limits(CALL, crate::Sequential, limits)
+    }
+
+    /// 決定的な方針では、集める地点が柔らかい上限を見て、公開された今のタスクに旗を立てる。旗の項は同じ集める地点が
+    /// 取り、今のタスクを保留にする。閾値は進む。
+    #[test]
+    fn a_gathered_policy_flags_in_gather() {
+        let (code, mut ctx, mut sched) = soft_fixture();
+        let control = Arc::clone(ctx.heap().control());
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        sched.mark = control.taken(0);
+        sched.publish(&task);
+        let held = ctx.fresh_string(&"x".repeat(200 << 10));
+        assert!(control.pressure().is_some());
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(ctx.depth_limit(), 0);
+        assert!(control.pressure().is_none(), "the threshold does not move");
+        assert!(sched.cells.mail.take(0).is_empty());
+        unsafe { ctx.heap_mut().decref(held) }.unwrap();
+    }
+
+    /// 待ちに入ったエントリの `Task` は、`Finish` の切り替えの前の集める地点で候補にならない。区間を閉じた直後に公開を
+    /// 外すためである。候補がないので旗は立たず、閾値は進む。
+    #[test]
+    fn an_entry_that_waits_is_not_chosen_in_the_gather_of_its_switch() {
+        let (code, mut ctx, mut sched) = soft_fixture();
+        let control = Arc::clone(ctx.heap().control());
+        let cell = cells::placed_task(&sched.cells, 0);
+        sched.cells.lock().started(cell).unwrap();
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        let mut other = Task::new(&code, function(&code, "main"), DEPTH);
+        other.worker = ctx.heap().worker();
+        other.state = TaskState::Ready;
+        let other_id = sched.add_task(other);
+        sched.run.push_ready(0, Ready::Task(other_id));
+        sched.mark = control.taken(0);
+        sched.publish(&task);
+        let held = ctx.fresh_string(&"x".repeat(200 << 10));
+        assert!(control.pressure().is_some());
+        entry_finish::<Checked>(&code, &mut ctx, &mut task, &mut sched).unwrap();
+        assert!(
+            task.cell.is_none(),
+            "the switch does not reach the other task"
+        );
+        // 旗の項は同じ集める地点の mail の処理が取るので、mail と `limited` は選ばれても空になる。セルの旗で見る
+        assert!(
+            !cells::limit_flag(&sched.cells, cell),
+            "a waiting task is chosen"
+        );
+        assert_eq!(sched.run.slots[0].current.load(Ordering::Relaxed), NO_CELL);
+        unsafe { ctx.heap_mut().decref(held) }.unwrap();
+    }
+
+    /// 左の子が終わって join で右の子を待つ `par` の親は、待ちに入る切り替えの集める地点で候補にならない。待ちに入る
+    /// 直前に公開を外すためである。閾値を越えたまま集める地点に来ても、旗は立たない。
+    #[test]
+    fn a_parent_waiting_on_its_join_is_not_chosen_in_the_gather_of_its_switch() {
+        let (code, mut ctx, mut sched) = soft_fixture();
+        let control = Arc::clone(ctx.heap().control());
+        let cell = cells::placed_task(&sched.cells, 0);
+        sched.cells.lock().started(cell).unwrap();
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        let mut right = Task::new(&code, function(&code, "main"), DEPTH);
+        right.worker = ctx.heap().worker();
+        right.state = TaskState::Ready;
+        let right = sched.add_task(right);
+        let j = sched.add_join(JoinNode {
+            parent: sched.current,
+            right,
+            right_worker: ctx.heap().worker(),
+            parent_evv: Word::UNIT,
+            left: None,
+            right_outcome: None,
+            ret: task.pc,
+            dst: 0,
+            orphan: false,
+        });
+        sched.run.push_ready(0, Ready::Task(right));
+        let base = task.push_frame(task.pc, 0, BOUNDARY_SIZE);
+        task.stack[base + 1] = Word::from_bits(j);
+        task.boundaries.push(j);
+        sched.mark = control.taken(0);
+        sched.publish(&task);
+        let held = ctx.fresh_string(&"x".repeat(200 << 10));
+        assert!(control.pressure().is_some());
+        child_done::<Checked>(
+            &code,
+            &mut ctx,
+            &mut task,
+            &mut sched,
+            Outcome::Value(Word::imm(1)),
+        )
+        .unwrap();
+        assert!(
+            task.cell.is_none(),
+            "the switch does not reach the right child"
+        );
+        assert!(
+            !cells::limit_flag(&sched.cells, cell),
+            "a waiting parent is chosen"
+        );
+        unsafe { ctx.heap_mut().decref(held) }.unwrap();
+    }
+
+    /// `par` の右の子は、タスクの外の親からは `Stops` を、タスクの中の親からは保留も猶予もない `Task` を受け継ぐ。
+    #[test]
+    fn a_right_child_inherits_the_kind_of_its_parent() {
+        for (parent, child) in [
+            (Limit::Stops, Limit::Stops),
+            (Limit::Task, Limit::Task),
+            (Limit::Pending, Limit::Task),
+            (Limit::Aborting { pending: true }, Limit::Task),
+            (Limit::Aborting { pending: false }, Limit::Task),
+        ] {
+            let right = Task::right_child(
+                0,
+                0,
+                Word::UNIT,
+                0,
+                DEPTH,
+                JOB,
+                Word::UNIT,
+                parent.inherit(),
+            );
+            assert_eq!(right.limit, child, "{parent:?}");
+        }
+    }
+
+    /// 保留のタスクの安全点で `NOTICE` も立っていれば、上限を扱う前に知らせを集める。`poll` し直す前に下ろしたビットの
+    /// 知らせを捨てないためである。聞く者のいないシグナルを集めて run を止めることで、集めたことを確かめる。
+    #[test]
+    fn a_pending_task_collects_a_notice_at_its_safepoint() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let control = Arc::clone(ctx.heap().control());
+        let main = code.functions[function(&code, "main") as usize].start;
+        let &(after_call, _) = code
+            .tables
+            .unwinds
+            .iter()
+            .find(|(pc, row)| *pc > main && row.entry == UnwindEntry::No)
+            .unwrap();
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.limit = Limit::Pending;
+        task.pc = after_call;
+        ctx.set_depth_limit(0);
+        control.defer(Control::TERMINATE);
+        assert_eq!(control.claim_signals(), Control::TERMINATE);
+        sched.cells.mail.push(MailItem::Signal(Control::TERMINATE));
+        control.notice(0);
+        let result = safepoint::<Checked>(&code, &mut ctx, &mut task, &mut sched);
+        assert!(result.is_err(), "the unheard signal stops the run");
+        assert_eq!(control.pending_signals(), 0);
+        assert_eq!(control.worker_bits(0) & Control::NOTICE, 0);
+    }
+
+    /// 予算で横取りする方針は、深さの上限を超えたままの安全点でも予算を数え、使い切れば横取りを求める。
+    #[test]
+    fn a_pending_task_still_spends_the_preemption_budget() {
+        let (code, mut ctx, mut sched) = limit_fixture_with(CALL, crate::Seeded::new(1));
+        let main = code.functions[function(&code, "main") as usize].start;
+        let &(after_call, _) = code
+            .tables
+            .unwinds
+            .iter()
+            .find(|(pc, row)| *pc > main && row.entry == UnwindEntry::No)
+            .unwrap();
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.limit = Limit::Pending;
+        task.pc = after_call;
+        ctx.set_depth_limit(0);
+        type Seeded = ExecWith<eml_rt::Checked, crate::Seeded>;
+        let switches = (0..16)
+            .map(|_| {
+                limit_safepoint::<Seeded>(&code, &mut ctx, &mut task, &mut sched, false, false)
+                    .unwrap()
+            })
+            .position(|switch| switch);
+        assert!(
+            switches.is_some(),
+            "the budget of at most 16 safepoints runs out"
+        );
+        assert_eq!(task.limit, Limit::Pending);
+    }
+
+    /// 旗を受けると、`Task` は保留になり、中断の間は着地の後に保留へ戻す印だけが付いて猶予の上限は変わらない。
+    #[test]
+    fn mark_pending_keeps_the_abort_bracket() {
+        let (code, mut ctx, _) = limit_fixture(CALL);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        for (before, after, limit) in [
+            (Limit::Task, Limit::Pending, 0),
+            (Limit::Pending, Limit::Pending, 0),
+            (
+                Limit::Aborting { pending: false },
+                Limit::Aborting { pending: true },
+                DEPTH + LIMIT_HEADROOM,
+            ),
+            (
+                Limit::Aborting { pending: true },
+                Limit::Aborting { pending: true },
+                DEPTH + LIMIT_HEADROOM,
+            ),
+            (Limit::Stops, Limit::Stops, DEPTH),
+        ] {
+            task.limit = before;
+            ctx.set_depth_limit(DEPTH);
+            apply_limit(&mut ctx, before, 0);
+            mark_pending(&mut ctx, &mut task);
+            assert_eq!(task.limit, after, "{before:?}");
+            assert_eq!(ctx.depth_limit(), limit, "{before:?}");
+        }
+    }
+
+    /// 集める地点が mail の上限の旗を受けると、表に退いたタスクは状態だけが保留になり、`Ctx` の上限は今のタスクの
+    /// ままである。今のタスクの旗では、今のタスクが保留になって上限が 0 になる。
+    #[test]
+    fn collect_marks_the_task_of_a_limited_cell() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let current = cells::task_on(&sched.cells, 0, 0, false);
+        let waiting = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(current);
+        task.limit = Limit::Task;
+        let mut other = Task::new(&code, function(&code, "main"), DEPTH);
+        other.cell = Some(waiting);
+        other.limit = Limit::Task;
+        let id = sched.add_task(other);
+        ctx.set_depth_limit(DEPTH);
+        sched.cells.mail.push(MailItem::Limit(waiting));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(sched.tasks[id].as_ref().unwrap().limit, Limit::Pending);
+        assert_eq!(task.limit, Limit::Task);
+        assert_eq!(ctx.depth_limit(), DEPTH);
+        sched.cells.mail.push(MailItem::Limit(current));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(ctx.depth_limit(), 0);
+        assert!(sched.limited.is_empty());
+    }
+
+    /// 同じセルの `Task` が今のタスクと表の両方にあれば、どちらにも旗を付ける。待ちに入った後で `Finish` へ戻る前の
+    /// エントリの `Task` と次のエントリの `Task` が並びうるためである。上限を 0 にするのは今のタスクの分だけである。
+    #[test]
+    fn collect_marks_every_task_of_the_cell() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        let mut other = Task::new(&code, function(&code, "main"), DEPTH);
+        other.cell = Some(cell);
+        other.limit = Limit::Aborting { pending: false };
+        let id = sched.add_task(other);
+        ctx.set_depth_limit(DEPTH);
+        sched.cells.mail.push(MailItem::Limit(cell));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(
+            sched.tasks[id].as_ref().unwrap().limit,
+            Limit::Aborting { pending: true }
+        );
+        assert_eq!(ctx.depth_limit(), 0);
+    }
+
+    /// ほかの worker が回した `Notice::Limit` は、集める地点が受け箱から取り、旗がまだ立っていれば今のタスクに付ける。
+    /// 届く前に旗が下りていれば付けない。
+    #[test]
+    fn collect_marks_the_task_of_a_forwarded_limit_only_while_flagged() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let control = Arc::clone(ctx.heap().control());
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        ctx.set_depth_limit(DEPTH);
+        assert_eq!(cells::limit_task(&sched.cells, cell), Some(cell));
+        sched.cells.lock().clear_limit(cell).unwrap();
+        sched.run.send(&control, 0, Notice::Limit(cell));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Task);
+        assert_eq!(ctx.depth_limit(), DEPTH);
+        assert_eq!(cells::limit_task(&sched.cells, cell), Some(cell));
+        sched.run.send(&control, 0, Notice::Limit(cell));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(ctx.depth_limit(), 0);
+    }
+
+    /// `Stops` でないタスクのスタックの容量の上限は、中断の間の猶予も覆う。
+    #[test]
+    fn a_task_stack_limit_covers_the_headroom() {
+        assert_eq!(task_stack_limit(1000, Limit::Stops), stack_limit(1000));
+        assert_eq!(
+            task_stack_limit(1000, Limit::Task),
+            stack_limit(1000) + LIMIT_HEADROOM
+        );
+    }
+
     #[test]
     fn the_stack_limit_is_the_depth_limit_and_one_frame() {
         assert_eq!(stack_limit(1000), 1000 + 65535 + 2);
@@ -4064,5 +5365,143 @@ fn f(p.0: unit) -> unit {
         let end = task.stack_limit + 100;
         task.reserve(end);
         assert_eq!((task.stack.len(), task.stack.capacity()), (end, end));
+    }
+
+    /// worker 0 のヒープにページを取らせ、`Control::taken` が増えた分を返す。
+    fn take_pages(ctx: &mut Ctx<eml_rt::Checked>) -> usize {
+        let before = ctx.heap().control().taken(0);
+        let word = ctx.fresh_string(&"x".repeat(1 << 17));
+        unsafe { ctx.heap_mut().decref(word) }.unwrap();
+        let grown = ctx.heap().control().taken(0) - before;
+        assert!(grown > 0, "a large string takes no page");
+        grown
+    }
+
+    /// `end_slice` は区間の始めから取ったページの分を `Async` のタスクの `counted` と `added` に足し、区間の始めを
+    /// 進める。セルを持たないタスクには数えない。
+    #[test]
+    fn end_slice_adds_the_slice_to_counted_and_added() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.cell = Some(cell);
+        task.counted = 1000;
+        sched.mark = ctx.heap().control().taken(0);
+        let grown = take_pages(&mut ctx);
+        sched.end_slice(&mut task);
+        assert_eq!((task.counted, task.added), (1000 + grown, grown));
+        assert_eq!(sched.mark, ctx.heap().control().taken(0));
+        let mut outside = Task::new(&code, function(&code, "main"), DEPTH);
+        take_pages(&mut ctx);
+        sched.end_slice(&mut outside);
+        assert_eq!((outside.counted, outside.added), (0, 0));
+        assert_eq!(sched.mark, ctx.heap().control().taken(0));
+    }
+
+    /// フレームを持ったまま横取りされたタスクはその数で `top` に出し、入るタスクは `current` に公開する。横取りされた
+    /// タスクに戻ると、`current` がそのタスクになり、`top` から消える。
+    #[test]
+    fn a_preempted_task_is_offered_as_top_and_cleared_when_resumed() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let slot = |sched: &Scheduler<crate::Sequential>| {
+            let slot = &sched.run.slots[0];
+            (
+                slot.current.load(Ordering::Relaxed),
+                slot.bytes.load(Ordering::Relaxed),
+                slot.top.load(Ordering::Relaxed),
+                slot.top_bytes.load(Ordering::Relaxed),
+            )
+        };
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.counted = 500;
+        sched.mark = ctx.heap().control().taken(0);
+        sched.publish(&task);
+        assert_eq!(slot(&sched), (cell_word(cell), 500, NO_CELL, 0));
+        let mut other = Task::new(&code, function(&code, "main"), DEPTH);
+        other.worker = ctx.heap().worker();
+        other.state = TaskState::Ready;
+        let other_id = sched.add_task(other);
+        let grown = take_pages(&mut ctx);
+        let mine = sched.current;
+        resume::<Checked>(
+            &code,
+            &mut ctx,
+            &mut task,
+            &mut sched,
+            other_id,
+            Some(TaskState::Ready),
+        )
+        .unwrap();
+        assert_eq!(slot(&sched), (NO_CELL, 500, cell_word(cell), 500 + grown));
+        resume::<Checked>(
+            &code,
+            &mut ctx,
+            &mut task,
+            &mut sched,
+            mine,
+            Some(TaskState::Ready),
+        )
+        .unwrap();
+        assert_eq!(task.cell, Some(cell));
+        assert_eq!(
+            slot(&sched),
+            (cell_word(cell), 500 + grown, NO_CELL, 500 + grown)
+        );
+    }
+
+    /// 自分の再開を積んだタスクは今の数で `top` に出し、待ちに入っても残す。本当に待つタスクは `top` から消す。どちらも
+    /// このエントリの数を `left` に積む。
+    #[test]
+    fn a_self_yield_offers_top_and_a_real_wait_clears_it() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.cell = Some(cell);
+        task.counted = 300;
+        sched.mark = ctx.heap().control().taken(0);
+        sched.publish(&task);
+        let grown = take_pages(&mut ctx);
+        let top = |sched: &Scheduler<crate::Sequential>| {
+            let slot = &sched.run.slots[0];
+            (
+                slot.top.load(Ordering::Relaxed),
+                slot.top_bytes.load(Ordering::Relaxed),
+            )
+        };
+        let wake = Runnable::Resume {
+            cell,
+            worker: 0,
+            k: Word::UNIT,
+            wake: cells::WOKE,
+        };
+        enqueue(&mut sched, wake, false).unwrap();
+        assert!(sched.yielded);
+        assert_eq!(top(&sched), (cell_word(cell), 300 + grown));
+        sched.end_slice(&mut task);
+        sched.left_entry(cell, task.added);
+        assert_eq!(top(&sched), (cell_word(cell), 300 + grown));
+        // 次の区間で本当に待つ
+        sched.yielded = false;
+        sched.offer_top(cell, 300 + grown);
+        task.added = 0;
+        sched.end_slice(&mut task);
+        sched.left_entry(cell, task.added);
+        assert_eq!(top(&sched).0, NO_CELL);
+        assert_eq!(sched.left, [(cell, grown), (cell, 0)]);
+        // ほかのセルの再開は今のタスクの譲りでない
+        let other = cells::task_on(&sched.cells, 0, 0, false);
+        let wake = Runnable::Resume {
+            cell: other,
+            worker: 0,
+            k: Word::UNIT,
+            wake: cells::WOKE,
+        };
+        enqueue(&mut sched, wake, false).unwrap();
+        assert!(!sched.yielded);
+        assert_eq!(top(&sched).0, NO_CELL);
+        sched.left.clear();
     }
 }

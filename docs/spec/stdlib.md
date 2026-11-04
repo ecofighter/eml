@@ -79,7 +79,7 @@ try_io action =
 - `try_io action` は `action ()` を呼び、IO の失敗がなければ `Ok` に包んで返す。IO の失敗があれば、そこで `action` の実行を止め、途中のフレームが持っていた値を後始末して `Err` を返す
 - 捕まえるのは、いちばん内側の `try_io` である。`IO` は `mask` に入らないので、row の上の位置でなく、実行の時点で外側にある最も近い `try_io` が捕まえる。例外と同じ動きである。たとえば `wrap : (Unit -> <e> a) -> <IO | e> Result IOError a` が、受け取ったコールバックを `try_io` の中で呼ぶと、コールバックの IO の失敗も `wrap` の `try_io` が捕まえる。ほかのエフェクトなら `mask` がコールバックの操作を外側へ通すが、`IO` ではそうしない
 - handler の節は handle の外側の `evv` で動く ([エフェクトと handler](effects.md) の「健全性」)。そのため、handle の本体の中にある `try_io` は、その handler の節の中で起きた IO の失敗を捕まえない。handle より外側の `try_io` が捕まえる
-- `try_io` は、`exit`、書き出しの失敗、`Panic` (算術の誤り、位置の範囲の誤り、`panic`)、割り込み、確保量と深さの上限、検査モードのヒープの誤りを捕まえない
+- `try_io` は、`exit`、書き出しの失敗、`Panic` (算術の誤り、位置の範囲の誤り、`panic`)、割り込み、確保量の上限、`Async` のタスクの外と `par` の子の中の深さの上限、検査モードのヒープの誤りを捕まえない。`Async` のタスクの中 (`par` の子の外) の深さの上限とメモリの柔らかい上限は、種類 `ResourceLimit` の IO の失敗になり、`try_io` が捕まえる (下の「`Std.Async`」)
 
 `IOErrorKind` の構築子は11個で、タグは宣言の順の 0 から 10 である。この実装の extern の誤りが出すのは、最初の5つ (`NotFound` から `Other`) だけである。残りの6つは `fail_io` が出し、`fail_io` は11個のどれでも出せる。`Cancelled` は、非同期の `Wake` の構築子 `Cancelled` と名前が重なる。修飾しない名前は自分のモジュールと import を Prelude より先に引くので ([モジュールと名前解決](modules.md) の「名前の解決」)、`Wake(..)` を import したモジュールでは、種類のほうを `Prelude.Cancelled` と書く。
 
@@ -90,7 +90,7 @@ try_io action =
 | `Io { reason, .. }` | `FileIn.open`、`FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`FileIn.read_all_bytes`、`FileIn.read_line_bytes`、`FileIn.read_chunk`、`FileOut.create`、`FileOut.append`、`FileOut.write`、`FileOut.write_bytes`、`FileOut.write_line`、`FileOut.flush`、`FileOut.close`、`Fs.write_text`、`Proc` の起動 (`run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn`)、`Child` の読みと書き込み (`output` と `capture` の中の読みを含む) | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
 | `Stdin(reason)` | `Stdin.read_text` と、`Stdin` のハンドルの読み (`read_all`、`read_line`、`read_all_bytes`、`read_line_bytes`、`read_chunk`) | 同上 |
 | `NotUtf8(_)` | `FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`Stdin.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Proc.output`、`Proc.capture`、`Proc.read_all`、`Proc.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
-| `Raised { kind, .. }` | `fail_io` と、`Async.await` と `Async.run` がタスクの IO の失敗を起こし直すとき。`Proc.capture` と `Proc.capture_bytes` の 0 でない終了も `fail_io` で起こす。`Std.Net` の失敗もこの形である (下の「`Std.Net`」) | `kind` のタグが表す種類 (`Proc` の終了は `Other`) |
+| `Raised { kind, .. }` | `fail_io` と、`Async.await` と `Async.run` がタスクの IO の失敗を起こし直すとき。`Async` のタスクの中の深さの上限 (下の「`Std.Async`」の「タスクの上限」) もこの形で、種類は `ResourceLimit` である。`Proc.capture` と `Proc.capture_bytes` の 0 でない終了も `fail_io` で起こす。`Std.Net` の失敗もこの形である (下の「`Std.Net`」) | `kind` のタグが表す種類 (`Proc` の終了は `Other`) |
 
 書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、実行時エラーのままにする。
 
@@ -1064,6 +1064,16 @@ body () =
 - `Scope` は `Unr` の即値で、子のタスクに渡せ、`scope` の外へも出せる。REPL の束縛にも置ける。離れたスコープの値と前の run の値は、閉じたスコープとして扱う ([VM](vm.md) の「セルと登録表」)
 - タスクは自分のスコープより長く生きない。スコープはタスクがすべて終わるまで閉じず、タスクが開いたスコープはタスクの底より前に閉じる
 
+### タスクの上限
+
+- タスクの中で呼び出しの深さが上限を超えると、run は止まらず、そのタスクに種類 `ResourceLimit`、文言 `the call depth limit is exceeded` の IO の失敗が起きる。深さはタスクごとに数え、どのタスクも `max_depth` をまるごと使う。`par` の子と入れ子の `run` の本体は、呼んだタスクの深さの続きから数える
+- ただし、`par` の子 (左も右も) の中の超過は、タスクの中でも run を止める実行時エラーで、捕まえられない。子の row は `IO` を含められず、失敗を起こす先がないためである (上の「`Std.Par`」)
+- 投げるのは普通の IO の失敗なので、タスクのフレームを巻き戻して `Lin` の値を落とし、`try_io` と `try_all` が捕まえる。捕まえれば、同じタスクはそのまま続けられ、もう一度超えればまた投げる。捕まえなければタスクの失敗になり、スコープの失敗として `run` と `scope` が起こし直す。`main` でも捕まえなければ、ほかの IO の失敗と同じく `run_result` の位置の実行時エラーになり、終了コードは 1 である
+- 失敗は関数に入るところでだけ起きる。戻りの途中で深さが上限を超えたままなら、次の呼び出しで起きる。継続の再開と handler の出入りのために処理系が足した補助の関数に入るところでは起きず、その後の次の関数で起きる
+- 確保量が柔らかい上限 `soft_bytes` の閾値を越えると、処理系は確保の数がいちばん大きいタスクを選んで上限の印を付け、そのタスクに種類 `ResourceLimit`、文言 `the memory soft limit is exceeded` の IO の失敗を起こさせる。run は止まらない。起きる所と捕まえ方は深さの上限と同じで、捕まえれば同じタスクは続けられ、`main` でも捕まえなければ `run_result` の位置の実行時エラーになる。印を付けるのは確保の数で選んだ1つのタスクで、そのタスクが確保を手放して小さくしたかは見ない。タスクの外の `main`、`par` の右の子、`compute` の仕事の確保はどのタスクの数にも入らない。それでも閾値を越えれば、そのときの数のいちばん大きいタスクに印が付く。印を付けるタスクが1つもなければ (`Async` のタスクのない run など)、硬い上限 `max_bytes` だけが run を止める ([VM](vm.md) の「上限と割り込み」)
+- タスクの外 (`main` の本体、`compute` の仕事、タスクの外の `par` の子) の深さの上限は、run を止める実行時エラーで、捕まえられない
+- 上限の印を受けたときに `IO` の失敗を起こせない所 (`par` の子の中と、タスクの始めと終わりの std のコード) にいれば、印は捨てずに残り、起こせる所に戻った後の次の呼び出しで失敗が起きる
+
 ### 取り消し
 
 - 取り消しは2つの所から来る。タスクの取り消しのビットは、`cancel t`、`drop t`、属するスコープの取り消し、取り消したスコープに加えることで立つ。スコープの取り消しの旗は、`cancel_scope`、スコープのタスクの失敗、`scope` の本体の失敗、親のスコープの取り消しで立ち、開くときに親の旗を写す (`shield` の境目は写さない。下の `shield` の箇条)。どちらも一度立てたら下ろさない
@@ -1084,6 +1094,7 @@ body () =
 - 境目とその内側のスコープの旗は、`shield` の中でも、その中の取り消しの地点に届く。取り消しの地点は、今のスコープを今の `shield` の中で自分が開いたときだけ、その旗を見る。そのため、さらに内側の `shield` の中では届かない
 - 守るのはスコープである。`shield` の中から外のスコープに加えたタスクは、外の取り消しを受ける。外のタスクが境目に `start_in` で加えたタスクは受けない
 - `shield` を出た後の最初の取り消しの地点が、外の取り消しで投げる
+- `shield` は上限の失敗 (上の「タスクの上限」) を後に回さない。`shield` の中でも上限の失敗はすぐに起き、取り消しの失敗の巻き戻しの途中に来た上限の印は、着地の後の次の呼び出しで起きる。取り消されたタスクが上限の印も受けると、先に地点に来たほうの失敗で終わるので、`Cancelled` でなく `ResourceLimit` (スコープの失敗) で終わることがある
 - 閉じたスコープへの `cancel_scope` は何もしない。`cancel` と `cancel_scope` の row は `Async` を持たないので、タスクの外でも呼べる。`run` は待つ間も取り消しの地点でない
 
 ### 操作の予算
@@ -1157,7 +1168,7 @@ body () =
 - 仕事は `par` の右の子と同じく、空いている worker があればその受け箱に置いてその worker で動かし、なければ呼んだ worker の実行待ちの列の後ろに積む ([VM](vm.md) の「`compute` の仕事」)。worker が1つの run (REPL、`--workers 1`) では、仕事はその worker のほかのタスクと交互に動く
 - `f` の row の上限は `never` である。`par` の子と同じく、`IO`、`Async`、`var` のエフェクト、`once` か `multi` の操作を持つエフェクトを `f` が起こしうる呼び出しは E2020 になる (上の「`Std.Par`」)。`f` は `Lin` の値を捕まえて消費でき、`Lin` の値を返してもよい
 - 仕事が `never` の操作で中断すると、仕事が終わった後で、呼んだタスクがその操作を起こし直す。起こし直す先は、仕事の中の操作が届いた handler で、`compute` の周りの `mask` も守る。仕事の中の handler と `try_panic` は、仕事の中の操作を仕事の中で捕まえる。仕事の中で捕まえない `Panic` も、呼んだタスクで起こし直す。呼んだタスクの `try_panic` か `try_all` が捕まえ、捕まえなければタスクの失敗 `Panicked` になる
-- 仕事の中の、`Panic` でない実行時エラー (呼び出しの深さの上限など) は、その場で run を止める。呼んだタスクの `try_all` も捕まえない
+- 仕事の中の、`Panic` でない実行時エラー (呼び出しの深さの上限など) は、その場で run を止める。呼んだタスクの `try_all` も捕まえない。仕事はタスクの外なので、深さの上限は上の「タスクの上限」の `ResourceLimit` にならない
 - `compute` は取り消しの地点だが、取り消しは仕事が終わってからでないと届かない。仕事の前や途中に立った取り消しは、仕事を止めない。仕事が終わった後、呼んだタスクが再開するときに取り消しの地点の規則 (上の「取り消し」) を満たしていれば、`compute` は仕事の結果を落として `Cancelled` を投げる。仕事が終わってから再開するまでに立った取り消しも、この規則で届く。`shield` の中では外の取り消しが届かないので、結果を返す
 - そのため、`timeout` で囲んだ `compute` は、期限が過ぎても仕事が終わるまで戻らず、仕事の後で `None` を返す。`race` で負けた腕の仕事も最後まで動く
 - `compute` 1回で `RunStats.parks` を1つ数え、`RunStats.tasks` は数えない ([VM](vm.md) の「`RunStats`」)
@@ -1600,7 +1611,7 @@ main () = Async.run (fn () ->
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルと、`Async.start_in` と `spawn_in` の閉じたスコープは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`Async` のタスクの中の深さの上限は、種類 `ResourceLimit` の IO の失敗 `the call depth limit is exceeded` で、メモリの柔らかい上限も同じ種類の IO の失敗 `the memory soft limit is exceeded` である (どちらも上の「`Std.Async`」の「タスクの上限」)。捕まえなければ `Async.run` の `run_result` の位置の実行時エラーになる。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルと、`Async.start_in` と `spawn_in` の閉じたスコープは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|

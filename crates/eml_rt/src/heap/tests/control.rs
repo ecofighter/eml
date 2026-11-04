@@ -106,12 +106,134 @@ fn the_memory_limit_reaches_the_worker_word() {
         max_bytes: 10,
         ..Limits::default()
     });
-    control.charge(10);
+    control.charge(0, 10);
     assert_eq!(control.worker_bits(0), 0);
     assert_eq!(control.stop_bits(), 0);
-    control.charge(1);
+    control.charge(0, 1);
     assert_eq!(control.worker_bits(0), Control::MEMORY);
     assert_eq!(control.stop_bits(), Control::MEMORY);
+}
+
+const KIB: usize = 1024;
+
+fn soft_control(workers: usize) -> Control {
+    Control::new(Limits {
+        max_bytes: 1024 * KIB,
+        soft_bytes: 128 * KIB,
+        workers,
+        ..Limits::default()
+    })
+}
+
+#[test]
+fn crossing_the_soft_limit_notices_only_the_charging_worker_once() {
+    let control = soft_control(2);
+    control.charge(1, 64 * KIB);
+    control.charge(1, 64 * KIB);
+    assert_eq!(control.worker_bits(0), 0);
+    assert_eq!(control.worker_bits(1), 0);
+    control.charge(1, 64 * KIB);
+    assert_eq!(control.worker_bits(0), 0);
+    assert_eq!(control.worker_bits(1), Control::NOTICE);
+    control.take_notice(1);
+    control.charge(1, 64 * KIB);
+    assert_eq!(control.worker_bits(1), 0);
+}
+
+#[test]
+fn the_soft_limit_never_stops_the_run() {
+    let control = soft_control(1);
+    for _ in 0..4 {
+        control.charge(0, 64 * KIB);
+    }
+    assert!(control.bytes() > 128 * KIB);
+    assert_eq!(control.stop_bits(), 0);
+    assert_eq!(control.worker_bits(0), Control::NOTICE);
+}
+
+#[test]
+fn taken_counts_each_worker_and_ignores_refunds() {
+    let control = soft_control(3);
+    control.charge(0, 10);
+    control.charge(2, 20);
+    control.charge(2, 5);
+    control.refund(25);
+    assert_eq!(control.taken(0), 10);
+    assert_eq!(control.taken(1), 0);
+    assert_eq!(control.taken(2), 25);
+    assert_eq!(control.taken(3), 0);
+    assert_eq!(control.bytes(), 10);
+}
+
+#[test]
+fn claim_pressure_moves_by_a_quarter_of_the_headroom() {
+    let control = soft_control(1);
+    assert_eq!(control.pressure(), None);
+    control.charge(0, 192 * KIB);
+    let (next, bytes) = control.pressure().unwrap();
+    assert_eq!((next, bytes), (128 * KIB, 192 * KIB));
+    assert!(control.claim_pressure(next, bytes));
+    assert!(!control.claim_pressure(next, bytes));
+    assert_eq!(control.pressure(), None);
+    let moved = bytes + (1024 * KIB - bytes) / 4;
+    control.charge(0, moved - bytes);
+    assert_eq!(control.pressure(), None);
+    control.charge(0, 1);
+    assert_eq!(control.pressure(), Some((moved, moved + 1)));
+}
+
+#[test]
+fn the_hard_limit_wins_over_the_soft_limit() {
+    let control = soft_control(1);
+    control.charge(0, 1024 * KIB + 1);
+    assert_eq!(control.worker_bits(0), Control::MEMORY);
+    assert_eq!(control.stop_bits(), Control::MEMORY);
+}
+
+#[test]
+fn clear_rearms_a_gap_above_the_current_bytes() {
+    let control = soft_control(1);
+    control.charge(0, 64 * KIB);
+    control.clear();
+    assert_eq!(control.pressure(), None);
+    control.charge(0, 64 * KIB);
+    assert_eq!(control.worker_bits(0), 0);
+    control.charge(0, 64 * KIB);
+    assert_eq!(control.worker_bits(0), Control::NOTICE);
+    let bytes = control.bytes();
+    control.clear();
+    let next = bytes + (1024 * KIB - bytes) / 4;
+    control.charge(0, next - bytes);
+    assert_eq!(control.pressure(), None);
+    control.charge(0, 1);
+    assert_eq!(control.pressure().map(|(n, _)| n), Some(next));
+}
+
+#[test]
+fn pressure_rearms_at_soft_when_bytes_fall_below_it() {
+    let control = soft_control(1);
+    control.charge(0, 192 * KIB);
+    let (next, bytes) = control.pressure().unwrap();
+    assert!(control.claim_pressure(next, bytes));
+    control.refund(192 * KIB);
+    assert_eq!(control.pressure(), None);
+    control.charge(0, 129 * KIB);
+    assert_eq!(control.pressure(), Some((128 * KIB, 129 * KIB)));
+}
+
+#[test]
+fn without_a_soft_limit_there_is_no_pressure() {
+    let control = Control::new(Limits {
+        max_bytes: 1024 * KIB,
+        ..Limits::default()
+    });
+    control.charge(0, 1024 * KIB);
+    assert_eq!(control.pressure(), None);
+    assert_eq!(control.worker_bits(0), 0);
+    control.clear();
+    assert_eq!(control.pressure(), None);
+    let unbounded = Control::new(Limits::default());
+    assert_eq!(unbounded.pressure(), None);
 }
 
 #[test]
@@ -314,7 +436,7 @@ fn every_word_sees_interrupt() {
         assert_eq!(ctx.poll(0), Err(Stop::Terminated));
     }
     control.clear();
-    control.charge(11 * PAGE_BYTES);
+    control.charge(0, 11 * PAGE_BYTES);
     for (k, ctx) in ctxs.iter().enumerate() {
         assert_eq!(control.worker_bits(k), Control::MEMORY);
         assert_eq!(ctx.poll(0), Err(Stop::MemoryLimit));

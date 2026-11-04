@@ -13,6 +13,7 @@ mod data;
 mod evidence;
 mod io;
 mod machine;
+mod memory;
 mod miri;
 mod par;
 mod preempt;

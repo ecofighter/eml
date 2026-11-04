@@ -2357,7 +2357,23 @@ fn find_byte_reads_the_body_of_an_object<M: Mode>() {
     assert_eq!(mortal(&mut ctx), 0);
 }
 
+// 課金は確保した worker の番号の数に足す (docs/spec/object-model.md の「確保と解放」)
+fn a_worker_heap_charges_its_own_slot<M: Mode>() {
+    let control = Arc::new(Control::new(Limits {
+        workers: 3,
+        ..Limits::default()
+    }));
+    let mut ctx = Ctx::<M>::for_worker(control.clone(), host(&Arc::default()), 2);
+    let big = unsafe { ctx.heap_mut().alloc_bytes(&vec![0; LARGE_BODY]) };
+    assert!(control.taken(2) >= PAGE_BYTES);
+    assert_eq!(control.taken(0), 0);
+    assert_eq!(control.taken(1), 0);
+    unsafe { ctx.heap_mut().decref(big) }.unwrap();
+    assert_eq!(mortal(&mut ctx), 0);
+}
+
 both_modes!(
+    a_worker_heap_charges_its_own_slot,
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
     dropping_a_heap_returns_every_page,

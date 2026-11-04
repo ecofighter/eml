@@ -1,6 +1,6 @@
 //! コード生成の形を逆アセンブラの出力で固定する (docs/spec/vm.md の「命令とフレーム」)。
 
-use crate::common::{disasm, disasm_unverified};
+use crate::common::{compile, disasm, disasm_unverified};
 
 #[test]
 fn a_call_passes_its_arguments_by_slot() {
@@ -141,7 +141,7 @@ b2:
     fn main (arity 0, frame 1)
          3  load_imm s0, 0
          4  tail_call show(s0)
-    fn show (arity 1, frame 3)
+    fn show (arity 1, frame 3) entry unwind [s0]
          5  switch_tobj s0 { #0 -> 6 [], #1 -> 9 [] }
          6  load_const s0, c0
          7  extern s0 = Prelude.println(s0)
@@ -201,7 +201,7 @@ b1:
          4  load_const s1, c1
          5  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
          6  tail_call first(s0)
-    fn first (arity 1, frame 3)
+    fn first (arity 1, frame 3) entry unwind [s0]
          7  switch_obj s0 { #0 -> 8 [@0 -> s1, @1 -> s2] }
          8  release s0 #0 [keep @0, keep @1]
          9  decref s2
@@ -297,7 +297,7 @@ b1:
          5  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
          6  con s0 = #0 (1 scanned, 0 raw) [@0 -> s0]
          7  tail_call go(s0)
-    fn go (arity 1, frame 4)
+    fn go (arity 1, frame 4) entry unwind [s0]
          8  unpack s0 #0 [@0 -> s1]
          9  switch_obj s1 { #0 -> 10 [@0 -> s2, @1 -> s3] }
         10  dup s2
@@ -467,7 +467,7 @@ b3:
          4  call s0 = pick(s0)
          5  load_imm s1, 0
          6  ret s1
-    fn pick (arity 1, frame 2)
+    fn pick (arity 1, frame 2) entry unwind [s0]
          7  switch_string s0 { 0 -> 8, 1 -> 11, _ -> 14 }
          8  decref s0
          9  load_raw s1, 1
@@ -503,7 +503,7 @@ yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
     fn main (arity 0, frame 1)
          3  load_imm s0, 0
          4  ret s0
-    fn land (arity 3, frame 4)
+    fn land (arity 3, frame 4) entry unwind [s0, s1, s2]
          5  dup s2
          6  load_imm s3, 0
          7  apply s0 = s0(s3) unwind [s1, s2*2] land s1
@@ -555,7 +555,7 @@ fn sink(q.0: obj) -> unit {
          4  load_raw s1, 7
          5  con s0 = #0 (1 scanned, 1 raw) [@0 -> s0, raw @1 -> s1]
          6  tail_call go(s0)
-    fn go (arity 1, frame 5)
+    fn go (arity 1, frame 5) entry unwind [s0]
          7  unpack s0 #0 [@0 -> s1, raw @1 -> s2]
          8  release s0 #0 [keep @0] token s0
          9  load_const s3, c1
@@ -569,7 +569,7 @@ fn sink(q.0: obj) -> unit {
         17  drop_token s0
         18  decref s1
         19  ret s3
-    fn sink (arity 1, frame 2)
+    fn sink (arity 1, frame 2) entry unwind [s0]
         20  decref s0
         21  load_imm s1, 0
         22  ret s1
@@ -675,7 +675,7 @@ fn main(f.0: tobj, x.1: tobj) -> tobj {
   tail apply f.0(c.3, #1)
 }
 "), @"
-    fn main (arity 2, frame 3)
+    fn main (arity 2, frame 3) entry unwind [s0, s1]
          3  dup s0
          4  load_imm s2, 2
          5  apply s1 = s0(s1, s2) unwind [s0]
@@ -714,4 +714,55 @@ fn f(c.0: int) -> int {
     );
     assert!(text.contains("move"), "{text}");
     assert!(!text.contains("extern"), "{text}");
+}
+
+/// 巻き戻しの表の `pc` は、エントリの行と呼び出しの行で重ならない (docs/spec/vm.md の「巻き戻しの表」)。表を仕上げる
+/// ところの `debug_assert!` が見張るので、std を含むプログラムをコンパイルできれば足りる。
+#[test]
+fn unwind_pcs_are_unique() {
+    let bench = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench");
+    let mut programs = 0;
+    for entry in std::fs::read_dir(bench).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|ext| ext == "em") {
+            let text = std::fs::read_to_string(&path).unwrap();
+            compile(&eml_test_support::lir(&text))
+                .unwrap_or_else(|error| panic!("{}: {error:?}", path.display()));
+            programs += 1;
+        }
+    }
+    assert!(programs > 30, "{programs} programs");
+}
+
+/// EP の補助の関数は決まった名前でコンパイルされ、ほかの名前の写しを持たない。VM はエントリでタスクの上限を起こすかを
+/// この名前で決めるので、`compose$$uniform` のような写しができると、その写しのエントリで起こしてしまう
+/// (docs/spec/vm.md の「タスクの上限」)。
+#[test]
+fn the_ep_helpers_are_compiled_under_their_names() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/ui/run/effects/mask_multi.em");
+    let text = std::fs::read_to_string(path).unwrap();
+    let code = compile(&eml_test_support::lir(&text)).unwrap_or_else(|error| panic!("{error:?}"));
+    let mut helpers: Vec<&str> = code
+        .functions()
+        .iter()
+        .map(|f| f.name.as_str())
+        .filter(|name| {
+            ["id$", "compose$", "prompt$", "resume$", "rewind$", "mask$["]
+                .iter()
+                .any(|helper| name.contains(helper))
+        })
+        .collect();
+    helpers.sort_unstable();
+    assert_eq!(
+        helpers,
+        [
+            "compose$",
+            "id$",
+            "mask$[Name]",
+            "prompt$",
+            "resume$",
+            "rewind$"
+        ]
+    );
 }

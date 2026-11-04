@@ -1672,6 +1672,7 @@ fn a_fork_entry_owns_its_evidence_and_child_abort_borrows_it() {
         .unwrap_or_else(|error| panic!("{error}"));
     // 地点は `child_abort` (b0 の文 1) の1つだけで、持つのは `ev.0` だけである。閉包の `c.3` は `child_abort` が消費する
     let owned: Vec<_> = points
+        .points
         .iter()
         .map(|point| (point.block.0, point.stmt, point.owned.clone()))
         .collect();
