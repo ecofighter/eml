@@ -216,7 +216,7 @@
   - 戻すとき: `bytes < soft_bytes` かつ `next > soft_bytes` なら、`next` を CAS で `soft_bytes` に戻す
   - REPL: `Control::clear()` (入力の始め) で `next = rearm(bytes())` にする
   - 回数の上限はない。毎 tick の送り直しはしない (小さいページは返らず `bytes` は柔らかい上限を超えたままなので、送り直すと tick ごとにタスクを止める)
-  - 選び方: `choose(run, taken)` はすべての slot を番号の順に見る。`current` を `c1` として読み、`NO_CELL` でなければ `bytes`、`mark`、もう一度 `current` (`c2`) を読み、`c1 == c2` なら候補 `(bytes + taken(k).saturating_sub(mark), c1)` にする。次に `top` が `NO_CELL` でなければ候補 `(top_bytes, top)` にする。前の最良より真に大きく、0 より大きいものだけを残す。同点なら番号の小さい worker、同じ worker なら `current` が勝つ
+  - 選び方: `choose(run, taken)` はすべての slot を番号の順に見る。slot の版の数 `seq` (書き手が `current`、`bytes`、`mark` を書く前に奇数に、書いた後に偶数に進める) を読み、奇数なら飛ばす。`current`、`bytes`、`mark` を読み、もう一度 `seq` を読んで変わっていなければ、`current` が `NO_CELL` でないとき候補 `(bytes + taken(k).saturating_sub(mark), current)` にする (同じセルを数え直して公開し直すことがあるので、`current` を2回比べる形では古い組を受け入れてしまう。実行の途中でレビューが見つけ、この形に直した)。次に `top` が `NO_CELL` でなければ候補 `(top_bytes, top)` にする。前の最良より真に大きく、0 より大きいものだけを残す。同点なら番号の小さい worker、同じ worker なら `current` が勝つ
   - 誰が: `Sched::Normal` (`Memory::Watched`) では監視のスレッドが tick ごとに `pressure_tick` を1回呼ぶ。決定的な方針 (`Memory::Gathered`) では、各 worker が `Scheduler::gather` の中で、`take_notice(k)` の直後、最初の `shared.lock()` の前に同じ `pressure_tick` を呼び、監視のスレッドは呼ばない (Q-1)
 - 理由: 一定の幅で進めると回数に上限ができ、長く動くサーバが保護を失う。残りの余裕の 1/4 なら尽きない。決定的な方針は壁時計の監視のスレッドに頼れない (1 worker の決定的な run では監視のスレッドが動かない)。`Rescue::Always` も同じ理由で救済を worker の上で行う。確保器の `NOTICE` があるので、1 worker の決定的な run では旗の地点がスケジュールによらない
 - 退けた案: 毎 tick の送り直し。増えたら旗を立てる案 (捕まえた直後にまた旗を立てる)。`(max - soft)/4` の固定の幅 (4回で尽きる)。柔らかい上限より上で `next` を下げる案 (揺れのたびに旗を立てる)。`Control` の中で 7/8 を求める案 (方針が `eml_rt` に入る)。`Normal` でも確保器が旗を立てる案 (前提に反する)
