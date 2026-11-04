@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/limit_depth_repeated.em
+---
+--- stdout ---
+1 ResourceLimit: the call depth limit is exceeded
+2 ResourceLimit: the call depth limit is exceeded
+3 ResourceLimit: the call depth limit is exceeded
+--- stderr ---
