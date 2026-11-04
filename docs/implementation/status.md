@@ -25,10 +25,11 @@
 - 位置つきの `mask`: 型検査が呼び出しごとに決め、エフェクトごとに内側の n 個の handler を残して続く m 個を飛ばす。`Yield Int` を受けて `Yield String` を出すような、型を変換する handler を書ける ([エフェクトと handler](../spec/effects.md) の「handler の意味」、[型と Kind](../spec/types.md) の「推論」)
 - `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`Char`、`Byte`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `FileIn` の `open`、`read_all`、`close` などが起こし、`FileIn.FileIn` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)。extern のエフェクトの多重度は表の行が決め、`IO` は `Once`、`Panic` は `Never` である ([エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」)
 - IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`fail_io : IOErrorKind -> String -> <IO> a` は、種類と文言を指定して IO の失敗を起こす。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」、「`fail_io`」、「`exit`」)
-- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`、`Par.em`、`Async.em`、`Chan.em`、`Atomic.em`、`Net.em`、`Signal.em`、`Tls.em`、`Http.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import したものだけを読み込む。`import FileIn` か `import Std.FileIn` を書いたモジュールで、`FileIn.open` のように修飾付きで使う。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
+- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`、`Par.em`、`Async.em`、`Chan.em`、`Atomic.em`、`Net.em`、`Signal.em`、`Tls.em`、`Http.em`、`Stream.em`、`Exec.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import したものだけを読み込む。`import FileIn` か `import Std.FileIn` を書いたモジュールで、`FileIn.open` のように修飾付きで使う。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
 - std のエフェクトと `Iter`: エフェクトのモジュール `Yield` (`for_each`、`fold`、`collect`)、`Fail` (`to_result`、`to_option`)、`State` (`run`、`eval`、`exec`) と、`once` の継続で作る引いて使うジェネレータ `Iter` とその変換。`FileIn` から1行ずつ読む `FileIn.read_line` ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」と「`FileIn`」)。`tests/ui/run/scripts/` の `grep`、`logstat`、`csv2jsonl` は std のエフェクトを使い、`csv2jsonl` の CSV の読み取りは `let … and …` の組で書く
 - 標準入出力とファイルのハンドル: 線形な型 `Stdin`、`Stdout`、`Stderr`、`FileIn.FileIn`、`FileOut.FileOut`。読むハンドルは文字列とバイト列を、全部、1行ずつ、塊ごとに読み、書くハンドルは文字列とバイト列と行を書く。`FileOut` は自分の buffer を持ち、閉じずに手放しても書き出す。標準のストリームごとに、生きているハンドルは高々1つである ([標準ライブラリ](../spec/stdlib.md) の「ハンドル」)
-- 子のプロセス: `Std.Proc` が、`Cmd` をシェルを介さずに起動する。起動の形は、標準入出力を受け継ぐ `run`、標準出力を取る `output` と `capture`、pipe でやりとりする線形な `Child` を返す `spawn` の3つである。作業ディレクトリ、環境変数、引数の追加、標準エラーの向き (`2>&1`、`2>/dev/null`) を `Cmd` に設定できる ([標準ライブラリ](../spec/stdlib.md) の「`Proc`」)
+- 子のプロセス: `Std.Proc` が、`Cmd` をシェルを介さずに起動する。起動の形は、標準入出力を受け継ぐ `run`、標準出力を取る `output` と `capture`、pipe でやりとりする線形な `Child` を返す `spawn` の3つである。作業ディレクトリ、環境変数、引数の追加、標準エラーの向き (`2>&1`、`2>/dev/null`)、標準入力 (文字列、ファイル、空)、標準出力のファイルへの書き出しと追記 (`> out`、`>> out`) を `Cmd` に設定できる。演算子 `.|` は `Cmd` をつないだパイプラインを作り、1回の `spawn` で段の間を OS の pipe でつないで起動する。`wait_all` はすべての段の終了コードを返す ([標準ライブラリ](../spec/stdlib.md) の「`Proc`」)
+- 非同期のファイルと子のプロセス: `Std.Stream` が通常のファイルを driver の上で読み書きし、`Std.Exec` が子のプロセスを起動して待つ。子の標準入力、標準出力、標準エラーの pipe は `Stream.Writer` と `Stream.Reader` として取り出し、複数のタスクで読み書きできる。待ちと pipe は Linux (epoll と pidfd)、macOS (kqueue)、Windows (IOCP) の本物の driver にあり、仮想の時計では `Std.Exec` の起動が誤りになる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Stream`」と「`Std.Exec`」)
 - `Float` (IEEE 754 の倍精度) のリテラル、算術、比較と、Python の `repr` の形の表示。変換と数学の関数は `Std.Float` にある ([宣言](../spec/declarations.md) の「Prelude のクラス」、[標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」)
 - 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)
 - 連想配列と集合: キーの順の `Map k v` (`Std.Map`) と `Set a` (`Std.Set`)。どちらも釣り合いを取った木で、キーと要素は `Unr` に限る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」)
@@ -53,7 +54,7 @@
 - まだ実装していない構文: 型の別名 `type` ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)。字句と文法の置き場所を用意してあり、使うと E0004 (未対応) を出して回復する。どの段階が E0004 を出すかは [診断](../spec/diagnostics.md) の「未対応の構文と E0004」にある
 - row の型引数を持つ型の instance と `deriving`。書くと E0004 を出す
 - Unicode の表が要る文字の操作 (ASCII でない大文字と小文字の変換、文字の分類)、置換付きの UTF-8 のデコード、`Lin` の要素の配列の API ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
-- コマンドの組み合わせ: パイプ (`.|`)、文字列からの標準入力、`Child` の標準エラーの pipe ([ロードマップ](../future/roadmap.md) の「段の列」)、ファイルへのリダイレクト、標準エラーを別の文字列に取ること、環境変数の削除 ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
+- コマンドの組み合わせ: `Proc` で標準エラーを別の文字列に取ること、環境変数の削除 ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - ユーザーが書く extern (FFI。[FFI と拡張の設計](../future/ffi.md))
 - 可変参照 `Ref`、再エクスポート (`pub import`)、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、関数をまたぐ reuse、LSP、フォーマッタ ([ロードマップ](../future/roadmap.md) の「その後の項目」)
 - 借用パラメータ、ネイティブ化 ([ロードマップ](../future/roadmap.md) の「段の列」)
@@ -144,7 +145,7 @@
 
 ### `Async`
 
-- driver の操作 (受け付け、待ち、取り出し) を使うのは `Std.Net`、`Std.Stream`、`Std.Exec` だけである。`Std.Stream` が開くのは通常のファイルだけで、子のプロセスの pipe は `Std.Exec` が作る。std の今の読み書きの行 (`FileIn`、`Stdin`、`Proc` など) はタスクの中でその場で動き、終わるまで worker を持ち続ける。その間、同じ worker のほかのタスクは、監視のスレッドが詰まりを見つけた後で、救済できるものだけがほかの worker で動く ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」、[ロードマップ](../future/roadmap.md) の `async-files`)
+- driver の操作 (受け付け、待ち、取り出し) を使うのは `Std.Net`、`Std.Stream`、`Std.Exec` だけである。`Std.Stream` が開くのは通常のファイルだけで、子のプロセスの pipe は `Std.Exec` が作る。std の今の読み書きの行 (`FileIn`、`Stdin`、`Proc` など) はタスクの中でその場で動き、終わるまで worker を持ち続ける。その間、同じ worker のほかのタスクは、監視のスレッドが詰まりを見つけた後で、救済できるものだけがほかの worker で動く ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」、「`Std.Stream`」、「`Std.Exec`」)
 - `Std.Net` に `resolve` と `write_within` はない。`listen` は名前を受けず、書きの期限は `Async.timeout` で付ける ([ロードマップ](../future/roadmap.md) の「非同期」)
 - `Std.Tls` に期限を持つ読み (`_within`)、server の API、OS の証明書ストアはない。期限は `Async.timeout` で付け、期限が来ると `Stream` を失う。信頼する根は webpki-roots の根と、渡した PEM の CA だけである ([標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」、[ロードマップ](../future/roadmap.md) の「非同期」、[ロードマップ](../future/roadmap.md) の `tls-platform-verifier`)
 - `Std.Http` に keep-alive、HTTP/2、gzip などの coding、プロキシ、cookie、ストリーミングの本文、本文の大きさの上限、IPv6 のアドレスの URL はない。ヘッダーと trailer の行の数にも上限がなく、期限は `Async.timeout` で付ける。本文を書き終える前に閉じた相手の応答は読めない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Http`」、[ロードマップ](../future/roadmap.md) の「非同期」)
@@ -176,7 +177,9 @@
 
 ### 子のプロセス
 
-- `Child` は、1度に1本の pipe しか読み書きしない。読みながら書く子に pipe の buffer より多く書いてから読むと、両方が止まる。処理系はこの状態を検出せず、Ctrl-C で終える。守る順は [標準ライブラリ](../spec/stdlib.md) の「`Child`」にある
+- `Proc` の `Child` は、1度に1本の pipe しか読み書きしない。読みながら書く子に pipe の buffer より多く書いてから読むと、両方が止まる。処理系はこの状態を検出せず、Ctrl-C で終える。守る順は [標準ライブラリ](../spec/stdlib.md) の「`Child`」にある。標準入力と標準エラーの pipe を別のタスクで読み書きするには `Std.Exec` を使う
+- `Std.Stream` は通常のファイルしか開かず、seek も、位置を指定する読み書きも、読み書き両用の開き方もない。ファイルの読み書きはプールのスレッドで動き、取り消しても終わるまで続く。`Writer` は buffer を持たず、`flush` もない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Stream`」)
+- `Std.Exec` は、仮想の時計 (UI テストの既定) では子を起動できず、本物の時計の run でだけ動く。pidfd のない Linux (5.3 より前のカーネル) では `wait` が `NotAvailable` で失敗する。パイプラインの途中の段の標準エラーは読めない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Exec`」)
 - 手放した `Child` の破棄処理が kill するのは直接の子だけである。`sh -c` が起動した孫は残りうる
 - `Cmd` のコンストラクタとフィールドは公開されている。`Std.Proc` が別のモジュールから作って更新するので、抽象型にしていない。`Cmd { … }` の作る式とパターンを書かない決まりで守る ([標準ライブラリ](../spec/stdlib.md) の「`Cmd`」)
 

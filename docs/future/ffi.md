@@ -87,7 +87,7 @@ matmul n a b =
   - 完了は持ち主の worker の driver の完了の列を通して届き、worker の受け箱は通らない。これが、プールの書き込みと持ち主の読みの順を決める ([非同期の設計](async.md) の「ブロックする呼び出しのプール」)
   - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し戻しで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
 - 場合ごとの扱いは [非同期の設計](async.md) の「I/O の driver」の表にある
-- std の今の同期の行 (`FileIn`、`Stdin`、`Proc` など) には `blocking` を付けない。非同期のファイルとパイプは I/O の driver で作る ([非同期の設計](async.md) の「ファイルとパイプ」)
+- std の今の同期の行 (`FileIn`、`Stdin`、`Proc` など) には `blocking` を付けない。非同期のファイルとパイプは I/O の driver の上の `Std.Stream` と `Std.Exec` で書く ([標準ライブラリ](../spec/stdlib.md) の「`Std.Stream`」と「`Std.Exec`」)
 - BLAS のスレッドのプールには仕組みを足さず、助言だけを書く。eml は環境変数を設定しない。環境変数はライブラリを読み込む前に要り、`eml run` はプロセスの環境を持たないためである。複数の eml の worker を使うプログラムは、始めに同じ FFI で `openblas_set_num_threads(1)` か `mkl_set_num_threads(1)` を呼ぶ。Accelerate は GCD を使い、設定のインターフェースがないので触らない
 
 ## VM からの呼び出し
