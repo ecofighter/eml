@@ -621,7 +621,7 @@ impl Hold {
 }
 
 /// mail の項。落ちたハンドルの項はハンドルの `Drop` が、取り消しの項は持ち主が自分のタスクに印を付けた `mark` が、
-/// シグナルの項は監視のスレッドが積む。
+/// シグナルの項と上限の旗の項は監視のスレッドが積む。
 pub(crate) enum MailItem {
     HandleDropped(CellRef),
     /// タスク `cell` の取り消し。`owner` は積んだ worker で、タスクの持ち主である。取り出すのはその worker だけである。
@@ -631,6 +631,11 @@ pub(crate) enum MailItem {
     },
     /// 監視のスレッドが中継した保留のシグナル (`Control::INTERRUPT` と `Control::TERMINATE` のビット)。
     Signal(u32),
+    /// タスク `cell` への上限の旗。監視のスレッドは登録表の lock を取らないので、lock なしで読んだ古い番号のこともある
+    /// (docs/spec/vm.md の「タスクの上限」)。
+    // 積む側の監視のスレッドの務めはまだなく、今はテストだけが積む
+    #[cfg_attr(not(test), expect(dead_code))]
+    Limit(CellRef),
 }
 
 #[cfg(test)]
@@ -641,7 +646,7 @@ impl MailItem {
     fn for_worker(&self, me: u32) -> bool {
         match *self {
             MailItem::Cancel { owner, .. } => owner == me,
-            MailItem::HandleDropped(_) | MailItem::Signal(_) => true,
+            MailItem::HandleDropped(_) | MailItem::Signal(_) | MailItem::Limit(_) => true,
         }
     }
 }
@@ -1081,6 +1086,8 @@ pub(crate) trait Post {
     fn cancel_io(&self, k: u32, op: CellRef);
     /// worker `k` に、持ち主として記録 `op` に置いた結果を当てさせる。
     fn completion(&self, k: u32, op: CellRef);
+    /// worker `k` に、持ち主として動いているタスク `cell` の上限の旗を届ける。
+    fn limit(&self, k: u32, cell: CellRef);
 }
 
 /// 登録表を触る worker と、取り消しと起こしの宛先。持ち主が自分なら取り消しは mail に積み、起こしはその場で走らせる。
@@ -1479,6 +1486,21 @@ impl Registry {
     }
 }
 
+/// 旗の立ったタスク `cell` の届け先を決める。動いていて持ち主がほかの worker なら、持ち主へ `Notice::Limit` を回す。
+/// 横取りされてフレームを持ったまま待つタスクも `Running` のままで、その `Task` を持つのは持ち主だからである。持ち主が
+/// 自分ならセルを返し、呼び手の実行系がその VM の `Task` に旗を付ける。置いたか待っているタスクは VM の `Task` を
+/// 持たないので、旗だけを残し、次の `started` か `resumed` が返す (docs/spec/vm.md の「タスクの上限」)。
+fn route_limit(task: &TaskCell, cell: CellRef, here: &Here) -> Option<CellRef> {
+    match task.phase {
+        Phase::Running if task.owner != here.me => {
+            here.post.limit(task.owner, cell);
+            None
+        }
+        Phase::Running => Some(cell),
+        Phase::Placed | Phase::Parked | Phase::Finished => None,
+    }
+}
+
 impl Registry {
     fn alloc(&mut self, kind: CellKind) -> CellRef {
         let index = match self.free.pop() {
@@ -1779,6 +1801,36 @@ impl Registry {
         }
         self.task_mut(cell)?.limit = false;
         Ok(())
+    }
+
+    /// mail の上限の旗の項を受けた。生きていて終わっていないタスクのセルに旗を立て、`route_limit` で届け先を決める。
+    /// 死んだセルと終わったセルは何もしない。監視のスレッドが lock なしで読んだ古い番号でありうるためである。旗を
+    /// 立てるのはこの道だけである (docs/spec/vm.md の「タスクの上限」)。
+    pub(crate) fn limit_task(
+        &mut self,
+        cell: CellRef,
+        here: &Here,
+    ) -> Result<Option<CellRef>, CellFault> {
+        let Some(CellKind::Task(task)) = self.live(cell) else {
+            return Ok(None);
+        };
+        if matches!(task.phase, Phase::Finished) {
+            return Ok(None);
+        }
+        task.limit = true;
+        Ok(route_limit(task, cell, here))
+    }
+
+    /// ほかの worker が回した `Notice::Limit` を持ち主として受けた。旗をもう一度立てず、まだ立っているときだけ
+    /// `route_limit` で届け先を決める。知らせが届く前にタスクが `ResourceLimit` を起こして旗を下ろしていれば、遅れた
+    /// 知らせで2度目の失敗を起こさないためである (docs/spec/vm.md の「タスクの上限」)。
+    pub(crate) fn limit_forwarded(&mut self, cell: CellRef, here: &Here) -> Option<CellRef> {
+        match self.live(cell) {
+            Some(CellKind::Task(task)) if task.limit && !matches!(task.phase, Phase::Finished) => {
+                route_limit(task, cell, here)
+            }
+            _ => None,
+        }
     }
 
     /// 待ちに入って `Finish` したエントリの `Task` の分だけ、セルごとに `entries` を1つ減らし、`cells` を空にする。
@@ -2641,10 +2693,11 @@ impl Registry {
         Ok(())
     }
 
-    /// mail の項を1つ処理する。落ちたハンドルとシグナルの項はどの worker が処理してもよく、取り消しの項は持ち主の
-    /// 項だけを受け取る (`Mail::take`)。取り消しで待ちを外したタスクの起こしを `out` に、driver への取り消しを `work` に、
-    /// 放したセルの値と ID を `discards` に積み、保留から下ろすシグナルのビットを返す。処理が新しい項を mail に積むことが
-    /// ある (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// mail の項を1つ処理する。落ちたハンドル、シグナル、上限の旗の項はどの worker が処理してもよく、取り消しの項は
+    /// 持ち主の項だけを受け取る (`Mail::take`)。取り消しで待ちを外したタスクの起こしを `out` に、driver への取り消しを
+    /// `work` に、放したセルの値と ID を `discards` に、旗を付ける VM の `Task` が自分の worker にあるタスクのセルを
+    /// `limited` に積み、保留から下ろすシグナルのビットを返す。処理が新しい項を mail に積むことがある
+    /// (docs/spec/vm.md の「タスクとスケジュール」)。
     pub(crate) fn receive_mail(
         &mut self,
         here: &Here,
@@ -2652,6 +2705,7 @@ impl Registry {
         out: &mut Vec<Woken>,
         work: &mut IoWork,
         discards: &mut Discards,
+        limited: &mut Vec<CellRef>,
     ) -> Result<u32, CellFault> {
         match item {
             MailItem::HandleDropped(cell) => self.let_go(here, cell, true, discards)?,
@@ -2663,6 +2717,7 @@ impl Registry {
                 self.deliver(bits, out)?;
                 return Ok(bits);
             }
+            MailItem::Limit(cell) => limited.extend(self.limit_task(cell, here)?),
         }
         Ok(0)
     }
@@ -4809,8 +4864,9 @@ pub(crate) fn finish_job(
     cells.route(&mut woken, here, out)
 }
 
-/// mail の項を処理し、取り消しで待ちを外したタスクを worker `here.me` で再開する仕事を `out` に積む。どの worker も
-/// 呼んでよく、落ちたハンドルとシグナルの項は最初に集めた worker が、取り消しの項はその持ち主が処理する。項は葉の
+/// mail の項を処理し、取り消しで待ちを外したタスクを worker `here.me` で再開する仕事を `out` に、旗を付ける VM の
+/// `Task` がこの worker にあるタスクのセルを `limited` に積む。どの worker も呼んでよく、落ちたハンドル、シグナル、
+/// 上限の旗の項は最初に集めた worker が、取り消しの項はその持ち主が処理する。項は葉の
 /// lock の下でまとめて取り出してから処理し、処理が新しい項を積むので、取り出す項がなくなるまで繰り返す。項ごとに短い lock の区間で処理し、lock を放してから、その項の driver への
 /// 取り消し、語の破棄と ID の退かせ、シグナルを保留から下ろすことを行う。破棄の破棄処理が積む項は、それより後に積まれた
 /// 項より先に処理する (docs/spec/vm.md の「セルと登録表」)。項を1つでも処理したら真を返す。
@@ -4821,6 +4877,7 @@ pub(crate) fn drain<M: Mode>(
     mut driver: Option<&mut (dyn IoDriver + 'static)>,
     depth_offset: usize,
     out: &mut Vec<Runnable>,
+    limited: &mut Vec<CellRef>,
 ) -> Result<bool, CellFault> {
     let (mut work, mut discards, mut woken) = (IoWork::default(), Discards::default(), Vec::new());
     let mut drained = false;
@@ -4833,7 +4890,14 @@ pub(crate) fn drain<M: Mode>(
         for item in items {
             let settled = {
                 let mut cells = shared.lock();
-                let bits = cells.receive_mail(here, item, &mut woken, &mut work, &mut discards)?;
+                let bits = cells.receive_mail(
+                    here,
+                    item,
+                    &mut woken,
+                    &mut work,
+                    &mut discards,
+                    limited,
+                )?;
                 cells.route(&mut woken, here, out)?;
                 bits
             };
@@ -4903,6 +4967,10 @@ impl Post for Unposted {
 
     fn completion(&self, k: u32, _op: CellRef) {
         panic!("a completion is sent to worker {k}");
+    }
+
+    fn limit(&self, k: u32, _cell: CellRef) {
+        panic!("a limit is sent to worker {k}");
     }
 }
 
@@ -6785,6 +6853,10 @@ impl Post for Submits {
     fn completion(&self, k: u32, _op: CellRef) {
         panic!("a completion is sent to worker {k}");
     }
+
+    fn limit(&self, k: u32, _cell: CellRef) {
+        panic!("a limit is sent to worker {k}");
+    }
 }
 
 /// 本物の時計の run では、worker 1 の接続は worker 1 の driver に出し、できたストリームを worker 1 に縛る。そのストリームを
@@ -7402,6 +7474,7 @@ fn a_read_after_a_read_line_is_served_from_the_stream_buffer() {
 struct Posted {
     wakes: std::cell::RefCell<Vec<(u32, CellRef)>>,
     cancels: std::cell::RefCell<Vec<(u32, CellRef)>>,
+    limits: std::cell::RefCell<Vec<(u32, CellRef)>>,
 }
 
 #[cfg(test)]
@@ -7416,6 +7489,10 @@ impl Post for Posted {
 
     fn cancel(&self, k: u32, cell: CellRef) {
         self.cancels.borrow_mut().push((k, cell));
+    }
+
+    fn limit(&self, k: u32, cell: CellRef) {
+        self.limits.borrow_mut().push((k, cell));
     }
 
     fn place(&self, k: u32, _cell: CellRef, _worker: u32, _closure: Word) {
@@ -7504,6 +7581,7 @@ fn mail_keeps_arrival_order() {
                 MailItem::HandleDropped(c) => format!("dropped {}", c.encode()),
                 MailItem::Cancel { cell, owner } => format!("cancel {} of {owner}", cell.encode()),
                 MailItem::Signal(bits) => format!("signal {bits}"),
+                MailItem::Limit(c) => format!("limit {}", c.encode()),
             })
             .collect()
     };
@@ -7589,16 +7667,154 @@ fn a_cancel_in_the_mail_waits_for_its_owner() {
     // worker 1 の集める地点は、worker 0 の取り消しを取らない
     let mut ctx = test_ctx();
     let mut out = Vec::new();
-    assert!(!drain(&shared, &here(1), &mut ctx, None, 0, &mut out).unwrap());
+    assert!(
+        !drain(
+            &shared,
+            &here(1),
+            &mut ctx,
+            None,
+            0,
+            &mut out,
+            &mut Vec::new()
+        )
+        .unwrap()
+    );
     assert!(out.is_empty() && shared.mail.pending());
     // 持ち主の次の集める地点が、満期より先に待ちを外す
-    assert!(drain(&shared, &here(0), &mut ctx, None, 0, &mut out).unwrap());
+    assert!(
+        drain(
+            &shared,
+            &here(0),
+            &mut ctx,
+            None,
+            0,
+            &mut out,
+            &mut Vec::new()
+        )
+        .unwrap()
+    );
     assert_eq!(resumed_cells(&out), [(cell, CANCELLED)]);
     assert!(!shared.mail.pending());
     out.clear();
     expire(&shared, &mut NoDriver::default(), 0, 5, &mut out).unwrap();
     assert!(out.is_empty());
     assert!(shared.lock().task_mut(cell).unwrap().k.is_none());
+}
+
+/// 動いているタスクへの上限の旗は、持ち主がほかの worker なら持ち主へ `Notice::Limit` で回し、自分が持ち主ならセルを
+/// 返して実行系に旗を付けさせる。どちらでもセルの旗は立つ (docs/spec/vm.md の「タスクの上限」)。
+#[test]
+fn a_limit_goes_to_the_owner_of_a_running_task() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let posted = Posted::default();
+    let here = Here {
+        me: 0,
+        host: 0,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let elsewhere = owned_task(&shared, 1);
+    assert_eq!(shared.lock().limit_task(elsewhere, &here).unwrap(), None);
+    assert_eq!(*posted.limits.borrow(), [(1, elsewhere)]);
+    assert!(shared.lock().task_mut(elsewhere).unwrap().limit);
+    let mine = owned_task(&shared, 0);
+    assert_eq!(shared.lock().limit_task(mine, &here).unwrap(), Some(mine));
+    assert_eq!(posted.limits.borrow().len(), 1);
+    assert!(shared.lock().task_mut(mine).unwrap().limit);
+}
+
+/// 待っているタスクと置いたタスクには旗だけが立ち、`resumed` と `started` が返す。起こした側の `clear_limit` で下りる。
+/// 終わったセルと死んだセルには何もしない (docs/spec/vm.md の「タスクの上限」)。
+#[test]
+fn a_limit_on_a_waiting_task_waits_for_its_entry() {
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let parked = sleeping_task(&shared, 0, 5);
+    assert_eq!(limit_task(&shared, parked), None);
+    let (_, marks) = shared.lock().resumed(parked, WOKE, false).unwrap();
+    assert_eq!(marks, TaskMarks { limit: true });
+    shared.lock().clear_limit(parked).unwrap();
+    assert!(!shared.lock().task_mut(parked).unwrap().limit);
+    let placed = placed_task(&shared, 0);
+    assert_eq!(limit_task(&shared, placed), None);
+    let (_, marks) = shared.lock().started(placed).unwrap();
+    assert_eq!(marks, TaskMarks { limit: true });
+    let finished = owned_task(&shared, 0);
+    shared.lock().task_mut(finished).unwrap().phase = Phase::Finished;
+    assert_eq!(limit_task(&shared, finished), None);
+    assert!(!shared.lock().task_mut(finished).unwrap().limit);
+    let dead = owned_task(&shared, 0);
+    shared.lock().release(dead.index);
+    assert_eq!(limit_task(&shared, dead), None);
+}
+
+/// 回した `Notice::Limit` が届く前にタスクが `ResourceLimit` を起こして旗を下ろしていれば、持ち主は旗を立て直さず、
+/// `Task` にも付けない。遅れた知らせで2度目の失敗を起こさないためである。旗がまだ立っていればセルを返す
+/// (docs/spec/vm.md の「タスクの上限」)。
+#[test]
+fn a_late_limit_notice_after_the_raise_is_dropped() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let posted = Posted::default();
+    let here = |me| Here {
+        me,
+        host: me,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let cell = owned_task(&shared, 1);
+    assert_eq!(shared.lock().limit_task(cell, &here(0)).unwrap(), None);
+    assert_eq!(shared.lock().limit_forwarded(cell, &here(1)), Some(cell));
+    shared.lock().clear_limit(cell).unwrap();
+    assert_eq!(shared.lock().limit_forwarded(cell, &here(1)), None);
+    assert!(!shared.lock().task_mut(cell).unwrap().limit);
+    assert_eq!(*posted.limits.borrow(), [(1, cell)]);
+}
+
+/// 回した `Notice::Limit` を受けた worker が今の持ち主でなければ、旗が立っている間は今の持ち主へ回し直す。待ちの間に
+/// 救済で持ち主が変わり、また動き始めたタスクに旗を届けるためである (docs/spec/vm.md の「タスクの上限」)。
+#[test]
+fn a_forwarded_limit_follows_a_new_owner() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let posted = Posted::default();
+    let here = Here {
+        me: 0,
+        host: 0,
+        mail: &shared.mail,
+        post: &posted,
+    };
+    let cell = owned_task(&shared, 1);
+    shared.lock().task_mut(cell).unwrap().limit = true;
+    assert_eq!(shared.lock().limit_forwarded(cell, &here), None);
+    assert_eq!(*posted.limits.borrow(), [(1, cell)]);
+    assert!(shared.lock().task_mut(cell).unwrap().limit);
+}
+
+/// mail の上限の旗の項はどの worker も取り出す。取り出した worker がタスクの持ち主なら、集める地点がセルを返す
+/// (docs/spec/vm.md の「セルと登録表」)。
+#[test]
+fn a_limit_in_the_mail_is_taken_by_any_worker() {
+    let shared = Shared::new(Registry::new(Vec::new(), 2));
+    let cell = owned_task(&shared, 0);
+    for me in [0, 1] {
+        shared.mail.push(MailItem::Limit(cell));
+        assert!(matches!(shared.mail.take(me)[..], [MailItem::Limit(c)] if c == cell));
+    }
+    shared.mail.push(MailItem::Limit(cell));
+    let (mut ctx, mut out, mut limited) = (test_ctx(), Vec::new(), Vec::new());
+    assert!(
+        drain(
+            &shared,
+            &solo(&shared),
+            &mut ctx,
+            None,
+            0,
+            &mut out,
+            &mut limited
+        )
+        .unwrap()
+    );
+    assert!(out.is_empty());
+    assert_eq!(limited, [cell]);
+    assert!(shared.lock().task_mut(cell).unwrap().limit);
 }
 
 /// 持ち主 `owner` で動いているタスクのセル。持ち主の違う場合をスレッドなしで作るためである。
@@ -7657,6 +7873,13 @@ pub(crate) fn arrival_of(shared: &Shared, token: i64) -> Option<bool> {
 #[cfg(test)]
 pub(crate) fn flag_cancel(shared: &Shared, cell: CellRef) {
     shared.lock().task_mut(cell).unwrap().cancel = true;
+}
+
+/// worker 0 だけの run で、mail の上限の旗の項を受けたときと同じくタスク `cell` に旗を立てる。旗を付ける VM の `Task` が
+/// worker 0 にあればセルを返す。
+#[cfg(test)]
+pub(crate) fn limit_task(shared: &Shared, cell: CellRef) -> Option<CellRef> {
+    shared.lock().limit_task(cell, &solo(shared)).unwrap()
 }
 
 /// 記録 `token` が、`main` の `Finish` で残ったタスクとみなす状態 (driver に出したままか置いたまま) か。

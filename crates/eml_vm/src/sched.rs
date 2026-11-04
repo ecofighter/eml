@@ -37,7 +37,9 @@ fn unheard_fault(control: &Control, bits: u32) -> VmFault {
 /// 持ち主がほかの worker ならその worker へ送り直す。`Completion` は記録の持ち主の自分が当てる。host の知らせ (`Submit`、
 /// `CancelIo`) は自分の driver の分で、結果を置いた後に届いた `CancelIo` だけは何もしない。もう待っていないセルへの
 /// 起こしと、結果のない記録への `Completion` は内部の誤りである (docs/spec/vm.md の「タスクとスケジュール」
-/// 「操作の記録」)。
+/// 「操作の記録」)。`Limit` は旗がまだ立っていれば、旗を付ける VM の `Task` がこの worker にあるタスクのセルを
+/// `limited` に積む (docs/spec/vm.md の「タスクの上限」)。
+#[allow(clippy::too_many_arguments)]
 fn take_async<M: Mode>(
     cells: &mut Registry,
     notices: Vec<Notice>,
@@ -46,6 +48,7 @@ fn take_async<M: Mode>(
     depth_offset: usize,
     out: &mut Vec<Runnable>,
     work: &mut IoWork,
+    limited: &mut Vec<CellRef>,
 ) -> Result<(), VmFault> {
     let mut woken = Vec::new();
     for notice in notices {
@@ -72,6 +75,7 @@ fn take_async<M: Mode>(
             Notice::Completion(op) => {
                 woken.extend(cells.take_completion(ctx, depth_offset, op, here, work)?);
             }
+            Notice::Limit(cell) => limited.extend(cells.limit_forwarded(cell, here)),
             Notice::Child(_) | Notice::Joined { .. } | Notice::Rescue { .. } => {
                 return Err(VmFault::Internal("a par notice is left for the registry"));
             }
@@ -596,6 +600,9 @@ pub struct Scheduler<P: Policy> {
     pub(crate) rescue: Option<(usize, usize)>,
     /// 集める地点が救済で盗んだ仕事を積む列。`runnables` と同じく、集める地点の外ではいつも空である。
     pub(crate) stolen: Vec<Runnable>,
+    /// 集める地点が受けた上限の旗のうち、旗を付ける VM の `Task` がこの worker にあるタスクのセル。実行系が集める地点の
+    /// 後で `Task` に旗を付けて空にする (docs/spec/vm.md の「タスクの上限」)。
+    pub(crate) limited: Vec<CellRef>,
     /// 最後の救済の結果。区間の後で `after_steal` が読む。
     pub(crate) steal_result: Option<StealResult>,
     /// 頼みを受けたときに読んだ、元の worker の `(ready_entries, inbox_work, settled)`。盗んでも取れなかったときに、
@@ -698,6 +705,7 @@ impl<P: Policy> Scheduler<P> {
             runnables: Vec::new(),
             rescue: None,
             stolen: Vec::new(),
+            limited: Vec::new(),
             steal_result: None,
             rescue_key: (0, 0, 0),
             rescues: 0,
@@ -866,6 +874,7 @@ impl<P: Policy> Scheduler<P> {
             own_deadline,
             rescue,
             stolen,
+            limited,
             steal_result,
             left,
             ..
@@ -899,6 +908,7 @@ impl<P: Policy> Scheduler<P> {
                     depth_offset,
                     &mut out,
                     &mut work,
+                    limited,
                 )?;
             }
             if let Some((victim, budget)) = rescue.take() {
@@ -945,6 +955,7 @@ impl<P: Policy> Scheduler<P> {
             driver.as_deref_mut(),
             depth_offset,
             &mut out,
+            limited,
         )?;
         // bin に印のあるハンドルは、driver が bin を空にするまで閉じない。完了がなくても driver に完了を問わせて空に
         // させる (docs/spec/vm.md の「時計と driver」)
@@ -1105,7 +1116,8 @@ impl<P: Policy> Scheduler<P> {
                 | Notice::Cancel(_)
                 | Notice::Submit(_)
                 | Notice::CancelIo(_)
-                | Notice::Completion(_)) => rest.push(notice),
+                | Notice::Completion(_)
+                | Notice::Limit(_)) => rest.push(notice),
             }
         }
     }
@@ -1148,6 +1160,7 @@ impl<P: Policy> Scheduler<P> {
             post: &post,
         };
         let mut work = IoWork::default();
+        // 終わりでは動くタスクがないので、旗を付ける `Task` もない
         take_async(
             &mut shared.lock(),
             notices,
@@ -1156,6 +1169,7 @@ impl<P: Policy> Scheduler<P> {
             depth_offset,
             out,
             &mut work,
+            &mut Vec::new(),
         )?;
         cells::run_io(
             shared,
@@ -2108,6 +2122,7 @@ mod tests {
                 Notice::CancelIo(op) => format!("cancel_io {}", op.encode()),
                 Notice::Completion(op) => format!("completion {}", op.encode()),
                 Notice::Rescue { victim } => format!("rescue {victim}"),
+                Notice::Limit(cell) => format!("limit {}", cell.encode()),
             })
             .collect();
         for notice in notices {

@@ -114,6 +114,10 @@ pub(crate) enum Notice {
     /// 救済の頼み。`victim` の仕事を盗めと、空いていた worker か `RescueAlways` の前の worker が頼む。語を持たず、
     /// `in_flight` に数えない。run の終わりでは仕事に数えず、捨てる (docs/spec/vm.md の「タスクとスケジュール」)。
     Rescue { victim: u32 },
+    /// この worker が持ち主の、動いているタスク `cell` への上限の旗。受けた worker が登録表の lock の下で旗がまだ
+    /// 立っているかを確かめ、立っていればその VM の `Task` に旗を付ける。語を持たず、`in_flight` に数えず、救済で
+    /// 外さない。run の終わりでは仕事に数えず、捨てる (docs/spec/vm.md の「タスクとスケジュール」「タスクの上限」)。
+    Limit(CellRef),
 }
 
 impl Notice {
@@ -170,6 +174,10 @@ impl Post for Mailer<'_> {
     fn completion(&self, k: u32, op: CellRef) {
         self.run
             .send(self.control, k as usize, Notice::Completion(op));
+    }
+
+    fn limit(&self, k: u32, cell: CellRef) {
+        self.run.send(self.control, k as usize, Notice::Limit(cell));
     }
 }
 
@@ -1199,7 +1207,7 @@ impl<P: Policy> Scheduler<P> {
 
     /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、この worker が走らせるはずの仕事があるかを
     /// 返す。実行待ちの列に残った `Entry`、右の子と仕事 (`Child`)、持ち主が自分のタスクの `Place`、継続を取り出せる
-    /// `Wake` を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`、`Rescue` と、もう待っていないセルへの起こしは数えない。
+    /// `Wake` を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`、`Rescue`、`Limit` と、もう待っていないセルへの起こしは数えない。
     /// 登録表は書き換えず、列の項と知らせの語は手放さない。数えたら run は誤りで終わり、回復がヒープを捨てるからである
     /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
     pub(crate) fn left_notices(&mut self) -> bool {
@@ -1226,7 +1234,8 @@ impl<P: Policy> Scheduler<P> {
                 | Notice::Submit(_)
                 | Notice::CancelIo(_)
                 | Notice::Completion(_)
-                | Notice::Rescue { .. } => false,
+                | Notice::Rescue { .. }
+                | Notice::Limit(_) => false,
             };
         }
         left

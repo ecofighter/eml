@@ -130,6 +130,16 @@ impl Limit {
             _ => Limit::Task,
         }
     }
+
+    /// 上限の旗を受けた後の状態。`Task` は保留に、中断の間は着地の後に保留へ戻す印だけを付ける。`Pending` はそのままで、
+    /// `Stops` のタスクはセルを持たないので旗を受けない。上限の値は呼び手が当てる (docs/spec/vm.md の「タスクの上限」)。
+    fn flagged(self) -> Limit {
+        match self {
+            Limit::Task => Limit::Pending,
+            Limit::Aborting { .. } => Limit::Aborting { pending: true },
+            Limit::Pending | Limit::Stops => self,
+        }
+    }
 }
 
 /// 巻き戻しの間に本当の限度へ足す猶予の語の数 (2 MiB)。節のエントリが暴走しても、この先で止まる。
@@ -575,7 +585,7 @@ fn safepoint<R: Exec>(
     }
     let tick = sched.policy.tick();
     if polled == Polled::Collect {
-        collect_notice::<R>(ctx, task.depth_offset, sched)?;
+        collect_notice::<R>(ctx, task, sched)?;
     }
     if (polled == Polled::Switch || tick) && ctx.yielding() == 0 {
         preempt::<R>(code, ctx, task, sched)?;
@@ -600,7 +610,7 @@ fn limit_safepoint<R: Exec>(
     switch: bool,
 ) -> Result<bool, VmFault> {
     if collect {
-        collect_notice::<R>(ctx, task.depth_offset, sched)?;
+        collect_notice::<R>(ctx, task, sched)?;
     }
     limit_hit::<R>(code, ctx, task, sched)?;
     let tick = sched.policy.tick();
@@ -709,17 +719,34 @@ unsafe fn switch_to<M: Mode>(
     saved
 }
 
-/// タスクに上限の旗が届いた。旗を受けるすべての所がこれを通る。`Task` は保留にして上限を 0 にし、中断の間は着地の後に
-/// 保留へ戻す印だけを付ける (上限は猶予のまま)。`Pending` はそのままで、`Stops` のタスク (セルを持たない) に旗は
-/// 届かない (docs/spec/vm.md の「タスクの上限」)。
+/// 今動いているタスクに上限の旗が届いた。状態は `Limit::flagged` で決め、`Task` から保留に変わったときだけ上限を 0 に
+/// する。中断の間は着地の後に保留へ戻す印だけが付き、上限は猶予のままである。表に退いたタスクはこれを通らず、
+/// `mark_limited` が状態だけを変え、上限は入るときに `switch_to` が当てる (docs/spec/vm.md の「タスクの上限」)。
 fn mark_pending<M: Mode>(ctx: &mut Ctx<M>, task: &mut Task) {
-    match task.limit {
-        Limit::Task => {
-            task.limit = Limit::Pending;
-            apply_limit(ctx, task.limit, task.depth_offset);
+    let before = task.limit;
+    task.limit = before.flagged();
+    if before == Limit::Task {
+        apply_limit(ctx, task.limit, task.depth_offset);
+    }
+}
+
+/// 集める地点が受けた上限の旗を、そのセルの VM の `Task` に付ける。今のタスクは `mark_pending` で上限まで直す。表に
+/// 退いたタスクは状態だけを変え、上限は切り替えで入るときに `switch_to` が当てる。同じセルの `Task` は、待ちに入った
+/// 後で `Finish` へ戻る前のエントリの `Task` と次のエントリの `Task` の2つがありうるので、すべてに付ける。前のほうは
+/// 底の `try_all` の外にいて IO の evidence がないので、旗では起こさない。どれもなければ何もしない。`Finish` に着いた
+/// エントリの `Task` で、旗は次の `started` か `resumed` が返すか、セルと一緒に消える (docs/spec/vm.md の「タスクの上限」)。
+#[cold]
+#[inline(never)]
+fn mark_limited<P: Policy, M: Mode>(ctx: &mut Ctx<M>, task: &mut Task, sched: &mut Scheduler<P>) {
+    for cell in std::mem::take(&mut sched.limited) {
+        if task.cell == Some(cell) {
+            mark_pending(ctx, task);
         }
-        Limit::Aborting { .. } => task.limit = Limit::Aborting { pending: true },
-        Limit::Pending | Limit::Stops => {}
+        for waiting in sched.tasks.iter_mut().flatten() {
+            if waiting.cell == Some(cell) {
+                waiting.limit = waiting.limit.flagged();
+            }
+        }
     }
 }
 
@@ -743,10 +770,10 @@ fn landed<M: Mode>(ctx: &mut Ctx<M>, task: &mut Task) {
 #[inline(never)]
 fn collect_notice<R: Exec>(
     ctx: &mut Ctx<R::M>,
-    depth_offset: usize,
+    task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    collect::<R>(ctx, depth_offset, sched, true)
+    collect::<R>(ctx, task, sched, true)
 }
 
 /// タスクを実行する。`task` はエントリのタスクで、切り替えるたびに動いているタスクと入れ替わる。成功して戻るときはエントリの
@@ -1795,14 +1822,14 @@ fn switch_away<R: Exec>(
     // 落ちたハンドルの知らせは切り替えのたびに処理し、終わったタスクのセルと ID を run の終わりまで残さない
     // (docs/spec/vm.md の「`Async` のタスク」)。走れるタスクがなければ直後の `wait` が OS を見るので、ここでは
     // 見ない。走れるタスクが続くときは `POLL_EVERY` 回に1回だけ見る (docs/spec/vm.md の「時計と driver」)
-    collect::<R>(ctx, task.depth_offset, sched, false)?;
+    collect::<R>(ctx, task, sched, false)?;
     // 切り替えるたびに、ほかのスレッドから受けた解放が溜まっていれば取り込む。溜まっていなければ2回の読みで済む
     // (docs/spec/vm.md の「タスクとスケジュール」)
     ctx.reclaim_if_due();
     if !sched.run.ready_is_empty(sched.index) {
         sched.since_poll += 1;
         if sched.since_poll >= POLL_EVERY {
-            collect::<R>(ctx, task.depth_offset, sched, true)?;
+            collect::<R>(ctx, task, sched, true)?;
         }
     }
     // 走れるタスクがなければ、起こされるか次の期限か driver の完了まで待って集め直す。戻るたびに止める語を読む。
@@ -1848,7 +1875,7 @@ fn switch_away<R: Exec>(
             return Err(VmFault::Stopped(Stop::DepthLimit));
         }
         sched.since_poll = 0;
-        collect::<R>(ctx, task.depth_offset, sched, false)?;
+        collect::<R>(ctx, task, sched, false)?;
     };
     match resume::<R>(code, ctx, task, sched, next, keep)? {
         Some(at) => {
@@ -1944,14 +1971,18 @@ fn resume<R: Exec>(
 }
 
 /// 集める地点。登録表とほかの worker の知らせを `Scheduler::gather` が集め、待ちを外したタスクを再開する仕事を列の
-/// 後ろに積む。聞く者のいなかったシグナルの誤りも、仕事を積んでから返す (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 後ろに積み、受けた上限の旗を VM の `Task` に付ける。`task` は今動いているタスクである。聞く者のいなかった
+/// シグナルの誤りも、仕事を積んで旗を付けてから返す (docs/spec/vm.md の「タスクとスケジュール」)。
 fn collect<R: Exec>(
     ctx: &mut Ctx<R::M>,
-    depth_offset: usize,
+    task: &mut Task,
     sched: &mut Scheduler<R::P>,
     look: bool,
 ) -> Result<(), VmFault> {
-    let gathered = sched.gather(ctx, depth_offset, look);
+    let gathered = sched.gather(ctx, task.depth_offset, look);
+    if !sched.limited.is_empty() {
+        mark_limited(ctx, task, sched);
+    }
     if !sched.runnables.is_empty() {
         let mut out = std::mem::take(&mut sched.runnables);
         for run in out.drain(..) {
@@ -1993,7 +2024,7 @@ fn preempt<R: Exec>(
     );
     // 横取りの刻みごとに OS を見るので、計算の重いタスクが走る worker でも I/O の完了の遅れは刻みの長さまでである
     // (docs/spec/vm.md の「時計と driver」)
-    collect::<R>(ctx, task.depth_offset, sched, true)?;
+    collect::<R>(ctx, task, sched, true)?;
     loop {
         let next = sched.run.pick_ready(sched.index, &mut sched.policy);
         sched.policy.reload();
@@ -2010,9 +2041,7 @@ fn preempt<R: Exec>(
             return Ok(());
         };
         let polled = match poll(ctx, task.stack_depth(), sched.index) {
-            Ok(Polled::Collect) => {
-                collect::<R>(ctx, task.depth_offset, sched, true).map(|()| Polled::Collect)
-            }
+            Ok(Polled::Collect) => collect::<R>(ctx, task, sched, true).map(|()| Polled::Collect),
             Ok(Polled::Limit { collect, switch }) => {
                 match limit_safepoint::<R>(code, ctx, task, sched, collect, switch) {
                     Ok(true) => continue,
@@ -2351,6 +2380,7 @@ fn finish<R: Exec>(
     sched.take_slot(ctx, task.depth_offset, &mut out)?;
     {
         here!(sched, post, here);
+        // 終わりでは動くタスクがないので、旗を付ける `Task` もない
         cells::drain(
             &sched.cells,
             &here,
@@ -2358,6 +2388,7 @@ fn finish<R: Exec>(
             sched.driver.as_deref_mut(),
             task.depth_offset,
             &mut out,
+            &mut Vec::new(),
         )?;
     }
     if !out.is_empty() || sched.cells.lock().left_at_end() {
@@ -2842,7 +2873,7 @@ fn async_op<R: Exec>(
             // 見ないと起きない同じ worker の読み手の先へ走り続けないためである。走れるタスクがなければ譲らずに続ける
             // (docs/spec/stdlib.md の「操作の予算」、docs/spec/vm.md の「時計と driver」)
             if step == cells::FAST_YIELD {
-                collect::<R>(ctx, task.depth_offset, sched, true)?;
+                collect::<R>(ctx, task, sched, true)?;
                 if sched.run.ready_is_empty(sched.index) {
                     step = sched.cells.lock().go_on(me)?;
                 }
@@ -4740,6 +4771,84 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             assert_eq!(task.limit, after, "{before:?}");
             assert_eq!(ctx.depth_limit(), limit, "{before:?}");
         }
+    }
+
+    /// 集める地点が mail の上限の旗を受けると、表に退いたタスクは状態だけが保留になり、`Ctx` の上限は今のタスクの
+    /// ままである。今のタスクの旗では、今のタスクが保留になって上限が 0 になる。
+    #[test]
+    fn collect_marks_the_task_of_a_limited_cell() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let current = cells::task_on(&sched.cells, 0, 0, false);
+        let waiting = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(current);
+        task.limit = Limit::Task;
+        let mut other = Task::new(&code, function(&code, "main"), DEPTH);
+        other.cell = Some(waiting);
+        other.limit = Limit::Task;
+        let id = sched.add_task(other);
+        ctx.set_depth_limit(DEPTH);
+        sched.cells.mail.push(MailItem::Limit(waiting));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(sched.tasks[id].as_ref().unwrap().limit, Limit::Pending);
+        assert_eq!(task.limit, Limit::Task);
+        assert_eq!(ctx.depth_limit(), DEPTH);
+        sched.cells.mail.push(MailItem::Limit(current));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(ctx.depth_limit(), 0);
+        assert!(sched.limited.is_empty());
+    }
+
+    /// 同じセルの `Task` が今のタスクと表の両方にあれば、どちらにも旗を付ける。待ちに入った後で `Finish` へ戻る前の
+    /// エントリの `Task` と次のエントリの `Task` が並びうるためである。上限を 0 にするのは今のタスクの分だけである。
+    #[test]
+    fn collect_marks_every_task_of_the_cell() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        let mut other = Task::new(&code, function(&code, "main"), DEPTH);
+        other.cell = Some(cell);
+        other.limit = Limit::Aborting { pending: false };
+        let id = sched.add_task(other);
+        ctx.set_depth_limit(DEPTH);
+        sched.cells.mail.push(MailItem::Limit(cell));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(
+            sched.tasks[id].as_ref().unwrap().limit,
+            Limit::Aborting { pending: true }
+        );
+        assert_eq!(ctx.depth_limit(), 0);
+    }
+
+    /// ほかの worker が回した `Notice::Limit` は、集める地点が受け箱から取り、旗がまだ立っていれば今のタスクに付ける。
+    /// 届く前に旗が下りていれば付けない。
+    #[test]
+    fn collect_marks_the_task_of_a_forwarded_limit_only_while_flagged() {
+        let (code, mut ctx, mut sched) = limit_fixture(CALL);
+        let control = Arc::clone(ctx.heap().control());
+        let cell = cells::task_on(&sched.cells, 0, 0, false);
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        ctx.set_depth_limit(DEPTH);
+        assert_eq!(cells::limit_task(&sched.cells, cell), Some(cell));
+        sched.cells.lock().clear_limit(cell).unwrap();
+        sched.run.send(&control, 0, Notice::Limit(cell));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Task);
+        assert_eq!(ctx.depth_limit(), DEPTH);
+        assert_eq!(cells::limit_task(&sched.cells, cell), Some(cell));
+        sched.run.send(&control, 0, Notice::Limit(cell));
+        collect::<Checked>(&mut ctx, &mut task, &mut sched, false).unwrap();
+        assert_eq!(task.limit, Limit::Pending);
+        assert_eq!(ctx.depth_limit(), 0);
     }
 
     /// `Stops` でないタスクのスタックの容量の上限は、中断の間の猶予も覆う。
