@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    Host, HostRef, Opened, Process, Spawn, Spawned, StderrMode, StdinSlot, Stdio, Stream, WriteMode,
+    Host, HostRef, Opened, Process, Spawn, Spawned, StderrSpec, StdinSlot, StdinSpec, StdoutSpec,
+    Stream, WriteMode,
 };
 
 /// メモリの上のファイル。読み手の振る舞い (1回に返すバイト数、途中の誤り、中断) を決められる。
@@ -134,7 +135,7 @@ pub(super) struct Started {
     pub(super) args: Vec<String>,
     pub(super) env: Vec<(String, String)>,
     pub(super) cwd: Option<String>,
-    pub(super) stdio: (Stdio, Stdio, StderrMode),
+    pub(super) stdio: (StdinSpec, StdoutSpec, StderrSpec),
 }
 
 impl MemoryHost {
@@ -304,23 +305,26 @@ impl Host for MemoryHost {
     }
     /// プロセスを起動せず、受けた設定を覚える。`missing` は見つからないプログラムである。pipe の標準入力は
     /// `child_input` に写し (`fail_write` があれば書くたびにその文言で失敗する)、pipe の標準出力は `child_output` を
-    /// 読ませる。子の `wait` は引数の数を終了コードにする
+    /// 読ませる。子の `wait` は引数の数を終了コードにする。段は1つだけ受ける
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
-        if spawn.program == "missing" {
+        let [stage] = spawn.stages else {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput));
+        };
+        if stage.program == "missing" {
             return Err(io::Error::from(io::ErrorKind::NotFound));
         }
         self.spawns.lock().unwrap().push(Started {
-            program: spawn.program.to_string(),
-            args: spawn.args.iter().map(|a| a.to_string()).collect(),
-            env: spawn
+            program: stage.program.to_string(),
+            args: stage.args.iter().map(|a| a.to_string()).collect(),
+            env: stage
                 .env
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
-            cwd: spawn.cwd.map(str::to_string),
-            stdio: (spawn.stdin, spawn.stdout, spawn.stderr),
+            cwd: stage.cwd.map(str::to_string),
+            stdio: (spawn.stdin, spawn.stdout, stage.stderr),
         });
-        let stdin = (spawn.stdin == Stdio::Pipe).then(|| {
+        let stdin = (spawn.stdin == StdinSpec::Pipe).then(|| {
             Box::new(ChildInput {
                 bytes: self.child_input.clone(),
                 fail: self.fail_write,
@@ -328,17 +332,17 @@ impl Host for MemoryHost {
                 interrupt: self.interrupt_run.clone(),
             }) as Box<dyn Write + Send>
         });
-        let stdout = (spawn.stdout == Stdio::Pipe)
+        let stdout = (spawn.stdout == StdoutSpec::Pipe)
             .then(|| Box::new(Cursor::new(self.child_output.clone())) as Box<dyn Read + Send>);
         Ok(Spawned {
             stdin,
             stdout,
-            process: Box::new(MemoryProcess {
-                code: spawn.args.len() as i32,
+            processes: vec![Box::new(MemoryProcess {
+                code: stage.args.len() as i32,
                 waits: self.waits.clone(),
                 kills: self.kills.clone(),
                 interrupt: self.interrupt_run.clone(),
-            }),
+            })],
         })
     }
 }
@@ -524,17 +528,20 @@ mod std_host {
     #[cfg(unix)]
     #[test]
     fn a_spawned_child_talks_through_pipes() {
-        use crate::{Spawn, StderrMode, Stdio};
+        use crate::{Spawn, Stage, StderrSpec, StdinSpec, StdoutSpec};
         let (host, out, _) = std_host(Buffering::Block);
         host.write_line(Stream::Out, "before").unwrap();
-        let spawn = Spawn {
+        let stage = Stage {
             program: "sh",
             args: &["-c", "cat; echo err >&2; exit 3"],
             env: &[],
             cwd: None,
-            stdin: Stdio::Pipe,
-            stdout: Stdio::Pipe,
-            stderr: StderrMode::ToStdout,
+            stderr: StderrSpec::ToStdout,
+        };
+        let spawn = Spawn {
+            stages: &[stage],
+            stdin: StdinSpec::Pipe,
+            stdout: StdoutSpec::Pipe,
         };
         let mut child = host.spawn(&spawn).unwrap();
         assert_eq!(out.text(), "before\n");
@@ -547,21 +554,30 @@ mod std_host {
             .read_to_string(&mut read)
             .unwrap();
         assert_eq!(read, "in\nerr\n");
-        assert_eq!(child.process.wait().unwrap(), 3);
-        let sleeper = Spawn {
+        assert_eq!(child.processes[0].wait().unwrap(), 3);
+        let sleeper = Stage {
             args: &["-c", "sleep 10"],
-            stdin: Stdio::Null,
-            stdout: Stdio::Null,
-            stderr: StderrMode::Null,
-            ..spawn
+            stderr: StderrSpec::Null,
+            ..stage
         };
-        let mut child = host.spawn(&sleeper).unwrap();
+        let mut child = host
+            .spawn(&Spawn {
+                stages: &[sleeper],
+                stdin: StdinSpec::Null,
+                stdout: StdoutSpec::Null,
+            })
+            .unwrap();
         assert!(child.stdin.is_none() && child.stdout.is_none());
-        child.process.kill().unwrap();
-        assert_eq!(child.process.wait().unwrap(), 128 + 9);
-        let missing = Spawn {
+        child.processes[0].kill().unwrap();
+        assert_eq!(child.processes[0].wait().unwrap(), 128 + 9);
+        let missing = Stage {
             program: "eml-no-such-program",
             ..sleeper
+        };
+        let missing = Spawn {
+            stages: &[missing],
+            stdin: StdinSpec::Null,
+            stdout: StdoutSpec::Null,
         };
         assert_eq!(
             host.spawn(&missing).err().map(|e| e.kind()),
@@ -576,7 +592,7 @@ mod std_host {
     fn a_spawned_child_runs_in_its_directory() {
         use std::os::unix::fs::PermissionsExt;
 
-        use crate::{Spawn, StderrMode, Stdio};
+        use crate::{Spawn, Stage, StderrSpec, StdinSpec, StdoutSpec};
         let dir = std::env::temp_dir().join(format!("eml_rt-spawn-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let script = dir.join("sub").join("run.sh");
@@ -590,13 +606,15 @@ mod std_host {
             Buffering::Line,
         );
         let spawn = Spawn {
-            program: "./run.sh",
-            args: &[],
-            env: &[("FOO", "a"), ("FOO", "b")],
-            cwd: Some("sub"),
-            stdin: Stdio::Null,
-            stdout: Stdio::Pipe,
-            stderr: StderrMode::Inherit,
+            stages: &[Stage {
+                program: "./run.sh",
+                args: &[],
+                env: &[("FOO", "a"), ("FOO", "b")],
+                cwd: Some("sub"),
+                stderr: StderrSpec::Inherit,
+            }],
+            stdin: StdinSpec::Null,
+            stdout: StdoutSpec::Pipe,
         };
         let mut child = host.spawn(&spawn).unwrap();
         let mut read = String::new();
@@ -607,7 +625,7 @@ mod std_host {
             .read_to_string(&mut read)
             .unwrap();
         assert_eq!(read, "b hi\n");
-        assert_eq!(child.process.wait().unwrap(), 0);
+        assert_eq!(child.processes[0].wait().unwrap(), 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

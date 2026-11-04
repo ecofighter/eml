@@ -12,8 +12,8 @@ use super::mortal;
 use super::string::text;
 use crate::externs::{FALSE, IndexFault, IoOp, IoReason, TRUE, Utf8Source};
 use crate::{
-    Control, Ctx, Fault, Form, Handle, HeapError, Limits, Mode, ReadAmount, StdStream, StderrMode,
-    Stdio, Stop, Stream, Word, Write,
+    Control, Ctx, Fault, Form, Handle, HeapError, Limits, Mode, ReadAmount, StdStream, StderrSpec,
+    StdinSpec, StdoutSpec, Stop, Stream, Word, Write,
 };
 
 fn s<M: Mode>(ctx: &mut Ctx<M>, x: &str) -> Word {
@@ -348,14 +348,19 @@ fn a_child_gets_its_lists_split<M: Mode>() {
                 &["-a", "", "x y"],
                 &[("K", "v"), ("K", "w")],
                 Some("sub".to_string()),
-                (Stdio::Inherit, Stdio::Null, StderrMode::ToStdout)
+                (StdinSpec::Inherit, StdoutSpec::Null, StderrSpec::ToStdout)
             ),
-            started(&[], &[], None, (Stdio::Null, Stdio::Pipe, StderrMode::Null)),
             started(
                 &[],
                 &[],
                 None,
-                (Stdio::Inherit, Stdio::Inherit, StderrMode::Inherit)
+                (StdinSpec::Null, StdoutSpec::Pipe, StderrSpec::Null)
+            ),
+            started(
+                &[],
+                &[],
+                None,
+                (StdinSpec::Inherit, StdoutSpec::Inherit, StderrSpec::Inherit)
             ),
         ]
     );

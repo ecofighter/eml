@@ -448,13 +448,6 @@ pub(crate) fn host_spawn(
     let spawned = (||
         {
             let invalid = || io::Error::from(io::ErrorKind::InvalidInput);
-            let stdio = |code: i64|
-                match code {
-                    0 => Some(Stdio::Inherit),
-                    1 => Some(Stdio::Null),
-                    2 => Some(Stdio::Pipe),
-                    _ => None,
-                };
             let args = fields(args).ok_or_else(invalid)?;
             let pairs = fields(env).ok_or_else(invalid)?;
             if pairs.len() % 2 != 0 || program.contains('\0') || cwd.contains('\0') {
@@ -465,7 +458,7 @@ pub(crate) fn host_spawn(
             if env.iter().any(|(name, _)| name.is_empty() || name.contains('=')) {
                 return Err(invalid());
             }
-            let spawn = Spawn {
+            let stage = Stage {
                 program,
                 args: &args,
                 env: &env,
@@ -474,19 +467,34 @@ pub(crate) fn host_spawn(
                 } else {
                     Some(cwd)
                 },
-                stdin: stdio(stdin).ok_or_else(invalid)?,
-                stdout: stdio(stdout).ok_or_else(invalid)?,
                 stderr: match stderr {
-                    0 => StderrMode::Inherit,
-                    1 => StderrMode::ToStdout,
-                    2 => StderrMode::Null,
+                    0 => StderrSpec::Inherit,
+                    1 => StderrSpec::ToStdout,
+                    2 => StderrSpec::Null,
                     _ => return Err(invalid()),
                 },
             };
-            host.host.spawn(&spawn)
+            let spawn = Spawn {
+                stages: std::slice::from_ref(&stage),
+                stdin: match stdin {
+                    0 => StdinSpec::Inherit,
+                    1 => StdinSpec::Null,
+                    2 => StdinSpec::Pipe,
+                    _ => return Err(invalid()),
+                },
+                stdout: match stdout {
+                    0 => StdoutSpec::Inherit,
+                    1 => StdoutSpec::Null,
+                    2 => StdoutSpec::Pipe,
+                    _ => return Err(invalid()),
+                },
+            };
+            let mut spawned = host.host.spawn(&spawn)?;
+            let process = spawned.processes.pop().ok_or_else(invalid)?;
+            Ok((spawned.stdin, spawned.stdout, process))
         })();
     match spawned {
-        Ok(Spawned { stdin, stdout, process }) => Ok(
+        Ok((stdin, stdout, process)) => Ok(
             Child {
                 program: program.into(),
                 process: Some(process),
@@ -1017,20 +1025,31 @@ pub trait Host: Send + Sync {
     }
 }
 
-/// 子の標準入力か標準出力の向き。
+/// 子の標準入力の向き。パイプラインでは先頭の段のものである。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Stdio {
+pub enum StdinSpec {
     /// eml のものを受け継ぐ。
     Inherit,
     /// 空にする (`/dev/null`)。
     Null,
-    /// pipe にして、`Spawned` で eml に渡す。
+    /// pipe にして、書き込む端を `Spawned` で eml に渡す。
     Pipe,
 }
 
-/// 子の標準エラーの向き。
+/// 子の標準出力の向き。パイプラインでは最後の段のものである。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StderrMode {
+pub enum StdoutSpec {
+    /// eml のものを受け継ぐ。
+    Inherit,
+    /// 空にする (`/dev/null`)。
+    Null,
+    /// pipe にして、読み手を `Spawned` で eml に渡す。
+    Pipe,
+}
+
+/// 子の標準エラーの向き。段ごとに決める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StderrSpec {
     /// eml のものを受け継ぐ。
     Inherit,
     /// 子の標準出力と同じ先に向ける (`2>&1`)。
@@ -1039,9 +1058,9 @@ pub enum StderrMode {
     Null,
 }
 
-/// `Host::spawn` に渡す、起動する子の設定。
-#[derive(Debug)]
-pub struct Spawn<'a> {
+/// 起動する段の1つ。
+#[derive(Debug, Clone, Copy)]
+pub struct Stage<'a> {
     /// `/` を含まなければ `PATH` から探す。`/` を含む相対パスは作業ディレクトリに対して解決する (`program_path`)。
     pub program: &'a str,
     pub args: &'a [&'a str],
@@ -1049,12 +1068,10 @@ pub struct Spawn<'a> {
     pub env: &'a [(&'a str, &'a str)],
     /// 作業ディレクトリ。相対パスは Host の `file_root` に対して読む (`dir`)。
     pub cwd: Option<&'a str>,
-    pub stdin: Stdio,
-    pub stdout: Stdio,
-    pub stderr: StderrMode,
+    pub stderr: StderrSpec,
 }
 
-impl Spawn<'_> {
+impl Stage<'_> {
     /// 子の作業ディレクトリ。`cwd` を `file_root` につなぐ。`cwd` がなければ `file_root` である。
     pub fn dir(&self, file_root: &Path) -> PathBuf {
         match self.cwd {
@@ -1075,6 +1092,14 @@ impl Spawn<'_> {
     }
 }
 
+/// `Host::spawn` に渡す、起動する子の設定。段を先頭から並べ、標準入力は先頭の段に、標準出力は最後の段に当てる。
+#[derive(Debug)]
+pub struct Spawn<'a> {
+    pub stages: &'a [Stage<'a>],
+    pub stdin: StdinSpec,
+    pub stdout: StdoutSpec,
+}
+
 /// 起動した子のプロセス。`std::process::Child` を Host の型に出さないのは、プロセスを持たない Host (組み込み先と
 /// テスト) も実装できるようにするためである。
 pub trait Process: Send {
@@ -1083,12 +1108,12 @@ pub trait Process: Send {
     fn kill(&mut self) -> io::Result<()>;
 }
 
-/// `Host::spawn` が起動した子。`Stdio::Pipe` にした向きだけが `Some` である。標準出力の読み手は buffer のない `Read`
-/// でよい。buffer は `eml_rt` の読み手が持つ。
+/// `Host::spawn` が起動した子。`stdin` と `stdout` は `Pipe` にした向きだけが `Some` である。標準出力の読み手は
+/// buffer のない `Read` でよい。buffer は `eml_rt` の読み手が持つ。`processes` は段ごとの子を先頭から並べる。
 pub struct Spawned {
     pub stdin: Option<Box<dyn Write + Send>>,
     pub stdout: Option<Box<dyn Read + Send>>,
-    pub process: Box<dyn Process>,
+    pub processes: Vec<Box<dyn Process>>,
 }
 
 /// `std::process::Child` の `Process`。
@@ -1158,12 +1183,21 @@ fn write_stopping(
     }
 }
 
-/// `Stdio` を std の向きにする。
-fn os_stdio(stdio: Stdio) -> process::Stdio {
-    match stdio {
-        Stdio::Inherit => process::Stdio::inherit(),
-        Stdio::Null => process::Stdio::null(),
-        Stdio::Pipe => process::Stdio::piped(),
+/// `StdinSpec` を std の向きにする。
+fn os_stdin(stdin: StdinSpec) -> process::Stdio {
+    match stdin {
+        StdinSpec::Inherit => process::Stdio::inherit(),
+        StdinSpec::Null => process::Stdio::null(),
+        StdinSpec::Pipe => process::Stdio::piped(),
+    }
+}
+
+/// `StdoutSpec` を std の向きにする。
+fn os_stdout(stdout: StdoutSpec) -> process::Stdio {
+    match stdout {
+        StdoutSpec::Inherit => process::Stdio::inherit(),
+        StdoutSpec::Null => process::Stdio::null(),
+        StdoutSpec::Pipe => process::Stdio::piped(),
     }
 }
 
@@ -1348,43 +1382,47 @@ impl Host for StdHost {
         ))
     }
 
+    /// 段は1つだけ受ける。
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
+        let [stage] = spawn.stages else {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput));
+        };
         lock(&self.out).flush()?;
-        let dir = spawn.dir(&self.file_root);
-        let mut command = Command::new(spawn.program_path(&dir)?);
-        command.args(spawn.args).envs(spawn.env.iter().copied());
+        let dir = stage.dir(&self.file_root);
+        let mut command = Command::new(stage.program_path(&dir)?);
+        command.args(stage.args).envs(stage.env.iter().copied());
         // 空の根はプロセスの今のディレクトリである。`current_dir("")` は開けない
         if !dir.as_os_str().is_empty() {
             command.current_dir(&dir);
         }
-        command.stdin(os_stdio(spawn.stdin));
+        command.stdin(os_stdin(spawn.stdin));
         let mut shared = None;
-        match (spawn.stdout, spawn.stderr) {
+        match (spawn.stdout, stage.stderr) {
             // 1本の pipe の書き込む端を2つに分けて、標準出力と標準エラーに渡す
-            (Stdio::Pipe, StderrMode::ToStdout) => {
+            (StdoutSpec::Pipe, StderrSpec::ToStdout) => {
                 let (reader, writer) = io::pipe()?;
                 command.stderr(writer.try_clone()?).stdout(writer);
                 shared = Some(reader);
             }
             // std は `io::Stdout` を、どの OS でも子に渡せる標準出力の写しにする (`2>&1` の意味)
-            (Stdio::Inherit, StderrMode::ToStdout) => {
+            (StdoutSpec::Inherit, StderrSpec::ToStdout) => {
                 command
                     .stdout(process::Stdio::inherit())
                     .stderr(io::stdout());
             }
-            (Stdio::Null, StderrMode::ToStdout) => {
+            (StdoutSpec::Null, StderrSpec::ToStdout) => {
                 command
                     .stdout(process::Stdio::null())
                     .stderr(process::Stdio::null());
             }
-            (stdout, StderrMode::Inherit) => {
+            (stdout, StderrSpec::Inherit) => {
                 command
-                    .stdout(os_stdio(stdout))
+                    .stdout(os_stdout(stdout))
                     .stderr(process::Stdio::inherit());
             }
-            (stdout, StderrMode::Null) => {
+            (stdout, StderrSpec::Null) => {
                 command
-                    .stdout(os_stdio(stdout))
+                    .stdout(os_stdout(stdout))
                     .stderr(process::Stdio::null());
             }
         }
@@ -1405,7 +1443,7 @@ impl Host for StdHost {
         Ok(Spawned {
             stdin,
             stdout,
-            process: Box::new(OsProcess(child)),
+            processes: vec![Box::new(OsProcess(child))],
         })
     }
 }

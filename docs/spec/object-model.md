@@ -1128,17 +1128,22 @@ pub struct Opened {
     pub size: Option<u64>,
 }
 
-pub enum Stdio { Inherit, Null, Pipe }
-pub enum StderrMode { Inherit, ToStdout, Null }
+pub enum StdinSpec { Inherit, Null, Pipe }
+pub enum StdoutSpec { Inherit, Null, Pipe }
+pub enum StderrSpec { Inherit, ToStdout, Null }
 
-pub struct Spawn<'a> {
+pub struct Stage<'a> {
     pub program: &'a str,
     pub args: &'a [&'a str],
     pub env: &'a [(&'a str, &'a str)],
     pub cwd: Option<&'a str>,
-    pub stdin: Stdio,
-    pub stdout: Stdio,
-    pub stderr: StderrMode,
+    pub stderr: StderrSpec,
+}
+
+pub struct Spawn<'a> {
+    pub stages: &'a [Stage<'a>],
+    pub stdin: StdinSpec,
+    pub stdout: StdoutSpec,
 }
 
 pub trait Process: Send {
@@ -1149,7 +1154,7 @@ pub trait Process: Send {
 pub struct Spawned {
     pub stdin: Option<Box<dyn Write + Send>>,
     pub stdout: Option<Box<dyn Read + Send>>,
-    pub process: Box<dyn Process>,
+    pub processes: Vec<Box<dyn Process>>,
 }
 ```
 
@@ -1164,10 +1169,10 @@ pub struct Spawned {
 - ネイティブ、WASM (WASI)、アプリへの組み込み、REPL は、渡す Host を替えるだけで済む。標準入力、環境変数、子のプロセスなどの extern を足すときも、Host のメソッドを足す
 - `args`、`env_var`、`stdin`、`open_write`、`spawn` は、その入出力を持たない Host の振る舞いを既定に持つ。引数は空、環境変数は設定されていない、標準入力はない (`None`。extern の理由は `not available`)、ほかは `Unsupported` の誤り (extern の理由は同じく `not available`) である。組み込み先の Host は、出力とファイルの読みだけを実装すれば済む
 - `stdin` は、Host が持つ標準入力の読み手の slot (`Arc<StdinSlot>`) を返す。`Stdin.open` が slot から読み手を取り、ハンドルを落とすときに buffer に残ったバイトごと返す (下の「読み手」)。Host のメソッドは `&self` を受けるので、slot は中の `Mutex` で守る。`StdinSlot::new(reader)` は、buffer のない `Read` を受けて読み手にする
-- `spawn` は、`Spawn` の設定で子を起動し、`Spawned` を返す。`Spawned` の `stdin` と `stdout` は、`Stdio::Pipe` にした向きだけが `Some` で、子の標準入力への書き込む端と、標準出力の読み手である。読み手は buffer のない `Read` でよい。buffer は `eml_rt` の読み手 (下の「読み手」) が持つ
-  - `Stdio` は標準入力と標準出力の向きで、受け継ぐ (`Inherit`)、空 (`Null`、`/dev/null`)、pipe (`Pipe`) の3つである。`StderrMode` は標準エラーの向きで、受け継ぐ (`Inherit`)、標準出力と同じ先 (`ToStdout`、`2>&1`)、捨てる (`Null`、`2>/dev/null`) の3つである
-  - `env` は上書きする環境変数で、後の組が勝つ。`cwd` は作業ディレクトリで、相対パスは Host の `file_root` に対して読む (`Spawn::dir`)
-  - `program` が `/` を含まなければ `PATH` から探す。`/` を含む相対パスは、子の作業ディレクトリに対して絶対パスにしてから起動する (`Spawn::program_path`)。Rust の `Command` は、`current_dir` と相対のプログラムの組み合わせの意味を決めていないためである
+- `spawn` は、`Spawn` の設定で子を起動し、`Spawned` を返す。`Spawn` は、起動する段 `Stage` を先頭から並べた `stages` と、標準入力と標準出力の向きを持つ。標準入力の向きは先頭の段に、標準出力の向きは最後の段に当たり、標準エラーの向きは段ごとに持つ。今の Host は段を1つだけ受け、ほかの数は `InvalidInput` で断る。`Spawned` の `processes` は段ごとの子を先頭から並べる。`stdin` と `stdout` は、`Pipe` にした向きだけが `Some` で、子の標準入力への書き込む端と、標準出力の読み手である。読み手は buffer のない `Read` でよい。buffer は `eml_rt` の読み手 (下の「読み手」) が持つ
+  - `StdinSpec` と `StdoutSpec` は標準入力と標準出力の向きで、受け継ぐ (`Inherit`)、空 (`Null`、`/dev/null`)、pipe (`Pipe`) の3つである。`StderrSpec` は標準エラーの向きで、受け継ぐ (`Inherit`)、標準出力と同じ先 (`ToStdout`、`2>&1`)、捨てる (`Null`、`2>/dev/null`) の3つである
+  - `Stage` の `env` は上書きする環境変数で、後の組が勝つ。`cwd` は作業ディレクトリで、相対パスは Host の `file_root` に対して読む (`Stage::dir`)
+  - `program` が `/` を含まなければ `PATH` から探す。`/` を含む相対パスは、子の作業ディレクトリに対して絶対パスにしてから起動する (`Stage::program_path`)。Rust の `Command` は、`current_dir` と相対のプログラムの組み合わせの意味を決めていないためである
   - `Process` は起動した子で、`wait` は子が終わるのを待って終了コード (`exit_code`) を返し、シグナルで終わった子は、シェルと同じく 128 + 番号にする。`kill` は子を止める。`std::process::Child` を Host の型に出さないのは、プロセスを持たない Host (組み込み先と、Miri のテストの Host) も実装できるようにするためである
 
 ### 出力のバッファ
@@ -1176,7 +1181,7 @@ pub struct Spawned {
 
 - `StdHost::stdio(file_root)` は、標準出力と標準エラーに書く。`StdHost::new(out, err, file_root, mode)` は、テストと組み込みのために書き込み先と書き方 (`Buffering` の `Line` か `Block`) を受ける。どちらも引数と標準入力を持たず (REPL の Host)、`with_args` と `with_stdin` で足す (`eml run` の Host。[VM](vm.md) の「置き場所」)。`with_stdin` は buffer のない `Read` を受けて slot に置き、`eml run` は `io::stdin()` をそのまま渡す
 - `StdHost` の `env_var` はプロセスの環境を読む。空の名前と、`=` か NUL を含む名前は `std::env::var_os` が panic しうるので、読まずに `None` を返す。`open_write` は `file_root` にパスをつなぎ、`OpenOptions` の `write` と `create` に、`Truncate` なら `truncate` を、`Append` なら `append` を足して開く
-- `StdHost` の `spawn` は、プロセスの環境に `env` を上書きし、`Spawn::dir` が空でなければそこを作業ディレクトリにする。標準入力と標準出力は `Stdio` のとおりで、`Pipe` は std の pipe である。標準エラーの `ToStdout` は、標準出力が `Pipe` なら `std::io::pipe` の書き込む端を `try_clone` して標準出力と標準エラーの両方に渡し、読み出す端を `Spawned` の `stdout` にする。標準出力を受け継ぐなら、受け継いだ標準出力の fd を写して標準エラーに渡す。標準出力が `Null` なら、標準エラーも `Null` にする。起動した後で `Command` を落とし、親が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読み手に終わりが届かないためである
+- `StdHost` の `spawn` は、プロセスの環境に `env` を上書きし、`Stage::dir` が空でなければそこを作業ディレクトリにする。標準入力と標準出力は `StdinSpec` と `StdoutSpec` のとおりで、`Pipe` は std の pipe である。標準エラーの `ToStdout` は、標準出力が `Pipe` なら `std::io::pipe` の書き込む端を `try_clone` して標準出力と標準エラーの両方に渡し、読み出す端を `Spawned` の `stdout` にする。標準出力を受け継ぐなら、受け継いだ標準出力の fd を写して標準エラーに渡す。標準出力が `Null` なら、標準エラーも `Null` にする。起動した後で `Command` を落とし、親が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読み手に終わりが届かないためである
 - 出力の方針は C の stdio と同じにする。標準出力が端末なら、対話ですぐ見えるように行ごとに書く (`Line`)。端末でなければ、64 KiB の `BufWriter` でまとめて書く (`Block`)。標準エラーは、いつも書くたびに書き出す
 - バイト列の書き込み (`Host::write`) は、標準出力が `Line` なら、`\n` を含むときに書き出す。`\n` を探す走査は `Line` のときだけ行い、`Block` の書き込みには費用を足さない。標準エラーへの書き込みは、`write_line` と同じく書くたびに書き出す
 - まとめて書くと、行ごとに flush する書き方より速い ([計測の基準](../implementation/benchmarks.md) の「出力のバッファと Host の呼び出し」)
@@ -1293,7 +1298,7 @@ pub struct Spawned {
 - `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `transfer_back` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
 
-Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と、ID ごとの数を数え直す `Control::check_owned` と `owned_by`、ID の表の lock と塊を扱う安全な関数とページの表を引いて書く安全な関数 (T15 の関数が呼ぶ)、取り込んでから検査する `Ctx::check_invariants` と `Ctx::leaks` (検査モード)、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と worker の止める語とシグナルの語と見張りの語と終わりの欄と確保量と worker ごとの取った量と柔らかい上限の閾値を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait (既定のメソッドを含む) と `Opened`、`IoDriver` の trait (受けたソケットを取り込む `adopt` を含む) と、driver に渡す記憶の構造体 `RawBuf`、driver に渡す操作 `Op`、完了 `Completion` とその中身 `Done` (受けたソケットの `Accepted` を含む)、どの driver にも登録していない OS のソケット `RawSocket` とその中身の型 `OsSocket` (`new`、`into_inner`、記述子の番号で比べる `PartialEq` と `Eq`)、起こしの trait `IoWaker`、落としたハンドルを積む `HandleBin`、子のプロセスの Host の型 `Stdio`、`StderrMode`、`Spawn` (作業ディレクトリを決める `dir` と、プログラムのパスを決める `program_path` を含む)、`Process`、`Spawned`、`StdHost` の子 `OsProcess` と、向きを写す `os_stdio`、`host_spawn` の列を要素に分ける `fields`、`StdinSlot` の `new` と、読み手を取り出す `take` と返す `put`、`StdinHandle`、`StdoutHandle`、`StderrHandle`、`Child` の `Drop` (T4)、`OpenFlags` の `new` と、印を選ぶ `flag`、立てる `raise`、下ろす `lower`、`Reader` の `new`、`fill_buf`、`consume` と buffer の残りを取り出す `take_buffered`、trait `Source` と `FileIn` と `StdinHandle` と `Child` の実装、読みの誤りに名前を付ける `fault`、書き込みの誤りで `FileOut` の buffer を捨てる `write_fault`、`exit_code`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、開けなかったパスがディレクトリかを見る `directory_error`、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` と、読みの部品 `check`、`line_part`、`read_line`、`read_all` (上の「読み手」)、テストだけである。
+Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と、ID ごとの数を数え直す `Control::check_owned` と `owned_by`、ID の表の lock と塊を扱う安全な関数とページの表を引いて書く安全な関数 (T15 の関数が呼ぶ)、取り込んでから検査する `Ctx::check_invariants` と `Ctx::leaks` (検査モード)、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と worker の止める語とシグナルの語と見張りの語と終わりの欄と確保量と worker ごとの取った量と柔らかい上限の閾値を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait (既定のメソッドを含む) と `Opened`、`IoDriver` の trait (受けたソケットを取り込む `adopt` を含む) と、driver に渡す記憶の構造体 `RawBuf`、driver に渡す操作 `Op`、完了 `Completion` とその中身 `Done` (受けたソケットの `Accepted` を含む)、どの driver にも登録していない OS のソケット `RawSocket` とその中身の型 `OsSocket` (`new`、`into_inner`、記述子の番号で比べる `PartialEq` と `Eq`)、起こしの trait `IoWaker`、落としたハンドルを積む `HandleBin`、子のプロセスの Host の型 `StdinSpec`、`StdoutSpec`、`StderrSpec`、`Stage` (作業ディレクトリを決める `dir` と、プログラムのパスを決める `program_path` を含む)、`Spawn`、`Process`、`Spawned`、`StdHost` の子 `OsProcess` と、向きを写す `os_stdin` と `os_stdout`、`host_spawn` の列を要素に分ける `fields`、`StdinSlot` の `new` と、読み手を取り出す `take` と返す `put`、`StdinHandle`、`StdoutHandle`、`StderrHandle`、`Child` の `Drop` (T4)、`OpenFlags` の `new` と、印を選ぶ `flag`、立てる `raise`、下ろす `lower`、`Reader` の `new`、`fill_buf`、`consume` と buffer の残りを取り出す `take_buffered`、trait `Source` と `FileIn` と `StdinHandle` と `Child` の実装、読みの誤りに名前を付ける `fault`、書き込みの誤りで `FileOut` の buffer を捨てる `write_fault`、`exit_code`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、開けなかったパスがディレクトリかを見る `directory_error`、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` と、読みの部品 `check`、`line_part`、`read_line`、`read_all` (上の「読み手」)、テストだけである。
 
 | # | 中身 | 理由 | Miri で確かめること |
 |---|---|---|---|

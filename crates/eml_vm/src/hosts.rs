@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 
 use eml_rt::{
-    Buffering, Host, HostRef, Opened, Process, Spawn, Spawned, StdHost, StderrMode, StdinSlot,
-    Stream, WriteMode, exit_code,
+    Buffering, Host, HostRef, Opened, Process, Spawn, Spawned, StdHost, StderrSpec, StdinSlot,
+    StdinSpec, StdoutSpec, Stream, WriteMode, exit_code,
 };
 
 /// 書いたバイト列を覚える書き込み先。テストが出力を読むために使う。
@@ -269,16 +269,20 @@ impl Host for CaptureHost {
     }
 
     /// 子の環境は、与えた表、本物の `PATH` (`with_path_prefix` のディレクトリが前に付く)、Windows では本物の
-    /// `SystemRoot`、`Proc.env` の組をこの順に足したもので、`Stdio::Inherit` の標準入力は空である。受け継ぐ標準出力と
-    /// 標準エラーは pipe にしてスレッドで最後まで読み、子を待った後で、捕まえたそれぞれの出力に `out`、`err` の順に
-    /// 足す。捕まえた出力の順を固定するためである。
-    /// スレッドで読むのは、子が pipe の buffer より多く書いても、eml の側の読み書きと詰まらないためである。
+    /// `SystemRoot`、`Proc.env` の組をこの順に足したもので、`StdinSpec::Inherit` の標準入力は空である。受け継ぐ標準
+    /// 出力と標準エラーは pipe にしてスレッドで最後まで読み、子を待った後で、捕まえたそれぞれの出力に `out`、`err` の
+    /// 順に足す。捕まえた出力の順を固定するためである。
+    /// スレッドで読むのは、子が pipe の buffer より多く書いても、eml の側の読み書きと詰まらないためである。段は1つ
+    /// だけ受ける。
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
+        let [stage] = spawn.stages else {
+            return Err(io::Error::from(io::ErrorKind::InvalidInput));
+        };
         self.inner.flush()?;
-        let dir = spawn.dir(&self.file_root);
-        let mut command = Command::new(spawn.program_path(&dir)?);
+        let dir = stage.dir(&self.file_root);
+        let mut command = Command::new(stage.program_path(&dir)?);
         command
-            .args(spawn.args)
+            .args(stage.args)
             .env_clear()
             .envs(self.env.iter().map(|(key, value)| (key, value)));
         if let Some(path) = child_path(self.path_prefix.as_deref())? {
@@ -289,30 +293,30 @@ impl Host for CaptureHost {
         if let Some(root) = std::env::var_os("SystemRoot") {
             command.env("SystemRoot", root);
         }
-        command.envs(spawn.env.iter().copied());
+        command.envs(stage.env.iter().copied());
         if !dir.as_os_str().is_empty() {
             command.current_dir(&dir);
         }
         command.stdin(match spawn.stdin {
-            eml_rt::Stdio::Pipe => Stdio::piped(),
-            eml_rt::Stdio::Inherit | eml_rt::Stdio::Null => Stdio::null(),
+            StdinSpec::Pipe => Stdio::piped(),
+            StdinSpec::Inherit | StdinSpec::Null => Stdio::null(),
         });
         let mut stdout = None;
         let mut out = None;
         match spawn.stdout {
-            eml_rt::Stdio::Null => {
+            StdoutSpec::Null => {
                 command.stdout(Stdio::null());
-                if spawn.stderr == StderrMode::ToStdout {
+                if stage.stderr == StderrSpec::ToStdout {
                     command.stderr(Stdio::null());
                 }
             }
             pipe => {
                 let (reader, writer) = io::pipe()?;
-                if spawn.stderr == StderrMode::ToStdout {
+                if stage.stderr == StderrSpec::ToStdout {
                     command.stderr(writer.try_clone()?);
                 }
                 command.stdout(writer);
-                if pipe == eml_rt::Stdio::Pipe {
+                if pipe == StdoutSpec::Pipe {
                     stdout = Some(Box::new(reader) as Box<dyn Read + Send>);
                 } else {
                     out = Some(reader);
@@ -320,16 +324,16 @@ impl Host for CaptureHost {
             }
         }
         let mut err = None;
-        match spawn.stderr {
-            StderrMode::Inherit => {
+        match stage.stderr {
+            StderrSpec::Inherit => {
                 let (reader, writer) = io::pipe()?;
                 command.stderr(writer);
                 err = Some(reader);
             }
-            StderrMode::Null => {
+            StderrSpec::Null => {
                 command.stderr(Stdio::null());
             }
-            StderrMode::ToStdout => {}
+            StderrSpec::ToStdout => {}
         }
         let mut child = command.spawn()?;
         // `command` が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読むスレッドに終わりが届かない
@@ -350,13 +354,13 @@ impl Host for CaptureHost {
         Ok(Spawned {
             stdin,
             stdout,
-            process: Box::new(CapturedChild {
+            processes: vec![Box::new(CapturedChild {
                 child,
                 out,
                 err,
                 out_capture: self.out.clone(),
                 err_capture: self.err.clone(),
-            }),
+            })],
         })
     }
 }
@@ -445,20 +449,29 @@ mod tests {
     use std::io::Read;
     use std::path::PathBuf;
 
-    use eml_rt::{Host, Spawn, StderrMode, Stdio};
+    use eml_rt::{Host, Spawn, Spawned, Stage, StderrSpec, StdinSpec, StdoutSpec};
 
     use super::CaptureHost;
 
-    fn spawn<'a>(script: &'a [&'a str], stdout: Stdio, stderr: StderrMode) -> Spawn<'a> {
-        Spawn {
+    fn spawn(
+        host: &CaptureHost,
+        script: &[&str],
+        stdout: StdoutSpec,
+        stderr: StderrSpec,
+    ) -> Spawned {
+        let stage = Stage {
             program: "sh",
             args: script,
             env: &[],
             cwd: None,
-            stdin: Stdio::Null,
-            stdout,
             stderr,
-        }
+        };
+        host.spawn(&Spawn {
+            stages: &[stage],
+            stdin: StdinSpec::Null,
+            stdout,
+        })
+        .unwrap()
     }
 
     /// 受け継ぐ標準出力と標準エラーは、子を待った後で、捕まえた出力に `out`、`err` の順に足す。pipe の buffer より
@@ -470,11 +483,9 @@ mod tests {
             "-c",
             "head -c 100000 /dev/zero | tr '\\0' x; echo; echo err >&2",
         ];
-        let mut child = host
-            .spawn(&spawn(&script, Stdio::Inherit, StderrMode::Inherit))
-            .unwrap();
+        let mut child = spawn(&host, &script, StdoutSpec::Inherit, StderrSpec::Inherit);
         assert!(child.stdout.is_none());
-        assert_eq!(child.process.wait().unwrap(), 0);
+        assert_eq!(child.processes[0].wait().unwrap(), 0);
         assert_eq!(host.output().contents().len(), 100_001);
         assert_eq!(host.errors().contents(), "err\n");
     }
@@ -484,14 +495,10 @@ mod tests {
     fn a_merged_error_joins_the_standard_output() {
         let host = CaptureHost::new(PathBuf::new());
         let script = ["-c", "echo out; echo err >&2"];
-        let mut child = host
-            .spawn(&spawn(&script, Stdio::Inherit, StderrMode::ToStdout))
-            .unwrap();
-        assert_eq!(child.process.wait().unwrap(), 0);
+        let mut child = spawn(&host, &script, StdoutSpec::Inherit, StderrSpec::ToStdout);
+        assert_eq!(child.processes[0].wait().unwrap(), 0);
         assert_eq!(host.output().contents(), "out\nerr\n");
-        let mut child = host
-            .spawn(&spawn(&script, Stdio::Pipe, StderrMode::ToStdout))
-            .unwrap();
+        let mut child = spawn(&host, &script, StdoutSpec::Pipe, StderrSpec::ToStdout);
         let mut read = String::new();
         child
             .stdout
@@ -499,7 +506,7 @@ mod tests {
             .unwrap()
             .read_to_string(&mut read)
             .unwrap();
-        assert_eq!(child.process.wait().unwrap(), 0);
+        assert_eq!(child.processes[0].wait().unwrap(), 0);
         assert_eq!(read, "out\nerr\n");
         assert_eq!(host.output().contents(), "out\nerr\n");
         assert_eq!(host.errors().contents(), "");
