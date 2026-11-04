@@ -44,7 +44,8 @@ rustyline = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, optional = true, features = ["Win32_System_SystemInformation"] }
+# Pipes、Security、Storage_FileSystem は、tests/cli.rs が名前付きパイプを作るためだけにある
+windows-sys = { workspace = true, optional = true, features = ["Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 eml_rt.workspace = true

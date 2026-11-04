@@ -6,6 +6,8 @@ use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
+use eml_rt::{OsHandle, RawFile};
+
 /// driver の時計の始まり。単調な時計の時刻で、OS の時計を読むのは backend の側だけにするため、核はこの別名と
 /// `now` を通してだけ扱う (docs/implementation/architecture.md の「`eml_io` の内部」)。
 pub type Epoch = Instant;
@@ -32,6 +34,15 @@ pub(crate) type Os = unix::Unix<kqueue::Kqueue>;
 pub(crate) type Os = iocp::Iocp;
 #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
 compile_error!("eml_io has no I/O backend for this OS");
+
+/// driver が取り込むファイルの handle。本物の driver もテストの driver もここを通す。Windows ではディスクのファイルの
+/// ほかを `NOT_REGULAR` で断る。unix では Host の `fstat` の確かめで足りる (docs/spec/vm.md の「時計と driver」)。
+pub(crate) fn regular_handle(file: RawFile) -> io::Result<OsHandle> {
+    #[cfg(windows)]
+    return iocp::disk_file(file.into_inner());
+    #[cfg(unix)]
+    Ok(file.into_inner())
+}
 
 /// `d` をミリ秒へ切り上げ、`max` で切る。切り上げるので期限より早くは戻らず、`max` で切った待ちは早く戻るだけで
 /// ある (docs/spec/vm.md の「時計と driver」)。期限のない待ちは、呼ぶ側が自分の OS の値に写し、ここへは渡さない。

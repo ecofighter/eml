@@ -1871,15 +1871,12 @@ fn dropping_a_driver_waits_for_a_running_file_job() {
 }
 
 /// これがあればテストのバイナリは子として `child_main` の動きをする。中身はその動きの名前である。
-#[cfg(unix)]
 const CHILD: &str = "EML_IO_CHILD";
 
 /// 子が標準エラーに書く文。libtest は標準出力に書くので、標準エラーには子の書いた分だけが流れる。
-#[cfg(unix)]
 const CHILD_TEXT: &[u8] = b"written by the child\n";
 
 /// パイプと子の終わりの待ちのテストの子。テストのバイナリをこのテストだけで起こし直して使う。変数がなければすぐ戻る。
-#[cfg(unix)]
 #[test]
 fn child_main() {
     use std::io::Write;
@@ -1903,10 +1900,8 @@ fn child_main() {
 }
 
 /// 落とすときに kill して回収する子。テストが途中で落ちても子を残さない。
-#[cfg(unix)]
 struct Kid(std::process::Child);
 
-#[cfg(unix)]
 impl Drop for Kid {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -1914,7 +1909,6 @@ impl Drop for Kid {
     }
 }
 
-#[cfg(unix)]
 impl Kid {
     /// `mode` の動きをする子を起こす。標準入出力は `set` が変えなければ null である。`Command` はここで落とすので、
     /// 子に渡した端を親は持たない。
@@ -1945,13 +1939,21 @@ impl Kid {
         kid
     }
 
+    #[cfg(unix)]
     fn process(&self) -> eml_rt::RawProcess {
         eml_rt::RawProcess(self.0.id() as i32)
+    }
+
+    /// Windows の `RawProcess` はハンドルを持つので、Host と同じく子のハンドルを写して渡す
+    #[cfg(windows)]
+    fn process(&self) -> eml_rt::RawProcess {
+        use std::os::windows::io::AsHandle;
+
+        eml_rt::RawProcess(self.0.as_handle().try_clone_to_owned().unwrap())
     }
 }
 
 /// `handle` から EOF まで読む。
-#[cfg(unix)]
 fn read_to_end(
     driver: &mut RealDriver,
     stash: &mut Vec<Completion>,
@@ -1978,7 +1980,6 @@ fn read_to_end(
 }
 
 /// 子が書いて終わり、書く端を持つ者がいなくなると、親の読みは EOF を読む。
-#[cfg(unix)]
 #[test]
 fn a_pipe_reports_eof_after_the_child_exits() {
     let mut driver = RealDriver::new().unwrap();
@@ -1993,7 +1994,6 @@ fn a_pipe_reports_eof_after_the_child_exits() {
 }
 
 /// 読む子が終わったパイプへの書きは、シグナルでなく `BrokenPipe` の誤りで終わる。
-#[cfg(unix)]
 #[test]
 fn a_pipe_write_after_the_reader_exited_is_broken() {
     let mut driver = RealDriver::new().unwrap();
@@ -2019,7 +2019,6 @@ fn a_pipe_write_after_the_reader_exited_is_broken() {
     assert_eq!(e.kind(), ErrorKind::BrokenPipe, "{e}");
 }
 
-#[cfg(unix)]
 #[test]
 fn a_pipe_read_is_cancelled_at_once() {
     let mut driver = RealDriver::new().unwrap();
@@ -2042,7 +2041,6 @@ fn a_pipe_read_is_cancelled_at_once() {
 }
 
 /// driver は子を回収しないので、知らせの後も Host の待ちが終わりのコードを読める。
-#[cfg(unix)]
 #[test]
 fn a_wait_on_an_exited_child_ends() {
     let mut driver = RealDriver::new().unwrap();
@@ -2056,7 +2054,6 @@ fn a_wait_on_an_exited_child_ends() {
     assert!(kid.0.wait().unwrap().success());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_wait_on_a_running_child_is_cancelled_at_once() {
     let mut driver = RealDriver::new().unwrap();
@@ -2075,7 +2072,6 @@ fn a_wait_on_a_running_child_is_cancelled_at_once() {
     assert_eq!(driver.pending(), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_wait_on_a_killed_child_ends() {
     let mut driver = RealDriver::new().unwrap();
@@ -2095,7 +2091,6 @@ fn a_wait_on_a_killed_child_ends() {
 }
 
 /// パイプの親の端はどの driver にも登録しないので、作った driver と別のスレッドの driver が取り込んで読める。
-#[cfg(unix)]
 #[test]
 fn a_pipe_end_is_used_by_the_driver_of_another_thread() {
     use std::io::Write;

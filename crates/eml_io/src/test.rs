@@ -433,8 +433,9 @@ impl IoDriver for TestDriver {
             )),
             RawResource::PipeRead(_) | RawResource::PipeWrite(_) => Err(no_processes()),
             RawResource::File(file) => {
+                let file = crate::sys::regular_handle(file)?;
                 let handle = self.net.handle();
-                self.files.insert(handle, fs::File::from(file.into_inner()));
+                self.files.insert(handle, fs::File::from(file));
                 Ok(handle)
             }
         }

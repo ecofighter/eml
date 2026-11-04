@@ -137,6 +137,60 @@ fn run_opens_an_absolute_path_as_is() {
     );
 }
 
+/// Windows の std の metadata は名前付きパイプを通常のファイルと見うるが、`Stream.open` はプールの仕事を出す前に
+/// 通常のファイルでないと断る (docs/spec/stdlib.md の「`Std.Stream`」、docs/spec/vm.md の「時計と driver」)。
+/// パイプのサーバーの端はこのテストが作り、`eml run` が同じ名前を読むために開く。
+#[cfg(windows)]
+#[test]
+fn stream_open_refuses_a_named_pipe() {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_OUTBOUND;
+    use windows_sys::Win32::System::Pipes::{
+        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+    };
+
+    let name = format!("\\\\.\\pipe\\eml-cli-test-{}", std::process::id());
+    let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+    // SAFETY: `wide` は 0 で終わる UTF-16 で、OS は戻るまでの間だけ読む。`SECURITY_ATTRIBUTES` は null である
+    let raw = unsafe {
+        CreateNamedPipeW(
+            wide.as_ptr(),
+            PIPE_ACCESS_OUTBOUND,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            1,
+            4096,
+            4096,
+            0,
+            std::ptr::null(),
+        )
+    };
+    assert_ne!(
+        raw,
+        INVALID_HANDLE_VALUE,
+        "{}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: `raw` は今作ったパイプで、ほかに所有者がいない
+    let server = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let dir = std::env::temp_dir().join(format!("eml-cli-pipe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let program = dir.join("pipe.em");
+    let source = format!(
+        "import Async (Async)\nimport Stream\nmain : Unit -> <IO, Panic> Unit\nmain () = Async.run (fn () ->\n  match try_io (fn () -> Stream.close (Stream.open \"{}\")) with\n    | Ok _ -> println \"opened\"\n    | Err e -> println \"\\{{show e.kind}}: \\{{e.message}}\")\n",
+        name.replace('\\', "\\\\")
+    );
+    std::fs::write(&program, source).unwrap();
+    let output = eml(&["run", "--debug-heap", program.to_str().unwrap()]);
+    drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("NotAvailable: cannot open `{name}`: not a regular file\n")
+    );
+}
+
 #[test]
 fn exit_ends_with_its_code_modulo_256() {
     let output = eml(&["run", "--debug-heap", "run/io/exit_code.em"]);

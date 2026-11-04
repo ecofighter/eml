@@ -35,8 +35,6 @@ pub(crate) enum Step<'a, S> {
     },
     /// 子の終わりの知らせを待つ1歩。終わっていれば `Size(0)` で終わる。子を回収しない。
     Wait {
-        // IOCP の backend は待ちを断るので、Windows ではこの欄を読む所がない
-        #[cfg_attr(windows, expect(dead_code))]
         process: &'a RawProcess,
     },
 }

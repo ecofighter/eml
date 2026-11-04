@@ -1044,6 +1044,28 @@ show_open f =
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Windows のデバイスは、std の metadata が通常のファイルと見ても見なくても、プールの仕事を出す前に同じ失敗になる
+/// (docs/spec/stdlib.md の「`Std.Stream`」)。
+#[cfg(windows)]
+#[test]
+fn a_stream_open_of_a_device_fails_at_once() {
+    let root = fresh_dir("device");
+    let src = "\
+import Async (Async)
+import Stream
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  match try_io (fn () -> Stream.close (Stream.open \"\\\\\\\\.\\\\NUL\")) with
+    | Ok _ -> println \"opened\"
+    | Err e -> println \"\\{show e.kind}: \\{e.message}\")
+";
+    assert_eq!(
+        run_on_files(src, &root, 1),
+        "NotAvailable: cannot open `\\\\.\\NUL`: not a regular file\n"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn the_stats_fields_follow_the_declaration() {
     let stats = RunStats::default();
