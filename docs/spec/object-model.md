@@ -757,7 +757,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `control` | セッションの `Arc<Control>` (下の「実行の制御」)。確保の前の上限の確かめと Host の読み手がヒープの中をたどらずに読めるように、ヒープとは別に持つ |
 | `word` | この worker の止める語の `Arc` (`Control::word(k)`)。安全点は、この欄を読み、語を読む2回の読みで済む |
 | `max_depth`、`max_evv` | `Control` の上限の写し。`Ctx::for_worker` が写す |
-| `depth_limit` | 今のタスクの深さの上限。`max_depth` からタスクの深さの起点を引いた値で、起点が `max_depth` を超えれば 0 である。`switch_task` が書き、安全点の `poll` が読む |
+| `depth_limit` | 今のタスクの深さの上限。`max_depth` からタスクの深さの起点を引いた値で、起点が `max_depth` を超えれば 0 である。`switch_task` と `set_depth_limit` が書き、安全点の `poll` が読む。保留のタスクでは 0、猶予の間は `max_depth` から起点を引いた値に猶予を足した値である (下の「タスクの切り替え」) |
 | `host` | セッションの Host (下の「extern」の「Host」)。出力とファイルは、これを通す |
 | `stats` | 仕事の回数 `CtxStats` (`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`)。`Heap` の `Stats` と同じく、検査モードだけで数える。`yields` は `yield_to` の回数で、中断は数えない |
 | `roots` | セッションの根の表 (下の「セッションの根」) |
@@ -837,7 +837,7 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 - タスクは、yield の状態がなしの安全点でだけ切り替える。そのため、退避するのは `evv` だけである
 - 切り替えは `switch_task(l, worker, depth_offset)` で行う。次のタスクの `evv` の l を入れ、ヒープの worker を次のタスクの ID `worker` にし、今のタスクの深さの上限を決め直し、前のタスクの `evv` を返す。変える欄はこの3つだけである。worker の替え方は `set_worker` と同じで、検査モードでは渡した ID を使っている ID にする (上の「論理的な worker ID」)。l の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、RC に触れない。`switch_task` は [LIR](lir.md) の「基本操作」の表にない、VM のための `Ctx` の操作である
 - `evv` と worker を1つの操作で替えるのは、`Ctx` の前提が `evv` の物体の持ち主を今の worker と比べるためである。次のタスクの `evv` は次のタスクの ID の下で正しく、前のタスクの `evv` は前のタスクの ID の下で正しい。2つを別の操作で替えると、その間はどちらかの `evv` の持ち主が今の worker と合わない。そのため、VM は `heap_mut()` で `set_worker` を呼ばない
-- 今のタスクの深さの上限は、`max_depth` から次のタスクの深さの起点 `depth_offset` を引いた値である。起点が `max_depth` を超えれば 0 にする。起点は、そのタスクのスタックの底より下に数える深さで、`par` の右の子では fork のときの親の深さである ([VM](vm.md) の「スロットとスタック」)。`Ctx::new` は上限を `max_depth` にし、起点 0 のタスクを表す。`switch_task` のほかに上限を変える操作はない
+- 今のタスクの深さの上限は、`max_depth` から次のタスクの深さの起点 `depth_offset` を引いた値である。起点が `max_depth` を超えれば 0 にする。起点は、そのタスクのスタックの底より下に数える深さで、`par` の右の子では fork のときの親の深さである ([VM](vm.md) の「スロットとスタック」)。`Ctx::new` は上限を `max_depth` にし、起点 0 のタスクを表す。上限を書く操作は `switch_task` と `set_depth_limit(limit)` の2つである。`set_depth_limit` は上限の欄だけを `limit` にし、ほかの欄を変えない。VM はこれで、タスクの深さの超過を知らせる保留と、巻き戻しの間の猶予を表す。0 は保留で、次の安全点の `poll` が必ず `DepthLimit` で失敗する。`real + LIMIT_HEADROOM` (`real` は上の `max_depth` から起点を引いた値) は猶予で、巻き戻しの間の節のエントリが深くなっても、すぐには止めない。通常の値は `max_depth` から `depth_offset` を引いた値である
 - 起点を上限から引いて `Ctx` に持つのは、安全点の速い道で起点を足さないためである。VM が安全点ごとにタスクの起点を足すと、基準のプログラムの命令の数が最大で約 1.2 % 増える。切り替えは安全点よりずっと少ないので、引く費用は切り替えの側で払う
 - `evv_word()` は今の `evv` の語を返すだけの操作で、RC に触れず、失敗しない。参照は `Ctx` に残る。`par` の fork が、子の `evv` を作る間に親の `evv` を読むための操作である。VM は返した語からたどれる節点と evidence を読むだけで、手放したり書き換えたりしないので、`heap_mut()` の前提 (上の「欄」) は崩れない。`switch_task` と同じく、[LIR](lir.md) の「基本操作」の表にない、VM のための `Ctx` の操作である
 - `evv_get` と `evv_set` で切り替えないのは、切り替えごとに `dup` と `decref` が1回ずつ増え、仕事の回数 (VM の `RunStats`) がスケジュールに依存するためである
