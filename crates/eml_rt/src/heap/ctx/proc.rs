@@ -6,7 +6,9 @@
 use super::proof::*;
 use super::*;
 use crate::externs::Fault;
-use crate::host::{Child, child_close_stdin, child_wait, host_spawn};
+use crate::host::{
+    Child, child_close_stdin, child_stage_count, child_wait, child_wait_stage, host_spawn,
+};
 
 verus! {
 
@@ -390,6 +392,67 @@ impl<M: Mode> Ctx<M> {
                 unsafe { child_close_stdin(p) };
                 Ok(h)
             },
+            Err(e) => Err(Fault::Heap(e)),
+        }
+    }
+
+    /// `Proc.stage_count`。`Child` のハンドル `h` を借り、パイプラインの段の数を返す。ヒープは変わらない。
+    ///
+    /// # Safety
+    /// `proc_wait` と同じである。
+    pub unsafe fn proc_stage_count(&mut self, h: Word) -> (r: Result<i64, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(h),
+            !M::CHECKED ==> old(self).holds(h) && old(self).heap_spec().rc_value(h) == 1,
+        ensures
+            *final(self) == *old(self),
+            r is Ok || (r matches Err(Fault::Heap(_))),
+            !M::CHECKED && r is Err ==> r == Err::<i64, Fault>(Fault::Heap(HeapError::WrongKind)),
+    {
+        let ghost s0 = *self;
+        if !h.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        proof {
+            if s0.held_ok() && s0.holds(h) {
+                s0.lemma_held_arg(h);
+            }
+        }
+        match unsafe { self.heap.foreign_unique::<Child>(h) } {
+            Ok(p) => Ok(unsafe { child_stage_count(p) }),
+            Err(e) => Err(Fault::Heap(e)),
+        }
+    }
+
+    /// `Proc.wait_stage`。`Child` のハンドル `h` を借り、標準入力を閉じてから段 0 から段 `k` までを先頭から待ち、段
+    /// `k` の終了コードを返す。ヒープは変わらず、`h` の参照は呼ぶ側に残る。待った段の破棄処理は kill しない。待つ間に
+    /// 止める語が立てば、段が終わった後で `Stopped` を返す。
+    ///
+    /// # Safety
+    /// `proc_wait` と同じである。
+    pub unsafe fn proc_wait_stage(&mut self, h: Word, k: i64) -> (r: Result<i64, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(h),
+            !M::CHECKED ==> old(self).holds(h) && old(self).heap_spec().rc_value(h) == 1,
+        ensures
+            *final(self) == *old(self),
+            !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<i64, Fault>(
+                Fault::Heap(HeapError::WrongKind),
+            ),
+    {
+        let ghost s0 = *self;
+        if !h.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        proof {
+            if s0.held_ok() && s0.holds(h) {
+                s0.lemma_held_arg(h);
+            }
+        }
+        match unsafe { self.heap.foreign_unique::<Child>(h) } {
+            Ok(p) => unsafe { child_wait_stage(p, k, &self.control) },
             Err(e) => Err(Fault::Heap(e)),
         }
     }

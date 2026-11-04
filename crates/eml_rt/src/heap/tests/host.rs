@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{
-    Host, HostRef, Opened, Process, Spawn, Spawned, StderrSpec, StdinSlot, StdinSpec, StdoutSpec,
-    Stream, WriteMode,
+    Host, HostRef, LaunchError, Opened, Process, Spawn, Spawned, StderrSpec, StdinSlot, StdinSpec,
+    StdoutSpec, Stream, WriteMode,
 };
 
 /// メモリの上のファイル。読み手の振る舞い (1回に返すバイト数、途中の誤り、中断) を決められる。
@@ -303,14 +303,16 @@ impl Host for MemoryHost {
             received: self.received.clone(),
         }))
     }
-    /// プロセスを起動せず、受けた設定を覚える。`missing` は見つからないプログラムである。pipe の標準入力は
-    /// `child_input` に写し (`fail_write` があれば書くたびにその文言で失敗する)、pipe の標準出力は `child_output` を
-    /// 読ませる。子の `wait` は引数の数を終了コードにする。段は1つだけ受け、ファイルを使う向き (文字列の標準入力と
-    /// リダイレクト) は OS のファイルが要るので `Unsupported` で断る
+    /// プロセスを起動せず、段ごとに受けた設定を覚える。`missing` は見つからないプログラムで、それより前の段を kill して
+    /// 待ってから、その段の誤りを返す。段の間は pipe とみなす。pipe の標準入力は `child_input` に写し (`fail_write`
+    /// があれば書くたびにその文言で失敗する)、pipe の標準出力は `child_output` を読ませる。段の `wait` は引数の数を終了
+    /// コードにする。ファイルを使う向き (文字列の標準入力とリダイレクト) は OS のファイルが要るので `Unsupported` で断る
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
-        let [stage] = spawn.stages else {
-            return Err(io::Error::from(io::ErrorKind::InvalidInput));
-        };
+        let last = spawn
+            .stages
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         let unsupported = || io::Error::from(io::ErrorKind::Unsupported);
         let stdin = match spawn.stdin {
             StdinSpec::Inherit => StdinSpec::Inherit,
@@ -324,20 +326,42 @@ impl Host for MemoryHost {
             StdoutSpec::Pipe => StdoutSpec::Pipe,
             StdoutSpec::File { .. } => return Err(unsupported()),
         };
-        if stage.program == "missing" {
-            return Err(io::Error::from(io::ErrorKind::NotFound));
+        let mut processes: Vec<Box<dyn Process>> = Vec::new();
+        for (k, stage) in spawn.stages.iter().enumerate() {
+            if stage.program == "missing" {
+                for process in &mut processes {
+                    process.kill()?;
+                }
+                for process in &mut processes {
+                    process.wait()?;
+                }
+                return Err(LaunchError::spawning(
+                    k,
+                    io::Error::from(io::ErrorKind::NotFound),
+                ));
+            }
+            self.spawns.lock().unwrap().push(Started {
+                program: stage.program.to_string(),
+                args: stage.args.iter().map(|a| a.to_string()).collect(),
+                env: stage
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                cwd: stage.cwd.map(str::to_string),
+                stdio: (
+                    if k == 0 { stdin } else { StdinSpec::Pipe },
+                    if k == last { stdout } else { StdoutSpec::Pipe },
+                    stage.stderr,
+                ),
+            });
+            processes.push(Box::new(MemoryProcess {
+                code: stage.args.len() as i32,
+                waits: self.waits.clone(),
+                kills: self.kills.clone(),
+                interrupt: self.interrupt_run.clone(),
+            }));
         }
-        self.spawns.lock().unwrap().push(Started {
-            program: stage.program.to_string(),
-            args: stage.args.iter().map(|a| a.to_string()).collect(),
-            env: stage
-                .env
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            cwd: stage.cwd.map(str::to_string),
-            stdio: (stdin, stdout, stage.stderr),
-        });
         let stdin = (spawn.stdin == StdinSpec::Pipe).then(|| {
             Box::new(ChildInput {
                 bytes: self.child_input.clone(),
@@ -351,12 +375,7 @@ impl Host for MemoryHost {
         Ok(Spawned {
             stdin,
             stdout,
-            processes: vec![Box::new(MemoryProcess {
-                code: stage.args.len() as i32,
-                waits: self.waits.clone(),
-                kills: self.kills.clone(),
-                interrupt: self.interrupt_run.clone(),
-            })],
+            processes,
         })
     }
 }
@@ -830,5 +849,91 @@ mod std_host {
         assert_eq!(failed(0, "", 3, "."), launch_fault(".", IoReason::Other));
         assert_eq!(failed(4, ".", 0, ""), launch_fault(".", IoReason::Other));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 段を起動できなければ、それより前に起動した段を kill して待ってから、その段の `LaunchError` を返す。kill しな
+    /// ければ、`sleep 30` を待つので戻らない。
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_stage_kills_the_stages_before_it() {
+        use crate::{LaunchCause, LaunchError, Spawn, Stage, StderrSpec, StdinSpec, StdoutSpec};
+        let (host, _, _) = std_host(Buffering::Line);
+        let sleeper = Stage {
+            program: "sleep",
+            args: &["30"],
+            env: &[],
+            cwd: None,
+            stderr: StderrSpec::Null,
+        };
+        let missing = Stage {
+            program: "eml-no-such-program",
+            args: &[],
+            ..sleeper
+        };
+        let started = std::time::Instant::now();
+        let error = host
+            .spawn(&Spawn {
+                stages: &[sleeper, sleeper, missing],
+                stdin: StdinSpec::Null,
+                stdout: StdoutSpec::Pipe,
+            })
+            .err()
+            .unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        let inner = error
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<LaunchError>());
+        assert!(
+            matches!(
+                inner,
+                Some(LaunchError {
+                    stage: 2,
+                    cause: LaunchCause::Spawn
+                })
+            ),
+            "{inner:?}"
+        );
+    }
+
+    /// 起動できなかった段の誤りは、その段のプログラムの名前の `Io { op: Run, .. }` になる。Host を呼ぶ前に断る誤りは、
+    /// 最後の段の名前である。
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_stage_names_its_program() {
+        use std::sync::Arc;
+
+        use super::super::ctx::{fields, stage};
+        use crate::{Fault, HostRef, IoOp, IoReason, launch};
+        let (host, _, _) = std_host(Buffering::Line);
+        let host = HostRef::new(Arc::new(host));
+        let control = Control::new(Limits::default());
+        let none = fields(&[]);
+        let run = |stages: &[(&str, i64)]| {
+            let stages: String = stages
+                .iter()
+                .map(|&(program, stderr)| stage(program, &none, &none, "", stderr))
+                .collect();
+            launch(&host, &control, &stages, 1, "", 1, "").err()
+        };
+        let not_found = |name: &str, reason| {
+            Some(Fault::Io {
+                op: IoOp::Run,
+                name: name.into(),
+                reason,
+            })
+        };
+        assert_eq!(
+            run(&[("true", 0), ("eml-missing-second", 0), ("true", 0)]),
+            not_found("eml-missing-second", IoReason::NotFound)
+        );
+        assert_eq!(
+            run(&[("eml-missing-first", 0), ("true", 0)]),
+            not_found("eml-missing-first", IoReason::NotFound)
+        );
+        assert_eq!(
+            run(&[("eml-first", 0), ("eml-last", 9)]),
+            not_found("eml-last", IoReason::Other)
+        );
     }
 }

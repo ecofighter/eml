@@ -13,8 +13,8 @@ use std::thread::{self, JoinHandle};
 
 use eml_rt::{
     Buffering, Host, HostRef, LaunchCause, LaunchError, Opened, Process, SPAWN_LOCK, Spawn,
-    Spawned, StdHost, StderrSpec, StdinSlot, StdinSpec, StdoutSpec, Stream, WriteMode, exit_code,
-    here_file, redirect_file,
+    Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec, StdoutSpec, Stream, WriteMode,
+    exit_code, here_file, redirect_file,
 };
 
 /// 書いたバイト列を覚える書き込み先。テストが出力を読むために使う。
@@ -270,17 +270,181 @@ impl Host for CaptureHost {
     }
 
     /// 子の環境は、与えた表、本物の `PATH` (`with_path_prefix` のディレクトリが前に付く)、Windows では本物の
-    /// `SystemRoot`、`Proc.env` の組をこの順に足したもので、`StdinSpec::Inherit` の標準入力は空である。受け継ぐ標準
-    /// 出力と標準エラーは pipe にしてスレッドで最後まで読み、子を待った後で、捕まえたそれぞれの出力に `out`、`err` の
-    /// 順に足す。捕まえた出力の順を固定するためである。
+    /// `SystemRoot`、段の `Proc.env` の組をこの順に足したもので、`StdinSpec::Inherit` の標準入力は空である。どの段の
+    /// 受け継ぐ標準エラーも、最後の段の受け継ぐ標準出力も、pipe にしてスレッドで最後まで読み、段を待った後で、捕まえた
+    /// それぞれの出力に `out`、`err` の順に足す。捕まえた出力の順を固定するためである。
     /// スレッドで読むのは、子が pipe の buffer より多く書いても、eml の側の読み書きと詰まらないためである。リダイレクトの
     /// パスは、このテストの Host が書いたファイルを先に引き、なければ `file_root` の下を開く。`> out` は書いたファイルに
-    /// 加わる。段は1つだけ受ける。
+    /// 加わる。
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
-        let [stage] = spawn.stages else {
-            return Err(io::Error::from(io::ErrorKind::InvalidInput));
-        };
+        let last = spawn
+            .stages
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         self.inner.flush()?;
+        let mut commands = Vec::with_capacity(spawn.stages.len());
+        for (k, stage) in spawn.stages.iter().enumerate() {
+            commands.push(
+                self.command(stage)
+                    .map_err(|e| LaunchError::spawning(k, e))?,
+            );
+        }
+        // 子に渡すファイルは、どれも `SPAWN_LOCK` の前に開く。書いたファイルの表は自分の lock を取り、葉の lock の中では
+        // 取れないためである。std のファイルは作ったときから子に受け継がれない (docs/spec/object-model.md の
+        // 「子のプロセス」)
+        let mut stdin = Some(match spawn.stdin {
+            StdinSpec::Pipe => Stdio::piped(),
+            StdinSpec::Inherit | StdinSpec::Null => Stdio::null(),
+            StdinSpec::Text(bytes) => here_file(bytes)?.into(),
+            StdinSpec::File(path) => self.redirect(0, path, None)?.into(),
+        });
+        let mut stdout_file = match spawn.stdout {
+            StdoutSpec::File { path, mode } => Some(self.redirect(last, path, Some(mode))?),
+            _ => None,
+        };
+        // 読むスレッドは放した後で作る
+        let spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut started: Vec<Started> = Vec::with_capacity(commands.len());
+        let mut next_stdin: Option<PipeReader> = None;
+        let mut stdout = None;
+        let mut failed = None;
+        for (k, (stage, mut command)) in spawn.stages.iter().zip(commands).enumerate() {
+            let mut out = None;
+            let mut err = None;
+            let child = (|| {
+                command.stdin(match next_stdin.take() {
+                    Some(reader) => Stdio::from(reader),
+                    None => stdin.take().unwrap_or_else(Stdio::null),
+                });
+                if k < last {
+                    let (reader, writer) = io::pipe()?;
+                    if stage.stderr == StderrSpec::ToStdout {
+                        command.stderr(writer.try_clone()?);
+                    }
+                    command.stdout(writer);
+                    next_stdin = Some(reader);
+                } else {
+                    match (spawn.stdout, stdout_file.take()) {
+                        (StdoutSpec::Null, _) => {
+                            command.stdout(Stdio::null());
+                            if stage.stderr == StderrSpec::ToStdout {
+                                command.stderr(Stdio::null());
+                            }
+                        }
+                        (StdoutSpec::File { .. }, Some(file)) => {
+                            if stage.stderr == StderrSpec::ToStdout {
+                                command.stderr(file.try_clone()?);
+                            }
+                            command.stdout(file);
+                        }
+                        (pipe, _) => {
+                            let (reader, writer) = io::pipe()?;
+                            if stage.stderr == StderrSpec::ToStdout {
+                                command.stderr(writer.try_clone()?);
+                            }
+                            command.stdout(writer);
+                            if pipe == StdoutSpec::Pipe {
+                                stdout = Some(Box::new(reader) as Box<dyn Read + Send>);
+                            } else {
+                                out = Some(reader);
+                            }
+                        }
+                    }
+                }
+                match stage.stderr {
+                    StderrSpec::Inherit => {
+                        let (reader, writer) = io::pipe()?;
+                        command.stderr(writer);
+                        err = Some(reader);
+                    }
+                    StderrSpec::Null => {
+                        command.stderr(Stdio::null());
+                    }
+                    StderrSpec::ToStdout => {}
+                }
+                command.spawn()
+            })();
+            // `command` が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読むスレッドと次の段に終わりが届かない
+            drop(command);
+            match child {
+                Ok(child) => started.push(Started { child, out, err }),
+                Err(error) => {
+                    failed = Some(LaunchError::spawning(k, error));
+                    break;
+                }
+            }
+        }
+        drop(next_stdin);
+        drop(spawning);
+        if let Some(error) = failed {
+            kill_all(&mut started);
+            return Err(error);
+        }
+        let mut drained = Vec::with_capacity(started.len());
+        let mut failed = None;
+        for stage in &mut started {
+            let out = stage.out.take().map(drain).transpose();
+            let err = stage.err.take().map(drain).transpose();
+            match (out, err) {
+                (Ok(out), Ok(err)) => drained.push((out, err)),
+                (Err(error), _) | (_, Err(error)) => {
+                    failed = Some(error);
+                    break;
+                }
+            }
+        }
+        // 読むスレッドがないと捕まえる出力が届かないので、段を残さずに起動の誤りにする
+        if let Some(error) = failed {
+            kill_all(&mut started);
+            return Err(error);
+        }
+        let stdin = started[0]
+            .child
+            .stdin
+            .take()
+            .map(|w| Box::new(w) as Box<dyn Write + Send>);
+        let processes = started
+            .into_iter()
+            .zip(drained)
+            .map(|(Started { child, .. }, (out, err))| {
+                Box::new(CapturedChild {
+                    child,
+                    out,
+                    err,
+                    out_capture: self.out.clone(),
+                    err_capture: self.err.clone(),
+                }) as Box<dyn Process>
+            })
+            .collect();
+        Ok(Spawned {
+            stdin,
+            stdout,
+            processes,
+        })
+    }
+}
+
+/// `CaptureHost::spawn` が起動した段と、読むスレッドをまだ作っていない pipe。
+struct Started {
+    child: process::Child,
+    out: Option<PipeReader>,
+    err: Option<PipeReader>,
+}
+
+/// 起動した段をすべて kill してから待つ。起動の誤りで、段を残さないためである。
+fn kill_all(started: &mut [Started]) {
+    for stage in started.iter_mut() {
+        let _ = stage.child.kill();
+    }
+    for stage in started.iter_mut() {
+        let _ = stage.child.wait();
+    }
+}
+
+impl CaptureHost {
+    /// 段 `stage` の `Command`。標準入出力のほかを設定する。
+    fn command(&self, stage: &Stage<'_>) -> io::Result<Command> {
         let dir = stage.dir(&self.file_root);
         let mut command = Command::new(stage.program_path(&dir)?);
         command
@@ -299,94 +463,9 @@ impl Host for CaptureHost {
         if !dir.as_os_str().is_empty() {
             command.current_dir(&dir);
         }
-        // 子に渡すファイルは、どれも `SPAWN_LOCK` の前に開く。書いたファイルの表は自分の lock を取り、葉の lock の中では
-        // 取れないためである。std のファイルは作ったときから子に受け継がれない (docs/spec/object-model.md の
-        // 「子のプロセス」)
-        let stdin = match spawn.stdin {
-            StdinSpec::Pipe => Stdio::piped(),
-            StdinSpec::Inherit | StdinSpec::Null => Stdio::null(),
-            StdinSpec::Text(bytes) => here_file(bytes)?.into(),
-            StdinSpec::File(path) => self.redirect(0, path, None)?.into(),
-        };
-        let stdout_file = match spawn.stdout {
-            StdoutSpec::File { path, mode } => Some(self.redirect(0, path, Some(mode))?),
-            _ => None,
-        };
-        // 読むスレッドは放した後で作る
-        let spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
-        command.stdin(stdin);
-        let mut stdout = None;
-        let mut out = None;
-        match (spawn.stdout, stdout_file) {
-            (StdoutSpec::Null, _) => {
-                command.stdout(Stdio::null());
-                if stage.stderr == StderrSpec::ToStdout {
-                    command.stderr(Stdio::null());
-                }
-            }
-            (StdoutSpec::File { .. }, Some(file)) => {
-                if stage.stderr == StderrSpec::ToStdout {
-                    command.stderr(file.try_clone()?);
-                }
-                command.stdout(file);
-            }
-            (pipe, _) => {
-                let (reader, writer) = io::pipe()?;
-                if stage.stderr == StderrSpec::ToStdout {
-                    command.stderr(writer.try_clone()?);
-                }
-                command.stdout(writer);
-                if pipe == StdoutSpec::Pipe {
-                    stdout = Some(Box::new(reader) as Box<dyn Read + Send>);
-                } else {
-                    out = Some(reader);
-                }
-            }
-        }
-        let mut err = None;
-        match stage.stderr {
-            StderrSpec::Inherit => {
-                let (reader, writer) = io::pipe()?;
-                command.stderr(writer);
-                err = Some(reader);
-            }
-            StderrSpec::Null => {
-                command.stderr(Stdio::null());
-            }
-            StderrSpec::ToStdout => {}
-        }
-        let mut child = command.spawn()?;
-        // `command` が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読むスレッドに終わりが届かない
-        drop(command);
-        drop(spawning);
-        let (out, err) = match (out.map(drain).transpose(), err.map(drain).transpose()) {
-            (Ok(out), Ok(err)) => (out, err),
-            (Err(error), _) | (_, Err(error)) => {
-                // 読むスレッドがないと捕まえる出力が届かないので、子を残さずに起動の誤りにする
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-        };
-        let stdin = child
-            .stdin
-            .take()
-            .map(|w| Box::new(w) as Box<dyn Write + Send>);
-        Ok(Spawned {
-            stdin,
-            stdout,
-            processes: vec![Box::new(CapturedChild {
-                child,
-                out,
-                err,
-                out_capture: self.out.clone(),
-                err_capture: self.err.clone(),
-            })],
-        })
+        Ok(command)
     }
-}
 
-impl CaptureHost {
     /// 段 `stage` のリダイレクトのファイルを開く。`mode` が `None` なら読むために、`Some` なら書くために開く。
     fn redirect(&self, stage: usize, path: &str, mode: Option<WriteMode>) -> io::Result<File> {
         let opened = match mode {

@@ -6,6 +6,9 @@ import List
 
 pub extern data Child
 
+-- 左の `Cmd` の標準出力を、右の `Cmd` の先頭の段の標準入力につなぐ (docs/spec/stdlib.md の「`Cmd`」)。`|>` より強く結ぶ
+pub infixl 2 .|
+
 -- 引数は `launch_args` の5つ (段の列、標準入力の向きと中身、標準出力の向きとパス) である。列は各要素を「バイト長の
 -- 十進、NUL、本文」の順に並べたものである
 extern spawn_raw : String -> Int -> String -> Int -> String -> <IO> Child
@@ -35,17 +38,30 @@ merge_stderr c = { c | stderr = MergeStderr }
 pub discard_stderr : Cmd -> Cmd
 discard_stderr c = { c | stderr = DiscardStderr }
 
+-- 入力の設定 (`.|`、`stdin_text`、`stdin_file`、`no_stdin`) はパイプラインの先頭の段に当て、ほかの設定は最後の段に
+-- 当てる (docs/spec/stdlib.md の「`Cmd`」)
+pub (.|) : Cmd -> Cmd -> Cmd
+left .| right = to_head (StdinFrom left) right
+
 -- 標準入力を文字列 `s` にする。子には、`s` を入れた名前のない一時ファイルとして見える
 pub stdin_text : String -> Cmd -> Cmd
-stdin_text s c = { c | stdin = StdinText s }
+stdin_text s c = to_head (StdinText s) c
 
 -- 標準入力をファイルから読ませる (`< path`)。相対パスは `FileIn.open` と同じ基準である
 pub stdin_file : String -> Cmd -> Cmd
-stdin_file path c = { c | stdin = StdinFile path }
+stdin_file path c = to_head (StdinFile path) c
 
 -- 標準入力を空にする (`< /dev/null`)
 pub no_stdin : Cmd -> Cmd
-no_stdin c = { c | stdin = NullStdin }
+no_stdin c = to_head NullStdin c
+
+-- `StdinFrom` の鎖をたどり、先頭の段の標準入力を `mode` に置き換える
+to_head : StdinMode -> Cmd -> Cmd
+to_head mode c = { c | stdin = head_stdin mode c.stdin }
+
+head_stdin : StdinMode -> StdinMode -> StdinMode
+head_stdin mode (StdinFrom prev) = StdinFrom (to_head mode prev)
+head_stdin mode _ = mode
 
 -- 標準出力をファイルに書かせる (`> path`)。ファイルは作るか切り詰める
 pub stdout_file : String -> Cmd -> Cmd
@@ -55,7 +71,7 @@ stdout_file path c = { c | stdout = StdoutFile path }
 pub stdout_append : String -> Cmd -> Cmd
 stdout_append path c = { c | stdout = StdoutAppend path }
 
--- 標準入出力を受け継いで起動し、終わるのを待って終了コードを返す
+-- 標準入出力を受け継いで起動し、終わるのを待って終了コードを返す。パイプラインなら最後の段の終了コードである
 pub run : Cmd -> <IO> Int
 run c = wait (spawn_from 0 0 c)
 
@@ -106,23 +122,41 @@ piped c = c.stdout == DefaultStdout
 -- `spawn_raw` の5つの引数 (段の列、標準入力の向きと中身、標準出力の向きとパス) にする。`DefaultStdin` と
 -- `DefaultStdout` は、渡した `stdin` と `stdout` の向きにする。向きの値は、標準入力が 0 受け継ぐ、1 空、2 pipe、
 -- 3 文字列、4 ファイル、標準出力が 0 受け継ぐ、1 空、2 pipe、3 ファイルに書く、4 ファイルに足す、である。`Bool` は
--- 最後の段が標準エラーを pipe にしてよいかで、今は使わない
+-- 最後の段が標準エラーを pipe にしてよいかで、今は使わない。最後でない段の標準出力を設定していれば、起動の誤りにする
 pub launch_args : Int -> Int -> Bool -> Cmd -> <IO> (String, Int, String, Int, String)
 launch_args stdin stdout _ c =
   let (si, payload) = stdin_code stdin c.stdin
   let (so, path) = stdout_code stdout c.stdout
-  (stage c, si, payload, so, path)
+  (stages (chain c Nil) "", si, payload, so, path)
 
--- 段の列の1つの段。プログラム、引数の列、環境の列、作業ディレクトリ (空なら設定なし)、標準エラーの向きを並べる
-stage : Cmd -> String
-stage c =
-  fields [c.program, fields c.args "", env_fields c.env "", dir c.cwd, stderr_code c.stderr] ""
+-- パイプラインの段を先頭から並べる
+chain : Cmd -> List Cmd -> List Cmd
+chain c acc = chain_from c.stdin (c :: acc)
 
+chain_from : StdinMode -> List Cmd -> List Cmd
+chain_from (StdinFrom prev) acc = chain prev acc
+chain_from _ acc = acc
+
+-- 段の列。段ごとに、プログラム、引数の列、環境の列、作業ディレクトリ (空なら設定なし)、標準エラーの向きを並べる。
+-- 最後でない段の標準出力は次の段への pipe なので、ほかの向きは黙って捨てずに誤りにする
+stages : List Cmd -> String -> <IO> String
+stages Nil acc = acc
+stages (c :: Nil) acc = stage c acc
+stages (c :: rest) acc =
+  if c.stdout == DefaultStdout then stages rest (stage c acc)
+  else fail_io Other "cannot run `\{c.program}`: the standard output of a stage that is not last is redirected"
+
+stage : Cmd -> String -> String
+stage c acc =
+  fields [c.program, fields c.args "", env_fields c.env "", dir c.cwd, stderr_code c.stderr] acc
+
+-- 標準入力の向きは先頭の段のものである
 stdin_code : Int -> StdinMode -> (Int, String)
 stdin_code d DefaultStdin = (d, "")
 stdin_code _ NullStdin = (1, "")
 stdin_code _ (StdinText s) = (3, s)
 stdin_code _ (StdinFile path) = (4, path)
+stdin_code d (StdinFrom prev) = stdin_code d prev.stdin
 
 stdout_code : Int -> StdoutMode -> (Int, String)
 stdout_code d DefaultStdout = (d, "")
@@ -157,8 +191,34 @@ pub extern write_bytes : Bytes -> Child -> <IO> Child
 pub extern write_line : String -> Child -> <IO> Child
 -- 子の標準入力を閉じて、子に EOF を届ける
 pub extern close_stdin : Child -> <IO> Child
--- 標準入力を閉じてから子を待ち、終了コードを返す。シグナルで終わったら 128 + 番号である
+-- 標準入力を閉じてから、すべての段を先頭から待ち、最後の段の終了コードを返す。シグナルで終わったら 128 + 番号である
 pub extern wait : Child -> <IO> Int
+
+-- すべての段の終了コードを先頭から並べる。`wait` と同じく、すべての段を先頭から待つ
+pub wait_all : Child -> <IO> List Int
+wait_all c =
+  let (n, c) = stage_count c
+  wait_from 0 n c Nil
+
+wait_from : Int -> Int -> Child -> List Int -> <IO> List Int
+wait_from k n c acc =
+  let next = next_stage k n
+  if next == n then List.reverse (wait c :: acc)
+  else
+    let (code, c) = wait_stage k c
+    wait_from next n c (code :: acc)
+
+-- 段の数は小さく、`+` は桁あふれしない。型から `Panic` を除くために `try_panic` で包み、届かない `Err` には段の数
+-- `n` を返して、待つ繰り返しを終える
+next_stage : Int -> Int -> Int
+next_stage k n =
+  match try_panic (fn () -> k + 1) with
+    | Ok next -> next
+    | Err _ -> n
+
+extern stage_count : Child -> (Int, Child)
+-- 標準入力を閉じ、段 0 から段 `k` までを先頭から待ち、段 `k` の終了コードを返す
+extern wait_stage : Int -> Child -> <IO> (Int, Child)
 
 -- 子の標準出力を読む。形は `Stdin` の読みと同じである
 pub extern read_chunk : Bytes -> Child -> <IO> (Bytes, Child)

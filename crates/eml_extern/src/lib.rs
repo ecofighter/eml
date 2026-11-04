@@ -839,6 +839,34 @@ table! {
             Lin,
             Purity::Effectful,
         ),
+        ProcStageCount => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Proc.stage_count",
+                    &[Obj],
+                    &[Lin],
+                    Int,
+                    Unr,
+                    Purity::Pure,
+                )
+            },
+        ),
+        ProcWaitStage => borrowing(
+            &[false, true],
+            FunctionRow {
+                with_arg: Some(1),
+                ..kinded(
+                    "Std.Proc.wait_stage",
+                    &[Int, Obj],
+                    &[Unr, Lin],
+                    Int,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
         ProcWrite => writing("Std.Proc.write"),
         ProcWriteBytes => writing("Std.Proc.write_bytes"),
         ProcWriteLine => writing("Std.Proc.write_line"),

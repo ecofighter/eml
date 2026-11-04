@@ -1306,6 +1306,8 @@ impl fmt::Display for Fault {
                     LaunchCause::Open(path) => {
                         write!(f, "cannot run `{program}`: cannot open `{path}`: {reason}")
                     }
+                    // `launch` は `Io { op: Run, .. }` にするので作らないが、文言はそれと同じにする
+                    LaunchCause::Spawn => write!(f, "cannot run `{program}`: {reason}"),
                 }
             }
             Fault::Stdin(reason) => write!(f, "cannot read the standard input: {reason}"),

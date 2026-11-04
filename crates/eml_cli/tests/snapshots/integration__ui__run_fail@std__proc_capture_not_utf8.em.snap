@@ -8,4 +8,4 @@ before
 --- stderr ---
 --- runtime error ---
 the output of `eml` is not valid UTF-8
-  at <std>/Proc.em:68:24
+  at <std>/Proc.em:84:24

@@ -406,26 +406,31 @@ pub(crate) fn host_env_var(host: &HostRef, name: &str) -> (r: Result<String, Fau
     }
 }
 
-/// `Proc.spawn` で起動した子。`Foreign` の物体の中身にする。子のプロセスと、その標準入力への書き込む端と、標準出力の
-/// 読み手を持つ。破棄処理は pipe を閉じてから子を kill して待つ (docs/spec/object-model.md の「子のプロセス」)。
+/// `Proc.spawn` で起動した子。`Foreign` の物体の中身にする。パイプラインの段ごとの子のプロセスと、先頭の段の標準入力への
+/// 書き込む端と、最後の段の標準出力の読み手を持つ。破棄処理は pipe を閉じてから、まだ待っていない段を kill して待つ
+/// (docs/spec/object-model.md の「子のプロセス」)。
 #[verifier::external_body]
 pub(crate) struct Child {
-    /// 起動したプログラムの名前。誤りの文言に使う。
-    program: Box<str>,
-    /// `child_wait` が取り出した後は `None` で、破棄処理は待たない。
-    process: Option<Box<dyn Process>>,
+    /// 段ごとに起動したプログラムの名前を先頭から並べる。誤りの文言に使う。
+    programs: Vec<Box<str>>,
+    /// 段ごとの子。待った段は `None` で、破棄処理は待たない。
+    processes: Vec<Option<Box<dyn Process>>>,
+    /// 段ごとの終了コード。待てた段だけが `Some` である。
+    codes: Vec<Option<i32>>,
     /// `close_stdin` の後、書き込みの誤りの後、待つ前は `None` である。
     stdin: Option<Box<dyn Write + Send>>,
     stdout: Option<Reader>,
 }
 
-/// 起動の誤りが、どのファイルで起きたか。`Fault::Launch` が持つ。
+/// 起動の誤りが、どこで起きたか。`Fault::Launch` が持つ。
 #[derive(Debug, PartialEq, Eq)]
 pub enum LaunchCause {
     /// `Proc.stdin_text` の中身を入れる一時ファイルを作れなかった。
     StdinText,
     /// リダイレクトのファイルを開けなかった。パスは渡されたままのものである。
     Open(Box<str>),
+    /// 段を起動できなかった (段の間の pipe を作れなかったときを含む)。`launch` は `Fault::Io { op: Run, .. }` にする。
+    Spawn,
 }
 
 /// Host に子のプロセスを起動させる。`stages` は段ごとに5つの要素 (プログラム、引数の列、環境の列、作業ディレクトリ、
@@ -445,20 +450,23 @@ pub(crate) fn host_spawn(
     ensures
         !(r matches Err(Fault::Heap(_))),
 {
-    let mut launched = launch(host, control, stages, stdin, stdin_payload, stdout, stdout_path)?;
-    let program = launched.programs.pop().unwrap_or_default();
-    let process = launched.spawned.processes.pop();
-    match process {
-        Some(process) => Ok(
-            Child {
-                program,
-                process: Some(process),
-                stdin: launched.spawned.stdin,
-                stdout: launched.spawned.stdout.map(Reader::new),
-            },
-        ),
-        None => Err(Fault::Io { op: IoOp::Run, name: program, reason: IoReason::Other }),
+    let launched = launch(host, control, stages, stdin, stdin_payload, stdout, stdout_path)?;
+    let spawned = launched.spawned;
+    let n = spawned.processes.len();
+    let child = Child {
+        codes: (0..n).map(|_| None).collect(),
+        processes: spawned.processes.into_iter().map(Some).collect(),
+        stdin: spawned.stdin,
+        stdout: spawned.stdout.map(Reader::new),
+        programs: launched.programs,
+    };
+    // 段と子の数が合わない Host の結果は、破棄処理で子を片づけてから起動の誤りにする
+    if n == 0 || n != child.programs.len() {
+        let name = child.last_program();
+        drop(child);
+        return Err(Fault::Io { op: IoOp::Run, name, reason: IoReason::Other });
     }
+    Ok(child)
 }
 
 /// `bytes` を (`line` なら続けて `\n` も) 子の標準入力に書き、書き出す。書き込む端がなければ (`close_stdin` の後) `not
@@ -488,13 +496,13 @@ pub(crate) unsafe fn child_write(c: *mut Child, bytes: &[u8], line: bool, contro
                     Failure::Stopped(stop) => Fault::Stopped(stop),
                     Failure::Io(reason) => Fault::Io {
                         op: IoOp::Write,
-                        name: c.program.clone(),
+                        name: c.head_program(),
                         reason,
                     },
                     // `write_stopping` は作らない
                     Failure::Output(_) | Failure::NotUtf8 => Fault::Io {
                         op: IoOp::Write,
-                        name: c.program.clone(),
+                        name: c.head_program(),
                         reason: IoReason::Other,
                     },
                 }
@@ -511,8 +519,9 @@ pub(crate) unsafe fn child_close_stdin(c: *mut Child) {
     unsafe { (*c).stdin = None };
 }
 
-/// 子の標準入力を閉じ、子を取り出して待ち、終了コードを返す。待つ間に止める語が立てば、子が終わった後で、止めたことに
-/// する (docs/spec/object-model.md の「実行の制御」)。待てなければ `Io { op: Wait, .. }` を返す。
+/// 子の標準入力を閉じ、まだ待っていない段をすべて先頭から待ち、最後の段の終了コードを返す。待つ間に止める語が立てば、
+/// 子が終わった後で、止めたことにする (docs/spec/object-model.md の「実行の制御」)。待てない段があれば、ほかの段も待って
+/// から、最初の段の `Io { op: Wait, .. }` を返す。
 ///
 /// # Safety
 /// `child_write` と同じである。
@@ -522,19 +531,37 @@ pub(crate) unsafe fn child_wait(c: *mut Child, control: &Control) -> (r: Result<
         !(r matches Err(Fault::Heap(_))),
 {
     let c = unsafe { &mut *c };
-    c.stdin = None;
-    let waited = match c.process.take() {
-        Some(mut process) => process.wait(),
-        None => Err(io::Error::from(io::ErrorKind::Unsupported)),
-    };
-    let bits = control.stop_bits();
-    if bits != 0 {
-        return Err(Fault::Stopped(stop_reason(bits)));
+    let last = c.processes.len().saturating_sub(1);
+    c.reap(last, control)
+}
+
+/// 子の標準入力を閉じ、段 0 から段 `k` までのまだ待っていない段を先頭から待ち、段 `k` の終了コードを返す。止める語と
+/// 待てない段は `child_wait` と同じである。`k` が段の範囲の外なら、何も待たずに `Io { op: Wait, .. }` を返す。
+///
+/// # Safety
+/// `child_write` と同じである。
+#[verifier::external_body]
+pub(crate) unsafe fn child_wait_stage(c: *mut Child, k: i64, control: &Control) -> (r: Result<
+    i64,
+    Fault,
+>)
+    ensures
+        !(r matches Err(Fault::Heap(_))),
+{
+    let c = unsafe { &mut *c };
+    match usize::try_from(k) {
+        Ok(k) if k < c.processes.len() => c.reap(k, control),
+        _ => Err(Fault::Io { op: IoOp::Wait, name: c.last_program(), reason: IoReason::Other }),
     }
-    match waited {
-        Ok(code) => Ok(code as i64),
-        Err(e) => Err(Fault::Io { op: IoOp::Wait, name: c.program.clone(), reason: io_reason(&e) }),
-    }
+}
+
+/// 子の段の数。
+///
+/// # Safety
+/// `child_write` と同じである。
+#[verifier::external_body]
+pub(crate) unsafe fn child_stage_count(c: *mut Child) -> i64 {
+    unsafe { (*c).processes.len() as i64 }
 }
 
 } // verus!
@@ -891,6 +918,55 @@ impl Source for StdinHandle {
     }
 }
 
+impl Child {
+    fn head_program(&self) -> Box<str> {
+        self.programs.first().cloned().unwrap_or_default()
+    }
+
+    fn last_program(&self) -> Box<str> {
+        self.programs.last().cloned().unwrap_or_default()
+    }
+
+    /// 標準入力を閉じ、段 0 から段 `k` までのまだ待っていない段を先頭から待ち、段 `k` の終了コードを返す。先頭から待つ
+    /// のは、最後の段の標準出力を読み切っていれば (pipe でなければ)、どの段も終われるためである
+    /// (docs/spec/stdlib.md の「`Child`」)。
+    fn reap(&mut self, k: usize, control: &Control) -> Result<i64, Fault> {
+        self.stdin = None;
+        let mut failed = None;
+        for stage in 0..=k {
+            let Some(mut process) = self.processes[stage].take() else {
+                continue;
+            };
+            match process.wait() {
+                Ok(code) => self.codes[stage] = Some(code),
+                Err(e) => {
+                    failed.get_or_insert((stage, e));
+                }
+            }
+        }
+        let bits = control.stop_bits();
+        if bits != 0 {
+            return Err(Fault::Stopped(stop_reason(bits)));
+        }
+        if let Some((stage, e)) = failed {
+            return Err(Fault::Io {
+                op: IoOp::Wait,
+                name: self.programs[stage].clone(),
+                reason: io_reason(&e),
+            });
+        }
+        match self.codes[k] {
+            Some(code) => Ok(code as i64),
+            // 前に待てなかった段は、もう待てない
+            None => Err(Fault::Io {
+                op: IoOp::Wait,
+                name: self.programs[k].clone(),
+                reason: IoReason::NotAvailable,
+            }),
+        }
+    }
+}
+
 impl Source for Child {
     fn reader(&mut self) -> Option<&mut Reader> {
         self.stdout.as_mut()
@@ -901,19 +977,24 @@ impl Source for Child {
     }
 
     fn name(&self) -> SourceName {
-        SourceName::Child(self.program.clone())
+        SourceName::Child(self.last_program())
     }
 }
 
 impl Drop for Child {
     fn drop(&mut self) {
-        // 先に pipe を閉じる。子が書き込みか読みで止まっていても、kill の前に EOF か EPIPE で戻れる。破棄処理は失敗
-        // できず、どのスレッドで呼ばれてもよいので、誤りは捨てる (docs/spec/object-model.md の「子のプロセス」)
+        // 先に pipe を閉じる。子が書き込みか読みで止まっていても、kill の前に EOF か EPIPE で戻れる。まだ待っていない段を
+        // すべて kill してから先頭から待つ。破棄処理は失敗できず、どのスレッドで呼ばれてもよいので、誤りは捨てる
+        // (docs/spec/object-model.md の「子のプロセス」)
         self.stdin = None;
         self.stdout = None;
-        if let Some(mut process) = self.process.take() {
+        for process in self.processes.iter_mut().flatten() {
             let _ = process.kill();
-            let _ = process.wait();
+        }
+        for process in &mut self.processes {
+            if let Some(mut process) = process.take() {
+                let _ = process.wait();
+            }
         }
     }
 }
@@ -1114,8 +1195,8 @@ fn fields(list: &str) -> Option<Vec<&str>> {
 /// 出さない。
 pub static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
-/// Host の起動の誤りのうち、子の標準入出力のファイルで起きたもの。`io::Error` の中身にして `launch` に届け、
-/// `launch` が `Fault::Launch` にする。`stage` は、そのファイルを使う段の先頭から数えた位置である。
+/// Host の起動の誤りが、どの段で何に起きたか。`io::Error` の中身にして `launch` に届け、`launch` が `Fault` にする。
+/// `stage` は、その段の先頭から数えた位置である。
 #[derive(Debug)]
 pub struct LaunchError {
     pub stage: usize,
@@ -1126,6 +1207,22 @@ impl LaunchError {
     /// `error` の種類を保ったまま、この誤りを中身にする。種類が理由の語を決める。
     pub fn wrap(self, error: io::Error) -> io::Error {
         io::Error::new(error.kind(), self)
+    }
+
+    /// 段 `stage` を起動するときの誤り `error` を、その段の誤りにする。すでに `LaunchError` を中身に持つ誤り
+    /// (ファイルの誤り) は、そのまま返す。
+    pub fn spawning(stage: usize, error: io::Error) -> io::Error {
+        if error
+            .get_ref()
+            .is_some_and(|inner| inner.is::<LaunchError>())
+        {
+            return error;
+        }
+        LaunchError {
+            stage,
+            cause: LaunchCause::Spawn,
+        }
+        .wrap(error)
     }
 }
 
@@ -1140,6 +1237,7 @@ impl std::fmt::Display for LaunchError {
                 )
             }
             LaunchCause::Open(path) => write!(f, "stage {}: cannot open `{path}`", self.stage),
+            LaunchCause::Spawn => write!(f, "stage {}: cannot start", self.stage),
         }
     }
 }
@@ -1238,7 +1336,7 @@ pub struct Launched {
 ///
 /// 読めない列、NUL を含む要素、空か `=` を含む環境変数の名前、範囲の外の向きは、Host を呼ばずに起動の誤り
 /// (`InvalidInput`) にする。止める語が起動の前に立っていれば起動しない (docs/spec/object-model.md の「実行の制御」)。
-/// 誤りの名前は、`LaunchError` を持つ誤りならその段の、ほかは最後の段のプログラムである。
+/// 段の数は1つ以上である。誤りの名前は、`LaunchError` を持つ誤りならその段の、ほかは最後の段のプログラムである。
 pub fn launch(
     host: &HostRef,
     control: &Control,
@@ -1304,10 +1402,6 @@ pub fn launch(
                 stderr: *stderr,
             })
             .collect();
-        // パイプラインはまだ受けない
-        if stages.len() != 1 {
-            return Err(invalid());
-        }
         let spawn = Spawn {
             stages: &stages,
             stdin: match stdin {
@@ -1349,14 +1443,25 @@ fn launch_fault(programs: &[Box<str>], e: &io::Error) -> Fault {
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<LaunchError>())
     {
-        Some(LaunchError { stage, cause }) => Fault::Launch(Box::new(Launch {
-            program: programs.get(*stage).cloned().unwrap_or(last),
-            cause: match cause {
+        Some(LaunchError { stage, cause }) => {
+            let program = programs.get(*stage).cloned().unwrap_or(last);
+            let cause = match cause {
                 LaunchCause::StdinText => LaunchCause::StdinText,
                 LaunchCause::Open(path) => LaunchCause::Open(path.clone()),
-            },
-            reason,
-        })),
+                LaunchCause::Spawn => {
+                    return Fault::Io {
+                        op: IoOp::Run,
+                        name: program,
+                        reason,
+                    };
+                }
+            };
+            Fault::Launch(Box::new(Launch {
+                program,
+                cause,
+                reason,
+            }))
+        }
         None => Fault::Io {
             op: IoOp::Run,
             name: last,
@@ -1619,69 +1724,85 @@ impl Host for StdHost {
         ))
     }
 
-    /// 段は1つだけ受ける。標準出力を書き出してから `SPAWN_LOCK` を取り、標準入出力のファイルと pipe を作って起動し、
-    /// `Command` を落としてから放す (docs/spec/object-model.md の「子のプロセス」)。
+    /// 標準出力を書き出してから `SPAWN_LOCK` を取り、標準入出力のファイルと段の間の pipe を作って段を先頭から起動し、
+    /// 段ごとに `Command` を落とす。最後の段が戻ってから放す (docs/spec/object-model.md の「子のプロセス」)。段 `k` を
+    /// 起動できなければ、それより前の段を kill して待ち、段 `k` の誤りを返す。
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
-        let [stage] = spawn.stages else {
-            return Err(io::Error::from(io::ErrorKind::InvalidInput));
-        };
+        let last = spawn
+            .stages
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         lock(&self.out).flush()?;
-        let dir = stage.dir(&self.file_root);
-        let mut command = Command::new(stage.program_path(&dir)?);
-        command.args(stage.args).envs(stage.env.iter().copied());
-        // 空の根はプロセスの今のディレクトリである。`current_dir("")` は開けない
-        if !dir.as_os_str().is_empty() {
-            command.current_dir(&dir);
+        let mut commands = Vec::with_capacity(spawn.stages.len());
+        for (k, stage) in spawn.stages.iter().enumerate() {
+            let dir = stage.dir(&self.file_root);
+            let program = stage
+                .program_path(&dir)
+                .map_err(|e| LaunchError::spawning(k, e))?;
+            let mut command = Command::new(program);
+            command.args(stage.args).envs(stage.env.iter().copied());
+            // 空の根はプロセスの今のディレクトリである。`current_dir("")` は開けない
+            if !dir.as_os_str().is_empty() {
+                command.current_dir(&dir);
+            }
+            commands.push(command);
         }
         let spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let root = &self.file_root;
-        command.stdin(os_stdin(spawn.stdin, root)?);
+        let mut children = Vec::with_capacity(commands.len());
+        let mut next_stdin = None;
         let mut shared = None;
-        match (spawn.stdout, stage.stderr) {
-            // 1本の pipe の書き込む端を2つに分けて、標準出力と標準エラーに渡す
-            (StdoutSpec::Pipe, StderrSpec::ToStdout) => {
-                let (reader, writer) = io::pipe()?;
-                command.stderr(writer.try_clone()?).stdout(writer);
-                shared = Some(reader);
-            }
-            // std は `io::Stdout` を、どの OS でも子に渡せる標準出力の写しにする (`2>&1` の意味)
-            (StdoutSpec::Inherit, StderrSpec::ToStdout) => {
-                command
-                    .stdout(process::Stdio::inherit())
-                    .stderr(io::stdout());
-            }
-            (StdoutSpec::Null, StderrSpec::ToStdout) => {
-                command
-                    .stdout(process::Stdio::null())
-                    .stderr(process::Stdio::null());
-            }
-            (StdoutSpec::File { path, mode }, StderrSpec::ToStdout) => {
-                let file =
-                    redirect_file(root, path, Some(mode)).map_err(|e| opening(0, path, e))?;
-                command.stderr(file.try_clone()?).stdout(file);
-            }
-            (stdout, StderrSpec::Inherit) => {
-                command
-                    .stdout(os_stdout(stdout, root, 0)?)
-                    .stderr(process::Stdio::inherit());
-            }
-            (stdout, StderrSpec::Null) => {
-                command
-                    .stdout(os_stdout(stdout, root, 0)?)
-                    .stderr(process::Stdio::null());
+        let mut failed = None;
+        for (k, (stage, mut command)) in spawn.stages.iter().zip(commands).enumerate() {
+            let started = (|| {
+                command.stdin(match next_stdin.take() {
+                    Some(reader) => process::Stdio::from(reader),
+                    None => os_stdin(spawn.stdin, root)?,
+                });
+                if k < last {
+                    let (reader, writer) = io::pipe()?;
+                    match stage.stderr {
+                        StderrSpec::Inherit => command.stderr(process::Stdio::inherit()),
+                        StderrSpec::ToStdout => command.stderr(writer.try_clone()?),
+                        StderrSpec::Null => command.stderr(process::Stdio::null()),
+                    };
+                    command.stdout(writer);
+                    next_stdin = Some(reader);
+                } else {
+                    shared = last_stdout(&mut command, spawn.stdout, stage.stderr, root, last)?;
+                }
+                command.spawn()
+            })();
+            // `command` が持つ pipe の端とファイルを閉じる。残すと、子が終わっても読み手に終わりが届かず、前の段が
+            // 書き込みで EPIPE を受けない
+            drop(command);
+            match started {
+                Ok(child) => children.push(child),
+                Err(e) => {
+                    failed = Some(LaunchError::spawning(k, e));
+                    break;
+                }
             }
         }
-        let mut child = command.spawn()?;
-        // `command` が持つ pipe の書き込む端とファイルを閉じる。残すと、子が終わっても読み手に終わりが届かない
-        drop(command);
+        drop(next_stdin);
         drop(spawning);
-        let stdin = child
+        if let Some(e) = failed {
+            for child in &mut children {
+                let _ = child.kill();
+            }
+            for child in &mut children {
+                let _ = child.wait();
+            }
+            return Err(e);
+        }
+        let stdin = children[0]
             .stdin
             .take()
             .map(|w| Box::new(w) as Box<dyn Write + Send>);
         let stdout = match shared {
             Some(reader) => Some(Box::new(reader) as Box<dyn Read + Send>),
-            None => child
+            None => children[last]
                 .stdout
                 .take()
                 .map(|r| Box::new(r) as Box<dyn Read + Send>),
@@ -1689,9 +1810,57 @@ impl Host for StdHost {
         Ok(Spawned {
             stdin,
             stdout,
-            processes: vec![Box::new(OsProcess(child))],
+            processes: children
+                .into_iter()
+                .map(|child| Box::new(OsProcess(child)) as Box<dyn Process>)
+                .collect(),
         })
     }
+}
+
+/// 最後の段の標準出力と標準エラーの向きを `command` に設定する。標準エラーを pipe の標準出力に合わせたときは、その
+/// pipe の読み出す端を返す。`SPAWN_LOCK` の中で呼ぶ。
+fn last_stdout(
+    command: &mut Command,
+    stdout: StdoutSpec<'_>,
+    stderr: StderrSpec,
+    root: &Path,
+    last: usize,
+) -> io::Result<Option<io::PipeReader>> {
+    match (stdout, stderr) {
+        // 1本の pipe の書き込む端を2つに分けて、標準出力と標準エラーに渡す
+        (StdoutSpec::Pipe, StderrSpec::ToStdout) => {
+            let (reader, writer) = io::pipe()?;
+            command.stderr(writer.try_clone()?).stdout(writer);
+            return Ok(Some(reader));
+        }
+        // std は `io::Stdout` を、どの OS でも子に渡せる標準出力の写しにする (`2>&1` の意味)
+        (StdoutSpec::Inherit, StderrSpec::ToStdout) => {
+            command
+                .stdout(process::Stdio::inherit())
+                .stderr(io::stdout());
+        }
+        (StdoutSpec::Null, StderrSpec::ToStdout) => {
+            command
+                .stdout(process::Stdio::null())
+                .stderr(process::Stdio::null());
+        }
+        (StdoutSpec::File { path, mode }, StderrSpec::ToStdout) => {
+            let file = redirect_file(root, path, Some(mode)).map_err(|e| opening(last, path, e))?;
+            command.stderr(file.try_clone()?).stdout(file);
+        }
+        (stdout, StderrSpec::Inherit) => {
+            command
+                .stdout(os_stdout(stdout, root, last)?)
+                .stderr(process::Stdio::inherit());
+        }
+        (stdout, StderrSpec::Null) => {
+            command
+                .stdout(os_stdout(stdout, root, last)?)
+                .stderr(process::Stdio::null());
+        }
+    }
+    Ok(None)
 }
 
 /// 開けなかったパスがディレクトリなら、誤りを `IsADirectory` にする。Windows はディレクトリを開くと

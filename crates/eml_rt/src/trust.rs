@@ -169,6 +169,8 @@ const TRUSTED: &[(&str, &str)] = &[
     ("host.rs: external_body child_write", "T11"),
     ("host.rs: external_body child_close_stdin", "T11"),
     ("host.rs: external_body child_wait", "T11"),
+    ("host.rs: external_body child_wait_stage", "T11"),
+    ("host.rs: external_body child_stage_count", "T11"),
     ("externs.rs: external_body float_add", "T12"),
     ("externs.rs: external_body float_sub", "T12"),
     ("externs.rs: external_body float_mul", "T12"),

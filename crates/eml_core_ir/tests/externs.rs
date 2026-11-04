@@ -286,8 +286,8 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 /// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`、
 /// `Std.Async.op_ready`、`Std.Async.job_cell`、
 /// `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr` と、`Std.Tls` の6つの行と、
-/// `Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.Tls` の `push_tls` と `write_plain` は
-/// データを借りて `Conn` を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
+/// `Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行と、`Std.Proc` の `stage_count`、`wait_stage` だけで
+/// ある。`Std.Tls` の `push_tls` と `write_plain` はデータを借りて `Conn` を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
@@ -329,6 +329,8 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Std.FileIn.read_chunk" | "Std.Stdin.read_chunk" | "Std.Proc.read_chunk" => {
                 (&[false, true], Some(1))
             }
+            "Std.Proc.stage_count" => (&[true], Some(0)),
+            "Std.Proc.wait_stage" => (&[false, true], Some(1)),
             "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], None),
             "Std.String.byte_at" | "Std.String.char_at" => (&[false, true], None),
             "Std.String.slice" => (&[false, false, true], None),
@@ -503,7 +505,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
     declared == row || (declared == Mark::Poly && row == Mark::Unr)
 }
 
-/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11、`MutArray` を扱う7つ、
+/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の13、`MutArray` を扱う7つ、
 /// `Std.Par.par`、`Std.Async` の20行、`Std.Chan` の2行、`Std.Net` の12行、`Std.Tls` の11行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
@@ -545,6 +547,8 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Proc.spawn_raw" => (&[Unr; 5], Lin),
             "Std.Proc.wait" => (&[Lin], Unr),
             "Std.Proc.close_stdin" => (&[Lin], Lin),
+            "Std.Proc.stage_count" => (&[Lin], Unr),
+            "Std.Proc.wait_stage" => (&[Unr, Lin], Unr),
             "Std.Proc.read_all"
             | "Std.Proc.read_line_raw"
             | "Std.Proc.read_all_bytes"

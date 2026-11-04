@@ -3981,6 +3981,14 @@ fn run_extern<R: Exec>(
                 let code = ctx.proc_wait(task.get(arg(0)))?;
                 task.set_raw(dst, code);
             }
+            Extern::ProcStageCount => {
+                let n = ctx.proc_stage_count(task.get(arg(0)))?;
+                task.set_raw(dst, n);
+            }
+            Extern::ProcWaitStage => {
+                let code = ctx.proc_wait_stage(task.get(arg(1)), task.raw(arg(0)))?;
+                task.set_raw(dst, code);
+            }
             Extern::ProcCloseStdin => {
                 let w = ctx.proc_close_stdin(task.get(arg(0)))?;
                 task.set(dst, w);

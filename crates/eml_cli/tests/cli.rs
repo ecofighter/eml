@@ -837,6 +837,47 @@ fn a_script_with_a_shebang_runs_directly() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "[\"1\", \"-2\"]\n");
 }
 
+/// `eml run` の Host (`StdHost`) は、パイプラインの段を OS の pipe でつないで起動する。最後の段の標準出力は、`capture`
+/// では pipe に、`run` では eml の標準出力にそのまま出る (docs/spec/stdlib.md の「`Proc`」)。
+#[test]
+fn a_pipeline_runs_through_the_real_host() {
+    let text = "import Env\n\
+import Proc ((.|))
+import Stdin
+import String
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  match Env.args () with
+    | [\"tag\"] -> tag (Stdin.open ())
+    | _ ->
+      let tag = `eml pipe.em tag`
+      println (String.trim (Proc.capture (Proc.stdin_text \"a\\nb\\n\" (tag .| tag))))
+      println (show (Proc.run (Proc.stdin_text \"c\\n\" (tag .| tag .| tag))))
+
+tag : Stdin.Stdin -> <IO, Panic> Unit
+tag h =
+  match Stdin.read_line h with
+    | (Some line, h) ->
+      println \"> \\{line}\"
+      tag h
+    | (None, h) -> Stdin.close h
+";
+    let dir = temp_project("cli-pipeline", &[("pipe.em", text)]);
+    let output = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .arg("pipe.em")
+        .env("PATH", path_with_eml())
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "> > a\n> > b\n> > > c\n0\n"
+    );
+}
+
 /// UTF-8 でない引数と環境変数の値は、読んだときに実行時エラーにする。
 #[test]
 fn arguments_and_variables_that_are_not_utf8_are_runtime_errors() {
