@@ -219,6 +219,7 @@
 - 要点: `eml_rt` の `OsHandle`、`RawFile`、`RawResource`、`Op::Adopt`、`Done::Handle`。核の `Class` と、`Memory` として保たれる `FileRead` と `FileWrite` の仕事。`crates/eml_io/Cargo.toml` に `Win32_Storage_FileSystem` を足す。vm.md に、ファイルの host は取り込んだ worker で、開くときに決まり、救済は持ち主のタスクだけを動かすことと、`quiesce` の前に driver を落とさないかぎり1秒の abort に届かないことを書く
 - 完了の条件に加えるもの: G-10 の確かめ (`commits.md` §5b)。このコミットは分けない。G-10 の `git log -S"FileRead"` が、このコミットを指すためである
 - 落とし穴: Windows のファイルの仕事は、null の `OVERLAPPED` で同期のハンドルに `ReadFile` と `WriteFile` を呼ぶ。overlapped のファイルの I/O は使わない
+- 実装で決めたこと: ファイルの仕事の slot は `Hold::None` のままで、driver の `Drop` が種類 (ファイルの読み書きの仕事) で見分けて `Hold::Memory` と同じに保つ。既存のテスト `trust::the_core_reads_hold_only_to_drop` が、`Hold::Memory` を `drop` の中にしか置かせないためである。D-5 の「`Memory` として保たれる」は、この形で満たす
 
 ### T-6: テストの driver に通常のファイルを持たせる
 - 目的: `stream_*` の UI テストを、仮想の時計の上で seed と N = 2、8 で流せるようにする
