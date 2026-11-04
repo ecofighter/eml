@@ -155,7 +155,7 @@
 - 監視のスレッドを始められなかった眠る driver の run では、VM が1回の待ちを 10 ms で切って止める語を読む。その run では Ctrl-C の後に driver を起こす道がないためで、眠る worker に Ctrl-C と確保量の上限が届くまで、10 ms と OS の遅れだけかかる ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver はブロックする仕事のプール (`Op::Job`、driver ごとに32本まで。すべてが仕事中なら、仕事は driver の中の列で待つ) を持つ。std からは `Std.Stream` のファイルの読み書きだけがプールで動き、`Op::Job` を使うのは Rust のテストだけである ([VM](../spec/vm.md) の「時計と driver」)
 - 時間は `sleep_ms`、`timeout`、`race`、`drain_within` で扱う。`eml run` と `eml repl` はいつも本物の時計で動く。テストとライブラリの既定は仮想の時計で、すべてのタスクが待つときだけ進む ([標準ライブラリ](../spec/stdlib.md) の「時間」、[VM](../spec/vm.md) の「時計と driver」)
-- 取り消しは協調的で、取り消しの地点 (`await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` と、`Std.Chan` の `send`、`recv` と、`Std.Net` と `Std.Stream` の待つ関数と、仕事が終わってから届く `compute`) でだけ届く。読み書きの extern と `par` の子は取り消しの地点でない ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
+- 取り消しは協調的で、取り消しの地点 (`await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled` と、`Std.Chan` の `send`、`recv` と、`Std.Net` と `Std.Stream` と `Std.Exec` の待つ関数と、仕事が終わってから届く `compute`) でだけ届く。読み書きの extern と `par` の子は取り消しの地点でない ([標準ライブラリ](../spec/stdlib.md) の「取り消し」)
 - `compute` の仕事は、空いた worker があるときだけほかの worker で動く。呼んだ worker の実行待ちに積んだ仕事は、後でほかの worker が空いても動かない。`par` の右の子と同じ制限で、盗みを入れる段で解く ([VM](../spec/vm.md) の「`compute` の仕事」、[ロードマップ](../future/roadmap.md) の `par-steal`)
 - `compute` の仕事は取り消せない。取り消しは仕事が終わってから届くので、`timeout` で囲んだ `compute` は期限が過ぎても仕事が終わるまで戻らず、仕事の後で `None` を返す。`race` で負けた腕の仕事も最後まで動く ([標準ライブラリ](../spec/stdlib.md) の「`compute`」)
 - `compute` の仕事の中の、`Panic` でない実行時エラーは、呼んだタスクの `try_all` も捕まえず、その場で run を止める。捕まえない `Panic` は、呼んだタスクの `Panicked` になる ([標準ライブラリ](../spec/stdlib.md) の「`compute`」)

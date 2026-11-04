@@ -785,7 +785,7 @@ eml は1度に1本の pipe しか読み書きしない。pipe の buffer は OS 
 | `wait`、`wait_all`、`run`、`output`、`output_bytes`、`capture`、`capture_bytes` | 子を待てない (`Io { op: Wait, name: program, .. }`。``cannot wait for `sort`: I/O error``)。起動の誤りと違い、子は起動している | `IO` |
 | `wait`、`wait_all`、読み、書き込み | 割り込み。子が終わった後に `Stopped` になる | 位置を付けた実行時エラー |
 
-- 起動の誤り (``cannot run `<program>`: …``。一時ファイルとリダイレクトの形を含み、最後でない段の標準出力の誤りを除く) の理由は、`not found`、`permission denied`、`not available`、`I/O error` の4つの語のどれかで、OS の文言を出さない。理由の語が誤りの種類 (`try_io` の `kind`) を決める。driver で読み書きする `Std.Stream` の読みと書きの失敗と、`Std.Exec` の pipe の読み書きと子の待ちの失敗は、`Std.Net` と同じく OS の文言を保つ (下の「`Std.Stream`」と「`Std.Exec`」)。`Std.Exec` の起動の誤りは、この4つの語を使う
+- 起動の誤り (``cannot run `<program>`: …``。一時ファイルとリダイレクトの形を含み、最後でない段の標準出力の誤りと、標準エラーの pipe の誤り (``the standard error pipe needs `Exec.spawn` on the last stage``) を除く。どちらも決まった文言である) の理由は、`not found`、`permission denied`、`not available`、`I/O error` の4つの語のどれかで、OS の文言を出さない。理由の語が誤りの種類 (`try_io` の `kind`) を決める。driver で読み書きする `Std.Stream` の読みと書きの失敗と、`Std.Exec` の pipe の読み書きと子の待ちの失敗は、`Std.Net` と同じく OS の文言を保つ (下の「`Std.Stream`」と「`Std.Exec`」)。`Std.Exec` の起動の誤りは、この4つの語を使う
 - `Child` の書き込みの失敗を、`Stdout` と違って `try_io` で捕まえるのは、`Child` が自分の pipe に直に書き、共有の buffer を持たないためである (`FileOut` と同じ理由)
 - 書き込みが失敗すると、ハンドルを手放すので、破棄処理が子を kill する。子の終了コードは失われる
 

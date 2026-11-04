@@ -821,6 +821,27 @@ fn a_real_clock_file_has_no_seed_or_workers_runs() {
     );
 }
 
+/// 本物の時計の上では、時間に頼る API を使うと結果が機械の速さで変わる (docs/implementation/testing.md の「UI テスト」)。
+#[test]
+fn a_real_clock_file_does_not_wait_on_time() {
+    const TIME_BOUND: [&str; 4] = ["sleep_ms", "timeout", "_within", "drain_within"];
+    for top in ["run", "run-fail"] {
+        for_each_file(&ui_root().join(top), "em", true, |path, marks| {
+            if !marks.real_clock {
+                return;
+            }
+            let text = fs::read_to_string(path).unwrap();
+            for word in TIME_BOUND {
+                assert!(
+                    !text.contains(word),
+                    "{}: a clock: real file must not use `{word}`",
+                    path.display()
+                );
+            }
+        });
+    }
+}
+
 #[test]
 #[should_panic(expected = "clock marks are not supported here")]
 fn a_clock_mark_in_a_transcript_fails() {
