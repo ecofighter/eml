@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/io/try_io_redirect_missing.em
+---
+--- stdout ---
+NotFound: cannot run `eml`: cannot open `nope.txt`: not found
+--- stderr ---

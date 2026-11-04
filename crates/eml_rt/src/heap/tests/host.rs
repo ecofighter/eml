@@ -135,7 +135,7 @@ pub(super) struct Started {
     pub(super) args: Vec<String>,
     pub(super) env: Vec<(String, String)>,
     pub(super) cwd: Option<String>,
-    pub(super) stdio: (StdinSpec, StdoutSpec, StderrSpec),
+    pub(super) stdio: (StdinSpec<'static>, StdoutSpec<'static>, StderrSpec),
 }
 
 impl MemoryHost {
@@ -305,10 +305,24 @@ impl Host for MemoryHost {
     }
     /// プロセスを起動せず、受けた設定を覚える。`missing` は見つからないプログラムである。pipe の標準入力は
     /// `child_input` に写し (`fail_write` があれば書くたびにその文言で失敗する)、pipe の標準出力は `child_output` を
-    /// 読ませる。子の `wait` は引数の数を終了コードにする。段は1つだけ受ける
+    /// 読ませる。子の `wait` は引数の数を終了コードにする。段は1つだけ受け、ファイルを使う向き (文字列の標準入力と
+    /// リダイレクト) は OS のファイルが要るので `Unsupported` で断る
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
         let [stage] = spawn.stages else {
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
+        };
+        let unsupported = || io::Error::from(io::ErrorKind::Unsupported);
+        let stdin = match spawn.stdin {
+            StdinSpec::Inherit => StdinSpec::Inherit,
+            StdinSpec::Null => StdinSpec::Null,
+            StdinSpec::Pipe => StdinSpec::Pipe,
+            StdinSpec::Text(_) | StdinSpec::File(_) => return Err(unsupported()),
+        };
+        let stdout = match spawn.stdout {
+            StdoutSpec::Inherit => StdoutSpec::Inherit,
+            StdoutSpec::Null => StdoutSpec::Null,
+            StdoutSpec::Pipe => StdoutSpec::Pipe,
+            StdoutSpec::File { .. } => return Err(unsupported()),
         };
         if stage.program == "missing" {
             return Err(io::Error::from(io::ErrorKind::NotFound));
@@ -322,7 +336,7 @@ impl Host for MemoryHost {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             cwd: stage.cwd.map(str::to_string),
-            stdio: (spawn.stdin, spawn.stdout, stage.stderr),
+            stdio: (stdin, stdout, stage.stderr),
         });
         let stdin = (spawn.stdin == StdinSpec::Pipe).then(|| {
             Box::new(ChildInput {
@@ -756,6 +770,65 @@ mod std_host {
                 .map(|e| e.kind()),
             Some(io::ErrorKind::IsADirectory)
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// 文字列の標準入力の一時ファイルは、書いた中身を先頭から読ませる。unix では作ってすぐ消すので、一時ディレクトリに
+    /// 名前が残らない。
+    #[test]
+    fn a_here_file_reads_back_its_bytes_and_has_no_name() {
+        let bytes = "日本語\n".repeat(1000);
+        let mut file = crate::here_file(bytes.as_bytes()).unwrap();
+        let mut read = String::new();
+        file.read_to_string(&mut read).unwrap();
+        assert_eq!(read, bytes);
+        #[cfg(unix)]
+        {
+            let prefix = format!("eml-stdin-{}-", std::process::id());
+            let left = std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(&prefix));
+            assert!(!left);
+        }
+    }
+
+    /// リダイレクトのファイルを開けなければ、子を起動せず、ファイルを使う段のプログラムとパスを誤りに出す。理由は
+    /// 開けなかった誤りの種類の語である。
+    #[test]
+    fn a_launch_error_names_the_file_it_could_not_open() {
+        use std::sync::Arc;
+
+        use super::super::ctx::{fields, stage};
+        use crate::{Fault, HostRef, IoReason, Launch, LaunchCause, launch};
+        let root = fixture("launch");
+        let host = StdHost::new(
+            Box::new(io::sink()),
+            Box::new(io::sink()),
+            root.clone(),
+            Buffering::Line,
+        );
+        let host = HostRef::new(Arc::new(host));
+        let control = Control::new(Limits::default());
+        let stages = stage("eml-no-such-program", &fields(&[]), &fields(&[]), "", 0);
+        let failed = |stdin, payload, stdout, path| {
+            launch(&host, &control, &stages, stdin, payload, stdout, path).err()
+        };
+        let launch_fault = |path: &str, reason| {
+            Some(Fault::Launch(Box::new(Launch {
+                program: "eml-no-such-program".into(),
+                cause: LaunchCause::Open(path.into()),
+                reason,
+            })))
+        };
+        let missing = failed(4, "nope.txt", 0, "");
+        assert_eq!(missing, launch_fault("nope.txt", IoReason::NotFound));
+        assert_eq!(
+            missing.unwrap().to_string(),
+            "cannot run `eml-no-such-program`: cannot open `nope.txt`: not found"
+        );
+        assert_eq!(failed(0, "", 3, "."), launch_fault(".", IoReason::Other));
+        assert_eq!(failed(4, ".", 0, ""), launch_fault(".", IoReason::Other));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

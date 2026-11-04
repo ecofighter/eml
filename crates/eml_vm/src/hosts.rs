@@ -12,8 +12,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 
 use eml_rt::{
-    Buffering, Host, HostRef, Opened, Process, Spawn, Spawned, StdHost, StderrSpec, StdinSlot,
-    StdinSpec, StdoutSpec, Stream, WriteMode, exit_code,
+    Buffering, Host, HostRef, LaunchCause, LaunchError, Opened, Process, SPAWN_LOCK, Spawn,
+    Spawned, StdHost, StderrSpec, StdinSlot, StdinSpec, StdoutSpec, Stream, WriteMode, exit_code,
+    here_file, redirect_file,
 };
 
 /// 書いたバイト列を覚える書き込み先。テストが出力を読むために使う。
@@ -272,8 +273,9 @@ impl Host for CaptureHost {
     /// `SystemRoot`、`Proc.env` の組をこの順に足したもので、`StdinSpec::Inherit` の標準入力は空である。受け継ぐ標準
     /// 出力と標準エラーは pipe にしてスレッドで最後まで読み、子を待った後で、捕まえたそれぞれの出力に `out`、`err` の
     /// 順に足す。捕まえた出力の順を固定するためである。
-    /// スレッドで読むのは、子が pipe の buffer より多く書いても、eml の側の読み書きと詰まらないためである。段は1つ
-    /// だけ受ける。
+    /// スレッドで読むのは、子が pipe の buffer より多く書いても、eml の側の読み書きと詰まらないためである。リダイレクトの
+    /// パスは、このテストの Host が書いたファイルを先に引き、なければ `file_root` の下を開く。`> out` は書いたファイルに
+    /// 加わる。段は1つだけ受ける。
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
         let [stage] = spawn.stages else {
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
@@ -297,20 +299,38 @@ impl Host for CaptureHost {
         if !dir.as_os_str().is_empty() {
             command.current_dir(&dir);
         }
-        command.stdin(match spawn.stdin {
+        // 子に渡すファイルは、どれも `SPAWN_LOCK` の前に開く。書いたファイルの表は自分の lock を取り、葉の lock の中では
+        // 取れないためである。std のファイルは作ったときから子に受け継がれない (docs/spec/object-model.md の
+        // 「子のプロセス」)
+        let stdin = match spawn.stdin {
             StdinSpec::Pipe => Stdio::piped(),
             StdinSpec::Inherit | StdinSpec::Null => Stdio::null(),
-        });
+            StdinSpec::Text(bytes) => here_file(bytes)?.into(),
+            StdinSpec::File(path) => self.redirect(0, path, None)?.into(),
+        };
+        let stdout_file = match spawn.stdout {
+            StdoutSpec::File { path, mode } => Some(self.redirect(0, path, Some(mode))?),
+            _ => None,
+        };
+        // 読むスレッドは放した後で作る
+        let spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        command.stdin(stdin);
         let mut stdout = None;
         let mut out = None;
-        match spawn.stdout {
-            StdoutSpec::Null => {
+        match (spawn.stdout, stdout_file) {
+            (StdoutSpec::Null, _) => {
                 command.stdout(Stdio::null());
                 if stage.stderr == StderrSpec::ToStdout {
                     command.stderr(Stdio::null());
                 }
             }
-            pipe => {
+            (StdoutSpec::File { .. }, Some(file)) => {
+                if stage.stderr == StderrSpec::ToStdout {
+                    command.stderr(file.try_clone()?);
+                }
+                command.stdout(file);
+            }
+            (pipe, _) => {
                 let (reader, writer) = io::pipe()?;
                 if stage.stderr == StderrSpec::ToStdout {
                     command.stderr(writer.try_clone()?);
@@ -338,6 +358,7 @@ impl Host for CaptureHost {
         let mut child = command.spawn()?;
         // `command` が持つ pipe の書き込む端を閉じる。残すと、子が終わっても読むスレッドに終わりが届かない
         drop(command);
+        drop(spawning);
         let (out, err) = match (out.map(drain).transpose(), err.map(drain).transpose()) {
             (Ok(out), Ok(err)) => (out, err),
             (Err(error), _) | (_, Err(error)) => {
@@ -361,6 +382,27 @@ impl Host for CaptureHost {
                 out_capture: self.out.clone(),
                 err_capture: self.err.clone(),
             })],
+        })
+    }
+}
+
+impl CaptureHost {
+    /// 段 `stage` のリダイレクトのファイルを開く。`mode` が `None` なら読むために、`Some` なら書くために開く。
+    fn redirect(&self, stage: usize, path: &str, mode: Option<WriteMode>) -> io::Result<File> {
+        let opened = match mode {
+            None => match self.written.open(path) {
+                Ok(Some((file, _))) => Ok(file),
+                Ok(None) => redirect_file(&self.file_root, path, None),
+                Err(error) => Err(error),
+            },
+            Some(mode) => self.written.open_write(path, mode),
+        };
+        opened.map_err(|error| {
+            LaunchError {
+                stage,
+                cause: LaunchCause::Open(path.into()),
+            }
+            .wrap(error)
         })
     }
 }

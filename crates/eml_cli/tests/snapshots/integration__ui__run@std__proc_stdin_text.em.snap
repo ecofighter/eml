@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/proc_stdin_text.em
+---
+--- stdout ---
+bytes 2097152 lines 32768
+bytes 6 lines 3
+exit 0
+--- stderr ---

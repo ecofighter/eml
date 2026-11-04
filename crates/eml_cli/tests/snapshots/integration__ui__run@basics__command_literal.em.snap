@@ -4,10 +4,10 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{s
 input_file: tests/ui/run/basics/command_literal.em
 ---
 --- stdout ---
-Cmd { program = "git", args = ["log", "-n", "3", "--out=out dir", "", "x yz", "a b", "c", "end"], cwd = None, env = [], stderr = InheritStderr }
+Cmd { program = "git", args = ["log", "-n", "3", "--out=out dir", "", "x yz", "a b", "c", "end"], cwd = None, env = [], stdin = DefaultStdin, stdout = DefaultStdout, stderr = InheritStderr }
 git log -n 3 --out=out dir  x yz a b c end
 ["log", "-n", "3", "--out=out dir", "", "x yz", "a b", "c", "end"]
 True
 False
-Cmd { program = "echo", args = ["a b", "c"], cwd = None, env = [], stderr = InheritStderr }
+Cmd { program = "echo", args = ["a b", "c"], cwd = None, env = [], stdin = DefaultStdin, stdout = DefaultStdout, stderr = InheritStderr }
 --- stderr ---

@@ -34,14 +34,15 @@ pub use driver::{
 };
 pub use error::HeapError;
 pub use externs::{
-    ArithFault, Fault, Form, Handle, IndexFault, IoOp, IoReason, Open, Raised, ReadAmount,
+    ArithFault, Fault, Form, Handle, IndexFault, IoOp, IoReason, Launch, Open, Raised, ReadAmount,
     StdStream, Utf8Source, Write,
 };
 pub use frozen::Frozen;
 pub use heap::{Ctx, CtxStats, Heap, MaskItem, Stats, Token};
 pub use host::{
-    Buffering, Host, HostRef, Opened, Process, Spawn, Spawned, Stage, StdHost, StderrSpec,
-    StdinSlot, StdinSpec, StdoutSpec, Stream, WriteMode, exit_code,
+    Buffering, Host, HostRef, LaunchCause, LaunchError, Launched, Opened, Process, SPAWN_LOCK,
+    Spawn, Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec, StdoutSpec, Stream,
+    WriteMode, exit_code, here_file, launch, redirect_file,
 };
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};

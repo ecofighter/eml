@@ -248,6 +248,23 @@ show_rest : Show a => String -> List a -> String
 show_rest acc Nil = acc ++ "]"
 show_rest acc (x :: rest) = show_rest (acc ++ ", " ++ show x) rest
 
+-- 標準入力の向き。`Proc.stdin_text`、`stdin_file`、`no_stdin` が設定し、利用者がコンストラクタを書く必要はない。
+-- `DefaultStdin` は起動の形が決める (docs/spec/stdlib.md の「`Cmd`」)
+pub data StdinMode =
+  | DefaultStdin
+  | NullStdin
+  | StdinText String
+  | StdinFile String
+  deriving (Eq, Show)
+
+-- 標準出力の向き。`Proc.stdout_file`、`stdout_append` が設定する。`DefaultStdout` は起動の形が決める
+pub data StdoutMode =
+  | DefaultStdout
+  | NullStdout
+  | StdoutFile String
+  | StdoutAppend String
+  deriving (Eq, Show)
+
 -- 標準エラーの向き。`Proc.merge_stderr`、`discard_stderr` が設定し、利用者がコンストラクタを書く必要はない
 pub data StderrMode =
   | InheritStderr
@@ -257,12 +274,13 @@ pub data StderrMode =
 
 -- コマンドリテラルの値。コマンドリテラルと `Std.Proc` の関数で組む (docs/spec/expressions.md の「コマンドリテラル」)
 pub data Cmd =
-  | Cmd { program : String, args : List String, cwd : Option String, env : List (String, String), stderr : StderrMode }
+  | Cmd { program : String, args : List String, cwd : Option String, env : List (String, String), stdin : StdinMode,
+          stdout : StdoutMode, stderr : StderrMode }
   deriving (Eq)
 
 -- `show` は導出した形、`display` は人が読む1行 (引数を空白でつなぐ。構文には戻せない)
 instance Show Cmd where
-  show c = "Cmd { program = \{show c.program}, args = \{show c.args}, cwd = \{show c.cwd}, env = \{show c.env}, stderr = \{show c.stderr} }"
+  show c = "Cmd { program = \{show c.program}, args = \{show c.args}, cwd = \{show c.cwd}, env = \{show c.env}, stdin = \{show c.stdin}, stdout = \{show c.stdout}, stderr = \{show c.stderr} }"
   display c = join_words c.program c.args
 
 -- 左辺を一意な文字列として伸ばすので、長さに比例する時間で済む
@@ -272,7 +290,16 @@ join_words acc (x :: rest) = join_words (acc ++ " " ++ x) rest
 
 -- コマンドリテラルの脱糖が名前を引かずに呼ぶ (docs/spec/expressions.md の「コマンドリテラル」)
 cmd_new : String -> List String -> Cmd
-cmd_new program args = Cmd { program = program, args = args, cwd = None, env = Nil, stderr = InheritStderr }
+cmd_new program args =
+  Cmd {
+    program = program,
+    args = args,
+    cwd = None,
+    env = Nil,
+    stdin = DefaultStdin,
+    stdout = DefaultStdout,
+    stderr = InheritStderr
+  }
 
 cmd_spread : List String -> List String -> List String
 cmd_spread Nil rest = rest

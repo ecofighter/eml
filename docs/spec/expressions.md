@@ -205,7 +205,7 @@ backup dest files = `rsync -a --delete \{..files} \{dest}`
 
 字句と、本文を引数に分ける規則は [字句](lexical.md) の「コマンドリテラル」にある。`Cmd` を組む設定の関数と起動する関数は、[標準ライブラリ](stdlib.md) の「`Proc`」にある。
 
-- コマンドリテラルは、Prelude の `Cmd` の値である。`Cmd` は、プログラム `program`、引数のリスト `args`、起動の設定 (`cwd`、`env`、`stderr`) を持つレコードである。リテラルは、設定を既定の値 (`None`、`Nil`、`InheritStderr`) にする
+- コマンドリテラルは、Prelude の `Cmd` の値である。`Cmd` は、プログラム `program`、引数のリスト `args`、起動の設定 (`cwd`、`env`、`stdin`、`stdout`、`stderr`) を持つレコードである。リテラルは、設定を既定の値 (`None`、`Nil`、`DefaultStdin`、`DefaultStdout`、`InheritStderr`) にする。`DefaultStdin` と `DefaultStdout` は、起動の形が向きを決めることを表す ([標準ライブラリ](stdlib.md) の「`Proc`」)
 - 最初の引数がプログラムで、残りが `args` になる。引数が1つもないリテラル (`` `   ` ``) は E1056 (`a command literal needs a program`) で、範囲はリテラル全体である
 - 穴 `\{e}` の式は `String` に限る。文字列の補間と違って、`display` を呼ばない。`\{xs}` (`xs : List String`) が `["a", "b"]` という1つの引数になる取り違えを、型の誤りで止めるためである。数は `\{show n}` と書く
 - 穴 `\{..xs}` (`xs : List String`) は、`xs` の要素を別々の引数として並べる (spread)。spread になるのは、次の3つがそろうときだけである

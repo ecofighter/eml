@@ -542,7 +542,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             | "Std.Proc.write"
             | "Std.Proc.write_bytes"
             | "Std.Proc.write_line" => (&[Unr, Lin], Lin),
-            "Std.Proc.spawn_raw" => (&[Unr; 7], Lin),
+            "Std.Proc.spawn_raw" => (&[Unr; 5], Lin),
             "Std.Proc.wait" => (&[Lin], Unr),
             "Std.Proc.close_stdin" => (&[Lin], Lin),
             "Std.Proc.read_all"

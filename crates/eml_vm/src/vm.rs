@@ -3970,12 +3970,10 @@ fn run_extern<R: Exec>(
             Extern::ProcSpawn => {
                 let w = ctx.proc_spawn(
                     task.get(arg(0)),
-                    task.get(arg(1)),
+                    task.raw(arg(1)),
                     task.get(arg(2)),
-                    task.get(arg(3)),
-                    task.raw(arg(4)),
-                    task.raw(arg(5)),
-                    task.raw(arg(6)),
+                    task.raw(arg(3)),
+                    task.get(arg(4)),
                 )?;
                 task.set(dst, w);
             }

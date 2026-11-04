@@ -819,12 +819,11 @@ table! {
             Unr,
             Purity::Effectful,
         ),
-        // 引数は、プログラム、引数の列、環境の列、作業ディレクトリ、標準入力、標準出力、標準エラーの向きである
-        // (docs/spec/stdlib.md の「`Proc`」)
+        // 引数は、段の列、標準入力の向きと中身、標準出力の向きとパスである (docs/spec/stdlib.md の「`Proc`」)
         ProcSpawn => kinded(
             "Std.Proc.spawn_raw",
-            &[Obj, Obj, Obj, Obj, Int, Int, Int],
-            &[Unr; 7],
+            &[Obj, Int, Obj, Int, Obj],
+            &[Unr; 5],
             Obj,
             Lin,
             Purity::Effectful,
