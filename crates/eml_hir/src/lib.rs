@@ -53,6 +53,7 @@ pub const STD: &[(&str, &str)] = &[
     ("Atomic.em", include_str!("../../../std/Atomic.em")),
     ("Net.em", include_str!("../../../std/Net.em")),
     ("Stream.em", include_str!("../../../std/Stream.em")),
+    ("Exec.em", include_str!("../../../std/Exec.em")),
     ("Signal.em", include_str!("../../../std/Signal.em")),
     ("Tls.em", include_str!("../../../std/Tls.em")),
     ("Http.em", include_str!("../../../std/Http.em")),

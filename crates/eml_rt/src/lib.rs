@@ -41,9 +41,9 @@ pub use frozen::Frozen;
 pub use heap::{Ctx, CtxStats, Heap, MaskItem, Stats, Token};
 pub use host::{
     Buffering, Host, HostRef, LaunchCause, LaunchError, Launched, NOT_REGULAR, OpenMode, Opened,
-    Process, SPAWN_LOCK, Spawn, Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec,
-    StdoutSpec, Stream, WriteMode, exit_code, here_file, io_reason, is_not_regular, launch,
-    open_regular, redirect_file, regular_file,
+    PipeEnd, Process, SPAWN_LOCK, Spawn, Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec,
+    StdoutSpec, Stream, WriteMode, exit_code, here_file, io_reason, is_not_regular, last_program,
+    launch, open_regular, raw_process, redirect_file, regular_file,
 };
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};

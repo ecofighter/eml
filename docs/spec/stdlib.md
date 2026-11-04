@@ -87,10 +87,10 @@ try_io action =
 
 | `Fault` | 起こす関数 | `kind` |
 |---|---|---|
-| `Io { reason, .. }` | `FileIn.open`、`FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`FileIn.read_all_bytes`、`FileIn.read_line_bytes`、`FileIn.read_chunk`、`FileOut.create`、`FileOut.append`、`FileOut.write`、`FileOut.write_bytes`、`FileOut.write_line`、`FileOut.flush`、`FileOut.close`、`Fs.write_text`、`Proc` の起動 (`run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn`)、`Child` の読みと書き込み (`output` と `capture` の中の読みを含む) | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
+| `Io { reason, .. }` | `FileIn.open`、`FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`FileIn.read_all_bytes`、`FileIn.read_line_bytes`、`FileIn.read_chunk`、`FileOut.create`、`FileOut.append`、`FileOut.write`、`FileOut.write_bytes`、`FileOut.write_line`、`FileOut.flush`、`FileOut.close`、`Fs.write_text`、`Proc` と `Std.Exec` の起動 (`run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn`)、`Proc.Child` の読みと書き込み (`output` と `capture` の中の読みを含む) | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
 | `Stdin(reason)` | `Stdin.read_text` と、`Stdin` のハンドルの読み (`read_all`、`read_line`、`read_all_bytes`、`read_line_bytes`、`read_chunk`) | 同上 |
 | `NotUtf8(_)` | `FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`Stdin.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Proc.output`、`Proc.capture`、`Proc.read_all`、`Proc.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
-| `Raised { kind, .. }` | `fail_io` と、`Async.await` と `Async.run` がタスクの IO の失敗を起こし直すとき。`Async` のタスクの中の深さの上限 (下の「`Std.Async`」の「タスクの上限」) もこの形で、種類は `ResourceLimit` である。`Proc.capture` と `Proc.capture_bytes` の 0 でない終了も `fail_io` で起こす。`Std.Net` の失敗もこの形である (下の「`Std.Net`」) | `kind` のタグが表す種類 (`Proc` の終了は `Other`) |
+| `Raised { kind, .. }` | `fail_io` と、`Async.await` と `Async.run` がタスクの IO の失敗を起こし直すとき。`Async` のタスクの中の深さの上限 (下の「`Std.Async`」の「タスクの上限」) もこの形で、種類は `ResourceLimit` である。`Proc.capture`、`Proc.capture_bytes`、`Exec.capture`、`Exec.capture_bytes` の 0 でない終了も `fail_io` で起こす。`Std.Net` の失敗と、`Std.Exec` の起動の誤りのほかの失敗もこの形である (下の「`Std.Net`」と「`Std.Exec`」) | `kind` のタグが表す種類 (子の終了は `Other`) |
 
 書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、実行時エラーのままにする。
 
@@ -783,7 +783,7 @@ eml は1度に1本の pipe しか読み書きしない。pipe の buffer は OS 
 | `wait`、`wait_all`、`run`、`output`、`output_bytes`、`capture`、`capture_bytes` | 子を待てない (`Io { op: Wait, name: program, .. }`。``cannot wait for `sort`: I/O error``)。起動の誤りと違い、子は起動している | `IO` |
 | `wait`、`wait_all`、読み、書き込み | 割り込み。子が終わった後に `Stopped` になる | 位置を付けた実行時エラー |
 
-- 起動の誤り (``cannot run `<program>`: …``。一時ファイルとリダイレクトの形を含み、最後でない段の標準出力の誤りを除く) の理由は、`not found`、`permission denied`、`not available`、`I/O error` の4つの語のどれかで、OS の文言を出さない。理由の語が誤りの種類 (`try_io` の `kind`) を決める。driver で読み書きする `Std.Stream` の読みと書きの失敗は、`Std.Net` と同じく OS の文言を保つ (下の「`Std.Stream`」)
+- 起動の誤り (``cannot run `<program>`: …``。一時ファイルとリダイレクトの形を含み、最後でない段の標準出力の誤りを除く) の理由は、`not found`、`permission denied`、`not available`、`I/O error` の4つの語のどれかで、OS の文言を出さない。理由の語が誤りの種類 (`try_io` の `kind`) を決める。driver で読み書きする `Std.Stream` の読みと書きの失敗と、`Std.Exec` の pipe の読み書きと子の待ちの失敗は、`Std.Net` と同じく OS の文言を保つ (下の「`Std.Stream`」と「`Std.Exec`」)。`Std.Exec` の起動の誤りは、この4つの語を使う
 - `Child` の書き込みの失敗を、`Stdout` と違って `try_io` で捕まえるのは、`Child` が自分の pipe に直に書き、共有の buffer を持たないためである (`FileOut` と同じ理由)
 - 書き込みが失敗すると、ハンドルを手放すので、破棄処理が子を kill する。子の終了コードは失われる
 
@@ -1105,9 +1105,9 @@ body () =
 - 取り消しは2つの所から来る。タスクの取り消しのビットは、`cancel t`、`drop t`、属するスコープの取り消し、取り消したスコープに加えることで立つ。スコープの取り消しの旗は、`cancel_scope`、スコープのタスクの失敗、`scope` の本体の失敗、親のスコープの取り消しで立ち、開くときに親の旗を写す (`shield` の境目は写さない。下の `shield` の箇条)。どちらも一度立てたら下ろさない
 - タスクにビットが立つと、そのタスクが開いているスコープと、入れ子の `run` で待っている根にも旗が立つ。ただし `shield` の中で開いたスコープには立たない。ビットが立った後に `shield` の外で開くスコープと、ビットが立った後に `shield` の外で呼ぶ入れ子の `run` の根も、開くときに旗を立てる
 - `scope` の本体を動かすタスクは、そのスコープの中にいる間だけ旗で取り消される (ビットは立てない)。スコープを出た後は、外の旗かビットが立っていなければ取り消されていない
-- 取り消しの地点は `await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled`、`compute` と、`Std.Chan` の `send` と `recv` と、`Std.Net` と `Std.Stream` の待つ関数である。取り消しの地点は、`shield` の外では、タスクのビットかタスクの今のスコープの旗が立っていれば (`shield` の中の規則は下の `shield` の箇条にある)、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる。`compute` はこの規則の例外である。仕事の前や途中に立った取り消しは待ちを外さず、仕事が終わって起こされた後、再開するまでに立った取り消しでも、`compute` は結果を落として投げる (下の「`compute`」)
+- 取り消しの地点は `await`、`yield_now`、`sleep_ms`、`drain_within`、`check_cancelled`、`compute` と、`Std.Chan` の `send` と `recv` と、`Std.Net`、`Std.Stream`、`Std.Exec` の待つ関数である。取り消しの地点は、`shield` の外では、タスクのビットかタスクの今のスコープの旗が立っていれば (`shield` の中の規則は下の `shield` の箇条にある)、種類 `Prelude.Cancelled`、文言 `task was cancelled` の IO の失敗を投げる。待つ前に立っていれば待たずに投げ、待っている間に立てば待ちを外して投げる。`yield_now` で実行待ちの列にいる間に立てば、その `yield_now` が投げる。待っていた相手が終わって起こされた後に立ったときは、`await` は結果を受け取り、次の取り消しの地点が投げる。`compute` はこの規則の例外である。仕事の前や途中に立った取り消しは待ちを外さず、仕事が終わって起こされた後、再開するまでに立った取り消しでも、`compute` は結果を落として投げる (下の「`compute`」)
 - `send` と `recv` は、待つ前と待っている間に取り消しが立てば投げる。起こされた後は、`await` と同じく、まず操作をやり直し (枠か品物があれば送るか受け取る)、次の取り消しの地点が投げる。やり直しで待ち直すときは、待つ前の規則で投げる
-- `Std.Net` の待つ関数は、待つ前に取り消しが立っていれば、何も受け付けずにストリームかリスナーを落として投げる。待っている間に立てば、driver に取り消しを頼み、操作の完了を待ってから、完了が作ったハンドル、記録の buffer、渡したストリームかリスナーを落として投げる。driver が buffer を使い終わるまで返せないためである (下の「`Std.Net`」)。`Std.Stream` の待つ関数も同じで、走っているファイルの仕事は取り消せないので、仕事の完了を待つ (下の「`Std.Stream`」)
+- `Std.Net` の待つ関数は、待つ前に取り消しが立っていれば、何も受け付けずにストリームかリスナーを落として投げる。待っている間に立てば、driver に取り消しを頼み、操作の完了を待ってから、完了が作ったハンドル、記録の buffer、渡したストリームかリスナーを落として投げる。driver が buffer を使い終わるまで返せないためである (下の「`Std.Net`」)。`Std.Stream` の待つ関数も同じで、走っているファイルの仕事は取り消せないので、仕事の完了を待つ (下の「`Std.Stream`」)。`Std.Exec` の待つ関数も同じで、子の待ちの取り消しは driver がその場で終える。取り消しで落とす `Child` は、まだ待っていない段を kill してから待つ (下の「`Std.Exec`」)
 - 失敗したタスクを同じスコープの中から `await` で待つタスクは、失敗が記録されたときにもう待っていればその失敗を受け取り、まだ待っていなければスコープの取り消しを受けて `Cancelled` を受け取る。どちらになるかはスケジュールで決まる。スコープの最初の失敗はどちらでも同じなので、`run` と `scope` が起こし直す失敗は変わらない。相手のスコープを `shield` の外で開いたときは、`await` を `shield` で囲めば、待つ相手の失敗を確かに受け取る
 - 取り消しは協調的で、取り消しの地点を通らないコードは止まらない。待たないループを取り消せるようにするには、ループの中で `check_cancelled ()` を呼ぶ
 - `cancel_requested ()` は、取り消しの地点が投げるときだけ真を返す。`shield` の中では、今のスコープを今の `shield` の中で自分が開いたときだけ、その旗を読む。タスクの外では偽である。`await` から出た `Cancelled` を捕まえたタスクは、`cancel_requested ()` で自分が取り消されたかを確かめられる
@@ -1431,7 +1431,7 @@ main () = Async.run (fn () ->
 
 ## `Std.Stream`
 
-`Std.Stream` は、driver で読み書きする通常のファイルのモジュールである。`Reader` と `Writer` は `Lin` の `Foreign` で、落とすとファイルを閉じる。待つ関数はどれも取り消しの地点で、`Std.Net` と同じく受け付け、待ち、取り出しの3段で動く ([VM](vm.md) の「操作の記録」)。ファイルの読み書きは driver のプールの仕事なので、タスクがファイルを待っても、同じ worker のほかのタスクは止まらない。`Async.run` の外で読み書きするときは、ブロックする `FileIn`、`FileOut`、`Fs` を使う。2つの組はハンドルの型を共有しない。
+`Std.Stream` は、driver で読み書きする通常のファイルと子のプロセスの pipe のモジュールである。`Reader` と `Writer` は `Lin` の `Foreign` で、落とすとファイルか pipe の端を閉じる。子の pipe の読み手と書き手は `Std.Exec` が作り、この節のファイルの規則のうち開くことと仕事の取り消しには従わない (下の「`Std.Exec`」)。待つ関数はどれも取り消しの地点で、`Std.Net` と同じく受け付け、待ち、取り出しの3段で動く ([VM](vm.md) の「操作の記録」)。ファイルの読み書きは driver のプールの仕事なので、タスクがファイルを待っても、同じ worker のほかのタスクは止まらない。`Async.run` の外で読み書きするときは、ブロックする `FileIn`、`FileOut`、`Fs` を使う。2つの組はハンドルの型を共有しない。
 
 ```haskell
 import Async
@@ -1498,7 +1498,69 @@ main () = Async.run (fn () ->
 | `source` | `Reader -> (String, Reader)` | 読み手 |
 
 - `submit_open path mode` は、`mode` が 0 なら読むために、1 なら作るか切り詰めて、2 なら作るか末尾に足す形で開く。開けなければ記録を作らずに失敗を投げる。開けたファイルの取り込みは host の driver が受け付けで終えるので、開くタスクが待つのは、host がほかの worker のとき (仮想の時計の worker 1 以降) の知らせの往復の間だけである
-- `op_reader` と `op_writer` は `Std.Net.op_stream` と同じく、終わった記録から受け付けに渡した読み手か書き手を移し出す。`op_prefix` は終わった記録の誤りの文言の prefix を返す。`take_reader` と `take_writer` は、`open` と、`create` か `append` の記録から作った読み手か書き手を返す。`take_line_bytes` は、`take_line` と同じ行の記録から、行を UTF-8 かどうかによらず `Bytes` で返す。ほかの行は `Std.Net` の同じ名前の行と同じである。`source` は、読み手を開いたパスを `` ` `` で囲んだ文字列を返し、`read_all` が UTF-8 の失敗の文言に使う。借りて組で返し、効果を持たない
+- `op_reader` と `op_writer` は `Std.Net.op_stream` と同じく、終わった記録から受け付けに渡した読み手か書き手を移し出す。`op_prefix` は終わった記録の誤りの文言の prefix を返す。`take_reader` と `take_writer` は、`open` と、`create` か `append` の記録から作った読み手か書き手を返す。`take_line_bytes` は、`take_line` と同じ行の記録から、行を UTF-8 かどうかによらず `Bytes` で返す。ほかの行は `Std.Net` の同じ名前の行と同じである。`source` は、読み手を開いたパスを `` ` `` で囲んだ文字列 (子の pipe の読み手では ``the output of `<program>` ``) を返し、`read_all` が UTF-8 の失敗の文言に使う。借りて組で返し、効果を持たない
+
+## `Std.Exec`
+
+`Std.Exec` は、子のプロセスを driver の上で起動して待つモジュールである。`Child` は `Lin` の `Foreign` で、段ごとの子のプロセスと、まだ取り出していない標準入力と標準出力の pipe の端を持つ。起動の設定は `Proc` と同じ `Cmd` で組み (上の「`Cmd`」と「パイプライン」)、pipe は `Std.Stream` の `Writer` と `Reader` で読み書きする。待つ関数はどれも取り消しの地点で、`Std.Stream` と同じく受け付け、待ち、取り出しの3段で動く ([VM](vm.md) の「操作の記録」)。子を待つ間も pipe を読み書きする間も、タスクのスレッドは OS の中で止まらないので、同じ worker のほかのタスクは止まらない。`Async.run` の外で子を起動するときは、ブロックする `Proc` を使う。`Proc.Child` と `Exec.Child` は別の型である。
+
+```haskell
+import Async
+import Exec
+import Proc ((.|))
+import Proc
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  println (Exec.capture (`sort` .| `uniq -c` |> Proc.stdin_text "b\na\nb\n")))
+```
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `Child` | `Lin` の `Foreign` の型 | extern |
+| `spawn` | `Cmd -> <IO, Async> Child` | eml |
+| `run` | `Cmd -> <IO, Async> Int` | eml |
+| `output` | `Cmd -> <IO, Async> (String, Int)` | eml |
+| `output_bytes` | `Cmd -> <IO, Async> (Bytes, Int)` | eml |
+| `capture` | `Cmd -> <IO, Async> String` | eml |
+| `capture_bytes` | `Cmd -> <IO, Async> Bytes` | eml |
+| `stdin` | `Child -> <IO> (Stream.Writer, Child)` | extern |
+| `stdout` | `Child -> <IO> (Stream.Reader, Child)` | extern |
+| `wait` | `Child -> <IO, Async> Int` | eml |
+| `wait_all` | `Child -> <IO, Async> List Int` | eml |
+
+- 起動の形と、`Cmd` が向きを設定していないときの既定は `Proc` と同じである (上の「起動」)。`run` は標準入出力を受け継ぎ、`output` と `capture` は標準入力を空にして標準出力を読み、`spawn` は標準入力と標準出力を pipe にする。設定した向きはどの形でもそのまま使う。`output`、`output_bytes`、`capture`、`capture_bytes` は、標準出力の向きを設定した子からは `Proc` と同じく何も読まず、空の文字列か空のバイト列を結果にする。`capture` と `capture_bytes` は、終了コードが 0 でなければ `Proc` と同じ IO の失敗 (``command `git` exited with code 128``) にする。`stdin_text`、`stdin_file`、`stdout_file`、`stdout_append`、`merge_stderr`、`discard_stderr`、パイプラインの意味も `Proc` と同じで、`merge_stderr` の最後の段の標準エラーは標準出力の pipe に入る
+- 起動の関数は、起動の前に取り消しの地点を通る。取り消しが立っていれば、子を起動せずに `Cancelled` を投げる。起動そのものは待たない
+- pipe は起動した worker の driver が作る ([VM](vm.md) の「時計と driver」)。親の端は driver に縛らずに `Child` が持ち、`stdin c` と `stdout c` がそれを取り出して `Stream.Writer` と `Stream.Reader` にする。取り出した端は、最初に操作を出した worker の driver が取り込むので、ほかの worker に置いたタスクに渡して読み書きしてよい。標準入力は先頭の段の、標準出力は最後の段の pipe である。2回目の取り出しと、pipe にしなかった向きの取り出しは、種類 `NotAvailable` の IO の失敗 (``cannot take the standard input of `sort`: not available``、``cannot take the output of `sort`: not available``) になる
+- 子の pipe の読み書きは `Std.Stream` の関数で行う。読みはファイルと同じく受け付けで容量を広げて貸し、読めるようになるのを待たない。pipe の読み書きはプールの仕事でなく、ソケットと同じく driver の歩で進むので、ファイルの仕事と違って取り消せる。取り消しの手順は `Std.Net` の待つ関数と同じである (上の「取り消し」)。誤りの文言の prefix は、読みでは ``cannot read the output of `<program>` ``、書きでは ``cannot write to `<program>` `` で、`read_all` の UTF-8 の失敗は ``cannot read the output of `<program>`: the text is not valid UTF-8`` である。読み手が終わった子への書きは、番号 2 の ``cannot write to `<program>`: broken pipe`` (種類 `ConnectionReset`) になる。eml のプロセスは SIGPIPE を無視したままにする ([VM](vm.md) の「時計と driver」)
+- 取り出した読み手と書き手は `Child` と別に生きる。`Child` を落として子を kill しても、取り出した読み手は EOF まで読める。EOF は書く端を持つものがすべて閉じたときに届くので、pipe を受け継いだ孫が EOF を遅らせうる。期限を付ける道は `Async.timeout` で、期限が来ると巻き戻しが読み手を落とす
+- `wait c` は、取り出していない標準入力の端を閉じてから、すべての段を先頭から待ち、最後の段の終了コードを返す。`wait_all c` も同じ順に待ち、すべての段の終了コードを先頭から並べる。どちらも `Child` を消費する。段ごとに、driver に OS の終わりの知らせを待たせ (`Op::Wait`)、知らせの後で Host の `Process::wait` がその段を回収する。driver は回収しない。終了コードの規則 (128 + シグナルの番号) と、`pipefail` がないことは `Proc` と同じである
+- 最後の段の標準出力を pipe にして読まずに待つと、pipe の buffer より多く書く子は書き込みで止まり、待ちも終わらない。`Proc` と違い、読むタスクと待つタスクを分ければ、読みながら待てる
+- 待つタスクが取り消されると、`Std.Net` と同じく driver に取り消しを頼み、完了を待ってから `Cancelled` を投げる。driver は子の待ちの取り消しをその場で終えるので、この待ちは長くならない。巻き戻しが落とす `Child` は破棄処理で片づく。取り出していない端を閉じ、まだ回収していない段の直接の子をすべて kill してから、先頭から待つ。誤りは捨てる。取り消したスコープでの `drop`、`exit`、捕まえない実行時エラー、`wait` を囲む `Async.timeout` の期限も同じである。直接の子は kill (unix の SIGKILL、Windows の `TerminateProcess`) で終わるので、待ちはすぐ終わる。孫は kill しない。テストの Host は、受け継いだ標準出力と標準エラーを読むスレッドも待つので、それを受け継いだ孫が待ちを遅らせうる。Host は `Std.Exec` の pipe の端を読まない
+- Ctrl-C と `Terminate` の止める語は、どの OS でも次の安全点で読まれる。タスクのスレッドは pipe の読み書きでも子の待ちでも OS の中で止まらないためである ([VM](vm.md) の「上限と割り込み」)。`Proc` の「止まったときは Ctrl-C で終われる」の制限は、ブロックする行だけのものである
+- OS の子を持たない Host (組み込み先など、`Process::raw` が `None`) の段は、driver に待たせず、`wait` がその場で Host のブロックする `wait` を呼ぶ。その間は worker のほかのタスクも止まる
+- 仮想の時計の run では、テストの driver が子を扱わないので、起動の関数はどの worker でも、driver に触れる前に種類 `NotAvailable` の IO の失敗 ``cannot run `<program>`: the test driver has no processes`` になる。名前は最後の段のプログラムである。子は起動しない ([VM](vm.md) の「時計と driver」)
+- pidfd のない Linux (5.3 より前のカーネル) では、driver が子の終わりを待てないので、`wait` が種類 `NotAvailable` で失敗する
+- 起動の誤りは `Proc` と同じ文言と、4つの理由の語を使う (上の「失敗」)。driver の読み、書き、待ちの番号 6 の誤りは、`Std.Stream` と同じく OS の文言を保つ。待ちの prefix は ``cannot wait for `<program>` `` で、名前は待てなかった段のプログラムである。知らせの後の回収が失敗したときは、`Proc` と同じく理由の語を使う (``cannot wait for `sort`: I/O error``)
+- 待つ関数の包みは `Std.Stream` と同じ形で、結果の番号も同じ 0 から 6 である。`wait_all` は段ごとに `submit_wait`、`Async.io_wait`、`op_child`、`op_outcome` の順に呼び、番号 0 なら `finish` で記録を放してから `reap` で回収する。`wait` は `wait_all` の最後の要素である。`+` は `Panic` を持つので、段の番号は `try_panic` で包んで数える
+- extern の行は次の10行で、`stdin` と `stdout` のほかは `pub` でない。VM は `Std.Stream` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
+
+| 行 | 型 | 借りる引数 |
+|---|---|---|
+| `spawn_raw` | `String -> Int -> String -> Int -> String -> <IO> Child` | なし |
+| `stdin` | `Child -> <IO> (Stream.Writer, Child)` | 子 |
+| `stdout` | `Child -> <IO> (Stream.Reader, Child)` | 子 |
+| `stage_count` | `Child -> (Int, Child)` | 子 |
+| `submit_wait` | `Int -> Child -> <IO> Async.OpId` | なし |
+| `op_child` | `Async.OpId -> <IO> (Child, Async.OpId)` | token |
+| `op_outcome` | `Async.OpId -> <IO> (Int, Async.OpId)` | token |
+| `op_prefix` | `Async.OpId -> <IO> (String, Async.OpId)` | token |
+| `finish` | `Async.OpId -> <IO> Unit` | なし |
+| `reap` | `Int -> Child -> <IO> (Int, Child)` | 子 |
+
+- `spawn_raw` の引数は `Proc.spawn_raw` と同じ5つで、`Proc.launch_args` が作る (上の「起動」)。pipe の向き (2) の端は、Host の pipe でなく driver の `pipe` が作ったものを渡す
+- `submit_wait k c` は、取り出していない標準入力の端を閉じ、段 `k` の終わりを待つ記録を作る。記録の持ち主と host は、待つタスクの worker である。回収した段と、OS の子を持たない Host の段の記録は、driver に何も出さずに受け付けで終わる。driver も、もう終わった子の待ちを受け付けで終えうる
+- `reap k c` は段 `k` を回収して、その終了コードを返す。知らせの後なので止まらない。回収した段は、覚えた終了コードを返す。`op_child` は終わった記録から子を移し出し、`stage_count` は段の数を返す。ほかの行は `Std.Stream` の同じ名前の行と同じである
 
 ## `Std.Tls`
 
@@ -1706,7 +1768,7 @@ main () = Async.run (fn () ->
 
 ## 実行時エラー
 
-標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。ただし `Std.Net` と `Std.Stream` の driver の誤りは、OS の誤りの表示を理由にする。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。
+標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。ただし `Std.Net`、`Std.Stream`、`Std.Exec` の driver の誤りは、OS の誤りの表示を理由にする。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。`Async.run` と `Async.await` が起こし直すタスクの失敗は、タスクの中の文言を保ち、位置は std の中の呼び出し (`run` なら `run_result` の呼び出し) になる (上の「`Std.Async`」)。
 
 I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`Async` のタスクの中の深さの上限は、種類 `ResourceLimit` の IO の失敗 `the call depth limit is exceeded` で、メモリの柔らかい上限も同じ種類の IO の失敗 `the memory soft limit is exceeded` である (どちらも上の「`Std.Async`」の「タスクの上限」)。捕まえなければ `Async.run` の `run_result` の位置の実行時エラーになる。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルと、`Async.start_in` と `spawn_in` の閉じたスコープは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
@@ -1733,14 +1795,19 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `Stream` の読み (`read_chunk`、`read_line`、`read_all`、`read_all_bytes`) | ``cannot read `in.txt`: `` と OS の誤りの表示 |
 | UTF-8 でない `Stream.read_all` と `read_line` | ``cannot read `in.txt`: the text is not valid UTF-8`` (`read_line` は `the line is not valid UTF-8`) |
 | `Stream` の書き (`write`、`write_bytes`、`write_line`) | ``cannot write to `out.txt`: `` と OS の誤りの表示 |
-| `Proc` の起動 (`run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn`) | ``cannot run `rsync`: not found`` |
-| `Proc` の起動の `stdin_text` の一時ファイル | ``cannot run `sort`: cannot make the standard input file: I/O error`` |
-| `Proc` の起動のリダイレクトのファイル | ``cannot run `sort`: cannot open `in.txt`: not found`` |
-| `Proc.capture`、`capture_bytes` の 0 でない終了 | ``command `sh` exited with code 3`` |
+| `Proc` と `Std.Exec` の起動 (`run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn`) | ``cannot run `rsync`: not found`` |
+| `Proc` と `Std.Exec` の起動の `stdin_text` の一時ファイル | ``cannot run `sort`: cannot make the standard input file: I/O error`` |
+| `Proc` と `Std.Exec` の起動のリダイレクトのファイル | ``cannot run `sort`: cannot open `in.txt`: not found`` |
+| 仮想の時計の `Std.Exec` の起動 | ``cannot run `sort`: the test driver has no processes`` |
+| `Proc.capture`、`capture_bytes`、`Exec.capture`、`capture_bytes` の 0 でない終了 | ``command `sh` exited with code 3`` |
 | `Child` の読み | ``cannot read the output of `sort`: I/O error`` |
 | UTF-8 でない子の出力 | ``the output of `sort` is not valid UTF-8`` |
 | `Child` の書き込み | ``cannot write to `sort`: I/O error`` |
 | `Proc.wait` と、子を待つ起動の関数 (`run`、`output`、`capture` など) | ``cannot wait for `sort`: I/O error`` |
+| `Exec.stdin`、`stdout` の2回目か pipe でない向き | ``cannot take the standard input of `sort`: not available`` (`stdout` は ``cannot take the output of `sort`: not available``) |
+| `Std.Exec` の子の pipe の読み | ``cannot read the output of `sort`: `` と OS の誤りの表示 |
+| `Std.Exec` の子の pipe の書き | ``cannot write to `sort`: `` と OS の誤りの表示 (読み手が終わった子は ``cannot write to `sort`: broken pipe``) |
+| `Exec.wait`、`wait_all` と、子を待つ起動の関数 | ``cannot wait for `sort`: `` と OS の誤りの表示 (知らせの後の回収の誤りは ``cannot wait for `sort`: I/O error``) |
 | 標準入力の2つ目のハンドル | ``the standard input is already open`` |
 | 標準出力の2つ目のハンドル | ``the standard output is already open`` |
 | 標準エラーの2つ目のハンドル | ``the standard error is already open`` |

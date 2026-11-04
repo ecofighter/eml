@@ -144,7 +144,7 @@
 
 ### `Async`
 
-- driver の操作 (受け付け、待ち、取り出し) を使うのは `Std.Net` と `Std.Stream` だけである。`Std.Stream` が開くのは通常のファイルだけで、非同期のパイプと子のプロセスはまだない。std の今の読み書きの行 (`FileIn`、`Stdin`、`Proc` など) はタスクの中でその場で動き、終わるまで worker を持ち続ける。その間、同じ worker のほかのタスクは、監視のスレッドが詰まりを見つけた後で、救済できるものだけがほかの worker で動く ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」、[ロードマップ](../future/roadmap.md) の `async-files`)
+- driver の操作 (受け付け、待ち、取り出し) を使うのは `Std.Net`、`Std.Stream`、`Std.Exec` だけである。`Std.Stream` が開くのは通常のファイルだけで、子のプロセスの pipe は `Std.Exec` が作る。std の今の読み書きの行 (`FileIn`、`Stdin`、`Proc` など) はタスクの中でその場で動き、終わるまで worker を持ち続ける。その間、同じ worker のほかのタスクは、監視のスレッドが詰まりを見つけた後で、救済できるものだけがほかの worker で動く ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」、[ロードマップ](../future/roadmap.md) の `async-files`)
 - `Std.Net` に `resolve` と `write_within` はない。`listen` は名前を受けず、書きの期限は `Async.timeout` で付ける ([ロードマップ](../future/roadmap.md) の「非同期」)
 - `Std.Tls` に期限を持つ読み (`_within`)、server の API、OS の証明書ストアはない。期限は `Async.timeout` で付け、期限が来ると `Stream` を失う。信頼する根は webpki-roots の根と、渡した PEM の CA だけである ([標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」、[ロードマップ](../future/roadmap.md) の「非同期」、[ロードマップ](../future/roadmap.md) の `tls-platform-verifier`)
 - `Std.Http` に keep-alive、HTTP/2、gzip などの coding、プロキシ、cookie、ストリーミングの本文、本文の大きさの上限、IPv6 のアドレスの URL はない。ヘッダーと trailer の行の数にも上限がなく、期限は `Async.timeout` で付ける。本文を書き終える前に閉じた相手の応答は読めない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Http`」、[ロードマップ](../future/roadmap.md) の「非同期」)

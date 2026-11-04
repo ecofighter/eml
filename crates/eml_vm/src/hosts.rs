@@ -12,9 +12,10 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 
 use eml_rt::{
-    Buffering, Host, HostRef, LaunchCause, LaunchError, NOT_REGULAR, OpenMode, Opened, Process,
-    RawFile, SPAWN_LOCK, Spawn, Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec,
-    StdoutSpec, Stream, WriteMode, exit_code, here_file, redirect_file, regular_file,
+    Buffering, Host, HostRef, LaunchCause, LaunchError, NOT_REGULAR, OpenMode, Opened, OsHandle,
+    Process, RawFile, RawProcess, SPAWN_LOCK, Spawn, Spawned, Stage, StdHost, StderrSpec,
+    StdinSlot, StdinSpec, StdoutSpec, Stream, WriteMode, exit_code, here_file, raw_process,
+    redirect_file, regular_file,
 };
 
 /// 書いたバイト列を覚える書き込み先。テストが出力を読むために使う。
@@ -295,8 +296,8 @@ impl Host for CaptureHost {
     /// それぞれの出力に `out`、`err` の順に足す。捕まえた出力の順を固定するためである。
     /// スレッドで読むのは、子が pipe の buffer より多く書いても、eml の側の読み書きと詰まらないためである。リダイレクトの
     /// パスは、このテストの Host が書いたファイルを先に引き、なければ `file_root` の下を開く。`> out` は書いたファイルに
-    /// 加わる。
-    fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
+    /// 加わる。`Given` の端は子に渡すだけで、スレッドで読まない (docs/spec/stdlib.md の「`Std.Exec`」)。
+    fn spawn(&self, spawn: Spawn<'_>) -> io::Result<Spawned> {
         let last = spawn
             .stages
             .len()
@@ -316,13 +317,19 @@ impl Host for CaptureHost {
         let mut stdin = Some(match spawn.stdin {
             StdinSpec::Pipe => Stdio::piped(),
             StdinSpec::Inherit | StdinSpec::Null => Stdio::null(),
+            StdinSpec::Given(handle) => handle.into(),
             StdinSpec::Text(bytes) => here_file(bytes)?.into(),
             StdinSpec::File(path) => self.redirect(0, path, None)?.into(),
         });
-        let mut stdout_file = match spawn.stdout {
-            StdoutSpec::File { path, mode } => Some(self.redirect(last, path, Some(mode))?),
-            _ => None,
-        };
+        let mut last_out = Some(match spawn.stdout {
+            StdoutSpec::File { path, mode } => {
+                LastOut::File(self.redirect(last, path, Some(mode))?)
+            }
+            StdoutSpec::Given(handle) => LastOut::Given(handle),
+            StdoutSpec::Null => LastOut::Null,
+            StdoutSpec::Pipe => LastOut::Pipe,
+            StdoutSpec::Inherit => LastOut::Capture,
+        });
         // 読むスレッドは放した後で作る
         let spawning = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         let mut started: Vec<Started> = Vec::with_capacity(commands.len());
@@ -345,26 +352,32 @@ impl Host for CaptureHost {
                     command.stdout(writer);
                     next_stdin = Some(reader);
                 } else {
-                    match (spawn.stdout, stdout_file.take()) {
-                        (StdoutSpec::Null, _) => {
+                    match last_out.take().unwrap_or(LastOut::Null) {
+                        LastOut::Null => {
                             command.stdout(Stdio::null());
                             if stage.stderr == StderrSpec::ToStdout {
                                 command.stderr(Stdio::null());
                             }
                         }
-                        (StdoutSpec::File { .. }, Some(file)) => {
+                        LastOut::File(file) => {
                             if stage.stderr == StderrSpec::ToStdout {
                                 command.stderr(file.try_clone()?);
                             }
                             command.stdout(file);
                         }
-                        (pipe, _) => {
+                        LastOut::Given(handle) => {
+                            if stage.stderr == StderrSpec::ToStdout {
+                                command.stderr(handle.try_clone()?);
+                            }
+                            command.stdout(handle);
+                        }
+                        pipe @ (LastOut::Pipe | LastOut::Capture) => {
                             let (reader, writer) = io::pipe()?;
                             if stage.stderr == StderrSpec::ToStdout {
                                 command.stderr(writer.try_clone()?);
                             }
                             command.stdout(writer);
-                            if pipe == StdoutSpec::Pipe {
+                            if matches!(pipe, LastOut::Pipe) {
                                 stdout = Some(Box::new(reader) as Box<dyn Read + Send>);
                             } else {
                                 out = Some(reader);
@@ -443,6 +456,17 @@ impl Host for CaptureHost {
             processes,
         })
     }
+}
+
+/// `CaptureHost::spawn` の最後の段の標準出力。ファイルは `SPAWN_LOCK` の前に開いたものである。
+enum LastOut {
+    Null,
+    File(File),
+    Given(OsHandle),
+    /// pipe にして eml に渡す。
+    Pipe,
+    /// pipe にしてスレッドで読み、捕まえた出力に足す。
+    Capture,
 }
 
 /// `CaptureHost::spawn` が起動した段と、読むスレッドをまだ作っていない pipe。
@@ -563,6 +587,11 @@ impl Process for CapturedChild {
     fn kill(&mut self) -> io::Result<()> {
         self.child.kill()
     }
+
+    /// 本物の時計の UI テストでも `Std.Exec.wait` が driver の待ちを通るように、OS の子を渡す。
+    fn raw(&self) -> Option<RawProcess> {
+        raw_process(&self.child)
+    }
 }
 
 /// 標準出力をメモリに捕まえる Host。`CaptureHost::new` の既定 (引数なし、空の標準入力、空の環境) で作る。
@@ -607,7 +636,7 @@ mod tests {
             cwd: None,
             stderr,
         };
-        host.spawn(&Spawn {
+        host.spawn(Spawn {
             stages: &[stage],
             stdin: StdinSpec::Null,
             stdout,

@@ -1,15 +1,15 @@
--- driver で読み書きするファイルのモジュール (docs/spec/stdlib.md の「`Std.Stream`」)。待つ関数は `Std.Net` と同じく、
+-- driver で読み書きするファイルと子の pipe のモジュール (docs/spec/stdlib.md の「`Std.Stream`」)。待つ関数は `Std.Net` と同じく、
 -- 受け付けから取り出しまでを1つの呼び出しの中で行い、token の `OpId` を外へ出さない
 import Async (Async)
 import Bytes
 import String
 
--- driver のファイルのハンドル、開いたパス、`read_line` が読みすぎたバイトを中身に持つ。Kind は `Lin` で、落とすと
--- ファイルを閉じる
+-- driver のファイルか子の pipe のハンドル、開いたパス (子の pipe ならプログラムの名前)、`read_line` が読みすぎたバイトを
+-- 中身に持つ。Kind は `Lin` で、落とすとファイルか pipe の端を閉じる
 pub extern data Reader
 
--- driver のファイルのハンドルと開いたパスを中身に持つ。書きの buffer は持たない。Kind は `Lin` で、落とすとファイルを
--- 閉じる
+-- driver のファイルか子の pipe のハンドルと、開いたパス (子の pipe ならプログラムの名前) を中身に持つ。書きの buffer は
+-- 持たない。Kind は `Lin` で、落とすとファイルか pipe の端を閉じる
 pub extern data Writer
 
 -- 通常のファイル `path` を読むために開く。取り消しの地点である
@@ -212,7 +212,8 @@ fail_code code prefix =
   else if code == 4 then fail_io AddrInUse "\{prefix}: address in use"
   else fail_io TimedOut "\{prefix}: timed out"
 
--- 読み手を開いたときの名前 (パスを引用符で囲んだもの) を読む。借りるだけで、効果を持たない
+-- 読み手を開いたときの名前 (パスを引用符で囲んだもの。子の pipe では ``the output of `<program>` ``) を読む。借りるだけで、
+-- 効果を持たない
 extern source : Reader -> (String, Reader)
 
 -- ランタイムのインターフェース。`submit_open` の向きは 0 が読み、1 が作る、2 が足すである。形と意味は `Std.Net` の同じ

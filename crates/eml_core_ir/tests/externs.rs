@@ -90,6 +90,9 @@ probe_stream_reader r = r
 probe_stream_writer : Stream.Writer -> Stream.Writer
 probe_stream_writer w = w
 
+probe_exec_child : Exec.Child -> Exec.Child
+probe_exec_child c = c
+
 probe_tls_conn : Tls.Conn -> Tls.Conn
 probe_tls_conn c = c
 
@@ -132,6 +135,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::NetTcpStream => "probe_tcp_stream",
         ExternType::StreamReader => "probe_stream_reader",
         ExternType::StreamWriter => "probe_stream_writer",
+        ExternType::ExecChild => "probe_exec_child",
         ExternType::TlsConn => "probe_tls_conn",
     }
 }
@@ -294,7 +298,8 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 /// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`、
 /// `Std.Async.op_ready`、`Std.Async.job_cell`、
 /// `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr` と、`Std.Stream` の
-/// `op_reader`、`op_writer`、`op_outcome`、`op_prefix`、`source` と、`Std.Tls` の6つの行と、
+/// `op_reader`、`op_writer`、`op_outcome`、`op_prefix`、`source` と、`Std.Exec` の `stdin`、`stdout`、`stage_count`、
+/// `op_child`、`op_outcome`、`op_prefix`、`reap` と、`Std.Tls` の6つの行と、
 /// `Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行と、`Std.Proc` の `stage_count`、`wait_stage` だけで
 /// ある。`Std.Tls` の `push_tls` と `write_plain` はデータを借りて `Conn` を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
@@ -321,6 +326,13 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             | "Std.Stream.op_outcome"
             | "Std.Stream.op_prefix"
             | "Std.Stream.source" => (&[true], Some(0)),
+            "Std.Exec.stdin"
+            | "Std.Exec.stdout"
+            | "Std.Exec.stage_count"
+            | "Std.Exec.op_child"
+            | "Std.Exec.op_outcome"
+            | "Std.Exec.op_prefix" => (&[true], Some(0)),
+            "Std.Exec.reap" => (&[false, true], Some(1)),
             "Std.Tls.pull_tls"
             | "Std.Tls.status"
             | "Std.Tls.error_message"
@@ -520,7 +532,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の13、`MutArray` を扱う7つ、
-/// `Std.Par.par`、`Std.Async` の20行、`Std.Chan` の2行、`Std.Net` の12行、`Std.Stream` の8行、`Std.Tls` の11行以外は、引数も結果も `Unr` である。
+/// `Std.Par.par`、`Std.Async` の20行、`Std.Chan` の2行、`Std.Net` の12行、`Std.Stream` の8行、`Std.Exec` の7行、`Std.Tls` の11行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -608,6 +620,11 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Stream.op_reader" | "Std.Stream.op_writer" => (&[Unr], Lin),
             "Std.Stream.take_reader" | "Std.Stream.take_writer" => (&[Unr], Lin),
             "Std.Stream.source" => (&[Lin], Unr),
+            "Std.Exec.spawn_raw" => (&[Unr; 5], Lin),
+            "Std.Exec.stdin" | "Std.Exec.stdout" => (&[Lin], Lin),
+            "Std.Exec.stage_count" => (&[Lin], Unr),
+            "Std.Exec.submit_wait" | "Std.Exec.reap" => (&[Unr, Lin], Unr),
+            "Std.Exec.op_child" => (&[Unr], Lin),
             "Std.Tls.client_raw" => (&[Unr, Unr], Lin),
             "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[Unr, Lin], Lin),
             "Std.Tls.push_eof" | "Std.Tls.send_close_notify" => (&[Lin], Lin),

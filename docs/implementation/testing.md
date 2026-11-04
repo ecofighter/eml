@@ -53,6 +53,7 @@
 - `eml_cli` の `api.rs` の `Outcome::Rejected` のテストは、トランスクリプトに出ない結果を固定する
 - `RunStats` がスケジュールによらないことは4か所で確かめる。`eml_vm` の `par.rs` の `the_run_stats_do_not_depend_on_the_schedule` は、手書きの LIR で VM の切り替えと join のコードを確かめる。UI テストの seed の run (下の「seed で流す」) は、`run/par/` のすべてのプログラムと、`exit` で終わらない `run/async/` のプログラムで生成したコードを確かめる。`run/par/` の N = 2 と 8 の run (下の「seed で流す」) は、worker をまたいで足した数が N = 1 と同じことを確かめる。`bench.rs` の `par_tree` は、回数を固定した基準のプログラムの形を確かめる
 - シグナルを届ける道は3か所で確かめる。`run/async/` と `run-fail/async/` の `signal_*.em` は、仮想のシグナルの予定で `Std.Signal` の意味の筋書きを確かめる。`eml_vm` の `signal.rs` は、ハンドラの代わりにテストのスレッドが `Control` と自己パイプを書き、本物の driver の上の監視のスレッドの中継と、集める地点で届けることを確かめる。`eml_cli` の `cli.rs` のシグナルのテストは、OS のシグナルを `eml run` に送り、ハンドラと終了コード、届けていない間の2回目の強制の終わりを確かめる
+- `Std.Exec` の子は2か所で確かめる。`run/async/` と `run-fail/async/` の `exec_*.em` は、印 `-- clock: real` の下の本物の時計で、パイプライン、標準入力の文字列、`wait_all`、取り消しで落とす子、終わった子への書きの筋書きを確かめる (下の「UI テスト」の印の規則)。仮想の時計で起動を断る `exec_needs_the_real_driver.em` だけは印を書かない。`eml_vm` の `io.rs` は、子の pipe をほかの worker のタスクが使うこと、救済の方針で worker 2 のタスクが子を待つこと、子を待つタスクを取り消すと子が kill されることを、worker の数と方針を変えて本物の時計と `StdHost` の上で確かめる。UI テストの印のあるファイルは worker の数も方針も変えないので、worker をまたぐ道は `io.rs` だけが持ち、AddressSanitizer と ThreadSanitizer でも流れる。`io.rs` の子はテストのバイナリそのもので、環境変数で動きを選んだテスト `child_main` を `--exact` で起こし直す。`sh` などを使わないのは、機械によって無いことがあるためである
 - `par` の子の誤りの規則は、`par.rs` の手書きの LIR のテストと `par::source` の組で確かめる。右の子の誤りを左の子が終わった後で報告する順序は、左の子が出力する LIR で書いた子 (`noisy`) だけが確かめる。ソースの子は出力できないので、ソースでは順序が見えない。`par::source` は、生成した `fork$` と `reperform$` を通っても、左の中断で右の誤りを救わないことと、左の誤りが先であることを確かめる
 
 ### crate の中の置き方
@@ -272,7 +273,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `signal.rs` は、シグナルを届ける道を本物の driver の上で確かめる ([VM](../spec/vm.md) の「タスクとスケジュール」と「上限と割り込み」)。テストのスレッドがハンドラの代わりに `Control::defer` を呼んで自己パイプを鳴らし、監視のスレッドの中継で待つタスクが起きること、待つタスクのいない保留が run を止めること、シグナルだけを待つ run がデッドロックにならないこと、予定した仮想のシグナルが本物の driver でも満ちること、yield せずに回る worker が `NOTICE` で知らせを集めること、`with_driver` で渡した driver の run が OS のシグナルを届けないこと、worker 1 に置いた待つタスクに保留のシグナルが届くことを確かめる。経過は下限だけを比べ、3 秒の番犬は止まったテストが待ち続けないためだけにある。自己パイプは `Machine` ごとなので、1つのプロセスで流す `cargo test` でもテストどうしは起こしを取り合わない
 - `chan.rs` は、`Std.Chan` の待ちと起こし、予算、run の終わりの後始末を、逐次の方針で `RunStats` まで固定して確かめる。worker をまたぐ channel は、2つ、4つ、8つの worker の run で、出力と置いたタスクの数だけを確かめる。根のタスクから続けて2つだけ `start` する N = 2 のテストでは、1つが worker 1 に、1つが worker 0 に置かれる
 - `miri.rs` は、Miri で流す小さい実行のテストである (上の「Miri」)
-- `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 (既定の普通の方針で子が回り続ける `par` のプログラムを含む)、SIGTERM で止めたときの終了コード 143、`Signal.wait` で待つタスクへ OS のシグナルが届くこと、4つの worker の `eml run` がタスクを散らして終わることを確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
+- `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 (既定の普通の方針で子が回り続ける `par` のプログラムを含む)、SIGTERM で止めたときの終了コード 143、`Signal.wait` で待つタスクへ OS のシグナルが届くこと、`Exec.wait` で子を待つ run が SIGINT で 130 で止まること、4つの worker の `eml run` がタスクを散らして終わることを確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
 
 ## LIR のテキストの形
 

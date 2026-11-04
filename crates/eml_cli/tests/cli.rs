@@ -1016,6 +1016,47 @@ main () = println (show (Proc.run `sh -c 'echo started >&2; exec sleep 30'`))
     assert!(rest.starts_with("runtime error: interrupted\n"), "{rest}");
 }
 
+/// `Exec.wait` で待つプログラムは、SIGINT を eml だけに送っても、次の安全点で止まり、終了コード 130 で終わる。待ちは
+/// driver の中にあり、タスクのスレッドは OS の中で止まらないためである。巻き戻しが落とす子は kill するので、30 秒
+/// 眠る子を待たない。子が標準エラーに書いた行を読んで、子が動いてから送る (docs/spec/stdlib.md の「`Std.Exec`」)。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_program_waiting_in_exec_wait_with_130() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::time::{Duration, Instant};
+
+    let text = "\
+import Async (Async)
+import Async
+import Exec
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (Async.run (fn () -> Exec.run `sh -c 'echo started >&2; exec sleep 30'`)))
+";
+    let dir = temp_project("cli-sigint-exec", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = spawn_run(&dir, std::process::Stdio::null());
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut started = String::new();
+    stderr.read_line(&mut started).unwrap();
+    assert_eq!(started, "started\n");
+    sigint(&child);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not stop");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut rest = String::new();
+    stderr.read_to_string(&mut rest).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{rest}");
+    assert!(rest.starts_with("runtime error: interrupted"), "{rest}");
+}
+
 /// 標準入力の読みの中で待つプログラムも、`FileIn.read_all` と同じく SIGINT で止まり、終了コードは 130 である。読みに入る
 /// 直前に届いた SIGINT は読みを止めないので、終わるまで 100 ms ごとに送り続ける (2回目の SIGINT はその場で終わらせる。
 /// `repeated_interrupts_end_a_program_waiting_in_a_read_with_130` と同じ)。

@@ -62,7 +62,7 @@ use std::thread::ThreadId;
 
 use eml_rt::{
     Completion, Control, Ctx, Done, Fault, HandleBin, HeapError, IoDriver, IoHandle, Mode, Op,
-    OpKey, OpenMode, RawBuf, RawResource, Submit, Word,
+    OpKey, OpenMode, Process, RawBuf, RawResource, Submit, Word,
 };
 
 /// 再開するタスクに渡す `Std.Async.Wake` の `Woke` のタグ (docs/spec/stdlib.md の「`Std.Async`」)。
@@ -449,6 +449,12 @@ enum OpKind {
         path: Arc<str>,
         write: bool,
     },
+    /// `Std.Exec.wait` の、子 (`Std.Exec.Child`) の段の1つの終わりの待ち。`program` はその段のプログラムで、誤りの
+    /// 文言は `` cannot wait for `program` `` である。記録の持ち主と host は同じ worker である (docs/spec/vm.md の
+    /// 「操作の記録」)。
+    Wait {
+        program: Arc<str>,
+    },
 }
 
 /// 読みと書きの記録が、誤りの文言の前に付ける語の元。受け付けたストリームの `Origin` で決まる。
@@ -457,6 +463,9 @@ enum Prefix {
     Net,
     /// `Std.Stream` のファイルで、値は開いたパスである。`` cannot read `p` `` と `` cannot write to `p` `` である。
     File(Arc<str>),
+    /// `Std.Exec` の子の pipe で、値は端のつながる段のプログラムである。`` cannot read the output of `p` `` と
+    /// `` cannot write to `p` `` である。
+    Child(Arc<str>, ChildPipe),
 }
 
 impl OpKind {
@@ -478,12 +487,19 @@ impl OpKind {
                 prefix: Prefix::File(path),
                 ..
             } => format!("cannot read `{path}`").into(),
+            OpKind::Read {
+                prefix: Prefix::Child(program, pipe),
+            }
+            | OpKind::Line {
+                prefix: Prefix::Child(program, pipe),
+                ..
+            } => format!("cannot read {} `{program}`", pipe.what()).into(),
             OpKind::Write {
                 prefix: Prefix::Net,
                 ..
             } => "cannot write to the stream".into(),
             OpKind::Write {
-                prefix: Prefix::File(path),
+                prefix: Prefix::File(path) | Prefix::Child(path, _),
                 ..
             } => format!("cannot write to `{path}`").into(),
             OpKind::Listen { prefix } | OpKind::Connect { prefix } => (&**prefix).into(),
@@ -491,6 +507,7 @@ impl OpKind {
             OpKind::ShutdownWrite => "cannot shut down the stream".into(),
             OpKind::SetNodelay => "cannot set the no-delay option".into(),
             OpKind::Open { path, .. } => format!("cannot open `{path}`").into(),
+            OpKind::Wait { program } => format!("cannot wait for `{program}`").into(),
         }
     }
 
@@ -884,6 +901,27 @@ enum Origin {
     Peer(SocketAddr),
     /// `Std.Stream` が開いた通常のファイル。値は開いたときに渡されたままのパスである。
     File(Arc<str>),
+    /// `Std.Exec` の子の pipe。`program` は端のつながる段 (標準入力なら先頭、標準出力なら最後) のプログラムである。
+    Child { program: Arc<str>, pipe: ChildPipe },
+}
+
+/// `Std.Exec` の子の pipe の向き。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChildPipe {
+    /// 先頭の段の標準入力で、親が書く。
+    Stdin,
+    /// 最後の段の標準出力で、親が読む。
+    Stdout,
+}
+
+impl ChildPipe {
+    /// 誤りの文言で、この端を指す語。
+    fn what(self) -> &'static str {
+        match self {
+            ChildPipe::Stdin => "the input of",
+            ChildPipe::Stdout => "the output of",
+        }
+    }
 }
 
 impl IoStream {
@@ -897,6 +935,7 @@ impl IoStream {
         match &self.origin {
             Origin::Peer(_) => Prefix::Net,
             Origin::File(path) => Prefix::File(Arc::clone(path)),
+            Origin::Child { program, pipe } => Prefix::Child(Arc::clone(program), *pipe),
         }
     }
 
@@ -971,6 +1010,83 @@ impl IoStream {
 impl Drop for IoStream {
     fn drop(&mut self) {
         self.bind.close();
+    }
+}
+
+/// `Std.Exec.Child` の `Foreign` の中身。段ごとの子と、まだ取り出していない pipe の親の端を持つ。端は driver に
+/// 縛らずに持ち、取り出した `Stream.Writer` か `Stream.Reader` の最初の操作が、その worker の driver に取り込む
+/// (docs/spec/vm.md の「時計と driver」)。
+pub(crate) struct ExecChild {
+    stages: Vec<ExecStage>,
+    stdin: Option<Bind>,
+    stdout: Option<Bind>,
+}
+
+/// `ExecChild` の段の1つ。
+struct ExecStage {
+    program: Arc<str>,
+    /// まだ回収していない子。回収した段は `None` で、`code` を持つ。
+    process: Option<Box<dyn Process>>,
+    code: Option<i64>,
+}
+
+impl ExecChild {
+    /// `Std.Exec.spawn_raw` が起動した子。`programs` と `processes` は段ごとに先頭から並び、数が同じである。`stdin` と
+    /// `stdout` は driver の `pipe` が作った親の端である。
+    pub(crate) fn new(
+        programs: Vec<Box<str>>,
+        processes: Vec<Box<dyn Process>>,
+        stdin: Option<RawResource>,
+        stdout: Option<RawResource>,
+    ) -> ExecChild {
+        ExecChild {
+            stages: programs
+                .into_iter()
+                .zip(processes)
+                .map(|(program, process)| ExecStage {
+                    program: program.into(),
+                    process: Some(process),
+                    code: None,
+                })
+                .collect(),
+            stdin: stdin.map(Bind::Unbound),
+            stdout: stdout.map(Bind::Unbound),
+        }
+    }
+
+    fn stage(&self, k: usize) -> Result<&ExecStage, CellFault> {
+        self.stages.get(k).ok_or(CellFault::Internal(
+            "a wait names a stage the child does not have",
+        ))
+    }
+
+    /// 段 `k` の子が、driver が終わりを待てる OS の子なら、その形。回収した段と、OS の子を持たない Host の段は `None`
+    /// である。
+    fn raw(&self, k: usize) -> Result<Option<eml_rt::RawProcess>, CellFault> {
+        Ok(self.stage(k)?.process.as_ref().and_then(|p| p.raw()))
+    }
+}
+
+/// 取り出していない端を閉じてから、まだ回収していない段をすべて kill し、先頭から待つ。誤りは捨てる。端を先に閉じる
+/// のは、標準入力を読む子に EOF を届け、kill の前に終われるようにするためである (docs/spec/stdlib.md の「`Std.Exec`」)。
+impl Drop for ExecChild {
+    fn drop(&mut self) {
+        for bind in [self.stdin.take(), self.stdout.take()]
+            .into_iter()
+            .flatten()
+        {
+            bind.close();
+        }
+        for stage in &mut self.stages {
+            if let Some(process) = &mut stage.process {
+                let _ = process.kill();
+            }
+        }
+        for stage in &mut self.stages {
+            if let Some(mut process) = stage.process.take() {
+                let _ = process.wait();
+            }
+        }
     }
 }
 
@@ -3425,7 +3541,10 @@ impl Registry {
             }
             (
                 OpPhase::Transfer,
-                OpKind::Write { .. } | OpKind::ShutdownWrite | OpKind::SetNodelay,
+                OpKind::Write { .. }
+                | OpKind::ShutdownWrite
+                | OpKind::SetNodelay
+                | OpKind::Wait { .. },
                 Ok(Done::Size(n)),
             ) => Ok(n),
             // 外が書いたバイトは、取り消しを頼んだ記録でもストリームの buffer に確定する。行の途中で止めても、
@@ -4322,7 +4441,7 @@ fn net_record(kind: OpKind, worker: u32, stream: Option<Word>) -> OpRecord {
 }
 
 /// 呼ぶ側から移ってきた `String` の参照 `w` の中身を写して、参照を手放す。
-fn take_string<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<String, CellFault> {
+pub(crate) fn take_string<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<String, CellFault> {
     // `w` は呼ぶ側が持つ今の worker の参照で、`Ctx` の持つ語には触れない。中身は写し終えてから手放す
     let text = unsafe { (*ctx.heap().string(w)?).to_owned() };
     unsafe { ctx.heap_mut().decref(w)? };
@@ -4352,11 +4471,131 @@ pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word,
 pub(crate) fn stream_source<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
     // 読み手は呼ぶ側が持つ唯一の参照で、借りて読むだけである (`Reader` は `Lin`)
     let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream)? };
-    let Origin::File(path) = &s.origin else {
-        return Err(CellFault::Internal("a socket stream has no path"));
+    let name = match &s.origin {
+        Origin::File(path) => format!("`{path}`"),
+        Origin::Child { program, pipe } => format!("{} `{program}`", pipe.what()),
+        Origin::Peer(_) => return Err(CellFault::Internal("a socket stream has no path")),
     };
-    let name = format!("`{path}`");
     Ok(ctx.fresh_string(&name))
+}
+
+/// `Std.Exec.stdin` と `stdout`。借りた子 `child` から、まだ取り出していない pipe の端を移し、縛っていないまま
+/// `Stream.Writer` か `Stream.Reader` の新しい物体にする。端がなければ (2回目か、pipe にしなかった向き)、IO の失敗の
+/// 文言を返す (docs/spec/stdlib.md の「`Std.Exec`」)。
+pub(crate) fn exec_take<M: Mode>(
+    ctx: &mut Ctx<M>,
+    child: Word,
+    pipe: ChildPipe,
+) -> Result<Result<Word, String>, CellFault> {
+    // 子は呼ぶ側が持つ唯一の参照で、借りて端だけを移す (`Child` は `Lin`)
+    let c = unsafe { &mut *ctx.heap().foreign_unique::<ExecChild>(child)? };
+    let (end, stage, what) = match pipe {
+        ChildPipe::Stdin => (c.stdin.take(), c.stages.first(), "the standard input"),
+        ChildPipe::Stdout => (c.stdout.take(), c.stages.last(), "the output"),
+    };
+    let program = stage
+        .map(|s| Arc::clone(&s.program))
+        .ok_or(CellFault::Internal("a child has no stages"))?;
+    let Some(bind) = end else {
+        return Ok(Err(format!(
+            "cannot take {what} of `{program}`: not available"
+        )));
+    };
+    let stream = IoStream {
+        bind,
+        origin: Origin::Child { program, pipe },
+        rest: Vec::new(),
+        start: 0,
+    };
+    // 確保するだけで、`Ctx` の持つ語には触れない。`Reader` と `Writer` は `Lin` である
+    Ok(Ok(unsafe { ctx.heap_mut() }.alloc_foreign(stream, true)))
+}
+
+/// `Std.Exec.stage_count`。借りた子の段の数。
+pub(crate) fn exec_stage_count<M: Mode>(ctx: &Ctx<M>, child: Word) -> Result<i64, CellFault> {
+    // 子は呼ぶ側が持つ唯一の参照で、借りて読むだけである (`Child` は `Lin`)
+    let n = unsafe {
+        (*ctx.heap().foreign_unique::<ExecChild>(child)?)
+            .stages
+            .len()
+    };
+    i64::try_from(n).map_err(|_| CellFault::Internal("a child has too many stages"))
+}
+
+/// `Std.Exec.submit_wait`。子 `child` は呼ぶ側から移ってきた参照で、記録に移す。取り出していない標準入力の端を先に
+/// 閉じ、段 `k` の終わりを持ち主 `here.me` の driver に `Op::Wait` で待たせる。持ち主と host を同じ worker にするのは、
+/// 待つタスクは救済されず、持ち主が動かないためである。driver の待ちは回収しないので、知らせの後で `reap` が回収する。
+/// 回収した段と、OS の子を持たない Host の段は、driver に出さずに終わった記録にする (docs/spec/vm.md の「操作の記録」)。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_wait<M: Mode>(
+    shared: &Shared,
+    here: &Here,
+    ctx: &mut Ctx<M>,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
+    worker: u32,
+    depth_offset: usize,
+    k: i64,
+    child: Word,
+) -> Result<i64, CellFault> {
+    if here.host != here.me {
+        return Err(CellFault::Internal(
+            "a wait is submitted on a worker that hosts no I/O",
+        ));
+    }
+    let k = usize::try_from(k)
+        .map_err(|_| CellFault::Internal("a wait names a stage the child does not have"))?;
+    // 子は呼ぶ側から移ってきた唯一の参照である (`Child` は `Lin`)
+    let c = unsafe { &mut *ctx.heap().foreign_unique::<ExecChild>(child)? };
+    if let Some(stdin) = c.stdin.take() {
+        stdin.close();
+    }
+    let program = Arc::clone(&c.stage(k)?.program);
+    let raw = c.raw(k)?;
+    let mut record = net_record(OpKind::Wait { program }, worker, Some(child));
+    let op = match raw {
+        Some(process) => Some(Op::Wait { process }),
+        None => {
+            record.phase = OpPhase::Done(Ok(0), false);
+            None
+        }
+    };
+    submit(shared, here, ctx, driver, depth_offset, record, op)
+}
+
+/// `Std.Exec.reap`。借りた子 `child` の段 `k` を回収し、終了コードを返す。`Op::Wait` の知らせの後なので待たずに済む。
+/// OS の子を持たない Host の段は、ここで止まって待つ。回収した段はその終了コードを返す。回収できなければ、IO の失敗の
+/// 誤りと文言を返す (docs/spec/stdlib.md の「`Std.Exec`」)。
+pub(crate) fn exec_reap<M: Mode>(
+    ctx: &Ctx<M>,
+    k: i64,
+    child: Word,
+) -> Result<Result<i64, (io::Error, String)>, CellFault> {
+    // 子は呼ぶ側が持つ唯一の参照で、借りて段だけを回収する (`Child` は `Lin`)
+    let c = unsafe { &mut *ctx.heap().foreign_unique::<ExecChild>(child)? };
+    let k = usize::try_from(k)
+        .map_err(|_| CellFault::Internal("a wait names a stage the child does not have"))?;
+    let stage = c.stages.get_mut(k).ok_or(CellFault::Internal(
+        "a wait names a stage the child does not have",
+    ))?;
+    if let Some(mut process) = stage.process.take() {
+        match process.wait() {
+            Ok(code) => stage.code = Some(i64::from(code)),
+            // 回収できなかった段は子に戻し、破棄処理が kill して待つ
+            Err(e) => {
+                let message = format!(
+                    "cannot wait for `{}`: {}",
+                    stage.program,
+                    eml_rt::io_reason(&e)
+                );
+                stage.process = Some(process);
+                return Ok(Err((e, message)));
+            }
+        }
+    }
+    stage
+        .code
+        .map(Ok)
+        .ok_or(CellFault::Internal("a reaped stage has no exit code"))
 }
 
 /// 受け付けに移ってきたストリーム `stream` の記録が、誤りの文言の前に付ける語の元。
@@ -4447,6 +4686,8 @@ fn bound_host<M: Mode>(ctx: &Ctx<M>, kind: &OpKind, w: Word) -> Result<Option<u3
     Ok(unsafe {
         match kind {
             OpKind::Accept => (*ctx.heap().foreign_unique::<NetListener>(w)?).bind.host(),
+            // 子の終わりの待ちはハンドルを引かず、持ち主の driver に出す
+            OpKind::Wait { .. } => None,
             _ => (*ctx.heap().foreign_unique::<IoStream>(w)?).bind.host(),
         }
     })
@@ -9115,4 +9356,299 @@ fn clear_limit_zeroes_the_bytes() {
     let mut cells = shared.lock();
     let task = cells.task_mut(parked).unwrap();
     assert_eq!((task.limit, task.bytes), (false, 0));
+}
+
+/// 起動しない子のプロセス。`kill` と `wait` の回数を数え、`wait` は `code` を返す。`raw` が立っていれば、driver が
+/// 終わりを待つ OS の子のふりをする。
+#[cfg(test)]
+struct FakeProcess {
+    raw: bool,
+    code: i32,
+    kills: Arc<std::sync::atomic::AtomicUsize>,
+    waits: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[cfg(test)]
+impl Process for FakeProcess {
+    fn wait(&mut self) -> io::Result<i32> {
+        self.waits.fetch_add(1, Ordering::Relaxed);
+        Ok(self.code)
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        self.kills.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    // テストの driver は受け付けた `Op::Wait` の中身を見ないので、Windows のハンドルは、この crate の `Cargo.toml` を
+    // 開いたもので代える
+    fn raw(&self) -> Option<eml_rt::RawProcess> {
+        if !self.raw {
+            return None;
+        }
+        #[cfg(unix)]
+        let raw = eml_rt::RawProcess(4242);
+        #[cfg(windows)]
+        let raw = eml_rt::RawProcess(
+            std::fs::File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+                .unwrap()
+                .into(),
+        );
+        Some(raw)
+    }
+}
+
+/// 起動しない子の `kill` と `wait` の回数。
+#[cfg(test)]
+type Counts = Arc<std::sync::atomic::AtomicUsize>;
+
+/// 段のプログラムが `programs` の、起動しない子の `Std.Exec.Child`。段 `k` の終了コードは `k + 3` である。kill と
+/// wait の回数を数える表を添えて返す。
+#[cfg(test)]
+fn fake_child<M: Mode>(ctx: &mut Ctx<M>, programs: &[&str], raw: bool) -> (Word, Counts, Counts) {
+    let (kills, waits): (Counts, Counts) = (Arc::default(), Arc::default());
+    let processes = (0..programs.len())
+        .map(|k| {
+            Box::new(FakeProcess {
+                raw,
+                code: k as i32 + 3,
+                kills: Arc::clone(&kills),
+                waits: Arc::clone(&waits),
+            }) as Box<dyn Process>
+        })
+        .collect();
+    let child = ExecChild::new(
+        programs.iter().map(|&p| p.into()).collect(),
+        processes,
+        None,
+        None,
+    );
+    let w = unsafe { ctx.heap_mut() }.alloc_foreign(child, true);
+    (w, kills, waits)
+}
+
+/// 子の終わりの待ちの記録は、持ち主の worker が host で、その driver に `Op::Wait` を出す。I/O をほかの worker に
+/// 任せる worker (仮想の時計の worker 1 から先) の待ちは、内部の誤りである。待ちは回収しないので、知らせの後の
+/// `reap` が段を回収して終了コードを返す (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_wait_record_is_hosted_by_its_owner() {
+    let mut ctx = test_ctx();
+    let shared = Shared::new(Registry::new(Vec::new(), 3));
+    let mut driver = NoDriver::default();
+    let here = Here {
+        me: 2,
+        host: 2,
+        mail: &shared.mail,
+        post: &Unposted,
+    };
+    let (child, _, waits) = fake_child(&mut ctx, &["eml"], true);
+    let token = submit_wait(&shared, &here, &mut ctx, Some(&mut driver), 0, 0, 0, child).unwrap();
+    let op = CellRef::decode(token);
+    assert_eq!(driver.submits, 1);
+    {
+        let mut cells = shared.lock();
+        let record = cells.op_mut(op).unwrap();
+        assert_eq!((record.owner, record.host), (2, 2));
+        assert!(matches!(record.phase, OpPhase::Transfer));
+    }
+    let arrival = shared
+        .lock()
+        .arrive(op, Ok(Done::Size(0)), false, 2)
+        .unwrap();
+    assert!(matches!(arrival, Arrival::Settle));
+    let bin = shared.lock().host_bin(2, Arc::default()).unwrap();
+    shared
+        .lock()
+        .settle_op(&mut ctx, &bin, 0, op, &here, &mut IoWork::default())
+        .unwrap();
+    assert_eq!(shared.lock().op_outcome(token, 0).unwrap(), OUTCOME_OK);
+    let child = shared.lock().op_stream(token, 0).unwrap();
+    take_op(&shared, &mut ctx, token, 0).unwrap();
+    assert_eq!(waits.load(Ordering::Relaxed), 0);
+    assert_eq!(exec_reap(&ctx, 0, child).unwrap().unwrap(), 3);
+    assert_eq!(waits.load(Ordering::Relaxed), 1);
+    // 回収した段は、破棄処理が待ち直さない
+    unsafe { ctx.heap_mut().decref(child) }.unwrap();
+    assert_eq!(waits.load(Ordering::Relaxed), 1);
+    let elsewhere = Here {
+        me: 1,
+        host: 0,
+        mail: &shared.mail,
+        post: &Unposted,
+    };
+    let (child, _, _) = fake_child(&mut ctx, &["eml"], true);
+    assert!(matches!(
+        submit_wait(&shared, &elsewhere, &mut ctx, None, 0, 0, 0, child),
+        Err(CellFault::Internal(
+            "a wait is submitted on a worker that hosts no I/O"
+        ))
+    ));
+    unsafe { ctx.heap_mut().decref(child) }.unwrap();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// OS の子を持たない Host の段の待ちは、driver に出さずに受け付けで終わり、`reap` がその場で Host の `wait` を呼ぶ。
+/// 回収した段は、もう一度回収しても同じ終了コードを返す (docs/spec/stdlib.md の「`Std.Exec`」)。
+#[test]
+fn a_wait_on_a_host_without_processes_is_done_at_submit() {
+    let mut ctx = test_ctx();
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let mut driver = NoDriver::default();
+    let (child, kills, waits) = fake_child(&mut ctx, &["first", "second"], false);
+    let token = submit_wait(
+        &shared,
+        &solo(&shared),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        1,
+        child,
+    )
+    .unwrap();
+    assert_eq!(driver.submits, 0);
+    assert_eq!(shared.lock().op_outcome(token, 0).unwrap(), OUTCOME_OK);
+    let child = shared.lock().op_stream(token, 0).unwrap();
+    take_op(&shared, &mut ctx, token, 0).unwrap();
+    assert_eq!(waits.load(Ordering::Relaxed), 0);
+    assert_eq!(exec_reap(&ctx, 1, child).unwrap().unwrap(), 4);
+    assert_eq!(exec_reap(&ctx, 1, child).unwrap().unwrap(), 4);
+    assert_eq!(waits.load(Ordering::Relaxed), 1);
+    // 破棄処理は、回収していない段 0 だけを kill して待つ
+    unsafe { ctx.heap_mut().decref(child) }.unwrap();
+    assert_eq!(
+        (kills.load(Ordering::Relaxed), waits.load(Ordering::Relaxed)),
+        (1, 2)
+    );
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// 子を落とすと、すべての段を kill してから待つ (docs/spec/stdlib.md の「`Std.Exec`」)。
+#[test]
+fn a_dropped_exec_child_kills_and_waits_every_stage() {
+    let mut ctx = test_ctx();
+    let (child, kills, waits) = fake_child(&mut ctx, &["a", "b", "c"], true);
+    assert_eq!(exec_stage_count(&ctx, child).unwrap(), 3);
+    unsafe { ctx.heap_mut().decref(child) }.unwrap();
+    assert_eq!(
+        (kills.load(Ordering::Relaxed), waits.load(Ordering::Relaxed)),
+        (3, 3)
+    );
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// 読み手が終わった子の pipe への書きの `BrokenPipe` は、ソケットの切断と同じ結果の番号 2 で、誤りの文言の前の語は
+/// 先頭の段のプログラムを名指す。取り出した端と pipe にしなかった端は取り出せない (docs/spec/stdlib.md の
+/// 「`Std.Exec`」)。
+#[test]
+fn a_pipe_write_broken_pipe_is_outcome_reset() {
+    let mut ctx = test_ctx();
+    let shared = Shared::new(Registry::new(Vec::new(), 1));
+    let mut driver = NoDriver::default();
+    let (child, _, _) = fake_child(&mut ctx, &["eml", "tail"], true);
+    unsafe { &mut *ctx.heap().foreign_unique::<ExecChild>(child).unwrap() }.stdin =
+        Some(Bind::Bound {
+            host: 0,
+            handle: 7,
+            bin: Arc::default(),
+        });
+    let writer = exec_take(&mut ctx, child, ChildPipe::Stdin)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        exec_take(&mut ctx, child, ChildPipe::Stdin).unwrap(),
+        Err("cannot take the standard input of `eml`: not available".to_string())
+    );
+    assert_eq!(
+        exec_take(&mut ctx, child, ChildPipe::Stdout).unwrap(),
+        Err("cannot take the output of `tail`: not available".to_string())
+    );
+    let buf = unsafe { ctx.heap_mut() }.alloc_bytes(b"late");
+    let token = submit_write(
+        &shared,
+        &solo(&shared),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        buf,
+        writer,
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    complete_op(
+        &shared,
+        &mut ctx,
+        &mut driver,
+        CellRef::decode(token),
+        Err(io::ErrorKind::BrokenPipe.into()),
+        &mut out,
+    );
+    assert_eq!(shared.lock().op_outcome(token, 0).unwrap(), OUTCOME_RESET);
+    assert_eq!(
+        shared.lock().op_prefix(token, 0).unwrap(),
+        "cannot write to `eml`"
+    );
+    let taken = take_op(&shared, &mut ctx, token, 0).unwrap();
+    assert!(taken.failure().is_none());
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    unsafe { ctx.heap_mut().decref(child) }.unwrap();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// 子の pipe の読みはファイルと同じく、空きの少ない buffer でも読めるようになるのを待たず、受け付けで広げて貸す。
+/// 読みの誤りの文言は、最後の段の出力を名指す (docs/spec/vm.md の「操作の記録」)。
+#[test]
+fn a_read_of_a_pipe_grows_at_submit() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let buf = bytes_ab(&mut ctx, 0);
+    let stream = IoStream {
+        bind: Bind::Bound {
+            host: 0,
+            handle: 0,
+            bin: Arc::default(),
+        },
+        origin: Origin::Child {
+            program: "eml".into(),
+            pipe: ChildPipe::Stdout,
+        },
+        rest: Vec::new(),
+        start: 0,
+    };
+    let stream = unsafe { ctx.heap_mut() }.alloc_foreign(stream, true);
+    let token = submit_read(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        Some(&mut driver),
+        0,
+        0,
+        buf,
+        stream,
+    )
+    .unwrap();
+    let op = CellRef::decode(token);
+    assert_eq!(driver.submits, 1);
+    assert_eq!(driver.lent.pop().unwrap().cap, READ_ROOM);
+    let mut out = Vec::new();
+    complete_op(
+        &registry,
+        &mut ctx,
+        &mut driver,
+        op,
+        Err(io::Error::other("gone")),
+        &mut out,
+    );
+    let taken = take_op(&registry, &mut ctx, token, 0).unwrap();
+    let (_, message) = taken.failure().unwrap();
+    assert_eq!(message, "cannot read the output of `eml`: gone");
+    unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
 }

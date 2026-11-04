@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/exec_pipeline.em
+---
+--- stdout ---
+lines 4096 bytes 285610
+b:a:line 0 0123456789abcdef0123456789abcdef0123456789abcdef0123456
+b:a:line 4095 0123456789abcdef0123456789abcdef0123456789abcdef0123456
+--- stderr ---

@@ -261,6 +261,8 @@ table! {
         // driver のファイルのハンドルを持つ `Foreign`。読む側と書く側で型を分ける (docs/spec/stdlib.md の「`Std.Stream`」)
         StreamReader => type_row("Std.Stream.Reader", Lin, Repr::Obj),
         StreamWriter => type_row("Std.Stream.Writer", Lin, Repr::Obj),
+        // 段ごとの子のプロセスと、まだ取り出していない pipe の端を持つ `Foreign` (docs/spec/stdlib.md の「`Std.Exec`」)
+        ExecChild => type_row("Std.Exec.Child", Lin, Repr::Obj),
         // rustls の接続と平文の列を持つ `Foreign`。I/O は持たない (docs/spec/stdlib.md の「`Std.Tls`」)
         TlsConn => type_row("Std.Tls.Conn", Lin, Repr::Obj),
     }
@@ -1702,6 +1704,130 @@ table! {
                 )
             },
         ),
+        // 非同期の子のインターフェース (docs/spec/stdlib.md の「`Std.Exec`」)。`spawn_raw` の引数は `Std.Proc.spawn_raw`
+        // と同じで、待ちの記録の行の形は `Std.Stream` の行と同じである
+        ExecSpawnRaw => kinded(
+            "Std.Exec.spawn_raw",
+            &[Obj, Int, Obj, Int, Obj],
+            &[Unr; 5],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        ExecStdin => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Exec.stdin",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ExecStdout => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Exec.stdout",
+                    &[Obj],
+                    &[Lin],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ExecStageCount => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Exec.stage_count",
+                    &[Obj],
+                    &[Lin],
+                    Int,
+                    Unr,
+                    Purity::Pure,
+                )
+            },
+        ),
+        ExecSubmitWait => kinded(
+            "Std.Exec.submit_wait",
+            &[Int, Obj],
+            &[Unr, Lin],
+            Int,
+            Unr,
+            Purity::Effectful,
+        ),
+        ExecOpChild => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Exec.op_child",
+                    &[Int],
+                    &[Unr],
+                    Obj,
+                    Lin,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ExecOpOutcome => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Exec.op_outcome",
+                    &[Int],
+                    &[Unr],
+                    Int,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ExecOpPrefix => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.Exec.op_prefix",
+                    &[Int],
+                    &[Unr],
+                    Obj,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
+        ExecFinish => kinded(
+            "Std.Exec.finish",
+            &[Int],
+            &[Unr],
+            Unit,
+            Unr,
+            Purity::Effectful,
+        ),
+        ExecReap => borrowing(
+            &[false, true],
+            FunctionRow {
+                with_arg: Some(1),
+                ..kinded(
+                    "Std.Exec.reap",
+                    &[Int, Obj],
+                    &[Unr, Lin],
+                    Int,
+                    Unr,
+                    Purity::Effectful,
+                )
+            },
+        ),
         // TLS の状態のインターフェース (docs/spec/stdlib.md の「`Std.Tls`」)。どれも待たないので普通の extern の行で、
         // 投げるのは `client_raw` だけである。組を返す行は `Conn` を借りる
         TlsClientRaw => kinded(
@@ -1818,7 +1944,7 @@ table! {
 }
 
 impl Extern {
-    /// `job_cell` を除く `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net`、`Std.Stream` の行。VM はこれらの行を
+    /// `job_cell` を除く `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net`、`Std.Stream`、`Std.Exec` の行。VM はこれらの行を
     /// 汎用の extern の命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
     /// `job_cell` と `chan_cell` は即値を写すだけの普通の extern である。
     pub fn is_async(self) -> bool {
@@ -1904,6 +2030,16 @@ impl Extern {
                 | Extern::StreamTakeLineBytes
                 | Extern::StreamFinish
                 | Extern::StreamSource
+                | Extern::ExecSpawnRaw
+                | Extern::ExecStdin
+                | Extern::ExecStdout
+                | Extern::ExecStageCount
+                | Extern::ExecSubmitWait
+                | Extern::ExecOpChild
+                | Extern::ExecOpOutcome
+                | Extern::ExecOpPrefix
+                | Extern::ExecFinish
+                | Extern::ExecReap
         )
     }
 }

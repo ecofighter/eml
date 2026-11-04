@@ -135,7 +135,15 @@ pub(super) struct Started {
     pub(super) args: Vec<String>,
     pub(super) env: Vec<(String, String)>,
     pub(super) cwd: Option<String>,
-    pub(super) stdio: (StdinSpec<'static>, StdoutSpec<'static>, StderrSpec),
+    pub(super) stdio: (Stdio, Stdio, StderrSpec),
+}
+
+/// `MemoryHost::spawn` が受ける標準入力と標準出力の向き。ファイルと端を使う向きは断るので、残りの3つである。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stdio {
+    Inherit,
+    Null,
+    Pipe,
 }
 
 impl MemoryHost {
@@ -307,7 +315,7 @@ impl Host for MemoryHost {
     /// 待ってから、その段の誤りを返す。段の間は pipe とみなす。pipe の標準入力は `child_input` に写し (`fail_write`
     /// があれば書くたびにその文言で失敗する)、pipe の標準出力は `child_output` を読ませる。段の `wait` は引数の数を終了
     /// コードにする。ファイルを使う向き (文字列の標準入力とリダイレクト) は OS のファイルが要るので `Unsupported` で断る
-    fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
+    fn spawn(&self, spawn: Spawn<'_>) -> io::Result<Spawned> {
         let last = spawn
             .stages
             .len()
@@ -315,16 +323,18 @@ impl Host for MemoryHost {
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         let unsupported = || io::Error::from(io::ErrorKind::Unsupported);
         let stdin = match spawn.stdin {
-            StdinSpec::Inherit => StdinSpec::Inherit,
-            StdinSpec::Null => StdinSpec::Null,
-            StdinSpec::Pipe => StdinSpec::Pipe,
-            StdinSpec::Text(_) | StdinSpec::File(_) => return Err(unsupported()),
+            StdinSpec::Inherit => Stdio::Inherit,
+            StdinSpec::Null => Stdio::Null,
+            StdinSpec::Pipe => Stdio::Pipe,
+            StdinSpec::Given(_) | StdinSpec::Text(_) | StdinSpec::File(_) => {
+                return Err(unsupported());
+            }
         };
         let stdout = match spawn.stdout {
-            StdoutSpec::Inherit => StdoutSpec::Inherit,
-            StdoutSpec::Null => StdoutSpec::Null,
-            StdoutSpec::Pipe => StdoutSpec::Pipe,
-            StdoutSpec::File { .. } => return Err(unsupported()),
+            StdoutSpec::Inherit => Stdio::Inherit,
+            StdoutSpec::Null => Stdio::Null,
+            StdoutSpec::Pipe => Stdio::Pipe,
+            StdoutSpec::Given(_) | StdoutSpec::File { .. } => return Err(unsupported()),
         };
         let mut processes: Vec<Box<dyn Process>> = Vec::new();
         for (k, stage) in spawn.stages.iter().enumerate() {
@@ -350,8 +360,8 @@ impl Host for MemoryHost {
                     .collect(),
                 cwd: stage.cwd.map(str::to_string),
                 stdio: (
-                    if k == 0 { stdin } else { StdinSpec::Pipe },
-                    if k == last { stdout } else { StdoutSpec::Pipe },
+                    if k == 0 { stdin } else { Stdio::Pipe },
+                    if k == last { stdout } else { Stdio::Pipe },
                     stage.stderr,
                 ),
             });
@@ -362,7 +372,7 @@ impl Host for MemoryHost {
                 interrupt: self.interrupt_run.clone(),
             }));
         }
-        let stdin = (spawn.stdin == StdinSpec::Pipe).then(|| {
+        let stdin = (stdin == Stdio::Pipe).then(|| {
             Box::new(ChildInput {
                 bytes: self.child_input.clone(),
                 fail: self.fail_write,
@@ -370,7 +380,7 @@ impl Host for MemoryHost {
                 interrupt: self.interrupt_run.clone(),
             }) as Box<dyn Write + Send>
         });
-        let stdout = (spawn.stdout == StdoutSpec::Pipe)
+        let stdout = (stdout == Stdio::Pipe)
             .then(|| Box::new(Cursor::new(self.child_output.clone())) as Box<dyn Read + Send>);
         Ok(Spawned {
             stdin,
@@ -576,7 +586,7 @@ mod std_host {
             stdin: StdinSpec::Pipe,
             stdout: StdoutSpec::Pipe,
         };
-        let mut child = host.spawn(&spawn).unwrap();
+        let mut child = host.spawn(spawn).unwrap();
         assert_eq!(out.text(), "before\n");
         child.stdin.take().unwrap().write_all(b"in\n").unwrap();
         let mut read = String::new();
@@ -594,7 +604,7 @@ mod std_host {
             ..stage
         };
         let mut child = host
-            .spawn(&Spawn {
+            .spawn(Spawn {
                 stages: &[sleeper],
                 stdin: StdinSpec::Null,
                 stdout: StdoutSpec::Null,
@@ -613,7 +623,7 @@ mod std_host {
             stdout: StdoutSpec::Null,
         };
         assert_eq!(
-            host.spawn(&missing).err().map(|e| e.kind()),
+            host.spawn(missing).err().map(|e| e.kind()),
             Some(io::ErrorKind::NotFound)
         );
     }
@@ -649,7 +659,7 @@ mod std_host {
             stdin: StdinSpec::Null,
             stdout: StdoutSpec::Pipe,
         };
-        let mut child = host.spawn(&spawn).unwrap();
+        let mut child = host.spawn(spawn).unwrap();
         let mut read = String::new();
         child
             .stdout
@@ -869,7 +879,7 @@ mod std_host {
         let control = Control::new(Limits::default());
         let stages = stage("eml-no-such-program", &fields(&[]), &fields(&[]), "", 0);
         let failed = |stdin, payload, stdout, path| {
-            launch(&host, &control, &stages, stdin, payload, stdout, path).err()
+            launch(&host, &control, &stages, stdin, payload, stdout, path, None).err()
         };
         let launch_fault = |path: &str, reason| {
             Some(Fault::Launch(Box::new(Launch {
@@ -910,7 +920,7 @@ mod std_host {
         };
         let started = std::time::Instant::now();
         let error = host
-            .spawn(&Spawn {
+            .spawn(Spawn {
                 stages: &[sleeper, sleeper, missing],
                 stdin: StdinSpec::Null,
                 stdout: StdoutSpec::Pipe,
@@ -952,7 +962,7 @@ mod std_host {
                 .iter()
                 .map(|&(program, stderr)| stage(program, &none, &none, "", stderr))
                 .collect();
-            launch(&host, &control, &stages, 1, "", 1, "").err()
+            launch(&host, &control, &stages, 1, "", 1, "", None).err()
         };
         let not_found = |name: &str, reason| {
             Some(Fault::Io {
