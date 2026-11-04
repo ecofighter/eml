@@ -217,13 +217,27 @@ pub(crate) fn choose(run: &Run, taken: impl Fn(usize) -> usize) -> Option<CellRe
     best.map(|(_, word)| CellRef::decode(word as i64))
 }
 
-/// 確保量が柔らかい上限の閾値を越えていれば、`choose` で選んだタスクに上限の旗を立てる。候補があるときだけ閾値を
-/// 進め、進めた者だけが旗を1回送る。候補がなければ閾値を進めず、次の呼び出しでまた探す。旗は mail に積んでから
-/// すべての worker の語に `NOTICE` を立てるので、ビットを見た worker は集める地点で項を見つける。立てたセルを返す
-/// (docs/spec/vm.md の「タスクの上限」)。
-pub(crate) fn pressure_tick(control: &Control, shared: &Shared, run: &Run) -> Option<CellRef> {
+/// 確保量が柔らかい上限の閾値を越えていれば、`choose` で選んだタスクに上限の旗を立てる。候補があれば閾値を進め、
+/// 進めた者だけが旗を1回送る。旗は mail に積んでからすべての worker の語に `NOTICE` を立てるので、ビットを見た worker
+/// は集める地点で項を見つける。立てたセルを返す。
+/// 候補がないとき、監視のスレッド (`retry` が偽) は閾値を進めず、次の刻みでまた探す。決定的な方針の集める地点
+/// (`retry` が真) は、旗を送らずに閾値を同じ幅だけ進める。確保器の `NOTICE` は閾値を越える1回の課金でしか立たず、
+/// 切り替えないタスクは逐次の方針では集める地点に来ないので、進めなければ後から増え始めたタスクに旗が立たない。
+/// 進めれば、次の閾値を越えたページの集める地点でまた探す (docs/spec/vm.md の「上限と割り込み」「タスクの上限」)。
+pub(crate) fn pressure_tick(
+    control: &Control,
+    shared: &Shared,
+    run: &Run,
+    retry: bool,
+) -> Option<CellRef> {
     let (next, bytes) = control.pressure()?;
-    let cell = choose(run, |k| control.taken(k))?;
+    let Some(cell) = choose(run, |k| control.taken(k)) else {
+        if retry {
+            // ほかの worker が先に進めていれば、閾値はもう進んでいる
+            control.claim_pressure(next, bytes);
+        }
+        return None;
+    };
     if !control.claim_pressure(next, bytes) {
         return None;
     }
@@ -292,7 +306,7 @@ fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, rescue: bool, pressur
             relay.rescue_tick(&mut tickers, &mut cursor);
         }
         if pressure {
-            pressure_tick(&relay.control, &relay.shared, run);
+            pressure_tick(&relay.control, &relay.shared, run, false);
         }
         next += TICK;
     }
@@ -702,22 +716,22 @@ mod tests {
         publish(&run, 0, cell, 0, 0);
         let mut held = vec![grow(&mut ctx, 200 << 10)];
         control.take_notice(0);
-        assert_eq!(pressure_tick(&control, &shared, &run), Some(cell));
+        assert_eq!(pressure_tick(&control, &shared, &run, false), Some(cell));
         assert_eq!(limits_in(&shared), [cell]);
         for k in 0..2 {
             assert_eq!(control.worker_bits(k), Control::NOTICE, "worker {k}");
             control.take_notice(k);
         }
-        assert_eq!(pressure_tick(&control, &shared, &run), None);
+        assert_eq!(pressure_tick(&control, &shared, &run, false), None);
         assert!(limits_in(&shared).is_empty());
         assert_eq!(control.worker_bits(1), 0);
         held.push(grow(&mut ctx, 17 << 20));
-        assert_eq!(pressure_tick(&control, &shared, &run), Some(cell));
+        assert_eq!(pressure_tick(&control, &shared, &run, false), Some(cell));
         assert_eq!(limits_in(&shared), [cell]);
         release(&mut ctx, held);
     }
 
-    /// 候補がなければ閾値を進めないので、候補が公開された後の呼び出しが旗を立てる。
+    /// 監視のスレッドの呼び出しは候補がなければ閾値を進めないので、候補が公開された後の呼び出しが旗を立てる。
     #[test]
     fn pressure_tick_without_a_candidate_keeps_the_threshold() {
         let (control, mut ctx) = pressured();
@@ -725,13 +739,36 @@ mod tests {
         let run = table(2);
         let held = vec![grow(&mut ctx, 200 << 10)];
         control.take_notice(0);
-        assert_eq!(pressure_tick(&control, &shared, &run), None);
+        assert_eq!(pressure_tick(&control, &shared, &run, false), None);
         assert!(limits_in(&shared).is_empty());
         assert_eq!(control.worker_bits(0), 0);
         assert!(control.pressure().is_some());
         let cell = cells::task_on(&shared, 0, 0, false);
         publish(&run, 1, cell, 1, 0);
-        assert_eq!(pressure_tick(&control, &shared, &run), Some(cell));
+        assert_eq!(pressure_tick(&control, &shared, &run, false), Some(cell));
+        assert_eq!(limits_in(&shared), [cell]);
+        release(&mut ctx, held);
+    }
+
+    /// 集める地点の呼び出しは、候補がなければ旗を送らずに閾値を進める。公開されたタスクが進んだ閾値を越えるまで確保
+    /// すると、次の呼び出しがそのタスクに旗を立てる。
+    #[test]
+    fn a_gathered_tick_without_a_candidate_moves_the_threshold() {
+        let (control, mut ctx) = pressured();
+        let shared = shared();
+        let run = table(2);
+        let mut held = vec![grow(&mut ctx, 200 << 10)];
+        control.take_notice(0);
+        assert_eq!(pressure_tick(&control, &shared, &run, true), None);
+        assert!(limits_in(&shared).is_empty());
+        assert_eq!(control.worker_bits(1), 0);
+        assert!(control.pressure().is_none(), "the threshold moves");
+        let cell = cells::task_on(&shared, 0, 0, false);
+        let mark = control.taken(0);
+        publish(&run, 0, cell, 0, mark);
+        held.push(grow(&mut ctx, 17 << 20));
+        assert!(control.pressure().is_some());
+        assert_eq!(pressure_tick(&control, &shared, &run, true), Some(cell));
         assert_eq!(limits_in(&shared), [cell]);
         release(&mut ctx, held);
     }

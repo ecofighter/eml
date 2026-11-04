@@ -7909,6 +7909,12 @@ pub(crate) fn limit_task(shared: &Shared, cell: CellRef) -> Option<CellRef> {
     shared.lock().limit_task(cell, &solo(shared)).unwrap()
 }
 
+/// タスク `cell` に上限の旗が立っているか。
+#[cfg(test)]
+pub(crate) fn limit_flag(shared: &Shared, cell: CellRef) -> bool {
+    shared.lock().task_mut(cell).unwrap().limit
+}
+
 /// 記録 `token` が、`main` の `Finish` で残ったタスクとみなす状態 (driver に出したままか置いたまま) か。
 #[cfg(test)]
 pub(crate) fn op_left(shared: &Shared, token: i64) -> bool {

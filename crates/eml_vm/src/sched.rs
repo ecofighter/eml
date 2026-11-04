@@ -896,9 +896,10 @@ impl<P: Policy> Scheduler<P> {
         // 受け箱を見る前に下ろす。後に積まれた知らせは、また立つビットが次の安全点で集めさせる
         self.watcher.control.take_notice(k);
         // 決定的な方針では監視のスレッドの代わりにここで柔らかい上限を見る。積んだ旗の項は、この集める地点の mail の
-        // 処理が取る (docs/spec/vm.md の「タスクとスケジュール」)
+        // 処理が取る。候補がなければ閾値を進める。刻みで探し直す者がいないためである (docs/spec/vm.md の
+        // 「タスクとスケジュール」「上限と割り込み」)
         if P::MEMORY == Memory::Gathered {
-            monitor::pressure_tick(&self.watcher.control, &self.cells, &self.run);
+            monitor::pressure_tick(&self.watcher.control, &self.cells, &self.run, true);
         }
         // ほかの worker からの知らせは、ないときは1回の読みで済ませる (docs/spec/vm.md の「タスクとスケジュール」)
         let mut notices = Vec::new();

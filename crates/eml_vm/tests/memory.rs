@@ -212,20 +212,44 @@ main () = Async.run body
     assert!(finished.rescued > 0, "{finished:?}");
 }
 
-/// join で右の子を待つ `par` の親は、待ちに入る切り替えの集める地点で候補にならない。`main` がタスクの前に柔らかい
-/// 上限を越えるので閾値は越えたままで、決定的な方針はその集める地点で候補を探す。待つ親のほかに数のあるタスクは
-/// ないので、旗はどこにも立たず、タスクは値を返す。
+/// 親が join で待っている間に `par` の右の子が柔らかい上限を越えても、どのタスクにも旗は立たない。右の子は親の
+/// worker で動き、セルを持たないので候補にならない。待つ親は動いておらず、実行待ちでもないので、欄の `current` にも
+/// `top` にも出ない。決定的な方針は候補のないまま閾値を進め、親は join の後に確保せずに値を返す。待ちに入る切り替えの
+/// 集める地点はこの越える前にあるので、そこで待つ親を候補にしないことは `vm.rs` の単体テストが確かめる。
 #[test]
-fn a_parent_waiting_on_its_join_is_not_chosen() {
+fn a_crossing_in_a_right_child_while_its_parent_waits_flags_no_task() {
+    let src = program(
+        "\
+body : Unit -> <IO, Panic, Async> Int
+body () =
+  let t = Async.start (fn () ->
+    let mine = build 5000 []
+    let (a, b) = Par.par (fn () -> 1) (fn () -> count (build 100000 []) 0)
+    count mine (a + b))
+  Async.await t
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let n = Async.run body
+  println \"ok \\{show n}\"
+",
+    );
+    let (out, result) = run(&src, 1, Sched::Sequential, 64 * MIB, 2 * MIB);
+    assert_eq!(out, "ok 105001\n");
+    result.unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// 候補のないまま柔らかい上限を越えた後に、切り替えずに増え始めたタスクにも旗が立つ。`main` がタスクの前に越えた
+/// ときは候補がなく、決定的な方針は閾値を同じ幅だけ進める。タスクは次の閾値を越えたページで集める地点に来て、そこで
+/// 選ばれる (docs/spec/vm.md の「上限と割り込み」)。
+#[test]
+fn a_task_that_grows_without_switching_after_a_crossing_without_a_candidate_is_flagged() {
     let src = program(
         "\
 body : List Int -> <IO, Panic, Async> Unit
 body held =
   let t = Async.start (fn () ->
-    match try_io (fn () ->
-        let mine = build 5000 []
-        let (a, b) = Par.par (fn () -> 1) (fn () -> 2)
-        count mine (a + b)) with
+    match try_io (fn () -> count (grow 0 []) 0) with
       | Ok n -> println \"ok \\{show n}\"
       | Err e -> println \"caught: \\{show e.kind}: \\{e}\")
   Async.await t
@@ -237,8 +261,11 @@ main () =
   Async.run (fn () -> body held)
 ",
     );
-    let (out, result) = run(&src, 1, Sched::Sequential, 64 * MIB, 2 * MIB);
-    assert_eq!(out, "ok 5003\nheld 100000\n");
+    let (out, result) = run(&src, 1, Sched::Sequential, 16 * MIB, 2 * MIB);
+    assert_eq!(
+        out,
+        "caught: ResourceLimit: the memory soft limit is exceeded\nheld 100000\n"
+    );
     result.unwrap_or_else(|error| panic!("{error}"));
 }
 

@@ -5049,7 +5049,7 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
     }
 
     /// 待ちに入ったエントリの `Task` は、`Finish` の切り替えの前の集める地点で候補にならない。区間を閉じた直後に公開を
-    /// 外すためである。候補がないので閾値も進まない。
+    /// 外すためである。候補がないので旗は立たず、閾値は進む。
     #[test]
     fn an_entry_that_waits_is_not_chosen_in_the_gather_of_its_switch() {
         let (code, mut ctx, mut sched) = soft_fixture();
@@ -5074,8 +5074,66 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             task.cell.is_none(),
             "the switch does not reach the other task"
         );
-        assert!(control.pressure().is_some(), "a waiting task is chosen");
+        // 旗の項は同じ集める地点の mail の処理が取るので、mail と `limited` は選ばれても空になる。セルの旗で見る
+        assert!(
+            !cells::limit_flag(&sched.cells, cell),
+            "a waiting task is chosen"
+        );
         assert_eq!(sched.run.slots[0].current.load(Ordering::Relaxed), NO_CELL);
+        unsafe { ctx.heap_mut().decref(held) }.unwrap();
+    }
+
+    /// 左の子が終わって join で右の子を待つ `par` の親は、待ちに入る切り替えの集める地点で候補にならない。待ちに入る
+    /// 直前に公開を外すためである。閾値を越えたまま集める地点に来ても、旗は立たない。
+    #[test]
+    fn a_parent_waiting_on_its_join_is_not_chosen_in_the_gather_of_its_switch() {
+        let (code, mut ctx, mut sched) = soft_fixture();
+        let control = Arc::clone(ctx.heap().control());
+        let cell = cells::placed_task(&sched.cells, 0);
+        sched.cells.lock().started(cell).unwrap();
+        let mut task = Task::new(&code, function(&code, "main"), DEPTH);
+        task.worker = ctx.heap().worker();
+        task.cell = Some(cell);
+        task.limit = Limit::Task;
+        let mut right = Task::new(&code, function(&code, "main"), DEPTH);
+        right.worker = ctx.heap().worker();
+        right.state = TaskState::Ready;
+        let right = sched.add_task(right);
+        let j = sched.add_join(JoinNode {
+            parent: sched.current,
+            right,
+            right_worker: ctx.heap().worker(),
+            parent_evv: Word::UNIT,
+            left: None,
+            right_outcome: None,
+            ret: task.pc,
+            dst: 0,
+            orphan: false,
+        });
+        sched.run.push_ready(0, Ready::Task(right));
+        let base = task.push_frame(task.pc, 0, BOUNDARY_SIZE);
+        task.stack[base + 1] = Word::from_bits(j);
+        task.boundaries.push(j);
+        sched.mark = control.taken(0);
+        sched.publish(&task);
+        let held = ctx.fresh_string(&"x".repeat(200 << 10));
+        assert!(control.pressure().is_some());
+        child_done::<Checked>(
+            &code,
+            &mut ctx,
+            &mut task,
+            &mut sched,
+            Outcome::Value(Word::imm(1)),
+        )
+        .unwrap();
+        assert!(
+            task.cell.is_none(),
+            "the switch does not reach the right child"
+        );
+        assert!(
+            !cells::limit_flag(&sched.cells, cell),
+            "a waiting parent is chosen"
+        );
         unsafe { ctx.heap_mut().decref(held) }.unwrap();
     }
 
