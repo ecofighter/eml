@@ -1,0 +1,26 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/ffi/attributes.em
+---
+[E0018] Error: `pure` is written twice
+   ╭─[ check-fail/ffi/attributes.em:2:17 ]
+   │
+ 2 │ extern "C" pure pure sin : Float -> Float
+   │                 ──┬─  
+   │                   ╰─── an attribute is written once
+───╯
+[E0018] Error: `pure` and `blocking` cannot both be written
+   ╭─[ check-fail/ffi/attributes.em:3:17 ]
+   │
+ 3 │ extern "C" pure blocking cos : Float -> <IO> Float
+   │                 ────┬───  
+   │                     ╰───── write one of them
+───╯
+[E0018] Error: attributes need `extern "C"`
+   ╭─[ check-fail/ffi/attributes.em:4:8 ]
+   │
+ 4 │ extern pure tan : Float -> Float
+   │        ──┬─  
+   │          ╰─── write `extern "C"` before the attributes
+───╯

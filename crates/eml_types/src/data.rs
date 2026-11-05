@@ -68,6 +68,8 @@ pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
                     TypeDefKind::Extern(Some(ty)) => ty.row().linearity == Linearity::Lin,
                     TypeDefKind::Extern(None) => false,
                     TypeDefKind::Data { constructors: _ } => def.lin,
+                    // C のハンドルは型引数のない `Lin` の型である (docs/spec/declarations.md の「`extern "C"`」)
+                    TypeDefKind::CHandle { .. } => true,
                 },
                 // 行のない extern の型の型引数は誤り (E1033) の跡で、使われ方が分からないので、安全な側の両方向にする。
                 // ハンドルの型 (`Chan a`) の値は共有する表を指し、ある持ち主が書いた値を別の持ち主が読む。共変にすると、
@@ -82,7 +84,9 @@ pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
                         };
                         vec![variance; arity]
                     }
-                    TypeDefKind::Extern(_) => vec![Variance::Both; arity],
+                    TypeDefKind::Extern(_) | TypeDefKind::CHandle { .. } => {
+                        vec![Variance::Both; arity]
+                    }
                     TypeDefKind::Data { constructors: _ } => vec![Variance::Absent; arity],
                 },
                 sorts: def.params.clone(),

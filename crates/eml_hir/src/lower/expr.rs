@@ -1167,6 +1167,7 @@ impl<'a> BodyLowering<'a> {
             items: self.items,
             vars: Vars::Signature,
             public_item: None,
+            c_widths: None,
             diagnostics: &mut *self.diagnostics,
         }
         .lower(ty, fallback)

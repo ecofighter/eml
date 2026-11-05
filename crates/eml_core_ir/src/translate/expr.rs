@@ -26,6 +26,7 @@ pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Exter
         FunctionKind::Extern(row) => {
             Some(row.expect("a program without errors has no user extern"))
         }
+        FunctionKind::C(_) => unimplemented!("translate of extern \"C\" calls"),
         FunctionKind::Defined
         | FunctionKind::DefaultMethod(_)
         | FunctionKind::InstanceMethod(..)

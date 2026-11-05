@@ -28,6 +28,20 @@ pub fn pretty(program: &Program) -> String {
 /// ことの両方がダンプから読めるようにするため。
 fn items(program: &Program, module: &Module, out: &mut String) {
     let items = &module.items;
+    for link in &items.links {
+        let os = match link.os {
+            eml_extern::Os::Linux => "linux",
+            eml_extern::Os::Macos => "macos",
+            eml_extern::Os::Windows => "windows",
+        };
+        match &link.library {
+            eml_extern::CLibrary::Named(name) => writeln!(out, "link on {os} {name:?}"),
+            eml_extern::CLibrary::Framework(name) => {
+                writeln!(out, "link on {os} framework {name:?}")
+            }
+        }
+        .unwrap();
+    }
     for (_, def) in items.types.iter() {
         let type_vars: Vec<&str> = def
             .generics
@@ -50,8 +64,13 @@ fn items(program: &Program, module: &Module, out: &mut String) {
         let (keyword, constructors) = match &def.kind {
             TypeDefKind::Data { constructors } => ("data", constructors.as_slice()),
             TypeDefKind::Extern(_) => ("extern data", [].as_slice()),
+            TypeDefKind::CHandle { .. } => ("extern \"C\" data", [].as_slice()),
         };
-        let annotation = if def.lin { " : Lin" } else { "" };
+        let annotation = match &def.kind {
+            TypeDefKind::CHandle { dtor: Some(dtor) } => format!(" drop {dtor:?}"),
+            _ if def.lin => " : Lin".to_string(),
+            _ => String::new(),
+        };
         if params.is_empty() {
             writeln!(out, "{keyword} {}{annotation}", def.name).unwrap();
         } else {
@@ -66,6 +85,7 @@ fn items(program: &Program, module: &Module, out: &mut String) {
         let printer = Printer {
             program,
             generics: &def.generics,
+            widths: &[],
         };
         for &ctor in constructors {
             writeln!(out, "  | {}", printer.constructor(def, &program[ctor])).unwrap();
@@ -104,6 +124,7 @@ fn items(program: &Program, module: &Module, out: &mut String) {
             let printer = Printer {
                 program,
                 generics: &operation.signature.generics,
+                widths: &[],
             };
             let multiplicity = match operation.multiplicity {
                 OpMultiplicity::Never => "never ",
@@ -127,7 +148,16 @@ fn items(program: &Program, module: &Module, out: &mut String) {
             .signature
             .as_ref()
             .map_or(&no_generics, |signature| &signature.generics);
-        Printer { program, generics }.function(function, module.bodies.get(local), out);
+        let widths = match function.kind {
+            FunctionKind::C(id) => program.c_decl(id).widths.as_slice(),
+            _ => &[],
+        };
+        Printer {
+            program,
+            generics,
+            widths,
+        }
+        .function(function, module.bodies.get(local), out);
     }
     for (_, binding) in items.bindings.iter() {
         let input = &program[binding.input].name;
@@ -143,6 +173,8 @@ fn items(program: &Program, module: &Module, out: &mut String) {
 struct Printer<'a> {
     program: &'a Program,
     generics: &'a Generics,
+    /// `extern "C"` のシグネチャの幅。型の後に `as int32_t` と書く。
+    widths: &'a [CWidth],
 }
 
 impl Printer<'_> {
@@ -263,8 +295,20 @@ impl Printer<'_> {
     }
 
     fn function(&self, function: &Function, body: Option<&Body>, out: &mut String) {
-        if let FunctionKind::Extern(_) = function.kind {
-            out.push_str("extern ");
+        match function.kind {
+            FunctionKind::Extern(_) => out.push_str("extern "),
+            FunctionKind::C(id) => {
+                let decl = self.program.c_decl(id);
+                out.push_str("extern \"C\" ");
+                if decl.pure {
+                    out.push_str("pure ");
+                }
+                if decl.blocking.is_some() {
+                    out.push_str("blocking ");
+                }
+                write!(out, "symbol {:?} ", decl.symbol).unwrap();
+            }
+            _ => {}
         }
         match &function.signature {
             Some(signature) => writeln!(
@@ -621,9 +665,9 @@ impl Printer<'_> {
     fn ty(&self, types: &la_arena::Arena<TypeRef>, id: TypeRefId) -> String {
         match &types[id].kind {
             TypeRefKind::Error => "<error>".to_string(),
-            TypeRefKind::Con(id, args, rows) => {
-                let mut text = self.program.names.ty(*id).to_string();
-                for arg in in_declaration_order(&self.program[*id].params, args, rows) {
+            TypeRefKind::Con(def, args, rows) => {
+                let mut text = self.program.names.ty(*def).to_string();
+                for arg in in_declaration_order(&self.program[*def].params, args, rows) {
                     match arg {
                         SortedArg::Type(&arg) => write!(text, " {}", self.ty_atom(types, arg)),
                         // 型の引数の row は省略できない (docs/spec/types.md の「row の型引数」)
@@ -635,6 +679,9 @@ impl Printer<'_> {
                         ),
                     }
                     .unwrap();
+                }
+                if let Some(width) = self.widths.iter().find(|width| width.ty == id) {
+                    write!(text, " as {}", width.int.c_name()).unwrap();
                 }
                 text
             }

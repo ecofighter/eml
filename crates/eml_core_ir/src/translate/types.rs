@@ -72,6 +72,7 @@ pub(super) fn type_def_repr(id: TypeDefId, hir: &HirProgram) -> Repr {
         TypeDefKind::Data { constructors } => {
             data_repr(constructors.iter().map(|&ctor| hir[ctor].fields.len()))
         }
+        TypeDefKind::CHandle { .. } => Repr::Obj,
     }
 }
 

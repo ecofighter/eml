@@ -1,14 +1,14 @@
 use std::collections::BTreeSet;
 
 use eml_diagnostics::{TextRange, TextSize};
-use eml_extern::{Extern, ExternEffect, ExternType, FloatBits};
+use eml_extern::{CInt, Extern, ExternEffect, ExternType, FloatBits};
 use la_arena::{Arena, ArenaMap, Idx};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::item_tree::Fixity;
 
 pub use crate::program::{
-    BindingId, ClassId, ConstructorId, EffectId, FunctionId, InstanceId, ItemId, MethodId,
+    BindingId, CDeclId, ClassId, ConstructorId, EffectId, FunctionId, InstanceId, ItemId, MethodId,
     ModuleId, OperationId, TypeDefId, ValueItem,
 };
 
@@ -83,6 +83,9 @@ pub enum TypeDefKind {
     Extern(Option<ExternType>),
     /// 宣言した順のコンストラクタ。
     Data { constructors: Vec<ConstructorId> },
+    /// `extern "C" data T drop "f"`。型引数のない不透明な `Lin` のハンドルで、`dtor` は物体を解放するときに呼ぶ C の
+    /// 関数の記号である (docs/spec/declarations.md の「`extern "C"`」)。
+    CHandle { dtor: Option<String> },
 }
 
 #[derive(Debug)]
@@ -255,6 +258,30 @@ pub enum FunctionKind {
     /// REPL の `let` の束縛か式の入力を実行する関数 `input$N`。問い合わせも同じ形の関数にし、検査だけをする。
     /// シグネチャを持たず、引数 `()` を1つ受ける。名前の表には入らない (docs/spec/modules.md の「REPL のセッション」)。
     Input(InputKind),
+    /// `extern "C"` のシグネチャ。本体を持たず、宣言したモジュールの `link` から解決する C の関数を呼ぶ
+    /// (docs/spec/declarations.md の「`extern "C"`」)。
+    C(CDeclId),
+}
+
+/// `extern "C"` の関数の記号、属性、`as` の幅。引数と結果の型はシグネチャが持つ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CDecl {
+    /// `symbol` に書いた記号。書かなければ宣言した名前である。
+    pub symbol: String,
+    pub pure: bool,
+    /// `blocking` の語の位置。型の検査がこの位置に診断を出す。
+    pub blocking: Option<TextRange>,
+    /// シグネチャに書いた `as` の幅。書いた順で、どの位置に書いてよいかは型検査が決める。
+    pub widths: Vec<CWidth>,
+}
+
+/// `Int as int32_t` の幅。`ty` は関数のシグネチャの型の注釈の番号で、`TypeRef` 自身は普通の `Int` のままである。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CWidth {
+    pub ty: TypeRefId,
+    pub int: CInt,
+    /// `as int32_t` の範囲。
+    pub range: TextRange,
 }
 
 /// REPL の入力の種類。
@@ -283,7 +310,7 @@ pub struct Binding {
 impl FunctionKind {
     /// 等式で本体を定義する関数か。
     pub fn has_equations(self) -> bool {
-        !matches!(self, FunctionKind::Extern(_))
+        !matches!(self, FunctionKind::Extern(_) | FunctionKind::C(_))
     }
 }
 

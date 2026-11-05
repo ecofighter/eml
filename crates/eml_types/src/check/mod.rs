@@ -454,9 +454,10 @@ pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
             let signature = function.signature.as_ref()?;
             let arrows = match function.kind {
                 FunctionKind::DefaultMethod(_) | FunctionKind::InstanceMethod(..) => METHOD_ARROWS,
-                FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => {
-                    Arrows::OutermostUnr
-                }
+                FunctionKind::Defined
+                | FunctionKind::Extern(_)
+                | FunctionKind::C(_)
+                | FunctionKind::Input(_) => Arrows::OutermostUnr,
             };
             Some((id, signature_shape(context, signature, arrows)))
         })
@@ -712,7 +713,10 @@ fn unrestricted_vars(
     let class_side = match function.kind {
         FunctionKind::InstanceMethod(instance, _) => program[instance].generics.type_vars.len(),
         FunctionKind::DefaultMethod(_) => 1,
-        FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => 0,
+        FunctionKind::Defined
+        | FunctionKind::Extern(_)
+        | FunctionKind::C(_)
+        | FunctionKind::Input(_) => 0,
     };
     let mut vars: Vec<TypeVarId> = signature
         .generics
@@ -737,9 +741,10 @@ fn signature_file(program: &Program, id: FunctionId) -> FileId {
         FunctionKind::InstanceMethod(_, method) | FunctionKind::DefaultMethod(method) => {
             program.file(method.module)
         }
-        FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => {
-            program.file(id.module)
-        }
+        FunctionKind::Defined
+        | FunctionKind::Extern(_)
+        | FunctionKind::C(_)
+        | FunctionKind::Input(_) => program.file(id.module),
     }
 }
 
@@ -752,10 +757,9 @@ fn declaration_schemes(
     let mut problems: Vec<(ValueItem, KindProblem)> = Vec::new();
     // extern の関数は本体を持たないので、部分適用のクロージャの Kind だけを宣言から出す
     // (docs/spec/types.md の「関数型」)
-    for (id, function) in program
-        .functions()
-        .filter(|(_, function)| matches!(function.kind, FunctionKind::Extern(_)))
-    {
+    for (id, function) in program.functions().filter(|(_, function)| {
+        matches!(function.kind, FunctionKind::Extern(_) | FunctionKind::C(_))
+    }) {
         let (Some(shape), Some(signature)) = (signatures.functions.get(id), &function.signature)
         else {
             continue;
@@ -959,7 +963,10 @@ fn check_method_kinds(
         let (instance, method) = match function.kind {
             FunctionKind::InstanceMethod(instance, method) => (Some(instance), method),
             FunctionKind::DefaultMethod(method) => (None, method),
-            FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => continue,
+            FunctionKind::Defined
+            | FunctionKind::Extern(_)
+            | FunctionKind::C(_)
+            | FunctionKind::Input(_) => continue,
         };
         if unreliable.contains(&id) || bodies.get(id).is_none() {
             continue;

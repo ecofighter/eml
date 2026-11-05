@@ -1,4 +1,5 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange, count, was};
+use eml_extern::CInt;
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
@@ -6,8 +7,8 @@ use super::{NameKind, NameUse, not_found, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{Resolved, Resolver};
 use crate::hir::{
-    EffectRef, Generics, ParamSort, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind,
-    TypeVarDecl, TypeVarId,
+    CWidth, EffectRef, Generics, ParamSort, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId,
+    TypeRefKind, TypeVarDecl, TypeVarId,
 };
 use crate::program::{TypeDefId, TypeItem};
 
@@ -35,6 +36,8 @@ pub(super) struct TypeLowering<'a> {
     /// `pub` の item の型を変換するときの、その item の名前。型に同じモジュールの `pub` でない型かエフェクトが現れたら
     /// E1032 にする (docs/spec/modules.md の「公開の範囲」)。`pub` でない item と本体の注釈では `None` である。
     pub public_item: Option<&'a str>,
+    /// `extern "C"` のシグネチャの `as` の幅を足す先。ほかの型の parser は `as` を読まないので `None` である。
+    pub c_widths: Option<&'a mut Vec<CWidth>>,
     pub diagnostics: &'a mut Vec<Diagnostic>,
 }
 
@@ -51,6 +54,10 @@ impl TypeLowering<'_> {
             _ => None,
         }
         .map(|path| path.range());
+        let width = match &ty {
+            ast::Type::PathType(path) => path.c_width(),
+            _ => None,
+        };
         let kind = match ty {
             ast::Type::PathType(path) => match path_name(path.path()).at(range) {
                 Some(at) => self.applied(&at, &[], range),
@@ -98,7 +105,42 @@ impl TypeLowering<'_> {
         if let (TypeRefKind::Con(id, _, _), Some(path_range)) = (&kind, path_range) {
             self.check_exposed(TypeItem::Type(*id), path_range);
         }
-        self.alloc(kind, range)
+        let id = self.alloc(kind, range);
+        if let Some(width) = width {
+            self.c_width(id, &width);
+        }
+        id
+    }
+
+    /// `as` の後の C の整数の型の名前 (docs/spec/declarations.md の「`extern "C"`」)。名前がなければパーサが
+    /// 報告済みである。
+    fn c_width(&mut self, ty: TypeRefId, width: &ast::CWidth) {
+        let Some(name) = width.name() else {
+            return;
+        };
+        let int = match name.text() {
+            "int" | "int32_t" => CInt::I32,
+            "int64_t" => CInt::I64,
+            "size_t" => CInt::SizeT,
+            other => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        codes::INVALID_EXTERN_C,
+                        format!("`{other}` is not a C integer type"),
+                        Label::new(self.file, name.text_range(), "unknown C type"),
+                    )
+                    .with_help("use int, int32_t, int64_t or size_t"),
+                );
+                return;
+            }
+        };
+        if let Some(widths) = &mut self.c_widths {
+            widths.push(CWidth {
+                ty,
+                int,
+                range: width.range(),
+            });
+        }
     }
 
     /// 型の名前に引数を適用する。型の名前が誤っていても引数の中の誤りを報告するよう、名前の誤りより先に引数を変換する。

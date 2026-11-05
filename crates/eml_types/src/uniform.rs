@@ -534,7 +534,7 @@ impl<'a> Graph<'a> {
                     FunctionKind::InstanceMethod(instance, _) => {
                         Constrained::at_instance(program, instance, class)
                     }
-                    FunctionKind::Extern(_) => {
+                    FunctionKind::Extern(_) | FunctionKind::C(_) => {
                         unreachable!("an extern function has no equations, so it has no nodes")
                     }
                     FunctionKind::Input(_) => {

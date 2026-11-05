@@ -601,7 +601,10 @@ impl Collector<'_> {
             return Part::Function;
         }
         if let TypeKind::Con { id, .. } = self.store.kind(ty)
-            && matches!(hir[*id].kind, TypeDefKind::Extern(_))
+            && matches!(
+                hir[*id].kind,
+                TypeDefKind::Extern(_) | TypeDefKind::CHandle { .. }
+            )
             && !eml_types::satisfies(hir, &self.store, hir.lang.show, ty)
         {
             return Part::Extern;
@@ -655,7 +658,7 @@ impl Collector<'_> {
                     DisplayForm::Data(id, self.constructor_fields(id, &args))
                 }
                 // `Show` を持つ extern の型は `display_part` が `show_prec` で書くので、ここへは届かない
-                TypeDefKind::Extern(_) => unreachable!(
+                TypeDefKind::Extern(_) | TypeDefKind::CHandle { .. } => unreachable!(
                     "the extern type `{}` is written without a display function",
                     hir[id].name
                 ),
