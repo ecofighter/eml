@@ -221,7 +221,8 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 ### AddressSanitizer
 
-- `asan` のジョブは、`eml_io` のテストと、`eml_vm` の `api::`、`signal::`、`io::`、`workers::` (本物の driver に記憶を貸す VM の道と、ほかの worker の driver に記憶を貸す道) を `-Zsanitizer=address` で流す。対象は `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`aarch64-apple-darwin` の3つである。Rust の AddressSanitizer は Windows の msvc を対象にしない
+- `asan` のジョブは、`eml_io` と `eml_native` のテストと、`eml_vm` の `api::`、`signal::`、`io::`、`workers::`、`ffi::` (本物の driver に記憶を貸す VM の道と、ほかの worker の driver に記憶を貸す道、C の関数に記憶を貸す道) を `-Zsanitizer=address` で流す。対象は `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`aarch64-apple-darwin` の3つである。Rust の AddressSanitizer は Windows の msvc を対象にしない
+- `eml_native` と `ffi::` を足したのは、橋渡しの Rust の関数が C に貸した配列や文字列の記憶を読み書きするためである。橋渡しの本体は Cranelift の JIT のコードで、計装されない。AddressSanitizer が見るのは、JIT のコードを呼ぶ Rust の側と、C に渡す前後の貸し借りの範囲である
 - `eml_vm` の lib のテストは AddressSanitizer の下で流さない。そのため、worker 1 のタスクの操作の記録を run の終わりに worker 0 が掃く道 (`sched.rs` の `an_op_record_left_on_worker_1_is_swept`) を確かめるのは、検査モードの漏れの確かめだけである
 - nightly は Miri と同じ `nix develop .#miri` のものを使い、`-Zbuild-std` で std も計装し、`--target` をいつも書く。leak の検出は AddressSanitizer の既定のままにする
 - 開発機では build の置き場所を `target/asan` に分ける (「よく使うコマンド」)
@@ -229,7 +230,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 ### ThreadSanitizer
 
-- `tsan` のジョブは、worker のスレッドの間で共有する記憶に data race がないことを `-Zsanitizer=thread` で確かめる。流すのは `eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、`io::`、`chan::`、`eml_vm` の lib の `counters::`、`eml_io` の lib の `driver::tests::` の4手順で、対象は `x86_64-unknown-linux-gnu` だけである。Miri は複数のスレッドの interleaving を網羅しないので、スレッドをまたぐ `unsafe` の核 (`eml_rt` の remote 解放の経路と、`eml_vm` の起こしの語、run の表、run の登録表と mail、ほかの worker への操作の転送、`Counter` の atomic、worker をまたぐ channel、`eml_io` の driver のプールのスレッドが貸された記憶に書くファイルの仕事) は、実際に走るスレッドの上で ThreadSanitizer が見る
+- `tsan` のジョブは、worker のスレッドの間で共有する記憶に data race がないことを `-Zsanitizer=thread` で確かめる。流すのは `eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、`io::`、`chan::`、`ffi::`、`eml_vm` の lib の `counters::`、`eml_io` の lib の `driver::tests::` の4手順で、対象は `x86_64-unknown-linux-gnu` だけである。Miri は複数のスレッドの interleaving を網羅しないので、スレッドをまたぐ `unsafe` の核 (`eml_rt` の remote 解放の経路と、`eml_vm` の起こしの語、run の表、run の登録表と mail、ほかの worker への操作の転送、`Counter` の atomic、worker をまたぐ channel、worker の間で共有する `CCall`、`eml_io` の driver のプールのスレッドが貸された記憶に書くファイルの仕事) は、実際に走るスレッドの上で ThreadSanitizer が見る
 - nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。`eml_rt` と `eml_vm` の3つの手順は、この形で報告なしに通っている
 - 合否は終了コードで決める。`TSAN_OPTIONS=halt_on_error=1` で、警告が1件でも出たらテストのプロセスが止まる。警告は抑制せず、`suppressions` も書かない。報告が出たら、コードの不具合か、`eml_rt` の `unsafe` が前提にしている順序の誤りとして直す
 - 開発機では build の置き場所を `target/tsan` に分ける (「よく使うコマンド」)
@@ -672,8 +673,8 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write` と `counters::`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
-- `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` のテストと `eml_vm` の `api::`、`signal::`、`io::`、`workers::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
-- `tsan`: x86_64 の Linux で、`eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、`io::`、`chan::`、lib の `counters::` と、`eml_io` の lib の `driver::tests::` を ThreadSanitizer の下で流す (下の「ThreadSanitizer」)
+- `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` と `eml_native` のテストと `eml_vm` の `api::`、`signal::`、`io::`、`workers::`、`ffi::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
+- `tsan`: x86_64 の Linux で、`eml_rt` の `trusted::` と、`eml_vm` の `workers::`、`signal::`、`preempt::`、`io::`、`chan::`、`ffi::`、lib の `counters::` と、`eml_io` の lib の `driver::tests::` を ThreadSanitizer の下で流す (下の「ThreadSanitizer」)
 
 CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
 
@@ -734,8 +735,8 @@ cargo insta test --test-runner nextest --accept      # テストを流し、ス�
 cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: signal:: io:: workers:: も。eml_io の検証)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: preempt:: io:: chan:: と -p eml_vm --lib counters::、eml_io は -p eml_io --lib -- driver::tests::。ThreadSanitizer)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: signal:: io:: workers:: ffi:: と eml_native も。eml_io の検証)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: preempt:: io:: chan:: ffi:: と -p eml_vm --lib counters::、eml_io は -p eml_io --lib -- driver::tests::。ThreadSanitizer)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
