@@ -64,8 +64,8 @@ impl<M: Mode> CodeBase<M> {
     /// 呼び出しを書ける。名前が同じ関数はいつも同じコードになるので (docs/spec/vm.md の「追記」)、debug ビルドでは
     /// すでにある名前の関数も変換し直して比べる。誤りを返した後の表は途中まで書いたものなので、使い続けない。
     ///
-    /// `linked` は、このプログラムの C の表をつないだ結果である。ポインタが署名に合うことは `Linked::new` の約束で、
-    /// ここでは長さだけを確かめる。長さが表と合わないのは呼び手の誤りなので、panic する
+    /// `linked` は、このプログラムの C の表をつないだ結果である。ポインタが組にした署名に合うことは `Linked::new` の
+    /// 約束で、ここでは `fits` で長さ、署名、dtor の有無を表と比べる。合わないのは呼び手の誤りなので、panic する
     /// (docs/spec/vm.md の「C の関数の命令」)。
     pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<u32, CompileError> {
         assert!(

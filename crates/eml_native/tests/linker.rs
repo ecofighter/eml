@@ -72,7 +72,9 @@ fn quoted(link: &CLink) -> String {
 
 #[test]
 fn a_registered_symbol_comes_first() {
-    let mut linker = Linker::new(Vec::new()).with_symbols(&[("llabs", half as *const ())]);
+    // SAFETY: `half` は `double f(double)` で、下の宣言も `Float -> Float` である
+    let mut linker =
+        unsafe { Linker::new(Vec::new()).with_symbols(&[("llabs", half as *const ())]) };
     let f = function(
         "Test.llabs",
         "llabs",
@@ -219,8 +221,10 @@ extern "C" fn test_dtor(_: *mut core::ffi::c_void) {}
 
 #[test]
 fn a_dtor_resolves_like_a_function() {
-    let mut linker =
-        Linker::new(Vec::new()).with_symbols(&[("eml_test_dtor", test_dtor as *const ())]);
+    // SAFETY: `test_dtor` は `void f(void*)` で、dtor としてだけ引く
+    let mut linker = unsafe {
+        Linker::new(Vec::new()).with_symbols(&[("eml_test_dtor", test_dtor as *const ())])
+    };
     let handles = [
         handle(Some("eml_test_dtor"), Vec::new()),
         handle(None, vec![c_library()]),

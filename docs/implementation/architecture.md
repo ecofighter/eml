@@ -79,7 +79,7 @@ eml_cli          check / run コマンド。パイプラインを組む唯一の
 eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_rt の Ctx の上で、worker のスレッドごとに1つの Ctx で実行する
 eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。時計と I/O の待ちを受け持つ
 eml_tls          rustls のクライアント接続を包む TLS の状態 (I/O を持たない)。aws-lc-rs の provider と webpki-roots を使い、eml のどの crate にも依存しない
-eml_native       Cranelift の橋渡しの関数と、C のライブラリと記号の解決 (Linker::link が Linked を作る)。eml_extern と eml_cabi だけに依存する
+eml_native       Cranelift の橋渡しの関数と、C のライブラリと記号の解決 (Linker::link が Linked を作る)。workspace の crate では eml_extern と eml_cabi だけに依存する
 eml_cabi         C の関数を呼ぶコードのポインタ (Bridge、Dtor、CCall、Linked)。eml_extern だけに依存する
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。最適化と evidence passing のパスと、LIR への変換
@@ -404,9 +404,9 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ## `eml_native` の内部
 
-- `bridge.rs` の `Bridges` は、`CSignature` ごとの橋渡しの関数を cranelift-jit で作り、署名で引く表に持つ。ISA は `cranelift_native` で動いている機械に合わせ、`opt_level=speed`、`is_pic=false` にする。`JITModule` は空でない最初の要求で作るので、C の関数のないプログラムは JIT の費用を払わない。1回の `get` は、まだない署名をまとめて定義し、`finalize_definitions` を1回だけ呼ぶ。`free_memory` は呼ばない。cranelift-jit の既定の memory provider は、`JITModule` を落とすと確保を忘れる (`mem::forget`) だけなので、作ったコードは map されたままプロセスの間ずっと残る。橋渡しの CLIF の形は [VM](../spec/vm.md) の「橋渡しの関数」にある
+- `bridge.rs` の `Bridges` は、`CSignature` ごとの橋渡しの関数を cranelift-jit で作り、署名で引く表に持つ。ISA は `cranelift_native` で動いている機械に合わせ、`opt_level=speed`、`is_pic=false` にする。`JITModule` は空でない最初の要求で作るので、C の関数のないプログラムは JIT の費用を払わない。1回の `get` は、まだない署名をまとめて定義し、`finalize_definitions` を1回だけ呼ぶ。`free_memory` は呼ばず、`JITModule` は `ManuallyDrop` で持って落とさない。cranelift-jit が module を落とすときにコードを解放するかどうかに頼らず、`Linker` を落としても作ったコードがプロセスの間ずっと残るようにするためである。1回の `get` の定義か finalize が失敗したら、その module を捨て (落とさずに手放し)、次の要求で新しい module を作る。途中まで定義した関数が次の finalize に混ざらないためで、前に作った橋渡しのコードは残る。橋渡しの CLIF の形は [VM](../spec/vm.md) の「橋渡しの関数」にある
 - `library.rs` は、名前の飾り (`candidates`)、動いている OS (`running_os`)、開いたライブラリの表 `Libraries` を持つ。`Libraries` は、`link` から開いたライブラリを最初の候補の道で引く表と、プロセスの範囲のライブラリを持つ。どれも最初に使うときに開き、`ManuallyDrop<libloading::Library>` で持って閉じない
-- `linker.rs` の `Linker` は、`--link` の上書き、登録した記号、`Libraries`、`Bridges` を持つ。`link` は、関数とハンドルの dtor の記号をすべて解決してから、関数の `c_signature()` について `Bridges::get` を1回呼び、入力に並びをそろえた `Linked` を返す。解決の順は [VM](../spec/vm.md) の「ライブラリと記号」にある。`Linker` は `Send` で、`Sync` は要らない
+- `linker.rs` の `Linker` は、`--link` の上書き、登録した記号、`Libraries`、`Bridges` を持つ。`link` は、関数とハンドルの dtor の記号をすべて解決してから、関数の `c_signature()` について `Bridges::get` を1回呼び、入力に並びをそろえた `Linked` を返す。解決の順は [VM](../spec/vm.md) の「ライブラリと記号」にある。`Linker` は `Send` で、`Sync` は要らない。`with_symbols` は `unsafe` で、登録するアドレスの署名と寿命は呼び手が約束する。`--link` で同じ KEY を2回以上渡すと、後のものが効く
 - `error.rs` の `LinkError` は、`Library`、`Symbol`、`UnknownOverride`、`Unsupported` の4つの変種を持ち、文言は固定である
 - trait はない。呼び手はプログラムを持ってから読み込む前につなぎ、結果の `Linked` の値を渡す。VM の側に linker も、それを作る関数も置かない
 - `unsafe` を書いてよいのは `bridge.rs`、`library.rs`、`linker.rs` だけである ([テスト戦略](testing.md) の「`eml_native` の検証」)

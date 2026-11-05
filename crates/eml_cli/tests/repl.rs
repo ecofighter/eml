@@ -17,7 +17,8 @@ use crate::common::for_each_file;
 
 /// トランスクリプトの REPL は、UI テストの道具と同じ fixture の記号を C の関数として引く。
 fn linker() -> Linker {
-    Linker::new(Vec::new()).with_symbols(&eml_test_support::fixture_symbols())
+    // SAFETY: トランスクリプトは fixture の記号を、`eml_test_support` の fixture と同じ署名で宣言する
+    unsafe { Linker::new(Vec::new()).with_symbols(&eml_test_support::fixture_symbols()) }
 }
 
 fn repl_root() -> PathBuf {

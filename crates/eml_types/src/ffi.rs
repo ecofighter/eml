@@ -93,7 +93,7 @@ pub(crate) fn check(program: &Program, function: FunctionId) -> Result<CShape, V
     } = checker;
     match shape {
         Some(shape) if diagnostics.is_empty() && !failed => match decl.blocking {
-            // `blocking` の宣言は、正しくてもまだ呼べない。誤りのある宣言にはその誤りだけを見せ、直した後で未対応を伝える
+            // `blocking` の C の関数は実装していないので、正しい宣言にも E0004 を出す。誤りのある宣言にはその誤りだけを見せ、直した後で未対応を伝える
             Some(range) => Err(vec![Diagnostic::not_yet_supported(
                 file,
                 range,

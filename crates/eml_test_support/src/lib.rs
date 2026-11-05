@@ -387,8 +387,11 @@ pub fn execute_on(
 /// テストの binary の中で1つの linker を使い回し、ライブラリと橋渡しを作り直さずに済ませる。テストは並んで走るので
 /// lock で守る。
 #[cfg(feature = "run")]
-static LINKER: LazyLock<Mutex<Linker>> =
-    LazyLock::new(|| Mutex::new(Linker::new(Vec::new()).with_symbols(&fixture_symbols())));
+static LINKER: LazyLock<Mutex<Linker>> = LazyLock::new(|| {
+    // SAFETY: `fixture_symbols()` の関数は Rust の `extern "C" fn` で、テストのプログラムはそれぞれの記号を同じ署名で
+    // 宣言する。dtor の `eml_fixture_handle_free` は `void f(void*)` で、どれもプロセスの間ずっとある
+    Mutex::new(unsafe { Linker::new(Vec::new()).with_symbols(&fixture_symbols()) })
+});
 
 /// プログラムの C の関数をつなぎ、つなぐ失敗で panic する。C の関数のないプログラムは、lock も JIT も触らずに
 /// `Linked::default()` を返す。

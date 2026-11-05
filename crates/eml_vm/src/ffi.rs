@@ -145,8 +145,9 @@ pub(crate) fn call<R: Exec>(
         Ok(args) => args,
         Err(why) => return raise::<R>(code, ctx, task, dst, &entry.function, why),
     };
-    // SAFETY: `Linked::new` の約束により、`bridge` は `callee` の署名の橋渡しで、どちらのコードもプロセスが
-    // 終わるまで有効である。`entry.function` はその署名の関数を番号だけ付け直したもので、`args` は橋渡しの読む slot
+    // SAFETY: `Linked::new` の約束により、`bridge` は組にした署名の橋渡しで、`callee` はその署名の関数であり、
+    // どちらのコードもプロセスが終わるまで有効である。`load` が `fits` でその署名を `entry.function` の
+    // `c_signature()` と比べた。`entry.function` は表の関数を番号だけ付け直したもので、`args` は橋渡しの読む slot
     // の数だけある (docs/spec/vm.md の「橋渡しの関数」)
     let ret = unsafe { (entry.call.bridge)(entry.call.callee, args.as_ptr()) };
     match unmarshal(code, ctx, &entry.function, ret)? {

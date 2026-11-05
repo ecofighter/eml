@@ -27,7 +27,7 @@ pub fn linked(
                 .iter()
                 .find(|(symbol, ..)| *symbol == function.symbol)
                 .unwrap_or_else(|| panic!("no call for `{}`", function.symbol));
-            CCall { bridge, callee }
+            (function.c_signature(), CCall { bridge, callee })
         })
         .collect();
     let dtors = program
@@ -44,7 +44,7 @@ pub fn linked(
         })
         .collect();
     // SAFETY: `calls()` は、このファイルの Rust の関数をそれぞれの署名の橋渡しと組にし、テストのプログラムはその記号を
-    // 同じ署名で宣言する。`rs_handle_free` は `void f(void*)` で、どの関数もプロセスの間ずっとある
+    // 同じ署名で宣言する。組にする署名もその宣言の `c_signature()` である。`rs_handle_free` は `void f(void*)` で、どの関数もプロセスの間ずっとある
     unsafe { Linked::new(calls, dtors) }
 }
 

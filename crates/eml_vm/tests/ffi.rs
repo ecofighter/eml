@@ -311,7 +311,14 @@ fn {f}(n.0: int) -> int {{
 #[should_panic(expected = "line up with the C tables")]
 fn a_misaligned_linked_table_is_a_programming_error() {
     let mut code = CodeBase::<Fast>::new(Arc::new(Control::new(Limits::default())));
-    let _ = code.load(&parse(ABS_FIRST), &Linked::default());
+    let short = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = code.load(&parse(ABS_FIRST), &Linked::default());
+    }));
+    assert!(short.is_err(), "a table of the wrong length is rejected");
+    // 長さが同じでも、別の署名でつないだ `Linked` は読み込まない。`int64_t` の橋渡しを `int32_t` の関数で呼ばないため
+    let other = parse(&ABS_FIRST.replace("(i64) -> i64", "(i32) -> i64"));
+    let mut code = CodeBase::<Fast>::new(Arc::new(Control::new(Limits::default())));
+    let _ = code.load(&other, &linked_all(&parse(ABS_FIRST)));
 }
 
 #[test]

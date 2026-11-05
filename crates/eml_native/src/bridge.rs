@@ -4,6 +4,7 @@
 #![allow(unsafe_code)]
 
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData, Signature, types};
 use cranelift_codegen::settings::{self, Configurable};
@@ -15,11 +16,11 @@ use eml_extern::{CSignature, CType};
 
 use crate::LinkError;
 
-/// 作った橋渡しの関数を署名で引く。cranelift-jit の既定の `SystemMemoryProvider` は、module を落とすと確保を
-/// 忘れる (`mem::forget`) だけなので、コードは map されたまま残る。解放するのは module の明示の解放の関数だけで、
-/// ここでは呼ばない。だから返した `Bridge` はプロセスの間ずっと呼べる。
+/// 作った橋渡しの関数を署名で引く。module は `ManuallyDrop` で持ち、落とさず、明示の解放の関数も呼ばない。
+/// cranelift-jit が module を落とすときにコードを解放するかどうかに頼らず、返した `Bridge` がプロセスの間ずっと
+/// 呼べるようにするためである。`Linker` を落としても、作ったコードは残る。
 pub struct Bridges {
-    module: Option<JITModule>,
+    module: Option<ManuallyDrop<JITModule>>,
     made: HashMap<CSignature, Bridge>,
     next: u32,
 }
@@ -51,17 +52,17 @@ impl Bridges {
         if !missing.is_empty() {
             let module = match &mut self.module {
                 Some(module) => module,
-                none => none.insert(new_module()?),
+                none => none.insert(ManuallyDrop::new(new_module()?)),
             };
-            let mut ids = Vec::with_capacity(missing.len());
-            for signature in &missing {
-                let name = format!("bridge{}", self.next);
-                self.next += 1;
-                ids.push(define(module, &name, signature)?);
-            }
-            module
-                .finalize_definitions()
-                .map_err(|_| unsupported("the bridge code could not be made executable"))?;
+            let ids = match make(module, &missing, &mut self.next) {
+                Ok(ids) => ids,
+                Err(error) => {
+                    // 途中まで定義した関数が次の finalize に混ざらないよう、この module を捨てて次の要求で作り直す。
+                    // `ManuallyDrop` なので、前に作った橋渡しのコードは残る
+                    self.module = None;
+                    return Err(error);
+                }
+            };
             for (signature, id) in missing.into_iter().zip(ids) {
                 let code = module.get_finalized_function(id);
                 // SAFETY: `define` が `Bridge` と同じ署名 (ポインタ2つを取り i64 を返す、OS の既定の呼び出し規約) で
@@ -75,6 +76,24 @@ impl Bridges {
             .map(|signature| self.made[signature])
             .collect())
     }
+}
+
+/// `missing` の橋渡しを定義して finalize し、それぞれの関数の番号を返す。
+fn make(
+    module: &mut JITModule,
+    missing: &[&CSignature],
+    next: &mut u32,
+) -> Result<Vec<FuncId>, LinkError> {
+    let mut ids = Vec::with_capacity(missing.len());
+    for signature in missing {
+        let name = format!("bridge{next}");
+        *next += 1;
+        ids.push(define(module, &name, signature)?);
+    }
+    module
+        .finalize_definitions()
+        .map_err(|_| unsupported("the bridge code could not be made executable"))?;
+    Ok(ids)
 }
 
 /// 理由は自前の固定の文にする。Cranelift の誤りの文は OS の文言を含みうるためである

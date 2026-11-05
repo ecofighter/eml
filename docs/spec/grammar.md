@@ -131,11 +131,11 @@ command     ::= CMD_START (CMD_TEXT | CMD_QUOTE | ESCAPE | '\{' '..'? expr INTER
   - ABI のない `extern` の属性と `drop` (`` attributes need `extern "C"` ``)
 - `extern "C"` の署名の型の中では、`qcon` だけの原子の型 (`Int`、`Float`) の後に `'as' LIDENT` を書いて、C の側の幅を表せる (`Int as int32_t`)。`as` は前の原子の型に、`->`、`,`、row より強く結びつく。そのため `-> <IO, Panic> Int as int` と `-> <IO> (Int as int, MutUnboxedArray Float)` は曖昧でない。parser は C の署名の中の原子の型ならどの位置の `as` も読む。C の署名の外の型は `as` を読まないので、`f : Int as int` の `as` は E0011 になる
 - 最上位で `link on <LIDENT>` の後に文字列か `framework` が続く行は、`link` の item である (`link on linux "libm.so.6"`、`link on macos framework "Accelerate"`)。`link`、`on`、`framework` も `LIDENT` のままで、この並びでだけ字面で見分ける。等式より先にこの形を見るので、最上位にはこの形の等式 (`link on linux "a" = …`) を書けない。`class` と `instance` のブロックの中では、この形も等式として読む。`link` の item は、ファイルのどこにいくつ書いてもよい。宣言には数えないので、後ろに `import_item` を書ける。後ろに読み残しがあるか、`framework` の後に文字列がなければ E0018 にする。`pub`、`abstract`、`extern` は付けられない (E0011)。OS の名前は parser では検査しない
-- `extern "C"` と `link` の CST は次の節点で組む。typed AST は `ast::Abi`、`ast::CAttr` (`is_pure`、`is_blocking`、`symbol`)、`ast::CWidth` (`name`)、`ast::LinkItem` (`os`、`framework`、`library`) で、`ast::Signature::abi` と `c_attrs`、`ast::DataItem::abi` と `c_drop`、`ast::PathType::c_width`、`ast::SourceFile::link_items` から引く
+- `extern "C"` と `link` の CST は次の節点で組む。typed AST は `ast::Abi`、`ast::CAttr` (`is_pure`、`is_blocking`、`symbol`)、`ast::CWidth` (`name`)、`ast::LinkItem` (`os`、`framework`、`library`) で、`ast::Signature::abi` と `c_attrs`、`ast::DataItem::abi` と `c_drop`、`ast::ExternMethod::abi`、`ast::PathType::c_width`、`ast::SourceFile::link_items` から引く
 
   | 節点 | 子 |
   |---|---|
-  | `ABI` (`SIGNATURE` と `DATA_ITEM` の子) | `STRING_LIT` |
+  | `ABI` (`SIGNATURE`、`DATA_ITEM`、`EXTERN_METHOD` の子) | `STRING_LIT` |
   | `C_ATTR` | 属性の語の `LIDENT`、`symbol` なら `STRING_LIT` |
   | `C_DROP` (`DATA_ITEM` の子) | `drop`、`STRING_LIT` |
   | `C_WIDTH` (`PATH_TYPE` の子) | `as`、`LIDENT` |

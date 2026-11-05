@@ -39,7 +39,12 @@ impl Linker {
     }
 
     /// どのライブラリより先に引く記号を登録する。テストが Rust の関数を C の関数として渡すために使う。
-    pub fn with_symbols(mut self, symbols: &[(&str, *const ())]) -> Linker {
+    ///
+    /// # Safety
+    /// どのアドレスも、その記号に解決するすべての宣言の C の署名を持つ関数である。dtor として引く記号のアドレスは
+    /// `void f(void*)` として呼べる関数である。どれもプロセスが終わるまで有効である。ライブラリの記号と違い、登録した
+    /// アドレスは宣言が保証しないので、この約束を登録する側が負う (docs/spec/vm.md の「ライブラリと記号」)。
+    pub unsafe fn with_symbols(mut self, symbols: &[(&str, *const ())]) -> Linker {
         for &(name, address) in symbols {
             self.symbols.insert(name.to_owned(), Address(address));
         }
@@ -68,21 +73,23 @@ impl Linker {
                 None => None,
                 Some(symbol) => {
                     let address = self.resolve(os, symbol, &handle.links)?;
-                    // SAFETY: dtor の C の署名は `void f(void*)` と宣言する側が約束する。値を返す関数でも、
-                    // 戻り値を捨てる呼び出しは OS の既定の呼び出し規約で正しい
+                    // SAFETY: dtor の C の署名は `void f(void*)` と宣言する側が約束する。登録した記号では
+                    // `with_symbols` の呼び手が約束する。値を返す関数でも、戻り値を捨てる呼び出しは OS の既定の
+                    // 呼び出し規約で正しい
                     Some(unsafe { std::mem::transmute::<*const (), Dtor>(address) })
                 }
             });
         }
         let signatures: Vec<_> = functions.iter().map(CFunction::c_signature).collect();
         let bridges = self.bridges.get(&signatures)?;
-        let calls = bridges
+        let calls = signatures
             .into_iter()
-            .zip(callees)
-            .map(|(bridge, callee)| CCall { bridge, callee })
+            .zip(bridges.into_iter().zip(callees))
+            .map(|(signature, (bridge, callee))| (signature, CCall { bridge, callee }))
             .collect();
-        // SAFETY: どちらの列も入力の表の順に並ぶ。橋渡しは各関数の `c_signature()` で引いたもので、記号はその関数の
-        // 宣言から解決した。橋渡しのコードもライブラリもプロセスの間外さない (docs/spec/vm.md の「橋渡しの関数」、
+        // SAFETY: 橋渡しは組にした署名で引いたものである。ライブラリの記号は、その署名を書いた宣言が境目として保証し
+        // (docs/spec/declarations.md の「宣言する側の約束」)、登録した記号は `with_symbols` の呼び手が保証する。
+        // 橋渡しのコードもライブラリもプロセスの間外さない (docs/spec/vm.md の「橋渡しの関数」、
         // docs/spec/vm.md の「ライブラリと記号」)
         Ok(unsafe { Linked::new(calls, dtors) })
     }
