@@ -10,6 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
+use eml_extern::CFunction;
 use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, VarId, VarInfo, push_var};
 
 use super::super::blocks::{Renamer, constant_target};
@@ -140,6 +141,7 @@ pub(crate) fn inline_clause(
     clause: &CoreFn,
     args: &[Atom],
     state: Atom,
+    c_functions: &[CFunction],
     resume: impl Fn(Atom, Atom) -> Rhs,
 ) {
     let returned = VarInfo {
@@ -154,6 +156,7 @@ pub(crate) fn inline_clause(
         args,
         state,
         base,
+        c_functions,
         |vars, value, state| {
             let var = push_var(vars, returned.clone());
             (
@@ -188,6 +191,7 @@ pub(crate) fn clause_blocks(
     args: &[Atom],
     state: Atom,
     base: u32,
+    c_functions: &[CFunction],
     mut resume: impl FnMut(&mut Vec<VarInfo>, Atom, Atom) -> (Vec<Stmt>, Term),
 ) -> Vec<Block> {
     let params = clause.params();
@@ -209,7 +213,7 @@ pub(crate) fn clause_blocks(
     for (index, block) in clause.blocks.iter().enumerate() {
         let params = copy.params(index, block);
         let resumed = match block.term {
-            Term::Return(_) => tail_position_call(block).map(|(at, _)| at),
+            Term::Return(_) => tail_position_call(block, c_functions).map(|(at, _)| at),
             _ => None,
         };
         let mut stmts = Vec::with_capacity(block.stmts.len());

@@ -535,3 +535,33 @@ fn f(a.0: tobj, b.1: tobj) -> obj {
 ";
     assert_eq!(contract_text(text), text);
 }
+
+#[test]
+fn an_unused_pure_c_call_is_removed() {
+    let text = "\
+cfn \"M.half\" symbol \"half\" pure link [] (f64) -> f64
+fn f(x.0: float) -> float {
+  let h.1: float = extern M.half(x.0)
+  return x.0
+}
+";
+    insta::assert_snapshot!(contract_text(text), @r#"
+    cfn "M.half" symbol "half" pure link [] (f64) -> f64
+    fn f(x.0: float) -> float {
+      return x.0
+    }
+    "#);
+}
+
+#[test]
+fn a_pure_c_call_that_writes_an_array_is_kept() {
+    // C は借りた配列に書き込む。書き込みは IR のデータの依存に現れないので、結果を使わなくても消さない
+    let text = "\
+cfn \"M.fill\" symbol \"fill\" pure link [] (mut_array, i64, f64) -> void
+fn f(a.0: obj lin, n.1: int, x.2: float) -> obj lin {
+  let u.3: unit = extern M.fill(a.0, n.1, x.2)
+  return a.0
+}
+";
+    assert_eq!(contract_text(text), text);
+}

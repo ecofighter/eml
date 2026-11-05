@@ -1,0 +1,13 @@
+[package]
+name = "eml_cabi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 単体テストがないので、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+eml_extern.workspace = true

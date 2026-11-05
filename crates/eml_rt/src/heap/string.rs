@@ -802,6 +802,63 @@ impl<M: Mode> Heap<M> {
         Ok(bytes_ptr(h, len, Tracked(p)))
     }
 
+    /// 文字列かバイト列の先頭のバイトの位置。C の関数に中身を読ませるために貸す。長さは `string` か `bytes` の結果の
+    /// 長さで、終わりの 0 は置かない (docs/spec/object-model.md の「バイト列と文字列」)。
+    ///
+    /// # Safety
+    /// `w` はこのヒープか付けた塊の生きている文字列かバイト列の物体を指す。返す位置から長さだけ読んでよいのは、物体が
+    /// 生きていて、その物体を書き換えていない間だけである (検査モードは確かめ、ほかの種類なら `WrongKind` を返す)。
+    pub unsafe fn text_payload(&self, w: Word) -> (r: Result<*const u8, HeapError>)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+            !M::CHECKED ==> self.settleable() && self.readable(w) && (self.is_string(w)
+                || self.is_bytes(w)),
+        ensures
+            self.consistent() && self.settleable() && self.readable(w) && (self.is_string(w)
+                || self.is_bytes(w)) ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> self.readable(w) && (self.is_string(w) || self.is_bytes(
+                w,
+            ))),
+    {
+        let h = self.header_of(w);
+        proof {
+            if self.consistent() && self.settleable() && self.readable(w) {
+                self.core.lemma_readable(w);
+            }
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
+            }
+        }
+        self.checked_live(h)?;
+        if M::CHECKED && !matches!(self.core.meta_get(h).kind(), Kind::String | Kind::Bytes) {
+            return Err(HeapError::WrongKind);
+        }
+        proof {
+            if M::CHECKED {
+                self.core.lemma_shape(h@.addr);
+                if self.core.dom().contains(h@.addr) {
+                    self.core.lemma_safe_at(h@.addr);
+                }
+            } else {
+                self.core.lemma_live_block(h@.addr);
+            }
+        }
+        let len = self.core.slot_get(h, 0).bits();
+        proof {
+            self.core.lemma_shape(h@.addr);
+            let cap = self.core.cap(h@.addr);
+            assert((len + 7) / 8 <= cap - 1) by (nonlinear_arith)
+                requires
+                    len <= 8 * (cap - 1),
+                    cap >= 1,
+            ;
+        }
+        let tracked p = self.core.tracked_perm(h@.addr);
+        Ok(bytes_ptr(h, len, Tracked(p)) as *const u8)
+    }
+
     /// `bytes_lend` と `bytes_commit` の前提がみな成り立ち、モデルが合っている。`w` は呼ぶ側だけが参照を持つ生きている
     /// バイト列である。
     pub closed spec fn lend_ok(&self, w: Word) -> bool {

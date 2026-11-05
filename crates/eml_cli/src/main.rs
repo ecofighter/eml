@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -6,8 +7,8 @@ use std::sync::Arc;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use eml_cli::{
-    Clock, Control, Finished, FsProvider, Limits, RunConfig, Sched, Session, default_limits,
-    script_host,
+    Clock, Control, Finished, FsProvider, Limits, LinkError, Linker, RunConfig, Sched, Session,
+    default_limits, script_host,
 };
 use eml_diagnostics::{has_errors, render};
 
@@ -37,6 +38,9 @@ enum Command {
         /// How many worker threads run `par` children: 1 or more (default: `EML_WORKERS`, else the number of available CPUs)
         #[arg(long, value_name = "N", value_parser = parse_workers)]
         workers: Option<usize>,
+        /// Open VALUE in place of the library written as KEY in a `link` item (repeatable)
+        #[arg(long = "link", value_name = "KEY=VALUE", value_parser = parse_link)]
+        link: Vec<(String, String)>,
         file: PathBuf,
     },
     /// Start an interactive session
@@ -44,6 +48,9 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
+        /// Open VALUE in place of the library written as KEY in a `link` item (repeatable)
+        #[arg(long = "link", value_name = "KEY=VALUE", value_parser = parse_link)]
+        link: Vec<(String, String)>,
         /// A file to load first, as with `:load`
         file: Option<PathBuf>,
     },
@@ -69,11 +76,16 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        Command::Repl { debug_heap, file } => terminal::run(debug_heap, file),
+        Command::Repl {
+            debug_heap,
+            link,
+            file,
+        } => terminal::run(debug_heap, link, file),
         Command::Run {
             debug_heap,
             stats,
             workers,
+            link,
             file,
         } => {
             // 環境変数の誤りも、ファイルを読む前に使い方の誤りとして断る
@@ -109,8 +121,20 @@ fn main() -> ExitCode {
             let Some(program) = compiled.program else {
                 return ExitCode::from(1);
             };
+            let linked = match link_program(&program, &compiled.link_keys, link) {
+                Ok(linked) => linked,
+                Err(error) => {
+                    eprintln!("link error: {error}");
+                    return ExitCode::from(1);
+                }
+            };
             // 相対パスはカレントディレクトリを基準にする
-            match eml_cli::execute(&program, &config, script_host(PathBuf::new(), script_args)) {
+            match eml_cli::execute(
+                &program,
+                &linked,
+                &config,
+                script_host(PathBuf::new(), script_args),
+            ) {
                 // シェルと同じく、終了コードは下の 8 ビットである (docs/spec/stdlib.md の「`exit`」)
                 Ok(finished) => {
                     if stats {
@@ -131,6 +155,30 @@ fn main() -> ExitCode {
                 }
             }
         }
+    }
+}
+
+/// 読み込む前に C の関数をつなぐ。どの `link` の item にも合わない KEY は、書き誤りとして断る
+/// (docs/spec/vm.md の「`--link`」)。`Linker` はここで捨ててよい。開いたライブラリと作った橋渡しは、プロセスの間ずっと
+/// 残る (docs/spec/vm.md の「ライブラリと記号」)。
+fn link_program(
+    program: &eml_lir::Program,
+    link_keys: &BTreeSet<String>,
+    overrides: Vec<(String, String)>,
+) -> Result<eml_cli::Linked, LinkError> {
+    if let Some((key, _)) = overrides.iter().find(|(key, _)| !link_keys.contains(key)) {
+        return Err(LinkError::UnknownOverride { key: key.clone() });
+    }
+    Linker::new(overrides).link(&program.c_functions, &program.c_handles)
+}
+
+/// `--link` の値。KEY と VALUE はどちらも空にできない (docs/spec/stdlib.md の「起動」)。
+fn parse_link(text: &str) -> Result<(String, String), String> {
+    match text.split_once('=') {
+        Some((key, value)) if !key.is_empty() && !value.is_empty() => {
+            Ok((key.to_string(), value.to_string()))
+        }
+        _ => Err(format!("`{text}` is not KEY=VALUE")),
     }
 }
 

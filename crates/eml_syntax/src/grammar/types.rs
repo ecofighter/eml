@@ -100,8 +100,25 @@ pub(super) fn btype(p: &mut Parser) -> bool {
         }
         args += 1;
     }
+    if args == 0 {
+        c_width(p);
+    }
     m.complete(p, if args == 0 { PATH_TYPE } else { APP_TYPE });
     true
+}
+
+/// C の署名の中でだけ、原子の型の後の `'as' LIDENT` を幅として読む。`->`、`,`、row より強く結びつくので、
+/// `-> <IO> (Int as int, T)` は曖昧でない。どの位置に書けるかは型の段が決める (docs/spec/grammar.md の「文法上の補足」)。
+fn c_width(p: &mut Parser) {
+    if !p.c_widths || !p.at(AS_KW) {
+        return;
+    }
+    let m = p.start();
+    p.bump(AS_KW);
+    if !p.eat(LIDENT) {
+        expected(p, "a C type name");
+    }
+    m.complete(p, C_WIDTH);
 }
 
 pub(super) fn type_atom(p: &mut Parser) -> bool {
@@ -109,6 +126,7 @@ pub(super) fn type_atom(p: &mut Parser) -> bool {
     let kind = match p.current() {
         UIDENT => {
             qcon(p);
+            c_width(p);
             PATH_TYPE
         }
         LIDENT => {

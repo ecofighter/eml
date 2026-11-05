@@ -5,6 +5,7 @@ mod common;
 
 mod r#async;
 mod boxing;
+mod c_functions;
 mod census;
 mod contract;
 mod evidence;

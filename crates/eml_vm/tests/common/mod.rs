@@ -1,3 +1,5 @@
+pub mod c;
+
 use std::sync::Arc;
 
 use eml_lir::Program;
@@ -12,7 +14,7 @@ pub fn parse(text: &str) -> Program {
 /// プログラム全体を、上限のない `Control` を持つ速いモードの新しい `CodeBase` に変換する。逆アセンブラのテストのため。
 pub fn compile(program: &Program) -> Result<CodeBase<Fast>, CompileError> {
     let mut code = CodeBase::new(Arc::new(Control::new(Limits::default())));
-    code.load(program)?;
+    code.load(program, &eml_vm::Linked::default())?;
     Ok(code)
 }
 

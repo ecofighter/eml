@@ -1,0 +1,28 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/ffi/link_os.em
+---
+[E1060] Error: `plan9` is not an operating system
+   ╭─[ check-fail/ffi/link_os.em:2:9 ]
+   │
+ 2 │ link on plan9 "libm.so"
+   │         ──┬──  
+   │           ╰──── unknown operating system
+   │ 
+   │ Help: write `linux`, `macos` or `windows`
+───╯
+[E1060] Error: `framework` is only for `macos`
+   ╭─[ check-fail/ffi/link_os.em:3:15 ]
+   │
+ 3 │ link on linux framework "Accelerate"
+   │               ────┬────  
+   │                   ╰────── frameworks exist only on macOS
+───╯
+[E1060] Error: a library name cannot be empty
+   ╭─[ check-fail/ffi/link_os.em:5:25 ]
+   │
+ 5 │ link on macos framework ""
+   │                         ─┬  
+   │                          ╰── write a library or a framework
+───╯

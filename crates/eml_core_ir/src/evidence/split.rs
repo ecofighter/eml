@@ -126,7 +126,7 @@ fn yield_points(
     let mut points = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
         let id = BlockId(index as u32);
-        let tail = tail_position_call(block).map(|(at, _)| at);
+        let tail = tail_position_call(block, &program.c_functions).map(|(at, _)| at);
         let first = points.len();
         for (at, stmt) in block.stmts.iter().enumerate() {
             // `IO` の extern と `never` の操作の節の呼び出しは、中断しても継続を作らずに巻き戻すので、地点にしない

@@ -11,6 +11,7 @@ eml は「線形型 × 代数的エフェクト」の組み合わせを試す、
 - エフェクトは Koka 方式の Row 多相で扱う。操作ごとに継続の多重度 (`never` / `once` / `multi`) を宣言する。
 - 副作用は組み込みの `IO` エフェクトとして管理する。`IO` は操作のないラベルで、`println` やファイルの操作 (`FileIn.open` など) は `extern` の関数である。
 - 構造化並行性の `Async` のタスク、`par` の fork と join、channel を持つ。標準ライブラリは TCP (`Std.Net`)、TLS のクライアント (`Std.Tls`)、HTTP/1.1 のクライアント (`Std.Http`) を扱う。
+- 利用者のモジュールに `extern "C"` で C の関数を宣言して呼べる。BLAS のように、配列を写さずにポインタで渡せる。
 - 型付きの Core IR を LIR に写し、レジスタ型のバイトコードの VM で実行する。メモリは Perceus 方式の参照カウントで管理する。
 - 1回の検査で、構文・名前解決・型・線形性・網羅性の誤りをまとめて報告する。
 
@@ -126,6 +127,8 @@ claude plugin install ecoskills@ecoskills --scope user
 | `eml_vm` | LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上で実行する。`par`、`Async` のタスク、channel も扱う |
 | `eml_io` | I/O の driver。OS ごとの backend (epoll、kqueue、IOCP) の上の本物の driver と、決定的なテストの driver |
 | `eml_tls` | rustls の接続を包む TLS の状態 (I/O を持たない) |
+| `eml_native` | C の関数を呼ぶ橋渡しの関数を Cranelift で作り、C のライブラリと記号を解決する |
+| `eml_cabi` | C の関数を呼ぶコードのポインタ (`eml_native` が作り、`eml_vm` が使う) |
 | `eml_rt` | VM とネイティブで共有するランタイムの核 (物体、ヒープ、参照カウント、検査モード、extern)。Verus で検証する |
 | `eml_core_ir` | 型付き HIR から Core IR (基本ブロックの列) への変換、evidence passing、LIR への変換 |
 | `eml_lir` | LIR と、`box` / `unbox` の挿入、縮約、`dup` / `decref` / `release` の挿入 |
@@ -133,7 +136,7 @@ claude plugin install ecoskills@ecoskills --scope user
 | `eml_hir` | CST から HIR への変換と名前解決 |
 | `eml_syntax` | lexer、レイアウト段、パーサ、rowan の CST |
 | `eml_diagnostics` | 診断のデータ構造と表示 |
-| `eml_extern` | 標準ライブラリの extern の表 |
+| `eml_extern` | 標準ライブラリの extern の表と、利用者の C の関数の記述 |
 | `eml_test_support` | 統合テスト用の補助 (開発時のみ) |
 
 crate の依存と各 crate の中身は [docs/implementation/architecture.md](docs/implementation/architecture.md) にある。crate のほかに、次のディレクトリがある。

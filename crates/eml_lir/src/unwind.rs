@@ -3,7 +3,7 @@
 //! いるとは限らず、借りたフィールドが呼び出しをまたぐことがあるためである (docs/spec/lir.md の「所有を取る時点」)。
 //! 走査を2つ持たないように、verifier の走査が地点ごとの所有を書き留める。
 
-use eml_extern::Purity;
+use eml_extern::CFunction;
 
 use crate::{BlockId, FnIdx, Prim, Program, Rhs, Stmt, VarId, VerifyError, verify};
 
@@ -49,12 +49,12 @@ pub fn points(
 
 /// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。複数の値を返す呼び出しは、葉をすべて束縛する
 /// (docs/spec/vm.md の「巻き戻しの表」)。
-pub(crate) fn point(stmt: &Stmt) -> Option<(&[VarId], Option<VarId>)> {
+pub(crate) fn point<'a>(stmt: &'a Stmt, c: &[CFunction]) -> Option<(&'a [VarId], Option<VarId>)> {
     match stmt {
         Stmt::Let { var, rhs } => {
             let (point, landing) = match rhs {
                 Rhs::Call(call) => (true, call.prompt()),
-                Rhs::Extern { ext, .. } => (ext.row().purity != Purity::Pure, None),
+                Rhs::Extern { ext, .. } => (ext.row(c).faults, None),
                 Rhs::Prim(Prim::YieldAbort | Prim::ChildAbort, _) => (true, None),
                 _ => (false, None),
             };

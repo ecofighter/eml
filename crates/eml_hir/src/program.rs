@@ -11,10 +11,10 @@ use eml_diagnostics::FileId;
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 use rustc_hash::FxHashMap;
 
-use eml_extern::ExternType;
+use eml_extern::{CLink, ExternType};
 
 use crate::hir::{
-    Binding, Body, ClassDef, Constructor, EffectDef, ExternIndex, Function, FunctionKind,
+    Binding, Body, CDecl, ClassDef, Constructor, EffectDef, ExternIndex, Function, FunctionKind,
     InstanceDef, LangItems, Method, Operation, Signature, TypeDef,
 };
 use crate::names::DisplayNames;
@@ -115,6 +115,7 @@ pub type ClassId = ItemId<ClassDef>;
 pub type MethodId = ItemId<Method>;
 pub type InstanceId = ItemId<InstanceDef>;
 pub type BindingId = ItemId<Binding>;
+pub type CDeclId = ItemId<CDecl>;
 
 /// 値の名前空間の item (docs/spec/modules.md の「名前空間」)。名前解決の結果、HIR の参照 (`Res::Item`)、型検査の
 /// 宣言ごとの表のキーが、同じ型を使う。
@@ -301,6 +302,10 @@ pub struct Items {
     pub instances: Arena<InstanceDef>,
     /// REPL の `let` の束縛。セッションの `let` の入力のモジュールだけが1つ持つ。
     pub bindings: Arena<Binding>,
+    /// `extern "C"` の関数の記号と属性。`FunctionKind::C` が指す。
+    pub c_decls: Arena<CDecl>,
+    /// `link` の item。書いた順で、E1060 にしたものを除いて持つ (docs/spec/declarations.md の「`extern "C"`」)。
+    pub links: Vec<CLink>,
 }
 
 impl Program {
@@ -434,12 +439,24 @@ impl Program {
     pub fn arity(&self, id: FunctionId) -> Option<usize> {
         let function = &self[id];
         match function.kind {
-            FunctionKind::Extern(_) => function.signature.as_ref().map(Signature::arity),
+            FunctionKind::Extern(_) | FunctionKind::C(_) => {
+                function.signature.as_ref().map(Signature::arity)
+            }
             FunctionKind::Defined
             | FunctionKind::DefaultMethod(_)
             | FunctionKind::InstanceMethod(..)
             | FunctionKind::Input(_) => self.body(id).map(|body| body.params.len()),
         }
+    }
+
+    pub fn c_decl(&self, id: CDeclId) -> &CDecl {
+        &self.modules[id.module].items.c_decls[id.local]
+    }
+
+    /// モジュールの `link` の item。C の関数と dtor の記号は、宣言したモジュールのこの並びから解決する
+    /// (docs/spec/vm.md の「ライブラリと記号」)。
+    pub fn links(&self, module: ModuleId) -> &[CLink] {
+        &self.modules[module].items.links
     }
 
     /// extern の型を宣言した item。型を宣言したモジュールを読み込んでいなければ panic する。Prelude の型はいつもある。

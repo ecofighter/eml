@@ -325,3 +325,29 @@ fn f(a.0: obj, n.1: int, t.2: tobj) -> int {
 ";
     assert_eq!(entry_of(text, "f"), [(0, 1), (2, 1)]);
 }
+
+#[test]
+fn an_io_c_row_without_narrowing_is_no_unwind_point() {
+    // `pure` でない C の行は `Effectful` だが、`IO` を上げない。中断しない行は地点にならない
+    let text = "\
+cfn \"M.tick\" symbol \"tick\" link [] (i64) -> i64
+fn f(n.0: int, b.1: obj) -> obj {
+  let r.2: int = extern M.tick(n.0)
+  return b.1
+}
+";
+    assert_eq!(points_of(text, "f"), []);
+}
+
+#[test]
+fn a_narrowing_c_row_is_an_unwind_point() {
+    // `i32` の引数は範囲を外れると `Panic` を上げるので、行の `faults` が立ち、地点になる
+    let text = "\
+cfn \"M.tick\" symbol \"tick\" link [] (i32) -> i64
+fn f(n.0: int, b.1: obj) -> obj {
+  let r.2: int = extern M.tick(n.0)
+  return b.1
+}
+";
+    assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);
+}

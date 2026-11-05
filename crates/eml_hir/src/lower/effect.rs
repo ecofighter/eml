@@ -109,6 +109,7 @@ impl ItemLowering<'_> {
             items: self.resolver,
             vars: Vars::Operation,
             public_item: public.then_some(item.name.as_str()),
+            c_widths: None,
             diagnostics: &mut *self.diagnostics,
         }
         .lower(decl.ty(), range);

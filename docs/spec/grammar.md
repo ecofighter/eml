@@ -16,13 +16,18 @@ parser が受け付ける文法と、文法だけでは表しきれない補足�
 ```
 file        ::= (item (SEP item)*)?
 
-item        ::= 'pub'? 'abstract'? ('extern' extern_decl | decl)
+item        ::= 'pub'? 'abstract'? ('extern' extern_decl | 'extern' string c_decl | decl)
               | equation
               | import_item
               | instance_item
+              | link_decl
 decl        ::= signature | data_item | type_item | effect_item | fixity_item | class_item
 
 extern_decl ::= signature | 'data' UIDENT LIDENT* | 'effect' UIDENT ('where' block(op_decl))?
+c_decl      ::= c_attr* (c_signature | 'data' UIDENT ('drop' string)?)
+c_attr      ::= 'pure' | 'blocking' | 'symbol' string
+c_signature ::= var ':' context? type                    -- type の中の qcon の原子に 'as' LIDENT を付けられる
+link_decl   ::= 'link' 'on' LIDENT (string | 'framework' string)
 signature   ::= var ':' context? type
 var         ::= LIDENT | '(' OP ')'
 equation    ::= LIDENT apat* '=' body
@@ -116,6 +121,25 @@ command     ::= CMD_START (CMD_TEXT | CMD_QUOTE | ESCAPE | '\{' '..'? expr INTER
 
 - `import_item` は、ファイルの先頭で宣言より前に書く。宣言の後の `import_item` は E0011 にする。`import_name` の `'(' OP ')'` は `:` で始まらない演算子なので、`((:+))` も E0011 にする。CST はどちらも組む ([モジュールと名前解決](modules.md) の「import」)
 - `extern` は宣言の修飾子で、`pub` の後に書く。後ろに続けられるのは、等式のないシグネチャ、`=` と Kind の宣言のない `data` (型引数は型変数の名前だけ)、型引数なしの `effect` だけである。`effect` には、普通の `effect` と同じく `where` と操作の並びを書ける。ほかの形 (`extern type`、`extern infixl`、`extern data T = …`、`extern effect E = …`、型引数のある `effect`、`extern pub`) は E0011 にする。`extern` を書けるのは標準ライブラリのモジュールだけで、ユーザーのモジュールに書くと HIR で E1033 になる ([宣言](declarations.md) の「`extern`」)
+- `extern` の直後に文字列を書くと、その文字列が ABI で、C の関数か C の型の宣言 `c_decl` になる。`pub` と `abstract` の扱いは `extern` と同じである。ABI の後に書けるのは、署名と、型引数のない `data` だけである。C の型は不透明なハンドルで、型引数を持たないためである。ほかの項目 (`effect` を含む) は `extern` のトークンに E0011 を出す。`effect` は `extern effect` として読み (`where` は書かなくてよい)、ほかは `extern` のない項目として読む。`data` の名前の後の型引数は E0011 にし、名前として読んで回復する。instance の `extern` の行の後に文字列を書くと、その文字列に E0011 を出す。後ろのメソッドの名前は読み、行の残りは誤りを重ねずに読み飛ばす。HIR はそのメソッドを定義したものに数え、E1033 も E1036 も出さない
+- 属性の語 `pure`、`blocking`、`symbol` はキーワードでなく `LIDENT` で、`extern` (と ABI) の直後で、次のトークンが `:` でない間だけ属性として読む。そのため `extern "C" pure : Float -> Float` は `pure` という名前の署名で、`extern "C" pure pure : …` は属性 `pure` の付いた `pure` の署名である。次の形は E0018 にし、属性は読んで回復する
+  - 同じ属性を2回書いた (`` `pure` is written twice ``)
+  - `pure` と `blocking` を両方書いた
+  - `extern "C" data` の上の属性 (`` `pure` is only allowed on an `extern "C"` function ``)
+  - `symbol` と `drop` の後に文字列がない
+  - ABI、`symbol`、`drop`、`link` の文字列に補間を書いた (`a C name is a plain string`)。名前は C の側でそのまま使うためである
+  - ABI のない `extern` の属性と `drop` (`` attributes need `extern "C"` ``)
+- `extern "C"` の署名の型の中では、`qcon` だけの原子の型 (`Int`、`Float`) の後に `'as' LIDENT` を書いて、C の側の幅を表せる (`Int as int32_t`)。`as` は前の原子の型に、`->`、`,`、row より強く結びつく。そのため `-> <IO, Panic> Int as int` と `-> <IO> (Int as int, MutUnboxedArray Float)` は曖昧でない。parser は C の署名の中の原子の型ならどの位置の `as` も読む。C の署名の外の型は `as` を読まないので、`f : Int as int` の `as` は E0011 になる
+- 最上位で `link on <LIDENT>` の後に文字列か `framework` が続く行は、`link` の item である (`link on linux "libm.so.6"`、`link on macos framework "Accelerate"`)。`link`、`on`、`framework` も `LIDENT` のままで、この並びでだけ字面で見分ける。等式より先にこの形を見るので、最上位にはこの形の等式 (`link on linux "a" = …`) を書けない。`class` と `instance` のブロックの中では、この形も等式として読む。`link` の item は、ファイルのどこにいくつ書いてもよい。宣言には数えないので、後ろに `import_item` を書ける。後ろに読み残しがあるか、`framework` の後に文字列がなければ E0018 にする。`pub`、`abstract`、`extern` は付けられない (E0011)。OS の名前は parser では検査しない
+- `extern "C"` と `link` の CST は次の節点で組む。typed AST は `ast::Abi`、`ast::CAttr` (`is_pure`、`is_blocking`、`symbol`)、`ast::CWidth` (`name`)、`ast::LinkItem` (`os`、`framework`、`library`) で、`ast::Signature::abi` と `c_attrs`、`ast::DataItem::abi` と `c_drop`、`ast::ExternMethod::abi`、`ast::PathType::c_width`、`ast::SourceFile::link_items` から引く
+
+  | 節点 | 子 |
+  |---|---|
+  | `ABI` (`SIGNATURE`、`DATA_ITEM`、`EXTERN_METHOD` の子) | `STRING_LIT` |
+  | `C_ATTR` | 属性の語の `LIDENT`、`symbol` なら `STRING_LIT` |
+  | `C_DROP` (`DATA_ITEM` の子) | `drop`、`STRING_LIT` |
+  | `C_WIDTH` (`PATH_TYPE` の子) | `as`、`LIDENT` |
+  | `LINK_ITEM` | `LIDENT` の `link`、`on`、OS の名前、あれば `framework`、`STRING_LIT` |
 - `abstract` は `pub` の後、`extern` の前に書く修飾子で、`data` と `effect` にだけ付く ([宣言](declarations.md) の「`pub`」)。ほかの宣言に付けたとき、`pub` がないとき、`extern` の宣言に付けたときは、`abstract` のトークンに E0011 を1つ出す (``` `abstract` is only allowed on `pub data` and `pub effect` ```)。`abstract pub` の順は、`extern pub` と同じく E0011 にして読み直す。クラスと instance のメンバーに書いた `abstract` は、`pub` と同じく E0011 にして読み飛ばす
 - 文脈 `context` は、型として読める形 (`Eq a`、`(Eq a, Show b)`) の後に `=>` を書いたものである。parser は、`signature` と `op_decl` の `:` の後と、`class` と `instance` のキーワードの後で、括弧の入れ子の外の `=>` が型の終わりより前にあるかを先読みし、あれば文脈として読む。括弧の外の `->`、`=`、`where` とブロックの始まりは文脈の後ろにしか現れないので、そこで先読みをやめる (中置のコンストラクタの `alt` の先読みと同じ形)。CST は `CONTEXT` の節点の下に、制約ごとの `CONSTRAINT` を置く。制約の形 (クラスの名前と1つの型変数) は HIR で検査する (E1040)
 - 文脈の構文があるのは、`signature` (トップレベルの関数、extern の関数、クラスのメソッド)、`op_decl`、`class` と `instance` の頭である。extern のシグネチャと操作のシグネチャの文脈は、構文として読んだうえで HIR が E1040 にする ([宣言](declarations.md) の「宣言の検査」)。本体の型の明示 `(e : T)`、ラムダの引数の型、`data` のフィールドの型には文脈の構文がなく、そこに書いた `=>` は E0011 になる

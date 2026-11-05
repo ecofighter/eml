@@ -5,6 +5,7 @@
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
+use eml_extern::CFunction;
 use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, Structs, VarId, VarInfo};
 
 use crate::optimize::blocks::Renamer;
@@ -73,6 +74,7 @@ pub(super) fn inline_calls(
     function: &mut CoreFn,
     functions: &[CoreFn],
     structs: &Structs,
+    c_functions: &[CFunction],
     chosen: &dyn Fn(VarId, FnIdx) -> bool,
     limit: usize,
 ) -> bool {
@@ -84,6 +86,7 @@ pub(super) fn inline_calls(
                 BlockId(block as u32),
                 functions,
                 structs,
+                c_functions,
                 chosen,
                 &mut room,
             )
@@ -177,6 +180,7 @@ fn sites(
     block: BlockId,
     functions: &[CoreFn],
     structs: &Structs,
+    c_functions: &[CFunction],
     chosen: &dyn Fn(VarId, FnIdx) -> bool,
     room: &mut usize,
 ) -> Vec<Site> {
@@ -201,14 +205,14 @@ fn sites(
             let callee = &functions[target.0 as usize];
             let at = (block, index);
             let grown = size(callee);
-            if grown > *room || !fits(function, at, callee, args, structs) {
+            if grown > *room || !fits(function, at, callee, args, structs, c_functions) {
                 return None;
             }
             *room -= grown;
             Some(Site {
                 index,
                 callee: *target,
-                tail: stays_tail(function, at, callee, args, structs),
+                tail: stays_tail(function, at, callee, args, structs, c_functions),
             })
         })
         .collect()
@@ -229,6 +233,7 @@ fn fits(
     callee: &CoreFn,
     args: &[Atom],
     structs: &Structs,
+    c_functions: &[CFunction],
 ) -> bool {
     if callee.yields && !function.yields {
         return false;
@@ -252,7 +257,8 @@ fn fits(
         args,
         (function.repr(result), function.mark(result)),
         structs,
-    ) || stays_tail(function, at, callee, args, structs)
+        c_functions,
+    ) || stays_tail(function, at, callee, args, structs, c_functions)
 }
 
 /// 末尾の位置の呼び出しで、本体の `return` をそのまま呼ぶ側の `return` にしてよいか。
@@ -262,14 +268,16 @@ fn stays_tail(
     callee: &CoreFn,
     args: &[Atom],
     structs: &Structs,
+    c_functions: &[CFunction],
 ) -> bool {
-    tail_position_call(function.block(block)).is_some_and(|(at, _)| at == index)
+    tail_position_call(function.block(block), c_functions).is_some_and(|(at, _)| at == index)
         && returns_pass(
             function,
             callee,
             args,
             (function.ret, function.ret_mark),
             structs,
+            c_functions,
         )
 }
 
@@ -282,9 +290,10 @@ fn returns_pass(
     args: &[Atom],
     (repr, mark): (Repr, Mark),
     structs: &Structs,
+    c_functions: &[CFunction],
 ) -> bool {
     let params = callee.params();
-    let never = never_bound(callee);
+    let never = never_bound(callee, c_functions);
     callee.blocks.iter().all(|block| {
         let Term::Return(returned) = block.term else {
             return true;
@@ -310,7 +319,7 @@ fn returns_pass(
 }
 
 /// 戻らない呼び出し (`never` の操作の `perform` と、戻らない extern) が束縛する変数。
-fn never_bound(function: &CoreFn) -> Vec<VarId> {
+fn never_bound(function: &CoreFn, c_functions: &[CFunction]) -> Vec<VarId> {
     function
         .blocks
         .iter()
@@ -330,7 +339,7 @@ fn never_bound(function: &CoreFn) -> Vec<VarId> {
             Stmt::Let {
                 var,
                 rhs: Rhs::Extern { ext, .. },
-            } if ext.row().ret == eml_extern::OpRet::Never => Some(*var),
+            } if ext.row(c_functions).ret == eml_extern::OpRet::Never => Some(*var),
             _ => None,
         })
         .collect()

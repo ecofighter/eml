@@ -256,7 +256,7 @@ pub(super) fn resumes_fit(
                     Call::Resume {
                         arg, state: next, ..
                     },
-                )) = tail_position_call(block)
+                )) = tail_position_call(block, &program.c_functions)
                 else {
                     return true;
                 };
@@ -391,7 +391,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
             stmts: Vec::new(),
             term: Term::Return(Atom::Unit),
         };
-        let tail = tail_position_call(original).map(|(at, _)| at);
+        let tail = tail_position_call(original, &program.c_functions).map(|(at, _)| at);
         let mut ended = false;
         for (at, stmt) in original.stmts.iter().enumerate() {
             let mut stmt = stmt.clone();
@@ -423,6 +423,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
                         &clause_args,
                         current_state.map_or(Atom::Unit, Atom::Var),
                         here + 1,
+                        &program.c_functions,
                         |_, value, next| {
                             let mut args = vec![value];
                             if stateful {

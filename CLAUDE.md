@@ -34,11 +34,11 @@ cargo insta review                   # accept snapshots
 cargo clippy --all-targets -- -D warnings && cargo fmt
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core, run without tls; eml_test_support also hir; eml_io + eml_vm --all-targets without tls)
 cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::)'   # the tls-off behaviour (a workspace run has tls on through eml_cli's default)
-cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--stats] [--workers N] <file.em> [args...] (the VM; --debug-heap is checked mode; --stats is checked mode and prints the counters of `RunStats` on stderr after a run that did not fail; --workers sets the worker threads, default $EML_WORKERS then the CPU count; `eml <file.em> [args...]` is the same), repl [--debug-heap] [file.em] (the terminal REPL)
+cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--stats] [--workers N] [--link KEY=VALUE]... <file.em> [args...] (the VM; --debug-heap is checked mode; --stats is checked mode and prints the counters of `RunStats` on stderr after a run that did not fail; --workers sets the worker threads, default $EML_WORKERS then the CPU count; --link opens VALUE in place of the library a `link` item names KEY; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--link KEY=VALUE]... [file.em] (the terminal REPL)
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # type-check the Windows-only code; eml_tls (C crypto) is excluded (Linux: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, same flags)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (also eml_vm --test integration -- api:: signal:: io:: workers::; docs/implementation/testing.md の「AddressSanitizer」)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (also -p eml_vm --test integration -- workers:: signal:: preempt:: io:: chan::, -p eml_vm --lib counters:: and -p eml_io --lib -- driver::tests::; docs/implementation/testing.md の「ThreadSanitizer」)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (also -p eml_native and eml_vm --test integration -- api:: signal:: io:: workers:: ffi::; docs/implementation/testing.md の「AddressSanitizer」)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (also -p eml_vm --test integration -- workers:: signal:: preempt:: io:: chan:: ffi::, -p eml_vm --lib counters:: and -p eml_io --lib -- driver::tests::; docs/implementation/testing.md の「ThreadSanitizer」)
 nix build                            # build the eml binary (eml_cli); $out/share/doc/eml/ gets LICENSE.txt and THIRD-PARTY-LICENSES.md
 nix develop -c nix/third-party-licenses.sh   # regenerate THIRD-PARTY-LICENSES.md after a dependency change (--check compares, as CI's licenses job does; docs/implementation/architecture.md の「外部 crate」)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri, trusted tests only; run once more with -Zmiri-tree-borrows added
@@ -95,6 +95,8 @@ eml_cli          check / run / repl; the only pipeline driver (`Session`); stage
 eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `eml run` on a worker-0 thread; a `par` right child or a `compute` job goes to an idle worker (worker 0 included; workers 1..N-1 start at the first fork, the first `fork_job` or the first placing `start`), else runs on its parent's worker; `Async` tasks are placed round-robin over the workers from worker 1 at `start` and move only by rescue; on the real clock every worker makes its own I/O driver when it first needs one, on the virtual clock only worker 0 has one and hosts the I/O of tasks on every worker; `Machine` appends programs by name (`eml run` with N workers, the REPL with one)
 eml_io           IoDriver implementations: the real driver (an OS-free core in `driver/` over per-OS backends in `sys/`: epoll, kqueue, IOCP; sockets, pipes, child-exit waits and regular-file jobs) and the deterministic test driver (sockets and files, no pipes or waits); jobs run on the core's own pool (at most 32 threads, then queued); name lookups run on its resolver threads (at most 8 live, 64 abandoned)
 eml_tls          rustls client connection, sans-IO (aws-lc-rs provider, webpki-roots); depends on no eml crate; eml_vm and eml_io reach it through their feature tls, and eml_cli's tls adds it for its real-socket test
+eml_native       Cranelift bridges and C library/symbol resolution (Linker::link builds Linked); depends on no workspace crate but eml_extern and eml_cabi (plus Cranelift and libloading)
+eml_cabi         the C call boundary: Bridge, Dtor, CCall, Linked (eml_native builds them, eml_vm uses them)
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
 eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> Perceus -> reuse, verifier
@@ -102,7 +104,7 @@ eml_types        Kind / type / row inference, class constraints; linearity, mult
 eml_hir          module loading, CST -> HIR, name resolution
 eml_syntax       logos lexer, layout stage, event-based parser, rowan CST, typed AST wrappers
 eml_diagnostics  Diagnostic, FileId / SourceFiles, ariadne rendering
-eml_extern       dependency-free extern table (types, effects, functions, value `Repr`s)
+eml_extern       dependency-free extern row types, the built-in table and the description of user C functions
 ```
 
 These invariants hold across crates; keep them when you change anything:
@@ -138,6 +140,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | `Std.Net` and `Std.Signal` | docs/spec/stdlib.md の「`Std.Net`」, docs/spec/stdlib.md の「`Std.Signal`」, docs/spec/vm.md の「上限と割り込み」 |
 | `Std.Tls` | docs/spec/stdlib.md の「`Std.Tls`」, docs/spec/vm.md の「時計と driver」 (the test driver's `tls.localhost`) |
 | `Std.Http` | docs/spec/stdlib.md の「`Std.Http`」 |
+| User C functions (`extern "C"`, `link`, `--link`) | docs/spec/declarations.md の「`extern "C"`」, docs/spec/vm.md の「C の関数の呼び出し」 |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
 | The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |
@@ -156,7 +159,7 @@ The rules are in docs/implementation/testing.md; the facts below are the ones ev
 - `eml_test_support` (dev-only) wraps `eml_cli::Session` for integration tests. Use it only from `tests/`, never from `#[cfg(test)]` in `src/`: the crate under test would be linked twice. Stages are features (`hir` < `types` < `core` < `run`); each crate enables only up to its own stage, so its tests still build while downstream crates are broken mid-refactor.
 - Core IR and LIR tests are written as IR text read by `eml_core_ir::parse` / `eml_lir::parse`; hand-written LIR tests live in `crates/eml_lir/tests` (docs/implementation/testing.md の「LIR のテキストの形」).
 - The `bench/` programs have their `RunStats` pinned by inline snapshots in `crates/eml_vm/tests/bench.rs`, so a change in work counts is an expected-value change. When a stage that touched `eml_vm`, `eml_rt`, `eml_lir`, `eml_core_ir`, `std/` or `bench/` closes, replace the three tables in docs/implementation/benchmarks.md の「今の数値」 with fresh `bench/run.sh`, `bench/rt.sh` and `bench/scripts.sh` output measured on a clean tree; the stage-by-stage history is the file's git log.
-- CI (`.github/workflows/ci.yml`) runs the tests, clippy and the feature-combo clippy on macOS, Linux (x86_64 and aarch64) and Windows, `cargo fmt --check` on Linux, Verus, verusfmt and Miri on Linux through nix, and `eml_io` plus the VM's real-driver tests under AddressSanitizer on x86_64 Linux, aarch64 Linux and macOS, and the thread-crossing tests of `eml_rt` and `eml_vm` under ThreadSanitizer on x86_64 Linux; apart from that timing check it checks pass/fail only, and it never retries (docs/implementation/testing.md の「CI」).
+- CI (`.github/workflows/ci.yml`) runs the tests, clippy and the feature-combo clippy on macOS, Linux (x86_64 and aarch64) and Windows, `cargo fmt --check` on Linux, Verus, verusfmt and Miri on Linux through nix, and `eml_io`, `eml_native` plus the VM's real-driver and C call tests under AddressSanitizer on x86_64 Linux, aarch64 Linux and macOS, and the thread-crossing tests of `eml_rt` and `eml_vm` under ThreadSanitizer on x86_64 Linux; apart from that timing check it checks pass/fail only, and it never retries (docs/implementation/testing.md の「CI」).
 - A change to `eml_rt` has a gate of its own: see `crates/eml_rt/CLAUDE.md`.
 
 ## Syntax

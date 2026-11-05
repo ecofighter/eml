@@ -1,0 +1,8 @@
+# C の関数をつなげない入力は何も読み込まず、セッションは変わらない。次の入力は今までどおり動く
+> extern "C" pure symbol "eml_no_such_symbol" missing : Float -> Float
+.
+> missing 1.0
+> n : Int
+. n = 2
+.
+> n + 1

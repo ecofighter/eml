@@ -134,7 +134,7 @@ fn a_seeded_run_of_one_task_does_not_preempt() {
     let run = |sched| {
         let config = RunConfig::default().with_debug_heap(true).with_sched(sched);
         let (host, _) = eml_vm::capture_host(Default::default());
-        eml_vm::execute(&parse(COUNT), &config, host).unwrap()
+        eml_vm::execute(&parse(COUNT), &eml_vm::Linked::default(), &config, host).unwrap()
     };
     let sequential = run(Sched::Sequential);
     assert_eq!(sequential.preemptions, 0);
@@ -153,7 +153,8 @@ fn an_interrupted_control_stops_at_the_first_safepoint() {
             .with_debug_heap(debug_heap)
             .with_control(control);
         let (host, _) = eml_vm::capture_host(Default::default());
-        let error = eml_vm::execute(&parse(COUNT), &config, host).unwrap_err();
+        let error =
+            eml_vm::execute(&parse(COUNT), &eml_vm::Linked::default(), &config, host).unwrap_err();
         assert_eq!(error.to_string(), "interrupted in `main`");
         assert!(error.interrupted());
     }
@@ -183,7 +184,7 @@ fn main() -> unit {
         .with_debug_heap(true)
         .with_control(control);
     let (host, _) = eml_vm::capture_host(root.clone());
-    let result = eml_vm::execute(&program, &config, host);
+    let result = eml_vm::execute(&program, &eml_vm::Linked::default(), &config, host);
     std::fs::remove_dir_all(&root).unwrap();
     let error = result.unwrap_err();
     assert!(
@@ -252,7 +253,8 @@ fn an_exit_is_written_to_the_end_field() {
             .with_debug_heap(debug_heap)
             .with_control(Arc::clone(&control));
         let (host, _) = eml_vm::capture_host(Default::default());
-        let finished = eml_vm::execute(&parse(EXIT), &config, host).unwrap();
+        let finished =
+            eml_vm::execute(&parse(EXIT), &eml_vm::Linked::default(), &config, host).unwrap();
         assert_eq!(finished.exit, Some(3));
         assert_eq!(control.exit_code(), Some(3));
     }
@@ -270,8 +272,12 @@ fn second() -> unit {
     let (host, _) = eml_vm::capture_host(Default::default());
     let control = Arc::new(Control::new(Limits::default()));
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host);
-    let first = machine.load(&parse(EXIT)).unwrap();
-    let second = machine.load(&parse(quiet)).unwrap();
+    let first = machine
+        .load(&parse(EXIT), &eml_vm::Linked::default())
+        .unwrap();
+    let second = machine
+        .load(&parse(quiet), &eml_vm::Linked::default())
+        .unwrap();
     assert_eq!(machine.run(first.entry).unwrap().exit, Some(3));
     assert_eq!(machine.run(second.entry).unwrap().exit, None);
     assert_eq!(control.exit_code(), None);
@@ -314,8 +320,12 @@ fn second() -> unit {
     let (host, out) = eml_vm::capture_host(root.clone());
     let control = Arc::new(Control::new(Limits::default()));
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host);
-    let first = machine.load(&eml_test_support::lir(src)).unwrap();
-    let second = machine.load(&parse(quiet)).unwrap();
+    let first = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
+    let second = machine
+        .load(&parse(quiet), &eml_vm::Linked::default())
+        .unwrap();
     let finished = machine.run(first.entry);
     std::fs::remove_dir_all(&root).unwrap();
     assert_eq!(finished.unwrap().exit, Some(3));
@@ -347,7 +357,7 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
     });
     let (host, _) = eml_vm::capture_host(Default::default());
     let start = Instant::now();
-    let result = eml_vm::execute(&program, &config, host);
+    let result = eml_vm::execute(&program, &eml_vm::Linked::default(), &config, host);
     let elapsed = start.elapsed();
     interrupter.join().unwrap();
     let error = result.unwrap_err();
@@ -434,7 +444,9 @@ main () = Async.run (fn () -> Async.sleep_ms 50)
     let (host, _) = eml_vm::capture_host(Default::default());
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
-    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let loaded = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
     machine
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -468,7 +480,7 @@ main () = Async.run (fn () -> Async.sleep_ms 100000)
                 .with_clock(Clock::Real)
                 .with_sched(Sched::Sequential)
                 .with_doorbell(doorbell);
-            let loaded = machine.load(&program).unwrap();
+            let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
             machine.run(loaded.entry)
         })
     };
@@ -529,7 +541,7 @@ fn run_real_on(
     if let Some(driver) = driver {
         machine = machine.with_driver(driver);
     }
-    let loaded = machine.load(&program).unwrap();
+    let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     let (done, finished) = mpsc::channel::<()>();
     let seen = out.clone();
     let start = Instant::now();
@@ -954,6 +966,7 @@ fn run_on_files(src: &str, root: &std::path::Path, workers: usize) -> String {
         .with_control(control);
     eml_vm::execute(
         &eml_test_support::lir(src),
+        &eml_vm::Linked::default(),
         &config,
         eml_rt::HostRef::new(Arc::new(host)),
     )

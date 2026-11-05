@@ -55,6 +55,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | ファイルと子の pipe | `Std.Stream` の `Reader` と `Writer` は `Lin` の `Foreign` で、通常のファイルと子の pipe の端に共通である。開くのは通常のファイルだけで、ファイルの読み書きはプールのスレッドが行い、走り出した仕事は取り消せない。`Std.Exec` は子を driver の上で起動して待ち、標準入力、標準出力、標準エラーの pipe を `Stream` の端として取り出す。`Cmd` は `.|` でパイプラインを組み、標準入出力をファイルや前の段へ向けられる。仮想の時計の run では `Exec` の起動が失敗する | [標準ライブラリ](spec/stdlib.md) の「`Std.Stream`」「`Std.Exec`」「`Proc`」、[VM](spec/vm.md) の「時計と driver」 |
 | TLS | `Std.Tls` はクライアントだけを持つ。TLS の状態 `Tls.Conn` は I/O を持たない `Lin` の `Foreign` で、ソケットの読み書き、待ち、取り消し、期限は `Std.Net` のものを使い、`std/Tls.em` が両者の間でバイトを汲む。close_notify のない EOF は IO の失敗にする。信頼する根は webpki-roots の根と、渡した PEM の CA である | [標準ライブラリ](spec/stdlib.md) の「`Std.Tls`」 |
 | HTTP | `Std.Http` は `Net` と `Tls` の上に eml で書いた HTTP/1.1 のクライアントで、extern を持たない。要求ごとに `Connection: close` で接続を開いて閉じる。本文は `Transfer-Encoding`、`Content-Length`、EOF の順に区切り、1つの `Bytes` に読む。リダイレクトは回数の上限まで追い、https から http へは追わない | [標準ライブラリ](spec/stdlib.md) の「`Std.Http`」 |
+| C の関数 | 利用者のモジュールに `extern "C"` で C の関数と不透明なハンドルの型を宣言する。型の対応は決まった表だけで、C の整数の幅は `Int as int` と書く。配列、`String`、`Bytes` は本体のポインタだけを渡し、`Lin` の引数は借りて結果の組で返す。ライブラリは `link on <os>` と `--link` で指定する。VM は、`eml_native` が Cranelift で作る橋渡しの関数を通して呼ぶ | [宣言](spec/declarations.md) の「`extern "C"`」、[VM](spec/vm.md) の「C の関数の呼び出し」 |
 
 ### 構文
 
@@ -83,7 +84,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式)。空白で引数を分け、`'…'` で空白をまとめ、穴 `\{e}` は `String` だけを受ける。値は Prelude の `Cmd` で、`Std.Proc` が起動する | [字句](spec/lexical.md)、[式](spec/expressions.md) |
 | fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式](spec/expressions.md) |
 | モジュール | 1ファイル = 1モジュール。`pub` で公開する。`pub abstract` の型とエフェクトは名前だけを公開し、コンストラクタと操作をモジュールの中に隠す。import は既定で修飾付き。標準ライブラリのモジュール (`Fs` など) も、Prelude のほかは import して修飾付きで使う | [モジュールと名前解決](spec/modules.md) |
-| 組み込みの宣言 | 修飾子 `extern` で組み込みの関数、型、エフェクトを宣言する (`pub extern println : String -> <IO> Unit`)。標準ライブラリはバイナリに埋め込んだ `std/` のツリーから読み、Prelude は `std/Prelude.em` である。ファイルを読む操作は標準ライブラリのモジュール `FileIn` (`FileIn.open` など) に、パスで済む操作は `Fs` (`Fs.read_text` など) にある | [宣言](spec/declarations.md)、[モジュールと名前解決](spec/modules.md) |
+| 組み込みの宣言 | 修飾子 `extern` で組み込みの関数、型、エフェクトを宣言する (`pub extern println : String -> <IO> Unit`)。ABI の文字列を付けた `extern "C"` は C の関数の宣言で、利用者のモジュールにも書ける。標準ライブラリはバイナリに埋め込んだ `std/` のツリーから読み、Prelude は `std/Prelude.em` である。ファイルを読む操作は標準ライブラリのモジュール `FileIn` (`FileIn.open` など) に、パスで済む操作は `Fs` (`Fs.read_text` など) にある | [宣言](spec/declarations.md)、[モジュールと名前解決](spec/modules.md) |
 | 並行処理 | 新しい構文は追加しない。エフェクトにより直接の形で書ける | [式](spec/expressions.md) |
 | コメント | `--` と、入れ子にできる `{- -}` | [字句](spec/lexical.md) |
 

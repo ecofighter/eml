@@ -11,15 +11,20 @@ pub mod pretty;
 mod repl;
 
 #[cfg(feature = "core")]
+use std::collections::BTreeSet;
+
+#[cfg(feature = "core")]
 use eml_diagnostics::has_errors;
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles, sort_diagnostics};
 
 pub use eml_hir::{MemorySource, ModulePath, ModuleSource, ReadError};
+#[cfg(feature = "run")]
+pub use eml_native::{LinkError, Linker};
 pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{
-    Capture, CaptureHost, Clock, Control, Doorbell, Finished, HostRef, Limits, RunConfig, RunStats,
-    RuntimeError, Sched, Signal, SourceLocation, Stop, VirtualSignal, VmFault, Written,
+    Capture, CaptureHost, Clock, Control, Doorbell, Finished, HostRef, Limits, Linked, RunConfig,
+    RunStats, RuntimeError, Sched, Signal, SourceLocation, Stop, VirtualSignal, VmFault, Written,
     capture_host, execute, script_host, stdio_host,
 };
 pub use fs_provider::FsProvider;
@@ -52,6 +57,9 @@ pub struct Compiled<P> {
     pub diagnostics: Vec<Diagnostic>,
     /// エラーがあれば `None`。
     pub program: Option<P>,
+    /// 読み込んだすべてのモジュールの `link` の item に書いた文字列。`eml run` は、どれにも合わない `--link` の KEY を
+    /// 断る (docs/spec/vm.md の「`--link`」)。
+    pub link_keys: BTreeSet<String>,
 }
 
 /// 1回の検査や実行で読むソースの集まり。読み込みの段が Prelude、エントリ、import でたどった依存先を登録する
@@ -200,6 +208,12 @@ impl Session {
             typed,
             mut diagnostics,
         } = self.check();
+        let link_keys = program
+            .modules
+            .iter()
+            .flat_map(|(_, module)| &module.items.links)
+            .map(|link| link.library.written().to_string())
+            .collect();
         // `main` がないことは実行するときだけ誤りにする。`main` を持たないファイルも検査できるようにするため (docs/spec/types.md)
         let main = program.main();
         if main.is_none() {
@@ -219,6 +233,7 @@ impl Session {
         Compiled {
             diagnostics,
             program,
+            link_keys,
         }
     }
 }

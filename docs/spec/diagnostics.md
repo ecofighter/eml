@@ -53,7 +53,7 @@ struct Fix {
 | E0001 | `UNEXPECTED_CHARACTER` | eml のソースとして認識できない文字 |
 | E0002 | `UNTERMINATED_STRING` | 閉じていない文字列リテラル (複数行の文字列、raw 文字列、コマンドリテラルを含む) と、閉じていない補間の穴 ([字句](lexical.md) の「改行での回復」) |
 | E0003 | `EXPECTED_ITEM` | トップレベルで項目の始まりでないトークン |
-| E0004 | `NOT_YET_SUPPORTED` | 実装していない構文 (型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`) |
+| E0004 | `NOT_YET_SUPPORTED` | 実装していない構文 (型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`、`blocking` の C の関数) |
 | E0005 | `UNTERMINATED_BLOCK_COMMENT` | 閉じていないブロックコメント |
 | E0006 | `TAB_INDENTATION` | インデントにタブを使った |
 | E0007 | `INVALID_NUMBER` | 不正な数値リテラル。`Int` や `Byte` の範囲を超える整数も含む ([字句](lexical.md) の「数値と文字」) |
@@ -67,6 +67,7 @@ struct Fix {
 | E0015 | `BLOCK_CLOSED_BY_COMMA` | 行の途中の `,` がブロックを閉じた後、次の行がそのブロックの列から始まる ([レイアウト規則](layout.md) の規則 4) |
 | E0016 | `INVALID_CHAR_LITERAL` | 文字のリテラルの形の誤り (本文が空、またはスカラー値が2つ以上。[字句](lexical.md) の「数値と文字」) |
 | E0017 | `UNTERMINATED_QUOTE` | コマンドリテラルの閉じていない `'` ([字句](lexical.md) の「コマンドリテラル」) |
+| E0018 | `EXTERN_C_ATTRIBUTES` | `extern "C"` の属性と `link` の item の形の誤り (同じ属性を2回、`pure` と `blocking` の両方、`extern "C" data` の上の属性、`symbol` と `drop` の後の文字列がない、補間のある C の名前、形の崩れた `link`、ABI のない属性。[文法](grammar.md) の「文法上の補足」) |
 | E1001 | `UNDEFINED_NAME` | 未定義の値の名前 |
 | E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前、本体の注釈に書いたシグネチャにない型変数と row 変数 |
 | E1003 | `DUPLICATE_DEFINITION` | 同じ名前空間でのトップレベルの定義の重複 |
@@ -125,6 +126,8 @@ struct Fix {
 | E1056 | `COMMAND_WITHOUT_PROGRAM` | コマンドリテラルに引数が1つもなく、プログラムがない ([式](expressions.md) の「コマンドリテラル」) |
 | E1057 | `ROW_BOUND_NOT_DECLARED` | row 変数の上限 `never` を、シグネチャが付けていない変数の本体の型の明示か `data` のフィールドに書いた、または操作のシグネチャに書いた ([型と Kind](types.md) の「row 変数の多重度の上限」) |
 | E1058 | `ABSTRACT_MEMBER` | 抽象型 (`pub abstract data`) のコンストラクタか、抽象エフェクト (`pub abstract effect`) の操作を、宣言したモジュールの外で作る式、パターン、perform、handler の節、import の並び (`T(..)`、`E(..)`、操作の名前) に書いた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
+| E1059 | `INVALID_EXTERN_C` | `extern "C"` の宣言の誤り。`"C"` でない ABI の文字列、`as` の後の知らない C の整数の型の名前、空の `symbol` か `drop` の文字列、C の関数のシグネチャに続く等式 ([宣言](declarations.md) の「`extern "C"`」) |
+| E1060 | `INVALID_LINK` | `link` の item の誤り。知らない OS の名前、`macos` でない OS の `framework`、空のライブラリの名前 ([宣言](declarations.md) の「`extern "C"`」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | エントリのモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
@@ -144,6 +147,8 @@ struct Fix {
 | E2019 | `VAR_ESCAPES` | `var` の変数を使う関数が範囲の外へ出うる。ノードの値の型、ノードの場所の row、範囲の外の束縛の型のどれかに、変数のエフェクトが現れる ([型と Kind](types.md) の「範囲の外へ出る閉包」) |
 | E2020 | `ROW_BOUND_EXCEEDED` | 呼び出しが多重度の上限を持つ row 変数に、上限を超える row を入れた。上限はシグネチャに書いたものと、推論で付いたものの両方を含む ([型と Kind](types.md) の「row 変数の多重度の上限」)。同じ SCC の中では、上限を持つ宣言を呼ぶ別の呼び出しに出て、上限を超える row を入れた呼び出しには出ないことがある ([型と Kind](types.md) の「推論」) |
 | E2021 | `PRIVATE_FIELD` | 抽象型のフィールドを、宣言したモジュールの外で射影か更新した ([モジュールと名前解決](modules.md) の「公開の範囲」) |
+| E2022 | `FFI_UNSUPPORTED_TYPE` | `extern "C"` の関数のシグネチャの型が、C の型に対応しない。表にない型、引数の `Int` と結果 `R` の `Int` のほかに書いた `as`、借りた引数を返さない結果の組 ([宣言](declarations.md) の「型の対応」) |
+| E2023 | `FFI_EFFECTS` | `extern "C"` の関数の行が、`pure`、狭める引数、ハンドルの結果、`blocking` から決まる行と違う。内側の矢印の行を含む ([宣言](declarations.md) の「型の対応」) |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、再帰するローカル関数の組の関数の捕獲、操作の型が節に求める制約) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った。配列の変数を、ある経路で2回以上取り出した場合を含む |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった。配列の変数を、ある経路で取り出さなかった場合を含む |
@@ -164,10 +169,10 @@ E2006 が `==` の位置に出る場合も、演算子でなくクラスの言�
 
 ## 未対応の構文と E0004
 
-E0004 (`NOT_YET_SUPPORTED`) は、実装していない構文に使う。型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving` である。どの段階が出しても「実装していない」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
+E0004 (`NOT_YET_SUPPORTED`) は、実装していない構文に使う。型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving`、`blocking` の C の関数である。どの段階が出しても「実装していない」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 
 - パーサは、これらの構文を CST まで組み、E0004 を出さない。意味を与える最初の段階が、未対応を判定する
-- E0004 を出すのは HIR だけである。`type` の宣言、`: Unr`、row の型引数を持つ型の instance と `deriving` に出す
+- E0004 を出すのは HIR と型検査である。HIR は `type` の宣言、`: Unr`、row の型引数を持つ型の instance と `deriving` に出す。型検査は、行が正しい `blocking` の C の関数の、`blocking` の語に出す ([宣言](declarations.md) の「型の対応」)
 - 型の位置の `[` と `{`、コンストラクタのない `{ … }` は、未対応の構文でなく、構文の誤り (E0011) である。リストの型は `List a` と書き、レコードは `data` で宣言する ([文法](grammar.md) の「文法上の補足」)
 
 ## 他の言語の書き方へのヒント

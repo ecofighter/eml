@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::builder::FnBuilder;
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_extern::Purity;
+use eml_extern::CFunction;
 use eml_lir::{
     Atom, BlockId, FnIdx, Mark, MaskItem, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo,
     operation, push_var,
@@ -257,7 +257,7 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
     let k = params[params.len() - 2];
     let mut returns = 0;
     for block in &clause.blocks {
-        let tail = tail_position_call(block);
+        let tail = tail_position_call(block, &program.c_functions);
         match block.term {
             Term::Return(_) => {
                 let resumed = matches!(
@@ -323,7 +323,7 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
 /// evidence の欄から取り出す。末尾の `resume k(v, s)` は、状態を欄に戻して v を返す形にする。本体が何かを呼ぶなら
 /// under の形にし、エントリの先頭で `evv` を evidence の外側に替え、`return` の前に戻す。節の本体は handler の外側で
 /// 動くので、本体の中の中断と `perform` が handle の本体の中の handler に届かないようにするためである。何も呼ばず、
-/// `Pure` の extern だけを使う節では `evv` を読む命令がないので、替えない (docs/spec/core-ir.md の
+/// `faults` でない extern だけを使う節では `evv` を読む命令がないので、替えない (docs/spec/core-ir.md の
 /// 「`perform` と節の3つの形」)。
 fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     let operation = operation(&program.effects, effect, op);
@@ -334,10 +334,12 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
         .blocks
         .iter()
         .enumerate()
-        .filter_map(|(index, block)| tail_position_call(block).map(|(at, _)| (index, at)))
+        .filter_map(|(index, block)| {
+            tail_position_call(block, &program.c_functions).map(|(at, _)| (index, at))
+        })
         .collect();
     let function = &mut program.functions[clause.0 as usize];
-    let under = calls_anything(function, &resumes);
+    let under = calls_anything(function, &resumes, &program.c_functions);
     let params = function.params().to_vec();
     let captures = params.len() - operation_params - 2;
     let state = params[params.len() - 1];
@@ -470,10 +472,10 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     function.split = None;
 }
 
-/// 節の本体が、末尾の `resume` のほかに呼び出しか、`Pure` でない extern を持つか。`resumes` は末尾の `resume` の
-/// 位置である。IO の失敗と `Panic` は handle の外の `try_io` と `try_panic` が捕まえるので、そうした extern を持つ節も
-/// under の形にする (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
-fn calls_anything(clause: &CoreFn, resumes: &[(usize, usize)]) -> bool {
+/// 節の本体が、末尾の `resume` のほかに呼び出しか、中断を始めうる (`faults` の) extern を持つか。`resumes` は末尾の
+/// `resume` の位置である。IO の失敗と `Panic` は handle の外の `try_io` と `try_panic` が捕まえるので、そうした extern
+/// を持つ節も under の形にする (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
+fn calls_anything(clause: &CoreFn, resumes: &[(usize, usize)], c_functions: &[CFunction]) -> bool {
     clause.blocks.iter().enumerate().any(|(index, block)| {
         block.stmts.iter().enumerate().any(|(at, stmt)| match stmt {
             Stmt::Let {
@@ -488,7 +490,7 @@ fn calls_anything(clause: &CoreFn, resumes: &[(usize, usize)]) -> bool {
                         args: _,
                         at: _,
                     },
-            } => ext.row().purity != Purity::Pure,
+            } => ext.row(c_functions).faults,
             _ => false,
         })
     })

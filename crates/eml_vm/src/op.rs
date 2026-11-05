@@ -394,6 +394,12 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
+    /// 利用者の C の関数の呼び出し。`operands[at..]` は [`CodeBase` の C の関数の番号, 引数の数, 引数のスロット…]
+    /// (docs/spec/vm.md の「C の関数の命令」)。
+    Ffi {
+        dst: Slot,
+        at: u32,
+    },
     EvvGet {
         dst: Slot,
     },

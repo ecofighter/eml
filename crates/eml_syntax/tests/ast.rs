@@ -675,3 +675,113 @@ fn and_bindings_of_let_statements_and_expressions() {
     assert_eq!(expr.and_bindings().count(), 1);
     assert!(expr.body().is_some());
 }
+
+#[test]
+fn c_attributes_and_widths_are_read() {
+    let file = source(&lines(&[
+        "link on linux \"libm.so.6\"",
+        "link on macos framework \"Accelerate\"",
+        "extern \"C\" pure symbol \"cos\" cosine : Float -> Int as int32_t",
+        "extern \"C\" blocking sleep : Int -> <IO> Unit",
+        "extern \"C\" data File drop \"fclose\"",
+        "f : Int -> Int",
+    ]));
+    let string = |lit: eml_syntax::ast::StringLit| format!("{:?}", lit.parts().unwrap());
+    let links: Vec<String> = file
+        .link_items()
+        .map(|link| {
+            format!(
+                "{} {:?} {}",
+                link.os().unwrap().text(),
+                link.framework().map(|token| token.text().to_string()),
+                string(link.library().unwrap()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        links,
+        [
+            "linux None [Text(\"libm.so.6\")]",
+            "macos Some(\"framework\") [Text(\"Accelerate\")]",
+        ]
+    );
+
+    let mut signatures = file.items().filter_map(|item| match item {
+        Item::Signature(signature) => Some(signature),
+        _ => None,
+    });
+    let cosine = signatures.next().unwrap();
+    assert_eq!(
+        string(cosine.abi().unwrap().string().unwrap()),
+        "[Text(\"C\")]"
+    );
+    let attrs: Vec<(bool, bool, Option<String>)> = cosine
+        .c_attrs()
+        .map(|attr| {
+            (
+                attr.is_pure(),
+                attr.is_blocking(),
+                attr.symbol().map(string),
+            )
+        })
+        .collect();
+    assert_eq!(
+        attrs,
+        [
+            (true, false, None),
+            (false, false, Some("[Text(\"cos\")]".to_string()))
+        ]
+    );
+    let widths: Vec<(String, String)> = cosine
+        .syntax()
+        .descendants()
+        .filter_map(eml_syntax::ast::PathType::cast)
+        .map(|ty| {
+            let width = ty.c_width().and_then(|width| width.name());
+            (
+                ty.path().unwrap().syntax().text().to_string(),
+                width.map_or(String::new(), |token| token.text().to_string()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        widths,
+        [
+            ("Float".to_string(), String::new()),
+            ("Int".to_string(), "int32_t".to_string())
+        ]
+    );
+
+    let sleep = signatures.next().unwrap();
+    assert!(sleep.c_attrs().all(|attr| attr.is_blocking()));
+    let plain = signatures.next().unwrap();
+    assert!(plain.abi().is_none() && plain.c_attrs().next().is_none());
+
+    let data = file
+        .items()
+        .find_map(|item| match item {
+            Item::DataItem(data) => Some(data),
+            _ => None,
+        })
+        .unwrap();
+    assert!(data.abi().is_some());
+    assert_eq!(string(data.c_drop().unwrap()), "[Text(\"fclose\")]");
+
+    // REPL の item の入力の `link` も、ファイルと同じく `Parse::link_items` で引ける
+    let (files, input) = eml_test_support::source("link on linux \"libm.so.6\"\nf : Int");
+    let (parse, diagnostics) = eml_syntax::parse_input(input, files.text(input));
+    assert!(diagnostics.is_empty());
+    let os: Vec<String> = parse
+        .link_items()
+        .unwrap()
+        .map(|link| link.os().unwrap().text().to_string())
+        .collect();
+    assert_eq!(os, ["linux"]);
+    let eml_syntax::ast::ReplInput::ReplItems(items) = parse.repl_input() else {
+        panic!("expected item input");
+    };
+    assert_eq!(items.link_items().count(), 1);
+    assert_eq!(items.items().count(), 1);
+    let parsed = eml_test_support::parse_clean("link on macos framework \"Accelerate\"");
+    assert_eq!(parsed.parse.link_items().unwrap().count(), 1);
+}

@@ -38,12 +38,18 @@ impl ItemLowering<'_> {
             let data = TypeDefKind::Data {
                 constructors: Vec::new(),
             };
-            let kind = match (item.extern_keyword, item.has_constructors) {
-                (Some(keyword), _) => {
+            let kind = match (item.extern_keyword, &item.abi, item.has_constructors) {
+                (Some(_), Some(abi), _) => {
+                    self.check_abi(abi);
+                    TypeDefKind::CHandle {
+                        dtor: self.c_name(item.c_drop.as_ref()),
+                    }
+                }
+                (Some(keyword), None, _) => {
                     TypeDefKind::Extern(self.extern_row(keyword, &item.name, ExternType::from_name))
                 }
-                (None, true) => data,
-                (None, false) => {
+                (None, _, true) => data,
+                (None, _, false) => {
                     self.diagnostics.push(Diagnostic::error(
                         codes::MISSING_CONSTRUCTORS,
                         format!("`{}` has no constructors", item.name),
@@ -142,6 +148,7 @@ impl ItemLowering<'_> {
                     items: self.resolver,
                     vars: Vars::Data,
                     public_item: exposed.then_some(constructor.name.as_str()),
+                    c_widths: None,
                     diagnostics: &mut *self.diagnostics,
                 };
                 let alt = constructor.ptr.to_node(self.root);

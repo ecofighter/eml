@@ -1,0 +1,31 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/ffi/fixtures.repl
+---
+> extern "C" data Handle drop "eml_fixture_handle_free"
+> extern "C" symbol "eml_fixture_handle_new" handle_new : Int -> Int -> <IO, Panic> Handle
+.
+> extern "C" symbol "eml_fixture_handle_get" handle_get : Handle -> <IO> (Int, Handle)
+.
+> extern "C" symbol "eml_fixture_frees" frees : Int -> <IO> Int
+.
+> extern "C" pure symbol "eml_fixture_add_i32" add : Int as int -> Int as int -> <Panic> Int as int
+.
+> add 20 22
+42
+> read_handle : Int -> <IO, Panic> Int
+. read_handle tag =
+.   let h = handle_new tag 5
+.   let (v, h) = handle_get h
+.   drop h
+.   v
+.
+> read_handle 3
+5
+> frees 3
+1
+> frees 3
+0
+--- close ---
+no leaks

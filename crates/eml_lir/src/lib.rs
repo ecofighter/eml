@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use eml_extern::{CFunction, CHandleType, ExternRef, FunctionRow};
 use eml_extern::{EffectMultiplicity, Extern, ExternEffect};
 pub use eml_extern::{FloatBits, Mark, OpRet, Repr, StructId};
 use rustc_hash::FxHashMap;
@@ -52,11 +53,19 @@ pub struct Program {
     pub effects: Vec<EffectInfo>,
     /// 表示用のパスの表。`Loc.file` が添字で引く。
     pub files: Vec<String>,
+    /// 利用者の C の関数の表。`ExternRef` が引く。LIR のパスは変えずに写す。
+    pub c_functions: Vec<CFunction>,
+    /// 利用者の C のハンドルの型の表。
+    pub c_handles: Vec<CHandleType>,
 }
 
 impl Program {
     pub fn function(&self, idx: FnIdx) -> &LirFn {
         &self.functions[idx.0 as usize]
+    }
+
+    pub fn row(&self, ext: ExternRef) -> FunctionRow<'_> {
+        ext.row(&self.c_functions)
     }
 
     /// 表にない番号なら `None` である。誤りを含む IR を表示でき、verifier がその番号を誤りとして報告できるようにする。
@@ -71,19 +80,13 @@ impl Program {
             .iter()
             .flat_map(|function| &function.blocks)
             .flat_map(|block| &block.stmts)
-            .any(|stmt| {
-                matches!(
-                    stmt,
-                    Stmt::Let {
-                        rhs: Rhs::Call(Call::Par { .. })
-                            | Rhs::Extern {
-                                ext: Extern::AsyncForkJob,
-                                ..
-                            }
-                            | Rhs::Prim(Prim::RootGet(_), _),
-                        ..
-                    }
-                )
+            .any(|stmt| match stmt {
+                Stmt::Let { var: _, rhs } => match rhs {
+                    Rhs::Call(Call::Par { .. }) | Rhs::Prim(Prim::RootGet(_), _) => true,
+                    Rhs::Extern { ext, .. } => ext.std() == Some(Extern::AsyncForkJob),
+                    _ => false,
+                },
+                _ => false,
             })
     }
 }
@@ -257,17 +260,17 @@ impl Stmt {
     }
 
     /// 値の使いのうち、基本操作と extern の借用の引数 (`Rhs::for_each_lent`)。
-    pub(crate) fn for_each_lent(&self, f: impl FnMut(Atom)) {
+    pub(crate) fn for_each_lent(&self, c: &[CFunction], f: impl FnMut(Atom)) {
         if let Stmt::Let { var: _, rhs } = self {
-            rhs.for_each_lent(f);
+            rhs.for_each_lent(c, f);
         }
     }
 
     /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` と `unbox` の値は読むだけなので数えない
     /// (docs/spec/lir.md)。
-    pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
+    pub fn for_each_consumed(&self, c: &[CFunction], f: impl FnMut(Atom)) {
         match self {
-            Stmt::Let { var: _, rhs } => rhs.for_each_consumed(f),
+            Stmt::Let { var: _, rhs } => rhs.for_each_consumed(c, f),
             Stmt::LetMany { vars: _, call } => call.for_each_atom(f),
             Stmt::Unpack { .. }
             | Stmt::UnboxStruct { .. }
@@ -385,7 +388,7 @@ pub enum Rhs {
     /// extern の関数をその場で実行する。eml のコードを呼び返さず、継続のフレームも積まない。`at` を持つ呼び出しが
     /// 起こした実行時エラーには、その位置を付ける (docs/spec/lir.md)。
     Extern {
-        ext: Extern,
+        ext: ExternRef,
         args: Vec<Atom>,
         at: Option<Loc>,
     },
@@ -438,8 +441,9 @@ impl Rhs {
     }
 
     /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値と、基本操作と extern の借用の引数は読むだけなので
-    /// 数えない (docs/spec/lir.md の「ブロックの列」「基本操作」「extern の借用」)。
-    pub fn for_each_consumed(&self, mut f: impl FnMut(Atom)) {
+    /// 数えない (docs/spec/lir.md の「ブロックの列」「基本操作」「extern の借用」)。`c` はプログラムの C の関数の表
+    /// (`Program::c_functions`) である。
+    pub fn for_each_consumed(&self, c: &[CFunction], mut f: impl FnMut(Atom)) {
         let mut unborrowed = |args: &[Atom], borrowed: &[bool]| {
             for (&atom, &borrowed) in args.iter().zip(borrowed) {
                 if !borrowed {
@@ -450,17 +454,17 @@ impl Rhs {
         match self {
             Rhs::Unbox(_) => {}
             Rhs::Prim(prim, args) => unborrowed(args, prim.row().borrowed),
-            Rhs::Extern { ext, args, at: _ } => unborrowed(args, ext.row().borrowed),
+            Rhs::Extern { ext, args, at: _ } => unborrowed(args, ext.row(c).borrowed),
             _ => self.for_each_atom(f),
         }
     }
 
     /// 値の使いのうち、基本操作と extern の借用の引数。読むだけなので `for_each_consumed` には入らない。同じ変数が
     /// 同じ命令の消費の位置にもあれば、その命令の前に参照が2つ要る (docs/spec/lir.md の「extern の借用」)。
-    pub(crate) fn for_each_lent(&self, mut f: impl FnMut(Atom)) {
+    pub(crate) fn for_each_lent(&self, c: &[CFunction], mut f: impl FnMut(Atom)) {
         let (args, borrowed) = match self {
             Rhs::Prim(prim, args) => (args, prim.row().borrowed),
-            Rhs::Extern { ext, args, at: _ } => (args, ext.row().borrowed),
+            Rhs::Extern { ext, args, at: _ } => (args, ext.row(c).borrowed),
             _ => return,
         };
         for (&atom, &borrowed) in args.iter().zip(borrowed) {

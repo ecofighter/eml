@@ -23,7 +23,8 @@
 - `drop` キーワード
 - エフェクトの宣言 (`never` / `once` / `multi`、型引数)、`handle` (deep)、`k` の呼び出しによる再開、`drop k`、パラメータ付き handler (`handle ... from ... with`)。操作の節は、`k` を受け取る `ctl` の節 (`| ctl op x k -> …`) と、本体の値ですぐに再開する `fn` の節 (`| fn op x -> …`) である ([式](../spec/expressions.md) の「handler」)
 - 位置つきの `mask`: 型検査が呼び出しごとに決め、エフェクトごとに内側の n 個の handler を残して続く m 個を飛ばす。`Yield Int` を受けて `Yield String` を出すような、型を変換する handler を書ける ([エフェクトと handler](../spec/effects.md) の「handler の意味」、[型と Kind](../spec/types.md) の「推論」)
-- `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`Char`、`Byte`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `FileIn` の `open`、`read_all`、`close` などが起こし、`FileIn.FileIn` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)。extern のエフェクトの多重度は表の行が決め、`IO` は `Once`、`Panic` は `Never` である ([エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」)
+- `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`Char`、`Byte`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `FileIn` の `open`、`read_all`、`close` などが起こし、`FileIn.FileIn` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、ABI のない `extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)。extern のエフェクトの多重度は表の行が決め、`IO` は `Once`、`Panic` は `Never` である ([エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」)
+- C の関数の呼び出し: ユーザーのモジュールに `extern "C"` で C の関数と不透明なハンドルの型 (`extern "C" data T drop "f"`) を宣言し、VM から呼ぶ。属性は `pure`、`symbol`、整数の幅は `Int as int` のように書き、配列、`String`、`Bytes`、ハンドルを借りて C に渡す。ライブラリは `link on <os>` の item と、`eml run` と `eml repl` の `--link KEY=VALUE` で指定する。橋渡しの関数は `eml_native` が Cranelift の JIT で作る ([宣言](../spec/declarations.md) の「`extern "C"`」、[VM](../spec/vm.md) の「C の関数の呼び出し」)
 - IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`fail_io : IOErrorKind -> String -> <IO> a` は、種類と文言を指定して IO の失敗を起こす。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」、「`fail_io`」、「`exit`」)
 - 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`UnboxedArray.em`、`MutUnboxedArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`、`Par.em`、`Async.em`、`Chan.em`、`Atomic.em`、`Net.em`、`Signal.em`、`Tls.em`、`Http.em`、`Stream.em`、`Exec.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import したものだけを読み込む。`import FileIn` か `import Std.FileIn` を書いたモジュールで、`FileIn.open` のように修飾付きで使う。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
 - std のエフェクトと `Iter`: エフェクトのモジュール `Yield` (`for_each`、`fold`、`collect`)、`Fail` (`to_result`、`to_option`)、`State` (`run`、`eval`、`exec`) と、`once` の継続で作る引いて使うジェネレータ `Iter` とその変換。`FileIn` から1行ずつ読む `FileIn.read_line` ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」と「`FileIn`」)。`tests/ui/run/scripts/` の `grep`、`logstat`、`csv2jsonl` は std のエフェクトを使い、`csv2jsonl` の CSV の読み取りは `let … and …` の組で書く
@@ -55,7 +56,6 @@
 - row の型引数を持つ型の instance と `deriving`。書くと E0004 を出す
 - Unicode の表が要る文字の操作 (ASCII でない大文字と小文字の変換、文字の分類)、置換付きの UTF-8 のデコード、`Lin` の要素の配列の API ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - コマンドの組み合わせ: `Proc` で標準エラーを別の文字列に取ること、環境変数の削除 ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
-- ユーザーが書く extern (FFI。[FFI と拡張の設計](../future/ffi.md))
 - 可変参照 `Ref`、再エクスポート (`pub import`)、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、関数をまたぐ reuse、LSP、フォーマッタ ([ロードマップ](../future/roadmap.md) の「その後の項目」)
 - 借用パラメータ、ネイティブ化 ([ロードマップ](../future/roadmap.md) の「段の列」)
 
@@ -182,6 +182,13 @@
 - `Std.Exec` は、仮想の時計 (UI テストの既定) では子を起動できず、本物の時計の run でだけ動く。pidfd のない Linux (5.3 より前のカーネル) では `wait` が `NotAvailable` で失敗する。パイプラインの途中の段の標準エラーは読めない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Exec`」)
 - 手放した `Child` の破棄処理が kill するのは直接の子だけである。`sh -c` が起動した孫は残りうる
 - `Cmd` のコンストラクタとフィールドは公開されている。`Std.Proc` が別のモジュールから作って更新するので、抽象型にしていない。`Cmd { … }` の作る式とパターンを書かない決まりで守る ([標準ライブラリ](../spec/stdlib.md) の「`Cmd`」)
+
+### C の関数の呼び出し
+
+- `blocking` の C の関数は呼べない。行が正しい宣言に E0004 を出す ([宣言](../spec/declarations.md) の「型の対応」)
+- コールバック、C の構造体、可変長の引数は渡せない。型の対応は表にある形だけである ([FFI と拡張の設計](../future/ffi.md) の「未決の論点と将来の拡張」)
+- C に貸せる配列は、要素が 64 bit の `UnboxedArray` と `MutUnboxedArray` (`Float` と `Int`) だけである。`float` や 32 bit の整数の buffer を求める API (LP64 の LAPACK など) は呼べない
+- 橋渡しのコードは `MAP_JIT` を使わずに確保するので、macOS の hardened runtime の下では C の関数を呼べない。処理系は hardened runtime を扱わない ([VM](../spec/vm.md) の「橋渡しの関数」)
 
 ### Windows
 

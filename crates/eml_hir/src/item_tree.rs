@@ -25,6 +25,8 @@ pub struct ItemTree {
     pub fixities: Vec<FixityItem>,
     pub classes: Vec<ClassItem>,
     pub instances: Vec<InstanceItem>,
+    /// `link` の item。ソースの順である。
+    pub links: Vec<LinkDecl>,
     /// REPL の入力が `let` の束縛か式か問い合わせなら、その入力。item の並びの入力とファイルは `None` である
     /// (docs/spec/modules.md の「REPL のセッション」)。
     pub input: Option<InputItem>,
@@ -68,6 +70,29 @@ pub struct SignatureItem {
     pub name_range: TextRange,
     /// `extern` はシグネチャにだけ書ける (docs/spec/declarations.md の「`extern`」)。
     pub extern_keyword: Option<TextRange>,
+    /// `extern "C"` の ABI の文字列と、その位置。
+    pub abi: Option<(String, TextRange)>,
+    pub c_attrs: CAttrs,
+}
+
+/// `extern "C"` のシグネチャの属性。重複や組み合わせの誤りはパーサが報告済みなので、書いたものを合わせて持つ。
+#[derive(Debug, Default)]
+pub struct CAttrs {
+    pub pure: bool,
+    /// `blocking` の語の位置。
+    pub blocking: Option<TextRange>,
+    /// `symbol` の文字列と、その位置。
+    pub symbol: Option<(String, TextRange)>,
+}
+
+/// `link on <os> "…"` の item。OS の名前はここではまだ検査しない。
+#[derive(Debug)]
+pub struct LinkDecl {
+    pub os: (String, TextRange),
+    /// `framework` の語の位置。
+    pub framework: Option<TextRange>,
+    /// ライブラリの道か framework の名前と、その文字列の位置。
+    pub library: (String, TextRange),
 }
 
 #[derive(Debug)]
@@ -79,6 +104,10 @@ pub struct DataItem {
     /// (docs/spec/modules.md の「公開の範囲」)。
     pub abstract_ctors: bool,
     pub extern_keyword: Option<TextRange>,
+    /// `extern "C" data` の ABI の文字列と、その位置。
+    pub abi: Option<(String, TextRange)>,
+    /// `drop "f"` の文字列と、その位置。
+    pub c_drop: Option<(String, TextRange)>,
     /// 型引数 (名前、位置、種類)。宣言の順である。名前は種類によらず重ねられないので、重複した名前 (E1003) は最初の
     /// 1つだけを残す (docs/spec/types.md の「row の型引数」)。
     pub params: Vec<(String, TextRange, ParamSort)>,
@@ -150,6 +179,8 @@ pub struct MemberItem {
     pub equations: Vec<(AstPtr<ast::Equation>, TextRange)>,
     /// `extern` の行のキーワードの位置。
     pub extern_range: Option<TextRange>,
+    /// `extern` の行に書けない `"C"` がある。パーサが E0011 にしたので、行を引かずに定義したものに数える。
+    pub c_abi: bool,
 }
 
 #[derive(Debug)]
@@ -291,6 +322,12 @@ impl Definitions {
                         extern_keyword: signature
                             .extern_keyword()
                             .map(|keyword| keyword.text_range()),
+                        abi: c_abi(
+                            signature.extern_keyword(),
+                            signature.abi(),
+                            signature.c_attrs().next().is_some(),
+                        ),
+                        c_attrs: c_attrs_of(signature),
                     },
                 ))
             }
@@ -378,6 +415,12 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
     let mut imports = Vec::new();
     let mut classes = Vec::new();
     let mut instances = Vec::new();
+    let links = parse
+        .link_items()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| link_of(&item))
+        .collect();
     for (index, item) in items.into_iter().enumerate() {
         let public = item.pub_keyword().is_some();
         let abstract_ = item.abstract_keyword().is_some();
@@ -419,6 +462,13 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     public,
                     abstract_ctors: abstract_,
                     extern_keyword: item.extern_keyword().map(|keyword| keyword.text_range()),
+                    abi: c_abi(
+                        item.extern_keyword(),
+                        item.abi(),
+                        item.extern_keyword()
+                            .is_some_and(|keyword| has_child(&keyword, SyntaxKind::C_DROP)),
+                    ),
+                    c_drop: c_string(item.c_drop()),
                     params: params(
                         file,
                         // 名前のない row の型引数はパーサが報告済み
@@ -459,7 +509,12 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     name_range: name.text_range(),
                     public,
                     abstract_ops: abstract_,
-                    extern_keyword: item.extern_keyword().map(|keyword| keyword.text_range()),
+                    // `extern "C" effect` はパーサが `extern` に E0011 を出し、`extern` のない `effect` として読んだ。
+                    // E1033 を重ねないよう、ここでも `extern` を読まない
+                    extern_keyword: item
+                        .extern_keyword()
+                        .filter(|keyword| !has_child(keyword, SyntaxKind::ABI))
+                        .map(|keyword| keyword.text_range()),
                     params: params(file, item.params().map(|name| (name, ())), &mut diagnostics)
                         .into_iter()
                         .map(|(name, range, ())| (name, range))
@@ -508,10 +563,73 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
             fixities,
             classes,
             instances,
+            links,
             input,
         },
         diagnostics,
     )
+}
+
+/// C の名前の文字列 (ABI、`symbol`、`drop`、`link`)。補間のある文字列と読めない文字列は、パーサか lexer が報告済み
+/// なので `None` にする。
+fn c_string(string: Option<ast::StringLit>) -> Option<(String, TextRange)> {
+    let string = string?;
+    let text = string
+        .parts()?
+        .into_iter()
+        .map(|part| match part {
+            ast::StringPart::Text(text) => Some(text),
+            ast::StringPart::Hole(_) => None,
+        })
+        .collect::<Option<String>>()?;
+    Some((text, string.range()))
+}
+
+/// `extern "C"` の ABI。読めない ABI の文字列と、ABI のない `extern` の上の属性か `drop` は、パーサか lexer が
+/// 報告済みである。E1059 と E1033 を重ねないよう、どちらも `"C"` と書いたものとして読む。
+fn c_abi(
+    keyword: Option<SyntaxToken>,
+    abi: Option<ast::Abi>,
+    c_written: bool,
+) -> Option<(String, TextRange)> {
+    match abi {
+        Some(abi) => Some(c_string(abi.string()).unwrap_or_else(|| ("C".to_string(), abi.range()))),
+        None if c_written => keyword.map(|keyword| ("C".to_string(), keyword.text_range())),
+        None => None,
+    }
+}
+
+fn c_attrs_of(signature: &ast::Signature) -> CAttrs {
+    let mut attrs = CAttrs::default();
+    for attr in signature.c_attrs() {
+        attrs.pure |= attr.is_pure();
+        if attr.is_blocking() && attrs.blocking.is_none() {
+            attrs.blocking = Some(attr.range());
+        }
+        if attrs.symbol.is_none() {
+            attrs.symbol = c_string(attr.symbol());
+        }
+    }
+    attrs
+}
+
+/// `extern` のキーワードを持つ item の節点が、`kind` の子を持つか。`effect` の item には ABI の accessor がなく、
+/// `DataItem::c_drop` は文字列のない `drop` でも `None` を返すので、節点の種類で見分ける。
+fn has_child(keyword: &SyntaxToken, kind: SyntaxKind) -> bool {
+    keyword
+        .parent()
+        .is_some_and(|item| item.children().any(|child| child.kind() == kind))
+}
+
+/// OS の名前かライブラリの文字列のない `link` の item は、パーサが報告済みなので集めない。
+fn link_of(item: &ast::LinkItem) -> Option<LinkDecl> {
+    let os = item.os()?;
+    let library = c_string(item.library())?;
+    Some(LinkDecl {
+        os: (os.text().to_string(), os.text_range()),
+        framework: item.framework().map(|word| word.text_range()),
+        library,
+    })
 }
 
 /// REPL の `let` の入力が束縛する名前。名前1つでないパターンはパーサが E0011 で報告済みなので、`None` にする
@@ -578,9 +696,10 @@ fn instance_of(
     for (index, member) in item.members().enumerate() {
         let (name, extern_keyword) = match &member {
             ast::InstanceMember::Equation(equation) => (value_name(equation.name()), None),
-            ast::InstanceMember::ExternMethod(line) => {
-                (value_name(line.name()), Some(line.keyword_range()))
-            }
+            ast::InstanceMember::ExternMethod(line) => (
+                value_name(line.name()),
+                Some((line.keyword_range(), line.abi().is_some())),
+            ),
             ast::InstanceMember::Signature(_) => continue,
         };
         let Some(name) = name else {
@@ -595,6 +714,7 @@ fn instance_of(
                     name_range: range,
                     equations: Vec::new(),
                     extern_range: None,
+                    c_abi: false,
                 });
                 states.push((None, None));
                 members.len() - 1
@@ -618,7 +738,10 @@ fn instance_of(
             continue;
         }
         match (member, extern_keyword) {
-            (_, Some(keyword)) => member_item.extern_range = Some(keyword),
+            (_, Some((keyword, c_abi))) => {
+                member_item.extern_range = Some(keyword);
+                member_item.c_abi = c_abi;
+            }
             (ast::InstanceMember::Equation(equation), None) => {
                 if let (Some(previous), Some((_, previous_range))) =
                     (*last_equation, member_item.equations.last())

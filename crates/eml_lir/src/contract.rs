@@ -7,6 +7,7 @@ use crate::{
     Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Repr, Rhs, Stmt, Structs, Term,
     VarId, operation,
 };
+use eml_extern::CFunction;
 
 pub fn contract(program: &mut Program) {
     let callee_rets: Vec<Vec<(Repr, Mark)>> = program
@@ -15,7 +16,7 @@ pub fn contract(program: &mut Program) {
         .map(|function| function.rets.clone())
         .collect();
     for function in &mut program.functions {
-        remove_dead_lets(function);
+        remove_dead_lets(function, &program.c_functions);
         let rets = function.rets.clone();
         for block in &mut function.blocks {
             tail_call(
@@ -29,7 +30,7 @@ pub fn contract(program: &mut Program) {
         // 1回のパスで不動点に達することを確かめる (docs/spec/lir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
         if cfg!(debug_assertions) {
-            let removed = remove_dead_lets(function);
+            let removed = remove_dead_lets(function, &program.c_functions);
             assert!(
                 !removed,
                 "one backward pass removes every dead binding in `{}`",
@@ -121,7 +122,7 @@ fn tail_call(
 /// 使われない純粋な `let` を消し、1つでも消したかを返す。定義は使う位置を支配し、辺は番号の大きい
 /// ブロックへ向かうので、ブロックを後ろから、文を後ろから見れば、`let` を見る時点でその変数の使用はすべて見終わって
 /// いる。関数全体の使用の数を消すたびに減らせば、1回のパスで、消した `let` だけが使っていた束縛も消える。
-fn remove_dead_lets(function: &mut LirFn) -> bool {
+fn remove_dead_lets(function: &mut LirFn, c_functions: &[CFunction]) -> bool {
     let mut uses = vec![0usize; function.vars.len()];
     let mut count = |atom: Atom| {
         if let Atom::Var(var) = atom {
@@ -138,10 +139,11 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
     let vars = &function.vars;
     for block in function.blocks.iter_mut().rev() {
         let mut keep = vec![true; block.stmts.len()];
-        let tail = tail_position_call(block).map(|(at, _)| (at, bound(&block.stmts[at])));
+        let tail =
+            tail_position_call(block, c_functions).map(|(at, _)| (at, bound(&block.stmts[at])));
         for (position, stmt) in block.stmts.iter_mut().enumerate().rev() {
             match stmt {
-                Stmt::Let { var, rhs } if uses[var.0 as usize] == 0 && pure(rhs) => {
+                Stmt::Let { var, rhs } if uses[var.0 as usize] == 0 && pure(rhs, c_functions) => {
                     keep[position] = false;
                     rhs.for_each_atom(|atom| {
                         if let Atom::Var(used) = atom {
@@ -201,7 +203,7 @@ fn bound(stmt: &Stmt) -> Vec<VarId> {
 /// いつも Perceus より前に走るので、Perceus の入力にこの `con` は残らない (docs/spec/lir.md の「縮約」)。`box` を消すと
 /// 確保が1つ減るだけで、`unbox` は値を読むだけなので、どちらも評価の順を変えない。token を受ける `con` は、消すと
 /// token を手放す命令がなくなるので消さない。
-pub(crate) fn pure(rhs: &Rhs) -> bool {
+pub(crate) fn pure(rhs: &Rhs, c_functions: &[CFunction]) -> bool {
     match rhs {
         Rhs::Con {
             ctor: _,
@@ -213,7 +215,7 @@ pub(crate) fn pure(rhs: &Rhs) -> bool {
             ext,
             args: _,
             at: _,
-        } => ext.row().removable(),
+        } => ext.row(c_functions).removable(),
         Rhs::Prim(prim, _) => prim.pure(),
         Rhs::Call(_) | Rhs::Drop(_) => false,
     }

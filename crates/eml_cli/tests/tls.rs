@@ -78,7 +78,7 @@ main () = Async.run (fn () ->
         .with_control(Arc::new(Control::new(default_limits())));
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../eml_tls/fixtures");
     let (host, out) = capture_host(root);
-    let result = execute(&program, &config, host);
+    let result = execute(&program, &eml_cli::Linked::default(), &config, host);
     assert!(result.is_ok(), "{:?}", result.err());
     assert_eq!(out.contents(), "Some pong\n0\n");
     assert_eq!(server.join().unwrap(), "ping\n");

@@ -37,6 +37,8 @@ impl<'p> Printer<'p> {
                 &program.effects,
                 &program.strings,
                 &program.files,
+                &program.c_functions,
+                &program.c_handles,
                 names,
                 positions,
             ),

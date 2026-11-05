@@ -1,6 +1,6 @@
 //! extern の宣言と、`eml_extern` の表と標準ライブラリの照らし合わせ。
 
-use eml_extern::{Extern, ExternEffect, ExternType, Purity};
+use eml_extern::{CInt, CLibrary, CLink, Extern, ExternEffect, ExternType, Os, Purity};
 use eml_hir::{
     EffectKind, FunctionKind, MethodImpl, Program, RowRef, Signature, TypeDefKind, TypeRefKind,
 };
@@ -466,4 +466,250 @@ fn the_hir_dump_shows_user_externs_with_the_keyword() {
     E1033 2:1 `extern` is only allowed in the standard library
     E1033 3:1 `extern` is only allowed in the standard library
     ");
+}
+
+fn c_decl<'a>(program: &'a Program, name: &str) -> &'a eml_hir::CDecl {
+    let (_, function) = program
+        .functions()
+        .find(|(_, function)| function.name == name)
+        .unwrap_or_else(|| panic!("{name}"));
+    let FunctionKind::C(id) = function.kind else {
+        panic!("`{name}` is not a C function: {:?}", function.kind);
+    };
+    program.c_decl(id)
+}
+
+fn type_kind<'a>(program: &'a Program, name: &str) -> &'a TypeDefKind {
+    let (_, def) = program
+        .types()
+        .find(|(_, def)| def.name == name)
+        .unwrap_or_else(|| panic!("{name}"));
+    &def.kind
+}
+
+#[test]
+fn an_extern_c_function_in_a_user_module_is_not_e1033() {
+    let text = "extern \"C\" pure cos : Float -> Float\n\nextern \"C\" data File\n\nmain : Unit -> <IO> Unit\nmain () = println \"\\{cos 0.0}\"";
+    assert_eq!(diagnostics(text), Vec::<String>::new());
+    let lowered = eml_test_support::lower(text);
+    let (id, function) = lowered
+        .program
+        .functions()
+        .find(|(_, function)| function.name == "cos")
+        .expect("cos");
+    assert!(matches!(function.kind, FunctionKind::C(_)));
+    assert!(!function.kind.has_equations());
+    assert!(lowered.program.body(id).is_none());
+    assert_eq!(lowered.program.arity(id), Some(1));
+    // instance の `extern "C"` のメンバーは、パーサの E0011 だけで、E1033 も E1036 も重ねない
+    let member =
+        "class C a where\n  c : a -> Int\n\ninstance C Int where\n  extern \"C\" c : Int -> Int";
+    assert_eq!(
+        diagnostics(member),
+        ["E0011 5:10 an instance member cannot be `extern \"C\"`"]
+    );
+}
+
+#[test]
+fn the_default_symbol_is_the_declared_name() {
+    let lowered = eml_test_support::lower(
+        "extern \"C\" cos : Float -> <IO> Float\nextern \"C\" symbol \"sin\" my_sin : Float -> <IO> Float",
+    );
+    assert_eq!(c_decl(&lowered.program, "cos").symbol, "cos");
+    assert_eq!(c_decl(&lowered.program, "my_sin").symbol, "sin");
+}
+
+#[test]
+fn attributes_are_recorded() {
+    let text = "extern \"C\" pure a : Float -> Float\nextern \"C\" blocking b : Float -> <IO> Float\nextern \"C\" c : Float -> <IO> Float";
+    let lowered = eml_test_support::lower(text);
+    // `blocking` は、型の検査が診断を出す語の位置を持つ
+    let flags = |name| {
+        let decl = c_decl(&lowered.program, name);
+        (decl.pure, decl.blocking.map(|range| &text[range]))
+    };
+    assert_eq!(flags("a"), (true, None));
+    assert_eq!(flags("b"), (false, Some("blocking")));
+    assert_eq!(flags("c"), (false, None));
+}
+
+#[test]
+fn widths_are_recorded_with_their_types() {
+    let lowered = eml_test_support::lower(
+        "extern \"C\" f : Int as int -> Int as size_t -> Int -> <IO> Int as int64_t",
+    );
+    let program = &lowered.program;
+    let decl = c_decl(program, "f");
+    let ints: Vec<CInt> = decl.widths.iter().map(|width| width.int).collect();
+    assert_eq!(ints, [CInt::I32, CInt::SizeT, CInt::I64]);
+    let (_, function) = program
+        .functions()
+        .find(|(_, function)| function.name == "f")
+        .expect("f");
+    let signature = function.signature.as_ref().expect("a signature");
+    let int = program.extern_type(ExternType::Int);
+    for width in &decl.widths {
+        // 幅は型の横に持ち、型の注釈は普通の `Int` のままである
+        assert!(matches!(
+            &signature.types[width.ty].kind,
+            TypeRefKind::Con(id, args, _) if *id == int && args.is_empty()
+        ));
+    }
+    // 3つ目の引数の `Int` には幅を書いていない
+    let mut spine = signature.ty;
+    let mut positions = Vec::new();
+    while let TypeRefKind::Fn { param, ret, .. } = &signature.types[spine].kind {
+        positions.push(*param);
+        spine = *ret;
+    }
+    positions.push(spine);
+    let widened: Vec<bool> = positions
+        .iter()
+        .map(|&ty| decl.widths.iter().any(|width| width.ty == ty))
+        .collect();
+    assert_eq!(widened, [true, true, false, true]);
+}
+
+#[test]
+fn an_extern_c_data_is_a_handle_with_its_drop() {
+    let text = "extern \"C\" data File drop \"fclose\"\nextern \"C\" data Plain";
+    assert_eq!(diagnostics(text), Vec::<String>::new());
+    let lowered = eml_test_support::lower(text);
+    assert!(matches!(
+        type_kind(&lowered.program, "File"),
+        TypeDefKind::CHandle { dtor: Some(dtor) } if dtor == "fclose"
+    ));
+    assert!(matches!(
+        type_kind(&lowered.program, "Plain"),
+        TypeDefKind::CHandle { dtor: None }
+    ));
+}
+
+#[test]
+fn link_items_are_kept_in_source_order() {
+    let text = "link on linux \"libm.so.6\"\n\nextern \"C\" pure cos : Float -> Float\n\nlink on macos framework \"Accelerate\"\nlink on windows \"msvcrt\"\nlink on linux \"./lib/libfoo.so\"";
+    assert_eq!(diagnostics(text), Vec::<String>::new());
+    let lowered = eml_test_support::lower(text);
+    let program = &lowered.program;
+    let named = |os, name: &str| CLink {
+        os,
+        library: CLibrary::Named(name.to_string()),
+    };
+    assert_eq!(
+        program.links(program.entry),
+        [
+            named(Os::Linux, "libm.so.6"),
+            CLink {
+                os: Os::Macos,
+                library: CLibrary::Framework("Accelerate".to_string()),
+            },
+            named(Os::Windows, "msvcrt"),
+            named(Os::Linux, "./lib/libfoo.so"),
+        ]
+    );
+}
+
+#[test]
+fn an_unknown_abi_is_e1059_and_still_a_c_function() {
+    // C の関数として読むので、後ろの等式は本体にならず、E1059 になる
+    let text = "extern \"Rust\" f : Int -> <IO> Int\nf x = x\nextern \"C++\" data T";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1059 1:8 the ABI `Rust` is not supported",
+            "E1059 2:1 `f` is an `extern \"C\"` function and cannot have equations",
+            "E1059 3:8 the ABI `C++` is not supported",
+        ]
+    );
+    let lowered = eml_test_support::lower(text);
+    assert_eq!(c_decl(&lowered.program, "f").symbol, "f");
+    assert!(matches!(
+        type_kind(&lowered.program, "T"),
+        TypeDefKind::CHandle { dtor: None }
+    ));
+}
+
+#[test]
+fn an_empty_c_name_is_e1059() {
+    let text = "extern \"C\" symbol \"\" f : Int -> <IO> Int\nextern \"C\" data T drop \"\"";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1059 1:19 a C name cannot be empty",
+            "E1059 2:24 a C name cannot be empty",
+        ]
+    );
+    // 空の名前は書かなかったものとして読む
+    let lowered = eml_test_support::lower(text);
+    assert_eq!(c_decl(&lowered.program, "f").symbol, "f");
+    assert!(matches!(
+        type_kind(&lowered.program, "T"),
+        TypeDefKind::CHandle { dtor: None }
+    ));
+}
+
+#[test]
+fn an_unknown_c_type_name_is_e1059() {
+    let text = "extern \"C\" f : Int as long -> <IO> Int as int";
+    assert_eq!(
+        diagnostics(text),
+        ["E1059 1:23 `long` is not a C integer type"]
+    );
+    let lowered = eml_test_support::lower(text);
+    let ints: Vec<CInt> = c_decl(&lowered.program, "f")
+        .widths
+        .iter()
+        .map(|width| width.int)
+        .collect();
+    assert_eq!(ints, [CInt::I32]);
+}
+
+#[test]
+fn an_unknown_os_is_e1060() {
+    let text = "link on plan9 \"libx\"\nlink on linux \"liby.so\"\nlink on linux \"\"";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1060 1:9 `plan9` is not an operating system",
+            "E1060 3:15 a library name cannot be empty",
+        ]
+    );
+    let lowered = eml_test_support::lower(text);
+    let program = &lowered.program;
+    assert_eq!(
+        program.links(program.entry),
+        [CLink {
+            os: Os::Linux,
+            library: CLibrary::Named("liby.so".to_string()),
+        }]
+    );
+}
+
+#[test]
+fn a_framework_outside_macos_is_e1060() {
+    let text = "link on linux framework \"Accelerate\"\nlink on windows framework \"Accelerate\"";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1060 1:15 `framework` is only for `macos`",
+            "E1060 2:17 `framework` is only for `macos`",
+        ]
+    );
+    let lowered = eml_test_support::lower(text);
+    let program = &lowered.program;
+    assert!(program.links(program.entry).is_empty());
+}
+
+#[test]
+fn the_hir_dump_shows_extern_c_declarations() {
+    let text = "link on linux \"libm.so.6\"\nlink on macos framework \"Accelerate\"\n\nextern \"C\" data File drop \"fclose\"\nextern \"C\" data Plain\nextern \"C\" pure symbol \"cos\" cosine : Float -> Float\nextern \"C\" blocking wait : Int as int -> <IO> Int as size_t\nextern \"C\" close : File -> <IO> (Unit, File)";
+    insta::assert_snapshot!(lower_text(text), @r#"
+    link on linux "libm.so.6"
+    link on macos framework "Accelerate"
+    extern "C" data File drop "fclose"
+    extern "C" data Plain
+    extern "C" pure symbol "cos" cosine : Float -> Float
+    extern "C" blocking symbol "wait" wait : Int as int32_t -> <IO> Int as size_t
+    extern "C" symbol "close" close : File -> <IO> (Unit, File)
+    "#);
 }

@@ -735,7 +735,7 @@ main () =
     let config = RunConfig::default()
         .with_debug_heap(true)
         .with_sched(Sched::Sequential);
-    let finished = eml_vm::execute(&lir(src), &config, host).unwrap();
+    let finished = eml_vm::execute(&lir(src), &eml_vm::Linked::default(), &config, host).unwrap();
     assert_eq!(out.contents(), "");
     assert_eq!(finished.exit, Some(3));
     assert_eq!(finished.stats.parks, 2);

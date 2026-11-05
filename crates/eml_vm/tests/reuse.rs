@@ -188,8 +188,8 @@ fn a_live_token_is_dropped_on_exit() {
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
-        let finished =
-            eml_vm::execute(&program, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        let finished = eml_vm::execute(&program, &eml_vm::Linked::default(), &config, host)
+            .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!((finished.exit, out.contents()), (Some(3), String::new()));
     }
 }

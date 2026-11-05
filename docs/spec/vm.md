@@ -9,7 +9,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 ## 置き場所
 
 - バイトコードは LIR から直接作り、中間に別の IR は挟まない。命令列への変換は1回の走査で済むためである
-- crate `eml_vm` は、依存先を `eml_lir`、`eml_rt`、`eml_extern` だけにし、フロントエンドには依存しない。中身は、LIR のプログラムを `CodeBase<M>` に変換するコード生成 (`compile`) と、`CodeBase` を `Ctx<M>` の上で実行する VM の繰り返しの2つである
+- crate `eml_vm` は、workspace の crate では `eml_lir`、`eml_io`、`eml_rt`、`eml_extern`、`eml_cabi` と、feature `tls` の下の `eml_tls` だけに依存し、フロントエンドには依存しない。中身は、LIR のプログラムを `CodeBase<M>` に変換するコード生成 (`compile`) と、`CodeBase` を `Ctx<M>` の上で実行する VM の繰り返しの2つである
 - `eml_vm` は、自分の `RunStats` と実行時エラーの型 `RuntimeError` を持つ。実行時エラーの型は1つだけなので、`RuntimeError` と呼ぶ。誤りの種類は `VmFault` と呼ぶ。`Fault` にすると、包んでいる `eml_rt::Fault` と名前がぶつかるためである
 - `eml_lir` は、データの物理的な形を決める関数 `LayoutCtor::shape` を持つ ([オブジェクトモデル](object-model.md) の「ペイロード」)
 - `eml_lir` は、文の単位の生存を公開の API にする ([LIR](lir.md) の「生存解析」)。スロットの割り当て (「スロットの割り当て」) が文の単位の干渉を作るために使う
@@ -19,18 +19,18 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - reuse の命令の関数 (`release_reuse` と `con_reuse`) は `#[inline]` にして、token を使う道だけを `vm::run` に展開する。値が共有されていた道 (`release_shared`) と token が空の道 (`con_fresh`) は、`#[cold]` と `#[inline(never)]` を付けた関数に出す。`bench/run.sh` で3つの置き方を比べた ([計測の基準](../implementation/benchmarks.md) の「reuse の命令の関数の置き方」)。2つの関数を `#[inline(never)]` にすると、reuse の命令ごとに呼び出しが1つ増え、`bench/tree.em` の命令の数の減り方が小さくなった。遅い道ごと展開すると、`vm::run` が大きくなり、reuse の命令を1つも使わない `bench/iter_pipeline.em` の命令の数が増えた。遅い道を出した置き方は、reuse するプログラムで最も減り、reuse しないプログラムの増え方は 0.5% 以内に収まった。`eml_rt` の部品 (`is_unique`、`into_token`、`con_at` など) は、速い道の中に展開される
 - VM の繰り返し (`vm::run`) は、モードと方針 (「タスクとスケジュール」) の組ごとに写しを作る。`step` から呼ぶ補助の関数 (`data`、`apply`、`vm` の中の関数) は、モード `M` でなく、モードと方針を束ねた1つの型 `R: Exec` (`R::M` と `R::P` を持つ) で総称にする。`M` だけで総称にすると、補助の関数の実体が逐次と seed の2つの写しから呼ばれ、呼び手が1つの関数を inline しやすくする LLVM の判断が外れる。`con`、`release`、`unpack` などが `vm::run` に展開されなくなり、逐次の `bench/run.sh` の実行の分が `records_wide` で 9.8% 増えた。`R` で総称にすれば、補助の関数の実体は写しごとにでき、呼び手は1つのままなので、写しごとの inline の判断は方針のない繰り返しと同じになる。上の `#[inline]` の規則もそのまま使える。測った数は [計測の基準](../implementation/benchmarks.md) の「モードと方針を束ねた型」にある
 - release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりしたためである ([計測の基準](../implementation/benchmarks.md) の「`codegen-units`」)
-- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<Finished, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、エントリを実行して閉じる (「追記」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) と、スケジュールの方針 (`sched: Sched`。「タスクとスケジュール」) と、タイマーが使う時計 (`clock: Clock`。「時計と driver」) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
+- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, linked: &Linked, config: &RunConfig, host: HostRef) -> Result<Finished, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、エントリを実行して閉じる (「追記」)。`linked` は、`eml_native` がプログラムの C の関数をつないだ結果である (「C の関数の命令」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) と、スケジュールの方針 (`sched: Sched`。「タスクとスケジュール」) と、タイマーが使う時計 (`clock: Clock`。「時計と driver」) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
 - `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)`、`with_control(Arc<Control>)`、`with_sched(Sched)`、`with_clock(Clock)` で組み立てる。方針の既定は `Sched::Sequential` で、時計の既定は `Clock::Virtual` である
 - 1つの `Control` は1回の実行に使う。止める理由のビットは `Control::clear` でしか下りないので、使い回すと、前の実行で立ったビットで次の実行がすぐ止まるためである。終わりの欄 (`exit` の終了コード) と `PREEMPT` と `NOTICE` は、`Machine::run` の始めに `Control::begin_run` が開いて下ろすので、使い回しの妨げにならない (「誤り、止めること、終わり」)。REPL (`eml_cli::Repl`) は1つの `Control` をセッション全体で使い、入力の始めに `clear` を呼ぶ。`RunConfig` を `clone` すると `Control` を共有するので、UI テストの仕組みと `eml_test_support` は実行ごとに新しい `RunConfig` を作る
 - `RunConfig` に `Control` を持たせるのは、CLI が Ctrl-C のハンドラに同じ `Control` を渡すためである。上限は `Control` が持つので、`RunConfig` に上限の欄は作らない ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - `eml_vm` は、`eml_rt` の `Control`、`Limits`、`Stop` を再公開する。`eml_cli` の lib と bin は `eml_rt` に直接は依存せず (テストは依存する)、これらの名前を `eml_vm` から受け取る
-- `eml_cli` は、`run` の feature で `eml_vm` に依存する。`RunConfig`、`RunStats`、`RuntimeError`、`VmFault`、`SourceLocation`、`Control`、`Limits`、`Stop`、`Sched`、`Clock`、`Finished`、`HostRef`、`Capture`、`CaptureHost`、`Written`、`capture_host`、`stdio_host`、`script_host`、`execute` を `eml_vm` から再公開する
+- `eml_cli` は、`run` の feature で `eml_vm` に依存する。`RunConfig`、`RunStats`、`RuntimeError`、`VmFault`、`SourceLocation`、`Control`、`Limits`、`Stop`、`Sched`、`Clock`、`Finished`、`HostRef`、`Linked`、`Capture`、`CaptureHost`、`Written`、`capture_host`、`stdio_host`、`script_host`、`execute` を `eml_vm` から再公開する
 - `eml run` は速いモードで動き、`--debug-heap` を付けると検査モードになる。`--stats` も検査モードで動かし、run が誤りなく終わったときに `RunStats` の欄を標準エラーへ1行で書く (`stats: 欄=値 ...`)。UI テストは、いつも検査モードで流してから速いモードでも流す ([テスト戦略](../implementation/testing.md) の「2つのモードで流す」)。Host は `script_host(PathBuf::new(), args)` で、スクリプトの引数と標準入力を持ち、相対パスはカレントディレクトリを基準にする。REPL の Host は `stdio_host(PathBuf::new())` で、引数と標準入力を持たない ([標準ライブラリ](stdlib.md) の「`Stdin`」)
 - テストの Host は `CaptureHost` である。標準出力と標準エラーを、それぞれメモリに捕まえる (`output`、`errors`)。引数、標準入力、環境変数は与えたものだけで (既定は、引数なし、空の標準入力、空の環境)、本物の環境は読まない。`Host::open_write` の書き手 (`FileOut` と、その上に書いた `Fs.write_text`) は、ディスクに書かずにメモリに覚え (`Written`)、同じパスの `FileIn.open` はそれを読む。`open_write` の `Truncate` は開いた時点でそのパスを空にし、`Append` は今の中身を残す。子のプロセスは本物を起動する。子の環境は、与えた表、本物の `PATH` (`with_path_prefix` で渡したディレクトリがあれば、それを前に置く)、Windows では本物の `SystemRoot`、`Proc.env` の組をこの順に足したもので、`Env.get` が見るのは与えた表だけで、受け継ぐ標準入力は空、作業ディレクトリはファイルの根 (`Proc.cwd` があればそれをつないだ所) である。どの段の受け継ぐ標準エラーも、最後の段の受け継ぐ標準出力も、pipe にしてスレッドで最後まで読み、それまでの出力を書き出した後で、その段を待ったときに捕まえたそれぞれの出力に足す。段は先頭から待つので、捕まえた出力も段の順に並ぶ。そのため、テストの Host の `wait` (破棄処理の `wait` を含む) は、pipe の書き込む端を持つプロセスがすべて終わるまで戻らない。`sh -c 'sleep 30 & echo hi'` は、`eml run` では `sh` が終われば戻るが、テストの Host では孫の `sleep` が終わるまで待つ。`capture_host(file_root)` は既定の `CaptureHost` と、捕まえた出力を返す
 
 ## `CodeBase` と `FnEntry`
 
-`CodeBase::new(control)` は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Program) -> Result<u32, CompileError>` はプログラムを追記してエントリの関数の番号を返す (「追記」)。1つのプログラムだけを読むときも、空の表に `load` する。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError` は、スロットが `u16` に収まらない関数 (`TooManySlots`)、`Heap::freeze` の誤り (`Freeze`)、debug ビルドの一致の確かめの食い違い (`Mismatch`)、結果が複数の値のエントリの関数 (`MultiValueEntry`)、fork しうるプログラムで名前が引けない `fork$` の関数 (`MissingFork`。「`par` の fork と join」)、`Async` の命令を持つプログラムで名前が引けないランタイムのエントリの関数 (`MissingEntry`。「`Async` のタスク」) と、poisoned の `Machine` への読み込み (`Poisoned`。「時計と driver」) である。エントリの `ret` は値1つで ([Core IR](core-ir.md) の「構造体にする型」)、`Finish` は値を1つだけ受けるためである。`Poisoned` のほかは正しいプログラムでは起きないので、`execute` は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)` が `CompileError` をその内部の誤りの `RuntimeError` にし (`Poisoned` は「時計と driver」の driver の誤りにする)、`execute` と、REPL の `Machine::load` の失敗 (`Outcome::Broken`) がこれを使う。
+`CodeBase::new(control)` は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Program, linked: &Linked) -> Result<u32, CompileError>` はプログラムを追記してエントリの関数の番号を返す (「追記」)。1つのプログラムだけを読むときも、空の表に `load` する。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError` は、スロットが `u16` に収まらない関数 (`TooManySlots`)、`Heap::freeze` の誤り (`Freeze`)、debug ビルドの一致の確かめの食い違いと、すでにある名前の C の関数かハンドルの型と違う項 (`Mismatch`。「C の関数の命令」)、結果が複数の値のエントリの関数 (`MultiValueEntry`)、fork しうるプログラムで名前が引けない `fork$` の関数 (`MissingFork`。「`par` の fork と join」)、`Async` の命令を持つプログラムで名前が引けないランタイムのエントリの関数 (`MissingEntry`。「`Async` のタスク」) と、poisoned の `Machine` への読み込み (`Poisoned`。「時計と driver」) である。エントリの `ret` は値1つで ([Core IR](core-ir.md) の「構造体にする型」)、`Finish` は値を1つだけ受けるためである。`Poisoned` のほかは正しいプログラムでは起きないので、`execute` は位置のない内部の誤り (`internal error: …`) として返す。`eml_vm::compile_error(program, error)` が `CompileError` をその内部の誤りの `RuntimeError` にし (`Poisoned` は「時計と driver」の driver の誤りにする)、`execute` と、REPL の `Machine::load` の失敗 (`Outcome::Broken`) がこれを使う。
 
 | 欄 | 中身 |
 |---|---|
@@ -44,10 +44,12 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 | `tables.locations` | 命令の位置から源の位置 (`Loc`) への表。命令の位置の昇順に並ぶ (「誤り、止めること、終わり」) |
 | `tables.unwinds` | 巻き戻しの表。巻き戻しの地点の命令の次の位置で引く行を、位置の昇順に並べる (「巻き戻し」) |
 | `files` | 位置のファイルの表示用のパス。読み込んだ `Program.files` のパスを、初めて現れた順に並べる |
-| `index` | 追記で番号を引き直す表。関数の名前、エフェクトの名前、ファイルのパス、文字列と整数と浮動小数の定数の中身から番号を引く (「追記」) |
+| `index` | 追記で番号を引き直す表。関数の名前、エフェクトの名前、ファイルのパス、文字列と整数と浮動小数の定数の中身、C の関数とハンドルの型の名前から番号を引く (「追記」) |
 | `control` | 定数の塊のページを数える `Control`。実行のヒープと同じものである |
 | `forks` | `par` の子の `evv` の凍結した部分。実行時のエフェクトの番号ごとの fork の表と、`Panic` の fork evidence の末尾である (「`par` の fork と join」) |
 | `entries` | ランタイムが名前で呼ぶ `Std.Async.start_task` と `Std.Async.resume_task` の関数の番号。引けるまでは `None` である (「`Async` のタスク」) |
+| `c_functions` | `Op::Ffi` が番号で指す C の関数の項 (`CEntry`)。ハンドルの型の番号を付け直した `CFunction` と、`CCall` を持つ (「C の関数の命令」) |
+| `c_handles` | C の関数の引数と結果が番号で指すハンドルの型の項 (`CHandleEntry`)。`CHandleType` と dtor を持つ |
 
 - `FnEntry` は、名前、命令列の範囲 `[start, end)`、引数の数 (`arity`)、枠の大きさ (`frame_size`、スロットの数) を公開の欄に持つ。`arity` は開いた後の引数の語の数で、構造体の引数は葉の数だけ数える。クロージャの捕まえた値も引数に数える。`apply` は引数の数だけを見て、部分適用か、ちょうどか、余るかを決める。引数と結果はどれも一様な語なので、シグネチャは要らない ([LIR](lir.md) の「関数の ABI」)
 - `FnEntry` は crate の中だけの欄を2つ持つ。引数の語の Repr の並び (`params`) は、クロージャを作るときと入るときに、捕まえた値を走査する語と生の語のどちらに置くかを引くためにある ([オブジェクトモデル](object-model.md) の「クロージャ」)。結果が RC の Repr か (`ret_rc`) は、その関数をエントリとして実行したときに `Finish` が結果を手放すかを決める (「誤り、止めること、終わり」)
@@ -61,7 +63,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 REPL (`eml_cli::Repl`) は入力ごとにプログラム全体を lowering し直し、同じ `CodeBase` に追記する。定義ごとに IR を保存して総称な定義の instance をキャッシュする形にしないのは、中段の各パスを純粋な関数のまま保つためである。その代わりに、名前が同じ関数はいつも同じコードになることを、全パスが守る規則にした ([Core IR](core-ir.md) の「変換の規則」)。クロージャは関数の番号を物体の中に持つので、入力をまたいで関数の番号を変えない。REPL のセッションの組み立ては [モジュールと名前解決](modules.md) の「REPL のセッション」に、入力の変換は [Core IR](core-ir.md) の「REPL の入力」にある。
 
 - `Machine<M>` は、`CodeBase<M>` と `Ctx<M>` を入力をまたいで持つ。`Machine::<Fast>::new` と `Machine::<Checked>::new` は `Control` と Host を受け取り、モードごとの確かめを決める。`Machine::with_sched(sched)` は、実行ごとに作るスケジューラの方針を選ぶ。既定は `Sched::Sequential` で、`AnyMachine::new` は `RunConfig` の `sched` を渡す (「タスクとスケジュール」)。`Machine::with_clock(clock)` は時計を選ぶ。既定は `Clock::Virtual` で、`AnyMachine::new` は `RunConfig` の `clock` を渡す (「時計と driver」)。`Machine::with_driver(driver)` は driver を直接渡す (「時計と driver」)。`AnyMachine` は、実行の前にモードを選ぶ呼び出し側のための列挙である
-- `Machine::load(program)` は `CodeBase::load` を呼び、新しい塊があれば実行のヒープに付け替えて、エントリの関数の番号を `Loaded { entry }` で返す。誤りを返した後の `Machine` は使い続けない
+- `Machine::load(program, linked)` は `CodeBase::load` を呼び、新しい塊があれば実行のヒープに付け替えて、エントリの関数の番号を `Loaded { entry }` で返す。誤りを返した後の `Machine` は使い続けない
 - `Machine::run(entry)` は、エントリの関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` と、実行ごとの登録表が数える `tasks`、`parks`、`timers`、`dropped_failures`、`cancels` だけがその実行の値である (`shared_objects` はヒープの数なので積算である)。検査モードでは、実行の後にヒープの不変条件だけを確かめる。セッションの根は手放さず、次の実行に残す。続けられる誤り (`is_broken` が偽) の後と、`exit` が run を捨てた後 (「誤り、止めること、終わり」) は `Ctx::recover` を呼び、根から届く物体を新しいヒープに写して古いヒープを捨てる ([オブジェクトモデル](object-model.md) の「回復」)。スタックと `evv` と yield の状態に残った語も、残った物体のページも、古いヒープと一緒に消える。回復が成功したら、検査モードでは新しいヒープの不変条件を確かめ、元の誤りをそのまま返す。捨てた run では、誤りの代わりに `exit` の終了コードを持つ `Finished` を返す。`eml run` (`execute`) も同じ `run` を通る。根がないので写すものはなく、古いヒープを捨てて届かない `Foreign` の物体を閉じるだけである
 - worker 1..N-1 を作った run では、返ってきたほかの worker の `Ctx` を `Machine` が持つ (`Machine::others`)。成功した run では終わりの検査の後に落とす (「誤り、止めること、終わり」)。回復する run では、すべてのヒープで受けた解放を取り込んでから worker 0 の `Ctx` で `recover` を呼び、その間ほかの worker のヒープを生かしておき、回復が成功したら落とす。`recover` はほかのヒープのページからも写しうるためである ([オブジェクトモデル](object-model.md) の「回復」)。回復しなかった誤り (`is_broken` の誤りと回復の失敗) の後と poisoned の `Machine` では、`Machine` を落とすまで持つ。落とす順は、driver、ほかの worker の `Ctx`、worker 0 の `Ctx` である。poisoned の `Machine` は worker 0 の `Ctx` と同じく、ほかの worker の `Ctx` も落とさずに漏らす。ほかのヒープの物体も driver に貸されうるためである
 - 回復が誤りを返すか、検査モードで回復の後の不変条件の確かめが失敗したら、`run` は `RuntimeError::Unrecovered { cause, reason }` を返す。`cause` は元の誤り (捨てた run では `Stopped(Stop::Ended)`) で、`reason` は回復の誤り (`HeapError`) である。回復の誤りは、写せない物体に着いた `Unrecoverable` と、検査モードの `UnknownPage` (登録していないページを指す語) と `NotQuiescent` (取り込んだ後も積んでいる途中のスレッドがある) の3つである。`Unrecoverable` と `UnknownPage` のときは `Control` の ID の表はもう消してあり、`NotQuiescent` のときは消す前に返るので表は残る ([オブジェクトモデル](object-model.md) の「回復」)。どれでも `Unrecovered` の `is_broken` は真で、REPL は後の入力を受け付けない。表示は元の誤りの後に `\nrecovery failed: {reason}` を足す。根の値は `Unr` で、根を持つセッションは worker を作らないので、検証を通ったプログラムではどれも起きない
@@ -74,6 +76,7 @@ REPL (`eml_cli::Repl`) は入力ごとにプログラム全体を lowering し�
   - 文字列の定数と、生の整数と浮動小数と `box` の整数と浮動小数の定数: 中身で引く。空の `MutArray` は1つだけ作り、その番号を使い続ける。浮動小数はビット列で引くので、`0.0` と `-0.0` は別の定数になる。前に読み込んだ定数は同じ番号を使う。新しい物体があるときだけ、作業用のヒープに今の先頭の塊を付けてから物体を作り、凍結する。新しい塊は前の塊を親に持つので、鎖が伸びる。新しい物体のない入力では塊を作らない。塊は使う大きさの級ごとに少なくとも1ページを持つためである
   - エフェクトの番号: 名前で引き、なければ次の番号を振る。`Program.effects` の添字は HIR の順で決まり、セッションにエフェクトを足すと後ろのエフェクトの添字がずれるためである。`evv_mask` の項目のエフェクトも引き直し、昇順に並べ直す。並べ直すときは、項目 (エフェクト、n、m) を1つの単位として動かす
   - 位置のファイルの番号: パスで引き、なければ `files` の末尾に足す
+  - C の関数とハンドルの型の番号: 関数と同じく名前で引き、なければ末尾に足す。プログラムの C の表は使った順に並び、入力ごとに番号が違うためである (「C の関数の命令」)
   - 配置と構造体の形の番号は、命令列を作るときに形を引くだけで、命令列に残らないので引き直さない
   - `Async` のタスクのエントリの番号 (`entries`): まだなければ、ロードごとに名前で引く。`Std.Async` は import したときだけ読み込むので、最初に `Std.Async` を読み込んだ入力の `load` で引ける。`Async` の命令を持つロードで引けなければ `MissingEntry` である (「`Async` のタスク」)
 - debug ビルドでは、すでにある名前の関数も同じ引き直しで変換し直し、前の命令列と比べる。比べるのは、逆アセンブラと同じテキストにした命令の並び (巻き戻しの表の行を含む) と、`FnEntry` の `arity`、`frame_size`、`params`、`ret_rc` である。テキストの命令の位置は関数の先頭からの位置で書き、オペランドは指す中身 (呼ぶ関数の名前、エフェクトの番号、定数の番号、位置のパス) で書く。一致しなければ `CompileError::Mismatch` を返す。比べた写しは消す
@@ -249,7 +252,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 巻き戻しの表
 
-- 巻き戻しの地点は、末尾でない `call`、末尾でない `apply` と `clause`、`par`、`Pure` でない extern の命令 (`exit`、`panic`、`Int` の算術と配列の専用の命令を含む)、`prim yield_abort` と `prim child_abort` である ([LIR](lir.md) の「巻き戻しの地点」)。呼ばれる側が中断するかは問わない。中断はこのどれかの命令の中か、その呼ばれる側で始まるので、中断が通るフレームはいつも地点の命令の直後で止まっている
+- 巻き戻しの地点は、末尾でない `call`、末尾でない `apply` と `clause`、`par`、`faults` の extern の命令 (`exit`、`panic`、`Int` の算術と配列の専用の命令を含む。std の行では `Pure` でない extern の命令と同じである)、`prim yield_abort` と `prim child_abort` である ([LIR](lir.md) の「巻き戻しの地点」)。呼ばれる側が中断するかは問わない。中断はこのどれかの命令の中か、その呼ばれる側で始まるので、中断が通るフレームはいつも地点の命令の直後で止まっている
 - 地点ごとの所有は、`eml_lir::unwind::points(program, wanted) -> Vec<Option<Result<Unwinds, VerifyError>>>` が、`wanted` の関数ごとに求める。コード生成は、追記で新しく変換する関数だけを求め、debug ビルドの一致の確かめ (「追記」) ではすでにある関数も求める。各関数の `Unwinds { entry, points }` の `points` は、`UnwindPoint { block, stmt, owned, tokens, landing }` をブロックの順、文の順に並べる。`entry` は関数のエントリの所有 ([LIR](lir.md) の「巻き戻しの地点」)
   - `owned` は、地点の命令の直後に所有している RC の対象の変数と、その所有の数 (1 以上) の列で、変数の番号の昇順に並ぶ。命令が束縛する変数 (呼び出しの結果、複数の値の結果、extern の行き先) は含めない。命令が戻らなければ、その変数はまだないためである
   - `tokens` は、地点の命令の直後に生きている token の変数の列で、変数の番号の昇順に並ぶ。token は RC の対象でないので `owned` には入れない。token は yield しうる呼び出しの後で生きていないので、着地の印を持つ地点の `tokens` はいつも空である
@@ -959,6 +962,80 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - 持ち主が変わった後に元の worker の受け箱と mail に残った知らせは、取り出した worker が今の持ち主へ回す (「セルと登録表」)。引き取るタスクは待ちの登録を持たないので、時間の輪、channel の待ち手の列、シグナルの待ち手の列、操作の記録、仕事のセルのどれも書き換えない。救済の後にタスクが待つときは、新しい持ち主の区画に登録する
 - 終わった操作の記録を持ったまま譲り (`ready`) で待つタスクも引き取る。記録の持ち主 (`owner`) は元の worker のままだが、取り出しは記録の持ち主を確かめず、持ち主を確かめる結果の当て (`settle_op`) は結果が届いたときにしか動かないので、終わった記録では害がない (「操作の記録」)。救済はこの形に頼るので、std の行は次を守らなければならない。終わっていない記録を持つタスクは、その操作の待ちに入るまで、ほかの `Async` の操作をしない。守れば、終わっていない記録を持つタスクはいつも操作の待ちにあり、救済の対象にならない。今の std の受け付けと待ちは隣り合い、間に入るのは `op_ready` が終わりを返した後の予算の譲りだけである。std に足す行もネイティブの std も同じ決まりに従う。操作の待ちを救済する形に変えるときは、この決まりを見直す ([ロードマップ](../future/roadmap.md) の「マルチコア対応」)
 - 引き取ったタスクが新しいハンドルを作る操作では、持ち主の I/O を受け付ける worker が host になる。本物の時計では救済した worker 自身、仮想の時計では worker 0 である。`Std.Stream` が開くファイルも同じく、その host の driver に取り込む。`Std.Exec` の起動が pipe を作る driver と、子の待ちを出す driver も、呼んだタスクが今いる worker のものである。子を待つタスクは操作の待ちにいるので救済されず、記録の持ち主と host は待ちの間に分かれない。すでに縛ったハンドルの操作は、縛った worker へ `Submit` で回す (「時計と driver」)。救済は `Submit` を処理しない
+
+## C の関数の呼び出し
+
+利用者の `extern "C"` の関数とハンドルの dtor は、`eml_native` がプログラムを読み込む前につなぐ。つないだ結果は `eml_cabi::Linked` の値で、C の関数ごとの `CCall` とハンドルの型ごとの dtor を、プログラムの C の関数の表とハンドルの型の表に並びをそろえて持つ。VM は橋渡しの関数を通して C の関数を呼ぶ。`eml_vm` は `eml_native` にも Cranelift にも依存せず、つなぐ処理を持たない。
+
+### 橋渡しの関数
+
+- 橋渡しの関数の型は `eml_cabi::Bridge`、つまり `unsafe extern "C" fn(callee: *const (), args: *const u64) -> u64` である。`CCall { bridge, callee }` は、橋渡しと、それで呼ぶ C の関数のアドレスの組である
+- 橋渡しは C の型の並び `CSignature` (要素は `I32`、`I64`、`F64`) ごとに1つ作り、同じ署名の関数で共有する。呼ぶ関数は最初の引数で受ける。引数は `u64` の slot の列で、slot k を `args` の offset `8*k` から読む。橋渡しが読むのは `args` だけで、`Ctx`、`Word`、ヒープの配置、スレッドローカル、記号の名前のどれにも触れない
+- `I64` の slot は語をそのまま渡し、`F64` の slot は語の bit の並びを `double` として渡す。`I32` (`int32_t`) の slot は語の下の 32 bit を符号を広げて渡し、上の 32 bit は読まない
+- 結果は1語で返す。`I32` は符号を広げ、`I64` はそのまま、`F64` は bit の並びをそのまま語にする。void の関数では 0 を返す
+- 呼び出し規約は、動いている OS の既定のもの (Rust の `extern "C"`) である
+- 橋渡しは状態を持たないので、どのスレッドから同時に呼んでもよい
+- コードは cranelift-jit が RW で確保して書き、命令の cache を消してから RX に変える。`MAP_JIT` を使わないので、macOS の hardened runtime の下では動かない。この処理系は hardened runtime を扱わない
+- 巻き戻しの情報を登録しないので、C の関数は橋渡しを通して巻き戻ってはならない (C++ の例外、SEH)
+- 橋渡しのコードは、プロセスが終わるまで解放しない。だから `CCall` は、作った `Linker` が消えた後も呼べる
+- `Linked` の欄は非公開で、作れるのは `unsafe fn Linked::new(calls, dtors)` と、空の `Linked::default()` だけである。`calls` は `(CFunction, CCall)` の組の列、`dtors` は `(CHandleType, Option<Dtor>)` の組の列で、`Linked` はつないだときの宣言の写しを持つ。VM は `Linked` のポインタを確かめずに呼ぶので、ポインタの正しさは `new` の呼び手が約束する。約束は次の3つで、`eml_native::Linker::link` とテストの道具が守る。読む側は `calls()`、`dtors()`、`fits` を使う
+  - 各 `CCall` の `callee` は、組にした宣言の記号と `links` を解決した C の関数で、`bridge` はその宣言の `c_signature()` の橋渡しである
+  - 各 dtor は、宣言が dtor を持つときに限りあり、その dtor の記号を解決した `void f(void*)` として呼べる関数である
+  - どのポインタも、プロセスが終わるまで有効なコードを指す
+- `fits` は、持っている宣言とプログラムの C の関数の表、ハンドルの型の表を `==` で比べる。ハンドルの型の番号は表の位置なので、`load` が番号を付け直す前の表と比べる。読み込む側はこれで、ポインタを保証した宣言が読み込むプログラムの宣言と同じことを確かめる (「C の関数の命令」)
+
+### ライブラリと記号
+
+- C の関数の記号は `CFunction` の `symbol`、dtor の記号は `CHandleType` の `dtor` である。どちらも、宣言したモジュールの `link` の item の写し (`links`) から、次の順で解決する
+  1. 登録した記号 (`Linker::with_symbols`)。テストが Rust の関数を渡すのに使う。登録したアドレスは宣言が保証しないので、`with_symbols` は `unsafe` で、呼び手が、その記号に解決するすべての宣言の署名を持つ関数であること (dtor なら `void f(void*)`) と、プロセスが終わるまで有効であることを約束する
+  2. 動いている OS の `link` の item のライブラリを、書いた順に。1 で見つからなかった記号では、動いている OS のライブラリを、記号がどこにあってもすべて開けなければならない。1つでも開けなければ `LinkError::Library` である。1 で見つかった記号では、ライブラリを開かない
+  3. プロセスの範囲。unix では `dlopen(NULL)` の範囲 (`libloading::os::unix::Library::this()`)、Windows では実行ファイル、その次に `ucrtbase.dll` である
+  4. どこにもなければ `LinkError::Symbol` である
+- ローダーに渡す名前は次のように飾る (`eml_native::candidates`)
+  - `/`、`\`、`.` を含む文字列は、そのまま渡す
+  - ほかの名前は、Linux では `lib<name>.so`、macOS では `lib<name>.dylib`、Windows では `<name>.dll` にする
+  - `framework "N"` は `/System/Library/Frameworks/N.framework/N` を、次に `/Library/Frameworks/N.framework/N` を試す。macOS の dlopen は framework の相対の道を開けないためである
+- `--link KEY=VALUE` の上書きは、`link` の item に書いた文字列 (`CLibrary::written`) を KEY と OS によらず比べる。合う item のうち動いている OS のものは、書いた名前の代わりに VALUE を開く。VALUE も上と同じ規則で飾る。上書きはモジュールによらず、プログラム全体に効く
+- 関数もハンドルの型もないプログラムは、何も開かず、JIT も作らない。C の関数かハンドルの型があって、動いている OS が Linux、macOS、Windows のどれでもなければ `LinkError::Unsupported` である
+- 開いたライブラリは、プロセスが終わるまで閉じない (`ManuallyDrop` で持つ)。閉じると、そこから引いた `CCall` と dtor のポインタが、解放したコードを指すことになるためである
+- `LinkError` の文言は次のとおりで、OS の文言を含まない
+  - `library "{name}" was not found`。`name` は開こうとした名前で、上書きしたときは VALUE である
+  - `symbol "{symbol}" was not found`。2 のライブラリがあれば、後ろに ` in {library}` を付ける。`library` は 2 のライブラリの名前 (上書きした後のもの) を引用して `", "` でつないだものである
+  - `--link names no library "{key}"`
+  - `C functions cannot be called on this machine: {reason}`。`reason` は処理系が決めた固定の文で、Cranelift の誤りの文を含めない
+
+### C の関数の命令
+
+- つなぐのは `load` の前である。`CodeBase::load` と `Machine::load` は、プログラムの C の関数の表 (`Program::c_functions`) とハンドルの型の表 (`Program::c_handles`) に並びをそろえた `Linked` を受け取る。`load` は `Linked::fits` で、つないだときの宣言を表と比べる。合わないのは呼び手の誤りなので、assert で panic する。C の関数を持たないプログラムには `Linked::default()` を渡す
+- `load` は、ハンドルの型、次に C の関数を、名前で `CodeBase` の番号 (`c_functions` と `c_handles`) に振る。すでにある名前なら前の項を使い、`Linked` の新しいポインタは捨てる。ない名前には末尾の番号を振り、項を足す。C の関数の項は、引数と結果のハンドルの型の番号を `CodeBase` の番号に付け直した `CFunction` を持つ。付け直すときは欄を書き換えず、`CFunction::new` で作り直す。行は欄から作るためである
+- すでにある名前で、付け直した値が前の項と違えば、`load` は `CompileError::Mismatch` を返す。この確かめは debug ビルドに限らない。`Mismatch` は `CodeBase` に何も書かないうちに返し、C の名前を `index` に入れるのは `load` 全体が通った後である。REPL で同じ名前を宣言し直すと、別のセッションのモジュールの別の名前になるので、この誤りにはならない ([Core IR](core-ir.md) の「translate の配置」)。`Machine` が生きている間、項は外さない
+- 命令は `Op::Ffi { dst, at }` である。`operands[at..]` は [`CodeBase` の C の関数の番号, 引数の数, 引数のスロット…] で、引数は行の Repr のとおりにスロットに置く。逆アセンブラは命令を `ffi s{dst} = {正規の名前}({引数})` と書き、`disassemble` は先頭に、C の関数の項ごとに `cfn {正規の名前}` の行を書く。追記の一致の確かめも、この名前で比べる
+- 引数を `u64` の slot にする変換と結果を値に戻す変換は、`eml_vm` の `ffi.rs` の1か所が両方のモードで受け持つ。slot の列は呼び出しごとに作る。引数は次のように slot にする
+
+  | 引数 | slot |
+  |---|---|
+  | `Int` (幅によらない) | 生の語 |
+  | `Float` | `double` の bit の並び |
+  | `UnboxedArray` | `Heap::unboxed_ptr` が返す要素 0 の位置 |
+  | `MutUnboxedArray` | `Heap::unboxed_ptr_mut` が返す要素 0 の位置 |
+  | `String`、`Bytes` | `Heap::text_payload` が返す先頭のバイトの位置。終わりの 0 は置かない |
+  | ハンドル | `CHandle` が持つ C のポインタ |
+  | ただ1つの引数の `Unit` | slot を作らない |
+
+- 物体の位置は、来歴を公開して (`expose_provenance`) slot に入れる ([オブジェクトモデル](object-model.md) の「`unsafe` の核」の T16)
+- 範囲の検査は、どのポインタを取るより先に、すべての引数について済ませる。狭める `Int as int|int32_t|size_t` の引数が範囲の外なら、C の関数を呼ばずに `Panic` を上げる。文言は `` argument {i} of `{name}` does not fit in C `{ctype}`: {value} `` である。`i` は 1 から数えた引数の位置、`name` は C の表の正規の名前、`ctype` は `int32_t` か `size_t` で、`int` も `int32_t` と書く
+- 結果は、void を `()` に、`Int` と `Float` を生の語に、ハンドルを `CHandle` を持つ `Foreign` の物体にする。`int32_t` の結果は橋渡しが符号を広げ、`size_t` の結果は読み替えたままにする。ハンドルを返す関数が null を返したら、何も確保せずに `` `{name}` returned a null handle `` の `Panic` を上げる
+- 2つの `Panic` は `abort_to` で最も近い `try_panic` に届け、なければその文言の実行時エラー (`VmFault::Panicked`) にする。位置は呼び出しの `Loc` である。どちらの `Panic` も起こしうる C の行は巻き戻しの地点を持つので ([LIR](lir.md) の「巻き戻しの地点」)、借りていた引数は巻き戻しの表が手放す。この2つは extern の誤りの振り分け (`failed`) を通さない
+- C の行は引数を借り、消費しない。`MutUnboxedArray` とハンドルの引数は呼び手のスロットに残り、translate がそれを結果と組にして返す ([Core IR](core-ir.md) の「組を返す extern」)
+- `CHandle` は `lin` の印の `Foreign` の物体の中身で、C のポインタとその型の dtor を持つ。VM はポインタを参照外ししないので、来歴を持たせない (`without_provenance_mut`)。物体を解放すると、解放した worker のスレッドで dtor を1回だけ呼ぶ。dtor のない型では何も呼ばない
+
+### `--link`
+
+- `eml run` は、コンパイルが通った後、プログラムを読み込む前につなぐ。始めに `--link` の KEY を、読み込んだすべてのモジュールの `link` の item に書いた文字列 (`Compiled::link_keys`) と比べる。どれにも合わない KEY があれば `LinkError::UnknownOverride` にする。書き誤った KEY が、黙って効かないままにならないようにするためである。C の関数を持たないプログラムでも同じく確かめる
+- 次に、上書きを持たせた `Linker::new` で、プログラムの C の関数の表とハンドルの型の表をつなぎ、`Linked` を `execute` に渡す。`Linker` はつないだ後で捨てる。開いたライブラリと作った橋渡しはプロセスが終わるまで残るので (「ライブラリと記号」)、`Linked` のポインタはそのまま使える
+- つなげなければ、標準エラーに `link error: {e}` を書き、実行せずに終了コード 1 で終わる。診断にも実行時エラーにもしない。ライブラリや記号があるかは動かす機械の事実で、ソースの誤りではないためである。文言は OS によらないので、テストは標準エラーをバイトまで比べられる
+- `eml check` はつながず、ライブラリを開かない
+- `eml repl` の `Repl` は1つの `Linker` を持ち、入力ごとに、`Machine::load` の前にその入力のプログラムをつなぐ。KEY は確かめない。上書きはセッションの間 `Linker` が持ち、後の入力の `link` の item にも効く。つなげない入力は `Outcome::Unlinked` で、`load` を呼ばないので `Machine` は変わらない ([REPL の端末](repl.md) の「C の関数」)
 
 ## `RunStats`
 

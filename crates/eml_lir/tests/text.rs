@@ -57,7 +57,7 @@ fn positions_are_printed_only_on_request() {
         Stmt::Let {
             var: VarId(2),
             rhs: Rhs::Extern {
-                ext: eml_extern::Extern::IntAdd,
+                ext: eml_extern::Extern::IntAdd.into(),
                 args: vec![v(0), Atom::Int(1)],
                 at: Some(Loc {
                     file: 0,
@@ -527,7 +527,7 @@ fn f(s.0: obj) -> unit {
         Stmt::Let {
             var: VarId(1),
             rhs: Rhs::Extern {
-                ext: eml_extern::Extern::Println,
+                ext: eml_extern::Extern::Println.into(),
                 args: vec![v(0)],
                 at: None,
             },
@@ -558,7 +558,7 @@ fn f(a.0: int, b.1: int) -> enum {
         Stmt::Let {
             var: VarId(2),
             rhs: Rhs::Extern {
-                ext: eml_extern::Extern::IntEq,
+                ext: eml_extern::Extern::IntEq.into(),
                 args: vec![v(0), v(1)],
                 at: None,
             },
@@ -668,10 +668,10 @@ fn f(n.0: int) -> int {
     stmts[2].for_each_atom(|atom| atoms.push(atom));
     assert_eq!(atoms, [v(1)]);
     let mut consumed = Vec::new();
-    stmts[2].for_each_consumed(|atom| consumed.push(atom));
+    stmts[2].for_each_consumed(&program.c_functions, |atom| consumed.push(atom));
     assert_eq!(consumed, []);
     let mut consumed = Vec::new();
-    stmts[0].for_each_consumed(|atom| consumed.push(atom));
+    stmts[0].for_each_consumed(&program.c_functions, |atom| consumed.push(atom));
     assert_eq!(consumed, [v(0)]);
 }
 
@@ -1921,4 +1921,84 @@ fn a_par_has_two_children() {
         "layout (,) { (,)(tobj, tobj) }\nfn f(a.0: tobj) -> obj {\n  let t.1: obj = par (,) #0(a.0)\n  return t.1\n}\n",
     );
     assert_eq!(error.to_string(), "line 3: expected `,`, found `)`");
+}
+
+const C_TABLES: &str = "\
+chandle \"Main.Solver\" drop \"solver_free\" link [linux \"openblas\", macos framework \"Accelerate\"]
+chandle \"Main.Plain\" link []
+cfn \"Main.dgemm\" symbol \"cblas_dgemm\" pure link [linux \"openblas\"] (i32, f64, array, mut_array, i32) -> void
+cfn \"Main.open\" symbol \"solver_new\" blocking link [windows \"solver\"] (i64, size_t, text, handle \"Main.Plain\", unit) -> handle \"Main.Solver\"
+cfn \"Main.half\" symbol \"half\" pure blocking link [] (f64) -> f64
+fn f(x.0: float) -> float {
+  let y.1: float = extern Main.half(x.0)
+  return y.1
+}
+";
+
+#[test]
+fn c_tables_read_back() {
+    use eml_extern::{
+        CFnId, CHandleId, CHandleType, CInt, CLibrary, CLink, CParam, CRet, ExternRef, Os,
+    };
+    let program = round_trip(C_TABLES);
+    assert_eq!(
+        program.c_handles,
+        [
+            CHandleType {
+                name: "Main.Solver".to_string(),
+                dtor: Some("solver_free".to_string()),
+                links: vec![
+                    CLink {
+                        os: Os::Linux,
+                        library: CLibrary::Named("openblas".to_string()),
+                    },
+                    CLink {
+                        os: Os::Macos,
+                        library: CLibrary::Framework("Accelerate".to_string()),
+                    },
+                ],
+            },
+            CHandleType {
+                name: "Main.Plain".to_string(),
+                dtor: None,
+                links: Vec::new(),
+            },
+        ]
+    );
+    let open = &program.c_functions[1];
+    assert_eq!(open.symbol, "solver_new");
+    assert!(!open.pure && open.blocking);
+    assert_eq!(
+        open.params,
+        [
+            CParam::Int(CInt::I64),
+            CParam::Int(CInt::SizeT),
+            CParam::Text,
+            CParam::Handle(CHandleId(1)),
+            CParam::NoArg,
+        ]
+    );
+    assert_eq!(open.ret, CRet::Handle(CHandleId(0)));
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(1),
+            rhs: Rhs::Extern {
+                ext: ExternRef::C(CFnId(2)),
+                args: vec![v(0)],
+                at: None,
+            },
+        }
+    );
+}
+
+#[test]
+fn an_unknown_c_handle_type_is_a_parse_error() {
+    let error = parse_error(
+        "cfn \"M.open\" symbol \"open\" link [] (i64) -> handle \"M.Missing\"\nfn f(x.0: int) -> int {\n  return x.0\n}\n",
+    );
+    assert_eq!(
+        error.to_string(),
+        "line 1: unknown C handle type \"M.Missing\""
+    );
 }

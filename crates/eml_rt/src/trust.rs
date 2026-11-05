@@ -233,6 +233,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("control.rs: external_body map_remove", "T15"),
     ("control.rs: external_body empty_map", "T15"),
     ("frozen.rs: external_body region_known", "T15"),
+    ("heap/unboxed.rs: external_body unboxed_payload", "T16"),
     ("alloc.rs: Drop for Pages", "T4"),
     ("heap/walk.rs: Drop for Heap", "T4"),
     ("frozen.rs: Drop for Frozen", "T4"),
@@ -534,7 +535,7 @@ fn the_trust_list_is_exactly_the_trusted_items() {
         assert!(
             [
                 "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12",
-                "T13", "T14", "T15"
+                "T13", "T14", "T15", "T16"
             ]
             .contains(number),
             "{item} has no trust row"

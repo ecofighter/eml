@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/ffi/abi_string.em
+---
+[E1059] Error: the ABI `Rust` is not supported
+   ╭─[ check-fail/ffi/abi_string.em:2:8 ]
+   │
+ 2 │ extern "Rust" hash : Int -> <IO> Int
+   │        ───┬──  
+   │           ╰──── only `"C"` is supported
+   │ 
+   │ Help: write `extern "C"`
+───╯
+[E1059] Error: the ABI `C++` is not supported
+   ╭─[ check-fail/ffi/abi_string.em:3:8 ]
+   │
+ 3 │ extern "C++" data Widget
+   │        ──┬──  
+   │          ╰──── only `"C"` is supported
+   │ 
+   │ Help: write `extern "C"`
+───╯

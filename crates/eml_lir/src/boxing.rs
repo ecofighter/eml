@@ -20,6 +20,7 @@ use crate::{
     Atom, Block, BlockId, Call, CasePattern, EffectInfo, Layout, LirFn, Mark, OpRet, OperationInfo,
     Program, Repr, Rhs, Stmt, Structs, Term, VarId, VarInfo, operation, push_var,
 };
+use eml_extern::CFunction;
 use rustc_hash::FxHashMap;
 
 pub fn boxing(program: &mut Program) {
@@ -46,6 +47,7 @@ pub fn boxing(program: &mut Program) {
             layouts: &program.layouts,
             structs: &program.structs,
             effects: &program.effects,
+            c_functions: &program.c_functions,
             unboxed_from: FxHashMap::default(),
             boxed_from: FxHashMap::default(),
             never,
@@ -64,7 +66,10 @@ pub fn boxing(program: &mut Program) {
 /// 開くパスの後は、`let (x.0, .., x.n) = <呼び出し>` の後の `return (x.0, .., x.n)` (同じ並び、同じ順) も同じ形で
 /// ある。構造体の `unbox` は純粋な `let` に数える
 /// (docs/spec/lir.md の「末尾の位置の呼び出し」)。
-pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
+pub(crate) fn tail_position_call<'a>(
+    block: &'a Block,
+    c_functions: &[CFunction],
+) -> Option<(usize, &'a Call)> {
     let returned: &[Atom] = match &block.term {
         Term::Return(atom) => std::slice::from_ref(atom),
         Term::ReturnMany(atoms) => atoms,
@@ -86,7 +91,7 @@ pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
                         _ => None,
                     };
                 }
-                if !pure(rhs) {
+                if !pure(rhs, c_functions) {
                     return None;
                 }
             }
@@ -260,6 +265,7 @@ struct Converter<'a> {
     layouts: &'a [Layout],
     structs: &'a Structs,
     effects: &'a [EffectInfo],
+    c_functions: &'a [CFunction],
     /// `let v = unbox w` の v から w。v を `tobj` の位置へ渡すときは、`box` を作らずに w を渡す。
     unboxed_from: FxHashMap<VarId, VarId>,
     /// `let v = box w` の v から w。v を w と同じ Repr のスカラーの位置へ渡すときは、`unbox` を作らずに w を渡す。
@@ -520,7 +526,7 @@ impl Converter<'_> {
                     // 具体化した型の Repr との間で `box` と `unbox` が要る。戻らない extern の束縛には制御が届かない
                     // ので、受け直さず、使う所も変換しない (docs/spec/lir.md の「box の挿入」と「戻らない extern」)
                     Rhs::Extern { ext, args, at: _ } => {
-                        let row = ext.row();
+                        let row = ext.row(self.c_functions);
                         for (arg, &param) in args.iter_mut().zip(row.params) {
                             *arg = self.convert(*arg, param, out);
                         }

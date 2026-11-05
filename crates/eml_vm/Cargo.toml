@@ -14,6 +14,7 @@ doctest = false
 tls = ["dep:eml_tls", "eml_io/tls"]
 
 [dependencies]
+eml_cabi.workspace = true
 eml_extern.workspace = true
 eml_lir.workspace = true
 eml_io.workspace = true

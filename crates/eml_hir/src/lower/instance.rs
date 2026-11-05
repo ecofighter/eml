@@ -132,11 +132,14 @@ impl ItemLowering<'_> {
                 pending.push(discarded(member, head.vars.clone()));
                 continue;
             };
-            // ユーザーのモジュールの `extern` は E1033 にして行を持たないが、定義したものに数えて E1036 を重ねない
+            // ユーザーのモジュールの `extern` は E1033 にして行を持たないが、定義したものに数えて E1036 を重ねない。
+            // `extern "C"` の行はパーサの E0011 だけにする
             defined.push(method);
             if let Some(keyword) = member.extern_range {
                 let name = format!("{class_written} {}.{}", head.written, member.name);
-                if let Some(row) = self.extern_row(keyword, &name, Extern::from_name) {
+                if !member.c_abi
+                    && let Some(row) = self.extern_row(keyword, &name, Extern::from_name)
+                {
                     planned.push(Planned::Extern(method, row));
                 }
                 continue;

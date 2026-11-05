@@ -28,8 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: なし。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
-- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。std がプールに出す仕事は `Std.Stream` のファイルの読み書きだけで、`Op::Job` の仕事は `eml_io` のテストだけが確かめるので、VM から `Op::Job` の仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
+- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。std がプールに出す仕事は `Std.Stream` のファイルの読み書きだけで、`Op::Job` の仕事は `eml_io` のテストだけが確かめるので、VM から `Op::Job` の仕事までを通すテストもここで足す。前提: なし。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
 - `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。`Tls.connect_with_ca` と `Tls.wrap_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: `ffi-blocking`。設計: この項目
   - テストの証明書: macOS は TLS の server の証明書の有効期間に上限 (825 日) を課すと理解しているので、期限を 2126 年にした `eml_tls` の fixtures は、本物のソケットのテストで拒まれる見込みである。段の最初に確かめ、期限の短い証明書を定期的に作り直すか、テストだけ別の検証を使うかを決める
   - Linux の OS の検証器は、OS のファイルから根を読んで rustls で検証する。`ca-certificates` を持たない最小のコンテナ (distroless など) と nix の sandbox では根が空になり、`Tls.connect` はすべて失敗する。この使い方は `Tls.connect_with_ca` で根を渡すと spec に書く。テストは `connect_with_ca` か `wrap_with_ca` で根を渡して書き、既定の根に頼るテストは置かない
@@ -46,7 +45,7 @@
   - 部分適用される関数と値として使う関数は借用を持てないので、所有の変種の包みが要る (Ullrich と de Moura)。包みは、box の挿入が作る変種 `<f>$uniform` と同じく名前で決まる関数 (`f$owned` など) にし、借用を入れるときに決める ([LIR](../spec/lir.md) の「関数の ABI」)。`apply` は実行時に値を変えないので ([VM](../spec/vm.md) の「呼び出しと戻り」)、借用を手放す仕事は包みが受け持つ
   - 借りたまま読む射影も、借用パラメータで扱う。今の所有の形では、射影で得たフィールドを読むだけなら RC の命令は出ない。しかし `f p.name` の後に `p` を使う形は、呼び出しがフィールドを消費するので、今と同じく `dup` する ([Core IR](../spec/core-ir.md) の「変換の規則」)。これを減らすには、`f` の引数を借用にする必要がある
 - `rt-layout`: `eml_rt` に、物体のペイロードの先頭 (数の語の有無と、走査の始まり。配列はいつも数の語を持ち、配列でないデータは走査する語が 255 個以上のときだけ持つ) を求めるインターフェースを足し、`eml_vm` の `data::count_word` が写して持つ同じ規則を消す。インターフェースの性質は、ヘッダの規則と同じく Verus で証明する。ネイティブのコード生成もこのインターフェースを使い、規則の写しを持たない。前提: なし。設計: [オブジェクトモデル](../spec/object-model.md) の「ヘッダ」
-- `jit-core`: `eml_native` に、一階の部分 (スカラー、データ、呼び出し、末尾呼び出し、クロージャと `apply`、RC) を CLIF にするコード生成を作り、`eml run --native` で動かす。AAPCS64 と x86_64 の SysV の `eml_enter` と `eml_fatal`、安全点、ネイティブのコードが読む `Ctx` の欄の配置、利用者の C の行をネイティブのコードから呼ぶことを入れる。扱わない形は E0004 で断り、UI テストの印 `// native: skip` を導入する。前提: `borrowed-params`、`ffi-c`、`rt-layout`。設計: [ネイティブ化の設計](native.md) の「確定した設計判断」、同じ文書の「呼び出し規約とエントリ」
+- `jit-core`: `eml_native` に、一階の部分 (スカラー、データ、呼び出し、末尾呼び出し、クロージャと `apply`、RC) を CLIF にするコード生成を作り、`eml run --native` で動かす。AAPCS64 と x86_64 の SysV の `eml_enter` と `eml_fatal`、安全点、ネイティブのコードが読む `Ctx` の欄の配置、利用者の C の行をネイティブのコードから呼ぶことを入れる。扱わない形は E0004 で断り、UI テストの印 `// native: skip` を導入する。前提: `borrowed-params`、`rt-layout`。設計: [ネイティブ化の設計](native.md) の「確定した設計判断」、同じ文書の「呼び出し規約とエントリ」
 - `jit-externs`: すべての extern とプラグインの行を、ネイティブのコードから呼ぶ。包みと VM の腕を表から作り、extern の失敗を `Ctx.fault` で返す。前提: `jit-core`。設計: [ネイティブ化の設計](native.md) の「extern のエントリ」
 - `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
 - `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 のエントリの stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
@@ -511,6 +510,9 @@
 - Windows でのビルドに `lld` を同梱すること
   - 後に回した理由: Visual Studio の Build Tools か、入れてある `lld-link` で足りる。
   - 見直す条件: Visual Studio の Build Tools を入れられない利用者が出たとき。
+- macOS の hardened runtime の下の JIT: `cranelift-jit` は `MAP_JIT` を使わずにコードを置くので、hardened runtime で署名した処理系では C の関数の橋渡しを作れない ([VM](../spec/vm.md) の「橋渡しの関数」)
+  - 後に回した理由: 今の処理系は署名して配らず、hardened runtime の下で動かさない。署名して配る形は `native-aot` で決める。
+  - 見直す条件: `native-aot` の段で、署名して配る処理系の JIT (REPL と `eml run`) の扱いを決めるとき。
 
 ### FFI と拡張
 
@@ -532,5 +534,5 @@
   - 後に回した理由: 最初のプラグインは egui である。
   - 見直す条件: egui のプラグインの後で、Slint が求められたとき。
 - 32 ビットの要素とバイトの要素の生の配列: `Unboxed` と `MutUnboxed` の新しい instance (`Byte` や 32 ビットの型) として足す。`Raw` の物体の要素はいつも 8 バイトで、`tag` は幅のために空けてある ([オブジェクトモデル](../spec/object-model.md) の「種類」)。幅に依る操作 (`length`、`set` と `thaw` の写す道、回復) は、物体の `tag` に幅を書くか、幅に依る関数をクラスに移すかのどちらかで決める。`Bytes` は名前を変えず、この族にも入れない。C に `uint8_t*` を書かせる API が要るときは `instance MutUnboxed Byte` を足すので、バイトの列の型が `Bytes` と `UnboxedArray Byte` の2つになり、変換の関数2つでつなぐ
-  - 後に回した理由: 生の要素の配列の要素は 8 バイトで、バイトの並びには `Bytes` がある。幅を知る必要のある使い道がまだない。
-  - 見直す条件: `float` の buffer を渡す C の API が要るとき。または、C の API が可変のバイトの buffer を求めたとき。
+  - 後に回した理由: 生の要素の配列の要素は 8 バイトで、バイトの並びには `Bytes` がある。利用者の `extern "C"` が C に貸せる配列も、要素が 64 ビットのものだけである ([宣言](../spec/declarations.md) の「型の対応」)。BLAS と ILP64 の Fortran の LAPACK はこれで呼べる。
+  - 見直す条件: LP64 の LAPACK、LAPACKE の `ipiv`、`float` の buffer のように、32 ビットの要素の buffer を渡す C の API が要るとき。または、C の API が可変のバイトの buffer を求めたとき。

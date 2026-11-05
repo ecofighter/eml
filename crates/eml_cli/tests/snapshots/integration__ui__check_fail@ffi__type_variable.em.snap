@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/ffi/type_variable.em
+---
+[E2022] Error: `a` cannot cross to C here
+   ╭─[ check-fail/ffi/type_variable.em:2:23 ]
+   │
+ 2 │ extern "C" identity : a -> <IO> a
+   │                       ┬  
+   │                       ╰── a C function has one fixed type at each position
+───╯
+[E2022] Error: `a` cannot cross to C here
+   ╭─[ check-fail/ffi/type_variable.em:2:33 ]
+   │
+ 2 │ extern "C" identity : a -> <IO> a
+   │                                 ┬  
+   │                                 ╰── a C function has one fixed type at each position
+───╯

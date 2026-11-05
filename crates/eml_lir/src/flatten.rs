@@ -15,6 +15,7 @@ use crate::{
     OpRet, Prim, Program, Repr, Rhs, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
     push_var,
 };
+use eml_extern::CFunction;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub fn flatten(program: &mut Program) {
@@ -37,6 +38,7 @@ pub fn flatten(program: &mut Program) {
             &program.structs,
             &program.layouts,
             &program.effects,
+            &program.c_functions,
             &signatures,
         )
         .run();
@@ -48,6 +50,7 @@ struct Flattener<'a> {
     structs: &'a Structs,
     layouts: &'a [Layout],
     effects: &'a [EffectInfo],
+    c_functions: &'a [CFunction],
     signatures: &'a [Vec<Repr>],
     /// 開く前の `ret`。
     ret: Repr,
@@ -71,6 +74,7 @@ impl<'a> Flattener<'a> {
         structs: &'a Structs,
         layouts: &'a [Layout],
         effects: &'a [EffectInfo],
+        c_functions: &'a [CFunction],
         signatures: &'a [Vec<Repr>],
     ) -> Self {
         let ret = function.rets[0].0;
@@ -79,6 +83,7 @@ impl<'a> Flattener<'a> {
             structs,
             layouts,
             effects,
+            c_functions,
             signatures,
             ret,
             leaves: FxHashMap::default(),
@@ -365,7 +370,7 @@ impl<'a> Flattener<'a> {
                 });
                 self.leaves.insert(var, leaves);
             }
-            Rhs::Extern { ext, args, at: _ } if ext.row().ret == OpRet::Never => {
+            Rhs::Extern { ext, args, at: _ } if ext.row(self.c_functions).ret == OpRet::Never => {
                 for arg in args.iter_mut() {
                     *arg = self.single(*arg);
                 }

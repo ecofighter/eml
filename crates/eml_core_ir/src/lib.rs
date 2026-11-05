@@ -2,7 +2,7 @@
 //! エフェクトを明示する。RC、box、末尾呼び出しは持たない。これらは EP の後に変換した LIR (`eml_lir`) の上で入れる
 //! (docs/spec/core-ir.md の「実行系の方針」)。
 
-use eml_extern::Extern;
+use eml_extern::{CFunction, CHandleType, ExternRef, FunctionRow};
 use eml_lir::{
     Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark,
     MaskItem, Prim, Repr, Structs, VarId, VarInfo,
@@ -48,11 +48,19 @@ pub struct Program {
     pub effects: Vec<EffectInfo>,
     /// 表示用のパスの表。`Loc.file` が添字で引く。
     pub files: Vec<String>,
+    /// 利用者の C の関数の表。`ExternRef` が引き、`to_lir` が LIR へ写す。
+    pub c_functions: Vec<CFunction>,
+    /// 利用者の C のハンドルの型の表。
+    pub c_handles: Vec<CHandleType>,
 }
 
 impl Program {
     pub fn function(&self, idx: FnIdx) -> &CoreFn {
         &self.functions[idx.0 as usize]
+    }
+
+    pub fn row(&self, ext: ExternRef) -> FunctionRow<'_> {
+        ext.row(&self.c_functions)
     }
 
     /// `size` 個の要素のタプルの配置。translate がタプルに使う配置と同じ形 (フィールドはどれも `tobj`) で、配置の表に
@@ -382,7 +390,7 @@ pub enum Rhs {
     /// extern の関数をその場で実行する。eml のコードを呼び返さず、継続のフレームも積まない。`at` を持つ呼び出しが
     /// 起こした実行時エラーには、その位置を付ける (docs/spec/core-ir.md)。
     Extern {
-        ext: Extern,
+        ext: ExternRef,
         args: Vec<Atom>,
         at: Option<Loc>,
     },

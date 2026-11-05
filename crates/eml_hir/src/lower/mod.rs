@@ -12,7 +12,7 @@ mod types;
 pub use types::{visit_row_type_vars, visit_type_vars};
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextEdit, TextRange};
-use eml_extern::Extern;
+use eml_extern::{CLibrary, CLink, Extern, Os};
 use eml_syntax::{AstPtr, SyntaxNode, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 use rustc_hash::FxHashMap;
@@ -23,7 +23,7 @@ use crate::def_map::{
     private_name,
 };
 use crate::hir::*;
-use crate::item_tree::{FunctionItem, InputItemKind, ItemTree};
+use crate::item_tree::{FunctionItem, InputItemKind, ItemTree, LinkDecl, SignatureItem};
 use crate::load::{LoadedModule, STD_ROOT};
 use crate::program::{ItemId, Items, Module, ModuleId, ModuleOrigin, Program};
 use class::ContextScope;
@@ -174,7 +174,12 @@ impl<'a> ItemLowering<'a> {
         self.declare_effects(&tree.effects, &mut items.effects);
         self.lower_operations(&tree.effects, items);
         self.lower_constructors(&tree.data, &mut items.types, &mut items.constructors);
-        self.lower_functions(&tree.functions, &mut items.functions);
+        self.lower_functions(&tree.functions, &mut items.functions, &mut items.c_decls);
+        items.links = tree
+            .links
+            .iter()
+            .filter_map(|link| self.link(link))
+            .collect();
         // `input$N` は `ItemTree` の関数の直後に置く。入力のモジュールはクラスを持たないので、既定のメソッドとは並ばない
         self.lower_input(tree, items);
         self.lower_classes(&tree.classes, items, pending);
@@ -229,7 +234,12 @@ impl<'a> ItemLowering<'a> {
         }
     }
 
-    fn lower_functions(&mut self, items: &[FunctionItem], functions: &mut Arena<Function>) {
+    fn lower_functions(
+        &mut self,
+        items: &[FunctionItem],
+        functions: &mut Arena<Function>,
+        c_decls: &mut Arena<CDecl>,
+    ) {
         for (k, function) in items.iter().enumerate() {
             let FunctionItem {
                 name,
@@ -238,16 +248,28 @@ impl<'a> ItemLowering<'a> {
                 signature,
                 equations,
             } = function;
-            let keyword = signature
-                .as_ref()
-                .and_then(|signature| signature.extern_keyword);
-            let kind = match keyword {
-                None => FunctionKind::Defined,
-                Some(keyword) => {
-                    FunctionKind::Extern(self.extern_row(keyword, name, Extern::from_name))
+            let kind = match signature {
+                Some(signature) if signature.abi.is_some() => {
+                    let decl = self.c_decl(name, signature);
+                    FunctionKind::C(ItemId::new(self.module, c_decls.alloc(decl)))
                 }
+                Some(signature) => match signature.extern_keyword {
+                    None => FunctionKind::Defined,
+                    Some(keyword) => {
+                        FunctionKind::Extern(self.extern_row(keyword, name, Extern::from_name))
+                    }
+                },
+                None => FunctionKind::Defined,
             };
-            // extern のシグネチャに続く等式は読み捨てる。E1033 のほかに診断を重ねないため
+            // extern のシグネチャに続く等式は読み捨てる。ABI のない extern は E1033 のほかに診断を重ねないためで、
+            // C の関数は本体を持てないことを最初の等式に E1059 で知らせる (docs/spec/declarations.md の「`extern "C"`」)
+            if let (FunctionKind::C(_), Some((_, range))) = (kind, equations.first()) {
+                self.diagnostics.push(Diagnostic::error(
+                    codes::INVALID_EXTERN_C,
+                    format!("`{name}` is an `extern \"C\"` function and cannot have equations"),
+                    Label::new(self.file, *range, "an `extern \"C\"` function has no body"),
+                ));
+            }
             let equations = if kind.has_equations() {
                 equations.as_slice()
             } else {
@@ -280,6 +302,10 @@ impl<'a> ItemLowering<'a> {
                     items: self.resolver,
                     vars: Vars::Define,
                     public_item,
+                    c_widths: match kind {
+                        FunctionKind::C(id) => Some(&mut c_decls[id.local].widths),
+                        _ => None,
+                    },
                     diagnostics: &mut *self.diagnostics,
                 }
                 .lower(node.ty(), range);
@@ -293,7 +319,9 @@ impl<'a> ItemLowering<'a> {
                 // 型を先に変換する。`Vars::Define` は型に現れる型変数だけを表に入れるので、文脈の型変数が型に
                 // 現れるかを表で判定できる
                 let scope = match kind {
-                    FunctionKind::Extern(_) => ContextScope::Forbidden("an extern declaration"),
+                    FunctionKind::Extern(_) | FunctionKind::C(_) => {
+                        ContextScope::Forbidden("an extern declaration")
+                    }
                     _ => ContextScope::Function {
                         type_error: types::has_error(&types),
                     },
@@ -320,6 +348,95 @@ impl<'a> ItemLowering<'a> {
             );
             debug_assert_eq!(id, item_id(self.module, k));
         }
+    }
+
+    /// `extern "C"` のシグネチャの記号と属性。幅はシグネチャの型を変換するときに足す。
+    fn c_decl(&mut self, name: &str, signature: &SignatureItem) -> CDecl {
+        if let Some(abi) = &signature.abi {
+            self.check_abi(abi);
+        }
+        let attrs = &signature.c_attrs;
+        let symbol = self
+            .c_name(attrs.symbol.as_ref())
+            .unwrap_or_else(|| name.to_string());
+        CDecl {
+            symbol,
+            pure: attrs.pure,
+            blocking: attrs.blocking,
+            widths: Vec::new(),
+        }
+    }
+
+    /// `C` でない ABI は E1059 にする。宣言は C として読み、型の検査を続ける (docs/spec/declarations.md の
+    /// 「`extern "C"`」)。
+    fn check_abi(&mut self, (abi, range): &(String, TextRange)) {
+        if abi != "C" {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    codes::INVALID_EXTERN_C,
+                    format!("the ABI `{abi}` is not supported"),
+                    Label::new(self.file, *range, "only `\"C\"` is supported"),
+                )
+                .with_help("write `extern \"C\"`"),
+            );
+        }
+    }
+
+    /// `symbol` と `drop` の C の名前。空の名前は E1059 にして、書かなかったものとして扱う。
+    fn c_name(&mut self, written: Option<&(String, TextRange)>) -> Option<String> {
+        let (name, range) = written?;
+        if name.is_empty() {
+            self.diagnostics.push(Diagnostic::error(
+                codes::INVALID_EXTERN_C,
+                "a C name cannot be empty",
+                Label::new(self.file, *range, "write the name of a C symbol"),
+            ));
+            return None;
+        }
+        Some(name.clone())
+    }
+
+    /// 知らない OS、`macos` でない `framework`、空のライブラリの名前は E1060 にして、その item を捨てる。
+    fn link(&mut self, link: &LinkDecl) -> Option<CLink> {
+        let (os_name, os_range) = &link.os;
+        let os = match os_name.as_str() {
+            "linux" => Os::Linux,
+            "macos" => Os::Macos,
+            "windows" => Os::Windows,
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        codes::INVALID_LINK,
+                        format!("`{os_name}` is not an operating system"),
+                        Label::new(self.file, *os_range, "unknown operating system"),
+                    )
+                    .with_help("write `linux`, `macos` or `windows`"),
+                );
+                return None;
+            }
+        };
+        let (name, name_range) = &link.library;
+        let library = match link.framework {
+            None => CLibrary::Named(name.clone()),
+            Some(_) if os == Os::Macos => CLibrary::Framework(name.clone()),
+            Some(range) => {
+                self.diagnostics.push(Diagnostic::error(
+                    codes::INVALID_LINK,
+                    "`framework` is only for `macos`",
+                    Label::new(self.file, range, "frameworks exist only on macOS"),
+                ));
+                return None;
+            }
+        };
+        if name.is_empty() {
+            self.diagnostics.push(Diagnostic::error(
+                codes::INVALID_LINK,
+                "a library name cannot be empty",
+                Label::new(self.file, *name_range, "write a library or a framework"),
+            ));
+            return None;
+        }
+        Some(CLink { os, library })
     }
 
     /// extern の宣言が指す表の行。標準ライブラリでは正式な名前 (`Prelude.++`) で表を引き、ない名前は `std/` の誤りなので

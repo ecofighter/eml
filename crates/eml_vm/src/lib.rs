@@ -27,6 +27,7 @@ mod disasm;
 mod doorbell;
 mod driver;
 mod error;
+mod ffi;
 mod hosts;
 mod monitor;
 mod op;
@@ -39,6 +40,7 @@ pub use code::{CodeBase, CompileError, FnEntry};
 pub use disasm::disassemble;
 pub use doorbell::Doorbell;
 pub use driver::{Clock, Signal, VirtualSignal};
+pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
@@ -251,6 +253,7 @@ pub(crate) const WORKER_STACK: usize = 8 << 20;
 /// 届ける。待っている読みに `EINTR` を返すためである (docs/spec/vm.md の「上限と割り込み」)。
 pub fn execute(
     program: &Program,
+    linked: &Linked,
     config: &RunConfig,
     host: HostRef,
 ) -> Result<Finished, RuntimeError> {
@@ -260,7 +263,7 @@ pub fn execute(
             .stack_size(WORKER_STACK);
         // 塞ぐのは作った後である。新しいスレッドは作ったスレッドの塞ぎを受け継ぐので、先に塞ぐと worker 0 も塞がれる
         let worker = builder
-            .spawn_scoped(scope, move || execute_here(program, config, host))
+            .spawn_scoped(scope, move || execute_here(program, linked, config, host))
             .map_err(|error| RuntimeError::Fault {
                 fault: VmFault::Driver(error.to_string()),
                 function: "<worker 0>".into(),
@@ -276,12 +279,13 @@ pub fn execute(
 /// `execute` の中身。worker 0 のスレッドで動く。
 fn execute_here(
     program: &Program,
+    linked: &Linked,
     config: &RunConfig,
     host: HostRef,
 ) -> Result<Finished, RuntimeError> {
     let mut machine = AnyMachine::new(config, host);
     let loaded = machine
-        .load(program)
+        .load(program, linked)
         .map_err(|error| compile_error(program, error))?;
     let finished = machine.run(loaded.entry)?;
     machine.close()?;
@@ -447,12 +451,13 @@ impl<M: Mode> Machine<M> {
         &self.code
     }
 
-    /// プログラムを追記する。誤りを返した後の `Machine` は使い続けない (`CodeBase::load`)。
-    pub fn load(&mut self, program: &Program) -> Result<Loaded, CompileError> {
+    /// プログラムを追記する。`linked` は `eml_native` がこのプログラムの C の表をつないだ結果である。誤りを返した後の
+    /// `Machine` は使い続けない (`CodeBase::load`)。
+    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, CompileError> {
         if self.poisoned {
             return Err(CompileError::Poisoned);
         }
-        let entry = self.code.load(program)?;
+        let entry = self.code.load(program, linked)?;
         if let Some(region) = &self.code.region {
             // 入力の境目で、Ctx の持つ語には触れずに塊を付け替えるだけなので、`heap_mut` の前提を崩さない。新しい塊は
             // 前の塊の子孫である (docs/spec/object-model.md の「凍結した領域」)
@@ -1193,10 +1198,10 @@ impl AnyMachine {
         }
     }
 
-    pub fn load(&mut self, program: &Program) -> Result<Loaded, CompileError> {
+    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, CompileError> {
         match self {
-            AnyMachine::Fast(machine) => machine.load(program),
-            AnyMachine::Checked(machine) => machine.load(program),
+            AnyMachine::Fast(machine) => machine.load(program, linked),
+            AnyMachine::Checked(machine) => machine.load(program, linked),
         }
     }
 

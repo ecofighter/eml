@@ -9,11 +9,17 @@ use std::sync::Arc;
 
 use eml_cli::lines::{Command, Lines, Step};
 use eml_cli::{
-    CaptureHost, Control, Evaluated, FsProvider, HostRef, InputStatus, Outcome, Repl, RunConfig,
-    RuntimeError, default_limits, input_status,
+    CaptureHost, Control, Evaluated, FsProvider, HostRef, InputStatus, Linker, Outcome, Repl,
+    RunConfig, RuntimeError, default_limits, input_status,
 };
 
 use crate::common::for_each_file;
+
+/// トランスクリプトの REPL は、UI テストの道具と同じ fixture の記号を C の関数として引く。
+fn linker() -> Linker {
+    // SAFETY: トランスクリプトは fixture の記号を、`eml_test_support` の fixture と同じ署名で宣言する
+    unsafe { Linker::new(Vec::new()).with_symbols(&eml_test_support::fixture_symbols()) }
+}
 
 fn repl_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -200,6 +206,7 @@ impl Runner<'_> {
             Box::new(FsProvider::new(self.root)),
             self.host.clone(),
         )
+        .with_linker(linker())
     }
 
     /// 古いセッションを閉じ、その結果を入力 `index` の位置に記録する。
@@ -230,6 +237,7 @@ impl Runner<'_> {
             &text,
             Box::new(FsProvider::new(self.root.join(dir))),
             self.host.clone(),
+            linker(),
         );
         self.repl = repl;
         self.file = Some(path.to_string());
@@ -286,6 +294,7 @@ impl Runner<'_> {
             }
             Outcome::Interrupted => writeln!(block, "interrupted").unwrap(),
             Outcome::Exited(code) => writeln!(block, "exited with code {code}").unwrap(),
+            Outcome::Unlinked(error) => writeln!(block, "link error: {error}").unwrap(),
             Outcome::Empty | Outcome::Accepted | Outcome::Rejected => {}
         }
     }
@@ -301,7 +310,8 @@ fn run(inputs: &[Input], root: &Path, directory: bool, debug_heap: bool) -> Tran
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(default_limits())));
-    let repl = Repl::new(&config, Box::new(FsProvider::new(root)), host.clone());
+    let repl =
+        Repl::new(&config, Box::new(FsProvider::new(root)), host.clone()).with_linker(linker());
     let mut runner = Runner {
         config,
         host,

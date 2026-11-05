@@ -6,12 +6,16 @@ use std::fmt::Write as _;
 use eml_extern::Extern;
 use eml_rt::{MaskItem, Mode};
 
-use crate::code::{CodeBase, FnEntry, Tables, UnwindEntry};
+use crate::code::{CEntry, CodeBase, FnEntry, Tables, UnwindEntry};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP};
 
 pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
     let view = View::of(code);
     let mut out = String::new();
+    // C の関数の項は名前で使い回すので、何度読み込んでも1つずつしか並ばない (docs/spec/vm.md の「C の関数の命令」)
+    for entry in &code.c_functions {
+        writeln!(out, "cfn {}", entry.function.name).unwrap();
+    }
     for f in &code.functions {
         write!(
             out,
@@ -38,6 +42,7 @@ pub(crate) struct View<'a> {
     pub(crate) tables: &'a Tables,
     pub(crate) functions: &'a [FnEntry],
     pub(crate) files: &'a [String],
+    pub(crate) c_functions: &'a [CEntry],
 }
 
 /// `release` の項目の並び。
@@ -104,6 +109,7 @@ impl<'a> View<'a> {
             tables: &code.tables,
             functions: &code.functions,
             files: &code.files,
+            c_functions: &code.c_functions,
         }
     }
 
@@ -390,6 +396,11 @@ impl<'a> View<'a> {
             Op::Async { dst, at } => format!(
                 "async s{dst} = {}({})",
                 Extern::ALL[ops(at)[0] as usize].row().name,
+                args(at, 2)
+            ),
+            Op::Ffi { dst, at } => format!(
+                "ffi s{dst} = {}({})",
+                self.c_functions[ops(at)[0] as usize].function.name,
                 args(at, 2)
             ),
         };

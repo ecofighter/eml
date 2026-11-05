@@ -21,7 +21,7 @@ use eml_hir::{
     PatKind, Program as HirProgram, Res, Stmt as HirStmt, ValueItem,
 };
 use eml_types::{
-    BodyTypes, InputDisplay, Lin, RowYield, TypeId, TypeKind, TypeStore, TypedProgram,
+    BodyTypes, CShape, InputDisplay, Lin, RowYield, TypeId, TypeKind, TypeStore, TypedProgram,
 };
 use la_arena::ArenaMap;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -30,7 +30,7 @@ use crate::{CoreFn, Program, Rhs, Term};
 use eml_lir::{Atom, FALSE, FnIdx, Loc, Mark, Repr, TRUE, VarId, VarInfo};
 
 use crate::builder::{FnBuilder, Label};
-use expr::extern_row;
+use expr::{ExternTarget, extern_target};
 use instances::{InstanceKind, Part, Target, wrapper_name};
 use names::NameTable;
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
@@ -139,9 +139,9 @@ struct Numbering {
 /// `targets` は、この instance の本体の中の参照の行き先である。
 fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) -> Numbering {
     let extern_of = |expr: ExprId| match body.exprs[expr].kind {
-        ExprKind::Path(Res::Item(ValueItem::Function(function))) => extern_row(hir, function),
+        ExprKind::Path(Res::Item(ValueItem::Function(function))) => extern_target(hir, function),
         ExprKind::Path(Res::Item(ValueItem::Method(_))) => match targets.get(expr) {
-            Some(Target::Extern(row)) => Some(*row),
+            Some(Target::Extern(row)) => Some(ExternTarget::Std(*row)),
             Some(Target::Function(_)) | None => None,
         },
         _ => None,
@@ -152,8 +152,8 @@ fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) 
         .iter()
         .filter_map(|(_, expr)| match &expr.kind {
             ExprKind::Call { callee, args } => {
-                let row = extern_of(*callee)?;
-                (args.len() >= row.row().params.len()).then_some(*callee)
+                let target = extern_of(*callee)?;
+                (args.len() >= target.arity(hir)).then_some(*callee)
             }
             _ => None,
         })
@@ -399,6 +399,7 @@ pub(crate) fn translate(
             continuation_forms: &forms,
             references: &references,
             lifted: &lifted,
+            c_shapes: &typed.c_shapes,
             source: Source {
                 files,
                 file_id: hir.modules[id.module].file,
@@ -448,6 +449,8 @@ pub(crate) fn translate(
         structs: builder.structs,
         effects: effect_table(hir, store, typed),
         files: builder.files.values,
+        c_functions: builder.c_functions,
+        c_handles: builder.c_handles,
     }
 }
 
@@ -545,6 +548,8 @@ struct BodyCtx<'a> {
     references: &'a ArenaMap<LocalId, u32>,
     /// 本体のローカル関数ごとの持ち上げた関数 (`lifted_functions`)。
     lifted: &'a ArenaMap<LocalId, Lifted>,
+    /// 型検査が確かめた C の関数の形。呼び出しを変換するときに C の表の行を作る。
+    c_shapes: &'a FxHashMap<FunctionId, CShape>,
     source: Source<'a>,
 }
 

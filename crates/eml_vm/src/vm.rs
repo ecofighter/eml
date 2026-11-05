@@ -18,6 +18,7 @@ use crate::code::{CodeBase, ForkTable, UnwindEntry};
 use crate::data;
 use crate::driver::DriverKind;
 use crate::error::VmFault;
+use crate::ffi;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
     JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Rescue, Scheduler, TaskId,
@@ -1172,6 +1173,7 @@ fn step<R: Exec>(
             task.set(dst, w);
         }
         Op::Extern { dst, at } => extern_call::<R>(code, ctx, task, counts, dst, at)?,
+        Op::Ffi { dst, at } => ffi::call::<R>(code, ctx, task, dst, at)?,
         // 基本操作 (docs/spec/lir.md の「基本操作」) は `Ctx` の同じ名前のメソッドを呼ぶ。引数の語は、LIR の所有の規則に
         // より VM が持つ参照か借りた語で、基本操作の契約 (docs/spec/object-model.md の「基本操作の契約」) のとおりに
         // 渡す。借用の引数は `Ctx` が手放さない。VM は基本操作の合間に `Ctx` の持つ語に触れない
@@ -3756,7 +3758,7 @@ fn entry_finish<R: Exec>(
 /// 中断の操作の番号。Prelude の `IO` (`io_failed`) と `Panic` (`panicked`) は、どちらも操作を1つだけ宣言する
 /// (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
 const IO_FAILED: usize = 0;
-const PANICKED: usize = 0;
+pub(crate) const PANICKED: usize = 0;
 
 /// 命令 `pc` が返した誤り。算術の専用の命令の誤りなら、ほかの extern の誤りと同じく `Panic` に届け、届かなければ
 /// 誤りを返す。ほかの命令の誤りはそのまま返す。命令の中でなく `run` の誤りの道で届けるのは、`step` の速い道の命令の
@@ -3856,7 +3858,7 @@ fn failed<R: Exec>(
 /// がなければ何もせずに `false` を返し、`args` も作らない。エントリは `never` の節のエントリなので、`yield_abort` で巻き戻しを
 /// 始めて戻らない。中断を起こした命令のフレームはエントリの呼び出し元になり、その命令の地点の表の行で片付く。エントリが戻らない
 /// ので、安全点も置かない (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
-fn abort_to<R: Exec, const N: usize>(
+pub(crate) fn abort_to<R: Exec, const N: usize>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
@@ -4674,7 +4676,7 @@ fn f(p.0: unit) -> unit {
         .unwrap_or_else(|error| panic!("{error}"));
         let control = Arc::new(Control::new(eml_rt::Limits::default()));
         let mut code = CodeBase::<eml_rt::Checked>::new(Arc::clone(&control));
-        let entry = code.load(&program).unwrap();
+        let entry = code.load(&program, &crate::Linked::default()).unwrap();
         let (host, _) = crate::capture_host(Default::default());
         let mut ctx = Ctx::new(Arc::clone(&control), host);
         let mut task = Task::new(&code, entry, usize::MAX);
@@ -4755,7 +4757,7 @@ fn f(p.0: unit) -> unit {
         let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
         let control = Arc::new(Control::new(limits));
         let mut code = CodeBase::<eml_rt::Checked>::new(Arc::clone(&control));
-        code.load(&program).unwrap();
+        code.load(&program, &crate::Linked::default()).unwrap();
         let (host, _) = crate::capture_host(Default::default());
         let ctx = Ctx::new(Arc::clone(&control), host);
         let driver = eml_io::TestDriver::new(None);

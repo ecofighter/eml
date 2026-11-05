@@ -241,6 +241,7 @@ impl ItemLowering<'_> {
                     items: self.resolver,
                     vars: Vars::Define,
                     public_item,
+                    c_widths: None,
                     diagnostics: &mut *self.diagnostics,
                 }
                 .lower(decl.ty(), range);

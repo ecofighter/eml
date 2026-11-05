@@ -3755,3 +3755,18 @@ fn a_program_that_may_fork_has_every_fork_entry() {
         )
     );
 }
+
+#[test]
+fn a_c_call_with_the_wrong_arity_is_rejected() {
+    let text = "\
+cfn \"M.half\" symbol \"half\" pure link [] (f64) -> f64
+fn f(x.0: float) -> float {
+  let h.1: float = extern M.half(x.0, x.0)
+  return h.1
+}
+";
+    assert_eq!(
+        check(text),
+        Err("`M.half` takes 1 arguments but is given 2 in `f`".to_string())
+    );
+}

@@ -38,6 +38,7 @@ pub mod codes {
     pub const INVALID_MULTILINE_STRING: ErrorCode = ErrorCode(14);
     pub const BLOCK_CLOSED_BY_COMMA: ErrorCode = ErrorCode(15);
     pub const INVALID_CHAR_LITERAL: ErrorCode = ErrorCode(16);
+    pub const EXTERN_C_ATTRIBUTES: ErrorCode = ErrorCode(18);
 }
 
 /// 壊れた入力でも必ず木を作る。エラーがあっても後の段階を止めないため。
@@ -63,6 +64,15 @@ impl Parse {
 
     /// 根が item の並び (ファイルか、item の REPL の入力) なら、その item。`let` の束縛、式、問い合わせの根は `None`。
     pub fn items(&self) -> Option<AstChildren<ast::Item>> {
+        let root = self.syntax();
+        match root.kind() {
+            SyntaxKind::SOURCE_FILE | SyntaxKind::REPL_ITEMS => Some(support::children(&root)),
+            _ => None,
+        }
+    }
+
+    /// `items` と同じ根の `link` の item。`link` の item は `ast::Item` に入らないので、別に引く。
+    pub fn link_items(&self) -> Option<AstChildren<ast::LinkItem>> {
         let root = self.syntax();
         match root.kind() {
             SyntaxKind::SOURCE_FILE | SyntaxKind::REPL_ITEMS => Some(support::children(&root)),

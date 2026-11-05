@@ -8,12 +8,15 @@ mod slots;
 
 use std::sync::Arc;
 
-use eml_extern::RuntimeEntry;
+use eml_cabi::Linked;
+use eml_extern::{CFunction, CHandleId, CParam, CRet, Extern, RuntimeEntry};
 use eml_lir::unwind::Unwinds;
 use eml_lir::{FnIdx, Program, Rhs, Stmt};
 use eml_rt::{Control, Mode};
 
-use crate::code::{AsyncEntries, CodeBase, CompileError, FnEntry, Forks, Index, Tables};
+use crate::code::{
+    AsyncEntries, CEntry, CHandleEntry, CodeBase, CompileError, FnEntry, Forks, Index, Tables,
+};
 use crate::disasm;
 use constants::Constants;
 
@@ -23,6 +26,15 @@ pub(crate) struct Links {
     pub(crate) strings: Vec<u32>,
     pub(crate) effects: Vec<u16>,
     pub(crate) files: Vec<u32>,
+    /// C の関数の番号。添字はプログラムの `c_functions` の番号である。
+    pub(crate) c_functions: Vec<u32>,
+}
+
+/// プログラムの C の表を `CodeBase` の番号に振った結果と、`CodeBase` にまだない項。
+struct CLinks {
+    functions: Vec<u32>,
+    new_functions: Vec<CEntry>,
+    new_handles: Vec<CHandleEntry>,
 }
 
 impl<M: Mode> CodeBase<M> {
@@ -42,6 +54,8 @@ impl<M: Mode> CodeBase<M> {
                 tail: eml_rt::Word::UNIT,
             },
             entries: None,
+            c_functions: Vec::new(),
+            c_handles: Vec::new(),
         }
     }
 
@@ -49,14 +63,30 @@ impl<M: Mode> CodeBase<M> {
     /// 末尾に足す。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭を引くので、関数の先頭の位置が決まる前に
     /// 呼び出しを書ける。名前が同じ関数はいつも同じコードになるので (docs/spec/vm.md の「追記」)、debug ビルドでは
     /// すでにある名前の関数も変換し直して比べる。誤りを返した後の表は途中まで書いたものなので、使い続けない。
-    pub fn load(&mut self, program: &Program) -> Result<u32, CompileError> {
+    ///
+    /// `linked` は、このプログラムの C の表をつないだ結果である。ポインタが組にした宣言を解決したものであることは
+    /// `Linked::new` の約束で、ここでは `fits` でその宣言をプログラムの表と比べる。合わないのは呼び手の誤りなので、
+    /// panic する (docs/spec/vm.md の「C の関数の命令」)。
+    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<u32, CompileError> {
+        assert!(
+            linked.fits(&program.c_functions, &program.c_handles),
+            "the linked calls and dtors line up with the C tables of the program"
+        );
         let entry = program.function(program.entry);
         if entry.rets.len() > 1 {
             return Err(CompileError::MultiValueEntry {
                 function: entry.name.clone(),
             });
         }
-        let links = self.links(program);
+        let c_links = self.c_links(program, linked)?;
+        let known_c = self.c_functions.len();
+        let known_handles = self.c_handles.len();
+        self.c_functions.extend(c_links.new_functions);
+        self.c_handles.extend(c_links.new_handles);
+        let links = Links {
+            c_functions: c_links.functions,
+            ..self.links(program)
+        };
         let CodeBase {
             functions,
             tables: out,
@@ -67,6 +97,8 @@ impl<M: Mode> CodeBase<M> {
             control,
             forks,
             entries,
+            c_functions,
+            c_handles,
         } = self;
         let mut pool = Constants::new(constants, index, region, control);
         let strings = &program.strings;
@@ -109,7 +141,15 @@ impl<M: Mode> CodeBase<M> {
         }
         if result.is_ok() && cfg!(debug_assertions) {
             result = check_known(
-                program, &unwinds, &links, functions, known, files, &mut pool, out,
+                program,
+                &unwinds,
+                &links,
+                functions,
+                known,
+                files,
+                c_functions,
+                &mut pool,
+                out,
             );
         }
         let frozen = pool.freeze();
@@ -127,7 +167,58 @@ impl<M: Mode> CodeBase<M> {
         if entries.is_none() {
             *entries = async_entries(program, index)?;
         }
+        // C の名前は、`load` 全体が通ってから引けるようにする
+        for (i, entry) in c_functions.iter().enumerate().skip(known_c) {
+            index
+                .c_functions
+                .insert(entry.function.name.clone(), i as u32);
+        }
+        for (i, entry) in c_handles.iter().enumerate().skip(known_handles) {
+            index.c_handles.insert(entry.handle.name.clone(), i as u32);
+        }
         Ok(links.functions[program.entry.0 as usize])
+    }
+
+    /// プログラムの C の関数とハンドルの型を、名前で `CodeBase` の番号に振る。ない名前には末尾の番号を振り、`linked` の
+    /// ポインタを持つ新しい項を作る。すでにある名前の項は前のものを使い、新しいポインタは捨てる。すでにある名前で項が
+    /// 違えば `Mismatch` を返す。`CodeBase` には何も書かない (docs/spec/vm.md の「C の関数の命令」)。
+    fn c_links(&self, program: &Program, linked: &Linked) -> Result<CLinks, CompileError> {
+        let mismatch = |name: &str| CompileError::Mismatch {
+            function: name.to_string(),
+        };
+        let mut handles = Vec::with_capacity(program.c_handles.len());
+        let mut new_handles = Vec::new();
+        for (handle, &dtor) in program.c_handles.iter().zip(linked.dtors()) {
+            match self.index.c_handles.get(&handle.name) {
+                Some(&k) if self.c_handles[k as usize].handle == *handle => handles.push(k),
+                Some(_) => return Err(mismatch(&handle.name)),
+                None => {
+                    handles.push((self.c_handles.len() + new_handles.len()) as u32);
+                    new_handles.push(CHandleEntry {
+                        handle: handle.clone(),
+                        dtor,
+                    });
+                }
+            }
+        }
+        let mut functions = Vec::with_capacity(program.c_functions.len());
+        let mut new_functions = Vec::new();
+        for (function, &call) in program.c_functions.iter().zip(linked.calls()) {
+            let function = renumbered(function, &handles);
+            match self.index.c_functions.get(&function.name) {
+                Some(&k) if self.c_functions[k as usize].function == function => functions.push(k),
+                Some(_) => return Err(mismatch(&function.name)),
+                None => {
+                    functions.push((self.c_functions.len() + new_functions.len()) as u32);
+                    new_functions.push(CEntry { function, call });
+                }
+            }
+        }
+        Ok(CLinks {
+            functions,
+            new_functions,
+            new_handles,
+        })
     }
 
     /// 関数、エフェクト、位置のファイルの番号を引く。ない名前には末尾の番号を振る。文字列は定数を作るときに引く。
@@ -174,8 +265,36 @@ impl<M: Mode> CodeBase<M> {
             strings: Vec::new(),
             effects,
             files,
+            c_functions: Vec::new(),
         }
     }
+}
+
+/// ハンドルの型の番号を `CodeBase` の番号 `handles` に付け直した C の関数。行は欄から作るので、欄を書き換えずに
+/// `CFunction::new` で作り直す。
+fn renumbered(function: &CFunction, handles: &[u32]) -> CFunction {
+    let handle = |id: CHandleId| CHandleId(handles[id.0 as usize]);
+    let params = function
+        .params
+        .iter()
+        .map(|&param| match param {
+            CParam::Handle(id) => CParam::Handle(handle(id)),
+            other => other,
+        })
+        .collect();
+    let ret = match function.ret {
+        CRet::Handle(id) => CRet::Handle(handle(id)),
+        other => other,
+    };
+    CFunction::new(
+        function.name.clone(),
+        function.symbol.clone(),
+        function.links.clone(),
+        function.pure,
+        function.blocking,
+        params,
+        ret,
+    )
 }
 
 /// ランタイムが名前で呼ぶ `Std.Async` のエントリの番号。名前は前のロードの関数からも引く。`Std.Async` は import した
@@ -205,7 +324,7 @@ fn async_entries(program: &Program, index: &Index) -> Result<Option<AsyncEntries
                 Stmt::Let {
                     rhs: Rhs::Extern { ext, .. },
                     ..
-                } if ext.is_async()
+                } if ext.std().is_some_and(Extern::is_async)
             )
         });
     match RuntimeEntry::ALL
@@ -232,6 +351,7 @@ fn check_known<M: Mode>(
     functions: &[FnEntry],
     known: usize,
     files: &[String],
+    c_functions: &[CEntry],
     pool: &mut Constants<'_, M>,
     out: &mut Tables,
 ) -> Result<(), CompileError> {
@@ -256,6 +376,7 @@ fn check_known<M: Mode>(
                 tables: out,
                 functions,
                 files,
+                c_functions,
             }
             .function(entry)
         };

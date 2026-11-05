@@ -357,7 +357,12 @@ fn run_at(src: &str, workers: usize) -> (String, Finished) {
     };
     let run = |debug_heap: bool| {
         let (host, out) = eml_vm::capture_host(Default::default());
-        let result = eml_vm::execute(&program, &config(debug_heap), host);
+        let result = eml_vm::execute(
+            &program,
+            &eml_vm::Linked::default(),
+            &config(debug_heap),
+            host,
+        );
         (out.contents(), result)
     };
     let (checked, result) = run(true);

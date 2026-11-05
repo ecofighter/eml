@@ -7,6 +7,7 @@ use rustc_hash::FxHashMap;
 
 use crate::boxing::{conform, tail_position_call, uniform_repr};
 use crate::{Atom, Block, Call, FnIdx, LirFn, Program, Repr, Rhs, Stmt, Term, VarId};
+use eml_extern::CFunction;
 
 /// 関数の ABI。手順 1 でそろえた後の引数と結果の Repr である。
 struct Abi {
@@ -56,7 +57,7 @@ pub(crate) fn make(program: &mut Program) {
                 .blocks
                 .iter()
                 .filter_map(|block| {
-                    tail_position_call(block).map(|(_, call)| match call {
+                    tail_position_call(block, &program.c_functions).map(|(_, call)| match call {
                         Call::Direct(target, _) => Tail::Direct(*target),
                         Call::Apply { .. } | Call::Clause { .. } => Tail::Indirect,
                         Call::Par { .. } => unreachable!("a par is never in tail position"),
@@ -128,7 +129,7 @@ impl Maker {
                     sources.push(target);
                 }
             });
-            if tails && let Some(target) = self.typed_tail(block) {
+            if tails && let Some(target) = self.typed_tail(block, &program.c_functions) {
                 sources.push(target);
             }
         }
@@ -158,8 +159,8 @@ impl Maker {
                 }
             });
             if tails
-                && let Some(source) = self.typed_tail(block)
-                && let Some((at, _)) = tail_position_call(block)
+                && let Some(source) = self.typed_tail(block, &program.c_functions)
+                && let Some((at, _)) = tail_position_call(block, &program.c_functions)
                 && let Stmt::Let {
                     var: _,
                     rhs: Rhs::Call(Call::Direct(target, _)),
@@ -188,8 +189,8 @@ impl Maker {
     }
 
     /// ブロックの末尾の位置の呼び出しが、結果が型どおりの関数の直接の呼び出しなら、その関数。
-    fn typed_tail(&self, block: &Block) -> Option<FnIdx> {
-        match tail_position_call(block)? {
+    fn typed_tail(&self, block: &Block, c_functions: &[CFunction]) -> Option<FnIdx> {
+        match tail_position_call(block, c_functions)? {
             (_, Call::Direct(target, _)) if !self.abis[target.0 as usize].ret.is_uniform() => {
                 Some(*target)
             }

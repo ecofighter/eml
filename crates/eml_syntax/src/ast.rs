@@ -141,6 +141,11 @@ ast_node! {
     Constraint => CONSTRAINT,
     Deriving => DERIVING,
     ExternMethod => EXTERN_METHOD,
+    Abi => ABI,
+    CAttr => C_ATTR,
+    CDrop => C_DROP,
+    CWidth => C_WIDTH,
+    LinkItem => LINK_ITEM,
     Block => BLOCK,
     LetStmt => LET_STMT,
     UseStmt => USE_STMT,
@@ -271,10 +276,13 @@ accessors! {
 
     SourceFile {
         items: [Item],
+        /// `link on <os> "…"` の item。`items` には入らない。
+        link_items: [LinkItem],
     }
 
     ReplItems {
         items: [Item],
+        link_items: [LinkItem],
     }
 
     ReplLet {
@@ -291,6 +299,9 @@ accessors! {
 
     Signature {
         extern_keyword: (EXTERN_KW),
+        /// `extern "C"` の `"C"`。
+        abi: Abi,
+        c_attrs: [CAttr],
         name: Name,
         context: Context,
         ty: Type,
@@ -385,6 +396,8 @@ accessors! {
 
     PathType {
         path: Path,
+        /// C の署名の中の `as int` の形の幅。
+        c_width: CWidth,
     }
 
     ParenType {
@@ -454,6 +467,8 @@ accessors! {
         /// `deriving` の句。2つ目からはパーサが E0011 にするが、クラスはすべての句から読む。
         deriving_clauses: [Deriving],
         extern_keyword: (EXTERN_KW),
+        /// `extern "C" data` の `"C"`。
+        abi: Abi,
         kind: KindAnnot,
         alts: [Alt],
     }
@@ -615,7 +630,65 @@ accessors! {
     }
 
     ExternMethod {
+        /// 書けない `"C"`。パーサが報告済みである。
+        abi: Abi,
         name: Name,
+    }
+
+    Abi {
+        string: StringLit,
+    }
+
+    CDrop {
+        string: StringLit,
+    }
+
+    CWidth {
+        /// `as` の後の C の型の名前。
+        name: (LIDENT),
+    }
+
+    LinkItem {
+        /// ライブラリの道か、framework の名前。
+        library: StringLit,
+    }
+}
+
+impl CAttr {
+    fn word(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::LIDENT)
+    }
+
+    pub fn is_pure(&self) -> bool {
+        self.word().is_some_and(|word| word.text() == "pure")
+    }
+
+    pub fn is_blocking(&self) -> bool {
+        self.word().is_some_and(|word| word.text() == "blocking")
+    }
+
+    /// `symbol "name"` の文字列。ほかの属性と、文字列を書き忘れた `symbol` では `None` である。
+    pub fn symbol(&self) -> Option<StringLit> {
+        support::child(&self.syntax)
+    }
+}
+
+impl LinkItem {
+    /// `link`、`on`、OS の名前、`framework` の順の語。
+    fn word(&self, n: usize) -> Option<SyntaxToken> {
+        self.syntax
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            .filter(|token| token.kind() == SyntaxKind::LIDENT)
+            .nth(n)
+    }
+
+    pub fn os(&self) -> Option<SyntaxToken> {
+        self.word(2)
+    }
+
+    pub fn framework(&self) -> Option<SyntaxToken> {
+        self.word(3)
     }
 }
 
@@ -1179,6 +1252,11 @@ impl ReturnClause {
 }
 
 impl DataItem {
+    /// `extern "C" data T drop "f"` の `"f"`。
+    pub fn c_drop(&self) -> Option<StringLit> {
+        support::child::<CDrop>(&self.syntax)?.string()
+    }
+
     /// `=` とコンストラクタの並びを書いたか。
     /// `=` か選択肢があるか。`=` を書き忘れた選択肢はパーサが報告済みなので、コンストラクタのない `data` には数えない。
     pub fn has_constructors(&self) -> bool {

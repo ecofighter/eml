@@ -3,7 +3,7 @@
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
 //! 文字列を返すエントリの結果を写すこと、`exit` の巻き戻し、`apply` と生の語の捕獲、複数の値の戻りと構造体と箱の間の
-//! 変換、`par` のタスクの切り替えと子の中断、両方のモード。
+//! 変換、`par` のタスクの切り替えと子の中断、C の関数の呼び出し (Rust の橋渡しと、整数を詰めたハンドル)、両方のモード。
 
 use eml_vm::{AnyMachine, RunConfig, RuntimeError, Sched, VmFault, capture_host, execute};
 
@@ -26,7 +26,8 @@ fn run_counting_preemptions(program: &eml_lir::Program, sched: Sched) -> (String
         let config = RunConfig::default()
             .with_debug_heap(debug_heap)
             .with_sched(sched);
-        let finished = execute(program, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        let finished = execute(program, &eml_vm::Linked::default(), &config, host)
+            .unwrap_or_else(|error| panic!("{error}"));
         outputs.push(out.contents());
         preemptions.push(finished.preemptions);
     }
@@ -191,7 +192,7 @@ fn second() -> unit {
             let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
             eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
             let loaded = machine
-                .load(&program)
+                .load(&program, &eml_vm::Linked::default())
                 .unwrap_or_else(|error| panic!("{error:?}"));
             machine
                 .run(loaded.entry)
@@ -219,7 +220,7 @@ fn shown() -> obj {
         let (host, _) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
-        let loaded = machine.load(&program).unwrap();
+        let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
         let (_, shown) = machine.run_shown(loaded.entry, 10).unwrap();
         assert_eq!(shown.as_deref(), Some("é7"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
@@ -261,7 +262,8 @@ fn bottom(n.0: int) -> unit {
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
-        let finished = execute(&program, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        let finished = execute(&program, &eml_vm::Linked::default(), &config, host)
+            .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!((finished.exit, out.contents()), (Some(5), String::new()));
         // `bottom`、`mid`、`ApplyRest` の枠、`main` の4つ。数は検査モードだけで数える
         let unwound = if debug_heap { 4 } else { 0 };
@@ -552,7 +554,8 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
-        let error = execute(&program, &config, host).expect_err("the panic is not caught");
+        let error = execute(&program, &eml_vm::Linked::default(), &config, host)
+            .expect_err("the panic is not caught");
         assert_eq!(out.contents(), "", "debug_heap: {debug_heap}");
         // 文言は `par.rs` が固定するので、ここでは起こし直した `panic` で終わったことだけを見る
         assert!(
@@ -564,6 +567,91 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
                 }
             ),
             "debug_heap: {debug_heap}: {error}"
+        );
+    }
+}
+
+const C_SCALARS: &str = "\
+cfn \"Main.abs\" symbol \"rs_abs\" pure link [] (i64) -> i64
+cfn \"Main.half\" symbol \"rs_half\" pure link [] (f64) -> f64
+cfn \"Main.sub\" symbol \"rs_sub_i32\" pure link [] (i32, i32) -> i32
+fn main() -> unit {
+  let n.0: int = extern \"Prelude.Num Int.-\"(0, 5)
+  let a.1: int = extern Main.abs(n.0)
+  let s.2: obj = extern \"Prelude.Show Int.show\"(a.1)
+  let u.3: unit = extern Prelude.println(s.2)
+  let h.4: float = extern Main.half(3.0)
+  let t.5: obj = extern \"Prelude.Show Float.show\"(h.4)
+  let u.6: unit = extern Prelude.println(t.5)
+  let d.7: int = extern Main.sub(1, 3)
+  let r.8: obj = extern \"Prelude.Show Int.show\"(d.7)
+  let u.9: unit = extern Prelude.println(r.8)
+  let e.10: int = extern Main.sub(1, 2147483648)
+  return ()
+}
+";
+
+/// `Op::Ffi` が引数の語を slot にして橋渡しを呼び、結果を戻す。`int32_t` の結果は符号を広げる。最後の呼び出しは範囲の
+/// 外の引数で、C の関数を呼ばずに `Panic` を上げる。捕まえる handler がないので実行時エラーになる。
+#[test]
+fn a_c_call_passes_scalars_in_both_modes() {
+    let program = eml_lir::parse(C_SCALARS).unwrap_or_else(|error| panic!("{error}"));
+    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let linked = crate::common::c::linked(&program, &crate::common::c::calls(), &[]);
+    for debug_heap in [true, false] {
+        let (host, out) = capture_host(Default::default());
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let error = execute(&program, &linked, &config, host).expect_err("the panic is not caught");
+        assert_eq!(out.contents(), "5\n1.5\n-2\n", "debug_heap: {debug_heap}");
+        assert!(
+            matches!(
+                &error,
+                RuntimeError::Fault {
+                    fault: VmFault::Panicked(text),
+                    ..
+                } if text == "argument 2 of `Main.sub` does not fit in C `int32_t`: 2147483648"
+            ),
+            "debug_heap: {debug_heap}: {error}"
+        );
+    }
+}
+
+/// C が返したハンドルの物体を作り、借りて C に渡し、手放すと dtor を1回だけ呼ぶ。
+#[test]
+fn a_c_handle_runs_its_dtor_once() {
+    let text = "\
+chandle \"Main.Handle\" drop \"rs_handle_free\" link []
+cfn \"Main.new\" symbol \"rs_handle_new\" link [] (i64, i64) -> handle \"Main.Handle\"
+cfn \"Main.get\" symbol \"rs_handle_get\" link [] (handle \"Main.Handle\") -> i64
+fn main() -> unit {
+  let v.0: int = call value(9)
+  let s.1: obj = extern \"Prelude.Show Int.show\"(v.0)
+  let u.2: unit = extern Prelude.println(s.1)
+  return u.2
+}
+fn value(n.0: int) -> int {
+  let h.1: obj lin = extern Main.new(100005, n.0)
+  let v.2: int = extern Main.get(h.1)
+  let u.3: unit = drop h.1
+  return v.2
+}
+";
+    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    let linked = crate::common::c::linked(
+        &program,
+        &crate::common::c::calls(),
+        &crate::common::c::dtors(),
+    );
+    for debug_heap in [true, false] {
+        let (host, out) = capture_host(Default::default());
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        execute(&program, &linked, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(out.contents(), "9\n", "debug_heap: {debug_heap}");
+        assert_eq!(
+            crate::common::c::rs_frees(100005),
+            1,
+            "debug_heap: {debug_heap}"
         );
     }
 }

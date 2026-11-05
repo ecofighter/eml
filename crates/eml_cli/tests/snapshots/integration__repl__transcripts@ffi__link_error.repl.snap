@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/ffi/link_error.repl
+---
+> extern "C" pure symbol "eml_no_such_symbol" missing : Float -> Float
+.
+> missing 1.0
+link error: symbol "eml_no_such_symbol" was not found
+> n : Int
+. n = 2
+.
+> n + 1
+3
+--- close ---
+no leaks

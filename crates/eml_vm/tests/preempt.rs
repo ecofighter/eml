@@ -78,7 +78,12 @@ fn run_raising(
         .with_debug_heap(true)
         .with_control(Arc::clone(&control))
         .with_sched(Sched::Sequential);
-    let result = eml_vm::execute(&program, &config, HostRef::new(Arc::new(host)));
+    let result = eml_vm::execute(
+        &program,
+        &eml_vm::Linked::default(),
+        &config,
+        HostRef::new(Arc::new(host)),
+    );
     (control, result)
 }
 
@@ -139,8 +144,13 @@ main () =
         .with_debug_heap(true)
         .with_control(control)
         .with_sched(Sched::Sequential);
-    let finished = eml_vm::execute(&program, &config, HostRef::new(Arc::new(host)))
-        .unwrap_or_else(|error| panic!("{error}"));
+    let finished = eml_vm::execute(
+        &program,
+        &eml_vm::Linked::default(),
+        &config,
+        HostRef::new(Arc::new(host)),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "a\nb\nc\n");
     assert_eq!(finished.preemptions, 1);
 }

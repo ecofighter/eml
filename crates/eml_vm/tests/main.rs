@@ -11,6 +11,7 @@ mod chan;
 mod codegen;
 mod data;
 mod evidence;
+mod ffi;
 mod io;
 mod machine;
 mod memory;

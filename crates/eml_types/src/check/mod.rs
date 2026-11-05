@@ -20,7 +20,7 @@ use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
     BodyTypes, DeclType, InputType, Instantiation, RowYield, TypedProgram, Uniform, Update,
-    VarType, carry, codes, exhaustive, scc, uniform, usage,
+    VarType, carry, codes, exhaustive, ffi, scc, uniform, usage,
 };
 use constraints::{Defaulting, Failure, show_constraint, solve};
 
@@ -231,7 +231,20 @@ pub(crate) fn check_module(
         &schemes,
     ));
     diagnostics.extend(report_violations(program, files, &types, violated));
+    let mut c_shapes = FxHashMap::default();
+    for (id, function) in program.functions() {
+        if !matches!(function.kind, FunctionKind::C(_)) || function.signature.is_none() {
+            continue;
+        }
+        match ffi::check(program, id) {
+            Ok(shape) => {
+                c_shapes.insert(id, shape);
+            }
+            Err(found) => diagnostics.extend(found),
+        }
+    }
     let mut typed = typed_program(signatures, schemes, joins, bodies, inputs, query, types);
+    typed.c_shapes = c_shapes;
     let (uniform, found) = uniform::uniform(program, &typed.types, &typed.decls, &typed.bodies);
     typed.uniform = uniform;
     diagnostics.extend(found);
@@ -454,9 +467,10 @@ pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
             let signature = function.signature.as_ref()?;
             let arrows = match function.kind {
                 FunctionKind::DefaultMethod(_) | FunctionKind::InstanceMethod(..) => METHOD_ARROWS,
-                FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => {
-                    Arrows::OutermostUnr
-                }
+                FunctionKind::Defined
+                | FunctionKind::Extern(_)
+                | FunctionKind::C(_)
+                | FunctionKind::Input(_) => Arrows::OutermostUnr,
             };
             Some((id, signature_shape(context, signature, arrows)))
         })
@@ -712,7 +726,10 @@ fn unrestricted_vars(
     let class_side = match function.kind {
         FunctionKind::InstanceMethod(instance, _) => program[instance].generics.type_vars.len(),
         FunctionKind::DefaultMethod(_) => 1,
-        FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => 0,
+        FunctionKind::Defined
+        | FunctionKind::Extern(_)
+        | FunctionKind::C(_)
+        | FunctionKind::Input(_) => 0,
     };
     let mut vars: Vec<TypeVarId> = signature
         .generics
@@ -737,9 +754,10 @@ fn signature_file(program: &Program, id: FunctionId) -> FileId {
         FunctionKind::InstanceMethod(_, method) | FunctionKind::DefaultMethod(method) => {
             program.file(method.module)
         }
-        FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => {
-            program.file(id.module)
-        }
+        FunctionKind::Defined
+        | FunctionKind::Extern(_)
+        | FunctionKind::C(_)
+        | FunctionKind::Input(_) => program.file(id.module),
     }
 }
 
@@ -752,10 +770,9 @@ fn declaration_schemes(
     let mut problems: Vec<(ValueItem, KindProblem)> = Vec::new();
     // extern の関数は本体を持たないので、部分適用のクロージャの Kind だけを宣言から出す
     // (docs/spec/types.md の「関数型」)
-    for (id, function) in program
-        .functions()
-        .filter(|(_, function)| matches!(function.kind, FunctionKind::Extern(_)))
-    {
+    for (id, function) in program.functions().filter(|(_, function)| {
+        matches!(function.kind, FunctionKind::Extern(_) | FunctionKind::C(_))
+    }) {
         let (Some(shape), Some(signature)) = (signatures.functions.get(id), &function.signature)
         else {
             continue;
@@ -959,7 +976,10 @@ fn check_method_kinds(
         let (instance, method) = match function.kind {
             FunctionKind::InstanceMethod(instance, method) => (Some(instance), method),
             FunctionKind::DefaultMethod(method) => (None, method),
-            FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => continue,
+            FunctionKind::Defined
+            | FunctionKind::Extern(_)
+            | FunctionKind::C(_)
+            | FunctionKind::Input(_) => continue,
         };
         if unreliable.contains(&id) || bodies.get(id).is_none() {
             continue;
@@ -1115,6 +1135,7 @@ fn typed_program(
         uniform: Uniform::default(),
         inputs,
         query,
+        c_shapes: FxHashMap::default(),
     }
 }
 

@@ -1,6 +1,6 @@
 //! 式ごとの変換と、呼び出しの引数の個数による場合分け (docs/spec/core-ir.md の eval/apply)。
 
-use eml_extern::{Extern, ExternType};
+use eml_extern::{Extern, ExternRef, ExternType};
 use eml_hir::EvalStep;
 use eml_hir::{
     Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, IndexBase, Literal,
@@ -20,12 +20,33 @@ use super::program::{
 use super::types::{mark, split_arrows};
 use super::{ContinuationForm, Exit, FnLowering, Param};
 
-/// extern の関数なら、その表の行。誤りのないプログラムの extern は、どれも標準ライブラリの宣言で行を持つ。
-pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Extern> {
-    match hir[function].kind {
-        FunctionKind::Extern(row) => {
-            Some(row.expect("a program without errors has no user extern"))
+/// 本体を持たず、呼ぶと extern の命令になる関数の行き先。C の関数の行はプログラムの C の表に入れて初めて番号を持つ
+/// ので、ここでは関数を指すだけにする。表に入れるのは `ProgramBuilder::extern_ref` である。
+#[derive(Clone, Copy)]
+pub(super) enum ExternTarget {
+    Std(Extern),
+    C(FunctionId),
+}
+
+impl ExternTarget {
+    /// 引数がそろうまでの引数の数。C の関数は宣言の型の背骨に沿った矢印の数で、行の引数の数と同じである。
+    pub(super) fn arity(self, hir: &HirProgram) -> usize {
+        match self {
+            ExternTarget::Std(ext) => ext.row().params.len(),
+            ExternTarget::C(function) => hir
+                .arity(function)
+                .expect("a C function without errors has a signature"),
         }
+    }
+}
+
+/// extern の関数なら、その行き先。誤りのないプログラムの `extern` は、どれも標準ライブラリの宣言で行を持つ。
+pub(super) fn extern_target(hir: &HirProgram, function: FunctionId) -> Option<ExternTarget> {
+    match hir[function].kind {
+        FunctionKind::Extern(row) => Some(ExternTarget::Std(
+            row.expect("a program without errors has no user extern"),
+        )),
+        FunctionKind::C(_) => Some(ExternTarget::C(function)),
         FunctionKind::Defined
         | FunctionKind::DefaultMethod(_)
         | FunctionKind::InstanceMethod(..)
@@ -41,7 +62,7 @@ enum Callee {
     Function(FnIdx),
     /// extern の関数か、extern で結んだメソッド。`callee` は呼ばれる式で、包む関数の型と呼び出しの位置に使う。
     Extern {
-        row: Extern,
+        row: ExternRef,
         callee: ExprId,
     },
     /// 操作とコンストラクタ。`callee` は参照の式で、包む関数の型引数と型を取る。
@@ -171,6 +192,12 @@ impl FnLowering<'_> {
         fields
     }
 
+    /// extern の行き先の行。C の関数は、ここで初めてプログラムの C の表に入る。
+    fn extern_ref(&mut self, target: ExternTarget) -> ExternRef {
+        self.program
+            .extern_ref(self.ctx.hir, self.ctx.c_shapes, target)
+    }
+
     /// 型 `ty` の値を束縛する `bind`。
     fn bind_typed(&mut self, name: &str, ty: TypeId, rhs: Rhs) -> Atom {
         let repr = self.type_repr(ty);
@@ -181,7 +208,7 @@ impl FnLowering<'_> {
     /// 値として使う extern の参照 `site` ごとの包む関数 (docs/spec/core-ir.md)。型は参照の式の型から取る。extern の
     /// 関数の宣言の型とは開いた row の末尾だけが違う。型変数の位置の Repr は、参照の型では `int` などで行では
     /// `tobj` と違いうるが、box の挿入が合わせる (docs/spec/lir.md の「extern の行」)。
-    fn extern_wrapper(&mut self, site: ExprId, row: Extern) -> FnIdx {
+    fn extern_wrapper(&mut self, site: ExprId, row: ExternRef) -> FnIdx {
         let number = self.ctx.numbering.externs[site];
         let name = format!("{}$extern{number}", self.ctx.root_name);
         let at = self.loc(site);
@@ -350,7 +377,7 @@ impl FnLowering<'_> {
     fn callee_arity(&self, callee: Callee) -> usize {
         match callee {
             Callee::Function(target) => self.program.arity(target),
-            Callee::Extern { row, callee: _ } => row.row().params.len(),
+            Callee::Extern { row, callee: _ } => self.program.row(row).params.len(),
             Callee::Operation { op, .. } => self.ctx.hir[op].arity,
             Callee::Constructor { ctor, .. } => self.ctx.hir[ctor].fields.len(),
             Callee::Continuation { arity, .. } => arity,
@@ -568,14 +595,20 @@ impl FnLowering<'_> {
     ) -> Atom {
         let head = match &self.ctx.body.exprs[callee].kind {
             ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
-                match extern_row(self.ctx.hir, *function) {
-                    Some(row) => Callee::Extern { row, callee },
+                match extern_target(self.ctx.hir, *function) {
+                    Some(target) => Callee::Extern {
+                        row: self.extern_ref(target),
+                        callee,
+                    },
                     None => Callee::Function(self.ctx.target(callee)),
                 }
             }
             ExprKind::Path(Res::Item(ValueItem::Method(_))) => match self.ctx.extern_target(callee)
             {
-                Some(row) => Callee::Extern { row, callee },
+                Some(row) => Callee::Extern {
+                    row: row.into(),
+                    callee,
+                },
                 None => Callee::Function(self.ctx.target(callee)),
             },
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
@@ -658,7 +691,8 @@ impl FnLowering<'_> {
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
             ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
-                if let Some(row) = extern_row(self.ctx.hir, *function) {
+                if let Some(target) = extern_target(self.ctx.hir, *function) {
+                    let row = self.extern_ref(target);
                     return Atom::Fn(self.extern_wrapper(id, row));
                 }
                 let name = self.ctx.hir[*function].name.clone();
@@ -666,7 +700,7 @@ impl FnLowering<'_> {
             }
             ExprKind::Path(Res::Item(ValueItem::Method(method))) => {
                 if let Some(row) = self.ctx.extern_target(id) {
-                    return Atom::Fn(self.extern_wrapper(id, row));
+                    return Atom::Fn(self.extern_wrapper(id, row.into()));
                 }
                 let name = self.ctx.hir[*method].name.clone();
                 self.function_value(id, &name)
@@ -1129,7 +1163,7 @@ impl FnLowering<'_> {
                     let pair_repr = program.tuple_struct(layout, vec![value, state]);
                     let pair = program.lending_call(
                         builder,
-                        ext,
+                        ext.into(),
                         lent,
                         None,
                         VarInfo::new("t", value.0, value.1),
@@ -1153,7 +1187,7 @@ impl FnLowering<'_> {
                     let written = Atom::Var(builder.bind(
                         VarInfo::new("st", state.0, state.1),
                         Rhs::Extern {
-                            ext: Extern::MutArrayWrite,
+                            ext: Extern::MutArrayWrite.into(),
                             args: vec![st, args[0], args[1]],
                             at: None,
                         },
@@ -1219,7 +1253,7 @@ impl FnLowering<'_> {
         );
         let at = Some(self.loc(site));
         let rhs = Rhs::Extern {
-            ext: Extern::CheckIndex,
+            ext: Extern::CheckIndex.into(),
             args: vec![index, length],
             at,
         };
@@ -1256,7 +1290,7 @@ impl FnLowering<'_> {
                     &mut self.builder,
                     hir,
                     store,
-                    Extern::ArrayGet,
+                    Extern::ArrayGet.into(),
                     vec![array, index],
                     Vec::new(),
                     at,

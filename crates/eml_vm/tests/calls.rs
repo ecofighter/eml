@@ -218,6 +218,7 @@ fn a_self_tail_loop_runs_in_constant_depth() {
     let (host, _) = eml_vm::capture_host(Default::default());
     let result = eml_vm::execute(
         &parse(COUNT),
+        &eml_vm::Linked::default(),
         &eml_vm::RunConfig::default()
             .with_debug_heap(true)
             .with_control(control),
@@ -234,6 +235,7 @@ fn a_self_tail_loop_stops_on_an_interrupt() {
     let (host, _) = eml_vm::capture_host(Default::default());
     let result = eml_vm::execute(
         &parse(COUNT),
+        &eml_vm::Linked::default(),
         &eml_vm::RunConfig::default()
             .with_debug_heap(true)
             .with_control(control),
@@ -274,6 +276,7 @@ b2:
     let (host, _) = eml_vm::capture_host(Default::default());
     let result = eml_vm::execute(
         &parse(text),
+        &eml_vm::Linked::default(),
         &eml_vm::RunConfig::default()
             .with_debug_heap(true)
             .with_control(control),
@@ -490,6 +493,7 @@ fn a_growing_heap_hits_the_memory_limit() {
             let (host, _) = eml_vm::capture_host(Default::default());
             eml_vm::execute(
                 &parse(&cons_loop(n)),
+                &eml_vm::Linked::default(),
                 &eml_vm::RunConfig::default()
                     .with_debug_heap(debug_heap)
                     .with_control(control),

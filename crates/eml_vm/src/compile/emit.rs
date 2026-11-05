@@ -1,6 +1,6 @@
 //! 関数ごとの命令の生成 (docs/spec/vm.md の「命令ごとの実行」)。定数の atom は、命令の前に一時のスロットへ読み込む。
 
-use eml_extern::Extern;
+use eml_extern::{Extern, ExternRef};
 use eml_lir::unwind::{UnwindPoint, Unwinds};
 use eml_lir::{
     Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Stmt,
@@ -493,6 +493,22 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         })
     }
 
+    fn std_extern(&mut self, ext: Extern, dst: Slot, slots: &[Slot]) -> Op {
+        arithmetic(ext, dst, slots).unwrap_or_else(|| {
+            if let Some(op) = self.array_op(ext, dst, slots) {
+                return op;
+            }
+            let at = self.out.slot_list([ext as u32], slots);
+            // `Std.Async`、`Std.Chan`、`Std.Atomic` の行は登録表に触れ、`Std.Async` の行はタスクを作るか起こして
+            // 切り替えるので、`Scheduler` を持つ命令にする (docs/spec/vm.md の「`Async` のタスク」)
+            if ext.is_async() {
+                Op::Async { dst, at }
+            } else {
+                Op::Extern { dst, at }
+            }
+        })
+    }
+
     fn rhs(&mut self, var: VarId, rhs: &Rhs) {
         let dst = self.slot(var);
         match rhs {
@@ -501,25 +517,21 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 self.out.push(Op::Call { dst, at });
             }
             Rhs::Extern { ext, args, at } => {
-                let row = ext.row();
+                let row = self.program.row(*ext);
                 let slots: Vec<Slot> = args
                     .iter()
                     .zip(row.params)
                     .map(|(&arg, &repr)| self.atom(arg, repr))
                     .collect();
-                let op = arithmetic(*ext, dst, &slots).unwrap_or_else(|| {
-                    if let Some(op) = self.array_op(*ext, dst, &slots) {
-                        return op;
+                let op = match *ext {
+                    ExternRef::Std(ext) => self.std_extern(ext, dst, &slots),
+                    // C の関数は名前で振った `CodeBase` の番号で指す (docs/spec/vm.md の「C の関数の命令」)
+                    ExternRef::C(id) => {
+                        let index = self.links.c_functions[id.0 as usize];
+                        let at = self.out.slot_list([index], &slots);
+                        Op::Ffi { dst, at }
                     }
-                    let at = self.out.slot_list([*ext as u32], &slots);
-                    // `Std.Async`、`Std.Chan`、`Std.Atomic` の行は登録表に触れ、`Std.Async` の行はタスクを作るか起こして
-                    // 切り替えるので、`Scheduler` を持つ命令にする (docs/spec/vm.md の「`Async` のタスク」)
-                    if ext.is_async() {
-                        Op::Async { dst, at }
-                    } else {
-                        Op::Extern { dst, at }
-                    }
-                });
+                };
                 let pc = self.out.push(op);
                 if let Some(loc) = at {
                     let file = self.links.files[loc.file as usize];

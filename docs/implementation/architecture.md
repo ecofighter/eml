@@ -43,6 +43,8 @@ eml/
     eml_types/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。workspace の crate では eml_extern だけに依存する
+    eml_cabi/           # C の関数を呼ぶコードのポインタ。eml_extern だけに依存する
+    eml_native/         # Cranelift の橋渡しの関数と、C のライブラリと記号の解決。workspace の crate では eml_extern と eml_cabi だけに依存する
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
     eml_io/             # I/O の driver (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存し、feature `tls` の下では eml_tls にも依存する
     eml_tls/            # rustls のクライアント接続を包む TLS の状態 (I/O を持たない)。workspace の crate には依存しない
@@ -77,6 +79,8 @@ eml_cli          check / run コマンド。パイプラインを組む唯一の
 eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_rt の Ctx の上で、worker のスレッドごとに1つの Ctx で実行する
 eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。時計と I/O の待ちを受け持つ
 eml_tls          rustls のクライアント接続を包む TLS の状態 (I/O を持たない)。aws-lc-rs の provider と webpki-roots を使い、eml のどの crate にも依存しない
+eml_native       Cranelift の橋渡しの関数と、C のライブラリと記号の解決 (Linker::link が Linked を作る)。workspace の crate では eml_extern と eml_cabi だけに依存する
+eml_cabi         C の関数を呼ぶコードのポインタ (Bridge、Dtor、CCall、Linked)。eml_extern だけに依存する
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。最適化と evidence passing のパスと、LIR への変換
 eml_lir          LIR (box、RC、末尾呼び出しを明示する基本ブロックの列)。box/unbox の挿入、構造体を葉に開くパス、縮約、dup/decref/release の挿入、reuse のパス
@@ -92,9 +96,11 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 - `eml_tls` は workspace のどの crate にも依存しない。`eml_vm` と `eml_io` が依存するのは feature `tls` の下だけである。`eml_cli` の feature `tls` も `eml_tls` を省ける普通の依存として足す。`eml_cli` の `src/` はこれを使わず、本物のソケットの上で TLS のサーバーを立てる結合テスト (`tests/tls.rs`) が使う。rustls は aws-lc-rs の provider だけで使い、根の証明書は webpki-roots が持つ。aws-lc-sys が要るのは C のツールチェーンだけで、Windows の x86_64 では NASM を使い、NASM がなければ組み済みのオブジェクトを使う。C のツールチェーンを持たない `.#cross` の clippy が `eml_tls` を除くのはこのためである
 - aws-lc-sys は、target の C のツールチェーンだけで組めることを前提にする。対応する OS か `nix build` で、組めない、リンクできない、動かないときは、OS ごとのツールや環境変数を足さず、provider を ring に替える。ring でも同じことが起きたら、設計から決め直す
 - `eml_lir` は、workspace の crate では `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
+- `eml_cabi` は、`eml_cabi → eml_extern` の辺だけを持つ葉の crate である。`Ctx` に関わらないコードのポインタだけを持つ。`eml_vm` と `eml_native` が依存し、`eml_native` が作った `Linked` を `eml_vm` の `load` が受け取る
+- `eml_native` は、workspace の crate では `eml_native → eml_extern` と `eml_native → eml_cabi` の辺だけを持ち、Cranelift の5つの crate と libloading に依存する。`eml_vm` は `eml_native` にも Cranelift にも依存しない。`eml_native` に依存するのは、`eml_cli` と `eml_test_support` の feature `run` だけである。別の cargo の feature は作らない。CI の test の job の手順 `dependency edges of eml_native` が、この2つと、`eml_extern` の `src/` に `unsafe` がないことを確かめる
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである。表 (`Extern`、`ExternType`、`ExternEffect`) は `table!` が1つの並びから変種、`ALL`、静的な行を作り、`row` は行への参照を返す。VM のコード生成は `self as usize` を行の番号に使い、VM は `ALL` で引き戻すので、並びが1つなら2つの順は食い違わない
-- `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れて物理メモリを読む `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` と `tls` で、`tls` は `eml_vm/tls`、`eml_io/tls` の順に feature を有効にする。バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
+- `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、C の関数をつなぐ `eml_native` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れて物理メモリを読む `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` と `tls` で、`tls` は `eml_vm/tls`、`eml_io/tls` の順に feature を有効にする。バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
 - `eml_test_support` は開発専用の crate で、パイプラインに入らない。各 crate の結合テストが dev-dependency として使う。パイプラインは `eml_cli::Session` で組み、段階を feature (`hir` < `types` < `core` < `run`) で選ぶ。各 feature は、`eml_cli` の同じ段階までの feature を有効にする。各 crate は自分の段階までを有効にする。破壊的な変更の途中で下流の crate がまだ組み立たなくても、変更している段階のテストを流せるようにするため ([テスト戦略](testing.md))
 
 ## 各段階の規律
@@ -114,7 +120,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 | `eml_types` | `check(&Program, &SourceFiles) -> (TypedProgram, Vec<Diagnostic>)`。`SourceFiles` は E3003 の fix の字下げを求めるのに使う |
 | `eml_core_ir` | `lower(Input) -> eml_lir::Program`。`Input` は HIR の `Program`、`TypedProgram`、エントリの `FunctionId`、`SourceFiles` の組で、どのエントリも同じものを受け取る。translate、`optimize`、EP、LIR への変換 (`to_lir`)、LIR のパス (`eml_lir::passes_until`) の順に呼ぶ。LIR のパスの途中で止める `lower_until(Input, eml_lir::Pass)` と、Core IR の段で止める `core_until(Input, Pass) -> Program` もある。エントリの関数は呼ぶ側が渡す。`SourceFiles` は extern の呼び出しの位置を行と列にするのに使う |
 | `eml_lir` | `passes_until(&mut Program, Pass)`。変換の直後の LIR に、box の挿入から指定したパスまでをかける |
-| `eml_vm` | `execute(&eml_lir::Program, &RunConfig, HostRef) -> Result<Finished, RuntimeError>`。`CodeBase::new(Arc<Control>)` の表に `CodeBase::load(&eml_lir::Program) -> Result<u32, CompileError>` でバイトコードを足し、`Ctx<M>` の上で実行する |
+| `eml_vm` | `execute(&eml_lir::Program, &Linked, &RunConfig, HostRef) -> Result<Finished, RuntimeError>`。`CodeBase::new(Arc<Control>)` の表に `CodeBase::load(&eml_lir::Program, &Linked) -> Result<u32, CompileError>` でバイトコードを足し、`Ctx<M>` の上で実行する |
 
 ## エラーが出ても止まらない
 
@@ -396,6 +402,15 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `Conn::server` は、テストの driver の終端器とテストのためだけにある。`fixtures` はこの2つと `examples/https_server.rs` が使う。`fixtures` の鍵は公開されたテスト用の定数で、何も認証しない
 - `examples/https_server.rs` は `bench/scripts.sh` の行 `https-get` の相手である。`Conn` を使わず、rustls の `StreamOwned` でブロックするソケットに書く。計測の相手は I/O を持たない形である必要がないためである。動き方は [計測の基準](benchmarks.md) の「スクリプトの計測」にある
 
+## `eml_native` の内部
+
+- `bridge.rs` の `Bridges` は、`CSignature` ごとの橋渡しの関数を cranelift-jit で作り、署名で引く表に持つ。ISA は `cranelift_native` で動いている機械に合わせ、`opt_level=speed`、`is_pic=false` にする。`JITModule` は空でない最初の要求で作るので、C の関数のないプログラムは JIT の費用を払わない。1回の `get` は、まだない署名をまとめて定義し、`finalize_definitions` を1回だけ呼ぶ。`free_memory` は呼ばず、`JITModule` も落とさない。`Bridges` を落とすときは、module をプロセス全体の表 `RETIRED` に移す。cranelift-jit が module を落とすときにコードを解放するかどうかに頼らず、`Linker` を落としても作ったコードがプロセスの間ずっと残るようにするためである。`ManuallyDrop` で手放さず表に残すのは、届かなくなった確保を LeakSanitizer が漏れとして報告するためである。1回の `get` の定義か finalize が失敗したら、その module を `RETIRED` に移し、次の要求で新しい module を作る。途中まで定義した関数が次の finalize に混ざらないためで、前に作った橋渡しのコードは残る。橋渡しの CLIF の形は [VM](../spec/vm.md) の「橋渡しの関数」にある
+- `library.rs` は、名前の飾り (`candidates`)、動いている OS (`running_os`)、開いたライブラリの表 `Libraries` を持つ。`Libraries` は、`link` から開いたライブラリを最初の候補の道で引く表と、プロセスの範囲のライブラリを持つ。どれも最初に使うときに開き、`ManuallyDrop<libloading::Library>` で持って閉じない
+- `linker.rs` の `Linker` は、`--link` の上書き、登録した記号、`Libraries`、`Bridges` を持つ。`link` は、関数とハンドルの dtor の記号をすべて解決してから、関数の `c_signature()` について `Bridges::get` を1回呼び、入力に並びをそろえた `Linked` を返す。解決の順は [VM](../spec/vm.md) の「ライブラリと記号」にある。`Linker` は `Send` で、`Sync` は要らない。`with_symbols` は `unsafe` で、登録するアドレスの署名と寿命は呼び手が約束する。`--link` で同じ KEY を2回以上渡すと、後のものが効く
+- `error.rs` の `LinkError` は、`Library`、`Symbol`、`UnknownOverride`、`Unsupported` の4つの変種を持ち、文言は固定である
+- trait はない。呼び手はプログラムを持ってから読み込む前につなぎ、結果の `Linked` の値を渡す。VM の側に linker も、それを作る関数も置かない
+- `unsafe` を書いてよいのは `bridge.rs`、`library.rs`、`linker.rs` だけである ([テスト戦略](testing.md) の「`eml_native` の検証」)
+
 ## ソースファイルと位置
 
 - `FileId` と `SourceFiles` (`FileId` → パスとテキスト) は `eml_diagnostics` に置く。`SourceFiles` には読み込みの段が読んだすべてのファイルが入る。`FileId` はモジュールの番号と同じ順である
@@ -412,21 +427,24 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `eml run --stats` も検査モードで実行し、実行時エラーで終わらなかった run の後に、標準エラーに `stats: <欄>=<値> ... preemptions=<値>` の1行を出す。欄は `RunStats::fields()` が宣言の順に返す名前そのままで、最後に `Finished::preemptions` を置く。検査モードの run なので、その run の時間は物差しに使えない。REPL には足さない
 - `eml run` は、ファイルを読む前に Ctrl-C と `Terminate` のシグナル (SIGTERM と、Windows のコンソールを閉じることとシャットダウン) のハンドラを入れ、`default_limits()` の上限で実行する ([VM](../spec/vm.md) の「上限と割り込み」)
 - 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、エントリのファイルが読めない)、130 = 割り込みで止まった、143 = `Terminate` のシグナルで止まった、とする。2 は、clap が引数の誤りで返す値に合わせた。130 と 143 は、シェルが SIGINT と SIGTERM で終わった子に報告する値と同じである。import したモジュールが見つからないことは診断 (E1026) なので 1 である
+- `eml run --link KEY=VALUE` と `eml repl --link KEY=VALUE` は、`link` の item のライブラリを上書きする ([標準ライブラリ](../spec/stdlib.md) の「起動」)。`eml run` はコンパイルの後、`Compiled::link_keys` にない KEY を断り、`eml_native::Linker` でつないでから `execute` を呼ぶ。つなぐ失敗は `link error: {e}` を標準エラーに書いて終了コード 1 にする。`eml check` は `Linker` を作らない ([VM](../spec/vm.md) の「`--link`」)
 - `eml run --workers <N>` (と環境変数 `EML_WORKERS`) は worker の数を選ぶ。`eml repl` は持たず、`repl_limits().workers` は 1 である ([起動](../spec/stdlib.md) の「起動」)
 - `eml run` と `eml repl` はスケジュールの方針がいつも `Normal` である (ライブラリの既定の `Sched::default()` は `Sequential` である。[VM](../spec/vm.md) の「タスクとスケジュール」)
-- `eml repl [--debug-heap] [file]` は、`file` を渡すと `:load` と同じく最初の入力として読み、`repl_limits()` の上限で `eml_cli::Repl` を使う。端末の繰り返しは bin の `terminal.rs` で、行を入力にまとめるのは lib の `eml_cli::lines` である。規則は [REPL の端末](../spec/repl.md) にある。終了コードは、0 = `:quit` か EOF で終わった、1 = 検査モードのリーク、続けられない誤り、行を読めない誤り、2 = 使い方の誤り、である。入力の誤りと実行時エラーは終了コードを変えない
+- `eml repl [--debug-heap] [--link KEY=VALUE]... [file]` は、`file` を渡すと `:load` と同じく最初の入力として読み、`repl_limits()` の上限で `eml_cli::Repl` を使う。端末の繰り返しは bin の `terminal.rs` で、行を入力にまとめるのは lib の `eml_cli::lines` である。規則は [REPL の端末](../spec/repl.md) にある。終了コードは、0 = `:quit` か EOF で終わった、1 = 検査モードのリーク、続けられない誤り、行を読めない誤り、2 = 使い方の誤り、である。入力の誤りと実行時エラーは終了コードを変えない
 - Ctrl-C と `Terminate` のシグナルのハンドラは bin の `interrupt` モジュールが入れる。unix では `interrupt/unix.rs` が `libc::sigaction` で、Windows では `interrupt/windows.rs` が `SetConsoleCtrlHandler` で入れる。`src/` の `unsafe` は、`interrupt` モジュールと、`physical_memory` と、端末の列の数を読む bin の `terminal.rs` の `stdout_width` の中だけに置く
 
 `eml_cli` の lib は次の API を公開する。`Session` はパイプラインを組む唯一の場所で、CLI、UI テスト、`eml_test_support` がこれを通す。UI テストはこれをプロセス内で呼ぶ。どのメソッドも読み込みの結果から計算し直し、途中の結果を持たない。途中の結果を使い回すのは、salsa でクエリ化するときに考える。`Session` は `Send + Sync` で、`crates/eml_cli/tests/api.rs` が確かめる。salsa への載せ替えと、フロントエンドの並列のコンパイルに備えるためで、実行とは関係ない。読み込みの結果が持つのは緑の木 (green tree) と `AstPtr` だけで、ノードを持たないので `Send + Sync` にできる。`Repl` は `Machine` を持つので `Send` でなく、作ったスレッドの上でだけ使う ([VM](../spec/vm.md) の「時計と driver」)。
 
 - `Session::load(entry_path, entry_text, &dyn ModuleSource) -> Session` は、エントリの表示のパスと本文を受け取り、読み込みの段で Prelude と、import をたどって見つけたモジュールを読む ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)。`Session::user_module_names` は出どころがユーザーのモジュールの名前を返し、UI テストの harness が1ファイルのテストの import を確かめるのに使う。`Session` は1回の検査や実行で読むソースの集まりである。エントリのファイルは `main.rs` が読み、読めなければ終了コード 2 にする。ファイルシステムから読む `ModuleSource` は `FsProvider` で、パスの各段の名前がディレクトリの一覧と大文字小文字まで一致することを確かめる。macOS のように大文字小文字を区別しないファイルシステムで、`import Report.Csv` が `report/Csv.em` に当たらないようにするためである。大文字小文字だけが違う名前があれば、実際の名前を読めない理由として返す (E1026)。`main.rs` は、エントリのファイル名をディレクトリの一覧にある綴りに直してから `Session::load` に渡す。`t/server.em` で `t/Server.em` を開けたときも、依存先の `import Server` がエントリを指すと分かるようにするためである。実行を始める `main` はエントリのモジュールからだけ探し (`hir::Program::main`)、Prelude には置かない
 - `Session::def_map() -> DefMapped`、`Session::lower() -> Lowered`、`Session::check() -> Checked` (feature `types`)。結果は段階の出力 (`DefMap`、HIR の `Program`、`TypedProgram`) と診断を持つ。診断は読み込みの段からその段階までのすべてで、`sort_diagnostics` で並べて返す。各段階は診断の順を約束しない。`eml check` は `check().diagnostics` を表示する
-- `Session::compile() -> Compiled<eml_lir::Program>` (feature `core`)。`Compiled<P>` は、検査で出た診断 (警告を含む) と、エラーがなければ IR (`program: Option<P>`) を持つ。`compile` は reuse の後の LIR を返す。`main` がないこと (E2003) は `compile` だけが検査する ([型と Kind](../spec/types.md) の「推論」)
+- `Session::compile() -> Compiled<eml_lir::Program>` (feature `core`)。`Compiled<P>` は、検査で出た診断 (警告を含む) と、エラーがなければ IR (`program: Option<P>`) を持つ。`compile` は reuse の後の LIR を返す。`main` がないこと (E2003) は `compile` だけが検査する ([型と Kind](../spec/types.md) の「推論」)。`link_keys` は、読み込んだすべてのモジュールの `link` の item に書いた文字列の集まりで、HIR から取る。誤りがあっても持つ
 - テストのためのインターフェースが2つある。`Session::load_with_std(std, entry_path, entry_text, source)` は標準ライブラリを `(ファイル名, 本文)` の並びに差し替えて読む。`Session::compile_with(lower: impl FnOnce(eml_core_ir::Input) -> P) -> Compiled<P>` は、検査が通れば `lower` で IR を作る。`compile` は `eml_core_ir::lower` を渡したものである。パスの順番は `eml_core_ir` と `eml_lir` だけが知るので、テストは `eml_core_ir::lower_until` や `core_until` を渡して、確かめたいパスの直後で止める
-- `execute(&eml_lir::Program, &RunConfig, HostRef) -> Result<Finished, RuntimeError>` (feature `run`)。`eml_vm::execute` の再公開である。VM で実行し、成功すると `Finished { stats, exit, preemptions, workers, placed, placed_tasks, placed_jobs }` を返す ([VM](../spec/vm.md) の「`RunStats`」)。`workers` と `placed` は、作った worker の数とほかの worker に置いた右の子の数で、`placed_tasks` は `start` を実行した worker と違う worker に置いた `Async` のタスクの数、`placed_jobs` は `fork_job` を実行した worker と違う worker に置いた `compute` の仕事の数である。`exit` は `exit n` で終わったときの `Some(n)` で、`eml run` は `n & 255` を終了コードにする。`stats` の `RunStats` は実行の仕事の回数と、同時に生きていたヒープの物体の数とスタックの語の数の最大で、CLI は使わない。テストが2乗の時間にならないことと、ループがフレームを積まないことを確かめるのに使う
+- `execute(&eml_lir::Program, &Linked, &RunConfig, HostRef) -> Result<Finished, RuntimeError>` (feature `run`)。`eml_vm::execute` の再公開で、`Linked` も `eml_vm` から再公開する。`Linked` はプログラムの C の関数をつないだ結果で、`Machine::load(program, &Linked)` も同じものを受け取る ([VM](../spec/vm.md) の「C の関数の命令」)。VM で実行し、成功すると `Finished { stats, exit, preemptions, workers, placed, placed_tasks, placed_jobs }` を返す ([VM](../spec/vm.md) の「`RunStats`」)。`workers` と `placed` は、作った worker の数とほかの worker に置いた右の子の数で、`placed_tasks` は `start` を実行した worker と違う worker に置いた `Async` のタスクの数、`placed_jobs` は `fork_job` を実行した worker と違う worker に置いた `compute` の仕事の数である。`exit` は `exit n` で終わったときの `Some(n)` で、`eml run` は `n & 255` を終了コードにする。`stats` の `RunStats` は実行の仕事の回数と、同時に生きていたヒープの物体の数とスタックの語の数の最大で、CLI は使わない。テストが2乗の時間にならないことと、ループがフレームを積まないことを確かめるのに使う
+- `Linker` と `LinkError` (feature `run`)。`eml_native` の再公開で、`eml run` と `Repl` がプログラムの C の関数をつなぐのに使う ([VM](../spec/vm.md) の「ライブラリと記号」)
 - `default_limits() -> Limits` (feature `run`)。`eml run` の既定の上限を作る ([VM](../spec/vm.md) の「上限と割り込み」)
 - `pretty::format(text, suffix, width) -> String` と `pretty::LIMIT`。REPL の結果を切って整形する純粋な関数で、`lines` と同じく feature によらない ([REPL の端末](../spec/repl.md) の「整形の規則」)
-- `Repl` (feature `run`)。REPL のセッションで、`Repl::new` が空のセッションを作り、`Repl::eval` が入力を1つずつ評価する ([モジュールと名前解決](../spec/modules.md) の「REPL のセッション」)。`Repl::with_file` は `:load` のファイルを最初の入力とする新しいセッションを作り、`Repl::type_of` は `:type` の問い合わせを検査して型の文字列を返す。受け付けた入力はファイルの表示のパスも覚え、セッションを読み直すたびにファイルとして読む。セッションを空にするメソッドはなく、呼び出し側が新しい `Repl` を作って古いものを閉じる。式の入力の結果は、`Machine::run_shown` が返した文字列を `eml_cli::pretty::format` で整形し、`Machine::write_line` で書く。幅は `Repl::set_width` で変える ([REPL の端末](../spec/repl.md) の「結果の表示」)
+- `Repl` (feature `run`)。REPL のセッションで、`Repl::new` が空のセッションを作り、`Repl::eval` が入力を1つずつ評価する ([モジュールと名前解決](../spec/modules.md) の「REPL のセッション」)。`Repl::with_file` は `:load` のファイルを最初の入力とする新しいセッションを作り、`Repl::type_of` は `:type` の問い合わせを検査して型の文字列を返す。受け付けた入力はファイルの表示のパスも覚え、セッションを読み直すたびにファイルとして読む。セッションを空にするメソッドはなく、呼び出し側が新しい `Repl` を作って古いものを閉じる。式の入力の結果は、`Machine::run_shown` が返した文字列を `eml_cli::pretty::format` で整形し、`Machine::write_line` で書く。幅は `Repl::set_width` で変える ([REPL の端末](../spec/repl.md) の「結果の表示」)。`Repl` は1つの `Linker` を持ち、入力ごとに `Machine::load` の前にその入力のプログラムをつなぐ。`Repl::new` は上書きのない `Linker` を入れ、`Repl::with_linker` で替える。`Repl::with_file` は、ファイルの入力より前に入れる `Linker` を引数で受ける。つなげない入力は `Outcome::Unlinked` で、`load` を呼ばず、セッションを変えない ([REPL の端末](../spec/repl.md) の「C の関数」)。端末は `--link` の上書きを持ち、`:load` と `:reload` で作るセッションにも同じ上書きの `Linker` を渡す
+- `eml_test_support::link(program) -> Linked` (feature `run`)。テストの道具がプログラムの C の関数をつなぐ。テストの binary に1つの `Linker` を `Mutex` で持ち、ライブラリと橋渡しを使い回す。lock が毒になっても使い続ける。つなぐ途中の panic で壊れる不変条件を `Linker` が持たないためである。C の関数もハンドルの型もないプログラムは、lock を取らずに `Linked::default()` を返す。つなぐ失敗で panic する。`eml_test_support::execute_on` と UI テストの道具がこれを通す
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
 
@@ -449,8 +467,10 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `rustyline` | 19.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
 | `rustls` | 0.23 (`aws_lc_rs`、`std`、`tls12`) | `eml_tls` の TLS の接続。provider は aws-lc-rs だけで、接続ごとに `builder_with_provider` で渡す。aws-lc-rs は rustls の既定で推奨の provider で、組むのに要るのは C のツールチェーンだけである (上の「crate の依存関係」) |
 | `webpki-roots` | 1.0 | `eml_tls` の既定の根の証明書 |
+| `cranelift-codegen`、`cranelift-frontend`、`cranelift-module`、`cranelift-jit`、`cranelift-native` | 0.137 | `eml_native` の橋渡しの関数の生成。`cranelift-native` が動いている機械の ISA を選び、`cranelift-jit` がコードを置く (上の「`eml_native` の内部」) |
+| `libloading` | 0.9 | `eml_native` が C のライブラリを開いて記号を引く (unix の `dlopen` と `dlsym`、Windows の `LoadLibraryExW` と `GetProcAddress`) |
 
-`eml` バイナリには、aws-lc、rustls、webpki-roots の根の証明書のデータが入る。どれも eml と別のライセンスに従う。aws-lc は `ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause` ほか、rustls は `Apache-2.0 OR ISC OR MIT`、webpki-roots の根のデータは `CDLA-Permissive-2.0` である。`flake.nix` の `meta.license` は eml 自身のライセンス (MIT) だけを書く。
+`eml` バイナリには、aws-lc、rustls、webpki-roots の根の証明書のデータが入る。どれも eml と別のライセンスに従う。aws-lc は `ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause` ほか、rustls は `Apache-2.0 OR ISC OR MIT`、webpki-roots の根のデータは `CDLA-Permissive-2.0` である。Cranelift の crate と、それが使う regalloc2 と target-lexicon は `Apache-2.0 WITH LLVM-exception` で、Cranelift から hashbrown を通して入る foldhash は `Zlib` である。`about.toml` の `accepted` はこの2つも認める。LLVM の例外は、Apache-2.0 の条件を、コンパイルした出力について緩めるだけである。`flake.nix` の `meta.license` は eml 自身のライセンス (MIT) だけを書く。
 
 バイナリに入る他者の crate と、そのライセンスの全文は、リポジトリの直下の `THIRD-PARTY-LICENSES.md` にまとめる。このファイルは cargo-about が `about.toml` と `about.hbs` から生成するので、手では直さない。依存を変えたら `nix develop -c nix/third-party-licenses.sh` で書き直す。cargo-about は devShell に入れてあり、バージョンは `flake.lock` で決まる。
 
