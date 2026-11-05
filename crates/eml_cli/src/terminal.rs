@@ -177,11 +177,13 @@ struct Terminal {
 
 impl Terminal {
     fn eval(&mut self, text: &str) -> Flow {
-        let flow = show(self.repl.eval(text));
+        let evaluated = self.repl.eval(text);
+        let printed_poisoned = printed_poisoned(&evaluated);
+        let flow = show(evaluated);
         // poisoned の `Machine` は後の入力をすべて断るので、その入力でセッションを終える。Ctrl-C で止めた入力も
-        // poisoned にしうるので、割り込みでも確かめる。続けられない誤りはもう書いてあり、`close` が同じ poisoned
-        // の誤りをもう一度書かないように `Flow::Broken` のままにする (docs/spec/vm.md の「追記」)
-        if self.repl.is_poisoned() && !matches!(flow, Flow::Broken) {
+        // poisoned にしうるので、flow によらずに確かめる。入力が poisoned の誤りそのものを書いたときだけは、`close`
+        // が同じ誤りをもう一度書かないように `Flow::Broken` のままにする (docs/spec/vm.md の「追記」)
+        if self.repl.is_poisoned() && !printed_poisoned {
             return Flow::Poisoned;
         }
         flow
@@ -218,9 +220,10 @@ impl Terminal {
         repl.set_width(self.width);
         self.repl = repl;
         self.file = Some(shown.to_string());
+        let printed_poisoned = printed_poisoned(&evaluated);
         let flow = show(evaluated);
         // `eval` と同じく確かめる
-        if self.repl.is_poisoned() && !matches!(flow, Flow::Broken) {
+        if self.repl.is_poisoned() && !printed_poisoned {
             return Flow::Poisoned;
         }
         flow
@@ -313,6 +316,11 @@ fn steps(terminal: &mut Terminal, steps: impl IntoIterator<Item = Step>) -> Flow
         }
     }
     Flow::Continue
+}
+
+/// `show` がこの結果を書くと、poisoned の誤りそのものを書くか。そのとき `show` は `Flow::Broken` を返す。
+fn printed_poisoned(evaluated: &Evaluated) -> bool {
+    matches!(&evaluated.outcome, Outcome::Broken(error) if error.kept_pending())
 }
 
 /// 入力と `:load` の結果を表示する (docs/spec/repl.md の「結果の表示」)。

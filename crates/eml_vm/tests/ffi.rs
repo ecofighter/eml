@@ -851,6 +851,12 @@ main () = Async.run body
     // `b` が `panic` を呼ぶ直前に開く合図を待ってから、`a` の鍵を開ける
     let opener = std::thread::spawn(|| {
         assert_eq!(rs_gate_wait(100027), 0, "the task never signalled");
+        // 取り消された待ちが仕事の完了の前に再開していれば、巻き戻しがもうハンドルを壊している
+        assert_eq!(
+            rs_frees(100024),
+            0,
+            "the cancelled wait resumed before its job"
+        );
         rs_gate_open(100026);
     });
     let result = machine.run(loaded.entry);
