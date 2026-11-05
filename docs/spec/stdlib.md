@@ -10,14 +10,16 @@
 eml wc.em -l input.txt          # eml run wc.em -l input.txt と同じ
 eml run --debug-heap wc.em -l input.txt
 eml run --workers 4 wc.em -l input.txt
+eml run --link openblas=/opt/lib/libopenblas.so solve.em
 ./wc.em -l input.txt            # 1行目が #!/usr/bin/env eml で、実行できるファイル
 ```
 
 - 最初の引数が `-` で始まらず、サブコマンドの名前 (`check`、`run`、`repl`、`help`) でもなければ、`run` として扱う。`run` という名前のファイルを動かすときは `eml run run` と書く。`-` で始まる最初の引数はフラグとして読むので、`eml --verison` は使い方の誤り (終了コード 2) である
-- `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--workers`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--stats`、`--workers=4`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
-- ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap`、`--stats`、`--workers` はファイルより前にだけ書ける。`eml run main.em --workers 4` は、スクリプトに `--workers` と `4` を渡す
+- `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--workers`、`--link`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--stats`、`--workers=4`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
+- ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap`、`--stats`、`--workers`、`--link` はファイルより前にだけ書ける。`eml run main.em --workers 4` は、スクリプトに `--workers` と `4` を渡す
 - `eml run` は、タスクを切り替える方針をいつも `Normal` にして、監視のスレッドの刻みで横取りする ([VM](vm.md) の「タスクとスケジュール」)
 - `--workers <N>` は、`par` の右の子と `Async` のタスクと `compute` の仕事を走らせる worker のスレッドの数 (worker 0 を含む) を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。`N` は 1 以上 1024 以下の整数である。run は worker ごとに止める語と欄を確保するので、上限を置いて、大きすぎる数を確保の失敗でなく使い方の誤りにする。`--workers` がなければ環境変数 `EML_WORKERS` を同じ規則で読み、それもなければ `available_parallelism()` の値にする (読めなければ 1、1024 を超えれば 1024)。0 と 1024 を超える数と数でない値は、フラグでも `EML_WORKERS` でも使い方の誤り (終了コード 2) で、2回書いた `--workers` も同じである。`run` だけが持ち、`repl` と `check` は持たない。`repl` は常に 1 である ([REPL の端末](repl.md) の「コマンドライン」)。ライブラリの `Limits::default()` と `eml_cli::default_limits()` も 1 で、UI テストは 1 で走らせる。`par/` と `async/` の UI テストは 2 と 8 でも走らせる ([テスト戦略](../implementation/testing.md) の「seed で流す」)
+- `--link KEY=VALUE` は、`link` の item に KEY と書いたライブラリの代わりに、VALUE を開く ([VM](vm.md) の「ライブラリと記号」)。何回でも書け、`run` と `repl` が持つ。`check` はライブラリを開かないので持たない。KEY は `link` の item に書いた文字列そのもので、VALUE は `link` の item の名前と同じ規則で飾る。最初の `=` で KEY と VALUE に分け、`=` のない値と、KEY か VALUE が空の値は使い方の誤り (`` `{text}` is not KEY=VALUE ``、終了コード 2) である。`run` は、読み込んだどのモジュールの `link` の item にも合わない KEY を、`link error: --link names no library "{key}"` で断る (終了コード 1。[VM](vm.md) の「`--link`」)。`repl` は断らない ([REPL の端末](repl.md) の「C の関数」)
 - `Env.args ()` は、ファイルより後ろの引数を返す。`eml` とスクリプトのパスは含めない
 - shebang は `#!/usr/bin/env eml` と書く。Linux の `env` は `#!` の行の残りを1つの引数として渡すので、`#!/usr/bin/env eml run` は動かない
 - ファイルの相対パスと子のプロセスの作業ディレクトリは、プロセスの今のディレクトリである

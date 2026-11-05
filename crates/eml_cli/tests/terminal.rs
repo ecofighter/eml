@@ -365,6 +365,28 @@ fn a_result_arrives_before_the_next_read() {
     assert_eq!(out, "");
 }
 
+/// `--link` の上書きは、`:load` と `:reload` で作り直すセッションにも効く (docs/spec/repl.md の「C の関数」)。
+#[test]
+fn link_overrides_survive_reload() {
+    let main = "link on linux \"eml_override_me\"
+link on macos \"eml_override_me\"
+link on windows \"eml_override_me\"
+
+extern \"C\" pure sqrt : Float -> Float
+";
+    let dir = temp_project("link-reload", &[("main.em", main)]);
+    let overridden = format!("eml_override_me={}", crate::cli::LIBM);
+    let output = repl_in(
+        &dir,
+        &["--link", &overridden],
+        ":load main.em\nsqrt 16.0\n:reload\nsqrt 25.0\n",
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stderr(&output), "");
+    assert_eq!(stdout(&output), "4.0\n5.0\n");
+}
+
 #[cfg(unix)]
 mod interrupts {
     use std::io::{BufRead, BufReader, Read, Write};

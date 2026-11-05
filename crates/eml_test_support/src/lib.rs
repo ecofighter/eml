@@ -13,7 +13,12 @@ use std::fmt::Write;
 use eml_cli::Session;
 use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles, sort_diagnostics};
 #[cfg(feature = "run")]
-use eml_vm::{CaptureHost, RunConfig, RunStats, RuntimeError};
+use std::sync::{LazyLock, Mutex, PoisonError};
+
+#[cfg(feature = "run")]
+use eml_native::{LinkError, Linker};
+#[cfg(feature = "run")]
+use eml_vm::{CaptureHost, Linked, RunConfig, RunStats, RuntimeError};
 
 pub struct Parsed {
     pub files: SourceFiles,
@@ -369,9 +374,33 @@ pub fn execute_on(
     host: CaptureHost,
 ) -> (String, Result<RunStats, RuntimeError>) {
     let out = host.output();
-    let result = eml_vm::execute(program, &eml_vm::Linked::default(), config, host.into_ref())
+    let result = eml_vm::execute(program, &link(program), config, host.into_ref())
         .map(|finished| finished.stats);
     (out.contents(), result)
+}
+
+/// テストの binary の中で1つの linker を使い回し、ライブラリと橋渡しを作り直さずに済ませる。テストは並んで走るので
+/// lock で守る。
+#[cfg(feature = "run")]
+static LINKER: LazyLock<Mutex<Linker>> = LazyLock::new(|| Mutex::new(Linker::new(Vec::new())));
+
+/// C の関数のないプログラムは、lock も JIT も触らずに `Linked::default()` を返す。
+#[cfg(feature = "run")]
+pub fn try_link(program: &eml_lir::Program) -> Result<Linked, LinkError> {
+    if program.c_functions.is_empty() && program.c_handles.is_empty() {
+        return Ok(Linked::default());
+    }
+    // 別のテストがつなぐ途中で panic しても、`Linker` に壊れる不変条件はないので、毒を無視して使う
+    LINKER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .link(&program.c_functions, &program.c_handles)
+}
+
+/// `try_link` の誤りで panic する。
+#[cfg(feature = "run")]
+pub fn link(program: &eml_lir::Program) -> Linked {
+    try_link(program).unwrap_or_else(|error| panic!("link error: {error}"))
 }
 
 /// 1件を `E0001 1:2 message` の1行にする。期待値を読みやすくするため、位置はバイトではなく行と列にする。

@@ -1572,3 +1572,122 @@ main () =
     );
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
+
+/// 動いている OS の C の数学のライブラリ。`--link` の VALUE に渡す。
+#[cfg(target_os = "linux")]
+pub const LIBM: &str = "libm.so.6";
+#[cfg(target_os = "macos")]
+pub const LIBM: &str = "libm.dylib";
+#[cfg(windows)]
+pub const LIBM: &str = "ucrtbase.dll";
+
+/// つなげないプログラムのファイルは `tests/ffi` に置き、UI テストには入れない。つなぐ失敗は実行時エラーでないので、
+/// UI の run-fail の道に載らないためである。
+fn eml_ffi(args: &[&str]) -> Output {
+    eml_in(
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/ffi")),
+        args,
+    )
+}
+
+#[test]
+fn a_c_program_runs_through_the_binary() {
+    let output = eml(&["run", "run/ffi/libm_sqrt.em"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+/// `--link KEY=VALUE` は、`link` に KEY と書いたライブラリの代わりに VALUE を開く (docs/spec/vm.md の「`--link`」)。
+#[test]
+fn link_override_replaces_the_library() {
+    let main = "link on linux \"eml_override_me\"
+link on macos \"eml_override_me\"
+link on windows \"eml_override_me\"
+
+extern \"C\" pure sqrt : Float -> Float
+
+main : Unit -> <IO> Unit
+main () = println (show (sqrt 16.0))
+";
+    let dir = temp_project("cli-link-override", &[("main.em", main)]);
+    let overridden = format!("eml_override_me={LIBM}");
+    let replaced = eml_in(&dir, &["run", "--link", &overridden, "main.em"]);
+    let written = eml_in(&dir, &["run", "main.em"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(replaced.status.code(), Some(0), "{replaced:?}");
+    assert_eq!(String::from_utf8_lossy(&replaced.stdout), "4.0\n");
+    assert_eq!(String::from_utf8_lossy(&replaced.stderr), "");
+    assert_eq!(written.status.code(), Some(1), "{written:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&written.stderr),
+        "link error: library \"eml_override_me\" was not found\n"
+    );
+}
+
+/// `run` は、どの `link` の item にも書いていない KEY を書き誤りとして断る。C の関数のないプログラムでも同じである。
+#[test]
+fn an_unknown_link_key_is_a_link_error() {
+    for file in ["run/ffi/libm_sqrt.em", "run/basics/comments_only.em"] {
+        let output = eml(&["run", "--link", "eml_unwritten=libm.so.6", file]);
+        assert_eq!(output.status.code(), Some(1), "{file}: {output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "", "{file}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "link error: --link names no library \"eml_unwritten\"\n",
+            "{file}"
+        );
+    }
+}
+
+/// `=` のない値と、空の KEY か VALUE は、`run` でも `repl` でも使い方の誤りである (docs/spec/stdlib.md の「起動」)。
+#[test]
+fn a_malformed_link_flag_is_a_usage_error() {
+    for value in ["libm", "=libm", "libm="] {
+        for command in ["run", "repl"] {
+            let output = eml(&[command, "--link", value, "run/ffi/libm_sqrt.em"]);
+            assert_eq!(
+                output.status.code(),
+                Some(2),
+                "{command} {value}: {output:?}"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(&format!("`{value}` is not KEY=VALUE")),
+                "{command} {value}: {stderr}"
+            );
+        }
+    }
+}
+
+/// `eml check` はライブラリを開かないので、開けないライブラリを書いたファイルも通る。
+#[test]
+fn check_loads_no_library() {
+    let output = eml_ffi(&["check", "missing_library.em"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+/// つなぐ失敗の文言は OS によらない (docs/spec/vm.md の「ライブラリと記号」)。
+#[test]
+fn a_missing_library_is_a_link_error() {
+    let output = eml_ffi(&["run", "missing_library.em"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "link error: library \"eml_no_such_library\" was not found\n"
+    );
+}
+
+#[test]
+fn a_missing_symbol_is_a_link_error() {
+    let output = eml_ffi(&["run", "missing_symbol.em"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "link error: symbol \"eml_no_such_symbol\" was not found\n"
+    );
+}

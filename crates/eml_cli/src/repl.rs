@@ -9,6 +9,7 @@ use eml_diagnostics::{Diagnostic, SourceFiles, TextSize, has_errors};
 use eml_hir::{
     FunctionId, FunctionKind, ImportCache, InputForm, InputKind, ModuleSource, SessionInput,
 };
+use eml_native::{LinkError, Linker};
 use eml_types::{InputDisplay, InstanceNode, TypedProgram};
 use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RuntimeError, SourceLocation, VmFault};
 
@@ -25,6 +26,8 @@ pub struct Repl {
     /// `:load` のファイルの表示のパス。ファイルを受け付けたかによらず持つ。
     file: Option<String>,
     machine: AnyMachine,
+    /// 入力ごとに C の関数をつなぐ。開いたライブラリと作った橋渡しを、セッションの間持ち続ける。
+    linker: Linker,
     /// 受け付けた定義と `let` の入力。式の入力は後の入力から参照されないので持たない。
     accepted: Vec<Accepted>,
     cache: ImportCache,
@@ -105,6 +108,8 @@ pub enum Outcome {
     Exited(i64),
     /// 続けられる実行時エラー。`let` の束縛は作らない。
     Failed(RuntimeError),
+    /// C の関数をつなげなかった。何も読み込まず、セッションは変わらない (docs/spec/repl.md の「C の関数」)。
+    Unlinked(LinkError),
     /// 続けられない誤り (ヒープの誤り、内部の誤り、`Machine::load` の誤り)。後の `eval` も実行しない。
     Broken(RuntimeError),
 }
@@ -122,6 +127,7 @@ impl Repl {
             source,
             file: None,
             machine: AnyMachine::new(config, host),
+            linker: Linker::new(Vec::new()),
             accepted: Vec::new(),
             cache: ImportCache::default(),
             uniform: BTreeMap::new(),
@@ -136,17 +142,25 @@ impl Repl {
     /// 最後の `/` までである。`source` はそのディレクトリを読む。ファイルを途中の入力として足す API は作らない。前の入力が
     /// import したモジュールとファイルが同じになる場合や、根とファイルのディレクトリが食い違う場合が出るためである
     /// (docs/spec/repl.md の「ファイルの読み込み」)。
+    ///
+    /// `linker` は、ファイルの入力より前に入れておかないと `--link` の上書きがファイルに効かないので、引数で受ける。
     pub fn with_file(
         config: &RunConfig,
         path: &str,
         text: &str,
         source: Box<dyn ModuleSource + Send>,
         host: HostRef,
+        linker: Linker,
     ) -> (Repl, Evaluated) {
-        let mut repl = Repl::new(config, source, host);
+        let mut repl = Repl::new(config, source, host).with_linker(linker);
         repl.file = Some(path.to_string());
         let evaluated = repl.evaluate(text, Form::File);
         (repl, evaluated)
+    }
+
+    /// 既定の linker は何も上書きせず、記号も登録しない。
+    pub fn with_linker(self, linker: Linker) -> Repl {
+        Repl { linker, ..self }
     }
 
     /// 結果を整形する幅を変える。20 より狭い幅は 20 にする。端末は列の数を渡す。
@@ -325,7 +339,13 @@ impl Repl {
     }
 
     fn run(&mut self, program: &eml_lir::Program, shown: Option<Shown>) -> Outcome {
-        let loaded = match self.machine.load(program, &eml_vm::Linked::default()) {
+        // `load` の前につなぐので、つなげなければ `Machine` に何も書かない。入力は `Accepted` のときだけ受け付けるので、
+        // セッションのモジュールの並びも変わらない
+        let linked = match self.linker.link(&program.c_functions, &program.c_handles) {
+            Ok(linked) => linked,
+            Err(error) => return Outcome::Unlinked(error),
+        };
+        let loaded = match self.machine.load(program, &linked) {
             Ok(loaded) => loaded,
             // コード生成の誤りは正しいプログラムでは起きない。`CodeBase` が途中まで書き換わっているかもしれないので、
             // 続けない

@@ -3,9 +3,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_cli::{
-    Capture, Control, FsProvider, HostRef, Limits, MemorySource, ModulePath, ModuleSource, Outcome,
-    ReadError, Repl, RunConfig, RuntimeError, Session, SourceLocation, Stop, VmFault, capture_host,
-    execute,
+    Capture, Control, FsProvider, HostRef, Limits, Linker, MemorySource, ModulePath, ModuleSource,
+    Outcome, ReadError, Repl, RunConfig, RuntimeError, Session, SourceLocation, Stop, VmFault,
+    capture_host, execute,
 };
 use eml_diagnostics::{Diagnostic, has_errors};
 use eml_rt::{Fault, Host, Opened, Stream};
@@ -966,6 +966,7 @@ fn a_file_reports_its_errors_under_its_path() {
         "f : Int\nf = nope\n",
         Box::new(MemorySource(&[])),
         host,
+        Linker::new(Vec::new()),
     );
     assert_eq!(evaluated.outcome, Outcome::Rejected);
     let paths: Vec<&str> = evaluated
@@ -985,6 +986,7 @@ fn an_empty_file_leaves_an_empty_session() {
         "-- nothing\n",
         Box::new(MemorySource(&[])),
         host,
+        Linker::new(Vec::new()),
     );
     assert_eq!(evaluated.outcome, Outcome::Empty);
     assert!(evaluated.diagnostics.is_empty());
@@ -1002,6 +1004,7 @@ fn later_inputs_keep_the_file_path_and_its_warnings_once() {
         file,
         Box::new(MemorySource(&[])),
         host,
+        Linker::new(Vec::new()),
     );
     assert_eq!(evaluated.outcome, Outcome::Accepted);
     assert_eq!(codes(&evaluated.diagnostics), ["E4004"]);
@@ -1023,6 +1026,7 @@ fn a_rejected_file_still_cannot_be_imported() {
         "f : Int\nf = nope\n",
         Box::new(MemorySource(&[("Tool.em", "pub g : Int\ng = 1\n")])),
         host,
+        Linker::new(Vec::new()),
     );
     assert_eq!(evaluated.outcome, Outcome::Rejected);
     assert!(codes(&repl.eval("import Tool").diagnostics).contains(&"E1030".to_string()));
@@ -1040,6 +1044,7 @@ fn an_interrupted_file_is_not_accepted() {
         "import Util\none : Int -> <Panic> Int\none x = Util.two x - 1\n",
         Box::new(InterruptingSource { control }),
         host,
+        Linker::new(Vec::new()),
     );
     assert_eq!(evaluated.outcome, Outcome::Interrupted);
     assert_eq!(codes(&repl.eval("one 1").diagnostics), ["E1001"]);

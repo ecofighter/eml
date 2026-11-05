@@ -4,7 +4,7 @@
 
 ## コマンドライン
 
-- `eml repl [--debug-heap] [file]` でセッションを始める。`--debug-heap` は `eml run` と同じく検査モードにする。スケジュールの方針も `eml run` と同じで、いつも `Normal` である。`file` を渡すと、最初に `:load file` と同じことをする。ただし `file` を読めなければ、`eml run` と同じく使い方の誤り (``error: cannot read `file`: …``、終了コード 2) にする
+- `eml repl [--debug-heap] [--link KEY=VALUE]... [file]` でセッションを始める。`--link` は「C の関数」にある。`--debug-heap` は `eml run` と同じく検査モードにする。スケジュールの方針も `eml run` と同じで、いつも `Normal` である。`file` を渡すと、最初に `:load file` と同じことをする。ただし `file` を読めなければ、`eml run` と同じく使い方の誤り (``error: cannot read `file`: …``、終了コード 2) にする
 - `eml repl` は `--workers` を持たず、渡すと使い方の誤り (終了コード 2) である。REPL の `Limits::workers` は 1 で、`par` の子はほかの worker に置かない ([VM](vm.md) の「タスクとスケジュール」)
 - `eml repl` は本物の時計で動く。テストのハーネスが仮想の時計で作るセッション (REPL のトランスクリプト) では、仮想の時計の時刻はセッションの間は入力をまたいで続く。時計はセッションの `Machine` が持つので、`:load` で新しいセッションを作ると 0 に戻る。タイマーは入力ごとの run のものなので、入力をまたいで残らない ([VM](vm.md) の「時計と driver」)
 - REPL のプログラムは引数を持たないので、`Env.args ()` は `[]` を返す。標準入力は REPL 自身が入力の行を読むので、プログラムは読めない。`Stdin.open` は通るが、ハンドルの読みと `Stdin.read_text` は I/O の失敗 (`cannot read the standard input: not available`) になる ([標準ライブラリ](stdlib.md) の「ハンドル」)。ハンドルは線形なので、ほかの線形な値と同じく、入力の中で使い切る
@@ -68,6 +68,12 @@
 - 覚えたファイルがなければ、標準エラーに `no file to reload; use ':load'` を書き、セッションを変えない。打ち間違えた `:r` で `let` の束縛が消えないようにするためである
 - 読めなければ (ファイルを消したときなど)、`:load` と同じく誤りを書き、セッションと覚えたファイルを変えない
 
+## C の関数
+
+- `--link KEY=VALUE` は、`eml run` と同じく、`link` の item に KEY と書いたライブラリの代わりに VALUE を開く ([標準ライブラリ](stdlib.md) の「起動」)。`eml run` と違い、どの `link` の item にも合わない KEY を断らない。KEY を書いた `link` の item は、後の入力が足せるためである
+- 入力のプログラムは、実行の前につなぐ ([VM](vm.md) の「`--link`」)。つなげない入力は、標準エラーに `link error: {error}` を書いて断る (`Outcome::Unlinked`)。何も読み込まず、診断のある入力と同じくセッションは変わらない。続けられない誤りではないので、後の入力は今までどおり評価する
+- 上書きは、`:load` と `:reload` で作り直すセッションにも効く。端末は新しいセッションを作るたびに、同じ上書きを渡す
+
 ## 型の表示
 
 `:type e` は、式の型を実行せずに表示する。
@@ -121,6 +127,7 @@ println "hi" : Unit
 | `Failed` | 割り込みで止まったなら `interrupted`、ほかは `runtime error: {error}` を標準エラーに書く。位置があれば `  at path:line:column` が続く |
 | `Interrupted` | 標準エラーに `interrupted` を書く |
 | `Exited(n)` | 標準エラーに `exited with code n` を書き、次の入力へ進む (「割り込みと実行時エラー」) |
+| `Unlinked` | 標準エラーに `link error: {error}` を書く (「C の関数」) |
 | `Broken` | 標準エラーに `runtime error: {error}` を書き、`close` を呼ばずに終了コード 1 で終わる。後の入力はどれも実行できないためである |
 
 - 割り込みは、止まった所によらず `interrupted` と書く。VM の中で止まったときの関数の名前 (`entry$` や `f@[Int]`) は、利用者が書いた名前でないので見せない

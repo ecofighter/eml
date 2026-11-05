@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use eml_cli::lines::{Command, Lines, Step};
 use eml_cli::{
-    CaptureHost, Control, Evaluated, FsProvider, HostRef, InputStatus, Outcome, Repl, RunConfig,
-    RuntimeError, default_limits, input_status,
+    CaptureHost, Control, Evaluated, FsProvider, HostRef, InputStatus, Linker, Outcome, Repl,
+    RunConfig, RuntimeError, default_limits, input_status,
 };
 
 use crate::common::for_each_file;
@@ -230,6 +230,7 @@ impl Runner<'_> {
             &text,
             Box::new(FsProvider::new(self.root.join(dir))),
             self.host.clone(),
+            Linker::new(Vec::new()),
         );
         self.repl = repl;
         self.file = Some(path.to_string());
@@ -286,6 +287,7 @@ impl Runner<'_> {
             }
             Outcome::Interrupted => writeln!(block, "interrupted").unwrap(),
             Outcome::Exited(code) => writeln!(block, "exited with code {code}").unwrap(),
+            Outcome::Unlinked(error) => writeln!(block, "link error: {error}").unwrap(),
             Outcome::Empty | Outcome::Accepted | Outcome::Rejected => {}
         }
     }

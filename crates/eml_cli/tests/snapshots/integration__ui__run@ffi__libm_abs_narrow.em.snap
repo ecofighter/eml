@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/ffi/libm_abs_narrow.em
+---
+--- stdout ---
+5
+5
+Err "argument 1 of `Main.abs` does not fit in C `int32_t`: 3000000000"
+--- stderr ---

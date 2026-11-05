@@ -1029,6 +1029,14 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - C の行は引数を借り、消費しない。`MutUnboxedArray` とハンドルの引数は呼び手のスロットに残り、translate がそれを結果と組にして返す ([Core IR](core-ir.md) の「組を返す extern」)
 - `CHandle` は `lin` の印の `Foreign` の物体の中身で、C のポインタとその型の dtor を持つ。VM はポインタを参照外ししないので、来歴を持たせない (`without_provenance_mut`)。物体を解放すると、解放した worker のスレッドで dtor を1回だけ呼ぶ。dtor のない型では何も呼ばない
 
+### `--link`
+
+- `eml run` は、コンパイルが通った後、プログラムを読み込む前につなぐ。始めに `--link` の KEY を、読み込んだすべてのモジュールの `link` の item に書いた文字列 (`Compiled::link_keys`) と比べる。どれにも合わない KEY があれば `LinkError::UnknownOverride` にする。書き誤った KEY が、黙って効かないままにならないようにするためである。C の関数を持たないプログラムでも同じに確かめる
+- 次に、上書きを持たせた `Linker::new` で、プログラムの C の関数の表とハンドルの型の表をつなぎ、`Linked` を `execute` に渡す。`Linker` はつないだ後で捨てる。開いたライブラリと作った橋渡しはプロセスが終わるまで残るので (「ライブラリと記号」)、`Linked` のポインタはそのまま使える
+- つなげなければ、標準エラーに `link error: {e}` を書き、実行せずに終了コード 1 で終わる。診断にも実行時エラーにもしない。ライブラリや記号があるかは動かす機械の事実で、ソースの誤りではないためである。文言は OS によらないので、テストは標準エラーをバイトまで比べられる
+- `eml check` はつながず、ライブラリを開かない
+- `eml repl` の `Repl` は1つの `Linker` を持ち、入力ごとに、`Machine::load` の前にその入力のプログラムをつなぐ。KEY は確かめない。上書きはセッションの間 `Linker` が持ち、後の入力の `link` の item にも効く。つなげない入力は `Outcome::Unlinked` で、`load` を呼ばないので `Machine` は変わらない ([REPL の端末](repl.md) の「C の関数」)
+
 ## `RunStats`
 
 `Machine::run`、`run_shown`、`eml_vm::execute` は、成功すると `Finished { stats, exit, preemptions, rescues, rescued, workers, placed, placed_tasks, placed_jobs }` を返す。`stats` は下の `RunStats` で、`exit` は `exit` で終わったときの終了コード (`Option<i64>`。終わりの欄から読む。「`exit`」)、`preemptions` は方針が始めた切り替えの数、`rescues` は1つ以上を盗んだ救済の数、`rescued` は救済で移した項の数、`workers` はその run が作った worker の数、`placed` はほかの worker に置いた `par` の右の子の数、`placed_tasks` はほかの worker に置いた `Async` のタスクの数、`placed_jobs` はほかの worker に置いた `compute` の仕事の数 (どれも「タスクとスケジュール」) である。

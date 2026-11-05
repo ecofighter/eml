@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use eml_cli::lines::{Command, Lines, Step};
 use eml_cli::{
-    Clock, Control, Evaluated, FsProvider, HostRef, Outcome, Repl, RunConfig, Sched, repl_limits,
-    stdio_host,
+    Clock, Control, Evaluated, FsProvider, HostRef, Linker, Outcome, Repl, RunConfig, Sched,
+    repl_limits, stdio_host,
 };
 use eml_diagnostics::render;
 use rustyline::error::ReadlineError;
@@ -26,7 +26,7 @@ Commands:
   :{             start an input of several lines, blank lines included; a line `:}` ends it
 A command may be shortened to any prefix of its name (`:q`, `:l`, `:r`, `:t`).";
 
-pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
+pub fn run(debug_heap: bool, link: Vec<(String, String)>, file: Option<PathBuf>) -> ExitCode {
     let control = Arc::new(Control::new(repl_limits()));
     let doorbell = crate::interrupt::doorbell();
     crate::interrupt::install(
@@ -60,12 +60,13 @@ pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
     let host = stdio_host(PathBuf::new());
     // 端末の大きさの変更は追わない (docs/spec/repl.md の「結果の表示」)
     let width = stdout_width();
-    let repl = empty_session(&config, &host, width);
+    let repl = empty_session(&config, &host, width, &link);
     let mut terminal = Terminal {
         config,
         control,
         host,
         width,
+        link,
         repl,
         file: None,
         close_failed: false,
@@ -111,12 +112,18 @@ pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
 }
 
 /// import の根はカレントディレクトリである (docs/spec/repl.md の「コマンドライン」)。
-fn empty_session(config: &RunConfig, host: &HostRef, width: usize) -> Repl {
+fn empty_session(
+    config: &RunConfig,
+    host: &HostRef,
+    width: usize,
+    link: &[(String, String)],
+) -> Repl {
     let mut repl = Repl::new(
         config,
         Box::new(FsProvider::new(Path::new(""))),
         host.clone(),
-    );
+    )
+    .with_linker(Linker::new(link.to_vec()));
     repl.set_width(width);
     repl
 }
@@ -155,6 +162,8 @@ struct Terminal {
     host: HostRef,
     /// 結果を整形する幅。`:load` で作り直すセッションにも渡す。
     width: usize,
+    /// `--link` の上書き。`:load` と `:reload` で作り直すセッションにも渡す (docs/spec/repl.md の「C の関数」)。
+    link: Vec<(String, String)>,
     repl: Repl,
     /// `:reload` で読み直すファイルの表示のパス。
     file: Option<String>,
@@ -193,6 +202,7 @@ impl Terminal {
             text,
             Box::new(FsProvider::new(dir)),
             self.host.clone(),
+            Linker::new(self.link.clone()),
         );
         repl.set_width(self.width);
         self.repl = repl;
@@ -204,7 +214,7 @@ impl Terminal {
     fn replace_with_empty(&mut self) {
         let old = std::mem::replace(
             &mut self.repl,
-            empty_session(&self.config, &self.host, self.width),
+            empty_session(&self.config, &self.host, self.width, &self.link),
         );
         if let Some(error) = old.close().leaks {
             eprintln!("runtime error: {error}");
@@ -304,6 +314,7 @@ fn show(evaluated: Evaluated) -> Flow {
             return Flow::Interrupted;
         }
         Outcome::Failed(error) => eprintln!("runtime error: {error}"),
+        Outcome::Unlinked(error) => eprintln!("link error: {error}"),
         Outcome::Broken(error) => {
             eprintln!("runtime error: {error}");
             return Flow::Broken;

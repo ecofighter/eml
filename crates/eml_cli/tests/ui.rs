@@ -209,7 +209,7 @@ fn execute_in(
     };
     let outcome = execute(
         program,
-        &eml_cli::Linked::default(),
+        &eml_test_support::link(program),
         &config,
         host.into_ref(),
     );
