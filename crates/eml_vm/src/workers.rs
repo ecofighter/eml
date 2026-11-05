@@ -17,7 +17,7 @@ use crate::cells::{CellRef, HostBin, Post, Runnable, Shared, Woken};
 use crate::code::CodeBase;
 use crate::counters::Counters;
 use crate::doorbell::Doorbell;
-use crate::driver::{DriverKind, RunClock, ceil_ms, floor_ms};
+use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, RunClock, ceil_ms, floor_ms};
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
 use crate::{HeapWork, RunCounts, RuntimeError, VmFault, WORKER_STACK};
@@ -1253,7 +1253,7 @@ impl<P: Policy> Scheduler<P> {
         let Some(mut driver) = self.driver.take() else {
             return false;
         };
-        driver.quiesce();
+        driver.quiesce(JOB_QUIESCE_LIMIT);
         let k = self.index;
         if record && self.cells.lock().in_flight(k) > 0 {
             let mut completed = Vec::new();

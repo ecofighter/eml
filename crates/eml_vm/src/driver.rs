@@ -11,6 +11,9 @@ use eml_rt::{Control, IoDriver};
 use crate::VmFault;
 use crate::sched::NO_DRIVER;
 
+/// 静止が `Op::Job` の仕事を待つ長さの上限。過ぎたら、残る仕事を見捨てる (docs/spec/vm.md の「時計と driver」)。
+pub(crate) const JOB_QUIESCE_LIMIT: Duration = Duration::from_secs(1);
+
 /// タイマーが使う時計の選び方。`RunConfig::with_clock` と `Machine::with_clock` で選ぶ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Clock {

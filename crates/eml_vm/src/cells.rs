@@ -6031,7 +6031,7 @@ impl IoDriver for NoDriver {
         Err(io::ErrorKind::Unsupported.into())
     }
 
-    fn quiesce(&mut self) {}
+    fn quiesce(&mut self, _jobs: std::time::Duration) {}
 }
 
 /// 出力を捨てる Host の上の、検査モードの `Ctx`。

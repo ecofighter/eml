@@ -140,7 +140,7 @@ fn a_wake_from_another_thread_leaves_a_wait_working() {
     assert!(driver.wait(None).unwrap());
     assert!(start.elapsed() < Duration::from_secs(1));
     ringer.join().unwrap();
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
 }
 
@@ -500,7 +500,7 @@ fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
     for key in [probe, full, job] {
         assert!(!finished.contains(&key), "op {key} finished early");
     }
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     drop(chunk);
 }
@@ -999,7 +999,7 @@ fn quiesce_drains_a_pending_accept_and_closes_discarded_streams() {
     peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
     // 接続を driver の中で終わらせ、完了は受け取らない。`quiesce` はその完了を捨て、中身のストリームを閉じる
     poll_for(&mut driver, 20);
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     let mut room = [0u8; 4];
     assert_eq!(peer.read(&mut room).unwrap(), 0);
@@ -1123,7 +1123,7 @@ fn quiesce_does_not_wait_for_a_lookup() {
         },
     );
     GATE.wait_started(1);
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     let mut out = Vec::new();
     driver.completions(&mut out);

@@ -67,6 +67,17 @@ impl State {
         self.running_values += 1;
         Some(job)
     }
+
+    /// 札の仕事が列にあれば外す。なければ、どれかのスレッドが取っていて、そちらが答える。
+    fn remove(&mut self, ticket: Ticket) -> Option<Job> {
+        let queue = if self.files.iter().any(|(t, _)| *t == ticket) {
+            &mut self.files
+        } else {
+            &mut self.values
+        };
+        let at = queue.iter().position(|(t, _)| *t == ticket)?;
+        queue.remove(at).map(|(_, job)| job)
+    }
 }
 
 pub(crate) struct Pool {
@@ -130,13 +141,7 @@ impl Pool {
                 state.threads -= 1;
                 // 列に残っていれば、この仕事は誰も取っていない。ほかのスレッドが取っていれば、そちらが答える。
                 // どちらでも完了は1回になる
-                let queue = if state.files.iter().any(|(t, _)| *t == ticket) {
-                    &mut state.files
-                } else {
-                    &mut state.values
-                };
-                let at = queue.iter().position(|(t, _)| *t == ticket);
-                let job = at.and_then(|at| queue.remove(at));
+                let job = state.remove(ticket);
                 drop(state);
                 if let Some(job) = job {
                     drop(job);
@@ -144,6 +149,12 @@ impl Pool {
                 }
             }
         }
+    }
+
+    /// 列で待つ仕事を、走らせずに外して返す。取られた仕事は外せず、`None` を返す。返した仕事は、呼ぶ側がプールの
+    /// lock の外で落とす。
+    pub(crate) fn forget(&mut self, ticket: Ticket) -> Option<Job> {
+        self.shared.lock().remove(ticket)
     }
 }
 

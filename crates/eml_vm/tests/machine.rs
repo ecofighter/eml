@@ -682,7 +682,7 @@ impl IoDriver for FakeDriver {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
-    fn quiesce(&mut self) {
+    fn quiesce(&mut self, _jobs: Duration) {
         self.quiesces.fetch_add(1, Ordering::SeqCst);
         if self.drains {
             self.pending = 0;
@@ -883,7 +883,7 @@ impl IoDriver for StubDriver {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
-    fn quiesce(&mut self) {
+    fn quiesce(&mut self, _jobs: Duration) {
         self.note(format!("quiesce {}", self.pending()));
         self.held.clear();
         self.cancelled.clear();

@@ -88,7 +88,7 @@ impl IoDriver for RealDriver {
         self.0.pipe(parent_reads)
     }
 
-    fn quiesce(&mut self) {
-        self.0.quiesce();
+    fn quiesce(&mut self, jobs: Duration) {
+        self.0.quiesce(jobs);
     }
 }

@@ -241,14 +241,14 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - 本物の driver の核 (`crates/eml_io/src/driver/`) は OS を呼ばない。OS に触れるのは `Backend` の実装だけで、核の単体テスト (`src/driver/tests/`、module `driver::tests`) は偽の backend (`src/driver/tests/fake.rs`) の上で、続きの規則、取り消し、壊れた driver、受けたソケットの取り込みと捨てた完了の受けたソケットが閉じること、`quiesce` と `Drop`、プール、名前の解決、ファイルの取り込みとファイルの読み書きの仕事を確かめる。同じテストを Miri でも流す
 - 偽の backend は鍵ごとの台本で `start` に答え、呼ばれた順を記録する。`Recv` と `Send` の buffer には `copy_nonoverlapping` で書き、slice を作らない。そのため、短い書きの残りの位置の誤りは Miri で落ちる
 - 偽の backend のファイルの仕事は、本物のプールのスレッドの上で、mutex の下の偽のファイルの中身と貸された記憶の間を `copy_nonoverlapping` で写す。貸す側のスレッドと別のスレッドが貸された記憶に書き、核が受け箱から答えを引き取った後に貸す側が読むので、プールの列と受け箱の mutex がつくる happens-before の辺を Miri が確かめる。仕事は門で止められ、取り消しが仕事を終わらせないこと、閉じたハンドルが仕事の後で閉じること、`quiesce` が仕事を待ちきること、driver を落とすときに門で止まった仕事の欄を残して終わりを待つことを、門を開く順で確かめる
-- 偽の backend の `wait` は実時間を使わない。`wait(None)` は起こしが鳴るまで待ち、10 秒鳴らなければ止まったテストとして panic する。`wait(Some(d))` は偽の時計を `d` 進めてすぐ戻る。`CANCEL_LIMIT` と `HELD_LIMIT` の 1 秒の道は、こうして実時間なしに通す。偽の backend が作ったスレッドが走っている間に `d > 0` で呼ぶと panic する。本物のスレッドを持つテストが、偽の時計の進み方に合否を預けないためである。そういうテストで使えるのは、`wait(None)` と、偽の backend の `finished` が期待の数に届いた後の `wait(Some(0))` だけである。例外は、driver を落とすときの期限つきの待ちを、ファイルの仕事を走らせるプールのスレッドと並べて通すテストである。偽の backend の `ring_while_threads_run` を立てると、スレッドが走る間の `wait(Some(d))` は時計を進めずに `wait(None)` と同じく起こしを待つ。時計が進まないので、合否はスケジュールに依らない
+- 偽の backend の `wait` は実時間を使わない。`wait(None)` は起こしが鳴るまで待ち、10 秒鳴らなければ止まったテストとして panic する。`wait(Some(d))` は偽の時計を `d` 進めてすぐ戻る。`CANCEL_LIMIT` と `HELD_LIMIT` の 1 秒の道は、こうして実時間なしに通す。偽の backend が作ったスレッドが走っている間に `d > 0` で呼ぶと panic する。本物のスレッドを持つテストが、偽の時計の進み方に合否を預けないためである。そういうテストで使えるのは、`wait(None)` と、偽の backend の `finished` が期待の数に届いた後の `wait(Some(0))` だけである。例外は偽の backend の次の2つの設定で、どちらも合否をスケジュールに預けない。`ring_while_threads_run` は、driver を落とすときの期限つきの待ちをファイルの仕事を走らせるプールのスレッドと並べて通すテストと、`Op::Job` を待ちきる `quiesce` のテストで立てる。立てると、スレッドが走る間の `wait(Some(d))` は時計を進めずに `wait(None)` と同じく起こしを待つ。時計が進まないので、合否はスケジュールに依らない。`advance_while_threads_run` は、`quiesce` が `Op::Job` を待つ上限を過ぎさせるテストで立てる。立てると、スレッドが走る間の `wait(Some(d))` は偽の時計を `d` 進めてすぐ戻る。そのテストは門で止めた仕事を `quiesce` が戻るまで開けないので、`quiesce` の中で起きるのは時計が進むことだけで、合否はスケジュールに依らない。見捨てた仕事の遅れた答えは、答えの起こし (偽の backend の `bell`) を待ってから `wait(Some(0))` で引き取る。プールのスレッドは仕事の後も空いたまま残り、`finished` が増えないためである
 - Miri で流すテストの形は次のとおりである。Miri は、main が終わるときに走っているスレッドを誤りにする
   1. 出した仕事と名前の解決は、手放したものも含めて、本体が答えを積み、核が引き取るまで進めてから driver を落とす。手放した解決は `finished` を待ってから `wait(Some(0))` を呼ぶ。`wait(None)` は保留の欄も届いた完了もないと `Ok(false)` で戻り、答えを引き取らないためである
   2. 順は門 (`mpsc`、`Mutex` と `Condvar`) で作る。`sleep` は合否に効かない検出力のためだけに使う
   3. 本物の時計を使わない
   4. driver を落とした後も走るスレッドを使うテストは `tests/real.rs` に置き、Miri では流さない
   5. 上限の振る舞いは小さな上限で確かめる。プールのスレッドの上限はスレッド 2 本のプールで、`Op::Job` の上限はスレッド 3 本、`Op::Job` 2 つまでのプールで確かめる。32 本のスレッドは Miri で起こさない
-  6. 偽の時計を進める待ちは、走るスレッドのない間だけ使う
+  6. 偽の時計を進める待ちは、走るスレッドのない間だけ使う。例外は、`advance_while_threads_run` を立て、門で止めた仕事だけが走る間の `quiesce` である
 - `Drop` がプロセスを止める道のテスト (`driver::tests::abort`) は、テストのバイナリを子として起こすので、Miri では `ignore` にする
 - コマンドは `cargo miri test -p eml_io --lib -- driver::tests::` で、`eml_rt` と同じ2つの `MIRIFLAGS` で流す (「よく使うコマンド」)。予算は、ビルド済みの作業ツリーでのコマンドの `user` で、Stacked Borrows で 30 秒以内、Tree Borrows で 35 秒以内にする。ほかのビルドが走っていない 4 CPU の Linux のコンテナで測った時間の約3倍である。aarch64-darwin の開発機で測った `user` は、Stacked Borrows で 6.1 秒、Tree Borrows で 6.9 秒である。測り直しの規則は上の「Miri」と同じである
 

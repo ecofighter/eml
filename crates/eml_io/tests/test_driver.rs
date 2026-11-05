@@ -295,7 +295,7 @@ fn quiesce_drops_every_pending_op_and_runs_jobs() {
             Box::new(0usize)
         })),
     );
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert!(ran.load(Ordering::Relaxed));
     assert_eq!(driver.pending(), 0);
     assert!(collect(&mut driver).is_empty());
@@ -679,7 +679,7 @@ fn quiesce_closes_the_handles_of_discarded_completions() {
     // 決着させるが、完了は渡さない
     assert!(driver.wait(None).unwrap());
     assert_eq!(driver.pending(), 1);
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     // 受けた側の端が閉じたので、接続した端は EOF を読む
     let mut room = [0u8; 4];
@@ -814,7 +814,7 @@ fn quiesce_runs_a_pending_file_write() {
         },
     );
     assert!(std::fs::read(&path).unwrap().is_empty());
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(std::fs::read(&path).unwrap(), b"written at quiesce");
     assert_eq!(driver.pending(), 0);
     assert!(collect(&mut driver).is_empty());

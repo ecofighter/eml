@@ -458,7 +458,7 @@ fn quiesce_closes_the_stream_of_a_discarded_accept() {
     assert!(driver.wait(None).unwrap());
     assert_eq!(driver.pending(), 1);
     assert!(!probe.closed());
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     assert!(probe.closed());
 }
@@ -498,7 +498,7 @@ fn a_failed_wait_breaks_the_driver() {
     driver.cancel(1);
     assert_eq!(driver.backend.calls.len(), waits);
     assert!(completions(&mut driver).is_empty());
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 1);
     assert_eq!(driver.backend.spawned.get(), 0);
 }
@@ -517,7 +517,7 @@ fn quiesce_breaks_on_a_cancel_that_never_completes() {
             buf: buf(&mut data),
         },
     ));
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.now(), Duration::from_secs(1));
     assert_eq!(driver.pending(), 1);
     assert_eq!(
@@ -722,7 +722,7 @@ fn drop_after_a_broken_quiesce_cancels_every_slot_once() {
         .backend
         .cancels
         .push_back(Err(io::Error::other("refused")));
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 2);
     assert_eq!(driver.wait(None).unwrap_err().to_string(), "refused");
     // 断られた欄も、印だけ立った欄も、落とすときに1回ずつ取り消しを出す
@@ -857,6 +857,7 @@ fn quiesce_waits_for_a_running_job() {
     let (tx, rx) = mpsc::channel::<()>();
     let ran = Arc::new(AtomicBool::new(false));
     let mut driver = driver();
+    driver.backend.ring_while_threads_run = true;
     let job_ran = Arc::clone(&ran);
     pending(driver.submit(
         1,
@@ -871,11 +872,76 @@ fn quiesce_waits_for_a_running_job() {
         thread::sleep(Duration::from_millis(20));
         tx.send(()).unwrap();
     });
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert!(ran.load(Ordering::SeqCst));
     assert_eq!(driver.pending(), 0);
     assert!(completions(&mut driver).is_empty());
     opener.join().unwrap();
+}
+
+#[test]
+fn quiesce_abandons_a_running_job_after_its_budget() {
+    let (started_tx, started) = mpsc::channel::<()>();
+    let (open, gate) = mpsc::channel::<()>();
+    let mut driver = driver();
+    // 門は `quiesce` が戻るまで閉じたままなので、`quiesce` の中では時計が進むことしか起きない
+    driver.backend.advance_while_threads_run = true;
+    pending(driver.submit(
+        1,
+        Op::Job(Box::new(move || {
+            started_tx.send(()).unwrap();
+            gate.recv().unwrap();
+            Box::new(1usize)
+        })),
+    ));
+    // 列で待つうちに見捨てると走らずに落ちるので、走り始めるのを待つ
+    started.recv().unwrap();
+    driver.quiesce(Duration::from_millis(10));
+    assert_eq!(driver.pending(), 1);
+    open.send(()).unwrap();
+    // プールのスレッドは仕事を終えても空いたまま残るので、`finished` でなく答えの起こしを待つ
+    driver.backend.bell.wait();
+    assert!(driver.wait(Some(0)).unwrap());
+    assert!(completions(&mut driver).is_empty());
+    assert_eq!(driver.pending(), 1);
+}
+
+#[test]
+fn quiesce_drops_a_queued_job_unrun() {
+    let (started_tx, started) = mpsc::channel::<()>();
+    let (open, gate) = mpsc::channel::<()>();
+    let ran = Arc::new(AtomicBool::new(false));
+    let mut driver = Driver::with_limits(Fake::new(), no_lookup, 1, 1);
+    driver.backend.advance_while_threads_run = true;
+    pending(driver.submit(
+        1,
+        Op::Job(Box::new(move || {
+            started_tx.send(()).unwrap();
+            gate.recv().unwrap();
+            Box::new(1usize)
+        })),
+    ));
+    let job_ran = Arc::clone(&ran);
+    pending(driver.submit(
+        2,
+        Op::Job(Box::new(move || {
+            job_ran.store(true, Ordering::SeqCst);
+            Box::new(2usize)
+        })),
+    ));
+    // 1本のスレッドが1つ目で止まるので、2つ目は列で待つ
+    started.recv().unwrap();
+    driver.quiesce(Duration::from_millis(10));
+    assert_eq!(driver.pending(), 2);
+    // 列から外した仕事は `quiesce` の中で落ちるので、2つ目の閉包が持つ参照はもうない。スケジュールに依らない
+    assert_eq!(Arc::strong_count(&ran), 1);
+    open.send(()).unwrap();
+    // 1つ目の答えを引き取るまで進める。2つ目は列から外れたので、空いたスレッドも取らない
+    driver.backend.bell.wait();
+    assert!(driver.wait(Some(0)).unwrap());
+    assert!(completions(&mut driver).is_empty());
+    assert_eq!(driver.pending(), 2);
+    assert!(!ran.load(Ordering::SeqCst));
 }
 
 static SLOW: Gate = Gate::new();
@@ -930,7 +996,7 @@ fn quiesce_abandons_a_lookup_and_drops_its_late_answer() {
             port: 80,
         },
     ));
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     QUIESCED.open();
     driver.backend.finished.reach(1);
@@ -1367,7 +1433,7 @@ fn a_file_write_job_reads_the_lent_bytes() {
         },
     ));
     // `quiesce` はファイルの仕事も取り消さずに待ちきる
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     assert_eq!(*driver.backend.file.lock().unwrap(), b"written");
 }
@@ -1396,6 +1462,31 @@ fn a_dropped_driver_waits_for_a_file_job() {
     drop(driver);
     // 待たずに欄を捨てた `Drop` なら、仕事はまだ門で止まっていて、何も書いていない
     assert_eq!(*file.lock().unwrap(), b"late");
+    opener.join().unwrap();
+}
+
+#[test]
+fn quiesce_still_waits_for_a_file_job() {
+    let mut driver = driver();
+    let open = gate_next_file_job(&driver);
+    let handle = adopted_file(&mut driver);
+    let mut data = *b"slow";
+    pending(driver.submit(
+        1,
+        Op::Write {
+            handle,
+            buf: buf(&mut data),
+        },
+    ));
+    // 門は `quiesce` が待ち始めた後に開く。遅れは検出力のためだけで、待つ `quiesce` ではいつも仕事が先に終わる
+    let opener = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(20));
+        open.send(()).unwrap();
+    });
+    // `Op::Job` を待つ上限が 0 でも、ファイルの仕事は見捨てない
+    driver.quiesce(Duration::ZERO);
+    assert_eq!(driver.pending(), 0);
+    assert_eq!(*driver.backend.file.lock().unwrap(), b"slow");
     opener.join().unwrap();
 }
 

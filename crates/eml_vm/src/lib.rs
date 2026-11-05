@@ -10,7 +10,7 @@ use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Sta
 
 use crate::cells::{Registry, Shared, TaskStats};
 use crate::counters::Counters;
-use crate::driver::{DriverKind, RunClock};
+use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, RunClock};
 use crate::error::KEPT_PENDING;
 use crate::vm::{ExecWith, Exit};
 use crate::workers::{
@@ -517,7 +517,7 @@ impl<M: Mode> Machine<M> {
         // カーネルやプールのスレッドが書いている記憶を写したり放したりしないように、ヒープに触れる前に driver を
         // 空にする (docs/spec/object-model.md の「回復」)
         if let Some(driver) = &mut self.driver {
-            driver.quiesce();
+            driver.quiesce(JOB_QUIESCE_LIMIT);
             if driver.pending() > 0 {
                 self.poisoned = true;
             }
@@ -1052,7 +1052,7 @@ fn run_scheduled<M: Mode, P: Policy>(
     // 完了を読まない (docs/spec/vm.md の「時計と driver」「誤り、止めること、終わり」)
     kept_pending |= match sched.driver.as_mut() {
         Some(driver) => {
-            driver.quiesce();
+            driver.quiesce(JOB_QUIESCE_LIMIT);
             let in_flight = sched.cells.lock().in_flight(sched.index);
             if result.is_ok() && in_flight > 0 {
                 let mut completed = Vec::new();

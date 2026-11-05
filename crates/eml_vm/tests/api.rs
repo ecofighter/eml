@@ -2,6 +2,7 @@
 //! 実行の設定 `RunConfig` と、スケジュールの方針 `Sched` と、実行時エラーの `interrupted` と、`exit` が書く終わりの欄である。
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
@@ -427,7 +428,7 @@ impl eml_rt::IoDriver for DeadlineRecorder {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
-    fn quiesce(&mut self) {}
+    fn quiesce(&mut self, _jobs: Duration) {}
 }
 
 /// `with_driver` で渡した driver の run も監視のスレッドを持つので、空きのループは1回の待ちを切らず、タイマーの期限まで
@@ -716,8 +717,8 @@ impl eml_rt::IoDriver for ProbeRecorder {
         self.inner.pipe(parent_reads)
     }
 
-    fn quiesce(&mut self) {
-        self.inner.quiesce();
+    fn quiesce(&mut self, jobs: Duration) {
+        self.inner.quiesce(jobs);
     }
 }
 
