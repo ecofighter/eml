@@ -138,6 +138,32 @@ fn recovery_copies_floats<M: Mode>() {
     assert_eq!(mortal(&mut ctx), 0);
 }
 
+/// 回復は 255 個未満の要素の配列も数の語ごと写し、配列でない短い `Data` には数の語を足さない。配列は長さによらず
+/// 数の語を持つ (docs/spec/object-model.md の「配列」)。
+fn recovery_keeps_the_count_word_of_short_arrays<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let a = ctx.array_make(3, Word::imm(7), false).unwrap();
+        let a = ctx.array_set(a, 2, Word::imm(9)).unwrap();
+        ctx.root_set(0, a).unwrap();
+        let c = cons(ctx.heap_mut(), Word::imm(1), Word::imm(2));
+        ctx.root_set(1, c).unwrap();
+        ctx.recover().unwrap();
+    }
+    assert_eq!(mortal(&mut ctx), 2);
+    let c = root(&mut ctx, 1);
+    let a = root(&mut ctx, 0);
+    unsafe {
+        assert_eq!(ctx.heap().meta(c).unwrap().scan(), 2);
+        assert_eq!(ctx.heap().meta(a).unwrap().scan(), Meta::EXTENDED_SCAN);
+        assert_eq!(ctx.array_length(a), Ok(3));
+        assert_eq!(ctx.array_get(a, 0), Ok(Word::imm(7)));
+        assert_eq!(ctx.array_get(a, 2), Ok(Word::imm(9)));
+    }
+    release_roots(&mut ctx);
+    assert_eq!(mortal(&mut ctx), 0);
+}
+
 /// evv と yield の状態が残っていても、回復は空に戻し、それらの物体も消す。
 fn recovery_empties_the_evv_and_the_yield_state<M: Mode>() {
     let mut ctx = ctx::<M>();
@@ -360,10 +386,65 @@ mod counting {
     }
 }
 
+/// 回復は `Raw` の物体を、同じ要素の新しい局所の物体に写す。共有の物体も局所の物体にする。
+fn recovery_copies_unboxed_arrays<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let bits = [u64::MAX, 0, (-0.0f64).to_bits()];
+    unsafe {
+        let heap = ctx.heap_mut();
+        let local = heap.alloc_unboxed(3, 0, false);
+        for (i, &b) in bits.iter().enumerate() {
+            heap.unboxed_put(local, i, b).unwrap();
+        }
+        let shared = heap.alloc_unboxed(1, 42, false);
+        heap.share(shared, 1).unwrap();
+        ctx.root_set(0, local).unwrap();
+        ctx.root_set(1, shared).unwrap();
+        ctx.recover().unwrap();
+    }
+    assert_eq!(mortal(&mut ctx), 2);
+    let local = root(&mut ctx, 0);
+    let shared = root(&mut ctx, 1);
+    unsafe {
+        let heap = ctx.heap();
+        for w in [local, shared] {
+            assert_eq!(heap.meta(w).unwrap().kind(), Kind::Raw);
+            assert_eq!(rc(w), 1);
+        }
+        assert_eq!(heap.unboxed_len(local), Ok(3));
+        for (i, &b) in bits.iter().enumerate() {
+            assert_eq!(heap.unboxed_word(local, i), Ok(b));
+        }
+        assert_eq!(heap.unboxed_len(shared), Ok(1));
+        assert_eq!(heap.unboxed_word(shared, 0), Ok(42));
+    }
+    release_roots(&mut ctx);
+    assert_eq!(mortal(&mut ctx), 0);
+}
+
+/// `lin` ビットの `Raw` の物体は、ほかの `lin` の物体と同じく写せない。
+fn recovery_refuses_a_lin_unboxed_array<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let w = unsafe {
+        let heap = ctx.heap_mut();
+        let w = heap.alloc_unboxed(1, 0, true);
+        let holder = cons(heap, w, Word::imm(0));
+        ctx.root_set(0, holder).unwrap();
+        holder
+    };
+    let before = mortal(&mut ctx);
+    assert_eq!(unsafe { ctx.recover() }, Err(HeapError::Unrecoverable));
+    assert_eq!(mortal(&mut ctx), before);
+    assert_eq!(root(&mut ctx, 0), w);
+}
+
 both_modes!(
+    recovery_copies_unboxed_arrays,
+    recovery_refuses_a_lin_unboxed_array,
     recovery_keeps_only_what_the_roots_reach,
     recovery_empties_the_evv_and_the_yield_state,
     recovery_copies_floats,
+    recovery_keeps_the_count_word_of_short_arrays,
     recovery_refuses_what_it_cannot_copy,
     recovery_copies_shared_objects_as_local,
     recovery_copies_shared_strings_and_bytes_of_another_worker,

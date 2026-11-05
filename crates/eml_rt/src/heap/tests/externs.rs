@@ -1964,6 +1964,46 @@ impl Args {
         }
     }
 
+    /// 生の要素の配列の要素か値の引数を、64 ビットの語にする
+    fn word(arg: &Arg) -> u64 {
+        match arg {
+            Arg::Int(v) => *v as u64,
+            Arg::Float(bits) => *bits,
+            _ => panic!("not an element argument: {arg:?}"),
+        }
+    }
+
+    /// 生の要素の配列の引数の参照を1つ作る。共有した配列は `dup` し、残った参照は結果を読んだ後で手放す
+    unsafe fn unboxed<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg) -> Word {
+        let Arg::Unboxed {
+            elements,
+            lin,
+            shared,
+            ..
+        } = arg
+        else {
+            panic!("not an unboxed array argument: {arg:?}");
+        };
+        unsafe {
+            let mut w = ctx.unboxed_make(elements.len() as i64, 0, *lin).unwrap();
+            for (i, &e) in elements.iter().enumerate() {
+                w = ctx.unboxed_set(w, i as i64, e).unwrap();
+            }
+            if *shared {
+                ctx.heap_mut().dup(w).unwrap();
+                self.release.push(w);
+            }
+            w
+        }
+    }
+
+    /// 借りて渡す生の要素の配列の引数。呼んだ側の参照は結果を読んだ後で手放す
+    unsafe fn lent_unboxed<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg) -> Word {
+        let w = unsafe { self.unboxed(ctx, arg) };
+        self.release.push(w);
+        w
+    }
+
     /// 借りて渡す文字列の引数。呼んだ側の参照は結果を読んだ後で手放す
     unsafe fn lent_string<M: Mode>(
         &mut self,
@@ -1995,6 +2035,35 @@ unsafe fn take_array<M: Mode>(ctx: &mut crate::Ctx<M>, w: Word) -> Outcome {
         ctx.heap_mut().decref(w).unwrap();
         Outcome::Array { elements, lin }
     }
+}
+
+/// 生の要素の配列の結果を読み、手放す。`float` なら要素を浮動小数として書く
+unsafe fn take_unboxed<M: Mode>(ctx: &mut crate::Ctx<M>, w: Word, float: bool) -> Outcome {
+    unsafe {
+        let lin = ctx.heap().meta(w).unwrap().lin();
+        let len = ctx.unboxed_length(w).unwrap();
+        let elements = (0..len).map(|i| ctx.unboxed_get(w, i).unwrap()).collect();
+        ctx.heap_mut().decref(w).unwrap();
+        Outcome::Unboxed {
+            elements,
+            float,
+            lin,
+        }
+    }
+}
+
+/// 生の要素の配列の要素の結果。`Float` の行なら浮動小数として書く
+fn element(x: u64, float: bool) -> Outcome {
+    if float {
+        Outcome::Float(table::float_outcome(f64::from_bits(x)))
+    } else {
+        Outcome::Int(x as i64)
+    }
+}
+
+/// 生の要素の配列の引数の要素が浮動小数か
+fn float_elements(arg: &Arg) -> bool {
+    matches!(arg, Arg::Unboxed { float: true, .. })
 }
 
 fn tag_bool(tag: i64) -> Outcome {
@@ -2421,6 +2490,53 @@ unsafe fn call<M: Mode>(
                 let a = args.array(ctx, &inputs[0]);
                 let w = ctx.array_freeze(a)?;
                 take_array(ctx, w)
+            }
+            "Std.UnboxedArray.Unboxed Int.make"
+            | "Std.UnboxedArray.Unboxed Float.make"
+            | "Std.MutUnboxedArray.MutUnboxed Int.make"
+            | "Std.MutUnboxedArray.MutUnboxed Float.make" => {
+                let lin = name.starts_with("Std.MutUnboxedArray.");
+                let w = ctx.unboxed_make(int(0), Args::word(&inputs[1]), lin)?;
+                take_unboxed(ctx, w, name.contains(" Float."))
+            }
+            "Std.MutUnboxedArray.empty" => {
+                let w = ctx.unboxed_empty(true)?;
+                take_unboxed(ctx, w, false)
+            }
+            "Std.UnboxedArray.length" | "Std.MutUnboxedArray.length" => {
+                let a = args.lent_unboxed(ctx, &inputs[0]);
+                Outcome::Int(ctx.unboxed_length(a)?)
+            }
+            "Std.UnboxedArray.Unboxed Int.get"
+            | "Std.UnboxedArray.Unboxed Float.get"
+            | "Std.MutUnboxedArray.MutUnboxed Int.read"
+            | "Std.MutUnboxedArray.MutUnboxed Float.read" => {
+                let a = args.lent_unboxed(ctx, &inputs[0]);
+                element(ctx.unboxed_get(a, int(1))?, name.contains(" Float."))
+            }
+            "Std.UnboxedArray.Unboxed Int.set"
+            | "Std.UnboxedArray.Unboxed Float.set"
+            | "Std.MutUnboxedArray.MutUnboxed Int.write"
+            | "Std.MutUnboxedArray.MutUnboxed Float.write" => {
+                let a = args.unboxed(ctx, &inputs[0]);
+                let w = ctx.unboxed_set(a, int(1), Args::word(&inputs[2]))?;
+                take_unboxed(ctx, w, name.contains(" Float."))
+            }
+            "Std.MutUnboxedArray.MutUnboxed Int.fill"
+            | "Std.MutUnboxedArray.MutUnboxed Float.fill" => {
+                let a = args.unboxed(ctx, &inputs[0]);
+                let w = ctx.unboxed_fill(a, Args::word(&inputs[1]))?;
+                take_unboxed(ctx, w, name.contains(" Float."))
+            }
+            "Std.UnboxedArray.thaw" => {
+                let a = args.unboxed(ctx, &inputs[0]);
+                let w = ctx.unboxed_thaw(a)?;
+                take_unboxed(ctx, w, float_elements(&inputs[0]))
+            }
+            "Std.MutUnboxedArray.freeze" => {
+                let a = args.unboxed(ctx, &inputs[0]);
+                let w = ctx.unboxed_freeze(a)?;
+                take_unboxed(ctx, w, float_elements(&inputs[0]))
             }
             name => panic!("an extern the table does not know: {name}"),
         })

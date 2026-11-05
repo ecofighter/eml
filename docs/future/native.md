@@ -26,7 +26,7 @@ LIR から Cranelift でネイティブのコードを出す設計をまとめ�
 | 8 | 安全点 | 関数のエントリとループの後ろ向きの辺で、止めるビットとスタックの限度を確かめる。ネイティブのタスクは `Async` の操作でだけ切り替わる |
 | 9 | スタック | eml のコードを動かすスレッドは、スタックを明示して予約する。worker のスレッドの既定は 1 GiB の仮想の予約で、`--stack-size` で変えられる。メインの worker ([マルチコア対応の設計](multicore.md) の「スレッドと worker」) だけは、OS の既定のスタックで動く |
 | 10 | 使い回しの鍵 | ネイティブのコードを使い回す単位は関数1つで、鍵は名前と、開いた後の LIR と、それが指す形と配置の中身のハッシュである |
-| 11 | 生の要素の配列 | 新しい物体の種類 `Raw` (番号 6) に `Float` と `Int` の要素を生の 8 バイトで並べる。要素の読み書きは呼び出しにせず展開する |
+| 11 | 生の要素の配列 | `UnboxedArray a` と `MutUnboxedArray a` の要素の読み書きは、呼び出しにせず展開する |
 
 ## IR の層
 
@@ -114,13 +114,9 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 
 ## 生の要素の配列
 
-- 型は `Std.FloatArray` (`Unr`) と `Std.MutFloatArray` (`Lin`)、`Std.IntArray` と `Std.MutIntArray` である。API は `Array` と `MutArray` と同じ (`make`、`length`、`get` と `read`、`set` と `write`、`freeze` と `thaw`、`tabulate`、`from_list`) で、`copy_slice`、`concat`、`fill` を足す。要素は 8 バイトで、バイトの配列は作らない (`Bytes` がある)。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
-- 物体の形は新しい種類 `Raw` (番号 6) である。生の語 0 が要素の数で、その後に生の 8 バイトの要素が並ぶ。`scan = 0` で、`String` と `Bytes` と同じく `raw` と `set_raw` からは中身が見えない。要素の型は静的に決まるので、`Float` と `Int` の配列は種類を共有する
-- `eml_rt` の中では、回復は `String` と同じく生の語を写し、`share` は子がないので O(1) で印を付け、`freeze` は受け付け、`foreign` と `unbox` は `WrongKind` で断る。検査モードは中身を不透明に扱う。`arrays.rs` の Verus の仕様に新しい種類を足す。VM の操作は extern で、新しい命令は作らない
-- `Mut*Array` は `Lin` で、型付けにより rc はいつも 1 である。`write` はいつもその場で書き、ネイティブの展開した `write` も rc 1 を前提にする (速いモード。VM の検査モードは、今の `MutArray` と同じく一意であることを確かめる)。`FloatArray.set` は `is_unique` でなければ写す。`thaw` は一意でなければ写して `lin` ビットを立て、`freeze` は消す。`lin` ビットを立てるのは `make` と `thaw` で、この種類の `Mut*Array` の値を作るのはこれらの extern だけなので、ビットのない `Lin` の物体は生じない
-- ネイティブのコードは `get`、`read`、`write` を展開する。要素の数を読み、符号なしで比べ、`Panic` の道へ冷たい分岐をし、`base + 8 + 8*i` の位置を `load.f64` か `store.f64` で浮動小数のレジスタとやりとりする。`Float` の箱は作らない
-- 並列の書き込みは1つの塊の添字の範囲を子に渡すプリミティブで行う。`split_at` と `concat` で分けて戻す形は採らず、`MutFloatArray` に `split_at` はない。変えない配列の `concat` と `copy_slice` は逐次の操作として残す
-- 配列を、要素の数を常に長さの語に持つ形 (`scan = 255`) にする案は、生の要素の配列と一緒に、ネイティブのコードが配列の要素を直接読むより前に入れる。そのとき `crates/eml_rt/src/heap/ctx/arrays.rs` の Verus の仕様のうち、`n >= 255` で `scan` を決める所がすべて変わる。仕様を変えるのは1回で済む
+- 型と関数は [標準ライブラリ](../spec/stdlib.md) の「`Std.UnboxedArray`」と「`Std.MutUnboxedArray`」に、物体の形は [オブジェクトモデル](../spec/object-model.md) の「配列」にある
+- ネイティブのコードは `UnboxedArray.get`、`MutUnboxedArray.read`、`MutUnboxedArray.write` を展開する。要素の数を読み、符号なしで比べ、`Panic` の道へ冷たい分岐をし、`base + 8 + 8*i` の位置を読み書きする。`Float` の要素は `load.f64` か `store.f64` で浮動小数のレジスタと、`Int` の要素は `load.i64` か `store.i64` で整数のレジスタとやりとりする。`Float` の箱は作らない。`MutUnboxedArray` の rc はいつも 1 なので ([オブジェクトモデル](../spec/object-model.md) の「配列」)、展開した `write` は一意かを確かめずにその場で書く
+- 並列の書き込みは1つの塊の添字の範囲を子に渡すプリミティブで行う。`split_at` と `concat` で分けて戻す形は採らず、`MutUnboxedArray` に `split_at` はない
 
 ## 並列の実行
 

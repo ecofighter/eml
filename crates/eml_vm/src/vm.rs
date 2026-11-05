@@ -1124,6 +1124,26 @@ fn step<R: Exec>(
             let n = unsafe { ctx.array_length(task.get(a)) }?;
             task.set_raw(dst, n);
         }
+        // unboxed の行も借りる引数を手放さない。要素は生のビットなので、値のスロットは `task.raw` で読む
+        Op::UnboxedGet { dst, a, b } => {
+            let x = unsafe { ctx.unboxed_get(task.get(a), task.raw(b)) }?;
+            task.set_raw(dst, x as i64);
+        }
+        Op::UnboxedLength { dst, a } => {
+            let n = unsafe { ctx.unboxed_length(task.get(a)) }?;
+            task.set_raw(dst, n);
+        }
+        Op::UnboxedSet { dst, at } => {
+            let o = &code.tables.operands[at as usize..];
+            let w = unsafe {
+                ctx.unboxed_set(
+                    task.get(o[0] as Slot),
+                    task.raw(o[1] as Slot),
+                    task.raw(o[2] as Slot) as u64,
+                )
+            }?;
+            task.set(dst, w);
+        }
         // 文字列の行も借りる引数を手放さない。誤りの扱いは配列の行と同じ
         Op::StrByteAt { dst, i, s } => {
             let b = unsafe { ctx.string_byte_at(task.raw(i), task.get(s)) }?;
@@ -3760,9 +3780,12 @@ fn step_failed<R: Exec>(
         | Op::ArrayGet { dst, .. }
         | Op::StrByteAt { dst, .. }
         | Op::BytesGet { dst, .. }
-        | Op::ArraySet { dst, .. } => (dst, Purity::Panics),
+        | Op::ArraySet { dst, .. }
+        | Op::UnboxedGet { dst, .. }
+        | Op::UnboxedSet { dst, .. } => (dst, Purity::Panics),
         // `length` の行は `Pure` で巻き戻しの地点を持たない
         Op::ArrayLength { dst, .. }
+        | Op::UnboxedLength { dst, .. }
         | Op::StrByteLength { dst, .. }
         | Op::BytesLength { dst, .. } => (dst, Purity::Pure),
         _ => return Err(fault),
@@ -4369,6 +4392,35 @@ fn run_extern<R: Exec>(
                 let w = ctx.array_freeze(task.get(arg(0)))?;
                 task.set(dst, w);
             }
+            // 要素はスロットの生のビットのまま渡すので、Float と Int の行が1つの操作を共有する
+            // (docs/spec/vm.md の「基本操作と extern」)
+            Extern::UnboxedArrayMakeFloat
+            | Extern::UnboxedArrayMakeInt
+            | Extern::MutUnboxedArrayMakeFloat
+            | Extern::MutUnboxedArrayMakeInt => {
+                let lin = matches!(
+                    ext,
+                    Extern::MutUnboxedArrayMakeFloat | Extern::MutUnboxedArrayMakeInt
+                );
+                let w = ctx.unboxed_make(task.raw(arg(0)), task.raw(arg(1)) as u64, lin)?;
+                task.set(dst, w);
+            }
+            Extern::MutUnboxedArrayEmpty => {
+                let w = ctx.unboxed_empty(true)?;
+                task.set(dst, w);
+            }
+            Extern::MutUnboxedArrayFillFloat | Extern::MutUnboxedArrayFillInt => {
+                let w = ctx.unboxed_fill(task.get(arg(0)), task.raw(arg(1)) as u64)?;
+                task.set(dst, w);
+            }
+            Extern::UnboxedArrayThaw => {
+                let w = ctx.unboxed_thaw(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::MutUnboxedArrayFreeze => {
+                let w = ctx.unboxed_freeze(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
             Extern::CheckIndex => {
                 externs::check_index(task.raw(arg(0)), task.raw(arg(1)))?;
                 task.set(dst, Word::UNIT);
@@ -4432,7 +4484,17 @@ fn run_extern<R: Exec>(
             | Extern::ArrayGet
             | Extern::MutArrayRead
             | Extern::ArraySet
-            | Extern::MutArrayWrite => {
+            | Extern::MutArrayWrite
+            | Extern::UnboxedArrayLength
+            | Extern::MutUnboxedArrayLength
+            | Extern::UnboxedArrayGetFloat
+            | Extern::UnboxedArrayGetInt
+            | Extern::MutUnboxedArrayReadFloat
+            | Extern::MutUnboxedArrayReadInt
+            | Extern::UnboxedArraySetFloat
+            | Extern::UnboxedArraySetInt
+            | Extern::MutUnboxedArrayWriteFloat
+            | Extern::MutUnboxedArrayWriteInt => {
                 return Err(VmFault::Internal(
                     "a dedicated-instruction extern reached the generic extern instruction",
                 ));

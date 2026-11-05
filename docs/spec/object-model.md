@@ -2,7 +2,7 @@
 
 位置づけ: 規範。
 
-VM とネイティブで共有するランタイム `eml_rt` の核と、その上に置く実行文脈 `Ctx` を定める。核は、語、物体 (ヘッダ、ペイロード、種類)、ページ単位の確保器と生存の列挙、局所と共有の参照カウント、`share`、`lin` ビット、核の操作、バイト列と文字列、凍結した領域、reuse の部品、検査モードから成る。核は物体の中身の種類をほとんど知らない。中身を知るのは `BigInt`、`Float`、`Foreign`、`String`、`Bytes` だけで、データとクロージャの物体の形 (下の「物体の形」) は VM が受け持つ。evidence の3つの物体の形は、`Ctx` の基本操作が受け持つ (下の「実行文脈 `Ctx`」)。`eml_extern` の表の関数の行は、`Ctx` の上に extern として置く (下の「extern」)。`eml_rt` を使うのは [VM](vm.md) で、`eml run` は VM で動く。
+VM とネイティブで共有するランタイム `eml_rt` の核と、その上に置く実行文脈 `Ctx` を定める。核は、語、物体 (ヘッダ、ペイロード、種類)、ページ単位の確保器と生存の列挙、局所と共有の参照カウント、`share`、`lin` ビット、核の操作、バイト列と文字列、凍結した領域、reuse の部品、検査モードから成る。核は物体の中身の種類をほとんど知らない。中身を知るのは `BigInt`、`Float`、`Foreign`、`String`、`Bytes`、`Raw` だけで、データとクロージャの物体の形 (下の「物体の形」) は VM が受け持つ。evidence の3つの物体の形は、`Ctx` の基本操作が受け持つ (下の「実行文脈 `Ctx`」)。`eml_extern` の表の関数の行は、`Ctx` の上に extern として置く (下の「extern」)。`eml_rt` を使うのは [VM](vm.md) で、`eml run` は VM で動く。
 
 設計の基準は、実用的なプログラムで速いことである。関数型のプログラムで回数の多い経路は、多い順に次のとおりで、核はこの順に速さを優先する。
 
@@ -55,7 +55,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 ```
 
 - `tag` はコンストラクタの添字である。データでない種類では、種類ごとに意味を決める (使わなければ 0)
-- `scan` は、走査する語 (`obj` と `tobj` の値) の数である。0 から 254 はそのまま数を表す。255 は「数がペイロードにある」印で、そのときは走査の始まりの位置の生の1語が数を持ち、走査する語はその次から並ぶ。走査する語が 255 個以上の物体 (フィールドの多いデータ、EP の継続のクロージャが捕まえる多くの値) も、同じヘッダで扱うためである。継続のクロージャはコンパイラが作るので、数の上限をユーザーの誤りにできない
+- `scan` は、走査する語 (`obj` と `tobj` の値) の数である。0 から 254 はそのまま数を表す。255 は「数がペイロードにある」印で、そのときは走査の始まりの位置の生の1語が数を持ち、走査する語はその次から並ぶ。走査する語が 255 個以上の物体 (フィールドの多いデータ、EP の継続のクロージャが捕まえる多くの値) も、同じヘッダで扱うためである。継続のクロージャはコンパイラが作るので、数の上限をユーザーの誤りにできない。配列は長さによらず `scan` を 255 にする (下の「配列」)
 - `info` は、最上位のビットが `lin` ビット (下の「`lin` ビット」)、下位の4ビットが種類である。残りの3ビットは予約し、0 にする
 - ヘッダを `rc` と `meta` の2つに分けるのは、reuse の書き込みを少なくするためである。確保は rc と `meta` の2つの欄を続けて書く。reuse でコンストラクタが変わるときは `meta` の 32 ビットの1回の store で済み、rc は 1 のままなので書かない。同じコンストラクタの reuse は、ヘッダに何も書かない
 - `meta` は atomic でない。`meta` を書くのは、確保と、一意な箱の reuse と、解放と、一意な配列の `lin` ビットを変える `set_lin` (下の「配列」) と、一意な文字列とバイト列の種類を変える `set_body_kind` (下の「バイト列と文字列」の「変換」) だけである。どれも、ほかのスレッドがその物体を読めないときに起きる
@@ -85,7 +85,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 | 破棄処理 | 解放のときに呼ぶ処理があるか |
 | ペイロードが不透明か | 核の操作から見て、ペイロードを語として読み書きできないか。`raw` と `set_raw` はこの欄で断る |
 
-今ある種類は次の7つである。
+今ある種類は次の8つである。
 
 | 種類 | 番号 | ペイロード | 走査の始まり | token | 破棄処理 | 不透明 |
 |---|---|---|---|---|---|---|
@@ -95,13 +95,16 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 | `String` | 3 | 生の1語目にバイト長、その後に UTF-8 のバイト列 (下の「バイト列と文字列」) | 0 (`scan` は 0) | できない | なし | 不透明 |
 | `Float` | 4 | `f64` のビット列の1語 | 0 (`scan` は 0) | できない | なし | いいえ |
 | `Bytes` | 5 | 生の1語目にバイト長、その後にバイト列 (下の「バイト列と文字列」) | 0 (`scan` は 0) | できない | なし | 不透明 |
+| `Raw` | 6 | 生の1語目に要素の数、その後に生の 8 バイトの要素 | 0 (`scan` は 0) | できない | なし | 不透明 |
 | `Free` | 15 | 空きリストの次のブロックへのポインタ | なし | できない | なし | いいえ |
 
 - `Foreign` は、`FileIn` のように Rust の値を持つ物体である。`alloc_foreign::<T>(value, lin)` が、`T` ごとに1つの静的な表 (値の型を照らす `TypeId` を返す関数と、`drop_in_place::<T>` を呼ぶ破棄処理) を作って先頭に置く。`T` は `Send + 'static` で、揃えは 8 バイト以下に限る。後で別のスレッドが最後の参照を手放しても、破棄処理をそのスレッドで呼べるようにするためである ([マルチコア対応の設計](../future/multicore.md) の「スレッドに縛られたリソース」)
 - `Foreign` の箱を空けるときは、表を読み、箱を先に死んだことにしてから破棄処理を呼び、その後でブロックを確保器に返す。破棄処理が panic しても同じ値を2回破棄せず、返した大きい物体のページを読まないためである。panic したときは、その箱が漏れる
 - `Foreign` を token にしないのは、破棄処理を飛ばして別の物体に使い回すと、`Lin` の資源の後始末が漏れるためである。`BigInt` と `Float` は reuse のパスの対象にならないので、token にしない
-- `String` と `Bytes` を token にしないのは、token の箱はいつも `Data` であるという性質を崩さないためである。`con_at` が書き直さない語の扱いは、この性質に頼る。reuse のパスも文字列とバイト列を対象にしない
-- `Foreign`、`String`、`Bytes` のペイロードは不透明である。`Foreign` は Rust の値を持ち、`String` と `Bytes` の語は途中までしか書いていないことがある。`raw` で語として読むと未初期化のメモリを読み、`set_raw` で書くと不変条件が崩れる
+- `String`、`Bytes`、`Raw` を token にしないのは、token の箱はいつも `Data` であるという性質を崩さないためである。`con_at` が書き直さない語の扱いは、この性質に頼る。reuse のパスも文字列とバイト列と生の要素の配列を対象にしない
+- `Foreign`、`String`、`Bytes`、`Raw` のペイロードは不透明である。`Foreign` は Rust の値を持ち、`String` と `Bytes` の語は途中までしか書いていないことがある。`Raw` の語 0 は、不変条件が縛る要素の数である。`raw` で語として読むと未初期化のメモリを読み、`set_raw` で書くと不変条件が崩れる
+- `Raw` は、`Float` と `Int` の要素を箱に入れずに生の 8 バイトの語で並べる配列である。語 0 が要素の数 n で、語 1..=n が要素である。容量の終わりまでの語をすべて書いておく。`scan` を 0 にするので子を持たず、`share` は rc の符号を変えるだけで済み、解放にも種類のためのコードが要らない。要素はどのビット列でもよい。走査しない語には、語が即値か物体を指すという条件が掛からないためである。要素はいつも 8 バイトで、`length`、`set` と `thaw` の写す道、回復は幅を 8 と決めて書く。`tag` は 0 でなければならず、要素の幅を後で書けるよう空けてある
+- `Raw` の物体を作るのは `alloc_unboxed` だけで、要素を書くのは `unboxed_put`、`unboxed_copy` と、回復が配列を写すときの `alloc_unboxed` の本体 (`make_unboxed`) だけである。構築中の物体にはならず、`alloc`、`alloc_immortal`、`con_at` の `meta` にもならない
 - `Free` は、確保器が空いたブロックに付ける内部の種類である (下の「確保器」)。生きている物体がこの種類を持つことはない
 - クロージャ、evidence のエントリの表、evidence、`evv` の節点は種類を分けず、`Data` にする (下の「物体の形」)
 - `Float` は `BigInt` と同じ形の1語の箱で、種類だけを分ける。検査モードの `unbox_int` と `unbox_float` が取り違えを `WrongKind` で断れるようにするためである。`Float` には `Int` の即値のような空きのビットがないので、`box` はいつも確保する (`alloc_float`)。値の語はビット列のまま書いて読み、浮動小数の算術をしないので、`-0.0` と NaN のペイロードもそのまま残る。生きている箱は値の語を書いてある。不変条件は `BigInt` と `Float` を1つの述語 (`Kind::boxes_value`) で扱う
@@ -114,11 +117,12 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 |---|---|
 | 即値 | そのまま |
 | rc が 0 の物体 | 古いヒープのダミーなら新しいヒープのダミーにする。凍結した領域の物体なら、語をそのまま使う。ヒープの不死の物体のうち、ダミーでないものは写せない (`Unrecoverable`) |
-| `Data` | 子を写した後に、同じ tag、走査する語の数、容量で作り、生の語を写し、走査する語に子の新しい語を置く |
+| `Data` | 子を写した後に、同じ tag、走査する語の数、数の語の有無、容量で作り、生の語を写し、走査する語に子の新しい語を置く |
 | `String` | 古いバイト列から `alloc_string` で作る。`alloc_string_room` が作った余りの容量は写さない |
 | `Bytes` | 古いバイト列から `alloc_bytes` で作る。`alloc_bytes_room` が作った余りの容量は写さない |
 | `BigInt` | 古い値から `alloc_int` で作る。値は 63 ビットに収まらないので、また `BigInt` になる |
 | `Float` | 古いビット列から `alloc_float` で作る |
+| `Raw` | 古い要素の語を写した、同じ要素の数の物体を `alloc_unboxed` と同じ道で作る |
 | rc が負の物体 (共有) | 局所の物体として写す。2つ目からの使い手は `dup` する。不死の `MIN` の rc も、普通の数の rc になる |
 | `Foreign`、`lin` ビットの物体、token の箱、解放した物体 | 写せない (`Unrecoverable`) |
 
@@ -327,7 +331,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 
 語を受ける操作は `unsafe fn` にする。条件は、Verus の `requires` に抽象のモデル (ブロックの状態、参照の数、語ごとの書き込みの状態) の言葉で書き、`# Safety` の文も同じ条件を指す。大きくは次のとおりである。速いモードはこれを確かめない。検査モードは、確かめられる違反を `Err` で返す (下の「検査モード」)。
 
-- 語は即値か、生きている物体を指す。生きている物体とは、`meta` に合うペイロード (走査する語、`scan` が 255 なら数の語、`BigInt` と `Float` なら値、`String` と `Bytes` なら長さの語) をすべて書いた物体である。データの物体の生の語は、この条件に入らない
+- 語は即値か、生きている物体を指す。生きている物体とは、`meta` に合うペイロード (走査する語、`scan` が 255 なら数の語、`BigInt` と `Float` なら値、`String` と `Bytes` なら長さの語、`Raw` なら容量の終わりまでの語) をすべて書いた物体である。データの物体の生の語は、この条件に入らない
 - 参照を消費する操作 (`decref`、`release`、`into_token` など) では、呼ぶ側がその参照を1つ持っている。読むだけの操作 (`field`、`raw`、`is_unique` など) では、呼ぶ側が参照を持っているか、生きている持ち主から借りている。Perceus の借りたフィールドと、基本操作の借用の引数がこれに当たる
 - 物体は、同じ `Heap` が確保したものか、その `Heap` に付けた凍結した塊とその祖先の物体か、同じ `Control` のほかのヒープのページの物体に限る (下の「凍結した領域」、上の「別のスレッドからの解放」)。ほかのヒープのページの物体で受け付けるのは、共有の物体 (rc < 0)、不死の物体、持ち主が今の worker の局所の物体である。証明のモデルは自分のヒープと付けた塊のブロックだけを持ち、ほかのヒープのページの物体は下の「`unsafe` の核」の T14 の読み方で扱う
 - rc が正の物体を書き換えるか、その rc を読んで判定する操作 (下の「報告する誤り」の `WrongOwner` に挙げた操作) では、物体の持ち主が今の worker である (下の「論理的な worker ID」)
@@ -338,8 +342,8 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | 操作 | 安全の前提 | モデルの前提 | 検査する前提 (検査モードの `Err`) |
 |---|---|---|---|
 | どの操作も | 語は即値か、このヒープのブロックか、このヒープに付けた塊とその祖先のブロックか、同じ `Control` のほかのヒープのページのブロックである。構築中の物体は書き終えている (`set_field` と `set_raw` を除く) | 読むだけの操作の語は、モデルで生きている物体 (参照の数が正か、不死) を指す | 物体のページは `Control` のページの表に登録してある (`UnknownPage`)。物体は生きている (`UseAfterFree`)。rc が正の物体を書き換えるか rc を読んで判定するなら、持ち主は今の worker である (`WrongOwner`) |
-| 物体を受ける操作 (`meta`、`field`、`set_field`、`raw`、`set_raw`、`scanned_len`、`scanned`、`set_lin`、`free_block`、`release`、`release_reuse`、`into_token`、`foreign`、`foreign_unique`、`string`、`bytes`、`string_push`、`string_concat`) | 語はポインタである (即値でも `Word::EMPTY` でもない) | | |
-| `alloc` / `alloc_immortal` / `con_at` | `meta` の種類は `Foreign`、`String`、`Bytes`、`Free` のどれでもない。`scan` は 255 でなく、走査する語はペイロードに収まる | | |
+| 物体を受ける操作 (`meta`、`field`、`set_field`、`raw`、`set_raw`、`scanned_len`、`scanned`、`set_lin`、`free_block`、`release`、`release_reuse`、`into_token`、`foreign`、`foreign_unique`、`string`、`bytes`、`string_push`、`string_concat`、`unboxed_len`、`unboxed_word`、`unboxed_put`、`unboxed_copy`) | 語はポインタである (即値でも `Word::EMPTY` でもない) | | |
+| `alloc` / `alloc_immortal` / `con_at` | `meta` の種類は `Foreign`、`String`、`Bytes`、`Raw`、`Free` のどれでもない。`scan` は 255 でなく、走査する語はペイロードに収まる | | |
 | `field` / `set_field` | | `set_field` が書く語は、呼ぶ側が数えた参照を持つ | i 語目は走査する語である (`OutOfBounds`)。`set_field` の物体は、ほかのスレッドが読めない (局所か、構築中。`NotWritable`) |
 | `scanned` | | | i は `scanned_len` より小さい (`OutOfBounds`) |
 | `raw` / `set_raw` | `raw` で読む語は先に書いてある。`alloc_data` は生の語を書かず、新しいページのメモリは初期化されていないためである | | 物体のペイロードは不透明でない (`WrongKind`。上の「種類」)。i 語目は、走査する語の後のブロックの中の語である (`OutOfBounds`)。`set_raw` の物体は、ほかのスレッドが読めない (`NotWritable`)。`alloc_immortal` で作る `BigInt` と `Float` の値の語も `set_raw` で書く |
@@ -349,7 +353,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `decref` / `release` / `release_reuse` | | 呼ぶ側が参照を1つ持つ。残さない子は呼ぶ側の参照と数える | 不死の物体の参照は `acquire_immortal` か `dup` で作った (`ImmortalOverRelease`)。共有の物体は `lin` ビットを持たない (`LinShared`)。`release` と `release_reuse` の物体はデータで、tag と走査する語の数が名指したものである (`WrongLayout`)。残さない子は `decref` の、`is_last` が偽のときの残す子は `dup` の検査する前提を満たす |
 | `acquire_immortal` | | | 物体は不死である (`NotImmortal`) |
 | `foreign_unique` | 返すポインタを使うのは、この物体の参照を手放すか、ほかの参照を作るまでの間だけである | | rc が 1 である (`NotUnique`。共有の物体も断る) |
-| `set_lin` | | 呼ぶ側が唯一の参照を持つ | 物体は `Data` である (`WrongKind`)。rc が 1 である (`NotUnique`。共有の物体も断る) |
+| `set_lin` | | 呼ぶ側が唯一の参照を持つ | 物体は `Data` か `Raw` である (`WrongKind`)。rc が 1 である (`NotUnique`。共有の物体も断る) |
 | `free_block` | | 呼ぶ側が最後の参照を持ち、子の参照はもう処理してある | rc が 1 か -1 である (`NotLast`)。種類は破棄処理を持たない (`FinalizerSkipped`) |
 | `into_token` | | 呼ぶ側が唯一の参照を持ち、子の参照はもう処理してある | token にできる種類である (`NotTokenable`)。rc が 1 である (`NotUnique`) |
 | `con_at` / `reuse_in_place` / `drop_token` | | token の箱の「残した」語 (`con_at` と `reuse_in_place` で書き直さない語) の参照を呼ぶ側が持つ | token はまだ使っていない (`StaleToken`)。`con_at` の箱は `payload_words` の物体のこのモードでの級にある (`WrongClass`。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす)。`reuse_in_place` の `meta` の tag、scan、種類は箱と同じで (`WrongMeta`)、箱が `lin` ビットを持つなら `meta` も持つ (`LinBitKept`) |
@@ -357,6 +361,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `transfer_back` | 裏返す物体 (根から rc -1 の物体だけを通って届く rc -1 の物体) を指す参照は、戻す値の中にしかない | | `from` は今の worker でない (`WrongOwner`)。届く物体はどれも生きている (`UseAfterFree`)。届いた局所の物体の持ち主は、今の worker か `from` である (`WrongOwner`) |
 | `string` | 返す位置を読むのは、物体が生きていて、`string_push` か `string_concat` でその物体を書き換えていない間だけである | | 物体は `String` である (`WrongKind`) |
 | `bytes` | 返す位置を読むのは、物体が生きていて、その物体を書き換えていない間だけである | | 物体は `Bytes` である (`WrongKind`) |
+| `unboxed_len` / `unboxed_word` / `unboxed_put` / `unboxed_copy` | `unboxed_copy` の写す先と写す元は別の物体である | | 物体は tag 0 の `Raw` である (`WrongKind`)。`unboxed_word` と `unboxed_put` の i は要素の数より小さく、`unboxed_copy` の n はどちらの要素の数も超えない (`OutOfBounds`)。`unboxed_put` と `unboxed_copy` が書く物体は、ほかのスレッドが読めない (`NotWritable`) |
 | `string_push` | `s` は left 自身の中身を指さない (下の「バイト列と文字列」) | 呼ぶ側が left の参照を1つ持つ | left は `String` である (`WrongKind`)。left は `decref` の検査する前提を満たす |
 | `string_concat` | | 呼ぶ側が left と right の参照を1つずつ持つ (同じ物体なら2つ持つ) | 両辺は `String` である (`WrongKind`)。両辺は `decref` の検査する前提を満たし、同じ物体なら2回続けた `decref` の検査する前提を満たす |
 
@@ -367,12 +372,14 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 
 `Err` を作らない操作は、呼ぶ側に展開すれば、最適化で `Result` の分岐が消える。そのため、`dup` と `decref` は、局所の rc を書き換えるだけの速い道を `#[inline]` にし、残り (共有、不死、張り付いた数、検査モードの仕事) を、`#[cold]` と `#[inline(never)]` を付けた遅い道の関数に出す。速いモードの `decref` の速い道は、rc が 1 なら解放の連鎖を直に呼ぶ。解放の連鎖は `#[inline(never)]` にするが、一意な物体を空けることはよく起きるので、`#[cold]` にはしない。確保と箱の解放の速い道、`release`、`release_reuse`、`con_at`、`into_token`、`drop_token` と、語とヘッダの小さい関数も `#[inline]` にする。VM は `eml_rt` の外の crate なので、付けないと、総称でない関数は crate をまたぐ呼び出しになりうるためである。`Ctx::poll` が読む `Control::stop_bits` も、同じ理由で `#[inline]` にする。`field`、`set_field`、`meta`、`scanned`、`string_push` と、`string_push` の中で呼ぶ `push_unchecked` と、`release` と `release_reuse` の子の処理 (`release_children`) が呼ぶ `release_unkept` も `#[inline]` にする。総称な関数の実体は、使う側の crate のコード生成単位の1つにしかできず、ほかの単位からは展開できないためである ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)。確保器の遅い道 (ページを替えること、大きい物体の確保と返却) は `#[cold]` にする。`decref` の解放の道を選んだ計測は [計測の基準](../implementation/benchmarks.md) の「`decref` が一意な物体を空ける道」に、今の命令の数は同じ文書の「今の数値」にある。
 
-ペイロードを呼ぶ側が書く `alloc` と `alloc_immortal` も `unsafe fn` である。`meta` の種類は `Foreign`、`String`、`Bytes`、`Free` のどれでもなく、`scan` は 255 でない。呼ぶ側は、ほかのヒープの操作の前に `meta` に合うペイロードを書く。`scan` が 255 の物体は走査する語の数をペイロードの先頭の数の語から読むので、数の語を書く前には、走査する語と生の語の境目が決まらない。走査する語が 255 個以上の物体は `alloc_data` で作る。ペイロードの形が正しいかは VM が受け持ち、確保のたびに実行時に確かめると速い道の費用になるためである。ペイロードを自分で書く `alloc_data`、`alloc_int`、`alloc_foreign`、`alloc_string`、`alloc_string_room`、`alloc_string_immortal`、`alloc_bytes`、`alloc_bytes_room`、`alloc_bytes_immortal` は安全な関数である。`String` と `Bytes` の物体を作れるのは、下の「バイト列と文字列」の操作だけである。
+ペイロードを呼ぶ側が書く `alloc` と `alloc_immortal` も `unsafe fn` である。`meta` の種類は `Foreign`、`String`、`Bytes`、`Raw`、`Free` のどれでもなく、`scan` は 255 でない。呼ぶ側は、ほかのヒープの操作の前に `meta` に合うペイロードを書く。`scan` が 255 の物体は走査する語の数をペイロードの先頭の数の語から読むので、数の語を書く前には、走査する語と生の語の境目が決まらない。走査する語が 255 個以上の物体と配列は `alloc_data` か `alloc_data_ext` で作る。ペイロードの形が正しいかは VM が受け持ち、確保のたびに実行時に確かめると速い道の費用になるためである。ペイロードを自分で書く `alloc_data`、`alloc_data_ext`、`alloc_array_immortal`、`alloc_int`、`alloc_foreign`、`alloc_string`、`alloc_string_room`、`alloc_string_immortal`、`alloc_bytes`、`alloc_bytes_room`、`alloc_bytes_immortal`、`alloc_unboxed` は安全な関数である。`String` と `Bytes` の物体を作れるのは、下の「バイト列と文字列」の操作だけで、`Raw` の物体を作れるのは `alloc_unboxed` だけである。
 
 | 操作 | 動作 |
 |---|---|
 | `alloc(payload_words, meta)` | 級のブロックを取り、rc 1 と `meta` を書く。ペイロードは呼ぶ側が書く |
 | `alloc_data(tag, scanned, raw, lin)` | データの物体を作る。走査する語が 255 個以上なら、ペイロードの先頭に数の語を置く。走査する語は `()` で埋めておく |
+| `alloc_data_ext(tag, scanned, raw, lin, force)` | `alloc_data` と同じで、`force` なら走査する語の数によらず数の語を置く。配列を作る操作と、回復が数の語を持つ物体を写すのに使う |
+| `alloc_array_immortal(lin)` | 長さ 0 の配列 (数の語 0 を持つ tag 0 の `Data`) を rc 0 の不死の物体として作る。`alloc_immortal` は `scan` が 255 の `meta` を断るので、別に持つ |
 | `alloc_immortal(payload_words, meta)` | rc 0 で確保する |
 | `acquire_immortal(w)` | 不死の物体の参照を1つ作る。速いモードでは何もしない (下の「不死の物体の数え方」) |
 | `alloc_int(n)` / `unbox_int(w)` | 上の「語」の `box` と `unbox` |
@@ -394,6 +401,10 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `transfer_back(w, from)` | 上の「`transfer_back`」 |
 | `alloc_string(s)` / `alloc_string_room(room)` / `alloc_string_immortal(s)` / `string(w)` / `string_push(left, s)` / `string_concat(left, right)` | 下の「バイト列と文字列」 |
 | `alloc_bytes(b)` / `alloc_bytes_room(room)` / `alloc_bytes_immortal(b)` / `bytes(w)` | 下の「バイト列と文字列」 |
+| `alloc_unboxed(n, x, lin)` | 要素の数 n で、どの要素も `x` のビット列の `Raw` の物体を作る。`lin` は `lin` ビットである |
+| `unboxed_len(w)` / `unboxed_word(w, i)` | 要素の数と、i 番目の要素のビット列を読む |
+| `unboxed_put(w, i, v)` | i 番目の要素に `v` のビット列を書く |
+| `unboxed_copy(dst, src, n)` | `src` の先頭の n 要素を `dst` の先頭の n 要素に写す。`dst` の残りの要素と `src` は変えない |
 
 - `con_at` で箱を使い回したときは、残したフィールドを書き直さなくてよい。呼ぶ側は、ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする
 - LIR の `decref` と `drop` は、どちらも `decref` で実行する。実行時の動作も検査モードの規則も同じだからである。`unr` でない値に `decref` を出さない規則 (V1) は静的な検査で、実行時には区別しない
@@ -505,7 +516,7 @@ left が一意 (is_unique)
 
 ## 配列
 
-`Array a` と `MutArray a` は同じ形の物体である。tag 0 の `Data` で、要素を走査する語として順に並べ、生の語は持たない。要素が 255 個以上なら、ほかの `Data` と同じく数の語を先に置く (上の「ヘッダ」)。要素の位置は一様な位置なので、`Int` は即値で、`Float` は箱で入る。`MutArray` の物体は `lin` ビットを持つ。種類を分けないので、回復は `lin` ビットのない配列を `Data` として写し、`MutArray` を `lin` ビットの物体として断る (上の「種類」の回復の表)。
+`Array a` と `MutArray a` は同じ形の物体である。tag 0 の `Data` で、要素を走査する語として順に並べ、生の語は持たない。長さによらず `scan` を 255 にし、ペイロードの語 0 に要素の数を置いて、要素を語 1 から並べる (上の「ヘッダ」)。ネイティブのコードが、長さを見ずに数を `base + 8` から、i 番目の要素を `base + 8 + 8*i` から読めるようにするためである。配列でない `Data` は、走査する語が 255 個以上のときだけ数の語を持つ。すべての `Data` に数の語を置くと、VM の `con`、LIR の `Shape` と reuse が変わり、すべてのコンストラクタとクロージャが 8 バイト大きくなるが、数の語を読むのは配列だけだからである。要素の位置は一様な位置なので、`Int` は即値で、`Float` は箱で入る。`MutArray` の物体は `lin` ビットを持つ。種類を分けないので、回復は `lin` ビットのない配列を `Data` として写し、`MutArray` を `lin` ビットの物体として断る (上の「種類」の回復の表)。
 
 配列の extern は `Ctx` のメソッドである (`heap/ctx/arrays.rs`)。
 
@@ -523,7 +534,24 @@ left が一意 (is_unique)
 - `MutArray` はいつも一意なので、共有の物体の `freeze` は型の誤りである。検査モードは `NotUnique` で断り、速いモードは写す。速いモードが写すのは、VM が確かめられない前提 (一意であること) をメソッドに置かないためである
 - `set_lin` は、一意な物体の `meta` の `lin` ビットだけを書き換え、tag、scan、種類、rc は変えない。一意な物体はほかの物体から辺で指されず、ほかのスレッドも読めない。そのため、ビットを変えても、`evv` のリストと evidence の形や、`Ctx` の持つ語の条件は崩れない。Verus はこの変化を、`evolved_by` の代わりに `evolved_lin` (`a` だけは `meta` の `lin` ビットも変わってよい変化) で書いて証明する
 - 写しも書き換えも語の単位なので、信頼の一覧に行を足さない
-- `var` の配列の変数を取り出した後の状態は、VM が凍結した領域に1つだけ置く、`lin` ビットを立てた長さ 0 の配列である (下の「凍結した領域」)。`alloc_immortal` は `lin` ビットのある `Data` を作れ、凍結は参照の数が 0 の物体を受け付けるので、このために `eml_rt` に足すものはない。長さが 0 なので、添字を確かめてから読み書きする `var` の節はこの物体を書き換えない ([Core IR](core-ir.md) の「`var` の変換」)
+- `var` の配列の変数を取り出した後の状態は、VM が凍結した領域に1つだけ置く、`lin` ビットを立てた長さ 0 の配列である (下の「凍結した領域」)。ほかの配列と同じく数の語 (0) を持つので、`alloc_immortal` では作れず、`alloc_array_immortal(true)` で作る。凍結は参照の数が 0 の物体を受け付ける。長さが 0 なので、添字を確かめてから読み書きする `var` の節はこの物体を書き換えない ([Core IR](core-ir.md) の「`var` の変換」)
+
+`UnboxedArray a` と `MutUnboxedArray a` (生の要素の配列) は同じ形の物体で、種類は `Raw` である (上の「種類」)。ペイロードの語 0 に要素の数 n を置き、語 1 から n 個の要素を生の 8 バイトで並べる。`Float` はビット列のまま、`Int` は 64 ビットの整数のまま入り、箱を作らない。配列と同じく、ネイティブのコードは数を `base + 8` から、i 番目の要素を `base + 8 + 8*i` から読める。`MutUnboxedArray` の物体は `lin` ビットを持つ。メソッドは要素を 64 ビットの語 (`u64`) で受け渡して型を見ないので、`Float` と `Int` の行は同じメソッドを使う (`heap/ctx/unboxed.rs`)。
+
+| メソッド | 引数の所有 | 動作 |
+|---|---|---|
+| `unboxed_make(n, x, lin)` | | どの要素も `x` の、長さ `n` の新しい配列を返す。`n` が負なら `Index` を返す |
+| `unboxed_empty(lin)` | | 長さ 0 の新しい配列を返す |
+| `unboxed_length(a)` | `a` を借りる | 長さを返す |
+| `unboxed_get(a, i)` | `a` を借りる | i 番目の要素を返す |
+| `unboxed_set(a, i, x)` | `a` を消費する | i 番目を `x` にした配列を返す。`a` が一意なら、その場で書き換えて `a` を返す。一意でなければ、要素を新しい物体に写してから書き、`a` を手放す。写しは `a` の `lin` ビットを引き継ぐ |
+| `unboxed_fill(a, x)` | `a` を消費する | どの要素も `x` にした配列を返す。`a` が一意なら、その場で書いて `a` を返す |
+| `unboxed_freeze(m)` / `unboxed_thaw(a)` | 消費する | `lin` ビットを下ろすか立てた配列を返す。一意なら `set_lin` でその場で変え、同じ語を返す。一意でなければ、要素を写した物体にビットを付け、元を手放す |
+
+- 誤りは配列と同じである。添字が範囲の外なら、`get` は何も変えずに、`set` は `a` を手放してから `Fault::Index` を返す。`make` は配列の `make` と同じく、確保器が作れる語の数に収まらない長さと、(n + 4) * 8 バイトを今の確保量に足すと上限を超える長さを、何も確保せずに `Fault::Stopped(Stop::MemoryLimit)` で断る。検査モードは、`Raw` でない物体を `WrongKind` で断る
+- `MutUnboxedArray` は `Lin` なので、型付けにより rc はいつも 1 で、`write` (`unboxed_set`) と `fill` はいつもその場で書く。検査モードは `lin` の物体の `dup` を `LinDup` で断るので、共有の `MutUnboxedArray` は生じない。`MutUnboxedArray` の値を作るのは、`lin` を渡した `unboxed_make` と `unboxed_empty`、`unboxed_thaw`、`lin` ビットを持つ配列を写す `unboxed_set` と `unboxed_fill` (速いモードの共有の物体) だけで、どれも `lin` ビットを立てる。そのため、`lin` ビットのない `Lin` の物体は生じない
+- 共有の物体の `fill` と `freeze` は型の誤りである。検査モードは `NotUnique` で断り、速いモードは写す。理由は `MutArray` の `freeze` と同じである。`fill` の写しは要素を写さず、`x` で埋めた新しい物体である
+- 要素は語のスロットの権限で読み書きするので、信頼の一覧に行を足さない
 
 ## 凍結した領域
 
@@ -548,7 +576,7 @@ left が一意 (is_unique)
 
 ### 作る
 
-- 塊を作るヒープ (作り手) は、普通の `Heap<M>` である。定数は `alloc_string_immortal` と `alloc_immortal` (と `set_field`、`set_raw`) で作る。作り手のための別の型は作らない
+- 塊を作るヒープ (作り手) は、普通の `Heap<M>` である。定数は `alloc_string_immortal`、`alloc_array_immortal`、`alloc_immortal` (と `set_field`、`set_raw`) で作る。空の `MutArray` の定数は、ほかの配列と同じく数の語を持つ。作り手のための別の型は作らない
 - 作り手は、前の塊を付けていてよい。後から足す定数が、前の塊の定数を指せるようにするためである
 - VM のコード生成 (`CodeBase::load`) は、新しい文字列のリテラルと即値に収まらない `box` の定数を、`Heap::with_control` で作って今の先頭の塊を付けた作業用のヒープに不死の物体として作り、`freeze` で1つの塊にする。実行のヒープは、`attach` でその塊に付け替える。塊の物体は検査モードでも数えないので (下の「検査モードでは数えない」)、VM は定数を読むときに `acquire_immortal` を呼ばず、語を写すだけにする ([VM](vm.md) の「`CodeBase` と `FnEntry`」)
 
@@ -686,8 +714,8 @@ token (`Token`) はどちらのモードでも1語である。VM のレジスタ
 - token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`。rc が 1 でない物体の `foreign_unique` と `set_lin` も同じ誤りにする)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)
 - `free_block` を、破棄処理を持つ種類の物体に使うこと (`FinalizerSkipped`) と、最後の参照でない物体に使うこと (`NotLast`)
 - `release` と `release_reuse` で、物体がデータでないか、タグと走査する語の数が名指したものと違うこと (`WrongLayout`)
-- `unbox_int`、`foreign`、`foreign_unique`、`string`、`bytes`、`string_push`、`string_concat`、`set_lin` で、物体の種類が違うこと (`WrongKind`)。`foreign` と `foreign_unique` は値の型も照らし、速いモードでも同じ誤りを返す (上の「核の操作」)
-- 添字の範囲の外 (`OutOfBounds`)。`field` と `set_field` は、添字が走査する語を指さないことを断る。`raw` と `set_raw` は、添字が走査する語の後のブロックの中の語を指さないことを断り、ペイロードが不透明な物体 (`Foreign`、`String`、`Bytes`) を `WrongKind` で断る。`scanned` は、添字が走査する語の数以上であることを断る。走査する語に生の値を書くと、解放の連鎖がその値をポインタとして読み、`Foreign` の破棄処理の表を上書きすると、破棄処理が正しくない関数のポインタを呼ぶ。`String` と `Bytes` の長さの語を書き換えると、`string` と `bytes` が容量の外を読む。どれも検査モードの安全を崩すので、断る
+- `unbox_int`、`foreign`、`foreign_unique`、`string`、`bytes`、`string_push`、`string_concat`、`set_lin`、`unboxed_len`、`unboxed_word`、`unboxed_put`、`unboxed_copy` で、物体の種類が違うこと (`WrongKind`)。`foreign` と `foreign_unique` は値の型も照らし、速いモードでも同じ誤りを返す (上の「核の操作」)
+- 添字の範囲の外 (`OutOfBounds`)。`field` と `set_field` は、添字が走査する語を指さないことを断る。`raw` と `set_raw` は、添字が走査する語の後のブロックの中の語を指さないことを断り、ペイロードが不透明な物体 (`Foreign`、`String`、`Bytes`、`Raw`) を `WrongKind` で断る。`scanned` は、添字が走査する語の数以上であることを断る。`unboxed_word` と `unboxed_put` は添字が要素の数以上であることを、`unboxed_copy` は写す数がどちらかの要素の数を超えることを断る。走査する語に生の値を書くと、解放の連鎖がその値をポインタとして読み、`Foreign` の破棄処理の表を上書きすると、破棄処理が正しくない関数のポインタを呼ぶ。`String` と `Bytes` の長さの語と `Raw` の要素の数を書き換えると、`string`、`bytes`、`unboxed_word` が容量の外を読む。どれも検査モードの安全を崩すので、断る
 - `Ctx` の基本操作の誤り (下の「実行文脈 `Ctx`」)
   - 節点、evidence、エントリの表の形が違うこと、エントリの欄の番号がエントリの数以上であること、エントリの欄に2回入れること、`evv` の長さが上限を超えること、`ev_new` のエフェクトの番号が 65535 であること、`ev_set_clause` で `lin` ビットの立った節の本体を入れること (`BadEvidence`)
   - `ev_lookup` と `evv_mask` で、合う evidence が `evv` にないこと (`NoHandler`)
@@ -991,8 +1019,14 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 | `Std.Proc.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk` | `Ctx::handle_read` (`Handle::Child`。`FileIn` の同じ名前の読みと同じ `ReadAmount` と `Form`) |
 | `Std.Proc.write`、`write_bytes`、`write_line` | `Ctx::handle_write` (`Handle::Child`。`Write::Text`、`Bytes`、`Line`) |
 | `Std.Array.make`、`length`、`get`、`set`、`thaw`、`Std.MutArray.make`、`empty`、`length`、`read`、`write`、`freeze` | `Ctx::array_make`、`array_empty`、`array_length`、`array_get`、`array_set`、`array_freeze`、`array_thaw` (上の「配列」) |
+| `Std.UnboxedArray.Unboxed Float.make`、`Unboxed Int.make`、`Std.MutUnboxedArray.MutUnboxed Float.make`、`MutUnboxed Int.make`、`Std.MutUnboxedArray.empty` | `Ctx::unboxed_make` (`lin` は `MutUnboxedArray` の行だけ)、`unboxed_empty` (上の「配列」) |
+| `Std.UnboxedArray.length`、`Std.MutUnboxedArray.length` | `Ctx::unboxed_length` |
+| `Std.UnboxedArray.Unboxed Float.get`、`Unboxed Int.get`、`Std.MutUnboxedArray.MutUnboxed Float.read`、`MutUnboxed Int.read` | `Ctx::unboxed_get` |
+| `Std.UnboxedArray.Unboxed Float.set`、`Unboxed Int.set`、`Std.MutUnboxedArray.MutUnboxed Float.write`、`MutUnboxed Int.write` | `Ctx::unboxed_set` |
+| `Std.MutUnboxedArray.MutUnboxed Float.fill`、`MutUnboxed Int.fill` | `Ctx::unboxed_fill` |
+| `Std.UnboxedArray.thaw`、`Std.MutUnboxedArray.freeze` | `Ctx::unboxed_thaw`、`unboxed_freeze` |
 
-`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.open`、`Std.Stdout.open`、`Std.Stderr.open`、`Std.Float.infinity_value`、`nan_value`、`Std.MutArray.empty`、`Std.Bytes.empty`) は、VM が引数を読まずに呼ぶ。
+`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.open`、`Std.Stdout.open`、`Std.Stderr.open`、`Std.Float.infinity_value`、`nan_value`、`Std.MutArray.empty`、`Std.MutUnboxedArray.empty`、`Std.Bytes.empty`) は、VM が引数を読まずに呼ぶ。
 
 ### 語の ABI
 
@@ -1315,6 +1349,7 @@ pub struct Spawned {
 - `unsafe` は小さい核に閉じる。核は、確保器、ヘッダとフィールドの読み書き、バイト列の読み書き、`dup`、`decref`、解放の連鎖、token の操作である。それ以外 (`share` と `transfer_back` のたどり、`release` の組み立て、生存の列挙) は核の操作を呼んで書く
 - 核では SeqCst と `fence` を使わない
 - `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `transfer_back` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
+- 生の要素の配列 (`Raw`) の要素は、配列の要素と同じく語の権限の上で読み書きするので、信頼の一覧に行を足さない (上の「種類」)
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
 
 Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と、ID ごとの数を数え直す `Control::check_owned` と `owned_by`、ID の表の lock と塊を扱う安全な関数とページの表を引いて書く安全な関数 (T15 の関数が呼ぶ)、取り込んでから検査する `Ctx::check_invariants` と `Ctx::leaks` (検査モード)、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と worker の止める語とシグナルの語と見張りの語と終わりの欄と確保量と worker ごとの取った量と柔らかい上限の閾値を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait (既定のメソッドを含む) と `Opened`、`IoDriver` の trait (受けたソケットを取り込む `adopt` を含む) と、driver に渡す記憶の構造体 `RawBuf`、driver に渡す操作 `Op`、完了 `Completion` とその中身 `Done` (受けたソケットの `Accepted` を含む)、どの driver にも登録していない OS のソケット `RawSocket` とその中身の型 `OsSocket` (`new`、`into_inner`、記述子の番号で比べる `PartialEq` と `Eq`)、起こしの trait `IoWaker`、落としたハンドルを積む `HandleBin`、子のプロセスの Host の型 `StdinSpec`、`StdoutSpec`、`StderrSpec`、`Stage` (作業ディレクトリを決める `dir` と、プログラムのパスを決める `program_path` を含む)、`Spawn`、`Process`、`Spawned`、`StdHost` の子 `OsProcess` と、向きを写す `os_stdin` と `os_stdout`、`launch` の列を要素に分ける `split` と `fields`、起動の入り口 `launch` とその結果 `Launched` と、誤りを `Fault` に写す `launch_fault`、`SPAWN_LOCK`、`LaunchError` (`wrap`、`Display`、`Error` の実装を含む)、一時ファイルを作る `here_file` とその中身の `make_here_file`、リダイレクトのファイルを開く `redirect_file` と、その誤りに段を付ける `opening`、`StdinSlot` の `new` と、読み手を取り出す `take` と返す `put`、`StdinHandle`、`StdoutHandle`、`StderrHandle`、`Child` の `Drop` (T4)、`OpenFlags` の `new` と、印を選ぶ `flag`、立てる `raise`、下ろす `lower`、`Reader` の `new`、`fill_buf`、`consume` と buffer の残りを取り出す `take_buffered`、trait `Source` と `FileIn` と `StdinHandle` と `Child` の実装、読みの誤りに名前を付ける `fault`、書き込みの誤りで `FileOut` の buffer を捨てる `write_fault`、`exit_code`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、開けなかったパスがディレクトリかを見る `directory_error`、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` と、読みの部品 `check`、`line_part`、`read_line`、`read_all` (上の「読み手」)、テストだけである。

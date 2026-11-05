@@ -40,6 +40,7 @@ mod recover;
 mod roots;
 mod script;
 mod strings;
+mod unboxed;
 
 verus! {
 
@@ -119,6 +120,10 @@ spec fn points_in(ws: Seq<Word>, b: usize) -> int
         points_in(ws.drop_last(), b) + points(ws.last(), b)
     }
 }
+
+/// 配列と生の要素の配列の `make` で作れる長さの上限。これより長い配列のブロックは、確保器が作れる語の数 (2^32 未満)
+/// を超えうる。
+const MAX_LEN: usize = 0xFFFF_0000;
 
 /// 書き終えた構築中の物体も、生きているブロックに含める。
 spec fn live<M: Mode>(h: Heap<M>, b: usize) -> bool {

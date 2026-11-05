@@ -475,7 +475,7 @@ impl<M: Mode> Heap<M> {
     /// # Safety
     /// `token` はこのヒープの token で、まだ使っていない。空でなければ、その箱は `payload_words` の物体のこのモードでの
     /// 級にある。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす。`meta` の種類は `Foreign`、
-    /// `String`、`Free` のどれでもない。呼ぶ側は、ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする。
+    /// `String`、`Bytes`、`Raw`、`Free` のどれでもない。呼ぶ側は、ほかのヒープの操作の前に、走査する語がみな `meta` に合う値を持つようにする。
     /// 箱を使い回したときは、残したフィールドを書き直さなくてよい。
     #[inline]
     pub unsafe fn con_at(&mut self, token: Token, payload_words: usize, meta: Meta) -> (r: Result<
@@ -485,8 +485,7 @@ impl<M: Mode> Heap<M> {
         requires
             old(self).wf(),
             old(self).safe_settleable(),
-            meta.kind_spec() != Kind::Foreign && !meta.kind_spec().has_body() && meta.kind_spec()
-                != Kind::Free,
+            !meta.kind_spec().opaque_spec() && meta.kind_spec() != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
             !M::CHECKED ==> old(self).con_at_ok(token, payload_words),

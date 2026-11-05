@@ -377,6 +377,11 @@ impl<'a> View<'a> {
             Op::BytesGet { dst, i, b } => bin("bytes_get", dst, i, b),
             Op::BytesLength { dst, b } => format!("bytes_length s{dst}, s{b}"),
             Op::ArraySet { dst, at } => format!("array_set s{dst} = {}", slots(&ops(at)[..3])),
+            Op::UnboxedGet { dst, a, b } => bin("unboxed_get", dst, a, b),
+            Op::UnboxedLength { dst, a } => format!("unboxed_length s{dst}, s{a}"),
+            Op::UnboxedSet { dst, at } => {
+                format!("unboxed_set s{dst} = {}", slots(&ops(at)[..3]))
+            }
             Op::Extern { dst, at } => format!(
                 "extern s{dst} = {}({})",
                 Extern::ALL[ops(at)[0] as usize].row().name,

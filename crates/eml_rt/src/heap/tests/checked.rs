@@ -289,3 +289,125 @@ fn freezing_a_constant_that_holds_a_freed_object_is_an_error() {
     }
     assert_eq!(b.freeze().unwrap_err(), HeapError::UseAfterFree);
 }
+
+/// 数の語を持たない tag 0 の `Data` は配列でない。配列は長さによらず数の語を持つ
+/// (docs/spec/object-model.md の「配列」)。
+#[test]
+fn array_operations_refuse_data_without_the_count_word() {
+    let mut ctx = super::ctx::ctx::<Checked>();
+    let wrong_kind = Err(crate::externs::Fault::Heap(HeapError::WrongKind));
+    unsafe {
+        for scanned in [0, 2] {
+            let w = ctx.heap_mut().alloc_data(0, scanned, 0, false);
+            assert_eq!(ctx.heap().meta(w).unwrap().scan(), scanned as u8);
+            assert_eq!(ctx.array_length(w), wrong_kind);
+            assert_eq!(ctx.array_get(w, 0).map(|_| 0), wrong_kind);
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+}
+
+/// `Raw` の語 0 は要素の数なので、語として読み書きする操作と、ほかの種類を求める操作は `Raw` を断る。`unboxed_*` は
+/// `Raw` でない物体を断る (docs/spec/object-model.md の「種類」)。
+#[test]
+fn raw_objects_and_other_kinds_are_not_mixed_up() {
+    let mut heap = H::new();
+    let u = heap.alloc_unboxed(2, 0, false);
+    let x = heap.alloc_data(0, 1, 1, false);
+    let b = heap.alloc_bytes(&[1, 2]);
+    unsafe {
+        assert_eq!(heap.raw(u, 1), Err(HeapError::WrongKind));
+        assert_eq!(heap.set_raw(u, 1, 7), Err(HeapError::WrongKind));
+        assert_eq!(heap.field(u, 0), Err(HeapError::OutOfBounds));
+        assert_eq!(
+            heap.set_field(u, 0, Word::UNIT),
+            Err(HeapError::OutOfBounds)
+        );
+        assert_eq!(heap.unbox_float(u), Err(HeapError::WrongKind));
+        assert_eq!(heap.unbox_int(u), Err(HeapError::WrongKind));
+        assert_eq!(heap.string(u).map(|_| ()), Err(HeapError::WrongKind));
+        assert_eq!(heap.bytes(u).map(|_| ()), Err(HeapError::WrongKind));
+        assert_eq!(
+            heap.foreign::<u64>(u).map(|_| ()),
+            Err(HeapError::WrongKind)
+        );
+        assert_eq!(heap.release(u, 0, &[]), Err(HeapError::WrongLayout));
+        assert_eq!(heap.into_token(u).map(|_| ()), Err(HeapError::NotTokenable));
+        for w in [x, b] {
+            assert_eq!(heap.unboxed_len(w), Err(HeapError::WrongKind));
+            assert_eq!(heap.unboxed_word(w, 0), Err(HeapError::WrongKind));
+            assert_eq!(heap.unboxed_put(w, 0, 7), Err(HeapError::WrongKind));
+            assert_eq!(heap.unboxed_copy(u, w, 0), Err(HeapError::WrongKind));
+            assert_eq!(heap.unboxed_copy(w, u, 0), Err(HeapError::WrongKind));
+        }
+        assert_eq!(heap.unboxed_word(u, 1), Ok(0));
+        for w in [u, x, b] {
+            heap.decref(w).unwrap();
+        }
+    }
+}
+
+/// `set_lin` が受けるのは一意な `Data` と `Raw` だけである。
+#[test]
+fn set_lin_refuses_a_shared_raw_object_and_other_kinds() {
+    let mut heap = H::new();
+    let u = heap.alloc_unboxed(1, 0, false);
+    let b = heap.alloc_bytes(&[1]);
+    unsafe {
+        heap.dup(u).unwrap();
+        assert_eq!(heap.set_lin(u, true), Err(HeapError::NotUnique));
+        heap.decref(u).unwrap();
+        heap.set_lin(u, true).unwrap();
+        assert_eq!(heap.set_lin(b, true), Err(HeapError::WrongKind));
+        heap.decref(u).unwrap();
+        heap.decref(b).unwrap();
+    }
+}
+
+#[test]
+fn raw_leaks_are_counted_by_kind() {
+    let mut heap = H::new();
+    let u = heap.alloc_unboxed(3, 0, false);
+    assert_eq!(heap.leaks(), BTreeMap::from([("Raw", 1)]));
+    unsafe { heap.decref(u) }.unwrap();
+    assert!(heap.leaks().is_empty());
+}
+
+/// `Raw` の物体は配列でないので、配列の操作は `WrongKind` で断る (docs/spec/object-model.md の「種類」)。
+#[test]
+fn array_operations_refuse_a_raw_object() {
+    let mut ctx = super::ctx::ctx::<Checked>();
+    let wrong_kind = Err(crate::externs::Fault::Heap(HeapError::WrongKind));
+    unsafe {
+        let u = ctx.heap_mut().alloc_unboxed(2, 0, false);
+        assert_eq!(ctx.array_length(u), wrong_kind);
+        assert_eq!(ctx.array_get(u, 0).map(|_| 0), wrong_kind);
+        for consume in [
+            |ctx: &mut crate::Ctx<Checked>, w| ctx.array_set(w, 0, Word::imm(1)),
+            |ctx: &mut crate::Ctx<Checked>, w| ctx.array_freeze(w),
+            |ctx: &mut crate::Ctx<Checked>, w| ctx.array_thaw(w),
+        ] {
+            assert_eq!(consume(&mut ctx, u).map(|_| 0), wrong_kind);
+            assert_eq!(ctx.heap().unboxed_word(u, 1), Ok(0));
+        }
+        ctx.heap_mut().decref(u).unwrap();
+    }
+}
+
+/// 共有した `Raw` の要素は、ほかのスレッドが読めるので書けない。断った後も要素は変わらない。
+#[test]
+fn writing_a_shared_raw_object_is_an_error() {
+    let mut heap = H::new();
+    let u = heap.alloc_unboxed(2, 5, false);
+    let src = heap.alloc_unboxed(2, 9, false);
+    unsafe {
+        heap.share(u, 1).unwrap();
+        assert_eq!(heap.unboxed_put(u, 0, 7), Err(HeapError::NotWritable));
+        assert_eq!(heap.unboxed_copy(u, src, 2), Err(HeapError::NotWritable));
+        for i in 0..2 {
+            assert_eq!(heap.unboxed_word(u, i), Ok(5));
+        }
+        heap.decref(u).unwrap();
+        heap.decref(src).unwrap();
+    }
+}

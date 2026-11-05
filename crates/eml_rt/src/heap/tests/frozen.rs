@@ -105,6 +105,24 @@ fn region_words_go_through_every_operation<M: Mode>() {
     assert_eq!(text(&heap, s), "constant");
 }
 
+/// 凍結した空の `MutArray` の定数も、ほかの配列と同じく数の語を持ち、つないだヒープから長さ 0 で読める
+/// (docs/spec/object-model.md の「凍結した領域」)。
+fn frozen_empty_arrays_carry_the_count_word<M: Mode>() {
+    let mut b = Heap::<M>::new();
+    let m = b.alloc_array_immortal(true);
+    let region = Arc::new(b.freeze().unwrap());
+    let mut ctx = super::ctx::ctx::<M>();
+    unsafe {
+        ctx.heap_mut().attach(region);
+        let meta = ctx.heap().meta(m).unwrap();
+        assert_eq!(meta.kind(), Kind::Data);
+        assert_eq!(meta.scan(), Meta::EXTENDED_SCAN);
+        assert!(meta.lin());
+        assert_eq!(ctx.heap().scanned_len(m), Ok(0));
+        assert_eq!(ctx.array_length(m), Ok(0));
+    }
+}
+
 fn own_objects_hold_region_words<M: Mode>() {
     let (mut heap, _region, s, big) = attached::<M>();
     let pair = heap.alloc_data(0, 2, 0, false);
@@ -265,6 +283,7 @@ both_modes!(
     long_chains_drop_without_recursion,
     region_words_go_through_every_operation,
     own_objects_hold_region_words,
+    frozen_empty_arrays_carry_the_count_word,
     region_objects_are_not_counted,
     chains_hold_constants_that_point_into_ancestors,
     attach_moves_to_a_descendant,

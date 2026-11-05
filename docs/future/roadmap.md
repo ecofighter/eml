@@ -28,10 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `raw-arrays`: `Float` と `Int` の要素を生の 8 バイトで並べる配列 (`Std.FloatArray`、`Std.MutFloatArray`、`Std.IntArray`、`Std.MutIntArray`) を、新しい物体の種類 `Raw` で入れる。配列の要素の数をいつも長さの語に持つ形も、この段で入れる。前提: なし。設計: [ネイティブ化の設計](native.md) の「生の要素の配列」
-  - 配列の要素は一様な位置なので、今は `Array Float` と `MutArray Float` の要素が書くたびに `Float` の箱に入る。spectral-norm では、確保のほとんどがこの箱である (`RunStats` の `allocations` 4043 のうち `boxes` が 4001。[計測の基準](../implementation/benchmarks.md) の「配列の `Float` の要素の箱」)。構造体の表現もこの箱を消さない
-  - 新しい配列は `Array a` とは別の型で、長さの語と連続した中身を持つ物体の仲間 (`String`、`Bytes`。[オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」) の別の種類である。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
-- `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: `raw-arrays`。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
+- `ffi-c`: VM の上で利用者の `extern "C"` を呼べるようにする。`eml_native` の crate を作り、その FFI のモジュールが VM から C の関数を呼ぶ橋渡しの関数を `cranelift-jit` で作る。C の整数の幅は `Int as int` のように書き、OS ごとのライブラリは `link on <os>` と CLI の `--link` で指定する。前提: なし。設計: [FFI と拡張の設計](ffi.md) の「`extern "C"` の宣言」、同じ文書の「VM からの呼び出し」
 - `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。std がプールに出す仕事は `Std.Stream` のファイルの読み書きだけで、`Op::Job` の仕事は `eml_io` のテストだけが確かめるので、VM から `Op::Job` の仕事までを通すテストもここで足す。前提: `ffi-c`。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
 - `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。`Tls.connect_with_ca` と `Tls.wrap_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: `ffi-blocking`。設計: この項目
   - テストの証明書: macOS は TLS の server の証明書の有効期間に上限 (825 日) を課すと理解しているので、期限を 2126 年にした `eml_tls` の fixtures は、本物のソケットのテストで拒まれる見込みである。段の最初に確かめ、期限の短い証明書を定期的に作り直すか、テストだけ別の検証を使うかを決める
@@ -48,14 +45,14 @@
   - extern の行は引数ごとの借用の列 (`FunctionRow::borrowed`) を持ち、どの位置の引数も借りられる。配列、`String`、`Bytes` を読む行と、ハンドルの読み書きの行は借りる。1つの命令が同じ変数を借りて消費するときに `dup` を入れる別名の規則もある ([LIR](../spec/lir.md) の「extern の借用」)。借用パラメータでも、この別名の規則を使う。引数を消費したままの `Effectful` の行 (`println`、`FileIn.open`、`Env` の行など) を借用にするかは、借用パラメータと一緒に決める
   - 部分適用される関数と値として使う関数は借用を持てないので、所有の変種の包みが要る (Ullrich と de Moura)。包みは、box の挿入が作る変種 `<f>$uniform` と同じく名前で決まる関数 (`f$owned` など) にし、借用を入れるときに決める ([LIR](../spec/lir.md) の「関数の ABI」)。`apply` は実行時に値を変えないので ([VM](../spec/vm.md) の「呼び出しと戻り」)、借用を手放す仕事は包みが受け持つ
   - 借りたまま読む射影も、借用パラメータで扱う。今の所有の形では、射影で得たフィールドを読むだけなら RC の命令は出ない。しかし `f p.name` の後に `p` を使う形は、呼び出しがフィールドを消費するので、今と同じく `dup` する ([Core IR](../spec/core-ir.md) の「変換の規則」)。これを減らすには、`f` の引数を借用にする必要がある
-- `rt-layout`: `eml_rt` に、物体のペイロードの先頭 (走査する語の数から決まる数の語の有無と、走査の始まり) を求めるインターフェースを足し、`eml_vm` の `data::count_word` が写して持つ同じ規則を消す。インターフェースの性質は、ヘッダの規則と同じく Verus で証明する。ネイティブのコード生成もこのインターフェースを使い、規則の写しを持たない。前提: なし。設計: [オブジェクトモデル](../spec/object-model.md) の「ヘッダ」
+- `rt-layout`: `eml_rt` に、物体のペイロードの先頭 (数の語の有無と、走査の始まり。配列はいつも数の語を持ち、配列でないデータは走査する語が 255 個以上のときだけ持つ) を求めるインターフェースを足し、`eml_vm` の `data::count_word` が写して持つ同じ規則を消す。インターフェースの性質は、ヘッダの規則と同じく Verus で証明する。ネイティブのコード生成もこのインターフェースを使い、規則の写しを持たない。前提: なし。設計: [オブジェクトモデル](../spec/object-model.md) の「ヘッダ」
 - `jit-core`: `eml_native` に、一階の部分 (スカラー、データ、呼び出し、末尾呼び出し、クロージャと `apply`、RC) を CLIF にするコード生成を作り、`eml run --native` で動かす。AAPCS64 と x86_64 の SysV の `eml_enter` と `eml_fatal`、安全点、ネイティブのコードが読む `Ctx` の欄の配置、利用者の C の行をネイティブのコードから呼ぶことを入れる。扱わない形は E0004 で断り、UI テストの印 `// native: skip` を導入する。前提: `borrowed-params`、`ffi-c`、`rt-layout`。設計: [ネイティブ化の設計](native.md) の「確定した設計判断」、同じ文書の「呼び出し規約とエントリ」
 - `jit-externs`: すべての extern とプラグインの行を、ネイティブのコードから呼ぶ。包みと VM の腕を表から作り、extern の失敗を `Ctx.fault` で返す。前提: `jit-core`。設計: [ネイティブ化の設計](native.md) の「extern のエントリ」
 - `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
 - `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 のエントリの stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
-- `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の実装の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`、`raw-arrays`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
+- `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の実装の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
 - `par-steal`: VM の `par` の右の子を、空いている worker の受け箱に置く形から、worker ごとの Chase-Lev の deque と盗みに替える。join の待ちと、子の終わりを親の worker へ知らせる道は、今のものをそのまま使う。呼んだ worker に積んだ `compute` の仕事も、右の子と同じく盗まれる。今の実行待ちは、`par` の子と `Async` の仕事が混ざる worker ごとに1本の mutex の列で、切り替えのたびにその lock を取る ([VM](../spec/vm.md) の「タスクとスケジュール」、[計測の基準](../implementation/benchmarks.md) の「実行待ちの列の lock」)。`par` の子を deque に移した後に残る列の形も、この段で決め直す。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
-- `std-par`: `std/Par` のデータ並列の集まりの関数と、添字の範囲のプリミティブを入れる。前提: `par-steal`、`raw-arrays`。設計: [マルチコア対応の設計](multicore.md) の「データ並列での使い勝手」
+- `std-par`: `std/Par` のデータ並列の集まりの関数と、添字の範囲のプリミティブを入れる。前提: `par-steal`。設計: [マルチコア対応の設計](multicore.md) の「データ並列での使い勝手」
 - `native-par`: ネイティブのコードで、join で待つ worker が手伝う fork / join を動かす。前提: `native-inline`、`std-par`、`jit-effects`。設計: [ネイティブ化の設計](native.md) の「並列の実行」
 
 ## その後の項目
@@ -94,6 +91,9 @@
 - 証拠が大きくなる制約付きの多相再帰: 今は型検査で弾く (E2012。[Core IR](../spec/core-ir.md) の「一様な位置と制約付きの多相再帰」)。必要な例が出たら、その場合だけ辞書渡しで許すかを見直す
 - `Lin` の型を受けるクラス: 今のクラスはすべて `Unr` のクラスで、制約 `C a` は `a ≤ Unr` を意味する ([型と Kind](../spec/types.md) の「`Unr` のクラス」)。`Read` / `Write` のようにハンドルを受け取って返すクラスは、借用がなくても役に立つ。広げるときは、クラスの性質として `Lin` を受けるクラスを区別し、`Lin` を受けるクラスの instance の本体は頭の型変数の Kind に制約を足せない、という規則を置く。今のクラスの意味は変えない。今の Kind の記法 ([型と Kind](../spec/types.md) の「`Lin` の宣言」) の上に作る
 - orphan 規則をパッケージ単位に広げるか: 今の orphan 規則はモジュール単位である ([モジュールと名前解決](../spec/modules.md) の「instance の一貫性」)。パッケージの仕組みがまだないので、パッケージを入れるときに決める
+- `closed` のクラス: instance を書けるのを std に限るクラス。`Unboxed` と `MutUnboxed` の instance は `Float` と `Int` だけで、ほかの型の instance は意味を持たない ([標準ライブラリ](../spec/stdlib.md) の「`Std.UnboxedArray`」)
+  - 後に回した理由: 利用者の instance は使い道がないだけで、壊れることはない。
+  - 見直す条件: 利用者が `Unboxed` か `MutUnboxed` の instance を書いて混乱したとき。
 
 ### 言語機能と構文
 
@@ -168,6 +168,9 @@
   - 見直す条件: `env -i` に当たる用途が出たとき。
 - パッケージ: 今の import が指すのは、ユーザーの根と標準ライブラリだけである ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)。入れるときは、import を解決する順 (ユーザーの根、パッケージ、標準ライブラリ) と、orphan 規則の単位 (上の「型システム」) を決める
 - 仮置きの式: どの型にもなる仮置きの式 (typed hole)。入れるときに、網羅されていない `match` と等式の fix (E4001 の枝の追加、E4002 の等式の追加の提案) を一緒に入れる ([診断の出し方](../implementation/diagnostics.md) の「網羅性の診断」)
+- `UnboxedArray` と `MutUnboxedArray` への `e[i]`、`x[i] <- v` と、`var` の配列の変数: 添字の式と `var` の配列の変数は `Array` と `MutArray` だけに使える ([標準ライブラリ](../spec/stdlib.md) の「`Std.UnboxedArray`」、[式](../spec/expressions.md) の「`var`」)
+  - 後に回した理由: `UnboxedArray.get` と `MutUnboxedArray.read`、`write` で書ける。
+  - 見直す条件: `UnboxedArray` を添字の式で書きたいプログラムが出たとき。
 
 ### 診断
 
@@ -205,7 +208,7 @@
 - `read_into`: Host の読みを、一意な `Bytes` の空きに直接書く extern。`FileIn` と標準入力の全部の読みが、`Vec` に読んでからヒープへ写す2回目の写しを省く ([オブジェクトモデル](../spec/object-model.md) の「読み手」)。約束は次のとおりにする。`read_into(h, cap, at, file, control) -> Result<usize, Failure>` は、窓 (`8*(cap-1) - at` バイト) を1回 0 で埋めてから読み、窓より大きい `n` を返す Host の読み手を断り (`Failure::Io(Other)`。そういう読み手の Miri のテストを置く)、読んだバイトで ghost の列を伸ばす。それを包む検証したループが、一意な物体を倍にして伸ばし (`eml_rt` の中だけの `bytes_grow`)、終わりか予算で止まる。信頼の一覧の T11 の行になる。C に buffer を埋めさせる FFI の行も、同じ下地 (一意な `Bytes` の空きを貸してから長さを書く) を使う
   - 後に回した理由: stable の Rust は `read_buf` を持たず、読む前に空きを 0 で埋めるので、ヒープへ直接読んでも得は 6〜10% に留まる。VM の `bench/rt.sh` の `read-all-bytes` は `read_to_end` の約2倍で、差は写しと 0 で埋める費用である ([計測の基準](../implementation/benchmarks.md) の「予算を超えた行の既知の差」)。
   - 見直す条件: ネイティブのコードで、`bench/rt.sh` の `read-all-bytes` が Rust の `read_to_end` の 1.3 倍を超えたとき。
-- 構造体のフィールドを親の物体に並べること: 構造体の表現は、配置で構造体の型を宣言したフィールド (`data Shape = | Ball Vec3 Float | Empty` の `Vec3`) を `tobj` にし、構造体を箱に入れて置く ([Core IR](../spec/core-ir.md) の「translate の配置」)。構造体の葉を親の物体のフィールドに直に並べる形を考える。配置を具体化した型ごとに分けることになるので、一様な位置を通るコードと配置が食い違わない形を一緒に決める。配列の要素の構造体も箱に入る (nbody では、配列に書く `Vec3` の箱が1回進めるごとに 25 残る。[計測の基準](../implementation/benchmarks.md) の「配列に書く構造体の箱」)。上の「段の列」の生の要素の配列の段と一緒に考える
+- 構造体のフィールドを親の物体に並べること: 構造体の表現は、配置で構造体の型を宣言したフィールド (`data Shape = | Ball Vec3 Float | Empty` の `Vec3`) を `tobj` にし、構造体を箱に入れて置く ([Core IR](../spec/core-ir.md) の「translate の配置」)。構造体の葉を親の物体のフィールドに直に並べる形を考える。配置を具体化した型ごとに分けることになるので、一様な位置を通るコードと配置が食い違わない形を一緒に決める。配列の要素の構造体も箱に入る (nbody では、配列に書く `Vec3` の箱が1回進めるごとに 25 残る。[計測の基準](../implementation/benchmarks.md) の「配列に書く構造体の箱」)。`Float` と `Int` の要素の箱は `UnboxedArray` で避けられる ([オブジェクトモデル](../spec/object-model.md) の「配列」)。構造体の要素は別の問題である。
   - 後に回した理由: 構造体の型のフィールドを持つコンストラクタは `bench/` と `std/` に1つもなく、UI テストの6つだけにある。親が構造体なら、入れ子の構造体はもう葉に並んでいる。nbody の箱は配列の要素で、フィールドへの埋め込みでは減らない。
   - 見直す条件: `bench/` か `tests/ui/run/scripts/` のプログラムで、構造体でないコンストラクタの、構造体の型のフィールドの箱が `allocations` の 10% を超えたとき。
   - 設計の要点: 配置のフィールドの Repr を、そのフィールドの型の scheme が構造体の型で、配置自身の型変数を含まないときに `struct(S)` にする。`Shape` は `struct(S)` のフィールドを深さ優先で葉に展開してから、今の規則 (参照を前、生を後ろ、`unit` の葉は0語) で並べる。flatten の前は、1つのフィールドを1つの構造体の変数で運び、flatten が展開する。配置の表は REPL の追記のために中身で引く。組の配置は型変数のフィールドなので埋め込まない。
@@ -352,6 +355,9 @@
 - `eml_rt` の並行の証明 (`rt-concurrent-proofs`): Verus の証明は1つのヒープの逐次の模型で、スレッドをまたぐ所は信頼の一覧の T0、T2、T14、T15 に置いてある ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)。これを並行の証明に置き換え、ほかのヒープの物体を証明の模型に入れる ([マルチコア対応の設計](multicore.md) の「テスト」)
   - 後に回した理由: vstd の atomic は SeqCst だけを扱い、今の証明は逐次の模型なので、並行の証明は証明の作り直しになる。1つのヒープの逐次の証明は、ほかのヒープが持つ物体の ghost の状態を今の値に保てないので、ほかのヒープの物体を貸し出しの token で模型に入れても、信頼は ghost の形に写るだけで減らない。T0 と T14 は、Miri の2つのスレッドのテスト、ThreadSanitizer、検査モードの N = 2 と 8 の UI テストで確かめる。
   - 見直す条件: ネイティブのコードが `eml_rt` を共有する前。または、ThreadSanitizer か Miri が T0 か T14 の誤りを見つけたとき。
+- `UnboxedArray` の `slice` と `append`
+  - 後に回した理由: `std-par` は添字の範囲のプリミティブで足り、`slice` と `append` を使う所がない。
+  - 見直す条件: `std-par` で、添字の範囲のプリミティブでは書けないデータ並列の関数が出たとき。
 
 ### 非同期
 
@@ -489,7 +495,7 @@
 
 - 引数を型どおりに受ける変種 `f$ret`: 関数の値の呼び出し規約で採らなかった案は、[ネイティブ化の設計](native.md) の「呼び出し規約とエントリ」にある
   - 後に回した理由: 今は変種の薄い形が、自分を呼ぶ `Float` のループを型どおりに保つ。
-  - 見直す条件: 特殊化されなかったクロージャで `Float` や構造体を累積するループの箱が、測って問題になったとき。または、データ並列の集まりの関数を入れる段で、`Par.tabulate_floats` の要素ごとの `Float` の箱を固定した `RunStats` の行で測るとき ([マルチコア対応の設計](multicore.md) の「未決の論点と将来の拡張」)。
+  - 見直す条件: 特殊化されなかったクロージャで `Float` や構造体を累積するループの箱が、測って問題になったとき。または、データ並列の集まりの関数を入れる段で、`Par.tabulate_unboxed` の要素ごとの `Float` の箱を固定した `RunStats` の行で測るとき ([マルチコア対応の設計](multicore.md) の「未決の論点と将来の拡張」)。
 - 置き換えの所で印を下げて `run_once g` を展開する手: 関数の値の呼び出し規約 ([ネイティブ化の設計](native.md) の「呼び出し規約とエントリ」) とともに後に回した手で、展開の置き換えで Kind の印を下げることを許す
   - 後に回した理由: 今は展開の置き換えで、変数の実引数と引数の Kind の印が等しいことを求める ([Core IR](../spec/core-ir.md) の「インライン化」)。
   - 見直す条件: 測って要るとわかったとき。
@@ -525,6 +531,6 @@
 - Slint のプラグイン
   - 後に回した理由: 最初のプラグインは egui である。
   - 見直す条件: egui のプラグインの後で、Slint が求められたとき。
-- 32 ビットの要素とバイトの要素の生の配列
-  - 後に回した理由: 生の要素の配列の要素は 8 バイトで、バイトの並びには `Bytes` がある。
-  - 見直す条件: `float` の buffer を渡す C の API が要るとき。
+- 32 ビットの要素とバイトの要素の生の配列: `Unboxed` と `MutUnboxed` の新しい instance (`Byte` や 32 ビットの型) として足す。`Raw` の物体の要素はいつも 8 バイトで、`tag` は幅のために空けてある ([オブジェクトモデル](../spec/object-model.md) の「種類」)。幅に依る操作 (`length`、`set` と `thaw` の写す道、回復) は、物体の `tag` に幅を書くか、幅に依る関数をクラスに移すかのどちらかで決める。`Bytes` は名前を変えず、この族にも入れない。C に `uint8_t*` を書かせる API が要るときは `instance MutUnboxed Byte` を足すので、バイトの列の型が `Bytes` と `UnboxedArray Byte` の2つになり、変換の関数2つでつなぐ
+  - 後に回した理由: 生の要素の配列の要素は 8 バイトで、バイトの並びには `Bytes` がある。幅を知る必要のある使い道がまだない。
+  - 見直す条件: `float` の buffer を渡す C の API が要るとき。または、C の API が可変のバイトの buffer を求めたとき。

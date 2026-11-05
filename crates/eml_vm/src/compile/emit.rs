@@ -461,6 +461,16 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         Some(match (ext, slots) {
             (Extern::ArrayLength | Extern::MutArrayLength, &[a]) => Op::ArrayLength { dst, a },
             (Extern::ArrayGet | Extern::MutArrayRead, &[a, b]) => Op::ArrayGet { dst, a, b },
+            (Extern::UnboxedArrayLength | Extern::MutUnboxedArrayLength, &[a]) => {
+                Op::UnboxedLength { dst, a }
+            }
+            (
+                Extern::UnboxedArrayGetFloat
+                | Extern::UnboxedArrayGetInt
+                | Extern::MutUnboxedArrayReadFloat
+                | Extern::MutUnboxedArrayReadInt,
+                &[a, b],
+            ) => Op::UnboxedGet { dst, a, b },
             (Extern::StrByteLength, &[s]) => Op::StrByteLength { dst, s },
             (Extern::StrByteAt, &[i, s]) => Op::StrByteAt { dst, i, s },
             (Extern::BytesLength | Extern::ShowBytesLength, &[b]) => Op::BytesLength { dst, b },
@@ -468,6 +478,16 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             (Extern::ArraySet | Extern::MutArrayWrite, &[_, _, _]) => {
                 let at = self.out.operands(slots.iter().map(|&s| u32::from(s)));
                 Op::ArraySet { dst, at }
+            }
+            (
+                Extern::UnboxedArraySetFloat
+                | Extern::UnboxedArraySetInt
+                | Extern::MutUnboxedArrayWriteFloat
+                | Extern::MutUnboxedArrayWriteInt,
+                &[_, _, _],
+            ) => {
+                let at = self.out.operands(slots.iter().map(|&s| u32::from(s)));
+                Op::UnboxedSet { dst, at }
             }
             _ => return None,
         })

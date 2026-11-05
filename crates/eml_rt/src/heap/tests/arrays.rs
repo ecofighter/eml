@@ -7,7 +7,7 @@ use super::ctx::ctx;
 use super::host::host;
 use super::mortal;
 use crate::externs::{Fault, IndexFault};
-use crate::{Control, Ctx, HeapError, Limits, Mode, Stop, Word};
+use crate::{Control, Ctx, HeapError, Limits, Meta, Mode, Stop, Word};
 
 fn int(n: i64) -> Word {
     Word::imm(n)
@@ -289,6 +289,27 @@ fn relin_copies_of_extended_arrays<M: Mode>() {
     assert_eq!(mortal(&mut ctx), 0);
 }
 
+fn scan_of<M: Mode>(ctx: &Ctx<M>, w: Word) -> u8 {
+    unsafe { ctx.heap().meta(w) }.unwrap().scan()
+}
+
+/// 配列は長さによらず数の語を持つ。ネイティブのコードが数を `base + 8` で読むためである。
+fn arrays_always_carry_the_count_word<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        for n in [0, 1, 254, 255, 300] {
+            let a = ctx.array_make(n, int(0), false).unwrap();
+            assert_eq!(scan_of(&ctx, a), Meta::EXTENDED_SCAN, "n = {n}");
+            assert_eq!(ctx.array_length(a), Ok(n));
+            release(&mut ctx, a);
+        }
+        let m = ctx.array_empty(true).unwrap();
+        assert_eq!(scan_of(&ctx, m), Meta::EXTENDED_SCAN);
+        release(&mut ctx, m);
+    }
+    assert_eq!(mortal(&mut ctx), 0);
+}
+
 fn checked_mode_rejects_a_lin_dup_of_a_mut_array<M: Mode>() {
     if !M::CHECKED {
         return;
@@ -316,4 +337,5 @@ both_modes!(
     oversized_make_stops_before_allocating,
     relin_copies_of_extended_arrays,
     checked_mode_rejects_a_lin_dup_of_a_mut_array,
+    arrays_always_carry_the_count_word,
 );

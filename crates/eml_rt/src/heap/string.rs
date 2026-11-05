@@ -419,28 +419,6 @@ impl<M: Mode> Heap<M> {
     {
     }
 
-    /// `alloc_string_immortal` か `alloc_bytes_immortal` の後の状態。`w` は rc 0 の生きている物体で、検査モードの外に
-    /// 出ている参照の数は 0 である。
-    pub closed spec fn made_immortal(&self, old: Heap<M>, w: Word) -> bool {
-        let h = w.bits_spec();
-        &&& self.wf()
-        &&& self.dummy == old.dummy
-        &&& self.region == old.region
-        &&& self.worker == old.worker
-        &&& self.core.model@.building is None
-        &&& w.is_ptr_spec()
-        &&& self.core.word_ok(w)
-        &&& !old.core.dom().contains(h)
-        &&& self.core.dom() == old.core.dom().insert(h)
-        &&& self.core.state(h) == BlockState::Live
-        &&& self.core.rc_of(h) == 0
-        &&& M::CHECKED ==> p_owner(self.core.perm(h)) == 0
-        &&& old.consistent() && old.settleable() ==> {
-            &&& self.consistent()
-            &&& self.core.frame(old.core)
-        }
-    }
-
     /// `s` の UTF-8 のバイト列を持つ文字列を作る。
     pub fn alloc_string(&mut self, s: &str) -> (w: Word)
         requires

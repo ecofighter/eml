@@ -27,11 +27,14 @@ pub enum Kind {
     /// バイト列。`String` と同じ形 (長さの語とバイト列) で、UTF-8 の不変条件だけを持たない
     /// (docs/spec/object-model.md の「バイト列と文字列」)。
     Bytes = 5,
+    /// 生の要素の配列。語 0 が要素の数 n で、語 1..=n が生の 8 バイトの要素である。どの語も走査しない (`scan` は 0)
+    /// (docs/spec/object-model.md の「種類」)。
+    Raw = 6,
     /// 確保器が空いたブロックに付ける。生きている物体はこの種類を持たない。
     Free = 15,
 }
 
-/// 種類のビットが表す種類。0、1、2、3、4、5、15 のほかは `Meta` の型の不変条件で除く。
+/// 種類のビットが表す種類。0 から 6 と 15 のほかは `Meta` の型の不変条件で除く。
 pub open spec fn kind_of(bits: u32) -> Kind {
     if bits == 0 {
         Kind::Data
@@ -45,13 +48,16 @@ pub open spec fn kind_of(bits: u32) -> Kind {
         Kind::Float
     } else if bits == 5 {
         Kind::Bytes
+    } else if bits == 6 {
+        Kind::Raw
     } else {
         Kind::Free
     }
 }
 
+// 選言を並べる形にすると、種類と関係のない `share` の補題が rlimit を超えたので、範囲で書く
 pub open spec fn known_kind(bits: u32) -> bool {
-    bits == 0 || bits == 1 || bits == 2 || bits == 3 || bits == 4 || bits == 5 || bits == 15
+    bits <= 6 || bits == 15
 }
 
 // 種類ごとの欄。破棄処理の欄だけは、箱を空けるたびに読むので、この `match` でなく `Meta::has_finalizer` が持つ
@@ -71,6 +77,7 @@ impl Kind {
             3 => Kind::String,
             4 => Kind::Float,
             5 => Kind::Bytes,
+            6 => Kind::Raw,
             15 => Kind::Free,
             _ => unreachable!("an unknown object kind {bits}"),
         }
@@ -87,6 +94,18 @@ impl Kind {
         self == Kind::String || self == Kind::Bytes
     }
 
+    /// ペイロードが核の操作から見て不透明な種類。`Raw` の語 0 は不変条件が縛る要素の数なので、`set_raw` で書くと
+    /// 不変条件が崩れる。`Raw` は専用の操作 (`unboxed_*`) で読み書きする (docs/spec/object-model.md の「種類」)。
+    pub open spec fn opaque_spec(self) -> bool {
+        self == Kind::Foreign || self.has_body() || self == Kind::Raw
+    }
+
+    /// 確保の関数が中身まで書いてから生きている物体にする種類。構築中の物体にならず、`alloc` と `con_at` の `meta` にも
+    /// ならない。
+    pub open spec fn self_made(self) -> bool {
+        self.has_body() || self == Kind::Raw
+    }
+
     /// リークの報告の種類の名前。
     pub fn name(self) -> &'static str {
         match self {
@@ -96,10 +115,13 @@ impl Kind {
             Kind::String => "String",
             Kind::Float => "Float",
             Kind::Bytes => "Bytes",
+            Kind::Raw => "Raw",
             Kind::Free => "Free",
         }
     }
 
+    /// token の箱はいつも `Data` である。`con_at` が書き直さない語の扱いはこの性質に頼るので、`Raw` も token にしない
+    /// (docs/spec/object-model.md の「種類」)。
     #[inline]
     pub(crate) fn tokenable(self) -> (r: bool)
         ensures
@@ -109,14 +131,14 @@ impl Kind {
     }
 
     /// ペイロードが核の操作から見て不透明か。`raw` と `set_raw` はこの種類を断る。`Foreign` は Rust の値を、`String` と
-    /// `Bytes` は途中までしか書いていない語を持つので、語として読み書きすると未初期化の読み込みか不変条件の破れになる
-    /// (docs/spec/object-model.md の「種類」)。
+    /// `Bytes` は途中までしか書いていない語を持ち、`Raw` は語 0 に要素の数を持つので、語として読み書きすると
+    /// 未初期化の読み込みか不変条件の破れになる (docs/spec/object-model.md の「種類」)。
     #[inline]
     pub(crate) fn opaque(self) -> (r: bool)
         ensures
-            r == (self == Kind::Foreign || self.has_body()),
+            r == self.opaque_spec(),
     {
-        matches!(self, Kind::Foreign | Kind::String | Kind::Bytes)
+        matches!(self, Kind::Foreign | Kind::String | Kind::Bytes | Kind::Raw)
     }
 }
 
@@ -882,6 +904,7 @@ mod tests {
             Kind::String,
             Kind::Float,
             Kind::Bytes,
+            Kind::Raw,
             Kind::Free,
         ] {
             assert_eq!(kind.tokenable(), kind == Kind::Data);
@@ -890,6 +913,17 @@ mod tests {
                 kind == Kind::Foreign
             );
         }
+    }
+
+    #[test]
+    fn raw_is_opaque() {
+        let m = Meta::new(0, 0, Kind::Raw, true);
+        assert_eq!(
+            (m.kind(), m.scan(), m.tag(), m.lin()),
+            (Kind::Raw, 0, 0, true)
+        );
+        assert!(Kind::Raw.opaque());
+        assert_eq!(Kind::Raw.name(), "Raw");
     }
 
     #[test]

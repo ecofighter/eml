@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/unboxed/shared_fill_and_thaw.em
+---
+--- stdout ---
+(7.0, [7.0, 7.0, 7.0], [0.0, 5.0, 0.0])
+(3, [3, 3])
+--- stderr ---

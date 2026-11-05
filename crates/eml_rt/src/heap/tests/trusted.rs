@@ -358,6 +358,14 @@ fn every_core_operation_once<M: Mode>() {
         assert_eq!(heap.unbox_float(x), Ok((-0.0f64).to_bits()));
         assert_eq!(heap.unbox_float(d), Ok(0));
         heap.decref(x).unwrap();
+        let src = heap.alloc_unboxed(2, 6, false);
+        let dst = heap.alloc_unboxed(3, 0, true);
+        heap.unboxed_put(src, 1, u64::MAX).unwrap();
+        heap.unboxed_copy(dst, src, 2).unwrap();
+        assert_eq!(heap.unboxed_len(dst), Ok(3));
+        assert_eq!(heap.unboxed_word(dst, 1), Ok(u64::MAX));
+        heap.decref(src).unwrap();
+        heap.decref(dst).unwrap();
     }
     // 生きているのは、ダミーと不死の物体だけである
     assert_eq!(heap.live_objects().len(), 2);
@@ -427,6 +435,10 @@ fn every_primitive_once<M: Mode>() {
         ctx.println(crate::Stream::Out, joined).unwrap();
         ctx.flush().unwrap();
         assert_eq!(memory.out(), "\"a\\n\"-12\n");
+        let u = ctx.unboxed_make(2, 4, false).unwrap();
+        let u = ctx.unboxed_set(u, 0, 8).unwrap();
+        assert_eq!(ctx.unboxed_get(u, 0), Ok(8));
+        ctx.heap_mut().decref(u).unwrap();
     }
     ctx_tests::clear(&mut ctx);
     assert!(ctx.check_finished());

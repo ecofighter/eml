@@ -127,7 +127,7 @@ try_panic action =
 | `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-`。`Float.truncate`、`Float.floor`、`Float.ceil`、`Float.round` (`Int` に収まらない値)、`Float.to_fixed` (桁数)、`Char.of_int` (スカラー値でない値)、`Byte.of_int` (0 から 255 の外の値) |
 | `Utf8(_)` | `String.decode` と、それを使う std の関数 |
 | `InUse(_)` | `Stdin.open`、`Stdout.open`、`Stderr.open` (同じストリームのハンドルが生きている間の2つ目の `open`) と、`Stdin.open` を使う `Stdin.read_text` (下の「ハンドル」) |
-| `Index(_)` | `String.byte_at`、`String.char_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
+| `Index(_)` | `String.byte_at`、`String.char_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make`、`UnboxedArray.get`、`UnboxedArray.set`、`UnboxedArray.make`、`MutUnboxedArray.read`、`MutUnboxedArray.write`、`MutUnboxedArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
 
 ## `fail_io`
 
@@ -415,6 +415,50 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `length` と `read` は配列を借りて読み、結果と配列の組を返す。組は translate が作り、組を受けてすぐ開く所では最適化で消えるので、読むたびの確保は残らない ([Core IR](core-ir.md) の「組を返す extern」)。`read` は要素の参照を1つ増やす
 - `write m i x` は、`i` 番目をその場で `x` に替える。添字が範囲の外なら `Panic` を起こす
 - `freeze m` は、写さずに `lin` ビットを下ろして `Array` にする
+
+## `Std.UnboxedArray`
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `make` | `Unboxed a => Int -> a -> <Panic> UnboxedArray a` | `Unboxed` のメソッド (instance ごとの extern) |
+| `get` | `Unboxed a => UnboxedArray a -> Int -> <Panic> a` | `Unboxed` のメソッド (instance ごとの extern。配列を借りる) |
+| `set` | `Unboxed a => UnboxedArray a -> Int -> a -> <Panic> UnboxedArray a` | `Unboxed` のメソッド (instance ごとの extern) |
+| `length` | `UnboxedArray a -> Int` | extern (配列を借りる) |
+| `thaw` | `UnboxedArray a -> MutUnboxedArray a` | extern |
+| `tabulate` | `Unboxed a => Int -> (Int -> <e> a) -> <Panic \| e> UnboxedArray a` | eml (`MutUnboxedArray.freeze (MutUnboxedArray.tabulate n f)`) |
+| `from_list` | `Unboxed a => List a -> UnboxedArray a` | eml |
+| `to_list` | `Unboxed a => UnboxedArray a -> List a` | eml |
+| `of_array` | `Unboxed a => Array a -> UnboxedArray a` | eml |
+| `to_array` | `Unboxed a => UnboxedArray a -> Array a` | eml |
+
+型 `UnboxedArray a` と `MutUnboxedArray a` は Prelude の extern の型で、関数は `Std.UnboxedArray` と `Std.MutUnboxedArray` に置く。`Std.Array` と同じく、モジュールで修飾して使う (`UnboxedArray.length a`)。
+
+- 要素は生の 8 バイトの語で並び、`Float` の要素も箱に入らない。物体の形は [オブジェクトモデル](object-model.md) の「配列」にある
+- 値の位置に要素の型が現れる関数は、クラス `MutUnboxed a => Unboxed a` のメソッドである。instance は `Float` と `Int` だけで、ほかの型の instance は意味を持たない。どちらの instance のメソッドも extern の行に結んであり、要素の Repr はそれぞれ `float` と `int` になる。2つの行は実行時の同じ操作を使う ([VM](vm.md) の「基本操作と extern」)。`MutUnboxed` は `Std.MutUnboxedArray` のクラスで、`Std.UnboxedArray` が import する
+- 型を `Float` 用と `Int` 用の4つに分けず、多相な2つの型にクラスを掛けて extern の行に結ぶのは、4つに分けると、配列を扱う std の関数がどれも型ごとに2つずつ要り、`Float` と `Int` のどちらにも使える関数を書けなくなるためである。instance ごとに行を持つので、`Float` と `Int` は実行時の同じ操作を使いながら、要素の Repr だけを分けられる。そのため、新しい Repr は要らない
+- クラスを Prelude に置かず、それぞれのモジュールに置くのは、`get`、`set`、`make`、`write` が修飾なしの名前としてどこからも見えるのを避けるためである
+- `length` と `thaw` は要素の値を扱わないので、ふつうの多相な extern である
+- `make`、`tabulate`、`get`、`set`、`thaw`、`length` は、`Std.Array` の同じ名前の関数と同じに振る舞う。誤りの文言も同じである (下の「実行時エラー」)
+- `tabulate` は `Lin` の `MutUnboxedArray` の上に作ってあるので、`Std.Array.tabulate` と同じく、`e` に `multi` の操作が含まれると E3006 になる
+- `from_list`、`to_list`、`of_array`、`to_array` は、添字が範囲の外にならないので `Panic` を起こさない。`Std.Array` の `from_list` と同じく、型の上の `Panic` を `try_panic` で除いてある
+- 添字の式 `e[i]`、`var` の配列の変数 ([式](expressions.md) の「`var`」)、`Eq`、`Ord`、`Show` の instance はない
+
+## `Std.MutUnboxedArray`
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `make` | `MutUnboxed a => Int -> a -> <Panic> MutUnboxedArray a` | `MutUnboxed` のメソッド (instance ごとの extern) |
+| `read` | `MutUnboxed a => MutUnboxedArray a -> Int -> <Panic> (a, MutUnboxedArray a)` | `MutUnboxed` のメソッド (instance ごとの extern。配列を借りて組を返す) |
+| `write` | `MutUnboxed a => MutUnboxedArray a -> Int -> a -> <Panic> MutUnboxedArray a` | `MutUnboxed` のメソッド (instance ごとの extern) |
+| `fill` | `MutUnboxed a => MutUnboxedArray a -> a -> MutUnboxedArray a` | `MutUnboxed` のメソッド (instance ごとの extern) |
+| `empty` | `Unit -> MutUnboxedArray a` | extern |
+| `length` | `MutUnboxedArray a -> (Int, MutUnboxedArray a)` | extern (配列を借りて組を返す) |
+| `freeze` | `MutUnboxedArray a -> UnboxedArray a` | extern |
+| `tabulate` | `MutUnboxed a => Int -> (Int -> <e> a) -> <Panic \| e> MutUnboxedArray a` | eml |
+
+- `MutUnboxedArray a` の Kind は要素によらず `Lin` である。instance は `Std.UnboxedArray` と同じく `Float` と `Int` だけで、ほかの型の instance は意味を持たない
+- `make`、`tabulate`、`empty`、`length`、`read`、`write`、`freeze` は、`Std.MutArray` の同じ名前の関数と同じに振る舞う。`tabulate` の E3006 も同じである
+- `fill m x` は、すべての要素をその場で `x` に替える。添字を取らないので `Panic` を起こさない
 
 ## `Std.Map`
 
@@ -1792,8 +1836,8 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `Bytes.get`、`set` の範囲の外 | ``bytes index 5 is out of range for length 3`` |
 | `Bytes.make`、`with_capacity` の負の長さ | ``bytes length -1 is negative`` |
 | `String.decode` の妥当でない UTF-8 | ``invalid UTF-8 at byte 3`` (数は最初の妥当でないバイトの位置) |
-| 配列の添字の範囲の外 (`get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
-| 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
+| 配列の添字の範囲の外 (`Array`、`MutArray`、`UnboxedArray`、`MutUnboxedArray` の `get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
+| 配列の負の長さ (`Array`、`MutArray`、`UnboxedArray`、`MutUnboxedArray` の `make`、`tabulate`) | ``array length -1 is negative`` |
 | `FileOut.create`、`append` | ``cannot open `out.txt`: permission denied`` |
 | `FileOut.write`、`write_bytes`、`write_line`、`flush`、`close` | ``cannot write to `out.txt`: I/O error`` |
 | `Stream.open`、`create`、`append` | ``cannot open `in.txt`: not found`` |

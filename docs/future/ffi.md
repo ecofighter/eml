@@ -20,7 +20,7 @@
 | 2 | 属性 | ABI の文字列と名前の間に `pure`、`blocking`、`symbol "<C の名前>"` を書ける |
 | 3 | 整数の幅 | C の整数の幅は `Int as int` のように引数の型の後に書く。C の型の名前は `int`、`int32_t`、`int64_t`、`size_t` である。ただの `Int` は `int64_t` である |
 | 4 | ライブラリ | `link on linux "openblas"`、`link on macos framework "Accelerate"` のように OS ごとに書く。CLI の `--link` で上書きできる |
-| 5 | 配列 | 配列は先頭のポインタだけを渡し、長さは明示した引数で渡す。`Mut*Array` は消費して `with_arg` の形で返す |
+| 5 | 配列 | 配列は先頭のポインタだけを渡し、長さは明示した引数で渡す。`MutUnboxedArray` は消費して `with_arg` の形で返す |
 | 6 | ハンドル | C のハンドルは `extern "C" data … drop "<C の関数>"` で宣言する |
 | 7 | 扱わないもの | コールバック、C の構造体、可変長の引数、書ける配列のほかの出力の引数、eml の物体の配列、NUL で終わる文字列は扱わない。これを超えるものは、今と同じく Rust で書いた std の extern の行にする |
 | 8 | 効果 | C の呼び出しは `pure` でなければ `<IO>` を持つ。利用者の C の行は失敗を返さないので、巻き戻しの地点にならない |
@@ -38,19 +38,20 @@ link on windows "mkl_rt"
 
 pub extern "C" pure symbol "cblas_dgemm" dgemm
   : Int as int -> Int as int -> Int as int -> Int as int -> Int as int -> Int as int
-    -> Float -> FloatArray -> Int as int -> FloatArray -> Int as int
-    -> Float -> MutFloatArray -> Int as int -> <Panic> (Unit, MutFloatArray)
+    -> Float -> UnboxedArray Float -> Int as int -> UnboxedArray Float -> Int as int
+    -> Float -> MutUnboxedArray Float -> Int as int -> <Panic> (Unit, MutUnboxedArray Float)
 
 pub extern "C" data Solver drop "solver_free"
 
-matmul : Int -> FloatArray -> FloatArray -> <Panic> FloatArray
+matmul : Int -> UnboxedArray Float -> UnboxedArray Float -> <Panic> UnboxedArray Float
 matmul n a b =
-  let ((), c) = dgemm 101 111 111 n n n 1.0 a n b n 0.0 (MutFloatArray.make (n * n) 0.0) n
-  MutFloatArray.freeze c
+  let ((), c) = dgemm 101 111 111 n n n 1.0 a n b n 0.0 (MutUnboxedArray.make (n * n) 0.0) n
+  MutUnboxedArray.freeze c
 ```
 
 - 属性は ABI の文字列と名前の間に置く文脈の語である。`pure` は下の「効果と中断の分類」、`blocking` は下の「長く走る呼び出し」で扱う。`symbol` は C の記号の名前で、書かなければ eml の名前を使う
-- 利用者の `extern "C"` は処理系の表の行を持たないので、引数に「預かる」印を書けない。引数の型に現れる型変数は、[宣言](../spec/declarations.md) の「`extern`」の規則のとおり `Unr` に固定したままである
+- 利用者の `extern "C"` は処理系の表の行を持たないので、引数に「預かる」印を書けない
+- 利用者の `extern "C"` の型には型変数を書けず、書けば検査の誤りにする。誤りの番号は実装するときに決める。C の側の型は eml の型から1つに決まらなければならず、`UnboxedArray a` の `a` が決まらなければ `const double*` か `const int64_t*` かが決まらないためである
 - `extern "C" data` は不透明なハンドルの型を宣言する。`drop` に書いた C の関数が後始末をする (下の「C のハンドル」)
 - `link` はモジュールの最上位に書く。`on linux`、`on macos`、`on windows` は、その OS のときだけ効く。`framework` は macOS だけのものである。AOT では `-l` と `-framework` にしてリンカに渡し ([ネイティブ化の設計](native.md) の「AOT と配布」)、VM と JIT では読み込みのときに `dlopen` で開く (`libopenblas` の `.dylib`、`.so`、`.dll`)
 - CLI の `--link <名前>` は `run` と `build` で使え、モジュールの `link` を上書きする。同じプログラムを別の BLAS で動かすためである
@@ -60,10 +61,10 @@ matmul n a b =
 ## 型の対応
 
 - スカラー: `Int` は `int64_t`、`Int as <C の型>` はその C の整数の型、`Float` は `double`、`Bool` とフィールドのない enum は `int64_t`、`Unit` は値を持たない。CBLAS と LAPACKE (LP64) は次元などの整数を C の `int` で受けるので、幅を書けることが要る
-- 変えない配列: `FloatArray` は `const double*`、`IntArray` は `const int64_t*` で、先頭のポインタだけを渡す。長さは利用者が明示した `Int` の引数で渡す
+- 変えない配列: `UnboxedArray Float` は `const double*`、`UnboxedArray Int` は `const int64_t*` で、先頭のポインタだけを渡す。長さは利用者が明示した `Int` の引数で渡す
 - 文字列とバイト列: `String` と `Bytes` は中身の先頭と長さを2つの C の引数 `(const char*, int64_t len)` と `(const uint8_t*, int64_t len)` で渡す
 - 変えない配列、文字列、バイト列は借りて渡す。ポインタは呼び出しの間だけ有効である。ヒープの物体は動かず、呼ぶ側のフレームが参照を持っているので、その間は生きている
-- 書ける配列: `MutFloatArray` は `double*`、`MutIntArray` は `int64_t*` で渡し、C はその中身を書いてよい。`Mut*Array` は `Lin` なので、引数を消費し、結果と組にして返す (`with_arg` の形)。eml の型は `… -> MutFloatArray -> … -> (R, MutFloatArray)` と書く
+- 書ける配列: `MutUnboxedArray Float` は `double*`、`MutUnboxedArray Int` は `int64_t*` で渡し、C はその中身を書いてよい。`MutUnboxedArray` は `Lin` なので、引数を消費し、結果と組にして返す (`with_arg` の形)。eml の型は `… -> MutUnboxedArray Float -> … -> (R, MutUnboxedArray Float)` と書く
 - ハンドル: `void*` で渡す
 - 結果: スカラー、`Unit`、ハンドルのどれかである。書ける配列は上の組で返る。C は `Bytes` を返したり埋めたりしない。C が作ったバイト列は、C を呼んで結果から `alloc_bytes` する Rust の extern の行で入れる。C に一意な `Bytes` の空きを埋めさせる形は、`read_into` と同じ下地で後に足す ([ロードマップ](roadmap.md) の「処理系」)
 - 書ける配列のほかの出力の引数 (LAPACK の `int* info` など) は扱わない
@@ -75,17 +76,17 @@ matmul n a b =
 - C の呼び出しは `pure` でなければ `<IO>` を持つ。新しいエフェクトは作らない
 - `pure` の行は `Pure` で、使わなければ消せる。`par` の子からも呼べる。BLAS の計算はこの形で宣言する
 - 利用者の C の行は純粋さの分類では `Effectful` だが、失敗を返さない。表の行は失敗を返しうるかを表す `faults: bool` を持ち、利用者の C の行では false である。`points` はこの行を巻き戻しの地点に数えないので、呼び出しの位置には失敗の確かめも後始末のブロックもない ([ネイティブ化の設計](native.md) の「extern のエントリ」)
-- 別名は問題にならない。`FloatArray` は `Unr` で書き換えず、`Mut*Array` は `Lin` で `with_arg` の形で渡すためである。`removable()` は `Lin` の引数を消費する行を除くので、`MutFloatArray` を書く `pure` の行は消されない
+- 別名は問題にならない。`UnboxedArray` は `Unr` で書き換えず、`MutUnboxedArray` は `Lin` で `with_arg` の形で渡すためである。`removable()` は `Lin` の引数を消費する行を除くので、`MutUnboxedArray` を書く `pure` の行は消されない
 
 ## 長く走る呼び出し
 
 - 属性のない `extern "C"` の呼び出しは、タスクの worker のスレッドの上でその場で動き、終わるまで worker を持ち続ける。BLAS のように CPU で計算する呼び出しは、`blocking` にしない
 - `blocking` の行は型に `<IO, Async>` を要する。`Async` のない行に `blocking` を書くと検査の誤りになる。この行の呼び出しは、ブロックする呼び出しのプールへの受け付けと待ちと取り出しの3段に下ろす ([非同期の設計](async.md) の「I/O の driver」)。受け付けは C の関数を包んだ仕事をプールに載せ、タスクは完了まで待ち、その間ほかのタスクが同じ worker で動く
 - プールはヒープを持たない。プールのスレッドは RC に触れず、確保もしない
-  - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
-  - プールは入力の中身を読み、移した `Mut*Array` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
+  - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`MutUnboxedArray` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
+  - プールは入力の中身を読み、移した `MutUnboxedArray` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
   - 完了は持ち主の worker の driver の完了の列を通して届き、worker の受け箱は通らない。これが、プールの書き込みと持ち主の読みの順を決める ([非同期の設計](async.md) の「ブロックする呼び出しのプール」)
-  - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し戻しで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
+  - 戻りの `MutUnboxedArray` と `Lin` の物体は、取り出しが移し戻しで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
 - 場合ごとの扱いは [非同期の設計](async.md) の「I/O の driver」の表にある
 - std の今の同期の行 (`FileIn`、`Stdin`、`Proc` など) には `blocking` を付けない。非同期のファイルとパイプは I/O の driver の上の `Std.Stream` と `Std.Exec` で書く ([標準ライブラリ](../spec/stdlib.md) の「`Std.Stream`」と「`Std.Exec`」)
 - BLAS のスレッドのプールには仕組みを足さず、助言だけを書く。eml は環境変数を設定しない。環境変数はライブラリを読み込む前に要り、`eml run` はプロセスの環境を持たないためである。複数の eml の worker を使うプログラムは、始めに同じ FFI で `openblas_set_num_threads(1)` か `mkl_set_num_threads(1)` を呼ぶ。Accelerate は GCD を使い、設定のインターフェースがないので触らない
@@ -102,7 +103,7 @@ matmul n a b =
 - データの配置は eml 独自のものを保ち、C との間は境目で変換する。`repr(C)` の data、1語より小さいフィールド、宣言の順のフィールド、C の形の構造体の型は作らない
 - C との受け渡しは Repr で型を決めた 64 ビットの語のスカラー、文字列、バイト列、生の要素の配列、`Foreign` で行う。長さの語の後に連続した中身を置く物体 (`String`、`Bytes`、生の要素の配列) は、中身の先頭をそのまま渡せる
 - Cranelift にとって今の配置は障害にならない。オフセットは配置ごとに決まった定数で、生の葉はそのまま `i64` か `f64` になる。C と食い違うヘッダ、参照を前に寄せるフィールドの順、1語のフィールド、一様な位置のタグ付きの `Int` と箱の `Float`、構造体にメモリの形がないことは、どれも配置を型の具体化から独立させるためのものである
-- `Array a` の物体の形は要素の型によらない。要素の型で形を変える `Array a` は、一様なコードのすべての読み書きに種類の確かめが要るので採らない。要素を生で並べる配列は、要素の型が静的に決まる別の型と別の種類にする ([ネイティブ化の設計](native.md) の「生の要素の配列」)。一様な位置の箱がネイティブでホットパスに目立つときに見直す
+- `Array a` の物体の形は要素の型によらない。要素の型で形を変える `Array a` は、一様なコードのすべての読み書きに種類の確かめが要るので採らない。要素を生で並べる配列は、別の型 `UnboxedArray a` と別の種類 `Raw` にしてある ([標準ライブラリ](../spec/stdlib.md) の「`Std.UnboxedArray`」、[オブジェクトモデル](../spec/object-model.md) の「配列」)。一様な位置の箱がネイティブでホットパスに目立つときに見直す
 
 ## C のハンドル
 
@@ -168,7 +169,7 @@ main () =
 - 結果の C の整数の幅: LAPACKE の関数は結果を `lapack_int` (LP64 では `int`) で返すので、結果にも幅を書く形が要る。既定は引数と同じく結果の型の後に `as <C の型>` を書く形である
 - C の型に入らない `Int as <C の型>` の引数: 既定は実行時エラー (`Panic`) にする。呼ぶ前に引数の範囲を確かめ、C の行そのものは今と同じく失敗を返さない (上の「効果と中断の分類」)。そのため、`int64_t` のほかの幅を書いた引数を持つ行は row に `Panic` を持つ (上の「`extern "C"` の宣言」の `dgemm`)。代わりの案は、範囲を確かめずに切り詰め、宣言を信頼する形である
 - C のレベルの受け箱: 自分のスレッドを持つ C のライブラリから eml へ知らせるインターフェースである。既定は作らず、そういう連携は Rust のプラグインだけで行う
-- 32 ビットの要素とバイトの要素の生の配列: 既定は作らない。`float` の buffer を渡す C の API が要るときに考える
+- 32 ビットの要素とバイトの要素の生の配列: 既定は作らない。作るときは `Unboxed` と `MutUnboxed` の新しい instance にする。`float` の buffer を渡す C の API が要るときに考える ([ロードマップ](roadmap.md) の「FFI と拡張」)
 - egui のクロージャのない入れ物: プラグインが `Ui` を自分で積み重ねる形は、egui の公開の API (`Ui::new` と `new_child`) に頼る。これが使えないときは、プラグインの中ではクロージャの形を保ち、eml の入れ物の API を `Gui.horizontal : Ui -> (Ui -> <IO> Ui) -> <IO> Ui` にして、プラグインがメインの worker の上で eml を呼び戻す。このときプラグインは呼び戻しの間にデストラクタを持たない
 - コールバックの中から worker のループを入れ子に呼ぶ形が使えないときは、`pump_app_events` を既定にする。そのときはモーダルなループの間 eml が止まる
 - Windows でのビルドに `lld` を同梱するか: [ネイティブ化の設計](native.md) の「未決の論点と将来の拡張」にある

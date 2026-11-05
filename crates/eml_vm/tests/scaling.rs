@@ -233,6 +233,46 @@ fn showing_bytes_does_not_dup_per_element_and_uses_the_dedicated_instructions() 
     assert!(!code.contains("= Prelude.bytes_"), "{code}");
 }
 
+/// `UnboxedArray.tabulate` で `Float` の要素を n 個作り、`get` で足した和を出力するプログラム。
+fn unboxed_sum(n: usize) -> String {
+    format!(
+        "import Float\nimport UnboxedArray\n\
+         \n\
+         sum_from : UnboxedArray Float -> Int -> Float -> <Panic> Float\n\
+         sum_from a i acc = if i == UnboxedArray.length a then acc else sum_from a (i + 1) (acc + UnboxedArray.get a i)\n\
+         \n\
+         main : Unit -> <IO, Panic> Unit\n\
+         main () =\n\
+         \x20 let a = UnboxedArray.tabulate {n} (fn i -> Float.of_int i)\n\
+         \x20 println (show (sum_from a 0 0.0))\n"
+    )
+}
+
+#[test]
+fn unboxed_float_elements_are_not_boxed_and_use_the_dedicated_instructions() {
+    // 要素は生の語なので、書くときも読むときも `Float` の箱を作らない (docs/spec/stdlib.md の「`Std.UnboxedArray`」)。
+    // 高階の `tabulate` も、既知の閉包への特殊化で閉包の結果を箱に入れない (docs/spec/core-ir.md の「最適化」)。
+    // 確保と箱を開ける回数は長さによらない
+    let small = stats(&unboxed_sum(1000), "499500.0\n");
+    let large = stats(&unboxed_sum(2000), "1999000.0\n");
+    assert_eq!((small.boxes, large.boxes), (0, 0), "{small:?} {large:?}");
+    assert_eq!(small.allocations, large.allocations, "{small:?} {large:?}");
+    assert_eq!(small.unboxes, large.unboxes, "{small:?} {large:?}");
+
+    // 読み書きと長さは専用の命令になり、汎用の extern の行の番号の `match` を通らない (docs/spec/vm.md の「基本操作と extern」)
+    let code = disassembly(&unboxed_sum(3));
+    for dedicated in ["unboxed_get s", "unboxed_length s", "unboxed_set s"] {
+        assert!(code.contains(dedicated), "{dedicated}\n{code}");
+    }
+    for generic in [
+        "= Std.UnboxedArray.Unboxed Float.get(",
+        "= Std.UnboxedArray.length(",
+        "= Std.MutUnboxedArray.MutUnboxed Float.write(",
+    ] {
+        assert!(!code.contains(generic), "{generic}\n{code}");
+    }
+}
+
 /// n 行のファイルをディスクに書き、そのパスと、`\r\n` を除いた行の長さの和と、ファイルの長さを返す。
 /// 行の長さは揃えない。
 fn lines_file(name: &str, n: usize) -> (String, usize, usize) {
