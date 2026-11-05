@@ -448,7 +448,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
 
-`RunConfig`、`RunStats`、`RuntimeError` などは `eml_vm` で定義し、`eml_cli` が再公開する ([VM](../spec/vm.md) の「置き場所」)。`RunConfig` は `#[non_exhaustive]` にしてあり、`RunConfig::default()` から `with_debug_heap`、`with_control`、`with_sched`、`with_clock`、`with_doorbell` で作る。`RunStats` の定めは [VM](../spec/vm.md) の「`RunStats`」にある。
+`RunConfig`、`RunStats`、`RuntimeError` などは `eml_vm` で定義し、`eml_cli` が再公開する ([VM](../spec/vm.md) の「置き場所」)。`RunConfig` は `#[non_exhaustive]` にしてあり、`RunConfig::default()` から `with_debug_heap`、`with_control`、`with_sched`、`with_clock`、`with_doorbell`、`with_job_budget` で作る。`RunConfig::job_budget` は、静止が走っている `Op::Job` を run で合わせて待つ長さで、既定は1秒である。`eml_cli` は変えず、1秒より短い予算が要るテストが渡す。`Machine` は同じ予算を `Machine::with_job_budget` で受け取る。`Machine::is_poisoned` と `AnyMachine::is_poisoned` は、静止の後に driver が保留の操作を残して `Machine` が poisoned になったかを返す。`execute` は poisoned の `Machine` を閉じず、`exit` で終わった run の `Finished` をそのまま返す ([VM](../spec/vm.md) の「時計と driver」)。`RunStats` の定めは [VM](../spec/vm.md) の「`RunStats`」にある。
 
 ## 外部 crate
 
