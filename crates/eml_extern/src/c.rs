@@ -1,0 +1,162 @@
+//! 利用者の `extern "C"` の宣言の記述。データだけを持ち、C の関数を呼ぶコードは含まない。
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Os {
+    Linux,
+    Macos,
+    Windows,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CLibrary {
+    Named(String),
+    Framework(String),
+}
+
+impl CLibrary {
+    /// `link` に書いた文字列。`--link` の KEY もこの文字列で引く。
+    pub fn written(&self) -> &str {
+        match self {
+            CLibrary::Named(name) | CLibrary::Framework(name) => name,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CLink {
+    pub os: Os,
+    pub library: CLibrary,
+}
+
+/// `Int` の引数と結果に書ける C の整数の幅。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CInt {
+    I64,
+    I32,
+    SizeT,
+}
+
+impl CInt {
+    pub fn c_name(self) -> &'static str {
+        match self {
+            CInt::I64 => "int64_t",
+            CInt::I32 => "int32_t",
+            CInt::SizeT => "size_t",
+        }
+    }
+
+    /// 値が C の型に収まるか。`SizeT` は eml の `Int` が符号付きなので、負の値だけを外す。
+    pub fn fits(self, value: i64) -> bool {
+        match self {
+            CInt::I64 => true,
+            CInt::I32 => i32::try_from(value).is_ok(),
+            CInt::SizeT => value >= 0,
+        }
+    }
+
+    /// 渡す前に範囲を確かめる必要があり、外れると実行時に中断する幅。
+    pub fn narrows(self) -> bool {
+        matches!(self, CInt::I32 | CInt::SizeT)
+    }
+
+    fn slot(self) -> CType {
+        match self {
+            CInt::I32 => CType::I32,
+            CInt::I64 | CInt::SizeT => CType::I64,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CFnId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CHandleId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CParam {
+    Int(CInt),
+    Float,
+    UnboxedArray,
+    MutUnboxedArray,
+    Text,
+    Handle(CHandleId),
+    /// 引数のない C の関数のために eml 側に置く `Unit` の引数。C には渡さない。
+    NoArg,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CRet {
+    Void,
+    Int(CInt),
+    Float,
+    Handle(CHandleId),
+}
+
+/// 橋渡しが受け渡す語の型。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CType {
+    I32,
+    I64,
+    F64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CSignature {
+    pub params: Vec<CType>,
+    pub ret: Option<CType>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CHandleType {
+    pub name: String,
+    pub dtor: Option<String>,
+    pub links: Vec<CLink>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CFunction {
+    /// 正規の名前 `Module.name`。
+    pub name: String,
+    pub symbol: String,
+    /// 宣言したモジュールの `link` の item の写し。
+    pub links: Vec<CLink>,
+    pub pure: bool,
+    pub blocking: bool,
+    pub params: Vec<CParam>,
+    pub ret: CRet,
+}
+
+impl CFunction {
+    /// 橋渡しの引数と結果の型。配列、文字列、ハンドルはポインタ1つの語で渡し、`NoArg` は語を持たない。
+    pub fn c_signature(&self) -> CSignature {
+        let params = self
+            .params
+            .iter()
+            .filter_map(|param| match param {
+                CParam::Int(int) => Some(int.slot()),
+                CParam::Float => Some(CType::F64),
+                CParam::UnboxedArray
+                | CParam::MutUnboxedArray
+                | CParam::Text
+                | CParam::Handle(_) => Some(CType::I64),
+                CParam::NoArg => None,
+            })
+            .collect();
+        let ret = match self.ret {
+            CRet::Void => None,
+            CRet::Int(int) => Some(int.slot()),
+            CRet::Float => Some(CType::F64),
+            CRet::Handle(_) => Some(CType::I64),
+        };
+        CSignature { params, ret }
+    }
+
+    /// 呼び出しが `Panic` で中断しうるか。狭める `Int as` の引数は範囲を外れうるし、ハンドルの結果は null になりうる。
+    pub fn faults(&self) -> bool {
+        self.params
+            .iter()
+            .any(|param| matches!(param, CParam::Int(int) if int.narrows()))
+            || matches!(self.ret, CRet::Handle(_))
+    }
+}

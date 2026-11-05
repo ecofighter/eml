@@ -3,9 +3,13 @@ name = "eml_extern"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+autotests = false
 
-# 単体テストがないので、空のテストのバイナリを作らない。表と標準ライブラリの照らし合わせは eml_hir と eml_core_ir の
-# 結合テストにある
+# lib 自体に単体テストはない。表と標準ライブラリの照らし合わせは eml_hir と eml_core_ir の結合テストにある
 [lib]
 test = false
 doctest = false
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

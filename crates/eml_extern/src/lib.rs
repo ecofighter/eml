@@ -6,6 +6,16 @@
 //! instance の `extern` で結ぶメソッドの行は、モジュール、クラス、型、メソッドの名前を並べた `Prelude.Eq Int.==` の
 //! 形である。どの行も、`std/` の extern の宣言か instance の `extern` のちょうど1つから指されることは、`eml_hir` の
 //! 結合テストが確かめる。行の Repr が std の宣言の型の Repr と同じであることは、`eml_core_ir` の結合テストが確かめる。
+//!
+//! 利用者の `extern "C"` の宣言も、`c` モジュールの型でここに記述する。標準ライブラリの行と違って表には載らず、
+//! プログラムごとに作る。
+
+mod c;
+
+pub use c::{
+    CFnId, CFunction, CHandleId, CHandleType, CInt, CLibrary, CLink, CParam, CRet, CSignature,
+    CType, Os,
+};
 
 /// 表を1つの並びから作る。行は宣言の順に並び、`ALL` の添字と `self as usize` と静的な行の表の添字が同じになる。
 /// 変種、`ALL`、行を別々に書くと、順と数を手で揃えることになるためである。行の式は定数として評価し、`row` は静的な
