@@ -322,3 +322,38 @@ fn checked_unboxed_operations_refuse_an_index_past_the_length() {
         heap.decref(src).unwrap();
     }
 }
+
+/// 検査モードの `unboxed_ptr_mut` は、ほかのスレッドが読める配列を `NotWritable` で断る。読む位置は貸す。
+#[test]
+fn unboxed_ptr_mut_refuses_a_shared_array_in_checked_mode() {
+    let mut heap = Heap::<Checked>::new();
+    let w = heap.alloc_unboxed(2, 5, false);
+    unsafe {
+        heap.share(w, 1).unwrap();
+        assert_eq!(heap.unboxed_ptr_mut(w), Err(HeapError::NotWritable));
+        assert!(heap.unboxed_ptr(w).is_ok());
+        heap.decref(w).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
+/// 検査モードの `text_payload` は配列を、`unboxed_ptr` と `unboxed_ptr_mut` は文字列とバイト列を `WrongKind` で断る。
+#[test]
+fn text_payload_refuses_an_array_in_checked_mode() {
+    let mut heap = Heap::<Checked>::new();
+    let arr = heap.alloc_unboxed(1, 0, false);
+    let s = heap.alloc_string("ab");
+    let b = heap.alloc_bytes(b"ab");
+    unsafe {
+        assert_eq!(heap.text_payload(arr), Err(HeapError::WrongKind));
+        for w in [s, b] {
+            assert!(heap.text_payload(w).is_ok());
+            assert_eq!(heap.unboxed_ptr(w), Err(HeapError::WrongKind));
+            assert_eq!(heap.unboxed_ptr_mut(w), Err(HeapError::WrongKind));
+        }
+        for w in [arr, s, b] {
+            heap.decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}

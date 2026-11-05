@@ -6,6 +6,8 @@ use vstd::prelude::*;
 #[cfg(verus_only)]
 use super::inv::raw_wf;
 use super::*;
+#[cfg(verus_only)]
+use crate::meta::{field_ptr, slot_offset};
 
 verus! {
 
@@ -185,6 +187,18 @@ impl Core {
             }
         }
     }
+}
+
+/// `Raw` のブロック `h` の要素 0 の位置 (語 0 が要素の数なので、ペイロードの語 1)。C に貸す位置で、ここからは何も
+/// 読み書きせず、権限も変えない (docs/spec/object-model.md の「`unsafe` の核」の T16)。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn unboxed_payload(h: *mut Header, Tracked(perm): Tracked<&BlockPerm>) -> *mut u64
+    requires
+        perm.slots.contains_key(0),
+        perm.slots[0].ptr() == field_ptr::<Word>(h, slot_offset(0)),
+{
+    slot_ptr(h, 1).cast::<u64>()
 }
 
 impl<M: Mode> Heap<M> {
@@ -666,6 +680,82 @@ impl<M: Mode> Heap<M> {
             }
         }
         Ok(())
+    }
+
+    /// 要素 0 の位置。C の関数に要素を読ませるために貸す (docs/spec/object-model.md の「配列」)。
+    ///
+    /// # Safety
+    /// `w` はこのヒープか付けた塊の生きている `Raw` の物体を指す。返す位置から要素の数だけ読んでよいのは、物体が生きて
+    /// いて、書き換えていない間だけである (検査モードは確かめ、`Raw` でなければ `WrongKind` を返す)。
+    pub unsafe fn unboxed_ptr(&self, w: Word) -> (r: Result<*const u64, HeapError>)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+            !M::CHECKED ==> self.settleable() && self.is_unboxed(w),
+        ensures
+            self.consistent() && self.settleable() && self.is_unboxed(w) ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> self.is_unboxed(w)),
+    {
+        let h = self.header_of(w);
+        proof {
+            if !M::CHECKED || (self.consistent() && self.is_unboxed(w)) {
+                self.core.lemma_readable(w);
+            }
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
+            }
+        }
+        self.checked_live(h)?;
+        self.checked_unboxed(h)?;
+        proof {
+            self.lemma_unboxed_block(h@.addr);
+            self.core.lemma_shape(h@.addr);
+        }
+        let tracked p = self.core.tracked_perm(h@.addr);
+        Ok(unboxed_payload(h, Tracked(p)) as *const u64)
+    }
+
+    /// 要素 0 の位置。C の関数に要素を書かせるために貸す (docs/spec/object-model.md の「配列」)。
+    ///
+    /// ヒープの何も変えないので `&self` を取る。`&Ctx` しか持たない呼び手 (VM が C の関数の引数を組むところ) からも
+    /// 貸せるようにするためである。書き込みの一意は Rust の借用でなく、下の前提と検査モードの `NotWritable` が守る。
+    /// 返す位置の来歴はヒープのページの確保から来るので、`&Heap` への共有の参照を通して書くことにはならない。
+    ///
+    /// # Safety
+    /// 添字を除いて `unboxed_put` と同じである。`w` はこのヒープの生きている `Raw` の物体を指し、ほかのスレッドはその
+    /// 物体を読めない。rc が正なら、持ち主は今の worker である (検査モードは確かめ、`Raw` でなければ `WrongKind` を、
+    /// ほかのスレッドが読める物体なら `NotWritable` を返す)。返す位置から要素の数だけ読み書きしてよいのは、物体を生かし、
+    /// 一意に保ち、このヒープの操作でその物体を読み書きしない間だけである。
+    pub unsafe fn unboxed_ptr_mut(&self, w: Word) -> (r: Result<*mut u64, HeapError>)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+            !M::CHECKED ==> self.writable(w) && self.is_unboxed(w) && self.owned(w),
+        ensures
+            M::CHECKED && r is Ok ==> self.is_unboxed(w) && self.unshared(w),
+            self.consistent() && self.writable(w) && self.is_unboxed(w) && self.owned(w)
+                ==> r is Ok,
+    {
+        let h = self.header_of(w);
+        proof {
+            self.lemma_checks_pass(w);
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
+            }
+        }
+        self.checked_live(h)?;
+        self.checked_unboxed(h)?;
+        proof {
+            self.lemma_unboxed_block(h@.addr);
+            self.core.lemma_shape(h@.addr);
+        }
+        if M::CHECKED {
+            self.checked_unshared(w, h)?;
+        }
+        let tracked p = self.core.tracked_perm(h@.addr);
+        Ok(unboxed_payload(h, Tracked(p)))
     }
 
     /// `src` の要素 0..n を `dst` の要素 0..n に写す。`dst` のほかの要素と `src` は変えない。

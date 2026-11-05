@@ -109,7 +109,7 @@
 8. 文字列: `string_push` と `string_concat` を、ほかの核の操作と同じく抽象のモデルの遷移で書く。`string_push` は「left の参照を1つ消費し、結果の参照を1つ作る」遷移で、その場で足す枝、作り直す枝、写す枝のすべてを含む。ghost のバイト列が連結になること、UTF-8 が保たれること、容量の計算、不変条件の長さの条件を保つことも証明する ([オブジェクトモデル](../spec/object-model.md) の「バイト列と文字列」)。`raw` と `set_raw` が不透明なペイロードを断ることも、Verus が確かめる。ただし、ほかの検証した書き込みが文字列のバイト列の語に届かないことは確かめない。ブロックの不変条件が ghost のバイト列と結ぶのは長さの語だけで、その後ろの語とは結ばないためである。この性質は T10 の前提である ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)
 9. extern: 整数の extern の結果を vstd の `checked_*`、`rust_div`、`rust_rem` の spec で、文字列の extern の結果をバイト列の spec (`lex`、`decimal`、`escape`) で約束する。I/O の extern は、メモリの安全と RC のモデルでの増減と、誤りのときの約束を証明し、OS とのやりとりの中身は約束しない ([オブジェクトモデル](../spec/object-model.md) の「extern」)
 
-信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T15) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
+信頼して証明しない部分は、[オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」の信頼の一覧 (T0 から T16) にまとめる。`src/trust.rs` の単体テストが、この一覧を固定する。
 
 - テストでないコード (`#[cfg(test)]` の module と `heap/tests/` を除く) から、Verus に確かめさせない項目を表す語 (`external_body`、`verifier::external`、`assume_specification`、`global`、`assume(`、`Tracked::assume_new` など) を探す。見つけた項目 (ファイル、語、それを含む関数か型の名前) が、表の番号を付けた一覧と同じであることを確かめる。属性や仮定が一覧の外に増えると、証明が空になっても検証は通ってしまうためである
 - `verus!` の外のコードに `unsafe` がないことを確かめる。除くのは `Word`、`Heap`、`Frozen` の `unsafe impl Send` と `Sync`、`RawBuf` の `unsafe impl Send` と、T4 の `Drop` だけである

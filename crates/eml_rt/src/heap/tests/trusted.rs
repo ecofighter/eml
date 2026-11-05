@@ -2423,6 +2423,124 @@ fn find_byte_reads_the_body_of_an_object<M: Mode>() {
     assert_eq!(mortal(&mut ctx), 0);
 }
 
+// T16: 下の `unsafe extern "C" fn` は C の関数の代わりで、貸した位置と要素の数だけを受け取る
+
+/// 要素 i に `i + k` を書く。
+unsafe extern "C" fn c_fill(p: *mut u64, n: usize, k: u64) {
+    for i in 0..n {
+        unsafe { p.add(i).write(i as u64 + k) };
+    }
+}
+
+/// 要素の和。
+unsafe extern "C" fn c_sum(p: *const u64, n: usize) -> u64 {
+    (0..n).fold(0, |acc, i| acc.wrapping_add(unsafe { p.add(i).read() }))
+}
+
+/// `n` バイトを `out` に写す。
+unsafe extern "C" fn c_copy(p: *const u8, n: usize, out: *mut u8) {
+    unsafe { std::ptr::copy_nonoverlapping(p, out, n) };
+}
+
+/// 大きい物体のページの末尾で終わる要素の数。ペイロードは要素の数の語とあわせて `LARGE_BODY` の中身と同じ語数になる
+const LARGE_ELEMENTS: usize = LARGE_BODY / 8;
+
+/// C が `unboxed_ptr_mut` の位置から書いた要素を、ヒープの操作が読む。小さい物体と、大きい物体のページの末尾まで
+/// 書く物体で通す。VM が C の関数の引数を組むときと同じく、位置は `&Heap` から借り、その共有の参照を生かしたまま
+/// 書く。書き込みの来歴が `Heap` への参照でなくページの確保から来ることを、2つの借用の規則で確かめるためである。
+fn c_writes_through_unboxed_ptr_mut_and_the_heap_reads_it<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    for n in [1, 3, LARGE_ELEMENTS] {
+        let w = heap.alloc_unboxed(n, 0, false);
+        let shared: &Heap<M> = &heap;
+        unsafe {
+            let p = shared.unboxed_ptr_mut(w).unwrap();
+            c_fill(p, n, 7);
+            assert_eq!(shared.unboxed_len(w), Ok(n));
+            for i in 0..n {
+                assert_eq!(shared.unboxed_word(w, i), Ok(i as u64 + 7));
+            }
+            heap.decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
+/// ほかのスレッドが読める配列も、`unboxed_ptr` の位置から C が読める。
+fn c_reads_a_shared_array_through_unboxed_ptr<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    for n in [2, LARGE_ELEMENTS] {
+        let w = heap.alloc_unboxed(n, 0, false);
+        unsafe {
+            for i in 0..n {
+                heap.unboxed_put(w, i, i as u64 * 3).unwrap();
+            }
+            heap.share(w, 1).unwrap();
+            let p = heap.unboxed_ptr(w).unwrap();
+            let expected = (0..n as u64).map(|i| i * 3).sum::<u64>();
+            assert_eq!(c_sum(p, n), expected);
+            heap.decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
+/// C は `text_payload` の位置から、`string` と `bytes` が返す長さだけ読む。空、語に揃わない長さ、多バイトの文字、
+/// 大きい物体のページの末尾で終わる長さと語に揃わない残りで終わる長さで通す。
+fn c_reads_string_and_bytes_through_text_payload<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let strings = [
+        String::new(),
+        "abc".to_string(),
+        "日本語".to_string(),
+        "a".repeat(LARGE_BODY),
+    ];
+    for s in &strings {
+        let w = heap.alloc_string(s);
+        unsafe {
+            let n = (&*heap.string(w).unwrap()).len();
+            let mut out = vec![0u8; n];
+            c_copy(heap.text_payload(w).unwrap(), n, out.as_mut_ptr());
+            assert_eq!(out, s.as_bytes());
+            heap.decref(w).unwrap();
+        }
+    }
+    let bodies = [
+        Vec::new(),
+        vec![0xff, 0, 1],
+        (0..LARGE_BODY + 3).map(|i| i as u8).collect(),
+    ];
+    for b in &bodies {
+        let w = heap.alloc_bytes(b);
+        unsafe {
+            let n = heap.bytes(w).unwrap().len();
+            let mut out = vec![0u8; n];
+            c_copy(heap.text_payload(w).unwrap(), n, out.as_mut_ptr());
+            assert_eq!(&out, b);
+            heap.decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
+/// 要素のない配列も、要素 0 の位置 (ヘッダと要素の数の語の後ろ) を貸す。C はそこから何も読み書きしない。
+fn an_empty_array_lends_a_pointer_to_no_elements<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_unboxed(0, 1, false);
+    unsafe {
+        let p = heap.unboxed_ptr(w).unwrap();
+        assert_eq!(p.addr(), w.bits() + 16);
+        assert_eq!(c_sum(p, 0), 0);
+        assert!(std::slice::from_raw_parts(p, 0).is_empty());
+        let q = heap.unboxed_ptr_mut(w).unwrap();
+        assert_eq!(q.cast_const(), p);
+        c_fill(q, 0, 1);
+        assert_eq!(heap.unboxed_len(w), Ok(0));
+        heap.decref(w).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
 // 課金は確保した worker の番号の数に足す (docs/spec/object-model.md の「確保と解放」)
 fn a_worker_heap_charges_its_own_slot<M: Mode>() {
     let control = Arc::new(Control::new(Limits {
@@ -2505,4 +2623,8 @@ both_modes!(
     a_failed_child_write_releases_the_handle,
     an_interrupted_child_write_stops_only_when_asked,
     find_byte_reads_the_body_of_an_object,
+    c_writes_through_unboxed_ptr_mut_and_the_heap_reads_it,
+    c_reads_a_shared_array_through_unboxed_ptr,
+    c_reads_string_and_bytes_through_text_payload,
+    an_empty_array_lends_a_pointer_to_no_elements,
 );
