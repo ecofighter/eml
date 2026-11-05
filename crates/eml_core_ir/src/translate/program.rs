@@ -1,12 +1,17 @@
 //! 変換の途中で関数を足していく表と、extern の関数、操作、コンストラクタ、継続を包む関数、エントリの関数、エフェクトの表。
 
-use eml_extern::{Extern, ExternType};
-use eml_hir::{
-    ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, Items, ModuleId, ModuleOrigin,
-    OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind, TypeRefKind,
-    ValueItem,
+use eml_extern::{
+    CFnId, CFunction, CHandleId, CHandleType, CParam, CRet, Extern, ExternRef, ExternType,
+    FunctionRow,
 };
-use eml_types::{TypeId, TypeKind, TypeStore, TypedProgram, VarClass, VarType};
+use eml_hir::{
+    ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, FunctionKind, Items, ModuleId,
+    ModuleOrigin, OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind,
+    TypeRefKind, ValueItem,
+};
+use eml_types::{
+    CArg, CResult, CShape, TypeId, TypeKind, TypeStore, TypedProgram, VarClass, VarType,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
@@ -18,6 +23,7 @@ use eml_lir::{
 use crate::builder::FnBuilder;
 
 use super::display::BUDGET;
+use super::expr::ExternTarget;
 use super::types::{Composite, StructTypes, boxed_repr, declared_mark, mark, split_arrows};
 
 /// 文字列リテラルと表示用のパスの表。同じ文字列には同じ番号を返す。
@@ -92,6 +98,12 @@ pub(super) struct ProgramBuilder {
     pub(super) structs: Structs,
     /// 型ごとに決めた Repr。構造体の判定は型をたどるので、同じ型を何度も読む変換のために覚えておく。
     reprs: FxHashMap<TypeId, Repr>,
+    /// プログラムが使う C の関数 (`Program.c_functions`) と、それが受けるか返すハンドルの型 (`Program.c_handles`)。
+    /// どちらも最初に使った順に番号を振る (docs/spec/core-ir.md の「translate の配置」)。
+    pub(super) c_functions: Vec<CFunction>,
+    c_function_ids: FxHashMap<FunctionId, CFnId>,
+    pub(super) c_handles: Vec<CHandleType>,
+    c_handle_ids: FxHashMap<TypeDefId, CHandleId>,
 }
 
 impl ProgramBuilder {
@@ -115,7 +127,101 @@ impl ProgramBuilder {
             struct_types,
             structs: Structs::default(),
             reprs: FxHashMap::default(),
+            c_functions: Vec::new(),
+            c_function_ids: FxHashMap::default(),
+            c_handles: Vec::new(),
+            c_handle_ids: FxHashMap::default(),
         }
+    }
+
+    /// extern の命令が指す行。C の行は、このプログラムの C の表から引く。
+    pub(super) fn row(&self, ext: ExternRef) -> FunctionRow<'_> {
+        ext.row(&self.c_functions)
+    }
+
+    /// extern の行き先を IR の行にする。C の関数は、最初に使ったときに C の表に入れる。
+    pub(super) fn extern_ref(
+        &mut self,
+        hir: &HirProgram,
+        c_shapes: &FxHashMap<FunctionId, CShape>,
+        target: ExternTarget,
+    ) -> ExternRef {
+        match target {
+            ExternTarget::Std(ext) => ext.into(),
+            ExternTarget::C(function) => ExternRef::C(self.c_function(hir, c_shapes, function)),
+        }
+    }
+
+    /// C の関数 `function` の C の表の番号。行は型検査が確かめた形 (`c_shapes`) から作る。誤りのないプログラムが
+    /// 使う C の関数は、どれも形を持つ。
+    fn c_function(
+        &mut self,
+        hir: &HirProgram,
+        c_shapes: &FxHashMap<FunctionId, CShape>,
+        function: FunctionId,
+    ) -> CFnId {
+        if let Some(&id) = self.c_function_ids.get(&function) {
+            return id;
+        }
+        let FunctionKind::C(decl) = hir[function].kind else {
+            unreachable!("only a C function has a C row")
+        };
+        let decl = hir.c_decl(decl);
+        let shape = c_shapes
+            .get(&function)
+            .expect("a C function in a program without errors has a checked shape");
+        let mut params = Vec::with_capacity(shape.params.len());
+        for &arg in &shape.params {
+            params.push(match arg {
+                CArg::Int(int) => CParam::Int(int),
+                CArg::Float => CParam::Float,
+                CArg::UnboxedArray => CParam::UnboxedArray,
+                CArg::MutUnboxedArray => CParam::MutUnboxedArray,
+                CArg::Text => CParam::Text,
+                CArg::Handle(ty) => CParam::Handle(self.c_handle(hir, ty)),
+                CArg::NoArg => CParam::NoArg,
+            });
+        }
+        let ret = match shape.ret {
+            CResult::Void => CRet::Void,
+            CResult::Int(int) => CRet::Int(int),
+            CResult::Float => CRet::Float,
+            CResult::Handle(ty) => CRet::Handle(self.c_handle(hir, ty)),
+        };
+        let module = function.module;
+        let row = CFunction::new(
+            c_name(hir, module, &hir[function].name),
+            decl.symbol.clone(),
+            hir.links(module).to_vec(),
+            decl.pure,
+            decl.blocking.is_some(),
+            params,
+            ret,
+        );
+        let id = CFnId(self.c_functions.len() as u32);
+        self.c_functions.push(row);
+        self.c_function_ids.insert(function, id);
+        id
+    }
+
+    /// `extern "C" data` の型 `ty` の C の表の番号。dtor の記号も、型を宣言したモジュールの `link` から解決する
+    /// (docs/spec/vm.md の「ライブラリと記号」)。
+    fn c_handle(&mut self, hir: &HirProgram, ty: TypeDefId) -> CHandleId {
+        if let Some(&id) = self.c_handle_ids.get(&ty) {
+            return id;
+        }
+        let TypeDefKind::CHandle { dtor } = &hir[ty].kind else {
+            unreachable!("a C handle is an `extern \"C\" data` type")
+        };
+        let handle = CHandleType {
+            name: c_name(hir, ty.module, &hir[ty].name),
+            dtor: dtor.clone(),
+            links: hir.links(ty.module).to_vec(),
+        };
+        let id = CHandleId(self.c_handles.len() as u32);
+        self.c_handles.push(handle);
+        self.c_handle_ids.insert(ty, id);
+        id
     }
 
     /// 変数の Repr。箱の位置の Repr (`boxed_repr`) に、構造体にする型の判定を加える。構造体の形のフィールドの Repr と
@@ -433,11 +539,11 @@ impl ProgramBuilder {
         hir: &HirProgram,
         types: &TypeStore,
         ty: TypeId,
-        row: Extern,
+        row: ExternRef,
         name: String,
         at: Loc,
     ) -> FnIdx {
-        let (param_types, result_type) = split_arrows(types, ty, row.row().params.len());
+        let (param_types, result_type) = split_arrows(types, ty, self.row(row).params.len());
         let function = self.reserve(param_types.len());
         let mut builder = FnBuilder::new();
         let args = param_types
@@ -468,8 +574,9 @@ impl ProgramBuilder {
         function
     }
 
-    /// extern の行 `ext` を呼び、型 `ty` の値を返す文を足す。`with_args` の行は、行の結果と引数を `con` で組にする。
-    /// extern は借りた配列を消費しないので、組がその配列を受け取る (docs/spec/core-ir.md の「組を返す extern」)。
+    /// extern の行 `ext` を呼び、型 `ty` の値を返す文を足す。`with_args` の行は、行の結果と `with_args` の引数を
+    /// `con` で組にする。extern は借りた引数を消費しないので、組がそれを受け取る (docs/spec/core-ir.md の
+    /// 「組を返す extern」)。
     /// `Std.Par.par` は extern の命令でなく `par` の呼び出しにし、`mask` はそれに付ける。ほかの行の `mask` は空である
     /// (docs/spec/core-ir.md の「`par` の呼び出し」)。
     #[expect(clippy::too_many_arguments, reason = "the parts of one extern call")]
@@ -478,13 +585,13 @@ impl ProgramBuilder {
         builder: &mut FnBuilder,
         hir: &HirProgram,
         types: &TypeStore,
-        ext: Extern,
+        ext: ExternRef,
         args: Vec<Atom>,
         mask: Vec<MaskItem>,
         at: Option<Loc>,
         ty: TypeId,
     ) -> Atom {
-        if ext == Extern::Par {
+        if ext.std() == Some(Extern::Par) {
             let [left, right] = args[..] else {
                 unreachable!("par takes two children")
             };
@@ -502,47 +609,39 @@ impl ProgramBuilder {
             return Atom::Var(builder.bind(info, Rhs::Call { call, mask }));
         }
         debug_assert!(mask.is_empty(), "only par has a mask among the externs");
-        if ext.row().with_args.is_empty() {
+        if self.row(ext).with_args.is_empty() {
             let info = self.var_info("t", hir, types, ty);
-            let ext = ext.into();
             return Atom::Var(builder.bind(info, Rhs::Extern { ext, args, at }));
         }
         let TypeKind::Tuple(elements) = types.kind(ty) else {
-            unreachable!("an extern with `with_args` returns a pair")
+            unreachable!("an extern with `with_args` returns a tuple")
         };
         let value = self.var_info("t", hir, types, elements[0]);
         let pair = self.var_info("d", hir, types, ty);
         self.lending_call(builder, ext, args, at, value, pair)
     }
 
-    /// `with_args` の行 `ext` を呼び、行の結果 (変数 `value`) と借りた引数の組 (変数 `pair`) を返す。std の行の
-    /// `with_args` は1つの位置である。
+    /// `with_args` の行 `ext` を呼び、行の結果 (変数 `value`) と、借りた引数を `with_args` の順に並べた組 (変数
+    /// `pair`) を返す。std の行の `with_args` は1つの位置で、C の行は `lin` の引数の位置をすべて持つ。
     pub(super) fn lending_call(
         &mut self,
         builder: &mut FnBuilder,
-        ext: Extern,
+        ext: ExternRef,
         args: Vec<Atom>,
         at: Option<Loc>,
         value: VarInfo,
         pair: VarInfo,
     ) -> Atom {
-        let &[k] = ext.row().with_args else {
-            unreachable!("a lending std row returns a pair")
-        };
-        let lent = args[k];
-        let ext = ext.into();
+        let lent: Vec<Atom> = self.row(ext).with_args.iter().map(|&k| args[k]).collect();
+        debug_assert!(!lent.is_empty(), "a lending row lends an argument");
         let value = Atom::Var(builder.bind(value, Rhs::Extern { ext, args, at }));
         let ctor = Ctor {
-            layout: self.tuple_layout(2),
+            layout: self.tuple_layout(1 + lent.len()),
             tag: TUPLE,
         };
-        Atom::Var(builder.bind(
-            pair,
-            Rhs::Con {
-                ctor,
-                args: vec![value, lent],
-            },
-        ))
+        let mut fields = vec![value];
+        fields.extend(lent);
+        Atom::Var(builder.bind(pair, Rhs::Con { ctor, args: fields }))
     }
 
     /// エントリの関数を `()` で呼ぶ関数を作る。名前は `entry$` にエントリの関数の名前を続ける。等式に引数のない
@@ -806,6 +905,17 @@ fn defines(items: &Items, name: &str) -> bool {
         || items.classes.values().any(|item| item.name == name)
         || items.methods.values().any(|item| item.name == name)
         || items.bindings.values().any(|item| item.name == name)
+}
+
+/// C の表の名前。正式な名前 `モジュール名.名前` で、エントリのモジュールでも修飾する。テキストの形では C の関数を
+/// `extern` の文の名前で引くので、エントリのモジュールの関数の名前と書き分けるためである。REPL のセッションの
+/// モジュールだけは、ほかの item と同じく中段の名前にする (docs/spec/core-ir.md の「REPL の入力」)。中段の名前は
+/// `.` を含まず、std の行の名前はどれもモジュールで修飾してあるので、名前で引いても std の行と取り違えない。
+fn c_name(hir: &HirProgram, module: ModuleId, name: &str) -> String {
+    match hir.modules[module].origin {
+        ModuleOrigin::Session(_) => versioned(hir, module, name),
+        _ => format!("{}.{name}", hir.modules[module].name),
+    }
 }
 
 /// 包む関数の名前の根。`$op$` と `$con$` に操作とコンストラクタの名前を続ける。
