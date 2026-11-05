@@ -232,7 +232,7 @@ ffi-c が入れた形を、最初の変更の前に確かめる。リポジト�
     3. 救済: 記録を待つタスクは動かさない (vm.md の「救済」)。
     4. 利用者の handler が `k` を捨てること: `Async` は抽象なので書けない (E1058)。
     5. `par` の右の子と `compute` の仕事: row が `never` で `IO` を含まないので、`blocking` を呼べない。
-    6. 誤りで終わる run (実行時の誤り、デッドロック、致命的な誤り、Ctrl-C、`exit`): worker は安全点で止まり、静止させてから `Ctx` を返す。待つ継続は巻き戻さず、ヒープとともに放す。ヒープを落とすか回復するのは、仕事を見捨てなかったときだけである。
+    6. run を止める終わり (`Async.run` の外へ出た実行時エラー、デッドロック、致命的な誤り、Ctrl-C、`exit`): worker は安全点で止まり、静止させてから `Ctx` を返す。待つ継続は巻き戻さず、ヒープとともに放す。ヒープを落とすか回復するのは、仕事を見捨てなかったときだけである。スコープの失敗は run を止めず、2 の道 (取り消し) を通る。
     7. worker の panic: poisoned になり、ヒープは漏らす。
     8. REPL の回復: `recover` は先に静止させ、`pending() > 0` なら poisoned にする。
     9. `Machine` を落とすこと: driver を先に落とす。poisoned の `Machine` はヒープを落とさない。
@@ -269,14 +269,16 @@ ffi-c が入れた形を、最初の変更の前に確かめる。リポジト�
   - `submit` は記録を作るとき、登録表の lock の下で `Registry::point(me)` (`op_ready` と `park_io` が使う関数) を評価する。真なら `Op` を出さず、`cancelling = true` と `Done(Err(other "cancelled"), true)` にする。`stats`、予算、`parks` には触れない。後の `io_wait` は、終わった記録を取り消しの地点で待つときと同じに動き、`Cancelled` で再開する。
   - 偽で、その後に取り消しが来たら、仕事は走り、タスクは本当の完了の後に `Cancelled` で再開する (今の操作の待ちの規則)。2つの確かめは仕事を始めるかだけを決め、待ちが終わるかは決めないので、食い違わない。
   - `take` は `Cancelled` のとき、記録を放し、行がハンドルを返していて答えが 0 でなければ、そのハンドルの型の dtor をその場で (持ち主のスレッドで) 呼び、IO の失敗 (種類 `Cancelled`、文言 `task was cancelled`) を起こす。`Cancelled` で答えが `Ok` のときは仕事が走ったので、C の副作用は残り、結果は捨てる。
-- 理由: std のどの待ちとも同じく取り消しの地点になる。仕事は止められない。C の資源を黙って漏らさない。
+  - スコープの失敗 (`fail_scope_io`、`fail_scope_panic`、`cancel_members`) による取り消しも同じ規則に従う。失敗を起こし直す `run` と `scope` は、取り消した子が終わるまで戻らないので (`wait_closed`)、戻らない C の呼び出しを抱えたスコープの失敗は、C の関数が戻るか、run を止める終わり (Ctrl-C など) が来るまで終わらない。run の仕事の予算は静止にだけ効き、取り消しには効かない (D-8)。`Std.Stream` のファイルの仕事と同じ規則である。
+- 理由: std のどの待ちとも同じく取り消しの地点になる。仕事は止められない。C の資源を黙って漏らさない。取り消しの途中で継続を再開すると、仕事が読む引数を落とす (D-2 の 2)。予算を取り消しに持ち込むには、記録か `take` が引数を留める必要があり、D-2 を作り直すことになる。
 - 退けた案: 取り消しの地点にしない `blocking`。
 - 及ぶ範囲: `Op::FfiSubmit`、`Op::FfiTake`、docs/spec/declarations.md。
 - 見直す条件: 仕事を取り消せるようにするとき。
 - 適合の確かめ
-  - MUST: 上の前の確かめ、取り消しの後は本当の完了を待つこと、`take` の `Cancelled` の扱い。
-  - 確かめ方: `blocking_fixture_cancelled.em` が `frees` で `1` を書く。`cells::tests::a_cancelled_task_submits_no_job` (名前は cells の `mod tests` に合わせる) と `ffi::a_cancelled_task_submits_no_job` が、取り消された後のタスクが `Op::Job` を出さないことを確かめる。今あるテストの `RunStats` の snapshot が変わらない。
-- リポジトリに残す所: docs/spec/vm.md の「`blocking` の呼び出し」、docs/spec/declarations.md の「`extern "C"`」(T-7)
+  - MUST: 上の前の確かめ、取り消しの後は本当の完了を待つこと、`take` の `Cancelled` の扱い。取り消された記録の待ちは、仕事の完了でだけ終わる。スコープの失敗も例外にしない。
+  - MUST NOT: 取り消しの道 (`cells.rs`、`Async.em`) に仕事の予算や期限を持ち込むこと。仕事の完了の前に、待つ継続を再開すること。
+  - 確かめ方: `blocking_fixture_cancelled.em` が `frees` で `1` を書く。`cells::tests::a_cancelled_task_submits_no_job` (名前は cells の `mod tests` に合わせる) と `ffi::a_cancelled_task_submits_no_job` が、取り消された後のタスクが `Op::Job` を出さないことを確かめる。今あるテストの `RunStats` の snapshot が変わらない。`ffi::a_failing_scope_waits_for_its_cancelled_blocking_call` が通る (run は `Panicked("boom")` で終わり、`is_poisoned()` が偽、`frees` が 1)。`grep -n "job_wait\|job_budget\|job_deadline" crates/eml_vm/src/cells.rs` が何も出さない。
+- リポジトリに残す所: docs/spec/vm.md の「`blocking` の呼び出し」、docs/spec/declarations.md の「`extern "C"`」(T-7)、docs/spec/stdlib.md の「取り消し」(T-8)
 
 #### D-5: 受け付けの行は狭める引数があるときだけ中断を起こし、取り出しの行はいつも起こす
 
@@ -331,8 +333,8 @@ ffi-c が入れた形を、最初の変更の前に確かめる。リポジト�
     - その後の `load`、`run`、`recover`、`close` は、どれも1つの文言 `the driver kept pending ops after quiesce` を返す。
     - REPL は、poisoned にした入力の直後に、その文言でセッションを終える (D-29)。
     - `eml_cli` は予算を出さない。
-  - Ctrl-C、`exit`、致命的な誤り、デッドロックは同じ道を通る。予算の間の2回目の Ctrl-C は今のまま `_exit(130)` で終わる。仮想の時計のテストの driver は予算を無視し、仕事をその場で動かす。
-- 理由: C の呼び出しが走っている記憶は放さない。それでも run は、利用者から見て1回の予算のうちに終わる。プログラムが選んだ終了コードは届く。`Std.Stream` の意味は変わらない。
+  - 予算が効くのは、run を止める終わりだけである: `exit`、Ctrl-C と SIGTERM、確保量の上限、致命的な誤り、デッドロック、`Async.run` の外へ出た実行時エラー。どれも静止を通る。スコープの失敗による取り消しは run を止めず、静止に入らない。その `run` は、取り消した `blocking` の呼び出しが終わるまで戻らない (D-4)。予算の間の2回目の Ctrl-C は今のまま `_exit(130)` で終わる。仮想の時計のテストの driver は予算を無視し、仕事をその場で動かす。
+- 理由: C の呼び出しが走っている記憶は放さない。それでも run を止める終わりは、利用者から見て1回の予算のうちに届く。失敗したスコープの待ちは Ctrl-C で止められ、そこからは予算が効く。プログラムが選んだ終了コードは届く。`Std.Stream` の意味は変わらない。
 - 退けた案
   - ファイルの仕事にも 1 秒の予算: 遅いディスクの `Std.Stream` を後退させ、安全も増えない。
   - worker ごとに 1 秒: N worker で最大 N 秒になる。
@@ -342,8 +344,8 @@ ffi-c が入れた形を、最初の変更の前に確かめる。リポジト�
 - 及ぶ範囲: `eml_rt` の trait、`eml_io` の本物の driver、`eml_vm` の `Run`、`Machine`、`AnyMachine`、`execute`、`eml_cli` の REPL。
 - 見直す条件: 予算が、戻るはずの呼び出しを切っている報告か計測が出たとき。
 - 適合の確かめ
-  - MUST: 上の静止の規則、run ごとの1つの期限、poisoned と漏らすこと、見える結果。MUST NOT: `eml_cli` が予算を出すこと。
-  - 確かめ方: `driver::tests::quiesce_abandons_a_running_job_after_its_budget`、`driver::tests::quiesce_drops_a_queued_job_unrun`、`driver::tests::quiesce_still_waits_for_a_file_job`、`workers::tests::job_wait_shares_one_deadline`、`machine::every_quiesce_gets_the_job_budget`、`machine::an_exit_with_an_op_left_pending_keeps_its_code_and_poisons`、`ffi_abandon::an_exit_during_a_blocking_call_keeps_its_code_and_poisons` (1 worker) と `…_on_worker_one` (2 worker)、`ffi_abandon::execute_keeps_the_exit_code_of_a_run_that_abandoned_a_job`、`repl::the_machine_is_poisoned_after_an_input_that_abandoned_a_job` が通る。`machine::a_driver_left_pending_poisons_the_machine` (machine.rs:784) は変えずに通る。`grep -rn "job_budget" crates/eml_cli/src` が何も出さない。REPL のセッションが終わることは 9 章の手での確かめで見る。
+  - MUST: 上の静止の規則、run ごとの1つの期限、poisoned と漏らすこと、見える結果。MUST NOT: `eml_cli` が予算を出すこと。取り消しの道に予算を持ち込むこと (D-4)。
+  - 確かめ方: `driver::tests::quiesce_abandons_a_running_job_after_its_budget`、`driver::tests::quiesce_drops_a_queued_job_unrun`、`driver::tests::quiesce_still_waits_for_a_file_job`、`workers::tests::job_wait_shares_one_deadline`、`machine::every_quiesce_gets_the_job_budget`、`machine::an_exit_with_an_op_left_pending_keeps_its_code_and_poisons`、`ffi_abandon::an_exit_during_a_blocking_call_keeps_its_code_and_poisons` (1 worker) と `…_on_worker_one` (2 worker)、`ffi_abandon::execute_keeps_the_exit_code_of_a_run_that_abandoned_a_job`、`repl::the_machine_is_poisoned_after_an_input_that_abandoned_a_job` が通る。`machine::a_driver_left_pending_poisons_the_machine` (machine.rs:784) は変えずに通る。`grep -rn "job_budget" crates/eml_cli/src` が何も出さない。`grep -c "run を止める終わり" docs/spec/declarations.md docs/spec/vm.md` がどちらも 1 以上。REPL のセッションが終わることは 9 章の手での確かめで見る。
 - リポジトリに残す所: docs/spec/vm.md の「時計と driver」の「run の外では」の箇条と「誤り、止めること、終わり」、docs/implementation/architecture.md の「CLI と lib API」、docs/future/multicore.md の「止める手順」(T-3、T-4)、REPL の文 (T-8)
 
 #### D-9: プールの仕事に貸す記憶は、その仕事のスレッドだけが使う
@@ -382,18 +384,19 @@ ffi-c が入れた形を、最初の変更の前に確かめる。リポジト�
   - 数えた1つの `Op::Job`
   - 本物の時計の鍵 (待つ間にほかのタスクが動く)
   - 本物の時計の worker 1
-  - 仕事が残る `exit` の run と誤りの run を、1 と 2 worker で
+  - 仕事が残る `exit` の run と、割り込みで止めた run を、1 と 2 worker で (どちらも poisoned になる)
+  - 失敗したスコープが取り消した `blocking` の呼び出しを、テストのスレッドが鍵を開けて終わらせ、`run` が待ちきってから失敗を起こし直すこと (poisoned にならない)
   - poisoned にした入力の後の REPL
   - 2回目の `load` が `CompileError::Poisoned` で断られること
   - 下ろし方の Miri
   - `ffi::` と `ffi_abandon::` の TSan と ASan
   - 鍵の fixture は待ったときに消費し、テストはそれぞれ重ならない番号を使い、`job_budget` は 1 秒より短くする。
-- 理由: roadmap の要件。D-2 の記憶の安全の道は、じかに試す必要がある。UI のテストは1つのプロセスの中で、ファイルを2回、並べて流す。
+- 理由: roadmap の要件。D-2 の記憶の安全の道は、じかに試す必要がある。UI のテストは1つのプロセスの中で、ファイルを2回、並べて流す。スコープの失敗で止まった run は C の関数が戻るまで終わらないので、テストは鍵を外から開ける。UI のテストには鍵を開ける手がないので、この形は eml_vm のテストにだけ置く (T-9 には足さない)。
 - 及ぶ範囲: `crates/eml_vm/tests/{ffi,ffi_abandon}.rs`、`crates/eml_vm/tests/common/c.rs`、UI テスト、`eml_test_support`、`crates/eml_cli/tests/repl.rs`、CI。
 - 見直す条件: テストの流し方 (同じプロセスで並べて流すこと) が変わるとき。
 - 適合の確かめ
   - MUST: 上の範囲。MUST NOT: 眠ること。壁の時間を見ること。
-  - 確かめ方: 7 章で名前を挙げたテストがあって通る。`grep -rn "Instant::now\|elapsed" crates/eml_vm/tests/ffi_abandon.rs` が何も出さない。`grep -n "sleep" crates/eml_test_support/src/fixtures.rs crates/eml_vm/tests/common/c.rs` が何も出さない。`ui::fixture_ids_are_disjoint_across_files` が通る。REPL のセッションが終わることは手で確かめる (9 章)。
+  - 確かめ方: 7 章で名前を挙げたテストがあって通る。`grep -rn "Instant::now\|elapsed" crates/eml_vm/tests/ffi_abandon.rs` が何も出さない。`grep -n "sleep" crates/eml_test_support/src/fixtures.rs crates/eml_vm/tests/common/c.rs` が何も出さない。`ui::fixture_ids_are_disjoint_across_files` が通る。`grep -n "fn an_error" crates/eml_vm/tests/ffi_abandon.rs` が何も出さない (名前は `an_interrupt_…`)。REPL のセッションが終わることは手で確かめる (9 章)。
 - リポジトリに残す所: docs/implementation/testing.md の「UI テスト」「AddressSanitizer」「ThreadSanitizer」(T-6、T-8、T-9)
 
 #### D-12: プールの道は、Rust のデータを持つ仕事にも使える形に保つ
@@ -999,7 +1002,7 @@ A 列 (T-5、T-6) は T-1 から T-4 と独立に進められる。1本のブラ
   - `crates/eml_vm/src/lib.rs` (`execute_here` :280-292)、`crates/eml_vm/tests/common/c.rs`、`crates/eml_vm/tests/ffi.rs`、新しい `crates/eml_vm/tests/ffi_abandon.rs`、`crates/eml_vm/tests/main.rs`
   - `crates/eml_cli/src/repl.rs` (`Repl`)、`crates/eml_cli/src/terminal.rs` (`Flow` :254-260、主のループ :86-111、起動の `load_text` :74-78、`Terminal::eval` と `Terminal::load_text` の `show` の呼び手)、`crates/eml_cli/tests/repl.rs`
   - `.github/workflows/ci.yml` (`asan` :211-221 と `tsan` :240-258 の job)
-  - 文書: `docs/spec/vm.md` の「追記」、`docs/spec/modules.md` の「REPL のセッション」、`docs/spec/repl.md` の「終わり方」、`docs/future/multicore.md` (REPL の箇条 :480)、`docs/future/async.md` の「ブロックする呼び出しのプール」の表の REPL の行、`docs/implementation/architecture.md` の「CLI と lib API」(`Repl::is_poisoned`)、`docs/implementation/testing.md` の「AddressSanitizer」(:222-229)「ThreadSanitizer」(:231-)
+  - 文書: `docs/spec/vm.md` の「追記」、`docs/spec/modules.md` の「REPL のセッション」、`docs/spec/repl.md` の「終わり方」、`docs/future/multicore.md` (REPL の箇条 :480)、`docs/future/async.md` の「ブロックする呼び出しのプール」の表の REPL の行、`docs/implementation/architecture.md` の「CLI と lib API」(`Repl::is_poisoned`)、`docs/implementation/testing.md` の「AddressSanitizer」(:222-229)「ThreadSanitizer」(:231-)、`docs/spec/declarations.md` の「`extern "C"`」(予算の箇条 :235)、`docs/spec/vm.md` の「時計と driver」(:544) と「`blocking` の呼び出し」(:1055)、`docs/spec/stdlib.md` の「取り消し」
 - 作業
   1. `execute_here` を D-24 のとおりにする。コメント (why): poisoned の `Machine` はヒープを漏らし、`close` は終了コードの代わりに poisoned の誤りを返す。`execute_here` は受け取った `&Linked` を `machine.load(program, linked)` に渡したままにする。
   2. REPL を D-29 のとおりにする。`terminal.rs` のコメント (why): poisoned の `Machine` は後の入力をすべて断るので、その入力でセッションを終える (docs/spec/vm.md の「追記」を引く)。`eml_cli` は予算を出さない (`main.rs` にオプションを足さず、REPL は `RunConfig` の既定を使う)。
@@ -1011,6 +1014,10 @@ A 列 (T-5、T-6) は T-1 から T-4 と独立に進められる。1本のブラ
      - multicore.md :480 の REPL の箇条 (「実行中のプールの仕事と操作を待ちきってから回復する」) と async.md の表の REPL の行: 予算の後もまだ走る仕事は見捨て、セッションはその入力の後に終わる。
      - architecture.md の「CLI と lib API」: `Repl::is_poisoned`。
      - testing.md の「AddressSanitizer」: `ffi_abandon::` を `detect_leaks=0` の別の step で流す理由 (poisoned の `Machine` を意図して漏らす) と、ほかの step の leak の検出は既定のままであること。「ThreadSanitizer」: 一覧に `ffi_abandon::`。
+     - declarations.md の「`extern "C"`」の予算の箇条 (:235): 予算が遅らせるのは run を止める終わり (`exit`、Ctrl-C、致命的な誤り、デッドロック、`Async.run` の外へ出た実行時エラー) だけで、ほかのタスクの失敗で `run` や `scope` が子を取り消すだけのときは、`run` は C の関数が戻るまで戻らず、待ちきれないときは Ctrl-C で止める (D-4、D-8)。
+     - vm.md の「時計と driver」(:544): 予算は静止の長さであって取り消しの長さではない。スコープの失敗で取り消された `blocking` の呼び出しやファイルの仕事は完了を待つので、その `run` は仕事が終わるまで戻らず、静止には入らない。
+     - vm.md の「`blocking` の呼び出し」(:1055): スコープの失敗による取り消しも同じで、失敗を起こし直す `run` と `scope` はその仕事が終わるまで戻らない。run の仕事の予算は静止にだけ効く。
+     - stdlib.md の「取り消し」の `Std.Net`/`Std.Stream`/`Std.Exec` の箇条: `blocking` の C の関数の呼び出しも同じであること。
   5. CI: ffi-c が両方の sanitizer に入れた `ffi::` に加え、ASan に `ASAN_OPTIONS=detect_leaks=0 … -p eml_vm --test integration -- ffi_abandon::` の step を足し、TSan の eml_vm の step に `ffi_abandon::` を足す。
   6. テスト (D-31 の決まりで書く。番号は 100020 から 100099 の、テストごとに違うもの)
      - `ffi.rs` (`common::c::linked`)
@@ -1018,11 +1025,12 @@ A 列 (T-5、T-6) は T-1 から T-4 と独立に進められる。1本のブラ
        - `ffi::another_task_runs_during_a_blocking_call` (A が `rs_gate_wait` で鍵を待つ間に B が動いて `rs_gate_open` で鍵を開ける)
        - `ffi::a_blocking_call_runs_on_the_driver_of_worker_one` (2 worker。最初に `start` したタスクは worker 1 に置かれる。結果と `RunStats.completions`)
        - `ffi::a_cancelled_blocking_call_resumes_after_its_job` (`rs_handle_wait` で鍵を待つ A を B が取り消してから鍵を開ける。A は `Cancelled` を受け、`rs_frees` が 1)
+       - `ffi::a_failing_scope_waits_for_its_cancelled_blocking_call` (本物の時計、1 worker。A はハンドルを作って合図の鍵を開け、`rs_handle_wait` で鍵を待つ。B は合図を待ってから `panic "boom"` を呼ぶ。`main` は `Async.run body` で、`try_*` を使わない。テストのスレッドは合図を待ってから鍵を開ける。`run` は `boom` の `Panic` の誤りを返し (`interrupted()` でない)、`is_poisoned()` は偽、`rs_frees` が 1、`close()` は `Ok`。鍵を外から開けなければ run は終わらないことを doc に書き、docs/spec/declarations.md の「`extern "C"`」を引く。取り消しと完了のどちらが先に当たっても結果は同じ)
      - `ffi_abandon.rs` (`common::c::linked`。`Machine::load(&program, &linked)`)
        - `ffi_abandon::an_exit_during_a_blocking_call_keeps_its_code_and_poisons` (1 worker) と `ffi_abandon::an_exit_during_a_blocking_call_keeps_its_code_and_poisons_on_worker_one` (2 worker): 開かない鍵を待つタスクと、`exit 3` を呼ぶタスク。`run` は `Ok(f)` で `f.exit == Some(3)`、`is_poisoned()`、`close()` の誤りに `the driver kept pending ops after quiesce` が入る。
        - `ffi_abandon::two_hung_workers_share_one_budget` (2 worker、worker ごとに戻らない呼び出しが1つ): 同じ3つの結果だけを確かめ、時間は何も確かめない。
-       - `ffi_abandon::an_error_during_a_blocking_call_poisons` と `ffi_abandon::an_error_during_a_blocking_call_poisons_on_worker_one`: `run` は run 自身の誤り (`RuntimeError::Unrecovered` でない) を返し、`is_poisoned()`。
-       - `ffi_abandon::a_machine_that_abandoned_a_job_refuses_recovery`: 戻らない呼び出しのある誤る run は自分の誤りを返す (poisoned の `Machine` では `run_recovering` が `recover` を飛ばすので、回復は試みられない)。それから `is_poisoned()`、2回目の `load(&program2, &Linked::default())` が `CompileError::Poisoned`、前の entry の `run` が poisoned の誤り。`recover` 自身の断り (lib.rs:525-527) には、run が `Machine` を poisoned にした後では届かない。
+       - `ffi_abandon::an_interrupt_during_a_blocking_call_poisons` と `ffi_abandon::an_interrupt_during_a_blocking_call_poisons_on_worker_one` (助けの関数は `an_interrupt_poisons`): テストのスレッドが合図の鍵を待ってから `Control::interrupt` で run を止める。`run` は run 自身の誤り (`RuntimeError::Unrecovered` でない、`interrupted()`) を返し、`is_poisoned()`。スコープの中の `Panic` では run は仕事を待って止まらないので (D-4)、割り込みを使うことを doc に書き、docs/spec/vm.md の「`blocking` の呼び出し」を引く。T-8 の最初の版の `an_error_during_a_blocking_call_poisons*` と `an_error_poisons` からの改名である (種類3。コミットの前の名前なので、一覧の差には出ない)
+       - `ffi_abandon::a_machine_that_abandoned_a_job_refuses_recovery`: 戻らない呼び出しのある、割り込みで止めた run は自分の誤りを返す (doc に割り込みを使う理由を同じく書く) (poisoned の `Machine` では `run_recovering` が `recover` を飛ばすので、回復は試みられない)。それから `is_poisoned()`、2回目の `load(&program2, &Linked::default())` が `CompileError::Poisoned`、前の entry の `run` が poisoned の誤り。`recover` 自身の断り (lib.rs:525-527) には、run が `Machine` を poisoned にした後では届かない。
        - `ffi_abandon::execute_keeps_the_exit_code_of_a_run_that_abandoned_a_job`: `eml_vm::execute(&program, &linked, &RunConfig::default().with_clock(Clock::Real).with_job_budget(Duration::from_millis(20)), host)` が `Ok(f)` で `f.exit == Some(3)`。
        - 各テストは終わりに `rs_gate_open` で鍵を開け、切り離したスレッドを終わらせる。
      - `crates/eml_cli/tests/repl.rs`: `repl::the_machine_is_poisoned_after_an_input_that_abandoned_a_job`
@@ -1087,7 +1095,7 @@ A 列 (T-5、T-6) は T-1 から T-4 と独立に進められる。1本のブラ
   - `docs/future/async.md` の「その場で動く同期の行」(:252-): 3つ目の箇条を vm.md を指す文にする
   - `docs/future/async.md` の「ブロックする呼び出しのプール」(:259-280): 箇条の 1、3 から 5 と 8 を書き直す。表では「移し戻し」を書く行を直し、「持ち主が入力をその場で書き換える」の行を「待つタスクの継続が数えた参照を持つ」にする
   - `docs/future/multicore.md`: 「移し戻し」の一覧 (:300) から「ブロックする呼び出しの取り出し」と「取り出しはプールへ移した…」の文を消し、印付けの表の行 (:316) を「印を付けない。待つタスクの継続が参照を持つ / なし」にする
-- 作業: 次の点を書く。4つの文の下ろし方。継続が引数を持ち、記録は語を持たない。`Done::Job`。仕事は `CCall` と `u64` のスロットを受け取る。24/32。run ごとに1つの 1 秒の予算。poisoned。REPL のセッションが終わる。プールは同じ橋渡しの関数を呼ぶ (「VM からの呼び出し」)。
+- 作業: 次の点を書く。4つの文の下ろし方。継続が引数を持ち、記録は語を持たない。`Done::Job`。仕事は `CCall` と `u64` のスロットを受け取る。24/32。run ごとに1つの 1 秒の予算 (「ブロックする呼び出しのプール」の表の予算の行に、予算は静止にだけ効き、失敗したスコープの取り消しは完了を待つことを書く)。poisoned。REPL のセッションが終わる。プールは同じ橋渡しの関数を呼ぶ (「VM からの呼び出し」)。
 - 実装者に任せること: 文 (natural-japanese の skill で書く)。
 - 条件: T-7 の後。実装者は Sonnet。
 - 完了の基準
@@ -1106,7 +1114,7 @@ A 列 (T-5、T-6) は T-1 から T-4 と独立に進められる。1本のブラ
 - 作業 (roadmap の「進め方」の順)
   1. `spec/` を仕上げる。`grep -rn "ffi-blocking" docs/spec docs/implementation` が何も出さず、declarations.md と diagnostics.md に `blocking` の E0004 の文が残っていない。
   2. 計測する (`eml_vm`、`eml_rt`、`eml_core_ir`、`eml_lir` が変わった)。基点の表は benchmarks.md の「今の数値」の3つ (`コミット: 9949fa6`) である。まず `bench/scripts.sh` を流し、範囲を外れた行があれば別のコミット `Resize bench rows` で大きさを変える。次に `bench/run.sh`、`bench/rt.sh`、`bench/scripts.sh` を、T-10 の後のきれいな作業ツリー (コードの最後のコミット) で流し直し、3つの表を入れ替える。表の `コミット:` はそのコミットにする。macOS がなければ表の入れ替えだけを直後の `Measure ffi-blocking` にする。
-  3. status.md: `blocking` が使えること。:156 の「`Op::Job` を使うのは Rust のテストだけ」と :188 の E0004 の箇条を消す。制限 (24/8、run ごとに 1 秒、仮想の時計では戻らない呼び出しで run が終わらない、仕事を見捨てた入力の後に REPL のセッションが終わる) を書く。
+  3. status.md: `blocking` が使えること。:156 の「`Op::Job` を使うのは Rust のテストだけ」と :188 の E0004 の箇条を消す。制限 (24/8、run ごとに 1 秒、仮想の時計では戻らない呼び出しで run が終わらない、仕事を見捨てた入力の後に REPL のセッションが終わる、失敗したスコープの中の `blocking` の呼び出しは C の関数が戻るまで待ち、戻らない呼び出しを抱えて失敗した `run` は Ctrl-C でしか終わらない (そこからは予算が効く)) を書く。
   4. architecture.md: eml_vm の `ffi.rs` (`FfiSubmit`/`FfiTake`)、cells の `OpKind::Ffi`、eml_io のプールの列 (:376 の「`Op::Job` を使うのは Rust のテストだけ」を消す)。testing.md:284 の同じ旨の文も直す。
   5. roadmap: `ffi-blocking` の行 (:31) を消す。`tls-platform-verifier` (:32) の「前提: `ffi-blocking`」を、「進め方」の 5 のとおり項目の名前に直すか消し、「仕事は `Done::Job` で `Conn` を値で返す」を足す。
   6. overview.md の 13 行と、docs/README.md の「文書の地図」は変わったときだけ直す。
@@ -1234,4 +1242,5 @@ T-6 (A 列) ─────────────────┘
 - I-2: T-6 の `pub use` とテストを `#[cfg(feature = "run")]` の下に置くと書いた。消費を確かめられないテストの名前を `an_open_pairs_with_one_wait` にした。
 - I-3: T-9 に、時間に頼る語を書かないことと、testing.md:390 の替える1文と残す文を書いた。
 - I-4: Miri のテストはスカラーの関数だけを呼ぶと決め、`eml_test_support::lir` で LIR を作ること、時間を測ること、超えたら止めること (Q-11) を書いた。
+- T-8 のレビューで、失敗したスコープが取り消した `blocking` の呼び出しは予算で終わらず、C の関数が戻るまで待つことが分かった。利用者が Fable に決めさせ、その結論の (a) をとった。予算は静止にだけ効き、取り消しは完了を待つ (D-2 の 6、D-4、D-8、D-11、T-8、T-10、T-11)。レビューの A-5 (テストの名前) もこの改名で閉じる。
 
