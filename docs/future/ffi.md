@@ -20,7 +20,7 @@
 | 2 | 属性 | ABI の文字列と名前の間に `pure`、`blocking`、`symbol "<C の名前>"` を書ける |
 | 3 | 整数の幅 | C の整数の幅は `Int as int` のように引数の型の後に書く。C の型の名前は `int`、`int32_t`、`int64_t`、`size_t` である。ただの `Int` は `int64_t` である |
 | 4 | ライブラリ | `link on linux "openblas"`、`link on macos framework "Accelerate"` のように OS ごとに書く。CLI の `--link` で上書きできる |
-| 5 | 配列 | 配列は先頭のポインタだけを渡し、長さは明示した引数で渡す。`MutUnboxedArray` は消費して `with_arg` の形で返す |
+| 5 | 配列 | 配列は先頭のポインタだけを渡し、長さは明示した引数で渡す。`MutUnboxedArray` は消費して `with_args` の形で返す |
 | 6 | ハンドル | C のハンドルは `extern "C" data … drop "<C の関数>"` で宣言する |
 | 7 | 扱わないもの | コールバック、C の構造体、可変長の引数、書ける配列のほかの出力の引数、eml の物体の配列、NUL で終わる文字列は扱わない。これを超えるものは、今と同じく Rust で書いた std の extern の行にする |
 | 8 | 効果 | C の呼び出しは `pure` でなければ `<IO>` を持つ。利用者の C の行は失敗を返さないので、巻き戻しの地点にならない |
@@ -64,7 +64,7 @@ matmul n a b =
 - 変えない配列: `UnboxedArray Float` は `const double*`、`UnboxedArray Int` は `const int64_t*` で、先頭のポインタだけを渡す。長さは利用者が明示した `Int` の引数で渡す
 - 文字列とバイト列: `String` と `Bytes` は中身の先頭と長さを2つの C の引数 `(const char*, int64_t len)` と `(const uint8_t*, int64_t len)` で渡す
 - 変えない配列、文字列、バイト列は借りて渡す。ポインタは呼び出しの間だけ有効である。ヒープの物体は動かず、呼ぶ側のフレームが参照を持っているので、その間は生きている
-- 書ける配列: `MutUnboxedArray Float` は `double*`、`MutUnboxedArray Int` は `int64_t*` で渡し、C はその中身を書いてよい。`MutUnboxedArray` は `Lin` なので、引数を消費し、結果と組にして返す (`with_arg` の形)。eml の型は `… -> MutUnboxedArray Float -> … -> (R, MutUnboxedArray Float)` と書く
+- 書ける配列: `MutUnboxedArray Float` は `double*`、`MutUnboxedArray Int` は `int64_t*` で渡し、C はその中身を書いてよい。`MutUnboxedArray` は `Lin` なので、引数を消費し、結果と組にして返す (`with_args` の形)。eml の型は `… -> MutUnboxedArray Float -> … -> (R, MutUnboxedArray Float)` と書く
 - ハンドル: `void*` で渡す
 - 結果: スカラー、`Unit`、ハンドルのどれかである。書ける配列は上の組で返る。C は `Bytes` を返したり埋めたりしない。C が作ったバイト列は、C を呼んで結果から `alloc_bytes` する Rust の extern の行で入れる。C に一意な `Bytes` の空きを埋めさせる形は、`read_into` と同じ下地で後に足す ([ロードマップ](roadmap.md) の「処理系」)
 - 書ける配列のほかの出力の引数 (LAPACK の `int* info` など) は扱わない
@@ -76,7 +76,7 @@ matmul n a b =
 - C の呼び出しは `pure` でなければ `<IO>` を持つ。新しいエフェクトは作らない
 - `pure` の行は `Pure` で、使わなければ消せる。`par` の子からも呼べる。BLAS の計算はこの形で宣言する
 - 利用者の C の行は純粋さの分類では `Effectful` だが、失敗を返さない。表の行は失敗を返しうるかを表す `faults: bool` を持ち、利用者の C の行では false である。`points` はこの行を巻き戻しの地点に数えないので、呼び出しの位置には失敗の確かめも後始末のブロックもない ([ネイティブ化の設計](native.md) の「extern のエントリ」)
-- 別名は問題にならない。`UnboxedArray` は `Unr` で書き換えず、`MutUnboxedArray` は `Lin` で `with_arg` の形で渡すためである。`removable()` は `Lin` の引数を消費する行を除くので、`MutUnboxedArray` を書く `pure` の行は消されない
+- 別名は問題にならない。`UnboxedArray` は `Unr` で書き換えず、`MutUnboxedArray` は `Lin` で `with_args` の形で渡すためである。`removable()` は `Lin` の引数を消費する行を除くので、`MutUnboxedArray` を書く `pure` の行は消されない
 
 ## 長く走る呼び出し
 

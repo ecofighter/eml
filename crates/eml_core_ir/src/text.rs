@@ -28,6 +28,8 @@ pub fn parse(text: &str) -> Result<Program, ParseError> {
         structs: tables.structs,
         effects: tables.effects,
         files: tables.files,
+        c_functions: tables.c_functions,
+        c_handles: tables.c_handles,
     })
 }
 

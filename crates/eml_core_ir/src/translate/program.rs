@@ -51,7 +51,7 @@ impl FnBuilder {
     /// (docs/spec/core-ir.md の「変換の規則」)。
     pub(super) fn concat(&mut self, left: Atom, right: Atom) -> Atom {
         self.bind_string(Rhs::Extern {
-            ext: Extern::StrConcat,
+            ext: Extern::StrConcat.into(),
             args: vec![left, right],
             at: None,
         })
@@ -468,7 +468,7 @@ impl ProgramBuilder {
         function
     }
 
-    /// extern の行 `ext` を呼び、型 `ty` の値を返す文を足す。`with_arg` の行は、行の結果と引数を `con` で組にする。
+    /// extern の行 `ext` を呼び、型 `ty` の値を返す文を足す。`with_args` の行は、行の結果と引数を `con` で組にする。
     /// extern は借りた配列を消費しないので、組がその配列を受け取る (docs/spec/core-ir.md の「組を返す extern」)。
     /// `Std.Par.par` は extern の命令でなく `par` の呼び出しにし、`mask` はそれに付ける。ほかの行の `mask` は空である
     /// (docs/spec/core-ir.md の「`par` の呼び出し」)。
@@ -502,19 +502,21 @@ impl ProgramBuilder {
             return Atom::Var(builder.bind(info, Rhs::Call { call, mask }));
         }
         debug_assert!(mask.is_empty(), "only par has a mask among the externs");
-        if ext.row().with_arg.is_none() {
+        if ext.row().with_args.is_empty() {
             let info = self.var_info("t", hir, types, ty);
+            let ext = ext.into();
             return Atom::Var(builder.bind(info, Rhs::Extern { ext, args, at }));
         }
         let TypeKind::Tuple(elements) = types.kind(ty) else {
-            unreachable!("an extern with `with_arg` returns a pair")
+            unreachable!("an extern with `with_args` returns a pair")
         };
         let value = self.var_info("t", hir, types, elements[0]);
         let pair = self.var_info("d", hir, types, ty);
         self.lending_call(builder, ext, args, at, value, pair)
     }
 
-    /// `with_arg` の行 `ext` を呼び、行の結果 (変数 `value`) と借りた引数の組 (変数 `pair`) を返す。
+    /// `with_args` の行 `ext` を呼び、行の結果 (変数 `value`) と借りた引数の組 (変数 `pair`) を返す。std の行の
+    /// `with_args` は1つの位置である。
     pub(super) fn lending_call(
         &mut self,
         builder: &mut FnBuilder,
@@ -524,8 +526,11 @@ impl ProgramBuilder {
         value: VarInfo,
         pair: VarInfo,
     ) -> Atom {
-        let k = ext.row().with_arg.expect("a lending row returns a pair");
+        let &[k] = ext.row().with_args else {
+            unreachable!("a lending std row returns a pair")
+        };
         let lent = args[k];
+        let ext = ext.into();
         let value = Atom::Var(builder.bind(value, Rhs::Extern { ext, args, at }));
         let ctor = Ctor {
             layout: self.tuple_layout(2),
@@ -647,7 +652,7 @@ impl ProgramBuilder {
     fn show(&mut self, builder: &mut FnBuilder, show: ShowTarget, value: Atom) -> Atom {
         let rhs = match show {
             ShowTarget::Extern(row) => Rhs::Extern {
-                ext: row,
+                ext: row.into(),
                 args: vec![value],
                 at: None,
             },

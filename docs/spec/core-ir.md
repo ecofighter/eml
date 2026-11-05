@@ -30,7 +30,7 @@
 - `perform`、`handle`、`resume`、呼び出しの `mask` は translate だけが出し、evidence passing (EP) が基本操作と節の呼び出しに置き換える (下の「evidence passing」)。`clause` と、REPL の根の2つ (`root_get`、`root_set`) と `var` の節の空の配列 (`empty_mut_array`) を除く `prim` は EP だけが出す
 - LIR との違いは、RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持たないことと、エフェクトの命令と `mask` を持つことである。RC の命令などは LIR のパスだけが入れる
 - `par` (`Call::Par`) は LIR と同じ命令で、テキストの形も同じである ([LIR](lir.md) の「LIR の命令」)。`call`、`apply`、`resume` と同じく `mask` を持てる (`mask [State] par (,) #0(f.1, g.2)`)。EP は `mask` のある `par` をほかの呼び出しと同じく包み、`mask` のない `par` はそのまま残す。子が起こせるのは `never` の操作だけで、親はそれを継続を作らずに起こし直すので、`par` は yield の地点にならない。最適化も、`par` を handler に触れない文として扱う (下の「handler への特殊化」)。その場で動く節の本体に `par` があれば、ほかの呼び出しと同じく under の形にする (下の「`perform` と節の3つの形」)
-- 関数は、名前、内部の関数かどうかの印 (`internal`。[LIR](lir.md) の「関数の ABI」)、一様な位置の始まり (`split`。[LIR](lir.md) の「関数の ABI」)、yield しうるかの印 (`yields`。下の「`yields` の印」)、エントリの関数の印 (`clause`。[LIR](lir.md) の「エントリの関数の印」)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。プログラムは、関数、エントリ、文字列の表、配置の表、構造体の形の表、エフェクトの表、ファイルの表を持つ。どちらも LIR と同じ欄で、LIR への変換がそのまま写す (下の「Core IR から LIR への変換」)
+- 関数は、名前、内部の関数かどうかの印 (`internal`。[LIR](lir.md) の「関数の ABI」)、一様な位置の始まり (`split`。[LIR](lir.md) の「関数の ABI」)、yield しうるかの印 (`yields`。下の「`yields` の印」)、エントリの関数の印 (`clause`。[LIR](lir.md) の「エントリの関数の印」)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。プログラムは、関数、エントリ、文字列の表、配置の表、構造体の形の表、エフェクトの表、ファイルの表、C の関数の表、C のハンドルの型の表を持つ。extern の行は、`extern` 命令が持つ `ExternRef` と、プログラムの C の関数の表から引く (`Program::row`)。どちらも LIR と同じ欄で、LIR への変換がそのまま写す (下の「Core IR から LIR への変換」)
 - ブロックの列の意味 (アトム、`con`、`jump`、`switch`、`unpack`、フィールドの束縛、消費と読む) は、LIR と同じである ([LIR](lir.md) の「ブロックの列」)。RC の命令、`box`、`unbox`、`tail` の項目は Core IR に当たらない。エフェクトの命令の引数は、ほかの呼び出しの引数と同じく消費である
 - Core IR は、[LIR](lir.md) の「構造の規則」のうち印のない部分に従う。R1〜R5、R6 の支配の半分、R7 と R8 のうち境界の検査でない部分である。下の「verifier」の引き継ぐ検査も受ける。境界の検査に従わないのは、translate と EP の出力が、box の挿入より前には境界に合わないためである
 - 値の表現、データの配置、構造体の形、位置の規則、関数の ABI、末尾の位置の呼び出しの定義は、LIR と同じである ([LIR](lir.md))。この文書は、translate がそれをどう決めるかを書く (下の「型の Repr」、「構造体にする型」、「translate の配置」)
@@ -73,9 +73,9 @@
 
 - 構造体の型の `con` は `struct(S)` の変数を束縛する。引数は形のフィールドの Repr と比べる正確な位置で、配置の宣言した Repr とは比べない
 - 構造体の値を分けるのは、いつも `unpack` である。束縛するフィールドの Repr と印は、形のものになる。構造体の変数はタグの `switch` の scrutinee にならない
-- `with_arg` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`、`Std.MutUnboxedArray.length` と2つの `read`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
+- `with_args` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`、`Std.MutUnboxedArray.length` と2つの `read`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
 - エントリの関数 `entry$<名前>` の `ret` は値1つにする。エントリの値の型が構造体なら `ret` を `obj` にし、box の挿入が箱に入れる。VM の `Finish` は値を1つだけ受けるためである ([VM](vm.md) の「誤り、止めること、終わり」)
-- 型から決める構造体 (`StructTypes`) と、型を持たない組 (`with_arg` の組と、`optimize` の状態を渡す形の複製が返す組) は、同じ語の数と `unit` の条件 (`MAX_STRUCT_WORDS`) で決める。型を持たない組の形は `tuple_struct` が作る
+- 型から決める構造体 (`StructTypes`) と、型を持たない組 (`with_args` の組と、`optimize` の状態を渡す形の複製が返す組) は、同じ語の数と `unit` の条件 (`MAX_STRUCT_WORDS`) で決める。型を持たない組の形は `tuple_struct` が作る
 
 ### Kind の印
 
@@ -239,7 +239,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Tls.error_message`、`take_line` | `Lin` | `Unr` (`String`) |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
-  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.MutUnboxedArray.length` と2つの `read`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
+  `with_args` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.MutUnboxedArray.length` と2つの `read`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
 - 基本操作の表の印の列は [LIR](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
 - 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
@@ -249,20 +249,20 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 - translate の型の Repr と配置の Repr は、同じ関数 (`data_repr`) で決める。構造体にする型も配置を持ち、配置の Repr は `obj` である。構造体の箱は、この配置の `con` と同じ形の物体である ([LIR](lir.md) の「構造体の形」)
 - 配置を持つのは、translate が出す IR が指すデータ型 (Prelude の `Bool` を含む) と、組の大きさごとの配置である。extern の型と `Unit` は持たない。名前は関数と同じく、エントリ以外のモジュールの型を修飾する (`Prelude.Bool`)。組の配置は宣言がないので大きさだけで決まり、名前は `(,)`、`(,,)` のように、大きさより1少ないカンマを括弧で囲む。組のコンストラクタは1つで、名前は配置と同じで、フィールドはどれも `tobj` である
 - translate は、命令を出すそれぞれの所で、コンストラクタか型から配置を決める。値の型からは決めない。配置は最初に使った順に表に入れる。translate の後のパス (EP と LIR のパス) は表を変えないので、使われなくなった配置が残ることがある。番号は1回の変換の中だけで意味を持つ。VM は実行時に配置の番号を使わないので、REPL の追記も配置の番号を引き直さない ([VM](vm.md) の「追記」)
-- extern が作るデータは、比べる extern と `Std.Env.has`、`Prelude.shows_minus`、`Std.Float.can_parse` の `Bool`、`compare` の extern の `Ordering` である。`Bool` は機械の定数 `FALSE` と `TRUE` で、`Ordering` は `LT`、`EQ`、`GT` で作る。そのタグが `Prelude.Bool` と `Prelude.Ordering` の宣言の順と合うことを、テストが確かめる。そのため、extern の行は配置を持たない。組は extern が作らず、`with_arg` の行の組は translate が作る (下の「組を返す extern」)。名前的なデータ (`List`、`Option`、`Result`) は extern が作らず、標準ライブラリの eml が包む ([標準ライブラリ](stdlib.md) の「extern の境界」)
+- extern が作るデータは、比べる extern と `Std.Env.has`、`Prelude.shows_minus`、`Std.Float.can_parse` の `Bool`、`compare` の extern の `Ordering` である。`Bool` は機械の定数 `FALSE` と `TRUE` で、`Ordering` は `LT`、`EQ`、`GT` で作る。そのタグが `Prelude.Bool` と `Prelude.Ordering` の宣言の順と合うことを、テストが確かめる。そのため、extern の行は配置を持たない。組は extern が作らず、`with_args` の行の組は translate が作る (下の「組を返す extern」)。名前的なデータ (`List`、`Option`、`Result`) は extern が作らず、標準ライブラリの eml が包む ([標準ライブラリ](stdlib.md) の「extern の境界」)
 - 名前付きのレコードは、ほかの `data` と同じく、型ごとの配置に入る。名前付きのフィールドを持つコンストラクタも、フィールドの名前は持たず、宣言の順のフィールドの Repr の列を持つ
 
 ### 組を返す extern
 
-- `Std.MutArray.length` と `read` は、宣言の型では結果と配列の組を返す (`MutArray a -> Int -> <Panic> (a, MutArray a)`)。extern は借りない引数を消費するので、組を作る extern にすると、読むたびに組を確保する。そこで行は配列を借り (`FunctionRow::borrowed`)、要素だけを返し、`with_arg: Some(0)` を持つ ([LIR](lir.md) の「extern の借用」)
-- `Std.FileIn`、`Std.Stdin`、`Std.Proc` の読み (`read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) も同じ形である。宣言の型は読んだ結果とハンドル (`FileIn`、`Stdin`、`Child`) の組を返し (`FileIn -> <IO> (String, FileIn)`)、行はハンドルを借りて結果だけを返す。`with_arg` はハンドルの位置で、`read_chunk : Bytes -> FileIn -> <IO> (Bytes, FileIn)` (`Stdin` と `Child` も同じ形) だけは `Some(1)`、ほかは `Some(0)` である
-- `Std.Async.task_cell : Task a -> (Cell, Task a)` も同じ形で、ハンドルを借りてセル (`int`) だけを返し、`with_arg: Some(0)` を持つ。ハンドルは `Lin` なので行の引数の印は `lin` で、この引数は借りたうえで預かる引数でもある ([宣言](declarations.md) の「`extern`」)
-- `Std.Async.job_cell : Job a -> (Cell, Job a)` も同じ形で、token を借りてセル (`int`) だけを返し、`with_arg: Some(0)` を持ち、引数を預からない。`Job a` は即値なので RC を持たない ([標準ライブラリ](stdlib.md) の「`Std.Async`」)
-- `Std.Async.op_ready : OpId -> Int -> <IO> (Int, OpId)` も token を借りて結果の番号 (`int`) だけを返し、`with_arg: Some(0)` を持ち、引数を預からない ([標準ライブラリ](stdlib.md) の「`Std.Async`」)
-- `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done` も token を借りてリスナー、ストリーム、結果の番号 (`int`)、終わったか (`Bool`) だけを返し、`local_port : TcpListener -> (Int, TcpListener)` と `peer_addr : TcpStream -> (String, TcpStream)` はハンドルを借りてポートと番地だけを返す。どれも `with_arg: Some(0)` を持ち、引数を預からない。`local_port` と `peer_addr` の行は `Std.MutArray.length` と同じく `Pure` である ([標準ライブラリ](stdlib.md) の「`Std.Net`」)
-- `Std.Tls` の `pull_tls`、`status`、`error_message`、`line_ready`、`take_line` は `Conn` を借りて結果 (`Bytes`、`int`、`String`) だけを返し、`with_arg: Some(0)` を持つ。`read_plain : Bytes -> Conn -> <IO> (Bytes, Conn)` は `Std.FileIn.read_chunk` と同じ形で、`Some(1)` を持つ。どれも引数を預からない ([標準ライブラリ](stdlib.md) の「`Std.Tls`」)。`push_tls` と `write_plain` は、下の書き込みと同じ形である
-- `Std.FileOut`、`Std.Stdout`、`Std.Stderr` の書き込み (`write`、`write_bytes`、`write_line`) は、書くデータを借り、ハンドルを消費して同じハンドルを返す。結果がハンドルそのものなので、組を返さず、`with_arg` を持たない
-- translate は、`with_arg: Some(k)` の行の引数のそろった呼び出しを、行の結果を束縛する `extern` 命令と、その結果と引数 k を組にする `con` にする。`let t.1: int = extern Std.MutArray.read(m.0, 0)` と `let d.2: (,){int, obj lin} lin = con (,) #0(t.1, m.0)` の形である。組が構造体にならない型なら、`d.2` は `obj` である。extern は m.0 を借りるだけなので、m.0 を消費するのは `con` だけである。`$externN` も同じ形の本体を持つ。どちらも同じ関数 (`ProgramBuilder::extern_call`) が作る
+- `Std.MutArray.length` と `read` は、宣言の型では結果と配列の組を返す (`MutArray a -> Int -> <Panic> (a, MutArray a)`)。extern は借りない引数を消費するので、組を作る extern にすると、読むたびに組を確保する。そこで行は配列を借り (`FunctionRow::borrowed`)、要素だけを返し、`with_args: [0]` を持つ ([LIR](lir.md) の「extern の借用」)
+- `Std.FileIn`、`Std.Stdin`、`Std.Proc` の読み (`read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) も同じ形である。宣言の型は読んだ結果とハンドル (`FileIn`、`Stdin`、`Child`) の組を返し (`FileIn -> <IO> (String, FileIn)`)、行はハンドルを借りて結果だけを返す。`with_args` はハンドルの位置で、`read_chunk : Bytes -> FileIn -> <IO> (Bytes, FileIn)` (`Stdin` と `Child` も同じ形) だけは `[1]`、ほかは `[0]` である
+- `Std.Async.task_cell : Task a -> (Cell, Task a)` も同じ形で、ハンドルを借りてセル (`int`) だけを返し、`with_args: [0]` を持つ。ハンドルは `Lin` なので行の引数の印は `lin` で、この引数は借りたうえで預かる引数でもある ([宣言](declarations.md) の「`extern`」)
+- `Std.Async.job_cell : Job a -> (Cell, Job a)` も同じ形で、token を借りてセル (`int`) だけを返し、`with_args: [0]` を持ち、引数を預からない。`Job a` は即値なので RC を持たない ([標準ライブラリ](stdlib.md) の「`Std.Async`」)
+- `Std.Async.op_ready : OpId -> Int -> <IO> (Int, OpId)` も token を借りて結果の番号 (`int`) だけを返し、`with_args: [0]` を持ち、引数を預からない ([標準ライブラリ](stdlib.md) の「`Std.Async`」)
+- `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done` も token を借りてリスナー、ストリーム、結果の番号 (`int`)、終わったか (`Bool`) だけを返し、`local_port : TcpListener -> (Int, TcpListener)` と `peer_addr : TcpStream -> (String, TcpStream)` はハンドルを借りてポートと番地だけを返す。どれも `with_args: [0]` を持ち、引数を預からない。`local_port` と `peer_addr` の行は `Std.MutArray.length` と同じく `Pure` である ([標準ライブラリ](stdlib.md) の「`Std.Net`」)
+- `Std.Tls` の `pull_tls`、`status`、`error_message`、`line_ready`、`take_line` は `Conn` を借りて結果 (`Bytes`、`int`、`String`) だけを返し、`with_args: [0]` を持つ。`read_plain : Bytes -> Conn -> <IO> (Bytes, Conn)` は `Std.FileIn.read_chunk` と同じ形で、`with_args: [1]` を持つ。どれも引数を預からない ([標準ライブラリ](stdlib.md) の「`Std.Tls`」)。`push_tls` と `write_plain` は、下の書き込みと同じ形である
+- `Std.FileOut`、`Std.Stdout`、`Std.Stderr` の書き込み (`write`、`write_bytes`、`write_line`) は、書くデータを借り、ハンドルを消費して同じハンドルを返す。結果がハンドルそのものなので、組を返さず、`with_args` を持たない
+- translate は、`with_args` が `[k]` の行の引数のそろった呼び出しを、行の結果を束縛する `extern` 命令と、その結果と引数 k を組にする `con` にする。`let t.1: int = extern Std.MutArray.read(m.0, 0)` と `let d.2: (,){int, obj lin} lin = con (,) #0(t.1, m.0)` の形である。組が構造体にならない型なら、`d.2` は `obj` である。extern は m.0 を借りるだけなので、m.0 を消費するのは `con` だけである。`$externN` も同じ形の本体を持つ。どちらも同じ関数 (`ProgramBuilder::extern_call`) が作る
 - 組を受けてすぐ開く所 (`let (v, m) = MutArray.read m i`) では、最適化の既知のコンストラクタ (下の「既知のコンストラクタ」) で組が消え、確保が残らない。組が構造体なら、既知のコンストラクタに頼らなくても確保がない
 
 ### 変換の規則
@@ -884,7 +884,7 @@ fork しうるプログラムには、EP は最後に `fork$E.op` と `reperform
   - 再開する操作 (`once` と `multi`) の `Call::Clause`
   - `mask` 付きの呼び出し (下の「`mask` の包み」)。ただし `mask` 付きの `par` は除く
 - `par` は、`mask` があってもなくても yield の地点にしない。子が起こせるのは `never` の操作だけで、親はそれを継続を作らずに起こし直すので、子は親へ yield しないためである (上の「Core IR の命令」)
-- `never` の操作の `Call::Clause` と `Pure` でない extern (`Panics` と `Effectful`) は、yield の地点にしない。どちらも中断を始めることがあるが、中断は継続を作らずに巻き戻しで進み、呼び出しの後には戻らないためである (下の「`never` の中断」と「IO の extern」)
+- `never` の操作の `Call::Clause` と extern は、yield の地点にしない。`never` の操作と `faults` の extern (失敗して中断を始めうる extern で、std の行では `Pure` でない `Panics` と `Effectful` の extern と同じ。[LIR](lir.md) の「巻き戻しの地点」) は中断を始めることがあるが、中断は継続を作らずに巻き戻しで進み、呼び出しの後には戻らない。`faults` でない extern は中断を始めない (下の「`never` の中断」と「IO の extern」)
 - 末尾の位置の呼び出し ([LIR](lir.md) の「末尾の位置の呼び出し」の、形だけで決まる定義) は、yield の地点にしない。呼ばれた側の yield は、そのまま呼び出し元へ返るためである。EP はこの定義を Core IR の上の写しで判定する。末尾の位置の `never` の操作の `clause` は、縮約が `tail clause` にする
 - yield の地点 `let x = <呼び出し>` の直後でブロックを切り、次の形にする
 
@@ -1017,7 +1017,7 @@ in-place のエントリは、translate が作った節の関数 g から、EP �
 
   エントリの関数 `g$entry` (`clause` の印) は g の写しである。引数は、捕獲、evidence `ev`、操作の引数の順にし、g の `k` と状態の引数を除く。状態はエントリの先頭の `ev_take_state(ev)` で得る。末尾の `let r = resume k(v, s)` と `return r` を、`ev_set_state(ev, s)` と `return v` に替える。`yields` の印は g の印を写す。g は使われなくなるので消す
 
-  g の本体が、最後の末尾の `resume` のほかに呼び出し (`Rhs::Call`。直接の呼び出し、`apply`、`perform`、`handle`) か `Pure` でない extern (`Panics` と `Effectful`) を1つでも持てば、エントリを under の形にする。エントリの先頭 (状態を取り出す前) で `evv` を evidence の外側の `evv` に替え、各 `return v` の前 (`ev_set_state(ev, s)` の後) で元に戻す。
+  g の本体が、最後の末尾の `resume` のほかに呼び出し (`Rhs::Call`。直接の呼び出し、`apply`、`perform`、`handle`) か `faults` の extern (std の行では `Pure` でない extern) を1つでも持てば、エントリを under の形にする。エントリの先頭 (状態を取り出す前) で `evv` を evidence の外側の `evv` に替え、各 `return v` の前 (`ev_set_state(ev, s)` の後) で元に戻す。
 
   ```
     let w = prim evv_get()
@@ -1042,14 +1042,14 @@ in-place のエントリは、translate が作った節の関数 g から、EP �
 
 - 中断は κ を組み立てない。`yield_abort` が yield の状態に宛先の evidence と節の本体を入れると、VM がタスクのスタックを、着地の印の evidence が宛先と同じ `apply` まで巻き戻す ([VM](vm.md) の「巻き戻し」)。外すフレームが持つ値は、巻き戻しの表で手放す。`FileIn` はこの解放で閉じる
 - 途中のフレームは、生きている `Lin` の値に `decref` も `drop` も置かない。生きている値は、巻き戻しの表に載るためである
-- 中断を始めうる命令 (`never` の操作の `clause` と `Pure` でない extern) は yield の地点にせず、その後に yield の確かめと遅い道を置かない (上の「yield の地点」)。`IO` と、すべての操作が `never` のエフェクトは、yield しうるラベルでもない ([型と Kind](types.md) の「row の具体化の記録」)。そのため、それらだけを row に持つ関数は `yields` でなく、その中で中断が起きてよい。巻き戻しは `yields` の印によらず、表で途中のフレームを片付ける
+- 中断を始めうる命令 (`never` の操作の `clause` と `faults` の extern) は yield の地点にせず、その後に yield の確かめと遅い道を置かない (上の「yield の地点」)。`IO` と、すべての操作が `never` のエフェクトは、yield しうるラベルでもない ([型と Kind](types.md) の「row の具体化の記録」)。そのため、それらだけを row に持つ関数は `yields` でなく、その中で中断が起きてよい。巻き戻しは `yields` の印によらず、表で途中のフレームを片付ける
 - `prompt$` の中断の経路は、`return` の節のクロージャ `ret` を `drop` する。捕まえていた `FileIn` はこの解放で閉じる (上の「EP の明示の `drop`」)
 
 #### IO の extern
 
 - `IO` を起こす extern (表の行の `purity` が `Effectful`) と `Panic` を起こす extern (`Panics`) の呼び出しは、yield の地点でない。直後に yield の確認も遅い道も置かない。`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節のエントリを呼んで中断を始める。`Panic` を起こす誤りで失敗したときと `panic` は、`panicked` の節のエントリを呼んで中断を始める。`exit` はいつも中断を始める ([VM](vm.md) の「extern の中断」)。どの中断も巻き戻しで進み、extern の後には戻らない (上の「`never` の中断」)
 - `IO` は yield しうるラベルでないので、`IO` だけを row に持つ関数は `yields` でない ([型と Kind](types.md) の「row の具体化の記録」)。`yields` でない関数も `IO` と `Panic` の extern を呼んでよい
-- すぐに再開する節の条件 (「`perform` と節の3つの形」) では、`Pure` でない extern の呼び出しを yield の地点に数えない。そうした extern を呼ぶ節のエントリは under の形にするので、節の本体は handle の外側の `evv` で動き、節の IO の失敗と `Panic` は handle の本体の中の `try_io` と `try_panic` でなく、handle の外の `try_io` と `try_panic` に届く
+- すぐに再開する節の条件 (「`perform` と節の3つの形」) では、`faults` の extern (std の行では `Pure` でない extern) の呼び出しを yield の地点に数えない。そうした extern を呼ぶ節のエントリは under の形にするので、節の本体は handle の外側の `evv` で動き、節の IO の失敗と `Panic` は handle の本体の中の `try_io` と `try_panic` でなく、handle の外の `try_io` と `try_panic` に届く
 - extern の関数を包む関数 (`$externN`) は、行が `Effectful` でも `yields` でない。extern を呼んで返すだけだからである
 - `IO` と `Panic` は、Prelude の最初の2つのエフェクトとして、いつもエフェクトの表にある。番号は 0 と 1 である。`try_io` の handle、`io_failed` の節、`prompt$` は、普通の `never` の操作の handle と同じ形に変換する
 
@@ -1098,7 +1098,7 @@ b_fast:
 
 ## Core IR から LIR への変換
 
-- `to_lir(eml_core_ir::Program) -> eml_lir::Program` は、関数、ブロック、変数の表、配置の表、文字列の表、エフェクトの表、ファイルの表を、番号と名前を変えずに写す。エントリも同じ関数を指す。関数の印 (`internal`、`yields`、`clause`)、`split`、構造体の形の表と `extern` 命令の位置も写す。Core IR の `ret` と `ret_mark` は、LIR の値1つの `rets` になる
+- `to_lir(eml_core_ir::Program) -> eml_lir::Program` は、関数、ブロック、変数の表、配置の表、文字列の表、エフェクトの表、ファイルの表、C の関数とハンドルの型の表を、番号と名前を変えずに写す。エントリも同じ関数を指す。関数の印 (`internal`、`yields`、`clause`)、`split`、構造体の形の表と `extern` 命令の位置も写す。Core IR の `ret` と `ret_mark` は、LIR の値1つの `rets` になる
 - 写すだけで、命令を足しも消しもしない。`handle`、`perform`、`resume` か空でない `mask` が残っていれば、内部の誤りとしてパニックする。EP の段の verifier が先に拒む形なので、捨てて先へ進むことはしない
 - 配置の表は、変換で LIR に移る。変換の直後の LIR は、RC の命令、`box`、`unbox`、`tail` を持たない。LIR のパスがそれを入れる ([LIR](lir.md) の「パスの順番」)
 - 変数の名前と番号が変わらないので、EP の後の Core IR の表示と、それを写した LIR の表示は同じ文字列になる。2つのテキスト形式は、共通の命令を同じに書く ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」)。`crates/eml_core_ir/tests/lowering.rs` が、UI テストのすべてのプログラムでこれを確かめる

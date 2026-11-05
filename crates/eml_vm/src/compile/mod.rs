@@ -8,7 +8,7 @@ mod slots;
 
 use std::sync::Arc;
 
-use eml_extern::RuntimeEntry;
+use eml_extern::{Extern, RuntimeEntry};
 use eml_lir::unwind::Unwinds;
 use eml_lir::{FnIdx, Program, Rhs, Stmt};
 use eml_rt::{Control, Mode};
@@ -205,7 +205,7 @@ fn async_entries(program: &Program, index: &Index) -> Result<Option<AsyncEntries
                 Stmt::Let {
                     rhs: Rhs::Extern { ext, .. },
                     ..
-                } if ext.is_async()
+                } if ext.std().is_some_and(Extern::is_async)
             )
         });
     match RuntimeEntry::ALL

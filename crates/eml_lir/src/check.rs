@@ -5,7 +5,7 @@
 
 use std::mem::discriminant;
 
-use eml_extern::{Extern, FunctionRow};
+use eml_extern::{CFunction, Extern, ExternRef, FunctionRow};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::syntax::{REPRS, effect_text, layout_text, operation_text, prim_text, repr_text};
@@ -349,6 +349,7 @@ pub struct Tables<'a> {
     pub structs: &'a Structs,
     pub effects: &'a [EffectInfo],
     pub strings: &'a [String],
+    pub c_functions: &'a [CFunction],
     /// プログラムの関数と同じ順の、関数の要約。
     pub functions: &'a [FnSummary<'a>],
 }
@@ -360,6 +361,7 @@ pub fn with_tables<'p, R>(
     structs: &'p Structs,
     effects: &'p [EffectInfo],
     strings: &'p [String],
+    c_functions: &'p [CFunction],
     functions: impl Iterator<Item = FnSummary<'p>>,
     f: impl FnOnce(Tables<'_>) -> R,
 ) -> R {
@@ -371,6 +373,7 @@ pub fn with_tables<'p, R>(
         structs,
         effects,
         strings,
+        c_functions,
         functions: &functions,
     })
 }
@@ -1058,10 +1061,10 @@ impl<'a> Context<'a> {
     /// extern の引数の数は表の行と同じである。範囲の段と所有の段では、引数と結果の Repr と印を、直接の呼び出しと
     /// 同じく互換の位置として行と比べる (R7)。型変数の位置の `tobj` の引数と結果は、box の挿入より前は具体化した型の
     /// Repr のままである (docs/spec/lir.md の「extern の行」)。
-    pub fn check_extern(&self, var: VarId, ext: Extern, args: &[Atom]) -> Result<(), String> {
-        let row = ext.row();
+    pub fn check_extern(&self, var: VarId, ext: ExternRef, args: &[Atom]) -> Result<(), String> {
+        let row = ext.row(self.tables.c_functions);
         // `par` の行は std の宣言を型検査に結ぶだけで、呼び出しは `par` の命令になる (docs/spec/lir.md の「verifier」)
-        if ext == Extern::Par {
+        if ext.std() == Some(Extern::Par) {
             return Err(format!("`{}` is not an extern instruction", row.name));
         }
         if args.len() != row.params.len() {
@@ -1073,7 +1076,7 @@ impl<'a> Context<'a> {
             ));
         }
         if !self.boundaries {
-            return self.check_extern_exact(var, row, args);
+            return self.check_extern_exact(var, &row, args);
         }
         for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
             if !self.passes(arg, expected) {

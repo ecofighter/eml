@@ -291,13 +291,8 @@ fn interpolation_keeps_only_the_accumulator_live_across_holes() {
             match stmt {
                 Stmt::Let {
                     var: _,
-                    rhs:
-                        Rhs::Extern {
-                            ext: Extern::StrConcat,
-                            args,
-                            at: _,
-                        },
-                } => {
+                    rhs: Rhs::Extern { ext, args, at: _ },
+                } if ext.std() == Some(Extern::StrConcat) => {
                     accumulator = match args[0] {
                         Atom::Var(left) => Some(left),
                         _ => None,

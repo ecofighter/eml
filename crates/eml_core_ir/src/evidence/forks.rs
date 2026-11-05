@@ -35,19 +35,18 @@ fn may_fork(program: &Program) -> bool {
         .flat_map(|function| &function.blocks)
         .flat_map(|block| &block.stmts)
         .any(|stmt| {
-            matches!(
-                stmt,
-                Stmt::Let {
-                    rhs: Rhs::Call {
-                        call: Call::Par { .. },
-                        ..
-                    } | Rhs::Extern {
-                        ext: Extern::AsyncForkJob,
-                        ..
-                    } | Rhs::Prim(Prim::RootGet(_), _),
+            let Stmt::Let { var: _, rhs } = stmt else {
+                return false;
+            };
+            match rhs {
+                Rhs::Call {
+                    call: Call::Par { .. },
                     ..
                 }
-            )
+                | Rhs::Prim(Prim::RootGet(_), _) => true,
+                Rhs::Extern { ext, .. } => ext.std() == Some(Extern::AsyncForkJob),
+                _ => false,
+            }
         })
 }
 
@@ -104,7 +103,7 @@ fn reperform_fn(program: &Program, effect: u32, op: u32) -> crate::CoreFn {
         // extern のエフェクトの evidence は `try_panic` だけが置き、ないときは VM が実行時エラーにする。`panic` は
         // その探し方を持つので、`Panic` は `panic` で起こし直す。位置は子の中にあり、親の側にはない
         Some(ExternEffect::Panic) => Rhs::Extern {
-            ext: Extern::Panic,
+            ext: Extern::Panic.into(),
             args,
             at: None,
         },

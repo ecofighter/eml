@@ -249,7 +249,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 巻き戻しの表
 
-- 巻き戻しの地点は、末尾でない `call`、末尾でない `apply` と `clause`、`par`、`Pure` でない extern の命令 (`exit`、`panic`、`Int` の算術と配列の専用の命令を含む)、`prim yield_abort` と `prim child_abort` である ([LIR](lir.md) の「巻き戻しの地点」)。呼ばれる側が中断するかは問わない。中断はこのどれかの命令の中か、その呼ばれる側で始まるので、中断が通るフレームはいつも地点の命令の直後で止まっている
+- 巻き戻しの地点は、末尾でない `call`、末尾でない `apply` と `clause`、`par`、`faults` の extern の命令 (`exit`、`panic`、`Int` の算術と配列の専用の命令を含む。std の行では `Pure` でない extern の命令と同じである)、`prim yield_abort` と `prim child_abort` である ([LIR](lir.md) の「巻き戻しの地点」)。呼ばれる側が中断するかは問わない。中断はこのどれかの命令の中か、その呼ばれる側で始まるので、中断が通るフレームはいつも地点の命令の直後で止まっている
 - 地点ごとの所有は、`eml_lir::unwind::points(program, wanted) -> Vec<Option<Result<Unwinds, VerifyError>>>` が、`wanted` の関数ごとに求める。コード生成は、追記で新しく変換する関数だけを求め、debug ビルドの一致の確かめ (「追記」) ではすでにある関数も求める。各関数の `Unwinds { entry, points }` の `points` は、`UnwindPoint { block, stmt, owned, tokens, landing }` をブロックの順、文の順に並べる。`entry` は関数のエントリの所有 ([LIR](lir.md) の「巻き戻しの地点」)
   - `owned` は、地点の命令の直後に所有している RC の対象の変数と、その所有の数 (1 以上) の列で、変数の番号の昇順に並ぶ。命令が束縛する変数 (呼び出しの結果、複数の値の結果、extern の行き先) は含めない。命令が戻らなければ、その変数はまだないためである
   - `tokens` は、地点の命令の直後に生きている token の変数の列で、変数の番号の昇順に並ぶ。token は RC の対象でないので `owned` には入れない。token は yield しうる呼び出しの後で生きていないので、着地の印を持つ地点の `tokens` はいつも空である

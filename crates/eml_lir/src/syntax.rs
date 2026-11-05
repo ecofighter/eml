@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
-use eml_extern::Extern;
+use eml_extern::{CFunction, CHandleType, ExternRef};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -368,6 +368,8 @@ pub struct Tables {
     pub structs: Structs,
     pub effects: Vec<EffectInfo>,
     pub files: Vec<String>,
+    pub c_functions: Vec<CFunction>,
+    pub c_handles: Vec<CHandleType>,
 }
 
 /// テキストの読み込みの部品。宣言と関数の頭、ラベル、アトムなど、2つの IR に共通する形を読み、表を作る。
@@ -385,6 +387,8 @@ pub struct Reader<'t> {
     string_ids: FxHashMap<String, u32>,
     files: Vec<String>,
     file_ids: FxHashMap<String, u32>,
+    c_functions: Vec<CFunction>,
+    c_handles: Vec<CHandleType>,
 }
 
 impl<'t> Reader<'t> {
@@ -402,6 +406,8 @@ impl<'t> Reader<'t> {
             string_ids: FxHashMap::default(),
             files: Vec::new(),
             file_ids: FxHashMap::default(),
+            c_functions: Vec::new(),
+            c_handles: Vec::new(),
         }
     }
 
@@ -438,6 +444,8 @@ impl<'t> Reader<'t> {
             structs: self.structs,
             effects: self.effects,
             files: self.files,
+            c_functions: self.c_functions,
+            c_handles: self.c_handles,
         })
     }
 
@@ -755,10 +763,10 @@ impl<'t> Reader<'t> {
     pub fn extern_call(
         &mut self,
         state: &mut FnState,
-    ) -> Result<(Extern, Vec<Atom>, Option<Loc>), ParseError> {
+    ) -> Result<(ExternRef, Vec<Atom>, Option<Loc>), ParseError> {
         let line = self.line();
         let name = self.name()?;
-        let ext = Extern::from_name(&name)
+        let ext = ExternRef::from_name(&name, &self.c_functions)
             .ok_or_else(|| error(line, format!("unknown extern `{name}`")))?;
         let args = self.list('(', ')', |p| p.atom(state))?;
         let at = self.position()?;
@@ -1493,6 +1501,7 @@ pub struct Writer<'p> {
     effects: &'p [EffectInfo],
     strings: &'p [String],
     files: &'p [String],
+    c_functions: &'p [CFunction],
     /// 関数の番号の順の名前。呼び出しと関数の値の表示が引く。
     functions: Vec<&'p str>,
     positions: bool,
@@ -1500,12 +1509,14 @@ pub struct Writer<'p> {
 
 impl<'p> Writer<'p> {
     /// `positions` が真なら、extern の呼び出しに `@"path":line:column` を付ける。
+    #[expect(clippy::too_many_arguments, reason = "the tables of one program")]
     pub fn new(
         layouts: &'p [Layout],
         structs: &'p Structs,
         effects: &'p [EffectInfo],
         strings: &'p [String],
         files: &'p [String],
+        c_functions: &'p [CFunction],
         functions: Vec<&'p str>,
         positions: bool,
     ) -> Writer<'p> {
@@ -1515,6 +1526,7 @@ impl<'p> Writer<'p> {
             effects,
             strings,
             files,
+            c_functions,
             functions,
             positions,
         }
@@ -1702,13 +1714,13 @@ impl<'p> Writer<'p> {
     pub fn extern_call(
         &self,
         vars: &[VarInfo],
-        ext: Extern,
+        ext: ExternRef,
         args: &[Atom],
         at: Option<Loc>,
     ) -> String {
         format!(
             "extern {}({}){}",
-            function_name(ext.row().name),
+            function_name(ext.row(self.c_functions).name),
             self.atoms(vars, args),
             self.position(at)
         )

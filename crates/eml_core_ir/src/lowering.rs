@@ -12,6 +12,8 @@ pub fn to_lir(program: Program) -> eml_lir::Program {
         structs,
         effects,
         files,
+        c_functions,
+        c_handles,
     } = program;
     eml_lir::Program {
         functions: functions.into_iter().map(function).collect(),
@@ -21,6 +23,8 @@ pub fn to_lir(program: Program) -> eml_lir::Program {
         structs,
         effects,
         files,
+        c_functions,
+        c_handles,
     }
 }
 

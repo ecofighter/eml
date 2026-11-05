@@ -354,7 +354,7 @@ pub struct EffectRow {
 table! {
     /// extern の関数。表の行は宣言の順に並び、`Extern::ALL` の添字は `*self as usize` と同じである。VM のコード生成は
     /// これを行の番号に使う。
-    pub enum Extern: FunctionRow, use {Mark::{Lin, Poly, Unr}, Repr::{Enum, Float, Int, Obj, TObj, Unit}} {
+    pub enum Extern: FunctionRow<'static>, use {Mark::{Lin, Poly, Unr}, Repr::{Enum, Float, Int, Obj, TObj, Unit}} {
         Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
         Open => kinded(
             "Std.FileIn.open",
@@ -367,7 +367,7 @@ table! {
         ReadAll => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.FileIn.read_all",
                     &[Obj],
@@ -381,7 +381,7 @@ table! {
         ReadLine => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.FileIn.read_line_raw",
                     &[Obj],
@@ -395,7 +395,7 @@ table! {
         ReadChunk => borrowing(
             &[false, true],
             FunctionRow {
-                with_arg: Some(1),
+                with_args: &[1],
                 ..kinded(
                     "Std.FileIn.read_chunk",
                     &[Obj, Obj],
@@ -409,7 +409,7 @@ table! {
         ReadAllBytes => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.FileIn.read_all_bytes",
                     &[Obj],
@@ -423,7 +423,7 @@ table! {
         ReadLineBytes => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.FileIn.read_line_bytes_raw",
                     &[Obj],
@@ -688,7 +688,7 @@ table! {
         StdinReadChunk => borrowing(
             &[false, true],
             FunctionRow {
-                with_arg: Some(1),
+                with_args: &[1],
                 ..kinded(
                     "Std.Stdin.read_chunk",
                     &[Obj, Obj],
@@ -702,7 +702,7 @@ table! {
         StdinReadAllBytes => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Stdin.read_all_bytes",
                     &[Obj],
@@ -716,7 +716,7 @@ table! {
         StdinReadAll => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Stdin.read_all",
                     &[Obj],
@@ -730,7 +730,7 @@ table! {
         StdinReadLineBytes => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Stdin.read_line_bytes_raw",
                     &[Obj],
@@ -744,7 +744,7 @@ table! {
         StdinReadLine => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Stdin.read_line_raw",
                     &[Obj],
@@ -859,7 +859,7 @@ table! {
         ProcStageCount => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Proc.stage_count",
                     &[Obj],
@@ -873,7 +873,7 @@ table! {
         ProcWaitStage => borrowing(
             &[false, true],
             FunctionRow {
-                with_arg: Some(1),
+                with_args: &[1],
                 ..kinded(
                     "Std.Proc.wait_stage",
                     &[Int, Obj],
@@ -890,7 +890,7 @@ table! {
         ProcReadChunk => borrowing(
             &[false, true],
             FunctionRow {
-                with_arg: Some(1),
+                with_args: &[1],
                 ..kinded(
                     "Std.Proc.read_chunk",
                     &[Obj, Obj],
@@ -904,7 +904,7 @@ table! {
         ProcReadAllBytes => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Proc.read_all_bytes",
                     &[Obj],
@@ -918,7 +918,7 @@ table! {
         ProcReadAll => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Proc.read_all",
                     &[Obj],
@@ -932,7 +932,7 @@ table! {
         ProcReadLineBytes => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Proc.read_line_bytes_raw",
                     &[Obj],
@@ -946,7 +946,7 @@ table! {
         ProcReadLine => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Proc.read_line_raw",
                     &[Obj],
@@ -965,8 +965,10 @@ table! {
             param_marks: &[Mark::Unr],
             ret_mark: Mark::Unr,
             purity: Purity::Effectful,
+            faults: true,
+            writes: false,
             borrowed: &[false],
-            with_arg: None,
+            with_args: &[],
             held: &[false],
         },
         // いつも `IO` の失敗で終わる戻らない行。宛先には書かず、届け先は VM の `failed` が決める
@@ -978,8 +980,10 @@ table! {
             param_marks: &[Mark::Unr, Mark::Unr],
             ret_mark: Mark::Unr,
             purity: Purity::Effectful,
+            faults: true,
+            writes: false,
             borrowed: &[false, false],
-            with_arg: None,
+            with_args: &[],
             held: &[false, false],
         },
         // `exit` と同じく VM が自分で実行し、文字列を `Panic` の `panicked` の節に渡す
@@ -991,8 +995,10 @@ table! {
             param_marks: &[Mark::Unr],
             ret_mark: Mark::Unr,
             purity: Purity::Panics,
+            faults: true,
+            writes: false,
             borrowed: &[false],
-            with_arg: None,
+            with_args: &[],
             held: &[false],
         },
         // 配列の要素は型変数の位置なので `tobj` である。型変数は `Unr` に固定するので、`Array` の Kind も `Unr` に
@@ -1034,7 +1040,7 @@ table! {
         MutArrayLength => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.MutArray.length",
                     &[Obj],
@@ -1048,7 +1054,7 @@ table! {
         MutArrayRead => borrowing(
             &[true, false],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.MutArray.read",
                     &[Obj, Int],
@@ -1093,7 +1099,7 @@ table! {
         MutUnboxedArrayLength => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.MutUnboxedArray.length",
                     &[Obj],
@@ -1167,7 +1173,7 @@ table! {
         MutUnboxedArrayReadFloat => borrowing(
             &[true, false],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.MutUnboxedArray.MutUnboxed Float.read",
                     &[Obj, Int],
@@ -1181,7 +1187,7 @@ table! {
         MutUnboxedArrayReadInt => borrowing(
             &[true, false],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.MutUnboxedArray.MutUnboxed Int.read",
                     &[Obj, Int],
@@ -1328,7 +1334,7 @@ table! {
             borrowing(
                 &[true],
                 FunctionRow {
-                    with_arg: Some(0),
+                    with_args: &[0],
                     ..kinded(
                         "Std.Async.task_cell",
                         &[Obj],
@@ -1482,7 +1488,7 @@ table! {
         AsyncOpReady => borrowing(
             &[true, false],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Async.op_ready",
                     &[Int, Int],
@@ -1496,7 +1502,7 @@ table! {
         // 仕事の行 (docs/spec/stdlib.md の「`Std.Async`」)。token は即値で、RC を持たない。`fork_job` は引数の閉包を
         // 預からない
         AsyncForkJob => kinded("Std.Async.fork_job", &[TObj], &[Poly], Int, Unr, Purity::Effectful),
-        AsyncJobCell => borrowing(&[true], FunctionRow { with_arg: Some(0), ..row("Std.Async.job_cell", &[Int], Int, Purity::Pure) }),
+        AsyncJobCell => borrowing(&[true], FunctionRow { with_args: &[0], ..row("Std.Async.job_cell", &[Int], Int, Purity::Pure) }),
         AsyncTakeJob => kinded("Std.Async.take_job", &[Int], &[Unr], TObj, Poly, Purity::Effectful),
         AsyncDropJob => row("Std.Async.drop_job", &[Int], Unit, Purity::Effectful),
         // channel の行 (docs/spec/stdlib.md の「`Std.Chan`」)。channel の引数は即値で、RC を持たない
@@ -1574,7 +1580,7 @@ table! {
         NetOpListener => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Net.op_listener",
                     &[Int],
@@ -1588,7 +1594,7 @@ table! {
         NetOpStream => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Net.op_stream",
                     &[Int],
@@ -1602,7 +1608,7 @@ table! {
         NetOpOutcome => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Net.op_outcome",
                     &[Int],
@@ -1616,7 +1622,7 @@ table! {
         NetOpDone => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Net.op_done",
                     &[Int],
@@ -1671,7 +1677,7 @@ table! {
         NetLocalPort => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Net.local_port",
                     &[Obj],
@@ -1685,7 +1691,7 @@ table! {
         NetPeerAddr => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Net.peer_addr",
                     &[Obj],
@@ -1749,7 +1755,7 @@ table! {
         StreamOpReader => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Stream.op_reader",
                     &[Int],
@@ -1763,7 +1769,7 @@ table! {
         StreamOpWriter => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Stream.op_writer",
                     &[Int],
@@ -1777,7 +1783,7 @@ table! {
         StreamOpOutcome => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Stream.op_outcome",
                     &[Int],
@@ -1791,7 +1797,7 @@ table! {
         StreamOpPrefix => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Stream.op_prefix",
                     &[Int],
@@ -1854,7 +1860,7 @@ table! {
         StreamSource => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Stream.source",
                     &[Obj],
@@ -1878,7 +1884,7 @@ table! {
         ExecStdin => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Exec.stdin",
                     &[Obj],
@@ -1892,7 +1898,7 @@ table! {
         ExecStdout => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Exec.stdout",
                     &[Obj],
@@ -1906,7 +1912,7 @@ table! {
         ExecStderr => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Exec.stderr",
                     &[Obj],
@@ -1920,7 +1926,7 @@ table! {
         ExecStageCount => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Exec.stage_count",
                     &[Obj],
@@ -1942,7 +1948,7 @@ table! {
         ExecOpChild => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Exec.op_child",
                     &[Int],
@@ -1956,7 +1962,7 @@ table! {
         ExecOpOutcome => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Exec.op_outcome",
                     &[Int],
@@ -1970,7 +1976,7 @@ table! {
         ExecOpPrefix => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Exec.op_prefix",
                     &[Int],
@@ -1992,7 +1998,7 @@ table! {
         ExecReap => borrowing(
             &[false, true],
             FunctionRow {
-                with_arg: Some(1),
+                with_args: &[1],
                 ..kinded(
                     "Std.Exec.reap",
                     &[Int, Obj],
@@ -2025,7 +2031,7 @@ table! {
         TlsPullTls => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Tls.pull_tls",
                     &[Obj],
@@ -2040,7 +2046,7 @@ table! {
         TlsReadPlain => borrowing(
             &[false, true],
             FunctionRow {
-                with_arg: Some(1),
+                with_args: &[1],
                 ..kinded(
                     "Std.Tls.read_plain",
                     &[Obj, Obj],
@@ -2054,7 +2060,7 @@ table! {
         TlsStatus => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Tls.status",
                     &[Obj],
@@ -2068,7 +2074,7 @@ table! {
         TlsErrorMessage => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Tls.error_message",
                     &[Obj],
@@ -2090,7 +2096,7 @@ table! {
         TlsLineReady => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Tls.line_ready",
                     &[Obj],
@@ -2104,7 +2110,7 @@ table! {
         TlsTakeLine => borrowing(
             &[true],
             FunctionRow {
-                with_arg: Some(0),
+                with_args: &[0],
                 ..kinded(
                     "Std.Tls.take_line",
                     &[Obj],
@@ -2261,44 +2267,87 @@ impl RuntimeEntry {
     }
 }
 
-pub struct FunctionRow {
-    pub name: &'static str,
+/// extern の関数の行の見え方。std の行は静的な表 (`FunctionRow<'static>`) にあり、`ExternRef::row` がどの行も同じ形で
+/// 見せる。
+#[derive(Clone, Copy, Debug)]
+pub struct FunctionRow<'a> {
+    pub name: &'a str,
     /// 引数の Repr。数はシグネチャの一番外側の `->` の数と等しい。
-    pub params: &'static [Repr],
+    pub params: &'a [Repr],
     /// 結果の Repr。`Never` は戻らない extern で、`ret_mark` は読まない。データを返す行は、比べる extern、
     /// `Std.Env.has`、`Prelude.shows_minus`、`Std.Float.can_parse` の `Bool` と、`compare` の `Ordering` である。
-    /// タグは決まっているので、行は配置を持たない。組は extern が作らず、`with_arg` の行は translate が作る。`List`
+    /// タグは決まっているので、行は配置を持たない。組は extern が作らず、`with_args` の行は translate が作る。`List`
     /// や `Option` も extern が作らず、標準ライブラリの eml が包む (docs/spec/core-ir.md の「translate の配置」)。
     pub ret: OpRet,
     /// 引数ごとの印。長さは `params` と同じである。LIR の印と同じ3値で、型変数の位置のうちスキームが `Unr` に固定しない
     /// 位置は `Poly` である (docs/spec/core-ir.md の「表の印の列」)。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる。
-    pub param_marks: &'static [Mark],
+    pub param_marks: &'a [Mark],
     pub ret_mark: Mark,
     pub purity: Purity,
+    /// 失敗して中断を始めうる (docs/spec/lir.md の「巻き戻しの地点」)
+    pub faults: bool,
+    /// 借りた引数の中身を書き換える (docs/spec/lir.md の「extern の借用」)
+    pub writes: bool,
     /// 引数ごとの借用の印。長さは `params` と同じである。印の立つ引数を extern は読むだけで消費せず、失敗したときも
     /// 呼んだ側が持ったままである (docs/spec/lir.md の「extern の借用」)。
-    pub borrowed: &'static [bool],
-    /// `Some(k)` の行は、宣言の型では結果と引数 `k` の組を返す。行の結果 (`ret`、`ret_mark`) は組の最初の要素で、
+    pub borrowed: &'a [bool],
+    /// 宣言の型が返す組に、結果の後ろに並べる引数の位置。空でない行の結果 (`ret`、`ret_mark`) は組の最初の要素で、
     /// translate が呼び出しの後に `con` で組を作る。組を受けてすぐ開く所では、最適化の既知のコンストラクタで組が
     /// 消える (docs/spec/core-ir.md の「組を返す extern」)。
-    pub with_arg: Option<usize>,
+    pub with_args: &'a [usize],
     /// 引数ごとの預かる印。長さは `params` と同じで、借用の印とは独立である。印の立つ引数の型引数の値を、処理系は
     /// 写さず中身を見ない。消費する引数なら持って後で高々1回返すか落とし、借りる引数なら読むだけで持たない。その型に
     /// 現れる型変数は `Unr` に固定せず、矢印の row も問わない (docs/spec/declarations.md の「`extern`」)。
-    pub held: &'static [bool],
+    pub held: &'a [bool],
 }
 
-impl FunctionRow {
-    /// 結果を使わない呼び出しを消してよい行。`Pure` で、借りずに受ける `Lin` の引数を持たない行である。`Lin` の値を
-    /// 消費する呼び出しを消すと、その値を手放す命令がなくなり、Perceus が `lin` の変数を `decref` するためである
+impl FunctionRow<'_> {
+    /// 結果を使わない呼び出しを消してよい行。`Pure` で、借りた引数を書き換えず、借りずに受ける `Lin` の引数を持たない
+    /// 行である。`Lin` の値を消費する呼び出しを消すと、その値を手放す命令がなくなり、Perceus が `lin` の変数を
+    /// `decref` するためである。書き換えは IR のデータの依存に現れないので、消すと書き込みごと失われる
     /// (docs/spec/lir.md の「縮約」)。
     pub fn removable(&self) -> bool {
         self.purity == Purity::Pure
+            && !self.writes
             && self
                 .param_marks
                 .iter()
                 .zip(self.borrowed)
                 .all(|(&mark, &borrowed)| borrowed || mark == Mark::Unr)
+    }
+}
+
+/// IR の `extern` の文が指す行。行は `ExternRef::row` で、プログラムの表とともに引く。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExternRef {
+    Std(Extern),
+}
+
+impl From<Extern> for ExternRef {
+    fn from(ext: Extern) -> ExternRef {
+        ExternRef::Std(ext)
+    }
+}
+
+impl ExternRef {
+    pub fn std(self) -> Option<Extern> {
+        match self {
+            ExternRef::Std(ext) => Some(ext),
+        }
+    }
+
+    /// `c` はプログラムの C の関数の表である。
+    pub fn row(self, c: &[CFunction]) -> FunctionRow<'_> {
+        let _ = c;
+        match self {
+            ExternRef::Std(ext) => *ext.row(),
+        }
+    }
+
+    /// std の名前を先に引き、次に `c` を引く。
+    pub fn from_name(name: &str, c: &[CFunction]) -> Option<ExternRef> {
+        let _ = c;
+        Extern::from_name(name).map(ExternRef::Std)
     }
 }
 
@@ -2310,7 +2359,7 @@ const fn kinded<const N: usize>(
     ret: Repr,
     ret_mark: Mark,
     purity: Purity,
-) -> FunctionRow {
+) -> FunctionRow<'static> {
     FunctionRow {
         name,
         params,
@@ -2318,14 +2367,19 @@ const fn kinded<const N: usize>(
         param_marks,
         ret_mark,
         purity,
+        faults: !matches!(purity, Purity::Pure),
+        writes: false,
         borrowed: const { &[false; N] },
-        with_arg: None,
+        with_args: &[],
         held: const { &[false; N] },
     }
 }
 
 /// 印の立つ引数を借りる行。長さは引数の数と同じである (docs/spec/lir.md の「extern の借用」)。
-const fn borrowing<const N: usize>(mask: &'static [bool; N], row: FunctionRow) -> FunctionRow {
+const fn borrowing<const N: usize>(
+    mask: &'static [bool; N],
+    row: FunctionRow<'static>,
+) -> FunctionRow<'static> {
     assert!(
         row.params.len() == N,
         "a borrow mask has one mark per parameter"
@@ -2337,7 +2391,10 @@ const fn borrowing<const N: usize>(mask: &'static [bool; N], row: FunctionRow) -
 }
 
 /// 印の立つ引数を預かる行。長さは引数の数と同じである (docs/spec/declarations.md の「`extern`」)。
-const fn holding<const N: usize>(mask: &'static [bool; N], row: FunctionRow) -> FunctionRow {
+const fn holding<const N: usize>(
+    mask: &'static [bool; N],
+    row: FunctionRow<'static>,
+) -> FunctionRow<'static> {
     assert!(
         row.params.len() == N,
         "a held mask has one mark per parameter"
@@ -2346,7 +2403,7 @@ const fn holding<const N: usize>(mask: &'static [bool; N], row: FunctionRow) -> 
 }
 
 /// ハンドルに書く行。データを借り、ハンドルを消費して返す (docs/spec/stdlib.md の「ハンドル」)。
-const fn writing(name: &'static str) -> FunctionRow {
+const fn writing(name: &'static str) -> FunctionRow<'static> {
     borrowing(
         &[true, false],
         kinded(
@@ -2366,7 +2423,7 @@ const fn row<const N: usize>(
     params: &'static [Repr; N],
     ret: Repr,
     purity: Purity,
-) -> FunctionRow {
+) -> FunctionRow<'static> {
     kinded(
         name,
         params,

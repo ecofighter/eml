@@ -1,6 +1,6 @@
 //! 関数ごとの命令の生成 (docs/spec/vm.md の「命令ごとの実行」)。定数の atom は、命令の前に一時のスロットへ読み込む。
 
-use eml_extern::Extern;
+use eml_extern::{Extern, ExternRef};
 use eml_lir::unwind::{UnwindPoint, Unwinds};
 use eml_lir::{
     Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Stmt,
@@ -501,17 +501,18 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 self.out.push(Op::Call { dst, at });
             }
             Rhs::Extern { ext, args, at } => {
+                let ExternRef::Std(ext) = *ext;
                 let row = ext.row();
                 let slots: Vec<Slot> = args
                     .iter()
                     .zip(row.params)
                     .map(|(&arg, &repr)| self.atom(arg, repr))
                     .collect();
-                let op = arithmetic(*ext, dst, &slots).unwrap_or_else(|| {
-                    if let Some(op) = self.array_op(*ext, dst, &slots) {
+                let op = arithmetic(ext, dst, &slots).unwrap_or_else(|| {
+                    if let Some(op) = self.array_op(ext, dst, &slots) {
                         return op;
                     }
-                    let at = self.out.slot_list([*ext as u32], &slots);
+                    let at = self.out.slot_list([ext as u32], &slots);
                     // `Std.Async`、`Std.Chan`、`Std.Atomic` の行は登録表に触れ、`Std.Async` の行はタスクを作るか起こして
                     // 切り替えるので、`Scheduler` を持つ命令にする (docs/spec/vm.md の「`Async` のタスク」)
                     if ext.is_async() {

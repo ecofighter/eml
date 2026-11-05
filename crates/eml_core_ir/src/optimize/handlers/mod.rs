@@ -28,6 +28,7 @@ use super::specialize::limited;
 use crate::liveness::{join_live, live_before_term, step_back};
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_extern::CFunction;
 use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo, push_var};
 
 use passing::{Returned, Tuples};
@@ -56,7 +57,7 @@ enum ClauseForm {
 impl ClauseForm {
     /// 本体に `handle` を持つ節は展開しない。展開した所ごとにその `handle` が写り、節の関数がちょうど1つの `handle`
     /// に属するという EP の前提 (`crates/eml_core_ir/src/evidence/handlers.rs` の `entries`) に反するためである。
-    fn of(clause: &CoreFn, operation: &OperationInfo) -> ClauseForm {
+    fn of(clause: &CoreFn, operation: &OperationInfo, c_functions: &[CFunction]) -> ClauseForm {
         if !operation.resumable {
             return ClauseForm::Other;
         }
@@ -68,7 +69,7 @@ impl ClauseForm {
         let mut returns = 0;
         for block in &clause.blocks {
             if let Term::Return(_) = block.term {
-                let resumed = tail_position_call(block).is_some_and(|(at, call)| {
+                let resumed = tail_position_call(block, c_functions).is_some_and(|(at, call)| {
                     matches!(call, Call::Resume { k: Atom::Var(var), .. } if *var == k)
                         && matches!(&block.stmts[at], Stmt::Let {
                             var: _,
@@ -559,7 +560,7 @@ fn eligible(
         if stateful && (param.repr, param.mark) != (state.repr, state.mark) {
             return None;
         }
-        let form = ClauseForm::of(function, operation);
+        let form = ClauseForm::of(function, operation, &program.c_functions);
         // それ以外の節の結果は、そのまま複製の結果になる
         let returns_handled =
             function.ret == ret_fn.ret && Mark::passes_to(function.ret_mark, ret_fn.ret_mark);
@@ -641,7 +642,7 @@ fn path(
     while let Some(&function) = path.get(next) {
         next += 1;
         for block in &program.function(function).blocks {
-            let tail = tail_position_call(block).map(|(at, _)| at);
+            let tail = tail_position_call(block, &program.c_functions).map(|(at, _)| at);
             for (at, stmt) in block.stmts.iter().enumerate() {
                 let Stmt::Let {
                     var: _,
@@ -936,7 +937,7 @@ impl Copies<'_> {
             let Term::Return(value) = code.blocks[block].term else {
                 continue;
             };
-            let tail = match tail_position_call(&code.blocks[block]) {
+            let tail = match tail_position_call(&code.blocks[block], &program.c_functions) {
                 Some((at, Call::Direct(target, args))) if program.function(*target).yields => {
                     Some((at, *target, args.clone()))
                 }
@@ -1161,6 +1162,7 @@ impl Copies<'_> {
             clause,
             &clause_args,
             state_atom,
+            &program.c_functions,
             |value, state| {
                 let mut args = live.clone();
                 args.push(value);

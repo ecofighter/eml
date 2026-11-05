@@ -448,6 +448,8 @@ pub(crate) fn translate(
         structs: builder.structs,
         effects: effect_table(hir, store, typed),
         files: builder.files.values,
+        c_functions: Vec::new(),
+        c_handles: Vec::new(),
     }
 }
 

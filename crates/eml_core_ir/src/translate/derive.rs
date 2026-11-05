@@ -221,7 +221,7 @@ impl Generator<'_> {
                     "t",
                     Repr::Enum,
                     Rhs::Extern {
-                        ext: Extern::IntCompare,
+                        ext: Extern::IntCompare.into(),
                         args: vec![left, right],
                         at: None,
                     },
@@ -350,7 +350,7 @@ impl Generator<'_> {
             "c",
             Repr::Enum,
             Rhs::Extern {
-                ext: Extern::IntGt,
+                ext: Extern::IntGt.into(),
                 args: vec![Atom::Var(d), Atom::Int(i64::from(precedence))],
                 at: None,
             },
@@ -583,7 +583,7 @@ pub(super) fn call_target(
             "t",
             ret,
             Rhs::Extern {
-                ext: row,
+                ext: row.into(),
                 args,
                 at: None,
             },

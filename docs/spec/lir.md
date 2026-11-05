@@ -24,7 +24,7 @@ EP の後の Core IR から写す LIR と、その実行の意味を定める。
   - エフェクトの命令 (`perform`、`handle`、`resume`) と、呼び出しの `mask` を持たない。LIR の型にないので、EP の後に残っていないことを verifier でなく型で保証する
   - RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持つ。どれも LIR のパス (box の挿入、縮約、Perceus) だけが入れる。複数の値の `let` と `return`、構造体の `unbox` は開くパスだけが入れる (下の「開く」)。token の命令は reuse のパスだけが入れる (下の「reuse」)。変換の直後の LIR はこれらを持たず、`passes_until` のエントリの verifier がそれを確かめる (下の「パスの順番」)
 - 関数は、名前、内部の関数かどうかの印 (`internal`)、一様な位置の始まり (`split`)、yield しうるかの印 (`yields`)、エントリの関数の印 (`clause`)、変数の表、結果の並び (`rets`)、ブロックの列を持つ。印と `split` は Core IR と同じ意味である ([Core IR](core-ir.md) の「`yields` の印」、下の「関数の ABI」と「エントリの関数の印」)。box の挿入は `split` と `clause` を読み、`internal` は読まない。`internal` は ABI を決めない。VM は `yields` を読まない ([VM](vm.md) の「呼び出しと戻り」)
-- プログラムは、関数、エントリ、文字列の表、配置の表、構造体の形の表、エフェクトの表、ファイルの表を持つ。Core IR のプログラムと同じ欄である。エフェクトの表は、`clause` の ABI (操作の Repr) と、基本操作の即値のために持つ
+- プログラムは、関数、エントリ、文字列の表、配置の表、構造体の形の表、エフェクトの表、ファイルの表、C の関数の表、C のハンドルの型の表を持つ。Core IR のプログラムと同じ欄である。LIR のパスは C の2つの表を変えずに写す。エフェクトの表は、`clause` の ABI (操作の Repr) と、基本操作の即値のために持つ
 - `Call::Par { left, right, pair, at }` は `par` の fork と join である。テキストの形は `par (,) #0(f.1, g.2)` で、`extern` と同じく位置を後ろに書ける (`par (,) #0(f.1, g.2) @"main.em":3:5`)
   - `left` と `right` は `()` を受ける関数の値で、`apply` の呼ぶ値と同じく `tobj` の位置である。どちらも消費する
   - 結果は、2つの子の値を `pair` の構築子に入れた組で、`obj` である。`pair` は `tobj` のフィールドをちょうど2つ持つ構築子である
@@ -266,7 +266,8 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - 借りるのは、配列を読む 10 行 (`Std.Array.length`、`Std.Array.get`、`Std.MutArray.length`、`Std.MutArray.read`、`Std.UnboxedArray.length`、`Std.UnboxedArray` の2つの `get`、`Std.MutUnboxedArray.length`、`Std.MutUnboxedArray` の2つの `read`) の配列の引数と、`String` を読む11行の `String` の引数である。11行は、`Std.String.byte_length`、`byte_at`、`char_at`、`slice`、`find_from` (探す文字列と対象の両方)、`Prelude.Eq String.==` と `!=`、`Prelude.Ord String.compare` (両辺)、`Prelude.Show String.show`、`Std.Float.can_parse` と `parse_raw` である。`FileIn` を読む5行 (`Std.FileIn.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) と、`Stdin` を読む同じ名前の5行 (`Std.Stdin.read_all` など) と、`Child` を読む同じ名前の5行 (`Std.Proc.read_all` など) も、ハンドルの引数を借りる。`read_chunk` は、足す先のバイト列 (最初の引数) を消費する。`Bytes` を読む行 (`Std.Bytes.length`、`get`、`slice`、`find_from` の探すバイト列と対象、`find_byte_from` の対象、`append_slice` の `src`、`Prelude.Eq Bytes.==` と `!=`、`Prelude.Ord Bytes.compare` の両辺、`Show Bytes` が読む `Prelude.bytes_length` と `bytes_get`) も `Bytes` の引数を借りる。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の書き込みの行 (`write`、`write_bytes`、`write_line`) は書くデータ (最初の引数) を借り、ハンドルを消費して同じハンドルを返す。読むたびに参照を渡して返す手間と、1バイトずつ読むループの `dup` を省くためである。`++`、`Std.String.push`、`println`、`eprintln`、`Std.FileIn.open`、`Std.FileOut.create` と `append`、`Std.Env` の行、`Std.Proc.spawn_raw` と `exited` は、引数を消費したままにする
 - 1つの命令が同じ変数を借りて、かつ消費するなら、その命令の前に参照が2つ要る。extern の行でこの形を持つのは `Std.Bytes.append_slice` だけで、`src` を借り、`dst` を消費する。借用は命令の間じゅう続くので、消費に渡す参照とは別に1つ持つ必要があるためである。Perceus は、借りる変数を同じ命令が消費するなら、その変数を命令の後も生きているとみなして `dup` を置き、命令の後の `decref` が借用の分を手放す。verifier は、`dup` のないこの形を `` `e.0` is lent to `prim ev_renew` and consumed by the same instruction `` のように断る。借りるだけの使いと、別の変数を消費する使いは、この規則に当たらない
 - extern が失敗して中断しても、借りた引数は呼んだ側が持ったままである。巻き戻しの表は呼び出しの後に持っている値を手放すので、借りた引数もそこで手放す ([VM](vm.md) の「巻き戻し」)。消費する引数は、extern が手放す
-- `with_arg: Some(k)` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.MutUnboxedArray.length` と2つの `read`) は、宣言の型では結果と引数 k の組を返す。行の結果は組の最初の要素で、組は translate が作る ([Core IR](core-ir.md) の「組を返す extern」)。LIR の `extern` 命令は行の結果だけを束縛し、借りた引数 k はその後の `con` が消費する
+- `writes` (`FunctionRow::writes`) の行は、借りた引数の中身を書き換える。std の配列を書く行は配列を消費して返すので、std の行はどれも `writes` を持たない
+- `with_args` が `[k]` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.MutUnboxedArray.length` と2つの `read`) は、宣言の型では結果と引数 k の組を返す。行の結果は組の最初の要素で、組は translate が作る ([Core IR](core-ir.md) の「組を返す extern」)。LIR の `extern` 命令は行の結果だけを束縛し、借りた引数 k はその後の `con` が消費する
 - 縮約は、`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`、`Std.MutUnboxedArray.freeze`、`MutUnboxed Float.fill`、`MutUnboxed Int.fill`) を消さない (下の「縮約」)
 
 ### 末尾の位置の呼び出し
@@ -505,7 +506,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 ### 縮約
 
-- 使われない純粋な `let` を消す。純粋なのは `const`、`con`、`closure`、`box`、`unbox`、`prim root_get`、`prim empty_mut_array` と、表の行が `Pure` の `extern` である。ただし、`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`、`Std.MutUnboxedArray.freeze`、`MutUnboxed Float.fill`、`MutUnboxed Int.fill`) は消さない (`FunctionRow::removable`)。消すと `Lin` の値を手放す命令がなくなり、Perceus がその変数を `decref` して V1 が拒むためである。呼び出し、`Panics` と `Effectful` の `extern`、`prim`、`drop` は、使われなくても消さない。ほかの基本操作は実行の文脈か evidence を読み書きするので、純粋でないとみなす。使われない `box` を消しても確保が1つ減るだけで、`unbox` は読むだけなので、どちらも評価の順を変えない
+- 使われない純粋な `let` を消す。純粋なのは `const`、`con`、`closure`、`box`、`unbox`、`prim root_get`、`prim empty_mut_array` と、表の行が消せる `extern` である。消せる行 (`FunctionRow::removable`) は、`Pure` で、`writes` でなく、`Lin` の引数をすべて借りる行である。`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`、`Std.MutUnboxedArray.freeze`、`MutUnboxed Float.fill`、`MutUnboxed Int.fill`) を消すと、`Lin` の値を手放す命令がなくなり、Perceus がその変数を `decref` して V1 が拒む。`writes` の行の書き込みは IR のデータの依存に現れないので、消すと書き込みごと失われる。呼び出し、`Panics` と `Effectful` の `extern`、`prim`、`drop` は、使われなくても消さない。ほかの基本操作は実行の文脈か evidence を読み書きするので、純粋でないとみなす。使われない `box` を消しても確保が1つ減るだけで、`unbox` は読むだけなので、どちらも評価の順を変えない
 - 構造体の `unbox` も純粋で、使われない葉は `_` にして読まない。葉がどれも使われない構造体の `unbox` は、箱が `unr` か、箱が末尾の位置の呼び出しの結果で、`unbox` がその呼び出しの後ろにあるときだけ消す。後者は box の挿入の覗き穴が残すもので、消すと末尾の位置の呼び出しの形が保たれる。箱は呼び出しの結果として返るので、手放す所がない。ほかの箱の `unbox` は呼び出しの後ろにあっても残す。Perceus はこの文で箱が構造体の箱だと知り、`unr` でない箱を手放す所を、V1 が拒む `decref` でなく `drop` にする (下の「Perceus」)
 - 縮約は、使われない純粋な `let` をすべて消し、いつも Perceus より前に走る。Perceus はこれに頼る。translate が開いた `unr` でない `con` の変数 ([Core IR](core-ir.md) の「translate が決める印」) は、使われない `con` として残り、その `lin` の引数は葉も読む。Perceus の入力にこの `con` が残ると、Perceus がその `lin` の `con` を `decref` し、V1 が拒む。そのため、Perceus の入力には、`unr` でない引数を持つ使われない `con` と `closure` がない
 - ブロックを後ろから、文を後ろから見る1回のパスで、関数全体の使用の数を使う。定義は使う位置を支配し、辺は番号の大きいブロックへ向かうので、`let` を見る時点でその変数の使用はすべて見終わっている。消した `let` だけが使っていた束縛も同じパスで消えるので、1回で不動点に達する。デバッグビルドでは、2回目のパスが何も変えないことを確かめる
@@ -513,6 +514,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   - 印には条件がある。印の受け渡しは推移的でないので、x を通してつながっていた結果の印と関数の戻り値の印を、値ごとに直接つないでも、結果の印を戻り値の印に渡せる (`Mark::passes_to`) ことを、`tail` にする条件にする。結果の印は、直接の呼び出しなら呼ばれる関数の戻り値の印、`apply` なら `poly` (いつも渡せる)、`clause` なら操作の表の戻り値の印である。`never` の操作の `clause` は結果を返さないので、どの戻り値の印にも渡せるとする。値の数が違う形 (構造体と箱の間) は `tail` にしない
   - 末尾呼び出しを変換を入れた後に作るので、Repr のための降格は要らない
 - 縮約は、評価の順も短絡評価も変えない。消すのは実行時に何も起こさない右辺だけである
+- extern の文を消す、まとめる、複製する、並べ替えるパスは、`writes` の行を、借りた `MutUnboxedArray` の引数それぞれへの書き込みとして扱う。今あるのは縮約の削除だけで、それは `removable` が受け持つ
 
 ### 生存解析
 
@@ -816,9 +818,9 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
   - 直接の呼び出し
   - `apply` と `clause` の呼び出し。すぐに再開する節は、操作を起こしたフレームの上でその場で動く (上の「節の呼び出し」)。そのため row が `<State>` のような閉包の呼び出しにも、節の本体の `panic` や IO の失敗が通る
   - `par`。子の中断を、join の後に親で起こし直すためである。`par` は末尾の位置の呼び出しにならないので、いつも末尾でない
-  - `Pure` でない extern
+  - `faults` の extern。`faults` (`FunctionRow::faults`) の行は、失敗して中断を始めうる行で、std の行では `Pure` でない行と同じである
   - `prim yield_abort` と `prim child_abort`
-- `Pure` の extern、prim、末尾の呼び出し (`tail call`、`tail apply`、`tail clause`) は地点にならない。末尾の呼び出しはフレームを呼ばれる側に渡すので、その位置に止まるフレームがない
+- `faults` でない extern、prim、末尾の呼び出し (`tail call`、`tail apply`、`tail clause`) は地点にならない。末尾の呼び出しはフレームを呼ばれる側に渡すので、その位置に止まるフレームがない
 - 地点でないものは、関数の中で中断が始まらない。中断が通るフレームは、いつも地点の命令の直後で止まっているか、関数のエントリで止まっている
 - 関数ごとにエントリの行を1つ持つ。エントリの行は、関数に入った直後に所有している値を並べる。エントリのフレームは、RC の表現を持つ引数をすべて所有し、借りた値も token も着地の印も持たないので、行は RC の表現を持つ引数を数 1 で並べるだけである。`VarId` の昇順に並べる
 - `eml_lir::unwind::points(program, wanted)` は、関数ごとに `Unwinds { entry, points }` を `FnIdx` の番号で返す。`entry` がエントリの行、`points` が地点で、ブロックの順、文の順に並ぶ。所有は、所有の段の走査 (上の「verifier」) が、ブロック 0 の最初の文の前と各地点で書き留める ([VM](vm.md) の「巻き戻しの表」)

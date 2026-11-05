@@ -242,23 +242,25 @@ fn head_type(checked: &Checked, head: TypeDefId) -> TypeId {
     )
 }
 
-/// 行の結果と比べる std の型。`with_arg` の行の宣言の型は結果と引数の組なので、組の最初の要素である。2つ目の要素は
-/// 引数 `k` の型と同じである (docs/spec/core-ir.md の「組を返す extern」)。
+/// 行の結果と比べる std の型。`with_args` の行の宣言の型は結果と引数の組なので、組の最初の要素である。後ろの要素は
+/// `with_args` の位置の引数の型と同じである (docs/spec/core-ir.md の「組を返す extern」)。
 fn row_result(
     types: &TypeStore,
     name: &str,
-    with_arg: Option<usize>,
+    with_args: &[usize],
     params: &[TypeId],
     ty: TypeId,
 ) -> TypeId {
-    let Some(k) = with_arg else {
+    if with_args.is_empty() {
         return ty;
-    };
+    }
     let TypeKind::Tuple(elements) = types.kind(ty) else {
         panic!("`{name}` returns a pair");
     };
-    assert_eq!(elements.len(), 2, "{name}");
-    assert_eq!(elements[1], params[k], "{name}");
+    assert_eq!(elements.len(), 1 + with_args.len(), "{name}");
+    for (element, &k) in elements[1..].iter().zip(with_args) {
+        assert_eq!(*element, params[k], "{name}");
+    }
     elements[0]
 }
 
@@ -286,7 +288,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
         assert_eq!(row.borrowed.len(), row.params.len(), "{}", row.name);
         match row.ret {
             OpRet::Repr(ret) => {
-                let result = row_result(types, row.name, row.with_arg, &param_types, ty);
+                let result = row_result(types, row.name, row.with_args, &param_types, ty);
                 assert_eq!(
                     boxed_repr(types, result, &checked.program),
                     ret,
@@ -315,47 +317,47 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 fn only_the_listed_rows_borrow_or_return_a_pair() {
     for &e in Extern::ALL {
         let row = e.row();
-        let expected: (&[bool], Option<usize>) = match row.name {
-            "Std.Array.length" => (&[true], None),
-            "Std.Array.get" => (&[true, false], None),
-            "Std.MutArray.length" => (&[true], Some(0)),
-            "Std.MutArray.read" => (&[true, false], Some(0)),
-            "Std.UnboxedArray.length" => (&[true], None),
+        let expected: (&[bool], &[usize]) = match row.name {
+            "Std.Array.length" => (&[true], &[]),
+            "Std.Array.get" => (&[true, false], &[]),
+            "Std.MutArray.length" => (&[true], &[0]),
+            "Std.MutArray.read" => (&[true, false], &[0]),
+            "Std.UnboxedArray.length" => (&[true], &[]),
             "Std.UnboxedArray.Unboxed Float.get" | "Std.UnboxedArray.Unboxed Int.get" => {
-                (&[true, false], None)
+                (&[true, false], &[])
             }
-            "Std.MutUnboxedArray.length" => (&[true], Some(0)),
+            "Std.MutUnboxedArray.length" => (&[true], &[0]),
             "Std.MutUnboxedArray.MutUnboxed Float.read"
-            | "Std.MutUnboxedArray.MutUnboxed Int.read" => (&[true, false], Some(0)),
-            "Std.Async.task_cell" => (&[true], Some(0)),
-            "Std.Async.op_ready" => (&[true, false], Some(0)),
-            "Std.Async.job_cell" => (&[true], Some(0)),
+            | "Std.MutUnboxedArray.MutUnboxed Int.read" => (&[true, false], &[0]),
+            "Std.Async.task_cell" => (&[true], &[0]),
+            "Std.Async.op_ready" => (&[true, false], &[0]),
+            "Std.Async.job_cell" => (&[true], &[0]),
             "Std.Net.op_listener"
             | "Std.Net.op_stream"
             | "Std.Net.op_outcome"
             | "Std.Net.op_done"
             | "Std.Net.local_port"
-            | "Std.Net.peer_addr" => (&[true], Some(0)),
+            | "Std.Net.peer_addr" => (&[true], &[0]),
             "Std.Stream.op_reader"
             | "Std.Stream.op_writer"
             | "Std.Stream.op_outcome"
             | "Std.Stream.op_prefix"
-            | "Std.Stream.source" => (&[true], Some(0)),
+            | "Std.Stream.source" => (&[true], &[0]),
             "Std.Exec.stdin"
             | "Std.Exec.stdout"
             | "Std.Exec.stderr"
             | "Std.Exec.stage_count"
             | "Std.Exec.op_child"
             | "Std.Exec.op_outcome"
-            | "Std.Exec.op_prefix" => (&[true], Some(0)),
-            "Std.Exec.reap" => (&[false, true], Some(1)),
+            | "Std.Exec.op_prefix" => (&[true], &[0]),
+            "Std.Exec.reap" => (&[false, true], &[1]),
             "Std.Tls.pull_tls"
             | "Std.Tls.status"
             | "Std.Tls.error_message"
             | "Std.Tls.line_ready"
-            | "Std.Tls.take_line" => (&[true], Some(0)),
-            "Std.Tls.read_plain" => (&[false, true], Some(1)),
-            "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[true, false], None),
+            | "Std.Tls.take_line" => (&[true], &[0]),
+            "Std.Tls.read_plain" => (&[false, true], &[1]),
+            "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[true, false], &[]),
             "Std.FileIn.read_all"
             | "Std.FileIn.read_line_raw"
             | "Std.FileIn.read_all_bytes"
@@ -367,27 +369,27 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             | "Std.Proc.read_all"
             | "Std.Proc.read_line_raw"
             | "Std.Proc.read_all_bytes"
-            | "Std.Proc.read_line_bytes_raw" => (&[true], Some(0)),
+            | "Std.Proc.read_line_bytes_raw" => (&[true], &[0]),
             "Std.FileIn.read_chunk" | "Std.Stdin.read_chunk" | "Std.Proc.read_chunk" => {
-                (&[false, true], Some(1))
+                (&[false, true], &[1])
             }
-            "Std.Proc.stage_count" => (&[true], Some(0)),
-            "Std.Proc.wait_stage" => (&[false, true], Some(1)),
-            "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], None),
-            "Std.String.byte_at" | "Std.String.char_at" => (&[false, true], None),
-            "Std.String.slice" => (&[false, false, true], None),
-            "Std.String.find_from" => (&[true, false, true], None),
+            "Std.Proc.stage_count" => (&[true], &[0]),
+            "Std.Proc.wait_stage" => (&[false, true], &[1]),
+            "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], &[]),
+            "Std.String.byte_at" | "Std.String.char_at" => (&[false, true], &[]),
+            "Std.String.slice" => (&[false, false, true], &[]),
+            "Std.String.find_from" => (&[true, false, true], &[]),
             "Prelude.Eq String.==" | "Prelude.Eq String.!=" | "Prelude.Ord String.compare" => {
-                (&[true, true], None)
+                (&[true, true], &[])
             }
-            "Std.Float.can_parse" | "Std.Float.parse_raw" => (&[true], None),
-            "Std.Bytes.length" | "Prelude.bytes_length" => (&[true], None),
-            "Std.Bytes.get" | "Prelude.bytes_get" => (&[false, true], None),
-            "Std.Bytes.slice" | "Std.Bytes.find_byte_from" => (&[false, false, true], None),
-            "Std.Bytes.append_slice" => (&[false, false, true, false], None),
-            "Std.Bytes.find_from" => (&[true, false, true], None),
+            "Std.Float.can_parse" | "Std.Float.parse_raw" => (&[true], &[]),
+            "Std.Bytes.length" | "Prelude.bytes_length" => (&[true], &[]),
+            "Std.Bytes.get" | "Prelude.bytes_get" => (&[false, true], &[]),
+            "Std.Bytes.slice" | "Std.Bytes.find_byte_from" => (&[false, false, true], &[]),
+            "Std.Bytes.append_slice" => (&[false, false, true, false], &[]),
+            "Std.Bytes.find_from" => (&[true, false, true], &[]),
             "Prelude.Eq Bytes.==" | "Prelude.Eq Bytes.!=" | "Prelude.Ord Bytes.compare" => {
-                (&[true, true], None)
+                (&[true, true], &[])
             }
             "Std.FileOut.write"
             | "Std.FileOut.write_bytes"
@@ -400,15 +402,22 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             | "Std.Stderr.write_line"
             | "Std.Proc.write"
             | "Std.Proc.write_bytes"
-            | "Std.Proc.write_line" => (&[true, false], None),
+            | "Std.Proc.write_line" => (&[true, false], &[]),
             _ => {
                 assert!(!row.borrowed.contains(&true), "{}", row.name);
-                assert_eq!(row.with_arg, None, "{}", row.name);
+                assert!(row.with_args.is_empty(), "{}", row.name);
                 continue;
             }
         };
-        assert_eq!((row.borrowed, row.with_arg), expected, "{}", row.name);
+        assert_eq!((row.borrowed, row.with_args), expected, "{}", row.name);
     }
+}
+
+/// std の行は借りた引数を書き換えない。std の配列を書く行は配列を消費して返すためである
+/// (docs/spec/lir.md の「extern の借用」)。
+#[test]
+fn no_std_row_writes_a_borrowed_argument() {
+    assert!(Extern::ALL.iter().all(|e| !e.row().writes));
 }
 
 #[test]
@@ -443,6 +452,7 @@ fn faulting_rows_carry_panic() {
             labels = effects.iter().map(|label| label.id).collect();
             ty = *ret;
         }
+        assert_eq!(row.faults, row.purity != Purity::Pure, "{}", row.name);
         match row.purity {
             Purity::Pure if method_bound(&checked, e) => {
                 assert!(labels.is_empty() || labels == [panic], "{}", row.name)
@@ -506,7 +516,7 @@ fn every_extern_function_row_has_the_marks_of_its_std_signature() {
             );
         }
         if let OpRet::Repr(_) = row.ret {
-            let result = row_result(types, row.name, row.with_arg, &param_types, ty);
+            let result = row_result(types, row.name, row.with_args, &param_types, ty);
             let declared = declared_mark(types, result, &checked.program);
             assert!(
                 mark_fits(declared, row.ret_mark),
@@ -811,7 +821,7 @@ fn every_extern_type_row_has_the_repr_of_its_type() {
     }
 }
 
-/// 機械の extern は `Bool` の値を、translate は `with_arg` の行の組を、配置の表を見ずに `FALSE`、`TRUE`、`TUPLE` の
+/// 機械の extern は `Bool` の値を、translate は `with_args` の行の組を、配置の表を見ずに `FALSE`、`TRUE`、`TUPLE` の
 /// タグで作る。そのタグが、translate が std の宣言から作る配置の添字と合うことを確かめる。
 #[test]
 fn the_tags_externs_build_name_the_constructors_of_their_layouts() {

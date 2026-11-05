@@ -459,7 +459,7 @@ impl Display<'_> {
             "c",
             Repr::Enum,
             Rhs::Extern {
-                ext,
+                ext: ext.into(),
                 args: vec![a, Atom::Int(n)],
                 at: None,
             },
@@ -472,7 +472,7 @@ impl Display<'_> {
             "n",
             Repr::Int,
             Rhs::Extern {
-                ext,
+                ext: ext.into(),
                 args: vec![a, Atom::Int(n)],
                 at: None,
             },

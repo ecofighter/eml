@@ -21,6 +21,7 @@ mod known_con;
 
 use crate::tail::pure;
 use crate::{CoreFn, FnRef, Program, Rhs, Stmt};
+use eml_extern::CFunction;
 use eml_lir::{Atom, FnIdx, Layout, Structs, VarId};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -67,6 +68,7 @@ pub(super) struct Fuser<'a> {
     functions: &'a mut Vec<CoreFn>,
     layouts: &'a [Layout],
     structs: &'a Structs,
+    c_functions: &'a [CFunction],
     callees: Vec<Callee>,
     graph: Graph,
     /// `fuse` に入った時点の関数の数。これより後ろは融合の段が作った複製である。
@@ -102,6 +104,7 @@ pub(crate) fn fuse(program: &mut Program) {
         functions: &mut program.functions,
         layouts: &program.layouts,
         structs: &program.structs,
+        c_functions: &program.c_functions,
         callees,
         graph,
         base: count,
@@ -155,6 +158,7 @@ impl Fuser<'_> {
                 &mut function,
                 self.functions,
                 self.structs,
+                self.c_functions,
                 &chosen,
                 usize::MAX,
             );
@@ -208,14 +212,21 @@ impl Fuser<'_> {
                 let chosen = |var: VarId, target: FnIdx| {
                     produced.contains(&var) && self.inlinable_from_here(target.0 as usize)
                 };
-                if inline::inline_calls(function, self.functions, self.structs, &chosen, limit) {
+                if inline::inline_calls(
+                    function,
+                    self.functions,
+                    self.structs,
+                    self.c_functions,
+                    &chosen,
+                    limit,
+                ) {
                     changed = true;
                     rounds += 1;
                     // 展開した本体が参照する複製も、この関数から参照する
                     self.refer_all(function);
                 }
             }
-            changed |= drop_dead_pure_lets(function);
+            changed |= drop_dead_pure_lets(function, self.c_functions);
             if !changed {
                 break;
             }
@@ -311,7 +322,7 @@ impl Fuser<'_> {
 /// 定義は使う位置を支配し、辺は番号の大きいブロックへ向かうので、ブロックを後ろから、文を後ろから見れば、`let` を
 /// 見る時点でその変数の使いはすべて見終わっている。消すたびに使いの数を減らせば、1回で、消した `let` だけが使って
 /// いた束縛も消える (LIR の縮約の `remove_dead_lets` と同じ形)。
-fn drop_dead_pure_lets(function: &mut CoreFn) -> bool {
+fn drop_dead_pure_lets(function: &mut CoreFn, c_functions: &[CFunction]) -> bool {
     let mut uses = vec![0usize; function.vars.len()];
     for block in &function.blocks {
         let mut count = |atom: Atom| {
@@ -331,7 +342,7 @@ fn drop_dead_pure_lets(function: &mut CoreFn) -> bool {
         for (position, stmt) in block.stmts.iter().enumerate().rev() {
             if let Stmt::Let { var, rhs } = stmt
                 && uses[var.0 as usize] == 0
-                && (pure(rhs) || drops_constant(rhs))
+                && (pure(rhs, c_functions) || drops_constant(rhs))
             {
                 keep[position] = false;
                 rhs.for_each_atom(|atom| {

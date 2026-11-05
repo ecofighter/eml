@@ -1153,7 +1153,7 @@ impl FnLowering<'_> {
                     let written = Atom::Var(builder.bind(
                         VarInfo::new("st", state.0, state.1),
                         Rhs::Extern {
-                            ext: Extern::MutArrayWrite,
+                            ext: Extern::MutArrayWrite.into(),
                             args: vec![st, args[0], args[1]],
                             at: None,
                         },
@@ -1219,7 +1219,7 @@ impl FnLowering<'_> {
         );
         let at = Some(self.loc(site));
         let rhs = Rhs::Extern {
-            ext: Extern::CheckIndex,
+            ext: Extern::CheckIndex.into(),
             args: vec![index, length],
             at,
         };

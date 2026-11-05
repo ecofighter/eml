@@ -369,6 +369,7 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
         &program.structs,
         &program.effects,
         &program.strings,
+        &program.c_functions,
         summaries,
         f,
     )
@@ -561,7 +562,7 @@ impl<'a> Checker<'a> {
             };
             self.check_stmt(&mut owned, stmt)?;
             if let Some(Recorder { entry: _, points }) = &mut self.unwind
-                && let Some((vars, landing)) = unwind::point(stmt)
+                && let Some((vars, landing)) = unwind::point(stmt, &self.program.c_functions)
             {
                 // 束縛した変数は命令が戻ってから現れるので、巻き戻しで手放すものに入れない
                 let (tokens, owned): (Vec<_>, Vec<_>) = owned
@@ -618,7 +619,8 @@ impl<'a> Checker<'a> {
                         args: _,
                         at: _,
                     } => {
-                        self.cx.note_never(*var, ext.row().ret == OpRet::Never);
+                        self.cx
+                            .note_never(*var, self.program.row(*ext).ret == OpRet::Never);
                     }
                     Rhs::Prim(_, _)
                     | Rhs::ConstString(_)
@@ -1407,9 +1409,10 @@ impl<'a> Checker<'a> {
             Rhs::Extern { ext, args, at: _ } => {
                 self.cx.check_extern(var, *ext, args)?;
                 // 借用の引数は基本操作と同じく読む使いである (docs/spec/lir.md の「extern の借用」)
-                let lent = format!("lent to `{}`", ext.row().name);
-                self.read_borrowed(owned, args, ext.row().borrowed, &lent)?;
-                self.lent_apart_from_consumed(owned, args, ext.row().borrowed, &lent)?;
+                let row = self.program.row(*ext);
+                let lent = format!("lent to `{}`", row.name);
+                self.read_borrowed(owned, args, row.borrowed, &lent)?;
+                self.lent_apart_from_consumed(owned, args, row.borrowed, &lent)?;
             }
             Rhs::Prim(prim, args) => {
                 self.cx.check_prim(var, prim, args)?;
@@ -1504,7 +1507,9 @@ impl<'a> Checker<'a> {
                 return self.read(owned, operand, "unboxed");
             }
         }
-        self.consume_all(owned, |f| rhs.for_each_consumed(f))
+        self.consume_all(owned, |f| {
+            rhs.for_each_consumed(&self.program.c_functions, f)
+        })
     }
 
     /// 呼び出しは、形を確かめた後に、オペランドの Repr を左から比べ、結果を `receiver` と比べてから、範囲と所有を

@@ -69,6 +69,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         &program.structs,
         &program.effects,
         &program.strings,
+        &program.c_functions,
         summaries,
         |tables| {
             for function in &program.functions {
@@ -240,7 +241,8 @@ impl<'a> Checker<'a> {
                         args: _,
                         at: _,
                     } => {
-                        self.cx.note_never(*var, ext.row().ret == OpRet::Never);
+                        self.cx
+                            .note_never(*var, self.program.row(*ext).ret == OpRet::Never);
                     }
                     Rhs::Prim(_, _)
                     | Rhs::ConstString(_)
@@ -486,7 +488,9 @@ impl<'a> Checker<'a> {
         }
         self.cx.visible(marker)?;
         let block = &self.function.blocks[self.cx.at.block as usize];
-        if tail_position_call(block).is_some_and(|(at, _)| at as i64 == self.cx.at.index) {
+        if tail_position_call(block, &self.program.c_functions)
+            .is_some_and(|(at, _)| at as i64 == self.cx.at.index)
+        {
             return Err(format!(
                 "an apply with the prompt marker `{}` is in a tail position, which leaves no frame to land on",
                 self.cx.name(marker)

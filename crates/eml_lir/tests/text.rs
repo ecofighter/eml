@@ -57,7 +57,7 @@ fn positions_are_printed_only_on_request() {
         Stmt::Let {
             var: VarId(2),
             rhs: Rhs::Extern {
-                ext: eml_extern::Extern::IntAdd,
+                ext: eml_extern::Extern::IntAdd.into(),
                 args: vec![v(0), Atom::Int(1)],
                 at: Some(Loc {
                     file: 0,
@@ -527,7 +527,7 @@ fn f(s.0: obj) -> unit {
         Stmt::Let {
             var: VarId(1),
             rhs: Rhs::Extern {
-                ext: eml_extern::Extern::Println,
+                ext: eml_extern::Extern::Println.into(),
                 args: vec![v(0)],
                 at: None,
             },
@@ -558,7 +558,7 @@ fn f(a.0: int, b.1: int) -> enum {
         Stmt::Let {
             var: VarId(2),
             rhs: Rhs::Extern {
-                ext: eml_extern::Extern::IntEq,
+                ext: eml_extern::Extern::IntEq.into(),
                 args: vec![v(0), v(1)],
                 at: None,
             },
@@ -668,10 +668,10 @@ fn f(n.0: int) -> int {
     stmts[2].for_each_atom(|atom| atoms.push(atom));
     assert_eq!(atoms, [v(1)]);
     let mut consumed = Vec::new();
-    stmts[2].for_each_consumed(|atom| consumed.push(atom));
+    stmts[2].for_each_consumed(&program.c_functions, |atom| consumed.push(atom));
     assert_eq!(consumed, []);
     let mut consumed = Vec::new();
-    stmts[0].for_each_consumed(|atom| consumed.push(atom));
+    stmts[0].for_each_consumed(&program.c_functions, |atom| consumed.push(atom));
     assert_eq!(consumed, [v(0)]);
 }
 
