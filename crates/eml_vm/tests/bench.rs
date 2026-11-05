@@ -1270,14 +1270,14 @@ fn spectral_norm() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 11,
-        rc_increments: 398371,
-        rc_decrements: 402413,
-        boxes: 4001,
-        unboxes: 400400,
-        allocations: 4043,
+        rc_increments: 4011,
+        rc_decrements: 4053,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 43,
         reuses: 0,
-        peak_objects: 304,
-        peak_stack: 51,
+        peak_objects: 4,
+        peak_stack: 50,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -1777,19 +1777,15 @@ fn mandelbrot_does_not_allocate_complex() {
     assert_eq!(small.allocations, large.allocations, "{small:?}\n{large:?}");
 }
 
-/// 組を構造体にしない場合の spectral-norm の確保の数 (docs/implementation/benchmarks.md の「配列の `Float` の要素の箱」)。
-const SPECTRAL_NORM_BOXED_TUPLE_ALLOCATIONS: u64 = 4057;
-
-/// 状態を渡す形の複製が返す組の 12 と、その中の `Float` の箱の 2 の、14 の確保が減る。配列の
-/// `Float` の要素の箱は残る。
+/// `UnboxedArray Float` の要素は生の語なので、大きさによらず要素の箱を作らない
+/// (docs/implementation/benchmarks.md の「配列の `Float` の要素の箱」)。
 #[test]
-fn spectral_norm_allocates_14_fewer() {
-    let stats = stats("spectral_norm", "1.274219991\n");
-    assert_eq!(
-        stats.allocations,
-        SPECTRAL_NORM_BOXED_TUPLE_ALLOCATIONS - 14,
-        "{stats:?}"
-    );
+fn spectral_norm_does_not_box_elements() {
+    let small = stats_with_args("spectral_norm", &["20"], "1.273839841\n");
+    let large = stats_with_args("spectral_norm", &["40"], "1.274167288\n");
+    assert!(small.boxes <= 1, "{small:?}");
+    assert_eq!(small.boxes, large.boxes, "{small:?}\n{large:?}");
+    assert_eq!(small.allocations, large.allocations, "{small:?}\n{large:?}");
 }
 
 /// 組の要素を入れ替える特殊化された `map` (`records/swap_map_specialized.em`) の、構造体の表現の前

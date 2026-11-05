@@ -56,7 +56,7 @@
 | `fannkuch_var.em` | fannkuch-redux (既定は n = 7) を、3本の配列の変数と10本の `Unr` の変数で書く | 何重にも入れ子になった `var` と、配列の添字 |
 | `fannkuch_by_hand.em` | 状態をすべて末尾再帰の局所関数に受け渡したもの | `fannkuch_var.em` の下限 |
 | `nbody.em` | Benchmarks Game の5つの天体を、`Vec3` の値で引数の回数 (既定は 1000) だけ進める | 配列に書く構造体の箱と `Float` の算術 |
-| `spectral_norm.em` | 引数の大きさ (既定は 100) のスペクトルノルムを、`Array Float` と `var` で求める | 配列の `Float` の要素の箱 |
+| `spectral_norm.em` | 引数の大きさ (既定は 100) のスペクトルノルムを、`UnboxedArray Float` と `var` で求める | 配列の `Float` の要素の箱 |
 | `mandelbrot.em` | 引数の大きさ (既定は 128) の正方形の格子で、集合に入る点を `Complex` の値で数える | 構造体の値の算術 |
 
 `nbody.em`、`spectral_norm.em`、`mandelbrot.em`、`sieve_var.em`、`fannkuch_var.em` は、大きさを省略できる引数で受ける。引数がなければ表の既定の大きさで動き、回数のテストと `bench/run.sh` はこの大きさで測る。`bench/scripts.sh` は大きな大きさを渡して Python の実装と比べる (下の「スクリプトの計測」)。大きさを読むために `Std.Env` と `String.to_int` のコードがプログラムに入るので、この5つの実行の分には、それをコンパイルして動かす約 4600 万から 6400 万命令が加わる (「今の数値」の環境で、`Env` と `String` の import と `size` を消して大きさを定数にしたプログラムとの差を測った値。`nbody`、`spectral_norm`、`sieve_var` は約 4600 万、`mandelbrot` と `fannkuch_var` は約 6400 万)。
@@ -80,7 +80,7 @@
 - `iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop`: `Iter.fold` で引く形の確保の数が入力の大きさによらず、直接のループ `sum_loop` と同じである。`Iter.filter` を重ねた形は、残した要素ごとに4つ確保する
 - `rebuilding_programs_reuse_boxes`: 関数の中で手放して作り直す8つのプログラムで `reuses` が0より大きい。`allocations_are_counted_in_checked_mode` は、確保の数が検査モードの数え方から来ることを確かめる
 - `var_matches_hand_written_work`: `var` で書いたプログラムと手書きのプログラムの2つの組で、`var` のプログラムの `evidence_steps` と `yields` が0で、確保の数の差が表 `RESIDUAL` の値に等しい
-- `nbody_allocates_25_per_step`、`mandelbrot_does_not_allocate_complex`、`spectral_norm_allocates_14_fewer`: 構造体の表現で消える確保と残る確保の数 (下の「配列に書く構造体の箱」と「配列の `Float` の要素の箱」)
+- `nbody_allocates_25_per_step`、`mandelbrot_does_not_allocate_complex`、`spectral_norm_does_not_box_elements`: 構造体の表現で消える確保と残る確保の数、生の要素の配列が要素の箱を作らないこと (下の「配列に書く構造体の箱」と「配列の `Float` の要素の箱」)
 - `unwind_points`: `bench/` と `tests/ui/run/scripts/` のプログラムの巻き戻しの表の行の数を固定する
 - `trade_offs`: 呼び出しの規約と構造体の表現の引き換えの形の回数を固定する (下の「呼び出しの規約の引き換え」と「構造体の表現の引き換え」)
 
@@ -853,9 +853,9 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 
 ### 配列の `Float` の要素の箱
 
-- 主張: 配列の要素は一様な位置なので、`Array Float` と `MutArray Float` の要素は書くたびに `Float` の箱に入る。spectral-norm の確保のほとんどはこの箱である
-- 数値: spectral-norm (既定の大きさ) は `allocations` 4043、`boxes` 4001。10回のくり返しで行列とベクトルの積を40回計算し、そのたびに100個の要素を作る (40 × 100 = 4000)。状態を渡す形の複製が返す組を構造体にしない場合は 4057 だった (e6665e64)。`RunStats` の値なので機種によらず、0fff343a の `bench.rs` のスナップショットと同じ
-- 根拠にしている所: [ロードマップ](../future/roadmap.md) の「段の列」の生の要素の配列の段、`bench/spectral_norm.em` の先頭のコメント、`crates/eml_vm/tests/bench.rs` の `spectral_norm_allocates_14_fewer`
+- 主張: `Array Float` と `MutArray Float` の要素は一様な位置に入るので、書くたびに `Float` の箱になる。`UnboxedArray Float` の要素は生の語なので、spectral-norm は要素の箱を作らない
+- 数値: spectral-norm (既定の大きさ) は `allocations` 43、`boxes` 0、`unboxes` 0 で、`rc_increments` は 4011 になる。同じ計算を要素が箱に入る `Array Float` で書くと、`allocations` 4043、`boxes` 4001、`unboxes` 400400、`rc_increments` 398371 になる。10回のくり返しで行列とベクトルの積を40回計算し、そのたびに100個の要素を作るので、要素の箱は 40 × 100 = 4000 個になる。`RunStats` の値なので機種によらない
+- 根拠にしている所: `bench/spectral_norm.em` の先頭のコメント、`crates/eml_vm/tests/bench.rs` の `spectral_norm_does_not_box_elements` (大きさ 20 と 40 で `boxes` と `allocations` が等しく、`boxes` が 1 以下)
 
 ### 配列に書く構造体の箱
 
