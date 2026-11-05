@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/unboxed_var_index.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/unboxed_var_index.em:7:3 ]
+   │
+ 7 │   u[0] <- 2.0
+   │   ─────┬─────  
+   │        ╰─────── expected `MutArray _`, found `UnboxedArray Float`
+   │
+   ├─[ check-fail/types/unboxed_var_index.em:7:3 ]
+   │
+ 6 │   var u = UnboxedArray.make 3 1.0
+   │   ───────────────┬───────────────  
+   │                  ╰───────────────── the type of `u` comes from here
+   │ 
+   │ Note: only a `var` variable that holds a `MutArray` can be written by index
+───╯

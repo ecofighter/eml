@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/unboxed_index.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/unboxed_index.em:5:26 ]
+   │
+ 5 │ main () = println (show (UnboxedArray.make 3 1.0)[0])
+   │                          ───────────┬───────────  
+   │                                     ╰───────────── expected `Array _`, found `UnboxedArray Float`
+   │ 
+   │ Note: only an `Array` value can be indexed; keep a `MutArray` in a `var` variable to index it
+───╯

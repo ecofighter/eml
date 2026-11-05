@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/par/unboxed_shared.em
+---
+--- stdout ---
+(124750.0, 375750.0, 999.0)
+--- stderr ---

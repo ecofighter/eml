@@ -57,6 +57,12 @@ probe_array a = a
 probe_mut_array : MutArray Int -> MutArray Int
 probe_mut_array a = a
 
+probe_unboxed_array : UnboxedArray Float -> UnboxedArray Float
+probe_unboxed_array a = a
+
+probe_mut_unboxed_array : MutUnboxedArray Float -> MutUnboxedArray Float
+probe_mut_unboxed_array a = a
+
 probe_cell : Async.Cell -> Async.Cell
 probe_cell c = c
 
@@ -124,6 +130,8 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Child => "probe_child",
         ExternType::Array => "probe_array",
         ExternType::MutArray => "probe_mut_array",
+        ExternType::UnboxedArray => "probe_unboxed_array",
+        ExternType::MutUnboxedArray => "probe_mut_unboxed_array",
         ExternType::Cell => "probe_cell",
         ExternType::Task => "probe_task",
         ExternType::Scope => "probe_scope",
@@ -295,7 +303,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     }
 }
 
-/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.Async.task_cell`、
+/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.MutUnboxedArray` の3つの行、`Std.Async.task_cell`、
 /// `Std.Async.op_ready`、`Std.Async.job_cell`、
 /// `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr` と、`Std.Stream` の
 /// `op_reader`、`op_writer`、`op_outcome`、`op_prefix`、`source` と、`Std.Exec` の `stdin`、`stdout`、`stderr`、`stage_count`、
@@ -312,6 +320,13 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Std.Array.get" => (&[true, false], None),
             "Std.MutArray.length" => (&[true], Some(0)),
             "Std.MutArray.read" => (&[true, false], Some(0)),
+            "Std.UnboxedArray.length" => (&[true], None),
+            "Std.UnboxedArray.Unboxed Float.get" | "Std.UnboxedArray.Unboxed Int.get" => {
+                (&[true, false], None)
+            }
+            "Std.MutUnboxedArray.length" => (&[true], Some(0)),
+            "Std.MutUnboxedArray.MutUnboxed Float.read"
+            | "Std.MutUnboxedArray.MutUnboxed Int.read" => (&[true, false], Some(0)),
             "Std.Async.task_cell" => (&[true], Some(0)),
             "Std.Async.op_ready" => (&[true, false], Some(0)),
             "Std.Async.job_cell" => (&[true], Some(0)),
@@ -532,7 +547,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
     declared == row || (declared == Mark::Poly && row == Mark::Unr)
 }
 
-/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の13、`MutArray` を扱う7つ、
+/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の13、`MutArray` を扱う7つ、`MutUnboxedArray` を扱う12、
 /// `Std.Par.par`、`Std.Async` の20行、`Std.Chan` の2行、`Std.Net` の12行、`Std.Stream` の8行、`Std.Exec` の8行、`Std.Tls` の11行以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
@@ -589,6 +604,18 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.MutArray.read" => (&[Lin, Unr], Unr),
             "Std.MutArray.write" => (&[Lin, Unr, Unr], Lin),
             "Std.MutArray.freeze" => (&[Lin], Unr),
+            "Std.UnboxedArray.thaw" => (&[Unr], Lin),
+            "Std.MutUnboxedArray.MutUnboxed Float.make"
+            | "Std.MutUnboxedArray.MutUnboxed Int.make" => (&[Unr, Unr], Lin),
+            "Std.MutUnboxedArray.empty" => (&[Unr], Lin),
+            "Std.MutUnboxedArray.length" => (&[Lin], Unr),
+            "Std.MutUnboxedArray.MutUnboxed Float.read"
+            | "Std.MutUnboxedArray.MutUnboxed Int.read" => (&[Lin, Unr], Unr),
+            "Std.MutUnboxedArray.MutUnboxed Float.write"
+            | "Std.MutUnboxedArray.MutUnboxed Int.write" => (&[Lin, Unr, Unr], Lin),
+            "Std.MutUnboxedArray.MutUnboxed Float.fill"
+            | "Std.MutUnboxedArray.MutUnboxed Int.fill" => (&[Lin, Unr], Lin),
+            "Std.MutUnboxedArray.freeze" => (&[Lin], Unr),
             "Std.Par.par" => (&[Poly, Poly], Poly),
             "Std.Async.start_raw" | "Std.Async.run_raw" => (&[Poly], Lin),
             "Std.Async.park" => (&[Unr, Lin], Unr),

@@ -4369,6 +4369,54 @@ fn run_extern<R: Exec>(
                 let w = ctx.array_freeze(task.get(arg(0)))?;
                 task.set(dst, w);
             }
+            // 要素はスロットの生のビットのまま渡すので、Float と Int の行が1つの操作を共有する
+            // (docs/spec/vm.md の「基本操作と extern」)
+            Extern::UnboxedArrayMakeFloat
+            | Extern::UnboxedArrayMakeInt
+            | Extern::MutUnboxedArrayMakeFloat
+            | Extern::MutUnboxedArrayMakeInt => {
+                let lin = matches!(
+                    ext,
+                    Extern::MutUnboxedArrayMakeFloat | Extern::MutUnboxedArrayMakeInt
+                );
+                let w = ctx.unboxed_make(task.raw(arg(0)), task.raw(arg(1)) as u64, lin)?;
+                task.set(dst, w);
+            }
+            Extern::MutUnboxedArrayEmpty => {
+                let w = ctx.unboxed_empty(true)?;
+                task.set(dst, w);
+            }
+            Extern::UnboxedArrayLength | Extern::MutUnboxedArrayLength => {
+                let n = ctx.unboxed_length(task.get(arg(0)))?;
+                task.set_raw(dst, n);
+            }
+            Extern::UnboxedArrayGetFloat
+            | Extern::UnboxedArrayGetInt
+            | Extern::MutUnboxedArrayReadFloat
+            | Extern::MutUnboxedArrayReadInt => {
+                let x = ctx.unboxed_get(task.get(arg(0)), task.raw(arg(1)))?;
+                task.set_raw(dst, x as i64);
+            }
+            Extern::UnboxedArraySetFloat
+            | Extern::UnboxedArraySetInt
+            | Extern::MutUnboxedArrayWriteFloat
+            | Extern::MutUnboxedArrayWriteInt => {
+                let w =
+                    ctx.unboxed_set(task.get(arg(0)), task.raw(arg(1)), task.raw(arg(2)) as u64)?;
+                task.set(dst, w);
+            }
+            Extern::MutUnboxedArrayFillFloat | Extern::MutUnboxedArrayFillInt => {
+                let w = ctx.unboxed_fill(task.get(arg(0)), task.raw(arg(1)) as u64)?;
+                task.set(dst, w);
+            }
+            Extern::UnboxedArrayThaw => {
+                let w = ctx.unboxed_thaw(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::MutUnboxedArrayFreeze => {
+                let w = ctx.unboxed_freeze(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
             Extern::CheckIndex => {
                 externs::check_index(task.raw(arg(0)), task.raw(arg(1)))?;
                 task.set(dst, Word::UNIT);

@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/mut_unboxed_array_unused.em
+---
+[E3003] Error: `m` must be used exactly once, but it is not used
+   ╭─[ check-fail/linearity/mut_unboxed_array_unused.em:6:7 ]
+   │
+ 6 │   let m = MutUnboxedArray.make 3 0.0
+   │       ┬  
+   │       ╰── `m` is bound here
+ 7 │   println "unused"
+   │                   │ 
+   │                   ╰─ `m` is not used before the end of this scope
+   │ 
+   │ Help: pass `m` to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯

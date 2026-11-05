@@ -73,7 +73,7 @@
 
 - 構造体の型の `con` は `struct(S)` の変数を束縛する。引数は形のフィールドの Repr と比べる正確な位置で、配置の宣言した Repr とは比べない
 - 構造体の値を分けるのは、いつも `unpack` である。束縛するフィールドの Repr と印は、形のものになる。構造体の変数はタグの `switch` の scrutinee にならない
-- `with_arg` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
+- `with_arg` の extern (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.read`、`length`、`Std.MutUnboxedArray.length` と2つの `read`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
 - エントリの関数 `entry$<名前>` の `ret` は値1つにする。エントリの値の型が構造体なら `ret` を `obj` にし、box の挿入が箱に入れる。VM の `Finish` は値を1つだけ受けるためである ([VM](vm.md) の「誤り、止めること、終わり」)
 - 型から決める構造体 (`StructTypes`) と、型を持たない組 (`with_arg` の組と、`optimize` の状態を渡す形の複製が返す組) は、同じ語の数と `unit` の条件 (`MAX_STRUCT_WORDS`) で決める。型を持たない組の形は `tuple_struct` が作る
 
@@ -201,6 +201,14 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.MutArray.read` | `Lin`、`Unr` | `Unr` (要素) |
   | `Std.MutArray.write` | `Lin`、`Unr`、`Unr` | `Lin` |
   | `Std.MutArray.freeze` | `Lin` | `Unr` (`Array a`) |
+  | `Std.UnboxedArray.thaw` | `Unr` | `Lin` (`MutUnboxedArray a`) |
+  | `Std.MutUnboxedArray.MutUnboxed Float.make`、`MutUnboxed Int.make` | `Unr`、`Unr` | `Lin` |
+  | `Std.MutUnboxedArray.empty` | `Unr` | `Lin` |
+  | `Std.MutUnboxedArray.length` | `Lin` | `Unr` (`Int`) |
+  | `Std.MutUnboxedArray.MutUnboxed Float.read`、`MutUnboxed Int.read` | `Lin`、`Unr` | `Unr` (要素) |
+  | `Std.MutUnboxedArray.MutUnboxed Float.write`、`MutUnboxed Int.write` | `Lin`、`Unr`、`Unr` | `Lin` |
+  | `Std.MutUnboxedArray.MutUnboxed Float.fill`、`MutUnboxed Int.fill` | `Lin`、`Unr` | `Lin` |
+  | `Std.MutUnboxedArray.freeze` | `Lin` | `Unr` (`UnboxedArray a`) |
   | `Std.Par.par` | `poly`、`poly` | `poly` |
   | `Std.Async.start_raw`、`run_raw` | `poly` | `Lin` (`Task a`) |
   | `Std.Async.park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_signal` | `Unr`、`Lin` | `Unr` |
@@ -231,7 +239,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Tls.error_message`、`take_line` | `Lin` | `Unr` (`String`) |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
-  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
+  `with_arg` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.MutUnboxedArray.length` と2つの `read`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
 - 基本操作の表の印の列は [LIR](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
 - 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 

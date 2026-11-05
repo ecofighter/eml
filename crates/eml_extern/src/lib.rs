@@ -242,6 +242,8 @@ table! {
         Child => type_row("Std.Proc.Child", Lin, Repr::Obj),
         Array => generic_type_row("Prelude.Array", Unr),
         MutArray => generic_type_row("Prelude.MutArray", Lin),
+        UnboxedArray => generic_type_row("Prelude.UnboxedArray", Unr),
+        MutUnboxedArray => generic_type_row("Prelude.MutUnboxedArray", Lin),
         // 登録表の添字の即値と、タスクのハンドルを中身に持つ `Foreign` (docs/spec/stdlib.md の「`Std.Async`」)
         Cell => type_row("Std.Async.Cell", Unr, Repr::Int),
         Task => generic_type_row("Std.Async.Task", Lin),
@@ -1061,6 +1063,155 @@ table! {
             &[Lin],
             Obj,
             Unr,
+            Purity::Pure,
+        ),
+        // 要素は生の `int` か `float` なので、型変数の位置にある要素も、instance ごとの行でその Repr にする。Float と
+        // Int の行は、VM と eml_rt で1つの操作を共有する (docs/spec/stdlib.md の「`Std.UnboxedArray`」)
+        UnboxedArrayLength => borrowing(
+            &[true],
+            kinded("Std.UnboxedArray.length", &[Obj], &[Unr], Int, Unr, Purity::Pure),
+        ),
+        UnboxedArrayThaw => kinded("Std.UnboxedArray.thaw", &[Obj], &[Unr], Obj, Lin, Purity::Pure),
+        MutUnboxedArrayEmpty => kinded(
+            "Std.MutUnboxedArray.empty",
+            &[Unit],
+            &[Unr],
+            Obj,
+            Lin,
+            Purity::Pure,
+        ),
+        MutUnboxedArrayLength => borrowing(
+            &[true],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.MutUnboxedArray.length",
+                    &[Obj],
+                    &[Lin],
+                    Int,
+                    Unr,
+                    Purity::Pure,
+                )
+            },
+        ),
+        MutUnboxedArrayFreeze => kinded(
+            "Std.MutUnboxedArray.freeze",
+            &[Obj],
+            &[Lin],
+            Obj,
+            Unr,
+            Purity::Pure,
+        ),
+        UnboxedArrayMakeFloat => row("Std.UnboxedArray.Unboxed Float.make", &[Int, Float], Obj, Purity::Panics),
+        UnboxedArrayMakeInt => row("Std.UnboxedArray.Unboxed Int.make", &[Int, Int], Obj, Purity::Panics),
+        UnboxedArrayGetFloat => borrowing(
+            &[true, false],
+            kinded(
+                "Std.UnboxedArray.Unboxed Float.get",
+                &[Obj, Int],
+                &[Unr, Unr],
+                Float,
+                Unr,
+                Purity::Panics,
+            ),
+        ),
+        UnboxedArrayGetInt => borrowing(
+            &[true, false],
+            kinded(
+                "Std.UnboxedArray.Unboxed Int.get",
+                &[Obj, Int],
+                &[Unr, Unr],
+                Int,
+                Unr,
+                Purity::Panics,
+            ),
+        ),
+        UnboxedArraySetFloat => row(
+            "Std.UnboxedArray.Unboxed Float.set",
+            &[Obj, Int, Float],
+            Obj,
+            Purity::Panics,
+        ),
+        UnboxedArraySetInt => row(
+            "Std.UnboxedArray.Unboxed Int.set",
+            &[Obj, Int, Int],
+            Obj,
+            Purity::Panics,
+        ),
+        MutUnboxedArrayMakeFloat => kinded(
+            "Std.MutUnboxedArray.MutUnboxed Float.make",
+            &[Int, Float],
+            &[Unr, Unr],
+            Obj,
+            Lin,
+            Purity::Panics,
+        ),
+        MutUnboxedArrayMakeInt => kinded(
+            "Std.MutUnboxedArray.MutUnboxed Int.make",
+            &[Int, Int],
+            &[Unr, Unr],
+            Obj,
+            Lin,
+            Purity::Panics,
+        ),
+        MutUnboxedArrayReadFloat => borrowing(
+            &[true, false],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.MutUnboxedArray.MutUnboxed Float.read",
+                    &[Obj, Int],
+                    &[Lin, Unr],
+                    Float,
+                    Unr,
+                    Purity::Panics,
+                )
+            },
+        ),
+        MutUnboxedArrayReadInt => borrowing(
+            &[true, false],
+            FunctionRow {
+                with_arg: Some(0),
+                ..kinded(
+                    "Std.MutUnboxedArray.MutUnboxed Int.read",
+                    &[Obj, Int],
+                    &[Lin, Unr],
+                    Int,
+                    Unr,
+                    Purity::Panics,
+                )
+            },
+        ),
+        MutUnboxedArrayWriteFloat => kinded(
+            "Std.MutUnboxedArray.MutUnboxed Float.write",
+            &[Obj, Int, Float],
+            &[Lin, Unr, Unr],
+            Obj,
+            Lin,
+            Purity::Panics,
+        ),
+        MutUnboxedArrayWriteInt => kinded(
+            "Std.MutUnboxedArray.MutUnboxed Int.write",
+            &[Obj, Int, Int],
+            &[Lin, Unr, Unr],
+            Obj,
+            Lin,
+            Purity::Panics,
+        ),
+        MutUnboxedArrayFillFloat => kinded(
+            "Std.MutUnboxedArray.MutUnboxed Float.fill",
+            &[Obj, Float],
+            &[Lin, Unr],
+            Obj,
+            Lin,
+            Purity::Pure,
+        ),
+        MutUnboxedArrayFillInt => kinded(
+            "Std.MutUnboxedArray.MutUnboxed Int.fill",
+            &[Obj, Int],
+            &[Lin, Unr],
+            Obj,
+            Lin,
             Purity::Pure,
         ),
         // `var` の配列の変数の添字を、使う所で確かめる。節の中で `Panic` を起こさないためである

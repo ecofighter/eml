@@ -1019,8 +1019,14 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 | `Std.Proc.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk` | `Ctx::handle_read` (`Handle::Child`。`FileIn` の同じ名前の読みと同じ `ReadAmount` と `Form`) |
 | `Std.Proc.write`、`write_bytes`、`write_line` | `Ctx::handle_write` (`Handle::Child`。`Write::Text`、`Bytes`、`Line`) |
 | `Std.Array.make`、`length`、`get`、`set`、`thaw`、`Std.MutArray.make`、`empty`、`length`、`read`、`write`、`freeze` | `Ctx::array_make`、`array_empty`、`array_length`、`array_get`、`array_set`、`array_freeze`、`array_thaw` (上の「配列」) |
+| `Std.UnboxedArray.Unboxed Float.make`、`Unboxed Int.make`、`Std.MutUnboxedArray.MutUnboxed Float.make`、`MutUnboxed Int.make`、`Std.MutUnboxedArray.empty` | `Ctx::unboxed_make` (`lin` は `MutUnboxedArray` の行だけ)、`unboxed_empty` (上の「配列」) |
+| `Std.UnboxedArray.length`、`Std.MutUnboxedArray.length` | `Ctx::unboxed_length` |
+| `Std.UnboxedArray.Unboxed Float.get`、`Unboxed Int.get`、`Std.MutUnboxedArray.MutUnboxed Float.read`、`MutUnboxed Int.read` | `Ctx::unboxed_get` |
+| `Std.UnboxedArray.Unboxed Float.set`、`Unboxed Int.set`、`Std.MutUnboxedArray.MutUnboxed Float.write`、`MutUnboxed Int.write` | `Ctx::unboxed_set` |
+| `Std.MutUnboxedArray.MutUnboxed Float.fill`、`MutUnboxed Int.fill` | `Ctx::unboxed_fill` |
+| `Std.UnboxedArray.thaw`、`Std.MutUnboxedArray.freeze` | `Ctx::unboxed_thaw`、`unboxed_freeze` |
 
-`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.open`、`Std.Stdout.open`、`Std.Stderr.open`、`Std.Float.infinity_value`、`nan_value`、`Std.MutArray.empty`、`Std.Bytes.empty`) は、VM が引数を読まずに呼ぶ。
+`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.open`、`Std.Stdout.open`、`Std.Stderr.open`、`Std.Float.infinity_value`、`nan_value`、`Std.MutArray.empty`、`Std.MutUnboxedArray.empty`、`Std.Bytes.empty`) は、VM が引数を読まずに呼ぶ。
 
 ### 語の ABI
 

@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/unboxed_no_instance.em
+---
+[E2006] Error: no instance of `Unboxed` for `String`
+   ╭─[ check-fail/types/unboxed_no_instance.em:6:11 ]
+   │
+ 6 │   let a = UnboxedArray.make 3 "x"
+   │           ────────┬────────  
+   │                   ╰────────── `make` requires `Unboxed String`
+───╯

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/unboxed/make_negative_length.em
+---
+--- stdout ---
+--- stderr ---
+--- runtime error ---
+array length -1 is negative
+  at run-fail/unboxed/make_negative_length.em:5:47

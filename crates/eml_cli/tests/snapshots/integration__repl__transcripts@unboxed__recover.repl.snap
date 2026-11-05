@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/unboxed/recover.repl
+---
+> import UnboxedArray
+> let a = UnboxedArray.make 3 0.0
+> UnboxedArray.get a 5
+runtime error: array index 5 is out of range for length 3
+  at <input 3>:1:1
+> UnboxedArray.to_list a
+[0.0, 0.0, 0.0]
+> a
+<extern> : UnboxedArray Float
+> (a, 1)
+(<extern>, 1) : (UnboxedArray Float, Int)
+> Some a
+Some <extern> : Option (UnboxedArray Float)
+--- close ---
+no leaks

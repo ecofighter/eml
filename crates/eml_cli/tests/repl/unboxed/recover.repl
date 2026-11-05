@@ -1,0 +1,8 @@
+# 実行時エラーの回復は `Raw` の配列も写し直す。`Show` のない `UnboxedArray Float` は `<extern>` と型を表示し、入れ子の位置でも同じに書く
+> import UnboxedArray
+> let a = UnboxedArray.make 3 0.0
+> UnboxedArray.get a 5
+> UnboxedArray.to_list a
+> a
+> (a, 1)
+> Some a
