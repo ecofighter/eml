@@ -1,0 +1,70 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/ffi/effects.em
+---
+[E2023] Error: the effects of `cos` must be `<>`
+   ╭─[ check-fail/ffi/effects.em:4:32 ]
+   │
+ 4 │ extern "C" pure cos : Float -> <IO> Float
+   │                                ──┬─  
+   │                                  ╰─── found `<IO>`
+   │ 
+   │ Note: a `pure` C function without narrowing `Int` arguments or a handle result has no effects
+───╯
+[E2023] Error: the effects of `abs` must be `<IO, Panic>`
+   ╭─[ check-fail/ffi/effects.em:5:32 ]
+   │
+ 5 │ extern "C" abs : Int as int -> <IO> Int
+   │                                ──┬─  
+   │                                  ╰─── found `<IO>`
+   │ 
+   │ Note 1: `IO` because the function is not `pure`
+   │ 
+   │ Note 2: `Panic` because an `Int` argument that does not fit its C type panics
+───╯
+[E2023] Error: the effects of `open` must be `<Panic>`
+   ╭─[ check-fail/ffi/effects.em:6:24 ]
+   │
+ 6 │ extern "C" pure open : Int -> Solver
+   │                        ──────┬──────  
+   │                              ╰──────── found `<>`
+   │ 
+   │ Note: `Panic` because a null handle from C panics
+───╯
+[E2023] Error: the effects of `add` must be `<IO>`
+   ╭─[ check-fail/ffi/effects.em:7:25 ]
+   │
+ 7 │ extern "C" add : Int -> <IO> Int -> Int
+   │                         ──┬─  
+   │                           ╰─── only the last arrow of a C function has effects
+───╯
+[E2023] Error: the effects of `add` must be `<IO>`
+   ╭─[ check-fail/ffi/effects.em:7:30 ]
+   │
+ 7 │ extern "C" add : Int -> <IO> Int -> Int
+   │                              ─────┬────  
+   │                                   ╰────── found `<>`
+   │ 
+   │ Note: `IO` because the function is not `pure`
+───╯
+[E2023] Error: the effects of `twice` must be `<IO>`
+   ╭─[ check-fail/ffi/effects.em:8:27 ]
+   │
+ 8 │ extern "C" twice : Int -> <IO, IO> Int
+   │                           ────┬───  
+   │                               ╰───── found `<IO, IO>`
+   │ 
+   │ Note: `IO` because the function is not `pure`
+───╯
+[E2023] Error: the effects of `make` must be `<IO, Panic>`
+   ╭─[ check-fail/ffi/effects.em:9:33 ]
+   │
+ 9 │ extern "C" make : Int as int -> <IO> Solver
+   │                                 ──┬─  
+   │                                   ╰─── found `<IO>`
+   │ 
+   │ Note 1: `IO` because the function is not `pure`
+   │ 
+   │ Note 2: `Panic` because an `Int` argument that does not fit its C type panics, and a null handle from C panics
+───╯

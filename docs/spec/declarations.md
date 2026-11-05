@@ -188,6 +188,60 @@ extern "C" data File drop "fclose"
 - dtor は、物体を解放する worker のスレッドで走る。どのスレッドで走るかは固定しない
 - `drop ""` は E1059 にし、`drop` を書かなかったものとして読む
 
+#### 型の対応
+
+C の関数の型は、eml の型だけから次の表で決まる。表にない型は E2022 にする。
+
+| eml の引数 | C の型 | 渡し方 |
+|---|---|---|
+| `Int`、`Int as int64_t` | `int64_t` | 値 |
+| `Int as int`、`Int as int32_t` | `int32_t` | 値。範囲を確かめる |
+| `Int as size_t` | `size_t` | 値。範囲を確かめる (`>= 0`) |
+| `Float` | `double` | 値 |
+| `UnboxedArray Float`、`UnboxedArray Int` | `const double*`、`const int64_t*` | 借りた配列の要素 0 へのポインタ |
+| `MutUnboxedArray Float`、`MutUnboxedArray Int` | `double*`、`int64_t*` | 借りた配列の要素 0 へのポインタ。結果の組で返す |
+| `String`、`Bytes` | `const char*`、`const uint8_t*` | 借りた本体へのポインタだけ。長さは別の `Int` の引数で渡す |
+| ハンドル (`extern "C" data`) | `void*` | 借りる。結果の組で返す |
+| ただ1つの引数の `Unit` | 引数なし | なし |
+
+| eml の結果 `R` | C の型 |
+|---|---|
+| `Unit` | `void` |
+| `Int`、`Int as …` | 引数の `Int` と同じ |
+| `Float` | `double` |
+| ハンドル | `void*` |
+
+- `MutUnboxedArray` とハンドルの引数は `Lin` の値で、C の関数はそれを消費せずに借りる。この引数があるときは、結果をちょうど組 `(R, Lin の引数の型を引数の順に)` と書く。`R` が `Unit` でも組の先頭に置く。組はユーザーが書き、処理系は推論しない。返ってくる配列は、C が書き込んだその配列である
+- `R` の位置のハンドルは、C の関数が作った新しい物体である。組の中で `R` の後ろに置けるのは、借りた引数の型だけである
+- `as` を書けるのは、引数の `Int` と、`R` の `Int` だけである。配列の要素や組の後ろの位置の `as` は E2022 にする
+- `Bool` と enum は対応させない。`Int` で渡す。型変数、関数の型、`Array`、ハンドルでない `data` とレコード、`R` の位置の `String`、`Bytes`、配列も E2022 にする。ほかの引数と一緒に書いた `Unit` も E2022 である
+- E2022 は、宣言の位置ごとに1つずつ、すべて出す
+
+最後の矢印の行は、ちょうど次のエフェクトを持つ。違えば E2023 にする。内側の矢印は行を持たない。
+
+- `Panic`: 狭める引数 (`Int as int`、`int32_t`、`size_t`) か、ハンドルの結果があるとき
+- `IO`: `pure` でないとき
+- `Async` (`Std.Async.Async`): `blocking` のとき
+
+`blocking` の C の関数は、まだ呼べない。行が正しい宣言に、`blocking` の語の位置で E0004 を出す。
+
+範囲と null の扱いは次のとおりである。
+
+- 範囲の外の `Int as int`、`int32_t`、`size_t` の引数は、呼ぶ前に `Panic` を上げる。位置は呼び出しの位置である。文言は `` argument {i} of `{name}` does not fit in C `{ctype}`: {value} `` で、`int` も `int32_t` と書く
+- 結果の範囲は確かめない。`int32_t` の結果は符号拡張し、`size_t` の結果は `Int` として読み替える
+- ハンドルを返す C の関数が NULL を返すと、呼んだ後で `` `{name}` returned a null handle `` の `Panic` を上げ、物体を作らない。そのため、ハンドルの物体の中のポインタは null にならない
+
+`pure` は次の約束である。結果と、`MutUnboxedArray` の引数に書き込む中身は、引数の値と渡した物体の中身だけで決まり、呼び出しはほかに観測できる効果を持たない。処理系は、使われない `pure` の呼び出しを消してよい。ただし、`MutUnboxedArray` の引数を持つ行は消さない。C の呼び出しを複製も並べ替えもしない。
+
+#### 宣言する側の約束
+
+処理系は次の約束を確かめず、宣言を信頼の境目とする。
+
+- `UnboxedArray`、`String`、`Bytes` で宣言した引数のポインタを通して書かない。物体は共有されているかもしれず、凍った定数かもしれない
+- ハンドルの状態を変える関数は `pure` にしない
+- ポインタは呼び出しの間だけ有効である
+- C の関数は、橋渡しの関数を通して巻き戻らない (C++ の例外、SEH)
+
 ## fixity
 
 ```haskell

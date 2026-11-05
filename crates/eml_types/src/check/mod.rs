@@ -20,7 +20,7 @@ use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
     BodyTypes, DeclType, InputType, Instantiation, RowYield, TypedProgram, Uniform, Update,
-    VarType, carry, codes, exhaustive, scc, uniform, usage,
+    VarType, carry, codes, exhaustive, ffi, scc, uniform, usage,
 };
 use constraints::{Defaulting, Failure, show_constraint, solve};
 
@@ -231,7 +231,20 @@ pub(crate) fn check_module(
         &schemes,
     ));
     diagnostics.extend(report_violations(program, files, &types, violated));
+    let mut c_shapes = FxHashMap::default();
+    for (id, function) in program.functions() {
+        if !matches!(function.kind, FunctionKind::C(_)) || function.signature.is_none() {
+            continue;
+        }
+        match ffi::check(program, id) {
+            Ok(shape) => {
+                c_shapes.insert(id, shape);
+            }
+            Err(found) => diagnostics.extend(found),
+        }
+    }
     let mut typed = typed_program(signatures, schemes, joins, bodies, inputs, query, types);
+    typed.c_shapes = c_shapes;
     let (uniform, found) = uniform::uniform(program, &typed.types, &typed.decls, &typed.bodies);
     typed.uniform = uniform;
     diagnostics.extend(found);
@@ -1122,6 +1135,7 @@ fn typed_program(
         uniform: Uniform::default(),
         inputs,
         query,
+        c_shapes: FxHashMap::default(),
     }
 }
 

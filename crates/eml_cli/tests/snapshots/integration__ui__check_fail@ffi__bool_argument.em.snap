@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/ffi/bool_argument.em
+---
+[E2022] Error: `Bool` cannot cross to C here
+   ╭─[ check-fail/ffi/bool_argument.em:2:21 ]
+   │
+ 2 │ extern "C" toggle : Bool -> <IO> Int
+   │                     ──┬─  
+   │                       ╰─── use `Int`
+───╯

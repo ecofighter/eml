@@ -8,6 +8,7 @@ mod classes;
 mod data;
 mod effects;
 mod exhaustive;
+mod ffi;
 mod instantiations;
 mod kind_export;
 mod kind_values;

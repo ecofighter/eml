@@ -14,7 +14,7 @@ mod c;
 
 pub use c::{
     CFnId, CFunction, CHandleId, CHandleType, CInt, CLibrary, CLink, CParam, CRet, CSignature,
-    CType, Os, writes,
+    CType, Os, c_faults, writes,
 };
 
 /// 表を1つの並びから作る。行は宣言の順に並び、`ALL` の添字と `self as usize` と静的な行の表の添字が同じになる。

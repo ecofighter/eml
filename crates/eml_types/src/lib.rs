@@ -7,6 +7,7 @@ mod data;
 mod diverge;
 mod dump;
 mod exhaustive;
+mod ffi;
 mod kind;
 mod resolve;
 mod scc;
@@ -30,6 +31,7 @@ use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 
 pub use dump::{dump, dump_linear};
+pub use ffi::{CArg, CResult, CShape};
 pub use resolve::{Resolution, resolve, satisfies};
 pub use store::{
     EffectLabel, Lin, RowTail, RowType, Substitution, TypeId, TypeKind, TypeNames, TypeStore,
@@ -66,6 +68,8 @@ pub mod codes {
     pub const VAR_ESCAPES: ErrorCode = ErrorCode(2019);
     pub const ROW_BOUND_EXCEEDED: ErrorCode = ErrorCode(2020);
     pub const PRIVATE_FIELD: ErrorCode = ErrorCode(2021);
+    pub const FFI_UNSUPPORTED_TYPE: ErrorCode = ErrorCode(2022);
+    pub const FFI_EFFECTS: ErrorCode = ErrorCode(2023);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
@@ -94,6 +98,9 @@ pub struct TypedProgram {
     /// 後で報告する誤り (線形性、網羅性、E2012) があっても `Some` になりうる。誤りの判断は呼び出し側が診断で行う
     /// (docs/spec/types.md の「REPL の入力」)。
     pub query: Option<String>,
+    /// 検査を通った `extern "C"` の関数の形。translate はこれだけを読んで C の行を作る
+    /// (docs/spec/declarations.md の「型の対応」)。
+    pub c_shapes: FxHashMap<FunctionId, CShape>,
 }
 
 /// REPL の入力の関数の検査の結果

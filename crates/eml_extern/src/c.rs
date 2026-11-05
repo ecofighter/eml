@@ -217,17 +217,26 @@ impl CFunction {
         CSignature { params, ret }
     }
 
-    /// 呼び出しが `Panic` で中断しうるか。狭める `Int as` の引数は範囲を外れうるし、ハンドルの結果は null になりうる。
+    /// 呼び出しが `Panic` で中断しうるか。狭める `Int as` の引数は範囲を外れうるし、ハンドルの結果は null になりうる
+    /// (docs/spec/declarations.md の「型の対応」)。
     pub fn faults(&self) -> bool {
         faults(&self.params, self.ret)
     }
 }
 
 fn faults(params: &[CParam], ret: CRet) -> bool {
-    params
-        .iter()
-        .any(|param| matches!(param, CParam::Int(int) if int.narrows()))
-        || matches!(ret, CRet::Handle(_))
+    let ints = params.iter().filter_map(|param| match param {
+        CParam::Int(int) => Some(*int),
+        _ => None,
+    });
+    c_faults(ints, matches!(ret, CRet::Handle(_)))
+}
+
+/// `Int` の引数の幅 `ints` と、結果がハンドルか (`handle_result`) から、呼び出しが `Panic` で中断しうるかを決める。
+/// 型検査は行を作る前にこれで期待する行を決めるので、行の `faults` と食い違わない
+/// (docs/spec/declarations.md の「型の対応」)。
+pub fn c_faults(ints: impl IntoIterator<Item = CInt>, handle_result: bool) -> bool {
+    ints.into_iter().any(CInt::narrows) || handle_result
 }
 
 /// C が借りた配列に書き込みうるか。`MutUnboxedArray` の引数だけが書ける (docs/spec/lir.md の「extern の借用」)。
