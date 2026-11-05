@@ -258,6 +258,19 @@ fn unboxed_float_elements_are_not_boxed_and_use_the_dedicated_instructions() {
     assert_eq!((small.boxes, large.boxes), (0, 0), "{small:?} {large:?}");
     assert_eq!(small.allocations, large.allocations, "{small:?} {large:?}");
     assert_eq!(small.unboxes, large.unboxes, "{small:?} {large:?}");
+
+    // 読み書きと長さは専用の命令になり、汎用の extern の行の番号の `match` を通らない (docs/spec/vm.md の「基本操作と extern」)
+    let code = disassembly(&unboxed_sum(3));
+    for dedicated in ["unboxed_get s", "unboxed_length s", "unboxed_set s"] {
+        assert!(code.contains(dedicated), "{dedicated}\n{code}");
+    }
+    for generic in [
+        "= Std.UnboxedArray.Unboxed Float.get(",
+        "= Std.UnboxedArray.length(",
+        "= Std.MutUnboxedArray.MutUnboxed Float.write(",
+    ] {
+        assert!(!code.contains(generic), "{generic}\n{code}");
+    }
 }
 
 /// n 行のファイルをディスクに書き、そのパスと、`\r\n` を除いた行の長さの和と、ファイルの長さを返す。

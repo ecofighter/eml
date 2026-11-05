@@ -346,6 +346,17 @@ pub enum Op {
         dst: Slot,
         a: Slot,
     },
+    /// `Std.UnboxedArray.get` と `Std.MutUnboxedArray.read` (Float と Int の4行)。配列 `a` は借りたまま、添字 `b` の要素を生のビットで `dst` に置く。
+    UnboxedGet {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    /// `Std.UnboxedArray.length` と `Std.MutUnboxedArray.length`。配列 `a` は借りたまま。
+    UnboxedLength {
+        dst: Slot,
+        a: Slot,
+    },
     /// `Std.String.byte_at`。文字列 `s` は借りたまま、バイト位置 `i` の値を生の語で `dst` に置く。
     StrByteAt {
         dst: Slot,
@@ -370,6 +381,11 @@ pub enum Op {
     },
     /// `Std.Array.set` と `Std.MutArray.write`。`operands[at..]` は [配列, 添字, 値]。配列と値を消費する。
     ArraySet {
+        dst: Slot,
+        at: u32,
+    },
+    /// `Std.UnboxedArray.set` と `Std.MutUnboxedArray.write` (Float と Int の4行)。`operands[at..]` は [配列, 添字, 値]。配列を消費し、値のスロットは生のビットである。
+    UnboxedSet {
         dst: Slot,
         at: u32,
     },
