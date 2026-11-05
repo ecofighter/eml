@@ -126,6 +126,16 @@ pub(crate) open spec fn body_wf(p: BlockPerm, cap: nat) -> bool {
     &&& p_kind(p) == Kind::String ==> valid_utf8(p.text())
 }
 
+/// `Raw` の物体の中身 (docs/spec/object-model.md の「種類」)。走査する語はなく、語 0 が要素の数 n で、語 1..=n が
+/// 要素である。要素の後ろも容量の終わりまで書いてある。
+pub(crate) open spec fn raw_wf(p: BlockPerm, cap: nat) -> bool {
+    &&& p_count(p) == 0
+    &&& !p_extended(p)
+    &&& cap >= 1
+    &&& p_filled(p, cap)
+    &&& p_word(p, 0).bits_spec() + 1 <= cap
+}
+
 /// ペイロードの語は、容量の終わりまですべて書いてある。`Data` の物体は生の語の数を持たないので、回復が生の語を容量の
 /// 終わりまで写せるように、`Data` のブロックはいつもこの形にする
 /// (docs/spec/object-model.md の「確保と解放」)。
@@ -453,8 +463,10 @@ impl Core {
             p,
             self.cap(h),
         ))
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::Raw
+            ==> raw_wf(p, self.cap(h)))
         &&& st != BlockState::Freed && p_kind(p) == Kind::Data ==> p_filled(p, self.cap(h))
-        &&& st == BlockState::Building ==> !p_kind(p).has_body()
+        &&& st == BlockState::Building ==> !p_kind(p).self_made()
         &&& st == BlockState::Live ==> forall|i: int| #[trigger]
             p_scanned(p, i) ==> self.slot_word(p, h, i)
         &&& st == BlockState::Dying ==> forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i)

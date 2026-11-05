@@ -115,7 +115,6 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 ## 生の要素の配列
 
 - 型は `Std.FloatArray` (`Unr`) と `Std.MutFloatArray` (`Lin`)、`Std.IntArray` と `Std.MutIntArray` である。API は `Array` と `MutArray` と同じ (`make`、`length`、`get` と `read`、`set` と `write`、`freeze` と `thaw`、`tabulate`、`from_list`) で、`copy_slice`、`concat`、`fill` を足す。要素は 8 バイトで、バイトの配列は作らない (`Bytes` がある)。`Array a` は要素が走査する語なので、今の `Data` の形のままにする
-- 物体の形は新しい種類 `Raw` (番号 6) である。生の語 0 が要素の数で、その後に生の 8 バイトの要素が並ぶ。`scan = 0` で、`String` と `Bytes` と同じく `raw` と `set_raw` からは中身が見えない。要素の型は静的に決まるので、`Float` と `Int` の配列は種類を共有する
 - `eml_rt` の中では、回復は `String` と同じく生の語を写し、`share` は子がないので O(1) で印を付け、`freeze` は受け付け、`foreign` と `unbox` は `WrongKind` で断る。検査モードは中身を不透明に扱う。`arrays.rs` の Verus の仕様に新しい種類を足す。VM の操作は extern で、新しい命令は作らない
 - `Mut*Array` は `Lin` で、型付けにより rc はいつも 1 である。`write` はいつもその場で書き、ネイティブの展開した `write` も rc 1 を前提にする (速いモード。VM の検査モードは、今の `MutArray` と同じく一意であることを確かめる)。`FloatArray.set` は `is_unique` でなければ写す。`thaw` は一意でなければ写して `lin` ビットを立て、`freeze` は消す。`lin` ビットを立てるのは `make` と `thaw` で、この種類の `Mut*Array` の値を作るのはこれらの extern だけなので、ビットのない `Lin` の物体は生じない
 - ネイティブのコードは `get`、`read`、`write` を展開する。要素の数を読み、符号なしで比べ、`Panic` の道へ冷たい分岐をし、`base + 8 + 8*i` の位置を `load.f64` か `store.f64` で浮動小数のレジスタとやりとりする。`Float` の箱は作らない

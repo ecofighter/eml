@@ -386,7 +386,61 @@ mod counting {
     }
 }
 
+/// 回復は `Raw` の物体を、同じ要素の新しい局所の物体に写す。共有の物体も局所の物体にする。
+fn recovery_copies_unboxed_arrays<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let bits = [u64::MAX, 0, (-0.0f64).to_bits()];
+    unsafe {
+        let heap = ctx.heap_mut();
+        let local = heap.alloc_unboxed(3, 0, false);
+        for (i, &b) in bits.iter().enumerate() {
+            heap.unboxed_put(local, i, b).unwrap();
+        }
+        let shared = heap.alloc_unboxed(1, 42, false);
+        heap.share(shared, 1).unwrap();
+        ctx.root_set(0, local).unwrap();
+        ctx.root_set(1, shared).unwrap();
+        ctx.recover().unwrap();
+    }
+    assert_eq!(mortal(&mut ctx), 2);
+    let local = root(&mut ctx, 0);
+    let shared = root(&mut ctx, 1);
+    unsafe {
+        let heap = ctx.heap();
+        for w in [local, shared] {
+            assert_eq!(heap.meta(w).unwrap().kind(), Kind::Raw);
+            assert_eq!(rc(w), 1);
+        }
+        assert_eq!(heap.unboxed_len(local), Ok(3));
+        for (i, &b) in bits.iter().enumerate() {
+            assert_eq!(heap.unboxed_word(local, i), Ok(b));
+        }
+        assert_eq!(heap.unboxed_len(shared), Ok(1));
+        assert_eq!(heap.unboxed_word(shared, 0), Ok(42));
+    }
+    release_roots(&mut ctx);
+    assert_eq!(mortal(&mut ctx), 0);
+}
+
+/// `lin` ビットの `Raw` の物体は、ほかの `lin` の物体と同じく写せない。
+fn recovery_refuses_a_lin_unboxed_array<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let w = unsafe {
+        let heap = ctx.heap_mut();
+        let w = heap.alloc_unboxed(1, 0, true);
+        let holder = cons(heap, w, Word::imm(0));
+        ctx.root_set(0, holder).unwrap();
+        holder
+    };
+    let before = mortal(&mut ctx);
+    assert_eq!(unsafe { ctx.recover() }, Err(HeapError::Unrecoverable));
+    assert_eq!(mortal(&mut ctx), before);
+    assert_eq!(root(&mut ctx, 0), w);
+}
+
 both_modes!(
+    recovery_copies_unboxed_arrays,
+    recovery_refuses_a_lin_unboxed_array,
     recovery_keeps_only_what_the_roots_reach,
     recovery_empties_the_evv_and_the_yield_state,
     recovery_copies_floats,

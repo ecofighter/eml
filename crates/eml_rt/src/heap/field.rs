@@ -276,7 +276,7 @@ impl Core {
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live || s0.state(h) == BlockState::Building,
             p_first(s0.perm(h)) + p_count(s0.perm(h)) <= i,
-            !s0.kind(h).has_body(),
+            !s0.kind(h).self_made(),
             self.slot_changed(s0, h, i),
             self.model == s0.model,
         ensures

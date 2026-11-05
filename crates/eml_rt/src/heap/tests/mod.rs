@@ -38,6 +38,7 @@ mod string;
 mod table;
 mod transfer;
 mod trusted;
+mod unboxed;
 mod workers;
 
 /// 生存の列挙の検査と、ID ごとの数の数え直し。VM の検査モードが run の後に確かめるものと同じである。

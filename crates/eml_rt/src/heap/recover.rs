@@ -786,6 +786,28 @@ impl<M: Mode> Heap<M> {
                 }
                 Ok(())
             },
+            Kind::Raw => {
+                // 読む前に持ち主を確かめるのは局所の物体だけである。共有の物体の前置きの持ち主は意味を持たない
+                // (docs/spec/object-model.md の「論理的な worker ID」)
+                if M::CHECKED && rc > 0 && self.core.prefix_first_get(h) != self.worker {
+                    return Err(HeapError::Unrecoverable);
+                }
+                proof {
+                    self.lemma_unboxed_block(a);
+                }
+                let n = self.core.slot_get(h, 0).bits();
+                let nw = new.make_unboxed(n, 0, false, Some((&self.core, h)));
+                proof {
+                    new.lemma_target_made(n0, *self, ws0, out, d0, nw, a);
+                    self.lemma_source_insert(d0, old(frames)@, a, Some(nw));
+                }
+                done.insert(a, Some(nw));
+                words.push(nw);
+                proof {
+                    assert(words@.drop_last() =~= ws0);
+                }
+                Ok(())
+            },
             Kind::BigInt => {
                 let x = self.core.slot_get(h, 0).bits() as i64;
                 let nw = new.alloc_int(x);

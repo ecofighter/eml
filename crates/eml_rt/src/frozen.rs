@@ -22,7 +22,7 @@ use crate::heap::check::UNCOUNTED;
 #[cfg(verus_only)]
 use crate::heap::inv::{
     body_wf, p_code, p_count, p_extended, p_first, p_init, p_kind, p_meta, p_owner, p_scanned,
-    p_word,
+    p_word, raw_wf,
 };
 use crate::meta::BlockPerm;
 #[cfg(verus_only)]
@@ -132,6 +132,7 @@ impl RegionPerms {
         &&& p_first(p) + p_count(p) <= cap
         &&& p_kind(p).boxes_value() ==> cap >= 1 && p_init(p, 0)
         &&& p_kind(p).has_body() ==> body_wf(p, cap)
+        &&& p_kind(p) == Kind::Raw ==> raw_wf(p, cap)
         &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
         &&& p.prefix is Some ==> p_code(p) == 1 && p_owner(p) == UNCOUNTED
         &&& forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i) && self.word_ok(p_word(p, i))

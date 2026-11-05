@@ -25,6 +25,7 @@ pub(crate) mod share;
 mod states;
 mod string;
 mod transfer;
+mod unboxed;
 mod walk;
 
 #[cfg(test)]
@@ -1154,7 +1155,7 @@ impl<M: Mode> Heap<M> {
     /// 物体を確保する。ペイロードは呼ぶ側が書く。
     ///
     /// # Safety
-    /// `meta` の種類は `Foreign`、`String`、`Bytes`、`Free` のどれでもなく、`scan` は 255 でなく、走査する語はペイロードに
+    /// `meta` の種類は `Foreign`、`String`、`Bytes`、`Raw`、`Free` のどれでもなく、`scan` は 255 でなく、走査する語はペイロードに
     /// 収まる。呼ぶ側は、ほかのヒープの操作の前に、`meta` に合うペイロード (走査する語、`BigInt` と `Float` なら値) を書く。
     #[inline]
     pub unsafe fn alloc(&mut self, payload_words: usize, meta: Meta) -> (w: Word)
@@ -1162,8 +1163,7 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             old(self).safe_settleable(),
             !M::CHECKED ==> old(self).settleable(),
-            meta.kind_spec() != Kind::Foreign && !meta.kind_spec().has_body() && meta.kind_spec()
-                != Kind::Free,
+            !meta.kind_spec().opaque_spec() && meta.kind_spec() != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
         ensures
@@ -1182,8 +1182,7 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             old(self).safe_settleable(),
             !M::CHECKED ==> old(self).settleable(),
-            meta.kind_spec() != Kind::Foreign && !meta.kind_spec().has_body() && meta.kind_spec()
-                != Kind::Free,
+            !meta.kind_spec().opaque_spec() && meta.kind_spec() != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
         ensures
@@ -1200,15 +1199,14 @@ impl<M: Mode> Heap<M> {
             old(self).safe_settleable(),
             !M::CHECKED ==> old(self).settleable(),
             rc == 0 || rc == 1,
-            meta.kind_spec() != Kind::Foreign && !meta.kind_spec().has_body() && meta.kind_spec()
-                != Kind::Free,
+            !meta.kind_spec().opaque_spec() && meta.kind_spec() != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
         ensures
             final(self).built(*old(self), w, meta, rc, payload_words),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
-        debug_assert!(!matches!(meta.kind(), Kind::Foreign | Kind::String | Kind::Bytes | Kind::Free));
+        debug_assert!(!matches!(meta.kind(), Kind::Foreign | Kind::String | Kind::Bytes | Kind::Raw | Kind::Free));
         self.settle();
         let ghost s1 = *self;
         let (h, Tracked(perm)) = self.alloc_header(payload_words, rc, meta);
@@ -3468,10 +3466,10 @@ impl<M: Mode> Heap<M> {
         self.core.scanned(w.bits_spec(), i)
     }
 
-    /// `w` の i 語目は生の語である。種類はペイロードが不透明な種類 (`Foreign`、`String`、`Bytes`) でなく、i 語目は走査する語の後でブロックの中にある。
+    /// `w` の i 語目は生の語である。種類はペイロードが不透明な種類 (`Foreign`、`String`、`Bytes`、`Raw`) でなく、i 語目は走査する語の後でブロックの中にある。
     pub closed spec fn raw_at(&self, w: Word, i: int) -> bool {
         let h = w.bits_spec();
-        &&& !(self.core.kind(h) == Kind::Foreign || self.core.kind(h).has_body())
+        &&& !self.core.kind(h).opaque_spec()
         &&& p_first(self.core.perm(h)) + p_count(self.core.perm(h)) <= i < self.core.cap(h)
     }
 
@@ -3814,16 +3812,12 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> r is Ok,
             r is Ok && M::CHECKED ==> {
                 let p = self.core.perm(h@.addr);
-                &&& !(self.core.kind(h@.addr) == Kind::Foreign || self.core.kind(
-                    h@.addr,
-                ).has_body())
+                &&& !self.core.kind(h@.addr).opaque_spec()
                 &&& p_first(p) + p_count(p) <= i < self.core.cap(h@.addr)
             },
             ({
                 let p = self.core.perm(h@.addr);
-                &&& !(self.core.kind(h@.addr) == Kind::Foreign || self.core.kind(
-                    h@.addr,
-                ).has_body())
+                &&& !self.core.kind(h@.addr).opaque_spec()
                 &&& p_first(p) + p_count(p) <= i < self.core.cap(h@.addr)
             }) ==> r is Ok,
     {
@@ -4283,37 +4277,41 @@ impl<M: Mode> Heap<M> {
         &&& bits_kind(self.core.meta_bits(h)) == bits_kind(old.core.meta_bits(h))
     }
 
-    /// 一意な `Data` の物体の `lin` ビットを `lin` にする。tag、scan、種類、rc は変えない。`MutArray.freeze` と
+    /// 一意な `Data` か `Raw` の物体の `lin` ビットを `lin` にする。tag、scan、種類、rc は変えない。`MutArray.freeze` と
     /// `Array.thaw` が、物体を写さずに `Array` と `MutArray` を行き来するのに使う (docs/spec/object-model.md の「配列」)。
     /// 一意な物体はほかの物体から辺で指されず、ほかのスレッドも読めないので、`lin` ビットを変えても誰の前提も崩れない。
     ///
     /// # Safety
-    /// `w` はこのヒープか付けた塊の生きている物体を指す。速いモードでは、`w` は `Data` の物体で、rc が 1 で、持ち主は
-    /// 今の worker である (検査モードは確かめ、`Data` でなければ `WrongKind` を、rc が 1 でなければ `NotUnique` を返す)。
+    /// `w` はこのヒープか付けた塊の生きている物体を指す。速いモードでは、`w` は `Data` か `Raw` の物体で、rc が 1 で、
+    /// 持ち主は今の worker である (検査モードは確かめ、`Data` でも `Raw` でもなければ `WrongKind` を、rc が 1 でなければ `NotUnique` を返す)。
     pub unsafe fn set_lin(&mut self, w: Word, lin: bool) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
             old(self).safe_settleable(),
             w.is_ptr_spec(),
             old(self).word_in(w),
-            !M::CHECKED ==> old(self).settleable() && old(self).readable(w) && old(self).kind_of(w)
-                == Kind::Data && old(self).rc_value(w) == 1 && old(self).owned(w),
+            !M::CHECKED ==> old(self).settleable() && old(self).readable(w) && (old(self).kind_of(w)
+                == Kind::Data || old(self).kind_of(w) == Kind::Raw) && old(self).rc_value(w) == 1
+                && old(self).owned(w),
         ensures
             final(self).wf(),
             final(self).settled(),
             r is Err ==> *final(self) == old(self).settled_heap(),
             !M::CHECKED ==> r is Ok,
-            old(self).consistent() && old(self).settleable() && old(self).readable(w) && old(
+            old(self).consistent() && old(self).settleable() && old(self).readable(w) && (old(
                 self,
-            ).kind_of(w) == Kind::Data && old(self).rc_value(w) == 1 && old(self).owned(w)
-                ==> r is Ok,
+            ).kind_of(w) == Kind::Data || old(self).kind_of(w) == Kind::Raw) && old(self).rc_value(
+                w,
+            ) == 1 && old(self).owned(w) ==> r is Ok,
             r is Ok ==> final(self).relinked(old(self).settled_heap(), w, lin),
             r is Ok && old(self).consistent() && old(self).settleable()
                 ==> final(self).consistent(),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
-        let ghost c = self.consistent() && self.settleable() && self.readable(w) && self.kind_of(w)
-            == Kind::Data && self.rc_value(w) == 1 && self.owned(w);
+        let ghost c = self.consistent() && self.settleable() && self.readable(w) && (self.kind_of(w)
+            == Kind::Data || self.kind_of(w) == Kind::Raw) && self.rc_value(w) == 1 && self.owned(
+            w,
+        );
         let ghost c0 = self.consistent() && self.settleable();
         self.settle();
         let ghost s1 = *self;
@@ -4325,7 +4323,7 @@ impl<M: Mode> Heap<M> {
         self.checked_live(h)?;
         let m = self.core.meta_get(h);
         if M::CHECKED {
-            if !matches!(m.kind(), Kind::Data) {
+            if !matches!(m.kind(), Kind::Data | Kind::Raw) {
                 return Err(HeapError::WrongKind);
             }
             let rc = self.core.rc_get(h);
