@@ -814,6 +814,13 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 - 数値: `bench/char_loop.em` は、汎用の `Op::Extern` で 207,838,220 命令、`StrCharAt` を足すと 200,857,118 命令で、実行の分で 4.4% の減りだった。文字列を伸ばすだけのプログラム (131,419,002 命令) を引いた読みのループの分では、約 9.1% の減りである (M5、4364489a の木と、それに `StrCharAt` を足した未コミットの木)。`bench/scripts.sh` の `wc` の行 (9000 KiB) は、`char_at` と `String.next` で読む形で eml 0.40 秒、`byte_at` で読む形で 0.28 秒だった (M5、64e6248 と be27bf7)
 - 根拠にしている所: [VM](../spec/vm.md) の「基本操作と extern」の `byte_at` と `byte_length` の項、[標準ライブラリ](../spec/stdlib.md) の「`String`」の走査の方針、`tests/ui/run/scripts/wc/main.em` の `is_space`、[ロードマップ](../future/roadmap.md) の「処理系」の、`Char`、`Byte`、`Bits`、`String` の行に VM の命令を足す項目
 
+### 生の要素の配列の専用の命令
+
+- 主張: `UnboxedArray` と `MutUnboxedArray` の `get`、`length`、`set` は、汎用の `Op::Extern` を通さず、専用の命令 (`UnboxedGet`、`UnboxedLength`、`UnboxedSet`) で動かす。汎用の extern を通すと、行の番号の `match` を通る分だけ1回ごとの命令が増える。`get` だけに専用の命令を置いても、`length` と `set` の分が残る
+- 数値: 100万反復のループで、汎用の extern を通すと1回ごとに `get` が 67.1 命令、`length` が 62.8 命令、`set` が 59.0 命令増える (release、3回の中央値)。`bench/spectral_norm.em` では、`get` だけでも 2690万命令 (4.7%) 増える
+- 根拠にしている所: [VM](../spec/vm.md) の「基本操作と extern」の `UnboxedGet`、`UnboxedLength`、`UnboxedSet` の項
+- 受け入れた理由: 命令が3つ増える費用より、よく通る読み書きが `match` を通らなくなる得のほうが大きいため
+
 ### `String` を import するプログラムの前段の分
 
 - 主張: `Std.String` を import するプログラムは、`String` が import する `List`、`Char`、`Iter`、`Yield` も読んでコンパイルする。この前段の命令は `empty` に入らないので、そのまま「実行の分」に加わる。大きさの引数を読む5つのプログラムも、`String.to_int` を通してこの分を持つ。std のコンパイルの結果を使い回せるようになったら (ロードマップの「処理系」のインクリメンタル化)、実行の分の引き方を見直す
@@ -854,7 +861,7 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 ### 配列の `Float` の要素の箱
 
 - 主張: `Array Float` と `MutArray Float` の要素は一様な位置に入るので、書くたびに `Float` の箱になる。`UnboxedArray Float` の要素は生の語なので、spectral-norm は要素の箱を作らない
-- 数値: spectral-norm (既定の大きさ) は `allocations` 43、`boxes` 0、`unboxes` 0 で、`rc_increments` は 4011 になる。同じ計算を要素が箱に入る `Array Float` で書くと、`allocations` 4043、`boxes` 4001、`unboxes` 400400、`rc_increments` 398371 になる。10回のくり返しで行列とベクトルの積を40回計算し、そのたびに100個の要素を作るので、要素の箱は 40 × 100 = 4000 個になる。`RunStats` の値なので機種によらない
+- 数値: spectral-norm (既定の大きさ) は `allocations` 43、`boxes` 0、`unboxes` 0 で、`rc_increments` は 4011 になる。同じ計算を要素が箱に入る `Array Float` で書いた `bench/spectral_norm.em` (書き直す前の 986b65a0 の版) は、`allocations` 4043、`boxes` 4001、`unboxes` 400400、`rc_increments` 398371 だった。10回のくり返しで行列とベクトルの積を40回計算し、そのたびに100個の要素を作るので、要素の箱は 40 × 100 = 4000 個になる。`RunStats` の値なので機種によらない
 - 根拠にしている所: `bench/spectral_norm.em` の先頭のコメント、`crates/eml_vm/tests/bench.rs` の `spectral_norm_does_not_box_elements` (大きさ 20 と 40 で `boxes` と `allocations` が等しく、`boxes` が 1 以下)
 
 ### 配列に書く構造体の箱

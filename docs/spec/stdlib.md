@@ -435,6 +435,8 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 
 - 要素は生の 8 バイトの語で並び、`Float` の要素も箱に入らない。物体の形は [オブジェクトモデル](object-model.md) の「配列」にある
 - 値の位置に要素の型が現れる関数は、クラス `MutUnboxed a => Unboxed a` のメソッドである。instance は `Float` と `Int` だけで、ほかの型の instance は意味を持たない。どちらの instance のメソッドも extern の行に結んであり、要素の Repr はそれぞれ `float` と `int` になる。2つの行は実行時の同じ操作を使う ([VM](vm.md) の「基本操作と extern」)。`MutUnboxed` は `Std.MutUnboxedArray` のクラスで、`Std.UnboxedArray` が import する
+- 型を `Float` 用と `Int` 用の4つに分けず、多相な2つの型にクラスを掛けて extern の行に結ぶのは、4つに分けると、配列を扱う std の関数がどれも型ごとに2つずつ要り、`Float` と `Int` のどちらにも使える関数を書けなくなるためである。instance ごとに行を持つので、`Float` と `Int` は実行時の同じ操作を使いながら、要素の Repr だけを分けられる。そのため、新しい Repr は要らない
+- クラスを Prelude に置かず、それぞれのモジュールに置くのは、`get`、`set`、`make`、`write` が修飾なしの名前としてどこからも見えるのを避けるためである
 - `length` と `thaw` は要素の値を扱わないので、ふつうの多相な extern である
 - `make`、`tabulate`、`get`、`set`、`thaw`、`length` は、`Std.Array` の同じ名前の関数と同じに振る舞う。誤りの文言も同じである (下の「実行時エラー」)
 - `tabulate` は `Lin` の `MutUnboxedArray` の上に作ってあるので、`Std.Array.tabulate` と同じく、`e` に `multi` の操作が含まれると E3006 になる
