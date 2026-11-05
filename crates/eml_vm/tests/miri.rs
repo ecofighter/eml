@@ -618,6 +618,7 @@ fn a_c_call_passes_scalars_in_both_modes() {
 }
 
 /// `blocking` の呼び出しのテストのプログラム。`BLOCKING_LIR` はこれをパイプラインで LIR にして書いたものである。
+#[cfg(not(miri))]
 const BLOCKING_SRC: &str = "\
 import Async (Async)
 

@@ -1,7 +1,7 @@
 //! 静止の予算を過ぎても戻らない `blocking` の呼び出しを見捨てる run (docs/spec/vm.md の「時計と driver」)。見捨てた
 //! `Machine` はヒープを意図して漏らすので、AddressSanitizer はこのモジュールだけを leak の検出なしで流す
-//! (docs/implementation/testing.md の「AddressSanitizer」)。どのテストも終わりに鍵を開け、見捨てたプールのスレッドを
-//! 終わらせる。
+//! (docs/implementation/testing.md の「AddressSanitizer」)。テストの書き方は docs/implementation/testing.md の
+//! 「`eml_vm` のテスト」の `ffi_abandon.rs` の項に従う。
 //!
 //! タスクは `gate_open` で合図の鍵を開けてから、開かない鍵を `gate_wait` で待つ。2つの呼び出しの間に安全点はないので、
 //! 合図を受けてから run を終わらせても、その前に仕事はもう出ている。`Machine` の既定の方針 `Sched::Sequential` は

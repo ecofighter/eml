@@ -240,7 +240,7 @@ read_chunk buf s =
 - driver のどの待ちも worker を起こす知らせと監視のスレッドの起こしで戻る。今の VM では、監視のスレッドを始められなかった run は Ctrl-C の後に起こされないので、VM が1回の待ちを 10 ms で切る。driver は内部の刻みを持たない ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver は、OS を呼ばない核と、`libc` と `windows-sys` で自前に書いた OS ごとの backend (Linux は epoll、Apple は kqueue、Windows は IOCP) からなり、io_uring は使わない (理由は [計測の基準](../implementation/benchmarks.md) の「io_uring と epoll」)。mio は Windows で AFD の readiness を真似るので採らない。核は保留の操作を呼ぶ側の鍵で引く1つの表で持ち、プールと名前の解決のスレッドも自前で持つ。構成は [アーキテクチャ](../implementation/architecture.md) の「`eml_io` の内部」にある
 - 完了は、ハンドルを縛った worker (host) の driver の完了の列に届き、host が集める地点で登録表の操作の記録に結果を置く。host がタスクのセルの持ち主でなければ、持ち主へ `Completion` を送り、持ち主が自分の `Ctx` で結果を記録に当てて歩を進める。host は driver の操作を出し入れするだけで、語には触れない。記録の語はタスクの論理的な ID のままで、印は付けない
-- REPL の回復は実行中の操作を取り消して完了を待ちきってから写す
+- REPL の回復は実行中の操作を取り消し、ファイルの仕事の完了を待ちきり、`Op::Job` は予算まで待ってから写す。予算を過ぎても走る仕事が残れば、`Machine` は回復せずに poisoned になる
 
 ### ハンドルと worker
 
