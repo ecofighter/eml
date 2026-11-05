@@ -16,6 +16,11 @@ use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles, sort_diag
 use std::sync::{LazyLock, Mutex, PoisonError};
 
 #[cfg(feature = "run")]
+mod fixtures;
+#[cfg(feature = "run")]
+pub use fixtures::fixture_symbols;
+
+#[cfg(feature = "run")]
 use eml_native::{LinkError, Linker};
 #[cfg(feature = "run")]
 use eml_vm::{CaptureHost, Linked, RunConfig, RunStats, RuntimeError};
@@ -382,7 +387,8 @@ pub fn execute_on(
 /// テストの binary の中で1つの linker を使い回し、ライブラリと橋渡しを作り直さずに済ませる。テストは並んで走るので
 /// lock で守る。
 #[cfg(feature = "run")]
-static LINKER: LazyLock<Mutex<Linker>> = LazyLock::new(|| Mutex::new(Linker::new(Vec::new())));
+static LINKER: LazyLock<Mutex<Linker>> =
+    LazyLock::new(|| Mutex::new(Linker::new(Vec::new()).with_symbols(&fixture_symbols())));
 
 /// C の関数のないプログラムは、lock も JIT も触らずに `Linked::default()` を返す。
 #[cfg(feature = "run")]

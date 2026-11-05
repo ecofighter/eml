@@ -15,6 +15,11 @@ use eml_cli::{
 
 use crate::common::for_each_file;
 
+/// トランスクリプトの REPL は、UI テストの道具と同じ fixture の記号を C の関数として引く。
+fn linker() -> Linker {
+    Linker::new(Vec::new()).with_symbols(&eml_test_support::fixture_symbols())
+}
+
 fn repl_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/repl")
@@ -200,6 +205,7 @@ impl Runner<'_> {
             Box::new(FsProvider::new(self.root)),
             self.host.clone(),
         )
+        .with_linker(linker())
     }
 
     /// 古いセッションを閉じ、その結果を入力 `index` の位置に記録する。
@@ -230,7 +236,7 @@ impl Runner<'_> {
             &text,
             Box::new(FsProvider::new(self.root.join(dir))),
             self.host.clone(),
-            Linker::new(Vec::new()),
+            linker(),
         );
         self.repl = repl;
         self.file = Some(path.to_string());
@@ -303,7 +309,8 @@ fn run(inputs: &[Input], root: &Path, directory: bool, debug_heap: bool) -> Tran
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(default_limits())));
-    let repl = Repl::new(&config, Box::new(FsProvider::new(root)), host.clone());
+    let repl =
+        Repl::new(&config, Box::new(FsProvider::new(root)), host.clone()).with_linker(linker());
     let mut runner = Runner {
         config,
         host,
