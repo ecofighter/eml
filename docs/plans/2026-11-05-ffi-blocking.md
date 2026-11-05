@@ -1187,7 +1187,7 @@ T-6 (A 列) ─────────────────┘
 | Q-8 | 端末の `Flow::Poisoned` の道の自動のテスト | T-8 | 決めてある | 置かない。9 章の手での確かめで見る |
 | Q-9 | 3 章と 4 章の名前や行番号が、実装の途中の木と違う | すべて | 実装者 | 行番号だけの違いは読み替え、コミットのメッセージに書く。形そのもの (関数の有無、引数、`unsafe`) が違えば止めて報告する |
 | Q-10 | `io_wait` を根にしたことで変わる stage-dump の snapshot | T-7 | T-7 | 8d6a813a の scratch の複製では `eml_core_ir` の snapshot は変わらなかった。6 章の種類2の範囲の中なら書き換えてコミットのメッセージに挙げる。範囲の外が変われば止めて報告する |
-| Q-11 | `miri::a_blocking_call_runs_on_the_test_driver` が Miri の下でパイプラインを流す時間 | T-7 | T-7 で測る | 足した user 時間が1つの設定で 60 秒以下なら入れる。超えれば止めて利用者に上げる (D-11 の「下ろし方の Miri」の満たし方を決め直すため。notes の「利用者に上げること」の条件つきの項) |
+| Q-11 | `miri::a_blocking_call_runs_on_the_test_driver` が Miri の下でパイプラインを流す時間 | T-7 | 決めた (利用者、T-7 の途中) | Miri の下のパイプラインは Prelude の構文解析で rowan の中の UB に当たる (両方の設定)。そのためテストは LIR を `crates/eml_vm/tests/miri/blocking.lir` (`include_str!`) から `eml_lir::parse` で読む。Miri でないときは同じテストが `eml_test_support::lir(src)` の出力を `eml_lir::pretty` で書き、fixture と一致することを確かめる。std/Async か translate の出力が変われば fixture を書き換える (種類2)。fixture 版でも足した user 時間は +65 秒 (Stacked) と +75 秒 (Tree) で 60 秒と `miri.rs` の1つあたり 10 秒を超えたので、利用者の判断で、テストを検査モードだけにし Miri の側の verify を外して測り直し、`miri.rs` の上限を超えるテストとして testing.md の「Miri」と roadmap の「`miri.rs` のテストの1つあたりの Miri の費用」に足す。`miri::` 全体の予算 (300 秒、400 秒) は守る |
 
 ## 付録 A: レビューで変わったこと (蒸し返さないために)
 
