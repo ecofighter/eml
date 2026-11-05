@@ -1691,3 +1691,30 @@ fn a_missing_symbol_is_a_link_error() {
         "link error: symbol \"eml_no_such_symbol\" was not found\n"
     );
 }
+
+/// BLAS を開く例のファイルは `tests/blas` に置く。ライブラリを入れていない機械では流せないので、UI テストには入れない。
+fn eml_blas(file: &str) -> Output {
+    eml_in(
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/blas")),
+        &["run", file],
+    )
+}
+
+#[test]
+#[ignore = "needs a BLAS library"]
+fn blas_dgemm() {
+    let output = eml_blas("dgemm.em");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "19\n22\n43\n50\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
+#[ignore = "needs Accelerate"]
+#[cfg(target_os = "macos")]
+fn blas_dgesv() {
+    let output = eml_blas("dgesv_ilp64.em");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "8\n14\n0\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
