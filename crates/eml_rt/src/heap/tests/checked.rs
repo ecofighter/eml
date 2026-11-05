@@ -289,3 +289,20 @@ fn freezing_a_constant_that_holds_a_freed_object_is_an_error() {
     }
     assert_eq!(b.freeze().unwrap_err(), HeapError::UseAfterFree);
 }
+
+/// 数の語を持たない tag 0 の `Data` は配列でない。配列は長さによらず数の語を持つ
+/// (docs/spec/object-model.md の「配列」)。
+#[test]
+fn array_operations_refuse_data_without_the_count_word() {
+    let mut ctx = super::ctx::ctx::<Checked>();
+    let wrong_kind = Err(crate::externs::Fault::Heap(HeapError::WrongKind));
+    unsafe {
+        for scanned in [0, 2] {
+            let w = ctx.heap_mut().alloc_data(0, scanned, 0, false);
+            assert_eq!(ctx.heap().meta(w).unwrap().scan(), scanned as u8);
+            assert_eq!(ctx.array_length(w), wrong_kind);
+            assert_eq!(ctx.array_get(w, 0).map(|_| 0), wrong_kind);
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+}

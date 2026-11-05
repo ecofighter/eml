@@ -1353,12 +1353,10 @@ impl<M: Mode> Heap<M> {
             }
         }
         let raw = f.cap - f.first - f.count;
-        let nw = new.alloc_data(f.tag, f.count, raw, false);
-        let nfirst: usize = if f.count >= 255 {
-            1
-        } else {
-            0
-        };
+        // 配列は 255 個未満の要素でも数の語を持つので、走査する語の数でなく元の形から決める
+        // (docs/spec/object-model.md の「配列」)
+        let nw = new.alloc_data_ext(f.tag, f.count, raw, false, f.first == 1);
+        let nfirst: usize = f.first;
         proof {
             assert(p_first(new.core.perm(nw.bits_spec())) == nfirst);
             new.lemma_build_start(

@@ -120,17 +120,13 @@ impl<'c, M: Mode> Constants<'c, M> {
         index
     }
 
-    /// 長さ 0 の `MutArray`。`lin` ビットを立てた、フィールドのない `Data` である。長さが 0 なので、添字を確かめて
-    /// 読み書きする所はどれもこの物体を書き換えない (docs/spec/object-model.md の「凍結した領域」)。
+    /// 長さ 0 の `MutArray`。`lin` ビットを立てた `Data` で、ほかの配列と同じく数の語 (0) を持つ。長さが 0 なので、
+    /// 添字を確かめて読み書きする所はどれもこの物体を書き換えない (docs/spec/object-model.md の「凍結した領域」)。
     pub(crate) fn empty_mut_array(&mut self) -> u32 {
         if let Some(index) = *self.empty_mut_array {
             return index;
         }
-        // 書く語のない物体なので、作り終えている
-        let w = unsafe {
-            self.heap()
-                .alloc_immortal(0, Meta::new(0, 0, Kind::Data, true))
-        };
+        let w = self.heap().alloc_array_immortal(true);
         let index = self.push(w);
         *self.empty_mut_array = Some(index);
         index

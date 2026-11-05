@@ -627,6 +627,28 @@ impl<M: Mode> Heap<M> {
         }
     }
 
+    /// `alloc_string_immortal`、`alloc_bytes_immortal`、`alloc_array_immortal` の後の状態。`w` は rc 0 の生きている
+    /// 物体で、検査モードの外に出ている参照の数は 0 である。
+    pub closed spec fn made_immortal(&self, old: Heap<M>, w: Word) -> bool {
+        let h = w.bits_spec();
+        &&& self.wf()
+        &&& self.dummy == old.dummy
+        &&& self.region == old.region
+        &&& self.worker == old.worker
+        &&& self.core.model@.building is None
+        &&& w.is_ptr_spec()
+        &&& self.core.word_ok(w)
+        &&& !old.core.dom().contains(h)
+        &&& self.core.dom() == old.core.dom().insert(h)
+        &&& self.core.state(h) == BlockState::Live
+        &&& self.core.rc_of(h) == 0
+        &&& M::CHECKED ==> p_owner(self.core.perm(h)) == 0
+        &&& old.consistent() && old.settleable() ==> {
+            &&& self.consistent()
+            &&& self.core.frame(old.core)
+        }
+    }
+
     /// `alloc_data`、`alloc_int` の後の状態。`w` は生きている物体で、呼ぶ側がその参照を1つ持つ。
     pub closed spec fn made(&self, old: Heap<M>, w: Word) -> bool {
         let h = w.bits_spec();
@@ -1339,7 +1361,121 @@ impl<M: Mode> Heap<M> {
             M::CHECKED ==> final(self).words_kept(*old(self)),
             final(self).grew(*old(self), w),
     {
-        let extended = scanned >= Meta::EXTENDED_SCAN as usize;
+        self.alloc_data_ext(tag, scanned, raw, lin, false)
+    }
+
+    /// `alloc_data` で、`force` なら走査する語の数によらず数の語を置く。配列はいつも数の語を持つので、`force` で作る
+    /// (docs/spec/object-model.md の「配列」)。
+    pub fn alloc_data_ext(
+        &mut self,
+        tag: u16,
+        scanned: usize,
+        raw: usize,
+        lin: bool,
+        force: bool,
+    ) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).made(*old(self), w),
+            final(self).kind_of(w) == Kind::Data,
+            final(self).count_of(w) == scanned,
+            final(self).tag_of(w) == tag,
+            final(self).scan_of(w) == if force || scanned >= 255 {
+                255u8
+            } else {
+                scanned as u8
+            },
+            final(self).lin_of(w) == lin,
+            final(self).owned(w),
+            forall|i: int|
+                (if force || scanned >= 255 {
+                    1int
+                } else {
+                    0int
+                }) + scanned <= i < (if force || scanned >= 255 {
+                    1int
+                } else {
+                    0int
+                }) + scanned + raw ==> #[trigger] final(self).raw_at(w, i),
+            M::CHECKED ==> forall|i: int| #[trigger]
+                final(self).scanned_at(w, i) ==> final(self).set_passes(w, i),
+            forall|i: int|
+                0 <= i < scanned ==> (#[trigger] final(self).scanned_word(w, i)).bits_spec() == 1,
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).grew(*old(self), w),
+    {
+        self.alloc_data_rc(tag, scanned, raw, lin, 1, force)
+    }
+
+    /// 長さ 0 の配列を、rc 0 の不死の物体として作る。`CodeBase` の空の `MutArray` の定数が使う。ほかの配列と同じく
+    /// 数の語 (0) を持つ (docs/spec/object-model.md の「凍結した領域」)。
+    pub fn alloc_array_immortal(&mut self, lin: bool) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).made_immortal(*old(self), w),
+            final(self).kind_of(w) == Kind::Data,
+            final(self).count_of(w) == 0,
+            final(self).tag_of(w) == 0,
+            final(self).scan_of(w) == 255u8,
+            final(self).lin_of(w) == lin,
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        self.alloc_data_rc(0, 0, 0, lin, 0, true)
+    }
+
+    /// `alloc_data_ext` を rc `rc` の生きている物体として作る。rc 0 なら不死の物体で、検査モードの外に出ている参照の
+    /// 数は 0 から始まる (`alloc_header` が書く)。
+    fn alloc_data_rc(
+        &mut self,
+        tag: u16,
+        scanned: usize,
+        raw: usize,
+        lin: bool,
+        rc: i32,
+        force: bool,
+    ) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+            rc == 0 || rc == 1,
+        ensures
+            rc == 1 ==> final(self).made(*old(self), w),
+            rc == 0 ==> final(self).made_immortal(*old(self), w),
+            final(self).kind_of(w) == Kind::Data,
+            final(self).count_of(w) == scanned,
+            final(self).tag_of(w) == tag,
+            final(self).scan_of(w) == if force || scanned >= 255 {
+                255u8
+            } else {
+                scanned as u8
+            },
+            final(self).lin_of(w) == lin,
+            final(self).owned(w),
+            forall|i: int|
+                (if force || scanned >= 255 {
+                    1int
+                } else {
+                    0int
+                }) + scanned <= i < (if force || scanned >= 255 {
+                    1int
+                } else {
+                    0int
+                }) + scanned + raw ==> #[trigger] final(self).raw_at(w, i),
+            M::CHECKED && rc == 1 ==> forall|i: int| #[trigger]
+                final(self).scanned_at(w, i) ==> final(self).set_passes(w, i),
+            forall|i: int|
+                0 <= i < scanned ==> (#[trigger] final(self).scanned_word(w, i)).bits_spec() == 1,
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).grew(*old(self), w),
+    {
+        let extended = force || scanned >= Meta::EXTENDED_SCAN as usize;
         let scan = if extended {
             Meta::EXTENDED_SCAN
         } else {
@@ -1360,7 +1496,7 @@ impl<M: Mode> Heap<M> {
         self.settle();
         let ghost s1 = *self;
         let meta = Meta::new(tag, scan, Kind::Data, lin);
-        let (h, Tracked(perm)) = self.alloc_header(payload_words, 1, meta);
+        let (h, Tracked(perm)) = self.alloc_header(payload_words, rc, meta);
         let tracked mut perm = perm;
         if extended {
             let tracked mut slot = perm.slots.tracked_remove(0);
@@ -1374,7 +1510,7 @@ impl<M: Mode> Heap<M> {
         while i < scanned
             invariant
                 perm.wf(h, cap, M::CHECKED),
-                perm.rc.is_init() && perm.rc.value() == 1,
+                perm.rc.is_init() && perm.rc.value() == rc,
                 perm.meta.is_init() && perm.meta.value() == meta.bits_spec(),
                 h@.addr + 8 * (HEADER_WORDS + cap) <= usize::MAX,
                 first + scanned <= cap,
@@ -1447,7 +1583,7 @@ impl<M: Mode> Heap<M> {
         let ghost mid = self.core;
         proof {
             assert(i == scanned);
-            self.lemma_data_perm(perm, h, meta, first, scanned, extended);
+            self.lemma_data_perm(perm, h, meta, first, scanned, extended, rc);
         }
         let ghost filled = perm;
         self.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Live), Ghost(self.worker));
@@ -1511,20 +1647,26 @@ impl<M: Mode> Heap<M> {
         first: usize,
         scanned: usize,
         extended: bool,
+        rc: i32,
     )
         requires
             h == self.core.block(h@.addr),
             perm.wf(h, self.core.cap(h@.addr), self.core.checked()),
             perm.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
-                && q.state.value() == ALIVE_STATE && q.first.value() == self.worker,
+                && q.state.value() == ALIVE_STATE && q.first.value() == if rc == 0 {
+                0
+            } else {
+                self.worker
+            },
             perm.rc.is_init(),
-            perm.rc.value() == 1,
+            rc == 0 || rc == 1,
+            perm.rc.value() == rc,
             perm.meta.is_init() && perm.meta.value() == meta.bits_spec(),
             meta.kind_spec() == Kind::Data,
             bits_wf(meta.bits_spec()),
             bits_kind(meta.bits_spec()) == meta.kind_spec(),
             bits_scan(meta.bits_spec()) == meta.scan_spec(),
-            extended == (scanned >= 255),
+            !extended ==> scanned < 255,
             meta.scan_spec() == if extended {
                 255u8
             } else {

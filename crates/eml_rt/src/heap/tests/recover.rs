@@ -138,6 +138,32 @@ fn recovery_copies_floats<M: Mode>() {
     assert_eq!(mortal(&mut ctx), 0);
 }
 
+/// 回復は 255 個未満の要素の配列も数の語ごと写し、配列でない短い `Data` には数の語を足さない。配列は長さによらず
+/// 数の語を持つ (docs/spec/object-model.md の「配列」)。
+fn recovery_keeps_the_count_word_of_short_arrays<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let a = ctx.array_make(3, Word::imm(7), false).unwrap();
+        let a = ctx.array_set(a, 2, Word::imm(9)).unwrap();
+        ctx.root_set(0, a).unwrap();
+        let c = cons(ctx.heap_mut(), Word::imm(1), Word::imm(2));
+        ctx.root_set(1, c).unwrap();
+        ctx.recover().unwrap();
+    }
+    assert_eq!(mortal(&mut ctx), 2);
+    let c = root(&mut ctx, 1);
+    let a = root(&mut ctx, 0);
+    unsafe {
+        assert_eq!(ctx.heap().meta(c).unwrap().scan(), 2);
+        assert_eq!(ctx.heap().meta(a).unwrap().scan(), Meta::EXTENDED_SCAN);
+        assert_eq!(ctx.array_length(a), Ok(3));
+        assert_eq!(ctx.array_get(a, 0), Ok(Word::imm(7)));
+        assert_eq!(ctx.array_get(a, 2), Ok(Word::imm(9)));
+    }
+    release_roots(&mut ctx);
+    assert_eq!(mortal(&mut ctx), 0);
+}
+
 /// evv と yield の状態が残っていても、回復は空に戻し、それらの物体も消す。
 fn recovery_empties_the_evv_and_the_yield_state<M: Mode>() {
     let mut ctx = ctx::<M>();
@@ -364,6 +390,7 @@ both_modes!(
     recovery_keeps_only_what_the_roots_reach,
     recovery_empties_the_evv_and_the_yield_state,
     recovery_copies_floats,
+    recovery_keeps_the_count_word_of_short_arrays,
     recovery_refuses_what_it_cannot_copy,
     recovery_copies_shared_objects_as_local,
     recovery_copies_shared_strings_and_bytes_of_another_worker,
