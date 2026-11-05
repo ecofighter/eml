@@ -179,6 +179,7 @@ REPL (`eml_cli::Repl`) では、セッションを1つのモジュールとみ�
 - `:type` の問い合わせは、受け付けた入力の後に、次の入力の番号を持つセッションのモジュールとして読む。入力の関数は `InputKind::Query` で、検査だけをし、lowering も実行もせず、受け付けない ([型と Kind](types.md) の「REPL の入力」)
 - `Std.Chan.Chan a` の値は束縛に残せるが、前の入力の channel は閉じて空の channel として振る舞う。後の入力の channel とは generation で見分ける ([VM](vm.md) の「セルと登録表」)
 - `Std.Atomic.Counter` は入力をまたいで使える。表を `Machine` が持つためである ([VM](vm.md) の「セルと登録表」)
+- 入力の run が `Machine` を poisoned にしたら (戻らない `blocking` の呼び出しを見捨てたときなど)、セッションはその入力の後に終わる ([VM](vm.md) の「追記」)
 
 ## 公開の範囲
 

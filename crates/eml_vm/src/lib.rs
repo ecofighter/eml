@@ -298,8 +298,8 @@ fn execute_here(
         .load(program, linked)
         .map_err(|error| compile_error(program, error))?;
     let finished = machine.run(loaded.entry)?;
-    // 仕事を見捨てた `exit` の run でも、終了コードを返す。poisoned の `close` は誤りを返して終了コードを隠す
-    // (docs/spec/vm.md の「時計と driver」)
+    // 仕事を見捨てた `exit` の run でも、終了コードを返す。poisoned の `Machine` はヒープを漏らし、`close` は終了コードの
+    // 代わりに poisoned の誤りを返す (docs/spec/vm.md の「時計と driver」)
     if machine.is_poisoned() {
         return Ok(finished);
     }

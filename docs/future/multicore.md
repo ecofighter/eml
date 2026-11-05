@@ -477,7 +477,7 @@ run の終わり方は `main` の正常な終わり、`exit`、致命的な誤�
 - シグナル: handler の手順は今と同じである ([VM](../spec/vm.md) の「上限と割り込み」)。そのシグナルを `Signal.wait` で待つタスクがいれば (見張りの語に立っていれば) `Control` の保留の語に入れ、いなければ `Control` の止める語とすべての worker の止める語に立てる (Ctrl-C は `INTERRUPT`、`SIGTERM` は `TERMINATE`)。どちらでも自己パイプを鳴らして監視のスレッドを起こす (上の「スレッドと worker」)。Windows ではコンソールの handler (`SetConsoleCtrlHandler`) が同じ手順で動く。CTRL_C は `INTERRUPT`、CTRL_CLOSE と CTRL_SHUTDOWN は `TERMINATE` である。監視のスレッドは保留のシグナルを run の mail へ中継し、すべての worker の止める語に `NOTICE` を立てる。最初に集めた worker が、登録表の lock の下で待つタスクに届ける。届けるときに聞く者のいなかったシグナルは、その worker がすべての止める語にビットを立てて run を止める。`INTERRUPT` では 130 で、`TERMINATE` は 143 で終わる
 - `signalfd` と `EVFILT_SIGNAL` は使わない。どちらもすべてのスレッドでシグナルを塞ぐ必要があり、今の handler とブロックする読みの `EINTR` の道と食い違う
 - 2回目のシグナルの扱いは今と同じである。`eml run` の handler は、止める語か保留の語に同じシグナルが立っていれば、その場で終わる (Ctrl-C は `_exit(130)`、SIGTERM は `_exit(143)`。[VM](../spec/vm.md) の「上限と割り込み」)。どちらの語も `Control` に1つなので、worker が増えても判定は変わらない
-- REPL では、`exit` と致命的な誤りで評価が終わる。REPL のセッションは根を持つので worker 1つで動き (上の「スレッドと worker」)、worker 0 が自分の I/O の driver を空にし、実行中のプールの仕事と操作を待ちきってから回復する。REPL で複数の worker を使うには、入力の間もヒープを生かす静止の手順か、run の終わりに根から届く物体を写すことが要る ([ロードマップ](roadmap.md) の「マルチコア対応」)
+- REPL では、`exit` と致命的な誤りで評価が終わる。REPL のセッションは根を持つので worker 1つで動き (上の「スレッドと worker」)、worker 0 が自分の I/O の driver を空にし、実行中の操作と、予算までのプールの仕事を待ってから回復する。予算の後もまだ走る仕事は見捨て、回復せずに `Machine` を poisoned にし、セッションはその入力の後に終わる ([VM](../spec/vm.md) の「追記」)。REPL で複数の worker を使うには、入力の間もヒープを生かす静止の手順か、run の終わりに根から届く物体を写すことが要る ([ロードマップ](roadmap.md) の「マルチコア対応」)
 - メインの worker があるときは、メインの worker がエントリへ戻った後、同じスレッドが host として 4 の終了コードの手順を行う (上の「スレッドと worker」)
 
 ## VM とネイティブのランタイム

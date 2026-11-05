@@ -255,6 +255,7 @@ Node
 - 終わるときは `Repl::close` を呼ぶ。終了コードは 0 である。`close` が誤りを返したら (検査モードのリーク、根を手放すときの誤り)、標準エラーに `runtime error: {error}` を書いて 1 で終わる
 - 入力の誤り、実行時エラー、コマンドの誤りでは終了コードを変えない。対話の中の誤りだからである
 - 行を読めない誤り (端末の誤り、UTF-8 でない入力) では、標準エラーに `error: cannot read input: {error}` を書き、`close` を呼んで 1 で終わる
+- 入力か `:load` のファイルの run が `Machine` を poisoned にしたら (戻らない `blocking` の呼び出しを見捨てたときなど)、その結果を書いた後に `close` を呼び、標準エラーに `` runtime error: the I/O driver failed: the driver kept pending ops after quiesce in `<close>` `` を1回書いて 1 で終わる。Ctrl-C で止めた入力の後も同じである。入力の結果が続けられない誤り (poisoned の誤りそのものを含む) なら、それを書いた所で `close` を呼ばずに 1 で終わり、同じ誤りを2回は書かない ([VM](vm.md) の「追記」)
 - `:load` と `:reload` が閉じたセッションの `close` が誤りを返したら、その誤りを書いて続け、REPL が終わるときの終了コードを 1 にする
 - 使い方の誤りは 2 である ([アーキテクチャ](../implementation/architecture.md) の「CLI と lib API」)
 

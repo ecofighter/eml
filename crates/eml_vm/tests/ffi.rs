@@ -1,6 +1,6 @@
 //! `Op::Ffi` で利用者の C の関数を呼ぶ (docs/spec/vm.md の「C の関数の命令」)。`blocking` の C の関数は
-//! `Op::FfiSubmit` と `Op::FfiTake` でテストの driver の仕事にする (docs/spec/vm.md の「`blocking` の呼び出し」)。
-//! C の関数は `common::c` の Rust の呼ばれる関数で、`Linked` は手で作る。
+//! `Op::FfiSubmit` と `Op::FfiTake` で driver の仕事にし、テストの driver と本物の driver のプールで流す
+//! (docs/spec/vm.md の「`blocking` の呼び出し」)。仕事を見捨てる run は `ffi_abandon` にある。C の関数は `common::c` の Rust の呼ばれる関数で、`Linked` は手で作る。
 
 use std::io;
 use std::sync::atomic::Ordering;
@@ -13,11 +13,11 @@ use eml_rt::{
     OpKey, Submit,
 };
 use eml_vm::{
-    CodeBase, CompileError, Finished, Linked, Machine, RunConfig, RuntimeError, capture_host,
-    disassemble,
+    Clock, CodeBase, CompileError, Finished, Linked, Machine, RunConfig, RuntimeError,
+    capture_host, disassemble,
 };
 
-use crate::common::c::{ADD_I32_CALLS, calls, dtors, linked};
+use crate::common::c::{ADD_I32_CALLS, calls, dtors, linked, rs_frees, rs_gate_open, rs_gate_wait};
 use crate::common::parse;
 
 fn linked_all(program: &Program) -> Linked {
@@ -673,4 +673,193 @@ main () = Async.run (fn () ->
     }
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "3.0\n5\n3.0\n5\n");
+}
+
+/// 本物の時計で `workers` 個の worker を使い、検査モードで1回流して閉じる。出力と `Finished` を返す。
+fn run_real(src: &str, workers: usize) -> (String, Finished) {
+    let program = eml_test_support::lir(src);
+    let control = Arc::new(Control::new(Limits {
+        workers,
+        ..Limits::default()
+    }));
+    let (host, out) = capture_host(Default::default());
+    let mut machine = Machine::<Checked>::new(control, host)
+        .with_clock(Clock::Real)
+        .with_job_budget(Duration::from_millis(20));
+    let loaded = machine.load(&program, &linked_all(&program)).unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    (out.contents(), finished)
+}
+
+/// 鍵の関数。`gate_wait` は `blocking` で、プールのスレッドで鍵を待つ。
+const GATE: &str = "\
+import Async (Async)
+import Async
+
+extern \"C\" blocking symbol \"rs_gate_wait\" gate_wait : Int -> <IO, Async> Int
+extern \"C\" symbol \"rs_gate_open\" gate_open : Int -> <IO> Unit
+";
+
+/// プールのスレッドで C が書いた配列は、取り出しの後に呼び手が読む同じ配列である (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn a_blocking_call_writes_an_array_on_the_pool() {
+    let src = "\
+import Async (Async)
+import Async
+import MutUnboxedArray
+
+extern \"C\" blocking symbol \"rs_fill\" fill : MutUnboxedArray Float -> Int -> Float -> <IO, Async> (Unit, MutUnboxedArray Float)
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let m = MutUnboxedArray.make 3 0.0
+  let ((), m) = fill m 3 1.5
+  let (x, m) = MutUnboxedArray.read m 1
+  let (y, m) = MutUnboxedArray.read m 2
+  drop m
+  println \"\\{show x} \\{show y}\")
+";
+    assert_eq!(run_real(src, 1).0, "1.5 3.0\n");
+}
+
+/// `a` の呼び出しは `b` が鍵を開けるまで戻らないので、`a` が待つ間に同じ worker の `b` が動いている。
+#[test]
+fn another_task_runs_during_a_blocking_call() {
+    let src = format!(
+        "{GATE}
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let a = Async.start (fn () -> gate_wait 100020)
+  let b = Async.start (fn () ->
+    println \"b opens the gate\"
+    gate_open 100020)
+  Async.await b
+  println (show (Async.await a))
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    );
+    assert_eq!(run_real(&src, 1).0, "b opens the gate\n0\n");
+}
+
+/// 最初に `start` したタスクは worker 1 に置かれ、その worker の driver のプールで仕事が走る
+/// (docs/spec/vm.md の「`Async` のタスク」)。`Machine` の既定の方針 `Sched::Sequential` は救済しないので、タスクは
+/// worker 1 から動かない (docs/spec/vm.md の「タスクとスケジュール」)。
+#[test]
+fn a_blocking_call_runs_on_the_driver_of_worker_one() {
+    let src = format!(
+        "{BLOCKING}
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let t = Async.start (fn () -> sub 7 2)
+  println (show (Async.await t))
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    );
+    let (out, finished) = run_real(&src, 2);
+    assert_eq!(out, "5\n");
+    assert_eq!(finished.placed_tasks, 1, "{finished:?}");
+    assert_eq!(finished.rescues, 0, "{finished:?}");
+    assert_eq!(finished.stats.completions, 1, "{finished:?}");
+}
+
+/// 仕事を出した後に取り消されたタスクは、仕事が終わってから `Cancelled` で再開し、貸したハンドルを落とす。`gate_open`
+/// と仕事の受け付けの間には何もないので、`body` が `a` を取り消すのは `a` が仕事を出した後である
+/// (docs/spec/vm.md の「`blocking` の呼び出し」)。
+#[test]
+fn a_cancelled_blocking_call_resumes_after_its_job() {
+    let src = format!(
+        "{GATE}
+extern \"C\" data Handle drop \"rs_handle_free\"
+extern \"C\" symbol \"rs_handle_new\" handle_new : Int -> Int -> <IO, Panic> Handle
+extern \"C\" blocking symbol \"rs_handle_wait\" handle_wait : Handle -> Int -> <IO, Async> (Int, Handle)
+extern \"C\" symbol \"rs_frees\" frees : Int -> <IO> Int
+
+wait_on : Int -> <IO, Panic, Async> Int
+wait_on value =
+  let h = handle_new 100021 value
+  gate_open 100022
+  let (v, h) = handle_wait h 100023
+  drop h
+  v
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let a = Async.start (fn () ->
+    match try_io (fn () -> wait_on 5) with
+      | Ok v -> println \"unreachable \\{{show v}}\"
+      | Err e -> println \"\\{{show e.kind}}: \\{{e}}\")
+  let _ = gate_wait 100022
+  Async.cancel a
+  gate_open 100023
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  Async.run body
+  println (show (frees 100021))
+"
+    );
+    assert_eq!(run_real(&src, 1).0, "Cancelled: task was cancelled\n1\n");
+}
+
+/// `b` の `Panic` でスコープが失敗すると、`run` は `a` を取り消し、`a` の仕事が終わるまで待ってから `Panic` を起こし
+/// 直す。run は止まらないので静止にも予算にも届かず、`Machine` は poisoned にならない。鍵を外から開けなければ、この
+/// run は終わらない (docs/spec/declarations.md の「`extern "C"`」)。取り消しと完了のどちらが先に当たっても、ハンドル
+/// は1回だけ壊れる。
+#[test]
+fn a_failing_scope_waits_for_its_cancelled_blocking_call() {
+    let src = format!(
+        "{GATE}
+extern \"C\" data Handle drop \"rs_handle_free\"
+extern \"C\" symbol \"rs_handle_new\" handle_new : Int -> Int -> <IO, Panic> Handle
+extern \"C\" blocking symbol \"rs_handle_wait\" handle_wait : Handle -> Int -> <IO, Async> (Int, Handle)
+
+wait_on : Int -> <IO, Panic, Async> Int
+wait_on value =
+  let h = handle_new 100024 value
+  gate_open 100025
+  let (v, h) = handle_wait h 100026
+  drop h
+  v
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let a = Async.start (fn () -> wait_on 5)
+  let b = Async.start (fn () ->
+    let _ = gate_wait 100025
+    gate_open 100027
+    (panic \"boom\" : Unit))
+  println (show (Async.await a))
+  Async.await b
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    );
+    let program = eml_test_support::lir(&src);
+    let (host, out) = capture_host(Default::default());
+    let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
+        .with_clock(Clock::Real)
+        .with_job_budget(Duration::from_millis(20));
+    let loaded = machine.load(&program, &linked_all(&program)).unwrap();
+    // `b` が `panic` を呼ぶ直前に開く合図を待ってから、`a` の鍵を開ける
+    let opener = std::thread::spawn(|| {
+        assert_eq!(rs_gate_wait(100027), 0, "the task never signalled");
+        rs_gate_open(100026);
+    });
+    let result = machine.run(loaded.entry);
+    opener.join().unwrap();
+    let error = result.unwrap_err();
+    assert!(!error.interrupted(), "{error:?}");
+    assert!(error.to_string().starts_with("panicked: boom"), "{error}");
+    assert!(!machine.is_poisoned());
+    assert_eq!(rs_frees(100024), 1);
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "");
 }

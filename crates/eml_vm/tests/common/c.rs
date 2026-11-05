@@ -4,10 +4,11 @@
 //! で受け、自分で位置に戻す。ハンドルは確保せず、tag と値を詰めた null でない整数にする。Miri が slot を通った位置を
 //! 参照外ししないためである。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, PoisonError};
+use std::time::Duration;
 
 use eml_lir::Program;
 use eml_vm::{Bridge, CCall, Dtor, Linked};
@@ -63,6 +64,13 @@ pub fn calls() -> Vec<(&'static str, Bridge, *const ())> {
         ("rs_handle_new", i64_i64_to_i64, rs_handle_new as *const ()),
         ("rs_handle_get", i64_to_i64, rs_handle_get as *const ()),
         ("rs_frees", i64_to_i64, rs_frees as *const ()),
+        ("rs_gate_open", i64_to_void, rs_gate_open as *const ()),
+        ("rs_gate_wait", i64_to_i64, rs_gate_wait as *const ()),
+        (
+            "rs_handle_wait",
+            i64_i64_to_i64,
+            rs_handle_wait as *const (),
+        ),
     ]
 }
 
@@ -86,6 +94,16 @@ unsafe extern "C" fn i64_to_i64(callee: *const (), args: *const u64) -> u64 {
         let f = std::mem::transmute::<*const (), extern "C" fn(i64) -> i64>(callee);
         f(slot(args, 0) as i64) as u64
     }
+}
+
+/// (I64) -> void
+unsafe extern "C" fn i64_to_void(callee: *const (), args: *const u64) -> u64 {
+    // SAFETY: `i64_to_i64` と同じ
+    unsafe {
+        let f = std::mem::transmute::<*const (), extern "C" fn(i64)>(callee);
+        f(slot(args, 0) as i64);
+    }
+    0
 }
 
 /// (I64, I64) -> I64
@@ -232,4 +250,44 @@ unsafe extern "C" fn rs_handle_free(h: *mut c_void) {
 pub extern "C" fn rs_frees(tag: i64) -> i64 {
     let mut frees = FREES.lock().unwrap_or_else(PoisonError::into_inner);
     frees.get_or_insert_default().remove(&tag).unwrap_or(0)
+}
+
+/// 開いた鍵の番号。待ちが消費する。
+static GATES: Mutex<Option<HashSet<i64>>> = Mutex::new(None);
+static GATES_CHANGED: Condvar = Condvar::new();
+
+/// テストが壊れて鍵が開かないときに、プロセスを止めないための見張り。ふつうの run では届かず、結果はこの時間で決まらない。
+const GATE_WATCHDOG: Duration = Duration::from_secs(10);
+
+/// 鍵 `id` を開く。開いた鍵は1回の `rs_gate_wait` が消費する。待ちが先でも後でも1回ずつ対になる。
+pub extern "C" fn rs_gate_open(id: i64) {
+    GATES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_default()
+        .insert(id);
+    GATES_CHANGED.notify_all();
+}
+
+/// 鍵 `id` が開くまで待ち、消費して 0 を返す。見張りの間に開かなければ -1 を返す。
+pub extern "C" fn rs_gate_wait(id: i64) -> i64 {
+    let gates = GATES.lock().unwrap_or_else(PoisonError::into_inner);
+    let (mut gates, _) = GATES_CHANGED
+        .wait_timeout_while(gates, GATE_WATCHDOG, |open| {
+            !open.as_ref().is_some_and(|open| open.contains(&id))
+        })
+        .unwrap_or_else(PoisonError::into_inner);
+    if gates.get_or_insert_default().remove(&id) {
+        0
+    } else {
+        -1
+    }
+}
+
+/// 鍵 `id` を待ってから、ハンドル `h` の値 (`rs_handle_get` と同じ) を返す。見張りで開かなければ -1。
+extern "C" fn rs_handle_wait(h: i64, id: i64) -> i64 {
+    if rs_gate_wait(id) != 0 {
+        return -1;
+    }
+    rs_handle_get(h)
 }
