@@ -4,7 +4,7 @@
 #![allow(unsafe_code)]
 
 use std::collections::HashMap;
-use std::mem::ManuallyDrop;
+use std::sync::Mutex;
 
 use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData, Signature, types};
 use cranelift_codegen::settings::{self, Configurable};
@@ -16,11 +16,22 @@ use eml_extern::{CSignature, CType};
 
 use crate::LinkError;
 
-/// 作った橋渡しの関数を署名で引く。module は `ManuallyDrop` で持ち、落とさず、明示の解放の関数も呼ばない。
-/// cranelift-jit が module を落とすときにコードを解放するかどうかに頼らず、返した `Bridge` がプロセスの間ずっと
-/// 呼べるようにするためである。`Linker` を落としても、作ったコードは残る。
+/// 使い終えた module を、プロセスが終わるまで持つ。cranelift-jit が module を落とすときにコードを解放するかどうかに
+/// 頼らず、返した `Bridge` がプロセスの間ずっと呼べるようにするためである。`ManuallyDrop` で手放すのでなく、ここに
+/// 置いて届く所に残すのは、LeakSanitizer が届かなくなった確保を漏れとして報告するためである。
+static RETIRED: Mutex<Vec<JITModule>> = Mutex::new(Vec::new());
+
+fn retire(module: JITModule) {
+    RETIRED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(module);
+}
+
+/// 作った橋渡しの関数を署名で引く。module は落とさず、明示の解放の関数も呼ばない。`Bridges` を落とすときも、
+/// 途中で失敗した module を捨てるときも、`RETIRED` に移す。`Linker` を落としても、作ったコードは残る。
 pub struct Bridges {
-    module: Option<ManuallyDrop<JITModule>>,
+    module: Option<JITModule>,
     made: HashMap<CSignature, Bridge>,
     next: u32,
 }
@@ -28,6 +39,14 @@ pub struct Bridges {
 impl Default for Bridges {
     fn default() -> Bridges {
         Bridges::new()
+    }
+}
+
+impl Drop for Bridges {
+    fn drop(&mut self) {
+        if let Some(module) = self.module.take() {
+            retire(module);
+        }
     }
 }
 
@@ -52,14 +71,16 @@ impl Bridges {
         if !missing.is_empty() {
             let module = match &mut self.module {
                 Some(module) => module,
-                none => none.insert(ManuallyDrop::new(new_module()?)),
+                none => none.insert(new_module()?),
             };
             let ids = match make(module, &missing, &mut self.next) {
                 Ok(ids) => ids,
                 Err(error) => {
-                    // 途中まで定義した関数が次の finalize に混ざらないよう、この module を捨てて次の要求で作り直す。
-                    // `ManuallyDrop` なので、前に作った橋渡しのコードは残る
-                    self.module = None;
+                    // 途中まで定義した関数が次の finalize に混ざらないよう、この module を退かせて次の要求で作り直す。
+                    // `RETIRED` に移すので、前に作った橋渡しのコードは残る
+                    if let Some(module) = self.module.take() {
+                        retire(module);
+                    }
                     return Err(error);
                 }
             };
