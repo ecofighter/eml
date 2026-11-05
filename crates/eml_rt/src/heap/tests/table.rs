@@ -30,6 +30,14 @@ pub enum Arg {
         lin: bool,
         shared: bool,
     },
+    /// 生の要素の配列。要素は 64 ビットの語で、`float` なら浮動小数のビット列、そうでなければ整数である。`lin` と
+    /// `shared` は `Array` と同じ
+    Unboxed {
+        elements: Vec<u64>,
+        float: bool,
+        lin: bool,
+        shared: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +60,12 @@ pub enum Outcome {
     /// 整数を要素に持つ配列と、その `lin` ビット
     Array {
         elements: Vec<i64>,
+        lin: bool,
+    },
+    /// 生の要素の配列と、その `lin` ビット。`float` なら要素を浮動小数として書く
+    Unboxed {
+        elements: Vec<u64>,
+        float: bool,
         lin: bool,
     },
     /// `HASHED_OVER` バイトより長い文字列の結果 (`Str` か `Out`) のバイト数と FNV-1a の値。1 MiB の中身をそのまま
@@ -485,6 +499,15 @@ fn parse_arg(text: &str) -> Result<Arg, String> {
             lin: kind == "M",
             shared: kind == "D",
         },
+        "U" | "UD" | "UM" | "UF" | "UFD" | "UFM" => {
+            let float = kind.starts_with("UF");
+            Arg::Unboxed {
+                elements: parse_words(value, float)?,
+                float,
+                lin: kind.ends_with('M'),
+                shared: kind.ends_with('D'),
+            }
+        }
         _ => return Err(format!("an unknown argument kind: {text}")),
     })
 }
@@ -512,6 +535,14 @@ fn parse_outcome(text: &str) -> Result<Outcome, String> {
             elements: parse_ints(value)?,
             lin: kind == "M",
         },
+        "U" | "UM" | "UF" | "UFM" => {
+            let float = kind.starts_with("UF");
+            Outcome::Unboxed {
+                elements: parse_words(value, float)?,
+                float,
+                lin: kind.ends_with('M'),
+            }
+        }
         "h" => {
             let (len, hash) = value
                 .split_once(':')
@@ -539,6 +570,48 @@ fn parse_ints(text: &str) -> Result<Vec<i64>, String> {
         return Ok(Vec::new());
     }
     inner.split(',').map(parse_int).collect()
+}
+
+/// 生の要素の配列の要素の並び。`float` なら Rust の `{:?}` で書いた浮動小数、そうでなければ整数である
+fn parse_words(text: &str, float: bool) -> Result<Vec<u64>, String> {
+    if !float {
+        return Ok(parse_ints(text)?.into_iter().map(|v| v as u64).collect());
+    }
+    let inner = text
+        .strip_prefix('[')
+        .and_then(|t| t.strip_suffix(']'))
+        .ok_or_else(|| format!("not a bracketed list: {text}"))?;
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+    inner
+        .split(',')
+        .map(|x| parse_float(x).map(f64::to_bits))
+        .collect()
+}
+
+fn words_text(elements: &[u64], float: bool) -> String {
+    let parts: Vec<String> = elements
+        .iter()
+        .map(|&e| {
+            if float {
+                format!("{:?}", f64::from_bits(e))
+            } else {
+                (e as i64).to_string()
+            }
+        })
+        .collect();
+    format!("[{}]", parts.join(","))
+}
+
+/// 生の要素の配列の種類の文字。`U` に、Float なら `F` を、`lin` なら `M` を、共有なら `D` を足す
+fn unboxed_kind(float: bool, lin: bool, shared: bool) -> String {
+    let suffix = match (lin, shared) {
+        (true, _) => "M",
+        (false, true) => "D",
+        (false, false) => "",
+    };
+    format!("U{}{suffix}", if float { "F" } else { "" })
 }
 
 fn bytes_text(bytes: &[u8]) -> String {
@@ -616,6 +689,16 @@ pub fn line(case: &Case) -> String {
             };
             format!("{kind}:{}", ints_text(elements))
         }
+        Arg::Unboxed {
+            elements,
+            float,
+            lin,
+            shared,
+        } => format!(
+            "{}:{}",
+            unboxed_kind(*float, *lin, *shared),
+            words_text(elements, *float)
+        ),
     }));
     let outcome = match &digest(case.outcome.clone()) {
         Outcome::Unit => "unit:()".to_string(),
@@ -631,6 +714,15 @@ pub fn line(case: &Case) -> String {
         Outcome::Array { elements, lin } => {
             format!("{}:{}", if *lin { "M" } else { "A" }, ints_text(elements))
         }
+        Outcome::Unboxed {
+            elements,
+            float,
+            lin,
+        } => format!(
+            "{}:{}",
+            unboxed_kind(*float, *lin, false),
+            words_text(elements, *float)
+        ),
     };
     fields.push(format!("=> {outcome}"));
     fields.join("\t")
@@ -1202,6 +1294,95 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         push("Std.Array.thaw", vec![array(elements, false, false)]);
         push("Std.Array.thaw", vec![array(elements, false, true)]);
         push("Std.MutArray.freeze", vec![array(elements, true, false)]);
+    }
+    // 生の要素の配列。行は `Float` と `Int` の instance ごとにあり、どちらも同じ操作を通る。長さと添字は配列と同じで、
+    // 長さには確保の前に止まる `Int` の最大を、`set` と `write` の添字には `Int` の両端も足す。共有された配列の `set` と `thaw` は写す。共有された配列の `fill` と
+    // `freeze` は、検査モードが断り速いモードが写すので、表に入れない
+    let unboxed = |elements: &[u64], float: bool, lin: bool, shared: bool| Arg::Unboxed {
+        elements: elements.to_vec(),
+        float,
+        lin,
+        shared,
+    };
+    let int_words = [10, 20, 30];
+    let float_words = [1.5f64, -0.0, 2.25].map(f64::to_bits);
+    for (ty, float, x, y, words) in [
+        ("Int", false, Arg::Int(7), Arg::Int(-9), int_words),
+        (
+            "Float",
+            true,
+            Arg::Float(2.5f64.to_bits()),
+            Arg::Float((-9.75f64).to_bits()),
+            float_words,
+        ),
+    ] {
+        let make = format!("Std.UnboxedArray.Unboxed {ty}.make");
+        let mut_make = format!("Std.MutUnboxedArray.MutUnboxed {ty}.make");
+        let get = format!("Std.UnboxedArray.Unboxed {ty}.get");
+        let read = format!("Std.MutUnboxedArray.MutUnboxed {ty}.read");
+        let set = format!("Std.UnboxedArray.Unboxed {ty}.set");
+        let write = format!("Std.MutUnboxedArray.MutUnboxed {ty}.write");
+        let fill = format!("Std.MutUnboxedArray.MutUnboxed {ty}.fill");
+        for n in [-1, 0, 1, 3, i64::MAX] {
+            push(&make, vec![Arg::Int(n), x.clone()]);
+            push(&mut_make, vec![Arg::Int(n), x.clone()]);
+        }
+        for i in [-1, 0, 2, 3, i64::MIN, i64::MAX] {
+            push(
+                &get,
+                vec![unboxed(&words, float, false, false), Arg::Int(i)],
+            );
+            push(
+                &read,
+                vec![unboxed(&words, float, true, false), Arg::Int(i)],
+            );
+        }
+        push(&get, vec![unboxed(&words, float, false, true), Arg::Int(1)]);
+        for i in [-1, 0, 2, 3, i64::MIN, i64::MAX] {
+            for shared in [false, true] {
+                push(
+                    &set,
+                    vec![
+                        unboxed(&words, float, false, shared),
+                        Arg::Int(i),
+                        y.clone(),
+                    ],
+                );
+            }
+            push(
+                &write,
+                vec![unboxed(&words, float, true, false), Arg::Int(i), y.clone()],
+            );
+        }
+        for elements in [&[][..], &words] {
+            push(
+                &fill,
+                vec![unboxed(elements, float, true, false), y.clone()],
+            );
+        }
+    }
+    push("Std.MutUnboxedArray.empty", vec![]);
+    for elements in [&[][..], &[5], &int_words] {
+        push(
+            "Std.UnboxedArray.length",
+            vec![unboxed(elements, false, false, false)],
+        );
+        push(
+            "Std.MutUnboxedArray.length",
+            vec![unboxed(elements, false, true, false)],
+        );
+    }
+    for (elements, float) in [(&[][..], false), (&int_words, false), (&float_words, true)] {
+        for shared in [false, true] {
+            push(
+                "Std.UnboxedArray.thaw",
+                vec![unboxed(elements, float, false, shared)],
+            );
+        }
+        push(
+            "Std.MutUnboxedArray.freeze",
+            vec![unboxed(elements, float, true, false)],
+        );
     }
     // `var` の配列の変数の添字の検査。長さは 0、1、3 と `Int` の最大で、添字は端と、その外側の 1 つずつと、`Int` の
     // 両端である

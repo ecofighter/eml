@@ -781,9 +781,6 @@ fn fill<M: Mode>(
     Ok(())
 }
 
-/// `make` で作れる長さの上限。これより長い配列のブロックは、確保器が作れる語の数 (2^32 未満) を超えうる。
-const MAX_LEN: usize = 0xFFFF_0000;
-
 impl<M: Mode> Ctx<M> {
     /// 配列の要素に入れられる値。`dup` できる。
     pub closed spec fn storable(&self, x: Word) -> bool {
@@ -791,7 +788,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// 呼ぶ側が持つ引数 `ws[i]` は、読めて、`decref` できる。
-    proof fn lemma_arg_ready(&self, ws: Seq<Word>, i: int)
+    pub(super) proof fn lemma_arg_ready(&self, ws: Seq<Word>, i: int)
         requires
             self.held_ok(),
             self.holds_args(ws),
@@ -814,7 +811,7 @@ impl<M: Mode> Ctx<M> {
 
     /// `old` から `moved(d)` で変えたヒープで、`Ctx` の語は持たれたままで、`evv` も同じリストである。`d` は、引数
     /// `ws` の参照を手放す分を超えて減らさない。
-    proof fn lemma_kept_ok(&self, old: Ctx<M>, ws: Seq<Word>, d: spec_fn(usize) -> int)
+    pub(super) proof fn lemma_kept_ok(&self, old: Ctx<M>, ws: Seq<Word>, d: spec_fn(usize) -> int)
         requires
             old.held_ok(),
             old.holds_args(ws),
@@ -885,7 +882,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// 引数 `x` の参照を手放して、誤り `f` を返す。
-    unsafe fn refuse(&mut self, x: Word, f: Fault) -> (r: Result<Word, Fault>)
+    pub(super) unsafe fn refuse(&mut self, x: Word, f: Fault) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(x),
@@ -1097,7 +1094,7 @@ impl<M: Mode> Ctx<M> {
 
 /// rc が 1 の読める物体は、このヒープのブロックで、数えた参照は 1 つである。呼ぶ側が外の参照を持てば、ほかの物体
 /// から辺で指されない。
-proof fn lemma_unique<M: Mode>(h: Heap<M>, w: Word)
+pub(super) proof fn lemma_unique<M: Mode>(h: Heap<M>, w: Word)
     requires
         h.consistent(),
         h.settleable(),
@@ -1806,7 +1803,7 @@ impl<M: Mode> Ctx<M> {
 }
 
 /// `moved` は、どのブロックについても `moved_lin` である。
-proof fn lemma_moved_to_lin<M: Mode>(
+pub(super) proof fn lemma_moved_to_lin<M: Mode>(
     h1: Heap<M>,
     h0: Heap<M>,
     d: spec_fn(usize) -> int,
@@ -1831,7 +1828,7 @@ proof fn lemma_moved_to_lin<M: Mode>(
 }
 
 /// `set_lin` の後のヒープは `a` の `lin` ビットのほかは前と同じに読める。
-proof fn lemma_relinked_same<M: Mode>(h1: Heap<M>, h0: Heap<M>, aw: Word, lin: bool)
+pub(super) proof fn lemma_relinked_same<M: Mode>(h1: Heap<M>, h0: Heap<M>, aw: Word, lin: bool)
     requires
         h1.relinked(h0, aw, lin),
     ensures
@@ -1947,7 +1944,13 @@ proof fn lemma_no_edge<M: Mode>(h: Heap<M>, ab: usize, w: Word, i: int)
 }
 
 /// `set_lin` の後も、持たれていた語は持たれたままである。`a` を指す語も、`a` の rc が正なので手放せる。
-proof fn lemma_held_word_relinked<M: Mode>(h1: Heap<M>, h0: Heap<M>, aw: Word, lin: bool, w: Word)
+pub(super) proof fn lemma_held_word_relinked<M: Mode>(
+    h1: Heap<M>,
+    h0: Heap<M>,
+    aw: Word,
+    lin: bool,
+    w: Word,
+)
     requires
         h1.relinked(h0, aw, lin),
         h0.rc_value(aw) == 1,
@@ -1962,7 +1965,7 @@ proof fn lemma_held_word_relinked<M: Mode>(h1: Heap<M>, h0: Heap<M>, aw: Word, l
 }
 
 /// `set_lin` の後も、`a` を通らない `evv` のリストは同じ列のリストである。
-proof fn lemma_path_relinked<M: Mode>(
+pub(super) proof fn lemma_path_relinked<M: Mode>(
     h1: Heap<M>,
     h0: Heap<M>,
     aw: Word,
@@ -2156,7 +2159,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// その場の `freeze` と `thaw` の、`settle` の前の文脈からの変化。
-    proof fn lemma_relinked_from(&self, s0: Ctx<M>, s1: Ctx<M>, a: Word)
+    pub(super) proof fn lemma_relinked_from(&self, s0: Ctx<M>, s1: Ctx<M>, a: Word)
         requires
             moved(s1.heap, s0.heap, |b: usize| 0int, Set::empty()),
             no_free(s1.heap, s0.heap),
