@@ -70,7 +70,7 @@
 
 ## C の関数
 
-- `--link KEY=VALUE` は、`eml run` と同じく、`link` の item に KEY と書いたライブラリの代わりに VALUE を開く ([標準ライブラリ](stdlib.md) の「起動」)。`eml run` と違い、どの `link` の item にも合わない KEY を断らない。KEY を書いた `link` の item は、後の入力が足せるためである
+- `--link KEY=VALUE` は、`eml run` と同じく、`link` の item に KEY と書いたライブラリの代わりに VALUE を開く ([標準ライブラリ](stdlib.md) の「起動」)。`eml run` と違い、どの `link` の item にも合わない KEY を断らない。その KEY を書いた `link` の item を、後の入力が足せるためである
 - 入力のプログラムは、実行の前につなぐ ([VM](vm.md) の「`--link`」)。つなげない入力は、標準エラーに `link error: {error}` を書いて断る (`Outcome::Unlinked`)。何も読み込まず、診断のある入力と同じくセッションは変わらない。続けられない誤りではないので、後の入力は今までどおり評価する
 - 上書きは、`:load` と `:reload` で作り直すセッションにも効く。端末は新しいセッションを作るたびに、同じ上書きを渡す
 

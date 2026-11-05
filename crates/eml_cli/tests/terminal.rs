@@ -379,12 +379,12 @@ extern \"C\" pure sqrt : Float -> Float
     let output = repl_in(
         &dir,
         &["--link", &overridden],
-        ":load main.em\nsqrt 16.0\n:reload\nsqrt 25.0\n",
+        &format!("{main}\nsqrt 9.0\n:load main.em\nsqrt 16.0\n:reload\nsqrt 25.0\n"),
     );
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stderr(&output), "");
-    assert_eq!(stdout(&output), "4.0\n5.0\n");
+    assert_eq!(stdout(&output), "3.0\n4.0\n5.0\n");
 }
 
 #[cfg(unix)]
