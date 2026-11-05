@@ -25,7 +25,7 @@ use eml_rt::{
     RawProcess, RawResource, Submit,
 };
 
-use backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
+use backend::{Arrival, Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
 use inbox::{Answer, Inbox, Ticket};
 use pool::{POOL_LIMIT, Pool};
 pub(crate) use resolve::Lookup;
@@ -566,7 +566,7 @@ impl<B: Backend> Driver<B> {
             match answer {
                 Answer::Job(Ok(result)) => self.done.push(Completion {
                     key,
-                    result: result.map(Done::Size),
+                    result,
                     cancelled: false,
                 }),
                 // 束の残りの答えを失わないよう、起こし直すのは処理しきった後である
@@ -729,7 +729,7 @@ impl<B: Backend> IoDriver for Driver<B> {
                     cancel_sent: None,
                 },
             );
-            self.pool.submit(&self.backend, ticket, job);
+            self.pool.submit(&self.backend, ticket, Job::File(job));
             return Submit::Pending;
         }
         match op {
@@ -814,7 +814,7 @@ impl<B: Backend> IoDriver for Driver<B> {
                         cancel_sent: None,
                     },
                 );
-                self.pool.submit(&self.backend, ticket, job);
+                self.pool.submit(&self.backend, ticket, Job::Value(job));
                 Submit::Pending
             }
             Op::Adopt { res } => Submit::Done(self.adopt(res).map(Done::Handle)),

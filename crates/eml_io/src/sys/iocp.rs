@@ -54,7 +54,9 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::core::GUID;
 
-use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
+use crate::driver::backend::{
+    Arrival, Backend, Cancel, Event, FileJob, Hold, Outcome, Start, Step,
+};
 
 /// 起こしの packet の completion key
 const WAKE: usize = 0;
@@ -1223,7 +1225,7 @@ impl Backend for Iocp {
             }
         }
     }
-    fn file_job(&self, sock: &Sock, write: bool, buf: RawBuf) -> Job {
+    fn file_job(&self, sock: &Sock, write: bool, buf: RawBuf) -> FileJob {
         let Sock::File(file) = sock else {
             unreachable!("the core gives file jobs only files");
         };

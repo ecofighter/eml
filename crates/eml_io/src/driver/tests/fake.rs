@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use eml_rt::{IoWaker, OpKey, PipePair, RawBuf, RawPipe, RawResource, RawSocket};
 
-use crate::driver::backend::{Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
+use crate::driver::backend::{Backend, Cancel, Event, FileJob, Hold, Outcome, Start, Step};
 
 /// 行番号だけを持つ。`Clone` も `Copy` もしないので、核がソケットを写せないことを型で守る。
 #[derive(Debug, PartialEq, Eq)]
@@ -335,7 +335,7 @@ impl Backend for Fake {
         })
     }
 
-    fn file_job(&self, _sock: &FakeSock, write: bool, buf: RawBuf) -> Job {
+    fn file_job(&self, _sock: &FakeSock, write: bool, buf: RawBuf) -> FileJob {
         let file = Arc::clone(&self.file);
         let gate = self
             .file_gate

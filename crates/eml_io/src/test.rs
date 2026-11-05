@@ -174,7 +174,7 @@ impl TestDriver {
             })
         };
         match pending.op {
-            Op::Job(job) => done(job().map(Done::Size)),
+            Op::Job(job) => done(Ok(Done::Job(job()))),
             Op::Adopt { res } => done(self.adopt(res).map(Done::Handle)),
             Op::Wait { .. } => done(Err(no_processes())),
             Op::Read { handle, buf } if self.files.contains_key(&handle) => {

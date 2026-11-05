@@ -151,7 +151,7 @@ fn a_short_write_is_continued_under_the_same_key() {
     let done = completions(&mut driver);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].key, 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(11));
+    assert!(matches!(done[0].result, Ok(Done::Size(11))));
     assert_eq!(driver.backend.sent, b"hello world");
     let sends = calls(&driver.backend)
         .into_iter()
@@ -313,7 +313,7 @@ fn a_retry_delivered_twice_completes_once() {
     assert!(driver.wait(None).unwrap());
     let done = completions(&mut driver);
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     assert_eq!(&data[..2], b"hi");
     assert_eq!(driver.pending(), 0);
     let recvs = calls(&driver.backend)
@@ -431,7 +431,7 @@ fn closing_a_handle_with_a_pending_op_closes_after_the_op() {
     assert_eq!(e.to_string(), "no such handle");
     driver.backend.events.push(retry(1));
     let done = settle(&mut driver);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     let closes = driver
         .backend
         .calls
@@ -493,7 +493,7 @@ fn a_failed_wait_breaks_the_driver() {
         },
     ));
     assert_eq!(e.to_string(), "the poller failed");
-    let e = error_of(driver.submit(3, Op::Job(Box::new(|| Ok(0)))));
+    let e = error_of(driver.submit(3, Op::Job(Box::new(|| Box::new(0usize)))));
     assert_eq!(e.to_string(), "the poller failed");
     driver.cancel(1);
     assert_eq!(driver.backend.calls.len(), waits);
@@ -634,7 +634,7 @@ fn a_retry_for_a_held_op_restarts_the_step() {
     ));
     driver.backend.events.push(retry(1));
     let done = settle(&mut driver);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     assert_eq!(starts(&driver.backend), 2);
     assert_eq!(&data[..2], b"ab");
 }
@@ -666,7 +666,7 @@ fn write_completed_after_a_cancel(n: usize) -> (Completion, usize) {
 #[test]
 fn a_full_write_completed_after_a_cancel_succeeds() {
     let (done, _) = write_completed_after_a_cancel(4);
-    assert_eq!(done.result.as_ref().unwrap(), &Done::Size(4));
+    assert!(matches!(done.result, Ok(Done::Size(4))));
     assert!(!done.cancelled);
 }
 
@@ -690,7 +690,7 @@ fn closing_a_handle_with_a_held_op_closes_after_the_event() {
         arrival: Arrival::Done(Ok(Outcome::Size(1))),
     });
     let done = settle(&mut driver);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(1));
+    assert!(matches!(done[0].result, Ok(Done::Size(1))));
     assert_eq!(driver.backend.calls.last(), Some(&Call::Close(0)));
 }
 
@@ -799,10 +799,23 @@ fn a_cancelled_arrival_without_a_cancel_is_a_contract_violation() {
 }
 
 #[test]
+fn a_job_returns_its_boxed_value() {
+    let mut driver = driver();
+    pending(driver.submit(1, Op::Job(Box::new(|| Box::new(42u64)))));
+    let done = settle(&mut driver);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].key, 1);
+    let Ok(Done::Job(value)) = &done[0].result else {
+        panic!("not a job value");
+    };
+    assert_eq!(value.downcast_ref::<u64>(), Some(&42));
+}
+
+#[test]
 fn a_job_panic_is_raised_on_the_driver_thread() {
     let mut driver = driver();
     pending(driver.submit(1, Op::Job(Box::new(|| panic!("boom")))));
-    pending(driver.submit(2, Op::Job(Box::new(|| Ok(7)))));
+    pending(driver.submit(2, Op::Job(Box::new(|| Box::new(7usize)))));
     let mut done = Vec::new();
     let payload = loop {
         match panic::catch_unwind(AssertUnwindSafe(|| driver.wait(None))) {
@@ -817,7 +830,10 @@ fn a_job_panic_is_raised_on_the_driver_thread() {
     done.extend(settle(&mut driver));
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].key, 2);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(7));
+    let Ok(Done::Job(value)) = &done[0].result else {
+        panic!("not a job value");
+    };
+    assert_eq!(value.downcast_ref::<usize>(), Some(&7));
     assert_eq!(driver.pending(), 0);
 }
 
@@ -825,7 +841,7 @@ fn a_job_panic_is_raised_on_the_driver_thread() {
 fn a_job_whose_thread_cannot_start_completes_once_with_an_error() {
     let mut driver = driver();
     driver.backend.spawn_error = true;
-    pending(driver.submit(1, Op::Job(Box::new(|| Ok(1)))));
+    pending(driver.submit(1, Op::Job(Box::new(|| Box::new(1usize)))));
     assert!(driver.wait(None).unwrap());
     let done = completions(&mut driver);
     assert_eq!(done.len(), 1);
@@ -847,7 +863,7 @@ fn quiesce_waits_for_a_running_job() {
         Op::Job(Box::new(move || {
             rx.recv().unwrap();
             job_ran.store(true, Ordering::SeqCst);
-            Ok(3)
+            Box::new(3usize)
         })),
     ));
     // 門は `quiesce` が待ち始めた後に開く。遅れは検出力のためだけで、待つ driver ではいつも仕事が先に終わる
@@ -1076,7 +1092,7 @@ mod pool {
 
     use eml_rt::{Done, IoDriver, Op};
 
-    use super::super::backend::Backend;
+    use super::super::backend::{Backend, Job};
     use super::super::inbox::{Answer, Inbox};
     use super::super::pool::Pool;
     use super::fake::Fake;
@@ -1096,11 +1112,11 @@ mod pool {
             pool.submit(
                 &fake,
                 i,
-                Box::new(move || {
+                Job::File(Box::new(move || {
                     started_tx.send(i).unwrap();
                     gate_rx.recv().unwrap();
                     Ok(usize::try_from(i).unwrap())
-                }),
+                })),
             );
         }
         let first = started.recv().unwrap();
@@ -1123,7 +1139,7 @@ mod pool {
         let mut sizes: Vec<usize> = answers
             .into_iter()
             .map(|(_, answer)| match answer {
-                Answer::Job(Ok(Ok(n))) => n,
+                Answer::Job(Ok(Ok(Done::Size(n)))) => n,
                 _ => panic!("a job failed"),
             })
             .collect();
@@ -1137,7 +1153,7 @@ mod pool {
     #[test]
     fn two_jobs_submitted_to_one_idle_thread_run_together() {
         let mut driver = driver();
-        pending(driver.submit(0, Op::Job(Box::new(|| Ok(0)))));
+        pending(driver.submit(0, Op::Job(Box::new(|| Box::new(0usize)))));
         assert_eq!(settle(&mut driver).len(), 1);
         // 空いたスレッドを作るためだけに眠る。合否には効かない
         thread::sleep(Duration::from_millis(5));
@@ -1146,19 +1162,19 @@ mod pool {
             1,
             Op::Job(Box::new(move || {
                 rx.recv().unwrap();
-                Ok(1)
+                Box::new(1usize)
             })),
         ));
         pending(driver.submit(
             2,
             Op::Job(Box::new(move || {
                 tx.send(()).unwrap();
-                Ok(2)
+                Box::new(2usize)
             })),
         ));
         let done = settle(&mut driver);
         assert_eq!(done.len(), 2);
-        assert!(done.iter().all(|c| matches!(c.result, Ok(Done::Size(_)))));
+        assert!(done.iter().all(|c| matches!(c.result, Ok(Done::Job(_)))));
     }
 }
 
@@ -1260,7 +1276,7 @@ fn a_file_read_job_fills_the_lent_room() {
     ));
     let done = settle(&mut driver);
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(5));
+    assert!(matches!(done[0].result, Ok(Done::Size(5))));
     assert!(!done[0].cancelled);
     assert_eq!(&data[..5], b"hello");
     // ファイルの読みは backend の歩を出さない
@@ -1332,7 +1348,7 @@ fn a_cancel_does_not_end_a_file_job() {
     open.send(()).unwrap();
     let done = settle(&mut driver);
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     assert!(!done[0].cancelled);
     assert_eq!(&data[..2], b"ab");
     assert_eq!(cancels(&driver.backend), 0);
@@ -1355,7 +1371,7 @@ fn a_closed_file_waits_for_its_running_job() {
     assert!(!driver.backend.calls.contains(&Call::Close(0)));
     open.send(()).unwrap();
     let done = settle(&mut driver);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(0));
+    assert!(matches!(done[0].result, Ok(Done::Size(0))));
     assert_eq!(calls(&driver.backend).last(), Some(&&Call::Close(0)));
 }
 
@@ -1488,7 +1504,7 @@ fn a_wait_ends_after_its_retry_with_size_zero() {
     driver.backend.events.push(retry(1));
     let done = settle(&mut driver);
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(0));
+    assert!(matches!(done[0].result, Ok(Done::Size(0))));
     assert!(!done[0].cancelled);
     assert_eq!(
         calls(&driver.backend),

@@ -130,7 +130,7 @@ fn work(shared: &Shared) {
         };
         state.running.insert(me);
         drop(state);
-        let answer = panic::catch_unwind(AssertUnwindSafe(job));
+        let answer = panic::catch_unwind(AssertUnwindSafe(|| job.run()));
         // 答えを積む前に走っている印を外す。答えを見た driver がすぐ落ちても、このスレッドは join される側にいる。
         // 積む (受け箱の lock と起こし) のはプールの lock の外で行う
         shared.lock().running.remove(&me);
