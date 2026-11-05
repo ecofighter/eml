@@ -18,7 +18,7 @@ use std::sync::{LazyLock, Mutex, PoisonError};
 #[cfg(feature = "run")]
 mod fixtures;
 #[cfg(feature = "run")]
-pub use fixtures::fixture_symbols;
+pub use fixtures::{eml_fixture_gate_open, eml_fixture_gate_wait, fixture_symbols};
 
 #[cfg(feature = "run")]
 use eml_native::Linker;

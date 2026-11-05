@@ -7,6 +7,8 @@ use eml_test_support::run;
 use eml_test_support::{check, lower, parse, with_modules};
 #[cfg(feature = "core")]
 use eml_test_support::{core_until, lir, lir_until};
+#[cfg(feature = "run")]
+use eml_test_support::{eml_fixture_gate_open, eml_fixture_gate_wait, fixture_symbols};
 use eml_test_support::{full, parse_clean, short, short_text, source, with_diagnostics};
 
 fn range(start: u32, end: u32) -> TextRange {
@@ -198,4 +200,34 @@ fn lower_clean_returns_a_module_without_diagnostics() {
 #[should_panic(expected = "unexpected diagnostics")]
 fn lower_clean_rejects_an_undefined_name() {
     lower_clean("f : Int -> Int\nf x = g x");
+}
+
+#[cfg(feature = "run")]
+#[test]
+fn an_open_pairs_with_one_wait() {
+    eml_fixture_gate_open(100200);
+    assert_eq!(eml_fixture_gate_wait(100200), 0);
+    eml_fixture_gate_open(100200);
+    assert_eq!(eml_fixture_gate_wait(100200), 0);
+}
+
+#[cfg(feature = "run")]
+#[test]
+fn a_wait_returns_after_another_thread_opens() {
+    let waiter = std::thread::spawn(|| eml_fixture_gate_wait(100201));
+    eml_fixture_gate_open(100201);
+    assert_eq!(waiter.join().unwrap(), 0);
+}
+
+#[cfg(feature = "run")]
+#[test]
+fn fixture_symbols_lists_the_gates() {
+    let names: Vec<&str> = fixture_symbols().iter().map(|(name, _)| *name).collect();
+    for gate in [
+        "eml_fixture_gate_open",
+        "eml_fixture_gate_wait",
+        "eml_fixture_handle_wait",
+    ] {
+        assert!(names.contains(&gate), "{gate} is missing");
+    }
 }
