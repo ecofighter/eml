@@ -247,7 +247,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
   2. 順は門 (`mpsc`、`Mutex` と `Condvar`) で作る。`sleep` は合否に効かない検出力のためだけに使う
   3. 本物の時計を使わない
   4. driver を落とした後も走るスレッドを使うテストは `tests/real.rs` に置き、Miri では流さない
-  5. 上限の振る舞いは小さな上限で確かめる。プールは上限 2 で確かめ、32 本のスレッドは Miri で起こさない
+  5. 上限の振る舞いは小さな上限で確かめる。プールのスレッドの上限はスレッド 2 本のプールで、`Op::Job` の上限はスレッド 3 本、`Op::Job` 2 つまでのプールで確かめる。32 本のスレッドは Miri で起こさない
   6. 偽の時計を進める待ちは、走るスレッドのない間だけ使う
 - `Drop` がプロセスを止める道のテスト (`driver::tests::abort`) は、テストのバイナリを子として起こすので、Miri では `ignore` にする
 - コマンドは `cargo miri test -p eml_io --lib -- driver::tests::` で、`eml_rt` と同じ2つの `MIRIFLAGS` で流す (「よく使うコマンド」)。予算は、ビルド済みの作業ツリーでのコマンドの `user` で、Stacked Borrows で 30 秒以内、Tree Borrows で 35 秒以内にする。ほかのビルドが走っていない 4 CPU の Linux のコンテナで測った時間の約3倍である。aarch64-darwin の開発機で測った `user` は、Stacked Borrows で 6.1 秒、Tree Borrows で 6.9 秒である。測り直しの規則は上の「Miri」と同じである

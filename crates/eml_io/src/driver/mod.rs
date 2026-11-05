@@ -27,7 +27,7 @@ use eml_rt::{
 
 use backend::{Arrival, Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
 use inbox::{Answer, Inbox, Ticket};
-use pool::{POOL_LIMIT, Pool};
+use pool::{JOB_LIMIT, POOL_LIMIT, Pool};
 pub(crate) use resolve::Lookup;
 use resolve::Resolver;
 
@@ -251,7 +251,7 @@ impl<B: Backend> Driver<B> {
     pub(crate) fn new(backend: B, lookup: Lookup) -> Driver<B> {
         let inbox = Inbox::new(backend.waker());
         Driver {
-            pool: Pool::new(Arc::clone(&inbox), POOL_LIMIT),
+            pool: Pool::new(Arc::clone(&inbox), POOL_LIMIT, JOB_LIMIT),
             resolver: Resolver::new(lookup, Arc::clone(&inbox)),
             backend,
             slots: HashMap::new(),

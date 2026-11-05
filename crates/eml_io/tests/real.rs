@@ -191,8 +191,8 @@ fn a_job_completes_with_its_value() {
     assert_eq!(driver.pending(), 0);
 }
 
-/// プールのスレッドは32本までで、それを超える仕事は driver の中の列で待ち、スレッドが空いてから動く。32 の仕事が
-/// 門で止まっている間も、33 本目の `submit` は呼んだスレッドを止めずに戻る。
+/// 同時に走る `Op::Job` は24までで、それを超える仕事は driver の中の列で待ち、走っている仕事が終わってから動く。24 の
+/// 仕事が門で止まっている間も、25 個目の `submit` は呼んだスレッドを止めずに戻る。
 #[test]
 fn a_job_pool_is_capped() {
     use std::sync::atomic::AtomicUsize;
@@ -204,7 +204,7 @@ fn a_job_pool_is_capped() {
     let finished = Arc::new(AtomicUsize::new(0));
     let mut gates = Vec::new();
     let mut keys = Vec::new();
-    for i in 0..32 {
+    for i in 0..24 {
         let started_tx = started_tx.clone();
         let finished = Arc::clone(&finished);
         let (gate, gate_rx) = mpsc::channel::<()>();
@@ -226,10 +226,10 @@ fn a_job_pool_is_capped() {
             })),
         ));
     }
-    for _ in 0..32 {
+    for _ in 0..24 {
         started.recv().unwrap();
     }
-    // 空いたスレッドがないので、33 本目は列で待つ。ここへ戻れたことが、`submit` が止まらない証拠である。
+    // 上限に達しているので、25 個目は列で待つ。ここへ戻れたことが、`submit` が止まらない証拠である。
     // 列の仕事はほかの仕事が終わってからしか動かないので、動いたときには終わった仕事がある
     let seen = Arc::clone(&finished);
     let last = submit(
@@ -237,7 +237,7 @@ fn a_job_pool_is_capped() {
         Op::Job(Box::new(move || {
             Box::new(Ok::<usize, std::io::Error>(
                 if seen.load(Ordering::SeqCst) > 0 {
-                    32
+                    24
                 } else {
                     usize::MAX
                 },

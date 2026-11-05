@@ -1102,7 +1102,7 @@ mod pool {
     fn a_job_beyond_the_limit_does_not_block_submit() {
         let fake: Fake = Fake::new();
         let inbox = Inbox::new(fake.waker());
-        let mut pool = Pool::new(Arc::clone(&inbox), 2);
+        let mut pool = Pool::new(Arc::clone(&inbox), 2, 2);
         let (started_tx, started) = mpsc::channel();
         let mut gates = Vec::new();
         for i in 0..3u64 {
@@ -1148,6 +1148,77 @@ mod pool {
         assert_eq!(fake.spawned.get(), 2);
         drop(pool);
         assert_eq!(fake.finished.get(), 2);
+    }
+
+    #[test]
+    fn jobs_beyond_the_job_limit_wait_while_a_file_job_gets_a_thread() {
+        let fake: Fake = Fake::new();
+        let inbox = Inbox::new(fake.waker());
+        let mut pool = Pool::new(Arc::clone(&inbox), 3, 2);
+        let (started_tx, started) = mpsc::channel();
+        let mut gates = Vec::new();
+        let mut submit_value = |pool: &mut Pool, i: u64| {
+            let (gate, gate_rx) = mpsc::channel::<()>();
+            gates.push(gate);
+            let started_tx = started_tx.clone();
+            pool.submit(
+                &fake,
+                i,
+                Job::Value(Box::new(move || {
+                    started_tx.send(i).unwrap();
+                    gate_rx.recv().unwrap();
+                    Box::new(i)
+                })),
+            );
+        };
+        submit_value(&mut pool, 0);
+        submit_value(&mut pool, 1);
+        let first = started.recv().unwrap();
+        started.recv().unwrap();
+        // 2つの値の仕事が上限を埋めているので、3つ目は列で待ち、スレッドも増やさない
+        submit_value(&mut pool, 2);
+        assert_eq!(fake.spawned.get(), 2);
+        assert!(started.try_recv().is_err());
+        // ファイルの仕事は3本目のスレッドを得て、2つの門が閉じたまま答える
+        pool.submit(&fake, 3, Job::File(Box::new(|| Ok(3))));
+        assert_eq!(fake.spawned.get(), 3);
+        let mut answers = std::collections::VecDeque::new();
+        while answers.is_empty() {
+            inbox.take(&mut answers);
+            if answers.is_empty() {
+                fake.bell.wait();
+            }
+        }
+        assert_eq!(answers.len(), 1);
+        assert!(matches!(
+            answers.pop_front(),
+            Some((3, Answer::Job(Ok(Ok(Done::Size(3))))))
+        ));
+        assert!(started.try_recv().is_err());
+        // 門を1つ開けると、待っていた値の仕事が始まる
+        gates[usize::try_from(first).unwrap()].send(()).unwrap();
+        assert_eq!(started.recv().unwrap(), 2);
+        for gate in &gates {
+            let _ = gate.send(());
+        }
+        let mut values = Vec::new();
+        while values.len() < 3 {
+            inbox.take(&mut answers);
+            for (_, answer) in answers.drain(..) {
+                match answer {
+                    Answer::Job(Ok(Ok(Done::Job(v)))) => values.push(*v.downcast::<u64>().unwrap()),
+                    _ => panic!("a job failed"),
+                }
+            }
+            if values.len() < 3 {
+                fake.bell.wait();
+            }
+        }
+        values.sort();
+        assert_eq!(values, [0, 1, 2]);
+        assert_eq!(fake.spawned.get(), 3);
+        drop(pool);
+        assert_eq!(fake.finished.get(), 3);
     }
 
     #[test]
