@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/async/blocking_fixture_null_handle.em
+---
+--- stdout ---
+before
+--- stderr ---
+--- runtime error ---
+panicked: `Main.handle_new` returned a null handle
+  at <std>/Async.em:75:9
