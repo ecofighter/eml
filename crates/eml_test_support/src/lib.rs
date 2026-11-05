@@ -21,7 +21,7 @@ mod fixtures;
 pub use fixtures::fixture_symbols;
 
 #[cfg(feature = "run")]
-use eml_native::{LinkError, Linker};
+use eml_native::Linker;
 #[cfg(feature = "run")]
 use eml_vm::{CaptureHost, Linked, RunConfig, RunStats, RuntimeError};
 
@@ -390,23 +390,19 @@ pub fn execute_on(
 static LINKER: LazyLock<Mutex<Linker>> =
     LazyLock::new(|| Mutex::new(Linker::new(Vec::new()).with_symbols(&fixture_symbols())));
 
-/// C の関数のないプログラムは、lock も JIT も触らずに `Linked::default()` を返す。
+/// プログラムの C の関数をつなぎ、つなぐ失敗で panic する。C の関数のないプログラムは、lock も JIT も触らずに
+/// `Linked::default()` を返す。
 #[cfg(feature = "run")]
-pub fn try_link(program: &eml_lir::Program) -> Result<Linked, LinkError> {
+pub fn link(program: &eml_lir::Program) -> Linked {
     if program.c_functions.is_empty() && program.c_handles.is_empty() {
-        return Ok(Linked::default());
+        return Linked::default();
     }
     // 別のテストがつなぐ途中で panic しても、`Linker` に壊れる不変条件はないので、毒を無視して使う
     LINKER
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .link(&program.c_functions, &program.c_handles)
-}
-
-/// `try_link` の誤りで panic する。
-#[cfg(feature = "run")]
-pub fn link(program: &eml_lir::Program) -> Linked {
-    try_link(program).unwrap_or_else(|error| panic!("link error: {error}"))
+        .unwrap_or_else(|error| panic!("link error: {error}"))
 }
 
 /// 1件を `E0001 1:2 message` の1行にする。期待値を読みやすくするため、位置はバイトではなく行と列にする。

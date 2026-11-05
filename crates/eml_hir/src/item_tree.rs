@@ -179,6 +179,8 @@ pub struct MemberItem {
     pub equations: Vec<(AstPtr<ast::Equation>, TextRange)>,
     /// `extern` の行のキーワードの位置。
     pub extern_range: Option<TextRange>,
+    /// `extern` の行に書けない `"C"` がある。パーサが E0011 にしたので、行を引かずに定義したものに数える。
+    pub c_abi: bool,
 }
 
 #[derive(Debug)]
@@ -694,9 +696,10 @@ fn instance_of(
     for (index, member) in item.members().enumerate() {
         let (name, extern_keyword) = match &member {
             ast::InstanceMember::Equation(equation) => (value_name(equation.name()), None),
-            ast::InstanceMember::ExternMethod(line) => {
-                (value_name(line.name()), Some(line.keyword_range()))
-            }
+            ast::InstanceMember::ExternMethod(line) => (
+                value_name(line.name()),
+                Some((line.keyword_range(), line.abi().is_some())),
+            ),
             ast::InstanceMember::Signature(_) => continue,
         };
         let Some(name) = name else {
@@ -711,6 +714,7 @@ fn instance_of(
                     name_range: range,
                     equations: Vec::new(),
                     extern_range: None,
+                    c_abi: false,
                 });
                 states.push((None, None));
                 members.len() - 1
@@ -734,7 +738,10 @@ fn instance_of(
             continue;
         }
         match (member, extern_keyword) {
-            (_, Some(keyword)) => member_item.extern_range = Some(keyword),
+            (_, Some((keyword, c_abi))) => {
+                member_item.extern_range = Some(keyword);
+                member_item.c_abi = c_abi;
+            }
             (ast::InstanceMember::Equation(equation), None) => {
                 if let (Some(previous), Some((_, previous_range))) =
                     (*last_equation, member_item.equations.last())

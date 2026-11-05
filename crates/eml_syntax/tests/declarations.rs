@@ -822,7 +822,9 @@ fn extern_c_data_with_drop() {
     let report: Vec<String> = [
         "extern \"C\" data T a drop \"f\"",
         "extern \"C\" effect E where\n  op : Unit -> Unit",
+        "extern \"C\" effect E",
         "extern \"C\" symbol \"e\" effect E where\n  op : Unit -> Unit",
+        "instance C Int where\n  extern \"C\" c : Int -> Int",
     ]
     .iter()
     .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
@@ -831,7 +833,9 @@ fn extern_c_data_with_drop() {
     [
         "\"extern \\\"C\\\" data T a drop \\\"f\\\"\" => [\"E0011 1:19 `extern \\\"C\\\" data` cannot have type parameters\"]",
         "\"extern \\\"C\\\" effect E where\\n  op : Unit -> Unit\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
+        "\"extern \\\"C\\\" effect E\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
         "\"extern \\\"C\\\" symbol \\\"e\\\" effect E where\\n  op : Unit -> Unit\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
+        "\"instance C Int where\\n  extern \\\"C\\\" c : Int -> Int\" => [\"E0011 2:10 an instance member cannot be `extern \\\"C\\\"`\"]",
     ]
     "#);
 }

@@ -223,7 +223,7 @@ C の関数の型は、eml の型だけから次の表で決まる。表にな�
 - `IO`: `pure` でないとき
 - `Async` (`Std.Async.Async`): `blocking` のとき
 
-`blocking` の C の関数は、まだ呼べない。行が正しい宣言に、`blocking` の語の位置で E0004 を出す。
+`blocking` の C の関数は実装していない。行が正しい宣言に、`blocking` の語の位置で E0004 を出す。
 
 範囲と null の扱いは次のとおりである。
 

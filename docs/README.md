@@ -11,7 +11,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/lexical.md](spec/lexical.md) | 規範 | 字句 (識別子、キーワード、演算子、リテラル、文字列、コマンドリテラル) |
 | [spec/layout.md](spec/layout.md) | 規範 | レイアウト規則 (仮想トークン `OPEN` / `SEP` / `CLOSE`) |
 | [spec/grammar.md](spec/grammar.md) | 規範 | 文法と文法上の補足 |
-| [spec/declarations.md](spec/declarations.md) | 規範 | シグネチャと等式、`data` と `type`、`effect`、`extern`、fixity と標準の演算子表、クラスと instance と `deriving`、Prelude のクラス、`pub` |
+| [spec/declarations.md](spec/declarations.md) | 規範 | シグネチャと等式、`data` と `type`、`effect`、`extern` と `extern "C"` (型の対応と宣言する側の約束)、fixity と標準の演算子表、クラスと instance と `deriving`、Prelude のクラス、`pub` |
 | [spec/expressions.md](spec/expressions.md) | 規範 | 式と脱糖 (`let`、ラムダ、`if`、`match`、演算子の列、セクション、`use`、handler の構文)、ローカル関数、リスト、レコード、補間、コマンドリテラル、`var`、並行処理、型の明示 |
 | [spec/records.md](spec/records.md) | 規範 | 直積型とレコード (タプルと Unit を含む) |
 | [spec/modules.md](spec/modules.md) | 規範 | モジュール、import、標準ライブラリ、名前の解決、名前空間、instance の一貫性、公開の範囲、REPL のセッション |
@@ -24,12 +24,12 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の命令、型の Repr、translate の配置、変換の規則 (単相化と row のビット、`yields` の印、メソッドの解決、導出の生成器)、パス (translate と evidence passing)、`par` の子の中断、LIR への変換、Core IR の verifier |
 | [spec/lir.md](spec/lir.md) | 規範 | LIR の命令、2つの IR に共通する規則 (ブロックの列と構造の規則、値の表現、データの配置、位置の規則、末尾の位置の呼び出し)、基本操作と実行の文脈、LIR のパス (box の挿入、開くパス、縮約、Perceus、reuse) とその境界の不変条件、LIR の verifier、実行の意味、実行時エラー |
 | [spec/object-model.md](spec/object-model.md) | 規範 | `eml_rt` の核: 語、ヘッダと種類、物体の形、ページの確保器と生存の列挙、別のスレッドからの解放、局所と共有の RC、`share`、`transfer_back`、`lin` ビット、核の操作、バイト列と文字列、凍結した領域、reuse の部品、検査モード (論理的な worker ID とページの表を含む)、実行文脈 `Ctx` (タスクの切り替えを含む)、extern (語の ABI、誤り、Host と出力のバッファ、読み手と `FileIn`、仕事の回数)、受け入れる制約、配列、ダミーの値、`unsafe` の核 |
-| [spec/vm.md](spec/vm.md) | 規範 | VM の置き場所と実行の API、`CodeBase` と `FnEntry`、スロットとフレーム、命令の形、スロットの割り当て、呼び出しと戻り、命令ごとの実行、誤りと終わりの処理、上限と割り込み、タスクとスケジュール、時計と driver、`par` の fork と join、`Async` のタスク、channel、`RunStats`、並列化への備え、巻き戻し、extern の中断 |
+| [spec/vm.md](spec/vm.md) | 規範 | VM の置き場所と実行の API、`CodeBase` と `FnEntry`、スロットとフレーム、命令の形、スロットの割り当て、呼び出しと戻り、命令ごとの実行、誤りと終わりの処理、上限と割り込み、タスクとスケジュール、時計と driver、`par` の fork と join、`Async` のタスク、channel、C の関数の呼び出し (橋渡しの関数、ライブラリと記号、`--link`)、`RunStats`、並列化への備え、巻き戻し、extern の中断 |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止、他の言語の書き方へのヒント |
 | [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例。実装していない構文を含む |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
 | [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続と evidence、構文解析と名前解決の回復、リポジトリ、ソースファイルと位置、外部 crate |
-| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt` の検証 (Verus、単体テスト、期待値の表、Miri)、`eml_io` の検証 (`unsafe` の一覧、核の Miri、AddressSanitizer、ThreadSanitizer)、`eml_vm` のテスト、UI テスト (2つのモードで流すこと、seed で流すこと)、LIR と Core IR のテキストの形、文書の引用の検査、REPL のトランスクリプト、CLI のテスト、OS ごとのテスト、性能のテスト、feature の組み合わせ、CI、よく使うコマンド |
+| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt` の検証 (Verus、単体テスト、期待値の表、Miri)、`eml_io` の検証 (`unsafe` の一覧、核の Miri、AddressSanitizer、ThreadSanitizer)、`eml_native` の検証、`eml_vm` のテスト、UI テスト (2つのモードで流すこと、seed で流すこと)、LIR と Core IR のテキストの形、文書の引用の検査、REPL のトランスクリプト、CLI のテスト、OS ごとのテスト、性能のテスト、feature の組み合わせ、CI、よく使うコマンド |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲 (実装したもの、まだないもの)、既知の制限 |
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、測り方、今の数値、ネットワークの計測、所見 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
@@ -37,7 +37,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [future/roadmap.md](future/roadmap.md) | 将来の設計 | 段の進め方と閉じる手順、段の列、その後の項目 |
 | [future/async.md](future/async.md) | 将来の設計 | 非同期の設計 (`Async` のタスクとスコープ、取り消し、時間、チャネル、I/O の driver、ネットワークとシグナル、TLS と HTTP) |
 | [future/native.md](future/native.md) | 将来の設計 | ネイティブ化の設計 (Cranelift のコード生成、呼び出し規約、中断と実行時エラー、安全点、生の要素の配列、AOT と配布) |
-| [future/ffi.md](future/ffi.md) | 将来の設計 | FFI と拡張の設計 (`extern "C"` の宣言、型の対応、長く走る呼び出し、拡張、GUI) |
+| [future/ffi.md](future/ffi.md) | 将来の設計 | FFI と拡張の設計 (`extern "C"` の設計の判断、`blocking` の呼び出し、VM からの呼び出し、拡張、GUI) |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (スレッドと worker、スケジューラ、共有の印方式の RC、`par`、継続の移動、止める手順) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |
@@ -60,6 +60,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | `eml_vm` | vm、lir、object-model |
 | `eml_rt` | object-model |
 | `eml_io` | vm |
+| `eml_cabi`、`eml_native` | [vm](spec/vm.md) の「C の関数の呼び出し」。crate の中は [architecture](implementation/architecture.md) の「`eml_native` の内部」 |
 | `eml_tls` | [stdlib](spec/stdlib.md) の「`Std.Tls`」。crate の中は [architecture](implementation/architecture.md) の「`eml_tls` の内部」 |
 | 診断を出すすべての段階 | diagnostics |
 

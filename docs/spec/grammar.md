@@ -121,7 +121,7 @@ command     ::= CMD_START (CMD_TEXT | CMD_QUOTE | ESCAPE | '\{' '..'? expr INTER
 
 - `import_item` は、ファイルの先頭で宣言より前に書く。宣言の後の `import_item` は E0011 にする。`import_name` の `'(' OP ')'` は `:` で始まらない演算子なので、`((:+))` も E0011 にする。CST はどちらも組む ([モジュールと名前解決](modules.md) の「import」)
 - `extern` は宣言の修飾子で、`pub` の後に書く。後ろに続けられるのは、等式のないシグネチャ、`=` と Kind の宣言のない `data` (型引数は型変数の名前だけ)、型引数なしの `effect` だけである。`effect` には、普通の `effect` と同じく `where` と操作の並びを書ける。ほかの形 (`extern type`、`extern infixl`、`extern data T = …`、`extern effect E = …`、型引数のある `effect`、`extern pub`) は E0011 にする。`extern` を書けるのは標準ライブラリのモジュールだけで、ユーザーのモジュールに書くと HIR で E1033 になる ([宣言](declarations.md) の「`extern`」)
-- `extern` の直後に文字列を書くと、その文字列が ABI で、C の関数か C の型の宣言 `c_decl` になる。`pub` と `abstract` の扱いは `extern` と同じである。ABI の後に書けるのは、署名と、型引数のない `data` だけである。C の型は不透明なハンドルで、型引数を持たないためである。ほかの項目 (`effect` を含む) は `extern` のトークンに E0011 を出し、`extern` のない項目として読む。`data` の名前の後の型引数は E0011 にし、名前として読んで回復する
+- `extern` の直後に文字列を書くと、その文字列が ABI で、C の関数か C の型の宣言 `c_decl` になる。`pub` と `abstract` の扱いは `extern` と同じである。ABI の後に書けるのは、署名と、型引数のない `data` だけである。C の型は不透明なハンドルで、型引数を持たないためである。ほかの項目 (`effect` を含む) は `extern` のトークンに E0011 を出す。`effect` は `extern effect` として読み (`where` は書かなくてよい)、ほかは `extern` のない項目として読む。`data` の名前の後の型引数は E0011 にし、名前として読んで回復する。instance の `extern` の行の後に文字列を書くと、その文字列に E0011 を出す。後ろのメソッドの名前は読み、行の残りは誤りを重ねずに読み飛ばす。HIR はそのメソッドを定義したものに数え、E1033 も E1036 も出さない
 - 属性の語 `pure`、`blocking`、`symbol` はキーワードでなく `LIDENT` で、`extern` (と ABI) の直後で、次のトークンが `:` でない間だけ属性として読む。そのため `extern "C" pure : Float -> Float` は `pure` という名前の署名で、`extern "C" pure pure : …` は属性 `pure` の付いた `pure` の署名である。次の形は E0018 にし、属性は読んで回復する
   - 同じ属性を2回書いた (`` `pure` is written twice ``)
   - `pure` と `blocking` を両方書いた

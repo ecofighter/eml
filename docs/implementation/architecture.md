@@ -96,7 +96,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 - `eml_tls` は workspace のどの crate にも依存しない。`eml_vm` と `eml_io` が依存するのは feature `tls` の下だけである。`eml_cli` の feature `tls` も `eml_tls` を省ける普通の依存として足す。`eml_cli` の `src/` はこれを使わず、本物のソケットの上で TLS のサーバーを立てる結合テスト (`tests/tls.rs`) が使う。rustls は aws-lc-rs の provider だけで使い、根の証明書は webpki-roots が持つ。aws-lc-sys が要るのは C のツールチェーンだけで、Windows の x86_64 では NASM を使い、NASM がなければ組み済みのオブジェクトを使う。C のツールチェーンを持たない `.#cross` の clippy が `eml_tls` を除くのはこのためである
 - aws-lc-sys は、target の C のツールチェーンだけで組めることを前提にする。対応する OS か `nix build` で、組めない、リンクできない、動かないときは、OS ごとのツールや環境変数を足さず、provider を ring に替える。ring でも同じことが起きたら、設計から決め直す
 - `eml_lir` は、workspace の crate では `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
-- `eml_cabi` は、`eml_cabi → eml_extern` の辺だけを持つ葉の crate である。`Ctx` に関わらないコードのポインタだけを持つ
+- `eml_cabi` は、`eml_cabi → eml_extern` の辺だけを持つ葉の crate である。`Ctx` に関わらないコードのポインタだけを持つ。`eml_vm` と `eml_native` が依存し、`eml_native` が作った `Linked` を `eml_vm` の `load` が受け取る
 - `eml_native` は、workspace の crate では `eml_native → eml_extern` と `eml_native → eml_cabi` の辺だけを持ち、Cranelift の5つの crate と libloading に依存する。`eml_vm` は `eml_native` にも Cranelift にも依存しない。`eml_native` に依存するのは、`eml_cli` と `eml_test_support` の feature `run` だけである。別の cargo の feature は作らない。CI の test の job の手順 `dependency edges of eml_native` が、この2つと、`eml_extern` の `src/` に `unsafe` がないことを確かめる
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである。表 (`Extern`、`ExternType`、`ExternEffect`) は `table!` が1つの並びから変種、`ALL`、静的な行を作り、`row` は行への参照を返す。VM のコード生成は `self as usize` を行の番号に使い、VM は `ALL` で引き戻すので、並びが1つなら2つの順は食い違わない
@@ -444,7 +444,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `default_limits() -> Limits` (feature `run`)。`eml run` の既定の上限を作る ([VM](../spec/vm.md) の「上限と割り込み」)
 - `pretty::format(text, suffix, width) -> String` と `pretty::LIMIT`。REPL の結果を切って整形する純粋な関数で、`lines` と同じく feature によらない ([REPL の端末](../spec/repl.md) の「整形の規則」)
 - `Repl` (feature `run`)。REPL のセッションで、`Repl::new` が空のセッションを作り、`Repl::eval` が入力を1つずつ評価する ([モジュールと名前解決](../spec/modules.md) の「REPL のセッション」)。`Repl::with_file` は `:load` のファイルを最初の入力とする新しいセッションを作り、`Repl::type_of` は `:type` の問い合わせを検査して型の文字列を返す。受け付けた入力はファイルの表示のパスも覚え、セッションを読み直すたびにファイルとして読む。セッションを空にするメソッドはなく、呼び出し側が新しい `Repl` を作って古いものを閉じる。式の入力の結果は、`Machine::run_shown` が返した文字列を `eml_cli::pretty::format` で整形し、`Machine::write_line` で書く。幅は `Repl::set_width` で変える ([REPL の端末](../spec/repl.md) の「結果の表示」)。`Repl` は1つの `Linker` を持ち、入力ごとに `Machine::load` の前にその入力のプログラムをつなぐ。`Repl::new` は上書きのない `Linker` を入れ、`Repl::with_linker` で替える。`Repl::with_file` は、ファイルの入力より前に入れる `Linker` を引数で受ける。つなげない入力は `Outcome::Unlinked` で、`load` を呼ばず、セッションを変えない ([REPL の端末](../spec/repl.md) の「C の関数」)。端末は `--link` の上書きを持ち、`:load` と `:reload` で作るセッションにも同じ上書きの `Linker` を渡す
-- `eml_test_support::link(program) -> Linked` (feature `run`)。テストの道具がプログラムの C の関数をつなぐ。テストの binary に1つの `Linker` を `Mutex` で持ち、ライブラリと橋渡しを使い回す。lock が毒になっても使い続ける。つなぐ途中の panic で壊れる不変条件を `Linker` が持たないためである。C の関数もハンドルの型もないプログラムは、lock を取らずに `Linked::default()` を返す。つなぐ失敗で panic し、`try_link` は失敗を `LinkError` で返す。`eml_test_support::execute_on` と UI テストの道具がこれを通す
+- `eml_test_support::link(program) -> Linked` (feature `run`)。テストの道具がプログラムの C の関数をつなぐ。テストの binary に1つの `Linker` を `Mutex` で持ち、ライブラリと橋渡しを使い回す。lock が毒になっても使い続ける。つなぐ途中の panic で壊れる不変条件を `Linker` が持たないためである。C の関数もハンドルの型もないプログラムは、lock を取らずに `Linked::default()` を返す。つなぐ失敗で panic する。`eml_test_support::execute_on` と UI テストの道具がこれを通す
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
 
@@ -467,8 +467,10 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `rustyline` | 19.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
 | `rustls` | 0.23 (`aws_lc_rs`、`std`、`tls12`) | `eml_tls` の TLS の接続。provider は aws-lc-rs だけで、接続ごとに `builder_with_provider` で渡す。aws-lc-rs は rustls の既定で推奨の provider で、組むのに要るのは C のツールチェーンだけである (上の「crate の依存関係」) |
 | `webpki-roots` | 1.0 | `eml_tls` の既定の根の証明書 |
+| `cranelift-codegen`、`cranelift-frontend`、`cranelift-module`、`cranelift-jit`、`cranelift-native` | 0.137 | `eml_native` の橋渡しの関数の生成。`cranelift-native` が動いている機械の ISA を選び、`cranelift-jit` がコードを置く (上の「`eml_native` の内部」) |
+| `libloading` | 0.9 | `eml_native` が C のライブラリを開いて記号を引く (unix の `dlopen` と `dlsym`、Windows の `LoadLibraryExW` と `GetProcAddress`) |
 
-`eml` バイナリには、aws-lc、rustls、webpki-roots の根の証明書のデータが入る。どれも eml と別のライセンスに従う。aws-lc は `ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause` ほか、rustls は `Apache-2.0 OR ISC OR MIT`、webpki-roots の根のデータは `CDLA-Permissive-2.0` である。`flake.nix` の `meta.license` は eml 自身のライセンス (MIT) だけを書く。
+`eml` バイナリには、aws-lc、rustls、webpki-roots の根の証明書のデータが入る。どれも eml と別のライセンスに従う。aws-lc は `ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause` ほか、rustls は `Apache-2.0 OR ISC OR MIT`、webpki-roots の根のデータは `CDLA-Permissive-2.0` である。Cranelift の crate と、それが使う regalloc2 と target-lexicon は `Apache-2.0 WITH LLVM-exception` で、Cranelift から hashbrown を通して入る foldhash は `Zlib` である。`about.toml` の `accepted` はこの2つも認める。LLVM の例外は、Apache-2.0 の条件を、コンパイルした出力について緩めるだけである。`flake.nix` の `meta.license` は eml 自身のライセンス (MIT) だけを書く。
 
 バイナリに入る他者の crate と、そのライセンスの全文は、リポジトリの直下の `THIRD-PARTY-LICENSES.md` にまとめる。このファイルは cargo-about が `about.toml` と `about.hbs` から生成するので、手では直さない。依存を変えたら `nix develop -c nix/third-party-licenses.sh` で書き直す。cargo-about は devShell に入れてあり、バージョンは `flake.lock` で決まる。
 

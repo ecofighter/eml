@@ -16,7 +16,7 @@ LIR から Cranelift でネイティブのコードを出す設計をまとめ�
 
 | # | 領域 | 決定 |
 |---|---|---|
-| 1 | コード生成器 | コード生成器は1つで、開いた後の LIR を CLIF にする crate `eml_native` である。JIT (`eml run --native` と REPL。`cranelift-jit`) と AOT (`eml build`。`cranelift-object`) の両方が、同じ CLIF と同じ `eml_rt` のエントリを使う。`eml_native` は `eml_rt`、`eml_lir`、`eml_sched`、Cranelift に依存し、エントリの stub と、FFI の橋渡しの関数を作る部分を持つ |
+| 1 | コード生成器 | コード生成器は1つで、開いた後の LIR を CLIF にする crate `eml_native` である。JIT (`eml run --native` と REPL。`cranelift-jit`) と AOT (`eml build`。`cranelift-object`) の両方が、同じ CLIF と同じ `eml_rt` のエントリを使う。`eml_native` は、FFI の橋渡しの関数とライブラリの解決を持ち、今は `eml_extern`、`eml_cabi`、Cranelift、libloading に依存する ([コンパイラの構成](../implementation/architecture.md) の「crate の依存関係」)。コード生成とエントリの stub を足すときに、`eml_rt` と `eml_lir` への依存を足す |
 | 2 | コンパイルの単位 | プログラム全体 (利用者のモジュールと、届く std) を、Core IR の最適化の後で一度にコンパイルする。`eml run --native` は始めに、REPL は入力の境目ごとに、その入力が足す関数をコンパイルする。どちらも worker が動いていない間に行う。関数ごとに遅れてコンパイルする stub は置かない |
 | 3 | VM との関係 | VM とネイティブのコードは混ぜない。ネイティブのコードはバイトコードを呼ばず、バイトコードもネイティブの eml の関数を呼ばない。VM は参照の実装で、検査モード (`--debug-heap`) を持つ唯一の実行系である。ネイティブは `eml_rt` を速いモードで具体化する。バックエンドを作る途中は、扱わない形を含むプログラムを E0004 で断る。断る形の一覧は空になるまで減らし、仕上がったバックエンドは何も断らない |
 | 4 | 呼び出し規約 | eml の中の呼び出しは Cranelift の `tail` 規約で、末尾呼び出しは `return_call` と `return_call_indirect` である。extern と C の関数は OS の既定の規約で、`tail` のコードから普通の `call` で呼ぶ |
@@ -99,7 +99,7 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 
 - extern の C ABI のエントリ (`extern "C"`) は、この設計で足す。今の extern は、引数がどれも 64 ビットの語で数が決まっているので、そのまま移せる。Host と読み手は panic しうるので、どの包みもエントリで `catch_unwind` する。`extern "C"` を越える panic はプロセスを落とすためである。包みは失敗を `Ctx.fault` に書き、語を1つ返す ([オブジェクトモデル](../spec/object-model.md) の「extern」)
 - `eml_rt` の行の `extern "C"` の包みと、VM の `match` の枝は、表から1つのマクロで作る。std の行を足すときに書くのは、今と同じく表の行と `Ctx` のメソッドと std の宣言で、どちらのバックエンドにも手で書くコードは増えない
-- 表の行は失敗を返しうるかを表す `faults: bool` を持つ。`Fault` を返す `eml_rt` の行は true、利用者の C の行は false である。`points` は失敗を返さない extern を巻き戻しの地点に数えない。そのため、`blocking` でない利用者の C の関数の呼び出しには失敗の確かめも後始末のブロックもなく、普通の `call` になる。`blocking` の C の行は `<IO, Async>` を要し、ブロックする呼び出しのプールへの受け付けと待ちと取り出しに下ろすので、普通の `call` にならない ([FFI と拡張の設計](ffi.md) の「効果と中断の分類」と「長く走る呼び出し」)。プラグインの行は普通の表の行なので、ほかの行と同じ包みを通る ([FFI と拡張の設計](ffi.md) の「拡張」)
+- 表の行は失敗して中断を始めうるかを表す `faults: bool` を持つ ([LIR](../spec/lir.md) の「巻き戻しの地点」)。`Fault` を返す `eml_rt` の行は true で、利用者の C の行は、範囲を確かめる引数かハンドルの結果を持つときだけ true である。`points` は `faults` でない extern を巻き戻しの地点に数えない。そのため、`faults` でも `blocking` でもない利用者の C の関数の呼び出しには失敗の確かめも後始末のブロックもなく、普通の `call` になる。`blocking` の C の行は `<IO, Async>` を要し、ブロックする呼び出しのプールへの受け付けと待ちと取り出しに下ろすので、普通の `call` にならない ([FFI と拡張の設計](ffi.md) の「効果と中断の分類」と「長く走る呼び出し」)。プラグインの行は普通の表の行なので、ほかの行と同じ包みを通る ([FFI と拡張の設計](ffi.md) の「拡張」)
 - 巻き戻しの地点の出どころは `points` だけである。コード生成は断った関数を受け取ったら panic する
 
 ## 展開と最適化の前提

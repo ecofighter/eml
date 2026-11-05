@@ -630,6 +630,8 @@ accessors! {
     }
 
     ExternMethod {
+        /// 書けない `"C"`。パーサが報告済みである。
+        abi: Abi,
         name: Name,
     }
 

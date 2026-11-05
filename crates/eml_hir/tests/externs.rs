@@ -501,6 +501,13 @@ fn an_extern_c_function_in_a_user_module_is_not_e1033() {
     assert!(!function.kind.has_equations());
     assert!(lowered.program.body(id).is_none());
     assert_eq!(lowered.program.arity(id), Some(1));
+    // instance の `extern "C"` のメンバーは、パーサの E0011 だけで、E1033 も E1036 も重ねない
+    let member =
+        "class C a where\n  c : a -> Int\n\ninstance C Int where\n  extern \"C\" c : Int -> Int";
+    assert_eq!(
+        diagnostics(member),
+        ["E0011 5:10 an instance member cannot be `extern \"C\"`"]
+    );
 }
 
 #[test]

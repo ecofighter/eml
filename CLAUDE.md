@@ -34,7 +34,7 @@ cargo insta review                   # accept snapshots
 cargo clippy --all-targets -- -D warnings && cargo fmt
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core, run without tls; eml_test_support also hir; eml_io + eml_vm --all-targets without tls)
 cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::)'   # the tls-off behaviour (a workspace run has tls on through eml_cli's default)
-cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--stats] [--workers N] <file.em> [args...] (the VM; --debug-heap is checked mode; --stats is checked mode and prints the counters of `RunStats` on stderr after a run that did not fail; --workers sets the worker threads, default $EML_WORKERS then the CPU count; `eml <file.em> [args...]` is the same), repl [--debug-heap] [file.em] (the terminal REPL)
+cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--stats] [--workers N] [--link KEY=VALUE]... <file.em> [args...] (the VM; --debug-heap is checked mode; --stats is checked mode and prints the counters of `RunStats` on stderr after a run that did not fail; --workers sets the worker threads, default $EML_WORKERS then the CPU count; --link opens VALUE in place of the library a `link` item names KEY; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--link KEY=VALUE]... [file.em] (the terminal REPL)
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # type-check the Windows-only code; eml_tls (C crypto) is excluded (Linux: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, same flags)
 nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (also -p eml_native and eml_vm --test integration -- api:: signal:: io:: workers:: ffi::; docs/implementation/testing.md の「AddressSanitizer」)
@@ -104,7 +104,7 @@ eml_types        Kind / type / row inference, class constraints; linearity, mult
 eml_hir          module loading, CST -> HIR, name resolution
 eml_syntax       logos lexer, layout stage, event-based parser, rowan CST, typed AST wrappers
 eml_diagnostics  Diagnostic, FileId / SourceFiles, ariadne rendering
-eml_extern       dependency-free extern table (types, effects, functions, value `Repr`s)
+eml_extern       dependency-free extern row types, the built-in table and the description of user C functions
 ```
 
 These invariants hold across crates; keep them when you change anything:
@@ -140,6 +140,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | `Std.Net` and `Std.Signal` | docs/spec/stdlib.md の「`Std.Net`」, docs/spec/stdlib.md の「`Std.Signal`」, docs/spec/vm.md の「上限と割り込み」 |
 | `Std.Tls` | docs/spec/stdlib.md の「`Std.Tls`」, docs/spec/vm.md の「時計と driver」 (the test driver's `tls.localhost`) |
 | `Std.Http` | docs/spec/stdlib.md の「`Std.Http`」 |
+| User C functions (`extern "C"`, `link`, `--link`) | docs/spec/declarations.md の「`extern "C"`」, docs/spec/vm.md の「C の関数の呼び出し」 |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
 | The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |

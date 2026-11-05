@@ -244,7 +244,8 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
     }
     match kind {
         Some(ItemKind::Data) if external => extern_data(p, m, abi),
-        Some(ItemKind::Effect) if external && !abi => extern_effect(p, m),
+        // `extern "C" effect` は上で E0011 にしたので、`where` を求めない `extern effect` の形で読み、誤りを重ねない
+        Some(ItemKind::Effect) if external => extern_effect(p, m),
         Some(ItemKind::Data) => data_item(p, m),
         Some(ItemKind::Type) => type_item(p, m),
         Some(ItemKind::Effect) => effect_item(p, m),
@@ -915,6 +916,19 @@ fn instance_member(p: &mut Parser) -> bool {
     }
     skip_member_abstract(p);
     if p.eat(EXTERN_KW) {
+        // instance に `extern "C"` は書けない (docs/spec/grammar.md の `inst_member`)。メソッドの名前は読んで HIR が
+        // 定義したものに数え、E1036 を重ねない。後ろの署名も誤りを重ねずに読み飛ばす
+        let abi = p.at(STRING_START);
+        if abi {
+            p.error(
+                codes::SYNTAX_ERROR,
+                "an instance member cannot be `extern \"C\"`",
+                "define the method with an equation",
+            );
+            let n = p.start();
+            c_string(p);
+            n.complete(p, ABI);
+        }
         if p.at(LIDENT) {
             name(p);
         } else if at_operator_name(p) {
@@ -925,6 +939,9 @@ fn instance_member(p: &mut Parser) -> bool {
             n.complete(p, NAME);
         } else {
             expected(p, "a method name");
+        }
+        if abi {
+            skip_to_sep(p, true);
         }
         m.complete(p, EXTERN_METHOD);
         return true;
