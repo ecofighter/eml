@@ -978,11 +978,11 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - コードは cranelift-jit が RW で確保して書き、命令の cache を消してから RX に変える。`MAP_JIT` を使わないので、macOS の hardened runtime の下では動かない。この処理系は hardened runtime を扱わない
 - 巻き戻しの情報を登録しないので、C の関数は橋渡しを通して巻き戻ってはならない (C++ の例外、SEH)
 - 橋渡しのコードは、プロセスが終わるまで解放しない。だから `CCall` は、作った `Linker` が消えた後も呼べる
-- `Linked` の欄は非公開で、作れるのは `unsafe fn Linked::new(calls, dtors)` と、空の `Linked::default()` だけである。`calls` は `(CSignature, CCall)` の組の列で、`Linked` は呼び出しごとに、つないだときの署名を持つ。VM は `Linked` のポインタを確かめずに呼ぶので、ポインタの正しさは `new` の呼び手が約束する。約束は次の3つで、`eml_native::Linker::link` とテストの道具が守る。読む側は `calls()`、`dtors()`、`fits` を使う
-  - 各 `CCall` の `bridge` は、組にした `CSignature` の橋渡しで、`callee` はその署名の C の関数である
-  - 各 dtor は `void f(void*)` として呼べる
+- `Linked` の欄は非公開で、作れるのは `unsafe fn Linked::new(calls, dtors)` と、空の `Linked::default()` だけである。`calls` は `(CFunction, CCall)` の組の列、`dtors` は `(CHandleType, Option<Dtor>)` の組の列で、`Linked` はつないだときの宣言の写しを持つ。VM は `Linked` のポインタを確かめずに呼ぶので、ポインタの正しさは `new` の呼び手が約束する。約束は次の3つで、`eml_native::Linker::link` とテストの道具が守る。読む側は `calls()`、`dtors()`、`fits` を使う
+  - 各 `CCall` の `callee` は、組にした宣言の記号と `links` を解決した C の関数で、`bridge` はその宣言の `c_signature()` の橋渡しである
+  - 各 dtor は、宣言が dtor を持つときに限りあり、その dtor の記号を解決した `void f(void*)` として呼べる関数である
   - どのポインタも、プロセスが終わるまで有効なコードを指す
-- 並びと署名がプログラムに合うことは、読み込む側が `fits` で確かめる (「C の関数の命令」)。別のプログラムのためにつないだ `Linked` を、同じ長さの別の署名の表と組にしても、署名の合わない橋渡しは呼ばれない
+- `fits` は、持っている宣言とプログラムの C の関数の表、ハンドルの型の表を `==` で比べる。ハンドルの型の番号は表の位置なので、`load` が番号を付け直す前の表と比べる。読み込む側はこれで、ポインタを保証した宣言が読み込むプログラムの宣言と同じことを確かめる (「C の関数の命令」)
 
 ### ライブラリと記号
 
@@ -1006,7 +1006,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 
 ### C の関数の命令
 
-- つなぐのは `load` の前である。`CodeBase::load` と `Machine::load` は、プログラムの C の関数の表 (`Program::c_functions`) とハンドルの型の表 (`Program::c_handles`) に並びをそろえた `Linked` を受け取る。`load` は `Linked::fits` で、長さ、呼び出しごとの署名 (`CFunction::c_signature`)、ハンドルの型ごとの dtor の有無を表と比べる。合わないのは呼び手の誤りなので、assert で panic する。C の関数を持たないプログラムには `Linked::default()` を渡す
+- つなぐのは `load` の前である。`CodeBase::load` と `Machine::load` は、プログラムの C の関数の表 (`Program::c_functions`) とハンドルの型の表 (`Program::c_handles`) に並びをそろえた `Linked` を受け取る。`load` は `Linked::fits` で、つないだときの宣言を表と比べる。合わないのは呼び手の誤りなので、assert で panic する。C の関数を持たないプログラムには `Linked::default()` を渡す
 - `load` は、ハンドルの型、次に C の関数を、名前で `CodeBase` の番号 (`c_functions` と `c_handles`) に振る。すでにある名前なら前の項を使い、`Linked` の新しいポインタは捨てる。ない名前には末尾の番号を振り、項を足す。C の関数の項は、引数と結果のハンドルの型の番号を `CodeBase` の番号に付け直した `CFunction` を持つ。付け直すときは欄を書き換えず、`CFunction::new` で作り直す。行は欄から作るためである
 - すでにある名前で、付け直した値が前の項と違えば、`load` は `CompileError::Mismatch` を返す。この確かめは debug ビルドに限らない。`Mismatch` は `CodeBase` に何も書かないうちに返し、C の名前を `index` に入れるのは `load` 全体が通った後である。REPL で同じ名前を宣言し直すと、別のセッションのモジュールの別の名前になるので、この誤りにはならない ([Core IR](core-ir.md) の「translate の配置」)。`Machine` が生きている間、項は外さない
 - 命令は `Op::Ffi { dst, at }` である。`operands[at..]` は [`CodeBase` の C の関数の番号, 引数の数, 引数のスロット…] で、引数は行の Repr のとおりにスロットに置く。逆アセンブラは命令を `ffi s{dst} = {正規の名前}({引数})` と書き、`disassemble` は先頭に、C の関数の項ごとに `cfn {正規の名前}` の行を書く。追記の一致の確かめも、この名前で比べる

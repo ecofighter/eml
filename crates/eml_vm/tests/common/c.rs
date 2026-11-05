@@ -27,24 +27,26 @@ pub fn linked(
                 .iter()
                 .find(|(symbol, ..)| *symbol == function.symbol)
                 .unwrap_or_else(|| panic!("no call for `{}`", function.symbol));
-            (function.c_signature(), CCall { bridge, callee })
+            (function.clone(), CCall { bridge, callee })
         })
         .collect();
     let dtors = program
         .c_handles
         .iter()
         .map(|handle| {
-            handle.dtor.as_ref().map(|name| {
+            let dtor = handle.dtor.as_ref().map(|name| {
                 dtors
                     .iter()
                     .find(|(symbol, _)| symbol == name)
                     .unwrap_or_else(|| panic!("no dtor `{name}`"))
                     .1
-            })
+            });
+            (handle.clone(), dtor)
         })
         .collect();
     // SAFETY: `calls()` は、このファイルの Rust の関数をそれぞれの署名の橋渡しと組にし、テストのプログラムはその記号を
-    // 同じ署名で宣言する。組にする署名もその宣言の `c_signature()` である。`rs_handle_free` は `void f(void*)` で、どの関数もプロセスの間ずっとある
+    // 同じ署名で宣言する。組にするのは記号で引いたその宣言で、dtor も宣言の dtor の名前で引く。`rs_handle_free` は
+    // `void f(void*)` で、どの関数もプロセスの間ずっとある
     unsafe { Linked::new(calls, dtors) }
 }
 

@@ -1,7 +1,7 @@
 //! C の関数を呼ぶコードのポインタ。`eml_native` が作り、`eml_vm` が使う。
 //! `Ctx` に関わらないので、`eml_rt` に依存せず、`eml_extern` だけに依存する葉の crate にする。
 
-use eml_extern::{CFunction, CHandleType, CSignature};
+use eml_extern::{CFunction, CHandleType};
 
 /// 引数の語の列を読んで C の関数を呼び、結果を1語で返す。
 pub type Bridge = unsafe extern "C" fn(callee: *const (), args: *const u64) -> u64;
@@ -21,28 +21,36 @@ unsafe impl Sync for CCall {}
 
 /// `Program::c_functions` と `Program::c_handles` に並びをそろえた、C の関数の呼び出しとハンドルの型の dtor。
 /// VM はこのポインタをそのまま呼ぶので、欄を非公開にし、作るのを `unsafe` の `new` に限る。空の `default` は何も
-/// 呼ばないので安全である。呼び出しごとにつないだときの署名を持ち、読み込む側が `fits` でプログラムの表と比べる。
-/// 別のプログラムのためにつないだ `Linked` を渡しても、署名の合わない橋渡しを呼ばないためである。
+/// 呼ばないので安全である。ポインタを保証するのはつないだときの宣言なので、`Linked` はその宣言の写しを持ち、読み込む
+/// 側が `fits` でプログラムの表と比べる。別のプログラムのためにつないだ `Linked` を渡しても、その宣言が保証しない
+/// 呼び方で C の関数や dtor を呼ばないためである。
 #[derive(Clone, Debug, Default)]
 pub struct Linked {
+    functions: Vec<CFunction>,
     calls: Vec<CCall>,
-    signatures: Vec<CSignature>,
+    handles: Vec<CHandleType>,
     dtors: Vec<Option<Dtor>>,
 }
 
 impl Linked {
-    /// `calls` は C の関数の表の順の (署名, 呼び出し)、`dtors` はハンドルの型の表の順の dtor である。
+    /// `calls` は C の関数の表の順の (宣言, 呼び出し)、`dtors` はハンドルの型の表の順の (宣言, dtor) である。
     ///
     /// # Safety
-    /// `calls` のそれぞれの `bridge` は、組にした署名の slot を読む橋渡しの関数で、`callee` はその署名の C の
-    /// 関数である。`dtors` のそれぞれは `void f(void*)` として呼べる関数である。どのポインタも、プロセスが終わるまで
-    /// 有効なコードを指す (docs/spec/vm.md の「橋渡しの関数」、docs/spec/vm.md の「ライブラリと記号」)。並びと署名が
-    /// 読み込むプログラムの表に合うことは、読み込む側が `fits` で確かめる。
-    pub unsafe fn new(calls: Vec<(CSignature, CCall)>, dtors: Vec<Option<Dtor>>) -> Linked {
-        let (signatures, calls) = calls.into_iter().unzip();
+    /// `calls` のそれぞれの `callee` は、組にした宣言の記号と `links` を解決して得た関数で、`bridge` はその宣言の
+    /// `c_signature()` の slot を読む橋渡しの関数である。`dtors` のそれぞれは、宣言が dtor を持つときに限り `Some`
+    /// で、その dtor の記号と `links` を解決して得た、`void f(void*)` として呼べる関数である。どのポインタも、
+    /// プロセスが終わるまで有効なコードを指す (docs/spec/vm.md の「橋渡しの関数」、docs/spec/vm.md の
+    /// 「ライブラリと記号」)。宣言が読み込むプログラムの表と同じことは、読み込む側が `fits` で確かめる。
+    pub unsafe fn new(
+        calls: Vec<(CFunction, CCall)>,
+        dtors: Vec<(CHandleType, Option<Dtor>)>,
+    ) -> Linked {
+        let (functions, calls) = calls.into_iter().unzip();
+        let (handles, dtors) = dtors.into_iter().unzip();
         Linked {
+            functions,
             calls,
-            signatures,
+            handles,
             dtors,
         }
     }
@@ -57,20 +65,9 @@ impl Linked {
         &self.dtors
     }
 
-    /// プログラムの表と合うか。長さ、呼び出しごとの署名 (`CFunction::c_signature`)、ハンドルの型ごとの dtor の
-    /// 有無を比べる。読み込む側が、呼ぶ前に確かめるために使う。
+    /// つないだときの宣言がプログラムの表と同じか。ハンドルの型の番号は表の位置なので、`load` が番号を付け直す前の
+    /// 表と比べる。読み込む側が、呼ぶ前に確かめるために使う。
     pub fn fits(&self, functions: &[CFunction], handles: &[CHandleType]) -> bool {
-        self.calls.len() == functions.len()
-            && self.dtors.len() == handles.len()
-            && self
-                .signatures
-                .iter()
-                .zip(functions)
-                .all(|(signature, function)| *signature == function.c_signature())
-            && self
-                .dtors
-                .iter()
-                .zip(handles)
-                .all(|(dtor, handle)| dtor.is_some() == handle.dtor.is_some())
+        self.functions == functions && self.handles == handles
     }
 }

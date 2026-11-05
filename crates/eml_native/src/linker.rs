@@ -69,7 +69,7 @@ impl Linker {
         }
         let mut dtors = Vec::with_capacity(handles.len());
         for handle in handles {
-            dtors.push(match &handle.dtor {
+            let dtor = match &handle.dtor {
                 None => None,
                 Some(symbol) => {
                     let address = self.resolve(os, symbol, &handle.links)?;
@@ -78,16 +78,19 @@ impl Linker {
                     // 呼び出し規約で正しい
                     Some(unsafe { std::mem::transmute::<*const (), Dtor>(address) })
                 }
-            });
+            };
+            dtors.push((handle.clone(), dtor));
         }
         let signatures: Vec<_> = functions.iter().map(CFunction::c_signature).collect();
         let bridges = self.bridges.get(&signatures)?;
-        let calls = signatures
-            .into_iter()
+        let calls = functions
+            .iter()
+            .cloned()
             .zip(bridges.into_iter().zip(callees))
-            .map(|(signature, (bridge, callee))| (signature, CCall { bridge, callee }))
+            .map(|(function, (bridge, callee))| (function, CCall { bridge, callee }))
             .collect();
-        // SAFETY: 橋渡しは組にした署名で引いたものである。ライブラリの記号は、その署名を書いた宣言が境目として保証し
+        // SAFETY: 呼ばれる関数と dtor は、組にした宣言の記号と `links` を解決して得たもので、橋渡しはその宣言の
+        // `c_signature()` で引いたものである。ライブラリの記号は宣言が境目として保証し
         // (docs/spec/declarations.md の「宣言する側の約束」)、登録した記号は `with_symbols` の呼び手が保証する。
         // 橋渡しのコードもライブラリもプロセスの間外さない (docs/spec/vm.md の「橋渡しの関数」、
         // docs/spec/vm.md の「ライブラリと記号」)

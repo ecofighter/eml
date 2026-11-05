@@ -310,15 +310,54 @@ fn {f}(n.0: int) -> int {{
 #[test]
 #[should_panic(expected = "line up with the C tables")]
 fn a_misaligned_linked_table_is_a_programming_error() {
-    let mut code = CodeBase::<Fast>::new(Arc::new(Control::new(Limits::default())));
-    let short = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _ = code.load(&parse(ABS_FIRST), &Linked::default());
-    }));
-    assert!(short.is_err(), "a table of the wrong length is rejected");
-    // 長さが同じでも、別の署名でつないだ `Linked` は読み込まない。`int64_t` の橋渡しを `int32_t` の関数で呼ばないため
-    let other = parse(&ABS_FIRST.replace("(i64) -> i64", "(i32) -> i64"));
-    let mut code = CodeBase::<Fast>::new(Arc::new(Control::new(Limits::default())));
-    let _ = code.load(&other, &linked_all(&parse(ABS_FIRST)));
+    let load = |program: &Program, linked: &Linked| {
+        let mut code = CodeBase::<Fast>::new(Arc::new(Control::new(Limits::default())));
+        let _ = code.load(program, linked);
+    };
+    let rejected = |program: &Program, linked: &Linked, why: &str| {
+        let payload =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load(program, linked)))
+                .expect_err(why);
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(
+            message.contains("line up with the C tables"),
+            "{why}: {message}"
+        );
+    };
+    let first = parse(ABS_FIRST);
+    rejected(&first, &Linked::default(), "a table of the wrong length");
+    // 長さが同じでも、別の宣言でつないだ `Linked` は読み込まない。`int64_t` の橋渡しで `int32_t` の関数を呼ばない
+    // ためである。橋渡しの語が同じ `Text` と `Int` も見分ける。`Int` の宣言で引いた関数に文字列の位置を渡さない
+    // ためである
+    let narrower = parse(&ABS_FIRST.replace("(i64) -> i64", "(i32) -> i64"));
+    rejected(&narrower, &linked_all(&first), "another word type");
+    let text = parse(&ABS_FIRST.replace("(i64) -> i64", "(text) -> i64"));
+    rejected(
+        &text,
+        &linked_all(&first),
+        "the same words, another declaration",
+    );
+    // dtor も、つないだときの宣言の dtor でなければ読み込まない
+    let handle = |drop: &str| {
+        format!(
+            "\
+chandle \"Main.Handle\" drop \"{drop}\" link []
+cfn \"Main.new\" symbol \"rs_handle_new\" link [] (i64, i64) -> handle \"Main.Handle\"
+fn keep(n.0: int) -> int {{
+  let h.1: obj lin = extern Main.new(100007, n.0)
+  let u.2: unit = drop h.1
+  return n.0
+}}
+"
+        )
+    };
+    let freed = parse(&handle("rs_handle_free"));
+    let other = parse(&handle("free"));
+    load(&other, &linked_all(&freed));
 }
 
 #[test]
