@@ -393,7 +393,7 @@ pub for_mut  : (Int -> a -> <never e> a) -> MutArray a -> <e> MutArray a        
 pub try_map  : (a -> <never e> Result x b) -> Array a -> <e> Result x (Array b)
 ```
 
-- `std/Par` の集まりの関数が主な API である。`for_mut` と `tabulate` はランタイムのプリミティブで、子に1つの塊の添字の範囲を渡す。ほかは `par` の上の eml で書く。粒度を指定する関数 (`map_grain`、`fold_grain`、`for_mut_grain`、`tabulate_grain`) と、生の要素の配列向けの関数 (`tabulate_unboxed : Unboxed a => …` と `for_mut_unboxed : MutUnboxed a => …`) を持つ
+- `std/Par` の集まりの関数が主な API である。`for_mut` と `tabulate` はランタイムのプリミティブで、子に1つの塊の添字の範囲を渡す。ほかは `par` の上の eml で書く。粒度を指定する関数 (`map_grain`、`fold_grain`、`for_mut_grain`、`tabulate_grain`) と、`UnboxedArray` と `MutUnboxedArray` 向けの関数 (`tabulate_unboxed : Unboxed a => …` と `for_mut_unboxed : MutUnboxed a => …`) を持つ
 - 分け方の木は長さと粒度だけで決まる。既定の粒度は N によらない定数 (1024 要素) である。盗まれたかどうかは節点の2つの半分を `par` で動かすかその場で動かすかだけを決め、木の形を変えない。そのため `fold` の組み合わせの順は決まっていて、浮動小数の結果はどの N とスケジュールでも同じビットになる
 - `try_map` は、見つかったいちばん左の `Err` の添字 i より右にある範囲の fork だけを省く (見つかった `Err` の添字の最小を CAS で持つ)。i より左はすべて評価するので、結果は左をすべて評価した後のいちばん左の `Err` である
 - 失敗の通知は `Panic` と、`Fail` のような `never` のエフェクトで書く
