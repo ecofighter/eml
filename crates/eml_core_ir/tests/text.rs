@@ -689,3 +689,32 @@ fn f(a.0: tobj, b.1: tobj) -> obj {
         }
     );
 }
+
+#[test]
+fn c_tables_read_back_in_core_ir() {
+    use eml_extern::{CFnId, ExternRef};
+    let program = round_trip(
+        "\
+chandle \"Main.Solver\" drop \"solver_free\" link [linux \"openblas\", macos framework \"Accelerate\"]
+cfn \"Main.dgemm\" symbol \"cblas_dgemm\" pure link [linux \"openblas\"] (i32, f64, array, mut_array, i32) -> void
+cfn \"Main.open\" symbol \"solver_new\" blocking link [] (size_t, text, unit) -> handle \"Main.Solver\"
+fn f(x.0: int, s.1: obj) -> obj {
+  let h.2: obj lin = extern Main.open(x.0, s.1, ())
+  return h.2
+}
+",
+    );
+    assert_eq!(program.c_handles.len(), 1);
+    assert_eq!(program.c_functions.len(), 2);
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(2),
+            rhs: Rhs::Extern {
+                ext: ExternRef::C(CFnId(1)),
+                args: vec![v(0), v(1), Atom::Unit],
+                at: None,
+            },
+        }
+    );
+}

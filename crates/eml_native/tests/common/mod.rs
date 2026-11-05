@@ -10,15 +10,15 @@ pub fn function(
     params: Vec<CParam>,
     ret: CRet,
 ) -> CFunction {
-    CFunction {
-        name: name.to_owned(),
-        symbol: symbol.to_owned(),
+    CFunction::new(
+        name.to_owned(),
+        symbol.to_owned(),
         links,
-        pure: false,
-        blocking: false,
+        false,
+        false,
         params,
         ret,
-    }
+    )
 }
 
 /// 動いている OS の C の標準ライブラリ。何も入れずにどの CI の機械にもある。

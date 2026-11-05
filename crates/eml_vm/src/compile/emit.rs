@@ -501,7 +501,10 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 self.out.push(Op::Call { dst, at });
             }
             Rhs::Extern { ext, args, at } => {
-                let ExternRef::Std(ext) = *ext;
+                let ext = match *ext {
+                    ExternRef::Std(ext) => ext,
+                    ExternRef::C(_) => unimplemented!("Op::Ffi"),
+                };
                 let row = ext.row();
                 let slots: Vec<Slot> = args
                     .iter()

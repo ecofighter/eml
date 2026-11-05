@@ -1,15 +1,22 @@
-use eml_extern::{CFunction, CHandleId, CInt, CLibrary, CParam, CRet, CType};
+use eml_extern::{
+    CFnId, CFunction, CHandleId, CInt, CLibrary, CParam, CRet, CType, Extern, ExternRef, Mark,
+    OpRet, Purity, Repr,
+};
 
 fn function(params: Vec<CParam>, ret: CRet) -> CFunction {
-    CFunction {
-        name: "Test.f".to_string(),
-        symbol: "f".to_string(),
-        links: Vec::new(),
-        pure: false,
-        blocking: false,
+    c_function("Test.f", false, params, ret)
+}
+
+fn c_function(name: &str, pure: bool, params: Vec<CParam>, ret: CRet) -> CFunction {
+    CFunction::new(
+        name.to_string(),
+        "f".to_string(),
+        Vec::new(),
+        pure,
+        false,
         params,
         ret,
-    }
+    )
 }
 
 #[test]
@@ -107,4 +114,118 @@ fn the_written_name_of_a_library() {
         CLibrary::Framework("Accelerate".to_string()).written(),
         "Accelerate"
     );
+}
+
+#[test]
+fn a_c_row_borrows_every_object_and_returns_its_lin_arguments() {
+    let f = function(
+        vec![
+            CParam::Int(CInt::I32),
+            CParam::Float,
+            CParam::UnboxedArray,
+            CParam::MutUnboxedArray,
+            CParam::Text,
+            CParam::Handle(CHandleId(0)),
+            CParam::NoArg,
+        ],
+        CRet::Handle(CHandleId(0)),
+    );
+    let row = f.row();
+    assert_eq!(row.name, "Test.f");
+    assert_eq!(
+        row.params,
+        [
+            Repr::Int,
+            Repr::Float,
+            Repr::Obj,
+            Repr::Obj,
+            Repr::Obj,
+            Repr::Obj,
+            Repr::Unit
+        ]
+    );
+    let lin = |k: usize| matches!(k, 3 | 5);
+    for (k, (&mark, &borrowed)) in row.param_marks.iter().zip(row.borrowed).enumerate() {
+        assert_eq!(mark == Mark::Lin, lin(k), "the mark of argument {k}");
+        assert_eq!(
+            borrowed,
+            row.params[k] == Repr::Obj,
+            "the borrow of argument {k}"
+        );
+    }
+    assert_eq!(row.with_args, [3, 5]);
+    assert!(row.held.iter().all(|&held| !held));
+    assert_eq!(row.held.len(), row.params.len());
+    assert_eq!(row.ret, OpRet::Repr(Repr::Obj));
+    assert_eq!(row.ret_mark, Mark::Lin);
+
+    let results = [
+        (CRet::Void, Repr::Unit),
+        (CRet::Int(CInt::SizeT), Repr::Int),
+        (CRet::Float, Repr::Float),
+    ];
+    for (ret, repr) in results {
+        let f = function(vec![], ret);
+        let row = f.row();
+        assert_eq!(row.ret, OpRet::Repr(repr), "{ret:?}");
+        assert_eq!(row.ret_mark, Mark::Unr, "{ret:?}");
+    }
+}
+
+#[test]
+fn the_purity_of_a_c_row() {
+    for pure in [false, true] {
+        for narrowing in [false, true] {
+            for handle in [false, true] {
+                for mutable in [false, true] {
+                    let mut params =
+                        vec![CParam::Int(if narrowing { CInt::I32 } else { CInt::I64 })];
+                    if mutable {
+                        params.push(CParam::MutUnboxedArray);
+                    }
+                    let ret = if handle {
+                        CRet::Handle(CHandleId(0))
+                    } else {
+                        CRet::Float
+                    };
+                    let f = c_function("Test.f", pure, params, ret);
+                    let row = f.row();
+                    let case = format!(
+                        "pure {pure}, narrowing {narrowing}, handle {handle}, mutable {mutable}"
+                    );
+                    assert_eq!(row.faults, narrowing || handle, "{case}");
+                    assert_eq!(row.faults, f.faults(), "{case}");
+                    let purity = match (pure, row.faults) {
+                        (true, false) => Purity::Pure,
+                        (true, true) => Purity::Panics,
+                        (false, _) => Purity::Effectful,
+                    };
+                    assert_eq!(row.purity, purity, "{case}");
+                    assert_eq!(row.writes, mutable, "{case}");
+                    assert_eq!(
+                        row.removable(),
+                        row.purity == Purity::Pure && !row.writes,
+                        "{case}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn from_name_prefers_std_rows() {
+    let std = Extern::ALL[0];
+    let name = std.row().name;
+    let c = [
+        c_function("M.half", true, vec![CParam::Float], CRet::Float),
+        c_function(name, true, vec![], CRet::Void),
+    ];
+    assert_eq!(ExternRef::from_name(name, &c), Some(ExternRef::Std(std)));
+    assert_eq!(
+        ExternRef::from_name("M.half", &c),
+        Some(ExternRef::C(CFnId(0)))
+    );
+    assert_eq!(ExternRef::from_name("M.missing", &c), None);
+    assert_eq!(ExternRef::C(CFnId(0)).row(&c).name, "M.half");
 }

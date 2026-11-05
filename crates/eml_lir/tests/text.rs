@@ -1922,3 +1922,83 @@ fn a_par_has_two_children() {
     );
     assert_eq!(error.to_string(), "line 3: expected `,`, found `)`");
 }
+
+const C_TABLES: &str = "\
+chandle \"Main.Solver\" drop \"solver_free\" link [linux \"openblas\", macos framework \"Accelerate\"]
+chandle \"Main.Plain\" link []
+cfn \"Main.dgemm\" symbol \"cblas_dgemm\" pure link [linux \"openblas\"] (i32, f64, array, mut_array, i32) -> void
+cfn \"Main.open\" symbol \"solver_new\" blocking link [windows \"solver\"] (i64, size_t, text, handle \"Main.Plain\", unit) -> handle \"Main.Solver\"
+cfn \"Main.half\" symbol \"half\" pure blocking link [] (f64) -> f64
+fn f(x.0: float) -> float {
+  let y.1: float = extern Main.half(x.0)
+  return y.1
+}
+";
+
+#[test]
+fn c_tables_read_back() {
+    use eml_extern::{
+        CFnId, CHandleId, CHandleType, CInt, CLibrary, CLink, CParam, CRet, ExternRef, Os,
+    };
+    let program = round_trip(C_TABLES);
+    assert_eq!(
+        program.c_handles,
+        [
+            CHandleType {
+                name: "Main.Solver".to_string(),
+                dtor: Some("solver_free".to_string()),
+                links: vec![
+                    CLink {
+                        os: Os::Linux,
+                        library: CLibrary::Named("openblas".to_string()),
+                    },
+                    CLink {
+                        os: Os::Macos,
+                        library: CLibrary::Framework("Accelerate".to_string()),
+                    },
+                ],
+            },
+            CHandleType {
+                name: "Main.Plain".to_string(),
+                dtor: None,
+                links: Vec::new(),
+            },
+        ]
+    );
+    let open = &program.c_functions[1];
+    assert_eq!(open.symbol, "solver_new");
+    assert!(!open.pure && open.blocking);
+    assert_eq!(
+        open.params,
+        [
+            CParam::Int(CInt::I64),
+            CParam::Int(CInt::SizeT),
+            CParam::Text,
+            CParam::Handle(CHandleId(1)),
+            CParam::NoArg,
+        ]
+    );
+    assert_eq!(open.ret, CRet::Handle(CHandleId(0)));
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(1),
+            rhs: Rhs::Extern {
+                ext: ExternRef::C(CFnId(2)),
+                args: vec![v(0)],
+                at: None,
+            },
+        }
+    );
+}
+
+#[test]
+fn an_unknown_c_handle_type_is_a_parse_error() {
+    let error = parse_error(
+        "cfn \"M.open\" symbol \"open\" link [] (i64) -> handle \"M.Missing\"\nfn f(x.0: int) -> int {\n  return x.0\n}\n",
+    );
+    assert_eq!(
+        error.to_string(),
+        "line 1: unknown C handle type \"M.Missing\""
+    );
+}

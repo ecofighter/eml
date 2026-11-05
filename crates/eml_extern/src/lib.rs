@@ -14,7 +14,7 @@ mod c;
 
 pub use c::{
     CFnId, CFunction, CHandleId, CHandleType, CInt, CLibrary, CLink, CParam, CRet, CSignature,
-    CType, Os,
+    CType, Os, writes,
 };
 
 /// 表を1つの並びから作る。行は宣言の順に並び、`ALL` の添字と `self as usize` と静的な行の表の添字が同じになる。
@@ -2317,10 +2317,46 @@ impl FunctionRow<'_> {
     }
 }
 
+/// プログラムごとに作る行の持ち主。欄は作る所 (`CFunction::new`) だけが埋め、行は `view` で同じ見え方にする。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnedRow {
+    name: String,
+    params: Vec<Repr>,
+    param_marks: Vec<Mark>,
+    borrowed: Vec<bool>,
+    with_args: Vec<usize>,
+    held: Vec<bool>,
+    ret: OpRet,
+    ret_mark: Mark,
+    purity: Purity,
+    faults: bool,
+    writes: bool,
+}
+
+impl OwnedRow {
+    pub fn view(&self) -> FunctionRow<'_> {
+        FunctionRow {
+            name: &self.name,
+            params: &self.params,
+            ret: self.ret,
+            param_marks: &self.param_marks,
+            ret_mark: self.ret_mark,
+            purity: self.purity,
+            faults: self.faults,
+            writes: self.writes,
+            borrowed: &self.borrowed,
+            with_args: &self.with_args,
+            held: &self.held,
+        }
+    }
+}
+
 /// IR の `extern` の文が指す行。行は `ExternRef::row` で、プログラムの表とともに引く。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExternRef {
     Std(Extern),
+    /// プログラムの C の関数の表の添字。
+    C(CFnId),
 }
 
 impl From<Extern> for ExternRef {
@@ -2333,21 +2369,25 @@ impl ExternRef {
     pub fn std(self) -> Option<Extern> {
         match self {
             ExternRef::Std(ext) => Some(ext),
+            ExternRef::C(_) => None,
         }
     }
 
     /// `c` はプログラムの C の関数の表である。
     pub fn row(self, c: &[CFunction]) -> FunctionRow<'_> {
-        let _ = c;
         match self {
             ExternRef::Std(ext) => *ext.row(),
+            ExternRef::C(id) => c[id.0 as usize].row(),
         }
     }
 
     /// std の名前を先に引き、次に `c` を引く。
     pub fn from_name(name: &str, c: &[CFunction]) -> Option<ExternRef> {
-        let _ = c;
-        Extern::from_name(name).map(ExternRef::Std)
+        Extern::from_name(name).map(ExternRef::Std).or_else(|| {
+            c.iter()
+                .position(|f| f.name == name)
+                .map(|k| ExternRef::C(CFnId(k as u32)))
+        })
     }
 }
 

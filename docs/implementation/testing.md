@@ -309,6 +309,17 @@ b3(t.3: int):
   - 同じ名前の配置が2つある (``layout `Option` is declared twice``)、`#` で始まる名前 (``a layout name cannot be `#N` ``)、形の違う組の配置 (``the tuple layout `(,)` must have one constructor `(,)` with 2 tobj fields``) は、`parse` が誤りにする。組の配置は、コンストラクタが1つで、その名前が配置と同じで、フィールドがカンマの数より1多く、すべて `tobj` でなければならない
   - 配置の行は、エフェクトの行より前に書く。エフェクトの行の後の配置の行は、関数の位置の誤り (``expected `fn` ``) になる
 - 配置の行の後に、エフェクトを、エフェクトの表の順に1行ずつ書く (`effect Counter { get(unit) -> int, put(int) -> unit }`、`effect Fail { never fail(tobj poly) -> never }`)。操作の表の印も、引数と結果の repr の後に `unr` でないときだけ書く (`effect Ask { ask(unit) -> tobj poly }`)。操作は、関数の引数と `ret` に合わせて、名前の後に引数の repr の並びと `->` と結果の repr を書く。再開しない操作には `never` を付け、結果を `never` と書く。`never` の操作が `never` 以外を返す形 (``a `never` operation returns `never` ``) と、ほかの操作が `never` を返す形 (``only a `never` operation returns `never` ``) は、`parse` が誤りにする。操作のないエフェクトは `effect E {}` と書く。extern のエフェクト (`IO`) もエフェクトの表にあるので、ほかのエフェクトと同じく1行に書く。`parse` は、エフェクトにこの行の順で番号を振り、操作の引数と結果の repr と、操作が再開するかどうかを戻す。
+- エフェクトの行の後、関数の前に、C のハンドルの型 (`Program.c_handles`) と C の関数 (`Program.c_functions`) を表の順に1行ずつ書く。ハンドルの型の行を先に書く。C の関数の行の `handle "T"` は、前に書いたハンドルの型を名前で引くためである
+
+  ```
+  chandle "Main.Solver" drop "solver_free" link [linux "openblas", macos framework "Accelerate"]
+  cfn "Main.dgemm" symbol "cblas_dgemm" pure link [linux "openblas"] (i32, f64, array, mut_array, i32) -> void
+  cfn "Main.open" symbol "solver_new" link [] (i64) -> handle "Main.Solver"
+  ```
+
+  - 名前、記号、ライブラリは文字列で書く。`drop` の記号のないハンドルの型は `drop` を書かない。`cfn` の属性は `pure`、`blocking` の順に、立っているものだけを書く。`link` の項目は `<OS> "名前"` か `<OS> framework "名前"` で、OS は `linux`、`macos`、`windows` のどれかである。項目がなければ `link []` と書く
+  - 引数の型は `i64`、`i32`、`size_t`、`f64`、`array`、`mut_array`、`text`、`handle "T"`、`unit` のどれかで、結果の型は `void`、`i64`、`i32`、`size_t`、`f64`、`handle "T"` のどれかである。`handle` は前に書いたハンドルの型を名前で引き、表にない名前 (`unknown C handle type "M.Missing"`) は `parse` が誤りにする。同じ名前のハンドルの型や C の関数を2度書くこと、知らない OS、知らない引数や結果の型も誤りである
+  - 行の Repr、印、借用、`purity` などは書かない。`parse` は C の関数を `CFunction::new` で作り、行は C の引数と結果の型から決まる ([LIR](../spec/lir.md) の「extern の行」)
 - 関数は `fn 名前(引数) -> repr { … }` と書く。`fn` の前に、内部の関数 (`internal`) なら `internal` を、yield しうる関数 (`yields`) なら `yields` を、in-place のエントリの関数 (`clause`) なら `clause <エフェクト>.<操作>` を、この順に書く (`internal fn main$lambda0(..)`、`internal yields clause State.get fn g$entry(..)`)。repr は `obj`、`tobj`、`int`、`float`、`enum`、`unit`、`token` のどれかで、`->` の後の repr が `ret` で、`unr` でないときはその後に `ret_mark` を書く (`-> tobj poly`)。関数の番号は `fn` を書いた順で、呼び出しは関数を名前で引くので、後で定義する関数も書ける。エントリは `entry$main` という名前の関数で、なければ最初の関数である。文字列定数の表と、位置のパスの表 (`Program.files`) は、現れた順に作る。
 - 一様な位置を持つ関数は、`fn` の直前に `uniform from N` と一様な位置の始まりを書く (`internal uniform from 0 fn main$handle1(..)`)。持たない関数には書かない ([LIR](../spec/lir.md) の「関数の ABI」)
 - reuse の token (repr が `token`) は次の3つの形で書く ([LIR](../spec/lir.md) の「reuse」。例は `crates/eml_lir/tests/reuse.rs`)
@@ -336,7 +347,7 @@ b3(t.3: int):
 - 終端は、`return a`、`tail <呼び出し>`、`jump bN(..)`、`switch a L { .. }` (タグの case を持つとき) か `switch a { .. }` のどれかである。`jump` は、引数がなくても括弧を書く (`jump b1()`)。
 - `switch` は `switch o.0 Option { #0 -> b1, #1(n.2: tobj) -> b2 }` や `switch n.0 { 1 -> b1, 2 -> b2, _ -> b3 }` と書き、`String` の case は `"a" -> b1` と書く。タグの case を持つ `switch` は、scrutinee と `{` の間に配置を書く。リテラルの `switch` と、case のない `switch` には書かない。フィールドのない case は `#0` と書く。`#0()` も読むが、表示は `#0` になる。case の書き方で、読み直して表示が変わる形はこれだけである。case のない `switch` は `switch a {}` と書く。行き先のない `switch` は verifier が誤りにする。
 - `apply ()(…)` は、呼ばれる値が `()` の `apply` である。誤りを含む IR の表示も読み戻すためである。
-- extern の呼び出しは `extern <正式な名前>(…)` と書く (`let t.2: unit = extern Prelude.println(s.1)`、`extern Prelude.++(a.0, b.1)`、`extern Std.FileIn.open(p.0)`)。空白などを含む正式な名前は、関数の名前と同じ規則で引用符で囲む (`extern "Prelude.Eq Int.=="(a.0, b.1)`)。instance の `extern` の行の名前がこれに当たる。`parse` は `extern` の後でも、語の代わりに文字列を読む。`parse` は正式な名前を `eml_extern` の表で引き、引数はいくつでも読む。引数の数と、引数と結果の repr が表と合うかは verifier が確かめる。誤りを含む IR も読み戻して verifier に報告させるためである。位置は、呼び出しの後に `@"パス":行:列` と書く。
+- extern の呼び出しは `extern <正式な名前>(…)` と書く (`let t.2: unit = extern Prelude.println(s.1)`、`extern Prelude.++(a.0, b.1)`、`extern Std.FileIn.open(p.0)`)。空白などを含む正式な名前は、関数の名前と同じ規則で引用符で囲む (`extern "Prelude.Eq Int.=="(a.0, b.1)`)。instance の `extern` の行の名前がこれに当たる。`parse` は `extern` の後でも、語の代わりに文字列を読む。`parse` は正式な名前を `eml_extern` の表で引き、なければ C の関数の表で引く (`extern Main.dgemm(..)`)。引数はいくつでも読む。引数の数と、引数と結果の repr が表と合うかは verifier が確かめる。誤りを含む IR も読み戻して verifier に報告させるためである。位置は、呼び出しの後に `@"パス":行:列` と書く。
 - 文字列は `"` で囲み、エスケープ `\"`、`\'`、`\\`、`\n`、`\r`、`\t`、`\0`、`\u{…}` を読む。
 - 末尾呼び出しの後には何も書かない。`tail` の後の `mask` は、ほかの未知の語と同じく `parse` が誤りにする (``line 3: expected a call, found `mask` ``)
 - 操作は名前のほかに `#N` (操作の番号) でも書ける。エフェクトにない番号も書けるので、誤りを含む IR を verifier に渡すテストに使う。`pretty` も、エフェクトにない番号の操作を `#N` で表示する。

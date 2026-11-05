@@ -259,6 +259,12 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
 - extern の行の引数と結果は、直接の呼び出しの引数と結果と同じく互換の位置である。std の宣言の型変数の位置 (`Std.Array.get` の要素、`Std.Array.make` の初期値) は `tobj` である。translate は具体化した型の Repr (`int` など) のまま引数を渡して結果を束縛し、box の挿入が行の Repr との間に `box` と `unbox` を入れる (下の「box の挿入」)
 - 境界の段は、引数と結果を互換の位置として行と比べる。Core IR と LIR のエントリの段は、引数の数に加えて、行の Repr が `tobj` でない位置の引数と結果の Repr が行と同じかを比べる。`tobj` の位置は具体化した型の Repr のままなので比べない (R7)
+- 利用者の C の関数も行である。IR の `extern` の文は `ExternRef::C` で、プログラムの C の関数の表 (`Program.c_functions`) の番号を指す。行は `CFunction::new` が C の型から作り、パスは std の行と同じく `Program::row` で引く ([VM](vm.md) の「C の関数の呼び出し」)
+  - 引数の Repr は、`Int` の幅 (`int64_t`、`int32_t`、`size_t`) が `int`、`Float` が `float`、配列、`String` と `Bytes`、ハンドルが `obj`、引数のない関数の `Unit` が `unit` である
+  - 引数の印は、`MutUnboxedArray` とハンドルが `lin` で、ほかは `unr` である。`obj` の引数はどれも借りる (`borrowed`)。C の行は引数を消費しない
+  - `with_args` は `lin` の引数の位置を引数の順に並べる。`lin` の引数がある行の宣言の型は `(R, lin の引数)` の組を返し、ない行は `R` を返す ([Core IR](core-ir.md) の「組を返す extern」)。預かる引数はない
+  - 結果は、`void` が `unit`、`Int` が `int`、`Float` が `float`、ハンドルが `lin` の `obj` である
+  - `faults` は、狭める幅 (`int32_t`、`size_t`) の `Int` の引数か、ハンドルの結果があるときに立つ。`purity` は、`pure` で `faults` でなければ `Pure`、`pure` で `faults` なら `Panics`、`pure` でなければ `Effectful` である。`writes` は `MutUnboxedArray` の引数があるときに立つ
 
 #### extern の借用
 
@@ -506,7 +512,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 ### 縮約
 
-- 使われない純粋な `let` を消す。純粋なのは `const`、`con`、`closure`、`box`、`unbox`、`prim root_get`、`prim empty_mut_array` と、表の行が消せる `extern` である。消せる行 (`FunctionRow::removable`) は、`Pure` で、`writes` でなく、`Lin` の引数をすべて借りる行である。`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`、`Std.MutUnboxedArray.freeze`、`MutUnboxed Float.fill`、`MutUnboxed Int.fill`) を消すと、`Lin` の値を手放す命令がなくなり、Perceus がその変数を `decref` して V1 が拒む。`writes` の行の書き込みは IR のデータの依存に現れないので、消すと書き込みごと失われる。呼び出し、`Panics` と `Effectful` の `extern`、`prim`、`drop` は、使われなくても消さない。ほかの基本操作は実行の文脈か evidence を読み書きするので、純粋でないとみなす。使われない `box` を消しても確保が1つ減るだけで、`unbox` は読むだけなので、どちらも評価の順を変えない
+- 使われない純粋な `let` を消す。純粋なのは `const`、`con`、`closure`、`box`、`unbox`、`prim root_get`、`prim empty_mut_array` と、表の行が消せる `extern` である。消せる行 (`FunctionRow::removable`) は、`Pure` で、`writes` でなく、`Lin` の引数をすべて借りる行である。`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`、`Std.MutUnboxedArray.freeze`、`MutUnboxed Float.fill`、`MutUnboxed Int.fill`) を消すと、`Lin` の値を手放す命令がなくなり、Perceus がその変数を `decref` して V1 が拒む。`writes` の行の書き込みは IR のデータの依存に現れないので、消すと書き込みごと失われる。`MutUnboxedArray` の引数を持つ C の行は `writes` を持つので、`Pure` で結果が使われなくても消さない。C は借りた配列に書き込み、呼んだ側はその配列を使い続けるためである。呼び出し、`Panics` と `Effectful` の `extern`、`prim`、`drop` は、使われなくても消さない。ほかの基本操作は実行の文脈か evidence を読み書きするので、純粋でないとみなす。使われない `box` を消しても確保が1つ減るだけで、`unbox` は読むだけなので、どちらも評価の順を変えない
 - 構造体の `unbox` も純粋で、使われない葉は `_` にして読まない。葉がどれも使われない構造体の `unbox` は、箱が `unr` か、箱が末尾の位置の呼び出しの結果で、`unbox` がその呼び出しの後ろにあるときだけ消す。後者は box の挿入の覗き穴が残すもので、消すと末尾の位置の呼び出しの形が保たれる。箱は呼び出しの結果として返るので、手放す所がない。ほかの箱の `unbox` は呼び出しの後ろにあっても残す。Perceus はこの文で箱が構造体の箱だと知り、`unr` でない箱を手放す所を、V1 が拒む `decref` でなく `drop` にする (下の「Perceus」)
 - 縮約は、使われない純粋な `let` をすべて消し、いつも Perceus より前に走る。Perceus はこれに頼る。translate が開いた `unr` でない `con` の変数 ([Core IR](core-ir.md) の「translate が決める印」) は、使われない `con` として残り、その `lin` の引数は葉も読む。Perceus の入力にこの `con` が残ると、Perceus がその `lin` の `con` を `decref` し、V1 が拒む。そのため、Perceus の入力には、`unr` でない引数を持つ使われない `con` と `closure` がない
 - ブロックを後ろから、文を後ろから見る1回のパスで、関数全体の使用の数を使う。定義は使う位置を支配し、辺は番号の大きいブロックへ向かうので、`let` を見る時点でその変数の使用はすべて見終わっている。消した `let` だけが使っていた束縛も同じパスで消えるので、1回で不動点に達する。デバッグビルドでは、2回目のパスが何も変えないことを確かめる
@@ -818,7 +824,7 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
   - 直接の呼び出し
   - `apply` と `clause` の呼び出し。すぐに再開する節は、操作を起こしたフレームの上でその場で動く (上の「節の呼び出し」)。そのため row が `<State>` のような閉包の呼び出しにも、節の本体の `panic` や IO の失敗が通る
   - `par`。子の中断を、join の後に親で起こし直すためである。`par` は末尾の位置の呼び出しにならないので、いつも末尾でない
-  - `faults` の extern。`faults` (`FunctionRow::faults`) の行は、失敗して中断を始めうる行で、std の行では `Pure` でない行と同じである
+  - `faults` の extern。`faults` (`FunctionRow::faults`) の行は、失敗して中断を始めうる行で、std の行では `Pure` でない行と同じである。C の行の `faults` は `purity` でなく C の型から決まる (上の「extern の行」)。狭める引数もハンドルの結果もない `pure` でない C の行は、`Effectful` でも `IO` を上げないので、地点にならない
   - `prim yield_abort` と `prim child_abort`
 - `faults` でない extern、prim、末尾の呼び出し (`tail call`、`tail apply`、`tail clause`) は地点にならない。末尾の呼び出しはフレームを呼ばれる側に渡すので、その位置に止まるフレームがない
 - 地点でないものは、関数の中で中断が始まらない。中断が通るフレームは、いつも地点の命令の直後で止まっているか、関数のエントリで止まっている

@@ -262,6 +262,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 - `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done` も token を借りてリスナー、ストリーム、結果の番号 (`int`)、終わったか (`Bool`) だけを返し、`local_port : TcpListener -> (Int, TcpListener)` と `peer_addr : TcpStream -> (String, TcpStream)` はハンドルを借りてポートと番地だけを返す。どれも `with_args: [0]` を持ち、引数を預からない。`local_port` と `peer_addr` の行は `Std.MutArray.length` と同じく `Pure` である ([標準ライブラリ](stdlib.md) の「`Std.Net`」)
 - `Std.Tls` の `pull_tls`、`status`、`error_message`、`line_ready`、`take_line` は `Conn` を借りて結果 (`Bytes`、`int`、`String`) だけを返し、`with_args: [0]` を持つ。`read_plain : Bytes -> Conn -> <IO> (Bytes, Conn)` は `Std.FileIn.read_chunk` と同じ形で、`with_args: [1]` を持つ。どれも引数を預からない ([標準ライブラリ](stdlib.md) の「`Std.Tls`」)。`push_tls` と `write_plain` は、下の書き込みと同じ形である
 - `Std.FileOut`、`Std.Stdout`、`Std.Stderr` の書き込み (`write`、`write_bytes`、`write_line`) は、書くデータを借り、ハンドルを消費して同じハンドルを返す。結果がハンドルそのものなので、組を返さず、`with_args` を持たない
+- 利用者の C の行は、`lin` の引数 (`MutUnboxedArray` とハンドル) をすべて借り、その位置を引数の順に `with_args` に持つ ([LIR](lir.md) の「extern の行」)。`lin` の引数があれば、宣言の型は `(R, lin の引数の型を引数の順に)` の組を返し、`R` が `Unit` でも組の先頭に置く。`lin` の引数がなければ `R` を返し、`with_args` は空である。C は借りた配列に書き込むので、呼んだ後の `con` が組に入れる配列は、C が書いた中身を持つ
 - translate は、`with_args` が `[k]` の行の引数のそろった呼び出しを、行の結果を束縛する `extern` 命令と、その結果と引数 k を組にする `con` にする。`let t.1: int = extern Std.MutArray.read(m.0, 0)` と `let d.2: (,){int, obj lin} lin = con (,) #0(t.1, m.0)` の形である。組が構造体にならない型なら、`d.2` は `obj` である。extern は m.0 を借りるだけなので、m.0 を消費するのは `con` だけである。`$externN` も同じ形の本体を持つ。どちらも同じ関数 (`ProgramBuilder::extern_call`) が作る
 - 組を受けてすぐ開く所 (`let (v, m) = MutArray.read m i`) では、最適化の既知のコンストラクタ (下の「既知のコンストラクタ」) で組が消え、確保が残らない。組が構造体なら、既知のコンストラクタに頼らなくても確保がない
 
@@ -766,7 +767,7 @@ handler への特殊化と2回目の `yields` の付け直しの後に、融合�
 
 - 書き換える順: 段に入った時点の関数の関係を凍らせ、各関数を1回だけ書き換える。直接の呼び出しに値としての参照 (`closure` の関数と関数の値 `&f`) を足した辺で SCC を Tarjan の方法で求め、届く先の SCC から順に書き換える。同じ SCC の中は、直接の呼び出しの関係で呼ばれる関数を先にする。値の参照も辺にするのは、閉包の関数を、その閉包への `apply` を直接の呼び出しにして展開する関数より先に書き換えるためである
 - 1つの関数の書き換え: 元の関数は、まず直接の呼び出しを1回の走査で展開する (下の「インライン化」)。そのあと、ブロックの片付け、既知のコンストラクタ、既知の閉包、`con` の値の形についての複製、書き換えで生まれた呼び出しの展開、使われない `let` の削除を、どれも当たらなくなるまで繰り返す
-- 使われない純粋な `let` の削除: 展開した本体が返す値を呼ぶ側が捨てる所に、値を作るだけの文が残るためである。純粋の規則は EP と同じ (`tail.rs` の `pure`) で、消しても評価の順と実行時エラーは変わらない。ただし、`Pure` の extern でも、`Lin` の引数を借りずに受ける行 (`Std.MutArray.freeze`、`Std.MutUnboxedArray.freeze`、`MutUnboxed Float.fill`、`MutUnboxed Int.fill`) は消さない (`FunctionRow::removable`。[LIR](lir.md) の「縮約」)。既知のコンストラクタを解いて定数になった値の `drop` (`None` の `#0` の `drop`) も消す
+- 使われない純粋な `let` の削除: 展開した本体が返す値を呼ぶ側が捨てる所に、値を作るだけの文が残るためである。純粋の規則は EP と同じ (`tail.rs` の `pure`) で、消しても評価の順と実行時エラーは変わらない。ただし、`Pure` の extern でも、`Lin` の引数を借りずに受ける行 (`Std.MutArray.freeze`、`Std.MutUnboxedArray.freeze`、`MutUnboxed Float.fill`、`MutUnboxed Int.fill`) は消さない (`FunctionRow::removable`。[LIR](lir.md) の「縮約」)。`MutUnboxedArray` の引数を持つ C の行も、`writes` を持つので、`Pure` でも消さない。既知のコンストラクタを解いて定数になった値の `drop` (`None` の `#0` の `drop`) も消す
 - 決定性: どの判断も、その関数のコードと、書き換え終えた呼び出し先と鍵の閉包の関数のコードと、鍵だけで決まる。プログラム全体の大きさの予算は使わない。書き換え終えた関数のコードは名前で決まるので、名前が同じ関数はどのプログラムでも同じコードになる ([VM](vm.md) の「追記」)
 
 #### インライン化

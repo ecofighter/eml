@@ -38,6 +38,7 @@ impl<'p> Printer<'p> {
                 &program.strings,
                 &program.files,
                 &program.c_functions,
+                &program.c_handles,
                 names,
                 positions,
             ),

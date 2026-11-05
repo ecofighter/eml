@@ -7,7 +7,9 @@
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
-use eml_extern::{CFunction, CHandleType, ExternRef};
+use eml_extern::{
+    CFunction, CHandleId, CHandleType, CInt, CLibrary, CLink, CParam, CRet, ExternRef, Os,
+};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -246,6 +248,24 @@ fn string_literal(
     }
 }
 
+/// C の整数の幅の字。引数と結果で同じ字を使う。
+fn c_int(word: &str) -> Option<CInt> {
+    match word {
+        "i64" => Some(CInt::I64),
+        "i32" => Some(CInt::I32),
+        "size_t" => Some(CInt::SizeT),
+        _ => None,
+    }
+}
+
+fn c_int_text(int: CInt) -> &'static str {
+    match int {
+        CInt::I64 => "i64",
+        CInt::I32 => "i32",
+        CInt::SizeT => "size_t",
+    }
+}
+
 fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '\''
 }
@@ -411,13 +431,19 @@ impl<'t> Reader<'t> {
         }
     }
 
-    /// 関数の前の、配置とエフェクトの宣言。続けて関数の名前に番号を振る。
+    /// 関数の前の、配置、エフェクト、C のハンドルの型と C の関数の宣言。続けて関数の名前に番号を振る。
     pub fn declarations(&mut self) -> Result<(), ParseError> {
         while self.at_word("layout") {
             self.layout()?;
         }
         while self.at_word("effect") {
             self.effect()?;
+        }
+        while self.at_word("chandle") {
+            self.c_handle()?;
+        }
+        while self.at_word("cfn") {
+            self.c_function()?;
         }
         self.declare_functions()
     }
@@ -558,6 +584,135 @@ impl<'t> Reader<'t> {
         }
         self.effects.push(EffectInfo { name, operations });
         Ok(())
+    }
+
+    /// `chandle "T" [drop "symbol"] link [..]`。
+    fn c_handle(&mut self) -> Result<(), ParseError> {
+        let line = self.expect_word("chandle")?;
+        let name = self.quoted("a C handle type name")?;
+        if self.c_handles.iter().any(|handle| handle.name == name) {
+            return Err(error(
+                line,
+                format!("C handle type {name:?} is declared twice"),
+            ));
+        }
+        let dtor = if self.at_word("drop") {
+            self.pos += 1;
+            Some(self.quoted("a symbol after `drop`")?)
+        } else {
+            None
+        };
+        let links = self.c_links()?;
+        self.c_handles.push(CHandleType { name, dtor, links });
+        Ok(())
+    }
+
+    /// `cfn "M.f" symbol "f" [pure] [blocking] link [..] (param, ..) -> ret`。
+    fn c_function(&mut self) -> Result<(), ParseError> {
+        let line = self.expect_word("cfn")?;
+        let name = self.quoted("a C function name")?;
+        if self
+            .c_functions
+            .iter()
+            .any(|function| function.name == name)
+        {
+            return Err(error(
+                line,
+                format!("C function {name:?} is declared twice"),
+            ));
+        }
+        self.expect_word("symbol")?;
+        let symbol = self.quoted("a symbol after `symbol`")?;
+        let pure = self.at_word("pure");
+        if pure {
+            self.pos += 1;
+        }
+        let blocking = self.at_word("blocking");
+        if blocking {
+            self.pos += 1;
+        }
+        let links = self.c_links()?;
+        let params = self.list('(', ')', |p| p.c_param())?;
+        self.expect_word("->")?;
+        let ret = self.c_ret()?;
+        self.c_functions.push(CFunction::new(
+            name, symbol, links, pure, blocking, params, ret,
+        ));
+        Ok(())
+    }
+
+    /// `link [linux "name", macos framework "name", ..]`。
+    fn c_links(&mut self) -> Result<Vec<CLink>, ParseError> {
+        self.expect_word("link")?;
+        self.list('[', ']', |p| {
+            let line = p.line();
+            let os = match p.word()?.as_str() {
+                "linux" => Os::Linux,
+                "macos" => Os::Macos,
+                "windows" => Os::Windows,
+                other => return Err(error(line, format!("unknown OS `{other}`"))),
+            };
+            let library = if p.at_word("framework") {
+                p.pos += 1;
+                CLibrary::Framework(p.quoted("a framework name")?)
+            } else {
+                CLibrary::Named(p.quoted("a library name")?)
+            };
+            Ok(CLink { os, library })
+        })
+    }
+
+    fn c_param(&mut self) -> Result<CParam, ParseError> {
+        let line = self.line();
+        let word = self.word()?;
+        if let Some(int) = c_int(&word) {
+            return Ok(CParam::Int(int));
+        }
+        match word.as_str() {
+            "f64" => Ok(CParam::Float),
+            "array" => Ok(CParam::UnboxedArray),
+            "mut_array" => Ok(CParam::MutUnboxedArray),
+            "text" => Ok(CParam::Text),
+            "handle" => Ok(CParam::Handle(self.c_handle_ref()?)),
+            "unit" => Ok(CParam::NoArg),
+            _ => Err(error(line, format!("unknown C parameter type `{word}`"))),
+        }
+    }
+
+    fn c_ret(&mut self) -> Result<CRet, ParseError> {
+        let line = self.line();
+        let word = self.word()?;
+        if let Some(int) = c_int(&word) {
+            return Ok(CRet::Int(int));
+        }
+        match word.as_str() {
+            "void" => Ok(CRet::Void),
+            "f64" => Ok(CRet::Float),
+            "handle" => Ok(CRet::Handle(self.c_handle_ref()?)),
+            _ => Err(error(line, format!("unknown C result type `{word}`"))),
+        }
+    }
+
+    /// `handle` の後のハンドルの型の名前。先に書いた `chandle` を引く。
+    fn c_handle_ref(&mut self) -> Result<CHandleId, ParseError> {
+        let line = self.line();
+        let name = self.quoted("a C handle type name after `handle`")?;
+        self.c_handles
+            .iter()
+            .position(|handle| handle.name == name)
+            .map(|index| CHandleId(index as u32))
+            .ok_or_else(|| error(line, format!("unknown C handle type {name:?}")))
+    }
+
+    /// 引用符で囲んだ文字列。`what` は無いときの誤りに書く。
+    fn quoted(&mut self, what: &str) -> Result<String, ParseError> {
+        match self.peek() {
+            Some(Tok::Str(value)) => {
+                self.pos += 1;
+                Ok(value.clone())
+            }
+            _ => Err(self.error_here(format!("expected {what}"))),
+        }
     }
 
     /// `[never] operation(repr, ..) -> ret`。`ret` は repr か `never` で、`never` の印と一致しなければならない。
@@ -1494,6 +1649,24 @@ pub fn error(line: usize, message: impl Into<String>) -> ParseError {
     }
 }
 
+fn c_links_text(links: &[CLink]) -> String {
+    let links: Vec<String> = links
+        .iter()
+        .map(|link| {
+            let os = match link.os {
+                Os::Linux => "linux",
+                Os::Macos => "macos",
+                Os::Windows => "windows",
+            };
+            match &link.library {
+                CLibrary::Named(name) => format!("{os} {name:?}"),
+                CLibrary::Framework(name) => format!("{os} framework {name:?}"),
+            }
+        })
+        .collect();
+    format!("[{}]", links.join(", "))
+}
+
 /// テキストの表示の部品。宣言と関数の頭、ラベル、アトムなど、2つの IR に共通する形を書く。
 pub struct Writer<'p> {
     layouts: &'p [Layout],
@@ -1502,6 +1675,7 @@ pub struct Writer<'p> {
     strings: &'p [String],
     files: &'p [String],
     c_functions: &'p [CFunction],
+    c_handles: &'p [CHandleType],
     /// 関数の番号の順の名前。呼び出しと関数の値の表示が引く。
     functions: Vec<&'p str>,
     positions: bool,
@@ -1517,6 +1691,7 @@ impl<'p> Writer<'p> {
         strings: &'p [String],
         files: &'p [String],
         c_functions: &'p [CFunction],
+        c_handles: &'p [CHandleType],
         functions: Vec<&'p str>,
         positions: bool,
     ) -> Writer<'p> {
@@ -1527,12 +1702,13 @@ impl<'p> Writer<'p> {
             strings,
             files,
             c_functions,
+            c_handles,
             functions,
             positions,
         }
     }
 
-    /// 配置とエフェクトの宣言。
+    /// 配置、エフェクト、C のハンドルの型と C の関数の宣言。
     pub fn declarations(&self, out: &mut String) {
         for layout in self.layouts {
             let constructors: Vec<String> = layout
@@ -1596,6 +1772,59 @@ impl<'p> Writer<'p> {
                 .unwrap();
             }
         }
+        for handle in self.c_handles {
+            let dtor = handle
+                .dtor
+                .as_ref()
+                .map_or_else(String::new, |dtor| format!(" drop {dtor:?}"));
+            writeln!(
+                out,
+                "chandle {:?}{dtor} link {}",
+                handle.name,
+                c_links_text(&handle.links)
+            )
+            .unwrap();
+        }
+        for function in self.c_functions {
+            let params: Vec<String> = function
+                .params
+                .iter()
+                .map(|&param| self.c_param(param))
+                .collect();
+            let ret = match function.ret {
+                CRet::Void => "void".to_string(),
+                CRet::Int(int) => c_int_text(int).to_string(),
+                CRet::Float => "f64".to_string(),
+                CRet::Handle(id) => self.c_handle_text(id),
+            };
+            writeln!(
+                out,
+                "cfn {:?} symbol {:?}{}{} link {} ({}) -> {ret}",
+                function.name,
+                function.symbol,
+                if function.pure { " pure" } else { "" },
+                if function.blocking { " blocking" } else { "" },
+                c_links_text(&function.links),
+                params.join(", ")
+            )
+            .unwrap();
+        }
+    }
+
+    fn c_param(&self, param: CParam) -> String {
+        match param {
+            CParam::Int(int) => c_int_text(int).to_string(),
+            CParam::Float => "f64".to_string(),
+            CParam::UnboxedArray => "array".to_string(),
+            CParam::MutUnboxedArray => "mut_array".to_string(),
+            CParam::Text => "text".to_string(),
+            CParam::Handle(id) => self.c_handle_text(id),
+            CParam::NoArg => "unit".to_string(),
+        }
+    }
+
+    fn c_handle_text(&self, id: CHandleId) -> String {
+        format!("handle {:?}", self.c_handles[id.0 as usize].name)
     }
 
     /// `[internal] [yields] [clause E.op] [uniform from N] fn name(params) -> rets {` の行。

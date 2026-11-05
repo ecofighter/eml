@@ -1,5 +1,7 @@
 //! 利用者の `extern "C"` の宣言の記述。データだけを持ち、C の関数を呼ぶコードは含まない。
 
+use crate::{FunctionRow, Mark, OpRet, OwnedRow, Purity, Repr};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Os {
     Linux,
@@ -114,6 +116,7 @@ pub struct CHandleType {
     pub links: Vec<CLink>,
 }
 
+/// 作った後で欄を書き換えると `row` が古くなるので、作るのも作り直すのも `CFunction::new` を通す。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CFunction {
     /// 正規の名前 `Module.name`。
@@ -125,9 +128,71 @@ pub struct CFunction {
     pub blocking: bool,
     pub params: Vec<CParam>,
     pub ret: CRet,
+    row: OwnedRow,
 }
 
 impl CFunction {
+    pub fn new(
+        name: String,
+        symbol: String,
+        links: Vec<CLink>,
+        pure: bool,
+        blocking: bool,
+        params: Vec<CParam>,
+        ret: CRet,
+    ) -> CFunction {
+        let faults = faults(&params, ret);
+        let purity = match (pure, faults) {
+            (true, false) => Purity::Pure,
+            (true, true) => Purity::Panics,
+            (false, _) => Purity::Effectful,
+        };
+        let row = OwnedRow {
+            name: name.clone(),
+            params: params.iter().map(|&param| param_repr(param)).collect(),
+            param_marks: params.iter().map(|&param| param_mark(param)).collect(),
+            borrowed: params
+                .iter()
+                .map(|&param| param_repr(param) == Repr::Obj)
+                .collect(),
+            with_args: params
+                .iter()
+                .enumerate()
+                .filter(|&(_, &param)| param_mark(param) == Mark::Lin)
+                .map(|(k, _)| k)
+                .collect(),
+            held: vec![false; params.len()],
+            ret: OpRet::Repr(match ret {
+                CRet::Void => Repr::Unit,
+                CRet::Int(_) => Repr::Int,
+                CRet::Float => Repr::Float,
+                CRet::Handle(_) => Repr::Obj,
+            }),
+            ret_mark: match ret {
+                CRet::Handle(_) => Mark::Lin,
+                CRet::Void | CRet::Int(_) | CRet::Float => Mark::Unr,
+            },
+            purity,
+            faults,
+            writes: writes(&params),
+        };
+        CFunction {
+            name,
+            symbol,
+            links,
+            pure,
+            blocking,
+            params,
+            ret,
+            row,
+        }
+    }
+
+    /// C の行の見え方 (docs/spec/lir.md の「extern の行」)。
+    pub fn row(&self) -> FunctionRow<'_> {
+        self.row.view()
+    }
+
     /// 橋渡しの引数と結果の型。配列、文字列、ハンドルはポインタ1つの語で渡し、`NoArg` は語を持たない。
     pub fn c_signature(&self) -> CSignature {
         let params = self
@@ -154,9 +219,38 @@ impl CFunction {
 
     /// 呼び出しが `Panic` で中断しうるか。狭める `Int as` の引数は範囲を外れうるし、ハンドルの結果は null になりうる。
     pub fn faults(&self) -> bool {
-        self.params
-            .iter()
-            .any(|param| matches!(param, CParam::Int(int) if int.narrows()))
-            || matches!(self.ret, CRet::Handle(_))
+        faults(&self.params, self.ret)
+    }
+}
+
+fn faults(params: &[CParam], ret: CRet) -> bool {
+    params
+        .iter()
+        .any(|param| matches!(param, CParam::Int(int) if int.narrows()))
+        || matches!(ret, CRet::Handle(_))
+}
+
+/// C が借りた配列に書き込みうるか。`MutUnboxedArray` の引数だけが書ける (docs/spec/lir.md の「extern の借用」)。
+pub fn writes(params: &[CParam]) -> bool {
+    params.contains(&CParam::MutUnboxedArray)
+}
+
+fn param_repr(param: CParam) -> Repr {
+    match param {
+        CParam::Int(_) => Repr::Int,
+        CParam::Float => Repr::Float,
+        CParam::UnboxedArray | CParam::MutUnboxedArray | CParam::Text | CParam::Handle(_) => {
+            Repr::Obj
+        }
+        CParam::NoArg => Repr::Unit,
+    }
+}
+
+fn param_mark(param: CParam) -> Mark {
+    match param {
+        CParam::MutUnboxedArray | CParam::Handle(_) => Mark::Lin,
+        CParam::Int(_) | CParam::Float | CParam::UnboxedArray | CParam::Text | CParam::NoArg => {
+            Mark::Unr
+        }
     }
 }
