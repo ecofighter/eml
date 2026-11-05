@@ -251,6 +251,16 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `Drop` がプロセスを止める道のテスト (`driver::tests::abort`) は、テストのバイナリを子として起こすので、Miri では `ignore` にする
 - コマンドは `cargo miri test -p eml_io --lib -- driver::tests::` で、`eml_rt` と同じ2つの `MIRIFLAGS` で流す (「よく使うコマンド」)。予算は、ビルド済みの作業ツリーでのコマンドの `user` で、Stacked Borrows で 30 秒以内、Tree Borrows で 35 秒以内にする。ほかのビルドが走っていない 4 CPU の Linux のコンテナで測った時間の約3倍である。aarch64-darwin の開発機で測った `user` は、Stacked Borrows で 6.1 秒、Tree Borrows で 6.9 秒である。測り直しの規則は上の「Miri」と同じである
 
+## `eml_native` の検証
+
+`eml_native` は本物の JIT のコードを動かし、OS のローダーを呼ぶ。そのため Miri ではこの crate を流さず、CI の各 OS の普通のテストで確かめる。
+
+- `unsafe` を書いてよいファイルは `crates/eml_native/src/trust.rs` の `UNSAFE_FILES` (`bridge.rs`、`library.rs`、`linker.rs`) が決める。`lib.rs` は `#![deny(unsafe_code)]` を持ち、一覧のファイルだけが先頭に `#![allow(unsafe_code)]` を置く。走査と3つのテスト (`unsafe_stays_in_the_listed_files`、`every_source_file_is_listed`、`the_scanner_skips_comments_and_strings`) は「`unsafe` の一覧」と同じである
+- `tests/bridge.rs` は、Cranelift で作った橋渡しを Rust の関数に向けて呼ぶ。上の 32 bit にごみのある `int32_t` の引数、スタック渡しを含む 12 個の引数、負の `int32_t` の結果、`double` の結果、void の結果、引数のない関数を確かめる。2回目の finalize の後も前の橋渡しを呼べることと、8 スレッドが同じ橋渡しを呼べることも確かめる
+- `tests/linker.rs` は、`Linker::with_symbols` で登録した Rust の関数と、何も入れずにどの機械にもある C の標準ライブラリ (Linux の `libc.so.6`、macOS の `libSystem.dylib`、Windows の `ucrtbase`) で、解決の順、上書き、誤りと文言を確かめる
+- `eml_vm` のテストと Miri は、Rust で書いた橋渡しで手で作った `Linked` を使い、Cranelift を使わない。Miri は JIT のコードを動かせないためである
+- OS によって飛ばしてよい FFI のテストは、macOS の framework の道の単体テスト (`linker::accelerate_loads_as_a_framework`) と、BLAS を使う `#[ignore]` のテストだけである。CI の機械には BLAS がない
+
 ## `eml_vm` のテスト
 
 `eml_vm` ([VM](../spec/vm.md)) の結合テストは、手で書いた LIR を `eml_lir::parse` で読んで確かめる。ソースのプログラムを VM で流すテストは、UI テスト (下の「2つのモードで流す」)、`bench.rs`、`scaling.rs`、`tasks.rs`、`preempt.rs` の `Async` のテスト、`memory.rs` のメモリの柔らかい上限のテスト (決定的な方針で、旗を立てるタスクの選び方と、捕まえる `try_io` を確かめる)、`crates/eml_cli/tests/cli.rs` の `eml run` のテスト、`crates/eml_cli/tests/std_invariants.rs` である。
@@ -645,7 +655,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 
 `.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の7つのジョブを流す。
 
-- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls` を外した `tls_off::` のテスト、既定でない feature の clippy (「feature の組み合わせの確認」の9つ) と、段「feature resolution of tls」の `cargo tree` の検査を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる。ubuntu-24.04 では、同じビルドで時間の検査 (「性能のテスト」) も流す
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04 と、aarch64 の ubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls` を外した `tls_off::` のテスト、既定でない feature の clippy (「feature の組み合わせの確認」の9つ) と、段「feature resolution of tls」と段「dependency edges of eml_native」の検査を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` のバージョンが `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いたバージョンを入れる。ubuntu-24.04 では、同じビルドで時間の検査 (「性能のテスト」) も流す
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる

@@ -15,7 +15,7 @@ pub struct CCall {
 }
 
 // SAFETY: 2つのポインタが指すコードは、プロセスが終わるまで外さない。橋渡しの関数は状態を持たないので、
-// どのスレッドから呼んでもよい。
+// どのスレッドから呼んでもよい (docs/spec/vm.md の「橋渡しの関数」、docs/spec/vm.md の「ライブラリと記号」)。
 unsafe impl Send for CCall {}
 unsafe impl Sync for CCall {}
 

@@ -960,6 +960,42 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - 終わった操作の記録を持ったまま譲り (`ready`) で待つタスクも引き取る。記録の持ち主 (`owner`) は元の worker のままだが、取り出しは記録の持ち主を確かめず、持ち主を確かめる結果の当て (`settle_op`) は結果が届いたときにしか動かないので、終わった記録では害がない (「操作の記録」)。救済はこの形に頼るので、std の行は次を守らなければならない。終わっていない記録を持つタスクは、その操作の待ちに入るまで、ほかの `Async` の操作をしない。守れば、終わっていない記録を持つタスクはいつも操作の待ちにあり、救済の対象にならない。今の std の受け付けと待ちは隣り合い、間に入るのは `op_ready` が終わりを返した後の予算の譲りだけである。std に足す行もネイティブの std も同じ決まりに従う。操作の待ちを救済する形に変えるときは、この決まりを見直す ([ロードマップ](../future/roadmap.md) の「マルチコア対応」)
 - 引き取ったタスクが新しいハンドルを作る操作では、持ち主の I/O を受け付ける worker が host になる。本物の時計では救済した worker 自身、仮想の時計では worker 0 である。`Std.Stream` が開くファイルも同じく、その host の driver に取り込む。`Std.Exec` の起動が pipe を作る driver と、子の待ちを出す driver も、呼んだタスクが今いる worker のものである。子を待つタスクは操作の待ちにいるので救済されず、記録の持ち主と host は待ちの間に分かれない。すでに縛ったハンドルの操作は、縛った worker へ `Submit` で回す (「時計と driver」)。救済は `Submit` を処理しない
 
+## C の関数の呼び出し
+
+利用者の `extern "C"` の関数とハンドルの dtor は、`eml_native` がプログラムを読み込む前につなぐ。つないだ結果は `eml_cabi::Linked` の値で、C の関数ごとの `CCall` とハンドルの型ごとの dtor を、プログラムの C の関数の表とハンドルの型の表に並びをそろえて持つ。VM は橋渡しの関数を通して C の関数を呼ぶ。`eml_vm` は `eml_native` にも Cranelift にも依存せず、つなぐ処理を持たない。
+
+### 橋渡しの関数
+
+- 橋渡しの関数の型は `eml_cabi::Bridge`、つまり `unsafe extern "C" fn(callee: *const (), args: *const u64) -> u64` である。`CCall { bridge, callee }` は、橋渡しと、それで呼ぶ C の関数のアドレスの組である
+- 橋渡しは C の型の並び `CSignature` (要素は `I32`、`I64`、`F64`) ごとに1つ作り、同じ署名の関数で共有する。呼ぶ関数は最初の引数で受ける。引数は `u64` の slot の列で、slot k を `args` の offset `8*k` から読む。橋渡しが読むのは `args` だけで、`Ctx`、`Word`、ヒープの配置、スレッドローカル、記号の名前のどれにも触れない
+- `I64` の slot は語をそのまま渡し、`F64` の slot は語の bit の並びを `double` として渡す。`I32` (`int32_t`) の slot は語の下の 32 bit を符号を広げて渡し、上の 32 bit は読まない
+- 結果は1語で返す。`I32` は符号を広げ、`I64` はそのまま、`F64` は bit の並びをそのまま語にする。void の関数では 0 を返す
+- 呼び出し規約は、動いている OS の既定のもの (Rust の `extern "C"`) である
+- 橋渡しは状態を持たないので、どのスレッドから同時に呼んでもよい
+- コードは cranelift-jit が RW で確保して書き、命令の cache を消してから RX に変える。`MAP_JIT` を使わないので、macOS の hardened runtime の下では動かない。この処理系は hardened runtime を扱わない
+- 巻き戻しの情報を登録しないので、C の関数は橋渡しを通して巻き戻ってはならない (C++ の例外、SEH)
+- 橋渡しのコードは、プロセスが終わるまで解放しない。だから `CCall` は、作った `Linker` が消えた後も呼べる
+
+### ライブラリと記号
+
+- C の関数の記号は `CFunction` の `symbol`、dtor の記号は `CHandleType` の `dtor` である。どちらも、宣言したモジュールの `link` の item の写し (`links`) から、次の順で解決する
+  1. 登録した記号 (`Linker::with_symbols`)。テストが Rust の関数を渡すのに使う
+  2. 動いている OS の `link` の item のライブラリを、書いた順に。1 で見つからなかった記号では、動いている OS のライブラリを、記号がどこにあってもすべて開けなければならない。1つでも開けなければ `LinkError::Library` である。1 で見つかった記号では、ライブラリを開かない
+  3. プロセスの範囲。unix では `dlopen(NULL)` の範囲 (`libloading::os::unix::Library::this()`)、Windows では実行ファイル、その次に `ucrtbase.dll` である
+  4. どこにもなければ `LinkError::Symbol` である
+- ローダーに渡す名前は次のように飾る (`eml_native::candidates`)
+  - `/`、`\`、`.` を含む文字列は、そのまま渡す
+  - ほかの名前は、Linux では `lib<name>.so`、macOS では `lib<name>.dylib`、Windows では `<name>.dll` にする
+  - `framework "N"` は `/System/Library/Frameworks/N.framework/N` を、次に `/Library/Frameworks/N.framework/N` を試す。macOS の dlopen は framework の相対の道を開けないためである
+- `--link KEY=VALUE` の上書きは、`link` の item に書いた文字列 (`CLibrary::written`) を KEY と OS によらず比べる。合う item のうち動いている OS のものは、書いた名前の代わりに VALUE を開く。VALUE も上と同じ規則で飾る。上書きはモジュールによらず、プログラム全体に効く
+- 関数もハンドルの型もないプログラムは、何も開かず、JIT も作らない。C の関数かハンドルの型があって、動いている OS が Linux、macOS、Windows のどれでもなければ `LinkError::Unsupported` である
+- 開いたライブラリは、プロセスが終わるまで閉じない (`ManuallyDrop` で持つ)。閉じると、そこから引いた `CCall` と dtor のポインタが、解放したコードを指すことになるためである
+- `LinkError` の文言は次のとおりで、OS の文言を含まない
+  - `library "{name}" was not found`。`name` は開こうとした名前で、上書きしたときは VALUE である
+  - `symbol "{symbol}" was not found`。2 のライブラリがあれば、後ろに ` in {library}` を付ける。`library` は 2 のライブラリの名前 (上書きした後のもの) を引用して `", "` でつないだものである
+  - `--link names no library "{key}"`
+  - `C functions cannot be called on this machine: {reason}`。`reason` は処理系が決めた固定の文で、Cranelift の誤りの文を含めない
+
 ## `RunStats`
 
 `Machine::run`、`run_shown`、`eml_vm::execute` は、成功すると `Finished { stats, exit, preemptions, rescues, rescued, workers, placed, placed_tasks, placed_jobs }` を返す。`stats` は下の `RunStats` で、`exit` は `exit` で終わったときの終了コード (`Option<i64>`。終わりの欄から読む。「`exit`」)、`preemptions` は方針が始めた切り替えの数、`rescues` は1つ以上を盗んだ救済の数、`rescued` は救済で移した項の数、`workers` はその run が作った worker の数、`placed` はほかの worker に置いた `par` の右の子の数、`placed_tasks` はほかの worker に置いた `Async` のタスクの数、`placed_jobs` はほかの worker に置いた `compute` の仕事の数 (どれも「タスクとスケジュール」) である。

@@ -44,6 +44,7 @@ eml/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。workspace の crate では eml_extern だけに依存する
     eml_cabi/           # C の関数を呼ぶコードのポインタ。eml_extern だけに依存する
+    eml_native/         # Cranelift の橋渡しの関数と、C のライブラリと記号の解決。workspace の crate では eml_extern と eml_cabi だけに依存する
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
     eml_io/             # I/O の driver (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存し、feature `tls` の下では eml_tls にも依存する
     eml_tls/            # rustls のクライアント接続を包む TLS の状態 (I/O を持たない)。workspace の crate には依存しない
@@ -78,6 +79,7 @@ eml_cli          check / run コマンド。パイプラインを組む唯一の
 eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_rt の Ctx の上で、worker のスレッドごとに1つの Ctx で実行する
 eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。時計と I/O の待ちを受け持つ
 eml_tls          rustls のクライアント接続を包む TLS の状態 (I/O を持たない)。aws-lc-rs の provider と webpki-roots を使い、eml のどの crate にも依存しない
+eml_native       Cranelift の橋渡しの関数と、C のライブラリと記号の解決 (Linker::link が Linked を作る)。eml_extern と eml_cabi だけに依存する
 eml_cabi         C の関数を呼ぶコードのポインタ (Bridge、Dtor、CCall、Linked)。eml_extern だけに依存する
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。最適化と evidence passing のパスと、LIR への変換
@@ -95,6 +97,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 - aws-lc-sys は、target の C のツールチェーンだけで組めることを前提にする。対応する OS か `nix build` で、組めない、リンクできない、動かないときは、OS ごとのツールや環境変数を足さず、provider を ring に替える。ring でも同じことが起きたら、設計から決め直す
 - `eml_lir` は、workspace の crate では `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
 - `eml_cabi` は、`eml_cabi → eml_extern` の辺だけを持つ葉の crate である。`Ctx` に関わらないコードのポインタだけを持つ
+- `eml_native` は、workspace の crate では `eml_native → eml_extern` と `eml_native → eml_cabi` の辺だけを持ち、Cranelift の5つの crate と libloading に依存する。`eml_vm` は `eml_native` にも Cranelift にも依存しない。CI の test の job の手順 `dependency edges of eml_native` が、この2つと、`eml_extern` の `src/` に `unsafe` がないことを確かめる
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである。表 (`Extern`、`ExternType`、`ExternEffect`) は `table!` が1つの並びから変種、`ALL`、静的な行を作り、`row` は行への参照を返す。VM のコード生成は `self as usize` を行の番号に使い、VM は `ALL` で引き戻すので、並びが1つなら2つの順は食い違わない
 - `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れて物理メモリを読む `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` と `tls` で、`tls` は `eml_vm/tls`、`eml_io/tls` の順に feature を有効にする。バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
@@ -398,6 +401,15 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `send_close_notify` は rustls のものを呼ぶだけで、2度目は何もしない。致命的な alert を送った後も何もしない。close_notify を送った後の `write_plain` も、rustls は止めずにレコードを作る。そのため、呼ぶ側がソケットの送る向きを閉じた後に書くと、そのレコードはソケットまで届いてそこで失敗する。close_notify を送った後に相手の壊れたレコードが届くと、rustls は致命的な alert を積む前の `debug_assert!` で panic する。そこで workspace の `Cargo.toml` は dev の profile で rustls の debug assertions を切り、release と同じく `FAILED` になるようにしている
 - `Conn::server` は、テストの driver の終端器とテストのためだけにある。`fixtures` はこの2つと `examples/https_server.rs` が使う。`fixtures` の鍵は公開されたテスト用の定数で、何も認証しない
 - `examples/https_server.rs` は `bench/scripts.sh` の行 `https-get` の相手である。`Conn` を使わず、rustls の `StreamOwned` でブロックするソケットに書く。計測の相手は I/O を持たない形である必要がないためである。動き方は [計測の基準](benchmarks.md) の「スクリプトの計測」にある
+
+## `eml_native` の内部
+
+- `bridge.rs` の `Bridges` は、`CSignature` ごとの橋渡しの関数を cranelift-jit で作り、署名で引く表に持つ。ISA は `cranelift_native` で動いている機械に合わせ、`opt_level=speed`、`is_pic=false` にする。`JITModule` は空でない最初の要求で作るので、C の関数のないプログラムは JIT の費用を払わない。1回の `get` は、まだない署名をまとめて定義し、`finalize_definitions` を1回だけ呼ぶ。`free_memory` は呼ばない。cranelift-jit の既定の memory provider は、`JITModule` を落とすと確保を忘れる (`mem::forget`) だけなので、作ったコードは map されたままプロセスの間ずっと残る。橋渡しの CLIF の形は [VM](../spec/vm.md) の「橋渡しの関数」にある
+- `library.rs` は、名前の飾り (`candidates`)、動いている OS (`running_os`)、開いたライブラリの表 `Libraries` を持つ。`Libraries` は、`link` から開いたライブラリを最初の候補の道で引く表と、プロセスの範囲のライブラリを持つ。どれも最初に使うときに開き、`ManuallyDrop<libloading::Library>` で持って閉じない
+- `linker.rs` の `Linker` は、`--link` の上書き、登録した記号、`Libraries`、`Bridges` を持つ。`link` は、関数とハンドルの dtor の記号をすべて解決してから、関数の `c_signature()` について `Bridges::get` を1回呼び、入力に並びをそろえた `Linked` を返す。解決の順は [VM](../spec/vm.md) の「ライブラリと記号」にある。`Linker` は `Send` で、`Sync` は要らない
+- `error.rs` の `LinkError` は、`Library`、`Symbol`、`UnknownOverride`、`Unsupported` の4つの変種を持ち、文言は固定である
+- trait はない。呼び手はプログラムを持ってから読み込む前につなぎ、結果の `Linked` の値を渡す。VM の側に linker も、それを作る関数も置かない
+- `unsafe` を書いてよいのは `bridge.rs`、`library.rs`、`linker.rs` だけである ([テスト戦略](testing.md) の「`eml_native` の検証」)
 
 ## ソースファイルと位置
 

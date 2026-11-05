@@ -12,6 +12,7 @@ eml_diagnostics = { path = "crates/eml_diagnostics" }
 eml_syntax = { path = "crates/eml_syntax" }
 eml_extern = { path = "crates/eml_extern" }
 eml_cabi = { path = "crates/eml_cabi" }
+eml_native = { path = "crates/eml_native" }
 eml_hir = { path = "crates/eml_hir" }
 eml_types = { path = "crates/eml_types" }
 eml_core_ir = { path = "crates/eml_core_ir" }
@@ -24,9 +25,15 @@ eml_cli = { path = "crates/eml_cli", default-features = false }
 eml_test_support = { path = "crates/eml_test_support", default-features = false }
 ariadne = "0.6"
 clap = { version = "4.6", features = ["derive"] }
+cranelift-codegen = "0.137"
+cranelift-frontend = "0.137"
+cranelift-jit = "0.137"
+cranelift-module = "0.137"
+cranelift-native = "0.137"
 insta = "1.49"
 la-arena = "0.3"
 libc = "0.2"
+libloading = "0.9"
 logos = "0.16"
 rustyline = { version = "19.0.0", default-features = false, features = ["buffer-redux"] }
 rowan = "0.17"

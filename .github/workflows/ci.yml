@@ -91,6 +91,14 @@ jobs:
           test "$(cargo tree --workspace -e features -i eml_vm | grep -c 'eml_vm feature "tls"')" -ge 1
           test "$(cargo tree -p eml_vm -p eml_io -e normal,dev,build --target all | grep -c -E 'eml_tls|aws-lc|ring v')" -eq 0
           test "$(cargo tree --workspace --exclude eml_tls --no-default-features --features eml_cli/run,eml_test_support/run -e normal,dev,build --target all | grep -c -E 'eml_tls|aws-lc|ring v')" -eq 0
+      # VM は Cranelift に依存せず、eml_native は eml_extern と eml_cabi のほかのワークスペースの crate に依存せず、
+      # extern の表は unsafe を持たない (docs/implementation/architecture.md の「crate の依存関係」)
+      - name: dependency edges of eml_native
+        if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
+        run: |
+          test "$(cargo tree -p eml_vm -e normal --target all | grep -c cranelift)" -eq 0
+          test "$(cargo tree -p eml_native -e normal --target all | grep -c -E 'eml_rt|eml_lir|eml_vm')" -eq 0
+          test -z "$(grep -rn unsafe crates/eml_extern/src)"
 
   fmt:
     runs-on: ubuntu-24.04
