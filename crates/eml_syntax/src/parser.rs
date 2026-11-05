@@ -48,6 +48,9 @@ pub(crate) struct Parser<'t> {
     /// `measure` の中で深さが届いた最大。
     peak: u32,
     too_deep: bool,
+    /// `extern "C"` の署名の型を読む間だけ真にする。型の parser は、そのときだけ原子の型の後の `as` を幅として読む
+    /// (docs/spec/grammar.md の「文法上の補足」)。
+    pub(crate) c_widths: bool,
 }
 
 impl<'t> Parser<'t> {
@@ -63,6 +66,7 @@ impl<'t> Parser<'t> {
             depth: 0,
             peak: 0,
             too_deep: false,
+            c_widths: false,
         }
     }
 
@@ -163,6 +167,14 @@ impl<'t> Parser<'t> {
         let text = self.text;
         self.tokens
             .get(self.pos)
+            .map_or("", |token| &text[token.range])
+    }
+
+    /// `n` 個先のトークンのテキスト。文脈で決まる語 (`link`、`on` など) を字面で見分けるのに使う。
+    pub(crate) fn nth_text(&self, n: usize) -> &'t str {
+        let text = self.text;
+        self.tokens
+            .get(self.pos + n)
             .map_or("", |token| &text[token.range])
     }
 
@@ -272,20 +284,6 @@ impl<'t> Parser<'t> {
             return;
         }
         let range = self.error_range();
-        self.push_error(range, code, message, label);
-    }
-
-    /// 直前に読んだトークンを指す。`pub` のように、続くトークンを見て初めて誤りとわかるトークンのため。
-    pub(crate) fn error_at_previous(
-        &mut self,
-        code: ErrorCode,
-        message: impl Into<String>,
-        label: impl Into<String>,
-    ) {
-        if self.too_deep {
-            return;
-        }
-        let range = self.tokens[self.pos - 1].range;
         self.push_error(range, code, message, label);
     }
 

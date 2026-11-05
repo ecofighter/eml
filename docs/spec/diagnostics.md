@@ -67,6 +67,7 @@ struct Fix {
 | E0015 | `BLOCK_CLOSED_BY_COMMA` | 行の途中の `,` がブロックを閉じた後、次の行がそのブロックの列から始まる ([レイアウト規則](layout.md) の規則 4) |
 | E0016 | `INVALID_CHAR_LITERAL` | 文字のリテラルの形の誤り (本文が空、またはスカラー値が2つ以上。[字句](lexical.md) の「数値と文字」) |
 | E0017 | `UNTERMINATED_QUOTE` | コマンドリテラルの閉じていない `'` ([字句](lexical.md) の「コマンドリテラル」) |
+| E0018 | `EXTERN_C_ATTRIBUTES` | `extern "C"` の属性と `link` の item の形の誤り (同じ属性を2回、`pure` と `blocking` の両方、`extern "C" data` の上の属性、`symbol` と `drop` の後の文字列がない、補間のある C の名前、形の崩れた `link`、ABI のない属性。[文法](grammar.md) の「文法上の補足」) |
 | E1001 | `UNDEFINED_NAME` | 未定義の値の名前 |
 | E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前、本体の注釈に書いたシグネチャにない型変数と row 変数 |
 | E1003 | `DUPLICATE_DEFINITION` | 同じ名前空間でのトップレベルの定義の重複 |

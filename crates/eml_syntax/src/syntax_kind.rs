@@ -150,6 +150,17 @@ pub enum SyntaxKind {
     DERIVING,
     /// instance の中の `extern (==)`。std だけが書ける (HIR の E1033)。
     EXTERN_METHOD,
+    /// `extern "C"` の ABI の文字列。子は `STRING_LIT` である。
+    ABI,
+    /// `extern "C"` の属性1つ。`pure`、`blocking`、`symbol` は `LIDENT` のまま入り、`symbol` は `STRING_LIT` も持つ
+    /// (docs/spec/grammar.md の「文法上の補足」)。
+    C_ATTR,
+    /// `extern "C" data` の `drop` と `STRING_LIT`。
+    C_DROP,
+    /// C の署名の中の `as` と幅の `LIDENT`。原子の型の `PATH_TYPE` の子である。
+    C_WIDTH,
+    /// `link on <os> "…"` と `link on macos framework "…"`。語はどれも `LIDENT` のまま入る。
+    LINK_ITEM,
 
     BLOCK,
     LET_STMT,

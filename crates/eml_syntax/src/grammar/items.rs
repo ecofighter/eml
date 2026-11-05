@@ -18,11 +18,22 @@ enum ItemKind {
     OperatorEquation,
     /// `=>` を演算子として定義しようとした等式やシグネチャ。E0011 にし、次の項目から回復する。
     ReservedOperator,
+    /// `link on <os> "…"`。
+    Link,
 }
 
 /// 今の位置から始まる項目の種類。`pub`、`abstract`、`extern` は項目の前置きなので、ここでは見ない。`at_item_start` と `item` が同じ判定を
 /// 使うため、項目の種類を足すときはここだけを直す。
 fn item_kind(p: &Parser) -> Option<ItemKind> {
+    if at_link(p) {
+        return Some(ItemKind::Link);
+    }
+    member_kind(p)
+}
+
+/// `item_kind` から最上位でだけ書ける `link` の item を除いたもの。クラスと instance のメンバーはこちらで見るので、
+/// メンバーの `link on linux "a" = 1` は既定の等式のままである。
+fn member_kind(p: &Parser) -> Option<ItemKind> {
     Some(match p.current() {
         DATA_KW => ItemKind::Data,
         TYPE_KW => ItemKind::Type,
@@ -76,6 +87,16 @@ fn has_top_level_eq(p: &Parser) -> bool {
     }
 }
 
+/// `link`、`on`、`framework` は識別子のままで、この並びでだけ字面で見分ける。等式より先に見るので、この形の等式は
+/// 書けない (docs/spec/grammar.md の「文法上の補足」)。
+fn at_link(p: &Parser) -> bool {
+    p.current_text() == "link"
+        && p.nth(1) == LIDENT
+        && p.nth_text(1) == "on"
+        && p.nth(2) == LIDENT
+        && (p.nth(3) == STRING_START || (p.nth(3) == LIDENT && p.nth_text(3) == "framework"))
+}
+
 /// `LIDENT` の直後が `-` なら、演算子の定義 (`a - b = ...`) とみなす。関数の定義とは2トークンの先読みで区別する。
 fn at_equation(p: &Parser) -> bool {
     p.at(LIDENT) && (p.nth(1) == EQ || (p.nth(1) != MINUS && patterns::at_apat_start_at(p, 1)))
@@ -103,7 +124,7 @@ fn at_reserved_operator(p: &Parser) -> bool {
         || patterns::apat_len(p).is_some_and(|len| p.nth(len) == FAT_ARROW)
 }
 
-/// 項目を1つ読み、import 以外の項目だったかを返す。`declared` は、ファイルの中でこれより前に import 以外の項目があったか。
+/// 項目を1つ読み、import と `link` 以外の項目だったかを返す。`declared` は、ファイルの中でこれより前にそのような項目があったか。
 pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
     let m = p.start();
     // `abstract pub` は `extern pub` と同じく、E0011 を1つ出して `pub abstract` と読む
@@ -130,10 +151,18 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
             "write `pub extern`",
         );
     }
+    let extern_at = p.position();
     let external = p.eat(EXTERN_KW);
     if misordered {
         p.bump(PUB_KW);
     }
+    let abi = external && p.at(STRING_START);
+    if abi {
+        let n = p.start();
+        c_string(p);
+        n.complete(p, ABI);
+    }
+    let first_attr = if external { c_attrs(p, abi) } else { None };
     let kind = item_kind(p);
     // `abstract` は `pub data` と `pub effect` にだけ付く (docs/spec/grammar.md の `item`)。誤りは `abstract` のトークンに
     // 1つだけ出し、項目は `abstract` がないものとして読む。項目がないときは「項目がない」誤りだけにする
@@ -169,32 +198,53 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
                 "`pub` cannot be written on an instance",
                 "an instance is visible everywhere",
             ),
+            Some(ItemKind::Link) => p.error_at(
+                pub_at,
+                codes::SYNTAX_ERROR,
+                "`pub` cannot be written on a `link` item",
+                "a `link` item belongs to its module",
+            ),
             _ => {}
         }
     }
     // `extern` は、等式のないシグネチャ、`=` のない `data`、型引数のない `effect` にだけ付く
     // (docs/spec/grammar.md の `item`)
+    // `extern "C"` の後に書けるのは署名と `data` だけである (docs/spec/grammar.md の `c_decl`)
     if external
         && !misordered
-        && kind.is_some_and(|kind| {
-            !matches!(
-                kind,
-                ItemKind::Signature
-                    | ItemKind::Data
-                    | ItemKind::Effect
-                    | ItemKind::ReservedOperator
-            )
+        && kind.is_some_and(|kind| match kind {
+            ItemKind::Signature | ItemKind::Data | ItemKind::ReservedOperator => false,
+            ItemKind::Effect => abi,
+            _ => true,
         })
     {
-        p.error_at_previous(
+        p.error_at(
+            extern_at,
             codes::SYNTAX_ERROR,
             "`extern` cannot be written on this item",
-            "`extern` goes on a signature, a `data` without `=`, or an `effect` without parameters",
+            if abi {
+                "`extern \"C\"` goes on a signature or a `data` without `=`"
+            } else {
+                "`extern` goes on a signature, a `data` without `=`, or an `effect` without parameters"
+            },
+        );
+    }
+    // 属性は C の関数の署名にだけ付く。ABI のない属性は `c_attrs` が、ABI の後の `data` 以外の項目は上の誤りが
+    // 報告済みなので重ねない
+    if let Some((at, word)) = first_attr
+        && abi
+        && matches!(kind, Some(ItemKind::Data))
+    {
+        p.error_at(
+            at,
+            codes::EXTERN_C_ATTRIBUTES,
+            format!("`{word}` is only allowed on an `extern \"C\"` function"),
+            "write the attributes on a C function's signature",
         );
     }
     match kind {
-        Some(ItemKind::Data) if external => extern_data(p, m),
-        Some(ItemKind::Effect) if external => extern_effect(p, m),
+        Some(ItemKind::Data) if external => extern_data(p, m, abi),
+        Some(ItemKind::Effect) if external && !abi => extern_effect(p, m),
         Some(ItemKind::Data) => data_item(p, m),
         Some(ItemKind::Type) => type_item(p, m),
         Some(ItemKind::Effect) => effect_item(p, m),
@@ -203,10 +253,11 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
         Some(ItemKind::Class) => class_item(p, m),
         Some(ItemKind::Instance) => instance_item(p, m),
         Some(ItemKind::Reserved) => reserved_item(p, m),
-        Some(ItemKind::Signature) => signature(p, m),
+        Some(ItemKind::Signature) => signature(p, m, abi),
         Some(ItemKind::Equation) => equation(p, m),
         Some(ItemKind::OperatorEquation) => operator_equation(p, m),
         Some(ItemKind::ReservedOperator) => reserved_operator(p, m, false),
+        Some(ItemKind::Link) => link_item(p, m),
         None => {
             // `pub` の後ろに項目がない
             p.error(
@@ -218,12 +269,125 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
             m.complete(p, ERROR);
         }
     }
-    // 項目のない `pub` は宣言ではないので、後ろの import を E0011 にしない
-    kind.is_some_and(|kind| !matches!(kind, ItemKind::Import))
+    // 項目のない `pub` は宣言ではないので、後ろの import を E0011 にしない。`link` の item はファイルのどこにでも書けるので
+    // (docs/spec/grammar.md の「文法上の補足」)、宣言に数えない
+    kind.is_some_and(|kind| !matches!(kind, ItemKind::Import | ItemKind::Link))
 }
 
-/// signature ::= var ':' type 、var ::= LIDENT | '(' OP ')'
-fn signature(p: &mut Parser, m: Marker) {
+/// c_attr ::= 'pure' | 'blocking' | 'symbol' STRING。語は識別子のままで、`pure : …` のような同じ名前の署名と
+/// 取り違えないよう、後ろが `:` でない間だけ属性として読む (docs/spec/grammar.md の「文法上の補足」)。最初の属性の
+/// 位置と語を返す。
+fn c_attrs(p: &mut Parser, abi: bool) -> Option<(usize, &'static str)> {
+    let mut first = None;
+    let mut seen: Vec<&'static str> = Vec::new();
+    while let Some(word) = c_attr_word(p) {
+        if first.is_none() {
+            first = Some((p.position(), word));
+            if !abi {
+                p.error(
+                    codes::EXTERN_C_ATTRIBUTES,
+                    "attributes need `extern \"C\"`",
+                    "write `extern \"C\"` before the attributes",
+                );
+            }
+        }
+        if seen.contains(&word) {
+            p.error(
+                codes::EXTERN_C_ATTRIBUTES,
+                format!("`{word}` is written twice"),
+                "an attribute is written once",
+            );
+        } else if matches!(word, "pure" | "blocking")
+            && seen.iter().any(|seen| matches!(*seen, "pure" | "blocking"))
+        {
+            p.error(
+                codes::EXTERN_C_ATTRIBUTES,
+                "`pure` and `blocking` cannot both be written",
+                "write one of them",
+            );
+        }
+        seen.push(word);
+        let m = p.start();
+        p.bump(LIDENT);
+        if word == "symbol" {
+            if p.at(STRING_START) {
+                c_string(p);
+            } else {
+                p.error(
+                    codes::EXTERN_C_ATTRIBUTES,
+                    "`symbol` needs a string",
+                    format!("found {}", describe(p)),
+                );
+            }
+        }
+        m.complete(p, C_ATTR);
+    }
+    first
+}
+
+fn c_attr_word(p: &Parser) -> Option<&'static str> {
+    if !p.at(LIDENT) || p.nth(1) == COLON {
+        return None;
+    }
+    let text = p.current_text();
+    ["pure", "blocking", "symbol"]
+        .into_iter()
+        .find(|word| *word == text)
+}
+
+/// ABI、記号、dtor、ライブラリの名前の文字列。名前は C の側でそのまま使うので、補間は E0018 にする。CST は普通の
+/// 文字列と同じに組む。
+fn c_string(p: &mut Parser) {
+    let mut n = 1;
+    while matches!(p.peek(n), STRING_TEXT | ESCAPE) {
+        n += 1;
+    }
+    if p.peek(n) == INTERP_START {
+        p.error_at(
+            p.position() + n,
+            codes::EXTERN_C_ATTRIBUTES,
+            "a C name is a plain string",
+            "remove the interpolation",
+        );
+    }
+    let m = p.start();
+    expressions::string_lit(p, false);
+    m.complete(p, STRING_LIT);
+}
+
+/// link_decl ::= 'link' 'on' LIDENT (STRING | 'framework' STRING)。OS の名前と、`framework` を書ける OS かは HIR が
+/// 検査する。
+fn link_item(p: &mut Parser, m: Marker) {
+    p.bump(LIDENT);
+    p.bump(LIDENT);
+    p.bump(LIDENT);
+    // `at_link` が4つ目を文字列か `framework` に限っている
+    p.eat(LIDENT);
+    if p.at(STRING_START) {
+        c_string(p);
+    } else {
+        malformed_link(p);
+    }
+    if !p.at_sep() && !p.at_eof() && !p.at(LAYOUT_CLOSE) {
+        malformed_link(p);
+        let e = p.start();
+        skip_to_sep(p, false);
+        e.complete(p, ERROR);
+    }
+    m.complete(p, LINK_ITEM);
+}
+
+fn malformed_link(p: &mut Parser) {
+    p.error(
+        codes::EXTERN_C_ATTRIBUTES,
+        "a `link` item is `link on <os> \"<library>\"` or `link on macos framework \"<name>\"`",
+        format!("found {}", describe(p)),
+    );
+}
+
+/// signature ::= var ':' type 、var ::= LIDENT | '(' OP ')'。`c_widths` は C の署名かどうかで、そのときだけ型の中の
+/// `as` を幅として読む。
+fn signature(p: &mut Parser, m: Marker, c_widths: bool) {
     if p.at(LIDENT) {
         name(p);
     } else {
@@ -237,7 +401,9 @@ fn signature(p: &mut Parser, m: Marker) {
         if has_context_ahead(p) {
             context(p);
         }
+        let outer = std::mem::replace(&mut p.c_widths, c_widths);
         types::type_(p);
+        p.c_widths = outer;
     }
     m.complete(p, SIGNATURE);
 }
@@ -281,14 +447,49 @@ fn data_item(p: &mut Parser, m: Marker) {
 
 /// extern_decl ::= 'data' UIDENT LIDENT*。`Array a` のように要素の型を持つ型があるので型引数は書ける。`=`、`where`、
 /// Kind の注釈は E0011 にして、項目の終わりまで読み飛ばす (docs/spec/grammar.md の `item`)。
-fn extern_data(p: &mut Parser, m: Marker) {
+fn extern_data(p: &mut Parser, m: Marker, abi: bool) {
     p.bump(DATA_KW);
     expect_name(p, UIDENT);
+    // C の型は不透明なハンドルなので型引数を持たない (docs/spec/grammar.md の `c_decl`)。誤って書いた型引数も名前として
+    // 読んで回復する
+    if abi && p.at(LIDENT) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "`extern \"C\" data` cannot have type parameters",
+            "a C type is an opaque handle",
+        );
+    }
     while p.at(LIDENT) {
         name(p);
     }
+    if p.at(DROP_KW) {
+        c_drop(p, abi);
+    }
     reject_extern_tail(p, "data");
     m.complete(p, DATA_ITEM);
+}
+
+/// `extern "C" data T drop "f"` の `drop "f"`。
+fn c_drop(p: &mut Parser, abi: bool) {
+    if !abi {
+        p.error(
+            codes::EXTERN_C_ATTRIBUTES,
+            "attributes need `extern \"C\"`",
+            "write `extern \"C\"` before the attributes",
+        );
+    }
+    let m = p.start();
+    p.bump(DROP_KW);
+    if p.at(STRING_START) {
+        c_string(p);
+    } else {
+        p.error(
+            codes::EXTERN_C_ATTRIBUTES,
+            "`drop` needs a string",
+            format!("found {}", describe(p)),
+        );
+    }
+    m.complete(p, C_DROP);
 }
 
 /// `extern effect` は名前の後に `where` と操作を書ける。型引数と `=` は書けない (docs/spec/declarations.md の
@@ -649,8 +850,8 @@ fn class_member(p: &mut Parser) -> bool {
         p.bump(PUB_KW);
     }
     skip_member_abstract(p);
-    match item_kind(p) {
-        Some(ItemKind::Signature) => signature(p, m),
+    match member_kind(p) {
+        Some(ItemKind::Signature) => signature(p, m, false),
         Some(ItemKind::Equation) => equation(p, m),
         Some(ItemKind::OperatorEquation) => operator_equation(p, m),
         Some(ItemKind::ReservedOperator) => reserved_operator(p, m, true),
@@ -728,14 +929,14 @@ fn instance_member(p: &mut Parser) -> bool {
         m.complete(p, EXTERN_METHOD);
         return true;
     }
-    match item_kind(p) {
+    match member_kind(p) {
         Some(ItemKind::Signature) => {
             p.error(
                 codes::SYNTAX_ERROR,
                 "an instance cannot have signatures",
                 "the type of a method comes from its class",
             );
-            signature(p, m);
+            signature(p, m, false);
         }
         Some(ItemKind::Equation) => equation(p, m),
         Some(ItemKind::OperatorEquation) => operator_equation(p, m),

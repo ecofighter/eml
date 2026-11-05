@@ -39,6 +39,8 @@ class instance deriving
 
 `forall` を予約する。項目の位置に書くと E0011 になる。
 
+`pure`、`blocking`、`symbol`、`link`、`on`、`framework` はキーワードでなく、小文字の識別子である。parser が `extern "C"` の属性と `link` の item の位置でだけ字面で見分けるので、ほかの所では名前に使える ([文法](grammar.md) の「文法上の補足」)。キーワードの `as` は、`import` の別名のほかに、`extern "C"` の署名の中で C の幅を書くのにも使う。
+
 `true` / `false` はキーワードではない。`Bool` は組み込みの `data Bool = | False | True` で、値は `True` / `False` と書く。
 
 ## 演算子

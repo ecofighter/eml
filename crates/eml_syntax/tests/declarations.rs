@@ -750,3 +750,283 @@ fn misplaced_abstract_is_one_error_at_abstract() {
     // `abstract pub` は `pub abstract` と読み直す
     assert_eq!(item_kinds("abstract pub data V = | V"), ["DATA_ITEM"]);
 }
+
+#[test]
+fn extern_c_signature_with_attributes() {
+    insta::assert_snapshot!(shape("pub extern \"C\" pure symbol \"cos\" cosine : Float -> Float"), @r#"
+    SOURCE_FILE
+      SIGNATURE
+        PUB_KW "pub"
+        EXTERN_KW "extern"
+        ABI
+          STRING_LIT
+            STRING_START "\""
+            STRING_TEXT "C"
+            STRING_END "\""
+        C_ATTR
+          LIDENT "pure"
+        C_ATTR
+          LIDENT "symbol"
+          STRING_LIT
+            STRING_START "\""
+            STRING_TEXT "cos"
+            STRING_END "\""
+        NAME
+          LIDENT "cosine"
+        COLON ":"
+        FN_TYPE
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Float"
+          THIN_ARROW "->"
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Float"
+    "#);
+}
+
+#[test]
+fn extern_c_data_with_drop() {
+    insta::assert_snapshot!(shape("extern \"C\" data File drop \"fclose\"\nextern \"C\" data Handle"), @r#"
+    SOURCE_FILE
+      DATA_ITEM
+        EXTERN_KW "extern"
+        ABI
+          STRING_LIT
+            STRING_START "\""
+            STRING_TEXT "C"
+            STRING_END "\""
+        DATA_KW "data"
+        NAME
+          UIDENT "File"
+        C_DROP
+          DROP_KW "drop"
+          STRING_LIT
+            STRING_START "\""
+            STRING_TEXT "fclose"
+            STRING_END "\""
+      DATA_ITEM
+        EXTERN_KW "extern"
+        ABI
+          STRING_LIT
+            STRING_START "\""
+            STRING_TEXT "C"
+            STRING_END "\""
+        DATA_KW "data"
+        NAME
+          UIDENT "Handle"
+    "#);
+    // `extern "C"` の後に書けるのは署名と型引数のない `data` だけで、ほかの形は E0011 である
+    let report: Vec<String> = [
+        "extern \"C\" data T a drop \"f\"",
+        "extern \"C\" effect E where\n  op : Unit -> Unit",
+        "extern \"C\" symbol \"e\" effect E where\n  op : Unit -> Unit",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"extern \\\"C\\\" data T a drop \\\"f\\\"\" => [\"E0011 1:19 `extern \\\"C\\\" data` cannot have type parameters\"]",
+        "\"extern \\\"C\\\" effect E where\\n  op : Unit -> Unit\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
+        "\"extern \\\"C\\\" symbol \\\"e\\\" effect E where\\n  op : Unit -> Unit\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
+    ]
+    "#);
+}
+
+#[test]
+fn link_items_named_framework_and_path() {
+    let text = lines(&[
+        "link on linux \"libm.so.6\"",
+        "link on macos framework \"Accelerate\"",
+    ]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      LINK_ITEM
+        LIDENT "link"
+        LIDENT "on"
+        LIDENT "linux"
+        STRING_LIT
+          STRING_START "\""
+          STRING_TEXT "libm.so.6"
+          STRING_END "\""
+      LINK_ITEM
+        LIDENT "link"
+        LIDENT "on"
+        LIDENT "macos"
+        LIDENT "framework"
+        STRING_LIT
+          STRING_START "\""
+          STRING_TEXT "Accelerate"
+          STRING_END "\""
+    "#);
+}
+
+#[test]
+fn a_link_shaped_line_is_a_link_item() {
+    // `link on <ident>` の後が文字列か `framework` のときだけ `link` の item で、ほかは等式のまま読む
+    assert_eq!(item_kinds("link on linux \"m\""), ["LINK_ITEM"]);
+    // `link` の item は宣言に数えないので、後ろに import を書ける
+    assert_eq!(
+        diagnostics("link on linux \"m\"\nimport M"),
+        Vec::<String>::new()
+    );
+    assert_eq!(item_kinds("link on os = 1"), ["EQUATION"]);
+    assert_eq!(item_kinds("link on os x = 1"), ["EQUATION"]);
+    assert_eq!(item_kinds("link x = 1"), ["EQUATION"]);
+    // `link` の item は最上位にだけあるので、クラスと instance の中では等式のままである
+    let members = lines(&[
+        "class C a where",
+        "  link : a -> a",
+        "  link on linux \"a\" = on",
+        "instance C Int where",
+        "  link on linux \"a\" = on",
+    ]);
+    assert_eq!(diagnostics(&members), Vec::<String>::new());
+    let report: Vec<String> = ["link on os \"a\" = 1", "link on os framework = 1"]
+        .iter()
+        .map(|text| format!("{text:?} => {:?} {:?}", item_kinds(text), diagnostics(text)))
+        .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"link on os \\\"a\\\" = 1\" => [\"LINK_ITEM\"] [\"E0018 1:16 a `link` item is `link on <os> \\\"<library>\\\"` or `link on macos framework \\\"<name>\\\"`\"]",
+        "\"link on os framework = 1\" => [\"LINK_ITEM\"] [\"E0018 1:22 a `link` item is `link on <os> \\\"<library>\\\"` or `link on macos framework \\\"<name>\\\"`\"]",
+    ]
+    "#);
+}
+
+#[test]
+fn pure_is_still_a_variable_name() {
+    let text = lines(&[
+        "pure : Int -> Int",
+        "pure x = x",
+        "symbol = pure 1",
+        "blocking = symbol",
+        "extern pure : Int",
+        "extern \"C\" pure pure : Float -> Float",
+    ]);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+    assert_eq!(
+        item_kinds(&text),
+        [
+            "SIGNATURE",
+            "EQUATION",
+            "EQUATION",
+            "EQUATION",
+            "SIGNATURE",
+            "SIGNATURE"
+        ]
+    );
+}
+
+#[test]
+fn duplicate_attribute_is_e0018() {
+    let report: Vec<String> = [
+        "extern \"C\" pure pure f : Int -> Int",
+        "extern \"C\" symbol \"a\" symbol \"b\" f : Int -> Int",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"extern \\\"C\\\" pure pure f : Int -> Int\" => [\"E0018 1:17 `pure` is written twice\"]",
+        "\"extern \\\"C\\\" symbol \\\"a\\\" symbol \\\"b\\\" f : Int -> Int\" => [\"E0018 1:23 `symbol` is written twice\"]",
+    ]
+    "#);
+}
+
+#[test]
+fn pure_with_blocking_is_e0018() {
+    let report: Vec<String> = [
+        "extern \"C\" pure blocking f : Int -> Int",
+        "extern \"C\" blocking symbol \"g\" pure f : Int -> Int",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"extern \\\"C\\\" pure blocking f : Int -> Int\" => [\"E0018 1:17 `pure` and `blocking` cannot both be written\"]",
+        "\"extern \\\"C\\\" blocking symbol \\\"g\\\" pure f : Int -> Int\" => [\"E0018 1:32 `pure` and `blocking` cannot both be written\"]",
+    ]
+    "#);
+}
+
+#[test]
+fn symbol_without_a_string_is_e0018() {
+    let report: Vec<String> = [
+        "extern \"C\" symbol f : Int -> Int",
+        "extern \"C\" data T drop",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"extern \\\"C\\\" symbol f : Int -> Int\" => [\"E0018 1:19 `symbol` needs a string\"]",
+        "\"extern \\\"C\\\" data T drop\" => [\"E0018 1:23 `drop` needs a string\"]",
+    ]
+    "#);
+}
+
+#[test]
+fn interpolated_c_name_is_e0018() {
+    let report: Vec<String> = [
+        "extern \"C\" symbol \"f\\{x}\" f : Int -> Int",
+        "extern \"C\" data T drop \"\\{x}\"",
+        "link on linux \"lib\\{x}.so\"",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"extern \\\"C\\\" symbol \\\"f\\\\{x}\\\" f : Int -> Int\" => [\"E0018 1:21 a C name is a plain string\"]",
+        "\"extern \\\"C\\\" data T drop \\\"\\\\{x}\\\"\" => [\"E0018 1:25 a C name is a plain string\"]",
+        "\"link on linux \\\"lib\\\\{x}.so\\\"\" => [\"E0018 1:19 a C name is a plain string\"]",
+    ]
+    "#);
+}
+
+#[test]
+fn malformed_link_is_e0018() {
+    let report: Vec<String> = [
+        "link on macos framework",
+        "link on linux \"a\" \"b\"",
+        "pub link on linux \"a\"",
+        "extern link on linux \"a\"",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"link on macos framework\" => [\"E0018 1:24 a `link` item is `link on <os> \\\"<library>\\\"` or `link on macos framework \\\"<name>\\\"`\"]",
+        "\"link on linux \\\"a\\\" \\\"b\\\"\" => [\"E0018 1:19 a `link` item is `link on <os> \\\"<library>\\\"` or `link on macos framework \\\"<name>\\\"`\"]",
+        "\"pub link on linux \\\"a\\\"\" => [\"E0011 1:1 `pub` cannot be written on a `link` item\"]",
+        "\"extern link on linux \\\"a\\\"\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
+    ]
+    "#);
+}
+
+#[test]
+fn attributes_without_an_abi_are_e0018() {
+    let report: Vec<String> = [
+        "extern pure f : Int -> Int",
+        "extern data T drop \"f\"",
+        "extern \"C\" pure data T",
+    ]
+    .iter()
+    .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+    .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"extern pure f : Int -> Int\" => [\"E0018 1:8 attributes need `extern \\\"C\\\"`\"]",
+        "\"extern data T drop \\\"f\\\"\" => [\"E0018 1:15 attributes need `extern \\\"C\\\"`\"]",
+        "\"extern \\\"C\\\" pure data T\" => [\"E0018 1:12 `pure` is only allowed on an `extern \\\"C\\\"` function\"]",
+    ]
+    "#);
+}

@@ -522,3 +522,108 @@ fn a_row_parameter_cannot_be_bounded() {
         ["E0011 1:9 a row parameter of `data` cannot have a bound"]
     );
 }
+
+#[test]
+fn as_binds_before_the_row_and_the_tuple() {
+    let text = lines(&[
+        "extern \"C\" f : Int as int -> <IO, Panic> Int as int",
+        "extern \"C\" g : Int -> <IO> (Int as int, MutUnboxedArray Float)",
+    ]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      SIGNATURE
+        EXTERN_KW "extern"
+        ABI
+          STRING_LIT
+            STRING_START "\""
+            STRING_TEXT "C"
+            STRING_END "\""
+        NAME
+          LIDENT "f"
+        COLON ":"
+        FN_TYPE
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Int"
+            C_WIDTH
+              AS_KW "as"
+              LIDENT "int"
+          THIN_ARROW "->"
+          EFFECT_ROW
+            L_ANGLE "<"
+            EFFECT
+              PATH
+                NAME_REF
+                  UIDENT "IO"
+            COMMA ","
+            EFFECT
+              PATH
+                NAME_REF
+                  UIDENT "Panic"
+            R_ANGLE ">"
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Int"
+            C_WIDTH
+              AS_KW "as"
+              LIDENT "int"
+      SIGNATURE
+        EXTERN_KW "extern"
+        ABI
+          STRING_LIT
+            STRING_START "\""
+            STRING_TEXT "C"
+            STRING_END "\""
+        NAME
+          LIDENT "g"
+        COLON ":"
+        FN_TYPE
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Int"
+          THIN_ARROW "->"
+          EFFECT_ROW
+            L_ANGLE "<"
+            EFFECT
+              PATH
+                NAME_REF
+                  UIDENT "IO"
+            R_ANGLE ">"
+          TUPLE_TYPE
+            L_PAREN "("
+            PATH_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "Int"
+              C_WIDTH
+                AS_KW "as"
+                LIDENT "int"
+            COMMA ","
+            APP_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "MutUnboxedArray"
+              PATH_TYPE
+                PATH
+                  NAME_REF
+                    UIDENT "Float"
+            R_PAREN ")"
+    "#);
+}
+
+#[test]
+fn as_outside_extern_c_is_not_a_type() {
+    let report: Vec<String> = ["f : Int as int -> Int", "extern f : Int as int"]
+        .iter()
+        .map(|text| format!("{text:?} => {:?}", diagnostics(text)))
+        .collect();
+    insta::assert_debug_snapshot!(report, @r#"
+    [
+        "\"f : Int as int -> Int\" => [\"E0011 1:9 unexpected `as`\"]",
+        "\"extern f : Int as int\" => [\"E0011 1:16 unexpected `as`\"]",
+    ]
+    "#);
+}
