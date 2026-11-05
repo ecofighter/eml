@@ -3,6 +3,8 @@
 //! driver はヒープの語にも RC にも触れず、`RawBuf` を通してだけ記憶に届く。そのため `Host` の trait と同じく
 //! `verus!` の外に置く。`external_body` を持たないので、信頼の一覧に行は要らない。
 
+use std::any::Any;
+use std::fmt;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -61,8 +63,9 @@ pub enum Op {
     SetNodelay { handle: IoHandle, on: bool },
     /// ブロックする呼び出しのプールの仕事。自分が所有する値 (所有して受け取る入力と、値で返す結果) を通してだけ
     /// 記憶に届き、ヒープにも RC にも触れない。panic しない。本物の driver は、仕事の panic を driver を持つ
-    /// スレッドの上で起こし直すためである。
-    Job(Box<dyn FnOnce() -> io::Result<usize> + Send + 'static>),
+    /// スレッドの上で起こし直すためである。所有した値を返し、`Done::Job` で終わる。失敗は値の中に書くので、
+    /// 完了の `Err` は driver が仕事を走らせられなかったことだけを指す。
+    Job(Box<dyn FnOnce() -> Box<dyn Any + Send> + Send + 'static>),
     /// どの driver にも縛っていない OS の資源を取り込み、`Done::Handle` で返す。いつも受け付けで終わり、受けた
     /// driver の `adopt` と同じ規則で `Submit::Done` を返す。
     Adopt { res: RawResource },
@@ -72,9 +75,8 @@ pub enum Op {
 }
 
 /// 終わった操作の中身。
-#[derive(Debug, PartialEq, Eq)]
 pub enum Done {
-    /// `Readable`、`Read`、`Write`、`Job` の値。`ShutdownWrite`、`SetNodelay`、`Wait` は 0 である。
+    /// `Readable`、`Read`、`Write` の値。`ShutdownWrite`、`SetNodelay`、`Wait` は 0 である。
     Size(usize),
     /// `Listen` が作ったリスナーと、待ち受けるポート。
     Listener { handle: IoHandle, port: u16 },
@@ -85,6 +87,34 @@ pub enum Done {
     Accepted { sock: RawSocket, peer: SocketAddr },
     /// `Adopt` が取り込んだ資源のハンドル。
     Handle(IoHandle),
+    /// `Job` が返した値。受け取る側が型を知っていて、`downcast` で取り出す。
+    Job(Box<dyn Any + Send>),
+}
+
+// 値の仕事の中身は `Debug` を持たないので、`Job` は中を書かない。
+impl fmt::Debug for Done {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Done::Size(n) => f.debug_tuple("Size").field(n).finish(),
+            Done::Listener { handle, port } => f
+                .debug_struct("Listener")
+                .field("handle", handle)
+                .field("port", port)
+                .finish(),
+            Done::Stream { handle, peer } => f
+                .debug_struct("Stream")
+                .field("handle", handle)
+                .field("peer", peer)
+                .finish(),
+            Done::Accepted { sock, peer } => f
+                .debug_struct("Accepted")
+                .field("sock", sock)
+                .field("peer", peer)
+                .finish(),
+            Done::Handle(h) => f.debug_tuple("Handle").field(h).finish(),
+            Done::Job(_) => f.write_str("Job(..)"),
+        }
+    }
 }
 
 /// OS のハンドルの持ち主の型。ファイルと子のパイプを driver と Host の間で受け渡す。
@@ -267,9 +297,11 @@ pub trait IoDriver {
     /// 立てるので、同時に起動するほかの子は子の端を受け継がない。親の端はどの driver にも縛らずに返す。パイプを扱わない
     /// driver と壊れた driver は `Err` を返す (docs/spec/vm.md の「時計と driver」)。
     fn pipe(&mut self, parent_reads: bool) -> io::Result<PipePair>;
-    /// 保留の操作をすべて取り消し、完了がすべて届くまで待って捨て、捨てた完了の中身のハンドルと `bin` のハンドルを
-    /// 閉じる。仕事は上限なしに待ちきり、仕事の panic は待ちきった後で起こし直す。名前の解決は待たない。OS に出した
-    /// 取り消しの終わりが上限までに届かなければ壊れた状態にする。driver が壊れているときは保留を残して戻る
-    /// (呼ぶ側は `pending()` で確かめる)。
-    fn quiesce(&mut self);
+    /// 取り消せる保留の操作をすべて取り消し、完了が届くまで待って捨て、捨てた完了の中身のハンドルと `bin` のハンドルを
+    /// 閉じる。ファイルの読み書きは上限なしに待ちきる。`Op::Job` は `jobs` まで待ち、まだ残るものをそれぞれ見捨てる。
+    /// 走っているものはそのスレッドで走り続け、その答えは捨てる。列で待つものは走らせずに捨てる。見捨てた仕事は、
+    /// それからずっと `pending()` に数える。見捨てても driver は壊れない。待ちきった仕事の panic は、待ち終えた後で
+    /// 起こし直す。名前の解決は待たない。OS に出した取り消しの終わりが上限までに届かなければ壊れた状態にする。driver が
+    /// 壊れているときは保留を残して戻る (呼ぶ側は `pending()` で確かめる)。
+    fn quiesce(&mut self, jobs: Duration);
 }

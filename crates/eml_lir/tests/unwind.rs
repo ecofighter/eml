@@ -351,3 +351,42 @@ fn f(n.0: int, b.1: obj) -> obj {
 ";
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);
 }
+
+#[test]
+fn a_submit_without_narrowing_is_no_unwind_point() {
+    // 受け付けは範囲を確かめる引数がなければ中断しない。IO の失敗と取り消しは取り出しで起こす
+    let text = "\
+cfn \"M.tick\" symbol \"tick\" blocking link [] (i64) -> i64
+fn f(n.0: int, b.1: obj) -> obj {
+  let r.2: int = extern submit M.tick(n.0)
+  return b.1
+}
+";
+    assert_eq!(points_of(text, "f"), []);
+}
+
+#[test]
+fn a_submit_with_narrowing_is_an_unwind_point() {
+    // 範囲の確かめは記録を作る前に走り、外れると `Panic` を上げる
+    let text = "\
+cfn \"M.tick\" symbol \"tick\" blocking link [] (i32) -> i64
+fn f(n.0: int, b.1: obj) -> obj {
+  let r.2: int = extern submit M.tick(n.0)
+  return b.1
+}
+";
+    assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);
+}
+
+#[test]
+fn a_take_is_an_unwind_point() {
+    // 取り出しは IO の失敗と取り消しをいつも起こしうるので、引数の幅によらず地点になる
+    let text = "\
+cfn \"M.tick\" symbol \"tick\" blocking link [] (i64) -> i64
+fn f(op.0: int, w.1: enum, b.2: obj) -> obj {
+  let r.3: int = extern take M.tick(op.0, w.1)
+  return b.2
+}
+";
+    assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
+}

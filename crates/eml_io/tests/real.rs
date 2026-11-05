@@ -140,7 +140,7 @@ fn a_wake_from_another_thread_leaves_a_wait_working() {
     assert!(driver.wait(None).unwrap());
     assert!(start.elapsed() < Duration::from_secs(1));
     ringer.join().unwrap();
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
 }
 
@@ -160,7 +160,7 @@ fn dropping_a_driver_does_not_wait_for_a_running_job() {
             end_tx
                 .send(gate_rx.recv_timeout(Duration::from_secs(10)).is_ok())
                 .unwrap();
-            Ok(0)
+            Box::new(0usize)
         })),
     );
     started.recv().unwrap();
@@ -169,20 +169,30 @@ fn dropping_a_driver_does_not_wait_for_a_running_job() {
     assert!(end.recv().unwrap());
 }
 
+/// `Op::Job` の完了から、仕事が返した箱の値を取り出す。
+fn boxed<T: 'static>(result: std::io::Result<Done>) -> T {
+    match result {
+        Ok(Done::Job(value)) => *value
+            .downcast::<T>()
+            .expect("the job returned another type"),
+        other => panic!("not a job value: {other:?}"),
+    }
+}
+
 #[test]
 fn a_job_completes_with_its_value() {
     let mut driver = RealDriver::new().unwrap();
     let mut stash = Vec::new();
-    let key = submit(&mut driver, Op::Job(Box::new(|| Ok(42))));
+    let key = submit(&mut driver, Op::Job(Box::new(|| Box::new(42usize))));
     assert!(key.done.is_none());
     assert_eq!(driver.pending(), 1);
     let completion = complete(&mut driver, &mut stash, key);
-    assert_eq!(completion.result.unwrap(), Done::Size(42));
+    assert_eq!(boxed::<usize>(completion.result), 42);
     assert_eq!(driver.pending(), 0);
 }
 
-/// プールのスレッドは32本までで、それを超える仕事は driver の中の列で待ち、スレッドが空いてから動く。32 の仕事が
-/// 門で止まっている間も、33 本目の `submit` は呼んだスレッドを止めずに戻る。
+/// 同時に走る `Op::Job` は24までで、それを超える仕事は driver の中の列で待ち、走っている仕事が終わってから動く。24 の
+/// 仕事が門で止まっている間も、25 個目の `submit` は呼んだスレッドを止めずに戻る。
 #[test]
 fn a_job_pool_is_capped() {
     use std::sync::atomic::AtomicUsize;
@@ -194,7 +204,7 @@ fn a_job_pool_is_capped() {
     let finished = Arc::new(AtomicUsize::new(0));
     let mut gates = Vec::new();
     let mut keys = Vec::new();
-    for i in 0..32 {
+    for i in 0..24 {
         let started_tx = started_tx.clone();
         let finished = Arc::clone(&finished);
         let (gate, gate_rx) = mpsc::channel::<()>();
@@ -207,27 +217,31 @@ fn a_job_pool_is_capped() {
                 let opened = gate_rx.recv_timeout(Duration::from_secs(10)).is_ok();
                 finished.fetch_add(1, Ordering::SeqCst);
                 if opened {
-                    Ok(i)
+                    Box::new(Ok::<usize, std::io::Error>(i))
                 } else {
-                    Err(std::io::Error::other("the gate never opened"))
+                    Box::new(Err::<usize, _>(std::io::Error::other(
+                        "the gate never opened",
+                    )))
                 }
             })),
         ));
     }
-    for _ in 0..32 {
+    for _ in 0..24 {
         started.recv().unwrap();
     }
-    // 空いたスレッドがないので、33 本目は列で待つ。ここへ戻れたことが、`submit` が止まらない証拠である。
+    // 上限に達しているので、25 個目は列で待つ。ここへ戻れたことが、`submit` が止まらない証拠である。
     // 列の仕事はほかの仕事が終わってからしか動かないので、動いたときには終わった仕事がある
     let seen = Arc::clone(&finished);
     let last = submit(
         &mut driver,
         Op::Job(Box::new(move || {
-            Ok(if seen.load(Ordering::SeqCst) > 0 {
-                32
-            } else {
-                usize::MAX
-            })
+            Box::new(Ok::<usize, std::io::Error>(
+                if seen.load(Ordering::SeqCst) > 0 {
+                    24
+                } else {
+                    usize::MAX
+                },
+            ))
         })),
     );
     assert!(last.done.is_none());
@@ -237,8 +251,8 @@ fn a_job_pool_is_capped() {
     }
     for (i, key) in keys.into_iter().enumerate() {
         assert_eq!(
-            complete(&mut driver, &mut stash, key).result.unwrap(),
-            Done::Size(i)
+            boxed::<std::io::Result<usize>>(complete(&mut driver, &mut stash, key).result).unwrap(),
+            i
         );
     }
     assert_eq!(driver.pending(), 0);
@@ -267,14 +281,14 @@ fn a_readable_probe_stays_pending_without_data() {
             buf: raw(&mut byte),
         },
     );
-    assert_eq!(
-        complete(&mut driver, &mut stash, write).result.unwrap(),
-        Done::Size(1)
-    );
-    assert_eq!(
-        complete(&mut driver, &mut stash, probe).result.unwrap(),
-        Done::Size(0)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, write).result,
+        Ok(Done::Size(1))
+    ));
+    assert!(matches!(
+        complete(&mut driver, &mut stash, probe).result,
+        Ok(Done::Size(0))
+    ));
     assert_eq!(driver.pending(), 0);
 }
 
@@ -290,10 +304,10 @@ fn a_probe_with_data_finishes_at_submit() {
         handle: b,
         buf: raw(&mut data),
     };
-    assert_eq!(
-        run_op(&mut driver, &mut stash, write).unwrap(),
-        Done::Size(2)
-    );
+    assert!(matches!(
+        run_op(&mut driver, &mut stash, write),
+        Ok(Done::Size(2))
+    ));
     let first = submit(&mut driver, Op::Readable { handle: a });
     complete(&mut driver, &mut stash, first).result.unwrap();
     let probe = driver.submit(next_key(), Op::Readable { handle: a });
@@ -309,10 +323,10 @@ fn a_probe_with_data_finishes_at_submit() {
         handle: a,
         buf: raw(&mut room),
     };
-    assert_eq!(
-        run_op(&mut driver, &mut stash, read).unwrap(),
-        Done::Size(2)
-    );
+    assert!(matches!(
+        run_op(&mut driver, &mut stash, read),
+        Ok(Done::Size(2))
+    ));
     assert_eq!(&room[..2], b"hi");
 }
 
@@ -330,14 +344,14 @@ fn a_read_after_a_probe_returns_the_bytes() {
             buf: raw(&mut data),
         },
     );
-    assert_eq!(
-        complete(&mut driver, &mut stash, write).result.unwrap(),
-        Done::Size(5)
-    );
-    assert_eq!(
-        complete(&mut driver, &mut stash, probe).result.unwrap(),
-        Done::Size(0)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, write).result,
+        Ok(Done::Size(5))
+    ));
+    assert!(matches!(
+        complete(&mut driver, &mut stash, probe).result,
+        Ok(Done::Size(0))
+    ));
     let mut room = [0u8; 16];
     let read = submit(
         &mut driver,
@@ -346,10 +360,10 @@ fn a_read_after_a_probe_returns_the_bytes() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(
-        complete(&mut driver, &mut stash, read).result.unwrap(),
-        Done::Size(5)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, read).result,
+        Ok(Done::Size(5))
+    ));
     assert_eq!(&room[..5], b"hello");
 }
 
@@ -366,10 +380,10 @@ fn a_write_is_read_by_the_peer() {
             buf: raw(&mut data),
         },
     );
-    assert_eq!(
-        complete(&mut driver, &mut stash, write).result.unwrap(),
-        Done::Size(6)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, write).result,
+        Ok(Done::Size(6))
+    ));
     let mut room = [0u8; 16];
     let read = submit(
         &mut driver,
@@ -378,10 +392,10 @@ fn a_write_is_read_by_the_peer() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(
-        complete(&mut driver, &mut stash, read).result.unwrap(),
-        Done::Size(6)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, read).result,
+        Ok(Done::Size(6))
+    ));
     assert_eq!(&room[..6], b"from a");
 }
 
@@ -445,10 +459,10 @@ fn a_closed_peer_reads_eof() {
     let (a, b) = connection(&mut driver, &mut stash);
     let probe = submit(&mut driver, Op::Readable { handle: a });
     driver.close(b);
-    assert_eq!(
-        complete(&mut driver, &mut stash, probe).result.unwrap(),
-        Done::Size(0)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, probe).result,
+        Ok(Done::Size(0))
+    ));
     let mut room = [0u8; 16];
     let read = submit(
         &mut driver,
@@ -457,10 +471,10 @@ fn a_closed_peer_reads_eof() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(
-        complete(&mut driver, &mut stash, read).result.unwrap(),
-        Done::Size(0)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, read).result,
+        Ok(Done::Size(0))
+    ));
 }
 
 /// 相手が読まない端への書きは、送りの buffer が空くまで終わらない。`quiesce` は終わらない読みと書きを取り消し、
@@ -476,7 +490,7 @@ fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
         &mut driver,
         Op::Job(Box::new(|| {
             std::thread::sleep(Duration::from_millis(30));
-            Ok(0)
+            Box::new(0usize)
         })),
     );
     look(&mut driver);
@@ -486,7 +500,7 @@ fn quiesce_drains_a_pending_probe_a_full_write_and_a_running_job() {
     for key in [probe, full, job] {
         assert!(!finished.contains(&key), "op {key} finished early");
     }
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     drop(chunk);
 }
@@ -526,13 +540,13 @@ fn pool_threads_block_interrupt_and_terminate() {
     let key = submit(
         &mut driver,
         Op::Job(Box::new(|| {
-            Ok(usize::from(blocked(libc::SIGINT) && blocked(libc::SIGTERM)))
+            Box::new(usize::from(blocked(libc::SIGINT) && blocked(libc::SIGTERM)))
         })),
     );
     assert!(!blocked(libc::SIGINT) && !blocked(libc::SIGTERM));
     assert_eq!(
-        complete(&mut driver, &mut stash, key).result.unwrap(),
-        Done::Size(1)
+        boxed::<usize>(complete(&mut driver, &mut stash, key).result),
+        1
     );
 }
 
@@ -686,10 +700,10 @@ fn an_accept_returns_the_connected_stream_and_its_peer() {
             buf: raw(&mut data),
         },
     );
-    assert_eq!(
-        complete(&mut driver, &mut stash, write).result.unwrap(),
-        Done::Size(2)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, write).result,
+        Ok(Done::Size(2))
+    ));
     let probe = submit(&mut driver, Op::Readable { handle: server });
     complete(&mut driver, &mut stash, probe).result.unwrap();
     let mut room = [0u8; 8];
@@ -700,12 +714,12 @@ fn an_accept_returns_the_connected_stream_and_its_peer() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(
-        complete(&mut driver, &mut stash, read).result.unwrap(),
-        Done::Size(2)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, read).result,
+        Ok(Done::Size(2))
+    ));
     assert_eq!(&room[..2], b"hi");
-    assert_eq!(
+    assert!(matches!(
         run_op(
             &mut driver,
             &mut stash,
@@ -713,10 +727,9 @@ fn an_accept_returns_the_connected_stream_and_its_peer() {
                 handle: client,
                 on: true
             }
-        )
-        .unwrap(),
-        Done::Size(0)
-    );
+        ),
+        Ok(Done::Size(0))
+    ));
 }
 
 #[test]
@@ -786,10 +799,10 @@ fn a_shutdown_write_gives_the_peer_eof() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(
-        complete(&mut driver, &mut stash, read).result.unwrap(),
-        Done::Size(0)
-    );
+    assert!(matches!(
+        complete(&mut driver, &mut stash, read).result,
+        Ok(Done::Size(0))
+    ));
     assert_eq!(
         run_op(&mut driver, &mut stash, Op::ShutdownWrite { handle: 99 })
             .unwrap_err()
@@ -836,7 +849,7 @@ fn a_long_write_completes_once_with_its_whole_length() {
         },
     );
     let completion = complete(&mut driver, &mut stash, write);
-    assert_eq!(completion.result.unwrap(), Done::Size(8 << 20));
+    assert!(matches!(completion.result, Ok(Done::Size(n)) if n == 8 << 20));
     assert_eq!(driver.pending(), 0);
     driver.completions(&mut stash);
     assert!(stash.is_empty());
@@ -886,7 +899,7 @@ fn a_cancelled_pending_long_write_completes_once() {
     assert!(stash.is_empty(), "{:?}", keys(&stash));
     match completion.result {
         Ok(done) => {
-            assert_eq!(done, Done::Size(PENDING_CHUNK));
+            assert!(matches!(done, Done::Size(n) if n == PENDING_CHUNK));
             assert!(!completion.cancelled);
         }
         Err(e) => {
@@ -986,7 +999,7 @@ fn quiesce_drains_a_pending_accept_and_closes_discarded_streams() {
     peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
     // 接続を driver の中で終わらせ、完了は受け取らない。`quiesce` はその完了を捨て、中身のストリームを閉じる
     poll_for(&mut driver, 20);
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     let mut room = [0u8; 4];
     assert_eq!(peer.read(&mut room).unwrap(), 0);
@@ -1110,7 +1123,7 @@ fn quiesce_does_not_wait_for_a_lookup() {
         },
     );
     GATE.wait_started(1);
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     let mut out = Vec::new();
     driver.completions(&mut out);
@@ -1267,10 +1280,10 @@ fn a_read_after_a_finished_probe_returns_done() {
         handle: b,
         buf: raw(&mut data),
     };
-    assert_eq!(
-        run_op(&mut driver, &mut stash, write).unwrap(),
-        Done::Size(5)
-    );
+    assert!(matches!(
+        run_op(&mut driver, &mut stash, write),
+        Ok(Done::Size(5))
+    ));
     let probe = submit(&mut driver, Op::Readable { handle: a });
     complete(&mut driver, &mut stash, probe).result.unwrap();
     let mut room = [0u8; 16];
@@ -1350,10 +1363,10 @@ fn a_cancel_after_completion_does_not_touch_the_next_op_of_the_key() {
         handle: a,
         buf: raw(&mut room),
     };
-    assert_eq!(
-        run_op(&mut driver, &mut stash, drain).unwrap(),
-        Done::Size(1)
-    );
+    assert!(matches!(
+        run_op(&mut driver, &mut stash, drain),
+        Ok(Done::Size(1))
+    ));
     driver.cancel(key);
     let again = driver.submit(
         key,
@@ -1371,7 +1384,7 @@ fn a_cancel_after_completion_does_not_touch_the_next_op_of_the_key() {
     run_op(&mut driver, &mut stash, write).unwrap();
     let completion = wait_for(&mut driver, &mut stash, key);
     assert!(!completion.cancelled);
-    assert_eq!(completion.result.unwrap(), Done::Size(2));
+    assert!(matches!(completion.result, Ok(Done::Size(2))));
     assert_eq!(&room[..2], b"yz");
 }
 
@@ -1399,8 +1412,8 @@ fn a_submit_closes_dropped_handles() {
 #[should_panic(expected = "a pending key is submitted again")]
 fn a_pending_key_submitted_twice_panics_in_debug() {
     let mut driver = RealDriver::new().unwrap();
-    let key = pending(&mut driver, Op::Job(Box::new(|| Ok(0))));
-    driver.submit(key, Op::Job(Box::new(|| Ok(0))));
+    let key = pending(&mut driver, Op::Job(Box::new(|| Box::new(0usize))));
+    driver.submit(key, Op::Job(Box::new(|| Box::new(0usize))));
 }
 
 /// 閉じたときに FIN でなく RST を送るよう、`s` に linger 0 を立てる。std の `TcpStream::set_linger` は安定していない。
@@ -1527,10 +1540,10 @@ fn a_probe_on_a_stream_that_had_data_before_accept_finishes() {
         handle: server,
         buf: raw(&mut room),
     };
-    assert_eq!(
-        run_op(&mut driver, &mut stash, read).unwrap(),
-        Done::Size(1)
-    );
+    assert!(matches!(
+        run_op(&mut driver, &mut stash, read),
+        Ok(Done::Size(1))
+    ));
 }
 
 /// 1つのストリームで、待つ `Readable` と待つ書きを同時に持てる。相手が書いて読めば、両方が終わる。待ち手は向きごとに
@@ -1552,9 +1565,8 @@ fn a_pending_read_and_a_pending_write_on_one_stream_both_finish() {
         peer.read_to_end(&mut sink).unwrap();
     });
     wait_for(&mut driver, &mut stash, probe).result.unwrap();
-    assert_eq!(
-        wait_for(&mut driver, &mut stash, write).result.unwrap(),
-        Done::Size(chunk.len())
+    assert!(
+        matches!(wait_for(&mut driver, &mut stash, write).result, Ok(Done::Size(n)) if n == chunk.len())
     );
     // 読まないデータを残して閉じると、相手には EOF でなくリセットが届く
     let mut room = [0u8; 4];
@@ -1562,10 +1574,10 @@ fn a_pending_read_and_a_pending_write_on_one_stream_both_finish() {
         handle: a,
         buf: raw(&mut room),
     };
-    assert_eq!(
-        run_op(&mut driver, &mut stash, read).unwrap(),
-        Done::Size(1)
-    );
+    assert!(matches!(
+        run_op(&mut driver, &mut stash, read),
+        Ok(Done::Size(1))
+    ));
     driver.close(a);
     reader.join().unwrap();
     drop(chunk);
@@ -1662,10 +1674,10 @@ fn a_signal_during_a_wait_leaves_the_driver_working() {
         flag.store(true, Ordering::SeqCst);
         driver.cancel(probe);
         assert!(wait_for(&mut driver, &mut stash, probe).cancelled);
-        let job = submit(&mut driver, Op::Job(Box::new(|| Ok(3))));
+        let job = submit(&mut driver, Op::Job(Box::new(|| Box::new(3usize))));
         assert_eq!(
-            complete(&mut driver, &mut stash, job).result.unwrap(),
-            Done::Size(3)
+            boxed::<usize>(complete(&mut driver, &mut stash, job).result),
+            3
         );
     });
     ready.recv().unwrap();
@@ -1762,10 +1774,10 @@ fn an_accepted_socket_is_used_by_the_driver_of_another_thread() {
                 buf: raw(&mut data),
             },
         );
-        assert_eq!(
-            complete(&mut other, &mut stash, write).result.unwrap(),
-            Done::Size(4)
-        );
+        assert!(matches!(
+            complete(&mut other, &mut stash, write).result,
+            Ok(Done::Size(4))
+        ));
     })
     .join()
     .unwrap();
@@ -1819,10 +1831,10 @@ fn a_file_is_written_and_read_through_the_pool() {
             buf: raw(&mut data),
         },
     );
-    assert_eq!(
-        wait_for(&mut driver, &mut stash, write).result.unwrap(),
-        Done::Size(16)
-    );
+    assert!(matches!(
+        wait_for(&mut driver, &mut stash, write).result,
+        Ok(Done::Size(16))
+    ));
     driver.close(writer);
     let reader = adopt_file(&mut driver, std::fs::File::open(&path).unwrap());
     let mut got = [0u8; 32];
@@ -2051,10 +2063,10 @@ fn a_wait_on_an_exited_child_ends() {
     let mut stash = Vec::new();
     let mut kid = Kid::spawn("exit", |_| {});
     let process = kid.process();
-    assert_eq!(
-        run_op(&mut driver, &mut stash, Op::Wait { process }).unwrap(),
-        Done::Size(0)
-    );
+    assert!(matches!(
+        run_op(&mut driver, &mut stash, Op::Wait { process }),
+        Ok(Done::Size(0))
+    ));
     assert!(kid.0.wait().unwrap().success());
 }
 
@@ -2090,7 +2102,7 @@ fn a_wait_on_a_killed_child_ends() {
     kid.0.kill().unwrap();
     let completion = wait_for(&mut driver, &mut stash, wait);
     assert!(!completion.cancelled);
-    assert_eq!(completion.result.unwrap(), Done::Size(0));
+    assert!(matches!(completion.result, Ok(Done::Size(0))));
     assert!(!kid.0.wait().unwrap().success());
 }
 

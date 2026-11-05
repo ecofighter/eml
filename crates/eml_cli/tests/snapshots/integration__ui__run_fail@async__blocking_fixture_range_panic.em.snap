@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/async/blocking_fixture_range_panic.em
+---
+--- stdout ---
+before
+--- stderr ---
+--- runtime error ---
+panicked: argument 1 of `Main.add` does not fit in C `int32_t`: 3000000000
+  at <std>/Async.em:75:9

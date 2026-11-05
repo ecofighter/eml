@@ -6,14 +6,14 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 
-use eml_rt::IoWaker;
+use eml_rt::{Done, IoWaker};
 
 /// driver の中で1度しか使わない番号。鍵は呼ぶ側が使い回すので、スレッドの答えは鍵でなくこれで当てる。
 pub(crate) type Ticket = u64;
 
 pub(crate) enum Answer {
     /// `Err` は仕事の panic の payload
-    Job(thread::Result<io::Result<usize>>),
+    Job(thread::Result<io::Result<Done>>),
     Lookup(io::Result<Vec<SocketAddr>>),
 }
 

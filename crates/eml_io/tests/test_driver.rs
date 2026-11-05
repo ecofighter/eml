@@ -90,7 +90,7 @@ fn a_wait_advances_the_clock_only_when_no_op_finishes() {
             buf: raw(&mut data),
         },
     );
-    assert_eq!(write.unwrap(), Done::Size(2));
+    assert!(matches!(write, Ok(Done::Size(2))));
     assert!(driver.wait(Some(20)).unwrap());
     assert_eq!(driver.now(), Duration::from_millis(10));
     let done = collect(&mut driver);
@@ -105,7 +105,7 @@ fn a_wait_advances_the_clock_only_when_no_op_finishes() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(read.unwrap(), Done::Size(2));
+    assert!(matches!(read, Ok(Done::Size(2))));
     assert_eq!(&room[..2], b"hi");
 }
 
@@ -131,7 +131,7 @@ fn a_seed_does_not_change_which_ops_finish() {
                     buf: raw(&mut data),
                 },
             );
-            assert_eq!(write.unwrap(), Done::Size(1));
+            assert!(matches!(write, Ok(Done::Size(1))));
         }
         stream(run_op(&mut driver, connect("127.0.0.1", port)));
         // 鍵は run ごとに違うので、受け付けの順の番号で比べる
@@ -167,7 +167,7 @@ fn the_bin_is_emptied_before_ops_settle() {
     driver.bin().dropped.lock().unwrap().push(a);
     let done = settle(&mut driver);
     assert_eq!(keys(&done), [probe]);
-    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(0));
+    assert!(matches!(done[0].result, Ok(Done::Size(0))));
 
     let mut room = [0u8; 4];
     let read = run_op(
@@ -177,7 +177,7 @@ fn the_bin_is_emptied_before_ops_settle() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(read.unwrap(), Done::Size(0));
+    assert!(matches!(read, Ok(Done::Size(0))));
 }
 
 /// 相手が閉じた後も、残りを読みきってから EOF を受ける。
@@ -204,7 +204,7 @@ fn a_closed_peer_leaves_its_bytes_before_eof() {
                 buf: raw(&mut room),
             },
         );
-        assert_eq!(read.unwrap(), Done::Size(expected));
+        assert!(matches!(read, Ok(Done::Size(n)) if n == expected));
     }
 }
 
@@ -263,8 +263,21 @@ fn a_cancel_after_the_op_finished_keeps_its_result() {
     driver.cancel(probe);
     let done = collect(&mut driver);
     assert_eq!(keys(&done), [probe]);
-    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(0));
+    assert!(matches!(done[0].result, Ok(Done::Size(0))));
     assert!(!done[0].cancelled);
+}
+
+#[test]
+fn a_job_value_is_delivered_at_wait() {
+    let mut driver = TestDriver::new(None);
+    let key = pending(&mut driver, Op::Job(Box::new(|| Box::new(42u64))));
+    assert!(collect(&mut driver).is_empty());
+    let done = settle(&mut driver);
+    assert_eq!(keys(&done), [key]);
+    let Ok(Done::Job(value)) = &done[0].result else {
+        panic!("not a job value");
+    };
+    assert_eq!(value.downcast_ref::<u64>(), Some(&42));
 }
 
 /// 保留の操作は取り消して捨てるが、仕事は取り消せないので動かしきる。
@@ -279,10 +292,10 @@ fn quiesce_drops_every_pending_op_and_runs_jobs() {
         &mut driver,
         Op::Job(Box::new(move || {
             flag.store(true, Ordering::Relaxed);
-            Ok(0)
+            Box::new(0usize)
         })),
     );
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert!(ran.load(Ordering::Relaxed));
     assert_eq!(driver.pending(), 0);
     assert!(collect(&mut driver).is_empty());
@@ -316,7 +329,7 @@ fn completions_do_not_settle() {
     let before = driver.now();
     let done = settle(&mut driver);
     assert_eq!(keys(&done), [read]);
-    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     assert_eq!(driver.now(), before);
 }
 
@@ -368,7 +381,7 @@ fn a_read_without_data_stays_pending_until_a_write() {
     .unwrap();
     let done = settle(&mut driver);
     assert_eq!(keys(&done), [read]);
-    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     assert_eq!(&room[..2], b"ok");
 }
 
@@ -396,7 +409,7 @@ fn a_cancel_after_completion_does_not_touch_the_next_op_of_the_key() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(drained.unwrap(), Done::Size(1));
+    assert!(matches!(drained, Ok(Done::Size(1))));
     driver.cancel(key);
     let again = driver.submit(
         key,
@@ -418,7 +431,7 @@ fn a_cancel_after_completion_does_not_touch_the_next_op_of_the_key() {
     let done = settle(&mut driver);
     assert_eq!(keys(&done), [key]);
     assert!(!done[0].cancelled);
-    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
 }
 
 #[cfg(debug_assertions)]
@@ -583,10 +596,10 @@ fn a_shutdown_write_gives_eof_and_the_peer_can_reply() {
             },
         )
     };
-    assert_eq!(
-        write(&mut driver, client, &mut data).unwrap(),
-        Done::Size(2)
-    );
+    assert!(matches!(
+        write(&mut driver, client, &mut data),
+        Ok(Done::Size(2))
+    ));
     run_op(&mut driver, Op::ShutdownWrite { handle: client }).unwrap();
     let mut room = [0u8; 4];
     for expected in [2, 0] {
@@ -597,14 +610,14 @@ fn a_shutdown_write_gives_eof_and_the_peer_can_reply() {
                 buf: raw(&mut room),
             },
         );
-        assert_eq!(read.unwrap(), Done::Size(expected));
+        assert!(matches!(read, Ok(Done::Size(n)) if n == expected));
     }
     assert_eq!(&room[..2], b"hi");
     let mut reply = *b"ok";
-    assert_eq!(
-        write(&mut driver, server, &mut reply).unwrap(),
-        Done::Size(2)
-    );
+    assert!(matches!(
+        write(&mut driver, server, &mut reply),
+        Ok(Done::Size(2))
+    ));
     let read = run_op(
         &mut driver,
         Op::Read {
@@ -612,23 +625,22 @@ fn a_shutdown_write_gives_eof_and_the_peer_can_reply() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(read.unwrap(), Done::Size(2));
+    assert!(matches!(read, Ok(Done::Size(2))));
     assert_eq!(&room[..2], b"ok");
     assert_eq!(
         write(&mut driver, client, &mut data).unwrap_err().kind(),
         ErrorKind::BrokenPipe
     );
-    assert_eq!(
+    assert!(matches!(
         run_op(
             &mut driver,
             Op::SetNodelay {
                 handle: client,
                 on: true
             }
-        )
-        .unwrap(),
-        Done::Size(0)
-    );
+        ),
+        Ok(Done::Size(0))
+    ));
 }
 
 /// リスナーを閉じると、まだ受けていない接続の端も閉じ、接続した側は EOF を読む。ポートは空く。
@@ -646,7 +658,7 @@ fn closing_a_listener_closes_its_backlog() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(read.unwrap(), Done::Size(0));
+    assert!(matches!(read, Ok(Done::Size(0))));
     assert_eq!(
         run_op(&mut driver, connect("127.0.0.1", port))
             .unwrap_err()
@@ -667,7 +679,7 @@ fn quiesce_closes_the_handles_of_discarded_completions() {
     // 決着させるが、完了は渡さない
     assert!(driver.wait(None).unwrap());
     assert_eq!(driver.pending(), 1);
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     // 受けた側の端が閉じたので、接続した端は EOF を読む
     let mut room = [0u8; 4];
@@ -678,7 +690,7 @@ fn quiesce_closes_the_handles_of_discarded_completions() {
             buf: raw(&mut room),
         },
     );
-    assert_eq!(read.unwrap(), Done::Size(0));
+    assert!(matches!(read, Ok(Done::Size(0))));
 }
 
 /// 決着の前に取り消した操作の完了は `cancelled` で、自分で終わった操作の完了はそうでない。
@@ -758,7 +770,7 @@ fn a_file_read_settles_at_wait() {
     assert_eq!(room, [0u8; 16]);
     let done = settle(&mut driver);
     assert_eq!(keys(&done), [read]);
-    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(7));
+    assert!(matches!(done[0].result, Ok(Done::Size(7))));
     assert_eq!(&room[..7], b"settled");
     std::fs::remove_file(&path).unwrap();
 }
@@ -782,7 +794,7 @@ fn a_cancelled_file_read_still_delivers_its_bytes() {
     let done = settle(&mut driver);
     assert_eq!(keys(&done), [read]);
     assert!(!done[0].cancelled);
-    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(10));
+    assert!(matches!(done[0].result, Ok(Done::Size(10))));
     assert_eq!(&room[..10], b"still here");
     std::fs::remove_file(&path).unwrap();
 }
@@ -802,7 +814,7 @@ fn quiesce_runs_a_pending_file_write() {
         },
     );
     assert!(std::fs::read(&path).unwrap().is_empty());
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(std::fs::read(&path).unwrap(), b"written at quiesce");
     assert_eq!(driver.pending(), 0);
     assert!(collect(&mut driver).is_empty());
@@ -878,7 +890,7 @@ fn a_binned_handle_keeps_its_queued_file_write() {
     driver.bin().dropped.lock().unwrap().push(file);
     let done = settle(&mut driver);
     assert_eq!(keys(&done), [write]);
-    assert_eq!(*done[0].result.as_ref().unwrap(), Done::Size(18));
+    assert!(matches!(done[0].result, Ok(Done::Size(18))));
     assert_eq!(std::fs::read(&path).unwrap(), b"kept until settled");
     let mut room = [0u8; 4];
     let after = run_op(

@@ -172,6 +172,12 @@ impl Repl {
         self.evaluate(text, Form::Typed)
     }
 
+    /// 入力の run が仕事を見捨てるなどして `Machine` を poisoned にしたか。そうなら後の入力はどれも断られる
+    /// (docs/spec/vm.md の「追記」)。
+    pub fn is_poisoned(&self) -> bool {
+        self.machine.is_poisoned()
+    }
+
     /// `text` を `:type` の問い合わせとしてセッションに対して検査する。lowering も実行もせず、入力を受け付けず、番号も
     /// 進めない。番号は次の入力の番号を使う。問い合わせは `CodeBase` に入らないので、同じ番号の `input$N` と食い違わない。
     /// 続けられない誤りの後のセッションでも検査する。前端だけを使い、ヒープに触れないためである

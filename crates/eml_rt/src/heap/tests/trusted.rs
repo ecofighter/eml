@@ -2466,6 +2466,38 @@ fn c_writes_through_unboxed_ptr_mut_and_the_heap_reads_it<M: Mode>() {
     assert_eq!(mortal(&mut heap), 0);
 }
 
+/// `unboxed_ptr_mut` の位置から別のスレッドが書いた要素を、持ち主が join の後に読む (driver のプールのスレッドが
+/// C の関数を走らせる形)。join が happens-before の辺になる。
+fn another_thread_writes_through_unboxed_ptr_mut_before_the_owner_reads<M: Mode>() {
+    struct SendPtr(*mut u64);
+    // SAFETY: 位置の先の物体は、join までこのスレッドのほかには触れない
+    unsafe impl Send for SendPtr {}
+
+    let mut heap = Heap::<M>::new();
+    for n in [1, 3, LARGE_ELEMENTS] {
+        let w = heap.alloc_unboxed(n, 0, false);
+        unsafe {
+            let shared: &Heap<M> = &heap;
+            let p = SendPtr(shared.unboxed_ptr_mut(w).unwrap());
+            std::thread::scope(|scope| {
+                scope.spawn(move || {
+                    // 欄ごとに捕まえると生のポインタだけが移り、閉包が `Send` でなくなるので、包みごと移す
+                    let p = p;
+                    for i in 0..n {
+                        p.0.add(i).write(i as u64 + 11);
+                    }
+                });
+            });
+            assert_eq!(heap.unboxed_len(w), Ok(n));
+            for i in 0..n {
+                assert_eq!(heap.unboxed_word(w, i), Ok(i as u64 + 11));
+            }
+            heap.decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
 /// ほかのスレッドが読める配列も、`unboxed_ptr` の位置から C が読める。
 fn c_reads_a_shared_array_through_unboxed_ptr<M: Mode>() {
     let mut heap = Heap::<M>::new();
@@ -2624,6 +2656,7 @@ both_modes!(
     an_interrupted_child_write_stops_only_when_asked,
     find_byte_reads_the_body_of_an_object,
     c_writes_through_unboxed_ptr_mut_and_the_heap_reads_it,
+    another_thread_writes_through_unboxed_ptr_mut_before_the_owner_reads,
     c_reads_a_shared_array_through_unboxed_ptr,
     c_reads_string_and_bytes_through_text_payload,
     an_empty_array_lends_a_pointer_to_no_elements,

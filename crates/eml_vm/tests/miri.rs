@@ -4,6 +4,7 @@
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
 //! 文字列を返すエントリの結果を写すこと、`exit` の巻き戻し、`apply` と生の語の捕獲、複数の値の戻りと構造体と箱の間の
 //! 変換、`par` のタスクの切り替えと子の中断、C の関数の呼び出し (Rust の橋渡しと、整数を詰めたハンドル)、両方のモード。
+//! テストの driver の仕事にした `blocking` の C の呼び出しは、検査モードだけで流す。
 
 use eml_vm::{AnyMachine, RunConfig, RuntimeError, Sched, VmFault, capture_host, execute};
 
@@ -614,6 +615,43 @@ fn a_c_call_passes_scalars_in_both_modes() {
             "debug_heap: {debug_heap}: {error}"
         );
     }
+}
+
+/// `blocking` の呼び出しのテストのプログラム。`BLOCKING_LIR` はこれをパイプラインで LIR にして書いたものである。
+#[cfg(not(miri))]
+const BLOCKING_SRC: &str = "\
+import Async (Async)
+
+extern \"C\" blocking symbol \"rs_sub_i32\" sub : Int as int32_t -> Int as int32_t -> <IO, Panic, Async> Int as int32_t
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> println (show (sub 7 2)))
+";
+
+/// `BLOCKING_SRC` の LIR。`Async.run` の機構は手で書けず、Miri の下ではパイプラインの構文解析が rowan の中で
+/// 止まるので、パイプラインの出力を写して置く。Prelude、std/Async、translate、最適化、LIR のパス、instance の名前、
+/// 表示のどれかでこのプログラムの出力が変われば書き直す。
+const BLOCKING_LIR: &str = include_str!("miri/blocking.lir");
+
+/// `blocking` の C の呼び出しが、受け付け、`io_wait`、取り出しの3段を通り、テストの driver の仕事として後の `wait` で
+/// 走る。Miri でない run は、写した LIR がパイプラインの今の出力と同じことを確かめる。パイプラインが verifier を
+/// 通しているので、Miri の下では verifier を流さず、検査モードだけで流す。Miri の費用を抑えるためである。slot の整数を
+/// ポインタに戻す呼ばれる関数は `-Zmiri-strict-provenance` で動かないので、スカラーだけを渡す (docs/spec/vm.md の
+/// 「`blocking` の呼び出し」)。
+#[test]
+fn a_blocking_call_runs_on_the_test_driver() {
+    #[cfg(not(miri))]
+    assert_eq!(
+        eml_lir::pretty(&eml_test_support::lir(BLOCKING_SRC)),
+        BLOCKING_LIR,
+        "rewrite tests/miri/blocking.lir from the pipeline's output"
+    );
+    let program = eml_lir::parse(BLOCKING_LIR).unwrap_or_else(|error| panic!("{error}"));
+    let linked = crate::common::c::linked(&program, &crate::common::c::calls(), &[]);
+    let (host, out) = capture_host(Default::default());
+    let config = RunConfig::default().with_debug_heap(true);
+    execute(&program, &linked, &config, host).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "5\n");
 }
 
 /// C が返したハンドルの物体を作り、借りて C に渡し、手放すと dtor を1回だけ呼ぶ。

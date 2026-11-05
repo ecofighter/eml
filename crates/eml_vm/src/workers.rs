@@ -10,6 +10,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, Scope, ScopedJoinHandle};
+use std::time::Duration;
 
 use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop, Word};
 
@@ -17,7 +18,7 @@ use crate::cells::{CellRef, HostBin, Post, Runnable, Shared, Woken};
 use crate::code::CodeBase;
 use crate::counters::Counters;
 use crate::doorbell::Doorbell;
-use crate::driver::{DriverKind, RunClock, ceil_ms, floor_ms};
+use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, RunClock, ceil_ms, floor_ms};
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
 use crate::{HeapWork, RunCounts, RuntimeError, VmFault, WORKER_STACK};
@@ -324,6 +325,11 @@ pub(crate) struct Run {
     fatal: Mutex<Option<RuntimeError>>,
     /// `Std.Atomic.Counter` の表。`Machine` が持ち、run が終わっても残る。lock を取らずに読み書きする。
     pub(crate) counters: Arc<Counters>,
+    /// run のすべての静止が分け合う、`Op::Job` を待てる長さ (docs/spec/vm.md の「時計と driver」)。
+    pub(crate) job_budget: Duration,
+    /// 仕事を待つ期限。run の時間の基準の時刻で、最初の静止が決める。worker ごとに持つと N worker で N 倍待つので、
+    /// run に1つだけ置く。
+    job_deadline: OnceLock<Duration>,
 }
 
 /// worker `k` の語に止めるビットか `END` が立っている。眠る直前に読み、立っていれば眠らずに戻る。監視のスレッドは
@@ -390,7 +396,16 @@ impl Run {
             bell,
             fatal: Mutex::new(None),
             counters,
+            job_budget: JOB_QUIESCE_LIMIT,
+            job_deadline: OnceLock::new(),
         }
+    }
+
+    /// 静止で仕事を待てる残り。run の最初の静止が期限を決め、ほかの worker はそれを分け合う。
+    pub(crate) fn job_wait(&self, now: Duration) -> Duration {
+        self.job_deadline
+            .get_or_init(|| now.saturating_add(self.job_budget))
+            .saturating_sub(now)
     }
 
     /// worker 1..N-1 を作った後に、作れた数 (worker 0 を含む) を書く。
@@ -1253,7 +1268,7 @@ impl<P: Policy> Scheduler<P> {
         let Some(mut driver) = self.driver.take() else {
             return false;
         };
-        driver.quiesce();
+        driver.quiesce(self.run.job_wait(driver.now()));
         let k = self.index;
         if record && self.cells.lock().in_flight(k) > 0 {
             let mut completed = Vec::new();
@@ -1352,6 +1367,7 @@ impl Run {
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
+    use std::time::Duration;
 
     use eml_rt::{Checked, Control, HeapError, Limits, Stop};
 
@@ -1644,6 +1660,18 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         run.set_live(2);
         let owners: Vec<u32> = (0..4).map(|_| run.next_owner()).collect();
         assert_eq!(owners, [1, 0, 1, 0]);
+    }
+
+    /// 仕事を待つ期限は run の最初の静止が決め、後の静止はその残りだけを受け取る。過ぎた後は 0 である
+    /// (docs/spec/vm.md の「時計と driver」)。
+    #[test]
+    fn job_wait_shares_one_deadline() {
+        let mut run = Run::new(2, None, RunClock::Virtual(Arc::default()), Arc::default());
+        run.job_budget = Duration::from_secs(1);
+        let ms = Duration::from_millis;
+        assert_eq!(run.job_wait(ms(10)), ms(1000));
+        assert_eq!(run.job_wait(ms(400)), ms(610));
+        assert_eq!(run.job_wait(ms(2000)), Duration::ZERO);
     }
 
     /// 新しいハンドルを作る操作の host は、本物の時計の run では受け付けた worker、仮想の時計の run では worker 0 である。

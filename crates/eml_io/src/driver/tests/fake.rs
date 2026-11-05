@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use eml_rt::{IoWaker, OpKey, PipePair, RawBuf, RawPipe, RawResource, RawSocket};
 
-use crate::driver::backend::{Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
+use crate::driver::backend::{Backend, Cancel, Event, FileJob, Hold, Outcome, Start, Step};
 
 /// 行番号だけを持つ。`Clone` も `Copy` もしないので、核がソケットを写せないことを型で守る。
 #[derive(Debug, PartialEq, Eq)]
@@ -145,8 +145,13 @@ pub(super) struct Fake {
     /// 次に作るファイルの仕事が、走り始めてから中身に触れる前に待つ門。
     pub file_gate: Mutex<Option<mpsc::Receiver<()>>>,
     /// 真なら、作ったスレッドが走る間の期限つきの待ちは、時計を進めずに起こしが鳴るまで待つ。偽なら panic する。
-    /// driver を落とすときの期限つきの待ちを、ファイルの仕事を走らせるプールのスレッドと並べて通すためにだけ立てる
+    /// driver を落とすときと、`quiesce` が `Op::Job` を待ちきるときの期限つきの待ちを、プールのスレッドと並べて
+    /// 通すためにだけ立てる
     pub ring_while_threads_run: bool,
+    /// 真なら、作ったスレッドが走る間の期限つきの待ちは、時計をその長さだけ進めてすぐ戻る。`quiesce` が `Op::Job` を
+    /// 待つ上限を、門で止めた仕事と並べて過ぎさせるためにだけ立てる。テストは `quiesce` が戻るまで門を開けないので、
+    /// その間に起きるのは時計が進むことだけで、合否はスケジュールに依らない
+    pub advance_while_threads_run: bool,
 }
 
 impl Fake {
@@ -170,6 +175,7 @@ impl Fake {
             file: Arc::default(),
             file_gate: Mutex::new(None),
             ring_while_threads_run: false,
+            advance_while_threads_run: false,
         }
     }
 
@@ -335,7 +341,7 @@ impl Backend for Fake {
         })
     }
 
-    fn file_job(&self, _sock: &FakeSock, write: bool, buf: RawBuf) -> Job {
+    fn file_job(&self, _sock: &FakeSock, write: bool, buf: RawBuf) -> FileJob {
         let file = Arc::clone(&self.file);
         let gate = self
             .file_gate
@@ -432,6 +438,10 @@ impl Backend for Fake {
                 if self.ring_while_threads_run && running > 0 && !d.is_zero() {
                     // 時計を進めず、スレッドの答えの起こしを待つ。止まらなかった起こしは 10 秒で落ちる
                     self.bell.wait();
+                    return Ok(());
+                }
+                if self.advance_while_threads_run && running > 0 && !d.is_zero() {
+                    self.now += d;
                     return Ok(());
                 }
                 assert!(

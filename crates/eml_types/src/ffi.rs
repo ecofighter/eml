@@ -62,8 +62,8 @@ impl CShape {
     }
 }
 
-/// C の関数 `function` のシグネチャを分類する。誤りは E2022 (型の対応)、E2023 (効果の行)、`blocking` の E0004 で、
-/// どれかがあれば形を返さない。
+/// C の関数 `function` のシグネチャを分類する。誤りは E2022 (型の対応) と E2023 (効果の行) で、どちらかがあれば形を
+/// 返さない。
 pub(crate) fn check(program: &Program, function: FunctionId) -> Result<CShape, Vec<Diagnostic>> {
     let item = &program[function];
     let (FunctionKind::C(decl), Some(signature)) = (item.kind, &item.signature) else {
@@ -87,20 +87,10 @@ pub(crate) fn check(program: &Program, function: FunctionId) -> Result<CShape, V
     let Checker {
         diagnostics,
         failed,
-        decl,
-        file,
         ..
     } = checker;
     match shape {
-        Some(shape) if diagnostics.is_empty() && !failed => match decl.blocking {
-            // `blocking` の C の関数は実装していないので、正しい宣言にも E0004 を出す。誤りのある宣言にはその誤りだけを見せ、直した後で未対応を伝える
-            Some(range) => Err(vec![Diagnostic::not_yet_supported(
-                file,
-                range,
-                "`blocking` C functions are not supported yet",
-            )]),
-            None => Ok(shape),
-        },
+        Some(shape) if diagnostics.is_empty() && !failed => Ok(shape),
         _ => Err(diagnostics),
     }
 }

@@ -25,9 +25,9 @@ use eml_rt::{
     RawProcess, RawResource, Submit,
 };
 
-use backend::{Arrival, Backend, Cancel, Event, Hold, Outcome, Start, Step};
+use backend::{Arrival, Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
 use inbox::{Answer, Inbox, Ticket};
-use pool::{POOL_LIMIT, Pool};
+use pool::{JOB_LIMIT, POOL_LIMIT, Pool};
 pub(crate) use resolve::Lookup;
 use resolve::Resolver;
 
@@ -112,8 +112,10 @@ enum Kind<S> {
     Lookup {
         ticket: Ticket,
     },
-    /// 仕事の答えは札で欄に当たり、仕事は取り消せないので、欄は札を持たない。
-    Job,
+    /// 仕事は取り消せず、答えは札で欄に当たる。欄が札を持つのは、`quiesce` が見捨てるときに札を外すためである。
+    Job {
+        ticket: Ticket,
+    },
     /// ファイルの読みと書きのプールの仕事。`Job` と同じく札で答えが当たり、取り消せない。仕事が終わるまで、
     /// プールのスレッドが貸された記憶を読み書きし、ハンドルの向きを占める。
     FileRead {
@@ -137,7 +139,9 @@ impl<S> Kind<S> {
             }
             Kind::Accept { listener } => Some((listener, Dir::Read)),
             Kind::Write { handle, .. } | Kind::FileWrite { handle } => Some((handle, Dir::Write)),
-            Kind::Connect { .. } | Kind::Lookup { .. } | Kind::Job | Kind::Wait { .. } => None,
+            Kind::Connect { .. } | Kind::Lookup { .. } | Kind::Job { .. } | Kind::Wait { .. } => {
+                None
+            }
         }
     }
 
@@ -145,7 +149,7 @@ impl<S> Kind<S> {
     fn on_a_thread(&self) -> bool {
         matches!(
             self,
-            Kind::Lookup { .. } | Kind::Job | Kind::FileRead { .. } | Kind::FileWrite { .. }
+            Kind::Lookup { .. } | Kind::Job { .. } | Kind::FileRead { .. } | Kind::FileWrite { .. }
         )
     }
 }
@@ -184,6 +188,9 @@ pub(crate) struct Driver<B: Backend> {
     /// 仕事の panic の payload。答えの束を処理しきってから、持ち主のスレッドで起こし直す。
     panic: Option<Box<dyn Any + Send>>,
     broken: Option<Broken>,
+    /// `quiesce` が見捨てた `Op::Job` の数。答えが来ても戻さない。見捨てた driver は VM が落とすからである
+    /// (docs/spec/vm.md の「時計と driver」)。
+    abandoned: usize,
 }
 
 fn cancelled_error() -> io::Error {
@@ -241,7 +248,7 @@ fn step_of<'a, S>(
         },
         Kind::Connect { sock, peer, .. } => Step::Connect { sock, peer: *peer },
         Kind::Wait { process } => Step::Wait { process },
-        Kind::Lookup { .. } | Kind::Job | Kind::FileRead { .. } | Kind::FileWrite { .. } => {
+        Kind::Lookup { .. } | Kind::Job { .. } | Kind::FileRead { .. } | Kind::FileWrite { .. } => {
             unreachable!("a thread's op has no step")
         }
     }
@@ -249,9 +256,19 @@ fn step_of<'a, S>(
 
 impl<B: Backend> Driver<B> {
     pub(crate) fn new(backend: B, lookup: Lookup) -> Driver<B> {
+        Driver::with_limits(backend, lookup, POOL_LIMIT, JOB_LIMIT)
+    }
+
+    /// 核は `new` で `POOL_LIMIT` と `JOB_LIMIT` を渡す。単体テストは小さな上限で、列で待つ仕事を作る。
+    pub(crate) fn with_limits(
+        backend: B,
+        lookup: Lookup,
+        limit: usize,
+        job_limit: usize,
+    ) -> Driver<B> {
         let inbox = Inbox::new(backend.waker());
         Driver {
-            pool: Pool::new(Arc::clone(&inbox), POOL_LIMIT),
+            pool: Pool::new(Arc::clone(&inbox), limit, job_limit),
             resolver: Resolver::new(lookup, Arc::clone(&inbox)),
             backend,
             slots: HashMap::new(),
@@ -267,6 +284,7 @@ impl<B: Backend> Driver<B> {
             bin: Arc::default(),
             panic: None,
             broken: None,
+            abandoned: 0,
         }
     }
 
@@ -566,7 +584,7 @@ impl<B: Backend> Driver<B> {
             match answer {
                 Answer::Job(Ok(result)) => self.done.push(Completion {
                     key,
-                    result: result.map(Done::Size),
+                    result,
                     cancelled: false,
                 }),
                 // 束の残りの答えを失わないよう、起こし直すのは処理しきった後である
@@ -641,6 +659,27 @@ impl<B: Backend> Driver<B> {
 
     fn is_file(&self, handle: IoHandle) -> bool {
         self.class(handle) == Some(Class::File)
+    }
+
+    /// `quiesce` が表から拾った `Op::Job` の欄 `keys` を見捨てる。保留の表を歩くのは `quiesce` と `drop` だけなので
+    /// (docs/implementation/testing.md の「`unsafe` の一覧」)、ここは鍵で引くだけにする。札を外すので、走っている
+    /// 仕事の遅れた答え (panic の payload も) は引き取っても捨てる。列で待つ仕事は走らせずに落とす。何か見捨てたら
+    /// 真を返す。
+    fn abandon_jobs(&mut self, keys: &[OpKey]) -> bool {
+        for key in keys {
+            let Some(Slot {
+                kind: Kind::Job { ticket },
+                ..
+            }) = self.slots.remove(key)
+            else {
+                unreachable!("only job slots are listed");
+            };
+            self.tickets.remove(&ticket);
+            // 利用者の値の `Drop` は、`forget` が放したプールの lock の外で走る
+            drop(self.pool.forget(ticket));
+            self.abandoned += 1;
+        }
+        !keys.is_empty()
     }
 
     /// ハンドルを引く歩の操作を受け付ける。ファイルの読み書きはここへ来ない。パイプには読みと書きだけを出せる。
@@ -729,7 +768,7 @@ impl<B: Backend> IoDriver for Driver<B> {
                     cancel_sent: None,
                 },
             );
-            self.pool.submit(&self.backend, ticket, job);
+            self.pool.submit(&self.backend, ticket, Job::File(job));
             return Submit::Pending;
         }
         match op {
@@ -808,13 +847,13 @@ impl<B: Backend> IoDriver for Driver<B> {
                 self.slots.insert(
                     key,
                     Slot {
-                        kind: Kind::Job,
+                        kind: Kind::Job { ticket },
                         cancelled: false,
                         hold: Hold::None,
                         cancel_sent: None,
                     },
                 );
-                self.pool.submit(&self.backend, ticket, job);
+                self.pool.submit(&self.backend, ticket, Job::Value(job));
                 Submit::Pending
             }
             Op::Adopt { res } => Submit::Done(self.adopt(res).map(Done::Handle)),
@@ -831,7 +870,7 @@ impl<B: Backend> IoDriver for Driver<B> {
         if slot.cancelled
             || matches!(
                 slot.kind,
-                Kind::Job | Kind::FileRead { .. } | Kind::FileWrite { .. }
+                Kind::Job { .. } | Kind::FileRead { .. } | Kind::FileWrite { .. }
             )
         {
             return;
@@ -890,7 +929,7 @@ impl<B: Backend> IoDriver for Driver<B> {
     }
 
     fn pending(&self) -> usize {
-        self.slots.len() + self.done.len()
+        self.slots.len() + self.done.len() + self.abandoned
     }
 
     fn waker(&self) -> Arc<dyn IoWaker> {
@@ -935,7 +974,7 @@ impl<B: Backend> IoDriver for Driver<B> {
         self.backend.pipe(parent_reads)
     }
 
-    fn quiesce(&mut self) {
+    fn quiesce(&mut self, jobs: Duration) {
         self.empty_bin();
         self.discard_done();
         if self.broken.is_some() {
@@ -955,11 +994,24 @@ impl<B: Backend> IoDriver for Driver<B> {
         for key in keys {
             self.cancel(key);
         }
-        // 仕事は取り消せないので待ちきる。OS に出した取り消しは `CANCEL_LIMIT` まで待つ
+        // 仕事は取り消せない。ファイルの読み書きは待ちきり、`Op::Job` は `jobs` まで待って残りを見捨てる。OS に出した
+        // 取り消しは `CANCEL_LIMIT` まで待つ (docs/spec/vm.md の「時計と driver」)
+        let job_deadline = self.backend.now().checked_add(jobs);
         loop {
             self.discard_done();
             if self.broken.is_some() || self.slots.is_empty() {
                 break;
+            }
+            let now = self.backend.now();
+            let job_keys: Vec<OpKey> = self
+                .slots
+                .iter()
+                .filter(|(_, slot)| matches!(slot.kind, Kind::Job { .. }))
+                .map(|(key, _)| *key)
+                .collect();
+            if job_deadline.is_some_and(|deadline| now >= deadline) && self.abandon_jobs(&job_keys)
+            {
+                continue;
             }
             let oldest = self
                 .slots
@@ -979,6 +1031,13 @@ impl<B: Backend> IoDriver for Driver<B> {
                     Some(left)
                 }
                 None => None,
+            };
+            let job_left = job_deadline
+                .filter(|_| !job_keys.is_empty())
+                .map(|deadline| deadline.saturating_sub(now));
+            let timeout = match (timeout, job_left) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
             };
             if self.turn(timeout).is_err() {
                 break;

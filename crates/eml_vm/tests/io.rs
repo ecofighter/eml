@@ -337,7 +337,7 @@ impl IoDriver for HoldingDriver {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
-    fn quiesce(&mut self) {
+    fn quiesce(&mut self, _jobs: Duration) {
         self.held.clear();
         self.done.clear();
     }
@@ -558,8 +558,8 @@ impl IoDriver for Recorder {
         self.inner.pipe(parent_reads)
     }
 
-    fn quiesce(&mut self) {
-        self.inner.quiesce();
+    fn quiesce(&mut self, jobs: Duration) {
+        self.inner.quiesce(jobs);
         self.log.lock().unwrap().immediate = self.inner.immediate();
     }
 }
@@ -1803,8 +1803,8 @@ impl IoDriver for FileWatch {
         self.inner.pipe(parent_reads)
     }
 
-    fn quiesce(&mut self) {
-        self.inner.quiesce();
+    fn quiesce(&mut self, jobs: Duration) {
+        self.inner.quiesce(jobs);
         self.log.lock().unwrap().open_at_quiesce = Some(self.inner.open_files());
     }
 }

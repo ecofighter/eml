@@ -531,6 +531,17 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                         let at = self.out.slot_list([index], &slots);
                         Op::Ffi { dst, at }
                     }
+                    // `blocking` の呼び出しの2つの命令も同じ被演算子で指す (docs/spec/vm.md の「`blocking` の呼び出し」)
+                    ExternRef::CSubmit(id) => {
+                        let index = self.links.c_functions[id.0 as usize];
+                        let at = self.out.slot_list([index], &slots);
+                        Op::FfiSubmit { dst, at }
+                    }
+                    ExternRef::CTake(id) => {
+                        let index = self.links.c_functions[id.0 as usize];
+                        let at = self.out.slot_list([index], &slots);
+                        Op::FfiTake { dst, at }
+                    }
                 };
                 let pc = self.out.push(op);
                 if let Some(loc) = at {

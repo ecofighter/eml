@@ -6,11 +6,12 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use eml_cli::lines::{Command, Lines, Step};
 use eml_cli::{
-    CaptureHost, Control, Evaluated, FsProvider, HostRef, InputStatus, Linker, Outcome, Repl,
-    RunConfig, RuntimeError, default_limits, input_status,
+    CaptureHost, Clock, Control, Evaluated, FsProvider, HostRef, InputStatus, Linker, Outcome,
+    Repl, RunConfig, RuntimeError, default_limits, input_status,
 };
 
 use crate::common::for_each_file;
@@ -435,4 +436,58 @@ fn main_right_under_a_category_fails() {
 #[should_panic(expected = "must be tests/repl/<category>/<name>.repl")]
 fn a_file_right_under_the_top_directory_fails() {
     classify(&repl_root().join("loose.repl"));
+}
+
+/// 仕事を見捨てた入力の結果はそのまま返り、その後の入力と `close` は poisoned の誤りになる。端末はこれを見て、その入力の
+/// 直後にセッションを終える (docs/spec/vm.md の「追記」)。本物の時計と短い予算が要るので、トランスクリプトにしない。
+#[test]
+fn the_machine_is_poisoned_after_an_input_that_abandoned_a_job() {
+    let root = repl_root();
+    let host = CaptureHost::new(root.clone()).without_stdin().into_ref();
+    let config = RunConfig::default()
+        .with_clock(Clock::Real)
+        .with_job_budget(Duration::from_millis(20));
+    let mut repl = Repl::new(&config, Box::new(FsProvider::new(&root)), host).with_linker(linker());
+    let declared = repl.eval(
+        "\
+import Async (Async)
+import Async
+extern \"C\" blocking symbol \"eml_fixture_gate_wait\" gate_wait : Int -> <IO, Async> Int",
+    );
+    assert!(
+        matches!(declared.outcome, Outcome::Accepted),
+        "{:?}",
+        declared.diagnostics
+    );
+    // worker は1つなので、`x` が仕事を出して待った後に `y` が動く
+    let exited = repl.eval(
+        "\
+Async.run (fn () ->
+  let x = Async.start (fn () -> gate_wait 100100)
+  let y = Async.start (fn () -> (exit 3 : Unit))
+  println (show (Async.await x))
+  Async.await y)",
+    );
+    let poisoned = repl.is_poisoned();
+    let next = repl.eval("1");
+    let closed = repl.close();
+    eml_test_support::eml_fixture_gate_open(100100);
+    assert!(matches!(exited.outcome, Outcome::Exited(3)));
+    assert!(poisoned);
+    match next.outcome {
+        Outcome::Broken(error) => assert!(
+            error
+                .to_string()
+                .contains("the driver kept pending ops after quiesce"),
+            "{error}"
+        ),
+        _ => panic!("the next input ran on a poisoned machine"),
+    }
+    let error = closed.leaks.expect("a poisoned machine does not close");
+    assert!(
+        error
+            .to_string()
+            .contains("the driver kept pending ops after quiesce"),
+        "{error}"
+    );
 }

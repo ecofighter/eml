@@ -1,0 +1,453 @@
+layout Prelude.IOError { IOError(enum, obj) }
+layout Prelude.Result { Err(tobj), Ok(tobj) }
+layout (,) { (,)(tobj, tobj) }
+layout Std.Async.Failure { IOFailed(tobj), Panicked(obj) }
+layout Prelude.Bool { False, True }
+effect Prelude.IO { never io_failed(enum, obj) -> never }
+effect Prelude.Panic { never panicked(obj) -> never }
+effect Std.Async.Async { await_cell(int) -> enum, reschedule(unit) -> enum, await_time(int) -> enum, await_drain(int) -> enum, await_send(int) -> enum, await_recv(int) -> enum, await_io(int) -> obj lin, await_io_until(int, int) -> obj lin, await_signal(int) -> enum }
+cfn "Main.sub" symbol "rs_sub_i32" blocking link [] (i32, i32) -> i32
+fn Std.Async.start_task(f.0: tobj poly) -> unit {
+  let c.1: tobj poly = closure Std.Async.start_task$handle0(f.0)
+  let w.3: tobj = prim evv_get()
+  dup w.3
+  let ev.4: obj = prim ev_new[Std.Async.Async]((), w.3)
+  let u.5: unit = prim ev_set_clause[Std.Async.Async.await_cell](ev.4, &Std.Async.start_task$handle0$await_cell$entry)
+  let u.6: unit = prim ev_set_clause[Std.Async.Async.reschedule](ev.4, &Std.Async.start_task$handle0$reschedule$entry)
+  let u.7: unit = prim ev_set_clause[Std.Async.Async.await_time](ev.4, &Std.Async.start_task$handle0$await_time$entry)
+  let u.8: unit = prim ev_set_clause[Std.Async.Async.await_drain](ev.4, &Std.Async.start_task$handle0$await_drain$entry)
+  let u.9: unit = prim ev_set_clause[Std.Async.Async.await_send](ev.4, &Std.Async.start_task$handle0$await_send$entry)
+  let u.10: unit = prim ev_set_clause[Std.Async.Async.await_recv](ev.4, &Std.Async.start_task$handle0$await_recv$entry)
+  let u.11: unit = prim ev_set_clause[Std.Async.Async.await_io](ev.4, &Std.Async.start_task$handle0$await_io$entry)
+  let u.12: unit = prim ev_set_clause[Std.Async.Async.await_io_until](ev.4, &Std.Async.start_task$handle0$await_io_until$entry)
+  let u.13: unit = prim ev_set_clause[Std.Async.Async.await_signal](ev.4, &Std.Async.start_task$handle0$await_signal$entry)
+  dup ev.4
+  let w.14: tobj = prim evv_push(w.3, ev.4)
+  let u.15: unit = prim evv_set(w.14)
+  let x.16: tobj poly = yields apply c.1(()) prompt ev.4
+  tail call prompt$(ev.4, &Std.Async.start_task$handle0$return, x.16)
+}
+fn Std.Async.resume_task(k.0: tobj lin, w.1: enum) -> unit {
+  let w.3: tobj = box w.1
+  tail apply k.0(w.3)
+}
+yields fn Std.Async.io_wait(op.0: int) -> (enum, int) {
+  let t.1: int = extern Std.Async.op_ready(op.0, 0)
+  let t.5: enum = extern "Prelude.Eq Int.=="(t.1, 0)
+  switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  let t.7: enum = extern "Prelude.Eq Int.=="(t.1, 2)
+  switch t.7 Prelude.Bool { #0 -> b3, #1 -> b4 }
+b2:
+  return (#0, op.0)
+b3:
+  let ev.11: obj = prim ev_lookup[Std.Async.Async]()
+  let c.12: tobj = prim ev_clause[Std.Async.Async.await_io](ev.11)
+  let t.21: obj lin = clause Std.Async.Async.await_io c.12(ev.11, op.0)
+  let (t.0.23: tobj, t.1.25: tobj) = unbox t.21 (,)
+  let t.0.24: enum = unbox t.0.23
+  let t.1.26: int = unbox t.1.25
+  let u.31: unit = drop t.21
+  return (t.0.24, t.1.26)
+b4:
+  let ev.13: obj = prim ev_lookup[Std.Async.Async]()
+  let c.14: tobj = prim ev_clause[Std.Async.Async.reschedule](ev.13)
+  let t.8: enum = clause Std.Async.Async.reschedule c.14(ev.13, ())
+  let y.15: int = prim yielding()
+  switch y.15 { 0 -> b6, _ -> b5 }
+b5:
+  let k.16: tobj poly = prim yield_cont_take()
+  let c.17: tobj = closure Std.Async.io_wait$k0(op.0)
+  let k.18: tobj poly = closure compose$(k.16, c.17)
+  let u.19: unit = prim yield_cont_set(k.18)
+  let d.22: obj poly = prim dummy()
+  let (d.0.27: tobj, d.1.29: tobj) = unbox d.22 (,)
+  let d.0.28: enum = unbox d.0.27
+  let d.1.30: int = unbox d.1.29
+  let u.32: unit = drop d.22
+  return (d.0.28, d.1.30)
+b6:
+  return (#0, op.0)
+}
+fn Std.Async.resume_io(k.0: tobj lin, w.1: enum, op.2: int) -> unit {
+  let d.6: tobj = box w.1
+  let d.7: tobj = box op.2
+  let d.5: obj lin = con (,) #0(d.6, d.7)
+  tail apply k.0(d.5)
+}
+internal yields uniform from 1 fn Std.Async.start_task$handle0(f.0: tobj poly, p.1: unit) -> unit {
+  tail yields apply f.0(())
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$await_cell(c.5: tobj, k.1: tobj lin, p.2: unit) -> unit {
+  let c.0: int = unbox c.5
+  decref c.5
+  let c.3: tobj lin = closure "$cont$@[Std.Async.Wake, Unit]"(k.1)
+  let t.4: unit = extern Std.Async.park(c.0, c.3)
+  return t.4
+}
+internal yields uniform from 0 fn "$cont$@[Std.Async.Wake, Unit]"(k.0: tobj poly, v.3: tobj) -> unit {
+  tail yields apply k.0(v.3, ())
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$reschedule(p.0: unit, k.1: tobj lin, p.2: unit) -> unit {
+  let c.3: tobj lin = closure "$cont$@[Std.Async.Wake, Unit]"(k.1)
+  let t.4: unit = extern Std.Async.ready(c.3)
+  return t.4
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$await_time(ms.5: tobj, k.1: tobj lin, p.2: unit) -> unit {
+  let ms.0: int = unbox ms.5
+  decref ms.5
+  let c.3: tobj lin = closure "$cont$@[Std.Async.Wake, Unit]"(k.1)
+  let t.4: unit = extern Std.Async.park_time(ms.0, c.3)
+  return t.4
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$await_drain(s.5: tobj, k.1: tobj lin, p.2: unit) -> unit {
+  let s.0: int = unbox s.5
+  decref s.5
+  let c.3: tobj lin = closure "$cont$@[Std.Async.Wake, Unit]"(k.1)
+  let t.4: unit = extern Std.Async.park_drain(s.0, c.3)
+  return t.4
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$await_send(c.5: tobj, k.1: tobj lin, p.2: unit) -> unit {
+  let c.0: int = unbox c.5
+  decref c.5
+  let c.3: tobj lin = closure "$cont$@[Std.Async.Wake, Unit]"(k.1)
+  let t.4: unit = extern Std.Async.park_send(c.0, c.3)
+  return t.4
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$await_recv(c.5: tobj, k.1: tobj lin, p.2: unit) -> unit {
+  let c.0: int = unbox c.5
+  decref c.5
+  let c.3: tobj lin = closure "$cont$@[Std.Async.Wake, Unit]"(k.1)
+  let t.4: unit = extern Std.Async.park_recv(c.0, c.3)
+  return t.4
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$await_io(op.5: tobj, k.1: tobj lin, p.2: unit) -> unit {
+  let op.0: int = unbox op.5
+  decref op.5
+  let c.3: tobj lin = closure "$cont$@[(Std.Async.Wake, Std.Async.OpId), Unit]"(k.1)
+  let t.4: unit = extern Std.Async.park_io(op.0, c.3)
+  return t.4
+}
+internal yields uniform from 0 fn "$cont$@[(Std.Async.Wake, Std.Async.OpId), Unit]"(k.0: tobj poly, v.3: tobj lin) -> unit {
+  let (_, _) = unbox v.3 (,)
+  tail yields apply k.0(v.3, ())
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$await_io_until(op.6: tobj, ms.7: tobj, k.2: tobj lin, p.3: unit) -> unit {
+  let op.0: int = unbox op.6
+  decref op.6
+  let ms.1: int = unbox ms.7
+  decref ms.7
+  let c.4: tobj lin = closure "$cont$@[(Std.Async.Wake, Std.Async.OpId), Unit]"(k.2)
+  let t.5: unit = extern Std.Async.park_io_until(op.0, ms.1, c.4)
+  return t.5
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$await_signal(s.5: tobj, k.1: tobj lin, p.2: unit) -> unit {
+  let s.0: int = unbox s.5
+  decref s.5
+  let c.3: tobj lin = closure "$cont$@[Std.Async.Wake, Unit]"(k.1)
+  let t.4: unit = extern Std.Async.park_signal(s.0, c.3)
+  return t.4
+}
+internal uniform from 0 fn Std.Async.start_task$handle0$return(p.0: unit, p.1: unit) -> unit {
+  return ()
+}
+fn entry$main() -> unit {
+  let t.1: obj lin = extern Std.Async.run_raw(&"Std.Async.bottom@[Unit]{0=main$lambda0}")
+  let t.2: unit = extern Std.Async.run_result(t.1)
+  return t.2
+}
+yields fn "Std.Async.bottom@[Unit]{0=main$lambda0}"(p.1: unit) -> unit {
+  let t.12: obj = call "Prelude.try_io@#70c9981cb5940bd2"()
+  let y.26: int = prim yielding()
+  switch y.26 { 0 -> b2, _ -> b1 }
+b1:
+  decref t.12
+  let k.27: tobj poly = prim yield_cont_take()
+  let k.28: tobj poly = closure compose$(k.27, &"Std.Async.bottom@[Unit]{0=main$lambda0}$k0")
+  let u.29: unit = prim yield_cont_set(k.28)
+  return ()
+b2:
+  switch t.12 Prelude.Result { #0(e.30: tobj) -> b3, #1(x.14: obj) -> b4 }
+b3:
+  let (e.0.31: enum, e.1.32: obj) = unbox e.30 Prelude.IOError
+  release t.12 Prelude.Result #0(e.30)
+  release unboxed e.30 Prelude.IOError #0(_, e.1.32)
+  let t.10: unit = extern Std.Async.finish_io(e.0.31, e.1.32)
+  return t.10
+b4:
+  switch x.14 Prelude.Result { #0(m.17: obj) -> b5, #1(x.18: unit) -> b6 }
+b5:
+  release t.12 Prelude.Result #1(x.14)
+  release x.14 Prelude.Result #0(m.17)
+  let t.11: unit = extern Std.Async.finish_panic(m.17)
+  return t.11
+b6:
+  decref t.12
+  let t.9: unit = extern Std.Async.finish_ok(x.18)
+  return t.9
+}
+yields fn "Prelude.try_io@#70c9981cb5940bd2"() -> obj {
+  let w.3: tobj = prim evv_get()
+  dup w.3
+  let ev.4: obj = prim ev_new[Prelude.IO]((), w.3)
+  let u.5: unit = prim ev_set_clause[Prelude.IO.io_failed](ev.4, &"Prelude.try_io@#b12fbf5b85ccaa63$entry")
+  dup ev.4
+  let w.6: tobj = prim evv_push(w.3, ev.4)
+  let u.7: unit = prim evv_set(w.6)
+  let x.8: tobj poly = yields apply &"Prelude.try_io@#1e74c3d30a482244"(()) prompt ev.4
+  tail call prompt$(ev.4, &"Prelude.try_io@#4d6854fb746ffdb8", x.8)
+}
+yields fn "Prelude.try_panic@[Unit]<e>{0=main$lambda0}"() -> obj {
+  let w.3: tobj = prim evv_get()
+  dup w.3
+  let ev.4: obj = prim ev_new[Prelude.Panic]((), w.3)
+  let u.5: unit = prim ev_set_clause[Prelude.Panic.panicked](ev.4, &"Prelude.try_panic@#b463fd5a69ae6ed2$entry")
+  dup ev.4
+  let w.6: tobj = prim evv_push(w.3, ev.4)
+  let u.7: unit = prim evv_set(w.6)
+  let x.8: tobj poly = yields apply &"Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}"(()) prompt ev.4
+  tail call prompt$(ev.4, &"Prelude.try_panic@#64740e57080cab89", x.8)
+}
+internal yields uniform from 0 fn "Prelude.try_io@#1e74c3d30a482244"(p.1: unit) -> obj {
+  tail call "Prelude.try_panic@[Unit]<e>{0=main$lambda0}"()
+}
+internal yields uniform from 0 fn "Prelude.try_io@#b12fbf5b85ccaa63"(kind.5: tobj, message.1: obj, p.2: unit) -> obj {
+  let kind.0: enum = unbox kind.5
+  decref kind.5
+  let d.6: obj = con Prelude.IOError #0(kind.0, message.1)
+  let d.4: obj = con Prelude.Result #0(d.6)
+  return d.4
+}
+internal yields uniform from 0 fn "Prelude.try_io@#4d6854fb746ffdb8"(x.0: obj, p.1: unit) -> obj {
+  let d.2: obj = con Prelude.Result #1(x.0)
+  return d.2
+}
+internal yields uniform from 0 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}"(p.1: unit) -> unit {
+  let op.3: int = extern submit Main.sub(7, 2)
+  let t.4: int = extern Std.Async.op_ready(op.3, 0)
+  let t.5: enum = extern "Prelude.Eq Int.=="(t.4, 0)
+  switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  let t.6: enum = extern "Prelude.Eq Int.=="(t.4, 2)
+  switch t.6 Prelude.Bool { #0 -> b3, #1 -> b6 }
+b2:
+  jump b9(#0, op.3)
+b3:
+  let ev.16: obj = prim ev_lookup[Std.Async.Async]()
+  let c.17: tobj = prim ev_clause[Std.Async.Async.await_io](ev.16)
+  let t.29: obj lin = clause Std.Async.Async.await_io c.17(ev.16, op.3)
+  let (t.0.30: tobj, t.1.32: tobj) = unbox t.29 (,)
+  let t.0.31: enum = unbox t.0.30
+  let t.1.33: int = unbox t.1.32
+  let u.34: unit = drop t.29
+  let y.20: int = prim yielding()
+  switch y.20 { 0 -> b5, _ -> b4 }
+b4:
+  let k.21: tobj poly = prim yield_cont_take()
+  let k.22: tobj poly = closure compose$(k.21, &"Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k0")
+  let u.23: unit = prim yield_cont_set(k.22)
+  return ()
+b5:
+  jump b9(t.0.31, t.1.33)
+b6:
+  let ev.18: obj = prim ev_lookup[Std.Async.Async]()
+  let c.19: tobj = prim ev_clause[Std.Async.Async.reschedule](ev.18)
+  let t.10: enum = clause Std.Async.Async.reschedule c.19(ev.18, ())
+  let y.24: int = prim yielding()
+  switch y.24 { 0 -> b8, _ -> b7 }
+b7:
+  let k.25: tobj poly = prim yield_cont_take()
+  let c.26: tobj = closure "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k1"(op.3)
+  let k.27: tobj poly = closure compose$(k.25, c.26)
+  let u.28: unit = prim yield_cont_set(k.27)
+  return ()
+b8:
+  jump b9(#0, op.3)
+b9(w.11: enum, op.12: int):
+  let t.13: int = extern take Main.sub(op.12, w.11)
+  let t.14: obj = extern "Prelude.Show Int.show"(t.13)
+  let t.15: unit = extern Prelude.println(t.14)
+  return t.15
+}
+internal yields uniform from 0 fn "Prelude.try_panic@#b463fd5a69ae6ed2"(message.0: obj, p.1: unit) -> obj {
+  let d.2: obj = con Prelude.Result #0(message.0)
+  return d.2
+}
+internal yields uniform from 0 fn "Prelude.try_panic@#64740e57080cab89"(x.0: unit, p.1: unit) -> obj {
+  let d.2: obj = con Prelude.Result #1(x.0)
+  return d.2
+}
+yields fn id$(x.0: tobj poly) -> tobj poly {
+  return x.0
+}
+internal yields clause Std.Async.Async.await_cell fn Std.Async.start_task$handle0$await_cell$entry(e.0: obj, c.1: int) -> enum {
+  let c.4: tobj = box c.1
+  let c.2: tobj = closure Std.Async.start_task$handle0$await_cell(c.4)
+  let u.3: unit = prim yield_to(e.0, c.2, &id$)
+  return #0
+}
+internal yields clause Std.Async.Async.reschedule fn Std.Async.start_task$handle0$reschedule$entry(e.0: obj, p.1: unit) -> enum {
+  let c.2: tobj = closure Std.Async.start_task$handle0$reschedule(p.1)
+  let u.3: unit = prim yield_to(e.0, c.2, &id$)
+  return #0
+}
+internal yields clause Std.Async.Async.await_time fn Std.Async.start_task$handle0$await_time$entry(e.0: obj, ms.1: int) -> enum {
+  let ms.4: tobj = box ms.1
+  let c.2: tobj = closure Std.Async.start_task$handle0$await_time(ms.4)
+  let u.3: unit = prim yield_to(e.0, c.2, &id$)
+  return #0
+}
+internal yields clause Std.Async.Async.await_drain fn Std.Async.start_task$handle0$await_drain$entry(e.0: obj, s.1: int) -> enum {
+  let s.4: tobj = box s.1
+  let c.2: tobj = closure Std.Async.start_task$handle0$await_drain(s.4)
+  let u.3: unit = prim yield_to(e.0, c.2, &id$)
+  return #0
+}
+internal yields clause Std.Async.Async.await_send fn Std.Async.start_task$handle0$await_send$entry(e.0: obj, c.1: int) -> enum {
+  let c.4: tobj = box c.1
+  let c.2: tobj = closure Std.Async.start_task$handle0$await_send(c.4)
+  let u.3: unit = prim yield_to(e.0, c.2, &id$)
+  return #0
+}
+internal yields clause Std.Async.Async.await_recv fn Std.Async.start_task$handle0$await_recv$entry(e.0: obj, c.1: int) -> enum {
+  let c.4: tobj = box c.1
+  let c.2: tobj = closure Std.Async.start_task$handle0$await_recv(c.4)
+  let u.3: unit = prim yield_to(e.0, c.2, &id$)
+  return #0
+}
+internal yields clause Std.Async.Async.await_io fn Std.Async.start_task$handle0$await_io$entry(e.0: obj, op.1: int) -> obj lin {
+  let op.5: tobj = box op.1
+  let c.2: tobj = closure Std.Async.start_task$handle0$await_io(op.5)
+  let u.3: unit = prim yield_to(e.0, c.2, &id$)
+  let d.4: obj poly = prim dummy()
+  return d.4
+}
+internal yields clause Std.Async.Async.await_io_until fn Std.Async.start_task$handle0$await_io_until$entry(e.0: obj, op.1: int, ms.2: int) -> obj lin {
+  let op.6: tobj = box op.1
+  let ms.7: tobj = box ms.2
+  let c.3: tobj = closure Std.Async.start_task$handle0$await_io_until(op.6, ms.7)
+  let u.4: unit = prim yield_to(e.0, c.3, &id$)
+  let d.5: obj poly = prim dummy()
+  return d.5
+}
+internal yields clause Std.Async.Async.await_signal fn Std.Async.start_task$handle0$await_signal$entry(e.0: obj, s.1: int) -> enum {
+  let s.4: tobj = box s.1
+  let c.2: tobj = closure Std.Async.start_task$handle0$await_signal(s.4)
+  let u.3: unit = prim yield_to(e.0, c.2, &id$)
+  return #0
+}
+internal clause Prelude.IO.io_failed fn "Prelude.try_io@#b12fbf5b85ccaa63$entry"(e.0: obj, kind.1: enum, message.2: obj) -> obj poly {
+  let kind.6: tobj = box kind.1
+  let c.3: tobj = closure "Prelude.try_io@#b12fbf5b85ccaa63"(kind.6, message.2)
+  let u.4: unit = prim yield_abort(e.0, c.3)
+  let d.5: obj poly = prim dummy()
+  return d.5
+}
+internal clause Prelude.Panic.panicked fn "Prelude.try_panic@#b463fd5a69ae6ed2$entry"(e.0: obj, message.1: obj) -> obj poly {
+  let c.2: tobj = closure "Prelude.try_panic@#b463fd5a69ae6ed2"(message.1)
+  let u.3: unit = prim yield_abort(e.0, c.2)
+  let d.4: obj poly = prim dummy()
+  return d.4
+}
+yields fn prompt$(ev.0: obj, ret.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let w.3: tobj = prim ev_take_evv(ev.0)
+  let u.4: unit = prim evv_set(w.3)
+  let s.5: int = prim yield_status(ev.0)
+  switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
+b1:
+  let st.6: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply ret.1(x.2, st.6)
+b2:
+  let u.8: unit = drop x.2
+  let k.9: tobj poly = prim yield_cont_take()
+  let c.10: tobj poly = prim yield_finish()
+  let st.11: tobj poly = prim ev_take_state(ev.0)
+  let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
+  tail yields apply c.10(k.12, st.11)
+b3:
+  let u.14: unit = drop ret.1
+  let u.15: unit = drop x.2
+  let c.16: tobj poly = prim yield_finish()
+  let st.17: tobj poly = prim ev_take_state(ev.0)
+  decref ev.0
+  tail yields apply c.16(st.17)
+b4:
+  let u.19: unit = drop x.2
+  let st.20: tobj poly = prim ev_take_state(ev.0)
+  let k.21: tobj poly = prim yield_cont_take()
+  let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+  let u.23: unit = prim yield_cont_set(k.22)
+  let d.24: obj poly = prim dummy()
+  return d.24
+}
+yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
+  let e.5: obj = prim ev_renew(ev.0, s.4)
+  decref ev.0
+  let w.6: tobj = prim evv_get()
+  dup e.5
+  let w.7: tobj = prim evv_push(w.6, e.5)
+  let u.8: unit = prim evv_set(w.7)
+  let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
+  tail call prompt$(e.5, ret.1, x.9)
+}
+yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
+  tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+}
+internal yields uniform from 1 fn Std.Async.io_wait$k0(op.0: int, t.3: tobj) -> tobj lin {
+  decref t.3
+  let d.5: tobj = box op.0
+  let d.4: obj lin = con (,) #0(#0, d.5)
+  return d.4
+}
+yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let r.3: tobj poly = yields apply k.0(x.2)
+  let y.4: int = prim yielding()
+  switch y.4 { 0 -> b2, _ -> b1 }
+b1:
+  let u.5: unit = drop r.3
+  let k.6: tobj poly = prim yield_cont_take()
+  let k.7: tobj poly = closure compose$(k.6, c.1)
+  let u.8: unit = prim yield_cont_set(k.7)
+  let d.9: obj poly = prim dummy()
+  return d.9
+b2:
+  tail yields apply c.1(r.3)
+}
+internal yields uniform from 0 fn "Std.Async.bottom@[Unit]{0=main$lambda0}$k0"(t.5: obj) -> unit {
+  switch t.5 Prelude.Result { #0(e.10: tobj) -> b1, #1(x.7: obj) -> b2 }
+b1:
+  let (e.0.11: enum, e.1.12: obj) = unbox e.10 Prelude.IOError
+  release t.5 Prelude.Result #0(e.10)
+  release unboxed e.10 Prelude.IOError #0(_, e.1.12)
+  let t.3: unit = extern Std.Async.finish_io(e.0.11, e.1.12)
+  return t.3
+b2:
+  switch x.7 Prelude.Result { #0(m.8: obj) -> b3, #1(x.9: unit) -> b4 }
+b3:
+  release t.5 Prelude.Result #1(x.7)
+  release x.7 Prelude.Result #0(m.8)
+  let t.4: unit = extern Std.Async.finish_panic(m.8)
+  return t.4
+b4:
+  decref t.5
+  let t.2: unit = extern Std.Async.finish_ok(x.9)
+  return t.2
+}
+internal yields uniform from 0 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k0"(t.4: tobj lin) -> unit {
+  let (t.0.5: tobj, t.1.7: tobj) = unbox t.4 (,)
+  let t.0.6: enum = unbox t.0.5
+  let t.1.8: int = unbox t.1.7
+  let u.9: unit = drop t.4
+  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j5"(t.0.6, t.1.8)
+}
+internal yields uniform from 1 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$k1"(op.0: int, t.3: tobj) -> unit {
+  decref t.3
+  tail call "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j5"(#0, op.0)
+}
+yields uniform from 2 fn "Prelude.try_panic@[Unit]<e>$handle0{0=main$lambda0}$j5"(w.0: enum, op.1: int) -> unit {
+  let t.2: int = extern take Main.sub(op.1, w.0)
+  let t.3: obj = extern "Prelude.Show Int.show"(t.2)
+  let t.4: unit = extern Prelude.println(t.3)
+  return t.4
+}

@@ -174,7 +174,7 @@ impl TestDriver {
             })
         };
         match pending.op {
-            Op::Job(job) => done(job().map(Done::Size)),
+            Op::Job(job) => done(Ok(Done::Job(job()))),
             Op::Adopt { res } => done(self.adopt(res).map(Done::Handle)),
             Op::Wait { .. } => done(Err(no_processes())),
             Op::Read { handle, buf } if self.files.contains_key(&handle) => {
@@ -445,8 +445,9 @@ impl IoDriver for TestDriver {
         Err(no_processes())
     }
 
-    fn quiesce(&mut self) {
-        // 仕事とファイルの読み書きは取り消せないので、ほかの driver と同じく最後まで動かしてから結果を捨てる
+    fn quiesce(&mut self, _jobs: Duration) {
+        // 仕事とファイルの読み書きは取り消せないので、最後まで動かしてから結果を捨てる。仕事はここでその場で終わるので、
+        // 待つ上限 `jobs` は見ず、何も見捨てない (docs/spec/vm.md の「時計と driver」)
         for pending in std::mem::take(&mut self.ops) {
             match pending.op {
                 Op::Job(job) => {

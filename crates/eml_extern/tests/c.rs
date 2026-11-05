@@ -229,3 +229,80 @@ fn from_name_prefers_std_rows() {
     assert_eq!(ExternRef::from_name("M.missing", &c), None);
     assert_eq!(ExternRef::C(CFnId(0)).row(&c).name, "M.half");
 }
+
+fn blocking_function(params: Vec<CParam>, ret: CRet) -> CFunction {
+    CFunction::new(
+        "Test.f".to_string(),
+        "f".to_string(),
+        Vec::new(),
+        false,
+        true,
+        params,
+        ret,
+    )
+}
+
+#[test]
+fn a_blocking_row_splits_into_submit_and_take() {
+    // `Int` の引数を `Lin` の物体より前に置き、取り出しの位置が物体の中の順位で決まることを見る
+    let f = blocking_function(
+        vec![
+            CParam::Int(CInt::I32),
+            CParam::Text,
+            CParam::Float,
+            CParam::MutUnboxedArray,
+            CParam::Int(CInt::I64),
+            CParam::Handle(CHandleId(0)),
+        ],
+        CRet::Handle(CHandleId(0)),
+    );
+    let c = [f];
+    let row = c[0].row();
+    let submit = ExternRef::CSubmit(CFnId(0)).row(&c);
+    let take = ExternRef::CTake(CFnId(0)).row(&c);
+    assert_eq!(submit.params, row.params);
+    assert_eq!(submit.borrowed, row.borrowed);
+    assert_eq!(submit.param_marks, row.param_marks);
+    assert_eq!(submit.ret, OpRet::Repr(Repr::Int));
+    assert_eq!(submit.ret_mark, Mark::Unr);
+    assert_eq!(submit.purity, Purity::Effectful);
+    assert!(submit.faults, "the row narrows an argument");
+    assert!(submit.with_args.is_empty());
+    assert!(submit.held.iter().all(|&held| !held));
+    assert_eq!(submit.held.len(), submit.params.len());
+
+    assert_eq!(
+        take.params,
+        [Repr::Int, Repr::Enum, Repr::Obj, Repr::Obj, Repr::Obj]
+    );
+    assert_eq!(take.borrowed, [false, false, true, true, true]);
+    assert_eq!(
+        take.param_marks,
+        [Mark::Unr, Mark::Unr, Mark::Unr, Mark::Lin, Mark::Lin]
+    );
+    assert_eq!(take.ret, row.ret);
+    assert_eq!(take.ret_mark, row.ret_mark);
+    assert_eq!(take.purity, Purity::Effectful);
+    assert!(take.faults);
+    assert_eq!(take.with_args, [3, 4]);
+    assert!(take.held.iter().all(|&held| !held));
+    assert_eq!(take.held.len(), take.params.len());
+
+    assert!(row.writes && submit.writes && take.writes);
+    assert!(!submit.removable() && !take.removable());
+
+    let plain = blocking_function(vec![CParam::Int(CInt::I64), CParam::Text], CRet::Void);
+    let (row, submit, take) = (
+        plain.row(),
+        plain.submit_row().unwrap(),
+        plain.take_row().unwrap(),
+    );
+    assert!(!row.writes && !submit.writes && !take.writes);
+    assert!(!submit.faults, "the row narrows no argument");
+    assert!(take.faults);
+    assert!(take.with_args.is_empty());
+    assert!(!submit.removable() && !take.removable());
+
+    let sync = function(vec![CParam::MutUnboxedArray], CRet::Void);
+    assert!(sync.submit_row().is_none() && sync.take_row().is_none());
+}

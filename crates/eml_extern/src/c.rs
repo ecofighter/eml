@@ -129,6 +129,9 @@ pub struct CFunction {
     pub params: Vec<CParam>,
     pub ret: CRet,
     row: OwnedRow,
+    /// `blocking` の行だけが持つ、受け付けと取り出しの見え方 (docs/spec/vm.md の「`blocking` の呼び出し」)。
+    submit_row: Option<OwnedRow>,
+    take_row: Option<OwnedRow>,
 }
 
 impl CFunction {
@@ -176,6 +179,13 @@ impl CFunction {
             faults,
             writes: writes(&params),
         };
+        let (submit_row, take_row) = match blocking {
+            true => (
+                Some(submit_row(&row, &params)),
+                Some(take_row(&row, &params)),
+            ),
+            false => (None, None),
+        };
         CFunction {
             name,
             symbol,
@@ -185,12 +195,24 @@ impl CFunction {
             params,
             ret,
             row,
+            submit_row,
+            take_row,
         }
     }
 
     /// C の行の見え方 (docs/spec/lir.md の「extern の行」)。
     pub fn row(&self) -> FunctionRow<'_> {
         self.row.view()
+    }
+
+    /// `blocking` の行の受け付けの見え方。`blocking` でない行は `None` である。
+    pub fn submit_row(&self) -> Option<FunctionRow<'_>> {
+        self.submit_row.as_ref().map(OwnedRow::view)
+    }
+
+    /// `blocking` の行の取り出しの見え方。`blocking` でない行は `None` である。
+    pub fn take_row(&self) -> Option<FunctionRow<'_>> {
+        self.take_row.as_ref().map(OwnedRow::view)
     }
 
     /// 橋渡しの引数と結果の型。配列、文字列、ハンドルはポインタ1つの語で渡し、`NoArg` は語を持たない。
@@ -221,6 +243,67 @@ impl CFunction {
     /// (docs/spec/declarations.md の「型の対応」)。
     pub fn faults(&self) -> bool {
         faults(&self.params, self.ret)
+    }
+}
+
+/// 受け付けは C の引数をすべて C の行と同じに借り、記録の番号 (`Std.Async.OpId`) を返す。範囲の確かめは記録を作る
+/// 前に走るので、中断しうるのは狭める引数があるときだけである (docs/spec/vm.md の「`blocking` の呼び出し」)。
+fn submit_row(row: &OwnedRow, params: &[CParam]) -> OwnedRow {
+    let narrows = params
+        .iter()
+        .any(|param| matches!(param, CParam::Int(int) if int.narrows()));
+    OwnedRow {
+        name: row.name.clone(),
+        params: row.params.clone(),
+        param_marks: row.param_marks.clone(),
+        borrowed: row.borrowed.clone(),
+        with_args: Vec::new(),
+        held: vec![false; params.len()],
+        ret: OpRet::Repr(Repr::Int),
+        // 記録の番号は即値なので、型の Kind によらず `unr` である (docs/spec/core-ir.md の「translate が決める印」)
+        ret_mark: Mark::Unr,
+        purity: Purity::Effectful,
+        faults: narrows,
+        writes: writes(params),
+    }
+}
+
+/// 取り出しは記録の番号と `Wake` に続けて、C の引数のうち物体のものを順に借りる。物体の最後の使い道を取り出しの後に
+/// 置き、プールが読む間に落とさないためである。null のハンドル、IO の失敗、取り消しをどれも取り出しで起こすので、
+/// いつも中断しうる (docs/spec/vm.md の「`blocking` の呼び出し」)。
+fn take_row(row: &OwnedRow, params: &[CParam]) -> OwnedRow {
+    let objects: Vec<CParam> = params
+        .iter()
+        .copied()
+        .filter(|&param| param_repr(param) == Repr::Obj)
+        .collect();
+    let m = objects.len();
+    OwnedRow {
+        name: row.name.clone(),
+        params: [Repr::Int, Repr::Enum]
+            .into_iter()
+            .chain(std::iter::repeat_n(Repr::Obj, m))
+            .collect(),
+        param_marks: [Mark::Unr, Mark::Unr]
+            .into_iter()
+            .chain(objects.iter().map(|&param| param_mark(param)))
+            .collect(),
+        borrowed: [false, false]
+            .into_iter()
+            .chain(std::iter::repeat_n(true, m))
+            .collect(),
+        with_args: objects
+            .iter()
+            .enumerate()
+            .filter(|&(_, &param)| param_mark(param) == Mark::Lin)
+            .map(|(k, _)| 2 + k)
+            .collect(),
+        held: vec![false; 2 + m],
+        ret: row.ret,
+        ret_mark: row.ret_mark,
+        purity: Purity::Effectful,
+        faults: true,
+        writes: writes(params),
     }
 }
 

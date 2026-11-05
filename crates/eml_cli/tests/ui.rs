@@ -847,6 +847,155 @@ fn a_real_clock_file_does_not_wait_on_time() {
     }
 }
 
+fn em_files_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            em_files_under(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "em") {
+            out.push(path);
+        }
+    }
+}
+
+/// `extern "C"` の宣言の行から、eml の側の名前と C の記号の名前を取る。`symbol` を書かなければ名前が記号になる。
+fn declared_c_function(line: &str) -> Option<(&str, &str)> {
+    if !line.starts_with("extern \"C\"") {
+        return None;
+    }
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.get(2) == Some(&"data") {
+        return None;
+    }
+    let colon = tokens.iter().position(|&token| token == ":")?;
+    let name = tokens[colon.checked_sub(1)?];
+    let symbol = tokens
+        .iter()
+        .position(|&token| token == "symbol")
+        .and_then(|at| tokens.get(at + 1))
+        .map_or(name, |quoted| quoted.trim_matches('"'));
+    Some((name, symbol))
+}
+
+/// 番号の引数が数字だけの literal のものを、番号として返す。`(1100 + k)` のような計算は literal でないので数えない。
+fn literal_id(token: Option<&&str>) -> Option<i64> {
+    let digits = token?.trim_end_matches(')');
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// ファイルが literal で書く、ハンドルの tag と鍵の番号。番号の位置は fixture の関数ごとに決まる。
+fn literal_fixture_ids(text: &str) -> Vec<i64> {
+    const FIRST_ARGUMENT: [&str; 4] = [
+        "eml_fixture_handle_new",
+        "eml_fixture_frees",
+        "eml_fixture_gate_open",
+        "eml_fixture_gate_wait",
+    ];
+    const SECOND_ARGUMENT: [&str; 1] = ["eml_fixture_handle_wait"];
+    let code: Vec<&str> = text
+        .lines()
+        .map(|line| line.split("--").next().unwrap_or(line))
+        .collect();
+    let declared: Vec<(&str, &str)> = code
+        .iter()
+        .filter_map(|line| declared_c_function(line))
+        .collect();
+    let symbol_of = |name: &str| {
+        declared
+            .iter()
+            .find(|(declared_name, _)| *declared_name == name)
+            .map(|(_, symbol)| *symbol)
+    };
+    let mut ids = Vec::new();
+    for line in code.iter().filter(|line| !line.starts_with("extern")) {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        for (at, token) in tokens.iter().enumerate() {
+            let Some(symbol) = symbol_of(token.trim_start_matches('(')) else {
+                continue;
+            };
+            let position = if FIRST_ARGUMENT.contains(&symbol) {
+                1
+            } else if SECOND_ARGUMENT.contains(&symbol) {
+                2
+            } else {
+                continue;
+            };
+            ids.extend(literal_id(tokens.get(at + position)));
+        }
+    }
+    ids
+}
+
+/// fixture のファイルは `-- fixture ids: A..B` を1つ持つ。範囲は半開きで空でなく、ファイルどうしで重ならず、ファイルが
+/// literal で書くハンドルの tag と鍵の番号を含む。`repl/ffi/fixtures.repl` の tag 3 は範囲に入れない
+/// (docs/implementation/testing.md の「UI テスト」)。
+#[test]
+fn fixture_ids_are_disjoint_across_files() {
+    const TRANSCRIPT_TAG: i64 = 3;
+    let mut files = Vec::new();
+    em_files_under(&ui_root(), &mut files);
+    files.sort();
+    let mut ranges: Vec<(i64, i64, String)> = Vec::new();
+    let mut literals = 0;
+    for path in files {
+        let text = fs::read_to_string(&path).unwrap();
+        if !text.lines().any(|line| line.starts_with("-- fixtures:")) {
+            continue;
+        }
+        let name = path
+            .strip_prefix(ui_root())
+            .unwrap()
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        let marks: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("-- fixture ids: "))
+            .collect();
+        assert_eq!(
+            marks.len(),
+            1,
+            "{name}: a fixture file has exactly one `-- fixture ids: A..B` line"
+        );
+        let (low, high) = marks[0]
+            .split_once("..")
+            .and_then(|(low, high)| Some((low.parse::<i64>().ok()?, high.parse::<i64>().ok()?)))
+            .unwrap_or_else(|| panic!("{name}: `{}` is not `A..B`", marks[0]));
+        assert!(low < high, "{name}: the range {low}..{high} is empty");
+        assert!(
+            !(low..high).contains(&TRANSCRIPT_TAG),
+            "{name}: the range {low}..{high} contains tag {TRANSCRIPT_TAG}, which the transcript fixtures.repl uses"
+        );
+        for id in literal_fixture_ids(&text) {
+            literals += 1;
+            assert!(
+                (low..high).contains(&id),
+                "{name}: the id {id} is outside its range {low}..{high}"
+            );
+        }
+        ranges.push((low, high, name));
+    }
+    assert!(!ranges.is_empty(), "no fixture file under tests/ui");
+    assert!(literals > 0, "no literal fixture id found");
+    ranges.sort();
+    for pair in ranges.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        assert!(
+            a.1 <= b.0,
+            "{} ({}..{}) overlaps {} ({}..{})",
+            a.2,
+            a.0,
+            a.1,
+            b.2,
+            b.0,
+            b.1
+        );
+    }
+}
+
 #[test]
 #[should_panic(expected = "clock marks are not supported here")]
 fn a_clock_mark_in_a_transcript_fails() {

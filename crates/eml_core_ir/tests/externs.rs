@@ -766,7 +766,7 @@ fn every_runtime_entry_is_a_monomorphic_std_function() {
         assert_eq!(params, entry.params(), "{}", entry.name());
         assert_eq!(
             boxed_repr(types, ty, program),
-            Repr::Unit,
+            entry.ret(),
             "{}",
             entry.name()
         );
@@ -795,7 +795,20 @@ fn the_runtime_entries_have_the_declared_abi() {
         assert_eq!(params, entry.params(), "{}", entry.name());
         assert_eq!(function.split, None, "{}", entry.name());
         assert!(!function.internal, "{}", entry.name());
-        assert_eq!(function.ret, Repr::Unit, "{}", entry.name());
+        // 組の結果は下ろした後は構造体の Repr で、`io_wait` の `(Wake, OpId)` である
+        if entry.ret() == Repr::Obj {
+            let Repr::Struct(id) = function.ret else {
+                panic!("`{}` returns a struct", entry.name());
+            };
+            assert_eq!(
+                core.structs.shape(id).fields,
+                [(Repr::Enum, Mark::Unr), (Repr::Int, Mark::Unr)],
+                "{}",
+                entry.name()
+            );
+        } else {
+            assert_eq!(function.ret, entry.ret(), "{}", entry.name());
+        }
     }
 }
 

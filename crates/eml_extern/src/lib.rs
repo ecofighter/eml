@@ -2226,8 +2226,8 @@ impl Extern {
     }
 }
 
-/// ランタイムが名前で呼ぶ std の eml の関数。どれも単相なので、名前がそのまま instance の名前になり、引数の Repr が
-/// 名前で決まる (docs/spec/stdlib.md の「`Std.Async`」)。
+/// ランタイムか処理系が名前で呼ぶ std の eml の関数。どれも単相なので、名前がそのまま instance の名前になり、引数の
+/// Repr が名前で決まる (docs/spec/stdlib.md の「`Std.Async`」)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RuntimeEntry {
     /// タスクを始める。引数はタスクの本体の閉包である。
@@ -2236,6 +2236,9 @@ pub enum RuntimeEntry {
     ResumeTask,
     /// driver の操作を待たせたタスクを再開する。引数は預けた継続と、それに渡す `Wake` と token である。
     ResumeIo,
+    /// 操作の記録を待つ。translate が `blocking` の C の呼び出しの受け付けと取り出しの間に呼ぶ。引数は記録の番号で、
+    /// 結果は `(Wake, OpId)` である (docs/spec/vm.md の「`blocking` の呼び出し」)。
+    IoWait,
 }
 
 impl RuntimeEntry {
@@ -2243,6 +2246,7 @@ impl RuntimeEntry {
         RuntimeEntry::StartTask,
         RuntimeEntry::ResumeTask,
         RuntimeEntry::ResumeIo,
+        RuntimeEntry::IoWait,
     ];
 
     pub fn name(self) -> &'static str {
@@ -2250,6 +2254,7 @@ impl RuntimeEntry {
             RuntimeEntry::StartTask => "Std.Async.start_task",
             RuntimeEntry::ResumeTask => "Std.Async.resume_task",
             RuntimeEntry::ResumeIo => "Std.Async.resume_io",
+            RuntimeEntry::IoWait => "Std.Async.io_wait",
         }
     }
 
@@ -2257,12 +2262,23 @@ impl RuntimeEntry {
         self.params().len()
     }
 
-    /// 引数の Repr。結果はどれも `Unit` である。
+    /// 引数の Repr。
     pub fn params(self) -> &'static [Repr] {
         match self {
             RuntimeEntry::StartTask => &[Repr::TObj],
             RuntimeEntry::ResumeTask => &[Repr::TObj, Repr::Enum],
             RuntimeEntry::ResumeIo => &[Repr::TObj, Repr::Enum, Repr::Int],
+            RuntimeEntry::IoWait => &[Repr::Int],
+        }
+    }
+
+    /// 結果の Repr。箱の形の Repr で、組の結果は `Obj` である。
+    pub fn ret(self) -> Repr {
+        match self {
+            RuntimeEntry::StartTask | RuntimeEntry::ResumeTask | RuntimeEntry::ResumeIo => {
+                Repr::Unit
+            }
+            RuntimeEntry::IoWait => Repr::Obj,
         }
     }
 }
@@ -2357,6 +2373,9 @@ pub enum ExternRef {
     Std(Extern),
     /// プログラムの C の関数の表の添字。
     C(CFnId),
+    /// `blocking` の C の関数の受け付けと取り出し。添字は `C` と同じ表を指す (docs/spec/vm.md の「`blocking` の呼び出し」)。
+    CSubmit(CFnId),
+    CTake(CFnId),
 }
 
 impl From<Extern> for ExternRef {
@@ -2369,7 +2388,7 @@ impl ExternRef {
     pub fn std(self) -> Option<Extern> {
         match self {
             ExternRef::Std(ext) => Some(ext),
-            ExternRef::C(_) => None,
+            ExternRef::C(_) | ExternRef::CSubmit(_) | ExternRef::CTake(_) => None,
         }
     }
 
@@ -2378,6 +2397,10 @@ impl ExternRef {
         match self {
             ExternRef::Std(ext) => *ext.row(),
             ExternRef::C(id) => c[id.0 as usize].row(),
+            ExternRef::CSubmit(id) => c[id.0 as usize]
+                .submit_row()
+                .expect("a blocking C function"),
+            ExternRef::CTake(id) => c[id.0 as usize].take_row().expect("a blocking C function"),
         }
     }
 

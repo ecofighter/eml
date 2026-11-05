@@ -151,7 +151,7 @@ fn a_short_write_is_continued_under_the_same_key() {
     let done = completions(&mut driver);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].key, 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(11));
+    assert!(matches!(done[0].result, Ok(Done::Size(11))));
     assert_eq!(driver.backend.sent, b"hello world");
     let sends = calls(&driver.backend)
         .into_iter()
@@ -313,7 +313,7 @@ fn a_retry_delivered_twice_completes_once() {
     assert!(driver.wait(None).unwrap());
     let done = completions(&mut driver);
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     assert_eq!(&data[..2], b"hi");
     assert_eq!(driver.pending(), 0);
     let recvs = calls(&driver.backend)
@@ -431,7 +431,7 @@ fn closing_a_handle_with_a_pending_op_closes_after_the_op() {
     assert_eq!(e.to_string(), "no such handle");
     driver.backend.events.push(retry(1));
     let done = settle(&mut driver);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     let closes = driver
         .backend
         .calls
@@ -458,7 +458,7 @@ fn quiesce_closes_the_stream_of_a_discarded_accept() {
     assert!(driver.wait(None).unwrap());
     assert_eq!(driver.pending(), 1);
     assert!(!probe.closed());
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     assert!(probe.closed());
 }
@@ -493,12 +493,12 @@ fn a_failed_wait_breaks_the_driver() {
         },
     ));
     assert_eq!(e.to_string(), "the poller failed");
-    let e = error_of(driver.submit(3, Op::Job(Box::new(|| Ok(0)))));
+    let e = error_of(driver.submit(3, Op::Job(Box::new(|| Box::new(0usize)))));
     assert_eq!(e.to_string(), "the poller failed");
     driver.cancel(1);
     assert_eq!(driver.backend.calls.len(), waits);
     assert!(completions(&mut driver).is_empty());
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 1);
     assert_eq!(driver.backend.spawned.get(), 0);
 }
@@ -517,7 +517,7 @@ fn quiesce_breaks_on_a_cancel_that_never_completes() {
             buf: buf(&mut data),
         },
     ));
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.now(), Duration::from_secs(1));
     assert_eq!(driver.pending(), 1);
     assert_eq!(
@@ -634,7 +634,7 @@ fn a_retry_for_a_held_op_restarts_the_step() {
     ));
     driver.backend.events.push(retry(1));
     let done = settle(&mut driver);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     assert_eq!(starts(&driver.backend), 2);
     assert_eq!(&data[..2], b"ab");
 }
@@ -666,7 +666,7 @@ fn write_completed_after_a_cancel(n: usize) -> (Completion, usize) {
 #[test]
 fn a_full_write_completed_after_a_cancel_succeeds() {
     let (done, _) = write_completed_after_a_cancel(4);
-    assert_eq!(done.result.as_ref().unwrap(), &Done::Size(4));
+    assert!(matches!(done.result, Ok(Done::Size(4))));
     assert!(!done.cancelled);
 }
 
@@ -690,7 +690,7 @@ fn closing_a_handle_with_a_held_op_closes_after_the_event() {
         arrival: Arrival::Done(Ok(Outcome::Size(1))),
     });
     let done = settle(&mut driver);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(1));
+    assert!(matches!(done[0].result, Ok(Done::Size(1))));
     assert_eq!(driver.backend.calls.last(), Some(&Call::Close(0)));
 }
 
@@ -722,7 +722,7 @@ fn drop_after_a_broken_quiesce_cancels_every_slot_once() {
         .backend
         .cancels
         .push_back(Err(io::Error::other("refused")));
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 2);
     assert_eq!(driver.wait(None).unwrap_err().to_string(), "refused");
     // 断られた欄も、印だけ立った欄も、落とすときに1回ずつ取り消しを出す
@@ -799,10 +799,23 @@ fn a_cancelled_arrival_without_a_cancel_is_a_contract_violation() {
 }
 
 #[test]
+fn a_job_returns_its_boxed_value() {
+    let mut driver = driver();
+    pending(driver.submit(1, Op::Job(Box::new(|| Box::new(42u64)))));
+    let done = settle(&mut driver);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].key, 1);
+    let Ok(Done::Job(value)) = &done[0].result else {
+        panic!("not a job value");
+    };
+    assert_eq!(value.downcast_ref::<u64>(), Some(&42));
+}
+
+#[test]
 fn a_job_panic_is_raised_on_the_driver_thread() {
     let mut driver = driver();
     pending(driver.submit(1, Op::Job(Box::new(|| panic!("boom")))));
-    pending(driver.submit(2, Op::Job(Box::new(|| Ok(7)))));
+    pending(driver.submit(2, Op::Job(Box::new(|| Box::new(7usize)))));
     let mut done = Vec::new();
     let payload = loop {
         match panic::catch_unwind(AssertUnwindSafe(|| driver.wait(None))) {
@@ -817,7 +830,10 @@ fn a_job_panic_is_raised_on_the_driver_thread() {
     done.extend(settle(&mut driver));
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].key, 2);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(7));
+    let Ok(Done::Job(value)) = &done[0].result else {
+        panic!("not a job value");
+    };
+    assert_eq!(value.downcast_ref::<usize>(), Some(&7));
     assert_eq!(driver.pending(), 0);
 }
 
@@ -825,7 +841,7 @@ fn a_job_panic_is_raised_on_the_driver_thread() {
 fn a_job_whose_thread_cannot_start_completes_once_with_an_error() {
     let mut driver = driver();
     driver.backend.spawn_error = true;
-    pending(driver.submit(1, Op::Job(Box::new(|| Ok(1)))));
+    pending(driver.submit(1, Op::Job(Box::new(|| Box::new(1usize)))));
     assert!(driver.wait(None).unwrap());
     let done = completions(&mut driver);
     assert_eq!(done.len(), 1);
@@ -841,13 +857,14 @@ fn quiesce_waits_for_a_running_job() {
     let (tx, rx) = mpsc::channel::<()>();
     let ran = Arc::new(AtomicBool::new(false));
     let mut driver = driver();
+    driver.backend.ring_while_threads_run = true;
     let job_ran = Arc::clone(&ran);
     pending(driver.submit(
         1,
         Op::Job(Box::new(move || {
             rx.recv().unwrap();
             job_ran.store(true, Ordering::SeqCst);
-            Ok(3)
+            Box::new(3usize)
         })),
     ));
     // 門は `quiesce` が待ち始めた後に開く。遅れは検出力のためだけで、待つ driver ではいつも仕事が先に終わる
@@ -855,11 +872,76 @@ fn quiesce_waits_for_a_running_job() {
         thread::sleep(Duration::from_millis(20));
         tx.send(()).unwrap();
     });
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert!(ran.load(Ordering::SeqCst));
     assert_eq!(driver.pending(), 0);
     assert!(completions(&mut driver).is_empty());
     opener.join().unwrap();
+}
+
+#[test]
+fn quiesce_abandons_a_running_job_after_its_budget() {
+    let (started_tx, started) = mpsc::channel::<()>();
+    let (open, gate) = mpsc::channel::<()>();
+    let mut driver = driver();
+    // 門は `quiesce` が戻るまで閉じたままなので、`quiesce` の中では時計が進むことしか起きない
+    driver.backend.advance_while_threads_run = true;
+    pending(driver.submit(
+        1,
+        Op::Job(Box::new(move || {
+            started_tx.send(()).unwrap();
+            gate.recv().unwrap();
+            Box::new(1usize)
+        })),
+    ));
+    // 列で待つうちに見捨てると走らずに落ちるので、走り始めるのを待つ
+    started.recv().unwrap();
+    driver.quiesce(Duration::from_millis(10));
+    assert_eq!(driver.pending(), 1);
+    open.send(()).unwrap();
+    // プールのスレッドは仕事を終えても空いたまま残るので、`finished` でなく答えの起こしを待つ
+    driver.backend.bell.wait();
+    assert!(driver.wait(Some(0)).unwrap());
+    assert!(completions(&mut driver).is_empty());
+    assert_eq!(driver.pending(), 1);
+}
+
+#[test]
+fn quiesce_drops_a_queued_job_unrun() {
+    let (started_tx, started) = mpsc::channel::<()>();
+    let (open, gate) = mpsc::channel::<()>();
+    let ran = Arc::new(AtomicBool::new(false));
+    let mut driver = Driver::with_limits(Fake::new(), no_lookup, 1, 1);
+    driver.backend.advance_while_threads_run = true;
+    pending(driver.submit(
+        1,
+        Op::Job(Box::new(move || {
+            started_tx.send(()).unwrap();
+            gate.recv().unwrap();
+            Box::new(1usize)
+        })),
+    ));
+    let job_ran = Arc::clone(&ran);
+    pending(driver.submit(
+        2,
+        Op::Job(Box::new(move || {
+            job_ran.store(true, Ordering::SeqCst);
+            Box::new(2usize)
+        })),
+    ));
+    // 1本のスレッドが1つ目で止まるので、2つ目は列で待つ
+    started.recv().unwrap();
+    driver.quiesce(Duration::from_millis(10));
+    assert_eq!(driver.pending(), 2);
+    // 列から外した仕事は `quiesce` の中で落ちるので、2つ目の閉包が持つ参照はもうない。スケジュールに依らない
+    assert_eq!(Arc::strong_count(&ran), 1);
+    open.send(()).unwrap();
+    // 1つ目の答えを引き取るまで進める。2つ目は列から外れたので、空いたスレッドも取らない
+    driver.backend.bell.wait();
+    assert!(driver.wait(Some(0)).unwrap());
+    assert!(completions(&mut driver).is_empty());
+    assert_eq!(driver.pending(), 2);
+    assert!(!ran.load(Ordering::SeqCst));
 }
 
 static SLOW: Gate = Gate::new();
@@ -914,7 +996,7 @@ fn quiesce_abandons_a_lookup_and_drops_its_late_answer() {
             port: 80,
         },
     ));
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     QUIESCED.open();
     driver.backend.finished.reach(1);
@@ -1076,7 +1158,7 @@ mod pool {
 
     use eml_rt::{Done, IoDriver, Op};
 
-    use super::super::backend::Backend;
+    use super::super::backend::{Backend, Job};
     use super::super::inbox::{Answer, Inbox};
     use super::super::pool::Pool;
     use super::fake::Fake;
@@ -1086,7 +1168,7 @@ mod pool {
     fn a_job_beyond_the_limit_does_not_block_submit() {
         let fake: Fake = Fake::new();
         let inbox = Inbox::new(fake.waker());
-        let mut pool = Pool::new(Arc::clone(&inbox), 2);
+        let mut pool = Pool::new(Arc::clone(&inbox), 2, 2);
         let (started_tx, started) = mpsc::channel();
         let mut gates = Vec::new();
         for i in 0..3u64 {
@@ -1096,11 +1178,11 @@ mod pool {
             pool.submit(
                 &fake,
                 i,
-                Box::new(move || {
+                Job::File(Box::new(move || {
                     started_tx.send(i).unwrap();
                     gate_rx.recv().unwrap();
                     Ok(usize::try_from(i).unwrap())
-                }),
+                })),
             );
         }
         let first = started.recv().unwrap();
@@ -1123,7 +1205,7 @@ mod pool {
         let mut sizes: Vec<usize> = answers
             .into_iter()
             .map(|(_, answer)| match answer {
-                Answer::Job(Ok(Ok(n))) => n,
+                Answer::Job(Ok(Ok(Done::Size(n)))) => n,
                 _ => panic!("a job failed"),
             })
             .collect();
@@ -1135,9 +1217,80 @@ mod pool {
     }
 
     #[test]
+    fn jobs_beyond_the_job_limit_wait_while_a_file_job_gets_a_thread() {
+        let fake: Fake = Fake::new();
+        let inbox = Inbox::new(fake.waker());
+        let mut pool = Pool::new(Arc::clone(&inbox), 3, 2);
+        let (started_tx, started) = mpsc::channel();
+        let mut gates = Vec::new();
+        let mut submit_value = |pool: &mut Pool, i: u64| {
+            let (gate, gate_rx) = mpsc::channel::<()>();
+            gates.push(gate);
+            let started_tx = started_tx.clone();
+            pool.submit(
+                &fake,
+                i,
+                Job::Value(Box::new(move || {
+                    started_tx.send(i).unwrap();
+                    gate_rx.recv().unwrap();
+                    Box::new(i)
+                })),
+            );
+        };
+        submit_value(&mut pool, 0);
+        submit_value(&mut pool, 1);
+        let first = started.recv().unwrap();
+        started.recv().unwrap();
+        // 2つの値の仕事が上限を埋めているので、3つ目は列で待ち、スレッドも増やさない
+        submit_value(&mut pool, 2);
+        assert_eq!(fake.spawned.get(), 2);
+        assert!(started.try_recv().is_err());
+        // ファイルの仕事は3本目のスレッドを得て、2つの門が閉じたまま答える
+        pool.submit(&fake, 3, Job::File(Box::new(|| Ok(3))));
+        assert_eq!(fake.spawned.get(), 3);
+        let mut answers = std::collections::VecDeque::new();
+        while answers.is_empty() {
+            inbox.take(&mut answers);
+            if answers.is_empty() {
+                fake.bell.wait();
+            }
+        }
+        assert_eq!(answers.len(), 1);
+        assert!(matches!(
+            answers.pop_front(),
+            Some((3, Answer::Job(Ok(Ok(Done::Size(3))))))
+        ));
+        assert!(started.try_recv().is_err());
+        // 門を1つ開けると、待っていた値の仕事が始まる
+        gates[usize::try_from(first).unwrap()].send(()).unwrap();
+        assert_eq!(started.recv().unwrap(), 2);
+        for gate in &gates {
+            let _ = gate.send(());
+        }
+        let mut values = Vec::new();
+        while values.len() < 3 {
+            inbox.take(&mut answers);
+            for (_, answer) in answers.drain(..) {
+                match answer {
+                    Answer::Job(Ok(Ok(Done::Job(v)))) => values.push(*v.downcast::<u64>().unwrap()),
+                    _ => panic!("a job failed"),
+                }
+            }
+            if values.len() < 3 {
+                fake.bell.wait();
+            }
+        }
+        values.sort();
+        assert_eq!(values, [0, 1, 2]);
+        assert_eq!(fake.spawned.get(), 3);
+        drop(pool);
+        assert_eq!(fake.finished.get(), 3);
+    }
+
+    #[test]
     fn two_jobs_submitted_to_one_idle_thread_run_together() {
         let mut driver = driver();
-        pending(driver.submit(0, Op::Job(Box::new(|| Ok(0)))));
+        pending(driver.submit(0, Op::Job(Box::new(|| Box::new(0usize)))));
         assert_eq!(settle(&mut driver).len(), 1);
         // 空いたスレッドを作るためだけに眠る。合否には効かない
         thread::sleep(Duration::from_millis(5));
@@ -1146,19 +1299,19 @@ mod pool {
             1,
             Op::Job(Box::new(move || {
                 rx.recv().unwrap();
-                Ok(1)
+                Box::new(1usize)
             })),
         ));
         pending(driver.submit(
             2,
             Op::Job(Box::new(move || {
                 tx.send(()).unwrap();
-                Ok(2)
+                Box::new(2usize)
             })),
         ));
         let done = settle(&mut driver);
         assert_eq!(done.len(), 2);
-        assert!(done.iter().all(|c| matches!(c.result, Ok(Done::Size(_)))));
+        assert!(done.iter().all(|c| matches!(c.result, Ok(Done::Job(_)))));
     }
 }
 
@@ -1260,7 +1413,7 @@ fn a_file_read_job_fills_the_lent_room() {
     ));
     let done = settle(&mut driver);
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(5));
+    assert!(matches!(done[0].result, Ok(Done::Size(5))));
     assert!(!done[0].cancelled);
     assert_eq!(&data[..5], b"hello");
     // ファイルの読みは backend の歩を出さない
@@ -1280,7 +1433,7 @@ fn a_file_write_job_reads_the_lent_bytes() {
         },
     ));
     // `quiesce` はファイルの仕事も取り消さずに待ちきる
-    driver.quiesce();
+    driver.quiesce(Duration::from_secs(10));
     assert_eq!(driver.pending(), 0);
     assert_eq!(*driver.backend.file.lock().unwrap(), b"written");
 }
@@ -1313,6 +1466,31 @@ fn a_dropped_driver_waits_for_a_file_job() {
 }
 
 #[test]
+fn quiesce_still_waits_for_a_file_job() {
+    let mut driver = driver();
+    let open = gate_next_file_job(&driver);
+    let handle = adopted_file(&mut driver);
+    let mut data = *b"slow";
+    pending(driver.submit(
+        1,
+        Op::Write {
+            handle,
+            buf: buf(&mut data),
+        },
+    ));
+    // 門は `quiesce` が待ち始めた後に開く。遅れは検出力のためだけで、待つ `quiesce` ではいつも仕事が先に終わる
+    let opener = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(20));
+        open.send(()).unwrap();
+    });
+    // `Op::Job` を待つ上限が 0 でも、ファイルの仕事は見捨てない
+    driver.quiesce(Duration::ZERO);
+    assert_eq!(driver.pending(), 0);
+    assert_eq!(*driver.backend.file.lock().unwrap(), b"slow");
+    opener.join().unwrap();
+}
+
+#[test]
 fn a_cancel_does_not_end_a_file_job() {
     let mut driver = driver();
     let open = gate_next_file_job(&driver);
@@ -1332,7 +1510,7 @@ fn a_cancel_does_not_end_a_file_job() {
     open.send(()).unwrap();
     let done = settle(&mut driver);
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(2));
+    assert!(matches!(done[0].result, Ok(Done::Size(2))));
     assert!(!done[0].cancelled);
     assert_eq!(&data[..2], b"ab");
     assert_eq!(cancels(&driver.backend), 0);
@@ -1355,7 +1533,7 @@ fn a_closed_file_waits_for_its_running_job() {
     assert!(!driver.backend.calls.contains(&Call::Close(0)));
     open.send(()).unwrap();
     let done = settle(&mut driver);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(0));
+    assert!(matches!(done[0].result, Ok(Done::Size(0))));
     assert_eq!(calls(&driver.backend).last(), Some(&&Call::Close(0)));
 }
 
@@ -1488,7 +1666,7 @@ fn a_wait_ends_after_its_retry_with_size_zero() {
     driver.backend.events.push(retry(1));
     let done = settle(&mut driver);
     assert_eq!(done.len(), 1);
-    assert_eq!(done[0].result.as_ref().unwrap(), &Done::Size(0));
+    assert!(matches!(done[0].result, Ok(Done::Size(0))));
     assert!(!done[0].cancelled);
     assert_eq!(
         calls(&driver.backend),

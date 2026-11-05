@@ -403,6 +403,16 @@ impl<'a> View<'a> {
                 self.c_functions[ops(at)[0] as usize].function.name,
                 args(at, 2)
             ),
+            Op::FfiSubmit { dst, at } => format!(
+                "ffi submit s{dst} = {}({})",
+                self.c_functions[ops(at)[0] as usize].function.name,
+                args(at, 2)
+            ),
+            Op::FfiTake { dst, at } => format!(
+                "ffi take s{dst} = {}({})",
+                self.c_functions[ops(at)[0] as usize].function.name,
+                args(at, 2)
+            ),
         };
         // エントリの行は直前の関数の最後の命令の次の位置で引けてしまうので、見出しの行にだけ書く。
         // 手放すものも token も着地もない行は書かない。どの命令に行があるかは命令の種類で決まるので、書かなくても失うものはない

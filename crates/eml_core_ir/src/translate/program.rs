@@ -2,7 +2,7 @@
 
 use eml_extern::{
     CFnId, CFunction, CHandleId, CHandleType, CParam, CRet, Extern, ExternRef, ExternType,
-    FunctionRow,
+    FunctionRow, RuntimeEntry,
 };
 use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, FunctionKind, Items, ModuleId,
@@ -104,6 +104,8 @@ pub(super) struct ProgramBuilder {
     c_function_ids: FxHashMap<FunctionId, CFnId>,
     pub(super) c_handles: Vec<CHandleType>,
     c_handle_ids: FxHashMap<TypeDefId, CHandleId>,
+    /// ランタイムか処理系が名前で呼ぶ関数の番号。読み込んだ std にある entry だけを持つ。
+    pub(super) runtime: FxHashMap<RuntimeEntry, FnIdx>,
 }
 
 impl ProgramBuilder {
@@ -131,7 +133,12 @@ impl ProgramBuilder {
             c_function_ids: FxHashMap::default(),
             c_handles: Vec::new(),
             c_handle_ids: FxHashMap::default(),
+            runtime: FxHashMap::default(),
         }
+    }
+
+    pub(super) fn runtime_target(&self, entry: RuntimeEntry) -> Option<FnIdx> {
+        self.runtime.get(&entry).copied()
     }
 
     /// extern の命令が指す行。C の行は、このプログラムの C の表から引く。
@@ -567,8 +574,11 @@ impl ProgramBuilder {
         builder.terminate(Term::Return(result));
         let info = self.var_info("t", hir, types, result_type);
         // `IO` を起こす extern も、失敗すると継続を作らずに巻き戻すので yield の地点でない。包む関数は extern を呼ぶだけ
-        // なので yield しない (docs/spec/core-ir.md の「IO の extern」)。値として生まれるので、引数と結果は一様である
-        let mut core = builder.finish(name, true, false, info.repr, info.mark);
+        // なので yield しない (docs/spec/core-ir.md の「IO の extern」)。`blocking` の C の行だけは、受け付けと取り出しの
+        // 間に `io_wait` で止まるので yield する (docs/spec/core-ir.md の「組を返す extern」)。値として生まれるので、
+        // 引数と結果は一様である
+        let yields = matches!(row, ExternRef::C(id) if self.c_functions[id.0 as usize].blocking);
+        let mut core = builder.finish(name, true, yields, info.repr, info.mark);
         core.split = Some(0);
         self.finish(function, core);
         function
@@ -609,6 +619,12 @@ impl ProgramBuilder {
             return Atom::Var(builder.bind(info, Rhs::Call { call, mask }));
         }
         debug_assert!(mask.is_empty(), "only par has a mask among the externs");
+        let (ext, args) = match ext {
+            ExternRef::C(id) if self.c_functions[id.0 as usize].blocking => {
+                self.blocking_call(builder, id, args, at)
+            }
+            _ => (ext, args),
+        };
         if self.row(ext).with_args.is_empty() {
             let info = self.var_info("t", hir, types, ty);
             return Atom::Var(builder.bind(info, Rhs::Extern { ext, args, at }));
@@ -619,6 +635,58 @@ impl ProgramBuilder {
         let value = self.var_info("t", hir, types, elements[0]);
         let pair = self.var_info("d", hir, types, ty);
         self.lending_call(builder, ext, args, at, value, pair)
+    }
+
+    /// `blocking` の C の関数 `id` の呼び出しを、受け付けと `Std.Async.io_wait` まで下ろし、残りの取り出しの行と
+    /// その引数を返す。取り出しは記録の番号と `Wake` に続けて、C の引数のうち物体のものを借りる。物体の最後の使い道を
+    /// 取り出しの後に置き、プールが読む間に生かすためである (docs/spec/core-ir.md の「組を返す extern」)。
+    fn blocking_call(
+        &mut self,
+        builder: &mut FnBuilder,
+        id: CFnId,
+        args: Vec<Atom>,
+        at: Option<Loc>,
+    ) -> (ExternRef, Vec<Atom>) {
+        let objects: Vec<Atom> = args
+            .iter()
+            .zip(self.row(ExternRef::C(id)).borrowed)
+            .filter(|&(_, &borrowed)| borrowed)
+            .map(|(&arg, _)| arg)
+            .collect();
+        let submitted = builder.bind(
+            VarInfo::new("op", Repr::Int, Mark::Unr),
+            Rhs::Extern {
+                ext: ExternRef::CSubmit(id),
+                args,
+                at,
+            },
+        );
+        let io_wait = self
+            .runtime_target(RuntimeEntry::IoWait)
+            .expect("a blocking row names `Async`, so `Std.Async` is loaded");
+        // `io_wait` の結果 `(Wake, OpId)` は構造体の Repr なので、型を持たない組の形で同じ構造体を作る。フィールドは
+        // どちらも即値なので印は `unr` で、組は `OpId` を含むので型どおり `lin` である (docs/spec/core-ir.md の
+        // 「translate が決める印」)
+        let layout = self.tuple_layout(2);
+        let pair_repr = self.tuple_struct(
+            layout,
+            vec![(Repr::Enum, Mark::Unr), (Repr::Int, Mark::Unr)],
+        );
+        let pair = builder.var(VarInfo::new("r", pair_repr, Mark::Lin));
+        builder.emit(Stmt::Let {
+            var: pair,
+            rhs: Rhs::call(Call::Direct(io_wait, vec![Atom::Var(submitted)])),
+        });
+        let wake = builder.var(VarInfo::new("w", Repr::Enum, Mark::Unr));
+        let op = builder.var(VarInfo::new("op", Repr::Int, Mark::Unr));
+        builder.emit(Stmt::Unpack {
+            value: pair,
+            ctor: Ctor { layout, tag: TUPLE },
+            fields: vec![wake, op],
+        });
+        let mut take = vec![Atom::Var(op), Atom::Var(wake)];
+        take.extend(objects);
+        (ExternRef::CTake(id), take)
     }
 
     /// `with_args` の行 `ext` を呼び、行の結果 (変数 `value`) と、借りた引数を `with_args` の順に並べた組 (変数

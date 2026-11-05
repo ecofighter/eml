@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use eml_extern::{
-    CFunction, CHandleId, CHandleType, CInt, CLibrary, CLink, CParam, CRet, ExternRef, Os,
+    CFnId, CFunction, CHandleId, CHandleType, CInt, CLibrary, CLink, CParam, CRet, ExternRef, Os,
 };
 use rustc_hash::FxHashMap;
 
@@ -914,15 +914,36 @@ impl<'t> Reader<'t> {
     }
 
     /// `extern` の後の、extern、引数、位置。引数はいくつでも読む。誤りを含む IR も読み戻して verifier に報告させるため、
-    /// 引数の数は verifier が表の値と比べる。
+    /// 引数の数は verifier が表の値と比べる。名前の前の `submit` と `take` は `blocking` の C の関数の受け付けと
+    /// 取り出しで、どちらも修飾のない語なので extern の名前と取り違えない。
     pub fn extern_call(
         &mut self,
         state: &mut FnState,
     ) -> Result<(ExternRef, Vec<Atom>, Option<Loc>), ParseError> {
         let line = self.line();
+        let split: Option<fn(CFnId) -> ExternRef> = match self.peek_word() {
+            Some("submit") => Some(ExternRef::CSubmit),
+            Some("take") => Some(ExternRef::CTake),
+            _ => None,
+        };
+        if split.is_some() {
+            self.bump();
+        }
         let name = self.name()?;
         let ext = ExternRef::from_name(&name, &self.c_functions)
             .ok_or_else(|| error(line, format!("unknown extern `{name}`")))?;
+        let ext = match (split, ext) {
+            (None, ext) => ext,
+            (Some(split), ExternRef::C(id)) if self.c_functions[id.0 as usize].blocking => {
+                split(id)
+            }
+            (Some(_), _) => {
+                return Err(error(
+                    line,
+                    format!("`{name}` is not a `blocking` C function"),
+                ));
+            }
+        };
         let args = self.list('(', ')', |p| p.atom(state))?;
         let at = self.position()?;
         Ok((ext, args, at))
@@ -1947,8 +1968,13 @@ impl<'p> Writer<'p> {
         args: &[Atom],
         at: Option<Loc>,
     ) -> String {
+        let split = match ext {
+            ExternRef::CSubmit(_) => "submit ",
+            ExternRef::CTake(_) => "take ",
+            ExternRef::Std(_) | ExternRef::C(_) => "",
+        };
         format!(
-            "extern {}({}){}",
+            "extern {split}{}({}){}",
             function_name(ext.row(self.c_functions).name),
             self.atoms(vars, args),
             self.position(at)

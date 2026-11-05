@@ -1,16 +1,32 @@
 //! 核と backend の境界 (docs/spec/vm.md の「時計と driver」)。核は続きの規則と操作の表を持ち、backend は OS の資源と
 //! fd ごとの状態を持つ。backend は `start` 1回につき、その歩の1回の試みだけを OS に出す。
 
+use std::any::Any;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use eml_rt::{IoWaker, OpKey, PipePair, RawBuf, RawProcess, RawResource, RawSocket};
+use eml_rt::{Done, IoWaker, OpKey, PipePair, RawBuf, RawProcess, RawResource, RawSocket};
 
-/// プールの仕事。`Op::Job` の中身と、backend が作るファイルの読み書きである。
-pub(crate) type Job = Box<dyn FnOnce() -> io::Result<usize> + Send + 'static>;
+/// backend が作るファイルの読み書きの仕事。
+pub(crate) type FileJob = Box<dyn FnOnce() -> io::Result<usize> + Send + 'static>;
+
+/// プールの仕事。ファイルの仕事は読み書きの長さを、`Op::Job` の仕事は所有した値を返す。
+pub(crate) enum Job {
+    File(FileJob),
+    Value(Box<dyn FnOnce() -> Box<dyn Any + Send> + Send + 'static>),
+}
+
+impl Job {
+    pub(crate) fn run(self) -> io::Result<Done> {
+        match self {
+            Job::File(job) => job().map(Done::Size),
+            Job::Value(job) => Ok(Done::Job(job())),
+        }
+    }
+}
 
 /// 1つの操作の1歩。核が出し、backend は OS にその歩の1回の試みを出す。
 pub(crate) enum Step<'a, S> {
@@ -134,7 +150,7 @@ pub(crate) trait Backend: Sized {
     /// ファイル `sock` の読み (`write` が偽) か書きの、プールのスレッドで走る仕事。読みは `buf.ptr[0..cap]` に1回読んで
     /// 読んだ長さを返し、書きは `cap` バイトをすべて書いて `cap` を返す。番地は OS の呼び出しの中でだけ使い、slice を
     /// 作らない (docs/spec/vm.md の「時計と driver」)。核は、仕事が終わるまでファイルを閉じず、`buf` を貸したままにする。
-    fn file_job(&self, sock: &Self::Sock, write: bool, buf: RawBuf) -> Job;
+    fn file_job(&self, sock: &Self::Sock, write: bool, buf: RawBuf) -> FileJob;
 
     /// 歩の1回の試みを OS に出す。核は、保留の欄の鍵を別の歩に使い回さない。
     fn start(&mut self, key: OpKey, step: Step<'_, Self::Sock>) -> Start;

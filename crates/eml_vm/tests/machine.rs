@@ -682,7 +682,7 @@ impl IoDriver for FakeDriver {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
-    fn quiesce(&mut self) {
+    fn quiesce(&mut self, _jobs: Duration) {
         self.quiesces.fetch_add(1, Ordering::SeqCst);
         if self.drains {
             self.pending = 0;
@@ -883,7 +883,7 @@ impl IoDriver for StubDriver {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 
-    fn quiesce(&mut self) {
+    fn quiesce(&mut self, _jobs: Duration) {
         self.note(format!("quiesce {}", self.pending()));
         self.held.clear();
         self.cancelled.clear();
@@ -950,4 +950,178 @@ main () = Async.run (fn () ->
     assert_eq!(out, "exiting\n");
     assert_eq!(log[..2], ["submit", "quiesce 1"]);
     assert!(log[2..].iter().all(|event| event == "quiesce 0"), "{log:?}");
+}
+
+/// 時計の止まった driver。`wait` はすぐ戻り、受け付けた操作は終わらせない。`quiesce` は受け取った待ちの長さを
+/// `jobs` に書き、`drains` のときだけ保留の操作を空にする。
+struct BudgetDriver {
+    drains: bool,
+    pending: usize,
+    jobs: Arc<Mutex<Vec<Duration>>>,
+}
+
+impl BudgetDriver {
+    fn new(drains: bool) -> (BudgetDriver, Arc<Mutex<Vec<Duration>>>) {
+        let jobs = Arc::new(Mutex::new(Vec::new()));
+        let driver = BudgetDriver {
+            drains,
+            pending: 0,
+            jobs: Arc::clone(&jobs),
+        };
+        (driver, jobs)
+    }
+}
+
+impl IoDriver for BudgetDriver {
+    fn now(&self) -> Duration {
+        Duration::from_millis(7)
+    }
+
+    fn wait(&mut self, _deadline_ms: Option<u64>) -> io::Result<bool> {
+        Ok(true)
+    }
+
+    fn submit(&mut self, _key: OpKey, _op: Op) -> Submit {
+        self.pending += 1;
+        Submit::Pending
+    }
+
+    fn cancel(&mut self, _key: OpKey) {}
+
+    fn completions(&mut self, _out: &mut Vec<Completion>) {}
+
+    fn pending(&self) -> usize {
+        self.pending
+    }
+
+    fn waker(&self) -> Arc<dyn IoWaker> {
+        Arc::new(NoWaker)
+    }
+
+    fn bin(&self) -> Arc<HandleBin> {
+        Arc::new(HandleBin::default())
+    }
+
+    fn close(&mut self, _handle: IoHandle) {}
+
+    fn adopt(&mut self, _res: eml_rt::RawResource) -> std::io::Result<IoHandle> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    fn pipe(&mut self, _parent_reads: bool) -> std::io::Result<eml_rt::PipePair> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    fn quiesce(&mut self, jobs: Duration) {
+        self.jobs.lock().unwrap().push(jobs);
+        if self.drains {
+            self.pending = 0;
+        }
+    }
+}
+
+/// run の最初の静止は予算をまるごと受け取る。既定の予算は 1 秒で、`with_job_budget` で変わる。誤りの run の後の回復も
+/// 予算をまるごと受け取る (docs/spec/vm.md の「時計と driver」)。
+#[test]
+fn every_quiesce_gets_the_job_budget() {
+    let quiesced = |budget: Option<Duration>, src: &str| {
+        let (driver, jobs) = BudgetDriver::new(true);
+        let (host, _) = capture_host(Default::default());
+        let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
+            .with_driver(Box::new(driver));
+        if let Some(budget) = budget {
+            machine = machine.with_job_budget(budget);
+        }
+        let loaded = machine
+            .load(&parse(src), &eml_vm::Linked::default())
+            .unwrap();
+        let ran = machine.run(loaded.entry).map(|_| ());
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
+        let jobs = jobs.lock().unwrap().clone();
+        (ran, jobs)
+    };
+    let ok = format!(
+        "\
+fn main() -> unit {{
+  let s.0: obj = const \"ran\"
+  tail call say(s.0)
+}}
+{SAY}"
+    );
+    let ms = Duration::from_millis;
+    assert_eq!(quiesced(None, &ok), (Ok(()), vec![ms(1000)]));
+    assert_eq!(quiesced(Some(ms(5)), &ok), (Ok(()), vec![ms(5)]));
+    let fails = "\
+fn main() -> unit {
+  let n.0: int = extern \"Prelude.Div Int.%\"(1, 0)
+  return ()
+}
+";
+    let (ran, jobs) = quiesced(Some(ms(5)), fails);
+    assert_eq!(ran.unwrap_err().to_string(), "division by zero in `main`");
+    assert_eq!(jobs, [ms(5), ms(5)]);
+}
+
+/// `exit` で終わった run は、静止の後に操作が残っても終了コードを返し、`Machine` を poisoned にする。後の `close` は
+/// driver の誤りを返す (docs/spec/vm.md の「時計と driver」)。
+fn exit_keeps_its_code_and_poisons(src: &str) {
+    let (driver, _) = BudgetDriver::new(false);
+    let (host, _) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(finished.exit, Some(3));
+    assert!(machine.is_poisoned());
+    let error = machine.close().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("the driver kept pending ops after quiesce"),
+        "{error}"
+    );
+}
+
+/// 待つタスクとは別のタスクの `exit` が run を捨てる。
+#[test]
+fn an_exit_with_an_op_left_pending_keeps_its_code_and_poisons() {
+    exit_keeps_its_code_and_poisons(
+        "\
+import Async (Async)
+import Async
+import Net
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let x = Async.start (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))
+  let y = Async.start (fn () -> (exit 3 : Unit))
+  Async.await x
+  Async.await y
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+",
+    );
+}
+
+/// 待つタスクを始めた後に、`body` が `exit` する。
+#[test]
+fn a_main_exit_with_an_op_left_pending_keeps_its_code_and_poisons() {
+    exit_keeps_its_code_and_poisons(
+        "\
+import Async (Async)
+import Async
+import Net
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let x = Async.start (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))
+  Async.yield_now ()
+  (exit 3 : Unit)
+  Async.await x
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+",
+    );
 }

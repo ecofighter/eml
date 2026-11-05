@@ -4,7 +4,7 @@ use eml_extern::CInt;
 use eml_test_support::check;
 use eml_types::{CArg, CResult, CShape};
 
-use crate::common::{check_full, check_short};
+use crate::common::check_full;
 
 /// エントリのモジュールの C の関数 `name` の形と、型検査までの診断。
 fn shape(text: &str, name: &str) -> (Option<CShape>, Vec<String>) {
@@ -270,13 +270,14 @@ fn an_inner_row_is_e2023() {
 }
 
 #[test]
-fn blocking_is_e0004_after_a_correct_row() {
+fn a_blocking_row_needs_io_and_async() {
     let correct = "import Async (Async)\n\nextern \"C\" blocking wait : Int -> <IO, Async> Int";
-    insta::assert_snapshot!(check_full(correct), @"
-    E0004 3:12 `blocking` C functions are not supported yet
-      3:12 this is implemented in a later stage
-    ");
-    // 行が違えば E2023 だけを出し、E0004 を重ねない
+    insta::assert_snapshot!(check_full(correct), @"");
     let wrong = "import Async (Async)\n\nextern \"C\" blocking wait : Int -> <IO> Int";
-    insta::assert_snapshot!(check_short(wrong).join("\n"), @"E2023 3:35 the effects of `wait` must be `<IO, Async>`");
+    insta::assert_snapshot!(check_full(wrong), @"
+    E2023 3:35 the effects of `wait` must be `<IO, Async>`
+      3:35 found `<IO>`
+      note: `IO` because the function is not `pure`
+      note: `Async` because the function is `blocking`
+    ");
 }

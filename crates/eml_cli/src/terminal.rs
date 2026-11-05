@@ -71,10 +71,12 @@ pub fn run(debug_heap: bool, link: Vec<(String, String)>, file: Option<PathBuf>)
         file: None,
         close_failed: false,
     };
-    if let Some((shown, text)) = file
-        && let Flow::Broken = terminal.load_text(&shown, &text)
-    {
-        return ExitCode::from(1);
+    if let Some((shown, text)) = file {
+        match terminal.load_text(&shown, &text) {
+            Flow::Broken => return ExitCode::from(1),
+            Flow::Poisoned => return terminal.close(ExitCode::from(1)),
+            Flow::Continue | Flow::Quit | Flow::Interrupted => {}
+        }
     }
     let mut reader = match Reader::new() {
         Ok(reader) => reader,
@@ -107,6 +109,8 @@ pub fn run(debug_heap: bool, link: Vec<(String, String)>, file: Option<PathBuf>)
             Flow::Quit => return terminal.close(ExitCode::SUCCESS),
             // 続けられない誤りの後はヒープを信用できないので、`close` を呼ばない (docs/spec/repl.md の「結果の表示」)
             Flow::Broken => return ExitCode::from(1),
+            // poisoned の `close` はヒープに触れずに poisoned の誤りを返すので、それを1回書いて 1 で終わる
+            Flow::Poisoned => return terminal.close(ExitCode::from(1)),
         }
     }
 }
@@ -173,7 +177,16 @@ struct Terminal {
 
 impl Terminal {
     fn eval(&mut self, text: &str) -> Flow {
-        show(self.repl.eval(text))
+        let evaluated = self.repl.eval(text);
+        let printed_poisoned = printed_poisoned(&evaluated);
+        let flow = show(evaluated);
+        // poisoned の `Machine` は後の入力をすべて断るので、その入力でセッションを終える。Ctrl-C で止めた入力も
+        // poisoned にしうるので、flow によらずに確かめる。入力が poisoned の誤りそのものを書いたときだけは、`close`
+        // が同じ誤りをもう一度書かないように `Flow::Broken` のままにする (docs/spec/vm.md の「追記」)
+        if self.repl.is_poisoned() && !printed_poisoned {
+            return Flow::Poisoned;
+        }
+        flow
     }
 
     /// 読めなければ、セッションも覚えたファイルも変えない (docs/spec/repl.md の「ファイルの読み込み」)。
@@ -207,7 +220,13 @@ impl Terminal {
         repl.set_width(self.width);
         self.repl = repl;
         self.file = Some(shown.to_string());
-        show(evaluated)
+        let printed_poisoned = printed_poisoned(&evaluated);
+        let flow = show(evaluated);
+        // `eval` と同じく確かめる
+        if self.repl.is_poisoned() && !printed_poisoned {
+            return Flow::Poisoned;
+        }
+        flow
     }
 
     /// 古いセッションを先に閉じるのは、閉じる誤りがファイルの診断より前に出るようにするためである。
@@ -257,6 +276,8 @@ enum Flow {
     Broken,
     /// 入力を割り込みで止めた。
     Interrupted,
+    /// 入力か `:load` の run が `Machine` を poisoned にした。
+    Poisoned,
 }
 
 /// 結果を順に処理する。`:quit`、続けられない誤り、割り込みで止まれば、残りは捨てる。貼り付けた行を読んだ後の
@@ -295,6 +316,11 @@ fn steps(terminal: &mut Terminal, steps: impl IntoIterator<Item = Step>) -> Flow
         }
     }
     Flow::Continue
+}
+
+/// `show` がこの結果を書くと、poisoned の誤りそのものを書くか。そのとき `show` は `Flow::Broken` を返す。
+fn printed_poisoned(evaluated: &Evaluated) -> bool {
+    matches!(&evaluated.outcome, Outcome::Broken(error) if error.kept_pending())
 }
 
 /// 入力と `:load` の結果を表示する (docs/spec/repl.md の「結果の表示」)。

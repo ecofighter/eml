@@ -19,7 +19,9 @@ use eml_rt::{
 };
 use libc::c_int;
 
-use crate::driver::backend::{Arrival, Backend, Cancel, Event, Hold, Job, Outcome, Start, Step};
+use crate::driver::backend::{
+    Arrival, Backend, Cancel, Event, FileJob, Hold, Outcome, Start, Step,
+};
 
 /// 起こしの識別子。行 `u32::MAX` は作らないので、どの行の識別子とも重ならない。
 pub(super) const WAKE: u64 = u64::MAX;
@@ -950,7 +952,7 @@ impl<P: Poller> Backend for Unix<P> {
         })
     }
 
-    fn file_job(&self, sock: &Sock, write: bool, buf: RawBuf) -> Job {
+    fn file_job(&self, sock: &Sock, write: bool, buf: RawBuf) -> FileJob {
         // 仕事が走る間、核はファイルを閉じない。そのため番号だけを渡してよい
         let fd = sock.fd.as_raw_fd();
         if write {

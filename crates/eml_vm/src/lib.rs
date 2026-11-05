@@ -4,13 +4,14 @@
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use eml_lir::Program;
 use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Stats};
 
 use crate::cells::{Registry, Shared, TaskStats};
 use crate::counters::Counters;
-use crate::driver::{DriverKind, RunClock};
+use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, RunClock};
 use crate::error::KEPT_PENDING;
 use crate::vm::{ExecWith, Exit};
 use crate::workers::{
@@ -196,6 +197,9 @@ pub struct RunConfig {
     pub doorbell: Option<Arc<Doorbell>>,
     /// 仮想のシグナルの予定。既定は空で、テストのハーネスだけが使う (docs/spec/vm.md の「時間の待ち」)。
     pub signals: Vec<VirtualSignal>,
+    /// 静止が走っている `Op::Job` を待つ長さで、run のすべての静止が分け合う。既定は 1 秒である。過ぎても残る仕事は
+    /// 見捨て、`Machine` は poisoned になる (docs/spec/vm.md の「時計と driver」)。
+    pub job_budget: Duration,
 }
 
 // `Control` は `Default` を持たないので、手で書く
@@ -208,6 +212,7 @@ impl Default for RunConfig {
             clock: Clock::Virtual,
             doorbell: None,
             signals: Vec::new(),
+            job_budget: JOB_QUIESCE_LIMIT,
         }
     }
 }
@@ -240,6 +245,11 @@ impl RunConfig {
 
     pub fn with_signals(mut self, signals: Vec<VirtualSignal>) -> RunConfig {
         self.signals = signals;
+        self
+    }
+
+    pub fn with_job_budget(mut self, job_budget: Duration) -> RunConfig {
+        self.job_budget = job_budget;
         self
     }
 }
@@ -288,6 +298,11 @@ fn execute_here(
         .load(program, linked)
         .map_err(|error| compile_error(program, error))?;
     let finished = machine.run(loaded.entry)?;
+    // 仕事を見捨てた `exit` の run でも、終了コードを返す。poisoned の `Machine` はヒープを漏らし、`close` は終了コードの
+    // 代わりに poisoned の誤りを返す (docs/spec/vm.md の「時計と driver」)
+    if machine.is_poisoned() {
+        return Ok(finished);
+    }
     machine.close()?;
     Ok(finished)
 }
@@ -358,6 +373,8 @@ pub struct Machine<M: Mode> {
     /// 次の run だけに渡す仮想のシグナルの予定。run が取り出すので、後の run は再生しない
     /// (docs/spec/vm.md の「時間の待ち」)。
     signals: Vec<VirtualSignal>,
+    /// 1回の run の静止が `Op::Job` を待てる長さ。`recover` はまるごと受け取る (docs/spec/vm.md の「時計と driver」)。
+    job_budget: Duration,
 }
 
 impl Machine<Fast> {
@@ -404,6 +421,7 @@ impl<M: Mode> Machine<M> {
             run_clock: Clock::Virtual.start(),
             doorbell: None,
             signals: Vec::new(),
+            job_budget: JOB_QUIESCE_LIMIT,
         }
     }
 
@@ -436,6 +454,13 @@ impl<M: Mode> Machine<M> {
         self
     }
 
+    /// 静止が走っている `Op::Job` を待つ長さを選ぶ。既定は 1 秒で、run のすべての静止が分け合う
+    /// (docs/spec/vm.md の「時計と driver」)。
+    pub fn with_job_budget(mut self, job_budget: Duration) -> Machine<M> {
+        self.job_budget = job_budget;
+        self
+    }
+
     /// 次の run から使う driver を渡す。後の `with_clock` と `with_sched` はこれを捨てる。driver は `Machine` を使う
     /// スレッドの上で作る。渡すのは眠る driver に限る。VM はその run の空きの待ちを 10 ms ごとに切るので、期限まで
     /// 時計を進める driver では、終わらない保留のある run がデッドロックで止まらない (docs/spec/vm.md の
@@ -449,6 +474,12 @@ impl<M: Mode> Machine<M> {
 
     pub fn code(&self) -> &CodeBase<M> {
         &self.code
+    }
+
+    /// 静止の後にも driver が保留の操作を残したか。そうなら、この後の `load`、`run`、`close` は driver の誤りを返す
+    /// (docs/spec/vm.md の「時計と driver」)。
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
     }
 
     /// プログラムを追記する。`linked` は `eml_native` がこのプログラムの C の表をつないだ結果である。誤りを返した後の
@@ -517,7 +548,7 @@ impl<M: Mode> Machine<M> {
         // カーネルやプールのスレッドが書いている記憶を写したり放したりしないように、ヒープに触れる前に driver を
         // 空にする (docs/spec/object-model.md の「回復」)
         if let Some(driver) = &mut self.driver {
-            driver.quiesce();
+            driver.quiesce(self.job_budget);
             if driver.pending() > 0 {
                 self.poisoned = true;
             }
@@ -623,6 +654,7 @@ impl<M: Mode> Machine<M> {
             run_clock: self.run_clock.clone(),
             doorbell: self.doorbell.clone(),
             signals: std::mem::take(&mut self.signals),
+            job_budget: self.job_budget,
         };
         let (result, mut scheduled) = match self.sched {
             Sched::Normal => run_scheduled(code, ctx, &mut task, Normal, start, &mut counts),
@@ -665,6 +697,23 @@ impl<M: Mode> Machine<M> {
             // 誤りと同じく誤りの前に行う。run の誤りがあれば、元の原因としてそれを返す (docs/spec/vm.md の「時計と driver」)
             self.poisoned = true;
             let flushed = ctx.flush();
+            let exit = ctx.heap().control().exit_code();
+            // 貸したままの仕事があっても `exit` の終了コードは返す。ヒープは写さず、終わりの検査もしない
+            if let (
+                Some(code),
+                Ok(())
+                | Err(RuntimeError::Fault {
+                    fault: VmFault::Stopped(Stop::Ended),
+                    ..
+                }),
+            ) = (exit, &result)
+            {
+                flushed.map_err(|fault| after(fault.into(), &task))?;
+                return Ok(Ran::Done(
+                    self.finished(&counts, &scheduled, Some(code)),
+                    None,
+                ));
+            }
             return Err(match result {
                 Ok(())
                 | Err(RuntimeError::Fault {
@@ -710,17 +759,7 @@ impl<M: Mode> Machine<M> {
                     &task,
                 ));
             };
-            let finished = Finished {
-                stats: self.run_stats(&counts, &scheduled),
-                exit: Some(code),
-                preemptions: scheduled.preemptions,
-                rescues: scheduled.rescues,
-                rescued: scheduled.rescued,
-                workers: scheduled.workers,
-                placed: scheduled.placed,
-                placed_tasks: scheduled.placed_tasks,
-                placed_jobs: scheduled.placed_jobs,
-            };
+            let finished = self.finished(&counts, &scheduled, Some(code));
             return Ok(Ran::Abandoned(finished, cause));
         }
         result?;
@@ -740,8 +779,17 @@ impl<M: Mode> Machine<M> {
             .map_err(|error| heap_fault(error, code.function_name(task.last_ret, &task)))?;
         (self.at_run_end)(&mut self.others)?;
         self.others.clear();
-        let finished = Finished {
-            stats: self.run_stats(&counts, &scheduled),
+        Ok(Ran::Done(self.finished(&counts, &scheduled, exit), text))
+    }
+
+    fn finished(
+        &self,
+        counts: &RunCounts,
+        scheduled: &Scheduled<M>,
+        exit: Option<i64>,
+    ) -> Finished {
+        Finished {
+            stats: self.run_stats(counts, scheduled),
             exit,
             preemptions: scheduled.preemptions,
             rescues: scheduled.rescues,
@@ -750,8 +798,7 @@ impl<M: Mode> Machine<M> {
             placed: scheduled.placed,
             placed_tasks: scheduled.placed_tasks,
             placed_jobs: scheduled.placed_jobs,
-        };
-        Ok(Ran::Done(finished, text))
+        }
     }
 
     /// `Machine` を作ってからの積算の `RunStats`。`peak_stack` と、登録表が数える `tasks`、`parks`、`dropped_failures` だけがこの実行の値である (docs/spec/vm.md の「追記」)。
@@ -910,6 +957,7 @@ struct Start {
     run_clock: RunClock,
     doorbell: Option<Arc<Doorbell>>,
     signals: Vec<VirtualSignal>,
+    job_budget: Duration,
 }
 
 /// 方針 `P` のスケジューラを作って `task` から実行する。方針を型の引数にして、方針ごとに VM の繰り返しを作る
@@ -928,12 +976,9 @@ fn run_scheduled<M: Mode, P: Policy>(
     // run の表は run ごとに作り、監視のスレッドが止まる `Scheduler` の破棄とともに捨てる (docs/spec/vm.md の
     // 「タスクとスケジュール」)
     let workers = control.limits().workers;
-    let run = Arc::new(Run::new(
-        workers,
-        start.doorbell,
-        start.run_clock,
-        start.counters,
-    ));
+    let mut run = Run::new(workers, start.doorbell, start.run_clock, start.counters);
+    run.job_budget = start.job_budget;
+    let run = Arc::new(run);
     // 登録表も run ごとに1つ作り、worker 0 と、後で作る worker 1..N-1 のすべての `Scheduler` に配る
     // (docs/spec/vm.md の「セルと登録表」)
     let mut registry = Registry::new(start.generations, workers);
@@ -1052,7 +1097,7 @@ fn run_scheduled<M: Mode, P: Policy>(
     // 完了を読まない (docs/spec/vm.md の「時計と driver」「誤り、止めること、終わり」)
     kept_pending |= match sched.driver.as_mut() {
         Some(driver) => {
-            driver.quiesce();
+            driver.quiesce(sched.run.job_wait(driver.now()));
             let in_flight = sched.cells.lock().in_flight(sched.index);
             if result.is_ok() && in_flight > 0 {
                 let mut completed = Vec::new();
@@ -1185,14 +1230,16 @@ impl AnyMachine {
             let mut machine = Machine::<Checked>::new(control, host)
                 .with_sched(config.sched)
                 .with_clock(config.clock)
-                .with_signals(config.signals.clone());
+                .with_signals(config.signals.clone())
+                .with_job_budget(config.job_budget);
             machine.doorbell = config.doorbell.clone();
             AnyMachine::Checked(machine)
         } else {
             let mut machine = Machine::<Fast>::new(control, host)
                 .with_sched(config.sched)
                 .with_clock(config.clock)
-                .with_signals(config.signals.clone());
+                .with_signals(config.signals.clone())
+                .with_job_budget(config.job_budget);
             machine.doorbell = config.doorbell.clone();
             AnyMachine::Fast(machine)
         }
@@ -1227,6 +1274,13 @@ impl AnyMachine {
         match self {
             AnyMachine::Fast(machine) => machine.write_line(line),
             AnyMachine::Checked(machine) => machine.write_line(line),
+        }
+    }
+
+    pub fn is_poisoned(&self) -> bool {
+        match self {
+            AnyMachine::Fast(machine) => machine.is_poisoned(),
+            AnyMachine::Checked(machine) => machine.is_poisoned(),
         }
     }
 

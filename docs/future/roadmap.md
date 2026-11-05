@@ -28,8 +28,7 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `ffi-blocking`: タスクの中の長い C の呼び出しを `blocking` で書き、ブロックする呼び出しのプールで動かす。std がプールに出す仕事は `Std.Stream` のファイルの読み書きだけで、`Op::Job` の仕事は `eml_io` のテストだけが確かめるので、VM から `Op::Job` の仕事までを通すテストもここで足す。前提: なし。設計: [FFI と拡張の設計](ffi.md) の「長く走る呼び出し」
-- `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。`Tls.connect_with_ca` と `Tls.wrap_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: `ffi-blocking`。設計: この項目
+- `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。仕事は `Done::Job` で `Conn` を値で返す。`Tls.connect_with_ca` と `Tls.wrap_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: なし。設計: この項目
   - テストの証明書: macOS は TLS の server の証明書の有効期間に上限 (825 日) を課すと理解しているので、期限を 2126 年にした `eml_tls` の fixtures は、本物のソケットのテストで拒まれる見込みである。段の最初に確かめ、期限の短い証明書を定期的に作り直すか、テストだけ別の検証を使うかを決める
   - Linux の OS の検証器は、OS のファイルから根を読んで rustls で検証する。`ca-certificates` を持たない最小のコンテナ (distroless など) と nix の sandbox では根が空になり、`Tls.connect` はすべて失敗する。この使い方は `Tls.connect_with_ca` で根を渡すと spec に書く。テストは `connect_with_ca` か `wrap_with_ca` で根を渡して書き、既定の根に頼るテストは置かない
   - 拒否の理由は OS ごとに違う。IO の失敗の文言は今の固定の文言を保ち、OS の詳細を付けない
@@ -240,8 +239,8 @@
 - n 列の `match`: 今は決定木の列に、最初の行でコンストラクタ、タプル、リテラルのどれかのパターンを持ついちばん左の列を選ぶ ([Core IR](../spec/core-ir.md))。行列によっては部分木が大きくなりうる。今の選び方でも決定木は正しいので、部分木の大きさが問題になる例が出てから列の選び方を見直す
 - doc comment: trivia の付け方を決める。doc comment を解釈するドキュメント生成と LSP の hover ([字句](../spec/lexical.md)) がまだないので、それを作るときに、使う側に合わせて決める。前提: LSP
 - JIT (投機的): バイトコードから機械語を安く作る copy-and-patch や、トレース JIT。VM が安定し、起動時間が支配的になってから検討する。トレース JIT はバイトコードにスタックのスタックを持たせる別の道で、evidence passing とは前提が合わない。前提: `native-aot`
-- `miri.rs` のテストの1つあたりの Miri の費用: `crates/eml_vm/tests/miri.rs` の `par_switches_between_tasks`、`shared_struct_boxes_with_scalar_leaves`、`multi_value_returns`、`an_immediate_clause_reads_and_writes_the_state_of_its_evidence` の4つは、1つのテストの上限 (Tree Borrows の下で 10 秒) を超える ([テスト戦略](../implementation/testing.md) の「Miri」)。上限に収めるには、1回の実行ごとの準備を安くする必要がある
-  - 後に回した理由: コマンド全体の `user` は予算に収まっている。4つはどれも、VM が核の操作の前提を守ることを別の道 (`par` の切り替え、構造体と箱の変換、共有の箱の葉、節の状態の読み書き) で確かめるので、削れない。テストの大きさは `cfg!(miri)` で変えない。
+- `miri.rs` のテストの1つあたりの Miri の費用: `crates/eml_vm/tests/miri.rs` の `par_switches_between_tasks`、`shared_struct_boxes_with_scalar_leaves`、`multi_value_returns`、`an_immediate_clause_reads_and_writes_the_state_of_its_evidence`、`a_blocking_call_runs_on_the_test_driver` の5つは、1つのテストの上限 (Tree Borrows の下で 10 秒) を超える ([テスト戦略](../implementation/testing.md) の「Miri」)。最後の1つは `Async.run` の機構を含む約 450 行の LIR を読んで流すので、検査モードだけで流しても上限の数倍かかる。上限に収めるには、1回の実行ごとの準備を安くする必要がある
+  - 後に回した理由: コマンド全体の `user` は予算に収まっている。5つはどれも、VM が核の操作の前提を守ることを別の道 (`par` の切り替え、構造体と箱の変換、共有の箱の葉、節の状態の読み書き、`blocking` の呼び出しの受け付けから取り出しまで) で確かめるので、削れない。テストの大きさは `cfg!(miri)` で変えない。
   - 見直す条件: `miri.rs` にテストを足すとき。または、`eml_vm` の `miri::` のコマンド全体の `user` が予算の半分を超えたとき。
   - 右の子を worker 1 に置く `par` の run (`--workers 2`) は `miri.rs` にない。足すと、Tree Borrows の下で `miri::` のコマンド全体の `user` が 15 秒増え、1つのテストの上限を超えた。worker をまたぐ道は、`eml_rt` の `trusted` の2つのスレッドのテストと ThreadSanitizer ([テスト戦略](../implementation/testing.md) の「ThreadSanitizer」) と、検査モードの N = 2 と 8 の UI テストで確かめる。1回の実行ごとの準備を安くしたときに、足すかを決め直す
   - `Async` のタスクをほかの worker に置く run も `miri.rs` にない。理由は同じである
@@ -433,9 +432,9 @@
 - `shield` の中で取り消しの要求を読む確かめ
   - 後に回した理由: `cancel_requested` は、`shield` の中では外から来た取り消しを読まない。`shield` の中の後始末が要求を知る使い道が、まだない。
   - 見直す条件: `shield` の中の後始末が、取り消されたかどうかで動きを変える必要が出たとき。
-- プールの仕事の予算と、放さずに終わる方針: `quiesce` は走っている仕事が終わるまで上限なしに待つ ([VM](../spec/vm.md) の「時計と driver」)
-  - 後に回した理由: std がプールに出す仕事は `Std.Stream` の通常のファイルの読み書きだけで、どれもディスクが答えれば終わる。仕事は取り消せず、完了の前に記録とヒープを放すと、届いた完了を当てる記録がなくなる。
-  - 見直す条件: `ffi-blocking` で、利用者の `blocking` の行が長く走る C の呼び出しをプールに載せるとき。
+- プールの上限 24/8 と静止の予算 1 秒 ([VM](../spec/vm.md) の「時計と driver」)
+  - 後に回した理由: 既定は計測なしで選んだ。
+  - 見直す条件: 計測か報告で、ファイルの仕事か C の呼び出しが上限で待つのが見えたとき、または予算が戻るはずの呼び出しを切っているのが見えたとき。
 - 1つのハンドルの1つの向きに、保留の操作を2つ以上置くこと: 今の本物の driver は、読みと書きのそれぞれに保留を1つしか置かず、2つ目を `InvalidInput` で断る ([VM](../spec/vm.md) の「時計と driver」)
   - 後に回した理由: std のストリームとリスナーは `Lin` なので、VM は同じ向きに2つの操作を出さない。backend の fd ごとの状態を最小にできる。
   - 見直す条件: 1つのハンドルを分けて同じ向きで2つ待たせる API を足すとき。そのときは backend の向きごとの待ち手を `OpKey` の列にし、核の断りを外す。

@@ -1,0 +1,40 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/ffi/blocking_effects.em
+---
+[E2023] Error: the effects of `wait` must be `<IO, Async>`
+   ╭─[ check-fail/ffi/blocking_effects.em:6:35 ]
+   │
+ 6 │ extern "C" blocking wait : Int -> <IO> Int
+   │                                   ──┬─  
+   │                                     ╰─── found `<IO>`
+   │ 
+   │ Note 1: `IO` because the function is not `pure`
+   │ 
+   │ Note 2: `Async` because the function is `blocking`
+───╯
+[E2023] Error: the effects of `sleep` must be `<IO, Panic, Async>`
+   ╭─[ check-fail/ffi/blocking_effects.em:7:46 ]
+   │
+ 7 │ extern "C" blocking sleep : Int as size_t -> <IO, Async> Int
+   │                                              ─────┬─────  
+   │                                                   ╰─────── found `<IO, Async>`
+   │ 
+   │ Note 1: `IO` because the function is not `pure`
+   │ 
+   │ Note 2: `Panic` because an `Int` argument that does not fit its C type panics
+   │ 
+   │ Note 3: `Async` because the function is `blocking`
+───╯
+[E2023] Error: the effects of `tick` must be `<IO, Async>`
+   ╭─[ check-fail/ffi/blocking_effects.em:9:35 ]
+   │
+ 9 │ extern "C" blocking tick : Int -> <IO, Panic, Async> Int
+   │                                   ─────────┬────────  
+   │                                            ╰────────── found `<IO, Panic, Async>`
+   │ 
+   │ Note 1: `IO` because the function is not `pure`
+   │ 
+   │ Note 2: `Async` because the function is `blocking`
+───╯

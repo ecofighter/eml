@@ -12,6 +12,7 @@ mod codegen;
 mod data;
 mod evidence;
 mod ffi;
+mod ffi_abandon;
 mod io;
 mod machine;
 mod memory;

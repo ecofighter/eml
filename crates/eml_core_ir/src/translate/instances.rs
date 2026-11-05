@@ -170,6 +170,9 @@ pub(super) struct Instances {
     /// エントリが値を書く式の入力なら、その値の書き方。エントリの関数 `entry$` が値の文字列を作るのに使う。入力の本体にない
     /// 呼び出しなので、参照の行き先 (`targets`) とは別に持つ (docs/spec/core-ir.md の「REPL の入力」)。
     pub(super) display: Option<Part>,
+    /// ランタイムか処理系が名前で呼ぶ関数の instance。読み込んだ std にある entry だけを持つ。translate が `blocking` の
+    /// 呼び出しを下ろすときに `io_wait` を引く (docs/spec/core-ir.md の「組を返す extern」)。
+    pub(super) runtime: FxHashMap<RuntimeEntry, InstanceId>,
     /// 型検査の型の表に、代入の結果を足した表。
     pub(super) store: TypeStore,
     /// instance の名前と、変換が作る型ごとの包む関数の名前 (`wrapper_name`) に使う表。
@@ -834,6 +837,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     let entry_index = collector.add(entry, entry_args, entry_bits);
     // ランタイムが名前で呼ぶ関数は、eml のコードから呼ばれないので、エントリと同じく根にする。どれも単相なので、型引数も
     // row のビットもない (docs/spec/core-ir.md の「変換の規則」)
+    let mut runtime_entries = FxHashMap::default();
     for &runtime in RuntimeEntry::ALL {
         if let Some(function) = hir.function_by_canonical_name(runtime.name()) {
             debug_assert!(
@@ -841,7 +845,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
                 "the runtime entry `{}` is monomorphic",
                 runtime.name()
             );
-            collector.add(function, vec![], vec![]);
+            runtime_entries.insert(runtime, collector.add(function, vec![], vec![]));
         }
     }
     // 入力の値そのものは、`show_prec` で書く型でも `show` を呼ぶ。表示を、利用者が `show` で得る文字列と同じにするため
@@ -866,7 +870,14 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     if cfg!(debug_assertions) {
         collector.check_linearity();
     }
-    order(hir, collector.found, entry_index, display, collector.store)
+    order(
+        hir,
+        collector.found,
+        entry_index,
+        &runtime_entries,
+        display,
+        collector.store,
+    )
 }
 
 /// 本体の型の表のどれかが Kind 変数 (`Var`) を含むか。
@@ -1048,6 +1059,7 @@ fn order(
     hir: &HirProgram,
     found: Vec<Found>,
     entry: usize,
+    runtime: &FxHashMap<RuntimeEntry, usize>,
     display: Option<FoundPart>,
     store: TypeStore,
 ) -> Instances {
@@ -1157,6 +1169,10 @@ fn order(
     Instances {
         list,
         entry: InstanceId(renumbered[entry]),
+        runtime: runtime
+            .iter()
+            .map(|(&entry, &index)| (entry, InstanceId(renumbered[index])))
+            .collect(),
         display: display.map(|part| part.renumber(&renumbered)),
         store,
         names,

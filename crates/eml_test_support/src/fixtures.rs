@@ -1,9 +1,10 @@
 //! UI テストとトランスクリプトが C の関数の代わりに呼ぶ Rust の関数。アドレスで `Linker` に登録するので、C の
 //! コンパイラも共有ライブラリも要らず、どの OS でも同じに動く (docs/implementation/testing.md の「UI テスト」)。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, PoisonError};
+use std::time::Duration;
 
 /// `Linker::with_symbols` に渡す、このファイルの `eml_fixture_*` のすべて。
 pub fn fixture_symbols() -> Vec<(&'static str, *const ())> {
@@ -27,6 +28,12 @@ pub fn fixture_symbols() -> Vec<(&'static str, *const ())> {
             eml_fixture_handle_free as *const (),
         ),
         ("eml_fixture_frees", eml_fixture_frees as *const ()),
+        ("eml_fixture_gate_open", eml_fixture_gate_open as *const ()),
+        ("eml_fixture_gate_wait", eml_fixture_gate_wait as *const ()),
+        (
+            "eml_fixture_handle_wait",
+            eml_fixture_handle_wait as *const (),
+        ),
     ]
 }
 
@@ -148,4 +155,48 @@ pub extern "C" fn eml_fixture_frees(tag: i64) -> i64 {
         .get_or_insert_default()
         .remove(&tag)
         .unwrap_or(0)
+}
+
+/// 開いた鍵の番号。プロセスで1つで、待ちが消費する。
+static GATES: Mutex<Option<HashSet<i64>>> = Mutex::new(None);
+static GATES_CHANGED: Condvar = Condvar::new();
+
+/// テストが壊れて鍵が開かないときに、プロセスを止めないための見張り。ふつうの run では届かず、結果はこの時間で決まらない。
+const GATE_WATCHDOG: Duration = Duration::from_secs(10);
+
+/// 鍵 `id` を開く。開いた鍵は1回の `eml_fixture_gate_wait` が消費する。待ちが先でも後でも1回ずつ対になる。
+pub extern "C" fn eml_fixture_gate_open(id: i64) {
+    GATES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_default()
+        .insert(id);
+    GATES_CHANGED.notify_all();
+}
+
+/// 鍵 `id` が開くまで待ち、消費して 0 を返す。見張りの間に開かなければ -1 を返す。
+pub extern "C" fn eml_fixture_gate_wait(id: i64) -> i64 {
+    let gates = GATES.lock().unwrap_or_else(PoisonError::into_inner);
+    let (mut gates, _) = GATES_CHANGED
+        .wait_timeout_while(gates, GATE_WATCHDOG, |open| {
+            !open.as_ref().is_some_and(|open| open.contains(&id))
+        })
+        .unwrap_or_else(PoisonError::into_inner);
+    if gates.get_or_insert_default().remove(&id) {
+        0
+    } else {
+        -1
+    }
+}
+
+/// 鍵 `id` を待ってから、ハンドル `h` の値 (`eml_fixture_handle_get` と同じ) を返す。見張りで開かなければ -1。
+///
+/// # Safety
+/// `h` は `eml_fixture_handle_new` が返し、まだ解放していない。VM は貸している間だけ使う。
+pub unsafe extern "C" fn eml_fixture_handle_wait(h: *mut c_void, id: i64) -> i64 {
+    if eml_fixture_gate_wait(id) != 0 {
+        return -1;
+    }
+    // SAFETY: 上の約束による
+    unsafe { eml_fixture_handle_get(h) }
 }
