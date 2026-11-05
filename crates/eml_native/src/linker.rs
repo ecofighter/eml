@@ -81,7 +81,10 @@ impl Linker {
             .zip(callees)
             .map(|(bridge, callee)| CCall { bridge, callee })
             .collect();
-        Ok(Linked { calls, dtors })
+        // SAFETY: どちらの列も入力の表の順に並ぶ。橋渡しは各関数の `c_signature()` で引いたもので、記号はその関数の
+        // 宣言から解決した。橋渡しのコードもライブラリもプロセスの間外さない (docs/spec/vm.md の「橋渡しの関数」、
+        // docs/spec/vm.md の「ライブラリと記号」)
+        Ok(unsafe { Linked::new(calls, dtors) })
     }
 
     fn resolve(&mut self, os: Os, symbol: &str, links: &[CLink]) -> Result<*const (), LinkError> {

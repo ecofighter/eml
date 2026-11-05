@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use eml_cabi::{CCall, Dtor};
+use eml_extern::{CFunction, CHandleType};
 use eml_lir::{FloatBits, Loc, Repr};
 use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 use rustc_hash::FxHashMap;
@@ -77,6 +79,23 @@ pub struct CodeBase<M: Mode> {
     pub(crate) forks: Forks,
     /// ランタイムが名前で呼ぶ `Std.Async` のエントリ。`Std.Async` を読み込んだロードで引く。
     pub(crate) entries: Option<AsyncEntries>,
+    /// `Op::Ffi` が番号で指す C の関数。名前で振り、読み込んだ順に並ぶ (docs/spec/vm.md の「C の関数の命令」)。
+    pub(crate) c_functions: Vec<CEntry>,
+    /// C の関数の引数と結果が番号で指すハンドルの型。
+    pub(crate) c_handles: Vec<CHandleEntry>,
+}
+
+/// `CodeBase` の C の関数の1項。
+pub(crate) struct CEntry {
+    /// ハンドルの型の番号を `CodeBase` の番号に付け直したもの。
+    pub(crate) function: CFunction,
+    pub(crate) call: CCall,
+}
+
+/// `CodeBase` のハンドルの型の1項。
+pub(crate) struct CHandleEntry {
+    pub(crate) handle: CHandleType,
+    pub(crate) dtor: Option<Dtor>,
 }
 
 /// `Async` のタスクのエントリの関数の番号 (docs/spec/vm.md の「`Async` のタスク」)。
@@ -220,6 +239,10 @@ pub(crate) struct Index {
     pub(crate) boxed_floats: FxHashMap<FloatBits, u32>,
     /// 不死の空の `MutArray` の定数の番号。最初に使うときに作る。
     pub(crate) empty_mut_array: Option<u32>,
+    /// C の関数の名前から `CodeBase::c_functions` の番号。
+    pub(crate) c_functions: FxHashMap<String, u32>,
+    /// ハンドルの型の名前から `CodeBase::c_handles` の番号。
+    pub(crate) c_handles: FxHashMap<String, u32>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -229,7 +252,8 @@ pub enum CompileError {
     /// 定数を凍結できなかった。
     Freeze(HeapError),
     /// すでにある名前の関数を変換し直すと、前と違うコードになった。debug ビルドだけが確かめる
-    /// (docs/spec/vm.md の「追記」)。
+    /// (docs/spec/vm.md の「追記」)。C の関数とハンドルの型では、すでにある名前の項と違う項が来た。こちらはどのビルドでも
+    /// 確かめる (docs/spec/vm.md の「C の関数の命令」)。
     Mismatch { function: String },
     /// 結果が複数の値のエントリの関数。エントリの `ret` は値1つで、`Finish` は値を1つだけ受ける
     /// (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。

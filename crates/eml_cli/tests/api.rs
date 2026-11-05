@@ -107,7 +107,13 @@ fn execute_runs_a_compiled_program() {
         .unwrap();
     let (host, _) = capture_host(std::path::PathBuf::new());
     assert_eq!(
-        execute(&program, &RunConfig::default(), host).map(|_| ()),
+        execute(
+            &program,
+            &eml_cli::Linked::default(),
+            &RunConfig::default(),
+            host
+        )
+        .map(|_| ()),
         Ok(())
     );
 }
@@ -288,7 +294,9 @@ fn execute_counts_its_work() {
     let program = single(TWICE).compile().program.unwrap();
     let (host, output) = capture_host(std::path::PathBuf::new());
     let config = RunConfig::default().with_debug_heap(true);
-    let stats: eml_cli::RunStats = execute(&program, &config, host).unwrap().stats;
+    let stats: eml_cli::RunStats = execute(&program, &eml_cli::Linked::default(), &config, host)
+        .unwrap()
+        .stats;
     assert_eq!(output.contents(), "xx\n");
     assert!(stats.string_bytes_copied > 0);
 }

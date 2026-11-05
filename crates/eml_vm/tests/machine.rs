@@ -38,7 +38,7 @@ fn run_two(first: &str, second: &str) -> String {
             let program = parse(text);
             eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
             let loaded = machine
-                .load(&program)
+                .load(&program, &eml_vm::Linked::default())
                 .unwrap_or_else(|error| panic!("{error:?}"));
             machine
                 .run(loaded.entry)
@@ -83,8 +83,12 @@ fn second() -> unit {{
 
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
-    let a = machine.load(&parse(&first)).unwrap();
-    let b = machine.load(&parse(&second)).unwrap();
+    let a = machine
+        .load(&parse(&first), &eml_vm::Linked::default())
+        .unwrap();
+    let b = machine
+        .load(&parse(&second), &eml_vm::Linked::default())
+        .unwrap();
     assert_eq!((a.entry, b.entry), (0, 2));
     assert_eq!(names(&machine), ["main", "say", "second"]);
 }
@@ -123,8 +127,12 @@ fn second() -> unit {{
 
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
-    machine.load(&parse(&first)).unwrap();
-    machine.load(&parse(&second)).unwrap();
+    machine
+        .load(&parse(&first), &eml_vm::Linked::default())
+        .unwrap();
+    machine
+        .load(&parse(&second), &eml_vm::Linked::default())
+        .unwrap();
     let text = disassemble(machine.code());
     let second_fn = &text[text.find("fn second").unwrap()..];
     assert!(second_fn.contains("load_const s0, c0"), "{second_fn}");
@@ -156,8 +164,12 @@ fn g(p.0: unit) -> unit {
 ";
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
-    machine.load(&parse(first)).unwrap();
-    machine.load(&parse(second)).unwrap();
+    machine
+        .load(&parse(first), &eml_vm::Linked::default())
+        .unwrap();
+    machine
+        .load(&parse(second), &eml_vm::Linked::default())
+        .unwrap();
     let text = disassemble(machine.code());
     let g = &text[text.find("fn g").unwrap()..];
     assert!(g.contains("ev_lookup s0, E0"), "{g}");
@@ -182,9 +194,13 @@ fn second() -> unit {
 ";
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
-    let a = machine.load(&parse(first)).unwrap();
+    let a = machine
+        .load(&parse(first), &eml_vm::Linked::default())
+        .unwrap();
     machine.run(a.entry).unwrap();
-    let b = machine.load(&parse(second)).unwrap();
+    let b = machine
+        .load(&parse(second), &eml_vm::Linked::default())
+        .unwrap();
     assert_eq!(
         machine.run(b.entry).unwrap_err(),
         RuntimeError::Fault {
@@ -215,9 +231,13 @@ fn one() -> int {
 ";
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
-    machine.load(&parse(first)).unwrap();
+    machine
+        .load(&parse(first), &eml_vm::Linked::default())
+        .unwrap();
     assert_eq!(
-        machine.load(&parse(second)).unwrap_err(),
+        machine
+            .load(&parse(second), &eml_vm::Linked::default())
+            .unwrap_err(),
         CompileError::Mismatch {
             function: "one".to_string()
         }
@@ -253,8 +273,12 @@ b2:
 ";
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
-    machine.load(&parse(first)).unwrap();
-    machine.load(&parse(second)).unwrap();
+    machine
+        .load(&parse(first), &eml_vm::Linked::default())
+        .unwrap();
+    machine
+        .load(&parse(second), &eml_vm::Linked::default())
+        .unwrap();
     assert_eq!(names(&machine), ["pick", "other"]);
 }
 
@@ -360,11 +384,15 @@ fn second() -> unit {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
-        let first = machine.load(&parse(first)).unwrap();
+        let first = machine
+            .load(&parse(first), &eml_vm::Linked::default())
+            .unwrap();
         let error = machine.run(first.entry).unwrap_err();
         assert_eq!(error.to_string(), "division by zero in `main`");
         assert!(!error.is_broken());
-        let second = machine.load(&parse(second)).unwrap();
+        let second = machine
+            .load(&parse(second), &eml_vm::Linked::default())
+            .unwrap();
         machine
             .run(second.entry)
             .unwrap_or_else(|error| panic!("{error}"));
@@ -407,7 +435,9 @@ fn an_interrupt_before_load_is_held_until_the_first_safe_point() {
             if before_load {
                 control.interrupt();
             }
-            let loaded = machine.load(&parse(COUNT_THEN_SAY)).unwrap();
+            let loaded = machine
+                .load(&parse(COUNT_THEN_SAY), &eml_vm::Linked::default())
+                .unwrap();
             if !before_load {
                 control.interrupt();
             }
@@ -454,7 +484,9 @@ fn third() -> unit {
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
     let mut run = |text: &str| {
-        let loaded = machine.load(&parse(text)).unwrap();
+        let loaded = machine
+            .load(&parse(text), &eml_vm::Linked::default())
+            .unwrap();
         machine.run(loaded.entry).map(|finished| finished.stats)
     };
     let before = run(first).unwrap_or_else(|error| panic!("{error}"));
@@ -493,7 +525,9 @@ fn main() -> unit {
         let (host, _) = capture_host(root.clone());
         let config = RunConfig::default().with_debug_heap(debug_heap);
         let mut machine = AnyMachine::new(&config, host);
-        let loaded = machine.load(&parse(text)).unwrap();
+        let loaded = machine
+            .load(&parse(text), &eml_vm::Linked::default())
+            .unwrap();
         errors.push(machine.run(loaded.entry).unwrap_err());
     }
     std::fs::remove_dir_all(&root).unwrap();
@@ -544,7 +578,7 @@ fn a_shown_entry_returns_its_text_after_the_output() {
         let mut machine = AnyMachine::new(&config, host);
         let program = parse(SHOWN);
         eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-        let loaded = machine.load(&program).unwrap();
+        let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
         let (_, text) = machine.run_shown(loaded.entry, 100).unwrap();
         assert_eq!(text.as_deref(), Some("x = 42"));
         // エントリが書いた行は、結果を返す前に書き出してある
@@ -564,7 +598,10 @@ fn a_shown_entry_must_return_an_object() {
     let (host, _) = capture_host(Default::default());
     let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
     let loaded = machine
-        .load(&parse("fn main() -> unit {\n  return ()\n}\n"))
+        .load(
+            &parse("fn main() -> unit {\n  return ()\n}\n"),
+            &eml_vm::Linked::default(),
+        )
         .unwrap();
     let error = machine.run_shown(loaded.entry, 10).unwrap_err();
     assert!(
@@ -662,14 +699,17 @@ fn every_run_quiesces_its_driver() {
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
     let loaded = machine
-        .load(&parse(&format!(
-            "\
+        .load(
+            &parse(&format!(
+                "\
 fn main() -> unit {{
   let s.0: obj = const \"ran\"
   tail call say(s.0)
 }}
 {SAY}"
-        )))
+            )),
+            &eml_vm::Linked::default(),
+        )
         .unwrap();
     machine
         .run(loaded.entry)
@@ -688,14 +728,17 @@ fn a_failed_run_quiesces_its_driver_before_recovery() {
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
     let loaded = machine
-        .load(&parse(
-            "\
+        .load(
+            &parse(
+                "\
 fn main() -> unit {
   let n.0: int = extern \"Prelude.Div Int.%\"(1, 0)
   return ()
 }
 ",
-        ))
+            ),
+            &eml_vm::Linked::default(),
+        )
         .unwrap();
     let error = machine.run(loaded.entry).unwrap_err();
     assert_eq!(error.to_string(), "division by zero in `main`");
@@ -720,7 +763,10 @@ fn a_failing_driver_breaks_the_run() {
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
     let loaded = machine
-        .load(&eml_test_support::lir(WAITS_ON_A_LISTEN))
+        .load(
+            &eml_test_support::lir(WAITS_ON_A_LISTEN),
+            &eml_vm::Linked::default(),
+        )
         .unwrap();
     let error = machine.run(loaded.entry).unwrap_err();
     assert!(error.is_broken(), "{error}");
@@ -741,7 +787,10 @@ fn a_driver_left_pending_poisons_the_machine() {
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
     let loaded = machine
-        .load(&eml_test_support::lir(WAITS_ON_A_LISTEN))
+        .load(
+            &eml_test_support::lir(WAITS_ON_A_LISTEN),
+            &eml_vm::Linked::default(),
+        )
         .unwrap();
     let error = machine.run(loaded.entry).unwrap_err();
     assert!(error.is_broken(), "{error}");
@@ -849,7 +898,9 @@ fn run_on_stub(src: &str) -> (String, eml_vm::Finished, Vec<String>) {
     let (host, out) = capture_host(Default::default());
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
-    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let loaded = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
     let finished = machine
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));

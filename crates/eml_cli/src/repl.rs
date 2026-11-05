@@ -325,7 +325,7 @@ impl Repl {
     }
 
     fn run(&mut self, program: &eml_lir::Program, shown: Option<Shown>) -> Outcome {
-        let loaded = match self.machine.load(program) {
+        let loaded = match self.machine.load(program, &eml_vm::Linked::default()) {
             Ok(loaded) => loaded,
             // コード生成の誤りは正しいプログラムでは起きない。`CodeBase` が途中まで書き換わっているかもしれないので、
             // 続けない

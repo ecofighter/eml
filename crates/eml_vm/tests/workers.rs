@@ -51,7 +51,7 @@ fn run_program(
     let config = RunConfig::default()
         .with_debug_heap(true)
         .with_control(control);
-    let result = eml_vm::execute(program, &config, host);
+    let result = eml_vm::execute(program, &eml_vm::Linked::default(), &config, host);
     (out.contents(), result)
 }
 
@@ -70,7 +70,7 @@ fn interrupted(src: &str, config: impl FnOnce(RunConfig) -> RunConfig) {
     });
     let (host, _) = eml_vm::capture_host(Default::default());
     let start = Instant::now();
-    let result = eml_vm::execute(&program, &config, host);
+    let result = eml_vm::execute(&program, &eml_vm::Linked::default(), &config, host);
     let elapsed = start.elapsed();
     interrupter.join().unwrap();
     let error = result.unwrap_err();
@@ -140,17 +140,23 @@ fn code_with_roots_starts_no_worker() {
 
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(4), host);
-    machine.load(&roots).unwrap();
-    let entry = machine.load(&par).unwrap().entry;
+    machine.load(&roots, &eml_vm::Linked::default()).unwrap();
+    let entry = machine
+        .load(&par, &eml_vm::Linked::default())
+        .unwrap()
+        .entry;
     assert_eq!(machine.run(entry).unwrap().workers, 0);
     machine.close().unwrap();
     assert_eq!(out.contents(), "3\n");
 
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(4), host);
-    let entry = machine.load(&par).unwrap().entry;
+    let entry = machine
+        .load(&par, &eml_vm::Linked::default())
+        .unwrap()
+        .entry;
     assert_eq!(machine.run(entry).unwrap().workers, 3);
-    machine.load(&roots).unwrap();
+    machine.load(&roots, &eml_vm::Linked::default()).unwrap();
     assert_eq!(machine.run(entry).unwrap().workers, 0);
     machine.close().unwrap();
     assert_eq!(out.contents(), "3\n3\n");
@@ -259,7 +265,10 @@ fn text(p.0: unit) -> tobj {{
     let program = parse(&text);
     let (host, _) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(2), host);
-    let entry = machine.load(&program).unwrap().entry;
+    let entry = machine
+        .load(&program, &eml_vm::Linked::default())
+        .unwrap()
+        .entry;
     let (finished, shown) = machine.run_shown(entry, 100).unwrap();
     assert_eq!(shown.as_deref(), Some("12345"));
     assert_eq!((finished.workers, finished.placed), (1, 1));
@@ -550,7 +559,10 @@ main () =
     );
     let (host, out) = eml_vm::capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(limits(2), host);
-    let entry = machine.load(&failing).unwrap().entry;
+    let entry = machine
+        .load(&failing, &eml_vm::Linked::default())
+        .unwrap()
+        .entry;
     for _ in 0..2 {
         let error = machine.run(entry).unwrap_err();
         assert!(error.to_string().contains("division by zero"), "{error}");
@@ -716,7 +728,12 @@ main () = Async.run (fn () ->
             .with_clock(Clock::Real)
             .with_sched(sched)
             .with_control(limits(2));
-        let result = eml_vm::execute(&eml_test_support::lir(src), &config, host);
+        let result = eml_vm::execute(
+            &eml_test_support::lir(src),
+            &eml_vm::Linked::default(),
+            &config,
+            host,
+        );
         assert_eq!(out.contents(), "timer\ndone\n", "{sched:?}");
         assert_eq!(result.unwrap().placed_tasks, 1, "{sched:?}");
     }
@@ -793,8 +810,8 @@ main () = Async.run (fn () -> println (show (sum_all (start_all 16) 0)))
         let config = RunConfig::default()
             .with_sched(Sched::Normal)
             .with_control(limits(4));
-        let finished =
-            eml_vm::execute(&program, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        let finished = eml_vm::execute(&program, &eml_vm::Linked::default(), &config, host)
+            .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(out.contents(), alone);
         assert!(finished.placed_tasks >= 1, "{finished:?}");
     }
@@ -812,7 +829,12 @@ fn run_sched_in(
         .with_debug_heap(true)
         .with_sched(sched)
         .with_control(limits(workers));
-    let result = eml_vm::execute(&eml_test_support::lir(src), &config, host);
+    let result = eml_vm::execute(
+        &eml_test_support::lir(src),
+        &eml_vm::Linked::default(),
+        &config,
+        host,
+    );
     (out.contents(), result)
 }
 
@@ -1081,6 +1103,7 @@ main () = Async.run (fn () ->
         .with_control(limits(2));
     let finished = eml_vm::execute(
         &eml_test_support::lir(src),
+        &eml_vm::Linked::default(),
         &config,
         eml_rt::HostRef::new(Arc::clone(&host) as Arc<dyn eml_rt::Host>),
     )

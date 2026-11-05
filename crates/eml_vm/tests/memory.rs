@@ -26,7 +26,12 @@ fn run(
         .with_debug_heap(true)
         .with_sched(sched)
         .with_control(control);
-    let result = eml_vm::execute(&eml_test_support::lir(src), &config, host);
+    let result = eml_vm::execute(
+        &eml_test_support::lir(src),
+        &eml_vm::Linked::default(),
+        &config,
+        host,
+    );
     (out.contents(), result)
 }
 

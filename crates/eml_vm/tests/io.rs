@@ -376,7 +376,9 @@ main () = Async.run (fn () ->
     let (host, out) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
         .with_driver(Box::new(HoldingDriver::default()));
-    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let loaded = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
     let finished = machine
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -422,7 +424,9 @@ main () = Async.run (fn () ->
     let (host, out) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
         .with_driver(Box::new(HoldingDriver::default()));
-    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let loaded = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
     let finished = machine
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -456,7 +460,9 @@ main () = Async.run (fn () ->
 ";
     let (host, out) = capture_host(Default::default());
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
-    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let loaded = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
     let finished = machine
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -590,7 +596,9 @@ main () = Async.run (fn () ->
     let (host, out) = capture_host(Default::default());
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
-    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let loaded = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
     let finished = machine
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -636,7 +644,9 @@ main () = Async.run (fn () ->
     let (host, out) = capture_host(Default::default());
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
-    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let loaded = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
     let finished = machine
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -689,7 +699,9 @@ main () = Async.run (fn () ->
         );
         let (host, _) = capture_host(Default::default());
         let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
-        let loaded = machine.load(&eml_test_support::lir(&src)).unwrap();
+        let loaded = machine
+            .load(&eml_test_support::lir(&src), &eml_vm::Linked::default())
+            .unwrap();
         let finished = machine
             .run(loaded.entry)
             .unwrap_or_else(|error| panic!("{error}"));
@@ -970,7 +982,12 @@ fn a_spent_budget_looks_at_the_os_and_goes_on_alone() {
         let (host, _) = capture_host(Default::default());
         let mut machine = Machine::<Checked>::new(RunConfig::default().control, host)
             .with_driver(Box::new(driver));
-        let loaded = machine.load(&eml_test_support::lir(src.as_str())).unwrap();
+        let loaded = machine
+            .load(
+                &eml_test_support::lir(src.as_str()),
+                &eml_vm::Linked::default(),
+            )
+            .unwrap();
         let finished = machine
             .run(loaded.entry)
             .unwrap_or_else(|error| panic!("{error}"));
@@ -1041,7 +1058,7 @@ main () = Async.run (fn () ->
 
 /// `machine` で `program` を流して閉じる。
 fn run_to_close<M: eml_rt::Mode>(mut machine: Machine<M>, program: &eml_lir::Program) {
-    let loaded = machine.load(program).unwrap();
+    let loaded = machine.load(program, &eml_vm::Linked::default()).unwrap();
     machine
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -1099,8 +1116,13 @@ fn run_on(src: &str, workers: usize, config: RunConfig) -> (String, eml_vm::Fini
     }));
     let config = config.with_debug_heap(true).with_control(control);
     let (host, out) = capture_host(Default::default());
-    let finished = eml_vm::execute(&eml_test_support::lir(src), &config, host)
-        .unwrap_or_else(|error| panic!("{error}"));
+    let finished = eml_vm::execute(
+        &eml_test_support::lir(src),
+        &eml_vm::Linked::default(),
+        &config,
+        host,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     (out.contents(), finished)
 }
 
@@ -1640,8 +1662,13 @@ main () = Async.run (fn () ->
             .with_sched(Sched::Normal)
             .with_debug_heap(true)
             .with_control(control);
-        let finished = eml_vm::execute(&eml_test_support::lir(src), &config, host)
-            .unwrap_or_else(|error| panic!("{error}"));
+        let finished = eml_vm::execute(
+            &eml_test_support::lir(src),
+            &eml_vm::Linked::default(),
+            &config,
+            host,
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
         let _ = done.send(finished);
     });
     // プログラムがポートを書くまで待つ
@@ -1787,7 +1814,9 @@ fn run_on_watch(src: &str, driver: FileWatch) -> String {
     let (host, out) = capture_host(Default::default());
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
-    let loaded = machine.load(&eml_test_support::lir(src)).unwrap();
+    let loaded = machine
+        .load(&eml_test_support::lir(src), &eml_vm::Linked::default())
+        .unwrap();
     machine
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -1920,6 +1949,7 @@ fn run_exec(src: &str, workers: usize, sched: Sched) -> (String, Finished) {
         .with_control(control);
     let finished = eml_vm::execute(
         &eml_test_support::lir(&with_exec_child(src)),
+        &eml_vm::Linked::default(),
         &config,
         eml_rt::HostRef::new(Arc::new(host)),
     )

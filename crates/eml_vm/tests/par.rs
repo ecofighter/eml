@@ -273,7 +273,7 @@ fn run_with(
         .with_debug_heap(debug_heap)
         .with_control(control)
         .with_sched(sched);
-    let result = eml_vm::execute(program, &config, host);
+    let result = eml_vm::execute(program, &eml_vm::Linked::default(), &config, host);
     (out.contents(), result)
 }
 

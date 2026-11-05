@@ -81,9 +81,9 @@ fn a_registered_symbol_comes_first() {
         CRet::Float,
     );
     let linked = linker.link(&[f], &[]).unwrap();
-    assert_eq!(linked.calls[0].callee, half as *const ());
+    assert_eq!(linked.calls()[0].callee, half as *const ());
     assert_eq!(
-        f64::from_bits(call(linked.calls[0], &[9.0f64.to_bits()])),
+        f64::from_bits(call(linked.calls()[0], &[9.0f64.to_bits()])),
         4.5
     );
 }
@@ -92,14 +92,14 @@ fn a_registered_symbol_comes_first() {
 fn the_c_library_provides_a_symbol() {
     let mut linker = Linker::new(Vec::new());
     let linked = linker.link(&[llabs(vec![c_library()])], &[]).unwrap();
-    assert_eq!(call(linked.calls[0], &[(-5i64) as u64]), 5);
+    assert_eq!(call(linked.calls()[0], &[(-5i64) as u64]), 5);
 }
 
 #[test]
 fn the_process_provides_a_symbol() {
     let mut linker = Linker::new(Vec::new());
     let linked = linker.link(&[llabs(Vec::new())], &[]).unwrap();
-    assert_eq!(call(linked.calls[0], &[(-6i64) as u64]), 6);
+    assert_eq!(call(linked.calls()[0], &[(-6i64) as u64]), 6);
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn each_function_uses_its_own_links() {
             &[],
         )
         .unwrap();
-    assert_eq!(linked.calls.len(), 2);
+    assert_eq!(linked.calls().len(), 2);
     // 誤りは、その関数の宣言したモジュールの `link` だけを挙げる
     let error = linker
         .link(&[llabs(vec![c_library()]), missing(vec![elsewhere])], &[])
@@ -147,7 +147,7 @@ fn an_override_replaces_the_written_name() {
     let linked = linker
         .link(&[llabs(vec![named(os(), written)])], &[])
         .unwrap();
-    assert_eq!(call(linked.calls[0], &[(-7i64) as u64]), 7);
+    assert_eq!(call(linked.calls()[0], &[(-7i64) as u64]), 7);
 }
 
 #[test]
@@ -227,13 +227,13 @@ fn a_dtor_resolves_like_a_function() {
         handle(Some("free"), vec![c_library()]),
     ];
     let linked = linker.link(&[], &handles).unwrap();
-    assert!(linked.calls.is_empty());
+    assert!(linked.calls().is_empty());
     assert_eq!(
-        linked.dtors[0].map(|dtor| dtor as usize),
+        linked.dtors()[0].map(|dtor| dtor as usize),
         Some(test_dtor as *const () as usize)
     );
-    assert!(linked.dtors[1].is_none());
-    assert!(linked.dtors[2].is_some());
+    assert!(linked.dtors()[1].is_none());
+    assert!(linked.dtors()[2].is_some());
     // 関数とハンドルを一緒につなぐと、それぞれの表に並びをそろえる
     let f = function(
         "Test.make",
@@ -243,7 +243,7 @@ fn a_dtor_resolves_like_a_function() {
         CRet::Handle(CHandleId(0)),
     );
     let linked = linker.link(&[f], &handles[..1]).unwrap();
-    assert_eq!((linked.calls.len(), linked.dtors.len()), (1, 1));
+    assert_eq!((linked.calls().len(), linked.dtors().len()), (1, 1));
 }
 
 #[test]
@@ -355,5 +355,5 @@ fn accelerate_loads_as_a_framework() {
         y.as_ptr().expose_provenance() as u64,
         1,
     ];
-    assert_eq!(f64::from_bits(call(linked.calls[0], &args)), 32.0);
+    assert_eq!(f64::from_bits(call(linked.calls()[0], &args)), 32.0);
 }

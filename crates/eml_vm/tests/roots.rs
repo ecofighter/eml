@@ -182,7 +182,7 @@ fn run_inputs(inputs: &[&str]) -> (String, Vec<Result<(), String>>) {
                 let program = parse(&format!("{LAYOUT}{input}{READERS}"));
                 eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
                 let loaded = machine
-                    .load(&program)
+                    .load(&program, &eml_vm::Linked::default())
                     .unwrap_or_else(|error| panic!("{error:?}"));
                 results.push(machine.run(loaded.entry).map(|_| ()).map_err(|error| {
                     assert!(!error.is_broken(), "{error}");

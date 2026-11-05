@@ -110,7 +110,12 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             };
             // 相対パスはカレントディレクトリを基準にする
-            match eml_cli::execute(&program, &config, script_host(PathBuf::new(), script_args)) {
+            match eml_cli::execute(
+                &program,
+                &eml_cli::Linked::default(),
+                &config,
+                script_host(PathBuf::new(), script_args),
+            ) {
                 // シェルと同じく、終了コードは下の 8 ビットである (docs/spec/stdlib.md の「`exit`」)
                 Ok(finished) => {
                     if stats {

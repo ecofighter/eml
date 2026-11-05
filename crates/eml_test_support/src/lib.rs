@@ -369,7 +369,8 @@ pub fn execute_on(
     host: CaptureHost,
 ) -> (String, Result<RunStats, RuntimeError>) {
     let out = host.output();
-    let result = eml_vm::execute(program, config, host.into_ref()).map(|finished| finished.stats);
+    let result = eml_vm::execute(program, &eml_vm::Linked::default(), config, host.into_ref())
+        .map(|finished| finished.stats);
     (out.contents(), result)
 }
 

@@ -43,7 +43,7 @@ main () = Async.run (fn () -> Async.sleep_ms 2000)
         })
     };
     let (host, _) = eml_vm::capture_host(Default::default());
-    let result = eml_vm::execute(&program, &config, host);
+    let result = eml_vm::execute(&program, &eml_vm::Linked::default(), &config, host);
     drop(done);
     watchdog.join().unwrap();
     let error = result.unwrap_err();
@@ -108,7 +108,7 @@ fn run_real_on(
         .with_sched(sched)
         .with_doorbell(Arc::clone(&doorbell))
         .with_signals(signals);
-    let loaded = machine.load(&program).unwrap();
+    let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     let (done, finished) = mpsc::channel::<()>();
     let poker = thread::spawn(move || {
         let poked = poke(&control, &doorbell);
@@ -313,7 +313,7 @@ main () = Async.run (fn () -> Signal.wait Signal.Terminate)
     let mut machine = Machine::<Checked>::new(Arc::clone(&control), host)
         .with_clock(Clock::Real)
         .with_driver(Box::new(eml_io::TestDriver::new(None)));
-    let loaded = machine.load(&program).unwrap();
+    let loaded = machine.load(&program, &eml_vm::Linked::default()).unwrap();
     // 番犬は失敗の条件にだけ使う。回り続ければ割り込みで止まり、下の検査が落ちる
     let (done, finished) = mpsc::channel::<()>();
     let watchdog = thread::spawn(move || {

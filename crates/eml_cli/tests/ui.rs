@@ -207,7 +207,12 @@ fn execute_in(
     } else {
         config
     };
-    let outcome = execute(program, &config, host.into_ref());
+    let outcome = execute(
+        program,
+        &eml_cli::Linked::default(),
+        &config,
+        host.into_ref(),
+    );
     let finished = outcome.as_ref().ok().copied();
     let result = outcome.map(|finished| finished.exit);
     let written = files
