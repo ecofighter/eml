@@ -1992,6 +1992,44 @@ fn c_tables_read_back() {
     );
 }
 
+const BLOCKING_CALLS: &str = "\
+cfn \"Main.count\" symbol \"count\" blocking link [] (text, i64) -> i64
+cfn \"Main.sync\" symbol \"sync\" link [] (i64) -> i64
+fn f(s.0: obj, w.1: enum) -> int {
+  let op.2: int = extern submit Main.count(s.0, 3)
+  let t.3: int = extern take Main.count(op.2, w.1, s.0)
+  return t.3
+}
+";
+
+/// `blocking` の C の関数の受け付けと取り出しは、名前の前の語 `submit` と `take` で書き、読み戻すと同じ行を指す。
+/// `blocking` でない C の関数には書けない。
+#[test]
+fn c_tables_with_blocking_calls_read_back() {
+    use eml_extern::{CFnId, ExternRef};
+    let program = round_trip(BLOCKING_CALLS);
+    let exts: Vec<ExternRef> = program.functions[0].blocks[0]
+        .stmts
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                rhs: Rhs::Extern { ext, .. },
+                ..
+            } => Some(*ext),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        exts,
+        [ExternRef::CSubmit(CFnId(0)), ExternRef::CTake(CFnId(0))]
+    );
+    let error = parse_error(&BLOCKING_CALLS.replace("submit Main.count", "submit Main.sync"));
+    assert_eq!(
+        error.to_string(),
+        "line 4: `Main.sync` is not a `blocking` C function"
+    );
+}
+
 #[test]
 fn an_unknown_c_handle_type_is_a_parse_error() {
     let error = parse_error(

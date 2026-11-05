@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 use crate::common::programs::{UiProgram, ui_programs};
+use crate::common::{core_text, function};
 
 /// プログラムどうしは独立なので、コアの数のスレッドで分けて流す。`Session` は `Send + Sync` である
 /// (docs/implementation/architecture.md の「CLI と lib API」)。
@@ -160,4 +161,63 @@ fn runtime_entries_are_absent_without_the_import() {
             entry.name()
         );
     }
+}
+
+/// `blocking` の C の関数と、それを呼ぶ関数。`count` は文字列を借り、`fill` は配列を借りて組で返す。
+const BLOCKING: &str = "\
+import Async (Async)
+import MutUnboxedArray
+
+extern \"C\" blocking count : String -> Int -> <IO, Async> Int
+extern \"C\" blocking fill : Int -> MutUnboxedArray Float -> <IO, Async> (Unit, MutUnboxedArray Float)
+
+go : String -> MutUnboxedArray Float -> <IO, Async> (Int, MutUnboxedArray Float)
+go s a =
+  let n = count s 3
+  let ((), a) = fill n a
+  (n, a)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let a : MutUnboxedArray Float = MutUnboxedArray.empty ()
+  let (n, a) = Async.run (fn () -> go \"x\" a)
+  drop a
+  println (show n)
+";
+
+/// `blocking` の呼び出しは、受け付け、`Std.Async.io_wait`、組の `unpack`、取り出しの4つの文になる。取り出しは記録の
+/// 番号と `Wake` に続けて物体の引数を借り、`lin` の引数は組で返る (docs/spec/core-ir.md の「組を返す extern」)。
+#[test]
+fn a_blocking_call_waits_between_submit_and_take() {
+    insta::assert_snapshot!(function(&core_text(BLOCKING, Pass::Translate), "go"), @"
+    yields fn go(s.0: obj, a.1: obj lin) -> (,){int, obj lin} lin {
+      let op.2: int = extern submit Main.count(s.0, 3)
+      let r.3: (,){enum, int} lin = call Std.Async.io_wait(op.2)
+      unpack r.3 (,) #0(w.4: enum, op.5: int)
+      let t.6: int = extern take Main.count(op.5, w.4, s.0)
+      let op.7: int = extern submit Main.fill(t.6, a.1)
+      let r.8: (,){enum, int} lin = call Std.Async.io_wait(op.7)
+      unpack r.8 (,) #0(w.9: enum, op.10: int)
+      let t.11: unit = extern take Main.fill(op.10, w.9, a.1)
+      let d.12: (,){unit, obj lin} lin = con (,) #0(t.11, a.1)
+      unpack d.12 (,) #0(x.13: unit, a.14: obj lin)
+      let d.15: (,){int, obj lin} lin = con (,) #0(t.6, a.14)
+      return d.15
+    }
+    ");
+}
+
+/// 値として使う `blocking` の C の関数を包む関数は、受け付けと取り出しの間で止まるので yield する。
+#[test]
+fn a_blocking_wrapper_yields() {
+    let text = BLOCKING.replace("let n = count s 3", "let f = count s\n  let n = f 3");
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "go$extern0"), @"
+    internal yields uniform from 0 fn go$extern0(p.0: obj, p.1: int) -> int {
+      let op.2: int = extern submit Main.count(p.0, p.1)
+      let r.3: (,){enum, int} lin = call Std.Async.io_wait(op.2)
+      unpack r.3 (,) #0(w.4: enum, op.5: int)
+      let t.6: int = extern take Main.count(op.5, w.4, p.0)
+      return t.6
+    }
+    ");
 }

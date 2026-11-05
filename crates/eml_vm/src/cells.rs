@@ -455,6 +455,12 @@ enum OpKind {
     Wait {
         program: Arc<str>,
     },
+    /// `blocking` の C の呼び出し。`call` は `CodeBase` の C の関数の番号、`ret` はプールが返した語。記録はヒープの語を
+    /// 持たず、引数は待つタスクの継続が持つ (docs/spec/vm.md の「`blocking` の呼び出し」)。
+    Ffi {
+        call: u32,
+        ret: Option<u64>,
+    },
 }
 
 /// 読みと書きの記録が、誤りの文言の前に付ける語の元。受け付けたストリームの `Origin` で決まる。
@@ -508,6 +514,7 @@ impl OpKind {
             OpKind::SetNodelay => "cannot set the no-delay option".into(),
             OpKind::Open { path, .. } => format!("cannot open `{path}`").into(),
             OpKind::Wait { program } => format!("cannot wait for `{program}`").into(),
+            OpKind::Ffi { .. } => "cannot call a C function".into(),
         }
     }
 
@@ -3554,6 +3561,16 @@ impl Registry {
                 | OpKind::Wait { .. },
                 Ok(Done::Size(n)),
             ) => Ok(n),
+            (OpPhase::Transfer, OpKind::Ffi { .. }, Ok(Done::Job(value))) => {
+                let r = *value.downcast::<u64>().map_err(|_| {
+                    CellFault::Internal("an op completes with another kind of result")
+                })?;
+                let OpKind::Ffi { ret, .. } = &mut self.op_mut(op)?.kind else {
+                    unreachable!("the kind is matched above");
+                };
+                *ret = Some(r);
+                Ok(0)
+            }
             // 外が書いたバイトは、取り消しを頼んだ記録でもストリームの buffer に確定する。行の途中で止めても、
             // 読んだバイトを次の読みに残すためである (docs/spec/stdlib.md の「`Std.Net`」)
             (OpPhase::Transfer, &OpKind::Line { filled, .. }, result) => {
@@ -3957,7 +3974,7 @@ pub(crate) fn submit_write<M: Mode>(
             None
         }
     };
-    submit(shared, here, ctx, driver, depth_offset, record, op)
+    submit(shared, here, ctx, driver, depth_offset, record, op, None)
 }
 
 /// `Std.Net.submit_read`。`buf` と `stream` を `submit_write` と同じく記録に移す。buffer が一意で空きが
@@ -3999,7 +4016,7 @@ pub(crate) fn submit_read<M: Mode>(
     let mut record = net_record(kind, worker, Some(stream));
     record.buf = Some(buf);
     record.phase = phase;
-    submit(shared, here, ctx, driver, depth_offset, record, op)
+    submit(shared, here, ctx, driver, depth_offset, record, op, None)
 }
 
 /// `Std.Net.submit_read_line`。`stream` は呼ぶ側から移ってきた参照で、記録に移す。ストリームの buffer の残りに改行が
@@ -4046,7 +4063,7 @@ pub(crate) fn submit_read_line<M: Mode>(
     let mut record = net_record(kind, worker, Some(stream));
     record.phase = phase;
     record.made = made;
-    submit(shared, here, ctx, driver, depth_offset, record, op)
+    submit(shared, here, ctx, driver, depth_offset, record, op, None)
 }
 
 /// `Std.Net.submit_listen`。`host` と `port` は呼ぶ側から移ってきた参照と即値で、`host` は読んでから手放す。
@@ -4086,6 +4103,7 @@ pub(crate) fn submit_listen<M: Mode>(
         depth_offset,
         record,
         Some(op),
+        None,
     )?))
 }
 
@@ -4107,7 +4125,16 @@ pub(crate) fn submit_accept<M: Mode>(
     };
     let op = Op::Accept { listener: handle };
     let record = net_record(OpKind::Accept, worker, Some(listener));
-    submit(shared, here, ctx, driver, depth_offset, record, Some(op))
+    submit(
+        shared,
+        here,
+        ctx,
+        driver,
+        depth_offset,
+        record,
+        Some(op),
+        None,
+    )
 }
 
 /// `Std.Net.submit_connect`。`submit_listen` と同じく `host` を読んで手放す。`host` は名前でもよく、driver が解決する。
@@ -4142,6 +4169,7 @@ pub(crate) fn submit_connect<M: Mode>(
         depth_offset,
         record,
         Some(op),
+        None,
     )?))
 }
 
@@ -4199,6 +4227,7 @@ pub(crate) fn submit_open<M: Mode>(
         depth_offset,
         record,
         Some(op),
+        None,
     )?))
 }
 
@@ -4231,12 +4260,14 @@ pub(crate) fn submit_control<M: Mode>(
             None
         }
     };
-    submit(shared, here, ctx, driver, depth_offset, record, op)
+    submit(shared, here, ctx, driver, depth_offset, record, op, None)
 }
 
 /// 呼ぶ側の物体から lock の外で作った記録を表に入れ、`op` があれば driver に出して、token を返す。driver がその場で
 /// 終えた操作はここで決着させる。誤りで終わっても記録は終わった記録として残り、取り出しの行が放す
-/// (docs/spec/vm.md の「操作の記録」)。
+/// (docs/spec/vm.md の「操作の記録」)。`point` のタスクが取り消しの地点で投げるなら、`op` を出さずに取り消しで
+/// 終わった記録にする (docs/spec/vm.md の「`blocking` の呼び出し」)。
+#[allow(clippy::too_many_arguments)]
 fn submit<M: Mode>(
     shared: &Shared,
     here: &Here,
@@ -4244,7 +4275,8 @@ fn submit<M: Mode>(
     driver: Option<&mut (dyn IoDriver + 'static)>,
     depth_offset: usize,
     mut record: OpRecord,
-    op: Option<Op>,
+    mut op: Option<Op>,
+    point: Option<CellRef>,
 ) -> Result<i64, CellFault> {
     // 縛ったハンドルを引く操作だけが、縛った worker を host にする。取り込みに失敗したストリームの記録は driver に出さない
     record.host = match record.stream {
@@ -4252,7 +4284,19 @@ fn submit<M: Mode>(
         None => here.host,
     };
     let mut work = IoWork::default();
-    let token = shared.lock().record(record, op, here, &mut work)?;
+    let token = {
+        let mut cells = shared.lock();
+        // 地点の確かめと記録を1つの区間に置き、取り消しが間に入って仕事だけが始まることをなくす。`stats` と予算と
+        // `parks` には触れない。後の `io_wait` が、終わった記録を待つ取り消しの地点として数える
+        if let Some(me) = point
+            && cells.point(me)?
+        {
+            record.phase = OpPhase::Done(Err(io::Error::other("cancelled")), true);
+            record.cancelling = true;
+            op = None;
+        }
+        cells.record(record, op, here, &mut work)?
+    };
     let mut out = Vec::new();
     run_io(shared, here, ctx, driver, depth_offset, &mut work, &mut out)?;
     // 待つタスクはまだいないので、再開の仕事はできない
@@ -4425,6 +4469,60 @@ fn op_key(op: CellRef) -> OpKey {
     op.encode() as OpKey
 }
 
+/// `blocking` の C の呼び出しの受け付け。プールの仕事 `job` を記録の host の driver に出し、token を返す。`call` は
+/// `CodeBase` の C の関数の番号で、取り出しが確かめに使う。`me` は呼んだタスクで、取り消しの地点なら仕事を出さない。
+/// 記録は語を持たない (docs/spec/vm.md の「`blocking` の呼び出し」)。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_job<M: Mode>(
+    shared: &Shared,
+    here: &Here,
+    ctx: &mut Ctx<M>,
+    driver: Option<&mut (dyn IoDriver + 'static)>,
+    worker: u32,
+    depth_offset: usize,
+    me: CellRef,
+    call: u32,
+    job: Op,
+) -> Result<i64, CellFault> {
+    let record = net_record(OpKind::Ffi { call, ret: None }, worker, None);
+    submit(
+        shared,
+        here,
+        ctx,
+        driver,
+        depth_offset,
+        record,
+        Some(job),
+        Some(me),
+    )
+}
+
+/// `take_ffi` が返す、終わった `blocking` の呼び出し。`result` はプールが返した語か、仕事を走らせられなかった誤りか、
+/// 取り消しの地点で出さなかった誤りである。
+pub(crate) struct FfiTaken {
+    pub(crate) call: u32,
+    pub(crate) result: io::Result<u64>,
+}
+
+/// `blocking` の呼び出しの取り出し。token を消費して記録を放す。取り出すのは受け付けたタスク (`worker`) だけである。
+pub(crate) fn take_ffi<M: Mode>(
+    shared: &Shared,
+    ctx: &mut Ctx<M>,
+    token: i64,
+    worker: u32,
+) -> Result<FfiTaken, CellFault> {
+    let taken = take_op(shared, ctx, token, worker)?;
+    let OpKind::Ffi { call, ret } = taken.kind else {
+        return Err(CellFault::Internal("an op is taken as another kind of op"));
+    };
+    let result = match (taken.result, ret) {
+        (Ok(_), Some(r)) => Ok(r),
+        (Ok(_), None) => return Err(CellFault::Internal("a C call op has no answer")),
+        (Err(e), _) => Err(e),
+    };
+    Ok(FfiTaken { call, result })
+}
+
 /// `Std.Net` の操作の記録。buffer を持たない操作はどれも driver が記憶を使わないので、段階は `Transfer` から始める。
 /// 持ち主と host は表に入れるときに決める。
 fn net_record(kind: OpKind, worker: u32, stream: Option<Word>) -> OpRecord {
@@ -4567,7 +4665,7 @@ pub(crate) fn submit_wait<M: Mode>(
             None
         }
     };
-    submit(shared, here, ctx, driver, depth_offset, record, op)
+    submit(shared, here, ctx, driver, depth_offset, record, op, None)
 }
 
 /// `Std.Exec.reap`。借りた子 `child` の段 `k` を回収し、終了コードを返す。`Op::Wait` の知らせの後なので待たずに済む。
@@ -6163,6 +6261,116 @@ fn a_cancelled_park_on_a_finished_op_marks_the_record_cancelling() {
     unsafe { ctx.heap_mut().decref(taken.buf.unwrap()) }.unwrap();
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// `blocking` の呼び出しの仕事を出す。答えは鍵を外さずに返る `u64` だけである。
+#[cfg(test)]
+fn submit_ffi_job(
+    registry: &Shared,
+    ctx: &mut Ctx<eml_rt::Checked>,
+    driver: &mut NoDriver,
+    me: CellRef,
+) -> i64 {
+    let job = Op::Job(Box::new(|| Box::new(7u64) as Box<dyn std::any::Any + Send>));
+    submit_job(
+        registry,
+        &solo(registry),
+        ctx,
+        Some(&mut *driver),
+        0,
+        0,
+        me,
+        3,
+        job,
+    )
+    .unwrap()
+}
+
+/// プールの仕事の記録は、完了の箱の `u64` を答えに受け、取り出しが C の関数の番号とともに返す
+/// (docs/spec/vm.md の「`blocking` の呼び出し」)。
+#[test]
+fn a_job_record_takes_the_boxed_answer() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let token = submit_ffi_job(&registry, &mut ctx, &mut driver, me);
+    assert_eq!(driver.submits, 1);
+    assert_eq!(registry.lock().in_flight(0), 1);
+    let mut out = Vec::new();
+    complete_op(
+        &registry,
+        &mut ctx,
+        &mut driver,
+        CellRef::decode(token),
+        Ok(Done::Job(Box::new(42u64))),
+        &mut out,
+    );
+    assert!(out.is_empty());
+    assert_eq!(registry.lock().in_flight(0), 0);
+    let taken = take_ffi(&registry, &mut ctx, token, 0).unwrap();
+    assert_eq!(taken.call, 3);
+    assert_eq!(taken.result.unwrap(), 42);
+    let leaks = ctx.leaks();
+    assert!(leaks.is_empty(), "{leaks:?}");
+}
+
+/// 取り消しの地点で投げるタスクの受け付けは、仕事を driver に出さず、取り消しで終わった記録にする。待ちの数も予算も
+/// 変えない。後の `io_wait` が数えるためである (docs/spec/vm.md の「`blocking` の呼び出し」)。
+#[test]
+fn a_cancelled_task_submits_no_job() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    registry.lock().task_mut(me).unwrap().cancel = true;
+    let before = format!("{:?}", registry.lock().stats);
+    let token = submit_ffi_job(&registry, &mut ctx, &mut driver, me);
+    assert_eq!(driver.submits, 0);
+    {
+        let mut cells = registry.lock();
+        assert_eq!(format!("{:?}", cells.stats), before);
+        assert_eq!(cells.task_mut(me).unwrap().budget, BUDGET);
+        assert_eq!(cells.in_flight(0), 0);
+        let record = cells.op_mut(CellRef::decode(token)).unwrap();
+        assert!(record.cancelling);
+        assert!(matches!(record.phase, OpPhase::Done(Err(_), true)));
+        assert!(record.pending_op.is_none());
+    }
+    let taken = take_ffi(&registry, &mut ctx, token, 0).unwrap();
+    assert!(taken.result.is_err());
+}
+
+/// `u64` でない値で終わった仕事の記録は、内部の誤りである。
+#[test]
+fn a_job_answer_of_another_type_is_an_internal_error() {
+    let mut ctx = test_ctx();
+    let mut driver = NoDriver::default();
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let token = submit_ffi_job(&registry, &mut ctx, &mut driver, me);
+    driver.done.push(Completion {
+        key: op_key(CellRef::decode(token)),
+        result: Ok(Done::Job(Box::new(42i32))),
+        cancelled: false,
+    });
+    assert!(matches!(
+        complete(
+            &registry,
+            &solo(&registry),
+            &mut ctx,
+            &mut driver,
+            0,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        ),
+        Err(CellFault::Internal(
+            "an op completes with another kind of result"
+        ))
+    ));
 }
 
 /// `op_ready` はどの待ちでも予算を使い、1バイトの書きは1つ使う。受け付けで終わった記録では、取り消しの地点が

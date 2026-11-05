@@ -1,17 +1,20 @@
 //! 利用者の C の関数の呼び出し。引数の語を橋渡しの `u64` の slot にし、結果の語を値に戻す変換は、両方のモードで
-//! ここだけが受け持つ (docs/spec/vm.md の「C の関数の命令」)。
+//! ここだけが受け持つ (docs/spec/vm.md の「C の関数の命令」、docs/spec/vm.md の「`blocking` の呼び出し」)。
 
+use std::any::Any;
 use std::ffi::c_void;
 use std::ptr;
 
-use eml_cabi::Dtor;
-use eml_extern::{CFunction, CInt, CParam, CRet, ExternEffect};
+use eml_cabi::{CCall, Dtor};
+use eml_extern::{CFunction, CInt, CParam, CRet, ExternEffect, Purity};
+use eml_rt::externs::{Fault, Raised};
 use eml_rt::{Ctx, Mode, Word};
 
+use crate::cells;
 use crate::code::CodeBase;
 use crate::error::VmFault;
 use crate::op::Slot;
-use crate::vm::{Exec, PANICKED, Task, abort_to};
+use crate::vm::{Exec, PANICKED, Task, abort_to, failed, io_kind};
 
 /// `extern "C" data` の物体の中身。C が返したポインタと、その型の dtor を持つ。
 pub(crate) struct CHandle {
@@ -88,8 +91,10 @@ pub(crate) fn marshal<M: Mode>(
     for (&param, slot) in args() {
         let w = task.get(slot);
         // SAFETY: LIR の借用の規則により、借りた物体は呼んだ側のスロットが生かしていて、`MutUnboxedArray` は一意で
-        // 今の worker が持つ。C は呼び出しの間だけポインタを使い、`MutUnboxedArray` のポインタだけを通して書く
-        // (docs/spec/object-model.md の「`unsafe` の核」の T16)。物体のポインタは来歴を公開して slot に入れる
+        // 今の worker が持つ。C は同期の呼び出しでは呼ぶ間、`blocking` の呼び出しでは受け付けから完了が持ち主の
+        // worker に当たるまでだけポインタを使い、`MutUnboxedArray` のポインタだけを通して書く。`blocking` の呼び出しの
+        // 物体は、待つタスクの継続が取り出しまで生かす (docs/spec/object-model.md の「`unsafe` の核」の T16)。物体の
+        // ポインタは来歴を公開して slot に入れる
         let slot = unsafe {
             match param {
                 CParam::Int(_) => w.bits() as u64,
@@ -156,6 +161,94 @@ pub(crate) fn call<R: Exec>(
             Ok(())
         }
         Err(why) => raise::<R>(code, ctx, task, dst, &entry.function, why),
+    }
+}
+
+/// `Op::FfiSubmit` の前半。引数を組み、プールで C の関数を呼ぶ仕事を作って、`CodeBase` の C の関数の番号とともに
+/// 返す。範囲の外の引数は記録を作らずに `Panic` を上げ、`None` を返す (docs/spec/vm.md の「`blocking` の呼び出し」)。
+pub(crate) fn job<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    dst: Slot,
+    at: u32,
+) -> Result<Option<(u32, eml_rt::Op)>, VmFault> {
+    let ops = &code.tables.operands[at as usize..];
+    let c = ops[0];
+    let entry = &code.c_functions[c as usize];
+    let args = match marshal(ctx, task, &entry.function, &ops[2..2 + ops[1] as usize])? {
+        Ok(args) => args,
+        Err(why) => {
+            raise::<R>(code, ctx, task, dst, &entry.function, why)?;
+            return Ok(None);
+        }
+    };
+    let call: CCall = entry.call;
+    let job = eml_rt::Op::Job(Box::new(move || -> Box<dyn Any + Send> {
+        // 欄ごとに捕まえると `callee` の生のポインタだけが移り、`Send` を失う。`CCall` をまるごと移す
+        let call = call;
+        // SAFETY: `call` は `Op::Ffi` と同じく `Linked::new` の約束と `fits` の比べで宣言の橋渡しと関数であり、`args`
+        // は橋渡しの読む slot の数だけある (docs/spec/vm.md の「橋渡しの関数」)。slot のポインタの物体は、受け付けから
+        // 完了が持ち主の worker に当たるまで待つタスクの継続が生かし、動かさない。その間ポインタを使うのはこの仕事を
+        // 走らせるプールのスレッドだけである (docs/spec/object-model.md の「`unsafe` の核」の T16)
+        Box::new(unsafe { (call.bridge)(call.callee, args.as_ptr()) })
+    }));
+    Ok(Some((c, job)))
+}
+
+/// `Op::FfiTake`。記録を放し、`Wake` と答えで分ける。取り消されたタスクは、仕事が返したハンドルをその場で壊し、
+/// 取り消しの IO の失敗を起こす (docs/spec/vm.md の「`blocking` の呼び出し」)。
+pub(crate) fn take<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    shared: &cells::Shared,
+    dst: Slot,
+    at: u32,
+) -> Result<(), VmFault> {
+    let ops = &code.tables.operands[at as usize..];
+    let c = ops[0];
+    let entry = &code.c_functions[c as usize];
+    let (token, wake) = (task.raw(ops[2] as Slot), task.raw(ops[3] as Slot));
+    let taken = cells::take_ffi(shared, ctx, token, task.worker)?;
+    if taken.call != c {
+        return Err(VmFault::Internal(
+            "a C call op is taken by another function",
+        ));
+    }
+    let function = &entry.function;
+    match (wake, taken.result) {
+        (cells::WOKE, Ok(r)) => match unmarshal(code, ctx, function, r)? {
+            Ok(out) => {
+                write_out(task, dst, out);
+                Ok(())
+            }
+            Err(why) => raise::<R>(code, ctx, task, dst, function, why),
+        },
+        (cells::WOKE, Err(e)) => {
+            let fault = Fault::Raised(Box::new(Raised {
+                kind: io_kind(&e),
+                message: format!("cannot call `{}`: {e}", function.name).into(),
+            }));
+            failed::<R>(code, ctx, task, dst, fault, Purity::Effectful)
+        }
+        (cells::CANCELLED, result) => {
+            // 仕事は走り終えたので C の副作用は残る。返したハンドルだけは、持ち主のスレッドで型の dtor に渡して壊す
+            if let (CRet::Handle(h), Ok(r)) = (function.ret, result)
+                && r != 0
+            {
+                drop(CHandle {
+                    ptr: ptr::without_provenance_mut(r as usize),
+                    dtor: code.c_handles[h.0 as usize].dtor,
+                });
+            }
+            let fault = Fault::Raised(Box::new(Raised {
+                kind: cells::IO_CANCELLED,
+                message: "task was cancelled".into(),
+            }));
+            failed::<R>(code, ctx, task, dst, fault, Purity::Effectful)
+        }
+        _ => Err(VmFault::Internal("a C call op is taken with another wake")),
     }
 }
 

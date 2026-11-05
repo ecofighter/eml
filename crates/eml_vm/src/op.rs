@@ -400,6 +400,18 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
+    /// `blocking` の C の関数の受け付け。被演算子は `Ffi` と同じで、`dst` は記録の番号である (docs/spec/vm.md の
+    /// 「`blocking` の呼び出し」)。
+    FfiSubmit {
+        dst: Slot,
+        at: u32,
+    },
+    /// `blocking` の C の関数の取り出し。`operands[at..]` は [`CodeBase` の C の関数の番号, 引数の数, 記録の番号,
+    /// `Wake`, 物体の引数のスロット…] (docs/spec/vm.md の「`blocking` の呼び出し」)。
+    FfiTake {
+        dst: Slot,
+        at: u32,
+    },
     EvvGet {
         dst: Slot,
     },

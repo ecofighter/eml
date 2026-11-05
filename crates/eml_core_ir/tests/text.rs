@@ -690,6 +690,45 @@ fn f(a.0: tobj, b.1: tobj) -> obj {
     );
 }
 
+/// Core IR の表示も、`blocking` の呼び出しの受け付けと取り出しを LIR と同じ語で書いて読み戻す。
+#[test]
+fn c_tables_with_blocking_calls_read_back() {
+    use eml_extern::{CFnId, ExternRef};
+    let program = round_trip(
+        "\
+cfn \"Main.count\" symbol \"count\" blocking link [] (text, i64) -> i64
+fn f(s.0: obj, w.1: enum) -> int {
+  let op.2: int = extern submit Main.count(s.0, 3)
+  let t.3: int = extern take Main.count(op.2, w.1, s.0)
+  return t.3
+}
+",
+    );
+    let stmts = &program.functions[0].blocks[0].stmts;
+    assert_eq!(
+        stmts[0],
+        Stmt::Let {
+            var: VarId(2),
+            rhs: Rhs::Extern {
+                ext: ExternRef::CSubmit(CFnId(0)),
+                args: vec![v(0), Atom::Int(3)],
+                at: None,
+            },
+        }
+    );
+    assert_eq!(
+        stmts[1],
+        Stmt::Let {
+            var: VarId(3),
+            rhs: Rhs::Extern {
+                ext: ExternRef::CTake(CFnId(0)),
+                args: vec![v(2), v(1), v(0)],
+                at: None,
+            },
+        }
+    );
+}
+
 #[test]
 fn c_tables_read_back_in_core_ir() {
     use eml_extern::{CFnId, ExternRef};

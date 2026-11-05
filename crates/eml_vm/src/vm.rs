@@ -1174,6 +1174,8 @@ fn step<R: Exec>(
         }
         Op::Extern { dst, at } => extern_call::<R>(code, ctx, task, counts, dst, at)?,
         Op::Ffi { dst, at } => ffi::call::<R>(code, ctx, task, dst, at)?,
+        Op::FfiSubmit { dst, at } => ffi_submit::<R>(code, ctx, task, sched, dst, at)?,
+        Op::FfiTake { dst, at } => ffi::take::<R>(code, ctx, task, &sched.cells, dst, at)?,
         // 基本操作 (docs/spec/lir.md の「基本操作」) は `Ctx` の同じ名前のメソッドを呼ぶ。引数の語は、LIR の所有の規則に
         // より VM が持つ参照か借りた語で、基本操作の契約 (docs/spec/object-model.md の「基本操作の契約」) のとおりに
         // 渡す。借用の引数は `Ctx` が手放さない。VM は基本操作の合間に `Ctx` の持つ語に触れない
@@ -3415,7 +3417,7 @@ fn async_op<R: Exec>(
 
 /// driver の誤りの種類を `IOErrorKind` のタグにする。extern の誤りと同じく、最初の5種類のうち I/O の4つだけを出す
 /// (docs/spec/stdlib.md の「`Std.Net`」)。
-fn io_kind(e: &std::io::Error) -> i64 {
+pub(crate) fn io_kind(e: &std::io::Error) -> i64 {
     match e.kind() {
         std::io::ErrorKind::NotFound => externs::IO_NOT_FOUND,
         std::io::ErrorKind::PermissionDenied => externs::IO_PERMISSION_DENIED,
@@ -3434,6 +3436,38 @@ fn bind_here<M: Mode, P: Policy>(
     if cells::stream_unbound(ctx, stream)? {
         sched.own_driver()?;
     }
+    Ok(())
+}
+
+/// `Op::FfiSubmit`。仕事は `ffi::job` が作り、ここで記録の host の driver に出す。登録表に触れる所は `Std.Net` の
+/// 受け付けと同じくここに置く (docs/spec/vm.md の「`blocking` の呼び出し」)。
+fn ffi_submit<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    dst: Slot,
+    at: u32,
+) -> Result<(), VmFault> {
+    let Some((c, job)) = ffi::job::<R>(code, ctx, task, dst, at)? else {
+        return Ok(());
+    };
+    let me = current_cell(task)?;
+    // 仕事は本物の時計の run では自分の driver のプールで走る (docs/spec/vm.md の「時計と driver」)
+    sched.own_driver()?;
+    here!(sched, post, here);
+    let token = cells::submit_job(
+        &sched.cells,
+        &here,
+        ctx,
+        sched.driver.as_deref_mut(),
+        task.worker,
+        task.depth_offset,
+        me,
+        c,
+        job,
+    )?;
+    task.set_raw(dst, token);
     Ok(())
 }
 
@@ -3821,7 +3855,7 @@ fn extern_call<R: Exec>(
 /// `Panic` である)。`try_io` の捕まえる誤りは、`Effectful` の行のものだけを届ける。捕まえる handler がなければ、
 /// 実行時エラーにする。失敗した extern は引数をすでに消費している。docs/spec/vm.md の「`IO` と `Panic` への中断」を
 /// 見る。
-fn failed<R: Exec>(
+pub(crate) fn failed<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,

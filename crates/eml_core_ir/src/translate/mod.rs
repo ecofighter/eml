@@ -339,6 +339,11 @@ pub(crate) fn translate(
             InstanceKind::Display(_) => builder.reserve(5),
         })
         .collect();
+    builder.runtime = instances
+        .runtime
+        .iter()
+        .map(|(&entry, instance)| (entry, indices[instance.0]))
+        .collect();
     for (instance, &index) in instances.list.iter().zip(&indices) {
         let function = match &instance.kind {
             InstanceKind::Function(function) => function,
