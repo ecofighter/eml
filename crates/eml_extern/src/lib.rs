@@ -2009,8 +2009,9 @@ table! {
                 )
             },
         ),
-        // TLS の状態のインターフェース (docs/spec/stdlib.md の「`Std.Tls`」)。どれも待たないので普通の extern の行で、
-        // 投げるのは `client_raw` だけである。組を返す行は `Conn` を借りる
+        // TLSの状態のインターフェース (docs/spec/stdlib.mdの「`Std.Tls`」)。どの行も待たない。`client_raw`はrunの
+        // driverの種類を読むので`Async`の命令で動き、投げるのはこの行だけである。ほかの行は普通のexternの行である。
+        // 組を返す行は`Conn`を借りる
         TlsClientRaw => kinded(
             "Std.Tls.client_raw",
             &[Obj, Obj],
@@ -2125,9 +2126,10 @@ table! {
 }
 
 impl Extern {
-    /// `job_cell` を除く `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net`、`Std.Stream`、`Std.Exec` の行。VM はこれらの行を
-    /// 汎用の extern の命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
-    /// `job_cell` と `chan_cell` は即値を写すだけの普通の extern である。
+    /// `job_cell`を除く`Std.Async`の行と、`chan_cell`を除く`Std.Chan`の行と、`Std.Atomic`、`Std.Net`、`Std.Stream`、
+    /// `Std.Exec`の行と、`Std.Tls`の`client_raw`。VMはこれらの行を汎用のexternの命令でなく`Async`の命令で実行する。
+    /// 登録表に触れるか、runのdriverの種類を読むためである (docs/spec/vm.mdの「`Async` のタスク」)。
+    /// `job_cell`と`chan_cell`は即値を写すだけの普通のexternである。
     pub fn is_async(self) -> bool {
         matches!(
             self,
@@ -2222,6 +2224,7 @@ impl Extern {
                 | Extern::ExecOpPrefix
                 | Extern::ExecFinish
                 | Extern::ExecReap
+                | Extern::TlsClientRaw
         )
     }
 }

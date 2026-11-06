@@ -8,4 +8,4 @@ Other
 --- stderr ---
 --- runtime error ---
 cannot complete the TLS handshake with tls.localhost: the server certificate was rejected
-  at run-fail/tls/unknown_ca.em:19:7
+  at run-fail/tls/unknown_ca.em:20:7

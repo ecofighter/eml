@@ -7,9 +7,17 @@ use std::fmt;
 use std::io::{self, BufRead};
 use std::sync::Arc;
 
+use rustls::client::WebPkiServerVerifier;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-use rustls::{ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection};
+use rustls::time_provider::TimeProvider;
+use rustls::{
+    CertificateError, ClientConfig, ClientConnection, DigitallySignedStruct, DistinguishedName,
+    RootCertStore, ServerConfig, ServerConnection, SignatureScheme,
+};
+
+pub use rustls::pki_types::UnixTime;
 
 pub mod fixtures;
 
@@ -32,6 +40,7 @@ pub enum Error {
     CertPem,
     KeyPem,
     Config,
+    NoRoots,
 }
 
 impl fmt::Display for Error {
@@ -42,6 +51,7 @@ impl fmt::Display for Error {
             Error::CertPem => "the certificate chain is not valid PEM",
             Error::KeyPem => "the private key is not valid PEM",
             Error::Config => "the TLS configuration is not valid",
+            Error::NoRoots => "no root certificates are available",
         })
     }
 }
@@ -69,28 +79,153 @@ fn provider() -> Arc<rustls::crypto::CryptoProvider> {
     Arc::new(rustls::crypto::aws_lc_rs::default_provider())
 }
 
-impl Conn {
-    /// `extra_ca_pem` の証明書を webpki-roots の根に足して信頼する。空なら根だけである
-    pub fn client(server_name: &str, extra_ca_pem: &[u8]) -> Result<Conn, Error> {
-        let name = ServerName::try_from(server_name.to_owned()).map_err(|_| Error::ServerName)?;
-        let mut roots = RootCertStore {
+/// SNIと証明書の名前の照合に使う名前
+#[derive(Clone, Debug)]
+pub struct Name(ServerName<'static>);
+
+impl Name {
+    pub fn parse(name: &str) -> Result<Name, Error> {
+        ServerName::try_from(name.to_owned())
+            .map(Name)
+            .map_err(|_| Error::ServerName)
+    }
+}
+
+/// クライアントがサーバーの証明書を確かめる方法。ブロックしてよい所で作れるよう、`Conn::client`と分けて作る。複製は安く、
+/// 別のスレッドに送れる
+#[derive(Clone, Debug)]
+pub struct Trust {
+    verifier: Arc<dyn ServerCertVerifier>,
+    now: Option<UnixTime>,
+}
+
+impl Trust {
+    /// webpki-rootsの根に`extra_ca_pem`のCAを足し、現実の時刻で確かめる。`extra_ca_pem`が空ならwebpki-rootsの根だけを
+    /// 信頼する
+    pub fn platform(extra_ca_pem: &[u8]) -> Result<Trust, Error> {
+        let mut store = RootCertStore {
             roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
         };
-        let mut added = 0;
-        for der in CertificateDer::pem_slice_iter(extra_ca_pem) {
-            let der = der.map_err(|_| Error::CaPem)?;
-            roots.add(der).map_err(|_| Error::CaPem)?;
-            added += 1;
+        store.add_parsable_certificates(extra_roots(extra_ca_pem)?);
+        Trust::webpki(store, None)
+    }
+
+    /// テストの世界: `ca_pem`のCAだけを根にし、`fixtures::NOW`の時刻で確かめる。`ca_pem`が空なら`Error::NoRoots`である
+    /// (docs/spec/vm.mdの「時計と driver」)
+    pub fn fixtures(ca_pem: &[u8]) -> Result<Trust, Error> {
+        let mut store = RootCertStore::empty();
+        store.add_parsable_certificates(extra_roots(ca_pem)?);
+        Trust::webpki(store, Some(fixtures::NOW))
+    }
+
+    fn webpki(store: RootCertStore, now: Option<UnixTime>) -> Result<Trust, Error> {
+        if store.is_empty() {
+            return Err(Error::NoRoots);
         }
-        if !extra_ca_pem.is_empty() && added == 0 {
-            return Err(Error::CaPem);
-        }
-        let config = ClientConfig::builder_with_provider(provider())
+        let verifier = WebPkiServerVerifier::builder_with_provider(Arc::new(store), provider())
+            .build()
+            .map_err(|_| Error::Config)?;
+        Ok(Trust {
+            verifier: Arc::new(Opaque(verifier)),
+            now,
+        })
+    }
+}
+
+/// 検証器を作る前に足す根を確かめる。`Error::CaPem`を信頼のほかの誤りより先にし、検証器に左右されないようにするためである
+fn extra_roots(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>, Error> {
+    let mut check = RootCertStore::empty();
+    let mut roots = Vec::new();
+    for der in CertificateDer::pem_slice_iter(pem) {
+        let der = der.map_err(|_| Error::CaPem)?;
+        check.add(der.clone()).map_err(|_| Error::CaPem)?;
+        roots.push(der);
+    }
+    if !pem.is_empty() && roots.is_empty() {
+        return Err(Error::CaPem);
+    }
+    Ok(roots)
+}
+
+#[derive(Debug)]
+struct Pinned(UnixTime);
+
+impl TimeProvider for Pinned {
+    fn current_time(&self) -> Option<UnixTime> {
+        Some(self.0)
+    }
+}
+
+// 証明書の誤りでない検証器の誤りは、検証器の文言を含みうるので、理由のない拒否にする。証明書の誤りはそのまま通し、rustlsが
+// 理由に合ったalertを送れるようにする (docs/spec/stdlib.mdの「`Std.Tls`」)
+#[derive(Debug)]
+struct Opaque(Arc<dyn ServerCertVerifier>);
+
+impl ServerCertVerifier for Opaque {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        self.0
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+            .map_err(|e| match e {
+                e @ rustls::Error::InvalidCertificate(_) => e,
+                _ => rustls::Error::InvalidCertificate(
+                    CertificateError::ApplicationVerificationFailure,
+                ),
+            })
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.supported_verify_schemes()
+    }
+
+    fn requires_raw_public_keys(&self) -> bool {
+        self.0.requires_raw_public_keys()
+    }
+
+    fn root_hint_subjects(&self) -> Option<&[DistinguishedName]> {
+        self.0.root_hint_subjects()
+    }
+}
+
+impl Conn {
+    /// I/Oはしない。接続ごとに`ClientConfig`を作るので、ある接続がほかの接続のsessionを再開することはない
+    pub fn client(name: &Name, trust: &Trust) -> Result<Conn, Error> {
+        let builder = match trust.now {
+            Some(now) => ClientConfig::builder_with_details(provider(), Arc::new(Pinned(now))),
+            None => ClientConfig::builder_with_provider(provider()),
+        };
+        let config = builder
             .with_safe_default_protocol_versions()
             .map_err(|_| Error::Config)?
-            .with_root_certificates(roots)
+            .dangerous()
+            .with_custom_certificate_verifier(trust.verifier.clone())
             .with_no_client_auth();
-        let tls = ClientConnection::new(Arc::new(config), name).map_err(|_| Error::Config)?;
+        let tls =
+            ClientConnection::new(Arc::new(config), name.0.clone()).map_err(|_| Error::Config)?;
         Ok(Conn::new(tls.into()))
     }
 

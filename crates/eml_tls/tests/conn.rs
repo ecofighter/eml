@@ -1,12 +1,18 @@
 use std::sync::Arc;
 
-use eml_tls::fixtures::{CA_PEM, CERT_PEM, KEY_PEM};
-use eml_tls::{Conn, Error, FAILED, HANDSHAKING, HAS_OUTGOING, PEER_CLOSED, TRUNCATED};
+use eml_tls::fixtures::{CA_PEM, CERT_PEM, KEY_PEM, OTHER_CA_PEM};
+use eml_tls::{
+    Conn, Error, FAILED, HANDSHAKING, HAS_OUTGOING, Name, PEER_CLOSED, TRUNCATED, Trust,
+};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 fn client(name: &str) -> Conn {
-    Conn::client(name, CA_PEM).unwrap()
+    Conn::client(
+        &Name::parse(name).unwrap(),
+        &Trust::fixtures(CA_PEM).unwrap(),
+    )
+    .unwrap()
 }
 
 fn server() -> Conn {
@@ -127,7 +133,11 @@ fn eof_in_the_handshake_is_truncated() {
 
 #[test]
 fn an_unknown_ca_is_rejected_with_a_fixed_message() {
-    let mut c = Conn::client("tls.localhost", b"").unwrap();
+    let mut c = Conn::client(
+        &Name::parse("tls.localhost").unwrap(),
+        &Trust::fixtures(OTHER_CA_PEM).unwrap(),
+    )
+    .unwrap();
     let mut s = server();
     pump(&mut c, &mut s);
     assert_eq!(c.status() & FAILED, FAILED);
@@ -160,12 +170,14 @@ fn the_alert_waits_until_pulled() {
 #[test]
 fn setup_errors() {
     for name in ["", "a b"] {
-        assert_eq!(Conn::client(name, CA_PEM).err(), Some(Error::ServerName));
+        assert_eq!(Name::parse(name).err(), Some(Error::ServerName));
     }
     let bad_der = b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
     for ca in [&b"garbage"[..], &bad_der[..]] {
-        assert_eq!(Conn::client("tls.localhost", ca).err(), Some(Error::CaPem));
+        assert_eq!(Trust::fixtures(ca).err(), Some(Error::CaPem));
+        assert_eq!(Trust::platform(ca).err(), Some(Error::CaPem));
     }
+    assert_eq!(Trust::fixtures(b"").err(), Some(Error::NoRoots));
     assert_eq!(Conn::server(b"", KEY_PEM).err(), Some(Error::CertPem));
     assert_eq!(
         Conn::server(CERT_PEM, b"garbage").err(),
@@ -179,6 +191,7 @@ fn setup_errors() {
         Error::CertPem,
         Error::KeyPem,
         Error::Config,
+        Error::NoRoots,
     ]
     .map(|e| e.to_string());
     assert_eq!(
@@ -189,6 +202,7 @@ fn setup_errors() {
             "the certificate chain is not valid PEM",
             "the private key is not valid PEM",
             "the TLS configuration is not valid",
+            "no root certificates are available",
         ]
     );
 }
@@ -341,6 +355,14 @@ fn read_plain_moves_everything() {
 fn the_box_fits_alloc_foreign() {
     assert!(std::mem::align_of::<Conn>() <= 8);
 }
+
+// `Trust`は接続の間で共有し、`Conn`は別のスレッドへ移すので、どちらも送れなければならない
+const _: () = {
+    const fn shared<T: Send + Sync + 'static>() {}
+    const fn moved<T: Send + 'static>() {}
+    shared::<Trust>();
+    moved::<Conn>();
+};
 
 // 自分が close_notify を送った後も、相手の壊れたレコードは panic でなく失敗になる
 #[test]

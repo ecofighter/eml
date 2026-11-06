@@ -1,6 +1,7 @@
 -- 終端器がクライアントのバイトを1つも受けないうちに server が閉じると、TLS のバイトは届かず、handshake は途中の
 -- EOF で失敗する。受けと閉じを1つのタスクで済ませ、ClientHello より先に閉じる (docs/spec/vm.md の「時計と driver」)
 import Async
+import Fs
 import Net
 import Tls
 
@@ -13,7 +14,7 @@ main () =
     let (s, l) = Net.accept l
     Net.close s
     Net.close_listener l
-    try_io (fn () -> Tls.close (Tls.wrap "tls.localhost" c)))
+    try_io (fn () -> Tls.close (Tls.wrap_with_ca (Fs.read_text "ca.pem") "tls.localhost" c)))
   match r with
     | Ok () -> println "connected"
     | Err e ->

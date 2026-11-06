@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/tls/bad_ca.em
+---
+--- stdout ---
+Other
+--- stderr ---
+--- runtime error ---
+cannot set up TLS for tls.localhost: the CA certificates are not valid PEM
+  at run-fail/tls/bad_ca.em:19:7

@@ -1,13 +1,13 @@
 use std::fs;
 use std::path::Path;
 
-use eml_tls::fixtures::{CA_PEM, CERT_PEM, KEY_PEM};
+use eml_tls::fixtures::{CA_PEM, CERT_PEM, KEY_PEM, OTHER_CA_PEM};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 #[test]
 fn the_fixtures_parse() {
-    for pem in [CA_PEM, CERT_PEM] {
+    for pem in [CA_PEM, CERT_PEM, OTHER_CA_PEM] {
         let certs: Vec<_> = CertificateDer::pem_slice_iter(pem)
             .collect::<Result<_, _>>()
             .unwrap();
@@ -23,6 +23,7 @@ fn the_fixtures_parse() {
 fn every_ca_copy_is_the_fixture() {
     let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
     let mut found = Vec::new();
+    let mut others = Vec::new();
     let mut stack = vec![ui.clone()];
     while let Some(dir) = stack.pop() {
         for entry in fs::read_dir(&dir).unwrap() {
@@ -32,6 +33,9 @@ fn every_ca_copy_is_the_fixture() {
             } else if path.file_name().is_some_and(|n| n == "ca.pem") {
                 assert_eq!(fs::read(&path).unwrap(), CA_PEM, "{}", path.display());
                 found.push(path.strip_prefix(&ui).unwrap().to_path_buf());
+            } else if path.file_name().is_some_and(|n| n == "other-ca.pem") {
+                assert_eq!(fs::read(&path).unwrap(), OTHER_CA_PEM, "{}", path.display());
+                others.push(path.strip_prefix(&ui).unwrap().to_path_buf());
             }
         }
     }
@@ -43,4 +47,5 @@ fn every_ca_copy_is_the_fixture() {
     ] {
         assert!(found.contains(&expected.into()), "{expected} がない");
     }
+    assert_eq!(others, [Path::new("run-fail/tls/other-ca.pem")]);
 }

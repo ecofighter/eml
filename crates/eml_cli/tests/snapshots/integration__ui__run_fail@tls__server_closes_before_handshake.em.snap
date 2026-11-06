@@ -8,4 +8,4 @@ ConnectionReset
 --- stderr ---
 --- runtime error ---
 cannot complete the TLS handshake with tls.localhost: the peer closed the connection
-  at run-fail/tls/server_closes_before_handshake.em:21:7
+  at run-fail/tls/server_closes_before_handshake.em:22:7

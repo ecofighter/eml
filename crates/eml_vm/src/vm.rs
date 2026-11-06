@@ -3226,6 +3226,25 @@ fn async_op<R: Exec>(
             }
             task.set(dst, Word::UNIT);
         }
+        ext @ Extern::TlsClientRaw => {
+            // `client_raw`はrunのdriverの種類を読むので`Async`の命令で動くが、待たない。`host`と`pem`の参照を
+            // 受け取って手放す (docs/spec/stdlib.mdの「`Std.Tls`」)
+            let host = unsafe { ctx.copy_string(task.get(arg(0)), usize::MAX) }?;
+            let pem = unsafe { ctx.copy_string(task.get(arg(1)), usize::MAX) }?;
+            match tls::client_conn(tls::Roots::of(sched.driver_kind), &host, pem.as_bytes()) {
+                Ok(c) => {
+                    let w = unsafe { ctx.heap_mut() }.alloc_foreign(c, true);
+                    task.set(dst, w);
+                }
+                Err(message) => {
+                    let raise = Raise::Io {
+                        kind: tls::SETUP_KIND,
+                        message,
+                    };
+                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
+                }
+            }
+        }
         Extern::NetLocalPort => {
             // リスナーは借りるだけで、組を作る後の `con` が消費する
             let port = cells::local_port(ctx, task.get(arg(0)))?;
@@ -4227,12 +4246,7 @@ fn run_extern<R: Exec>(
                 let w = ctx.proc_close_stdin(task.get(arg(0)))?;
                 task.set(dst, w);
             }
-            // TLS の状態の行。待たないので普通の extern で、投げるのは `client_raw` だけである
-            // (docs/spec/stdlib.md の「`Std.Tls`」)
-            Extern::TlsClientRaw => {
-                let w = tls::client_raw(ctx, task.get(arg(0)), task.get(arg(1)))?;
-                task.set(dst, w);
-            }
+            // TLSの状態の行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Tls`」)
             Extern::TlsPushTls => {
                 let w = tls::push_tls(ctx, task.get(arg(0)), task.get(arg(1)))?;
                 task.set(dst, w);
@@ -4617,7 +4631,8 @@ fn run_extern<R: Exec>(
             | Extern::ExecOpOutcome
             | Extern::ExecOpPrefix
             | Extern::ExecFinish
-            | Extern::ExecReap => {
+            | Extern::ExecReap
+            | Extern::TlsClientRaw => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }
