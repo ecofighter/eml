@@ -224,8 +224,8 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `asan`のジョブは、`eml_io`と`eml_native`のテストと、`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`seat::`、`pinned::` (本物のdriverに記憶を貸すVMの道と、ほかのworkerのdriverに記憶を貸す道、Cの関数に記憶を貸す道、メインのworkerのdriverに記憶を貸す道) を`-Zsanitizer=address`で流す。対象は`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`aarch64-apple-darwin`の3つである。RustのAddressSanitizerはWindowsのmsvcを対象にしない
 - `eml_native` と `ffi::` を足したのは、橋渡しの Rust の関数が C に貸した配列や文字列の記憶を読み書きするためである。橋渡しの本体は Cranelift の JIT のコードで、計装されない。AddressSanitizer が見るのは、JIT のコードを呼ぶ Rust の側と、C に渡す前後の貸し借りの範囲である
 - `eml_vm` の lib のテストは AddressSanitizer の下で流さない。そのため、worker 1 のタスクの操作の記録を run の終わりに worker 0 が掃く道 (`sched.rs` の `an_op_record_left_on_worker_1_is_swept`) を確かめるのは、検査モードの漏れの確かめだけである
-- `eml_vm`の`ffi_abandon::` (戻らない`blocking`の呼び出しを見捨てるrun) は、`ASAN_OPTIONS=detect_leaks=0`を付けた別のstepで流す。見捨てた`Machine`は、プールのスレッドに貸したままの記憶を放さないために、ヒープを意図して漏らすからである ([VM](../spec/vm.md)の「時計と driver」)。`seat.rs`と`pinned.rs`の`worker_panic::` (worker 0かメインのworkerがpanicするrun) も同じstepで流し、最初のstepは`--skip worker_panic::`で飛ばす。panicしたworkerは、途中の状態のヒープを落とさないように`Ctx`を漏らすからである ([VM](../spec/vm.md)の「タスクとスケジュール」)。このstepでも記憶の誤りは確かめ、切るのはleakの検出だけである
-- nightlyはMiriと同じ`nix develop .#miri`のものを使い、`-Zbuild-std`でstdも計装し、`--target`をいつも書く。leakの検出は、`ffi_abandon::`と`worker_panic::`のstepを除いてAddressSanitizerの既定のままにする
+- `eml_vm`の`ffi_abandon::` (戻らない`blocking`の呼び出しを見捨てるrun) と、`seat.rs`と`pinned.rs`の`worker_panic::` (workerがpanicするrun) も、ほかのモジュールと同じくleakの検出を付けて流す。見捨てた呼び出しは仕事が持つ写しだけを使い、panicしたworkerのヒープもほかのヒープと同じく落とすので、どちらのrunもヒープを漏らさない ([VM](../spec/vm.md)の「`blocking` の呼び出し」「タスクとスケジュール」)
+- nightlyはMiriと同じ`nix develop .#miri`のものを使い、`-Zbuild-std`でstdも計装し、`--target`をいつも書く。leakの検出は、どのstepでもAddressSanitizerの既定のままにする
 - 開発機では build の置き場所を `target/asan` に分ける (「よく使うコマンド」)
 - 道具の不具合 (runtime がない、link、rpath、時間切れ) で緑にできない脚は、その脚だけ fenix と同じ日付に固めた rustup の nightly にし、時間の上限を 90 分にする。それでも緑にならなければ脚を外し、外した脚をこの節とロードマップの「その後の項目」に書く
 
@@ -678,7 +678,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write` と `counters::`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
-- `asan`: x86_64のLinux、aarch64のLinux、aarch64のmacOSのそれぞれで、`eml_io`と`eml_native`のテストと`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`seat::`、`pinned::`と、leakの検出を切った`ffi_abandon::`と`worker_panic::`をAddressSanitizerの下で流す (下の「AddressSanitizer」)
+- `asan`: x86_64のLinux、aarch64のLinux、aarch64のmacOSのそれぞれで、`eml_io`と`eml_native`のテストと`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`をAddressSanitizerの下で流す (下の「AddressSanitizer」)
 - `tsan`: x86_64のLinuxで、`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、libの`counters::`と、`eml_io`のlibの`driver::tests::`をThreadSanitizerの下で流す (下の「ThreadSanitizer」)
 
 CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
@@ -740,7 +740,7 @@ cargo insta test --test-runner nextest --accept      # テストを流し、ス�
 cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vmの api:: signal:: io:: workers:: ffi:: seat:: pinned:: --skip worker_panic:: とeml_nativeも。eml_vmの ffi_abandon:: worker_panic:: はASAN_OPTIONS=detect_leaks=0で別に流す。eml_ioの検証)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vmの api:: signal:: io:: workers:: ffi:: ffi_abandon:: seat:: pinned:: とeml_nativeも。eml_ioの検証)
 nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon:: seat:: pinned:: と -p eml_vm --lib counters::、eml_io は -p eml_io --lib -- driver::tests::。ThreadSanitizer)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
