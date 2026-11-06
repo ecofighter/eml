@@ -18,6 +18,7 @@ mod machine;
 mod memory;
 mod miri;
 mod par;
+mod pinned;
 mod reuse;
 mod roots;
 mod run;

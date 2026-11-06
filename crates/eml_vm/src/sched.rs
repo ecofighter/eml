@@ -399,6 +399,9 @@ pub struct Scheduler<P: Policy> {
     /// worker 1..N-1 を作るか、作ったか。worker 0 は run の始めに決め、worker 1..N-1 はいつも `Peer` である。
     /// 右の子と仕事をほかの worker に置くのは `Started` と `Peer` の `Scheduler` だけである。
     pub(crate) workers: Workers,
+    /// 分かれたrunのメインのworkerの`Scheduler`である。走れるタスクがなくなったら、空きの待ちに入らずに`drive`から
+    /// 抜ける (docs/spec/vm.mdの「メインのworker」)。
+    pub(crate) main_loop: bool,
     /// driverの出どころ。runの`Run`の時間の基準から決めるので、どのworkerでも同じである。`Real`のrunだけがOSの
     /// シグナルを待つタスクへ届ける (docs/spec/stdlib.mdの「`Std.Signal`」)。空きの待ちに上限を掛けるかと、TLSが
     /// 信頼する根もこれで決まる (docs/spec/vm.mdの「時計と driver」)。
@@ -507,6 +510,7 @@ impl<P: Policy> Scheduler<P> {
             run,
             index: 0,
             workers: Workers::Denied,
+            main_loop: false,
             driver_kind,
             since_poll: 0,
             runnables: Vec::new(),

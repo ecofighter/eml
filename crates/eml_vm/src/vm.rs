@@ -834,6 +834,73 @@ fn work_loop<R: Exec>(
     }
 }
 
+/// メインのworkerの実行の繰り返し。`drive`で走れるタスクをすべて動かし、走れるものがなくなったら待つ。止める語か
+/// 誤りで抜け、その誤りを返す。止める語で抜けたときは`None`である (docs/spec/vm.mdの「メインのworker」)。
+pub(crate) fn main_work<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    sched: &mut Scheduler<R::P>,
+    counts: &mut RunCounts,
+) -> (Option<RuntimeError>, u64) {
+    let mut task = Task::idle();
+    task.worker = sched.main_worker;
+    let error = loop {
+        match drive::<R>(code, ctx, &mut task, sched, counts) {
+            Ok(true) => {}
+            Ok(false) => break None,
+            Err(error) => break Some(error),
+        }
+        if let Err(fault) = sched.main_wait() {
+            break Some(RuntimeError::Fault {
+                fault,
+                function: "<main worker>".into(),
+                at: None,
+            });
+        }
+    };
+    (error, sched.peak_stack(&task))
+}
+
+/// メインのworkerの1回の仕事。受け箱の知らせを取り、走れるタスクを列が空になるまで動かして戻る。列が空になった
+/// 地点では`HOST_IDLE`でVMの繰り返しを抜けるので、メインのworkerが待つ間、VMの状態はRustのスタックに残らない。
+/// 動くタスクのない`Task`は、ほかのworkerと同じく表の`ENTRY`の欄に退避する。止める語を読んだら`false`を返す
+/// (docs/spec/vm.mdの「メインのworker」)。
+fn drive<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    counts: &mut RunCounts,
+) -> Result<bool, RuntimeError> {
+    if crate::workers::stopping(&sched.watcher.control, sched.index) {
+        return Ok(false);
+    }
+    let mut ran = match switch_away::<R>(code, ctx, task, sched, Some(TaskState::Ready)) {
+        Ok(()) => Ok(()),
+        Err(fault) => {
+            let pc = task.pc;
+            task_failed::<R>(code, ctx, task, sched, Failure { fault, pc })
+        }
+    };
+    if ran.is_ok() {
+        ran = match run_tasks::<R>(code, ctx, task, sched, counts) {
+            Ok(()) => Err(code.error(
+                Failure {
+                    fault: VmFault::Internal("a pinned task reached the end of a run"),
+                    pc: task.pc,
+                },
+                task,
+            )),
+            Err(error) => Err(error),
+        };
+    }
+    match ran {
+        Err(RuntimeError::Fault { fault, .. }) if fault == HOST_IDLE => Ok(true),
+        Ok(()) => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
 fn run_tasks<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1466,6 +1533,10 @@ fn unwind<R: Exec>(
 /// join が見つけた子の誤りを `Scheduler::failed` に置いたことを、実行の繰り返しに伝える印。外には出ない。
 const CHILD_FAILED: VmFault = VmFault::Internal("a child failure is waiting in the scheduler");
 
+/// メインのworkerの走れるタスクがなくなったことを、実行の繰り返しに伝える印。`drive`が受け取り、外には出ない
+/// (docs/spec/vm.mdの「メインのworker」)。
+const HOST_IDLE: VmFault = VmFault::Internal("the main worker has nothing to run");
+
 /// `par` の fork。親の文脈で、右の子に ID を出して閉包と子の `evv` に印を付け、右の子をまだ始めずに列に入れ、左の子を
 /// 親のスタックの上で始める。mask は evidence passing の包みがすでに当てている。
 #[inline(never)]
@@ -1850,6 +1921,14 @@ fn switch_away<R: Exec>(
             sched.added.is_empty(),
             "an entry is left unsettled before a worker sleeps"
         );
+        // メインのworkerはここで待たず、動くタスクのない`Task`に戻って`drive`から抜ける。待ちは`drive`の外で行う
+        // ので、待つ間にVMの状態をRustのスタックに残さない (docs/spec/vm.mdの「メインのworker」)
+        if sched.main_loop {
+            if sched.current != ENTRY {
+                resume::<R>(code, ctx, task, sched, ENTRY, keep)?;
+            }
+            return Err(HOST_IDLE);
+        }
         sched.idle_wait()?;
         // `NOTICE`は捨てる。その知らせは続く集める地点が集める。直前の`wait`がOSを見たので、
         // 集める地点は見ない。ここは関数のエントリでないので、タスクの中の上限は保留のまま次の安全点に任せる
@@ -2241,6 +2320,13 @@ fn task_failed<R: Exec>(
     mut failure: Failure,
 ) -> Result<(), RuntimeError> {
     loop {
+        if failure.fault == HOST_IDLE {
+            return Err(RuntimeError::Fault {
+                fault: HOST_IDLE,
+                function: String::new(),
+                at: None,
+            });
+        }
         let error = match sched.failed.take() {
             Some(error) => error,
             None => code.error(failure, task),
@@ -2421,13 +2507,21 @@ fn async_op<R: Exec>(
         return Err(VmFault::Internal("the Async entries are not loaded"));
     }
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、行がそれを預かる
-    match Extern::ALL[o[0] as usize] {
-        Extern::AsyncStartRaw => {
+    let ext = Extern::ALL[o[0] as usize];
+    match ext {
+        Extern::AsyncStartRaw | Extern::AsyncStartMainRaw => {
             let cell = current_cell(task)?;
-            let scope = sched.cells.lock().current_of(cell)?;
-            let owner = place_owner(sched);
-            let (handle, run) = start_task::<R>(ctx, task, sched, scope, owner, task.get(arg(0)))?
-                .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
+            // 固定したタスクが始めるタスクも固定する (docs/spec/vm.mdの「`Async`のタスク」)
+            let (scope, pinned) = {
+                let mut cells = sched.cells.lock();
+                let pinned = cells.pinned(cell)?;
+                (cells.current_of(cell)?, pinned)
+            };
+            let pinned = pinned || ext == Extern::AsyncStartMainRaw;
+            let owner = place_owner(sched, pinned);
+            let (handle, run) =
+                start_task::<R>(ctx, task, sched, scope, owner, task.get(arg(0)), pinned)?
+                    .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
             task.set(dst, handle);
             // ほかの worker に置いたタスクは、`Place` を受けた持ち主が始める
             if let Some(run) = run {
@@ -2436,18 +2530,20 @@ fn async_op<R: Exec>(
         }
         Extern::AsyncRunRaw => {
             // 呼んだ `Task` はスタックを持ったまま、根のスコープが閉じるのを待つ
-            let root = {
+            let (root, pinned) = {
                 let mut cells = sched.cells.lock();
-                let parent = match task.cell {
-                    Some(cell) => Some(cells.current_of(cell)?),
-                    None => None,
+                let (parent, pinned) = match task.cell {
+                    Some(cell) => (Some(cells.current_of(cell)?), cells.pinned(cell)?),
+                    None => (None, false),
                 };
-                cells.open_root(parent, task.cell)?
+                (cells.open_root(parent, task.cell)?, pinned)
             };
-            // 根のタスクは呼んだ worker に置く (docs/spec/vm.md の「`Async` のタスク」)
+            // 根のタスクは呼んだworkerに置く。固定したタスクの入れ子の根も固定する (docs/spec/vm.mdの
+            // 「`Async`のタスク」)
             let me = sched.me();
-            let (handle, run) = start_task::<R>(ctx, task, sched, root, me, task.get(arg(0)))?
-                .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
+            let (handle, run) =
+                start_task::<R>(ctx, task, sched, root, me, task.get(arg(0)), pinned)?
+                    .ok_or(VmFault::Internal("a task starts in a closed scope"))?;
             let run = run.ok_or(VmFault::Internal("a root task is placed elsewhere"))?;
             sched
                 .cells
@@ -2600,12 +2696,16 @@ fn async_op<R: Exec>(
             task.set(dst, Word::UNIT);
         }
         Extern::AsyncStartInRaw => {
-            current_cell(task)?;
+            let cell = current_cell(task)?;
             let g = task.get(arg(1));
-            let scope = sched.cells.lock().scope_cell(task.raw(arg(0)));
-            let owner = place_owner(sched);
+            let (scope, pinned) = {
+                let mut cells = sched.cells.lock();
+                let pinned = cells.pinned(cell)?;
+                (cells.scope_cell(task.raw(arg(0))), pinned)
+            };
+            let owner = place_owner(sched, pinned);
             let started = match scope {
-                Some(scope) => start_task::<R>(ctx, task, sched, scope, owner, g)?,
+                Some(scope) => start_task::<R>(ctx, task, sched, scope, owner, g, pinned)?,
                 None => None,
             };
             let Some((handle, run)) = started else {
@@ -3431,13 +3531,11 @@ fn raise_again<R: Exec>(
     }
 }
 
-/// `start`が新しいタスクを置くworker。workerを作ったrunでは、worker 0を除く作ったworkerをworker 1から順に回り、
-/// 作らないrunでは呼んだworkerである。タスクは置いたworkerから動かない (docs/spec/vm.mdの「`Async`のタスク」)。
-fn place_owner<P: Policy>(sched: &Scheduler<P>) -> u32 {
-    match sched.workers.places() {
-        true => sched.run.next_owner(),
-        false => sched.me(),
-    }
+/// `start`が新しいタスクを置くworker (`Run::place_owner`)。
+fn place_owner<P: Policy>(sched: &Scheduler<P>, pinned: bool) -> u32 {
+    sched
+        .run
+        .place_owner(sched.workers.places(), sched.me(), pinned)
 }
 
 /// 今の `Task` から、スコープ `scope` に worker `owner` を持ち主とする新しいタスクを置く。閉包 `g` とまだ印のない根に、
@@ -3449,6 +3547,7 @@ fn start_task<R: Exec>(
     scope: CellRef,
     owner: u32,
     g: Word,
+    pinned: bool,
 ) -> Result<Option<(Word, Option<Runnable>)>, VmFault> {
     let roots = unshared_roots(ctx, sched);
     let started = {
@@ -3456,7 +3555,7 @@ fn start_task<R: Exec>(
         sched
             .cells
             .lock()
-            .start(ctx, &here, scope, task.worker, owner, g, &roots)?
+            .start(ctx, &here, scope, task.worker, owner, g, &roots, pinned)?
     };
     Ok(started.map(|(cell, run)| (cells::task_handle(ctx, &sched.cells, cell), run)))
 }
@@ -4443,6 +4542,7 @@ fn run_extern<R: Exec>(
             }
             // コード生成が `Async` の命令にする (docs/spec/vm.md の「`Async` のタスク」)
             Extern::AsyncStartRaw
+            | Extern::AsyncStartMainRaw
             | Extern::AsyncRunRaw
             | Extern::AsyncPark
             | Extern::AsyncParkTime

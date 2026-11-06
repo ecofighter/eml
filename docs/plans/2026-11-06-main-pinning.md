@@ -429,6 +429,7 @@ Let `B0` be the test count after `sched-cooperative` closed (`cargo nextest run`
   - `.github/workflows/ci.yml`;
   - docs.
 - Work: D-32's `drive`, `HOST_IDLE` and `main_loop`; D-33's pinning, the row, the std functions and the VM arm; `Finished.pinned_tasks`.
+- Decided during execution: the main worker does not take `MailItem::Signal` from the mail (`MailItem::for_worker`, `Mail::set_main`); relaying signals is a run-wide duty that stays on workers 0..N-1 (D-4), so that a park that does not return soon cannot delay signals. vm.md states it, naming workers 0..N-1, and T4's status.md lists the one-worker delay as limit (4).
 - Added after the T2b review (required; D-10 forbids any thread waiting on MAIN): in a separate run, worker 0's body ends after it joins its peers, `settle`s, and quiesces and drops the Machine driver. The rest of the end of the run moves to the Machine owner, after both joins, in this order:
   1. `settle(result, run.take_fatal())` again, so that an error MAIN records (a fault in a pinned task in `drive`) is not lost;
   2. both end checks;
@@ -514,6 +515,7 @@ Let `B0` be the test count after `sched-cooperative` closed (`cargo nextest run`
     - "(1) END does not interrupt a running pinned task: the run ends when the task reaches a safe point or its extern or toolkit callback returns; a park that stays in a modal loop, or ignores `Progress::Stopping` in a release build, delays only the final exit."
     - "(2) On the virtual clock, time advances only while every worker including the main worker sleeps; a running pinned task holds the clock and the deadlock verdict like any running task; on the real clock only the verdict waits."
     - "(3) No `EINTR` reaches a synchronous read on the main worker."
+    - (added after the T3 review) "(4) The main worker never delivers relayed signals (a run-wide duty, D-4): workers 0..N-1 take them from the mail. With `--workers 1`, a signal reaches its waiter, pinned or not, only when worker 0 reaches a collect point; while `main` blocks in an in-place read, a second signal in that window takes the default action."
     - "(4) Only `DefaultPark` exists; a replacement park must also wait on the main worker's I/O driver, which needs `Pending::io()` (toolkit stage); until then, pinned I/O under a custom park does not complete."
 - Completion criteria:
   - `cargo nextest run` → `B0 + 29 + 11 passed` (+1 on Windows), 0 failed (8 `pinned.rs` tests and 3 unit tests).

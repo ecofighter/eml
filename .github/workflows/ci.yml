@@ -211,10 +211,10 @@ jobs:
         id: io
         run: |
           nix develop .#miri -c cargo test -Zbuild-std --target ${{ matrix.target }} -p eml_io
-      - name: "cargo test -p eml_vm --test integration -- api:: signal:: io:: workers:: ffi::"
+      - name: "cargo test -p eml_vm --test integration -- api:: signal:: io:: workers:: ffi:: seat:: pinned::"
         if: ${{ !cancelled() && steps.io.outcome != 'skipped' }}
         run: |
-          nix develop .#miri -c cargo test -Zbuild-std --target ${{ matrix.target }} -p eml_vm --test integration -- api:: signal:: io:: workers:: ffi::
+          nix develop .#miri -c cargo test -Zbuild-std --target ${{ matrix.target }} -p eml_vm --test integration -- api:: signal:: io:: workers:: ffi:: seat:: pinned::
       # 仕事を見捨てた Machine はヒープを意図して漏らすので、このモジュールだけ leak の検出を切る。記憶の誤りは確かめる
       - name: "cargo test -p eml_vm --test integration -- ffi_abandon:: (detect_leaks=0)"
         if: ${{ !cancelled() && steps.io.outcome != 'skipped' }}
@@ -247,10 +247,10 @@ jobs:
         id: rt
         run: |
           nix develop .#miri -c cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::
-      - name: "cargo test -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon::"
+      - name: "cargo test -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon:: seat:: pinned::"
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
-          nix develop .#miri -c cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon::
+          nix develop .#miri -c cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon:: seat:: pinned::
       - name: "cargo test -p eml_vm --lib counters::"
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |

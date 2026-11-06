@@ -58,7 +58,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::ThreadId;
 
 use eml_rt::{
@@ -284,6 +284,9 @@ struct TaskCell {
     /// タスクの上限の旗。共有で、lock の下で誰でも立て、`ResourceLimit` を起こした実行系が `clear_limit` で下ろす
     /// (docs/spec/vm.md の「タスクの上限」)。
     limit: bool,
+    /// メインのworkerに固定したタスクである。`start`だけが書き、このタスクが始めるタスクが受け継ぐ
+    /// (docs/spec/vm.mdの「`Async`のタスク」)。
+    pinned: bool,
     /// 待ちをまたぐタスクの数 (取ったページのバイト数)。持ち主だけが書き、`leave` が終わったエントリの分を足し、
     /// `clear_limit` が 0 に戻す (docs/spec/vm.md の「セルと登録表」)。
     bytes: usize,
@@ -729,11 +732,14 @@ pub(crate) enum MailItem {
 type Hook = Box<dyn FnOnce(&Mail) + Send>;
 
 impl MailItem {
-    /// worker `me` が取り出してよい項か。取り消しの項は持ち主だけが、ほかの項はどの worker も取り出す。
-    fn for_worker(&self, me: u32) -> bool {
+    /// worker `me`が取り出してよい項か。取り消しの項は持ち主だけが取り出す。中継したシグナルは、分かれたrunの
+    /// メインのworker `main`のほかのworker (worker 0..N-1) が取り出す。ほかの項はどのworkerも取り出す
+    /// (docs/spec/vm.mdの「メインのworker」)。
+    fn for_worker(&self, me: u32, main: Option<u32>) -> bool {
         match *self {
             MailItem::Cancel { owner, .. } => owner == me,
-            MailItem::HandleDropped(_) | MailItem::Signal(_) | MailItem::Limit(_) => true,
+            MailItem::Signal(_) => main != Some(me),
+            MailItem::HandleDropped(_) | MailItem::Limit(_) => true,
         }
     }
 }
@@ -745,6 +751,8 @@ pub(crate) struct Mail {
     items: Mutex<Vec<MailItem>>,
     /// 項がある。集める地点とデッドロックの判定が lock を取らずに1回の読みで確かめるためにある。
     pending: AtomicBool,
+    /// 分かれたrunのメインのworkerの番号。runの始めに1回だけ書く。
+    main: OnceLock<u32>,
     /// デッドロックの判定が登録表を読んだ後、欄を読み直す前に1回だけ呼ぶ。その間に項が積まれる順序をテストで作る。
     #[cfg(test)]
     hook: Mutex<Option<Hook>>,
@@ -755,6 +763,11 @@ impl Mail {
         let mut items = self.items.lock().unwrap_or_else(PoisonError::into_inner);
         items.push(item);
         self.pending.store(true, Ordering::Release);
+    }
+
+    /// 分かれたrunのメインのworker `k`を覚える。そのworkerは中継したシグナルを取り出さない。
+    pub(crate) fn set_main(&self, k: u32) {
+        let _ = self.main.set(k);
     }
 
     /// まだ取り出していない項がある。ほかの worker の取り消しの項だけが残っていても真である。
@@ -786,13 +799,15 @@ impl Mail {
         if !self.pending.load(Ordering::Acquire) {
             return Vec::new();
         }
+        let main = self.main.get().copied();
         let mut items = self.items.lock().unwrap_or_else(PoisonError::into_inner);
         // 1つの worker の上では、どの項もその worker のものなので、列ごと取り出す
-        if items.iter().all(|item| item.for_worker(me)) {
+        if items.iter().all(|item| item.for_worker(me, main)) {
             self.pending.store(false, Ordering::Release);
             return std::mem::take(&mut *items);
         }
-        let (mine, rest): (Vec<_>, Vec<_>) = items.drain(..).partition(|item| item.for_worker(me));
+        let (mine, rest): (Vec<_>, Vec<_>) =
+            items.drain(..).partition(|item| item.for_worker(me, main));
         *items = rest;
         mine
     }
@@ -1418,8 +1433,10 @@ pub(crate) struct Registry {
     free: Vec<u32>,
     pub(crate) stats: TaskStats,
     /// 持ち主を `start` を実行した worker と違う worker にしたタスクの数。両方のモードで数え、`RunStats` には入れない
-    /// (docs/spec/vm.md の「`Async` のタスク」)。
+    /// (docs/spec/vm.mdの「`Async`のタスク」)。
     pub(crate) placed_tasks: u64,
+    /// 始めた固定したタスクの数。両方のモードで数え、`RunStats`には入れない。
+    pub(crate) pinned_tasks: u64,
     /// worker ごとの区画。添字が worker の番号である。
     parts: Vec<Part>,
     /// シグナルの番号ごとの、待ち始めた順の待ち手。項はいつも生きていて、`wait == Some(Wait::Signal(その番号))` である。
@@ -1452,6 +1469,7 @@ impl Registry {
             free,
             stats: TaskStats::default(),
             placed_tasks: 0,
+            pinned_tasks: 0,
             parts: (0..workers.max(1)).map(|_| Part::new()).collect(),
             signal_waiters: [Vec::new(), Vec::new()],
             unheard: 0,
@@ -1793,6 +1811,12 @@ impl Registry {
         Ok(self.task_mut(cell)?.current)
     }
 
+    /// タスク`cell`がメインのworkerに固定したタスクか。そのタスクが始めるタスクも固定する
+    /// (docs/spec/vm.mdの「`Async`のタスク」)。
+    pub(crate) fn pinned(&mut self, cell: CellRef) -> Result<bool, CellFault> {
+        Ok(self.task_mut(cell)?.pinned)
+    }
+
     /// スコープが閉じているか。
     pub(crate) fn closed(&mut self, scope: CellRef) -> Result<bool, CellFault> {
         Ok(self.scope_mut(scope)?.closed)
@@ -1882,6 +1906,7 @@ impl Registry {
     /// スコープ `scope` に新しいタスクを置き、セルと、持ち主が自分なら始める仕事を返す。持ち主がほかの worker なら、
     /// 同じ区間でその受け箱に `Place` を送り、仕事は返さない。ハンドルは呼ぶ側が lock を放してから `task_handle` で作る。
     /// `spawner` は呼んだタスクの論理的な ID で、`owner` はタスクを動かす worker、`g` はエントリに渡す閉包である。
+    /// `pinned`なら、タスクをメインのworkerに固定したものとして数える。
     /// 新しい ID に渡す前に、`g` とまだ印のないセッションの根 `roots` に共有の印を付ける (`par` の fork と同じ。
     /// docs/spec/vm.md の「`Async` のタスク」)。
     #[allow(clippy::too_many_arguments)]
@@ -1894,6 +1919,7 @@ impl Registry {
         owner: u32,
         g: Word,
         roots: &[Word],
+        pinned: bool,
     ) -> Result<Option<(CellRef, Option<Runnable>)>, CellFault> {
         let s = self.scope_mut(scope)?;
         if s.closed {
@@ -1928,10 +1954,12 @@ impl Registry {
             run: None,
             detached: false,
             limit: false,
+            pinned,
             bytes: 0,
         }));
         self.scope_mut(scope)?.members.push(cell);
         self.stats.tasks += 1;
+        self.pinned_tasks += u64::from(pinned);
         if owner != here.me {
             self.placed_tasks += 1;
             here.post.place(owner, cell, worker, g);
@@ -5717,6 +5745,7 @@ pub(crate) fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
         run: None,
         detached: false,
         limit: false,
+        pinned: false,
         bytes: 0,
     }))
 }

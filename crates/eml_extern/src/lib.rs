@@ -1256,6 +1256,17 @@ table! {
                 Purity::Effectful,
             ),
         ),
+        AsyncStartMainRaw => holding(
+            &[true],
+            kinded(
+                "Std.Async.start_main_raw",
+                &[TObj],
+                &[Poly],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+        ),
         AsyncRunRaw => holding(
             &[true],
             kinded(
@@ -2156,6 +2167,7 @@ impl Extern {
         matches!(
             self,
             Extern::AsyncStartRaw
+                | Extern::AsyncStartMainRaw
                 | Extern::AsyncRunRaw
                 | Extern::AsyncPark
                 | Extern::AsyncParkTime

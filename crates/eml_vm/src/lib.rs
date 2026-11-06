@@ -146,6 +146,9 @@ pub struct Finished {
     /// この run が、`start` を実行した worker と違う worker に置いた `Async` のタスクの数
     /// (docs/spec/vm.md の「`Async` のタスク」)。
     pub placed_tasks: u64,
+    /// このrunが始めた固定したタスクの数。`Async.start_on_main`で始めたタスクと、固定したタスクが始めたタスクを
+    /// 数える (docs/spec/vm.mdの「`Async`のタスク」)。
+    pub pinned_tasks: u64,
     /// この run がほかの worker に置いた `compute` の仕事の数。どの worker の `fork_job` も数える
     /// (docs/spec/vm.md の「`compute` の仕事」)。
     pub placed_jobs: u64,
@@ -797,6 +800,7 @@ impl<M: Mode> Machine<M> {
             workers: scheduled.workers,
             placed: scheduled.placed,
             placed_tasks: scheduled.placed_tasks,
+            pinned_tasks: scheduled.pinned_tasks,
             placed_jobs: scheduled.placed_jobs,
         }
     }
@@ -929,12 +933,14 @@ struct Scheduled<M: Mode> {
     kept_pending: bool,
     /// worker 1..N-1 と、分かれた run のメインの worker の `Ctx`。join の後に返ってきたもの。
     others: Vec<Ctx<M>>,
-    /// 作った worker の数。
+    /// 作ったworkerの数。
     workers: usize,
     /// ほかの worker に置いた右の子の数。
     placed: u64,
     /// ほかの worker に置いた `Async` のタスクの数。
     placed_tasks: u64,
+    /// 始めた固定したタスクの数。
+    pinned_tasks: u64,
     /// ほかの worker に置いた `compute` の仕事の数。
     placed_jobs: u64,
     /// worker 1..N-1 の panic。最初のものを worker 0 で起こし直す。
@@ -957,6 +963,7 @@ impl<M: Mode> Scheduled<M> {
             workers: 0,
             placed: 0,
             placed_tasks: 0,
+            pinned_tasks: 0,
             placed_jobs: 0,
             panic: None,
         }
@@ -989,8 +996,8 @@ type Outcome<M> = (
 
 /// 方針 `P` の run の表を作り、worker 0 の本体を `task` から実行する。方針を型の引数にして、方針ごとに VM の繰り返しを
 /// 作る (docs/spec/vm.md の「タスクとスケジュール」)。合わせた run では本体をこのスレッドで動かす。分かれた run では、
-/// このスレッドが本体のために worker 0 を作り、run が終わるまでメインの worker として待つ。その後に worker 0 を join し、
-/// `END` を下ろし、メインの worker の `Ctx` を最後に畳み込む (docs/spec/vm.md の「メインの worker」)。
+/// このスレッドが本体のためにworker 0を作り、runが終わるまでメインのworkerとして動く。その後にworker 0をjoinし、
+/// runの終わりを自分で行い、最後に`END`を下ろす (docs/spec/vm.mdの「誤り、止めること、終わり」)。
 fn run_scheduled<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -1017,6 +1024,11 @@ fn run_scheduled<M: Mode, P: Policy>(
     // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
     registry.schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
     let cells = Arc::new(Shared::new(registry));
+    // 中継したシグナルを届けるのはworker 0..N-1だけである。シグナルを届けることはrunの全体の務めで、すぐに戻らない
+    // メインのworkerの待ちがそれを遅らせてはならないためである (docs/spec/vm.mdの「メインのworker」)
+    if run.separate() {
+        cells.mail.set_main(run.main() as u32);
+    }
     let args = EntryArgs {
         run: Arc::clone(&run),
         control: Arc::clone(&control),
@@ -1030,11 +1042,13 @@ fn run_scheduled<M: Mode, P: Policy>(
         roots_free: !code.tables.uses_roots && ctx.roots().len() == 0,
     };
     if !run.separate() {
-        let out = entry_body(code, ctx, task, policy, start.driver, args, counts);
-        if out.1.workers > 0 {
+        let (body, driver) = entry_body(code, ctx, task, policy, start.driver, args, counts);
+        let workers = body.workers;
+        let (result, scheduled) = end_run(code, ctx, task, &run, &cells, body);
+        if workers > 0 {
             control.clear_end();
         }
-        return out;
+        return (result, scheduled, driver);
     }
     let main_policy = policy.for_worker(run.main());
     let (worker_ctx, worker_task, worker_counts) = (&mut *ctx, &mut *task, &mut *counts);
@@ -1049,7 +1063,7 @@ fn run_scheduled<M: Mode, P: Policy>(
             .name("eml-worker-0".into())
             .stack_size(WORKER_STACK);
         let spawned = builder.spawn_scoped(scope, move || {
-            let (result, scheduled, driver) = entry_body(
+            let (body, driver) = entry_body(
                 code,
                 worker_ctx,
                 worker_task,
@@ -1060,7 +1074,7 @@ fn run_scheduled<M: Mode, P: Policy>(
             );
             // driver は作った worker 0 のスレッドで落とす
             drop(driver);
-            (result, scheduled)
+            body
         });
         let worker = match spawned {
             Ok(worker) => worker,
@@ -1073,6 +1087,7 @@ fn run_scheduled<M: Mode, P: Policy>(
         // (docs/spec/vm.md の「上限と割り込み」)
         let _blocked = eml_io::Masked::new();
         let main = workers::run_main::<M, P>(
+            code,
             main_policy,
             &run,
             &control,
@@ -1086,12 +1101,10 @@ fn run_scheduled<M: Mode, P: Policy>(
         drop(guard);
         (Ok(joined), Some(main))
     });
-    // `END` を下ろすのは `Machine` を持つスレッドだけで、メインの worker と worker 0 がどちらも戻った後である。worker 0
-    // が下ろすと、メインの worker が見逃して眠り続けうる (docs/spec/vm.md の「誤り、止めること、終わり」)
-    control.clear_end();
-    let (mut result, mut scheduled) = match joined {
-        Ok(joined) => joined,
+    let mut body = match joined {
+        Ok(body) => body,
         Err(error) => {
+            control.clear_end();
             let error = RuntimeError::Fault {
                 fault: VmFault::Driver(error.to_string()),
                 function: "<worker 0>".into(),
@@ -1104,49 +1117,20 @@ fn run_scheduled<M: Mode, P: Policy>(
             );
         }
     };
-    // メインの worker のヒープは、ほかの worker のヒープと同じく最後に畳み込む。worker 0 が確かめる間にメインの worker
-    // はまだ driver を静止させていうるので、その終わりの確かめは worker 0 の確かめの後に行う
+    // 分かれたrunの終わりは、両方のjoinの後にここで行う。メインのworkerはworker 0が結果を決めた後に致命的な誤りを
+    // 書きうるので、もう一度決める。メインのworkerのヒープは、ほかのworkerのヒープと同じく最後に畳み込む
+    body.result = settle(body.result, run.take_fatal());
     match main {
-        Some(Ok(Retired {
-            ctx: mut main_ctx,
-            counts: main_counts,
-            preemptions,
-            peak_stack,
-            base,
-            left,
-            kept_pending,
-        })) => {
-            main_ctx.reclaim();
-            counts.add(&main_counts);
-            scheduled.preemptions += preemptions;
-            scheduled.peak_stack = scheduled.peak_stack.max(peak_stack);
-            let c = main_ctx.stats();
-            scheduled.others_ctx.evidence_steps += c.evidence_steps;
-            scheduled.others_ctx.yields += c.yields;
-            scheduled.others_ctx.yield_frames += c.yield_frames;
-            scheduled.others_ctx.string_bytes_copied += c.string_bytes_copied;
-            scheduled
-                .others_heap
-                .add(&HeapWork::of(main_ctx.heap().stats()).since(&base));
-            scheduled.kept_pending |= kept_pending;
-            scheduled.others.push(main_ctx);
-            result = result.and_then(|()| {
-                workers::end_check(kept_pending, left).map_err(|fault| {
-                    code.error(
-                        vm::Failure {
-                            fault,
-                            pc: task.pc - 1,
-                        },
-                        task,
-                    )
-                })
-            });
-        }
+        Some(Ok(retired)) => body.add(retired, counts),
         Some(Err(payload)) => {
-            scheduled.panic.get_or_insert(payload);
+            body.panic.get_or_insert(payload);
         }
         None => {}
     }
+    let (result, scheduled) = end_run(code, ctx, task, &run, &cells, body);
+    // `END`を下ろすのは`Machine`を持つスレッドだけで、両方のjoinとrunの終わりの後である。worker 0が下ろすと、
+    // メインのworkerが見逃して眠り続けうる (docs/spec/vm.mdの「誤り、止めること、終わり」)
+    control.clear_end();
     (result, scheduled, None)
 }
 
@@ -1162,9 +1146,55 @@ struct EntryArgs {
     roots_free: bool,
 }
 
+/// worker 0の本体がrunの終わりに残すもの。結果と、joinしたworkerの仕事である。分かれたrunでは`Machine`を
+/// 持つスレッドに戻り、そのスレッドがメインのworkerの分を足してからrunの終わりを行う。
+struct Body<M: Mode> {
+    result: Result<(), RuntimeError>,
+    preemptions: u64,
+    peak_stack: u64,
+    shared_roots: usize,
+    /// 作ったworkerの数。
+    workers: usize,
+    /// joinしたworkerの`Ctx`と、それを作った直後のヒープの仕事。同じ順に並ぶ。
+    others: Vec<Ctx<M>>,
+    bases: Vec<HeapWork>,
+    left: bool,
+    kept_pending: bool,
+    panic: Option<Box<dyn std::any::Any + Send>>,
+}
+
+impl<M: Mode> Body<M> {
+    /// スケジューラを作る前に終わった本体。
+    fn failed(error: RuntimeError, shared_roots: usize) -> Body<M> {
+        Body {
+            result: Err(error),
+            preemptions: 0,
+            peak_stack: 0,
+            shared_roots,
+            workers: 0,
+            others: Vec::new(),
+            bases: Vec::new(),
+            left: false,
+            kept_pending: false,
+            panic: None,
+        }
+    }
+
+    /// 抜けたworkerの仕事を足す。数は足し、山は最大を取る (docs/spec/vm.mdの「`RunStats`」)。
+    fn add(&mut self, retired: Retired<M>, counts: &mut RunCounts) {
+        counts.add(&retired.counts);
+        self.preemptions += retired.preemptions;
+        self.peak_stack = self.peak_stack.max(retired.peak_stack);
+        self.bases.push(retired.base);
+        self.others.push(retired.ctx);
+        self.left |= retired.left;
+        self.kept_pending |= retired.kept_pending;
+    }
+}
+
 /// worker 0 の本体。渡されなければ driver を作り、スケジューラを作り、worker 1..N-1 を作り、エントリを実行して
-/// join し、driver を静止させる。`Box<dyn IoDriver>` は作ったスレッドを離れないので、driver は結果と並べて返す
-/// (docs/spec/vm.md の「時計と driver」)。
+/// joinし、結果を決めてdriverを静止させる。`Box<dyn IoDriver>`は作ったスレッドを離れないので、driverは本体の
+/// 結果と並べて返す (docs/spec/vm.mdの「時計とdriver」)。
 fn entry_body<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -1173,7 +1203,7 @@ fn entry_body<M: Mode, P: Policy>(
     driver: Option<Box<dyn IoDriver>>,
     args: EntryArgs,
     counts: &mut RunCounts,
-) -> Outcome<M> {
+) -> (Body<M>, Option<Box<dyn IoDriver>>) {
     // 分かれた run では、この本体のどの出口も `END` を立ててメインの worker を起こすので、何かが失敗しうる前に見張りを
     // 置く (docs/spec/vm.md の「誤り、止めること、終わり」)
     let mut shutdown = Shutdown {
@@ -1201,7 +1231,7 @@ fn entry_body<M: Mode, P: Policy>(
                 },
                 task,
             );
-            return (Err(error), Scheduled::empty(&cells, shared_roots), None);
+            return (Body::failed(error, shared_roots), None);
         }
     };
     let mut sched = Scheduler::new(policy, driver, run, control, task.worker, max_depth, cells);
@@ -1247,48 +1277,37 @@ fn entry_body<M: Mode, P: Policy>(
         Workers::Started(n) => n,
         Workers::Denied | Workers::Peer => 0,
     };
-    let mut others = Vec::with_capacity(exits.len());
-    let mut panic = None;
-    // ほかの worker の仕事を worker 0 の数に足す。数は足し、山は最大を取る (docs/spec/vm.md の「`RunStats`」)
-    let mut preemptions = sched.preemptions();
-    let mut peak_stack = sched.peak_stack(task);
-    let mut bases = Vec::with_capacity(exits.len());
-    let mut left = false;
-    let mut kept_pending = false;
+    let mut body = Body {
+        result,
+        preemptions: sched.preemptions(),
+        peak_stack: sched.peak_stack(task),
+        shared_roots: sched.shared_roots,
+        workers,
+        others: Vec::with_capacity(exits.len()),
+        bases: Vec::with_capacity(exits.len()),
+        left: false,
+        kept_pending: false,
+        panic: None,
+    };
+    // ほかのworkerの仕事をworker 0の数に足す (docs/spec/vm.mdの「`RunStats`」)
     for exit in exits {
         match exit {
-            Ok(Retired {
-                ctx: other,
-                counts: worker_counts,
-                preemptions: worker_preemptions,
-                peak_stack: worker_peak,
-                base,
-                left: worker_left,
-                kept_pending: worker_kept,
-            }) => {
-                counts.add(&worker_counts);
-                preemptions += worker_preemptions;
-                peak_stack = peak_stack.max(worker_peak);
-                bases.push(base);
-                others.push(other);
-                left |= worker_left;
-                kept_pending |= worker_kept;
-            }
+            Ok(retired) => body.add(retired, counts),
             Err(payload) => {
-                panic.get_or_insert(payload);
+                body.panic.get_or_insert(payload);
             }
         }
     }
-    let result = settle(result, sched.run.take_fatal());
+    body.result = settle(body.result, sched.run.take_fatal());
     // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に driver を静止させる。どの worker も
     // もう受け付けを送らないので、join の後に行う。ほかの worker の driver は、その worker が抜ける前に静止させてある。
     // 成功した run では、静止させた driver が返した完了を記録に置く。集める地点と同じく、driver に出した操作がなければ
     // 完了を読まない (docs/spec/vm.md の「時計と driver」「誤り、止めること、終わり」)
-    kept_pending |= match sched.driver.as_mut() {
+    body.kept_pending |= match sched.driver.as_mut() {
         Some(driver) => {
             driver.quiesce(sched.run.job_wait(driver.now()));
             let in_flight = sched.cells.lock().in_flight(sched.index);
-            if result.is_ok() && in_flight > 0 {
+            if body.result.is_ok() && in_flight > 0 {
                 let mut completed = Vec::new();
                 driver.completions(&mut completed);
                 sched.cells.lock().quiesced(sched.index, &mut completed);
@@ -1297,6 +1316,37 @@ fn entry_body<M: Mode, P: Policy>(
         }
         None => false,
     };
+    // 予約と確定の間に安全点はないので、`Finish`に来たworker 0は予約を持たない (docs/spec/vm.mdの「channel」)
+    debug_assert!(
+        body.result.is_err() || sched.hold.is_none(),
+        "a channel reservation is held at the end"
+    );
+    (body, sched.driver.take())
+}
+
+/// どのworkerもjoinした後のrunの終わり。終わりの確かめ、残ったセルの片付け、登録表の数、ほかのスレッドが積んだ
+/// 解放の取り込み、ほかのヒープの統計である。分かれたrunではこの間ずっと`END`が立っているので、どの手順も止める語を
+/// 読まない (docs/spec/vm.mdの「誤り、止めること、終わり」)。
+fn end_run<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &Task,
+    run: &Run,
+    cells: &Shared,
+    body: Body<M>,
+) -> (Result<(), RuntimeError>, Scheduled<M>) {
+    let Body {
+        result,
+        preemptions,
+        peak_stack,
+        shared_roots,
+        workers,
+        mut others,
+        bases,
+        left,
+        kept_pending,
+        panic,
+    } = body;
     // 成功した run だけが、残った知らせと保留の操作を確かめてから、残ったセルを片付ける。誤りと `exit` の run の登録表は、
     // 触れずに `Scheduler` と一緒に落とす。誤りには `Finish` の位置を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)
     let result = result.and_then(|()| {
@@ -1310,21 +1360,15 @@ fn entry_body<M: Mode, P: Policy>(
             )
         };
         workers::end_check(kept_pending, left).map_err(at_finish)?;
-        // 予約と確定の間に安全点はないので、`Finish` に来た worker 0 は予約を持たない (docs/spec/vm.md の「channel」)
-        debug_assert!(
-            sched.hold.is_none(),
-            "a channel reservation is held at the end"
-        );
-        cells::sweep_all(&sched.cells, ctx, task.depth_offset)
-            .map_err(|fault| at_finish(fault.into()))
+        cells::sweep_all(cells, ctx, task.depth_offset).map_err(|fault| at_finish(fault.into()))
     });
-    let (tasks, placed_tasks) = {
-        let cells = sched.cells.lock();
-        (cells.stats, cells.placed_tasks)
+    let (tasks, placed_tasks, pinned_tasks) = {
+        let cells = cells.lock();
+        (cells.stats, cells.placed_tasks, cells.pinned_tasks)
     };
     // join の後に、ほかのスレッドが積んだ解放をすべてのヒープで取り込む。この後はどのスレッドも解放を積まない
     // (docs/spec/vm.md の「誤り、止めること、終わり」)
-    if workers > 0 || sched.run.separate() {
+    if workers > 0 || run.separate() {
         reclaim_all(ctx, &mut others);
     }
     // ほかのヒープの統計は、取り込みの後に読む。`Machine` が `others` を落とす前だからである
@@ -1338,11 +1382,11 @@ fn entry_body<M: Mode, P: Policy>(
         others_ctx.string_bytes_copied += c.string_bytes_copied;
         others_heap.add(&HeapWork::of(other.heap().stats()).since(base));
     }
-    let generations = sched.cells.lock().next_generations();
+    let generations = cells.lock().next_generations();
     let scheduled = Scheduled {
         preemptions,
         peak_stack,
-        shared_roots: sched.shared_roots,
+        shared_roots,
         tasks,
         others_ctx,
         others_heap,
@@ -1350,15 +1394,13 @@ fn entry_body<M: Mode, P: Policy>(
         kept_pending,
         others,
         workers,
-        placed: sched.run.placed.load(std::sync::atomic::Ordering::Relaxed),
+        placed: run.placed.load(std::sync::atomic::Ordering::Relaxed),
         placed_tasks,
-        placed_jobs: sched
-            .run
-            .placed_jobs
-            .load(std::sync::atomic::Ordering::Relaxed),
+        pinned_tasks,
+        placed_jobs: run.placed_jobs.load(std::sync::atomic::Ordering::Relaxed),
         panic,
     };
-    (result, scheduled, sched.driver.take())
+    (result, scheduled)
 }
 
 /// `RunStats` に入るヒープの仕事の数 (docs/spec/vm.md の「`RunStats`」)。
