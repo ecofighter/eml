@@ -103,7 +103,7 @@
 #### D-15: OSの検証器のテストとCI
 
 - 決定: `02-verifier.md`の1.5〜1.7と5.5。本物のOSの検証器に届くテストは次のとおりである。`crates/eml_tls/tests/platform.rs` (すべてのOSで`NOW`の時刻の3つのテストと、Linuxだけの2つのテスト。後者は`SSL_CERT_FILE=/dev/null`にして`SSL_CERT_DIR`を外し、テストのバイナリを子として流し直して、nixのsandboxの代わりにする)。本物のソケットの`crates/eml_cli/tests/tls.rs` (`other-ca.pem`による拒否のテストにする。どの日付でも成り立つ)。OSの根に頼るテストは置かない。Windowsの残る不明 (根の自動更新) は、rustls-platform-verifier自身のwindows-2025のCI (URLのない証明書で27のテストが0.17秒) を根拠に、既定では受け入れる。だめだったときの扱いはQ-1にある
-- 本物のソケットのテストの名前は`a_real_socket_handshake_with_an_unknown_ca_is_rejected`にする (T-4では拒否はまだwebpki-rootsから来て、T-8からはOSの検証器から来る)
+- 本物のソケットのテストの名前は`a_real_socket_handshake_rejects_the_expired_fixtures`にする。`other-ca.pem`ではなく、署名した本人で現実の時刻では期限切れの`ca.pem`を渡し、固定の拒否を期待する (実行中に変えた。本物のdriverのrunがテストの検証器を使えば通ってしまうので、漏れを捕まえる)。T-4では拒否はまだwebpki-rootsから来て、T-8からはOSの検証器から来る。`DriverKind`はどのworkerでもrunのものを使う (T-4の査読で直した)
 
 ## 6. 実装の制約と決まり
 
@@ -201,7 +201,7 @@
 
 - 目的: 検証器を替える前に、テストの世界を日付とOSから切り離す (D-10、D-11、D-13、D-15)
 - 対象: `crates/eml_tls/` (`fixtures/gen.sh`、作り直したPEM、`other-ca.pem`、`src/fixtures.rs`、`src/lib.rs`、`tests/*`)、`crates/eml_vm/src/tls.rs`、`vm.rs`、`crates/eml_extern/src/lib.rs` (`is_async`)、`crates/eml_io/tests/tls.rs`、`crates/eml_cli/tests/tls.rs`、`tests/ui/run-fail/tls/` (`unknown_ca.em`、`server_closes_before_handshake.em`、新しい`bad_ca.em`と`no_roots.em`、`other-ca.pem`) とそのsnapshot、`docs/spec/stdlib.md`、`docs/spec/vm.md`、`docs/implementation/testing.md`
-- 作業: `02-verifier.md`の5.4の作業Aを、5.1、5.3、5.5の「Unit A」と「Real-driver test」と合わせて行う。振り分けはD-13のとおりにする (`03-tls-on-pool.md`の5.1。`vm.rs`の2つの`Async`のexternの一覧を含む)。このコミットの`Trust::platform`は、今のコードをそのまま移したもの (webpki-rootsに追加のPEMを足し、現実の時刻で確かめる) である。fixturesは`nix shell nixpkgs#openssl -c crates/eml_tls/fixtures/gen.sh`で作り直す。本物のソケットのテストは`a_real_socket_handshake_with_an_unknown_ca_is_rejected`である (D-15)。文書: `docs/spec/stdlib.md`の「`Std.Tls`」に、テストのdriverの条件で書いた`NoRoots`の行を足す。externの段落には、`client_raw`はrunのdriverの種類を読むので`Async`の命令として動くが、待たないことは変わらない、と書く。`docs/spec/vm.md`の「時計と driver」に、`Machine`がテストのdriverを作ったrunは、渡したCAだけでTLSをrustlsで2026-01-15T00:00:00Zの時刻で確かめ、ほかのrunはOSの検証器を使う、と書く。`docs/implementation/testing.md`の427〜428行 (テストの世界はfixturesの根を使うこと。`other-ca.pem`の写し) と550行 (本物のdriverのテストは拒否のテストであること)
+- 作業: `02-verifier.md`の5.4の作業Aを、5.1、5.3、5.5の「Unit A」と「Real-driver test」と合わせて行う。振り分けはD-13のとおりにする (`03-tls-on-pool.md`の5.1。`vm.rs`の2つの`Async`のexternの一覧を含む)。このコミットの`Trust::platform`は、今のコードをそのまま移したもの (webpki-rootsに追加のPEMを足し、現実の時刻で確かめる) である。fixturesは`nix shell nixpkgs#openssl -c crates/eml_tls/fixtures/gen.sh`で作り直す。本物のソケットのテストは`a_real_socket_handshake_rejects_the_expired_fixtures`である (D-15)。文書: `docs/spec/stdlib.md`の「`Std.Tls`」に、テストのdriverの条件で書いた`NoRoots`の行を足す。externの段落には、`client_raw`はrunのdriverの種類を読むので`Async`の命令として動くが、待たないことは変わらない、と書く。`docs/spec/vm.md`の「時計と driver」に、`Machine`がテストのdriverを作ったrunは、渡したCAだけでTLSをrustlsで2026-01-15T00:00:00Zの時刻で確かめ、ほかのrunはOSの検証器を使う、と書く。`docs/implementation/testing.md`の427〜428行 (テストの世界はfixturesの根を使うこと。`other-ca.pem`の写し) と550行 (本物のdriverのテストは拒否のテストであること)
 - 実装者に任せること: 日本語の言い回し。`02-verifier.md`の5.5にあるUIテストの頭のコメントは下書きなので、PLaMoで訳し直す
 - 条件: いつも
 - 完了の条件:
