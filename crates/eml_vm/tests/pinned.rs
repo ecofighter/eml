@@ -684,9 +684,15 @@ struct WindowPark {
     lowered: Arc<AtomicBool>,
 }
 
+impl WindowPark {
+    fn open(&self) -> bool {
+        self.host.lines().iter().any(|(line, _)| line == "open")
+    }
+}
+
 impl Park for WindowPark {
     fn wait(&mut self, timeout: Option<Duration>, pending: &mut dyn Pending) -> io::Result<()> {
-        let open = self.host.lines().iter().any(|(line, _)| line == "open");
+        let open = self.open();
         if open && self.held < self.lower_after {
             // 次の`run`がメインのworkerを眠らせる前に書く
             pending.set_holds(true);
@@ -700,6 +706,10 @@ impl Park for WindowPark {
             self.bell.wait(timeout);
         }
         pending.run();
+        // 窓は`run`の中で開きうる。戻ることもタスクを動かさせるので、開いていれば戻る前に抱える
+        if !open && self.open() {
+            pending.set_holds(true);
+        }
         Ok(())
     }
 
@@ -708,9 +718,10 @@ impl Park for WindowPark {
     }
 }
 
-/// 固定したタスクが「窓」を開いたのを見ると、`Park`は次の`run`の前に`set_holds(true)`を書き、後で下ろす。固定した
-/// タスクは窓を開いた後に仮想の時計で眠るので、そのタイマーが判定をその`run`の後まで延ばす。それから届かない
-/// channelを待つ。runはデッドロックで終わるが、判定は`Park`が下ろした後である。
+/// 固定したタスクが「窓」を開いたのを見ると、`Park`はタスクを動かさせる前か戻る前に`set_holds(true)`を書き、後で
+/// 下ろす。窓は`run`の中で開くので、`Park`は`run`の後にも見て、戻る前に抱える。戻った後にメインのworkerが、起こされた
+/// タスクを代わりに動かしうるためである。固定したタスクは窓を開いた後に仮想の時計で眠り、それから届かないchannelを
+/// 待つ。runはデッドロックで終わるが、判定は`Park`が下ろした後である。
 #[test]
 fn a_park_that_raises_holds_once_a_window_is_open_defers_the_verdict() {
     let src = "\
