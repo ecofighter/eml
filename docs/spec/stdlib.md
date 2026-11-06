@@ -1619,7 +1619,7 @@ main () = Async.run (fn () ->
 
 ## `Std.Tls`
 
-`Std.Tls`はTLSのクライアントのモジュールである。`Conn`はrustlsの接続と、復号してまだ返していない平文の列を持つ`Lin`の`Foreign`で、I/Oを持たない。`Stream`は`Conn`と`Net.TcpStream`の組のemlのデータで、`std/Tls.em`のコードが両者の間でバイトを汲む。ソケットの読み書き、待ち、取り消し、期限はすべて`Std.Net`のものである。`Conn`を作ることは、根を作るときにOSの根のファイルを読むことがあるので、プールの仕事として走る ([VM](vm.md)の「プールの仕事」)。仕事が走る間も、そのworkerのほかのタスクは走り続ける。仕事はdriverの24の`Op::Job`の枠を`blocking`の呼び出しと分け合うので (上の「`Std.Stream`」)、接続が枠を待つことがある。仮想の時計では、仕事はworker 0の上でその場で走る。暗号はaws-lc-rs、既定の根はwebpki-rootsの根で、OSの証明書ストアは使わない。テストのdriverのrunには既定の根がない ([VM](vm.md)の「時計と driver」)。根に足すCAはPEMで渡す。TLS 1.2と1.3を受ける。serverの側のAPIはない。
+`Std.Tls`はTLSのクライアントのモジュールである。`Conn`はrustlsの接続と、復号してまだ返していない平文の列を持つ`Lin`の`Foreign`で、I/Oを持たない。`Stream`は`Conn`と`Net.TcpStream`の組のemlのデータで、`std/Tls.em`のコードが両者の間でバイトを汲む。ソケットの読み書き、待ち、取り消し、期限はすべて`Std.Net`のものである。`Conn`を作ることは、根を作るときにOSの根のファイルを読むことがあるので、プールの仕事として走る ([VM](vm.md)の「プールの仕事」)。handshakeの間の押し込みも、証明書を確かめることがあり、OSの検証器がブロックするかネットワークに出ることがあるので、プールの仕事として走る。rustlsが証明書を確かめるのはhandshakeの間だけなので、handshakeの後の押し込みはworkerの上で走る。仕事が走る間も、そのworkerのほかのタスクは走り続ける。仕事はdriverの24の`Op::Job`の枠を`blocking`の呼び出しと分け合うので (上の「`Std.Stream`」)、接続が枠を待つことがある。仮想の時計では、仕事はworker 0の上でその場で走る。暗号はaws-lc-rs、既定の根はwebpki-rootsの根で、OSの証明書ストアは使わない。テストのdriverのrunには既定の根がない ([VM](vm.md)の「時計と driver」)。根に足すCAはPEMで渡す。TLS 1.2と1.3を受ける。serverの側のAPIはない。
 
 ```haskell
 import Async
@@ -1696,13 +1696,15 @@ main () = Async.run (fn () ->
 | 16 | failed | TLS の誤りを記録した |
 
 - handshake は、書き出すものを書き出し、`status` が handshaking でなくなるまで、`Net.read_chunk` の1回分を押し込んでは書き出すことを繰り返す。peer_closed か truncated が立てば、handshake の途中で相手が閉じた失敗にする
+- 押し込みは、呼び手が直前に読んだ`status`のhandshakingで行を選ぶ。handshakingが立っていれば`submit_push`と`take_conn`で、立っていなければ`push_tls`で押し込む
 - 押し込みの後に failed が立てば、`error_message` で理由を読み、alert を `try_io` の中で書き出してから、種類 `Other` の IO の失敗を投げる。alert を書けなくても TLS の誤りのほうを報告する。書き出しが `Cancelled` で失敗したときだけは `Cancelled` を投げる。failed が立たなければ、書き出すもの (TLS 1.3 の KeyUpdate への応答など) を書き出す
 - `line_ready` は、`Conn` の平文の先頭の行の状態を 0 (行も EOF もまだない)、1 (行がある)、2 (中身が上限を超えた)、3 (UTF-8 でない) で返す。EOF とみなすのは peer_closed のときだけである。`Conn` は前の `line_ready` が探し終えた位置を持ち、次は新しく届いた平文だけを探す。平文を返すと位置を先頭に戻す。1 のときだけ `take_line` を呼び、行を終わりの改行ごと文字列にして返す。残りのない EOF では空の文字列で、包みがそれを `None` にする
-- externの行は次の12行で、どれも`pub`でない。`submit_client`と`take_conn`はプールの仕事の組 ([VM](vm.md)の「プールの仕事」) で、VMは`Async`の命令として実行する。ほかの行は待たず、普通のexternの行として実行する。投げるのは`take_conn`だけで、ほかの行のTLSの誤りは`status`のfailedと`error_message`に残る
+- externの行は次の13行で、どれも`pub`でない。`submit_client`、`submit_push`、`take_conn`はプールの仕事の行 ([VM](vm.md)の「プールの仕事」) で、VMは`Async`の命令として実行する。ほかの行は待たず、普通のexternの行として実行する。投げるのは`take_conn`だけで、ほかの行のTLSの誤りは`status`のfailedと`error_message`に残る
 
 | 行 | 型 | 借りる引数 |
 |---|---|---|
 | `submit_client` | `String -> String -> <IO> Async.OpId` | 両方 |
+| `submit_push` | `Bytes -> Conn -> <IO> Async.OpId` | バイト列 |
 | `take_conn` | `Async.OpId -> Async.Wake -> <IO> Conn` | なし |
 | `push_tls` | `Bytes -> Conn -> <IO> Conn` | バイト列 |
 | `push_eof` | `Conn -> <IO> Conn` | なし |
@@ -1715,7 +1717,7 @@ main () = Async.run (fn () ->
 | `line_ready` | `Conn -> <IO> (Int, Conn)` | `Conn` |
 | `take_line` | `Conn -> <IO> (String, Conn)` | `Conn` |
 
-- `submit_client host ca`は`host`と`ca`を写し、仕事の中で`Conn`を作る。信頼する根はrunのdriverの種類で決まる ([VM](vm.md)の「時計と driver」)。`take_conn`はそれを新しい物体として返すか、接続の設定の誤りを投げる。`push_tls`は暗号文を押し込み、`push_eof`はEOFを記録する。`pull_tls`は書き出す暗号文をすべて新しい`Bytes`にする。failedの後もalertはここから出る。`write_plain`は平文を暗号にして積む。failedの後は捨てる。`read_plain`は平文の先頭の65 536バイトまでを`Bytes`の後ろに足して返す。`send_close_notify`は1度だけclose_notifyを積む。致命的なalertの後は何もしない。`take_line`を行のそろっていないときに呼ぶと、内部の誤りになる
+- `submit_client host ca`は`host`と`ca`を写し、仕事の中で`Conn`を作る。信頼する根はrunのdriverの種類で決まる ([VM](vm.md)の「時計と driver」)。`submit_push b conn`は`b`を写し、`conn`の中身を仕事へ移して、そこで暗号文を押し込む。`take_conn`はどちらの仕事の`Conn`も新しい物体として返すか、接続の設定の誤りを投げる。`push_tls`はhandshakeの後の暗号文を押し込み、handshakeの間に呼ぶと内部の誤り`Std.Tls.push_tls runs during the handshake`になる。`push_eof`はEOFを記録する。`pull_tls`は書き出す暗号文をすべて新しい`Bytes`にする。failedの後もalertはここから出る。`write_plain`は平文を暗号にして積む。failedの後は捨てる。`read_plain`は平文の先頭の65 536バイトまでを`Bytes`の後ろに足して返す。`send_close_notify`は1度だけclose_notifyを積む。致命的なalertの後は何もしない。`take_line`を行のそろっていないときに呼ぶと、内部の誤りになる
 
 ## `Std.Http`
 

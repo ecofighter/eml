@@ -230,6 +230,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Net.op_stream`、`take_stream` | `Unr` | `Lin` (`TcpStream`) |
   | `Std.Net.local_port` | `Lin` | `Unr` (`Int`) |
   | `Std.Net.peer_addr` | `Lin` | `Unr` (`String`) |
+  | `Std.Tls.submit_push` | `Unr`、`Lin` | `Unr` (`OpId`) |
   | `Std.Tls.take_conn` | `Unr`、`Unr` | `Lin` (`Conn`) |
   | `Std.Tls.push_tls`、`write_plain` | `Unr`、`Lin` | `Lin` (同じ `Conn`) |
   | `Std.Tls.push_eof`、`send_close_notify` | `Lin` | `Lin` (同じ `Conn`) |

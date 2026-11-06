@@ -3236,6 +3236,18 @@ fn async_op<R: Exec>(
                 tls::client_conn(roots, &host, pem.as_bytes())
             })?;
         }
+        Extern::TlsSubmitPush => {
+            // `Conn`は消費するので、中身を取り出して箱を手放してから出す。記録はヒープの語を持たない。バイト列は
+            // 借りるので、手放さずに写す (docs/spec/vm.mdの「プールの仕事」)
+            let (bytes, conn) = (task.get(arg(0)), task.get(arg(1)));
+            let c = unsafe { ctx.heap().foreign_take::<tls::TlsConn>(conn) }?;
+            unsafe { ctx.heap_mut().decref(conn) }?;
+            let b = unsafe { &*ctx.heap().bytes(bytes)? }.to_vec();
+            // `Ok`は、両方の仕事が`take_conn`の答えの型を分け合うためだけにある
+            jobs::submit::<R, _>(ctx, task, sched, dst, TLS_JOB, move || {
+                Ok::<_, String>(tls::push_conn(c, b))
+            })?;
+        }
         ext @ Extern::TlsTakeConn => {
             let (token, wake) = (task.raw(arg(0)), task.raw(arg(1)));
             let outcome = jobs::take::<R, Result<tls::TlsConn, String>>(
@@ -4659,6 +4671,7 @@ fn run_extern<R: Exec>(
             | Extern::ExecFinish
             | Extern::ExecReap
             | Extern::TlsSubmitClient
+            | Extern::TlsSubmitPush
             | Extern::TlsTakeConn => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }

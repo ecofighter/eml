@@ -12,9 +12,9 @@ use crate::driver::DriverKind;
 use crate::error::VmFault;
 
 #[cfg(feature = "tls")]
-use eml_tls::{Conn, PEER_CLOSED};
+use eml_tls::{Conn, HANDSHAKING, PEER_CLOSED};
 #[cfg(not(feature = "tls"))]
-use off::{Conn, PEER_CLOSED};
+use off::{Conn, HANDSHAKING, PEER_CLOSED};
 
 /// TLSの接続の設定の誤りの種類 (docs/spec/stdlib.mdの「`Std.Tls`」)。
 #[cfg(feature = "tls")]
@@ -27,6 +27,7 @@ mod off {
     /// TLSのない処理系の`Conn`。値を持たない。
     pub(crate) enum Conn {}
 
+    pub(crate) const HANDSHAKING: u32 = 1;
     pub(crate) const PEER_CLOSED: u32 = 4;
 
     impl Conn {
@@ -175,6 +176,12 @@ pub(crate) fn client_conn(roots: Roots, host: &str, pem: &[u8]) -> Result<TlsCon
     Err(format!("cannot set up TLS for {host}: not available"))
 }
 
+/// `submit_push`の仕事の本体。プールのスレッドで走り、`Conn`の中身を値で返す。
+pub(crate) fn push_conn(mut c: TlsConn, b: Vec<u8>) -> TlsConn {
+    c.conn.push_tls(&b);
+    c
+}
+
 /// `Std.Tls.push_tls`。`bytes` は借り、`conn` を消費して返す。
 ///
 /// # Safety
@@ -187,6 +194,13 @@ pub(crate) unsafe fn push_tls<M: Mode>(
     // バイト列と `Foreign` は別の物体で、`push_tls` はヒープに触れない
     let b = unsafe { &*ctx.heap().bytes(bytes)? };
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
+    // handshakeの間の押し込みは証明書を確かめうるので、stdは`submit_push`で押し込む
+    // (docs/spec/stdlib.mdの「`Std.Tls`」)
+    if c.conn.status() & HANDSHAKING != 0 {
+        return Err(VmFault::Internal(
+            "Std.Tls.push_tls runs during the handshake",
+        ));
+    }
     c.conn.push_tls(b);
     Ok(conn)
 }
@@ -383,7 +397,6 @@ mod tests {
 #[cfg(all(test, feature = "tls"))]
 mod on_tests {
     use eml_rt::Checked;
-    use eml_tls::HANDSHAKING;
     use eml_tls::fixtures::{CA_PEM, CERT_PEM, KEY_PEM};
 
     use super::*;
@@ -472,6 +485,22 @@ mod on_tests {
         let out = unsafe { pull_tls(&mut ctx, client) }.unwrap();
         assert!(unsafe { &*ctx.heap().bytes(out).unwrap() }.is_empty());
         unsafe { ctx.heap_mut().decref(out) }.unwrap();
+        unsafe { ctx.heap_mut().decref(client) }.unwrap();
+        let leaks = ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
+    }
+
+    /// handshakeの間の押し込みはstdがプールで行うので、`push_tls`の腕では内部の誤りである。
+    #[test]
+    fn push_tls_during_the_handshake_is_an_internal_error() {
+        let mut ctx = cells::test_ctx();
+        let client = new_client(&mut ctx);
+        let b = unsafe { ctx.heap_mut() }.alloc_bytes(b"x");
+        let Err(VmFault::Internal(m)) = (unsafe { push_tls(&mut ctx, b, client) }) else {
+            panic!("push_tls during the handshake did not fail");
+        };
+        assert_eq!(m, "Std.Tls.push_tls runs during the handshake");
+        unsafe { ctx.heap_mut().decref(b) }.unwrap();
         unsafe { ctx.heap_mut().decref(client) }.unwrap();
         let leaks = ctx.leaks();
         assert!(leaks.is_empty(), "{leaks:?}");

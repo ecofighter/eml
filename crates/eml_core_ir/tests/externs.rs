@@ -309,9 +309,9 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 /// `Std.Async.op_ready`、`Std.Async.job_cell`、
 /// `Std.Net`の`op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`と、`Std.Stream`の
 /// `op_reader`、`op_writer`、`op_outcome`、`op_prefix`、`source`と、`Std.Exec`の`stdin`、`stdout`、`stderr`、`stage_count`、
-/// `op_child`、`op_outcome`、`op_prefix`、`reap`と、`Std.Tls`の7つの行と、
+/// `op_child`、`op_outcome`、`op_prefix`、`reap`と、`Std.Tls`の6つの行と、
 /// `Std.FileIn`、`Std.Stdin`、`Std.Proc`のそれぞれ5つの読みの行と、`Std.Proc`の`stage_count`、`wait_stage`だけで
-/// ある。`Std.Tls`の`push_tls`と`write_plain`はデータを借りて`Conn`を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc`の
+/// ある。`Std.Tls`の`push_tls`と`write_plain`はデータを借りて`Conn`を返す。`Std.Tls`の`submit_client`と`submit_push`はデータを借りて`OpId`を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc`の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
@@ -357,7 +357,9 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             | "Std.Tls.line_ready"
             | "Std.Tls.take_line" => (&[true], &[0]),
             "Std.Tls.read_plain" => (&[false, true], &[1]),
-            "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[true, false], &[]),
+            "Std.Tls.push_tls" | "Std.Tls.write_plain" | "Std.Tls.submit_push" => {
+                (&[true, false], &[])
+            }
             "Std.Tls.submit_client" => (&[true, true], &[]),
             "Std.FileIn.read_all"
             | "Std.FileIn.read_line_raw"
@@ -558,8 +560,8 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
     declared == row || (declared == Mark::Poly && row == Mark::Unr)
 }
 
-/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の13、`MutArray` を扱う7つ、`MutUnboxedArray` を扱う12、
-/// `Std.Par.par`、`Std.Async` の20行、`Std.Chan` の2行、`Std.Net` の12行、`Std.Stream` の8行、`Std.Exec` の8行、`Std.Tls` の11行以外は、引数も結果も `Unr` である。
+/// 表の値そのもの。`FileIn`の7つ、`Stdin`の7つ、`Stdout`の6つ、`Stderr`の5つ、`Child`の13、`MutArray`を扱う7つ、`MutUnboxedArray`を扱う12、
+/// `Std.Par.par`、`Std.Async`の20行、`Std.Chan`の2行、`Std.Net`の12行、`Std.Stream`の8行、`Std.Exec`の8行、`Std.Tls`の12行以外は、引数も結果も`Unr`である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -664,6 +666,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Exec.stage_count" => (&[Lin], Unr),
             "Std.Exec.submit_wait" | "Std.Exec.reap" => (&[Unr, Lin], Unr),
             "Std.Exec.op_child" => (&[Unr], Lin),
+            "Std.Tls.submit_push" => (&[Unr, Lin], Unr),
             "Std.Tls.take_conn" => (&[Unr, Unr], Lin),
             "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[Unr, Lin], Lin),
             "Std.Tls.push_eof" | "Std.Tls.send_close_notify" => (&[Lin], Lin),
