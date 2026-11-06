@@ -847,7 +847,7 @@ fn run_sched(src: &str, workers: usize, sched: Sched) -> (String, Result<Finishe
 /// worker 1に置いたタスクの中の入れ子の`Async.run`は終わり、出力はworkerが1つのrunと同じである
 /// (docs/spec/vm.mdの「`Async`のタスク」)。
 #[test]
-fn a_nested_run_closed_before_its_caller_waits_goes_on() {
+fn a_nested_run_inside_a_task_on_worker_1_ends() {
     let src = "\
 import Async
 main : Unit -> <IO, Panic> Unit

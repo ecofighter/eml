@@ -1079,7 +1079,7 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、このworkerが走らせるはずの仕事があるかを
-    /// 返す。実行待ちの列に残った`Entry`、右の子と仕事 (`Child`)、持ち主が自分のタスクの`Place`、
+    /// 返す。実行待ちの列に残った`Entry`、右の子と仕事 (`Child`)、`Place`、
     /// 継続を取り出せる`Wake`を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`、`Limit`と、
     /// もう待っていないセルへの起こしは数えない。登録表は書き換えず、列の項と知らせの語は手放さない。
     /// 数えたらrunは誤りで終わり、回復がヒープを捨てるからである (docs/spec/vm.mdの「誤り、止めること、終わり」)。
@@ -1097,10 +1097,7 @@ impl<P: Policy> Scheduler<P> {
         let mut cells = self.cells.lock();
         for notice in &notices {
             left |= match notice {
-                Notice::Child(_) => true,
-                Notice::Place { cell, worker, .. } => {
-                    cells.placed_owner(*cell, *worker).ok() == Some(me)
-                }
+                Notice::Child(_) | Notice::Place { .. } => true,
                 Notice::Wake(w) => cells.would_run(w, me),
                 Notice::Joined { .. }
                 | Notice::Cancel(_)

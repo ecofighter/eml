@@ -283,7 +283,7 @@ fn run_with_stats_prints_one_stats_line() {
         .filter(|line| line.starts_with("stats: "))
         .collect();
     assert_eq!(lines.len(), 1, "{stderr}");
-    for name in ["parks=", "completions=", "preemptions="] {
+    for name in ["parks=", "completions="] {
         assert!(lines[0].contains(name), "{}", lines[0]);
     }
     assert!(!String::from_utf8_lossy(&plain.stderr).contains("stats: "));

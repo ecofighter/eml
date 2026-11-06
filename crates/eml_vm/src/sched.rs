@@ -30,13 +30,14 @@ fn unheard_fault(control: &Control, bits: u32) -> VmFault {
     VmFault::Stopped(Stop::Terminated)
 }
 
-/// 受け箱から取った `Async` のタスクと driver の操作の知らせを、登録表の1回の区間で届いた順に処理する。走らせる仕事を
-/// `out` に、lock を放してから driver に出す操作と取り消しを `work` に積む。`Place`、`Wake`、`Cancel` は、セルの今の
-/// 持ち主がほかの worker ならその worker へ送り直す。`Completion` は記録の持ち主の自分が当てる。host の知らせ (`Submit`、
-/// `CancelIo`) は自分の driver の分で、結果を置いた後に届いた `CancelIo` だけは何もしない。もう待っていないセルへの
-/// 起こしと、結果のない記録への `Completion` は内部の誤りである (docs/spec/vm.md の「タスクとスケジュール」
-/// 「操作の記録」)。`Limit` は旗がまだ立っていれば、旗を付ける VM の `Task` がこの worker にあるタスクのセルを
-/// `limited` に積む (docs/spec/vm.md の「タスクの上限」)。
+/// 受け箱から取った`Async`のタスクとdriverの操作の知らせを、登録表の1回の区間で届いた順に処理する。走らせる仕事を
+/// `out`に、lockを放してからdriverに出す操作と取り消しを`work`に積む。`Place`、`Wake`、`Cancel`、`Limit`は、どれも
+/// 自分が持ち主のタスクか、tokenの起こしなら自分の上で待つ`Task`を名指す。送る側はタスクの持ち主か待つ`Task`の
+/// workerに送り、持ち主は`start`の後に変わらないためである。`Completion`は
+/// 記録の持ち主の自分が当てる。hostの知らせ (`Submit`、`CancelIo`) は自分のdriverの分で、結果を置いた後に届いた
+/// `CancelIo`だけは何もしない。もう待っていないセルへの起こしと、結果のない記録への`Completion`は内部の誤りである
+/// (docs/spec/vm.mdの「タスクとスケジュール」「操作の記録」)。`Limit`は旗がまだ立っていてタスクが動いていれば、
+/// そのセルを`limited`に積む (docs/spec/vm.mdの「タスクの上限」)。
 #[allow(clippy::too_many_arguments)]
 fn take_async<M: Mode>(
     cells: &mut Registry,
@@ -51,29 +52,33 @@ fn take_async<M: Mode>(
     let mut woken = Vec::new();
     for notice in notices {
         match notice {
-            Notice::Wake(w) => woken.push(w),
-            Notice::Cancel(cell) => cells.cancel_task(cell, here, &mut woken, work)?,
+            Notice::Wake(w) => {
+                debug_assert!(
+                    cells.wake_is_for(&w, here.me),
+                    "a wake reaches a worker that is not its destination"
+                );
+                woken.push(w);
+            }
+            Notice::Cancel(cell) => cells.unpark(cell, here, &mut woken, work)?,
             Notice::Place {
                 cell,
                 worker,
                 closure,
             } => {
                 cells.route(&mut woken, here, out)?;
-                match cells.placed_owner(cell, worker)? {
-                    owner if owner == here.me => out.push(Runnable::Start {
-                        cell,
-                        worker,
-                        closure,
-                    }),
-                    owner => here.post.place(owner, cell, worker, closure),
-                }
+                cells.placed(cell, worker, here.me)?;
+                out.push(Runnable::Start {
+                    cell,
+                    worker,
+                    closure,
+                });
             }
             Notice::Submit(op) => cells.take_submit(op, here.me, work)?,
             Notice::CancelIo(op) => cells.cancel_hosted(op, here.me, work)?,
             Notice::Completion(op) => {
                 woken.extend(cells.take_completion(ctx, depth_offset, op, here, work)?);
             }
-            Notice::Limit(cell) => limited.extend(cells.limit_forwarded(cell, here)),
+            Notice::Limit(cell) => limited.extend(cells.limit_forwarded(cell, here.me)),
             Notice::Child(_) | Notice::Joined { .. } => {
                 return Err(VmFault::Internal("a par notice is left for the registry"));
             }
@@ -357,10 +362,6 @@ pub struct Scheduler<P: Policy> {
     free_tasks: Vec<TaskId>,
     /// 動いているタスクの番号。
     pub(crate) current: TaskId,
-    /// 根のスコープを待とうとして切り替える途中の今のタスクに、スコープが閉じた起こしが届いた。
-    /// そのタスクはまだ表にいないので、列に入れずにここに覚え、`switch_away`が待たずに続ける
-    /// (docs/spec/vm.mdの「`Async`のタスク」)。
-    pub(crate) current_woken: bool,
     pub(crate) joins: Vec<Option<JoinNode>>,
     free_joins: Vec<JoinId>,
     /// 方針が安全点で始めた切り替えの数。
@@ -490,7 +491,6 @@ impl<P: Policy> Scheduler<P> {
             tasks: vec![None],
             free_tasks: Vec::new(),
             current: MAIN,
-            current_woken: false,
             joins: Vec::new(),
             free_joins: Vec::new(),
             preemptions: 0,

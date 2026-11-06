@@ -69,7 +69,7 @@ pub data Wake = | Woke | Cancelled
 `run`、`start`、`spawn`、`await`、`yield_now`、名前付きのスコープ (`scope`、`start_in`、`spawn_in`、`cancel_scope`)、`cancel` と `Task a` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」と「スコープ」にあり、セルの形は [VM](../spec/vm.md) の「セルと登録表」にある。ここには、複数の worker とネイティブのコードのために足すものを書く。
 
 - タスクの閉じた row `<IO, Panic, Async>` は `Heap h` も除く
-- 複数の worker では、タスクのセルは今の持ち主の worker を持つ。取り消しのビット、スコープの旗、スコープの属するタスクと入れ子のスコープの一覧は、どれも run の登録表の lock の下で読み書きする。印を付ける手順は1つの worker のときと同じで、届け方だけが持ち主で分かれる ([VM](../spec/vm.md) の「取り消しの届け方」、[マルチコア対応の設計](multicore.md) の「`Async` のタスク」)
+- 複数のworkerでは、タスクのセルは持ち主のworkerを持つ。取り消しのビット、スコープの旗、スコープの属するタスクと入れ子のスコープの一覧は、どれもrunの登録表のlockの下で読み書きする。印を付ける手順は1つのworkerのときと同じで、届け方だけが持ち主で分かれる ([VM](../spec/vm.md) の「取り消しの届け方」、[マルチコア対応の設計](multicore.md) の「`Async`のタスク」)
 - `cancel` とスコープの取り消しは、取り消しをタスクのセルの持ち主の worker へ届ける。印を付けた worker が持ち主なら run の mail に積み、ほかの worker なら持ち主の受け箱に知らせを送る。`Task a` の `drop` は run の mail に項を積み、それを処理した worker が同じ形で届ける。`Task a` はほかの `Lin` の値と同じく `Chan` で送れる
 - ネイティブのコードでは、`Async.run` はマシンのスタックの上で worker のループを入れ子にする。呼んだ側が完了の後に再開するという約束は VM と同じである ([VM](../spec/vm.md) の「待ちの2種類」、[ネイティブ化の設計](native.md) の「並列の実行」)
 - ハンドルにスコープの型引数は付けない。付けると `run_heap` のようなランク2の特別な形が要るためである。スコープの外へ出た `Task a` は、取り消されたものでもありうる
