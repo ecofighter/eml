@@ -480,7 +480,7 @@ Let `B0` be the test count after `sched-cooperative` closed (`cargo nextest run`
 ### T3b: UI files and REPL transcript
 - Targets:
   - `tests/ui/run/async/run_on_main_returns.em`, `run_on_main_nested_start.em`;
-  - `tests/ui/run-fail/async/run_on_main_exit.em`, `run_on_main_panics.em`;
+  - `tests/ui/run-fail/async/run_on_main_panics.em`, and `run_on_main_exit.em` under `tests/ui/run/async/` (decided during execution: an `exit` is a `run` test whose snapshot ends with `--- exit: n ---`, as `exit_in_task.em`);
   - `crates/eml_cli/tests/repl/async/run_on_main.repl`. At the REPL top level, wrap the call in `Async.run`.
 - Each `async/` file follows testing.md 「seed で流す」 (`spin 40` after a start; output order independent of the schedule).
 - Completion criteria:

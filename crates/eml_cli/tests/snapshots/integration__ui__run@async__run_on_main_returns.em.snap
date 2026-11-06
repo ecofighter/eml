@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/async/run_on_main_returns.em
+---
+--- stdout ---
+main worker: 20
+plain task: 1
+after run: 7
+--- stderr ---

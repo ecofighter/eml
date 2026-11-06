@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/async/run_on_main_panics.em
+---
+--- stdout ---
+before
+--- stderr ---
+--- runtime error ---
+panicked: boom on main
+  at <std>/Async.em:75:9
