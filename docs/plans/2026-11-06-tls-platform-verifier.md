@@ -102,7 +102,7 @@
 
 #### D-15: OSの検証器のテストとCI
 
-- 決定: `02-verifier.md`の1.5〜1.7と5.5。本物のOSの検証器に届くテストは次のとおりである。`crates/eml_tls/tests/platform.rs` (すべてのOSで`NOW`の時刻の3つのテストと、Linuxだけの2つのテスト。後者は`SSL_CERT_FILE=/dev/null`にして`SSL_CERT_DIR`を外し、テストのバイナリを子として流し直して、nixのsandboxの代わりにする)。本物のソケットの`crates/eml_cli/tests/tls.rs` (`other-ca.pem`による拒否のテストにする。どの日付でも成り立つ)。OSの根に頼るテストは置かない。Windowsの残る不明 (根の自動更新) は、rustls-platform-verifier自身のwindows-2025のCI (URLのない証明書で27のテストが0.17秒) を根拠に、既定では受け入れる。だめだったときの扱いはQ-1にある
+- 決定: `02-verifier.md`の1.5〜1.7と5.5。本物のOSの検証器に届くテストは次のとおりである。`crates/eml_tls/tests/platform.rs` (すべてのOSで`NOW`の時刻の3つのテストと、Linuxだけの2つのテスト。後者は`SSL_CERT_FILE=/dev/null`にして`SSL_CERT_DIR`を外し、テストのバイナリを子として流し直して、nixのsandboxの代わりにする)。本物のソケットの`crates/eml_cli/tests/tls.rs` (期限切れの`ca.pem`による拒否のテストにする。2026-02-01より後のどの日付でも成り立つ。次の箇条を見る。付録`02-verifier.md`の`other-ca.pem`を使う記述は、この箇条で置き換える)。OSの根に頼るテストは置かない。Windowsの残る不明 (根の自動更新) は、rustls-platform-verifier自身のwindows-2025のCI (URLのない証明書で27のテストが0.17秒) を根拠に、既定では受け入れる。だめだったときの扱いはQ-1にある
 - 本物のソケットのテストの名前は`a_real_socket_handshake_rejects_the_expired_fixtures`にする。`other-ca.pem`ではなく、署名した本人で現実の時刻では期限切れの`ca.pem`を渡し、固定の拒否を期待する (実行中に変えた。本物のdriverのrunがテストの検証器を使えば通ってしまうので、漏れを捕まえる)。T-4では拒否はまだwebpki-rootsから来て、T-8からはOSの検証器から来る。`DriverKind`はどのworkerでもrunのものを使う (T-4の査読で直した)
 
 ## 6. 実装の制約と決まり
