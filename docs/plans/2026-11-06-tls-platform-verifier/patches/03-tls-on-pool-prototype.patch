@@ -1,0 +1,770 @@
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run@tls__timeout_connect.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run@tls__timeout_connect.em.snap
+new file mode 100644
+index 00000000..42374dad
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run@tls__timeout_connect.em.snap
+@@ -0,0 +1,9 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
++input_file: tests/ui/run/tls/timeout_connect.em
++---
++--- stdout ---
++0: timed out
++1: connected
++--- stderr ---
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run_fail@tls__bad_ca.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@tls__bad_ca.em.snap
+new file mode 100644
+index 00000000..f5f53f5c
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@tls__bad_ca.em.snap
+@@ -0,0 +1,11 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
++input_file: tests/ui/run-fail/tls/bad_ca.em
++---
++--- stdout ---
++Other
++--- stderr ---
++--- runtime error ---
++cannot set up TLS for tls.localhost: the CA certificates are not valid PEM
++  at run-fail/tls/bad_ca.em:17:7
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run_fail@tls__cancelled_setup.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@tls__cancelled_setup.em.snap
+new file mode 100644
+index 00000000..d4fc776b
+--- /dev/null
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@tls__cancelled_setup.em.snap
+@@ -0,0 +1,11 @@
++---
++source: crates/eml_cli/tests/ui.rs
++expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
++input_file: tests/ui/run-fail/tls/cancelled_setup.em
++---
++--- stdout ---
++Cancelled
++--- stderr ---
++--- runtime error ---
++task was cancelled
++  at <std>/Async.em:75:9
+diff --git a/crates/eml_core_ir/tests/externs.rs b/crates/eml_core_ir/tests/externs.rs
+index 2a61a75b..a65a3935 100644
+--- a/crates/eml_core_ir/tests/externs.rs
++++ b/crates/eml_core_ir/tests/externs.rs
+@@ -357,7 +357,10 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
+             | "Std.Tls.line_ready"
+             | "Std.Tls.take_line" => (&[true], &[0]),
+             "Std.Tls.read_plain" => (&[false, true], &[1]),
+-            "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[true, false], &[]),
++            "Std.Tls.push_tls" | "Std.Tls.write_plain" | "Std.Tls.submit_push" => {
++                (&[true, false], &[])
++            }
++            "Std.Tls.submit_client" => (&[true, true], &[]),
+             "Std.FileIn.read_all"
+             | "Std.FileIn.read_line_raw"
+             | "Std.FileIn.read_all_bytes"
+@@ -663,7 +666,8 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
+             "Std.Exec.stage_count" => (&[Lin], Unr),
+             "Std.Exec.submit_wait" | "Std.Exec.reap" => (&[Unr, Lin], Unr),
+             "Std.Exec.op_child" => (&[Unr], Lin),
+-            "Std.Tls.client_raw" => (&[Unr, Unr], Lin),
++            "Std.Tls.submit_push" => (&[Unr, Lin], Unr),
++            "Std.Tls.take_conn" => (&[Unr, Unr], Lin),
+             "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[Unr, Lin], Lin),
+             "Std.Tls.push_eof" | "Std.Tls.send_close_notify" => (&[Lin], Lin),
+             "Std.Tls.pull_tls"
+diff --git a/crates/eml_extern/src/lib.rs b/crates/eml_extern/src/lib.rs
+index f9f5a576..e55ddf9a 100644
+--- a/crates/eml_extern/src/lib.rs
++++ b/crates/eml_extern/src/lib.rs
+@@ -2011,9 +2011,31 @@ table! {
+         ),
+         // TLS の状態のインターフェース (docs/spec/stdlib.md の「`Std.Tls`」)。どれも待たないので普通の extern の行で、
+         // 投げるのは `client_raw` だけである。組を返す行は `Conn` を借りる
+-        TlsClientRaw => kinded(
+-            "Std.Tls.client_raw",
+-            &[Obj, Obj],
++        TlsSubmitClient => borrowing(
++            &[true, true],
++            kinded(
++                "Std.Tls.submit_client",
++                &[Obj, Obj],
++                &[Unr, Unr],
++                Int,
++                Unr,
++                Purity::Effectful,
++            ),
++        ),
++        TlsSubmitPush => borrowing(
++            &[true, false],
++            kinded(
++                "Std.Tls.submit_push",
++                &[Obj, Obj],
++                &[Unr, Lin],
++                Int,
++                Unr,
++                Purity::Effectful,
++            ),
++        ),
++        TlsTakeConn => kinded(
++            "Std.Tls.take_conn",
++            &[Int, Enum],
+             &[Unr, Unr],
+             Obj,
+             Lin,
+@@ -2196,6 +2218,9 @@ impl Extern {
+                 | Extern::NetPeerAddr
+                 | Extern::NetSubmitShutdownWrite
+                 | Extern::NetSubmitSetNodelay
++                | Extern::TlsSubmitClient
++                | Extern::TlsSubmitPush
++                | Extern::TlsTakeConn
+                 | Extern::StreamSubmitOpen
+                 | Extern::StreamSubmitRead
+                 | Extern::StreamSubmitReadLine
+diff --git a/crates/eml_rt/src/foreign.rs b/crates/eml_rt/src/foreign.rs
+index ef8989b5..bd786057 100644
+--- a/crates/eml_rt/src/foreign.rs
++++ b/crates/eml_rt/src/foreign.rs
+@@ -75,6 +75,25 @@ pub(crate) fn value<T: 'static>(h: *mut Header, Tracked(perm): Tracked<&BlockPer
+     ((table.type_id)() == TypeId::of::<T>()).then(|| slot_ptr(h, 1).cast())
+ }
+ 
++/// 値が `T` なら、値を移して返し、表を `Taken` の表に替える。移した後の箱の破棄処理は何もせず、`value::<T>` は
++/// `None` を返す。
++#[verifier::external_body]
++#[inline]
++pub(crate) fn take<T: Send + 'static>(h: *mut Header, Tracked(perm): Tracked<&BlockPerm>) -> Option<
++    T,
++> {
++    let table = unsafe { slot_ptr(h, 0).cast::<&'static VTable>().read() };
++    if (table.type_id)() != TypeId::of::<T>() {
++        return None;
++    }
++    let taken: &'static VTable = &Table::<Taken>::VTABLE;
++    unsafe {
++        let value = slot_ptr(h, 1).cast::<T>().read();
++        slot_ptr(h, 0).cast::<&'static VTable>().write(taken);
++        Some(value)
++    }
++}
++
+ /// 破棄処理と値の位置。物体の状態を替えたあとで呼べるように、先に読み出しておく。
+ #[verifier::external_body]
+ pub(crate) struct Finalizer {
+@@ -100,6 +119,9 @@ pub(crate) fn run_finalizer(f: Finalizer, Tracked(perm): Tracked<&BlockPerm>) {
+ 
+ } // verus!
+ 
++/// `take` が値を移した後の箱の印。破棄処理は何もしない。
++struct Taken;
++
+ impl<T: Send + 'static> Table<T> {
+     const VTABLE: VTable = VTable {
+         type_id: TypeId::of::<T>,
+diff --git a/crates/eml_rt/src/heap/mod.rs b/crates/eml_rt/src/heap/mod.rs
+index 18244abd..77773753 100644
+--- a/crates/eml_rt/src/heap/mod.rs
++++ b/crates/eml_rt/src/heap/mod.rs
+@@ -4257,6 +4257,48 @@ impl<M: Mode> Heap<M> {
+         unsafe { self.foreign(w) }
+     }
+ 
++    /// `Foreign` の値を移して取り出す。箱は生きたままで、破棄処理は何もしなくなり、`foreign` は `WrongKind` を返す。
++    /// 呼ぶ側は、その後で参照を手放す (docs/spec/object-model.md の「核の操作」)。検査モードの誤りは `foreign_unique`
++    /// と同じである。
++    ///
++    /// # Safety
++    ///
++    /// `foreign_unique` と同じである。
++    pub unsafe fn foreign_take<T: Send + 'static>(&self, w: Word) -> (r: Result<T, HeapError>)
++        requires
++            self.wf(),
++            w.is_ptr_spec(),
++            self.word_in(w),
++            !M::CHECKED ==> self.settleable() && self.readable(w) && self.owned(w) && self.rc_value(
++                w,
++            ) == 1,
++        ensures
++            r is Err ==> M::CHECKED || r == Err::<T, HeapError>(HeapError::WrongKind),
++    {
++        let h = self.header_of(w);
++        proof {
++            if self.consistent() && self.settleable() && self.readable(w) {
++                self.core.lemma_readable(w);
++            }
++        }
++        self.checked_live(h)?;
++        if M::CHECKED {
++            let rc = self.core.rc_get(h);
++            if rc != 1 {
++                return Err(HeapError::NotUnique);
++            }
++            self.checked_owner(h, rc)?;
++        }
++        if self.core.meta_get(h).kind() != Kind::Foreign {
++            return Err(HeapError::WrongKind);
++        }
++        let tracked p = self.core.tracked_perm(h@.addr);
++        match foreign::take::<T>(h, Tracked(p)) {
++            Some(v) => Ok(v),
++            None => Err(HeapError::WrongKind),
++        }
++    }
++
+     /// `set_lin` の後の状態。`w` の物体の `meta` の `lin` ビットだけが `lin` になり、ほかは変わらない。
+     pub closed spec fn relinked(&self, old: Heap<M>, w: Word, lin: bool) -> bool {
+         let h = w.bits_spec();
+diff --git a/crates/eml_rt/src/heap/tests/trusted.rs b/crates/eml_rt/src/heap/tests/trusted.rs
+index f72e35d1..d026b03d 100644
+--- a/crates/eml_rt/src/heap/tests/trusted.rs
++++ b/crates/eml_rt/src/heap/tests/trusted.rs
+@@ -252,6 +252,27 @@ fn foreign_values_with_drop_are_finalized_once<M: Mode>() {
+     assert_eq!(drops.load(Ordering::Relaxed), 1);
+ }
+ 
++fn a_taken_foreign_value_is_not_finalized<M: Mode>() {
++    let mut heap = Heap::<M>::new();
++    let (value, drops) = probe();
++    let f = heap.alloc_foreign(value, true);
++    unsafe {
++        assert_eq!(heap.foreign_take::<String>(f), Err(HeapError::WrongKind));
++        let taken = heap.foreign_take::<Probe>(f).unwrap();
++        assert!(matches!(heap.foreign::<Probe>(f), Err(HeapError::WrongKind)));
++        assert!(matches!(heap.foreign_take::<Probe>(f), Err(HeapError::WrongKind)));
++        heap.decref(f).unwrap();
++        assert_eq!(drops.load(Ordering::Relaxed), 0);
++        drop(taken);
++        assert_eq!(drops.load(Ordering::Relaxed), 1);
++        let again = heap.alloc_foreign(String::from("again"), true);
++        assert_eq!(heap.foreign_take::<String>(again).unwrap(), "again");
++        heap.decref(again).unwrap();
++    }
++    drop(heap);
++    assert_eq!(drops.load(Ordering::Relaxed), 1);
++}
++
+ fn a_zero_sized_foreign_value<M: Mode>() {
+     struct Nothing;
+     let mut heap = Heap::<M>::new();
+@@ -2599,6 +2620,7 @@ both_modes!(
+     transfer_back_flips_and_rewrites,
+     a_foreign_value_of_another_type_is_wrong_kind,
+     foreign_values_with_drop_are_finalized_once,
++    a_taken_foreign_value_is_not_finalized,
+     a_zero_sized_foreign_value,
+     a_panicking_finalizer_is_not_run_twice,
+     a_foreign_value_written_in_place_is_finalized_once,
+diff --git a/crates/eml_rt/src/trust.rs b/crates/eml_rt/src/trust.rs
+index d38d6a75..b00e4658 100644
+--- a/crates/eml_rt/src/trust.rs
++++ b/crates/eml_rt/src/trust.rs
+@@ -124,6 +124,7 @@ const TRUSTED: &[(&str, &str)] = &[
+     ("foreign.rs: external_body value_words", "T3"),
+     ("foreign.rs: external_body write", "T3"),
+     ("foreign.rs: external_body value", "T3"),
++    ("foreign.rs: external_body take", "T3"),
+     ("foreign.rs: external_body Finalizer", "T3"),
+     ("foreign.rs: external_body finalizer_of", "T3"),
+     ("foreign.rs: external_body run_finalizer", "T3"),
+diff --git a/crates/eml_vm/src/tls.rs b/crates/eml_vm/src/tls.rs
+index 8e0a002f..6c230497 100644
+--- a/crates/eml_vm/src/tls.rs
++++ b/crates/eml_vm/src/tls.rs
+@@ -11,15 +11,15 @@ use crate::cells::{self, Found, LINE_LIMIT, READ_ROOM};
+ use crate::error::VmFault;
+ 
+ #[cfg(feature = "tls")]
+-use eml_tls::{Conn, PEER_CLOSED};
++use eml_tls::{Conn, HANDSHAKING, PEER_CLOSED};
+ #[cfg(not(feature = "tls"))]
+-use off::{Conn, PEER_CLOSED};
++use off::{Conn, HANDSHAKING, PEER_CLOSED};
+ 
+ /// `client_raw` の設定の誤りの種類 (docs/spec/stdlib.md の「`Std.Tls`」)。
+ #[cfg(feature = "tls")]
+-const SETUP_KIND: i64 = externs::IO_OTHER;
++pub(crate) const SETUP_KIND: i64 = externs::IO_OTHER;
+ #[cfg(not(feature = "tls"))]
+-const SETUP_KIND: i64 = externs::IO_NOT_AVAILABLE;
++pub(crate) const SETUP_KIND: i64 = externs::IO_NOT_AVAILABLE;
+ 
+ #[cfg(not(feature = "tls"))]
+ mod off {
+@@ -37,6 +37,7 @@ mod off {
+     }
+ 
+     pub(crate) const PEER_CLOSED: u32 = 4;
++    pub(crate) const HANDSHAKING: u32 = 1;
+ 
+     impl Conn {
+         pub(crate) fn client(_: &str, _: &[u8]) -> Result<Conn, NotAvailable> {
+@@ -141,29 +142,55 @@ unsafe fn tls_conn<M: Mode>(ctx: &Ctx<M>, conn: Word) -> Result<*mut TlsConn, Vm
+     Ok(unsafe { ctx.heap().foreign_unique::<TlsConn>(conn) }?)
+ }
+ 
+-/// `Std.Tls.client_raw`。`host` と `pem` の参照を受け取って手放す。投げるのはこの行だけである。
+-///
+-/// # Safety
+-/// `host` と `pem` は呼ぶ側が持つ文字列の参照である。
+-pub(crate) unsafe fn client_raw<M: Mode>(
+-    ctx: &mut Ctx<M>,
+-    host: Word,
+-    pem: Word,
+-) -> Result<Word, VmFault> {
+-    let host = unsafe { ctx.copy_string(host, usize::MAX) }?;
+-    let pem = unsafe { ctx.copy_string(pem, usize::MAX) }?;
+-    match Conn::client(&host, pem.as_bytes()) {
+-        Ok(conn) => {
+-            let value = TlsConn { conn, line_from: 0 };
+-            Ok(unsafe { ctx.heap_mut() }.alloc_foreign(value, true))
++/// submit_client の仕事の本体。プールで走る
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum Roots {
++    Fixtures,
++    Platform,
++}
++
++impl Roots {
++    pub(crate) fn of(kind: crate::driver::DriverKind) -> Roots {
++        if kind == crate::driver::DriverKind::Virtual {
++            Roots::Fixtures
++        } else {
++            Roots::Platform
+         }
+-        Err(e) => Err(VmFault::Extern(Fault::Raised(Box::new(Raised {
+-            kind: SETUP_KIND,
+-            message: format!("cannot set up TLS for {host}: {e}").into(),
+-        })))),
+     }
+ }
+ 
++pub(crate) fn client_conn(roots: Roots, host: &str, pem: &[u8]) -> Result<TlsConn, String> {
++    // stub: S2-A's Name::parse -> roots.trust(pem) -> Conn::client goes here
++    let _ = roots;
++    match Conn::client(host, pem) {
++        Ok(conn) => Ok(TlsConn { conn, line_from: 0 }),
++        Err(e) => Err(format!("cannot set up TLS for {host}: {e}")),
++    }
++}
++
++/// submit_push の仕事の本体。プールで走る
++pub(crate) fn push_conn(mut c: TlsConn, b: Vec<u8>) -> TlsConn {
++    c.conn.push_tls(&b);
++    c
++}
++
++/// 借りた文字列を写す
++pub(crate) unsafe fn copy_borrowed<M: Mode>(ctx: &Ctx<M>, w: Word) -> Result<String, VmFault> {
++    Ok(unsafe { &*ctx.heap().string(w)? }.to_owned())
++}
++
++/// 借りたバイト列を写す
++pub(crate) unsafe fn copy_bytes<M: Mode>(ctx: &Ctx<M>, w: Word) -> Result<Vec<u8>, VmFault> {
++    Ok(unsafe { &*ctx.heap().bytes(w)? }.to_vec())
++}
++
++/// 消費した Conn を箱から移して箱を放す
++pub(crate) unsafe fn move_out<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<TlsConn, VmFault> {
++    let value = unsafe { ctx.heap().foreign_take::<TlsConn>(conn) }?;
++    unsafe { ctx.heap_mut().decref(conn) }?;
++    Ok(value)
++}
++
+ /// `Std.Tls.push_tls`。`bytes` は借り、`conn` を消費して返す。
+ ///
+ /// # Safety
+@@ -176,6 +203,9 @@ pub(crate) unsafe fn push_tls<M: Mode>(
+     // バイト列と `Foreign` は別の物体で、`push_tls` はヒープに触れない
+     let b = unsafe { &*ctx.heap().bytes(bytes)? };
+     let c = unsafe { &mut *tls_conn(ctx, conn)? };
++    if c.conn.status() & HANDSHAKING != 0 {
++        return Err(VmFault::Internal("Std.Tls.push_tls runs during the handshake"));
++    }
+     c.conn.push_tls(b);
+     Ok(conn)
+ }
+@@ -377,9 +407,8 @@ mod on_tests {
+     use super::*;
+ 
+     fn new_client(ctx: &mut Ctx<Checked>) -> Word {
+-        let host = ctx.fresh_string("tls.localhost");
+-        let pem = ctx.fresh_string(std::str::from_utf8(CA_PEM).unwrap());
+-        unsafe { client_raw(ctx, host, pem) }.unwrap()
++        let c = client_conn(Roots::Fixtures, "tls.localhost", CA_PEM);
++        unsafe { ctx.heap_mut() }.alloc_foreign(c.ok().unwrap(), true)
+     }
+ 
+     /// クライアントの `Foreign` と server の間で、どちらも送るものがなくなるまで暗号文を汲む。
+@@ -394,9 +423,14 @@ mod on_tests {
+             if sent.is_empty() && back.is_empty() {
+                 return;
+             }
+-            let b = unsafe { ctx.heap_mut() }.alloc_bytes(&back);
+-            unsafe { push_tls(ctx, b, client) }.unwrap();
+-            unsafe { ctx.heap_mut().decref(b) }.unwrap();
++            // handshake の間は std と同じくプールの仕事の本体で押し込み、後は腕で押し込む
++            if unsafe { status(ctx, client) }.unwrap() & i64::from(HANDSHAKING) != 0 {
++                unsafe { (*tls_conn(ctx, client).unwrap()).conn.push_tls(&back) };
++            } else {
++                let b = unsafe { ctx.heap_mut() }.alloc_bytes(&back);
++                unsafe { push_tls(ctx, b, client) }.unwrap();
++                unsafe { ctx.heap_mut().decref(b) }.unwrap();
++            }
+         }
+     }
+ 
+@@ -448,6 +482,17 @@ mod on_tests {
+         assert!(leaks.is_empty(), "{leaks:?}");
+     }
+ 
++    #[test]
++    fn push_tls_during_the_handshake_is_an_internal_error() {
++        let mut ctx = cells::test_ctx();
++        let client = new_client(&mut ctx);
++        let b = unsafe { ctx.heap_mut() }.alloc_bytes(b"x");
++        let Err(VmFault::Internal(m)) = (unsafe { push_tls(&mut ctx, b, client) }) else {
++            panic!("push_tls during the handshake did not fail");
++        };
++        assert_eq!(m, "Std.Tls.push_tls runs during the handshake");
++    }
++
+     #[test]
+     fn pull_tls_on_an_idle_conn_is_empty() {
+         let mut ctx = cells::test_ctx();
+@@ -476,15 +521,10 @@ mod on_tests {
+                 "cannot set up TLS for tls.localhost: the CA certificates are not valid PEM",
+             ),
+         ] {
+-            let h = ctx.fresh_string(host);
+-            let p = ctx.fresh_string(pem);
+-            let Err(VmFault::Extern(Fault::Raised(raised))) =
+-                (unsafe { client_raw(&mut ctx, h, p) })
+-            else {
+-                panic!("{host} with {pem:?} did not raise");
++            let Err(got) = client_conn(Roots::Fixtures, host, pem.as_bytes()) else {
++                panic!("{host} with {pem:?} did not fail");
+             };
+-            assert_eq!(raised.kind, externs::IO_OTHER);
+-            assert_eq!(&*raised.message, message);
++            assert_eq!(got, message);
+         }
+         let leaks = ctx.leaks();
+         assert!(leaks.is_empty(), "{leaks:?}");
+diff --git a/crates/eml_vm/src/vm.rs b/crates/eml_vm/src/vm.rs
+index 1149ec92..f7c0dc89 100644
+--- a/crates/eml_vm/src/vm.rs
++++ b/crates/eml_vm/src/vm.rs
+@@ -3224,6 +3224,47 @@ fn async_op<R: Exec>(
+             }
+             task.set(dst, Word::UNIT);
+         }
++        Extern::TlsSubmitClient => {
++            let host = unsafe { tls::copy_borrowed(ctx, task.get(arg(0))) }?;
++            let pem = unsafe { tls::copy_borrowed(ctx, task.get(arg(1))) }?;
++            let roots = tls::Roots::of(sched.driver_kind);
++            proto_submit::<R, _>(ctx, task, sched, dst, PROTO_CLIENT, move || {
++                tls::client_conn(roots, &host, pem.as_bytes())
++            })?;
++        }
++        ext @ Extern::TlsTakeConn => {
++            match proto_take::<R::M, Result<tls::TlsConn, String>>(
++                &sched.cells,
++                ctx,
++                task,
++                task.raw(arg(0)),
++                task.raw(arg(1)),
++                PROTO_CLIENT,
++            )? {
++                ProtoOut::Woke(Ok(c)) => {
++                    let w = unsafe { ctx.heap_mut() }.alloc_foreign(c, true);
++                    task.set(dst, w);
++                }
++                ProtoOut::Woke(Err(message)) => {
++                    let raise = Raise::Io { kind: tls::SETUP_KIND, message };
++                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
++                }
++                ProtoOut::Failed(e) => {
++                    let raise = Raise::Io { kind: io_kind(&e), message: format!("cannot run TLS: {e}") };
++                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
++                }
++                ProtoOut::Cancelled => {
++                    let raise = Raise::Io { kind: cells::IO_CANCELLED, message: "task was cancelled".into() };
++                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
++                }
++            }
++        }
++        Extern::TlsSubmitPush => {
++            let (bytes, conn) = (task.get(arg(0)), task.get(arg(1)));
++            let c = unsafe { tls::move_out(ctx, conn) }?;
++            let b = unsafe { tls::copy_bytes(ctx, bytes) }?;
++            proto_submit::<R, _>(ctx, task, sched, dst, PROTO_CLIENT, move || Ok::<_, String>(tls::push_conn(c, b)))?;
++        }
+         Extern::NetLocalPort => {
+             // リスナーは借りるだけで、組を作る後の `con` が消費する
+             let port = cells::local_port(ctx, task.get(arg(0)))?;
+@@ -3439,6 +3480,74 @@ fn bind_here<M: Mode, P: Policy>(
+     Ok(())
+ }
+ 
++const PROTO_CLIENT: u32 = u32::MAX - 1;
++const PROTO_PUSH: u32 = u32::MAX - 2;
++
++enum ProtoOut<T> {
++    Woke(T),
++    Failed(std::io::Error),
++    Cancelled,
++}
++
++fn proto_submit<R: Exec, T: Send + 'static>(
++    ctx: &mut Ctx<R::M>,
++    task: &mut Task,
++    sched: &mut Scheduler<R::P>,
++    dst: Slot,
++    call: u32,
++    job: impl FnOnce() -> T + Send + 'static,
++) -> Result<(), VmFault> {
++    let op = eml_rt::Op::Job(Box::new(move || -> Box<dyn std::any::Any + Send> {
++        let t = job();
++        Box::new(Box::into_raw(Box::new(t)) as usize as u64)
++    }));
++    let me = current_cell(task)?;
++    eprintln!("PROTO submit call={}", u32::MAX - call);
++    sched.own_driver()?;
++    here!(sched, post, here);
++    let token = cells::submit_job(
++        &sched.cells,
++        &here,
++        ctx,
++        sched.driver.as_deref_mut(),
++        task.worker,
++        task.depth_offset,
++        me,
++        call,
++        op,
++    )?;
++    task.set_raw(dst, token);
++    Ok(())
++}
++
++fn proto_take<M: Mode, T>(
++    shared: &cells::Shared,
++    ctx: &mut Ctx<M>,
++    task: &Task,
++    token: i64,
++    wake: i64,
++    call: u32,
++) -> Result<ProtoOut<T>, VmFault> {
++    let taken = cells::take_ffi(shared, ctx, token, task.worker)?;
++    eprintln!("PROTO take call={} wake={}", u32::MAX - call, wake);
++    if taken.call != call {
++        return Err(VmFault::Internal("an op is taken by another function"));
++    }
++    let value = taken
++        .result
++        .map(|r| *unsafe { Box::from_raw(r as usize as *mut T) });
++    match (wake, value) {
++        (cells::WOKE, Ok(v)) => Ok(ProtoOut::Woke(v)),
++        (cells::WOKE, Err(e)) => Ok(ProtoOut::Failed(e)),
++        (cells::CANCELLED, v) => {
++            eprintln!("PROTO cancelled call={} ran={}", u32::MAX - call, v.is_ok());
++            drop(v);
++            Ok(ProtoOut::Cancelled)
++        }
++        _ => Err(VmFault::Internal("an op is taken with another wake")),
++    }
++}
++
+ /// `Op::FfiSubmit`。仕事は `ffi::job` が作り、ここで記録の host の driver に出す。登録表に触れる所は `Std.Net` の
+ /// 受け付けと同じくここに置く (docs/spec/vm.md の「`blocking` の呼び出し」)。
+ fn ffi_submit<R: Exec>(
+@@ -4243,10 +4352,6 @@ fn run_extern<R: Exec>(
+             }
+             // TLS の状態の行。待たないので普通の extern で、投げるのは `client_raw` だけである
+             // (docs/spec/stdlib.md の「`Std.Tls`」)
+-            Extern::TlsClientRaw => {
+-                let w = tls::client_raw(ctx, task.get(arg(0)), task.get(arg(1)))?;
+-                task.set(dst, w);
+-            }
+             Extern::TlsPushTls => {
+                 let w = tls::push_tls(ctx, task.get(arg(0)), task.get(arg(1)))?;
+                 task.set(dst, w);
+@@ -4631,7 +4736,10 @@ fn run_extern<R: Exec>(
+             | Extern::ExecOpOutcome
+             | Extern::ExecOpPrefix
+             | Extern::ExecFinish
+-            | Extern::ExecReap => {
++            | Extern::ExecReap
++            | Extern::TlsSubmitClient
++            | Extern::TlsSubmitPush
++            | Extern::TlsTakeConn => {
+                 return Err(VmFault::Internal("Async externs run through Op::Async"));
+             }
+         }
+diff --git a/std/Tls.em b/std/Tls.em
+index fc97b2e7..b311f0b4 100644
+--- a/std/Tls.em
++++ b/std/Tls.em
+@@ -20,7 +20,7 @@ connect host port = connect_with_ca "" host port
+ pub connect_with_ca : String -> String -> Int -> <IO, Async> Stream
+ connect_with_ca ca host port =
+   -- 名前と PEM の誤りは、接続を開く前に投げる
+-  let conn = client_raw host ca
++  let conn = client host ca
+   let sock = Net.connect host port
+   handshake host conn sock
+ 
+@@ -31,7 +31,7 @@ wrap host sock = wrap_with_ca "" host sock
+ -- `wrap` に、根に足す CA の証明書 (PEM) を渡す。空の文字列なら既定の根だけを使う
+ pub wrap_with_ca : String -> String -> Net.TcpStream -> <IO, Async> Stream
+ wrap_with_ca ca host sock =
+-  let conn = client_raw host ca
++  let conn = client host ca
+   handshake host conn sock
+ 
+ -- handshake の間、送るものを書き出しては読んで `Conn` に入れる。最後の書き出しがクライアントの Finished を送る
+@@ -46,9 +46,21 @@ handshake host conn sock =
+     drop sock
+     fail_io ConnectionReset "\{prefix}: the peer closed the connection"
+   else
+-    let (conn, sock) = fill prefix conn sock
++    let (conn, sock) = fill prefix st conn sock
+     handshake host conn sock
+ 
++-- `Conn` を作る。根を作るときに OS のファイルを読むことがあるので、ブロックする呼び出しのプールで作る。名前と PEM の誤りは
++-- 取り出しが投げる (docs/spec/stdlib.md の「`Std.Tls`」)
++client : String -> String -> <IO, Async> Conn
++client host ca =
++  let (w, op) = Async.io_wait (submit_client host ca)
++  take_conn op w
++
++push_pooled : Bytes -> Conn -> <IO, Async> Conn
++push_pooled b conn =
++  let (w, op) = Async.io_wait (submit_push b conn)
++  take_conn op w
++
+ -- 平文を `b` の後ろに 1 バイト以上 65 536 バイト以下足して返す。相手が close_notify で閉じた後は何も足さない。
+ -- close_notify のない EOF は `ConnectionReset` の IO の失敗である。取り消しの地点である
+ pub read_chunk : Bytes -> Stream -> <IO, Async> (Bytes, Stream)
+@@ -70,7 +82,7 @@ read_loop b conn sock =
+     if st &&& peer_closed != 0 then (b, Stream { conn, sock })
+     else if st &&& truncated != 0 then truncated_eof conn sock
+     else
+-      let (conn, sock) = fill read_prefix conn sock
++      let (conn, sock) = fill read_prefix st conn sock
+       read_loop b conn sock
+ 
+ -- 1行を読み、終わりの改行を除いて返す。意味、上限、文言は `Net.read_line` と同じである。読みすぎた平文は `Conn` に
+@@ -91,7 +103,7 @@ line_loop conn sock =
+     let (st, conn) = status conn
+     if st &&& truncated != 0 then truncated_eof conn sock
+     else
+-      let (conn, sock) = fill read_prefix conn sock
++      let (conn, sock) = fill read_prefix st conn sock
+       line_loop conn sock
+   else line_result code conn sock
+ 
+@@ -153,10 +165,13 @@ flush conn sock =
+     (conn, sock)
+ 
+ -- ソケットを1回読んで `Conn` に入れる。空の読みは EOF である
+-fill : String -> Conn -> Net.TcpStream -> <IO, Async> (Conn, Net.TcpStream)
+-fill prefix conn sock =
++fill : String -> Int -> Conn -> Net.TcpStream -> <IO, Async> (Conn, Net.TcpStream)
++fill prefix st conn sock =
+   let (b, sock) = Net.read_chunk (Bytes.empty ()) sock
+-  let conn = if Bytes.length b == 0 then push_eof conn else push_tls b conn
++  let conn =
++    if Bytes.length b == 0 then push_eof conn
++    else if st &&& handshaking != 0 then push_pooled b conn
++    else push_tls b conn
+   checked prefix conn sock
+ 
+ -- TLS の誤りなら alert を書き出してから IO の失敗にし、同じ押し込みで復号した平文も返さない。誤りでなければ送るもの
+@@ -203,7 +218,9 @@ failed : Int
+ failed = 16
+ 
+ -- ランタイムのインターフェース。`client_raw` のほかは投げず、TLS の誤りは `status` の 16 と `error_message` に残る
+-extern client_raw        : String -> String -> <IO> Conn
++extern submit_client     : String -> String -> <IO> Async.OpId
++extern submit_push       : Bytes -> Conn -> <IO> Async.OpId
++extern take_conn         : Async.OpId -> Async.Wake -> <IO> Conn
+ extern push_tls          : Bytes -> Conn -> <IO> Conn
+ extern push_eof          : Conn -> <IO> Conn
+ extern pull_tls          : Conn -> <IO> (Bytes, Conn)
+diff --git a/tests/ui/run-fail/tls/bad_ca.em b/tests/ui/run-fail/tls/bad_ca.em
+new file mode 100644
+index 00000000..2c4e008e
+--- /dev/null
++++ b/tests/ui/run-fail/tls/bad_ca.em
+@@ -0,0 +1,17 @@
++import Async
++import Net
++import Tls
++
++main : Unit -> <IO, Panic> Unit
++main () =
++  let r = Async.run (fn () ->
++    let l = Net.listen "127.0.0.1" 0
++    let (port, l) = Net.local_port l
++    let r = try_io (fn () -> Tls.close (Tls.connect_with_ca "garbage" "tls.localhost" port))
++    Net.close_listener l
++    r)
++  match r with
++    | Ok () -> println "connected"
++    | Err e ->
++      println (show e.kind)
++      fail_io e.kind e.message
+diff --git a/tests/ui/run-fail/tls/cancelled_setup.em b/tests/ui/run-fail/tls/cancelled_setup.em
+new file mode 100644
+index 00000000..cedc0d25
+--- /dev/null
++++ b/tests/ui/run-fail/tls/cancelled_setup.em
+@@ -0,0 +1,19 @@
++import Async (Async)
++import Async
++import Fs
++import Net
++import Tls
++
++main : Unit -> <IO, Panic> Unit
++main () = Async.run (fn () ->
++  let ca = Fs.read_text "ca.pem"
++  let l = Net.listen "127.0.0.1" 0
++  let (port, l) = Net.local_port l
++  Net.close_listener l
++  Async.scope (fn s ->
++    Async.spawn_in s (fn () -> Async.cancel_scope s)
++    match try_io (fn () -> Tls.close (Tls.connect_with_ca ca "tls.localhost" port)) with
++      | Ok () -> println "connected"
++      | Err e ->
++        println (show e.kind)
++        fail_io e.kind e.message))
+diff --git a/tests/ui/run/tls/timeout_connect.em b/tests/ui/run/tls/timeout_connect.em
+new file mode 100644
+index 00000000..bcab4a04
+--- /dev/null
++++ b/tests/ui/run/tls/timeout_connect.em
+@@ -0,0 +1,22 @@
++import Async (Async)
++import Async
++import Fs
++import Net
++import Tls
++
++attempt : String -> Int -> Int -> <IO, Panic, Async> Unit
++attempt ca port ms =
++  match Async.timeout ms (fn () -> Tls.connect_with_ca ca "tls.localhost" port) with
++    | Some s ->
++      println "\{show ms}: connected"
++      Tls.close s
++    | None -> println "\{show ms}: timed out"
++
++main : Unit -> <IO, Panic> Unit
++main () = Async.run (fn () ->
++  let ca = Fs.read_text "ca.pem"
++  let l = Net.listen "127.0.0.1" 0
++  let (port, l) = Net.local_port l
++  attempt ca port 0
++  attempt ca port 1
++  Net.close_listener l)
