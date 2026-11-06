@@ -1,5 +1,5 @@
--- `Tls.connect_with_ca`が接続を設定している間にタスクを取り消すと、設定の仕事は最後まで走り、その後で取り出しが
--- `Conn`を落として`Cancelled`を投げる (docs/spec/stdlib.mdの「`Std.Tls`」)
+-- `Tls.connect_with_ca`が接続を設定している間にタスクを取り消すと、受け付けで取り消しが届いても、設定の仕事が走った後で
+-- 取り出しが`Conn`を落としても、どちらの道も同じ`Cancelled`の失敗で終わる (docs/spec/stdlib.mdの「`Std.Tls`」)
 import Async (Async)
 import Async
 import Fs
