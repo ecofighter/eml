@@ -1,7 +1,7 @@
 //! LIR を実行するレジスタ型のバイトコード VM (docs/spec/vm.md)。`eml_rt` の `Ctx` の上で動き、フロントエンドに
 //! 依存しない。
 
-use std::mem::ManuallyDrop;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -13,7 +13,9 @@ use crate::cells::{Registry, Shared, TaskStats};
 use crate::counters::Counters;
 use crate::driver::{JOB_QUIESCE_LIMIT, RunClock};
 use crate::vm::ExecWith;
-use crate::workers::{Retired, Run, Shutdown, WorkerExit, Workers, settle, spawn_workers};
+use crate::workers::{
+    Panicked, Retired, Run, Shutdown, WorkerExit, Workers, settle, spawn_workers,
+};
 
 mod apply;
 mod cells;
@@ -318,8 +320,8 @@ pub struct Machine<M: Mode> {
     code: CodeBase<M>,
     /// `ctx` と同じ Host。worker 1..N-1 の `Ctx` に写す。
     host: HostRef,
-    /// workerがpanicしたrunの後は、ヒープが途中の状態でありうるので、`Drop`が落とさずに漏らす。
-    ctx: ManuallyDrop<Ctx<M>>,
+    /// worker 0の`Ctx`。
+    ctx: Ctx<M>,
     /// worker 1..N-1 が run の終わりに返した `Ctx`。成功した run では終わりの検査の後に落とし、ほかの道では回復の
     /// 後に落とす。回復はほかのヒープのページから写しうるためである。回復しなかった誤りの後は `Drop` まで残す
     /// (docs/spec/object-model.md の「回復」)。
@@ -389,7 +391,7 @@ impl<M: Mode> Machine<M> {
             code: CodeBase::new(Arc::clone(&control)),
             max_depth: control.limits().max_depth,
             host: host.clone(),
-            ctx: ManuallyDrop::new(Ctx::new(control, host)),
+            ctx: Ctx::new(control, host),
             others: Vec::new(),
             panicked: false,
             sched: Sched::Sequential,
@@ -519,7 +521,7 @@ impl<M: Mode> Machine<M> {
         self.ctx.print_line(line)
     }
 
-    /// runがpanicした`Machine`は、途中の状態でありうるヒープに触れない。
+    /// runがpanicした`Machine`はもう使わない。runのタスクとセルが途中のまま残っているためである。
     fn refuse_after_panic(&self) {
         assert!(!self.panicked, "a Machine is used after a run panicked");
     }
@@ -682,13 +684,23 @@ impl<M: Mode> Machine<M> {
             signals: std::mem::take(&mut self.signals),
             job_budget: self.job_budget,
         };
-        let (result, mut scheduled, driver) = match self.sched {
+        let sched = self.sched;
+        let outcome = catch_unwind(AssertUnwindSafe(|| match sched {
             Sched::Normal => run_scheduled(code, ctx, &mut task, Normal, start, &mut counts),
             Sched::Sequential => {
                 run_scheduled(code, ctx, &mut task, Sequential, start, &mut counts)
             }
             Sched::Seeded(seed) => {
                 run_scheduled(code, ctx, &mut task, Seeded::new(seed), start, &mut counts)
+            }
+        }));
+        let (result, mut scheduled, driver) = match outcome {
+            Ok(outcome) => outcome,
+            Err(payload) => {
+                // ここに届くpanicは、`entry_body`が捕まえる区間の外のworker 0のスレッドか、runの終わりから来る。もうrunの
+                // どのスレッドもjoinしてある (docs/spec/vm.mdの「タスクとスケジュール」)
+                self.panicked = true;
+                resume_unwind(payload);
             }
         };
         self.shared_roots = scheduled.shared_roots;
@@ -713,10 +725,10 @@ impl<M: Mode> Machine<M> {
             }
         }
         if let Some(panic) = scheduled.panic.take() {
-            // panic した worker のヒープは途中の状態で漏らしたので、この `Machine` はもう使わない
-            // (docs/spec/vm.md の「タスクとスケジュール」)
+            // この`Machine`はもう使わない。`Drop`は、panicしたworkerのものも含めてどのworkerのヒープも、ほかのrunの後と
+            // 同じく落とす (docs/spec/vm.mdの「タスクとスケジュール」)
             self.panicked = true;
-            std::panic::resume_unwind(panic);
+            resume_unwind(panic);
         }
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
@@ -873,14 +885,10 @@ impl<M: Mode> Drop for Machine<M> {
     fn drop(&mut self) {
         // 本物の driver には、落とすときにカーネルの書き込みの終わりを待つものがあるので、その間はヒープを生かしておく
         self.driver = None;
-        if self.panicked {
-            // ほかのworkerのヒープも、panicしたヒープの物体を指しうるので、`ctx`と同じく漏らす
-            std::mem::forget(std::mem::take(&mut self.others));
-        } else {
-            self.others.clear();
-            // `ctx` はこの後に使わない
-            unsafe { ManuallyDrop::drop(&mut self.ctx) }
-        }
+        // どのヒープも落とすときにほかのヒープのページに触れないので、どのrunの後もこの順で落とせる。panicしたworkerの
+        // ヒープも、巻き戻しの後に落とせる (docs/spec/object-model.mdの「`unsafe` の核」のT7)。`ctx`はこの後に欄の
+        // 後始末で落ちる
+        self.others.clear();
     }
 }
 
@@ -917,13 +925,18 @@ struct Scheduled<M: Mode> {
     pinned_tasks: u64,
     /// ほかの worker に置いた `compute` の仕事の数。
     placed_jobs: u64,
-    /// worker 1..N-1 の panic。最初のものを worker 0 で起こし直す。
+    /// runの最初に記録したpanic。`Machine`のスレッドで起こし直す。
     panic: Option<Box<dyn std::any::Any + Send>>,
 }
 
 impl<M: Mode> Scheduled<M> {
     /// スケジューラを作る前に終わった run の結果。
     fn empty(cells: &Shared, shared_roots: usize) -> Scheduled<M> {
+        Scheduled::ended(shared_roots, cells.lock().next_generations())
+    }
+
+    /// 何も数えずに終わったrunの結果。
+    fn ended(shared_roots: usize, generations: Vec<u32>) -> Scheduled<M> {
         Scheduled {
             preemptions: 0,
             peak_stack: 0,
@@ -931,7 +944,7 @@ impl<M: Mode> Scheduled<M> {
             tasks: TaskStats::default(),
             others_ctx: CtxStats::default(),
             others_heap: HeapWork::default(),
-            generations: cells.lock().next_generations(),
+            generations,
             others: Vec::new(),
             workers: 0,
             placed: 0,
@@ -1046,7 +1059,7 @@ fn run_scheduled<M: Mode, P: Policy>(
             .name("eml-worker-0".into())
             .stack_size(WORKER_STACK);
         let spawned = builder.spawn_scoped(scope, move || {
-            let (body, driver) = entry_body(
+            let (mut body, driver) = entry_body(
                 code,
                 worker_ctx,
                 worker_task,
@@ -1055,8 +1068,8 @@ fn run_scheduled<M: Mode, P: Policy>(
                 args,
                 worker_counts,
             );
-            // driver は作った worker 0 のスレッドで落とす
-            drop(driver);
+            // driverは作ったworker 0のスレッドで落とす
+            drop_recording(driver, &mut body.panic);
             body
         });
         let worker = match spawned {
@@ -1079,14 +1092,18 @@ fn run_scheduled<M: Mode, P: Policy>(
             start.max_depth,
             park,
         );
-        let joined = worker
-            .join()
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        let joined = worker.join();
         drop(guard);
         (Ok(joined), Some(main))
     });
     let mut body = match joined {
-        Ok(body) => body,
+        Ok(Ok(body)) => body,
+        Ok(Err(payload)) => {
+            // worker 0は、本体がpanicを捕まえ始める前にpanicしたので、workerを作っていない
+            let mut body = Body::failed(worker_panicked(), start.shared_roots);
+            body.panic = Some(payload);
+            body
+        }
         Err(error) => {
             control.clear_end();
             let error = RuntimeError::Fault {
@@ -1104,12 +1121,8 @@ fn run_scheduled<M: Mode, P: Policy>(
     // 分かれたrunの終わりは、両方のjoinの後にここで行う。メインのworkerはworker 0が結果を決めた後に致命的な誤りを
     // 書きうるので、もう一度決める。メインのworkerのヒープは、ほかのworkerのヒープと同じく最後に畳み込む
     body.result = settle(body.result, run.take_fatal());
-    match main {
-        Some(Ok(retired)) => body.add(retired, counts),
-        Some(Err(payload)) => {
-            body.panic.get_or_insert(payload);
-        }
-        None => {}
+    if let Some(exit) = main {
+        body.retire(exit, counts);
     }
     let (result, scheduled) = end_run(code, ctx, task, &run, &cells, body);
     // `END`を下ろすのは`Machine`を持つスレッドだけで、両方のjoinとrunの終わりの後である。worker 0が下ろすと、
@@ -1164,13 +1177,46 @@ impl<M: Mode> Body<M> {
         }
     }
 
+    /// 抜けたworkerを受け取る。panicしたworkerは最初のpanicの中身を残し、その`Ctx`はほかの`Ctx`に加わる。起点は
+    /// この時点のヒープの仕事なので、panicしたworkerは`RunStats`に仕事を足さない。
+    fn retire(&mut self, exit: WorkerExit<M>, counts: &mut RunCounts) {
+        match exit {
+            Ok(retired) => self.add(retired, counts),
+            Err(panicked) => {
+                let Panicked { payload, ctx } = *panicked;
+                if let Some(ctx) = ctx {
+                    let base = HeapWork::of(ctx.heap().stats());
+                    self.others.push(ctx);
+                    self.bases.push(base);
+                }
+                self.panic.get_or_insert(payload);
+            }
+        }
+    }
+
+    /// 出口の`Ctx`を、その仕事を数えずに`body`に移す。
+    fn keep(&mut self, exit: WorkerExit<M>) {
+        match exit {
+            Ok(retired) => {
+                self.others.push(retired.ctx);
+                self.bases.push(retired.base);
+            }
+            Err(panicked) => {
+                let Panicked { payload, ctx } = *panicked;
+                self.others.extend(ctx);
+                self.panic.get_or_insert(payload);
+            }
+        }
+    }
+
     /// 抜けたworkerの仕事を足す。数は足し、山は最大を取る (docs/spec/vm.mdの「`RunStats`」)。
     fn add(&mut self, retired: Retired<M>, counts: &mut RunCounts) {
+        // 和でpanicしても`Ctx`を落とさないよう、先に入れる
+        self.others.push(retired.ctx);
+        self.bases.push(retired.base);
         counts.add(&retired.counts);
         self.preemptions += retired.preemptions;
         self.peak_stack = self.peak_stack.max(retired.peak_stack);
-        self.bases.push(retired.base);
-        self.others.push(retired.ctx);
         self.left |= retired.left;
         self.kept_pending |= retired.kept_pending;
     }
@@ -1221,111 +1267,198 @@ fn entry_body<M: Mode, P: Policy>(
     let mut sched = Scheduler::new(policy, driver, run, control, task.worker, max_depth, cells);
     sched.shared_roots = shared_roots;
     let wanted = sched.begin_run(roots_free);
-    let (result, exits) = thread::scope(|scope| {
-        // worker 1..N-1はrunの最初の命令の前に作るので、命令を2回実行することはない
-        // (docs/spec/vm.mdの「タスクとスケジュール」)
-        let handles = if wanted {
-            spawn_workers::<M, P>(
-                scope,
-                code,
-                &sched.policy,
-                &sched.run,
-                &sched.watcher.control,
-                &sched.cells,
-                &host,
-                max_depth,
-            )
-        } else {
-            Vec::new()
-        };
-        // workerができたらすぐに見張りを立てる。この後でpanicしても、workerを起こしてjoinできるようにするためである
+    // 結果は、worker 0がpanicしなければ後で決める
+    let mut body = Body::failed(worker_panicked(), shared_roots);
+    let mut exits: Vec<WorkerExit<M>> = Vec::new();
+    let ran = thread::scope(|scope| {
+        let mut handles = Vec::new();
+        // ここからjoinまでのpanicを捕まえる。workerがまだ動く間に`thread::scope`を抜けると、scopeはどのworkerもjoin
+        // する前に、返ってきた`Ctx`を落としてしまう (docs/spec/vm.mdの「タスクとスケジュール」)
+        let ran = catch_unwind(AssertUnwindSafe(|| {
+            // worker 1..N-1はrunの最初の命令の前に作るので、命令を2回実行することはない
+            // (docs/spec/vm.mdの「タスクとスケジュール」)
+            if wanted {
+                spawn_workers::<M, P>(
+                    scope,
+                    code,
+                    &sched.policy,
+                    &sched.run,
+                    &sched.watcher.control,
+                    &sched.cells,
+                    &host,
+                    max_depth,
+                    &mut handles,
+                );
+            }
+            // workerができたらすぐに見張りを立てる。この後でpanicしても、workerを起こしてjoinできるようにするためである
+            shutdown.armed |= !handles.is_empty();
+            // タスクを置くのは作れたworkerだけである
+            sched.run.set_live(handles.len() + 1);
+            // 1つも作れなければworker 0だけで続ける
+            sched.workers = match handles.len() {
+                0 => Workers::Denied,
+                n => Workers::Started(n),
+            };
+            vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts)
+        }));
+        // 終わりを決めたのはworker 0のループか、ほかのworkerの致命的な誤りか、worker 0のpanicである。どれでも`END`を
+        // 立ててすべてのworkerを起こし、`Ctx`を返させてからjoinする (docs/spec/vm.mdの「タスクとスケジュール」)
         shutdown.armed |= !handles.is_empty();
-        // タスクを置くのは作れたworkerだけである
-        sched.run.set_live(handles.len() + 1);
-        // 1つも作れなければworker 0だけで続ける
-        sched.workers = match handles.len() {
-            0 => Workers::Denied,
-            n => Workers::Started(n),
-        };
-        let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
-        // 終わりを決めたのは worker 0 のループか、ほかの worker の致命的な誤りである。どちらでも `END` を立てて
-        // すべての worker を起こし、`Ctx` を返させてから join する (docs/spec/vm.md の「タスクとスケジュール」)
         drop(shutdown);
-        let exits: Vec<WorkerExit<M>> = handles
-            .into_iter()
-            .map(|handle| handle.join().unwrap_or_else(Err))
-            .collect();
-        (result, exits)
+        exits.extend(handles.into_iter().map(|handle| {
+            handle
+                .join()
+                .unwrap_or_else(|payload| Err(Box::new(Panicked { payload, ctx: None })))
+        }));
+        ran
     });
-    let workers = match sched.workers {
-        Workers::Started(n) => n,
-        Workers::Denied | Workers::Peer => 0,
-    };
-    let mut body = Body {
-        result,
-        preemptions: sched.preemptions(),
-        peak_stack: sched.peak_stack(task),
-        shared_roots: sched.shared_roots,
-        workers,
-        others: Vec::with_capacity(exits.len()),
-        bases: Vec::with_capacity(exits.len()),
-        left: false,
-        kept_pending: false,
-        panic: None,
+    body.workers = exits.len();
+    let result = match ran {
+        Ok(result) => result,
+        Err(payload) => {
+            // worker 0がpanicした。まず`Scheduler`とdriverを静止させずに落とす。driverの`Drop`は、記憶を貸した操作を
+            // 待つか止める
+            body.panic = Some(payload);
+            drop_recording(sched, &mut body.panic);
+            retire_all(&mut body, exits, counts);
+            return (body, None);
+        }
     };
     // ほかのworkerの仕事をworker 0の数に足す (docs/spec/vm.mdの「`RunStats`」)
-    for exit in exits {
-        match exit {
-            Ok(retired) => body.add(retired, counts),
-            Err(payload) => {
-                body.panic.get_or_insert(payload);
+    retire_all(&mut body, exits, counts);
+    // joinの後のpanicも同じに扱う。分かれたrunではメインのworkerがまだ動きうるので、巻き戻すとjoinした`Ctx`を落として
+    // しまう
+    let finished = catch_unwind(AssertUnwindSafe(|| {
+        body.preemptions += sched.preemptions();
+        body.peak_stack = body.peak_stack.max(sched.peak_stack(task));
+        body.shared_roots = sched.shared_roots;
+        body.result = settle(result, sched.run.take_fatal());
+        // runの外に保留の操作を残さない。誤りの道でも、`Scheduler`と登録表を落とす前にdriverを静止させる。どのworkerも
+        // もう受け付けを送らないので、joinの後に行う。ほかのworkerのdriverは、そのworkerが抜ける前に静止させてある。
+        // 成功したrunでは、静止させたdriverが返した完了を記録に置く。集める地点と同じく、driverに出した操作がなければ
+        // 完了を読まない (docs/spec/vm.mdの「時計と driver」「誤り、止めること、終わり」)
+        let kept = match sched.driver.as_mut() {
+            Some(driver) => {
+                driver.quiesce(sched.run.job_wait(driver.now()));
+                let in_flight = sched.cells.lock().in_flight(sched.index);
+                if body.result.is_ok() && in_flight > 0 {
+                    let mut completed = Vec::new();
+                    driver.completions(&mut completed);
+                    sched.cells.lock().quiesced(sched.index, &mut completed);
+                }
+                driver.pending() > 0
             }
+            None => false,
+        };
+        body.kept_pending |= kept;
+        // 予約と確定の間に安全点はないので、`Finish`に来たworker 0は予約を持たない (docs/spec/vm.mdの「channel」)
+        debug_assert!(
+            body.result.is_err() || sched.hold.is_none(),
+            "a channel reservation is held at the end"
+        );
+        let driver = sched.driver.take();
+        if kept {
+            // 操作を残したdriverは、どのヒープにも触れる前に、作ったこのスレッドで落とし、`Machine`には返さない
+            // (docs/spec/vm.mdの「時計と driver」)
+            drop(driver);
+            return None;
         }
-    }
-    body.result = settle(body.result, sched.run.take_fatal());
-    // run の外に保留の操作を残さない。誤りの道でも、`Scheduler` と登録表を落とす前に driver を静止させる。どの worker も
-    // もう受け付けを送らないので、join の後に行う。ほかの worker の driver は、その worker が抜ける前に静止させてある。
-    // 成功した run では、静止させた driver が返した完了を記録に置く。集める地点と同じく、driver に出した操作がなければ
-    // 完了を読まない (docs/spec/vm.md の「時計と driver」「誤り、止めること、終わり」)
-    let kept = match sched.driver.as_mut() {
-        Some(driver) => {
-            driver.quiesce(sched.run.job_wait(driver.now()));
-            let in_flight = sched.cells.lock().in_flight(sched.index);
-            if body.result.is_ok() && in_flight > 0 {
-                let mut completed = Vec::new();
-                driver.completions(&mut completed);
-                sched.cells.lock().quiesced(sched.index, &mut completed);
-            }
-            driver.pending() > 0
+        driver
+    }));
+    let driver = match finished {
+        Ok(driver) => driver,
+        Err(payload) => {
+            body.result = Err(worker_panicked());
+            body.panic.get_or_insert(payload);
+            None
         }
-        None => false,
     };
-    body.kept_pending |= kept;
-    // 予約と確定の間に安全点はないので、`Finish`に来たworker 0は予約を持たない (docs/spec/vm.mdの「channel」)
-    debug_assert!(
-        body.result.is_err() || sched.hold.is_none(),
-        "a channel reservation is held at the end"
-    );
-    let driver = sched.driver.take();
-    if kept {
-        // 操作を残したdriverは、どのヒープにも触れる前に、作ったこのスレッドで落とし、`Machine`には返さない
-        // (docs/spec/vm.mdの「時計と driver」)
-        drop(driver);
-        return (body, None);
-    }
+    drop_recording(sched, &mut body.panic);
     (body, driver)
 }
 
-/// どのworkerもjoinした後のrunの終わり。終わりの確かめ、残ったセルの片付け、登録表の数、ほかのスレッドが積んだ
-/// 解放の取り込み、ほかのヒープの統計である。分かれたrunではこの間ずっと`END`が立っているので、どの手順も止める語を
-/// 読まない (docs/spec/vm.mdの「誤り、止めること、終わり」)。
+/// `exits`の出口をすべて`body`に受け取る。途中でpanicしたら、それを記録し、残りの`Ctx`は数えずに`body`に移す。分かれた
+/// runのメインのworkerがまだ動きうる間に、どれも落とさないためである。
+fn retire_all<M: Mode>(body: &mut Body<M>, exits: Vec<WorkerExit<M>>, counts: &mut RunCounts) {
+    let mut exits = exits.into_iter();
+    let retired = catch_unwind(AssertUnwindSafe(|| {
+        for exit in exits.by_ref() {
+            body.retire(exit, counts);
+        }
+    }));
+    if let Err(payload) = retired {
+        body.panic.get_or_insert(payload);
+        for exit in exits {
+            body.keep(exit);
+        }
+    }
+}
+
+/// `value`を落とし、その`Drop`のpanicを`panic`に記録する。先に記録したpanicがあればそれを残す。分かれたrunでは
+/// メインのworkerがまだ動きうるので、worker 0の本体から巻き戻すと、joinした`Ctx`を落としてしまう。
+fn drop_recording<T>(value: T, panic: &mut Option<Box<dyn std::any::Any + Send>>) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(value))) {
+        panic.get_or_insert(payload);
+    }
+}
+
+/// panicしたworker 0の本体の結果。runは`Machine`のスレッドでpanicを起こし直すので、この誤りは返らない。
+fn worker_panicked() -> RuntimeError {
+    RuntimeError::Fault {
+        fault: VmFault::Internal("a worker thread panicked"),
+        function: "<worker 0>".into(),
+        at: None,
+    }
+}
+
+/// 記録したpanicを失わずに`finish_run`を動かす。`others`はその外に置く。runの終わりがpanicしたら、ヒープは巻き戻しの
+/// 間に落とさずに結果に入れ、`Machine`がdriverの後で落とす。最初のpanicを残し、後のものは捨てる。
 fn end_run<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     task: &Task,
     run: &Run,
     cells: &Shared,
+    mut body: Body<M>,
+) -> (Result<(), RuntimeError>, Scheduled<M>) {
+    let first = body.panic.take();
+    let panicked = first.is_some();
+    let shared_roots = body.shared_roots;
+    let workers = body.workers;
+    let mut others = std::mem::take(&mut body.others);
+    let finished = catch_unwind(AssertUnwindSafe(|| {
+        finish_run(code, ctx, task, run, cells, body, &mut others, panicked)
+    }));
+    match finished {
+        Ok((result, mut scheduled)) => {
+            scheduled.others = others;
+            scheduled.panic = first;
+            (result, scheduled)
+        }
+        Err(payload) => {
+            let mut scheduled = Scheduled::ended(shared_roots, Vec::new());
+            scheduled.others = others;
+            scheduled.workers = workers;
+            scheduled.panic = Some(first.unwrap_or(payload));
+            (Err(worker_panicked()), scheduled)
+        }
+    }
+}
+
+/// どのworkerもjoinした後のrunの終わり。終わりの確かめ、残ったセルの片付け、登録表の数、ほかのスレッドが積んだ
+/// 解放の取り込み、ほかのヒープの統計である。分かれたrunではこの間ずっと`END`が立っているので、どの手順も止める語を
+/// 読まない (docs/spec/vm.mdの「誤り、止めること、終わり」)。`panicked`はrunでpanicを記録したことで、その中身は
+/// `end_run`が持つ。
+#[allow(clippy::too_many_arguments)]
+fn finish_run<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &Task,
+    run: &Run,
+    cells: &Shared,
     body: Body<M>,
+    others: &mut [Ctx<M>],
+    panicked: bool,
 ) -> (Result<(), RuntimeError>, Scheduled<M>) {
     let Body {
         result,
@@ -1333,15 +1466,20 @@ fn end_run<M: Mode>(
         peak_stack,
         shared_roots,
         workers,
-        mut others,
+        others: _,
         bases,
         left,
         kept_pending,
-        panic,
+        panic: _,
     } = body;
+    // panicの後は、runのタスクとセルが途中のまま残っているので、終わりの確かめも取り込みもしない。ヒープはいつもどおり
+    // 落とす
     // 成功した run だけが、残った知らせと保留の操作を確かめてから、残ったセルを片付ける。誤りと `exit` の run の登録表は、
     // 触れずに `Scheduler` と一緒に落とす。誤りには `Finish` の位置を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)
     let result = result.and_then(|()| {
+        if panicked {
+            return Ok(());
+        }
         let at_finish = |fault: VmFault| {
             code.error(
                 vm::Failure {
@@ -1365,8 +1503,8 @@ fn end_run<M: Mode>(
     };
     // join の後に、ほかのスレッドが積んだ解放をすべてのヒープで取り込む。この後はどのスレッドも解放を積まない
     // (docs/spec/vm.md の「誤り、止めること、終わり」)
-    if workers > 0 || run.separate() {
-        reclaim_all(ctx, &mut others);
+    if !panicked && (workers > 0 || run.separate()) {
+        reclaim_all(ctx, others);
     }
     // ほかのヒープの統計は、取り込みの後に読む。`Machine` が `others` を落とす前だからである
     let mut others_ctx = CtxStats::default();
@@ -1388,13 +1526,13 @@ fn end_run<M: Mode>(
         others_ctx,
         others_heap,
         generations,
-        others,
+        others: Vec::new(),
         workers,
         placed: run.placed.load(std::sync::atomic::Ordering::Relaxed),
         placed_tasks,
         pinned_tasks,
         placed_jobs: run.placed_jobs.load(std::sync::atomic::Ordering::Relaxed),
-        panic,
+        panic: None,
     };
     (result, scheduled)
 }

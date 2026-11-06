@@ -5,7 +5,6 @@
 
 use std::any::Any;
 use std::collections::VecDeque;
-use std::mem::ManuallyDrop;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -164,8 +163,16 @@ impl Workers {
     }
 }
 
-/// worker のスレッドの結果。panic したら、その中身を worker 0 に運ぶ。`Ctx` は漏らしてある。
-pub(crate) type WorkerExit<M> = Result<Retired<M>, Box<dyn Any + Send>>;
+/// workerのスレッドの結果。panicしたら、その中身と`Ctx`をworker 0に運ぶ。
+pub(crate) type WorkerExit<M> = Result<Retired<M>, Box<Panicked<M>>>;
+
+/// panicしたworkerが返すもの。`Ctx`を作る前のpanicなら`ctx`は`None`である。`Machine`は、すべてのworkerがjoinした後に
+/// ほかのヒープと同じくそれを落とす。巻き戻しの後もヒープは落とせる (docs/spec/object-model.mdの「`unsafe` の核」の
+/// T7)。
+pub(crate) struct Panicked<M: Mode> {
+    pub(crate) payload: Box<dyn Any + Send>,
+    pub(crate) ctx: Option<Ctx<M>>,
+}
 
 /// 抜けた worker が worker 0 に返すもの。`Ctx` のほかに、`RunStats` に足す worker の仕事を運ぶ
 /// (docs/spec/vm.md の「`RunStats`」)。
@@ -834,7 +841,8 @@ pub(crate) fn settle(
 
 /// worker 1..N-1を作る。作るのはworker 0で、runの始め、最初の命令の前に1回だけである。どのworkerも眠って空いている
 /// 形で始める。worker `k`を作れなければ、それより後は作らず、作れたworkerだけを使う (docs/spec/vm.mdの
-/// 「タスクとスケジュール」)。
+/// 「タスクとスケジュール」)。スレッドを作るたびにハンドルを`handles`に積むので、worker 0は途中でpanicしても、作った
+/// workerをすべてjoinできる。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
     scope: &'scope Scope<'scope, '_>,
@@ -845,8 +853,8 @@ pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
     cells: &Arc<Shared>,
     host: &HostRef,
     max_depth: usize,
-) -> Vec<ScopedJoinHandle<'scope, WorkerExit<M>>> {
-    let mut handles = Vec::new();
+    handles: &mut Vec<ScopedJoinHandle<'scope, WorkerExit<M>>>,
+) {
     for k in 1..run.workers() {
         run.prepare(k);
         let builder = thread::Builder::new()
@@ -869,12 +877,11 @@ pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
             }
         }
     }
-    handles
 }
 
 /// worker `k` (`k` ≥ 1) のスレッドの本体。自分のスレッドで `Ctx` を作り、run の終わりに worker 0 へ返す。`Ctx` を
 /// 作るところから `catch_unwind` の中で動き、panic は `fatal` に書いてすべての worker に終わりを知らせる。そのときの
-/// `Ctx` は、途中の状態のヒープを落とさないように漏らす。
+/// `Ctx`も返す。
 #[allow(clippy::too_many_arguments)]
 fn run_worker<M: Mode, P: Policy>(
     code: &CodeBase<M>,
@@ -906,19 +913,31 @@ pub(crate) fn run_main<M: Mode, P: Policy>(
 ) -> WorkerExit<M> {
     let k = run.main();
     on_own_ctx(run, control, host, k, "<main worker>".into(), move |ctx| {
-        let done = main_work::<M, P>(
-            code, ctx, policy, run, control, cells, max_depth, &mut *park,
-        );
-        // `Park`の`Drop`も利用者のコードなので`catch_unwind`の中で落とし、そこでのpanicはメインのworkerのpanicと
-        // 同じに扱う
-        drop(park);
-        done
+        let done = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            main_work::<M, P>(
+                code, ctx, policy, run, control, cells, max_depth, &mut *park,
+            )
+        }));
+        match done {
+            Ok(done) => {
+                // `Park`の`Drop`も利用者のコードなので`catch_unwind`の中で落とし、そこでのpanicはメインのworkerの
+                // panicと同じに扱う
+                drop(park);
+                done
+            }
+            Err(payload) => {
+                // 巻き戻しの間に`Drop`がpanicすると処理系が止まるので、`Park`は自分の`catch_unwind`の下で落とし、
+                // 最初のpanicを残して続ける
+                let _ = std::panic::catch_unwind(AssertUnwindSafe(move || drop(park)));
+                std::panic::resume_unwind(payload)
+            }
+        }
     })
 }
 
 /// 呼んだスレッドで worker `k` の `Ctx` を作り、`catch_unwind` の中で `body` を動かして、`Ctx` を返す。`Ctx` を作る
 /// ところから `catch_unwind` の中で動き、panic は関数の名前 `function` で `fatal` に書いてすべての worker に終わりを
-/// 知らせる。そのときの `Ctx` は、途中の状態のヒープを落とさないように漏らす。
+/// 知らせる。そのときの`Ctx`も返す。
 fn on_own_ctx<M: Mode>(
     run: &Run,
     control: &Arc<Control>,
@@ -927,15 +946,11 @@ fn on_own_ctx<M: Mode>(
     function: String,
     body: impl FnOnce(&mut Ctx<M>) -> Done,
 ) -> WorkerExit<M> {
-    let mut slot: Option<ManuallyDrop<Ctx<M>>> = None;
+    let mut slot: Option<Ctx<M>> = None;
     let mut done: Option<Done> = None;
     let mut base = HeapWork::default();
     let body = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let ctx = slot.insert(ManuallyDrop::new(Ctx::<M>::for_worker(
-            Arc::clone(control),
-            host,
-            k,
-        )));
+        let ctx = slot.insert(Ctx::<M>::for_worker(Arc::clone(control), host, k));
         base = HeapWork::of(ctx.heap().stats());
         done = Some(body(ctx));
     }));
@@ -945,7 +960,7 @@ fn on_own_ctx<M: Mode>(
             let ctx = slot.expect("a worker that returns has built its Ctx");
             let done = done.expect("a worker that returns has finished its loop");
             Ok(Retired {
-                ctx: ManuallyDrop::into_inner(ctx),
+                ctx,
                 counts: done.counts,
                 preemptions: done.preemptions,
                 peak_stack: done.peak_stack,
@@ -963,7 +978,7 @@ fn on_own_ctx<M: Mode>(
             control.end_run();
             run.wake_all();
             run.exit_worker(k);
-            Err(payload)
+            Err(Box::new(Panicked { payload, ctx: slot }))
         }
     }
 }

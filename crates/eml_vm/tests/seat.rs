@@ -184,4 +184,143 @@ main () = println \"boom\"
         .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(out.contents(), "main\n");
     }
+
+    /// worker 0でrunがpanicした合わせた`Machine`は、runのタスクとセルを途中のまま残しているので、後の`run`はそれらを
+    /// 使わずにpanicする (docs/spec/vm.mdの「タスクとスケジュール」)。
+    #[test]
+    #[should_panic(expected = "a Machine is used after a run panicked")]
+    fn a_machine_refuses_use_after_a_run_panicked() {
+        let program = eml_test_support::lir(
+            "\
+main : Unit -> <IO, Panic> Unit
+main () = println \"boom\"
+",
+        );
+        let (host, _) = RecordingHost::new(Some("boom"));
+        let mut machine = Machine::<Checked>::new(control(), host.host_ref());
+        let entry = machine
+            .load(&program, &eml_vm::Linked::default())
+            .unwrap()
+            .entry;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.run(entry)))
+            .expect_err("the panic reaches the caller");
+        assert_eq!(
+            panic.downcast_ref::<String>().map(String::as_str),
+            Some("boom")
+        );
+        let _ = machine.run(entry);
+    }
+
+    /// worker 1に置いたタスクがHostの中でpanicした合わせた`Machine`は、そのpanicを同じ中身のまま起こし直し、後の
+    /// 使用を拒む (docs/spec/vm.mdの「タスクとスケジュール」)。
+    #[test]
+    #[should_panic(expected = "a Machine is used after a run panicked")]
+    fn a_panic_on_worker_1_reaches_the_caller_of_a_merged_run() {
+        let program = eml_test_support::lir(
+            "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () -> println \"boom\")
+  Async.await t)
+",
+        );
+        let (host, _) = RecordingHost::new(Some("boom"));
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            ..Limits::default()
+        }));
+        let mut machine = Machine::<Checked>::new(control, host.host_ref());
+        let entry = machine
+            .load(&program, &eml_vm::Linked::default())
+            .unwrap()
+            .entry;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.run(entry)))
+            .expect_err("the panic reaches the caller");
+        assert_eq!(
+            panic.downcast_ref::<String>().map(String::as_str),
+            Some("boom")
+        );
+        let _ = machine.run(entry);
+    }
+
+    /// panicしたworkerのヒープは、`Machine`を落とすときに破棄処理を呼ぶ。panicしたrunが開いたままにした`Stdin`の
+    /// ハンドルは閉じるので、同じHostの後のrunはまた標準入力を開ける (docs/spec/vm.mdの「タスクとスケジュール」)。
+    #[test]
+    fn a_panicked_heap_runs_its_finalizers_when_the_machine_drops() {
+        finalizers_run_after_a_panic(
+            1,
+            "\
+import Stdin
+main : Unit -> <IO, Panic> Unit
+main () =
+  let h = Stdin.open ()
+  println \"boom\"
+  Stdin.close h
+",
+        );
+    }
+
+    /// workerが2つのときも同じである。worker 1に置いたタスクが標準入力を開いてpanicし、そのヒープはworker 1が返す
+    /// `Ctx`を通って`Machine`に届く。
+    #[test]
+    fn a_panicked_heap_on_worker_1_runs_its_finalizers_when_the_machine_drops() {
+        finalizers_run_after_a_panic(
+            2,
+            "\
+import Async
+import Stdin
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let t = Async.start (fn () ->
+    let h = Stdin.open ()
+    println \"boom\"
+    Stdin.close h)
+  Async.await t)
+",
+        );
+    }
+
+    /// `workers`個のworkerの合わせた`Machine`で`src`を動かし、Hostの`boom`でpanicさせる。`Machine`を落とした後、同じ
+    /// Hostの新しい`Machine`で標準入力を開き直す。
+    fn finalizers_run_after_a_panic(workers: usize, src: &str) {
+        let (host, out) = RecordingHost::new(Some("boom"));
+        let host_ref = host.host_ref();
+        let limited = Arc::new(Control::new(Limits {
+            workers,
+            ..Limits::default()
+        }));
+        let panicking = eml_test_support::lir(src);
+        let mut machine = Machine::<Checked>::new(limited, host_ref.clone());
+        let entry = machine
+            .load(&panicking, &eml_vm::Linked::default())
+            .unwrap()
+            .entry;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.run(entry)))
+            .expect_err("the panic reaches the caller");
+        assert_eq!(
+            panic.downcast_ref::<String>().map(String::as_str),
+            Some("boom")
+        );
+        drop(machine);
+
+        let reopening = eml_test_support::lir(
+            "\
+import Stdin
+main : Unit -> <IO, Panic> Unit
+main () =
+  let h = Stdin.open ()
+  Stdin.close h
+  println \"reopened\"
+",
+        );
+        let mut machine = Machine::<Checked>::new(control(), host_ref);
+        let entry = machine
+            .load(&reopening, &eml_vm::Linked::default())
+            .unwrap()
+            .entry;
+        machine.run(entry).unwrap_or_else(|error| panic!("{error}"));
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(out.contents(), "reopened\n");
+    }
 }

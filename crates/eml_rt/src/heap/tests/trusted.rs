@@ -2493,8 +2493,8 @@ fn c_writes_through_unboxed_ptr_mut_and_the_heap_reads_it<M: Mode>() {
     assert_eq!(mortal(&mut heap), 0);
 }
 
-/// `unboxed_ptr_mut` の位置から別のスレッドが書いた要素を、持ち主が join の後に読む (driver のプールのスレッドが
-/// C の関数を走らせる形)。join が happens-before の辺になる。
+/// `unboxed_ptr_mut`の位置から別のスレッドが書いた要素を、持ち主がjoinの後に読む。同期で呼んだCの関数が、書くのを
+/// 自分のスレッドに任せ、戻る前にjoinする形である。joinがhappens-beforeの辺になる。
 fn another_thread_writes_through_unboxed_ptr_mut_before_the_owner_reads<M: Mode>() {
     struct SendPtr(*mut u64);
     // SAFETY: 位置の先の物体は、join までこのスレッドのほかには触れない
