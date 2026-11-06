@@ -71,6 +71,12 @@ pub fn calls() -> Vec<(&'static str, Bridge, *const ())> {
             i64_i64_to_i64,
             rs_handle_wait as *const (),
         ),
+        ("rs_mix", i64x8_to_i64, rs_mix as *const ()),
+        (
+            "rs_fill_gated",
+            i64_i64_i64_to_void,
+            rs_fill_gated as *const (),
+        ),
     ]
 }
 
@@ -156,6 +162,31 @@ unsafe extern "C" fn i64_i64_f64_to_void(callee: *const (), args: *const u64) ->
             slot(args, 0) as i64,
             slot(args, 1) as i64,
             f64::from_bits(slot(args, 2)),
+        );
+    }
+    0
+}
+
+/// (I64 × 8) -> I64
+unsafe extern "C" fn i64x8_to_i64(callee: *const (), args: *const u64) -> u64 {
+    type F = extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i64;
+    // SAFETY: `i64_to_i64`と同じ
+    unsafe {
+        let f = std::mem::transmute::<*const (), F>(callee);
+        let a = |k| slot(args, k) as i64;
+        f(a(0), a(1), a(2), a(3), a(4), a(5), a(6), a(7)) as u64
+    }
+}
+
+/// (I64, I64, I64) -> void
+unsafe extern "C" fn i64_i64_i64_to_void(callee: *const (), args: *const u64) -> u64 {
+    // SAFETY: `i64_to_i64`と同じ
+    unsafe {
+        let f = std::mem::transmute::<*const (), extern "C" fn(i64, i64, i64)>(callee);
+        f(
+            slot(args, 0) as i64,
+            slot(args, 1) as i64,
+            slot(args, 2) as i64,
         );
     }
     0
@@ -290,4 +321,67 @@ extern "C" fn rs_handle_wait(h: i64, id: i64) -> i64 {
         return -1;
     }
     rs_handle_get(h)
+}
+
+/// 位置`p`から`n`バイトの和。
+///
+/// # Safety
+/// `p`から`n`バイトを読める。
+unsafe fn byte_sum(p: i64, n: i64) -> i64 {
+    // SAFETY: 呼び手の約束による
+    let bytes = unsafe {
+        std::slice::from_raw_parts(
+            std::ptr::with_exposed_provenance::<u8>(p as usize),
+            n as usize,
+        )
+    };
+    bytes.iter().map(|&b| i64::from(b)).sum()
+}
+
+/// 文字列`s`とバイト列`b`のバイトの和を`ss`と`sb`として、`m1[i] = a[i] + ss`と`m2[i] = 10 * a[i] + sb`を
+/// 書き、`ss * 1000 + sb`を返す。どの配列も`n`個の要素を持つ。
+#[allow(clippy::too_many_arguments)]
+extern "C" fn rs_mix(s: i64, ns: i64, a: i64, m1: i64, b: i64, nb: i64, m2: i64, n: i64) -> i64 {
+    // SAFETY: VMは文字列とバイト列の中身、`UnboxedArray Int`、2つの一意な`MutUnboxedArray Int`の要素0の位置を
+    // 渡し、呼び手は`ns`、`nb`、`n`を長さ以下にする
+    unsafe {
+        let (ss, sb) = (byte_sum(s, ns), byte_sum(b, nb));
+        let a = std::slice::from_raw_parts(
+            std::ptr::with_exposed_provenance::<i64>(a as usize),
+            n as usize,
+        );
+        let m1 = std::slice::from_raw_parts_mut(
+            std::ptr::with_exposed_provenance_mut::<i64>(m1 as usize),
+            n as usize,
+        );
+        let m2 = std::slice::from_raw_parts_mut(
+            std::ptr::with_exposed_provenance_mut::<i64>(m2 as usize),
+            n as usize,
+        );
+        for i in 0..a.len() {
+            m1[i] = a[i] + ss;
+            m2[i] = 10 * a[i] + sb;
+        }
+        ss * 1000 + sb
+    }
+}
+
+/// 鍵`gate`を開け、鍵`gate + 1`を待ってから`p`の`n`個の要素に`i + 1`を書き、鍵`gate + 2`を開ける。
+/// 見張りで開かなければ何も書かない。
+extern "C" fn rs_fill_gated(p: i64, n: i64, gate: i64) {
+    rs_gate_open(gate);
+    if rs_gate_wait(gate + 1) != 0 {
+        return;
+    }
+    // SAFETY: VMは一意な`MutUnboxedArray Int`の要素0の位置を渡し、呼び手は`n`を要素の数以下にする
+    let a = unsafe {
+        std::slice::from_raw_parts_mut(
+            std::ptr::with_exposed_provenance_mut::<i64>(p as usize),
+            n as usize,
+        )
+    };
+    for (i, x) in a.iter_mut().enumerate() {
+        *x = i as i64 + 1;
+    }
+    rs_gate_open(gate + 2);
 }
