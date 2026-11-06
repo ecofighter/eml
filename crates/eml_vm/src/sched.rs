@@ -11,6 +11,7 @@ use crate::VmFault;
 use crate::cells::{self, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken};
 use crate::driver::DriverKind;
 use crate::monitor::{self, Monitor};
+use crate::park::Guard;
 use crate::vm::Task;
 use crate::workers::{Mailer, NO_CELL, Notice, Ready, Run, Workers, cell_word};
 
@@ -402,6 +403,8 @@ pub struct Scheduler<P: Policy> {
     /// 分かれたrunのメインのworkerの`Scheduler`である。走れるタスクがなくなったら、空きの待ちに入らずに`drive`から
     /// 抜ける (docs/spec/vm.mdの「メインのworker」)。
     pub(crate) main_loop: bool,
+    /// メインのworkerの`Pending::run`の状態。待ちの外では`Outside`である (docs/spec/vm.mdの「メインの worker の待ち」)。
+    pub(crate) guard: Guard,
     /// driverの出どころ。runの`Run`の時間の基準から決めるので、どのworkerでも同じである。`Real`のrunだけがOSの
     /// シグナルを待つタスクへ届ける (docs/spec/stdlib.mdの「`Std.Signal`」)。空きの待ちに上限を掛けるかと、TLSが
     /// 信頼する根もこれで決まる (docs/spec/vm.mdの「時計と driver」)。
@@ -511,6 +514,7 @@ impl<P: Policy> Scheduler<P> {
             index: 0,
             workers: Workers::Denied,
             main_loop: false,
+            guard: Guard::Outside,
             driver_kind,
             since_poll: 0,
             runnables: Vec::new(),

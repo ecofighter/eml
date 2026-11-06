@@ -176,6 +176,14 @@
 - 上限の近くで待ちに入ったタスクを再開すると、再開の後の深さは待ちに入る前より大きくなる。深さが上限と猶予 (2^18 語) の和を超えると、タスクの失敗でなく run の誤りで止まる。上限との間なら、論理的な深さが上限に届いていなくても `the call depth limit is exceeded` の `ResourceLimit` が起きる ([VM](../spec/vm.md) の「タスクの上限」、[ロードマップ](../future/roadmap.md) の「非同期」)
 - `IOErrorKind` の `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit`、`ConnectionRefused` を出すのは `fail_io` と、`Async` のタスクの上限の `ResourceLimit` だけで、extern の誤りはこれらの種類を出さない ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「タスクの上限」)
 
+### メインの worker
+
+- `END`は動いている固定したタスクを止めない。runが終わるのは、タスクが安全点に着くか、そのexternかツールキットのコールバックが戻ったときである。モーダルなループに留まる`Park`や、releaseのビルドで`Progress::Stopping`を無視する`Park`は、runの最後の終わりだけを遅らせる ([VM](../spec/vm.md)の「メインの worker の待ち」)
+- 仮想の時計の時間は、メインのworkerを含むすべてのworkerが眠っている間だけ進む。動いている固定したタスクは、ほかの動いているタスクと同じく時計とデッドロックの判定を止める。本物の時計で待つのは判定だけである ([VM](../spec/vm.md)の「時計と driver」)
+- メインのworkerの同期の読みには`EINTR`が届かない ([VM](../spec/vm.md)の「上限と割り込み」)
+- メインのworkerは中継したシグナルを届けない。runの全体の務めで、mailから取り出すのはworker 0..N-1である。`--workers 1`では、待つタスクが固定したものかによらず、シグナルが届くのはworker 0が集める地点に着いたときだけである。`main`がその場の読みで止まっている間に来た2回目のシグナルは、既定の動作をとる ([VM](../spec/vm.md)の「メインの worker」)
+- `Park`は`DefaultPark`しかない。替える`Park`もメインのworkerのI/Oのdriverで待たなければならず、それには`Pending::io()`が要るが、まだない。それまでは、`default_wait`を使わずに待つ`Park`の下では固定したタスクのI/Oは終わらない ([VM](../spec/vm.md)の「メインの worker の待ち」)
+
 ### 子のプロセス
 
 - `Proc` の `Child` は、1度に1本の pipe しか読み書きしない。読みながら書く子に pipe の buffer より多く書いてから読むと、両方が止まる。処理系はこの状態を検出せず、Ctrl-C で終える。守る順は [標準ライブラリ](../spec/stdlib.md) の「`Child`」にある。標準入力と標準エラーの pipe を別のタスクで読み書きするには `Std.Exec` を使う

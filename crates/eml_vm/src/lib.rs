@@ -31,6 +31,7 @@ mod hosts;
 mod jobs;
 mod monitor;
 mod op;
+mod park;
 mod sched;
 mod tls;
 mod vm;
@@ -44,6 +45,7 @@ pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
+pub use park::{DefaultPark, Park, ParkFactory, Pending, Progress};
 pub use sched::{Memory, Normal, Policy, Sched, Scheduler, Seeded, Sequential};
 pub use vm::Task;
 pub use workers::{Entry, Ready, Seat};
@@ -200,6 +202,9 @@ pub struct RunConfig {
     /// `Machine` を持つスレッドと worker 0 の関係。既定は `Seat::Merged` で、`execute` はいつも `Seat::Separate` にする
     /// (docs/spec/vm.md の「メインの worker」)。
     pub seat: Seat,
+    /// 分かれたrunのメインのworkerの`Park`を作るもの。既定は`None`で、`DefaultPark`を使う。合わせたrunは使わない
+    /// (docs/spec/vm.mdの「メインの worker の待ち」)。
+    pub main_park: Option<ParkFactory>,
 }
 
 // `Control` は `Default` を持たないので、手で書く
@@ -214,6 +219,7 @@ impl Default for RunConfig {
             signals: Vec::new(),
             job_budget: JOB_QUIESCE_LIMIT,
             seat: Seat::Merged,
+            main_park: None,
         }
     }
 }
@@ -256,6 +262,11 @@ impl RunConfig {
 
     pub fn with_seat(mut self, seat: Seat) -> RunConfig {
         self.seat = seat;
+        self
+    }
+
+    pub fn with_main_park(mut self, main_park: ParkFactory) -> RunConfig {
+        self.main_park = Some(main_park);
         self
     }
 }
@@ -357,6 +368,7 @@ pub struct Machine<M: Mode> {
     /// 1回の run の静止が `Op::Job` を待てる長さ。`recover` はまるごと受け取る (docs/spec/vm.md の「時計と driver」)。
     job_budget: Duration,
     seat: Seat,
+    main_park: Option<ParkFactory>,
 }
 
 impl Machine<Fast> {
@@ -404,6 +416,7 @@ impl<M: Mode> Machine<M> {
             signals: Vec::new(),
             job_budget: JOB_QUIESCE_LIMIT,
             seat: Seat::Merged,
+            main_park: None,
         }
     }
 
@@ -428,6 +441,13 @@ impl<M: Mode> Machine<M> {
     /// セッションの根に触れるコードと渡された driver を拒む (docs/spec/vm.md の「メインの worker」)。
     pub fn with_seat(mut self, seat: Seat) -> Machine<M> {
         self.seat = seat;
+        self
+    }
+
+    /// 分かれたrunのメインのworkerの`Park`を作るものを渡す。runごとに`Machine`を持つスレッドで1つ作る。渡さなければ
+    /// `DefaultPark`で、合わせたrunは使わない (docs/spec/vm.mdの「メインの worker の待ち」)。
+    pub fn with_main_park(mut self, main_park: ParkFactory) -> Machine<M> {
+        self.main_park = Some(main_park);
         self
     }
 
@@ -664,6 +684,7 @@ impl<M: Mode> Machine<M> {
             driver,
             seed: self.sched.seed(),
             seat: self.seat,
+            main_park: self.main_park.clone(),
             run_clock,
             doorbell: self.doorbell.clone(),
             signals: std::mem::take(&mut self.signals),
@@ -981,6 +1002,7 @@ struct Start {
     driver: Option<Box<dyn IoDriver>>,
     seed: Option<u64>,
     seat: Seat,
+    main_park: Option<ParkFactory>,
     run_clock: RunClock,
     doorbell: Option<Arc<Doorbell>>,
     signals: Vec<VirtualSignal>,
@@ -1051,6 +1073,15 @@ fn run_scheduled<M: Mode, P: Policy>(
         return (result, scheduled, driver);
     }
     let main_policy = policy.for_worker(run.main());
+    // `Park`はメインのworkerのスレッドで作り、そこで落とす。wakerは待ちに入る前に置くので、どの起こしも鳴らす
+    // (docs/spec/vm.mdの「メインの worker の待ち」)
+    let park: Box<dyn Park> = match &start.main_park {
+        Some(factory) => factory(),
+        None => Box::new(DefaultPark),
+    };
+    if let Some(waker) = park.waker() {
+        let _ = run.slots[run.main()].park_waker.set(waker);
+    }
     let (worker_ctx, worker_task, worker_counts) = (&mut *ctx, &mut *task, &mut *counts);
     let (joined, main) = thread::scope(|scope| {
         // 呼んだスレッドの panic でも `END` を立ててすべての worker を起こし、scope が worker 0 を join できるようにする
@@ -1094,6 +1125,7 @@ fn run_scheduled<M: Mode, P: Policy>(
             Arc::clone(&cells),
             start.host.clone(),
             start.max_depth,
+            park,
         );
         let joined = worker
             .join()
@@ -1462,6 +1494,7 @@ impl AnyMachine {
                 .with_job_budget(config.job_budget)
                 .with_seat(config.seat);
             machine.doorbell = config.doorbell.clone();
+            machine.main_park = config.main_park.clone();
             AnyMachine::Checked(machine)
         } else {
             let mut machine = Machine::<Fast>::new(control, host)
@@ -1471,6 +1504,7 @@ impl AnyMachine {
                 .with_job_budget(config.job_budget)
                 .with_seat(config.seat);
             machine.doorbell = config.doorbell.clone();
+            machine.main_park = config.main_park.clone();
             AnyMachine::Fast(machine)
         }
     }

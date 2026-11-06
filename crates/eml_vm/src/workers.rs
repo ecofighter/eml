@@ -19,6 +19,7 @@ use crate::code::CodeBase;
 use crate::counters::Counters;
 use crate::doorbell::Doorbell;
 use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, RunClock, ceil_ms, floor_ms};
+use crate::park::Park;
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
 use crate::{HeapWork, RunCounts, RuntimeError, VmFault, WORKER_STACK};
@@ -212,6 +213,9 @@ pub(crate) struct Slot {
     cv: Condvar,
     /// driver を持つ worker の driver の waker。起こすときに driver の待ちも終わらせる。
     pub(crate) waker: OnceLock<Arc<dyn IoWaker>>,
+    /// 分かれたrunのメインのworkerの`Park`のwaker。runごとに、メインのworkerが繰り返しを始める前に1回だけ置く
+    /// (docs/spec/vm.mdの「メインの worker の待ち」)。
+    pub(crate) park_waker: OnceLock<Arc<dyn IoWaker>>,
     /// driver を持つ worker の driver の bin。ほかの worker は集める地点で印を見て、host を起こす
     /// (docs/spec/vm.md の「時計と driver」)。
     pub(crate) bin: OnceLock<Arc<HostBin>>,
@@ -234,10 +238,13 @@ pub(crate) struct Slot {
 }
 
 impl Slot {
-    /// 眠っているworkerの待ちを終わらせる。条件変数とdriverのwakerを鳴らす。
+    /// 眠っているworkerの待ちを終わらせる。条件変数と、driverのwakerと、`Park`のwakerを鳴らす。
     pub(crate) fn ring(&self) {
         self.cv.notify_one();
         if let Some(waker) = self.waker.get() {
+            waker.wake();
+        }
+        if let Some(waker) = self.park_waker.get() {
             waker.wake();
         }
     }
@@ -260,6 +267,10 @@ pub(crate) struct Run {
     seat: Seat,
     /// 始めた worker のうち眠っていないものの数。`parked` を替えるときに、その欄の lock の下でだけ替える。
     pub(crate) running: AtomicUsize,
+    /// メインのworkerの`Park`がrunの外の待ちを抱えている。偽で始まり、`Pending::set_holds`が書く。worker 0は2つの
+    /// デッドロックの判定で`running`の後にAcquireで読み、真の間は判定せずに待つ (docs/spec/vm.mdの
+    /// 「メインの worker の待ち」)。
+    holds: AtomicBool,
     /// 送った子の知らせのうち、終わりの知らせをまだ受け取っていないものの数。親を失った節点の分も数える。
     pub(crate) in_flight: AtomicUsize,
     /// ほかの worker に置いた右の子の数。どの worker の fork も足す。
@@ -326,6 +337,7 @@ impl Run {
                 has_notices: AtomicBool::new(false),
                 cv: Condvar::new(),
                 waker: OnceLock::new(),
+                park_waker: OnceLock::new(),
                 bin: OnceLock::new(),
                 ready: Mutex::new(VecDeque::new()),
                 seq: AtomicU64::new(0),
@@ -341,6 +353,7 @@ impl Run {
             workers,
             seat,
             running: AtomicUsize::new(1),
+            holds: AtomicBool::new(false),
             in_flight: AtomicUsize::new(0),
             placed: AtomicU64::new(0),
             placed_jobs: AtomicU64::new(0),
@@ -470,7 +483,7 @@ impl Run {
     }
 
     /// worker `k` を起きた形にする。driver の待ちから戻った worker が自分に対して呼ぶ。
-    fn unpark(&self, k: usize) {
+    pub(crate) fn unpark(&self, k: usize) {
         self.unpark_locked(&mut lock(&self.slots[k].state));
     }
 
@@ -690,6 +703,52 @@ impl Run {
         true
     }
 
+    /// メインのworkerの`Park`がrunの外の待ちを抱えているかを書き、前の値を返す。
+    ///
+    /// ここで書いた真を、メインのworkerの次の眠りの後のどの判定も読むのは、次のためである。worker 0が判定するのは、
+    /// 自分の引き算かその後の読みで`running`が0だと読んだ後だけである。`running`の変更はどれも読んで書き換える操作
+    /// なので、メインのworkerの次の眠りの引き算か、そのrelease sequenceの後の書き込みから読む読みは、この書き込みより
+    /// 後に起きる。この書き込みはプログラムの順でその引き算より前にあるためである。読みがメインのworkerのそれより前の
+    /// 眠りから来る判定は、見逃しうる。`Park`はタスクを動かさせる前に立てるので、そのタスクが始めた待ちで眠った
+    /// メインのworkerの判定は、立てた真を読む。
+    pub(crate) fn swap_holds(&self, holds: bool) -> bool {
+        self.holds.swap(holds, Ordering::AcqRel)
+    }
+
+    fn holds(&self) -> bool {
+        self.holds.load(Ordering::Acquire)
+    }
+
+    /// メインのworker `k`が`Park`から戻った。起こされたか、知らせがあるか、もう眠った形でないか、止める語を読めば、
+    /// 起きた形にして真を返す。どれもなければ眠った形のままにする。何も変わらずに戻る`Park`は、どの数も替えない。
+    pub(crate) fn main_woken(&self, control: &Control, k: usize) -> bool {
+        let mut state = lock(&self.slots[k].state);
+        let woke =
+            state.woken || !state.notices.is_empty() || !state.parked || stopping(control, k);
+        if woke {
+            state.woken = false;
+            self.unpark_locked(&mut state);
+        }
+        woke
+    }
+
+    /// メインのworkerの`Park`がrunの外の待ちを抱えている間に、worker 0 (`k`) が進むものを見つけられなかった。
+    /// デッドロックと決める代わりに、起こされるまで条件変数で眠る。
+    fn hold_sleep(&self, control: &Control, k: usize) {
+        let slot = &self.slots[k];
+        let mut state = lock(&slot.state);
+        if state.woken || !state.notices.is_empty() || stopping(control, k) {
+            state.woken = false;
+            return;
+        }
+        state.parked = true;
+        self.running.fetch_sub(1, Ordering::AcqRel);
+        while state.parked {
+            state = slot.cv.wait(state).unwrap_or_else(PoisonError::into_inner);
+        }
+        state.woken = false;
+    }
+
     /// worker `k` (`k` ≥ 1) の空きの待ちの前半。眠ってよければ眠った形にして真を返し、知らせか起こしか止める語が
     /// あれば眠らずに偽を返す。
     fn park_idle(&self, control: &Control, k: usize) -> bool {
@@ -834,6 +893,7 @@ fn run_worker<M: Mode, P: Policy>(
 
 /// 分かれた run のメインの worker の本体。`Machine` を持つスレッドで、worker 0 を作った後に動き、自分の `Ctx` を
 /// `run_scheduled` の畳み込みに返す (docs/spec/vm.md の「メインの worker」)。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_main<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     policy: P,
@@ -842,10 +902,13 @@ pub(crate) fn run_main<M: Mode, P: Policy>(
     cells: Arc<Shared>,
     host: HostRef,
     max_depth: usize,
+    mut park: Box<dyn Park>,
 ) -> WorkerExit<M> {
     let k = run.main();
     on_own_ctx(run, control, host, k, "<main worker>".into(), |ctx| {
-        main_work::<M, P>(code, ctx, policy, run, control, cells, max_depth)
+        main_work::<M, P>(
+            code, ctx, policy, run, control, cells, max_depth, &mut *park,
+        )
     })
 }
 
@@ -982,6 +1045,7 @@ fn work<M: Mode, P: Policy>(
 /// メインのworkerの仕事。固定したタスクを動かし、走れるものがなければ待つ。worker 1..N-1と同じく`END`か止める
 /// ビットで抜け、致命的な誤りはrunの`fatal`に書く。返す前に自分のdriverを自分のスレッドで静止させる
 /// (docs/spec/vm.mdの「メインのworker」)。
+#[allow(clippy::too_many_arguments)]
 fn main_work<M: Mode, P: Policy>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -990,6 +1054,7 @@ fn main_work<M: Mode, P: Policy>(
     control: &Arc<Control>,
     cells: Arc<Shared>,
     max_depth: usize,
+    park: &mut dyn Park,
 ) -> Done {
     let mut sched = Scheduler::worker(
         policy,
@@ -1003,7 +1068,7 @@ fn main_work<M: Mode, P: Policy>(
     sched.main_loop = true;
     let mut counts = RunCounts::default();
     let (error, peak_stack) =
-        crate::vm::main_work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts);
+        crate::vm::main_work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts, park);
     let quiet = error.as_ref().is_none_or(quiet);
     // 止めるビットと`END`は安全点か待ちの後でだけ読むので、ここに来たメインのworkerは集める地点の途中で抜けて
     // いない。その後に受け箱に届いた知らせを最後に1回だけ見る (docs/spec/vm.mdの「誤り、止めること、終わり」)
@@ -1127,7 +1192,11 @@ impl<P: Policy> Scheduler<P> {
                 run.leave_idle(k);
                 return Ok(());
             }
-            if deadline.is_none() && pending == 0 && run.in_flight.load(Ordering::Acquire) == 0 {
+            if deadline.is_none()
+                && pending == 0
+                && run.in_flight.load(Ordering::Acquire) == 0
+                && !run.holds()
+            {
                 run.unpark_locked(&mut state);
                 drop(state);
                 run.leave_idle(k);
@@ -1177,7 +1246,12 @@ impl<P: Policy> Scheduler<P> {
                             && !slot.has_notices.load(Ordering::Acquire)
                             && !self.cells.mail.pending() =>
                     {
-                        Err(VmFault::Deadlock)
+                        if run.holds() {
+                            run.hold_sleep(&control, k);
+                            Ok(())
+                        } else {
+                            Err(VmFault::Deadlock)
+                        }
                     }
                     Ok(false) => Ok(()),
                     Err(e) => Err(VmFault::Driver(e.to_string())),
@@ -1219,27 +1293,39 @@ impl<P: Policy> Scheduler<P> {
         }
     }
 
-    /// メインのworkerの待ち。空きの集まりに入らずにworker 1..N-1の手順で眠る。本物の時計で自分の区画に期限があれば
-    /// driverを作り、driverがあればdriverで、なければ欄の条件変数で待つ (docs/spec/vm.mdの「メインのworker」)。
-    pub(crate) fn main_wait(&mut self) -> Result<(), VmFault> {
+    /// メインのworkerの待ちの前半。空きの集まりに入らずにworker 1..N-1の手順で眠った形にし、眠ったかを返す。本物の
+    /// 時計で自分の区画に期限があれば、先にdriverを作る (docs/spec/vm.mdの「メインの worker」)。
+    pub(crate) fn main_park(&mut self) -> Result<bool, VmFault> {
         let k = self.index;
-        let deadline = self.own_deadline.filter(|_| self.run.io_worker(k) == k);
-        if deadline.is_some() {
+        if self.own_deadline.is_some() && self.run.io_worker(k) == k {
             // wakerを置いてから眠った形にするので、作った直後の起こしもdriverの待ちを終わらせる
             self.own_driver()?;
         }
-        if !self.run.park_main(&self.watcher.control, k) {
-            return Ok(());
-        }
+        Ok(self.run.park_main(&self.watcher.control, k))
+    }
+
+    /// メインのworkerの`Park`が待ってよい長さ。本物の時計でdriverを持てば自分の区画のいちばん早い期限まで、ほかでは
+    /// 起こされるまで (`None`) である。仮想の時計では、期限の来たタイマーのためにworker 0がメインのworkerを起こす。
+    pub(crate) fn main_timeout(&self) -> Option<Duration> {
+        let k = self.index;
+        let deadline = self.own_deadline.filter(|_| self.run.io_worker(k) == k)?;
+        let driver = self.driver.as_deref()?;
+        Some(Duration::from_millis(deadline).saturating_sub(driver.now()))
+    }
+
+    /// メインのworkerの既定の待ち (`Pending::default_wait`)。driverを持てば期限までdriverで待ち、戻ったら起きた形に
+    /// なる。完了と期限の来たタイマーは次の集める地点が拾うためである。driverを持たなければ、起こされるまで欄の
+    /// 条件変数で眠る (docs/spec/vm.mdの「メインの worker の待ち」)。
+    pub(crate) fn main_default_wait(&mut self) -> std::io::Result<()> {
+        let k = self.index;
+        let deadline = self.own_deadline.filter(|_| self.run.io_worker(k) == k);
         let Some(driver) = self.driver.as_deref_mut() else {
             self.run.sleep(k);
             return Ok(());
         };
         let waited = driver.wait(deadline.or(Some(u64::MAX)));
         self.run.woke(k);
-        waited
-            .map(|_| ())
-            .map_err(|e| VmFault::Driver(e.to_string()))
+        waited.map(|_| ())
     }
 
     /// worker `k` (`k` ≥ 1) が抜ける前に、自分の driver を静止させ、`record` なら driver に出したままの記録に、driver が
@@ -1696,6 +1782,33 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         assert_eq!(run.running.load(Ordering::Acquire), 2);
         assert!(run.park_main(&control, 2));
         assert_eq!(run.running.load(Ordering::Acquire), 1);
+    }
+
+    /// 眠っているメインのworkerに知らせを送ると、`Park`のwakerを1回鳴らす。動いている間に届いた知らせは鳴らさない。
+    /// メインのworkerは眠る前に欄のlockの下で受け箱を見るためである (docs/spec/vm.mdの「メインの worker の待ち」)。
+    #[test]
+    fn a_notice_to_the_parked_main_worker_rings_its_park_waker() {
+        struct Count(std::sync::atomic::AtomicUsize);
+        impl eml_rt::IoWaker for Count {
+            fn wake(&self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let control = Control::new(Limits {
+            workers: 2,
+            ..Limits::default()
+        });
+        let run = separate(2, RunClock::Virtual(Arc::default()));
+        let rings = Arc::new(Count(Default::default()));
+        assert!(run.slots[2].park_waker.set(rings.clone()).is_ok());
+        run.send(&control, 2, Notice::Limit(CellRef::decode(0)));
+        assert_eq!(rings.0.load(Ordering::SeqCst), 1);
+        run.send(&control, 2, Notice::Limit(CellRef::decode(0)));
+        assert_eq!(rings.0.load(Ordering::SeqCst), 1);
+        assert_eq!(run.take_notices(2).len(), 2);
+        assert!(run.park_main(&control, 2));
+        run.wake(2);
+        assert_eq!(rings.0.load(Ordering::SeqCst), 2);
     }
 
     /// 固定したタスクの`start`はメインのworkerに置く。分かれたrunではメインのworkerの受け箱に`Place`を送り、合わせたrun

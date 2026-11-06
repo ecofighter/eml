@@ -4,6 +4,7 @@
 
 use std::marker::PhantomData;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault, Raised};
@@ -21,6 +22,7 @@ use crate::error::VmFault;
 use crate::ffi;
 use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
+use crate::park::{Guard, Park, Pending, Progress};
 use crate::sched::{
     ENTRY, JOB, JoinId, JoinNode, Memory, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId,
     TaskState,
@@ -834,37 +836,166 @@ fn work_loop<R: Exec>(
     }
 }
 
-/// メインのworkerの実行の繰り返し。`drive`で走れるタスクをすべて動かし、走れるものがなくなったら待つ。止める語か
-/// 誤りで抜け、その誤りを返す。止める語で抜けたときは`None`である (docs/spec/vm.mdの「メインのworker」)。
+/// メインのworkerの実行の繰り返し。`park`で待ち、`park`が積まれた仕事か期限の来たタイマーを残して戻れば、
+/// `Pending::run`と同じ規則で`park`の代わりにその仕事を動かす。最初の待ちの前には固定したタスクを動かさないので、
+/// どの固定したタスクが動く前にも、`park`が先に制御を受け取る。止める語か誤りで抜け、その誤りを返す。止める語で
+/// 抜けたときは`None`である (docs/spec/vm.mdの「メインのworker」)。
 pub(crate) fn main_work<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     sched: &mut Scheduler<R::P>,
     counts: &mut RunCounts,
+    park: &mut dyn Park,
 ) -> (Option<RuntimeError>, u64) {
     let mut task = Task::idle();
     task.worker = sched.main_worker;
     let error = loop {
-        match drive::<R>(code, ctx, &mut task, sched, counts) {
+        match main_wait::<R>(code, ctx, &mut task, sched, counts, park) {
             Ok(true) => {}
             Ok(false) => break None,
             Err(error) => break Some(error),
-        }
-        if let Err(fault) = sched.main_wait() {
-            break Some(RuntimeError::Fault {
-                fault,
-                function: "<main worker>".into(),
-                at: None,
-            });
         }
     };
     (error, sched.peak_stack(&task))
 }
 
+fn main_fault(fault: VmFault) -> RuntimeError {
+    RuntimeError::Fault {
+        fault,
+        function: "<main worker>".into(),
+        at: None,
+    }
+}
+
+/// メインのworkerの1回の待ち。仕事がもう積まれていなければメインのworkerを眠った形にする。積まれた仕事とともに
+/// 始まる待ちは鳴らしておくので、`park`はすぐに戻るか`run`を呼ぶ。`park`が戻った後、メインのworkerが起こされたか、
+/// 知らせがあるか、もう眠った形でないか、止める語を読んだか、本物の時計で自分の期限を過ぎていれば、`park`の代わりに
+/// 仕事を動かす。どれもなければ眠った形のままにする。メインのworkerが止まれば偽を返す。`run`の誤りは待ちの後に返す
+/// (docs/spec/vm.mdの「メインの worker の待ち」)。
+fn main_wait<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+    counts: &mut RunCounts,
+    park: &mut dyn Park,
+) -> Result<bool, RuntimeError> {
+    let k = sched.index;
+    if !sched.main_park().map_err(main_fault)? {
+        sched.run.slots[k].ring();
+    }
+    let timeout = sched.main_timeout();
+    sched.guard = Guard::Parked;
+    let mut pending = MainPending::<R> {
+        code,
+        ctx: &mut *ctx,
+        task: &mut *task,
+        sched: &mut *sched,
+        counts: &mut *counts,
+        stop: None,
+    };
+    let waited = park.wait(timeout, &mut pending);
+    let stop = pending.stop.take();
+    if let Some(error) = stop {
+        sched.guard = Guard::Outside;
+        return Err(error);
+    }
+    if let Err(e) = waited {
+        sched.guard = Guard::Outside;
+        return Err(main_fault(VmFault::Driver(e.to_string())));
+    }
+    if matches!(sched.guard, Guard::Stopped(_)) {
+        sched.guard = Guard::Outside;
+        return Ok(false);
+    }
+    // 本物の時計では、メインのworkerの区画の期限で起こすものはほかにいない。期限を過ぎて戻った`Park`をまた
+    // 呼ぶと、残りが0の待ちを繰り返すので、起きた形にしてタイマーを拾う
+    let due = sched.main_timeout() == Some(Duration::ZERO);
+    if !sched.run.main_woken(&sched.watcher.control, k) && !due {
+        sched.guard = Guard::Outside;
+        return Ok(true);
+    }
+    let mut pending = MainPending::<R> {
+        code,
+        ctx: &mut *ctx,
+        task: &mut *task,
+        sched: &mut *sched,
+        counts: &mut *counts,
+        stop: None,
+    };
+    let progress = pending.run();
+    let stop = pending.stop.take();
+    sched.guard = Guard::Outside;
+    match (progress, stop) {
+        (_, Some(error)) => Err(error),
+        (Progress::Stopping, None) => Ok(false),
+        _ => Ok(true),
+    }
+}
+
+/// `Park::wait`に渡す、メインのworkerの仕事。待ちごとに作り、`Scheduler`にまた触れる前に落とす。
+struct MainPending<'a, R: Exec> {
+    code: &'a CodeBase<R::M>,
+    ctx: &'a mut Ctx<R::M>,
+    task: &'a mut Task,
+    sched: &'a mut Scheduler<R::P>,
+    counts: &'a mut RunCounts,
+    /// `run`の`drive`が止まった誤り。待ちの後で`main_wait`が返す。
+    stop: Option<RuntimeError>,
+}
+
+impl<R: Exec> Pending for MainPending<'_, R> {
+    fn run(&mut self) -> Progress {
+        if let Some(progress) = self.sched.guard.enter() {
+            return progress;
+        }
+        self.sched.run.unpark(self.sched.index);
+        loop {
+            let driven = drive::<R>(self.code, self.ctx, self.task, self.sched, self.counts)
+                .and_then(|go| {
+                    if !go {
+                        return Ok(None);
+                    }
+                    self.sched.main_park().map(Some).map_err(main_fault)
+                });
+            match driven {
+                Ok(Some(true)) => {
+                    self.sched.guard = Guard::Parked;
+                    return Progress::Wait(self.sched.main_timeout());
+                }
+                // 眠る前に起こされたので、もう一度動かす
+                Ok(Some(false)) => {}
+                Ok(None) => {
+                    self.sched.guard = Guard::Stopped(0);
+                    return Progress::Stopping;
+                }
+                Err(error) => {
+                    self.stop = Some(error);
+                    self.sched.guard = Guard::Stopped(0);
+                    return Progress::Stopping;
+                }
+            }
+        }
+    }
+
+    fn default_wait(&mut self) -> std::io::Result<()> {
+        if matches!(self.sched.guard, Guard::Stopped(_)) {
+            return Ok(());
+        }
+        self.sched.main_default_wait()
+    }
+
+    fn set_holds(&mut self, holds: bool) {
+        if self.sched.run.swap_holds(holds) && !holds {
+            self.sched.run.wake(0);
+        }
+    }
+}
+
 /// メインのworkerの1回の仕事。受け箱の知らせを取り、走れるタスクを列が空になるまで動かして戻る。列が空になった
 /// 地点では`HOST_IDLE`でVMの繰り返しを抜けるので、メインのworkerが待つ間、VMの状態はRustのスタックに残らない。
-/// 動くタスクのない`Task`は、ほかのworkerと同じく表の`ENTRY`の欄に退避する。止める語を読んだら`false`を返す
-/// (docs/spec/vm.mdの「メインのworker」)。
+/// 動くタスクのない`Task`は、ほかのworkerと同じく表の`ENTRY`の欄に退避する。止める語を読んだら`false`を返す。
+/// 呼ぶのは`Pending::run`だけである (docs/spec/vm.mdの「メインのworker」)。
 fn drive<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,

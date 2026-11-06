@@ -81,7 +81,7 @@ Names:
 | D-3 Dedication | MAIN MUST NOT be returned by `next_owner` or `pop_idle`, MUST NOT join `idle`, and MUST NOT receive `par` children or `compute` jobs by placement | GUI latency must not depend on unrelated work | `placement_never_picks_the_main_worker`, `the_main_worker_never_joins_idle` |
 | D-4 Liveness separation | No run-wide progress duty (clock, verdict, END, spawn/join, other workers' I/O hosting, monitor) MAY sit on a worker whose park is replaceable or that runs pinned tasks | a toolkit modal loop or a pinned extern must not stall the run | `a_park_that_never_runs_pending_still_ends_main`; `idle_wait` has no park hook |
 | D-5 Pinning | A task is pinned iff `start_main_raw` started it or a pinned task started it (nested `Async.run` roots included). Pinned tasks are placed on MAIN. `par` children and `compute` jobs do not inherit. "Never moves" follows from `sched-cooperative` | thread-bound state lives in pinned tasks; parallel work must leave MAIN | `children_of_a_pinned_task_stay_on_the_main_worker`, `par_/compute_in_a_pinned_task_is_placed_on_a_worker` |
-| D-6 MAIN is a peer in the accounting | MAIN parks through the peer protocol without `join_idle`. `Run.holds` is stored with Release before the `running` decrement, and read with Acquire after `running` at worker 0's two verdict sites. A `holds` change while parked is stored, and when it becomes false MAIN wakes worker 0. Before parking, MAIN checks `SlotState.woken` or a non-empty inbox under the slot lock | worker 0 advances the clock only when everyone sleeps, and the last parker wakes it; MAIN needs nothing new | `the_main_worker_parking_last_wakes_worker_0`, `a_wake_before_the_main_worker_parks_keeps_it_awake`, `a_holding_park_defers_the_deadlock_verdict*` |
+| D-6 MAIN is a peer in the accounting | MAIN parks through the peer protocol without `join_idle`. `Run.holds` is written by the park through `Pending::set_holds` (amended after the T4 review; see T4) and read with Acquire after `running` at worker 0's two verdict sites; lowering it wakes worker 0. Before parking, MAIN checks `SlotState.woken` or a non-empty inbox under the slot lock | worker 0 advances the clock only when everyone sleeps, and the last parker wakes it; MAIN needs nothing new | `the_main_worker_parking_last_wakes_worker_0`, `a_wake_before_the_main_worker_parks_keeps_it_awake`, `a_holding_park_defers_the_deadlock_verdict*` |
 | D-7 Park contract | See D-7 below the table | the clock and the verdict do not depend on the park (D-4), so the contract is "serve your own wake" | T4 tests |
 | D-8 Native | `eml_run_pending` MUST NOT longjmp or unwind past its own frame; each entry goes through `eml_enter`; a nested native loop on MAIN parks as a peer in `Parked` | toolkit frames sit between the park and eml code | native stages' review (`jit-effects`) |
 | D-9 Signals | Unix: only worker 0 is unmasked. The Machine owner masks SIGINT/SIGTERM from right after spawning worker 0 until it has joined it | `EINTR` must reach worker 0's blocking reads | `spawns::every_thread_but_worker_0_is_masked` |
@@ -102,7 +102,7 @@ D-7, the park contract:
 - `run()` is `Busy` unless the innermost loop on the thread is `Parked` (three-state guard).
 - The default park is MAIN's own driver wait when MAIN has a driver (real clock; `timeout` = MAIN's earliest deadline), else the slot condvar (virtual clock: `None`; worker 0 wakes MAIN for due timers).
 - A park MUST also serve MAIN's driver readiness. `DefaultPark` does by waiting on the driver; a toolkit park will do so through `Pending::io()`, which the toolkit stage adds.
-- A park calls `run()` or returns when rung or when `holds()` changed, and returns after `Stopping`.
+- A park calls `run()` or returns when rung, and returns after `Stopping`. Holding is reported with `Pending::set_holds` (amended after the T4 review; see T4).
 - `Progress = { Wait(Option<Duration>), Stopping, Busy }`.
 
 Kept in the repository:
@@ -232,14 +232,13 @@ entry_body(code, ctx, task, policy, driver, args, counts) -> (Result, Scheduled<
   - `task_failed` returns `Err(RuntimeError::Fault { fault: HOST_IDLE, function: String::new(), at: None })` at the top of its loop.
   - Every `switch_away` call site returns its `Result` into a step or `task_failed` (`vm.rs:866, 1785, 1803, 1827, 1866, 2384, 2570, 3832`). Natively the loop simply returns when the queue is empty.
 - `main_wait(park)`:
-  - `holds = park.holds(); park_main(N, holds)`. `park_main` stores `Run.holds` with Release, then sets `parked = true` and `running -= 1`; the last parker wakes worker 0. Under the slot lock it first checks `woken || !notices.is_empty()`; if either holds, it clears `woken` and returns false.
+  - (Superseded after the T4 review: `holds` comes from `Pending::set_holds`, see T4.) `park_main(N)` sets `parked = true` and `running -= 1`; the last parker wakes worker 0. Under the slot lock it first checks `woken || !notices.is_empty()`; if either holds, it clears `woken` and returns false.
   - If MAIN did not park, return.
   - `timeout` = Real with a driver ? its earliest deadline − now : `None`.
   - Loop:
     - `guard = Parked; r = park.wait(timeout, &mut pending); guard = Outside`.
     - Propagate `pending.stop`; `r?` → `VmFault::Driver`.
     - `if take_wake(N) || !parked(N) { unpark; return }`.
-    - `h = park.holds(); if h != holds { holds = h; run.holds.store(h, Release); if !h { run.wake(0) } }`.
   - A park that returns with nothing new keeps MAIN parked: no accounting change.
 - `Pending::run`, with the guard `Outside | Parked | Running | Stopped`:
   - `Outside` or `Running` → `Busy`.
@@ -260,7 +259,6 @@ pub trait Park {
     fn wait(&mut self, timeout: Option<Duration>, pending: &mut dyn Pending) -> std::io::Result<()>;
     fn waker(&self) -> Option<Arc<dyn IoWaker>>;
     /// The toolkit has pending external waits: worker 0 reports no deadlock while MAIN is parked with this true.
-    fn holds(&self) -> bool { false }
 }
 pub trait Pending { fn run(&mut self) -> Progress; fn default_wait(&mut self) -> std::io::Result<()>; }
 pub enum Progress { Wait(Option<Duration>), Stopping, Busy }
@@ -507,6 +505,10 @@ Let `B0` be the test count after `sched-cooperative` closed (`cargo nextest run`
   7. `a_pinned_socket_read_completes_under_the_default_park`: Real; no custom-park test does pinned I/O.
   - Unit: `run_pending_enters_only_from_a_parked_wait`, `stopping_is_sticky_until_the_wait_ends`, `a_notice_to_the_parked_main_worker_rings_its_park_waker`.
   - `api.rs`: the `ParkFactory` `Send + Sync` assertions.
+  - Added after the T4 review: `a_park_that_returns_at_its_timeout_collects_a_pinned_timer` (Real, a park that never calls `run()` and returns when its timeout passes, a pinned `sleep_ms`; the run ends). When the park returns after the main worker's own deadline has passed, `main_wait` unparks the main worker so that `drive` collects the timer. `a_park_that_never_runs_pending_still_ends_main` asserts that the park was entered.
+  - Decided with the user after the T4 review (amends D-7): `Park::holds()` is removed. A park reports holding with `Pending::set_holds(bool)`, callable at any time inside `wait`, before or after `run()`. It stores `Run.holds` at once; a true is seen by every verdict that follows the main worker's next parking, and a verdict before that may miss it. Protocol (after the T4 re-review): a park whose `run()` may start an outside wait (a window, a modal loop) raises `set_holds(true)` before calling `run()` and lowers it afterwards if nothing started; lowering wakes worker 0, so raising early is safe. The initial value is false, which is safe because nothing can hold before the main worker has run a pinned task; the store before spawning worker 0 goes away. The holding tests call `set_holds`; the window test is named for what it does (a park that raises holding before `run()` and keeps it while a pinned task's "window" is open), and a second window test has no pending timer after the window opens, so it fails without the protocol. vm.md, park.rs docs and docs/future use this form.
+  - Decided with the user after the T4 re-review (amends D-32): the park always gets control before any pinned task runs (option B, chosen over a strict "only through `run()`" form that would break G-4). The loop is `loop { park.wait(pending); if the main worker has queued work or a due timer { pending.run() } }` until it stops; there is no `drive` before the first wait. The `set_holds` rule becomes: a park raises holding before it lets tasks run, by calling `run()` or by returning from `wait`, and lowers it afterwards if nothing started. G-4 holds: a park that never calls `run()` still has its tasks run when it returns. Existing tests stay unchanged; new test `a_window_opened_by_the_first_pinned_task_is_held`. The three-state guard, latching, the F1 deadline rule and `Stopping` keep their meaning.
+  - Decided after the T4 review: `ParkFactory` stays `Arc<dyn Fn() -> Box<dyn Park> + Send + Sync>`; `seat::a_panic_on_worker_0_ends_a_separate_run` wraps its borrow in `AssertUnwindSafe` (kind 3). The park contract states that `wait` blocks until a ring, the timeout or `Stopping` (a park that returns at once spins the main thread) and that `default_wait` is called at most once per `wait`.
 - Spec and docs (same commit):
   - vm.md, new `### メインの worker の待ち`: the `Park`/`Pending`/`Progress`/`ParkFactory` contract of D-7; the three-state guard and the sticky `Stopping` (a debug assertion on the 64th call); latching; MAIN stays parked across early returns; `Run.holds` with its ordering and its two reads in `idle_wait`; `Slot::ring`; "a `Park` must also wait on the main worker's driver; `DefaultPark` does; a toolkit park does so through `Pending::io()` (toolkit stage)".
   - architecture.md 「CLI と lib API」: `with_main_park`, `Park`.
@@ -570,7 +572,8 @@ Let `B0` be the test count after `sched-cooperative` closed (`cargo nextest run`
     - 「未決」: replace the `pump_app_events` item with the modal rule.
   - docs/future/roadmap.md:
     - Delete this stage's entry from 「段の列」.
-    - `gui-plugin` → `gui-toolkit`: "a Rust toolkit crate over Qt 6, WinUI 3 1.2 and AppKit on the main worker's park; adds `Pending::io()`; creates `Std.Gui`. Prereq: `main-pinning`. Design: ffi.md 「GUI」".
+    - `gui-plugin` → `gui-toolkit`: "a Rust toolkit crate over Qt 6, WinUI 3 1.2 and AppKit on the main worker's park; adds `Pending::io()`; creates `Std.Gui`. Prereq: `main-pinning`. Design: ffi.md 「GUI」". Its design also settles (added after the T4 review): a park that returns from `wait` must raise holding before every return and lower it on the next entry, and each lowering wakes worker 0, so a park that returns per event wakes worker 0 at the event rate; remedies are waking only when a verdict was held back, or `Pending::has_work()`.
+  - (Added after the T4 review) Heading spelling: rename the vm.md headings 「メインの worker」 and 「メインの worker の待ち」 to 「メインのworker」 and 「メインのworkerの待ち」 (CLAUDE.md's no-space rule) and update every citation of them in code and docs; `citations::` passes.
     - `jit-effects` prereqs: `jit-externs` and `main-pinning` (drop `gui-plugin`); add "`eml_run_pending` and the main worker's fatal path".
     - The `spawn_here` item (~:427): "named placement exists only as `Async.start_on_main`".
     - Add to 「その後の項目」, each with 「後に回した理由」 and 「見直す条件」:

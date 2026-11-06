@@ -137,14 +137,14 @@ main () = println \"boom\"
             workers: 2,
             ..Limits::default()
         })));
-    let panic = std::panic::catch_unwind(|| {
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         eml_vm::execute(
             &program,
             &eml_vm::Linked::default(),
             &config,
             host.host_ref(),
         )
-    })
+    }))
     .expect_err("the panic reaches the caller");
     let message = panic
         .downcast_ref::<String>()
