@@ -1619,7 +1619,7 @@ main () = Async.run (fn () ->
 
 ## `Std.Tls`
 
-`Std.Tls`はTLSのクライアントのモジュールである。`Conn`はrustlsの接続と、復号してまだ返していない平文の列を持つ`Lin`の`Foreign`で、I/Oを持たない。`Stream`は`Conn`と`Net.TcpStream`の組のemlのデータで、`std/Tls.em`のコードが両者の間でバイトを汲む。ソケットの読み書き、待ち、取り消し、期限はすべて`Std.Net`のものである。`Conn`を作ることは、根を作るときにOSの根のファイルを読むことがあるので、プールの仕事として走る ([VM](vm.md)の「プールの仕事」)。handshakeの間の押し込みも、証明書を確かめることがあり、OSの検証器がブロックするかネットワークに出ることがあるので、プールの仕事として走る。rustlsが証明書を確かめるのはhandshakeの間だけなので、handshakeの後の押し込みはworkerの上で走る。仕事が走る間も、そのworkerのほかのタスクは走り続ける。仕事はdriverの24の`Op::Job`の枠を`blocking`の呼び出しと分け合うので (上の「`Std.Stream`」)、接続が枠を待つことがある。仮想の時計では、仕事はworker 0の上でその場で走る。暗号はaws-lc-rs、既定の根はwebpki-rootsの根で、OSの証明書ストアは使わない。テストのdriverのrunには既定の根がない ([VM](vm.md)の「時計と driver」)。根に足すCAはPEMで渡す。TLS 1.2と1.3を受ける。serverの側のAPIはない。
+`Std.Tls`はTLSのクライアントのモジュールである。`Conn`はrustlsの接続と、復号してまだ返していない平文の列を持つ`Lin`の`Foreign`で、I/Oを持たない。`Stream`は`Conn`と`Net.TcpStream`の組のemlのデータで、`std/Tls.em`のコードが両者の間でバイトを汲む。ソケットの読み書き、待ち、取り消し、期限はすべて`Std.Net`のものである。`Conn`を作ることは、根を作るときにOSの根のファイルを読むことがあるので、プールの仕事として走る ([VM](vm.md)の「プールの仕事」)。handshakeの間の押し込みも、証明書を確かめることがあり、OSの検証器がブロックするかネットワークに出ることがあるので、プールの仕事として走る。rustlsが証明書を確かめるのはhandshakeの間だけなので、handshakeの後の押し込みはworkerの上で走る。仕事が走る間も、そのworkerのほかのタスクは走り続ける。仕事はdriverの24の`Op::Job`の枠を`blocking`の呼び出しと分け合うので (上の「`Std.Stream`」)、接続が枠を待つことがある。仮想の時計では、仕事はworker 0の上でその場で走る。暗号はaws-lc-rsである。サーバーの証明書はOSの検証器で確かめる。macOSではSecurity.framework、WindowsではCryptoAPI、LinuxではOSの根のファイルの上のrustlsで、Linuxの根のファイルは`SSL_CERT_FILE`と`SSL_CERT_DIR`で替えられる。PEMで渡したCAは、OSの根に加えて信頼する。OSによっては、失効の確認や中間の証明書の取得のために、検証がネットワークに出ることがある。テストのdriverのrunはOSの検証器を使わず、自分の根も持たない ([VM](vm.md)の「時計と driver」)。TLS 1.2と1.3を受ける。serverの側のAPIはない。
 
 ```haskell
 import Async
@@ -1653,7 +1653,7 @@ main () = Async.run (fn () ->
 | `shutdown_write` | `Stream -> <IO, Async> Stream` | eml |
 | `close` | `Stream -> <IO, Async> Unit` | eml |
 
-- `connect host port`は`Net.connect host port`で接続し、`host`をSNIと証明書の名前の照合に使ってhandshakeまで行う。根は既定の根だけである。`connect_with_ca ca host port`は、PEMの`ca`の証明書を根に足す。`ca`が空の文字列なら`connect`と同じである。`wrap host s`は、既にある`TcpStream`の上で同じhandshakeを行い、根は既定の根だけである。`wrap_with_ca ca host s`は`connect_with_ca`と同じく`ca`を根に足し、`ca`が空の文字列なら`wrap`と同じである。テストのdriverのrunには既定の根がないので、`connect`、`wrap`と、空の`ca`の`_with_ca`は、根の証明書がない失敗を投げる。サーバーの名前とPEMの誤りと根がないことは、接続を開く前に投げる
+- `connect host port`は`Net.connect host port`で接続し、`host`をSNIと証明書の名前の照合に使ってhandshakeまで行う。根はOSの根だけである。`connect_with_ca ca host port`は、PEMの`ca`の証明書をOSの根に加えて信頼する。`ca`が空の文字列なら`connect`と同じである。`wrap host s`は、既にある`TcpStream`の上で同じhandshakeを行い、根はOSの根だけである。`wrap_with_ca ca host s`は`connect_with_ca`と同じく`ca`をOSの根に加えて信頼し、`ca`が空の文字列なら`wrap`と同じである。テストのdriverのrunには根がないので、`connect`、`wrap`と、空の`ca`の`_with_ca`は、根の証明書がない失敗を投げる。CAを渡さずにOSの検証器を作れないときも、どのOSでも同じ失敗を投げる。よくあるのは、LinuxでOSの根のファイルがないときである。静的な配布物や最小のコンテナのように根のファイルのない所で動くプログラムは、`connect_with_ca`でCAを渡す。サーバーの名前とPEMの誤りと根がないことは、接続を開く前に投げる
 - どの関数も期限を持たない。期限は`Async.timeout ms (fn () -> Tls.connect host port)`のように付ける。期限が来ると巻き戻しが`Stream`を落とすので、期限の後に同じ`Stream`は使えない。`Net.read_line_within`のような、期限の後も読みを続けられる`_within`の関数はない。走っている仕事は取り消せない。仕事の間に期限か取り消しが来ると、仕事が終わるのを待ってから、close_notifyを送らずに`Conn`とソケットを落とし、`Cancelled`を投げる。`Async.timeout`が戻るのはそのときである。仮想の時計では、期限が仕事の途中に来ることはない。仕事の間にrunが割り込まれると、runは仕事の予算まで仕事を待ち、それより長い仕事は`Machine`をpoisonedにする ([VM](vm.md)の「時計と driver」)
 - `read_chunk b s` は、平文を `b` の後ろに 1 バイト以上 65 536 バイト以下足して返す。`Conn` に平文がなければ、ソケットを読んで復号するのを平文が届くまで繰り返す。相手が close_notify で閉じた後は、何も足さずに `b` の中身のまま返す。これが EOF である。close_notify のない EOF は、届いた平文をすべて返した後で、種類 `ConnectionReset` の IO の失敗になる。TLS の誤りを見つけた押し込みで復号した平文は返さない
 - `read_line s` は1行を読み、終わりの改行を除いて返す。改行、上限、UTF-8 の扱いと文言は `Net.read_line` と同じで、行は同じ関数で切り出す (上の「`Std.Net`」)。EOF は close_notify の後だけで、改行のない最後の行はそのまま返し、残りがなければ `None` を返す。close_notify のない EOF は `read_chunk` と同じ失敗である。読みすぎた平文は `Conn` に残り、次の `read_chunk` か `read_line` が先に返す。そのため2つを混ぜても、平文は失われず、順も入れ替わらない
@@ -1670,7 +1670,7 @@ main () = Async.run (fn () ->
 |---|---|---|
 | サーバーの名前を使えない | `Other` | `cannot set up TLS for {host}: the server name is not valid` |
 | 足す CA の PEM の誤り | `Other` | `cannot set up TLS for {host}: the CA certificates are not valid PEM` |
-| 根の証明書がない (テストのdriverのrunでCAを渡さなかった) | `Other` | `cannot set up TLS for {host}: no root certificates are available` |
+| 根の証明書がない (CAを渡さずにOSの検証器を作れなかった。よくあるのはLinuxでOSの根のファイルがないときである。または、テストのdriverのrunでCAを渡さなかった) | `Other` | `cannot set up TLS for {host}: no root certificates are available` |
 | TLS のない処理系 | `NotAvailable` | `cannot set up TLS for {host}: not available` |
 | TLSの仕事を走らせられない (パニックなど) | 失敗の種類 | `cannot run TLS: {理由}` |
 | 証明書の拒否 | `Other` | `cannot complete the TLS handshake with {host}: the server certificate was rejected` |
@@ -1683,7 +1683,7 @@ main () = Async.run (fn () ->
 | 取り消し | `Cancelled` | `task was cancelled` |
 | ソケットの誤り | `Std.Net` と同じ | `Std.Net` の文言 |
 
-証明書の拒否は、理由によらず同じ文言で、rustls の詳細を付けない。
+証明書の拒否は、理由によらず同じ文言で、rustlsとOSの詳細を付けない。検証の中でOSの側が失敗したとき (Windowsの証明書のエンジンの誤りなど) も、証明書の拒否として報告する。
 
 包みの形は次のとおりである。`status` は `Conn` の状態を次の印の和で返す。
 
@@ -1750,7 +1750,7 @@ main () = Async.run (fn () ->
 | `get` | `String -> <IO, Panic, Async> Response` | eml |
 | `request` | `String -> String -> Bytes -> Options -> <IO, Panic, Async> Response` | eml |
 
-- `Options`は要求の設定である。`headers`は要求に足すヘッダー、`ca`は根に足すCAの証明書のPEM (`Tls.connect_with_ca`の`ca`で、空なら既定の根だけ。テストのdriverのrunには既定の根がない)、`max_redirects`は追うリダイレクトの回数の上限である。`defaults`は`Options { headers = [], ca = "", max_redirects = 5 }`である。`Options`と`Response`は`Eq`と`Show`を導出する
+- `Options`は要求の設定である。`headers`は要求に足すヘッダー、`ca`は根に足すCAの証明書のPEM (`Tls.connect_with_ca`の`ca`で、空ならOSの根だけ。テストのdriverのrunには根がない)、`max_redirects`は追うリダイレクトの回数の上限である。`defaults`は`Options { headers = [], ca = "", max_redirects = 5 }`である。`Options`と`Response`は`Eq`と`Show`を導出する
 - `get url` は `request "GET" url (Bytes.empty ()) defaults` である
 - `request method url body options` は、接続の前に `method`、`options.headers` の各項目、`url` の順に確かめる。`method` は RFC 9110 の token (英数字と ``!#$%&'*+-.^_`|~`` の1文字以上) で、綴りのまま送る。メソッドは書いたとおりに比べるので、下の `HEAD`、`POST`、`PUT`、`PATCH` の扱いは大文字の綴りにだけ当たる。ヘッダーの名前は token で、値は HTAB のほかの制御文字 (CR、LF、NUL を含む) と DEL を含まない。0x80 からのバイトは UTF-8 の文字として通す。名前が大文字小文字を区別せずに `Host`、`Connection`、`Content-Length`、`Transfer-Encoding` のどれかなら失敗にする。この4つは本文の区切りと接続の扱いを決めるので、`Std.Http` が書く
 - URL は `scheme://authority` に path と query が続く形である。最初の `#` から後ろの fragment は除き、送らない。残りのバイトはどれも 0x21 から 0x7E でなければならない。空白、制御文字、ASCII でない文字は失敗で、百分率の符号化は呼ぶ側が行う。scheme は最初の `://` の前で、大文字小文字を区別せずに `http` か `https` である。authority は `://` の後から最初の `/` か `?` の手前までで、`host` か `host:port` である。`@` を含む authority (userinfo) と `[` で始まる authority (IPv6 のアドレス) は扱わない。host は英数字、`-`、`.`、`_` の1文字以上で、小文字にして使う。port は1桁から5桁の数字で、1 から 65535 である。省くと、`http` は 80、`https` は 443 である。空の path は `/` にし、`?` で始まるときは前に `/` を足す。オリジンは scheme、host、port の組である

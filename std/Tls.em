@@ -13,11 +13,11 @@ pub extern data Conn
 pub data Stream =
   | Stream { conn : Conn, sock : Net.TcpStream }
 
--- `host` の `port` へ接続し、`host` を SNI と証明書の名前に使って handshake まで行う。根は既定の根だけである
+-- `host`の`port`へ接続し、`host`をSNIと証明書の名前に使ってhandshakeまで行う。根はOSの根だけである
 pub connect : String -> Int -> <IO, Async> Stream
 connect host port = connect_with_ca "" host port
 
--- `connect` に、根に足す CA の証明書 (PEM) を渡す。空の文字列なら既定の根だけを使う
+-- `connect`に、OSの根に加えて信頼するCAの証明書 (PEM) を渡す。空の文字列ならOSの根だけを使う
 pub connect_with_ca : String -> String -> Int -> <IO, Async> Stream
 connect_with_ca ca host port =
   -- 名前とPEMの誤りは、接続を開く前に投げる
@@ -25,11 +25,11 @@ connect_with_ca ca host port =
   let sock = Net.connect host port
   handshake host conn sock
 
--- 既にある `TcpStream` の上で handshake する。`host` は SNI と証明書の名前で、根は既定の根だけである
+-- 既にある`TcpStream`の上でhandshakeする。`host`はSNIと証明書の名前で、根はOSの根だけである
 pub wrap : String -> Net.TcpStream -> <IO, Async> Stream
 wrap host sock = wrap_with_ca "" host sock
 
--- `wrap` に、根に足す CA の証明書 (PEM) を渡す。空の文字列なら既定の根だけを使う
+-- `wrap`に、OSの根に加えて信頼するCAの証明書 (PEM) を渡す。空の文字列ならOSの根だけを使う
 pub wrap_with_ca : String -> String -> Net.TcpStream -> <IO, Async> Stream
 wrap_with_ca ca host sock =
   let conn = client host ca

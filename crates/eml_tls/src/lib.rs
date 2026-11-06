@@ -100,14 +100,15 @@ pub struct Trust {
 }
 
 impl Trust {
-    /// webpki-rootsの根に`extra_ca_pem`のCAを足し、現実の時刻で確かめる。`extra_ca_pem`が空ならwebpki-rootsの根だけを
-    /// 信頼する
+    /// OSの検証器で確かめ、OSの根に加えて`extra_ca_pem`のCAを信頼する。時刻は現実のものを使う。Linuxでは呼ぶたびに
+    /// 根のファイルを読む
     pub fn platform(extra_ca_pem: &[u8]) -> Result<Trust, Error> {
-        let mut store = RootCertStore {
-            roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-        };
-        store.add_parsable_certificates(extra_roots(extra_ca_pem)?);
-        Trust::webpki(store, None)
+        Trust::os(extra_ca_pem, None)
+    }
+
+    /// `platform`と同じだが、`now`の時刻で確かめる。OSの検証器のテストのためにある
+    pub fn platform_at(extra_ca_pem: &[u8], now: UnixTime) -> Result<Trust, Error> {
+        Trust::os(extra_ca_pem, Some(now))
     }
 
     /// テストの世界: `ca_pem`のCAだけを根にし、`fixtures::NOW`の時刻で確かめる。`ca_pem`が空なら`Error::NoRoots`である
@@ -116,6 +117,23 @@ impl Trust {
         let mut store = RootCertStore::empty();
         store.add_parsable_certificates(extra_roots(ca_pem)?);
         Trust::webpki(store, Some(fixtures::NOW))
+    }
+
+    fn os(extra_ca_pem: &[u8], now: Option<UnixTime>) -> Result<Trust, Error> {
+        let roots = extra_roots(extra_ca_pem)?;
+        let no_extra = roots.is_empty();
+        // Linuxでは、システムの根も足す根もないと作るのに失敗する。その失敗を`Error::NoRoots`として報告する
+        // (docs/spec/stdlib.mdの「`Std.Tls`」)
+        let verifier = rustls_platform_verifier::Verifier::new_with_extra_roots(roots, provider())
+            .map_err(|e| match e {
+                _ if no_extra => Error::NoRoots,
+                rustls::Error::InvalidCertificate(_) => Error::CaPem,
+                _ => Error::Config,
+            })?;
+        Ok(Trust {
+            verifier: Arc::new(Opaque(Arc::new(verifier))),
+            now,
+        })
     }
 
     fn webpki(store: RootCertStore, now: Option<UnixTime>) -> Result<Trust, Error> {

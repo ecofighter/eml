@@ -134,7 +134,7 @@ unsafe fn tls_conn<M: Mode>(ctx: &Ctx<M>, conn: Word) -> Result<*mut TlsConn, Vm
 pub(crate) enum Roots {
     /// `Machine`が自分で作ったテストのdriver: 渡したCAだけを根にし、`fixtures::NOW`の時刻で確かめる。
     Fixtures,
-    /// 既定の根に、渡したCAを足したもの。
+    /// OSの検証器。OSの根に加えて、渡したCAを信頼する。
     Platform,
 }
 

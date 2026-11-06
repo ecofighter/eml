@@ -41,8 +41,8 @@ rustc-hash = "2.1"
 # provider は aws-lc-rs だけで、`eml_tls` が `builder_with_provider` で渡す。`logging` と `prefer-post-quantum` は使わないので既定は外す
 # (docs/implementation/architecture.md の「crate の依存関係」)
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-platform-verifier = "0.7.1"
 text-size = "1.1"
-webpki-roots = "1.0.11"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Threading"] }
 
 # テストの時間の多くはフロントエンドにあり、一部の crate だけを最適化しても縮まない。debug assertions は既定のまま有効にする

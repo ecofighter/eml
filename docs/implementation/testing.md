@@ -557,6 +557,8 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `eml_tls` は aws-lc-sys を組み、そのために対象の C のツールチェーンが要る。`.#cross` の devShell にはないので、この clippy は `eml_tls` を除き、`tls` を外した形で流す。Linux の2つの target も同じフラグである。`tls` を外した側のコードは、feature の組み合わせの clippy の行が検査する。`eml_tls` そのものは、CI のどの OS でも clippy とテストにかける。C の暗号を組む crate を dev-dependency に持ってよいのは `eml_tls` だけで、ほかの crate のテストは、optional の依存を `cfg(feature = "tls")` の下で通して `eml_tls` に届く。CI はこの決まりを `cargo tree` で確かめる (「feature の組み合わせの確認」)。
 
+本物のOSの検証器に届くテストは、`eml_tls`の`platform::`のテストと、`eml_cli`の`tls::`のテスト (上の「CLI のテスト」) である。`platform::`のテストのhandshakeは、fixturesに対してメモリの中で、`fixtures::NOW`の時刻で確かめる。渡したCAは信頼され、`other-ca.pem`と、証明書にない名前は拒まれる。Linuxではさらに2つのテストが、`SSL_CERT_FILE`を`/dev/null`にし、`SSL_CERT_DIR`を外して、テストのバイナリを子として流し直す。これはシステムの根を持たないnixのbuildのsandboxの条件である。このとき検証器が、CAを渡さなければ`no root certificates are available`で失敗し、CAを渡せばhandshakeを終えることを確かめる。fixturesの証明書にはAIAもCDPもないので、検証器が取りに行くURLはない。Windowsはまずシステムのストアに対して鎖を組み、それが失敗したときだけ渡したCAを試す。OSの根に頼るテストはないので、結果は機械がどの根を持つかに左右されない。
+
 ### 新しい対象で落ちたテストの仕分け
 
 CI の対象 (OS、CPU、AddressSanitizer の脚) を足して落ちたテストは、1件ずつ見てから次のどれかに分ける。前もって範囲で期待値の書き直しを許すことはしない。
