@@ -4257,6 +4257,48 @@ impl<M: Mode> Heap<M> {
         unsafe { self.foreign(w) }
     }
 
+    /// `Foreign`の値を移して取り出す。箱は生きたままで、破棄処理は何もしなくなり、`foreign`は`WrongKind`を返す。
+    /// 呼ぶ側は、その後で参照を手放す (docs/spec/object-model.mdの「核の操作」)。検査モードの誤りは`foreign_unique`
+    /// と同じである。
+    ///
+    /// # Safety
+    ///
+    /// `foreign_unique`と同じである。
+    pub unsafe fn foreign_take<T: Send + 'static>(&self, w: Word) -> (r: Result<T, HeapError>)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+            !M::CHECKED ==> self.settleable() && self.readable(w) && self.owned(w) && self.rc_value(
+                w,
+            ) == 1,
+        ensures
+            r is Err ==> M::CHECKED || r == Err::<T, HeapError>(HeapError::WrongKind),
+    {
+        let h = self.header_of(w);
+        proof {
+            if self.consistent() && self.settleable() && self.readable(w) {
+                self.core.lemma_readable(w);
+            }
+        }
+        self.checked_live(h)?;
+        if M::CHECKED {
+            let rc = self.core.rc_get(h);
+            if rc != 1 {
+                return Err(HeapError::NotUnique);
+            }
+            self.checked_owner(h, rc)?;
+        }
+        if self.core.meta_get(h).kind() != Kind::Foreign {
+            return Err(HeapError::WrongKind);
+        }
+        let tracked p = self.core.tracked_perm(h@.addr);
+        match foreign::take::<T>(h, Tracked(p)) {
+            Some(v) => Ok(v),
+            None => Err(HeapError::WrongKind),
+        }
+    }
+
     /// `set_lin` の後の状態。`w` の物体の `meta` の `lin` ビットだけが `lin` になり、ほかは変わらない。
     pub closed spec fn relinked(&self, old: Heap<M>, w: Word, lin: bool) -> bool {
         let h = w.bits_spec();
