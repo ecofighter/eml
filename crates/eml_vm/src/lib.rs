@@ -764,7 +764,7 @@ impl<M: Mode> Machine<M> {
         };
         // 写して手放した結果は、ほかの worker のヒープの物体でありうる。手放しがそのヒープに積んだ解放を、統計と
         // 検査の前に取り込む (docs/spec/vm.md の「誤り、止めること、終わり」)
-        if copied.is_some() && scheduled.workers > 0 {
+        if copied.is_some() && (scheduled.workers > 0 || separate) {
             reclaim_all(ctx, &mut self.others);
         }
         // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである

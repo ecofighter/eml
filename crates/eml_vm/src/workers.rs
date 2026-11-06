@@ -905,10 +905,14 @@ pub(crate) fn run_main<M: Mode, P: Policy>(
     mut park: Box<dyn Park>,
 ) -> WorkerExit<M> {
     let k = run.main();
-    on_own_ctx(run, control, host, k, "<main worker>".into(), |ctx| {
-        main_work::<M, P>(
+    on_own_ctx(run, control, host, k, "<main worker>".into(), move |ctx| {
+        let done = main_work::<M, P>(
             code, ctx, policy, run, control, cells, max_depth, &mut *park,
-        )
+        );
+        // `Park`の`Drop`も利用者のコードなので`catch_unwind`の中で落とし、そこでのpanicはメインのworkerのpanicと
+        // 同じに扱う
+        drop(park);
+        done
     })
 }
 

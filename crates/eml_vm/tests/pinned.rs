@@ -1105,3 +1105,49 @@ main () = Async.run (fn () ->
         std::thread::current().id()
     );
 }
+
+/// `Drop`でpanicする`Park`。待ちは既定の`Park`と同じである。
+struct DropPanicPark;
+
+impl Park for DropPanicPark {
+    fn wait(&mut self, _timeout: Option<Duration>, pending: &mut dyn Pending) -> io::Result<()> {
+        pending.default_wait()
+    }
+
+    fn waker(&self) -> Option<Arc<dyn IoWaker>> {
+        None
+    }
+}
+
+impl Drop for DropPanicPark {
+    fn drop(&mut self) {
+        panic!("park drop");
+    }
+}
+
+/// `Drop`でpanicする`Park`は、メインのworkerのpanicと同じくrunを終える。`execute`は呼んだスレッドでそのpanicを同じ
+/// 中身のまま起こし直し、次の`execute`はいつもどおり動く。
+#[test]
+fn a_park_whose_drop_panics_ends_the_run() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () -> println \"pinned\")
+  println \"main\")
+";
+    let config = RunConfig::default()
+        .with_control(limits(2))
+        .with_main_park(Arc::new(|| Box::new(DropPanicPark)));
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_with(src, config)))
+        .expect_err("the panic reaches the caller");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied());
+    assert_eq!(message, Some("park drop"));
+
+    let (lines, result) = run(src, 2);
+    finished(result);
+    assert_eq!(texts(&lines), ["pinned", "main"]);
+}
