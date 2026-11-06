@@ -141,7 +141,7 @@ fn taken_counts_each_worker_and_ignores_refunds() {
     assert_eq!(control.taken(0), 10);
     assert_eq!(control.taken(1), 0);
     assert_eq!(control.taken(2), 25);
-    assert_eq!(control.taken(3), 0);
+    assert_eq!(control.taken(4), 0);
     assert_eq!(control.bytes(), 10);
 }
 
@@ -386,6 +386,21 @@ fn three_workers() -> (Arc<Control>, Vec<Ctx<Fast>>) {
         .map(|k| Ctx::for_worker(control.clone(), host(&Arc::default()), k))
         .collect();
     (control, ctxs)
+}
+
+// workerの語のあとに、メインのworkerの語が1つある
+#[test]
+fn control_keeps_a_word_for_the_main_worker() {
+    let (control, _) = three_workers();
+    let main = Ctx::<Fast>::for_worker(control.clone(), host(&Arc::default()), 3);
+    control.end_run();
+    assert_eq!(control.worker_bits(3), Control::END);
+    assert_eq!(main.poll(0), Err(Stop::Ended));
+    let before = control.taken(3);
+    control.charge(3, 30);
+    assert_eq!(control.taken(3), before + 30);
+    let past = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| control.word(4)));
+    assert!(past.is_err());
 }
 
 // 止めるビットを書く側は、どれもすべての worker の語に直接書く。語から語へ写す者はいない

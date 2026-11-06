@@ -883,15 +883,15 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 | 欄 | 中身 |
 |---|---|
 | 止める語 | 止める理由のビットを持つ `AtomicU32`。ビットは `Control::INTERRUPT` (1)、`Control::MEMORY` (2)、`Control::TERMINATE` (8) である。host の読み手 (`Control::stop_bits()`) が読む |
-| workerの止める語 | workerごとに1つある`Arc<AtomicU32>`で、添字がworkerの番号である。`Control::new`で`limits.workers`個作り、増やしも減らしもしない。worker `k`の安全点が`k`番目の語を読む。`INTERRUPT`、`MEMORY`、`TERMINATE`と同じビットに加えて、この語にだけ立つ`Control::END` (4) と`Control::NOTICE` (`1 << 30`) を持つ。`END`はrunが終わったのでエントリへ戻れ、`NOTICE`は次の安全点で知らせを集めよ、という印である |
+| workerの止める語 | workerごとに1つある`Arc<AtomicU32>`で、添字がworkerの番号である。`Control::new`で`limits.workers + 1`個作り、増やしも減らしもしない。語0..N−1 (Nは`limits.workers`) は`main`とタスクを走らせるworkerの語で、語Nは、メインのworkerを別に持つrunでそのworkerが使い、持たないrunでは使わない。worker `k`の安全点が`k`番目の語を読む。`INTERRUPT`、`MEMORY`、`TERMINATE`と同じビットに加えて、この語にだけ立つ`Control::END` (4) と`Control::NOTICE` (`1 << 30`) を持つ。`END`はrunが終わったのでエントリへ戻れ、`NOTICE`は次の安全点で知らせを集めよ、という印である |
 | シグナルの語 | 待つタスクへまだ届けていないシグナルを持つ `AtomicU32` の `signals`。`INTERRUPT` か `TERMINATE` のビット `b` が保留を、`b << 16` が中継済みを表す |
 | 見張りの語 | 待つタスクのいるシグナルのビットを持つ `AtomicU32` の `watched`。シグナルのハンドラが読む |
 | 終わりの欄 | `exit n` の終わりを持つ `AtomicU32` の `end` (0 は開いている、1 は書いた) と、終了コードを持つ `AtomicI64` の `code` |
 | 確保量 | セッションのヒープが OS から取ったページのバイト数を持つ `AtomicUsize` |
-| worker ごとの取った量 | `Control::taken(k)`。worker `k` のヒープが取ったページのバイト数の合計を持つ `AtomicUsize` の列で、`Control::new` で `limits.workers` 個作る。単調に増え、払い戻しでは減らない。範囲の外の `k` は 0 を返す |
+| workerごとの取った量 | `Control::taken(k)`。worker `k`のヒープが取ったページのバイト数の合計を持つ`AtomicUsize`の列で、`Control::new`で止める語と同じ`limits.workers + 1`個作る。単調に増え、払い戻しでは減らない。範囲の外の`k`は0を返す |
 | 柔らかい上限の閾値 | 確保量がこの値を越えると、課金した worker に知らせる `AtomicUsize` の `next`。`Limits::soft_bytes` で始まる |
 | ID の表 | 検査モードの論理的な worker ID と ID ごとの数を持つ `WorkerIds` (上の「論理的な worker ID」) |
-| 上限 (`Limits`) | `max_bytes` (確保量)、`soft_bytes` (確保量の柔らかい上限。超えると、確保の多いタスクに `ResourceLimit` を起こさせる。`usize::MAX` なら置かない)、`max_depth` (深さ)、`max_evv` (`evv` の長さ)、`workers` (worker の数。1 以上)。`Control::new(limits)` で作るときに決め、変えない。既定の値は、`workers` が 1 で、ほかはどれも `usize::MAX` である |
+| 上限 (`Limits`) | `max_bytes` (確保量)、`soft_bytes` (確保量の柔らかい上限。超えると、確保の多いタスクに`ResourceLimit`を起こさせる。`usize::MAX`なら置かない)、`max_depth` (深さ)、`max_evv` (`evv`の長さ)、`workers` (`main`とタスクを走らせるworkerの数。1以上で`usize::MAX`未満)。`Control::new(limits)`で作るときに決め、変えない。既定の値は、`workers`が1で、ほかはどれも`usize::MAX`である |
 
 - 安全点の確かめは`Ctx::poll(depth) -> Result<(), Stop>`である。速い道は、`depth`が今のタスクの深さの上限 (`max_depth`からタスクの深さの起点を引いた値。上の「タスクの切り替え」) を超えるかと、止める語が0でないかの2つの比較で、どちらも偽なら`Ok`を返す。真なら`#[cold]`の関数が、速い道で読んだビットから`Stop`を決める。優先の順は`Interrupted`、`Terminated`、`MemoryLimit`、`Ended`、`Notice`、`DepthLimit`である。`DepthLimit`は「止めるビットがなく、深さが今の上限を超えた」で、本当の深さの超過か、VMが上限を0にした保留のタスクの上限である。どちらかはVMが決める ([VM](vm.md)の「タスクの上限」)。VMがタスクごとの上限に使うのはこの欄の値だけで、`poll`は変わらない。`END`は`Ended`になる。`Notice`は止めることでなく、知らせを集めることを求める。文言は`a signal notice`で、利用者には見せない。`poll`が読む語は自分のworkerの止める語で、止める語ではない。`Ctx`はその語の`Arc` (`Control::word(k)`) を写して持つので、`Ctx`の欄を読み、語を読む2回の読みで済む。ビットを読み直さないのは、その間にほかのスレッドが`clear`すると、深さの上限を超えていないのに`DepthLimit`を返すためである。VMは呼び出し、戻り、自己末尾呼び出しのジャンプで`poll`を呼ぶ ([VM](vm.md)の「呼び出しと戻り」)
 - 深さは、VM のタスクが持つスタックの語の数で数える。`poll` に渡す深さはタスクの深さの起点を含まず、起点は上限の側で引いてある。フレームの数で数えないのは、スタックの大きさを抑えるのが目的だからである

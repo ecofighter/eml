@@ -30,7 +30,8 @@ pub struct Limits {
     pub max_depth: usize,
     /// `evv` の長さの上限。
     pub max_evv: usize,
-    /// worker の数。`Control` は worker ごとに止める語を1つ持つ。1 以上である。
+    /// `main`とタスクを走らせるworkerの数。`Control`はworkerごとに止める語を1つ持ち、メインのworkerの語をもう1つ持つ。
+    /// 1以上で`usize::MAX`未満である。
     pub workers: usize,
 }
 
@@ -60,8 +61,9 @@ pub enum Stop {
 
 pub struct Control {
     stop: AtomicU32,
-    /// worker ごとの止める語。添字が worker の番号である。`Control::new` で `limits.workers` 個作り、増やしも減らしも
-    /// しない。各 worker の `Ctx` が自分の語の `Arc` を写して持つ。
+    /// workerごとの止める語。添字がworkerの番号である。`Control::new`で`limits.workers + 1`個作り、増やしも減らしも
+    /// しない。最後の語 (添字`limits.workers`) は、メインのworkerを別に持つrunではそのworkerが使い、持たないrunでは
+    /// 使わない。各workerの`Ctx`が自分の語の`Arc`を写して持つ。
     words: Vec<Arc<AtomicU32>>,
     end: AtomicU32,
     code: AtomicI64,
@@ -379,21 +381,21 @@ fn stop_words(n: usize) -> (r: Vec<Arc<AtomicU32>>)
 }
 
 impl Control {
-    /// `limits.workers` 個の止める語を持つ `Control`。worker 0 の `Ctx` が語を1つ要るので、`limits.workers` は 1 以上で
-    /// ある。
+    /// `limits.workers + 1`個の止める語を持つ`Control`。runには`main`を走らせるworkerが要るので`limits.workers`は1以上
+    /// で、`+ 1`が溢れないように`usize::MAX`未満である。この範囲は前提で、実行時には確かめない。
     pub fn new(limits: Limits) -> (r: Control)
         requires
-            limits.workers >= 1,
+            1 <= limits.workers < usize::MAX,
         ensures
-            r.word_count() == limits.workers,
+            r.word_count() == limits.workers + 1,
     {
         Control {
             stop: AtomicU32::new(0),
-            words: stop_words(limits.workers),
+            words: stop_words(limits.workers + 1),
             end: AtomicU32::new(0),
             code: AtomicI64::new(0),
             bytes: AtomicUsize::new(0),
-            taken: byte_counters(limits.workers),
+            taken: byte_counters(limits.workers + 1),
             next: AtomicUsize::new(limits.soft_bytes),
             signals: AtomicU32::new(0),
             watched: AtomicU32::new(0),
@@ -404,7 +406,7 @@ impl Control {
         }
     }
 
-    /// 止める語の数。`limits.workers` である。
+    /// 止める語の数。`limits.workers + 1`である。
     pub closed spec fn word_count(&self) -> nat {
         self.words@.len()
     }
@@ -440,7 +442,7 @@ impl Control {
     /// worker `k` の止める語。`Ctx` が写して持ち、安全点で読む。
     ///
     /// # Panics
-    /// `k` が `limits.workers` 以上のとき。
+    /// `k`が`limits.workers`より大きいとき。
     pub fn word(&self, k: usize) -> Arc<AtomicU32>
         requires
             k < self.word_count(),
