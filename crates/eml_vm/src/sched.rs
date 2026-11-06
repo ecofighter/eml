@@ -95,12 +95,12 @@ pub enum Memory {
 /// スケジュールの方針の選び方。`RunConfig::with_sched` で選ぶ。`eml run` と `eml repl` はいつも `Normal` で動く。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Sched {
-    /// 監視のスレッドの `PREEMPT` で横取りする。
+    /// 自分からは切り替えない。起こしたタスクを列の後ろに入れ、メモリは監視のスレッドが見る。
     Normal,
-    /// 横取りしない。
+    /// 自分からは切り替えない。起こしたタスクを列の先頭に入れ、メモリは集める地点が見る。
     #[default]
     Sequential,
-    /// seed で決まる擬似乱数で、横取りする安全点と次のタスクを選ぶ。
+    /// seedで決まる擬似乱数で、切り替える安全点と次のタスクを選ぶ。
     Seeded(u64),
 }
 
@@ -117,16 +117,13 @@ impl Sched {
 /// スケジューラの中のタスクの番号。
 pub type TaskId = usize;
 
-/// スケジュールの方針。いつ横取りし、次にどのタスクを動かし、起こしたタスクを列のどこに入れるかを決める。
+/// スケジュールの方針。安全点で切り替えるか、次にどのタスクを動かし、起こしたタスクを列のどこに入れるかを決める。
 pub trait Policy: Send {
-    /// 監視のスレッドの `PREEMPT` で横取りするか。真なら、`Scheduler` は最初のタスクで監視のスレッドを始め、切り替えを
-    /// 監視のスレッドに数えさせる。
-    const PREEMPTS: bool;
     /// メモリの柔らかい上限を見る者。
     const MEMORY: Memory;
-    /// 安全点ごとに1回呼ぶ。真を返したら、横取りを試みる。
+    /// 安全点ごとに1回呼ぶ。真を返したら、切り替えを試みる。
     fn tick(&mut self) -> bool;
-    /// 横取りを試みた後に、次の横取りまでの予算を詰め直す。
+    /// 切り替えを試みた後に、次の切り替えまでの予算を詰め直す。
     fn reload(&mut self);
     /// 走れるタスクの列から、次に動かす項を取り出す。列の lock の下で呼ぶので、列のほかに触れない。
     fn pick(&mut self, ready: &mut VecDeque<Ready>) -> Option<Ready>;
@@ -139,15 +136,14 @@ pub trait Policy: Send {
         Self: Sized;
 }
 
-/// 監視のスレッドの `PREEMPT` だけで横取りする方針。列は FIFO である。
+/// 自分からは切り替えない方針。タスクは`Async`の操作で待つか終わるまで走る。列はFIFOである。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Normal;
 
 impl Policy for Normal {
-    const PREEMPTS: bool = true;
     const MEMORY: Memory = Memory::Watched;
 
-    // 横取りは監視のスレッドの `PREEMPT` が求めるので、安全点に分岐を残さない
+    // 定数の偽に畳まれ、安全点に分岐を残さない
     #[inline(always)]
     fn tick(&mut self) -> bool {
         false
@@ -168,12 +164,11 @@ impl Policy for Normal {
     }
 }
 
-/// 横取りしない方針。列の先頭から取り、起こしたタスクも先頭に入れる。
+/// 自分からは切り替えない方針。列の先頭から取り、起こしたタスクも先頭に入れる。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Sequential;
 
 impl Policy for Sequential {
-    const PREEMPTS: bool = false;
     const MEMORY: Memory = Memory::Gathered;
 
     // 定数の偽に畳まれ、安全点に分岐を残さない
@@ -203,7 +198,7 @@ pub struct Seeded {
     /// 作ったときの seed。worker ごとの方針を作るときに使う。
     seed: u64,
     state: u64,
-    /// 次の横取りまでに残る安全点の数。0 のままなら、次の安全点でまた試みる。
+    /// 次の切り替えまでに残る安全点の数。0のままなら、次の安全点でまた試みる。
     budget: u64,
 }
 
@@ -236,10 +231,9 @@ fn splitmix64(state: u64) -> u64 {
 }
 
 impl Policy for Seeded {
-    const PREEMPTS: bool = false;
     const MEMORY: Memory = Memory::Gathered;
 
-    // 予算が 0 になっても yield の途中なら切り替えないので、詰め直すのは横取りを試みたときだけにする
+    // 予算が0になってもyieldの途中なら切り替えないので、詰め直すのは切り替えを試みたときだけにする
     fn tick(&mut self) -> bool {
         self.budget = self.budget.saturating_sub(1);
         self.budget == 0
@@ -616,8 +610,8 @@ impl<P: Policy> Scheduler<P> {
         Ok(Some(deadline.map_or(cap, |d| d.min(cap))))
     }
 
-    /// 監視のスレッドを1回だけ始める。`begin_run` のほかに、横取りする方針で2つ目の仕事が走れるようになりうるときに
-    /// 呼ぶ。どれにも当たらない run はスレッドを作らない (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 監視のスレッドを1回だけ始める。`begin_run`のほかに、メモリを見張る方針で最初の`Async`のタスクを列に積むときに
+    /// 呼ぶ。どれにも当たらないrunはスレッドを作らない (docs/spec/vm.mdの「タスクとスケジュール」)。
     pub(crate) fn start_monitor(&mut self) {
         let watcher = &mut self.watcher;
         if std::mem::replace(&mut watcher.tried, true) {
@@ -627,7 +621,6 @@ impl<P: Policy> Scheduler<P> {
             Arc::clone(&watcher.control),
             Arc::clone(&self.cells),
             Arc::clone(&self.run),
-            P::PREEMPTS,
             P::MEMORY == Memory::Watched,
         );
     }
@@ -900,9 +893,6 @@ impl<P: Policy> Scheduler<P> {
     }
 
     pub(crate) fn add_task(&mut self, task: Task) -> TaskId {
-        if P::PREEMPTS {
-            self.start_monitor();
-        }
         match self.free_tasks.pop() {
             Some(id) => {
                 self.tasks[id] = Some(task);
@@ -915,15 +905,9 @@ impl<P: Policy> Scheduler<P> {
         }
     }
 
-    /// 動いているタスクの番号を替える。`current` はここでだけ書き、横取りする方針では監視のスレッドに切り替えを伝える。
-    /// 数は監視のスレッドが判定に読むだけで、ほかのメモリへの書き込みを公開しないので Relaxed で足りる。
+    /// 動いているタスクの番号を替える。`current`はここでだけ書く。
     pub(crate) fn set_current(&mut self, id: TaskId) {
         self.current = id;
-        if P::PREEMPTS {
-            self.run.slots[self.index]
-                .switches
-                .fetch_add(1, Ordering::Relaxed);
-        }
     }
 
     /// 表から外したタスクの欄を空ける。

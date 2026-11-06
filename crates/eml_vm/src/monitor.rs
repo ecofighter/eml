@@ -1,9 +1,8 @@
-//! 監視のスレッド (docs/spec/vm.md の「タスクとスケジュール」)。`Scheduler` が持つ。保留のシグナルを run の mail へ中継して
-//! すべての worker の語に `NOTICE` を立て、止めるビットや知らせのときにすべての worker を起こす。横取りする方針では、worker
-//! ごとに、刻みの間に動くタスクが替わらなければその worker の語に `PREEMPT` も立てる。メモリを見張る方針では、確保量が
-//! 柔らかい上限の閾値を越えたら、数のいちばん大きいタスクに上限の旗を立てる。スレッドが持つのは
-//! `Arc<Control>`、mail を持つ `Shared`、run の表 `Run`、`Arc<Watch>` だけで、ヒープの語も `Ctx` も持たない。ヒープに触れるのは
-//! worker のスレッドだけにするためである (docs/future/multicore.md の「スレッドと worker」)。
+//! 監視のスレッド (docs/spec/vm.mdの「タスクとスケジュール」)。`Scheduler`が持つ。保留のシグナルをrunのmailへ中継して
+//! すべてのworkerの語に`NOTICE`を立て、止めるビットや知らせのときにすべてのworkerを起こす。メモリを見張る方針では、
+//! 確保量が柔らかい上限の閾値を越えたら、数のいちばん大きいタスクに上限の旗を立てる。スレッドが持つのは
+//! `Arc<Control>`、mailを持つ`Shared`、runの表`Run`、`Arc<Watch>`だけで、ヒープの語も`Ctx`も持たない。ヒープに触れるのは
+//! workerのスレッドだけにするためである (docs/future/multicore.mdの「スレッドと worker」)。
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering, fence};
@@ -45,15 +44,14 @@ pub(crate) struct Monitor {
 }
 
 impl Monitor {
-    /// 監視のスレッドを始める。自己パイプは`run`のものを待つ。`preempt`は刻みごとの横取りを求めるか、
-    /// `pressure`は刻みごとにメモリの柔らかい上限を見るかである。始められなければ`None`を返し、
+    /// 監視のスレッドを始める。自己パイプは`run`のものを待つ。`pressure`は刻みごとにメモリの
+    /// 柔らかい上限を見るかである。始められなければ`None`を返し、
     /// 呼ぶ側は監視なしで続ける。そのときの振る舞いはFIFOの逐次と同じで、誤りにはしない。柔らかい上限もなくなる
     /// (docs/spec/vm.mdの「タスクとスケジュール」)。
     pub(crate) fn start(
         control: Arc<Control>,
         cells: Arc<Shared>,
         run: Arc<Run>,
-        preempt: bool,
         pressure: bool,
     ) -> Option<Monitor> {
         let watch = Arc::new(Watch {
@@ -71,10 +69,8 @@ impl Monitor {
             .stack_size(STACK);
         // SIGINT と SIGTERM が監視のスレッドに届くと、VM のスレッドの待っている読みに `EINTR` が来なくなる
         // (docs/spec/vm.md の「上限と割り込み」)
-        let thread = eml_io::spawn_masked(builder, move || {
-            watch_loop(&relay, &shared, preempt, pressure)
-        })
-        .ok()?;
+        let thread =
+            eml_io::spawn_masked(builder, move || watch_loop(&relay, &shared, pressure)).ok()?;
         Some(Monitor {
             watch,
             doorbell,
@@ -91,20 +87,6 @@ impl Monitor {
         self.thread.thread().unpark();
         // 監視のループは panic しない。panic しても止める側に伝えることはないので、結果は捨てる
         let _ = self.thread.join();
-    }
-}
-
-/// 刻みごとに、動くタスクが前の刻みから替わったかを決める。時間に依らずにテストするため、ループから分けてある。
-struct Ticker {
-    last: u64,
-}
-
-impl Ticker {
-    /// 前の刻みから切り替えがなければ真を返す。
-    fn tick(&mut self, switches: u64) -> bool {
-        let same = switches == self.last;
-        self.last = switches;
-        same
     }
 }
 
@@ -189,22 +171,15 @@ pub(crate) fn pressure_tick(
     Some(cell)
 }
 
-/// 自己パイプで眠るときの待ちの長さ。刻む務め (横取りかメモリの見張り) があっても、動いている worker がなければ刻まずに
-/// 鳴るまで眠る。動き始めた worker が自己パイプを鳴らすので、刻みを取りこぼさない。動く worker のない間は確保も
-/// ない (docs/spec/vm.md の「タスクとスケジュール」)。
-fn bell_timeout(ticks: bool, running: usize, until_next: Duration) -> Option<Duration> {
-    (ticks && running > 0).then_some(until_next)
+/// 自己パイプで眠るときの待ちの長さ。刻む務め (メモリの見張り) があっても、動いているworkerがなければ刻まずに
+/// 鳴るまで眠る。動き始めたworkerが自己パイプを鳴らすので、刻みを取りこぼさない。動くworkerのない間は確保も
+/// ない (docs/spec/vm.mdの「タスクとスケジュール」)。
+fn bell_timeout(pressure: bool, running: usize, until_next: Duration) -> Option<Duration> {
+    (pressure && running > 0).then_some(until_next)
 }
 
-fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, pressure: bool) {
+fn watch_loop(relay: &Relay, watch: &Watch, pressure: bool) {
     let run = &*relay.run;
-    let mut tickers: Vec<Ticker> = run
-        .slots
-        .iter()
-        .map(|slot| Ticker {
-            last: slot.switches.load(Ordering::Relaxed),
-        })
-        .collect();
     let mut next = Instant::now() + TICK;
     loop {
         // 自己パイプがなければ、刻みでシグナルと止めるビットを見に行く。眠る worker を起こせるのは監視のスレッドだけ
@@ -213,11 +188,8 @@ fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, pressure: bool) {
         match run.bell.as_deref() {
             // 鳴ったかどうかによらず、保留のシグナルを見に行く
             Some(doorbell) => {
-                let timeout = bell_timeout(
-                    preempt || pressure,
-                    run.running.load(Ordering::Acquire),
-                    until_next,
-                );
+                let timeout =
+                    bell_timeout(pressure, run.running.load(Ordering::Acquire), until_next);
                 doorbell.wait(timeout);
                 // 刻まずに眠った後は、起きた時から刻み直す。遅れた刻みをまとめて取り戻さないためである
                 if timeout.is_none() {
@@ -233,13 +205,6 @@ fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, pressure: bool) {
         // 待ちは時間の前にも戻りうる
         if Instant::now() < next {
             continue;
-        }
-        if preempt {
-            for (k, (slot, ticker)) in run.slots.iter().zip(&mut tickers).enumerate() {
-                if ticker.tick(slot.switches.load(Ordering::Relaxed)) {
-                    relay.control.preempt(k);
-                }
-            }
         }
         if pressure {
             pressure_tick(&relay.control, &relay.shared, run, false);
@@ -258,25 +223,10 @@ mod tests {
 
     use eml_rt::{Checked, Ctx, Word};
 
-    use super::{Monitor, Relay, Ticker, bell_timeout, choose, pressure_tick};
+    use super::{Monitor, Relay, bell_timeout, choose, pressure_tick};
     use crate::cells::{self, CellRef, MailItem, Registry, Shared};
-    use crate::doorbell::Doorbell;
     use crate::sched::{Normal, Scheduler};
     use crate::workers::{NO_CELL, Run, cell_word};
-
-    #[test]
-    fn a_tick_without_a_switch_asks_for_a_switch() {
-        let mut ticker = Ticker { last: 3 };
-        assert!(ticker.tick(3));
-        assert!(ticker.tick(3));
-    }
-
-    #[test]
-    fn a_tick_after_a_switch_does_not() {
-        let mut ticker = Ticker { last: 3 };
-        assert!(!ticker.tick(4));
-        assert!(ticker.tick(4));
-    }
 
     /// 鳴らされた回数を数える waker。
     #[derive(Default)]
@@ -554,7 +504,6 @@ mod tests {
             Arc::clone(&control),
             Arc::clone(&shared),
             Arc::clone(&run),
-            false,
             true,
         )
         .expect("the monitor started");
@@ -578,37 +527,6 @@ mod tests {
         assert_eq!(bell_timeout(false, 1, tick), None);
     }
 
-    /// 自己パイプのある横取りの監視は、どの worker も動いていない間は刻まず、`PREEMPT` を立てない。worker が動き始めると
-    /// 自己パイプが鳴り、刻みを始める。立たないことは 50 ms (5 刻み) で確かめ、立つことは 5 秒まで待つ。
-    #[test]
-    fn the_monitor_sleeps_while_every_worker_is_parked() {
-        let control = Arc::new(Control::new(Limits::default()));
-        let run = Arc::new(Run::new(
-            1,
-            Some(Doorbell::new().unwrap()),
-            crate::driver::RunClock::Virtual(Arc::default()),
-            Arc::default(),
-        ));
-        run.park(0);
-        let monitor = Monitor::start(
-            Arc::clone(&control),
-            shared(),
-            Arc::clone(&run),
-            true,
-            false,
-        )
-        .expect("the monitor started");
-        std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(control.worker_bits(0) & Control::PREEMPT, 0);
-        run.wake(0);
-        let start = Instant::now();
-        while control.worker_bits(0) & Control::PREEMPT == 0 {
-            assert!(start.elapsed() < Duration::from_secs(5), "no tick");
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        monitor.stop();
-    }
-
     /// 自己パイプのない監視は刻みごとに止めるビットを見て、眠っている worker を起こす。シグナルのハンドラと同じく、
     /// 止めるビットを立てる側は誰も起こさない。
     #[test]
@@ -629,14 +547,8 @@ mod tests {
                 woke.send(()).unwrap();
             })
         };
-        let monitor = Monitor::start(
-            Arc::clone(&control),
-            shared(),
-            Arc::clone(&run),
-            false,
-            false,
-        )
-        .expect("the monitor started");
+        let monitor = Monitor::start(Arc::clone(&control), shared(), Arc::clone(&run), false)
+            .expect("the monitor started");
         control.interrupt();
         assert!(rx.recv_timeout(Duration::from_secs(5)).is_ok(), "not woken");
         worker.join().unwrap();

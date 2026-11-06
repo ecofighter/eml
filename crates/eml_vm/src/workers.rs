@@ -37,7 +37,7 @@ const _: () = {
 
 /// worker の実行待ちの列の項 (docs/spec/vm.md の「タスクとスケジュール」)。
 pub enum Ready {
-    /// この worker の表にある VM の `Task`。`par` の右の子、横取りしたタスク、join で待つ親、`Async.run` で待つ `Task`
+    /// このworkerの表にあるVMの`Task`。`par`の右の子、`Seeded`が切り替えたタスク、joinで待つ親、`Async.run`で待つ`Task`
     /// で、フレームを持つ。
     Task(TaskId),
     /// フレームを持たない `Async` の仕事。持ち主が `pick` で取ったときにエントリの `Task` にする。
@@ -206,8 +206,6 @@ pub(crate) struct Slot {
     /// driver を持つ worker の driver の bin。ほかの worker は集める地点で印を見て、host を起こす
     /// (docs/spec/vm.md の「時計と driver」)。
     pub(crate) bin: OnceLock<Arc<HostBin>>,
-    /// worker が動くタスクを替えた回数。監視のスレッドが横取りの判定に読む。
-    pub(crate) switches: AtomicU64,
     /// 走れるタスクの列。受け箱とは別の lock で、持つ間はほかの lock を取らない。触れるのは `Run` の列の操作だけである。
     ready: Mutex<VecDeque<Ready>>,
     /// `current`、`bytes`、`mark` の版の数。持ち主が3つを書く前に奇数に、書いた後に偶数に進める。読み手は前後で同じ
@@ -304,7 +302,6 @@ impl Run {
                 cv: Condvar::new(),
                 waker: OnceLock::new(),
                 bin: OnceLock::new(),
-                switches: AtomicU64::new(0),
                 ready: Mutex::new(VecDeque::new()),
                 seq: AtomicU64::new(0),
                 current: AtomicU64::new(NO_CELL),
@@ -561,15 +558,14 @@ impl Run {
         lock(&self.idle).retain(|&i| i != k);
     }
 
-    /// worker `k` を始める前の形にする。眠っていて空いている形で、`running` には数えない。作る前に置くので、作る途中の
-    /// 起こしも取りこぼさない。始めていない欄には `wake_all` の起こした印が、語には監視のスレッドの `PREEMPT` が
-    /// 溜まりうるので、どちらも下ろす。
-    fn prepare(&self, control: &Control, k: usize) {
+    /// worker `k`を始める前の形にする。眠っていて空いている形で、`running`には数えない。作る前に置くので、作る途中の
+    /// 起こしも取りこぼさない。始めていない欄には`wake_all`の起こした印が
+    /// 溜まりうるので下ろす。
+    fn prepare(&self, k: usize) {
         {
             let mut state = lock(&self.slots[k].state);
             state.parked = true;
             state.woken = false;
-            control.take_preempt(k);
         }
         self.join_idle(k);
     }
@@ -709,7 +705,7 @@ pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
 ) -> Vec<ScopedJoinHandle<'scope, WorkerExit<M>>> {
     let mut handles = Vec::new();
     for k in 1..run.slots.len() {
-        run.prepare(control, k);
+        run.prepare(k);
         let builder = thread::Builder::new()
             .name(format!("eml-worker-{k}"))
             .stack_size(WORKER_STACK);
@@ -1440,7 +1436,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             Arc::clone(&shared),
         );
         // worker 1 は始めてあり、動いている
-        run.prepare(&control, 1);
+        run.prepare(1);
         run.wake(1);
         // worker 1 は起こされた印を下ろして動き始めた
         assert!(run.take_wake(1));

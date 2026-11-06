@@ -1317,9 +1317,10 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }
 
-/// 本物の時計で、worker 0 の `main` が接続して書き、自分で閉じたストリームを、worker 1 に置いたサーバーが EOF まで
-/// 読む。閉じた後の worker 0 は driver に出した操作のない計算のタスクだけを走らせ、driver で眠らないので、閉じるのは
-/// 集める地点である (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りで、時間は確かめない。
+/// 本物の時計で、worker 0の`Async.run`の根が接続して書き、自分で閉じたストリームを、worker 1に置いたサーバーが
+/// EOFまで読む。閉じた後の根は待たずに計算し、回るたびに`Async.yield_now`を呼ぶので、worker 0はdriverで眠らない。
+/// 閉じたことはhostの次の切り替えの集める地点で相手に届く (docs/spec/vm.mdの「時計と driver」)。計算を終わらせる旗は
+/// サーバーが立てる。3秒は止まりの見張りで、時間は確かめない。
 #[test]
 fn a_stream_closed_by_its_busy_host_reaches_its_peer_on_worker_1() {
     let src = "\
@@ -1346,11 +1347,12 @@ read_back buf s =
     read_back buf s
 fib : Int -> <Panic> Int
 fib k = if k < 2 then k else fib (k - 1) + fib (k - 2)
-spin : Atomic.Counter -> <IO, Panic> Unit
+spin : Atomic.Counter -> <IO, Panic, Async> Unit
 spin flag =
   if Atomic.load flag != 0 then ()
   else
     let _ = fib 15
+    Async.yield_now ()
     spin flag
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
@@ -1360,14 +1362,14 @@ main () = Async.run (fn () ->
   let server = Async.start (fn () ->
     let (s, l) = Net.accept l
     Net.close_listener l
-    echo s 0)
-  let busy = Async.start (fn () -> spin flag)
+    let n = echo s 0
+    Atomic.store 1 flag
+    n)
   let c = Net.write \"abc\" (Net.connect \"127.0.0.1\" port)
   let (_, c) = read_back (Bytes.empty ()) c
   Net.close c
+  spin flag
   let n = Async.await server
-  Atomic.store 1 flag
-  Async.await busy
   println (show n))
 ";
     let (done, ran) = std::sync::mpsc::channel();
@@ -1487,10 +1489,10 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }
 
-/// 本物の時計で、worker 0 が受けて設定したストリームは worker 0 の driver に縛られる。それを持たせて worker 1 に置いた
-/// タスクが書いて閉じると、worker 0 の相手が EOF まで読む。ハンドルを落とした worker 1 が、driver の待ちで眠る host の
-/// worker 0 を起こすためである (docs/spec/vm.md の「操作の記録」)。普通の方針で流す。横取りしない方針では、閉じるのは
-/// 落とした worker の次の集める地点まで遅れうる。3 秒は止まりの見張りで、時間は確かめない。
+/// 本物の時計で、worker 0が受けて設定したストリームはworker 0のdriverに縛られる。それを持たせてworker 1に置いた
+/// タスクが書いて閉じると、worker 0の相手がEOFまで読む。ハンドルを落としたworker 1が、driverの待ちで眠るhostの
+/// worker 0を起こすためである (docs/spec/vm.mdの「操作の記録」)。普通の方針で流す。閉じるのは、
+/// 落としたworkerの次の集める地点まで遅れうる。3秒は止まりの見張りで、時間は確かめない。
 #[test]
 fn a_stream_bound_on_worker_0_and_closed_on_worker_1_wakes_its_host() {
     let src = "\

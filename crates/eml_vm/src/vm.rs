@@ -22,7 +22,8 @@ use crate::ffi;
 use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
-    JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
+    JOB, JoinId, JoinNode, MAIN, Memory, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId,
+    TaskState,
 };
 use crate::tls;
 use crate::workers::{Entry, EntryKind, Notice, Ready};
@@ -495,15 +496,12 @@ fn read_header(w: Word) -> (Pc, Slot, usize) {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Polled {
     Continue,
-    /// 横取りを試みる。
-    Switch,
     /// 切り替えずに知らせを集める。
     Collect,
-    /// 深さが今の上限を超えた。本当の超過か、保留のタスクの上限か、猶予の超過かは `limit_hit` が決める。
-    /// `poll` し直す前に下ろした `NOTICE` と `PREEMPT` を `collect` と `switch` で持ち、安全点がそれも果たす。
+    /// 深さが今の上限を超えた。本当の超過か、保留のタスクの上限か、猶予の超過かは`limit_hit`が決める。
+    /// `poll`し直す前に下ろした`NOTICE`を`collect`で持ち、安全点がそれも果たす。
     Limit {
         collect: bool,
-        switch: bool,
     },
 }
 
@@ -517,11 +515,10 @@ fn poll<M: Mode>(ctx: &Ctx<M>, depth: usize, k: usize) -> Result<Polled, VmFault
     }
 }
 
-/// `poll` が止める理由を返したときの扱い。`DepthLimit` は `Polled::Limit` にして安全点に任せ、`Preempt` と `Notice`
-/// 以外は誤りとして返す。2つは、yield の途中でなければ
-/// ビットを下ろしてからもう一度 `poll` する。間に命令がないので、深さの上限は正確で、同時に立った止めるビットは切り替えと
-/// 集めることより先に勝つ。`NOTICE` だけでは切り替えないので、`Sequential` は `NOTICE` では切り替えない
-/// (docs/spec/vm.md の「タスクとスケジュール」「タスクの上限」)。
+/// `poll`が止める理由を返したときの扱い。`DepthLimit`は`Polled::Limit`にして安全点に任せ、`Notice`以外は誤りとして
+/// 返す。`Notice`は、yieldの途中でなければビットを下ろしてからもう一度`poll`する。間に命令がないので、深さの上限は
+/// 正確で、同時に立った止めるビットは集めることより先に勝つ。`NOTICE`では切り替えない
+/// (docs/spec/vm.mdの「タスクとスケジュール」「タスクの上限」)。
 #[cold]
 #[inline(never)]
 fn polled_stop<M: Mode>(
@@ -533,58 +530,27 @@ fn polled_stop<M: Mode>(
     // `Ctx` は worker `k` の語を読むので、下ろすのも `k` 番の語である
     let control = ctx.heap().control();
     match stop {
-        Stop::Notice | Stop::Preempt => {}
-        Stop::DepthLimit => {
-            return Ok(Polled::Limit {
-                collect: false,
-                switch: false,
-            });
-        }
+        Stop::Notice => {}
+        Stop::DepthLimit => return Ok(Polled::Limit { collect: false }),
         _ => return Err(stop.into()),
     }
     // yield の途中では切り替えも集めることもしない。ビットは立てたままにして、次の yield のない安全点で拾う
     if ctx.yielding() != 0 {
         return Ok(Polled::Continue);
     }
-    if stop == Stop::Preempt {
-        control.take_preempt(k);
-        return match ctx.poll(depth) {
-            // 間に立った `NOTICE` は下ろさずに残す。切り替えの前の集める地点が下ろす
-            Ok(()) | Err(Stop::Preempt | Stop::Notice) => Ok(Polled::Switch),
-            // 下ろした `PREEMPT` は、安全点が `limit_hit` の後で果たす
-            Err(Stop::DepthLimit) => Ok(Polled::Limit {
-                collect: false,
-                switch: true,
-            }),
-            Err(stop) => Err(stop.into()),
-        };
-    }
     control.take_notice(k);
     match ctx.poll(depth) {
         // 2回目の `poll` の前に立ち直した `NOTICE` も、集める地点が下ろす
         Ok(()) | Err(Stop::Notice) => Ok(Polled::Collect),
-        // 横取りも求められていれば、`PREEMPT` を拾うときと同じく下ろしてから切り替える。下ろさないと、切り替えた先の
-        // 最初の安全点がまた切り替える
-        Err(Stop::Preempt) => match polled_stop(ctx, depth, Stop::Preempt, k)? {
-            Polled::Limit { switch, .. } => Ok(Polled::Limit {
-                collect: true,
-                switch,
-            }),
-            polled => Ok(polled),
-        },
         // 下ろした `NOTICE` の知らせは、安全点が `limit_hit` の前に集める
-        Err(Stop::DepthLimit) => Ok(Polled::Limit {
-            collect: true,
-            switch: false,
-        }),
+        Err(Stop::DepthLimit) => Ok(Polled::Limit { collect: true }),
         Err(stop) => Err(stop.into()),
     }
 }
 
-/// 安全点 (docs/spec/vm.md の「タスクとスケジュール」)。止める理由と深さを確かめた後で、`PREEMPT` が立っていたか
-/// 方針が求め、yield の途中でなければ横取りを試みる。yield の途中の状態は `Ctx` が1つだけ持つので、そこでは
-/// 切り替えない。`tick` は予算を数える方針があるので、`PREEMPT` の有無によらず毎回呼ぶ。`NOTICE` は切り替えずに
-/// 集めるので、`Sequential` は今のタスクを続ける。
+/// 安全点 (docs/spec/vm.mdの「タスクとスケジュール」)。止める理由と深さを確かめた後で、方針の`tick`が求め、yieldの
+/// 途中でなければ切り替えを試みる。yieldの途中の状態は`Ctx`が1つだけ持つので、そこでは切り替えない。`tick`は予算を
+/// 数える方針があるので毎回呼ぶ。`NOTICE`は切り替えずに集めるので、今のタスクを続ける。
 #[inline(always)]
 fn safepoint<R: Exec>(
     code: &CodeBase<R::M>,
@@ -593,8 +559,8 @@ fn safepoint<R: Exec>(
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
     let polled = poll(ctx, task.stack_depth(), sched.index)?;
-    if let Polled::Limit { collect, switch } = polled {
-        if limit_safepoint::<R>(code, ctx, task, sched, collect, switch)? {
+    if let Polled::Limit { collect } = polled {
+        if limit_safepoint::<R>(code, ctx, task, sched, collect)? {
             preempt::<R>(code, ctx, task, sched)?;
         }
         return Ok(());
@@ -603,18 +569,17 @@ fn safepoint<R: Exec>(
     if polled == Polled::Collect {
         collect_notice::<R>(ctx, task, sched)?;
     }
-    if (polled == Polled::Switch || tick) && ctx.yielding() == 0 {
+    if tick && ctx.yielding() == 0 {
         preempt::<R>(code, ctx, task, sched)?;
     }
     Ok(())
 }
 
-/// 深さの上限を超えた安全点。`poll` し直す前に下ろした `NOTICE` の知らせを先に集め、`limit_hit` の後で方針の
-/// `tick` を数える。横取りを試みるか (下ろした `PREEMPT` か `tick` が求め、yield の途中でも中断を起こしたばかりでもない)
-/// を返し、試みるのは呼び手である。`preempt` の繰り返しが Rust の再帰を重ねないためである。試みないときは、下ろした
-/// `PREEMPT` を立て直して着地の後の安全点に任せる。どちらのビットも捨てると、ビットを見た worker が知らせを集めないまま、
-/// または横取りされないまま動き続ける。`tick` を飛ばすと、予算で横取りする方針が保留のタスクを切り替えなくなる
-/// (docs/spec/vm.md の「タスクの上限」)。
+/// 深さの上限を超えた安全点。`poll`し直す前に下ろした`NOTICE`の知らせを先に集め、`limit_hit`の後で方針の
+/// `tick`を数える。切り替えを試みるか (`tick`が求め、yieldの途中でも中断を起こしたばかりでもない) を返し、試みるのは
+/// 呼び手である。`preempt`の繰り返しがRustの再帰を重ねないためである。`tick`を飛ばすと、予算で切り替える方針が
+/// 保留のタスクを切り替えなくなる
+/// (docs/spec/vm.mdの「タスクの上限」)。
 #[cold]
 #[inline(never)]
 fn limit_safepoint<R: Exec>(
@@ -623,20 +588,13 @@ fn limit_safepoint<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
     collect: bool,
-    switch: bool,
 ) -> Result<bool, VmFault> {
     if collect {
         collect_notice::<R>(ctx, task, sched)?;
     }
     limit_hit::<R>(code, ctx, task, sched)?;
     let tick = sched.policy.tick();
-    if (switch || tick) && ctx.yielding() == 0 && !matches!(task.limit, Limit::Aborting { .. }) {
-        return Ok(true);
-    }
-    if switch {
-        ctx.heap().control().preempt(sched.index);
-    }
-    Ok(false)
+    Ok(tick && ctx.yielding() == 0 && !matches!(task.limit, Limit::Aborting { .. }))
 }
 
 /// 安全点の `poll` が深さの上限を超えたと返した。タスクの外と猶予の間は run を止める。タスクの中では、関数のエントリの
@@ -1873,8 +1831,8 @@ fn switch_away<R: Exec>(
             collect::<R>(ctx, task, sched, true)?;
         }
     }
-    // 走れるタスクがなければ、起こされるか次の期限か driver の完了まで待って集め直す。戻るたびに止める語を読む。
-    // `PREEMPT` は切り替える先がないので捨てる。デッドロックは空きの待ちが決める (docs/spec/vm.md の「時計と driver」)
+    // 走れるタスクがなければ、起こされるか次の期限かdriverの完了まで待って集め直す。戻るたびに止める語を読む。
+    // デッドロックは空きの待ちが決める (docs/spec/vm.mdの「時計と driver」)
     let next = loop {
         // 置いた右の子の終わりは知らせで届く。待とうとする親はまだ表にいないので、集めた知らせが親の join に
         // 終わりを届けても起こされない。そのときは待たずにここで join を完了する (docs/spec/vm.md の「子の終わりと join」)
@@ -1908,9 +1866,9 @@ fn switch_away<R: Exec>(
             "an entry is left unsettled before a worker sleeps"
         );
         sched.idle_wait()?;
-        // `PREEMPT` と `NOTICE` は捨てる。`NOTICE` の知らせは続く集める地点が集める。直前の `wait` が OS を見たので、
+        // `NOTICE`は捨てる。その知らせは続く集める地点が集める。直前の`wait`がOSを見たので、
         // 集める地点は見ない。ここは関数のエントリでないので、タスクの中の上限は保留のまま次の安全点に任せる
-        // (docs/spec/vm.md の「タスクの上限」)
+        // (docs/spec/vm.mdの「タスクの上限」)
         if matches!(
             poll(ctx, task.stack_depth(), sched.index)?,
             Polled::Limit { .. }
@@ -1930,11 +1888,11 @@ fn switch_away<R: Exec>(
     }
 }
 
-/// タスク `next` に切り替える。`evv` と worker は `Ctx::switch_task` の1回で替え、RC に触れない
-/// (docs/spec/object-model.md の「タスクの切り替え」)。まだ始まっていない右の子と仕事は、その ID に替えた後で閉包を呼ぶ。
-/// 閉包を手放すと、子の ID の物体を解放しうるためである。待っていた親は join を完了し、そのときは `par` の命令の
-/// 位置を返す。`par` の後の安全点は呼ぶ側が行い、その誤りにもこの位置を付ける (`at_par`)。ここで安全点に進むと、横取りが `preempt` と `resume` を Rust の再帰で重ねる
-/// ためである (docs/spec/vm.md の「並列化への備え」)。
+/// タスク`next`に切り替える。`evv`とworkerは`Ctx::switch_task`の1回で替え、RCに触れない
+/// (docs/spec/object-model.mdの「タスクの切り替え」)。まだ始まっていない右の子と仕事は、そのIDに替えた後で閉包を呼ぶ。
+/// 閉包を手放すと、子のIDの物体を解放しうるためである。待っていた親はjoinを完了し、そのときは`par`の命令の
+/// 位置を返す。`par`の後の安全点は呼ぶ側が行い、その誤りにもこの位置を付ける (`at_par`)。ここで安全点に進むと、切り替えが`preempt`と`resume`をRustの再帰で重ねる
+/// ためである (docs/spec/vm.mdの「並列化への備え」)。
 fn resume<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -2051,10 +2009,9 @@ fn collect<R: Exec>(
     gathered
 }
 
-/// 方針か `PREEMPT` が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す (`PREEMPT` は
-/// 安全点の `poll` がもう下ろしている)。切り替えた先が join を
-/// 完了したら、`par` の後の安全点をここで繰り返す。Rust の再帰を使わないためである
-/// (docs/spec/vm.md の「並列化への備え」)。
+/// 方針が安全点で切り替えを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す。切り替えた先がjoinを
+/// 完了したら、`par`の後の安全点をここで繰り返す。Rustの再帰を使わないためである
+/// (docs/spec/vm.mdの「並列化への備え」)。
 #[cold]
 #[inline(never)]
 fn preempt<R: Exec>(
@@ -2067,8 +2024,7 @@ fn preempt<R: Exec>(
         sched.hold.is_none(),
         "a channel reservation is held at a switch"
     );
-    // 横取りの刻みごとに OS を見るので、計算の重いタスクが走る worker でも I/O の完了の遅れは刻みの長さまでである
-    // (docs/spec/vm.md の「時計と driver」)
+    // 方針が強いる切り替えの頭でもOSを1回見る (docs/spec/vm.mdの「時計と driver」)
     collect::<R>(ctx, task, sched, true)?;
     loop {
         let next = sched.run.pick_ready(sched.index, &mut sched.policy);
@@ -2086,22 +2042,22 @@ fn preempt<R: Exec>(
             return Ok(());
         };
         let polled = match poll(ctx, task.stack_depth(), sched.index) {
-            Ok(Polled::Collect) => collect::<R>(ctx, task, sched, true).map(|()| Polled::Collect),
-            Ok(Polled::Limit { collect, switch }) => {
-                match limit_safepoint::<R>(code, ctx, task, sched, collect, switch) {
+            Ok(Polled::Collect) => collect::<R>(ctx, task, sched, true),
+            Ok(Polled::Limit { collect }) => {
+                match limit_safepoint::<R>(code, ctx, task, sched, collect) {
                     Ok(true) => continue,
                     Ok(false) => return Ok(()),
                     Err(fault) => return at_par(code, task, sched, at, Err(fault)),
                 }
             }
-            polled => polled,
+            Ok(Polled::Continue) => Ok(()),
+            Err(fault) => Err(fault),
         };
-        let polled = match polled {
-            Ok(polled) => polled,
-            Err(fault) => return at_par(code, task, sched, at, Err(fault)),
-        };
+        if let Err(fault) = polled {
+            return at_par(code, task, sched, at, Err(fault));
+        }
         let tick = sched.policy.tick();
-        if !((polled == Polled::Switch || tick) && ctx.yielding() == 0) {
+        if !(tick && ctx.yielding() == 0) {
             return Ok(());
         }
     }
@@ -3597,9 +3553,9 @@ fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), Vm
             return Ok(());
         }
     };
-    // 横取りする方針では、2つ目の仕事が走れるようになったので監視のスレッドを始める。エントリの `Task` を作るのは
-    // `pick` のときなので、`add_task` を待つと、今のタスクが走り続ける間は横取りされない
-    if P::PREEMPTS {
+    // メモリを見張る方針では、最初の`Async`のタスクで監視のスレッドを始める。どのタスクもここで列に入り、タスクの
+    // ないrunは監視のスレッドを作らない (docs/spec/vm.mdの「タスクとスケジュール」)
+    if P::MEMORY == Memory::Watched {
         sched.start_monitor();
     }
     sched.run.push_ready(sched.index, Ready::Entry(entry));
@@ -4644,18 +4600,14 @@ mod tests {
         }
     }
 
-    /// `NOTICE` だけなら切り替えずに集め、`PREEMPT` も立っていれば両方を下ろして切り替える。
+    /// `NOTICE`は切り替えずに集める。
     #[test]
-    fn a_notice_collects_and_a_notice_with_a_preempt_switches() {
+    fn a_notice_collects_without_switching() {
         let control = Arc::new(Control::new(eml_rt::Limits::default()));
         let (host, _) = crate::capture_host(Default::default());
         let ctx = Ctx::<eml_rt::Checked>::new(Arc::clone(&control), host);
         control.notice(0);
         assert!(poll(&ctx, 0, 0).ok() == Some(Polled::Collect));
-        assert_eq!(control.worker_bits(0), 0);
-        control.notice(0);
-        control.preempt(0);
-        assert!(poll(&ctx, 0, 0).ok() == Some(Polled::Switch));
         assert_eq!(control.worker_bits(0), 0);
     }
 
@@ -5495,8 +5447,7 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
         type Seeded = ExecWith<eml_rt::Checked, crate::Seeded>;
         let switches = (0..16)
             .map(|_| {
-                limit_safepoint::<Seeded>(&code, &mut ctx, &mut task, &mut sched, false, false)
-                    .unwrap()
+                limit_safepoint::<Seeded>(&code, &mut ctx, &mut task, &mut sched, false).unwrap()
             })
             .position(|switch| switch);
         assert!(

@@ -1523,22 +1523,22 @@ fn an_interrupt_from_another_thread_is_seen() {
     assert_eq!(control.stop_bits(), Control::INTERRUPT);
 }
 
-// `PREEMPT` は worker の語だけに立つ。別のスレッドが立てたのを `poll` が読む
+// `NOTICE`はworkerの語だけに立つ。別のスレッドが立てたのを`poll`が読む
 #[test]
-fn a_preempt_from_another_thread_is_seen() {
+fn a_notice_from_another_thread_is_seen() {
     let control = Arc::new(Control::new(Limits::default()));
     let ctx = Ctx::<Fast>::new(control.clone(), host(&Arc::default()));
     let setter = {
         let control = control.clone();
-        std::thread::spawn(move || control.preempt(0))
+        std::thread::spawn(move || control.notice(0))
     };
     while ctx.poll(0).is_ok() {
         std::thread::yield_now();
     }
-    assert_eq!(ctx.poll(0), Err(crate::Stop::Preempt));
+    assert_eq!(ctx.poll(0), Err(crate::Stop::Notice));
     setter.join().unwrap();
     assert_eq!(control.stop_bits(), 0);
-    control.take_preempt(0);
+    control.take_notice(0);
     assert_eq!(ctx.poll(0), Ok(()));
 }
 

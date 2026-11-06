@@ -161,8 +161,8 @@ fn no_poke(_: &Control, _: &Doorbell) -> bool {
     true
 }
 
-/// 保留のシグナルは、監視のスレッドの中継を通って待つタスクに届く。監視のスレッドは、横取りしない方針でも
-/// `park_signal` が始める (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 保留のシグナルは、監視のスレッドの中継を通って待つタスクに届く。本物の時計のrunでは、監視のスレッドは方針に
+/// よらずrunの始めに始まる (docs/spec/vm.mdの「タスクとスケジュール」)。
 #[test]
 fn a_pending_signal_reaches_a_waiter_through_the_monitor() {
     let src = "\
@@ -258,8 +258,8 @@ main () = Async.run (fn () -> Async.sleep_ms 2000)
     assert!(error.terminated(), "{error:?}");
 }
 
-/// 横取りしない方針で yield せずに回る worker も、`NOTICE` で次の安全点にシグナルを集めて届ける。届けた後は待つタスクが
-/// いないので、次のシグナルはハンドラが止める語に立て、run が止まる (docs/spec/vm.md の「上限と割り込み」)。
+/// yieldせずに回るworkerも、`NOTICE`で次の安全点にシグナルを集めて届ける。届けた後は待つタスクが
+/// いないので、次のシグナルはハンドラが止める語に立て、runが止まる (docs/spec/vm.mdの「上限と割り込み」)。
 #[test]
 fn a_busy_worker_collects_a_signal_and_a_second_one_stops_it() {
     let src = "\

@@ -54,7 +54,6 @@ pub enum Stop {
     DepthLimit,
     MemoryLimit,
     Ended,
-    Preempt,
     /// worker が次の安全点で知らせを集めること。止めずに続けるので、利用者には見せない。
     Notice,
 }
@@ -460,7 +459,6 @@ impl fmt::Display for Stop {
             Stop::DepthLimit => "the call depth limit is exceeded",
             Stop::MemoryLimit => "the memory limit is exceeded",
             Stop::Ended => "the run has ended",
-            Stop::Preempt => "preempted",
             Stop::Notice => "a signal notice",
         })
     }
@@ -481,8 +479,6 @@ impl Control {
     pub const TERMINATE: u32 = 8;
     /// worker の止める語にだけ立つ。次の安全点で知らせを集めよ、という意味である。
     pub const NOTICE: u32 = 1 << 30;
-    /// worker の止める語にだけ立つ。`stop` には立てない (host の読み手が見る語を変えないため)。
-    pub const PREEMPT: u32 = 1 << 31;
     /// シグナルの語で、中継済みのビットを保留のビットから離す幅。
     const RELAYED_SHIFT: u32 = 16;
     const PENDING_MASK: u32 = (1 << Self::RELAYED_SHIFT) - 1;
@@ -522,16 +518,6 @@ impl Control {
     /// すべての worker の語から `END` を下ろす。
     pub fn clear_end(&self) {
         self.lower_words(Self::END);
-    }
-
-    /// worker `k` に、次の安全点で切り替えるよう求める。
-    pub fn preempt(&self, k: usize) {
-        self.words[k].fetch_or(Self::PREEMPT, Ordering::Relaxed);
-    }
-
-    /// worker `k` が切り替えを受けたときに `PREEMPT` を下ろす。
-    pub fn take_preempt(&self, k: usize) {
-        self.words[k].fetch_and(!Self::PREEMPT, Ordering::Relaxed);
     }
 
     /// worker `k` に、次の安全点で知らせを集めるよう求める。
@@ -612,16 +598,16 @@ impl Control {
         }
     }
 
-    /// run の始めに終わりの欄を開き、すべての worker の語から `PREEMPT`、`NOTICE`、`END` を下ろす。止めるビットと
+    /// runの始めに終わりの欄を開き、すべてのworkerの語から`NOTICE`と`END`を下ろす。止めるビットと
     /// シグナルの語は下ろさない。
     pub fn begin_run(&self) {
         self.end.store(0, Ordering::Relaxed);
-        self.lower_words(Self::PREEMPT | Self::NOTICE | Self::END);
+        self.lower_words(Self::NOTICE | Self::END);
     }
 
-    /// 止める理由のビットと、すべての worker の語と、シグナルの語と見張りの語をすべて下ろし、終わりの欄を開く。確保量が
-    /// 上限を下回ってもビットは下りないので、止めるビットを下ろすのはこの関数だけである。`PREEMPT` と `NOTICE` は
-    /// `take_preempt`、`take_notice`、`begin_run` も下ろし、`END` は `clear_end` と `begin_run` も下ろす。
+    /// 止める理由のビットと、すべてのworkerの語と、シグナルの語と見張りの語をすべて下ろし、終わりの欄を開く。確保量が
+    /// 上限を下回ってもビットは下りないので、止めるビットを下ろすのはこの関数だけである。`NOTICE`は
+    /// `take_notice`と`begin_run`も下ろし、`END`は`clear_end`と`begin_run`も下ろす。
     pub fn clear(&self) {
         self.stop.store(0, Ordering::Relaxed);
         for word in &self.words {
@@ -873,9 +859,9 @@ impl Control {
     }
 }
 
-/// 止める理由。割り込み、終了の求め (`TERMINATE`)、確保量、run の終わり (`END`)、知らせ、切り替え、深さの順に先に
+/// 止める理由。割り込み、終了の求め (`TERMINATE`)、確保量、runの終わり (`END`)、知らせ、深さの順に先に
 /// 報告する。ビットがどれも立っていなければ、深さの上限で止めたとする。ビットは呼ぶ側が速い道で読んだ値を受け、
-/// 読み直さない。読み直すと、その間にほかのスレッドが `clear` したとき、深さの上限を超えていなくても `DepthLimit` を
+/// 読み直さない。読み直すと、その間にほかのスレッドが`clear`したとき、深さの上限を超えていなくても`DepthLimit`を
 /// 返すためである。
 #[cold]
 pub(crate) fn stop_reason(bits: u32) -> Stop {
@@ -889,8 +875,6 @@ pub(crate) fn stop_reason(bits: u32) -> Stop {
         Stop::Ended
     } else if bits & Control::NOTICE != 0 {
         Stop::Notice
-    } else if bits & Control::PREEMPT != 0 {
-        Stop::Preempt
     } else {
         Stop::DepthLimit
     }

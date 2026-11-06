@@ -260,12 +260,18 @@
   - Delete `Control::{PREEMPT, preempt, take_preempt}` and `Stop::Preempt` from eml_rt. `begin_run` lowers `NOTICE | END`, and `stop_reason` loses its branch.
   - Delete `Slot.switches`, the switch counting in `Scheduler::set_current`, `Ticker`, `bell_timeout`'s `ticks` argument (keep it for pressure only), `Monitor::start`'s `preempt` flag, `Policy::PREEMPTS`, the monitor starts in `add_task` that exist for preemption, and the safe point's `PREEMPT` branch. `Ctx::poll`'s cold path keeps `NOTICE` and the limits.
   - Keep `Policy::tick` and `reload` (`Seeded`); `Normal::tick` stays the constant false.
+  - Decided during execution: the monitor starts that were gated on `P::PREEMPTS` also started the memory soft-limit watch (`Normal` is the only `Watched` policy). Keep one start in vm.rs `schedule`, before the `Ready::Entry` push, gated on `P::MEMORY == Memory::Watched`; every `Async` task enters there, so a run with no task starts no monitor thread. Also delete the `take_preempt` call in `Run::prepare` and its `control` parameter, `Polled::Switch`, and `limit_safepoint`'s `switch` argument; `bell_timeout`'s parameter becomes `pressure`.
 - Test changes:
   - Kind 1 (deleted), one by one:
     - tests/preempt.rs (whole file deleted; remove `mod preempt;` from tests/main.rs): `a_preempt_without_a_ready_task_only_lowers_the_bit`, `a_stop_raised_with_preempt_wins`, `a_preempt_request_switches_at_the_next_safepoint`.
     - tests/par.rs:952 `the_monitor_preempts_a_long_par_child` (`#[ignore]`d today, so it lowers the skipped count, not the passed count).
     - src/monitor.rs unit tests about `PREEMPT`, listed by `git grep -n -B2 PREEMPT crates/eml_vm/src/monitor.rs | grep 'fn '`. Record their names in the commit message.
   - Kind 2. Scope: "a test whose busy task relied on the monitor's tick to reach a collect point makes the task yield". Only `tests/io.rs` `a_stream_closed_by_its_busy_host_reaches_its_peer_on_worker_1`: `spin` calls `Async.yield_now` each round; the doc comment says the close happens at the busy task's next switch.
+  - Revised during execution (kind 2): since the ring, `busy` in `a_stream_closed_by_its_busy_host_reaches_its_peer_on_worker_1` runs on worker 1 and the stream's host (the root on worker 0) is not busy. Restructure the test so the root, which hosts the stream, closes it and then spins calling `Async.yield_now`, and `server` on worker 1 sets the flag; the doc says the close reaches the peer at the host's next switch.
+  - Added during execution:
+    - Kind 1: src/monitor.rs `a_tick_without_a_switch_asks_for_a_switch`, `a_tick_after_a_switch_does_not`, `the_monitor_sleeps_while_every_worker_is_parked`; eml_rt src/heap/tests/control.rs `preempt_reaches_only_the_worker_word`.
+    - Kind 2: eml_rt control.rs tests `stop_reason_puts_preempt_after_the_stops` → `stop_reason_without_a_bit_is_the_depth_limit`, `preempt_and_notice_reach_only_their_word` → `a_notice_reaches_only_its_word`, `begin_run_reopens_the_end_and_lowers_preempt` → `begin_run_reopens_the_end`, `stop_reason_puts_notice_between_the_stops_and_preempt` → `stop_reason_puts_notice_after_the_stops`; trusted.rs `a_preempt_from_another_thread_is_seen` → `a_notice_from_another_thread_is_seen` (run Miri `trusted::`); vm.rs `a_notice_collects_and_a_notice_with_a_preempt_switches` → `a_notice_collects_without_switching`.
+    - Kind 3: removed `preempt` calls, `PREEMPT` bits, the `limit_safepoint` argument, the `prepare` argument and the `Monitor::start` argument in tests.
   - Unchanged: `Seeded`-based `preemptions > 0` assertions (par.rs:883-886, :962-965, miri.rs:515, ui.rs:469) and the `== 0` ones for `Sequential` (api.rs:141, par.rs:879).
 - Spec and docs (same commit):
   - vm.md 「タスクとスケジュール」:
@@ -343,7 +349,7 @@
       - a Verus proof of cooperative placement (an owner set once at `start`, notices routed to the owner, no lost wakeups in `park_idle`/`wake`): revisit with multicore.md 「テスト」.
     - Under 「処理系」, add the deferred item "CLI tests kill their `eml` child on timeout (a process group on unix or a job object on Windows, or kill-on-drop), so that nextest's slow-timeout does not orphan a hung `eml`": revisit when an orphaned `eml` shows in CI.
   - docs/overview.md:93: "…`Async` tasks are placed on workers 1..N-1 in rotation at `start` and run there until they end".
-  - docs/implementation/benchmarks.md: delete 「救済の判定の値」 (:919-926); :708 drop the clause naming it; :913 "one queue per worker under the slot's mutex (the shape `par-steal` revisits)"; refresh the three tables in 「今の数値」 from `bench/run.sh`, `bench/rt.sh` and `bench/scripts.sh` on a clean tree (U-2: refresh at this close).
+  - docs/implementation/benchmarks.md: delete 「救済の判定の値」 (:919-926); :708 drop the clause naming it; :913 "one queue per worker under the slot's mutex (the shape `par-steal` revisits)"; also (added after the S1-T3 review) the 「横取り2回分」 explanation (~:522) and the `busy-self` note (~:672; at N = 2 the compute task now runs on worker 1) must describe the new numbers without preemption; refresh the three tables in 「今の数値」 from `bench/run.sh`, `bench/rt.sh` and `bench/scripts.sh` on a clean tree (U-2: refresh at this close).
   - docs/README.md: change the map entries only where the content changed.
   - Delete `docs/plans/2026-11-06-sched-cooperative.md`.
 - Completion criteria:
