@@ -15,10 +15,6 @@ use crate::sched::Scheduler;
 use crate::vm::{Exec, Task, current_cell, here};
 
 /// プールの仕事の取り出しの行が受け取るもの。
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "最初の使い手は`Std.Tls`の行である")
-)]
 pub(crate) enum Outcome<T> {
     /// 仕事が最後まで走り、値を返した。
     Woke(T),
@@ -31,7 +27,6 @@ pub(crate) enum Outcome<T> {
 /// 仕事`job`を記録のhostのdriverのプールに出し、tokenを`dst`に書く。制約が`Ctx`、タスク、scheduler、登録表を
 /// 借りることを拒むので、仕事は捕まえるものをすべて持つ。受け付けは取り消しの地点で、投げるなら仕事を走らせずに
 /// 落とす (docs/spec/vm.md の「プールの仕事」)。
-#[expect(dead_code, reason = "最初の使い手は`Std.Tls`の行である")]
 pub(crate) fn submit<R: Exec, T: Send + 'static>(
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
@@ -77,10 +72,6 @@ pub(crate) fn submit_op<R: Exec>(
 /// プールのスレッドで仕事を走らせ、結果を箱に入れる。箱はいつも`Result<T, String>`を持ち、中身は値か、捕まえた
 /// panicの文言である。外のcrateのコード (rustls、OSの検証器) はpanicしうるが、panicはプロセスを終わらせずに、この
 /// 操作だけを失敗させる。
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "最初の使い手は`Std.Tls`の行である")
-)]
 fn answer<T: Send + 'static>(job: impl FnOnce() -> T) -> Box<dyn Any + Send> {
     let result: Result<T, String> =
         panic::catch_unwind(AssertUnwindSafe(job)).map_err(|payload| panic_message(&*payload));
@@ -88,10 +79,6 @@ fn answer<T: Send + 'static>(job: impl FnOnce() -> T) -> Box<dyn Any + Send> {
 }
 
 /// 捕まえたpanicの文言。文を持つのは`&str`と`String`の中身だけである。
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "最初の使い手は`Std.Tls`の行である")
-)]
 fn panic_message(payload: &(dyn Any + Send)) -> String {
     let text = payload
         .downcast_ref::<&str>()
@@ -106,7 +93,6 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 /// プールの仕事の記録を放し、結果を`Wake`で分ける。ほかの出どころの記録、`Woke`と`Cancelled`のほかの`Wake`、違う型の
 /// 答えはVMの誤りである。取り消されたタスクは、値を受ける束縛がないので、持ち主のスレッドでここで値を落とす
 /// (docs/spec/vm.md の「プールの仕事」)。
-#[expect(dead_code, reason = "最初の使い手は`Std.Tls`の行である")]
 pub(crate) fn take<R: Exec, T: Send + 'static>(
     ctx: &mut Ctx<R::M>,
     task: &Task,
@@ -119,10 +105,6 @@ pub(crate) fn take<R: Exec, T: Send + 'static>(
 }
 
 /// 論理的なworker ID`worker`のタスクの`take`。
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "最初の使い手は`Std.Tls`の行である")
-)]
 fn take_on<M: Mode, T: Send + 'static>(
     ctx: &mut Ctx<M>,
     shared: &Shared,

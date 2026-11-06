@@ -1526,7 +1526,7 @@ main () = Async.run (fn () ->
 - `read_all_bytes r` は `read_chunk` を1つの `Bytes` に繰り返し、何も足さない読みで終える。`read_all r` はそれを UTF-8 の文字列にし、UTF-8 でなければ読み手を落として、種類 `NotUtf8` の IO の失敗 ``cannot read `<path>`: the text is not valid UTF-8`` にする
 - `write_bytes b w` は `b` をすべて書き、`b` と書き手の組を返す。返す `b` は渡した物体そのもので、共有の `Bytes` でも写さない。`write s w` は `s` の UTF-8 のバイトを書き、`write_line s w` は `s` と改行を書く。どれも1回の操作ですべてを書き、書いた後のファイルは、同じ run のほかの読み手からすぐ読める
 - 走り出したファイルの仕事は取り消せない。読みか書きを待つタスクが取り消されると、そのタスクは仕事が終わるまで待ち、終わってから読み手か書き手を落として種類 `Cancelled` の失敗を投げる。読みの仕事が読んだバイトは確定してから捨てる。`Async.timeout ms (fn () -> Stream.read_chunk b r)` も、期限が来たときに仕事が走っていれば、仕事が終わってから戻る。テストの driver は待ちの区切りでファイルの仕事を終え、仮想の時計はそれを待ってから進むので、仮想の時計の期限が走っている仕事より先に来ることはない ([VM](vm.md) の「時計と driver」)
-- ファイルの読み書きは driver のプールの仕事で、`blocking` の C の呼び出しと同じプールを使う。`blocking` の呼び出しは、タスクを置いた worker の driver のプールで走る。1つの driver で同時に走る `blocking` の呼び出しは 24 までで、それを超えた呼び出しは順に待つ。ファイルの読み書きのために、別に 8 本を残す。worker を N 個使う run では上限は driver ごとにあり、タスクをどの worker に置くかはランタイムが決める。仮想の時計 (テスト) では、仕事は worker 0 の上でその場で動き、上限はない。`blocking` の呼び出しの中で、同じ run のほかの `blocking` の呼び出しの結果を待つ C の関数は、上限に達するとデッドロックする ([宣言](declarations.md) の「`extern "C"`」)
+- ファイルの読み書きはdriverのプールの仕事で、`blocking`のCの呼び出しと同じプールを使う。`blocking`の呼び出しは、タスクを置いたworkerのdriverのプールで走る。1つのdriverで同時に走る`blocking`の呼び出しは24までで、この上限は`Std.Tls`の仕事と分け合う。それを超えた呼び出しは順に待つ。ファイルの読み書きのために、別に8本を残す。workerをN個使うrunでは上限はdriverごとにあり、タスクをどのworkerに置くかはランタイムが決める。仮想の時計 (テスト) では、仕事はworker 0の上でその場で動き、上限はない。`blocking`の呼び出しの中で、同じrunのほかの`blocking`の呼び出しの結果を待つCの関数は、上限に達するとデッドロックする ([宣言](declarations.md) の「`extern "C"`」)
 - 待つ関数の包みは `Std.Net` と同じ形で、結果の番号も同じ 0 から 6 である (上の「`Std.Net`」の表)。番号 2 (OS の誤りの種類が ConnectionReset、BrokenPipe、ConnectionAborted) は、種類 `ConnectionReset` の ``<prefix>: broken pipe`` にする。番号 3 から 5 は `Std.Net` と同じ種類と文言である。番号 6 は `finish` が投げ、種類は `Std.Net` と同じく OS の誤りから最初の5つに写す。文言は prefix と OS の誤りの表示を `: ` でつないだもので、OS の文言を保つ。そのため、ディスクの満杯や読み取り専用の書き先は `Other`、書く権限のないファイルは `PermissionDenied` である。prefix は、開くことでは ``cannot open `<path>` ``、読みでは ``cannot read `<path>` ``、書きでは ``cannot write to `<path>` `` で、パスは開いたときに渡したままのものである。番号 2 から 5 の文言の prefix は、包みが `op_prefix` で記録から読む
 - extern の行は次の15行で、どれも `pub` でない。VM は `Std.Net` の行と同じく `Async` の命令で実行する ([VM](vm.md) の「`Async` のタスク」)
 
@@ -1619,7 +1619,7 @@ main () = Async.run (fn () ->
 
 ## `Std.Tls`
 
-`Std.Tls`はTLSのクライアントのモジュールである。`Conn`はrustlsの接続と、復号してまだ返していない平文の列を持つ`Lin`の`Foreign`で、I/Oを持たない。`Stream`は`Conn`と`Net.TcpStream`の組のemlのデータで、`std/Tls.em`のコードが両者の間でバイトを汲む。ソケットの読み書き、待ち、取り消し、期限はすべて`Std.Net`のもので、`Std.Tls`は何も足さない。暗号はaws-lc-rs、既定の根はwebpki-rootsの根で、OSの証明書ストアは使わない。テストのdriverのrunには既定の根がない ([VM](vm.md)の「時計と driver」)。根に足すCAはPEMで渡す。TLS 1.2と1.3を受ける。serverの側のAPIはない。
+`Std.Tls`はTLSのクライアントのモジュールである。`Conn`はrustlsの接続と、復号してまだ返していない平文の列を持つ`Lin`の`Foreign`で、I/Oを持たない。`Stream`は`Conn`と`Net.TcpStream`の組のemlのデータで、`std/Tls.em`のコードが両者の間でバイトを汲む。ソケットの読み書き、待ち、取り消し、期限はすべて`Std.Net`のものである。`Conn`を作ることは、根を作るときにOSの根のファイルを読むことがあるので、プールの仕事として走る ([VM](vm.md)の「プールの仕事」)。仕事が走る間も、そのworkerのほかのタスクは走り続ける。仕事はdriverの24の`Op::Job`の枠を`blocking`の呼び出しと分け合うので (上の「`Std.Stream`」)、接続が枠を待つことがある。仮想の時計では、仕事はworker 0の上でその場で走る。暗号はaws-lc-rs、既定の根はwebpki-rootsの根で、OSの証明書ストアは使わない。テストのdriverのrunには既定の根がない ([VM](vm.md)の「時計と driver」)。根に足すCAはPEMで渡す。TLS 1.2と1.3を受ける。serverの側のAPIはない。
 
 ```haskell
 import Async
@@ -1654,10 +1654,10 @@ main () = Async.run (fn () ->
 | `close` | `Stream -> <IO, Async> Unit` | eml |
 
 - `connect host port`は`Net.connect host port`で接続し、`host`をSNIと証明書の名前の照合に使ってhandshakeまで行う。根は既定の根だけである。`connect_with_ca ca host port`は、PEMの`ca`の証明書を根に足す。`ca`が空の文字列なら`connect`と同じである。`wrap host s`は、既にある`TcpStream`の上で同じhandshakeを行い、根は既定の根だけである。`wrap_with_ca ca host s`は`connect_with_ca`と同じく`ca`を根に足し、`ca`が空の文字列なら`wrap`と同じである。テストのdriverのrunには既定の根がないので、`connect`、`wrap`と、空の`ca`の`_with_ca`は、根の証明書がない失敗を投げる。サーバーの名前とPEMの誤りと根がないことは、接続を開く前に投げる
-- どの関数も期限を持たない。期限は `Async.timeout ms (fn () -> Tls.connect host port)` のように付ける。期限が来ると巻き戻しが `Stream` を落とすので、期限の後に同じ `Stream` は使えない。`Net.read_line_within` のような、期限の後も読みを続けられる `_within` の関数はない
+- どの関数も期限を持たない。期限は`Async.timeout ms (fn () -> Tls.connect host port)`のように付ける。期限が来ると巻き戻しが`Stream`を落とすので、期限の後に同じ`Stream`は使えない。`Net.read_line_within`のような、期限の後も読みを続けられる`_within`の関数はない。走っている仕事は取り消せない。仕事の間に期限か取り消しが来ると、仕事が終わるのを待ってから、close_notifyを送らずに`Conn`とソケットを落とし、`Cancelled`を投げる。`Async.timeout`が戻るのはそのときである。仮想の時計では、期限が仕事の途中に来ることはない。仕事の間にrunが割り込まれると、runは仕事の予算まで仕事を待ち、それより長い仕事は`Machine`をpoisonedにする ([VM](vm.md)の「時計と driver」)
 - `read_chunk b s` は、平文を `b` の後ろに 1 バイト以上 65 536 バイト以下足して返す。`Conn` に平文がなければ、ソケットを読んで復号するのを平文が届くまで繰り返す。相手が close_notify で閉じた後は、何も足さずに `b` の中身のまま返す。これが EOF である。close_notify のない EOF は、届いた平文をすべて返した後で、種類 `ConnectionReset` の IO の失敗になる。TLS の誤りを見つけた押し込みで復号した平文は返さない
 - `read_line s` は1行を読み、終わりの改行を除いて返す。改行、上限、UTF-8 の扱いと文言は `Net.read_line` と同じで、行は同じ関数で切り出す (上の「`Std.Net`」)。EOF は close_notify の後だけで、改行のない最後の行はそのまま返し、残りがなければ `None` を返す。close_notify のない EOF は `read_chunk` と同じ失敗である。読みすぎた平文は `Conn` に残り、次の `read_chunk` か `read_line` が先に返す。そのため2つを混ぜても、平文は失われず、順も入れ替わらない
-- `read_chunk` と `read_line` は、入口でいつも取り消しを確かめる取り消しの地点である。取り消されると `Stream` を落とし、`Cancelled` を投げる。平文が `Conn` に残っていて `Net` の読みを呼ばないときも同じである
+- `read_chunk`と`read_line`は、入口でいつも取り消しを確かめる取り消しの地点である。取り消されると`Stream`を落とし、`Cancelled`を投げる。平文が`Conn`に残っていて`Net`の読みを呼ばないときも同じである。`connect`、`connect_with_ca`、`wrap`、`wrap_with_ca`は、接続を設定するところで取り消しの地点である
 - `write_bytes b s` は `b` を暗号にし、同じ呼び出しの中で `Net.write_bytes` で書き出す。`write str s` は `str` の UTF-8 のバイトを、`write_line str s` は `str` と改行を書く。書き出すときは `Net.write_bytes` と同じく取り消しの地点である。`shutdown_write` の後の書きは、`Net` の書きと同じ失敗になる。テストの driver では種類 `ConnectionReset`、文言 `cannot write to the stream: connection reset` である
 - `shutdown_write s` は close_notify を書き出してから、`Net.shutdown_write` で送る側を閉じる。`close s` は `shutdown_write` してから `Stream` を落とす。相手がもう閉じていれば close_notify は書けないので、`close` は書きの失敗を捨てる。`Cancelled` だけはそのまま投げ、ほかの失敗では失敗しない
 - `Stream` を落とすと、巻き戻しの間も含めて、close_notify を送らずにソケットを閉じる。取り消しで落ちた `Stream` も同じである
@@ -1672,6 +1672,7 @@ main () = Async.run (fn () ->
 | 足す CA の PEM の誤り | `Other` | `cannot set up TLS for {host}: the CA certificates are not valid PEM` |
 | 根の証明書がない (テストのdriverのrunでCAを渡さなかった) | `Other` | `cannot set up TLS for {host}: no root certificates are available` |
 | TLS のない処理系 | `NotAvailable` | `cannot set up TLS for {host}: not available` |
+| TLSの仕事を走らせられない (パニックなど) | 失敗の種類 | `cannot run TLS: {理由}` |
 | 証明書の拒否 | `Other` | `cannot complete the TLS handshake with {host}: the server certificate was rejected` |
 | handshake のほかの TLS の誤り | `Other` | `cannot complete the TLS handshake with {host}: {rustls の文言}` |
 | handshake の途中で相手が閉じた (EOF か close_notify) | `ConnectionReset` | `cannot complete the TLS handshake with {host}: the peer closed the connection` |
@@ -1697,11 +1698,12 @@ main () = Async.run (fn () ->
 - handshake は、書き出すものを書き出し、`status` が handshaking でなくなるまで、`Net.read_chunk` の1回分を押し込んでは書き出すことを繰り返す。peer_closed か truncated が立てば、handshake の途中で相手が閉じた失敗にする
 - 押し込みの後に failed が立てば、`error_message` で理由を読み、alert を `try_io` の中で書き出してから、種類 `Other` の IO の失敗を投げる。alert を書けなくても TLS の誤りのほうを報告する。書き出しが `Cancelled` で失敗したときだけは `Cancelled` を投げる。failed が立たなければ、書き出すもの (TLS 1.3 の KeyUpdate への応答など) を書き出す
 - `line_ready` は、`Conn` の平文の先頭の行の状態を 0 (行も EOF もまだない)、1 (行がある)、2 (中身が上限を超えた)、3 (UTF-8 でない) で返す。EOF とみなすのは peer_closed のときだけである。`Conn` は前の `line_ready` が探し終えた位置を持ち、次は新しく届いた平文だけを探す。平文を返すと位置を先頭に戻す。1 のときだけ `take_line` を呼び、行を終わりの改行ごと文字列にして返す。残りのない EOF では空の文字列で、包みがそれを `None` にする
-- externの行は次の11行で、どれも`pub`でない。どの行も待たない。`client_raw`はrunのdriverの種類を読むので、VMは`Async`の命令として実行するが、待たないことは変わらない。ほかの行は普通のexternの行として実行する。投げるのは`client_raw`だけで、ほかの行のTLSの誤りは`status`のfailedと`error_message`に残る
+- externの行は次の12行で、どれも`pub`でない。`submit_client`と`take_conn`はプールの仕事の組 ([VM](vm.md)の「プールの仕事」) で、VMは`Async`の命令として実行する。ほかの行は待たず、普通のexternの行として実行する。投げるのは`take_conn`だけで、ほかの行のTLSの誤りは`status`のfailedと`error_message`に残る
 
 | 行 | 型 | 借りる引数 |
 |---|---|---|
-| `client_raw` | `String -> String -> <IO> Conn` | なし |
+| `submit_client` | `String -> String -> <IO> Async.OpId` | 両方 |
+| `take_conn` | `Async.OpId -> Async.Wake -> <IO> Conn` | なし |
 | `push_tls` | `Bytes -> Conn -> <IO> Conn` | バイト列 |
 | `push_eof` | `Conn -> <IO> Conn` | なし |
 | `pull_tls` | `Conn -> <IO> (Bytes, Conn)` | `Conn` |
@@ -1713,7 +1715,7 @@ main () = Async.run (fn () ->
 | `line_ready` | `Conn -> <IO> (Int, Conn)` | `Conn` |
 | `take_line` | `Conn -> <IO> (String, Conn)` | `Conn` |
 
-- `client_raw host ca`は`host`と`ca`を写して手放し、`Conn`を作る。信頼する根はrunのdriverの種類で決まる ([VM](vm.md)の「時計と driver」)。`push_tls`は暗号文を押し込み、`push_eof`はEOFを記録する。`pull_tls`は書き出す暗号文をすべて新しい`Bytes`にする。failedの後もalertはここから出る。`write_plain`は平文を暗号にして積む。failedの後は捨てる。`read_plain`は平文の先頭の65 536バイトまでを`Bytes`の後ろに足して返す。`send_close_notify`は1度だけclose_notifyを積む。致命的なalertの後は何もしない。`take_line`を行のそろっていないときに呼ぶと、内部の誤りになる
+- `submit_client host ca`は`host`と`ca`を写し、仕事の中で`Conn`を作る。信頼する根はrunのdriverの種類で決まる ([VM](vm.md)の「時計と driver」)。`take_conn`はそれを新しい物体として返すか、接続の設定の誤りを投げる。`push_tls`は暗号文を押し込み、`push_eof`はEOFを記録する。`pull_tls`は書き出す暗号文をすべて新しい`Bytes`にする。failedの後もalertはここから出る。`write_plain`は平文を暗号にして積む。failedの後は捨てる。`read_plain`は平文の先頭の65 536バイトまでを`Bytes`の後ろに足して返す。`send_close_notify`は1度だけclose_notifyを積む。致命的なalertの後は何もしない。`take_line`を行のそろっていないときに呼ぶと、内部の誤りになる
 
 ## `Std.Http`
 

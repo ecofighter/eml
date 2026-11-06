@@ -469,6 +469,9 @@ enum OpKind {
 pub(crate) enum JobSource {
     /// `blocking`のCの関数。値は`CodeBase`のCの関数の番号である。
     C(u32),
+    /// stdのexternの行。値は取り出しの行の`Extern`の判別子である。`Extern`そのものを持たないのは、このモジュールが
+    /// `eml_extern`をimportしないためである。
+    Std(u32),
 }
 
 /// 読みと書きの記録が、誤りの文言の前に付ける語の元。受け付けたストリームの `Origin` で決まる。

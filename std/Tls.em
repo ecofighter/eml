@@ -1,5 +1,5 @@
--- TLS のクライアント (docs/spec/stdlib.md の「`Std.Tls`」)。ソケットの I/O はすべて `Std.Net` が行い、ここでは
--- `Conn` と `TcpStream` の間でバイトを汲む。待ち、取り消し、期限は `Net` のもので、ここでは何も足さない
+-- TLSのクライアント (docs/spec/stdlib.mdの「`Std.Tls`」)。ソケットのI/Oはすべて`Std.Net`が行い、ここでは`Conn`と
+-- `TcpStream`の間でバイトを汲む。ソケットの待ち、取り消し、期限は`Net`のもので、`Conn`を作ることはプールの仕事を待つ
 import Async (Async)
 import Bytes
 import Net
@@ -19,8 +19,8 @@ connect host port = connect_with_ca "" host port
 -- `connect` に、根に足す CA の証明書 (PEM) を渡す。空の文字列なら既定の根だけを使う
 pub connect_with_ca : String -> String -> Int -> <IO, Async> Stream
 connect_with_ca ca host port =
-  -- 名前と PEM の誤りは、接続を開く前に投げる
-  let conn = client_raw host ca
+  -- 名前とPEMの誤りは、接続を開く前に投げる
+  let conn = client host ca
   let sock = Net.connect host port
   handshake host conn sock
 
@@ -31,8 +31,15 @@ wrap host sock = wrap_with_ca "" host sock
 -- `wrap` に、根に足す CA の証明書 (PEM) を渡す。空の文字列なら既定の根だけを使う
 pub wrap_with_ca : String -> String -> Net.TcpStream -> <IO, Async> Stream
 wrap_with_ca ca host sock =
-  let conn = client_raw host ca
+  let conn = client host ca
   handshake host conn sock
+
+-- `Conn`を作る。根を作るときにOSのファイルを読むことがあるので、ブロックする呼び出しのプールで作る。名前とPEMの
+-- 誤りは取り出しが投げる (docs/spec/stdlib.mdの「`Std.Tls`」)
+client : String -> String -> <IO, Async> Conn
+client host ca =
+  let (w, op) = Async.io_wait (submit_client host ca)
+  take_conn op w
 
 -- handshake の間、送るものを書き出しては読んで `Conn` に入れる。最後の書き出しがクライアントの Finished を送る
 handshake : String -> Conn -> Net.TcpStream -> <IO, Async> Stream
@@ -202,8 +209,9 @@ truncated = 8
 failed : Int
 failed = 16
 
--- ランタイムのインターフェース。`client_raw` のほかは投げず、TLS の誤りは `status` の 16 と `error_message` に残る
-extern client_raw        : String -> String -> <IO> Conn
+-- ランタイムのインターフェース。`take_conn`のほかは投げず、TLSの誤りは`status`の16と`error_message`に残る
+extern submit_client     : String -> String -> <IO> Async.OpId
+extern take_conn         : Async.OpId -> Async.Wake -> <IO> Conn
 extern push_tls          : Bytes -> Conn -> <IO> Conn
 extern push_eof          : Conn -> <IO> Conn
 extern pull_tls          : Conn -> <IO> (Bytes, Conn)

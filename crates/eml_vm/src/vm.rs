@@ -13,7 +13,7 @@ use eml_rt::{
 };
 
 use crate::apply;
-use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
+use crate::cells::{self, CellRef, JobSource, Raise, Runnable, Take, WaitToken};
 use crate::code::{CodeBase, ForkTable, UnwindEntry};
 use crate::data;
 use crate::driver::DriverKind;
@@ -3226,24 +3226,47 @@ fn async_op<R: Exec>(
             }
             task.set(dst, Word::UNIT);
         }
-        ext @ Extern::TlsClientRaw => {
-            // `client_raw`はrunのdriverの種類を読むので`Async`の命令で動くが、待たない。`host`と`pem`の参照を
-            // 受け取って手放す (docs/spec/stdlib.mdの「`Std.Tls`」)
-            let host = unsafe { ctx.copy_string(task.get(arg(0)), usize::MAX) }?;
-            let pem = unsafe { ctx.copy_string(task.get(arg(1)), usize::MAX) }?;
-            match tls::client_conn(tls::Roots::of(sched.driver_kind), &host, pem.as_bytes()) {
-                Ok(c) => {
+        Extern::TlsSubmitClient => {
+            // `host`と`pem`は借りるので、写して手放さない。仕事はプールのスレッドで走るので、根はここでrunのdriverの
+            // 種類から選ぶ (docs/spec/stdlib.mdの「`Std.Tls`」)
+            let host = unsafe { &*ctx.heap().string(task.get(arg(0)))? }.to_owned();
+            let pem = unsafe { &*ctx.heap().string(task.get(arg(1)))? }.to_owned();
+            let roots = tls::Roots::of(sched.driver_kind);
+            jobs::submit::<R, _>(ctx, task, sched, dst, TLS_JOB, move || {
+                tls::client_conn(roots, &host, pem.as_bytes())
+            })?;
+        }
+        ext @ Extern::TlsTakeConn => {
+            let (token, wake) = (task.raw(arg(0)), task.raw(arg(1)));
+            let outcome = jobs::take::<R, Result<tls::TlsConn, String>>(
+                ctx,
+                task,
+                &sched.cells,
+                token,
+                wake,
+                TLS_JOB,
+            )?;
+            let raise = match outcome {
+                jobs::Outcome::Woke(Ok(c)) => {
                     let w = unsafe { ctx.heap_mut() }.alloc_foreign(c, true);
                     task.set(dst, w);
+                    return Ok(());
                 }
-                Err(message) => {
-                    let raise = Raise::Io {
-                        kind: tls::SETUP_KIND,
-                        message,
-                    };
-                    return raise_again::<R>(code, ctx, task, dst, raise, ext);
-                }
-            }
+                // `Err`を返すのは`submit_client`の仕事だけで、接続の設定の誤りである
+                jobs::Outcome::Woke(Err(message)) => Raise::Io {
+                    kind: tls::SETUP_KIND,
+                    message,
+                },
+                jobs::Outcome::Failed(e) => Raise::Io {
+                    kind: io_kind(&e),
+                    message: format!("cannot run TLS: {e}"),
+                },
+                jobs::Outcome::Cancelled => Raise::Io {
+                    kind: cells::IO_CANCELLED,
+                    message: "task was cancelled".into(),
+                },
+            };
+            return raise_again::<R>(code, ctx, task, dst, raise, ext);
         }
         Extern::NetLocalPort => {
             // リスナーは借りるだけで、組を作る後の `con` が消費する
@@ -3435,6 +3458,9 @@ fn async_op<R: Exec>(
     }
     Ok(())
 }
+
+/// `Std.Tls`のプールの仕事の出どころ。受け付けの行はどれも、ただ1つの取り出しの行`take_conn`の名前で出す。
+const TLS_JOB: JobSource = JobSource::Std(Extern::TlsTakeConn as u32);
 
 /// driver の誤りの種類を `IOErrorKind` のタグにする。extern の誤りと同じく、最初の5種類のうち I/O の4つだけを出す
 /// (docs/spec/stdlib.md の「`Std.Net`」)。
@@ -4632,7 +4658,8 @@ fn run_extern<R: Exec>(
             | Extern::ExecOpPrefix
             | Extern::ExecFinish
             | Extern::ExecReap
-            | Extern::TlsClientRaw => {
+            | Extern::TlsSubmitClient
+            | Extern::TlsTakeConn => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

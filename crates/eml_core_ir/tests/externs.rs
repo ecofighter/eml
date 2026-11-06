@@ -305,13 +305,13 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     }
 }
 
-/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行、`Std.MutUnboxedArray` の3つの行、`Std.Async.task_cell`、
+/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは`Std.MutArray`の2つの行、`Std.MutUnboxedArray`の3つの行、`Std.Async.task_cell`、
 /// `Std.Async.op_ready`、`Std.Async.job_cell`、
-/// `Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr` と、`Std.Stream` の
-/// `op_reader`、`op_writer`、`op_outcome`、`op_prefix`、`source` と、`Std.Exec` の `stdin`、`stdout`、`stderr`、`stage_count`、
-/// `op_child`、`op_outcome`、`op_prefix`、`reap` と、`Std.Tls` の6つの行と、
-/// `Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行と、`Std.Proc` の `stage_count`、`wait_stage` だけで
-/// ある。`Std.Tls` の `push_tls` と `write_plain` はデータを借りて `Conn` を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
+/// `Std.Net`の`op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`と、`Std.Stream`の
+/// `op_reader`、`op_writer`、`op_outcome`、`op_prefix`、`source`と、`Std.Exec`の`stdin`、`stdout`、`stderr`、`stage_count`、
+/// `op_child`、`op_outcome`、`op_prefix`、`reap`と、`Std.Tls`の7つの行と、
+/// `Std.FileIn`、`Std.Stdin`、`Std.Proc`のそれぞれ5つの読みの行と、`Std.Proc`の`stage_count`、`wait_stage`だけで
+/// ある。`Std.Tls`の`push_tls`と`write_plain`はデータを借りて`Conn`を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc`の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
@@ -358,6 +358,7 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             | "Std.Tls.take_line" => (&[true], &[0]),
             "Std.Tls.read_plain" => (&[false, true], &[1]),
             "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[true, false], &[]),
+            "Std.Tls.submit_client" => (&[true, true], &[]),
             "Std.FileIn.read_all"
             | "Std.FileIn.read_line_raw"
             | "Std.FileIn.read_all_bytes"
@@ -663,7 +664,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             "Std.Exec.stage_count" => (&[Lin], Unr),
             "Std.Exec.submit_wait" | "Std.Exec.reap" => (&[Unr, Lin], Unr),
             "Std.Exec.op_child" => (&[Unr], Lin),
-            "Std.Tls.client_raw" => (&[Unr, Unr], Lin),
+            "Std.Tls.take_conn" => (&[Unr, Unr], Lin),
             "Std.Tls.push_tls" | "Std.Tls.write_plain" => (&[Unr, Lin], Lin),
             "Std.Tls.push_eof" | "Std.Tls.send_close_notify" => (&[Lin], Lin),
             "Std.Tls.pull_tls"
