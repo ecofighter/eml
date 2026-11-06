@@ -249,9 +249,9 @@
   - `cargo nextest run -p eml_vm --features tls --lib -E 'test(tls::)'` → 11 passed
   - `cargo nextest run -p eml_cli --test integration -E 'test(ui::)'` → すべて通り、`git status --porcelain crates/eml_cli/tests` → 空
   - この行に当たるD-1の確かめがすべて成り立つ
-    - G-1: `grep -n "jobs::submit" crates/eml_vm/src/vm.rs` → `TlsSubmitClient`と`TlsSubmitPush`の腕の2行
+    - G-1: `grep -nE "jobs::submit(::<|\()" crates/eml_vm/src/vm.rs | grep -v ":[0-9]*: *//"` → `TlsSubmitClient`と`TlsSubmitPush`の腕の2行 (`ffi_submit`が呼ぶ`jobs::submit_op`は数えない)
     - G-2: `awk '/Extern::TlsSubmitPush =>/,/^        }/' crates/eml_vm/src/vm.rs | grep -n "foreign_take::<\|decref(\|jobs::submit"` → この3つがこの順に、増える行番号で出る
-    - G-4: `perl -0ne 'while (/jobs::submit(?:::<[^>]*>)?\((.*?)\)\?;/sg) { my $c = $1; $c =~ s/^.*?move \|\|//s; print "$c\0" }' crates/eml_vm/src/*.rs > closures.txt` (作業ツリーの外の一時ファイルに書く) の後、`grep -c "heap\|Word" closures.txt` → `0`。`tr -cd '\0' < closures.txt | wc -c` (クロージャの数) が、`grep -n "jobs::submit" crates/eml_vm/src/*.rs | grep -v ":[0-9]*: *//"` の行数 (コメントでない呼び出しの数) と等しい。クロージャの本体に`)?;`を含めない
+    - G-4: `perl -0ne 'while (/jobs::submit(?:::<[^>]*>)?\((.*?)\)\?;/sg) { my $c = $1; $c =~ s/^.*?move \|\|//s; print "$c\0" }' crates/eml_vm/src/*.rs > closures.txt` (作業ツリーの外の一時ファイルに書く) の後、`grep -a -c "heap\|Word" closures.txt` → `0`。`tr -cd '\0' < closures.txt | wc -c` (クロージャの数) が、`grep -nE "jobs::submit(::<|\()" crates/eml_vm/src/*.rs | grep -v ":[0-9]*: *//"` の行数 (コメントでない呼び出しの数) と等しい。クロージャの本体に`)?;`を含めない
     - G-5: `grep -n "submit_client\|submit_push" std/Tls.em | grep -v "^[0-9]*:extern "` → ちょうど2行で、どちらも`Async.io_wait (submit_`を含み、それぞれの次の行が`  take_conn op w`である。`grep -c "io_wait_until (submit_" std/Tls.em` → `0`
     - G-6: `grep -n -A6 "Outcome::Cancelled" crates/eml_vm/src/vm.rs` → `TlsTakeConn`の腕に`IO_CANCELLED`と`"task was cancelled"`が出る
     - G-7: `grep -n "^pub extern submit_\|^pub extern take_conn" std/Tls.em` → 何も出ない
