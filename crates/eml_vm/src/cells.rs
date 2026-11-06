@@ -52,6 +52,7 @@
 //! 操作が読む。スコープの `shield` と `boundary` は開くときに1回書き、後は読むだけである。タスクのセルの残りは、
 //! そのタスクを動かすか取り消しを処理する持ち主だけが読み書きする (docs/spec/vm.md の「取り消しの届け方」)。
 
+use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
@@ -455,12 +456,19 @@ enum OpKind {
     Wait {
         program: Arc<str>,
     },
-    /// `blocking` の C の呼び出し。`call` は `CodeBase` の C の関数の番号、`ret` はプールが返した語。記録はヒープの語を
-    /// 持たず、引数は待つタスクの継続が持つ (docs/spec/vm.md の「`blocking` の呼び出し」)。
-    Ffi {
-        call: u32,
-        ret: Option<u64>,
+    /// プールの仕事。`from`は仕事の出どころで、取り出しが確かめる。`answer`はプールが返した箱で、記録は取り出しまで
+    /// 開けずに持つ。記録はヒープの語を持たない (docs/spec/vm.md の「操作の記録」)。
+    Job {
+        from: JobSource,
+        answer: Option<Box<dyn Any + Send>>,
     },
+}
+
+/// プールの仕事の出どころ。取り出しは、取り出す行の出どころと比べる。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum JobSource {
+    /// `blocking`のCの関数。値は`CodeBase`のCの関数の番号である。
+    C(u32),
 }
 
 /// 読みと書きの記録が、誤りの文言の前に付ける語の元。受け付けたストリームの `Origin` で決まる。
@@ -514,7 +522,7 @@ impl OpKind {
             OpKind::SetNodelay => "cannot set the no-delay option".into(),
             OpKind::Open { path, .. } => format!("cannot open `{path}`").into(),
             OpKind::Wait { program } => format!("cannot wait for `{program}`").into(),
-            OpKind::Ffi { .. } => "cannot call a C function".into(),
+            OpKind::Job { .. } => "cannot run a job".into(),
         }
     }
 
@@ -3561,14 +3569,12 @@ impl Registry {
                 | OpKind::Wait { .. },
                 Ok(Done::Size(n)),
             ) => Ok(n),
-            (OpPhase::Transfer, OpKind::Ffi { .. }, Ok(Done::Job(value))) => {
-                let r = *value.downcast::<u64>().map_err(|_| {
-                    CellFault::Internal("an op completes with another kind of result")
-                })?;
-                let OpKind::Ffi { ret, .. } = &mut self.op_mut(op)?.kind else {
+            // 箱は開けずに持つ。型を知るのは、仕事を受け付けた行の取り出しだけである
+            (OpPhase::Transfer, OpKind::Job { .. }, Ok(Done::Job(value))) => {
+                let OpKind::Job { answer, .. } = &mut self.op_mut(op)?.kind else {
                     unreachable!("the kind is matched above");
                 };
-                *ret = Some(r);
+                *answer = Some(value);
                 Ok(0)
             }
             // 外が書いたバイトは、取り消しを頼んだ記録でもストリームの buffer に確定する。行の途中で止めても、
@@ -4469,9 +4475,9 @@ fn op_key(op: CellRef) -> OpKey {
     op.encode() as OpKey
 }
 
-/// `blocking` の C の呼び出しの受け付け。プールの仕事 `job` を記録の host の driver に出し、token を返す。`call` は
-/// `CodeBase` の C の関数の番号で、取り出しが確かめに使う。`me` は呼んだタスクで、取り消しの地点なら仕事を出さない。
-/// 記録は語を持たない (docs/spec/vm.md の「`blocking` の呼び出し」)。
+/// プールの仕事の受け付け。仕事`job`を記録のhostのdriverに出し、tokenを返す。`from`は仕事の出どころで、取り出しが
+/// 確かめる。`me`は呼んだタスクで、取り消しの地点なら仕事を出さない。記録は語を持たない (docs/spec/vm.md の
+/// 「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn submit_job<M: Mode>(
     shared: &Shared,
@@ -4481,10 +4487,10 @@ pub(crate) fn submit_job<M: Mode>(
     worker: u32,
     depth_offset: usize,
     me: CellRef,
-    call: u32,
+    from: JobSource,
     job: Op,
 ) -> Result<i64, CellFault> {
-    let record = net_record(OpKind::Ffi { call, ret: None }, worker, None);
+    let record = net_record(OpKind::Job { from, answer: None }, worker, None);
     submit(
         shared,
         here,
@@ -4497,30 +4503,43 @@ pub(crate) fn submit_job<M: Mode>(
     )
 }
 
-/// `take_ffi` が返す、終わった `blocking` の呼び出し。`result` はプールが返した語か、仕事を走らせられなかった誤りか、
-/// 取り消しの地点で出さなかった誤りである。
-pub(crate) struct FfiTaken {
-    pub(crate) call: u32,
-    pub(crate) result: io::Result<u64>,
+/// `take_job`が返す、終わったプールの仕事。`result`はプールが返した箱か、仕事を走らせられなかった誤りか、取り消しの
+/// 地点で出さなかった誤りである。
+pub(crate) struct JobTaken {
+    pub(crate) from: JobSource,
+    result: io::Result<Box<dyn Any + Send>>,
 }
 
-/// `blocking` の呼び出しの取り出し。token を消費して記録を放す。取り出すのは受け付けたタスク (`worker`) だけである。
-pub(crate) fn take_ffi<M: Mode>(
+impl JobTaken {
+    /// 箱を、仕事を受け付けた行が入れた型に戻す。仕事の誤りはそのまま返す。違う型はVMの誤りである。
+    pub(crate) fn answer<T: 'static>(self) -> Result<io::Result<T>, CellFault> {
+        match self.result {
+            Ok(answer) => answer
+                .downcast::<T>()
+                .map(|r| Ok(*r))
+                .map_err(|_| CellFault::Internal("an op completes with another kind of result")),
+            Err(e) => Ok(Err(e)),
+        }
+    }
+}
+
+/// プールの仕事の取り出し。tokenを消費して記録を放す。取り出すのは受け付けたタスク (`worker`) だけである。
+pub(crate) fn take_job<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
     worker: u32,
-) -> Result<FfiTaken, CellFault> {
+) -> Result<JobTaken, CellFault> {
     let taken = take_op(shared, ctx, token, worker)?;
-    let OpKind::Ffi { call, ret } = taken.kind else {
+    let OpKind::Job { from, answer } = taken.kind else {
         return Err(CellFault::Internal("an op is taken as another kind of op"));
     };
-    let result = match (taken.result, ret) {
-        (Ok(_), Some(r)) => Ok(r),
-        (Ok(_), None) => return Err(CellFault::Internal("a C call op has no answer")),
+    let result = match (taken.result, answer) {
+        (Ok(_), Some(answer)) => Ok(answer),
+        (Ok(_), None) => return Err(CellFault::Internal("a job op has no answer")),
         (Err(e), _) => Err(e),
     };
-    Ok(FfiTaken { call, result })
+    Ok(JobTaken { from, result })
 }
 
 /// `Std.Net` の操作の記録。buffer を持たない操作はどれも driver が記憶を使わないので、段階は `Transfer` から始める。
@@ -6280,14 +6299,14 @@ fn submit_ffi_job(
         0,
         0,
         me,
-        3,
+        JobSource::C(3),
         job,
     )
     .unwrap()
 }
 
-/// プールの仕事の記録は、完了の箱の `u64` を答えに受け、取り出しが C の関数の番号とともに返す
-/// (docs/spec/vm.md の「`blocking` の呼び出し」)。
+/// プールの仕事の記録は完了の箱をそのまま持ち、取り出しが仕事の出どころとともに返して、`u64`に戻す
+/// (docs/spec/vm.md の「操作の記録」)。
 #[test]
 fn a_job_record_takes_the_boxed_answer() {
     let mut ctx = test_ctx();
@@ -6309,9 +6328,9 @@ fn a_job_record_takes_the_boxed_answer() {
     );
     assert!(out.is_empty());
     assert_eq!(registry.lock().in_flight(0), 0);
-    let taken = take_ffi(&registry, &mut ctx, token, 0).unwrap();
-    assert_eq!(taken.call, 3);
-    assert_eq!(taken.result.unwrap(), 42);
+    let taken = take_job(&registry, &mut ctx, token, 0).unwrap();
+    assert_eq!(taken.from, JobSource::C(3));
+    assert_eq!(taken.answer::<u64>().unwrap().unwrap(), 42);
     let leaks = ctx.leaks();
     assert!(leaks.is_empty(), "{leaks:?}");
 }
@@ -6339,11 +6358,11 @@ fn a_cancelled_task_submits_no_job() {
         assert!(matches!(record.phase, OpPhase::Done(Err(_), true)));
         assert!(record.pending_op.is_none());
     }
-    let taken = take_ffi(&registry, &mut ctx, token, 0).unwrap();
+    let taken = take_job(&registry, &mut ctx, token, 0).unwrap();
     assert!(taken.result.is_err());
 }
 
-/// `u64` でない値で終わった仕事の記録は、内部の誤りである。
+/// 完了は箱の型を見ない。`u64`でない値で終わった仕事を`u64`として取り出すのは、内部の誤りである。
 #[test]
 fn a_job_answer_of_another_type_is_an_internal_error() {
     let mut ctx = test_ctx();
@@ -6357,16 +6376,19 @@ fn a_job_answer_of_another_type_is_an_internal_error() {
         result: Ok(Done::Job(Box::new(42i32))),
         cancelled: false,
     });
+    complete(
+        &registry,
+        &solo(&registry),
+        &mut ctx,
+        &mut driver,
+        0,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let taken = take_job(&registry, &mut ctx, token, 0).unwrap();
     assert!(matches!(
-        complete(
-            &registry,
-            &solo(&registry),
-            &mut ctx,
-            &mut driver,
-            0,
-            &mut Vec::new(),
-            &mut Vec::new(),
-        ),
+        taken.answer::<u64>(),
         Err(CellFault::Internal(
             "an op completes with another kind of result"
         ))

@@ -10,7 +10,7 @@ use eml_extern::{CFunction, CInt, CParam, CRet, ExternEffect, Purity};
 use eml_rt::externs::{Fault, Raised};
 use eml_rt::{Ctx, Mode, Word};
 
-use crate::cells;
+use crate::cells::{self, JobSource};
 use crate::code::CodeBase;
 use crate::error::VmFault;
 use crate::op::Slot;
@@ -164,15 +164,16 @@ pub(crate) fn call<R: Exec>(
     }
 }
 
-/// `Op::FfiSubmit` の前半。引数を組み、プールで C の関数を呼ぶ仕事を作って、`CodeBase` の C の関数の番号とともに
-/// 返す。範囲の外の引数は記録を作らずに `Panic` を上げ、`None` を返す (docs/spec/vm.md の「`blocking` の呼び出し」)。
+/// `Op::FfiSubmit`の前半。引数を組み、プールでCの関数を呼ぶ仕事を作って、その出どころ (`CodeBase`のCの関数の
+/// 番号を持つ`JobSource::C`) とともに返す。範囲の外の引数は記録を作らずに`Panic`を上げ、`None`を返す (docs/spec/vm.md の
+/// 「`blocking` の呼び出し」)。
 pub(crate) fn job<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
     task: &mut Task,
     dst: Slot,
     at: u32,
-) -> Result<Option<(u32, eml_rt::Op)>, VmFault> {
+) -> Result<Option<(JobSource, eml_rt::Op)>, VmFault> {
     let ops = &code.tables.operands[at as usize..];
     let c = ops[0];
     let entry = &code.c_functions[c as usize];
@@ -193,7 +194,7 @@ pub(crate) fn job<R: Exec>(
         // 走らせるプールのスレッドだけである (docs/spec/object-model.md の「`unsafe` の核」の T16)
         Box::new(unsafe { (call.bridge)(call.callee, args.as_ptr()) })
     }));
-    Ok(Some((c, job)))
+    Ok(Some((JobSource::C(c), job)))
 }
 
 /// `Op::FfiTake`。記録を放し、`Wake` と答えで分ける。取り消されたタスクは、仕事が返したハンドルをその場で壊し、
@@ -210,14 +211,12 @@ pub(crate) fn take<R: Exec>(
     let c = ops[0];
     let entry = &code.c_functions[c as usize];
     let (token, wake) = (task.raw(ops[2] as Slot), task.raw(ops[3] as Slot));
-    let taken = cells::take_ffi(shared, ctx, token, task.worker)?;
-    if taken.call != c {
-        return Err(VmFault::Internal(
-            "a C call op is taken by another function",
-        ));
+    let taken = cells::take_job(shared, ctx, token, task.worker)?;
+    if taken.from != JobSource::C(c) {
+        return Err(VmFault::Internal("an op is taken by another function"));
     }
     let function = &entry.function;
-    match (wake, taken.result) {
+    match (wake, taken.answer::<u64>()?) {
         (cells::WOKE, Ok(r)) => match unmarshal(code, ctx, function, r)? {
             Ok(out) => {
                 write_out(task, dst, out);
@@ -248,7 +247,7 @@ pub(crate) fn take<R: Exec>(
             }));
             failed::<R>(code, ctx, task, dst, fault, Purity::Effectful)
         }
-        _ => Err(VmFault::Internal("a C call op is taken with another wake")),
+        _ => Err(VmFault::Internal("an op is taken with another wake")),
     }
 }
 

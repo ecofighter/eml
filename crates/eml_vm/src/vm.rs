@@ -3449,7 +3449,7 @@ fn ffi_submit<R: Exec>(
     dst: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let Some((c, job)) = ffi::job::<R>(code, ctx, task, dst, at)? else {
+    let Some((from, job)) = ffi::job::<R>(code, ctx, task, dst, at)? else {
         return Ok(());
     };
     let me = current_cell(task)?;
@@ -3464,7 +3464,7 @@ fn ffi_submit<R: Exec>(
         task.worker,
         task.depth_offset,
         me,
-        c,
+        from,
         job,
     )?;
     task.set_raw(dst, token);
