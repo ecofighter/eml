@@ -195,6 +195,16 @@ struct SlotState {
     parked: bool,
 }
 
+/// `Machine`を持つスレッドと、`main`を動かすworker 0の関係。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum Seat {
+    /// `Machine`を持つスレッドがworker 0を兼ねる。`eml repl`と`Machine`の既定である。
+    Merged,
+    /// `Machine`を持つスレッドがメインのworkerになり、worker 0は別のスレッドで動く。
+    Separate,
+}
+
 /// worker 1つ分の欄。
 pub(crate) struct Slot {
     state: Mutex<SlotState>,
@@ -224,6 +234,16 @@ pub(crate) struct Slot {
     pub(crate) top_bytes: AtomicUsize,
 }
 
+impl Slot {
+    /// 眠っているworkerの待ちを終わらせる。条件変数とdriverのwakerを鳴らす。
+    pub(crate) fn ring(&self) {
+        self.cv.notify_one();
+        if let Some(waker) = self.waker.get() {
+            waker.wake();
+        }
+    }
+}
+
 /// `Slot::current` と `Slot::top` の、タスクのないことを表す値。
 pub(crate) const NO_CELL: u64 = u64::MAX;
 
@@ -234,8 +254,11 @@ pub(crate) fn cell_word(cell: CellRef) -> u64 {
 
 /// 1回の run で worker が共有する表。run ごとに作り、run の終わりに捨てる。
 pub(crate) struct Run {
-    /// worker ごとの欄。添字が worker の番号で、数は `Limits::workers` である。
+    /// workerごとの欄。添字がworkerの番号で、数は`Limits::workers`に、`Separate`ではメインのworkerの分を1つ足したものである。
     pub(crate) slots: Box<[Slot]>,
+    /// `main`とタスクを動かすworkerの数。メインのworkerを含まない。
+    workers: usize,
+    seat: Seat,
     /// 始めた worker のうち眠っていないものの数。`parked` を替えるときに、その欄の lock の下でだけ替える。
     pub(crate) running: AtomicUsize,
     /// 送った子の知らせのうち、終わりの知らせをまだ受け取っていないものの数。親を失った節点の分も数える。
@@ -283,20 +306,23 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Run {
-    /// worker が `workers` 個の run の表。始めた worker は worker 0 だけで、動いている。まだ始めていない worker の欄は
-    /// 眠っていない形にしておく。起こしても `running` に数えないためである。
+    /// workerが`workers`個のrunの表。始めたworkerはworker 0だけで、動いている。まだ始めていないworkerの欄は
+    /// 眠っていない形にしておく。起こしても`running`に数えないためである。`Separate`ではメインのworkerの欄を
+    /// 最後に足し、始めてあるが眠っている形にする。
     pub(crate) fn new(
         workers: usize,
+        seat: Seat,
         bell: Option<Arc<Doorbell>>,
         clock: RunClock,
         counters: Arc<Counters>,
     ) -> Run {
-        let slots = (0..workers)
-            .map(|_| Slot {
+        let separate = seat == Seat::Separate;
+        let slots = (0..workers + usize::from(separate))
+            .map(|k| Slot {
                 state: Mutex::new(SlotState {
                     notices: Vec::new(),
                     woken: false,
-                    parked: false,
+                    parked: separate && k == workers,
                 }),
                 has_notices: AtomicBool::new(false),
                 cv: Condvar::new(),
@@ -313,11 +339,13 @@ impl Run {
             .collect();
         Run {
             slots,
+            workers,
+            seat,
             running: AtomicUsize::new(1),
             in_flight: AtomicUsize::new(0),
             placed: AtomicU64::new(0),
             placed_jobs: AtomicU64::new(0),
-            next_place: AtomicUsize::new(0),
+            next_place: AtomicUsize::new(usize::from(separate)),
             live: AtomicUsize::new(1),
             idle: Mutex::new(Vec::new()),
             clock,
@@ -327,6 +355,28 @@ impl Run {
             job_budget: JOB_QUIESCE_LIMIT,
             job_deadline: OnceLock::new(),
         }
+    }
+
+    /// `main`とタスクを動かすworkerの数。メインのworkerを含まない。
+    pub(crate) fn workers(&self) -> usize {
+        self.workers
+    }
+
+    /// メインのworkerの番号。`Separate`では最後の欄で、`Merged`ではworker 0がメインのworkerを兼ねる。
+    #[allow(dead_code)]
+    pub(crate) fn main(&self) -> usize {
+        if self.separate() { self.workers } else { 0 }
+    }
+
+    pub(crate) fn separate(&self) -> bool {
+        self.seat == Seat::Separate
+    }
+
+    /// worker 0が最初に作るdriver。`Separate`ではworker 0のスレッドで作る。`Box<dyn IoDriver>`は`Send`でないので、作ったスレッドで
+    /// 捨てるためである。
+    #[allow(dead_code)]
+    pub(crate) fn entry_driver(&self, seed: Option<u64>) -> std::io::Result<Box<dyn IoDriver>> {
+        self.clock.driver(seed)
     }
 
     /// 静止で仕事を待てる残り。run の最初の静止が期限を決め、ほかの worker はそれを分け合う。
@@ -423,10 +473,7 @@ impl Run {
             state.woken = true;
             self.unpark_locked(&mut state);
         }
-        slot.cv.notify_one();
-        if let Some(waker) = slot.waker.get() {
-            waker.wake();
-        }
+        slot.ring();
     }
 
     /// worker `k` の受け箱に知らせを積む。欄の lock の下で積んで `k` を動いている形にし、`NOTICE` を立ててから、
@@ -445,10 +492,7 @@ impl Run {
         };
         control.notice(k);
         if parked {
-            slot.cv.notify_one();
-            if let Some(waker) = slot.waker.get() {
-                waker.wake();
-            }
+            slot.ring();
         }
     }
 
@@ -704,7 +748,7 @@ pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
     max_depth: usize,
 ) -> Vec<ScopedJoinHandle<'scope, WorkerExit<M>>> {
     let mut handles = Vec::new();
-    for k in 1..run.slots.len() {
+    for k in 1..run.workers() {
         run.prepare(k);
         let builder = thread::Builder::new()
             .name(format!("eml-worker-{k}"))
@@ -1154,7 +1198,7 @@ mod tests {
 
     use eml_rt::{Checked, Control, HeapError, Limits, Stop};
 
-    use super::{Notice, Run, settle};
+    use super::{Notice, Run, Seat, settle};
     use crate::cells::{CellRef, MailItem, Registry, Shared};
     use crate::driver::RunClock;
     use crate::sched::{Scheduler, Sequential};
@@ -1196,7 +1240,13 @@ mod tests {
     /// 眠っている worker を起こすと `running` に数え、もう一度起こしても数は増えない。
     #[test]
     fn waking_a_parked_worker_counts_it_once() {
-        let run = Run::new(2, None, RunClock::Virtual(Arc::default()), Arc::default());
+        let run = Run::new(
+            2,
+            Seat::Merged,
+            None,
+            RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        );
         run.park(0);
         assert_eq!(run.running.load(Ordering::Acquire), 0);
         run.wake(0);
@@ -1274,6 +1324,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         }));
         let run = Arc::new(Run::new(
             2,
+            Seat::Merged,
             None,
             RunClock::Virtual(Arc::default()),
             Arc::default(),
@@ -1316,11 +1367,23 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
     /// worker 0である (docs/spec/vm.mdの「`Async`のタスク」)。
     #[test]
     fn the_ring_never_places_on_worker_0() {
-        let run = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
+        let run = Run::new(
+            3,
+            Seat::Merged,
+            None,
+            RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        );
         run.set_live(3);
         let owners: Vec<u32> = (0..4).map(|_| run.next_owner()).collect();
         assert_eq!(owners, [1, 2, 1, 2]);
-        let run = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
+        let run = Run::new(
+            3,
+            Seat::Merged,
+            None,
+            RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        );
         run.set_live(1);
         assert_eq!(run.next_owner(), 0);
     }
@@ -1329,7 +1392,13 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
     /// (docs/spec/vm.md の「時計と driver」)。
     #[test]
     fn job_wait_shares_one_deadline() {
-        let mut run = Run::new(2, None, RunClock::Virtual(Arc::default()), Arc::default());
+        let mut run = Run::new(
+            2,
+            Seat::Merged,
+            None,
+            RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        );
         run.job_budget = Duration::from_secs(1);
         let ms = Duration::from_millis;
         assert_eq!(run.job_wait(ms(10)), ms(1000));
@@ -1343,6 +1412,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
     fn only_the_real_clock_gives_each_worker_its_own_driver() {
         let real = Run::new(
             3,
+            Seat::Merged,
             None,
             RunClock::Real {
                 epoch: std::time::Instant::now(),
@@ -1354,7 +1424,13 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             [0, 1, 2]
         );
         assert!(matches!(real.new_driver(), Some(Ok(_))));
-        let virtual_ = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
+        let virtual_ = Run::new(
+            3,
+            Seat::Merged,
+            None,
+            RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        );
         assert_eq!(
             (0..3).map(|k| virtual_.io_worker(k)).collect::<Vec<_>>(),
             [0, 0, 0]
@@ -1365,7 +1441,13 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
     /// まだ始めていない worker の欄を起こしても、`running` には数えない。
     #[test]
     fn waking_an_unstarted_worker_counts_nothing() {
-        let run = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
+        let run = Run::new(
+            3,
+            Seat::Merged,
+            None,
+            RunClock::Virtual(Arc::default()),
+            Arc::default(),
+        );
         run.wake_all();
         assert_eq!(run.running.load(Ordering::Acquire), 1);
     }
@@ -1377,7 +1459,13 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         let idle = |hook: bool| {
             let control = Arc::new(Control::new(Limits::default()));
             let driver = eml_io::TestDriver::new(None);
-            let run = Run::new(1, None, RunClock::Virtual(driver.clock()), Arc::default());
+            let run = Run::new(
+                1,
+                Seat::Merged,
+                None,
+                RunClock::Virtual(driver.clock()),
+                Arc::default(),
+            );
             let mut sched = Scheduler::new(
                 Sequential,
                 Box::new(driver),
@@ -1418,6 +1506,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         let clock = driver.clock();
         let run = Arc::new(Run::new(
             2,
+            Seat::Merged,
             None,
             RunClock::Virtual(Arc::clone(&clock)),
             Arc::default(),

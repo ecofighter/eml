@@ -14,7 +14,7 @@ use crate::counters::Counters;
 use crate::driver::{JOB_QUIESCE_LIMIT, RunClock};
 use crate::error::KEPT_PENDING;
 use crate::vm::ExecWith;
-use crate::workers::{Retired, Run, Shutdown, WorkerExit, Workers, settle, spawn_workers};
+use crate::workers::{Retired, Run, Seat, Shutdown, WorkerExit, Workers, settle, spawn_workers};
 
 mod apply;
 mod cells;
@@ -951,12 +951,18 @@ fn run_scheduled<M: Mode, P: Policy>(
     // run の表は run ごとに作り、監視のスレッドが止まる `Scheduler` の破棄とともに捨てる (docs/spec/vm.md の
     // 「タスクとスケジュール」)
     let workers = control.limits().workers;
-    let mut run = Run::new(workers, start.doorbell, start.run_clock, start.counters);
+    let mut run = Run::new(
+        workers,
+        Seat::Merged,
+        start.doorbell,
+        start.run_clock,
+        start.counters,
+    );
     run.job_budget = start.job_budget;
     let run = Arc::new(run);
     // 登録表も run ごとに1つ作り、worker 0 と、後で作る worker 1..N-1 のすべての `Scheduler` に配る
     // (docs/spec/vm.md の「セルと登録表」)
-    let mut registry = Registry::new(start.generations, workers);
+    let mut registry = Registry::new(start.generations, run.slots.len());
     // 予定は最初の命令の前に、どのタイマーよりも先に載せる (docs/spec/vm.md の「時間の待ち」)
     registry.schedule_signals(start.signals.iter().map(|s| (s.at_ms, s.signal.bit())));
     let mut sched = Scheduler::new(

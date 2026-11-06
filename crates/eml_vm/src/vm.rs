@@ -22,7 +22,7 @@ use crate::ffi;
 use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
-    JOB, JoinId, JoinNode, MAIN, Memory, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId,
+    ENTRY, JOB, JoinId, JoinNode, Memory, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId,
     TaskState,
 };
 use crate::tls;
@@ -328,7 +328,7 @@ impl Task {
     }
 
     /// worker 1..N-1 で、動くタスクのない間に VM の繰り返しが持つ `Task`。スタックも語も持たず、最初の切り替えで
-    /// 表の `MAIN` の欄に退避したまま、二度と動かさない。
+    /// 表の `ENTRY` の欄に退避したまま、二度と動かさない。
     fn idle() -> Task {
         Task {
             stack: Vec::new(),
@@ -815,7 +815,7 @@ fn work_loop<R: Exec>(
     sched: &mut Scheduler<R::P>,
     counts: &mut RunCounts,
 ) -> RuntimeError {
-    // 動くタスクのない `Task` は `MAIN` の欄に退避し、その番号をどのタスクにも振らない
+    // 動くタスクのない `Task` は `ENTRY` の欄に退避し、その番号をどのタスクにも振らない
     if let Err(fault) = switch_away::<R>(code, ctx, task, sched, Some(TaskState::Ready)) {
         let pc = task.pc;
         if let Err(error) = task_failed::<R>(code, ctx, task, sched, Failure { fault, pc }) {
@@ -895,7 +895,7 @@ fn step<R: Exec>(
         Op::CallN { at } => call_many::<R>(code, ctx, task, sched, at)?,
         Op::RetN { at } => return_many::<R>(code, ctx, task, sched, pc, at)?,
         Op::Finish => {
-            if sched.current != MAIN {
+            if sched.current != ENTRY {
                 entry_finish::<R>(code, ctx, task, sched)?;
                 return Ok(true);
             }
@@ -1491,7 +1491,7 @@ fn par<R: Exec>(
     let ret = task.pc;
     let j = sched.add_join(JoinNode {
         parent: sched.current,
-        right: MAIN,
+        right: ENTRY,
         right_worker: child,
         parent_evv,
         left: None,
@@ -2248,7 +2248,7 @@ fn task_failed<R: Exec>(
         // `Async` のタスクの失敗は底の `try_all` が捕まえるので、ここに来るのは捕まえられない誤りで、run を止める
         // (docs/spec/vm.md の「`Async` のタスク」)。仕事のセルは誤りを持たないので、仕事の誤りもその場で run を止める
         // (docs/spec/vm.md の「`compute` の仕事」)
-        if sched.current == MAIN
+        if sched.current == ENTRY
             || task.cell.is_some()
             || task.job.is_some()
             || stops_the_run(&error)
@@ -4620,7 +4620,13 @@ fn f(p.0: unit) -> unit {
         let mut sched = Scheduler::new(
             crate::Sequential,
             Box::new(driver),
-            Arc::new(crate::workers::Run::new(1, None, clock, Arc::default())),
+            Arc::new(crate::workers::Run::new(
+                1,
+                crate::workers::Seat::Merged,
+                None,
+                clock,
+                Arc::default(),
+            )),
             Arc::clone(&control),
             task.worker,
             usize::MAX,
@@ -4699,7 +4705,13 @@ fn f(p.0: unit) -> unit {
         let sched = Scheduler::new(
             policy,
             Box::new(driver),
-            Arc::new(crate::workers::Run::new(1, None, clock, Arc::default())),
+            Arc::new(crate::workers::Run::new(
+                1,
+                crate::workers::Seat::Merged,
+                None,
+                clock,
+                Arc::default(),
+            )),
             control,
             ctx.heap().worker(),
             DEPTH,

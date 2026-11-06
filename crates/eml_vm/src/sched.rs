@@ -269,7 +269,7 @@ impl Policy for Seeded {
 pub type JoinId = usize;
 
 /// エントリのタスクの番号。worker 1..N-1 では、動くタスクのない間の `Task` を退避する欄で、どのタスクにも振らない。
-pub(crate) const MAIN: TaskId = 0;
+pub(crate) const ENTRY: TaskId = 0;
 
 /// ほかの worker に置いた右の子を表す、join の節点の `right`。置いた子はこの worker の表にない。
 pub(crate) const PLACED: TaskId = usize::MAX;
@@ -490,7 +490,7 @@ impl<P: Policy> Scheduler<P> {
             policy,
             tasks: vec![None],
             free_tasks: Vec::new(),
-            current: MAIN,
+            current: ENTRY,
             joins: Vec::new(),
             free_joins: Vec::new(),
             preemptions: 0,
@@ -554,14 +554,14 @@ impl<P: Policy> Scheduler<P> {
     /// (docs/spec/vm.mdの「タスクとスケジュール」「時計と driver」)。
     pub(crate) fn begin_run(&mut self, roots_free: bool) -> bool {
         self.publish_driver();
-        if self.driver_kind != DriverKind::Virtual || self.run.slots.len() >= 2 {
+        if self.driver_kind != DriverKind::Virtual || self.run.workers() >= 2 {
             self.start_monitor();
         }
         // 中継するかは監視のスレッドを始めた後で決まり、run の間は変わらない。集めるのはどの worker でもよいので、
         // 登録表に写す (docs/spec/vm.md の「上限と割り込み」)
         let relay = self.relay_on();
         self.cells.lock().relay = relay;
-        self.run.slots.len() >= 2
+        self.run.workers() >= 2
             && self.watcher.monitor.is_some()
             && roots_free
             && self.driver_kind != DriverKind::Injected
@@ -1070,6 +1070,7 @@ mod tests {
     use crate::cells::{CancelPath, MailItem, Registry, Woken};
     use crate::doorbell::Doorbell;
     use crate::driver::RunClock;
+    use crate::workers::Seat;
     use eml_rt::Word;
 
     /// 監視のスレッドでメモリを見るのは `Normal` だけで、決定的な方針は集める地点で見る。
@@ -1094,6 +1095,7 @@ mod tests {
         };
         let run = Run::new(
             workers,
+            Seat::Merged,
             doorbell.then(|| Doorbell::new().unwrap()),
             clock,
             Arc::default(),
@@ -1212,6 +1214,7 @@ mod tests {
         }));
         let run = Arc::new(Run::new(
             2,
+            Seat::Merged,
             None,
             RunClock::Virtual(Arc::default()),
             Arc::default(),
@@ -1264,7 +1267,7 @@ mod tests {
                 crate::tls::Roots::Fixtures,
             ),
         ] {
-            let run = Arc::new(Run::new(2, None, clock, Arc::default()));
+            let run = Arc::new(Run::new(2, Seat::Merged, None, clock, Arc::default()));
             let sched = Scheduler::worker(
                 Sequential,
                 run,
@@ -1444,6 +1447,7 @@ mod tests {
         let bin = Arc::new(HostBin::new(driver.bin(), false));
         let run = Arc::new(Run::new(
             2,
+            Seat::Merged,
             None,
             RunClock::Virtual(driver.clock()),
             Arc::default(),
