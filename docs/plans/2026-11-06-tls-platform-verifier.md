@@ -68,6 +68,7 @@
 - 影響の範囲: Rustの処理をプールで動かすstdのexternの行すべて (今は`Std.Tls`、今後のそうした行も)。ブロックするCの呼び出し
 - 見直す条件: 操作を待つタスクが別のworkerへ移る段が来たとき (取り出しは`with_worker`の下で箱を作り、印を付ける必要がある。G-13)。Rustの仕事の行の3つ目の族が現れたとき (U1を見直す)
 - 適合の確かめ: `01-pool-jobs.md`の8のG-1〜G-13。それぞれに確かめのコマンドがある。G-4、G-5、G-9と、5の取り出しの失敗の箇条は、利用者が採った直した文である (元の確かめは、書いたとおりでは通りえなかった)
+- 実行中に決めたこと: `cells.rs`が`std`と`eml_rt`だけに依存する性質を保つため、`JobSource`はT-2では`C(u32)`だけを持ち、`Std`の変種は最初の使い手と一緒にT-6で`Std(u32)` (`Extern`の判別子) として入れる。T-2の`JobTaken::answer::<T>`は`Result<io::Result<T>, CellFault>`を返す。T-3の`jobs.rs`はT-6まで本番の呼び手がないので、`#[cfg_attr(not(test), expect(dead_code, reason = …))]`を付け、T-6で外す (`#[allow]`は使わない)
 - リポジトリに残す所: `docs/spec/vm.md`の「プールの仕事」(新しい節) と「`blocking`の呼び出し」、`docs/spec/object-model.md` (`foreign_take`)、`docs/spec/stdlib.md`の「extern の境界」。T-1〜T-3が書く
 
 ### 5.2 短中期の設計 (理由があれば実装中に変えてよい。変えたらコミットのメッセージに書く)
