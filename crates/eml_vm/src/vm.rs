@@ -3464,7 +3464,7 @@ fn async_op<R: Exec>(
         }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net, Std.Stream and Std.Exec reached the Async instruction",
+                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net, Std.Stream, Std.Exec and Std.Tls reached the Async instruction",
             ));
         }
     }

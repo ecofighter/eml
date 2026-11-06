@@ -122,8 +122,8 @@ impl Trust {
     fn os(extra_ca_pem: &[u8], now: Option<UnixTime>) -> Result<Trust, Error> {
         let roots = extra_roots(extra_ca_pem)?;
         let no_extra = roots.is_empty();
-        // Linuxでは、システムの根も足す根もないと作るのに失敗する。その失敗を`Error::NoRoots`として報告する
-        // (docs/spec/stdlib.mdの「`Std.Tls`」)
+        // CAを渡さなければ、検証器を作れないことをどのOSでも`Error::NoRoots`として報告する。よくあるのは、
+        // システムの根も足す根もないLinuxである (docs/spec/stdlib.mdの「`Std.Tls`」)
         let verifier = rustls_platform_verifier::Verifier::new_with_extra_roots(roots, provider())
             .map_err(|e| match e {
                 _ if no_extra => Error::NoRoots,
