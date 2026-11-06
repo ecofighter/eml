@@ -665,7 +665,7 @@ route を切り替えより先に行うのは、起こしを受け箱に積ん�
 
 ## `Async` のタスク
 
-`Std.Async`のタスク ([標準ライブラリ](stdlib.md)の「`Std.Async`」) は、`start`のときにworkerに置き、終わるまでそこで動く。worker 1..N-1を作ったrun (`Workers`が`Started`か`Peer`) では、`start_raw`と`start_in_raw`がrunの表の数`next_place`に1を足し、足す前の値をworker 0を除く作ったworkerの数 (live − 1) で割った余りに1を足したworkerに置く。workerは1、2、…、N−1、1、…の順に回る。`main`を動かすworker 0には`start`でタスクを置かないので、`main`の同期の読み込みがそれらのタスクを止めることはない。workerを作らないrunでは、呼んだworkerを持ち主にする。`Async.run`の根のタスクは、いつも呼んだworkerに置く。持ち主を`start`を実行したworkerと違うworkerにしたタスクの数は`Finished.placed_tasks`に数える (「タスクとスケジュール」)。どのworkerがどのタスクを持つかはスケジュールで決まるので、N = 2以上のrunの出力の順と`RunStats`はseedでは再現しない。タスクとスコープの意味は`eml_vm`の`cells.rs`の核が持ち、VMの命令`Async`は核を呼んで、返った仕事をVMの`Task`にする。
+`Std.Async`のタスク ([標準ライブラリ](stdlib.md)の「`Std.Async`」) は、`start`のときにworkerに置き、終わるまでそこで動く。worker 1..N-1を作ったrun (`Workers`が`Started`か`Peer`) では、`start_raw`と`start_in_raw`がrunの表の数`next_place`に1を足し、足す前の値をworker 0を除く作ったworkerの数 (live − 1) で割った余りに1を足したworkerに置く。workerは1、2、…、N−1、1、…の順に回る。`main`を動かすworker 0には`start`でタスクを置かないので、`main`の同期の読み込みの間もそれらのタスクは動く。ただし、worker 0のdriverが受け持つI/O (`main`が作ったソケットと`Std.Stream`のファイル、仮想の時計ではすべてのI/O) は待つ。worker 0はそれらの完了を自分の集める地点でだけ拾うためである (「時計と driver」)。workerを作らないrunでは、呼んだworkerを持ち主にする。`Async.run`の根のタスクは、いつも呼んだworkerに置く。持ち主を`start`を実行したworkerと違うworkerにしたタスクの数は`Finished.placed_tasks`に数える (「タスクとスケジュール」)。どのworkerがどのタスクを持つかはスケジュールで決まるので、N = 2以上のrunの出力の順と`RunStats`はseedでは再現しない。タスクとスコープの意味は`eml_vm`の`cells.rs`の核が持ち、VMの命令`Async`は核を呼んで、返った仕事をVMの`Task`にする。
 
 ### 核と実行系
 
