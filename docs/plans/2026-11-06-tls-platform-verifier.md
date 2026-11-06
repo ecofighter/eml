@@ -144,7 +144,7 @@
 ### 各作業で共通の確かめ
 
 - `cargo nextest run` → 0で終わる。`cargo clippy --all-targets -- -D warnings` → 0で終わる。`cargo fmt --check` → 0で終わる
-- `grep -rn "docs/plans" crates docs/spec docs/implementation std` → 何も出ない
+- `git diff b80f06e7 -- crates docs/spec docs/implementation docs/future std | grep '^+.*docs/plans'` → 何も出ない (基準のコミットにある既存の言及は数えない)
 - テストを流した後の`git status --porcelain crates/eml_vm/tests` → 空 (どの作業も`RunStats`のsnapshotを変えない)
 
 ### T-0: 計画を入れる
@@ -166,8 +166,8 @@
   - `cargo verus verify -p eml_rt` → 最後の行が`verification results:: N verified, 0 errors`
   - `verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')` → 0で終わり、何も出ない
   - `cargo test -p eml_rt --lib taken_foreign` → `test result: ok. 2 passed`
-  - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::a_taken_foreign_value_is_not_finalized` → 2 passed。`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"`でも2 passed
-  - `grep -n "foreign_take" crates/eml_rt/src/trust.rs docs/spec/object-model.md` → どちらのファイルからも1行以上出る
+  - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt --lib a_taken_foreign_value_is_not_finalized` → 2 passed (`trusted::fast::`と`trusted::checked::`)。`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"`でも2 passed
+  - `grep -n "foreign.rs: external_body take" crates/eml_rt/src/trust.rs` → 1行出る。`grep -n "foreign_take" docs/spec/object-model.md` → 1行以上出る
   - `crates/eml_rt/CLAUDE.md`のgateの残りが成り立つ
 - 落とし穴: `foreign_take`は`foreign_unique`と同じ契約で`&self`と共有の`&BlockPerm`を取る。ghostの模型は`Foreign`のブロックの欄0と1を読まないので、ヒープの状態についての`ensures`は要らない
 
