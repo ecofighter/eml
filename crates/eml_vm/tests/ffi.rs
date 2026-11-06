@@ -846,10 +846,9 @@ main () =
     assert_eq!(run_real(&src, 1).0, "Cancelled: task was cancelled\n1\n");
 }
 
-/// `b` の `Panic` でスコープが失敗すると、`run` は `a` を取り消し、`a` の仕事が終わるまで待ってから `Panic` を起こし
-/// 直す。run は止まらないので静止にも予算にも届かず、`Machine` は poisoned にならない。鍵を外から開けなければ、この
-/// run は終わらない (docs/spec/declarations.md の「`extern "C"`」)。取り消しと完了のどちらが先に当たっても、ハンドル
-/// は1回だけ壊れる。
+/// `b`の`Panic`でスコープが失敗すると、`run`は`a`を取り消し、`a`の仕事が終わるまで待ってから`Panic`を起こし直す。
+/// runは止まらないので静止にも予算にも届かない。鍵を外から開けなければ、このrunは終わらない
+/// (docs/spec/declarations.mdの「`extern "C"`」)。取り消しと完了のどちらが先に当たっても、ハンドルは1回だけ壊れる。
 #[test]
 fn a_failing_scope_waits_for_its_cancelled_blocking_call() {
     let src = format!(
@@ -902,7 +901,6 @@ main () = Async.run body
     let error = result.unwrap_err();
     assert!(!error.interrupted(), "{error:?}");
     assert!(error.to_string().starts_with("panicked: boom"), "{error}");
-    assert!(!machine.is_poisoned());
     assert_eq!(rs_frees(100024), 1);
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "");
@@ -922,7 +920,7 @@ extern \"C\" blocking symbol \"rs_fill_gated\" fill_gated : MutUnboxedArray Int 
 fill : Unit -> <IO, Panic, Async> Unit
 fill () =
   let m = MutUnboxedArray.make 3 0
-  let ((), m) = fill_gated m 3 100030
+  let ((), m) = fill_gated m 3 100013
   drop m
 
 body : Unit -> <IO, Panic, Async> Unit
@@ -931,14 +929,14 @@ body () =
     match try_io fill with
       | Ok () -> println \"unreachable\"
       | Err e -> println \"\\{{show e.kind}}: \\{{e}}\")
-  let _ = gate_wait 100030
+  let _ = gate_wait 100013
   Async.cancel a
-  gate_open 100031
+  gate_open 100014
 
 main : Unit -> <IO, Panic> Unit
 main () = Async.run body
 "
     );
     assert_eq!(run_real(&src, 1).0, "Cancelled: task was cancelled\n");
-    assert_eq!(rs_gate_wait(100032), 0, "C did not write the copy");
+    assert_eq!(rs_gate_wait(100015), 0, "C did not write the copy");
 }

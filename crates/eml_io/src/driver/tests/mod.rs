@@ -897,13 +897,13 @@ fn quiesce_abandons_a_running_job_after_its_budget() {
     // 列で待つうちに見捨てると走らずに落ちるので、走り始めるのを待つ
     started.recv().unwrap();
     driver.quiesce(Duration::from_millis(10));
-    assert_eq!(driver.pending(), 1);
+    assert_eq!(driver.pending(), 0);
     open.send(()).unwrap();
     // プールのスレッドは仕事を終えても空いたまま残るので、`finished` でなく答えの起こしを待つ
     driver.backend.bell.wait();
     assert!(driver.wait(Some(0)).unwrap());
     assert!(completions(&mut driver).is_empty());
-    assert_eq!(driver.pending(), 1);
+    assert_eq!(driver.pending(), 0);
 }
 
 #[test]
@@ -932,7 +932,7 @@ fn quiesce_drops_a_queued_job_unrun() {
     // 1本のスレッドが1つ目で止まるので、2つ目は列で待つ
     started.recv().unwrap();
     driver.quiesce(Duration::from_millis(10));
-    assert_eq!(driver.pending(), 2);
+    assert_eq!(driver.pending(), 0);
     // 列から外した仕事は `quiesce` の中で落ちるので、2つ目の閉包が持つ参照はもうない。スケジュールに依らない
     assert_eq!(Arc::strong_count(&ran), 1);
     open.send(()).unwrap();
@@ -940,7 +940,7 @@ fn quiesce_drops_a_queued_job_unrun() {
     driver.backend.bell.wait();
     assert!(driver.wait(Some(0)).unwrap());
     assert!(completions(&mut driver).is_empty());
-    assert_eq!(driver.pending(), 2);
+    assert_eq!(driver.pending(), 0);
     assert!(!ran.load(Ordering::SeqCst));
 }
 

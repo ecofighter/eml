@@ -45,9 +45,9 @@ pub fn linked(
             (handle.clone(), dtor)
         })
         .collect();
-    // SAFETY: `calls()` は、このファイルの Rust の関数をそれぞれの署名の橋渡しと組にし、テストのプログラムはその記号を
-    // 同じ署名で宣言する。組にするのは記号で引いたその宣言で、dtor も宣言の dtor の名前で引く。`rs_handle_free` は
-    // `void f(void*)` で、どの関数もプロセスの間ずっとある
+    // SAFETY: `calls()`は、このファイルのRustの関数をそれぞれの署名の橋渡しと組にし、テストのプログラムはその記号を
+    // 同じ署名で宣言する。組にするのは記号で引いたその宣言で、dtorも宣言のdtorの名前で引く。`rs_handle_free`と
+    // `rs_handle_free_open`は`void f(void*)`で、どの関数もプロセスの間ずっとある
     unsafe { Linked::new(calls, dtors) }
 }
 
@@ -82,7 +82,10 @@ pub fn calls() -> Vec<(&'static str, Bridge, *const ())> {
 
 /// `linked` に渡す、このファイルのすべての dtor。
 pub fn dtors() -> Vec<(&'static str, Dtor)> {
-    vec![("rs_handle_free", rs_handle_free)]
+    vec![
+        ("rs_handle_free", rs_handle_free),
+        ("rs_handle_free_open", rs_handle_free_open),
+    ]
 }
 
 /// slot `k` の語。
@@ -275,6 +278,14 @@ unsafe extern "C" fn rs_handle_free(h: *mut c_void) {
     let tag = (h.addr() as i64) >> TAG_SHIFT;
     let mut frees = FREES.lock().unwrap_or_else(PoisonError::into_inner);
     *frees.get_or_insert_default().entry(tag).or_default() += 1;
+}
+
+/// `rs_handle_free`と同じく数えてから、ハンドルのtagを番号とする鍵を開く。テストはその鍵を待って、dtorがほかの
+/// スレッドで走ったことを知る。
+unsafe extern "C" fn rs_handle_free_open(h: *mut c_void) {
+    // SAFETY: 受けたハンドルをそのまま渡す
+    unsafe { rs_handle_free(h) };
+    rs_gate_open((h.addr() as i64) >> TAG_SHIFT);
 }
 
 /// `tag` の dtor の回数を返して 0 に戻す。

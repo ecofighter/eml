@@ -1,7 +1,6 @@
-//! 静止の予算を過ぎても戻らない `blocking` の呼び出しを見捨てる run (docs/spec/vm.md の「時計と driver」)。見捨てた
-//! `Machine` はヒープを意図して漏らすので、AddressSanitizer はこのモジュールだけを leak の検出なしで流す
-//! (docs/implementation/testing.md の「AddressSanitizer」)。テストの書き方は docs/implementation/testing.md の
-//! 「`eml_vm` のテスト」の `ffi_abandon.rs` の項に従う。
+//! 静止の予算を過ぎても戻らない`blocking`の呼び出しを見捨てるrun (docs/spec/vm.mdの「時計と driver」)。runはほかと
+//! 同じく終わり、`Machine`はヒープを回復し、閉じることも、もう一度走ることもできる。テストの書き方は
+//! docs/implementation/testing.mdの「`eml_vm` のテスト」の`ffi_abandon.rs`の項に従う。
 //!
 //! タスクは `gate_open` で合図の鍵を開けてから、開かない鍵を `gate_wait` で待つ。2つの呼び出しの間に安全点はないので、
 //! 合図を受けてから run を終わらせても、その前に仕事はもう出ている。2 workerのrunで最初に`start`したタスクは
@@ -13,14 +12,12 @@ use std::time::Duration;
 
 use eml_lir::Program;
 use eml_rt::{Checked, Control, Limits};
-use eml_vm::{Clock, CompileError, Linked, Machine, RunConfig, RuntimeError, capture_host};
+use eml_vm::{Capture, Clock, Linked, Machine, RunConfig, RuntimeError, capture_host};
 
-use crate::common::c::{calls, dtors, linked, rs_gate_open, rs_gate_wait};
+use crate::common::c::{calls, dtors, linked, rs_frees, rs_gate_open, rs_gate_wait};
 
 /// 静止が仕事を待つ長さ。1 秒の既定より短くし、テストを速く終える。
 const BUDGET: Duration = Duration::from_millis(20);
-
-const KEPT_PENDING: &str = "the driver kept pending ops after quiesce";
 
 fn linked_all(program: &Program) -> Linked {
     linked(program, &calls(), &dtors())
@@ -28,15 +25,21 @@ fn linked_all(program: &Program) -> Linked {
 
 /// 本物の時計で `workers` 個の worker を使う、検査モードの `Machine`。
 fn machine(workers: usize) -> (Machine<Checked>, Arc<Control>) {
+    let (machine, control, _) = capturing_machine(workers);
+    (machine, control)
+}
+
+/// `machine`と同じで、標準出力も返す。
+fn capturing_machine(workers: usize) -> (Machine<Checked>, Arc<Control>, Capture) {
     let control = Arc::new(Control::new(Limits {
         workers,
         ..Limits::default()
     }));
-    let (host, _) = capture_host(Default::default());
+    let (host, out) = capture_host(Default::default());
     let machine = Machine::<Checked>::new(Arc::clone(&control), host)
         .with_clock(Clock::Real)
         .with_job_budget(BUDGET);
-    (machine, control)
+    (machine, control, out)
 }
 
 const HEAD: &str = "\
@@ -92,32 +95,29 @@ fn interrupt_after(ready: i64, control: &Arc<Control>) -> thread::JoinHandle<()>
     })
 }
 
-/// `exit` で終わった run は終了コードを返し、`Machine` は poisoned になり、`close` は driver の誤りを返す。
-fn exit_keeps_its_code_and_poisons(src: &str, workers: usize, gates: &[i64]) {
+/// `exit`で終わったrunは終了コードを返す。`Machine`は回復し、`close`は成功する。
+fn exit_keeps_its_code(src: &str, workers: usize, gates: &[i64]) {
     let program = eml_test_support::lir(src);
     let (mut machine, _) = machine(workers);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     let finished = machine.run(loaded.entry);
-    let poisoned = machine.is_poisoned();
     let closed = machine.close();
     for &gate in gates {
         rs_gate_open(gate);
     }
     let finished = finished.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(finished.exit, Some(3));
-    assert!(poisoned);
-    let error = closed.unwrap_err();
-    assert!(error.to_string().contains(KEPT_PENDING), "{error}");
+    closed.unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[test]
-fn an_exit_during_a_blocking_call_keeps_its_code_and_poisons() {
-    exit_keeps_its_code_and_poisons(&exits_during(100030, 100031), 1, &[100031]);
+fn an_exit_during_a_blocking_call_keeps_its_code() {
+    exit_keeps_its_code(&exits_during(100030, 100031), 1, &[100031]);
 }
 
 #[test]
-fn an_exit_during_a_blocking_call_keeps_its_code_and_poisons_on_worker_one() {
-    exit_keeps_its_code_and_poisons(&exits_during(100032, 100033), 2, &[100033]);
+fn an_exit_during_a_blocking_call_keeps_its_code_on_worker_one() {
+    exit_keeps_its_code(&exits_during(100032, 100033), 2, &[100033]);
 }
 
 /// 戻らない呼び出しを2つのタスクに置く。`x`はworker 1、`z`はworker 2に置かれ、どちらのworkerの静止も、runの
@@ -142,41 +142,45 @@ main : Unit -> <IO, Panic> Unit
 main () = Async.run body
 "
     );
-    exit_keeps_its_code_and_poisons(&src, 3, &[100035, 100037]);
+    exit_keeps_its_code(&src, 3, &[100035, 100037]);
 }
 
-/// 割り込みで止めた run は、回復を試みずにその誤りを返し、`Machine` は poisoned になる。誤りに割り込みを使うのは、
-/// run を止める終わりだけが静止に入って仕事を見捨てるためである (`hangs`)。
-fn an_interrupt_poisons(workers: usize, ready: i64, gate: i64) {
+/// 割り込みで止めたrunは、回復の後にその誤りを返し、`close`は成功する。誤りに割り込みを使うのは、runを止める
+/// 終わりだけが静止に入って仕事を見捨てるためである (`hangs`)。
+fn an_interrupt_recovers(workers: usize, ready: i64, gate: i64) {
     let program = eml_test_support::lir(&hangs(ready, gate));
     let (mut machine, control) = machine(workers);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     let interrupter = interrupt_after(ready, &control);
     let result = machine.run(loaded.entry);
-    let poisoned = machine.is_poisoned();
+    let closed = machine.close();
     rs_gate_open(gate);
     interrupter.join().unwrap();
     let error = result.unwrap_err();
     assert!(error.interrupted(), "{error:?}");
-    assert!(poisoned);
+    assert!(
+        !matches!(error, RuntimeError::Unrecovered { .. }),
+        "{error:?}"
+    );
+    closed.unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[test]
-fn an_interrupt_during_a_blocking_call_poisons() {
-    an_interrupt_poisons(1, 100040, 100041);
+fn an_interrupt_during_a_blocking_call_recovers() {
+    an_interrupt_recovers(1, 100040, 100041);
 }
 
 #[test]
-fn an_interrupt_during_a_blocking_call_poisons_on_worker_one() {
-    an_interrupt_poisons(2, 100042, 100043);
+fn an_interrupt_during_a_blocking_call_recovers_on_worker_one() {
+    an_interrupt_recovers(2, 100042, 100043);
 }
 
-/// poisoned の `Machine` では `run` が回復を飛ばすので、誤りは run 自身のもので、`Unrecovered` にならない。その後の
-/// `load` と `run` は、どれも poisoned の誤りで断る。run を割り込みで止めるのは `hangs` と同じ理由である。
+/// 仕事を見捨てたrunの後も`Machine`は回復するので、誤りはrun自身のもので、`Unrecovered`にならない。その後の`load`と
+/// `run`はふつうに動く。runを割り込みで止めるのは`hangs`と同じ理由である。
 #[test]
-fn a_machine_that_abandoned_a_job_refuses_recovery() {
+fn a_machine_that_abandoned_a_job_runs_again() {
     let program = eml_test_support::lir(&hangs(100044, 100045));
-    let (mut machine, control) = machine(1);
+    let (mut machine, control, out) = capturing_machine(1);
     let loaded = machine.load(&program, &linked_all(&program)).unwrap();
     let interrupter = interrupt_after(100044, &control);
     let first = machine.run(loaded.entry);
@@ -188,22 +192,117 @@ fn a_machine_that_abandoned_a_job_refuses_recovery() {
         "{error:?}"
     );
     assert!(error.interrupted(), "{error:?}");
-    assert!(machine.is_poisoned());
-    let program2 = eml_test_support::lir(
+    // 割り込みのビットは`clear`でしか下りないので、REPLと同じく次のrunの前に下ろす
+    control.clear();
+    // 名前が同じなら同じコードでなければならないので、`entry$main`を持たない手書きのLIRにする
+    let program2 = crate::common::parse(
         "\
-main : Unit -> <IO> Unit
-main () = println \"unreachable\"
+fn main() -> unit {
+  let s.0: obj = const \"again\"
+  let u.1: unit = extern Prelude.println(s.0)
+  return u.1
+}
 ",
     );
-    assert_eq!(
-        machine.load(&program2, &Linked::default()),
-        Err(CompileError::Poisoned)
-    );
-    let again = machine.run(loaded.entry).unwrap_err();
-    assert!(again.to_string().contains(KEPT_PENDING), "{again}");
+    let loaded = machine
+        .load(&program2, &Linked::default())
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "again\n");
 }
 
-/// `execute` は poisoned の `Machine` を閉じないので、`exit` の終了コードがそのまま届く。
+/// 仕事は貸されたハンドルの`Arc`を持つ。runの後に回復と`close`が物体を放しても、dtorは呼び出しが戻ったときに
+/// プールのスレッドで1回だけ走る (docs/spec/vm.mdの「`blocking` の呼び出し」)。
+#[test]
+fn a_handle_lent_to_an_abandoned_call_is_destroyed_after_it_returns() {
+    let src = format!(
+        "{HEAD}
+extern \"C\" data Handle drop \"rs_handle_free_open\"
+extern \"C\" symbol \"rs_handle_new\" handle_new : Int -> Int -> <IO, Panic> Handle
+extern \"C\" blocking symbol \"rs_handle_wait\" handle_wait : Handle -> Int -> <IO, Async> (Int, Handle)
+
+wait_on : Unit -> <IO, Panic, Async> Int
+wait_on () =
+  let h = handle_new 100110 7
+  gate_open 100111
+  let (v, h) = handle_wait h 100112
+  drop h
+  v
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let x = Async.start wait_on
+  let y = Async.start (fn () ->
+    let _ = gate_wait 100111
+    (exit 3 : Unit))
+  println (show (Async.await x))
+  Async.await y
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    );
+    let program = eml_test_support::lir(&src);
+    let (mut machine, _) = machine(1);
+    let loaded = machine.load(&program, &linked_all(&program)).unwrap();
+    let finished = machine.run(loaded.entry);
+    let closed = machine.close();
+    let frees_before = rs_frees(100110);
+    rs_gate_open(100112);
+    let destroyed = rs_gate_wait(100110);
+    let finished = finished.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(finished.exit, Some(3));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(frees_before, 0);
+    assert_eq!(destroyed, 0, "the dtor never ran");
+    assert_eq!(rs_frees(100110), 1);
+}
+
+/// 呼び出しは配列の写しにだけ書く。ヒープの位置を通して書けば、回復か`close`が放した記憶に当たり、
+/// AddressSanitizerがそれを報告する (docs/spec/vm.mdの「`blocking` の呼び出し」)。
+#[test]
+fn an_array_lent_to_an_abandoned_call_is_written_to_a_copy() {
+    let src = format!(
+        "import MutUnboxedArray
+{HEAD}
+extern \"C\" blocking symbol \"rs_fill_gated\" fill_gated : MutUnboxedArray Int -> Int -> Int -> <IO, Async> (Unit, MutUnboxedArray Int)
+
+fill : Unit -> <IO, Panic, Async> Unit
+fill () =
+  let m = MutUnboxedArray.make 3 0
+  let ((), m) = fill_gated m 3 100120
+  drop m
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let x = Async.start fill
+  let y = Async.start (fn () ->
+    let _ = gate_wait 100120
+    (exit 3 : Unit))
+  Async.await x
+  Async.await y
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    );
+    let program = eml_test_support::lir(&src);
+    let (mut machine, _) = machine(1);
+    let loaded = machine.load(&program, &linked_all(&program)).unwrap();
+    let finished = machine.run(loaded.entry);
+    let closed = machine.close();
+    rs_gate_open(100121);
+    let written = rs_gate_wait(100122);
+    let finished = finished.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(finished.exit, Some(3));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(written, 0, "C did not write the copy");
+}
+
+/// `execute`は仕事を見捨てたrunの後にも`Machine`を閉じ、`exit`の終了コードがそのまま届く。
 #[test]
 fn execute_keeps_the_exit_code_of_a_run_that_abandoned_a_job() {
     let program = eml_test_support::lir(&exits_during(100046, 100047));

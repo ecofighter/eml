@@ -188,9 +188,6 @@ pub(crate) struct Driver<B: Backend> {
     /// 仕事の panic の payload。答えの束を処理しきってから、持ち主のスレッドで起こし直す。
     panic: Option<Box<dyn Any + Send>>,
     broken: Option<Broken>,
-    /// `quiesce` が見捨てた `Op::Job` の数。答えが来ても戻さない。見捨てた driver は VM が落とすからである
-    /// (docs/spec/vm.md の「時計と driver」)。
-    abandoned: usize,
 }
 
 fn cancelled_error() -> io::Error {
@@ -284,7 +281,6 @@ impl<B: Backend> Driver<B> {
             bin: Arc::default(),
             panic: None,
             broken: None,
-            abandoned: 0,
         }
     }
 
@@ -677,7 +673,6 @@ impl<B: Backend> Driver<B> {
             self.tickets.remove(&ticket);
             // 利用者の値の `Drop` は、`forget` が放したプールの lock の外で走る
             drop(self.pool.forget(ticket));
-            self.abandoned += 1;
         }
         !keys.is_empty()
     }
@@ -920,8 +915,8 @@ impl<B: Backend> IoDriver for Driver<B> {
 
     fn completions(&mut self, out: &mut Vec<Completion>) {
         self.empty_bin();
-        // 壊れた後は、集めてあった結果も含めて何も渡さない。保留は `quiesce` の後も残り、実行系はそれを見て
-        // 機械を poisoned の状態にする (docs/spec/vm.md の「時計と driver」)
+        // 壊れた後は、集めてあった結果も含めて何も渡さない。保留は`quiesce`の後も残り、実行系はそれを見て、どの
+        // ヒープにも触れる前にこのdriverを落とす (docs/spec/vm.mdの「時計と driver」)
         if self.broken.is_some() {
             return;
         }
@@ -929,7 +924,7 @@ impl<B: Backend> IoDriver for Driver<B> {
     }
 
     fn pending(&self) -> usize {
-        self.slots.len() + self.done.len() + self.abandoned
+        self.slots.len() + self.done.len()
     }
 
     fn waker(&self) -> Arc<dyn IoWaker> {

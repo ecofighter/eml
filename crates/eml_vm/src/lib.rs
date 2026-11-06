@@ -12,7 +12,6 @@ use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Sta
 use crate::cells::{Registry, Shared, TaskStats};
 use crate::counters::Counters;
 use crate::driver::{JOB_QUIESCE_LIMIT, RunClock};
-use crate::error::KEPT_PENDING;
 use crate::vm::ExecWith;
 use crate::workers::{Retired, Run, Shutdown, WorkerExit, Workers, settle, spawn_workers};
 
@@ -196,8 +195,8 @@ pub struct RunConfig {
     pub doorbell: Option<Arc<Doorbell>>,
     /// 仮想のシグナルの予定。既定は空で、テストのハーネスだけが使う (docs/spec/vm.md の「時間の待ち」)。
     pub signals: Vec<VirtualSignal>,
-    /// 静止が走っている `Op::Job` を待つ長さで、run のすべての静止が分け合う。既定は 1 秒である。過ぎても残る仕事は
-    /// 見捨て、`Machine` は poisoned になる (docs/spec/vm.md の「時計と driver」)。
+    /// 静止が走っている`Op::Job`を待つ長さで、runのすべての静止が分け合う。既定は1秒である。過ぎても残る仕事は
+    /// 見捨て、runはそれでもほかと同じ終わり方で終わる (docs/spec/vm.mdの「時計と driver」)。
     pub job_budget: Duration,
     /// `Machine`を持つスレッドとworker 0の関係。既定は`Seat::Merged`で、`execute`はいつも`Seat::Separate`にする
     /// (docs/spec/vm.mdの「メインのworker」)。
@@ -290,11 +289,6 @@ pub fn execute(
         .load(program, linked)
         .map_err(|error| compile_error(program, error))?;
     let finished = machine.run(loaded.entry)?;
-    // 仕事を見捨てた `exit` の run でも、終了コードを返す。poisoned の `Machine` はヒープを漏らし、`close` は終了コードの
-    // 代わりに poisoned の誤りを返す (docs/spec/vm.md の「時計と driver」)
-    if machine.is_poisoned() {
-        return Ok(finished);
-    }
     machine.close()?;
     Ok(finished)
 }
@@ -324,15 +318,15 @@ pub struct Machine<M: Mode> {
     code: CodeBase<M>,
     /// `ctx` と同じ Host。worker 1..N-1 の `Ctx` に写す。
     host: HostRef,
-    /// poisoned の `Machine` では、driver が貸したままの記憶を放さないように、`Drop` が落とさずに漏らす。
+    /// workerがpanicしたrunの後は、ヒープが途中の状態でありうるので、`Drop`が落とさずに漏らす。
     ctx: ManuallyDrop<Ctx<M>>,
     /// worker 1..N-1 が run の終わりに返した `Ctx`。成功した run では終わりの検査の後に落とし、ほかの道では回復の
     /// 後に落とす。回復はほかのヒープのページから写しうるためである。回復しなかった誤りの後は `Drop` まで残す
     /// (docs/spec/object-model.md の「回復」)。
     others: Vec<Ctx<M>>,
-    /// `quiesce` の後にも driver が保留の操作を残した。この後の run、回復、`close` はヒープに触れずに driver の誤りを
-    /// 返す (docs/spec/vm.md の「時計と driver」)。
-    poisoned: bool,
+    /// runの間にworkerがpanicした。この後の`load`、`run`、`close`は、ヒープに触れずにpanicする
+    /// (docs/spec/vm.mdの「タスクとスケジュール」)。
+    panicked: bool,
     max_depth: usize,
     sched: Sched,
     /// 実行と回復の後の確かめ。2つ目の引数はほかの worker の `Ctx` である。検査モードではどのヒープの不変条件も
@@ -397,7 +391,7 @@ impl<M: Mode> Machine<M> {
             host: host.clone(),
             ctx: ManuallyDrop::new(Ctx::new(control, host)),
             others: Vec::new(),
-            poisoned: false,
+            panicked: false,
             sched: Sched::Sequential,
             check_heap,
             at_run_end,
@@ -486,18 +480,10 @@ impl<M: Mode> Machine<M> {
         &self.code
     }
 
-    /// 静止の後にも driver が保留の操作を残したか。そうなら、この後の `load`、`run`、`close` は driver の誤りを返す
-    /// (docs/spec/vm.md の「時計と driver」)。
-    pub fn is_poisoned(&self) -> bool {
-        self.poisoned
-    }
-
     /// プログラムを追記する。`linked` は `eml_native` がこのプログラムの C の表をつないだ結果である。誤りを返した後の
     /// `Machine` は使い続けない (`CodeBase::load`)。
     pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, CompileError> {
-        if self.poisoned {
-            return Err(CompileError::Poisoned);
-        }
+        self.refuse_after_panic();
         let entry = self.code.load(program, linked)?;
         if let Some(region) = &self.code.region {
             // 入力の境目で、Ctx の持つ語には触れずに塊を付け替えるだけなので、`heap_mut` の前提を崩さない。新しい塊は
@@ -533,38 +519,40 @@ impl<M: Mode> Machine<M> {
         self.ctx.print_line(line)
     }
 
+    /// runがpanicした`Machine`は、途中の状態でありうるヒープに触れない。
+    fn refuse_after_panic(&self) {
+        assert!(!self.panicked, "a Machine is used after a run panicked");
+    }
+
     fn run_recovering(
         &mut self,
         entry: u32,
         shown: Option<usize>,
     ) -> Result<(Finished, Option<String>), RuntimeError> {
+        self.refuse_after_panic();
         match self.run_entry(entry, shown) {
             Ok(Ran::Done(finished, text)) => Ok((finished, text)),
             // 捨てた run のヒープには片付けていないタスクの物体が残るので、誤りの後と同じく入れ替える。`Scheduler` と
             // 登録表は `run_scheduled` が返るときに捨ててあるので、古いヒープの語を持つものは回復の後に残らない
             // (docs/spec/vm.md の「追記」)
             Ok(Ran::Abandoned(finished, cause)) => self.recover(cause).map(|_| (finished, None)),
-            // poisoned の `Machine` は回復せず、run の誤りをそのまま返す
-            Err(cause) if !cause.is_broken() && !self.poisoned => Err(match self.recover(cause) {
+            Err(cause) if !cause.is_broken() => Err(match self.recover(cause) {
                 Ok(cause) | Err(cause) => cause,
             }),
             Err(cause) => Err(cause),
         }
     }
 
-    /// 誤り `cause` の後にヒープを入れ替え、成功したら `cause` を返す。失敗したら、回復の誤りを足した `Unrecovered`
-    /// か、poisoned の `Machine` の driver の誤りを返す。
+    /// 誤り`cause`の後にヒープを入れ替え、成功したら`cause`を返す。失敗したら、回復の誤りを足した`Unrecovered`を
+    /// 返す。
     fn recover(&mut self, cause: RuntimeError) -> Result<RuntimeError, RuntimeError> {
-        // カーネルやプールのスレッドが書いている記憶を写したり放したりしないように、ヒープに触れる前に driver を
-        // 空にする (docs/spec/object-model.md の「回復」)
+        // カーネルやプールのスレッドが書いている記憶を写したり放したりしないように、ヒープに触れる前にdriverを
+        // 空にする。それでも操作を残すdriverは、ここで落とす (docs/spec/object-model.mdの「回復」)
         if let Some(driver) = &mut self.driver {
             driver.quiesce(self.job_budget);
             if driver.pending() > 0 {
-                self.poisoned = true;
+                self.drop_kept_driver();
             }
-        }
-        if self.poisoned {
-            return Err(poisoned_fault("<recover>"));
         }
         match self.recover_heap() {
             Ok(()) => Ok(cause),
@@ -603,12 +591,16 @@ impl<M: Mode> Machine<M> {
         }
     }
 
-    fn run_entry(&mut self, entry: u32, shown: Option<usize>) -> Result<Ran, RuntimeError> {
-        if self.poisoned {
-            return Err(poisoned_fault(
-                self.code.functions[entry as usize].name.as_str(),
-            ));
+    /// 静止の後にも操作を残したdriverを落とす。渡されたdriverの代わりに、次のrunは`clock`からdriverを作る
+    /// (docs/spec/vm.mdの「時計と driver」)。
+    fn drop_kept_driver(&mut self) {
+        self.driver = None;
+        if matches!(self.run_clock, Some(RunClock::Injected)) {
+            self.run_clock = None;
         }
+    }
+
+    fn run_entry(&mut self, entry: u32, shown: Option<usize>) -> Result<Ran, RuntimeError> {
         // 終わりの欄は run ごとに開く (docs/spec/vm.md の「誤り、止めること、終わり」)
         self.ctx.heap().control().begin_run();
         let (code, ctx) = (&self.code, &mut self.ctx);
@@ -707,50 +699,24 @@ impl<M: Mode> Machine<M> {
         self.others_ctx.yield_frames += o.yield_frames;
         self.others_ctx.string_bytes_copied += o.string_bytes_copied;
         self.others_heap.add(&scheduled.others_heap);
-        // ほかの worker のヒープは、確かめるか回復するまで `Machine` が持つ。poisoned になる道でも落とさない
+        // ほかのworkerのヒープは、確かめるか回復するまで`Machine`が持つ
         self.others.append(&mut scheduled.others);
         self.generations = std::mem::take(&mut scheduled.generations);
         // 誤りで返る道でも driver を失わないように、run の直後に戻す。分かれた run は worker 0 で落としたので返さない
         self.driver = driver;
+        if !separate && self.driver.is_none() {
+            // worker 0は静止の後にも操作を残したdriverを落とした。次のrunは時間の基準からdriverを作り直す。runは
+            // それでもほかと同じく終わり、`exit`なら終了コードを返して回復し、誤りならそれを返す
+            // (docs/spec/vm.mdの「時計と driver」)
+            if matches!(self.run_clock, Some(RunClock::Injected)) {
+                self.run_clock = None;
+            }
+        }
         if let Some(panic) = scheduled.panic.take() {
             // panic した worker のヒープは途中の状態で漏らしたので、この `Machine` はもう使わない
             // (docs/spec/vm.md の「タスクとスケジュール」)
-            self.poisoned = true;
+            self.panicked = true;
             std::panic::resume_unwind(panic);
-        }
-        if scheduled.kept_pending {
-            // 貸したままの記憶があるので、結果を写さず、終わりの確かめもしない。書き出しはヒープに触れないので、ほかの
-            // 誤りと同じく誤りの前に行う。run の誤りがあれば、元の原因としてそれを返す (docs/spec/vm.md の「時計と driver」)
-            self.poisoned = true;
-            let flushed = ctx.flush();
-            let exit = ctx.heap().control().exit_code();
-            // 貸したままの仕事があっても `exit` の終了コードは返す。ヒープは写さず、終わりの検査もしない
-            if let (
-                Some(code),
-                Ok(())
-                | Err(RuntimeError::Fault {
-                    fault: VmFault::Stopped(Stop::Ended),
-                    ..
-                }),
-            ) = (exit, &result)
-            {
-                flushed.map_err(|fault| after(fault.into(), &task))?;
-                return Ok(Ran::Done(
-                    self.finished(&counts, &scheduled, Some(code)),
-                    None,
-                ));
-            }
-            return Err(match result {
-                Ok(())
-                | Err(RuntimeError::Fault {
-                    fault: VmFault::Stopped(Stop::Ended),
-                    ..
-                }) => match flushed {
-                    Ok(()) => poisoned_fault(code.functions[entry as usize].name.as_str()),
-                    Err(fault) => after(fault.into(), &task),
-                },
-                Err(cause) => cause,
-            });
         }
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
@@ -891,9 +857,7 @@ impl<M: Mode> Machine<M> {
     /// 実行の状態を閉じる。根の参照は VM が持つので先に手放す。検査モードでは、その後にヒープの不変条件を確かめ、
     /// 残った物体をリークとして返す。
     pub fn close(mut self) -> Result<(), RuntimeError> {
-        if self.poisoned {
-            return Err(poisoned_fault("<close>"));
-        }
+        self.refuse_after_panic();
         let close_error = |error| heap_fault(error, "<close>".to_string());
         for root in self.ctx.take_roots().into_iter().flatten() {
             // 根の語は根が持つ参照で、ほかの語には触れないので、`heap_mut` の前提を崩さない
@@ -909,23 +873,14 @@ impl<M: Mode> Drop for Machine<M> {
     fn drop(&mut self) {
         // 本物の driver には、落とすときにカーネルの書き込みの終わりを待つものがあるので、その間はヒープを生かしておく
         self.driver = None;
-        if self.poisoned {
-            // ほかの worker のヒープの物体も driver に貸されうるので、`ctx` と同じく漏らす
+        if self.panicked {
+            // ほかのworkerのヒープも、panicしたヒープの物体を指しうるので、`ctx`と同じく漏らす
             std::mem::forget(std::mem::take(&mut self.others));
         } else {
             self.others.clear();
             // `ctx` はこの後に使わない
             unsafe { ManuallyDrop::drop(&mut self.ctx) }
         }
-    }
-}
-
-/// poisoned の `Machine` の誤り。
-fn poisoned_fault(function: &str) -> RuntimeError {
-    RuntimeError::Fault {
-        fault: VmFault::Driver(KEPT_PENDING.to_string()),
-        function: function.to_string(),
-        at: None,
     }
 }
 
@@ -950,8 +905,6 @@ struct Scheduled<M: Mode> {
     others_ctx: CtxStats,
     others_heap: HeapWork,
     generations: Vec<u32>,
-    /// どれかの worker の driver が、静止させた後にも保留の操作を残した。
-    kept_pending: bool,
     /// worker 1..N-1と、分かれたrunのメインのworkerの`Ctx`。joinの後に返ってきたもの。
     others: Vec<Ctx<M>>,
     /// 作ったworkerの数。
@@ -979,7 +932,6 @@ impl<M: Mode> Scheduled<M> {
             others_ctx: CtxStats::default(),
             others_heap: HeapWork::default(),
             generations: cells.lock().next_generations(),
-            kept_pending: false,
             others: Vec::new(),
             workers: 0,
             placed: 0,
@@ -1335,7 +1287,7 @@ fn entry_body<M: Mode, P: Policy>(
     // もう受け付けを送らないので、join の後に行う。ほかの worker の driver は、その worker が抜ける前に静止させてある。
     // 成功した run では、静止させた driver が返した完了を記録に置く。集める地点と同じく、driver に出した操作がなければ
     // 完了を読まない (docs/spec/vm.md の「時計と driver」「誤り、止めること、終わり」)
-    body.kept_pending |= match sched.driver.as_mut() {
+    let kept = match sched.driver.as_mut() {
         Some(driver) => {
             driver.quiesce(sched.run.job_wait(driver.now()));
             let in_flight = sched.cells.lock().in_flight(sched.index);
@@ -1348,12 +1300,20 @@ fn entry_body<M: Mode, P: Policy>(
         }
         None => false,
     };
+    body.kept_pending |= kept;
     // 予約と確定の間に安全点はないので、`Finish`に来たworker 0は予約を持たない (docs/spec/vm.mdの「channel」)
     debug_assert!(
         body.result.is_err() || sched.hold.is_none(),
         "a channel reservation is held at the end"
     );
-    (body, sched.driver.take())
+    let driver = sched.driver.take();
+    if kept {
+        // 操作を残したdriverは、どのヒープにも触れる前に、作ったこのスレッドで落とし、`Machine`には返さない
+        // (docs/spec/vm.mdの「時計と driver」)
+        drop(driver);
+        return (body, None);
+    }
+    (body, driver)
 }
 
 /// どのworkerもjoinした後のrunの終わり。終わりの確かめ、残ったセルの片付け、登録表の数、ほかのスレッドが積んだ
@@ -1391,6 +1351,11 @@ fn end_run<M: Mode>(
                 task,
             )
         };
+        if kept_pending && ctx.heap().control().exit_code().is_some() {
+            // 操作を残したdriverがあっても、`main`の底の`exit`は終了コードを保つ。ほかのタスクの`exit`と同じくrunを
+            // 捨てたことにし、終わりの確かめで誤りにせずに回復する (docs/spec/vm.mdの「時計と driver」)
+            return Err(at_finish(VmFault::Stopped(Stop::Ended)));
+        }
         workers::end_check(kept_pending, left).map_err(at_finish)?;
         cells::sweep_all(cells, ctx, task.depth_offset).map_err(|fault| at_finish(fault.into()))
     });
@@ -1423,7 +1388,6 @@ fn end_run<M: Mode>(
         others_ctx,
         others_heap,
         generations,
-        kept_pending,
         others,
         workers,
         placed: run.placed.load(std::sync::atomic::Ordering::Relaxed),
@@ -1541,13 +1505,6 @@ impl AnyMachine {
         }
     }
 
-    pub fn is_poisoned(&self) -> bool {
-        match self {
-            AnyMachine::Fast(machine) => machine.is_poisoned(),
-            AnyMachine::Checked(machine) => machine.is_poisoned(),
-        }
-    }
-
     pub fn close(self) -> Result<(), RuntimeError> {
         match self {
             AnyMachine::Fast(machine) => machine.close(),
@@ -1606,8 +1563,7 @@ fn check_leaks(ctx: &mut Ctx<Checked>) -> Result<(), RuntimeError> {
     }
 }
 
-/// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。poisoned の `Machine` の `Poisoned` だけは driver
-/// の誤りにする。REPL は `Machine::load` の誤りをこれで報告する。
+/// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。REPLは`Machine::load`の誤りをこれで報告する。
 pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
     let (what, function) = match error {
         CompileError::TooManySlots { function } => {
@@ -1630,9 +1586,6 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
             "a program that runs Async tasks lacks a runtime entry",
             function,
         ),
-        CompileError::Poisoned => {
-            return poisoned_fault(program.function(program.entry).name.as_str());
-        }
     };
     RuntimeError::Fault {
         fault: VmFault::Internal(what),

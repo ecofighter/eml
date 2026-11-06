@@ -23,8 +23,8 @@ pub enum VmFault {
     Driver(String),
 }
 
-/// `quiesce` の後にも driver が保留の操作を残したときの、`VmFault::Driver` の文。この後の `Machine` は poisoned の状態で、
-/// ヒープに触れない (docs/spec/vm.md の「時計と driver」)。
+/// `quiesce`の後にもdriverが保留の操作を残したときの、`VmFault::Driver`の文。そのdriverはどのヒープにも触れる前に
+/// 落とす (docs/spec/vm.mdの「時計と driver」)。
 pub(crate) const KEPT_PENDING: &str = "the driver kept pending ops after quiesce";
 
 /// デッドロックの文言。関数の名前と位置は内部のコードとスケジュールで変わるので付けない。
@@ -126,15 +126,6 @@ impl RuntimeError {
                     | VmFault::Extern(Fault::Stopped(Stop::Terminated)),
                 ..
             }
-        )
-    }
-
-    /// poisoned の誤り (静止の後にも driver が保留の操作を残した) か。REPL の端末は、入力がこの誤りをもう書いたかを
-    /// これで見分け、同じ誤りを `close` でもう一度書かない (docs/spec/vm.md の「追記」)。
-    pub fn kept_pending(&self) -> bool {
-        matches!(
-            self,
-            RuntimeError::Fault { fault: VmFault::Driver(error), .. } if error == KEPT_PENDING
         )
     }
 

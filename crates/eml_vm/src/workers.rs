@@ -182,8 +182,8 @@ pub(crate) struct Retired<M: Mode> {
     /// 最後の集める地点で、この worker が走らせるはずの知らせ (`Child`、`Place`、`Wake`) が受け箱に残っていた。成功した
     /// run でも、タスクを残したまま終わったことになる (docs/spec/vm.md の「誤り、止めること、終わり」)。
     pub(crate) left: bool,
-    /// この worker の driver が、静止させた後にも保留の操作を残した。run の `Machine` を poisoned にする
-    /// (docs/spec/vm.md の「時計と driver」)。
+    /// このworkerのdriverが、静止させた後にも保留の操作を残した。そのdriverは抜ける前に落としてある
+    /// (docs/spec/vm.mdの「時計と driver」)。
     pub(crate) kept_pending: bool,
 }
 

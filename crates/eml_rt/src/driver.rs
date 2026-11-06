@@ -282,7 +282,7 @@ pub trait IoDriver {
     /// `wait` (と `cancel` の即時の取り消し) が届けた完了をすべて `out` に移す。OS を見ず、保留の表を歩かない。
     /// 順は driver が決め、呼ぶ側は鍵で記録を引く。
     fn completions(&mut self, out: &mut Vec<Completion>);
-    /// `Pending` を返して、まだ `completions` で返していない操作の数。
+    /// `Pending`を返して、まだ`completions`で返していない操作の数。`quiesce`が見捨てた`Op::Job`は数えない。
     fn pending(&self) -> usize;
     fn waker(&self) -> Arc<dyn IoWaker>;
     fn bin(&self) -> Arc<HandleBin>;
@@ -297,11 +297,11 @@ pub trait IoDriver {
     /// 立てるので、同時に起動するほかの子は子の端を受け継がない。親の端はどの driver にも縛らずに返す。パイプを扱わない
     /// driver と壊れた driver は `Err` を返す (docs/spec/vm.md の「時計と driver」)。
     fn pipe(&mut self, parent_reads: bool) -> io::Result<PipePair>;
-    /// 取り消せる保留の操作をすべて取り消し、完了が届くまで待って捨て、捨てた完了の中身のハンドルと `bin` のハンドルを
-    /// 閉じる。ファイルの読み書きは上限なしに待ちきる。`Op::Job` は `jobs` まで待ち、まだ残るものをそれぞれ見捨てる。
-    /// 走っているものはそのスレッドで走り続け、その答えは捨てる。列で待つものは走らせずに捨てる。見捨てた仕事は、
-    /// それからずっと `pending()` に数える。見捨てても driver は壊れない。待ちきった仕事の panic は、待ち終えた後で
-    /// 起こし直す。名前の解決は待たない。OS に出した取り消しの終わりが上限までに届かなければ壊れた状態にする。driver が
-    /// 壊れているときは保留を残して戻る (呼ぶ側は `pending()` で確かめる)。
+    /// 取り消せる保留の操作をすべて取り消し、完了が届くまで待って捨て、捨てた完了の中身のハンドルと`bin`のハンドルを
+    /// 閉じる。ファイルの読み書きは上限なしに待ちきる。`Op::Job`は`jobs`まで待ち、まだ残るものをそれぞれ見捨てる。
+    /// 走っているものはそのスレッドで走り続け、その遅れた答えは捨てる。列で待つものは走らせずに捨てる。見捨てた仕事は
+    /// `pending()`に数えない。見捨ててもdriverは壊れない。待ちきった仕事のpanicは、待ち終えた後で起こし直す。名前の
+    /// 解決は待たない。OSに出した取り消しの終わりが上限までに届かなければ壊れた状態にする。driverが壊れているときは
+    /// 保留を残して戻る (呼ぶ側は`pending()`で確かめる)。
     fn quiesce(&mut self, jobs: Duration);
 }

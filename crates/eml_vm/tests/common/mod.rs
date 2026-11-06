@@ -175,12 +175,8 @@ fn run_merged(program: &Program, debug_heap: bool) -> (String, Result<(), Runtim
             .load(program, &eml_vm::Linked::default())
             .map_err(|error| eml_vm::compile_error(program, error))?;
         machine.run(loaded.entry)?;
-        Ok::<bool, RuntimeError>(!machine.is_poisoned())
+        Ok::<(), RuntimeError>(())
     };
-    let result = match run() {
-        Ok(true) => machine.close(),
-        Ok(false) => Ok(()),
-        Err(error) => Err(error),
-    };
+    let result = run().and_then(|()| machine.close());
     (out.contents(), result)
 }
