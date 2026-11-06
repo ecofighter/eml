@@ -361,8 +361,8 @@ main () =
     }
 }
 
-/// worker を作るのが最初の `start` でも、保留のシグナルは worker 1 に置いた待つタスクに届く。集めた worker が mail の
-/// シグナルを届け、待ち手の持ち主の worker 1 が再開する (docs/spec/vm.md の「上限と割り込み」)。
+/// runの始めに作ったworkerでも、保留のシグナルはworker 1に置いた待つタスクに届く。集めたworkerがmailの
+/// シグナルを届け、待ち手の持ち主のworker 1が再開する (docs/spec/vm.mdの「上限と割り込み」)。
 #[test]
 fn a_pending_signal_reaches_a_waiter_on_worker_1() {
     let src = "\

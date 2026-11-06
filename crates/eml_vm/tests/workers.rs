@@ -1,6 +1,5 @@
-//! worker 1..N-1 の起動と止める手順 (docs/spec/vm.md の「タスクとスケジュール」)。worker は run の最初の `par` の
-//! fork か、`Async` のタスクを置く最初の `start` か、最初の `fork_job` で作り、run の終わりに join する。根に触れる `Machine` は worker を
-//! 作らない。
+//! worker 1..N-1の起動と止める手順 (docs/spec/vm.mdの「タスクとスケジュール」)。workerはrunの始め、最初の命令の前に
+//! 作り、runの終わりにjoinする。根に触れる`Machine`はworkerを作らない。
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -110,19 +109,19 @@ fn one(p.0: unit) -> tobj {
 ";
 
 #[test]
-fn a_run_without_par_starts_no_worker() {
+fn a_run_with_workers_starts_them_at_the_start() {
     let src = "\
 main : Unit -> <IO> Unit
 main () = println \"no par\"
 ";
     let (out, result) = run(src, 4);
     assert_eq!(out, "no par\n");
-    assert_eq!(result.unwrap().workers, 0);
+    assert_eq!(result.unwrap().workers, 3);
 }
 
-/// 最初の fork が worker 1..N-1 をすべて作り、同じ fork をやり直す。出力は worker が1つの run と同じである。
+/// worker 1..N-1は最初のforkの前にすべてある。出力はworkerが1つのrunと同じである。
 #[test]
-fn the_first_fork_starts_the_workers() {
+fn the_workers_exist_before_the_first_fork() {
     let (out, result) = run(PAR, 4);
     assert_eq!(out, "3\n");
     assert_eq!(result.unwrap().workers, 3);
@@ -445,11 +444,11 @@ main () = Async.run (fn () ->
     assert_eq!(other.to_string(), alone.to_string());
 }
 
-/// `compute` の仕事は `par` の右の子と同じく空いた worker に置く。空きの作り方は
-/// `a_timer_on_worker_0_and_a_child_on_worker_1_agree` と同じで、`fork_job` のときには worker 1 が空いている。
-/// 仕事は worker 1 のヒープにリストを作って返し、出したタスクが worker 0 でたどってから手放す。検査モードは、
-/// `take_job` が受け取った物体の持ち主の取り違えと漏れを見つける。仕事は `par` の右の子でないので `placed` は増えず、
-/// `placed_jobs` だけが増える (docs/spec/vm.md の「`compute` の仕事」)。
+/// `compute`の仕事は`par`の右の子と同じく空いたworkerに置く。何もしないタスクをworker 1に置いて待ち、続く
+/// `sleep_ms`はどのworkerも眠ったときにだけ戻るので、`fork_job`のときにはworker 1が空いている。
+/// 仕事はworker 1のヒープにリストを作って返し、出したタスクがworker 0でたどってから手放す。検査モードは、
+/// `take_job`が受け取った物体の持ち主の取り違えと漏れを見つける。仕事は`par`の右の子でないので`placed`は増えず、
+/// `placed_jobs`だけが増える (docs/spec/vm.mdの「`compute` の仕事」)。
 #[test]
 fn a_job_is_placed_on_an_idle_worker() {
     let src = "\
@@ -484,30 +483,33 @@ main () = Async.run (fn () ->
     );
 }
 
-/// 止まらない仕事がほかの worker で動いている run も `exit` で終わる。空きを作った後の `spawn` は worker 0 に置くので、
-/// そのタスクの `fork_job` は仕事を空いた worker 1 に置く。出したタスクは仕事を待って park したまま、worker 0 の本体が
-/// `exit` する。仕事と待つタスクは捨て、回復が2つのヒープを片付ける。
+/// 止まらない仕事がほかのworkerで動いているrunも`exit`で終わる。3つのworkerでは、置く順によりタスクAをworker 1に、
+/// 何もしないタスクをworker 2に、Aが始める`exit`のタスクをworker 1に置く。Aは先に眠る。`sleep_ms`はどのworkerも
+/// 眠ったときにだけ戻るので、worker 2はタスクを終えて空いたままであり、Aがforkする仕事はほかの空いたworkerに置く。
+/// `exit`のタスクはforkの前にworker 1の列に入っているので、仕事をどのworkerが取っても、Aが待つ間にworker 1がそれを
+/// 動かす。仕事と待つタスクは捨て、回復がヒープを片付ける。
 #[test]
 fn exit_abandons_a_job_on_another_worker() {
     let src = format!(
         "import Async (Async)\n{SPIN}\
 body : Unit -> <IO, Panic, Async> Unit
 body () =
+  let a = Async.start (fn () ->
+    Async.sleep_ms 1
+    Async.spawn (fn () -> (exit 3 : Unit))
+    println (show (Async.compute (fn () -> spin 0))))
   let d = Async.start (fn () -> ())
   Async.await d
-  Async.sleep_ms 1
-  Async.spawn (fn () -> println (show (Async.compute (fn () -> spin 0))))
-  Async.yield_now ()
-  (exit 3 : Unit)
+  Async.await a
 main : Unit -> <IO, Panic> Unit
 main () = Async.run body
 "
     );
-    let (out, result) = run(&src, 2);
+    let (out, result) = run(&src, 3);
     assert_eq!(out, "");
     let finished = result.unwrap();
     assert_eq!(finished.exit, Some(3));
-    assert_eq!((finished.workers, finished.placed_jobs), (1, 1));
+    assert_eq!((finished.workers, finished.placed_jobs), (2, 1));
 }
 
 /// ほかの worker に置いた仕事でも、取り消しは仕事が終わってから出したタスクに1回だけ届く。仕事の終わりは worker 1
@@ -572,12 +574,12 @@ main () =
     assert_eq!(out.contents(), "start\nstart\n");
 }
 
-/// worker 0 のタスクのタイマーと worker 1 の右の子。仮想の時計は、どの worker も動かないときだけ進むので、子が
-/// 終わるまでタイマーは満ちない。出力は worker が1つの run と同じである。最初の `start` は worker 1 に置くので、
-/// 何もしないタスクを先に置いて待つ。続く `sleep_ms` は、どの worker も眠ったときにだけ戻るので、fork のときには
-/// worker 1 が空いていて、タイマーのタスクは worker 0 に、右の子は worker 1 に置く。
+/// worker 1..N-1のタスクのタイマーと右の子。仮想の時計は、どのworkerも動かないときだけ進むので、子が終わるまで
+/// タイマーは満ちない。出力はworkerが1つのrunと同じである。何もしないタスクはworker 1に、タイマーのタスクはworker 2に
+/// 置く。間の`sleep_ms`は、どのworkerも眠ったときにだけ戻るので、forkのときにはworker 1が空いていて、右の子は
+/// 空いたworkerに置く。
 #[test]
-fn a_timer_on_worker_0_and_a_child_on_worker_1_agree() {
+fn a_timer_task_and_a_child_on_other_workers_agree() {
     let src = "\
 import Std.Par
 import Async
@@ -598,11 +600,11 @@ main () = Async.run (fn () ->
     let (alone, result) = run(src, 1);
     assert_eq!(alone, "20001\ntimer\n");
     result.unwrap();
-    let (out, result) = run(src, 2);
+    let (out, result) = run(src, 3);
     assert_eq!(out, alone);
     let finished = result.unwrap();
     assert_eq!(finished.placed, 1);
-    assert_eq!(finished.placed_tasks, 1);
+    assert_eq!(finished.placed_tasks, 2);
 }
 
 /// 深さ 3 の `par` の木は 7 回 fork する。worker が8つあれば、空いている worker はいつも残るので、どの fork も
@@ -626,10 +628,10 @@ main () = println (show (tree 3))
     assert_eq!((finished.workers, finished.placed), (7, 7));
 }
 
-/// 最初の `start` が worker 1..N-1 をすべて作り、同じ `start` をやり直す。最初に置くタスクは worker 1 に置くので、
-/// タスクを1つしか始めないプログラムでもほかの worker で動く。出力は worker が1つの run と同じである。
+/// workerは最初の`start`の前にあり、最初に置くタスクはworker 1に置くので、タスクを1つしか始めないプログラムでも
+/// ほかのworkerで動く。出力はworkerが1つのrunと同じである。
 #[test]
-fn the_first_start_starts_the_workers() {
+fn the_first_start_places_on_worker_1() {
     let src = "\
 import Async
 main : Unit -> <IO, Panic> Unit
@@ -647,10 +649,10 @@ main () = Async.run (fn () ->
     assert_eq!((finished.workers, finished.placed_tasks), (3, 1));
 }
 
-/// 入れ子の `Async.run` から戻ったタスクの `start` も worker を作る。入れ子の run の根のタスクは呼んだ worker に置き、
-/// worker を求めない。
+/// 入れ子の`Async.run`から戻ったタスクの`start`も、ほかのworkerに置く。入れ子のrunの根のタスクは呼んだworkerに
+/// 置く。
 #[test]
-fn a_start_after_a_nested_run_starts_the_workers() {
+fn a_start_after_a_nested_run_places_on_another_worker() {
     let src = "\
 import Async
 main : Unit -> <IO, Panic> Unit

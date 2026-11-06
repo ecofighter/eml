@@ -122,7 +122,7 @@ fn an_exit_during_a_blocking_call_keeps_its_code_and_poisons_on_worker_one() {
     exit_keeps_its_code_and_poisons(&exits_during(100032, 100033), 2, &[100033]);
 }
 
-/// 戻らない呼び出しを2つのタスクに置く。`x` は worker 1、`z` は worker 0 に置かれ、どちらの worker の静止も、run の
+/// 戻らない呼び出しを2つのタスクに置く。`x`はworker 1、`z`はworker 2に置かれ、どちらのworkerの静止も、runの
 /// 1つの期限の残りを受け取る。
 #[test]
 fn two_hung_workers_share_one_budget() {
@@ -144,7 +144,7 @@ main : Unit -> <IO, Panic> Unit
 main () = Async.run body
 "
     );
-    exit_keeps_its_code_and_poisons(&src, 2, &[100035, 100037]);
+    exit_keeps_its_code_and_poisons(&src, 3, &[100035, 100037]);
 }
 
 /// 割り込みで止めた run は、回復を試みずにその誤りを返し、`Machine` は poisoned になる。誤りに割り込みを使うのは、

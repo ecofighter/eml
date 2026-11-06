@@ -394,7 +394,7 @@ main () =
 ";
     let (out, finished) = run_both_on(&eml_test_support::lir(src), 2);
     assert_eq!(out, "3\n2\n");
-    // 最初の fork が worker 1 を作り、空いたその worker に右の子を置く (docs/spec/vm.md の「タスクとスケジュール」)
+    // workerはrunの始めに作るので、最初のforkは空いたworker 1に右の子を置く (docs/spec/vm.mdの「タスクとスケジュール」)
     for finished in finished {
         assert!(finished.placed >= 1, "{finished:?}");
     }

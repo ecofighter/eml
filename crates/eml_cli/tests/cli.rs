@@ -434,8 +434,8 @@ main () =
   println (show (a + b))
 ";
 
-/// 既定の方針 (`normal`) では、最初の `par` の右の子の追加で監視のスレッドが始まる。合図の行はその後に書くので、回り続ける `par` の run も
-/// 1回目の SIGINT で次の安全点に止まり、終了コード 130 で終わる (docs/spec/vm.md の「上限と割り込み」)。
+/// 既定の方針 (`normal`) では、監視のスレッドとworkerはrunの始めに動き始める。合図の行は最初の`par`の後に書くので、
+/// 回り続ける`par`のrunも1回目のSIGINTで次の安全点に止まり、終了コード130で終わる (docs/spec/vm.mdの「上限と割り込み」)。
 #[cfg(unix)]
 #[test]
 fn an_interrupt_stops_a_par_program_with_130() {

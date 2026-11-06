@@ -13,7 +13,7 @@ use crate::cells::{Registry, Shared, TaskStats};
 use crate::counters::Counters;
 use crate::driver::{JOB_QUIESCE_LIMIT, RunClock};
 use crate::error::KEPT_PENDING;
-use crate::vm::{ExecWith, Exit};
+use crate::vm::ExecWith;
 use crate::workers::{
     Retired, Run, Shutdown, WorkerExit, Workers, rescuable, settle, spawn_workers,
 };
@@ -991,45 +991,43 @@ fn run_scheduled<M: Mode, P: Policy>(
     sched.shared_roots = start.shared_roots;
     // 根は REPL のコードだけが作るので、根に触れるコードを読み込んだ `Machine` は worker を作らない。成功した run の後に
     // 根が、落としたほかの worker のヒープを指しうるためである (docs/spec/vm.md の「タスクとスケジュール」)
-    sched.begin_run(!code.tables.uses_roots && ctx.roots().len() == 0);
+    let wanted = sched.begin_run(!code.tables.uses_roots && ctx.roots().len() == 0);
     let host = start.host;
     let (result, exits) = thread::scope(|scope| {
-        let mut handles = Vec::new();
-        let mut shutdown = Shutdown {
+        // worker 1..N-1はrunの最初の命令の前に作るので、命令を2回実行することはない
+        // (docs/spec/vm.mdの「タスクとスケジュール」)
+        let handles = if wanted {
+            spawn_workers::<M, P>(
+                scope,
+                code,
+                &sched.policy,
+                &sched.run,
+                &sched.watcher.control,
+                &sched.cells,
+                &host,
+                start.max_depth,
+            )
+        } else {
+            Vec::new()
+        };
+        // workerができたらすぐに見張りを置く。この後でpanicしても、workerを起こしてjoinできるようにするためである
+        let shutdown = Shutdown {
             control: Arc::clone(&sched.watcher.control),
             run: Arc::clone(&sched.run),
-            armed: false,
+            armed: !handles.is_empty(),
         };
-        let result = loop {
-            match vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts) {
-                Ok(Exit::Finished) => break Ok(()),
-                Ok(Exit::Spawn) => {
-                    handles = spawn_workers::<M, P>(
-                        scope,
-                        code,
-                        &sched.policy,
-                        &sched.run,
-                        &sched.watcher.control,
-                        &sched.cells,
-                        &host,
-                        start.max_depth,
-                    );
-                    shutdown.armed = !handles.is_empty();
-                    // タスクを置くのは作れた worker だけである
-                    sched.run.set_live(handles.len() + 1);
-                    // 1つも作れなければ worker 0 だけで続ける。救済を強いる方針は、救済する worker がいるときだけ働く
-                    sched.workers = match handles.len() {
-                        0 => Workers::Denied,
-                        n => {
-                            sched.policy.set_rescuable(rescuable(&sched.run, 0));
-                            sched.policy.workers_started();
-                            Workers::Started(n)
-                        }
-                    };
-                }
-                Err(error) => break Err(error),
+        // タスクを置くのは作れたworkerだけである
+        sched.run.set_live(handles.len() + 1);
+        // 1つも作れなければworker 0だけで続ける。救済を強いる方針は、救済するworkerがいるときだけ働く
+        sched.workers = match handles.len() {
+            0 => Workers::Denied,
+            n => {
+                sched.policy.set_rescuable(rescuable(&sched.run, 0));
+                sched.policy.workers_started();
+                Workers::Started(n)
             }
         };
+        let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
         // 終わりを決めたのは worker 0 のループか、ほかの worker の致命的な誤りである。どちらでも `END` を立てて
         // すべての worker を起こし、`Ctx` を返させてから join する (docs/spec/vm.md の「タスクとスケジュール」)
         drop(shutdown);
@@ -1041,7 +1039,7 @@ fn run_scheduled<M: Mode, P: Policy>(
     });
     let workers = match sched.workers {
         Workers::Started(n) => n,
-        Workers::Wanted | Workers::Denied | Workers::Peer => 0,
+        Workers::Denied | Workers::Peer => 0,
     };
     if workers > 0 {
         sched.watcher.control.clear_end();

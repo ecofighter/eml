@@ -186,15 +186,11 @@ impl Post for Mailer<'_> {
 /// いつも `Peer` を持つ (docs/spec/vm.md の「タスクとスケジュール」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Workers {
-    /// 起動の条件を満たしている。最初の `par` の fork か、タスクを置く最初の `start` か、最初の `fork_job` で作る。worker 0 だけが持つ。
-    Wanted,
     /// 作った。数は worker 0 を除く。
     Started(usize),
     /// 作らない。条件を満たさないか、1つも作れなかった。
     Denied,
-    /// worker 1..N-1 の `Scheduler`。worker を作る判断はせず、右の子とタスクと仕事を置くことだけをする。作り直しの印
-    /// (`Wanted`) を持たないので、worker を作るために戻る先のない実行の繰り返しが、fork や `start` や `fork_job` から
-    /// 抜けることはない。
+    /// worker 1..N-1 の `Scheduler`。worker を作る判断はせず、右の子とタスクと仕事を置くことだけをする。
     Peer,
 }
 
@@ -308,11 +304,12 @@ pub(crate) struct Run {
     pub(crate) placed: AtomicU64,
     /// ほかの worker に置いた `compute` の仕事の数。どの worker の `fork_job` も足す。
     pub(crate) placed_jobs: AtomicU64,
-    /// 次に置く `Async` のタスクの持ち主を決める数。1 から始め、`start` のたびに1つ進めて、作った worker の数で割った
-    /// 余りを持ち主にする (docs/spec/vm.md の「`Async` のタスク」)。
+    /// 次に置く`Async`のタスクの持ち主を決める数。0から始め、`start`のたびに1つ進めて、worker 0を除く作ったworkerの
+    /// 数で割った余りに1を足したものを持ち主にする。`main`を動かすworker 0には`start`でタスクを置かない
+    /// (docs/spec/vm.mdの「`Async`のタスク」)。
     next_place: AtomicUsize,
-    /// 作った worker の数で、worker 0 を含む。worker を作った worker 0 が、作り直した命令をやり直す前に1回だけ書く。
-    /// 作れなかった worker の欄には置かないためである。
+    /// 作ったworkerの数で、worker 0を含む。worker 0がworker 1..N-1を作った後、runの最初の命令の前に1回だけ書く。
+    /// 作れなかったworkerの欄には置かないためである。
     live: AtomicUsize,
     /// 受け箱が空で待ちに入った worker の番号。重ならない。
     idle: Mutex<Vec<usize>>,
@@ -389,7 +386,7 @@ impl Run {
             in_flight: AtomicUsize::new(0),
             placed: AtomicU64::new(0),
             placed_jobs: AtomicU64::new(0),
-            next_place: AtomicUsize::new(1),
+            next_place: AtomicUsize::new(0),
             live: AtomicUsize::new(1),
             idle: Mutex::new(Vec::new()),
             clock,
@@ -418,12 +415,15 @@ impl Run {
         self.live.load(Ordering::Acquire)
     }
 
-    /// 次に始める `Async` のタスクの持ち主。作った worker を 1 から順に回る。数えるだけの数なので Relaxed で足し、
-    /// 作った数は worker 0 が書いた後の知らせを受けてから読むので、Acquire で足りる (docs/spec/vm.md の
-    /// 「`Async` のタスク」)。
+    /// 次に始める`Async`のタスクの持ち主。worker 0を除く作ったworkerをworker 1から順に回り、ほかに作ったworkerが
+    /// なければworker 0である。数えるだけの数なのでRelaxedで足し、作った数はworker 0が書いた後の知らせを受けてから
+    /// 読むので、Acquireで足りる (docs/spec/vm.mdの「`Async`のタスク」)。
     pub(crate) fn next_owner(&self) -> u32 {
         let live = self.live();
-        (self.next_place.fetch_add(1, Ordering::Relaxed) % live) as u32
+        if live <= 1 {
+            return 0;
+        }
+        (1 + self.next_place.fetch_add(1, Ordering::Relaxed) % (live - 1)) as u32
     }
 
     /// runのdriverの出どころ。
@@ -889,9 +889,9 @@ pub(crate) fn settle(
     }
 }
 
-/// worker 1..N-1 を作る。作るのは worker 0 で、最初の `par` の fork か、タスクを置く最初の `start` のときに1回だけ
-/// である。どの worker も眠って空いている形で始める。worker `k` を作れなければ、それより後は作らず、作れた worker
-/// だけを使う (docs/spec/vm.md の「タスクとスケジュール」)。
+/// worker 1..N-1を作る。作るのはworker 0で、runの始め、最初の命令の前に1回だけである。どのworkerも眠って空いている
+/// 形で始める。worker `k`を作れなければ、それより後は作らず、作れたworkerだけを使う (docs/spec/vm.mdの
+/// 「タスクとスケジュール」)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_workers<'scope, M: Mode, P: Policy + 'scope>(
     scope: &'scope Scope<'scope, '_>,
@@ -1653,18 +1653,17 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         assert_eq!(work(), 0);
     }
 
-    /// `start` は作った worker を worker 1 から順に回って持ち主にする。3つの worker では 1、2、0 を繰り返す。作れた
-    /// worker が少なければ、その数で回る (docs/spec/vm.md の「`Async` のタスク」)。
+    /// workerが3つなら、`start`はworker 1と2に順に置き、`main`を動かすworker 0には置かない。worker 0だけなら持ち主は
+    /// worker 0である (docs/spec/vm.mdの「`Async`のタスク」)。
     #[test]
-    fn placement_rotates_over_every_worker() {
+    fn the_ring_never_places_on_worker_0() {
         let run = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
         run.set_live(3);
-        let owners: Vec<u32> = (0..6).map(|_| run.next_owner()).collect();
-        assert_eq!(owners, [1, 2, 0, 1, 2, 0]);
-        let run = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
-        run.set_live(2);
         let owners: Vec<u32> = (0..4).map(|_| run.next_owner()).collect();
-        assert_eq!(owners, [1, 0, 1, 0]);
+        assert_eq!(owners, [1, 2, 1, 2]);
+        let run = Run::new(3, None, RunClock::Virtual(Arc::default()), Arc::default());
+        run.set_live(1);
+        assert_eq!(run.next_owner(), 0);
     }
 
     /// 仕事を待つ期限は run の最初の静止が決め、後の静止はその残りだけを受け取る。過ぎた後は 0 である

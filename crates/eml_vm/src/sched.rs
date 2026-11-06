@@ -782,30 +782,25 @@ impl<P: Policy> Scheduler<P> {
         sched
     }
 
-    /// run の始めの準備。driver の waker を自分の欄に置き、眠る driver の run と worker を2つ以上持てる run では監視の
-    /// スレッドを始める。眠る worker に Ctrl-C と止める語を届けるのは監視のスレッドの起こしなので、run の始めから
-    /// 動かす。続けて worker 1..N-1 を作るかを決める。作るのは、worker を2つ以上持て、監視のスレッドが動き、
-    /// セッションに根がなく、読み込んだコードが根に触れない (`roots_free`) run だけである。渡された driver の run
-    /// (`Injected`) は作らない。時刻をその driver に聞くので、driver を持たない worker は時刻を読めないためである
-    /// (docs/spec/vm.md の「タスクとスケジュール」「時計と driver」)。
-    pub(crate) fn begin_run(&mut self, roots_free: bool) {
+    /// runの始めの準備。driverのwakerを自分の欄に置き、眠るdriverのrunとworkerを2つ以上持てるrunでは監視の
+    /// スレッドを始める。眠るworkerにCtrl-Cと止める語を届けるのは監視のスレッドの起こしなので、runの始めから
+    /// 動かす。続けてworker 1..N-1を作るかを決めて返す。作るのは、workerを2つ以上持て、監視のスレッドが動き、
+    /// セッションに根がなく、読み込んだコードが根に触れない (`roots_free`) runだけである。渡されたdriverのrun
+    /// (`Injected`) は作らない。時刻をそのdriverに聞くので、driverを持たないworkerは時刻を読めないためである
+    /// (docs/spec/vm.mdの「タスクとスケジュール」「時計と driver」)。
+    pub(crate) fn begin_run(&mut self, roots_free: bool) -> bool {
         self.publish_driver();
         if self.driver_kind != DriverKind::Virtual || self.run.slots.len() >= 2 {
             self.start_monitor();
         }
-        self.workers = if self.run.slots.len() >= 2
-            && self.watcher.monitor.is_some()
-            && roots_free
-            && self.driver_kind != DriverKind::Injected
-        {
-            Workers::Wanted
-        } else {
-            Workers::Denied
-        };
         // 中継するかは監視のスレッドを始めた後で決まり、run の間は変わらない。集めるのはどの worker でもよいので、
         // 登録表に写す (docs/spec/vm.md の「上限と割り込み」)
         let relay = self.relay_on();
         self.cells.lock().relay = relay;
+        self.run.slots.len() >= 2
+            && self.watcher.monitor.is_some()
+            && roots_free
+            && self.driver_kind != DriverKind::Injected
     }
 
     /// 持っている driver の waker と bin を、自分の欄と登録表に置く。run の表は run ごとに作り、driver は worker ごとに

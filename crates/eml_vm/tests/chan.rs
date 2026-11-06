@@ -342,9 +342,9 @@ main () =
 
 // worker をまたぐ channel
 
-/// 検査モードと速いモードで、worker を `workers` 個まで持てる仮想の時計の run を流す。どちらも成功して同じ標準出力を
-/// 返すことを確かめ、その出力と検査モードの `Finished` を返す。N = 2 のテストは、根のタスクから続けて2つだけ
-/// `start` するので、置き方によらず1つが worker 1 に、1つが worker 0 に置かれる。
+/// 検査モードと速いモードで、workerを`workers`個まで持てる仮想の時計のrunを流す。どちらも成功して同じ標準出力を
+/// 返すことを確かめ、その出力と検査モードの`Finished`を返す。根のタスクが始めるタスクは、worker 1から順に置く。
+/// 根のタスクから続けて2つだけ`start`するN = 3のテストは、1つをworker 1に、1つをworker 2に置く。
 fn run_at(src: &str, workers: usize) -> (String, Finished) {
     let program = lir(src);
     let config = |debug_heap: bool| {
@@ -414,10 +414,10 @@ main () = Async.run (fn () ->
     );
     let (out, finished) = run_at(&src, 2);
     assert_eq!(out, "20100\n");
-    assert_eq!((finished.workers, finished.placed_tasks), (1, 1));
+    assert_eq!((finished.workers, finished.placed_tasks), (1, 2));
 }
 
-/// 2つの worker で待つ受け手を、根のタスクの送りが起こす。`sleep_ms` はどの worker も眠ったときにだけ戻るので、
+/// worker 1と2で待つ受け手を、根のタスクの送りが起こす。`sleep_ms`はどのworkerも眠ったときにだけ戻るので、
 /// 送る前に2つとも待っている。
 #[test]
 fn parked_receivers_on_both_workers_are_woken_by_the_root() {
@@ -437,9 +437,9 @@ main () = Async.run (fn () ->
   let b = Async.await r2
   println (show (List.sort [a, b])))
 ";
-    let (out, finished) = run_at(src, 2);
+    let (out, finished) = run_at(src, 3);
     assert_eq!(out, "[Some 1, Some 2]\n");
-    assert_eq!(finished.placed_tasks, 1);
+    assert_eq!(finished.placed_tasks, 2);
 }
 
 /// `Lin` の品物は送り手の worker から受け手の worker へ移り、書き込んで送り返しても漏れない。閉じない channel に
@@ -488,11 +488,11 @@ main () = Async.run (fn () ->
 ";
     let (out, finished) = run_at(src, 2);
     assert_eq!(out, "7 7\n");
-    assert_eq!(finished.placed_tasks, 1);
+    assert_eq!(finished.placed_tasks, 2);
 }
 
-/// 2つの worker で待つ受け手をスコープごと取り消すと、どちらも待ち手の列から外れる。その後の `try_send` は受け手が
-/// いないので `Full` を返す (docs/spec/vm.md の「取り消しの届け方」)。
+/// worker 1と2で待つ受け手をスコープごと取り消すと、どちらも待ち手の列から外れる。その後の`try_send`は受け手が
+/// いないので`Full`を返す (docs/spec/vm.mdの「取り消しの届け方」)。
 #[test]
 fn receivers_cancelled_on_both_workers_leave_the_queue() {
     let src = "\
@@ -515,9 +515,9 @@ main () = Async.run (fn () ->
     | Chan.Full x -> println \"Full \\{show x}\"
     | Chan.Refused x -> println \"Refused \\{show x}\")
 ";
-    let (out, finished) = run_at(src, 2);
+    let (out, finished) = run_at(src, 3);
     assert_eq!(out, "Full 1\n");
-    assert_eq!(finished.placed_tasks, 1);
+    assert_eq!(finished.placed_tasks, 2);
 }
 
 /// 8つの worker で、3つの送り手の 300 個の品物は、3つの受け手のどれか1つにだけ届く。受け手は受けるたびに `Counter`

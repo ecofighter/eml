@@ -141,12 +141,15 @@
     - tests/workers.rs:120 `a_run_without_par_starts_no_worker` → rename to `a_run_with_workers_starts_them_at_the_start` (N = 4: `workers == 3`).
     - :123-131 `the_first_fork_starts_the_workers` → rename to `the_workers_exist_before_the_first_fork` (values unchanged; name and doc only).
     - :505-510 `exit_abandons_a_job_on_another_worker`. `placed_jobs` becomes schedule-dependent, because the task now runs on worker 1 and worker 0 may not be idle yet. Make `main` sleep before forking so that worker 0 is idle, and keep `placed_jobs == 1` and the exit code.
-    - :600-605 `a_timer_on_worker_0_and_a_child_on_worker_1_agree` → `a_timer_on_worker_1_and_a_child_on_worker_2_agree` (N = 3, `placed_tasks == 2`).
+    - :600-605 `a_timer_on_worker_0_and_a_child_on_worker_1_agree` → `a_timer_task_and_a_child_on_other_workers_agree` (N = 3, `placed_tasks == 2`; the timer task lands on worker 2, so the name names no worker).
     - chan.rs:417 `producers_on_both_workers_feed_the_root_task`: `(1, 1)` → `(1, 2)`.
     - chan.rs:442 `parked_receivers_on_both_workers_are_woken_by_the_root`: 1 → 2.
     - chan.rs:491 `lin_items_cross_workers_and_come_back`: 1 → 2.
     - chan.rs:520 `receivers_cancelled_on_both_workers_leave_the_queue`: 1 → 2.
   - New unit test in workers.rs: `the_ring_never_places_on_worker_0` (live 3: 1, 2, 1, 2; live 1: 0).
+  - Kind 2 (decided after review): tests whose names claim two workers but which the ring now puts on worker 1 alone run at N = 3, so that they keep checking two workers: ffi_abandon.rs `two_hung_workers_share_one_budget`, chan.rs `parked_receivers_on_both_workers_are_woken_by_the_root` and `receivers_cancelled_on_both_workers_leave_the_queue` (and the `run_at` doc), with their counts and docs updated.
+  - Kind 1 (decided during execution): delete the unit test `placement_rotates_over_every_worker` (src/workers.rs); it asserts the old rotation through worker 0, and `the_ring_never_places_on_worker_0` replaces it.
+  - Moved here from S1-T2 (decided during execution, kind 2): crates/eml_cli/tests/ui.rs `WORKER_RUNS` (:298-304) and the second table in `workers_runs_cover_par_and_async` (:755-763) → `async/` at `[(2, Sequential), (8, Sequential)]`, with the `RescueAlways`-only assertions they guard; testing.md :458-460 accordingly. With eager workers, `RescueAlways` can move an `Async.run` root to worker 1 before it starts, so the `placed_tasks > 0` check of those runs no longer holds.
   - Unchanged (checked): workers.rs:148-160, :171, :208, :274, :345, :626, :643, :647, :667, :686; chan.rs:563, :598; signal.rs:387; io.rs:1479, :1531.
 - Spec and docs (same commit):
   - vm.md 「タスクとスケジュール」 :423-424, replace with: "Every `Scheduler` holds the state `Workers` of workers 1..N-1: `Started(n)`, `Denied` or `Peer`. Worker 0 decides it at the start of the run (`begin_run`); workers 1..N-1 are always `Peer`. Only `Started` and `Peer` schedulers place right children, `Async` tasks and `compute` jobs on other workers. Workers are wanted when `Limits::workers ≥ 2`, the monitor runs, the session has no roots, the loaded code has no root primitives and no driver was injected with `Machine::with_driver`. Worker 0 then spawns workers 1..N-1 at once (`eml_io::spawn_scoped_masked`, named `eml-worker-k`, 8 MiB), before the first instruction of `main`, and joins them at the end of the run. Workers start parked and idle. No instruction is re-executed: a `par`, `start` or `fork_job` never waits for workers."
@@ -156,9 +159,9 @@
   - CLAUDE.md:97 (eml_vm row) and :122: "workers 1..N-1 start at run start", "`Async` tasks are placed round-robin over workers 1..N-1 at `start` and never move".
 - Left to the implementer: the shape of the hoisted spawn code, keeping today's error mapping of a failed spawn.
 - Completion criteria:
-  - `cargo nextest run` → 4697 passed (4696 + 1 new), 0 failed.
+  - `cargo nextest run` → 4696 passed (4696 + 1 new − 1 deleted), 0 failed.
   - `git grep -n -e SPAWN_WORKERS -e 'Workers::Wanted' -e 'Exit::Spawn' -- crates` → no output.
-  - `git diff --stat HEAD~ -- 'crates/*/tests' '*.snap'` → only `crates/eml_vm/tests/workers.rs` and `crates/eml_vm/tests/chan.rs`.
+  - `git diff --stat HEAD~ -- 'crates/*/tests' '*.snap'` → only `crates/eml_vm/tests/workers.rs`, `crates/eml_vm/tests/chan.rs` and `crates/eml_cli/tests/ui.rs`.
   - `cargo clippy --all-targets -- -D warnings` → exit 0; `cargo fmt --check` → exit 0.
 - Pitfalls: a test that relied on worker 0 receiving the first task now sees worker 1. Only the listed tests change; any other failure is a design defect to report.
 
@@ -191,8 +194,7 @@
     - tests/workers.rs `the_monitor_rescues_a_worker_blocked_in_an_extern` (`#[ignore]`) → `tasks_on_other_workers_run_while_main_blocks_in_an_extern`, not ignored. N = 2 with `BlockingHost`: `main`'s `println "a"` blocks until a task prints `"b"`; the task is on worker 1 by D-3; output `b\na\n`; deterministic and under 1 s.
     - tests/io.rs `a_wait_from_a_task_placed_on_worker_2_ends_under_rescue_always` → `a_wait_from_a_task_placed_on_worker_2_ends` (N = 4, `Sequential`).
     - crates/eml_cli/tests/ui.rs:
-      - `WORKER_RUNS` (:298-304) and the second table in `workers_runs_cover_par_and_async` (:755-763): `async/` → `[(2, Sequential), (8, Sequential)]`.
-      - The `rescued > 0` assertion (:374-375) is deleted.
+      - (Done in S1-T1: `WORKER_RUNS` and the second table in `workers_runs_cover_par_and_async`.) Delete what remains of the `RescueAlways` assertions, e.g. the `rescued > 0` assertion (:374-375), if S1-T1 left any.
   - Kind 3:
     - ui.rs:527-528 and :574-575: the `Finished` literals lose `rescues`/`rescued`.
     - tests/ffi.rs:768 and tests/ffi_abandon.rs:109: delete `assert_eq!(finished.rescues, 0, ..)`.
@@ -233,7 +235,7 @@
   - architecture.md:322-323: drop rescue from the eml_vm description ("`Async` tasks are placed on workers 1..N-1 in rotation and never move").
   - CLAUDE.md:139: "`par/` and `async/` run at 2 and 8 workers under `Sequential`".
 - Completion criteria:
-  - `cargo nextest run` → 4660 passed, 0 failed. That is 4697 − 38 deleted tests (8 integration, 18 sched unit, 1 workers unit, 6 monitor unit, 1 cells unit) + 1 for the formerly ignored test that now runs. If a deleted test was itself ignored, the passed count is one higher per such test; record the exact passed and skipped numbers in the commit message.
+  - `cargo nextest run` → 4659 passed, 0 failed. That is 4696 − 38 deleted tests (8 integration, 18 sched unit, 1 workers unit, 6 monitor unit, 1 cells unit) + 1 for the formerly ignored test that now runs. If a deleted test was itself ignored, the passed count is one higher per such test; record the exact passed and skipped numbers in the commit message.
   - `git grep -n -e RescueAlways -e steal_start -e steal_resume -e steal_wake -e ready_entries -e inbox_work -e futile -e 'Notice::Rescue' -e rescuable -- crates` → no output.
   - `cargo nextest run -p eml_cli --test integration -E 'test(ui::) | test(repl::)'` → passes with no `.em` file or snapshot changed.
   - `git diff --stat HEAD~ -- crates/eml_rt` → empty.
