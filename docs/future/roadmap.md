@@ -28,12 +28,6 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `tls-platform-verifier`: `Std.Tls` の証明書の検証を、webpki-roots の根から OS の検証器 (`rustls-platform-verifier`) に移し、webpki-roots を依存から外す。会社の端末に管理者が入れた根、OS が信頼しないと設定した根、失効を、OS と同じに扱うためである。OS の検証は失効の確認や中間の証明書の取得でネットワークに出ることがあり、rustls は検証を `process_new_packets` の中で同期して呼ぶ。そのため、検証を含む `Conn` の処理をブロックする呼び出しのプールで動かし、待ち、取り消し、期限は今と同じく `Std.Net` に置く。仕事は `Done::Job` で `Conn` を値で返す。`Tls.connect_with_ca` と `Tls.wrap_with_ca` の追加の CA は、OS の検証器に追加の根として渡す。前提: なし。設計: この項目
-  - テストの証明書: macOS は TLS の server の証明書の有効期間に上限 (825 日) を課すと理解しているので、期限を 2126 年にした `eml_tls` の fixtures は、本物のソケットのテストで拒まれる見込みである。段の最初に確かめ、期限の短い証明書を定期的に作り直すか、テストだけ別の検証を使うかを決める
-  - Linux の OS の検証器は、OS のファイルから根を読んで rustls で検証する。`ca-certificates` を持たない最小のコンテナ (distroless など) と nix の sandbox では根が空になり、`Tls.connect` はすべて失敗する。この使い方は `Tls.connect_with_ca` で根を渡すと spec に書く。テストは `connect_with_ca` か `wrap_with_ca` で根を渡して書き、既定の根に頼るテストは置かない
-  - 拒否の理由は OS ごとに違う。IO の失敗の文言は今の固定の文言を保ち、OS の詳細を付けない
-  - Windows の検証が根をネットワークから取りに行くと、CI の結果がネットワークの状態に左右される。CI でこれをどう避けるかを、この段の設計で決める
-  - 依存が OS ごとに増える (macOS の security-framework、Windows の証明書の API)。暗号の provider は aws-lc-rs のまま変えない
 - `main-pinning`: プロセスのメインスレッドをメインの worker にし、`Std.Gui` を `Gui.run_on_main` だけで作る。メインの worker のタスクとその子は、救済されず、ほかの worker に移らない。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「固定したタスク」、同じ文書の「スレッドと worker」
 - `gui-plugin`: VM の上で egui のプラグインを動かし、`Std.Gui` の残りを入れる。前提: `main-pinning`。設計: [FFI と拡張の設計](ffi.md) の「GUI」、同じ文書の「拡張」
 - `borrowed-params`: 借用パラメータを入れる。所有の引数で1バイトごとに `dup` する形をなくし、verifier が借用のブロック引数を確かめる。前提: なし。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
@@ -412,7 +406,7 @@
   - 後に回した理由: 比べた5件 (many-self-1000、echo-self-fresh、echo-py-fresh、echo-py-reuse、bulk-1k) のどれでも、2回のセッションで続けて、CPU の比が 0.800 以下で判定が「差」にはならなかった (いちばん縮んだのは `io_uring_direct` の many-self-1000 で、1回目が 0.779 で四分位が重なり、2回目が 0.940)。貸した buffer を1つだけカーネルに渡す契約の下では、io_uring で省けるのは、登録、接続の確かめ、空振りの読みの syscall に限られる。
   - 見直す条件: ネイティブ化の後に many-self-1000 と echo-self-fresh を測り直し、減らせる syscall の分が CPU の2割に当たるとき。buffer の契約を変え、カーネルが選ぶ buffer を受け入れる設計をするとき。`Std.Stream` のファイルの仕事で、プールの費用が計測で目立ったとき。
 - musl で静的に結んだ Linux の配布物 (`x86_64-unknown-linux-musl`)
-  - 後に回した理由: TLS とは別の配布の話である。aws-lc-sys のために musl を対象にする C のツールチェーンを flake に足し、`nix build` の2つ目のパッケージと CI のジョブが要る。musl の名前の解決と確保の速さは glibc と違う。AOT の配布物は `libeml_rt.a` を同梱して利用者の `cc` で結ぶので、musl の配布物には musl 向けの `libeml_rt.a` と結び方を別に用意する必要がある。根の証明書は今は webpki-roots なので静的な配布物でも OS のストアは要らないが、`tls-platform-verifier` の後は OS の根のファイルが要る。
+  - 後に回した理由: TLSとは別の配布の話である。aws-lc-sysのためにmuslを対象にするCのツールチェーンをflakeに足し、`nix build`の2つ目のパッケージとCIのジョブが要る。muslの名前の解決と確保の速さはglibcと違う。AOTの配布物は`libeml_rt.a`を同梱して利用者の`cc`で結ぶので、muslの配布物にはmusl向けの`libeml_rt.a`と結び方を別に用意する必要がある。静的な配布物も証明書をOSの検証器で確かめるので、OSの根のファイルか`SSL_CERT_FILE`、またはCAを渡すプログラムが要る。
   - 見直す条件: Linux の tarball を配布するとき。既定の配布物とは別の配布物にする。
 - 時刻を扱う `Time` のモジュール
   - 後に回した理由: 待ちと期限は `Int` のミリ秒で足りる。
@@ -517,6 +511,9 @@
 
 設計は [FFI と拡張の設計](ffi.md) にある。ここには後に回した項目を置く。既定は同じ文書の「GUI」と「未決の論点と将来の拡張」にある。
 
+- stdの`extern`の行に付け、translateが下ろす`blocking`の属性: Rustの処理をブロックする呼び出しのプールで動かすstdの行を1つの行で書き、translateが`blocking`のCの関数と同じく受け付けと取り出しに分ける ([VM](../spec/vm.md) の「プールの仕事」)
+  - 後に回した理由: Rustの処理をプールで動かすstdの行の族は1つ (`Std.Tls`) しかなく、手で書く3つ組は2つの行とemlの3行で済む。属性には、`ExternRef`のstdの行の受け付けと取り出しの変種、`eml_extern`の2つ目の導出、VMの腕の分割、translateの変更が要る。
+  - 見直す条件: プラグインやGUIのような、`blocking`のCの呼び出しと`Std.Tls`に次ぐ3つ目の仕事の行の族が現れたとき。
 - 同期のコールバック: 比較の関数を渡す API (`qsort`)、常微分方程式と積分のソルバー (GSL、SUNDIALS)、訪問の API が使う
   - 後に回した理由: 目標の BLAS、LAPACK、Accelerate、MKL は要らない。同じスレッドの同期のコールバックは、巻き戻しの仕組みを変えずに後で足せる。
   - 見直す条件: 目標のライブラリで、初めてコールバックが要るものが出たとき。

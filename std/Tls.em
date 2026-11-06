@@ -1,5 +1,6 @@
--- TLS のクライアント (docs/spec/stdlib.md の「`Std.Tls`」)。ソケットの I/O はすべて `Std.Net` が行い、ここでは
--- `Conn` と `TcpStream` の間でバイトを汲む。待ち、取り消し、期限は `Net` のもので、ここでは何も足さない
+-- TLSのクライアント (docs/spec/stdlib.mdの「`Std.Tls`」)。ソケットのI/Oはすべて`Std.Net`が行い、ここでは`Conn`と
+-- `TcpStream`の間でバイトを汲む。ソケットの待ち、取り消し、期限は`Net`のもので、`Conn`を作ることと
+-- handshakeの間の押し込みはプールの仕事を待つ
 import Async (Async)
 import Bytes
 import Net
@@ -12,27 +13,34 @@ pub extern data Conn
 pub data Stream =
   | Stream { conn : Conn, sock : Net.TcpStream }
 
--- `host` の `port` へ接続し、`host` を SNI と証明書の名前に使って handshake まで行う。根は既定の根だけである
+-- `host`の`port`へ接続し、`host`をSNIと証明書の名前に使ってhandshakeまで行う。根はOSの根だけである
 pub connect : String -> Int -> <IO, Async> Stream
 connect host port = connect_with_ca "" host port
 
--- `connect` に、根に足す CA の証明書 (PEM) を渡す。空の文字列なら既定の根だけを使う
+-- `connect`に、OSの根に加えて信頼するCAの証明書 (PEM) を渡す。空の文字列ならOSの根だけを使う
 pub connect_with_ca : String -> String -> Int -> <IO, Async> Stream
 connect_with_ca ca host port =
-  -- 名前と PEM の誤りは、接続を開く前に投げる
-  let conn = client_raw host ca
+  -- 名前とPEMの誤りは、接続を開く前に投げる
+  let conn = client host ca
   let sock = Net.connect host port
   handshake host conn sock
 
--- 既にある `TcpStream` の上で handshake する。`host` は SNI と証明書の名前で、根は既定の根だけである
+-- 既にある`TcpStream`の上でhandshakeする。`host`はSNIと証明書の名前で、根はOSの根だけである
 pub wrap : String -> Net.TcpStream -> <IO, Async> Stream
 wrap host sock = wrap_with_ca "" host sock
 
--- `wrap` に、根に足す CA の証明書 (PEM) を渡す。空の文字列なら既定の根だけを使う
+-- `wrap`に、OSの根に加えて信頼するCAの証明書 (PEM) を渡す。空の文字列ならOSの根だけを使う
 pub wrap_with_ca : String -> String -> Net.TcpStream -> <IO, Async> Stream
 wrap_with_ca ca host sock =
-  let conn = client_raw host ca
+  let conn = client host ca
   handshake host conn sock
+
+-- `Conn`を作る。根を作るときにOSのファイルを読むことがあるので、ブロックする呼び出しのプールで作る。名前とPEMの
+-- 誤りは取り出しが投げる (docs/spec/stdlib.mdの「`Std.Tls`」)
+client : String -> String -> <IO, Async> Conn
+client host ca =
+  let (w, op) = Async.io_wait (submit_client host ca)
+  take_conn op w
 
 -- handshake の間、送るものを書き出しては読んで `Conn` に入れる。最後の書き出しがクライアントの Finished を送る
 handshake : String -> Conn -> Net.TcpStream -> <IO, Async> Stream
@@ -46,7 +54,7 @@ handshake host conn sock =
     drop sock
     fail_io ConnectionReset "\{prefix}: the peer closed the connection"
   else
-    let (conn, sock) = fill prefix conn sock
+    let (conn, sock) = fill prefix st conn sock
     handshake host conn sock
 
 -- 平文を `b` の後ろに 1 バイト以上 65 536 バイト以下足して返す。相手が close_notify で閉じた後は何も足さない。
@@ -70,7 +78,7 @@ read_loop b conn sock =
     if st &&& peer_closed != 0 then (b, Stream { conn, sock })
     else if st &&& truncated != 0 then truncated_eof conn sock
     else
-      let (conn, sock) = fill read_prefix conn sock
+      let (conn, sock) = fill read_prefix st conn sock
       read_loop b conn sock
 
 -- 1行を読み、終わりの改行を除いて返す。意味、上限、文言は `Net.read_line` と同じである。読みすぎた平文は `Conn` に
@@ -91,7 +99,7 @@ line_loop conn sock =
     let (st, conn) = status conn
     if st &&& truncated != 0 then truncated_eof conn sock
     else
-      let (conn, sock) = fill read_prefix conn sock
+      let (conn, sock) = fill read_prefix st conn sock
       line_loop conn sock
   else line_result code conn sock
 
@@ -152,12 +160,22 @@ flush conn sock =
     let (_, sock) = Net.write_bytes out sock
     (conn, sock)
 
--- ソケットを1回読んで `Conn` に入れる。空の読みは EOF である
-fill : String -> Conn -> Net.TcpStream -> <IO, Async> (Conn, Net.TcpStream)
-fill prefix conn sock =
+-- ソケットを1回読んで`Conn`に入れる。空の読みはEOFである。handshakeの間の押し込みは証明書を確かめることがあり、
+-- OSの検証器はブロックしうるので、ブロックする呼び出しのプールで動かす。`st`は呼び手が読んだばかりの状態である
+fill : String -> Int -> Conn -> Net.TcpStream -> <IO, Async> (Conn, Net.TcpStream)
+fill prefix st conn sock =
   let (b, sock) = Net.read_chunk (Bytes.empty ()) sock
-  let conn = if Bytes.length b == 0 then push_eof conn else push_tls b conn
+  let conn =
+    if Bytes.length b == 0 then push_eof conn
+    else if st &&& handshaking != 0 then push_pooled b conn
+    else push_tls b conn
   checked prefix conn sock
+
+-- handshakeの間の押し込みを、ブロックする呼び出しのプールで行う
+push_pooled : Bytes -> Conn -> <IO, Async> Conn
+push_pooled b conn =
+  let (w, op) = Async.io_wait (submit_push b conn)
+  take_conn op w
 
 -- TLS の誤りなら alert を書き出してから IO の失敗にし、同じ押し込みで復号した平文も返さない。誤りでなければ送るもの
 -- (TLS 1.3 の KeyUpdate への応答など) を書き出す
@@ -202,8 +220,10 @@ truncated = 8
 failed : Int
 failed = 16
 
--- ランタイムのインターフェース。`client_raw` のほかは投げず、TLS の誤りは `status` の 16 と `error_message` に残る
-extern client_raw        : String -> String -> <IO> Conn
+-- ランタイムのインターフェース。`take_conn`のほかは投げず、TLSの誤りは`status`の16と`error_message`に残る
+extern submit_client     : String -> String -> <IO> Async.OpId
+extern submit_push       : Bytes -> Conn -> <IO> Async.OpId
+extern take_conn         : Async.OpId -> Async.Wake -> <IO> Conn
 extern push_tls          : Bytes -> Conn -> <IO> Conn
 extern push_eof          : Conn -> <IO> Conn
 extern pull_tls          : Conn -> <IO> (Bytes, Conn)

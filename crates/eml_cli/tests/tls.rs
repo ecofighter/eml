@@ -1,4 +1,7 @@
-//! 本物の driver の上で `Std.Tls` が、ローカルの TLS の server と往復する (docs/spec/stdlib.md の「`Std.Tls`」)。
+//! 本物のdriverの上で`Std.Tls`は、サーバーの証明書に署名したCAをプログラムが渡しても、ローカルのTLSのserverの
+//! 証明書を固定の文言で拒む。本物のdriverのrunは現実の時刻で確かめ、そこではテスト用の証明書は期限切れである (docs/spec/vm.mdの
+//! 「時計と driver」)。本物のdriverのrunが、有効期間の中の固定の時刻で確かめるテストの世界の信頼を使えば、この
+//! テストは失敗する。
 //!
 //! `eml_tls` は `tls` の feature が足す依存で、dev-dependency にはしない。dev-dependency にすると、tls を外した
 //! ビルドの `cargo tree` にも `eml_tls` が現れる (docs/implementation/testing.md の「feature の組み合わせの確認」)。
@@ -15,55 +18,48 @@ use eml_cli::{
 };
 use eml_tls::{Conn, FAILED, fixtures};
 
-/// 1行を受け取り、`pong` を返して close_notify を送り、相手が閉じるまで読んで、受け取った行を返す。
-fn serve(listener: TcpListener) -> String {
+/// クライアントのalertが届くまでhandshakeに応える。失敗を記録したか、クライアントが閉じたら届いたとする。
+fn serve(listener: TcpListener) {
     let (mut tcp, _) = listener.accept().unwrap();
     // 止まったクライアントでテストが固まらず、失敗になるようにする
     tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut conn = Conn::server(fixtures::CERT_PEM, fixtures::KEY_PEM).unwrap();
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
-    let mut line = Vec::new();
-    while !line.contains(&b'\n') {
+    loop {
         conn.pull_tls(&mut out);
         tcp.write_all(&out).unwrap();
         out.clear();
         let n = tcp.read(&mut buf).unwrap();
-        assert_ne!(n, 0, "the client closed before it sent a line");
+        if n == 0 {
+            return;
+        }
         conn.push_tls(&buf[..n]);
-        conn.read_plain(&mut line);
-        assert_eq!(conn.status() & FAILED, 0, "{}", conn.error_message());
+        if conn.status() & FAILED != 0 {
+            return;
+        }
     }
-    conn.write_plain(b"pong\n");
-    conn.send_close_notify();
-    conn.pull_tls(&mut out);
-    tcp.write_all(&out).unwrap();
-    while tcp.read(&mut buf).unwrap() != 0 {}
-    String::from_utf8(line).unwrap()
 }
 
 #[test]
-fn a_client_talks_to_a_local_tls_server() {
+fn a_real_socket_handshake_rejects_the_expired_fixtures() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = thread::spawn(move || serve(listener));
 
     let src = format!(
         r#"import Async
-import Bytes
 import Fs
 import Tls
 main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let s = Tls.connect_with_ca (Fs.read_text "ca.pem") "127.0.0.1" {port}
-  let s = Tls.write_line "ping" s
-  let (line, s) = Tls.read_line s
-  match line with
-    | Some text -> println "Some \{{text}}"
-    | None -> println "None"
-  let (rest, s) = Tls.read_chunk (Bytes.empty ()) s
-  println (show (Bytes.length rest))
-  Tls.close s)
+main () =
+  let r = Async.run (fn () ->
+    try_io (fn () -> Tls.close (Tls.connect_with_ca (Fs.read_text "ca.pem") "127.0.0.1" {port})))
+  match r with
+    | Ok () -> println "connected"
+    | Err e ->
+      println (show e.kind)
+      println e.message
 "#
     );
     let compiled = Session::load("tls.em", &src, &MemorySource(&[])).compile();
@@ -80,6 +76,9 @@ main () = Async.run (fn () ->
     let (host, out) = capture_host(root);
     let result = execute(&program, &eml_cli::Linked::default(), &config, host);
     assert!(result.is_ok(), "{:?}", result.err());
-    assert_eq!(out.contents(), "Some pong\n0\n");
-    assert_eq!(server.join().unwrap(), "ping\n");
+    assert_eq!(
+        out.contents(),
+        "Other\ncannot complete the TLS handshake with 127.0.0.1: the server certificate was rejected\n"
+    );
+    server.join().unwrap();
 }

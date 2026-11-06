@@ -36,14 +36,6 @@ impl Clock {
             Clock::Virtual => RunClock::Virtual(Arc::new(AtomicU64::new(0))),
         }
     }
-
-    /// この時計の出どころ。
-    pub(crate) fn kind(self) -> DriverKind {
-        match self {
-            Clock::Real => DriverKind::Real,
-            Clock::Virtual => DriverKind::Virtual,
-        }
-    }
 }
 
 /// run の時間の基準。run の driver はどれもこの基準で作り、VM はここからだけ時刻を読む
@@ -59,6 +51,16 @@ pub(crate) enum RunClock {
 }
 
 impl RunClock {
+    /// この基準のdriverの出どころ。runのどのworkerの`Scheduler`もここから読むので、出どころとそれで決まるTLSの根は
+    /// どのworkerでも同じである (docs/spec/vm.mdの「時計と driver」)。
+    pub(crate) fn kind(&self) -> DriverKind {
+        match self {
+            RunClock::Real { .. } => DriverKind::Real,
+            RunClock::Virtual(_) => DriverKind::Virtual,
+            RunClock::Injected => DriverKind::Injected,
+        }
+    }
+
     /// この基準の新しい driver。`seed` は `Sched::seed` で、テストの driver が決着の組を混ぜるのに使う。driver は
     /// 作ったスレッドの上でだけ使うので、run を行うスレッドで作る。渡された driver の基準 `Injected` からは作れない。
     pub(crate) fn driver(&self, seed: Option<u64>) -> io::Result<Box<dyn IoDriver>> {
@@ -79,8 +81,8 @@ impl RunClock {
     }
 }
 
-/// run が使う driver の出どころ。OS のシグナルを中継するか、空きの待ちに上限を掛けるかを決める
-/// (docs/spec/vm.md の「時計と driver」)。
+/// runが使うdriverの出どころ。OSのシグナルを中継するか、空きの待ちに上限を掛けるか、TLSの接続が信頼する根を
+/// 決める (docs/spec/vm.mdの「時計と driver」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DriverKind {
     /// `Machine` が `Clock::Real` から作った本物の driver。

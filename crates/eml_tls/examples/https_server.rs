@@ -1,9 +1,9 @@
 //! `bench/scripts.sh` の行 `https-get` の相手になる、ループバックの HTTPS の server
 //! (docs/implementation/benchmarks.md の「スクリプトの計測」)。
 //!
-//! `https_server MIB` は `127.0.0.1` の空いたポートで待ち受け、ポートを標準出力の1行目に出す。どの要求にも
-//! `Content-Length` 付きで MIB MiB の本文を返す。止めるのは呼ぶ側の signal である。鍵と証明書は `fixtures` の
-//! ものを使い、何も認証しない。
+//! `https_server CERT_PEM_PATH KEY_PEM_PATH MIB` は `127.0.0.1` の空いたポートで待ち受け、ポートを標準出力の1行目に出す。
+//! どの要求にも `Content-Length` 付きで MIB MiB の本文を返す。止めるのは呼ぶ側の signal である。証明書と鍵は
+//! 引数のPEMのファイルから読み、何も認証しない。
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use eml_tls::fixtures::{CERT_PEM, KEY_PEM};
 use rustls::crypto::CryptoProvider;
 use rustls::crypto::aws_lc_rs::{cipher_suite, default_provider};
 use rustls::pki_types::pem::PemObject;
@@ -22,20 +21,24 @@ use rustls::{ServerConfig, ServerConnection, StreamOwned};
 const LINE: usize = 16;
 
 fn main() {
-    let mib: usize = std::env::args()
-        .nth(1)
-        .and_then(|arg| arg.parse().ok())
-        .expect("usage: https_server MIB");
+    const USAGE: &str = "usage: https_server CERT_PEM_PATH KEY_PEM_PATH MIB";
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let [cert_path, key_path, mib] = args.as_slice() else {
+        panic!("{USAGE}");
+    };
+    let mib: usize = mib.parse().expect(USAGE);
+    let cert_pem = std::fs::read(cert_path).expect("cannot read CERT_PEM_PATH");
+    let key_pem = std::fs::read(key_path).expect("cannot read KEY_PEM_PATH");
     // 計測の最中に本文を作らないよう、ポートを出す前に作る
     let mut body = Vec::with_capacity(mib << 20);
     for i in 0..(mib << 20) / LINE {
         writeln!(body, "{i:015}").unwrap();
     }
     let body: Arc<[u8]> = body.into();
-    let chain = CertificateDer::pem_slice_iter(CERT_PEM)
+    let chain = CertificateDer::pem_slice_iter(&cert_pem)
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    let key = PrivateKeyDer::from_pem_slice(KEY_PEM).unwrap();
+    let key = PrivateKeyDer::from_pem_slice(&key_pem).unwrap();
     // eml の rustls と Python の OpenSSL が別の暗号を選ぶと、比に暗号の速さの差が混ざる。そこで暗号を1つに絞る
     let provider = CryptoProvider {
         cipher_suites: vec![cipher_suite::TLS13_AES_256_GCM_SHA384],

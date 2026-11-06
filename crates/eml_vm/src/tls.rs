@@ -1,48 +1,36 @@
 //! `Std.Tls` の extern の腕 (docs/spec/stdlib.md の「`Std.Tls`」)。TLS の状態は `eml_tls::Conn` が持ち、それを `lin`
 //! の `Foreign` に入れる。ソケットの I/O は `std/Tls.em` が `Std.Net` で行うので、ここには待ちも driver もない。
 //!
-//! feature `tls` を外した処理系では、`Conn` を値のない型にし、`client_raw` がいつも `NotAvailable` を投げる。値を
-//! 作れないので、ほかの腕には届かない。`vm.rs` に cfg を置かないため、両方で同じ名前とメソッドを使う。
+//! feature `tls`を外した処理系では、`Conn`を値のない型にし、`client_conn`がいつも`not available`で失敗する。値を
+//! 作れないので、ほかの腕には届かない。`vm.rs`にcfgを置かないため、両方で同じ名前とメソッドを使う。
 
-use eml_rt::externs::{self, Fault, Raised};
+use eml_rt::externs;
 use eml_rt::{Ctx, Mode, Word};
 
 use crate::cells::{self, Found, LINE_LIMIT, READ_ROOM};
+use crate::driver::DriverKind;
 use crate::error::VmFault;
 
 #[cfg(feature = "tls")]
-use eml_tls::{Conn, PEER_CLOSED};
+use eml_tls::{Conn, HANDSHAKING, PEER_CLOSED};
 #[cfg(not(feature = "tls"))]
-use off::{Conn, PEER_CLOSED};
+use off::{Conn, HANDSHAKING, PEER_CLOSED};
 
-/// `client_raw` の設定の誤りの種類 (docs/spec/stdlib.md の「`Std.Tls`」)。
+/// TLSの接続の設定の誤りの種類 (docs/spec/stdlib.mdの「`Std.Tls`」)。
 #[cfg(feature = "tls")]
-const SETUP_KIND: i64 = externs::IO_OTHER;
+pub(crate) const SETUP_KIND: i64 = externs::IO_OTHER;
 #[cfg(not(feature = "tls"))]
-const SETUP_KIND: i64 = externs::IO_NOT_AVAILABLE;
+pub(crate) const SETUP_KIND: i64 = externs::IO_NOT_AVAILABLE;
 
 #[cfg(not(feature = "tls"))]
 mod off {
-    use std::fmt;
-
-    /// TLS のない処理系の `Conn`。値がないので、作れるのは `client` が `Err` を返すことだけである。
+    /// TLSのない処理系の`Conn`。値を持たない。
     pub(crate) enum Conn {}
 
-    pub(crate) struct NotAvailable;
-
-    impl fmt::Display for NotAvailable {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("not available")
-        }
-    }
-
+    pub(crate) const HANDSHAKING: u32 = 1;
     pub(crate) const PEER_CLOSED: u32 = 4;
 
     impl Conn {
-        pub(crate) fn client(_: &str, _: &[u8]) -> Result<Conn, NotAvailable> {
-            Err(NotAvailable)
-        }
-
         pub(crate) fn push_tls(&mut self, _: &[u8]) {
             match *self {}
         }
@@ -141,27 +129,57 @@ unsafe fn tls_conn<M: Mode>(ctx: &Ctx<M>, conn: Word) -> Result<*mut TlsConn, Vm
     Ok(unsafe { ctx.heap().foreign_unique::<TlsConn>(conn) }?)
 }
 
-/// `Std.Tls.client_raw`。`host` と `pem` の参照を受け取って手放す。投げるのはこの行だけである。
-///
-/// # Safety
-/// `host` と `pem` は呼ぶ側が持つ文字列の参照である。
-pub(crate) unsafe fn client_raw<M: Mode>(
-    ctx: &mut Ctx<M>,
-    host: Word,
-    pem: Word,
-) -> Result<Word, VmFault> {
-    let host = unsafe { ctx.copy_string(host, usize::MAX) }?;
-    let pem = unsafe { ctx.copy_string(pem, usize::MAX) }?;
-    match Conn::client(&host, pem.as_bytes()) {
-        Ok(conn) => {
-            let value = TlsConn { conn, line_from: 0 };
-            Ok(unsafe { ctx.heap_mut() }.alloc_foreign(value, true))
+/// runの接続が信頼する根。runのdriverの種類からworkerの上で選ぶ (docs/spec/vm.mdの「時計と driver」)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Roots {
+    /// `Machine`が自分で作ったテストのdriver: 渡したCAだけを根にし、`fixtures::NOW`の時刻で確かめる。
+    Fixtures,
+    /// OSの検証器。OSの根に加えて、渡したCAを信頼する。
+    Platform,
+}
+
+impl Roots {
+    pub(crate) fn of(kind: DriverKind) -> Roots {
+        if kind == DriverKind::Virtual {
+            Roots::Fixtures
+        } else {
+            Roots::Platform
         }
-        Err(e) => Err(VmFault::Extern(Fault::Raised(Box::new(Raised {
-            kind: SETUP_KIND,
-            message: format!("cannot set up TLS for {host}: {e}").into(),
-        })))),
     }
+
+    #[cfg(feature = "tls")]
+    fn trust(self, pem: &[u8]) -> Result<eml_tls::Trust, eml_tls::Error> {
+        match self {
+            Roots::Fixtures => eml_tls::Trust::fixtures(pem),
+            Roots::Platform => eml_tls::Trust::platform(pem),
+        }
+    }
+}
+
+/// クライアントの`Foreign`の中身を作る。`Ctx`には触れない。誤りはサーバーの名前、信頼、設定の順に確かめる。
+#[cfg(feature = "tls")]
+pub(crate) fn client_conn(roots: Roots, host: &str, pem: &[u8]) -> Result<TlsConn, String> {
+    eml_tls::Name::parse(host)
+        .and_then(|name| {
+            roots
+                .trust(pem)
+                .and_then(|trust| Conn::client(&name, &trust))
+        })
+        .map(|conn| TlsConn { conn, line_from: 0 })
+        .map_err(|e| format!("cannot set up TLS for {host}: {e}"))
+}
+
+/// クライアントの`Foreign`の中身を作る。`Ctx`には触れない。誤りはサーバーの名前、信頼、設定の順に確かめる。
+#[cfg(not(feature = "tls"))]
+pub(crate) fn client_conn(roots: Roots, host: &str, pem: &[u8]) -> Result<TlsConn, String> {
+    let _ = (roots, pem);
+    Err(format!("cannot set up TLS for {host}: not available"))
+}
+
+/// `submit_push`の仕事の本体。プールのスレッドで走り、`Conn`の中身を値で返す。
+pub(crate) fn push_conn(mut c: TlsConn, b: Vec<u8>) -> TlsConn {
+    c.conn.push_tls(&b);
+    c
 }
 
 /// `Std.Tls.push_tls`。`bytes` は借り、`conn` を消費して返す。
@@ -176,6 +194,13 @@ pub(crate) unsafe fn push_tls<M: Mode>(
     // バイト列と `Foreign` は別の物体で、`push_tls` はヒープに触れない
     let b = unsafe { &*ctx.heap().bytes(bytes)? };
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
+    // handshakeの間の押し込みは証明書を確かめうるので、stdは`submit_push`で押し込む
+    // (docs/spec/stdlib.mdの「`Std.Tls`」)
+    if c.conn.status() & HANDSHAKING != 0 {
+        return Err(VmFault::Internal(
+            "Std.Tls.push_tls runs during the handshake",
+        ));
+    }
     c.conn.push_tls(b);
     Ok(conn)
 }
@@ -377,9 +402,8 @@ mod on_tests {
     use super::*;
 
     fn new_client(ctx: &mut Ctx<Checked>) -> Word {
-        let host = ctx.fresh_string("tls.localhost");
-        let pem = ctx.fresh_string(std::str::from_utf8(CA_PEM).unwrap());
-        unsafe { client_raw(ctx, host, pem) }.unwrap()
+        let c = client_conn(Roots::Fixtures, "tls.localhost", CA_PEM);
+        unsafe { ctx.heap_mut() }.alloc_foreign(c.ok().unwrap(), true)
     }
 
     /// クライアントの `Foreign` と server の間で、どちらも送るものがなくなるまで暗号文を汲む。
@@ -394,9 +418,15 @@ mod on_tests {
             if sent.is_empty() && back.is_empty() {
                 return;
             }
-            let b = unsafe { ctx.heap_mut() }.alloc_bytes(&back);
-            unsafe { push_tls(ctx, b, client) }.unwrap();
-            unsafe { ctx.heap_mut().decref(b) }.unwrap();
+            // handshakeの間は`Conn`に直に押し込み、その後は`push_tls`の腕で押し込む。handshakeの後の押し込みで
+            // 腕を通すためである
+            if unsafe { status(ctx, client) }.unwrap() & i64::from(HANDSHAKING) != 0 {
+                unsafe { (*tls_conn(ctx, client).unwrap()).conn.push_tls(&back) };
+            } else {
+                let b = unsafe { ctx.heap_mut() }.alloc_bytes(&back);
+                unsafe { push_tls(ctx, b, client) }.unwrap();
+                unsafe { ctx.heap_mut().decref(b) }.unwrap();
+            }
         }
     }
 
@@ -460,10 +490,25 @@ mod on_tests {
         assert!(leaks.is_empty(), "{leaks:?}");
     }
 
-    /// 設定の誤りは種類 `Other` で、文言は固定である。誤りでは何も確保しない。
+    /// handshakeの間の押し込みはstdがプールで行うので、`push_tls`の腕では内部の誤りである。
+    #[test]
+    fn push_tls_during_the_handshake_is_an_internal_error() {
+        let mut ctx = cells::test_ctx();
+        let client = new_client(&mut ctx);
+        let b = unsafe { ctx.heap_mut() }.alloc_bytes(b"x");
+        let Err(VmFault::Internal(m)) = (unsafe { push_tls(&mut ctx, b, client) }) else {
+            panic!("push_tls during the handshake did not fail");
+        };
+        assert_eq!(m, "Std.Tls.push_tls runs during the handshake");
+        unsafe { ctx.heap_mut().decref(b) }.unwrap();
+        unsafe { ctx.heap_mut().decref(client) }.unwrap();
+        let leaks = ctx.leaks();
+        assert!(leaks.is_empty(), "{leaks:?}");
+    }
+
+    /// 設定の誤りの文言は固定である。
     #[test]
     fn client_errors_are_other_with_fixed_messages() {
-        let mut ctx = cells::test_ctx();
         for (host, pem, message) in [
             (
                 "a b",
@@ -475,18 +520,16 @@ mod on_tests {
                 "garbage",
                 "cannot set up TLS for tls.localhost: the CA certificates are not valid PEM",
             ),
+            (
+                "tls.localhost",
+                "",
+                "cannot set up TLS for tls.localhost: no root certificates are available",
+            ),
         ] {
-            let h = ctx.fresh_string(host);
-            let p = ctx.fresh_string(pem);
-            let Err(VmFault::Extern(Fault::Raised(raised))) =
-                (unsafe { client_raw(&mut ctx, h, p) })
-            else {
-                panic!("{host} with {pem:?} did not raise");
+            let Err(got) = client_conn(Roots::Fixtures, host, pem.as_bytes()) else {
+                panic!("{host} with {pem:?} did not fail");
             };
-            assert_eq!(raised.kind, externs::IO_OTHER);
-            assert_eq!(&*raised.message, message);
+            assert_eq!(got, message);
         }
-        let leaks = ctx.leaks();
-        assert!(leaks.is_empty(), "{leaks:?}");
     }
 }

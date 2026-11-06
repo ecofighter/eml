@@ -614,8 +614,9 @@ pub struct Scheduler<P: Policy> {
     /// worker 1..N-1 を作るか、作ったか。worker 0 は run の始めに決め、worker 1..N-1 はいつも `Peer` である。
     /// 右の子と仕事をほかの worker に置くのは `Started` と `Peer` の `Scheduler` だけである。
     pub(crate) workers: Workers,
-    /// driver の出どころ。`Real` の run だけが OS のシグナルを待つタスクへ届ける (docs/spec/stdlib.md の
-    /// 「`Std.Signal`」)。空きの待ちに上限を掛けるかもこれで決まる (docs/spec/vm.md の「時計と driver」)。
+    /// driverの出どころ。runの`Run`の時間の基準から決めるので、どのworkerでも同じである。`Real`のrunだけがOSの
+    /// シグナルを待つタスクへ届ける (docs/spec/stdlib.mdの「`Std.Signal`」)。空きの待ちに上限を掛けるかと、TLSが
+    /// 信頼する根もこれで決まる (docs/spec/vm.mdの「時計と driver」)。
     pub(crate) driver_kind: DriverKind,
     /// OS を見ずに続けた `switch_away` の切り替えの数。`POLL_EVERY` に達するか、集める地点が OS を見たら 0 に戻す。
     pub(crate) since_poll: u32,
@@ -711,6 +712,7 @@ impl<P: Policy> Scheduler<P> {
         max_depth: usize,
         cells: Arc<Shared>,
     ) -> Scheduler<P> {
+        let driver_kind = run.driver_kind();
         Scheduler {
             policy,
             tasks: vec![None],
@@ -733,7 +735,7 @@ impl<P: Policy> Scheduler<P> {
             run,
             index: 0,
             workers: Workers::Denied,
-            driver_kind: DriverKind::Virtual,
+            driver_kind,
             since_poll: 0,
             runnables: Vec::new(),
             rescue: None,
@@ -771,10 +773,6 @@ impl<P: Policy> Scheduler<P> {
         cells: Arc<Shared>,
     ) -> Scheduler<P> {
         let mut sched = Scheduler::build(policy, None, run, control, main_worker, max_depth, cells);
-        // 自分で受け付ける worker の driver は、本物の時計から作る (docs/spec/vm.md の「時計と driver」)
-        if sched.run.io_worker(index) == index {
-            sched.driver_kind = DriverKind::Real;
-        }
         sched.index = index;
         let rescuable = rescuable(&sched.run, index);
         sched.policy.set_rescuable(rescuable);
@@ -1594,6 +1592,48 @@ mod tests {
             shared,
             sched,
             ctx,
+        }
+    }
+
+    /// worker 0でないworkerもrunの出どころを受けるので、本物のdriverか渡したdriverのrunがテストの根を使うことはない
+    /// (docs/spec/vm.mdの「時計と driver」)。
+    #[test]
+    fn every_worker_takes_the_driver_kind_of_the_run() {
+        let control = Arc::new(Control::new(Limits {
+            workers: 2,
+            ..Limits::default()
+        }));
+        for (clock, kind, roots) in [
+            (
+                RunClock::Real {
+                    epoch: std::time::Instant::now(),
+                },
+                DriverKind::Real,
+                crate::tls::Roots::Platform,
+            ),
+            (
+                RunClock::Injected,
+                DriverKind::Injected,
+                crate::tls::Roots::Platform,
+            ),
+            (
+                RunClock::Virtual(Arc::default()),
+                DriverKind::Virtual,
+                crate::tls::Roots::Fixtures,
+            ),
+        ] {
+            let run = Arc::new(Run::new(2, None, clock, Arc::default()));
+            let sched = Scheduler::worker(
+                Sequential,
+                run,
+                Arc::clone(&control),
+                1,
+                0,
+                usize::MAX,
+                Arc::new(Shared::new(Registry::new(Vec::new(), 2))),
+            );
+            assert_eq!(sched.driver_kind, kind);
+            assert_eq!(crate::tls::Roots::of(sched.driver_kind), roots);
         }
     }
 

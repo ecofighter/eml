@@ -124,6 +124,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("foreign.rs: external_body value_words", "T3"),
     ("foreign.rs: external_body write", "T3"),
     ("foreign.rs: external_body value", "T3"),
+    ("foreign.rs: external_body take", "T3"),
     ("foreign.rs: external_body Finalizer", "T3"),
     ("foreign.rs: external_body finalizer_of", "T3"),
     ("foreign.rs: external_body run_finalizer", "T3"),

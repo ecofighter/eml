@@ -11,7 +11,7 @@ use eml_rt::{Checked, Ctx, CtxStats, Fast, Fault, HeapError, IoDriver, Mode, Sta
 
 use crate::cells::{Registry, Shared, TaskStats};
 use crate::counters::Counters;
-use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, RunClock};
+use crate::driver::{JOB_QUIESCE_LIMIT, RunClock};
 use crate::error::KEPT_PENDING;
 use crate::vm::{ExecWith, Exit};
 use crate::workers::{
@@ -30,6 +30,7 @@ mod driver;
 mod error;
 mod ffi;
 mod hosts;
+mod jobs;
 mod monitor;
 mod op;
 mod sched;
@@ -323,11 +324,10 @@ pub struct Machine<M: Mode> {
     /// 移す。`with_clock` と `with_sched` は `None` に戻し、次の run が作り直す。作った後は時刻が run をまたいで続く。
     /// driver が貸した記憶はヒープにあるので、`Drop` は `ctx` より先にこの欄を落とす (docs/spec/vm.md の「時計と driver」)。
     driver: Option<Box<dyn IoDriver>>,
-    /// 持っている driver の出どころ。`with_driver` で渡した driver は、時計の欄によらず `Injected` にする。出どころを
-    /// 知らない driver の run には OS のシグナルを中継せず、眠る driver として空きの待ちを切る
-    /// (docs/spec/vm.md の「時計と driver」)。
-    driver_kind: DriverKind,
-    /// `driver` と同じ時間の基準。run の `Run` に渡し、run をまたいで続く時刻を同じ driver と同じ基準で読む。
+    /// `driver`と同じ時間の基準。runの`Run`に渡し、runをまたいで続く時刻を同じdriverと同じ基準で読む。driverの
+    /// 出どころもこれが決める。`with_driver`で渡したdriverは、時計の欄によらず基準を`Injected`にする。出どころを
+    /// 知らないdriverのrunにはOSのシグナルを中継せず、眠るdriverとして空きの待ちを切る (docs/spec/vm.mdの
+    /// 「時計と driver」)。
     run_clock: RunClock,
     code: CodeBase<M>,
     /// `ctx` と同じ Host。worker 1..N-1 の `Ctx` に写す。
@@ -417,7 +417,6 @@ impl<M: Mode> Machine<M> {
             counters: Arc::default(),
             clock: Clock::Virtual,
             driver: None,
-            driver_kind: DriverKind::Virtual,
             run_clock: Clock::Virtual.start(),
             doorbell: None,
             signals: Vec::new(),
@@ -467,7 +466,6 @@ impl<M: Mode> Machine<M> {
     /// 「時計と driver」)。
     pub fn with_driver(mut self, driver: Box<dyn IoDriver>) -> Machine<M> {
         self.driver = Some(driver);
-        self.driver_kind = DriverKind::Injected;
         self.run_clock = RunClock::Injected;
         self
     }
@@ -629,7 +627,6 @@ impl<M: Mode> Machine<M> {
         let driver = match self.driver.take() {
             Some(driver) => driver,
             None => {
-                self.driver_kind = self.clock.kind();
                 self.run_clock = self.clock.start();
                 self.run_clock.driver(self.sched.seed()).map_err(|e| {
                     code.error(
@@ -650,7 +647,6 @@ impl<M: Mode> Machine<M> {
             generations: std::mem::take(&mut self.generations),
             counters: Arc::clone(&self.counters),
             driver,
-            driver_kind: self.driver_kind,
             run_clock: self.run_clock.clone(),
             doorbell: self.doorbell.clone(),
             signals: std::mem::take(&mut self.signals),
@@ -953,7 +949,6 @@ struct Start {
     generations: Vec<u32>,
     counters: Arc<Counters>,
     driver: Box<dyn IoDriver>,
-    driver_kind: DriverKind,
     run_clock: RunClock,
     doorbell: Option<Arc<Doorbell>>,
     signals: Vec<VirtualSignal>,
@@ -994,7 +989,6 @@ fn run_scheduled<M: Mode, P: Policy>(
         Arc::new(Shared::new(registry)),
     );
     sched.shared_roots = start.shared_roots;
-    sched.driver_kind = start.driver_kind;
     // 根は REPL のコードだけが作るので、根に触れるコードを読み込んだ `Machine` は worker を作らない。成功した run の後に
     // 根が、落としたほかの worker のヒープを指しうるためである (docs/spec/vm.md の「タスクとスケジュール」)
     sched.begin_run(!code.tables.uses_roots && ctx.roots().len() == 0);

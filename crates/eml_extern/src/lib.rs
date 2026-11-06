@@ -2009,11 +2009,34 @@ table! {
                 )
             },
         ),
-        // TLS の状態のインターフェース (docs/spec/stdlib.md の「`Std.Tls`」)。どれも待たないので普通の extern の行で、
-        // 投げるのは `client_raw` だけである。組を返す行は `Conn` を借りる
-        TlsClientRaw => kinded(
-            "Std.Tls.client_raw",
-            &[Obj, Obj],
+        // TLSの状態のインターフェース (docs/spec/stdlib.mdの「`Std.Tls`」)。どの行も自分では待たない。`submit_client`、
+        // `submit_push`、`take_conn`はプールの仕事の行 (docs/spec/vm.mdの「プールの仕事」) で`Async`の命令として動き、
+        // 投げるのは`take_conn`だけである。ほかの行は普通のexternの行である。組を返す行は`Conn`を借りる
+        TlsSubmitClient => borrowing(
+            &[true, true],
+            kinded(
+                "Std.Tls.submit_client",
+                &[Obj, Obj],
+                &[Unr, Unr],
+                Int,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
+        TlsSubmitPush => borrowing(
+            &[true, false],
+            kinded(
+                "Std.Tls.submit_push",
+                &[Obj, Obj],
+                &[Unr, Lin],
+                Int,
+                Unr,
+                Purity::Effectful,
+            ),
+        ),
+        TlsTakeConn => kinded(
+            "Std.Tls.take_conn",
+            &[Int, Enum],
             &[Unr, Unr],
             Obj,
             Lin,
@@ -2125,9 +2148,10 @@ table! {
 }
 
 impl Extern {
-    /// `job_cell` を除く `Std.Async` の行と、`chan_cell` を除く `Std.Chan` の行と、`Std.Atomic`、`Std.Net`、`Std.Stream`、`Std.Exec` の行。VM はこれらの行を
-    /// 汎用の extern の命令でなく `Async` の命令で実行する。登録表に触れるためである (docs/spec/vm.md の「`Async` のタスク」)。
-    /// `job_cell` と `chan_cell` は即値を写すだけの普通の extern である。
+    /// `job_cell`を除く`Std.Async`の行と、`chan_cell`を除く`Std.Chan`の行と、`Std.Atomic`、`Std.Net`、`Std.Stream`、
+    /// `Std.Exec`の行と、`Std.Tls`の`submit_client`、`submit_push`、`take_conn`。VMはこれらの行を汎用のexternの命令で
+    /// なく`Async`の命令で実行する。登録表に触れるか、runのdriverの種類を読むためである (docs/spec/vm.mdの「`Async` のタスク」)。
+    /// `job_cell`と`chan_cell`は即値を写すだけの普通のexternである。
     pub fn is_async(self) -> bool {
         matches!(
             self,
@@ -2222,6 +2246,9 @@ impl Extern {
                 | Extern::ExecOpPrefix
                 | Extern::ExecFinish
                 | Extern::ExecReap
+                | Extern::TlsSubmitClient
+                | Extern::TlsSubmitPush
+                | Extern::TlsTakeConn
         )
     }
 }

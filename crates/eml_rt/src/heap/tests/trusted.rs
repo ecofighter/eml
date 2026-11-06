@@ -252,6 +252,33 @@ fn foreign_values_with_drop_are_finalized_once<M: Mode>() {
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 }
 
+fn a_taken_foreign_value_is_not_finalized<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let (value, drops) = probe();
+    let f = heap.alloc_foreign(value, true);
+    unsafe {
+        assert_eq!(heap.foreign_take::<String>(f), Err(HeapError::WrongKind));
+        let taken = heap.foreign_take::<Probe>(f).unwrap();
+        assert!(matches!(
+            heap.foreign::<Probe>(f),
+            Err(HeapError::WrongKind)
+        ));
+        assert!(matches!(
+            heap.foreign_take::<Probe>(f),
+            Err(HeapError::WrongKind)
+        ));
+        heap.decref(f).unwrap();
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        drop(taken);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        let again = heap.alloc_foreign(String::from("again"), true);
+        assert_eq!(heap.foreign_take::<String>(again).unwrap(), "again");
+        heap.decref(again).unwrap();
+    }
+    drop(heap);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
 fn a_zero_sized_foreign_value<M: Mode>() {
     struct Nothing;
     let mut heap = Heap::<M>::new();
@@ -2599,6 +2626,7 @@ both_modes!(
     transfer_back_flips_and_rewrites,
     a_foreign_value_of_another_type_is_wrong_kind,
     foreign_values_with_drop_are_finalized_once,
+    a_taken_foreign_value_is_not_finalized,
     a_zero_sized_foreign_value,
     a_panicking_finalizer_is_not_run_twice,
     a_foreign_value_written_in_place_is_finalized_once,

@@ -13,12 +13,13 @@ use eml_rt::{
 };
 
 use crate::apply;
-use crate::cells::{self, CellRef, Raise, Runnable, Take, WaitToken};
+use crate::cells::{self, CellRef, JobSource, Raise, Runnable, Take, WaitToken};
 use crate::code::{CodeBase, ForkTable, UnwindEntry};
 use crate::data;
 use crate::driver::DriverKind;
 use crate::error::VmFault;
 use crate::ffi;
+use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
     JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Rescue, Scheduler, TaskId,
@@ -41,6 +42,7 @@ macro_rules! here {
         };
     };
 }
+pub(crate) use here;
 
 // 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
 const _: () = assert!(cells::WOKE == eml_lir::WAKE_WOKE as i64);
@@ -3224,6 +3226,60 @@ fn async_op<R: Exec>(
             }
             task.set(dst, Word::UNIT);
         }
+        Extern::TlsSubmitClient => {
+            // `host`と`pem`は借りるので、写して手放さない。仕事はプールのスレッドで走るので、根はここでrunのdriverの
+            // 種類から選ぶ (docs/spec/stdlib.mdの「`Std.Tls`」)
+            let host = unsafe { &*ctx.heap().string(task.get(arg(0)))? }.to_owned();
+            let pem = unsafe { &*ctx.heap().string(task.get(arg(1)))? }.to_owned();
+            let roots = tls::Roots::of(sched.driver_kind);
+            jobs::submit::<R, _>(ctx, task, sched, dst, TLS_JOB, move || {
+                tls::client_conn(roots, &host, pem.as_bytes())
+            })?;
+        }
+        Extern::TlsSubmitPush => {
+            // `Conn`は消費するので、中身を取り出して箱を手放してから出す。記録はヒープの語を持たない。バイト列は
+            // 借りるので、手放さずに写す (docs/spec/vm.mdの「プールの仕事」)
+            let (bytes, conn) = (task.get(arg(0)), task.get(arg(1)));
+            let c = unsafe { ctx.heap().foreign_take::<tls::TlsConn>(conn) }?;
+            unsafe { ctx.heap_mut().decref(conn) }?;
+            let b = unsafe { &*ctx.heap().bytes(bytes)? }.to_vec();
+            // `Ok`は、両方の仕事が`take_conn`の答えの型を分け合うためだけにある
+            jobs::submit::<R, _>(ctx, task, sched, dst, TLS_JOB, move || {
+                Ok::<_, String>(tls::push_conn(c, b))
+            })?;
+        }
+        ext @ Extern::TlsTakeConn => {
+            let (token, wake) = (task.raw(arg(0)), task.raw(arg(1)));
+            let outcome = jobs::take::<R, Result<tls::TlsConn, String>>(
+                ctx,
+                task,
+                &sched.cells,
+                token,
+                wake,
+                TLS_JOB,
+            )?;
+            let raise = match outcome {
+                jobs::Outcome::Woke(Ok(c)) => {
+                    let w = unsafe { ctx.heap_mut() }.alloc_foreign(c, true);
+                    task.set(dst, w);
+                    return Ok(());
+                }
+                // `Err`を返すのは`submit_client`の仕事だけで、接続の設定の誤りである
+                jobs::Outcome::Woke(Err(message)) => Raise::Io {
+                    kind: tls::SETUP_KIND,
+                    message,
+                },
+                jobs::Outcome::Failed(e) => Raise::Io {
+                    kind: io_kind(&e),
+                    message: format!("cannot run TLS: {e}"),
+                },
+                jobs::Outcome::Cancelled => Raise::Io {
+                    kind: cells::IO_CANCELLED,
+                    message: "task was cancelled".into(),
+                },
+            };
+            return raise_again::<R>(code, ctx, task, dst, raise, ext);
+        }
         Extern::NetLocalPort => {
             // リスナーは借りるだけで、組を作る後の `con` が消費する
             let port = cells::local_port(ctx, task.get(arg(0)))?;
@@ -3408,12 +3464,15 @@ fn async_op<R: Exec>(
         }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net, Std.Stream and Std.Exec reached the Async instruction",
+                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net, Std.Stream, Std.Exec and Std.Tls reached the Async instruction",
             ));
         }
     }
     Ok(())
 }
+
+/// `Std.Tls`のプールの仕事の出どころ。受け付けの行はどれも、ただ1つの取り出しの行`take_conn`の名前で出す。
+const TLS_JOB: JobSource = JobSource::Std(Extern::TlsTakeConn as u32);
 
 /// driver の誤りの種類を `IOErrorKind` のタグにする。extern の誤りと同じく、最初の5種類のうち I/O の4つだけを出す
 /// (docs/spec/stdlib.md の「`Std.Net`」)。
@@ -3439,8 +3498,8 @@ fn bind_here<M: Mode, P: Policy>(
     Ok(())
 }
 
-/// `Op::FfiSubmit`。仕事は `ffi::job` が作り、ここで記録の host の driver に出す。登録表に触れる所は `Std.Net` の
-/// 受け付けと同じくここに置く (docs/spec/vm.md の「`blocking` の呼び出し」)。
+/// `Op::FfiSubmit`。仕事は`ffi::job`が作り、stdのプールの仕事と同じ`jobs::submit_op`で記録のhostのdriverに出す
+/// (docs/spec/vm.md の「`blocking` の呼び出し」)。
 fn ffi_submit<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -3449,30 +3508,14 @@ fn ffi_submit<R: Exec>(
     dst: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    let Some((c, job)) = ffi::job::<R>(code, ctx, task, dst, at)? else {
+    let Some((from, job)) = ffi::job::<R>(code, ctx, task, dst, at)? else {
         return Ok(());
     };
-    let me = current_cell(task)?;
-    // 仕事は本物の時計の run では自分の driver のプールで走る (docs/spec/vm.md の「時計と driver」)
-    sched.own_driver()?;
-    here!(sched, post, here);
-    let token = cells::submit_job(
-        &sched.cells,
-        &here,
-        ctx,
-        sched.driver.as_deref_mut(),
-        task.worker,
-        task.depth_offset,
-        me,
-        c,
-        job,
-    )?;
-    task.set_raw(dst, token);
-    Ok(())
+    jobs::submit_op::<R>(ctx, task, sched, dst, from, job)
 }
 
 /// 今の `Task` のタスクのセル。`main`、`par` の右の子、`compute` の仕事は `Async` の操作を実行しない。
-fn current_cell(task: &Task) -> Result<CellRef, VmFault> {
+pub(crate) fn current_cell(task: &Task) -> Result<CellRef, VmFault> {
     task.cell
         .ok_or(VmFault::Internal("an Async operation runs outside a task"))
 }
@@ -4241,12 +4284,7 @@ fn run_extern<R: Exec>(
                 let w = ctx.proc_close_stdin(task.get(arg(0)))?;
                 task.set(dst, w);
             }
-            // TLS の状態の行。待たないので普通の extern で、投げるのは `client_raw` だけである
-            // (docs/spec/stdlib.md の「`Std.Tls`」)
-            Extern::TlsClientRaw => {
-                let w = tls::client_raw(ctx, task.get(arg(0)), task.get(arg(1)))?;
-                task.set(dst, w);
-            }
+            // TLSの状態の行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Tls`」)
             Extern::TlsPushTls => {
                 let w = tls::push_tls(ctx, task.get(arg(0)), task.get(arg(1)))?;
                 task.set(dst, w);
@@ -4631,7 +4669,10 @@ fn run_extern<R: Exec>(
             | Extern::ExecOpOutcome
             | Extern::ExecOpPrefix
             | Extern::ExecFinish
-            | Extern::ExecReap => {
+            | Extern::ExecReap
+            | Extern::TlsSubmitClient
+            | Extern::TlsSubmitPush
+            | Extern::TlsTakeConn => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

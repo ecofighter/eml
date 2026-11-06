@@ -75,6 +75,25 @@ pub(crate) fn value<T: 'static>(h: *mut Header, Tracked(perm): Tracked<&BlockPer
     ((table.type_id)() == TypeId::of::<T>()).then(|| slot_ptr(h, 1).cast())
 }
 
+/// 値が`T`なら、値を移して返し、表を`Taken`の表に替える。移した後の箱の破棄処理は何もせず、`value::<T>`は
+/// `None`を返す。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn take<T: Send + 'static>(h: *mut Header, Tracked(perm): Tracked<&BlockPerm>) -> Option<
+    T,
+> {
+    let table = unsafe { slot_ptr(h, 0).cast::<&'static VTable>().read() };
+    if (table.type_id)() != TypeId::of::<T>() {
+        return None;
+    }
+    let taken: &'static VTable = &Table::<Taken>::VTABLE;
+    unsafe {
+        let value = slot_ptr(h, 1).cast::<T>().read();
+        slot_ptr(h, 0).cast::<&'static VTable>().write(taken);
+        Some(value)
+    }
+}
+
 /// 破棄処理と値の位置。物体の状態を替えたあとで呼べるように、先に読み出しておく。
 #[verifier::external_body]
 pub(crate) struct Finalizer {
@@ -99,6 +118,9 @@ pub(crate) fn run_finalizer(f: Finalizer, Tracked(perm): Tracked<&BlockPerm>) {
 }
 
 } // verus!
+
+/// `take`が値を移した後の箱の印。破棄処理は何もしない。
+struct Taken;
 
 impl<T: Send + 'static> Table<T> {
     const VTABLE: VTable = VTable {

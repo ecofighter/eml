@@ -426,6 +426,11 @@ impl Run {
         (self.next_place.fetch_add(1, Ordering::Relaxed) % live) as u32
     }
 
+    /// runのdriverの出どころ。
+    pub(crate) fn driver_kind(&self) -> DriverKind {
+        self.clock.kind()
+    }
+
     /// worker `k` のタスクが新しいハンドルを作る操作を受け付ける worker (host)。本物の時計の run では各 worker が自分の
     /// driver を持つので `k` である。テストの driver の仮想のネットワークは driver ごとにあるので、ほかの run では driver を
     /// worker 0 の1つに集め、どの worker の操作も worker 0 が driver に出す (docs/spec/vm.md の「時計と driver」)。

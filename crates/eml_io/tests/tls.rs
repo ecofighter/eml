@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use eml_io::TestDriver;
 use eml_rt::{Done, IoDriver, IoHandle, Op, OpKey, RawBuf, Submit};
-use eml_tls::fixtures::CA_PEM;
-use eml_tls::{Conn, FAILED, HANDSHAKING, PEER_CLOSED, TRUNCATED};
+use eml_tls::fixtures::{CA_PEM, OTHER_CA_PEM};
+use eml_tls::{Conn, FAILED, HANDSHAKING, Name, PEER_CLOSED, TRUNCATED, Trust};
 
 fn raw(bytes: &mut [u8]) -> RawBuf {
     RawBuf {
@@ -156,8 +156,13 @@ fn connected(driver: &mut TestDriver, host: &str) -> (IoHandle, IoHandle) {
     (client, server)
 }
 
+fn client_with(ca_pem: &[u8]) -> Conn {
+    let name = Name::parse("tls.localhost").unwrap();
+    Conn::client(&name, &Trust::fixtures(ca_pem).unwrap()).unwrap()
+}
+
 fn client() -> Conn {
-    Conn::client("tls.localhost", CA_PEM).unwrap()
+    client_with(CA_PEM)
 }
 
 #[test]
@@ -230,7 +235,7 @@ fn the_cut_host_closes_without_close_notify() {
 fn a_rejected_certificate_closes_the_plaintext_end() {
     let mut driver = TestDriver::new(None);
     let (client_end, server) = connected(&mut driver, "tls.localhost");
-    let mut conn = Conn::client("tls.localhost", b"").unwrap();
+    let mut conn = client_with(OTHER_CA_PEM);
     handshake(&mut driver, client_end, &mut conn);
     assert_ne!(conn.status() & FAILED, 0);
     settle(&mut driver);

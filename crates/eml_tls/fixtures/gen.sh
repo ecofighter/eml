@@ -9,9 +9,10 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 # CA の鍵は残さない。leaf に署名したら捨てて、これ以上の証明書を作れないようにする
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$tmp/ca.key"
-# 期限を 100 年に取り、テストが時計に左右されないようにする
+# 有効期間は1か月にする。handshakeの成功を期待するテストはその中の固定の時刻`fixtures::NOW`で確かめるので、結果は
+# 日付に左右されない。現実の時刻では、これらの証明書は期限切れである
 openssl req -x509 -new -key "$tmp/ca.key" -sha256 -subj "/CN=eml test CA" \
-  -not_before 20260101000000Z -not_after 21260101000000Z \
+  -not_before 20260101000000Z -not_after 20260201000000Z \
   -addext "basicConstraints=critical,CA:TRUE" \
   -addext "keyUsage=critical,keyCertSign,cRLSign" \
   -out "$dir/ca.pem"
@@ -25,10 +26,19 @@ extendedKeyUsage=serverAuth
 subjectAltName=DNS:tls.localhost,DNS:tls-cut.localhost,DNS:localhost,IP:127.0.0.1
 EXT
 openssl x509 -req -in "$tmp/leaf.csr" -CA "$dir/ca.pem" -CAkey "$tmp/ca.key" -sha256 \
-  -not_before 20260101000000Z -not_after 21260101000000Z \
+  -not_before 20260101000000Z -not_after 20260201000000Z \
   -extfile "$tmp/leaf.ext" -out "$dir/cert.pem"
+# 拒否のテストのための、何にも署名していない2つ目のCA。その鍵も捨てる
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$tmp/other.key"
+openssl req -x509 -new -key "$tmp/other.key" -sha256 -subj "/CN=eml other CA" \
+  -not_before 20260101000000Z -not_after 20260201000000Z \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -out "$dir/other-ca.pem"
 # UI テストはテストファイルのあるディレクトリを根にするので、カテゴリごとに CA を写す
 for copy in "$root/tests/ui/run/tls" "$root/tests/ui/run-fail/tls" "$root/tests/ui/run/http" "$root/tests/ui/run-fail/http"; do
   mkdir -p "$copy"
   cp "$dir/ca.pem" "$copy/ca.pem"
 done
+# 2つ目のCAを読むのは拒否のテストだけなので、その分類にだけ写す
+cp "$dir/other-ca.pem" "$root/tests/ui/run-fail/tls/other-ca.pem"

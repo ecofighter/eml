@@ -13,7 +13,7 @@ doctest = false
 
 [dependencies]
 rustls.workspace = true
-webpki-roots.workspace = true
+rustls-platform-verifier.workspace = true
 
 [[test]]
 name = "integration"
