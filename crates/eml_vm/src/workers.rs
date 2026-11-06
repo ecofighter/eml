@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use eml_rt::{Control, Ctx, HostRef, IoDriver, IoWaker, Mode, Stop, Word};
 
-use crate::cells::{CellRef, HostBin, Post, Runnable, Shared, Woken};
+use crate::cells::{CellRef, HostBin, Post, Shared, Woken};
 use crate::code::CodeBase;
 use crate::counters::Counters;
 use crate::doorbell::Doorbell;
@@ -51,8 +51,6 @@ pub struct Entry {
     pub(crate) kind: EntryKind,
     /// 始める仕事では閉包、再開する仕事では継続で、項が参照を1つ持つ。
     pub(crate) word: Word,
-    /// 救済で受けた項。その間はもう一度盗まない。
-    pub(crate) rescued: bool,
 }
 
 /// `Entry` が入るエントリの関数と、語のほかに渡す即値。
@@ -62,29 +60,6 @@ pub(crate) enum EntryKind {
     Resume { wake: i64 },
     ResumeIo { wake: i64, op: i64 },
 }
-
-impl Ready {
-    /// 欄の `ready_entries` に数える項か。救済で受けていない、始める仕事と `resume_task` で再開する仕事である。
-    pub(crate) fn counted(&self) -> bool {
-        matches!(
-            self,
-            Ready::Entry(Entry {
-                rescued: false,
-                kind: EntryKind::Start | EntryKind::Resume { .. },
-                ..
-            })
-        )
-    }
-}
-
-/// worker `victim` の仕事を救済してよいか。今はいつも真である (docs/spec/vm.md の「救済」)。
-pub(crate) fn rescuable(run: &Run, victim: usize) -> bool {
-    let _ = (run, victim);
-    true
-}
-
-/// 1回の救済で見る項の数の上限。実行待ちと受け箱のそれぞれに掛かる。
-pub(crate) const STEAL_SCAN: usize = 1024;
 
 /// ほかの worker から受け箱に届く知らせ (docs/spec/vm.md の「`par` の fork と join」「タスクとスケジュール」)。
 /// 語を運ぶのは `Child`、`Joined`、`Place` だけで、ほかの `Async` のタスクの知らせはセルの番号しか持たない。driver の
@@ -112,23 +87,10 @@ pub(crate) enum Notice {
     CancelIo(CellRef),
     /// この worker が持ち主の記録に、host が結果を置いた。受けた worker が当てて段階を進める。
     Completion(CellRef),
-    /// 救済の頼み。`victim` の仕事を盗めと、空いていた worker か `RescueAlways` の前の worker が頼む。語を持たず、
-    /// `in_flight` に数えない。run の終わりでは仕事に数えず、捨てる (docs/spec/vm.md の「タスクとスケジュール」)。
-    Rescue { victim: u32 },
-    /// この worker が持ち主の、動いているタスク `cell` への上限の旗。受けた worker が登録表の lock の下で旗がまだ
-    /// 立っているかを確かめ、立っていればその VM の `Task` に旗を付ける。語を持たず、`in_flight` に数えず、救済で
-    /// 外さない。run の終わりでは仕事に数えず、捨てる (docs/spec/vm.md の「タスクとスケジュール」「タスクの上限」)。
+    /// このworkerが持ち主の、動いているタスク`cell`への上限の旗。受けたworkerが登録表のlockの下で旗がまだ立っているかを
+    /// 確かめ、立っていればそのVMの`Task`に旗を付ける。語を持たず、`in_flight`に数えない。runの終わりでは仕事に数えず、
+    /// 捨てる (docs/spec/vm.mdの「タスクとスケジュール」「タスクの上限」)。
     Limit(CellRef),
-}
-
-impl Notice {
-    /// 救済が受け箱から外せるかもしれない知らせか。`Place` と、`op` を持たない `Wake` である。
-    fn stealable(&self) -> bool {
-        matches!(
-            self,
-            Notice::Place { .. } | Notice::Wake(Woken::Task { op: None, .. })
-        )
-    }
 }
 
 /// 登録表の lock の下から、ほかの worker の受け箱に `Async` のタスクの知らせを積む道 (docs/spec/vm.md の
@@ -211,9 +173,6 @@ pub(crate) struct Retired<M: Mode> {
     /// VM が数える回数。
     pub(crate) counts: RunCounts,
     pub(crate) preemptions: u64,
-    /// 1つ以上を盗んだ救済の数と、救済で移した項の数 (docs/spec/vm.md の「`RunStats`」)。
-    pub(crate) rescues: u64,
-    pub(crate) rescued: u64,
     /// worker のタスクのスタックで同時に使った語の数の最大。
     pub(crate) peak_stack: u64,
     /// `Ctx` を作った直後のヒープの仕事。ヒープごとのダミーの物体の確保は実行の仕事ではないので、`RunStats` から引く
@@ -251,22 +210,6 @@ pub(crate) struct Slot {
     pub(crate) switches: AtomicU64,
     /// 走れるタスクの列。受け箱とは別の lock で、持つ間はほかの lock を取らない。触れるのは `Run` の列の操作だけである。
     ready: Mutex<VecDeque<Ready>>,
-    /// 列の項のうち `Ready::counted` に当たるものの数。列の操作が列の lock の下で書く。
-    pub(crate) ready_entries: AtomicUsize,
-    /// 持ち主が待ちの後始末を終えたタスクのセルの数。単調に増える。
-    pub(crate) settled: AtomicU64,
-    /// 受け箱の知らせのうち、救済で盗めるかもしれないもの (`Place` と、`op` を持たない `Wake`) の数。知らせを積むとき、
-    /// 取り出すとき、救済が受け箱から外すときに、欄の lock の下で書く。
-    pub(crate) inbox_work: AtomicUsize,
-    /// 救済が空振りに終わった。立っている間は、下の3つの数が変わるまで、監視のスレッドはこの worker を飛ばす。
-    /// 3つの数を書いてから Release で立て、読む側は Acquire で読む (docs/spec/vm.md の「救済」)。
-    pub(crate) futile: AtomicBool,
-    pub(crate) futile_ready: AtomicUsize,
-    pub(crate) futile_inbox: AtomicUsize,
-    pub(crate) futile_settled: AtomicU64,
-    /// `RescueAlways` の頼んだ印。持ち主が `Rescue` を送る前に立て、頼まれた worker が盗む前に下ろす
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) asked: AtomicBool,
     /// `current`、`bytes`、`mark` の版の数。持ち主が3つを書く前に奇数に、書いた後に偶数に進める。読み手は前後で同じ
     /// 偶数を読めたときだけ3つを組として使う。同じセルを数え直して公開し直すことがあるので、`current` を2回比べる
     /// 形では古い組を受け入れてしまう (docs/spec/vm.md の「タスクとスケジュール」)。
@@ -278,8 +221,7 @@ pub(crate) struct Slot {
     /// `bytes + taken(k) - mark` である。
     pub(crate) bytes: AtomicUsize,
     pub(crate) mark: AtomicUsize,
-    /// この worker の実行待ちのうち、数のいちばん大きいタスクのセルの符号とその数。なければ `NO_CELL`。持ち主が
-    /// 書き、救済した worker は盗んだタスクの分を `NO_CELL` に戻す。
+    /// このworkerの実行待ちのうち、数のいちばん大きいタスクのセルの符号とその数。なければ`NO_CELL`。持ち主だけが書く。
     pub(crate) top: AtomicU64,
     pub(crate) top_bytes: AtomicUsize,
 }
@@ -364,14 +306,6 @@ impl Run {
                 bin: OnceLock::new(),
                 switches: AtomicU64::new(0),
                 ready: Mutex::new(VecDeque::new()),
-                ready_entries: AtomicUsize::new(0),
-                settled: AtomicU64::new(0),
-                inbox_work: AtomicUsize::new(0),
-                futile: AtomicBool::new(false),
-                futile_ready: AtomicUsize::new(0),
-                futile_inbox: AtomicUsize::new(0),
-                futile_settled: AtomicU64::new(0),
-                asked: AtomicBool::new(false),
                 seq: AtomicU64::new(0),
                 current: AtomicU64::new(NO_CELL),
                 bytes: AtomicUsize::new(0),
@@ -506,9 +440,6 @@ impl Run {
         let slot = &self.slots[k];
         let parked = {
             let mut state = lock(&slot.state);
-            if notice.stealable() {
-                slot.inbox_work.fetch_add(1, Ordering::Relaxed);
-            }
             state.notices.push(notice);
             slot.has_notices.store(true, Ordering::Release);
             let parked = state.parked;
@@ -540,23 +471,12 @@ impl Run {
 
     /// worker `k` の実行待ちの列の後ろに積む。
     pub(crate) fn push_ready(&self, k: usize, item: Ready) {
-        let slot = &self.slots[k];
-        let mut ready = lock(&slot.ready);
-        if item.counted() {
-            slot.ready_entries.fetch_add(1, Ordering::Relaxed);
-        }
-        ready.push_back(item);
+        lock(&self.slots[k].ready).push_back(item);
     }
 
     /// worker `k` の実行待ちの列から、方針 `policy` が選ぶ項を取り出す。
     pub(crate) fn pick_ready<P: Policy>(&self, k: usize, policy: &mut P) -> Option<Ready> {
-        let slot = &self.slots[k];
-        let mut ready = lock(&slot.ready);
-        let item = policy.pick(&mut ready)?;
-        if item.counted() {
-            slot.ready_entries.fetch_sub(1, Ordering::Relaxed);
-        }
-        Some(item)
+        policy.pick(&mut lock(&self.slots[k].ready))
     }
 
     /// 起こしたタスク `id` を、方針 `policy` が決める位置で worker `k` の実行待ちの列に入れる。
@@ -566,26 +486,13 @@ impl Run {
 
     /// worker `k` の実行待ちの列のうち、`keep` が真を返す項だけを順に残す。`keep` は列の lock の下で呼ぶので、項を
     /// 見るほかに何もしない。
-    pub(crate) fn retain_ready(&self, k: usize, mut keep: impl FnMut(&Ready) -> bool) {
-        let slot = &self.slots[k];
-        let mut ready = lock(&slot.ready);
-        let mut removed = 0;
-        ready.retain(|item| {
-            let kept = keep(item);
-            if !kept && item.counted() {
-                removed += 1;
-            }
-            kept
-        });
-        if removed > 0 {
-            slot.ready_entries.fetch_sub(removed, Ordering::Relaxed);
-        }
+    pub(crate) fn retain_ready(&self, k: usize, keep: impl FnMut(&Ready) -> bool) {
+        lock(&self.slots[k].ready).retain(keep);
     }
 
-    /// worker `k` の実行待ちのタスク `cell` (数 `count`) を、今の `top` より大きいか同じなら `top` にする。同じセルなら
-    /// 数を書き直す。`top` と `top_bytes` は組として読めないので、読み手は古いセルと新しい数の組を見うる (救済が `top`
-    /// を消した直後に持ち主がより小さい数を書いたときなど)。旗はそれでも生きたセルへ行き、数は選び方を変えるだけなので
-    /// 害はない (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// worker `k`の実行待ちのタスク`cell` (数`count`) を、今の`top`より大きいか同じなら`top`にする。
+    /// 同じセルなら数を書き直す。`top`と`top_bytes`は組として読めないので、読み手は古いセルと新しい数の組を見うる。
+    /// 旗はそれでも生きたセルへ行き、数は選び方を変えるだけなので害はない (docs/spec/vm.mdの「タスクとスケジュール」)。
     pub(crate) fn offer_top(&self, k: usize, cell: CellRef, count: usize) {
         let slot = &self.slots[k];
         let word = cell_word(cell);
@@ -615,111 +522,9 @@ impl Run {
         lock(&self.slots[k].ready).is_empty()
     }
 
-    /// 救済が worker `victim` の実行待ちの列から盗む。列の lock の下で、先頭から `STEAL_SCAN` 個までの項を2回の走査で
-    /// 見る。1回目は、`take` が仕事を返した項の位置を `budget` 個まで覚え、仕事を順に `out` へ積む。2回目は、覚えた
-    /// 項を列から外し、`ready_entries` を外した分だけ減らす。最後に覚えた項より先には触れない。`take` が誤りを返したら
-    /// 列を変えずにすぐ返す。返すのは外した数と、列が上限より長かったかである (docs/spec/vm.md の「救済」)。
-    pub(crate) fn steal_ready<E>(
-        &self,
-        victim: usize,
-        budget: usize,
-        mut take: impl FnMut(&Ready) -> Result<Option<Runnable>, E>,
-        out: &mut Vec<Runnable>,
-    ) -> Result<(usize, bool), E> {
-        let slot = &self.slots[victim];
-        let mut ready = lock(&slot.ready);
-        let truncated = ready.len() > STEAL_SCAN;
-        let mut chosen = Vec::new();
-        for (i, item) in ready.iter().take(STEAL_SCAN).enumerate() {
-            if chosen.len() == budget {
-                break;
-            }
-            if let Some(run) = take(item)? {
-                chosen.push(i);
-                out.push(run);
-            }
-        }
-        let Some(&last) = chosen.last() else {
-            return Ok((0, truncated));
-        };
-        // 覚えた項までの前の部分だけを外し、残す項を元の順で前に戻す。列の全体を詰め直さないためである
-        let prefix: Vec<Ready> = ready.drain(..=last).collect();
-        let mut counted = 0;
-        let mut marks = chosen.iter().copied().peekable();
-        let mut kept = Vec::with_capacity(prefix.len() - chosen.len());
-        for (i, item) in prefix.into_iter().enumerate() {
-            if marks.next_if_eq(&i).is_some() {
-                if item.counted() {
-                    counted += 1;
-                }
-            } else {
-                kept.push(item);
-            }
-        }
-        for item in kept.into_iter().rev() {
-            ready.push_front(item);
-        }
-        slot.ready_entries.fetch_sub(counted, Ordering::Relaxed);
-        Ok((chosen.len(), truncated))
-    }
-
-    /// 救済が worker `victim` の受け箱から盗む。受け箱の lock の下で、先頭から `STEAL_SCAN` 個までの知らせを
-    /// `steal_ready` と同じ2回の走査で見る。外した数だけ `inbox_work` を減らし、受け箱が空になれば `has_notices` を
-    /// 下ろす。ほかの知らせは順を保って残す (docs/spec/vm.md の「救済」)。
-    pub(crate) fn steal_inbox<E>(
-        &self,
-        victim: usize,
-        budget: usize,
-        mut take: impl FnMut(&Notice) -> Result<Option<Runnable>, E>,
-        out: &mut Vec<Runnable>,
-    ) -> Result<(usize, bool), E> {
-        let slot = &self.slots[victim];
-        let mut state = lock(&slot.state);
-        let notices = &mut state.notices;
-        let truncated = notices.len() > STEAL_SCAN;
-        let mut chosen = Vec::new();
-        for (i, notice) in notices.iter().take(STEAL_SCAN).enumerate() {
-            if chosen.len() == budget {
-                break;
-            }
-            if let Some(run) = take(notice)? {
-                chosen.push(i);
-                out.push(run);
-            }
-        }
-        let Some(&last) = chosen.last() else {
-            return Ok((0, truncated));
-        };
-        let mut marks = chosen.iter().copied().peekable();
-        let mut i = 0;
-        // 外す知らせは `Place` と `Wake` だけで、語は `out` の仕事に移してある
-        notices.retain(|_| {
-            let keep = i > last || marks.next_if_eq(&i).is_none();
-            i += 1;
-            keep
-        });
-        let work = slot.inbox_work.fetch_sub(chosen.len(), Ordering::Relaxed);
-        debug_assert!(
-            work >= chosen.len(),
-            "the inbox has more stealable notices than it counts"
-        );
-        if notices.is_empty() {
-            slot.has_notices.store(false, Ordering::Relaxed);
-        }
-        Ok((chosen.len(), truncated))
-    }
-
     /// 空いている worker を1つ取り出す。取り出した worker には、置く側が `Child` を1つ送る。
     pub(crate) fn pop_idle(&self) -> Option<usize> {
         lock(&self.idle).pop()
-    }
-
-    /// 空いている worker のうち、`victim` でなく `live` 未満のいちばん新しいものを1つ取り出す。救済を頼む側が使う。
-    /// `idle` の lock (末端の lock) だけを取る。取り出した worker には、頼む側が `Rescue` を1つ送る。
-    pub(crate) fn pop_idle_except(&self, victim: usize, live: usize) -> Option<usize> {
-        let mut idle = lock(&self.idle);
-        let at = idle.iter().rposition(|&r| r != victim && r < live)?;
-        Some(idle.remove(at))
     }
 
     /// すべての worker を起こす。止めるビットを眠っている worker に読ませるときに呼ぶ。
@@ -742,7 +547,6 @@ impl Run {
         let slot = &self.slots[k];
         let mut state = lock(&slot.state);
         slot.has_notices.store(false, Ordering::Relaxed);
-        slot.inbox_work.store(0, Ordering::Relaxed);
         std::mem::take(&mut state.notices)
     }
 
@@ -966,8 +770,6 @@ fn run_worker<M: Mode, P: Policy>(
                 ctx: ManuallyDrop::into_inner(ctx),
                 counts: done.counts,
                 preemptions: done.preemptions,
-                rescues: done.rescues,
-                rescued: done.rescued,
                 peak_stack: done.peak_stack,
                 base,
                 left: done.left,
@@ -992,8 +794,6 @@ fn run_worker<M: Mode, P: Policy>(
 struct Done {
     counts: RunCounts,
     preemptions: u64,
-    rescues: u64,
-    rescued: u64,
     peak_stack: u64,
     left: bool,
     kept_pending: bool,
@@ -1026,9 +826,10 @@ fn work<M: Mode, P: Policy>(
     );
     let mut counts = RunCounts::default();
     let (error, peak_stack) = crate::vm::work::<ExecWith<M, P>>(code, ctx, &mut sched, &mut counts);
-    // `Finish` の後にはいつも集める地点が続き、その最初の区間が `left` を空にする (docs/spec/vm.md の「救済」)
+    // `Finish`の後にはいつも集める地点が続き、その最初の区間が`added`を空にする (docs/spec/vm.mdの
+    // 「タスクとスケジュール」)
     debug_assert!(
-        sched.left.is_empty(),
+        sched.added.is_empty(),
         "an entry is left unsettled when a worker exits"
     );
     // 止めるビットと `END` は安全点か空きの待ちでだけ見るので、ここに来た worker は集める地点の途中で抜けておらず、
@@ -1061,8 +862,6 @@ fn work<M: Mode, P: Policy>(
     Done {
         counts,
         preemptions: sched.preemptions(),
-        rescues: sched.rescues,
-        rescued: sched.rescued,
         peak_stack,
         left,
         kept_pending,
@@ -1283,11 +1082,11 @@ impl<P: Policy> Scheduler<P> {
         driver.pending() > 0
     }
 
-    /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、この worker が走らせるはずの仕事があるかを
-    /// 返す。実行待ちの列に残った `Entry`、右の子と仕事 (`Child`)、持ち主が自分のタスクの `Place`、継続を取り出せる
-    /// `Wake` を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`、`Rescue`、`Limit` と、もう待っていないセルへの起こしは数えない。
-    /// 登録表は書き換えず、列の項と知らせの語は手放さない。数えたら run は誤りで終わり、回復がヒープを捨てるからである
-    /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
+    /// worker `k` (`k` ≥ 1) が抜ける前に、受け箱に残った知らせを取り出し、このworkerが走らせるはずの仕事があるかを
+    /// 返す。実行待ちの列に残った`Entry`、右の子と仕事 (`Child`)、持ち主が自分のタスクの`Place`、
+    /// 継続を取り出せる`Wake`を数え、`Joined`、`Cancel`、`Submit`、`CancelIo`、`Completion`、`Limit`と、
+    /// もう待っていないセルへの起こしは数えない。登録表は書き換えず、列の項と知らせの語は手放さない。
+    /// 数えたらrunは誤りで終わり、回復がヒープを捨てるからである (docs/spec/vm.mdの「誤り、止めること、終わり」)。
     pub(crate) fn left_notices(&mut self) -> bool {
         let mut left = false;
         self.run.retain_ready(self.index, |item| {
@@ -1312,7 +1111,6 @@ impl<P: Policy> Scheduler<P> {
                 | Notice::Submit(_)
                 | Notice::CancelIo(_)
                 | Notice::Completion(_)
-                | Notice::Rescue { .. }
                 | Notice::Limit(_) => false,
             };
         }
@@ -1338,19 +1136,6 @@ impl<P: Policy> Scheduler<P> {
 
 #[cfg(test)]
 impl Run {
-    /// worker `k` の実行待ちの列のうち、`ready_entries` に数える項の数を数え直す。
-    pub(crate) fn count_entries(&self, k: usize) -> usize {
-        lock(&self.slots[k].ready)
-            .iter()
-            .filter(|item| item.counted())
-            .count()
-    }
-
-    /// 空いている worker の並びを、古い順に `workers` へ置き換える。
-    pub(crate) fn set_idle(&self, workers: &[usize]) {
-        *lock(&self.idle) = workers.to_vec();
-    }
-
     /// worker `k` を眠った形にする。空きの待ちが眠るときと同じく、欄の lock の下で `running` から引く。
     pub(crate) fn park(&self, k: usize) {
         let mut state = lock(&self.slots[k].state);
@@ -1376,8 +1161,8 @@ mod tests {
 
     use eml_rt::{Checked, Control, HeapError, Limits, Stop};
 
-    use super::{Entry, EntryKind, Notice, Ready, Run, settle};
-    use crate::cells::{CellRef, MailItem, Registry, Shared, Woken};
+    use super::{Notice, Run, settle};
+    use crate::cells::{CellRef, MailItem, Registry, Shared};
     use crate::driver::RunClock;
     use crate::sched::{Scheduler, Sequential};
     use crate::{Machine, RuntimeError, VmFault};
@@ -1413,81 +1198,6 @@ mod tests {
             assert_eq!(settle(result(i), Some(heap())), Err(heap()));
             assert_eq!(settle(result(i), None), result(i));
         }
-    }
-
-    /// 欄の `ready_entries` は、列の `Entry` のうち救済で受けていない始める仕事と `resume_task` の再開の数で、積む、
-    /// 取る、残すのどれの後も数え直した値と等しい。`ResumeIo`、救済で受けた項、`Ready::Task` は数えない
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
-    #[test]
-    fn ready_entries_follows_push_pick_and_retain() {
-        let run = Run::new(1, None, RunClock::Virtual(Arc::default()), Arc::default());
-        let entry = |index: i64, kind: EntryKind, rescued: bool| {
-            Ready::Entry(Entry {
-                cell: CellRef::decode(index),
-                worker: 1,
-                kind,
-                word: eml_rt::Word::UNIT,
-                rescued,
-            })
-        };
-        let counts = |run: &Run| {
-            let counted = run.slots[0].ready_entries.load(Ordering::Relaxed);
-            assert_eq!(counted, run.count_entries(0));
-            counted
-        };
-        assert!(run.ready_is_empty(0));
-        run.push_ready(0, Ready::Task(5));
-        run.push_ready(0, entry(1, EntryKind::Start, false));
-        run.push_ready(0, entry(2, EntryKind::Resume { wake: 0 }, false));
-        run.push_ready(0, entry(3, EntryKind::ResumeIo { wake: 0, op: 7 }, false));
-        run.push_ready(0, entry(4, EntryKind::Start, true));
-        run.push_ready(0, entry(5, EntryKind::Resume { wake: 0 }, true));
-        assert_eq!(counts(&run), 2);
-        let mut policy = Sequential;
-        assert!(matches!(
-            run.pick_ready(0, &mut policy),
-            Some(Ready::Task(5))
-        ));
-        assert_eq!(counts(&run), 2);
-        assert!(matches!(
-            run.pick_ready(0, &mut policy),
-            Some(Ready::Entry(Entry {
-                kind: EntryKind::Start,
-                rescued: false,
-                ..
-            }))
-        ));
-        assert_eq!(counts(&run), 1);
-        // 起こしたタスクは数を変えない。`Sequential` は列の前に入れる
-        run.wake_ready(0, &mut policy, 6);
-        assert_eq!(counts(&run), 1);
-        // 数えない項を外しても数は変わらず、数える項を外すと減る
-        run.retain_ready(0, |item| {
-            !matches!(
-                item,
-                Ready::Entry(Entry {
-                    kind: EntryKind::ResumeIo { .. },
-                    ..
-                })
-            )
-        });
-        assert_eq!(counts(&run), 1);
-        run.retain_ready(
-            0,
-            |item| !matches!(item, Ready::Entry(e) if e.cell == CellRef::decode(2)),
-        );
-        assert_eq!(counts(&run), 0);
-        assert!(matches!(
-            run.pick_ready(0, &mut policy),
-            Some(Ready::Task(6))
-        ));
-        // 救済で受けた2つの項は数えずに残る
-        assert!(!run.ready_is_empty(0));
-        assert!(run.pick_ready(0, &mut policy).is_some());
-        assert!(run.pick_ready(0, &mut policy).is_some());
-        assert_eq!(counts(&run), 0);
-        assert!(run.ready_is_empty(0));
-        assert!(run.pick_ready(0, &mut policy).is_none());
     }
 
     /// 眠っている worker を起こすと `running` に数え、もう一度起こしても数は増えない。
@@ -1607,50 +1317,6 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             Err(VmFault::Internal("a task is left at the end"))
         );
         assert_eq!(super::end_check(false, false), Ok(()));
-    }
-
-    /// `inbox_work` は、受け箱に積んだ `Place` と `op` を持たない `Wake` の数だけ増え、ほかの知らせでは増えない。
-    /// 受け箱を取り出すと 0 に戻る (docs/spec/vm.md の「タスクとスケジュール」)。
-    #[test]
-    fn inbox_work_counts_places_and_plain_wakes() {
-        let control = Control::new(Limits {
-            workers: 2,
-            ..Limits::default()
-        });
-        let run = Run::new(2, None, RunClock::Virtual(Arc::default()), Arc::default());
-        let shared = Shared::new(Registry::new(Vec::new(), 2));
-        let cell = crate::cells::placed_task(&shared, 1);
-        let work = || run.slots[1].inbox_work.load(Ordering::Relaxed);
-        let task = |op| Notice::Wake(Woken::Task { cell, wake: 0, op });
-        run.send(
-            &control,
-            1,
-            Notice::Place {
-                cell,
-                worker: 0,
-                closure: eml_rt::Word::UNIT,
-            },
-        );
-        assert_eq!(work(), 1);
-        run.send(&control, 1, task(None));
-        assert_eq!(work(), 2);
-        run.send(&control, 1, task(Some(cell)));
-        run.send(
-            &control,
-            1,
-            Notice::Wake(Woken::Token {
-                owner: 1,
-                token: crate::cells::WaitToken(0),
-            }),
-        );
-        run.send(&control, 1, Notice::Cancel(cell));
-        run.send(&control, 1, Notice::Submit(cell));
-        run.send(&control, 1, Notice::CancelIo(cell));
-        run.send(&control, 1, Notice::Completion(cell));
-        run.send(&control, 1, Notice::Rescue { victim: 0 });
-        assert_eq!(work(), 2);
-        assert_eq!(run.take_notices(1).len(), 9);
-        assert_eq!(work(), 0);
     }
 
     /// workerが3つなら、`start`はworker 1と2に順に置き、`main`を動かすworker 0には置かない。worker 0だけなら持ち主は

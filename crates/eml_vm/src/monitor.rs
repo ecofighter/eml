@@ -14,20 +14,13 @@ use eml_rt::Control;
 
 use crate::cells::{CellRef, MailItem, Shared};
 use crate::doorbell::Doorbell;
-use crate::workers::{NO_CELL, Notice, Run};
+use crate::workers::{NO_CELL, Run};
 
 /// 監視の刻み。自己パイプのない監視は、この刻みでシグナルと止めるビットを見に行く。
 const TICK: Duration = Duration::from_millis(10);
 
 /// 監視のスレッドのスタックの大きさ。ループは再帰も大きな局所変数も持たない。
 const STACK: usize = 64 * 1024;
-
-/// 切り替えの数がこの刻みの数だけ続けて変わらない worker を、詰まったとみなす。VM のタスクは安全点で切り替わるので、
-/// 2刻み変わらないのは extern の中で止まったときだけである (docs/spec/vm.md の「タスクとスケジュール」)。
-const STUCK_TICKS: u32 = 2;
-
-/// 目安 `ready_entries + inbox_work` がこの数を超える worker を、切り替えていても過負荷とみなす。
-const OVERLOAD: usize = 64;
 
 /// 監視のスレッドを止める側と共有する欄。ほかのメモリへの書き込みを公開する役を持たないので Relaxed で足りる。止める
 /// ときの順序は `unpark` と `join` が与える。
@@ -52,16 +45,15 @@ pub(crate) struct Monitor {
 }
 
 impl Monitor {
-    /// 監視のスレッドを始める。自己パイプは `run` のものを待つ。`preempt` は刻みごとの横取りを求めるか、`rescue` は
-    /// 刻みごとに救済の判定をするか、`pressure` は刻みごとにメモリの柔らかい上限を見るかである。始められなければ
-    /// `None` を返し、呼ぶ側は監視なしで続ける。そのときの振る舞いは FIFO の逐次と同じで、誤りにはしない。柔らかい
-    /// 上限もなくなる (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// 監視のスレッドを始める。自己パイプは`run`のものを待つ。`preempt`は刻みごとの横取りを求めるか、
+    /// `pressure`は刻みごとにメモリの柔らかい上限を見るかである。始められなければ`None`を返し、
+    /// 呼ぶ側は監視なしで続ける。そのときの振る舞いはFIFOの逐次と同じで、誤りにはしない。柔らかい上限もなくなる
+    /// (docs/spec/vm.mdの「タスクとスケジュール」)。
     pub(crate) fn start(
         control: Arc<Control>,
         cells: Arc<Shared>,
         run: Arc<Run>,
         preempt: bool,
-        rescue: bool,
         pressure: bool,
     ) -> Option<Monitor> {
         let watch = Arc::new(Watch {
@@ -80,7 +72,7 @@ impl Monitor {
         // SIGINT と SIGTERM が監視のスレッドに届くと、VM のスレッドの待っている読みに `EINTR` が来なくなる
         // (docs/spec/vm.md の「上限と割り込み」)
         let thread = eml_io::spawn_masked(builder, move || {
-            watch_loop(&relay, &shared, preempt, rescue, pressure)
+            watch_loop(&relay, &shared, preempt, pressure)
         })
         .ok()?;
         Some(Monitor {
@@ -105,8 +97,6 @@ impl Monitor {
 /// 刻みごとに、動くタスクが前の刻みから替わったかを決める。時間に依らずにテストするため、ループから分けてある。
 struct Ticker {
     last: u64,
-    /// 切り替えの数が続けて変わらなかった刻みの数。
-    still: u32,
 }
 
 impl Ticker {
@@ -114,16 +104,7 @@ impl Ticker {
     fn tick(&mut self, switches: u64) -> bool {
         let same = switches == self.last;
         self.last = switches;
-        self.still = if same {
-            self.still.saturating_add(1)
-        } else {
-            0
-        };
         same
-    }
-
-    fn stuck(&self) -> bool {
-        self.still >= STUCK_TICKS
     }
 }
 
@@ -142,46 +123,6 @@ impl Relay {
         }
         if new != 0 || self.control.stop_bits() != 0 {
             self.run.wake_all();
-        }
-    }
-
-    /// 救済を頼む worker を決め、空いている worker に `Rescue` を送る。登録表の lock も欄の lock も取らず、atomic を読むだけ
-    /// である。`cursor` から回すので、頼みが先頭の worker に偏らない。空いている worker がなければ、その刻みはやめる
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
-    fn rescue_tick(&self, tickers: &mut [Ticker], cursor: &mut usize) {
-        let run = &*self.run;
-        let live = run.live().min(tickers.len());
-        for i in 0..live {
-            let k = (*cursor + i) % live;
-            let slot = &run.slots[k];
-            let ready = slot.ready_entries.load(Ordering::Relaxed);
-            let inbox = slot.inbox_work.load(Ordering::Relaxed);
-            let settled = slot.settled.load(Ordering::Relaxed);
-            let hint = ready + inbox;
-            if hint == 0 {
-                continue;
-            }
-            // 覚えた3つの数は、`futile` の Release の前に書かれている。Acquire で `futile` を読めば、その値以後が見える
-            if slot.futile.load(Ordering::Acquire)
-                && (ready, inbox, settled)
-                    == (
-                        slot.futile_ready.load(Ordering::Relaxed),
-                        slot.futile_inbox.load(Ordering::Relaxed),
-                        slot.futile_settled.load(Ordering::Relaxed),
-                    )
-            {
-                continue;
-            }
-            if !(tickers[k].stuck() || hint > OVERLOAD) {
-                continue;
-            }
-            match run.pop_idle_except(k, live) {
-                Some(r) => {
-                    run.send(&self.control, r, Notice::Rescue { victim: k as u32 });
-                    *cursor = k + 1;
-                }
-                None => break,
-            }
         }
     }
 }
@@ -255,17 +196,15 @@ fn bell_timeout(ticks: bool, running: usize, until_next: Duration) -> Option<Dur
     (ticks && running > 0).then_some(until_next)
 }
 
-fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, rescue: bool, pressure: bool) {
+fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, pressure: bool) {
     let run = &*relay.run;
     let mut tickers: Vec<Ticker> = run
         .slots
         .iter()
         .map(|slot| Ticker {
             last: slot.switches.load(Ordering::Relaxed),
-            still: 0,
         })
         .collect();
-    let mut cursor = 0;
     let mut next = Instant::now() + TICK;
     loop {
         // 自己パイプがなければ、刻みでシグナルと止めるビットを見に行く。眠る worker を起こせるのは監視のスレッドだけ
@@ -295,15 +234,12 @@ fn watch_loop(relay: &Relay, watch: &Watch, preempt: bool, rescue: bool, pressur
         if Instant::now() < next {
             continue;
         }
-        if preempt || rescue {
+        if preempt {
             for (k, (slot, ticker)) in run.slots.iter().zip(&mut tickers).enumerate() {
-                if ticker.tick(slot.switches.load(Ordering::Relaxed)) && preempt {
+                if ticker.tick(slot.switches.load(Ordering::Relaxed)) {
                     relay.control.preempt(k);
                 }
             }
-        }
-        if rescue && run.live() >= 2 {
-            relay.rescue_tick(&mut tickers, &mut cursor);
         }
         if pressure {
             pressure_tick(&relay.control, &relay.shared, run, false);
@@ -322,201 +258,24 @@ mod tests {
 
     use eml_rt::{Checked, Ctx, Word};
 
-    use super::{Monitor, OVERLOAD, Relay, Ticker, bell_timeout, choose, pressure_tick};
+    use super::{Monitor, Relay, Ticker, bell_timeout, choose, pressure_tick};
     use crate::cells::{self, CellRef, MailItem, Registry, Shared};
     use crate::doorbell::Doorbell;
     use crate::sched::{Normal, Scheduler};
-    use crate::workers::{NO_CELL, Notice, Run, cell_word};
+    use crate::workers::{NO_CELL, Run, cell_word};
 
     #[test]
     fn a_tick_without_a_switch_asks_for_a_switch() {
-        let mut ticker = Ticker { last: 3, still: 0 };
+        let mut ticker = Ticker { last: 3 };
         assert!(ticker.tick(3));
         assert!(ticker.tick(3));
     }
 
     #[test]
     fn a_tick_after_a_switch_does_not() {
-        let mut ticker = Ticker { last: 3, still: 0 };
+        let mut ticker = Ticker { last: 3 };
         assert!(!ticker.tick(4));
         assert!(ticker.tick(4));
-    }
-
-    #[test]
-    fn a_worker_is_stuck_after_two_ticks_without_a_switch() {
-        let mut ticker = Ticker { last: 3, still: 0 };
-        assert!(ticker.tick(3));
-        assert!(!ticker.stuck());
-        assert!(ticker.tick(3));
-        assert!(ticker.stuck());
-        assert!(!ticker.tick(4));
-        assert!(!ticker.stuck());
-    }
-
-    /// 作った worker が `workers` 個で、全員が詰まっている形の `Relay` と刻み。
-    fn rescuer(workers: usize) -> (Relay, Vec<Ticker>) {
-        let run = Run::new(
-            workers,
-            None,
-            crate::driver::RunClock::Virtual(Arc::default()),
-            Arc::default(),
-        );
-        run.set_live(workers);
-        let limits = Limits {
-            workers,
-            ..Limits::default()
-        };
-        let relay = Relay {
-            control: Arc::new(Control::new(limits)),
-            shared: shared(),
-            run: Arc::new(run),
-        };
-        let tickers = (0..workers).map(|_| Ticker { last: 0, still: 9 }).collect();
-        (relay, tickers)
-    }
-
-    /// worker `k` が受けた `Rescue` の victim の並び。
-    fn rescues_to(relay: &Relay, k: usize) -> Vec<u32> {
-        relay
-            .run
-            .take_notices(k)
-            .into_iter()
-            .map(|notice| match notice {
-                Notice::Rescue { victim } => victim,
-                _ => panic!("not a rescue"),
-            })
-            .collect()
-    }
-
-    fn hint(relay: &Relay, k: usize, ready: usize, inbox: usize) {
-        relay.run.slots[k]
-            .ready_entries
-            .store(ready, Ordering::Relaxed);
-        relay.run.slots[k]
-            .inbox_work
-            .store(inbox, Ordering::Relaxed);
-    }
-
-    #[test]
-    fn a_stuck_worker_without_a_hint_is_left_alone() {
-        let (relay, mut tickers) = rescuer(2);
-        relay.run.set_idle(&[1]);
-        let mut cursor = 0;
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        assert!(rescues_to(&relay, 1).is_empty());
-        assert_eq!(relay.run.pop_idle_except(0, 2), Some(1));
-        hint(&relay, 0, 1, 0);
-        relay.run.set_idle(&[1]);
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        assert_eq!(rescues_to(&relay, 1), [0]);
-    }
-
-    #[test]
-    fn an_overloaded_worker_is_rescued_while_it_switches() {
-        let (relay, mut tickers) = rescuer(2);
-        relay.run.set_idle(&[1]);
-        let mut cursor = 0;
-        for switches in 1..=3 {
-            tickers[0].tick(switches);
-            assert!(!tickers[0].stuck());
-            hint(&relay, 0, OVERLOAD - 1, 1);
-            relay.rescue_tick(&mut tickers, &mut cursor);
-            assert!(rescues_to(&relay, 1).is_empty());
-        }
-        tickers[0].tick(4);
-        assert!(!tickers[0].stuck());
-        hint(&relay, 0, OVERLOAD, 1);
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        assert_eq!(rescues_to(&relay, 1), [0]);
-        assert_eq!(cursor, 1);
-    }
-
-    #[test]
-    fn a_rescue_goes_to_an_idle_worker_other_than_the_victim() {
-        let (relay, mut tickers) = rescuer(3);
-        hint(&relay, 0, 1, 0);
-        let mut cursor = 0;
-        relay.run.set_idle(&[0]);
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        assert!(rescues_to(&relay, 0).is_empty());
-        relay.run.set_idle(&[1, 0]);
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        assert_eq!(rescues_to(&relay, 1), [0]);
-        assert!(rescues_to(&relay, 0).is_empty());
-        // 取り出した worker は空きから外れ、victim は残る
-        assert_eq!(relay.run.pop_idle_except(2, 3), Some(0));
-        assert_eq!(relay.run.pop_idle_except(2, 3), None);
-    }
-
-    #[test]
-    fn without_an_idle_worker_nothing_is_sent() {
-        let (relay, mut tickers) = rescuer(3);
-        hint(&relay, 0, 1, 0);
-        hint(&relay, 1, 1, 0);
-        let mut cursor = 2;
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        for k in 0..3 {
-            assert!(rescues_to(&relay, k).is_empty());
-        }
-        assert_eq!(cursor, 2);
-    }
-
-    /// 空振りの印は、3つの数が覚えた値と等しい間だけ効く。
-    fn futile(relay: &Relay, k: usize, ready: usize, inbox: usize, settled: u64) {
-        let slot = &relay.run.slots[k];
-        slot.futile_ready.store(ready, Ordering::Relaxed);
-        slot.futile_inbox.store(inbox, Ordering::Relaxed);
-        slot.futile_settled.store(settled, Ordering::Relaxed);
-        slot.futile.store(true, Ordering::Release);
-    }
-
-    #[test]
-    fn a_futile_victim_is_skipped_until_its_counts_change() {
-        let (relay, mut tickers) = rescuer(2);
-        hint(&relay, 0, 2, 0);
-        futile(&relay, 0, 2, 0, 0);
-        relay.run.set_idle(&[1]);
-        let mut cursor = 0;
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        assert!(rescues_to(&relay, 1).is_empty());
-        hint(&relay, 0, 2, 1);
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        assert_eq!(rescues_to(&relay, 1), [0]);
-    }
-
-    #[test]
-    fn a_futile_victim_is_retried_after_its_entries_settle() {
-        let (relay, mut tickers) = rescuer(2);
-        hint(&relay, 0, 2, 0);
-        futile(&relay, 0, 2, 0, 0);
-        relay.run.set_idle(&[1]);
-        let mut cursor = 0;
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        assert!(rescues_to(&relay, 1).is_empty());
-        relay.run.slots[0].settled.fetch_add(1, Ordering::Relaxed);
-        relay.rescue_tick(&mut tickers, &mut cursor);
-        assert_eq!(rescues_to(&relay, 1), [0]);
-    }
-
-    /// extern の中で止まった worker は、切り替えの数が変わらないので、3回の呼び出しのうちに見つかる。
-    #[test]
-    fn a_blocked_worker_is_rescued_within_three_ticks() {
-        let (relay, mut tickers) = rescuer(2);
-        tickers[0] = Ticker { last: 5, still: 0 };
-        tickers[1] = Ticker { last: 0, still: 0 };
-        hint(&relay, 0, 1, 0);
-        relay.run.set_idle(&[1]);
-        let mut cursor = 0;
-        let mut sent = 0;
-        for _ in 0..3 {
-            // 刻み 0 の前に切り替えが1回あり、その後は止まる
-            for (k, ticker) in tickers.iter_mut().enumerate() {
-                ticker.tick(if k == 0 { 6 } else { 0 });
-            }
-            relay.rescue_tick(&mut tickers, &mut cursor);
-            sent += rescues_to(&relay, 1).len();
-        }
-        assert_eq!(sent, 1);
     }
 
     /// 鳴らされた回数を数える waker。
@@ -796,7 +555,6 @@ mod tests {
             Arc::clone(&shared),
             Arc::clone(&run),
             false,
-            false,
             true,
         )
         .expect("the monitor started");
@@ -838,7 +596,6 @@ mod tests {
             Arc::clone(&run),
             true,
             false,
-            false,
         )
         .expect("the monitor started");
         std::thread::sleep(Duration::from_millis(50));
@@ -876,7 +633,6 @@ mod tests {
             Arc::clone(&control),
             shared(),
             Arc::clone(&run),
-            false,
             false,
             false,
         )

@@ -22,8 +22,7 @@ use crate::ffi;
 use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
-    JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Rescue, Scheduler, TaskId,
-    TaskState,
+    JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId, TaskState,
 };
 use crate::tls;
 use crate::workers::{Entry, EntryKind, Notice, Ready};
@@ -1905,7 +1904,7 @@ fn switch_away<R: Exec>(
         ctx.reclaim_if_due();
         sched.publish_idle();
         debug_assert!(
-            sched.left.is_empty(),
+            sched.added.is_empty(),
             "an entry is left unsettled before a worker sleeps"
         );
         sched.idle_wait()?;
@@ -2048,19 +2047,6 @@ fn collect<R: Exec>(
             schedule(sched, run)?;
         }
         sched.runnables = out;
-    }
-    // 救済で盗んだ仕事は、lock をすべて放した後に自分の仕事の後ろに積む (docs/spec/vm.md の「救済」)
-    if !sched.stolen.is_empty() {
-        let mut stolen = std::mem::take(&mut sched.stolen);
-        for run in stolen.drain(..) {
-            enqueue(sched, run, true)?;
-        }
-        sched.stolen = stolen;
-    }
-    // 自分で頼む方針は、この集める地点が積んだ項まで見てから頼む。lock はもうどれも持っていない
-    // (docs/spec/vm.md の「タスクとスケジュール」)
-    if R::P::RESCUE == Rescue::Always {
-        sched.ask_rescue();
     }
     gathered
 }
@@ -3549,16 +3535,6 @@ fn deposit(task: &mut Task, outcome: cells::Outcome) -> Result<(), VmFault> {
 /// 始める仕事と再開する仕事はフレームを持たない `Entry` のまま積み、持ち主が `pick` で取ったときにエントリの `Task` に
 /// する。token は待っている `Task` の番号である。
 fn schedule<P: Policy>(sched: &mut Scheduler<P>, run: Runnable) -> Result<(), VmFault> {
-    enqueue(sched, run, false)
-}
-
-/// `schedule` の本体。`rescued` は救済で受けた仕事の印で、その項を `pick` するまでもう一度盗まない
-/// (docs/spec/vm.md の「救済」)。
-fn enqueue<P: Policy>(
-    sched: &mut Scheduler<P>,
-    run: Runnable,
-    rescued: bool,
-) -> Result<(), VmFault> {
     // 今のタスクが自分の再開を積んだ。待ちに入っても実行待ちにいるので、今の数で `top` に出す
     // (docs/spec/vm.md の「タスクとスケジュール」)
     if let Runnable::Resume { cell, .. } | Runnable::ResumeIo { cell, .. } = run
@@ -3577,7 +3553,6 @@ fn enqueue<P: Policy>(
             worker,
             kind: EntryKind::Start,
             word: closure,
-            rescued,
         },
         Runnable::Resume {
             cell,
@@ -3589,7 +3564,6 @@ fn enqueue<P: Policy>(
             worker,
             kind: EntryKind::Resume { wake },
             word: k,
-            rescued,
         },
         Runnable::ResumeIo {
             cell,
@@ -3602,7 +3576,6 @@ fn enqueue<P: Policy>(
             worker,
             kind: EntryKind::ResumeIo { wake, op },
             word: k,
-            rescued,
         },
         Runnable::Token(WaitToken(token)) => {
             let id = token as TaskId;
@@ -5766,8 +5739,8 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
         );
     }
 
-    /// 自分の再開を積んだタスクは今の数で `top` に出し、待ちに入っても残す。本当に待つタスクは `top` から消す。どちらも
-    /// このエントリの数を `left` に積む。
+    /// 自分の再開を積んだタスクは今の数で`top`に出し、待ちに入っても残す。本当に待つタスクは`top`から消す。
+    /// どちらもこのエントリの数を`added`に積む。
     #[test]
     fn a_self_yield_offers_top_and_a_real_wait_clears_it() {
         let (code, mut ctx, mut sched) = limit_fixture(CALL);
@@ -5791,7 +5764,7 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             k: Word::UNIT,
             wake: cells::WOKE,
         };
-        enqueue(&mut sched, wake, false).unwrap();
+        schedule(&mut sched, wake).unwrap();
         assert!(sched.yielded);
         assert_eq!(top(&sched), (cell_word(cell), 300 + grown));
         sched.end_slice(&mut task);
@@ -5804,7 +5777,7 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
         sched.end_slice(&mut task);
         sched.left_entry(cell, task.added);
         assert_eq!(top(&sched).0, NO_CELL);
-        assert_eq!(sched.left, [(cell, grown), (cell, 0)]);
+        assert_eq!(sched.added, [(cell, grown), (cell, 0)]);
         // ほかのセルの再開は今のタスクの譲りでない
         let other = cells::task_on(&sched.cells, 0, 0, false);
         let wake = Runnable::Resume {
@@ -5813,9 +5786,9 @@ fn return$(r.0: tobj, s.1: unit) -> tobj {
             k: Word::UNIT,
             wake: cells::WOKE,
         };
-        enqueue(&mut sched, wake, false).unwrap();
+        schedule(&mut sched, wake).unwrap();
         assert!(!sched.yielded);
         assert_eq!(top(&sched).0, NO_CELL);
-        sched.left.clear();
+        sched.added.clear();
     }
 }

@@ -180,6 +180,8 @@
   - the re-exports `Rescue` and `RescueAlways` at `lib.rs:49-50`.
 
   The monitor keeps relay, waking and memory pressure (D-10).
+  - Decided during execution: `Registry::leave` also adds each entry's `added` bytes to `task.bytes` (the task-limit count). Keep that part as a byte-only batch: `Scheduler.left` → `Scheduler.added`, `Registry::leave` → `Registry::add_bytes`, flushed in the same registry section of `gather`, so lock counts and `RunStats` stay the same. Also delete `Ticker::stuck`, `Ticker.still`, `STUCK_TICKS` and `OVERLOAD`, which only rescue used.
+  - Decided during execution: the paths that follow an owner change (`placed_owner` re-routing in `take_async`, `MailItem::Cancel { owner }` forwarding, `limit_forwarded`/`route_limit`, `take_op` not checking the record owner) stay in this unit; only their comments that cite 救済 change. Their removal is R-4.
 - Test changes:
   - Kind 1 (deleted), one by one:
     - tests/workers.rs: `rescue_always_rescues_every_started_task`, `a_rescued_task_holding_a_lin_resource_passes_the_checks`, `sequential_never_rescues`, `rescue_always_at_one_worker_is_sequential`, `rescued_tasks_sleep_and_take_from_a_channel_on_their_new_worker`, `a_cancel_reaches_a_rescued_waiting_task`.
@@ -189,6 +191,9 @@
     - src/workers.rs unit: `ready_entries_follows_push_pick_and_retain`.
     - src/monitor.rs unit: `a_stuck_worker_without_a_hint_is_left_alone`, `an_overloaded_worker_is_rescued_while_it_switches`, `a_rescue_goes_to_an_idle_worker_other_than_the_victim`, `a_futile_victim_is_skipped_until_its_counts_change`, `a_futile_victim_is_retried_after_its_entries_settle`, `a_blocked_worker_is_rescued_within_three_ticks`.
     - src/cells.rs unit: `two_live_entries_keep_a_parked_task_unstealable`, and the helper `entries_of`.
+    - Added during execution: src/sched.rs `a_stale_cancel_in_the_victim_mail_reaches_the_new_owner`; src/cells.rs `steal_helpers_refuse_a_cell_owned_by_a_third_worker`, `an_entry_count_follows_start_park_resume_and_finish`; src/workers.rs `inbox_work_counts_places_and_plain_wakes`; src/monitor.rs `without_an_idle_worker_nothing_is_sent`, `a_worker_is_stuck_after_two_ticks_without_a_switch`. Each tests a deleted mechanism.
+  - Kind 2 (added during execution): src/cells.rs `leave_skips_a_released_cell` is rewritten against `add_bytes`, without the entry-count assertions; `leave_adds_the_bytes_and_resumed_returns_them` → `add_bytes_adds_the_bytes_and_resumed_returns_them`, without the return-value assertions.
+  - Kind 3 (added during execution): src/vm.rs `a_self_yield_offers_top_and_a_real_wait_clears_it` reads `sched.added` in place of `sched.left`; the doc of `a_forwarded_limit_follows_a_new_owner` stops citing rescue.
   - Kind 2. Scope: "tests that used `RescueAlways` to put a task on another worker place it there at `start` under `Sequential`; the ignored monitor-rescue test becomes a placement test".
     - tests/workers.rs `a_nested_run_closed_before_its_caller_waits_goes_on`: N = 2, `Sequential`, no `rescued` assertion.
     - tests/workers.rs `the_monitor_rescues_a_worker_blocked_in_an_extern` (`#[ignore]`) → `tasks_on_other_workers_run_while_main_blocks_in_an_extern`, not ignored. N = 2 with `BlockingHost`: `main`'s `println "a"` blocks until a task prints `"b"`; the task is on worker 1 by D-3; output `b\na\n`; deterministic and under 1 s.
@@ -235,7 +240,7 @@
   - architecture.md:322-323: drop rescue from the eml_vm description ("`Async` tasks are placed on workers 1..N-1 in rotation and never move").
   - CLAUDE.md:139: "`par/` and `async/` run at 2 and 8 workers under `Sequential`".
 - Completion criteria:
-  - `cargo nextest run` → 4659 passed, 0 failed. That is 4696 − 38 deleted tests (8 integration, 18 sched unit, 1 workers unit, 6 monitor unit, 1 cells unit) + 1 for the formerly ignored test that now runs. If a deleted test was itself ignored, the passed count is one higher per such test; record the exact passed and skipped numbers in the commit message.
+  - `cargo nextest run` → 4653 passed, 0 failed (amended: the 6 added kind-1 deletions). Originally: 4659 = 4696 − 38 deleted tests (8 integration, 18 sched unit, 1 workers unit, 6 monitor unit, 1 cells unit) + 1 for the formerly ignored test that now runs. If a deleted test was itself ignored, the passed count is one higher per such test; record the exact passed and skipped numbers in the commit message.
   - `git grep -n -e RescueAlways -e steal_start -e steal_resume -e steal_wake -e ready_entries -e inbox_work -e futile -e 'Notice::Rescue' -e rescuable -- crates` → no output.
   - `cargo nextest run -p eml_cli --test integration -E 'test(ui::) | test(repl::)'` → passes with no `.em` file or snapshot changed.
   - `git diff --stat HEAD~ -- crates/eml_rt` → empty.
@@ -278,6 +283,8 @@
   - vm.md 「`RunStats`」: `preemptions` = switches started by `Seeded`'s `tick`.
   - object-model.md 「実行の制御」: delete `Control::PREEMPT (1 << 31)` from the bit list.
   - status.md:37: "`eml run` and `eml repl` use `Normal`, which never switches tasks by itself; `Sequential` and `Seeded` are library-only test policies."
+  - status.md ~:166 (added after the S1-T2 review): replace 「CPUを使うタスクは同じworkerのほかのタスクと時間を分け合い」 with "a task switches only at `Async` operations; a CPU-bound task or an in-place read delays the other tasks of its worker until it waits or returns".
+  - Line numbers in this task predate S1-T2, which removed vm.md lines; locate text by quotation.
   - testing.md 「ThreadSanitizer」, CLAUDE.md (the TSan command) and ci.yml: drop `preempt::` from the TSan lists.
 - Completion criteria:
   - `cargo verus verify -p eml_rt` → both summary lines `0 errors`.
@@ -368,6 +375,7 @@ S1-T0 → S1-T1 → S1-T2 → S1-T3 → S1-T4, strictly in sequence; each commit
 | ID | Item | Impact | How / when | Default |
 |---|---|---|---|---|
 | R-1 | The design ran a prototype that disabled rescue and preemption rather than deleting them. Deleting the code may reveal compile-level users not listed here. | S1-T2, S1-T3 | the implementer, at compile time | removing a field or assertion of a deleted item is kind 3; anything else stops for an amendment |
+| R-4 | After S1-T2 a task's owner never changes, so the owner-forwarding paths (`placed_owner` re-routing, `MailItem::Cancel { owner }` (no direct test since S1-T2), `limit_forwarded`/`route_limit`, `take_op`'s missing owner check) and `Scheduler.current_woken` with its branches (vm.rs, sched.rs; the kind-2 test `a_nested_run_closed_before_its_caller_waits_goes_on` no longer reaches it) are unreachable code; vm.md still describes them (「持ち主が変わっても起こしを取り残さない」, 「持ち主がまた変わっていればそこへ回し」, the `current_woken` sentence in 「`Async` のタスク」) | after S1-T3 | the orchestrator, at the final review | default: list it as a follow-up for the user; do not remove it inside S1-T2/S1-T3 |
 | R-2 | A `tests/ui/run/async/` file depends on rescue | S1-T2 | the UI run in S1-T2 | the prototype ran them 50/50; if one fails, stop and amend |
 | R-3 | Windows has no prototype run | all | CI | fix in the task's commit if CI fails |
 | R-4 | A hung test leaves orphaned `eml` processes | local runs | the hygiene rule in section 6 | kill after each run; the roadmap item fixes the cause |

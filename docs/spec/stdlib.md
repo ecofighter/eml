@@ -982,7 +982,7 @@ main () =
 
 ## `Std.Async`
 
-`Std.Async` は複数の worker の上でタスクを動かすモジュールである。タスクは `start` のときに置く worker を決め、救済で移るほかはそこから動かない ([VM](vm.md) の「`Async` のタスク」)。
+`Std.Async`は複数のworkerの上でタスクを動かすモジュールである。タスクは`start`のときにworkerに置き、終わるまでそこで動く ([VM](vm.md)の「`Async`のタスク」)。
 
 ```haskell
 import Async (Async)
