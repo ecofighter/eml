@@ -512,8 +512,10 @@ main () = Async.run body
     assert_eq!((finished.workers, finished.placed_jobs), (2, 1));
 }
 
-/// ほかの worker に置いた仕事でも、取り消しは仕事が終わってから出したタスクに1回だけ届く。仕事の終わりは worker 1
-/// から、出したタスクのいる worker 0 へ起こしを送る (docs/spec/vm.md の「取り消しの届け方」)。
+/// ほかのworkerに置いた仕事でも、取り消しは仕事が終わってから出したタスクに1回だけ届く。3つのworkerでは、置く順に
+/// より何もしないタスクをworker 1に、出したタスクをworker 2に置く。`sleep_ms`はどのworkerも眠ったときにだけ戻るので、
+/// `fork_job`のときにはworker 1が空いていて、仕事はほかの空いたworkerに置く。仕事の終わりは、出したタスクのいる
+/// worker 2へ起こしを送る (docs/spec/vm.md の「取り消しの届け方」)。
 #[test]
 fn a_cancelled_job_on_another_worker_counts_one_cancel() {
     let src = "\
@@ -538,7 +540,7 @@ main () =
           | Err e -> println \"job: \\{show e.kind}\"))
     Async.await t)
 ";
-    let (out, result) = run(src, 2);
+    let (out, result) = run(src, 3);
     assert_eq!(out, "job: Cancelled\n");
     let finished = result.unwrap();
     assert_eq!(finished.stats.cancels, 1);
