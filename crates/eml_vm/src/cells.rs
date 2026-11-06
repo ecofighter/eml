@@ -5777,7 +5777,7 @@ pub(crate) fn end_with_exit(control: &Control, n: i64) -> bool {
 
 /// 根のスコープに、動いているタスクのセルを1つ置く。輪だけを確かめるので、ヒープの ID は持たない。
 #[cfg(test)]
-fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
+pub(crate) fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
     registry.lock().alloc(CellKind::Task(TaskCell {
         owner: 0,
         entries: 0,

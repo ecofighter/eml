@@ -30,6 +30,7 @@ mod driver;
 mod error;
 mod ffi;
 mod hosts;
+mod jobs;
 mod monitor;
 mod op;
 mod sched;

@@ -19,6 +19,7 @@ use crate::data;
 use crate::driver::DriverKind;
 use crate::error::VmFault;
 use crate::ffi;
+use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::sched::{
     JOB, JoinId, JoinNode, MAIN, Outcome, PLACED, POLL_EVERY, Policy, Rescue, Scheduler, TaskId,
@@ -41,6 +42,7 @@ macro_rules! here {
         };
     };
 }
+pub(crate) use here;
 
 // 核は `eml_lir` を知らないので、`Wake` のタグを自分で持つ。表の値と食い違わないことをここで確かめる
 const _: () = assert!(cells::WOKE == eml_lir::WAKE_WOKE as i64);
@@ -3439,8 +3441,8 @@ fn bind_here<M: Mode, P: Policy>(
     Ok(())
 }
 
-/// `Op::FfiSubmit`。仕事は `ffi::job` が作り、ここで記録の host の driver に出す。登録表に触れる所は `Std.Net` の
-/// 受け付けと同じくここに置く (docs/spec/vm.md の「`blocking` の呼び出し」)。
+/// `Op::FfiSubmit`。仕事は`ffi::job`が作り、stdのプールの仕事と同じ`jobs::submit_op`で記録のhostのdriverに出す
+/// (docs/spec/vm.md の「`blocking` の呼び出し」)。
 fn ffi_submit<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -3452,27 +3454,11 @@ fn ffi_submit<R: Exec>(
     let Some((from, job)) = ffi::job::<R>(code, ctx, task, dst, at)? else {
         return Ok(());
     };
-    let me = current_cell(task)?;
-    // 仕事は本物の時計の run では自分の driver のプールで走る (docs/spec/vm.md の「時計と driver」)
-    sched.own_driver()?;
-    here!(sched, post, here);
-    let token = cells::submit_job(
-        &sched.cells,
-        &here,
-        ctx,
-        sched.driver.as_deref_mut(),
-        task.worker,
-        task.depth_offset,
-        me,
-        from,
-        job,
-    )?;
-    task.set_raw(dst, token);
-    Ok(())
+    jobs::submit_op::<R>(ctx, task, sched, dst, from, job)
 }
 
 /// 今の `Task` のタスクのセル。`main`、`par` の右の子、`compute` の仕事は `Async` の操作を実行しない。
-fn current_cell(task: &Task) -> Result<CellRef, VmFault> {
+pub(crate) fn current_cell(task: &Task) -> Result<CellRef, VmFault> {
     task.cell
         .ok_or(VmFault::Internal("an Async operation runs outside a task"))
 }
