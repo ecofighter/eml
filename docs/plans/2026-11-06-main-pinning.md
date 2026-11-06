@@ -393,6 +393,8 @@ Let `B0` be the test count after `sched-cooperative` closed (`cargo nextest run`
     - `worker_0_is_a_spawned_thread_in_a_separate_run` (recording Host: the `main` line's thread ≠ the test thread).
   - cli.rs (`#[cfg(windows)]`): `eml_exe_reserves_an_8_mib_main_stack`.
 - Existing tests: no expected-value change (prototype: 4697/4697 unchanged).
+  - Decided during execution (kind 2, how a test runs; expected values unchanged): crates/eml_vm/tests/roots.rs `a_value_set_in_a_root_is_read_back` and `reading_an_empty_root_is_an_error` run their LIR on a merged `Machine` (`Seat::Merged`) instead of through `execute`. They test the root primitives, which only a merged run (the REPL) can use; under `execute`'s separate seat they meet the D-17 refusal, which stays. Add the merged-machine runner to `tests/common` if one is needed.
+  - Decided during execution: there is no `Async.now`, so `a_separate_machine_runs_twice` checks that both real-clock runs succeed on one `Machine`, plus the persisted time base through whatever the library can observe (for example, a timer in the second run that is due relative to the first run's base); if nothing is observable, both runs Ok is enough and the commit message says so.
 - Spec and docs (same commit):
   - vm.md 「上限と割り込み」 :400, replace with: "`eml run` calls `eml_vm::execute`. `execute` builds the `Machine`, loads the program and runs on the calling thread (the Machine owner; in `eml run` the process main thread), which is the main worker during the run (「タスクとスケジュール」の「メインの worker」). `main` runs on worker 0, a thread `eml-worker-0` with an 8 MiB stack that `run_scheduled` spawns and joins inside the run. The caller masks SIGINT and SIGTERM with `eml_io::Masked` from just after spawning worker 0 until it has joined it; it does not mask earlier, because a new thread inherits its creator's mask. The frontend compile (`eml_cli::Session`) and `Machine::load` run on the caller before worker 0 exists, so a signal then is taken by the handler as a bit and read at the first safe point. If worker 0 cannot be spawned, the run ends with the driver error (`the I/O driver failed: {e}`) in function `<worker 0>`. `eml repl` spawns no worker 0 and runs the VM on its own thread (`Seat::Merged`)."
   - vm.md 「タスクとスケジュール」, new `### メインの worker` after the policies: "A separate run (`Seat::Separate`: `execute`, or a `Machine` with `with_seat(Separate)`) has one more worker than `Limits::workers`: the main worker, slot N, on the thread that owns the `Machine`. It exists from the start of the run with its own `Ctx` (`Ctx::for_worker(.., N)`) and starts parked. It never joins `idle`, is never chosen by `next_owner` or `pop_idle`, makes its own I/O driver on the real clock when it first needs one, like workers 1..N-1 (on the virtual clock worker 0 hosts its I/O), and carries no run-wide duty: the clock, the verdict, END and the monitor stay with worker 0. It waits through the peer protocol without `idle`: under its slot lock it sets `parked`, decrements `running` and, as the last parker, wakes worker 0. Before it returns, it quiesces and drops its driver on its own thread like workers 1..N-1. In a merged run (`eml repl`, the `Machine` default), worker 0 is the main worker and none of this applies."
@@ -427,6 +429,15 @@ Let `B0` be the test count after `sched-cooperative` closed (`cargo nextest run`
   - `.github/workflows/ci.yml`;
   - docs.
 - Work: D-32's `drive`, `HOST_IDLE` and `main_loop`; D-33's pinning, the row, the std functions and the VM arm; `Finished.pinned_tasks`.
+- Added after the T2b review (required; D-10 forbids any thread waiting on MAIN): in a separate run, worker 0's body ends after it joins its peers, `settle`s, and quiesces and drops the Machine driver. The rest of the end of the run moves to the Machine owner, after both joins, in this order:
+  1. `settle(result, run.take_fatal())` again, so that an error MAIN records (a fault in a pinned task in `drive`) is not lost;
+  2. both end checks;
+  3. `sweep_all` (on success only);
+  4. read the task stats, `placed_tasks` and generations;
+  5. `reclaim_all` over the Machine `ctx`, the peers and MAIN;
+  6. the `others_ctx`/`others_heap` stats;
+  7. lower END (`clear_end`).
+  `Outcome` hands the registry (`Arc<Shared>`) and the peer exits back to the caller. Merged runs keep today's order. Premise: nothing in the end-of-run tail polls the stop word, since END stays raised through it. Make vm.md 「誤り、止めること、終わり」 state this order.
 - New tests (`pinned.rs`):
   1. `run_on_main_runs_on_the_caller_thread`: N = 1; the pinned line is on the test thread, the `main` line is not.
   2. `children_of_a_pinned_task_stay_on_the_main_worker`: N = 2.
@@ -498,6 +509,7 @@ Let `B0` be the test count after `sched-cooperative` closed (`cargo nextest run`
 - Spec and docs (same commit):
   - vm.md, new `### メインの worker の待ち`: the `Park`/`Pending`/`Progress`/`ParkFactory` contract of D-7; the three-state guard and the sticky `Stopping` (a debug assertion on the 64th call); latching; MAIN stays parked across early returns; `Run.holds` with its ordering and its two reads in `idle_wait`; `Slot::ring`; "a `Park` must also wait on the main worker's driver; `DefaultPark` does; a toolkit park does so through `Pending::io()` (toolkit stage)".
   - architecture.md 「CLI と lib API」: `with_main_park`, `Park`.
+  - CLAUDE.md (added after the T2b review): the eml_vm row and the invariant bullet gain "with a replaceable `Park`" for the main worker; T2b leaves it out because `Park` does not exist before T4.
   - status.md, new `### メインの worker` under the known limits:
     - "(1) END does not interrupt a running pinned task: the run ends when the task reaches a safe point or its extern or toolkit callback returns; a park that stays in a modal loop, or ignores `Progress::Stopping` in a release build, delays only the final exit."
     - "(2) On the virtual clock, time advances only while every worker including the main worker sleeps; a running pinned task holds the clock and the deadlock verdict like any running task; on the real clock only the verdict waits."

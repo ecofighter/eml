@@ -589,7 +589,7 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 次の3つで OS によって合否が変わるテストには印を付けず、どの OS でも通るように直す。
 
 - libm の最後のビットに依る期待値: 正確な場合か、IEEE で正確な演算 (`sqrt`、四則) に書き直す。許容の幅は入れない
-- スタックのあふれ: あふれたのが `eml.exe` なら、main.rs でコマンドの本体を 8 MiB (macOS と Linux のメインスレッドと同じ大きさ) のスタックのスレッドで動かす。そうでなければ再帰を直す
+- スタックのあふれ: あふれたのが`eml.exe`なら、メインスレッドは`crates/eml_cli/build.rs`で8 MiBを予約する (`/STACK:8388608`。`cli::eml_exe_reserves_an_8_mib_main_stack`が確かめる)。プロセスのメインスレッドはメインのworkerなので、コマンドの本体をほかのスレッドへ移さない。そうでなければ再帰を直す
 - OS が作る誤りの文言: fixture を替え、文言が Rust か eml から来るようにする
 
 ### OS で振る舞いが決まっているテスト

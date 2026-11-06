@@ -22,6 +22,7 @@ mod reuse;
 mod roots;
 mod run;
 mod scaling;
+mod seat;
 mod signal;
 mod spawns;
 mod structs;
