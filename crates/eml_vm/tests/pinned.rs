@@ -964,26 +964,6 @@ main () = Async.run (fn () ->
     }
 }
 
-/// `Stopping`の後も`run`を呼び続ける`Park`は、メインのworkerのdebugの確かめで落ち、`execute`はそのpanicで戻る。
-/// メインのworkerの繰り返しはいつも`Park`の待ちから始まるので、runがすぐに終わっても`Park`に入る。
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "Park::wait ignored Progress::Stopping")]
-fn a_park_that_ignores_stopping_fails_in_debug_builds() {
-    let src = "\
-import Async
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  Async.run_on_main (fn () -> Async.sleep_ms 10)
-  println \"main\")
-";
-    let log = Arc::new(Log::default());
-    let config = RunConfig::default()
-        .with_control(limits(1))
-        .with_main_park(park(Mode::IgnoresStopping, &log));
-    let _ = run_with(src, config);
-}
-
 /// `run`を一度も呼ばない`Park`でも`main`は止まらない。時計、判定、`END`はworker 0にあり、runはどちらの時計でも
 /// いつもの出力で終わる。メインのworkerの繰り返しはいつも`Park`の待ちから始まるので、`Park`は必ず呼ばれる。固定した
 /// タスクは、`Park`が戻った後にメインのworkerが代わりに動かす。`Park`を抜けるのは、起こされたときか期限を過ぎた
@@ -1106,48 +1086,79 @@ main () = Async.run (fn () ->
     );
 }
 
-/// `Drop`でpanicする`Park`。待ちは既定の`Park`と同じである。
-struct DropPanicPark;
+/// workerがpanicするrun。panicしたworkerは`Ctx`を漏らすので (docs/spec/vm.mdの「タスクとスケジュール」)、
+/// AddressSanitizerは`worker_panic::`をleakの検出なしで流す (docs/implementation/testing.mdの「AddressSanitizer」)。
+mod worker_panic {
+    use super::*;
 
-impl Park for DropPanicPark {
-    fn wait(&mut self, _timeout: Option<Duration>, pending: &mut dyn Pending) -> io::Result<()> {
-        pending.default_wait()
+    /// `Stopping`の後も`run`を呼び続ける`Park`は、メインのworkerのdebugの確かめで落ち、`execute`はそのpanicで戻る。
+    /// メインのworkerの繰り返しはいつも`Park`の待ちから始まるので、runがすぐに終わっても`Park`に入る。
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "Park::wait ignored Progress::Stopping")]
+    fn a_park_that_ignores_stopping_fails_in_debug_builds() {
+        let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () -> Async.sleep_ms 10)
+  println \"main\")
+";
+        let log = Arc::new(Log::default());
+        let config = RunConfig::default()
+            .with_control(limits(1))
+            .with_main_park(park(Mode::IgnoresStopping, &log));
+        let _ = run_with(src, config);
     }
 
-    fn waker(&self) -> Option<Arc<dyn IoWaker>> {
-        None
-    }
-}
+    /// `Drop`でpanicする`Park`。待ちは既定の`Park`と同じである。
+    struct DropPanicPark;
 
-impl Drop for DropPanicPark {
-    fn drop(&mut self) {
-        panic!("park drop");
-    }
-}
+    impl Park for DropPanicPark {
+        fn wait(
+            &mut self,
+            _timeout: Option<Duration>,
+            pending: &mut dyn Pending,
+        ) -> io::Result<()> {
+            pending.default_wait()
+        }
 
-/// `Drop`でpanicする`Park`は、メインのworkerのpanicと同じくrunを終える。`execute`は呼んだスレッドでそのpanicを同じ
-/// 中身のまま起こし直し、次の`execute`はいつもどおり動く。
-#[test]
-fn a_park_whose_drop_panics_ends_the_run() {
-    let src = "\
+        fn waker(&self) -> Option<Arc<dyn IoWaker>> {
+            None
+        }
+    }
+
+    impl Drop for DropPanicPark {
+        fn drop(&mut self) {
+            panic!("park drop");
+        }
+    }
+
+    /// `Drop`でpanicする`Park`は、メインのworkerのpanicと同じくrunを終える。`execute`は呼んだスレッドでそのpanicを同じ
+    /// 中身のまま起こし直し、次の`execute`はいつもどおり動く。
+    #[test]
+    fn a_park_whose_drop_panics_ends_the_run() {
+        let src = "\
 import Async
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
   Async.run_on_main (fn () -> println \"pinned\")
   println \"main\")
 ";
-    let config = RunConfig::default()
-        .with_control(limits(2))
-        .with_main_park(Arc::new(|| Box::new(DropPanicPark)));
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_with(src, config)))
-        .expect_err("the panic reaches the caller");
-    let message = panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied());
-    assert_eq!(message, Some("park drop"));
+        let config = RunConfig::default()
+            .with_control(limits(2))
+            .with_main_park(Arc::new(|| Box::new(DropPanicPark)));
+        let panic =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_with(src, config)))
+                .expect_err("the panic reaches the caller");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied());
+        assert_eq!(message, Some("park drop"));
 
-    let (lines, result) = run(src, 2);
-    finished(result);
-    assert_eq!(texts(&lines), ["pinned", "main"]);
+        let (lines, result) = run(src, 2);
+        finished(result);
+        assert_eq!(texts(&lines), ["pinned", "main"]);
+    }
 }

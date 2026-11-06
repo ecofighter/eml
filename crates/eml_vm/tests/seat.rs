@@ -120,49 +120,6 @@ fn a_separate_machine_runs_twice() {
     assert_eq!(out.contents(), "slept\n");
 }
 
-/// worker 0のpanicは、呼んだスレッドで同じ中身のまま起こし直す。メインのworkerは`END`で起き、scopeは戻る。その後の
-/// `execute`は新しい`Machine`で動く。
-#[test]
-fn a_panic_on_worker_0_ends_a_separate_run() {
-    let program = eml_test_support::lir(
-        "\
-main : Unit -> <IO, Panic> Unit
-main () = println \"boom\"
-",
-    );
-    let (host, _) = RecordingHost::new(Some("boom"));
-    let config = RunConfig::default()
-        .with_debug_heap(true)
-        .with_control(Arc::new(Control::new(Limits {
-            workers: 2,
-            ..Limits::default()
-        })));
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        eml_vm::execute(
-            &program,
-            &eml_vm::Linked::default(),
-            &config,
-            host.host_ref(),
-        )
-    }))
-    .expect_err("the panic reaches the caller");
-    let message = panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied());
-    assert_eq!(message, Some("boom"));
-
-    let (host, out) = RecordingHost::new(None);
-    eml_vm::execute(
-        &eml_test_support::lir(HELLO),
-        &eml_vm::Linked::default(),
-        &config,
-        host.host_ref(),
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out.contents(), "main\n");
-}
-
 /// `execute`の`main`は、呼んだスレッドでなく、runが作るworker 0のスレッドで動く。
 #[test]
 fn worker_0_is_a_spawned_thread_in_a_separate_run() {
@@ -178,4 +135,53 @@ fn worker_0_is_a_spawned_thread_in_a_separate_run() {
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].0, "main");
     assert_ne!(lines[0].1, std::thread::current().id());
+}
+
+/// workerがpanicするrun。panicしたworkerは`Ctx`を漏らすので (docs/spec/vm.mdの「タスクとスケジュール」)、
+/// AddressSanitizerは`worker_panic::`をleakの検出なしで流す (docs/implementation/testing.mdの「AddressSanitizer」)。
+mod worker_panic {
+    use super::*;
+
+    /// worker 0のpanicは、呼んだスレッドで同じ中身のまま起こし直す。メインのworkerは`END`で起き、scopeは戻る。その後の
+    /// `execute`は新しい`Machine`で動く。
+    #[test]
+    fn a_panic_on_worker_0_ends_a_separate_run() {
+        let program = eml_test_support::lir(
+            "\
+main : Unit -> <IO, Panic> Unit
+main () = println \"boom\"
+",
+        );
+        let (host, _) = RecordingHost::new(Some("boom"));
+        let config = RunConfig::default()
+            .with_debug_heap(true)
+            .with_control(Arc::new(Control::new(Limits {
+                workers: 2,
+                ..Limits::default()
+            })));
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            eml_vm::execute(
+                &program,
+                &eml_vm::Linked::default(),
+                &config,
+                host.host_ref(),
+            )
+        }))
+        .expect_err("the panic reaches the caller");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied());
+        assert_eq!(message, Some("boom"));
+
+        let (host, out) = RecordingHost::new(None);
+        eml_vm::execute(
+            &eml_test_support::lir(HELLO),
+            &eml_vm::Linked::default(),
+            &config,
+            host.host_ref(),
+        )
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(out.contents(), "main\n");
+    }
 }
