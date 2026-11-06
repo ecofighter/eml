@@ -1,5 +1,5 @@
-//! 分かれた run (`Seat::Separate`) の形。`Machine`を持つスレッドはメインのworkerで、`main`はrunが作るworker 0で
-//! 動く (docs/spec/vm.mdの「メインの worker」)。
+//! 分かれたrun (`Seat::Separate`) の形。`Machine`を持つスレッドはメインのworkerで、`main`はrunが作るworker 0で
+//! 動く (docs/spec/vm.mdの「メインのworker」)。
 
 use std::sync::Arc;
 

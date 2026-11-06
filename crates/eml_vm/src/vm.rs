@@ -871,7 +871,7 @@ fn main_fault(fault: VmFault) -> RuntimeError {
 /// 始まる待ちは鳴らしておくので、`park`はすぐに戻るか`run`を呼ぶ。`park`が戻った後、メインのworkerが起こされたか、
 /// 知らせがあるか、もう眠った形でないか、止める語を読んだか、本物の時計で自分の期限を過ぎていれば、`park`の代わりに
 /// 仕事を動かす。どれもなければ眠った形のままにする。メインのworkerが止まれば偽を返す。`run`の誤りは待ちの後に返す
-/// (docs/spec/vm.mdの「メインの worker の待ち」)。
+/// (docs/spec/vm.mdの「メインのworkerの待ち」)。
 fn main_wait<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,

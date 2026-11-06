@@ -1,5 +1,5 @@
--- メインの worker のタスクの `exit 4` は、待っている本体を捨てて、その終了コードで run を終える
--- (docs/spec/stdlib.md の「`exit`」、「`Std.Async`」の「メインの worker」)。
+-- メインのworkerのタスクの`exit 4`は、待っている本体を捨てて、その終了コードでrunを終える
+-- (docs/spec/stdlib.mdの「`exit`」、「`Std.Async`」の「メインのworker」)。
 import Async (Async)
 
 spin : Int -> <Panic> Int

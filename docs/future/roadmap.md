@@ -28,8 +28,8 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `main-pinning`: プロセスのメインスレッドをメインのworkerにし、`Std.Gui`を`Gui.run_on_main`だけで作る。メインのworkerのタスクとその子は、ほかのworkerに移らない。前提: なし。設計: [マルチコア対応の設計](multicore.md)の「固定したタスク」、同じ文書の「スレッドとworker」
-- `gui-plugin`: VM の上で egui のプラグインを動かし、`Std.Gui` の残りを入れる。前提: `main-pinning`。設計: [FFI と拡張の設計](ffi.md) の「GUI」、同じ文書の「拡張」
+- `gui-toolkit`: メインのworkerの`Park`の上で、Qt 6、WinUI 3 1.2、AppKitを包むRustのtoolkitのcrateを作る。`Pending::io()`を足し、`Std.Gui`を作る。前提: なし。設計: [FFIと拡張の設計](ffi.md)の「GUI」、同じ文書の「拡張」
+  - この段の設計では、外の待ちを抱えていると知らせる費用も決める。`wait`から戻る`Park`は、戻るたびにその前に抱えている印を立て、次に入ったときに下ろさなければならず、下ろすたびにworker 0を起こすので、イベントごとに戻る`Park`はイベントの頻度でworker 0を起こす。手立ては、判定を控えたときだけworker 0を起こすことか、`Pending::has_work()`を足すことである
 - `borrowed-params`: 借用パラメータを入れる。所有の引数で1バイトごとに `dup` する形をなくし、verifier が借用のブロック引数を確かめる。前提: なし。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
   - 1つの呼び出しでは、所有の引数を消費した後で借用の引数を確かめる。借用の推論では、同じ配置の `con` を作る行き先を持つ `switch` の scrutinee を所有にする。借用にすると、その値の箱が reuse の元にならないためである。継続のクロージャが捕まえる値に借用の部分を含めない。借用のブロック引数は持ち主 (同じブロックの引数か関数のエントリ) を宣言し、verifier は辺ごとに確かめる
   - 所有の都合で `TailCall` を `let r = <呼び出し>` と `return r` に降格するのも、借用パラメータと一緒に入れる。今は `tail` の前に実引数をすべて所有にし、保持している変数をすべて手放す ([LIR](../spec/lir.md) の「持ち主を手放す時点」) ので、借用パラメータを入れるまで降格は起きない。Perceus は、終端を文と新しい終端に置き換える編集をその場でできる形にしてある
@@ -40,7 +40,7 @@
 - `rt-layout`: `eml_rt` に、物体のペイロードの先頭 (数の語の有無と、走査の始まり。配列はいつも数の語を持ち、配列でないデータは走査する語が 255 個以上のときだけ持つ) を求めるインターフェースを足し、`eml_vm` の `data::count_word` が写して持つ同じ規則を消す。インターフェースの性質は、ヘッダの規則と同じく Verus で証明する。ネイティブのコード生成もこのインターフェースを使い、規則の写しを持たない。前提: なし。設計: [オブジェクトモデル](../spec/object-model.md) の「ヘッダ」
 - `jit-core`: `eml_native` に、一階の部分 (スカラー、データ、呼び出し、末尾呼び出し、クロージャと `apply`、RC) を CLIF にするコード生成を作り、`eml run --native` で動かす。AAPCS64 と x86_64 の SysV の `eml_enter` と `eml_fatal`、安全点、ネイティブのコードが読む `Ctx` の欄の配置、利用者の C の行をネイティブのコードから呼ぶことを入れる。扱わない形は E0004 で断り、UI テストの印 `// native: skip` を導入する。前提: `borrowed-params`、`rt-layout`。設計: [ネイティブ化の設計](native.md) の「確定した設計判断」、同じ文書の「呼び出し規約とエントリ」
 - `jit-externs`: すべての extern とプラグインの行を、ネイティブのコードから呼ぶ。包みと VM の腕を表から作り、extern の失敗を `Ctx.fault` で返す。前提: `jit-core`。設計: [ネイティブ化の設計](native.md) の「extern のエントリ」
-- `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` のエントリ、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
+- `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec`と`IoDriver`の上の`Async`のエントリ、ネイティブの`Async.run`の入れ子、親ごとに1つのworkerの上の`par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004で断る形がなくなる。`eml_run_pending`とメインのworkerの致命的な誤りの道も入れる。前提: `jit-externs`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
 - `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 のエントリの stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
 - `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の実装の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
 - `par-steal`: VM の `par` の右の子を、空いている worker の受け箱に置く形から、worker ごとの Chase-Lev の deque と盗みに替える。join の待ちと、子の終わりを親の worker へ知らせる道は、今のものをそのまま使う。呼んだ worker に積んだ `compute` の仕事も、右の子と同じく盗まれる。今の実行待ちは、`par` の子と `Async` の仕事が混ざる worker ごとに1本の mutex の列で、切り替えのたびにその lock を取る ([VM](../spec/vm.md) の「タスクとスケジュール」、[計測の基準](../implementation/benchmarks.md) の「実行待ちの列の lock」)。`par` の子を deque に移した後に残る列の形も、この段で決め直す。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
@@ -247,6 +247,9 @@
 - CLIのテストが時間切れで子の`eml`を殺すこと (unixではプロセスグループ、Windowsではジョブオブジェクト、またはdropでのkill): nextestのslow-timeoutが止めたテストが、起動した`eml`を残さないようにする
   - 後に回した理由: nextestのslow-timeoutは止まったテストを終わらせるが、CLIのテストが起動した`eml`の子は動き続ける。プロセスの木を殺す方法はOSごとに違う。
   - 見直す条件: CIで残った`eml`が見つかったとき。
+- 対応するOSより古いCIのrunner: `macos-15`と`ubuntu-24.04`のimageは、macOS 26とLinux 6.12より古い ([テスト戦略](../implementation/testing.md)の「OSごとのテスト」)
+  - 後に回した理由: 対応するOSの版の機能に頼るテストがまだない。
+  - 見直す条件: 段が対応するOSの版の機能に頼るとき。
 
 ### REPL
 
@@ -258,6 +261,9 @@
   - 見直す条件: この誤りで止まる REPL の入力が見つかったとき。
 - 凍結のときに生きている物体を詰め直して、塊のページを減らすこと。塊は使う大きさの級ごとに少なくとも1ページを持つので、新しい定数を持つ入力ごとに塊を作ると、使うメモリは入力の数に比例して増える ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)。トップレベルの値の1回だけの評価 (上の「言語機能と構文」) を入れると、塊はさらに増える。困ったときに入れる
 - 入力ごとにセッション全体を検査し直すので、セッションが大きくなるほど入力ごとの時間が延びる。困ったら増分の lowering に移る。名前が同じ関数はいつも同じコードになる規則 ([Core IR](../spec/core-ir.md) の「変換の規則」) があるので、後から移れる
+- REPLのGUI (`python -m asyncio`の形): メインスレッドが`Seat::Separate`の`Machine`とtoolkitの`Park`を持ち、行の編集器は別のスレッドで動いて入力を1つずつ渡し、出力はrustylineの`ExternalPrinter`を通す ([FFIと拡張の設計](ffi.md)の「GUI」)
+  - 後に回した理由: REPLのセッションは根を持ち、分かれたrunはセッションの根に触れるコードを拒む。固定したタスクの閉包から届く根の物体と、runとrunの間に動く`Machine`の`Park`も要る。それまで、`eml repl`でGUIは使えない。
+  - 見直す条件: `gui-toolkit`の後で、対話のGUIのセッションが求められたとき。
 
 ### マルチコア対応
 
@@ -356,6 +362,9 @@
 - `UnboxedArray` の `slice` と `append`
   - 後に回した理由: `std-par` は添字の範囲のプリミティブで足り、`slice` と `append` を使う所がない。
   - 見直す条件: `std-par` で、添字の範囲のプリミティブでは書けないデータ並列の関数が出たとき。
+- 一般の専用のworker (`rt_thread_new`): メインのworkerと同じく配置で仕事を受けず、待ちを替えられるworkerを、自分のスレッドの上に作る
+  - 後に回した理由: 見えているスレッドに縛られたライブラリはGUIのtoolkitだけで、それはメインのworkerを使う。
+  - 見直す条件: スレッドに縛られた2つ目のライブラリが出たとき。
 
 ### 非同期
 
@@ -426,9 +435,9 @@
 - 非同期の名前の解決: 戻らない解決のスレッドが64本たまると、名前での `connect` は IO の失敗になる ([VM](../spec/vm.md) の「時計と driver」)
   - 後に回した理由: 名前の解決は driver の解決のスレッド (同時に8本) で行い、取り消しと `quiesce` は待たない。
   - 見直す条件: その失敗か、8本の待ちが計測で見えたとき。
-- タスクを置く worker を選ぶ API (`spawn_here` など)
-  - 後に回した理由: スレッドに縛られた仕事は `Gui.run_on_main` で書ける ([FFI と拡張の設計](ffi.md) の「GUI」)。
-  - 見直す条件: `Gui.run_on_main` のほかに、タスクを特定の worker に置く必要が出たとき。
+- タスクを置くworkerを選ぶAPI (`spawn_here`など)
+  - 後に回した理由: workerを名指しする配置は`Async.start_on_main`だけで、スレッドに縛られた仕事はそれで書ける ([標準ライブラリ](../spec/stdlib.md)の「`Std.Async`」)。
+  - 見直す条件: タスクをメインのworkerのほかの決まったworkerに置く必要が出たとき。
 - `shield` の中で取り消しの要求を読む確かめ
   - 後に回した理由: `cancel_requested` は、`shield` の中では外から来た取り消しを読まない。`shield` の中の後始末が要求を知る使い道が、まだない。
   - 見直す条件: `shield` の中の後始末が、取り消されたかどうかで動きを変える必要が出たとき。
@@ -486,6 +495,9 @@
 - Windows で子の pipe を読むタスクの Ctrl-C を確かめるテスト: unix では `crates/eml_cli/tests/cli.rs` が `Exec.wait` の待ちの Ctrl-C (終了コード 130) を確かめる
   - 後に回した理由: `crates/eml_cli/tests/cli.rs` にコンソールのイベントを送る仕組みがない。
   - 見直す条件: Windows のコンソールの Ctrl-C を送る仕組みを cli.rs に足すとき。または、Windows で `Std.Exec` の待ちが Ctrl-C で止まらない報告が出たとき。
+- `pidfd_open`の`ENOSYS`の場合 (`eml_io`の`sys/unix.rs`) と、pidfdのないLinuxで`wait`が`NotAvailable`で失敗する規則を消すこと ([標準ライブラリ](../spec/stdlib.md)の「`Std.Exec`」)
+  - 後に回した理由: 対応するLinuxは6.12以降で、`pidfd_open`はいつもあるが、この場合を残しても費用はない。
+  - 見直す条件: 子の終わりを待つコードを変えるとき。
 
 ### ネイティブ化
 
@@ -533,8 +545,8 @@
   - 後に回した理由: そういう連携は Rust のプラグインだけで行う。
   - 見直す条件: 自分のスレッドを持つ C のライブラリを、プラグインなしで使いたいとき。
 - Slint のプラグイン
-  - 後に回した理由: 最初のプラグインは egui である。
-  - 見直す条件: egui のプラグインの後で、Slint が求められたとき。
+  - 後に回した理由: 最初のtoolkitはOSの部品を包む (`gui-toolkit`)。
+  - 見直す条件: `gui-toolkit`の後で、Slintが求められたとき。
 - 32 ビットの要素とバイトの要素の生の配列: `Unboxed` と `MutUnboxed` の新しい instance (`Byte` や 32 ビットの型) として足す。`Raw` の物体の要素はいつも 8 バイトで、`tag` は幅のために空けてある ([オブジェクトモデル](../spec/object-model.md) の「種類」)。幅に依る操作 (`length`、`set` と `thaw` の写す道、回復) は、物体の `tag` に幅を書くか、幅に依る関数をクラスに移すかのどちらかで決める。`Bytes` は名前を変えず、この族にも入れない。C に `uint8_t*` を書かせる API が要るときは `instance MutUnboxed Byte` を足すので、バイトの列の型が `Bytes` と `UnboxedArray Byte` の2つになり、変換の関数2つでつなぐ
   - 後に回した理由: 生の要素の配列の要素は 8 バイトで、バイトの並びには `Bytes` がある。利用者の `extern "C"` が C に貸せる配列も、要素が 64 ビットのものだけである ([宣言](../spec/declarations.md) の「型の対応」)。BLAS と ILP64 の Fortran の LAPACK はこれで呼べる。
   - 見直す条件: LP64 の LAPACK、LAPACKE の `ipiv`、`float` の buffer のように、32 ビットの要素の buffer を渡す C の API が要るとき。または、C の API が可変のバイトの buffer を求めたとき。

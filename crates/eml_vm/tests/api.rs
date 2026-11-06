@@ -23,7 +23,7 @@ fn a_code_base_is_shared_and_a_task_moves() {
     sync::<CodeBase<Fast>>();
     sync::<CodeBase<Checked>>();
     send::<Task>();
-    // `Park`を作るものは`RunConfig`とともにスレッドをまたぐ (docs/spec/vm.mdの「メインの worker の待ち」)
+    // `Park`を作るものは`RunConfig`とともにスレッドをまたぐ (docs/spec/vm.mdの「メインのworkerの待ち」)
     send::<ParkFactory>();
     sync::<ParkFactory>();
 }

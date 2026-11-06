@@ -7,7 +7,7 @@
 ## 目的と範囲
 
 - 目的: 行列の計算のために、BLAS (CBLAS) と、ILP64 の Fortran の形の LAPACK (Accelerate の `dgesv$NEWLAPACK$ILP64` など) を利用者のモジュールから呼べるようにする。配列は写さずにポインタで渡し、C に結果をその場で書かせる
-- GUI は FFI でなくプラグインで組み込む。egui、winit、Slint は Rust の crate で、C の API を持たないためである
+- GUIはFFIでなく、Rustのtoolkitのcrateで組み込む。Qt、WinUI、AppKitのAPIはC++、WinRT、Objective-Cで、このFFIが扱わないもの (コールバック、イベントループの持ち主、スレッドに縛られた物) が要るためである
 - 範囲: `extern "C"` の宣言、型の対応、効果と中断の分類、長く走る呼び出し、VM からの呼び出し、データの配置、C のハンドル、プラグイン、GUI
 - 範囲の外: 生の要素の配列の物体の形と、ネイティブのコードでの展開 ([ネイティブ化の設計](native.md) の「生の要素の配列」)
 - 安全: `extern "C"` の宣言は std の行と同じく信頼する。宣言が境目で、処理系は C の側を確かめない。次元を誤った宣言や呼び出しはメモリを壊す。宣言する側が守る約束は [宣言](../spec/declarations.md) の「宣言する側の約束」にある
@@ -27,8 +27,8 @@
 | 9 | 効果 | C の呼び出しは `pure` でなければ `<IO>` を持つ。範囲を確かめる引数かハンドルの結果を持つ行は `<Panic>` を持ち、中断を始めうる行 (`faults`) になる。`MutUnboxedArray` を貸す行は書き込む行 (`writes`) で、使われなくても消さない |
 | 10 | 長く走る呼び出し | `blocking` は型に `<IO, Async>` を要し、ブロックする呼び出しのプールへの受け付けと待ちと取り出しに下ろす |
 | 11 | VM からの呼び出し | `eml_native` が `cranelift-jit` で、C の型の並びごとの橋渡しの関数を作る。VM は読み込みの前につないだ `Linked` の値を受け取り、`Op::Ffi` で橋渡しを通して呼ぶ。libffi は使わない |
-| 12 | 拡張 | GUI は Rust のプラグインの crate (`eml_gui`。まず egui) にする。プラグインの行は普通の extern の表の行で、実装だけが `Plugin` の trait に回る |
-| 13 | GUI のスレッド | イベントループは、メインの worker (プロセスのメインスレッドを専用の worker にしたもの。[マルチコア対応の設計](multicore.md) の「スレッドと worker」) の待ちに載せる。GUI のタスクとその子は、そのスレッドから動かない |
+| 12 | 拡張 | GUIは、Qt 6 (Linux)、WinUI 3 1.2 (Windows)、AppKit (macOS) を包むRustのtoolkitのcrateにする。部品 (widget) はtoolkitのもので、`Send`でなく、メインのworkerの上でだけ触れる。toolkitの行は普通のexternの表の行で、実装だけが`Plugin`のtraitに回る |
+| 13 | GUIのスレッド | toolkitのイベントループは、メインのworkerの`Park`である ([マルチコア対応の設計](multicore.md)の「スレッドとworker」)。`Pending::io()`を通してメインのworkerのI/Oのdriverでも待つ。kqueueかepollのfdはrun loopの源かソケットの通知器にし、IOCPは起こしを投函する補助のスレッドで受ける。ループは時計もデッドロックの判定も受け持たない。`eml_io`はどのtoolkitも参照しない。GUIのタスクとその子は、そのスレッドから動かない |
 
 ## `extern "C"` の宣言
 
@@ -124,9 +124,9 @@ matmul n a b =
 
 - プラグインは Rust の crate で、`eml_rt` の `Plugin` の trait を実装する。形は今の `Host` と同じで、trait は `eml_rt` に置き、実装は検証する核の外に置く。信頼の一覧では Host と同じ T11 の行に属する。`eml_rt` は vstd だけに依存したまま保つ
 - プラグインの行は普通の `eml_extern` の表の行で、Repr、Kind、純粋さ、借用、`Extern` の場合をそれぞれ持つ。そのため、型検査、LIR、コード生成の ABI、表と std を結ぶテストは変わらない。違うのは実装だけで、表から作る `extern "C"` の包みが行ごとに型の付いた `dyn Plugin` のメソッドを呼ぶ (Host の行と同じく `external_body`)
-- `Session::run` が実行系を組み立てるときにプラグインを登録する。プラグインのない処理系でそのモジュール (`Std.Gui` など) を import すると、読み込みの誤りになる。新しい誤りの番号を足す
+- `eml_vm::execute`がrunを組み立てるときにプラグインを登録する。プラグインは`Std.Tls`と同じ形で切り替える。プラグインのない処理系もそのモジュール (`Std.Gui`など) を持ち、その操作は種類`NotAvailable`のIOの失敗になる ([標準ライブラリ](../spec/stdlib.md)の「`Std.Tls`」)
 - `Plugin` は `Send + Sync` で、スレッドをまたいで安全な部分だけを持つ。`Send` でない状態は所有者の worker を確かめてから触れる入れ物に入れる (下の「GUI」)
-- `eml_cli` はプラグインを feature (`--features gui`) で切り替える。AOT はそのモジュールを import したときだけプラグインの静的ライブラリ (`libeml_gui.a`) をリンクする ([ネイティブ化の設計](native.md) の「AOT と配布」)
+- `eml_cli`は、`Std.Tls`をfeature `tls`で切り替えるのと同じく、プラグインをfeature (`--features gui`) で切り替える。AOTはそのモジュールをimportしたときだけプラグインの静的ライブラリ (`libeml_gui.a`) をリンクする ([ネイティブ化の設計](native.md)の「AOTと配布」)
 
 ## GUI
 
@@ -134,30 +134,26 @@ matmul n a b =
 import Async
 import Gui
 
-counter : Gui.Window -> Int -> <IO, Panic, Async> Unit
-counter w n =
+loop : Gui.Window -> <IO, Panic, Async> Unit
+loop w =
   match Gui.next_event w with
     | (Gui.Closed, w) -> Gui.close w
-    | (_, w) ->
-      let ui = Gui.begin_frame w
-      let (clicked, ui) = Gui.button ui "+1"
-      let ui = Gui.label ui "count: \{n}"
-      counter (Gui.end_frame ui) (if clicked then n + 1 else n)
+    | (_, w) -> loop w
 
 main : Unit -> <IO, Panic> Unit
 main () =
   use Async.run
-  Gui.run_on_main (fn () -> counter (Gui.open "counter" 400 300) 0)
+  Async.run_on_main (fn () -> loop (Gui.open "hello" 400 300))
 ```
 
-- 最初のプラグインは `crates/eml_gui` で、egui-winit と egui-wgpu を手でつなぐ (eframe は使わない。下の「却下した案」)
-- GUI はプロセスのメインスレッドで動く。メインの worker ([マルチコア対応の設計](multicore.md) の「スレッドと worker」) の上で、`Gui.run_on_main : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` が関数を動かす。winit、egui、wgpu の `Send` でない状態は `SendCell<Option<GuiState>>` (`unsafe impl Send`) に入れ、どの操作も今の worker がメインの worker であることを確かめてから触れる。ハンドルの持ち主の worker を確かめるのと同じ形である
-- プロセスに置くイベントループは1つである。`Gui.open` が、メインの worker の待ちをプラグインのものに替える。worker のループに動けるタスクがなくなると、待ちが winit の `run_app` の形でイベントループを回す。toolkit のコールバック (`about_to_wait`、利用者のイベント、Windows と macOS のウィンドウの大きさを変える間のループ) は、動けるタスクがなくなるまで動かして戻る関数を呼ぶ。そのため、モーダルなループの間も eml が動き続ける。起こすのは `EventLoopProxy::send_event` である。割り込みは、監視のスレッドが止めるビットを写して起こすことで、イベントループで待つ worker にも届く
-- イベントは引く形で受ける。`Gui.next_event : Window -> <IO, Async> (Event, Window)` はイベントが来るまでタスクを待たせる
-- UI の状態とクロージャは境目を越えない。プラグインはフレームごとに egui の `Ui` の積み重ねを持ち、eml は `Lin` の `Ui` のハンドルで操作する。`Gui.begin_frame : Window -> <IO> Ui` で始め、部品は `Gui.button : Ui -> String -> <IO> (Bool, Ui)` のようにハンドルを返す。入れ物は `Gui.begin_horizontal : Ui -> <IO> Ui` と `Gui.end_horizontal : Ui -> <IO> Ui` で開いて閉じ、入れ子の対応はプラグインが実行時に確かめる。対応しなければ実行時エラーである。`Gui.end_frame : Ui -> <IO> Window` が描いてウィンドウを返す。再描画は `Gui.request_redraw` で求める
-- GUIのタスクとその子はメインのworkerから動かない。メインのworkerは新しいタスクを置く先にもしない ([マルチコア対応の設計](multicore.md)の「スケジューラ」)。重い仕事は`compute`か、固定していないタスクへのchannelでメインのworkerの外へ出す。別のタスクの結果は`Gui.proxy`で得たインターフェースから`Gui.post`でGUIのタスクへ送る
-- CI では、ウィンドウを開かない形のプラグインのテスト (フレームの組み立て、入れ子の誤り、`post`) を流す。CI は GPU を持たないので、画面の確かめは OS ごとに手で行う。ネイティブのコードでも同じテストを流す
-- Slint は egui の後に2つ目のプラグインにできる
+- toolkitはRustのcrate `crates/eml_gui`である。部品はOSのtoolkitのもので、LinuxではQt 6、WindowsではWinUI 3 1.2 (Windows App SDK)、macOS 26ではAppKitを使う。winioと同じく、OSごとのイベントループをメインのworkerの`Park`に組み込む
+- GUIはプロセスのメインスレッド、つまりメインのworker ([マルチコア対応の設計](multicore.md)の「スレッドとworker」) で動く。`Std.Gui`はtoolkitの段で作り、メインのworkerでコードを動かすには`Async.run_on_main`と`Async.start_on_main`を使う。toolkitの部品と状態は`Send`でなく、今のworkerがメインのworkerであることを確かめてから触れる入れ物に入れる。ハンドルの持ち主のworkerを確かめるのと同じ形である
+- プロセスに置くイベントループは1つである。`Gui.open`が、toolkitの`Park`をメインのworkerの`Park`に据える。その待ちはOSのループを次のように組み込む。Win32では`MsgWaitForMultipleObjectsEx`で待って`PeekMessage`で汲み、`Park`のwakerは`PostMessage`で起こす。AppKitでは`nextEventMatchingMask`か、wakerが知らせる`CFRunLoop`の源で待つ。Qtでは`processEvents(WaitForMoreEvents)`を呼び、wakerはイベントを投函する。WinUIでは`Application::Start`がポンプを持ち、wakerは`DispatcherQueue`で`run_pending`を積む
+- toolkitのコールバックは、動けるタスクがなくなるまで動かして戻る`run_pending`を呼ぶ。モーダルなループの規則は次のとおりである。`Park`の中で入ったモーダルなループの間は、コールバックが`run_pending`を呼ぶのでemlが動き続ける。externから入ったモーダルなループは、externが戻るまでemlを止める。割り込みは、書く側がすべてのworkerの止める語にビットを立て、監視のスレッドがすべてのworkerを起こすので、wakerを通してイベントループで待つメインのworkerにも届く
+- runの外のイベントは、toolkitの段が足す`Pending`の起こしで届く。イベントは引く形で受ける。`Gui.next_event : Window -> <IO, Async> (Event, Window)`はイベントが来るまでタスクを待たせる
+- GUIのタスクとその子はメインのworkerから動かず、メインのworkerは配置でタスクを受けない ([マルチコア対応の設計](multicore.md)の「固定したタスク」)。重い仕事は`compute`か、固定していないタスクへのchannelでメインのworkerの外へ出す。別のタスクは、toolkitの投函のインターフェースでGUIのタスクへ結果を送る
+- CIでは、偽の`Park`と、ウィンドウを開かないstubのbackendでテスト (部品の組み立て、入れ子の誤り、投函) を流す。CIは画面を持たないので、画面の確かめはOSごとに手で行う。ネイティブのコードでも同じテストを流す
+- REPLのGUIは`python -m asyncio`の形にする。メインスレッドが`Seat::Separate`の`Machine`とtoolkitの`Park`を持ち、行の編集器は別のスレッドで動いて入力を1つずつ渡し、出力はrustylineの`ExternalPrinter`を通す。先に要るものは2つある。固定したタスクの閉包から届く根の物体と、runとrunの間に動く`Machine`の`Park`である ([ロードマップ](roadmap.md)の「REPL」)
 
 ## 却下した案
 
@@ -171,7 +167,9 @@ main () =
 - つなぐ失敗に診断の番号を付ける案と、すべての宣言をつなぐ案: ライブラリがあるかは機械の事実で、ソースの診断ではない。すべてつなぐと、使わない記号が1つないだけでプログラムが動かなくなる
 - `MutUnboxedArray` を貸す `pure` の行を `Effectful` にする案と、`Purity` に書き込みの変種を足す案: 前者は書き込みと `IO` を混ぜ、後者は2つの軸を1つの enum に混ぜる
 - FFI のための新しいエフェクト: `pure` と `IO` の区別より多くを表さない
-- GUI に eframe を使う案: eframe は `run_app` を自分で持つので、イベントループをメインの worker の待ちに載せられない
+- egui、winit、wgpuの組: 部品がOSのものでなく、GPUに依存し、winitがループを持って外の源を受け付けない
+- GUIのループを`IoDriver`の実装にする案: driverはどのworkerにもあって時計とI/Oの完了を受け持つが、GUIのループはメインのworkerだけのもので、時計とデッドロックの判定を受け持ってはならない
+- 入力のフックでREPLのGUIを動かす案 (行の編集器が入力を待つ間にイベントループを回す): 上の「GUI」の`python -m asyncio`の形が代わりになる。フックでは、編集器が待つ間しかGUIが動かない
 
 ## 未決の論点と将来の拡張
 
@@ -182,6 +180,5 @@ main () =
 - 32 ビットの要素とバイトの要素の生の配列: 既定は作らない。作るときは `Unboxed` と `MutUnboxed` の新しい instance にする。LP64 の LAPACK、LAPACKE の `ipiv`、`float` の buffer を渡す C の API が要るときに考える ([ロードマップ](roadmap.md) の「FFI と拡張」)
 - macOS の hardened runtime の下の JIT: 橋渡しのコードは `MAP_JIT` を使わずに置くので、hardened runtime で署名した処理系では C の関数を呼べない。署名して配る形は `native-aot` の段で扱う ([ロードマップ](roadmap.md) の「ネイティブ化」)
 - `long`: 既定は入れない。OS で幅が違うためである。`long` で受ける API は、OS ごとに宣言を分けて `int` か `int64_t` で書く。OS によって幅を変える名前が要る用途が出たときに考える
-- egui のクロージャのない入れ物: プラグインが `Ui` を自分で積み重ねる形は、egui の公開の API (`Ui::new` と `new_child`) に頼る。これが使えないときは、プラグインの中ではクロージャの形を保ち、eml の入れ物の API を `Gui.horizontal : Ui -> (Ui -> <IO> Ui) -> <IO> Ui` にして、プラグインがメインの worker の上で eml を呼び戻す。このときプラグインは呼び戻しの間にデストラクタを持たない
-- コールバックの中から worker のループを入れ子に呼ぶ形が使えないときは、`pump_app_events` を既定にする。そのときはモーダルなループの間 eml が止まる
+- モーダルなループ: `Park`の中で入ったモーダルなループの間はemlが動き続け、externから入ったものはexternが戻るまでemlを止める。既定はこの止まりを受け入れる。externからしか入れないモーダルなループがtoolkitに要るときに考え直す
 - Windows でのビルドに `lld` を同梱するか: [ネイティブ化の設計](native.md) の「未決の論点と将来の拡張」にある

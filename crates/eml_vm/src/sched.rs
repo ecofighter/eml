@@ -403,7 +403,7 @@ pub struct Scheduler<P: Policy> {
     /// 分かれたrunのメインのworkerの`Scheduler`である。走れるタスクがなくなったら、空きの待ちに入らずに`drive`から
     /// 抜ける (docs/spec/vm.mdの「メインのworker」)。
     pub(crate) main_loop: bool,
-    /// メインのworkerの`Pending::run`の状態。待ちの外では`Outside`である (docs/spec/vm.mdの「メインの worker の待ち」)。
+    /// メインのworkerの`Pending::run`の状態。待ちの外では`Outside`である (docs/spec/vm.mdの「メインのworkerの待ち」)。
     pub(crate) guard: Guard,
     /// driverの出どころ。runの`Run`の時間の基準から決めるので、どのworkerでも同じである。`Real`のrunだけがOSの
     /// シグナルを待つタスクへ届ける (docs/spec/stdlib.mdの「`Std.Signal`」)。空きの待ちに上限を掛けるかと、TLSが

@@ -1,5 +1,5 @@
--- `run_on_main` はメインの worker で動かした関数の値を返す。値は待つ側のタスクに戻る
--- (docs/spec/stdlib.md の「`Std.Async`」の「メインの worker」)。
+-- `run_on_main`はメインのworkerで動かした関数の値を返す。値は待つ側のタスクに戻る
+-- (docs/spec/stdlib.mdの「`Std.Async`」の「メインのworker」)。
 import Async (Async)
 
 spin : Int -> <Panic> Int

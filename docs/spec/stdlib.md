@@ -1252,7 +1252,7 @@ body () =
 - そのため、`timeout` で囲んだ `compute` は、期限が過ぎても仕事が終わるまで戻らず、仕事の後で `None` を返す。`race` で負けた腕の仕事も最後まで動く
 - `compute` 1回で `RunStats.parks` を1つ数え、`RunStats.tasks` は数えない ([VM](vm.md) の「`RunStats`」)
 
-### メインの worker
+### メインのworker
 
 ```haskell
 body : Unit -> <IO, Panic, Async> Unit
@@ -1261,7 +1261,7 @@ body () =
   println (show n)
 ```
 
-- `start_on_main f`は、`f`をメインのworkerのタスクとして始め、そのハンドルを返す。メインのworkerは`Machine`を持つスレッドで、`eml run`ではプロセスのメインのスレッド、`eml repl`ではworker 0である ([VM](vm.md)の「メインの worker」)。`run_on_main f`は`await (start_on_main f)`である
+- `start_on_main f`は、`f`をメインのworkerのタスクとして始め、そのハンドルを返す。メインのworkerは`Machine`を持つスレッドで、`eml run`ではプロセスのメインのスレッド、`eml repl`ではworker 0である ([VM](vm.md)の「メインのworker」)。`run_on_main f`は`await (start_on_main f)`である
 - `start_on_main`で始めたタスクを固定したタスクと呼ぶ。固定したタスクが始めるタスク (入れ子の`Async.run`の根も含む) も固定し、`par`の子と`compute`の仕事は固定しない ([VM](vm.md)の「`Async` のタスク」)。固定したタスクはほかのworkerへ動かない
 - スレッドに結び付いた資源 (GUIのツールキット) は、固定したタスクからだけ使う
 

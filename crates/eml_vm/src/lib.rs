@@ -199,11 +199,11 @@ pub struct RunConfig {
     /// 静止が走っている `Op::Job` を待つ長さで、run のすべての静止が分け合う。既定は 1 秒である。過ぎても残る仕事は
     /// 見捨て、`Machine` は poisoned になる (docs/spec/vm.md の「時計と driver」)。
     pub job_budget: Duration,
-    /// `Machine` を持つスレッドと worker 0 の関係。既定は `Seat::Merged` で、`execute` はいつも `Seat::Separate` にする
-    /// (docs/spec/vm.md の「メインの worker」)。
+    /// `Machine`を持つスレッドとworker 0の関係。既定は`Seat::Merged`で、`execute`はいつも`Seat::Separate`にする
+    /// (docs/spec/vm.mdの「メインのworker」)。
     pub seat: Seat,
     /// 分かれたrunのメインのworkerの`Park`を作るもの。既定は`None`で、`DefaultPark`を使う。合わせたrunは使わない
-    /// (docs/spec/vm.mdの「メインの worker の待ち」)。
+    /// (docs/spec/vm.mdの「メインのworkerの待ち」)。
     pub main_park: Option<ParkFactory>,
 }
 
@@ -275,9 +275,9 @@ impl RunConfig {
 /// 深さだけを受け持てばよい。
 pub(crate) const WORKER_STACK: usize = 8 << 20;
 
-/// プログラムを1回だけ実行する。呼んだスレッドで `Seat::Separate` の新しい `Machine` を作り、読み込み、エントリを
-/// 実行して閉じる。run の間、呼んだスレッドはメインの worker で、`main` は run が作る worker 0 で動く
-/// (docs/spec/vm.md の「上限と割り込み」)。
+/// プログラムを1回だけ実行する。呼んだスレッドで`Seat::Separate`の新しい`Machine`を作り、読み込み、エントリを
+/// 実行して閉じる。runの間、呼んだスレッドはメインのworkerで、`main`はrunが作るworker 0で動く
+/// (docs/spec/vm.mdの「上限と割り込み」)。
 pub fn execute(
     program: &Program,
     linked: &Linked,
@@ -437,15 +437,15 @@ impl<M: Mode> Machine<M> {
         self
     }
 
-    /// `Machine` を持つスレッドと worker 0 の関係を選ぶ。既定は `Seat::Merged` である。`Seat::Separate` の run は、
-    /// セッションの根に触れるコードと渡された driver を拒む (docs/spec/vm.md の「メインの worker」)。
+    /// `Machine`を持つスレッドとworker 0の関係を選ぶ。既定は`Seat::Merged`である。`Seat::Separate`のrunは、
+    /// セッションの根に触れるコードと渡されたdriverを拒む (docs/spec/vm.mdの「メインのworker」)。
     pub fn with_seat(mut self, seat: Seat) -> Machine<M> {
         self.seat = seat;
         self
     }
 
     /// 分かれたrunのメインのworkerの`Park`を作るものを渡す。runごとに`Machine`を持つスレッドで1つ作る。渡さなければ
-    /// `DefaultPark`で、合わせたrunは使わない (docs/spec/vm.mdの「メインの worker の待ち」)。
+    /// `DefaultPark`で、合わせたrunは使わない (docs/spec/vm.mdの「メインのworkerの待ち」)。
     pub fn with_main_park(mut self, main_park: ParkFactory) -> Machine<M> {
         self.main_park = Some(main_park);
         self
@@ -639,8 +639,8 @@ impl<M: Mode> Machine<M> {
         let refused = if !separate {
             None
         } else if code.tables.uses_roots || ctx.roots().len() > 0 {
-            // run の後に根が、落としたメインの worker のヒープを指しうる
-            // (docs/spec/vm.md の「誤り、止めること、終わり」)
+            // runの後に根が、落としたメインのworkerのヒープを指しうる
+            // (docs/spec/vm.mdの「誤り、止めること、終わり」)
             Some("code reaching session roots cannot run with a main worker on another thread")
         } else if self.driver.is_some() {
             // driver は作ったスレッドを離れられないので、分かれた run の driver は worker 0 が作る
@@ -952,7 +952,7 @@ struct Scheduled<M: Mode> {
     generations: Vec<u32>,
     /// どれかの worker の driver が、静止させた後にも保留の操作を残した。
     kept_pending: bool,
-    /// worker 1..N-1 と、分かれた run のメインの worker の `Ctx`。join の後に返ってきたもの。
+    /// worker 1..N-1と、分かれたrunのメインのworkerの`Ctx`。joinの後に返ってきたもの。
     others: Vec<Ctx<M>>,
     /// 作ったworkerの数。
     workers: usize,
@@ -1074,7 +1074,7 @@ fn run_scheduled<M: Mode, P: Policy>(
     }
     let main_policy = policy.for_worker(run.main());
     // `Park`はメインのworkerのスレッドで作り、そこで落とす。wakerは待ちに入る前に置くので、どの起こしも鳴らす
-    // (docs/spec/vm.mdの「メインの worker の待ち」)
+    // (docs/spec/vm.mdの「メインのworkerの待ち」)
     let park: Box<dyn Park> = match &start.main_park {
         Some(factory) => factory(),
         None => Box::new(DefaultPark),
@@ -1236,8 +1236,8 @@ fn entry_body<M: Mode, P: Policy>(
     args: EntryArgs,
     counts: &mut RunCounts,
 ) -> (Body<M>, Option<Box<dyn IoDriver>>) {
-    // 分かれた run では、この本体のどの出口も `END` を立ててメインの worker を起こすので、何かが失敗しうる前に見張りを
-    // 置く (docs/spec/vm.md の「誤り、止めること、終わり」)
+    // 分かれたrunでは、この本体のどの出口も`END`を立ててメインのworkerを起こすので、何かが失敗しうる前に見張りを
+    // 置く (docs/spec/vm.mdの「誤り、止めること、終わり」)
     let mut shutdown = Shutdown {
         control: Arc::clone(&args.control),
         run: Arc::clone(&args.run),

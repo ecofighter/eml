@@ -98,7 +98,7 @@ probe_all hosts =
 
 `try_all` は `probe` の中にあるので、1つの接続の失敗は `Err` として返り、スコープの失敗にならない。`timeout` は `try_all` の外にあるので、期限を過ぎた接続は `None`、失敗した接続は `Err` になる。
 
-- worker が複数のときも、`exit n` はどのタスクで呼んでもプログラムを終える。底が `Control` の終わりの欄に終了コードを書いた後 (最初の書き手が勝つ)、終わりのビットを立てる。各 worker は次の安全点で自分のエントリへ戻り、自分のスレッドの上で I/O の driver を空にしてから終わる。driver を空にするとは、操作を取り消して完了が届くまで待つことである。ファイルの仕事は終わるまで時間の上限なしに待ち、`Op::Job` は run で合わせて予算 (既定は1秒) まで待って、残りを見捨てる。見捨てた仕事があれば `Machine` は poisoned になり、ヒープを落とさずに漏らして終了コードを返す ([VM](../spec/vm.md) の「時計と driver」)。host のスレッドはすべての worker を待ち、その後、ヒープを落とし (ファイナライザが書き出して閉じる)、Host を書き出し、`n & 255` で終わる ([マルチコア対応の設計](multicore.md) の「止める手順」)。1つの worker の手順は [VM](../spec/vm.md) の「`Async` のタスク」の「終わり」にある
+- workerが複数のときも、`exit n`はどのタスクで呼んでもプログラムを終える。底が`Control`の終わりの欄に終了コードを書いた後 (最初の書き手が勝つ)、終わりのビットを立てる。各workerは次の安全点で自分のエントリへ戻り、自分のスレッドの上でI/Oのdriverを空にしてから終わる。driverを空にするとは、操作を取り消して完了が届くまで待つことである。ファイルの仕事は終わるまで時間の上限なしに待ち、`Op::Job`はrunで合わせて予算 (既定は1秒) まで待って、残りを見捨てる。見捨てた仕事があれば`Machine`はpoisonedになり、ヒープを落とさずに漏らして終了コードを返す ([VM](../spec/vm.md) の「時計とdriver」)。`Machine`を持つスレッドはすべてのworkerを待ち、その後、ヒープを落とし (ファイナライザが書き出して閉じる)、Hostを書き出し、`n & 255`で終わる ([マルチコア対応の設計](multicore.md) の「止める手順」)。1つのworkerの手順は [VM](../spec/vm.md) の「`Async`のタスク」の「終わり」にある
 - 実行時エラー (ヒープの誤り、上限、`Signal.wait Interrupt` で待つタスクのない割り込み) は今と同じく run 全体を止め、1回だけ報告する ([標準ライブラリ](../spec/stdlib.md) の「実行時エラー」)
 
 ### タスクごとの上限
@@ -211,7 +211,7 @@ std の非同期の操作はどれも次の3段で行う。extern は yield し�
 2. 待ち: `io_wait` は、操作がもう終わっていれば perform せずに続け、終わっていなければ生の操作 `await_io` でタスクを待たせる。token は `Wake` と組で戻る
 3. 取り出し (`take_*`): token を消費して、結果 (buffer とハンドル) を返すか、操作の IO の失敗を投げる extern。取り消した後も buffer とハンドルを返す。取り消したことは `Wake` で分かる
 
-ソケット、シグナル、`Gui.next_event` ([FFI と拡張の設計](ffi.md) の「GUI」)、ブロックする呼び出しのプールの仕事は、どれもこの形で待つ。例外は `Std.Net` のストリームの設定 (`shutdown_write`、`set_nodelay`) で、取り消しの地点にしないために `io_wait` を通さない。記録が終わったかを `op_done` で読み、受け付けで終わっていれば待たずに取り出し、別の worker の driver に回したときだけ `Async.io_wait_shielded` で host の受け付けを待つ ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。時間は `await_time` で待つ。
+ソケット、シグナル、`Gui.next_event` (メインのworkerの`Park`からの`Pending`の起こしで終わる。[FFIと拡張の設計](ffi.md)の「GUI」)、ブロックする呼び出しのプールの仕事は、どれもこの形で待つ。例外は`Std.Net`のストリームの設定 (`shutdown_write`、`set_nodelay`) で、取り消しの地点にしないために`io_wait`を通さない。記録が終わったかを`op_done`で読み、受け付けで終わっていれば待たずに取り出し、別のworkerのdriverに回したときだけ`Async.io_wait_shielded`でhostの受け付けを待つ ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。時間は`await_time`で待つ。
 
 ```haskell
 pub read_chunk : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
@@ -375,7 +375,7 @@ TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ラ
 - 複数の channel の `select`: 既定は入れない。`race`、`timeout`、`merge` で書く
 - broadcast と watch の channel: 既定は作らない
 - `Counter` のほかの `Atomic`: 既定は作らない
-- タスクを置く worker を選ぶ API (`spawn_here` など): 既定は作らない。スレッドに縛られた仕事は `Gui.run_on_main` で書く ([FFI と拡張の設計](ffi.md) の「GUI」)
+- タスクを置くworkerを選ぶAPI (`spawn_here`など): 既定は作らない。workerを名指しするプリミティブは`Async.start_on_main`だけである ([標準ライブラリ](../spec/stdlib.md)の「`Std.Async`」)
 - channel のキュー: 既定は mutex で、ロックフリーには後でランタイムの中だけで替える
 - `Lin` の closer token: 既定は作らない。`Chan.owned : Int -> <IO> (Chan a, ChanOwner)` のように `Lin` の `Foreign` の `ChanOwner` を足し、その `Drop` が run の mail に閉じる項を積む形である。`TaskHandle` の `Drop` と同じ仕組みなので、`eml_rt` は変わらず、送受信に費用を足さない。これで足りなければ、`Chan a` を `Unr` の `Foreign` のハンドルにする。channel の Rust の構造は変わらず、ハンドルの読みと放す引き金だけが変わる ([ロードマップ](roadmap.md) の「非同期」)
 - `Time` のモジュール: 上の「時間」にある

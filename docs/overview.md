@@ -90,7 +90,11 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 
 ### コンパイラと実行系
 
-処理系はバッチ型のパイプラインで、各段階を純粋な関数にし、後でクエリ化 (salsaなど) できるようにしてある。実行系は、型付きCore IR (前向きの辺だけを持つ基本ブロックの列で、エフェクトを明示する) をEPの後にLIR (RCとboxを明示し、エフェクトの命令を持たない) に写し、LIRをレジスタ型のバイトコードのVMで実行する。メモリはPerceus方式の参照カウントで管理し、`Lin`の値を2回消費することはない。VMはworkerごとにOSのスレッドとヒープを持ち、`par`の右の子を空いているworkerで動かす ([VM](spec/vm.md)の「`par`のforkとjoin」)。`Async`のタスクは`start`のときにworker 1..N-1を順に回して置き、終わるまでそこで動く ([VM](spec/vm.md)の「`Async`のタスク」)。並列化は、VMとネイティブのランタイムの両方に入れ、複数のworkerがOSのスレッドの上でタスクを動かす。詳細は[コンパイラの構成](implementation/architecture.md)、[Core IR](spec/core-ir.md)、[LIR](spec/lir.md)、[VM](spec/vm.md)、[オブジェクトモデル](spec/object-model.md)、[マルチコア対応の設計](future/multicore.md)にある。
+処理系はバッチ型のパイプラインで、各段階を純粋な関数にし、後でクエリ化 (salsaなど) できるようにしてある。実行系は、型付きCore IR (前向きの辺だけを持つ基本ブロックの列で、エフェクトを明示する) をEPの後にLIR (RCとboxを明示し、エフェクトの命令を持たない) に写し、LIRをレジスタ型のバイトコードのVMで実行する。メモリはPerceus方式の参照カウントで管理し、`Lin`の値を2回消費することはない。VMはworkerごとにOSのスレッドとヒープを持ち、`par`の右の子を空いているworkerで動かす ([VM](spec/vm.md)の「`par`のforkとjoin」)。`Async`のタスクは`start`のときにworker 1..N-1を順に回して置き、終わるまでそこで動く ([VM](spec/vm.md)の「`Async`のタスク」)。`Machine`を持つスレッドの上のメインのworkerは、`Async.start_on_main`で始めたタスクを動かす ([VM](spec/vm.md)の「メインのworker」)。並列化は、VMとネイティブのランタイムの両方に入れ、複数のworkerがOSのスレッドの上でタスクを動かす。詳細は[コンパイラの構成](implementation/architecture.md)、[Core IR](spec/core-ir.md)、[LIR](spec/lir.md)、[VM](spec/vm.md)、[オブジェクトモデル](spec/object-model.md)、[マルチコア対応の設計](future/multicore.md)にある。
+
+| 領域 | 決定 | 詳細 |
+|---|---|---|
+| 対応するOS | Windows 10 1809以降、Linux 6.12以降、macOS 26以降。後の段はこれらの版の機能に頼ってよい | [テスト戦略](implementation/testing.md)の「OSごとのテスト」 |
 
 ## 用語
 
@@ -110,4 +114,4 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | Perceus | 参照カウントの `dup` / `decref` / `release` を静的に挿入する方式。reuse analysis も持つ ([LIR](spec/lir.md) の「reuse」)。借用の最適化はない ([ロードマップ](future/roadmap.md) の「段の列」) |
 | Core IR | 型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列の IR。すべての中間値に名前を付け、エフェクトの命令を明示する。RC と box は持たない |
 | LIR | EP の後の Core IR から写す、基本ブロックの列の IR。エフェクトの命令を持たず、box、RC の命令、末尾呼び出しを明示する。VM と後のネイティブ化の入力である |
-| worker | タスクを動かす OS のスレッド1つ。自分の `Ctx` とヒープを持ち、スケジューラの下で仕事を取る。[マルチコア対応の設計](future/multicore.md) の「スレッドと worker」にある |
+| worker | タスクを動かすOSのスレッド1つ。自分の`Ctx`とヒープを持ち、スケジューラの下で仕事を取る。分かれたrunでは、`Machine`を持つスレッドの上のメインのworkerが、固定したタスクだけを動かすworkerとして1つ加わる。[マルチコア対応の設計](future/multicore.md)の「スレッドとworker」にある |

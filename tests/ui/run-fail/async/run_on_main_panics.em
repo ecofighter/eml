@@ -1,5 +1,5 @@
--- メインの worker のタスクの Panic は、ほかのタスクの失敗と同じく `await` で起こし直され、
--- `run` が文言を保って起こし直す (docs/spec/stdlib.md の「`Std.Async`」の「メインの worker」)。
+-- メインのworkerのタスクのPanicは、ほかのタスクの失敗と同じく`await`で起こし直され、
+-- `run`が文言を保って起こし直す (docs/spec/stdlib.mdの「`Std.Async`」の「メインのworker」)。
 import Async (Async)
 
 spin : Int -> <Panic> Int

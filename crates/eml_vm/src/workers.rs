@@ -214,7 +214,7 @@ pub(crate) struct Slot {
     /// driver を持つ worker の driver の waker。起こすときに driver の待ちも終わらせる。
     pub(crate) waker: OnceLock<Arc<dyn IoWaker>>,
     /// 分かれたrunのメインのworkerの`Park`のwaker。runごとに、メインのworkerが繰り返しを始める前に1回だけ置く
-    /// (docs/spec/vm.mdの「メインの worker の待ち」)。
+    /// (docs/spec/vm.mdの「メインのworkerの待ち」)。
     pub(crate) park_waker: OnceLock<Arc<dyn IoWaker>>,
     /// driver を持つ worker の driver の bin。ほかの worker は集める地点で印を見て、host を起こす
     /// (docs/spec/vm.md の「時計と driver」)。
@@ -269,7 +269,7 @@ pub(crate) struct Run {
     pub(crate) running: AtomicUsize,
     /// メインのworkerの`Park`がrunの外の待ちを抱えている。偽で始まり、`Pending::set_holds`が書く。worker 0は2つの
     /// デッドロックの判定で`running`の後にAcquireで読み、真の間は判定せずに待つ (docs/spec/vm.mdの
-    /// 「メインの worker の待ち」)。
+    /// 「メインのworkerの待ち」)。
     holds: AtomicBool,
     /// 送った子の知らせのうち、終わりの知らせをまだ受け取っていないものの数。親を失った節点の分も数える。
     pub(crate) in_flight: AtomicUsize,
@@ -680,9 +680,9 @@ impl Run {
         self.leave_idle(k);
     }
 
-    /// メインの worker の空きの待ちの前半。`park_idle` と同じだが、空きの集まりには入らないので、`pop_idle` が選ぶこと
-    /// はない。メインの worker は眠った形で始まるので、その形では真を返すだけである。最後に眠った worker なら worker 0 を
-    /// 起こす (docs/spec/vm.md の「メインの worker」)。
+    /// メインのworkerの空きの待ちの前半。`park_idle`と同じだが、空きの集まりには入らないので、`pop_idle`が選ぶこと
+    /// はない。メインのworkerは眠った形で始まるので、その形では真を返すだけである。最後に眠ったworkerならworker 0を
+    /// 起こす (docs/spec/vm.mdの「メインのworker」)。
     pub(crate) fn park_main(&self, control: &Control, k: usize) -> bool {
         let slot = &self.slots[k];
         let previous = {
@@ -891,8 +891,8 @@ fn run_worker<M: Mode, P: Policy>(
     })
 }
 
-/// 分かれた run のメインの worker の本体。`Machine` を持つスレッドで、worker 0 を作った後に動き、自分の `Ctx` を
-/// `run_scheduled` の畳み込みに返す (docs/spec/vm.md の「メインの worker」)。
+/// 分かれたrunのメインのworkerの本体。`Machine`を持つスレッドで、worker 0を作った後に動き、自分の`Ctx`を
+/// `run_scheduled`の畳み込みに返す (docs/spec/vm.mdの「メインのworker」)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_main<M: Mode, P: Policy>(
     code: &CodeBase<M>,
@@ -1298,7 +1298,7 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// メインのworkerの待ちの前半。空きの集まりに入らずにworker 1..N-1の手順で眠った形にし、眠ったかを返す。本物の
-    /// 時計で自分の区画に期限があれば、先にdriverを作る (docs/spec/vm.mdの「メインの worker」)。
+    /// 時計で自分の区画に期限があれば、先にdriverを作る (docs/spec/vm.mdの「メインのworker」)。
     pub(crate) fn main_park(&mut self) -> Result<bool, VmFault> {
         let k = self.index;
         if self.own_deadline.is_some() && self.run.io_worker(k) == k {
@@ -1319,7 +1319,7 @@ impl<P: Policy> Scheduler<P> {
 
     /// メインのworkerの既定の待ち (`Pending::default_wait`)。driverを持てば期限までdriverで待ち、戻ったら起きた形に
     /// なる。完了と期限の来たタイマーは次の集める地点が拾うためである。driverを持たなければ、起こされるまで欄の
-    /// 条件変数で眠る (docs/spec/vm.mdの「メインの worker の待ち」)。
+    /// 条件変数で眠る (docs/spec/vm.mdの「メインのworkerの待ち」)。
     pub(crate) fn main_default_wait(&mut self) -> std::io::Result<()> {
         let k = self.index;
         let deadline = self.own_deadline.filter(|_| self.run.io_worker(k) == k);
@@ -1670,8 +1670,8 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         Run::new(workers, Seat::Separate, None, clock, Arc::default())
     }
 
-    /// 分かれた run は、`main` とタスクを動かす worker の後にメインの worker の欄を1つ足す。その欄は眠った形で始まるので
-    /// `running` に数えず、起こすと数える (docs/spec/vm.md の「メインの worker」)。
+    /// 分かれたrunは、`main`とタスクを動かすworkerの後にメインのworkerの欄を1つ足す。その欄は眠った形で始まるので
+    /// `running`に数えず、起こすと数える (docs/spec/vm.mdの「メインのworker」)。
     #[test]
     fn a_separate_run_adds_a_parked_main_slot() {
         let run = separate(3, RunClock::Virtual(Arc::default()));
@@ -1695,7 +1695,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         );
     }
 
-    /// `start` の持ち主の輪はメインの worker を選ばない (docs/spec/vm.md の「メインの worker」)。
+    /// `start`の持ち主の輪はメインのworkerを選ばない (docs/spec/vm.mdの「メインのworker」)。
     #[test]
     fn placement_never_picks_the_main_worker() {
         let run = separate(3, RunClock::Virtual(Arc::default()));
@@ -1706,8 +1706,8 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         assert_eq!(run.next_owner(), 0);
     }
 
-    /// 本物の時計では、メインの worker も自分の driver の host になる。仮想の時計では worker 0 が host である
-    /// (docs/spec/vm.md の「時計と driver」)。
+    /// 本物の時計では、メインのworkerも自分のdriverのhostになる。仮想の時計ではworker 0がhostである
+    /// (docs/spec/vm.mdの「時計とdriver」)。
     #[test]
     fn io_worker_gives_the_main_worker_its_own_driver_on_the_real_clock() {
         let real = || RunClock::Real {
@@ -1729,7 +1729,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         assert_eq!(hosts(&merged), [0, 1, 2]);
     }
 
-    /// メインの worker は眠っても空きの集まりに入らないので、`pop_idle` が選ぶのはほかの worker だけである。
+    /// メインのworkerは眠っても空きの集まりに入らないので、`pop_idle`が選ぶのはほかのworkerだけである。
     #[test]
     fn the_main_worker_never_joins_idle() {
         let control = Control::new(Limits {
@@ -1745,7 +1745,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         assert_eq!(run.pop_idle(), None);
     }
 
-    /// 最後に眠ったのがメインの worker なら、眠っていた worker 0 を起こす (docs/spec/vm.md の「メインの worker」)。
+    /// 最後に眠ったのがメインのworkerなら、眠っていたworker 0を起こす (docs/spec/vm.mdの「メインのworker」)。
     #[test]
     fn the_main_worker_parking_last_wakes_worker_0() {
         let control = Control::new(Limits::default());
@@ -1755,12 +1755,12 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         run.park(0);
         assert_eq!(run.running.load(Ordering::Acquire), 1);
         assert!(run.park_main(&control, 1));
-        // worker 0 は起こされて動いている形に戻り、メインの worker は眠っている
+        // worker 0は起こされて動いている形に戻り、メインのworkerは眠っている
         assert!(run.take_wake(0));
         assert_eq!(run.running.load(Ordering::Acquire), 1);
     }
 
-    /// 眠っているメインの worker を2回起こしても、`running` には1回だけ数える。
+    /// 眠っているメインのworkerを2回起こしても、`running`には1回だけ数える。
     #[test]
     fn a_wake_of_the_parked_main_worker_counts_it_once() {
         let run = separate(2, RunClock::Virtual(Arc::default()));
@@ -1771,7 +1771,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         assert!(!run.take_wake(2));
     }
 
-    /// 眠る前に届いた起こしは、メインの worker を眠らせずに一度だけ素通りさせる。数は変わらない。
+    /// 眠る前に届いた起こしは、メインのworkerを眠らせずに一度だけ素通りさせる。数は変わらない。
     #[test]
     fn a_wake_before_the_main_worker_parks_keeps_it_awake() {
         let control = Control::new(Limits {
@@ -1789,7 +1789,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
     }
 
     /// 眠っているメインのworkerに知らせを送ると、`Park`のwakerを1回鳴らす。動いている間に届いた知らせは鳴らさない。
-    /// メインのworkerは眠る前に欄のlockの下で受け箱を見るためである (docs/spec/vm.mdの「メインの worker の待ち」)。
+    /// メインのworkerは眠る前に欄のlockの下で受け箱を見るためである (docs/spec/vm.mdの「メインのworkerの待ち」)。
     #[test]
     fn a_notice_to_the_parked_main_worker_rings_its_park_waker() {
         struct Count(std::sync::atomic::AtomicUsize);

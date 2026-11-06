@@ -1,6 +1,7 @@
-//! 分かれたrunのメインのworkerの待ち (docs/spec/vm.mdの「メインの worker の待ち」)。`Park`が替えるのはメインの
-//! workerの眠る道だけである。時計、デッドロックの判定、`END`はworker 0に残るので、すぐに戻らない`Park`もrunを
-//! 止められない。
+//! 分かれたrunのメインのworkerの待ち (docs/spec/vm.mdの「メインのworkerの待ち」)。`Park`が替えるのはメインの
+//! workerの眠る道だけである。時計、デッドロックの判定、`END`はworker 0に残るので、すぐに戻らない`Park`も、wakerが
+//! 鳴ったときに`run`を呼ぶか戻るなら、遅らせるのは固定したタスクとrunの最後の終わりだけである。どちらもしなければ、
+//! メインのworkerが`running`に数えられたままになり、仮想の時計とデッドロックの判定も止まる。
 
 use std::sync::Arc;
 use std::time::Duration;

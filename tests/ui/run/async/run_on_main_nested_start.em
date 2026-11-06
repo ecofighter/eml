@@ -1,5 +1,5 @@
 -- メインのworkerのタスクが始めた子と孫の結果が、親に戻る。子もメインのworkerに置かれることは、`eml_vm`の
--- `pinned.rs`が確かめる (docs/spec/stdlib.md の「`Std.Async`」の「メインの worker」)。
+-- `pinned.rs`が確かめる (docs/spec/stdlib.mdの「`Std.Async`」の「メインのworker」)。
 import Async (Async)
 
 spin : Int -> <Panic> Int
