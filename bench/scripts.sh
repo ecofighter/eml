@@ -24,9 +24,10 @@ eml="$root/target/release/eml"
 # `--example` を付けると選んだ target しか組まないので、eml_cli とは別の呼び出しにする
 cargo build --release -p eml_tls --example https_server --manifest-path "$root/Cargo.toml" >&2
 https_server="$root/target/release/examples/https_server"
-# 行 `https-get` の server を、途中で止まったときも残さない
+# 行 `https-get` の server と、その行の CA と鍵を、途中で止まったときも残さない
 server_pid=""
-trap 'if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; fi' EXIT
+pki=""
+trap 'if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; fi; if [[ -n "$pki" ]]; then rm -rf "$pki"; fi' EXIT
 
 # 種類 `$1` (`log` か `csv`) で約 `$2` KiB の入力のパスを出す。生成に時間がかかるので、あれば作り直さない。名前に大きさを
 # 入れるので、ほかの大きさで作ったファイルを測ることはない
@@ -130,14 +131,51 @@ numeric_row() {
   row "$label" "$size" "$root/bench/$program.em" "$root/bench/numeric/$py.py" /dev/null "$size"
 }
 
+# ディレクトリ `$1` に、2 日有効の CA (`ca.pem`) と、それが署名した 127.0.0.1 の leaf (`leaf.pem`、PKCS#8 の鍵
+# `leaf.key`) を作る。macOS 付属の LibreSSL で作れる形にしてある。leaf の AKI は、なければ Python 3.14 の既定の
+# context が鎖を拒むために付ける
+make_pki() {
+  local dir="$1" openssl=/usr/bin/openssl
+  cat > "$dir/ca.cnf" <<EXT
+[req]
+distinguished_name=dn
+x509_extensions=ext
+[dn]
+[ext]
+basicConstraints=critical,CA:TRUE
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+EXT
+  cat > "$dir/leaf.ext" <<EXT
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=serverAuth
+subjectAltName=IP:127.0.0.1
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid
+EXT
+  "$openssl" ecparam -name prime256v1 -genkey -noout -out "$dir/ca.ec.key"
+  "$openssl" req -x509 -new -config "$dir/ca.cnf" -key "$dir/ca.ec.key" -sha256 -days 2 -subj "/CN=eml bench CA" \
+    -out "$dir/ca.pem"
+  "$openssl" ecparam -name prime256v1 -genkey -noout -out "$dir/leaf.ec.key"
+  "$openssl" pkcs8 -topk8 -nocrypt -in "$dir/leaf.ec.key" -out "$dir/leaf.key"
+  "$openssl" req -new -key "$dir/leaf.key" -subj "/CN=127.0.0.1" -out "$dir/leaf.csr"
+  "$openssl" x509 -req -in "$dir/leaf.csr" -CA "$dir/ca.pem" -CAkey "$dir/ca.ec.key" -CAcreateserial -sha256 -days 2 \
+    -extfile "$dir/leaf.ext" -out "$dir/leaf.pem"
+}
+
 # 行 `https-get`。`crates/eml_tls/examples/https_server.rs` を `$2` MiB の本文で裏で動かし、eml の `Http` と Python の
-# `urllib.request` が `https://127.0.0.1:PORT/` から取る。比べも計測も同じ server につなぐ
+# `urllib.request` が `https://127.0.0.1:PORT/` から取る。比べも計測も同じ server につなぐ。`eml_tls` の fixtures は
+# 固定した 2026 年 1 月の時刻でしか有効でなく、現実の時刻では期限切れなので、runごとに 2 日有効の CA と leaf を作る。
+# leaf に AKI がないと、Python 3.14 の既定の context が鎖を拒む
 https_row() {
   local label="$1" mib="$2"
   local port_file="$data/https-port.txt" port="" cpu_before cpu_after
+  pki="$(mktemp -d)"
+  make_pki "$pki"
   # 前の実行のポートを読まないよう、起こす前に消す
   rm -f "$port_file"
-  "$https_server" "$mib" > "$port_file" &
+  "$https_server" "$pki/leaf.pem" "$pki/leaf.key" "$mib" > "$port_file" &
   server_pid=$!
   # 起動で落ちた server を待ち続けない
   for _ in $(seq 100); do
@@ -153,13 +191,15 @@ https_row() {
   fi
   cpu_before="$(ps -o time= -p "$server_pid")"
   row "$label" "$mib MiB" "$root/bench/scripts/https_get.em" "$root/bench/scripts/https_get.py" /dev/null \
-    "$root/crates/eml_tls/fixtures/ca.pem" "https://127.0.0.1:$port/"
+    "$pki/ca.pem" "https://127.0.0.1:$port/"
   # server が eml の速さを抑えていないかを見るため、比べと計測の接続の分の CPU 時間を出す
   cpu_after="$(ps -o time= -p "$server_pid")"
   echo "bench/scripts.sh: https_server の CPU 時間 $cpu_before -> $cpu_after (接続 $((2 + 2 * runs)) 本)" >&2
   kill "$server_pid"
   wait "$server_pid" 2>/dev/null || true
   server_pid=""
+  rm -rf "$pki"
+  pki=""
 }
 
 # 5回測った実時間の中央値を使う。(最大 - 最小) / 中央値 が 10% を超えたら、1回だけ測り直してその値を使う
