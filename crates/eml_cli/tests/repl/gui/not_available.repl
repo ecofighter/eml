@@ -1,0 +1,7 @@
+# REPLにはGUIのParkがないので、`Gui.run`は`NotAvailable`を投げる。失敗した後もセッションは続く
+# (docs/spec/stdlib.mdの「`Std.Gui`」、docs/spec/modules.mdの「REPL のセッション」)
+> import Async
+> import Gui
+> data Msg = | Quit
+> Async.run (fn () -> try_io (fn () -> Async.run (fn () -> Gui.run (fn () -> Gui.wait ()))))
+> println "next"

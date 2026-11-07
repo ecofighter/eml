@@ -752,6 +752,60 @@ fn workers_flag_is_accepted_and_rejected() {
     }
 }
 
+/// `--gui`は`native`か`stub`で、`EML_GUI`より先に読む。ほかの値は、フラグでも環境変数でも使い方の誤りで、
+/// 環境変数の誤りには`EML_GUI: `を付ける (docs/spec/stdlib.mdの「起動」)。
+#[test]
+fn a_bogus_gui_backend_is_a_usage_error() {
+    let run = |args: &[&str], env: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_eml"));
+        command
+            .args(args)
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/ui"))
+            .env_remove("EML_GUI");
+        if let Some(value) = env {
+            command.env("EML_GUI", value);
+        }
+        command.output().unwrap()
+    };
+    let file = "run/basics/comments_only.em";
+    let flag = run(&["run", "--gui", "bogus", file], None);
+    assert_eq!(flag.status.code(), Some(2), "{flag:?}");
+    assert!(
+        String::from_utf8_lossy(&flag.stderr)
+            .contains("`bogus` is not a GUI backend (native or stub)"),
+        "{flag:?}"
+    );
+    let env = run(&["run", file], Some("bogus"));
+    assert_eq!(env.status.code(), Some(2), "{env:?}");
+    assert!(
+        String::from_utf8_lossy(&env.stderr)
+            .contains("EML_GUI: `bogus` is not a GUI backend (native or stub)"),
+        "{env:?}"
+    );
+    // フラグが環境変数に勝つ
+    let flag_wins = run(&["run", "--gui", "stub", file], Some("bogus"));
+    assert_eq!(flag_wins.status.code(), Some(0), "{flag_wins:?}");
+    assert_eq!(run(&["repl", "--gui", "stub"], None).status.code(), Some(2));
+}
+
+/// 筋書きのないstubは、窓を開くと閉じる要求を1回送る。`EML_GUI`でも選べる。
+#[cfg(feature = "gui")]
+#[test]
+fn the_stub_backend_closes_a_window_that_has_no_script() {
+    let counter = "run/gui/counter.em";
+    let flag = eml(&["run", "--gui", "stub", counter]);
+    assert_eq!(flag.status.code(), Some(0), "{flag:?}");
+    assert_eq!(String::from_utf8_lossy(&flag.stdout), "final 0\n");
+    let output = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .args(["run", counter])
+        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/ui"))
+        .env("EML_GUI", "stub")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "final 0\n");
+}
+
 /// `run` が持たないフラグも、ファイルより後ろならそのままスクリプトに渡す (docs/spec/stdlib.md の「起動」)。
 #[test]
 fn flags_after_the_file_go_to_the_script() {

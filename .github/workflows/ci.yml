@@ -57,11 +57,11 @@ jobs:
       - name: cargo nextest run
         id: test
         run: cargo nextest run --failure-output immediate-final
-      # ワークスペースの実行では eml_cli の既定が tls を有効にするので、tls を外した処理系の振る舞いは
+      # ワークスペースの実行ではeml_cliの既定がtlsとguiを有効にするので、それらを外した処理系の振る舞いは
       # eml_io と eml_vm だけを選んで流す (docs/implementation/testing.md の「feature の組み合わせの確認」)
-      - name: cargo nextest run without tls
+      - name: cargo nextest run without tls and gui
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
-        run: cargo nextest run -p eml_io -p eml_vm --failure-output immediate-final -E 'test(tls_off::)'
+        run: cargo nextest run -p eml_io -p eml_vm --failure-output immediate-final -E 'test(tls_off::) | test(gui_off::)'
       # 時間の検査は runner の速さをそろえるため x86_64 の Linux だけで流す。ビルドは前の手順のものを使う
       - name: cargo nextest run --profile timing -j 1
         if: ${{ matrix.os == 'ubuntu-24.04' && !cancelled() && steps.test.outcome != 'skipped' }}
@@ -77,6 +77,7 @@ jobs:
           cargo clippy -p eml_cli --no-default-features --features types -- -D warnings
           cargo clippy -p eml_cli --no-default-features --features core -- -D warnings
           cargo clippy -p eml_cli --no-default-features --features run -- -D warnings
+          cargo clippy -p eml_cli --no-default-features --features run,gui -- -D warnings
           cargo clippy -p eml_io -p eml_vm --all-targets -- -D warnings
           cargo clippy -p eml_test_support --no-default-features -- -D warnings
           cargo clippy -p eml_test_support --no-default-features --features hir -- -D warnings
@@ -99,11 +100,13 @@ jobs:
           test "$(cargo tree -p eml_vm -e normal --target all | grep -c cranelift)" -eq 0
           test "$(cargo tree -p eml_native -e normal --target all | grep -c -E 'eml_rt|eml_lir|eml_vm')" -eq 0
           test -z "$(grep -rn unsafe crates/eml_extern/src)"
-      # eml_gui はワークスペースのどの crate にも依存しない (docs/implementation/architecture.md の「crate の依存関係」)
+      # eml_guiはワークスペースのどのcrateにも依存せず、既定の依存の木にnativeのtoolkitのcrateは入らない
+      # (docs/implementation/architecture.mdの「crate の依存関係」)
       - name: dependency edges of eml_gui
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
         run: |
           test "$(cargo tree -p eml_gui -e normal --target all --prefix none | grep -v '^eml_gui ' | grep -c '^eml_')" -eq 0
+          test "$(cargo tree -p eml_cli -e normal,build --target all | grep -c -E 'cxx v|objc2 v|winio-|qt-build-utils v')" -eq 0
 
   fmt:
     runs-on: ubuntu-24.04

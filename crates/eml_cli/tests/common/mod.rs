@@ -118,6 +118,8 @@ pub struct Marks {
     pub max_depth: Option<usize>,
     /// 確保量の上限 (hard, soft)。無ければ既定の上限を使う。
     pub max_bytes: Option<(usize, usize)>,
+    /// GUIのstubの`Park`を置いて流す。筋書きは`<名前>.gui`に書く (docs/implementation/testing.mdの「UI テスト」)。
+    pub gui_stub: bool,
 }
 
 /// テストのエントリか。分類の直下のファイルか、ディレクトリのテストの `main.<extension>` である。ディレクトリの
@@ -132,8 +134,8 @@ pub fn is_entry(root: &Path, path: &Path, extension: &str) -> bool {
             .is_some_and(|name| name.to_string_lossy() == format!("main.{extension}"))
 }
 
-/// `leading_marks` の誤りと、許さない場所のシグナルの印と worker の印と時計の印と深さの印と確保量の印で panic する。`shown` は
-/// 文言に出すファイルの名前である。この5つの印を許すのは、`run_entry` が真のとき (`run/` と `run-fail/` のエントリ) だけである。
+/// `leading_marks`の誤りと、許さない場所のシグナルの印とworkerの印と時計の印と深さの印と確保量の印とGUIの印でpanicする。`shown`は
+/// 文言に出すファイルの名前である。この6つの印を許すのは、`run_entry`が真のとき (`run/`と`run-fail/`のエントリ) だけである。
 pub fn marks_of(shown: &str, text: &str, leader: &str, run_entry: bool) -> Marks {
     let marks = leading_marks(text, leader).unwrap_or_else(|message| panic!("{shown}: {message}"));
     if !run_entry && !marks.signals.is_empty() {
@@ -151,11 +153,14 @@ pub fn marks_of(shown: &str, text: &str, leader: &str, run_entry: bool) -> Marks
     if !run_entry && marks.max_bytes.is_some() {
         panic!("{shown}: max-bytes marks are not supported here");
     }
+    if !run_entry && marks.gui_stub {
+        panic!("{shown}: gui marks are not supported here");
+    }
     marks
 }
 
 /// 先頭の印の行を読む。印の行は、shebang の行があればその後ろから続く、`<leader> windows:`、`<leader> signal:`、
-/// `<leader> workers:`、`<leader> clock:`、`<leader> max-depth:`、`<leader> max-bytes:` で始まる行の並びで、6種類をどの順に混ぜてもよい。
+/// `<leader> workers:`、`<leader> clock:`、`<leader> max-depth:`、`<leader> max-bytes:`、`<leader> gui:`で始まる行の並びで、7種類をどの順に混ぜてもよい。
 /// 深さの印と確保量の印は1つずつしか書けない。後ろの印が黙って前の印を上書きしないよう、重ねて書くと誤りにする。
 /// shebang は1行目にしか書けないので、印はその後ろに置く。
 pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
@@ -185,6 +190,8 @@ pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
             if marks.max_bytes.replace(bytes).is_some() {
                 return Err(format!("the max-bytes mark is written twice, at `{line}`"));
             }
+        } else if starts(line, " gui:") {
+            marks.gui_stub |= gui_stub(line, leader)?;
         } else {
             break;
         }
@@ -209,10 +216,17 @@ pub fn workers_skip(line: &str, leader: &str) -> Result<bool, String> {
 }
 
 /// 先頭の印の行の1つが `<leader> clock: real (<理由>)` なら本物の時計で流す
-/// (docs/implementation/testing.md の「UI テスト」)。綴りの誤りは `windows_skip` と同じく誤りにする。
+/// (docs/implementation/testing.mdの「UI テスト」)。綴りの誤りは`windows_skip`と同じく誤りにする。
 pub fn clock_real(line: &str, leader: &str) -> Result<bool, String> {
     reason_mark(line, leader, "clock", "real")
         .ok_or_else(|| format!("the clock mark is `{leader} clock: real (<reason>)`, not `{line}`"))
+}
+
+/// 先頭の印の行の1つが`<leader> gui: stub (<理由>)`ならGUIのstubの`Park`を置いて流す
+/// (docs/implementation/testing.mdの「UI テスト」)。綴りの誤りは`windows_skip`と同じく誤りにする。
+pub fn gui_stub(line: &str, leader: &str) -> Result<bool, String> {
+    reason_mark(line, leader, "gui", "stub")
+        .ok_or_else(|| format!("the gui mark is `{leader} gui: stub (<reason>)`, not `{line}`"))
 }
 
 /// `<leader> <kind>: <word> (<理由>)` を読む。`<leader> <kind>:` で始まらない行は `Some(false)`、始まるのに形が

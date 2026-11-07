@@ -41,6 +41,9 @@ enum Command {
         /// Open VALUE in place of the library written as KEY in a `link` item (repeatable)
         #[arg(long = "link", value_name = "KEY=VALUE", value_parser = parse_link)]
         link: Vec<(String, String)>,
+        /// The backend that `Std.Gui` opens windows with: `native`, or `stub`, which opens nothing and closes every window at once (default: `EML_GUI`, else native)
+        #[arg(long, value_name = "native|stub", value_parser = parse_gui)]
+        gui: Option<GuiChoice>,
         file: PathBuf,
     },
     /// Start an interactive session
@@ -86,11 +89,20 @@ fn main() -> ExitCode {
             stats,
             workers,
             link,
+            gui,
             file,
         } => {
             // 環境変数の誤りも、ファイルを読む前に使い方の誤りとして断る
             let workers = match workers.map_or_else(workers_from_env, Ok) {
                 Ok(workers) => workers,
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    return ExitCode::from(2);
+                }
+            };
+            #[cfg_attr(not(feature = "gui"), allow(unused_variables))]
+            let gui = match gui.map_or_else(gui_from_env, Ok) {
+                Ok(gui) => gui,
                 Err(message) => {
                     eprintln!("error: {message}");
                     return ExitCode::from(2);
@@ -111,7 +123,11 @@ fn main() -> ExitCode {
                 .with_debug_heap(debug_heap || stats)
                 .with_sched(Sched::Normal)
                 .with_clock(Clock::Real)
-                .with_control(control);
+                .with_control(Arc::clone(&control));
+            #[cfg(feature = "gui")]
+            {
+                config = config.with_main_park(gui_park(gui, &control, doorbell.clone()));
+            }
             if let Some(doorbell) = doorbell {
                 config = config.with_doorbell(doorbell);
             }
@@ -206,6 +222,53 @@ fn workers_from_env() -> Result<usize, String> {
         Err(std::env::VarError::NotUnicode(_)) => Err("EML_WORKERS: not valid unicode".to_string()),
         Err(std::env::VarError::NotPresent) => Ok(std::thread::available_parallelism()
             .map_or(1, |cpus| usize::from(cpus).min(MAX_WORKERS))),
+    }
+}
+
+/// `--gui`と`EML_GUI`の値。`Std.Gui`が窓を開くbackendを選ぶ (docs/spec/stdlib.mdの「起動」)。
+#[derive(Clone, Copy)]
+enum GuiChoice {
+    Native,
+    Stub,
+}
+
+fn parse_gui(text: &str) -> Result<GuiChoice, String> {
+    match text {
+        "native" => Ok(GuiChoice::Native),
+        "stub" => Ok(GuiChoice::Stub),
+        _ => Err(format!("`{text}` is not a GUI backend (native or stub)")),
+    }
+}
+
+/// `eml run`のGUIの`Park`。OSの終了の操作は、シグナルと同じく実行を割り込む (docs/spec/vm.mdの「GUI の Park」)。
+#[cfg(feature = "gui")]
+fn gui_park(
+    gui: GuiChoice,
+    control: &Arc<Control>,
+    doorbell: Option<Arc<eml_cli::Doorbell>>,
+) -> eml_cli::ParkFactory {
+    let backend = match gui {
+        GuiChoice::Native => eml_cli::Backend::Native,
+        GuiChoice::Stub => eml_cli::Backend::Stub(eml_cli::Script::default()),
+    };
+    let control = Arc::clone(control);
+    eml_cli::gui_park(
+        backend,
+        Arc::new(move || {
+            control.interrupt();
+            if let Some(doorbell) = &doorbell {
+                doorbell.ring();
+            }
+        }),
+    )
+}
+
+/// `--gui`がないときのbackend。`EML_GUI`がなければnativeにする。
+fn gui_from_env() -> Result<GuiChoice, String> {
+    match std::env::var("EML_GUI") {
+        Ok(text) => parse_gui(&text).map_err(|message| format!("EML_GUI: {message}")),
+        Err(std::env::VarError::NotUnicode(_)) => Err("EML_GUI: not valid unicode".to_string()),
+        Err(std::env::VarError::NotPresent) => Ok(GuiChoice::Native),
     }
 }
 
