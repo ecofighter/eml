@@ -32,7 +32,7 @@ eml run --link openblas=/opt/lib/libopenblas.so solve.em
 
 extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
-externの行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md)の「`extern`」)。預かる行は`Std.Async`の`start_raw`、`start_main_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`park_signal`の19行と、`Std.Chan`の`push_raw`の1行で、`task_cell`だけは借りて預かる。預からない引数の型変数は、同じ節の規則のとおり`Unr`に固定するか、コールバックの結果なら固定しない。
+externの行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md)の「`extern`」)。預かる行は`Std.Async`の`start_raw`、`start_main_raw`、`start_off_main_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`park_signal`の20行と、`Std.Chan`の`push_raw`の1行で、`task_cell`だけは借りて預かる。預からない引数の型変数は、同じ節の規則のとおり`Unr`に固定するか、コールバックの結果なら固定しない。
 
 stdの行は、`submit_*`、`Async.io_wait`、`take_*`の3つ組で、Rustの処理をdriverのブロックする呼び出しのプールで走らせられる。受け付けの行が消費した`Lin`の`Foreign`の引数は仕事へ移り、取り出しの行が新しい物体として返す ([VM](vm.md) の「プールの仕事」)。
 
@@ -1018,6 +1018,8 @@ main () = println (show (Async.run body))
 | `shield` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` | eml |
 | `compute` | `(Unit -> <never e> a) -> <IO, Async \| e> a` | eml |
 | `start_on_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
+| `start_off_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
+| `spawn_off_main` | `(Unit -> <IO, Panic, Async> Unit) -> <IO, Async> Unit` | eml |
 | `run_on_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` | eml |
 | `try_all` | `(Unit -> <IO, Panic \| e> a) -> <IO \| e> Result Failure a` | eml |
 | `Failure` | `IOFailed IOError` と `Panicked String` を持つ型 | eml (`deriving (Show)`) |
@@ -1076,6 +1078,7 @@ pub data Failure =
 |---|---|---|
 | `start_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
 | `start_main_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
+| `start_off_main_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
 | `run_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
 | `start_in_raw` | `Scope -> (Unit -> <IO, Async> Unit) -> <IO, Panic> Task a` | 閉包 (2つ目の引数) |
 | `park` | `Cell -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
@@ -1115,7 +1118,7 @@ pub data Failure =
 
 - タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
 - `take_result`と`run_result`が返す値の型が、`finish_ok`に預けた値の型と合うことは、処理系は確かめない。生の行を`pub`にせず、`start`、`start_in`、`start_on_main`、`run`、`await`のシグネチャだけが本体の結果の型`a`とハンドルの`Task a`を結ぶことで、標準ライブラリが保つ。`take_job`が返す値の型が`fork_job`に渡した閉包の結果の型と合うことも、同じく`compute`のシグネチャが保つ
-- 預かる引数の矢印 (`start_raw`、`start_main_raw`、`run_raw`、`start_in_raw`の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`park_signal`、`ready`の継続) には、閉じたrowを書く。ランタイムはそれを呼ばず、エントリの`start_task`、`resume_task`、`resume_io`が呼ぶので、rowはエントリの型が決める
+- 預かる引数の矢印 (`start_raw`、`start_main_raw`、`start_off_main_raw`、`run_raw`、`start_in_raw`の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`park_signal`、`ready`の継続) には、閉じたrowを書く。ランタイムはそれを呼ばず、エントリの`start_task`、`resume_task`、`resume_io`が呼ぶので、rowはエントリの型が決める
 - `park_io` と `park_io_until` は継続だけを預かり、token は預からずに消費する。token は即値の番号なので、再開の仕事が記録の番号から作り直して `resume_io` に渡す
 - `op_ready op ms` は token を借りて、待たずに続けてよいかを 0 (続ける)、1 (待つ)、2 (先に譲る) で返し、宣言の型では結果と token の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。どの呼び出しも、操作が終わっていたかによらず操作の予算を使い、書きの操作は長さに応じて多く使う (下の「操作の予算」)。記録が終わっていて取り消しの地点が投げなければ、予算が残れば待ちを1つ数えて 0 を返す。切れれば OS を1回見て集め、走れるタスクがあれば数えずに 2 を返し、なければ予算を戻し、待ちを1つ数えて 0 を返す。2 の待ちは、続く `reschedule ()` が数える。ほかは 1 で、何も数えない。待つ側の `await_io` が数える ([VM](vm.md) の「操作の記録」)
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
@@ -1263,6 +1266,7 @@ body () =
 
 - `start_on_main f`は、`f`をメインのworkerのタスクとして始め、そのハンドルを返す。メインのworkerは`Machine`を持つスレッドで、`eml run`ではプロセスのメインのスレッド、`eml repl`ではworker 0である ([VM](vm.md)の「メインのworker」)。`run_on_main f`は`await (start_on_main f)`である
 - `start_on_main`で始めたタスクを固定したタスクと呼ぶ。固定したタスクが始めるタスク (入れ子の`Async.run`の根も含む) も固定し、`par`の子と`compute`の仕事は固定しない ([VM](vm.md)の「`Async` のタスク」)。固定したタスクはほかのworkerへ動かない
+- `start_off_main f`と`spawn_off_main f`は`start`と`spawn`と同じだが、呼んだタスクが固定したタスクでも、新しいタスクを固定せずにworkerの輪に置く。新しいタスクは`Finished.pinned_tasks`に数えず、そのタスクが始めるタスクも固定しない。固定したタスクが開いたスコープの子にもなり、スコープを閉じるときはその終わりを待ち、取り消しも届く。メインのworkerの外で動かす仕事 (GUIを待たせないI/Oなど) に使う
 - スレッドに結び付いた資源 (GUIのツールキット) は、固定したタスクからだけ使う
 
 ### `Failure` と `try_all`

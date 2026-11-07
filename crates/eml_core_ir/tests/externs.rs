@@ -630,9 +630,10 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             | "Std.MutUnboxedArray.MutUnboxed Int.fill" => (&[Lin, Unr], Lin),
             "Std.MutUnboxedArray.freeze" => (&[Lin], Unr),
             "Std.Par.par" => (&[Poly, Poly], Poly),
-            "Std.Async.start_raw" | "Std.Async.start_main_raw" | "Std.Async.run_raw" => {
-                (&[Poly], Lin)
-            }
+            "Std.Async.start_raw"
+            | "Std.Async.start_main_raw"
+            | "Std.Async.start_off_main_raw"
+            | "Std.Async.run_raw" => (&[Poly], Lin),
             "Std.Async.park" => (&[Unr, Lin], Unr),
             "Std.Async.park_time" | "Std.Async.park_signal" => (&[Unr, Lin], Unr),
             "Std.Async.park_drain" => (&[Unr, Lin], Unr),
@@ -692,7 +693,7 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     }
 }
 
-/// 表の値そのもの。引数を預かる行は`Std.Async`の19行と`Std.Chan.push_raw`だけである。預かる引数は型変数を`Unr`に固定しない位置なので、
+/// 表の値そのもの。引数を預かる行は`Std.Async`の20行と`Std.Chan.push_raw`だけである。預かる引数は型変数を`Unr`に固定しない位置なので、
 /// その印は`Unr`でない (docs/spec/declarations.mdの「`extern`」)。
 #[test]
 fn only_the_listed_rows_hold_an_argument() {
@@ -707,6 +708,7 @@ fn only_the_listed_rows_hold_an_argument() {
         [
             "Std.Async.start_raw",
             "Std.Async.start_main_raw",
+            "Std.Async.start_off_main_raw",
             "Std.Async.run_raw",
             "Std.Async.park",
             "Std.Async.park_time",

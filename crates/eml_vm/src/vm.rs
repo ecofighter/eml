@@ -2640,7 +2640,7 @@ fn async_op<R: Exec>(
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、行がそれを預かる
     let ext = Extern::ALL[o[0] as usize];
     match ext {
-        Extern::AsyncStartRaw | Extern::AsyncStartMainRaw => {
+        Extern::AsyncStartRaw | Extern::AsyncStartMainRaw | Extern::AsyncStartOffMainRaw => {
             let cell = current_cell(task)?;
             // 固定したタスクが始めるタスクも固定する (docs/spec/vm.mdの「`Async`のタスク」)
             let (scope, pinned) = {
@@ -2648,7 +2648,9 @@ fn async_op<R: Exec>(
                 let pinned = cells.pinned(cell)?;
                 (cells.current_of(cell)?, pinned)
             };
-            let pinned = pinned || ext == Extern::AsyncStartMainRaw;
+            // 固定したタスクの仕事をメインのworkerの外へ出せるよう、`start_off_main_raw`は固定を引き継がない (docs/spec/stdlib.mdの「メインのworker」)
+            let pinned =
+                (pinned || ext == Extern::AsyncStartMainRaw) && ext != Extern::AsyncStartOffMainRaw;
             let owner = place_owner(sched, pinned);
             let (handle, run) =
                 start_task::<R>(ctx, task, sched, scope, owner, task.get(arg(0)), pinned)?
@@ -4674,6 +4676,7 @@ fn run_extern<R: Exec>(
             // コード生成が `Async` の命令にする (docs/spec/vm.md の「`Async` のタスク」)
             Extern::AsyncStartRaw
             | Extern::AsyncStartMainRaw
+            | Extern::AsyncStartOffMainRaw
             | Extern::AsyncRunRaw
             | Extern::AsyncPark
             | Extern::AsyncParkTime

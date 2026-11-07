@@ -1267,6 +1267,17 @@ table! {
                 Purity::Effectful,
             ),
         ),
+        AsyncStartOffMainRaw => holding(
+            &[true],
+            kinded(
+                "Std.Async.start_off_main_raw",
+                &[TObj],
+                &[Poly],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+        ),
         AsyncRunRaw => holding(
             &[true],
             kinded(
@@ -2168,6 +2179,7 @@ impl Extern {
             self,
             Extern::AsyncStartRaw
                 | Extern::AsyncStartMainRaw
+                | Extern::AsyncStartOffMainRaw
                 | Extern::AsyncRunRaw
                 | Extern::AsyncPark
                 | Extern::AsyncParkTime

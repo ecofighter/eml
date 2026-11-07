@@ -446,6 +446,79 @@ main () = Async.run (fn () ->
     }
 }
 
+/// `start_off_main`は固定したタスクからでも、新しいタスクをworkerの輪に置く。別のworkerのスレッドで動き、
+/// `Finished.pinned_tasks`は固定した親の1つだけを数える (docs/spec/stdlib.mdの「メインのworker」)。
+#[test]
+fn spawn_off_main_from_a_pinned_task_runs_on_a_worker() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () ->
+    println \"pinned\"
+    let t = Async.start_off_main (fn () -> println \"off\")
+    Async.await t
+    Async.spawn_off_main (fn () -> println \"spawned\")
+    Async.sleep_ms 1)
+  println \"main\")
+";
+    let (lines, result) = run(src, 2);
+    let finished = finished(result);
+    assert_eq!(texts(&lines), ["pinned", "off", "spawned", "main"]);
+    let me = std::thread::current().id();
+    assert_eq!(thread_of(&lines, "pinned"), me);
+    assert_ne!(thread_of(&lines, "off"), me);
+    assert_ne!(thread_of(&lines, "spawned"), me);
+    assert_eq!(finished.pinned_tasks, 1);
+}
+
+/// 固定したスコープを閉じるときは、輪に置いた固定しない子の終わりも待つ。
+#[test]
+fn closing_a_pinned_scope_waits_for_an_unpinned_child() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () ->
+    Async.scope (fn _ ->
+      Async.spawn_off_main (fn () ->
+        Async.sleep_ms 5
+        println \"child\")
+      println \"body\"))
+  println \"main\")
+";
+    let (lines, result) = run(src, 2);
+    let finished = finished(result);
+    assert_eq!(texts(&lines), ["body", "child", "main"]);
+    assert_ne!(thread_of(&lines, "child"), std::thread::current().id());
+    assert_eq!(finished.pinned_tasks, 1);
+}
+
+/// 固定したスコープを取り消すと、輪に置いた固定しない子にも届き、スコープはその終わりを待って閉じる。
+#[test]
+fn cancelling_a_pinned_scope_reaches_an_unpinned_child() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () ->
+    Async.scope (fn s ->
+      Async.spawn_off_main (fn () ->
+        println \"started\"
+        Async.sleep_ms 100000
+        println \"late\")
+      Async.sleep_ms 5
+      Async.cancel_scope s
+      println \"body\"))
+  println \"main\")
+";
+    let (lines, result) = run(src, 2);
+    let finished = finished(result);
+    assert_eq!(texts(&lines), ["started", "body", "main"]);
+    assert_ne!(thread_of(&lines, "started"), std::thread::current().id());
+    assert_eq!(finished.pinned_tasks, 1);
+}
+
 /// 鳴ったかを持つwaker。
 #[derive(Default)]
 struct Bell {
