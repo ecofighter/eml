@@ -30,9 +30,10 @@ mod qt {
         for path in qt.include_paths() {
             build.include(path);
         }
-        // Qtのライブラリを名前でつなぐ (`rustc-link-lib`の既定の種類なので動的である)
-        qt.cargo_link_libraries(&mut build);
         build.compile("eml_gui_qt");
+        // Qtのライブラリを名前でつなぐ (`rustc-link-lib`の既定の種類なので動的である)。rustcはこの順にリンクの引数を
+        // 並べ、ld.bfdは左から右に解決するので、Qtはそれを使うshimの静的ライブラリより後に置く
+        qt.cargo_link_libraries(&mut build);
         for source in SOURCES {
             println!("cargo::rerun-if-changed={source}");
         }
