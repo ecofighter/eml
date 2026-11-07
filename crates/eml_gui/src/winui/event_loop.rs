@@ -30,15 +30,15 @@ use winui3::Microsoft::UI::Xaml::{
     IApplicationOverrides_Impl, LaunchActivatedEventArgs,
 };
 
-use super::{Expected, with_shared};
+use super::{Value, with_shared};
 use crate::{EventLoop, EventQueue, Id, IoSource, RawEvent, Reason, Step};
 
 /// backendのメインのスレッドの側。ウィジェット、ループ、callbackが共有する。
 pub(super) struct Shared {
     queue: EventQueue,
     bell: Arc<Bell>,
-    /// `set`が置いた値。`super::push_unless_expected`が見る。
-    pub(super) expected: RefCell<HashMap<Id, Expected>>,
+    /// ウィジェットの値として最後に知らせたか置いたもの。`super::push_if_changed`が見る。
+    pub(super) known: RefCell<HashMap<Id, Value>>,
     /// `Application::Start`が戻った。その後はWinUIのオブジェクトに触れない。
     pub(super) exited: Cell<bool>,
     dispatcher: RefCell<Option<DispatcherQueue>>,
@@ -64,7 +64,7 @@ impl Shared {
                 queued: AtomicBool::new(false),
                 dispatcher: Mutex::new(None),
             }),
-            expected: RefCell::new(HashMap::new()),
+            known: RefCell::new(HashMap::new()),
             exited: Cell::new(false),
             dispatcher: RefCell::new(None),
             timer: RefCell::new(None),
@@ -253,16 +253,16 @@ impl WinUiLoop {
     }
 }
 
-/// `run_loop`が置いたものを、どの出口でも (`Err`、panic) 外す。起こしは`DispatcherQueue`から外し、時計は止めて手放す。
+/// `run_loop`が置いたものを、`Application::Start`が戻った後に外す。起こしは`DispatcherQueue`から外す。XAMLの核はもう
+/// 止まっているので、時計には触れず (止めるのは`Stop`の`stop`がすでにした)、登録も外す呼び出しをせずに忘れる。
 struct Running<'a>(&'a Shared);
 
 impl Drop for Running<'_> {
     fn drop(&mut self) {
         let shared = self.0;
         shared.bell.listen(None);
-        if let Some((timer, tick)) = shared.timer.borrow_mut().take() {
-            drop(tick);
-            let _ = timer.Stop();
+        if let Some((_timer, tick)) = shared.timer.borrow_mut().take() {
+            tick.forget();
         }
         shared.dispatcher.borrow_mut().take();
         shared.step.set(None);

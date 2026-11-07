@@ -1882,7 +1882,8 @@ main () =
 | 知らないか閉じたウィジェット | `NotFound "gui: unknown or closed widget"` |
 | ウィジェットにない性質 | `Other "gui: the widget has no such property"` |
 | 範囲の外の値 | `Other "gui: a value is out of range"` |
-| ネイティブのtoolkitがない、メインのスレッドでない | backendの文言の`NotAvailable` (`cannot open the GUI: built without the native toolkit`、`cannot open the GUI: AppKit needs the main thread`、`cannot open the GUI: Qt needs the main thread`、`cannot open the GUI: WinUI needs the main thread`) |
+| ネイティブのtoolkitがない、メインのスレッドでない | backendの文言の`NotAvailable` (`cannot open the GUI: built without the native toolkit`、`cannot open the GUI: AppKit needs the main thread`、`cannot open the GUI: Qt needs the main thread`、`cannot open the GUI: the GUI opens only on the main thread`) |
+| Windows 11より古いWindows | `NotAvailable "cannot open the GUI: WinUI needs Windows 11 or later"` |
 | Windows App SDK 2のruntimeがない (Windows) | `NotAvailable "cannot open the GUI: the Windows App SDK 2 runtime is not installed (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)"` |
 | 画面がない (Linuxで`DISPLAY`も`WAYLAND_DISPLAY`もない) | `Other "cannot open the GUI: no display (DISPLAY and WAYLAND_DISPLAY are unset)"` |
 | ほかのbackendの誤り | backendの文言の`Other` |

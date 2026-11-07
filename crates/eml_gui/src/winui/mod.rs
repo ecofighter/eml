@@ -35,11 +35,19 @@ const FIELD_WIDTH: f32 = 160.0;
 windows_core::link!("user32.dll" "system" fn GetDpiForWindow(hwnd: *mut core::ffi::c_void) -> u32);
 
 pub(crate) fn create() -> Result<Native, GuiError> {
-    // `eml run`ではMachineのスレッドがプロセスのメインのスレッドで、Rustのruntimeはそれを`main`と名づける。ほかの
-    // スレッド (テスト) ではruntimeを読み込まず、ウィンドウも開かない
+    // WinUIが求めるのはシングルスレッドのアパートメントだけだが、emlはGUIをメインのスレッドでだけ開く。`eml run`では
+    // Machineのスレッドがプロセスのメインのスレッドで、Rustのruntimeはそれを`main`と名づける。ほかのスレッド (テスト) では
+    // runtimeを読み込まず、ウィンドウも開かない
     if std::thread::current().name() != Some("main") {
         return Err(GuiError::NotAvailable(
-            "cannot open the GUI: WinUI needs the main thread".to_string(),
+            "cannot open the GUI: the GUI opens only on the main thread".to_string(),
+        ));
+    }
+    // Windows 11より古いと、bootstrapはruntimeのDLLを名前だけで探し、作業のディレクトリや`PATH`に置かれた同じ名前の
+    // DLLを読み込みうる。bootstrapの前に断る
+    if !is_windows_11(os_build()) {
+        return Err(GuiError::NotAvailable(
+            "cannot open the GUI: WinUI needs Windows 11 or later".to_string(),
         ));
     }
     bootstrap()?;
@@ -59,6 +67,38 @@ pub(crate) fn create() -> Result<Native, GuiError> {
         event_loop: Box::new(event_loop::WinUiLoop::new(shared)),
         queue,
     })
+}
+
+/// Windows 11の最初のビルドは22000である。
+fn is_windows_11(build: u32) -> bool {
+    build >= 22000
+}
+
+#[repr(C)]
+struct OsVersionInfo {
+    size: u32,
+    major: u32,
+    minor: u32,
+    build: u32,
+    platform: u32,
+    service_pack: [u16; 128],
+}
+
+windows_core::link!("ntdll.dll" "system" fn RtlGetVersion(info: *mut OsVersionInfo) -> i32);
+
+/// OSのビルドの番号。`GetVersionEx`はmanifestによって古い版を返すので、`RtlGetVersion`で読む。読めなければ0である。
+fn os_build() -> u32 {
+    let mut info = OsVersionInfo {
+        size: size_of::<OsVersionInfo>() as u32,
+        major: 0,
+        minor: 0,
+        build: 0,
+        platform: 0,
+        service_pack: [0; 128],
+    };
+    // SAFETY: `info`は`OSVERSIONINFOW`と同じ形で、`size`にその大きさを入れてある
+    let status = unsafe { RtlGetVersion(&mut info) };
+    if status == 0 { info.build } else { 0 }
 }
 
 /// Windows App SDK 2のruntimeのパッケージをプロセスに加える。結果はプロセスで1度だけ求める。加えた依存はプロセスの終わり
@@ -97,26 +137,22 @@ fn push(event: RawEvent) {
     with_shared(|s| s.push(event));
 }
 
-/// 値を変える`set`が起こすイベントを、ユーザーの操作と区別するための、プログラムが最後に置いた値。WinUIは、プログラムが
-/// 値を変えても`TextBox`の`TextChanged`と`ComboBox`の`SelectionChanged`を出し、`TextChanged`は後から出すので、
-/// 1回の`set`に何回出るかは決まらない。
+/// ウィジェットの値として最後に知らせたか置いたもの。WinUIは、プログラムが値を変えても`TextBox`の`TextChanged`と
+/// `ComboBox`の`SelectionChanged`を出し、`TextChanged`は後から出す。そのcallbackは出した時の値でなく今の値を読むので、
+/// 1回の変更に何回出るかは決まらない。
 #[derive(Clone, Debug, PartialEq)]
-enum Expected {
+enum Value {
     Text(String),
     Index(i32),
 }
 
-/// 置いた値と同じ値を知らせるイベントは、ユーザーの操作ではないので捨てる。違う値なら、ユーザーが変えたので、置いた値を
-/// 忘れて積む。ユーザーの変更は今の値と違う値にするので、同じ値を知らせるイベントを捨てても、ユーザーの変更は失わない。
-fn push_unless_expected(id: Id, seen: Expected, event: Event) {
+/// 今の値が最後に知らせたか置いた値と違うときだけ、その値を覚えてイベントを積む。`set`の後の知らせも、同じ変更を2度
+/// 知らせるイベントも、これで捨てる。ユーザーの変更は値を今の値と違うものにするので、失われない。
+fn push_if_changed(id: Id, now: Value, event: Event) {
     with_shared(|s| {
-        let mut expected = s.expected.borrow_mut();
-        if expected.get(&id) == Some(&seen) {
-            return;
+        if s.known.borrow_mut().insert(id, now.clone()).as_ref() != Some(&now) {
+            s.push(RawEvent::User(event));
         }
-        expected.remove(&id);
-        drop(expected);
-        s.push(RawEvent::User(event));
     });
 }
 
@@ -161,8 +197,18 @@ struct Held {
     part: Part,
     /// 子を外す時の親。ウィンドウにはない。
     parent: Option<Canvas>,
-    /// callbackの登録。落とすと外れる。
-    _events: Vec<EventRevoker>,
+    /// callbackの登録。落とすと外す呼び出しをするので、ループが終わった後は`release`が忘れる。
+    events: Vec<EventRevoker>,
+}
+
+/// 手放した`Held`を片付ける。ループが終わった後は、XAMLの核はもう止まっているので、登録を外す呼び出しもせず、参照を
+/// 手放すだけにする。
+fn release(held: Held, exited: bool) {
+    if exited {
+        for registration in held.events {
+            registration.forget();
+        }
+    }
 }
 
 struct WinUiWidgets {
@@ -170,6 +216,15 @@ struct WinUiWidgets {
     parts: HashMap<Id, Held>,
     /// min-contentの問い合わせで、ラベルの語を1つずつ測る、画面に出さない`TextBlock`。ループの中で初めて要る時に作る。
     measurer: Option<TextBlock>,
+}
+
+impl Drop for WinUiWidgets {
+    fn drop(&mut self) {
+        let exited = self.shared.exited.get();
+        for (_, held) in self.parts.drain() {
+            release(held, exited);
+        }
+    }
 }
 
 /// `ContentControl`の中身にする文字列。
@@ -202,15 +257,11 @@ impl WinUiWidgets {
                 let changed = field.TextChanged(move |sender, _| {
                     if let Ok(text) = sender.ok().and_then(|s| s.cast::<TextBox>()?.Text()) {
                         let text = text.to_string_lossy();
-                        push_unless_expected(
-                            id,
-                            Expected::Text(text.clone()),
-                            Event::Text(id, text),
-                        );
+                        push_if_changed(id, Value::Text(text.clone()), Event::Text(id, text));
                     }
                     Ok(())
                 })?;
-                self.expect(id, Expected::Text(text.clone()));
+                self.remember(id, Value::Text(text.clone()));
                 field.SetText(&HSTRING::from(text.as_str()))?;
                 (Part::TextField(field), vec![changed])
             }
@@ -237,9 +288,9 @@ impl WinUiWidgets {
                         .and_then(|s| s.cast::<ComboBox>()?.SelectedIndex())
                         && index >= 0
                     {
-                        push_unless_expected(
+                        push_if_changed(
                             id,
-                            Expected::Index(index),
+                            Value::Index(index),
                             Event::Select(id, i64::from(index)),
                         );
                     }
@@ -258,8 +309,8 @@ impl WinUiWidgets {
     }
 
     /// プログラムが値を置く前に呼ぶ。
-    fn expect(&self, id: Id, value: Expected) {
-        self.shared.expected.borrow_mut().insert(id, value);
+    fn remember(&self, id: Id, value: Value) {
+        self.shared.known.borrow_mut().insert(id, value);
     }
 
     fn set_part(
@@ -276,13 +327,13 @@ impl WinUiWidgets {
             (Part::Button(button), Prop::Text(text)) => button.SetContent(&content(text)),
             (Part::CheckBox(check), Prop::Text(text)) => check.SetContent(&content(text)),
             (Part::TextField(field), Prop::Text(text)) => {
-                self.expect(w, Expected::Text(text.clone()));
+                self.remember(w, Value::Text(text.clone()));
                 field.SetText(&HSTRING::from(text.as_str()))
             }
             (Part::ProgressBar(bar), Prop::Value(v)) => bar.SetValue(*v as f64),
             (Part::Choice(choice), Prop::Value(v)) => {
                 let index = i32::try_from(*v).map_err(|_| GuiError::OutOfRange)?;
-                self.expect(w, Expected::Index(index));
+                self.remember(w, Value::Index(index));
                 choice.SetSelectedIndex(index)
             }
             (Part::CheckBox(check), Prop::Checked(on)) => check.SetIsChecked(Some(*on)),
@@ -454,7 +505,7 @@ impl Widgets for WinUiWidgets {
             Held {
                 part,
                 parent: None,
-                _events: events,
+                events,
             },
         );
         Ok(())
@@ -477,7 +528,7 @@ impl Widgets for WinUiWidgets {
             Held {
                 part,
                 parent: Some(canvas),
-                _events: events,
+                events,
             },
         );
         Ok(())
@@ -541,16 +592,27 @@ impl Widgets for WinUiWidgets {
         let Some(held) = self.parts.remove(&w) else {
             return;
         };
+        let exited = self.shared.exited.get();
         if w.is_window() {
-            self.parts.retain(|id, _| id.window_no() != w.window_no());
+            let children: Vec<Id> = self
+                .parts
+                .keys()
+                .filter(|id| id.window_no() == w.window_no())
+                .copied()
+                .collect();
+            for id in children {
+                if let Some(child) = self.parts.remove(&id) {
+                    release(child, exited);
+                }
+            }
         }
         let parts = &self.parts;
         self.shared
-            .expected
+            .known
             .borrow_mut()
             .retain(|id, _| parts.contains_key(id));
-        // ループが終わった後は、WinUIのオブジェクトに触れずに手放すだけにする
-        if self.shared.exited.get() {
+        if exited {
+            release(held, exited);
             return;
         }
         match (&held.part, &held.parent) {
@@ -589,9 +651,18 @@ mod tests {
         assert_eq!(
             create().err(),
             Some(GuiError::NotAvailable(
-                "cannot open the GUI: WinUI needs the main thread".to_string()
+                "cannot open the GUI: the GUI opens only on the main thread".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn winui_needs_windows_11() {
+        assert!(!is_windows_11(0));
+        assert!(!is_windows_11(19045));
+        assert!(is_windows_11(22000));
+        assert!(is_windows_11(26100));
+        assert!(os_build() > 0, "RtlGetVersion reads the build number");
     }
 
     /// runtimeがないWindowsでは、bootstrapの誤りはMicrosoftの配布のページを示す。runtimeのあるWindowsでは確かめられない。

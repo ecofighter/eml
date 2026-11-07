@@ -620,7 +620,7 @@ fn the_qt_backend_is_made_only_when_a_run_asks_for_a_gui() {
 #[test]
 fn the_winui_backend_is_made_only_when_a_run_asks_for_a_gui() {
     assert_the_native_backend_is_made_only_when_a_run_asks_for_a_gui(
-        "IOError { kind = NotAvailable, message = \"cannot open the GUI: WinUI needs the main thread\" }",
+        "IOError { kind = NotAvailable, message = \"cannot open the GUI: the GUI opens only on the main thread\" }",
     );
 }
 
