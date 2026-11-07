@@ -17,7 +17,7 @@ use crate::cells::{CellRef, HostBin, Post, Shared, Woken};
 use crate::code::CodeBase;
 use crate::counters::Counters;
 use crate::doorbell::Doorbell;
-use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, RunClock, ceil_ms, floor_ms};
+use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, MadeDriver, RunClock, ceil_ms, floor_ms};
 use crate::park::Park;
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
@@ -260,6 +260,10 @@ impl Slot {
 /// `Slot::current` と `Slot::top` の、タスクのないことを表す値。
 pub(crate) const NO_CELL: u64 = u64::MAX;
 
+/// メインのworkerのdriverに保留の操作があり、OSの源 (`Pending::io`) がないときに、`Park`の待ちに渡す長さの上限
+/// (docs/spec/vm.mdの「メインのworkerの待ち」)。
+const MAIN_POLL_CAP: Duration = Duration::from_millis(10);
+
 /// `Slot::current` と `Slot::top` に置くセルの符号。
 pub(crate) fn cell_word(cell: CellRef) -> u64 {
     cell.encode() as u64
@@ -393,7 +397,7 @@ impl Run {
     /// worker 0が最初に作るdriver。`Separate`ではworker 0のスレッドで作る。`Box<dyn IoDriver>`は`Send`でないので、作ったスレッドで
     /// 捨てるためである。
     pub(crate) fn entry_driver(&self, seed: Option<u64>) -> std::io::Result<Box<dyn IoDriver>> {
-        self.clock.driver(seed)
+        self.clock.driver(seed).map(|(driver, _)| driver)
     }
 
     /// 静止で仕事を待てる残り。run の最初の静止が期限を決め、ほかの worker はそれを分け合う。
@@ -460,7 +464,7 @@ impl Run {
     /// 本物の時計の run で、worker `k` (`k` ≥ 1) が最初に要るときに作る driver。run の時間の基準から作るので、どの
     /// worker の driver も同じ時刻を読む。ほかの run では作らず `None` である。渡された driver の run (`Injected`) は
     /// worker を作らないので、基準から driver を作る道を通らない (docs/spec/vm.md の「時計と driver」)。
-    pub(crate) fn new_driver(&self) -> Option<std::io::Result<Box<dyn IoDriver>>> {
+    pub(crate) fn new_driver(&self) -> Option<std::io::Result<MadeDriver>> {
         match self.clock {
             RunClock::Real { .. } => Some(self.clock.driver(None)),
             RunClock::Virtual(_) | RunClock::Injected => None,
@@ -1324,12 +1328,36 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// メインのworkerの`Park`が待ってよい長さ。本物の時計でdriverを持てば自分の区画のいちばん早い期限まで、ほかでは
-    /// 起こされるまで (`None`) である。仮想の時計では、期限の来たタイマーのためにworker 0がメインのworkerを起こす。
+    /// 起こされるまで (`None`) である。driverにOSの源がなく、保留の操作があれば、`MAIN_POLL_CAP`で切る。仮想の時計
+    /// では、期限の来たタイマーのためにworker 0がメインのworkerを起こす。
     pub(crate) fn main_timeout(&self) -> Option<Duration> {
         let k = self.index;
-        let deadline = self.own_deadline.filter(|_| self.run.io_worker(k) == k)?;
-        let driver = self.driver.as_deref()?;
-        Some(Duration::from_millis(deadline).saturating_sub(driver.now()))
+        let driver = self
+            .driver
+            .as_deref()
+            .filter(|_| self.run.io_worker(k) == k)?;
+        let until = self
+            .own_deadline
+            .map(|d| Duration::from_millis(d).saturating_sub(driver.now()));
+        // OSの源を渡せない`Park`は、driverに出した操作の完了を見に、間をおいて`run`を呼ぶ (docs/spec/vm.mdの「メインのworkerの待ち」)
+        let cap = (self.poll.is_none() && driver.pending() > 0).then_some(MAIN_POLL_CAP);
+        match (until, cap) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// driverを持てば、待たずに1回OSを見る。届いた完了は次の集める地点が拾う。`Park`が呼ぶメインのworkerの`run`の
+    /// 始めに使う (docs/spec/vm.mdの「メインのworkerの待ち」)。
+    pub(crate) fn look_once(&mut self) -> Result<(), VmFault> {
+        let Some(driver) = self.driver.as_deref_mut() else {
+            return Ok(());
+        };
+        let now = self.run.now_ms_floor(Some(&*driver))?;
+        driver
+            .wait(Some(now))
+            .map(|_| ())
+            .map_err(|e| VmFault::Driver(e.to_string()))
     }
 
     /// メインのworkerの既定の待ち (`Pending::default_wait`)。driverを持てば期限までdriverで待ち、戻ったら起きた形に
@@ -1355,6 +1383,7 @@ impl<P: Policy> Scheduler<P> {
         let Some(mut driver) = self.driver.take() else {
             return false;
         };
+        self.poll = None;
         driver.quiesce(self.run.job_wait(driver.now()));
         let k = self.index;
         if record && self.cells.lock().in_flight(k) > 0 {

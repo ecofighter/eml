@@ -46,7 +46,7 @@ pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
-pub use park::{DefaultPark, Park, ParkFactory, Pending, Progress};
+pub use park::{DefaultPark, Park, ParkFactory, Pending, PollSource, Progress};
 pub use sched::{Memory, Normal, Policy, Sched, Scheduler, Seeded, Sequential};
 pub use vm::Task;
 pub use workers::{Entry, Ready, Seat};
@@ -658,15 +658,20 @@ impl<M: Mode> Machine<M> {
         let driver = match (separate, self.driver.take()) {
             (true, _) => None,
             (false, Some(driver)) => Some(driver),
-            (false, None) => Some(run_clock.driver(self.sched.seed()).map_err(|e| {
-                code.error(
-                    vm::Failure {
-                        fault: VmFault::Driver(e.to_string()),
-                        pc: task.pc,
-                    },
-                    &task,
-                )
-            })?),
+            (false, None) => Some(
+                run_clock
+                    .driver(self.sched.seed())
+                    .map(|(driver, _)| driver)
+                    .map_err(|e| {
+                        code.error(
+                            vm::Failure {
+                                fault: VmFault::Driver(e.to_string()),
+                                pc: task.pc,
+                            },
+                            &task,
+                        )
+                    })?,
+            ),
         };
         let mut counts = RunCounts::default();
         let start = Start {

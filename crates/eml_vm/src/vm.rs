@@ -22,7 +22,7 @@ use crate::error::VmFault;
 use crate::ffi;
 use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
-use crate::park::{Guard, Park, Pending, Progress};
+use crate::park::{Guard, Park, Pending, PollSource, Progress};
 use crate::sched::{
     ENTRY, JOB, JoinId, JoinNode, Memory, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId,
     TaskState,
@@ -893,6 +893,7 @@ fn main_wait<R: Exec>(
         sched: &mut *sched,
         counts: &mut *counts,
         stop: None,
+        from_park: true,
     };
     let waited = park.wait(timeout, &mut pending);
     let stop = pending.stop.take();
@@ -922,6 +923,7 @@ fn main_wait<R: Exec>(
         sched: &mut *sched,
         counts: &mut *counts,
         stop: None,
+        from_park: false,
     };
     let progress = pending.run();
     let stop = pending.stop.take();
@@ -942,6 +944,9 @@ struct MainPending<'a, R: Exec> {
     counts: &'a mut RunCounts,
     /// `run`の`drive`が止まった誤り。待ちの後で`main_wait`が返す。
     stop: Option<RuntimeError>,
+    /// `Park`に渡したものか。`Park`はdriverの代わりにdriverのOSの源で待ちうるので、`Park`が呼ぶ`run`は始めに1回、
+    /// 待たずにdriverに問う。完了を取り、源に残った起こしも消すためである (docs/spec/vm.mdの「メインのworkerの待ち」)。
+    from_park: bool,
 }
 
 impl<R: Exec> Pending for MainPending<'_, R> {
@@ -950,6 +955,13 @@ impl<R: Exec> Pending for MainPending<'_, R> {
             return progress;
         }
         self.sched.run.unpark(self.sched.index);
+        if self.from_park
+            && let Err(error) = self.sched.look_once()
+        {
+            self.stop = Some(main_fault(error));
+            self.sched.guard = Guard::Stopped(0);
+            return Progress::Stopping;
+        }
         loop {
             let driven = drive::<R>(self.code, self.ctx, self.task, self.sched, self.counts)
                 .and_then(|go| {
@@ -989,6 +1001,10 @@ impl<R: Exec> Pending for MainPending<'_, R> {
         if self.sched.run.swap_holds(holds) && !holds {
             self.sched.run.wake(0);
         }
+    }
+
+    fn io(&self) -> Option<PollSource> {
+        self.sched.poll
     }
 }
 

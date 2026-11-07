@@ -182,7 +182,7 @@
 - 仮想の時計の時間は、メインのworkerを含むすべてのworkerが眠っている間だけ進む。動いている固定したタスクは、ほかの動いているタスクと同じく時計とデッドロックの判定を止める。本物の時計で待つのは判定だけである ([VM](../spec/vm.md)の「時計と driver」)
 - メインのworkerの同期の読みには`EINTR`が届かない ([VM](../spec/vm.md)の「上限と割り込み」)
 - メインのworkerは中継したシグナルを届けない。runの全体の務めで、mailから取り出すのはworker 0..N-1である。`--workers 1`では、待つタスクが固定したものかによらず、シグナルが届くのはworker 0が集める地点に着いたときだけである。`main`がその場の読みで止まっている間に来た2回目のシグナルでは、ハンドラがその規則でその場でプログラムを終わらせる (`_exit(130)`、`_exit(143)`。[VM](../spec/vm.md)の「メインのworker」、[標準ライブラリ](../spec/stdlib.md)の「`Std.Signal`」)
-- `Park`は`DefaultPark`しかない。替える`Park`もメインのworkerのI/Oのdriverで待たなければならず、それには`Pending::io()`が要るが、まだない。それまでは、`default_wait`を使わずに待つ`Park`の下では固定したタスクのI/Oは終わらない ([VM](../spec/vm.md)の「メインのworkerの待ち」)
+- `Park`は`DefaultPark`しかなく、GUIのツールキットのループはまだない。替える`Park`の下で固定したタスクのI/Oが終わるのは、`Park`が`default_wait`で待つか、`Pending::io()`の源 (unix) か10 msの上限 (Windows) で待って自分で`run`を呼ぶときである ([VM](../spec/vm.md)の「メインのworkerの待ち」)
 
 ### 子のプロセス
 

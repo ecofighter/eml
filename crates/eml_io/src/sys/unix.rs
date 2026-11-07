@@ -74,6 +74,9 @@ pub(crate) trait Poller: Sized {
         timeout: Option<Duration>,
         deliver: impl FnMut(u64, Ready),
     ) -> io::Result<()>;
+    /// pollerが待つOSの物体のfd。eventか起こしが残っていれば読める。driverの外の待ち (メインのworkerの`Park`) が
+    /// 源の1つとして待つ。
+    fn raw_fd(&self) -> RawFd;
 }
 
 /// 核が持つソケット、パイプの親の端、ファイル。核は中を見ず、`fd` を閉じるのは `Backend::close` だけである。
@@ -612,6 +615,10 @@ impl<P: Poller> Unix<P> {
             waits: HashMap::new(),
             epoch,
         })
+    }
+
+    pub(crate) fn raw_fd(&self) -> RawFd {
+        self.poller.raw_fd()
     }
 
     /// fd を登録する唯一の所。`listen`、`adopt`、`Connect` と子の終わりの待ちが呼び、以後 `close` まで登録を変えない。
