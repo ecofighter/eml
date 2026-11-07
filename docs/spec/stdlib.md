@@ -1823,7 +1823,7 @@ URL の誤りの理由は、`the URL contains a space, a control or a non-ASCII 
 
 ## `Std.Gui`
 
-`Std.Gui`はネイティブのGUIのtoolkitである。プログラムはウィンドウを直接の形で1回だけ組み、ハンドルを通してウィジェットを変え、`wait`でメッセージを取り出す。toolkitの層とbackendは`eml_gui`にある (docs/implementation/architecture.mdの「`eml_gui`の内部」)。
+`Std.Gui`はネイティブのGUIのtoolkitである。プログラムはウィンドウを直接の形で1回だけ組み、ハンドルを通してウィジェットを変え、`wait`でメッセージを取り出す。toolkitの層とbackendは`eml_gui`にある (docs/implementation/architecture.mdの「`eml_gui`の内部」)。利用者が入れるものと、Qtなどのライセンスは、docs/implementation/distribution.mdにある。
 
 ```haskell
 counter : Unit -> <Gui Msg, IO, Panic, Async> Unit
