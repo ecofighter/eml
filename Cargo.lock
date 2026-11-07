@@ -525,6 +525,10 @@ name = "eml_extern"
 version = "0.1.0"
 
 [[package]]
+name = "eml_gui"
+version = "0.1.0"
+
+[[package]]
 name = "eml_hir"
 version = "0.1.0"
 dependencies = [

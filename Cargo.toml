@@ -20,6 +20,7 @@ eml_lir = { path = "crates/eml_lir" }
 eml_rt = { path = "crates/eml_rt" }
 eml_io = { path = "crates/eml_io" }
 eml_tls = { path = "crates/eml_tls" }
+eml_gui = { path = "crates/eml_gui" }
 eml_vm = { path = "crates/eml_vm" }
 eml_cli = { path = "crates/eml_cli", default-features = false }
 eml_test_support = { path = "crates/eml_test_support", default-features = false }

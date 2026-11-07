@@ -75,7 +75,7 @@ close W:S
 quit
 ```
 
-Loop: (1) `run_loop` logs `run_loop` and calls `step(Woken)`, even if the waker rang before. (2) After each `Continue`, if a scripted event remains, push it and call `step(Events)`; scripted events go before rings and timeouts. (3) A script that is empty from the start pushes, after the first `Continue` with shown windows, one `CloseRequest` per shown window, once. (4) Otherwise wait on a condvar for a ring (`step(Woken)`) or the timeout (`step(Timeout)`). (5) After 5 s with nothing: `Err(io::Error::other("stub: nothing woke the loop for 5 s"))`. (6) `Stop` logs `stop` and returns.
+Loop: (1) `run_loop` logs `run_loop` and calls `step(Woken)`, even if the waker rang before. (2) After each `Continue`, if a scripted event remains, push it and call `step(Events)`; scripted events go before rings and timeouts. (3) A script that is empty from the start pushes, after the first `Continue` with shown windows, one `CloseRequest` per shown window, once. (4) Otherwise wait on a condvar for a ring (`step(Woken)`) or the timeout (`step(Timeout)`). (5) After 5 s with nothing: `Err(io::Error::other("stub: nothing woke the loop for 5 s"))`; a pending timeout longer than 5 s does not count, so a stub run with such a timer fails rather than finishing late. (5a) When `run_loop` is given an I/O source, the stub does not look at it (eml_gui has no OS polling); instead it never waits longer than 10 ms and calls `step(Io)` each time that wait ends without a ring, so pinned-task I/O on the real driver still completes. The 5 s failure does not apply while an I/O source is given. (6) `Stop` logs `stop` and returns.
 
 ## 3. Extern rows (T-4, T-6)
 

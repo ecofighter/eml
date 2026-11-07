@@ -99,6 +99,11 @@ jobs:
           test "$(cargo tree -p eml_vm -e normal --target all | grep -c cranelift)" -eq 0
           test "$(cargo tree -p eml_native -e normal --target all | grep -c -E 'eml_rt|eml_lir|eml_vm')" -eq 0
           test -z "$(grep -rn unsafe crates/eml_extern/src)"
+      # eml_gui はワークスペースのどの crate にも依存しない (docs/implementation/architecture.md の「crate の依存関係」)
+      - name: dependency edges of eml_gui
+        if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
+        run: |
+          test "$(cargo tree -p eml_gui -e normal --target all --prefix none | grep -v '^eml_gui ' | grep -c '^eml_')" -eq 0
 
   fmt:
     runs-on: ubuntu-24.04

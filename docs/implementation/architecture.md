@@ -48,6 +48,7 @@ eml/
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
     eml_io/             # I/O の driver (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存し、feature `tls` の下では eml_tls にも依存する
     eml_tls/            # rustlsのクライアント接続を包むTLSの状態 (I/Oを持たない)。証明書はOSの検証器で確かめる。workspaceのcrateには依存しない
+    eml_gui/            # ネイティブのGUIのtoolkitの共通の層と、画面を開かないstubのbackend。workspaceのcrateには依存しない
     eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_io、eml_rt、eml_extern だけに依存し、feature `tls` の下では eml_tls にも依存する
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
@@ -79,6 +80,7 @@ eml_cli          check / run コマンド。パイプラインを組む唯一の
 eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_rt の Ctx の上で、worker のスレッドごとに1つの Ctx で実行する
 eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。時計と I/O の待ちを受け持つ
 eml_tls          rustlsのクライアント接続を包むTLSの状態 (I/Oを持たない)。aws-lc-rsのproviderとrustls-platform-verifierを使い、emlのどのcrateにも依存しない
+eml_gui          ネイティブのGUIのtoolkitの共通の層 (Widgets、EventLoop、Toolkit、EventQueue) と、画面を開かないstubのbackend。emlのどのcrateにも依存しない
 eml_native       Cranelift の橋渡しの関数と、C のライブラリと記号の解決 (Linker::link が Linked を作る)。workspace の crate では eml_extern と eml_cabi だけに依存する
 eml_cabi         C の関数を呼ぶコードのポインタ (Bridge、Dtor、CCall、Linked)。eml_extern だけに依存する
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
@@ -94,6 +96,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 - 段階の連なりに `eml_rt` は入らず、`eml_vm` と `eml_io` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
 - `eml_io` は workspace の crate では `eml_rt` と、feature `tls` の下の `eml_tls` だけに依存し、`eml_vm` には依存しない。依存の順は `eml_cli` > `eml_vm` > `eml_io` > `eml_rt` で、feature `tls` の下では `eml_io` > `eml_tls` と `eml_vm` > `eml_tls` が加わる。trait `IoDriver` と driver に渡す型は `eml_rt` が持ち、`eml_io` はその実装だけを持つ ([VM](../spec/vm.md) の「時計と driver」)
 - `eml_tls`はworkspaceのどのcrateにも依存しない。`eml_vm`と`eml_io`が依存するのはfeature `tls`の下だけである。`eml_cli`のfeature `tls`も`eml_tls`を省ける普通の依存として足す。`eml_cli`の`src/`はこれを使わず、本物のソケットの上でTLSのサーバーを立てる結合テスト (`tests/tls.rs`) が使う。rustlsはaws-lc-rsのproviderだけで使い、サーバーの証明書はrustls-platform-verifierを通してOSの検証器で確かめる。aws-lc-sysが要るのはCのツールチェーンだけで、Windowsのx86_64ではNASMを使い、NASMがなければ組み済みのオブジェクトを使う。Cのツールチェーンを持たない`.#cross`のclippyが`eml_tls`を除くのはこのためである
+- `eml_gui`はworkspaceのどのcrateにも依存せず、`Park`、`Pending`、`Ctx`、`eml_io`の型を名指さない。今はworkspaceの一員であるだけで、どのcrateも`eml_gui`に依存しない。ネイティブのループが待つOSの源は、VMの`PollSource`と同じ形の`IoSource`を`eml_gui`が自分で持つ。CIのtestのjobの手順`dependency edges of eml_gui`が、`eml_gui`の依存に`eml_`で始まるcrateがないことを確かめる
 - aws-lc-sys は、target の C のツールチェーンだけで組めることを前提にする。対応する OS か `nix build` で、組めない、リンクできない、動かないときは、OS ごとのツールや環境変数を足さず、provider を ring に替える。ring でも同じことが起きたら、設計から決め直す
 - `eml_lir` は、workspace の crate では `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
 - `eml_cabi` は、`eml_cabi → eml_extern` の辺だけを持つ葉の crate である。`Ctx` に関わらないコードのポインタだけを持つ。`eml_vm` と `eml_native` が依存し、`eml_native` が作った `Linked` を `eml_vm` の `load` が受け取る
@@ -412,6 +415,17 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `error.rs` の `LinkError` は、`Library`、`Symbol`、`UnknownOverride`、`Unsupported` の4つの変種を持ち、文言は固定である
 - trait はない。呼び手はプログラムを持ってから読み込む前につなぎ、結果の `Linked` の値を渡す。VM の側に linker も、それを作る関数も置かない
 - `unsafe` を書いてよいのは `bridge.rs`、`library.rs`、`linker.rs` だけである ([テスト戦略](testing.md) の「`eml_native` の検証」)
+
+## `eml_gui`の内部
+
+- `Widgets`と`EventLoop`は、`Send`でない2つのtraitである。`Widgets`はネイティブのウィジェットを作り、変え、測り、置き、表示し、壊す。`EventLoop`はネイティブのイベントループを回す。`Backend::create`は、この2つをtraitのオブジェクトとして持つ`Native`と、2つが共有する`EventQueue`を返す。呼び分けを動的にするのは、stubとネイティブのbackendを1つのバイナリに同居させ、backendを実行のときに選ぶためである
+- ウィジェットは`Id` (`(window_no << 32) | seq`) で名指す。ウィンドウの番号は`Toolkit`ごとに1から始まり、seqの0はウィンドウ自身である。どちらも使い回さないので、閉じたウィジェットの`Id`は`UnknownId`で失敗し、壊したウィジェットのイベントは`Toolkit::poll`が捨てる
+- `Toolkit`は、ウィジェットの表と、作りかけの入れ物の積み重ねを持つただの値である。ウィジェットは一番内側の開いた入れ物の中に作る。開いた入れ物がなければ、作るのは`NoContainer`で、`end`は`NothingOpen`で失敗する。`set`は値をすぐにネイティブのウィジェットに渡す。`Text`はWindow、Label、Button、TextField、CheckBoxに、`Value`はProgressBar (0..=100に収める。作るときの値も同じ) とChoice (項目の数より小さい番号で、ほかは`OutOfRange`) に、`Checked`はCheckBoxに、`Enabled`はWindow、Grid、Label以外のすべての種類に効き、ほかの組み合わせは`WrongKind`である。`flush`は新しいウィンドウを表示する。レイアウトはせず、子はすべて原点に大きさ0で置く
+- ネイティブのcallbackは`EventQueue`に積むだけで、`Widgets::set`と`Widgets::add_item`はイベントを出さない。`take_control`は制御のイベント (`QuitRequested`、`Resized`、`Invalidate`) を取り出し、ユーザーのイベントは列に残す。`pop_user`を呼ぶのは`Toolkit::poll`だけである。`Toolkit`がないときに積まれたユーザーのイベントは捨てる。1つの列に同時に付く`Toolkit`は1つだけで、2つ目を付けるとpanicする。`request_close_all`は、OSの終了の操作を、`close_window`で閉じていないウィンドウごとに1つの`CloseRequest`に変える。閉じる要求だけではウィンドウは閉じない
+- stub (`stub.rs`) は画面を開かない。呼び出しを1つずつ1行にして、スレッドごとの記録 (`stub::take_transcript`) に書く。行は`create Button #1:3 in #1:1 "-"`、`set #1:2 Text("1")`、`place #1:2 (0, 0) 54x24`、`show_window #1:0 78x80 min 78x80`のような形である。ウィジェットは幅`7 * 文字数 + 16`、高さ24と測る (Choiceは一番長い項目で、ProgressBarは0文字とする)。ループは、それより前に起こしが鳴っていても、まず`step(Woken)`を呼ぶ。`Continue`のたびに、筋書きの次のイベントを積んで`step(Events)`を呼び、これは起こしと期限より先である。初めから空の筋書きでは、表示したウィンドウがある最初の`Continue`の後に、表示したウィンドウごとに1つの`CloseRequest`を1度だけ送る。それ以外では起こしか期限を待ち、何もないまま5秒たつと`stub: nothing woke the loop for 5 s`で失敗する。I/Oの源を渡されると、stubは源を見ないが、1回の待ちを10 msまでにし、起こしなしに終わった待ちのたびに`step(Io)`を呼ぶ。この間は5秒の失敗はない
+- 筋書き (`Script::parse`) は1行に1つのイベントを書く。`click W:S`、`text W:S <行の残り>` (末尾の空白も含めてそのまま値にする)、`toggle W:S true|false`、`select W:S <整数>`、`close W:S`、`quit`である。空の行と`#`で始まる行は飛ばす
+- ネイティブのbackendは組まないので、`Backend::Native`は`NotAvailable("cannot open the GUI: built without the native toolkit")`で失敗する
+- 単体テストは`src/`にあり、結合テストはない
 
 ## ソースファイルと位置
 

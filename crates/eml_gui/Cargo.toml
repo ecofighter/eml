@@ -1,0 +1,10 @@
+[package]
+name = "eml_gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# 結合テストはなく、単体テストは`src/`にある (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+[lib]
+doctest = false
