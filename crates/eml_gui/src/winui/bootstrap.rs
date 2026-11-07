@@ -11,7 +11,9 @@ use super::bindings::{
     CreatePackageDependencyOptions_None, GetModuleHandleW, GetProcAddress, GetProcessHeap,
     HeapFree, PACKAGE_VERSION, PACKAGE_VERSION_0, PACKAGEDEPENDENCY_CONTEXT, PSID,
     PackageDependencyLifetimeKind, PackageDependencyLifetimeKind_Process,
-    PackageDependencyProcessorArchitectures, PackageDependencyProcessorArchitectures_None,
+    PackageDependencyProcessorArchitectures, PackageDependencyProcessorArchitectures_Arm,
+    PackageDependencyProcessorArchitectures_Arm64, PackageDependencyProcessorArchitectures_Neutral,
+    PackageDependencyProcessorArchitectures_X64, PackageDependencyProcessorArchitectures_X86,
 };
 use crate::GuiError;
 
@@ -32,6 +34,22 @@ fn pack_version([major, minor, build, revision]: [u16; 4]) -> u64 {
         | (u64::from(build) << 16)
         | u64::from(revision)
 }
+
+/// このプロセスのアーキテクチャとNeutral。windows-reactorのbootstrap (microsoft/windows-rsの
+/// `crates/libs/reactor/src/native/bootstrap.rs`) が渡すのと同じ値である。
+const ARCHITECTURES: PackageDependencyProcessorArchitectures =
+    PackageDependencyProcessorArchitectures_Neutral
+        | if cfg!(target_arch = "x86_64") {
+            PackageDependencyProcessorArchitectures_X64
+        } else if cfg!(target_arch = "aarch64") {
+            PackageDependencyProcessorArchitectures_Arm64
+        } else if cfg!(target_arch = "x86") {
+            PackageDependencyProcessorArchitectures_X86
+        } else if cfg!(target_arch = "arm") {
+            PackageDependencyProcessorArchitectures_Arm
+        } else {
+            0
+        };
 
 type TryCreatePackageDependency = unsafe extern "system" fn(
     user: PSID,
@@ -102,7 +120,7 @@ unsafe fn add_dependency() -> windows_core::Result<()> {
                     Version: pack_version(MIN_VERSION),
                 },
             },
-            PackageDependencyProcessorArchitectures_None,
+            ARCHITECTURES,
             PackageDependencyLifetimeKind_Process,
             PCWSTR::null(),
             CreatePackageDependencyOptions_None,
@@ -132,10 +150,17 @@ unsafe fn add_dependency() -> windows_core::Result<()> {
 mod tests {
     use super::*;
 
-    /// familyと最小の版は、Microsoft.WindowsAppSDK.Runtime 2.6.4の`WindowsAppSDK-VersionInfo.h`の値である。
+    /// familyの版は最小の版のmajorで、最小の版はMicrosoft.WindowsAppSDK.Runtime 2.6.4の`WindowsAppSDK-VersionInfo.h`の
+    /// 値2.6.4.0である。
     #[test]
-    fn the_runtime_pins_are_the_version_header_values() {
-        assert_eq!(FAMILY, "Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe");
+    fn the_family_and_the_minimum_agree_with_the_version_header() {
+        assert_eq!(
+            FAMILY,
+            format!(
+                "Microsoft.WindowsAppRuntime.{}_8wekyb3d8bbwe",
+                MIN_VERSION[0]
+            )
+        );
         assert_eq!(pack_version(MIN_VERSION), 0x0002_0006_0004_0000);
     }
 }

@@ -1,5 +1,5 @@
 // WinUIのbackendが使うAPI (nix/winui-bindings.sh)。メンバーは、プロパティ、イベント、メソッドの名前で指す。
-Microsoft.UI.Dispatching.DispatcherQueue::{GetForCurrentThread, TryEnqueue, CreateTimer}
+Microsoft.UI.Dispatching.DispatcherQueue::{GetForCurrentThread, TryEnqueue, CreateTimer, EnqueueEventLoopExit}
 Microsoft.UI.Dispatching.DispatcherQueueHandler
 Microsoft.UI.Dispatching.DispatcherQueueTimer::{Interval, IsRepeating, Start, Stop, Tick}
 Microsoft.UI.Windowing.AppWindow::{ResizeClient, Size, ClientSize, Presenter, Closing}
@@ -39,7 +39,7 @@ Windows.Win32.GetProcAddress
 Windows.Win32.PACKAGE_VERSION
 Windows.Win32.PACKAGEDEPENDENCY_CONTEXT
 Windows.Win32.PackageDependencyLifetimeKind::{PackageDependencyLifetimeKind_Process}
-Windows.Win32.PackageDependencyProcessorArchitectures::{PackageDependencyProcessorArchitectures_None}
+Windows.Win32.PackageDependencyProcessorArchitectures::{PackageDependencyProcessorArchitectures_Arm, PackageDependencyProcessorArchitectures_Arm64, PackageDependencyProcessorArchitectures_Neutral, PackageDependencyProcessorArchitectures_X64, PackageDependencyProcessorArchitectures_X86}
 Windows.Win32.PSID
 Windows.Win32.GetProcessHeap
 Windows.Win32.HeapFree

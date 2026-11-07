@@ -20,9 +20,9 @@ use windows_time::TimeSpan;
 use super::bindings::{
     Application, ApplicationInitializationCallback, DispatcherQueue, DispatcherQueueHandler,
     DispatcherQueueTimer, DispatcherShutdownMode, IApplication3, IApplicationOverrides,
-    IApplicationOverrides_Impl, IXamlMetadataProvider, IXamlMetadataProvider_Impl, IXamlType,
-    LaunchActivatedEventArgs, TypeName, XamlControlsResources, XamlControlsXamlMetaDataProvider,
-    XmlnsDefinition,
+    IApplicationOverrides_Impl, IDispatcherQueue3, IXamlMetadataProvider,
+    IXamlMetadataProvider_Impl, IXamlType, LaunchActivatedEventArgs, TypeName,
+    XamlControlsResources, XamlControlsXamlMetaDataProvider, XmlnsDefinition,
 };
 use super::{Value, with_shared};
 use crate::{EventLoop, EventQueue, Id, IoSource, RawEvent, Reason, Step};
@@ -281,12 +281,17 @@ impl EventLoop for WinUiLoop {
         shared.stopped.set(false);
         // `Start`は`Exit`まで戻らない。`OnLaunched`が最初の`step`を呼ぶ
         let started = Application::Start(&ApplicationInitializationCallback::new(|_| {
+            let app = match App::compose() {
+                Ok(app) => app,
+                Err(e) => {
+                    leave_without_application(e);
+                    return;
+                }
+            };
             // 最後のウィンドウを閉じてもループを終えない。終えるのは`Stop`の`Exit`だけである
-            let composed = App::compose().and_then(|app| {
-                app.cast::<IApplication3>()?
-                    .SetDispatcherShutdownMode(DispatcherShutdownMode::OnExplicitShutdown)
-            });
-            if let Err(e) = composed {
+            if let Err(e) = app.cast::<IApplication3>().and_then(|a| {
+                a.SetDispatcherShutdownMode(DispatcherShutdownMode::OnExplicitShutdown)
+            }) {
                 with_shared(|s| s.fail(e));
             }
         }));
@@ -304,6 +309,21 @@ impl EventLoop for WinUiLoop {
     fn waker(&self) -> Arc<dyn Fn() + Send + Sync> {
         let bell = Arc::clone(&self.shared.bell);
         Arc::new(move || bell.ring())
+    }
+}
+
+/// `Application`を作れなかったときに、誤りを覚えて`Start`を戻す。Applicationがなければ`OnLaunched`は走らず、`Exit`を
+/// 呼ぶものもない。そこでこのスレッドのdispatcherにメッセージのループを抜けさせる。それもできなければ`Start`は戻らないので、
+/// 黙って止まる代わりにプロセスを止める。
+fn leave_without_application(e: windows_core::Error) {
+    with_shared(|s| s.fail(e.clone()));
+    let left = DispatcherQueue::GetForCurrentThread()
+        .and_then(|d| d.cast::<IDispatcherQueue3>()?.EnqueueEventLoopExit());
+    if let Err(exit) = left {
+        eprintln!(
+            "eml: cannot open the GUI: WinUI failed: {e}; cannot leave the WinUI loop: {exit}"
+        );
+        std::process::abort();
     }
 }
 

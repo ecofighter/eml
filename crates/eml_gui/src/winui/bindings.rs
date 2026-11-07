@@ -1695,6 +1695,31 @@ pub struct IDispatcherQueue_Vtbl {
     ) -> windows_core::HRESULT,
 }
 windows_core::imp::define_interface!(
+    IDispatcherQueue3,
+    IDispatcherQueue3_Vtbl,
+    0x14a7a175_5c27_5a35_b079_21960cf764a8
+);
+impl windows_core::RuntimeType for IDispatcherQueue3 {
+    const SIGNATURE: windows_core::imp::ConstBuffer =
+        windows_core::imp::ConstBuffer::for_interface::<Self>();
+}
+impl IDispatcherQueue3 {
+    pub fn EnqueueEventLoopExit(&self) -> windows_core::Result<()> {
+        unsafe {
+            (windows_core::Interface::vtable(self).EnqueueEventLoopExit)(
+                windows_core::Interface::as_raw(self),
+            )
+            .ok()
+        }
+    }
+}
+#[repr(C)]
+pub struct IDispatcherQueue3_Vtbl {
+    pub base__: windows_core::IInspectable_Vtbl,
+    pub EnqueueEventLoopExit:
+        unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_core::HRESULT,
+}
+windows_core::imp::define_interface!(
     IDispatcherQueueStatics,
     IDispatcherQueueStatics_Vtbl,
     0xcd3382ea_a455_5124_b63a_ca40d34ca23c
@@ -3524,7 +3549,13 @@ pub type PSID = *mut core::ffi::c_void;
 pub type PackageDependencyLifetimeKind = i32;
 pub const PackageDependencyLifetimeKind_Process: PackageDependencyLifetimeKind = 0;
 pub type PackageDependencyProcessorArchitectures = u32;
-pub const PackageDependencyProcessorArchitectures_None: PackageDependencyProcessorArchitectures = 0;
+pub const PackageDependencyProcessorArchitectures_Arm: PackageDependencyProcessorArchitectures = 8;
+pub const PackageDependencyProcessorArchitectures_Arm64: PackageDependencyProcessorArchitectures =
+    16;
+pub const PackageDependencyProcessorArchitectures_Neutral: PackageDependencyProcessorArchitectures =
+    1;
+pub const PackageDependencyProcessorArchitectures_X64: PackageDependencyProcessorArchitectures = 4;
+pub const PackageDependencyProcessorArchitectures_X86: PackageDependencyProcessorArchitectures = 2;
 #[repr(transparent)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Panel(windows_core::IUnknown);
