@@ -1,6 +1,7 @@
 //! ネイティブのGUIのtoolkitの共通の層と、テスト用のstubのbackend (docs/implementation/architecture.md の「`eml_gui`の内部」)。
 
 mod backend;
+mod layout;
 mod queue;
 pub mod stub;
 mod toolkit;
@@ -185,6 +186,8 @@ pub enum Step {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Measure {
     Exact(f32),
+    /// 最大でこの論理px。どちらの軸でも`AtMost(0.0)`は、その軸に沿った最小の自然な大きさを求める (Taffyのmin-contentの問い合わせ)。
+    /// 0という厳密な上限になることはない。
     AtMost(f32),
     Unbounded,
 }
@@ -219,6 +222,8 @@ pub trait Widgets {
     fn create(&mut self, id: Id, kind: Kind, parent: Id, init: &Init) -> Result<(), GuiError>;
     fn add_item(&mut self, w: Id, item: &str) -> Result<(), GuiError>;
     fn set(&mut self, w: Id, prop: &Prop) -> Result<(), GuiError>;
+    /// 与えられた制約の下でのウィジェットの大きさを論理pxで返す。`AtMost(0.0)`は、その軸に沿った最小の自然な大きさを意味し、
+    /// 0という上限ではない (`Measure`を参照)。
     fn measure(&mut self, w: Id, width: Measure, height: Measure) -> Size;
     fn place(&mut self, w: Id, rect: Rect);
     fn show_window(&mut self, w: Id, size: Size, min: Size);

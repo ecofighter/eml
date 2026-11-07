@@ -115,7 +115,7 @@ If implementation runs into a conflict with any of these, stop and report. Each 
   - What eml can say: tracks `Auto | Fr Int | Px Int` for columns and rows (`rows = []` means implicit auto rows); auto-placement, row-major; per child `col_span`, `row_span`, `halign`, `valign` in `{Start, Center, End, Stretch}`, default `Stretch`; grids nest. Gap 8 and window padding 12 logical px, fixed.
   - Mapping: grid node `display: Grid`, templates from tracks (`auto()`, `fr(n)`, `length(n)`), `grid_auto_rows: auto()`, `gap: length(8)`; root grid `padding: length(12)` and `size: percent(1.0)`; child `grid_column` / `grid_row` = `Line { start: Auto, end: Span(n) }`, `justify_self` / `align_self` from the cell.
   - Leaf sizes come from `Widgets::measure` through Taffy's measure function (Qt `minimumSizeHint` / `sizeHint` / `heightForWidth`; WinUI `Measure` + `DesiredSize`; AppKit `fittingSize` with `preferredMaxLayoutWidth`), cached per widget and request, invalidated by `Text`, `add_item` and `RawEvent::Invalidate` (font, theme, DPI).
-  - Window initial size = root at max-content; native minimum = min-content; on `Resized` relayout with the definite size and `place` only children whose rounded rect changed. Layout runs only in `flush` (dirty windows), on `Resized` and on `Invalidate`.
+  - Window initial size = root at max-content; native minimum = min-content width, and a height no greater than the natural height (the height at the min-content width, clamped to the natural height, because a wrapping label is taller when narrower); on `Resized` relayout with the definite size and `place` only children whose rounded rect changed. Layout runs only in `flush` (dirty windows), on `Resized` and on `Invalidate`.
   - All numbers are logical px; no backend scales. Layout lives in Rust only.
 - Rationale: simplicity first (user premise); measuring instead of winio's fixed preferred sizes gives wrapping labels a width-dependent height at the same cost.
 - Rejected alternatives: explicit placement and named areas — not needed for forms, deferred; per-kind default alignment — needs an "unset" alignment value.
@@ -358,7 +358,7 @@ Measure `w = 7 * chars + 16`, `h = 24` (Choice: longest item; ProgressBar: 0 cha
   | counter resized to 300x200 | grid (12,12) 276x176; label (0,0) 276x84; minus (0,92) 134x84; plus (142,92) 134x84 |
   | form (`[Auto, Fr 1]`; "Name", empty field, check box span 2, submit span 2 halign End) | window 92x112; grid (12,12) 68x88; name (0,0) 44x24; field (52,0) 16x24; agree (0,32) 68x24; submit (10,64) 58x24 |
 
-  Plus: a label whose text changes is re-measured exactly once at the next flush (G-13); layout runs once per dirty flush and per resize (G-12).
+  Plus: after a label's text changes, the next flush measures only that label, and each distinct (widget, request) pair at most once (Taffy's grid asks a leaf several different questions per layout, so "once" means once per request, not one call); an unchanged flush measures nothing (G-13); layout runs once per dirty flush and per resize (G-12). The T-2 test that asserts the zero placement (`flush_shows_new_windows_once_and_places_new_children`) gets the laid-out values: a kind-3 follow-up of the placeholder T-2 introduced, noted in the commit message. The native minimum is set when a window is first shown and not updated later in this stage (Q-14).
 - Left to the implementer: whether the Taffy tree is reused across flushes.
 - Condition: always.
 - Completion criteria: `cargo nextest run -p eml_gui` → all pass, fixtures exact; workspace nextest and clippy green.
@@ -524,6 +524,7 @@ T-3, T-4 and T-5 are independent of each other (T-3 needs T-2). T-9 and T-10 are
 | Q-10 | Repeated native `Gui.run` in a process outside `eml run` | – | a Machine-API host that needs it | untested; noted in status.md |
 | Q-11 | LGPL conveyance by binary caches of the Nix closure | distribution.md | when the project publishes a cache | distribution.md states the cache operator conveys Qt and relies on nixpkgs' public source |
 | Q-12 | What `Std.Stdout` / `Std.Stderr` / `Std.Stdin` do in a Windows `gui`-profile program, which has no console | the native-aot stage | that stage's design | writes are discarded and reads see end of input, rather than IO failures; recorded in native.md 「AOT と配布」 by T-12 as the default |
+| Q-14 | A window's native minimum is set at first show and not updated when content grows later | T-3, backends | when a program shows a clipped window | keep; add a `Widgets::set_min_size` later if needed (roadmap item at close) |
 | Q-13 | Whether native-aot builds Windows programs with a static CRT (`+crt-static`), removing the VC++ redistributable prerequisite | the native-aot stage | that stage's design | dynamic CRT; recorded in native.md 「AOT と配布」 by T-12 |
 
 ## Appendix: Main changes from review

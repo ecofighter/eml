@@ -8,3 +8,6 @@ autotests = false
 
 [lib]
 doctest = false
+
+[dependencies]
+taffy.workspace = true

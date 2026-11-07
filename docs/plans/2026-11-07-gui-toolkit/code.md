@@ -805,7 +805,7 @@ loop {
     reap(pending);
     for e in queue.take_control():
         QuitRequested -> ui live ? toolkit.request_close_all() : (self.interrupt)()
-        Resized / Invalidate -> toolkit.settle()
+        Resized / Invalidate -> toolkit.settle(&e)
     if let Some(g) = opening && !poked { pending.poke(g); poked = true }
     if ui live && (reason == Events || toolkit.has_events()) { pending.poke(ui.gate) }
     match pending.run() {
