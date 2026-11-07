@@ -36,6 +36,7 @@
 - 連想配列と集合: キーの順の `Map k v` (`Std.Map`) と `Set a` (`Std.Set`)。どちらも釣り合いを取った木で、キーと要素は `Unr` に限る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」)
 - 2つの計算の組: `Std.Par`の`par`は2つの子を動かして両方を待ち、子の`never`の操作を親で起こし直す。子のrowの上限は`never`で、`IO`や`var`を使う子はE2020になる。`both`は同じ組を逐次に作る ([標準ライブラリ](../spec/stdlib.md)の「`Std.Par`」)。`eml run`と`eml repl`は、子を切り替える方針がいつも普通の方針 (`Normal`。自分からはタスクを切り替えない) である。逐次 (`Sequential`) とseedで決まる切り替え (`Seeded`) は、ライブラリのAPIから渡すテストのための方針である ([VM](../spec/vm.md)の「タスクとスケジュール」)。`eml run`の`--workers`でworkerのスレッドの数を選び、右の子は空いているworkerで動く ([標準ライブラリ](../spec/stdlib.md)の「起動」)
 - 非同期のタスク: `Std.Async`の`run`が根のスコープを開いて本体をタスクとして動かし、`start`と`spawn`が今のスコープにタスクを足し、`await`がタスクの値を受け取るか失敗を起こし直す。`run`はスコープのすべてのタスクを待ってから戻る。`scope`が名前付きのスコープを開き、`start_in`と`spawn_in`がそこにタスクを足す。`cancel`と`cancel_scope`がタスクとスコープを取り消し、`shield`が取り消しの地点を守り、`check_cancelled`と`cancel_requested`が待たないループの中で取り消しを確かめる。ほかに`yield_now`、`try_all`、`Failure`と、時間を扱う`sleep_ms`、`timeout`、`race`、`drain_within`と、CPUを使う仕事を子が1つの`par`と同じ仕事として動かし、呼んだタスクだけを待たせる`compute`がある。タスクは`start`のときに置けるworkerをworker 1から順に回して置く。同じworkerのタスクはスケジュールの方針に従って切り替えて動く ([標準ライブラリ](../spec/stdlib.md)の「`Std.Async`」、[VM](../spec/vm.md)の「`Async`のタスク」)
+- メインのworker: `eml run`では、`Machine`を持つプロセスのメインのスレッドがメインのworkerになり、`Async.start_on_main`と`Async.run_on_main`で始めた固定したタスクを動かす。`main`はworker 0で動く。固定したタスクが始めるタスクも固定し、`par`の子と`compute`の仕事はほかのタスクと同じく置く。`eml repl`ではworker 0がメインのworkerを兼ねる ([標準ライブラリ](../spec/stdlib.md)の「メインのworker」、[VM](../spec/vm.md)の「メインのworker」)
 - タスクごとの上限: `Async` のタスクの中で呼び出しの深さが上限を超えると、run は止まらず、そのタスクに種類 `ResourceLimit` の IO の失敗が起きる。確保量がメモリの柔らかい上限 (既定は `max_bytes` の 7/8) の閾値を越えたときも、確保の数がいちばん大きいタスクに同じ失敗が起きる。どちらも関数に入るところで起き、`try_io` と `try_all` で捕まえられる。タスクの外の深さの上限と、メモリの硬い上限 `max_bytes` は run を止める ([標準ライブラリ](../spec/stdlib.md) の「タスクの上限」、[VM](../spec/vm.md) の「上限と割り込み」と「タスクの上限」)
 - タスクの間の channel と共有の数: `Std.Chan` の channel (`send`、`recv`、`try_send`、`try_recv`、`close`、`merge`) と、`Std.Atomic` の `Counter` がある。どちらも worker をまたいで使える ([標準ライブラリ](../spec/stdlib.md) の「`Std.Chan`」と「`Std.Atomic`」、[VM](../spec/vm.md) の「channel」)
 - TCP: `Std.Net` の `listen`、`accept`、`connect`、読み書き、`read_line` が、macOS と Linux の本物の driver とテストの driver の上で動く。`connect` は名前を driver の解決のスレッドで解決する。誤りは IO の失敗で、拒まれた接続、reset、使用中の番地、時間切れを種類で分ける ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。driver が受け付けの時点で終えた操作は、待たずに続ける。操作の token `OpId` はヒープの物体を持たない即値である ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」、[VM](../spec/vm.md) の「操作の記録」)。空きのある buffer への読みは、driver の操作1つで済む。空きは `Bytes.with_capacity` で作れる。`write_bytes` は書いた `Bytes` とストリームの組を返し、共有の `Bytes` も写さずに書く
@@ -174,6 +175,14 @@
 - メモリの柔らかい上限が選ぶタスクは、原因のタスクとは限らない。数えるのはタスクが動いている間に取ったページだけで、手放しても減らない。待っているタスクと、本当の待ちから起きてまだ動いていないタスクは候補にならない。`par` の右の子と `compute` の仕事の確保はどのタスクにも数えないので、そうした増え方は硬い上限で run を止める。柔らかい上限と硬い上限の間の1回の大きな確保も run を止める。印が失われると、次の閾値まで確保が増えてから印が付く。監視のスレッドを始められなかった run には柔らかい上限がない ([VM](../spec/vm.md) の「タスクの上限」、[ロードマップ](../future/roadmap.md) の「マルチコア対応」)
 - 上限の近くで待ちに入ったタスクを再開すると、再開の後の深さは待ちに入る前より大きくなる。深さが上限と猶予 (2^18 語) の和を超えると、タスクの失敗でなく run の誤りで止まる。上限との間なら、論理的な深さが上限に届いていなくても `the call depth limit is exceeded` の `ResourceLimit` が起きる ([VM](../spec/vm.md) の「タスクの上限」、[ロードマップ](../future/roadmap.md) の「非同期」)
 - `IOErrorKind` の `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit`、`ConnectionRefused` を出すのは `fail_io` と、`Async` のタスクの上限の `ResourceLimit` だけで、extern の誤りはこれらの種類を出さない ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「タスクの上限」)
+
+### メインのworker
+
+- `END`は動いている固定したタスクを止めない。runが終わるのは、タスクが安全点に着くか、そのexternかツールキットのコールバックが戻ったときである。モーダルなループに留まる`Park`や、releaseのビルドで`Progress::Stopping`を無視する`Park`は、runの最後の終わりだけを遅らせる ([VM](../spec/vm.md)の「メインのworkerの待ち」)
+- 仮想の時計の時間は、メインのworkerを含むすべてのworkerが眠っている間だけ進む。動いている固定したタスクは、ほかの動いているタスクと同じく時計とデッドロックの判定を止める。本物の時計で待つのは判定だけである ([VM](../spec/vm.md)の「時計と driver」)
+- メインのworkerの同期の読みには`EINTR`が届かない ([VM](../spec/vm.md)の「上限と割り込み」)
+- メインのworkerは中継したシグナルを届けない。runの全体の務めで、mailから取り出すのはworker 0..N-1である。`--workers 1`では、待つタスクが固定したものかによらず、シグナルが届くのはworker 0が集める地点に着いたときだけである。`main`がその場の読みで止まっている間に来た2回目のシグナルでは、ハンドラがその規則でその場でプログラムを終わらせる (`_exit(130)`、`_exit(143)`。[VM](../spec/vm.md)の「メインのworker」、[標準ライブラリ](../spec/stdlib.md)の「`Std.Signal`」)
+- `Park`は`DefaultPark`しかない。替える`Park`もメインのworkerのI/Oのdriverで待たなければならず、それには`Pending::io()`が要るが、まだない。それまでは、`default_wait`を使わずに待つ`Park`の下では固定したタスクのI/Oは終わらない ([VM](../spec/vm.md)の「メインのworkerの待ち」)
 
 ### 子のプロセス
 

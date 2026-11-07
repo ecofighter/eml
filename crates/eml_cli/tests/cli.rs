@@ -1707,6 +1707,26 @@ fn blas_dgemm() {
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }
 
+/// `eml.exe`のメインのスレッドはフロントエンドのために8 MiBを予約する (`crates/eml_cli/build.rs`の`/STACK`)。PEの
+/// 見出しの`SizeOfStackReserve`を読む。`e_lfanew`は0x3Cにあり、PE32+の任意の見出しは署名とCOFFの見出しの24バイト
+/// 後に始まり、`SizeOfStackReserve`はその72バイト目のu64である (docs/implementation/testing.md の「OS ごとのテスト」)。
+#[cfg(windows)]
+#[test]
+fn eml_exe_reserves_an_8_mib_main_stack() {
+    let image = std::fs::read(env!("CARGO_BIN_EXE_eml")).unwrap();
+    let u32_at = |at: usize| u32::from_le_bytes(image[at..at + 4].try_into().unwrap()) as usize;
+    let pe = u32_at(0x3C);
+    assert_eq!(&image[pe..pe + 4], b"PE\0\0");
+    let optional = pe + 24;
+    assert_eq!(
+        u16::from_le_bytes(image[optional..optional + 2].try_into().unwrap()),
+        0x20B,
+        "not PE32+"
+    );
+    let reserve = u64::from_le_bytes(image[optional + 72..optional + 80].try_into().unwrap());
+    assert_eq!(reserve, 8 << 20);
+}
+
 #[test]
 #[ignore = "needs Accelerate"]
 #[cfg(target_os = "macos")]

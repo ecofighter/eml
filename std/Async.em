@@ -177,6 +177,14 @@ compute f =
       drop_job j
       raise_cancelled ()
 
+-- `f`をメインのworkerに固定したタスクとして始める。固定したタスクが始めるタスクも固定する
+-- (docs/spec/stdlib.mdの「メインのworker」)
+pub start_on_main : (Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a
+start_on_main f = start_main_raw (bottom f)
+
+pub run_on_main : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a
+run_on_main f = await (start_on_main f)
+
 -- `ms` ミリ秒待つ取り消しの地点。0 以下なら実行待ちの列の後ろへ回るだけである (docs/spec/stdlib.md の「時間」)
 pub sleep_ms : Int -> <IO, Async> Unit
 sleep_ms ms =
@@ -340,8 +348,8 @@ signal_wait s =
 resume_io : (once (Wake, OpId) -> <IO> Unit) -> Wake -> OpId -> <IO> Unit
 resume_io k w op = k (w, op)
 
--- ランタイムのインターフェース。生の行を `pub` にせず、結果の型の `a` は `start`、`start_in`、`run`、`await`、`compute` のシグネチャだけが結ぶ。
--- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`run_raw`、`ready`、`finish_ok`、
+-- ランタイムのインターフェース。生の行を`pub`にせず、結果の型の`a`は`start`、`start_in`、`start_on_main`、`run`、`await`、`compute`のシグネチャだけが結ぶ。
+-- 処理系はこの対応を確かめない。表で預かる印を付ける引数は、`start_raw`、`start_main_raw`、`run_raw`、`ready`、`finish_ok`、
 -- `take_result`、`run_result`、`detach`、`cancel_raw` の引数、`park`、`park_time`、`park_drain`、`park_send`、
 -- `park_recv`、`park_io`、`park_signal`、`start_in_raw` の2つ目の引数、`park_io_until` の3つ目の引数、`task_cell` の引数
 -- (`task_cell` だけは借りて預かる) である。預かる引数の型変数は `Unr` に固定せず、その矢印には閉じた row を書ける (docs/spec/stdlib.md の「`Std.Async`」)
@@ -382,3 +390,4 @@ extern fork_job         : (Unit -> <never e> a) -> <IO> Job a
 extern job_cell         : Job a -> (Cell, Job a)
 extern take_job         : Job a -> <IO> a
 extern drop_job         : Job a -> <IO> Unit
+extern start_main_raw   : (Unit -> <IO, Async> Unit) -> <IO> Task a

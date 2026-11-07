@@ -226,7 +226,7 @@ mod tests {
     use super::{Monitor, Relay, bell_timeout, choose, pressure_tick};
     use crate::cells::{self, CellRef, MailItem, Registry, Shared};
     use crate::sched::{Normal, Scheduler};
-    use crate::workers::{NO_CELL, Run, cell_word};
+    use crate::workers::{NO_CELL, Run, Seat, cell_word};
 
     /// 鳴らされた回数を数える waker。
     #[derive(Default)]
@@ -247,6 +247,7 @@ mod tests {
         let waker = Arc::new(Counting::default());
         let run = Run::new(
             1,
+            Seat::Merged,
             None,
             crate::driver::RunClock::Virtual(Arc::default()),
             Arc::default(),
@@ -299,6 +300,7 @@ mod tests {
             Box::new(eml_io::TestDriver::new(None)),
             Arc::new(Run::new(
                 1,
+                Seat::Merged,
                 None,
                 crate::driver::RunClock::Virtual(Arc::default()),
                 Arc::default(),
@@ -329,6 +331,7 @@ mod tests {
     fn table(workers: usize) -> Run {
         Run::new(
             workers,
+            Seat::Merged,
             None,
             crate::driver::RunClock::Virtual(Arc::default()),
             Arc::default(),
@@ -534,6 +537,7 @@ mod tests {
         let control = Arc::new(Control::new(Limits::default()));
         let run = Arc::new(Run::new(
             1,
+            Seat::Merged,
             None,
             crate::driver::RunClock::Virtual(Arc::default()),
             Arc::default(),

@@ -1043,7 +1043,9 @@ impl<M: Mode> Ctx<M> {
     /// worker 0 の `Ctx` (`for_worker(control, host, 0)`)。
     ///
     /// # Panics
-    /// `control.limits().workers` が 0 のとき。
+    /// `control`に語0がないとき。`Control::new`の前提 (`main`を走らせるworkerがあり、`+ 1`が溢れない) の中で作った
+    /// `Control`には語0がいつもある。前提は実行時には確かめないので、`limits.workers`が`usize::MAX`だと語の数が0に
+    /// 巻き戻り、ここでpanicする。
     pub fn new(control: Arc<Control>, host: HostRef) -> (r: Ctx<M>)
         requires
             control.word_count() >= 1,
@@ -1059,7 +1061,7 @@ impl<M: Mode> Ctx<M> {
     /// を通す。安全点は `control` の `k` 番目の止める語を読む。
     ///
     /// # Panics
-    /// `k` が `control.limits().workers` 以上のとき。
+    /// `k`が`control.limits().workers`より大きいとき。
     pub fn for_worker(control: Arc<Control>, host: HostRef, k: usize) -> (r: Ctx<M>)
         requires
             k < control.word_count(),

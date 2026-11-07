@@ -1,0 +1,6 @@
+# REPLではメインのworkerはworker 0である。最上位では`Async.run`で包んで呼ぶと、`run_on_main`の値が返り、その子も動く
+# (docs/spec/stdlib.mdの「`Std.Async`」の「メインのworker」)
+> import Async
+> Async.run (fn () -> Async.run_on_main (fn () -> 6 * 7))
+> Async.run (fn () -> Async.await (Async.start_on_main (fn () -> Async.await (Async.start (fn () -> 5)) + 1)))
+> println "next"

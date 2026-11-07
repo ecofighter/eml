@@ -69,7 +69,7 @@
 - 段階は feature (`hir` < `types` < `core` < `run`) で選ぶ。各 feature は `eml_cli` の同じ段階までの feature を有効にし、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。段階の API そのものを確かめるテストは、`eml_test_support` を通さずに段階の関数を直接呼ぶ。`eml_hir` の `load.rs` と `def_map.rs` の読み込みのテスト、`item_tree.rs` の `item_tree` を直接呼ぶテスト、`eml_types` の `scaling.rs`、`eml_core_ir` の `translate.rs` と `instances.rs` のエントリを選ぶテスト、`instances.rs` のコンパイル時間のテストである
 - HIR と型のダンプは、Prelude だけでなく標準ライブラリのモジュールをすべて飛ばす。標準ライブラリの本文はダンプに加わらない。`println` などの extern の関数への参照は、普通の関数として表示する。ユーザーのモジュールの extern の宣言は、型、エフェクト、関数のどれも `extern` を付けて表示する (`extern data T`、`extern effect E`、`extern f : Int -> Int`)
 - `eml_hir` の結合テストが、`eml_extern` の表と `std/` を照らし合わせる。エントリのプログラムは、Prelude のほかのすべての標準ライブラリのモジュールを import する。表のどの行も、`std/` の種類の合う extern の宣言か、instance の中の `extern` の行の、ちょうど1つから指されること、`std/` の extern の宣言と instance の `extern` の行がどれも1つの行を指すこと、シグネチャの矢印の数が行の引数の数と等しいこと、`Effectful` の行だけが最後の矢印の row に extern のエフェクトを持つこと、開いた row は、方法に縛られない `Pure` の行で、関数型の引数の矢印の row と最後の外側の矢印の row が共有するラベルのない末尾にだけ許すことを確かめる。開いた row の例外は、コールバックのエフェクトを呼んだ側へ通す高階の extern (`Std.Par.par`) のためにある。預かる引数 (`FunctionRow::held`) の型の中の矢印には、閉じた row を許す ([宣言](../spec/declarations.md) の「`extern`」)。`held` の長さが `params` と同じであることも確かめる。`eml_core_ir` の `faulting_rows_carry_panic` も、矢印の row の末尾を同じく関数型の引数の row の末尾に限って、行の `purity` と row を比べる。instance の `extern` の行のシグネチャは、クラスのメソッドのシグネチャである。埋め込んだ `eml_hir::STD` が `std/` のファイルと一致することも、同じ場所で確かめる
-- `eml_core_ir` の結合テスト (`tests/externs.rs`) が、`eml_extern` の表の Repr を、箱の位置の Repr を決める規則 (`eml_core_ir::boxed_repr`) で std の宣言と照らし合わせる。関数の行の `params` と `ret` が std のシグネチャの型の Repr と同じであること、型の行の `repr` が、型検査がその型に与える型の Repr と同じであること (`Unit` は要素のないタプル)、関数の行のシグネチャに型変数がないことを確かめる。エントリのプログラムは Prelude のほかのすべての標準ライブラリのモジュールを import する。標準ライブラリは使うモジュールだけを読み込むためである。印の列 (`param_marks` と `ret_mark`) は、長さが `params` と同じであること、すべての行の印が std のシグネチャの型の印と合うこと (型変数に依る位置は `Poly` と読み、行の `Unr` とも `Poly` とも合う。組を返す行 (`with_args`) の結果は、組の最初の要素の印である。[Core IR](../spec/core-ir.md) の「表の印の列」と「組を返す extern」)、一覧に挙げた行 (`FileIn`、`Stdin`、`Stdout`、`Stderr`、`MutArray` を扱う行、`Std.Par.par`、`Std.Async` の行、`Std.Chan` の `push_raw` と `pop_raw`、`Std.Net` の行) のほかはすべて `Unr` であることを確かめる。借りる引数を持つ行と組を返す行が一覧のとおりであること (`Std.Net` の `op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr` を含む)、預かる印を持つ行が `Std.Async` の18行と `Std.Chan.push_raw` だけであること、ランタイムが名前で呼ぶエントリ (`RuntimeEntry`) が型変数のない std の関数で、引数の数と Repr が表と合うことも確かめる。instance の `extern` で結んだ行のシグネチャの型は、クラスのメソッドの宣言の型のクラスの型変数を、instance の頭の型に置き換えた型である。多相な extern の行を足すときに、行の Repr の比べ方を決め直す。機械の extern が配置の表を見ずに使うタグも、同じファイルで確かめる。Prelude の `Bool` の配置のコンストラクタが `[False, True]` で `FALSE` と `TRUE` に合うこと、`Ordering` のコンストラクタの順が `LT`、`EQ`、`GT` の定数に合うこと、組のタグ `TUPLE` が 0 であること、`Std.Async` の `Wake` のコンストラクタの順が `WAKE_WOKE` と `WAKE_CANCELLED` に合うことである
+- `eml_core_ir`の結合テスト (`tests/externs.rs`) が、`eml_extern`の表のReprを、箱の位置のReprを決める規則 (`eml_core_ir::boxed_repr`) でstdの宣言と照らし合わせる。関数の行の`params`と`ret`がstdのシグネチャの型のReprと同じであること、型の行の`repr`が、型検査がその型に与える型のReprと同じであること (`Unit`は要素のないタプル)、関数の行のシグネチャに型変数がないことを確かめる。エントリのプログラムはPreludeのほかのすべての標準ライブラリのモジュールをimportする。標準ライブラリは使うモジュールだけを読み込むためである。印の列 (`param_marks`と`ret_mark`) は、長さが`params`と同じであること、すべての行の印がstdのシグネチャの型の印と合うこと (型変数に依る位置は`Poly`と読み、行の`Unr`とも`Poly`とも合う。組を返す行 (`with_args`) の結果は、組の最初の要素の印である。[Core IR](../spec/core-ir.md) の「表の印の列」と「組を返すextern」)、一覧に挙げた行 (`FileIn`、`Stdin`、`Stdout`、`Stderr`、`MutArray`を扱う行、`Std.Par.par`、`Std.Async`の行、`Std.Chan`の`push_raw`と`pop_raw`、`Std.Net`の行) のほかはすべて`Unr`であることを確かめる。借りる引数を持つ行と組を返す行が一覧のとおりであること (`Std.Net`の`op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`を含む)、預かる印を持つ行が`Std.Async`の19行と`Std.Chan.push_raw`だけであること、ランタイムが名前で呼ぶエントリ (`RuntimeEntry`) が型変数のないstdの関数で、引数の数とReprが表と合うことも確かめる。instanceの`extern`で結んだ行のシグネチャの型は、クラスのメソッドの宣言の型のクラスの型変数を、instanceの頭の型に置き換えた型である。多相なexternの行を足すときに、行のReprの比べ方を決め直す。機械のexternが配置の表を見ずに使うタグも、同じファイルで確かめる。Preludeの`Bool`の配置のコンストラクタが`[False, True]`で`FALSE`と`TRUE`に合うこと、`Ordering`のコンストラクタの順が`LT`、`EQ`、`GT`の定数に合うこと、組のタグ`TUPLE`が0であること、`Std.Async`の`Wake`のコンストラクタの順が`WAKE_WOKE`と`WAKE_CANCELLED`に合うことである
 
 ## 層ごとの方法
 
@@ -221,17 +221,17 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 ### AddressSanitizer
 
-- `asan` のジョブは、`eml_io` と `eml_native` のテストと、`eml_vm` の `api::`、`signal::`、`io::`、`workers::`、`ffi::` (本物の driver に記憶を貸す VM の道と、ほかの worker の driver に記憶を貸す道、C の関数に記憶を貸す道) を `-Zsanitizer=address` で流す。対象は `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`aarch64-apple-darwin` の3つである。Rust の AddressSanitizer は Windows の msvc を対象にしない
+- `asan`のジョブは、`eml_io`と`eml_native`のテストと、`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`seat::`、`pinned::` (本物のdriverに記憶を貸すVMの道と、ほかのworkerのdriverに記憶を貸す道、Cの関数に記憶を貸す道、メインのworkerのdriverに記憶を貸す道) を`-Zsanitizer=address`で流す。対象は`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`aarch64-apple-darwin`の3つである。RustのAddressSanitizerはWindowsのmsvcを対象にしない
 - `eml_native` と `ffi::` を足したのは、橋渡しの Rust の関数が C に貸した配列や文字列の記憶を読み書きするためである。橋渡しの本体は Cranelift の JIT のコードで、計装されない。AddressSanitizer が見るのは、JIT のコードを呼ぶ Rust の側と、C に渡す前後の貸し借りの範囲である
 - `eml_vm` の lib のテストは AddressSanitizer の下で流さない。そのため、worker 1 のタスクの操作の記録を run の終わりに worker 0 が掃く道 (`sched.rs` の `an_op_record_left_on_worker_1_is_swept`) を確かめるのは、検査モードの漏れの確かめだけである
-- `eml_vm` の `ffi_abandon::` (戻らない `blocking` の呼び出しを見捨てる run) は、`ASAN_OPTIONS=detect_leaks=0` を付けた別の step で流す。見捨てた `Machine` は、プールのスレッドに貸したままの記憶を放さないために、ヒープを意図して漏らすからである ([VM](../spec/vm.md) の「時計と driver」)。この step でも記憶の誤りは確かめ、切るのは leak の検出だけである
-- nightly は Miri と同じ `nix develop .#miri` のものを使い、`-Zbuild-std` で std も計装し、`--target` をいつも書く。leak の検出は、`ffi_abandon::` の step を除いて AddressSanitizer の既定のままにする
+- `eml_vm`の`ffi_abandon::` (戻らない`blocking`の呼び出しを見捨てるrun) は、`ASAN_OPTIONS=detect_leaks=0`を付けた別のstepで流す。見捨てた`Machine`は、プールのスレッドに貸したままの記憶を放さないために、ヒープを意図して漏らすからである ([VM](../spec/vm.md)の「時計と driver」)。`seat.rs`と`pinned.rs`の`worker_panic::` (worker 0かメインのworkerがpanicするrun) も同じstepで流し、最初のstepは`--skip worker_panic::`で飛ばす。panicしたworkerは、途中の状態のヒープを落とさないように`Ctx`を漏らすからである ([VM](../spec/vm.md)の「タスクとスケジュール」)。このstepでも記憶の誤りは確かめ、切るのはleakの検出だけである
+- nightlyはMiriと同じ`nix develop .#miri`のものを使い、`-Zbuild-std`でstdも計装し、`--target`をいつも書く。leakの検出は、`ffi_abandon::`と`worker_panic::`のstepを除いてAddressSanitizerの既定のままにする
 - 開発機では build の置き場所を `target/asan` に分ける (「よく使うコマンド」)
 - 道具の不具合 (runtime がない、link、rpath、時間切れ) で緑にできない脚は、その脚だけ fenix と同じ日付に固めた rustup の nightly にし、時間の上限を 90 分にする。それでも緑にならなければ脚を外し、外した脚をこの節とロードマップの「その後の項目」に書く
 
 ### ThreadSanitizer
 
-- `tsan`のジョブは、workerのスレッドの間で共有する記憶にdata raceがないことを`-Zsanitizer=thread`で確かめる。流すのは`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、`eml_vm`のlibの`counters::`、`eml_io`のlibの`driver::tests::`の4手順で、対象は`x86_64-unknown-linux-gnu`だけである。Miriは複数のスレッドのinterleavingを網羅しないので、スレッドをまたぐ`unsafe`の核 (`eml_rt`のremote解放の経路と、`eml_vm`の起こしの語、runの表、runの登録表とmail、ほかのworkerへの操作の転送、`Counter`のatomic、workerをまたぐchannel、workerの間で共有する`CCall`、`eml_io`のdriverのプールのスレッドが貸された記憶に書くファイルの仕事) は、実際に走るスレッドの上でThreadSanitizerが見る
+- `tsan`のジョブは、workerのスレッドの間で共有する記憶にdata raceがないことを`-Zsanitizer=thread`で確かめる。流すのは`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`、`eml_vm`のlibの`counters::`、`eml_io`のlibの`driver::tests::`の4手順で、対象は`x86_64-unknown-linux-gnu`だけである。Miriは複数のスレッドのinterleavingを網羅しないので、スレッドをまたぐ`unsafe`の核 (`eml_rt`のremote解放の経路と、`eml_vm`の起こしの語、runの表、runの登録表とmail、ほかのworkerへの操作の転送、`Counter`のatomic、workerをまたぐchannel、workerの間で共有する`CCall`、`eml_io`のdriverのプールのスレッドが貸された記憶に書くファイルの仕事) は、実際に走るスレッドの上でThreadSanitizerが見る
 - nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。`eml_rt` と `eml_vm` の3つの手順も、この形で流す
 - 合否は終了コードで決める。`TSAN_OPTIONS=halt_on_error=1` で、警告が1件でも出たらテストのプロセスが止まる。警告は抑制せず、`suppressions` も書かない。報告が出たら、コードの不具合か、`eml_rt` の `unsafe` が前提にしている順序の誤りとして直す
 - 開発機では build の置き場所を `target/tsan` に分ける (「よく使うコマンド」)
@@ -552,6 +552,8 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 テストは macOS、Linux (x86_64 と aarch64)、Windows の3つの OS で流す。Windows で対応する target は `x86_64-pc-windows-msvc` だけで、`x86_64-pc-windows-gnu` (MinGW) は対応せず、流さない。テストは移植できるのが既定である。Windows での違いが処理系の側にあるなら、ソースを直すかテストを移す。
 
+対応するOSは、Windows 10 1809以降、Linux 6.12以降、macOS 26以降である ([概要](../overview.md)の「コンパイラと実行系」)。CIの`macos-15`と`ubuntu-24.04`のimageはこれより古い。これらの版の機能に頼るテストはまだない。
+
 開発機の OS で組まれないコード (`cfg(windows)` や `cfg(unix)` の部分) は、`nix develop .#cross` の clippy で型を検査する。この devShell の toolchain は、ふだんと同じバージョンに `x86_64-pc-windows-msvc`、`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu` の `rust-std` を足したものである。link はできないので、流すのは clippy だけで、テストは CI の各 OS のジョブで流す。build の置き場所は `target/cross` で、ふだんの `target/` と分ける。
 
 `eml_tls` は aws-lc-sys を組み、そのために対象の C のツールチェーンが要る。`.#cross` の devShell にはないので、この clippy は `eml_tls` を除き、`tls` を外した形で流す。Linux の2つの target も同じフラグである。`tls` を外した側のコードは、feature の組み合わせの clippy の行が検査する。`eml_tls` そのものは、CI のどの OS でも clippy とテストにかける。C の暗号を組む crate を dev-dependency に持ってよいのは `eml_tls` だけで、ほかの crate のテストは、optional の依存を `cfg(feature = "tls")` の下で通して `eml_tls` に届く。CI はこの決まりを `cargo tree` で確かめる (「feature の組み合わせの確認」)。
@@ -589,7 +591,7 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 次の3つで OS によって合否が変わるテストには印を付けず、どの OS でも通るように直す。
 
 - libm の最後のビットに依る期待値: 正確な場合か、IEEE で正確な演算 (`sqrt`、四則) に書き直す。許容の幅は入れない
-- スタックのあふれ: あふれたのが `eml.exe` なら、main.rs でコマンドの本体を 8 MiB (macOS と Linux のメインスレッドと同じ大きさ) のスタックのスレッドで動かす。そうでなければ再帰を直す
+- スタックのあふれ: あふれたのが`eml.exe`なら、メインスレッドは`crates/eml_cli/build.rs`で8 MiBを予約する (`/STACK:8388608`。`cli::eml_exe_reserves_an_8_mib_main_stack`が確かめる)。プロセスのメインスレッドはメインのworkerなので、コマンドの本体をほかのスレッドへ移さない。そうでなければ再帰を直す
 - OS が作る誤りの文言: fixture を替え、文言が Rust か eml から来るようにする
 
 ### OS で振る舞いが決まっているテスト
@@ -676,7 +678,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write` と `counters::`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
-- `asan`: x86_64 の Linux、aarch64 の Linux、aarch64 の macOS のそれぞれで、`eml_io` と `eml_native` のテストと `eml_vm` の `api::`、`signal::`、`io::`、`workers::`、`ffi::` と、leak の検出を切った `ffi_abandon::` を AddressSanitizer の下で流す (下の「AddressSanitizer」)
+- `asan`: x86_64のLinux、aarch64のLinux、aarch64のmacOSのそれぞれで、`eml_io`と`eml_native`のテストと`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`seat::`、`pinned::`と、leakの検出を切った`ffi_abandon::`と`worker_panic::`をAddressSanitizerの下で流す (下の「AddressSanitizer」)
 - `tsan`: x86_64のLinuxで、`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、libの`counters::`と、`eml_io`のlibの`driver::tests::`をThreadSanitizerの下で流す (下の「ThreadSanitizer」)
 
 CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
@@ -738,8 +740,8 @@ cargo insta test --test-runner nextest --accept      # テストを流し、ス�
 cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vm の api:: signal:: io:: workers:: ffi:: と eml_native も。eml_vm の ffi_abandon:: は ASAN_OPTIONS=detect_leaks=0 で別に流す。eml_io の検証)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon:: と -p eml_vm --lib counters::、eml_io は -p eml_io --lib -- driver::tests::。ThreadSanitizer)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vmの api:: signal:: io:: workers:: ffi:: seat:: pinned:: --skip worker_panic:: とeml_nativeも。eml_vmの ffi_abandon:: worker_panic:: はASAN_OPTIONS=detect_leaks=0で別に流す。eml_ioの検証)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon:: seat:: pinned:: と -p eml_vm --lib counters::、eml_io は -p eml_io --lib -- driver::tests::。ThreadSanitizer)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)

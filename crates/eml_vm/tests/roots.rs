@@ -4,7 +4,7 @@
 use eml_rt::{Fault, HeapError};
 use eml_vm::{AnyMachine, RunConfig, RuntimeError, Sched, VmFault, capture_host};
 
-use crate::common::{disasm, parse, run_lir};
+use crate::common::{disasm, parse, run_lir_merged};
 
 /// 根に置いた文字列と整数を読み直して表示する。整数は `tobj` に box して置き、文字列はそのまま `obj` で読む。
 #[test]
@@ -25,7 +25,7 @@ fn main() -> unit {
   return w.9
 }
 ";
-    assert_eq!(run_lir(text), ("kept\n42\n".to_string(), Ok(())));
+    assert_eq!(run_lir_merged(text), ("kept\n42\n".to_string(), Ok(())));
 }
 
 /// 空の根は、どちらのモードでも読めない。
@@ -39,7 +39,7 @@ fn main() -> unit {
 }
 ";
     assert_eq!(
-        run_lir(text).1,
+        run_lir_merged(text).1,
         Err(RuntimeError::Fault {
             fault: VmFault::Extern(Fault::Heap(HeapError::RootMisuse)),
             function: "main".to_string(),
