@@ -36,6 +36,42 @@ la-arena = "0.3"
 libc = "0.2"
 libloading = "0.9"
 logos = "0.16"
+# AppKitのbackend (eml_guiのnative) が使う部分だけを有効にする
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSApplication",
+    "NSButton",
+    "NSCell",
+    "NSControl",
+    "NSEvent",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSLayoutConstraint",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPopUpButton",
+    "NSProgressIndicator",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSTextField",
+    "NSView",
+    "NSWindow",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFDate",
+    "CFFileDescriptor",
+    "CFRunLoop",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSGeometry",
+    "NSNotification",
+    "NSString",
+] }
 rustyline = { version = "19.0.0", default-features = false, features = ["buffer-redux"] }
 rowan = "0.17"
 rustc-hash = "2.1"

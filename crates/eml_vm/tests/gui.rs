@@ -502,6 +502,7 @@ main () = Async.run (fn () ->
 
 /// backendを作れないrunでは、`Gui.run`は作るときの誤りで失敗する。`open_ui_raw`がゲートを放して印を下ろすので、
 /// 誤りは次の`Gui.run`でも同じで、その後のプログラムは終わり、デッドロックもまた判定される。
+#[cfg(not(feature = "gui-native"))]
 #[test]
 fn a_failed_backend_creation_fails_each_run_and_lowers_the_holds() {
     let attempt = "\
@@ -542,6 +543,55 @@ main () = Async.run (fn () ->
         "{error_after}"
     );
     assert_eq!(texts(&lines), [error, error]);
+}
+
+/// AppKitのbackendはメインのスレッドでしか作れず、テストはメインのスレッドで走らない。GUIを求めないプログラムは
+/// ネイティブのbackendの`Park`でも`DefaultPark`と同じに終わり、印も立たないので、backendを作ろうともしない。求めるプログラムでは
+/// 作るのに失敗し、`Gui.run`ごとにその誤りが届く。
+#[cfg(all(feature = "gui-native", target_os = "macos"))]
+#[test]
+fn the_appkit_backend_is_made_only_when_a_run_asks_for_a_gui() {
+    let native = |src: &str| {
+        let control = limits(1);
+        let interrupt = Arc::clone(&control);
+        let config = RunConfig::default()
+            .with_control(control)
+            .with_main_park(eml_vm::gui_park(
+                Backend::Native,
+                Arc::new(move || interrupt.interrupt()),
+            ));
+        run_with(src, config)
+    };
+    let plain = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () -> println \"pinned\"))
+";
+    let (lines, _, result) = native(plain);
+    let default = RunConfig::default()
+        .with_control(limits(1))
+        .with_main_park(Arc::new(|| Box::new(DefaultPark)));
+    let (_, _, default_result) = run_with(plain, default);
+    let (ran, default) = (finished(result), finished(default_result));
+    assert_eq!(texts(&lines), ["pinned"]);
+    assert_eq!(ran.stats, default.stats);
+    assert_eq!(holds(&ran), (0, 0));
+
+    let (lines, _, result) = native(&with_app(
+        "\
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let attempt () = match try_io (fn () -> Async.run (fn () -> Gui.run (app \"native\"))) with
+    | Ok () -> println \"opened\"
+    | Err e -> println (show e)
+  attempt ()
+  attempt ())
+",
+    ));
+    let error = "IOError { kind = NotAvailable, message = \"cannot open the GUI: AppKit needs the main thread\" }";
+    assert_eq!(texts(&lines), [error, error]);
+    assert_eq!(holds(&finished(result)), (2, 2));
 }
 
 const PROGRESS: &str = "\

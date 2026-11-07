@@ -671,11 +671,25 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 
 `tls`と`gui`を外した処理系の振る舞いのテストは、`eml_io`と`eml_vm`の結合テストの`mod tls_off`と`mod gui_off`に置く。ワークスペースの実行ではfeatureの統一で`tls`と`gui`が有効になり、このモジュールは組まれない。そこでCIの段「cargo nextest run without tls and gui」が`cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::) | test(gui_off::)'`で別に流す。`gui_off`は`Gui.run`が`NotAvailable`で失敗することを確かめる。2つのモジュールは`cfg(not(feature = "tls"))`と`cfg(not(feature = "gui"))`だけで分け、OSでは分けない。nextestは何も合わないfilterをexit 4で落とすので、この段はモジュールの名前を変えたことも見つける。
 
+## GUI の手での確認
+
+nativeのGUIのbackendは、自動のテストでは開かない。CIの`gui-native`のジョブはbackendを組んでつなぎ、stubのテストを流すだけである (「CI」)。そこでnativeのbackendか、`eml_vm`の`gui.rs`のループの扱いを変えたときは、そのOSで`gui-native`を足して組んだ`eml`で`tests/ui/run/gui/`の3つの例 (`counter.em`、`form.em`、`progress.em`) を開き、次を手で確かめる。動かすのは`timeout 60 cargo run -p eml_cli --features gui-native -- run tests/ui/run/gui/<例>.em`である。
+
+1. counterが中身の自然な大きさで開き、最小の大きさより小さくできず、+と−でラベルの数が変わる
+2. ウィンドウの大きさを変えると、升目が広がる (counterの2つの`Fr 1`の列が幅を等しく分ける)
+3. formでは、名前が空でなく、箱に印が付くまでSubmitを押せない
+4. progressでは、Startの後に棒が進み、仕事の間もウィンドウを動かせる
+5. 閉じるボタンでプログラムが終わる (counterは`final N`を書く)
+6. OSの終了の操作 (macOSでは⌘QとDockの「終了」) が、`CloseRequest`を通してウィンドウを閉じる
+7. `Gui.run`が戻った後は、Dockのアイコンがなく (macOS)、Ctrl-Cでプログラムが終わる
+8. HiDPIの画面でも、論理pxの配置が同じである
+
 ## CI
 
-`.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の7つのジョブを流す。
+`.github/workflows/ci.yml`は、mainへのpush、pull request、手動の起動で、次の8つのジョブを流す。
 
 - `test`: macOS (macos-15)、Linux (ubuntu-24.04と、aarch64のubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls`と`gui`を外した`tls_off::`と`gui_off::`のテスト、既定でないfeatureのclippy (「feature の組み合わせの確認」の10個) と、段「feature resolution of tls」、段「dependency edges of eml_native」、段「dependency edges of eml_gui」の検査を流す。段「dependency edges of eml_gui」は、`eml_gui`がワークスペースのどのcrateにも依存しないことと、`eml_cli`の既定の依存の木にnativeのtoolkitのcrate (`cxx`、`objc2`、`winio-*`、`qt-build-utils`) が入らないことを`cargo tree`で守る。toolchainはrustupが`rust-toolchain.toml`から入れ、`rustc -V`のバージョンが`channel`と同じことを確かめる。Windowsのtargetは`x86_64-pc-windows-msvc`だけで、ジョブはhostがそれであることを確かめる。cargo-nextestは、ワークフローに書いたバージョンを入れる。ubuntu-24.04では、同じビルドで時間の検査 (「性能のテスト」) も流す
+- `gui-native`: macOS (macos-15) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUI の手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKitのbackendはテストの中では作れない
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
@@ -685,7 +699,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 
 CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
 
-アクションは commit の SHA で固定し、バージョンの名前をコメントに書く。runner の image は名前で固定し、上げるのは手で行う。nix のストアはキャッシュしない。install-nix-action には `GITHUB_TOKEN` を渡し、`github:` の input の取得が率の制限に当たらないようにする。token は nix.conf に入ってジョブの中で動くものから読めるが、権限は `contents: read` だけで、ジョブとともに切れるので受け入れる。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
+アクションはcommitのSHAで固定し、バージョンの名前をコメントに書く。runnerのimageは名前で固定し、上げるのは手で行う。nixのストアはキャッシュしない。install-nix-actionには`GITHUB_TOKEN`を渡し、`github:`のinputの取得が率の制限に当たらないようにする。tokenはnix.confに入ってジョブの中で動くものから読めるが、権限は`contents: read`だけで、ジョブとともに切れるので受け入れる。cargoの依存のビルドをキャッシュするのは`test`と`gui-native`のジョブだけで、保存するのはmainの実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml`で検査する。
 
 ## クラウドのセッション
 
@@ -734,6 +748,7 @@ cargo nextest run --profile timing -j 1              # CI の時間の検査 (SL
 cargo nextest run -p eml_syntax --test integration parser::empty_file    # 1つのテスト
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'          # UI テスト
 cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::) | test(gui_off::)'   # tlsとguiを外した振る舞い (ワークスペースの実行ではeml_cliの既定でtlsとguiが有効になる。「feature の組み合わせの確認」)
+cargo nextest run --features eml_cli/gui-native   # nativeのGUIのbackendを足して組む (CIのgui-nativeのジョブ。テストはstubで流れる)
 EML_UI_FILTER=basics/hello.em cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # 1つの UI テストだけ流す
 EML_UI_FILTER=/par/ cargo nextest run -p eml_cli --test integration -E 'test(=ui::run) | test(=ui::run_fail)'   # par の UI テスト (逐次と2つの seed。seed で流す)
 EML_UI_FILTER=par/nested.em cargo nextest run -p eml_cli --test integration -E 'test(=ui::run)'   # seed の run の食い違いを再現する

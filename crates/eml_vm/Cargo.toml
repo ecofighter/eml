@@ -9,10 +9,12 @@ autotests = false
 [lib]
 doctest = false
 
-# tlsを外すとStd.Tlsの腕はNotAvailableを投げる。guiを外すとStd.Guiを開けず、NotAvailableを投げる
+# tlsを外すとStd.Tlsの腕はNotAvailableを投げる。guiを外すとStd.Guiを開けず、NotAvailableを投げる。gui-nativeは
+# ネイティブのGUIのbackendを足し、ないとnativeのbackendを選んだ`Gui.run`がNotAvailableを投げる
 [features]
 tls = ["dep:eml_tls", "eml_io/tls"]
 gui = ["dep:eml_gui"]
+gui-native = ["gui", "eml_gui/native"]
 
 [dependencies]
 eml_cabi.workspace = true

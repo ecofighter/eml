@@ -14,6 +14,7 @@ pub struct EventQueue(Rc<Inner>);
 struct Inner {
     events: RefCell<VecDeque<RawEvent>>,
     attached: Cell<bool>,
+    pushed: Cell<bool>,
 }
 
 impl EventQueue {
@@ -27,6 +28,17 @@ impl EventQueue {
             return;
         }
         self.0.events.borrow_mut().push_back(event);
+        self.0.pushed.set(true);
+    }
+
+    /// 前に呼んでから`push`で積まれたイベントがあったか。callbackは積むことしかしないので、ネイティブのループはこれを見て
+    /// 次の`step(Events)`を決める。
+    #[cfg_attr(
+        not(all(feature = "native", target_os = "macos")),
+        allow(dead_code, reason = "only the AppKit loop asks")
+    )]
+    pub(crate) fn take_pushed(&self) -> bool {
+        self.0.pushed.replace(false)
     }
 
     /// ユーザーのイベント以外のイベント (`QuitRequested`、`Resized`、`Invalidate`) を順に取り出す。ユーザーのイベントは列に残る。
@@ -127,6 +139,21 @@ mod tests {
         q.detach();
         assert!(!q.has_user());
         assert_eq!(q.take_control(), vec![RawEvent::QuitRequested]);
+    }
+
+    #[test]
+    fn take_pushed_reports_a_push_since_the_last_take() {
+        let q = EventQueue::new();
+        assert!(!q.take_pushed());
+        q.push(click(1));
+        assert!(!q.take_pushed(), "a dropped user event is no push");
+        q.push(RawEvent::QuitRequested);
+        assert!(q.take_pushed());
+        assert!(!q.take_pushed());
+        q.attach();
+        q.push(click(2));
+        let _ = q.pop_user();
+        assert!(q.take_pushed(), "taking the event does not clear the mark");
     }
 
     #[test]

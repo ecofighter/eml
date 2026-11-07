@@ -21,6 +21,9 @@ impl Backend {
     pub fn create(self) -> Result<Native, GuiError> {
         match self {
             Backend::Stub(script) => Ok(stub::create(script)),
+            #[cfg(all(feature = "native", target_os = "macos"))]
+            Backend::Native => crate::appkit::create(),
+            #[cfg(not(all(feature = "native", target_os = "macos")))]
             Backend::Native => Err(GuiError::NotAvailable(
                 "cannot open the GUI: built without the native toolkit".to_string(),
             )),
@@ -32,6 +35,7 @@ impl Backend {
 mod tests {
     use super::*;
 
+    #[cfg(not(feature = "native"))]
     #[test]
     fn native_is_not_available_without_the_native_toolkit() {
         assert_eq!(

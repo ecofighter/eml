@@ -21,7 +21,8 @@ required-features = ["run"]
 # tlsはrunに足すStd.Tlsで、外すとStd.Tlsの腕がNotAvailableを投げる。`dep:eml_tls`はsrc/では使わず、
 # 本物のソケットの上の結合テスト (tests/tls.rs) がサーバーを立てるためにある。dev-dependencyにしない理由は
 # docs/implementation/testing.mdの「OS ごとのテスト」にある。guiはrunに足すStd.Guiで、外すとStd.Guiを
-# 開けず、NotAvailableを投げる。
+# 開けず、NotAvailableを投げる。gui-nativeはネイティブのGUIのbackendを足す。既定に入れないので、既定のビルドは
+# toolkitの開発用のファイルを要らない (docs/implementation/architecture.mdの「crate の依存関係」)。
 [features]
 default = ["run", "tls", "gui"]
 types = ["dep:eml_types"]
@@ -29,6 +30,7 @@ core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
 run = ["core", "dep:eml_vm", "dep:eml_native", "dep:libc", "dep:rustyline", "dep:windows-sys"]
 tls = ["run", "eml_vm/tls", "dep:eml_tls"]
 gui = ["run", "eml_vm/gui"]
+gui-native = ["gui", "eml_vm/gui-native"]
 
 [dependencies]
 clap.workspace = true

@@ -14,7 +14,8 @@ cargo fetch --locked
 out=$(mktemp)
 log=$(mktemp)
 trap 'rm -f "$out" "$log"' EXIT
-cargo-about generate --frozen --fail -m crates/eml_cli/Cargo.toml -o "$out" about.hbs 2>"$log"
+# feature gui-nativeが足すnativeのGUIのbackendのcrateも数える
+cargo-about generate --frozen --fail --features gui-native -m crates/eml_cli/Cargo.toml -o "$out" about.hbs 2>"$log"
 # about.toml で指定したファイルの checksum が crate の更新で合わなくなると、cargo-about は警告だけを出して指定を捨て、
 # 自動の判定が拾う別のファイルや SPDX の雛形の文面に戻る。そのまま書き出すと、その文面に替わったことに気づけないので、
 # 警告を誤りとして扱う

@@ -1882,7 +1882,7 @@ main () =
 | 知らないか閉じたウィジェット | `NotFound "gui: unknown or closed widget"` |
 | ウィジェットにない性質 | `Other "gui: the widget has no such property"` |
 | 範囲の外の値 | `Other "gui: a value is out of range"` |
-| ネイティブのtoolkitか画面がない | backendの文言の`NotAvailable` (`cannot open the GUI: built without the native toolkit`) |
+| ネイティブのtoolkitか画面がない、メインのスレッドでない | backendの文言の`NotAvailable` (`cannot open the GUI: built without the native toolkit`、`cannot open the GUI: AppKit needs the main thread`) |
 | ほかのbackendの誤り | backendの文言の`Other` |
 
 配置はTaffyが置くgridで、置き方は自動だけである。gridはtrack (`Auto | Fr n | Px n`) の列と行を持ち、`rows = []`は暗黙の`Auto`の行である。子は行の順に埋める。子は直前の`cell`の`col_span`、`row_span`、`halign`、`valign` (なければ`default_cell`) を持ち、gridは入れ子にできる。間隔は8、ウィンドウの余白は12の論理pxで、どちらも固定である。ウィンドウは自然な大きさで開き、最小の幅はmin-contentの幅である。座標、大きさ、DPIの値はemlに渡らない。

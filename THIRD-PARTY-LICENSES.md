@@ -79,6 +79,11 @@ Do not edit it by hand; regenerate it with `nix develop -c nix/third-party-licen
 - `memmap2` 0.9.12: MIT OR Apache-2.0
 - `memoffset` 0.9.1: MIT
 - `nix` 0.31.3: MIT
+- `objc2` 0.6.5: MIT
+- `objc2-app-kit` 0.3.2: Zlib OR Apache-2.0 OR MIT
+- `objc2-core-foundation` 0.3.2: Zlib OR Apache-2.0 OR MIT
+- `objc2-encode` 4.1.0: MIT
+- `objc2-foundation` 0.3.2: MIT
 - `once_cell` 1.21.4: MIT OR Apache-2.0
 - `once_cell_polyfill` 1.70.2: MIT OR Apache-2.0
 - `openssl-probe` 0.2.2: MIT OR Apache-2.0
@@ -2076,6 +2081,11 @@ Used by:
 - `convert_case` 0.4.0
 - `la-arena` 0.3.1
 - `libm` 0.2.16
+- `objc2-app-kit` 0.3.2
+- `objc2-core-foundation` 0.3.2
+- `objc2-encode` 4.1.0
+- `objc2-foundation` 0.3.2
+- `objc2` 0.6.5
 - `taffy` 0.15.1
 - `verus_builtin` 0.0.0-2026-10-11-0230
 - `verus_builtin_macros` 0.0.0-2026-10-25-0158

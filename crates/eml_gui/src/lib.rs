@@ -1,5 +1,7 @@
 //! ネイティブのGUIのtoolkitの共通の層と、テスト用のstubのbackend (docs/implementation/architecture.md の「`eml_gui`の内部」)。
 
+#[cfg(all(feature = "native", target_os = "macos"))]
+mod appkit;
 mod backend;
 mod layout;
 mod queue;

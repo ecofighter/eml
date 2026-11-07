@@ -108,6 +108,42 @@ jobs:
           test "$(cargo tree -p eml_gui -e normal --target all --prefix none | grep -v '^eml_gui ' | grep -c '^eml_')" -eq 0
           test "$(cargo tree -p eml_cli -e normal,build --target all | grep -c -E 'cxx v|objc2 v|winio-|qt-build-utils v')" -eq 0
 
+  # nativeのGUIのbackendを組み、stubのテストを流す。画面を開くテストはない (docs/implementation/testing.mdの「CI」)
+  gui-native:
+    name: gui-native (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        if: runner.os != 'Linux'
+        run: rustup toolchain install
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        if: runner.os == 'Linux'
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: runner.os != 'Linux'
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        if: runner.os != 'Linux'
+        with:
+          tool: cargo-nextest@0.9.146
+          fallback: none
+      - name: cargo clippy --features gui-native
+        id: clippy
+        run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo clippy --all-targets --features eml_cli/gui-native -- -D warnings
+      - name: cargo nextest run --features gui-native
+        if: ${{ !cancelled() && steps.clippy.outcome != 'skipped' }}
+        run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo nextest run --features eml_cli/gui-native --failure-output immediate-final --no-capture
+
   fmt:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
