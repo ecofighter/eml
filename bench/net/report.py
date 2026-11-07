@@ -77,7 +77,7 @@ TARGETS = [
      lambda v, n: div(v["per_wait"], v["waits"]), lambda x: x <= 0.05, "≤ 0.05"),
 ]
 STATS = ["parks", "completions", "tasks", "allocations", "string_bytes_copied", "rc_increments",
-         "rc_decrements", "preemptions"]
+         "rc_decrements"]
 
 
 def cpu(r):

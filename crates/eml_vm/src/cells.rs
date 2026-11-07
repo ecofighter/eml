@@ -247,12 +247,8 @@ struct TimerKey {
 }
 
 struct TaskCell {
-    /// タスクを動かす物理的な worker。`start` と救済が登録表の lock の下で書く (docs/spec/vm.md の「セルと登録表」
-    /// 「救済」)。
+    /// タスクを動かす物理的なworker。`start`だけが登録表のlockの下で書く (docs/spec/vm.mdの「セルと登録表」)。
     owner: u32,
-    /// このタスクのエントリの `Task` のうち、まだ `Finish` していないものの数。0 の間だけ救済で動かせる
-    /// (docs/spec/vm.md の「救済」)。
-    entries: u32,
     phase: Phase,
     outcome: Option<Outcome>,
     /// 加わったスコープ。作るときに決まり、`members` の一覧と失敗の記録の先になる。
@@ -341,8 +337,8 @@ enum CellKind {
     Job(JobCell),
 }
 
-/// `compute` の仕事のセル (docs/spec/vm.md の「セルと登録表」)。受け箱の番号を持たないので、仕事を動かす worker が
-/// 替わっても、終わりは `submitter` の今の持ち主に route される。
+/// `compute`の仕事のセル (docs/spec/vm.mdの「セルと登録表」)。受け箱の番号を持たないので、仕事を動かすworkerが
+/// 替わっても、終わりは`submitter`の持ち主にrouteされる。
 struct JobCell {
     /// 仕事の論理的な ID。終わりの語はこの ID の物体で、取り出す側が `transfer_back` してから退かせる。
     worker: u32,
@@ -1288,9 +1284,8 @@ pub(crate) enum Route {
     Stale,
 }
 
-/// ほかの worker の受け箱へ知らせを積む道。登録表の lock の下で呼び、持ち主を読んだのと同じ区間で積む。持ち主が
-/// 変わる前に積んだ知らせを、受けた worker が今の持ち主へ回せるようにするためである (docs/spec/vm.md の
-/// 「セルと登録表」)。実行系が実装する。このファイルは worker の表を知らないからである。
+/// ほかのworkerの受け箱へ知らせを積む道。登録表のlockの下で呼び、持ち主を読んだのと同じ区間で積む
+/// (docs/spec/vm.mdの「セルと登録表」)。実行系が実装する。このファイルはworkerの表を知らないからである。
 pub(crate) trait Post {
     /// worker `k` に、持ち主として起こしを受け取らせる。
     fn wake(&self, k: u32, w: Woken);
@@ -1594,7 +1589,7 @@ impl Registry {
                 let Some(CellKind::Task(task)) = self.live(cell) else {
                     return Ok(Route::Stale);
                 };
-                // 宛先はセルが今持つ持ち主で決める。起こしを作った後に持ち主が変わっても取り残さない
+                // 起こしはどのworkerでも作るので、宛先はセルの持ち主で決める
                 if task.owner != me {
                     return Ok(Route::Forward(task.owner));
                 }
@@ -1623,9 +1618,9 @@ impl Registry {
         }
     }
 
-    /// 起こしをすべて worker `here.me` で受け取る。持ち主が自分のものは走らせる仕事にして `out` に積み、ほかの worker の
-    /// ものは同じ区間でその持ち主の受け箱に送る。宛先は起こしを作ったときでなく、セルが今持つ持ち主で決める
-    /// (docs/spec/vm.md の「セルと登録表」)。もう待っていないセルへの起こしは内部の誤りである。
+    /// 起こしをすべてworker `here.me`で受け取る。持ち主が自分のものは走らせる仕事にして`out`に積み、ほかのworkerの
+    /// ものは同じ区間でその持ち主の受け箱に送る。起こしは宛先を持たないので、セルの持ち主で決める
+    /// (docs/spec/vm.mdの「セルと登録表」)。もう待っていないセルへの起こしは内部の誤りである。
     pub(crate) fn route(
         &mut self,
         woken: &mut Vec<Woken>,
@@ -1640,6 +1635,18 @@ impl Registry {
             }
         }
         Ok(())
+    }
+
+    /// 受け箱から取った起こし`w`が、worker `me`が持ち主のタスクか、`me`の上で待つ`Task`を名指すか。`take_async`が
+    /// debugのビルドで確かめる。もう生きていないセルへの起こしは`route`が内部の誤りにするので、真を返す。
+    pub(crate) fn wake_is_for(&mut self, w: &Woken, me: u32) -> bool {
+        match *w {
+            Woken::Token { owner, .. } => owner == me,
+            Woken::Task { cell, .. } => match self.live(cell) {
+                Some(CellKind::Task(task)) => task.owner == me,
+                _ => true,
+            },
+        }
     }
 
     /// 受け箱の起こし `w` を worker `me` が受け取れば、走らせる仕事になるか。継続は取り出さない。run の終わりに残った
@@ -1702,21 +1709,6 @@ impl Registry {
     fn part_of(&mut self, cell: CellRef) -> Result<&mut Part, CellFault> {
         let owner = self.task_mut(cell)?.owner as usize;
         Ok(&mut self.parts[owner])
-    }
-}
-
-/// 旗の立ったタスク `cell` の届け先を決める。動いていて持ち主がほかの worker なら、持ち主へ `Notice::Limit` を回す。
-/// 横取りされてフレームを持ったまま待つタスクも `Running` のままで、その `Task` を持つのは持ち主だからである。持ち主が
-/// 自分ならセルを返し、呼び手の実行系がその VM の `Task` に旗を付ける。置いたか待っているタスクは VM の `Task` を
-/// 持たないので、旗だけを残し、次の `started` か `resumed` が返す (docs/spec/vm.md の「タスクの上限」)。
-fn route_limit(task: &TaskCell, cell: CellRef, here: &Here) -> Option<CellRef> {
-    match task.phase {
-        Phase::Running if task.owner != here.me => {
-            here.post.limit(task.owner, cell);
-            None
-        }
-        Phase::Running => Some(cell),
-        Phase::Placed | Phase::Parked | Phase::Finished => None,
     }
 }
 
@@ -1918,7 +1910,6 @@ impl Registry {
         unsafe { heap.share(g, worker) }?;
         let cell = self.alloc(CellKind::Task(TaskCell {
             owner,
-            entries: 0,
             phase: Phase::Placed,
             outcome: None,
             scope,
@@ -1956,15 +1947,19 @@ impl Registry {
         )))
     }
 
-    /// 受け箱の `Place` が名指すタスクの今の持ち主。受けた worker は、自分なら始める仕事にし、ほかの worker ならその
-    /// 持ち主へ送り直す。置いたタスクは始まるまで放されないので、始まるのを待っていないセルは内部の誤りである
-    /// (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) fn placed_owner(&mut self, cell: CellRef, worker: u32) -> Result<u32, CellFault> {
+    /// 受け箱の`Place`が名指すタスクが、始まるのを待っているかを確かめる。置いたタスクは始まるまで放されないので、
+    /// 始まるのを待っていないセルは内部の誤りである。受けたworker `me`は持ち主である。`start`が持ち主に送り、
+    /// 持ち主は変わらないためである (docs/spec/vm.mdの「タスクとスケジュール」)。
+    pub(crate) fn placed(&mut self, cell: CellRef, worker: u32, me: u32) -> Result<(), CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Placed) || task.worker != worker {
             return Err(CellFault::Internal("a placed task is not waiting to start"));
         }
-        Ok(task.owner)
+        debug_assert_eq!(
+            task.owner, me,
+            "a place reaches a worker that is not the owner"
+        );
+        Ok(())
     }
 
     /// 始める仕事を実行系が動かし始めた。始めたタスクの ID とタスクの上限の印を返す。実行系は、その ID から閉包を
@@ -1975,7 +1970,6 @@ impl Registry {
             return Err(CellFault::Internal("a task starts twice"));
         }
         task.phase = Phase::Running;
-        task.entries += 1;
         task.budget = BUDGET;
         let marks = TaskMarks {
             limit: task.limit,
@@ -2002,7 +1996,6 @@ impl Registry {
             return Err(CellFault::Internal("a task resumes without waiting"));
         }
         task.phase = Phase::Running;
-        task.entries += 1;
         if !io || task.budget == 0 {
             task.budget = BUDGET;
         }
@@ -2032,9 +2025,12 @@ impl Registry {
         Ok(())
     }
 
-    /// mail の上限の旗の項を受けた。生きていて終わっていないタスクのセルに旗を立て、`route_limit` で届け先を決める。
-    /// 死んだセルと終わったセルは何もしない。監視のスレッドが lock なしで読んだ古い番号でありうるためである。旗を
-    /// 立てるのはこの道だけである (docs/spec/vm.md の「タスクの上限」)。
+    /// mailの上限の旗の項を受けた。生きていて終わっていないタスクのセルに旗を立て、届け先を決める。死んだセルと
+    /// 終わったセルは何もしない。監視のスレッドがlockなしで読んだ古い番号でありうるためである。旗を立てるのはこの道
+    /// だけである。動いていて持ち主がほかのworkerなら、持ち主へ`Notice::Limit`を回す。横取りされてフレームを持った
+    /// まま待つタスクも`Running`のままで、その`Task`を持つのは持ち主だからである。持ち主が自分ならセルを返し、呼び手の
+    /// 実行系がそのVMの`Task`に旗を付ける。置いたか待っているタスクはVMの`Task`を持たないので、旗だけを残し、次の
+    /// `started`か`resumed`が返す (docs/spec/vm.mdの「タスクの上限」)。
     pub(crate) fn limit_task(
         &mut self,
         cell: CellRef,
@@ -2047,106 +2043,45 @@ impl Registry {
             return Ok(None);
         }
         task.limit = true;
-        Ok(route_limit(task, cell, here))
+        Ok(match task.phase {
+            Phase::Running if task.owner != here.me => {
+                here.post.limit(task.owner, cell);
+                None
+            }
+            Phase::Running => Some(cell),
+            Phase::Placed | Phase::Parked | Phase::Finished => None,
+        })
     }
 
-    /// ほかの worker が回した `Notice::Limit` を持ち主として受けた。旗をもう一度立てず、まだ立っているときだけ
-    /// `route_limit` で届け先を決める。知らせが届く前にタスクが `ResourceLimit` を起こして旗を下ろしていれば、遅れた
-    /// 知らせで2度目の失敗を起こさないためである (docs/spec/vm.md の「タスクの上限」)。
-    pub(crate) fn limit_forwarded(&mut self, cell: CellRef, here: &Here) -> Option<CellRef> {
+    /// ほかのworkerが回した`Notice::Limit`を持ち主`me`として受けた。旗をもう一度立てず、まだ立っていてタスクが動いて
+    /// いるときだけセルを返す。知らせが届く前にタスクが`ResourceLimit`を起こして旗を下ろしていれば、遅れた知らせで
+    /// 2度目の失敗を起こさないためである。置いたか待っているタスクは旗だけを残す (docs/spec/vm.mdの「タスクの上限」)。
+    pub(crate) fn limit_forwarded(&mut self, cell: CellRef, me: u32) -> Option<CellRef> {
         match self.live(cell) {
-            Some(CellKind::Task(task)) if task.limit && !matches!(task.phase, Phase::Finished) => {
-                route_limit(task, cell, here)
+            Some(CellKind::Task(task)) if task.limit && matches!(task.phase, Phase::Running) => {
+                debug_assert_eq!(
+                    task.owner, me,
+                    "a limit reaches a worker that is not the owner"
+                );
+                Some(cell)
             }
             _ => None,
         }
     }
 
-    /// 待ちに入って `Finish` したエントリの `Task` の分だけ、セルごとに `entries` を1つ減らしてそのエントリの数を
-    /// `bytes` に足し、`cells` を空にする。返すのは 0 になったセルの数である。持ち主が次の集める地点の最初の区間で呼ぶ。0 のセルを減らすのは内部の誤り
-    /// である。もう放したセルは飛ばす。待ちに入ったエントリの `Task` が `Finish` に着く前に、同じタスクの次のエントリの
-    /// `Task` がタスクを終え、ハンドルの `take` がセルを放しうるためである (docs/spec/vm.md の「救済」)。
-    pub(crate) fn leave(&mut self, cells: &mut Vec<(CellRef, usize)>) -> Result<usize, CellFault> {
-        let mut settled = 0;
+    /// 待ちに入って`Finish`したエントリの`Task`の分だけ、セルごとにそのエントリの数を`bytes`に足し、`cells`を空にする。
+    /// 持ち主が次の集める地点の最初の区間で呼ぶ。もう放したセルは飛ばす。待ちに入ったエントリの`Task`が`Finish`に着く前
+    /// に、同じタスクの次のエントリの`Task`がタスクを終え、ハンドルの`take`がセルを放しうるためである
+    /// (docs/spec/vm.mdの「タスクとスケジュール」)。
+    pub(crate) fn add_bytes(&mut self, cells: &mut Vec<(CellRef, usize)>) -> Result<(), CellFault> {
         for (cell, added) in cells.drain(..) {
             if self.live(cell).is_none() {
                 continue;
             }
             let task = self.task_mut(cell)?;
-            task.entries = task.entries.checked_sub(1).ok_or(CellFault::Internal(
-                "a task leaves an entry it has not entered",
-            ))?;
             task.bytes = task.bytes.saturating_add(added);
-            if task.entries == 0 {
-                settled += 1;
-            }
         }
-        Ok(settled)
-    }
-
-    /// 救済する worker `me` が、worker `victim` の始める仕事のタスク `cell` を引き取る。まだ始まっておらず持ち主が
-    /// `victim` なら、持ち主を `me` にして真を返す (docs/spec/vm.md の「救済」)。
-    pub(crate) fn steal_start(
-        &mut self,
-        cell: CellRef,
-        victim: u32,
-        me: u32,
-    ) -> Result<bool, CellFault> {
-        let task = self.task_mut(cell)?;
-        if !matches!(task.phase, Phase::Placed) || task.owner != victim {
-            return Ok(false);
-        }
-        debug_assert_eq!(task.entries, 0, "a placed task has a live entry");
-        task.owner = me;
-        Ok(true)
-    }
-
-    /// 救済する worker `me` が、worker `victim` の実行待ちにある再開する仕事のタスク `cell` を引き取る。継続は仕事が
-    /// 持つので、セルは継続も待ちの登録 (実行待ちのほか) も持たない。生きたエントリの `Task` がなく持ち主が `victim`
-    /// なら、持ち主を `me` にして真を返す (docs/spec/vm.md の「救済」)。
-    pub(crate) fn steal_resume(
-        &mut self,
-        cell: CellRef,
-        victim: u32,
-        me: u32,
-    ) -> Result<bool, CellFault> {
-        let task = self.task_mut(cell)?;
-        if !matches!(task.phase, Phase::Parked)
-            || !matches!(task.wait, None | Some(Wait::Ready))
-            || task.k.is_some()
-            || task.entries != 0
-            || task.owner != victim
-        {
-            return Ok(false);
-        }
-        debug_assert_eq!(task.entries, 0, "a task with a live entry is rescued");
-        task.owner = me;
-        Ok(true)
-    }
-
-    /// 救済する worker `me` が、worker `victim` の受け箱の起こしのタスク `cell` を引き取る。起こされて継続をセルに
-    /// 持ち、生きたエントリの `Task` がなく持ち主が `victim` なら、持ち主を `me` にして、取り出した継続とタスクの
-    /// 論理的な ID を返す (docs/spec/vm.md の「救済」)。
-    pub(crate) fn steal_wake(
-        &mut self,
-        cell: CellRef,
-        victim: u32,
-        me: u32,
-    ) -> Result<Option<(Word, u32)>, CellFault> {
-        let task = self.task_mut(cell)?;
-        if !matches!(task.phase, Phase::Parked)
-            || task.wait.is_some()
-            || task.entries != 0
-            || task.owner != victim
-        {
-            return Ok(None);
-        }
-        let Some(k) = task.k.take() else {
-            return Ok(None);
-        };
-        debug_assert_eq!(task.entries, 0, "a task with a live entry is rescued");
-        task.owner = me;
-        Ok(Some((k, task.worker)))
+        Ok(())
     }
 
     /// 取り消しの地点の規則。`shield` の中では、いちばん内側の `shield` の中で自分が開いたスコープの旗だけを見る
@@ -2833,30 +2768,11 @@ impl Registry {
         Ok(())
     }
 
-    /// 届いた取り消しを処理する。持ち主が自分なら待ちを外し、ほかの worker なら、外さずにその持ち主へ送り直す。待ちを
-    /// 外すことと操作の取り消しは持ち主だけが行うからである (docs/spec/vm.md の「セルと登録表」)。
-    pub(crate) fn cancel_task(
-        &mut self,
-        cell: CellRef,
-        here: &Here,
-        out: &mut Vec<Woken>,
-        work: &mut IoWork,
-    ) -> Result<(), CellFault> {
-        let Some(CellKind::Task(task)) = self.live(cell) else {
-            return Ok(());
-        };
-        if task.owner != here.me {
-            here.post.cancel(task.owner, cell);
-            return Ok(());
-        }
-        self.unpark(cell, here, out, work)
-    }
-
     /// 取り消しの項を受けたタスクの待ちを外す。タスクとスコープの待ち手の項は残し、起こす側が `wait` で見分ける。
     /// channel の待ち手の列の項はいつも生きているので、ここで外す。操作を待つタスクは、driver が記憶を使い終わるまで
     /// 再開できないので、待ちを外さずに取り消しを `work` に積み、結果を当てるときに `Cancelled` として再開する
     /// (docs/spec/vm.md の「取り消しの届け方」)。
-    fn unpark(
+    pub(crate) fn unpark(
         &mut self,
         cell: CellRef,
         here: &Here,
@@ -2941,7 +2857,7 @@ impl Registry {
             MailItem::HandleDropped(cell) => self.let_go(here, cell, true, discards)?,
             MailItem::Cancel { cell, owner } => {
                 debug_assert_eq!(owner, here.me, "a cancel is taken by another worker");
-                self.cancel_task(cell, here, out, work)?;
+                self.unpark(cell, here, out, work)?;
             }
             MailItem::Signal(bits) => {
                 self.deliver(bits, out)?;
@@ -3789,8 +3705,8 @@ impl Registry {
     /// から落とす。取り出すのは受け付けたタスク (`worker`) だけである。
     fn take_op(&mut self, token: i64, worker: u32) -> Result<(Taken, Option<Word>), CellFault> {
         let op = self.op_of(token, worker)?;
-        // 記録の持ち主 (`owner`) はわざと確かめない。救済で移った譲りのタスクは、元の worker を持ち主にした終わった記録を
-        // 持ったまま、救済した worker で取り出すためである (docs/spec/vm.md の「救済」)
+        // 記録の持ち主 (`owner`) は確かめない。記録を取り出すのは受け付けたタスクだけで、
+        // `op_of`がタスクの論理的なIDで確かめる。タスクは持ち主のworkerから動かないので、持ち主も同じworkerのままである
         let record = self.op_mut(op)?;
         if !matches!(record.phase, OpPhase::Done(..)) {
             return Err(CellFault::Internal("an op is taken before its completion"));
@@ -4650,10 +4566,10 @@ pub(crate) fn exec_stage_count<M: Mode>(ctx: &Ctx<M>, child: Word) -> Result<i64
     i64::try_from(n).map_err(|_| CellFault::Internal("a child has too many stages"))
 }
 
-/// `Std.Exec.submit_wait`。子 `child` は呼ぶ側から移ってきた参照で、記録に移す。取り出していない標準入力の端を先に
-/// 閉じ、段 `k` の終わりを持ち主 `here.me` の driver に `Op::Wait` で待たせる。持ち主と host を同じ worker にするのは、
-/// 待つタスクは救済されず、持ち主が動かないためである。driver の待ちは回収しないので、知らせの後で `reap` が回収する。
-/// 回収した段と、OS の子を持たない Host の段は、driver に出さずに終わった記録にする (docs/spec/vm.md の「操作の記録」)。
+/// `Std.Exec.submit_wait`。子`child`は呼ぶ側から移ってきた参照で、記録に移す。取り出していない標準入力の端を先に閉じ、
+/// 段`k`の終わりを持ち主`here.me`のdriverに`Op::Wait`で待たせる。持ち主とhostを同じworkerにするのは、
+/// タスクが持ち主のworkerから動かないためである。driverの待ちは回収しないので、知らせの後で`reap`が回収する。
+/// 回収した段と、OSの子を持たないHostの段は、driverに出さずに終わった記録にする (docs/spec/vm.mdの「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn submit_wait<M: Mode>(
     shared: &Shared,
@@ -5783,7 +5699,6 @@ pub(crate) fn end_with_exit(control: &Control, n: i64) -> bool {
 pub(crate) fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
     registry.lock().alloc(CellKind::Task(TaskCell {
         owner: 0,
-        entries: 0,
         phase: Phase::Running,
         outcome: None,
         scope,
@@ -5905,7 +5820,7 @@ fn a_cancel_leaves_a_task_parked_on_a_job() {
     let mut work = IoWork::default();
     registry
         .lock()
-        .cancel_task(me, &solo(&registry), &mut woken, &mut work)
+        .unpark(me, &solo(&registry), &mut woken, &mut work)
         .unwrap();
     assert!(woken.is_empty());
     assert_eq!(registry.lock().stats.cancels, 0);
@@ -8870,30 +8785,11 @@ fn a_late_limit_notice_after_the_raise_is_dropped() {
     };
     let cell = owned_task(&shared, 1);
     assert_eq!(shared.lock().limit_task(cell, &here(0)).unwrap(), None);
-    assert_eq!(shared.lock().limit_forwarded(cell, &here(1)), Some(cell));
+    assert_eq!(shared.lock().limit_forwarded(cell, 1), Some(cell));
     shared.lock().clear_limit(cell).unwrap();
-    assert_eq!(shared.lock().limit_forwarded(cell, &here(1)), None);
+    assert_eq!(shared.lock().limit_forwarded(cell, 1), None);
     assert!(!shared.lock().task_mut(cell).unwrap().limit);
     assert_eq!(*posted.limits.borrow(), [(1, cell)]);
-}
-
-/// 回した `Notice::Limit` を受けた worker が今の持ち主でなければ、旗が立っている間は今の持ち主へ回し直す。待ちの間に
-/// 救済で持ち主が変わり、また動き始めたタスクに旗を届けるためである (docs/spec/vm.md の「タスクの上限」)。
-#[test]
-fn a_forwarded_limit_follows_a_new_owner() {
-    let shared = Shared::new(Registry::new(Vec::new(), 2));
-    let posted = Posted::default();
-    let here = Here {
-        me: 0,
-        host: 0,
-        mail: &shared.mail,
-        post: &posted,
-    };
-    let cell = owned_task(&shared, 1);
-    shared.lock().task_mut(cell).unwrap().limit = true;
-    assert_eq!(shared.lock().limit_forwarded(cell, &here), None);
-    assert_eq!(*posted.limits.borrow(), [(1, cell)]);
-    assert!(shared.lock().task_mut(cell).unwrap().limit);
 }
 
 /// mail の上限の旗の項はどの worker も取り出す。取り出した worker がタスクの持ち主なら、集める地点がセルを返す
@@ -9416,119 +9312,10 @@ fn park_returns_at_once_when_another_worker_changed_the_channel() {
     assert_eq!(chan_state(&shared, c), (1, 0, 0, 0));
 }
 
-/// タスク `cell` の、まだ `Finish` していないエントリの `Task` の数。
-#[cfg(test)]
-pub(crate) fn entries_of(shared: &Shared, cell: CellRef) -> u32 {
-    shared.lock().task_mut(cell).unwrap().entries
-}
-
-/// タスク `cell` の今の持ち主。
-#[cfg(test)]
-pub(crate) fn owner_of(shared: &Shared, cell: CellRef) -> u32 {
-    shared.lock().task_mut(cell).unwrap().owner
-}
-
-/// `entries` は始めるときと再開するときに1つ増え、待ちに入ったエントリの `Task` の後始末 (`leave`) で1つ減る。
-/// すぐ戻る待ちでは減らない。0 のセルを減らすのは内部の誤りである (docs/spec/vm.md の「救済」)。
+/// 後始末の前に放したタスクのセルは、`add_bytes`が飛ばし、その添字を使う次のセルに数を足さない。
+/// 生きているが種類の違うセルは内部の誤りである (docs/spec/vm.mdの「タスクとスケジュール」)。
 #[test]
-fn an_entry_count_follows_start_park_resume_and_finish() {
-    let shared = Shared::new(Registry::new(Vec::new(), 1));
-    let cell = placed_task(&shared, 0);
-    shared.lock().started(cell).unwrap();
-    assert_eq!(entries_of(&shared, cell), 1);
-    assert!(
-        shared
-            .lock()
-            .park_time(0, 5, cell, Word::UNIT)
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(entries_of(&shared, cell), 1);
-    assert_eq!(shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 1);
-    assert_eq!(entries_of(&shared, cell), 0);
-    let mut out = Vec::new();
-    expire(&shared, &mut NoDriver::default(), 0, 5, &mut out).unwrap();
-    assert_eq!(resumed_cells(&out), [(cell, WOKE)]);
-    shared.lock().resumed(cell, WOKE, false).unwrap();
-    assert_eq!(entries_of(&shared, cell), 1);
-    // 譲りはすぐ戻る仕事を返し、前のエントリの `Task` はまだ終わっていない
-    let run = shared.lock().ready(cell, Word::UNIT).unwrap();
-    assert!(matches!(run, Runnable::Resume { cell: c, .. } if c == cell));
-    assert_eq!(entries_of(&shared, cell), 1);
-    let mut left = vec![(cell, 0)];
-    assert_eq!(shared.lock().leave(&mut left).unwrap(), 1);
-    assert!(left.is_empty());
-    shared.lock().resumed(cell, WOKE, false).unwrap();
-    assert_eq!(entries_of(&shared, cell), 1);
-    assert_eq!(shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 1);
-    assert!(matches!(
-        shared.lock().leave(&mut vec![(cell, 0)]),
-        Err(CellFault::Internal(_))
-    ));
-}
-
-/// すぐ再開する待ちでは、前のエントリの `Task` が残る間に次のエントリの `Task` が動き始める。2つとも後始末を終えるまで、
-/// 待ったタスクの起こしは盗めない (docs/spec/vm.md の「救済」)。
-#[test]
-fn two_live_entries_keep_a_parked_task_unstealable() {
-    let shared = Shared::new(Registry::new(Vec::new(), 2));
-    let cell = placed_task(&shared, 0);
-    shared.lock().started(cell).unwrap();
-    let run = shared.lock().ready(cell, Word::UNIT).unwrap();
-    assert!(matches!(run, Runnable::Resume { .. }));
-    shared.lock().resumed(cell, WOKE, false).unwrap();
-    assert_eq!(entries_of(&shared, cell), 2);
-    let c = test_chan(&shared, 0);
-    park_receiver(&shared, c, cell);
-    assert_eq!(shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 0);
-    assert_eq!(entries_of(&shared, cell), 1);
-    assert_eq!(send_now(&shared, c, 4).len(), 1);
-    assert!(shared.lock().steal_wake(cell, 0, 1).unwrap().is_none());
-    assert_eq!(shared.lock().task_mut(cell).unwrap().owner, 0);
-    assert_eq!(shared.lock().leave(&mut vec![(cell, 0)]).unwrap(), 1);
-    assert!(matches!(
-        shared.lock().steal_wake(cell, 0, 1).unwrap(),
-        Some((k, 0)) if k == Word::UNIT
-    ));
-    let mut cells = shared.lock();
-    let task = cells.task_mut(cell).unwrap();
-    assert_eq!(task.owner, 1);
-    assert!(task.k.is_none());
-}
-
-/// 救済の helper は、持ち主が元の worker のセルだけを引き取る。ほかの worker のセルは、引き取れる状態でも持ち主を
-/// 変えない (docs/spec/vm.md の「救済」)。
-#[test]
-fn steal_helpers_refuse_a_cell_owned_by_a_third_worker() {
-    let shared = Shared::new(Registry::new(Vec::new(), 3));
-    let placed = placed_task(&shared, 2);
-    let yielded = owned_task(&shared, 2);
-    shared.lock().ready(yielded, Word::UNIT).unwrap();
-    let woken = owned_task(&shared, 2);
-    let c = test_chan(&shared, 0);
-    park_receiver(&shared, c, woken);
-    assert_eq!(send_now(&shared, c, 4).len(), 1);
-    let mut cells = shared.lock();
-    assert!(!cells.steal_start(placed, 0, 1).unwrap());
-    assert!(!cells.steal_resume(yielded, 0, 1).unwrap());
-    assert!(cells.steal_wake(woken, 0, 1).unwrap().is_none());
-    for cell in [placed, yielded, woken] {
-        assert_eq!(cells.task_mut(cell).unwrap().owner, 2);
-    }
-    assert!(cells.task_mut(woken).unwrap().k.is_some());
-    // 元の worker が持ち主なら、同じ3つを引き取る
-    assert!(cells.steal_start(placed, 2, 1).unwrap());
-    assert!(cells.steal_resume(yielded, 2, 1).unwrap());
-    assert!(cells.steal_wake(woken, 2, 1).unwrap().is_some());
-    for cell in [placed, yielded, woken] {
-        assert_eq!(cells.task_mut(cell).unwrap().owner, 1);
-    }
-}
-
-/// 後始末の前に放したタスクのセルは、`leave` が飛ばして数えない。生きているが種類の違うセルは内部の誤りである
-/// (docs/spec/vm.md の「救済」)。
-#[test]
-fn leave_skips_a_released_cell() {
+fn add_bytes_skips_a_released_cell() {
     let shared = Shared::new(Registry::new(Vec::new(), 1));
     let cell = placed_task(&shared, 0);
     shared.lock().started(cell).unwrap();
@@ -9537,21 +9324,21 @@ fn leave_skips_a_released_cell() {
     let next = placed_task(&shared, 0);
     assert!(shared.lock().scope_cell(cell.encode()).is_none());
     shared.lock().started(next).unwrap();
-    let mut left = vec![(cell, 0)];
-    assert_eq!(shared.lock().leave(&mut left).unwrap(), 0);
-    assert!(left.is_empty());
-    assert_eq!(entries_of(&shared, next), 1);
+    let mut added = vec![(cell, 7)];
+    shared.lock().add_bytes(&mut added).unwrap();
+    assert!(added.is_empty());
+    assert_eq!(shared.lock().task_mut(next).unwrap().bytes, 0);
     let scope = shared.lock().open_root(None, None).unwrap();
     assert!(matches!(
-        shared.lock().leave(&mut vec![(scope, 0)]),
+        shared.lock().add_bytes(&mut vec![(scope, 0)]),
         Err(CellFault::Internal(_))
     ));
 }
 
-/// 待ちに入って `Finish` したエントリの数は `leave` がセルに足し、次の `started` か `resumed` が返す。数は待ちをまたいで
-/// 足し続け、放したセルの分は捨てる (docs/spec/vm.md の「セルと登録表」)。
+/// 待ちに入って`Finish`したエントリの数は`add_bytes`がセルに足し、次の`started`か`resumed`が返す。
+/// 数は待ちをまたいで足し続け、放したセルの分は捨てる (docs/spec/vm.mdの「セルと登録表」)。
 #[test]
-fn leave_adds_the_bytes_and_resumed_returns_them() {
+fn add_bytes_adds_the_bytes_and_resumed_returns_them() {
     let shared = Shared::new(Registry::new(Vec::new(), 1));
     let cell = placed_task(&shared, 0);
     let (_, marks) = shared.lock().started(cell).unwrap();
@@ -9564,7 +9351,7 @@ fn leave_adds_the_bytes_and_resumed_returns_them() {
                 .unwrap()
                 .is_none()
         );
-        assert_eq!(shared.lock().leave(&mut vec![(cell, added)]).unwrap(), 1);
+        shared.lock().add_bytes(&mut vec![(cell, added)]).unwrap();
         let mut out = Vec::new();
         expire(&shared, &mut NoDriver::default(), 0, now + 5, &mut out).unwrap();
         assert_eq!(resumed_cells(&out), [(cell, WOKE)]);
@@ -9574,7 +9361,7 @@ fn leave_adds_the_bytes_and_resumed_returns_them() {
     let gone = placed_task(&shared, 0);
     shared.lock().started(gone).unwrap();
     shared.lock().release(gone.index);
-    assert_eq!(shared.lock().leave(&mut vec![(gone, 7)]).unwrap(), 0);
+    shared.lock().add_bytes(&mut vec![(gone, 7)]).unwrap();
 }
 
 /// 旗で `ResourceLimit` を起こした実行系の `clear_limit` は、旗と一緒にタスクの数も 0 に戻す。次のエントリは 0 から

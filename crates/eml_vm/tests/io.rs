@@ -1192,51 +1192,6 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }
 
-/// 救済を強いる方針の2つの worker で、20 往復の echo をする。救済で持ち主が替わったタスクの操作も、仮想の時計の
-/// driver を持つ worker 0 が host として受け付け、出力は worker が1つの run と同じである (docs/spec/vm.md の「救済」)。
-#[test]
-fn a_rescued_task_does_io_through_its_host() {
-    let src = "\
-import Async (Async)
-import Async
-import Bytes
-import Net
-serve : Int -> Net.TcpStream -> <IO, Panic, Async> Unit
-serve n s =
-  if n == 0 then Net.close s
-  else
-    let (buf, s) = Net.read_chunk (Bytes.empty ()) s
-    let (_, s) = Net.write_bytes buf s
-    serve (n - 1) s
-ask : Int -> Int -> Net.TcpStream -> <IO, Panic, Async> Int
-ask n got c =
-  if n == 0 then
-    Net.close c
-    got
-  else
-    let c = Net.write \"ping\" c
-    let (buf, c) = Net.read_chunk (Bytes.empty ()) c
-    ask (n - 1) (got + Bytes.length buf) c
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let l = Net.listen \"127.0.0.1\" 0
-  let (port, l) = Net.local_port l
-  let t = Async.start (fn () ->
-    let (s, l) = Net.accept l
-    Net.close_listener l
-    serve 20 s)
-  let c = Net.connect \"127.0.0.1\" port
-  let got = ask 20 0 c
-  Async.await t
-  println (show got))
-";
-    let (alone, _) = run_on(src, 1, RunConfig::default());
-    assert_eq!(alone, "80\n");
-    let (out, finished) = run_on(src, 2, RunConfig::default().with_sched(Sched::RescueAlways));
-    assert_eq!(out, alone);
-    assert!(finished.rescued >= 1, "{finished:?}");
-}
-
 /// 別の worker の driver に回した設定の操作は、host が受け付けるまで取り消しを見ずに待つ。取り消したスコープの中でも
 /// 投げずに終わり、相手は EOF を読む (docs/spec/stdlib.md の「`Std.Net`」)。
 #[test]
@@ -1362,9 +1317,10 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }
 
-/// 本物の時計で、worker 0 の `main` が接続して書き、自分で閉じたストリームを、worker 1 に置いたサーバーが EOF まで
-/// 読む。閉じた後の worker 0 は driver に出した操作のない計算のタスクだけを走らせ、driver で眠らないので、閉じるのは
-/// 集める地点である (docs/spec/vm.md の「時計と driver」)。3 秒は止まりの見張りで、時間は確かめない。
+/// 本物の時計で、worker 0の`Async.run`の根が接続して書き、自分で閉じたストリームを、worker 1に置いたサーバーが
+/// EOFまで読む。閉じた後の根は待たずに計算し、回るたびに`Async.yield_now`を呼ぶので、worker 0はdriverで眠らない。
+/// 閉じたことはhostの次の切り替えの集める地点で相手に届く (docs/spec/vm.mdの「時計と driver」)。計算を終わらせる旗は
+/// サーバーが立てる。3秒は止まりの見張りで、時間は確かめない。
 #[test]
 fn a_stream_closed_by_its_busy_host_reaches_its_peer_on_worker_1() {
     let src = "\
@@ -1391,11 +1347,12 @@ read_back buf s =
     read_back buf s
 fib : Int -> <Panic> Int
 fib k = if k < 2 then k else fib (k - 1) + fib (k - 2)
-spin : Atomic.Counter -> <IO, Panic> Unit
+spin : Atomic.Counter -> <IO, Panic, Async> Unit
 spin flag =
   if Atomic.load flag != 0 then ()
   else
     let _ = fib 15
+    Async.yield_now ()
     spin flag
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
@@ -1405,14 +1362,14 @@ main () = Async.run (fn () ->
   let server = Async.start (fn () ->
     let (s, l) = Net.accept l
     Net.close_listener l
-    echo s 0)
-  let busy = Async.start (fn () -> spin flag)
+    let n = echo s 0
+    Atomic.store 1 flag
+    n)
   let c = Net.write \"abc\" (Net.connect \"127.0.0.1\" port)
   let (_, c) = read_back (Bytes.empty ()) c
   Net.close c
+  spin flag
   let n = Async.await server
-  Atomic.store 1 flag
-  Async.await busy
   println (show n))
 ";
     let (done, ran) = std::sync::mpsc::channel();
@@ -1532,10 +1489,10 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 1, "{finished:?}");
 }
 
-/// 本物の時計で、worker 0 が受けて設定したストリームは worker 0 の driver に縛られる。それを持たせて worker 1 に置いた
-/// タスクが書いて閉じると、worker 0 の相手が EOF まで読む。ハンドルを落とした worker 1 が、driver の待ちで眠る host の
-/// worker 0 を起こすためである (docs/spec/vm.md の「操作の記録」)。普通の方針で流す。横取りしない方針では、閉じるのは
-/// 落とした worker の次の集める地点まで遅れうる。3 秒は止まりの見張りで、時間は確かめない。
+/// 本物の時計で、worker 0が受けて設定したストリームはworker 0のdriverに縛られる。それを持たせてworker 1に置いた
+/// タスクが書いて閉じると、worker 0の相手がEOFまで読む。ハンドルを落としたworker 1が、driverの待ちで眠るhostの
+/// worker 0を起こすためである (docs/spec/vm.mdの「操作の記録」)。普通の方針で流す。閉じるのは、
+/// 落としたworkerの次の集める地点まで遅れうる。3秒は止まりの見張りで、時間は確かめない。
 #[test]
 fn a_stream_bound_on_worker_0_and_closed_on_worker_1_wakes_its_host() {
     let src = "\
@@ -1994,10 +1951,10 @@ main () = Async.run (fn () ->
     assert!(finished.placed_tasks >= 2, "{finished:?}");
 }
 
-/// 救済で動かした worker 2 のタスクが子を待つ。待つタスクは救済されないので、`Wait` の記録の持ち主は host のまま
-/// 動かない (docs/spec/vm.md の「救済」)。
+/// worker 2に置いたタスクが子を待つ。タスクは自分のworkerから動かないので、`Wait`の記録の持ち主はhostのままである
+/// (docs/spec/vm.mdの「`Async`のタスク」)。
 #[test]
-fn a_wait_from_a_task_placed_on_worker_2_ends_under_rescue_always() {
+fn a_wait_from_a_task_placed_on_worker_2_ends() {
     let src = "\
 import Async (Async)
 import Async
@@ -2012,9 +1969,9 @@ main () = Async.run (fn () ->
   let _ = Async.await t
   println \"exit \\{show (Async.await u)}\")
 ";
-    let (out, finished) = run_exec(src, 4, Sched::RescueAlways);
+    let (out, finished) = run_exec(src, 4, Sched::Sequential);
     assert_eq!(out, "exit 7\n");
-    assert!(finished.rescued > 0, "{finished:?}");
+    assert_eq!(finished.placed_tasks, 2, "{finished:?}");
 }
 
 /// 子を待つタスクを取り消すと、driver の待ちを取り消し、巻き戻しが落とす子を kill して待つ。子は 10 秒眠るので、

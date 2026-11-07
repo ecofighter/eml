@@ -1,6 +1,5 @@
-//! worker 1..N-1 の起動と止める手順 (docs/spec/vm.md の「タスクとスケジュール」)。worker は run の最初の `par` の
-//! fork か、`Async` のタスクを置く最初の `start` か、最初の `fork_job` で作り、run の終わりに join する。根に触れる `Machine` は worker を
-//! 作らない。
+//! worker 1..N-1の起動と止める手順 (docs/spec/vm.mdの「タスクとスケジュール」)。workerはrunの始め、最初の命令の前に
+//! 作り、runの終わりにjoinする。根に触れる`Machine`はworkerを作らない。
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -110,19 +109,19 @@ fn one(p.0: unit) -> tobj {
 ";
 
 #[test]
-fn a_run_without_par_starts_no_worker() {
+fn a_run_with_workers_starts_them_at_the_start() {
     let src = "\
 main : Unit -> <IO> Unit
 main () = println \"no par\"
 ";
     let (out, result) = run(src, 4);
     assert_eq!(out, "no par\n");
-    assert_eq!(result.unwrap().workers, 0);
+    assert_eq!(result.unwrap().workers, 3);
 }
 
-/// 最初の fork が worker 1..N-1 をすべて作り、同じ fork をやり直す。出力は worker が1つの run と同じである。
+/// worker 1..N-1は最初のforkの前にすべてある。出力はworkerが1つのrunと同じである。
 #[test]
-fn the_first_fork_starts_the_workers() {
+fn the_workers_exist_before_the_first_fork() {
     let (out, result) = run(PAR, 4);
     assert_eq!(out, "3\n");
     assert_eq!(result.unwrap().workers, 3);
@@ -445,11 +444,11 @@ main () = Async.run (fn () ->
     assert_eq!(other.to_string(), alone.to_string());
 }
 
-/// `compute` の仕事は `par` の右の子と同じく空いた worker に置く。空きの作り方は
-/// `a_timer_on_worker_0_and_a_child_on_worker_1_agree` と同じで、`fork_job` のときには worker 1 が空いている。
-/// 仕事は worker 1 のヒープにリストを作って返し、出したタスクが worker 0 でたどってから手放す。検査モードは、
-/// `take_job` が受け取った物体の持ち主の取り違えと漏れを見つける。仕事は `par` の右の子でないので `placed` は増えず、
-/// `placed_jobs` だけが増える (docs/spec/vm.md の「`compute` の仕事」)。
+/// `compute`の仕事は`par`の右の子と同じく空いたworkerに置く。何もしないタスクをworker 1に置いて待ち、続く
+/// `sleep_ms`はどのworkerも眠ったときにだけ戻るので、`fork_job`のときにはworker 1が空いている。
+/// 仕事はworker 1のヒープにリストを作って返し、出したタスクがworker 0でたどってから手放す。検査モードは、
+/// `take_job`が受け取った物体の持ち主の取り違えと漏れを見つける。仕事は`par`の右の子でないので`placed`は増えず、
+/// `placed_jobs`だけが増える (docs/spec/vm.mdの「`compute` の仕事」)。
 #[test]
 fn a_job_is_placed_on_an_idle_worker() {
     let src = "\
@@ -484,34 +483,39 @@ main () = Async.run (fn () ->
     );
 }
 
-/// 止まらない仕事がほかの worker で動いている run も `exit` で終わる。空きを作った後の `spawn` は worker 0 に置くので、
-/// そのタスクの `fork_job` は仕事を空いた worker 1 に置く。出したタスクは仕事を待って park したまま、worker 0 の本体が
-/// `exit` する。仕事と待つタスクは捨て、回復が2つのヒープを片付ける。
+/// 止まらない仕事がほかのworkerで動いているrunも`exit`で終わる。3つのworkerでは、置く順によりタスクAをworker 1に、
+/// 何もしないタスクをworker 2に、Aが始める`exit`のタスクをworker 1に置く。Aは先に眠る。`sleep_ms`はどのworkerも
+/// 眠ったときにだけ戻るので、worker 2はタスクを終えて空いたままであり、Aがforkする仕事はほかの空いたworkerに置く。
+/// `exit`のタスクはforkの前にworker 1の列に入っているので、仕事をどのworkerが取っても、Aが待つ間にworker 1がそれを
+/// 動かす。仕事と待つタスクは捨て、回復がヒープを片付ける。
 #[test]
 fn exit_abandons_a_job_on_another_worker() {
     let src = format!(
         "import Async (Async)\n{SPIN}\
 body : Unit -> <IO, Panic, Async> Unit
 body () =
+  let a = Async.start (fn () ->
+    Async.sleep_ms 1
+    Async.spawn (fn () -> (exit 3 : Unit))
+    println (show (Async.compute (fn () -> spin 0))))
   let d = Async.start (fn () -> ())
   Async.await d
-  Async.sleep_ms 1
-  Async.spawn (fn () -> println (show (Async.compute (fn () -> spin 0))))
-  Async.yield_now ()
-  (exit 3 : Unit)
+  Async.await a
 main : Unit -> <IO, Panic> Unit
 main () = Async.run body
 "
     );
-    let (out, result) = run(&src, 2);
+    let (out, result) = run(&src, 3);
     assert_eq!(out, "");
     let finished = result.unwrap();
     assert_eq!(finished.exit, Some(3));
-    assert_eq!((finished.workers, finished.placed_jobs), (1, 1));
+    assert_eq!((finished.workers, finished.placed_jobs), (2, 1));
 }
 
-/// ほかの worker に置いた仕事でも、取り消しは仕事が終わってから出したタスクに1回だけ届く。仕事の終わりは worker 1
-/// から、出したタスクのいる worker 0 へ起こしを送る (docs/spec/vm.md の「取り消しの届け方」)。
+/// ほかのworkerに置いた仕事でも、取り消しは仕事が終わってから出したタスクに1回だけ届く。3つのworkerでは、置く順に
+/// より何もしないタスクをworker 1に、出したタスクをworker 2に置く。`sleep_ms`はどのworkerも眠ったときにだけ戻るので、
+/// `fork_job`のときにはworker 1が空いていて、仕事はほかの空いたworkerに置く。仕事の終わりは、出したタスクのいる
+/// worker 2へ起こしを送る (docs/spec/vm.md の「取り消しの届け方」)。
 #[test]
 fn a_cancelled_job_on_another_worker_counts_one_cancel() {
     let src = "\
@@ -536,7 +540,7 @@ main () =
           | Err e -> println \"job: \\{show e.kind}\"))
     Async.await t)
 ";
-    let (out, result) = run(src, 2);
+    let (out, result) = run(src, 3);
     assert_eq!(out, "job: Cancelled\n");
     let finished = result.unwrap();
     assert_eq!(finished.stats.cancels, 1);
@@ -572,12 +576,12 @@ main () =
     assert_eq!(out.contents(), "start\nstart\n");
 }
 
-/// worker 0 のタスクのタイマーと worker 1 の右の子。仮想の時計は、どの worker も動かないときだけ進むので、子が
-/// 終わるまでタイマーは満ちない。出力は worker が1つの run と同じである。最初の `start` は worker 1 に置くので、
-/// 何もしないタスクを先に置いて待つ。続く `sleep_ms` は、どの worker も眠ったときにだけ戻るので、fork のときには
-/// worker 1 が空いていて、タイマーのタスクは worker 0 に、右の子は worker 1 に置く。
+/// worker 1..N-1のタスクのタイマーと右の子。仮想の時計は、どのworkerも動かないときだけ進むので、子が終わるまで
+/// タイマーは満ちない。出力はworkerが1つのrunと同じである。何もしないタスクはworker 1に、タイマーのタスクはworker 2に
+/// 置く。間の`sleep_ms`は、どのworkerも眠ったときにだけ戻るので、forkのときにはworker 1が空いていて、右の子は
+/// 空いたworkerに置く。
 #[test]
-fn a_timer_on_worker_0_and_a_child_on_worker_1_agree() {
+fn a_timer_task_and_a_child_on_other_workers_agree() {
     let src = "\
 import Std.Par
 import Async
@@ -598,11 +602,11 @@ main () = Async.run (fn () ->
     let (alone, result) = run(src, 1);
     assert_eq!(alone, "20001\ntimer\n");
     result.unwrap();
-    let (out, result) = run(src, 2);
+    let (out, result) = run(src, 3);
     assert_eq!(out, alone);
     let finished = result.unwrap();
     assert_eq!(finished.placed, 1);
-    assert_eq!(finished.placed_tasks, 1);
+    assert_eq!(finished.placed_tasks, 2);
 }
 
 /// 深さ 3 の `par` の木は 7 回 fork する。worker が8つあれば、空いている worker はいつも残るので、どの fork も
@@ -626,10 +630,10 @@ main () = println (show (tree 3))
     assert_eq!((finished.workers, finished.placed), (7, 7));
 }
 
-/// 最初の `start` が worker 1..N-1 をすべて作り、同じ `start` をやり直す。最初に置くタスクは worker 1 に置くので、
-/// タスクを1つしか始めないプログラムでもほかの worker で動く。出力は worker が1つの run と同じである。
+/// workerは最初の`start`の前にあり、最初に置くタスクはworker 1に置くので、タスクを1つしか始めないプログラムでも
+/// ほかのworkerで動く。出力はworkerが1つのrunと同じである。
 #[test]
-fn the_first_start_starts_the_workers() {
+fn the_first_start_places_on_worker_1() {
     let src = "\
 import Async
 main : Unit -> <IO, Panic> Unit
@@ -647,10 +651,10 @@ main () = Async.run (fn () ->
     assert_eq!((finished.workers, finished.placed_tasks), (3, 1));
 }
 
-/// 入れ子の `Async.run` から戻ったタスクの `start` も worker を作る。入れ子の run の根のタスクは呼んだ worker に置き、
-/// worker を求めない。
+/// 入れ子の`Async.run`から戻ったタスクの`start`も、ほかのworkerに置く。入れ子のrunの根のタスクは呼んだworkerに
+/// 置く。
 #[test]
-fn a_start_after_a_nested_run_starts_the_workers() {
+fn a_start_after_a_nested_run_places_on_another_worker() {
     let src = "\
 import Async
 main : Unit -> <IO, Panic> Unit
@@ -842,176 +846,10 @@ fn run_sched(src: &str, workers: usize, sched: Sched) -> (String, Result<Finishe
     run_sched_in(src, workers, sched, Default::default())
 }
 
-/// 根のタスクが 12 のタスクを始めて、すべての結果を足す。
-const MANY_TASKS: &str = "\
-import Async (Async)
-import Async
-spin : Int -> <Panic> Int
-spin n = if n == 0 then 0 else spin (n - 1)
-start_all : Int -> <IO, Panic, Async> List (Async.Task Int)
-start_all n = if n == 0 then [] else Async.start (fn () -> spin 20 + n) :: start_all (n - 1)
-sum_all : List (Async.Task Int) -> Int -> <IO, Panic, Async> Int
-sum_all ts acc = match ts with
-  | [] -> acc
-  | t :: rest -> sum_all rest (acc + Async.await t)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> println (show (sum_all (start_all 12) 0)))
-";
-
-/// 救済を強いる方針では、worker を作った後に始めたタスクはどれも、動く前にほかの worker へ移る。worker を作る前に
-/// 始まる根のタスクだけが移らずに始まる。4つの worker では、始めた worker 0、置いた持ち主、救済する次の worker が
-/// みな違う。印を付けずに移しても、検査モードの持ち主の検査と漏れの検査が通る (docs/spec/vm.md の「救済」)。
+/// worker 1に置いたタスクの中の入れ子の`Async.run`は終わり、出力はworkerが1つのrunと同じである
+/// (docs/spec/vm.mdの「`Async`のタスク」)。
 #[test]
-fn rescue_always_rescues_every_started_task() {
-    let (alone, _) = run(MANY_TASKS, 1);
-    assert_eq!(alone, "78\n");
-    for workers in [2, 4] {
-        let (out, result) = run_sched(MANY_TASKS, workers, Sched::RescueAlways);
-        assert_eq!(out, alone, "{workers} workers");
-        let finished = result.unwrap_or_else(|error| panic!("{workers} workers: {error}"));
-        assert!(finished.rescues >= 1, "{finished:?}");
-        assert!(finished.rescued + 1 >= finished.stats.tasks, "{finished:?}");
-    }
-}
-
-/// 救済したタスクが `FileIn` と唯一の `Bytes` を持ったまま、譲りと channel の待ちをくぐって終わる。印を付けずに移した
-/// 物体を新しい worker の上で使い、手放しても、検査モードの持ち主の検査と漏れの検査が通る (docs/spec/vm.md の「救済」)。
-#[test]
-fn a_rescued_task_holding_a_lin_resource_passes_the_checks() {
-    let src = "\
-import Async (Async)
-import Async
-import Bytes
-import Chan
-import FileIn
-reader : Chan.Chan Int -> <IO, Panic, Async> Int
-reader c =
-  let f = FileIn.open \"a.txt\"
-  let (b, f) = FileIn.read_all_bytes f
-  Async.yield_now ()
-  let n = match Chan.recv c with
-    | Some x -> x
-    | None -> 0
-  FileIn.close f
-  Bytes.length b + n
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let c = Chan.new 1
-  let t = Async.start (fn () -> reader c)
-  Async.sleep_ms 5
-  match Chan.send 4 c with
-    | Chan.Sent -> ()
-    | Chan.Rejected _ -> println \"rejected\"
-  println (show (Async.await t)))
-";
-    let root = std::env::temp_dir().join(format!("eml-vm-rescued-lin-{}", std::process::id()));
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("a.txt"), "abc").unwrap();
-    let (alone, one) = run_sched_in(src, 1, Sched::Sequential, root.clone());
-    let (out, two) = run_sched_in(src, 2, Sched::RescueAlways, root.clone());
-    std::fs::remove_dir_all(&root).unwrap();
-    one.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(alone, "7\n");
-    assert_eq!(out, alone);
-    let finished = two.unwrap_or_else(|error| panic!("{error}"));
-    // 読み手は始める仕事、譲りの後、受けの後の3回とも、動く前に救済で移る。後の2回は物体を持ったまま移る
-    assert!(finished.rescued >= 3, "{finished:?}");
-}
-
-/// 逐次の方針は、worker が2つでも救済しない (docs/spec/vm.md の「タスクとスケジュール」)。
-#[test]
-fn sequential_never_rescues() {
-    let (out, result) = run_sched(MANY_TASKS, 2, Sched::Sequential);
-    assert_eq!(out, "78\n");
-    let finished = result.unwrap();
-    assert!(finished.placed_tasks >= 1, "{finished:?}");
-    assert_eq!((finished.rescues, finished.rescued), (0, 0));
-}
-
-/// worker が1つの run では、救済を強いる方針は最後まで逐次の方針と同じに動き、`RunStats` も同じである
-/// (docs/spec/vm.md の「タスクとスケジュール」)。
-#[test]
-fn rescue_always_at_one_worker_is_sequential() {
-    for src in [
-        MANY_TASKS,
-        include_str!("../../../tests/ui/run/async/chan_many.em"),
-    ] {
-        let (expected, sequential) = run_sched(src, 1, Sched::Sequential);
-        let (out, rescue) = run_sched(src, 1, Sched::RescueAlways);
-        let (sequential, rescue) = (sequential.unwrap(), rescue.unwrap());
-        assert_eq!(out, expected);
-        assert_eq!(rescue.stats, sequential.stats);
-        assert_eq!(rescue.exit, sequential.exit);
-        assert_eq!((rescue.rescues, rescue.rescued), (0, 0));
-    }
-}
-
-/// 救済で受けたタスクは、新しい worker の上で眠り、channel の品物を待って受け取る。時間の区画と待ち手の列は新しい
-/// 持ち主で引くので、出力は worker が1つの run と同じである (docs/spec/vm.md の「救済」)。
-#[test]
-fn rescued_tasks_sleep_and_take_from_a_channel_on_their_new_worker() {
-    let src = "\
-import Async (Async)
-import Async
-import Chan
-receiver : Chan.Chan Int -> <IO, Async> Int
-receiver c =
-  Async.sleep_ms 5
-  match Chan.recv c with
-    | Some x -> x
-    | None -> 0
-sender : Chan.Chan Int -> <IO, Async> Int
-sender c =
-  Async.sleep_ms 10
-  match Chan.send 7 c with
-    | Chan.Sent -> 1
-    | Chan.Rejected _ -> 2
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let c = Chan.new 1
-  let a = Async.start (fn () -> receiver c)
-  let b = Async.start (fn () -> sender c)
-  let x = Async.await a
-  let y = Async.await b
-  println \"\\{show x} \\{show y}\")
-";
-    let (alone, _) = run(src, 1);
-    assert_eq!(alone, "7 1\n");
-    let (out, result) = run_sched(src, 2, Sched::RescueAlways);
-    assert_eq!(out, alone);
-    let finished = result.unwrap();
-    assert!(finished.rescued >= 2, "{finished:?}");
-}
-
-/// 救済で受けて眠っているタスクにも取り消しが届く。`timeout` の期限が本体の眠りより先に来て、`None` を返す
-/// (docs/spec/vm.md の「救済」「取り消しの届け方」)。
-#[test]
-fn a_cancel_reaches_a_rescued_waiting_task() {
-    let src = "\
-import Async (Async)
-import Async
-sleepy : Unit -> <IO, Panic, Async> Option Int
-sleepy () = Async.timeout 20 (fn () ->
-  Async.sleep_ms 1000
-  1)
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  let t = Async.start sleepy
-  println (show (Async.await t)))
-";
-    let (alone, _) = run(src, 1);
-    assert_eq!(alone, "None\n");
-    let (out, result) = run_sched(src, 2, Sched::RescueAlways);
-    assert_eq!(out, alone);
-    let finished = result.unwrap();
-    assert!(finished.rescued >= 1, "{finished:?}");
-    assert!(finished.stats.cancels >= 1, "{finished:?}");
-}
-
-/// 入れ子の `Async.run` の根のタスクが救済で移ると、呼んだ `Task` が待ちに入る前に根のスコープが閉じうる。そのときは
-/// 待たずに続け、出力は worker が1つの run と同じである (docs/spec/vm.md の「`Async` のタスク」)。
-#[test]
-fn a_nested_run_closed_before_its_caller_waits_goes_on() {
+fn a_nested_run_inside_a_task_on_worker_1_ends() {
     let src = "\
 import Async
 main : Unit -> <IO, Panic> Unit
@@ -1021,12 +859,9 @@ main () = Async.run (fn () ->
 ";
     let (alone, _) = run(src, 1);
     assert_eq!(alone, "21\n");
-    for workers in [2, 8] {
-        let (out, result) = run_sched(src, workers, Sched::RescueAlways);
-        assert_eq!(out, alone, "{workers} workers");
-        let finished = result.unwrap_or_else(|error| panic!("{workers} workers: {error}"));
-        assert!(finished.rescued >= 2, "{finished:?}");
-    }
+    let (out, result) = run_sched(src, 2, Sched::Sequential);
+    assert_eq!(out, alone);
+    result.unwrap_or_else(|error| panic!("{error}"));
 }
 
 /// 行 "a" の書き込みを、別のスレッドが "b" を書くまで止める Host。lock は持たずに条件変数で待ち、10 秒で自分から抜ける。
@@ -1073,22 +908,17 @@ impl eml_rt::Host for BlockingHost {
     }
 }
 
-/// extern の中で止まった worker の仕事は、監視のスレッドが 3 刻み以内に別の worker へ移す。worker 1 のタスク T1 が
-/// `println "a"` で止まり、同じ worker の T2 の `println "b"` が先に出る (docs/spec/vm.md の「タスクとスケジュール」)。
-/// 刻みの 10 ms に頼るので、release で流す。
+/// worker 1に置いたタスクは、`main`がworker 0をexternの中で止めている間も動く。根のタスクの`println "a"`はタスクが
+/// "b"を書くまで止まるので、"b"が先に出る (docs/spec/vm.mdの「`Async`のタスク」)。
 #[test]
-#[ignore = "depends on the monitor's 10 ms tick"]
-fn the_monitor_rescues_a_worker_blocked_in_an_extern() {
+fn tasks_on_other_workers_run_while_main_blocks_in_an_extern() {
     let src = "\
 import Async
 main : Unit -> <IO, Panic> Unit
 main () = Async.run (fn () ->
-  let t1 = Async.start (fn () -> println \"a\")
-  let x = Async.start (fn () -> ())
-  let t2 = Async.start (fn () -> println \"b\")
-  Async.await t1
-  Async.await x
-  Async.await t2)
+  let t = Async.start (fn () -> println \"b\")
+  println \"a\"
+  Async.await t)
 ";
     let inner = eml_vm::CaptureHost::new(Default::default());
     let out = inner.output();
@@ -1098,8 +928,7 @@ main () = Async.run (fn () ->
         wrote_b: Default::default(),
     });
     let config = RunConfig::default()
-        .with_clock(Clock::Real)
-        .with_sched(Sched::Normal)
+        .with_sched(Sched::Sequential)
         .with_control(limits(2));
     let finished = eml_vm::execute(
         &eml_test_support::lir(src),
@@ -1109,8 +938,5 @@ main () = Async.run (fn () ->
     )
     .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "b\na\n");
-    assert!(finished.rescues >= 1, "{finished:?}");
-    let (entered, wrote) = *host.times();
-    let delay = wrote.unwrap() - entered.unwrap();
-    assert!(delay < Duration::from_millis(50), "{delay:?}");
+    assert_eq!(finished.placed_tasks, 1, "{finished:?}");
 }

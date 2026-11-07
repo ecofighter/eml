@@ -394,7 +394,7 @@ main () =
 ";
     let (out, finished) = run_both_on(&eml_test_support::lir(src), 2);
     assert_eq!(out, "3\n2\n");
-    // 最初の fork が worker 1 を作り、空いたその worker に右の子を置く (docs/spec/vm.md の「タスクとスケジュール」)
+    // workerはrunの始めに作るので、最初のforkは空いたworker 1に右の子を置く (docs/spec/vm.mdの「タスクとスケジュール」)
     for finished in finished {
         assert!(finished.placed >= 1, "{finished:?}");
     }
@@ -746,9 +746,8 @@ main () = Async.run body
     assert_eq!(run_real(&src, 1).0, "b opens the gate\n0\n");
 }
 
-/// 最初に `start` したタスクは worker 1 に置かれ、その worker の driver のプールで仕事が走る
-/// (docs/spec/vm.md の「`Async` のタスク」)。`Machine` の既定の方針 `Sched::Sequential` は救済しないので、タスクは
-/// worker 1 から動かない (docs/spec/vm.md の「タスクとスケジュール」)。
+/// 最初に`start`したタスクはworker 1に置かれ、そのworkerのdriverのプールで仕事が走る (docs/spec/vm.mdの
+/// 「`Async`のタスク」)。タスクは置いたworkerから動かないので、worker 1で動き続ける。
 #[test]
 fn a_blocking_call_runs_on_the_driver_of_worker_one() {
     let src = format!(
@@ -765,7 +764,6 @@ main () = Async.run body
     let (out, finished) = run_real(&src, 2);
     assert_eq!(out, "5\n");
     assert_eq!(finished.placed_tasks, 1, "{finished:?}");
-    assert_eq!(finished.rescues, 0, "{finished:?}");
     assert_eq!(finished.stats.completions, 1, "{finished:?}");
 }
 

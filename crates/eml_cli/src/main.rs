@@ -217,11 +217,7 @@ fn print_stats(finished: &Finished) {
         .iter()
         .map(|(name, value)| format!("{name}={value}"))
         .collect();
-    eprintln!(
-        "stats: {} preemptions={}",
-        fields.join(" "),
-        finished.preemptions
-    );
+    eprintln!("stats: {}", fields.join(" "));
 }
 
 /// `eml FILE ARGS...` を `eml run FILE ARGS...` にする (docs/spec/stdlib.md の「起動」)。`-` で始まる最初の引数は今と同じく

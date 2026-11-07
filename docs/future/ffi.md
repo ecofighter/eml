@@ -155,7 +155,7 @@ main () =
 - プロセスに置くイベントループは1つである。`Gui.open` が、メインの worker の待ちをプラグインのものに替える。worker のループに動けるタスクがなくなると、待ちが winit の `run_app` の形でイベントループを回す。toolkit のコールバック (`about_to_wait`、利用者のイベント、Windows と macOS のウィンドウの大きさを変える間のループ) は、動けるタスクがなくなるまで動かして戻る関数を呼ぶ。そのため、モーダルなループの間も eml が動き続ける。起こすのは `EventLoopProxy::send_event` である。割り込みは、監視のスレッドが止めるビットを写して起こすことで、イベントループで待つ worker にも届く
 - イベントは引く形で受ける。`Gui.next_event : Window -> <IO, Async> (Event, Window)` はイベントが来るまでタスクを待たせる
 - UI の状態とクロージャは境目を越えない。プラグインはフレームごとに egui の `Ui` の積み重ねを持ち、eml は `Lin` の `Ui` のハンドルで操作する。`Gui.begin_frame : Window -> <IO> Ui` で始め、部品は `Gui.button : Ui -> String -> <IO> (Bool, Ui)` のようにハンドルを返す。入れ物は `Gui.begin_horizontal : Ui -> <IO> Ui` と `Gui.end_horizontal : Ui -> <IO> Ui` で開いて閉じ、入れ子の対応はプラグインが実行時に確かめる。対応しなければ実行時エラーである。`Gui.end_frame : Ui -> <IO> Window` が描いてウィンドウを返す。再描画は `Gui.request_redraw` で求める
-- GUI のタスクとその子はメインの worker から動かない。メインの worker のタスクは救済せず、新しいタスクを置く先にもしない ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。重い仕事は `compute` か、固定していないタスクへの channel でメインの worker の外へ出す。別のタスクの結果は `Gui.proxy` で得たインターフェースから `Gui.post` で GUI のタスクへ送る
+- GUIのタスクとその子はメインのworkerから動かない。メインのworkerは新しいタスクを置く先にもしない ([マルチコア対応の設計](multicore.md)の「スケジューラ」)。重い仕事は`compute`か、固定していないタスクへのchannelでメインのworkerの外へ出す。別のタスクの結果は`Gui.proxy`で得たインターフェースから`Gui.post`でGUIのタスクへ送る
 - CI では、ウィンドウを開かない形のプラグインのテスト (フレームの組み立て、入れ子の誤り、`post`) を流す。CI は GPU を持たないので、画面の確かめは OS ごとに手で行う。ネイティブのコードでも同じテストを流す
 - Slint は egui の後に2つ目のプラグインにできる
 

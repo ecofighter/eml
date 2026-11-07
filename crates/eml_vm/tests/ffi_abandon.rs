@@ -4,9 +4,8 @@
 //! 「`eml_vm` のテスト」の `ffi_abandon.rs` の項に従う。
 //!
 //! タスクは `gate_open` で合図の鍵を開けてから、開かない鍵を `gate_wait` で待つ。2つの呼び出しの間に安全点はないので、
-//! 合図を受けてから run を終わらせても、その前に仕事はもう出ている。`Machine` の既定の方針 `Sched::Sequential` は
-//! 救済しないので、2 worker の run で最初に `start` したタスクは worker 1 で動き、仕事は worker 1 の driver に出る
-//! (docs/spec/vm.md の「タスクとスケジュール」)。
+//! 合図を受けてから run を終わらせても、その前に仕事はもう出ている。2 workerのrunで最初に`start`したタスクは
+//! worker 1に置かれてそこで動き、仕事はworker 1のdriverに出る (docs/spec/vm.mdの「`Async`のタスク」)。
 
 use std::sync::Arc;
 use std::thread;
@@ -106,7 +105,6 @@ fn exit_keeps_its_code_and_poisons(src: &str, workers: usize, gates: &[i64]) {
     }
     let finished = finished.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(finished.exit, Some(3));
-    assert_eq!(finished.rescues, 0, "{finished:?}");
     assert!(poisoned);
     let error = closed.unwrap_err();
     assert!(error.to_string().contains(KEPT_PENDING), "{error}");
@@ -122,7 +120,7 @@ fn an_exit_during_a_blocking_call_keeps_its_code_and_poisons_on_worker_one() {
     exit_keeps_its_code_and_poisons(&exits_during(100032, 100033), 2, &[100033]);
 }
 
-/// 戻らない呼び出しを2つのタスクに置く。`x` は worker 1、`z` は worker 0 に置かれ、どちらの worker の静止も、run の
+/// 戻らない呼び出しを2つのタスクに置く。`x`はworker 1、`z`はworker 2に置かれ、どちらのworkerの静止も、runの
 /// 1つの期限の残りを受け取る。
 #[test]
 fn two_hung_workers_share_one_budget() {
@@ -144,7 +142,7 @@ main : Unit -> <IO, Panic> Unit
 main () = Async.run body
 "
     );
-    exit_keeps_its_code_and_poisons(&src, 2, &[100035, 100037]);
+    exit_keeps_its_code_and_poisons(&src, 3, &[100035, 100037]);
 }
 
 /// 割り込みで止めた run は、回復を試みずにその誤りを返し、`Machine` は poisoned になる。誤りに割り込みを使うのは、

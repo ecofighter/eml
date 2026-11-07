@@ -1,6 +1,6 @@
--- (e) 計算と I/O が混ざる run。同じ run の中の 16 バイトの echo を `n` 往復する2つのタスクと、計算だけを続けるタスク
--- 1つを動かす。計算のタスクは待ちの操作をせず、横取りの刻みでだけ切り替わる。I/O の完了を拾う集める地点の頻度
--- (docs/spec/vm.md の「時計と driver」) が往復の時間に出るかを見る
+-- (e) 計算とI/Oが混ざるrun。同じrunの中の16バイトのechoを`n`往復する2つのタスクと、計算だけを続けるタスク1つを
+-- 動かす。計算のタスクは待ちの操作をせず、1歩ごとに呼ぶ`Async.yield_now`でだけ切り替わる。計算のタスクと同じ
+-- workerにあるとき、往復が切り替えの間隔をどれだけ待つかを見る (docs/spec/vm.md の「時計と driver」)
 -- 引数: n
 import Async (Async)
 import Async
@@ -38,11 +38,12 @@ fib : Int -> <Panic> Int
 fib k = if k < 2 then k else fib (k - 1) + fib (k - 2)
 
 -- 旗が立つまで計算を続け、回った数を返す
-spin : Int -> Atomic.Counter -> <IO, Panic> Int
+spin : Int -> Atomic.Counter -> <IO, Panic, Async> Int
 spin done flag =
   if Atomic.load flag != 0 then done
   else
     let _ = fib 15
+    Async.yield_now ()
     spin (done + 1) flag
 
 main : Unit -> <IO, Panic> Unit

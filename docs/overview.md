@@ -90,7 +90,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 
 ### コンパイラと実行系
 
-処理系はバッチ型のパイプラインで、各段階を純粋な関数にし、後でクエリ化 (salsa など) できるようにしてある。実行系は、型付き Core IR (前向きの辺だけを持つ基本ブロックの列で、エフェクトを明示する) を EP の後に LIR (RC と box を明示し、エフェクトの命令を持たない) に写し、LIR をレジスタ型のバイトコードの VM で実行する。メモリは Perceus 方式の参照カウントで管理し、`Lin` の値を2回消費することはない。VM は worker ごとに OS のスレッドとヒープを持ち、`par` の右の子を空いている worker で動かす ([VM](spec/vm.md) の「`par` の fork と join」)。`Async` のタスクは `start` のときに置く worker を順に回して決め、詰まった worker か過負荷の worker のタスクは空いた worker が救済で引き取る ([VM](spec/vm.md) の「`Async` のタスク」、[VM](spec/vm.md) の「救済」)。並列化は、VM とネイティブのランタイムの両方に入れ、複数の worker が OS のスレッドの上でタスクを動かす。詳細は [コンパイラの構成](implementation/architecture.md)、[Core IR](spec/core-ir.md)、[LIR](spec/lir.md)、[VM](spec/vm.md)、[オブジェクトモデル](spec/object-model.md)、[マルチコア対応の設計](future/multicore.md) にある。
+処理系はバッチ型のパイプラインで、各段階を純粋な関数にし、後でクエリ化 (salsaなど) できるようにしてある。実行系は、型付きCore IR (前向きの辺だけを持つ基本ブロックの列で、エフェクトを明示する) をEPの後にLIR (RCとboxを明示し、エフェクトの命令を持たない) に写し、LIRをレジスタ型のバイトコードのVMで実行する。メモリはPerceus方式の参照カウントで管理し、`Lin`の値を2回消費することはない。VMはworkerごとにOSのスレッドとヒープを持ち、`par`の右の子を空いているworkerで動かす ([VM](spec/vm.md)の「`par`のforkとjoin」)。`Async`のタスクは`start`のときにworker 1..N-1を順に回して置き、終わるまでそこで動く ([VM](spec/vm.md)の「`Async`のタスク」)。並列化は、VMとネイティブのランタイムの両方に入れ、複数のworkerがOSのスレッドの上でタスクを動かす。詳細は[コンパイラの構成](implementation/architecture.md)、[Core IR](spec/core-ir.md)、[LIR](spec/lir.md)、[VM](spec/vm.md)、[オブジェクトモデル](spec/object-model.md)、[マルチコア対応の設計](future/multicore.md)にある。
 
 ## 用語
 

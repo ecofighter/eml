@@ -184,39 +184,6 @@ main () = Async.run body
     }
 }
 
-/// 譲るたびに救済でほかの worker へ移るタスクも、数はセルについて回り、動いている worker の公開から旗が立つ。捕まえる
-/// のは確保したタスク自身の `try_io` である。
-#[test]
-fn a_task_moved_by_rescue_is_flagged() {
-    let src = program(
-        "\
-churn : List Int -> <IO, Panic, Async> Int
-churn acc =
-  Async.yield_now ()
-  churn (build 1000 acc)
-
-body : Unit -> <IO, Panic, Async> Unit
-body () =
-  let t = Async.start (fn () ->
-    match try_io (fn () -> churn []) with
-      | Ok n -> println \"unreachable \\{show n}\"
-      | Err e -> println \"churn caught: \\{show e.kind}: \\{e}\")
-  Async.await t
-  println \"done\"
-
-main : Unit -> <IO, Panic> Unit
-main () = Async.run body
-",
-    );
-    let (out, result) = run(&src, 2, Sched::RescueAlways, 64 * MIB, 2 * MIB);
-    assert_eq!(
-        out,
-        "churn caught: ResourceLimit: the memory soft limit is exceeded\ndone\n"
-    );
-    let finished = result.unwrap_or_else(|error| panic!("{error}"));
-    assert!(finished.rescued > 0, "{finished:?}");
-}
-
 /// 親が join で待っている間に `par` の右の子が柔らかい上限を越えても、どのタスクにも旗は立たない。右の子は親の
 /// worker で動き、セルを持たないので候補にならない。待つ親は動いておらず、実行待ちでもないので、欄の `current` にも
 /// `top` にも出ない。決定的な方針は候補のないまま閾値を進め、親は join の後に確保せずに値を返す。待ちに入る切り替えの

@@ -13,10 +13,8 @@ use crate::cells::{Registry, Shared, TaskStats};
 use crate::counters::Counters;
 use crate::driver::{JOB_QUIESCE_LIMIT, RunClock};
 use crate::error::KEPT_PENDING;
-use crate::vm::{ExecWith, Exit};
-use crate::workers::{
-    Retired, Run, Shutdown, WorkerExit, Workers, rescuable, settle, spawn_workers,
-};
+use crate::vm::ExecWith;
+use crate::workers::{Retired, Run, Shutdown, WorkerExit, Workers, settle, spawn_workers};
 
 mod apply;
 mod cells;
@@ -46,9 +44,7 @@ pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
-pub use sched::{
-    Memory, Normal, Policy, Rescue, RescueAlways, Sched, Scheduler, Seeded, Sequential,
-};
+pub use sched::{Memory, Normal, Policy, Sched, Scheduler, Seeded, Sequential};
 pub use vm::Task;
 pub use workers::{Entry, Ready};
 
@@ -141,11 +137,7 @@ pub struct Finished {
     pub exit: Option<i64>,
     /// 方針が安全点で始めたタスクの切り替えの数 (docs/spec/vm.md の「タスクとスケジュール」)。
     pub preemptions: u64,
-    /// 1つ以上を盗んだ救済の数と、救済で移した項の数。どちらも worker の和である。救済はスケジュールで決まるので
-    /// `RunStats` に入れない (docs/spec/vm.md の「`RunStats`」)。
-    pub rescues: u64,
-    pub rescued: u64,
-    /// この run が作った worker の数。worker 0 は数えない (docs/spec/vm.md の「タスクとスケジュール」)。
+    /// このrunが始めに作ったworkerの数。worker 0は数えない (docs/spec/vm.mdの「タスクとスケジュール」)。
     pub workers: usize,
     /// この run がほかの worker に置いた `par` の右の子の数。どの worker の fork も数える
     /// (docs/spec/vm.md の「`par` の fork と join」)。
@@ -660,14 +652,6 @@ impl<M: Mode> Machine<M> {
             Sched::Seeded(seed) => {
                 run_scheduled(code, ctx, &mut task, Seeded::new(seed), start, &mut counts)
             }
-            Sched::RescueAlways => run_scheduled(
-                code,
-                ctx,
-                &mut task,
-                RescueAlways::default(),
-                start,
-                &mut counts,
-            ),
         };
         self.shared_roots = scheduled.shared_roots;
         // 誤りで終わる run の分も積算に入れる。ほかのヒープは回復で落ちるので、落ちる前に足す
@@ -788,8 +772,6 @@ impl<M: Mode> Machine<M> {
             stats: self.run_stats(counts, scheduled),
             exit,
             preemptions: scheduled.preemptions,
-            rescues: scheduled.rescues,
-            rescued: scheduled.rescued,
             workers: scheduled.workers,
             placed: scheduled.placed,
             placed_tasks: scheduled.placed_tasks,
@@ -914,8 +896,6 @@ enum Ran {
 /// 実行が終わった後に、捨てるスケジューラから読むもの。
 struct Scheduled<M: Mode> {
     preemptions: u64,
-    rescues: u64,
-    rescued: u64,
     peak_stack: u64,
     shared_roots: usize,
     tasks: TaskStats,
@@ -991,45 +971,39 @@ fn run_scheduled<M: Mode, P: Policy>(
     sched.shared_roots = start.shared_roots;
     // 根は REPL のコードだけが作るので、根に触れるコードを読み込んだ `Machine` は worker を作らない。成功した run の後に
     // 根が、落としたほかの worker のヒープを指しうるためである (docs/spec/vm.md の「タスクとスケジュール」)
-    sched.begin_run(!code.tables.uses_roots && ctx.roots().len() == 0);
+    let wanted = sched.begin_run(!code.tables.uses_roots && ctx.roots().len() == 0);
     let host = start.host;
     let (result, exits) = thread::scope(|scope| {
-        let mut handles = Vec::new();
-        let mut shutdown = Shutdown {
+        // worker 1..N-1はrunの最初の命令の前に作るので、命令を2回実行することはない
+        // (docs/spec/vm.mdの「タスクとスケジュール」)
+        let handles = if wanted {
+            spawn_workers::<M, P>(
+                scope,
+                code,
+                &sched.policy,
+                &sched.run,
+                &sched.watcher.control,
+                &sched.cells,
+                &host,
+                start.max_depth,
+            )
+        } else {
+            Vec::new()
+        };
+        // workerができたらすぐに見張りを置く。この後でpanicしても、workerを起こしてjoinできるようにするためである
+        let shutdown = Shutdown {
             control: Arc::clone(&sched.watcher.control),
             run: Arc::clone(&sched.run),
-            armed: false,
+            armed: !handles.is_empty(),
         };
-        let result = loop {
-            match vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts) {
-                Ok(Exit::Finished) => break Ok(()),
-                Ok(Exit::Spawn) => {
-                    handles = spawn_workers::<M, P>(
-                        scope,
-                        code,
-                        &sched.policy,
-                        &sched.run,
-                        &sched.watcher.control,
-                        &sched.cells,
-                        &host,
-                        start.max_depth,
-                    );
-                    shutdown.armed = !handles.is_empty();
-                    // タスクを置くのは作れた worker だけである
-                    sched.run.set_live(handles.len() + 1);
-                    // 1つも作れなければ worker 0 だけで続ける。救済を強いる方針は、救済する worker がいるときだけ働く
-                    sched.workers = match handles.len() {
-                        0 => Workers::Denied,
-                        n => {
-                            sched.policy.set_rescuable(rescuable(&sched.run, 0));
-                            sched.policy.workers_started();
-                            Workers::Started(n)
-                        }
-                    };
-                }
-                Err(error) => break Err(error),
-            }
+        // タスクを置くのは作れたworkerだけである
+        sched.run.set_live(handles.len() + 1);
+        // 1つも作れなければworker 0だけで続ける
+        sched.workers = match handles.len() {
+            0 => Workers::Denied,
+            n => Workers::Started(n),
         };
+        let result = vm::run::<ExecWith<M, P>>(code, ctx, task, &mut sched, counts);
         // 終わりを決めたのは worker 0 のループか、ほかの worker の致命的な誤りである。どちらでも `END` を立てて
         // すべての worker を起こし、`Ctx` を返させてから join する (docs/spec/vm.md の「タスクとスケジュール」)
         drop(shutdown);
@@ -1041,7 +1015,7 @@ fn run_scheduled<M: Mode, P: Policy>(
     });
     let workers = match sched.workers {
         Workers::Started(n) => n,
-        Workers::Wanted | Workers::Denied | Workers::Peer => 0,
+        Workers::Denied | Workers::Peer => 0,
     };
     if workers > 0 {
         sched.watcher.control.clear_end();
@@ -1050,8 +1024,6 @@ fn run_scheduled<M: Mode, P: Policy>(
     let mut panic = None;
     // ほかの worker の仕事を worker 0 の数に足す。数は足し、山は最大を取る (docs/spec/vm.md の「`RunStats`」)
     let mut preemptions = sched.preemptions();
-    let mut rescues = sched.rescues;
-    let mut rescued = sched.rescued;
     let mut peak_stack = sched.peak_stack(task);
     let mut bases = Vec::with_capacity(exits.len());
     let mut left = false;
@@ -1062,8 +1034,6 @@ fn run_scheduled<M: Mode, P: Policy>(
                 ctx: other,
                 counts: worker_counts,
                 preemptions: worker_preemptions,
-                rescues: worker_rescues,
-                rescued: worker_rescued,
                 peak_stack: worker_peak,
                 base,
                 left: worker_left,
@@ -1071,8 +1041,6 @@ fn run_scheduled<M: Mode, P: Policy>(
             }) => {
                 counts.add(&worker_counts);
                 preemptions += worker_preemptions;
-                rescues += worker_rescues;
-                rescued += worker_rescued;
                 peak_stack = peak_stack.max(worker_peak);
                 bases.push(base);
                 others.push(other);
@@ -1146,8 +1114,6 @@ fn run_scheduled<M: Mode, P: Policy>(
     let generations = sched.cells.lock().next_generations();
     let scheduled = Scheduled {
         preemptions,
-        rescues,
-        rescued,
         peak_stack,
         shared_roots: sched.shared_roots,
         tasks,
