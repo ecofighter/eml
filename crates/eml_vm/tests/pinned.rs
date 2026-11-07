@@ -1097,8 +1097,8 @@ main () = Async.run (fn () ->
     );
 }
 
-/// workerがpanicするrun。panicしたworkerは`Ctx`を漏らすので (docs/spec/vm.mdの「タスクとスケジュール」)、
-/// AddressSanitizerは`worker_panic::`をleakの検出なしで流す (docs/implementation/testing.mdの「AddressSanitizer」)。
+/// workerがpanicするrun。panicしたworkerのヒープは、すべてのworkerをjoinした後に、ほかのヒープと同じく落とす
+/// (docs/spec/vm.mdの「タスクとスケジュール」)。
 mod worker_panic {
     use super::*;
 

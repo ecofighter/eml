@@ -268,9 +268,9 @@ fn submit_row(row: &OwnedRow, params: &[CParam]) -> OwnedRow {
     }
 }
 
-/// 取り出しは記録の番号と `Wake` に続けて、C の引数のうち物体のものを順に借りる。物体の最後の使い道を取り出しの後に
-/// 置き、プールが読む間に落とさないためである。null のハンドル、IO の失敗、取り消しをどれも取り出しで起こすので、
-/// いつも中断しうる (docs/spec/vm.md の「`blocking` の呼び出し」)。
+/// 取り出しは記録の番号と`Wake`に続けて、Cの引数のうち物体のものを順に借りる。取り出しは`MutUnboxedArray`の引数に
+/// 写しを書き戻すので、その最後の使い道は取り出しの後に置く。nullのハンドル、IOの失敗、取り消しをどれも取り出しで
+/// 起こすので、いつも中断しうる (docs/spec/vm.md の「`blocking` の呼び出し」)。
 fn take_row(row: &OwnedRow, params: &[CParam]) -> OwnedRow {
     let objects: Vec<CParam> = params
         .iter()

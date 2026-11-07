@@ -694,6 +694,46 @@ fn run_real(src: &str, workers: usize) -> (String, Finished) {
     (out.contents(), finished)
 }
 
+/// 物体の引数をいろいろ混ぜた`blocking`の呼び出し。仕事は文字列、バイト列、配列を写して受け取り、取り出しは2つの
+/// `MutUnboxedArray`の写しをそれぞれの配列に書き戻す。空の文字列と空のバイト列も渡す (docs/spec/vm.md の
+/// 「`blocking` の呼び出し」)。
+const MIX: &str = "\
+import Async (Async)
+import Async
+import Bytes
+import MutUnboxedArray
+import UnboxedArray
+
+extern \"C\" blocking symbol \"rs_mix\" mix : String -> Int -> UnboxedArray Int -> MutUnboxedArray Int -> Bytes -> Int -> MutUnboxedArray Int -> Int -> <IO, Async> (Int, MutUnboxedArray Int, MutUnboxedArray Int)
+
+call : String -> Int -> Bytes -> Int -> <IO, Panic, Async> Unit
+call s ns b nb =
+  let a = UnboxedArray.from_list [1, 2, 3]
+  let m1 = MutUnboxedArray.make 3 0
+  let m2 = MutUnboxedArray.make 3 0
+  let (r, m1, m2) = mix s ns a m1 b nb m2 3
+  let l1 = UnboxedArray.to_list (MutUnboxedArray.freeze m1)
+  let l2 = UnboxedArray.to_list (MutUnboxedArray.freeze m2)
+  println \"\\{show r} \\{show l1} \\{show l2}\"
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  call (\"a\" ++ \"b\") 2 (Bytes.empty ()) 0
+  call \"\" 0 (Bytes.of_string \"xy\") 2)
+";
+
+const MIXED: &str = "195000 [196, 197, 198] [10, 20, 30]\n241 [1, 2, 3] [251, 261, 271]\n";
+
+#[test]
+fn a_blocking_call_copies_mixed_object_arguments() {
+    assert_eq!(run_both(MIX), MIXED);
+}
+
+#[test]
+fn a_blocking_call_copies_mixed_object_arguments_on_the_pool() {
+    assert_eq!(run_real(MIX, 1).0, MIXED);
+}
+
 /// 鍵の関数。`gate_wait` は `blocking` で、プールのスレッドで鍵を待つ。
 const GATE: &str = "\
 import Async (Async)
@@ -806,10 +846,9 @@ main () =
     assert_eq!(run_real(&src, 1).0, "Cancelled: task was cancelled\n1\n");
 }
 
-/// `b` の `Panic` でスコープが失敗すると、`run` は `a` を取り消し、`a` の仕事が終わるまで待ってから `Panic` を起こし
-/// 直す。run は止まらないので静止にも予算にも届かず、`Machine` は poisoned にならない。鍵を外から開けなければ、この
-/// run は終わらない (docs/spec/declarations.md の「`extern "C"`」)。取り消しと完了のどちらが先に当たっても、ハンドル
-/// は1回だけ壊れる。
+/// `b`の`Panic`でスコープが失敗すると、`run`は`a`を取り消し、`a`の仕事が終わるまで待ってから`Panic`を起こし直す。
+/// runは止まらないので静止にも予算にも届かない。鍵を外から開けなければ、このrunは終わらない
+/// (docs/spec/declarations.mdの「`extern "C"`」)。取り消しと完了のどちらが先に当たっても、ハンドルは1回だけ壊れる。
 #[test]
 fn a_failing_scope_waits_for_its_cancelled_blocking_call() {
     let src = format!(
@@ -862,8 +901,42 @@ main () = Async.run body
     let error = result.unwrap_err();
     assert!(!error.interrupted(), "{error:?}");
     assert!(error.to_string().starts_with("panicked: boom"), "{error}");
-    assert!(!machine.is_poisoned());
     assert_eq!(rs_frees(100024), 1);
     machine.close().unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out.contents(), "");
+}
+
+/// 走っている仕事の後に取り消されたタスクでも、Cは写しに書き終え、取り出しは写しを配列に書き戻してから取り消しの
+/// IOの失敗を起こす。配列は巻き戻しで放されるので、書き戻した値はemlから見えない。検査モードの取り出しと終わりの
+/// 検査、それにAddressSanitizerが、書き戻しが生きた一意な配列に収まることを確かめる (docs/spec/vm.md の
+/// 「`blocking` の呼び出し」)。
+#[test]
+fn a_cancelled_blocking_call_writes_its_array_back() {
+    let src = format!(
+        "import MutUnboxedArray
+{GATE}
+extern \"C\" blocking symbol \"rs_fill_gated\" fill_gated : MutUnboxedArray Int -> Int -> Int -> <IO, Async> (Unit, MutUnboxedArray Int)
+
+fill : Unit -> <IO, Panic, Async> Unit
+fill () =
+  let m = MutUnboxedArray.make 3 0
+  let ((), m) = fill_gated m 3 100013
+  drop m
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let a = Async.start (fn () ->
+    match try_io fill with
+      | Ok () -> println \"unreachable\"
+      | Err e -> println \"\\{{show e.kind}}: \\{{e}}\")
+  let _ = gate_wait 100013
+  Async.cancel a
+  gate_open 100014
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    );
+    assert_eq!(run_real(&src, 1).0, "Cancelled: task was cancelled\n");
+    assert_eq!(rs_gate_wait(100015), 0, "C did not write the copy");
 }

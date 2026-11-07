@@ -2,7 +2,7 @@
 //! `Machine` に続けて読み込み、名前で照らした関数の番号、定数、エフェクト、位置のファイルの引き直しを確かめる。
 
 use std::io;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -617,11 +617,12 @@ fn a_shown_entry_must_return_an_object() {
 }
 
 /// 完了を返さない driver。`wait` はいつも壊れた driver の誤りを返す。`quiesce` は呼ばれた回数を数え、`drains` のときだけ
-/// 保留の操作を空にする。
+/// 保留の操作を空にする。落とされると`dropped`を立てる。
 struct FakeDriver {
     drains: bool,
     pending: usize,
     quiesces: Arc<AtomicUsize>,
+    dropped: Arc<AtomicBool>,
 }
 
 impl FakeDriver {
@@ -631,8 +632,15 @@ impl FakeDriver {
             drains,
             pending: 0,
             quiesces: Arc::clone(&quiesces),
+            dropped: Arc::default(),
         };
         (driver, quiesces)
+    }
+}
+
+impl Drop for FakeDriver {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::SeqCst);
     }
 }
 
@@ -778,11 +786,12 @@ fn a_failing_driver_breaks_the_run() {
     );
 }
 
-/// `quiesce` の後も保留の操作が残れば、`Machine` は poisoned の状態になり、ヒープに触れずに `close` が driver の誤りを
-/// 返す (docs/spec/vm.md の「時計と driver」)。
+/// `quiesce`の後も保留の操作が残れば、runはどのヒープにも触れる前にそのdriverを落とす。runは壊れたrunとして
+/// driverの誤りで終わる (docs/spec/vm.mdの「時計と driver」)。
 #[test]
-fn a_driver_left_pending_poisons_the_machine() {
+fn a_driver_left_pending_is_dropped_with_the_run() {
     let (driver, _) = FakeDriver::new(false);
+    let dropped = Arc::clone(&driver.dropped);
     let (host, _) = capture_host(Default::default());
     let mut machine =
         Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
@@ -794,11 +803,14 @@ fn a_driver_left_pending_poisons_the_machine() {
         .unwrap();
     let error = machine.run(loaded.entry).unwrap_err();
     assert!(error.is_broken(), "{error}");
-    let error = machine.close().unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "the I/O driver failed: the driver kept pending ops after quiesce in `<close>`"
+    assert!(
+        error
+            .to_string()
+            .starts_with("the I/O driver failed: broken"),
+        "{error}"
     );
+    assert!(dropped.load(Ordering::SeqCst));
+    drop(machine);
 }
 
 /// 操作を持ったまま終わらせない driver。`cancel` は記録するだけで操作を終わらせず、取り消しを頼まれた操作は次の
@@ -1062,9 +1074,9 @@ fn main() -> unit {
     assert_eq!(jobs, [ms(5), ms(5)]);
 }
 
-/// `exit` で終わった run は、静止の後に操作が残っても終了コードを返し、`Machine` を poisoned にする。後の `close` は
-/// driver の誤りを返す (docs/spec/vm.md の「時計と driver」)。
-fn exit_keeps_its_code_and_poisons(src: &str) {
+/// `exit`で終わったrunは、静止の後に操作が残っても終了コードを返す。`Machine`は回復し、後の`close`は成功する
+/// (docs/spec/vm.mdの「時計と driver」)。
+fn exit_keeps_its_code(src: &str) {
     let (driver, _) = BudgetDriver::new(false);
     let (host, _) = capture_host(Default::default());
     let mut machine =
@@ -1076,20 +1088,13 @@ fn exit_keeps_its_code_and_poisons(src: &str) {
         .run(loaded.entry)
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(finished.exit, Some(3));
-    assert!(machine.is_poisoned());
-    let error = machine.close().unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("the driver kept pending ops after quiesce"),
-        "{error}"
-    );
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
 }
 
 /// 待つタスクとは別のタスクの `exit` が run を捨てる。
 #[test]
-fn an_exit_with_an_op_left_pending_keeps_its_code_and_poisons() {
-    exit_keeps_its_code_and_poisons(
+fn an_exit_with_an_op_left_pending_keeps_its_code() {
+    exit_keeps_its_code(
         "\
 import Async (Async)
 import Async
@@ -1106,10 +1111,60 @@ main () = Async.run body
     );
 }
 
+/// 渡されたdriverが静止の後にも操作を残したら、runはそれを落とし、次のrunは時計から新しいdriverを作って動く
+/// (docs/spec/vm.mdの「時計と driver」)。
+#[test]
+fn a_machine_runs_again_after_its_injected_driver_kept_an_op() {
+    let (driver, _) = BudgetDriver::new(false);
+    let (host, out) = capture_host(Default::default());
+    let mut machine =
+        Machine::<Checked>::new(RunConfig::default().control, host).with_driver(Box::new(driver));
+    let loaded = machine
+        .load(
+            &eml_test_support::lir(
+                "\
+import Async (Async)
+import Async
+import Net
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let x = Async.start (fn () -> Net.close_listener (Net.listen \"127.0.0.1\" 0))
+  let y = Async.start (fn () -> (exit 3 : Unit))
+  Async.await x
+  Async.await y
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+",
+            ),
+            &eml_vm::Linked::default(),
+        )
+        .unwrap();
+    let finished = machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(finished.exit, Some(3));
+    let again = format!(
+        "\
+fn main() -> unit {{
+  let s.0: obj = const \"ran\"
+  tail call say(s.0)
+}}
+{SAY}"
+    );
+    let loaded = machine
+        .load(&parse(&again), &eml_vm::Linked::default())
+        .unwrap();
+    machine
+        .run(loaded.entry)
+        .unwrap_or_else(|error| panic!("{error}"));
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "ran\n");
+}
+
 /// 待つタスクを始めた後に、`body` が `exit` する。
 #[test]
-fn a_main_exit_with_an_op_left_pending_keeps_its_code_and_poisons() {
-    exit_keeps_its_code_and_poisons(
+fn a_main_exit_with_an_op_left_pending_keeps_its_code() {
+    exit_keeps_its_code(
         "\
 import Async (Async)
 import Async

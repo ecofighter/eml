@@ -103,8 +103,8 @@ pub enum Outcome {
     Rejected,
     /// 実行を始める前に割り込まれた。セッションは変わらない (docs/spec/repl.md の「割り込み」)。
     Interrupted,
-    /// `exit` で終わった。実行時エラーと同じく受け入れず、`let` の束縛も作らない。中断で後始末が済んでいるので、
-    /// 回復は要らない (docs/spec/repl.md の「割り込みと実行時エラー」)。
+    /// `exit`で終わった。実行時エラーと同じく受け入れず、`let`の束縛も作らない。ヒープには片付けていないタスクの
+    /// 物体が残りうるので、`Machine`が回復する (docs/spec/repl.mdの「割り込みと実行時エラー」)。
     Exited(i64),
     /// 続けられる実行時エラー。`let` の束縛は作らない。
     Failed(RuntimeError),
@@ -170,12 +170,6 @@ impl Repl {
 
     pub fn eval(&mut self, text: &str) -> Evaluated {
         self.evaluate(text, Form::Typed)
-    }
-
-    /// 入力の run が仕事を見捨てるなどして `Machine` を poisoned にしたか。そうなら後の入力はどれも断られる
-    /// (docs/spec/vm.md の「追記」)。
-    pub fn is_poisoned(&self) -> bool {
-        self.machine.is_poisoned()
     }
 
     /// `text` を `:type` の問い合わせとしてセッションに対して検査する。lowering も実行もせず、入力を受け付けず、番号も

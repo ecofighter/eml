@@ -23,8 +23,8 @@ pub enum VmFault {
     Driver(String),
 }
 
-/// `quiesce` の後にも driver が保留の操作を残したときの、`VmFault::Driver` の文。この後の `Machine` は poisoned の状態で、
-/// ヒープに触れない (docs/spec/vm.md の「時計と driver」)。
+/// `quiesce`の後にもdriverが保留の操作を残したときの、`VmFault::Driver`の文。そのdriverはどのヒープにも触れる前に
+/// 落とす (docs/spec/vm.mdの「時計と driver」)。
 pub(crate) const KEPT_PENDING: &str = "the driver kept pending ops after quiesce";
 
 /// デッドロックの文言。関数の名前と位置は内部のコードとスケジュールで変わるので付けない。
@@ -129,19 +129,10 @@ impl RuntimeError {
         )
     }
 
-    /// poisoned の誤り (静止の後にも driver が保留の操作を残した) か。REPL の端末は、入力がこの誤りをもう書いたかを
-    /// これで見分け、同じ誤りを `close` でもう一度書かない (docs/spec/vm.md の「追記」)。
-    pub fn kept_pending(&self) -> bool {
-        matches!(
-            self,
-            RuntimeError::Fault { fault: VmFault::Driver(error), .. } if error == KEPT_PENDING
-        )
-    }
-
     /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き `RootMisuse` を含む) と内部の誤りの後と、回復が
-    /// 失敗した後は、ヒープを信用できない。driver の誤りの後は、driver が貸した記憶を手放したかを確かめられない。
-    /// driver を作れなかったときも、その `Machine` では I/O を動かせないので同じに扱う。REPL はこの後の入力を受け付けない
-    /// (docs/spec/vm.md の「追記」と「時計と driver」)。
+    /// 失敗した後は、ヒープを信用できない。driverの誤りの後は、その`Machine`のI/Oを信用することも続けることもできない。
+    /// driverを作れなかったときも、その`Machine`ではI/Oを動かせないので同じに扱う。REPLはこの後の入力を受け付けない
+    /// (docs/spec/vm.mdの「追記」と「時計と driver」)。
     pub fn is_broken(&self) -> bool {
         matches!(
             self,

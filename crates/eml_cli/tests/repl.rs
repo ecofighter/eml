@@ -438,10 +438,10 @@ fn a_file_right_under_the_top_directory_fails() {
     classify(&repl_root().join("loose.repl"));
 }
 
-/// 仕事を見捨てた入力の結果はそのまま返り、その後の入力と `close` は poisoned の誤りになる。端末はこれを見て、その入力の
-/// 直後にセッションを終える (docs/spec/vm.md の「追記」)。本物の時計と短い予算が要るので、トランスクリプトにしない。
+/// 仕事を見捨てた入力の結果はそのまま返り、セッションは続く。その後の入力はふつうに動き、`close`も成功する
+/// (docs/spec/vm.mdの「追記」)。本物の時計と短い予算が要るので、トランスクリプトにしない。
 #[test]
-fn the_machine_is_poisoned_after_an_input_that_abandoned_a_job() {
+fn the_session_continues_after_an_input_that_abandoned_a_job() {
     let root = repl_root();
     let host = CaptureHost::new(root.clone()).without_stdin().into_ref();
     let config = RunConfig::default()
@@ -468,26 +468,14 @@ Async.run (fn () ->
   println (show (Async.await x))
   Async.await y)",
     );
-    let poisoned = repl.is_poisoned();
     let next = repl.eval("1");
     let closed = repl.close();
     eml_test_support::eml_fixture_gate_open(100100);
     assert!(matches!(exited.outcome, Outcome::Exited(3)));
-    assert!(poisoned);
-    match next.outcome {
-        Outcome::Broken(error) => assert!(
-            error
-                .to_string()
-                .contains("the driver kept pending ops after quiesce"),
-            "{error}"
-        ),
-        _ => panic!("the next input ran on a poisoned machine"),
-    }
-    let error = closed.leaks.expect("a poisoned machine does not close");
     assert!(
-        error
-            .to_string()
-            .contains("the driver kept pending ops after quiesce"),
-        "{error}"
+        matches!(next.outcome, Outcome::Accepted),
+        "{:?}",
+        next.outcome
     );
+    assert!(closed.leaks.is_none(), "{:?}", closed.leaks);
 }
