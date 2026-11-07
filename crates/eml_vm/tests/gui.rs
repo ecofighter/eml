@@ -502,7 +502,10 @@ main () = Async.run (fn () ->
 
 /// backendを作れないrunでは、`Gui.run`は作るときの誤りで失敗する。`open_ui_raw`がゲートを放して印を下ろすので、
 /// 誤りは次の`Gui.run`でも同じで、その後のプログラムは終わり、デッドロックもまた判定される。
-#[cfg(not(all(feature = "gui-native", any(target_os = "macos", target_os = "linux"))))]
+#[cfg(not(all(
+    feature = "gui-native",
+    any(target_os = "macos", target_os = "linux", windows)
+)))]
 #[test]
 fn a_failed_backend_creation_fails_each_run_and_lowers_the_holds() {
     let attempt = "\
@@ -547,7 +550,10 @@ main () = Async.run (fn () ->
 
 /// GUIを求めないプログラムは、ネイティブのbackendの`Park`でも`DefaultPark`と同じに終わり、印も立たないので、backendを
 /// 作ろうともしない。求めるプログラムでは作るのに失敗し、`Gui.run`ごとにその誤り`error`が届く。
-#[cfg(all(feature = "gui-native", any(target_os = "macos", target_os = "linux")))]
+#[cfg(all(
+    feature = "gui-native",
+    any(target_os = "macos", target_os = "linux", windows)
+))]
 fn assert_the_native_backend_is_made_only_when_a_run_asks_for_a_gui(error: &str) {
     let native = |src: &str| {
         let control = limits(1);
@@ -606,6 +612,15 @@ fn the_appkit_backend_is_made_only_when_a_run_asks_for_a_gui() {
 fn the_qt_backend_is_made_only_when_a_run_asks_for_a_gui() {
     assert_the_native_backend_is_made_only_when_a_run_asks_for_a_gui(
         "IOError { kind = NotAvailable, message = \"cannot open the GUI: Qt needs the main thread\" }",
+    );
+}
+
+/// WinUIのbackendもメインのスレッドでしか作らないので、テストの中ではWindows App SDKのruntimeを読み込まず、画面を開かない。
+#[cfg(all(feature = "gui-native", windows))]
+#[test]
+fn the_winui_backend_is_made_only_when_a_run_asks_for_a_gui() {
+    assert_the_native_backend_is_made_only_when_a_run_asks_for_a_gui(
+        "IOError { kind = NotAvailable, message = \"cannot open the GUI: WinUI needs the main thread\" }",
     );
 }
 

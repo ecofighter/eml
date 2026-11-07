@@ -9,7 +9,7 @@ autotests = false
 [lib]
 doctest = false
 
-# nativeはネイティブのbackendを足す。macOSではAppKit、LinuxではQt 6で、ほかのOSでは`Backend::Native`がNotAvailableを返す。
+# nativeはネイティブのbackendを足す。macOSではAppKit、LinuxではQt 6、WindowsではWinUI 3で、ほかのOSでは`Backend::Native`がNotAvailableを返す。
 # LinuxではビルドにQt 6の開発用のファイルが要る (docs/implementation/architecture.mdの「`eml_gui`の内部」)
 [features]
 native = [
@@ -20,6 +20,11 @@ native = [
     "dep:cxx",
     "dep:cxx-build",
     "dep:qt-build-utils",
+    "dep:winui3",
+    "dep:windows",
+    "dep:windows-core",
+    "dep:windows-reference",
+    "dep:windows-time",
 ]
 
 [dependencies]
@@ -33,6 +38,13 @@ objc2-core-foundation = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cxx = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+winui3 = { workspace = true, optional = true }
+windows = { workspace = true, optional = true }
+windows-core = { workspace = true, optional = true }
+windows-reference = { workspace = true, optional = true }
+windows-time = { workspace = true, optional = true }
 
 # build.rsはtargetがLinuxのときだけこれらを使う。build-dependenciesのtargetの条件はhostで決まるので、OSで分けない
 [build-dependencies]

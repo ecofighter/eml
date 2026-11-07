@@ -683,15 +683,18 @@ nativeのGUIのbackendは、自動のテストでは開かない。CIの`gui-nat
 6. OSの終了の操作 (macOSでは⌘QとDockの「終了」) が、`CloseRequest`を通してウィンドウを閉じる
 7. `Gui.run`が戻った後は、Dockのアイコンがなく (macOS)、Ctrl-Cでプログラムが終わる
 8. HiDPIの画面でも、論理pxの配置が同じである
+9. Windows App SDK 2のruntimeがないWindowsでは、`Gui.run`の`NotAvailable`の文言がMicrosoftの配布のページ (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads) を示す
 
-Linuxでは`nix build`で組んだ`eml`を、X11かWaylandのデスクトップ (`DISPLAY`か`WAYLAND_DISPLAY`がある) で`timeout 60 result/bin/eml run tests/ui/run/gui/<例>.em`として動かす。`result/bin/eml`は`wrapQtAppsHook`が作ったラッパーで、Qtのプラグインの場所を置く。Linuxの6は、デスクトップがアプリケーションを終わらせる操作 (Dockやウィンドウの一覧の「終了」など) で、ウィンドウを1つずつ閉じる。7のDockのアイコンはLinuxにはない
+Linuxでは`nix build`で組んだ`eml`を、X11かWaylandのデスクトップ (`DISPLAY`か`WAYLAND_DISPLAY`がある) で`timeout 60 result/bin/eml run tests/ui/run/gui/<例>.em`として動かす。`result/bin/eml`は`wrapQtAppsHook`が作ったラッパーで、Qtのプラグインの場所を置く。Linuxの6は、デスクトップがアプリケーションを終わらせる操作 (Dockやウィンドウの一覧の「終了」など) で、ウィンドウを1つずつ閉じる。7のDockのアイコンはLinuxにはない。9はLinuxとmacOSにはない
+
+Windows 11では、Microsoftから入れたWindows App SDK 2のruntime (`Get-AppxPackage *WindowsAppRuntime.2*`に出る) の下で、`cargo run -p eml_cli --features gui-native -- run tests/ui/run/gui/<例>.em`として動かす。9は、runtimeのないWindowsでcounterを動かして確かめる。Windowsの6は、タスクバーの「すべてのウィンドウを閉じる」で、ウィンドウを1つずつ閉じる。7のDockのアイコンはWindowsにはない
 
 ## CI
 
 `.github/workflows/ci.yml`は、mainへのpush、pull request、手動の起動で、次の8つのジョブを流す。
 
-- `test`: macOS (macos-15)、Linux (ubuntu-24.04と、aarch64のubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls`と`gui`を外した`tls_off::`と`gui_off::`のテスト、既定でないfeatureのclippy (「feature の組み合わせの確認」の10個) と、段「feature resolution of tls」、段「dependency edges of eml_native」、段「dependency edges of eml_gui」の検査を流す。段「dependency edges of eml_gui」は、`eml_gui`がワークスペースのどのcrateにも依存しないことと、`eml_cli`の既定の依存の木にnativeのtoolkitのcrate (`cxx`、`objc2`、`winio-*`、`qt-build-utils`) が入らないことを`cargo tree`で守る。toolchainはrustupが`rust-toolchain.toml`から入れ、`rustc -V`のバージョンが`channel`と同じことを確かめる。Windowsのtargetは`x86_64-pc-windows-msvc`だけで、ジョブはhostがそれであることを確かめる。cargo-nextestは、ワークフローに書いたバージョンを入れる。ubuntu-24.04では、同じビルドで時間の検査 (「性能のテスト」) も流す
-- `gui-native`: macOS (macos-15) とLinux (ubuntu-24.04) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUIの手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKitとQtのbackendはテストの中では作れない。Linuxでは、Qt 6の入ったふだんのdevShellを通して流し、続けて`nix build`を流す。rustcはx86_64のLinuxで既定に自分のLLDでリンクし、nixのldのラッパーを通らないので、Qtとlibstdc++へのRUNPATHが付かない。そこでdevShellと`nix build`は`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Clinker-features=-lld`でラッパーのldに戻し、ラッパーがRUNPATHを付ける。`result/bin/.eml-wrapped`が`libQt6Widgets.so.6`に動的にリンクすること (`readelf -d`) と、`result`に`libQt6*`、`*.dll`、`*.msix`のファイルがないことを確かめる
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04と、aarch64のubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls`と`gui`を外した`tls_off::`と`gui_off::`のテスト、既定でないfeatureのclippy (「feature の組み合わせの確認」の10個) と、段「feature resolution of tls」、段「dependency edges of eml_native」、段「dependency edges of eml_gui」の検査を流す。段「dependency edges of eml_gui」は、`eml_gui`がワークスペースのどのcrateにも依存しないことと、`eml_cli`の既定の依存の木にnativeのtoolkitのcrate (`cxx`、`objc2`、`winio-*`、`qt-build-utils`) が入らないことを`cargo tree`で守る。`gui-native`を足した木 (`--target all`) は1度書き出し、`cxx v`、`objc2 v`、`winio-winui3 v`、`qt-build-utils v`がそれぞれ出ることを、crateごとの`grep -q`で確かめる。まとめて数えると、1つのtoolkitのcrateだけでも数が足りてしまうからである。toolchainはrustupが`rust-toolchain.toml`から入れ、`rustc -V`のバージョンが`channel`と同じことを確かめる。Windowsのtargetは`x86_64-pc-windows-msvc`だけで、ジョブはhostがそれであることを確かめる。cargo-nextestは、ワークフローに書いたバージョンを入れる。ubuntu-24.04では、同じビルドで時間の検査 (「性能のテスト」) も流す
+- `gui-native`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUIの手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKit、Qt、WinUIのbackendはテストの中では作れない。WindowsではWindows App SDKのファイルなしに組み、`eml_gui`のbootstrapのテストは、runnerにruntimeがなければ文言がMicrosoftの配布のページを示すことを確かめ、あれば`skipped: the Windows App SDK 2 runtime is installed`と書いて通る。Linuxでは、Qt 6の入ったふだんのdevShellを通して流し、続けて`nix build`を流す。rustcはx86_64のLinuxで既定に自分のLLDでリンクし、nixのldのラッパーを通らないので、Qtとlibstdc++へのRUNPATHが付かない。そこでdevShellと`nix build`は`CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Clinker-features=-lld`でラッパーのldに戻し、ラッパーがRUNPATHを付ける。`result/bin/.eml-wrapped`が`libQt6Widgets.so.6`に動的にリンクすること (`readelf -d`) と、`result`に`libQt6*`、`*.dll`、`*.msix`のファイルがないことを確かめる
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
@@ -701,7 +704,7 @@ Linuxでは`nix build`で組んだ`eml`を、X11かWaylandのデスクトップ 
 
 CIが時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件とMiriのCPU時間の予算は開発機で確かめ、runnerの速さに合わせて緩めない。ほかの手順では、nextestがテストを止める60秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]`を付けたテストと`bench/`の計測は、CIで流さない。`nix build`は`gui-native`のジョブのLinuxでだけ流し、aarch64-darwinの`nix build`は手で確かめる。
 
-アクションはcommitのSHAで固定し、バージョンの名前をコメントに書く。runnerのimageは名前で固定し、上げるのは手で行う。nixのストアはキャッシュしない。install-nix-actionには`GITHUB_TOKEN`を渡し、`github:`のinputの取得が率の制限に当たらないようにする。tokenはnix.confに入ってジョブの中で動くものから読めるが、権限は`contents: read`だけで、ジョブとともに切れるので受け入れる。cargoの依存のビルドをキャッシュするのは、`test`のジョブと、devShellを通さない`gui-native`のジョブ (macOS) だけで、保存するのはmainの実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml`で検査する。
+アクションはcommitのSHAで固定し、バージョンの名前をコメントに書く。runnerのimageは名前で固定し、上げるのは手で行う。nixのストアはキャッシュしない。install-nix-actionには`GITHUB_TOKEN`を渡し、`github:`のinputの取得が率の制限に当たらないようにする。tokenはnix.confに入ってジョブの中で動くものから読めるが、権限は`contents: read`だけで、ジョブとともに切れるので受け入れる。cargoの依存のビルドをキャッシュするのは、`test`のジョブと、devShellを通さない`gui-native`のジョブ (macOSとWindows) だけで、保存するのはmainの実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml`で検査する。
 
 ## クラウドのセッション
 

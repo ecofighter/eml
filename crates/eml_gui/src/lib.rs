@@ -9,6 +9,8 @@ mod qt;
 mod queue;
 pub mod stub;
 mod toolkit;
+#[cfg(all(feature = "native", windows))]
+mod winui;
 
 use std::fmt;
 use std::io;
