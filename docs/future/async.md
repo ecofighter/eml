@@ -211,7 +211,7 @@ std の非同期の操作はどれも次の3段で行う。extern は yield し�
 2. 待ち: `io_wait` は、操作がもう終わっていれば perform せずに続け、終わっていなければ生の操作 `await_io` でタスクを待たせる。token は `Wake` と組で戻る
 3. 取り出し (`take_*`): token を消費して、結果 (buffer とハンドル) を返すか、操作の IO の失敗を投げる extern。取り消した後も buffer とハンドルを返す。取り消したことは `Wake` で分かる
 
-ソケット、シグナル、`Gui.next_event` (メインのworkerの`Park`からの`Pending`の起こしで終わる。[FFIと拡張の設計](ffi.md)の「GUI」)、ブロックする呼び出しのプールの仕事は、どれもこの形で待つ。例外は`Std.Net`のストリームの設定 (`shutdown_write`、`set_nodelay`) で、取り消しの地点にしないために`io_wait`を通さない。記録が終わったかを`op_done`で読み、受け付けで終わっていれば待たずに取り出し、別のworkerのdriverに回したときだけ`Async.io_wait_shielded`でhostの受け付けを待つ ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。時間は`await_time`で待つ。
+ソケット、シグナル、ブロックする呼び出しのプールの仕事は、どれもこの形で待つ。GUIは操作の記録を持たず、ゲートのセルを`Async.gui_wait`で待つ ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)。例外は`Std.Net`のストリームの設定 (`shutdown_write`、`set_nodelay`) で、取り消しの地点にしないために`io_wait`を通さない。記録が終わったかを`op_done`で読み、受け付けで終わっていれば待たずに取り出し、別のworkerのdriverに回したときだけ`Async.io_wait_shielded`でhostの受け付けを待つ ([標準ライブラリ](../spec/stdlib.md)の「`Std.Net`」)。時間は`await_time`で待つ。
 
 ```haskell
 pub read_chunk : Bytes -> TcpStream -> <IO, Async> (Bytes, TcpStream)
@@ -322,7 +322,7 @@ main () =
 
 TLS のクライアント `Std.Tls` の面、失敗、包みの形は [標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」に、テストの driver の TLS の終端器は [VM](../spec/vm.md) の「時計と driver」にある。ここには TLS と HTTP で採った形の理由を書く。
 
-- TLS はプラグインでなく、普通の std のモジュールである。プラグインの仕組みは GUI の要求 (スレッドの固定、イベントループ) のためにあり、I/O を持たない TLS の状態はそのどれも要らない
+- TLSは普通のstdのモジュールで、`Std.Gui`と同じくcfgのfeatureで切り替える。GUIが要るもの (スレッドの固定、イベントループ) は、I/Oを持たないTLSの状態には要らない
 - TLS の状態は I/O を持たず、ソケットの I/O はすべて `Std.Net` が行う。driver の側に TLS のストリームを置くと、本物の driver に rustls が入り、取り消しと期限の意味が別に要る。I/O を持たない形なら、待ち、取り消し、期限が `Net` の1か所に集まる
 - 暗号の provider は aws-lc-rs である。rustls の既定で推奨の provider だからである。ring の最後のリリースは 2025-03 で、純 Rust の provider は TLS 1.3 だけか、対応する CPU が限られる。組むのに要るのは C のツールチェーンだけである ([コンパイラの構成](../implementation/architecture.md) の「crate の依存関係」)
 - テストの相手は、テストの driver の仮想のホストが Rust で TLS を終端する。handshake はクライアントの乱数が毎回変わるので録音で再生できず、相手は生きた server でなければならない。公開の server の API もテスト専用の std のモジュールも置かないので、決定的にできる場所はテストの driver だけである

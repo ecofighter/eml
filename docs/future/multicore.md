@@ -4,7 +4,7 @@
 
 VMとネイティブのランタイムで、複数のコアを使って実行するための設計をまとめる。workerとスレッドの模型、スケジューラ、スレッドをまたぐRC、`par`の意味、止める手順を書く。今のVMはworkerのスレッドを持ち、`par`の右の子を空いているworkerに置き、`Async`のタスクを`start`のときにworker 1..N-1へ順に回して置き、タスクは終わるまでそのworkerで動く ([VM](../spec/vm.md)の「タスクとスケジュール」と「`par`のforkとjoin」と「`Async`のタスク」)。`par`の盗みとネイティブの並列はまだない。VMは、並列を広げられる制約を守る (下の「VMの並列化の備え」)。今の実装に入れてある備えは、rowのKindの束の`Never` ([型とKind](../spec/types.md)) と、持ち越し規則の制約を`σ ≤ Once`と書くこと ([エフェクトとhandler](../spec/effects.md)) のほかに、`eml_rt`の共有の印方式のRC (`share`、負のRC、共有した物体をreuseしないこと。下の「スレッドをまたぐRC」)、検査モードの所有者の検査、別のスレッドからの解放とほかのヒープの物体の受け付け (下の「別のスレッドからの解放」)、workerごとの止める語、`CodeBase<M>: Sync`と`Task: Send`の型のassert (下の「VMの並列化の備え」) である。
 
-std の `Async` の意味 (タスク、スコープ、取り消し、I/O、channel) は [非同期の設計](async.md) に、ネイティブのコードの fork / join とエントリは [ネイティブ化の設計](native.md) の「並列の実行」に、GUI のプラグインは [FFI と拡張の設計](ffi.md) の「GUI」にある。この文書はその下の仕組みを書く。
+stdの`Async`の意味 (タスク、スコープ、取り消し、I/O、channel) は[非同期の設計](async.md)に、ネイティブのコードのfork / joinとエントリは[ネイティブ化の設計](native.md)の「並列の実行」に、GUIは[FFIと拡張の設計](ffi.md)の「GUI」にある。この文書はその下の仕組みを書く。
 
 ## 目的と範囲
 
@@ -51,7 +51,7 @@ std の `Async` の意味 (タスク、スコープ、取り消し、I/O、chann
 ```
 std:           Std.Par (par、both、集まりの関数)    Std.Async、Std.Chan、Std.Net (タスク、スコープ、取り消し)
                ──────────────────────────────────────────────────────────────────────
-eml_cli        Session::run が実行系を組み立てる (worker の数、実行系、I/O の driver の時計と seed、プラグイン)
+eml_cli        Session::run が実行系を組み立てる (worker の数、実行系、I/O の driver の時計と seed、GUI の Park)
 eml_vm         Exec を実装する (VM)                eml_native   Exec を実装する (ネイティブ)
 eml_sched      スレッド、受け箱、タスクのセル、監視のスレッド、deque、待ちと起こし、Exec の trait
 eml_io         IoDriver を実装する (本物の driver、テストの driver、ブロックする呼び出しのプール)

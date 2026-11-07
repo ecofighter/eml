@@ -507,7 +507,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 `eml`バイナリには、aws-lcとrustlsが入る。どちらもemlと別のライセンスに従う。aws-lcは`ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause`ほか、rustlsは`Apache-2.0 OR ISC OR MIT`である。Craneliftのcrateと、それが使うregalloc2とtarget-lexiconは`Apache-2.0 WITH LLVM-exception`で、Craneliftからhashbrownを通して、またcxxから入るfoldhashは`Zlib`である。`about.toml`の`accepted`はこの2つも認める。LLVMの例外は、Apache-2.0の条件を、コンパイルした出力について緩めるだけである。`flake.nix`の`meta.license`はeml自身のライセンス (MIT) だけを書く。
 
-`gui-native`を足した`eml`は、crateでないプラットフォームのGUIのtoolkitにもリンクする。LinuxではQt 6で、LGPL-3.0に従って動的にリンクする。`flake.nix`は`eml`を`gui-native`で組み、LinuxではQtをnixpkgsの`qt6.qtbase`から取り、`wrapQtAppsHook`がQtのプラグインの場所を置くラッパーを作る。WindowsのWinUI 3は、利用者が入れたWindows App SDK 2のruntimeから実行のときに読み込み、リンクの時には名指さない。emlはそのファイルを配らない。`about.hbs`は、これを`THIRD-PARTY-LICENSES.md`の「System libraries」の節に書く。LGPLv3はGNU GPLv3に許可を足す形なので、両方の全文を配る。全文は`licenses/GPL-3.0.txt`と`licenses/LGPL-3.0.txt`で、FSFの文面をそのまま置く。
+`gui-native`を足した`eml`は、crateでないプラットフォームのGUIのtoolkitにもリンクする。LinuxではQt 6で、LGPL-3.0に従って動的にリンクする。`flake.nix`は`eml`を`gui-native`で組み、LinuxではQtをnixpkgsの`qt6.qtbase`から取り、`wrapQtAppsHook`がQtのプラグインの場所を置くラッパーを作る。WindowsのWinUI 3は、利用者が入れたWindows App SDK 2のruntimeから実行のときに読み込み、リンクの時には名指さない。emlはそのファイルを配らない。`about.hbs`は、これを`THIRD-PARTY-LICENSES.md`の「System libraries」の節に書く。LGPLv3はGNU GPLv3に許可を足す形なので、両方の全文を配る。全文は`licenses/GPL-3.0.txt`と`licenses/LGPL-3.0.txt`で、FSFの文面をそのまま置く。利用者が入れるものと、emlやそれから作ったものを配る人が負うことは、[配布とGUIの前提](distribution.md)にある。
 
 バイナリに入る他者の crate と、そのライセンスの全文は、リポジトリの直下の `THIRD-PARTY-LICENSES.md` にまとめる。このファイルは cargo-about が `about.toml` と `about.hbs` から生成するので、手では直さない。依存を変えたら `nix develop -c nix/third-party-licenses.sh` で書き直す。cargo-about は devShell に入れてあり、バージョンは `flake.lock` で決まる。
 

@@ -37,8 +37,8 @@ eml を実装するエージェントとプログラマのための文書群で�
 | **future/** | 将来の設計 | まだ実装しない方針 |
 | [future/roadmap.md](future/roadmap.md) | 将来の設計 | 段の進め方と閉じる手順、段の列、その後の項目 |
 | [future/async.md](future/async.md) | 将来の設計 | 非同期の設計 (`Async` のタスクとスコープ、取り消し、時間、チャネル、I/O の driver、ネットワークとシグナル、TLS と HTTP) |
-| [future/native.md](future/native.md) | 将来の設計 | ネイティブ化の設計 (Cranelift のコード生成、呼び出し規約、中断と実行時エラー、安全点、生の要素の配列、AOT と配布) |
-| [future/ffi.md](future/ffi.md) | 将来の設計 | FFI と拡張の設計 (`extern "C"` の設計の判断、`blocking` の呼び出し、VM からの呼び出し、拡張、GUI) |
+| [future/native.md](future/native.md) | 将来の設計 | ネイティブ化の設計 (Craneliftのコード生成、呼び出し規約、中断と実行時エラー、安全点、生の要素の配列、AOTと配布 (ビルドのプロファイル)) |
+| [future/ffi.md](future/ffi.md) | 将来の設計 | FFIと拡張の設計 (`extern "C"`の設計の判断、`blocking`の呼び出し、VMからの呼び出し、拡張 (cfgの継ぎ目)、GUI (toolkitの設計と採らなかった案)) |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (スレッドとworker、メインのworker、スケジューラ、共有の印方式のRC、`par`、継続の移動、止める手順) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |

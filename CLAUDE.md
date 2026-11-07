@@ -145,6 +145,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | `Std.Net` and `Std.Signal` | docs/spec/stdlib.md の「`Std.Net`」, docs/spec/stdlib.md の「`Std.Signal`」, docs/spec/vm.md の「上限と割り込み」 |
 | `Std.Tls` | docs/spec/stdlib.md の「`Std.Tls`」, docs/spec/vm.md の「時計と driver」 (the test driver's `tls.localhost`) |
 | `Std.Http` | docs/spec/stdlib.md の「`Std.Http`」 |
+| `Std.Gui` | docs/spec/stdlib.md の「`Std.Gui`」, docs/spec/vm.md の「GUI の Park」, docs/spec/vm.md の「メインのworkerの待ち」, docs/implementation/architecture.md の「`eml_gui`の内部」, docs/implementation/distribution.md (prerequisites, licensing, AOT rules), docs/implementation/testing.md の「GUIの手での確認」, docs/future/ffi.md の「GUI」 (design and rejected alternatives) |
 | User C functions (`extern "C"`, `link`, `--link`) | docs/spec/declarations.md の「`extern "C"`」, docs/spec/vm.md の「C の関数の呼び出し」 |
 | `blocking` C calls | docs/spec/declarations.md の「`extern "C"`」, docs/spec/vm.md の「`blocking` の呼び出し」 |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
