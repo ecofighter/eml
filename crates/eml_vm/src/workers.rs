@@ -908,13 +908,19 @@ fn run_worker<M: Mode, P: Policy>(
     k: usize,
     max_depth: usize,
 ) -> WorkerExit<M> {
-    on_own_ctx(&run, &control, host, k, format!("<worker {k}>"), |ctx| {
-        work::<M, P>(code, ctx, policy, &run, &control, cells, k, max_depth)
-    })
+    on_own_ctx(
+        &run,
+        &control,
+        k,
+        format!("<worker {k}>"),
+        || Ctx::for_worker(Arc::clone(&control), host, k),
+        |ctx| work::<M, P>(code, ctx, policy, &run, &control, cells, k, max_depth),
+    )
 }
 
 /// 分かれたrunのメインのworkerの本体。`Machine`を持つスレッドで、worker 0を作った後に動き、自分の`Ctx`を
-/// `run_scheduled`の畳み込みに返す (docs/spec/vm.mdの「メインのworker」)。
+/// `run_scheduled`の畳み込みに返す。`ctx`は同じスレッドがworker 0を作る前に作ったものである
+/// (docs/spec/vm.mdの「メインのworker」)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_main<M: Mode, P: Policy>(
     code: &CodeBase<M>,
@@ -922,50 +928,57 @@ pub(crate) fn run_main<M: Mode, P: Policy>(
     run: &Arc<Run>,
     control: &Arc<Control>,
     cells: Arc<Shared>,
-    host: HostRef,
+    ctx: Ctx<M>,
     max_depth: usize,
     mut park: Box<dyn Park>,
 ) -> WorkerExit<M> {
     let k = run.main();
-    on_own_ctx(run, control, host, k, "<main worker>".into(), move |ctx| {
-        let done = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            main_work::<M, P>(
-                code, ctx, policy, run, control, cells, max_depth, &mut *park,
-            )
-        }));
-        match done {
-            Ok(done) => {
-                // `Park`の`Drop`も利用者のコードなので`catch_unwind`の中で落とし、そこでのpanicはメインのworkerの
-                // panicと同じに扱う
-                drop(park);
-                done
+    on_own_ctx(
+        run,
+        control,
+        k,
+        "<main worker>".into(),
+        move || ctx,
+        move |ctx| {
+            let done = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                main_work::<M, P>(
+                    code, ctx, policy, run, control, cells, max_depth, &mut *park,
+                )
+            }));
+            match done {
+                Ok(done) => {
+                    // `Park`の`Drop`も利用者のコードなので`catch_unwind`の中で落とし、そこでのpanicはメインのworkerの
+                    // panicと同じに扱う
+                    drop(park);
+                    done
+                }
+                Err(payload) => {
+                    // 巻き戻しの間に`Drop`がpanicすると処理系が止まるので、`Park`は自分の`catch_unwind`の下で落とし、
+                    // 最初のpanicを残して続ける
+                    let _ = std::panic::catch_unwind(AssertUnwindSafe(move || drop(park)));
+                    std::panic::resume_unwind(payload)
+                }
             }
-            Err(payload) => {
-                // 巻き戻しの間に`Drop`がpanicすると処理系が止まるので、`Park`は自分の`catch_unwind`の下で落とし、
-                // 最初のpanicを残して続ける
-                let _ = std::panic::catch_unwind(AssertUnwindSafe(move || drop(park)));
-                std::panic::resume_unwind(payload)
-            }
-        }
-    })
+        },
+    )
 }
 
-/// 呼んだスレッドで worker `k` の `Ctx` を作り、`catch_unwind` の中で `body` を動かして、`Ctx` を返す。`Ctx` を作る
-/// ところから `catch_unwind` の中で動き、panic は関数の名前 `function` で `fatal` に書いてすべての worker に終わりを
+/// 呼んだスレッドで worker `k` の `Ctx` を `make` で得て、`catch_unwind` の中で `body` を動かし、`Ctx` を返す。`make`
+/// から `catch_unwind` の中で動き、panic は関数の名前 `function` で `fatal` に書いてすべての worker に終わりを
 /// 知らせる。そのときの`Ctx`も返す。
 fn on_own_ctx<M: Mode>(
     run: &Run,
     control: &Arc<Control>,
-    host: HostRef,
     k: usize,
     function: String,
+    make: impl FnOnce() -> Ctx<M>,
     body: impl FnOnce(&mut Ctx<M>) -> Done,
 ) -> WorkerExit<M> {
     let mut slot: Option<Ctx<M>> = None;
     let mut done: Option<Done> = None;
     let mut base = HeapWork::default();
     let body = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let ctx = slot.insert(Ctx::<M>::for_worker(Arc::clone(control), host, k));
+        let ctx = slot.insert(make());
         base = HeapWork::of(ctx.heap().stats());
         done = Some(body(ctx));
     }));

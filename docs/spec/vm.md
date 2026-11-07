@@ -450,7 +450,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 分かれたrun (`Seat::Separate`。`execute`か、`with_seat(Seat::Separate)`の`Machine`) は、`Limits::workers`より1つ多いworkerを持つ。増えるのはメインのworkerで、欄`N`にあり、`Machine`を持つスレッドで動く。
 
-- メインのworkerの欄はrunの始めから眠った形である。`Machine`を持つスレッドは、worker 0を作った後に自分の`Ctx` (`Ctx::for_worker(.., N)`) を作る
+- メインのworkerの欄はrunの始めから眠った形である。`Machine`を持つスレッドは、worker 0を作る前に自分の`Ctx` (`Ctx::for_worker(.., N)`) を作り、worker 0を作った後にメインのworkerとして動く。検査モードでは`Ctx`を作るときにページを1枚取って確保量に数えるので、worker 0の後に作ると、その課金とプログラムの確保の前後がスレッドの速さで決まる。決定的な方針ではメモリの柔らかい上限の旗の地点が確保量で決まるためである (「タスクとスケジュール」)
 - 空きの集まり`idle`には入らず、`next_owner`も`pop_idle`も選ばない。本物の時計では、worker 1..N-1と同じく最初に要るときに自分のI/Oのdriverを作る。仮想の時計ではworker 0がそのI/Oのhostである
 - runの全体の務めは持たない。時計、デッドロックの判定、`END`、監視のスレッドはworker 0に残る
 - 待つときは、`idle`を使わずにworker 1..N-1の手順で眠る。欄のlockの下で`parked`を立てて`running`から引き、最後に眠ったworkerならworker 0を起こす。眠る道は替えられる`Park`である (「メインのworkerの待ち」)
