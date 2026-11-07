@@ -101,16 +101,17 @@ jobs:
           test "$(cargo tree -p eml_native -e normal --target all | grep -c -E 'eml_rt|eml_lir|eml_vm')" -eq 0
           test -z "$(grep -rn unsafe crates/eml_extern/src)"
       # eml_guiはワークスペースのどのcrateにも依存せず、既定の依存の木にnativeのtoolkitのcrateは入らない。gui-nativeの木には
-      # 3つのtoolkitのcrateがどれも入る (docs/implementation/architecture.mdの「crate の依存関係」)
+      # 3つのtoolkitのcrateがどれも入る。WinUIの印は、生成したbindingだけが使うwindows-collectionsとする
+      # (docs/implementation/architecture.mdの「crate の依存関係」)
       - name: dependency edges of eml_gui
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
         run: |
           test "$(cargo tree -p eml_gui -e normal --target all --prefix none | grep -v '^eml_gui ' | grep -c '^eml_')" -eq 0
-          test "$(cargo tree -p eml_cli -e normal,build --target all | grep -c -E 'cxx v|objc2 v|winio-|qt-build-utils v')" -eq 0
+          test "$(cargo tree -p eml_cli -e normal,build --target all | grep -c -E 'cxx v|objc2 v|windows-collections v|qt-build-utils v')" -eq 0
           cargo tree -p eml_cli --features gui-native -e normal,build --target all > "$RUNNER_TEMP/gui-native-tree.txt"
           grep -q 'cxx v' "$RUNNER_TEMP/gui-native-tree.txt"
           grep -q 'objc2 v' "$RUNNER_TEMP/gui-native-tree.txt"
-          grep -q 'winio-winui3 v' "$RUNNER_TEMP/gui-native-tree.txt"
+          grep -q 'windows-collections v' "$RUNNER_TEMP/gui-native-tree.txt"
           grep -q 'qt-build-utils v' "$RUNNER_TEMP/gui-native-tree.txt"
 
   # nativeのGUIのbackendを組み、stubのテストを流す。画面を開くテストはない (docs/implementation/testing.mdの「CI」)

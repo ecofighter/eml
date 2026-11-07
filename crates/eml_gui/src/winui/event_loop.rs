@@ -14,22 +14,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use windows::UI::Xaml::Interop::TypeName;
-use windows_core::{Array, EventRevoker, HSTRING, Ref, implement};
+use windows_core::{Array, EventRevoker, HSTRING, Interface, Ref, implement};
 use windows_time::TimeSpan;
-use winui3::Microsoft::UI::Dispatching::{
-    DispatcherQueue, DispatcherQueueHandler, DispatcherQueueTimer,
-};
-use winui3::Microsoft::UI::Xaml::Controls::XamlControlsResources;
-use winui3::Microsoft::UI::Xaml::Markup::{
-    IXamlMetadataProvider, IXamlMetadataProvider_Impl, IXamlType, XmlnsDefinition,
-};
-use winui3::Microsoft::UI::Xaml::XamlTypeInfo::XamlControlsXamlMetaDataProvider;
-use winui3::Microsoft::UI::Xaml::{
-    Application, ApplicationInitializationCallback, DispatcherShutdownMode, IApplicationOverrides,
-    IApplicationOverrides_Impl, LaunchActivatedEventArgs,
-};
 
+use super::bindings::{
+    Application, ApplicationInitializationCallback, DispatcherQueue, DispatcherQueueHandler,
+    DispatcherQueueTimer, DispatcherShutdownMode, IApplication3, IApplicationOverrides,
+    IApplicationOverrides_Impl, IXamlMetadataProvider, IXamlMetadataProvider_Impl, IXamlType,
+    LaunchActivatedEventArgs, TypeName, XamlControlsResources, XamlControlsXamlMetaDataProvider,
+    XmlnsDefinition,
+};
 use super::{Value, with_shared};
 use crate::{EventLoop, EventQueue, Id, IoSource, RawEvent, Reason, Step};
 
@@ -93,7 +87,6 @@ impl Shared {
                         s.drive(Reason::Events);
                     }
                 });
-                Ok(())
             }))
             .unwrap_or(false)
         });
@@ -172,6 +165,11 @@ impl Shared {
 
     /// `OnLaunched`から呼ぶ。ループの準備をして、最初の`step(Woken)`を呼ぶ。
     fn launched(&self) {
+        // 初期化のcallbackは誤りを返せないので、そこでの失敗はここで受けて、ループを始めずに終える
+        if self.error.borrow().is_some() {
+            self.stop();
+            return;
+        }
         if let Err(e) = self.prepare() {
             self.fail(e);
             self.stop();
@@ -186,10 +184,7 @@ impl Shared {
         let dispatcher = DispatcherQueue::GetForCurrentThread()?;
         let timer = dispatcher.CreateTimer()?;
         timer.SetIsRepeating(false)?;
-        let tick = timer.Tick(|_, _| {
-            with_shared(|s| s.drive(Reason::Timeout));
-            Ok(())
-        })?;
+        let tick = timer.Tick(|_, _| with_shared(|s| s.drive(Reason::Timeout)))?;
         *self.timer.borrow_mut() = Some((timer, tick));
         *self.dispatcher.borrow_mut() = Some(dispatcher.clone());
         self.bell.listen(Some(dispatcher));
@@ -226,7 +221,6 @@ impl Bell {
                 if bell.rang.swap(false, Ordering::AcqRel) {
                     with_shared(|s| s.drive(Reason::Woken));
                 }
-                Ok(())
             }))
             .unwrap_or(false);
         if !queued {
@@ -287,9 +281,14 @@ impl EventLoop for WinUiLoop {
         shared.stopped.set(false);
         // `Start`は`Exit`まで戻らない。`OnLaunched`が最初の`step`を呼ぶ
         let started = Application::Start(&ApplicationInitializationCallback::new(|_| {
-            let app = App::compose()?;
             // 最後のウィンドウを閉じてもループを終えない。終えるのは`Stop`の`Exit`だけである
-            app.SetDispatcherShutdownMode(DispatcherShutdownMode::OnExplicitShutdown)
+            let composed = App::compose().and_then(|app| {
+                app.cast::<IApplication3>()?
+                    .SetDispatcherShutdownMode(DispatcherShutdownMode::OnExplicitShutdown)
+            });
+            if let Err(e) = composed {
+                with_shared(|s| s.fail(e));
+            }
         }));
         drop(running);
         if let Some(payload) = shared.panic.take() {
@@ -347,7 +346,7 @@ impl IXamlMetadataProvider_Impl for App_Impl {
     }
 
     fn GetXamlTypeByFullName(&self, name: &HSTRING) -> windows_core::Result<IXamlType> {
-        self.provider.GetXamlTypeByFullName(name)
+        self.provider.GetXamlTypeByFullName(&name.to_string_lossy())
     }
 
     fn GetXmlnsDefinitions(&self) -> windows_core::Result<Array<XmlnsDefinition>> {

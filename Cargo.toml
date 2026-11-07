@@ -86,17 +86,9 @@ rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs
 rustls-platform-verifier = "0.7.1"
 text-size = "1.1"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Threading"] }
-# WinUIのbackend (eml_guiのnative) のbindingとbootstrap。alphaの版なので固定し、bindingが使うwindowsの部分集合とwindows-coreも合わせる
-winui3 = { package = "winio-winui3", version = "=0.7.0-alpha.8", features = [
-    "UI_Composition",
-    "UI_Dispatching",
-    "UI_Windowing",
-    "UI_Xaml_Controls",
-    "UI_Xaml_Controls_Primitives",
-    "UI_Xaml_Markup",
-    "UI_Xaml_XamlTypeInfo",
-] }
-windows = { package = "winio-windows-subset", version = "=0.3.0-alpha.3" }
+# WinUIのbackend (eml_guiのnative) のbindingが使うcrate。bindingはwindows-bindgen 0.100が生成するので、版をそれに合わせる
+# (nix/winui-bindings.sh)
+windows-collections = "0.100"
 windows-core = "0.100"
 windows-reference = "0.100"
 windows-time = "0.100"

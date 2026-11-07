@@ -619,11 +619,10 @@ dependencies = [
  "objc2-foundation",
  "qt-build-utils",
  "taffy",
+ "windows-collections",
  "windows-core",
  "windows-reference",
  "windows-time",
- "winio-windows-subset",
- "winio-winui3",
 ]
 
 [[package]]
@@ -1838,17 +1837,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-future"
-version = "0.100.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a74555161b6c58612bbe052b9964c9c069326c487d24b8f7e77d5a8e83fb81c8"
-dependencies = [
- "windows-core",
- "windows-link 0.100.0",
- "windows-threading",
-]
-
-[[package]]
 name = "windows-implement"
 version = "0.100.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1881,15 +1869,6 @@ name = "windows-link"
 version = "0.100.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415"
-
-[[package]]
-name = "windows-numerics"
-version = "0.100.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9c5500bf6a9098f27922953422ae7324cdd330c868e945801593455a6832701"
-dependencies = [
- "windows-core",
-]
 
 [[package]]
 name = "windows-reference"
@@ -1954,15 +1933,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-threading"
-version = "0.100.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cff005f1c94bffb9b073230837d3448d0e0ba3cf11c34b6f1f7d4c3875eded09"
-dependencies = [
- "windows-link 0.100.0",
-]
-
-[[package]]
 name = "windows-time"
 version = "0.100.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2018,35 +1988,6 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
-
-[[package]]
-name = "winio-windows-subset"
-version = "0.3.0-alpha.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d9f01d45c05bb30334c7f4a0c54371b47082824f5e659721a925181c8cb9ba2"
-dependencies = [
- "windows-collections",
- "windows-core",
- "windows-future",
- "windows-numerics",
- "windows-reference",
- "windows-time",
-]
-
-[[package]]
-name = "winio-winui3"
-version = "0.7.0-alpha.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7e4a37ed49590f2fcf85e4ec93d09a1e22e8ed41bf62a72f3ef47400fb775b1"
-dependencies = [
- "windows-collections",
- "windows-core",
- "windows-future",
- "windows-numerics",
- "windows-reference",
- "windows-time",
- "winio-windows-subset",
-]
 
 [[package]]
 name = "yansi"

@@ -14,7 +14,7 @@
 
 - `gui-native`を足して組んだ`eml`のLinux版は、Qtを起動のときに読み込むので、GUIを使わないプログラムを動かすときもQtのライブラリが要る。Windowsは、プログラムが初めてGUIを求めたときに、Windows App SDKのruntimeをその場で探す。macOSはAppKitを起動のときにつなぐ
 - `gui-native`なしで組んだ`eml`は、上の表のGUIのtoolkitの項目を要らない。nativeのbackendを持たず、`--gui stub`と同じく画面を開かないからである ([標準ライブラリ](../spec/stdlib.md) の「`Std.Gui`」)
-- 足りないものがあると、`Gui.run`が`NotAvailable`か`Other`で失敗する。Windows 11より古いときと、Windows App SDKのruntimeがないときの文言は、Microsoftの配布のページ (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads) を示す。Linuxの画面がないときの文言は`Other`で、QApplicationを作る前に出る。文言は [標準ライブラリ](../spec/stdlib.md) の「`Std.Gui`」の誤りの表にある
+- 足りないものがあると、`Gui.run`が`NotAvailable`か`Other`で失敗する。Microsoftの配布のページ (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads) を示すのは、Windows App SDKのruntimeがないときの文言だけである。Windows 11より古いときの文言は、WinUIがWindows 11以降を要ることを述べる。Linuxの画面がないときの文言は`Other`で、QApplicationを作る前に出る。文言は [標準ライブラリ](../spec/stdlib.md) の「`Std.Gui`」の誤りの表にある
 - Qtのプラットフォームプラグインの探し方は、Nixのラッパーが置く場所に頼る。Nixの外では、ディストリビューションが入れるプラグインに頼る
 
 ## 組むのに要るもの
@@ -22,8 +22,8 @@
 nativeのbackendはfeature `gui-native`が足し、既定のビルドはGUIのtoolkitのファイルを要らない ([アーキテクチャ](architecture.md) の「外部 crate」)。
 
 - macOS: AppKitとFoundationをつなぐクレートはRustだけで、C++のコンパイラもtoolkitのファイルも要らない
-- Linux: Qt 6の開発用のファイル (ヘッダと`.prl`) と、C++17のコンパイラが要る。Qtは`QMAKE`のqmake、なければ`PATH`の`qmake6`か`qmake`で探し、Qt 5が見つかると`build.rs`がpanicする。Qtのライブラリは、`libQt6Core.so.6`のように版を持つsonameで動的につなぐ。Nixでは`flake.nix`のdevShellとパッケージがqtbase、pkg-config、`wrapQtAppsHook`を足し、x86_64 Linuxではnixpkgsのlinkerのラッパーを通してつなぐので、Qtとlibstdc++へのRUNPATHがバイナリに入る ([テスト戦略](testing.md) の「CI」)
-- Windows: Windows App SDKのファイル (import library、`.winmd`、bootstrapのDLL、インストーラ) は、組むときも要らず、配るものにも入らない。WinRTとuser32とntdllの関数は`raw-dylib`でつなぐ。Rustの通常のMSVCのtoolchainがあればよい
+- Linux: Qt 6の開発用のファイル (ヘッダと`.prl`) と、C++17のコンパイラが要る。Qtは`QMAKE`のqmake、なければ`PATH`の`qmake6`か`qmake`で探し、Qt 5が見つかると`build.rs`がpanicする。Qtのライブラリは、`libQt6Core.so.6`のように版を持つsonameで動的につなぐ。Nixでは、`flake.nix`のdevShellがqtbaseとpkg-configを、パッケージがqtbase、pkg-config、`wrapQtAppsHook`を足し、x86_64 Linuxではnixpkgsのlinkerのラッパーを通してつなぐので、Qtとlibstdc++へのRUNPATHがバイナリに入る ([テスト戦略](testing.md) の「CI」)
+- Windows: Windows App SDKのファイル (import library、`.winmd`、bootstrapのDLL、インストーラ) は、組むときも要らず、配るものにも入らない。WinRT、user32、ntdll、kernel32の関数は`raw-dylib`でつなぐ。Rustの通常のMSVCのtoolchainがあればよい
 
 ## Qtを配る規則
 
@@ -43,14 +43,14 @@ emlの配布物は、次の4つを`share/doc/eml/`に入れる。`nix build`が�
 
 ## Windows App SDKのruntime
 
-emlはMicrosoftのファイルを何も配らない。bootstrapのDLLも、`.winmd`も、インストーラも含めない。Windows App SDKのライセンスの条件をemlに持ち込まないためである。
+emlはMicrosoftのファイルを何も配らない。bootstrapのDLLも、`.winmd`も、インストーラも含めない。Windows App SDKのライセンスの条件をemlに持ち込まないためである。WinUIのbindingはemlのコードで、microsoft/windows-rsが公開するWindows App SDKのメタデータから生成する ([アーキテクチャ](architecture.md) の「`eml_gui`の内部」)。
 
-- runtimeは利用者が入れる。bootstrapは`AddPackageDependency`で、パッケージのfamily `Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe` (`winio-winui3`の`V2`) を依存に足す。呼び出しはWindows 11のkernelbaseが持つ。プロセスで1回、プログラムが初めてGUIを求めたときだけ呼び、依存はプロセスの間生きる
-- Windows 11 (build 22000以降) かどうかは、bootstrapの前に確かめる。足りなければ`WinUI needs Windows 11 or later`で失敗する。そのため、runtimeのDLLを名前だけで読み込む道には入らない
+- runtimeは利用者が入れる。bootstrapは、Windows 11のkernelbaseが持つ`TryCreatePackageDependency`と`AddPackageDependency`で、runtimeのframeworkのパッケージをプロセスに加える。プロセスで1回、プログラムが初めてGUIを求めたときだけ呼び、依存はプロセスの間生きる
+- familyは`Microsoft.WindowsAppRuntime.2_8wekyb3d8bbwe`、最小の版は2.6.4.0である。どちらも、NuGetのパッケージMicrosoft.WindowsAppSDK.Runtime 2.6.4の`WindowsAppSDK-VersionInfo.h`にある`WINDOWSAPPSDK_RUNTIME_PACKAGE_FRAMEWORK_PACKAGEFAMILYNAME`と`WINDOWSAPPSDK_RUNTIME_VERSION_UINT64`の値である。family名はmajorの版に従うので、2.xの版はどれも同じfamilyを使う (Windows App SDK 2.0のrelease notes)。最小の版はbindingのメタデータの版なので、emlが呼ぶAPIはどれもruntimeにある。古い2.xのruntimeを入れた利用者には配布のページの文言が出て、runtimeを上げることになる
+- Windows 11 (build 22000以降) かどうかは、bootstrapの前に確かめる。足りなければ`WinUI needs Windows 11 or later`で失敗する。bootstrapは2つの関数を実行のときにkernelbaseから引き、importしないので、`gui-native`で組んだ`eml`もWindows 10で起動できる。runtimeのDLLを名前で読み込むことはない
 - runtimeがなければ、`open_ui_raw`は`NotAvailable`で失敗し、文言がMicrosoftの配布のページを示す ([標準ライブラリ](../spec/stdlib.md) の「`Std.Gui`」)
-- runtimeを探す規則は、family名の後ろの2とバージョン0で組んである。入れたruntimeに実機で当たるかは確かめていない。当たらなければ、Microsoftの文書のfamily名を使い、最小のバージョンを2.0.1.0にする
 - runtimeを含めて自己完結にする配り方 (self-contained) は、MSBuildの手順しか文書になく、使わない
-- Windows App SDK 2のライセンスとインストーラの条件は、まだ読んでいない。emlは何も配らないので、emlの側に条件は生じない。プログラムの作者がインストーラを同梱して配るときは、Microsoftの条件の下で行うことになる
+- Windows App SDK 2.6のNuGetのパッケージのライセンスは、アプリケーションを作って試すための利用を認め、メタデータにも生成したprojectionにも触れない。emlは、同じメタデータから生成したbindingをMIT OR Apache-2.0で公開するwindows-rsに従う。インストーラの条件は、まだ読んでいない。emlは何も配らないので、emlの側に条件は生じない。プログラムの作者がインストーラを同梱して配るときは、Microsoftの条件の下で行うことになる
 
 ## macOSの署名と公証
 
@@ -70,4 +70,4 @@ emlはMicrosoftのファイルを何も配らない。bootstrapのDLLも、`.win
 
 ## 他者のクレートのライセンス
 
-GUIのために足したクレート (`taffy`、`slotmap`、`smallvec`、serdeの系統、`cxx`の系統、`foldhash`、`objc2`の系統、`windows-*`の0.100の系統、`winio-winui3`、`winio-windows-subset`) は、どれも`about.toml`の`accepted`にあるライセンスで使える。`accepted`は変えない。クレートを足したり上げたりしたら、`THIRD-PARTY-LICENSES.md`を`nix develop -c nix/third-party-licenses.sh`で書き直す。CIの`licenses`の手順が、コミットしたファイルと生成した結果を比べる ([アーキテクチャ](architecture.md) の「外部 crate」)。
+GUIのbackendが使うクレート (`taffy`、`slotmap`、`smallvec`、serdeの系統、`cxx`の系統、`foldhash`、`objc2`の系統、`windows-*`の0.100の系統) は、どれも`about.toml`の`accepted`にあるライセンスで使える。`accepted`は変えない。クレートを足したり上げたりしたら、`THIRD-PARTY-LICENSES.md`を`nix develop -c nix/third-party-licenses.sh`で書き直す。CIの`licenses`の手順が、コミットしたファイルと生成した結果を比べる ([アーキテクチャ](architecture.md) の「外部 crate」)。

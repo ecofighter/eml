@@ -20,8 +20,7 @@ native = [
     "dep:cxx",
     "dep:cxx-build",
     "dep:qt-build-utils",
-    "dep:winui3",
-    "dep:windows",
+    "dep:windows-collections",
     "dep:windows-core",
     "dep:windows-reference",
     "dep:windows-time",
@@ -40,8 +39,7 @@ objc2-core-foundation = { workspace = true, optional = true }
 cxx = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-winui3 = { workspace = true, optional = true }
-windows = { workspace = true, optional = true }
+windows-collections = { workspace = true, optional = true }
 windows-core = { workspace = true, optional = true }
 windows-reference = { workspace = true, optional = true }
 windows-time = { workspace = true, optional = true }

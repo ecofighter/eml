@@ -153,24 +153,19 @@ platform's GUI toolkit. The toolkit is not one of the crates below, and the
 - `wasmtime-internal-jit-icache-coherence` 50.0.1: Apache-2.0 WITH LLVM-exception
 - `windows-collections` 0.100.0: MIT OR Apache-2.0
 - `windows-core` 0.100.0: MIT OR Apache-2.0
-- `windows-future` 0.100.0: MIT OR Apache-2.0
 - `windows-implement` 0.100.0: MIT OR Apache-2.0
 - `windows-interface` 0.100.0: MIT OR Apache-2.0
 - `windows-link` 0.2.1: MIT OR Apache-2.0
 - `windows-link` 0.100.0: MIT OR Apache-2.0
-- `windows-numerics` 0.100.0: MIT OR Apache-2.0
 - `windows-reference` 0.100.0: MIT OR Apache-2.0
 - `windows-result` 0.100.0: MIT OR Apache-2.0
 - `windows-strings` 0.100.0: MIT OR Apache-2.0
 - `windows-sys` 0.52.0: MIT OR Apache-2.0
 - `windows-sys` 0.61.2: MIT OR Apache-2.0
 - `windows-targets` 0.52.6: MIT OR Apache-2.0
-- `windows-threading` 0.100.0: MIT OR Apache-2.0
 - `windows-time` 0.100.0: MIT OR Apache-2.0
 - `windows_x86_64_gnu` 0.52.6: MIT OR Apache-2.0
 - `windows_x86_64_msvc` 0.52.6: MIT OR Apache-2.0
-- `winio-windows-subset` 0.3.0-alpha.3: MIT
-- `winio-winui3` 0.7.0-alpha.8: MIT
 - `yansi` 1.0.1: MIT OR Apache-2.0
 - `zeroize` 1.9.1: Apache-2.0 OR MIT
 
@@ -2131,20 +2126,15 @@ Used by:
 - `vstd` 0.0.0-2026-10-25-0158
 - `windows-collections` 0.100.0
 - `windows-core` 0.100.0
-- `windows-future` 0.100.0
 - `windows-implement` 0.100.0
 - `windows-interface` 0.100.0
-- `windows-numerics` 0.100.0
 - `windows-reference` 0.100.0
 - `windows-result` 0.100.0
 - `windows-strings` 0.100.0
 - `windows-targets` 0.52.6
-- `windows-threading` 0.100.0
 - `windows-time` 0.100.0
 - `windows_x86_64_gnu` 0.52.6
 - `windows_x86_64_msvc` 0.52.6
-- `winio-windows-subset` 0.3.0-alpha.3
-- `winio-winui3` 0.7.0-alpha.8
 
 ````text
 MIT License

@@ -2,37 +2,49 @@
 //! 読み込む。WinUIのオブジェクトは`Application::Start`の中でしか作れないので、ウィジェットはどれもループの中で作る
 //! (docs/implementation/architecture.mdの「`eml_gui`の内部」)。
 
+#[rustfmt::skip]
+#[allow(
+    non_snake_case,
+    non_camel_case_types,
+    non_upper_case_globals,
+    dead_code,
+    clippy::all,
+    reason = "windows-bindgenの出力を生成したまま置く (nix/winui-bindings.sh)"
+)]
+mod bindings;
+mod bootstrap;
 mod event_loop;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
-use std::sync::OnceLock;
 
-use windows::Graphics::SizeInt32;
-use windows::Win32::System::WinRT::{RO_INIT_SINGLETHREADED, RoInitialize};
-use windows_core::{EventRevoker, HSTRING, IInspectable, Interface};
+use bindings::{
+    AppWindow, Button, Canvas, CheckBox, ComboBox, ComboBoxItem, IAppWindow2, IButtonBase,
+    IContentControl, IControl, IFrameworkElement, IItemsControl, IOverlappedPresenter3, IPanel,
+    IRangeBase, ISelector, IToggleButton, IWindow2, ProgressBar, RO_INIT_SINGLETHREADED,
+    RoInitialize, SizeInt32, TextBlock, TextBox, TextWrapping, UIElement, Window,
+};
+use bootstrap::bootstrap;
+use windows_core::{EventRevoker, HSTRING, IInspectable, IUnknown, Interface};
 use windows_reference::IReference;
-use winui3::Microsoft::UI::Windowing::{AppWindow, OverlappedPresenter};
-use winui3::Microsoft::UI::Xaml::Controls::{
-    Button, Canvas, CheckBox, ComboBox, ComboBoxItem, Control, ProgressBar, TextBlock, TextBox,
-};
-use winui3::Microsoft::UI::Xaml::{
-    FrameworkElement, IWindowNative, TextWrapping, UIElement, Window,
-};
-use winui3::{PackageDependency, WindowsAppSDKVersion};
 
 use crate::{
     Event, EventQueue, GuiError, Id, Init, Kind, Measure, Native, Prop, RawEvent, Rect, Size,
     Widgets,
 };
 
-const NO_RUNTIME: &str = "cannot open the GUI: the Windows App SDK 2 runtime is not installed (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)";
-
 /// WinUIは編集する欄と進み具合の棒に、中身によらない自然な幅を与えない。この幅を自然な幅とする。
 const FIELD_WIDTH: f32 = 160.0;
 
 windows_core::link!("user32.dll" "system" fn GetDpiForWindow(hwnd: *mut core::ffi::c_void) -> u32);
+
+/// `Window`のHWNDを渡す相互運用のインターフェース。宣言はWindows App SDKのヘッダ`microsoft.ui.xaml.window.h`にだけ
+/// あり、メタデータにはないので、ここで宣言する。
+#[windows_core::interface("eecdbf0e-bae9-4cb6-a68e-9598e1cb57bb")]
+unsafe trait IWindowNative: IUnknown {
+    fn window_handle(&self, hwnd: *mut *mut core::ffi::c_void) -> windows_core::HRESULT;
+}
 
 pub(crate) fn create() -> Result<Native, GuiError> {
     // WinUIが求めるのはシングルスレッドのアパートメントだけだが、emlはGUIをメインのスレッドでだけ開く。`eml run`では
@@ -43,8 +55,7 @@ pub(crate) fn create() -> Result<Native, GuiError> {
             "cannot open the GUI: the GUI opens only on the main thread".to_string(),
         ));
     }
-    // Windows 11より古いと、bootstrapはruntimeのDLLを名前だけで探し、作業のディレクトリや`PATH`に置かれた同じ名前の
-    // DLLを読み込みうる。bootstrapの前に断る
+    // Windows 11より古いと、kernelbaseは動的な依存の関数を持たない。bootstrapの前に、それと分かる文言で断る
     if !is_windows_11(os_build()) {
         return Err(GuiError::NotAvailable(
             "cannot open the GUI: WinUI needs Windows 11 or later".to_string(),
@@ -53,6 +64,7 @@ pub(crate) fn create() -> Result<Native, GuiError> {
     bootstrap()?;
     // SAFETY: このスレッドのWindows Runtimeをシングルスレッドのアパートメントで始めるだけである
     unsafe { RoInitialize(RO_INIT_SINGLETHREADED) }
+        .ok()
         .map_err(|e| GuiError::Backend(format!("cannot open the GUI: {e}")))?;
     let queue = EventQueue::new();
     let shared = Rc::new(event_loop::Shared::new(queue.clone()));
@@ -101,28 +113,14 @@ fn os_build() -> u32 {
     if status == 0 { info.build } else { 0 }
 }
 
-/// Windows App SDK 2のruntimeのパッケージをプロセスに加える。結果はプロセスで1度だけ求める。加えた依存はプロセスの終わり
-/// まで外さない。外すと、読み込んだWinUIのDLLを使えなくなるからである。
-pub(crate) fn bootstrap() -> Result<(), GuiError> {
-    static DONE: OnceLock<Result<(), GuiError>> = OnceLock::new();
-    DONE.get_or_init(
-        || match PackageDependency::initialize_version(WindowsAppSDKVersion::V2) {
-            Ok(dependency) => {
-                std::mem::forget(dependency);
-                Ok(())
-            }
-            Err(_) => Err(GuiError::NotAvailable(NO_RUNTIME.to_string())),
-        },
-    )
-    .clone()
-}
-
 fn winui_error(e: windows_core::Error) -> GuiError {
     GuiError::Backend(format!("gui: WinUI failed: {e}"))
 }
 
 thread_local! {
-    /// WinUIのcallbackが積む先。callbackは`Send`でなければならず、`Rc`の列を持てないので、メインのスレッドのここから引く。
+    /// WinUIのcallbackが積む先。WinRTの委譲はCOMのオブジェクトで、WinUIはウィジェットがなくなった後も持ちうるし、ほかの
+    /// スレッドから呼ばれることもありうる。そこでcallbackはウィジェットの`Id`だけを持ち、メインのスレッドのここから
+    /// `Shared`を引く。
     static SHARED: RefCell<Weak<event_loop::Shared>> = const { RefCell::new(Weak::new()) };
 }
 
@@ -168,7 +166,7 @@ enum Part {
 }
 
 impl Part {
-    fn element(&self) -> windows_core::Result<FrameworkElement> {
+    fn element(&self) -> windows_core::Result<UIElement> {
         match self {
             Part::Window { root, .. } | Part::Grid(root) => root.cast(),
             Part::Label(label) => label.cast(),
@@ -240,15 +238,16 @@ impl WinUiWidgets {
                 let label = TextBlock::new()?;
                 // 語の途中では折り返さない。一番長い語の幅がmin-contentの幅になる
                 label.SetTextWrapping(TextWrapping::WrapWholeWords)?;
-                label.SetText(&HSTRING::from(text.as_str()))?;
+                label.SetText(text)?;
                 (Part::Label(label), vec![])
             }
             Init::Button(text) => {
                 let button = Button::new()?;
-                button.SetContent(&content(text))?;
-                let click = button.Click(move |_, _| {
+                button
+                    .cast::<IContentControl>()?
+                    .SetContent(&content(text))?;
+                let click = button.cast::<IButtonBase>()?.Click(move |_, _| {
                     push(RawEvent::User(Event::Click(id)));
-                    Ok(())
                 })?;
                 (Part::Button(button), vec![click])
             }
@@ -256,53 +255,56 @@ impl WinUiWidgets {
                 let field = TextBox::new()?;
                 let changed = field.TextChanged(move |sender, _| {
                     if let Ok(text) = sender.ok().and_then(|s| s.cast::<TextBox>()?.Text()) {
-                        let text = text.to_string_lossy();
                         push_if_changed(id, Value::Text(text.clone()), Event::Text(id, text));
                     }
-                    Ok(())
                 })?;
                 self.remember(id, Value::Text(text.clone()));
-                field.SetText(&HSTRING::from(text.as_str()))?;
+                field.SetText(text)?;
                 (Part::TextField(field), vec![changed])
             }
             Init::CheckBox(text, checked) => {
                 let check = CheckBox::new()?;
-                check.SetContent(&content(text))?;
-                check.SetIsChecked(Some(*checked))?;
+                check
+                    .cast::<IContentControl>()?
+                    .SetContent(&content(text))?;
+                check
+                    .cast::<IToggleButton>()?
+                    .SetIsChecked(Some(*checked))?;
                 // `Click`はユーザーの操作でだけ出て、`SetIsChecked`では出ない
-                let click = check.Click(move |sender, _| {
+                let click = check.cast::<IButtonBase>()?.Click(move |sender, _| {
                     let on = sender
                         .ok()
-                        .and_then(|s| s.cast::<CheckBox>()?.IsChecked())
+                        .and_then(|s| s.cast::<IToggleButton>()?.IsChecked())
                         .unwrap_or(false);
                     push(RawEvent::User(Event::Toggle(id, on)));
-                    Ok(())
                 })?;
                 (Part::CheckBox(check), vec![click])
             }
             Init::Choice => {
                 let choice = ComboBox::new()?;
-                let changed = choice.SelectionChanged(move |sender, _| {
-                    if let Ok(index) = sender
-                        .ok()
-                        .and_then(|s| s.cast::<ComboBox>()?.SelectedIndex())
-                        && index >= 0
-                    {
-                        push_if_changed(
-                            id,
-                            Value::Index(index),
-                            Event::Select(id, i64::from(index)),
-                        );
-                    }
-                    Ok(())
-                })?;
+                let changed = choice
+                    .cast::<ISelector>()?
+                    .SelectionChanged(move |sender, _| {
+                        if let Ok(index) = sender
+                            .ok()
+                            .and_then(|s| s.cast::<ISelector>()?.SelectedIndex())
+                            && index >= 0
+                        {
+                            push_if_changed(
+                                id,
+                                Value::Index(index),
+                                Event::Select(id, i64::from(index)),
+                            );
+                        }
+                    })?;
                 (Part::Choice(choice), vec![changed])
             }
             Init::ProgressBar(value) => {
                 let bar = ProgressBar::new()?;
-                bar.SetMinimum(0.0)?;
-                bar.SetMaximum(100.0)?;
-                bar.SetValue(*value as f64)?;
+                let range = bar.cast::<IRangeBase>()?;
+                range.SetMinimum(0.0)?;
+                range.SetMaximum(100.0)?;
+                range.SetValue(*value as f64)?;
                 (Part::ProgressBar(bar), vec![])
             }
         })
@@ -320,23 +322,31 @@ impl WinUiWidgets {
         prop: &Prop,
     ) -> Result<windows_core::Result<()>, GuiError> {
         Ok(match (part, prop) {
-            (Part::Window { window, .. }, Prop::Text(text)) => {
-                window.SetTitle(&HSTRING::from(text.as_str()))
-            }
-            (Part::Label(label), Prop::Text(text)) => label.SetText(&HSTRING::from(text.as_str())),
-            (Part::Button(button), Prop::Text(text)) => button.SetContent(&content(text)),
-            (Part::CheckBox(check), Prop::Text(text)) => check.SetContent(&content(text)),
+            (Part::Window { window, .. }, Prop::Text(text)) => window.SetTitle(text),
+            (Part::Label(label), Prop::Text(text)) => label.SetText(text),
+            (Part::Button(button), Prop::Text(text)) => button
+                .cast::<IContentControl>()
+                .and_then(|c| c.SetContent(&content(text))),
+            (Part::CheckBox(check), Prop::Text(text)) => check
+                .cast::<IContentControl>()
+                .and_then(|c| c.SetContent(&content(text))),
             (Part::TextField(field), Prop::Text(text)) => {
                 self.remember(w, Value::Text(text.clone()));
-                field.SetText(&HSTRING::from(text.as_str()))
+                field.SetText(text)
             }
-            (Part::ProgressBar(bar), Prop::Value(v)) => bar.SetValue(*v as f64),
+            (Part::ProgressBar(bar), Prop::Value(v)) => {
+                bar.cast::<IRangeBase>().and_then(|r| r.SetValue(*v as f64))
+            }
             (Part::Choice(choice), Prop::Value(v)) => {
                 let index = i32::try_from(*v).map_err(|_| GuiError::OutOfRange)?;
                 self.remember(w, Value::Index(index));
-                choice.SetSelectedIndex(index)
+                choice
+                    .cast::<ISelector>()
+                    .and_then(|s| s.SetSelectedIndex(index))
             }
-            (Part::CheckBox(check), Prop::Checked(on)) => check.SetIsChecked(Some(*on)),
+            (Part::CheckBox(check), Prop::Checked(on)) => check
+                .cast::<IToggleButton>()
+                .and_then(|t| t.SetIsChecked(Some(*on))),
             (
                 Part::Button(..)
                 | Part::TextField(..)
@@ -346,7 +356,7 @@ impl WinUiWidgets {
                 Prop::Enabled(on),
             ) => part
                 .element()
-                .and_then(|e| e.cast::<Control>()?.SetIsEnabled(*on)),
+                .and_then(|e| e.cast::<IControl>()?.SetIsEnabled(*on)),
             (
                 Part::Window { .. }
                 | Part::Grid(_)
@@ -373,7 +383,7 @@ impl WinUiWidgets {
         };
         let mut widest = 0.0f32;
         for word in text.split_whitespace() {
-            measurer.SetText(&HSTRING::from(word))?;
+            measurer.SetText(word)?;
             widest = widest.max(desired(&measurer.cast()?, f32::INFINITY)?.w);
         }
         Ok(widest)
@@ -390,7 +400,7 @@ impl WinUiWidgets {
                     Measure::Exact(v) => v,
                     Measure::AtMost(v) if v > 0.0 => desired(&element, v)?.w,
                     Measure::AtMost(_) => {
-                        let text = label.Text()?.to_string_lossy();
+                        let text = label.Text()?;
                         self.longest_word(&text)?
                     }
                     Measure::Unbounded => desired(&element, f32::INFINITY)?.w,
@@ -416,46 +426,48 @@ impl WinUiWidgets {
     }
 
     fn show(&self, window: &Window, size: Size, min: Size) -> windows_core::Result<()> {
-        let app_window: AppWindow = window.AppWindow()?;
+        let app_window: AppWindow = window.cast::<IWindow2>()?.AppWindow()?;
         // AppWindowの大きさは物理的なpxなので、ここでだけ論理pxに倍率を掛ける
         // SAFETY: `IWindowNative`はWinUIの`Window`が持つ相互運用のインターフェースである
-        let hwnd = unsafe { window.cast::<IWindowNative>()?.WindowHandle()? };
+        let mut hwnd = std::ptr::null_mut();
+        unsafe { window.cast::<IWindowNative>()?.window_handle(&mut hwnd) }.ok()?;
         // SAFETY: 生きているウィンドウのハンドルを渡す
         let dpi = unsafe { GetDpiForWindow(hwnd) };
         let scale = if dpi == 0 { 1.0 } else { f64::from(dpi) / 96.0 };
         let px = |v: f32| (f64::from(v) * scale).ceil() as i32;
-        app_window.ResizeClient(SizeInt32 {
-            Width: px(size.w),
-            Height: px(size.h),
+        let client_area = app_window.cast::<IAppWindow2>()?;
+        client_area.ResizeClient(SizeInt32 {
+            width: px(size.w),
+            height: px(size.h),
         })?;
         // 最小の大きさは枠を含むウィンドウ全体の大きさで置く
-        let (outer, client) = (app_window.Size()?, app_window.ClientSize()?);
-        let presenter = app_window.Presenter()?.cast::<OverlappedPresenter>()?;
-        presenter.SetPreferredMinimumWidth(Some(px(min.w) + outer.Width - client.Width))?;
-        presenter.SetPreferredMinimumHeight(Some(px(min.h) + outer.Height - client.Height))?;
+        let (outer, client) = (app_window.Size()?, client_area.ClientSize()?);
+        let presenter = app_window.Presenter()?.cast::<IOverlappedPresenter3>()?;
+        presenter.SetPreferredMinimumWidth(Some(px(min.w) + outer.width - client.width))?;
+        presenter.SetPreferredMinimumHeight(Some(px(min.h) + outer.height - client.height))?;
         window.Activate()
     }
 }
 
 /// 要素が与えた幅の下で求める大きさ。`place`が置いた幅と高さは測る間だけ外す。外さないと、それがそのまま求める大きさに
 /// なるからである。
-fn desired(element: &FrameworkElement, width: f32) -> windows_core::Result<Size> {
-    let (w, h) = (element.Width()?, element.Height()?);
-    element.SetWidth(f64::NAN)?;
-    element.SetHeight(f64::NAN)?;
-    let measured = element.cast::<UIElement>().and_then(|e| {
-        e.Measure(windows::Foundation::Size {
-            Width: width,
-            Height: f32::INFINITY,
-        })?;
-        e.DesiredSize()
-    });
-    element.SetWidth(w)?;
-    element.SetHeight(h)?;
+fn desired(element: &UIElement, width: f32) -> windows_core::Result<Size> {
+    let framework = element.cast::<IFrameworkElement>()?;
+    let (w, h) = (framework.Width()?, framework.Height()?);
+    framework.SetWidth(f64::NAN)?;
+    framework.SetHeight(f64::NAN)?;
+    let measured = element
+        .Measure(bindings::Size {
+            width,
+            height: f32::INFINITY,
+        })
+        .and_then(|()| element.DesiredSize());
+    framework.SetWidth(w)?;
+    framework.SetHeight(h)?;
     let measured = measured?;
     Ok(Size {
-        w: measured.Width,
-        h: measured.Height,
+        w: measured.width,
+        h: measured.height,
     })
 }
 
@@ -463,33 +475,33 @@ impl Widgets for WinUiWidgets {
     fn create_window(&mut self, id: Id, title: &str) -> Result<(), GuiError> {
         let window = Window::new().map_err(winui_error)?;
         let part = (|| {
-            window.SetTitle(&HSTRING::from(title))?;
+            window.SetTitle(title)?;
             let root = Canvas::new()?;
-            window.SetContent(&root)?;
+            window.SetContent(&root.cast::<UIElement>()?)?;
             // 閉じるのはプログラムだけにする
-            let closing = window.AppWindow()?.Closing(move |_, args| {
-                if let Ok(args) = args.ok() {
-                    let _ = args.SetCancel(true);
-                }
-                push(RawEvent::User(Event::CloseRequest(id)));
-                Ok(())
-            })?;
+            let closing = window
+                .cast::<IWindow2>()?
+                .AppWindow()?
+                .Closing(move |_, args| {
+                    if let Ok(args) = args.ok() {
+                        let _ = args.SetCancel(true);
+                    }
+                    push(RawEvent::User(Event::CloseRequest(id)));
+                })?;
             let resized = window.SizeChanged(move |_, args| {
                 if let Ok(size) = args.ok().and_then(|a| a.Size()) {
                     push(RawEvent::Resized(
                         id,
                         Size {
-                            w: size.Width,
-                            h: size.Height,
+                            w: size.width,
+                            h: size.height,
                         },
                     ));
                 }
-                Ok(())
             })?;
-            let theme = root.ActualThemeChanged(move |_, _| {
-                push(RawEvent::Invalidate(id));
-                Ok(())
-            })?;
+            let theme = root
+                .cast::<IFrameworkElement>()?
+                .ActualThemeChanged(move |_, _| push(RawEvent::Invalidate(id)))?;
             Ok((
                 Part::Window {
                     window: window.clone(),
@@ -521,7 +533,7 @@ impl Widgets for WinUiWidgets {
         }
         let (part, events) = self.new_part(id, init).map_err(winui_error)?;
         part.element()
-            .and_then(|e| canvas.Children()?.Append(&e))
+            .and_then(|e| canvas.cast::<IPanel>()?.Children()?.Append(&e))
             .map_err(winui_error)?;
         self.parts.insert(
             id,
@@ -538,8 +550,13 @@ impl Widgets for WinUiWidgets {
         match self.parts.get(&w).map(|h| &h.part) {
             Some(Part::Choice(choice)) => (|| {
                 let entry = ComboBoxItem::new()?;
-                entry.SetContent(&content(item))?;
-                choice.Items()?.Append(&entry.cast::<IInspectable>()?)
+                entry
+                    .cast::<IContentControl>()?
+                    .SetContent(&content(item))?;
+                choice
+                    .cast::<IItemsControl>()?
+                    .Items()?
+                    .Append(&entry.cast::<IInspectable>()?)
             })()
             .map_err(winui_error),
             Some(_) => Err(GuiError::WrongKind),
@@ -572,8 +589,9 @@ impl Widgets for WinUiWidgets {
             let _ = held.part.element().and_then(|e| {
                 Canvas::SetLeft(&e, f64::from(rect.x))?;
                 Canvas::SetTop(&e, f64::from(rect.y))?;
-                e.SetWidth(f64::from(rect.w))?;
-                e.SetHeight(f64::from(rect.h))
+                let framework = e.cast::<IFrameworkElement>()?;
+                framework.SetWidth(f64::from(rect.w))?;
+                framework.SetHeight(f64::from(rect.h))
             });
         }
     }
@@ -624,7 +642,7 @@ impl Widgets for WinUiWidgets {
             }
             (part, Some(parent)) => {
                 let _ = part.element().and_then(|e| {
-                    let children = parent.Children()?;
+                    let children = parent.cast::<IPanel>()?.Children()?;
                     let mut index = 0;
                     if children.IndexOf(&e, &mut index)? {
                         children.RemoveAt(index)?;
