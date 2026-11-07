@@ -20,6 +20,7 @@ use crate::data;
 use crate::driver::DriverKind;
 use crate::error::VmFault;
 use crate::ffi;
+use crate::gui;
 use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::park::{Guard, Park, Pending, PollSource, Progress};
@@ -1006,6 +1007,45 @@ impl<R: Exec> Pending for MainPending<'_, R> {
     fn io(&self) -> Option<PollSource> {
         self.sched.poll
     }
+
+    fn poke(&mut self, gate: i64) {
+        if let Err(fault) = poke_gate(self.sched, gate) {
+            self.fail(fault);
+        }
+    }
+
+    fn release_gate(&mut self, gate: i64) {
+        let released = self.sched.cells.lock().release_gate(gate);
+        if let Err(fault) = released {
+            self.fail(fault.into());
+        }
+    }
+}
+
+impl<R: Exec> MainPending<'_, R> {
+    /// `Park`が呼んだ登録表の操作の誤りを、`run`の誤りと同じくrunの誤りにする。続く`run`は`Stopping`を返す。
+    fn fail(&mut self, fault: VmFault) {
+        if self.stop.is_none() {
+            self.stop = Some(main_fault(fault));
+        }
+        self.sched.guard = Guard::Stopped(0);
+    }
+}
+
+/// ゲート`gate`に知らせ、起こしたタスクを積む。`Std.Gui.poke_raw`の腕とメインのworkerの`Pending::poke`が使う
+/// (docs/spec/vm.mdの「セルと登録表」)。
+fn poke_gate<P: Policy>(sched: &mut Scheduler<P>, gate: i64) -> Result<(), VmFault> {
+    let mut runs = Vec::new();
+    {
+        here!(sched, post, here);
+        let mut cells = sched.cells.lock();
+        cells.poke_gate(gate, &mut sched.woken)?;
+        cells.route(&mut sched.woken, &here, &mut runs)?;
+    }
+    for run in runs {
+        schedule(sched, run)?;
+    }
+    Ok(())
 }
 
 /// メインのworkerの1回の仕事。受け箱の知らせを取り、走れるタスクを列が空になるまで動かして戻る。列が空になった
@@ -3592,9 +3632,26 @@ fn async_op<R: Exec>(
                 }
             }
         }
+        // GUIを開く行と、ゲートの行。ゲートは登録表のセルである (docs/spec/vm.mdの「GUI の Park」)
+        Extern::GuiWantRaw => match gui::want(sched)? {
+            Ok(gate) => task.set_raw(dst, gate),
+            Err(raise) => return raise_again::<R>(code, ctx, task, dst, raise, ext),
+        },
+        Extern::GuiOpenUiRaw => match gui::open_ui(ctx, sched, task.raw(arg(0)))? {
+            Ok(ui) => task.set(dst, ui),
+            Err(raise) => return raise_again::<R>(code, ctx, task, dst, raise, ext),
+        },
+        Extern::GuiPokeRaw => {
+            poke_gate(sched, task.raw(arg(0)))?;
+            task.set(dst, Word::UNIT);
+        }
+        Extern::GuiAbandonRaw => {
+            gui::abandon(sched, task.raw(arg(0)))?;
+            task.set(dst, Word::UNIT);
+        }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net, Std.Stream, Std.Exec and Std.Tls reached the Async instruction",
+                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net, Std.Stream, Std.Exec, Std.Tls and Std.Gui reached the Async instruction",
             ));
         }
     }
@@ -4430,6 +4487,30 @@ fn run_extern<R: Exec>(
                 let w = tls::take_line(ctx, task.get(arg(0)))?;
                 task.set(dst, w);
             }
+            // toolkitに触れる行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Gui`」)
+            Extern::GuiCloseUi
+            | Extern::GuiBeginWindowRaw
+            | Extern::GuiBeginGridRaw
+            | Extern::GuiEndRaw
+            | Extern::GuiNextCellRaw
+            | Extern::GuiCreateRaw
+            | Extern::GuiAddItemRaw
+            | Extern::GuiSetTextRaw
+            | Extern::GuiSetIntRaw
+            | Extern::GuiCloseWindowRaw
+            | Extern::GuiOpenWindowsRaw
+            | Extern::GuiFlushRaw
+            | Extern::GuiPollRaw
+            | Extern::GuiEventIntRaw
+            | Extern::GuiEventTextRaw => {
+                let n = ext.row().params.len();
+                let mut args = [Word::UNIT; 5];
+                for (i, w) in args.iter_mut().enumerate().take(n) {
+                    *w = task.get(arg(i));
+                }
+                let w = gui::arm(ctx, ext, &args[..n])?;
+                task.set(dst, w);
+            }
             // いつも誤りを返すので、宛先には書かない。届け先は `failed` が決める (docs/spec/vm.md の「extern の中断」)
             Extern::FailIo => {
                 let message = ctx.copy_string(task.get(arg(1)), usize::MAX)?;
@@ -4785,7 +4866,11 @@ fn run_extern<R: Exec>(
             | Extern::ExecReap
             | Extern::TlsSubmitClient
             | Extern::TlsSubmitPush
-            | Extern::TlsTakeConn => {
+            | Extern::TlsTakeConn
+            | Extern::GuiWantRaw
+            | Extern::GuiOpenUiRaw
+            | Extern::GuiPokeRaw
+            | Extern::GuiAbandonRaw => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

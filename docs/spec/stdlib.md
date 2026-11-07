@@ -1020,6 +1020,7 @@ main () = println (show (Async.run body))
 | `start_on_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
 | `start_off_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
 | `spawn_off_main` | `(Unit -> <IO, Panic, Async> Unit) -> <IO, Async> Unit` | eml |
+| `gui_wait` | `Cell -> <IO, Async> Wake` | eml |
 | `run_on_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` | eml |
 | `try_all` | `(Unit -> <IO, Panic \| e> a) -> <IO \| e> Result Failure a` | eml |
 | `Failure` | `IOFailed IOError` と `Panicked String` を持つ型 | eml (`deriving (Show)`) |
@@ -1126,6 +1127,7 @@ pub data Failure =
 - `fork_job f` は `f` を仕事として、空いている worker の受け箱か呼んだ worker の実行待ちに置き、仕事の token を返す。閉包は仕事として動き、`fork_job` が消費する。`take_job j` は token を消費して、終わった仕事の結果を返すか、仕事の中断を起こし直す。`drop_job j` は token を消費して、終わった仕事の終わりを落とす。どちらも、仕事を出したタスクが仕事の終わった後に呼ぶ。std の `compute` は `job_cell` で借りたセルを `await_cell` で待ってから呼ぶ ([VM](vm.md) の「`compute` の仕事」)
 - `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のためのインターフェースで、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
 - `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.Net` のためのインターフェースで、同じ理由で `pub` である。処理系も、`blocking` の C の関数の呼び出しの受け付けと取り出しの間で `io_wait` を呼ぶ ([VM](vm.md) の「`blocking` の呼び出し」)。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.Net`」)。どちらも先に `op_ready` を呼ぶ。0 なら perform せずに `(Woke, op)` を返し、2 なら `reschedule ()` で列の後ろへ回ってから、その `Wake` を見ずに `(Woke, op)` を返す。1 のときだけ `await_io` か `await_io_until` を perform して待つ。回る間に届いた取り消しは、次の取り消しの地点で投げる
+- `gui_wait` (`Cell -> <IO, Async> Wake`) は`Std.Gui`のためのインターフェースで、同じ理由で`pub`である。ゲートのセルで待つ取り消しの地点である。ゲートは旗と高々1つの待ち手を持つ登録表のセルで、前の待ちの後に知らせが届いていれば旗を下ろしてすぐ`Woke`で戻る。取り消しは旗より先に見る ([VM](vm.md) の「セルと登録表」、下の「`Std.Gui`」)。ゲートを作る公開の関数はないので、利用者は呼べない
 - `io_wait_shielded` (`OpId -> <IO, Async> OpId`) も `Std.Net` のためのインターフェースである。`shield` と同じ深さの印の中で `io_wait` を呼び、`Wake` を捨てて token を返す。中の待ちは外の取り消しで外れず、いつも操作が終わってから戻る。`shield` は本体の行に `Panic` を求めるので、`Panic` を持たない `Std.Net` の包みのためにこの形にする
 - `signal_wait` (`Int -> <IO, Async> Wake`) は `Std.Signal` のためのインターフェースで、同じ理由で `pub` である。0 と 1 のほかの番号は、待たずに種類 `NotAvailable` の IO の失敗 (`no such signal`) にする。利用者が呼んでも、`Signal.wait` と同じ待ちになるだけである (下の「`Std.Signal`」)
 
@@ -1816,6 +1818,93 @@ main () = Async.run (fn () ->
 | 接続、TLS、読み書き、取り消しの失敗 | `Std.Net` と `Std.Tls` と同じ | `Std.Net` と `Std.Tls` の文言 |
 
 URL の誤りの理由は、`the URL contains a space, a control or a non-ASCII character`、`the scheme is not http or https`、`userinfo is not supported`、`IPv6 addresses are not supported`、`the host is not valid`、`the port is not valid` のどれかである。`Location` の誤りの理由は、これに `the location is not an absolute URL or an absolute path` を足したものである。`{url}` は渡した URL、`{coding}` は `Transfer-Encoding` の値を `, ` でつないだもの、`{location}` は前後の空白を除いた `Location` の値、`{n}` は `max_redirects` である。
+
+## `Std.Gui`
+
+`Std.Gui`はネイティブのGUIのtoolkitである。プログラムはウィンドウを直接の形で1回だけ組み、ハンドルを通してウィジェットを変え、`wait`でメッセージを取り出す。toolkitの層とbackendは`eml_gui`にある (docs/implementation/architecture.mdの「`eml_gui`の内部」)。
+
+```haskell
+counter : Unit -> <Gui Msg, IO, Panic, Async> Unit
+counter () =
+  use _ <- Gui.window "Counter" Quit
+  use Gui.grid [Fr 1, Fr 1] []
+  let shown = Gui.cell { Gui.default_cell | col_span = 2 } (fn () -> Gui.label "0")
+  let _ = Gui.button "-" Dec
+  let _ = Gui.button "+" Inc
+  let loop n =
+    match Gui.wait () with
+      | Inc ->
+        Gui.text shown (show (n + 1))
+        loop (n + 1)
+      | Dec ->
+        Gui.text shown (show (n - 1))
+        loop (n - 1)
+      | Quit -> println "final \{show n}"
+  loop 0
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  use Async.run
+  Gui.run counter
+```
+
+ウィジェットのメッセージは、作るときにそのウィジェットに結び付ける。ウィジェットのハンドルは`Unr`のidである。handler `run`はtoolkitのハンドル`Ui` (`Lin`) をhandlerの状態として持ち、ほかのコードからは見えない。
+
+公開の名前は次のとおりである。データの型`Track` (`Auto`、`Fr Int`、`Px Int`)、`Align` (`Start`、`Center`、`End`、`Stretch`)、`Cell` (`col_span`、`row_span`、`halign`、`valign`) と`default_cell` (幅は1、`Stretch`)。抽象の型`Window`、`Grid`、`Label`、`Button`、`TextField`、`CheckBox`、`Choice`、`ProgressBar`、`Sink msg`。クラス`Widget w` (`wid : w -> Int`)。17の操作を持つエフェクト`Gui msg`。包みの関数`window`、`grid`、`cell`、`text`、`enable`、`value`、`select`、`checked`、`post`、`run`。エフェクトは抽象ではないので、テストは自分のhandlerで扱える。
+
+- `run app` (`(Unit -> <Gui msg, IO, Panic, Async> a) -> <IO, Panic, Async> a`) は、`Async.run_on_main`で`app`を固定したタスクとして動かす (上の「メインのworker」)。`Gui`の操作は自分では`IO`も`Async`も持たない
+- 開くのは2段である。タスクは`want_gui_raw`でゲートのセルを作り、`Async.gui_wait`でそこで待つ。メインのworkerのGUIの`Park`がbackendを作ってネイティブのループに入り、ループの中からゲートに知らせる。タスクはそれから`open_ui_raw`を呼ぶので、toolkitの呼び出しはどれもネイティブのループの中で動く ([VM](vm.md)の「GUI の Park」)
+- ゲートで待つ間に取り消された`run`は、`abandon_raw`でゲートを放し、`Cancelled`で失敗する。次の`run`は開ける
+- `wait ()`は次の順に見る。取り消しの地点、flush (変わったウィンドウの配置と新しいウィンドウの表示)、次のネイティブのイベント、次に送られたメッセージ、そしてウィンドウが1つも開いておらず`sink`も取っていなければ失敗`Other "gui: wait with no open window and no sink"`。どれもなければゲートで待ち、初めから見直す。引き出しと待ちの間に届いた知らせはゲートの旗を立てるので、待ちはすぐに戻る
+- `sink ()`は、`run`のchannel (容量64) とゲートを持つ`Sink msg`を返す。`post sink m`は、どのworkerのどのタスクからも呼べ、`m`を送ってからゲートに知らせる。`run`が戻った後に送ったメッセージは捨てる。channelは閉じていて、放したゲートへの知らせは何もしないからである
+- `app`が戻るか、失敗するか、取り消されると、`run`はchannelを閉じて`Ui`を手放す。`Ui`を手放すことは旗を立てるだけで、ウィンドウは`Park`が次の段ですべて閉じる。そのため、正常な終わり、panic、取り消しのどれでもウィンドウは閉じる
+- 求めるか開いているGUIは一度に1つだけである。ほかの`run`が開くのを待っているか`Ui`を開いている間の`run`は、`Other "cannot open the GUI: it is already open"`で失敗する。GUIの`Park`のないrun (`eml repl`、`eml run`の`Park`を置かないrun、feature `gui`のない処理系) では、`run`は`NotAvailable "cannot open the GUI: not available"`で失敗する
+- GUIを求めるか開いている間は、プログラムをデッドロックと判定しない。利用者を待っていることがあるからである。開くのに失敗したか、ウィンドウができる前に取り消された`run`はその期間を終えるので、その後のデッドロックはまた報告される
+
+ウィジェットのidは`(window_no << 32) | seq`である。`window_no`は開いた`Ui`ごとに1から数え、`seq`の0はウィンドウ自身である。idは使い回さない。閉じたウィジェットのidは`NotFound`で失敗し、閉じたウィジェットのイベントは捨てる。`close_window`は、idの上位32ビットがそのウィンドウと同じウィジェットのhandlerをすべて忘れる。
+
+行が1つのイベントで渡すのは`Int`と多くても1つの`String`だけで、`msg`の値はemlの側で作る。`poll_raw`は次のイベントのウィジェットのidを返し、イベントがなければ0を返す。`event_int_raw`と`event_text_raw`はそのイベントの中身を読み、どちらを読むかはそのidに登録したhandlerが決める。`create_raw`の種類の番号はLabel 1、Button 2、TextField 3、CheckBox 4、Choice 5、ProgressBar 6、`set_int_raw`の性質の番号はvalue 1、checked 2、enabled 3、揃えの番号はStart 0、Center 1、End 2、Stretch 3である。trackは`a`、`f<n>`、`p<n>`を`,`でつないだ文字列で渡す。正でない`Fr`と負の`Px`は範囲の外である。
+
+| 性質 | ウィジェット | 値 |
+|---|---|---|
+| text | Window (題名)、Label、Button、TextField、CheckBox | どの文字列も |
+| value | ProgressBar、Choice | ProgressBarは0..=100に収める。Choiceの番号は`0 <= i < 項目の数`でなければならない |
+| checked | CheckBox | `Bool` |
+| enabled | Button、TextField、CheckBox、Choice、ProgressBar | `Bool` |
+
+空のChoiceへの`select`は範囲の外で、`choice`は空の列では最初の`select`をしない。イベントは、Buttonのクリック、編集のたびのTextFieldの文字、CheckBoxの切り替え、Choiceの選択、ウィンドウを閉じる要求である。
+
+| 誤り | IOの失敗 |
+|---|---|
+| 開いた入れ物がない | `Other "gui: no open container"` |
+| 知らないか閉じたウィジェット | `NotFound "gui: unknown or closed widget"` |
+| ウィジェットにない性質 | `Other "gui: the widget has no such property"` |
+| 範囲の外の値 | `Other "gui: a value is out of range"` |
+| ネイティブのtoolkitか画面がない | backendの文言の`NotAvailable` (`cannot open the GUI: built without the native toolkit`) |
+| ほかのbackendの誤り | backendの文言の`Other` |
+
+配置はTaffyが置くgridで、置き方は自動だけである。gridはtrack (`Auto | Fr n | Px n`) の列と行を持ち、`rows = []`は暗黙の`Auto`の行である。子は行の順に埋める。子は直前の`cell`の`col_span`、`row_span`、`halign`、`valign` (なければ`default_cell`) を持ち、gridは入れ子にできる。間隔は8、ウィンドウの余白は12の論理pxで、どちらも固定である。ウィンドウは自然な大きさで開き、最小の幅はmin-contentの幅である。座標、大きさ、DPIの値はemlに渡らない。
+
+externの行は次の19行で、どれも`pub`でない。`want_gui_raw`、`open_ui_raw`、`poke_raw`、`abandon_raw`は登録表のゲートのセルに触れるので、VMは`Async`の命令として実行する ([VM](vm.md)の「GUI の Park」)。ほかの行は待たず、普通のexternの行としてメインのスレッドのtoolkitに触れる。`Ui`を消費して返す行は、失敗するときは`Ui`を手放してから投げる。
+
+| 行 | 型 |
+|---|---|
+| `want_gui_raw` | `Unit -> <IO> Async.Cell` |
+| `open_ui_raw` | `Async.Cell -> <IO> Ui` |
+| `close_ui` | `Ui -> <IO> Unit` |
+| `begin_window_raw` | `String -> Ui -> <IO> (Int, Ui)` |
+| `begin_grid_raw` | `String -> String -> Ui -> <IO> (Int, Ui)` |
+| `end_raw`、`flush_raw` | `Ui -> <IO> Ui` |
+| `next_cell_raw` | `Int -> Int -> Int -> Int -> Ui -> <IO> Ui` |
+| `create_raw` | `Int -> String -> Int -> Ui -> <IO> (Int, Ui)` |
+| `add_item_raw`、`set_text_raw` | `Int -> String -> Ui -> <IO> Ui` |
+| `set_int_raw` | `Int -> Int -> Int -> Ui -> <IO> Ui` |
+| `close_window_raw` | `Int -> Ui -> <IO> Ui` |
+| `open_windows_raw`、`poll_raw`、`event_int_raw` | `Ui -> <IO> (Int, Ui)` |
+| `event_text_raw` | `Ui -> <IO> (String, Ui)` |
+| `poke_raw`、`abandon_raw` | `Async.Cell -> <IO> Unit` |
+
+放したゲートで待つのは、ほかのセルと同じく内部の誤りである。stdはそうしない。`Ui`はどれも自分のゲートを持ち、`abandon_raw`は開かなかったゲートを放し、runより長く残るゲートの値は`Sink`の中のものだけで、それを使うのは`poke_raw`だけであり、放したゲートへの知らせは何もしないからである。
 
 ## `Std.Signal`
 

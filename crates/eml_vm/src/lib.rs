@@ -28,6 +28,7 @@ mod doorbell;
 mod driver;
 mod error;
 mod ffi;
+mod gui;
 mod hosts;
 mod jobs;
 mod monitor;
@@ -43,8 +44,13 @@ pub use disasm::disassemble;
 pub use doorbell::Doorbell;
 pub use driver::{Clock, Signal, VirtualSignal};
 pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
+/// GUIのtoolkitの層。`eml run`はここのbackendと筋書きでGUIの`Park`を作る (docs/spec/vm.mdの「GUI の Park」)。
+#[cfg(feature = "gui")]
+pub use eml_gui;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
+#[cfg(feature = "gui")]
+pub use gui::park as gui_park;
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
 pub use park::{DefaultPark, Park, ParkFactory, Pending, PollSource, Progress};
 pub use sched::{Memory, Normal, Policy, Sched, Scheduler, Seeded, Sequential};
@@ -155,6 +161,11 @@ pub struct Finished {
     /// この run がほかの worker に置いた `compute` の仕事の数。どの worker の `fork_job` も数える
     /// (docs/spec/vm.md の「`compute` の仕事」)。
     pub placed_jobs: u64,
+    /// runの外の待ちの印(`Run.holds`)を立てた回数と、下ろした回数。立てるのは`want_gui_raw`、下ろすのは回収、
+    /// `abandon_raw`、作るときの誤りを返す`open_ui_raw`である。期間がつながる2つの`Gui.run`では1回立てて1回下ろす
+    /// (docs/spec/vm.mdの「GUI の Park」)。
+    pub holds_raised: u64,
+    pub holds_lowered: u64,
 }
 
 /// VM だけが知る仕事の回数。検査モードだけで数える。
@@ -806,6 +817,8 @@ impl<M: Mode> Machine<M> {
             placed_tasks: scheduled.placed_tasks,
             pinned_tasks: scheduled.pinned_tasks,
             placed_jobs: scheduled.placed_jobs,
+            holds_raised: scheduled.holds_raised,
+            holds_lowered: scheduled.holds_lowered,
         }
     }
 
@@ -930,6 +943,9 @@ struct Scheduled<M: Mode> {
     pinned_tasks: u64,
     /// ほかの worker に置いた `compute` の仕事の数。
     placed_jobs: u64,
+    /// `Run.holds`を立てた回数と下ろした回数。
+    holds_raised: u64,
+    holds_lowered: u64,
     /// runの最初に記録したpanic。`Machine`のスレッドで起こし直す。
     panic: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -956,6 +972,8 @@ impl<M: Mode> Scheduled<M> {
             placed_tasks: 0,
             pinned_tasks: 0,
             placed_jobs: 0,
+            holds_raised: 0,
+            holds_lowered: 0,
             panic: None,
         }
     }
@@ -1537,6 +1555,8 @@ fn finish_run<M: Mode>(
         placed_tasks,
         pinned_tasks,
         placed_jobs: run.placed_jobs.load(std::sync::atomic::Ordering::Relaxed),
+        holds_raised: run.holds_raised.load(std::sync::atomic::Ordering::Relaxed),
+        holds_lowered: run.holds_lowered.load(std::sync::atomic::Ordering::Relaxed),
         panic: None,
     };
     (result, scheduled)

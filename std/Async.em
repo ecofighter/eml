@@ -192,6 +192,10 @@ start_off_main f = start_off_main_raw (bottom f)
 pub spawn_off_main : (Unit -> <IO, Panic, Async> Unit) -> <IO, Async> Unit
 spawn_off_main f = detach (start_off_main_raw (bottom f))
 
+-- ゲートのセルで待つ。前の待ちの後にゲートへ知らせが届いていれば、すぐに戻る (docs/spec/vm.mdの「セルと登録表」)
+pub gui_wait : Cell -> <IO, Async> Wake
+gui_wait c = await_cell c
+
 -- `ms` ミリ秒待つ取り消しの地点。0 以下なら実行待ちの列の後ろへ回るだけである (docs/spec/stdlib.md の「時間」)
 pub sleep_ms : Int -> <IO, Async> Unit
 sleep_ms ms =

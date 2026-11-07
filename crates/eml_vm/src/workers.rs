@@ -282,6 +282,9 @@ pub(crate) struct Run {
     /// デッドロックの判定で`running`の後にAcquireで読み、真の間は判定せずに待つ (docs/spec/vm.mdの
     /// 「メインのworkerの待ち」)。
     holds: AtomicBool,
+    /// `holds`を偽から真にした回数と、真から偽にした回数 (docs/spec/vm.mdの「GUI の Park」)。
+    pub(crate) holds_raised: AtomicU64,
+    pub(crate) holds_lowered: AtomicU64,
     /// 送った子の知らせのうち、終わりの知らせをまだ受け取っていないものの数。親を失った節点の分も数える。
     pub(crate) in_flight: AtomicUsize,
     /// ほかの worker に置いた右の子の数。どの worker の fork も足す。
@@ -365,6 +368,8 @@ impl Run {
             seat,
             running: AtomicUsize::new(1),
             holds: AtomicBool::new(false),
+            holds_raised: AtomicU64::new(0),
+            holds_lowered: AtomicU64::new(0),
             in_flight: AtomicUsize::new(0),
             placed: AtomicU64::new(0),
             placed_jobs: AtomicU64::new(0),
@@ -723,10 +728,16 @@ impl Run {
     /// 眠りから来る判定は、見逃しうる。`Park`はタスクを動かさせる前に立てるので、そのタスクが始めた待ちで眠った
     /// メインのworkerの判定は、立てた真を読む。
     pub(crate) fn swap_holds(&self, holds: bool) -> bool {
-        self.holds.swap(holds, Ordering::AcqRel)
+        let old = self.holds.swap(holds, Ordering::AcqRel);
+        match (old, holds) {
+            (false, true) => self.holds_raised.fetch_add(1, Ordering::Relaxed),
+            (true, false) => self.holds_lowered.fetch_add(1, Ordering::Relaxed),
+            _ => 0,
+        };
+        old
     }
 
-    fn holds(&self) -> bool {
+    pub(crate) fn holds(&self) -> bool {
         self.holds.load(Ordering::Acquire)
     }
 

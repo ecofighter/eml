@@ -75,7 +75,7 @@ close W:S
 quit
 ```
 
-Loop: (1) `run_loop` logs `run_loop` and calls `step(Woken)`, even if the waker rang before. (2) After each `Continue`, if a scripted event remains, push it and call `step(Events)`; scripted events go before rings and timeouts. (3) A script that is empty from the start pushes, after the first `Continue` with shown windows, one `CloseRequest` per shown window, once. (4) Otherwise wait on a condvar for a ring (`step(Woken)`) or the timeout (`step(Timeout)`). (5) After 5 s with nothing: `Err(io::Error::other("stub: nothing woke the loop for 5 s"))`; a pending timeout longer than 5 s does not count, so a stub run with such a timer fails rather than finishing late. (5a) When `run_loop` is given an I/O source, the stub does not look at it (eml_gui has no OS polling); instead it never waits longer than 10 ms and calls `step(Io)` each time that wait ends without a ring, so pinned-task I/O on the real driver still completes. The 5 s failure does not apply while an I/O source is given. (6) `Stop` logs `stop` and returns.
+Loop: (1) `run_loop` logs `run_loop` and calls `step(Woken)`, even if the waker rang before. (2) After each `Continue`, if a scripted event remains, push it and call `step(Events)`; scripted events go before rings and timeouts. (3) A script that is empty from the start pushes, after the first `Continue` with shown windows, one `CloseRequest` per shown window, once. (4) Otherwise wait on a condvar for a ring (`step(Woken)`) or the timeout (`step(Timeout)`). (5) After 5 s with nothing: `Err(io::Error::other("stub: nothing woke the loop for 5 s"))`; a pending timeout longer than 5 s does not count, so a stub run with such a timer fails rather than finishing late. (5a) When `run_loop` is given an I/O source, the stub does not look at it (eml_gui has no OS polling); instead it never waits longer than 10 ms and calls `step(Io)` each time that wait ends without a ring, so pinned-task I/O on the real driver still completes. The 5 s failure applies here too: it counts the time since the last ring, scripted event or timeout, and `step(Io)` wake-ups do not reset it, so a stuck real-clock stub run fails instead of stepping every 10 ms until it is killed. (6) `Stop` logs `stop` and returns.
 
 ## 3. Extern rows (T-4, T-6)
 
@@ -163,7 +163,7 @@ In `crates/eml_extern/src/lib.rs`. Run rustfmt over them.
         GuiAbandonRaw => row("Std.Gui.abandon_raw", &[Int], Unit, Purity::Effectful),
 ```
 
-The comment on the `GuiUi` row: `// 実行の世代と回収の旗を持つ`Foreign`。Kindは`Lin` (docs/spec/stdlib.md の「`Std.Gui`」)`.
+The comment on the `GuiUi` row: `// 実行の世代と回収の旗を持つ`Foreign`。Kindは`Lin` (docs/spec/stdlib.mdの「`Std.Gui`」)`.
 
 Every row is `Purity::Effectful`, so `faults = true`; `writes = false`; `held` is all false except `AsyncStartOffMainRaw`. `AsyncStartOffMainRaw`, `GuiWantRaw`, `GuiOpenUiRaw`, `GuiPokeRaw` and `GuiAbandonRaw` go into `is_async` (around lines 2162-2265) and the `Op::Async` list (`vm.rs:4674-4776`); the other 15 are `run_extern` arms. Rows that consume the `Ui` (`end_raw`, `next_cell_raw`, `add_item_raw`, `set_text_raw`, `set_int_raw`, `close_window_raw`, `flush_raw`, `close_ui`) call `ctx.heap_mut().decref(ui)` before raising (docs/spec/lir.md around line 274).
 
@@ -208,7 +208,7 @@ spawn_off_main f = detach (start_off_main_raw (bottom f))
 After them, in T-6:
 
 ```haskell
--- ゲートのセルで待つ。前の待ちの後にゲートへ知らせが届いていれば、すぐに戻る (docs/spec/vm.md の「セルと登録表」)
+-- ゲートのセルで待つ。前の待ちの後にゲートへ知らせが届いていれば、すぐに戻る (docs/spec/vm.mdの「セルと登録表」)
 pub gui_wait : Cell -> <IO, Async> Wake
 gui_wait c = await_cell c
 ```
@@ -224,7 +224,7 @@ extern start_off_main_raw : (Unit -> <IO, Async> Unit) -> <IO> Task a
 The whole module, verbatim. It type-checks against the rows above (with the arms stubbed), and the seven probe programs, including the three examples below, compile through the LIR verifier.
 
 ```haskell
--- ネイティブのGUIのtoolkit (docs/spec/stdlib.md の「`Std.Gui`」)。`run`は、固定したタスクの上で、toolkitのハンドル`Ui`を
+-- ネイティブのGUIのtoolkit (docs/spec/stdlib.mdの「`Std.Gui`」)。`run`は、固定したタスクの上で、toolkitのハンドル`Ui`を
 -- handlerの状態として持つ。部品はUnrのidで、メッセージは作るときに部品に結び付け、`wait`で引き出す
 import Async (Async)
 import Async
@@ -357,7 +357,7 @@ data Handler msg =
 data State msg : Lin =
   | State { ui : Ui, chan : Chan.Chan msg, gate : Async.Cell, has_sink : Bool, handlers : Map.Map Int (Handler msg) }
 
--- `create_raw`の種類の番号と`set_int_raw`の性質の番号 (docs/spec/stdlib.md の「`Std.Gui`」)
+-- `create_raw`の種類の番号と`set_int_raw`の性質の番号 (docs/spec/stdlib.mdの「`Std.Gui`」)
 label_kind : Int
 label_kind = 1
 button_kind : Int
@@ -430,7 +430,7 @@ run_here app =
         x
 
 -- 2段階で開く。メインのworkerの`Park`がネイティブのループを動かすまで、タスクはゲートで待つ。そのため、toolkitの
--- 呼び出しはすべてそのループの中で動く (docs/spec/vm.md の「GUI の Park」)
+-- 呼び出しはすべてそのループの中で動く (docs/spec/vm.mdの「GUI の Park」)
 open_state : Unit -> <IO, Async> State msg
 open_state () =
   let gate = want_gui_raw ()
@@ -520,7 +520,7 @@ listen h f st =
   let State { ui, chan, gate, has_sink, handlers } = st
   State { ui, chan, gate, has_sink, handlers = Map.insert h f handlers }
 
--- 閉じたウィンドウの部品は、idの上位32ビットがそのウィンドウと同じである (docs/spec/stdlib.md の「`Std.Gui`」)
+-- 閉じたウィンドウの部品は、idの上位32ビットがそのウィンドウと同じである (docs/spec/stdlib.mdの「`Std.Gui`」)
 forget_window : Int -> State msg -> State msg
 forget_window h st =
   let State { ui, chan, gate, has_sink, handlers } = st
@@ -775,7 +775,7 @@ fn release_gate(&mut self, gate: i64);
 ```rust
 pub struct Slot {
     backend: Cell<Option<eml_gui::Backend>>,      // taken at the first create
-    native: RefCell<Option<eml_gui::Native>>,     // widgets + queue; event_loop moves into GuiPark
+    parts: RefCell<Option<Parts>>,                // Parts { widgets, queue } of the created Native; event_loop moves into GuiPark
     create_error: RefCell<Option<GuiError>>,      // sticky for the run (Backend is consumed)
     opening: Cell<Option<i64>>,                   // gate of a want_gui_raw not yet opened
     poked: Cell<bool>,                            // step has poked `opening`
@@ -817,9 +817,9 @@ loop {
 }
 ```
 
-`reap(pending)` runs only when a Ui exists and its reap flag is set: `toolkit.close_all()`, `set_presence(false)`, `slot.toolkit = None`, `let s = slot.ui.take()`, `pending.release_gate(s.gate)`, `pending.set_holds(false)`.
+`reap(pending)` runs only when a Ui exists and its reap flag is set: `toolkit.close_all()`, `set_presence(false)`, `slot.toolkit = None`, `let s = slot.ui.take()`, `pending.release_gate(s.gate)`, `if opening.is_none() { pending.set_holds(false) }`.
 
-Second `Gui.run` in sequence: the first run's `close_ui` sets the reap flag; in the same `pending.run()` the second `want_gui_raw` succeeds (the old Ui is flagged), sets `opening = g2` and parks on `g2`; `run` returns `Wait`; the loop repeats because the old Ui is flagged; that pass reaps it (releasing `g1`, lowering holds), pokes `g2` and runs again; `open_ui_raw(g2)` raises holds. Totals: raised 2, lowered 2.
+Second `Gui.run` in sequence: the first run's `close_ui` sets the reap flag; in the same `pending.run()` the second `want_gui_raw` succeeds (the old Ui is flagged), sets `opening = g2` and parks on `g2`; `run` returns `Wait`; the loop repeats because the old Ui is flagged; that pass reaps it (releasing `g1`), pokes `g2` and runs again; `open_ui_raw(g2)` opens the second Ui. Totals: raised 1, lowered 1 (the raise at `want(g2)` is a no-op swap; the reaper skips the lower because `g2` is opening; `g2`'s reap lowers).
 
 ## 8. CLI (T-7)
 

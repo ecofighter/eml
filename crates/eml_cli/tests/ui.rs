@@ -516,6 +516,8 @@ fn stats_are_compared_by_cancellations_and_channels() {
                 placed_tasks: 0,
                 pinned_tasks: 0,
                 placed_jobs: 0,
+                holds_raised: 0,
+                holds_lowered: 0,
             }
         });
         Ran {
@@ -562,6 +564,8 @@ fn stats_of_driver_runs_are_compared_without_the_work_counts() {
                 placed_tasks: 0,
                 pinned_tasks: 0,
                 placed_jobs: 0,
+                holds_raised: 0,
+                holds_lowered: 0,
             }),
         }
     };

@@ -265,9 +265,16 @@ struct StubLoop {
 }
 
 impl StubLoop {
-    /// 起こされるか、`timeout`が過ぎるまで待つ。I/Oの源があれば`IO_POLL`で切り上げて`Io`を返す。源がなく、どちらも起きないまま上限を過ぎたら`None`を返す。
-    fn wait(&self, timeout: Option<Duration>, io: bool) -> Option<Reason> {
-        let cap = if io { IO_POLL } else { self.idle_limit };
+    /// 起こされるか、`timeout`が過ぎるまで待つ。I/Oの源があれば`IO_POLL`で切り上げて`Io`を返す。`idle_since`から
+    /// 何も起きないまま上限を過ぎたら`None`を返す。`Io`の切り上げは何かが起きたことに数えないので、源があっても止まった
+    /// ループは失敗する。
+    fn wait(&self, timeout: Option<Duration>, io: bool, idle_since: Instant) -> Option<Reason> {
+        let idle_left = self.idle_limit.saturating_sub(idle_since.elapsed());
+        let cap = if io {
+            IO_POLL.min(idle_left)
+        } else {
+            idle_left
+        };
         let limit = timeout.map_or(cap, |t| t.min(cap));
         let deadline = Instant::now() + limit;
         let mut rang = self.bell.rang.lock().unwrap();
@@ -282,7 +289,7 @@ impl StubLoop {
             Some(Reason::Woken)
         } else if timeout.is_some_and(|t| t <= cap) {
             Some(Reason::Timeout)
-        } else if io {
+        } else if cap < idle_left {
             Some(Reason::Io)
         } else {
             None
@@ -301,7 +308,11 @@ impl EventLoop for StubLoop {
         // 最初の`step(Woken)`は、その前に鳴った起こしもまとめて扱う
         *self.bell.rang.lock().unwrap() = false;
         let mut reason = Reason::Woken;
+        let mut idle_since = Instant::now();
         loop {
+            if reason != Reason::Io {
+                idle_since = Instant::now();
+            }
             let timeout = match step(reason) {
                 Step::Stop => {
                     log("stop".to_string());
@@ -323,7 +334,7 @@ impl EventLoop for StubLoop {
                 continue;
             }
             reason = self
-                .wait(timeout, io.is_some())
+                .wait(timeout, io.is_some(), idle_since)
                 .ok_or_else(|| io::Error::other("stub: nothing woke the loop for 5 s"))?;
         }
     }
@@ -677,17 +688,16 @@ quit
 
     #[cfg(unix)]
     #[test]
-    fn run_loop_with_an_io_source_steps_io_every_10_ms_and_never_gives_up() {
+    fn run_loop_with_an_io_source_steps_io_every_10_ms() {
         let mut lp = stub_loop(vec![], EventQueue::new());
+        lp.idle_limit = IDLE_LIMIT;
         let mut reasons = Vec::new();
-        let start = Instant::now();
         lp.run_loop(Some(IoSource::Fd(-1)), None, &mut |r| {
             reasons.push(r);
             match reasons.len() {
-                // 5回の待ちは、何も起きないときのstubの上限 (このテストでは20 ms) より長い
-                1..=5 => Step::Continue(None),
-                6 => Step::Continue(Some(Duration::from_millis(1))),
-                7 => Step::Continue(Some(Duration::from_secs(60))),
+                1 | 2 => Step::Continue(None),
+                3 => Step::Continue(Some(Duration::from_millis(1))),
+                4 => Step::Continue(Some(Duration::from_secs(60))),
                 _ => Step::Stop,
             }
         })
@@ -698,14 +708,45 @@ quit
                 Reason::Woken,
                 Reason::Io,
                 Reason::Io,
-                Reason::Io,
-                Reason::Io,
-                Reason::Io,
                 Reason::Timeout,
                 Reason::Io,
             ]
         );
-        assert!(start.elapsed() >= Duration::from_millis(50));
+        take_transcript();
+    }
+
+    /// I/Oの源があっても、`step(Io)`だけが続くループは、何も起きないままの上限 (このテストでは20 ms) で失敗する。
+    /// 起こし、筋書きのイベント、期限は数え直させる。
+    #[cfg(unix)]
+    #[test]
+    fn run_loop_with_an_io_source_fails_when_only_io_steps_follow() {
+        let mut lp = stub_loop(vec![], EventQueue::new());
+        let mut reasons = Vec::new();
+        let start = Instant::now();
+        let err = lp
+            .run_loop(Some(IoSource::Fd(-1)), None, &mut |r| {
+                reasons.push(r);
+                Step::Continue(None)
+            })
+            .unwrap_err();
+        assert_eq!(err.to_string(), "stub: nothing woke the loop for 5 s");
+        assert!(start.elapsed() >= Duration::from_millis(20));
+        assert_eq!(reasons[0], Reason::Woken);
+        assert!(reasons.len() >= 2);
+        assert!(reasons[1..].iter().all(|&r| r == Reason::Io), "{reasons:?}");
+        let mut lp = stub_loop(vec![], EventQueue::new());
+        let mut steps = 0;
+        let start = Instant::now();
+        lp.run_loop(Some(IoSource::Fd(-1)), None, &mut |_| {
+            steps += 1;
+            if start.elapsed() >= Duration::from_millis(60) {
+                Step::Stop
+            } else {
+                Step::Continue(Some(Duration::from_millis(5)))
+            }
+        })
+        .unwrap();
+        assert!(steps > 1);
         take_transcript();
     }
 

@@ -238,6 +238,18 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Tls.read_plain` | `Unr`、`Lin` | `Unr` (`Bytes`) |
   | `Std.Tls.status`、`line_ready` | `Lin` | `Unr` (`Int`) |
   | `Std.Tls.error_message`、`take_line` | `Lin` | `Unr` (`String`) |
+  | `Std.Gui.open_ui_raw` | `Unr` | `Lin` (`Ui`) |
+  | `Std.Gui.close_ui` | `Lin` | `Unr` |
+  | `Std.Gui.open_windows_raw`、`poll_raw`、`event_int_raw` | `Lin` | `Unr` (`Int`) |
+  | `Std.Gui.event_text_raw` | `Lin` | `Unr` (`String`) |
+  | `Std.Gui.begin_window_raw` | `Unr`、`Lin` | `Unr` (`Int`) |
+  | `Std.Gui.begin_grid_raw` | `Unr`、`Unr`、`Lin` | `Unr` (`Int`) |
+  | `Std.Gui.create_raw` | `Unr`、`Unr`、`Unr`、`Lin` | `Unr` (`Int`) |
+  | `Std.Gui.end_raw`、`flush_raw` | `Lin` | `Lin` (同じ`Ui`) |
+  | `Std.Gui.next_cell_raw` | `Unr`、`Unr`、`Unr`、`Unr`、`Lin` | `Lin` (同じ`Ui`) |
+  | `Std.Gui.add_item_raw`、`set_text_raw` | `Unr`、`Unr`、`Lin` | `Lin` (同じ`Ui`) |
+  | `Std.Gui.set_int_raw` | `Unr`、`Unr`、`Unr`、`Lin` | `Lin` (同じ`Ui`) |
+  | `Std.Gui.close_window_raw` | `Unr`、`Lin` | `Lin` (同じ`Ui`) |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
   `with_args` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.MutUnboxedArray.length` と2つの `read`、`Std.Async.task_cell`、`op_ready`、`job_cell`、`Std.Net.op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`、`Std.Tls.pull_tls`、`read_plain`、`status`、`error_message`、`line_ready`、`take_line`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、固定される位置の行は `unr` で、固定しない位置の行は `poly` なので、`Poly` はどちらの行とも合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)

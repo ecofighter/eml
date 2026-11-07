@@ -9,13 +9,15 @@ autotests = false
 [lib]
 doctest = false
 
-# tls を外すと Std.Tls の腕は NotAvailable を投げる
+# tlsを外すとStd.Tlsの腕はNotAvailableを投げる。guiを外すとStd.Guiを開けず、NotAvailableを投げる
 [features]
 tls = ["dep:eml_tls", "eml_io/tls"]
+gui = ["dep:eml_gui"]
 
 [dependencies]
 eml_cabi.workspace = true
 eml_extern.workspace = true
+eml_gui = { workspace = true, optional = true }
 eml_lir.workspace = true
 eml_io.workspace = true
 eml_rt.workspace = true

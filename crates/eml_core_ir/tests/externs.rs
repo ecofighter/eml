@@ -102,6 +102,9 @@ probe_exec_child c = c
 probe_tls_conn : Tls.Conn -> Tls.Conn
 probe_tls_conn c = c
 
+probe_gui_ui : Gui.Ui -> Gui.Ui
+probe_gui_ui u = u
+
 probe_panic : Unit -> <Panic> Int
 probe_panic () = panic \"x\"
 
@@ -145,6 +148,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::StreamWriter => "probe_stream_writer",
         ExternType::ExecChild => "probe_exec_child",
         ExternType::TlsConn => "probe_tls_conn",
+        ExternType::GuiUi => "probe_gui_ui",
     }
 }
 
@@ -309,9 +313,10 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 /// `Std.Async.op_ready`、`Std.Async.job_cell`、
 /// `Std.Net`の`op_listener`、`op_stream`、`op_outcome`、`op_done`、`local_port`、`peer_addr`と、`Std.Stream`の
 /// `op_reader`、`op_writer`、`op_outcome`、`op_prefix`、`source`と、`Std.Exec`の`stdin`、`stdout`、`stderr`、`stage_count`、
-/// `op_child`、`op_outcome`、`op_prefix`、`reap`と、`Std.Tls`の6つの行と、
+/// `op_child`、`op_outcome`、`op_prefix`、`reap`と、`Std.Tls`の6つの行と、`Std.Gui`の`begin_window_raw`、
+/// `begin_grid_raw`、`create_raw`、`open_windows_raw`、`poll_raw`、`event_int_raw`、`event_text_raw`と、
 /// `Std.FileIn`、`Std.Stdin`、`Std.Proc`のそれぞれ5つの読みの行と、`Std.Proc`の`stage_count`、`wait_stage`だけで
-/// ある。`Std.Tls`の`push_tls`と`write_plain`はデータを借りて`Conn`を返す。`Std.Tls`の`submit_client`と`submit_push`はデータを借りて`OpId`を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc`の
+/// ある。`Std.Tls`の`push_tls`と`write_plain`はデータを借りて`Conn`を返す。`Std.Gui`の`add_item_raw`と`set_text_raw`は文字列を借りて`Ui`を返す。`Std.Tls`の`submit_client`と`submit_push`はデータを借りて`OpId`を返す。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc`の
 /// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
@@ -361,6 +366,14 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
                 (&[true, false], &[])
             }
             "Std.Tls.submit_client" => (&[true, true], &[]),
+            "Std.Gui.begin_window_raw" => (&[true, true], &[1]),
+            "Std.Gui.begin_grid_raw" => (&[true, true, true], &[2]),
+            "Std.Gui.create_raw" => (&[false, true, false, true], &[3]),
+            "Std.Gui.add_item_raw" | "Std.Gui.set_text_raw" => (&[false, true, false], &[]),
+            "Std.Gui.open_windows_raw"
+            | "Std.Gui.poll_raw"
+            | "Std.Gui.event_int_raw"
+            | "Std.Gui.event_text_raw" => (&[true], &[0]),
             "Std.FileIn.read_all"
             | "Std.FileIn.read_line_raw"
             | "Std.FileIn.read_all_bytes"
@@ -561,7 +574,7 @@ fn mark_fits(declared: Mark, row: Mark) -> bool {
 }
 
 /// 表の値そのもの。`FileIn`の7つ、`Stdin`の7つ、`Stdout`の6つ、`Stderr`の5つ、`Child`の13、`MutArray`を扱う7つ、`MutUnboxedArray`を扱う12、
-/// `Std.Par.par`、`Std.Async`の20行、`Std.Chan`の2行、`Std.Net`の12行、`Std.Stream`の8行、`Std.Exec`の8行、`Std.Tls`の12行以外は、引数も結果も`Unr`である。
+/// `Std.Par.par`、`Std.Async`の20行、`Std.Chan`の2行、`Std.Net`の12行、`Std.Stream`の8行、`Std.Exec`の8行、`Std.Tls`の12行、`Std.Gui`の16行以外は、引数も結果も`Unr`である。
 #[test]
 fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
     use Mark::{Lin, Poly, Unr};
@@ -679,6 +692,20 @@ fn only_the_listed_rows_carry_a_lin_or_poly_mark() {
             | "Std.Tls.line_ready"
             | "Std.Tls.take_line" => (&[Lin], Unr),
             "Std.Tls.read_plain" => (&[Unr, Lin], Unr),
+            "Std.Gui.open_ui_raw" => (&[Unr], Lin),
+            "Std.Gui.close_ui"
+            | "Std.Gui.open_windows_raw"
+            | "Std.Gui.poll_raw"
+            | "Std.Gui.event_int_raw"
+            | "Std.Gui.event_text_raw" => (&[Lin], Unr),
+            "Std.Gui.begin_window_raw" => (&[Unr, Lin], Unr),
+            "Std.Gui.begin_grid_raw" => (&[Unr, Unr, Lin], Unr),
+            "Std.Gui.create_raw" => (&[Unr, Unr, Unr, Lin], Unr),
+            "Std.Gui.end_raw" | "Std.Gui.flush_raw" => (&[Lin], Lin),
+            "Std.Gui.next_cell_raw" => (&[Unr, Unr, Unr, Unr, Lin], Lin),
+            "Std.Gui.add_item_raw" | "Std.Gui.set_text_raw" => (&[Unr, Unr, Lin], Lin),
+            "Std.Gui.set_int_raw" => (&[Unr, Unr, Unr, Lin], Lin),
+            "Std.Gui.close_window_raw" => (&[Unr, Lin], Lin),
             _ => {
                 assert!(
                     row.param_marks.iter().all(|&mark| mark == Unr),

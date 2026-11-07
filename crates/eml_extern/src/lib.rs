@@ -277,6 +277,8 @@ table! {
         ExecChild => type_row("Std.Exec.Child", Lin, Repr::Obj),
         // rustls の接続と平文の列を持つ `Foreign`。I/O は持たない (docs/spec/stdlib.md の「`Std.Tls`」)
         TlsConn => type_row("Std.Tls.Conn", Lin, Repr::Obj),
+        // 実行の世代と回収の旗を持つ`Foreign`。Kindは`Lin` (docs/spec/stdlib.mdの「`Std.Gui`」)
+        GuiUi => type_row("Std.Gui.Ui", Lin, Repr::Obj),
     }
 }
 
@@ -2166,12 +2168,82 @@ table! {
                 )
             },
         ),
+        GuiWantRaw => row("Std.Gui.want_gui_raw", &[Unit], Int, Purity::Effectful),
+        GuiOpenUiRaw => kinded("Std.Gui.open_ui_raw", &[Int], &[Unr], Obj, Lin, Purity::Effectful),
+        GuiCloseUi => kinded("Std.Gui.close_ui", &[Obj], &[Lin], Unit, Unr, Purity::Effectful),
+        GuiBeginWindowRaw => borrowing(
+            &[true, true],
+            FunctionRow {
+                with_args: &[1],
+                ..kinded("Std.Gui.begin_window_raw", &[Obj, Obj], &[Unr, Lin], Int, Unr, Purity::Effectful)
+            },
+        ),
+        GuiBeginGridRaw => borrowing(
+            &[true, true, true],
+            FunctionRow {
+                with_args: &[2],
+                ..kinded("Std.Gui.begin_grid_raw", &[Obj, Obj, Obj], &[Unr, Unr, Lin], Int, Unr, Purity::Effectful)
+            },
+        ),
+        GuiEndRaw => kinded("Std.Gui.end_raw", &[Obj], &[Lin], Obj, Lin, Purity::Effectful),
+        GuiNextCellRaw => kinded(
+            "Std.Gui.next_cell_raw",
+            &[Int, Int, Int, Int, Obj],
+            &[Unr, Unr, Unr, Unr, Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        GuiCreateRaw => borrowing(
+            &[false, true, false, true],
+            FunctionRow {
+                with_args: &[3],
+                ..kinded("Std.Gui.create_raw", &[Int, Obj, Int, Obj], &[Unr, Unr, Unr, Lin], Int, Unr, Purity::Effectful)
+            },
+        ),
+        GuiAddItemRaw => borrowing(
+            &[false, true, false],
+            kinded("Std.Gui.add_item_raw", &[Int, Obj, Obj], &[Unr, Unr, Lin], Obj, Lin, Purity::Effectful),
+        ),
+        GuiSetTextRaw => borrowing(
+            &[false, true, false],
+            kinded("Std.Gui.set_text_raw", &[Int, Obj, Obj], &[Unr, Unr, Lin], Obj, Lin, Purity::Effectful),
+        ),
+        GuiSetIntRaw => kinded(
+            "Std.Gui.set_int_raw",
+            &[Int, Int, Int, Obj],
+            &[Unr, Unr, Unr, Lin],
+            Obj,
+            Lin,
+            Purity::Effectful,
+        ),
+        GuiCloseWindowRaw => kinded("Std.Gui.close_window_raw", &[Int, Obj], &[Unr, Lin], Obj, Lin, Purity::Effectful),
+        GuiOpenWindowsRaw => borrowing(
+            &[true],
+            FunctionRow { with_args: &[0], ..kinded("Std.Gui.open_windows_raw", &[Obj], &[Lin], Int, Unr, Purity::Effectful) },
+        ),
+        GuiFlushRaw => kinded("Std.Gui.flush_raw", &[Obj], &[Lin], Obj, Lin, Purity::Effectful),
+        GuiPollRaw => borrowing(
+            &[true],
+            FunctionRow { with_args: &[0], ..kinded("Std.Gui.poll_raw", &[Obj], &[Lin], Int, Unr, Purity::Effectful) },
+        ),
+        GuiEventIntRaw => borrowing(
+            &[true],
+            FunctionRow { with_args: &[0], ..kinded("Std.Gui.event_int_raw", &[Obj], &[Lin], Int, Unr, Purity::Effectful) },
+        ),
+        GuiEventTextRaw => borrowing(
+            &[true],
+            FunctionRow { with_args: &[0], ..kinded("Std.Gui.event_text_raw", &[Obj], &[Lin], Obj, Unr, Purity::Effectful) },
+        ),
+        GuiPokeRaw => row("Std.Gui.poke_raw", &[Int], Unit, Purity::Effectful),
+        GuiAbandonRaw => row("Std.Gui.abandon_raw", &[Int], Unit, Purity::Effectful),
     }
 }
 
 impl Extern {
     /// `job_cell`を除く`Std.Async`の行と、`chan_cell`を除く`Std.Chan`の行と、`Std.Atomic`、`Std.Net`、`Std.Stream`、
-    /// `Std.Exec`の行と、`Std.Tls`の`submit_client`、`submit_push`、`take_conn`。VMはこれらの行を汎用のexternの命令で
+    /// `Std.Exec`の行と、`Std.Tls`の`submit_client`、`submit_push`、`take_conn`と、`Std.Gui`の`want_gui_raw`、
+    /// `open_ui_raw`、`poke_raw`、`abandon_raw`。VMはこれらの行を汎用のexternの命令で
     /// なく`Async`の命令で実行する。登録表に触れるか、runのdriverの種類を読むためである (docs/spec/vm.mdの「`Async` のタスク」)。
     /// `job_cell`と`chan_cell`は即値を写すだけの普通のexternである。
     pub fn is_async(self) -> bool {
@@ -2273,6 +2345,10 @@ impl Extern {
                 | Extern::TlsSubmitClient
                 | Extern::TlsSubmitPush
                 | Extern::TlsTakeConn
+                | Extern::GuiWantRaw
+                | Extern::GuiOpenUiRaw
+                | Extern::GuiPokeRaw
+                | Extern::GuiAbandonRaw
         )
     }
 }

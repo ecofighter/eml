@@ -100,12 +100,14 @@ Do not edit it by hand; regenerate it with `nix develop -c nix/third-party-licen
 - `schannel` 0.1.30: MIT
 - `security-framework` 3.7.0: MIT OR Apache-2.0
 - `security-framework-sys` 2.17.0: MIT OR Apache-2.0
+- `slotmap` 1.1.1: Zlib
 - `smallvec` 1.16.4: MIT OR Apache-2.0
 - `strsim` 0.11.1: MIT
 - `subtle` 2.6.1: BSD-3-Clause
 - `syn` 2.0.119: MIT OR Apache-2.0
 - `syn` 3.0.9: MIT OR Apache-2.0
 - `synstructure` 0.13.2: MIT
+- `taffy` 0.15.1: MIT
 - `target-lexicon` 0.13.5: Apache-2.0 WITH LLVM-exception
 - `text-size` 1.1.1: MIT OR Apache-2.0
 - `unicode-ident` 1.0.27: (MIT OR Apache-2.0) AND Unicode-3.0
@@ -2074,6 +2076,7 @@ Used by:
 - `convert_case` 0.4.0
 - `la-arena` 0.3.1
 - `libm` 0.2.16
+- `taffy` 0.15.1
 - `verus_builtin` 0.0.0-2026-10-11-0230
 - `verus_builtin_macros` 0.0.0-2026-10-25-0158
 - `verus_state_machines_macros` 0.0.0-2026-10-25-0158
@@ -2496,6 +2499,35 @@ Except as contained in this notice, the name of a copyright holder shall
 not be used in advertising or otherwise to promote the sale, use or other
 dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
+
+````
+
+### zlib License
+
+Used by:
+
+- `slotmap` 1.1.1
+
+````text
+Copyright (c) 2021 Orson Peters <orsonpeters@gmail.com>
+
+This software is provided 'as-is', without any express or implied warranty. In
+no event will the authors be held liable for any damages arising from the use of
+this software.
+
+Permission is granted to anyone to use this software for any purpose, including
+commercial applications, and to alter it and redistribute it freely, subject to
+the following restrictions:
+
+ 1. The origin of this software must not be misrepresented; you must not claim
+    that you wrote the original software. If you use this software in a product,
+    an acknowledgment in the product documentation would be appreciated but is
+    not required.
+
+ 2. Altered source versions must be plainly marked as such, and must not be
+    misrepresented as being the original software.
+
+ 3. This notice may not be removed or altered from any source distribution.
 
 ````
 
