@@ -34,8 +34,8 @@ impl EventQueue {
     /// 前に呼んでから`push`で積まれたイベントがあったか。callbackは積むことしかしないので、ネイティブのループはこれを見て
     /// 次の`step(Events)`を決める。
     #[cfg_attr(
-        not(all(feature = "native", target_os = "macos")),
-        allow(dead_code, reason = "only the AppKit loop asks")
+        not(all(feature = "native", any(target_os = "macos", target_os = "linux"))),
+        allow(dead_code, reason = "only the native loops ask")
     )]
     pub(crate) fn take_pushed(&self) -> bool {
         self.0.pushed.replace(false)

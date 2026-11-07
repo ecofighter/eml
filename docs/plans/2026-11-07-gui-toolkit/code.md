@@ -831,16 +831,16 @@ In `packages.eml` after `cargoBuildFlags` (around line 104):
 
 ```nix
               buildFeatures = [ "gui-native" ];
-              # Qt 6 はシステムのライブラリとして動的にリンクする (docs/implementation/distribution.md)
-              nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [
+              # Qt 6はシステムのライブラリとして動的にリンクする (docs/implementation/distribution.md)
+              nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
                 pkgs.pkg-config
                 pkgs.qt6.qtbase
                 pkgs.qt6.wrapQtAppsHook
               ];
-              buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.qt6.qtbase ];
+              buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.qt6.qtbase ];
 ```
 
-`postInstall` adds `cp ${./licenses/GPL-3.0.txt} ${./licenses/LGPL-3.0.txt} $out/share/doc/eml/`. The default devShell's package list gets `pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.qt6.qtbase pkgs.pkg-config ]`. The shared `shellHook` is not touched.
+`postInstall`'s `install` line adds `licenses/GPL-3.0.txt licenses/LGPL-3.0.txt` (adjusted in T-9: `cp ${./licenses/GPL-3.0.txt} ...` would copy the store path's name, `<hash>-GPL-3.0.txt`). The default devShell's package list gets `pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.qt6.qtbase pkgs.pkg-config ]`. The shared `shellHook` is not touched.
 
 ## 10. CI (`.github/workflows/ci.yml`)
 
@@ -897,7 +897,7 @@ T-8 adds the job below with `os: [macos-15]`; T-9 adds `ubuntu-24.04` and the `n
       - name: cargo nextest run --features gui-native
         if: ${{ !cancelled() && steps.clippy.outcome != 'skipped' }}
         run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo nextest run --features eml_cli/gui-native --failure-output immediate-final --no-capture
-      # Qt は動的にリンクし、配るものに Qt と Windows App SDK のファイルを含めない (docs/implementation/distribution.md)
+      # Qtは動的にリンクし、配るものにQtとWindows App SDKのファイルを含めない (docs/implementation/distribution.md)
       - name: nix build links Qt dynamically
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.clippy.outcome != 'skipped' }}
         run: |
@@ -906,6 +906,6 @@ T-8 adds the job below with `os: [macos-15]`; T-9 adds `ubuntu-24.04` and the `n
           test "$(find -L result \( -name 'libQt6*' -o -name '*.dll' -o -name '*.msix' \) | wc -l)" -eq 0
 ```
 
-T-10: the 「dependency edges of eml_gui」 step adds `test "$(cargo tree -p eml_cli --features gui-native -e normal,build --target all | grep -c -E 'cxx v|objc2 v|winio-winui3 v|qt-build-utils v')" -ge 4`.
+T-10: the 「dependency edges of eml_gui」 step saves `cargo tree -p eml_cli --features gui-native -e normal,build --target all` once and runs one `grep -q` per toolkit crate on it: `cxx v`, `objc2 v`, `winio-winui3 v`, `qt-build-utils v` (each must match).
 
 T-8: `nix/third-party-licenses.sh` runs `cargo-about generate --frozen --fail --features gui-native -m crates/eml_cli/Cargo.toml -o "$out" about.hbs`.

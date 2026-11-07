@@ -23,7 +23,9 @@ impl Backend {
             Backend::Stub(script) => Ok(stub::create(script)),
             #[cfg(all(feature = "native", target_os = "macos"))]
             Backend::Native => crate::appkit::create(),
-            #[cfg(not(all(feature = "native", target_os = "macos")))]
+            #[cfg(all(feature = "native", target_os = "linux"))]
+            Backend::Native => crate::qt::create(),
+            #[cfg(not(all(feature = "native", any(target_os = "macos", target_os = "linux"))))]
             Backend::Native => Err(GuiError::NotAvailable(
                 "cannot open the GUI: built without the native toolkit".to_string(),
             )),
@@ -35,7 +37,7 @@ impl Backend {
 mod tests {
     use super::*;
 
-    #[cfg(not(all(feature = "native", target_os = "macos")))]
+    #[cfg(not(all(feature = "native", any(target_os = "macos", target_os = "linux"))))]
     #[test]
     fn native_is_not_available_without_the_native_toolkit() {
         assert_eq!(

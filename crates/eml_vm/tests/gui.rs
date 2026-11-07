@@ -502,7 +502,7 @@ main () = Async.run (fn () ->
 
 /// backendを作れないrunでは、`Gui.run`は作るときの誤りで失敗する。`open_ui_raw`がゲートを放して印を下ろすので、
 /// 誤りは次の`Gui.run`でも同じで、その後のプログラムは終わり、デッドロックもまた判定される。
-#[cfg(not(all(feature = "gui-native", target_os = "macos")))]
+#[cfg(not(all(feature = "gui-native", any(target_os = "macos", target_os = "linux"))))]
 #[test]
 fn a_failed_backend_creation_fails_each_run_and_lowers_the_holds() {
     let attempt = "\
@@ -545,12 +545,10 @@ main () = Async.run (fn () ->
     assert_eq!(texts(&lines), [error, error]);
 }
 
-/// AppKitのbackendはメインのスレッドでしか作れず、テストはメインのスレッドで走らない。GUIを求めないプログラムは
-/// ネイティブのbackendの`Park`でも`DefaultPark`と同じに終わり、印も立たないので、backendを作ろうともしない。求めるプログラムでは
-/// 作るのに失敗し、`Gui.run`ごとにその誤りが届く。
-#[cfg(all(feature = "gui-native", target_os = "macos"))]
-#[test]
-fn the_appkit_backend_is_made_only_when_a_run_asks_for_a_gui() {
+/// GUIを求めないプログラムは、ネイティブのbackendの`Park`でも`DefaultPark`と同じに終わり、印も立たないので、backendを
+/// 作ろうともしない。求めるプログラムでは作るのに失敗し、`Gui.run`ごとにその誤り`error`が届く。
+#[cfg(all(feature = "gui-native", any(target_os = "macos", target_os = "linux")))]
+fn assert_the_native_backend_is_made_only_when_a_run_asks_for_a_gui(error: &str) {
     let native = |src: &str| {
         let control = limits(1);
         let interrupt = Arc::clone(&control);
@@ -589,9 +587,26 @@ main () = Async.run (fn () ->
   attempt ())
 ",
     ));
-    let error = "IOError { kind = NotAvailable, message = \"cannot open the GUI: AppKit needs the main thread\" }";
     assert_eq!(texts(&lines), [error, error]);
     assert_eq!(holds(&finished(result)), (2, 2));
+}
+
+/// AppKitのbackendはメインのスレッドでしか作れず、テストはメインのスレッドで走らない。
+#[cfg(all(feature = "gui-native", target_os = "macos"))]
+#[test]
+fn the_appkit_backend_is_made_only_when_a_run_asks_for_a_gui() {
+    assert_the_native_backend_is_made_only_when_a_run_asks_for_a_gui(
+        "IOError { kind = NotAvailable, message = \"cannot open the GUI: AppKit needs the main thread\" }",
+    );
+}
+
+/// Qtのbackendもメインのスレッドでしか作らないので、テストの中ではQApplicationを作らず、画面を開かない。
+#[cfg(all(feature = "gui-native", target_os = "linux"))]
+#[test]
+fn the_qt_backend_is_made_only_when_a_run_asks_for_a_gui() {
+    assert_the_native_backend_is_made_only_when_a_run_asks_for_a_gui(
+        "IOError { kind = NotAvailable, message = \"cannot open the GUI: Qt needs the main thread\" }",
+    );
 }
 
 const PROGRESS: &str = "\

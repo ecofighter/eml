@@ -4,6 +4,8 @@
 mod appkit;
 mod backend;
 mod layout;
+#[cfg(all(feature = "native", target_os = "linux"))]
+mod qt;
 mod queue;
 pub mod stub;
 mod toolkit;

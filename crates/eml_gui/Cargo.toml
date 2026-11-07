@@ -9,9 +9,18 @@ autotests = false
 [lib]
 doctest = false
 
-# nativeはネイティブのbackendを足す。今はmacOSのAppKitだけで、ほかのOSでは`Backend::Native`がNotAvailableを返す
+# nativeはネイティブのbackendを足す。macOSではAppKit、LinuxではQt 6で、ほかのOSでは`Backend::Native`がNotAvailableを返す。
+# LinuxではビルドにQt 6の開発用のファイルが要る (docs/implementation/architecture.mdの「`eml_gui`の内部」)
 [features]
-native = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", "dep:objc2-core-foundation"]
+native = [
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-app-kit",
+    "dep:objc2-core-foundation",
+    "dep:cxx",
+    "dep:cxx-build",
+    "dep:qt-build-utils",
+]
 
 [dependencies]
 taffy.workspace = true
@@ -21,3 +30,11 @@ objc2 = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 objc2-app-kit = { workspace = true, optional = true }
 objc2-core-foundation = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cxx = { workspace = true, optional = true }
+
+# build.rsはtargetがLinuxのときだけこれらを使う。build-dependenciesのtargetの条件はhostで決まるので、OSで分けない
+[build-dependencies]
+cxx-build = { workspace = true, optional = true }
+qt-build-utils = { workspace = true, optional = true }

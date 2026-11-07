@@ -107,15 +107,24 @@
                 "-p"
                 "eml_cli"
               ];
+              buildFeatures = [ "gui-native" ];
+              # Qt 6はシステムのライブラリとして動的にリンクする (docs/implementation/distribution.md)
+              nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                pkgs.pkg-config
+                pkgs.qt6.qtbase
+                pkgs.qt6.wrapQtAppsHook
+              ];
+              buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.qt6.qtbase ];
               # nix の build の sandbox には /usr/bin/env が無く、shebang の行を解決できない
               # (docs/implementation/testing.md の「nix build の中で流さないテスト」)
               checkFlags = [
                 "--skip"
                 "cli::a_script_with_a_shebang_runs_directly"
               ];
-              # 他者の crate のライセンスの全文をバイナリと一緒に配る (docs/implementation/architecture.md の「外部 crate」)
+              # 他者のcrateのライセンスの全文と、Qtが求めるGNU GPLとLGPLの全文をバイナリと一緒に配る
+              # (docs/implementation/architecture.mdの「外部 crate」)
               postInstall = ''
-                install -Dm644 -t $out/share/doc/eml LICENSE.txt THIRD-PARTY-LICENSES.md
+                install -Dm644 -t $out/share/doc/eml LICENSE.txt THIRD-PARTY-LICENSES.md licenses/GPL-3.0.txt licenses/LGPL-3.0.txt
               '';
               meta.license = pkgs.lib.licenses.mit;
             };
@@ -130,6 +139,11 @@
                 pkgs.cargo-about
                 pkgs.cargo-insta
                 pkgs.cargo-nextest
+              ]
+              # LinuxではnativeのGUIのbackendがQt 6の開発用のファイルを要る (docs/implementation/testing.mdの「CI」)
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                pkgs.qt6.qtbase
+                pkgs.pkg-config
               ]
               ++ pkgs.lib.optionals hasVerus [
                 verus
