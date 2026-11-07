@@ -35,7 +35,7 @@ impl Backend {
 mod tests {
     use super::*;
 
-    #[cfg(not(feature = "native"))]
+    #[cfg(not(all(feature = "native", target_os = "macos")))]
     #[test]
     fn native_is_not_available_without_the_native_toolkit() {
         assert_eq!(

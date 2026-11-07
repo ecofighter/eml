@@ -1,6 +1,6 @@
 //! `NSApplication::run`の上のループ。VMの`step`はrun loopの源から呼ぶ。起こしは`CFRunLoopSource`、I/Oは
 //! `CFFileDescriptor`、時間切れは`CFRunLoopTimer`で、callbackが積んだイベントは眠る前の`CFRunLoopObserver`が拾う
-//! (docs/implementation/architecture.md の「`eml_gui`の内部」)。
+//! (docs/implementation/architecture.mdの「`eml_gui`の内部」)。
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -15,9 +15,9 @@ use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_core_foundation::{
     CFAbsoluteTimeGetCurrent, CFFileDescriptor, CFFileDescriptorContext, CFIndex, CFOptionFlags,
-    CFRetained, CFRunLoop, CFRunLoopActivity, CFRunLoopObserver, CFRunLoopObserverContext,
-    CFRunLoopSource, CFRunLoopSourceContext, CFRunLoopTimer, CFRunLoopTimerContext,
-    kCFFileDescriptorReadCallBack, kCFRunLoopCommonModes,
+    CFRetained, CFRunLoop, CFRunLoopActivity, CFRunLoopMode, CFRunLoopObserver,
+    CFRunLoopObserverContext, CFRunLoopSource, CFRunLoopSourceContext, CFRunLoopTimer,
+    CFRunLoopTimerContext, kCFFileDescriptorReadCallBack, kCFRunLoopCommonModes,
 };
 use objc2_foundation::NSPoint;
 
@@ -25,6 +25,11 @@ use crate::{EventLoop, EventQueue, IoSource, Reason, Step};
 
 /// 待つものがないときの時計の次の発火。runより長く、実際には来ない。
 const NEVER: f64 = 1.0e10;
+
+/// 1回の`drive`で、`step`の最中に積まれたイベントのために続けて呼ぶ`step(Events)`の上限。ふつうは、表示したウィンドウの
+/// 大きさの知らせのような1回で収まる。上限は、積むことが積むことを呼び続ける場合に、1つのcallbackの中にrun loopを
+/// 閉じ込めないためにある。超えた分は印に残り、次に眠る前のobserverが拾う。
+const PUSHED_STEPS: u32 = 8;
 
 /// runのループの状態。run loopの源のcallbackは`info`としてこれを指す。`AppKitLoop`が箱に入れて持つので、場所は動かない。
 struct State {
@@ -56,6 +61,7 @@ impl State {
         };
         self.running.set(true);
         let mut reason = reason;
+        let mut pushed_steps = 0;
         loop {
             // `step`が列を見るので、それより前に積まれた分の印は消す
             self.queue.take_pushed();
@@ -73,9 +79,15 @@ impl State {
                     break;
                 }
             }
-            match self.deferred.take() {
-                Some(next) => reason = next,
-                None => break,
+            // `step`の最中に積まれたイベントは、この`step`がobserverから呼ばれていればそのobserverはもう過ぎているので、
+            // ここで拾う
+            if let Some(next) = self.deferred.take() {
+                reason = next;
+            } else if pushed_steps < PUSHED_STEPS && self.queue.take_pushed() {
+                pushed_steps += 1;
+                reason = Reason::Events;
+            } else {
+                break;
             }
         }
         self.running.set(false);
@@ -223,6 +235,39 @@ impl Drop for AppKitLoop {
     }
 }
 
+/// `run_loop`がrun loopに置いたものと`step`。どの出口でも (`Err`、panic) `Drop`で外して無効にし、`step`を外すので、
+/// 失敗した`run_loop`もrun loopに何も残さず、`State`は外した後の`step`を指さない。
+struct Scheduled<'a> {
+    state: &'a State,
+    run_loop: &'a CFRunLoop,
+    modes: Option<&'a CFRunLoopMode>,
+    bell: Option<&'a CFRunLoopSource>,
+    fd_source: Option<CFRetained<CFRunLoopSource>>,
+    observer: Option<CFRetained<CFRunLoopObserver>>,
+}
+
+impl Drop for Scheduled<'_> {
+    fn drop(&mut self) {
+        if let Some(bell) = self.bell {
+            self.run_loop.remove_source(Some(bell), self.modes);
+        }
+        if let Some(observer) = self.observer.take() {
+            observer.invalidate();
+        }
+        if let Some(source) = self.fd_source.take() {
+            source.invalidate();
+        }
+        if let Some(watch) = self.state.fd.borrow_mut().take() {
+            watch.invalidate();
+        }
+        if let Some(timer) = self.state.timer.borrow_mut().take() {
+            timer.invalidate();
+        }
+        self.state.step.set(None);
+        self.state.deferred.set(None);
+    }
+}
+
 impl EventLoop for AppKitLoop {
     fn run_loop(
         &mut self,
@@ -235,8 +280,16 @@ impl EventLoop for AppKitLoop {
         // SAFETY: 定数はCFが定める
         let modes = unsafe { kCFRunLoopCommonModes };
         let step: *mut (dyn FnMut(Reason) -> Step + '_) = step;
-        // SAFETY: 寿命を消すだけで、`step`はこの関数を出る前に外す
+        // SAFETY: 寿命を消すだけで、`step`はこの関数を出る前に`Scheduled`の`Drop`が外す
         let step: *mut (dyn FnMut(Reason) -> Step + 'static) = unsafe { std::mem::transmute(step) };
+        let mut scheduled = Scheduled {
+            state,
+            run_loop,
+            modes,
+            bell: None,
+            fd_source: None,
+            observer: None,
+        };
         state.step.set(Some(step));
         state.stopped.set(false);
 
@@ -260,10 +313,9 @@ impl EventLoop for AppKitLoop {
             )
         }
         .ok_or_else(|| io::Error::other("CFRunLoopTimerCreate failed"))?;
+        *state.timer.borrow_mut() = Some(timer.clone());
         run_loop.add_timer(Some(&timer), modes);
-        *state.timer.borrow_mut() = Some(timer);
 
-        let mut fd_source = None;
         if let Some(IoSource::Fd(fd)) = io {
             let context = CFFileDescriptorContext {
                 version: 0,
@@ -276,12 +328,12 @@ impl EventLoop for AppKitLoop {
             // SAFETY: `context`は正しい形で、fdはこの関数を出る前に無効にする
             let watch = unsafe { CFFileDescriptor::new(None, fd, false, Some(readable), &context) }
                 .ok_or_else(|| io::Error::other("CFFileDescriptorCreate failed"))?;
+            *state.fd.borrow_mut() = Some(watch.clone());
             watch.enable_call_backs(kCFFileDescriptorReadCallBack);
             let source = CFFileDescriptor::new_run_loop_source(None, Some(&watch), 0)
                 .ok_or_else(|| io::Error::other("CFFileDescriptorCreateRunLoopSource failed"))?;
             run_loop.add_source(Some(&source), modes);
-            *state.fd.borrow_mut() = Some(watch);
-            fd_source = Some(source);
+            scheduled.fd_source = Some(source);
         }
 
         let mut observer_context = CFRunLoopObserverContext {
@@ -304,25 +356,15 @@ impl EventLoop for AppKitLoop {
         }
         .ok_or_else(|| io::Error::other("CFRunLoopObserverCreate failed"))?;
         run_loop.add_observer(Some(&observer), modes);
+        scheduled.observer = Some(observer);
         run_loop.add_source(Some(&self.bell.source), modes);
+        scheduled.bell = Some(&self.bell.source);
 
         // 最初の`step(Woken)`は、それより前に鳴った起こしもまとめて扱う
         self.bell.ring();
         state.app.run();
 
-        run_loop.remove_source(Some(&self.bell.source), modes);
-        observer.invalidate();
-        if let Some(source) = fd_source {
-            source.invalidate();
-        }
-        if let Some(watch) = state.fd.borrow_mut().take() {
-            watch.invalidate();
-        }
-        if let Some(timer) = state.timer.borrow_mut().take() {
-            timer.invalidate();
-        }
-        state.step.set(None);
-        state.deferred.set(None);
+        drop(scheduled);
         if let Some(payload) = state.panic.take() {
             panic::resume_unwind(payload);
         }

@@ -422,7 +422,7 @@ Measure `w = 7 * chars + 16`, `h = 24` (Choice: longest item; ProgressBar: 0 cha
 
 ### T-8: AppKit backend
 - Purpose: D-2, D-16; first native backend.
-- Targets: `crates/eml_gui/src/appkit/*`, `gui-native` features in eml_gui, eml_vm, eml_cli, `.github/workflows/ci.yml` (`gui-native` job, macOS), `nix/third-party-licenses.sh` (`--features gui-native`), `THIRD-PARTY-LICENSES.md`, testing.md 「GUI の手での確認」 and 「CI」, architecture.md, `CLAUDE.md` (`cargo build --features eml_cli/gui-native` line).
+- Targets: `crates/eml_gui/src/appkit/*`, `gui-native` features in eml_gui, eml_vm, eml_cli, `.github/workflows/ci.yml` (`gui-native` job, macOS), `nix/third-party-licenses.sh` (`--features gui-native`), `THIRD-PARTY-LICENSES.md`, testing.md 「GUIの手での確認」 and 「CI」, architecture.md, `CLAUDE.md` (`cargo build --features eml_cli/gui-native` line).
 - Work: D-16 AppKit; flipped content view; `set_presence` (`Regular` + activate / `Prohibited`); `applicationShouldTerminate` → `QuitRequested` + `TerminateCancel`; measure with `fittingSize`. The `gui-native` job (appendix) with macOS only; the licenses script change and regeneration. The manual checklist into testing.md (section 9).
 - Left to the implementer: the objc2 class declarations; whether the primary loop or the fallback pump is needed (decide by the manual check).
 - Condition: always.
@@ -433,7 +433,7 @@ Measure `w = 7 * chars + 16`, `h = 24` (Choice: longest item; ProgressBar: 0 cha
 
 ### T-9: Qt backend, flake and notices
 - Purpose: D-2, D-8, D-16.
-- Targets: `crates/eml_gui/src/qt/{mod.rs, shim.hpp, shim.cpp, event_loop.rs}`, `crates/eml_gui/build.rs`, `flake.nix`, `about.hbs`, `licenses/{GPL-3.0.txt, LGPL-3.0.txt}`, `.github/workflows/ci.yml` (Linux row and `nix build` step), `THIRD-PARTY-LICENSES.md`, architecture.md 「外部 crate」.
+- Targets: `crates/eml_gui/src/qt/{mod.rs, shim.hpp, shim.cpp, event_loop.rs}`, `crates/eml_gui/build.rs`, `flake.nix`, `about.hbs`, `licenses/{GPL-3.0.txt, LGPL-3.0.txt}`, `.github/workflows/ci.yml` (Linux row and `nix build` step), `THIRD-PARTY-LICENSES.md`, architecture.md 「外部 crate」, testing.md 「CI」 (the `gui-native` job's OS list, the `nix build` step) and 「GUIの手での確認」 (Linux), and the cfg gates of the failed-creation and laziness tests (`crates/eml_vm/tests/gui.rs`, `crates/eml_gui/src/backend.rs`): gate them on the OSes whose native backend exists, so the other rows still run the failed-creation test; add a laziness test for Qt if it can run under nextest.
 - Work: D-16 Qt; build.rs panics `eml_gui needs Qt 6 (found Qt {v})` on Qt 5; flake.nix per the appendix (`buildFeatures = [ "gui-native" ]`, Qt in `nativeBuildInputs` / `buildInputs` on Linux, devShell packages on Linux, `postInstall` copies the two license texts; the shared `shellHook` is not touched); `about.hbs` system-library section (Qt 6 LGPL-3.0, dynamic, source at qt.io, relinking right; the Windows App SDK runtime is Microsoft's, installed separately; AppKit is part of macOS); the verbatim FSF texts; `open_ui_raw` fails `Other "cannot open the GUI: no display (DISPLAY and WAYLAND_DISPLAY are unset)"` when neither is set.
 - Left to the implementer: the cxx bridge details; `QMAKE` only if `nix develop -c which qmake` fails (then set it as a derivation / mkShell attribute on Linux, never in `shellHook`).
 - Condition: always.
@@ -445,13 +445,13 @@ Measure `w = 7 * chars + 16`, `h = 24` (Choice: longest item; ProgressBar: 0 cha
 
 ### T-10: WinUI backend
 - Purpose: D-2, D-8, D-16.
-- Targets: `crates/eml_gui/src/winui/*`, `.github/workflows/ci.yml` (Windows row, G-2 positive check), `THIRD-PARTY-LICENSES.md`, architecture.md.
+- Targets: `crates/eml_gui/src/winui/*`, `.github/workflows/ci.yml` (Windows row, G-2 positive check), `THIRD-PARTY-LICENSES.md`, architecture.md, testing.md 「CI」 and 「GUIの手での確認」 (Windows notes and checklist item 9, the runtime message), and the same cfg gates as T-9 (widened to Windows).
 - Work: D-16 WinUI; bootstrap `V2`; `open_ui_raw` fails `NotAvailable "cannot open the GUI: the Windows App SDK 2 runtime is not installed (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)"` when it fails; a `#[cfg(all(test, feature = "native", windows))]` test in `src/winui/mod.rs` calls `bootstrap()`: on `Ok` it prints `skipped: the Windows App SDK 2 runtime is installed` and returns, on `Err(NotAvailable(m))` asserts that `m` contains the URL, otherwise fails.
 - Left to the implementer: the XAML composition; the alpha pin fallback (D-16).
 - Condition: always.
 - Completion criteria:
   - CI Windows `gui-native` lane → green; the bootstrap test passes or logs its skip.
-  - CI G-2 step: `cargo tree -p eml_cli --features gui-native -e normal,build --target all | grep -c -E 'cxx v|objc2 v|winio-winui3 v|qt-build-utils v'` → at least 4.
+  - CI G-2 step: in `cargo tree -p eml_cli --features gui-native -e normal,build --target all`, each of `cxx v`, `objc2 v`, `winio-winui3 v`, `qt-build-utils v` matches at least once (one `grep -q` per toolkit crate; a single count would pass on objc2 alone).
   - Manual (the user, Windows 11): checklist items 1–9.
 
 ### T-11: Distribution document

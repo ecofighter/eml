@@ -502,7 +502,7 @@ main () = Async.run (fn () ->
 
 /// backendを作れないrunでは、`Gui.run`は作るときの誤りで失敗する。`open_ui_raw`がゲートを放して印を下ろすので、
 /// 誤りは次の`Gui.run`でも同じで、その後のプログラムは終わり、デッドロックもまた判定される。
-#[cfg(not(feature = "gui-native"))]
+#[cfg(not(all(feature = "gui-native", target_os = "macos")))]
 #[test]
 fn a_failed_backend_creation_fails_each_run_and_lowers_the_holds() {
     let attempt = "\

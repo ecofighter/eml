@@ -1,5 +1,5 @@
 //! macOSのAppKitのbackend。AppKitはメインのスレッドでしか使えないので、`create`はそこでしか成功しない
-//! (docs/implementation/architecture.md の「`eml_gui`の内部」)。
+//! (docs/implementation/architecture.mdの「`eml_gui`の内部」)。
 
 mod event_loop;
 
@@ -229,7 +229,7 @@ impl WindowWatcher {
 
 define_class!(
     /// OSの終了の操作 (⌘Q、Dockの「終了」) を`QuitRequested`に変え、アプリケーションの終了は取りやめる。ループを
-    /// 終えるのはrunだけである (docs/spec/vm.md の「GUI の Park」)。
+    /// 終えるのはrunだけである (docs/spec/vm.mdの「GUI の Park」)。
     // SAFETY: NSObjectを継承するときの決まりはなく、`Drop`も実装しない
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]

@@ -671,7 +671,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 
 `tls`と`gui`を外した処理系の振る舞いのテストは、`eml_io`と`eml_vm`の結合テストの`mod tls_off`と`mod gui_off`に置く。ワークスペースの実行ではfeatureの統一で`tls`と`gui`が有効になり、このモジュールは組まれない。そこでCIの段「cargo nextest run without tls and gui」が`cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::) | test(gui_off::)'`で別に流す。`gui_off`は`Gui.run`が`NotAvailable`で失敗することを確かめる。2つのモジュールは`cfg(not(feature = "tls"))`と`cfg(not(feature = "gui"))`だけで分け、OSでは分けない。nextestは何も合わないfilterをexit 4で落とすので、この段はモジュールの名前を変えたことも見つける。
 
-## GUI の手での確認
+## GUIの手での確認
 
 nativeのGUIのbackendは、自動のテストでは開かない。CIの`gui-native`のジョブはbackendを組んでつなぎ、stubのテストを流すだけである (「CI」)。そこでnativeのbackendか、`eml_vm`の`gui.rs`のループの扱いを変えたときは、そのOSで`gui-native`を足して組んだ`eml`で`tests/ui/run/gui/`の3つの例 (`counter.em`、`form.em`、`progress.em`) を開き、次を手で確かめる。動かすのは`timeout 60 cargo run -p eml_cli --features gui-native -- run tests/ui/run/gui/<例>.em`である。
 
@@ -689,7 +689,7 @@ nativeのGUIのbackendは、自動のテストでは開かない。CIの`gui-nat
 `.github/workflows/ci.yml`は、mainへのpush、pull request、手動の起動で、次の8つのジョブを流す。
 
 - `test`: macOS (macos-15)、Linux (ubuntu-24.04と、aarch64のubuntu-24.04-arm)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、`tls`と`gui`を外した`tls_off::`と`gui_off::`のテスト、既定でないfeatureのclippy (「feature の組み合わせの確認」の10個) と、段「feature resolution of tls」、段「dependency edges of eml_native」、段「dependency edges of eml_gui」の検査を流す。段「dependency edges of eml_gui」は、`eml_gui`がワークスペースのどのcrateにも依存しないことと、`eml_cli`の既定の依存の木にnativeのtoolkitのcrate (`cxx`、`objc2`、`winio-*`、`qt-build-utils`) が入らないことを`cargo tree`で守る。toolchainはrustupが`rust-toolchain.toml`から入れ、`rustc -V`のバージョンが`channel`と同じことを確かめる。Windowsのtargetは`x86_64-pc-windows-msvc`だけで、ジョブはhostがそれであることを確かめる。cargo-nextestは、ワークフローに書いたバージョンを入れる。ubuntu-24.04では、同じビルドで時間の検査 (「性能のテスト」) も流す
-- `gui-native`: macOS (macos-15) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUI の手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKitのbackendはテストの中では作れない
+- `gui-native`: macOS (macos-15) で、`eml_cli`の`gui-native`を足した`cargo clippy --all-targets -- -D warnings`と`cargo nextest run`を流す。nativeのGUIのbackendを組んでつなぐことを確かめるジョブで、テストはどれもstubで流れ、画面を開かない (「GUIの手での確認」)。テストは開発機と同じくプロセスのメインのスレッドで走らないので、AppKitのbackendはテストの中では作れない
 - `fmt`: Linux で `cargo fmt --check` を流す
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
