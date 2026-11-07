@@ -17,6 +17,7 @@
 #include <climits>
 #include <clocale>
 #include <cmath>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -69,6 +70,18 @@ private:
   std::uint64_t id;
 };
 
+// QApplicationの構築は`setlocale(LC_ALL, "")`でプロセスのロケールをシステムのものに替える。Cのコードのロケールが
+// GUIを開いたことで変わらないように、構築の前の値に戻す。ただしLC_CTYPEはQtが選んだもの (UTF-8) を残す。QtはUTF-8の
+// ロケールを前提とし、UTF-8でなければ自分でC.UTF-8に切り替えるからである
+std::unique_ptr<QApplication> new_app(int &argc, char **argv) {
+  std::string before = std::setlocale(LC_ALL, nullptr);
+  auto app = std::make_unique<QApplication>(argc, argv);
+  std::string ctype = std::setlocale(LC_CTYPE, nullptr);
+  std::setlocale(LC_ALL, before.c_str());
+  std::setlocale(LC_CTYPE, ctype.c_str());
+  return app;
+}
+
 Hints hints_of(QSize min, QSize size) {
   return Hints{static_cast<double>(std::max(min.width(), 0)),
                static_cast<double>(std::max(min.height(), 0)),
@@ -80,13 +93,11 @@ Hints hints_of(QSize min, QSize size) {
 
 Shim::Shim(rust::Box<Events> events)
     : argc(1), arg0{'e', 'm', 'l', '\0'}, argv{arg0, nullptr},
-      app(std::make_unique<QApplication>(argc, argv)),
+      app(new_app(argc, argv)),
       events(std::move(events)), measurer(std::make_unique<QLabel>()),
       timer(std::make_unique<QTimer>()) {
   // ウィンドウをすべて閉じてもループは終わらない。終えるのはrunだけである (docs/spec/vm.mdの「GUI の Park」)
   QApplication::setQuitOnLastWindowClosed(false);
-  // QApplicationはCのロケールをシステムのものに替える。Cの関数の数の書き方が変わらないように戻す
-  std::setlocale(LC_NUMERIC, "C");
   measurer->setTextFormat(Qt::PlainText);
   timer->setSingleShot(true);
   timer->setTimerType(Qt::PreciseTimer);

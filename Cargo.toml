@@ -76,7 +76,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 ] }
 # Qtのbackend (eml_guiのnative) のbuild.rsがQtを探してつなぐ。0.10のAPIに合わせて書いたので、版を固定する
 qt-build-utils = "=0.10.0"
-rustyline ={ version = "19.0.0", default-features = false, features = ["buffer-redux"] }
+rustyline = { version = "19.0.0", default-features = false, features = ["buffer-redux"] }
 rowan = "0.17"
 rustc-hash = "2.1"
 taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "grid"] }
