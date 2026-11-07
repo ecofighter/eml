@@ -221,10 +221,10 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 ### AddressSanitizer
 
-- `asan`のジョブは、`eml_io`と`eml_native`のテストと、`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`seat::`、`pinned::` (本物のdriverに記憶を貸すVMの道と、ほかのworkerのdriverに記憶を貸す道、Cの関数に記憶を貸す道、メインのworkerのdriverに記憶を貸す道) を`-Zsanitizer=address`で流す。対象は`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`aarch64-apple-darwin`の3つである。RustのAddressSanitizerはWindowsのmsvcを対象にしない
+- `asan`のジョブは、`eml_io`と`eml_native`のテストと、`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::` (本物のdriverに記憶を貸すVMの道と、ほかのworkerのdriverに記憶を貸す道、Cの関数に記憶を貸す道、メインのworkerのdriverに記憶を貸す道) を`-Zsanitizer=address`で流す。対象は`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`aarch64-apple-darwin`の3つである。RustのAddressSanitizerはWindowsのmsvcを対象にしない
 - `eml_native` と `ffi::` を足したのは、橋渡しの Rust の関数が C に貸した配列や文字列の記憶を読み書きするためである。橋渡しの本体は Cranelift の JIT のコードで、計装されない。AddressSanitizer が見るのは、JIT のコードを呼ぶ Rust の側と、C に渡す前後の貸し借りの範囲である
 - `eml_vm` の lib のテストは AddressSanitizer の下で流さない。そのため、worker 1 のタスクの操作の記録を run の終わりに worker 0 が掃く道 (`sched.rs` の `an_op_record_left_on_worker_1_is_swept`) を確かめるのは、検査モードの漏れの確かめだけである
-- `eml_vm`の`ffi_abandon::` (戻らない`blocking`の呼び出しを見捨てるrun) と、`seat.rs`と`pinned.rs`の`worker_panic::` (workerがpanicするrun) も、ほかのモジュールと同じくleakの検出を付けて流す。見捨てた呼び出しは仕事が持つ写しだけを使い、panicしたworkerのヒープもほかのヒープと同じく落とすので、どちらのrunもヒープを漏らさない ([VM](../spec/vm.md)の「`blocking` の呼び出し」「タスクとスケジュール」)
+- `eml_vm`の`ffi_abandon::` (戻らない`blocking`の呼び出しを見捨てるrun) と、`seat.rs`と`pinned.rs`の`worker_panic::` (workerがpanicするrun) も、ほかのモジュールと同じくleakの検出を付けて流す。見捨てた呼び出しは仕事が持つ写しだけを使い、panicしたworkerのヒープもほかのヒープと同じく落とすので、どちらのrunも、終わった後にすべてのヒープを放す ([VM](../spec/vm.md)の「`blocking` の呼び出し」「タスクとスケジュール」)
 - nightlyはMiriと同じ`nix develop .#miri`のものを使い、`-Zbuild-std`でstdも計装し、`--target`をいつも書く。leakの検出は、どのstepでもAddressSanitizerの既定のままにする
 - 開発機では build の置き場所を `target/asan` に分ける (「よく使うコマンド」)
 - 道具の不具合 (runtime がない、link、rpath、時間切れ) で緑にできない脚は、その脚だけ fenix と同じ日付に固めた rustup の nightly にし、時間の上限を 90 分にする。それでも緑にならなければ脚を外し、外した脚をこの節とロードマップの「その後の項目」に書く
@@ -679,7 +679,7 @@ CI の段「feature resolution of tls」は、`cargo tree` の4つの検査で�
 - `licenses`: Linux で、ふだんの devShell を通して `nix/third-party-licenses.sh --check` を流し、コミットした `THIRD-PARTY-LICENSES.md` が生成した結果と同じことを確かめる ([コンパイラの構成](architecture.md) の「外部 crate」)。違えば、書き直すコマンドを出して落ちる
 - `miri`: Linux で、Miri の devShell を通して `trusted::`、`miri::`、`cells::a_read` と `cells::a_write` と `counters::`、`eml_io` の `driver::tests::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 - `asan`: x86_64のLinux、aarch64のLinux、aarch64のmacOSのそれぞれで、`eml_io`と`eml_native`のテストと`eml_vm`の`api::`、`signal::`、`io::`、`workers::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`をAddressSanitizerの下で流す (下の「AddressSanitizer」)
-- `tsan`: x86_64のLinuxで、`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、libの`counters::`と、`eml_io`のlibの`driver::tests::`をThreadSanitizerの下で流す (下の「ThreadSanitizer」)
+- `tsan`: x86_64のLinuxで、`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`、libの`counters::`と、`eml_io`のlibの`driver::tests::`をThreadSanitizerの下で流す (下の「ThreadSanitizer」)
 
 CI が時間を見るのは、時間の検査 (「性能のテスト」) だけである。テストの1秒の条件と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。ほかの手順では、nextest がテストを止める 60 秒が1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。`nix build` も CI のジョブになく、aarch64-darwin の `nix build` は手で確かめる。
 
