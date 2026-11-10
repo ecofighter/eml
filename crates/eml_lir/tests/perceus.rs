@@ -3,6 +3,7 @@
 //! 確かめる。ソースからパイプラインを通すテストは `eml_core_ir` の tests/perceus.rs にある。
 
 use eml_lir::liveness::live_in;
+use eml_lir::verify_borrowed;
 use eml_lir::{Pass, VarId, parse, perceus, pretty, verify, verify_scopes};
 
 use crate::common::{function, passes_text};
@@ -1500,6 +1501,305 @@ fn f(c.0: tobj, l.1: tobj lin) -> obj {
       let t.2: obj = par (,) #0(c.0, l.1)
       let u.3: obj = con (,) #0(t.2, c.0)
       return u.3
+    }
+    ");
+}
+
+/// 入力は貸された引数の印を持つので、借用の段のverifier (`verify_borrowed`) を通ることを確かめる。出力は所有の段の
+/// verifierを通る。所有の段は、貸された引数の静的な規則も確かめる。
+fn perceus_borrowed_text(text: &str) -> String {
+    let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    if let Err(error) = verify_borrowed(&program) {
+        panic!("the input must verify: {error}\n{text}");
+    }
+    perceus(&mut program);
+    let shown = pretty(&program);
+    if let Err(error) = verify(&program) {
+        panic!("the output must verify: {error}\n{shown}");
+    }
+    shown
+}
+
+#[test]
+fn a_reader_of_a_borrowed_parameter_gets_no_rc_instruction() {
+    // 貸された引数を読むだけの関数にはRCの命令が付かない。ほかの読む関数や末尾呼び出しに貸しても、何も足さない
+    let shown = perceus_borrowed_text(
+        "\
+fn len(borrowed s.0: obj) -> int {
+  let n.1: int = extern \"Std.String.byte_length\"(s.0)
+  return n.1
+}
+fn twice(borrowed s.0: obj) -> int {
+  let a.1: int = call len(s.0)
+  let b.2: int = call len(s.0)
+  let c.3: int = extern \"Prelude.Num Int.+\"(a.1, b.2)
+  return c.3
+}
+fn unused(borrowed s.0: obj) -> int {
+  return 0
+}
+fn last(borrowed s.0: obj) -> int {
+  tail call len(s.0)
+}
+",
+    );
+    insta::assert_snapshot!(shown, @r#"
+    fn len(borrowed s.0: obj) -> int {
+      let n.1: int = extern Std.String.byte_length(s.0)
+      return n.1
+    }
+    fn twice(borrowed s.0: obj) -> int {
+      let a.1: int = call len(s.0)
+      let b.2: int = call len(s.0)
+      let c.3: int = extern "Prelude.Num Int.+"(a.1, b.2)
+      return c.3
+    }
+    fn unused(borrowed s.0: obj) -> int {
+      return 0
+    }
+    fn last(borrowed s.0: obj) -> int {
+      tail call len(s.0)
+    }
+    "#);
+}
+
+#[test]
+fn a_consumed_borrowed_parameter_is_dupped_once_per_use() {
+    // 貸された引数は所有にならない。消費する使いごとに、最後の使いでも、命令の直前に`dup`を1つ置く
+    let shown = perceus_borrowed_text(
+        "\
+fn twice(borrowed s.0: obj) -> obj {
+  let t.1: obj = extern Prelude.++(s.0, s.0)
+  let u.2: obj = extern Prelude.++(s.0, t.1)
+  return u.2
+}
+fn same(borrowed s.0: obj) -> obj {
+  return s.0
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    fn twice(borrowed s.0: obj) -> obj {
+      dup s.0
+      dup s.0
+      let t.1: obj = extern Prelude.++(s.0, s.0)
+      dup s.0
+      let u.2: obj = extern Prelude.++(s.0, t.1)
+      return u.2
+    }
+    fn same(borrowed s.0: obj) -> obj {
+      dup s.0
+      return s.0
+    }
+    ");
+}
+
+#[test]
+fn a_field_of_a_borrowed_parameter_is_borrowed_from_the_caller() {
+    // 貸された引数のフィールドも呼んだ側から借りる。読むだけなら何も要らず、消費するなら`dup`が要る。持ち主の
+    // 引数を手放す命令はない
+    let shown = perceus_borrowed_text(
+        "\
+layout Pair { Pair(obj, obj) }
+layout Option { None, Some(tobj) }
+fn first(borrowed p.0: obj) -> obj {
+  unpack p.0 Pair #0(a.1: obj, b.2: obj)
+  let n.3: int = extern \"Std.String.byte_length\"(b.2)
+  return a.1
+}
+fn get(borrowed o.0: tobj, d.1: tobj) -> tobj {
+  switch o.0 Option { #0 -> b1, #1(x.2: tobj) -> b2 }
+b1:
+  return d.1
+b2:
+  return x.2
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Pair { Pair(obj, obj) }
+    layout Option { None, Some(tobj) }
+    fn first(borrowed p.0: obj) -> obj {
+      unpack p.0 Pair #0(a.1: obj, b.2: obj)
+      let n.3: int = extern Std.String.byte_length(b.2)
+      dup a.1
+      return a.1
+    }
+    fn get(borrowed o.0: tobj, d.1: tobj) -> tobj {
+      switch o.0 Option { #0 -> b1, #1(x.2: tobj) -> b2 }
+    b1:
+      return d.1
+    b2:
+      decref d.1
+      dup x.2
+      return x.2
+    }
+    ");
+}
+
+#[test]
+fn a_borrowed_merge_parameter_is_not_owned() {
+    // どの辺も呼んだ側から借りた値を渡すなら、合流するブロックの引数も貸された引数にできる。合流するブロックで生きて
+    // いる、呼んだ側から借りた変数も、そこで所有にならない。所有の引数への`jump`は消費なので、借りた実引数を
+    // `dup`する
+    let shown = perceus_borrowed_text(
+        "\
+layout Prelude.Bool { False, True }
+fn pick(c.0: enum, borrowed s.1: obj, borrowed t.2: obj) -> int {
+  switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  jump b3(s.1)
+b2:
+  jump b3(t.2)
+b3(borrowed u.3: obj):
+  let n.4: int = extern \"Std.String.byte_length\"(u.3)
+  let m.5: int = extern \"Std.String.byte_length\"(s.1)
+  let r.6: int = extern \"Prelude.Num Int.+\"(n.4, m.5)
+  return r.6
+}
+fn own(c.0: enum, borrowed s.1: obj) -> obj {
+  switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  jump b3(s.1)
+b2:
+  let t.2: obj = const \"none\"
+  jump b3(t.2)
+b3(u.3: obj):
+  return u.3
+}
+",
+    );
+    insta::assert_snapshot!(shown, @r#"
+    layout Prelude.Bool { False, True }
+    fn pick(c.0: enum, borrowed s.1: obj, borrowed t.2: obj) -> int {
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      jump b3(s.1)
+    b2:
+      jump b3(t.2)
+    b3(borrowed u.3: obj):
+      let n.4: int = extern Std.String.byte_length(u.3)
+      let m.5: int = extern Std.String.byte_length(s.1)
+      let r.6: int = extern "Prelude.Num Int.+"(n.4, m.5)
+      return r.6
+    }
+    fn own(c.0: enum, borrowed s.1: obj) -> obj {
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      dup s.1
+      jump b3(s.1)
+    b2:
+      let t.2: obj = const "none"
+      jump b3(t.2)
+    b3(u.3: obj):
+      return u.3
+    }
+    "#);
+}
+
+#[test]
+fn a_field_lent_by_a_call_that_consumes_its_owner_is_dupped() {
+    // 呼び出しが持ち主`p.0`の最後の参照を消費し、そのフィールド`a.1`を貸す。呼ばれる側は`a.1`を読む前に`p.0`を
+    // 解放しうるので、`a.1`を呼び出しの前に`dup`し、後で`decref`する (docs/spec/lir.mdの「所有を取る時点」)
+    let shown = perceus_borrowed_text(
+        "\
+layout Pair { Pair(obj, obj) }
+fn g(p.0: obj, borrowed s.1: obj) -> int {
+  let n.2: int = extern \"Std.String.byte_length\"(s.1)
+  return n.2
+}
+fn f(p.0: obj) -> int {
+  unpack p.0 Pair #0(a.1: obj, b.2: obj)
+  let n.3: int = call g(p.0, a.1)
+  return n.3
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Pair { Pair(obj, obj) }
+    fn g(p.0: obj, borrowed s.1: obj) -> int {
+      decref p.0
+      let n.2: int = extern Std.String.byte_length(s.1)
+      return n.2
+    }
+    fn f(p.0: obj) -> int {
+      unpack p.0 Pair #0(a.1: obj, b.2: obj)
+      dup a.1
+      let n.3: int = call g(p.0, a.1)
+      decref a.1
+      return n.3
+    }
+    ");
+}
+
+#[test]
+fn a_call_lending_an_owned_variable_is_followed_by_a_decref() {
+    // 所有の変数を貸すのは読む使いである。呼び出しは数を変えず、最後の使いの直後で`decref`する。後でも使うなら
+    // `dup`しない
+    let shown = perceus_borrowed_text(
+        "\
+fn len(borrowed s.0: obj) -> int {
+  let n.1: int = extern \"Std.String.byte_length\"(s.0)
+  return n.1
+}
+fn last(t.0: obj) -> int {
+  let n.1: int = call len(t.0)
+  return n.1
+}
+fn again(t.0: obj) -> obj {
+  let n.1: int = call len(t.0)
+  return t.0
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    fn len(borrowed s.0: obj) -> int {
+      let n.1: int = extern Std.String.byte_length(s.0)
+      return n.1
+    }
+    fn last(t.0: obj) -> int {
+      let n.1: int = call len(t.0)
+      decref t.0
+      return n.1
+    }
+    fn again(t.0: obj) -> obj {
+      let n.1: int = call len(t.0)
+      return t.0
+    }
+    ");
+}
+
+#[test]
+fn a_held_owner_of_a_field_lent_to_a_call_is_resolved_before_it() {
+    // 呼び出しが貸すだけのフィールド`a.1`の持ち主`o.0`は、呼び出しで必要でない (保持されている)。保持されている
+    // 変数は呼び出しをまたがないので、呼び出しの前に`o.0`を解いて`a.1`を受け取り、呼び出しの直後で`decref`する
+    // (docs/spec/lir.mdの「所有を取る時点」)
+    let shown = perceus_borrowed_text(
+        "\
+layout Pair { Pair(obj, obj) }
+fn len(borrowed s.0: obj) -> int {
+  let n.1: int = extern \"Std.String.byte_length\"(s.0)
+  return n.1
+}
+fn f(o.0: obj) -> int {
+  unpack o.0 Pair #0(a.1: obj, b.2: obj)
+  let r.3: int = call len(a.1)
+  return r.3
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Pair { Pair(obj, obj) }
+    fn len(borrowed s.0: obj) -> int {
+      let n.1: int = extern Std.String.byte_length(s.0)
+      return n.1
+    }
+    fn f(o.0: obj) -> int {
+      unpack o.0 Pair #0(a.1: obj, b.2: obj)
+      release o.0 Pair #0(a.1, _)
+      let r.3: int = call len(a.1)
+      decref a.1
+      return r.3
     }
     ");
 }
