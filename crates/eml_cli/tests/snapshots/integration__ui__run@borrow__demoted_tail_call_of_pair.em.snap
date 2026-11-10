@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/borrow/demoted_tail_call_of_pair.em
+---
+--- stdout ---
+61.0 930.0
+63.0 1240.0
+--- stderr ---

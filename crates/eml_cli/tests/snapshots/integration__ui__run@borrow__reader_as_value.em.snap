@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/borrow/reader_as_value.em
+---
+--- stdout ---
+-733
+-727
+direct7
+banana!
+--- stderr ---
