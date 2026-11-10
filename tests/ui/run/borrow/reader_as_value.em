@@ -1,5 +1,5 @@
 -- 文字列を読むだけの関数を、関数の値として使い、部分適用する。値としての参照は所有した引数を受ける写しを指し、
--- 直接の呼び出しは借りる側の元の関数を呼ぶ (docs/spec/lir.md の「関数の ABI」)。
+-- 直接の呼び出しは借りる側の元の関数を呼ぶ (docs/spec/lir.mdの「関数の ABI」)。
 import String
 
 pick : String -> String -> String

@@ -1,5 +1,5 @@
 -- 文字列を読むだけの関数の中でpanicする。呼ぶ側が貸している文字列は巻き戻しが手放し、検査モードは
--- 漏れを見つけない (docs/spec/vm.md の「巻き戻し」)。
+-- 漏れを見つけない (docs/spec/vm.mdの「巻き戻し」)。
 import Byte
 import String
 

@@ -46,7 +46,7 @@
 | `upsert_by_hand.em` | `increment` と比較を `upsert` と `sort_by` に書き込んだもの | `upsert.em` の下限 |
 | `records.em` | 4つのフィールドのレコードを、`{ st \| … }` で10万回更新する | 構造体の値の更新 (確保も reuse もしない) |
 | `records_wide.em` | `records.em` を7つの `Int` のフィールドのレコードにしたもの | 構造体にしない値の reuse |
-| `words_loop.em` | 3万語の文字列の語を、`String.byte_at` で読む再帰の関数 `skip_spaces`、`skip_word`、`count` で数える | 展開されない再帰の関数が読むだけの文字列を、呼ぶたびに渡すRC (`rc_increments`) |
+| `words_loop.em` | 3万語の文字列の語を、`String.byte_at`で読む再帰の関数`skip_spaces`、`skip_word`、`count`で数える | 展開されない再帰の関数が読むだけの文字列を、呼ぶたびに渡すRC (`rc_increments`) |
 | `rbtree.em` | 赤黒木に1万個の `Int` を入れる。`balance` は組み直す節を受ける | 同じ関数の中で節を作り直す reuse |
 | `tree_map.em` | 8191 節の完全二分木の全節を、`incr` で20回作り直す | 書かないフィールドとその場の書き換え |
 | `par_tree.em` | 4095 節の完全二分木の全節に、上の深さ 4 までを `par` で分けて 1 を足し (15 回の fork)、逐次にもう一度足す | fork と join の仕事。右の子は共有の印の付いた木から新しく作り、左の子と join の後の親はその場で作り直す |
