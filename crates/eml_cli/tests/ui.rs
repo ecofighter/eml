@@ -397,8 +397,9 @@ struct ExtraRuns {
     workers: bool,
 }
 
-/// 本物の時計の印のあるファイルは、子のプロセスが終わる順が seed や worker の数で決まらないので、seed の run も
-/// worker の run も流さない。シグナルの予定は仮想の時計でしか進まないので、一緒に書くと誤りにする。
+/// 本物の時計の印のあるファイルは、子のプロセスが終わる順がseedやworkerの数で決まらないので、seedのrunも
+/// workerのrunも流さない。本物の時計ではシグナルの予定が壁時計で満ち、そのときにタスクが待っているかは機械の
+/// 速さによるので、一緒に書くと誤りにする。
 fn extra_runs(suffix: &str, marks: &Marks) -> ExtraRuns {
     if marks.real_clock {
         assert!(
