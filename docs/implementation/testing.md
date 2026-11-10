@@ -323,6 +323,7 @@ b3(t.3: int):
   - 引数の型は `i64`、`i32`、`size_t`、`f64`、`array`、`mut_array`、`text`、`handle "T"`、`unit` のどれかで、結果の型は `void`、`i64`、`i32`、`size_t`、`f64`、`handle "T"` のどれかである。`handle` は前に書いたハンドルの型を名前で引き、表にない名前 (`unknown C handle type "M.Missing"`) は `parse` が誤りにする。同じ名前のハンドルの型や C の関数を2度書くこと、知らない OS、知らない引数や結果の型も誤りである
   - 行の Repr、印、借用、`purity` などは書かない。`parse` は C の関数を `CFunction::new` で作り、行は C の引数と結果の型から決まる ([LIR](../spec/lir.md) の「extern の行」)
 - 関数は `fn 名前(引数) -> repr { … }` と書く。`fn` の前に、内部の関数 (`internal`) なら `internal` を、yield しうる関数 (`yields`) なら `yields` を、in-place のエントリの関数 (`clause`) なら `clause <エフェクト>.<操作>` を、この順に書く (`internal fn main$lambda0(..)`、`internal yields clause State.get fn g$entry(..)`)。repr は `obj`、`tobj`、`int`、`float`、`enum`、`unit`、`token` のどれかで、`->` の後の repr が `ret` で、`unr` でないときはその後に `ret_mark` を書く (`-> tobj poly`)。関数の番号は `fn` を書いた順で、呼び出しは関数を名前で引くので、後で定義する関数も書ける。エントリは `entry$main` という名前の関数で、なければ最初の関数である。文字列定数の表と、位置のパスの表 (`Program.files`) は、現れた順に作る。
+- 呼び出した側が貸す引数は、`fn`の引数の並びとブロックのラベルで、束縛の前に`borrowed`と書く (`fn skip(borrowed s.0: obj, i.1: int) -> int {`、`b4(borrowed u.7: obj):`)。`parse`は`Block::borrowed`に読み、`pretty`が同じ形で書くので往復する。Core IRのテキストは読まず、誤りにする (``Core IR has no `borrowed` parameters``)
 - 一様な位置を持つ関数は、`fn` の直前に `uniform from N` と一様な位置の始まりを書く (`internal uniform from 0 fn main$handle1(..)`)。持たない関数には書かない ([LIR](../spec/lir.md) の「関数の ABI」)
 - reuse の token (repr が `token`) は次の3つの形で書く ([LIR](../spec/lir.md) の「reuse」。例は `crates/eml_lir/tests/reuse.rs`)
   - token を定義する `release`: `let r.4: token = release x.0 P #0(a.1, b.2)`

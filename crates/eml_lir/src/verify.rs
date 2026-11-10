@@ -119,6 +119,10 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     with_tables(program, |tables| {
         // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
         for function in &program.functions {
+            no_borrowed(function).map_err(|message| VerifyError {
+                function: function.name.clone(),
+                message,
+            })?;
             rets(program, function, level, function.clause.is_some()).map_err(|message| {
                 VerifyError {
                     function: function.name.clone(),
@@ -304,6 +308,22 @@ fn no_struct_layouts(program: &Program) -> Result<(), VerifyError> {
         }
     }
     Ok(())
+}
+
+/// 貸された引数は借用のパスが付ける。どの段にもそのパスはまだないので、印は拒む
+/// (docs/spec/lir.mdの「ブロックの列」)。
+fn no_borrowed(function: &LirFn) -> Result<(), String> {
+    match function
+        .blocks
+        .iter()
+        .find_map(|block| block.borrowed.first())
+    {
+        Some(&var) => Err(format!(
+            "`{}.{}` is borrowed before the borrow pass",
+            function.vars[var.0 as usize].name, var.0
+        )),
+        None => Ok(()),
+    }
 }
 
 /// 開いた後の段では、変数の表のどこにも構造体は残らない。開くパスは開いた構造体の変数を表から外す。

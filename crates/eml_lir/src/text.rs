@@ -41,13 +41,13 @@ impl Parser<'_> {
     fn function(&mut self) -> Result<LirFn, ParseError> {
         let mut state = FnState::default();
         let header = self.reader.function_header(&mut state)?;
-        let mut blocks = vec![self.block(&mut state, header.params)?];
+        let mut blocks = vec![self.block(&mut state, header.params, header.borrowed)?];
         while !self.reader.end_function() {
             if self.reader.peek_word().is_none() {
                 return Err(self.reader.error_here("expected `}`"));
             }
-            let params = self.reader.label(&mut state, blocks.len() as u32)?;
-            blocks.push(self.block(&mut state, params)?);
+            let (params, borrowed) = self.reader.label(&mut state, blocks.len() as u32)?;
+            blocks.push(self.block(&mut state, params, borrowed)?);
         }
         let vars = self.reader.function_vars(state, blocks.len())?;
         Ok(LirFn {
@@ -63,7 +63,12 @@ impl Parser<'_> {
     }
 
     /// 文の並びと、それを終える終端。
-    fn block(&mut self, state: &mut FnState, params: Vec<VarId>) -> Result<Block, ParseError> {
+    fn block(
+        &mut self,
+        state: &mut FnState,
+        params: Vec<VarId>,
+        borrowed: Vec<VarId>,
+    ) -> Result<Block, ParseError> {
         let mut stmts = Vec::new();
         let term = loop {
             let line = self.reader.line();
@@ -135,6 +140,7 @@ impl Parser<'_> {
         };
         Ok(Block {
             params,
+            borrowed,
             stmts,
             term,
         })

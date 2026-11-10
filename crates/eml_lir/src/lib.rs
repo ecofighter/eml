@@ -122,6 +122,16 @@ impl LirFn {
         &self.blocks[BlockId::ENTRY.0 as usize].params
     }
 
+    /// 引数の位置ごとに、貸された引数かどうか。
+    pub fn lends(&self) -> Vec<bool> {
+        let entry = &self.blocks[BlockId::ENTRY.0 as usize];
+        entry
+            .params
+            .iter()
+            .map(|param| entry.borrowed.contains(param))
+            .collect()
+    }
+
     pub fn block(&self, id: BlockId) -> &Block {
         &self.blocks[id.0 as usize]
     }
@@ -154,6 +164,10 @@ impl LirFn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub params: Vec<VarId>,
+    /// `params`の部分列で、貸された引数である。貸すのは関数のエントリだけ (呼び出した側が参照を持ち続ける) なので、
+    /// 持ち主の欄はない。エントリのブロックの`borrowed`が関数の署名になる
+    /// (docs/spec/lir.mdの「ブロックの列」)。
+    pub borrowed: Vec<VarId>,
     pub stmts: Vec<Stmt>,
     pub term: Term,
 }

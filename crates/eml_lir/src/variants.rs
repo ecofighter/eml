@@ -323,6 +323,7 @@ fn build(program: &Program, source: FnIdx, copy: bool) -> LirFn {
             rets: original.rets.clone(),
             blocks: vec![Block {
                 params: args.clone(),
+                borrowed: Vec::new(),
                 stmts: vec![Stmt::Let {
                     var: result,
                     rhs: Rhs::Call(Call::Direct(
@@ -359,6 +360,7 @@ fn placeholder() -> LirFn {
         rets: vec![(Repr::Unit, crate::Mark::Unr)],
         blocks: vec![Block {
             params: Vec::new(),
+            borrowed: Vec::new(),
             stmts: Vec::new(),
             term: Term::Return(Atom::Unit),
         }],

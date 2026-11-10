@@ -2040,3 +2040,31 @@ fn an_unknown_c_handle_type_is_a_parse_error() {
         "line 1: unknown C handle type \"M.Missing\""
     );
 }
+
+#[test]
+fn borrowed_parameters_round_trip() {
+    let program = round_trip(
+        "\
+fn skip(borrowed s.0: obj, i.1: int) -> int {
+  switch i.1 { 0 -> b1, _ -> b2 }
+b1:
+  jump b3(s.0, i.1)
+b2:
+  jump b3(s.0, 0)
+b3(borrowed u.2: obj, j.3: int):
+  return j.3
+}
+",
+    );
+    let f = &program.functions[0];
+    assert_eq!(f.block(BlockId(0)).borrowed, [VarId(0)]);
+    assert_eq!(f.block(BlockId(1)).borrowed, []);
+    assert_eq!(f.block(BlockId(3)).borrowed, [VarId(2)]);
+    assert_eq!(f.lends(), [true, false]);
+}
+
+#[test]
+fn a_borrowed_without_a_binder_is_an_error() {
+    let error = parse_error("fn f(borrowed) -> int {\n  return 0\n}\n");
+    assert_eq!(error.line, 1);
+}

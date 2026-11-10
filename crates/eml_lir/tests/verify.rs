@@ -3770,3 +3770,27 @@ fn f(x.0: float) -> float {
         Err("`M.half` takes 1 arguments but is given 2 in `f`".to_string())
     );
 }
+
+#[test]
+fn a_borrowed_parameter_is_rejected_before_the_borrow_pass() {
+    let entry = "fn f(borrowed s.0: obj) -> int {\n  return 0\n}\n";
+    let merge = "\
+fn f(s.0: obj) -> int {
+  jump b1(s.0)
+b1(borrowed t.1: obj):
+  return 0
+}
+";
+    for (text, name) in [(entry, "s.0"), (merge, "t.1")] {
+        let message = format!("`{name}` is borrowed before the borrow pass");
+        for result in [
+            check(text),
+            check_scopes(text),
+            check_lowered(text),
+            verify_flattened(&read(text)).map_err(|error| error.to_string()),
+        ] {
+            let error = result.expect_err("the mark is rejected at every level");
+            assert!(error.contains(&message), "{error}");
+        }
+    }
+}
