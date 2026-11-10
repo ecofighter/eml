@@ -1,5 +1,5 @@
 //! `Std.Gui`のexternの腕と、メインのworkerの`Park`であるGUIの`Park` (docs/spec/stdlib.mdの「`Std.Gui`」、
-//! docs/spec/vm.mdの「GUI の Park」)。toolkitはメインのスレッドのスロット`GUI_SLOT`にあり、腕はそこからだけ触れる。
+//! docs/spec/vm.mdの「GUIのPark」)。toolkitはメインのスレッドのスロット`GUI_SLOT`にあり、腕はそこからだけ触れる。
 //! ネイティブのループは1回の`Park::wait`の中で動き、VMには`Pending`とwakerを通してだけ入る。
 //!
 //! feature `gui`を外した処理系では、`UiToken`を値のない型にし、`want`がいつも`not available`で失敗する。`Ui`を
@@ -9,7 +9,7 @@ use eml_extern::Extern;
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::{Ctx, Mode, Word};
 
-use crate::cells::Raise;
+use crate::cells::{CellRef, Raise};
 use crate::error::VmFault;
 use crate::sched::{Policy, Scheduler};
 
@@ -43,7 +43,7 @@ pub(crate) fn abandon<P: Policy>(sched: &mut Scheduler<P>, gate: i64) -> Result<
 }
 
 /// GUIを求めても開いてもいなくなったので、runの外の待ちの印を下ろす。`Pending::set_holds`と同じく、下ろしたら
-/// worker 0に判定し直させる (docs/spec/vm.mdの「GUI の Park」)。
+/// worker 0に判定し直させる (docs/spec/vm.mdの「GUIのPark」)。
 #[cfg_attr(
     not(feature = "gui"),
     allow(dead_code, reason = "only an opened GUI raises holds")
@@ -79,12 +79,18 @@ mod off {
         _: &mut Ctx<M>,
         sched: &mut Scheduler<P>,
         gate: i64,
+        _: Option<CellRef>,
     ) -> Result<Result<Word, Raise>, VmFault> {
         sched.cells.lock().release_gate(gate)?;
         Ok(Err(not_available()))
     }
 
     pub(crate) fn forget_opening(_: i64) -> bool {
+        false
+    }
+
+    /// `Std.Gui.is_gui_task_raw`。GUIを開けないので、どのタスクもGUIのタスクでない。
+    pub(crate) fn is_gui_task(_: i64, _: Option<CellRef>) -> bool {
         false
     }
 
@@ -137,6 +143,8 @@ mod on {
         generation: u32,
         gate: i64,
         reap: Arc<AtomicBool>,
+        /// `open_ui_raw`を呼んだタスク、つまりGUIのタスクのセル。
+        task: Option<CellRef>,
     }
 
     /// 作ったbackendのうち、`Toolkit`が使うもの。ループは`GuiPark`が持つ。
@@ -162,6 +170,9 @@ mod on {
         /// `poll_raw`が取ったイベント。`event_int_raw`と`event_text_raw`が読む。
         event: RefCell<Option<Event>>,
         gens: Cell<u32>,
+        /// 回収した`Toolkit`が最後に作ったウィンドウの番号。次の`Toolkit`はその次から数えるので、runの中でidを
+        /// 使い回さない (docs/spec/stdlib.mdの「`Std.Gui`」)。
+        last_window: Cell<u32>,
         waker: Arc<GuiWaker>,
     }
 
@@ -198,13 +209,14 @@ mod on {
 
         /// 回収。手放した`Ui`のウィンドウを閉じ、presenceを下ろし、ゲートを放し、開きかけがなければrunの外の待ちの印を下ろす。正常に
         /// 終わったとき、panicしたとき、取り消したときのどれもここを通る。`Park`の側で`Pending::release_gate`と
-        /// `Pending::set_holds`を呼ぶのはここだけである(docs/spec/vm.mdの「GUI の Park」)。
+        /// `Pending::set_holds`を呼ぶのはここだけである(docs/spec/vm.mdの「GUIのPark」)。
         fn reap(&self, pending: &mut dyn Pending) {
             if !self.reap_flagged() {
                 return;
             }
             let toolkit = self.toolkit.borrow_mut().take();
             if let Some(mut toolkit) = toolkit {
+                self.last_window.set(toolkit.last_window());
                 toolkit.close_all();
             }
             self.set_presence(false);
@@ -287,7 +299,7 @@ mod on {
     }
 
     /// メインのworkerの`Park`。GUIを求められるまでは`DefaultPark`と同じく`default_wait`だけで待つ。求められたら
-    /// backendを作り、runに1回だけネイティブのループに入る (docs/spec/vm.mdの「GUI の Park」)。
+    /// backendを作り、runに1回だけネイティブのループに入る (docs/spec/vm.mdの「GUIのPark」)。
     pub(crate) struct GuiPark {
         slot: Rc<Slot>,
         event_loop: Option<Box<dyn EventLoop>>,
@@ -312,6 +324,7 @@ mod on {
                 ui: RefCell::new(None),
                 event: RefCell::new(None),
                 gens: Cell::new(0),
+                last_window: Cell::new(0),
                 waker: Arc::default(),
             });
             GUI_SLOT.with(|s| *s.borrow_mut() = Some(Rc::clone(&slot)));
@@ -459,7 +472,7 @@ mod on {
         sched.own_driver()?;
         let gate = sched.cells.lock().open_gate().encode();
         // ゲートで待つタスクはデッドロックの判定に数えないので、メインのworkerがこの後に眠る前に印を立てる
-        // (docs/spec/vm.mdの「GUI の Park」)
+        // (docs/spec/vm.mdの「GUIのPark」)
         sched.run.swap_holds(true);
         slot.opening.set(Some(gate));
         slot.poked.set(false);
@@ -473,6 +486,7 @@ mod on {
         ctx: &mut Ctx<M>,
         sched: &mut Scheduler<P>,
         gate: i64,
+        task: Option<CellRef>,
     ) -> Result<Result<Word, Raise>, VmFault> {
         let Some(slot) = current_slot() else {
             sched.cells.lock().release_gate(gate)?;
@@ -497,7 +511,11 @@ mod on {
             ));
         }
         let toolkit = match &*slot.parts.borrow() {
-            Some(parts) => Toolkit::new(Rc::clone(&parts.widgets), parts.queue.clone()),
+            Some(parts) => Toolkit::new(
+                Rc::clone(&parts.widgets),
+                parts.queue.clone(),
+                slot.last_window.get(),
+            ),
             None => return Err(VmFault::Internal("open_ui_raw runs without a backend")),
         };
         *slot.toolkit.borrow_mut() = Some(toolkit);
@@ -509,11 +527,26 @@ mod on {
             generation,
             gate,
             reap: Arc::clone(&reap),
+            task,
         });
         debug_assert!(sched.run.holds(), "a GUI opens without holds");
         Ok(Ok(
             unsafe { ctx.heap_mut() }.alloc_foreign(UiToken { generation, reap }, true)
         ))
+    }
+
+    /// `Std.Gui.is_gui_task_raw`。`task`が、ゲート`gate`の開いている`Ui`を開いたタスクかを返す。GUIのタスクは
+    /// メインのworkerにだけいるので、ほかのスレッドでは枠を見るまでもなく偽である。
+    pub(crate) fn is_gui_task(gate: i64, task: Option<CellRef>) -> bool {
+        let Some(slot) = current_slot() else {
+            return false;
+        };
+        task.is_some()
+            && slot
+                .ui
+                .borrow()
+                .as_ref()
+                .is_some_and(|ui| ui.gate == gate && ui.task == task)
     }
 
     /// 開きかけの印がゲート`gate`なら下ろし、下ろしたかを返す。

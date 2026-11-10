@@ -21,6 +21,8 @@ pub enum VmFault {
     Deadlock,
     /// I/O の driver を作れなかったか、driver が壊れた (docs/spec/vm.md の「時計と driver」)。
     Driver(String),
+    /// メインのworkerの`Park`が回すGUIのループが失敗した (docs/spec/vm.mdの「メインのworkerの待ち」)。
+    GuiLoop(String),
 }
 
 /// `quiesce`の後にもdriverが保留の操作を残したときの、`VmFault::Driver`の文。そのdriverはどのヒープにも触れる前に
@@ -39,6 +41,7 @@ impl fmt::Display for VmFault {
             VmFault::Internal(what) => write!(f, "internal error: {what}"),
             VmFault::Deadlock => f.write_str(DEADLOCK),
             VmFault::Driver(error) => write!(f, "the I/O driver failed: {error}"),
+            VmFault::GuiLoop(error) => write!(f, "the GUI loop failed: {error}"),
         }
     }
 }

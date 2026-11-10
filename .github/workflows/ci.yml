@@ -149,7 +149,11 @@ jobs:
         run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo clippy --all-targets --features eml_cli/gui-native -- -D warnings
       - name: cargo nextest run --features gui-native
         if: ${{ !cancelled() && steps.clippy.outcome != 'skipped' }}
-        run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo nextest run --features eml_cli/gui-native --failure-output immediate-final --no-capture
+        run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo nextest run --features eml_cli/gui-native --failure-output immediate-final
+      # bootstrapのテストがskipしたかをログに出す。--no-captureはテストを1つずつ流すので、このテストにだけ付ける
+      - name: WinUI bootstrap test with its output
+        if: ${{ runner.os == 'Windows' && !cancelled() && steps.clippy.outcome != 'skipped' }}
+        run: cargo nextest run --features eml_cli/gui-native --no-capture -E 'test(=winui::tests::bootstrap_names_the_download_page_when_the_runtime_is_missing)'
       # Qtは動的にリンクし、配るものにQtとWindows App SDKのファイルを含めない (docs/implementation/distribution.md)
       - name: nix build links Qt dynamically
         if: ${{ runner.os == 'Linux' && !cancelled() && steps.clippy.outcome != 'skipped' }}

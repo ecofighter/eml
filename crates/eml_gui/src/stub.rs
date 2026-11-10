@@ -115,6 +115,7 @@ pub(crate) fn create(script: Script) -> Native {
         auto_close: script.0.is_empty(),
         script: script.0.into(),
         shown,
+        asked: BTreeSet::new(),
         bell: Arc::default(),
         idle_limit: IDLE_LIMIT,
     };
@@ -257,9 +258,11 @@ struct Bell {
 struct StubLoop {
     queue: EventQueue,
     script: VecDeque<RawEvent>,
-    /// 筋書きが初めから空なら、表示したウィンドウに1度だけ閉じる要求を送り、プログラムを終わらせる。
+    /// 筋書きが初めから空なら、表示したウィンドウのそれぞれに閉じる要求を1度だけ送り、プログラムを終わらせる。
     auto_close: bool,
     shown: Rc<RefCell<BTreeSet<Id>>>,
+    /// 閉じる要求を送った、まだ表示しているウィンドウ。
+    asked: BTreeSet<Id>,
     bell: Arc<Bell>,
     idle_limit: Duration,
 }
@@ -295,6 +298,20 @@ impl StubLoop {
             None
         }
     }
+
+    /// まだ閉じる要求を送っていない表示中のウィンドウに送り、送ったかを返す。
+    fn ask_new_windows(&mut self) -> bool {
+        let shown = self.shown.borrow();
+        self.asked.retain(|w| shown.contains(w));
+        let mut asked = false;
+        for &w in shown.iter() {
+            if self.asked.insert(w) {
+                self.queue.push(RawEvent::User(Event::CloseRequest(w)));
+                asked = true;
+            }
+        }
+        asked
+    }
 }
 
 impl EventLoop for StubLoop {
@@ -325,11 +342,7 @@ impl EventLoop for StubLoop {
                 reason = Reason::Events;
                 continue;
             }
-            if self.auto_close && !self.shown.borrow().is_empty() {
-                self.auto_close = false;
-                for &w in self.shown.borrow().iter() {
-                    self.queue.push(RawEvent::User(Event::CloseRequest(w)));
-                }
+            if self.auto_close && self.ask_new_windows() {
                 reason = Reason::Events;
                 continue;
             }
@@ -363,6 +376,7 @@ mod tests {
             auto_close: script.is_empty(),
             script: script.into(),
             shown: Rc::default(),
+            asked: BTreeSet::new(),
             bell: Arc::default(),
             idle_limit: Duration::from_millis(20),
         }
@@ -602,7 +616,7 @@ quit
     #[test]
     fn set_and_add_item_emit_nothing() {
         let native = Backend::Stub(Script::default()).create().unwrap();
-        let mut toolkit = Toolkit::new(Rc::clone(&native.widgets), native.queue.clone());
+        let mut toolkit = Toolkit::new(Rc::clone(&native.widgets), native.queue.clone(), 0);
         toolkit.begin_window("W").unwrap();
         let field = toolkit.create(Init::TextField(String::new())).unwrap();
         let check = toolkit.create(Init::CheckBox("c".into(), false)).unwrap();
@@ -773,7 +787,7 @@ quit
             mut event_loop,
             queue,
         } = Backend::Stub(Script::default()).create().unwrap();
-        let mut toolkit = Toolkit::new(widgets, queue);
+        let mut toolkit = Toolkit::new(widgets, queue, 0);
         let mut seen = Vec::new();
         let mut steps = 0;
         event_loop
@@ -793,17 +807,26 @@ quit
                         toolkit.flush();
                         Step::Continue(None)
                     }
-                    3 => Step::Continue(Some(Duration::ZERO)),
+                    // 要求を送ったウィンドウには、開いたままでももう送らない。新しく表示したウィンドウには送る
+                    3 => {
+                        toolkit.close_window(Id::new(1, 0)).unwrap();
+                        toolkit.begin_window("C").unwrap();
+                        toolkit.end().unwrap();
+                        toolkit.flush();
+                        Step::Continue(None)
+                    }
+                    4 => Step::Continue(Some(Duration::ZERO)),
                     _ => Step::Stop,
                 }
             })
             .unwrap();
-        assert_eq!(steps, 4);
+        assert_eq!(steps, 5);
         assert_eq!(
             seen,
             [
                 (Reason::Events, Event::CloseRequest(Id::new(1, 0))),
                 (Reason::Events, Event::CloseRequest(Id::new(2, 0))),
+                (Reason::Events, Event::CloseRequest(Id::new(3, 0))),
             ]
         );
         take_transcript();
@@ -816,7 +839,7 @@ quit
             mut event_loop,
             queue,
         } = Backend::Stub(Script(vec![click(1, 1)])).create().unwrap();
-        let mut toolkit = Toolkit::new(widgets, queue);
+        let mut toolkit = Toolkit::new(widgets, queue, 0);
         toolkit.begin_window("A").unwrap();
         let button = toolkit.create(Init::Button("b".into())).unwrap();
         toolkit.flush();

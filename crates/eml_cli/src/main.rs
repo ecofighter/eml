@@ -240,7 +240,7 @@ fn parse_gui(text: &str) -> Result<GuiChoice, String> {
     }
 }
 
-/// `eml run`のGUIの`Park`。OSの終了の操作は、シグナルと同じく実行を割り込む (docs/spec/vm.mdの「GUI の Park」)。
+/// `eml run`のGUIの`Park`。OSの終了の操作は、シグナルと同じく実行を割り込む (docs/spec/vm.mdの「GUIのPark」)。
 #[cfg(feature = "gui")]
 fn gui_park(
     gui: GuiChoice,

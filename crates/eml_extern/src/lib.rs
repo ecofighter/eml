@@ -2237,14 +2237,16 @@ table! {
         ),
         GuiPokeRaw => row("Std.Gui.poke_raw", &[Int], Unit, Purity::Effectful),
         GuiAbandonRaw => row("Std.Gui.abandon_raw", &[Int], Unit, Purity::Effectful),
+        GuiIsGuiTaskRaw => row("Std.Gui.is_gui_task_raw", &[Int], Enum, Purity::Effectful),
     }
 }
 
 impl Extern {
     /// `job_cell`を除く`Std.Async`の行と、`chan_cell`を除く`Std.Chan`の行と、`Std.Atomic`、`Std.Net`、`Std.Stream`、
     /// `Std.Exec`の行と、`Std.Tls`の`submit_client`、`submit_push`、`take_conn`と、`Std.Gui`の`want_gui_raw`、
-    /// `open_ui_raw`、`poke_raw`、`abandon_raw`。VMはこれらの行を汎用のexternの命令で
-    /// なく`Async`の命令で実行する。登録表に触れるか、runのdriverの種類を読むためである (docs/spec/vm.mdの「`Async` のタスク」)。
+    /// `open_ui_raw`、`poke_raw`、`abandon_raw`、`is_gui_task_raw`。VMはこれらの行を汎用のexternの命令で
+    /// なく`Async`の命令で実行する。登録表に触れるか、runのdriverの種類か今のタスクを読むためである
+    /// (docs/spec/vm.mdの「`Async` のタスク」)。
     /// `job_cell`と`chan_cell`は即値を写すだけの普通のexternである。
     pub fn is_async(self) -> bool {
         matches!(
@@ -2349,6 +2351,7 @@ impl Extern {
                 | Extern::GuiOpenUiRaw
                 | Extern::GuiPokeRaw
                 | Extern::GuiAbandonRaw
+                | Extern::GuiIsGuiTaskRaw
         )
     }
 }

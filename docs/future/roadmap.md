@@ -529,7 +529,7 @@
 
 - stdの`extern`の行に付け、translateが下ろす`blocking`の属性: Rustの処理をブロックする呼び出しのプールで動かすstdの行を1つの行で書き、translateが`blocking`のCの関数と同じく受け付けと取り出しに分ける ([VM](../spec/vm.md) の「プールの仕事」)
   - 後に回した理由: Rustの処理をプールで動かすstdの行の族は1つ (`Std.Tls`) しかなく、手で書く3つ組は2つの行とemlの3行で済む。属性には、`ExternRef`のstdの行の受け付けと取り出しの変種、`eml_extern`の2つ目の導出、VMの腕の分割、translateの変更が要る。
-  - 見直す条件: プラグインやGUIのような、`blocking`のCの呼び出しと`Std.Tls`に次ぐ3つ目の仕事の行の族が現れたとき。
+  - 見直す条件: プラグインのような、`blocking`のCの呼び出しと`Std.Tls`に次ぐ3つ目の仕事の行の族が現れたとき。`Std.Gui`の行はメインのスレッドで動き、プールの仕事ではないので、この族に当たらない。
 - 同期のコールバック: 比較の関数を渡す API (`qsort`)、常微分方程式と積分のソルバー (GSL、SUNDIALS)、訪問の API が使う
   - 後に回した理由: 目標の BLAS、LAPACK、Accelerate、MKL は要らない。同じスレッドの同期のコールバックは、巻き戻しの仕組みを変えずに後で足せる。
   - 見直す条件: 目標のライブラリで、初めてコールバックが要るものが出たとき。
@@ -574,9 +574,12 @@
 - `eml run`の外のプロセス (`Machine`のAPIのhost) で、ネイティブの`Gui.run`をrunをまたいで繰り返すこと
   - 後に回した理由: `eml run`はプロセスで1つのrunを動かし、それ以上を要るhostはない。試していない。
   - 見直す条件: `Machine`のAPIのhostが要るとき。
-- GUIのbackendのメインスレッドの確かめ
-  - 後に回した理由: Rustのruntimeが`main`と名づけたスレッドかどうかで確かめる。`eml run`ではそれがプロセスのメインスレッドである。
-  - 見直す条件: Cの`main`を持つネイティブのAOTのバイナリか、`Machine`を埋め込むhostがGUIを開くとき。
+- WinUIのbackendのメインスレッドの確かめ
+  - 後に回した理由: WinUIは、Rustのruntimeが`main`と名づけたスレッドかどうかで確かめる。`eml run`ではそれがプロセスのメインスレッドである。AppKitとQtはOSに問うので、変えなくてよい。
+  - 見直す条件: Cの`main`を持つネイティブのAOTのバイナリか、`Machine`を埋め込むhostが、WindowsでGUIを開くとき。
+- `gui::`のテストをThreadSanitizerとAddressSanitizerで流すこと: スレッドをまたぐGUIの道 (どのworkerからも鳴るwaker、どのworkerでも落ちうる`Ui`の回収の旗、メインのworkerの外のタスクの`Gui.post`) は、どちらのsanitizerの一覧にも入っていない
+  - 後に回した理由: 段の計画が求めておらず、sanitizerが何かを見つけるかは確かめていない。
+  - 見直す条件: GUIの`Park`か`Std.Gui`のスレッドをまたぐ道を変えるとき、またはGUIのテストが原因の分からないまま落ちたとき。
 - WinUIのbindingを、公開されたwindows-rsのcrateに替えること
   - 後に回した理由: windows-rsは`Microsoft.UI`の生のbindingを公開していないので、emlがメタデータから生成する ([コンパイラの構成](../implementation/architecture.md)の「`eml_gui`の内部」)。
   - 見直す条件: そのようなcrateが公開されたとき。そのときは、生成したファイルと`nix/winui-bindings.sh`を消す。

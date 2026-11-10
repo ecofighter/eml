@@ -96,7 +96,7 @@ Shim::Shim(rust::Box<Events> events)
       app(new_app(argc, argv)),
       events(std::move(events)), measurer(std::make_unique<QLabel>()),
       timer(std::make_unique<QTimer>()) {
-  // ウィンドウをすべて閉じてもループは終わらない。終えるのはrunだけである (docs/spec/vm.mdの「GUI の Park」)
+  // ウィンドウをすべて閉じてもループは終わらない。終えるのはrunだけである (docs/spec/vm.mdの「GUIのPark」)
   QApplication::setQuitOnLastWindowClosed(false);
   measurer->setTextFormat(Qt::PlainText);
   timer->setSingleShot(true);

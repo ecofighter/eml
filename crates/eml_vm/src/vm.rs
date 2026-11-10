@@ -902,9 +902,10 @@ fn main_wait<R: Exec>(
         sched.guard = Guard::Outside;
         return Err(error);
     }
+    // driverの誤りは`default_wait`が`stop`に残したので、ここに来る誤りは`Park`自身のループのものである
     if let Err(e) = waited {
         sched.guard = Guard::Outside;
-        return Err(main_fault(VmFault::Driver(e.to_string())));
+        return Err(main_fault(VmFault::GuiLoop(e.to_string())));
     }
     if matches!(sched.guard, Guard::Stopped(_)) {
         sched.guard = Guard::Outside;
@@ -995,7 +996,12 @@ impl<R: Exec> Pending for MainPending<'_, R> {
         if matches!(self.sched.guard, Guard::Stopped(_)) {
             return Ok(());
         }
-        self.sched.main_default_wait()
+        let waited = self.sched.main_default_wait();
+        if let Err(e) = &waited {
+            self.stop = Some(main_fault(VmFault::Driver(e.to_string())));
+            self.sched.guard = Guard::Stopped(0);
+        }
+        waited
     }
 
     fn set_holds(&mut self, holds: bool) {
@@ -3632,12 +3638,12 @@ fn async_op<R: Exec>(
                 }
             }
         }
-        // GUIを開く行と、ゲートの行。ゲートは登録表のセルである (docs/spec/vm.mdの「GUI の Park」)
+        // GUIを開く行と、ゲートの行。ゲートは登録表のセルである (docs/spec/vm.mdの「GUIのPark」)
         Extern::GuiWantRaw => match gui::want(sched)? {
             Ok(gate) => task.set_raw(dst, gate),
             Err(raise) => return raise_again::<R>(code, ctx, task, dst, raise, ext),
         },
-        Extern::GuiOpenUiRaw => match gui::open_ui(ctx, sched, task.raw(arg(0)))? {
+        Extern::GuiOpenUiRaw => match gui::open_ui(ctx, sched, task.raw(arg(0)), task.cell)? {
             Ok(ui) => task.set(dst, ui),
             Err(raise) => return raise_again::<R>(code, ctx, task, dst, raise, ext),
         },
@@ -3648,6 +3654,10 @@ fn async_op<R: Exec>(
         Extern::GuiAbandonRaw => {
             gui::abandon(sched, task.raw(arg(0)))?;
             task.set(dst, Word::UNIT);
+        }
+        Extern::GuiIsGuiTaskRaw => {
+            let own = gui::is_gui_task(task.raw(arg(0)), task.cell);
+            task.set_raw(dst, i64::from(own));
         }
         _ => {
             return Err(VmFault::Internal(
@@ -4870,7 +4880,8 @@ fn run_extern<R: Exec>(
             | Extern::GuiWantRaw
             | Extern::GuiOpenUiRaw
             | Extern::GuiPokeRaw
-            | Extern::GuiAbandonRaw => {
+            | Extern::GuiAbandonRaw
+            | Extern::GuiIsGuiTaskRaw => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

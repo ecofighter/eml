@@ -44,7 +44,7 @@ pub use disasm::disassemble;
 pub use doorbell::Doorbell;
 pub use driver::{Clock, Signal, VirtualSignal};
 pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
-/// GUIのtoolkitの層。`eml run`はここのbackendと筋書きでGUIの`Park`を作る (docs/spec/vm.mdの「GUI の Park」)。
+/// GUIのtoolkitの層。`eml run`はここのbackendと筋書きでGUIの`Park`を作る (docs/spec/vm.mdの「GUIのPark」)。
 #[cfg(feature = "gui")]
 pub use eml_gui;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
@@ -163,7 +163,7 @@ pub struct Finished {
     pub placed_jobs: u64,
     /// runの外の待ちの印(`Run.holds`)を立てた回数と、下ろした回数。立てるのは`want_gui_raw`、下ろすのは回収、
     /// `abandon_raw`、作るときの誤りを返す`open_ui_raw`である。期間がつながる2つの`Gui.run`では1回立てて1回下ろす
-    /// (docs/spec/vm.mdの「GUI の Park」)。
+    /// (docs/spec/vm.mdの「GUIのPark」)。
     pub holds_raised: u64,
     pub holds_lowered: u64,
 }

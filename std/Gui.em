@@ -111,12 +111,19 @@ select c n = set_value (wid c) n
 pub checked : CheckBox -> Bool -> <Gui msg> Unit
 checked c b = set_checked (wid c) b
 
--- どのworkerのどのタスクからも呼べる。`run`が終わった後に送ったメッセージは捨てる
+-- どのworkerのどのタスクからも呼べる。`run`が終わった後に送ったメッセージは捨てる。GUIのタスクはchannelのただ1つの
+-- 受け手で、満ちたchannelで待つと誰も空けないので、そのタスクの`post`は待たずに失敗する (docs/spec/stdlib.mdの「`Std.Gui`」)
 pub post : Sink msg -> msg -> <IO, Async> Unit
 post (Sink c g) m =
-  match Chan.send m c with
-    | Chan.Sent -> poke_raw g
-    | Chan.Rejected _ -> ()
+  if is_gui_task_raw g then
+    match Chan.try_send m c with
+      | Chan.Accepted -> poke_raw g
+      | Chan.Full _ -> fail_io ResourceLimit "cannot post: the GUI's message queue is full"
+      | Chan.Refused _ -> ()
+  else
+    match Chan.send m c with
+      | Chan.Sent -> poke_raw g
+      | Chan.Rejected _ -> ()
 
 pub run : (Unit -> <Gui msg, IO, Panic, Async> a) -> <IO, Panic, Async> a
 run app = Async.run_on_main (fn () -> run_here app)
@@ -204,7 +211,7 @@ run_here app =
         x
 
 -- 2段階で開く。メインのworkerの`Park`がネイティブのループを動かすまで、タスクはゲートで待つ。そのため、toolkitの
--- 呼び出しはすべてそのループの中で動く (docs/spec/vm.mdの「GUI の Park」)
+-- 呼び出しはすべてそのループの中で動く (docs/spec/vm.mdの「GUIのPark」)
 open_state : Unit -> <IO, Async> State msg
 open_state () =
   let gate = want_gui_raw ()
@@ -345,3 +352,4 @@ extern event_int_raw    : Ui -> <IO> (Int, Ui)
 extern event_text_raw   : Ui -> <IO> (String, Ui)
 extern poke_raw         : Async.Cell -> <IO> Unit
 extern abandon_raw      : Async.Cell -> <IO> Unit
+extern is_gui_task_raw  : Async.Cell -> <IO> Bool

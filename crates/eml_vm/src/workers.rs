@@ -282,7 +282,7 @@ pub(crate) struct Run {
     /// デッドロックの判定で`running`の後にAcquireで読み、真の間は判定せずに待つ (docs/spec/vm.mdの
     /// 「メインのworkerの待ち」)。
     holds: AtomicBool,
-    /// `holds`を偽から真にした回数と、真から偽にした回数 (docs/spec/vm.mdの「GUI の Park」)。
+    /// `holds`を偽から真にした回数と、真から偽にした回数 (docs/spec/vm.mdの「GUIのPark」)。
     pub(crate) holds_raised: AtomicU64,
     pub(crate) holds_lowered: AtomicU64,
     /// 送った子の知らせのうち、終わりの知らせをまだ受け取っていないものの数。親を失った節点の分も数える。

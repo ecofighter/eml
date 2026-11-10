@@ -166,7 +166,7 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 - リンクに渡すもの: Linuxでは`cc`、`-lstdc++`、版を持つsonameのQt (pkg-configを優先する)。Windowsでは`link.exe`か`lld-link`で、SDKのimport libraryは使わない。macOSではXcodeのCommand Line Toolsと`-framework AppKit -framework Foundation`
 - emlは静的ライブラリと並べて通知のファイル`THIRD-PARTY-LICENSES-runtime.md`を配り、`eml build`はそれを出力の隣にコピーする。出力を配り直すときは、このファイルも要る ([配布とGUIの前提](../implementation/distribution.md)の「AOTの出力」)
 - `gui`のプロファイルのWindowsのプログラムはコンソールを持たない。そこでは、`Std.Stdout`と`Std.Stderr`への書き込みは捨て、`Std.Stdin`の読みは入力の終わりを見る。IOの失敗にはしない
-- GUIのbackendは、Rustのruntimeが`main`と名づけたスレッドでだけ開く ([コンパイラの構成](../implementation/architecture.md)の「`eml_gui`の内部」)。Cの`main`を持つAOTのバイナリでは、この確かめを見直す
+- Windowsでは、GUIのbackendはRustのruntimeが`main`と名づけたスレッドでだけ開く。AppKitとQtは、プロセスの最初のスレッドかをOSに問う ([コンパイラの構成](../implementation/architecture.md)の「`eml_gui`の内部」)。Cの`main`を持つAOTのバイナリでは、Windowsでこの確かめを見直す
 - 展開の情報は正しさに要らない (中断も致命的な誤りも使わない)。`cranelift-object` が出せる所ではデバッガのためだけに出す
 - 使い回しの鍵は、名前と、開いた後の LIR と、それが指す形と配置の中身のハッシュにする。関数の値の ABI は一様で、直接呼ぶ関数の ABI はその名前で決まるので、呼ぶ関数のシグネチャは鍵に入れなくてよい。鍵は今決め、使い回しの仕組みは後で作る
 - 定数の静的なデータは、凍結した領域と同じ約束 (rc 0、書き込まない、検査ビルドでは前置きを持つ) に乗る ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)。検査モードの範囲の確かめのようにページの頭を読む道は、起動時に `freeze` で定数を作る形を既定にする。静的なデータに容量を持たせる形は、起動時の `freeze` が測定で重いときの代案にする

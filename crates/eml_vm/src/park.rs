@@ -50,7 +50,7 @@ pub trait Pending {
     /// ある。`Park`がそれを見張るのは1回の`wait`の間だけで、`wait`から戻る前に見張りをやめ、閉じることはない。
     fn io(&self) -> Option<PollSource>;
     /// `Std.Gui.poke_raw`と同じく、ゲートの旗を立てるか、待つタスクを起こす。もう放したゲートには何もしない
-    /// (docs/spec/vm.mdの「GUI の Park」)。
+    /// (docs/spec/vm.mdの「GUIのPark」)。
     fn poke(&mut self, gate: i64);
     /// GUIを閉じたrunのゲートを登録表から外す。待つタスクがいれば内部の誤りで、runは止まる。
     fn release_gate(&mut self, gate: i64);

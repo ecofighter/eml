@@ -1,6 +1,6 @@
 //! `Std.Gui`をstubのbackendで動かす。GUIの`Park`はメインのworkerの1回の待ちの中でネイティブのループを回す。runの外の
 //! 待ちの印は`want_gui_raw`が立て、手放した`Ui`の回収か、開く前の取り消しか、作るときの誤りが下ろす
-//! (docs/spec/stdlib.mdの「`Std.Gui`」、docs/spec/vm.mdの「GUI の Park」)。
+//! (docs/spec/stdlib.mdの「`Std.Gui`」、docs/spec/vm.mdの「GUIのPark」)。
 
 use std::sync::Arc;
 use std::thread::ThreadId;
@@ -234,7 +234,7 @@ fn with_app(main: &str) -> String {
 }
 
 /// 1つの固定したタスクが続けて2回`Gui.run`する。2回目の`want_gui_raw`は1回目の`Ui`の回収より先に同じ`run`の中で
-/// 動くので、回収は印を下ろさず、2つのGUIは1つの期間になる (docs/spec/vm.mdの「GUI の Park」)。`main`から別々に
+/// 動くので、回収は印を下ろさず、2つのGUIは1つの期間になる (docs/spec/vm.mdの「GUIのPark」)。`main`から別々に
 /// 呼ぶと回収が先になりうるので、この形で数を決める。
 #[test]
 fn two_sequential_runs_share_one_loop_and_one_holds_period() {
@@ -247,15 +247,135 @@ main () = Async.run (fn () ->
     Gui.run (app \"two\")))
 ",
     );
-    let (lines, transcript, result) = run(&src, "close 1:0\nclose 1:0\n", 1);
+    let (lines, transcript, result) = run(&src, "close 1:0\nclose 2:0\n", 1);
     let finished = finished(result);
     assert_eq!(lines, ["closed one", "closed two"]);
     assert_eq!(holds(&finished), (1, 1));
     assert_eq!(count(&transcript, "run_loop"), 1);
     assert_eq!(count(&transcript, "create_window #1:0 \"one\""), 1);
-    assert_eq!(count(&transcript, "create_window #1:0 \"two\""), 1);
-    assert_eq!(count(&transcript, "destroy #1:0"), 2);
+    assert_eq!(count(&transcript, "create_window #2:0 \"two\""), 1);
+    assert_eq!(count(&transcript, "destroy #1:0"), 1);
+    assert_eq!(count(&transcript, "destroy #2:0"), 1);
     assert_eq!(count(&transcript, "presence off"), 2);
+}
+
+/// ウィンドウの番号はrunを通して数えるので、前の`Gui.run`のウィジェットのidは次の`Gui.run`のどのウィジェットも
+/// 指さず、`NotFound`で失敗する。
+#[test]
+fn a_widget_from_an_earlier_gui_run_fails_not_found() {
+    let src = with_app(
+        "\
+first : Unit -> <Gui Msg, IO, Panic, Async> Gui.Label
+first () =
+  use _ <- Gui.window \"first\" Quit
+  let l = Gui.label \"one\"
+  let _ = Gui.wait ()
+  l
+
+second : Gui.Label -> Unit -> <Gui Msg, IO, Panic, Async> Unit
+second old () =
+  use _ <- Gui.window \"second\" Quit
+  let _ = Gui.label \"two\"
+  Gui.text old \"stale\"
+  println \"changed\"
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Gui.run first
+  match try_io (fn () -> Async.run (fn () -> Gui.run (second l))) with
+    | Ok () -> println \"ok\"
+    | Err e -> println (show e))
+",
+    );
+    let (lines, transcript, result) = run(&src, "close 1:0\n", 1);
+    finished(result);
+    assert_eq!(
+        lines,
+        ["IOError { kind = NotFound, message = \"gui: unknown or closed widget\" }"]
+    );
+    assert_eq!(count(&transcript, "create_window #2:0 \"second\""), 1);
+    assert_eq!(count(&transcript, "create Label #2:1 in #2:0 \"two\""), 1);
+    assert!(
+        !transcript.iter().any(|line| line.contains("stale")),
+        "{transcript:?}"
+    );
+}
+
+/// GUIのタスクは自分のchannelのただ1つの受け手なので、そのタスクの`Gui.post`は待たない。容量の64を超えた65個目は
+/// `ResourceLimit`で失敗し、それまでに送ったメッセージは`wait`で取り出せる。
+#[test]
+fn a_post_from_the_gui_task_fails_when_the_queue_is_full() {
+    let src = with_app(
+        "\
+flood : Unit -> <Gui Msg, IO, Panic, Async> Unit
+flood () =
+  let sink = Gui.sink ()
+  let posts i =
+    match try_io (fn () -> Gui.post sink Posted) with
+      | Ok () -> posts (i + 1)
+      | Err e -> (i, e)
+  let (n, e) = posts 0
+  println \"\\{show n} posted, then \\{show e}\"
+  let drain k =
+    if k == 0 then ()
+    else
+      match Gui.wait () with
+        | Posted -> drain (k - 1)
+        | _ -> panic \"not a posted message\"
+  drain n
+  println \"drained\"
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> Gui.run flood)
+",
+    );
+    let (lines, _, result) = run(&src, "", 1);
+    let finished = finished(result);
+    assert_eq!(
+        lines,
+        [
+            "64 posted, then IOError { kind = ResourceLimit, message = \"cannot post: the GUI's message queue is full\" }",
+            "drained",
+        ]
+    );
+    assert_eq!(holds(&finished), (1, 1));
+}
+
+/// GUIのタスクでないタスクの`Gui.post`は、固定したタスクでもメインのworkerの外のタスクでも、channelが満ちていれば
+/// 空くまで待つので、どのメッセージも落ちずに届く。
+#[test]
+fn posts_from_other_tasks_wait_for_room_and_all_arrive() {
+    let src = with_app(
+        "\
+posts : Gui.Sink Msg -> Int -> <IO, Panic, Async> Unit
+posts sink i =
+  if i == 0 then ()
+  else
+    Gui.post sink Posted
+    posts sink (i - 1)
+
+flood : Unit -> <Gui Msg, IO, Panic, Async> Unit
+flood () =
+  let sink = Gui.sink ()
+  Async.spawn (fn () -> posts sink 100)
+  Async.spawn_off_main (fn () -> posts sink 100)
+  let drain k =
+    if k == 0 then ()
+    else
+      match Gui.wait () with
+        | Posted -> drain (k - 1)
+        | _ -> panic \"not a posted message\"
+  drain 200
+  println \"drained\"
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> Gui.run flood)
+",
+    );
+    let (lines, _, result) = run(&src, "", 2);
+    let finished = finished(result);
+    assert_eq!(lines, ["drained"]);
+    assert_eq!(holds(&finished), (1, 1));
 }
 
 /// 本体のpanicも`Ui`を手放すので、回収がウィンドウを閉じて印を下ろす。後のデッドロックはまた判定される。

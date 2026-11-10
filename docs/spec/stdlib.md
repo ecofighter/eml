@@ -20,7 +20,7 @@ eml run --link openblas=/opt/lib/libopenblas.so solve.em
 - ファイルより後ろの引数は、`-`で始まるものも含めてそのままスクリプトに渡す。`--debug-heap`、`--stats`、`--workers`、`--link`、`--gui`はファイルより前にだけ書ける。`eml run main.em --workers 4`は、スクリプトに`--workers`と`4`を渡す
 - `eml run`は、タスクを切り替える方針をいつも`Normal`にする。タスクは`Async`の操作でだけ切り替わる ([VM](vm.md)の「タスクとスケジュール」)
 - `--workers <N>` は、`par` の右の子と `Async` のタスクと `compute` の仕事を走らせる worker のスレッドの数 (worker 0 を含む) を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。`N` は 1 以上 1024 以下の整数である。run は worker ごとに止める語と欄を確保するので、上限を置いて、大きすぎる数を確保の失敗でなく使い方の誤りにする。`--workers` がなければ環境変数 `EML_WORKERS` を同じ規則で読み、それもなければ `available_parallelism()` の値にする (読めなければ 1、1024 を超えれば 1024)。0 と 1024 を超える数と数でない値は、フラグでも `EML_WORKERS` でも使い方の誤り (終了コード 2) で、2回書いた `--workers` も同じである。`run` だけが持ち、`repl` と `check` は持たない。`repl` は常に 1 である ([REPL の端末](repl.md) の「コマンドライン」)。ライブラリの `Limits::default()` と `eml_cli::default_limits()` も 1 で、UI テストは 1 で走らせる。`par/` と `async/` の UI テストは 2 と 8 でも走らせる ([テスト戦略](../implementation/testing.md) の「seed で流す」)
-- `--gui <native|stub>`は、`Std.Gui`がウィンドウを開くbackendを選ぶ ([VM](vm.md) の「GUI の Park」)。`native`はOSのtoolkitで、`stub`は何も開かず、ウィンドウを表示するたびに閉じる要求を1回送るので、プログラムはウィンドウを待たずに終わりまで動く。`--gui`がなければ環境変数`EML_GUI`を同じ規則で読み、それもなければ`native`にする。ほかの値は、フラグでも`EML_GUI`でも使い方の誤り (`` `{値}` is not a GUI backend (native or stub) ``、終了コード2) で、`EML_GUI`の誤りは`EML_GUI: `を前に付ける。`run`だけが持ち、`repl`と`check`は持たない。`repl`にはGUIの`Park`がないので、`Gui.run`は`NotAvailable`で失敗する (下の「`Std.Gui`」)
+- `--gui <native|stub>`は、`Std.Gui`がウィンドウを開くbackendを選ぶ ([VM](vm.md)の「GUIのPark」)。`native`はOSのtoolkitで、`stub`は何も開かず、表示したウィンドウごとに閉じる要求を1回送るので、プログラムはウィンドウを待たずに終わりまで動く。`--gui`がなければ環境変数`EML_GUI`を同じ規則で読み、それもなければ`native`にする。ほかの値は、フラグでも`EML_GUI`でも使い方の誤り (`` `{値}` is not a GUI backend (native or stub) ``、終了コード2) で、`EML_GUI`の誤りは`EML_GUI: `を前に付ける。`run`だけが持ち、`repl`と`check`は持たない。`repl`にはGUIの`Park`がないので、`Gui.run`は`NotAvailable`で失敗する (下の「`Std.Gui`」)
 - `--link KEY=VALUE` は、`link` の item に KEY と書いたライブラリの代わりに、VALUE を開く ([VM](vm.md) の「ライブラリと記号」)。何回でも書け、`run` と `repl` が持つ。同じ KEY を2回以上書くと、後に書いたものが効く。`check` はライブラリを開かないので持たない。KEY は `link` の item に書いた文字列そのもので、VALUE は `link` の item の名前と同じ規則で飾る。最初の `=` で KEY と VALUE に分け、`=` のない値と、KEY か VALUE が空の値は使い方の誤り (`` `{text}` is not KEY=VALUE ``、終了コード 2) である。`run` は、読み込んだどのモジュールの `link` の item にも合わない KEY を、`link error: --link names no library "{key}"` で断る (終了コード 1。[VM](vm.md) の「`--link`」)。`repl` は断らない ([REPL の端末](repl.md) の「C の関数」)
 - `Env.args ()` は、ファイルより後ろの引数を返す。`eml` とスクリプトのパスは含めない
 - shebang は `#!/usr/bin/env eml` と書く。Linux の `env` は `#!` の行の残りを1つの引数として渡すので、`#!/usr/bin/env eml run` は動かない
@@ -1855,15 +1855,15 @@ main () =
 公開の名前は次のとおりである。データの型`Track` (`Auto`、`Fr Int`、`Px Int`)、`Align` (`Start`、`Center`、`End`、`Stretch`)、`Cell` (`col_span`、`row_span`、`halign`、`valign`) と`default_cell` (幅は1、`Stretch`)。抽象の型`Window`、`Grid`、`Label`、`Button`、`TextField`、`CheckBox`、`Choice`、`ProgressBar`、`Sink msg`。クラス`Widget w` (`wid : w -> Int`)。17の操作を持つエフェクト`Gui msg`。包みの関数`window`、`grid`、`cell`、`text`、`enable`、`value`、`select`、`checked`、`post`、`run`。エフェクトは抽象ではないので、テストは自分のhandlerで扱える。
 
 - `run app` (`(Unit -> <Gui msg, IO, Panic, Async> a) -> <IO, Panic, Async> a`) は、`Async.run_on_main`で`app`を固定したタスクとして動かす (上の「メインのworker」)。`Gui`の操作は自分では`IO`も`Async`も持たない
-- 開くのは2段である。タスクは`want_gui_raw`でゲートのセルを作り、`Async.gui_wait`でそこで待つ。メインのworkerのGUIの`Park`がbackendを作ってネイティブのループに入り、ループの中からゲートに知らせる。タスクはそれから`open_ui_raw`を呼ぶので、toolkitの呼び出しはどれもネイティブのループの中で動く ([VM](vm.md)の「GUI の Park」)
+- 開くのは2段である。タスクは`want_gui_raw`でゲートのセルを作り、`Async.gui_wait`でそこで待つ。メインのworkerのGUIの`Park`がbackendを作ってネイティブのループに入り、ループの中からゲートに知らせる。タスクはそれから`open_ui_raw`を呼ぶので、toolkitの呼び出しはどれもネイティブのループの中で動く ([VM](vm.md)の「GUIのPark」)
 - ゲートで待つ間に取り消された`run`は、`abandon_raw`でゲートを放し、`Cancelled`で失敗する。次の`run`は開ける
 - `wait ()`は次の順に見る。取り消しの地点、flush (変わったウィンドウの配置と新しいウィンドウの表示)、次のネイティブのイベント、次に送られたメッセージ、そしてウィンドウが1つも開いておらず`sink`も取っていなければ失敗`Other "gui: wait with no open window and no sink"`。どれもなければゲートで待ち、初めから見直す。引き出しと待ちの間に届いた知らせはゲートの旗を立てるので、待ちはすぐに戻る
-- `sink ()`は、`run`のchannel (容量64) とゲートを持つ`Sink msg`を返す。`post sink m`は、どのworkerのどのタスクからも呼べ、`m`を送ってからゲートに知らせる。`run`が戻った後に送ったメッセージは捨てる。channelは閉じていて、放したゲートへの知らせは何もしないからである
+- `sink ()`は、`run`のchannel (容量64) とゲートを持つ`Sink msg`を返す。`post sink m`は、どのworkerのどのタスクからも呼べ、`m`を送ってからゲートに知らせる。GUIのタスクでないタスクは、channelが満ちていれば空くまで待つ。GUIのタスク (`app`を動かすタスク) は待たず、channelが満ちていれば`post`はすぐに`ResourceLimit "cannot post: the GUI's message queue is full"`で失敗する。そのタスクはchannelのただ1つの受け手なので、待てば誰も空けないからである。`app`が始めたタスクは、固定したタスクでもGUIのタスクではない。`run`が戻った後に送ったメッセージは捨てる。channelは閉じていて、放したゲートへの知らせは何もしないからである
 - `app`が戻るか、失敗するか、取り消されると、`run`はchannelを閉じて`Ui`を手放す。`Ui`を手放すことは旗を立てるだけで、ウィンドウは`Park`が次の段ですべて閉じる。そのため、正常な終わり、panic、取り消しのどれでもウィンドウは閉じる
 - 求めるか開いているGUIは一度に1つだけである。ほかの`run`が開くのを待っているか`Ui`を開いている間の`run`は、`Other "cannot open the GUI: it is already open"`で失敗する。GUIの`Park`のないrun (`eml repl`、`eml run`の`Park`を置かないrun、feature `gui`のない処理系) では、`run`は`NotAvailable "cannot open the GUI: not available"`で失敗する
 - GUIを求めるか開いている間は、プログラムをデッドロックと判定しない。利用者を待っていることがあるからである。開くのに失敗したか、ウィンドウができる前に取り消された`run`はその期間を終えるので、その後のデッドロックはまた報告される
 
-ウィジェットのidは`(window_no << 32) | seq`である。`window_no`は開いた`Ui`ごとに1から数え、`seq`の0はウィンドウ自身である。idは使い回さない。閉じたウィジェットのidは`NotFound`で失敗し、閉じたウィジェットのイベントは捨てる。`close_window`は、idの上位32ビットがそのウィンドウと同じウィジェットのhandlerをすべて忘れる。
+ウィジェットのidは`(window_no << 32) | seq`である。`window_no`はプログラムのrunを通して、その中で開いたどの`Ui`のウィンドウも続けて1から数え、`seq`の0はウィンドウ自身である。idは使い回さない。閉じたウィジェットのidは`NotFound`で失敗し、閉じたウィジェットのイベントは捨てる。`close_window`は、idの上位32ビットがそのウィンドウと同じウィジェットのhandlerをすべて忘れる。
 
 行が1つのイベントで渡すのは`Int`と多くても1つの`String`だけで、`msg`の値はemlの側で作る。`poll_raw`は次のイベントのウィジェットのidを返し、イベントがなければ0を返す。`event_int_raw`と`event_text_raw`はそのイベントの中身を読み、どちらを読むかはそのidに登録したhandlerが決める。`create_raw`の種類の番号はLabel 1、Button 2、TextField 3、CheckBox 4、Choice 5、ProgressBar 6、`set_int_raw`の性質の番号はvalue 1、checked 2、enabled 3、揃えの番号はStart 0、Center 1、End 2、Stretch 3である。trackは`a`、`f<n>`、`p<n>`を`,`でつないだ文字列で渡す。正でない`Fr`と負の`Px`は範囲の外である。
 
@@ -1887,10 +1887,11 @@ main () =
 | 2.6.4以降のWindows App SDK 2のruntimeがない (Windows) | `NotAvailable "cannot open the GUI: the Windows App SDK 2 runtime is not installed (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)"` |
 | 画面がない (Linuxで`DISPLAY`も`WAYLAND_DISPLAY`もない) | `Other "cannot open the GUI: no display (DISPLAY and WAYLAND_DISPLAY are unset)"` |
 | ほかのbackendの誤り | backendの文言の`Other` |
+| GUIのタスクの`post`で、channelが満ちている | `ResourceLimit "cannot post: the GUI's message queue is full"` |
 
 配置はTaffyが置くgridで、置き方は自動だけである。gridはtrack (`Auto | Fr n | Px n`) の列と行を持ち、`rows = []`は暗黙の`Auto`の行である。子は行の順に埋める。子は直前の`cell`の`col_span`、`row_span`、`halign`、`valign` (なければ`default_cell`) を持ち、gridは入れ子にできる。間隔は8、ウィンドウの余白は12の論理pxで、どちらも固定である。ウィンドウは自然な大きさで開き、最小の幅はmin-contentの幅である。座標、大きさ、DPIの値はemlに渡らない。
 
-externの行は次の19行で、どれも`pub`でない。`want_gui_raw`、`open_ui_raw`、`poke_raw`、`abandon_raw`は登録表のゲートのセルに触れるので、VMは`Async`の命令として実行する ([VM](vm.md)の「GUI の Park」)。ほかの行は待たず、普通のexternの行としてメインのスレッドのtoolkitに触れる。`Ui`を消費して返す行は、失敗するときは`Ui`を手放してから投げる。
+externの行は次の20行で、どれも`pub`でない。`want_gui_raw`、`open_ui_raw`、`poke_raw`、`abandon_raw`は登録表のゲートのセルに触れ、`is_gui_task_raw`は今のタスクを読むので、VMは`Async`の命令として実行する ([VM](vm.md)の「GUIのPark」)。`is_gui_task_raw g`が真になるのは、呼んだタスクが、ゲートが`g`の開いている`Ui`を開いたタスクのときだけである。ほかの行は待たず、普通のexternの行としてメインのスレッドのtoolkitに触れる。`Ui`を消費して返す行は、失敗するときは`Ui`を手放してから投げる。
 
 | 行 | 型 |
 |---|---|
@@ -1908,6 +1909,7 @@ externの行は次の19行で、どれも`pub`でない。`want_gui_raw`、`open
 | `open_windows_raw`、`poll_raw`、`event_int_raw` | `Ui -> <IO> (Int, Ui)` |
 | `event_text_raw` | `Ui -> <IO> (String, Ui)` |
 | `poke_raw`、`abandon_raw` | `Async.Cell -> <IO> Unit` |
+| `is_gui_task_raw` | `Async.Cell -> <IO> Bool` |
 
 放したゲートで待つのは、ほかのセルと同じく内部の誤りである。stdはそうしない。`Ui`はどれも自分のゲートを持ち、`abandon_raw`は開かなかったゲートを放し、runより長く残るゲートの値は`Sink`の中のものだけで、それを使うのは`poke_raw`だけであり、放したゲートへの知らせは何もしないからである。
 

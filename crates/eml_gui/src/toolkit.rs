@@ -29,7 +29,9 @@ struct Window {
 }
 
 impl Toolkit {
-    pub fn new(widgets: Rc<RefCell<dyn Widgets>>, queue: EventQueue) -> Toolkit {
+    /// ウィンドウの番号は`last_window`の次から数える。同じbackendの上で続く`Toolkit`は、前の`Toolkit`の
+    /// `last_window()`を渡して、idを使い回さない。
+    pub fn new(widgets: Rc<RefCell<dyn Widgets>>, queue: EventQueue, last_window: u32) -> Toolkit {
         queue.attach();
         Toolkit {
             widgets,
@@ -38,9 +40,14 @@ impl Toolkit {
             windows: BTreeMap::new(),
             stack: Vec::new(),
             next: None,
-            last_window: 0,
+            last_window,
             layouts: 0,
         }
+    }
+
+    /// 最後に作ったウィンドウの番号。まだなければ`new`に渡した番号である。
+    pub fn last_window(&self) -> u32 {
+        self.last_window
     }
 
     pub fn begin_window(&mut self, title: &str) -> Result<Id, GuiError> {
@@ -289,7 +296,7 @@ mod tests {
         take_transcript();
         let native = Backend::Stub(Script::default()).create().unwrap();
         let queue = native.queue.clone();
-        (Toolkit::new(native.widgets, native.queue), queue)
+        (Toolkit::new(native.widgets, native.queue, 0), queue)
     }
 
     fn user(e: Event) -> RawEvent {
@@ -440,7 +447,7 @@ mod tests {
     fn a_second_toolkit_on_one_queue_panics() {
         let (tk, queue) = toolkit();
         let widgets = Rc::clone(&tk.widgets);
-        let _second = Toolkit::new(widgets, queue);
+        let _second = Toolkit::new(widgets, queue, 0);
     }
 
     #[test]
@@ -448,10 +455,29 @@ mod tests {
         let (tk, queue) = toolkit();
         let widgets = Rc::clone(&tk.widgets);
         drop(tk);
-        let mut tk = Toolkit::new(widgets, queue.clone());
+        let mut tk = Toolkit::new(widgets, queue.clone(), 0);
         let w = tk.begin_window("A").unwrap();
         queue.push(RawEvent::User(Event::CloseRequest(w)));
         assert_eq!(tk.poll(), Some(Event::CloseRequest(w)));
+    }
+
+    #[test]
+    fn a_new_toolkit_numbers_windows_after_the_last_one() {
+        let (mut tk, queue) = toolkit();
+        tk.begin_window("A").unwrap();
+        tk.begin_window("B").unwrap();
+        assert_eq!(tk.last_window(), 2);
+        let widgets = Rc::clone(&tk.widgets);
+        let last = tk.last_window();
+        drop(tk);
+        let mut tk = Toolkit::new(widgets, queue, last);
+        assert_eq!(tk.last_window(), 2);
+        assert_eq!(tk.begin_window("C").unwrap(), Id::new(3, 0));
+        assert_eq!(
+            tk.set(Id::new(1, 0), Prop::Text("x".into())),
+            Err(GuiError::UnknownId)
+        );
+        take_transcript();
     }
 
     #[test]
@@ -733,7 +759,7 @@ mod tests {
             fail_create: Rc::clone(&fail_create),
         };
         (
-            Toolkit::new(Rc::new(RefCell::new(counting)), native.queue),
+            Toolkit::new(Rc::new(RefCell::new(counting)), native.queue, 0),
             requests,
             fail_create,
         )
