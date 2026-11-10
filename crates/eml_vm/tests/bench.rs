@@ -7,7 +7,7 @@ use eml_test_support::{capture, lir, run_stats, run_stats_on, schedule_independe
 use eml_vm::{RunConfig, RunStats, Sched};
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 41] = [
+const PROGRAMS: [&str; 42] = [
     "apply_float",
     "apply_int",
     "byte_loop",
@@ -49,6 +49,7 @@ const PROGRAMS: [&str; 41] = [
     "tree_map",
     "upsert",
     "upsert_by_hand",
+    "words_loop",
 ];
 
 /// 自動に任せたプログラムと手で特殊化した `_by_hand` のプログラムの組と、両方の出力。`state_loop` の組は、状態を渡す形の
@@ -1045,6 +1046,37 @@ fn upsert_by_hand() {
 }
 
 #[test]
+fn words_loop() {
+    insta::assert_debug_snapshot!(stats("words_loop", "30000\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 90005,
+        rc_increments: 60000,
+        rc_decrements: 60016,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 17,
+        reuses: 0,
+        peak_objects: 3,
+        peak_stack: 21,
+        tasks: 0,
+        parks: 0,
+        dropped_failures: 0,
+        cancels: 0,
+        timers: 0,
+        shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
+        completions: 0,
+    }
+    ");
+}
+
+#[test]
 fn records() {
     insta::assert_debug_snapshot!(stats("records", "100000 49764648 999 223\n"), @"
     RunStats {
@@ -1629,6 +1661,7 @@ fn unwind_points() {
     tree_map: 20
     upsert: 31
     upsert_by_hand: 31
+    words_loop: 11
     scripts/wc: 56
     scripts/grep: 61
     scripts/logstat: 119
