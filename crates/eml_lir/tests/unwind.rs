@@ -390,3 +390,22 @@ fn f(op.0: int, w.1: enum, b.2: obj) -> obj {
 ";
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
 }
+
+#[test]
+fn the_entry_row_omits_a_borrowed_parameter() {
+    // 貸された引数は呼んだ側が生かしておくので、エントリの行も呼ばれる側の地点も、それを手放さない
+    let text = "\
+fn len(borrowed s.0: obj) -> int {
+  let n.1: int = extern Std.String.byte_length(s.0)
+  return n.1
+}
+fn f(borrowed s.0: obj, t.1: obj) -> int {
+  let n.2: int = call len(s.0)
+  decref t.1
+  return n.2
+}
+";
+    assert_eq!(entry_of(text, "f"), [(1, 1)]);
+    assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);
+    assert_eq!(entry_of(text, "len"), []);
+}

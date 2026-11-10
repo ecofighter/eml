@@ -380,8 +380,7 @@ fn make(u.0: unit) -> (int, float, obj) {
   let s.3: obj = extern \"Prelude.++\"(a.1, b.2)
   return (4611686018427387904, 2.5, s.3)
 }
-fn first(p.0.4: int, p.1.5: float, p.2.6: obj) -> int {
-  decref p.2.6
+fn first(p.0.4: int, p.1.5: float, borrowed p.2.6: obj) -> int {
   return p.0.4
 }
 fn third(p.0.4: int, p.1.5: float, p.2.6: obj) -> obj {
@@ -400,6 +399,7 @@ fn first$uniform(p.2: tobj) -> tobj {
   let p.1.7: float = unbox p.1.6
   release unboxed p.2 (,,) #0(_, _, p.2.8)
   let r.1: int = call first(p.0.5, p.1.7, p.2.8)
+  decref p.2.8
   let r.3: tobj = box r.1
   return r.3
 }
@@ -621,11 +621,19 @@ fn a_c_call_passes_scalars_in_both_modes() {
 #[cfg(not(miri))]
 const BLOCKING_SRC: &str = "\
 import Async (Async)
+import MutUnboxedArray
+import UnboxedArray
 
 extern \"C\" blocking symbol \"rs_sub_i32\" sub : Int as int32_t -> Int as int32_t -> <IO, Panic, Async> Int as int32_t
+extern \"C\" symbol \"rs_publish\" publish : UnboxedArray Int -> Int -> <IO> Int
+extern \"C\" blocking symbol \"rs_publish\" publish_blocking : UnboxedArray Int -> Int -> <IO, Async> Int
 
 main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () -> println (show (sub 7 2)))
+main () = Async.run (fn () ->
+  let a = MutUnboxedArray.freeze (MutUnboxedArray.make 200 0)
+  let _ = publish a 100160
+  let _ = publish_blocking a 100161
+  println (show (sub 7 2)))
 ";
 
 /// `BLOCKING_SRC` の LIR。`Async.run` の機構は手で書けず、Miri の下ではパイプラインの構文解析が rowan の中で
@@ -633,11 +641,11 @@ main () = Async.run (fn () -> println (show (sub 7 2)))
 /// 表示のどれかでこのプログラムの出力が変われば書き直す。
 const BLOCKING_LIR: &str = include_str!("miri/blocking.lir");
 
-/// `blocking` の C の呼び出しが、受け付け、`io_wait`、取り出しの3段を通り、テストの driver の仕事として後の `wait` で
-/// 走る。Miri でない run は、写した LIR がパイプラインの今の出力と同じことを確かめる。パイプラインが verifier を
-/// 通しているので、Miri の下では verifier を流さず、検査モードだけで流す。Miri の費用を抑えるためである。slot の整数を
-/// ポインタに戻す呼ばれる関数は `-Zmiri-strict-provenance` で動かないので、スカラーだけを渡す (docs/spec/vm.md の
-/// 「`blocking` の呼び出し」)。
+/// `blocking`のCの呼び出しが、受け付け、`io_wait`、取り出しの3段を通り、テストのdriverの仕事として後の`wait`で
+/// 走る。Miriでないrunは、写したLIRがパイプラインの今の出力と同じことを確かめる。パイプラインがverifierを
+/// 通しているので、Miriの下ではverifierを流さず、検査モードだけで流す。Miriの費用を抑えるためである。slotの整数を
+/// ポインタに戻す呼ばれる関数は`-Zmiri-strict-provenance`で動かないので、呼ばれる関数はどれも位置を参照外ししない
+/// (docs/spec/vm.mdの「`blocking` の呼び出し」)。
 #[test]
 fn a_blocking_call_runs_on_the_test_driver() {
     #[cfg(not(miri))]
@@ -646,12 +654,32 @@ fn a_blocking_call_runs_on_the_test_driver() {
         BLOCKING_LIR,
         "rewrite tests/miri/blocking.lir from the pipeline's output"
     );
-    let program = eml_lir::parse(BLOCKING_LIR).unwrap_or_else(|error| panic!("{error}"));
-    let linked = crate::common::c::linked(&program, &crate::common::c::calls(), &[]);
-    let (host, out) = capture_host(Default::default());
-    let config = RunConfig::default().with_debug_heap(true);
-    execute(&program, &linked, &config, host).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out.contents(), "5\n");
+    assert_eq!(blocking_run(), "5\n");
+}
+
+/// `BLOCKING_LIR`を検査モードで1回だけ流し、出力を返す。このプロセスの2つのテストが同じrunを見るのは、Miriの
+/// 費用を抑えるためである。
+fn blocking_run() -> &'static str {
+    static OUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    OUT.get_or_init(|| {
+        let program = eml_lir::parse(BLOCKING_LIR).unwrap_or_else(|error| panic!("{error}"));
+        let linked = crate::common::c::linked(&program, &crate::common::c::calls(), &[]);
+        let (host, out) = capture_host(Default::default());
+        let config = RunConfig::default().with_debug_heap(true);
+        execute(&program, &linked, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        out.contents()
+    })
+}
+
+/// `blocking`の呼び出しが、大きい物体のページにある配列を写さずに貸す。同期の呼び出しとCが受けた位置を比べる
+/// だけである。位置を参照外しする呼ばれる関数は`-Zmiri-strict-provenance`で動かないためである
+/// (docs/spec/vm.mdの「`blocking` の呼び出し」)。
+#[test]
+fn a_blocking_call_lends_a_large_array_on_the_test_driver() {
+    blocking_run();
+    let sync = crate::common::c::published(100160);
+    assert!(sync.is_some(), "the synchronous call did not publish");
+    assert_eq!(crate::common::c::published(100161), sync);
 }
 
 /// C が返したハンドルの物体を作り、借りて C に渡し、手放すと dtor を1回だけ呼ぶ。

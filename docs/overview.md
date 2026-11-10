@@ -112,7 +112,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | deep handler | 再開した継続の中でも同じ handler が有効なままの handler |
 | パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。状態は handler の実行ごとの evidence に置き、脱糖しない |
 | レイアウト段 | lexer と parser の間で、仮想トークン `OPEN` / `SEP` / `CLOSE` (コードでは `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE`) を挿入する段 |
-| Perceus | 参照カウントの `dup` / `decref` / `release` を静的に挿入する方式。reuse analysis も持つ ([LIR](spec/lir.md) の「reuse」)。借用の最適化はない ([ロードマップ](future/roadmap.md) の「段の列」) |
+| Perceus | 参照カウントの`dup` / `decref` / `release`を静的に挿入する方式。reuse analysisも持つ ([LIR](spec/lir.md)の「reuse」)。読むだけの関数は引数を借りて受け取る ([LIR](spec/lir.md)の「借用の推論」) |
 | Core IR | 型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列の IR。すべての中間値に名前を付け、エフェクトの命令を明示する。RC と box は持たない |
 | LIR | EP の後の Core IR から写す、基本ブロックの列の IR。エフェクトの命令を持たず、box、RC の命令、末尾呼び出しを明示する。VM と後のネイティブ化の入力である |
 | worker | タスクを動かすOSのスレッド1つ。自分の`Ctx`とヒープを持ち、スケジューラの下で仕事を取る。分かれたrunでは、`Machine`を持つスレッドの上のメインのworkerが、固定したタスクだけを動かすworkerとして1つ加わる。[マルチコア対応の設計](future/multicore.md)の「スレッドとworker」にある |

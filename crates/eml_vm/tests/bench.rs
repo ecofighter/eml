@@ -7,7 +7,7 @@ use eml_test_support::{capture, lir, run_stats, run_stats_on, schedule_independe
 use eml_vm::{RunConfig, RunStats, Sched};
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 41] = [
+const PROGRAMS: [&str; 42] = [
     "apply_float",
     "apply_int",
     "byte_loop",
@@ -49,6 +49,7 @@ const PROGRAMS: [&str; 41] = [
     "tree_map",
     "upsert",
     "upsert_by_hand",
+    "words_loop",
 ];
 
 /// 自動に任せたプログラムと手で特殊化した `_by_hand` のプログラムの組と、両方の出力。`state_loop` の組は、状態を渡す形の
@@ -457,7 +458,7 @@ fn list() {
         allocations: 100002,
         reuses: 100000,
         peak_objects: 100001,
-        peak_stack: 700015,
+        peak_stack: 700016,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -636,14 +637,14 @@ fn tree() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 37,
-        rc_increments: 14898,
-        rc_decrements: 29800,
+        rc_increments: 0,
+        rc_decrements: 14902,
         boxes: 14898,
         unboxes: 251563,
         allocations: 14903,
         reuses: 236665,
         peak_objects: 14900,
-        peak_stack: 392,
+        peak_stack: 393,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -812,7 +813,7 @@ fn orders() {
         allocations: 200002,
         reuses: 159320,
         peak_objects: 200001,
-        peak_stack: 18,
+        peak_stack: 19,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -843,7 +844,7 @@ fn orders_by_hand() {
         allocations: 200002,
         reuses: 159320,
         peak_objects: 200001,
-        peak_stack: 18,
+        peak_stack: 19,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -960,14 +961,14 @@ fn tree_by_hand() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 37,
-        rc_increments: 14898,
-        rc_decrements: 29800,
+        rc_increments: 0,
+        rc_decrements: 14902,
         boxes: 14898,
         unboxes: 251563,
         allocations: 14903,
         reuses: 236665,
         peak_objects: 14900,
-        peak_stack: 392,
+        peak_stack: 393,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -991,8 +992,8 @@ fn upsert() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 157580,
-        rc_increments: 25952,
-        rc_decrements: 71955,
+        rc_increments: 0,
+        rc_decrements: 46003,
         boxes: 22000,
         unboxes: 58815,
         allocations: 46004,
@@ -1022,14 +1023,45 @@ fn upsert_by_hand() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 157580,
-        rc_increments: 25952,
-        rc_decrements: 71955,
+        rc_increments: 0,
+        rc_decrements: 46003,
         boxes: 22000,
         unboxes: 58815,
         allocations: 46004,
         reuses: 312764,
         peak_objects: 6002,
         peak_stack: 352,
+        tasks: 0,
+        parks: 0,
+        dropped_failures: 0,
+        cancels: 0,
+        timers: 0,
+        shared_objects: 0,
+        channel_ops: 0,
+        channel_waits: 0,
+        channels_swept: 0,
+        completions: 0,
+    }
+    ");
+}
+
+#[test]
+fn words_loop() {
+    insta::assert_debug_snapshot!(stats("words_loop", "30000\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 90005,
+        rc_increments: 0,
+        rc_decrements: 16,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 17,
+        reuses: 0,
+        peak_objects: 3,
+        peak_stack: 22,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -1091,7 +1123,7 @@ fn rbtree() {
         allocations: 24498,
         reuses: 128498,
         peak_objects: 9998,
-        peak_stack: 259,
+        peak_stack: 260,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -1122,7 +1154,7 @@ fn tree_map() {
         allocations: 8193,
         reuses: 163820,
         peak_objects: 8192,
-        peak_stack: 126,
+        peak_stack: 127,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -1153,7 +1185,7 @@ fn std_list() {
         allocations: 20002,
         reuses: 257148,
         peak_objects: 20001,
-        peak_stack: 23,
+        peak_stack: 24,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -1177,8 +1209,8 @@ fn std_map() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 157580,
-        rc_increments: 2000,
-        rc_decrements: 50003,
+        rc_increments: 0,
+        rc_decrements: 48003,
         boxes: 22000,
         unboxes: 58777,
         allocations: 48004,
@@ -1239,8 +1271,8 @@ fn nbody() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 24,
-        rc_increments: 82160,
-        rc_decrements: 107210,
+        rc_increments: 66120,
+        rc_decrements: 91170,
         boxes: 5,
         unboxes: 20055,
         allocations: 25051,
@@ -1270,14 +1302,14 @@ fn spectral_norm() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 11,
-        rc_increments: 4011,
-        rc_decrements: 4053,
+        rc_increments: 1,
+        rc_decrements: 43,
         boxes: 0,
         unboxes: 0,
         allocations: 43,
         reuses: 0,
-        peak_objects: 4,
-        peak_stack: 50,
+        peak_objects: 6,
+        peak_stack: 51,
         tasks: 0,
         parks: 0,
         dropped_failures: 0,
@@ -1629,11 +1661,98 @@ fn unwind_points() {
     tree_map: 20
     upsert: 31
     upsert_by_hand: 31
+    words_loop: 11
     scripts/wc: 56
     scripts/grep: 61
     scripts/logstat: 119
-    scripts/csv2jsonl: 118
+    scripts/csv2jsonl: 174
     scripts/deploy: 136
+    ");
+}
+
+/// `$owned`の写しの名前。写しは借用パラメータを持つ関数の値参照と末尾呼びのために作られる
+/// (docs/spec/lir.mdの「関数の ABI」)。
+fn owned_names(program: &eml_lir::Program) -> Vec<&str> {
+    let mut names: Vec<&str> = program
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .filter(|name| name.ends_with("$owned"))
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// `$owned`の写しの一覧。写しはプログラムのコードを増やすので、一覧がその増え方の尺度になる。
+#[test]
+fn owned_variants() {
+    let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui/run/scripts");
+    let mut lines = Vec::new();
+    let mut total = 0;
+    let mut push = |name: String, program: &eml_lir::Program| {
+        let names = owned_names(program);
+        total += names.len();
+        let listed: String = names.iter().map(|owned| format!(" {owned}")).collect();
+        lines.push(format!("{name}:{listed}"));
+    };
+    for name in PROGRAMS {
+        let text = std::fs::read_to_string(bench_dir().join(format!("{name}.em"))).unwrap();
+        push(name.to_string(), &lir(&text));
+    }
+    for name in ["wc", "grep", "logstat", "csv2jsonl", "deploy"] {
+        let text = std::fs::read_to_string(scripts.join(name).join("main.em")).unwrap();
+        push(format!("scripts/{name}"), &lir(with_modules(&text, &[])));
+    }
+    lines.push(format!("total: {total}"));
+    insta::assert_snapshot!(lines.join("\n"), @"
+    apply_float:
+    apply_int:
+    byte_loop:
+    bytes_loop:
+    char_loop:
+    empty:
+    ep_float:
+    fannkuch_by_hand:
+    fannkuch_var:
+    fib:
+    fold_state:
+    iter_generate:
+    iter_pipeline:
+    iter_pipeline_by_hand:
+    list:
+    loop:
+    mandelbrot:
+    nbody:
+    orders:
+    orders_by_hand:
+    par_tree:
+    push_fold:
+    push_fold_by_hand:
+    rbtree:
+    records:
+    records_wide:
+    sieve_by_hand:
+    sieve_var:
+    spectral_norm:
+    state:
+    state_loop:
+    state_loop_by_hand:
+    state_nested:
+    std_list:
+    std_map:
+    sum_loop:
+    tree:
+    tree_by_hand:
+    tree_map:
+    upsert:
+    upsert_by_hand:
+    words_loop:
+    scripts/wc:
+    scripts/grep:
+    scripts/logstat:
+    scripts/csv2jsonl: convert$handle0$yield@#22031fe5edd465bb$owned convert$handle0$yield@#315c772923134341$owned rows$let$after_quote@#e184ce0ea59753f6$h0$owned rows$let$after_quote@#e184ce0ea59753f6$owned rows$let$field@#fb526ad2d9943e53$h0$owned rows$let$field@#fb526ad2d9943e53$hj13$owned rows$let$field@#fb526ad2d9943e53$owned rows$let$in_quotes@#a330da13ffd556f8$owned rows$let$row_start@#74a7b3a5e5e7a0fe$owned
+    scripts/deploy:
+    total: 9
     ");
 }
 

@@ -60,6 +60,7 @@ fn block(block: Block) -> eml_lir::Block {
     } = block;
     eml_lir::Block {
         params,
+        borrowed: Vec::new(),
         stmts: stmts.into_iter().map(stmt).collect(),
         term: terminator(term),
     }

@@ -62,12 +62,14 @@ impl<'p> Printer<'p> {
             clause: function.clause,
             split: function.split,
             params: function.params().to_vec(),
+            borrowed: function.blocks[BlockId::ENTRY.0 as usize].borrowed.clone(),
             rets: function.rets.clone(),
         };
         self.writer.function_head(&header, &function.vars, out);
         for (index, block) in function.blocks.iter().enumerate() {
             if index != BlockId::ENTRY.0 as usize {
-                self.writer.label(index, &block.params, &function.vars, out);
+                self.writer
+                    .label(index, &block.params, &block.borrowed, &function.vars, out);
             }
             self.block(function, block, out);
         }

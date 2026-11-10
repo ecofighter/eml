@@ -9,7 +9,7 @@ use std::sync::Arc;
 use eml_cabi::{CCall, Dtor};
 use eml_extern::{CFunction, CInt, CParam, CRet, ExternEffect, Purity};
 use eml_rt::externs::{Fault, Raised};
-use eml_rt::{Ctx, Kind, Mode, Word};
+use eml_rt::{Ctx, Kind, Mode, PagePin, Word};
 
 use crate::cells::{self, JobSource};
 use crate::code::CodeBase;
@@ -129,8 +129,9 @@ fn marshal<M: Mode>(
     Ok(Ok(out))
 }
 
-/// `blocking`の呼び出しの引数で、仕事が値で持つ。仕事はヒープのポインタを持たないので、runより長く生きる呼び出し
-/// もヒープに触れない (docs/spec/vm.md の「`blocking` の呼び出し」)。
+/// `blocking`の呼び出しの引数で、仕事が持つ。大きい物体のページにある配列、文字列、バイト列は、そのページを留めて
+/// 貸し、ほかの物体は写す。runより長く生きる呼び出しも、貸した範囲のほかはヒープに触れず、そのページは仕事が
+/// 留めを落とすまで返らない (docs/spec/vm.mdの「`blocking` の呼び出し」、docs/spec/object-model.mdの「ページの留め」)。
 enum Arg {
     /// `Int`と`Float`の生の語。
     Word(u64),
@@ -140,6 +141,8 @@ enum Arg {
     MutArray(Box<[u64]>),
     /// `String`か`Bytes`の中身の写し。終わりのNULは置かない。
     Text(Box<[u8]>),
+    /// 大きい物体のページにある配列、文字列、バイト列の、`Op::Ffi`が渡すのと同じ位置と、そのページの留め。
+    Lent(u64, PagePin),
     /// ハンドルのセルへの参照。Cが戻るまでdtorを走らせないためである。
     Handle(Arc<HandleCell>),
 }
@@ -152,20 +155,23 @@ impl Arg {
             Arg::Array(elements) => elements.as_ptr().expose_provenance() as u64,
             Arg::MutArray(elements) => elements.as_mut_ptr().expose_provenance() as u64,
             Arg::Text(bytes) => bytes.as_ptr().expose_provenance() as u64,
+            Arg::Lent(at, _) => *at,
             Arg::Handle(cell) => cell.ptr.addr() as u64,
         }
     }
 }
 
-/// `blocking`の呼び出しの仕事の答え。結果の語と、引数の順に並べた`MutUnboxedArray`の写しを持つ。
+/// `blocking`の呼び出しの仕事の答え。結果の語と、`MutUnboxedArray`の引数ごとに引数の順で1つずつの項を持つ。
+/// 項は写しか、Cがその場で書いた貸した配列の`None`である。
 struct CAnswer {
     ret: u64,
-    back: Vec<Box<[u64]>>,
+    back: Vec<Option<Box<[u64]>>>,
 }
 
-/// `blocking`の呼び出しの引数を仕事のために写す。`marshal`と同じく先に範囲の検査をすべて済ませ、範囲の外の引数が
-/// あれば何も写さずに`Raise`を返す。物体は借りるだけで、参照の数を変えない。
-fn copy_args<M: Mode>(
+/// `blocking`の呼び出しの仕事の引数を作る。`marshal`と同じく先に範囲の検査をすべて済ませ、範囲の外の引数が
+/// あれば何も留めず、何も写さずに`Raise`を返す。物体は借りるだけで、参照の数を変えない。大きい物体のページにある
+/// 配列、文字列、バイト列は留めて貸し、ほかの物体は写す。
+fn job_args<M: Mode>(
     ctx: &Ctx<M>,
     task: &Task,
     function: &CFunction,
@@ -179,24 +185,39 @@ fn copy_args<M: Mode>(
     for (&param, slot) in function.params.iter().zip(slots.iter().map(|&s| s as Slot)) {
         let w = task.get(slot);
         // SAFETY: LIRの借用の規則により、借りた物体は呼んだ側のスロットが生かしていて、`MutUnboxedArray`は一意で
-        // 今のworkerが持つ。写しはここで持ち主のworkerが作り、ほかのスレッドは物体に触れない
+        // 今のworkerが持つ。留めと写しはここで持ち主のworkerが作る。貸した物体は、待つタスクの継続が数えた参照を
+        // 持つので`FfiTake`が戻るまで生き、仕事を見捨てても留めがそのページを返させない
+        // (docs/spec/object-model.mdの「`unsafe` の核」のT16とT17)
         let arg = unsafe {
             match param {
                 CParam::Int(_) | CParam::Float => Arg::Word(w.bits() as u64),
                 CParam::UnboxedArray => {
-                    Arg::Array(elements(heap.unboxed_ptr(w)?, heap.unboxed_len(w)?))
+                    let at = heap.unboxed_ptr(w)?;
+                    match heap.pin(w)? {
+                        Some(pin) => Arg::Lent(at.expose_provenance() as u64, pin),
+                        None => Arg::Array(elements(at, heap.unboxed_len(w)?)),
+                    }
                 }
-                CParam::MutUnboxedArray => Arg::MutArray(elements(
-                    heap.unboxed_ptr_mut(w)?.cast_const(),
-                    heap.unboxed_len(w)?,
-                )),
+                CParam::MutUnboxedArray => {
+                    let at = heap.unboxed_ptr_mut(w)?;
+                    match heap.pin(w)? {
+                        Some(pin) => Arg::Lent(at.expose_provenance() as u64, pin),
+                        None => Arg::MutArray(elements(at.cast_const(), heap.unboxed_len(w)?)),
+                    }
+                }
                 CParam::Text => {
-                    let text: *const [u8] = if heap.meta(w)?.kind() == Kind::String {
-                        heap.string(w)? as *const [u8]
-                    } else {
-                        heap.bytes(w)?
-                    };
-                    Arg::Text(Box::from(&*text))
+                    let at = heap.text_payload(w)?;
+                    match heap.pin(w)? {
+                        Some(pin) => Arg::Lent(at.expose_provenance() as u64, pin),
+                        None => {
+                            let text: *const [u8] = if heap.meta(w)?.kind() == Kind::String {
+                                heap.string(w)? as *const [u8]
+                            } else {
+                                heap.bytes(w)?
+                            };
+                            Arg::Text(Box::from(&*text))
+                        }
+                    }
                 }
                 CParam::Handle(_) => Arg::Handle(Arc::clone(&(&*heap.foreign::<CHandle>(w)?).cell)),
                 CParam::NoArg => continue,
@@ -271,9 +292,9 @@ pub(crate) fn call<R: Exec>(
     }
 }
 
-/// `Op::FfiSubmit`の前半。引数を写し、プールでCの関数を呼ぶ仕事を作って、その出どころ (`CodeBase`のCの関数の
-/// 番号を持つ`JobSource::C`) とともに返す。範囲の外の引数は記録を作らずに`Panic`を上げ、`None`を返す (docs/spec/vm.md の
-/// 「`blocking` の呼び出し」)。
+/// `Op::FfiSubmit`の前半。引数を写すか留めて貸し、プールでCの関数を呼ぶ仕事を作って、その出どころ (`CodeBase`の
+/// Cの関数の番号を持つ`JobSource::C`) とともに返す。範囲の外の引数は記録を作らずに`Panic`を上げ、`None`を返す
+/// (docs/spec/vm.mdの「`blocking` の呼び出し」)。
 pub(crate) fn job<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -284,7 +305,7 @@ pub(crate) fn job<R: Exec>(
     let ops = &code.tables.operands[at as usize..];
     let c = ops[0];
     let entry = &code.c_functions[c as usize];
-    let mut args = match copy_args(ctx, task, &entry.function, &ops[2..2 + ops[1] as usize])? {
+    let mut args = match job_args(ctx, task, &entry.function, &ops[2..2 + ops[1] as usize])? {
         Ok(args) => args,
         Err(why) => {
             raise::<R>(code, ctx, task, dst, &entry.function, why)?;
@@ -292,21 +313,37 @@ pub(crate) fn job<R: Exec>(
         }
     };
     let call: CCall = entry.call;
+    let params: Vec<CParam> = entry
+        .function
+        .params
+        .iter()
+        .copied()
+        .filter(|&param| param != CParam::NoArg)
+        .collect();
     let job = eml_rt::Op::Job(Box::new(move || -> Box<dyn Any + Send> {
         // 欄ごとに捕まえると `callee` の生のポインタだけが移り、`Send` を失う。`CCall` をまるごと移す
         let call = call;
         let slots: Vec<u64> = args.iter_mut().map(Arg::slot).collect();
         // SAFETY: `call`は`Op::Ffi`と同じく`Linked::new`の約束と`fits`の比べで宣言の橋渡しと関数であり、`slots`は
         // 橋渡しの読むslotの数だけある (docs/spec/vm.md の「橋渡しの関数」)。`slots`の物体の位置はどれも、この閉包が
-        // 戻るまで持つ写しを指す。ハンドルのslotはCのポインタで、`args`の`Arc<HandleCell>`がそのdtorを走らせない
+        // 持つ写しか、`args`の留めがページを返させない貸した範囲を指す。ハンドルのslotはCのポインタで、`args`の
+        // `Arc<HandleCell>`がそのdtorを走らせない
         let ret = unsafe { (call.bridge)(call.callee, slots.as_ptr()) };
-        let back = args
-            .into_iter()
-            .filter_map(|arg| match arg {
+        // 引数は、留めも含めてここで落とす。Cが戻った後で、答えを届ける前である
+        let mut back = Vec::new();
+        for (param, arg) in params.into_iter().zip(args) {
+            let copy = match arg {
                 Arg::MutArray(elements) => Some(elements),
+                Arg::Lent(_, pin) => {
+                    drop(pin);
+                    None
+                }
                 _ => None,
-            })
-            .collect();
+            };
+            if param == CParam::MutUnboxedArray {
+                back.push(copy);
+            }
+        }
         Box::new(CAnswer { ret, back })
     }));
     Ok(Some((JobSource::C(c), job)))
@@ -378,13 +415,13 @@ pub(crate) fn take<R: Exec>(
 const MISMATCH: VmFault = VmFault::Internal("a blocking call's copy does not match its array");
 
 /// `MutUnboxedArray`の写し`back`を、取り出しの物体の引数`objects`のうち`MutUnboxedArray`のものに、引数の順に
-/// 組にして書き戻す。
+/// 組にして書き戻す。`None`はCがその場で書いた貸した配列なので、飛ばす。
 fn write_back<M: Mode>(
     ctx: &Ctx<M>,
     task: &Task,
     function: &CFunction,
     objects: &[u32],
-    back: Vec<Box<[u64]>>,
+    back: Vec<Option<Box<[u64]>>>,
 ) -> Result<(), VmFault> {
     let params = function.params.iter().filter(|param| {
         matches!(
@@ -402,6 +439,7 @@ fn write_back<M: Mode>(
     }
     let heap = ctx.heap();
     for (w, copy) in arrays.into_iter().zip(back) {
+        let Some(copy) = copy else { continue };
         // SAFETY: 取り出しの物体の引数は呼び出しの引数で、待つタスクの継続が生かしている。`MutUnboxedArray`は一意で
         // このworker (持ち主) が持ち、写しの長さは書く前に配列の要素の数と比べる
         unsafe {

@@ -1,0 +1,26 @@
+# 読むだけの関数を1つの入力で定義し、後の入力で値として渡し、新しい文字列で末尾呼び出しする
+> import String
+> pick : String -> String -> String
+. pick s other =
+.   if String.byte_length other >= String.byte_length s then other
+.   else pick s (other ++ "+")
+.
+> pick "abc" "n="
+> let partial = pick ("de" ++ "f")
+> partial "m="
+> apply_all : List (String -> String) -> String -> String
+. apply_all fs x =
+.   match fs with
+.     | [] -> x
+.     | f :: rest -> apply_all rest (f x)
+.
+> apply_all [partial, pick "wxyz", pick ("a" ++ "b"), partial] "a="
+> fresh : Int -> String
+. fresh k = pick ("k" ++ show k) "len="
+.
+> fresh 12345
+> apply_all [partial] (fresh 7)
+> chain : Int -> <Panic> String
+. chain k = if k <= 0 then fresh 100 else chain (k - 1)
+.
+> chain 3

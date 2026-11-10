@@ -77,6 +77,13 @@ pub fn calls() -> Vec<(&'static str, Bridge, *const ())> {
             i64_i64_i64_to_void,
             rs_fill_gated as *const (),
         ),
+        ("rs_ptr", i64_to_i64, rs_ptr as *const ()),
+        ("rs_publish", i64_i64_to_i64, rs_publish as *const ()),
+        (
+            "rs_sum_gated",
+            i64_i64_i64_to_void,
+            rs_sum_gated as *const (),
+        ),
     ]
 }
 
@@ -377,9 +384,10 @@ extern "C" fn rs_mix(s: i64, ns: i64, a: i64, m1: i64, b: i64, nb: i64, m2: i64,
     }
 }
 
-/// 鍵`gate`を開け、鍵`gate + 1`を待ってから`p`の`n`個の要素に`i + 1`を書き、鍵`gate + 2`を開ける。
-/// 見張りで開かなければ何も書かない。
+/// 鍵`gate`の番号で`p`を公開し、鍵`gate`を開け、鍵`gate + 1`を待ってから`p`の`n`個の要素に`i + 1`を書き、
+/// 鍵`gate + 2`を開ける。見張りで開かなければ何も書かない。
 extern "C" fn rs_fill_gated(p: i64, n: i64, gate: i64) {
+    publish(gate, p);
     rs_gate_open(gate);
     if rs_gate_wait(gate + 1) != 0 {
         return;
@@ -394,5 +402,50 @@ extern "C" fn rs_fill_gated(p: i64, n: i64, gate: i64) {
     for (i, x) in a.iter_mut().enumerate() {
         *x = i as i64 + 1;
     }
+    rs_gate_open(gate + 2);
+}
+
+/// `rs_publish`、`rs_fill_gated`、`rs_sum_gated`が公開した値。鍵は呼び手が選ぶ番号で、テストは互いに違う番号を
+/// 使う。
+static PUBLISHED: Mutex<Option<HashMap<i64, i64>>> = Mutex::new(None);
+
+fn publish(key: i64, value: i64) {
+    PUBLISHED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_default()
+        .insert(key, value);
+}
+
+/// 番号`key`で公開した値を取り除いて返す。
+pub fn published(key: i64) -> Option<i64> {
+    PUBLISHED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_default()
+        .remove(&key)
+}
+
+/// 受けた位置をそのまま返す。参照外ししないので、Miriの`-Zmiri-strict-provenance`の下でも動く。
+extern "C" fn rs_ptr(p: i64) -> i64 {
+    p
+}
+
+/// 受けた位置を番号`key`で公開する。参照外ししない。
+extern "C" fn rs_publish(p: i64, key: i64) -> i64 {
+    publish(key, p);
+    0
+}
+
+/// 鍵`gate`の番号で`p`を公開し、鍵`gate`を開け、鍵`gate + 1`を待ってから`p`の`n`バイトの和を鍵`gate + 2`の
+/// 番号で公開し、鍵`gate + 2`を開ける。見張りで開かなければ何も読まない。
+extern "C" fn rs_sum_gated(p: i64, n: i64, gate: i64) {
+    publish(gate, p);
+    rs_gate_open(gate);
+    if rs_gate_wait(gate + 1) != 0 {
+        return;
+    }
+    // SAFETY: VMは文字列かバイト列の先頭の位置を渡し、呼び手は`n`を長さ以下にする
+    publish(gate + 2, unsafe { byte_sum(p, n) });
     rs_gate_open(gate + 2);
 }

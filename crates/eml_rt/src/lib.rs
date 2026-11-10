@@ -27,6 +27,7 @@ mod text;
 mod trust;
 mod word;
 
+pub use alloc::PagePin;
 pub use control::{Control, Limits, Stop};
 pub use driver::{
     Completion, Done, HandleBin, IoDriver, IoHandle, IoWaker, Op, OpKey, OsHandle, OsSocket,

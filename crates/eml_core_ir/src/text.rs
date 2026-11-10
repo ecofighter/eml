@@ -48,12 +48,19 @@ impl Parser<'_> {
         let [(ret, ret_mark)] = header.rets[..] else {
             return Err(syntax::error(line, "a Core IR function returns one value"));
         };
+        if !header.borrowed.is_empty() {
+            return Err(syntax::error(line, "Core IR has no `borrowed` parameters"));
+        }
         let mut blocks = vec![self.block(&mut state, header.params)?];
         while !self.reader.end_function() {
             if self.reader.peek_word().is_none() {
                 return Err(self.reader.error_here("expected `}`"));
             }
-            let params = self.reader.label(&mut state, blocks.len() as u32)?;
+            let line = self.reader.line();
+            let (params, borrowed) = self.reader.label(&mut state, blocks.len() as u32)?;
+            if !borrowed.is_empty() {
+                return Err(syntax::error(line, "Core IR has no `borrowed` parameters"));
+            }
             blocks.push(self.block(&mut state, params)?);
         }
         let vars = self.reader.function_vars(state, blocks.len())?;

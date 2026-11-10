@@ -370,6 +370,7 @@ pub struct FnHeader {
     pub clause: Option<(u32, u32)>,
     pub split: Option<u32>,
     pub params: Vec<VarId>,
+    pub borrowed: Vec<VarId>,
     pub rets: Vec<(Repr, Mark)>,
 }
 
@@ -805,7 +806,7 @@ impl<'t> Reader<'t> {
         };
         self.expect_word("fn")?;
         let name = self.name()?;
-        let params = self.list('(', ')', |p| p.binder(state))?;
+        let (params, borrowed) = self.params(state)?;
         self.expect_word("->")?;
         let rets = if self.at_punct('(') && !self.at_tuple_name() {
             let line = self.line();
@@ -829,8 +830,26 @@ impl<'t> Reader<'t> {
             clause,
             split,
             params,
+            borrowed,
             rets,
         })
+    }
+
+    /// `(`から`)`までの引数の並び。貸された引数は束縛の前に`borrowed`と書く。引数と、そのうちの貸された引数を返す。
+    pub fn params(&mut self, state: &mut FnState) -> Result<(Vec<VarId>, Vec<VarId>), ParseError> {
+        let binders = self.list('(', ')', |p| {
+            let lent = p.at_word("borrowed");
+            if lent {
+                p.pos += 1;
+            }
+            p.binder(state).map(|var| (var, lent))
+        })?;
+        let borrowed = binders
+            .iter()
+            .filter(|&&(_, lent)| lent)
+            .map(|&(var, _)| var)
+            .collect();
+        Ok((binders.into_iter().map(|(var, _)| var).collect(), borrowed))
     }
 
     /// `uniform from` の後の番号。
@@ -992,14 +1011,19 @@ impl<'t> Reader<'t> {
         Ok(vars)
     }
 
-    /// `bN:` か `bN(params):`。ブロックは書いた順に番号が付くので、`N` はその番号でなければならない。
-    pub fn label(&mut self, state: &mut FnState, expected: u32) -> Result<Vec<VarId>, ParseError> {
+    /// `bN:`か`bN(params):`。ブロックは書いた順に番号が付くので、`N`はその番号でなければならない。引数と、そのうちの
+    /// 貸された引数を返す。
+    pub fn label(
+        &mut self,
+        state: &mut FnState,
+        expected: u32,
+    ) -> Result<(Vec<VarId>, Vec<VarId>), ParseError> {
         let line = self.line();
         let word = self.word()?;
         let (head, params) = match word.strip_suffix(':') {
-            Some(head) => (head, Vec::new()),
+            Some(head) => (head, (Vec::new(), Vec::new())),
             None => {
-                let params = self.list('(', ')', |p| p.binder(state))?;
+                let params = self.params(state)?;
                 self.expect_word(":")?;
                 (word.as_str(), params)
             }
@@ -1862,18 +1886,25 @@ impl<'p> Writer<'p> {
             if header.internal { "internal " } else { "" },
             if header.yields { "yields " } else { "" },
             function_name(&header.name),
-            self.binders(vars, &header.params),
+            self.params(vars, &header.params, &header.borrowed),
             self.rets(&header.rets),
         )
         .unwrap();
     }
 
     /// エントリでないブロックの `bN:` か `bN(params):` の行。
-    pub fn label(&self, index: usize, params: &[VarId], vars: &[VarInfo], out: &mut String) {
+    pub fn label(
+        &self,
+        index: usize,
+        params: &[VarId],
+        borrowed: &[VarId],
+        vars: &[VarInfo],
+        out: &mut String,
+    ) {
         if params.is_empty() {
             writeln!(out, "b{index}:").unwrap();
         } else {
-            writeln!(out, "b{index}({}):", self.binders(vars, params)).unwrap();
+            writeln!(out, "b{index}({}):", self.params(vars, params, borrowed)).unwrap();
         }
     }
 
@@ -2064,6 +2095,22 @@ impl<'p> Writer<'p> {
             self.repr(info.repr),
             mark_suffix(info.mark)
         )
+    }
+
+    /// 引数の並び。貸された引数は束縛の前に`borrowed`と書く。
+    pub fn params(&self, vars: &[VarInfo], params: &[VarId], borrowed: &[VarId]) -> String {
+        params
+            .iter()
+            .map(|&v| {
+                let lent = if borrowed.contains(&v) {
+                    "borrowed "
+                } else {
+                    ""
+                };
+                format!("{lent}{}", self.binder(vars, v))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     pub fn binders(&self, vars: &[VarInfo], params: &[VarId]) -> String {

@@ -4,6 +4,7 @@
 use eml_lir::{
     Prim, Program, Rhs, Stmt, parse, verify, verify_flattened, verify_lowered, verify_scopes,
 };
+use eml_lir::{VarId, verify_borrowed};
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
 const BOOL: &str = "layout Prelude.Bool { False, True }\n";
@@ -3768,5 +3769,293 @@ fn f(x.0: float) -> float {
     assert_eq!(
         check(text),
         Err("`M.half` takes 1 arguments but is given 2 in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_borrowed_parameter_is_rejected_before_the_borrow_pass() {
+    let entry = "fn f(borrowed s.0: obj) -> int {\n  return 0\n}\n";
+    let merge = "\
+fn f(s.0: obj) -> int {
+  jump b1(s.0)
+b1(borrowed t.1: obj):
+  return 0
+}
+";
+    for (text, name) in [(entry, "s.0"), (merge, "t.1")] {
+        let message = format!("`{name}` is borrowed before the borrow pass");
+        for result in [
+            check_scopes(text),
+            check_lowered(text),
+            verify_flattened(&read(text)).map_err(|error| error.to_string()),
+        ] {
+            let error = result.expect_err("the mark is rejected before the borrow pass");
+            assert!(error.contains(&message), "{error}");
+        }
+    }
+}
+
+fn check_borrowed(text: &str) -> Result<(), String> {
+    verify_borrowed(&read(text)).map_err(|error| error.to_string())
+}
+
+/// 貸された引数をさらに貸すだけの、読むだけの関数と、値を持ち続けて呼び出しの後で手放す呼び出し元。
+const READER: &str = "\
+fn len(borrowed s.0: obj) -> int {
+  let n.1: int = extern Std.String.byte_length(s.0)
+  return n.1
+}
+fn f(s.0: obj) -> int {
+  let n.1: int = call len(s.0)
+  decref s.0
+  return n.1
+}
+";
+
+#[test]
+fn borrowed_parameters_are_accepted_from_the_borrow_pass_on() {
+    let unused = "fn f(borrowed s.0: obj) -> int {\n  return 0\n}\n";
+    assert_eq!(check_borrowed(unused), Ok(()));
+    assert_eq!(check(unused), Ok(()));
+    assert_eq!(check(READER), Ok(()));
+}
+
+#[test]
+fn a_borrowed_parameter_is_reference_counted() {
+    let text = "fn f(x.0: obj, borrowed n.1: int) -> int {\n  return n.1\n}\n";
+    let message = "`n.1` (int) is a borrowed parameter, but only obj and tobj can be in `f`";
+    assert_eq!(check_borrowed(text), Err(message.to_string()));
+    assert_eq!(check(text), Err(message.to_string()));
+}
+
+#[test]
+fn a_borrowed_parameter_is_unr() {
+    assert_eq!(
+        check_borrowed("fn g(borrowed h.0: obj lin) -> int {\n  return 0\n}\n"),
+        Err("`h.0` (lin) is a borrowed parameter, but only unr can be in `g`".to_string())
+    );
+}
+
+#[test]
+fn the_borrowed_parameters_are_a_subsequence_of_the_parameters() {
+    let mut program = read("fn f(s.0: obj, t.1: obj) -> int {\n  return 0\n}\n");
+    program.functions[0].blocks[0].borrowed = vec![VarId(1), VarId(0)];
+    assert_eq!(
+        verify_borrowed(&program).map_err(|error| error.to_string()),
+        Err(
+            "the borrowed parameters of b0 are not a subsequence of its parameters in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_pinned_function_has_no_borrowed_parameter() {
+    let lambda = "uniform from 0 fn main$lambda3(borrowed s.0: tobj) -> tobj {\n  return s.0\n}\n";
+    assert_eq!(
+        check_borrowed(lambda),
+        Err(
+            "`s.0` of `main$lambda3` is borrowed, but the function is not called directly in `main$lambda3`"
+                .to_string()
+        )
+    );
+    let copy = "fn f$owned(borrowed s.0: obj) -> int {\n  return 0\n}\n";
+    assert_eq!(
+        check_borrowed(copy),
+        Err(
+            "`s.0` of `f$owned` is borrowed, but the function is not called directly in `f$owned`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_function_with_a_borrowed_parameter_is_not_a_value() {
+    let callee = "fn f(borrowed s.0: tobj, t.1: tobj) -> tobj {\n  return s.0\n}\n";
+    let message = "`f` is used as a value, but its parameter `s.0` is borrowed in `g`";
+    let reference = format!("{callee}fn g(x.0: tobj) -> tobj {{\n  return &f\n}}\n");
+    assert_eq!(check_borrowed(&reference), Err(message.to_string()));
+    let closure = format!(
+        "{callee}fn g(x.0: tobj) -> tobj {{\n  let c.1: tobj = closure f(x.0)\n  return c.1\n}}\n"
+    );
+    assert_eq!(check_borrowed(&closure), Err(message.to_string()));
+}
+
+/// 引数が貸された合流のブロックへの2つの辺。`entry`が真なら、`s.0`はエントリで貸されている。
+fn merge_of(entry: bool) -> String {
+    let mark = if entry { "borrowed " } else { "" };
+    format!(
+        "fn f({mark}s.0: obj, c.1: int) -> int {{
+  switch c.1 {{ 0 -> b1, _ -> b2 }}
+b1:
+  jump b3(s.0)
+b2:
+  jump b3(s.0)
+b3(borrowed u.2: obj):
+  let n.3: int = extern Std.String.byte_length(u.2)
+  return n.3
+}}
+"
+    )
+}
+
+#[test]
+fn a_jump_into_a_borrowed_parameter_passes_a_value_borrowed_from_the_caller() {
+    assert_eq!(check(&merge_of(true)), Ok(()));
+    let message = "`s.0` is passed to the borrowed parameter `u.2` of b3, but it is not borrowed from the caller in `f`";
+    assert_eq!(check_borrowed(&merge_of(false)), Err(message.to_string()));
+    assert_eq!(check(&merge_of(false)), Err(message.to_string()));
+}
+
+#[test]
+fn a_tail_call_lends_only_a_value_borrowed_from_the_caller() {
+    let callee = "fn g(borrowed s.0: obj) -> int {\n  return 0\n}\n";
+    let borrowed = format!("{callee}fn f(borrowed s.0: obj) -> int {{\n  tail call g(s.0)\n}}\n");
+    assert_eq!(check(&borrowed), Ok(()));
+    let owned = format!("{callee}fn f(s.0: obj) -> int {{\n  tail call g(s.0)\n}}\n");
+    assert_eq!(
+        check_borrowed(&owned),
+        Err(
+            "`s.0` is lent to `g` by a tail call, but it is not borrowed from the caller in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_value_borrowed_from_the_caller_is_consumed_only_after_a_dup() {
+    let used = "fn f(borrowed s.0: obj) -> obj {\n  return s.0\n}\n";
+    assert_eq!(
+        check(used),
+        Err("`s.0` is used but is only borrowed from the caller in `f`".to_string())
+    );
+    let released = "fn f(borrowed s.0: obj) -> int {\n  decref s.0\n  return 0\n}\n";
+    assert_eq!(
+        check(released),
+        Err("`s.0` is released but is only borrowed from the caller in `f`".to_string())
+    );
+    let dupped = "fn f(borrowed s.0: obj) -> obj {\n  dup s.0\n  return s.0\n}\n";
+    assert_eq!(check(dupped), Ok(()));
+    // 貸された引数のフィールドも、呼んだ側が支える
+    let field = |body: &str| {
+        format!(
+            "{BOX}fn f(borrowed b.0: obj) -> tobj {{\n  unpack b.0 Box #0(x.1: tobj)\n{body}}}\n"
+        )
+    };
+    assert_eq!(
+        check(&field("  return x.1\n")),
+        Err("`x.1` is used but is only borrowed from the caller in `f`".to_string())
+    );
+    assert_eq!(check(&field("  dup x.1\n  return x.1\n")), Ok(()));
+}
+
+/// `g`は最初の引数を借り、2番目の引数を消費する。
+const LENDS_FIRST: &str =
+    "fn g(borrowed a.0: tobj, b.1: obj) -> int {\n  decref b.1\n  return 0\n}\n";
+
+#[test]
+fn a_variable_lent_and_consumed_by_one_call_needs_two_references() {
+    let text = |body: &str| format!("{LENDS_FIRST}fn f(s.0: obj) -> int {{\n{body}}}\n");
+    assert_eq!(
+        check(&text("  let n.1: int = call g(s.0, s.0)\n  return n.1\n")),
+        Err("`s.0` is lent to `g` and consumed by the same instruction in `f`".to_string())
+    );
+    assert_eq!(
+        check(&text(
+            "  dup s.0\n  let n.1: int = call g(s.0, s.0)\n  decref s.0\n  return n.1\n"
+        )),
+        Ok(())
+    );
+}
+
+/// `f`は`d.0`のフィールド`x.1`を`g`に貸し、同じ呼び出しで`d.0`の参照を`g`に渡す。
+fn lent_field(before: &str, after: &str) -> String {
+    format!(
+        "{PAIR}{LENDS_FIRST}fn f(d.0: obj) -> int {{
+  unpack d.0 (,) #0(x.1: tobj, y.2: tobj)
+{before}  let n.3: int = call g(x.1, d.0)
+{after}  return n.3
+}}
+"
+    )
+}
+
+#[test]
+fn a_lent_field_is_valid_after_the_consumptions_of_the_same_call() {
+    // `g`は`x.1`を読む前に`d.0`を解放しうるので、フィールドには自分の参照か、持ち主の余分な参照が要る
+    assert_eq!(
+        check(&lent_field("", "")),
+        Err("`x.1` is lent to `g` after its owner `d.0` was given up in `f`".to_string())
+    );
+    assert_eq!(check(&lent_field("  dup x.1\n", "  decref x.1\n")), Ok(()));
+    assert_eq!(check(&lent_field("  dup d.0\n", "  decref d.0\n")), Ok(()));
+}
+
+#[test]
+fn a_field_of_a_borrowed_parameter_and_a_constant_may_be_lent_on() {
+    // 貸された引数のフィールドも呼んだ側から借りた変数で、変数でない値は所有を持たないので、どちらも貸せる
+    let jump = format!(
+        "{BOX}fn f(borrowed b.0: obj, c.1: int) -> int {{
+  unpack b.0 Box #0(x.2: tobj)
+  switch c.1 {{ 0 -> b1, _ -> b2 }}
+b1:
+  jump b3(x.2)
+b2:
+  jump b3(())
+b3(borrowed u.3: tobj):
+  return 0
+}}
+"
+    );
+    assert_eq!(check(&jump), Ok(()));
+    let callee = "fn g(borrowed s.0: tobj) -> int {\n  return 0\n}\n";
+    let field = format!(
+        "{BOX}{callee}fn f(borrowed b.0: obj) -> int {{\n  unpack b.0 Box #0(x.1: tobj)\n  tail call g(x.1)\n}}\n"
+    );
+    assert_eq!(check(&field), Ok(()));
+    let constant = format!("{callee}fn f() -> int {{\n  tail call g(())\n}}\n");
+    assert_eq!(check(&constant), Ok(()));
+}
+
+#[test]
+fn a_field_of_a_borrowed_merge_parameter_is_backed_by_the_caller() {
+    let merge = |body: &str| {
+        format!(
+            "{BOX}fn f(borrowed s.0: obj, c.1: int) -> tobj {{
+  switch c.1 {{ 0 -> b1, _ -> b2 }}
+b1:
+  jump b3(s.0)
+b2:
+  jump b3(s.0)
+b3(borrowed u.2: obj):
+  unpack u.2 Box #0(x.3: tobj)
+{body}}}
+"
+        )
+    };
+    assert_eq!(
+        check(&merge("  return x.3\n")),
+        Err("`x.3` is used but is only borrowed from the caller in `f`".to_string())
+    );
+    assert_eq!(check(&merge("  dup x.3\n  return x.3\n")), Ok(()));
+}
+
+#[test]
+fn a_jump_reports_a_lent_field_whose_owner_was_given_up() {
+    // `dup`した引数から分解したフィールドは、その引数を持ち主にする。持ち主を手放した後に貸すと拒む
+    let text = format!(
+        "{BOX}fn f(borrowed s.0: obj) -> int {{
+  dup s.0
+  unpack s.0 Box #0(x.1: tobj)
+  decref s.0
+  jump b1(x.1)
+b1(borrowed u.2: tobj):
+  return 0
+}}
+"
+    );
+    assert_eq!(
+        check(&text),
+        Err("`x.1` is passed to b1 after its owner `s.0` was given up in `f`".to_string())
     );
 }

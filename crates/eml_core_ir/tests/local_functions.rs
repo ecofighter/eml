@@ -400,10 +400,10 @@ fn std_public_functions_keep_their_lir() {
       let d.4: tobj = con Prelude.List #1(x.2, $0.0)
       tail call "F1"(d.4, rest.3)
     }
-    fn "F2"(xs.0: tobj) -> int {
+    fn "F2"(borrowed xs.0: tobj) -> int {
       tail call "F3"(0, xs.0)
     }
-    fn "F4"(xs.0: tobj) -> int {
+    fn "F4"(borrowed xs.0: tobj) -> int {
       tail call "F5"(0, xs.0)
     }
     fn "F6"(f.0: tobj, xs.1: tobj) -> tobj {
@@ -415,13 +415,11 @@ fn std_public_functions_keep_their_lir() {
     fn "F10"(f.0: tobj, xs.1: tobj) -> tobj {
       tail call "F11"(f.0, #0, xs.1)
     }
-    fn F12(prefix.0: obj, s.1: obj) -> enum {
+    fn F12(borrowed prefix.0: obj, borrowed s.1: obj) -> enum {
       let t.2: int = extern Std.String.byte_length(prefix.0)
       let t.3: enum = extern "Prelude.Ord Int.>="(0, 0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      decref prefix.0
-      decref s.1
       return #0
     b2:
       let t.4: int = extern "Prelude.Num Int.+"(0, t.2)
@@ -429,13 +427,11 @@ fn std_public_functions_keep_their_lir() {
       let t.6: enum = extern "Prelude.Ord Int.<="(t.4, t.5)
       switch t.6 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
-      decref prefix.0
-      decref s.1
       return #0
     b4:
       tail call F13(prefix.0, s.1, 0, t.2, 0)
     }
-    fn F14(suffix.0: obj, s.1: obj) -> enum {
+    fn F14(borrowed suffix.0: obj, borrowed s.1: obj) -> enum {
       let t.2: int = extern Std.String.byte_length(s.1)
       let t.3: int = extern Std.String.byte_length(suffix.0)
       let t.4: int = extern "Prelude.Num Int.-"(t.2, t.3)
@@ -443,8 +439,6 @@ fn std_public_functions_keep_their_lir() {
       let t.6: enum = extern "Prelude.Ord Int.>="(t.4, 0)
       switch t.6 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      decref suffix.0
-      decref s.1
       return #0
     b2:
       let t.7: int = extern "Prelude.Num Int.+"(t.4, t.5)
@@ -452,24 +446,23 @@ fn std_public_functions_keep_their_lir() {
       let t.9: enum = extern "Prelude.Ord Int.<="(t.7, t.8)
       switch t.9 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
-      decref suffix.0
-      decref s.1
       return #0
     b4:
       tail call F13(suffix.0, s.1, t.4, t.5, 0)
     }
-    fn F15(sep.0: obj, s.1: obj) -> tobj {
+    fn F15(borrowed sep.0: obj, s.1: obj) -> tobj {
       let t.2: int = extern Std.String.byte_length(sep.0)
       let t.3: enum = extern "Prelude.Eq Int.=="(t.2, 0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      tail call F16(sep.0, s.1, 0, #0)
+      let r.4: tobj = call F16(sep.0, s.1, 0, #0)
+      decref s.1
+      return r.4
     b2:
-      decref sep.0
-      let d.4: tobj = con Prelude.List #1(s.1, #0)
-      return d.4
+      let d.5: tobj = con Prelude.List #1(s.1, #0)
+      return d.5
     }
-    fn F17(s.0: obj) -> tobj {
+    fn F17(borrowed s.0: obj) -> tobj {
       tail call F18(s.0, 0, #0)
     }
     fn F19(sep.0: obj, xs.1: tobj) -> obj {
@@ -483,17 +476,14 @@ fn std_public_functions_keep_their_lir() {
       release xs.1 Prelude.List #1(x.2, rest.3)
       tail call F20(sep.0, x.2, rest.3)
     }
-    fn F21(s.0: obj) -> obj {
+    fn F21(borrowed s.0: obj) -> obj {
       let t.1: int = extern Std.String.byte_length(s.0)
-      dup s.0
       let t.2: int = call F22(s.0, t.1, 0)
-      dup s.0
       let t.3: int = call F23(s.0, t.2, t.1)
       let t.4: obj = extern Std.String.slice(t.2, t.3, s.0)
-      decref s.0
       return t.4
     }
-    fn F24(s.0: obj) -> tobj {
+    fn F24(borrowed s.0: obj) -> tobj {
       let t.1: int = extern Std.String.byte_length(s.0)
       let t.2: enum = extern "Prelude.Ord Int.>"(t.1, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -531,27 +521,22 @@ fn std_public_functions_keep_their_lir() {
     b13:
       tail call F25(s.0, t.1, t.10, t.9, t.5, 0)
     b14:
-      decref s.0
       return #0
     }
-    fn "F3"(n.0: int, ys.1: tobj) -> int {
+    fn "F3"(n.0: int, borrowed ys.1: tobj) -> int {
       switch ys.1 Prelude.List { #0 -> b1, #1(x.2: tobj, rest.3: tobj) -> b2 }
     b1:
-      decref ys.1
       return n.0
     b2:
       let t.4: int = extern "Prelude.Num Int.+"(n.0, 1)
-      release ys.1 Prelude.List #1(_, rest.3)
       tail call "F3"(t.4, rest.3)
     }
-    fn "F5"(n.0: int, ys.1: tobj) -> int {
+    fn "F5"(n.0: int, borrowed ys.1: tobj) -> int {
       switch ys.1 Prelude.List { #0 -> b1, #1(x.2: obj, rest.3: tobj) -> b2 }
     b1:
-      decref ys.1
       return n.0
     b2:
       let t.4: int = extern "Prelude.Num Int.+"(n.0, 1)
-      release ys.1 Prelude.List #1(_, rest.3)
       tail call "F5"(t.4, rest.3)
     }
     fn "F7"(f.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
@@ -607,7 +592,7 @@ fn std_public_functions_keep_their_lir() {
       let d.7: tobj = con Prelude.List #1(y.6, acc.1)
       tail call "F11"(f.0, d.7, rest.4)
     }
-    fn F13(needle.0: obj, s.1: obj, at.2: int, n.3: int, i.4: int) -> enum {
+    fn F13(borrowed needle.0: obj, borrowed s.1: obj, at.2: int, n.3: int, i.4: int) -> enum {
       let t.5: enum = extern "Prelude.Ord Int.>="(i.4, n.3)
       switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -617,18 +602,14 @@ fn std_public_functions_keep_their_lir() {
       let t.9: enum = extern "Prelude.Eq Byte.=="(t.6, t.8)
       switch t.9 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b2:
-      decref needle.0
-      decref s.1
       return #1
     b3:
-      decref needle.0
-      decref s.1
       return #0
     b4:
       let t.10: int = extern "Prelude.Num Int.+"(i.4, 1)
       tail call F13(needle.0, s.1, at.2, n.3, t.10)
     }
-    fn F16(sep.0: obj, s.1: obj, at.2: int, acc.3: tobj) -> tobj {
+    fn F16(borrowed sep.0: obj, borrowed s.1: obj, at.2: int, acc.3: tobj) -> tobj {
       let t.4: int = extern Std.String.find_from(sep.0, at.2, s.1)
       let t.5: enum = extern "Prelude.Ord Int.<"(t.4, 0)
       switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -639,14 +620,12 @@ fn std_public_functions_keep_their_lir() {
       let d.9: tobj = con Prelude.List #1(t.8, acc.3)
       tail call F16(sep.0, s.1, t.7, d.9)
     b2:
-      decref sep.0
       let t.10: int = extern Std.String.byte_length(s.1)
       let t.11: obj = extern Std.String.slice(at.2, t.10, s.1)
-      decref s.1
       let d.12: tobj = con Prelude.List #1(t.11, acc.3)
       tail call "F1"(#0, d.12)
     }
-    fn F18(s.0: obj, at.1: int, acc.2: tobj) -> tobj {
+    fn F18(borrowed s.0: obj, at.1: int, acc.2: tobj) -> tobj {
       let t.3: int = extern Std.String.byte_length(s.0)
       let t.4: enum = extern "Prelude.Ord Int.>="(at.1, t.3)
       switch t.4 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -657,7 +636,6 @@ fn std_public_functions_keep_their_lir() {
       let t.7: enum = extern "Prelude.Ord Int.<"(t.6, 0)
       switch t.7 Prelude.Bool { #0 -> b3, #1 -> b10 }
     b2:
-      decref s.0
       tail call "F1"(#0, acc.2)
     b3:
       let t.8: int = extern "Prelude.Num Int.+"(t.6, 1)
@@ -686,7 +664,6 @@ fn std_public_functions_keep_their_lir() {
       tail call F18(s.0, t.8, d.18)
     b10:
       let t.19: obj = extern Std.String.slice(at.1, t.3, s.0)
-      decref s.0
       let d.20: tobj = con Prelude.List #1(t.19, acc.2)
       tail call "F1"(#0, d.20)
     }
@@ -703,11 +680,10 @@ fn std_public_functions_keep_their_lir() {
       let t.6: obj = extern Prelude.++(t.5, x.3)
       tail call F20(sep.0, t.6, rest.4)
     }
-    fn F22(s.0: obj, len.1: int, i.2: int) -> int {
+    fn F22(borrowed s.0: obj, len.1: int, i.2: int) -> int {
       let t.3: enum = extern "Prelude.Ord Int.<"(i.2, len.1)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      decref s.0
       jump b10()
     b2:
       let t.4: int = extern Std.String.byte_at(i.2, s.0)
@@ -719,13 +695,11 @@ fn std_public_functions_keep_their_lir() {
     b4:
       jump b9()
     b5:
-      decref s.0
       jump b10()
     b6:
       let t.7: enum = extern "Prelude.Ord Byte.<="(t.4, 13)
       switch t.7 Prelude.Bool { #0 -> b7, #1 -> b8 }
     b7:
-      decref s.0
       jump b10()
     b8:
       jump b9()
@@ -735,11 +709,10 @@ fn std_public_functions_keep_their_lir() {
     b10:
       return i.2
     }
-    fn F23(s.0: obj, start.1: int, stop.2: int) -> int {
+    fn F23(borrowed s.0: obj, start.1: int, stop.2: int) -> int {
       let t.3: enum = extern "Prelude.Ord Int.>"(stop.2, start.1)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      decref s.0
       jump b10()
     b2:
       let t.4: int = extern "Prelude.Num Int.-"(stop.2, 1)
@@ -752,13 +725,11 @@ fn std_public_functions_keep_their_lir() {
     b4:
       jump b9()
     b5:
-      decref s.0
       jump b10()
     b6:
       let t.8: enum = extern "Prelude.Ord Byte.<="(t.5, 13)
       switch t.8 Prelude.Bool { #0 -> b7, #1 -> b8 }
     b7:
-      decref s.0
       jump b10()
     b8:
       jump b9()
@@ -768,7 +739,7 @@ fn std_public_functions_keep_their_lir() {
     b10:
       return stop.2
     }
-    fn F25(s.0: obj, len.1: int, min_int.2: int, i.3: int, negative.4: enum, acc.5: int) -> tobj {
+    fn F25(borrowed s.0: obj, len.1: int, min_int.2: int, i.3: int, negative.4: enum, acc.5: int) -> tobj {
       let t.6: enum = extern "Prelude.Ord Int.>="(i.3, len.1)
       switch t.6 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -778,7 +749,6 @@ fn std_public_functions_keep_their_lir() {
       let t.10: enum = extern "Prelude.Ord Int.<"(t.9, 0)
       switch t.10 Prelude.Bool { #0 -> b7, #1 -> b8 }
     b2:
-      decref s.0
       switch negative.4 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
       let t.11: enum = extern "Prelude.Eq Int.=="(acc.5, min_int.2)
@@ -798,7 +768,6 @@ fn std_public_functions_keep_their_lir() {
       let t.17: enum = extern "Prelude.Ord Int.>"(t.9, 9)
       switch t.17 Prelude.Bool { #0 -> b9, #1 -> b10 }
     b8:
-      decref s.0
       jump b11()
     b9:
       let t.18: int = extern "Prelude.Num Int.+"(min_int.2, t.9)
@@ -806,7 +775,6 @@ fn std_public_functions_keep_their_lir() {
       let t.20: enum = extern "Prelude.Ord Int.<"(acc.5, t.19)
       switch t.20 Prelude.Bool { #0 -> b12, #1 -> b13 }
     b10:
-      decref s.0
       jump b11()
     b11:
       return #0
@@ -816,28 +784,103 @@ fn std_public_functions_keep_their_lir() {
       let t.23: int = extern "Prelude.Num Int.-"(t.22, t.9)
       tail call F25(s.0, len.1, min_int.2, t.21, negative.4, t.23)
     b13:
-      decref s.0
       return #0
     }
     fn "F26"(xs.0: tobj) -> tobj {
       let r.1: int = call "F2"(xs.0)
+      decref xs.0
       let r.2: tobj = box r.1
       return r.2
     }
     fn "F27"(xs.0: tobj) -> tobj {
       let r.1: int = call "F4"(xs.0)
+      decref xs.0
       let r.2: tobj = box r.1
       return r.2
     }
     fn F28(prefix.0: obj, s.1: obj) -> tobj {
       let r.2: enum = call F12(prefix.0, s.1)
+      decref prefix.0
+      decref s.1
       let r.3: tobj = box r.2
       return r.3
     }
     fn F29(suffix.0: obj, s.1: obj) -> tobj {
       let r.2: enum = call F14(suffix.0, s.1)
+      decref suffix.0
+      decref s.1
       let r.3: tobj = box r.2
       return r.3
+    }
+    fn F30(sep.0: obj, s.1: obj) -> tobj {
+      let t.2: int = extern Std.String.byte_length(sep.0)
+      let t.3: enum = extern "Prelude.Eq Int.=="(t.2, 0)
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let r.4: tobj = call F16(sep.0, s.1, 0, #0)
+      decref sep.0
+      decref s.1
+      return r.4
+    b2:
+      decref sep.0
+      let d.5: tobj = con Prelude.List #1(s.1, #0)
+      return d.5
+    }
+    fn F31(s.0: obj) -> tobj {
+      let r.1: tobj = call F18(s.0, 0, #0)
+      decref s.0
+      return r.1
+    }
+    fn F32(s.0: obj) -> obj {
+      let t.1: int = extern Std.String.byte_length(s.0)
+      let t.2: int = call F22(s.0, t.1, 0)
+      let t.3: int = call F23(s.0, t.2, t.1)
+      let t.4: obj = extern Std.String.slice(t.2, t.3, s.0)
+      decref s.0
+      return t.4
+    }
+    fn F33(s.0: obj) -> tobj {
+      let t.1: int = extern Std.String.byte_length(s.0)
+      let t.2: enum = extern "Prelude.Ord Int.>"(t.1, 0)
+      switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      jump b3(#0)
+    b2:
+      let t.3: int = extern Std.String.byte_at(0, s.0)
+      let t.4: enum = extern "Prelude.Eq Byte.=="(t.3, 45)
+      jump b3(t.4)
+    b3(t.5: enum):
+      switch t.5 Prelude.Bool { #0 -> b4, #1 -> b5 }
+    b4:
+      let t.6: enum = extern "Prelude.Ord Int.>"(t.1, 0)
+      switch t.6 Prelude.Bool { #0 -> b6, #1 -> b7 }
+    b5:
+      jump b10()
+    b6:
+      jump b11()
+    b7:
+      let t.7: int = extern Std.String.byte_at(0, s.0)
+      let t.8: enum = extern "Prelude.Eq Byte.=="(t.7, 43)
+      switch t.8 Prelude.Bool { #0 -> b8, #1 -> b9 }
+    b8:
+      jump b11()
+    b9:
+      jump b10()
+    b10:
+      jump b12(1)
+    b11:
+      jump b12(0)
+    b12(t.9: int):
+      let t.10: int = extern "Prelude.Num Int.-"(-9223372036854775807, 1)
+      let t.11: enum = extern "Prelude.Ord Int.>="(t.9, t.1)
+      switch t.11 Prelude.Bool { #0 -> b13, #1 -> b14 }
+    b13:
+      let r.12: tobj = call F25(s.0, t.1, t.10, t.9, t.5, 0)
+      decref s.0
+      return r.12
+    b14:
+      decref s.0
+      return #0
     }
     "#);
 }

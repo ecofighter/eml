@@ -14,6 +14,7 @@ use super::inv::{
 use super::model::Pos;
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, lemma_indeg_pos};
+use crate::alloc::large_in;
 #[cfg(verus_only)]
 use crate::alloc::{FREE_META, PageHeader, header_cap, header_ok, header_sink, page_base};
 use crate::cell::{
@@ -234,6 +235,19 @@ impl Core {
         } else {
             self.pages.tracked_block_header(h)
         }
+    }
+
+    /// ブロック`h`が大きい物体のページにあるか。ページを公開した後は書かないページの頭から級を読むので、
+    /// ほかのヒープのブロックでも同じように読める (信頼の一覧のT14)。
+    #[inline]
+    pub(crate) fn on_large_page(&self, h: *mut Header) -> (r: bool)
+        requires
+            self.sound(),
+            self.has(h@.addr),
+            h == self.block(h@.addr),
+    {
+        let tracked hdr = self.tracked_header(h@.addr);
+        large_in(h, Tracked(hdr))
     }
 
     /// ブロック `h` は、付けた塊のブロックでなく、このヒープのブロックである。ページの頭の `sink` が、このヒープの

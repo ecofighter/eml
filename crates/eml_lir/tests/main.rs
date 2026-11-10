@@ -3,6 +3,7 @@
 
 mod common;
 
+mod borrow;
 mod boxing;
 mod contract;
 mod flatten;

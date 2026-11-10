@@ -1,4 +1,6 @@
-use eml_lir::{Pass, parse, passes_until, pretty, verify, verify_flattened, verify_scopes};
+use eml_lir::{
+    Pass, parse, passes_until, pretty, verify, verify_borrowed, verify_flattened, verify_scopes,
+};
 
 /// 名前で選んだ関数の表示。ほかの関数 (`entry$main` など) を期待値から外すため。内部の関数は `internal fn` の行から
 /// 始まる。
@@ -28,6 +30,7 @@ pub fn passes_text(text: &str, last: Pass) -> String {
         Pass::Boxing => verify_scopes(&parsed),
         Pass::Flatten => verify_flattened(&parsed),
         Pass::Contract => verify_flattened(&parsed),
+        Pass::Borrow => verify_borrowed(&parsed),
         Pass::Perceus | Pass::Reuse => verify(&parsed),
     };
     if let Err(error) = verified {

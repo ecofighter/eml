@@ -261,11 +261,7 @@ impl<'a> Planner<'a> {
         kept: &[Option<VarId>],
     ) {
         let shape = self.shape(ctor);
-        // フィールドのない構築子は箱でなく即値である
-        if shape.positions.is_empty() {
-            return;
-        }
-        let Some(words) = shape.reuse_words() else {
+        let Some(words) = source_words(shape) else {
             return;
         };
         let id = self.tokens.len();
@@ -365,7 +361,7 @@ impl<'a> Planner<'a> {
     /// ものを選ぶ (docs/spec/lir.md の「reuse」)。
     fn pair(&mut self, path: &mut Path, at: At, var: VarId, ctor: Ctor, args: &[Atom]) {
         let shape = self.shape(ctor);
-        let Some(words) = shape.reuse_words() else {
+        let Some(words) = source_words(shape) else {
             return;
         };
         let best = path
@@ -482,6 +478,15 @@ impl<'a> Planner<'a> {
             drops,
         }
     }
+}
+
+/// 構築子の箱がreuseの元になれるなら、組を作るときに比べる語の数を返す。フィールドのない構築子は箱でなく即値で、
+/// 走査する語が255個以上の形は組に入れない (docs/spec/lir.mdの「reuse」)。
+pub(crate) fn source_words(shape: &Shape) -> Option<u32> {
+    if shape.positions.is_empty() {
+        return None;
+    }
+    shape.reuse_words()
 }
 
 /// 文が使う変数。`dup`、`decref`、`release` の対象と、`release` が名前を書いたフィールドも数える。

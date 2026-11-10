@@ -757,3 +757,21 @@ fn f(x.0: int, s.1: obj) -> obj {
         }
     );
 }
+
+#[test]
+fn borrowed_parameters_are_an_error() {
+    let function = parse_error("fn f(borrowed s.0: obj) -> int {\n  return 0\n}\n");
+    assert_eq!(function.line, 1);
+    assert!(function.message.contains("borrowed"), "{function}");
+    let label = parse_error(
+        "\
+fn f(x.0: obj) -> int {
+  jump b1(x.0)
+b1(borrowed y.1: obj):
+  return 0
+}
+",
+    );
+    assert_eq!(label.line, 3);
+    assert!(label.message.contains("borrowed"), "{label}");
+}

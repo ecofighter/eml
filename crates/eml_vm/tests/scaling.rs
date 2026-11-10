@@ -1663,3 +1663,76 @@ main () =
     );
     assert_flat((short, long));
 }
+
+/// 末尾呼びのサイクル`go` -> `g` -> 末尾の`apply` -> ラムダ -> `go`の各ラウンドで、新しい`String`を、読むだけの`g`へ
+/// 渡す。`g`は`apply`を末尾に持つので、借用のまま末尾で呼ぶと呼ばれた側の下にフレームが残りうる。`g`への呼びは
+/// `g$owned`に向き、サイクルはスタックを伸ばさない (docs/spec/lir.mdの「末尾の位置の呼び出し」)。
+#[test]
+fn a_tail_cycle_through_apply_passing_a_fresh_string_to_a_reader_keeps_the_stack_flat() {
+    let program = |n: u64| {
+        format!(
+            "import String
+{HIDE}
+g : String -> (Int -> <Panic> String) -> Int -> Int -> <Panic> String
+g s f k n =
+  if k > 0 then g s f (k - 1) n
+  else if n == 0 then show (String.byte_length s) else f (n - 1)
+
+data Fix = | Fix (Fix -> Int -> <Panic> String)
+
+go : Fix -> Int -> <Panic> String
+go (Fix h) n =
+  let Box f = hide 0 (fn m -> h (Fix h) m)
+  g (show n) f 1 n
+
+main : Unit -> <IO, Panic> Unit
+main () = println (go (Fix go) {n})
+"
+        )
+    };
+    assert!(
+        disassembly(&program(1)).contains("tail_call g$owned("),
+        "{}",
+        disassembly(&program(1))
+    );
+    let run = |n: u64| stats(&program(n), "1\n");
+    let (short, long) = (run(1_000), run(100_000));
+    assert_eq!(short.peak_stack, long.peak_stack, "{short:?} {long:?}");
+}
+
+/// 呼んだ側が持ち続ける文字列を、読むだけの関数へ渡すたびのRCは、`rc_increments`に出ない。語の数によらず0であることを、
+/// 2つの大きさで比べる。形は`bench/words_loop.em`と同じである (docs/spec/lir.mdの「借用の推論」)。
+#[test]
+fn passing_a_string_to_readers_does_no_rc_whatever_the_size() {
+    let increments = |n: u64| {
+        let source = format!(
+            "import String
+
+grow : Int -> String -> <Panic> String
+grow n acc = if n == 0 then acc else grow (n - 1) (acc ++ \" ab\")
+
+skip_spaces : String -> Int -> <Panic> Int
+skip_spaces s i =
+  if i >= String.byte_length s then i
+  else if String.byte_at i s == ' 'u8 then skip_spaces s (i + 1) else i
+
+skip_word : String -> Int -> <Panic> Int
+skip_word s i =
+  if i >= String.byte_length s then i
+  else if String.byte_at i s == ' 'u8 then i else skip_word s (i + 1)
+
+count : String -> Int -> Int -> <Panic> Int
+count s i acc =
+  if i >= String.byte_length s then acc
+  else count s (skip_word s (skip_spaces s i)) (acc + 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let s = grow {n} \"\"
+  println (show (count s 0 0))
+"
+        );
+        stats(&source, &format!("{n}\n")).rc_increments
+    };
+    assert_eq!((increments(300), increments(3000)), (0, 0));
+}

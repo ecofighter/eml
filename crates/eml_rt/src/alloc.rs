@@ -6,9 +6,11 @@
 //! 集合とページごとの数は ghost の値で持ち、割り算を量化子の中に置かずに済ませる。
 
 use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use std::collections::BTreeMap;
 use std::mem::ManuallyDrop;
 use std::ptr;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use vstd::prelude::*;
 use vstd::raw_ptr::{Dealloc, PointsTo, PointsToRaw, ptr_mut_write, ptr_ref};
@@ -3334,7 +3336,56 @@ fn dealloc_page(
         raw.is_range(p@.addr as int, bytes as int),
         p@.provenance == page.provenance(),
 {
-    unsafe { dealloc(p, Layout::from_size_align_unchecked(bytes, PAGE_BYTES)) }
+    unsafe { return_page(p, bytes) }
+}
+
+// ページを返す道の唯一の入り口 (信頼の一覧のT17)。留めたページは返さずに取り置き、最後の留めを落とす`PagePin`の`Drop`がOSに返す
+// (docs/spec/object-model.mdの「ページの留め」)。
+//
+// lockを取らずに留めの数を読む。留めを取ることがこの呼び出しより前に起きていれば、このページの留めを見落とさない。
+// 書き込みと読みの整合 (write-read coherence) により、読みはその加算かそれより後の値を見て、数は留めが生きている間
+// 0より大きいためである。ページをここへ運ぶ道は、どれもそうした辺で留めた側より後に順序づく。留めたスレッド自身
+// (局所の解放、ヒープを落とすこと、回復)、別のスレッドが物体を空ける前の共有のrcのAcqRelの減算とAcquireの読み
+// (cell.rs)、別のスレッドが空けたページを持ち主が返す前の、持ち主の`RemoteSink`からのAcquireの取り出し、凍結した
+// 塊の`Arc`を落とすこと、別のスレッドで使ったヒープを落とす前のworkerのjoinとdriverの`quiesce`である。ページを
+// 別のスレッドに渡して返させる新しい道も、留めた側より後にこうした辺で順序づけなければならない
+//
+// # Safety
+// `page`は`alloc_page`が`bytes`で確保したページで、もうどのヒープも使わない。呼ぶ側はどのページも1回だけ渡す。
+#[verifier::external_body]
+unsafe fn return_page(page: *mut u8, bytes: usize) {
+    if PINNED.load(Ordering::Relaxed) != 0 && park(page, bytes) {
+        return;
+    }
+    unsafe { dealloc(page, Layout::from_size_align_unchecked(bytes, PAGE_BYTES)) }
+}
+
+/// 大きい物体のページの留め (docs/spec/object-model.mdの「ページの留め」)。生きている間、ページをOSに返さない。
+/// その間にブロックを空けるかヒープを落とすと、ページを取り置き、最後の留めを落とすときに返す。
+#[verifier::external_body]
+pub struct PagePin {
+    page: usize,
+}
+
+/// 番地`page`のページに留めを登録する (T17)。
+#[verifier::external_body]
+pub(crate) fn pin_page(page: usize) -> PagePin {
+    let mut table = pins();
+    table.entry(page).or_insert(Pinned { count: 0, parked: None }).count += 1;
+    PINNED.fetch_add(1, Ordering::Relaxed);
+    PagePin { page }
+}
+
+/// ページの頭の権限`hdr`で、ブロック`h`が大きい物体のページにあるかを読む。
+#[inline]
+pub(crate) fn large_in(h: *mut Header, Tracked(hdr): Tracked<&PointsTo<PageHeader>>) -> (r: bool)
+    requires
+        hdr.ptr()@.addr == page_base(h@.addr),
+        hdr.ptr()@.provenance == h@.provenance,
+        hdr.is_init(),
+{
+    let page = page_of(h);
+    ptr_ref(page, Tracked(hdr)).class == LARGE
 }
 
 // セッションのページの数の加減 (信頼の一覧の T1)。値について何も約束しないので、検証には何も持ち込まない
@@ -3388,18 +3439,87 @@ impl Drop for Pages {
                 forget_page(&self.control, page.addr());
             }
             let bytes = unsafe { (*page).bytes };
-            unsafe {
-                dealloc(
-                    page.cast(),
-                    Layout::from_size_align_unchecked(bytes, PAGE_BYTES),
-                );
-            }
+            unsafe { return_page(page.cast(), bytes) };
             self.control.refund(bytes);
         }
         // ほかのスレッドはもうこのヒープに積まない (docs/spec/object-model.md の「別のスレッドからの解放」)
         drop(unsafe { Box::from_raw(self.sink.cast_mut()) });
         // `control` の欄はこの後で読まない
         release_control(unsafe { ManuallyDrop::take(&mut self.control) });
+    }
+}
+
+/// 留めの表。プロセスに1つで、ページの番地で引く。lockはほかのlockを取らない末端のlockで、
+/// 中でヒープのページを確保せず、`Control`に触れないので、poisonしたlockもそのまま使う。
+static PINS: Mutex<BTreeMap<usize, Pinned>> = Mutex::new(BTreeMap::new());
+
+/// 生きている留めの数。表のlockの下でだけ変え、`return_page`はlockを取らずに読んで、何も留めていない間は表を引かない。
+static PINNED: AtomicUsize = AtomicUsize::new(0);
+
+/// 1つのページの留めの数と、留めている間に`return_page`に渡されたページ。
+struct Pinned {
+    count: usize,
+    parked: Option<Parked>,
+}
+
+/// 留めている間に`return_page`に渡されたページと、確保したときのバイト数。
+struct Parked {
+    page: *mut u8,
+    bytes: usize,
+}
+
+// SAFETY: 取り置いたページはもうどのヒープも使わない。ポインタを読むのは、ページを返す最後の留めの`Drop`だけである
+unsafe impl Send for Parked {}
+
+/// lockを取った表。poisonは無視する (理由は`PINS`の注釈にある)。
+fn pins() -> MutexGuard<'static, BTreeMap<usize, Pinned>> {
+    PINS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// `page`が留めてあれば取り置き、取り置いたかを返す。
+fn park(page: *mut u8, bytes: usize) -> bool {
+    match pins().get_mut(&page.addr()) {
+        Some(pinned) => {
+            pinned.parked = Some(Parked { page, bytes });
+            true
+        }
+        None => false,
+    }
+}
+
+/// `page`の留めを1つ外す。最後の留めなら項目を外し、その間に取り置いたページを返す。
+/// 呼ぶ側はlockを放した後でそのページを返す。
+fn unpin(page: usize) -> Option<Parked> {
+    let mut table = pins();
+    let pinned = table.get_mut(&page).expect("a pinned page");
+    pinned.count -= 1;
+    PINNED.fetch_sub(1, Ordering::Relaxed);
+    if pinned.count > 0 {
+        return None;
+    }
+    table.remove(&page).and_then(|pinned| pinned.parked)
+}
+
+impl PagePin {
+    /// `addr`を含むページが取り置いてあるか。`addr`以下で一番近いページを引き、`addr`がその取り置いたページの中に
+    /// あるかを見るので、大きい物体のページの中のどの番地でもよい。テストのためにある。表は番地で引くので、
+    /// 1つのプロセスで並行に走るテストは互いに乱さない。
+    #[doc(hidden)]
+    pub fn parked(addr: usize) -> bool {
+        pins()
+            .range(..=addr)
+            .next_back()
+            .and_then(|(&page, pinned)| pinned.parked.as_ref().map(|p| addr < page + p.bytes))
+            .unwrap_or(false)
+    }
+}
+
+impl Drop for PagePin {
+    fn drop(&mut self) {
+        // lockを放してから返し、lockを末端に保つ
+        if let Some(Parked { page, bytes }) = unpin(self.page) {
+            unsafe { dealloc(page, Layout::from_size_align_unchecked(bytes, PAGE_BYTES)) }
+        }
     }
 }
 

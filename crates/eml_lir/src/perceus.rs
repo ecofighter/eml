@@ -2,39 +2,44 @@
 //! として扱い、後でも使う変数を複製し、使わなくなった変数をできるだけ早く捨てる。対象は RC の対象 (`Repr::is_rc`) の
 //! 変数だけである。
 //!
-//! `switch` と `unpack` のフィールドは値から借りて始まり、読むだけなら借りたまま使う。所有を取るのは、消費するとき、
-//! 合流するブロックのエントリで生きているとき、持ち主の最後の参照を消費した後も生きているとき、保持されている持ち主に
-//! 属して呼び出しの後で生きているときだけである。持ち主がその命令で要るならフィールドを `dup` し、要らないなら
-//! 持ち主を `release` で解いてフィールドを受け取る (docs/spec/lir.md の「Perceus」)。こうすると、分解した後に使わない
-//! 持ち主のフィールドは `dup` されず、`Lin` の物体の参照は1つのまま保たれる。
+//! `switch`と`unpack`のフィールドは値から借りて始まり、読むだけなら借りたまま使う。所有を取るのは、消費するとき、
+//! 合流するブロックのエントリで生きているとき、持ち主の最後の参照を消費した後も生きているか、持ち主を貸さずに
+//! その最後の参照を消費する命令が貸すとき、保持されている持ち主に属して呼び出しの後で生きているか、その呼び出しが
+//! 貸すときだけである。持ち主がその命令で要るならフィールドを`dup`し、要らないなら持ち主を`release`で解いて
+//! フィールドを受け取る (docs/spec/lir.mdの「Perceus」)。こうすると、分解した後に使わない持ち主のフィールドは
+//! `dup`されず、`Lin`の物体の参照は1つのまま保たれる。
+//!
+//! 貸されたブロックの引数とそれから分解したフィールドは、呼んだ側から借りたまま使う。所有にせず、消費する使いごとに
+//! `dup`を1つ置く (docs/spec/lir.mdの「Perceus」)。
 //!
 //! ブロックを番号の順に1回たどる。各ブロックでは、後ろからたどって各文で死ぬ変数を求め、前から所有の集合を持って
 //! 命令を足す。
 
 use std::collections::BTreeSet;
 
-use eml_extern::CFunction;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::{
-    Atom, Block, BlockId, CasePattern, Ctor, Layout, LirFn, Mark, Program, Repr, Rhs, Stmt, Term,
-    VarId, VarInfo,
+    Atom, Block, BlockId, CasePattern, Ctor, Layout, Lends, LirFn, Mark, Program, Repr, Rhs, Stmt,
+    Term, VarId, VarInfo,
 };
 
 /// 変換と contract の後に、プログラム全体に1回だけかける。入力は RC の命令を持たない。
 pub fn perceus(program: &mut Program) {
+    let callees = program.lends();
     for function in &mut program.functions {
-        insert_rc(function, &program.layouts, &program.c_functions);
+        let lends = Lends::new(&program.c_functions, &callees, function);
+        insert_rc(function, &program.layouts, lends);
     }
 }
 
-fn insert_rc(function: &mut LirFn, layouts: &[Layout], c_functions: &[CFunction]) {
+fn insert_rc(function: &mut LirFn, layouts: &[Layout], lends: Lends) {
     let live_in = live_in(function);
     let unboxed = function.struct_boxes();
     let mut fields = Fields {
         layouts,
-        c_functions,
+        lends,
         rc: function.vars.iter().map(|var| var.repr.is_rc()).collect(),
         marks: function.vars.iter().map(|var| var.mark).collect(),
         unboxed,
@@ -49,13 +54,17 @@ fn insert_rc(function: &mut LirFn, layouts: &[Layout], c_functions: &[CFunction]
         let id = BlockId(index as u32);
         let after_term = live_after_term(function, &function.blocks[index].term, &live_in);
         let block = &mut function.blocks[index];
-        // エントリと合流するブロックは、生きている変数と引数を1つずつ所有して始まり、借りた変数を持たない
+        for &param in &block.borrowed {
+            fields.owner[param.0 as usize] = Some(Owner::Entry);
+        }
+        // エントリと合流するブロックは、呼んだ側から借りた変数を除いて、生きている変数と引数を1つずつ所有して始まり、
+        // 借りた変数を持たない
         let mut state = switch_entries.remove(&id).unwrap_or_else(|| State {
             owned: live_in[index]
                 .iter()
                 .chain(&block.params)
                 .copied()
-                .filter(|&var| fields.rc(var))
+                .filter(|&var| fields.rc(var) && !fields.lent_by_caller(var))
                 .collect(),
             lent: FxHashMap::default(),
         });
@@ -126,10 +135,19 @@ struct Parent {
     slot: usize,
 }
 
+/// 借りた変数の参照を持つもの。`Entry`は呼んだ側で、貸されたブロックの引数と、それから束縛したフィールドがこれを持つ。
+/// 参照はこのフレームより下のフレームが持つので、そういう変数は所有にならず、どの持ち主にも属さない
+/// (docs/spec/lir.mdの「経路ごとの状態」)。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Owner {
+    Var(VarId),
+    Entry,
+}
+
 /// 関数全体の表。変数は関数の中で1回だけ定義される (R5) ので、束縛の位置で1回書けばよい。
 struct Fields<'a> {
     layouts: &'a [Layout],
-    c_functions: &'a [CFunction],
+    lends: Lends<'a>,
     rc: Vec<bool>,
     marks: Vec<Mark>,
     /// 構造体の `unbox` が読む箱。箱は構造体の変数の印を持ち、`lin` か `poly` なら `decref` できない (V1) ので、
@@ -139,7 +157,7 @@ struct Fields<'a> {
     parent: Vec<Option<Parent>>,
     /// 束縛の時点の持ち主。verifier と同じく、親が所有されていれば親、そうでなければ親の持ち主である
     /// (docs/spec/lir.md の「verifier」)。後で親が所有になっても変えない。
-    owner: Vec<Option<VarId>>,
+    owner: Vec<Option<Owner>>,
     /// 箱を手放す `drop` が束縛する `unit` の変数。関数の変数の表の後ろに足す。
     drops: Vec<VarInfo>,
 }
@@ -161,8 +179,16 @@ impl Fields<'_> {
         self.rc[var.0 as usize]
     }
 
+    /// 変数の持ち主。呼んだ側から借りた変数は持ち主の変数を持たない。
     fn owner(&self, var: VarId) -> Option<VarId> {
-        self.owner[var.0 as usize]
+        match self.owner[var.0 as usize] {
+            Some(Owner::Var(owner)) => Some(owner),
+            Some(Owner::Entry) | None => None,
+        }
+    }
+
+    fn lent_by_caller(&self, var: VarId) -> bool {
+        self.owner[var.0 as usize] == Some(Owner::Entry)
     }
 
     fn parent(&self, var: VarId) -> Parent {
@@ -182,9 +208,9 @@ impl Fields<'_> {
         fields: impl Iterator<Item = (usize, VarId)>,
     ) {
         let owner = if owned.contains(&value) {
-            Some(value)
+            Some(Owner::Var(value))
         } else {
-            self.owner(value)
+            self.owner[value.0 as usize]
         };
         for (slot, field) in fields {
             self.parent[field.0 as usize] = Some(Parent { value, ctor, slot });
@@ -264,22 +290,33 @@ impl Fields<'_> {
     /// 変数である。
     fn stmt(&mut self, state: &mut State, stmt: Stmt, live: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
         let used = vars(|f| stmt.for_each_atom(f));
-        let consumed = self.consumed(|f| stmt.for_each_consumed(self.c_functions, f));
+        // 呼んだ側から借りた変数は所有にしない。消費する使いごとに`dup`を1つ文の直前に置き、所有の数を持つのを
+        // その文の中だけにする (docs/spec/lir.mdの「Perceus」)
+        let (by_caller, consumed): (Vec<VarId>, Vec<VarId>) = self
+            .consumed(|f| stmt.for_each_consumed(&self.lends, f))
+            .into_iter()
+            .partition(|&var| self.lent_by_caller(var));
         // 借りる変数を同じ文が消費もするなら、文の後も生きているとみなす。借用は文の間じゅう続くので、消費に渡す参照とは
         // 別に1つ要り、文の後の `decref` がその参照を手放す (docs/spec/lir.md の「extern の借用」)
-        let lent = self.consumed(|f| stmt.for_each_lent(self.c_functions, f));
+        let lent = self.consumed(|f| stmt.for_each_lent(&self.lends, f));
         let need = Need { live, used: &used };
         // 消費する変数のほかに、所有を取るのは次の変数である。持ち主の最後の参照をこの文が消費した後も生きている、
-        // その持ち主に属する変数。呼び出しの後で生きている、保持されている持ち主に属する変数。後者は持ち主を呼び出しの
-        // 前に解く。保持されている持ち主が呼び出しをまたぐと、死んだ兄弟のフィールドも残り、末尾でない再帰で段ごとに
-        // 溜まるためである (docs/spec/lir.md の「所有を取る時点」)
+        // その持ち主に属する変数と、持ち主を貸さないこの文が貸す、その持ち主に属する変数。呼び出しの後で生きているか、
+        // 呼び出しが貸す、保持されている持ち主に属する変数。2つ目は、呼ばれる側が貸された変数を読む前に、消費した
+        // 持ち主を解放しうるためで、文の後の`decref`が貸した分を手放す。3つ目は持ち主を呼び出しの前に解き、貸すだけの
+        // 変数は呼び出しの後の`decref`で手放す。保持されている持ち主が呼び出しをまたぐと、死んだ兄弟のフィールドも
+        // 残り、末尾でない再帰で段ごとに溜まるためである (docs/spec/lir.mdの「所有を取る時点」)
         let mut take = consumed.clone();
         for var in &consumed {
             if state.owned.contains(var)
                 && !live.contains(var)
                 && let Some(vars) = state.lent.get(var)
             {
-                take.extend(vars.iter().filter(|var| live.contains(var)));
+                let last = !lent.contains(var);
+                take.extend(
+                    vars.iter()
+                        .filter(|var| live.contains(var) || (last && lent.contains(var))),
+                );
             }
         }
         if matches!(
@@ -295,7 +332,7 @@ impl Fields<'_> {
                     .iter()
                     .filter(|(owner, _)| !need.contains(**owner))
                     .flat_map(|(_, vars)| vars.iter().copied())
-                    .filter(|var| live.contains(var)),
+                    .filter(|var| live.contains(var) || lent.contains(var)),
             );
         }
         self.take(state, take, &need, out);
@@ -304,6 +341,7 @@ impl Fields<'_> {
                 .into_iter()
                 .map(Stmt::Dup),
         );
+        out.extend(by_caller.into_iter().map(Stmt::Dup));
         debug_assert!(consumed.iter().all(|var| state.owned.contains(var)));
         for var in &consumed {
             if !live.contains(var) && !lent.contains(var) {
@@ -388,7 +426,18 @@ impl Fields<'_> {
             return;
         }
         let used = vars(|f| term.for_each_atom(f));
-        let consumed = self.consumed(|f| term.for_each_consumed(f));
+        // 末尾呼び出しと`jump`は、呼んだ側から借りた変数だけを貸す。末尾呼び出しの後には呼び出し元のフレームがなく、
+        // 合流するブロックは入った辺を区別できないためである (docs/spec/lir.mdの「verifier」)
+        debug_assert!(
+            self.consumed(|f| term.for_each_lent(&self.lends, f))
+                .iter()
+                .all(|&var| self.lent_by_caller(var)),
+            "a tail call or a jump lends only variables borrowed from the caller"
+        );
+        let (by_caller, consumed): (Vec<VarId>, Vec<VarId>) = self
+            .consumed(|f| term.for_each_consumed(&self.lends, f))
+            .into_iter()
+            .partition(|&var| self.lent_by_caller(var));
         let mut take = consumed.clone();
         if matches!(term, Term::Jump { .. }) {
             take.extend(
@@ -413,6 +462,7 @@ impl Fields<'_> {
                 .into_iter()
                 .map(Stmt::Dup),
         );
+        out.extend(by_caller.into_iter().map(Stmt::Dup));
         let owned = &mut state.owned;
         for var in &consumed {
             if !after.contains(var) {
@@ -429,7 +479,9 @@ impl Fields<'_> {
             self.discard(var, out);
         }
         debug_assert!(
-            owned.iter().eq(after.iter().filter(|&&var| self.rc(var))),
+            owned.iter().eq(after
+                .iter()
+                .filter(|&&var| self.rc(var) && !self.lent_by_caller(var))),
             "the owned set at the end of a block"
         );
     }

@@ -61,10 +61,11 @@ pub enum Op {
     /// ストリーム `handle` の `TCP_NODELAY` を切り替える。いつも受け付けで終わり、`Submit::Done(Ok(Done::Size(0)))` か
     /// `Submit::Done(Err(_))` を返す。
     SetNodelay { handle: IoHandle, on: bool },
-    /// ブロックする呼び出しのプールの仕事。自分が所有する値 (所有して受け取る入力と、値で返す結果) を通してだけ
-    /// 記憶に届き、ヒープにも RC にも触れない。panic しない。本物の driver は、仕事の panic を driver を持つ
-    /// スレッドの上で起こし直すためである。所有した値を返し、`Done::Job` で終わる。失敗は値の中に書くので、
-    /// 完了の `Err` は driver が仕事を走らせられなかったことだけを指す。
+    /// ブロックする呼び出しのプールの仕事。自分が所有する値 (所有して受け取る入力と、値で返す結果) か、自分が持つ
+    /// `PagePin`の下でT16の規則で貸された範囲 (docs/spec/object-model.mdの「`unsafe` の核」) を通してだけ記憶に
+    /// 届き、`Ctx`にもRCにも触れず、ヒープで何も確保しない。panicしない。本物のdriverは、仕事のpanicをdriverを持つ
+    /// スレッドの上で起こし直すためである。所有した値を返し、`Done::Job`で終わる。失敗は値の中に書くので、
+    /// 完了の`Err`はdriverが仕事を走らせられなかったことだけを指す。
     Job(Box<dyn FnOnce() -> Box<dyn Any + Send> + Send + 'static>),
     /// どの driver にも縛っていない OS の資源を取り込み、`Done::Handle` で返す。いつも受け付けで終わり、受けた
     /// driver の `adopt` と同じ規則で `Submit::Done` を返す。
