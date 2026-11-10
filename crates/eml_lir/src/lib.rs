@@ -8,6 +8,7 @@ use eml_extern::{EffectMultiplicity, Extern, ExternEffect, RuntimeEntry};
 pub use eml_extern::{FloatBits, Mark, OpRet, Repr, StructId};
 use rustc_hash::FxHashMap;
 
+mod borrow;
 mod boxing;
 pub mod check;
 mod contract;
@@ -24,6 +25,7 @@ pub mod unwind;
 mod variants;
 mod verify;
 
+pub use borrow::borrow;
 pub use boxing::boxing;
 pub use contract::contract;
 pub use flatten::flatten;
