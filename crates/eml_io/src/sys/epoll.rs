@@ -5,7 +5,7 @@
 #![allow(unsafe_code)]
 
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::ptr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -86,6 +86,10 @@ impl Poller for Epoll {
             events: vec![libc::epoll_event { events: 0, u64: 0 }; EVENTS],
         };
         Ok((poller, wake))
+    }
+
+    fn raw_fd(&self) -> RawFd {
+        self.ep.as_raw_fd()
     }
 
     fn register(&mut self, fd: BorrowedFd<'_>, token: u64, interest: Interest) -> io::Result<()> {

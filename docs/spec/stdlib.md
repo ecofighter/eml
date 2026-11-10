@@ -10,15 +10,17 @@
 eml wc.em -l input.txt          # eml run wc.em -l input.txt と同じ
 eml run --debug-heap wc.em -l input.txt
 eml run --workers 4 wc.em -l input.txt
+eml run --gui stub counter.em
 eml run --link openblas=/opt/lib/libopenblas.so solve.em
 ./wc.em -l input.txt            # 1行目が #!/usr/bin/env eml で、実行できるファイル
 ```
 
 - 最初の引数が `-` で始まらず、サブコマンドの名前 (`check`、`run`、`repl`、`help`) でもなければ、`run` として扱う。`run` という名前のファイルを動かすときは `eml run run` と書く。`-` で始まる最初の引数はフラグとして読むので、`eml --verison` は使い方の誤り (終了コード 2) である
-- `run` の後のファイルは、値を取るフラグの値でない、`-` で始まらない最初の引数である。値を取るフラグ (`--workers`、`--link`) と同じ引数は、次の引数を値として取る。そのほかの `-` で始まる引数 (`--debug-heap`、`--stats`、`--workers=4`) は、その引数だけでフラグになる。値を取るフラグは clap の `run` の定義から読む
-- ファイルより後ろの引数は、`-` で始まるものも含めてそのままスクリプトに渡す。`--debug-heap`、`--stats`、`--workers`、`--link` はファイルより前にだけ書ける。`eml run main.em --workers 4` は、スクリプトに `--workers` と `4` を渡す
+- `run`の後のファイルは、値を取るフラグの値でない、`-`で始まらない最初の引数である。値を取るフラグ (`--workers`、`--link`、`--gui`) と同じ引数は、次の引数を値として取る。そのほかの`-`で始まる引数 (`--debug-heap`、`--stats`、`--workers=4`) は、その引数だけでフラグになる。値を取るフラグはclapの`run`の定義から読む
+- ファイルより後ろの引数は、`-`で始まるものも含めてそのままスクリプトに渡す。`--debug-heap`、`--stats`、`--workers`、`--link`、`--gui`はファイルより前にだけ書ける。`eml run main.em --workers 4`は、スクリプトに`--workers`と`4`を渡す
 - `eml run`は、タスクを切り替える方針をいつも`Normal`にする。タスクは`Async`の操作でだけ切り替わる ([VM](vm.md)の「タスクとスケジュール」)
 - `--workers <N>` は、`par` の右の子と `Async` のタスクと `compute` の仕事を走らせる worker のスレッドの数 (worker 0 を含む) を選ぶ ([VM](vm.md) の「タスクとスケジュール」)。`N` は 1 以上 1024 以下の整数である。run は worker ごとに止める語と欄を確保するので、上限を置いて、大きすぎる数を確保の失敗でなく使い方の誤りにする。`--workers` がなければ環境変数 `EML_WORKERS` を同じ規則で読み、それもなければ `available_parallelism()` の値にする (読めなければ 1、1024 を超えれば 1024)。0 と 1024 を超える数と数でない値は、フラグでも `EML_WORKERS` でも使い方の誤り (終了コード 2) で、2回書いた `--workers` も同じである。`run` だけが持ち、`repl` と `check` は持たない。`repl` は常に 1 である ([REPL の端末](repl.md) の「コマンドライン」)。ライブラリの `Limits::default()` と `eml_cli::default_limits()` も 1 で、UI テストは 1 で走らせる。`par/` と `async/` の UI テストは 2 と 8 でも走らせる ([テスト戦略](../implementation/testing.md) の「seed で流す」)
+- `--gui <native|stub>`は、`Std.Gui`がウィンドウを開くbackendを選ぶ ([VM](vm.md)の「GUIのPark」)。`native`はOSのtoolkitで、`stub`は何も開かず、表示したウィンドウごとに閉じる要求を1回送るので、プログラムはウィンドウを待たずに終わりまで動く。`--gui`がなければ環境変数`EML_GUI`を同じ規則で読み、それもなければ`native`にする。ほかの値は、フラグでも`EML_GUI`でも使い方の誤り (`` `{値}` is not a GUI backend (native or stub) ``、終了コード2) で、`EML_GUI`の誤りは`EML_GUI: `を前に付ける。`run`だけが持ち、`repl`と`check`は持たない。`repl`にはGUIの`Park`がないので、`Gui.run`は`NotAvailable`で失敗する (下の「`Std.Gui`」)
 - `--link KEY=VALUE` は、`link` の item に KEY と書いたライブラリの代わりに、VALUE を開く ([VM](vm.md) の「ライブラリと記号」)。何回でも書け、`run` と `repl` が持つ。同じ KEY を2回以上書くと、後に書いたものが効く。`check` はライブラリを開かないので持たない。KEY は `link` の item に書いた文字列そのもので、VALUE は `link` の item の名前と同じ規則で飾る。最初の `=` で KEY と VALUE に分け、`=` のない値と、KEY か VALUE が空の値は使い方の誤り (`` `{text}` is not KEY=VALUE ``、終了コード 2) である。`run` は、読み込んだどのモジュールの `link` の item にも合わない KEY を、`link error: --link names no library "{key}"` で断る (終了コード 1。[VM](vm.md) の「`--link`」)。`repl` は断らない ([REPL の端末](repl.md) の「C の関数」)
 - `Env.args ()` は、ファイルより後ろの引数を返す。`eml` とスクリプトのパスは含めない
 - shebang は `#!/usr/bin/env eml` と書く。Linux の `env` は `#!` の行の残りを1つの引数として渡すので、`#!/usr/bin/env eml run` は動かない
@@ -32,7 +34,7 @@ eml run --link openblas=/opt/lib/libopenblas.so solve.em
 
 extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
-externの行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md)の「`extern`」)。預かる行は`Std.Async`の`start_raw`、`start_main_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`park_signal`の19行と、`Std.Chan`の`push_raw`の1行で、`task_cell`だけは借りて預かる。預からない引数の型変数は、同じ節の規則のとおり`Unr`に固定するか、コールバックの結果なら固定しない。
+externの行は引数を預かることがある (`FunctionRow::held`。[宣言](declarations.md)の「`extern`」)。預かる行は`Std.Async`の`start_raw`、`start_main_raw`、`start_off_main_raw`、`run_raw`、`park`、`ready`、`finish_ok`、`task_cell`、`take_result`、`run_result`、`detach`、`cancel_raw`、`start_in_raw`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`park_signal`の20行と、`Std.Chan`の`push_raw`の1行で、`task_cell`だけは借りて預かる。預からない引数の型変数は、同じ節の規則のとおり`Unr`に固定するか、コールバックの結果なら固定しない。
 
 stdの行は、`submit_*`、`Async.io_wait`、`take_*`の3つ組で、Rustの処理をdriverのブロックする呼び出しのプールで走らせられる。受け付けの行が消費した`Lin`の`Foreign`の引数は仕事へ移り、取り出しの行が新しい物体として返す ([VM](vm.md) の「プールの仕事」)。
 
@@ -1018,6 +1020,9 @@ main () = println (show (Async.run body))
 | `shield` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` | eml |
 | `compute` | `(Unit -> <never e> a) -> <IO, Async \| e> a` | eml |
 | `start_on_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
+| `start_off_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Async> Task a` | eml |
+| `spawn_off_main` | `(Unit -> <IO, Panic, Async> Unit) -> <IO, Async> Unit` | eml |
+| `gui_wait` | `Cell -> <IO, Async> Wake` | eml |
 | `run_on_main` | `(Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` | eml |
 | `try_all` | `(Unit -> <IO, Panic \| e> a) -> <IO \| e> Result Failure a` | eml |
 | `Failure` | `IOFailed IOError` と `Panicked String` を持つ型 | eml (`deriving (Show)`) |
@@ -1076,6 +1081,7 @@ pub data Failure =
 |---|---|---|
 | `start_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
 | `start_main_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
+| `start_off_main_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
 | `run_raw` | `(Unit -> <IO, Async> Unit) -> <IO> Task a` | 閉包 |
 | `start_in_raw` | `Scope -> (Unit -> <IO, Async> Unit) -> <IO, Panic> Task a` | 閉包 (2つ目の引数) |
 | `park` | `Cell -> (once Wake -> <IO> Unit) -> <IO> Unit` | 継続 (2つ目の引数) |
@@ -1115,7 +1121,7 @@ pub data Failure =
 
 - タスクの結果は値のまま渡す。`finish_ok` が結果の値を預かってタスクのセルに持ち、`take_result` と `run_result` がハンドルを消費して、同じセルに持っていた値を1回返す。ランタイムは預かった値を写さず、中身も見ない。返さないままセルを放すときは、その値を落とす。預かる引数の型変数は `Unr` に固定しないので、`Lin` の結果も thunk に包まずに渡せる ([宣言](declarations.md) の「`extern`」)
 - `take_result`と`run_result`が返す値の型が、`finish_ok`に預けた値の型と合うことは、処理系は確かめない。生の行を`pub`にせず、`start`、`start_in`、`start_on_main`、`run`、`await`のシグネチャだけが本体の結果の型`a`とハンドルの`Task a`を結ぶことで、標準ライブラリが保つ。`take_job`が返す値の型が`fork_job`に渡した閉包の結果の型と合うことも、同じく`compute`のシグネチャが保つ
-- 預かる引数の矢印 (`start_raw`、`start_main_raw`、`run_raw`、`start_in_raw`の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`park_signal`、`ready`の継続) には、閉じたrowを書く。ランタイムはそれを呼ばず、エントリの`start_task`、`resume_task`、`resume_io`が呼ぶので、rowはエントリの型が決める
+- 預かる引数の矢印 (`start_raw`、`start_main_raw`、`start_off_main_raw`、`run_raw`、`start_in_raw`の閉包、`park`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until`、`park_signal`、`ready`の継続) には、閉じたrowを書く。ランタイムはそれを呼ばず、エントリの`start_task`、`resume_task`、`resume_io`が呼ぶので、rowはエントリの型が決める
 - `park_io` と `park_io_until` は継続だけを預かり、token は預からずに消費する。token は即値の番号なので、再開の仕事が記録の番号から作り直して `resume_io` に渡す
 - `op_ready op ms` は token を借りて、待たずに続けてよいかを 0 (続ける)、1 (待つ)、2 (先に譲る) で返し、宣言の型では結果と token の組を返す ([Core IR](core-ir.md) の「組を返す extern」)。どの呼び出しも、操作が終わっていたかによらず操作の予算を使い、書きの操作は長さに応じて多く使う (下の「操作の予算」)。記録が終わっていて取り消しの地点が投げなければ、予算が残れば待ちを1つ数えて 0 を返す。切れれば OS を1回見て集め、走れるタスクがあれば数えずに 2 を返し、なければ予算を戻し、待ちを1つ数えて 0 を返す。2 の待ちは、続く `reschedule ()` が数える。ほかは 1 で、何も数えない。待つ側の `await_io` が数える ([VM](vm.md) の「操作の記録」)
 - `task_cell` はハンドルを借りてセルを返し、宣言の型ではセルとハンドルの組を返す ([Core IR](core-ir.md) の「組を返す extern」)
@@ -1123,6 +1129,7 @@ pub data Failure =
 - `fork_job f` は `f` を仕事として、空いている worker の受け箱か呼んだ worker の実行待ちに置き、仕事の token を返す。閉包は仕事として動き、`fork_job` が消費する。`take_job j` は token を消費して、終わった仕事の結果を返すか、仕事の中断を起こし直す。`drop_job j` は token を消費して、終わった仕事の終わりを落とす。どちらも、仕事を出したタスクが仕事の終わった後に呼ぶ。std の `compute` は `job_cell` で借りたセルを `await_cell` で待ってから呼ぶ ([VM](vm.md) の「`compute` の仕事」)
 - `chan_wait_send` と `chan_wait_recv` (`Cell -> <IO, Async> Wake`) は `Std.Chan` のためのインターフェースで、`pub` である。`Async` の操作は外のモジュールから perform できないためである ([エフェクトと handler](effects.md) の「抽象エフェクト」)。`Cell` を返すか渡す公開の関数はないので、利用者は呼べない。`Cell` を公開の関数に出すときは、この2つを見直す。channel でないセルか放したセルを渡すと、すぐ `Woke` で戻る
 - `io_wait` (`OpId -> <IO, Async> (Wake, OpId)`) と `io_wait_until` (`OpId -> Int -> <IO, Async> (Wake, OpId)`) は `Std.Net` のためのインターフェースで、同じ理由で `pub` である。処理系も、`blocking` の C の関数の呼び出しの受け付けと取り出しの間で `io_wait` を呼ぶ ([VM](vm.md) の「`blocking` の呼び出し」)。`OpId` を作る公開の関数はないので、利用者は呼べない (下の「`Std.Net`」)。どちらも先に `op_ready` を呼ぶ。0 なら perform せずに `(Woke, op)` を返し、2 なら `reschedule ()` で列の後ろへ回ってから、その `Wake` を見ずに `(Woke, op)` を返す。1 のときだけ `await_io` か `await_io_until` を perform して待つ。回る間に届いた取り消しは、次の取り消しの地点で投げる
+- `gui_wait` (`Cell -> <IO, Async> Wake`) は`Std.Gui`のためのインターフェースで、同じ理由で`pub`である。ゲートのセルで待つ取り消しの地点である。ゲートは旗と高々1つの待ち手を持つ登録表のセルで、前の待ちの後に知らせが届いていれば旗を下ろしてすぐ`Woke`で戻る。取り消しは旗より先に見る ([VM](vm.md) の「セルと登録表」、下の「`Std.Gui`」)。ゲートを作る公開の関数はないので、利用者は呼べない
 - `io_wait_shielded` (`OpId -> <IO, Async> OpId`) も `Std.Net` のためのインターフェースである。`shield` と同じ深さの印の中で `io_wait` を呼び、`Wake` を捨てて token を返す。中の待ちは外の取り消しで外れず、いつも操作が終わってから戻る。`shield` は本体の行に `Panic` を求めるので、`Panic` を持たない `Std.Net` の包みのためにこの形にする
 - `signal_wait` (`Int -> <IO, Async> Wake`) は `Std.Signal` のためのインターフェースで、同じ理由で `pub` である。0 と 1 のほかの番号は、待たずに種類 `NotAvailable` の IO の失敗 (`no such signal`) にする。利用者が呼んでも、`Signal.wait` と同じ待ちになるだけである (下の「`Std.Signal`」)
 
@@ -1263,6 +1270,7 @@ body () =
 
 - `start_on_main f`は、`f`をメインのworkerのタスクとして始め、そのハンドルを返す。メインのworkerは`Machine`を持つスレッドで、`eml run`ではプロセスのメインのスレッド、`eml repl`ではworker 0である ([VM](vm.md)の「メインのworker」)。`run_on_main f`は`await (start_on_main f)`である
 - `start_on_main`で始めたタスクを固定したタスクと呼ぶ。固定したタスクが始めるタスク (入れ子の`Async.run`の根も含む) も固定し、`par`の子と`compute`の仕事は固定しない ([VM](vm.md)の「`Async` のタスク」)。固定したタスクはほかのworkerへ動かない
+- `start_off_main f`と`spawn_off_main f`は`start`と`spawn`と同じだが、呼んだタスクが固定したタスクでも、新しいタスクを固定せずにworkerの輪に置く。新しいタスクは`Finished.pinned_tasks`に数えず、そのタスクが始めるタスクも固定しない。固定したタスクが開いたスコープの子にもなり、スコープを閉じるときはその終わりを待ち、取り消しも届く。メインのworkerの外で動かす仕事 (GUIを待たせないI/Oなど) に使う
 - スレッドに結び付いた資源 (GUIのツールキット) は、固定したタスクからだけ使う
 
 ### `Failure` と `try_all`
@@ -1812,6 +1820,98 @@ main () = Async.run (fn () ->
 | 接続、TLS、読み書き、取り消しの失敗 | `Std.Net` と `Std.Tls` と同じ | `Std.Net` と `Std.Tls` の文言 |
 
 URL の誤りの理由は、`the URL contains a space, a control or a non-ASCII character`、`the scheme is not http or https`、`userinfo is not supported`、`IPv6 addresses are not supported`、`the host is not valid`、`the port is not valid` のどれかである。`Location` の誤りの理由は、これに `the location is not an absolute URL or an absolute path` を足したものである。`{url}` は渡した URL、`{coding}` は `Transfer-Encoding` の値を `, ` でつないだもの、`{location}` は前後の空白を除いた `Location` の値、`{n}` は `max_redirects` である。
+
+## `Std.Gui`
+
+`Std.Gui`はネイティブのGUIのtoolkitである。プログラムはウィンドウを直接の形で1回だけ組み、ハンドルを通してウィジェットを変え、`wait`でメッセージを取り出す。toolkitの層とbackendは`eml_gui`にある (docs/implementation/architecture.mdの「`eml_gui`の内部」)。利用者が入れるものと、Qtなどのライセンスは、docs/implementation/distribution.mdにある。
+
+```haskell
+counter : Unit -> <Gui Msg, IO, Panic, Async> Unit
+counter () =
+  use _ <- Gui.window "Counter" Quit
+  use Gui.grid [Fr 1, Fr 1] []
+  let shown = Gui.cell { Gui.default_cell | col_span = 2 } (fn () -> Gui.label "0")
+  let _ = Gui.button "-" Dec
+  let _ = Gui.button "+" Inc
+  let loop n =
+    match Gui.wait () with
+      | Inc ->
+        Gui.text shown (show (n + 1))
+        loop (n + 1)
+      | Dec ->
+        Gui.text shown (show (n - 1))
+        loop (n - 1)
+      | Quit -> println "final \{show n}"
+  loop 0
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  use Async.run
+  Gui.run counter
+```
+
+ウィジェットのメッセージは、作るときにそのウィジェットに結び付ける。ウィジェットのハンドルは`Unr`のidである。handler `run`はtoolkitのハンドル`Ui` (`Lin`) をhandlerの状態として持ち、ほかのコードからは見えない。
+
+公開の名前は次のとおりである。データの型`Track` (`Auto`、`Fr Int`、`Px Int`)、`Align` (`Start`、`Center`、`End`、`Stretch`)、`Cell` (`col_span`、`row_span`、`halign`、`valign`) と`default_cell` (幅は1、`Stretch`)。抽象の型`Window`、`Grid`、`Label`、`Button`、`TextField`、`CheckBox`、`Choice`、`ProgressBar`、`Sink msg`。クラス`Widget w` (`wid : w -> Int`)。17の操作を持つエフェクト`Gui msg`。包みの関数`window`、`grid`、`cell`、`text`、`enable`、`value`、`select`、`checked`、`post`、`run`。エフェクトは抽象ではないので、テストは自分のhandlerで扱える。
+
+- `run app` (`(Unit -> <Gui msg, IO, Panic, Async> a) -> <IO, Panic, Async> a`) は、`Async.run_on_main`で`app`を固定したタスクとして動かす (上の「メインのworker」)。`Gui`の操作は自分では`IO`も`Async`も持たない
+- 開くのは2段である。タスクは`want_gui_raw`でゲートのセルを作り、`Async.gui_wait`でそこで待つ。メインのworkerのGUIの`Park`がbackendを作ってネイティブのループに入り、ループの中からゲートに知らせる。タスクはそれから`open_ui_raw`を呼ぶので、toolkitの呼び出しはどれもネイティブのループの中で動く ([VM](vm.md)の「GUIのPark」)
+- ゲートで待つ間に取り消された`run`は、`abandon_raw`でゲートを放し、`Cancelled`で失敗する。次の`run`は開ける
+- `wait ()`は次の順に見る。取り消しの地点、flush (変わったウィンドウの配置と新しいウィンドウの表示)、次のネイティブのイベント、次に送られたメッセージ、そしてウィンドウが1つも開いておらず`sink`も取っていなければ失敗`Other "gui: wait with no open window and no sink"`。どれもなければゲートで待ち、初めから見直す。引き出しと待ちの間に届いた知らせはゲートの旗を立てるので、待ちはすぐに戻る
+- `sink ()`は、`run`のchannel (容量64) とゲートを持つ`Sink msg`を返す。`post sink m`は、どのworkerのどのタスクからも呼べ、`m`を送ってからゲートに知らせる。GUIのタスクでないタスクは、channelが満ちていれば空くまで待つ。GUIのタスク (`app`を動かすタスク) は待たず、channelが満ちていれば`post`はすぐに`ResourceLimit "cannot post: the GUI's message queue is full"`で失敗する。そのタスクはchannelのただ1つの受け手なので、待てば誰も空けないからである。`app`が始めたタスクは、固定したタスクでもGUIのタスクではない。GUIのタスクが待つタスク (`await`するタスクや、`app`の中の`Async.run`の本体) も、満ちたchannelで待つ。channelを空けるのはGUIのタスクだけなので、runはデッドロックの報告なしに止まったままになる。`run`が戻った後に送ったメッセージは捨てる。channelは閉じていて、放したゲートへの知らせは何もしないからである
+- `app`が戻るか、失敗するか、取り消されると、`run`はchannelを閉じて`Ui`を手放す。`Ui`を手放すことは旗を立てるだけで、ウィンドウは`Park`が次の段ですべて閉じる。そのため、正常な終わり、panic、取り消しのどれでもウィンドウは閉じる
+- 求めるか開いているGUIは一度に1つだけである。ほかの`run`が開くのを待っているか`Ui`を開いている間の`run`は、`Other "cannot open the GUI: it is already open"`で失敗する。GUIの`Park`のないrun (`eml repl`、`eml run`の`Park`を置かないrun、feature `gui`のない処理系) では、`run`は`NotAvailable "cannot open the GUI: not available"`で失敗する
+- GUIを求めるか開いている間は、プログラムをデッドロックと判定しない。利用者を待っていることがあるからである。開くのに失敗したか、ウィンドウができる前に取り消された`run`はその期間を終えるので、その後のデッドロックはまた報告される
+
+ウィジェットのidは`(window_no << 32) | seq`である。`window_no`はプログラムのrunを通して、その中で開いたどの`Ui`のウィンドウも続けて1から数え、`seq`の0はウィンドウ自身である。idは使い回さない。閉じたウィジェットのidは`NotFound`で失敗し、閉じたウィジェットのイベントは捨てる。`close_window`は、idの上位32ビットがそのウィンドウと同じウィジェットのhandlerをすべて忘れる。
+
+行が1つのイベントで渡すのは`Int`と多くても1つの`String`だけで、`msg`の値はemlの側で作る。`poll_raw`は次のイベントのウィジェットのidを返し、イベントがなければ0を返す。`event_int_raw`と`event_text_raw`はそのイベントの中身を読み、どちらを読むかはそのidに登録したhandlerが決める。`create_raw`の種類の番号はLabel 1、Button 2、TextField 3、CheckBox 4、Choice 5、ProgressBar 6、`set_int_raw`の性質の番号はvalue 1、checked 2、enabled 3、揃えの番号はStart 0、Center 1、End 2、Stretch 3である。trackは`a`、`f<n>`、`p<n>`を`,`でつないだ文字列で渡す。正でない`Fr`と負の`Px`は範囲の外である。
+
+| 性質 | ウィジェット | 値 |
+|---|---|---|
+| text | Window (題名)、Label、Button、TextField、CheckBox | どの文字列も |
+| value | ProgressBar、Choice | ProgressBarは0..=100に収める。Choiceの番号は`0 <= i < 項目の数`でなければならない |
+| checked | CheckBox | `Bool` |
+| enabled | Button、TextField、CheckBox、Choice、ProgressBar | `Bool` |
+
+空のChoiceへの`select`は範囲の外で、`choice`は空の列では最初の`select`をしない。イベントは、Buttonのクリック、編集のたびのTextFieldの文字、CheckBoxの切り替え、Choiceの選択、ウィンドウを閉じる要求である。
+
+| 誤り | IOの失敗 |
+|---|---|
+| 開いた入れ物がない | `Other "gui: no open container"` |
+| 知らないか閉じたウィジェット | `NotFound "gui: unknown or closed widget"` |
+| ウィジェットにない性質 | `Other "gui: the widget has no such property"` |
+| 範囲の外の値 | `Other "gui: a value is out of range"` |
+| ネイティブのtoolkitがない、メインのスレッドでない | backendの文言の`NotAvailable` (`cannot open the GUI: built without the native toolkit`、`cannot open the GUI: AppKit needs the main thread`、`cannot open the GUI: Qt needs the main thread`、`cannot open the GUI: the GUI opens only on the main thread`) |
+| Windows 11より古いWindows | `NotAvailable "cannot open the GUI: WinUI needs Windows 11 or later"` |
+| 2.6.4以降のWindows App SDK 2のruntimeがない (Windows) | `NotAvailable "cannot open the GUI: the Windows App SDK 2 runtime is not installed (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)"` |
+| 画面がない (Linuxで`DISPLAY`も`WAYLAND_DISPLAY`もない) | `Other "cannot open the GUI: no display (DISPLAY and WAYLAND_DISPLAY are unset)"` |
+| ほかのbackendの誤り | backendの文言の`Other` |
+| GUIのタスクの`post`で、channelが満ちている | `ResourceLimit "cannot post: the GUI's message queue is full"` |
+
+配置はTaffyが置くgridで、置き方は自動だけである。gridはtrack (`Auto | Fr n | Px n`) の列と行を持ち、`rows = []`は暗黙の`Auto`の行である。子は行の順に埋める。子は直前の`cell`の`col_span`、`row_span`、`halign`、`valign` (なければ`default_cell`) を持ち、gridは入れ子にできる。間隔は8、ウィンドウの余白は12の論理pxで、どちらも固定である。ウィンドウは自然な大きさで開き、最小の幅はmin-contentの幅である。座標、大きさ、DPIの値はemlに渡らない。
+
+externの行は次の20行で、どれも`pub`でない。`want_gui_raw`、`open_ui_raw`、`poke_raw`、`abandon_raw`は登録表のゲートのセルに触れ、`is_gui_task_raw`は今のタスクを読むので、VMは`Async`の命令として実行する ([VM](vm.md)の「GUIのPark」)。`is_gui_task_raw g`が真になるのは、呼んだタスクが、ゲートが`g`の開いている`Ui`を開いたタスクのときだけである。ほかの行は待たず、普通のexternの行としてメインのスレッドのtoolkitに触れる。`Ui`を消費して返す行は、失敗するときは`Ui`を手放してから投げる。
+
+| 行 | 型 |
+|---|---|
+| `want_gui_raw` | `Unit -> <IO> Async.Cell` |
+| `open_ui_raw` | `Async.Cell -> <IO> Ui` |
+| `close_ui` | `Ui -> <IO> Unit` |
+| `begin_window_raw` | `String -> Ui -> <IO> (Int, Ui)` |
+| `begin_grid_raw` | `String -> String -> Ui -> <IO> (Int, Ui)` |
+| `end_raw`、`flush_raw` | `Ui -> <IO> Ui` |
+| `next_cell_raw` | `Int -> Int -> Int -> Int -> Ui -> <IO> Ui` |
+| `create_raw` | `Int -> String -> Int -> Ui -> <IO> (Int, Ui)` |
+| `add_item_raw`、`set_text_raw` | `Int -> String -> Ui -> <IO> Ui` |
+| `set_int_raw` | `Int -> Int -> Int -> Ui -> <IO> Ui` |
+| `close_window_raw` | `Int -> Ui -> <IO> Ui` |
+| `open_windows_raw`、`poll_raw`、`event_int_raw` | `Ui -> <IO> (Int, Ui)` |
+| `event_text_raw` | `Ui -> <IO> (String, Ui)` |
+| `poke_raw`、`abandon_raw` | `Async.Cell -> <IO> Unit` |
+| `is_gui_task_raw` | `Async.Cell -> <IO> Bool` |
+
+放したゲートで待つのは、ほかのセルと同じく内部の誤りである。stdはそうしない。`Ui`はどれも自分のゲートを持ち、`abandon_raw`は開かなかったゲートを放し、runより長く残るゲートの値は`Sink`の中のものだけで、それを使うのは`poke_raw`と`is_gui_task_raw`だけであり、放したゲートへの知らせは何もせず、`is_gui_task_raw`は登録表に触れないからである。
 
 ## `Std.Signal`
 

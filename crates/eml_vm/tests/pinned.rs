@@ -446,6 +446,79 @@ main () = Async.run (fn () ->
     }
 }
 
+/// `start_off_main`は固定したタスクからでも、新しいタスクをworkerの輪に置く。別のworkerのスレッドで動き、
+/// `Finished.pinned_tasks`は固定した親の1つだけを数える (docs/spec/stdlib.mdの「メインのworker」)。
+#[test]
+fn spawn_off_main_from_a_pinned_task_runs_on_a_worker() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () ->
+    println \"pinned\"
+    let t = Async.start_off_main (fn () -> println \"off\")
+    Async.await t
+    Async.spawn_off_main (fn () -> println \"spawned\")
+    Async.sleep_ms 1)
+  println \"main\")
+";
+    let (lines, result) = run(src, 2);
+    let finished = finished(result);
+    assert_eq!(texts(&lines), ["pinned", "off", "spawned", "main"]);
+    let me = std::thread::current().id();
+    assert_eq!(thread_of(&lines, "pinned"), me);
+    assert_ne!(thread_of(&lines, "off"), me);
+    assert_ne!(thread_of(&lines, "spawned"), me);
+    assert_eq!(finished.pinned_tasks, 1);
+}
+
+/// 固定したスコープを閉じるときは、輪に置いた固定しない子の終わりも待つ。
+#[test]
+fn closing_a_pinned_scope_waits_for_an_unpinned_child() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () ->
+    Async.scope (fn _ ->
+      Async.spawn_off_main (fn () ->
+        Async.sleep_ms 5
+        println \"child\")
+      println \"body\"))
+  println \"main\")
+";
+    let (lines, result) = run(src, 2);
+    let finished = finished(result);
+    assert_eq!(texts(&lines), ["body", "child", "main"]);
+    assert_ne!(thread_of(&lines, "child"), std::thread::current().id());
+    assert_eq!(finished.pinned_tasks, 1);
+}
+
+/// 固定したスコープを取り消すと、輪に置いた固定しない子にも届き、スコープはその終わりを待って閉じる。
+#[test]
+fn cancelling_a_pinned_scope_reaches_an_unpinned_child() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () ->
+    Async.scope (fn s ->
+      Async.spawn_off_main (fn () ->
+        println \"started\"
+        Async.sleep_ms 100000
+        println \"late\")
+      Async.sleep_ms 5
+      Async.cancel_scope s
+      println \"body\"))
+  println \"main\")
+";
+    let (lines, result) = run(src, 2);
+    let finished = finished(result);
+    assert_eq!(texts(&lines), ["started", "body", "main"]);
+    assert_ne!(thread_of(&lines, "started"), std::thread::current().id());
+    assert_eq!(finished.pinned_tasks, 1);
+}
+
 /// 鳴ったかを持つwaker。
 #[derive(Default)]
 struct Bell {
@@ -1172,4 +1245,217 @@ main () = Async.run (fn () ->
         finished(result);
         assert_eq!(texts(&lines), ["pinned", "main"]);
     }
+}
+
+/// メインのworkerのdriverのOSの源 (`Pending::io`) を自分のループで待つ`Park` (docs/spec/vm.mdの「メインのworkerの待ち」)。
+#[cfg(unix)]
+mod io_source {
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::time::Instant;
+
+    use eml_vm::PollSource;
+
+    use super::*;
+
+    /// ソケットの対の片方に1バイト書くwaker。
+    struct SocketBell(UnixStream);
+
+    impl IoWaker for SocketBell {
+        fn wake(&self) {
+            let _ = (&self.0).write(&[1]);
+        }
+    }
+
+    /// GUIのツールキットのループの形の`Park`。`default_wait`を呼ばず、wakerの端と`pending.io()`のfdを`poll(2)`で
+    /// 待っては`run`を呼び、`Stopping`で戻る。
+    struct FdPark {
+        bell: Arc<SocketBell>,
+        rx: UnixStream,
+        sourced: Arc<AtomicBool>,
+        runs: Arc<AtomicUsize>,
+    }
+
+    impl Park for FdPark {
+        fn wait(
+            &mut self,
+            mut timeout: Option<Duration>,
+            pending: &mut dyn Pending,
+        ) -> io::Result<()> {
+            let start = Instant::now();
+            loop {
+                assert!(
+                    start.elapsed() < Duration::from_secs(2),
+                    "the park never ended"
+                );
+                let mut fds = vec![libc::pollfd {
+                    fd: self.rx.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                }];
+                if let Some(PollSource::Fd(fd)) = pending.io() {
+                    self.sourced.store(true, Ordering::SeqCst);
+                    fds.push(libc::pollfd {
+                        fd,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    });
+                }
+                // 期限のない待ちも1 sで切り、壊れた源の道がテストを止めずに上の確かめで落ちるようにする
+                let ms = timeout.map_or(1000, |t| t.as_micros().div_ceil(1000).min(1000) as i32);
+                // SAFETY: `fds`は局所の配列で、カーネルは`revents`だけを書く
+                let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) };
+                assert!(n >= 0, "{}", io::Error::last_os_error());
+                let mut drained = [0u8; 64];
+                while (&self.rx).read(&mut drained).is_ok_and(|n| n > 0) {}
+                self.runs.fetch_add(1, Ordering::SeqCst);
+                match pending.run() {
+                    Progress::Wait(next) => timeout = next,
+                    Progress::Stopping | Progress::Busy => return Ok(()),
+                }
+            }
+        }
+
+        fn waker(&self) -> Option<Arc<dyn IoWaker>> {
+            Some(Arc::clone(&self.bell) as Arc<dyn IoWaker>)
+        }
+    }
+
+    fn fd_park(sourced: &Arc<AtomicBool>, runs: &Arc<AtomicUsize>) -> ParkFactory {
+        let (sourced, runs) = (Arc::clone(sourced), Arc::clone(runs));
+        Arc::new(move || {
+            let (tx, rx) = UnixStream::pair().unwrap();
+            tx.set_nonblocking(true).unwrap();
+            rx.set_nonblocking(true).unwrap();
+            Box::new(FdPark {
+                bell: Arc::new(SocketBell(tx)),
+                rx,
+                sourced: Arc::clone(&sourced),
+                runs: Arc::clone(&runs),
+            })
+        })
+    }
+
+    /// `pending.io()`のfdを待って`run`を呼ぶ`Park`の下で、固定したタスクのソケットの読みが本物のdriverで終わる。
+    /// 完了を知らせるのはOSの源だけで、`Park`のwakerは鳴らない。`Park`が呼ぶ`run`は始めに1回、待たずにdriverに問い、
+    /// 続く集める地点がその完了を渡す。
+    #[test]
+    fn a_park_waiting_on_the_io_source_finishes_a_pinned_exchange() {
+        let src = "\
+import Async
+import Net
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let reader = Async.start_on_main (fn () ->
+    let c = Net.connect \"127.0.0.1\" port
+    let (line, c) = Net.read_line c
+    let c = Net.write_line \"back\" c
+    Net.close c
+    match line with
+      | Some text -> println \"pinned: \\{text}\"
+      | None -> println \"eof\")
+  let (s, l) = Net.accept l
+  Net.close_listener l
+  let s = Net.write_line \"hello\" s
+  let (line, s) = Net.read_line s
+  Net.close s
+  Async.await reader
+  match line with
+    | Some text -> println \"main: \\{text}\"
+    | None -> println \"eof\")
+";
+        let sourced = Arc::new(AtomicBool::new(false));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let config = RunConfig::default()
+            .with_clock(Clock::Real)
+            .with_control(limits(1))
+            .with_main_park(fd_park(&sourced, &runs));
+        let (lines, result) = run_with(src, config);
+        finished(result);
+        assert_eq!(texts(&lines), ["pinned: hello", "main: back"]);
+        assert_eq!(
+            thread_of(&lines, "pinned: hello"),
+            std::thread::current().id()
+        );
+        assert!(sourced.load(Ordering::SeqCst));
+    }
+
+    /// メインのworkerのdriverができ、保留の操作がなくなった後に、メインのworkerを起こしても源は読めるままにならない。
+    /// 固定したタスクが眠る間、`Park`は回り続けず、`run`を数回だけ呼ぶ。
+    #[test]
+    fn a_wake_with_nothing_in_flight_does_not_leave_the_source_ready() {
+        let src = "\
+import Async
+import Net
+import Chan
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let l = Net.listen \"127.0.0.1\" 0
+  let (port, l) = Net.local_port l
+  let ch : Chan.Chan Int = Chan.new 0
+  let reader = Async.start_on_main (fn () ->
+    let c = Net.connect \"127.0.0.1\" port
+    Net.close c
+    let _ = Chan.recv ch
+    Async.sleep_ms 100
+    println \"pinned 1\")
+  let (s, l) = Net.accept l
+  Net.close_listener l
+  Net.close s
+  Async.sleep_ms 20
+  let _ = Chan.send 1 ch
+  Async.await reader)
+";
+        let sourced = Arc::new(AtomicBool::new(false));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let config = RunConfig::default()
+            .with_clock(Clock::Real)
+            .with_control(limits(1))
+            .with_main_park(fd_park(&sourced, &runs));
+        let (lines, result) = run_with(src, config);
+        finished(result);
+        assert_eq!(texts(&lines), ["pinned 1"]);
+        assert!(sourced.load(Ordering::SeqCst));
+        let runs = runs.load(Ordering::SeqCst);
+        assert!(runs < 100, "the park called run {runs} times");
+    }
+}
+
+/// 待ちで誤りを返す`Park`。
+struct FailingPark;
+
+impl Park for FailingPark {
+    fn wait(&mut self, _: Option<Duration>, _: &mut dyn Pending) -> io::Result<()> {
+        Err(io::Error::other("boom"))
+    }
+
+    fn waker(&self) -> Option<Arc<dyn IoWaker>> {
+        None
+    }
+}
+
+/// `Pending::default_wait`のものでない`Park::wait`の誤りは、`Park`の誤りとしてrunを止め、`Machine`は壊れない
+/// (docs/spec/vm.mdの「メインのworkerの待ち」)。
+#[test]
+fn an_error_of_the_park_stops_the_run_as_a_park_failure() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () -> println \"pinned\"))
+";
+    let config = RunConfig::default()
+        .with_control(limits(1))
+        .with_main_park(Arc::new(|| Box::new(FailingPark)));
+    let (lines, result) = run_with(src, config);
+    let error = result.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "the main worker's park failed: boom in `<main worker>`"
+    );
+    assert!(!error.is_broken());
+    assert!(lines.is_empty(), "{lines:?}");
 }

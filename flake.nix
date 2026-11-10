@@ -87,6 +87,12 @@
           verusfmt = pkgs.callPackage ./nix/verusfmt.nix {
             src = inputs."verusfmt-${system}";
           };
+          # rustcはx86_64のLinuxで既定に自分のLLDでリンクし、nixのldのラッパーを通らない。するとQtとlibstdc++への
+          # RUNPATHが付かず、テストのバイナリも`nix build`の`eml`も共有ライブラリを見つけられないので、ラッパーの
+          # ldに戻す (docs/implementation/testing.mdの「CI」)
+          systemLinker = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS = "-Clinker-features=-lld";
+          };
           # cargo は外部サブコマンドを PATH より先に $CARGO_HOME/bin から探す。rustup が入っていると
           # ~/.cargo/bin の cargo-clippy や cargo-miri (rustup のプロキシ) が fenix のものより先に当たるので、
           # どの devShell も rustup のない CARGO_HOME を使う
@@ -107,16 +113,26 @@
                 "-p"
                 "eml_cli"
               ];
+              buildFeatures = [ "gui-native" ];
+              # Qt 6はシステムのライブラリとして動的にリンクする (docs/implementation/distribution.md)
+              nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                pkgs.pkg-config
+                pkgs.qt6.qtbase
+                pkgs.qt6.wrapQtAppsHook
+              ];
+              buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.qt6.qtbase ];
               # nix の build の sandbox には /usr/bin/env が無く、shebang の行を解決できない
               # (docs/implementation/testing.md の「nix build の中で流さないテスト」)
               checkFlags = [
                 "--skip"
                 "cli::a_script_with_a_shebang_runs_directly"
               ];
-              # 他者の crate のライセンスの全文をバイナリと一緒に配る (docs/implementation/architecture.md の「外部 crate」)
+              # 他者のcrateのライセンスの全文と、Qtが求めるGNU GPLとLGPLの全文をバイナリと一緒に配る
+              # (docs/implementation/architecture.mdの「外部 crate」)
               postInstall = ''
-                install -Dm644 -t $out/share/doc/eml LICENSE.txt THIRD-PARTY-LICENSES.md
+                install -Dm644 -t $out/share/doc/eml LICENSE.txt THIRD-PARTY-LICENSES.md licenses/GPL-3.0.txt licenses/LGPL-3.0.txt
               '';
+              env = systemLinker;
               meta.license = pkgs.lib.licenses.mit;
             };
             default = eml;
@@ -131,10 +147,16 @@
                 pkgs.cargo-insta
                 pkgs.cargo-nextest
               ]
+              # LinuxではnativeのGUIのbackendがQt 6の開発用のファイルを要る (docs/implementation/testing.mdの「CI」)
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+                pkgs.qt6.qtbase
+                pkgs.pkg-config
+              ]
               ++ pkgs.lib.optionals hasVerus [
                 verus
                 verusfmt
               ];
+              env = systemLinker;
               inherit shellHook;
             };
             miri = pkgs.mkShell {

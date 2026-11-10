@@ -173,6 +173,26 @@ fn host_for(path: &Path, root: &Path) -> CaptureHost {
     host
 }
 
+/// 印`-- gui: stub (<理由>)`のファイルの`Park`。筋書きは`<名前>.gui`で、なければ空 (窓を開いたら閉じる要求を1回送る)
+/// である (docs/implementation/testing.mdの「UI テスト」)。
+#[cfg(feature = "gui")]
+fn stub_park(path: &Path) -> eml_cli::ParkFactory {
+    let script = match fs::read_to_string(path.with_extension("gui")) {
+        Ok(text) => eml_cli::Script::parse(&text)
+            .unwrap_or_else(|message| panic!("{}: {message}", path.display())),
+        Err(_) => eml_cli::Script::default(),
+    };
+    eml_cli::gui_park(eml_cli::Backend::Stub(script), Arc::new(|| {}))
+}
+
+#[cfg(not(feature = "gui"))]
+fn stub_park(path: &Path) -> eml_vm::ParkFactory {
+    panic!(
+        "{}: the gui mark needs eml_cli's gui feature",
+        path.display()
+    )
+}
+
 /// `eml run` と同じ既定の上限で流す。止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい
 /// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。`marks` はファイルの
 /// 先頭の印で、シグナルの予定と深さと確保量の上限をどの run にも同じように当てる (docs/implementation/testing.md の「UI テスト」)。
@@ -204,6 +224,11 @@ fn execute_in(
         .with_signals(marks.signals.clone());
     let config = if marks.real_clock {
         config.with_clock(Clock::Real)
+    } else {
+        config
+    };
+    let config = if marks.gui_stub {
+        config.with_main_park(stub_park(path))
     } else {
         config
     };
@@ -516,6 +541,8 @@ fn stats_are_compared_by_cancellations_and_channels() {
                 placed_tasks: 0,
                 pinned_tasks: 0,
                 placed_jobs: 0,
+                holds_raised: 0,
+                holds_lowered: 0,
             }
         });
         Ran {
@@ -562,6 +589,8 @@ fn stats_of_driver_runs_are_compared_without_the_work_counts() {
                 placed_tasks: 0,
                 pinned_tasks: 0,
                 placed_jobs: 0,
+                holds_raised: 0,
+                holds_lowered: 0,
             }),
         }
     };
@@ -1041,6 +1070,7 @@ fn the_workers_mark_needs_a_reason() {
             }],
             max_depth: None,
             max_bytes: None,
+            gui_stub: false,
         })
     );
 }
@@ -1214,6 +1244,7 @@ fn signal_marks_are_parsed_in_order() {
             signals: vec![at(100, Signal::Terminate), at(5, Signal::Interrupt)],
             max_depth: None,
             max_bytes: None,
+            gui_stub: false,
         })
     );
 }
@@ -1437,4 +1468,62 @@ fn a_malformed_max_bytes_mark_panics() {
 #[should_panic(expected = "x.repl: max-bytes marks are not supported here")]
 fn a_max_bytes_mark_in_a_transcript_panics() {
     marks_of("x.repl", "# max-bytes: 100 soft 50\n> 1\n", "#", false);
+}
+
+/// `-- gui: stub (<理由>)`は、GUIのstubの`Park`を置いて流す印である (docs/implementation/testing.mdの「UI テスト」)。
+#[test]
+fn a_gui_mark_is_parsed() {
+    let marks = leading_marks(
+        "-- gui: stub (scripted events in x.gui)\nmain () = ()\n",
+        "--",
+    )
+    .unwrap();
+    assert!(marks.gui_stub);
+    assert!(!leading_marks("main () = ()\n", "--").unwrap().gui_stub);
+    let mixed = leading_marks(
+        "-- windows: skip (x)\n-- gui: stub (y)\n-- workers: skip (z)\n",
+        "--",
+    )
+    .unwrap();
+    assert!(mixed.gui_stub && mixed.windows_skip && mixed.workers_skip);
+}
+
+#[test]
+fn a_malformed_gui_mark_is_an_error() {
+    for wrong in [
+        "-- gui: stub",
+        "-- gui: stub ()",
+        "-- gui: native (x)",
+        "-- gui:stub (x)",
+    ] {
+        assert_eq!(
+            leading_marks(wrong, "--"),
+            Err(format!(
+                "the gui mark is `-- gui: stub (<reason>)`, not `{wrong}`"
+            )),
+            "{wrong}"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "x.repl: gui marks are not supported here")]
+fn a_gui_mark_in_a_transcript_panics() {
+    marks_of("x.repl", "# gui: stub (x)\n> 1\n", "#", false);
+}
+
+/// 流すworkerの数とseedのrunは`par/`と`async/`だけなので、`gui/`は検査モードと速いモードだけで流す。
+#[test]
+fn gui_files_have_no_seed_or_workers_runs() {
+    let marks = Marks {
+        gui_stub: true,
+        ..Marks::default()
+    };
+    assert_eq!(
+        extra_runs("gui/counter.em", &marks),
+        ExtraRuns {
+            seeds: false,
+            workers: false
+        }
+    );
 }

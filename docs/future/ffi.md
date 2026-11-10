@@ -8,7 +8,7 @@
 
 - 目的: 行列の計算のために、BLAS (CBLAS) と、ILP64 の Fortran の形の LAPACK (Accelerate の `dgesv$NEWLAPACK$ILP64` など) を利用者のモジュールから呼べるようにする。配列は写さずにポインタで渡し、C に結果をその場で書かせる
 - GUIはFFIでなく、Rustのtoolkitのcrateで組み込む。Qt、WinUI、AppKitのAPIはC++、WinRT、Objective-Cで、このFFIが扱わないもの (コールバック、イベントループの持ち主、スレッドに縛られた物) が要るためである
-- 範囲: `extern "C"` の宣言、型の対応、効果と中断の分類、長く走る呼び出し、VM からの呼び出し、データの配置、C のハンドル、プラグイン、GUI
+- 範囲: `extern "C"`の宣言、型の対応、効果と中断の分類、長く走る呼び出し、VMからの呼び出し、データの配置、Cのハンドル、拡張、GUI
 - 範囲の外: 生の要素の配列の物体の形と、ネイティブのコードでの展開 ([ネイティブ化の設計](native.md) の「生の要素の配列」)
 - 安全: `extern "C"` の宣言は std の行と同じく信頼する。宣言が境目で、処理系は C の側を確かめない。次元を誤った宣言や呼び出しはメモリを壊す。宣言する側が守る約束は [宣言](../spec/declarations.md) の「宣言する側の約束」にある
 
@@ -27,8 +27,8 @@
 | 9 | 効果 | C の呼び出しは `pure` でなければ `<IO>` を持つ。範囲を確かめる引数かハンドルの結果を持つ行は `<Panic>` を持ち、中断を始めうる行 (`faults`) になる。`MutUnboxedArray` を貸す行は書き込む行 (`writes`) で、使われなくても消さない |
 | 10 | 長く走る呼び出し | `blocking` は型に `<IO, Async>` を要し、ブロックする呼び出しのプールへの受け付けと待ちと取り出しに下ろす |
 | 11 | VM からの呼び出し | `eml_native` が `cranelift-jit` で、C の型の並びごとの橋渡しの関数を作る。VM は読み込みの前につないだ `Linked` の値を受け取り、`Op::Ffi` で橋渡しを通して呼ぶ。libffi は使わない |
-| 12 | 拡張 | GUIは、Qt 6 (Linux)、WinUI 3 1.2 (Windows)、AppKit (macOS) を包むRustのtoolkitのcrateにする。部品 (widget) はtoolkitのもので、`Send`でなく、メインのworkerの上でだけ触れる。toolkitの行は普通のexternの表の行で、実装だけが`Plugin`のtraitに回る |
-| 13 | GUIのスレッド | toolkitのイベントループは、メインのworkerの`Park`である ([マルチコア対応の設計](multicore.md)の「スレッドとworker」)。`Pending::io()`を通してメインのworkerのI/Oのdriverでも待つ。kqueueかepollのfdはrun loopの源かソケットの通知器にし、IOCPは起こしを投函する補助のスレッドで受ける。ループは時計もデッドロックの判定も受け持たない。`eml_io`はどのtoolkitも参照しない。GUIのタスクとその子は、そのスレッドから動かない |
+| 12 | 拡張 | GUIは、Qt 6 (Linux)、Windows App SDK 2のWinUI 3 (Windows 11)、AppKit (macOS) を包むRustのtoolkitのcrate `eml_gui`である。ウィジェットはtoolkitのもので、`Send`でなく、メインのworkerの上でだけ触れる。toolkitの行は普通のexternの表の行で、腕は`eml_vm`の`gui.rs`にあり、`Std.Tls`と同じくcfgのfeatureで切り替える。`Plugin`のtraitは置かない |
+| 13 | GUIのスレッド | toolkitのイベントループは、runの間ずっと、メインのworkerの1回の`Park::wait`の中で回る ([マルチコア対応の設計](multicore.md)の「スレッドとworker」)。開くのはゲートのセルを通した2段で、toolkitの呼び出しはどれもネイティブのループの中で動く。ループは`Pending::io()` (epollかkqueueのfd) を通してメインのworkerのI/Oのdriverでも待つ。源がない所 (Windows) では、操作が保留の間は1回の待ちを10 msまでにする。ループは時計もデッドロックの判定も受け持たない。GUIを求めるか開いている間は判定を控え、worker 0はイベントごとでなくGUIの期間ごとに1回起きる。`eml_io`はどのtoolkitも参照しない。GUIのタスクとその子はそのスレッドから動かず、エフェクトを持つ仕事は`Async.start_off_main`でその外へ出す |
 
 ## `extern "C"` の宣言
 
@@ -122,43 +122,76 @@ matmul n a b =
 
 ## 拡張
 
-- プラグインは Rust の crate で、`eml_rt` の `Plugin` の trait を実装する。形は今の `Host` と同じで、trait は `eml_rt` に置き、実装は検証する核の外に置く。信頼の一覧では Host と同じ T11 の行に属する。`eml_rt` は vstd だけに依存したまま保つ
-- プラグインの行は普通の `eml_extern` の表の行で、Repr、Kind、純粋さ、借用、`Extern` の場合をそれぞれ持つ。そのため、型検査、LIR、コード生成の ABI、表と std を結ぶテストは変わらない。違うのは実装だけで、表から作る `extern "C"` の包みが行ごとに型の付いた `dyn Plugin` のメソッドを呼ぶ (Host の行と同じく `external_body`)
-- `eml_vm::execute`がrunを組み立てるときにプラグインを登録する。プラグインは`Std.Tls`と同じ形で切り替える。プラグインのない処理系もそのモジュール (`Std.Gui`など) を持ち、その操作は種類`NotAvailable`のIOの失敗になる ([標準ライブラリ](../spec/stdlib.md)の「`Std.Tls`」)
-- `Plugin` は `Send + Sync` で、スレッドをまたいで安全な部分だけを持つ。`Send` でない状態は所有者の worker を確かめてから触れる入れ物に入れる (下の「GUI」)
-- `eml_cli`は、`Std.Tls`をfeature `tls`で切り替えるのと同じく、プラグインをfeature (`--features gui`) で切り替える。AOTはそのモジュールをimportしたときだけプラグインの静的ライブラリ (`libeml_gui.a`) をリンクする ([ネイティブ化の設計](native.md)の「AOTと配布」)
+- CのAPIを持たないライブラリ (今は`Std.Gui`) は、VMがcfgのfeatureを通して組み込むRustのcrateで、`Std.Tls`と同じ形である。`eml_vm`の`gui.rs`が、toolkitの行の腕、GUIの`Park`、ゲートのセル、回収を持つ。featureを外した処理系もそのモジュールを持ち、`Ui`の型は値を持たず、`Gui.run`は種類`NotAvailable`のIOの失敗になる ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)
+- 行は普通の`eml_extern`の表の行で、Repr、Kind、純粋さ、借用、`Extern`の場合をそれぞれ持つ。そのため、型検査、LIR、コード生成のABI、表とstdを結ぶテストは変わらない
+- `eml_vm`のfeature `gui`は、stubのbackendだけを持つ`eml_gui`を足し、`gui-native`はネイティブのbackendを足す。`eml_cli`は`gui`を既定のfeatureに入れ、`gui-native`は入れないので、既定のビルドはどのtoolkitの開発用のファイルも要らない ([コンパイラの構成](../implementation/architecture.md)の「外部 crate」)
+- `eml_rt`に`Plugin`のtraitは置かない。プラグインが1つでは、検証するcrateにtraitを入れる理由にならない。2つ目のプラグインが現れたとき、または`jit-externs`がプラグインをまたいで行ごとに型の付いたエントリを要るときに入れる。形は`Host`と同じで、traitは`eml_rt`に置き、実装は検証する核の外に置き、信頼の一覧ではHostと同じT11の行に属する。`eml_rt`はvstdだけに依存したまま保つ。表から作る`extern "C"`の包みが、行ごとに型の付いた`dyn Plugin`のメソッドを呼ぶ。`Plugin`は`Send + Sync`で、`Send`でない状態は、所有者のworkerを確かめてから触れる入れ物に入れる
+- AOTがリンクする実行系の静的ライブラリは、ビルドのプロファイルが選ぶ1つだけである。プラグインは自分のコードを`gui`のプロファイルの変種に足すか、新しいプロファイルになり、後から足すライブラリにはならない ([ネイティブ化の設計](native.md)の「AOT と配布」)
 
 ## GUI
 
 ```haskell
+import Async (Async)
 import Async
+import Gui (Gui(..), Track(..), Align(..), Cell(..))
 import Gui
 
-loop : Gui.Window -> <IO, Panic, Async> Unit
-loop w =
-  match Gui.next_event w with
-    | (Gui.Closed, w) -> Gui.close w
-    | (_, w) -> loop w
+data Msg =
+  | Inc
+  | Dec
+  | Quit
+
+counter : Unit -> <Gui Msg, IO, Panic, Async> Unit
+counter () =
+  use _ <- Gui.window "Counter" Quit
+  use Gui.grid [Fr 1, Fr 1] []
+  let shown = Gui.cell { Gui.default_cell | col_span = 2 } (fn () -> Gui.label "0")
+  let _ = Gui.button "-" Dec
+  let _ = Gui.button "+" Inc
+  let loop n =
+    match Gui.wait () with
+      | Inc ->
+        Gui.text shown (show (n + 1))
+        loop (n + 1)
+      | Dec ->
+        Gui.text shown (show (n - 1))
+        loop (n - 1)
+      | Quit -> println "final \{show n}"
+  loop 0
 
 main : Unit -> <IO, Panic> Unit
 main () =
   use Async.run
-  Async.run_on_main (fn () -> loop (Gui.open "hello" 400 300))
+  Gui.run counter
 ```
 
-- toolkitはRustのcrate `crates/eml_gui`である。部品はOSのtoolkitのもので、LinuxではQt 6、WindowsではWinUI 3 1.2 (Windows App SDK)、macOS 26ではAppKitを使う。winioと同じく、OSごとのイベントループをメインのworkerの`Park`に組み込む
-- GUIはプロセスのメインスレッド、つまりメインのworker ([マルチコア対応の設計](multicore.md)の「スレッドとworker」) で動く。`Std.Gui`はtoolkitの段で作り、メインのworkerでコードを動かすには`Async.run_on_main`と`Async.start_on_main`を使う。toolkitの部品と状態は`Send`でなく、今のworkerがメインのworkerであることを確かめてから触れる入れ物に入れる。ハンドルの持ち主のworkerを確かめるのと同じ形である
-- プロセスに置くイベントループは1つである。`Gui.open`が、toolkitの`Park`をメインのworkerの`Park`に据える。その待ちはOSのループを次のように組み込む。Win32では`MsgWaitForMultipleObjectsEx`で待って`PeekMessage`で汲み、`Park`のwakerは`PostMessage`で起こす。AppKitでは`nextEventMatchingMask`か、wakerが知らせる`CFRunLoop`の源で待つ。Qtでは`processEvents(WaitForMoreEvents)`を呼び、wakerはイベントを投函する。WinUIでは`Application::Start`がポンプを持ち、wakerは`DispatcherQueue`で`run_pending`を積む
-- toolkitのコールバックは、動けるタスクがなくなるまで動かして戻る`run_pending`を呼ぶ。モーダルなループの規則は次のとおりである。`Park`の中で入ったモーダルなループの間は、コールバックが`run_pending`を呼ぶのでemlが動き続ける。externから入ったモーダルなループは、externが戻るまでemlを止める。割り込みは、書く側がすべてのworkerの止める語にビットを立て、監視のスレッドがすべてのworkerを起こすので、wakerを通してイベントループで待つメインのworkerにも届く
-- runの外のイベントは、toolkitの段が足す`Pending`の起こしで届く。イベントは引く形で受ける。`Gui.next_event : Window -> <IO, Async> (Event, Window)`はイベントが来るまでタスクを待たせる
-- GUIのタスクとその子はメインのworkerから動かず、メインのworkerは配置でタスクを受けない ([マルチコア対応の設計](multicore.md)の「固定したタスク」)。重い仕事は`compute`か、固定していないタスクへのchannelでメインのworkerの外へ出す。別のタスクは、toolkitの投函のインターフェースでGUIのタスクへ結果を送る
-- CIでは、偽の`Park`と、ウィンドウを開かないstubのbackendでテスト (部品の組み立て、入れ子の誤り、投函) を流す。CIは画面を持たないので、画面の確かめはOSごとに手で行う。ネイティブのコードでも同じテストを流す
-- REPLのGUIは`python -m asyncio`の形にする。メインスレッドが`Seat::Separate`の`Machine`とtoolkitの`Park`を持ち、行の編集器は別のスレッドで動いて入力を1つずつ渡し、出力はrustylineの`ExternalPrinter`を通す。先に要るものは2つある。固定したタスクの閉包から届く根の物体と、runとrunの間に動く`Machine`の`Park`である ([ロードマップ](roadmap.md)の「REPL」)
+- toolkitはRustのcrate `crates/eml_gui`である。ウィジェットはOSのtoolkitのもので、LinuxではQt 6、Windows 11ではWindows App SDK 2のWinUI 3、macOS 26ではAppKitを使う。汎用の層 (`Toolkit`、Taffyの配置、`EventQueue`) が、backendごとに実装する2つのtrait `Widgets`と`EventLoop`の上にある。呼び分けは動的で、stubとネイティブのbackendが1つのバイナリに同居する ([コンパイラの構成](../implementation/architecture.md)の「`eml_gui`の内部」)
+- ウィジェットは、3つのtoolkitに共通のものだけにする。新しいウィジェットは、3つのtoolkitのどれにも同じ性質とイベントを持つネイティブのクラスがあり、振る舞いを真似なくてよいものに限る。足すときは、`Kind`、stub、3つのbackend、`std/Gui.em`、UIテストを一度に変える。そうでないものは、emlで組み合わせて書くか、待つ
+- 配置は、TaffyがRustの中で置くgridで、置き方は自動だけである。葉の大きさはtoolkitが測る。数値はすべて論理pxで、座標、大きさ、DPIの値はemlに渡らない ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)
+- APIはエフェクトを使う。プログラムはhandler `Gui.run`の下で直接の形でUIを1回だけ組み、ハンドルを通してウィジェットを変え、`Gui.wait`でメッセージを取り出す。メッセージはウィジェットを作るときに結び付けるので、プログラムはハンドルを比べない。handlerの節はどれも`k`をちょうど1回再開するので、1回だけ再開するdeep handlerに合う。差分は取らない。宣言的な層は、この原始的な操作の上に載せられる ([ロードマップ](roadmap.md)の「GUI」)
+- externの行は原始的な操作ごとに1つで、命令の列 (command buffer) は置かない。ウィジェットの木、配置、イベントの列はRustにあり、emlはidと、idからhandlerへの表を持つ。性質の書き換えはその場で効き、`wait`が自然なflushの地点になる。1つのイベントで境目を越えるのは`Int`と多くても1つの`String`だけで、送ったメッセージは`Std.Chan`を通る
+- GUIはプロセスのメインスレッド、つまりメインのworker ([マルチコア対応の設計](multicore.md)の「スレッドとworker」) で動く。`Gui.run`は`Async.run_on_main`でアプリケーションを固定したタスクにする。固定したタスクが始めるタスクも固定するので、エフェクトを持つ裏の仕事は`Async.start_off_main`か`Async.spawn_off_main`で、純粋な仕事は`compute`でメインのworkerの外へ出す。結果は`Gui.post`でGUIのタスクへ送る
+- プロセスに置くイベントループは1つで、runの間ずっと、メインのworkerの1回の`Park::wait`の中で回る ([VM](../spec/vm.md)の「GUIのPark」)。WinUIは自分でポンプ (`Application::Start`) を持ち、XAMLのものをその中でしか作らない。そのため、ループはイベントごとに戻れず、ループが始まる前にはtoolkitに触れられない。そこで開くのを2段にする。タスクはゲートで待ち、`Park`がbackendを作ってループに入り、ループの最初の段がゲートに知らせ、タスクはループの中からウィンドウを組む。どのbackendも同じ形を使う
+- toolkitのコールバックは列に積むだけである。ループは`Pending::run`を呼び、それは動ける固定したタスクがなくなるまで動かす。モーダルなループの規則は次のとおりである。`Park`の中で入ったモーダルなループの間は、ループの源が`step`を呼び続けるのでemlが動き続ける。externから入ったモーダルなループは、externが戻るまでemlを止める。割り込みは、書く側がすべてのworkerの止める語にビットを立て、監視のスレッドがすべてのworkerを起こすので、wakerを通してイベントループで待つメインのworkerにも届く
+- `Ui`が開いていれば、OSの終了の操作はウィンドウごとの閉じる要求になり、開いていなければrunの割り込みになる。ループは自分では終わらない
+- CIは、すべてのテストを、画面を開かないstubのbackendに筋書きのイベントを与えて流す。`gui-native`のジョブはネイティブのbackendを組んでつなぐが、CIは画面を持たないので動かさない。画面はOSごとに手で確かめる ([テスト戦略](../implementation/testing.md)の「GUIの手での確認」)
+- `eml repl`はGUIの`Park`を持たず、そこでの`Gui.run`は`NotAvailable`で失敗する。REPLのGUIは`python -m asyncio`の形にする。メインスレッドが`Seat::Separate`の`Machine`とtoolkitの`Park`を持ち、行の編集器は別のスレッドで動いて入力を1つずつ渡し、出力はrustylineの`ExternalPrinter`を通す。先に要るものは2つある。固定したタスクの閉包から届く根の物体と、runとrunの間に動く`Machine`の`Park`である ([ロードマップ](roadmap.md)の「REPL」)
 
 ## 却下した案
 
 - C の shim を作り、GUI を C の FFI のライブラリとして扱う案: この FFI が扱わないもの (構造体、イベントループのスレッドの上のコールバック、ループの所有、境目を越えるクロージャ) がすべて要る
 - GUI を `eml_rt` の中に置く案: toolkit のコードが検証する crate に入る
+- 既存のRustのGUIのframeworkのウィジェットと配置のcrateに依存する案: そのループは自分の非同期のruntimeで、プログラムの形はElmの形のコンポーネントで、backendをビルドごとに1つ選ぶ。どれも、VMが持ち続けるウィジェットの木と、メインのworkerの`Park`であるループに合わない。stubとネイティブのbackendも1つのバイナリに同居させなければならない
+- APIの土台を、作り直して差分を取る形 (Elm、Compose) にする案: キーで照らし合わせる仕組みが要る。原始的な操作の上の層としてなら作れる
+- 操作されると戻るウィジェット (Concur) の案: 競わせるには何回も再開できる継続が要る
+- パラメータのない`Gui`のエフェクトで、イベントがハンドルを運ぶ案: ガードがないので、ハンドルを比べる`if`の連なりになる
+- Rustの受け箱を通してメッセージを送る案: メッセージの型が失われる
+- emlとtoolkitの間に命令の列を置く案: 得るものなしに2つ目の表現ができる
+- イベントごとに戻る`Park`に`Pending::has_work()`を足す案: 自分でポンプを持つWinUIではできず、イベントごとにworker 0を起こす
+- runの始めからメインのworkerの全体を`Application::Start`の中で動かす案: GUIを使わないプログラムでもtoolkitを初期化する
+- WinUIだけ命令の列で遅らせる案: 1つのbackendだけ、配置と測り方が違う
+- `eml_rt`の`IoDriver`に`poll_fd`のメソッドを足す案: unixのための読み出しをVerusの検証の内側に置く。具体的なdriverはVMが持つので、`eml_io`の`RealDriver::poll_fd`で足りる
+- `Plugin`のtraitを今入れる案: 実装が1つしかないのに、検証するcrateを変える
 - ヒープの外の配列 (OCaml の Bigarray の形): 物体の2つ目の世界ができる。見直す条件は上の「C のハンドル」にある
 - 配列の view: 小さい view が大きい buffer を生かし続け、物体の2つ目の形を作る ([ロードマップ](roadmap.md) の「処理系」の共有の O(1) の部分文字列の項目と同じ理由)
 - VM の FFI に libffi を使う案: C への依存が増え、値を C の型に直す実装が2つになる
@@ -181,4 +214,5 @@ main () =
 - macOS の hardened runtime の下の JIT: 橋渡しのコードは `MAP_JIT` を使わずに置くので、hardened runtime で署名した処理系では C の関数を呼べない。署名して配る形は `native-aot` の段で扱う ([ロードマップ](roadmap.md) の「ネイティブ化」)
 - `long`: 既定は入れない。OS で幅が違うためである。`long` で受ける API は、OS ごとに宣言を分けて `int` か `int64_t` で書く。OS によって幅を変える名前が要る用途が出たときに考える
 - モーダルなループ: `Park`の中で入ったモーダルなループの間はemlが動き続け、externから入ったものはexternが戻るまでemlを止める。既定はこの止まりを受け入れる。externからしか入れないモーダルなループがtoolkitに要るときに考え直す
+- イベントの中身: 1つのイベントが渡すのは`Int`と多くても1つの`String`である。どちらでもない中身が要るウィジェットが出たときに、emlとRustの境目を考え直す
 - Windows でのビルドに `lld` を同梱するか: [ネイティブ化の設計](native.md) の「未決の論点と将来の拡張」にある

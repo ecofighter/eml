@@ -41,6 +41,14 @@ impl RealDriver {
     ) -> io::Result<RealDriver> {
         Ok(RealDriver(Driver::new(sys::Os::new(epoch)?, lookup)))
     }
+
+    /// OSのpoller (epollかkqueue) のfd。`wait`が取る完了か起こしが残っている間は読めるので、driverの外の待ちは
+    /// このfdを自分の源の1つとして待ち、それから期限が今以前の`wait`を呼べる。driverが生きている間だけ使える
+    /// (docs/spec/vm.mdの「時計と driver」)。
+    #[cfg(unix)]
+    pub fn poll_fd(&self) -> std::os::fd::RawFd {
+        self.0.backend().raw_fd()
+    }
 }
 
 impl IoDriver for RealDriver {

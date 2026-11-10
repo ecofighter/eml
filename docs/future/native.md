@@ -10,7 +10,7 @@ LIR から Cranelift でネイティブのコードを出す設計をまとめ�
 - 目標: `tests/ui/run/scripts/` の `wc`、`grep -n`、`logstat`、`csv2jsonl` で、同じ出力を返す Rust の実装の約2倍以内の実時間にする。Rust の実装は eml の実装と同じ手順 (走査の回数、標準ライブラリの操作、同じ計算量のデータ構造) を標準ライブラリだけで書いたもので、`bench/scripts/rust/` に置く。測り方は [計測の基準](../implementation/benchmarks.md) の「C/Rust との比べ方」にある。上の完了の条件は変えない。今の入力では、4本でこの目標を満たせば Python の1.5倍の条件も満たす。`csv2jsonl` は欄ごとに新しい文字列を作る今の書き方では届かない見込みである。2倍を超えた行では原因 (1バイトずつの呼び出し、RC、確保、写し、境界と桁あふれの確かめ、ベクトル化の有無、読み込み) を計測の基準に記録する
 - コンパイルの条件: JIT は std と 1000 行のプログラムを release のビルドで 300 ms 未満でコンパイルする
 - 範囲: コード生成器、呼び出し規約とエントリ、中断と実行時エラー、安全点とスタック、extern のエントリ、展開、生の要素の配列、並列の実行、AOT と配布、テスト
-- 範囲の外: 利用者の `extern "C"` の宣言と型の対応、GUI のプラグイン。これらはネイティブのバックエンドなしに VM の上で動く。Cranelift で作るのは、VM から C の関数を呼ぶ橋渡しの関数だけである。この文書は、ネイティブのコードがそれらを呼ぶ所だけを書く。宣言と型の対応とプラグインの設計は [FFI と拡張の設計](ffi.md) にある
+- 範囲の外: 利用者の`extern "C"`の宣言と型の対応、GUIのtoolkit (`Std.Gui`)。これらはネイティブのバックエンドなしにVMの上で動く。Craneliftで作るのは、VMからCの関数を呼ぶ橋渡しの関数だけである。この文書は、ネイティブのコードがそれらを呼ぶ所と、AOTでリンクする形だけを書く。宣言と型の対応と拡張の設計は[FFI と拡張の設計](ffi.md)にある
 
 ## 確定した設計判断
 
@@ -148,11 +148,29 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 ## AOT と配布
 
 - `eml build` は `cranelift-object` で object を書き、システムのリンカを呼ぶ。リンカは rustc と同じやり方で探す (Unix では `cc`、Windows では Visual Studio の `link.exe`、あれば `lld-link`)。モジュールの `link` の指示は `-l` と `-framework` にして渡す。利用者のマシンに rustc も cargo も要らない
-- eml の配布物 (Nix のパッケージと、リリースの tarball) は、`eml_rt` と実行系とエントリの stub をまとめた静的ライブラリを、eml のビルドのときに固定した toolchain で作って同梱する。プラグインの静的ライブラリ (`libeml_gui.a` など) も同梱し、そのモジュールを import したときだけリンクする
+- emlの配布物 (Nixのパッケージと、リリースのtarball) は、実行系の静的ライブラリを、emlのビルドのときに固定したtoolchainで作って同梱する。変種は2つある。`libeml_rt.a`は`eml_rt`と実行系とエントリのstubをまとめ、GUIを持たない。`libeml_rt_gui.a`はそれに、toolkitの行の腕、`Park`の繋ぎ、runの外の待ちの印とゲートと回収の処理、`eml_gui`、shimのobjectを加える。AOTのプログラムにリンクするRustの静的ライブラリは、いつもちょうど1つである。1つのリンクに複数のRustの静的ライブラリを入れると衝突するためである (personalityの記号の直しが入るrustcは、固定した版より後である)
+- `eml build`はビルドのプロファイル`--profile console|gui`を取り、既定は`console`である。何をリンクするかはプロファイルだけが決め、importからは推し量らない。Windowsのsubsystemや後のバンドルは、プログラムの事実でなく作者の選択だからである
+
+  | | `console` (既定) | `gui` |
+  |---|---|---|
+  | 実行系の静的ライブラリ | `libeml_rt.a` | `libeml_rt_gui.a` |
+  | `Std.Gui`をimportするプログラム | 組むと誤り: `` `Std.Gui` needs the gui profile (eml build --profile gui) `` | 組める |
+  | Windows | `/SUBSYSTEM:CONSOLE` | `/SUBSYSTEM:WINDOWS`と`/ENTRY:mainCRTStartup`。エントリは`main`のままで、コンソールのウィンドウは出ない |
+  | macOS | 裸の実行ファイル | 裸の実行ファイル (`.app`のバンドルは、後でこのプロファイルの選択肢にする) |
+  | Linux | – | Qt 6に動的にリンクする |
+
+- `Std.Gui`の確かめは、`eml build`がリンクの前に報告するモジュールの依存の事実である。`--link`の失敗と同じく終了コード2の機械の事実の誤りで、ソースの診断ではない。プログラムは妥当なemlで、`eml run`は動かすからである。`Std.Gui`を`console`で許してGUIの実行系をつなぐ形は、プロファイルが何をリンクするかを決めなくなるので採らない。`console`で組めて実行のときに失敗する形は、動かないビルドを成功させるので採らない
+- プロファイルはリンクの形に名前を付けるだけで、プログラムの意味を変えない。後のプラグインは自分のコードを`gui`の変種に足すか新しいプロファイルになり、後から足すライブラリにはならない。`eml run` (VM) はプロファイルを持たず、`--gui native|stub`とfeature `gui-native`はプロファイルと関わらない
+- Cのruntimeとプラットフォームのライブラリは、既定で動的にリンクする。LinuxではglibcとQt 6、それに`gui`のプロファイルのQtのshimのためだけの`libstdc++`、macOSでは`libSystem`、`libobjc`、AppKit、Foundation、WindowsではUCRTと`vcruntime140.dll`である。Windowsは動的なCRTを使うので、出力を動かすにはVisual C++の再頒布可能パッケージが要る。静的なCRT (`+crt-static`) にしてこの前提をなくすかは、`native-aot`の段で決める。Windows App SDKはリンクの時に名指さず、実行のときにbootstrapで探す。システムのDLLは`raw-dylib`でimportする。2つの実行系の静的ライブラリと最後のリンクは、同じCRTの設定を使う
+- `gui`の変種は下限の版に対して組み、その版を記録する。Qt 6.2のヘッダ、glibc 2.35、libstdc++ 12で、Ubuntu 22.04にあたる。`eml build`は、Qtがそれより古いhostを断る (機械の事実の誤りで、診断ではない)。shimはemlのビルドのときに組むので、利用者のマシンにC++のコンパイラもQtの開発用のファイルも要らない
+- リンクに渡すもの: Linuxでは`cc`、`-lstdc++`、版を持つsonameのQt (pkg-configを優先する)。Windowsでは`link.exe`か`lld-link`で、SDKのimport libraryは使わない。macOSではXcodeのCommand Line Toolsと`-framework AppKit -framework Foundation`
+- emlは静的ライブラリと並べて通知のファイル`THIRD-PARTY-LICENSES-runtime.md`を配り、`eml build`はそれを出力の隣にコピーする。出力を配り直すときは、このファイルも要る ([配布とGUIの前提](../implementation/distribution.md)の「AOTの出力」)
+- `gui`のプロファイルのWindowsのプログラムはコンソールを持たない。そこでは、`Std.Stdout`と`Std.Stderr`への書き込みは捨て、`Std.Stdin`の読みは入力の終わりを見る。IOの失敗にはしない
+- Windowsでは、GUIのbackendはRustのruntimeが`main`と名づけたスレッドでだけ開く。AppKitとQtは、プロセスの最初のスレッドかをOSに問う ([コンパイラの構成](../implementation/architecture.md)の「`eml_gui`の内部」)。Cの`main`を持つAOTのバイナリでは、Windowsでこの確かめを見直す
 - 展開の情報は正しさに要らない (中断も致命的な誤りも使わない)。`cranelift-object` が出せる所ではデバッガのためだけに出す
 - 使い回しの鍵は、名前と、開いた後の LIR と、それが指す形と配置の中身のハッシュにする。関数の値の ABI は一様で、直接呼ぶ関数の ABI はその名前で決まるので、呼ぶ関数のシグネチャは鍵に入れなくてよい。鍵は今決め、使い回しの仕組みは後で作る
 - 定数の静的なデータは、凍結した領域と同じ約束 (rc 0、書き込まない、検査ビルドでは前置きを持つ) に乗る ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)。検査モードの範囲の確かめのようにページの頭を読む道は、起動時に `freeze` で定数を作る形を既定にする。静的なデータに容量を持たせる形は、起動時の `freeze` が測定で重いときの代案にする
-- AOTの`main()`は、`Control` (N+1語) を作り、スタックを予約してworker 0を作り、既定の`Park`でメインのworkerの繰り返しを動かし、worker 0をjoinし、ヒープを畳み込んで終了コードを返す
+- AOTの`main()`は、`Control` (N+1語) を作り、スタックを予約してworker 0を作り、メインのworkerの繰り返しを動かし、worker 0をjoinし、ヒープを畳み込んで終了コードを返す。`Park`は、`console`のプロファイルでは既定の`Park`、`gui`のプロファイルではGUIの`Park`である
 
 ## テスト
 

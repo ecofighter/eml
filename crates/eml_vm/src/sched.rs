@@ -11,7 +11,7 @@ use crate::VmFault;
 use crate::cells::{self, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken};
 use crate::driver::DriverKind;
 use crate::monitor::{self, Monitor};
-use crate::park::Guard;
+use crate::park::{Guard, PollSource};
 use crate::vm::Task;
 use crate::workers::{Mailer, NO_CELL, Notice, Ready, Run, Workers, cell_word};
 
@@ -389,6 +389,9 @@ pub struct Scheduler<P: Policy> {
     /// 最初に要るときに自分のスレッドで作り、抜けるときに落とす (docs/spec/vm.md の「時計と driver」)。触れるときは
     /// `driver_mut` を通す。
     pub(crate) driver: Option<Box<dyn IoDriver>>,
+    /// `own_driver`で作ったdriverが待つOSの源。メインのworkerの`Park`が`Pending::io`で読む。そのdriverがなければ
+    /// `None`である (docs/spec/vm.mdの「メインのworkerの待ち」)。
+    pub(crate) poll: Option<PollSource>,
     /// 最後の集める地点が登録表から読んだ、自分の区画のいちばん早い期限。本物の時計の worker `k` (`k` ≥ 1) の空きの
     /// 待ちが、登録表の lock を取らずに期限を知るためにある。区画に項を足すのはその持ち主だけで、足した後は眠る前に
     /// 集める地点を通るので、今の期限より遅くはならない (docs/spec/vm.md の「タスクとスケジュール」)。
@@ -509,6 +512,7 @@ impl<P: Policy> Scheduler<P> {
             completed: Vec::new(),
             stacks: Vec::new(),
             driver,
+            poll: None,
             own_deadline: None,
             run,
             index: 0,
@@ -598,7 +602,9 @@ impl<P: Policy> Scheduler<P> {
         let Some(made) = self.run.new_driver() else {
             return Ok(());
         };
-        self.driver = Some(made.map_err(|e| VmFault::Driver(e.to_string()))?);
+        let (driver, poll) = made.map_err(|e| VmFault::Driver(e.to_string()))?;
+        self.driver = Some(driver);
+        self.poll = poll;
         self.publish_driver();
         Ok(())
     }
@@ -1169,6 +1175,39 @@ mod tests {
         let mut virtual_ = scheduler(DriverKind::Virtual, false, 1);
         for deadline in [Some(5000), None, Some(u64::MAX)] {
             assert_eq!(virtual_.wait_deadline(deadline), Ok(deadline));
+        }
+    }
+
+    /// driverに保留の操作があり、OSの源がなければ、メインのworkerの`Park`の待ちは10 msまでである。源があるか保留が
+    /// なければ切らず、それより早い期限はそのまま渡す (docs/spec/vm.mdの「メインのworkerの待ち」)。
+    #[test]
+    fn main_timeout_caps_a_wait_without_a_source_while_an_op_is_in_flight() {
+        use eml_rt::{Done, Op, Submit};
+        use std::time::Duration;
+        let ms = Duration::from_millis;
+        let mut sched = scheduler(DriverKind::Virtual, false, 1);
+        assert_eq!(sched.main_timeout(), None);
+        sched.own_deadline = Some(30);
+        assert_eq!(sched.main_timeout(), Some(ms(30)));
+        let driver = sched.driver.as_deref_mut().unwrap();
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let Submit::Done(Ok(Done::Listener { handle, .. })) = driver.submit(1, Op::Listen { addr })
+        else {
+            panic!("the virtual listen ends at submit");
+        };
+        assert!(matches!(
+            driver.submit(2, Op::Accept { listener: handle }),
+            Submit::Pending
+        ));
+        assert_eq!(sched.main_timeout(), Some(ms(10)));
+        sched.own_deadline = Some(3);
+        assert_eq!(sched.main_timeout(), Some(ms(3)));
+        sched.own_deadline = None;
+        assert_eq!(sched.main_timeout(), Some(ms(10)));
+        #[cfg(unix)]
+        {
+            sched.poll = Some(PollSource::Fd(0));
+            assert_eq!(sched.main_timeout(), None);
         }
     }
 

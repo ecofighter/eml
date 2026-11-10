@@ -1,0 +1,12 @@
+[package]
+name = "winui-bindings"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# emlのworkspaceの外に置く。使うのはnix/winui-bindings.shだけで、emlのどのcrateの依存にもならない
+[workspace]
+
+[dependencies]
+windows-bindgen = "=0.100.0"

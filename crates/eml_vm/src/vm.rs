@@ -20,9 +20,10 @@ use crate::data;
 use crate::driver::DriverKind;
 use crate::error::VmFault;
 use crate::ffi;
+use crate::gui;
 use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
-use crate::park::{Guard, Park, Pending, Progress};
+use crate::park::{Guard, Park, Pending, PollSource, Progress};
 use crate::sched::{
     ENTRY, JOB, JoinId, JoinNode, Memory, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId,
     TaskState,
@@ -893,6 +894,7 @@ fn main_wait<R: Exec>(
         sched: &mut *sched,
         counts: &mut *counts,
         stop: None,
+        from_park: true,
     };
     let waited = park.wait(timeout, &mut pending);
     let stop = pending.stop.take();
@@ -900,9 +902,10 @@ fn main_wait<R: Exec>(
         sched.guard = Guard::Outside;
         return Err(error);
     }
+    // driverの誤りは`default_wait`が`stop`に残したので、ここに来る誤りは`Park`自身のものである
     if let Err(e) = waited {
         sched.guard = Guard::Outside;
-        return Err(main_fault(VmFault::Driver(e.to_string())));
+        return Err(main_fault(VmFault::Park(e.to_string())));
     }
     if matches!(sched.guard, Guard::Stopped(_)) {
         sched.guard = Guard::Outside;
@@ -922,6 +925,7 @@ fn main_wait<R: Exec>(
         sched: &mut *sched,
         counts: &mut *counts,
         stop: None,
+        from_park: false,
     };
     let progress = pending.run();
     let stop = pending.stop.take();
@@ -942,6 +946,9 @@ struct MainPending<'a, R: Exec> {
     counts: &'a mut RunCounts,
     /// `run`の`drive`が止まった誤り。待ちの後で`main_wait`が返す。
     stop: Option<RuntimeError>,
+    /// `Park`に渡したものか。`Park`はdriverの代わりにdriverのOSの源で待ちうるので、`Park`が呼ぶ`run`は始めに1回、
+    /// 待たずにdriverに問う。完了を取り、源に残った起こしも消すためである (docs/spec/vm.mdの「メインのworkerの待ち」)。
+    from_park: bool,
 }
 
 impl<R: Exec> Pending for MainPending<'_, R> {
@@ -950,6 +957,13 @@ impl<R: Exec> Pending for MainPending<'_, R> {
             return progress;
         }
         self.sched.run.unpark(self.sched.index);
+        if self.from_park
+            && let Err(error) = self.sched.look_once()
+        {
+            self.stop = Some(main_fault(error));
+            self.sched.guard = Guard::Stopped(0);
+            return Progress::Stopping;
+        }
         loop {
             let driven = drive::<R>(self.code, self.ctx, self.task, self.sched, self.counts)
                 .and_then(|go| {
@@ -982,7 +996,12 @@ impl<R: Exec> Pending for MainPending<'_, R> {
         if matches!(self.sched.guard, Guard::Stopped(_)) {
             return Ok(());
         }
-        self.sched.main_default_wait()
+        let waited = self.sched.main_default_wait();
+        if let Err(e) = &waited {
+            self.stop = Some(main_fault(VmFault::Driver(e.to_string())));
+            self.sched.guard = Guard::Stopped(0);
+        }
+        waited
     }
 
     fn set_holds(&mut self, holds: bool) {
@@ -990,6 +1009,49 @@ impl<R: Exec> Pending for MainPending<'_, R> {
             self.sched.run.wake(0);
         }
     }
+
+    fn io(&self) -> Option<PollSource> {
+        self.sched.poll
+    }
+
+    fn poke(&mut self, gate: i64) {
+        if let Err(fault) = poke_gate(self.sched, gate) {
+            self.fail(fault);
+        }
+    }
+
+    fn release_gate(&mut self, gate: i64) {
+        let released = self.sched.cells.lock().release_gate(gate);
+        if let Err(fault) = released {
+            self.fail(fault.into());
+        }
+    }
+}
+
+impl<R: Exec> MainPending<'_, R> {
+    /// `Park`が呼んだ登録表の操作の誤りを、`run`の誤りと同じくrunの誤りにする。続く`run`は`Stopping`を返す。
+    fn fail(&mut self, fault: VmFault) {
+        if self.stop.is_none() {
+            self.stop = Some(main_fault(fault));
+        }
+        self.sched.guard = Guard::Stopped(0);
+    }
+}
+
+/// ゲート`gate`に知らせ、起こしたタスクを積む。`Std.Gui.poke_raw`の腕とメインのworkerの`Pending::poke`が使う
+/// (docs/spec/vm.mdの「セルと登録表」)。
+fn poke_gate<P: Policy>(sched: &mut Scheduler<P>, gate: i64) -> Result<(), VmFault> {
+    let mut runs = Vec::new();
+    {
+        here!(sched, post, here);
+        let mut cells = sched.cells.lock();
+        cells.poke_gate(gate, &mut sched.woken)?;
+        cells.route(&mut sched.woken, &here, &mut runs)?;
+    }
+    for run in runs {
+        schedule(sched, run)?;
+    }
+    Ok(())
 }
 
 /// メインのworkerの1回の仕事。受け箱の知らせを取り、走れるタスクを列が空になるまで動かして戻る。列が空になった
@@ -2640,7 +2702,7 @@ fn async_op<R: Exec>(
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、行がそれを預かる
     let ext = Extern::ALL[o[0] as usize];
     match ext {
-        Extern::AsyncStartRaw | Extern::AsyncStartMainRaw => {
+        Extern::AsyncStartRaw | Extern::AsyncStartMainRaw | Extern::AsyncStartOffMainRaw => {
             let cell = current_cell(task)?;
             // 固定したタスクが始めるタスクも固定する (docs/spec/vm.mdの「`Async`のタスク」)
             let (scope, pinned) = {
@@ -2648,7 +2710,9 @@ fn async_op<R: Exec>(
                 let pinned = cells.pinned(cell)?;
                 (cells.current_of(cell)?, pinned)
             };
-            let pinned = pinned || ext == Extern::AsyncStartMainRaw;
+            // 固定したタスクの仕事をメインのworkerの外へ出せるよう、`start_off_main_raw`は固定を引き継がない (docs/spec/stdlib.mdの「メインのworker」)
+            let pinned =
+                (pinned || ext == Extern::AsyncStartMainRaw) && ext != Extern::AsyncStartOffMainRaw;
             let owner = place_owner(sched, pinned);
             let (handle, run) =
                 start_task::<R>(ctx, task, sched, scope, owner, task.get(arg(0)), pinned)?
@@ -3574,9 +3638,30 @@ fn async_op<R: Exec>(
                 }
             }
         }
+        // GUIを開く行と、ゲートの行。ゲートは登録表のセルである (docs/spec/vm.mdの「GUIのPark」)
+        Extern::GuiWantRaw => match gui::want(sched)? {
+            Ok(gate) => task.set_raw(dst, gate),
+            Err(raise) => return raise_again::<R>(code, ctx, task, dst, raise, ext),
+        },
+        Extern::GuiOpenUiRaw => match gui::open_ui(ctx, sched, task.raw(arg(0)), task.cell)? {
+            Ok(ui) => task.set(dst, ui),
+            Err(raise) => return raise_again::<R>(code, ctx, task, dst, raise, ext),
+        },
+        Extern::GuiPokeRaw => {
+            poke_gate(sched, task.raw(arg(0)))?;
+            task.set(dst, Word::UNIT);
+        }
+        Extern::GuiAbandonRaw => {
+            gui::abandon(sched, task.raw(arg(0)))?;
+            task.set(dst, Word::UNIT);
+        }
+        Extern::GuiIsGuiTaskRaw => {
+            let own = gui::is_gui_task(task.raw(arg(0)), task.cell);
+            task.set_raw(dst, i64::from(own));
+        }
         _ => {
             return Err(VmFault::Internal(
-                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net, Std.Stream, Std.Exec and Std.Tls reached the Async instruction",
+                "a row outside Std.Async, Std.Chan, Std.Atomic, Std.Net, Std.Stream, Std.Exec, Std.Tls and Std.Gui reached the Async instruction",
             ));
         }
     }
@@ -4412,6 +4497,30 @@ fn run_extern<R: Exec>(
                 let w = tls::take_line(ctx, task.get(arg(0)))?;
                 task.set(dst, w);
             }
+            // toolkitに触れる行。待たないので普通のexternである (docs/spec/stdlib.mdの「`Std.Gui`」)
+            Extern::GuiCloseUi
+            | Extern::GuiBeginWindowRaw
+            | Extern::GuiBeginGridRaw
+            | Extern::GuiEndRaw
+            | Extern::GuiNextCellRaw
+            | Extern::GuiCreateRaw
+            | Extern::GuiAddItemRaw
+            | Extern::GuiSetTextRaw
+            | Extern::GuiSetIntRaw
+            | Extern::GuiCloseWindowRaw
+            | Extern::GuiOpenWindowsRaw
+            | Extern::GuiFlushRaw
+            | Extern::GuiPollRaw
+            | Extern::GuiEventIntRaw
+            | Extern::GuiEventTextRaw => {
+                let n = ext.row().params.len();
+                let mut args = [Word::UNIT; 5];
+                for (i, w) in args.iter_mut().enumerate().take(n) {
+                    *w = task.get(arg(i));
+                }
+                let w = gui::arm(ctx, ext, &args[..n])?;
+                task.set(dst, w);
+            }
             // いつも誤りを返すので、宛先には書かない。届け先は `failed` が決める (docs/spec/vm.md の「extern の中断」)
             Extern::FailIo => {
                 let message = ctx.copy_string(task.get(arg(1)), usize::MAX)?;
@@ -4674,6 +4783,7 @@ fn run_extern<R: Exec>(
             // コード生成が `Async` の命令にする (docs/spec/vm.md の「`Async` のタスク」)
             Extern::AsyncStartRaw
             | Extern::AsyncStartMainRaw
+            | Extern::AsyncStartOffMainRaw
             | Extern::AsyncRunRaw
             | Extern::AsyncPark
             | Extern::AsyncParkTime
@@ -4766,7 +4876,12 @@ fn run_extern<R: Exec>(
             | Extern::ExecReap
             | Extern::TlsSubmitClient
             | Extern::TlsSubmitPush
-            | Extern::TlsTakeConn => {
+            | Extern::TlsTakeConn
+            | Extern::GuiWantRaw
+            | Extern::GuiOpenUiRaw
+            | Extern::GuiPokeRaw
+            | Extern::GuiAbandonRaw
+            | Extern::GuiIsGuiTaskRaw => {
                 return Err(VmFault::Internal("Async externs run through Op::Async"));
             }
         }

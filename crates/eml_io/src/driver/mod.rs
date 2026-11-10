@@ -284,6 +284,11 @@ impl<B: Backend> Driver<B> {
         }
     }
 
+    #[cfg(unix)]
+    pub(crate) fn backend(&self) -> &B {
+        &self.backend
+    }
+
     /// 落とされたハンドルを閉じる。
     fn empty_bin(&mut self) {
         self.binned.extend(

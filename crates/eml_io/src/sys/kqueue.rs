@@ -5,7 +5,7 @@
 #![allow(unsafe_code)]
 
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::ptr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -95,6 +95,10 @@ impl Poller for Kqueue {
             events: vec![change(0, 0, 0, 0, 0); EVENTS],
         };
         Ok((poller, Arc::new(User(kq))))
+    }
+
+    fn raw_fd(&self) -> RawFd {
+        self.kq.as_raw_fd()
     }
 
     fn register(&mut self, fd: BorrowedFd<'_>, token: u64, interest: Interest) -> io::Result<()> {

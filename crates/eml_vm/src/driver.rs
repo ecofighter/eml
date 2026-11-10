@@ -9,6 +9,7 @@ use eml_io::{RealDriver, TestDriver};
 use eml_rt::{Control, IoDriver};
 
 use crate::VmFault;
+use crate::park::PollSource;
 use crate::sched::NO_DRIVER;
 
 /// 静止が `Op::Job` の仕事を待つ予算の既定の値。run のすべての静止が分け合い、過ぎたら残る仕事を見捨てる
@@ -38,6 +39,9 @@ impl Clock {
     }
 }
 
+/// 作ったdriverと、それが待つOSの源。
+pub(crate) type MadeDriver = (Box<dyn IoDriver>, Option<PollSource>);
+
 /// run の時間の基準。run の driver はどれもこの基準で作り、VM はここからだけ時刻を読む
 /// (docs/spec/vm.md の「時計と driver」)。
 #[derive(Debug, Clone)]
@@ -61,12 +65,23 @@ impl RunClock {
         }
     }
 
-    /// この基準の新しい driver。`seed` は `Sched::seed` で、テストの driver が決着の組を混ぜるのに使う。driver は
-    /// 作ったスレッドの上でだけ使うので、run を行うスレッドで作る。渡された driver の基準 `Injected` からは作れない。
-    pub(crate) fn driver(&self, seed: Option<u64>) -> io::Result<Box<dyn IoDriver>> {
+    /// この基準の新しいdriverと、それが待つOSの源。`seed`は`Sched::seed`で、テストのdriverが決着の組を混ぜるのに
+    /// 使う。driverは作ったスレッドの上でだけ使うので、runを行うスレッドで作る。渡されたdriverの基準`Injected`からは
+    /// 作れない。源を持つのはunixの本物のdriverだけである (docs/spec/vm.mdの「メインのworkerの待ち」)。
+    pub(crate) fn driver(&self, seed: Option<u64>) -> io::Result<MadeDriver> {
         Ok(match self {
-            RunClock::Real { epoch } => Box::new(RealDriver::new_at(*epoch)?),
-            RunClock::Virtual(clock) => Box::new(TestDriver::new_shared(seed, Arc::clone(clock))),
+            RunClock::Real { epoch } => {
+                let driver = RealDriver::new_at(*epoch)?;
+                #[cfg(unix)]
+                let poll = Some(PollSource::Fd(driver.poll_fd()));
+                #[cfg(not(unix))]
+                let poll = None;
+                (Box::new(driver), poll)
+            }
+            RunClock::Virtual(clock) => (
+                Box::new(TestDriver::new_shared(seed, Arc::clone(clock))),
+                None,
+            ),
             RunClock::Injected => unreachable!("an injected driver is not made from a clock"),
         })
     }

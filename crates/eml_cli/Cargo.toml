@@ -16,17 +16,21 @@ name = "eml"
 path = "src/main.rs"
 required-features = ["run"]
 
-# `eml_test_support` はこの crate でパイプラインを組むので、段階ごとに feature を分ける。各 crate のテストは自分より
-# 下流の crate を組み立てずに済む (docs/implementation/testing.md)。
-# tls は run に足す Std.Tls で、外すと Std.Tls の腕が NotAvailable を投げる。`dep:eml_tls` は src/ では使わず、
-# 本物のソケットの上の結合テスト (tests/tls.rs) がサーバーを立てるためにある。dev-dependency にしない理由は
-# docs/implementation/testing.md の「OS ごとのテスト」にある。
+# `eml_test_support`はこのcrateでパイプラインを組むので、段階ごとにfeatureを分ける。各crateのテストは自分より
+# 下流のcrateを組み立てずに済む (docs/implementation/testing.md)。
+# tlsはrunに足すStd.Tlsで、外すとStd.Tlsの腕がNotAvailableを投げる。`dep:eml_tls`はsrc/では使わず、
+# 本物のソケットの上の結合テスト (tests/tls.rs) がサーバーを立てるためにある。dev-dependencyにしない理由は
+# docs/implementation/testing.mdの「OS ごとのテスト」にある。guiはrunに足すStd.Guiで、外すとStd.Guiを
+# 開けず、NotAvailableを投げる。gui-nativeはネイティブのGUIのbackendを足す。既定に入れないので、既定のビルドは
+# toolkitの開発用のファイルを要らない (docs/implementation/architecture.mdの「crate の依存関係」)。
 [features]
-default = ["run", "tls"]
+default = ["run", "tls", "gui"]
 types = ["dep:eml_types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
 run = ["core", "dep:eml_vm", "dep:eml_native", "dep:libc", "dep:rustyline", "dep:windows-sys"]
 tls = ["run", "eml_vm/tls", "dep:eml_tls"]
+gui = ["run", "eml_vm/gui"]
+gui-native = ["gui", "eml_vm/gui-native"]
 
 [dependencies]
 clap.workspace = true

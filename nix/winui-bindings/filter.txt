@@ -1,0 +1,45 @@
+// WinUIのbackendが使うAPI (nix/winui-bindings.sh)。メンバーは、プロパティ、イベント、メソッドの名前で指す。
+Microsoft.UI.Dispatching.DispatcherQueue::{GetForCurrentThread, TryEnqueue, CreateTimer, EnqueueEventLoopExit}
+Microsoft.UI.Dispatching.DispatcherQueueHandler
+Microsoft.UI.Dispatching.DispatcherQueueTimer::{Interval, IsRepeating, Start, Stop, Tick}
+Microsoft.UI.Windowing.AppWindow::{ResizeClient, Size, ClientSize, Presenter, Closing}
+Microsoft.UI.Windowing.AppWindowClosingEventArgs::{Cancel}
+Microsoft.UI.Windowing.OverlappedPresenter::{PreferredMinimumWidth, PreferredMinimumHeight}
+Microsoft.UI.Xaml.Application::{CreateInstance, Start, Current, Exit, Resources, DispatcherShutdownMode}
+Microsoft.UI.Xaml.ApplicationInitializationCallback
+Microsoft.UI.Xaml.DispatcherShutdownMode
+Microsoft.UI.Xaml.IApplicationOverrides
+Microsoft.UI.Xaml.LaunchActivatedEventArgs::{}
+Microsoft.UI.Xaml.FrameworkElement::{Width, Height, ActualThemeChanged}
+Microsoft.UI.Xaml.UIElement::{Measure, DesiredSize}
+Microsoft.UI.Xaml.ResourceDictionary::{MergedDictionaries}
+Microsoft.UI.Xaml.TextWrapping
+Microsoft.UI.Xaml.Window::{CreateInstance, Title, Content, AppWindow, Activate, Close, SizeChanged}
+Microsoft.UI.Xaml.WindowSizeChangedEventArgs::{Size}
+Microsoft.UI.Xaml.Controls.Button::{CreateInstance, Content, Click}
+Microsoft.UI.Xaml.Controls.Canvas::{CreateInstance, SetLeft, SetTop, Children}
+Microsoft.UI.Xaml.Controls.CheckBox::{CreateInstance, Content, IsChecked, Click}
+Microsoft.UI.Xaml.Controls.ComboBox::{CreateInstance, SelectedIndex, Items, SelectionChanged}
+Microsoft.UI.Xaml.Controls.ComboBoxItem::{CreateInstance, Content}
+Microsoft.UI.Xaml.Controls.Control::{IsEnabled}
+Microsoft.UI.Xaml.Controls.ItemCollection
+Microsoft.UI.Xaml.Controls.ProgressBar::{CreateInstance, Minimum, Maximum, Value}
+Microsoft.UI.Xaml.Controls.TextBlock::{CreateInstance, Text, TextWrapping}
+Microsoft.UI.Xaml.Controls.TextBox::{CreateInstance, Text, TextChanged}
+Microsoft.UI.Xaml.Controls.UIElementCollection
+Microsoft.UI.Xaml.Controls.XamlControlsResources::{CreateInstance}
+Microsoft.UI.Xaml.Markup.IXamlMetadataProvider
+Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider::{CreateInstance}
+Windows.Win32.RoInitialize
+Windows.Win32.RO_INIT_SINGLETHREADED
+Windows.Win32.AddPackageDependencyOptions::{AddPackageDependencyOptions_None}
+Windows.Win32.CreatePackageDependencyOptions::{CreatePackageDependencyOptions_None}
+Windows.Win32.GetModuleHandleW
+Windows.Win32.GetProcAddress
+Windows.Win32.PACKAGE_VERSION
+Windows.Win32.PACKAGEDEPENDENCY_CONTEXT
+Windows.Win32.PackageDependencyLifetimeKind::{PackageDependencyLifetimeKind_Process}
+Windows.Win32.PackageDependencyProcessorArchitectures::{PackageDependencyProcessorArchitectures_Arm, PackageDependencyProcessorArchitectures_Arm64, PackageDependencyProcessorArchitectures_Neutral, PackageDependencyProcessorArchitectures_X64, PackageDependencyProcessorArchitectures_X86}
+Windows.Win32.PSID
+Windows.Win32.GetProcessHeap
+Windows.Win32.HeapFree

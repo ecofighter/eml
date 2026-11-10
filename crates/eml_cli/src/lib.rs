@@ -27,6 +27,12 @@ pub use eml_vm::{
     RunStats, RuntimeError, Sched, Signal, SourceLocation, Stop, VirtualSignal, VmFault, Written,
     capture_host, execute, script_host, stdio_host,
 };
+#[cfg(feature = "gui")]
+pub use eml_vm::{
+    ParkFactory,
+    eml_gui::{Backend, Script},
+    gui_park,
+};
 pub use fs_provider::FsProvider;
 #[cfg(feature = "run")]
 pub use repl::{Closed, Evaluated, Outcome, Repl, Typed};

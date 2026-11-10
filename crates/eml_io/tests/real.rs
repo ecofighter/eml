@@ -144,6 +144,44 @@ fn a_wake_from_another_thread_leaves_a_wait_working() {
     assert_eq!(driver.pending(), 0);
 }
 
+/// `poll_fd`は、完了が届くと読めるようになる。`Park`がそのfdを自分の待つ源の1つとして待てるようにするためである。
+/// 仕事が走っている間は読めない (docs/spec/vm.mdの「時計と driver」)。
+#[cfg(unix)]
+#[test]
+fn the_poll_fd_is_readable_once_a_completion_arrives() {
+    use std::sync::mpsc;
+    let mut driver = RealDriver::new().unwrap();
+    let fd = driver.poll_fd();
+    let (gate, gate_rx) = mpsc::channel::<()>();
+    let job = submit(
+        &mut driver,
+        Op::Job(Box::new(move || {
+            gate_rx.recv().unwrap();
+            Box::new(7usize)
+        })),
+    );
+    assert!(job.done.is_none());
+    assert!(!readable(fd, 0));
+    gate.send(()).unwrap();
+    assert!(readable(fd, 1000));
+    let completion = complete(&mut driver, &mut Vec::new(), job);
+    assert_eq!(boxed::<usize>(completion.result), 7);
+}
+
+/// `fd`が`ms`ミリ秒のうちに読めるようになったか。
+#[cfg(unix)]
+fn readable(fd: std::os::fd::RawFd, ms: i32) -> bool {
+    let mut poll = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: `poll`は局所の値で、カーネルは`revents`だけを書く
+    let n = unsafe { libc::poll(&raw mut poll, 1, ms) };
+    assert!(n >= 0, "{}", std::io::Error::last_os_error());
+    n == 1 && poll.revents & libc::POLLIN != 0
+}
+
 /// 走っている仕事を持つ driver は、落とすときに仕事の終わりを待たない。仕事は driver が消えた後も走り終える。
 #[test]
 fn dropping_a_driver_does_not_wait_for_a_running_job() {

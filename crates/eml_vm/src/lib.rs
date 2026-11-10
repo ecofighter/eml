@@ -28,6 +28,7 @@ mod doorbell;
 mod driver;
 mod error;
 mod ffi;
+mod gui;
 mod hosts;
 mod jobs;
 mod monitor;
@@ -43,10 +44,15 @@ pub use disasm::disassemble;
 pub use doorbell::Doorbell;
 pub use driver::{Clock, Signal, VirtualSignal};
 pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
+/// GUIのtoolkitの層。`eml run`はここのbackendと筋書きでGUIの`Park`を作る (docs/spec/vm.mdの「GUIのPark」)。
+#[cfg(feature = "gui")]
+pub use eml_gui;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
+#[cfg(feature = "gui")]
+pub use gui::park as gui_park;
 pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
-pub use park::{DefaultPark, Park, ParkFactory, Pending, Progress};
+pub use park::{DefaultPark, Park, ParkFactory, Pending, PollSource, Progress};
 pub use sched::{Memory, Normal, Policy, Sched, Scheduler, Seeded, Sequential};
 pub use vm::Task;
 pub use workers::{Entry, Ready, Seat};
@@ -155,6 +161,11 @@ pub struct Finished {
     /// この run がほかの worker に置いた `compute` の仕事の数。どの worker の `fork_job` も数える
     /// (docs/spec/vm.md の「`compute` の仕事」)。
     pub placed_jobs: u64,
+    /// runの外の待ちの印(`Run.holds`)を立てた回数と、下ろした回数。立てるのは`want_gui_raw`、下ろすのは回収、
+    /// `abandon_raw`、作るときの誤りを返す`open_ui_raw`である。期間がつながる2つの`Gui.run`では1回立てて1回下ろす
+    /// (docs/spec/vm.mdの「GUIのPark」)。
+    pub holds_raised: u64,
+    pub holds_lowered: u64,
 }
 
 /// VM だけが知る仕事の回数。検査モードだけで数える。
@@ -658,15 +669,20 @@ impl<M: Mode> Machine<M> {
         let driver = match (separate, self.driver.take()) {
             (true, _) => None,
             (false, Some(driver)) => Some(driver),
-            (false, None) => Some(run_clock.driver(self.sched.seed()).map_err(|e| {
-                code.error(
-                    vm::Failure {
-                        fault: VmFault::Driver(e.to_string()),
-                        pc: task.pc,
-                    },
-                    &task,
-                )
-            })?),
+            (false, None) => Some(
+                run_clock
+                    .driver(self.sched.seed())
+                    .map(|(driver, _)| driver)
+                    .map_err(|e| {
+                        code.error(
+                            vm::Failure {
+                                fault: VmFault::Driver(e.to_string()),
+                                pc: task.pc,
+                            },
+                            &task,
+                        )
+                    })?,
+            ),
         };
         let mut counts = RunCounts::default();
         let start = Start {
@@ -801,6 +817,8 @@ impl<M: Mode> Machine<M> {
             placed_tasks: scheduled.placed_tasks,
             pinned_tasks: scheduled.pinned_tasks,
             placed_jobs: scheduled.placed_jobs,
+            holds_raised: scheduled.holds_raised,
+            holds_lowered: scheduled.holds_lowered,
         }
     }
 
@@ -925,6 +943,9 @@ struct Scheduled<M: Mode> {
     pinned_tasks: u64,
     /// ほかの worker に置いた `compute` の仕事の数。
     placed_jobs: u64,
+    /// `Run.holds`を立てた回数と下ろした回数。
+    holds_raised: u64,
+    holds_lowered: u64,
     /// runの最初に記録したpanic。`Machine`のスレッドで起こし直す。
     panic: Option<Box<dyn std::any::Any + Send>>,
 }
@@ -951,6 +972,8 @@ impl<M: Mode> Scheduled<M> {
             placed_tasks: 0,
             pinned_tasks: 0,
             placed_jobs: 0,
+            holds_raised: 0,
+            holds_lowered: 0,
             panic: None,
         }
     }
@@ -1047,6 +1070,10 @@ fn run_scheduled<M: Mode, P: Policy>(
     if let Some(waker) = park.waker() {
         let _ = run.slots[run.main()].park_waker.set(waker);
     }
+    // メインのworkerの`Ctx`はworker 0を作る前に作る。検査モードでは作るときにページを1枚取り、確保量に数えるので、
+    // その課金がプログラムの確保とどう前後するかをスレッドの速さで決めないためである。決定的な方針では柔らかい上限の
+    // 旗の地点が確保量で決まる (docs/spec/vm.mdの「メインのworker」「タスクとスケジュール」)
+    let main_ctx = Ctx::<M>::for_worker(Arc::clone(&control), start.host.clone(), run.main());
     let (worker_ctx, worker_task, worker_counts) = (&mut *ctx, &mut *task, &mut *counts);
     let (joined, main) = thread::scope(|scope| {
         // 呼んだスレッドの panic でも `END` を立ててすべての worker を起こし、scope が worker 0 を join できるようにする
@@ -1088,7 +1115,7 @@ fn run_scheduled<M: Mode, P: Policy>(
             &run,
             &control,
             Arc::clone(&cells),
-            start.host.clone(),
+            main_ctx,
             start.max_depth,
             park,
         );
@@ -1532,6 +1559,8 @@ fn finish_run<M: Mode>(
         placed_tasks,
         pinned_tasks,
         placed_jobs: run.placed_jobs.load(std::sync::atomic::Ordering::Relaxed),
+        holds_raised: run.holds_raised.load(std::sync::atomic::Ordering::Relaxed),
+        holds_lowered: run.holds_lowered.load(std::sync::atomic::Ordering::Relaxed),
         panic: None,
     };
     (result, scheduled)

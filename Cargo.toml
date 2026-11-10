@@ -20,6 +20,7 @@ eml_lir = { path = "crates/eml_lir" }
 eml_rt = { path = "crates/eml_rt" }
 eml_io = { path = "crates/eml_io" }
 eml_tls = { path = "crates/eml_tls" }
+eml_gui = { path = "crates/eml_gui" }
 eml_vm = { path = "crates/eml_vm" }
 eml_cli = { path = "crates/eml_cli", default-features = false }
 eml_test_support = { path = "crates/eml_test_support", default-features = false }
@@ -30,20 +31,67 @@ cranelift-frontend = "0.137"
 cranelift-jit = "0.137"
 cranelift-module = "0.137"
 cranelift-native = "0.137"
+cxx = "1.0"
+cxx-build = "1.0"
 insta = "1.49"
 la-arena = "0.3"
 libc = "0.2"
 libloading = "0.9"
 logos = "0.16"
+# AppKitのbackend (eml_guiのnative) が使う部分だけを有効にする
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSApplication",
+    "NSButton",
+    "NSCell",
+    "NSControl",
+    "NSEvent",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSLayoutConstraint",
+    "NSMenu",
+    "NSMenuItem",
+    "NSPopUpButton",
+    "NSProgressIndicator",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSTextField",
+    "NSView",
+    "NSWindow",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFDate",
+    "CFFileDescriptor",
+    "CFRunLoop",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSGeometry",
+    "NSNotification",
+    "NSString",
+] }
+# Qtのbackend (eml_guiのnative) のbuild.rsがQtを探してつなぐ。0.10のAPIに合わせて書いたので、版を固定する
+qt-build-utils = "=0.10.0"
 rustyline = { version = "19.0.0", default-features = false, features = ["buffer-redux"] }
 rowan = "0.17"
 rustc-hash = "2.1"
+taffy = { version = "0.15", default-features = false, features = ["std", "taffy_tree", "grid"] }
 # provider は aws-lc-rs だけで、`eml_tls` が `builder_with_provider` で渡す。`logging` と `prefer-post-quantum` は使わないので既定は外す
 # (docs/implementation/architecture.md の「crate の依存関係」)
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-platform-verifier = "0.7.1"
 text-size = "1.1"
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_System_Threading"] }
+# WinUIのbackend (eml_guiのnative) のbindingが使うcrate。bindingはwindows-bindgen 0.100が生成するので、版をそれに合わせる
+# (nix/winui-bindings.sh)
+windows-collections = "0.100"
+windows-core = "0.100"
+windows-reference = "0.100"
+windows-time = "0.100"
 
 # テストの時間の多くはフロントエンドにあり、一部の crate だけを最適化しても縮まない。debug assertions は既定のまま有効にする
 # (docs/implementation/testing.md の「よく使うコマンド」)

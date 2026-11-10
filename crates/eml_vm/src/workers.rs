@@ -17,7 +17,7 @@ use crate::cells::{CellRef, HostBin, Post, Shared, Woken};
 use crate::code::CodeBase;
 use crate::counters::Counters;
 use crate::doorbell::Doorbell;
-use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, RunClock, ceil_ms, floor_ms};
+use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, MadeDriver, RunClock, ceil_ms, floor_ms};
 use crate::park::Park;
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
@@ -260,6 +260,10 @@ impl Slot {
 /// `Slot::current` と `Slot::top` の、タスクのないことを表す値。
 pub(crate) const NO_CELL: u64 = u64::MAX;
 
+/// メインのworkerのdriverに保留の操作があり、OSの源 (`Pending::io`) がないときに、`Park`の待ちに渡す長さの上限
+/// (docs/spec/vm.mdの「メインのworkerの待ち」)。
+const MAIN_POLL_CAP: Duration = Duration::from_millis(10);
+
 /// `Slot::current` と `Slot::top` に置くセルの符号。
 pub(crate) fn cell_word(cell: CellRef) -> u64 {
     cell.encode() as u64
@@ -278,6 +282,9 @@ pub(crate) struct Run {
     /// デッドロックの判定で`running`の後にAcquireで読み、真の間は判定せずに待つ (docs/spec/vm.mdの
     /// 「メインのworkerの待ち」)。
     holds: AtomicBool,
+    /// `holds`を偽から真にした回数と、真から偽にした回数 (docs/spec/vm.mdの「GUIのPark」)。
+    pub(crate) holds_raised: AtomicU64,
+    pub(crate) holds_lowered: AtomicU64,
     /// 送った子の知らせのうち、終わりの知らせをまだ受け取っていないものの数。親を失った節点の分も数える。
     pub(crate) in_flight: AtomicUsize,
     /// ほかの worker に置いた右の子の数。どの worker の fork も足す。
@@ -361,6 +368,8 @@ impl Run {
             seat,
             running: AtomicUsize::new(1),
             holds: AtomicBool::new(false),
+            holds_raised: AtomicU64::new(0),
+            holds_lowered: AtomicU64::new(0),
             in_flight: AtomicUsize::new(0),
             placed: AtomicU64::new(0),
             placed_jobs: AtomicU64::new(0),
@@ -393,7 +402,7 @@ impl Run {
     /// worker 0が最初に作るdriver。`Separate`ではworker 0のスレッドで作る。`Box<dyn IoDriver>`は`Send`でないので、作ったスレッドで
     /// 捨てるためである。
     pub(crate) fn entry_driver(&self, seed: Option<u64>) -> std::io::Result<Box<dyn IoDriver>> {
-        self.clock.driver(seed)
+        self.clock.driver(seed).map(|(driver, _)| driver)
     }
 
     /// 静止で仕事を待てる残り。run の最初の静止が期限を決め、ほかの worker はそれを分け合う。
@@ -460,7 +469,7 @@ impl Run {
     /// 本物の時計の run で、worker `k` (`k` ≥ 1) が最初に要るときに作る driver。run の時間の基準から作るので、どの
     /// worker の driver も同じ時刻を読む。ほかの run では作らず `None` である。渡された driver の run (`Injected`) は
     /// worker を作らないので、基準から driver を作る道を通らない (docs/spec/vm.md の「時計と driver」)。
-    pub(crate) fn new_driver(&self) -> Option<std::io::Result<Box<dyn IoDriver>>> {
+    pub(crate) fn new_driver(&self) -> Option<std::io::Result<MadeDriver>> {
         match self.clock {
             RunClock::Real { .. } => Some(self.clock.driver(None)),
             RunClock::Virtual(_) | RunClock::Injected => None,
@@ -719,10 +728,16 @@ impl Run {
     /// 眠りから来る判定は、見逃しうる。`Park`はタスクを動かさせる前に立てるので、そのタスクが始めた待ちで眠った
     /// メインのworkerの判定は、立てた真を読む。
     pub(crate) fn swap_holds(&self, holds: bool) -> bool {
-        self.holds.swap(holds, Ordering::AcqRel)
+        let old = self.holds.swap(holds, Ordering::AcqRel);
+        match (old, holds) {
+            (false, true) => self.holds_raised.fetch_add(1, Ordering::Relaxed),
+            (true, false) => self.holds_lowered.fetch_add(1, Ordering::Relaxed),
+            _ => 0,
+        };
+        old
     }
 
-    fn holds(&self) -> bool {
+    pub(crate) fn holds(&self) -> bool {
         self.holds.load(Ordering::Acquire)
     }
 
@@ -893,13 +908,19 @@ fn run_worker<M: Mode, P: Policy>(
     k: usize,
     max_depth: usize,
 ) -> WorkerExit<M> {
-    on_own_ctx(&run, &control, host, k, format!("<worker {k}>"), |ctx| {
-        work::<M, P>(code, ctx, policy, &run, &control, cells, k, max_depth)
-    })
+    on_own_ctx(
+        &run,
+        &control,
+        k,
+        format!("<worker {k}>"),
+        || Ctx::for_worker(Arc::clone(&control), host, k),
+        |ctx| work::<M, P>(code, ctx, policy, &run, &control, cells, k, max_depth),
+    )
 }
 
 /// 分かれたrunのメインのworkerの本体。`Machine`を持つスレッドで、worker 0を作った後に動き、自分の`Ctx`を
-/// `run_scheduled`の畳み込みに返す (docs/spec/vm.mdの「メインのworker」)。
+/// `run_scheduled`の畳み込みに返す。`ctx`は同じスレッドがworker 0を作る前に作ったものである
+/// (docs/spec/vm.mdの「メインのworker」)。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_main<M: Mode, P: Policy>(
     code: &CodeBase<M>,
@@ -907,50 +928,57 @@ pub(crate) fn run_main<M: Mode, P: Policy>(
     run: &Arc<Run>,
     control: &Arc<Control>,
     cells: Arc<Shared>,
-    host: HostRef,
+    ctx: Ctx<M>,
     max_depth: usize,
     mut park: Box<dyn Park>,
 ) -> WorkerExit<M> {
     let k = run.main();
-    on_own_ctx(run, control, host, k, "<main worker>".into(), move |ctx| {
-        let done = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            main_work::<M, P>(
-                code, ctx, policy, run, control, cells, max_depth, &mut *park,
-            )
-        }));
-        match done {
-            Ok(done) => {
-                // `Park`の`Drop`も利用者のコードなので`catch_unwind`の中で落とし、そこでのpanicはメインのworkerの
-                // panicと同じに扱う
-                drop(park);
-                done
+    on_own_ctx(
+        run,
+        control,
+        k,
+        "<main worker>".into(),
+        move || ctx,
+        move |ctx| {
+            let done = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                main_work::<M, P>(
+                    code, ctx, policy, run, control, cells, max_depth, &mut *park,
+                )
+            }));
+            match done {
+                Ok(done) => {
+                    // `Park`の`Drop`も利用者のコードなので`catch_unwind`の中で落とし、そこでのpanicはメインのworkerの
+                    // panicと同じに扱う
+                    drop(park);
+                    done
+                }
+                Err(payload) => {
+                    // 巻き戻しの間に`Drop`がpanicすると処理系が止まるので、`Park`は自分の`catch_unwind`の下で落とし、
+                    // 最初のpanicを残して続ける
+                    let _ = std::panic::catch_unwind(AssertUnwindSafe(move || drop(park)));
+                    std::panic::resume_unwind(payload)
+                }
             }
-            Err(payload) => {
-                // 巻き戻しの間に`Drop`がpanicすると処理系が止まるので、`Park`は自分の`catch_unwind`の下で落とし、
-                // 最初のpanicを残して続ける
-                let _ = std::panic::catch_unwind(AssertUnwindSafe(move || drop(park)));
-                std::panic::resume_unwind(payload)
-            }
-        }
-    })
+        },
+    )
 }
 
-/// 呼んだスレッドで worker `k` の `Ctx` を作り、`catch_unwind` の中で `body` を動かして、`Ctx` を返す。`Ctx` を作る
-/// ところから `catch_unwind` の中で動き、panic は関数の名前 `function` で `fatal` に書いてすべての worker に終わりを
+/// 呼んだスレッドでworker `k`の`Ctx`を`make`で得て、`catch_unwind`の中で`body`を動かし、`Ctx`を返す。`make`
+/// から`catch_unwind`の中で動き、panicは関数の名前`function`で`fatal`に書いてすべてのworkerに終わりを
 /// 知らせる。そのときの`Ctx`も返す。
 fn on_own_ctx<M: Mode>(
     run: &Run,
     control: &Arc<Control>,
-    host: HostRef,
     k: usize,
     function: String,
+    make: impl FnOnce() -> Ctx<M>,
     body: impl FnOnce(&mut Ctx<M>) -> Done,
 ) -> WorkerExit<M> {
     let mut slot: Option<Ctx<M>> = None;
     let mut done: Option<Done> = None;
     let mut base = HeapWork::default();
     let body = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        let ctx = slot.insert(Ctx::<M>::for_worker(Arc::clone(control), host, k));
+        let ctx = slot.insert(make());
         base = HeapWork::of(ctx.heap().stats());
         done = Some(body(ctx));
     }));
@@ -1324,12 +1352,36 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// メインのworkerの`Park`が待ってよい長さ。本物の時計でdriverを持てば自分の区画のいちばん早い期限まで、ほかでは
-    /// 起こされるまで (`None`) である。仮想の時計では、期限の来たタイマーのためにworker 0がメインのworkerを起こす。
+    /// 起こされるまで (`None`) である。driverにOSの源がなく、保留の操作があれば、`MAIN_POLL_CAP`で切る。仮想の時計
+    /// では、期限の来たタイマーのためにworker 0がメインのworkerを起こす。
     pub(crate) fn main_timeout(&self) -> Option<Duration> {
         let k = self.index;
-        let deadline = self.own_deadline.filter(|_| self.run.io_worker(k) == k)?;
-        let driver = self.driver.as_deref()?;
-        Some(Duration::from_millis(deadline).saturating_sub(driver.now()))
+        let driver = self
+            .driver
+            .as_deref()
+            .filter(|_| self.run.io_worker(k) == k)?;
+        let until = self
+            .own_deadline
+            .map(|d| Duration::from_millis(d).saturating_sub(driver.now()));
+        // OSの源を渡せない`Park`は、driverに出した操作の完了を見に、間をおいて`run`を呼ぶ (docs/spec/vm.mdの「メインのworkerの待ち」)
+        let cap = (self.poll.is_none() && driver.pending() > 0).then_some(MAIN_POLL_CAP);
+        match (until, cap) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// driverを持てば、待たずに1回OSを見る。届いた完了は次の集める地点が拾う。`Park`が呼ぶメインのworkerの`run`の
+    /// 始めに使う (docs/spec/vm.mdの「メインのworkerの待ち」)。
+    pub(crate) fn look_once(&mut self) -> Result<(), VmFault> {
+        let Some(driver) = self.driver.as_deref_mut() else {
+            return Ok(());
+        };
+        let now = self.run.now_ms_floor(Some(&*driver))?;
+        driver
+            .wait(Some(now))
+            .map(|_| ())
+            .map_err(|e| VmFault::Driver(e.to_string()))
     }
 
     /// メインのworkerの既定の待ち (`Pending::default_wait`)。driverを持てば期限までdriverで待ち、戻ったら起きた形に
@@ -1355,6 +1407,7 @@ impl<P: Policy> Scheduler<P> {
         let Some(mut driver) = self.driver.take() else {
             return false;
         };
+        self.poll = None;
         driver.quiesce(self.run.job_wait(driver.now()));
         let k = self.index;
         if record && self.cells.lock().in_flight(k) > 0 {

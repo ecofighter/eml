@@ -26,7 +26,7 @@
 - `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`Char`、`Byte`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `FileIn` の `open`、`read_all`、`close` などが起こし、`FileIn.FileIn` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、ABI のない `extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)。extern のエフェクトの多重度は表の行が決め、`IO` は `Once`、`Panic` は `Never` である ([エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」)
 - C の関数の呼び出し: ユーザーのモジュールに `extern "C"` で C の関数と不透明なハンドルの型 (`extern "C" data T drop "f"`) を宣言し、VM から呼ぶ。属性は `pure`、`blocking`、`symbol`、整数の幅は `Int as int` のように書き、配列、`String`、`Bytes`、ハンドルを借りて C に渡す。`blocking` の関数の呼び出しは、呼んだタスクだけを止め、C の関数を driver のプールのスレッドで呼ぶ。ライブラリは `link on <os>` の item と、`eml run` と `eml repl` の `--link KEY=VALUE` で指定する。橋渡しの関数は `eml_native` が Cranelift の JIT で作る ([宣言](../spec/declarations.md) の「`extern "C"`」、[VM](../spec/vm.md) の「C の関数の呼び出し」、[VM](../spec/vm.md) の「`blocking` の呼び出し」)
 - IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`fail_io : IOErrorKind -> String -> <IO> a` は、種類と文言を指定して IO の失敗を起こす。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」、「`fail_io`」、「`exit`」)
-- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`UnboxedArray.em`、`MutUnboxedArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`、`Par.em`、`Async.em`、`Chan.em`、`Atomic.em`、`Net.em`、`Signal.em`、`Tls.em`、`Http.em`、`Stream.em`、`Exec.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import したものだけを読み込む。`import FileIn` か `import Std.FileIn` を書いたモジュールで、`FileIn.open` のように修飾付きで使う。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
+- 標準ライブラリのツリー: リポジトリの`std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`UnboxedArray.em`、`MutUnboxedArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`、`Par.em`、`Async.em`、`Chan.em`、`Atomic.em`、`Net.em`、`Signal.em`、`Tls.em`、`Http.em`、`Stream.em`、`Exec.em`、`Gui.em`) をバイナリに埋め込む。Preludeはいつも読み込み、ほかのモジュールはimportしたものだけを読み込む。`import FileIn`か`import Std.FileIn`を書いたモジュールで、`FileIn.open`のように修飾付きで使う。予約した根は`Std`である ([モジュールと名前解決](../spec/modules.md)の「標準ライブラリ」)
 - std のエフェクトと `Iter`: エフェクトのモジュール `Yield` (`for_each`、`fold`、`collect`)、`Fail` (`to_result`、`to_option`)、`State` (`run`、`eval`、`exec`) と、`once` の継続で作る引いて使うジェネレータ `Iter` とその変換。`FileIn` から1行ずつ読む `FileIn.read_line` ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」と「`FileIn`」)。`tests/ui/run/scripts/` の `grep`、`logstat`、`csv2jsonl` は std のエフェクトを使い、`csv2jsonl` の CSV の読み取りは `let … and …` の組で書く
 - 標準入出力とファイルのハンドル: 線形な型 `Stdin`、`Stdout`、`Stderr`、`FileIn.FileIn`、`FileOut.FileOut`。読むハンドルは文字列とバイト列を、全部、1行ずつ、塊ごとに読み、書くハンドルは文字列とバイト列と行を書く。`FileOut` は自分の buffer を持ち、閉じずに手放しても書き出す。標準のストリームごとに、生きているハンドルは高々1つである ([標準ライブラリ](../spec/stdlib.md) の「ハンドル」)
 - 子のプロセス: `Std.Proc` が、`Cmd` をシェルを介さずに起動する。起動の形は、標準入出力を受け継ぐ `run`、標準出力を取る `output` と `capture`、pipe でやりとりする線形な `Child` を返す `spawn` の3つである。作業ディレクトリ、環境変数、引数の追加、標準エラーの向き (`2>&1`、`2>/dev/null`)、標準入力 (文字列、ファイル、空)、標準出力のファイルへの書き出しと追記 (`> out`、`>> out`) を `Cmd` に設定できる。演算子 `.|` は `Cmd` をつないだパイプラインを作り、1回の `spawn` で段の間を OS の pipe でつないで起動する。`wait_all` はすべての段の終了コードを返す ([標準ライブラリ](../spec/stdlib.md) の「`Proc`」)
@@ -42,6 +42,7 @@
 - TCP: `Std.Net` の `listen`、`accept`、`connect`、読み書き、`read_line` が、macOS と Linux の本物の driver とテストの driver の上で動く。`connect` は名前を driver の解決のスレッドで解決する。誤りは IO の失敗で、拒まれた接続、reset、使用中の番地、時間切れを種類で分ける ([標準ライブラリ](../spec/stdlib.md) の「`Std.Net`」)。driver が受け付けの時点で終えた操作は、待たずに続ける。操作の token `OpId` はヒープの物体を持たない即値である ([標準ライブラリ](../spec/stdlib.md) の「`Std.Async`」、[VM](../spec/vm.md) の「操作の記録」)。空きのある buffer への読みは、driver の操作1つで済む。空きは `Bytes.with_capacity` で作れる。`write_bytes` は書いた `Bytes` とストリームの組を返し、共有の `Bytes` も写さずに書く
 - TLS: `Std.Tls`のクライアントが、`Std.Net`のストリームの上でhandshakeし、暗号にして読み書きする。TLSの状態はI/Oを持たないcrate `eml_tls`が持ち、ソケットのI/Oは`std/Tls.em`が`Std.Net`で行う。暗号はaws-lc-rsである。サーバーの証明書はOSの検証器で確かめ、OSの根に加えてPEMで渡したCAを信頼する。接続の設定とhandshakeの間の押し込みは、ブロックする呼び出しのプールで動く。テストのdriverの`tls.localhost`がTLSを終端する ([標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」)
 - HTTP: `Std.Http` の HTTP/1.1 のクライアントが、`Std.Net` と `Std.Tls` の上で `http` と `https` の URL に要求を出す。要求ごとに接続を開いて閉じ、本文は `Transfer-Encoding` の chunked、`Content-Length`、EOF で区切る。リダイレクトを追い、https から http へは追わない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Http`」)
+- GUI: `Std.Gui`は、handler `Gui.run`の下で直接の形でネイティブのウィンドウを組み、ハンドルを通してウィジェットを変え、`Gui.wait`でメッセージを取り出す。ウィジェットはWindow、Grid、Label、Button、TextField、CheckBox、Choice、ProgressBarで、Taffyのgridが自動で置く。`eml run`はネイティブのループをメインのworkerの`Park`の中で回す。ネイティブのbackendは、macOSではAppKit、LinuxではQt 6、Windows 11ではWindows App SDK 2のWinUI 3で、feature `gui-native`で組む。既定のビルドは画面を開かないstubのbackendだけを持ち、`--gui stub`もそれを選ぶ。固定したタスクは、`Async.start_off_main`と`Async.spawn_off_main`でエフェクトを持つ仕事をメインのworkerの外で始める ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」、[VM](../spec/vm.md)の「GUIのPark」、[配布とGUIの前提](distribution.md))
 - シグナル: `Std.Signal` の `wait` で、タスクが Ctrl-C と SIGTERM を待てる。待つタスクがなければ、`eml run` は Ctrl-C で終了コード 130、SIGTERM で 143 で終わる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Signal`」)
 - ブロックの中の `var` と代入 `x <- e`、添字の読み `x[i]` と書き込み `x[i] <- e`、Prelude の `for` と `while` ([式](../spec/expressions.md) の「`var`」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」)
 - 線形性、持ち越し規則、網羅性の検査。`fail` や `exit` のような戻らない呼び出しで終わる経路では、消費しない `Lin` の値を手放さなくてよい ([線形性](../spec/linearity.md) の「暗黙の後始末」)
@@ -59,6 +60,7 @@
 - コマンドの組み合わせ: `Proc` で標準エラーを別の文字列に取ること、環境変数の削除 ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - 可変参照 `Ref`、再エクスポート (`pub import`)、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、関数をまたぐ reuse、LSP、フォーマッタ ([ロードマップ](../future/roadmap.md) の「その後の項目」)
 - 借用パラメータ、ネイティブ化 ([ロードマップ](../future/roadmap.md) の「段の列」)
+- GUIのウィジェットの追加、ダイアログ、メニュー、gridの明示の置き方、宣言的な層 ([ロードマップ](../future/roadmap.md)の「GUI」)
 
 ## 既知の制限
 
@@ -182,7 +184,18 @@
 - 仮想の時計の時間は、メインのworkerを含むすべてのworkerが眠っている間だけ進む。動いている固定したタスクは、ほかの動いているタスクと同じく時計とデッドロックの判定を止める。本物の時計で待つのは判定だけである ([VM](../spec/vm.md)の「時計と driver」)
 - メインのworkerの同期の読みには`EINTR`が届かない ([VM](../spec/vm.md)の「上限と割り込み」)
 - メインのworkerは中継したシグナルを届けない。runの全体の務めで、mailから取り出すのはworker 0..N-1である。`--workers 1`では、待つタスクが固定したものかによらず、シグナルが届くのはworker 0が集める地点に着いたときだけである。`main`がその場の読みで止まっている間に来た2回目のシグナルでは、ハンドラがその規則でその場でプログラムを終わらせる (`_exit(130)`、`_exit(143)`。[VM](../spec/vm.md)の「メインのworker」、[標準ライブラリ](../spec/stdlib.md)の「`Std.Signal`」)
-- `Park`は`DefaultPark`しかない。替える`Park`もメインのworkerのI/Oのdriverで待たなければならず、それには`Pending::io()`が要るが、まだない。それまでは、`default_wait`を使わずに待つ`Park`の下では固定したタスクのI/Oは終わらない ([VM](../spec/vm.md)の「メインのworkerの待ち」)
+- `eml run`はGUIの`Park`を置き、それはプログラムがGUIを求めるまで`DefaultPark`と同じに動く。ライブラリのAPIから渡す、替える`Park`の下で固定したタスクのI/Oが終わるのは、`Park`が`default_wait`で待つか、`Pending::io()`の源 (unix) か10 msの上限 (Windows) で待って自分で`run`を呼ぶときである ([VM](../spec/vm.md)の「メインのworkerの待ち」)
+
+### GUI
+
+- ネイティブのbackendの画面は、3つのOSのどれでもまだ手で確かめていない。CIはネイティブのbackendを組んでつなぐが、テストはどれもstubで流す ([テスト戦略](testing.md)の「GUIの手での確認」)
+- WinUIのbackendは、Windows App SDKのruntimeを入れたWindowsで動かしたことがない。CIのrunnerにはruntimeがない。そのため、bootstrapが入れてある2.6.4以降のruntimeを見つけるかは確かめていない ([配布とGUIの前提](distribution.md)の「Windows App SDKのruntime」)
+- WinUIの`Application`を作れなかったときに、`EnqueueEventLoopExit`で`Application::Start`を戻す道は試していない
+- `eml run`の外のプロセスで、ネイティブのGUIをrunをまたいで開くこと (`Machine`のAPIのhost) は試していない。WinUIのbackendは、Rustのruntimeが`main`と名づけたスレッドでだけ開く。AppKitとQtのbackendは、プロセスの最初のスレッドで開く ([コンパイラの構成](architecture.md)の「`eml_gui`の内部」)
+- ウィンドウのネイティブの最小の大きさは初めて表示するときに決め、後で中身が増えても変えない
+- 拡張の継ぎ目はcfgのfeatureで、`Plugin`のtraitはない ([FFI と拡張の設計](../future/ffi.md)の「拡張」)
+- `eml repl`ではGUIを開けず、`Gui.run`は`NotAvailable`で失敗する ([ロードマップ](../future/roadmap.md)の「REPL」)
+- GUIのタスクが待つタスク (`await`するタスクや、`app`の中の`Async.run`の本体) から満ちたchannelへの`Gui.post`は、いつまでも待つ。GUIが開いている間はrunの外の待ちの印が立つので、デッドロックとしても報告しない ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)
 
 ### 子のプロセス
 

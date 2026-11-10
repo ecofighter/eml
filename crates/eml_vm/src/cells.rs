@@ -338,6 +338,21 @@ enum CellKind {
     Chan(ChanCell),
     Op(OpRecord),
     Job(JobCell),
+    #[cfg_attr(
+        not(feature = "gui"),
+        allow(
+            dead_code,
+            reason = "only the GUI arms open a gate (docs/spec/vm.md 「セルと登録表」)"
+        )
+    )]
+    Gate(GateCell),
+}
+
+/// GUIのゲートのセル (docs/spec/vm.mdの「セルと登録表」)。待つタスクがいないときの知らせは旗に残し、次の待ちはすぐに
+/// 戻る。待つタスクは高々1つである。
+struct GateCell {
+    flag: bool,
+    waiter: Option<CellRef>,
 }
 
 /// `compute`の仕事のセル (docs/spec/vm.mdの「セルと登録表」)。受け箱の番号を持たないので、仕事を動かすworkerが
@@ -1773,27 +1788,39 @@ impl Registry {
     fn task_mut(&mut self, cell: CellRef) -> Result<&mut TaskCell, CellFault> {
         match self.cell_mut(cell)? {
             CellKind::Task(task) => Ok(task),
-            CellKind::Scope(_) | CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => Err(
-                CellFault::Internal("a task cell reference names another kind of cell"),
-            ),
+            CellKind::Scope(_)
+            | CellKind::Chan(_)
+            | CellKind::Op(_)
+            | CellKind::Job(_)
+            | CellKind::Gate(_) => Err(CellFault::Internal(
+                "a task cell reference names another kind of cell",
+            )),
         }
     }
 
     fn scope_mut(&mut self, cell: CellRef) -> Result<&mut ScopeCell, CellFault> {
         match self.cell_mut(cell)? {
             CellKind::Scope(scope) => Ok(scope),
-            CellKind::Task(_) | CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => Err(
-                CellFault::Internal("a scope cell reference names another kind of cell"),
-            ),
+            CellKind::Task(_)
+            | CellKind::Chan(_)
+            | CellKind::Op(_)
+            | CellKind::Job(_)
+            | CellKind::Gate(_) => Err(CellFault::Internal(
+                "a scope cell reference names another kind of cell",
+            )),
         }
     }
 
     fn job_mut(&mut self, cell: CellRef) -> Result<&mut JobCell, CellFault> {
         match self.cell_mut(cell)? {
             CellKind::Job(job) => Ok(job),
-            CellKind::Task(_) | CellKind::Scope(_) | CellKind::Chan(_) | CellKind::Op(_) => Err(
-                CellFault::Internal("a job cell reference names another kind of cell"),
-            ),
+            CellKind::Task(_)
+            | CellKind::Scope(_)
+            | CellKind::Chan(_)
+            | CellKind::Op(_)
+            | CellKind::Gate(_) => Err(CellFault::Internal(
+                "a job cell reference names another kind of cell",
+            )),
         }
     }
 
@@ -2133,13 +2160,15 @@ impl Registry {
         k: Word,
     ) -> Result<Option<Runnable>, CellFault> {
         let target = CellRef::decode(c);
-        if let CellKind::Job(_) = self.cell_mut(target)? {
-            return self.park_job(target, me, k);
+        match self.cell_mut(target)? {
+            CellKind::Job(_) => return self.park_job(target, me, k),
+            CellKind::Gate(_) => return self.park_gate(target, me, k),
+            CellKind::Task(_) | CellKind::Scope(_) | CellKind::Chan(_) | CellKind::Op(_) => {}
         }
         let done = match self.cell_mut(target)? {
             CellKind::Task(task) => matches!(task.phase, Phase::Finished),
             CellKind::Scope(scope) => scope.closed,
-            CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => {
+            CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) | CellKind::Gate(_) => {
                 return Err(CellFault::Internal("a cell of the wrong kind"));
             }
         };
@@ -2168,7 +2197,7 @@ impl Registry {
         let waiters = match self.cell_mut(target)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
-            CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => {
+            CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) | CellKind::Gate(_) => {
                 return Err(CellFault::Internal("a cell of the wrong kind"));
             }
         };
@@ -2405,7 +2434,7 @@ impl Registry {
         let waiters = match self.cell_mut(cell)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
-            CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) => {
+            CellKind::Chan(_) | CellKind::Op(_) | CellKind::Job(_) | CellKind::Gate(_) => {
                 return Err(CellFault::Internal("a cell of the wrong kind"));
             }
         };
@@ -2853,12 +2882,14 @@ impl Registry {
             Some(Wait::Time(key)) => {
                 self.parts[owner as usize].timers.remove(&key);
             }
-            Some(Wait::Cell(c)) => {
-                if let Some(chan) = self.chan_mut(c) {
+            Some(Wait::Cell(c)) => match self.live(c) {
+                Some(CellKind::Chan(chan)) => {
                     chan.senders.retain(|&t| t != cell);
                     chan.receivers.retain(|&t| t != cell);
                 }
-            }
+                Some(CellKind::Gate(gate)) if gate.waiter == Some(cell) => gate.waiter = None,
+                _ => {}
+            },
             Some(Wait::Signal(index)) => self.signal_waiters[index].retain(|&t| t != cell),
             Some(Wait::Ready | Wait::Io(_) | Wait::Job(_)) | None => {}
         }
@@ -2930,6 +2961,7 @@ impl Registry {
                 Some(CellKind::Scope(_)) => self.release(cell.index),
                 Some(CellKind::Chan(_)) => self.free_chan(cell, discards)?,
                 Some(CellKind::Job(_)) => self.free_job(cell, discards)?,
+                Some(CellKind::Gate(_)) => self.release(cell.index),
                 Some(CellKind::Op(_)) | None => {}
             }
         }
@@ -2954,6 +2986,103 @@ impl Registry {
         discards.retire(worker);
         self.release(cell.index);
         Ok(())
+    }
+}
+
+/// GUIのゲートのセル (docs/spec/vm.mdの「セルと登録表」)。GUIの腕が開き、`poke_raw`の行とメインのworkerの`Park`が
+/// 知らせ、GUIを閉じた`Park`か、開く前に諦めたタスクが放す。
+impl Registry {
+    #[cfg_attr(
+        not(feature = "gui"),
+        allow(
+            dead_code,
+            reason = "only the GUI arms open a gate (docs/spec/vm.md 「セルと登録表」)"
+        )
+    )]
+    pub(crate) fn open_gate(&mut self) -> CellRef {
+        self.alloc(CellKind::Gate(GateCell {
+            flag: false,
+            waiter: None,
+        }))
+    }
+
+    /// ゲート`c`に知らせる。待つタスクがいれば`Woke`で起こし、いなければ旗を立てる。もう放したゲートと古い番号には
+    /// 何もしない。runの後に残る`Sink`の値が知らせうるからである。
+    pub(crate) fn poke_gate(&mut self, c: i64, out: &mut Vec<Woken>) -> Result<(), CellFault> {
+        let gate = match self.live(CellRef::decode(c)) {
+            None => return Ok(()),
+            Some(CellKind::Gate(gate)) => gate,
+            Some(_) => {
+                return Err(CellFault::Internal(
+                    "a gate reference names another kind of cell",
+                ));
+            }
+        };
+        match gate.waiter.take() {
+            Some(t) => out.extend(self.wake_cell(t, WOKE, None)?),
+            None => gate.flag = true,
+        }
+        Ok(())
+    }
+
+    /// ゲート`c`を放す。もう放したゲートには何もしない。待つタスクがいれば内部の誤りである。
+    pub(crate) fn release_gate(&mut self, c: i64) -> Result<(), CellFault> {
+        let target = CellRef::decode(c);
+        match self.live(target) {
+            None => Ok(()),
+            Some(CellKind::Gate(gate)) if gate.waiter.is_some() => Err(CellFault::Internal(
+                "a gate is released while a task waits on it",
+            )),
+            Some(CellKind::Gate(_)) => {
+                self.release(target.index);
+                Ok(())
+            }
+            Some(_) => Err(CellFault::Internal(
+                "a gate reference names another kind of cell",
+            )),
+        }
+    }
+
+    /// `park`のゲートの枝。取り消しの地点を旗より先に見る。旗が立っていれば下ろしてすぐ再開の項を返し、立っていなければ
+    /// ただ1つの待ち手になる。
+    fn park_gate(
+        &mut self,
+        target: CellRef,
+        me: CellRef,
+        k: Word,
+    ) -> Result<Option<Runnable>, CellFault> {
+        let worker = self.suspend(me)?;
+        self.stats.parks += 1;
+        if self.point(me)? {
+            self.stats.cancels += 1;
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                worker,
+                k,
+                wake: CANCELLED,
+            }));
+        }
+        let Some(CellKind::Gate(gate)) = self.live(target) else {
+            return Err(CellFault::Internal(
+                "a gate reference names another kind of cell",
+            ));
+        };
+        if std::mem::take(&mut gate.flag) {
+            return Ok(Some(Runnable::Resume {
+                cell: me,
+                worker,
+                k,
+                wake: WOKE,
+            }));
+        }
+        if gate.waiter.is_some() {
+            return Err(CellFault::Internal("a second task waits on a gate"));
+        }
+        gate.waiter = Some(me);
+        let task = self.task_mut(me)?;
+        task.k = Some(k);
+        task.wait = Some(Wait::Cell(target));
+        Ok(None)
     }
 }
 
@@ -3036,9 +3165,13 @@ impl Registry {
     fn op_mut(&mut self, op: CellRef) -> Result<&mut OpRecord, CellFault> {
         match self.cell_mut(op)? {
             CellKind::Op(record) => Ok(record),
-            CellKind::Task(_) | CellKind::Scope(_) | CellKind::Chan(_) | CellKind::Job(_) => Err(
-                CellFault::Internal("an op reference names another kind of cell"),
-            ),
+            CellKind::Task(_)
+            | CellKind::Scope(_)
+            | CellKind::Chan(_)
+            | CellKind::Job(_)
+            | CellKind::Gate(_) => Err(CellFault::Internal(
+                "an op reference names another kind of cell",
+            )),
         }
     }
 
@@ -5923,6 +6056,187 @@ fn a_job_of_another_task_is_an_internal_error() {
         registry.lock().take_job(job.encode(), me),
         Err(CellFault::Internal("a job is taken before it ends"))
     ));
+}
+
+/// ゲートで待つ前の知らせは旗に残り、次の待ちはすぐに`Woke`で戻って旗を下ろす (docs/spec/vm.mdの「セルと登録表」)。
+#[test]
+fn a_poke_before_a_park_sets_the_flag() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let gate = registry.lock().open_gate().encode();
+    let mut woken = Vec::new();
+    registry.lock().poke_gate(gate, &mut woken).unwrap();
+    assert!(woken.is_empty());
+    let run = registry.lock().park(gate, me, Word::UNIT).unwrap();
+    assert!(matches!(run, Some(Runnable::Resume { cell, wake: WOKE, .. }) if cell == me));
+    let mut cells = registry.lock();
+    let Some(CellKind::Gate(g)) = cells.live(CellRef::decode(gate)) else {
+        panic!("the gate is live");
+    };
+    assert!(!g.flag && g.waiter.is_none());
+}
+
+/// 待つタスクがいれば、知らせはそのタスクを`Woke`で起こし、旗は立てない。
+#[test]
+fn a_poke_after_a_park_wakes_the_waiter() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let gate = registry.lock().open_gate().encode();
+    assert!(
+        registry
+            .lock()
+            .park(gate, me, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    let mut out = Vec::new();
+    {
+        let mut cells = registry.lock();
+        let mut woken = Vec::new();
+        cells.poke_gate(gate, &mut woken).unwrap();
+        cells.route(&mut woken, &solo(&registry), &mut out).unwrap();
+        let Some(CellKind::Gate(g)) = cells.live(CellRef::decode(gate)) else {
+            panic!("the gate is live");
+        };
+        assert!(!g.flag && g.waiter.is_none());
+    }
+    assert_eq!(resumed_cells(&out), [(me, WOKE)]);
+}
+
+/// 取り消しの地点は旗より先で、旗は次の待ちのために残る。
+#[test]
+fn the_cancellation_point_wins_over_the_flag() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let gate = registry.lock().open_gate().encode();
+    registry.lock().poke_gate(gate, &mut Vec::new()).unwrap();
+    registry.lock().task_mut(me).unwrap().cancel = true;
+    let run = registry.lock().park(gate, me, Word::UNIT).unwrap();
+    assert!(matches!(run, Some(Runnable::Resume { cell, wake: CANCELLED, .. }) if cell == me));
+    let mut cells = registry.lock();
+    let Some(CellKind::Gate(g)) = cells.live(CellRef::decode(gate)) else {
+        panic!("the gate is live");
+    };
+    assert!(g.flag);
+}
+
+/// 放したゲートで待つのは、ほかのセルと同じく内部の誤りである。放したゲートへの知らせと2回目の放しは何もしない。
+#[test]
+fn a_released_gate_ignores_pokes_and_cannot_be_waited_on() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let gate = registry.lock().open_gate().encode();
+    registry.lock().release_gate(gate).unwrap();
+    let mut woken = Vec::new();
+    registry.lock().poke_gate(gate, &mut woken).unwrap();
+    assert!(woken.is_empty());
+    registry.lock().release_gate(gate).unwrap();
+    assert!(matches!(
+        registry.lock().park(gate, me, Word::UNIT),
+        Err(CellFault::Internal("a cell reference names a freed cell"))
+    ));
+}
+
+#[test]
+fn a_second_waiter_on_a_gate_is_an_internal_error() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let first = running_task(&registry, scope);
+    let second = running_task(&registry, scope);
+    let gate = registry.lock().open_gate().encode();
+    assert!(
+        registry
+            .lock()
+            .park(gate, first, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        registry.lock().park(gate, second, Word::UNIT),
+        Err(CellFault::Internal("a second task waits on a gate"))
+    ));
+}
+
+/// 待つタスクのいるゲートを放すのは内部の誤りである。
+#[test]
+fn releasing_a_gate_with_a_waiter_is_an_internal_error() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let gate = registry.lock().open_gate().encode();
+    assert!(
+        registry
+            .lock()
+            .park(gate, me, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        registry.lock().release_gate(gate),
+        Err(CellFault::Internal(
+            "a gate is released while a task waits on it"
+        ))
+    ));
+}
+
+/// 残ったゲートは成功したrunの終わりを妨げず、`sweep_all`が放す。
+#[test]
+fn a_gate_left_at_the_end_is_swept() {
+    let mut registry = Registry::new(Vec::new(), 1);
+    let gate = registry.open_gate();
+    assert!(!registry.left_at_end());
+    registry.sweep_all(&mut Discards::default()).unwrap();
+    assert!(registry.live(gate).is_none());
+}
+
+/// 取り消しでゲートの待ちを外すと、待ち手も外れ、後の知らせは旗に残る。
+#[test]
+fn unparking_a_gate_waiter_clears_the_waiter() {
+    let registry = Shared::new(Registry::new(Vec::new(), 1));
+    let scope = registry.lock().open_root(None, None).unwrap();
+    let me = running_task(&registry, scope);
+    let gate = registry.lock().open_gate().encode();
+    assert!(
+        registry
+            .lock()
+            .park(gate, me, Word::UNIT)
+            .unwrap()
+            .is_none()
+    );
+    registry.lock().task_mut(me).unwrap().cancel = true;
+    let mut out = Vec::new();
+    unpark(&registry, &mut NoDriver::default(), me, &mut out);
+    assert_eq!(resumed_cells(&out), [(me, CANCELLED)]);
+    let mut woken = Vec::new();
+    let mut cells = registry.lock();
+    cells.poke_gate(gate, &mut woken).unwrap();
+    assert!(woken.is_empty());
+    let Some(CellKind::Gate(g)) = cells.live(CellRef::decode(gate)) else {
+        panic!("the gate is live");
+    };
+    assert!(g.flag && g.waiter.is_none());
+    cells.release_gate(gate).unwrap();
+}
+
+/// 古い番号への知らせは、同じ添字を使い回した新しいゲートに届かない。
+#[test]
+fn a_stale_poke_does_nothing() {
+    let mut registry = Registry::new(Vec::new(), 1);
+    let old = registry.open_gate().encode();
+    registry.release_gate(old).unwrap();
+    let new = registry.open_gate();
+    assert_eq!(new.index, CellRef::decode(old).index);
+    let mut woken = Vec::new();
+    registry.poke_gate(old, &mut woken).unwrap();
+    assert!(woken.is_empty());
+    let Some(CellKind::Gate(g)) = registry.live(new) else {
+        panic!("the gate is live");
+    };
+    assert!(!g.flag);
 }
 
 #[test]

@@ -20,6 +20,15 @@ pub enum Progress {
     Busy,
 }
 
+/// メインのworkerのdriverが待つOSの源。自分のループで待つ`Park`はこれをそのループの源に加え、読めるようになったら
+/// `Pending::run`を呼ぶ (docs/spec/vm.mdの「メインのworkerの待ち」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PollSource {
+    /// epollかkqueueのfd。読めるようになったら、driverに取る完了か起こしがある。
+    #[cfg(unix)]
+    Fd(std::os::fd::RawFd),
+}
+
 /// メインのworkerを待つ仕事。`Park`は`Park::wait`でこれを受け取る。
 pub trait Pending {
     /// 走れるものがなくなるまでメインのworkerのタスクを動かし、メインのworkerをまた眠らせる。動かすのは眠った待ちの
@@ -37,6 +46,14 @@ pub trait Pending {
     /// そのため、`Park`はタスクを動かさせる前、つまり`run`を呼ぶ前か`wait`から戻る前に`set_holds(true)`を立て、
     /// 何も始まらなければ後で下ろす。下ろせばworker 0を起こすので、先に立てても害はない。
     fn set_holds(&mut self, holds: bool);
+    /// メインのworkerのdriverが待つOSの源。仮想の時計、Windows、driverを作る前は`None`である。fdはdriverのもので
+    /// ある。`Park`がそれを見張るのは1回の`wait`の間だけで、`wait`から戻る前に見張りをやめ、閉じることはない。
+    fn io(&self) -> Option<PollSource>;
+    /// `Std.Gui.poke_raw`と同じく、ゲートの旗を立てるか、待つタスクを起こす。もう放したゲートには何もしない
+    /// (docs/spec/vm.mdの「GUIのPark」)。
+    fn poke(&mut self, gate: i64);
+    /// GUIを閉じたrunのゲートを登録表から外す。待つタスクがいれば内部の誤りで、runは止まる。
+    fn release_gate(&mut self, gate: i64);
 }
 
 /// メインのworkerの眠る道。`Machine`を持つスレッドで作り、そのスレッドから動かない。
@@ -46,7 +63,11 @@ pub trait Park {
     /// 変わらずに戻る`Park`はすぐにまた呼ばれるので、メインのスレッドを回し続ける。メインのworkerの期限を過ぎて
     /// 戻れば、`run`を呼んでいなくてもメインのworkerは起きてタイマーを拾う。`Park`が積まれた仕事、期限の来た
     /// タイマー、止めることを残して戻れば、メインのworkerは次の`wait`の前に、`run`と同じ規則で`Park`の代わりに
-    /// その仕事を動かす。そのため、戻ることもタスクを動かさせることになる (`Pending::set_holds`)。
+    /// その仕事を動かす。そのため、戻ることもタスクを動かさせることになる (`Pending::set_holds`)。ただし、メインの
+    /// workerのdriverの完了はこれに含まない。`Pending::io`と`timeout`の10 msの上限は、自分で`run`を呼ぶ`Park`の
+    /// ためにある。その`Park`は源で待ち、源が読めるようになるか`timeout`が過ぎたら`run`を呼ぶ。戻るだけの`Park`の
+    /// 下では、メインのworkerが自分のI/Oを拾うのは、欄が鳴ったときか自分の期限を過ぎたときだけである
+    /// (docs/spec/vm.mdの「メインのworkerの待ち」)。
     fn wait(&mut self, timeout: Option<Duration>, pending: &mut dyn Pending)
     -> std::io::Result<()>;
     /// 待ちを終わらせるwaker。メインのworkerを起こすたびに鳴らす。`Pending::default_wait`だけで待つ`Park`では
