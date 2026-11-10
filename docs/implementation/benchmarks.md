@@ -83,6 +83,7 @@
 - `var_matches_hand_written_work`: `var` で書いたプログラムと手書きのプログラムの2つの組で、`var` のプログラムの `evidence_steps` と `yields` が0で、確保の数の差が表 `RESIDUAL` の値に等しい
 - `nbody_allocates_25_per_step`、`mandelbrot_does_not_allocate_complex`、`spectral_norm_does_not_box_elements`: 構造体の表現で消える確保と残る確保の数、生の要素の配列が要素の箱を作らないこと (下の「配列に書く構造体の箱」と「配列の `Float` の要素の箱」)
 - `unwind_points`: `bench/` と `tests/ui/run/scripts/` のプログラムの巻き戻しの表の行の数を固定する
+- `owned_variants`: `bench/`と`tests/ui/run/scripts/`のプログラムごとに、`$owned`の写しの名前と全体の数を固定する。写しは、借用パラメータを持つ関数を値として参照するときと末尾で呼ぶときに作られるので、この一覧がコードの増え方の尺度になる
 - `trade_offs`: 呼び出しの規約と構造体の表現の引き換えの形の回数を固定する (下の「呼び出しの規約の引き換え」と「構造体の表現の引き換え」)
 
 回数を変える変更は、期待値の変更として段の設計 (`docs/plans/`) に書く ([テスト戦略](testing.md) の「テストの変更の運用」)。

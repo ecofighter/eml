@@ -1670,6 +1670,92 @@ fn unwind_points() {
     ");
 }
 
+/// `$owned`の写しの名前。写しは借用パラメータを持つ関数の値参照と末尾呼びのために作られる
+/// (docs/spec/lir.mdの「関数の ABI」)。
+fn owned_names(program: &eml_lir::Program) -> Vec<&str> {
+    let mut names: Vec<&str> = program
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .filter(|name| name.ends_with("$owned"))
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// `$owned`の写しの一覧。写しはプログラムのコードを増やすので、一覧がその増え方の尺度になる。
+#[test]
+fn owned_variants() {
+    let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui/run/scripts");
+    let mut lines = Vec::new();
+    let mut total = 0;
+    let mut push = |name: String, program: &eml_lir::Program| {
+        let names = owned_names(program);
+        total += names.len();
+        let listed: String = names.iter().map(|owned| format!(" {owned}")).collect();
+        lines.push(format!("{name}:{listed}"));
+    };
+    for name in PROGRAMS {
+        let text = std::fs::read_to_string(bench_dir().join(format!("{name}.em"))).unwrap();
+        push(name.to_string(), &lir(&text));
+    }
+    for name in ["wc", "grep", "logstat", "csv2jsonl", "deploy"] {
+        let text = std::fs::read_to_string(scripts.join(name).join("main.em")).unwrap();
+        push(format!("scripts/{name}"), &lir(with_modules(&text, &[])));
+    }
+    lines.push(format!("total: {total}"));
+    insta::assert_snapshot!(lines.join("\n"), @"
+    apply_float:
+    apply_int:
+    byte_loop:
+    bytes_loop:
+    char_loop:
+    empty:
+    ep_float:
+    fannkuch_by_hand:
+    fannkuch_var:
+    fib:
+    fold_state:
+    iter_generate:
+    iter_pipeline:
+    iter_pipeline_by_hand:
+    list:
+    loop:
+    mandelbrot:
+    nbody:
+    orders:
+    orders_by_hand:
+    par_tree:
+    push_fold:
+    push_fold_by_hand:
+    rbtree:
+    records:
+    records_wide:
+    sieve_by_hand:
+    sieve_var:
+    spectral_norm:
+    state:
+    state_loop:
+    state_loop_by_hand:
+    state_nested:
+    std_list:
+    std_map:
+    sum_loop:
+    tree:
+    tree_by_hand:
+    tree_map:
+    upsert:
+    upsert_by_hand:
+    words_loop:
+    scripts/wc:
+    scripts/grep:
+    scripts/logstat:
+    scripts/csv2jsonl: convert$handle0$yield@#22031fe5edd465bb$owned convert$handle0$yield@#315c772923134341$owned rows$let$after_quote@#e184ce0ea59753f6$h0$owned rows$let$after_quote@#e184ce0ea59753f6$owned rows$let$field@#fb526ad2d9943e53$h0$owned rows$let$field@#fb526ad2d9943e53$hj13$owned rows$let$field@#fb526ad2d9943e53$owned rows$let$in_quotes@#a330da13ffd556f8$owned rows$let$row_start@#74a7b3a5e5e7a0fe$owned
+    scripts/deploy:
+    total: 9
+    ");
+}
+
 /// 呼び出しの規約と構造体の表現の引き換え (docs/implementation/benchmarks.md の「呼び出しの規約の引き換え」と「構造体の表現の引き換え」)。特殊化されない `List.map` が呼ぶ関数の値は結果が一様なので、
 /// 受けた `Float` をそのまま返すラムダの変種が、要素ごとに結果の `Float` の箱を1つ作る。組を入れ替える関数の値を渡すと、ラムダが要素の組を箱から
 /// 取り出して入れ替え、新しい箱に入れて返す。その回数を固定して記録する。特殊化される組の入れ替えと、RC の葉を3つ持つ組を展開しない関数に通す形も
