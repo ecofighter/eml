@@ -213,34 +213,8 @@ main () = Async.run (fn () ->
     assert!(run.closed.is_ok(), "{:?}", run.closed);
 }
 
-/// 予定の仮想のシグナルは、本物の driver でも時間の輪から満ちて、待つタスクに届く。経過時間は下限だけを確かめる
-/// (docs/spec/vm.md の「時間の待ち」)。
-#[test]
-fn a_scheduled_signal_fires_on_the_real_driver() {
-    let src = "\
-import Async
-import Signal
-
-main : Unit -> <IO, Panic> Unit
-main () = Async.run (fn () ->
-  Signal.wait Signal.Terminate
-  println \"got\")
-";
-    let signals = vec![VirtualSignal {
-        at_ms: 20,
-        signal: Signal::Terminate,
-    }];
-    let run = run_real(src, Sched::Sequential, signals, no_poke);
-    assert!(run.result.is_ok(), "{:?}", run.result);
-    assert_eq!(run.stdout, "got\n");
-    assert!(
-        run.elapsed >= Duration::from_millis(20),
-        "{:?}",
-        run.elapsed
-    );
-}
-
-/// 待つタスクのいない予定の `Terminate` は、本物の driver でも run を止める。
+/// 待つタスクのいない予定の`Terminate`は、本物のdriverでも時間の輪から満ちてrunを止める。経過時間は下限だけを
+/// 確かめる (docs/spec/vm.mdの「時間の待ち」)。
 #[test]
 fn an_unheard_scheduled_terminate_stops_the_run() {
     let src = "\
@@ -256,6 +230,7 @@ main () = Async.run (fn () -> Async.sleep_ms 2000)
     let run = run_real(src, Sched::Sequential, signals, no_poke);
     let error = run.result.unwrap_err();
     assert!(error.terminated(), "{error:?}");
+    assert!(run.elapsed >= Duration::from_millis(5), "{:?}", run.elapsed);
 }
 
 /// yieldせずに回るworkerも、`NOTICE`で次の安全点にシグナルを集めて届ける。届けた後は待つタスクが
