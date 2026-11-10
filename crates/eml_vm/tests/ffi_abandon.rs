@@ -14,7 +14,7 @@ use eml_lir::Program;
 use eml_rt::{Checked, Control, Limits};
 use eml_vm::{Capture, Clock, Linked, Machine, RunConfig, RuntimeError, capture_host};
 
-use crate::common::c::{calls, dtors, linked, rs_frees, rs_gate_open, rs_gate_wait};
+use crate::common::c::{calls, dtors, linked, published, rs_frees, rs_gate_open, rs_gate_wait};
 
 /// 静止が仕事を待つ長さ。1 秒の既定より短くし、テストを速く終える。
 const BUDGET: Duration = Duration::from_millis(20);
@@ -314,4 +314,117 @@ fn execute_keeps_the_exit_code_of_a_run_that_abandoned_a_job() {
     rs_gate_open(100047);
     let finished = result.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(finished.exit, Some(3));
+}
+
+/// 大きい`MutUnboxedArray`を`fill_gated`に渡すタスクと、Cが鍵`gate`を開けたら`exit 3`を呼ぶタスク。
+fn exits_during_a_large_fill(gate: i64) -> String {
+    format!(
+        "import MutUnboxedArray
+{HEAD}
+extern \"C\" blocking symbol \"rs_fill_gated\" fill_gated : MutUnboxedArray Int -> Int -> Int -> <IO, Async> (Unit, MutUnboxedArray Int)
+
+fill : Unit -> <IO, Panic, Async> Unit
+fill () =
+  let m = MutUnboxedArray.make 10000 0
+  let ((), m) = fill_gated m 10000 {gate}
+  drop m
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let x = Async.start fill
+  let y = Async.start (fn () ->
+    let _ = gate_wait {gate}
+    (exit 3 : Unit))
+  Async.await x
+  Async.await y
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    )
+}
+
+/// 見捨てた呼び出しに貸した大きい配列のページは、runの後に回復と`close`がヒープを放しても取り置かれ、Cはその
+/// ページに書く。AddressSanitizerが書きを確かめる (docs/spec/object-model.mdの「ページの留め」)。
+fn a_large_array_keeps_its_page(workers: usize, gate: i64) {
+    let program = eml_test_support::lir(&exits_during_a_large_fill(gate));
+    let (mut machine, _) = machine(workers);
+    let loaded = machine.load(&program, &linked_all(&program)).unwrap();
+    let finished = machine.run(loaded.entry);
+    let closed = machine.close();
+    // 鍵を開けるとCが戻って留めを落とすので、取り置きはその前に見る
+    let parked = published(gate).map(|at| eml_rt::PagePin::parked(at as usize));
+    rs_gate_open(gate + 1);
+    let written = rs_gate_wait(gate + 2);
+    let finished = finished.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(finished.exit, Some(3));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(parked, Some(true), "the lent page was not parked");
+    assert_eq!(written, 0, "C did not write the array");
+}
+
+#[test]
+fn a_large_array_lent_to_an_abandoned_call_keeps_its_page() {
+    a_large_array_keeps_its_page(1, 100150);
+}
+
+/// 貸すタスクはworker 1に置かれ、配列はworker 1のヒープにある。
+#[test]
+fn a_large_array_lent_on_worker_one_keeps_its_page() {
+    a_large_array_keeps_its_page(2, 100153);
+}
+
+/// 割り込みで止めたrunが見捨てた呼び出しに貸した大きい文字列は、回復と次のrunの後も取り置かれ、Cはそれから
+/// 読む。読んだバイトの和は元の文字列のものである。
+#[test]
+fn a_large_string_lent_to_an_abandoned_call_is_read_after_recovery() {
+    let src = format!(
+        "{HEAD}
+extern \"C\" blocking symbol \"rs_sum_gated\" sum_gated : String -> Int -> Int -> <IO, Async> Unit
+
+grow : Int -> String -> <Panic> String
+grow k s = if k == 0 then s else grow (k - 1) (s ++ s)
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> sum_gated (grow 10 \"ab\") 2048 100156)
+"
+    );
+    let program = eml_test_support::lir(&src);
+    let (mut machine, control, out) = capturing_machine(1);
+    let loaded = machine.load(&program, &linked_all(&program)).unwrap();
+    let interrupter = interrupt_after(100156, &control);
+    let first = machine.run(loaded.entry);
+    interrupter.join().unwrap();
+    control.clear();
+    // 名前が同じなら同じコードでなければならないので、`entry$main`を持たない手書きのLIRにする
+    let program2 = crate::common::parse(
+        "\
+fn main() -> unit {
+  let s.0: obj = const \"again\"
+  let u.1: unit = extern Prelude.println(s.0)
+  return u.1
+}
+",
+    );
+    let second = machine
+        .load(&program2, &Linked::default())
+        .map_err(|error| format!("{error:?}"))
+        .and_then(|loaded| machine.run(loaded.entry).map_err(|error| error.to_string()));
+    // 鍵を開けるとCが戻って留めを落とすので、取り置きはその前に見る
+    let parked = published(100156).map(|at| eml_rt::PagePin::parked(at as usize));
+    rs_gate_open(100157);
+    let read = rs_gate_wait(100158);
+    let closed = machine.close();
+    let error = first.unwrap_err();
+    assert!(error.interrupted(), "{error:?}");
+    assert!(
+        !matches!(error, RuntimeError::Unrecovered { .. }),
+        "{error:?}"
+    );
+    second.unwrap_or_else(|error| panic!("{error}"));
+    closed.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out.contents(), "again\n");
+    assert_eq!(parked, Some(true), "the lent page was not parked");
+    assert_eq!(read, 0, "C did not read the string");
+    assert_eq!(published(100158), Some(199_680));
 }

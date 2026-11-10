@@ -17,7 +17,9 @@ use eml_vm::{
     capture_host, disassemble,
 };
 
-use crate::common::c::{ADD_I32_CALLS, calls, dtors, linked, rs_frees, rs_gate_open, rs_gate_wait};
+use crate::common::c::{
+    ADD_I32_CALLS, calls, dtors, linked, published, rs_frees, rs_gate_open, rs_gate_wait,
+};
 use crate::common::parse;
 
 fn linked_all(program: &Program) -> Linked {
@@ -939,4 +941,230 @@ main () = Async.run body
     );
     assert_eq!(run_real(&src, 1).0, "Cancelled: task was cancelled\n");
     assert_eq!(rs_gate_wait(100015), 0, "C did not write the copy");
+}
+
+/// 本物の時計で`workers`個のworkerを使い、検査モード、次に速いモードで流す。どちらも通って同じ出力になることを
+/// 確かめ、その出力を返す。
+fn run_real_both(src: &str, workers: usize) -> String {
+    let program = eml_test_support::lir(src);
+    let outputs: Vec<String> = [true, false]
+        .into_iter()
+        .map(|debug_heap| {
+            let config = RunConfig::default()
+                .with_debug_heap(debug_heap)
+                .with_control(Arc::new(Control::new(Limits {
+                    workers,
+                    ..Limits::default()
+                })))
+                .with_clock(Clock::Real)
+                .with_job_budget(Duration::from_millis(20));
+            let (host, out) = capture_host(Default::default());
+            eml_vm::execute(&program, &linked_all(&program), &config, host)
+                .unwrap_or_else(|error| panic!("debug_heap {debug_heap}: {error}"));
+            out.contents()
+        })
+        .collect();
+    assert_eq!(
+        outputs[0], outputs[1],
+        "the fast mode printed something else"
+    );
+    outputs[0].clone()
+}
+
+/// 同じ配列を同期の呼び出しと`blocking`の呼び出しに渡し、Cが受けた位置が同じかを出す。
+fn same_position(elements: usize) -> String {
+    format!(
+        "import Async (Async)
+import Async
+import MutUnboxedArray
+import UnboxedArray
+
+extern \"C\" pure symbol \"rs_ptr\" at : UnboxedArray Int -> Int
+extern \"C\" blocking symbol \"rs_ptr\" at_blocking : UnboxedArray Int -> <IO, Async> Int
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let a = MutUnboxedArray.freeze (MutUnboxedArray.make {elements} 0)
+  let p = at a
+  println (show (p == at_blocking a)))
+"
+    )
+}
+
+/// 大きい物体のページにある配列は、写さずにその位置を貸す (docs/spec/vm.mdの「`blocking` の呼び出し」)。
+#[test]
+fn a_blocking_call_receives_a_large_array_itself() {
+    let src = same_position(10_000);
+    assert_eq!(run_both(&src), "True\n");
+    assert_eq!(run_real_both(&src, 1), "True\n");
+}
+
+/// 小さい物体のページにある配列は、写しを渡す (docs/spec/vm.mdの「`blocking` の呼び出し」)。
+#[test]
+fn a_blocking_call_receives_a_copy_of_a_small_array() {
+    let src = same_position(3);
+    assert_eq!(run_both(&src), "False\n");
+    assert_eq!(run_real_both(&src, 1), "False\n");
+}
+
+/// プールのスレッドでCが貸した大きい配列に書いた値は、取り出しの後に呼び手が読む同じ配列にある。
+#[test]
+fn a_blocking_call_fills_a_large_array_on_the_pool() {
+    let src = "\
+import Async (Async)
+import Async
+import MutUnboxedArray
+
+extern \"C\" blocking symbol \"rs_fill\" fill : MutUnboxedArray Float -> Int -> Float -> <IO, Async> (Unit, MutUnboxedArray Float)
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let m = MutUnboxedArray.make 10000 0.0
+  let ((), m) = fill m 10000 1.5
+  let (x, m) = MutUnboxedArray.read m 0
+  let (y, m) = MutUnboxedArray.read m 9999
+  drop m
+  println \"\\{show x} \\{show y}\")
+";
+    assert_eq!(run_real_both(src, 1), "0.0 14998.5\n");
+}
+
+/// Cに貸した大きい配列のページを留めている間に、同じworkerのほかのタスクが文字列と配列を確保して落とし、それから
+/// Cに書かせる。Cが書いた値は、取り出しの後に呼び手が読む同じ配列にあり、検査モードの終わりの検査も通る。
+#[test]
+fn another_task_allocates_while_a_blocking_call_writes_a_large_array() {
+    let src = format!(
+        "import MutUnboxedArray
+import String
+import UnboxedArray
+{GATE}
+extern \"C\" blocking symbol \"rs_fill_gated\" fill_gated : MutUnboxedArray Int -> Int -> Int -> <IO, Async> (Unit, MutUnboxedArray Int)
+
+fill : Unit -> <IO, Panic, Async> (Int, Int)
+fill () =
+  let m = MutUnboxedArray.make 10000 0
+  let ((), m) = fill_gated m 10000 100130
+  let (x, m) = MutUnboxedArray.read m 0
+  let (y, m) = MutUnboxedArray.read m 9999
+  drop m
+  (x, y)
+
+churn : Int -> Int -> <Panic> Int
+churn k acc =
+  if k == 0 then acc
+  else
+    let s = show k ++ \"!\"
+    let a = MutUnboxedArray.freeze (MutUnboxedArray.make 300 k)
+    churn (k - 1) (acc + String.byte_length s + UnboxedArray.length a)
+
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let a = Async.start fill
+  let b = Async.start (fn () ->
+    let _ = gate_wait 100130
+    let n = churn 200 0
+    gate_open 100131
+    n)
+  let n = Async.await b
+  let (x, y) = Async.await a
+  println \"\\{{show n}} \\{{show x}} \\{{show y}}\"
+  let _ = gate_wait 100132
+  ()
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    );
+    assert_eq!(run_real_both(&src, 1), "60692 1 10000\n");
+}
+
+/// 文字列の引数の位置を同期の呼び出しと`blocking`の呼び出しで比べ、`blocking`の呼び出しが読んだバイトの和を出す。
+const TEXT_AT: &str = "\
+import Async (Async)
+import Async
+import String
+
+extern \"C\" pure symbol \"rs_ptr\" at : String -> Int
+extern \"C\" blocking symbol \"rs_ptr\" at_blocking : String -> <IO, Async> Int
+extern \"C\" blocking symbol \"rs_bytes_sum\" sum_blocking : String -> Int -> <IO, Async> Int
+
+grow : Int -> String -> <Panic> String
+grow k s = if k == 0 then s else grow (k - 1) (s ++ s)
+
+read : String -> <IO, Panic, Async> Unit
+read s =
+  let p = at s
+  let same = p == at_blocking s
+  println \"\\{show same} \\{show (sum_blocking s (String.byte_length s))}\"
+";
+
+/// ほかのworkerのタスクに渡した大きい文字列も、そのページを留めて貸す。物体はworker 0のヒープにあり、留めは
+/// worker 1が取る (docs/spec/object-model.mdの「ページの留め」)。
+#[test]
+fn a_blocking_call_reads_a_large_string_shared_with_another_worker() {
+    let src = format!(
+        "{TEXT_AT}
+body : Unit -> <IO, Panic, Async> Unit
+body () =
+  let s = grow 10 \"ab\"
+  Async.await (Async.start (fn () -> read s))
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run body
+"
+    );
+    assert_eq!(run_real_both(&src, 2), "True 199680\n");
+}
+
+/// 大きい定数の文字列は凍結した塊にあり、そのページを留めて貸す (docs/spec/object-model.mdの「ページの留め」)。
+#[test]
+fn a_blocking_call_reads_a_large_constant_string() {
+    let src = format!(
+        "{TEXT_AT}
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () -> read \"{}\")
+",
+        "ab".repeat(1024)
+    );
+    assert_eq!(run_both(&src), "True 199680\n");
+    assert_eq!(run_real_both(&src, 1), "True 199680\n");
+}
+
+/// 受け付けの取り消しの地点で投げるタスクは、大きい配列のページを留めた仕事を走らせずに落とす。留めはそのとき
+/// 落ちるので、runが終わってヒープを放した後、ページは取り置かれていない (docs/spec/vm.mdの「`blocking` の呼び出し」)。
+#[test]
+fn a_job_dropped_at_the_cancellation_point_releases_its_pin() {
+    let src = "\
+import Async (Async)
+import Async
+import MutUnboxedArray
+import UnboxedArray
+
+extern \"C\" symbol \"rs_publish\" publish : UnboxedArray Int -> Int -> <IO> Int
+extern \"C\" blocking symbol \"rs_publish\" publish_blocking : UnboxedArray Int -> Int -> <IO, Async> Int
+
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  let a = MutUnboxedArray.freeze (MutUnboxedArray.make 10000 0)
+  let _ = publish a 100133
+  let r = try_io (fn () -> Async.scope (fn s ->
+    Async.cancel_scope s
+    publish_blocking a 100134))
+  match r with
+    | Ok _ -> println \"unreachable\"
+    | Err e -> println (show e.kind))
+";
+    let program = eml_test_support::lir(src);
+    for debug_heap in [true, false] {
+        let control = RunConfig::default().control;
+        let (out, result) = run_mode(&program, debug_heap, control);
+        result.unwrap_or_else(|error| panic!("debug_heap {debug_heap}: {error}"));
+        assert_eq!(out, "Cancelled\n", "debug_heap {debug_heap}");
+        let at = published(100133).expect("the synchronous call did not publish");
+        assert!(
+            !eml_rt::PagePin::parked(at as usize),
+            "debug_heap {debug_heap}: the dropped job left its page parked"
+        );
+        assert_eq!(published(100134), None, "debug_heap {debug_heap}: C ran");
+    }
 }
