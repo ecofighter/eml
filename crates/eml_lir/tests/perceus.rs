@@ -1473,6 +1473,7 @@ b2:
     b1:
       release unboxed t.10 Tok #0(t.0.12, _)
       let m.6: int = call g(t.0.12)
+      decref t.0.12
       let o.7: obj = const "x"
       let r.11: obj lin = con Tok #0(o.7, t.1.13)
       return r.11

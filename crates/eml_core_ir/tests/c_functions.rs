@@ -241,3 +241,56 @@ fn the_c_row_of_a_translated_call() {
     );
     assert!(cos.removable());
 }
+
+#[test]
+fn a_blocking_call_argument_is_owned_by_the_waiting_continuation() {
+    // `blocking`の呼び出しの物体の引数は待ちをまたいで生きるので、継続の閉包が捕まえる。捕まえることは消費する位置
+    // なので、呼び出しをする関数の引数は所有のままで、閉包はそれぞれへの自分の数えた参照を持つ。Cが読みうる間、
+    // 借りた語が引数の代わりになることはない (docs/spec/lir.mdの「借用の推論」、docs/spec/vm.mdの
+    // 「`blocking` の呼び出し」)。`hide`は、`wrap`を`main`に展開させず、自分の関数のまま残す
+    let text = "\
+import Async (Async)
+import MutUnboxedArray
+
+extern \"C\" blocking fill : String -> MutUnboxedArray Int -> <IO, Async> (Int, MutUnboxedArray Int)
+
+wrap : String -> MutUnboxedArray Int -> <IO, Async> (Int, MutUnboxedArray Int)
+wrap s a = fill s a
+
+data Box a = | Box a
+
+hide : Int -> a -> <Panic> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let Box wrap = hide 0 wrap
+  let a : MutUnboxedArray Int = MutUnboxedArray.empty ()
+  let (n, a) = Async.run (fn () -> wrap \"x\" a)
+  drop a
+  println (show n)
+";
+    let shown = lir_text(text, eml_lir::Pass::Reuse);
+    let wrap = function(&shown, "wrap");
+    assert!(
+        wrap.starts_with("yields fn wrap(s.0: obj, a.1: obj lin) -> "),
+        "{wrap}"
+    );
+    let captures: Vec<&str> = wrap
+        .lines()
+        .filter(|line| line.contains("= closure wrap$k"))
+        .collect();
+    assert!(!captures.is_empty(), "{wrap}");
+    for capture in captures {
+        assert!(capture.contains("(s.0, a.1"), "{capture}");
+    }
+    let continuations: Vec<&str> = shown
+        .lines()
+        .filter(|line| line.contains(" fn wrap$k"))
+        .collect();
+    assert!(!continuations.is_empty(), "{shown}");
+    for header in continuations {
+        assert!(!header.contains("borrowed"), "{header}");
+    }
+    assert!(!shown.contains("dup a."), "{shown}");
+}

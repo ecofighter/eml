@@ -327,6 +327,7 @@
 - `$owned`の写しをdebugで作り直して比べる確かめは、失敗しえないので外した。名前の規則 (D-3) は、`crates/eml_lir/tests/borrow.rs`の2つのプログラムのテストと、REPLの`Mismatch`の確かめで確かめる
 - Q-1は解決した。`Heap::pin`は、runのほかのヒープのブロックと、付けた凍結した塊のブロックにも使える。T-8は、共有の文字列と定数の文字列のテストを残す
 - `PINNED`は`Relaxed`の順序を使う。実行系の核は`SeqCst`を使わない。留めたページが`return_page`に届く道は、どれも留めた側から前に起きる辺 (共有のrcのAcqRelとAcquire、`RemoteSink`のAcquireの取り出し、凍結した塊の`Arc`を捨てること、workerのjoinと`quiesce`) を通る (docs/spec/object-model.mdのT17)
+- T-9は、`eml_core_ir`の`perceus.rs`の3つのテスト (`pick`、`flag`、`describe`) の入力を変え、引数がまた消費されるようにした。借用のパスをかけると引数が借りられ、テストが名前の示すことを見せなくなったためである。種類2 (期待値の変更) で、T-9の中で行う
 
 ## 付録: レビューによる主な変更点
 

@@ -380,8 +380,7 @@ fn make(u.0: unit) -> (int, float, obj) {
   let s.3: obj = extern \"Prelude.++\"(a.1, b.2)
   return (4611686018427387904, 2.5, s.3)
 }
-fn first(p.0.4: int, p.1.5: float, p.2.6: obj) -> int {
-  decref p.2.6
+fn first(p.0.4: int, p.1.5: float, borrowed p.2.6: obj) -> int {
   return p.0.4
 }
 fn third(p.0.4: int, p.1.5: float, p.2.6: obj) -> obj {
@@ -400,6 +399,7 @@ fn first$uniform(p.2: tobj) -> tobj {
   let p.1.7: float = unbox p.1.6
   release unboxed p.2 (,,) #0(_, _, p.2.8)
   let r.1: int = call first(p.0.5, p.1.7, p.2.8)
+  decref p.2.8
   let r.3: tobj = box r.1
   return r.3
 }

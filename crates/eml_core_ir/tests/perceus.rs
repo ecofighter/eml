@@ -88,25 +88,24 @@ fn constructor_arguments_are_owned_by_the_value() {
 
 #[test]
 fn a_known_value_that_skips_its_field_releases_it() {
-    // `Some s` と `Some "x"` は値を作らずに `Some _` の枝へ向かい、枝はフィールドを受け取らない。`s` はどこでも使わない
-    // ので、関数のエントリで捨てる
-    let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Option a = | None | Some a\n\npick : Bool -> Bool -> String -> String\npick a b s = match (if a then None else if b then Some s else Some \"x\") with\n  | None -> \"none\"\n  | Some _ -> \"some\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box pick = hide 0 pick\n  println (pick False True \"s\")";
+    // `Some s`と`Some "x"`は値を作らずに`Some _`の枝へ向かい、枝はフィールドを受け取らない。`s`を使うのは`None`の
+    // 枝だけなので、ほかの行き先はエントリで捨てる
+    let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Option a = | None | Some a\n\npick : Bool -> Bool -> String -> String\npick a b s = match (if a then None else if b then Some s else Some \"x\") with\n  | None -> s\n  | Some _ -> \"some\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box pick = hide 0 pick\n  println (pick False True \"s\")";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "pick"), @r#"
     fn pick(a.0: enum, b.1: enum, s.2: obj) -> obj {
-      decref s.2
       switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
+      decref s.2
       switch b.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b2:
-      let s.4: obj = const "none"
-      return s.4
+      return s.2
     b3:
       jump b5()
     b4:
       jump b5()
     b5:
-      let s.5: obj = const "some"
-      return s.5
+      let s.4: obj = const "some"
+      return s.4
     }
     "#);
 }
@@ -114,16 +113,15 @@ fn a_known_value_that_skips_its_field_releases_it() {
 #[test]
 fn a_dead_scrutinee_whose_fields_are_unused_is_decreffed() {
     // どの行き先も `o` を所有して始まる。フィールドを使わないので、`release` ではなく `decref` で手放す
-    let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Option a = | None | Some a\n\nflag : Option String -> Int\nflag o = match o with\n  | Some _ -> 0\n  | None -> 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box flag = hide 0 flag\n  println (show (flag None))";
+    let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Option a = | None | Some a\n\nflag : Option String -> Option String\nflag o = match o with\n  | Some _ -> None\n  | None -> o\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box flag = hide 0 flag\n  let _ = flag None\n  ()";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "flag"), @"
-    fn flag(o.0: tobj) -> int {
+    fn flag(o.0: tobj) -> tobj {
       switch o.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
     b1:
-      decref o.0
-      return 1
+      return o.0
     b2:
       decref o.0
-      return 0
+      return #0
     }
     ");
 }
@@ -131,9 +129,9 @@ fn a_dead_scrutinee_whose_fields_are_unused_is_decreffed() {
 #[test]
 fn a_default_target_owns_the_scrutinee_without_a_dup() {
     // `ys` が受ける `xs` は `switch` の前で複製しない。入れ子のパターンの内側の scrutinee `x.2` は、借りたまま読む
-    let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata List a = | Nil | Cons a (List a)\n\nsize : List Int -> Int\nsize xs = match xs with\n  | Nil -> 2\n  | Cons _ rest -> size rest\n\ndescribe : List Int -> Int\ndescribe xs = match xs with\n  | Cons _ Nil -> 1\n  | ys -> size ys\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box describe = hide 0 describe\n  println (show (describe Nil))";
+    let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata List a = | Nil | Cons a (List a)\n\ndescribe : List Int -> List Int\ndescribe xs = match xs with\n  | Cons _ Nil -> Nil\n  | ys -> Cons 0 ys\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box describe = hide 0 describe\n  let _ = describe Nil\n  ()";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "describe"), @"
-    fn describe(xs.0: tobj) -> int {
+    fn describe(xs.0: tobj) -> tobj {
       switch xs.0 List { #1(x.5: tobj, x.2: tobj) -> b1, _ -> b2 }
     b1:
       switch x.2 List { #0 -> b3, _ -> b4 }
@@ -141,11 +139,13 @@ fn a_default_target_owns_the_scrutinee_without_a_dup() {
       jump b5(xs.0)
     b3:
       decref xs.0
-      return 1
+      return #0
     b4:
       jump b5(xs.0)
     b5(ys.3: tobj):
-      tail call size(ys.3)
+      let b.6: tobj = box 0
+      let d.4: tobj = con List #1(b.6, ys.3)
+      return d.4
     }
     ");
 }
@@ -189,6 +189,7 @@ fn a_nested_pattern_releases_from_the_parent_down() {
       switch x.1 List { #0 -> b3, #1(a.3: obj, x.4: tobj) -> b4 }
     b3:
       let t.5: int = call "length@[Main.List String]"(w.0)
+      decref w.0
       let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       return t.6
     b4:

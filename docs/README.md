@@ -22,7 +22,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/effects.md](spec/effects.md) | 規範 | 操作の多重度、持ち越し規則、handler の意味、extern のエフェクトの `IO`、標準ライブラリの `FileIn`、組み込みの `Panic`、抽象エフェクト、`var` のエフェクト、健全性 |
 | [spec/exhaustiveness.md](spec/exhaustiveness.md) | 規範 | 網羅性の検査 |
 | [spec/core-ir.md](spec/core-ir.md) | 規範 | Core IR の命令、型の Repr、translate の配置、変換の規則 (単相化と row のビット、`yields` の印、メソッドの解決、導出の生成器)、パス (translate と evidence passing)、`par` の子の中断、LIR への変換、Core IR の verifier |
-| [spec/lir.md](spec/lir.md) | 規範 | LIR の命令、2つの IR に共通する規則 (ブロックの列と構造の規則、値の表現、データの配置、位置の規則、末尾の位置の呼び出し)、基本操作と実行の文脈、LIR のパス (box の挿入、開くパス、縮約、Perceus、reuse) とその境界の不変条件、LIR の verifier、実行の意味、実行時エラー |
+| [spec/lir.md](spec/lir.md) | 規範 | LIRの命令、2つのIRに共通する規則 (ブロックの列と構造の規則、値の表現、データの配置、位置の規則、末尾の位置の呼び出し)、基本操作と実行の文脈、LIRのパス (boxの挿入、開くパス、縮約、借用のパス、Perceus、reuse) とその境界の不変条件、LIRのverifier、実行の意味、実行時エラー |
 | [spec/object-model.md](spec/object-model.md) | 規範 | `eml_rt` の核: 語、ヘッダと種類、物体の形、ページの確保器と生存の列挙、別のスレッドからの解放、局所と共有の RC、`share`、`transfer_back`、`lin` ビット、核の操作、バイト列と文字列、凍結した領域、reuse の部品、検査モード (論理的な worker ID とページの表を含む)、実行文脈 `Ctx` (タスクの切り替えを含む)、extern (語の ABI、誤り、Host と出力のバッファ、読み手と `FileIn`、仕事の回数)、受け入れる制約、配列、ダミーの値、`unsafe` の核 |
 | [spec/vm.md](spec/vm.md) | 規範 | VMの置き場所と実行のAPI、`CodeBase`と`FnEntry`、スロットとフレーム、命令の形、スロットの割り当て、呼び出しと戻り、命令ごとの実行、誤りと終わりの処理、上限と割り込み、タスクとスケジュール、メインのworker、時計とdriver、`par`のforkとjoin、`Async`のタスク (プールの仕事を含む)、channel、Cの関数の呼び出し (橋渡しの関数、ライブラリと記号、`blocking`の呼び出し、`--link`)、`RunStats`、並列化への備え、巻き戻し、externの中断 |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止、他の言語の書き方へのヒント |
