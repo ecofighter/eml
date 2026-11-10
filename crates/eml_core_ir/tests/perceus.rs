@@ -315,3 +315,228 @@ fn interpolation_keeps_only_the_accumulator_live_across_holes() {
     // 穴の `display` は小さいので展開されて extern の `show` になり、呼び出しは穴ごとに `g` の1つだけ残る
     assert_eq!(calls, 3, "one call per hole: {shown}");
 }
+
+const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";
+
+#[test]
+fn readers_of_a_string_that_the_caller_keeps_borrow_it_and_hold_no_rc() {
+    // bench/words_loop.emの形。呼ばれる側は文字列を読むだけなので、3つとも借りる。借りたパラメータには`dup`も
+    // `decref`も要らない。持ち主は`main`で、`grow`の結果を最後に1回だけ手放す
+    let text = "import Byte\nimport String\n\ngrow : Int -> String -> <Panic> String\ngrow n acc = if n == 0 then acc else grow (n - 1) (acc ++ \" ab\")\n\nskip_spaces : String -> Int -> <Panic> Int\nskip_spaces s i =\n  if i >= String.byte_length s then i\n  else if String.byte_at i s == ' 'u8 then skip_spaces s (i + 1) else i\n\nskip_word : String -> Int -> <Panic> Int\nskip_word s i =\n  if i >= String.byte_length s then i\n  else if String.byte_at i s == ' 'u8 then i else skip_word s (i + 1)\n\ncount : String -> Int -> Int -> <Panic> Int\ncount s i acc =\n  if i >= String.byte_length s then acc\n  else count s (skip_word s (skip_spaces s i)) (acc + 1)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let s = grow 30000 \"\"\n  println (show (count s 0 0))";
+    let shown = lir_text(text, eml_lir::Pass::Perceus);
+    for name in ["skip_spaces", "skip_word", "count"] {
+        let reader = function(&shown, name);
+        assert!(reader.contains("(borrowed s.0: obj"), "{reader}");
+        for rc in ["dup ", "decref ", "release "] {
+            assert!(!reader.contains(rc), "{reader}");
+        }
+    }
+    insta::assert_snapshot!(function(&shown, "count"), @r#"
+    fn count(borrowed s.0: obj, i.1: int, acc.2: int) -> int {
+      let t.3: int = extern Std.String.byte_length(s.0)
+      let t.4: enum = extern "Prelude.Ord Int.>="(i.1, t.3)
+      switch t.4 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.5: int = call skip_spaces(s.0, i.1)
+      let t.6: int = call skip_word(s.0, t.5)
+      let t.7: int = extern "Prelude.Num Int.+"(acc.2, 1)
+      tail call count(s.0, t.6, t.7)
+    b2:
+      return acc.2
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "entry$main"), @r#"
+    fn entry$main() -> unit {
+      let s.1: obj = const ""
+      let t.2: obj = call grow(30000, s.1)
+      let t.3: int = call count(t.2, 0, 0)
+      decref t.2
+      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
+      let t.5: unit = extern Prelude.println(t.4)
+      return t.5
+    }
+    "#);
+}
+
+#[test]
+fn a_field_passed_to_a_reader_needs_no_dup_but_one_passed_to_a_consumer_does() {
+    // `p.name`の後で`p`をまた使う。`len`は`s`を読むだけなので、フィールドは`p`から借りたまま渡し、`dup`は
+    // 入らない。`keep`は`s`をデータに入れて消費するので、渡す前に1回`dup`する
+    let text = format!(
+        "import String\n\n{HIDE}data Person = | Person String Int\n\nlen : String -> Int -> <Panic> Int\nlen s i = if i >= String.byte_length s then i else len s (i + 1)\n\ndata Held = | Held String\n\nkeep : String -> Int -> <Panic> Held\nkeep s i = if i > 0 then keep s (i - 1) else Held s\n\nread_then_use : Person -> <Panic> Int\nread_then_use p = match p with\n  | Person name age -> len name 0 + String.byte_length name + age\n\nconsume_then_use : Person -> <Panic> Int\nconsume_then_use p = match p with\n  | Person name age -> let _ = keep name 0 in String.byte_length name + age\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box a = hide 0 read_then_use\n  let Box b = hide 0 consume_then_use\n  println (show (a (Person \"x\" 1) + b (Person \"y\" 2)))"
+    );
+    let shown = lir_text(&text, eml_lir::Pass::Perceus);
+    let reader = function(&shown, "read_then_use");
+    assert!(
+        reader.starts_with("fn read_then_use(borrowed p.0."),
+        "{reader}"
+    );
+    assert!(!reader.contains("dup "), "{reader}");
+    let consumer = function(&shown, "consume_then_use");
+    assert_eq!(consumer.matches("dup p.0.").count(), 1, "{consumer}");
+    insta::assert_snapshot!(reader, @r#"
+    fn read_then_use(borrowed p.0.7: obj, p.1.8: int) -> int {
+      let t.3: int = call len(p.0.7, 0)
+      let t.4: int = extern Std.String.byte_length(p.0.7)
+      let t.5: int = extern "Prelude.Num Int.+"(t.3, t.4)
+      let t.6: int = extern "Prelude.Num Int.+"(t.5, p.1.8)
+      return t.6
+    }
+    "#);
+    insta::assert_snapshot!(consumer, @r#"
+    fn consume_then_use(p.0.6: obj, p.1.7: int) -> int {
+      dup p.0.6
+      let t.0.8: obj = call keep(p.0.6, 0)
+      decref t.0.8
+      let t.4: int = extern Std.String.byte_length(p.0.6)
+      decref p.0.6
+      let t.5: int = extern "Prelude.Num Int.+"(t.4, p.1.7)
+      return t.5
+    }
+    "#);
+}
+
+#[test]
+fn a_merged_string_that_is_only_read_is_borrowed_through_the_merge() {
+    // `u`は`s`か`t`で、読むだけである。`s`も`t`も呼ぶ側が持ち続けるので、どちらも借り、合流の引数`u`も
+    // 借りる。借りた2つの値が渡る合流には、`dup`も`decref`も入らない
+    let text = format!(
+        "import String\n\n{HIDE}pick_len : Bool -> String -> String -> Int\npick_len c s t =\n  let u = if c then s else t\n  String.byte_length u\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 pick_len\n  println (show (f True \"s\" \"t\"))"
+    );
+    let shown = lir_text(&text, eml_lir::Pass::Perceus);
+    let pick_len = function(&shown, "pick_len");
+    assert!(
+        pick_len.starts_with("fn pick_len(c.0: enum, borrowed s.1: obj, borrowed t.2: obj)"),
+        "{pick_len}"
+    );
+    assert!(pick_len.contains("b3(borrowed "), "{pick_len}");
+    for rc in ["dup ", "decref ", "release "] {
+        assert!(!pick_len.contains(rc), "{pick_len}");
+    }
+    insta::assert_snapshot!(pick_len, @"
+    fn pick_len(c.0: enum, borrowed s.1: obj, borrowed t.2: obj) -> int {
+      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      jump b3(t.2)
+    b2:
+      jump b3(s.1)
+    b3(borrowed t.3: obj):
+      let t.4: int = extern Std.String.byte_length(t.3)
+      return t.4
+    }
+    ");
+}
+
+#[test]
+fn a_parameter_live_across_a_yield_point_is_owned_and_moved_into_the_continuation() {
+    // `s`は`yield_now`の後でも読むので、待ちをまたいで生きる。継続の閉包が捕まえることは消費する位置なので、
+    // `s`は借りられず、閉包へ`dup`なしで移る (docs/spec/lir.mdの「借用の推論」)
+    let text = format!(
+        "import Async (Async)\nimport String\n\n{HIDE}pause_then_read : String -> <IO, Async> Int\npause_then_read s =\n  Async.yield_now ()\n  String.byte_length s\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 pause_then_read\n  println (show (Async.run (fn () -> f \"s\")))"
+    );
+    let shown = lir_text(&text, eml_lir::Pass::Perceus);
+    let pause = function(&shown, "pause_then_read");
+    assert!(
+        pause.starts_with("yields fn pause_then_read(s.0: obj)"),
+        "{pause}"
+    );
+    let captures: Vec<&str> = pause
+        .lines()
+        .filter(|line| line.contains("= closure pause_then_read$k"))
+        .collect();
+    assert!(!captures.is_empty(), "{pause}");
+    for capture in captures {
+        assert!(capture.contains("(s.0"), "{capture}");
+    }
+    assert!(!pause.contains("dup s."), "{pause}");
+    for header in shown
+        .lines()
+        .filter(|line| line.contains(" fn pause_then_read$k"))
+    {
+        assert!(!header.contains("borrowed"), "{header}");
+    }
+    insta::assert_snapshot!(pause, @r#"
+    yields fn pause_then_read(s.0: obj) -> int {
+      let ev.6: obj = prim ev_lookup[Std.Async.Async]()
+      let c.7: tobj = prim ev_clause[Std.Async.Async.reschedule](ev.6)
+      let t.3: enum = clause Std.Async.Async.reschedule c.7(ev.6, ())
+      let y.8: int = prim yielding()
+      switch y.8 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.9: tobj poly = prim yield_cont_take()
+      let c.10: tobj = closure pause_then_read$k0(s.0)
+      let k.11: tobj poly = closure compose$(k.9, c.10)
+      let u.12: unit = prim yield_cont_set(k.11)
+      return 0
+    b2:
+      switch t.3 Std.Async.Wake { #0 -> b3, #1 -> b4 }
+    b3:
+      jump b5(())
+    b4:
+      let s.4: obj = const "task was cancelled"
+      let t.5: unit = extern Prelude.fail_io(#5, s.4)
+      jump b5(t.5)
+    b5(t.1: unit):
+      let t.2: int = extern Std.String.byte_length(s.0)
+      decref s.0
+      return t.2
+    }
+    "#);
+}
+
+#[test]
+fn map_over_an_int_list_keeps_its_reuse() {
+    // 借用の推論は、再利用の元になる引数を借りない。`xs`は`Cons`で分解して消費し、新しい`Cons`が同じ札を
+    // 持ち回る
+    let text = format!(
+        "{HIDE}data List a = | Nil | Cons a (List a)\n\nmap : (Int -> Int) -> List Int -> <Panic> List Int\nmap f xs = match xs with\n  | Nil -> Nil\n  | Cons x rest -> Cons (f x) (map f rest)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box m = hide 0 map\n  let _ = m (fn x -> x) (Cons 1 Nil)\n  ()"
+    );
+    let shown = lir_text(&text, eml_lir::Pass::Reuse);
+    let map = function(&shown, "map");
+    assert!(map.contains("reuse "), "{map}");
+    assert!(!map.contains("borrowed xs"), "{map}");
+    insta::assert_snapshot!(map, @"
+    fn map(f.0: tobj, xs.1: tobj) -> tobj {
+      switch xs.1 List { #0 -> b1, #1(x.7: tobj, rest.3: tobj) -> b2 }
+    b1:
+      decref f.0
+      decref xs.1
+      return #0
+    b2:
+      let r.9: token = release xs.1 List #1(x.7, rest.3)
+      dup f.0
+      let t.8: tobj = apply f.0(x.7)
+      let t.5: tobj = call map(f.0, rest.3)
+      let d.6: tobj = con List #1(t.8, t.5) reuse r.9 in place
+      return d.6
+    }
+    ");
+}
+
+#[test]
+fn a_function_returning_a_scalar_field_of_a_list_node_borrows_the_list() {
+    // リストは先頭の`Int`だけを読む。スカラーのフィールドを消費してもルートは所有にならないので、リストの
+    // パラメータは借り、関数にRCの命令は入らない。`main`はリストをその後も使う
+    let text = format!(
+        "{HIDE}data List a = | Nil | Cons a (List a)\n\nhead_or_zero : List Int -> Int\nhead_or_zero xs = match xs with\n  | Cons x _ -> x\n  | Nil -> 0\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 head_or_zero\n  let xs = Cons 1 (Cons 2 Nil)\n  println (show (f xs))\n  println (show (f xs))"
+    );
+    let shown = lir_text(&text, eml_lir::Pass::Perceus);
+    let head = function(&shown, "head_or_zero");
+    assert!(
+        head.starts_with("fn head_or_zero(borrowed xs.0: tobj)"),
+        "{head}"
+    );
+    for rc in ["dup ", "decref ", "release "] {
+        assert!(!head.contains(rc), "{head}");
+    }
+    insta::assert_snapshot!(head, @"
+    fn head_or_zero(borrowed xs.0: tobj) -> int {
+      switch xs.0 List { #0 -> b1, #1(x.3: tobj, x.2: tobj) -> b2 }
+    b1:
+      return 0
+    b2:
+      let x.1: int = unbox x.3
+      return x.1
+    }
+    ");
+}
