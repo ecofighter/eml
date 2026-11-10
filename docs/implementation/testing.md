@@ -226,7 +226,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `eml_vm` の lib のテストは AddressSanitizer の下で流さない。そのため、worker 1 のタスクの操作の記録を run の終わりに worker 0 が掃く道 (`sched.rs` の `an_op_record_left_on_worker_1_is_swept`) を確かめるのは、検査モードの漏れの確かめだけである
 - `eml_vm`の`ffi_abandon::` (戻らない`blocking`の呼び出しを見捨てるrun) と、`seat.rs`と`pinned.rs`の`worker_panic::` (workerがpanicするrun) も、ほかのモジュールと同じくleakの検出を付けて流す。見捨てた呼び出しは仕事が持つ写しと、ページを留めた大きい引数だけを使い、留めたページはCが戻って留めを落としたときに返る。panicしたworkerのヒープもほかのヒープと同じく落とすので、どちらのrunも、終わった後にすべてのヒープを放す ([VM](../spec/vm.md)の「`blocking` の呼び出し」「タスクとスケジュール」)
 - nightlyはMiriと同じ`nix develop .#miri`のものを使い、`-Zbuild-std`でstdも計装し、`--target`をいつも書く。leakの検出は、どのstepでもAddressSanitizerの既定のままにする
-- 開発機では build の置き場所を `target/asan` に分ける (「よく使うコマンド」)
+- 開発機では、buildの置き場所を`target/asan`に分け、`--target`には開発機のhostのtargetを書く (「よく使うコマンド」)。x86_64とaarch64のLinuxでも、aarch64-darwinでも流せる
 - 道具の不具合 (runtime がない、link、rpath、時間切れ) で緑にできない脚は、その脚だけ fenix と同じ日付に固めた rustup の nightly にし、時間の上限を 90 分にする。それでも緑にならなければ脚を外し、外した脚をこの節とロードマップの「その後の項目」に書く
 
 ### ThreadSanitizer
@@ -234,7 +234,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - `tsan`のジョブは、workerのスレッドの間で共有する記憶にdata raceがないことを`-Zsanitizer=thread`で確かめる。流すのは`eml_rt`の`trusted::`と、`eml_vm`の`workers::`、`signal::`、`io::`、`chan::`、`ffi::`、`ffi_abandon::`、`seat::`、`pinned::`、`eml_vm`のlibの`counters::`、`eml_io`のlibの`driver::tests::`の4手順で、対象は`x86_64-unknown-linux-gnu`だけである。Miriは複数のスレッドのinterleavingを網羅しないので、スレッドをまたぐ`unsafe`の核 (`eml_rt`のremote解放の経路と、`eml_vm`の起こしの語、runの表、runの登録表とmail、ほかのworkerへの操作の転送、`Counter`のatomic、workerをまたぐchannel、workerの間で共有する`CCall`、`eml_io`のdriverのプールのスレッドが貸された記憶に書くファイルの仕事) は、実際に走るスレッドの上でThreadSanitizerが見る
 - nightly と `-Zbuild-std` の使い方は「AddressSanitizer」と同じである。`-Zbuild-std` で std も sanitizer つきで組み直し、std の `Mutex` と `Condvar` の同期も ThreadSanitizer に見せる。組み直さない std の同期は ThreadSanitizer に見えず、正しいコードでも race と報告されうるためである。`eml_rt` と `eml_vm` の3つの手順も、この形で流す
 - 合否は終了コードで決める。`TSAN_OPTIONS=halt_on_error=1` で、警告が1件でも出たらテストのプロセスが止まる。警告は抑制せず、`suppressions` も書かない。報告が出たら、コードの不具合か、`eml_rt` の `unsafe` が前提にしている順序の誤りとして直す
-- 開発機では build の置き場所を `target/tsan` に分ける (「よく使うコマンド」)
+- 開発機では、buildの置き場所を`target/tsan`に分け、`--target`には「AddressSanitizer」と同じく開発機のhostのtargetを書く (「よく使うコマンド」)。CIが流すのはx86_64のLinuxだけだが、aarch64-darwinの開発機でも同じ手順で流せる
 - 道具の不具合で緑にできないときは、「AddressSanitizer」と同じく、fenix と同じ日付に固めた rustup の nightly にする。それでも緑にならなければ、ジョブを外し、外したことをこの節とロードマップの「その後の項目」に書く
 
 ### 核の Miri
@@ -768,8 +768,8 @@ nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # Windows の target の clippy。C の暗号を組む eml_tls は除く (Linux は x86_64-unknown-linux-gnu と aarch64-unknown-linux-gnu で、フラグは同じ。OS ごとのテスト)
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run,eml_cli/gui-native -- -D warnings   # WinUIのbackendも含めたWindowsのtargetのclippy (Windows App SDKのファイルは要らない。OS ごとのテスト)
 nix develop -c nix/winui-bindings.sh   # 固定したメタデータからWinUIのbindingを作り直す (--checkは比べる。ネットワークが要る。CI)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_io   # AddressSanitizer (eml_vmの api:: signal:: io:: workers:: ffi:: ffi_abandon:: seat:: pinned:: とeml_nativeも。eml_ioの検証)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target x86_64-unknown-linux-gnu -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon:: seat:: pinned:: と -p eml_vm --lib counters::、eml_io は -p eml_io --lib -- driver::tests::。ThreadSanitizer)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target $(rustc -vV | sed -n 's/^host: //p') -p eml_io   # AddressSanitizer (eml_vmの api:: signal:: io:: workers:: ffi:: ffi_abandon:: seat:: pinned:: とeml_nativeも。eml_ioの検証)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target $(rustc -vV | sed -n 's/^host: //p') -p eml_rt trusted::   # ThreadSanitizer (eml_vm は -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon:: seat:: pinned:: と -p eml_vm --lib counters::、eml_io は -p eml_io --lib -- driver::tests::。ThreadSanitizer)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
