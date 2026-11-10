@@ -1423,3 +1423,39 @@ main () = Async.run (fn () ->
         assert!(runs < 100, "the park called run {runs} times");
     }
 }
+
+/// 待ちで誤りを返す`Park`。
+struct FailingPark;
+
+impl Park for FailingPark {
+    fn wait(&mut self, _: Option<Duration>, _: &mut dyn Pending) -> io::Result<()> {
+        Err(io::Error::other("boom"))
+    }
+
+    fn waker(&self) -> Option<Arc<dyn IoWaker>> {
+        None
+    }
+}
+
+/// `Pending::default_wait`のものでない`Park::wait`の誤りは、`Park`の誤りとしてrunを止め、`Machine`は壊れない
+/// (docs/spec/vm.mdの「メインのworkerの待ち」)。
+#[test]
+fn an_error_of_the_park_stops_the_run_as_a_park_failure() {
+    let src = "\
+import Async
+main : Unit -> <IO, Panic> Unit
+main () = Async.run (fn () ->
+  Async.run_on_main (fn () -> println \"pinned\"))
+";
+    let config = RunConfig::default()
+        .with_control(limits(1))
+        .with_main_park(Arc::new(|| Box::new(FailingPark)));
+    let (lines, result) = run_with(src, config);
+    let error = result.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "the main worker's park failed: boom in `<main worker>`"
+    );
+    assert!(!error.is_broken());
+    assert!(lines.is_empty(), "{lines:?}");
+}

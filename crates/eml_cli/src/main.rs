@@ -41,7 +41,7 @@ enum Command {
         /// Open VALUE in place of the library written as KEY in a `link` item (repeatable)
         #[arg(long = "link", value_name = "KEY=VALUE", value_parser = parse_link)]
         link: Vec<(String, String)>,
-        /// The backend that `Std.Gui` opens windows with: `native`, or `stub`, which opens nothing and closes every window at once (default: `EML_GUI`, else native)
+        /// The backend that `Std.Gui` opens windows with: `native`, or `stub`, which opens nothing and sends one close request to each window it shows (default: `EML_GUI`, else native)
         #[arg(long, value_name = "native|stub", value_parser = parse_gui)]
         gui: Option<GuiChoice>,
         file: PathBuf,

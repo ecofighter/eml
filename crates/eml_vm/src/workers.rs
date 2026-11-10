@@ -963,8 +963,8 @@ pub(crate) fn run_main<M: Mode, P: Policy>(
     )
 }
 
-/// 呼んだスレッドで worker `k` の `Ctx` を `make` で得て、`catch_unwind` の中で `body` を動かし、`Ctx` を返す。`make`
-/// から `catch_unwind` の中で動き、panic は関数の名前 `function` で `fatal` に書いてすべての worker に終わりを
+/// 呼んだスレッドでworker `k`の`Ctx`を`make`で得て、`catch_unwind`の中で`body`を動かし、`Ctx`を返す。`make`
+/// から`catch_unwind`の中で動き、panicは関数の名前`function`で`fatal`に書いてすべてのworkerに終わりを
 /// 知らせる。そのときの`Ctx`も返す。
 fn on_own_ctx<M: Mode>(
     run: &Run,

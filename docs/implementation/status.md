@@ -195,6 +195,7 @@
 - ウィンドウのネイティブの最小の大きさは初めて表示するときに決め、後で中身が増えても変えない
 - 拡張の継ぎ目はcfgのfeatureで、`Plugin`のtraitはない ([FFI と拡張の設計](../future/ffi.md)の「拡張」)
 - `eml repl`ではGUIを開けず、`Gui.run`は`NotAvailable`で失敗する ([ロードマップ](../future/roadmap.md)の「REPL」)
+- GUIのタスクが待つタスク (`await`するタスクや、`app`の中の`Async.run`の本体) から満ちたchannelへの`Gui.post`は、いつまでも待つ。GUIが開いている間はrunの外の待ちの印が立つので、デッドロックとしても報告しない ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)
 
 ### 子のプロセス
 

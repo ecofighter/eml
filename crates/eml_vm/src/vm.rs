@@ -902,10 +902,10 @@ fn main_wait<R: Exec>(
         sched.guard = Guard::Outside;
         return Err(error);
     }
-    // driverの誤りは`default_wait`が`stop`に残したので、ここに来る誤りは`Park`自身のループのものである
+    // driverの誤りは`default_wait`が`stop`に残したので、ここに来る誤りは`Park`自身のものである
     if let Err(e) = waited {
         sched.guard = Guard::Outside;
-        return Err(main_fault(VmFault::GuiLoop(e.to_string())));
+        return Err(main_fault(VmFault::Park(e.to_string())));
     }
     if matches!(sched.guard, Guard::Stopped(_)) {
         sched.guard = Guard::Outside;

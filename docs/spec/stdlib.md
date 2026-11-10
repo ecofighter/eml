@@ -1858,7 +1858,7 @@ main () =
 - 開くのは2段である。タスクは`want_gui_raw`でゲートのセルを作り、`Async.gui_wait`でそこで待つ。メインのworkerのGUIの`Park`がbackendを作ってネイティブのループに入り、ループの中からゲートに知らせる。タスクはそれから`open_ui_raw`を呼ぶので、toolkitの呼び出しはどれもネイティブのループの中で動く ([VM](vm.md)の「GUIのPark」)
 - ゲートで待つ間に取り消された`run`は、`abandon_raw`でゲートを放し、`Cancelled`で失敗する。次の`run`は開ける
 - `wait ()`は次の順に見る。取り消しの地点、flush (変わったウィンドウの配置と新しいウィンドウの表示)、次のネイティブのイベント、次に送られたメッセージ、そしてウィンドウが1つも開いておらず`sink`も取っていなければ失敗`Other "gui: wait with no open window and no sink"`。どれもなければゲートで待ち、初めから見直す。引き出しと待ちの間に届いた知らせはゲートの旗を立てるので、待ちはすぐに戻る
-- `sink ()`は、`run`のchannel (容量64) とゲートを持つ`Sink msg`を返す。`post sink m`は、どのworkerのどのタスクからも呼べ、`m`を送ってからゲートに知らせる。GUIのタスクでないタスクは、channelが満ちていれば空くまで待つ。GUIのタスク (`app`を動かすタスク) は待たず、channelが満ちていれば`post`はすぐに`ResourceLimit "cannot post: the GUI's message queue is full"`で失敗する。そのタスクはchannelのただ1つの受け手なので、待てば誰も空けないからである。`app`が始めたタスクは、固定したタスクでもGUIのタスクではない。`run`が戻った後に送ったメッセージは捨てる。channelは閉じていて、放したゲートへの知らせは何もしないからである
+- `sink ()`は、`run`のchannel (容量64) とゲートを持つ`Sink msg`を返す。`post sink m`は、どのworkerのどのタスクからも呼べ、`m`を送ってからゲートに知らせる。GUIのタスクでないタスクは、channelが満ちていれば空くまで待つ。GUIのタスク (`app`を動かすタスク) は待たず、channelが満ちていれば`post`はすぐに`ResourceLimit "cannot post: the GUI's message queue is full"`で失敗する。そのタスクはchannelのただ1つの受け手なので、待てば誰も空けないからである。`app`が始めたタスクは、固定したタスクでもGUIのタスクではない。GUIのタスクが待つタスク (`await`するタスクや、`app`の中の`Async.run`の本体) も、満ちたchannelで待つ。channelを空けるのはGUIのタスクだけなので、runはデッドロックの報告なしに止まったままになる。`run`が戻った後に送ったメッセージは捨てる。channelは閉じていて、放したゲートへの知らせは何もしないからである
 - `app`が戻るか、失敗するか、取り消されると、`run`はchannelを閉じて`Ui`を手放す。`Ui`を手放すことは旗を立てるだけで、ウィンドウは`Park`が次の段ですべて閉じる。そのため、正常な終わり、panic、取り消しのどれでもウィンドウは閉じる
 - 求めるか開いているGUIは一度に1つだけである。ほかの`run`が開くのを待っているか`Ui`を開いている間の`run`は、`Other "cannot open the GUI: it is already open"`で失敗する。GUIの`Park`のないrun (`eml repl`、`eml run`の`Park`を置かないrun、feature `gui`のない処理系) では、`run`は`NotAvailable "cannot open the GUI: not available"`で失敗する
 - GUIを求めるか開いている間は、プログラムをデッドロックと判定しない。利用者を待っていることがあるからである。開くのに失敗したか、ウィンドウができる前に取り消された`run`はその期間を終えるので、その後のデッドロックはまた報告される
@@ -1911,7 +1911,7 @@ externの行は次の20行で、どれも`pub`でない。`want_gui_raw`、`open
 | `poke_raw`、`abandon_raw` | `Async.Cell -> <IO> Unit` |
 | `is_gui_task_raw` | `Async.Cell -> <IO> Bool` |
 
-放したゲートで待つのは、ほかのセルと同じく内部の誤りである。stdはそうしない。`Ui`はどれも自分のゲートを持ち、`abandon_raw`は開かなかったゲートを放し、runより長く残るゲートの値は`Sink`の中のものだけで、それを使うのは`poke_raw`だけであり、放したゲートへの知らせは何もしないからである。
+放したゲートで待つのは、ほかのセルと同じく内部の誤りである。stdはそうしない。`Ui`はどれも自分のゲートを持ち、`abandon_raw`は開かなかったゲートを放し、runより長く残るゲートの値は`Sink`の中のものだけで、それを使うのは`poke_raw`と`is_gui_task_raw`だけであり、放したゲートへの知らせは何もせず、`is_gui_task_raw`は登録表に触れないからである。
 
 ## `Std.Signal`
 

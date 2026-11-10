@@ -22,7 +22,7 @@ pub use queue::EventQueue;
 pub use stub::Script;
 pub use toolkit::Toolkit;
 
-/// ウィジェットの番号。上位32ビットはウィンドウの番号 (`Toolkit`ごとに1から)、下位32ビットはウィンドウの中の連番 (0はウィンドウ自身) で、
+/// ウィジェットの番号。上位32ビットはウィンドウの番号 (`Toolkit::new`に渡した番号の次から)、下位32ビットはウィンドウの中の連番 (0はウィンドウ自身) で、
 /// どちらも再利用しない。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Id(pub u64);
