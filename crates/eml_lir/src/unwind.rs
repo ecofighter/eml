@@ -26,8 +26,9 @@ pub struct UnwindPoint {
 /// 関数の巻き戻しの表。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unwinds {
-    /// 関数のエントリで所有している RC の対象の引数と、その参照の数 (どれも 1)。エントリのフレームは借りた値も
-    /// token も着地も持たないので、これだけで巻き戻しの行になる。`VarId` の昇順である。
+    /// 関数のエントリで所有しているRCの対象の引数と、その参照の数 (どれも1)。貸された引数は呼んだ側が持つので
+    /// 入らない。エントリのフレームは借りたフィールドもtokenも着地も持たないので、これだけで巻き戻しの行になる。
+    /// `VarId`の昇順である。
     pub entry: Vec<(VarId, u32)>,
     /// ブロックの順、文の順に並ぶ地点。
     pub points: Vec<UnwindPoint>,

@@ -1,6 +1,7 @@
 //! LIR のテキストの形 (docs/implementation/testing.md の「LIR のテキストの形」)。`parse` が読んだものを
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
+use eml_lir::Lends;
 use eml_lir::{Atom, CasePattern, Ctor, FloatBits, FnIdx, LayoutId, MaskItem, OpRet, Prim, VarId};
 use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, StructShape, verify};
 use eml_lir::{Call, Program, Rhs, Stmt, Term, parse, pretty, pretty_with_positions};
@@ -667,11 +668,13 @@ fn f(n.0: int) -> int {
     let mut atoms = Vec::new();
     stmts[2].for_each_atom(|atom| atoms.push(atom));
     assert_eq!(atoms, [v(1)]);
+    let callees = program.lends();
+    let lends = Lends::new(&program.c_functions, &callees, &program.functions[0]);
     let mut consumed = Vec::new();
-    stmts[2].for_each_consumed(&program.c_functions, |atom| consumed.push(atom));
+    stmts[2].for_each_consumed(&lends, |atom| consumed.push(atom));
     assert_eq!(consumed, []);
     let mut consumed = Vec::new();
-    stmts[0].for_each_consumed(&program.c_functions, |atom| consumed.push(atom));
+    stmts[0].for_each_consumed(&lends, |atom| consumed.push(atom));
     assert_eq!(consumed, [v(0)]);
 }
 

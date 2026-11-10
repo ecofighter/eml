@@ -4,8 +4,8 @@
 //! 節の呼び出しの形を確かめる (`verify_scopes`)。R7 と R8 には境界の検査も入る。呼び出しの引数と結果、`closure` の
 //! 引数、`tobj` のフィールドを比べる。`tail` の結果は印だけを比べる。box の挿入の前のエントリの段では、
 //! 境界を確かめずに、`box`、`unbox`、`tail` と、Perceus が入れるものがまだないことを確かめる (`verify_lowered`)。
-//! Perceus の後は、RC の対象の所有の多重集合 (R6) も確かめる (`verify`)。`switch`、`unpack`、`unbox` は値を読む
-//! だけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
+//! 借用のパスの後は貸された引数の静的な規則を (`verify_borrowed`)、Perceusの後は、RCの対象の所有の多重集合 (R6)
+//! も確かめる (`verify`)。`switch`、`unpack`、`unbox`は値を読むだけである。`switch`と`unpack`のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
 //! 段の分け方は docs/spec/lir.md の「verifier」による。Core IR の verifier と共有する部品は `check` にある。
 //!
 //! R8 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの
@@ -36,8 +36,8 @@ use crate::reuse;
 use crate::syntax::{layout_text, operation_text, prim_text, repr_text, rets_text};
 use crate::unwind::{self, UnwindPoint, Unwinds};
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, LirFn, Mark, OpRet, Prim, Program, Repr,
-    Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
+    Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Lends, LirFn, Mark, OpRet, Prim, Program,
+    Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
 };
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
@@ -58,6 +58,11 @@ pub fn verify_flattened(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Flattened)
 }
 
+/// 借用のパスの後でPerceusより前のLIRを確かめる。開いた後の段の検査に、貸された引数の規則を足す (docs/spec/lir.mdの「verifier」)。
+pub fn verify_borrowed(program: &Program) -> Result<(), VerifyError> {
+    verify_at(program, Level::Borrowed)
+}
+
 /// box の挿入の前の LIR を確かめる。範囲の段と同じ形と範囲を確かめ、境界は比べない。box の挿入と縮約が作るもの
 /// (`box`、`unbox`、`tail`) と、Perceus が入れるもの (`dup`、`decref`、`release`) がまだないことを確かめる。
 /// box の挿入は、末尾呼び出しと変換のない入力を前提にするためである (docs/spec/lir.md の「パスの順番」)。
@@ -72,6 +77,7 @@ enum Level {
     Lowered,
     Scopes,
     Flattened,
+    Borrowed,
     Ownership,
 }
 
@@ -81,6 +87,7 @@ pub(crate) fn unwind_points(
     program: &Program,
     wanted: impl Fn(FnIdx) -> bool,
 ) -> Vec<Option<Result<Unwinds, VerifyError>>> {
+    let callees = program.lends();
     with_tables(program, |tables| {
         program
             .functions
@@ -92,8 +99,14 @@ pub(crate) fn unwind_points(
                 }
                 let points = shape(&block_shapes(function))
                     .and_then(|dominators| {
-                        let mut checker =
-                            Checker::new(program, tables, function, Level::Ownership, dominators);
+                        let mut checker = Checker::new(
+                            program,
+                            tables,
+                            &callees,
+                            function,
+                            Level::Ownership,
+                            dominators,
+                        );
                         checker.unwind = Some(Recorder {
                             entry: Vec::new(),
                             points: Vec::new(),
@@ -116,10 +129,16 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         no_struct_layouts(program)?;
     }
     forks(program)?;
+    let callees = program.lends();
     with_tables(program, |tables| {
         // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
         for function in &program.functions {
-            no_borrowed(function).map_err(|message| VerifyError {
+            let marks = if level < Level::Borrowed {
+                no_borrowed(function)
+            } else {
+                borrowed_params(program, function)
+            };
+            marks.map_err(|message| VerifyError {
                 function: function.name.clone(),
                 message,
             })?;
@@ -157,7 +176,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         for function in &program.functions {
             shape(&block_shapes(function))
                 .and_then(|dominators| {
-                    Checker::new(program, tables, function, level, dominators).run()
+                    Checker::new(program, tables, &callees, function, level, dominators).run()
                 })
                 .map_err(|message| VerifyError {
                     function: function.name.clone(),
@@ -168,6 +187,14 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         if level >= Level::Scopes {
             for function in &program.functions {
                 value_references(program, function).map_err(|message| VerifyError {
+                    function: function.name.clone(),
+                    message,
+                })?;
+            }
+        }
+        if level >= Level::Borrowed {
+            for function in &program.functions {
+                borrowed_values(program, function).map_err(|message| VerifyError {
                     function: function.name.clone(),
                     message,
                 })?;
@@ -310,8 +337,7 @@ fn no_struct_layouts(program: &Program) -> Result<(), VerifyError> {
     Ok(())
 }
 
-/// 貸された引数は借用のパスが付ける。どの段にもそのパスはまだないので、印は拒む
-/// (docs/spec/lir.mdの「ブロックの列」)。
+/// 貸された引数の印は借用のパスが付けるので、それより前の段は印を拒む (docs/spec/lir.mdの「ブロックの列」)。
 fn no_borrowed(function: &LirFn) -> Result<(), String> {
     match function
         .blocks
@@ -324,6 +350,88 @@ fn no_borrowed(function: &LirFn) -> Result<(), String> {
         )),
         None => Ok(()),
     }
+}
+
+/// ブロックの貸された引数は、そのブロックの引数の部分列で、どれもRCの対象で`unr`である。
+/// 固定の関数 (`LirFn::pinned`) は貸された引数を持たない (docs/spec/lir.mdの「verifier」)。
+fn borrowed_params(program: &Program, function: &LirFn) -> Result<(), String> {
+    let name = |var: VarId| format!("{}.{}", function.vars[var.0 as usize].name, var.0);
+    for (index, block) in function.blocks.iter().enumerate() {
+        let mut params = block.params.iter();
+        if !block
+            .borrowed
+            .iter()
+            .all(|borrowed| params.any(|param| param == borrowed))
+        {
+            return Err(format!(
+                "the borrowed parameters of b{index} are not a subsequence of its parameters"
+            ));
+        }
+        for &var in &block.borrowed {
+            let info = &function.vars[var.0 as usize];
+            if !info.repr.is_rc() {
+                return Err(format!(
+                    "`{}` ({}) is a borrowed parameter, but only obj and tobj can be",
+                    name(var),
+                    repr_text(&program.layouts, &program.structs, info.repr)
+                ));
+            }
+            if info.mark != Mark::Unr {
+                return Err(format!(
+                    "`{}` ({}) is a borrowed parameter, but only unr can be",
+                    name(var),
+                    info.mark.name()
+                ));
+            }
+        }
+    }
+    match function.blocks[BlockId::ENTRY.0 as usize].borrowed.first() {
+        Some(&var) if function.pinned() => Err(format!(
+            "`{}` of `{}` is borrowed, but the function is not called directly",
+            name(var),
+            function.name
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// 値の参照 (`&f`、`closure f(..)`) は、貸された引数を持つ関数を指さない。
+/// `apply`と節の呼び出しは所有した語を渡すためである。表にない番号は、先に走る本体の検査が報告する。
+fn borrowed_values(program: &Program, function: &LirFn) -> Result<(), String> {
+    let check = |target: FnIdx| -> Result<(), String> {
+        let Some(callee) = program.functions.get(target.0 as usize) else {
+            return Ok(());
+        };
+        match callee.blocks[BlockId::ENTRY.0 as usize].borrowed.first() {
+            Some(&param) => Err(format!(
+                "`{}` is used as a value, but its parameter `{}.{}` is borrowed",
+                callee.name, callee.vars[param.0 as usize].name, param.0
+            )),
+            None => Ok(()),
+        }
+    };
+    let mut result = Ok(());
+    let mut atom = |atom: Atom| {
+        if let Atom::Fn(target) = atom
+            && result.is_ok()
+        {
+            result = check(target);
+        }
+    };
+    for block in &function.blocks {
+        for stmt in &block.stmts {
+            if let Stmt::Let {
+                var: _,
+                rhs: Rhs::MakeClosure(target, _),
+            } = stmt
+            {
+                check(*target)?;
+            }
+            stmt.for_each_atom(&mut atom);
+        }
+        block.term.for_each_atom(&mut atom);
+    }
+    result
 }
 
 /// 開いた後の段では、変数の表のどこにも構造体は残らない。開くパスは開いた構造体の変数を表から外す。
@@ -448,6 +556,14 @@ struct Checker<'a> {
     program: &'a Program,
     function: &'a LirFn,
     level: Level,
+    /// 呼び出しと`jump`のどの引数を貸すか。
+    lends: Lends<'a>,
+    /// 根が貸されたブロックの引数である変数。その引数自身か、それから分解したフィールドである。定義のときに決まるので、
+    /// 関数に1つの表にする (R5)。
+    entry_borrowed: Vec<bool>,
+    /// 呼んだ側が支える変数。貸されたブロックの引数か、所有の数0のそういう変数から束縛したフィールドである。
+    /// いつも読めて、`dup`なしには消費できない。
+    entry_backed: Vec<bool>,
     /// 所有にも命令の型にも関わらない検査の状態。
     cx: Context<'a>,
     /// 着地の印の検査が使うエントリの生存集合。印がなければ求めない。
@@ -484,6 +600,7 @@ impl<'a> Checker<'a> {
     fn new(
         program: &'a Program,
         tables: Tables<'a>,
+        callees: &'a [Vec<bool>],
         function: &'a LirFn,
         level: Level,
         dominators: Dominators,
@@ -492,6 +609,9 @@ impl<'a> Checker<'a> {
             program,
             function,
             level,
+            lends: Lends::new(&program.c_functions, callees, function),
+            entry_borrowed: vec![false; function.vars.len()],
+            entry_backed: vec![false; function.vars.len()],
             // 境界の検査は、box の挿入の後の段 (範囲の段と所有の段) だけで行う
             cx: Context::new(tables, &function.vars, level >= Level::Scopes, dominators),
             live_in: std::cell::OnceCell::new(),
@@ -522,6 +642,12 @@ impl<'a> Checker<'a> {
             self.cx.at = Site::entry(index);
             for &param in &block.params {
                 self.define(&mut owned, param, self.cx.at)?;
+                // 貸された引数は所有の数0で始まる。物体は呼んだ側が生かしておく
+                if block.borrowed.contains(&param) {
+                    owned.remove(&param);
+                    self.entry_borrowed[param.0 as usize] = true;
+                    self.entry_backed[param.0 as usize] = true;
+                }
             }
             self.check_block(index, block, owned)?;
         }
@@ -966,13 +1092,31 @@ impl<'a> Checker<'a> {
                 self.nothing_owned(&owned)
             }
             Term::Jump { target, args } => {
-                let params = &self.function.block(*target).params;
-                for (&arg, &param) in args.iter().zip(params) {
+                let block = self.function.block(*target);
+                for (&arg, &param) in args.iter().zip(&block.params) {
                     self.cx.check_passed(*target, arg, param)?;
                 }
-                for &arg in args {
-                    self.consume(&mut owned, arg)?;
+                // 合流するブロックは入った辺を区別できないので、どの辺も呼んだ側が持ち続ける値を渡す
+                for (&arg, &param) in args.iter().zip(&block.params) {
+                    if let Atom::Var(var) = arg
+                        && block.borrowed.contains(&param)
+                        && !self.is_entry_borrowed(var)
+                    {
+                        return Err(format!(
+                            "`{}` is passed to the borrowed parameter `{}` of b{}, but it is not borrowed from the caller",
+                            self.cx.name(var),
+                            self.cx.name(param),
+                            target.0
+                        ));
+                    }
                 }
+                let (consumed, lent) = self.uses(
+                    |f| term.for_each_consumed(&self.lends, f),
+                    |f| term.for_each_lent(&self.lends, f),
+                );
+                self.consume_and_lend(&mut owned, &consumed, &lent, || {
+                    format!("passed to b{}", target.0)
+                })?;
                 self.merge_known(*target);
                 self.merge(*target, owned)
             }
@@ -1145,6 +1289,12 @@ impl<'a> Checker<'a> {
             ));
         }
         if !owned.contains_key(&var) {
+            if self.entry_backed[var.0 as usize] {
+                return Err(format!(
+                    "`{}` is {what} but is only borrowed from the caller",
+                    self.cx.name(var)
+                ));
+            }
             return Err(match self.owners[var.0 as usize] {
                 Some(owner) if owned.contains_key(&owner) => format!(
                     "`{}` is {what} but is only borrowed from `{}`",
@@ -1162,14 +1312,10 @@ impl<'a> Checker<'a> {
     /// data は書き換わらないので、そこからたどれる物体もすべて生きている (docs/spec/lir.md の「verifier」)。
     fn read(&self, owned: &Owned, var: VarId, what: &str) -> Result<(), String> {
         self.cx.visible(var)?;
-        if self.level != Level::Ownership
-            || !self.function.repr(var).is_rc()
-            || owned.contains_key(&var)
-        {
+        if self.valid(owned, var) {
             return Ok(());
         }
         match self.owners[var.0 as usize] {
-            Some(owner) if owned.contains_key(&owner) => Ok(()),
             Some(owner) => Err(format!(
                 "`{}` is {what} after its owner `{}` was given up",
                 self.cx.name(var),
@@ -1180,6 +1326,23 @@ impl<'a> Checker<'a> {
                 self.cx.name(var)
             )),
         }
+    }
+
+    /// `var`を読んでよいか。所有の段の外か、RCの対象でない変数か、所有の数を持つ変数か、持ち主が所有の数を持つ変数か、
+    /// 呼んだ側が支える変数である (docs/spec/lir.mdの「verifier」)。
+    fn valid(&self, owned: &Owned, var: VarId) -> bool {
+        self.level != Level::Ownership
+            || !self.function.repr(var).is_rc()
+            || owned.contains_key(&var)
+            || self.entry_backed[var.0 as usize]
+            || self.owners[var.0 as usize].is_some_and(|owner| owned.contains_key(&owner))
+    }
+
+    fn is_entry_borrowed(&self, var: VarId) -> bool {
+        self.entry_borrowed
+            .get(var.0 as usize)
+            .copied()
+            .unwrap_or(false)
     }
 
     /// `case` か `unpack` のフィールドを定義する。RC の対象のフィールドは所有を持たずに始まる (借りる)。持ち主と
@@ -1198,9 +1361,13 @@ impl<'a> Checker<'a> {
         } else {
             self.owners[value.0 as usize]
         };
+        let entry_borrowed = self.entry_borrowed[value.0 as usize];
+        let entry_backed = self.entry_backed[value.0 as usize] && !owned.contains_key(&value);
         for (slot, field) in fields {
             self.define(owned, field, site)?;
             owned.remove(&field);
+            self.entry_borrowed[field.0 as usize] = entry_borrowed;
+            self.entry_backed[field.0 as usize] = entry_backed;
             self.owners[field.0 as usize] = owner;
             self.origins[field.0 as usize] = Some(Origin { value, ctor, slot });
         }
@@ -1308,54 +1475,44 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 借用の印 `borrowed` が立つ引数を読む。
-    fn read_borrowed(
+    /// 命令の使いを、消費する値と貸す値に分ける。どちらも引数の順である。
+    fn uses(
         &self,
-        owned: &mut Owned,
-        args: &[Atom],
-        borrowed: &[bool],
-        lent: &str,
-    ) -> Result<(), String> {
-        for (&arg, &borrowed) in args.iter().zip(borrowed) {
-            match arg {
-                Atom::Var(arg) if borrowed => self.read(owned, arg, lent)?,
-                // 変数でない値は所有を持たないので、消費と同じ検査 (関数の番号) だけを通す
-                _ if borrowed => self.consume(owned, arg)?,
-                _ => {}
-            }
-        }
-        Ok(())
+        consumed: impl FnOnce(&mut dyn FnMut(Atom)),
+        lent: impl FnOnce(&mut dyn FnMut(Atom)),
+    ) -> (Vec<Atom>, Vec<Atom>) {
+        let (mut taken, mut read) = (Vec::new(), Vec::new());
+        consumed(&mut |atom| taken.push(atom));
+        lent(&mut |atom| read.push(atom));
+        (taken, read)
     }
 
-    /// 借りる変数を同じ命令が消費もするなら、消費の数より多い参照を持っているはずである。借りる引数は命令の間じゅう
-    /// 読まれるので、足りないと消費が最後の参照を渡して、読みが解放された物体に当たる
-    /// (docs/spec/lir.md の「extern の借用」)。
-    fn lent_apart_from_consumed(
+    /// 1つの命令の消費を左から当て、その後で貸す変数がどれも有効であることを求める。貸す引数は命令の間じゅう読まれ、
+    /// 呼ばれる側は貸された値を読む前に消費した値を解放しうるためである。変数でない貸す値は、
+    /// 消費と同じ検査 (関数の番号) だけを通す。`lent_text`は誤りの文の句である (docs/spec/lir.mdの「extern の借用」)。
+    fn consume_and_lend(
         &self,
-        owned: &Owned,
-        args: &[Atom],
-        borrowed: &[bool],
-        lent: &str,
+        owned: &mut Owned,
+        consumed: &[Atom],
+        lent: &[Atom],
+        lent_text: impl Fn() -> String,
     ) -> Result<(), String> {
-        if self.level != Level::Ownership {
-            return Ok(());
+        for &atom in consumed {
+            self.consume(owned, atom)?;
         }
-        for (&arg, _) in args.iter().zip(borrowed).filter(|&(_, &borrowed)| borrowed) {
-            let Atom::Var(var) = arg else { continue };
-            let Some(&held) = owned.get(&var) else {
+        for &atom in lent {
+            let Atom::Var(var) = atom else {
+                self.consume(owned, atom)?;
                 continue;
             };
-            let consumed = args
-                .iter()
-                .zip(borrowed)
-                .filter(|&(&other, &borrowed)| !borrowed && other == arg)
-                .count();
-            if consumed > 0 && held as usize <= consumed {
+            if consumed.contains(&atom) && !self.valid(owned, var) {
                 return Err(format!(
-                    "`{}` is {lent} and consumed by the same instruction",
-                    self.cx.name(var)
+                    "`{}` is {} and consumed by the same instruction",
+                    self.cx.name(var),
+                    lent_text()
                 ));
             }
+            self.read(owned, var, &lent_text())?;
         }
         Ok(())
     }
@@ -1373,20 +1530,6 @@ impl<'a> Checker<'a> {
             return self.cx.visible(var);
         }
         self.give_up(owned, var, "used")
-    }
-
-    fn consume_all(
-        &self,
-        owned: &mut Owned,
-        for_each: impl FnOnce(&mut dyn FnMut(Atom)),
-    ) -> Result<(), String> {
-        let mut result = Ok(());
-        for_each(&mut |atom| {
-            if result.is_ok() {
-                result = self.consume(owned, atom);
-            }
-        });
-        result
     }
 
     fn check_rhs(&self, owned: &mut Owned, var: VarId, rhs: &Rhs) -> Result<(), String> {
@@ -1428,19 +1571,11 @@ impl<'a> Checker<'a> {
             }
             Rhs::Extern { ext, args, at: _ } => {
                 self.cx.check_extern(var, *ext, args)?;
-                // 借用の引数は基本操作と同じく読む使いである (docs/spec/lir.md の「extern の借用」)
-                let row = self.program.row(*ext);
-                let lent = format!("lent to `{}`", row.name);
-                self.read_borrowed(owned, args, row.borrowed, &lent)?;
-                self.lent_apart_from_consumed(owned, args, row.borrowed, &lent)?;
             }
+            // 借用の引数は`unbox`のオペランドと同じく読む使いで、所有の数を変えない
+            // (docs/spec/lir.mdの「基本操作」)
             Rhs::Prim(prim, args) => {
                 self.cx.check_prim(var, prim, args)?;
-                // 借用の引数は `unbox` のオペランドと同じく読む使いで、所有の数を変えない
-                // (docs/spec/lir.md の「基本操作」)
-                let lent = format!("lent to `prim {}`", prim_text(&self.program.effects, prim));
-                self.read_borrowed(owned, args, prim.row().borrowed, &lent)?;
-                self.lent_apart_from_consumed(owned, args, prim.row().borrowed, &lent)?;
             }
             Rhs::ConstString(index) => self.cx.const_string(*index)?,
             Rhs::Con { ctor, args, reuse } => {
@@ -1527,8 +1662,17 @@ impl<'a> Checker<'a> {
                 return self.read(owned, operand, "unboxed");
             }
         }
-        self.consume_all(owned, |f| {
-            rhs.for_each_consumed(&self.program.c_functions, f)
+        // 借用の引数は基本操作と同じく読む使いである (docs/spec/lir.mdの「extern の借用」)
+        let (consumed, lent) = self.uses(
+            |f| rhs.for_each_consumed(&self.lends, f),
+            |f| rhs.for_each_lent(&self.lends, f),
+        );
+        self.consume_and_lend(owned, &consumed, &lent, || match rhs {
+            Rhs::Extern { ext, .. } => format!("lent to `{}`", self.program.row(*ext).name),
+            Rhs::Prim(prim, _) => {
+                format!("lent to `prim {}`", prim_text(&self.program.effects, prim))
+            }
+            _ => unreachable!("outside calls only externs and prims lend"),
         })
     }
 
@@ -1596,7 +1740,26 @@ impl<'a> Checker<'a> {
                 self.check_result(call, &result, receiver)?;
             }
         }
-        self.consume_all(owned, |f| call.for_each_atom(f))?;
+        let (consumed, lent) = self.uses(
+            |f| call.for_each_consumed(&self.lends, f),
+            |f| call.for_each_lent(&self.lends, f),
+        );
+        // 末尾呼び出しは貸す値を生かしておくフレームを残さないので、呼んだ側が持ち続ける値だけを貸せる
+        if matches!(receiver, Receiver::Tail)
+            && let Some(var) = lent.iter().find_map(|&atom| match atom {
+                Atom::Var(var) if !self.is_entry_borrowed(var) => Some(var),
+                _ => None,
+            })
+        {
+            return Err(format!(
+                "`{}` is lent to {} by a tail call, but it is not borrowed from the caller",
+                self.cx.name(var),
+                self.call_text(call, false)
+            ));
+        }
+        self.consume_and_lend(owned, &consumed, &lent, || {
+            format!("lent to {}", self.call_text(call, false))
+        })?;
         match call.prompt() {
             Some(marker) => self.check_prompt(owned, call, marker),
             None => Ok(()),

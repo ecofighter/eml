@@ -4,7 +4,7 @@
 use std::fmt;
 
 use eml_extern::{CFunction, CHandleType, ExternRef, FunctionRow};
-use eml_extern::{EffectMultiplicity, Extern, ExternEffect};
+use eml_extern::{EffectMultiplicity, Extern, ExternEffect, RuntimeEntry};
 pub use eml_extern::{FloatBits, Mark, OpRet, Repr, StructId};
 use rustc_hash::FxHashMap;
 
@@ -33,7 +33,7 @@ pub use pretty::{pretty, pretty_with_positions};
 pub use prim::{Immediates, Prim, PrimRow};
 pub use reuse::reuse;
 pub use text::parse;
-pub use verify::{verify, verify_flattened, verify_lowered, verify_scopes};
+pub use verify::{verify, verify_borrowed, verify_flattened, verify_lowered, verify_scopes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -71,6 +71,11 @@ impl Program {
     /// 表にない番号なら `None` である。誤りを含む IR を表示でき、verifier がその番号を誤りとして報告できるようにする。
     pub fn layout(&self, id: LayoutId) -> Option<&Layout> {
         self.layouts.get(id.0 as usize)
+    }
+
+    /// 関数 (`FnIdx`) ごとの、引数の位置ごとの貸された印 (`LirFn::lends`)。直接の呼び出しで`Lends`が引く表である。
+    pub fn lends(&self) -> Vec<Vec<bool>> {
+        self.functions.iter().map(LirFn::lends).collect()
     }
 
     /// プログラムが子を fork しうるか。`par` か `fork_job` を含むか、REPL の根を読むときである。根の閉包は前の入力の
@@ -136,6 +141,20 @@ impl LirFn {
         &self.blocks[id.0 as usize]
     }
 
+    /// 貸された引数を持てない、固定の関数か。値として生まれる関数 (`split`)、節のエントリ、`$uniform`と`$owned`の変種、
+    /// EPの補助の関数、ランタイムが名前で呼ぶ関数は、`apply`、節、ランタイムから入られ、
+    /// どれも所有した語を渡すためである (docs/spec/lir.mdの「verifier」)。
+    pub fn pinned(&self) -> bool {
+        self.split.is_some()
+            || self.clause.is_some()
+            || self.name.ends_with("$uniform")
+            || self.name.ends_with("$owned")
+            || ep_helper(&self.name)
+            || RuntimeEntry::ALL
+                .iter()
+                .any(|entry| entry.name() == self.name)
+    }
+
     pub fn repr(&self, var: VarId) -> Repr {
         self.vars[var.0 as usize].repr
     }
@@ -170,6 +189,62 @@ pub struct Block {
     pub borrowed: Vec<VarId>,
     pub stmts: Vec<Stmt>,
     pub term: Term,
+}
+
+/// 直接の呼び出しと`jump`のどの引数を、消費せずに貸すか。呼ばれる関数か行き先のブロックの`borrowed`の位置である。
+/// externと基本操作の行 (`c_functions`) と合わせて、`for_each_consumed`と`for_each_lent`が読む使いと消費を
+/// 分けるのに要るものになる。表をスライスで持つのは、パスが求めている途中の印からも作れるようにするためである
+/// (docs/spec/lir.mdの「ブロックの列」)。
+#[derive(Debug, Clone)]
+pub struct Lends<'a> {
+    pub c_functions: &'a [CFunction],
+    /// `FnIdx`ごとの、引数の位置ごとの印 (`Program::lends`)。
+    pub callees: &'a [Vec<bool>],
+    /// 今の関数のブロックごとの、引数の位置ごとの印。
+    pub blocks: Vec<Vec<bool>>,
+}
+
+impl<'a> Lends<'a> {
+    pub fn new(c_functions: &'a [CFunction], callees: &'a [Vec<bool>], function: &LirFn) -> Self {
+        let blocks = function
+            .blocks
+            .iter()
+            .map(|block| {
+                block
+                    .params
+                    .iter()
+                    .map(|param| block.borrowed.contains(param))
+                    .collect()
+            })
+            .collect();
+        Lends {
+            c_functions,
+            callees,
+            blocks,
+        }
+    }
+
+    fn call(&self, callee: FnIdx) -> &[bool] {
+        self.callees
+            .get(callee.0 as usize)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    fn jump(&self, target: BlockId) -> &[bool] {
+        self.blocks
+            .get(target.0 as usize)
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
+/// 印が`lent`に等しい引数を`f`に渡す。印の並びより後ろの位置は消費とする。verifierが別に報告する引数の数の誤りで、
+/// 引数が見えなくならないようにするためである。
+fn each_marked(args: &[Atom], marks: &[bool], lent: bool, mut f: impl FnMut(Atom)) {
+    for (index, &atom) in args.iter().enumerate() {
+        if marks.get(index).copied().unwrap_or(false) == lent {
+            f(atom);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,19 +348,21 @@ impl Stmt {
         }
     }
 
-    /// 値の使いのうち、基本操作と extern の借用の引数 (`Rhs::for_each_lent`)。
-    pub(crate) fn for_each_lent(&self, c: &[CFunction], f: impl FnMut(Atom)) {
-        if let Stmt::Let { var: _, rhs } = self {
-            rhs.for_each_lent(c, f);
+    /// 値の使いのうち、基本操作、extern、直接の呼び出しの借用の引数 (`Rhs::for_each_lent`)。
+    pub(crate) fn for_each_lent(&self, lends: &Lends, f: impl FnMut(Atom)) {
+        match self {
+            Stmt::Let { var: _, rhs } => rhs.for_each_lent(lends, f),
+            Stmt::LetMany { vars: _, call } => call.for_each_lent(lends, f),
+            _ => {}
         }
     }
 
     /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` と `unbox` の値は読むだけなので数えない
     /// (docs/spec/lir.md)。
-    pub fn for_each_consumed(&self, c: &[CFunction], f: impl FnMut(Atom)) {
+    pub fn for_each_consumed(&self, lends: &Lends, f: impl FnMut(Atom)) {
         match self {
-            Stmt::Let { var: _, rhs } => rhs.for_each_consumed(c, f),
-            Stmt::LetMany { vars: _, call } => call.for_each_atom(f),
+            Stmt::Let { var: _, rhs } => rhs.for_each_consumed(lends, f),
+            Stmt::LetMany { vars: _, call } => call.for_each_consumed(lends, f),
             Stmt::Unpack { .. }
             | Stmt::UnboxStruct { .. }
             | Stmt::Dup(_)
@@ -372,10 +449,22 @@ impl Term {
     }
 
     /// 値の使いのうち、参照を1つ受け取る「消費」。`switch` の scrutinee は読むだけなので数えない
-    /// (docs/spec/lir.md)。
-    pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
-        if !matches!(self, Term::Switch { .. }) {
-            self.for_each_atom(f);
+    /// (docs/spec/lir.md)。`tail call`と`jump`の、貸された位置の引数は、消費でなく貸す使いである。
+    pub fn for_each_consumed(&self, lends: &Lends, f: impl FnMut(Atom)) {
+        match self {
+            Term::TailCall(call) => call.for_each_consumed(lends, f),
+            Term::Jump { target, args } => each_marked(args, lends.jump(*target), false, f),
+            Term::Switch { .. } => {}
+            Term::Return(_) | Term::ReturnMany(_) => self.for_each_atom(f),
+        }
+    }
+
+    /// 値の使いのうち、`tail call`と`jump`の、貸された位置の引数。
+    pub(crate) fn for_each_lent(&self, lends: &Lends, f: impl FnMut(Atom)) {
+        match self {
+            Term::TailCall(call) => call.for_each_lent(lends, f),
+            Term::Jump { target, args } => each_marked(args, lends.jump(*target), true, f),
+            Term::Switch { .. } | Term::Return(_) | Term::ReturnMany(_) => {}
         }
     }
 
@@ -455,36 +544,32 @@ impl Rhs {
     }
 
     /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値と、基本操作と extern の借用の引数は読むだけなので
-    /// 数えない (docs/spec/lir.md の「ブロックの列」「基本操作」「extern の借用」)。`c` はプログラムの C の関数の表
-    /// (`Program::c_functions`) である。
-    pub fn for_each_consumed(&self, c: &[CFunction], mut f: impl FnMut(Atom)) {
-        let mut unborrowed = |args: &[Atom], borrowed: &[bool]| {
-            for (&atom, &borrowed) in args.iter().zip(borrowed) {
-                if !borrowed {
-                    f(atom);
-                }
-            }
-        };
+    /// 数えない (docs/spec/lir.mdの「ブロックの列」「基本操作」「extern の借用」)。呼ばれる関数の貸された位置の、
+    /// 直接の呼び出しの引数も数えない。これと`for_each_lent`が、Perceusとverifierが使う、読む使いと消費の唯一の
+    /// 定義である。
+    pub fn for_each_consumed(&self, lends: &Lends, f: impl FnMut(Atom)) {
         match self {
             Rhs::Unbox(_) => {}
-            Rhs::Prim(prim, args) => unborrowed(args, prim.row().borrowed),
-            Rhs::Extern { ext, args, at: _ } => unborrowed(args, ext.row(c).borrowed),
+            Rhs::Call(call) => call.for_each_consumed(lends, f),
+            Rhs::Prim(prim, args) => each_marked(args, prim.row().borrowed, false, f),
+            Rhs::Extern { ext, args, at: _ } => {
+                each_marked(args, ext.row(lends.c_functions).borrowed, false, f)
+            }
             _ => self.for_each_atom(f),
         }
     }
 
-    /// 値の使いのうち、基本操作と extern の借用の引数。読むだけなので `for_each_consumed` には入らない。同じ変数が
-    /// 同じ命令の消費の位置にもあれば、その命令の前に参照が2つ要る (docs/spec/lir.md の「extern の借用」)。
-    pub(crate) fn for_each_lent(&self, c: &[CFunction], mut f: impl FnMut(Atom)) {
-        let (args, borrowed) = match self {
-            Rhs::Prim(prim, args) => (args, prim.row().borrowed),
-            Rhs::Extern { ext, args, at: _ } => (args, ext.row(c).borrowed),
-            _ => return,
-        };
-        for (&atom, &borrowed) in args.iter().zip(borrowed) {
-            if borrowed {
-                f(atom);
+    /// 値の使いのうち、基本操作とexternの借用の引数。読むだけなので`for_each_consumed`には入らない。
+    /// 呼ばれる関数の貸された位置の、直接の呼び出しの引数も入る。貸す変数は、同じ命令の消費を当てた後も有効で
+    /// なければならない (docs/spec/lir.mdの「extern の借用」)。
+    pub(crate) fn for_each_lent(&self, lends: &Lends, f: impl FnMut(Atom)) {
+        match self {
+            Rhs::Call(call) => call.for_each_lent(lends, f),
+            Rhs::Prim(prim, args) => each_marked(args, prim.row().borrowed, true, f),
+            Rhs::Extern { ext, args, at: _ } => {
+                each_marked(args, ext.row(lends.c_functions).borrowed, true, f)
             }
+            _ => {}
         }
     }
 
@@ -595,6 +680,22 @@ impl Call {
                 f(*callee);
                 args.iter().for_each(|&atom| f(atom));
             }
+        }
+    }
+
+    /// 値の使いのうち消費。呼ばれる関数の貸された位置の、直接の呼び出しの引数を除くすべての値である。`apply`、
+    /// `clause`、`par`は、呼ぶ値と引数を消費する。
+    pub fn for_each_consumed(&self, lends: &Lends, f: impl FnMut(Atom)) {
+        match self {
+            Call::Direct(callee, args) => each_marked(args, lends.call(*callee), false, f),
+            _ => self.for_each_atom(f),
+        }
+    }
+
+    /// 値の使いのうち貸す使い。呼ばれる関数の貸された位置の、直接の呼び出しの引数である。
+    pub(crate) fn for_each_lent(&self, lends: &Lends, f: impl FnMut(Atom)) {
+        if let Call::Direct(callee, args) = self {
+            each_marked(args, lends.call(*callee), true, f);
         }
     }
 

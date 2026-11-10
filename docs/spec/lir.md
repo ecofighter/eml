@@ -35,7 +35,7 @@ EP の後の Core IR から写す LIR と、その実行の意味を定める。
 
 - 変数の表は、変数の番号ごとに名前、Repr (下の「値の表現」)、Kind の印 (下の「Kind の印」) を持つ
 - `blocks[0]` がエントリで、その引数が関数の引数である。ほかのブロックは番号 `bN` で指す
-- ブロックの`borrowed`は、引数の部分列で、貸された引数である。貸すのは関数のエントリだけで、呼び出した側が呼び出しの戻りまで参照を持ち続ける。そのため持ち主の欄はない。エントリのブロックの`borrowed`が関数の署名になる。テキストの形では、引数の並びとブロックのラベルで、束縛の前に`borrowed`と書く (`fn skip(borrowed s.0: obj, i.1: int) -> int {`、`b4(borrowed u.7: obj):`)。読むのはLIRのreaderだけで、Core IRのテキストは拒む。この印を付けるパスはまだないので、verifierはどの段でも拒む (`` `s.0` is borrowed before the borrow pass ``)
+- ブロックの`borrowed`は、引数の部分列で、貸された引数である。貸すのは関数のエントリだけで、呼び出した側が呼び出しの戻りまで参照を持ち続ける。そのため持ち主の欄はない。エントリのブロックの`borrowed`が関数の署名になる。テキストの形では、引数の並びとブロックのラベルで、束縛の前に`borrowed`と書く (`fn skip(borrowed s.0: obj, i.1: int) -> int {`、`b4(borrowed u.7: obj):`)。読むのはLIRのreaderだけで、Core IRのテキストは拒む。借用のパスより前の段のverifierは、この印を拒む (`` `s.0` is borrowed before the borrow pass ``。下の「verifier」)
 - 関数の結果 `rets` は、直接の呼び出しの結果の Repr と Kind の印の組の並びである。開くパスの前はいつも1つで、その Repr を `ret`、印を `ret_mark` と呼ぶ。開いた後は、構造体を返す関数がその葉を並べる (下の「開く」)。テキストの形では、2つ以上の値を `-> (float, float)` と書く
 - 文は、変数を定義する `let`、複数の値の `let`、`unpack`、構造体の `unbox` と、RC の命令 `dup`、`decref`、`release` である。ブロックの最後に終端が1つある
 - 値 (アトム) は、変数、`Int` の定数、`()`、引数のないコンストラクタのタグ `#N`、`Float` の定数 (ビット列 `FloatBits` で持つ)、関数の値 `&f` のどれかである
@@ -271,7 +271,8 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
 - 行は、引数ごとの借用の印 (`FunctionRow::borrowed`) を `params` と並べて持つ。印はどの位置の引数にも立てられる。印の立つ引数を extern は読むだけで、消費しない。基本操作の借用の引数 (下の「基本操作」) と同じく読む使いなので、Perceus は借りた変数を `dup` しない。借用が最後の使いなら、その命令の直後で手放す
 - 借りるのは、配列を読む 10 行 (`Std.Array.length`、`Std.Array.get`、`Std.MutArray.length`、`Std.MutArray.read`、`Std.UnboxedArray.length`、`Std.UnboxedArray` の2つの `get`、`Std.MutUnboxedArray.length`、`Std.MutUnboxedArray` の2つの `read`) の配列の引数と、`String` を読む11行の `String` の引数である。11行は、`Std.String.byte_length`、`byte_at`、`char_at`、`slice`、`find_from` (探す文字列と対象の両方)、`Prelude.Eq String.==` と `!=`、`Prelude.Ord String.compare` (両辺)、`Prelude.Show String.show`、`Std.Float.can_parse` と `parse_raw` である。`FileIn` を読む5行 (`Std.FileIn.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) と、`Stdin` を読む同じ名前の5行 (`Std.Stdin.read_all` など) と、`Child` を読む同じ名前の5行 (`Std.Proc.read_all` など) も、ハンドルの引数を借りる。`read_chunk` は、足す先のバイト列 (最初の引数) を消費する。`Bytes` を読む行 (`Std.Bytes.length`、`get`、`slice`、`find_from` の探すバイト列と対象、`find_byte_from` の対象、`append_slice` の `src`、`Prelude.Eq Bytes.==` と `!=`、`Prelude.Ord Bytes.compare` の両辺、`Show Bytes` が読む `Prelude.bytes_length` と `bytes_get`) も `Bytes` の引数を借りる。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の書き込みの行 (`write`、`write_bytes`、`write_line`) は書くデータ (最初の引数) を借り、ハンドルを消費して同じハンドルを返す。読むたびに参照を渡して返す手間と、1バイトずつ読むループの `dup` を省くためである。`++`、`Std.String.push`、`println`、`eprintln`、`Std.FileIn.open`、`Std.FileOut.create` と `append`、`Std.Env` の行、`Std.Proc.spawn_raw` と `exited` は、引数を消費したままにする
-- 1つの命令が同じ変数を借りて、かつ消費するなら、その命令の前に参照が2つ要る。extern の行でこの形を持つのは `Std.Bytes.append_slice` だけで、`src` を借り、`dst` を消費する。借用は命令の間じゅう続くので、消費に渡す参照とは別に1つ持つ必要があるためである。Perceus は、借りる変数を同じ命令が消費するなら、その変数を命令の後も生きているとみなして `dup` を置き、命令の後の `decref` が借用の分を手放す。verifier は、`dup` のないこの形を `` `e.0` is lent to `prim ev_renew` and consumed by the same instruction `` のように断る。借りるだけの使いと、別の変数を消費する使いは、この規則に当たらない
+- 1つの命令が同じ変数を借りて、かつ消費するなら、その変数は命令の消費を当てた後も有効でなければならない。持ち主が所有を持つフィールドでなければ、その命令の前に参照が2つ要る。externの行でこの形を持つのは`Std.Bytes.append_slice`だけで、`src`を借り、`dst`を消費する。借用は命令の間じゅう続くので、消費に渡す参照とは別に1つ持つ必要があるためである。Perceusは、借りる変数を同じ命令が消費するなら、その変数を命令の後も生きているとみなして`dup`を置き、命令の後の`decref`が借用の分を手放す。verifierは、命令の消費をすべて先に当ててから、貸す変数がどれも有効であることを求める (下の「verifier」)。`dup`のないこの形は`` `e.0` is lent to `prim ev_renew` and consumed by the same instruction ``のように断る。同じ命令が持ち主を消費する、貸すフィールドと、直接の呼び出しが貸された引数に貸す引数にも、同じ規則が当たる
+- 行が引数を借りるのは、引数を読むだけで、呼ぶ所がふつう値を持ち続けるときだけである。引数を預かる行 (`Std.Async`の閉包とセル、`Std.Chan.push_raw`、`Std.Net`と`Std.Stream`の`submit`の行のバッファ)、ハンドルを終える行 (`close`、`Std.Proc.wait`)、ふつう最後の使いで一時的な値を受け取る行は、引数を消費する。そのため、`println`、`Std.FileIn.open`、`Std.Env`の行のように物体の引数を消費するstdの行は、消費したままにする。そこで借りても省けるのはsyscallの隣のRCの1組だけで、行ごとにランタイムのメソッドを変える必要があるためである
 - extern が失敗して中断しても、借りた引数は呼んだ側が持ったままである。巻き戻しの表は呼び出しの後に持っている値を手放すので、借りた引数もそこで手放す ([VM](vm.md) の「巻き戻し」)。消費する引数は、extern が手放す
 - `writes` (`FunctionRow::writes`) の行は、借りた引数の中身を書き換える。std の配列を書く行は配列を消費して返すので、std の行はどれも `writes` を持たない
 - `with_args` が `[k]` の行 (`Std.FileIn`、`Std.Stdin`、`Std.Proc` のそれぞれ5つの読み、`Std.MutArray.length`、`read`、`Std.MutUnboxedArray.length` と2つの `read`) は、宣言の型では結果と引数 k の組を返す。行の結果は組の最初の要素で、組は translate が作る ([Core IR](core-ir.md) の「組を返す extern」)。LIR の `extern` 命令は行の結果だけを束縛し、借りた引数 k はその後の `con` が消費する
@@ -658,14 +659,15 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 
 ### verifier
 
-- LIR の verifier は5つの段を持つ。段はパスの順に直線に並ぶので、境界の検査だけを切り替える別の旗は持たない
+- LIRのverifierは6つの段を持つ。段はパスの順に直線に並ぶので、境界の検査だけを切り替える別の旗は持たない
   - エントリの段 (`verify_lowered`) は、`passes_until` が入力にかける (上の「パスの順番」)。構造の規則のうち境界と所有に関わらないもの (R1〜R5、R6 の支配、R7 と R8 のうち境界の検査を除くもの) と、下の引き継ぐ検査と、基本操作と `clause` の検査を確かめ、`tail`、`box`、`unbox`、`dup`、`decref`、`release` がないことを確かめる。box の挿入は末尾呼び出しと変換のない入力を前提にし、`let` と `return` の形から末尾の位置を見るためである。Perceus より前に `release` を拒むのと同じく、パスの入力の約束を verifier が確かめる
   - 範囲の段 (`verify_scopes`) は box の挿入の後にかける。エントリの段から `box` と `unbox` の拒否を除き、`box` と `unbox` の規則 (上の「値の表現」) と境界の検査を足す。構造体の変数を受け、複数の値の `let` と `return`、構造体の `unbox` を拒む。互換でない `return` は、末尾の位置の呼び出しの結果を返す形のときだけ許す (上の「末尾の位置の呼び出し」)
   - 開いた後の段 (`verify_flattened`) は開くパスの後にかける。範囲の段に加えて、変数、関数の結果、配置のフィールドのどこにも構造体が残らないことを確かめ、複数の値の `let` と `return`、構造体の `unbox` を受ける
-  - 所有の段 (`verify`) は Perceus と reuse の後にかけ、開いた後の段に加えて、RC の対象の所有の多重集合 (R6)、V1、token の規則、`release unboxed` の印を確かめる
-  - エントリの段のほかの4つの段を、境界の段と呼ぶ。境界の検査 (下) は境界の段で走る
+  - 借用の段 (`verify_borrowed`) は借用のパスの後にかける。開いた後の段に加えて、下の貸された引数の静的な規則を確かめる。これより前の段は`borrowed`の印を拒む (上の「ブロックの列」)
+  - 所有の段 (`verify`) はPerceusとreuseの後にかけ、借用の段に加えて、RCの対象の所有の多重集合 (R6)、V1、tokenの規則、`release unboxed`の印、下の貸された引数の所有の規則を確かめる
+  - エントリの段のほかの5つの段を、境界の段と呼ぶ。境界の検査 (下) は境界の段で走る
 - Kind の印の検査 (V1、V2、作る所の検査) は、下の「Kind の印の検査」にある。V2 と作る所の検査は Repr を比べる所と同じ所で、V1 は所有の段で走る
-- 着地の印 (上の「着地の印」) の検査は、5つの段のすべてで走る
+- 着地の印 (上の「着地の印」) の検査は、6つの段のすべてで走る
   - 末尾呼び出しの印は、呼び出しの検査の最初に拒む (``a tail apply has a prompt marker, but a tail call leaves no frame to land on``)。エントリの段は `tail` そのものを拒むので、この文言はエントリの段のほかで出る
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数 v が見えること、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
@@ -676,17 +678,28 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 - RC の対象のフィールドには、定義のとき (R5 で1回だけ) 持ち主と出どころを記録する
   - 持ち主: 分解した値 s が、束縛の時点で所有の数を1つ以上持っていれば s、そうでなければ s の持ち主
   - 出どころ: `(s, Ctor, 位置)`。case の `Ctor` は、`switch` の配置と case のタグである。フィールドの数は R8 が配置で確かめるので、出どころに持たない
-- 変数 v が有効なのは、v の所有の数が1つ以上か、v の持ち主の所有の数が1つ以上のときである。1回の参照で決まるので、verifier は線形のままである。所有の数が正なら、その経路は実際の参照を持ち、物体は生きている。データは変更されないので、その下の物体もすべて生きている
+- 変数vが有効なのは、vの所有の数が1つ以上か、vの持ち主の所有の数が1つ以上か、vを呼んだ側が支えるとき (下の貸された引数の所有の規則) である。1回の参照で決まるので、verifierは線形のままである。所有の数が正なら、その経路は実際の参照を持ち、物体は生きている。データは変更されないので、その下の物体もすべて生きている
 - 所有の段では、次の規則を確かめる
   - 分解 (case のフィールド、`unpack`): 値は見えて有効な RC の対象の変数である。RC の対象のフィールドは所有の数0で始まる。借りた変数への `switch` と `unpack` も受け入れる
-  - 読む (`switch` の scrutinee、`unpack` の値、`unbox` のオペランド、`prim` と extern の借用の引数、`dup` の対象): 見えて有効である。所有の数を変えない。ただし `dup v` は v の所有の数を1つ増やす。`prim` の借用の引数が変数でない値なら、消費と同じ検査 (関数の値の番号) だけを通す。借りる変数を同じ命令が消費するなら、所有の数が消費の数より多くなければならない
+  - 読む (`switch`のscrutinee、`unpack`の値、`unbox`のオペランド、`prim`とexternの借用の引数、`dup`の対象): 見えて有効である。所有の数を変えない。ただし`dup v`はvの所有の数を1つ増やす。`prim`の借用の引数が変数でない値なら、消費と同じ検査 (関数の値の番号) だけを通す。貸す引数は、その命令の消費をすべて当てた後で有効でなければならない (下の貸された引数の所有の規則)
   - 消費と `decref v`: 見えて、v の所有の数が1つ以上である。1つ減らす。1つの命令の中では左から順に当てる
   - `release x L #t(p1, .., pn)`: 名前が1つ以上あるか、token を定義する。x の所有の数が1つ以上である。名前を書いた各 pi は見えて、Repr が RC の対象で、出どころが `(x, L #t, i)` である。その後、x を1つ減らし、各 pi を1つ増やす。1つの位置には1つの名前しか書けないので、同じフィールドを2つの変数が引き継ぐことはない
   - 名前のない `release` では、その道で x の構築子が `L #t` だと分かっている。箱の子は `L #t` の形で手放され、token の語の数も `L #t` で決まるので、違う構築子なら fast mode で記憶がおかしくなるためである。分かっている構築子は reuse のパスと同じく道ごとに持つ。タグの case の行き先はその scrutinee の、`unpack` はその値の構築子を知り、合流するブロックには入るすべての道で分かっているものだけが残る。フィールドのない構築子は数えない。名前のある `release` には求めない。出どころが x を `L #t` として分解したことを示すうえ、両立しない2つの `switch` を通る死んだ道では、分かっている構築子が出どころと食い違うことがあるためである
   - token: token の変数は、token を定義する `release` でだけ定義する。経路でまだ使っていない token は所有の数1として持ち、所有と同じ写し方で `switch` の行き先へ渡す。どの経路でも、token を受ける `con` か `drop_token` で、ちょうど1回使う。token は値の位置 (上の「token の流れ」) に現れず、`jump`、`return`、`tail` の時点と、yield しうる呼び出しの直後に生きていない
   - token を受ける `con`: 物理的な語の数は token の元の構築子と同じである。`in place` なら、元と同じ配置の同じタグで、`lin` ビットの条件を満たす。書かない印の数は引数の数と同じで、書かない引数は、元の値を分解して束縛した変数で、語の種類と物理的な位置が元と同じである
-  - 借りた変数 (所有の数0) は消費できないので、`jump` で渡されることはない。呼び出しの後も見えたままで、持ち主が所有されていれば有効である。持ち主を呼び出しの引数として消費すると、その後の借りた変数の使いは拒まれる。定義が支配する合流のブロックでも見えたままで、持ち主がどの辺でも所有されていれば有効である
+  - 借りた変数 (所有の数0) は消費できないので、貸されたブロックの引数へのほかは`jump`で渡されることはない。呼び出しの後も見えたままで、持ち主が所有されていれば有効である。持ち主を呼び出しの引数として消費すると、その後の借りた変数の使いは拒まれる。定義が支配する合流のブロックでも見えたままで、持ち主がどの辺でも所有されていれば有効である
   - 持ち主を手放した後は、間の変数を後で `dup` していても、借りた変数を拒む。保守的だが健全で、Perceus はその形を出さない。親をたどる規則に緩めても、IR は変わらない
+- 貸された引数の静的な規則は次のとおりである。借用の段と所有の段で走る
+  - ブロックの`borrowed`は`params`の部分列で、貸された引数はどれもRCの対象 (`obj`か`tobj`) で`unr`である。`lin`の値は参照をちょうど1つ持ち、貸された値を消費して使うには`dup`が要るためである
+  - 固定の関数 (`LirFn::pinned`) は貸された引数を持たない。固定の関数は、`split`を持つ関数、`clause`の印を持つ関数、`$uniform`と`$owned`の変種、EPの補助の関数、ランタイムが名前で呼ぶ関数 (`RuntimeEntry`) である。`apply`、節の呼び出し、ランタイムは所有した語を渡すためである。値の参照 (`&f`、`closure f(..)`) は、貸された引数を持つ関数を指さない
+  - 貸されたブロックの引数への`jump`の実引数は、どれも呼んだ側から借りた変数か、変数でない値である。呼んだ側から借りた変数とは、根が貸されたブロックの引数である変数で、その引数自身か、それから`switch`のcase、`unpack`、構造体の`unbox`で分解したフィールドである。合流するブロックは入った辺を区別できないので、どの辺もそういう値を渡さなければならない
+  - `tail call`の、呼ばれる関数の貸された位置の引数は、どれも呼んだ側から借りた変数か、変数でない値である。末尾呼び出しは、値を生かしておく呼び出し元のフレームを残さないためである
+- 貸された引数の所有の規則は次のとおりである。所有の段で走る
+  - 貸されたブロックの引数は所有の数0で始まり、呼んだ側が支える。呼んだ側が支える値から、その値の所有の数が0の間に束縛したフィールドも、呼んだ側が支える。呼んだ側が支える値は、いつも有効である
+  - 消費、`decref`、`release`は、呼んだ側が支える値にも所有の数1以上を求める。そういう値は`dup`でだけ所有の数を得る
+  - 直接の呼び出しの、呼ばれる関数の貸された位置の引数と、貸されたブロックの引数への`jump`の実引数は、貸す使いである。`prim`とexternの借用の引数と同じく読む使いで、所有の数を変えない
+  - 貸す引数を持つ命令 (extern、`prim`、直接の呼び出し、`tail call`、`jump`) では、命令の消費をすべて左から順に当て、その後で貸す変数がどれも有効であることを求める。貸す引数は命令の間じゅう読まれ、呼ばれる側は貸された値を読む前に、消費した値を解放しうるためである。そのため、同じ命令が持ち主の最後の参照を消費するときに貸すフィールドは拒まれる
+  - 合流の規則と、`return`と`tail`の時点で所有が残らない規則は変わらない。巻き戻しの表のエントリの行は、所有しているRCの対象の引数だけを並べる (下の「巻き戻しの地点」)
 - 引数のない `con` は、2つの IR のどの段でも拒む (`` a constructor value without fields is written as a tag `#N`, not `con` ``)
 - エントリの段だけの文言は次のとおりである
   - `tail`: ``a tail call is formed before contract``。`call` のほかは ``a tail apply``、``a tail clause``、``a tail par`` を同じ形で使う
@@ -698,13 +711,19 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 残った構造体: `` `d.3` is Vec3{float, float, float}, but no struct remains after flatten ``、``the function returns Vec3{float, float, float}, but no struct remains after flatten``、``the constructor `Ball` has a struct field, but no struct remains after flatten``
   - 複数の値: ``a return gives 3 values, but the function returns (float, float)``、``2 values are bound to `f`, which returns (float, float, float)``
   - 構造体の `unbox`: `` `w.3` (float) is unboxed as a struct, but only obj and tobj can be ``、`` an unbox of `w.3` names `Shape`, which has 2 constructors ``
+- 借用の段と所有の段の、貸された引数の静的な規則の文言は次のとおりである
+  - 引数の表現と印: `` `n.1` (int) is a borrowed parameter, but only obj and tobj can be ``、`` `h.0` (lin) is a borrowed parameter, but only unr can be ``、``the borrowed parameters of b2 are not a subsequence of its parameters``
+  - 固定の関数と値の参照: `` `s.0` of `main$lambda3` is borrowed, but the function is not called directly ``、`` `f` is used as a value, but its parameter `s.0` is borrowed ``
+  - `jump`: `` `x.3` is passed to the borrowed parameter `u.7` of b4, but it is not borrowed from the caller ``
+  - `tail call`: `` `x.3` is lent to `g` by a tail call, but it is not borrowed from the caller ``
 - 所有の段の `release unboxed` の文言は次のとおりである。`` `w.3` is unboxed as a struct, but its release is not marked unboxed ``、`` `w.3` is released as unboxed, but it is not unboxed as a struct ``
 - エントリの段と範囲の段の文言は次のとおりである。Perceus より前の RC の命令を拒む
   - `` `s.0` is duplicated before Perceus ``、`` `s.0` is released before Perceus `` (`decref`)、`` `d.0` is released with its fields before Perceus `` (`release`)。token の命令も同じく拒む
 - 所有の段の誤りの文言は次のとおりである
   - `` `x.1` is {used|released} but is only borrowed from `d.0` ``: 持ち主が所有されている間に、所有の数0の変数を消費したか、`decref` か `release` で手放した
-  - `` `x.1` is {duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after its owner `d.0` was given up ``: 無効な変数を読んだ。`prim` の借用の引数では、基本操作をテキストの形 (即値を含む) で書く。extern の借用の引数では、行の名前を書く (``lent to `Std.Array.get` ``)
-  - `` `x.1` is lent to `Std.Array.get` and consumed by the same instruction ``: 借りる変数を同じ命令が消費するのに、所有の数が消費の数以下である。`prim` の借用の引数では、基本操作をテキストの形で書く (``lent to `prim ev_renew` ``)
+  - `` `s.0` is {used|released} but is only borrowed from the caller ``: 呼んだ側が支える変数を、所有の数0で消費したか、`decref`か`release`で手放した
+  - `` `x.1` is {duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after its owner `d.0` was given up ``: 無効な変数を読んだ。`prim`の借用の引数では、基本操作をテキストの形 (即値を含む) で書く。externの借用の引数では、行の名前を書く (``lent to `Std.Array.get` ``)。直接の呼び出しの貸す引数では呼ばれる関数の名前を (``lent to `g` ``)、`jump`の貸す実引数では行き先を書く (``passed to b3``)
+  - `` `x.1` is lent to `Std.Array.get` and consumed by the same instruction ``: 貸す変数を同じ命令が消費し、その命令の消費を当てた後で有効でない。`prim`の借用の引数では、基本操作をテキストの形で書く (``lent to `prim ev_renew` ``)
   - `` `x.1` is not field 0 of `d.0` as `Option` #1 ``: `release` の名前の出どころが違う
   - `` a release of `d.0` keeps no field `` と `` `x.1` is kept but is not reference counted ``: `release` の名前の誤り
   - `` `x.0` is released as `P` #0, but its constructor is not known on this path ``: 名前のない `release` の構築子が、その道で分かっていない
@@ -743,15 +762,15 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `unbox` のオペランド: `` `p.0` (obj) is unboxed, but only tobj can be ``、``5 is unboxed, but only tobj can be``
   - `unbox` の束縛: `` `n.2` (tobj) is bound to an unbox, which gives int, float or enum ``
 - 引き継ぐ検査は次のとおりである。2つの IR のすべての段で走る。直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数と、`extern Std.Par.par` を拒むこと (`` `Std.Par.par` is not an extern instruction ``。`Extern::Par` の行は std の宣言を型検査に結ぶためだけにあり、translate は呼び出しを `par` にする。[Core IR](core-ir.md) の「`par` の呼び出し」)、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`。Core IR のエフェクトの命令の検査は [Core IR](core-ir.md) の「verifier」にある
-- 基本操作と `clause` の検査は次のとおりである。Core IR の EP の段と、LIR の5つの段のすべてで走る
+- 基本操作と`clause`の検査は次のとおりである。Core IRのEPの段と、LIRの6つの段のすべてで走る
   - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask` の項目は、呼び出しの `mask` と同じく空でなく、番号の真に昇順に並び (同じエフェクトの項目が2つない)、どの項目も1つ以上の evidence を飛ばす (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``、``an item of `prim evv_mask[State*0]` skips no handler``)
   - `clause` の操作がエフェクトの表にあり、引数の数が「1 + 操作の引数の数」である
   - `ev_set_clause[E.op]` に渡す値が `&g` か、同じ関数の中の `closure g(..)` なら、g の `clause` の印が op に合い、同じ関数の中で evidence を定義した `ev_new[E]` の E にも合う
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける
-- `par` の検査は次のとおりである。Core IR の2つの段と、LIR の5つの段のすべてで走る
+- `par`の検査は次のとおりである。Core IRの2つの段と、LIRの6つの段のすべてで走る
   - `pair` は、`tobj` のフィールドをちょうど2つ持つ構築子である。VM は子の一様な結果を2つ並べて組を作るためである (``the pair of a par is `Box` #0, which does not have two tobj fields``)。表にない配置とタグの範囲は R8 と同じ文言で、主語を ``the pair of a par`` にする
   - LIR の `tail par` は、エントリの段のほかの段で拒む (``a par is a tail call, but the join needs the parent's frame``)。縮約は `par` を `tail` にしないので、この形はパスの誤りである
-- fork の関数の検査は次のとおりである。5つの段のすべてで、関数ごとの検査より前に走る
+- forkの関数の検査は次のとおりである。6つの段のすべてで、関数ごとの検査より前に走る
   - fork しうるプログラム (`Program::may_fork`) は、fork の関数を持つエフェクト (操作を1つ以上持ち、`EffectInfo::never_only` が真のもの) の操作ごとに、その操作の `clause` の印を持つ `fork$E.op` と、`reperform$E.op` を持つ。VM が子の evidence をこの名前で作るためである ([Core IR](core-ir.md) の「`par` の子の中断」)。文言は `` `Fail.fail` has no fork entry, but the program may fork `` (`reperform$` は `no reperform entry`) と ``the fork entry is not a clause of `Fail.fail` `` で、`` in `fork$Fail.fail` `` のように探した関数の名前が付く
 - 値の参照と変種の検査は次のとおりである。範囲の段から後のすべての段で、本体の検査の後に走る
   - 値として参照する関数 (`&f` と `closure f(..)` の `f`) は、捕獲より後ろの引数と結果がすべて一様である。`clause` の印の関数は操作の ABI で呼ばれるので除く (`` `g` is used as a value with 0 captures, but its later parameters and its result are not all uniform ``)
@@ -830,7 +849,7 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
   - `prim yield_abort` と `prim child_abort`
 - `faults` でない extern、prim、末尾の呼び出し (`tail call`、`tail apply`、`tail clause`) は地点にならない。末尾の呼び出しはフレームを呼ばれる側に渡すので、その位置に止まるフレームがない
 - 地点でないものは、関数の中で中断が始まらない。中断が通るフレームは、いつも地点の命令の直後で止まっているか、関数のエントリで止まっている
-- 関数ごとにエントリの行を1つ持つ。エントリの行は、関数に入った直後に所有している値を並べる。エントリのフレームは、RC の表現を持つ引数をすべて所有し、借りた値も token も着地の印も持たないので、行は RC の表現を持つ引数を数 1 で並べるだけである。`VarId` の昇順に並べる
+- 関数ごとにエントリの行を1つ持つ。エントリの行は、関数に入った直後に所有している値を並べる。エントリのフレームは、貸された引数を除くRCの表現を持つ引数をすべて所有し、借りたフィールドもtokenも着地の印も持たない。そのため行は、所有しているRCの表現を持つ引数を数1で、`VarId`の昇順に並べるだけである。貸された引数は呼んだ側が生かしておき、呼んだ側の行が手放す
 - `eml_lir::unwind::points(program, wanted)` は、関数ごとに `Unwinds { entry, points }` を `FnIdx` の番号で返す。`entry` がエントリの行、`points` が地点で、ブロックの順、文の順に並ぶ。所有は、所有の段の走査 (上の「verifier」) が、ブロック 0 の最初の文の前と各地点で書き留める ([VM](vm.md) の「巻き戻しの表」)
 - 名前が同じ関数の表は、REPL のどの入力で作っても同じになる。表は関数のコードだけで決まり、ほかの関数に依存しない。名前が同じ関数は同じコードなので ([VM](vm.md) の「追記」)、表も同じになる
 

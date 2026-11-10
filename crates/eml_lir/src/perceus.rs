@@ -13,28 +13,29 @@
 
 use std::collections::BTreeSet;
 
-use eml_extern::CFunction;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::{
-    Atom, Block, BlockId, CasePattern, Ctor, Layout, LirFn, Mark, Program, Repr, Rhs, Stmt, Term,
-    VarId, VarInfo,
+    Atom, Block, BlockId, CasePattern, Ctor, Layout, Lends, LirFn, Mark, Program, Repr, Rhs, Stmt,
+    Term, VarId, VarInfo,
 };
 
 /// 変換と contract の後に、プログラム全体に1回だけかける。入力は RC の命令を持たない。
 pub fn perceus(program: &mut Program) {
+    let callees = program.lends();
     for function in &mut program.functions {
-        insert_rc(function, &program.layouts, &program.c_functions);
+        let lends = Lends::new(&program.c_functions, &callees, function);
+        insert_rc(function, &program.layouts, lends);
     }
 }
 
-fn insert_rc(function: &mut LirFn, layouts: &[Layout], c_functions: &[CFunction]) {
+fn insert_rc(function: &mut LirFn, layouts: &[Layout], lends: Lends) {
     let live_in = live_in(function);
     let unboxed = function.struct_boxes();
     let mut fields = Fields {
         layouts,
-        c_functions,
+        lends,
         rc: function.vars.iter().map(|var| var.repr.is_rc()).collect(),
         marks: function.vars.iter().map(|var| var.mark).collect(),
         unboxed,
@@ -129,7 +130,7 @@ struct Parent {
 /// 関数全体の表。変数は関数の中で1回だけ定義される (R5) ので、束縛の位置で1回書けばよい。
 struct Fields<'a> {
     layouts: &'a [Layout],
-    c_functions: &'a [CFunction],
+    lends: Lends<'a>,
     rc: Vec<bool>,
     marks: Vec<Mark>,
     /// 構造体の `unbox` が読む箱。箱は構造体の変数の印を持ち、`lin` か `poly` なら `decref` できない (V1) ので、
@@ -264,10 +265,10 @@ impl Fields<'_> {
     /// 変数である。
     fn stmt(&mut self, state: &mut State, stmt: Stmt, live: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
         let used = vars(|f| stmt.for_each_atom(f));
-        let consumed = self.consumed(|f| stmt.for_each_consumed(self.c_functions, f));
+        let consumed = self.consumed(|f| stmt.for_each_consumed(&self.lends, f));
         // 借りる変数を同じ文が消費もするなら、文の後も生きているとみなす。借用は文の間じゅう続くので、消費に渡す参照とは
         // 別に1つ要り、文の後の `decref` がその参照を手放す (docs/spec/lir.md の「extern の借用」)
-        let lent = self.consumed(|f| stmt.for_each_lent(self.c_functions, f));
+        let lent = self.consumed(|f| stmt.for_each_lent(&self.lends, f));
         let need = Need { live, used: &used };
         // 消費する変数のほかに、所有を取るのは次の変数である。持ち主の最後の参照をこの文が消費した後も生きている、
         // その持ち主に属する変数。呼び出しの後で生きている、保持されている持ち主に属する変数。後者は持ち主を呼び出しの
@@ -388,7 +389,7 @@ impl Fields<'_> {
             return;
         }
         let used = vars(|f| term.for_each_atom(f));
-        let consumed = self.consumed(|f| term.for_each_consumed(f));
+        let consumed = self.consumed(|f| term.for_each_consumed(&self.lends, f));
         let mut take = consumed.clone();
         if matches!(term, Term::Jump { .. }) {
             take.extend(
