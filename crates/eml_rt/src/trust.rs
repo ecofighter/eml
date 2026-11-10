@@ -105,6 +105,10 @@ const TRUSTED: &[(&str, &str)] = &[
     ("alloc.rs: external_body alloc_page", "T1"),
     ("alloc.rs: Tracked::assume_new alloc_page", "T1"),
     ("alloc.rs: external_body dealloc_page", "T1"),
+    ("alloc.rs: external_body return_page", "T17"),
+    ("alloc.rs: external_body PagePin", "T17"),
+    ("alloc.rs: external_body pin_page", "T17"),
+    ("alloc.rs: Drop for PagePin", "T17"),
     ("alloc.rs: external_body charge_pages", "T1"),
     ("alloc.rs: external_body refund_pages", "T1"),
     ("alloc.rs: external_body over_budget", "T1"),
@@ -536,7 +540,7 @@ fn the_trust_list_is_exactly_the_trusted_items() {
         assert!(
             [
                 "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12",
-                "T13", "T14", "T15", "T16"
+                "T13", "T14", "T15", "T16", "T17"
             ]
             .contains(number),
             "{item} has no trust row"

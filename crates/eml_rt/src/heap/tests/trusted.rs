@@ -17,7 +17,9 @@ use crate::cell::{rc_decref_shared, rc_dup_shared};
 use crate::externs::{Fault, Form, Handle, IoOp, IoReason, Open, ReadAmount, Write};
 use crate::heap::ctx::positions::find_byte;
 use crate::host::{BUFFER_BYTES, Failure, FileIn, Reader, WriteMode, consume, fill, host_open};
-use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
+use crate::{
+    Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, PagePin, Word,
+};
 
 const PAGE_BYTES: usize = 0x1_0000;
 
@@ -2600,6 +2602,228 @@ fn an_empty_array_lends_a_pointer_to_no_elements<M: Mode>() {
     assert_eq!(mortal(&mut heap), 0);
 }
 
+// T17: 留めた大きい物体のページは返さずに取り置き、最後の留めが返す。どのテストも留めをすべて落とすので、
+// 返さないページがあればMiriが漏れとして報告する
+
+/// 番地`addr`のページの頭の番地。
+fn page_of(addr: usize) -> usize {
+    addr & !(PAGE_BYTES - 1)
+}
+
+/// 留めたページはヒープより長く生きる。ヒープを落とした後はページを取り置き、貸した位置から書いて読める。
+/// 留めを落とすとページを返す。
+fn a_pinned_large_page_outlives_its_heap<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_unboxed(LARGE_ELEMENTS, 0, false);
+    let (p, pin) = unsafe { (heap.unboxed_ptr_mut(w).unwrap(), heap.pin(w).unwrap()) };
+    let pin = pin.expect("a large array is pinned");
+    assert!(!PagePin::parked(p.addr()));
+    drop(heap);
+    assert!(PagePin::parked(p.addr()));
+    assert!(PagePin::parked(p.wrapping_add(LARGE_ELEMENTS - 1).addr()));
+    unsafe {
+        let last = p.add(LARGE_ELEMENTS - 1);
+        last.write(42);
+        assert_eq!(last.read(), 42);
+    }
+    drop(pin);
+    assert!(!PagePin::parked(p.addr()));
+}
+
+/// 留めた大きい物体を空けても、そのページは残る。取り置いて読めるままで、後で確保した大きい物体はその番地を使わない。
+fn a_pinned_large_object_freed_by_its_heap_is_parked<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_unboxed(LARGE_ELEMENTS, 5, false);
+    let (p, pin) = unsafe { (heap.unboxed_ptr(w).unwrap(), heap.pin(w).unwrap()) };
+    let pin = pin.expect("a large array is pinned");
+    unsafe { heap.decref(w) }.unwrap();
+    // 速いモードは空けた大きい物体のページをすぐに返すので、ここで取り置く。検査モードはヒープを落とすまで隔離する
+    assert_eq!(PagePin::parked(p.addr()), !M::CHECKED);
+    assert_eq!(unsafe { p.add(LARGE_ELEMENTS - 1).read() }, 5);
+    for _ in 0..3 {
+        let other = heap.alloc_unboxed(LARGE_ELEMENTS, 1, false);
+        assert_ne!(page_of(other.bits()), page_of(p.addr()));
+        unsafe { heap.decref(other) }.unwrap();
+    }
+    drop(pin);
+    assert!(!PagePin::parked(p.addr()));
+    assert_eq!(mortal(&mut heap), 0);
+}
+
+/// 小さい配列、短い文字列、即値は留めない。
+fn a_small_object_is_not_pinned<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let array = heap.alloc_unboxed(8, 0, false);
+    let string = heap.alloc_string("short");
+    unsafe {
+        assert!(heap.pin(array).unwrap().is_none());
+        assert!(heap.pin(string).unwrap().is_none());
+        assert!(heap.pin(Word::imm(7)).unwrap().is_none());
+        heap.decref(array).unwrap();
+        heap.decref(string).unwrap();
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
+/// 1つのページの2つの留め。ページは2つ目の留めを落とすときに1回だけ返す。
+fn two_pins_of_one_page_return_it_once<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_unboxed(LARGE_ELEMENTS, 0, false);
+    let (p, first, second) = unsafe {
+        (
+            heap.unboxed_ptr(w).unwrap(),
+            heap.pin(w).unwrap().expect("a large array is pinned"),
+            heap.pin(w).unwrap().expect("a large array is pinned"),
+        )
+    };
+    drop(heap);
+    drop(first);
+    assert!(PagePin::parked(p.addr()));
+    drop(second);
+    assert!(!PagePin::parked(p.addr()));
+}
+
+/// 持ち主がヒープで確保し、空け、(検査モードで) 歩き、落とす間に、別のスレッドが留めた配列の位置から書く。
+/// 歩きは走査する語だけを読むので、Miriは競合を報告しない。
+fn another_thread_writes_a_pinned_array_while_the_owner_allocates_and_walks<M: Mode>() {
+    struct SendPtr(*mut u64);
+    // SAFETY: joinまで、配列の要素に触れるのは書くスレッドだけである
+    unsafe impl Send for SendPtr {}
+
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_unboxed(LARGE_ELEMENTS, 0, false);
+    let (p, pin) = unsafe { (heap.unboxed_ptr_mut(w).unwrap(), heap.pin(w).unwrap()) };
+    let pin = pin.expect("a large array is pinned");
+    let lent = SendPtr(p);
+    let writer = std::thread::spawn(move || {
+        // 欄ごとに捕まえると生のポインタだけが移り、閉包が`Send`でなくなるので、包みごと移す
+        let lent = lent;
+        for i in 0..LARGE_ELEMENTS {
+            unsafe { lent.0.add(i).write(i as u64 + 13) };
+        }
+    });
+    for _ in 0..3 {
+        let s = heap.alloc_string(&"b".repeat(LARGE_BODY));
+        let a = heap.alloc_unboxed(LARGE_ELEMENTS, 2, false);
+        let l = list(&mut heap, 4);
+        unsafe {
+            heap.decref(s).unwrap();
+            heap.decref(a).unwrap();
+            heap.decref(l).unwrap();
+        }
+    }
+    if let Some(checked) = as_checked(&mut heap) {
+        assert_eq!(checked.check_invariants(), Ok(()));
+        assert_eq!(checked.leaks().get("Raw"), Some(&1));
+    }
+    drop(heap);
+    writer.join().unwrap();
+    assert!(PagePin::parked(p.addr()));
+    for i in 0..LARGE_ELEMENTS {
+        assert_eq!(unsafe { p.add(i).read() }, i as u64 + 13);
+    }
+    drop(pin);
+    assert!(!PagePin::parked(p.addr()));
+}
+
+/// 取り置いたページの最後の留めを別のスレッドで落とす。Cの関数が戻った後のプールのスレッドと同じである。
+/// そのスレッドが貸した位置から読み、ページを返す。
+fn the_last_pin_of_a_parked_page_is_dropped_on_another_thread<M: Mode>() {
+    struct SendPtr(*const u64);
+    // SAFETY: ヒープを落とした後、位置の先のページに触れるのは受け取ったスレッドだけである
+    unsafe impl Send for SendPtr {}
+
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_unboxed(LARGE_ELEMENTS, 4, false);
+    let (p, pin) = unsafe { (heap.unboxed_ptr(w).unwrap(), heap.pin(w).unwrap()) };
+    let pin = pin.expect("a large array is pinned");
+    drop(heap);
+    assert!(PagePin::parked(p.addr()));
+    let lent = SendPtr(p);
+    std::thread::spawn(move || {
+        // 欄ごとに捕まえると生のポインタだけが移り、閉包が`Send`でなくなるので、包みごと移す
+        let lent = lent;
+        assert_eq!(unsafe { lent.0.add(LARGE_ELEMENTS - 1).read() }, 4);
+        drop(pin);
+    })
+    .join()
+    .unwrap();
+    assert!(!PagePin::parked(p.addr()));
+}
+
+/// 別のスレッドが空けた留めた大きい物体は持ち主の`RemoteSink`に積まれ、持ち主の取り込みがページを返さずに取り置く
+/// (速いモード)。検査モードはページを隔離するので、持ち主のヒープを落とすときに取り置く。
+fn a_pinned_large_object_freed_by_another_thread_is_parked_by_reclaim<M: Mode>() {
+    let (mut a, b) = two_heaps::<M>(Limits::default());
+    let w = a.alloc_unboxed(LARGE_ELEMENTS, 6, false);
+    let (p, pin) = unsafe { (a.unboxed_ptr(w).unwrap(), a.pin(w).unwrap()) };
+    let pin = pin.expect("a large array is pinned");
+    unsafe { a.share(w, 0) }.unwrap();
+    let b = std::thread::spawn(move || {
+        let mut b = b;
+        unsafe { b.decref(w) }.unwrap();
+        b
+    })
+    .join()
+    .unwrap();
+    assert!(!PagePin::parked(p.addr()));
+    a.reclaim();
+    assert_eq!(PagePin::parked(p.addr()), !M::CHECKED);
+    assert_eq!(unsafe { p.add(LARGE_ELEMENTS - 1).read() }, 6);
+    assert_eq!(mortal(&mut a), 0);
+    drop(a);
+    drop(b);
+    assert!(PagePin::parked(p.addr()));
+    drop(pin);
+    assert!(!PagePin::parked(p.addr()));
+}
+
+/// 凍結した塊の留めたページは、塊より長く生きる。
+fn a_pinned_frozen_page_outlives_its_chunk<M: Mode>() {
+    let text = "c".repeat(LARGE_BODY);
+    let mut b = Heap::<M>::new();
+    let s = b.alloc_string_immortal(&text);
+    let mut heap = Heap::<M>::new();
+    heap.attach(Arc::new(b.freeze().unwrap()));
+    let (p, pin) = unsafe { (heap.text_payload(s).unwrap(), heap.pin(s).unwrap()) };
+    let pin = pin.expect("a large constant is pinned");
+    // 塊の最後の`Arc`はヒープが持つ
+    drop(heap);
+    assert!(PagePin::parked(p.addr()));
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(p, LARGE_BODY) },
+        text.as_bytes()
+    );
+    drop(pin);
+    assert!(!PagePin::parked(p.addr()));
+}
+
+/// 留めたページは回復より長く生きる。回復が古いヒープを落とすとページを取り置き、古い位置からは写しと同じ中身を読める。
+fn a_pinned_page_outlives_recovery<M: Mode>() {
+    let body: Vec<u8> = (0..LARGE_BODY + 3).map(|i| i as u8).collect();
+    let mut ctx = ctx_tests::ctx::<M>();
+    let pin = unsafe {
+        let w = ctx.heap_mut().alloc_bytes(&body);
+        ctx.root_set(0, w).unwrap();
+        let p = ctx.heap().text_payload(w).unwrap();
+        let pin = ctx.heap().pin(w).unwrap().expect("large bytes are pinned");
+        ctx.recover().unwrap();
+        assert!(PagePin::parked(p.addr()));
+        let copy = ctx.root_get(0).unwrap();
+        assert_ne!(copy, w);
+        let old = std::slice::from_raw_parts(p, body.len());
+        assert_eq!(old, &*ctx.heap().bytes(copy).unwrap());
+        assert_eq!(old, &body[..]);
+        ctx.heap_mut().decref(copy).unwrap();
+        pin
+    };
+    drop(pin);
+    for w in ctx.take_roots().into_iter().flatten() {
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    }
+    assert_eq!(mortal(&mut ctx), 0);
+}
+
 // 課金は確保した worker の番号の数に足す (docs/spec/object-model.md の「確保と解放」)
 fn a_worker_heap_charges_its_own_slot<M: Mode>() {
     let control = Arc::new(Control::new(Limits {
@@ -2688,4 +2912,13 @@ both_modes!(
     c_reads_a_shared_array_through_unboxed_ptr,
     c_reads_string_and_bytes_through_text_payload,
     an_empty_array_lends_a_pointer_to_no_elements,
+    a_pinned_large_page_outlives_its_heap,
+    a_pinned_large_object_freed_by_its_heap_is_parked,
+    a_small_object_is_not_pinned,
+    two_pins_of_one_page_return_it_once,
+    another_thread_writes_a_pinned_array_while_the_owner_allocates_and_walks,
+    the_last_pin_of_a_parked_page_is_dropped_on_another_thread,
+    a_pinned_large_object_freed_by_another_thread_is_parked_by_reclaim,
+    a_pinned_frozen_page_outlives_its_chunk,
+    a_pinned_page_outlives_recovery,
 );

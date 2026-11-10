@@ -36,7 +36,7 @@ use std::mem::{self, ManuallyDrop};
 use std::sync::Arc;
 
 use crate::alloc::FREE_META;
-use crate::alloc::{Pages, too_large};
+use crate::alloc::{PagePin, Pages, page_of, pin_page, too_large};
 #[cfg(verus_only)]
 use crate::alloc::{page_base, region_cap, region_ptr};
 use crate::control::{Control, IdCounts};
@@ -3726,6 +3726,41 @@ impl<M: Mode> Heap<M> {
         }
         self.checked_live(h)?;
         Ok(self.core.meta_get(h))
+    }
+
+    /// `w`のページが大きい物体のページなら、そのページを留める。
+    /// このタスクが待ちに入った後に走るコードにメモリを貸すためである (docs/spec/object-model.mdの「ページの留め」)。
+    /// 即値と小さい物体のページのブロックは`None`を返す。空けた小さいブロックは使い回しから守れないためである。
+    /// このヒープ、runのほかのヒープ、付けた塊のブロックを同じように扱う。
+    ///
+    /// # Safety
+    /// `w`は即値か、このヒープか付けた塊の生きている物体を指す。
+    pub unsafe fn pin(&self, w: Word) -> (r: Result<Option<PagePin>, HeapError>)
+        requires
+            self.wf(),
+            self.word_in(w),
+            !M::CHECKED ==> self.settleable() && self.readable(w),
+        ensures
+            self.consistent() && self.settleable() && self.readable(w) ==> r is Ok,
+            M::CHECKED && w.is_ptr_spec() ==> (r is Ok <==> self.readable(w)),
+    {
+        if !w.is_ptr() {
+            return Ok(None);
+        }
+        let h = self.header_of(w);
+        proof {
+            if self.consistent() && self.settleable() && self.readable(w) {
+                self.core.lemma_readable(w);
+            }
+            if M::CHECKED {
+                self.lemma_checked_readable(w);
+            }
+        }
+        self.checked_live(h)?;
+        if !self.core.on_large_page(h) {
+            return Ok(None);
+        }
+        Ok(Some(pin_page(page_of(h).addr())))
     }
 
     /// 検査モードでは、生存の検査が通ることと、読めることは同じである。構築中の物体は、モデルの構築中の物体だけである。
