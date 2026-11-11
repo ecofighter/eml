@@ -685,6 +685,22 @@ fn unique_conversions_rewrite_the_kind<M: Mode>() {
     }
 }
 
+/// `Bytes.empty` は確保量の上限を使い切った後でも成功する (docs/spec/object-model.md の「バイト列の操作」)。
+fn an_empty_bytes_ignores_the_request_budget<M: Mode>() {
+    let limits = Limits {
+        max_bytes: 0,
+        ..Limits::default()
+    };
+    let mut ctx = Ctx::<M>::new(Arc::new(Control::new(limits)), host(&Arc::default()));
+    assert_eq!(
+        unsafe { ctx.bytes_make(0, 0) },
+        Err(Fault::Stopped(Stop::MemoryLimit))
+    );
+    let w = ctx.bytes_empty().unwrap();
+    assert_eq!(body(ctx.heap(), w), Vec::<u8>::new());
+    unsafe { ctx.heap_mut().decref(w).unwrap() };
+}
+
 /// `Bytes.empty` は長さ 0 の物体を作り、`Bytes.find_from` は最初の位置を返す。検査モードは文字列を断る。
 fn empty_bytes_and_a_search<M: Mode>() {
     let mut ctx = ctx::<M>();
@@ -743,6 +759,7 @@ both_modes!(
     appending_a_part_of_itself_needs_two_references,
     bytes_externs_refuse_a_string,
     empty_bytes_and_a_search,
+    an_empty_bytes_ignores_the_request_budget,
     bytes_copies_are_counted,
     strings_become_bytes,
     bytes_decode_to_strings,

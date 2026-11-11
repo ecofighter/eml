@@ -634,7 +634,7 @@ impl<M: Mode> Ctx<M> {
                 h0 == s0.heap,
                 c == s0.held_ok(),
                 self.evv == s0.evv,
-                self.yielding == s0.yielding,
+                self.native.yielding == s0.native.yielding,
                 self.max_evv == s0.max_evv,
                 !M::CHECKED ==> c,
                 M::CHECKED ==> self.heap.words_kept(h0),
@@ -1374,7 +1374,7 @@ impl<M: Mode> Ctx<M> {
             s0.holds(w),
             moved(self.heap, s0.heap, |x: usize| 0int, Set::empty()),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
         ensures
             self.holds(w),
     {
@@ -1398,7 +1398,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.evolved(s0.heap, w, -1),
             self.heap.kept_live(s0.heap),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -1453,7 +1453,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.evolved(h2, s, -1),
             self.heap.kept_live(h2),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -1492,7 +1492,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.settleable(),
             moved(self.heap, s0.heap, |x: usize| 0int, Set::empty()),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -1515,7 +1515,7 @@ impl<M: Mode> Ctx<M> {
             s0.held_ok(),
             line_held(self.heap, s0.heap, w),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -1537,7 +1537,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.evolved(h1, w, -1),
             self.heap.kept_live(h1),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -1562,7 +1562,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.made(s0.heap, s),
             self.heap.owned(s),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -1595,7 +1595,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.evolved(h1, s, -1),
             self.heap.kept_live(h1),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),

@@ -46,6 +46,12 @@ impl Word {
 
     pub const MAX_INT: i64 = 0x3FFF_FFFF_FFFF_FFFF;
 
+    /// 即値の印のビットと、値をずらす幅 (docs/spec/object-model.mdの「語」)。ネイティブのコードが同じ数を繰り返さずに
+    /// 即値を作り、読めるように公開する。
+    pub const IMM_TAG: usize = 1;
+
+    pub const IMM_SHIFT: u32 = 1;
+
     /// 語のビット列。
     pub closed spec fn bits_spec(self) -> usize {
         self.0@.addr
@@ -244,7 +250,7 @@ pub(crate) const fn imm_bits(n: i64) -> (r: usize)
     ensures
         r == imm_spec(n),
 {
-    ((n << 1) | 1) as usize
+    ((n << Word::IMM_SHIFT) | Word::IMM_TAG as i64) as usize
 }
 
 #[inline]
@@ -252,7 +258,7 @@ pub(crate) const fn is_imm_bits(bits: usize) -> (r: bool)
     ensures
         r == is_imm_spec(bits),
 {
-    bits & 1 == 1
+    bits & Word::IMM_TAG == Word::IMM_TAG
 }
 
 /// ポインタの語のビット列か。空の語 (0) はポインタでない。
@@ -261,7 +267,7 @@ pub(crate) const fn is_ptr_bits(bits: usize) -> (r: bool)
     ensures
         r == is_ptr_spec(bits),
 {
-    bits & 1 == 0 && bits != 0
+    bits & Word::IMM_TAG == 0 && bits != 0
 }
 
 /// 即値の値。算術右シフトで1ビットずらす。
@@ -270,7 +276,7 @@ pub(crate) const fn imm_value_bits(bits: usize) -> (r: i64)
     ensures
         r == imm_value_spec(bits),
 {
-    (bits as i64) >> 1
+    (bits as i64) >> Word::IMM_SHIFT
 }
 
 // 補題
@@ -384,6 +390,17 @@ mod tests {
         assert_eq!(Word::int(Word::MAX_INT + 1), None);
         assert_eq!(Word::int(Word::MIN_INT - 1), None);
         assert_eq!(Word::int(i64::MIN), None);
+    }
+
+    #[test]
+    fn an_immediate_is_the_shifted_value_with_the_tag_bit() {
+        assert_eq!((Word::IMM_TAG, Word::IMM_SHIFT), (1, 1));
+        for n in [0, 1, -1, Word::MIN_INT, Word::MAX_INT] {
+            assert_eq!(
+                Word::imm(n).bits(),
+                (n << Word::IMM_SHIFT) as usize | Word::IMM_TAG
+            );
+        }
     }
 
     #[test]

@@ -340,7 +340,10 @@ impl Core {
                 &&& forall|i: int| #[trigger]
                     self.scanned(b, i) ==> self.model@.written[b].contains(i)
                         || self.model@.kept.contains((b, i))
-                &&& self.kind(b).boxes_value() ==> p_init(self.perm(b), 0)
+                &&& self.kind(b).boxes_value() ==> p_init(
+                    self.perm(b),
+                    crate::layout::BOX_VALUE_WORD as int,
+                )
                 &&& forall|i: int| #[trigger]
                     self.model@.kept.contains((b, i)) ==> self.kept_ok(b, p_word(self.perm(b), i))
                 &&& forall|t: usize|
@@ -454,7 +457,7 @@ impl Core {
             &&& p_first(p) + p_count(p) <= self.cap(h)
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
-            ==> self.cap(h) >= 1 && p_init(p, 0))
+            ==> self.cap(h) >= 1 && p_init(p, crate::layout::BOX_VALUE_WORD as int))
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).has_body() ==> body_wf(
             p,
             self.cap(h),

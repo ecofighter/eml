@@ -66,17 +66,18 @@ impl<M: Mode> Ctx<M> {
         requires
             self.heap.words_kept(old.heap),
             old.heap.word_in(old.evv),
-            old.heap.word_in(old.yielding.target),
-            old.heap.word_in(old.yielding.clause),
-            old.heap.word_in(old.yielding.cont),
+            old.heap.word_in(old.native.yielding.target),
+            old.heap.word_in(old.native.yielding.clause),
+            old.heap.word_in(old.native.yielding.cont),
             old.heap.word_in(self.evv),
-            self.yielding == old.yielding || (self.yielding.target.bits_spec() == 1
-                && self.yielding.clause.bits_spec() == 1 && self.yielding.cont.bits_spec() == 1),
+            self.native.yielding == old.native.yielding || (self.native.yielding.target.bits_spec()
+                == 1 && self.native.yielding.clause.bits_spec() == 1
+                && self.native.yielding.cont.bits_spec() == 1),
         ensures
             self.heap.word_in(self.evv),
-            self.heap.word_in(self.yielding.target),
-            self.heap.word_in(self.yielding.clause),
-            self.heap.word_in(self.yielding.cont),
+            self.heap.word_in(self.native.yielding.target),
+            self.heap.word_in(self.native.yielding.clause),
+            self.heap.word_in(self.native.yielding.cont),
     {
         lemma_unit_bits();
     }
@@ -86,8 +87,8 @@ impl<M: Mode> Ctx<M> {
         requires
             self.held_ok() || (self.heap.consistent() && self.heap.settleable()),
             self.holds_args(ws),
-            w == self.evv || w == self.yielding.target || w == self.yielding.clause || w
-                == self.yielding.cont,
+            w == self.evv || w == self.native.yielding.target || w == self.native.yielding.clause
+                || w == self.native.yielding.cont,
             w == self.evv ==> self.evv_wf(w),
         ensures
             self.heap.decref_ok(w),
@@ -116,9 +117,9 @@ impl<M: Mode> Ctx<M> {
             old.heap.settleable(),
             moved(self.heap, old.heap, d, x),
             held_word(old.heap, self.evv),
-            held_word(old.heap, self.yielding.target),
-            held_word(old.heap, self.yielding.clause),
-            held_word(old.heap, self.yielding.cont),
+            held_word(old.heap, self.native.yielding.target),
+            held_word(old.heap, self.native.yielding.clause),
+            held_word(old.heap, self.native.yielding.cont),
             forall|i: int| 0 <= i < ws1.len() ==> held_word(old.heap, #[trigger] ws1[i]),
             forall|b: usize| #[trigger]
                 self.need(ws1, b) > 0 ==> old.need(ws0, b) + d(b) >= self.need(ws1, b),
@@ -139,14 +140,14 @@ impl<M: Mode> Ctx<M> {
         assert(held_word(h1, self.evv)) by {
             lemma_points_at(ws1, 0, self.evv.bits_spec());
         }
-        assert(held_word(h1, self.yielding.target)) by {
-            lemma_points_at(ws1, 0, self.yielding.target.bits_spec());
+        assert(held_word(h1, self.native.yielding.target)) by {
+            lemma_points_at(ws1, 0, self.native.yielding.target.bits_spec());
         }
-        assert(held_word(h1, self.yielding.clause)) by {
-            lemma_points_at(ws1, 0, self.yielding.clause.bits_spec());
+        assert(held_word(h1, self.native.yielding.clause)) by {
+            lemma_points_at(ws1, 0, self.native.yielding.clause.bits_spec());
         }
-        assert(held_word(h1, self.yielding.cont)) by {
-            lemma_points_at(ws1, 0, self.yielding.cont.bits_spec());
+        assert(held_word(h1, self.native.yielding.cont)) by {
+            lemma_points_at(ws1, 0, self.native.yielding.cont.bits_spec());
         }
         let v0 = h0.core.settled_view();
         let v1 = h1.core.settled_view();
@@ -171,19 +172,20 @@ impl<M: Mode> Ctx<M> {
         requires
             self.need(ws1, b) > 0,
         ensures
-            w == self.evv || w == self.yielding.target || w == self.yielding.clause || w
-                == self.yielding.cont || exists|i: int| 0 <= i < ws1.len() && ws1[i] == w,
+            w == self.evv || w == self.native.yielding.target || w == self.native.yielding.clause
+                || w == self.native.yielding.cont || exists|i: int|
+                0 <= i < ws1.len() && ws1[i] == w,
             w.is_ptr_spec(),
             w.bits_spec() == b,
     {
         if points(self.evv, b) > 0 {
             self.evv
-        } else if points(self.yielding.target, b) > 0 {
-            self.yielding.target
-        } else if points(self.yielding.clause, b) > 0 {
-            self.yielding.clause
-        } else if points(self.yielding.cont, b) > 0 {
-            self.yielding.cont
+        } else if points(self.native.yielding.target, b) > 0 {
+            self.native.yielding.target
+        } else if points(self.native.yielding.clause, b) > 0 {
+            self.native.yielding.clause
+        } else if points(self.native.yielding.cont, b) > 0 {
+            self.native.yielding.cont
         } else {
             let i = lemma_points_witness(ws1, b);
             ws1[i]
@@ -253,7 +255,7 @@ impl<M: Mode> Ctx<M> {
             s0.holds_args(seq![state, outer]),
             effect < u16::MAX,
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
             h1.made(s0.heap, table),
             h1.kind_of(table) == Kind::Data,
@@ -384,7 +386,7 @@ impl<M: Mode> Ctx<M> {
             s0.ev_shape(e),
             s0.holds_args(seq![l, e]),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
             h1.made(s0.heap, node),
             h1.kind_of(node) == Kind::Data,
@@ -566,7 +568,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.field_set(h1, ev, 1, unit),
             self.heap.consistent(),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             s == s0.ev_state(ev),
@@ -649,7 +651,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.field_set(h1, ev, 2, unit),
             self.heap.consistent(),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             w == s0.ev_outer(ev),
@@ -787,7 +789,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.evolved(h2, old_state, -1),
             self.heap.kept_live(h2),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.ev_state(ev) == s,
@@ -909,7 +911,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.field_set(h1, s0.ev_table(ev), i, c),
             self.heap.consistent(),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.ev_entry(ev, op) == c,
@@ -1022,7 +1024,7 @@ impl<M: Mode> Ctx<M> {
             h5.consistent(),
             self.heap.consistent(),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -1128,7 +1130,7 @@ impl<M: Mode> Ctx<M> {
             s0.heap.readable(w),
             dupable(s0.heap, w),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
             self.heap.bumped(s0.heap, w),
             self.heap.settled(),
@@ -1162,7 +1164,7 @@ impl<M: Mode> Ctx<M> {
             old.heap.consistent(),
             old.heap.settleable(),
             self.evv == old.evv,
-            self.yielding == old.yielding,
+            self.native.yielding == old.native.yielding,
             moved(self.heap, old.heap, |b: usize| points(w, b), x),
             held_word(old.heap, w),
         ensures
@@ -1206,7 +1208,7 @@ impl<M: Mode> Ctx<M> {
             self.holds_args(seq![]),
             old.holds_args(seq![]),
             self.evv == old.evv,
-            self.yielding == old.yielding,
+            self.native.yielding == old.native.yielding,
             r.is_ptr_spec(),
             !live(old.heap, r.bits_spec()),
             held_word(self.heap, r),
@@ -2324,8 +2326,8 @@ impl<M: Mode> Ctx<M> {
         let r = h2.lemma_reclaimed(h1, held);
         assert(h2.core.model@.building is None);
         assert forall|w: Word|
-            w == c0.evv || w == c0.yielding.target || w == c0.yielding.clause || w
-                == c0.yielding.cont implies #[trigger] h2.word_in(w) by {
+            w == c0.evv || w == c0.native.yielding.target || w == c0.native.yielding.clause || w
+                == c0.native.yielding.cont implies #[trigger] h2.word_in(w) by {
             assert(c0.held_set().contains(w.bits_spec()));
             assert(held.contains(w.bits_spec()));
             assert(h1.core.word_ok(w));
@@ -3419,7 +3421,7 @@ impl<M: Mode> Ctx<M> {
             copy_seq(items, s, out, js, bound as int, skip_total(items) as int),
             rest == nth(s0.heap, w, bound),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
             self.heap.consistent(),
             self.heap.settled(),

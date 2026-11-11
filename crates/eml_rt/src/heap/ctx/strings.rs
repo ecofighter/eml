@@ -1767,7 +1767,7 @@ impl<M: Mode> Ctx<M> {
             h1.consistent(),
             self.heap == h1,
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -1814,7 +1814,7 @@ impl<M: Mode> Ctx<M> {
             h3.core.model@.building is None,
             self.heap == h3,
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -2039,7 +2039,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.made(s0.heap, w),
             self.heap.owned(w),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -2078,7 +2078,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.consistent(),
             self.heap.concatenated(h1, a, b, w),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -2184,7 +2184,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.consistent(),
             self.heap.pushed(h1, left, w),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -2245,7 +2245,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.evolved(h1, left, -1),
             self.heap.kept_live(h1),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -2299,7 +2299,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.evolved(h3, s, -1),
             self.heap.kept_live(h3),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -2341,7 +2341,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.consistent(),
             self.heap.core.model@.building is None,
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),

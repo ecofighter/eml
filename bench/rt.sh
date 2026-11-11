@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# eml_rt の速いモードの計測用プログラム (crates/eml_rt/examples/rt_bench.rs と、extern の rt_extern_bench.rs) を
+# eml_rt の速いモードの計測用プログラム (crates/eml_rt/examples/rt_bench.rs と、extern の rt_extern_bench.rs) と、
+# ネイティブの実行系のエントリの計測 (crates/eml_nrt/examples/nrt_bench.rs) を
 # release ビルドで3回ずつ走らせ、実行した命令の数と実時間の中央値を、プログラムごとに Markdown の表で出す
 # (docs/implementation/benchmarks.md)。測り方は bench/run.sh と同じで、
 # macOS の `/usr/bin/time -l` の `instructions retired` を使う。
@@ -14,7 +15,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 中央値を1つの値に決めるため、奇数にする
 runs=3
 
-cargo build --release -p eml_rt --example rt_bench --example rt_extern_bench \
+cargo build --release -p eml_rt -p eml_nrt --example rt_bench --example rt_extern_bench --example nrt_bench \
   --manifest-path "$root/Cargo.toml" >&2
 examples="$root/target/release/examples"
 
@@ -98,6 +99,10 @@ measure "$examples/rt_extern_bench" \
   find-byte find-byte-swar find-sub find-sub-contains slice-short slice-short-box \
   read-all-bytes read-all-bytes-std read-line-bytes-64mib read-line-bytes-64mib-std \
   stdout-write-line-10m
+echo
+echo "ネイティブの実行系のエントリ (nrt_bench)"
+echo
+measure "$examples/nrt_bench" enter entry-plain entry-shim
 echo
 echo "eml / 参照の比 (1 MiB の2組は目標が2倍、続く4組は予算の行、最後の組は記録だけの行。docs/implementation/benchmarks.md)"
 echo

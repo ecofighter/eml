@@ -45,7 +45,7 @@ use crate::foreign;
 #[cfg(verus_keep_ghost)]
 use crate::frozen::RegionPerms;
 use crate::frozen::{Frozen, not_a_descendant};
-use crate::layout::HEADER_WORDS;
+use crate::layout::{BOX_VALUE_WORD, BOX_WORDS, HEADER_WORDS};
 use crate::meta::{self, BlockPerm, Header, Kind, Meta, meta_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
@@ -61,7 +61,9 @@ use vstd::raw_ptr::ptr_mut_write;
 #[cfg(verus_keep_ghost)]
 use vstd::shared::Shared;
 
-pub use ctx::{Ctx, CtxStats, MaskItem};
+pub use ctx::{
+    CTX_FAULT, CTX_JMP, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Ctx, CtxStats, MaskItem,
+};
 pub use reuse::Token;
 // host.rs の文字列の行の読みも、`\n` を T13 の走査で探す (docs/spec/object-model.md の「`unsafe` の核」)
 pub(crate) use ctx::positions::find_byte;
@@ -817,12 +819,16 @@ impl<M: Mode> Heap<M> {
             final(self).unused(),
     {
         // ダミーは値 0 の BigInt の不死の物体で、検査モードでも数えない (docs/spec/object-model.md の「ダミーの値」)
-        let (h, Tracked(perm)) = self.alloc_header(1, 0, Meta::new(0, 0, Kind::BigInt, false));
+        let (h, Tracked(perm)) = self.alloc_header(
+            BOX_WORDS,
+            0,
+            Meta::new(0, 0, Kind::BigInt, false),
+        );
         let tracked mut perm = perm;
-        let tracked mut slot = perm.slots.tracked_remove(0);
-        ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(0));
+        let tracked mut slot = perm.slots.tracked_remove(BOX_VALUE_WORD as int);
+        ptr_mut_write(slot_ptr(h, BOX_VALUE_WORD), Tracked(&mut slot), Word::from_bits(0));
         proof {
-            perm.slots.tracked_insert(0, slot);
+            perm.slots.tracked_insert(BOX_VALUE_WORD as int, slot);
         }
         if M::CHECKED {
             let tracked mut pre = perm.prefix.tracked_unwrap();
@@ -1688,15 +1694,19 @@ impl<M: Mode> Heap<M> {
                 self.settle();
                 let ghost s1 = *self;
                 let (h, Tracked(perm)) = self.alloc_header(
-                    1,
+                    BOX_WORDS,
                     1,
                     Meta::new(0, 0, Kind::BigInt, false),
                 );
                 let tracked mut perm = perm;
-                let tracked mut slot = perm.slots.tracked_remove(0);
-                ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(n as usize));
+                let tracked mut slot = perm.slots.tracked_remove(BOX_VALUE_WORD as int);
+                ptr_mut_write(
+                    slot_ptr(h, BOX_VALUE_WORD),
+                    Tracked(&mut slot),
+                    Word::from_bits(n as usize),
+                );
                 proof {
-                    perm.slots.tracked_insert(0, slot);
+                    perm.slots.tracked_insert(BOX_VALUE_WORD as int, slot);
                 }
                 let ghost mid = self.core;
                 proof {
@@ -1739,12 +1749,20 @@ impl<M: Mode> Heap<M> {
     {
         self.settle();
         let ghost s1 = *self;
-        let (h, Tracked(perm)) = self.alloc_header(1, 1, Meta::new(0, 0, Kind::Float, false));
+        let (h, Tracked(perm)) = self.alloc_header(
+            BOX_WORDS,
+            1,
+            Meta::new(0, 0, Kind::Float, false),
+        );
         let tracked mut perm = perm;
-        let tracked mut slot = perm.slots.tracked_remove(0);
-        ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(bits as usize));
+        let tracked mut slot = perm.slots.tracked_remove(BOX_VALUE_WORD as int);
+        ptr_mut_write(
+            slot_ptr(h, BOX_VALUE_WORD),
+            Tracked(&mut slot),
+            Word::from_bits(bits as usize),
+        );
         proof {
-            perm.slots.tracked_insert(0, slot);
+            perm.slots.tracked_insert(BOX_VALUE_WORD as int, slot);
         }
         let ghost mid = self.core;
         proof {
@@ -4437,7 +4455,7 @@ impl<M: Mode> Heap<M> {
                 self.core.lemma_safe_live_block(h@.addr);
             }
         }
-        let x = self.core.slot_get(h, 0);
+        let x = self.core.slot_get(h, BOX_VALUE_WORD);
         Ok(x.bits() as i64)
     }
 
@@ -4481,7 +4499,7 @@ impl<M: Mode> Heap<M> {
                 self.core.lemma_safe_live_block(h@.addr);
             }
         }
-        let x = self.core.slot_get(h, 0);
+        let x = self.core.slot_get(h, BOX_VALUE_WORD);
         Ok(x.bits() as u64)
     }
 }

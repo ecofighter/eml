@@ -21,7 +21,7 @@ mod host;
 pub mod layout;
 mod meta;
 mod mode;
-mod rc;
+pub mod rc;
 mod remote;
 mod text;
 #[cfg(test)]
@@ -40,7 +40,10 @@ pub use externs::{
     StdStream, Utf8Source, Write,
 };
 pub use frozen::Frozen;
-pub use heap::{Ctx, CtxStats, Heap, MaskItem, Stats, Token};
+pub use heap::{
+    CTX_FAULT, CTX_JMP, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Ctx, CtxStats, Heap, MaskItem,
+    Stats, Token,
+};
 pub use host::{
     Buffering, Host, HostRef, LaunchCause, LaunchError, Launched, NOT_REGULAR, OpenMode, Opened,
     PipeEnd, Process, SPAWN_LOCK, Spawn, Spawned, Stage, StdHost, StderrSpec, StdinSlot, StdinSpec,

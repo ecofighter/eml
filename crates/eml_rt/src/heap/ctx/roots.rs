@@ -45,7 +45,7 @@ impl<M: Mode> Ctx<M> {
             old.wf(),
             self.heap == old.heap,
             self.evv == old.evv,
-            self.yielding == old.yielding,
+            self.native.yielding == old.native.yielding,
             self.max_evv == old.max_evv,
         ensures
             self.wf(),
@@ -156,7 +156,7 @@ impl<M: Mode> Ctx<M> {
             invariant
                 self.heap == old(self).heap,
                 self.evv == old(self).evv,
-                self.yielding == old(self).yielding,
+                self.native.yielding == old(self).native.yielding,
                 self.max_evv == old(self).max_evv,
                 old(self).roots@.len() <= self.roots@.len(),
                 old(self).roots@.len() < self.roots@.len() ==> self.roots@.len() <= i + 1,

@@ -25,14 +25,15 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/lir.md](spec/lir.md) | 規範 | LIRの命令、2つのIRに共通する規則 (ブロックの列と構造の規則、値の表現、データの配置、位置の規則、末尾の位置の呼び出し)、基本操作と実行の文脈、LIRのパス (boxの挿入、開くパス、縮約、借用のパス、Perceus、reuse) とその境界の不変条件、LIRのverifier、実行の意味、実行時エラー |
 | [spec/object-model.md](spec/object-model.md) | 規範 | `eml_rt` の核: 語、ヘッダと種類、物体の形、ページの確保器と生存の列挙、別のスレッドからの解放、局所と共有の RC、`share`、`transfer_back`、`lin` ビット、核の操作、バイト列と文字列、凍結した領域、reuse の部品、検査モード (論理的な worker ID とページの表を含む)、実行文脈 `Ctx` (タスクの切り替えを含む)、extern (語の ABI、誤り、Host と出力のバッファ、読み手と `FileIn`、仕事の回数)、受け入れる制約、配列、ダミーの値、`unsafe` の核 |
 | [spec/vm.md](spec/vm.md) | 規範 | VMの置き場所と実行のAPI、`CodeBase`と`FnEntry`、スロットとフレーム、命令の形、スロットの割り当て、呼び出しと戻り、命令ごとの実行、誤りと終わりの処理、上限と割り込み、タスクとスケジュール、メインのworker、時計とdriver、`par`のforkとjoin、`Async`のタスク (プールの仕事を含む)、channel、Cの関数の呼び出し (橋渡しの関数、ライブラリと記号、`blocking`の呼び出し、`--link`)、`RunStats`、並列化への備え、巻き戻し、externの中断 |
+| [spec/native.md](spec/native.md) | 規範 | ネイティブの実行系: エントリ (エントリのABI、記述子の表、包みの本体、失敗の手順、`eml_enter`、`eml_fatal`、対象) |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止、他の言語の書き方へのヒント |
 | [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例。実装していない構文を含む |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
 | [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続と evidence、構文解析と名前解決の回復、リポジトリ、ソースファイルと位置、外部 crate |
-| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt` の検証 (Verus、単体テスト、期待値の表、Miri)、`eml_io` の検証 (`unsafe` の一覧、核の Miri、AddressSanitizer、ThreadSanitizer)、`eml_native` の検証、`eml_vm` のテスト、UI テスト (2つのモードで流すこと、seed で流すこと)、LIR と Core IR のテキストの形、文書の引用の検査、REPL のトランスクリプト、CLI のテスト、OS ごとのテスト、性能のテスト、feature の組み合わせ、CI、よく使うコマンド |
+| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt`の検証 (Verus、単体テスト、期待値の表、Miri)、`eml_io`の検証 (`unsafe`の一覧、核のMiri、AddressSanitizer、ThreadSanitizer)、`eml_native`の検証、`eml_nrt`の検証、`eml_vm`のテスト、UIテスト (2つのモードで流すこと、seedで流すこと)、LIRとCore IRのテキストの形、文書の引用の検査、REPLのトランスクリプト、CLIのテスト、OSごとのテスト、性能のテスト、featureの組み合わせ、CI、よく使うコマンド |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲 (実装したもの、まだないもの)、既知の制限 |
 | [implementation/distribution.md](implementation/distribution.md) | 手引き | 動かすのに要るもの (OSごと)、組むのに要るもの、Qtを配る規則 (通知と全文、配る側の3つの場合)、Windows App SDKのruntimeとbootstrap、macOSの署名と公証、AOTの出力の規則、他者のクレートのライセンス |
-| [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、測り方、今の数値、ネットワークの計測、所見 |
+| [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、測り方、今の数値、ネイティブの数値、ネットワークの計測、所見 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
 | [future/roadmap.md](future/roadmap.md) | 将来の設計 | 段の進め方と閉じる手順、段の列、その後の項目 |
@@ -42,7 +43,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (スレッドとworker、メインのworker、スケジューラ、共有の印方式のRC、`par`、継続の移動、止める手順) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |
-| **plans/** | 作業中 | 段の設計と計画。段の最初のコミットで入れ、段を閉じるときに消す。コードと文書から引かない |
+| **plans/** | 作業中 | 段の設計と計画。段の最初のコミットで入れ、段を閉じるときにその段の計画だけを消す。まとめて計画した段の共有の付録のディレクトリは、最初の段の計画と一緒に入れ、それらの段の最後の段を閉じるときに消す。コードと文書から引かない |
 | **reports/** | 調査 | 実装の方針を決めるための調査レポート。書いた時点のコミットに基づき、後から更新しない |
 | [reports/eml/](reports/eml/) | 調査 | VM のマルチコア対応 |
 
@@ -62,6 +63,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | `eml_rt` | object-model |
 | `eml_io` | vm |
 | `eml_cabi`、`eml_native` | [vm](spec/vm.md) の「C の関数の呼び出し」。crate の中は [architecture](implementation/architecture.md) の「`eml_native` の内部」 |
+| `eml_nrt` | [native](spec/native.md)。crateの中は[architecture](implementation/architecture.md) の「`eml_nrt`の内部」 |
 | `eml_tls` | [stdlib](spec/stdlib.md) の「`Std.Tls`」。crate の中は [architecture](implementation/architecture.md) の「`eml_tls` の内部」 |
 | `eml_gui` | [stdlib](spec/stdlib.md) の「`Std.Gui`」。crate の中は [architecture](implementation/architecture.md) の「`eml_gui`の内部」。配布とライセンスは [distribution](implementation/distribution.md) |
 | 診断を出すすべての段階 | diagnostics |
@@ -75,7 +77,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 - 計測の数値は `implementation/benchmarks.md` だけが持つ。ほかの文書は定性的に書き、根拠が要る所で `benchmarks.md` の「所見」を引く。
 - `implementation/status.md` と `implementation/architecture.md` と `benchmarks.md` の表は、段の途中では直さず、段を閉じるときに直す ([ロードマップ](future/roadmap.md) の「進め方」)。
 - `future/` の内容はまだ実装しない。実装に進むときは、決まった部分を `spec/` に移す。今後の項目の一覧は [future/roadmap.md](future/roadmap.md) を正とする。非同期、ネイティブ化、FFI、マルチコア、標準ライブラリの詳細は、`future/` のそれぞれの設計文書にある。
-- 段の設計と計画は `docs/plans/` に置き、段の最初のコミットで入れ、段を閉じるときに消す。コードと `docs/` から `plans/` と `reports/` の見出しを引かない。
+- 段の設計と計画は`docs/plans/`に置き、段の最初のコミットで入れ、段を閉じるときにその段の計画のファイルだけを消す。まとめて計画した段の共有の付録のディレクトリは、最初の段の計画と一緒に入れ、それらの段の最後の段を閉じるときに消す ([ロードマップ](future/roadmap.md)の「進め方」)。コードと`docs/`から`plans/`と`reports/`の見出しを引かない。
 - 見出しは題名 (規則、概念、計測の題) にし、段の名前と日付を付けない。コードと文書が引くのは題名の見出しで、見出しを引く文はその見出しがあるコミットに入れ、見出しを消すか改名するときは同じコミットで引く側を直す ([テスト戦略](implementation/testing.md) の「文書の引用の検査」)。
 - 構文で迷ったときは Haskell の慣習に寄せる。
 - 文書は日本語で書く。

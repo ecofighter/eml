@@ -9,10 +9,14 @@ autotests = false
 [lib]
 doctest = false
 
-# workspace の crate では eml_extern と eml_cabi だけに依存する (docs/implementation/architecture.md の「crate の依存関係」)
+# workspaceのcrateではeml_extern、eml_cabi、eml_lir、eml_nrt、eml_rt (eml_rtはレイアウトの定数だけで、名指すのはmem.rsだけ) に
+# 依存し、eml_vmには依存しない (docs/implementation/architecture.md の「crate の依存関係」)
 [dependencies]
 eml_extern.workspace = true
 eml_cabi.workspace = true
+eml_lir.workspace = true
+eml_nrt.workspace = true
+eml_rt.workspace = true
 cranelift-codegen.workspace = true
 cranelift-frontend.workspace = true
 cranelift-jit.workspace = true

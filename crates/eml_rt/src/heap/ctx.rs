@@ -17,11 +17,12 @@ use super::chain_err;
 use super::model::BlockState;
 use crate::control::{Control, Stop, stop_reason};
 use crate::error::HeapError;
+use crate::externs::Fault;
 use crate::host::HostRef;
 use crate::meta::{Kind, Meta};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
-use crate::mode::{Checked, Mode};
+use crate::mode::{Checked, Fast, Mode};
 use crate::word::Word;
 #[cfg(verus_only)]
 use crate::word::lemma_unit_bits;
@@ -816,12 +817,45 @@ fn seen_at_least<M: Mode>(
     Ok(count as u64 >= occ)
 }
 
+/// `Ctx`の止める語へのポインタ。生のポインタのままでは`Ctx`が`Send`でなくなるので包む
+/// (docs/spec/object-model.md の「`unsafe` の核」のT18)。
+#[repr(transparent)]
+pub struct StopPtr(*const AtomicU32);
+
+/// ネイティブの実行系のいちばん内側のジャンプバッファへのポインタ (T18)。
+#[repr(transparent)]
+pub struct JmpPtr(*mut ());
+
+/// ネイティブの実行系の、workerごとの構造体へのポインタ (T18)。
+#[repr(transparent)]
+pub struct RtPtr(*mut ());
+
+/// ネイティブのコードが読む欄。`Ctx`の先頭に置き、`CTX_*`の定数の位置で読む (docs/spec/object-model.md の「欄」)。
+/// 総称でないので、位置はどちらのモードでも同じである。
+#[repr(C)]
+pub struct Native {
+    yielding: YieldState,
+    /// 0か、`fault_value`に失敗を置いている間は1である (docs/spec/object-model.md の「置いた失敗」)。
+    fault: u64,
+    stop: StopPtr,
+    stack_limit: usize,
+    jmp: JmpPtr,
+    runtime: RtPtr,
+}
+
+// ポインタはeml_rtの外のコードだけが読むので、何も約束しない (T18)
+#[verifier::external_body]
+fn stop_of(word: &Arc<AtomicU32>) -> StopPtr {
+    StopPtr(Arc::as_ptr(word))
+}
+
 /// 実行文脈。VM はこれだけを持ち回す。`evv` と yield の状態の語は、`Ctx` が持つ数えた参照である。`Ctx` を落としても
 /// これらの語には触れず、ヒープと一緒に消える。Host はセッションに1つで、`par` の子の `Ctx` は同じ Host を写して持つ。
+#[repr(C)]
 pub struct Ctx<M: Mode> {
+    native: Native,
     heap: Heap<M>,
     evv: Word,
-    yielding: YieldState,
     /// セッションの根 (`roots.rs`)。空の根は `None` である。
     roots: Vec<Option<Word>>,
     /// 確保の前の上限の確かめと Host の読み手がヒープの中をたどらずに読めるよう、ヒープとは別に持つ。
@@ -837,6 +871,8 @@ pub struct Ctx<M: Mode> {
     max_evv: usize,
     stats: CtxStats,
     host: HostRef,
+    /// `native.fault`が1の間に置いてある失敗。
+    fault_value: Option<Fault>,
 }
 
 impl<M: Mode> Ctx<M> {
@@ -850,7 +886,12 @@ impl<M: Mode> Ctx<M> {
 
     /// yield の状態。宛先、節の本体、κ、中断か、の組である。
     pub closed spec fn yield_spec(&self) -> (Word, Word, Word, bool) {
-        (self.yielding.target, self.yielding.clause, self.yielding.cont, self.yielding.abort)
+        (
+            self.native.yielding.target,
+            self.native.yielding.clause,
+            self.native.yielding.cont,
+            self.native.yielding.abort,
+        )
     }
 
     pub open spec fn is_yielding(&self) -> bool {
@@ -995,8 +1036,10 @@ impl<M: Mode> Ctx<M> {
 
     /// `Ctx` の語と `ws` の語のうち、物体 `b` を指すものの数。
     spec fn need(&self, ws: Seq<Word>, b: usize) -> int {
-        points(self.evv, b) + points(self.yielding.target, b) + points(self.yielding.clause, b)
-            + points(self.yielding.cont, b) + points_in(ws, b)
+        points(self.evv, b) + points(self.native.yielding.target, b) + points(
+            self.native.yielding.clause,
+            b,
+        ) + points(self.native.yielding.cont, b) + points_in(ws, b)
     }
 
     /// `Ctx` の語と `ws` の語を合わせて、語ごとに参照を1つ持つ。どの語も即値か生きている物体を指し、`decref` で
@@ -1006,9 +1049,9 @@ impl<M: Mode> Ctx<M> {
     pub closed spec fn holds_args(&self, ws: Seq<Word>) -> bool {
         let v = self.heap.core.settled_view();
         &&& held_word(self.heap, self.evv)
-        &&& held_word(self.heap, self.yielding.target)
-        &&& held_word(self.heap, self.yielding.clause)
-        &&& held_word(self.heap, self.yielding.cont)
+        &&& held_word(self.heap, self.native.yielding.target)
+        &&& held_word(self.heap, self.native.yielding.clause)
+        &&& held_word(self.heap, self.native.yielding.cont)
         &&& forall|i: int| 0 <= i < ws.len() ==> held_word(self.heap, #[trigger] ws[i])
         &&& forall|b: usize| #[trigger]
             self.need(ws, b) > 0 && v.rc_of(b) != 0 ==> v.ext(b) >= self.need(ws, b)
@@ -1032,11 +1075,11 @@ impl<M: Mode> Ctx<M> {
     pub closed spec fn wf(&self) -> bool {
         &&& self.heap.wf()
         &&& self.heap.safe_settleable()
-        &&& self.yielding.wf()
+        &&& self.native.yielding.wf()
         &&& self.heap.word_in(self.evv)
-        &&& self.heap.word_in(self.yielding.target)
-        &&& self.heap.word_in(self.yielding.clause)
-        &&& self.heap.word_in(self.yielding.cont)
+        &&& self.heap.word_in(self.native.yielding.target)
+        &&& self.heap.word_in(self.native.yielding.clause)
+        &&& self.heap.word_in(self.native.yielding.cont)
         &&& !M::CHECKED ==> self.held_ok()
     }
 
@@ -1073,10 +1116,18 @@ impl<M: Mode> Ctx<M> {
         let limits = control.limits();
         let word = control.word(k);
         let heap = Heap::for_worker(control.clone(), k);
+        let stop = stop_of(&word);
         let r = Ctx {
+            native: Native {
+                yielding: YieldState::none(),
+                fault: 0,
+                stop,
+                stack_limit: 0,
+                jmp: JmpPtr(core::ptr::null_mut()),
+                runtime: RtPtr(core::ptr::null_mut()),
+            },
             heap,
             evv: Word::UNIT,
-            yielding: YieldState::none(),
             roots: Vec::new(),
             control,
             word,
@@ -1090,6 +1141,7 @@ impl<M: Mode> Ctx<M> {
                 string_bytes_copied: 0,
             },
             host,
+            fault_value: None,
         };
         proof {
             lemma_unit_bits();
@@ -1132,11 +1184,123 @@ impl<M: Mode> Ctx<M> {
         ensures
             r == self.finished(),
     {
-        self.evv.bits() == 1 && self.yielding.target.bits() == 1
+        self.evv.bits() == 1 && self.native.yielding.target.bits() == 1
     }
 
     pub fn stats(&self) -> CtxStats {
         self.stats
+    }
+
+    /// ヒープ、`evv`、yieldの状態、`max_evv`が同じなら、不変条件も同じである。`Native`の残りの欄と`fault_value`だけを
+    /// 書く関数は、これで不変条件を保つ。
+    proof fn lemma_same_words(&self, s0: Ctx<M>)
+        requires
+            self.heap == s0.heap,
+            self.evv == s0.evv,
+            self.native.yielding == s0.native.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            s0.wf() ==> self.wf(),
+            s0.held_ok() ==> self.held_ok(),
+    {
+        assert(self.heap.core.settled_view() == s0.heap.core.settled_view());
+        assert forall|b: usize| #[trigger] self.need(seq![], b) == s0.need(seq![], b) by {}
+        if s0.holds_args(seq![]) {
+            assert(self.holds_args(seq![]));
+        }
+        if s0.held_ok() {
+            assert(self.held_ok());
+        }
+    }
+
+    /// 失敗を置いているか。ネイティブのコードは`native.fault`が0でないかだけを見る。
+    pub closed spec fn fault_parked(&self) -> bool {
+        self.native.fault != 0
+    }
+
+    /// `fault`を置き、前に置いてあった失敗を返す。1回の呼び出しで置く失敗は1つなので、`Some`はその約束が破れた
+    /// ということで、呼ぶ側は`None`であることを`debug_assert!`で確かめる (docs/spec/object-model.md の「置いた失敗」)。
+    pub fn set_fault(&mut self, fault: Fault) -> (previous: Option<Fault>)
+        ensures
+            old(self).wf() ==> final(self).wf(),
+            old(self).held_ok() ==> final(self).held_ok(),
+            final(self).heap_spec() == old(self).heap_spec(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            final(self).fault_parked(),
+    {
+        let previous = self.fault_value.take();
+        self.fault_value = Some(fault);
+        self.native.fault = 1;
+        proof {
+            self.lemma_same_words(*old(self));
+        }
+        previous
+    }
+
+    /// 置いてある失敗を取り出す。
+    pub fn take_fault(&mut self) -> (r: Option<Fault>)
+        ensures
+            old(self).wf() ==> final(self).wf(),
+            old(self).held_ok() ==> final(self).held_ok(),
+            final(self).heap_spec() == old(self).heap_spec(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !final(self).fault_parked(),
+    {
+        self.native.fault = 0;
+        let r = self.fault_value.take();
+        proof {
+            self.lemma_same_words(*old(self));
+        }
+        r
+    }
+
+    pub fn stack_limit(&self) -> usize {
+        self.native.stack_limit
+    }
+
+    pub fn set_stack_limit(&mut self, limit: usize)
+        ensures
+            old(self).wf() ==> final(self).wf(),
+            old(self).held_ok() ==> final(self).held_ok(),
+            final(self).heap_spec() == old(self).heap_spec(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+    {
+        self.native.stack_limit = limit;
+        proof {
+            self.lemma_same_words(*old(self));
+        }
+    }
+
+    pub fn runtime(&self) -> *mut () {
+        self.native.runtime.0
+    }
+
+    /// ネイティブの実行系がworkerの始まりと終わりに書く (docs/spec/object-model.md の「`unsafe` の核」のT18)。
+    pub fn set_runtime(&mut self, runtime: *mut ())
+        ensures
+            old(self).wf() ==> final(self).wf(),
+            old(self).held_ok() ==> final(self).held_ok(),
+            final(self).heap_spec() == old(self).heap_spec(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+    {
+        self.native.runtime = RtPtr(runtime);
+        proof {
+            self.lemma_same_words(*old(self));
+        }
+    }
+
+    /// 書く関数は置かない。書くのはネイティブの実行系のエントリのstubだけで、`CTX_JMP`の位置に書く (T18)。
+    pub fn jmp(&self) -> *mut () {
+        self.native.jmp.0
+    }
+
+    /// 書く関数は置かない。`stop`は`for_worker`が書いた後は変わらない (T18)。
+    pub fn stop_word(&self) -> *const AtomicU32 {
+        self.native.stop.0
     }
 
     /// ほかのスレッドから受けた解放を取り込む (docs/spec/object-model.md の「別のスレッドからの解放」)。先に構築中の
@@ -1170,9 +1334,9 @@ impl<M: Mode> Ctx<M> {
     spec fn held_set(&self) -> Set<usize> {
         set![
             self.evv.bits_spec(),
-            self.yielding.target.bits_spec(),
-            self.yielding.clause.bits_spec(),
-            self.yielding.cont.bits_spec(),
+            self.native.yielding.target.bits_spec(),
+            self.native.yielding.clause.bits_spec(),
+            self.native.yielding.cont.bits_spec(),
         ]
     }
 
@@ -1226,7 +1390,7 @@ impl<M: Mode> Ctx<M> {
                 0i64
             },
     {
-        if self.yielding.target.bits() == 1 {
+        if self.native.yielding.target.bits() == 1 {
             0
         } else {
             1
@@ -1247,12 +1411,12 @@ impl<M: Mode> Ctx<M> {
                 1i64
             },
     {
-        let target = self.yielding.target.bits();
+        let target = self.native.yielding.target.bits();
         if target == 1 {
             0
         } else if target != ev.bits() {
             3
-        } else if self.yielding.abort {
+        } else if self.native.yielding.abort {
             2
         } else {
             1
@@ -1282,14 +1446,14 @@ impl<M: Mode> Ctx<M> {
             final(self).heap_spec() == old(self).heap_spec(),
             final(self).evv_spec() == old(self).evv_spec(),
     {
-        if M::CHECKED && (self.yielding.target.bits() != 1 || !ev.is_ptr()) {
+        if M::CHECKED && (self.native.yielding.target.bits() != 1 || !ev.is_ptr()) {
             return Err(HeapError::YieldMisuse);
         }
         proof {
             crate::word::lemma_imm_and_ptr_are_disjoint(ev.bits_spec());
             lemma_unit_bits();
         }
-        self.yielding = YieldState { target: ev, clause, cont: k, abort };
+        self.native.yielding = YieldState { target: ev, clause, cont: k, abort };
         if M::CHECKED && !abort {
             self.stats.yields = self.stats.yields.wrapping_add(1);
         }
@@ -1451,11 +1615,11 @@ impl<M: Mode> Ctx<M> {
             final(self).heap_spec() == old(self).heap_spec(),
             final(self).evv_spec() == old(self).evv_spec(),
     {
-        if M::CHECKED && self.yielding.target.bits() == 1 {
+        if M::CHECKED && self.native.yielding.target.bits() == 1 {
             return Err(HeapError::YieldMisuse);
         }
-        let k = self.yielding.cont;
-        self.yielding.cont = Word::UNIT;
+        let k = self.native.yielding.cont;
+        self.native.yielding.cont = Word::UNIT;
         proof {
             lemma_unit_bits();
             if !M::CHECKED {
@@ -1498,10 +1662,11 @@ impl<M: Mode> Ctx<M> {
             final(self).heap_spec() == old(self).heap_spec(),
             final(self).evv_spec() == old(self).evv_spec(),
     {
-        if M::CHECKED && (self.yielding.target.bits() == 1 || self.yielding.cont.bits() != 1) {
+        if M::CHECKED && (self.native.yielding.target.bits() == 1
+            || self.native.yielding.cont.bits() != 1) {
             return Err(HeapError::YieldMisuse);
         }
-        self.yielding.cont = k;
+        self.native.yielding.cont = k;
         if M::CHECKED {
             self.stats.yield_frames = self.stats.yield_frames.wrapping_add(1);
         }
@@ -1554,12 +1719,13 @@ impl<M: Mode> Ctx<M> {
                 )
             },
     {
-        if M::CHECKED && (self.yielding.target.bits() == 1 || self.yielding.cont.bits() != 1) {
+        if M::CHECKED && (self.native.yielding.target.bits() == 1
+            || self.native.yielding.cont.bits() != 1) {
             return Err(HeapError::YieldMisuse);
         }
-        let target = self.yielding.target;
-        let clause = self.yielding.clause;
-        self.yielding = YieldState::none();
+        let target = self.native.yielding.target;
+        let clause = self.native.yielding.clause;
+        self.native.yielding = YieldState::none();
         proof {
             lemma_unit_bits();
             if old(self).held_ok() {
@@ -1790,7 +1956,7 @@ impl<M: Mode> Ctx<M> {
             let s0 = *old(self);
             assert(self.heap == s0.heap);
             assert(self.evv == s0.evv);
-            assert(self.yielding == s0.yielding);
+            assert(self.native.yielding == s0.native.yielding);
             assert(self.max_evv == s0.max_evv);
             assert(self.heap.core.settled_view() == s0.heap.core.settled_view());
             assert forall|b: usize| #[trigger] self.need(seq![], b) == s0.need(seq![], b) by {}
@@ -2717,7 +2883,7 @@ impl<M: Mode> Ctx<M> {
                 self.wf(),
                 self.heap == s0.heap,
                 self.evv == s0.evv,
-                self.yielding == s0.yielding,
+                self.native.yielding == s0.native.yielding,
                 self.max_evv == s0.max_evv,
                 self.heap.word_in(node),
                 steps <= self.max_evv,
@@ -2744,7 +2910,7 @@ impl<M: Mode> Ctx<M> {
                 self.wf(),
                 self.heap == s0.heap,
                 self.evv == s0.evv,
-                self.yielding == s0.yielding,
+                self.native.yielding == s0.native.yielding,
                 self.max_evv == s0.max_evv,
                 self.heap.word_in(node),
                 node.is_ptr_spec(),
@@ -2894,7 +3060,7 @@ impl<M: Mode> Ctx<M> {
                 self.wf(),
                 self.heap == s0.heap,
                 self.evv == s0.evv,
-                self.yielding == s0.yielding,
+                self.native.yielding == s0.native.yielding,
                 self.max_evv == s0.max_evv,
                 self.heap.word_in(node),
                 steps <= self.max_evv,
@@ -2921,7 +3087,7 @@ impl<M: Mode> Ctx<M> {
                 self.wf(),
                 self.heap == s0.heap,
                 self.evv == s0.evv,
-                self.yielding == s0.yielding,
+                self.native.yielding == s0.native.yielding,
                 self.max_evv == s0.max_evv,
                 self.heap.word_in(node),
                 node.is_ptr_spec(),
@@ -3128,7 +3294,7 @@ impl<M: Mode> Ctx<M> {
                 self.heap.safe_settleable(),
                 !M::CHECKED ==> c,
                 self.evv == s0.evv,
-                self.yielding == s0.yielding,
+                self.native.yielding == s0.native.yielding,
                 self.max_evv == s0.max_evv,
                 s0.heap == hs,
                 m == skip_total(items@),
@@ -3640,6 +3806,49 @@ impl<M: Mode> Ctx<M> {
 }
 
 } // verus!
+// `Native`のポインタの約束は docs/spec/object-model.md の「`unsafe` の核」のT18にある
+unsafe impl Send for StopPtr {}
+unsafe impl Send for JmpPtr {}
+unsafe impl Send for RtPtr {}
+
+/// ネイティブのコードが`Ctx`の欄を読む位置 (docs/spec/object-model.md の「欄」)。ネイティブのコードは`Ctx<Fast>`だけを
+/// 使い、`native`はどちらのモードでも先頭にある。
+pub const CTX_YIELD_TARGET: usize = core::mem::offset_of!(Ctx<Fast>, native)
+    + core::mem::offset_of!(Native, yielding)
+    + core::mem::offset_of!(YieldState, target);
+pub const CTX_FAULT: usize =
+    core::mem::offset_of!(Ctx<Fast>, native) + core::mem::offset_of!(Native, fault);
+pub const CTX_STOP: usize =
+    core::mem::offset_of!(Ctx<Fast>, native) + core::mem::offset_of!(Native, stop);
+pub const CTX_STACK_LIMIT: usize =
+    core::mem::offset_of!(Ctx<Fast>, native) + core::mem::offset_of!(Native, stack_limit);
+pub const CTX_JMP: usize =
+    core::mem::offset_of!(Ctx<Fast>, native) + core::mem::offset_of!(Native, jmp);
+
+// 120以下で8の倍数なら、x86-64では8ビットのずれで、aarch64ではscaledの`ldr`1つで読め、yieldの語は`ldp`と`stp`が
+// 届く。`heap`を`Native`のすぐ後に置き、`Heap`の外の関数を呼ぶ`Ctx`のメソッドの費用を`add`1つに抑える
+const _: () = {
+    assert!(core::mem::offset_of!(Ctx<Fast>, native) == 0);
+    assert!(core::mem::offset_of!(Ctx<Checked>, native) == 0);
+    assert!(
+        core::mem::offset_of!(Ctx<Fast>, heap) == core::mem::size_of::<Native>()
+            && core::mem::offset_of!(Ctx<Checked>, heap) == core::mem::size_of::<Native>()
+    );
+    assert!(core::mem::size_of::<Native>() == 72);
+    let consts = [
+        CTX_YIELD_TARGET,
+        CTX_FAULT,
+        CTX_STOP,
+        CTX_STACK_LIMIT,
+        CTX_JMP,
+    ];
+    let mut i = 0;
+    while i < consts.len() {
+        assert!(consts[i] <= 120 && consts[i].is_multiple_of(8));
+        i += 1;
+    }
+};
+
 // 安全点の確かめは何も約束しないので、`verus!` の外に書く (docs/spec/object-model.md の「実行の制御」)。止める語は
 // 「止めよ」のビットだけを伝えるので、Relaxed で読む
 impl<M: Mode> Ctx<M> {

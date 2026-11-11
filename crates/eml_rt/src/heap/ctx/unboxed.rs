@@ -190,7 +190,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.consistent(),
             self.heap.settleable(),
             self.evv == old.evv,
-            self.yielding == old.yielding,
+            self.native.yielding == old.native.yielding,
             self.max_evv == old.max_evv,
             moved(self.heap, old.heap, d, x),
             forall|b: usize| #[trigger] d(b) >= -points_in(ws, b),
@@ -238,7 +238,7 @@ impl<M: Mode> Ctx<M> {
             self.heap == s0.heap.settled_heap(),
             self.heap.consistent(),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -263,7 +263,7 @@ impl<M: Mode> Ctx<M> {
             self.heap == s1.heap || self.heap.unboxed_written(s1.heap, a),
             self.heap.consistent(),
             self.evv == s1.evv,
-            self.yielding == s1.yielding,
+            self.native.yielding == s1.native.yielding,
             self.max_evv == s1.max_evv,
         ensures
             self.held_ok(),
@@ -313,7 +313,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.evolved(h3, a, -1),
             self.heap.kept_live(h3),
             self.evv == s1.evv,
-            self.yielding == s1.yielding,
+            self.native.yielding == s1.native.yielding,
             self.max_evv == s1.max_evv,
         ensures
             self.held_ok(),
@@ -367,7 +367,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.relinked(s1.heap, a, lin),
             self.heap.consistent(),
             self.evv == s1.evv,
-            self.yielding == s1.yielding,
+            self.native.yielding == s1.native.yielding,
             self.max_evv == s1.max_evv,
         ensures
             self.held_ok(),
@@ -398,14 +398,14 @@ impl<M: Mode> Ctx<M> {
         assert(held_word(h1, self.evv)) by {
             lemma_held_word_relinked(h1, h0, a, lin, self.evv);
         }
-        assert(held_word(h1, self.yielding.target)) by {
-            lemma_held_word_relinked(h1, h0, a, lin, self.yielding.target);
+        assert(held_word(h1, self.native.yielding.target)) by {
+            lemma_held_word_relinked(h1, h0, a, lin, self.native.yielding.target);
         }
-        assert(held_word(h1, self.yielding.clause)) by {
-            lemma_held_word_relinked(h1, h0, a, lin, self.yielding.clause);
+        assert(held_word(h1, self.native.yielding.clause)) by {
+            lemma_held_word_relinked(h1, h0, a, lin, self.native.yielding.clause);
         }
-        assert(held_word(h1, self.yielding.cont)) by {
-            lemma_held_word_relinked(h1, h0, a, lin, self.yielding.cont);
+        assert(held_word(h1, self.native.yielding.cont)) by {
+            lemma_held_word_relinked(h1, h0, a, lin, self.native.yielding.cont);
         }
         assert(held_word(h1, a)) by {
             lemma_held_word_relinked(h1, h0, a, lin, a);

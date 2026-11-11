@@ -113,7 +113,7 @@ impl<M: Mode> Ctx<M> {
                 std::mem::swap(&mut self.heap, &mut fresh);
                 self.roots = out;
                 self.evv = Word::UNIT;
-                self.yielding = YieldState::none();
+                self.native.yielding = YieldState::none();
                 proof {
                     lemma_unit_bits();
                     lemma_points_in(seq![], 0);
