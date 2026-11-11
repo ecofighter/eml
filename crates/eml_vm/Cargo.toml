@@ -23,6 +23,7 @@ eml_gui = { workspace = true, optional = true }
 eml_lir.workspace = true
 eml_io.workspace = true
 eml_rt.workspace = true
+eml_sched.workspace = true
 eml_tls = { workspace = true, optional = true }
 rustc-hash.workspace = true
 
@@ -30,6 +31,7 @@ rustc-hash.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+eml_sched = { workspace = true, features = ["testing"] }
 eml_test_support = { workspace = true, features = ["run"] }
 insta.workspace = true
 

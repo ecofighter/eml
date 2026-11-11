@@ -150,6 +150,9 @@ mod tests {
         let scope = registry.lock().open_root(None, None).unwrap();
         let me = running_task(registry, scope);
         let mut driver = TestDriver::new(None);
+        registry
+            .lock()
+            .set_bin(0, Arc::new(cells::HostBin::new(driver.bin(), false)));
         let token = cells::submit_job(
             registry,
             &solo(registry),

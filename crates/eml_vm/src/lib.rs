@@ -18,7 +18,6 @@ use crate::workers::{
 };
 
 mod apply;
-mod cells;
 mod code;
 mod compile;
 mod counters;
@@ -26,7 +25,6 @@ mod data;
 mod disasm;
 mod doorbell;
 mod driver;
-mod error;
 mod ffi;
 mod gui;
 mod hosts;
@@ -48,6 +46,7 @@ pub use eml_cabi::{Bridge, CCall, Dtor, Linked};
 #[cfg(feature = "gui")]
 pub use eml_gui;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
+pub(crate) use eml_sched::{cells, error};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 #[cfg(feature = "gui")]
 pub use gui::park as gui_park;

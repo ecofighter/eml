@@ -9,8 +9,9 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 ## 置き場所
 
 - バイトコードは LIR から直接作り、中間に別の IR は挟まない。命令列への変換は1回の走査で済むためである
-- crate `eml_vm` は、workspace の crate では `eml_lir`、`eml_io`、`eml_rt`、`eml_extern`、`eml_cabi` と、feature `tls` の下の `eml_tls` だけに依存し、フロントエンドには依存しない。中身は、LIR のプログラムを `CodeBase<M>` に変換するコード生成 (`compile`) と、`CodeBase` を `Ctx<M>` の上で実行する VM の繰り返しの2つである
-- `eml_vm` は、自分の `RunStats` と実行時エラーの型 `RuntimeError` を持つ。実行時エラーの型は1つだけなので、`RuntimeError` と呼ぶ。誤りの種類は `VmFault` と呼ぶ。`Fault` にすると、包んでいる `eml_rt::Fault` と名前がぶつかるためである
+- crate `eml_vm`は、workspaceのcrateでは`eml_lir`、`eml_io`、`eml_rt`、`eml_sched`、`eml_extern`、`eml_cabi`と、feature `tls`の下の`eml_tls`だけに依存し、フロントエンドには依存しない。中身は、LIRのプログラムを`CodeBase<M>`に変換するコード生成 (`compile`) と、`CodeBase`を`Ctx<M>`の上で実行するVMの繰り返しの2つである
+- crate `eml_sched`は、VMとネイティブの実行系が共有するタスクのセルの核 (`cells.rs`) と実行時エラーの型 (`error.rs`) を持ち、workspaceのcrateでは`eml_rt`だけに依存する ([アーキテクチャ](../implementation/architecture.md)の「crate の依存関係」)
+- `eml_vm`は、自分の`RunStats`を持ち、`eml_sched`の実行時エラーの型`RuntimeError`を再公開する。実行時エラーの型は1つだけなので、`RuntimeError`と呼ぶ。誤りの種類は`VmFault`と呼ぶ。`Fault`にすると、包んでいる`eml_rt::Fault`と名前がぶつかるためである
 - `eml_lir` は、データの物理的な形を決める関数 `LayoutCtor::shape` を持つ ([オブジェクトモデル](object-model.md) の「ペイロード」)
 - `eml_lir` は、文の単位の生存を公開の API にする ([LIR](lir.md) の「生存解析」)。スロットの割り当て (「スロットの割り当て」) が文の単位の干渉を作るために使う
 - `eml_rt` は、`Word::from_bits` を公開する。生の `int` と `enum` の値をスロットに置くためである (「スロットとスタック」)
@@ -712,11 +713,11 @@ route を切り替えより先に行うのは、起こしを受け箱に積ん�
 
 ## `Async` のタスク
 
-`Std.Async`のタスク ([標準ライブラリ](stdlib.md)の「`Std.Async`」) は、`start`のときにworkerに置き、終わるまでそこで動く。worker 1..N-1を作ったrun (`Workers`が`Started`か`Peer`) では、`start_raw`と`start_in_raw`がrunの表の数`next_place`に1を足し、足す前の値をworker 0を除く作ったworkerの数 (live − 1) で割った余りに1を足したworkerに置く。workerは1、2、…、N−1、1、…の順に回る。`main`を動かすworker 0には`start`でタスクを置かない (例外は合わせたrunの固定したタスクで、worker 0がメインのworkerを兼ねる) ので、`main`の同期の読み込みの間もそれらのタスクは動く。ただし、worker 0のdriverが受け持つI/O (`main`が作ったソケットと`Std.Stream`のファイル、仮想の時計ではすべてのI/O) は待つ。worker 0はそれらの完了を自分の集める地点でだけ拾うためである (「時計とdriver」)。workerを作らないrunでは、呼んだworkerを持ち主にする。`Async.run`の根のタスクは、いつも呼んだworkerに置く。`start_main_raw`はタスクをメインのworkerに置き、固定したものとして印を付ける。固定したタスクが始めるタスク (`start_raw`、`start_in_raw`、入れ子の`run_raw`の根) も固定し、輪を回らずにメインのworker (合わせたrunではworker 0) に置く。`par`の子と`compute`の仕事は固定しない。`start_off_main_raw`は固定したタスクからでも輪に置き、新しいタスクを固定しない。そのタスクが始めるタスクも固定しない。固定して始めたタスクの数は`Finished.pinned_tasks`に数える (`start_off_main_raw`で始めたタスクは数えない) (「メインのworker」)。持ち主を`start`を実行したworkerと違うworkerにしたタスクの数は`Finished.placed_tasks`に数える (「タスクとスケジュール」)。どのworkerがどのタスクを持つかはスケジュールで決まるので、N = 2以上のrunの出力の順と`RunStats`はseedでは再現しない。タスクとスコープの意味は`eml_vm`の`cells.rs`の核が持ち、VMの命令`Async`は核を呼んで、返った仕事をVMの`Task`にする。
+`Std.Async`のタスク ([標準ライブラリ](stdlib.md)の「`Std.Async`」) は、`start`のときにworkerに置き、終わるまでそこで動く。worker 1..N-1を作ったrun (`Workers`が`Started`か`Peer`) では、`start_raw`と`start_in_raw`がrunの表の数`next_place`に1を足し、足す前の値をworker 0を除く作ったworkerの数 (live − 1) で割った余りに1を足したworkerに置く。workerは1、2、…、N−1、1、…の順に回る。`main`を動かすworker 0には`start`でタスクを置かない (例外は合わせたrunの固定したタスクで、worker 0がメインのworkerを兼ねる) ので、`main`の同期の読み込みの間もそれらのタスクは動く。ただし、worker 0のdriverが受け持つI/O (`main`が作ったソケットと`Std.Stream`のファイル、仮想の時計ではすべてのI/O) は待つ。worker 0はそれらの完了を自分の集める地点でだけ拾うためである (「時計とdriver」)。workerを作らないrunでは、呼んだworkerを持ち主にする。`Async.run`の根のタスクは、いつも呼んだworkerに置く。`start_main_raw`はタスクをメインのworkerに置き、固定したものとして印を付ける。固定したタスクが始めるタスク (`start_raw`、`start_in_raw`、入れ子の`run_raw`の根) も固定し、輪を回らずにメインのworker (合わせたrunではworker 0) に置く。`par`の子と`compute`の仕事は固定しない。`start_off_main_raw`は固定したタスクからでも輪に置き、新しいタスクを固定しない。そのタスクが始めるタスクも固定しない。固定して始めたタスクの数は`Finished.pinned_tasks`に数える (`start_off_main_raw`で始めたタスクは数えない) (「メインのworker」)。持ち主を`start`を実行したworkerと違うworkerにしたタスクの数は`Finished.placed_tasks`に数える (「タスクとスケジュール」)。どのworkerがどのタスクを持つかはスケジュールで決まるので、N = 2以上のrunの出力の順と`RunStats`はseedでは再現しない。タスクとスコープの意味は`eml_sched`の`cells.rs`の核が持ち、VMの命令`Async`は核を呼んで、返った仕事をVMの`Task`にする。
 
 ### 核と実行系
 
-- `cells.rs` は `std` と `eml_rt` だけを import する。VM の `Task`、`TaskId`、`Scheduler`、フレームを知らず、走らせる仕事を `Runnable` で返す。`Runnable` は、タスクを始める `Start { cell, closure }`、待っていたタスクを再開する `Resume { cell, k, wake }`、driver の操作を待っていたタスクを再開する `ResumeIo { cell, k, wake, op }`、token で待つものを起こす `Token(WaitToken)` の4つである。`WaitToken` は不透明な番号で、VM は `Task` の番号に写す。ネイティブのコードが同じ核を `extern "C"` のエントリから呼べるようにするためである。import の制限はテスト (`crates/eml_vm/tests/tasks.rs`) で確かめる
+- `eml_sched`の`cells.rs`は、`std`と`eml_rt`だけをimportする。VMの`Task`、`TaskId`、`Scheduler`、フレームを知らず、走らせる仕事を`Runnable`で返す。`Runnable`は、タスクを始める`Start { cell, closure }`、待っていたタスクを再開する`Resume { cell, k, wake }`、driverの操作を待っていたタスクを再開する`ResumeIo { cell, k, wake, op }`、tokenで待つものを起こす`Token(WaitToken)`の4つである。`WaitToken`は不透明な番号で、VMは`Task`の番号に写す。ネイティブのコードが同じ核を`extern "C"`のエントリから呼べるようにするためである。importの制限はテスト (`crates/eml_sched/tests/imports.rs`) で確かめる
 - VMだけが受け持つのは、`run_raw`を呼んだ`Task`をスタックを持ったまま待たせること (`WaitingCell`)、`Seeded`が切り替えた`Task`がスタックを持つこと、誤りと`exit`で`vm::run`から誤りで出ることの3つである
 
 ### セルと登録表
@@ -902,7 +903,7 @@ stdの行は、driverのブロックする呼び出しのプールでRustの処�
 
 ### channel
 
-`Std.Chan` の channel ([標準ライブラリ](stdlib.md) の「`Std.Chan`」) は、登録表のセルの3つ目の種類で、`cells.rs` の核が持つ。待ちの種類は足さず、channel を待つタスクの待ちの登録は、ほかのセルと同じセルの待ちである。
+`Std.Chan`のchannel ([標準ライブラリ](stdlib.md)の「`Std.Chan`」) は、登録表のセルの3つ目の種類で、`eml_sched`の`cells.rs`の核が持つ。待ちの種類は足さず、channelを待つタスクの待ちの登録は、ほかのセルと同じセルの待ちである。
 
 - 積めるかは、積んだ品物の数と送りの予約の数の和が、容量と待っている受け手の数の和より少ないかで決める (`items.len() + sends < cap + receivers.len()`)。待っている受け手1人につき枠が1つ開くので、容量 0 の channel でも、受け手が待っていれば1つ積める (待ち合わせ)
 - 予約と hold: `reserve_*` は 0 を書くと予約を数え、確定に要るもの (channel の番号、預かる ID、受け取りでは列から取った品物) を worker の hold (`Scheduler.hold`) に置く。続く `push_raw` か `pop_raw` が hold から取り出して確定する。予約から確定までの命令には安全点も切り替えも捕まえる失敗もないので、hold は worker に1つで足り、ほかのタスクに渡らず、安全点ではいつも空である。予約は確定まで channel を放させないので、`publish` と `receive` を lock の外で行っても、`settle` の後の `retire_worker` はそれらすべての後に起きる。どの channel の行も、登録表の lock を1区間だけ取る
