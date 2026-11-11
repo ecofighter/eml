@@ -54,6 +54,7 @@ cargo verus verify -p eml_rt         # Verus proofs of eml_rt
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)
 bench/rt.sh                          # eml_rt fast-mode instruction counts (macOS)
+bench/rt-gate.sh [--allow 'ROW ROW...' --allow-bound PCT] BASE [PAIRS]   # the gate for an eml_rt change: alternates BASE and HEAD in one clean tree, runs bench/rt.sh on each (PAIRS=5), and exits 0 when the median delta of every gated row is at most +0.1% (macOS; docs/implementation/benchmarks.md の「命令の数の測り方」)
 bench/scripts.sh                     # the scripts under tests/ui/run/scripts/, the https-get row (Std.Http against a local TLS server) and the numeric bench/ programs against their Python versions, each row sized to ~300 ms of eml time: wall time and peak RSS (macOS)
 bench/net.sh LABEL=EML[@DIR] [LABEL=EML[@DIR]] [--only REGEX] [--stats] [--workers 1,2,4]   # Std.Net on the real driver: CPU, syscalls (strace, Linux), RSS and RunStats per case as JSONL; @DIR runs that label on the programs in DIR (an older commit's bench/net); --workers runs each label at each worker count as LABEL:wN (default 1); bench/net/report.py makes the tables
 bench/async/scale.sh                 # wall time of Async tasks, the same work in par, a separate-process floor and channel ping-pong at 1, 2 and 4 workers, as a Markdown table (release; EML=..., ROUNDS=11)
