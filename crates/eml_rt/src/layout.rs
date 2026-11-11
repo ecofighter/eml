@@ -34,6 +34,12 @@ pub const EXTENDED_FIRST: usize = COUNT_WORD + 1;
 /// 配列でない`Data`が数の語を持つ、走査する語の最小の数。`scan`の印の値でもある。
 pub const INLINE_SCAN_LIMIT: usize = 255;
 
+/// `BigInt`と`Float`の箱の値を持つペイロードの語。
+pub const BOX_VALUE_WORD: usize = 0;
+
+/// `BigInt`と`Float`の箱のペイロードの語の数。
+pub const BOX_WORDS: usize = BOX_VALUE_WORD + 1;
+
 /// 物体のポインタから、ペイロードのi語目までのバイトのずれ。
 pub open spec fn slot_offset_spec(i: int) -> int {
     WORD_BYTES * (HEADER_WORDS + i)
@@ -207,6 +213,11 @@ mod tests {
         assert_eq!((COUNT_WORD, EXTENDED_FIRST), (0, 1));
         assert_eq!(slot_byte_offset(0), 8);
         assert_eq!(slot_byte_offset(1), 16);
+    }
+
+    #[test]
+    fn the_box_value_word_is_pinned() {
+        assert_eq!((BOX_VALUE_WORD, BOX_WORDS), (0, 1));
     }
 
     #[test]

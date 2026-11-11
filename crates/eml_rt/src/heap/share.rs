@@ -588,6 +588,8 @@ proof fn lemma_moves_prefix<N>(g: GView<N>, root: N, path: Seq<N>, i: int)
 
 /// 所有を移す `lin` でない物体の親は、所有を移す物体である。rc 1 の物体を指す辺はただ1つなので、道の上の親が
 /// その親である
+// 不変条件の箱の語を`crate::layout::BOX_VALUE_WORD`で書くと、この補題を解く量が既定の上限 (10) を超えた
+#[verifier::rlimit(20)]
 proof fn lemma_moves_parent<N>(g: GView<N>, root: N, p: N, k: int)
     requires
         sound(g, root),

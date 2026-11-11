@@ -132,7 +132,7 @@ impl Core {
             &&& p_first(p) + p_count(p) <= self.cap(h)
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
-            ==> self.cap(h) >= 1 && p_init(p, 0))
+            ==> self.cap(h) >= 1 && p_init(p, crate::layout::BOX_VALUE_WORD as int))
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).has_body() ==> body_wf(
             p,
             self.cap(h),
@@ -418,7 +418,7 @@ impl Core {
             }
         }
         if p_kind(p).boxes_value() {
-            assert(p.slots.contains_key(0));
+            assert(p.slots.contains_key(crate::layout::BOX_VALUE_WORD as int));
         }
         assert(self.model@.state =~= s0.model@.state.insert(b, self.state(b)));
         assert(self.model@.written =~= s0.model@.written.insert(b, self.model@.written[b]));
@@ -656,10 +656,11 @@ impl Core {
             }
         }
         if p_kind(q).boxes_value() && s0.state(h) == BlockState::Live {
-            assert(p_init(q, 0));
-            assert(p.slots.contains_key(0));
-            if i != 0 {
-                assert(p.slots[0] == q.slots[0]);
+            assert(p_init(q, crate::layout::BOX_VALUE_WORD as int));
+            assert(p.slots.contains_key(crate::layout::BOX_VALUE_WORD as int));
+            if i != crate::layout::BOX_VALUE_WORD as int {
+                assert(p.slots[crate::layout::BOX_VALUE_WORD as int]
+                    == q.slots[crate::layout::BOX_VALUE_WORD as int]);
             }
         }
         assert(self.safe_block_wf(h));
@@ -990,7 +991,10 @@ impl Core {
                 &&& forall|i: int| #[trigger]
                     self.scanned(b, i) ==> self.model@.written[b].contains(i)
                         || self.model@.kept.contains((b, i))
-                &&& self.kind(b).boxes_value() ==> p_init(self.perm(b), 0)
+                &&& self.kind(b).boxes_value() ==> p_init(
+                    self.perm(b),
+                    crate::layout::BOX_VALUE_WORD as int,
+                )
             },
         }
     }
@@ -1004,7 +1008,10 @@ impl Core {
             self.state(h) == BlockState::Live || self.state(h) == BlockState::Building,
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), crate::layout::COUNT_WORD as int),
-            p_kind(self.perm(h)).boxes_value() ==> self.cap(h) >= 1 && p_init(self.perm(h), 0),
+            p_kind(self.perm(h)).boxes_value() ==> self.cap(h) >= 1 && p_init(
+                self.perm(h),
+                crate::layout::BOX_VALUE_WORD as int,
+            ),
             p_kind(self.perm(h)).has_body() ==> body_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {
@@ -1015,7 +1022,7 @@ impl Core {
         reveal(Core::building_wf);
         self.lemma_safe_at(h);
         if p_kind(self.perm(h)).boxes_value() {
-            assert(self.perm(h).slots.contains_key(0));
+            assert(self.perm(h).slots.contains_key(crate::layout::BOX_VALUE_WORD as int));
         }
     }
 
@@ -1107,7 +1114,7 @@ impl Core {
             &&& p_first(p) + p_count(p) <= self.cap(h)
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
-            ==> self.cap(h) >= 1 && p_init(p, 0))
+            ==> self.cap(h) >= 1 && p_init(p, crate::layout::BOX_VALUE_WORD as int))
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).has_body() ==> body_wf(
             p,
             self.cap(h),

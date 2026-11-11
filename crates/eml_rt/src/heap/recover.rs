@@ -809,7 +809,7 @@ impl<M: Mode> Heap<M> {
                 Ok(())
             },
             Kind::BigInt => {
-                let x = self.core.slot_get(h, 0).bits() as i64;
+                let x = self.core.slot_get(h, crate::layout::BOX_VALUE_WORD).bits() as i64;
                 let nw = new.alloc_int(x);
                 proof {
                     if nw.is_imm_spec() {
@@ -828,7 +828,7 @@ impl<M: Mode> Heap<M> {
                 Ok(())
             },
             Kind::Float => {
-                let x = self.core.slot_get(h, 0).bits() as u64;
+                let x = self.core.slot_get(h, crate::layout::BOX_VALUE_WORD).bits() as u64;
                 let nw = new.alloc_float(x);
                 proof {
                     new.lemma_target_made(n0, *self, ws0, out, d0, nw, a);

@@ -102,7 +102,10 @@ impl Core {
             self.settled_state(h) == BlockState::Live,
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), crate::layout::COUNT_WORD as int),
-            p_kind(self.perm(h)).boxes_value() ==> p_init(self.perm(h), 0),
+            p_kind(self.perm(h)).boxes_value() ==> p_init(
+                self.perm(h),
+                crate::layout::BOX_VALUE_WORD as int,
+            ),
             p_kind(self.perm(h)).has_body() ==> body_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {

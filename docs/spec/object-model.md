@@ -78,19 +78,20 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 
 ### 語の位置
 
-- `eml_rt`は、自身のコードが読む物体の語の位置、つまりヘッダの欄、`Data`の数の語、走査する最初の語を持つ。これらについて`eml_rt`と食い違うコード生成器は、メモリの安全を壊す
+- `eml_rt`は、自身のコードが読む物体の語の位置、つまりヘッダの欄、`Data`の数の語、走査する最初の語、`BigInt`と`Float`の箱の値の語を持つ。これらについて`eml_rt`と食い違うコード生成器は、メモリの安全を壊す
 - `eml_rt`は、それぞれをモジュール`eml_rt::layout`で1回だけ定める。どれも、Verusの`pub open spec fn`とその対の`pub const fn` (`ensures`がそのspecであるもの) か、`pub const`である。`eml_rt`の復号、確保器、ポインタの関数、ヒープの述語はこれらを使う
 - コード生成器 (VMのコンパイラと実行系) は、こうした値をすべてこのモジュールから取り、物体の語の位置を表す数を自分では書かない。`eml_lir`のreuseの上限は、reuseを`eml_rt`の上に下ろす各crateのコンパイル時のassertで`INLINE_SCAN_LIMIT`に結び付ける (下の「ペイロード」)
 - 項目は次のとおりである。添字は語の単位で、バイトに直すのは`slot_byte_offset`だけである
   - ヘッダ: `WORD_BYTES`、`HEADER_WORDS`、`RC_BYTE`、`META_BYTE`と、`slot_byte_offset(i)` = `WORD_BYTES * (HEADER_WORDS + i)` (物体のポインタから、ペイロードのi語目までのバイトのずれ)
   - `Data`: `INLINE_SCAN_LIMIT`、`COUNT_WORD`、`EXTENDED_FIRST`
+  - 箱: `BOX_VALUE_WORD`、`BOX_WORDS`
   - 走査する語の数と配列かどうかからの符号化: `data_extended`、`data_scan`、`data_first`、`data_raw_first`、`data_words`、`data_meta`
   - `scan`からの復号: `scan_extended`、`scan_first`
 - これらは上の「ヘッダ」の規則を実装し、規則を言い直さない。数の語があれば、それはペイロードの`COUNT_WORD`語目にあり、走査する語は`EXTENDED_FIRST`語目から始まる。生の語は走査する語の後に続く
 - 復号が意味を持つのは`Data`だけである。物体が配列かどうかは、`meta`からは読めない
 - Verusは次を証明する。実行の項目はどれもそのspecに等しい。復号は符号化を元に戻す (`lemma_data_scan`)。`alloc_data`、`alloc_data_ext`、`alloc_data_rc`は、`scan`のバイトと生の語の範囲をこれらのspecで述べる。`alloc_array_immortal`は`scan`のバイトを`data_scan_spec(0, true)`と述べ、数は0で生の語を持たない。ヒープの不変条件は、数を`COUNT_WORD`語目から読む
 - 単体テストはすべての値を固定する。constのassertは、ヘッダの項目を`size_of::<Header>()`、`offset_of!`、`size_of::<Word>()`に、`Meta::EXTENDED_SCAN`を`INLINE_SCAN_LIMIT`に結び付ける。`eml_rt`のほかのソースファイルに綴り`255`と`EXTENDED_SCAN`が増えないことは、単体テストが見張る
-- このモジュールに入らないもの (括弧があれば、その中がそれを定める所か読む所): `Meta`のビットの詰め方 (`Meta`の定数。上の「ヘッダ」)、`Word`のタグ (`Word::IMM_TAG`と`IMM_SHIFT`。上の「語」)、フィールドの順 (`eml_lir`)、クロージャの中身 (下の「クロージャ」)、`Ctx`の欄のずれ (`eml_rt`の`CTX_*`。下の「欄」)、検査モードの前置きとページの配置 (`eml_rt`だけが読む)、`String`、`Bytes`、`Raw`の中身の配置、`BigInt`と`Float`の箱の値の語、`Foreign`のペイロード、空きリストの次のブロックへのポインタ (下の「種類」)、evidenceの物体の欄の役割 (下の「evidence の3つの物体」)
+- このモジュールに入らないもの (括弧があれば、その中がそれを定める所か読む所): `Meta`のビットの詰め方 (`Meta`の定数。上の「ヘッダ」)、`Word`のタグ (`Word::IMM_TAG`と`IMM_SHIFT`。上の「語」)、フィールドの順 (`eml_lir`)、クロージャの中身 (下の「クロージャ」)、`Ctx`の欄のずれ (`eml_rt`の`CTX_*`。下の「欄」)、検査モードの前置きとページの配置 (`eml_rt`だけが読む)、`String`、`Bytes`、`Raw`の中身の配置、`Foreign`のペイロード、空きリストの次のブロックへのポインタ (下の「種類」)、evidenceの物体の欄の役割 (下の「evidence の3つの物体」)
 
 ### 種類
 

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{LONG, cons, list, mortal, probe};
 use crate::heap::TOO_LARGE;
-use crate::{Fast, Heap, HeapError, Kind, Meta, Mode, Word};
+use crate::{Fast, Heap, HeapError, Kind, Meta, Mode, Word, layout};
 
 fn a_cons_list_is_freed_by_one_decref<M: Mode>() {
     let mut heap = Heap::<M>::new();
@@ -110,6 +110,21 @@ fn float_box_round_trips<M: Mode>() {
             assert_eq!(heap.unbox_float(big), Err(HeapError::WrongKind));
             heap.decref(big).unwrap();
         }
+    }
+    assert_eq!(mortal(&mut heap), 0);
+}
+
+/// コード生成器は箱の値を`layout::BOX_VALUE_WORD`から直に読むので、`unbox`の読む語がそこにあることを確かめる。
+fn the_box_value_sits_at_the_layout_word<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let bits = 1.5f64.to_bits();
+    let big = heap.alloc_int(i64::MAX);
+    let float = heap.alloc_float(bits);
+    unsafe {
+        assert_eq!(heap.raw(big, layout::BOX_VALUE_WORD), Ok(i64::MAX as u64));
+        assert_eq!(heap.raw(float, layout::BOX_VALUE_WORD), Ok(bits));
+        heap.decref(big).unwrap();
+        heap.decref(float).unwrap();
     }
     assert_eq!(mortal(&mut heap), 0);
 }
@@ -332,6 +347,7 @@ both_modes!(
     a_big_int_is_boxed_only_outside_63_bits,
     the_dummy_ignores_dup_and_decref_and_unboxes_to_zero,
     float_box_round_trips,
+    the_box_value_sits_at_the_layout_word,
     unbox_float_accepts_the_dummy,
     an_extended_scan_object_frees_all_its_children,
     a_foreign_value_is_finalized_exactly_once,

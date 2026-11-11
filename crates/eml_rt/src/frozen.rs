@@ -132,7 +132,7 @@ impl RegionPerms {
         &&& p_kind(p) != Kind::Foreign
         &&& p_extended(p) ==> cap >= 1 && p_init(p, crate::layout::COUNT_WORD as int)
         &&& p_first(p) + p_count(p) <= cap
-        &&& p_kind(p).boxes_value() ==> cap >= 1 && p_init(p, 0)
+        &&& p_kind(p).boxes_value() ==> cap >= 1 && p_init(p, crate::layout::BOX_VALUE_WORD as int)
         &&& p_kind(p).has_body() ==> body_wf(p, cap)
         &&& p_kind(p) == Kind::Raw ==> raw_wf(p, cap)
         &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
