@@ -190,8 +190,8 @@ base + 0 .. base + frame_size: スロット
 ### データとクロージャ
 
 - `con L #t(a..)` は、`LayoutCtor::shape` で宣言の位置を物理的な位置へ写す。そのうえで `alloc_data(tag, 走査する語の数, 生の語の数, lin)` で作り、走査する語を `set_field`、生の語を `set_raw` で書く。`lin` は、束縛する変数の印が `lin` なら真である ([オブジェクトモデル](object-model.md) の「`lin` ビット」)
-- 走査する語が 255 個以上のデータでは、ペイロードの先頭に数の語がある。`field`、`set_field`、`raw`、`set_raw` の位置はこの数の語を含む物理的な位置なので、VM はその物体の位置を、コード生成の時点で1つずらしておく
-- `closure f(a..)` (`Closure { dst, at }`) の `operands[at..]` は [関数の番号, lin, 引数の数 k, 引数のスロット…] である。走査する語に `&f` と参照の語 (`f` の引数の Repr が `obj` か `tobj` の語) を、生の語にほかの語を、`f` の引数の順に並べて作る。引数の Repr は `FnEntry` の `params` で引く。`&f` の即値には k を詰める (`f | k << 32`)。開いた後の引数を並べるので、構造体の捕獲は葉の数だけ数える。`lin` の決め方は `con` と同じである。走査する語が 255 個以上なら、`con` と同じく位置をずらす。VM が部分適用で作るクロージャも同じ形である ([オブジェクトモデル](object-model.md) の「クロージャ」)
+- 形の位置は論理的な位置で、数の語を数えない。`field`、`set_field`、`raw`、`set_raw`の位置は物理的な添字なので、VMはコード生成の時点で`eml_rt::layout::data_first(scanned, false)`を足しておく ([オブジェクトモデル](object-model.md) の「語の位置」)
+- `closure f(a..)` (`Closure { dst, at }`) の`operands[at..]`は [関数の番号, lin, 引数の数k, 引数のスロット…] である。走査する語に`&f`と参照の語 (`f`の引数のReprが`obj`か`tobj`の語) を、生の語にほかの語を、`f`の引数の順に並べて作る。引数のReprは`FnEntry`の`params`で引く。`&f`の即値にはkを詰める (`f | k << 32`)。開いた後の引数を並べるので、構造体の捕獲は葉の数だけ数える。`lin`の決め方は`con`と同じである。位置は`data_first`と`data_raw_first`に、`1 + 参照の捕獲の数`を渡して求める。VMが部分適用で作るクロージャも同じ形である ([オブジェクトモデル](object-model.md) の「クロージャ」)
 - 構造体の `unbox` (`UnboxStruct { src, at }`) は、`unpack` と同じオペランドで箱のフィールドを読み、名前を書いた葉のスロットに書く。箱がダミーなら、各スロットに葉のダミー (`word` ならヒープのダミー、スカラーならビット列 0) を書く
 - 構造体の `unbox` で葉を借りた箱の `release` (`ReleaseUnboxed { src, at }`) は、`release` と同じ展開で、token のスロットも持てる。箱がダミーなら何もせず、token の形は空の token を書く。ダミーかどうかは、速いモードでは物体の種類で見分ける。ダミーは種類 `BigInt` の物体で、構造体の箱はいつも `Data` である。検査モードでは、加えてヒープのダミーと同じ語であることも確かめ、ダミーでない `BigInt` を内部の誤りにする。1回の実行の中ではダミーは1つで、回復はスタックを捨てるので、語の比べが使える。ふつうの `release` の速い道に確かめを足さないため、命令を分ける ([LIR](lir.md) の「ダミーの値」)
 
@@ -211,8 +211,8 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 - token を受ける `con L #t(a..) reuse r [in place]` (`ConReuse`) のオペランドは、token のスロット、タグ、走査する語の数、生の語の数、`lin`、`in place` の印、引数の並びである。引数の並びは `con` と同じ [物理的な位置, スロット] で、書かない引数の位置には `SKIP` のビットを立てる
   - token が空なら、`con` と同じく `alloc_data` で確保し、書かない印の引数も含めてすべてのフィールドを書く
-  - 空でなければ、`in place` なら `reuse_in_place(r, meta)`、そうでなければ `con_at(r, 走査する語の数 + 生の語の数, meta)` で箱を得る。`meta` は `Meta::new(tag, 走査する語の数, Data, lin)` で、`lin` は `con` と同じく束縛する変数の印で決める。そのうえで、書かない印の引数を飛ばしてフィールドを書く。箱は中身を消さないので、飛ばしたフィールドには元の値が残っている
-  - 組になる形は走査する語が 255 個未満に限るので (`Shape::reuse_words`、[オブジェクトモデル](object-model.md) の「ヘッダ」)、数の語はなく、位置をずらさない。コード生成はこれをデバッグビルドで確かめる
+  - 空でなければ、`in place`なら`reuse_in_place(r, meta)`、そうでなければ`con_at(r, 走査する語の数 + 生の語の数, meta)`で箱を得る。`meta`は`eml_rt::layout::data_meta(tag, 走査する語の数, lin)`で、`lin`は`con`と同じく束縛する変数の印で決める。そのうえで、書かない印の引数を飛ばしてフィールドを書く。箱は中身を消さないので、飛ばしたフィールドには元の値が残っている
+  - 組になる形は走査する語が`Shape::REUSE_SCANNED_LIMIT`個未満に限る (`Shape::reuse_words`、[オブジェクトモデル](object-model.md) の「ペイロード」)。`eml_vm`のコンパイル時のassertがこの上限を`layout::INLINE_SCAN_LIMIT`以下に保つので、数の語はなく、`data_meta`の前提が成り立つ。前提は実行時には確かめない。守るのは、LIRのverifierのreuseの組の確かめ、コード生成のデバッグビルドのassert、`compile/forks.rs`の表を作る所の`assert!`、コンパイル時のassertである。`data_raw_first`の前提 (`scanned < usize::MAX`) も実行時には確かめない。呼ぶのは実在する物体と形の走査する語の数だけで、`usize::MAX`には届かない
   - 検査モードでは、空でない token を使った回数を `RunStats` の `reuses` に数える
 - `drop_token r` (`DropToken`) は、`Heap::drop_token` を呼ぶ。空の token なら何もしない
 - token の命令を1つも持たない関数には、reuse の命令も、その費用も加わらない

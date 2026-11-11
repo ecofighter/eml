@@ -152,7 +152,7 @@ pub struct Meta(u32);
 
 impl Meta {
     /// `scan` のこの値は、走査する語の数がペイロードの生の1語にあることを表す。
-    pub const EXTENDED_SCAN: u8 = crate::layout::INLINE_SCAN_LIMIT as u8;
+    pub(crate) const EXTENDED_SCAN: u8 = crate::layout::INLINE_SCAN_LIMIT as u8;
 
     const LIN: u32 = 1 << 31;
 

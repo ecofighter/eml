@@ -481,7 +481,7 @@ impl<'a> Planner<'a> {
 }
 
 /// 構築子の箱がreuseの元になれるなら、組を作るときに比べる語の数を返す。フィールドのない構築子は箱でなく即値で、
-/// 走査する語が255個以上の形は組に入れない (docs/spec/lir.mdの「reuse」)。
+/// 走査する語が`Shape::REUSE_SCANNED_LIMIT`個以上の形は組に入れない (docs/spec/lir.mdの「reuse」)。
 pub(crate) fn source_words(shape: &Shape) -> Option<u32> {
     if shape.positions.is_empty() {
         return None;

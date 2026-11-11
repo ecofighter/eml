@@ -776,7 +776,8 @@ impl Layout {
 
 /// コンストラクタのフィールドの物理的な形 (docs/spec/object-model.md の「ペイロード」)。走査する語 (`obj` と `tobj`)
 /// を宣言の順に並べ、その後に残りを宣言の順に並べる。VM と reuse のパスが同じ規則を使うように、規則はここに
-/// 1つだけ置く。走査する語が 255 個以上のときにペイロードの先頭に置く数の語は `eml_rt` の形なので、ここでは数えない。
+/// 1つだけ置く。走査する語が多いときにペイロードの先頭に置く数の語は`eml_rt`の形なので、ここでは数えない
+/// (docs/spec/object-model.mdの「語の位置」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shape {
     /// 宣言の位置ごとの、ペイロードの中の位置。
@@ -786,10 +787,14 @@ pub struct Shape {
 }
 
 impl Shape {
-    /// reuse の組を作るときに比べる、ペイロードの物理的な語の数。走査する語が 255 個以上の形は、`eml_rt` だけが知る
-    /// 数の語を持つので、組に入れない (docs/spec/object-model.md の「ヘッダ」)。
+    /// reuseの組に入れる形の、走査する語の数の上限 (これ未満だけが入る)。`eml_rt`は走査する語が多い形に数の語を
+    /// 付けて物理的な語の数を変えるので、そうした形は組に入れない。上限は`eml_lir`の方針で、reuseを`eml_rt`の上に
+    /// 下ろすcrateが`eml_rt`の上限以下であることを確かめる (docs/spec/object-model.mdの「ペイロード」)。
+    pub const REUSE_SCANNED_LIMIT: u32 = 255;
+
+    /// reuseの組を作るときに比べる、ペイロードの物理的な語の数。
     pub fn reuse_words(&self) -> Option<u32> {
-        (self.scanned < 255).then_some(self.scanned + self.raw)
+        (self.scanned < Self::REUSE_SCANNED_LIMIT).then_some(self.scanned + self.raw)
     }
 }
 

@@ -676,7 +676,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 - 元は、Perceus の `release x L #t(..)` と、構築子がその道で分かっている x の `decref x` である。レコードの更新では、フィールドがみな借りたまま読まれるので、Perceus は `release` でなく `decref` を出す。`decref x` は、`release x L #t(_, .., _)` に書き換えてから token を定義する
 - 構築子が分かるのは、x を scrutinee とするタグの `switch` の case の行き先と、`unpack x` と構造体の `unbox` の箱 x の後である。合流するブロックへは、入るすべての道で分かっている構築子だけを渡す
 - x の Repr は `obj` か `tobj` で、構築子はフィールドを持つ。フィールドのない構築子の値は、箱でなく即値である
-- 組にする語の数は、構築子の `Shape::reuse_words` (走査する語と生の語の数の和) である ([オブジェクトモデル](object-model.md) の「ペイロード」)。走査する語が 255 個以上の構築子は、`eml_rt` だけが知る数の語を持つので、元にも `con` の相手にもならない
+- 組にする語の数は、構築子の`Shape::reuse_words` (走査する語と生の語の数の和) である ([オブジェクトモデル](object-model.md) の「ペイロード」)。走査する語が`Shape::REUSE_SCANNED_LIMIT` (255) 個以上の構築子は、元にも`con`の相手にもならない。`eml_rt`がそうした物体に数の語を付けることがあり、上限は`eml_lir`の方針である ([オブジェクトモデル](object-model.md) の「ペイロード」)
 - 構造体の `unbox` の箱の `decref` から作る token の `release` にも、Perceus の `release` と同じく `unboxed` の印を付ける。箱がダミーなら空の token を作るためである。`unr` でない箱を Perceus が `drop` で手放す所は、元にしない
 - translate と EP が出す `drop x` は元にしない。出る所が少なく、束縛が `()` の右辺を token の定義に変える手間に見合わないためである
 

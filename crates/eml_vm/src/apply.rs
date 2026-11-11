@@ -2,10 +2,10 @@
 //! 引数と結果はどれも一様な語なので、引数の数だけを比べ、実行時に Repr を変えない (docs/spec/lir.md の「関数の ABI」)。
 
 use eml_lir::Repr;
+use eml_rt::layout::{data_first, data_raw_first};
 use eml_rt::{Ctx, Mode, Word};
 
 use crate::code::{CodeBase, FnEntry};
-use crate::data::count_word;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, Pc, Slot};
 use crate::vm::{Exec, Task};
@@ -231,7 +231,7 @@ fn take_captures<R: Exec>(
     unsafe {
         let last = heap.is_last(w)?;
         let mut scanned = 1;
-        let mut raw = count_word(closure.scanned as u32) as usize + closure.scanned;
+        let mut raw = data_raw_first(closure.scanned, false);
         for (slot, &repr) in dst.iter_mut().zip(params) {
             *slot = if repr.is_rc() {
                 let field = heap.scanned(w, scanned)?;
@@ -292,13 +292,13 @@ pub(crate) fn make_closure<R: Exec>(
         ))?;
     let refs = params.iter().filter(|repr| repr.is_rc()).count();
     let scanned = 1 + refs;
-    let offset = count_word(scanned as u32) as usize;
+    let first = data_first(scanned, false);
     // 作る物体だけに書き、`Ctx` の持つ語には触れない
     let heap = unsafe { ctx.heap_mut() };
     let w = heap.alloc_data(0, scanned, args.len() - refs, lin);
-    let (mut next_scanned, mut next_raw) = (offset + 1, offset + scanned);
+    let (mut next_scanned, mut next_raw) = (first + 1, data_raw_first(scanned, false));
     unsafe {
-        heap.set_field(w, offset, Word::imm(i64::from(f) | (k as i64) << 32))?;
+        heap.set_field(w, first, Word::imm(i64::from(f) | (k as i64) << 32))?;
         for (&arg, &repr) in args.iter().zip(params) {
             if repr.is_rc() {
                 heap.set_field(w, next_scanned, arg)?;
