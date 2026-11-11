@@ -205,6 +205,11 @@ S0 → S1 → S2 → S3 → Closeの順に1つずつ行い、どれも1コミッ
 ## 9. 検証の計画
 
 - 基準の確かめ (S0、`Close jit-rt`で): Gの1〜3が通る。`cargo nextest run`の合計 (`Close jit-rt`のメッセージの合計)。バイナリごとの数`201`と`579`。指紋。S0がここに値を書く
+- S0の結果 (`main` @ c03bf93dで確かめた。これは`Close jit-rt` (9f719ba4) に、文書だけの`Address the final review of jit-rt` (e34f4777) とマージを足したもので、テストは変わらない):
+  - Gの1〜3が通る。`cargo nextest run` → `4909 tests run: 4909 passed, 22 skipped`。`Close jit-rt`のメッセージの合計 (4909) と同じ
+  - バイナリごとの数: `eml_vm` 201、`eml_vm::integration` 579 (7の表の基準のまま。ずれはない)。`eml_sched`はまだないので、S0では`-p eml_vm`だけで流した (`-p eml_sched`を付けるとコマンドが何も出さない)。S1からは表のとおり両方を付ける
+  - 指紋: `03c6a01c35059eea895e2c05314b4310742ff283`
+  - 参照の今の場所: `eml_vm/src/lib.rs` (`RunStats`のdocはL60、構造体はL64、`Finished`はL142-、`RunConfig`のdocは〜L190、`impl RunConfig`はL239-284)、`sched.rs` (`Sched` L103、`seed` L115、`NO_DRIVER`のdocと定数 L286-287)、`tests/tasks.rs` L278、`eml_test_support/src/lib.rs` L316-339、`eml_cli/tests/ui.rs` L532、L575、L612は基準と同じ。jit-rtがずらしたのは、`ci.yml`のMiriの手順 (L241-244)、testing.mdのMiriの項目 (L203)、「CI」(L722)、「よく使うコマンド」(L803)、CLAUDE.md L51である
 - 全体の検証 (Closeの後): G。S1〜S3の完了の条件をHEADで流し直す。`cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::) | test(gui_off::)'` → `0 failed`。`cargo clippy -p eml_cli --no-default-features --features types -- -D warnings`と`--features core` → 終了コード0。`nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- counters::` → `test result: ok`。S3の2つのcrossのclippy → 出力なし。`nix build`が成功し、`cargo tree -p eml_cli -e normal,build -f '{p} {f}' | grep -c 'eml_sched.*testing'` → `0`
 - 利用者が手で確かめること: architecture.mdの`eml_sched`の行と`testing`の段落を読む。Closeのコミットのbenchの表に、思わぬVMの変化がないことを見る
 
