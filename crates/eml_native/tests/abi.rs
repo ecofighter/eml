@@ -5,11 +5,9 @@ use std::sync::Arc;
 
 use cranelift_codegen::ir::{InstBuilder, MemFlagsData, types};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
-use cranelift_module::{
-    DataDescription, FuncId, Linkage, Module, ModuleError, default_libcall_names,
-};
-use eml_native::abi::{JIT_REGION_BYTES, declare_entry, isa, jit_builder, tail_signature};
+use cranelift_jit::JITModule;
+use cranelift_module::{DataDescription, FuncId, Linkage, Module, ModuleError};
+use eml_native::abi::{JIT_REGION_BYTES, declare_entry, jit_builder, tail_signature};
 use eml_native::thunk::define_thunk;
 use eml_nrt::Kind::{self, F64, I64};
 use eml_nrt::{Entry, Fatal, Thunk, detached, enter};
@@ -120,6 +118,12 @@ fn thunk(m: &JITModule, id: FuncId) -> Thunk {
     unsafe { std::mem::transmute::<*const u8, Thunk>(m.get_finalized_function(id)) }
 }
 
+/// finalizeしたmoduleの領域は、moduleを落としても解放されない。Windowsは予約した領域の全体をコミットするので、
+/// テストの終わりに明示して解放する。
+fn release(m: JITModule) {
+    unsafe { m.free_memory() };
+}
+
 fn params(b: &FunctionBuilder) -> Vec<cranelift_codegen::ir::Value> {
     let block = b.current_block().unwrap();
     b.block_params(block).to_vec()
@@ -207,6 +211,7 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
         }
         assert!(detached(&ctx));
     }
+    release(m);
 }
 
 /// 自分への`return_call`はスタックを伸ばさず、スタック渡しの引数が多い関数への`return_call`と、複数の値の戻りが通る。
@@ -257,6 +262,7 @@ fn tail_calls_and_multiple_results_run() {
     assert_eq!(argv[0], n * (n + 1) / 2 + 45);
     assert_eq!(f64::from_bits(argv[1]), 0.5);
     assert_eq!(argv[2], 1);
+    release(m);
 }
 
 /// ネイティブのコード生成器が頼るCraneliftの機能が、どの対象でも動く。localなデータの記号の読み、関数のアドレスを通した
@@ -264,6 +270,7 @@ fn tail_calls_and_multiple_results_run() {
 #[test]
 fn the_code_generator_features_run() {
     const WORD: u64 = 0x0123_4567_89ab_cdef;
+    const BIG_FRAME: u32 = 64 << 10;
     let mut m = module();
 
     let data = m
@@ -346,11 +353,11 @@ fn the_code_generator_features_run() {
         b.ins().return_(&[sp, local]);
     });
 
-    // 16 KiBの枠の両端に触れる。枠が1ページより大きいので、Craneliftはinlineのstack probeを出す
+    // 64 KiBの枠の両端に触れ、低い端から先に書く。枠が1ページより大きいので、Craneliftはinlineのstack probeを出す
     let big = define(&mut m, "big", &[], &[I64], |_, b, _| {
         let slot = b.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
             cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-            16 << 10,
+            BIG_FRAME,
             3,
         ));
         let base = b.ins().stack_addr(types::I64, slot, 0);
@@ -358,9 +365,9 @@ fn the_code_generator_features_run() {
         let one = b.ins().iconst(types::I64, 1);
         let two = b.ins().iconst(types::I64, 2);
         b.ins().store(flags, one, base, 0);
-        b.ins().store(flags, two, base, (16 << 10) - 8);
+        b.ins().store(flags, two, base, BIG_FRAME as i32 - 8);
         let low = b.ins().load(types::I64, flags, base, 0);
-        let high = b.ins().load(types::I64, flags, base, (16 << 10) - 8);
+        let high = b.ins().load(types::I64, flags, base, BIG_FRAME as i32 - 8);
         let sum = b.ins().iadd(low, high);
         b.ins().return_(&[sum]);
     });
@@ -371,8 +378,25 @@ fn the_code_generator_features_run() {
     let thunk_overflow = define_thunk(&mut m, "thunk$overflow", &[I64, I64], &[I64; 6]).unwrap();
     let thunk_sp = define_thunk(&mut m, "thunk$sp", &[], &[I64, I64]).unwrap();
     m.finalize_definitions().unwrap();
-    let mut ctx = ctx();
 
+    // `big`は、まだ何も深く触れていない小さいスタックの新しいスレッドで最初に流す。Windowsはスタックをガードページ1枚ずつ
+    // コミットするので、probeがなければ枠の低い端への書き込みがガードページを飛び越えて落ちる
+    let (thunk_big, big) = (thunk(&m, thunk_big), m.get_finalized_function(big) as usize);
+    let sum = std::thread::Builder::new()
+        .stack_size(4 * BIG_FRAME as usize)
+        .spawn(move || {
+            let mut ctx = ctx();
+            let mut argv = [0u64];
+            let r = unsafe { enter(&mut *ctx, thunk_big, big as *const u8, argv.as_mut_ptr()) };
+            assert_eq!(r, Ok(()));
+            argv[0]
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(sum, 3);
+
+    let mut ctx = ctx();
     let mut argv = [0u64];
     run(&mut ctx, &m, thunk_read, read, &mut argv);
     assert_eq!(argv[0], WORD);
@@ -384,10 +408,6 @@ fn the_code_generator_features_run() {
     run(&mut ctx, &m, thunk_bounce, bounce, &mut argv);
     assert_eq!(argv[0], 3 * 100_005);
     assert_eq!(argv[1], 0, "return_call_indirect grew the stack");
-
-    let mut argv = [0u64];
-    run(&mut ctx, &m, thunk_big, big, &mut argv);
-    assert_eq!(argv[0], 3);
 
     let edges = [i64::MAX, i64::MIN, 0, 1, -1];
     for x in edges {
@@ -407,18 +427,16 @@ fn the_code_generator_features_run() {
         }
     }
 
+    // RustのフレームのアドレスとSPは比べない。AddressSanitizerはRustの局所変数を
+    // 偽のスタックに移すので、その差は本当のスタックの深さを表さない
     let mut argv = [0u64, 0];
-    let caller = &argv as *const _ as u64;
     run(&mut ctx, &m, thunk_sp, sp, &mut argv);
     let (sp, local) = (argv[0], argv[1]);
     assert!(
         sp <= local && local - sp < 4096,
         "sp {sp:#x}, local {local:#x}"
     );
-    assert!(
-        sp < caller && caller - sp < 1 << 20,
-        "sp {sp:#x}, caller {caller:#x}"
-    );
+    release(m);
 }
 
 /// 定義してfinalizeする2つ目の回のコードが、1つ目の回のデータを読み、1つ目の回の関数を呼べる。REPLが同じmoduleに足していく形である。
@@ -457,32 +475,21 @@ fn a_second_round_reaches_the_first() {
     let mut argv = [0u64];
     run(&mut ctx, &m, th, sum, &mut argv);
     assert_eq!(argv[0], 42);
+    release(m);
 }
 
-/// 領域が尽きると、定義が`ModuleError::Allocation`を返す。panicしない。
+/// `jit_builder`のmoduleは`JIT_REGION_BYTES`の領域に収まらない定義を`ModuleError::Allocation`で断り、panicしない。
+/// 既定のmemory providerなら定義できてしまうので、`jit_builder`が領域を置かなくなるとこのテストが落ちる。
 #[test]
 fn a_full_region_is_an_error() {
-    let mut builder = JITBuilder::with_isa(isa(false).unwrap(), default_libcall_names());
-    builder.memory_provider(Box::new(
-        ArenaMemoryProvider::new_with_size(256 << 10).unwrap(),
-    ));
-    let mut m = JITModule::new(builder);
+    let mut m = module();
+    let data = m
+        .declare_data("too_big", Linkage::Local, false, false)
+        .unwrap();
     let mut description = DataDescription::new();
-    description.define(vec![0u8; 64 << 10].into_boxed_slice());
-    let mut failed = None;
-    for i in 0..16 {
-        let data = m
-            .declare_data(&format!("block{i}"), Linkage::Local, false, false)
-            .unwrap();
-        if let Err(e) = m.define_data(data, &description) {
-            failed = Some(e);
-            break;
-        }
-    }
-    assert!(
-        matches!(failed, Some(ModuleError::Allocation { .. })),
-        "{failed:?}"
-    );
+    description.define_zeroinit(JIT_REGION_BYTES + 1);
+    let r = m.define_data(data, &description);
+    assert!(matches!(r, Err(ModuleError::Allocation { .. })), "{r:?}");
 }
 
 mod fatal {
@@ -533,5 +540,6 @@ mod fatal {
             assert_eq!(r, Err(Fatal { code: 7, site: 9 }));
             assert!(detached(&ctx));
         }
+        release(m);
     }
 }
