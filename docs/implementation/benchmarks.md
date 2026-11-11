@@ -227,7 +227,7 @@ bench/scripts.sh
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.2.1 (26B131)
 - rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
-- コミット: f98014c
+- コミット: 42444e5
 
 | プログラム | instructions retired | 実行の分 | 実時間 (s) |
 |---|---:|---:|---:|
@@ -279,7 +279,7 @@ bench/scripts.sh
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.2.1 (26B131)
 - rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
-- コミット: f98014c
+- コミット: 42444e5
 
 `rt_bench` の計測
 
@@ -370,7 +370,7 @@ eml / 参照の比 (1 MiB の2組は目標が2倍、続く4組は予算の行、
 - OS: macOS 27.2.1 (26B131)
 - rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
 - Python: Python 3.14.8
-- コミット: f98014c
+- コミット: 42444e5
 - 入力: スクリプトの入力は bench/scripts/gen.py が作る。大きさは表の「大きさ」の欄にある
 
 スクリプト
@@ -1008,6 +1008,6 @@ bench/net.sh A=target/release/eml --workers 1,2,4 --no-strace \
 - 主張: releaseのプロファイルはthin LTOで組む。LTOがないと、ほかのcrateの関数は、総称なものと`#[inline]`の付いたもの、小さな葉の関数のほかは呼ぶ側に展開されないので、速い道からcrateを分けると命令の数が増える。thin LTOでは1つのcrateの中と同じように展開されるので、分けても遅くならない
 - 数値:
   - LTOなしで、タスクのセルの核とdriverの選び方を`eml_vm`から`eml_sched`へ移すと (c03bf93dから2abc1c4a)、`bench/run.sh`の実行の分はほぼすべてのプログラムで+0.4%から+2.4%増え、`wc`のCPU時間は0.56秒から0.66秒 (+18%) になった。`CARGO_PROFILE_RELEASE_LTO=thin`では、`wc`は分ける前も後も0.58秒だった
-  - thin LTOの表 (f98014c) を、分けた後のLTOなしの表 (382cf2f) と比べると、`bench/run.sh`の実行の分は-3.15% (`sieve_var`) から+0.33% (`state_loop`) の間で動き、41のプログラムのうち29で減った。`bench/scripts.sh`の`wc`は0.30秒から0.27秒に、Rustとの比べの`wc`は3.26秒から2.93秒になった
+  - thin LTOの表 (42444e5) を、分けた後のLTOなしの表 (382cf2f) と比べると、`bench/run.sh`の実行の分は-3.15% (`sieve_var`) から+0.33% (`state_loop`) の間で動き、41のプログラムのうち29で減った。`bench/scripts.sh`の`wc`は0.30秒から0.27秒に、Rustとの比べの`wc`は3.26秒から2.93秒になった
   - `bench/rt.sh`では、`find-byte`が1,308,540,578から998,419,481命令に、`slice-short`が2,778,827,555から1,938,665,090命令に減り、`eml_enter`の1回の往復は約54から約41命令になった。どの関数が新しく展開されたかは、インライン化の注釈で確かめていない
 - 根拠にしている所: ルートの`Cargo.toml`の`[profile.release]`のコメント、[VM](../spec/vm.md)の「置き場所」のthin LTOの項
