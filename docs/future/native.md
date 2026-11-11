@@ -95,7 +95,7 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 - 限度は `ctx.stack_limit = stack_base + 1 MiB` である。eml のフレームの大きさは LIR の verifier のフレームの上限 (VM では `u16::MAX` 語 = 512 KiB。ネイティブのフレームはこれより大きくならない) で抑えられ、`eml_rt` の Rust の extern はスタックで再帰しない (解放は明示したワークリストで行う) ので、1 MiB で eml のフレーム1つと任意の extern が収まる
 - ページより大きいフレームにはその場で stack probe を入れる (`probestack_strategy=inline`)。Windows で要り、ほかの OS でも害がない
 - ネイティブでは `max_depth` を使わず、スタックの限度で深さを止める。タスクの外で止めるときの誤りの文は `DepthLimit` のままにする
-- `Ctx` は、ネイティブのコードが決まったオフセットで読む `#[repr(C)]` の欄を持つ。`yielding` (今もある)、`fault`、worker の止める語へのポインタ、`stack_limit`、本当のスタックの限度 (か `stack_base`)、`limit_class`、`jmp: *mut JmpBuf`、`worker` である。オフセットは今の `YieldState` と同じくテストで確かめる
+- `Ctx`は、ネイティブのコードが決まったずれで読む`#[repr(C)]`の欄を持つ。`yielding` (今もある)、`fault`、workerの止める語へのポインタ、`stack_limit`、本当のスタックの限度 (か`stack_base`)、`limit_class`、`jmp: *mut JmpBuf`、`worker`である。ずれは`eml_rt`が`offset_of!`から求めた`pub const`として`Ctx`の隣に書き出す (`eml_rt::layout`には置かない)。ネイティブのコードは、`Ctx`の欄をこのconstのずれでだけ読む
 
 ## extern のエントリ
 
@@ -117,7 +117,7 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 ## 生の要素の配列
 
 - 型と関数は [標準ライブラリ](../spec/stdlib.md) の「`Std.UnboxedArray`」と「`Std.MutUnboxedArray`」に、物体の形は [オブジェクトモデル](../spec/object-model.md) の「配列」にある
-- ネイティブのコードは `UnboxedArray.get`、`MutUnboxedArray.read`、`MutUnboxedArray.write` を展開する。要素の数を読み、符号なしで比べ、`Panic` の道へ冷たい分岐をし、`base + 8 + 8*i` の位置を読み書きする。`Float` の要素は `load.f64` か `store.f64` で浮動小数のレジスタと、`Int` の要素は `load.i64` か `store.i64` で整数のレジスタとやりとりする。`Float` の箱は作らない。`MutUnboxedArray` の rc はいつも 1 なので ([オブジェクトモデル](../spec/object-model.md) の「配列」)、展開した `write` は一意かを確かめずにその場で書く
+- ネイティブのコードは`UnboxedArray.get`、`MutUnboxedArray.read`、`MutUnboxedArray.write`を展開する。要素の数を読み、符号なしで比べ、`Panic`の道へ冷たい分岐をし、[オブジェクトモデル](../spec/object-model.md) の「配列」の要素の位置を読み書きする。`Float`の要素は`load.f64`か`store.f64`で浮動小数のレジスタと、`Int`の要素は`load.i64`か`store.i64`で整数のレジスタとやりとりする。`Float`の箱は作らない。`MutUnboxedArray`のrcはいつも1なので ([オブジェクトモデル](../spec/object-model.md) の「配列」)、展開した`write`は一意かを確かめずにその場で書く
 - 並列の書き込みは1つの塊の添字の範囲を子に渡すプリミティブで行う。`split_at` と `concat` で分けて戻す形は採らず、`MutUnboxedArray` に `split_at` はない
 
 ## 並列の実行
