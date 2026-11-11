@@ -1,3 +1,4 @@
+-- native: skip (the depth limit is the thread's stack, not a word count)
 -- max-depth: 4096
 -- spawn したタスクの深さの超過はスコープの失敗になり、`run` が `ResourceLimit` の IO の失敗として起こし直す
 -- (docs/spec/stdlib.md の「`Std.Async`」)。

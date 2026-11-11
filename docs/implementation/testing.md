@@ -402,7 +402,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - `run` のテストは `exit` で終わってもよい。`exit` で終わったら、スナップショットの最後に `--- exit: {n} ---` を足す。`n` は `& 255` をしない値である。速いモードでも同じ終了コードであることを確かめる
 - `tests/ui/check-fail/**/*.em` は、診断のエラーが1件以上出ることを確認し、診断の表示をスナップショットにする
 - `tests/ui/run-fail/**/*.em` は、診断のエラーなしでコンパイルでき、実行が実行時エラーで終わることを確認する。エラーまでの出力と実行時エラーのメッセージをスナップショットにする。スナップショットは `run` と同じ `--- stdout ---` と `--- stderr ---` の節の後に、`--- runtime error ---` の節を置く
-- テストは `crates/eml_cli/tests/ui.rs` に置く。`tests/common` の `for_each_file` が最上位のディレクトリの下の `.em` を集め、最上位のディレクトリごとに1つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`) がそのファイルを並べて流す。ワーカーの数は、`RUST_TEST_THREADS` があればその値、なければ `available_parallelism()` で、ファイルの数を超えない。`eml_cli` の lib API をプロセス内で呼び、検査モードと速いモードの2つで実行する (下の「2つのモードで流す」)
+- テストは`crates/eml_cli/tests/ui.rs`に置く。`tests/common`の`for_each_file`が最上位のディレクトリの下の`.em`を集め、最上位のディレクトリごとに1つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`) がそのファイルを並べて流す。ワーカーの数は、`RUST_TEST_THREADS`があればその値、なければ`available_parallelism()`で、ファイルの数を超えない。`eml_cli`のlib APIをプロセス内で呼び、検査モードと速いモードの2つで実行する (下の「2つのモードで流す」)。`run`と`run-fail`のファイルは、ネイティブでも別のテストが流す (下の「ネイティブで流す」)
 - 1つのファイルが失敗しても残りのファイルを流し、終わりに失敗したファイルをすべて挙げる。文言は `<k> of <n> files failed:` の後に、`<ワークスペースからの相対パス>: <panic の文言>` を1行ずつ並べたものである。同時に失敗したファイルのスナップショットの差分は出力の中で混ざるので、1つを読むには `EML_UI_FILTER=<部分文字列>` で流し直す。ワークスペースからの相対パスにその文字列を含むファイルだけが流れる。この絞り込みは UI テストとトランスクリプトの両方にかかり、どのファイルにも当たらなければ失敗する。打ち間違えた絞り込みで、0個のファイルを流して通るのを防ぐためである。当たるファイルのないテストは通る
 - 1つのファイルが 10 秒を超えて走ると、`still running after 10s: <パス>` を標準エラーに1回出す。テストは1つで多くのファイルを流すので、止まったときにどのファイルかを知らせるためである。nextest は標準エラーを捕まえるので、この行はテストを止めたときの要約か、`--no-capture` で流したときに見える
 - テストは1つのファイル (`<最上位>/<分類>/<名前>.em`) か、1つのディレクトリ (`<最上位>/<分類>/<名前>/main.em`) である。ディレクトリのテストでは `main.em` がエントリで、そのディレクトリが根になる。ディレクトリの中のほかの `.em` は `main.em` から import するモジュールで、単独のテストにしない。1つのファイルのテストはユーザーのモジュールを import しない。根が分類のディレクトリなので、import すると隣のテストのファイルをモジュールとして読んでしまう。ハーネスは、ユーザーのモジュールがエントリだけであることを `Session::user_module_names` で確かめ、依存先のユーザーのモジュールを読み込んだ1つのファイルのテストを失敗にする。標準ライブラリのモジュールはユーザーのモジュールに数えないので、1つのファイルのテストでも `FileIn.open` や `import Fs` を使ってよい
@@ -502,6 +502,18 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `completions` は比べる。終わった driver の操作の数 (受け付けで終わった操作と、集めた完了の和) で、出した操作の数で決まり、受け付けで終わったかによらない。テストの driver の seed が混ぜるのは、1回の決着で終わった操作の順だけである。データのある端の 0 以下の期限の読みだけは順で変わるので、`async/` のファイルはそれを書かない (上の `async/` のファイルの規則)。`read_line` の読みの周の数は、バイトがどう分かれて届くかで決まる。そのため `async/` のファイルは、行を1回の書きで送るなど、周の数がプログラムで決まるように書く。channel を使う run でも比べる (`channel_independent` も残す)
   - `channels_swept` は比べる。run の終わりに放した channel の数で、どの channel が閉じずに残るか、品物が残るかがプログラムで決まるときだけ順によらない。`async/` のファイルはそう書く (上の `async/` のファイルの規則)
 - 欄がスケジュールで変わると分かったら、その欄の定義を直すか、理由を書いてこの一覧と `schedule_independent` に足す。食い違う欄を一律に外すことはしない
+
+## ネイティブで流す
+
+`ui::run_native`と`ui::run_fail_native`は、`run/`と`run-fail/`のエントリのファイルのうち、ネイティブのコード生成器が受け入れるものを数える。ファイルは`ui::run`、`ui::run_fail`と同じで、先頭の印の読み方も同じである。違うのは、`windows: skip`の印のあるファイルも残すことである。数えるのはOSによらないので、スナップショットはどのOSでも同じになる。入口のファイルは次の順で分ける。
+
+1. 印`-- native: skip (<理由>)`のあるファイルは`skipped`に数える
+2. そうでなければファイルをコンパイルし、そのプログラムに`eml_native::unsupported`をかける。返った要素があれば`rejected`に数え、最初の要素の`Form::label`の名前の下に数える
+3. そうでなければ`accepted`に数える
+
+印はほかの印と同じく先頭の印の行に書く (上の「OS ごとのテスト」)。置けるのは`run/`と`run-fail/`のエントリのファイルだけで、ほかの場所に書くとpanicする。印は断ることより優先する。理由は、そのファイルの振る舞いを違えるもの、つまり[ネイティブの実行系](../spec/native.md)の「VMとの違い」の項目を名指す。一覧は印そのものなので、docsには写さない。数えるには`grep -rn 'native: skip' tests/ui`を使う。
+
+数は、テストごとのinstaのファイルスナップショット (`integration__ui__run_native.snap`、`integration__ui__run_fail_native.snap`) と比べる。中身は`accepted`、`skipped`、`rejected`と、名前の順に並べた`rejected`の内訳の行である。`run_fail_native`のスナップショットは、`accepted`の次に`checked only`の行を持つ。`EML_UI_FILTER`を置いたときは、流したファイルだけの数になるので、スナップショットと比べない。数が変わるのは期待値の変更である (上の「テストの変更の運用」)。
 
 ## REPL のトランスクリプト
 
@@ -604,7 +616,7 @@ CI の対象 (OS、CPU、AddressSanitizer の脚) を足して落ちたテスト
 印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のシェルを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットと、誰も答えない loopback の番地への接続が進行中のまま残ること (Windows は `127.0.0.0/8` のどの番地にも答え、受けの列が詰まった待ち受けは列を広げて接続を終えることがある) がそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
 
 - Rust のテストは、`#[test]` の関数か、そうしたテストだけを持つ `mod` に `#[cfg(unix)]` を付ける。`src/` の中のテストの `mod` には `#[cfg(all(test, unix))]` を付ける。本体が `libc::kill`、`mkfifo`、`PermissionsExt`、`CommandExt::process_group` を使い、Windows でコンパイルできないので、`cfg_attr(windows, ignore)` は使えない
-- UIテストとトランスクリプトは、エントリのファイルの先頭の印の行に印を書く。`.em`は`-- windows: skip (<理由>)`、`.repl`は`# windows: skip (<理由>)`である。理由は空にしない。先頭の印の行は、shebang (`#!…`) の行があればその後ろから続く、`<leader> windows:`、`<leader> signal:`、`<leader> workers:`、`<leader> clock:`、`<leader> max-depth:`、`<leader> max-bytes:`、`<leader> gui:`で始まる行の並びで、7種類をどの順に混ぜてもよい (シグナルの印、workerの印、時計の印、深さの印、確保量の印、GUIの印は上の「UI テスト」)。印はエントリのファイル (1つのファイルか`main.em`、`main.repl`) にだけ書く
+- UIテストとトランスクリプトは、エントリのファイルの先頭の印の行に印を書く。`.em`は`-- windows: skip (<理由>)`、`.repl`は`# windows: skip (<理由>)`である。理由は空にしない。先頭の印の行は、shebang (`#!…`) の行があればその後ろから続く、`<leader> windows:`、`<leader> signal:`、`<leader> workers:`、`<leader> clock:`、`<leader> max-depth:`、`<leader> max-bytes:`、`<leader> gui:`、`<leader> native:`で始まる行の並びで、8種類をどの順に混ぜてもよい (シグナルの印、workerの印、時計の印、深さの印、確保量の印、GUIの印は上の「UI テスト」、ネイティブの印は「ネイティブで流す」)。印はエントリのファイル (1つのファイルか`main.em`、`main.repl`) にだけ書く
 - `crates/eml_cli/tests/common/mod.rs` の `leading_marks` が先頭の印の行を読み、`windows_skip` が Windows の印を、`workers_skip` が worker の印を読む。`for_each_file` は `EML_UI_FILTER` の後でこれを使う。Windows では印のあるファイルを流さない。どの OS でも、`<leader> windows:` で始まって形の合わない行 (理由がない、`()`、`windows:skip` など) は panic する。綴りを誤った印が黙って流れ続けるのを防ぐためである
 
 一覧は印そのものなので、docs には写さない。数えるには次の2つを使う。
@@ -641,11 +653,11 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 
 本物の時計を使うテストは、時間の下限 (「以上」) と終わることだけを確かめる。上限は確かめず、止まらないときのための見張りだけを置く。見張りの長さは、測った時間の10倍以上にする。刻みに依って合否が決まるテストは置かない。
 
-ファイルを集めて流す5つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`、`repl::transcripts`、`lowering::every_program_lowers_to_the_same_text`) は、1つのファイルが1秒以内で、テスト全体が5秒以内であればよい。この5つはテストの中でファイルを並べて流すので、`.config/nextest.toml` で単独で流し、ほかのテストとコアを取り合わないようにする。テストの中に壁時計の上限を置くのは、止まったことを見つけるためだけにする。上限は測った時間の10倍以上にする。2つの条件に当たらないテストには `#[ignore = "<理由>"]` を付ける。流すコマンドを「よく使うコマンド」に書き、流す時 (何を変えたときか) をそのテストを説明する節に書く。
+ファイルを集めて流す7つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`、`ui::run_native`、`ui::run_fail_native`、`repl::transcripts`、`lowering::every_program_lowers_to_the_same_text`) は、1つのファイルが1秒以内で、テスト全体が5秒以内であればよい。この7つはテストの中でファイルを並べて流すので、`.config/nextest.toml` で単独で流し、ほかのテストとコアを取り合わないようにする。テストの中に壁時計の上限を置くのは、止まったことを見つけるためだけにする。上限は測った時間の10倍以上にする。2つの条件に当たらないテストには `#[ignore = "<理由>"]` を付ける。流すコマンドを「よく使うコマンド」に書き、流す時 (何を変えたときか) をそのテストを説明する節に書く。
 
-nextest は2秒を超えて走るテストを `SLOW` と表示し、60 秒で止めて失敗にする。集めて流す5つのテストは 10 秒ごとに表示し、同じく 60 秒で止める。止めたテストの標準エラーは要約に出る。
+nextest は2秒を超えて走るテストを `SLOW` と表示し、60 秒で止めて失敗にする。集めて流す7つのテストは 10 秒ごとに表示し、同じく 60 秒で止める。止めたテストの標準エラーは要約に出る。
 
-CI は、`.config/nextest.toml` の `timing` の profile で、テストを1つずつ流す (`cargo nextest run --profile timing -j 1`)。この profile は、`SLOW` と表示する時間 (2秒、集めて流す5つは 10 秒) を過ぎたテストを止めて失敗にする。条件を破ったテストが、誰も気づかないまま残るのを防ぐためである。時間は開発機での条件の2倍にし、runner が開発機より遅くても、条件を守るテストは通るようにする。閾値を1つの速さの runner に合わせるため、流すのは x86_64 の Linux の runner だけにする。
+CI は、`.config/nextest.toml` の `timing` の profile で、テストを1つずつ流す (`cargo nextest run --profile timing -j 1`)。この profile は、`SLOW` と表示する時間 (2秒、集めて流す7つは 10 秒) を過ぎたテストを止めて失敗にする。条件を破ったテストが、誰も気づかないまま残るのを防ぐためである。時間は開発機での条件の2倍にし、runner が開発機より遅くても、条件を守るテストは通るようにする。閾値を1つの速さの runner に合わせるため、流すのは x86_64 の Linux の runner だけにする。
 
 `crates/eml_types/tests/scaling.rs` は、合成プログラムを4倍の大きさにしたときの型検査の時間の比を確かめる。形は、多相な関数の連鎖、独立した多相な関数、`data` と `match`、持ち越しの連鎖、環状の相互再帰、関数を引数に取る関数の輪 (`a_ring_of_higher_order_functions`)、局所のラムダを持つ関数の輪 (`a_ring_of_functions_with_local_lambdas`)、推論で上限が付く関数の輪 (`a_ring_of_functions_with_inferred_bounds`)、長い矢印の鎖の上を参照する多くの関数 (`many_functions_over_a_long_arrow_chain`)、1つの本体で同じ名前の `let` が続く連鎖、部分を共有する型を作る `let` の列 (`let f1 = f0 ident` の列)、その列を2本作って `if` で合わせる形、呼び出しを要素に持つリストのリテラル (`a_list_literal_of_calls`。`[id_ 0, id_ 1, …]`) である。HIR まで作ってから `eml_types::check` の時間だけを測り、各大きさで3回測った最小を使う。大きさは関数の数で、2000 と 8000 にする。最後の4つの形は関数の数を大きさにしない。同じ名前の `let` が続く連鎖は `let` の数を、部分を共有する型を作る2つの形は1本の列の長さを、リストのリテラルは要素の数を大きさにする。リストのリテラルは、持ち越しのパスが評価済みの要素を1つで代表させること ([コンパイラの構成](architecture.md) の「`eml_types` の内部」) を確かめる。比が6以下なら通る。部分を共有する型を作る2つの形は、型の深さが列の長さに比例し、書き出し、単一化、occurs の検査の再帰がその深さまで進む。テストのスレッドの既定のスタック (2 MiB) では足りないので、この2つは 64 MiB のスタックのスレッドで測る。ほかに、前の値を2つ並べた `Pair` の `let` の列の後で、型クラスの制約を1つ解く形がある。この型は木として書き下すと列の長さの指数の大きさになるので、制約の解決が同じクラスと型の組を1回だけ解くかを確かめる。列そのものの検査に列の長さの2乗の時間がかかる ([実装の現在地](status.md) の「コンパイルの時間と深さ」) ため、この形は大きさを変えた比を測らない。長さ 2000 の同じ列で、最後に制約を解く本体と解かない本体の時間を比べ、比が6以下なら通る。型が深いので、これも 64 MiB のスタックのスレッドで測る。時間を測るので `#[ignore]` を付け、release ビルドで流す。型検査の構造を変えたときに流す。
 
@@ -776,7 +788,7 @@ dev プロファイル (`cargo nextest run` と `cargo test` もこれを使う)
 ```sh
 cargo nextest run                                    # すべてのテスト
 cargo test                                           # 同じテストを流す (1つの crate の短いループでは cargo test -p の方が速い)
-cargo nextest run -j 1                               # ふだんの実行の条件を確かめる (1秒を超えるのは集めて流す5つだけ。性能のテスト)
+cargo nextest run -j 1                               # ふだんの実行の条件を確かめる (1秒を超えるのは集めて流す7つだけ。性能のテスト)
 cargo nextest run --profile timing -j 1              # CI の時間の検査 (SLOW の時間を過ぎたテストを失敗にする。性能のテスト)
 cargo nextest run -p eml_syntax --test integration parser::empty_file    # 1つのテスト
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'          # UI テスト

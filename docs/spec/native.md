@@ -104,5 +104,11 @@
 | `Apply` | `apply` | `Call::Apply` |
 
 - 形は、何度現れても1度だけ報告する。1つの構文が2つの形に入ることがある。着地の印を持つ`Call::Apply`は、`Prompt`でもあり`Apply`でもある
-- `rows::INLINE`は、CLIFの演算としてインラインに下ろす45の行である。VMの算術と比較の専用の命令 ([VM](vm.md) の「基本操作と extern」) の行から`FloatMod`を除いたものである。Craneliftの`LibCall`には`fmod`がないので、`FloatMod`は呼ぶ行にする
+- `rows::INLINE`は、CLIFの演算としてインラインに下ろす45の行である。VMの算術と比較の専用の命令 ([VM](vm.md)の「基本操作と extern」) の行から`FloatMod`を除いたものである。Craneliftの`LibCall`には`fmod`がないので、`FloatMod`は呼ぶ行にする
 - `rows::CALLED`は、エントリ`eml_x_<Variant>`の呼び出しとして下ろす行で、`Println`、`Eprintln`、`IntShow`、`StrShow`、`FloatShow`、`StrConcat`、`StrEq`、`StrCompare`、`FloatMod`、`Exit`、`Panic`である。`rows::lowering(ext)`は、行がこの2つのどちらであるかを返し、ネイティブのコードが断る行には`None`を返す
+
+## VMとの違い
+
+ネイティブの実行とVMの速いモードの実行で、外から見える違いは、ここに挙げた項目だけである。振る舞いの違うUIテストのファイルには印`-- native: skip (<理由>)`を付け、理由はこの節の項目を名指す ([テスト戦略](../implementation/testing.md)の「ネイティブで流す」)。
+
+1. 語の数で数える深さの上限はない。深さの上限はコードを走らせるスレッドのスタックなので、ネイティブのコードは`Limits`の`max_depth`を読まない。VMで`max_depth`を超える再帰は、ネイティブでは同じ深さで止まらない

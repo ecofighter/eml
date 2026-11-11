@@ -2,10 +2,11 @@
 //! 誤っても、成功と失敗の入れ替わりを検出できるようにするため。テストはその下の分類のサブディレクトリに置き、1つの
 //! ファイルか、`main.em` をエントリとする1つのディレクトリである (docs/implementation/testing.md の「UI テスト」)。
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use eml_cli::{
     CaptureHost, Clock, Control, Finished, FsProvider, Limits, RunConfig, RunFault, RunStats,
@@ -15,8 +16,8 @@ use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
 
 use crate::common::{
-    Marks, assert_filter_matches, for_each_file, is_entry, leading_marks, marks_of, run_all,
-    temp_project, windows_skip, workers_skip,
+    Marks, assert_filter_matches, for_each_file, is_entry, leading_marks, marked_files, marks_of,
+    run_all, run_marked, temp_project, windows_skip, workers_skip,
 };
 
 fn ui_root() -> PathBuf {
@@ -709,6 +710,67 @@ fn run_fail_file(path: &Path, marks: &Marks) {
     }
 }
 
+/// `run/`と`run-fail/`のエントリを、ネイティブのコード生成器が受け入れるか断るかで数える。数えるのはOSによらないので、
+/// `windows: skip`のファイルも数える (docs/implementation/testing.mdの「ネイティブで流す」)。
+#[derive(Debug, Default)]
+struct NativeTally {
+    accepted: usize,
+    skipped: usize,
+    rejected: BTreeMap<&'static str, usize>,
+}
+
+impl NativeTally {
+    fn render(&self, checked_only: Option<usize>) -> String {
+        let mut text = format!("accepted {}\n", self.accepted);
+        if let Some(count) = checked_only {
+            text += &format!("checked only {count}\n");
+        }
+        text += &format!("skipped {}\n", self.skipped);
+        text += &format!("rejected {}\n", self.rejected.values().sum::<usize>());
+        for (label, count) in &self.rejected {
+            text += &format!("  {label} {count}\n");
+        }
+        text
+    }
+}
+
+/// `run_native`と`run_fail_native`の本体。
+fn native_entries(name: &str, top: &str, checked_only: Option<usize>) {
+    let marked = marked_files(&ui_root().join(top), "em", true);
+    let tally = Mutex::new(NativeTally::default());
+    run_marked(&marked, |path, marks| {
+        let Entry::Test(suffix) = classify(path, top) else {
+            return;
+        };
+        if marks.native_skip {
+            tally.lock().unwrap().skipped += 1;
+            return;
+        }
+        let (program, _, _) = compile(path, &suffix);
+        let forms = eml_native::unsupported(&program);
+        let mut tally = tally.lock().unwrap();
+        match forms.first() {
+            Some(first) => *tally.rejected.entry(first.form.label()).or_default() += 1,
+            None => tally.accepted += 1,
+        }
+    });
+    // 一部のファイルだけを流したときの数は、スナップショットの数と合わない
+    if std::env::var_os("EML_UI_FILTER").is_none() {
+        let counts = tally.into_inner().unwrap().render(checked_only);
+        insta::assert_snapshot!(name, counts);
+    }
+}
+
+#[test]
+fn run_native() {
+    native_entries("run_native", "run", None);
+}
+
+#[test]
+fn run_fail_native() {
+    native_entries("run_fail_native", "run-fail", Some(0));
+}
+
 #[test]
 fn check_fail() {
     for_each_file(&ui_root().join("check-fail"), "em", false, |path, _| {
@@ -1078,6 +1140,7 @@ fn the_workers_mark_needs_a_reason() {
             max_depth: None,
             max_bytes: None,
             gui_stub: false,
+            native_skip: false,
         })
     );
 }
@@ -1252,6 +1315,7 @@ fn signal_marks_are_parsed_in_order() {
             max_depth: None,
             max_bytes: None,
             gui_stub: false,
+            native_skip: false,
         })
     );
 }
@@ -1517,6 +1581,44 @@ fn a_malformed_gui_mark_is_an_error() {
 #[should_panic(expected = "x.repl: gui marks are not supported here")]
 fn a_gui_mark_in_a_transcript_panics() {
     marks_of("x.repl", "# gui: stub (x)\n> 1\n", "#", false);
+}
+
+/// `-- native: skip (<理由>)`は、ネイティブで流さない印である (docs/implementation/testing.mdの「ネイティブで流す」)。
+#[test]
+fn a_native_mark_is_read() {
+    let marks = leading_marks(
+        "-- native: skip (the depth limit is the thread's stack)\nmain () = ()\n",
+        "--",
+    )
+    .unwrap();
+    assert!(marks.native_skip);
+    assert!(!leading_marks("main () = ()\n", "--").unwrap().native_skip);
+    let mixed = leading_marks(
+        "-- windows: skip (x)\n-- native: skip (y)\n-- max-depth: 100\n",
+        "--",
+    )
+    .unwrap();
+    assert!(mixed.native_skip && mixed.windows_skip && mixed.max_depth == Some(100));
+    for wrong in [
+        "-- native: skip",
+        "-- native: skip ()",
+        "-- native: run (x)",
+        "-- native:skip (x)",
+    ] {
+        assert_eq!(
+            leading_marks(wrong, "--"),
+            Err(format!(
+                "the native mark is `-- native: skip (<reason>)`, not `{wrong}`"
+            )),
+            "{wrong}"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "x.repl: native marks are not supported here")]
+fn a_native_mark_outside_a_run_entry_panics() {
+    marks_of("x.repl", "# native: skip (x)\n> 1\n", "#", false);
 }
 
 /// 流すworkerの数とseedのrunは`par/`と`async/`だけなので、`gui/`は検査モードと速いモードだけで流す。

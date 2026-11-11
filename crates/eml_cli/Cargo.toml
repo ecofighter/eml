@@ -53,6 +53,7 @@ libc = { workspace = true, optional = true }
 windows-sys = { workspace = true, optional = true, features = ["Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
+eml_native.workspace = true
 eml_rt.workspace = true
 eml_test_support = { workspace = true, features = ["run"] }
 insta.workspace = true

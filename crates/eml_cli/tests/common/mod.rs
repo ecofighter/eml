@@ -68,6 +68,14 @@ pub fn for_each_file(
     run_entry: bool,
     test: impl Fn(&Path, &Marks) + Sync,
 ) {
+    let mut marked = marked_files(root, extension, run_entry);
+    marked.retain(|(_, marks)| !(cfg!(windows) && marks.windows_skip));
+    run_marked(&marked, test);
+}
+
+/// `for_each_file`と同じファイルを、`windows: skip`のファイルも残して、印と一緒に返す。ネイティブの下ろしの数え方は
+/// OSによらないので、数える側はどのOSでも同じファイルを見る (docs/implementation/testing.mdの「ネイティブで流す」)。
+pub fn marked_files(root: &Path, extension: &str, run_entry: bool) -> Vec<(PathBuf, Marks)> {
     let mut files = Vec::new();
     collect(root, extension, &mut files);
     files.sort();
@@ -81,7 +89,7 @@ pub fn for_each_file(
         files.retain(|path| shown(path).contains(&filter));
     }
     let leader = if extension == "repl" { "#" } else { "--" };
-    let mut marked: Vec<(PathBuf, Marks)> = files
+    files
         .into_iter()
         .map(|path| {
             let marks = marks_of(
@@ -92,8 +100,11 @@ pub fn for_each_file(
             );
             (path, marks)
         })
-        .collect();
-    marked.retain(|(_, marks)| !(cfg!(windows) && marks.windows_skip));
+        .collect()
+}
+
+/// `marked_files`が返したファイルを`run_all`で流す。
+pub fn run_marked(marked: &[(PathBuf, Marks)], test: impl Fn(&Path, &Marks) + Sync) {
     let files: Vec<PathBuf> = marked.iter().map(|(path, _)| path.clone()).collect();
     run_all(&files, |path| {
         let (_, marks) = marked
@@ -120,6 +131,8 @@ pub struct Marks {
     pub max_bytes: Option<(usize, usize)>,
     /// GUIのstubの`Park`を置いて流す。筋書きは`<名前>.gui`に書く (docs/implementation/testing.mdの「UI テスト」)。
     pub gui_stub: bool,
+    /// ネイティブで流さない。理由は`docs/spec/native.md`の「VMとの違い」の項目を名指す (docs/implementation/testing.mdの「ネイティブで流す」)。
+    pub native_skip: bool,
 }
 
 /// テストのエントリか。分類の直下のファイルか、ディレクトリのテストの `main.<extension>` である。ディレクトリの
@@ -134,8 +147,8 @@ pub fn is_entry(root: &Path, path: &Path, extension: &str) -> bool {
             .is_some_and(|name| name.to_string_lossy() == format!("main.{extension}"))
 }
 
-/// `leading_marks`の誤りと、許さない場所のシグナルの印とworkerの印と時計の印と深さの印と確保量の印とGUIの印でpanicする。`shown`は
-/// 文言に出すファイルの名前である。この6つの印を許すのは、`run_entry`が真のとき (`run/`と`run-fail/`のエントリ) だけである。
+/// `leading_marks`の誤りと、許さない場所のシグナルの印とworkerの印と時計の印と深さの印と確保量の印とGUIの印とネイティブの印でpanicする。`shown`は
+/// 文言に出すファイルの名前である。この7つの印を許すのは、`run_entry`が真のとき (`run/`と`run-fail/`のエントリ) だけである。
 pub fn marks_of(shown: &str, text: &str, leader: &str, run_entry: bool) -> Marks {
     let marks = leading_marks(text, leader).unwrap_or_else(|message| panic!("{shown}: {message}"));
     if !run_entry && !marks.signals.is_empty() {
@@ -156,11 +169,14 @@ pub fn marks_of(shown: &str, text: &str, leader: &str, run_entry: bool) -> Marks
     if !run_entry && marks.gui_stub {
         panic!("{shown}: gui marks are not supported here");
     }
+    if !run_entry && marks.native_skip {
+        panic!("{shown}: native marks are not supported here");
+    }
     marks
 }
 
 /// 先頭の印の行を読む。印の行は、shebang の行があればその後ろから続く、`<leader> windows:`、`<leader> signal:`、
-/// `<leader> workers:`、`<leader> clock:`、`<leader> max-depth:`、`<leader> max-bytes:`、`<leader> gui:`で始まる行の並びで、7種類をどの順に混ぜてもよい。
+/// `<leader> workers:`、`<leader> clock:`、`<leader> max-depth:`、`<leader> max-bytes:`、`<leader> gui:`、`<leader> native:`で始まる行の並びで、8種類をどの順に混ぜてもよい。
 /// 深さの印と確保量の印は1つずつしか書けない。後ろの印が黙って前の印を上書きしないよう、重ねて書くと誤りにする。
 /// shebang は1行目にしか書けないので、印はその後ろに置く。
 pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
@@ -192,6 +208,8 @@ pub fn leading_marks(text: &str, leader: &str) -> Result<Marks, String> {
             }
         } else if starts(line, " gui:") {
             marks.gui_stub |= gui_stub(line, leader)?;
+        } else if starts(line, " native:") {
+            marks.native_skip |= native_skip(line, leader)?;
         } else {
             break;
         }
@@ -227,6 +245,14 @@ pub fn clock_real(line: &str, leader: &str) -> Result<bool, String> {
 pub fn gui_stub(line: &str, leader: &str) -> Result<bool, String> {
     reason_mark(line, leader, "gui", "stub")
         .ok_or_else(|| format!("the gui mark is `{leader} gui: stub (<reason>)`, not `{line}`"))
+}
+
+/// 先頭の印の行の1つが`<leader> native: skip (<理由>)`ならネイティブで流さない
+/// (docs/implementation/testing.mdの「ネイティブで流す」)。綴りの誤りは`windows_skip`と同じく誤りにする。
+pub fn native_skip(line: &str, leader: &str) -> Result<bool, String> {
+    reason_mark(line, leader, "native", "skip").ok_or_else(|| {
+        format!("the native mark is `{leader} native: skip (<reason>)`, not `{line}`")
+    })
 }
 
 /// `<leader> <kind>: <word> (<理由>)` を読む。`<leader> <kind>:` で始まらない行は `Some(false)`、始まるのに形が
