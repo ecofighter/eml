@@ -351,7 +351,7 @@ pub(crate) open spec fn node_ok(
     &&& base.block(a)@.addr == a
     &&& a % 8 == 0
     &&& a >= 8
-    &&& a + 8 * (1 + base.cap(a)) <= usize::MAX
+    &&& a + crate::layout::slot_offset_spec(base.cap(a) as int) <= usize::MAX
     &&& p.wf(base.block(a), base.cap(a), checked)
     &&& p.rc.is_init()
     &&& p.meta.is_init()
@@ -359,7 +359,7 @@ pub(crate) open spec fn node_ok(
     &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
     &&& p.prefix is Some ==> p_code(p) == state_code(st)
     &&& st != BlockState::Freed ==> {
-        &&& p_extended(p) ==> p_init(p, 0)
+        &&& p_extended(p) ==> p_init(p, crate::layout::COUNT_WORD as int)
         &&& p_first(p) + p_count(p) <= base.cap(a)
     }
     &&& st != BlockState::Freed ==> forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i)
@@ -915,11 +915,16 @@ impl<M: Mode> Graph for Objects<M> {
         let tracked p = self.tracked_node(h@.addr, M::CHECKED);
         let bits = *ptr_ref(meta_ptr(h), Tracked(&p.meta));
         let m = Meta::from_bits(bits);
-        let (first, n) = if m.scan() == Meta::EXTENDED_SCAN {
-            let w = *ptr_ref(slot_ptr(h, 0), Tracked(p.slots.tracked_borrow(0)));
-            (1usize, w.bits())
+        let scan = m.scan();
+        let first = crate::layout::scan_first(scan);
+        let n = if crate::layout::scan_extended(scan) {
+            let w = *ptr_ref(
+                slot_ptr(h, crate::layout::COUNT_WORD),
+                Tracked(p.slots.tracked_borrow(crate::layout::COUNT_WORD as int)),
+            );
+            w.bits()
         } else {
-            (0usize, m.scan() as usize)
+            scan as usize
         };
         let mut i: usize = 0;
         while i < n

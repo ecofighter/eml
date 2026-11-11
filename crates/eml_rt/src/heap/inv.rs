@@ -30,7 +30,7 @@ pub(crate) open spec fn p_kind(p: BlockPerm) -> Kind {
 }
 
 pub(crate) open spec fn p_extended(p: BlockPerm) -> bool {
-    bits_scan(p.meta.value()) == 255
+    crate::layout::scan_extended_spec(bits_scan(p.meta.value()))
 }
 
 /// 検査モードの前置きの状態の欄の、状態の2ビット。
@@ -93,17 +93,13 @@ pub(crate) open spec fn p_word(p: BlockPerm, i: int) -> Word {
 
 /// 走査する語の始まり (`scan` が 255 なら、数の語の次)。
 pub(crate) open spec fn p_first(p: BlockPerm) -> int {
-    if p_extended(p) {
-        1
-    } else {
-        0
-    }
+    crate::layout::scan_first_spec(bits_scan(p.meta.value()))
 }
 
 /// 走査する語の数。`scan` が 255 なら、ペイロードの先頭の数の語から読む。
 pub(crate) open spec fn p_count(p: BlockPerm) -> int {
     if p_extended(p) {
-        p_word(p, 0).bits_spec() as int
+        p_word(p, crate::layout::COUNT_WORD as int).bits_spec() as int
     } else {
         bits_scan(p.meta.value()) as int
     }
@@ -454,7 +450,7 @@ impl Core {
         &&& bits_wf(p_meta(p))
         &&& p_kind(p) != Kind::Free
         &&& st != BlockState::Freed ==> {
-            &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, 0)
+            &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, crate::layout::COUNT_WORD as int)
             &&& p_first(p) + p_count(p) <= self.cap(h)
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()

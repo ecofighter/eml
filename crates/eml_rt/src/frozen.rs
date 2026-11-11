@@ -24,9 +24,11 @@ use crate::heap::inv::{
     body_wf, p_code, p_count, p_extended, p_first, p_init, p_kind, p_meta, p_owner, p_scanned,
     p_word, raw_wf,
 };
+#[cfg(verus_only)]
+use crate::layout::HEADER_WORDS;
 use crate::meta::BlockPerm;
 #[cfg(verus_only)]
-use crate::meta::{HEADER_WORDS, Header, Kind, bits_wf};
+use crate::meta::{Header, Kind, bits_wf};
 use crate::mode::Mode;
 #[cfg(verus_only)]
 use crate::word::Word;
@@ -120,7 +122,7 @@ impl RegionPerms {
         &&& ptr@.addr == h
         &&& h % 8 == 0
         &&& h >= 8
-        &&& h + 8 * (HEADER_WORDS + cap) <= usize::MAX
+        &&& h + crate::layout::slot_offset_spec(cap as int) <= usize::MAX
         &&& p.wf(ptr, cap, prefixed)
         &&& p.rc.is_init()
         &&& p.rc.value() == 0
@@ -128,7 +130,7 @@ impl RegionPerms {
         &&& bits_wf(p_meta(p))
         &&& p_kind(p) != Kind::Free
         &&& p_kind(p) != Kind::Foreign
-        &&& p_extended(p) ==> cap >= 1 && p_init(p, 0)
+        &&& p_extended(p) ==> cap >= 1 && p_init(p, crate::layout::COUNT_WORD as int)
         &&& p_first(p) + p_count(p) <= cap
         &&& p_kind(p).boxes_value() ==> cap >= 1 && p_init(p, 0)
         &&& p_kind(p).has_body() ==> body_wf(p, cap)

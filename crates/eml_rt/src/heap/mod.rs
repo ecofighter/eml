@@ -45,7 +45,8 @@ use crate::foreign;
 #[cfg(verus_keep_ghost)]
 use crate::frozen::RegionPerms;
 use crate::frozen::{Frozen, not_a_descendant};
-use crate::meta::{self, BlockPerm, HEADER_WORDS, Header, Kind, Meta, meta_ptr, rc_ptr, slot_ptr};
+use crate::layout::HEADER_WORDS;
+use crate::meta::{self, BlockPerm, Header, Kind, Meta, meta_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
 use crate::mode::Mode;
@@ -271,7 +272,7 @@ fn fill_zero(
     requires
         old(perm).wf(h, cap, prefixed),
         from <= to <= cap,
-        h@.addr + 8 * (HEADER_WORDS + cap) <= usize::MAX,
+        h@.addr + crate::layout::slot_offset_spec(cap as int) <= usize::MAX,
     ensures
         final(perm).wf(h, cap, prefixed),
         final(perm).rc == old(perm).rc,
@@ -295,7 +296,7 @@ fn fill_zero(
             perm.prefix == start.prefix,
             perm.text == start.text,
             from <= i <= to <= cap,
-            h@.addr + 8 * (HEADER_WORDS + cap) <= usize::MAX,
+            h@.addr + crate::layout::slot_offset_spec(cap as int) <= usize::MAX,
             forall|j: int|
                 from <= j < i ==> #[trigger] p_init(*perm, j) && p_word(*perm, j).bits_spec() == 0,
             forall|j: int| !(from <= j < i) ==> #[trigger] perm.slots[j] == start.slots[j],
@@ -1104,7 +1105,8 @@ impl<M: Mode> Heap<M> {
             },
             r.0@.addr % 8 == 0,
             r.0@.addr >= 8,
-            r.0@.addr + 8 * (HEADER_WORDS + final(self).core.cap(r.0@.addr)) <= usize::MAX,
+            r.0@.addr + crate::layout::slot_offset_spec(final(self).core.cap(r.0@.addr) as int)
+                <= usize::MAX,
             forall|b: usize| #[trigger]
                 old(self).core.dom().contains(b) ==> final(self).core.block(b) == old(
                     self,
@@ -1164,7 +1166,7 @@ impl<M: Mode> Heap<M> {
             old(self).safe_settleable(),
             !M::CHECKED ==> old(self).settleable(),
             !meta.kind_spec().opaque_spec() && meta.kind_spec() != Kind::Free,
-            meta.scan_spec() != 255,
+            !crate::layout::scan_extended_spec(meta.scan_spec()),
             meta.scan_spec() <= payload_words,
         ensures
             final(self).built(*old(self), w, meta, 1, payload_words),
@@ -1183,7 +1185,7 @@ impl<M: Mode> Heap<M> {
             old(self).safe_settleable(),
             !M::CHECKED ==> old(self).settleable(),
             !meta.kind_spec().opaque_spec() && meta.kind_spec() != Kind::Free,
-            meta.scan_spec() != 255,
+            !crate::layout::scan_extended_spec(meta.scan_spec()),
             meta.scan_spec() <= payload_words,
         ensures
             final(self).built(*old(self), w, meta, 0, payload_words),
@@ -1200,7 +1202,7 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> old(self).settleable(),
             rc == 0 || rc == 1,
             !meta.kind_spec().opaque_spec() && meta.kind_spec() != Kind::Free,
-            meta.scan_spec() != 255,
+            !crate::layout::scan_extended_spec(meta.scan_spec()),
             meta.scan_spec() <= payload_words,
         ensures
             final(self).built(*old(self), w, meta, rc, payload_words),
@@ -1335,23 +1337,13 @@ impl<M: Mode> Heap<M> {
             final(self).kind_of(w) == Kind::Data,
             final(self).count_of(w) == scanned,
             final(self).tag_of(w) == tag,
-            final(self).scan_of(w) == if scanned >= 255 {
-                255u8
-            } else {
-                scanned as u8
-            },
+            final(self).scan_of(w) == crate::layout::data_scan_spec(scanned as nat, false),
             final(self).lin_of(w) == lin,
             final(self).owned(w),
             forall|i: int|
-                (if scanned >= 255 {
-                    1int
-                } else {
-                    0int
-                }) + scanned <= i < (if scanned >= 255 {
-                    1int
-                } else {
-                    0int
-                }) + scanned + raw ==> #[trigger] final(self).raw_at(w, i),
+                crate::layout::data_first_spec(scanned as nat, false) + scanned <= i
+                    < crate::layout::data_first_spec(scanned as nat, false) + scanned + raw
+                    ==> #[trigger] final(self).raw_at(w, i),
             M::CHECKED ==> forall|i: int| #[trigger]
                 final(self).scanned_at(w, i) ==> final(self).set_passes(w, i),
             forall|i: int|
@@ -1381,23 +1373,13 @@ impl<M: Mode> Heap<M> {
             final(self).kind_of(w) == Kind::Data,
             final(self).count_of(w) == scanned,
             final(self).tag_of(w) == tag,
-            final(self).scan_of(w) == if force || scanned >= 255 {
-                255u8
-            } else {
-                scanned as u8
-            },
+            final(self).scan_of(w) == crate::layout::data_scan_spec(scanned as nat, force),
             final(self).lin_of(w) == lin,
             final(self).owned(w),
             forall|i: int|
-                (if force || scanned >= 255 {
-                    1int
-                } else {
-                    0int
-                }) + scanned <= i < (if force || scanned >= 255 {
-                    1int
-                } else {
-                    0int
-                }) + scanned + raw ==> #[trigger] final(self).raw_at(w, i),
+                crate::layout::data_first_spec(scanned as nat, force) + scanned <= i
+                    < crate::layout::data_first_spec(scanned as nat, force) + scanned + raw
+                    ==> #[trigger] final(self).raw_at(w, i),
             M::CHECKED ==> forall|i: int| #[trigger]
                 final(self).scanned_at(w, i) ==> final(self).set_passes(w, i),
             forall|i: int|
@@ -1420,7 +1402,7 @@ impl<M: Mode> Heap<M> {
             final(self).kind_of(w) == Kind::Data,
             final(self).count_of(w) == 0,
             final(self).tag_of(w) == 0,
-            final(self).scan_of(w) == 255u8,
+            final(self).scan_of(w) == crate::layout::data_scan_spec(0, true),
             final(self).lin_of(w) == lin,
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
@@ -1449,23 +1431,13 @@ impl<M: Mode> Heap<M> {
             final(self).kind_of(w) == Kind::Data,
             final(self).count_of(w) == scanned,
             final(self).tag_of(w) == tag,
-            final(self).scan_of(w) == if force || scanned >= 255 {
-                255u8
-            } else {
-                scanned as u8
-            },
+            final(self).scan_of(w) == crate::layout::data_scan_spec(scanned as nat, force),
             final(self).lin_of(w) == lin,
             final(self).owned(w),
             forall|i: int|
-                (if force || scanned >= 255 {
-                    1int
-                } else {
-                    0int
-                }) + scanned <= i < (if force || scanned >= 255 {
-                    1int
-                } else {
-                    0int
-                }) + scanned + raw ==> #[trigger] final(self).raw_at(w, i),
+                crate::layout::data_first_spec(scanned as nat, force) + scanned <= i
+                    < crate::layout::data_first_spec(scanned as nat, force) + scanned + raw
+                    ==> #[trigger] final(self).raw_at(w, i),
             M::CHECKED && rc == 1 ==> forall|i: int| #[trigger]
                 final(self).scanned_at(w, i) ==> final(self).set_passes(w, i),
             forall|i: int|
@@ -1473,22 +1445,11 @@ impl<M: Mode> Heap<M> {
             M::CHECKED ==> final(self).words_kept(*old(self)),
             final(self).grew(*old(self), w),
     {
-        let extended = force || scanned >= Meta::EXTENDED_SCAN as usize;
-        let scan = if extended {
-            Meta::EXTENDED_SCAN
-        } else {
-            scanned as u8
-        };
-        let first: usize = if extended {
-            1
-        } else {
-            0
-        };
-        let payload_words = match first.checked_add(scanned) {
-            Some(n) => match n.checked_add(raw) {
-                Some(m) => m,
-                None => too_large(),
-            },
+        let extended = crate::layout::data_extended(scanned, force);
+        let scan = crate::layout::data_scan(scanned, force);
+        let first = crate::layout::data_first(scanned, force);
+        let payload_words = match crate::layout::data_words(scanned, raw, force) {
+            Some(n) => n,
             None => too_large(),
         };
         self.settle();
@@ -1497,10 +1458,14 @@ impl<M: Mode> Heap<M> {
         let (h, Tracked(perm)) = self.alloc_header(payload_words, rc, meta);
         let tracked mut perm = perm;
         if extended {
-            let tracked mut slot = perm.slots.tracked_remove(0);
-            ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(scanned));
+            let tracked mut slot = perm.slots.tracked_remove(crate::layout::COUNT_WORD as int);
+            ptr_mut_write(
+                slot_ptr(h, crate::layout::COUNT_WORD),
+                Tracked(&mut slot),
+                Word::from_bits(scanned),
+            );
             proof {
-                perm.slots.tracked_insert(0, slot);
+                perm.slots.tracked_insert(crate::layout::COUNT_WORD as int, slot);
             }
         }
         let ghost cap = self.core.cap(h@.addr);
@@ -1510,14 +1475,17 @@ impl<M: Mode> Heap<M> {
                 perm.wf(h, cap, M::CHECKED),
                 perm.rc.is_init() && perm.rc.value() == rc,
                 perm.meta.is_init() && perm.meta.value() == meta.bits_spec(),
-                h@.addr + 8 * (HEADER_WORDS + cap) <= usize::MAX,
+                h@.addr + crate::layout::slot_offset_spec(cap as int) <= usize::MAX,
                 first + scanned <= cap,
                 first == if extended {
                     1usize
                 } else {
                     0usize
                 },
-                extended ==> p_init(perm, 0) && p_word(perm, 0).bits_spec() == scanned,
+                extended ==> p_init(perm, crate::layout::COUNT_WORD as int) && p_word(
+                    perm,
+                    crate::layout::COUNT_WORD as int,
+                ).bits_spec() == scanned,
                 unit_filled(perm, first as int, first + i),
                 0 <= i <= scanned,
             decreases scanned - i,
@@ -1546,7 +1514,8 @@ impl<M: Mode> Heap<M> {
                 assert(perm.slots =~= before.slots.insert((first + i) as int, slot));
                 lemma_unit_filled_extend(before, perm, first as int, first + i);
                 if extended {
-                    assert(perm.slots[0] == before.slots[0]);
+                    assert(perm.slots[crate::layout::COUNT_WORD as int]
+                        == before.slots[crate::layout::COUNT_WORD as int]);
                 }
             }
             i += 1;
@@ -1566,7 +1535,8 @@ impl<M: Mode> Heap<M> {
         proof {
             lemma_unit_filled_frame(scanned_perm, perm, first as int, first + scanned);
             if extended {
-                assert(perm.slots[0] == scanned_perm.slots[0]);
+                assert(perm.slots[crate::layout::COUNT_WORD as int]
+                    == scanned_perm.slots[crate::layout::COUNT_WORD as int]);
             }
             assert forall|j: int| 0 <= j < cap implies #[trigger] p_init(perm, j) by {
                 if j < first + scanned {
@@ -1581,7 +1551,7 @@ impl<M: Mode> Heap<M> {
         let ghost mid = self.core;
         proof {
             assert(i == scanned);
-            self.lemma_data_perm(perm, h, meta, first, scanned, extended, rc);
+            self.lemma_data_perm(perm, h, meta, first, scanned, extended, force, rc);
         }
         let ghost filled = perm;
         self.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Live), Ghost(self.worker));
@@ -1645,6 +1615,7 @@ impl<M: Mode> Heap<M> {
         first: usize,
         scanned: usize,
         extended: bool,
+        force: bool,
         rc: i32,
     )
         requires
@@ -1664,19 +1635,14 @@ impl<M: Mode> Heap<M> {
             bits_wf(meta.bits_spec()),
             bits_kind(meta.bits_spec()) == meta.kind_spec(),
             bits_scan(meta.bits_spec()) == meta.scan_spec(),
-            !extended ==> scanned < 255,
-            meta.scan_spec() == if extended {
-                255u8
-            } else {
-                scanned as u8
-            },
-            first == if extended {
-                1usize
-            } else {
-                0usize
-            },
+            extended == crate::layout::data_extended_spec(scanned as nat, force),
+            meta.scan_spec() == crate::layout::data_scan_spec(scanned as nat, force),
+            first == crate::layout::data_first_spec(scanned as nat, force),
             first + scanned <= self.core.cap(h@.addr),
-            extended ==> p_init(perm, 0) && p_word(perm, 0).bits_spec() == scanned,
+            extended ==> p_init(perm, crate::layout::COUNT_WORD as int) && p_word(
+                perm,
+                crate::layout::COUNT_WORD as int,
+            ).bits_spec() == scanned,
             unit_filled(perm, first as int, first + scanned),
             p_filled(perm, self.core.cap(h@.addr)),
         ensures

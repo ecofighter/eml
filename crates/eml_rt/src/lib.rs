@@ -18,6 +18,7 @@ mod foreign;
 mod frozen;
 mod heap;
 mod host;
+pub mod layout;
 mod meta;
 mod mode;
 mod rc;

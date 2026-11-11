@@ -2386,8 +2386,8 @@ impl<M: Mode> Ctx<M> {
         r
     }
 
-    /// エントリの表の欄 `op` に節の本体 `c` を入れる。`c` は消費し、`ev` は借りる。欄が 255 個以上の表は、先頭に数の語を
-    /// 持つので、書く位置を1つずらす (docs/spec/object-model.md の「物体の形」)。
+    /// エントリの表の欄`op`に節の本体`c`を入れる。`c`は消費し、`ev`は借りる。書く位置は走査する最初の語から`op`語目で、
+    /// 数の語を持つ表ではその分だけ後ろになる (docs/spec/object-model.md の「語の位置」)。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`ev` と `c` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側が `c`
@@ -2489,11 +2489,7 @@ impl<M: Mode> Ctx<M> {
         proof {
             tm.lemma_fields();
         }
-        let i = if tm.scan() == Meta::EXTENDED_SCAN {
-            op + 1
-        } else {
-            op
-        };
+        let i = crate::layout::scan_first(tm.scan()) + op;
         self.heap.settle();
         let ghost h1 = self.heap;
         proof {

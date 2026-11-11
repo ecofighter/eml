@@ -3,7 +3,7 @@
 //! 一覧の外に増えると、証明が空になっても検証は通ってしまうためである。
 
 /// 調べるファイル。`src/` のテストでないファイルをすべて載せる (`every_source_file_is_listed` が確かめる)。
-const FILES: &[(&str, &str)] = &[
+pub(crate) const FILES: &[(&str, &str)] = &[
     ("lib.rs", include_str!("lib.rs")),
     ("alloc.rs", include_str!("alloc.rs")),
     ("cell.rs", include_str!("cell.rs")),
@@ -14,6 +14,7 @@ const FILES: &[(&str, &str)] = &[
     ("foreign.rs", include_str!("foreign.rs")),
     ("frozen.rs", include_str!("frozen.rs")),
     ("host.rs", include_str!("host.rs")),
+    ("layout.rs", include_str!("layout.rs")),
     ("meta.rs", include_str!("meta.rs")),
     ("mode.rs", include_str!("mode.rs")),
     ("rc.rs", include_str!("rc.rs")),
@@ -333,7 +334,7 @@ fn starts_with_at(s: &[char], at: usize, word: &str) -> bool {
 }
 
 /// `word` の語が `at` から始まり、前が識別子の続きでないか。
-fn word_at(s: &[char], at: usize, word: &str) -> bool {
+pub(crate) fn word_at(s: &[char], at: usize, word: &str) -> bool {
     starts_with_at(s, at, word) && (at == 0 || !is_ident(s[at - 1]))
 }
 
@@ -376,7 +377,7 @@ fn blank_test_modules(mut s: Vec<char>) -> Vec<char> {
     s
 }
 
-fn prepare(text: &str) -> Vec<char> {
+pub(crate) fn prepare(text: &str) -> Vec<char> {
     blank_test_modules(blank_comments_and_strings(text))
 }
 

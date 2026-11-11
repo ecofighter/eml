@@ -23,7 +23,7 @@ spec fn array_ok<M: Mode>(h: Heap<M>, a: Word) -> bool {
     &&& h.readable(a)
     &&& h.kind_of(a) == Kind::Data
     &&& h.tag_of(a) == 0
-    &&& h.scan_of(a) == 255
+    &&& crate::layout::scan_extended_spec(h.scan_of(a))
     &&& h.owned(a)
     &&& forall|i: int| 0 <= i < h.count_of(a) ==> dupable(h, #[trigger] h.scanned_word(a, i))
 }
@@ -103,7 +103,9 @@ impl<M: Mode> Ctx<M> {
         proof {
             m.lemma_fields();
         }
-        if !matches!(m.kind(), Kind::Data) || m.tag() != 0 || m.scan() != Meta::EXTENDED_SCAN {
+        if !matches!(m.kind(), Kind::Data) || m.tag() != 0 || !crate::layout::scan_extended(
+            m.scan(),
+        ) {
             return Err(HeapError::WrongKind);
         }
         Ok(())
@@ -272,7 +274,7 @@ spec fn fresh_array<M: Mode>(hs: Heap<M>, h: Heap<M>, t: Word, n: int, lin: bool
     &&& h.tag_of(t) == 0
     &&& h.lin_of(t) == lin
     &&& h.count_of(t) == n
-    &&& h.scan_of(t) == 255u8
+    &&& crate::layout::scan_extended_spec(h.scan_of(t))
     &&& h.owned(t)
     &&& h.rc_value(t) > 0
     &&& h.core.settled_view().ext(tb) == 1
@@ -330,11 +332,14 @@ spec fn source_ok<M: Mode>(hs: Heap<M>, a: Word, d: spec_fn(usize) -> int, to: i
 /// 数の語を持つ物体の、走査する語と物理的な語の対応。
 proof fn lemma_array_slots<M: Mode>(h: Heap<M>, t: Word)
     requires
-        h.scan_of(t) == 255,
+        crate::layout::scan_extended_spec(h.scan_of(t)),
     ensures
-        forall|j: int| #[trigger] h.scanned_word(t, j) == h.word_at(t, 1 + j),
-        forall|j: int| #[trigger] h.scanned_at(t, j) <==> 1 <= j < 1 + h.count_of(t),
-        h.count_of(t) == h.word_at(t, 0).bits_spec(),
+        forall|j: int| #[trigger]
+            h.scanned_word(t, j) == h.word_at(t, crate::layout::EXTENDED_FIRST as int + j),
+        forall|j: int| #[trigger]
+            h.scanned_at(t, j) <==> crate::layout::EXTENDED_FIRST <= j
+                < crate::layout::EXTENDED_FIRST + h.count_of(t),
+        h.count_of(t) == h.word_at(t, crate::layout::COUNT_WORD as int).bits_spec(),
 {
 }
 
@@ -374,7 +379,7 @@ proof fn lemma_fill_start<M: Mode>(
         h.kind_of(t) == Kind::Data,
         h.count_of(t) == n,
         h.tag_of(t) == 0,
-        h.scan_of(t) == 255u8,
+        crate::layout::scan_extended_spec(h.scan_of(t)),
         h.lin_of(t) == lin,
         h.owned(t),
         forall|j: int| 0 <= j < n ==> (#[trigger] h.scanned_word(t, j)).bits_spec() == 1,
@@ -444,8 +449,8 @@ proof fn lemma_fill_ready<M: Mode>(
     ensures
         h.writable(t),
         h.owned(t),
-        h.scanned_at(t, 1 + i),
-        h.word_at(t, 1 + i).bits_spec() == 1,
+        h.scanned_at(t, crate::layout::EXTENDED_FIRST as int + i),
+        h.word_at(t, crate::layout::EXTENDED_FIRST as int + i).bits_spec() == 1,
 {
     lemma_array_slots(h, t);
     assert(h.scanned_word(t, i).bits_spec() == 1);
@@ -478,7 +483,7 @@ proof fn lemma_fill_dupped<M: Mode>(
     ensures
         h1.writable(t),
         h1.owned(t),
-        h1.scanned_at(t, 1 + i),
+        h1.scanned_at(t, crate::layout::EXTENDED_FIRST as int + i),
         h1.holds(w),
         h1.word_in(t),
 {
@@ -515,7 +520,7 @@ proof fn lemma_fill_step<M: Mode>(
         h1.bumped(h, w),
         h1.settled(),
         h1.consistent(),
-        h2.field_set(h1, t, 1 + i, w),
+        h2.field_set(h1, t, crate::layout::EXTENDED_FIRST as int + i, w),
         h2.consistent(),
     ensures
         filling(hs, h2, t, n, lin, i + 1, v, d),
@@ -532,27 +537,36 @@ proof fn lemma_fill_step<M: Mode>(
     assert(same_head(h1, h, tb));
     assert(h1.core.perm(tb).slots == h.core.perm(tb).slots);
     assert(h1.core.dom().contains(tb));
-    lemma_set_unit_moved(h2, h1, t, 1 + i, w);
+    lemma_set_unit_moved(h2, h1, t, crate::layout::EXTENDED_FIRST as int + i, w);
     lemma_moved_chain(h2, h1, hs, dp, |b: usize| -points(w, b), d, none, none.insert(tb), none);
     assert(live(h2, tb));
     assert(same_head(h2, h1, tb));
     // `w` は `hs` で読めて、`t` は `hs` になかったので、`w` は `t` を指さない
     assert(points(w, tb) == 0);
-    lemma_slot_written(h2, h1, t, 1 + i, w);
+    lemma_slot_written(h2, h1, t, crate::layout::EXTENDED_FIRST as int + i, w);
     lemma_array_slots(h, t);
     lemma_array_slots(h1, t);
     lemma_array_slots(h2, t);
-    assert(h2.word_at(t, 0) == h1.word_at(t, 0));
+    assert(h2.word_at(t, crate::layout::COUNT_WORD as int) == h1.word_at(
+        t,
+        crate::layout::COUNT_WORD as int,
+    ));
     assert(h2.count_of(t) == n);
     assert forall|j: int| 0 <= j < i + 1 implies #[trigger] h2.scanned_word(t, j) == v(j) by {
         if j != i {
-            assert(h2.word_at(t, 1 + j) == h1.word_at(t, 1 + j));
+            assert(h2.word_at(t, crate::layout::EXTENDED_FIRST as int + j) == h1.word_at(
+                t,
+                crate::layout::EXTENDED_FIRST as int + j,
+            ));
             assert(h.scanned_word(t, j) == v(j));
         }
     }
     assert forall|j: int| i + 1 <= j < n implies (#[trigger] h2.scanned_word(t, j)).bits_spec()
         == 1 by {
-        assert(h2.word_at(t, 1 + j) == h1.word_at(t, 1 + j));
+        assert(h2.word_at(t, crate::layout::EXTENDED_FIRST as int + j) == h1.word_at(
+            t,
+            crate::layout::EXTENDED_FIRST as int + j,
+        ));
         assert(h.scanned_word(t, j).bits_spec() == 1);
     }
     assert(h2.word_in(t));
@@ -577,7 +591,7 @@ proof fn lemma_fill_put<M: Mode>(
         i < n,
         w == v(i),
         hs.readable(w),
-        h2.field_set(h, t, 1 + i, w),
+        h2.field_set(h, t, crate::layout::EXTENDED_FIRST as int + i, w),
         h2.consistent(),
         forall|b: usize| live(hs, b) ==> #[trigger] e(b) == d(b) - points(w, b),
     ensures
@@ -586,26 +600,35 @@ proof fn lemma_fill_put<M: Mode>(
     let tb = t.bits_spec();
     let none = Set::<usize>::empty();
     lemma_fill_ready(hs, h, t, n, lin, i, v, d);
-    lemma_set_unit_moved(h2, h, t, 1 + i, w);
+    lemma_set_unit_moved(h2, h, t, crate::layout::EXTENDED_FIRST as int + i, w);
     lemma_moved_chain(h2, h, hs, d, |b: usize| -points(w, b), e, none, none.insert(tb), none);
     assert(live(h, tb));
     assert(live(h2, tb));
     assert(same_head(h2, h, tb));
     assert(points(w, tb) == 0);
-    lemma_slot_written(h2, h, t, 1 + i, w);
+    lemma_slot_written(h2, h, t, crate::layout::EXTENDED_FIRST as int + i, w);
     lemma_array_slots(h, t);
     lemma_array_slots(h2, t);
-    assert(h2.word_at(t, 0) == h.word_at(t, 0));
+    assert(h2.word_at(t, crate::layout::COUNT_WORD as int) == h.word_at(
+        t,
+        crate::layout::COUNT_WORD as int,
+    ));
     assert(h2.count_of(t) == n);
     assert forall|j: int| 0 <= j < i + 1 implies #[trigger] h2.scanned_word(t, j) == v(j) by {
         if j != i {
-            assert(h2.word_at(t, 1 + j) == h.word_at(t, 1 + j));
+            assert(h2.word_at(t, crate::layout::EXTENDED_FIRST as int + j) == h.word_at(
+                t,
+                crate::layout::EXTENDED_FIRST as int + j,
+            ));
             assert(h.scanned_word(t, j) == v(j));
         }
     }
     assert forall|j: int| i + 1 <= j < n implies (#[trigger] h2.scanned_word(t, j)).bits_spec()
         == 1 by {
-        assert(h2.word_at(t, 1 + j) == h.word_at(t, 1 + j));
+        assert(h2.word_at(t, crate::layout::EXTENDED_FIRST as int + j) == h.word_at(
+            t,
+            crate::layout::EXTENDED_FIRST as int + j,
+        ));
         assert(h.scanned_word(t, j).bits_spec() == 1);
     }
     assert(h2.word_in(t));
@@ -767,7 +790,7 @@ fn fill<M: Mode>(
                 lemma_fill_dupped(hs, h, h1, t, n, lin, i as int, v, d, w);
             }
         }
-        (unsafe { heap.set_field(t, i + 1, w) })?;
+        (unsafe { heap.set_field(t, crate::layout::EXTENDED_FIRST + i, w) })?;
         proof {
             if M::CHECKED {
                 lemma_words_trans(*heap, h1, h0);
@@ -1070,7 +1093,7 @@ impl<M: Mode> Ctx<M> {
             }
         }
         // 最後の要素には、受け取った `x` の参照をそのまま入れる
-        if let Err(e) = unsafe { self.heap.set_field(t, last + 1, x) } {
+        if let Err(e) = unsafe { self.heap.set_field(t, crate::layout::EXTENDED_FIRST + last, x) } {
             proof {
                 lemma_words_trans(h2, h1, hs);
                 self.lemma_words_kept(s0);
@@ -1194,7 +1217,7 @@ impl<M: Mode> Ctx<M> {
             h1.settled(),
             s0.heap.rc_value(a) == 1,
             0 <= idx < s0.heap.count_of(a),
-            p == idx + 1,
+            p == crate::layout::EXTENDED_FIRST + idx,
         ensures
             h1.writable(a),
             h1.owned(a),
@@ -1244,7 +1267,7 @@ impl<M: Mode> Ctx<M> {
             h1.settled(),
             s0.heap.rc_value(a) == 1,
             0 <= idx < s0.heap.count_of(a),
-            p == idx + 1,
+            p == crate::layout::EXTENDED_FIRST + idx,
             old == h1.word_at(a, p),
             h2.field_set(h1, a, p, x),
             h2.consistent(),
@@ -1302,7 +1325,7 @@ impl<M: Mode> Ctx<M> {
             h1.settled(),
             s0.heap.rc_value(a) == 1,
             0 <= idx < s0.heap.count_of(a),
-            p == idx + 1,
+            p == crate::layout::EXTENDED_FIRST + idx,
             old == h1.word_at(a, p),
             h2.field_set(h1, a, p, x),
             h2.consistent(),
@@ -1360,13 +1383,19 @@ impl<M: Mode> Ctx<M> {
         lemma_array_slots(h1, a);
         lemma_array_slots(h2, a);
         lemma_array_slots(h3, a);
-        assert(h2.word_at(a, 0) == h1.word_at(a, 0));
+        assert(h2.word_at(a, crate::layout::COUNT_WORD as int) == h1.word_at(
+            a,
+            crate::layout::COUNT_WORD as int,
+        ));
         assert(h3.count_of(a) == h0.count_of(a));
         assert(h3.scanned_word(a, idx) == x);
         assert forall|j: int|
             0 <= j < h0.count_of(a) && j != idx implies #[trigger] h3.scanned_word(a, j)
             == h0.scanned_word(a, j) by {
-            assert(h2.word_at(a, 1 + j) == h1.word_at(a, 1 + j));
+            assert(h2.word_at(a, crate::layout::EXTENDED_FIRST as int + j) == h1.word_at(
+                a,
+                crate::layout::EXTENDED_FIRST as int + j,
+            ));
         }
         s0.lemma_arg_counted(ws, 1);
         lemma_points_in(ws, x.bits_spec());
@@ -1620,10 +1649,17 @@ impl<M: Mode> Ctx<M> {
             proof {
                 lemma_settled_twice(hs);
                 if c {
-                    Self::lemma_set_ready(s0, h1, a, idx as int, (idx + 1) as int, x);
+                    Self::lemma_set_ready(
+                        s0,
+                        h1,
+                        a,
+                        idx as int,
+                        (crate::layout::EXTENDED_FIRST + idx) as int,
+                        x,
+                    );
                 }
             }
-            let old = match unsafe { self.heap.field(a, idx + 1) } {
+            let old = match unsafe { self.heap.field(a, crate::layout::EXTENDED_FIRST + idx) } {
                 Ok(w) => w,
                 Err(e) => {
                     proof {
@@ -1632,7 +1668,8 @@ impl<M: Mode> Ctx<M> {
                     return Err(Fault::Heap(e));
                 },
             };
-            if let Err(e) = unsafe { self.heap.set_field(a, idx + 1, x) } {
+            if let Err(e) = unsafe { self.heap.set_field(a, crate::layout::EXTENDED_FIRST + idx, x)
+            } {
                 proof {
                     self.lemma_words_kept(s0);
                 }
@@ -1641,7 +1678,16 @@ impl<M: Mode> Ctx<M> {
             let ghost h2 = self.heap;
             proof {
                 if c {
-                    Self::lemma_set_old_ready(s0, h1, h2, a, idx as int, (idx + 1) as int, x, old);
+                    Self::lemma_set_old_ready(
+                        s0,
+                        h1,
+                        h2,
+                        a,
+                        idx as int,
+                        (crate::layout::EXTENDED_FIRST + idx) as int,
+                        x,
+                        old,
+                    );
                 }
             }
             if let Err(e) = unsafe { self.heap.decref(old) } {
@@ -1659,7 +1705,16 @@ impl<M: Mode> Ctx<M> {
                     self.lemma_words_kept(s0);
                 }
                 if c {
-                    self.lemma_set_in_place(s0, h1, h2, a, idx as int, (idx + 1) as int, x, old);
+                    self.lemma_set_in_place(
+                        s0,
+                        h1,
+                        h2,
+                        a,
+                        idx as int,
+                        (crate::layout::EXTENDED_FIRST + idx) as int,
+                        x,
+                        old,
+                    );
                 }
             }
             return Ok(a);
@@ -1727,7 +1782,7 @@ impl<M: Mode> Ctx<M> {
                 lemma_arg_moved(h2, hs, z, Set::empty(), x);
             }
         }
-        if let Err(e) = unsafe { self.heap.set_field(t, idx + 1, x) } {
+        if let Err(e) = unsafe { self.heap.set_field(t, crate::layout::EXTENDED_FIRST + idx, x) } {
             proof {
                 lemma_words_trans(h2, h1, hs);
                 self.lemma_words_kept(s0);

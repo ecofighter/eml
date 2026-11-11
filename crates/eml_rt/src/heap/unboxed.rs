@@ -394,7 +394,7 @@ impl<M: Mode> Heap<M> {
                 perm.meta == start.meta,
                 perm.prefix == start.prefix,
                 perm.text == start.text,
-                h@.addr + 8 * (HEADER_WORDS + cap) <= usize::MAX,
+                h@.addr + crate::layout::slot_offset_spec(cap as int) <= usize::MAX,
                 n + 1 <= cap,
                 0 <= i <= n,
                 p_init(perm, 0) && p_word(perm, 0).bits_spec() == n,

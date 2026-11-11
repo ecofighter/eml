@@ -857,11 +857,7 @@ impl<M: Mode> Ctx<M> {
             s0.ev_shape(ev),
             0 <= op < s0.ev_ops(ev),
             s0.heap.rc_value(s0.ev_table(ev)) > 0,
-            i == if s0.heap.scan_of(s0.ev_table(ev)) == 255 {
-                op + 1
-            } else {
-                op
-            },
+            i == crate::layout::scan_first_spec(s0.heap.scan_of(s0.ev_table(ev))) + op,
             self.heap == s0.heap.settled_heap(),
             self.heap.consistent(),
             self.heap.settled(),
@@ -909,11 +905,7 @@ impl<M: Mode> Ctx<M> {
             h1.word_at(s0.ev_table(ev), i) == s0.ev_entry(ev, op),
             h1.core.dom().contains(s0.ev_table(ev).bits_spec()),
             h1.core.state(s0.ev_table(ev).bits_spec()) == BlockState::Live,
-            i == if s0.heap.scan_of(s0.ev_table(ev)) == 255 {
-                op + 1
-            } else {
-                op
-            },
+            i == crate::layout::scan_first_spec(s0.heap.scan_of(s0.ev_table(ev))) + op,
             self.heap.field_set(h1, s0.ev_table(ev), i, c),
             self.heap.consistent(),
             self.evv == s0.evv,
@@ -1551,7 +1543,7 @@ pub(super) proof fn lemma_arg_moved<M: Mode>(
 /// `scan` が 255 でない物体は、走査する語の数を `meta` に持ち、走査する語は先頭の語から並ぶ。
 pub(super) proof fn lemma_unextended<M: Mode>(h: Heap<M>, w: Word)
     requires
-        h.scan_of(w) != 255,
+        !crate::layout::scan_extended_spec(h.scan_of(w)),
     ensures
         h.count_of(w) == h.scan_of(w) as int,
         forall|i: int| #[trigger] h.scanned_word(w, i) == h.word_at(w, i),
@@ -1586,7 +1578,7 @@ pub(super) proof fn lemma_set_passes_kept<M: Mode>(
     requires
         h1.field_set(h0, w, i, v),
         h0.set_passes(w, j),
-        h0.scan_of(w) != 255,
+        !crate::layout::scan_extended_spec(h0.scan_of(w)),
     ensures
         h1.set_passes(w, j),
 {
