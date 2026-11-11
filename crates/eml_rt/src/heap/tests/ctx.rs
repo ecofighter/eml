@@ -923,3 +923,20 @@ both_modes!(
     the_outer_list_of_a_shared_evidence_is_not_writable,
     evv_word_reads_the_list_without_rc_work,
 );
+
+// ネイティブのコードはこれらの位置で読むので、値を変えるのはコード生成器の読みと一緒のときだけである
+// (docs/spec/object-model.md の「欄」)
+#[test]
+fn the_native_offsets_are_pinned() {
+    use crate::{CTX_FAULT, CTX_JMP, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET};
+    assert_eq!(
+        (
+            CTX_YIELD_TARGET,
+            CTX_FAULT,
+            CTX_STOP,
+            CTX_STACK_LIMIT,
+            CTX_JMP
+        ),
+        (0, 32, 40, 48, 56)
+    );
+}

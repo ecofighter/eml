@@ -1525,6 +1525,43 @@ fn an_interrupt_from_another_thread_is_seen() {
     assert_eq!(control.stop_bits(), Control::INTERRUPT);
 }
 
+// T18: `Native`のポインタの欄。`stop`は`Ctx`の止める語を指し、`Ctx`が別のスレッドへ移った後も読める。`jmp`と
+// `runtime`は作ったときはnullで、`runtime`は置いたポインタをそのまま返す。置いた失敗は1回だけ取り出せ、取り出さずに
+// 落とした`Ctx`も失敗を漏らさない
+#[test]
+fn the_native_pointers_follow_the_ctx_across_threads() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut ctx = Ctx::<Fast>::new(control.clone(), host(&Arc::default()));
+    assert!(ctx.jmp().is_null() && ctx.runtime().is_null());
+    // SAFETY: `stop_word`は、`ctx`が生きている間その止める語を指す
+    assert_eq!(unsafe { &*ctx.stop_word() }.load(Ordering::Relaxed), 0);
+    let mut slot = Box::new(7u64);
+    ctx.set_runtime((&raw mut *slot).cast());
+    // SAFETY: 上で置いた`slot`を指す
+    unsafe { *ctx.runtime().cast::<u64>() += 1 };
+    ctx.set_runtime(std::ptr::null_mut());
+    assert_eq!(*slot, 8);
+    ctx.set_stack_limit(4096);
+    assert_eq!(ctx.stack_limit(), 4096);
+    assert_eq!(ctx.set_fault(Fault::Output("lost".into())), None);
+    assert_eq!(
+        ctx.set_fault(Fault::Output("first".into())),
+        Some(Fault::Output("lost".into()))
+    );
+    assert_eq!(ctx.take_fault(), Some(Fault::Output("first".into())));
+    assert_eq!(ctx.take_fault(), None);
+    control.interrupt();
+    let moved = std::thread::spawn(move || {
+        // SAFETY: 移った先でも、`ctx`の止める語を指す
+        let bits = unsafe { &*ctx.stop_word() }.load(Ordering::Relaxed);
+        let _ = ctx.set_fault(Fault::Output("left behind".into()));
+        (bits, ctx.poll(0))
+    })
+    .join()
+    .unwrap();
+    assert_eq!(moved, (Control::INTERRUPT, Err(crate::Stop::Interrupted)));
+}
+
 // `NOTICE`はworkerの語だけに立つ。別のスレッドが立てたのを`poll`が読む
 #[test]
 fn a_notice_from_another_thread_is_seen() {

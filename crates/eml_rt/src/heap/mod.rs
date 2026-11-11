@@ -61,7 +61,9 @@ use vstd::raw_ptr::ptr_mut_write;
 #[cfg(verus_keep_ghost)]
 use vstd::shared::Shared;
 
-pub use ctx::{Ctx, CtxStats, MaskItem};
+pub use ctx::{
+    CTX_FAULT, CTX_JMP, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Ctx, CtxStats, MaskItem,
+};
 pub use reuse::Token;
 // host.rs の文字列の行の読みも、`\n` を T13 の走査で探す (docs/spec/object-model.md の「`unsafe` の核」)
 pub(crate) use ctx::positions::find_byte;

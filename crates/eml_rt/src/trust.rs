@@ -240,6 +240,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("control.rs: external_body empty_map", "T15"),
     ("frozen.rs: external_body region_known", "T15"),
     ("heap/unboxed.rs: external_body unboxed_payload", "T16"),
+    ("heap/ctx.rs: external_body stop_of", "T18"),
     ("alloc.rs: Drop for Pages", "T4"),
     ("heap/walk.rs: Drop for Heap", "T4"),
     ("frozen.rs: Drop for Frozen", "T4"),
@@ -541,11 +542,37 @@ fn the_trust_list_is_exactly_the_trusted_items() {
         assert!(
             [
                 "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12",
-                "T13", "T14", "T15", "T16", "T17"
+                "T13", "T14", "T15", "T16", "T17", "T18"
             ]
             .contains(number),
             "{item} has no trust row"
         );
+    }
+}
+
+/// ネイティブのコードとの境界 (エントリ、asmのstub、panicを捕まえること) はネイティブの実行系に置き、検証した
+/// crateには置かない (docs/spec/object-model.md の「欄」)。`word_at`は前の境だけを見るので、後ろの境も確かめて
+/// `pub mod externs;`のような語に当たらないようにする。
+#[test]
+fn the_core_has_no_native_boundary() {
+    for (file, text) in FILES {
+        let s = prepare(text);
+        for word in [
+            "extern",
+            "no_mangle",
+            "naked",
+            "naked_asm",
+            "global_asm",
+            "asm",
+            "catch_unwind",
+        ] {
+            let len = word.chars().count();
+            assert!(
+                !(0..s.len())
+                    .any(|i| word_at(&s, i, word) && !s.get(i + len).is_some_and(|&c| is_ident(c))),
+                "{file} uses {word}"
+            );
+        }
     }
 }
 

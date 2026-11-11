@@ -974,7 +974,7 @@ impl<M: Mode> Ctx<M> {
                 forall|x: Word| #[trigger] self.heap.core.word_ok(x) == h2.core.word_ok(x),
                 forall|i: int| 0 <= i < 64 ==> chunk@[i] == byte,
                 self.evv == s0.evv,
-                self.yielding == s0.yielding,
+                self.native.yielding == s0.native.yielding,
                 self.max_evv == s0.max_evv,
             decreases k - done,
         {
@@ -1764,13 +1764,13 @@ impl<M: Mode> Ctx<M> {
             s1.heap == s0.heap.settled_heap(),
             s1.heap.consistent(),
             s1.evv == s0.evv,
-            s1.yielding == s0.yielding,
+            s1.native.yielding == s0.native.yielding,
             s1.max_evv == s0.max_evv,
             self.heap.rekinded(s1.heap, a.bits_spec(), kind),
             kind.has_body(),
             self.heap.consistent(),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -1799,9 +1799,9 @@ impl<M: Mode> Ctx<M> {
         lemma_rekinded_same(h2, h1, ab, kind);
         assert(h2.core.settleable());
         assert(held_word(h2, self.evv));
-        assert(held_word(h2, self.yielding.target));
-        assert(held_word(h2, self.yielding.clause));
-        assert(held_word(h2, self.yielding.cont));
+        assert(held_word(h2, self.native.yielding.target));
+        assert(held_word(h2, self.native.yielding.clause));
+        assert(held_word(h2, self.native.yielding.cont));
         assert(held_word(h1, seq![a][0]));
         assert(held_word(h2, a));
         assert(self.holds_args(seq![])) by {

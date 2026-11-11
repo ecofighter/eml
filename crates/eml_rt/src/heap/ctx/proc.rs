@@ -490,7 +490,7 @@ impl<M: Mode> Ctx<M> {
             self.held_ok(),
             moved(self.heap, s0.heap, d, Set::empty()),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             forall|x: usize| #[trigger] points_in(ws, x) + d(x) >= points(ws[i], x),
         ensures
             self.holds(ws[i]),
@@ -519,7 +519,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.settleable(),
             moved(self.heap, s0.heap, |x: usize| 0int, Set::empty()),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
             self.max_evv == s0.max_evv,
         ensures
             self.held_ok(),
@@ -574,7 +574,7 @@ impl<M: Mode> Ctx<M> {
             ),
             self.held_ok(),
             self.evv == s0.evv,
-            self.yielding == s0.yielding,
+            self.native.yielding == s0.native.yielding,
         ensures
             self.evolved_by(
                 s0,
