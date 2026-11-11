@@ -21,7 +21,7 @@ use crate::driver::{DriverKind, JOB_QUIESCE_LIMIT, MadeDriver, RunClock, ceil_ms
 use crate::park::Park;
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
-use crate::{HeapWork, RunCounts, RuntimeError, VmFault, WORKER_STACK};
+use crate::{HeapWork, RunCounts, RunFault, RuntimeError, WORKER_STACK};
 pub use eml_sched::config::Seat;
 
 // 6つの型はどれも、スレッドをまたいで渡すか共有する (docs/spec/vm.md の「タスクとスケジュール」)
@@ -469,12 +469,12 @@ impl Run {
     }
 
     /// 満期の判定で読む今の時刻 (ミリ秒、切り捨て)。`driver` は基準が渡された driver の `Injected` のときだけ読む。
-    pub(crate) fn now_ms_floor(&self, driver: Option<&dyn IoDriver>) -> Result<u64, VmFault> {
+    pub(crate) fn now_ms_floor(&self, driver: Option<&dyn IoDriver>) -> Result<u64, RunFault> {
         self.clock.now(driver).map(floor_ms)
     }
 
     /// 登録で読む今の時刻 (ミリ秒、切り上げ)。
-    pub(crate) fn now_ms_ceil(&self, driver: Option<&dyn IoDriver>) -> Result<u64, VmFault> {
+    pub(crate) fn now_ms_ceil(&self, driver: Option<&dyn IoDriver>) -> Result<u64, RunFault> {
         self.clock.now(driver).map(ceil_ms)
     }
 
@@ -991,7 +991,7 @@ fn on_own_ctx<M: Mode>(
         }
         Err(payload) => {
             run.set_fatal(RuntimeError::Fault {
-                fault: VmFault::Internal("a worker thread panicked"),
+                fault: RunFault::Internal("a worker thread panicked"),
                 function,
                 at: None,
             });
@@ -1057,7 +1057,7 @@ fn work<M: Mode, P: Policy>(
             || matches!(
                 error,
                 RuntimeError::Fault {
-                    fault: VmFault::Internal(_),
+                    fault: RunFault::Internal(_),
                     ..
                 }
             ),
@@ -1130,12 +1130,12 @@ fn main_work<M: Mode, P: Policy>(
 /// 成功した run の、worker を join した後の確かめ。driver が静止させた後にも保留の操作を残していれば driver の誤り、
 /// どれかの worker の受け箱に走らせるはずの知らせが残っていれば内部の誤りである (docs/spec/vm.md の
 /// 「誤り、止めること、終わり」)。
-pub(crate) fn end_check(kept_pending: bool, left: bool) -> Result<(), VmFault> {
+pub(crate) fn end_check(kept_pending: bool, left: bool) -> Result<(), RunFault> {
     if kept_pending {
-        return Err(VmFault::Driver(crate::error::KEPT_PENDING.to_string()));
+        return Err(RunFault::Driver(crate::error::KEPT_PENDING.to_string()));
     }
     if left {
-        return Err(VmFault::Internal("a task is left at the end"));
+        return Err(RunFault::Internal("a task is left at the end"));
     }
     Ok(())
 }
@@ -1145,9 +1145,9 @@ fn quiet(error: &RuntimeError) -> bool {
     matches!(
         error,
         RuntimeError::Fault {
-            fault: VmFault::Stopped(
+            fault: RunFault::Stopped(
                 Stop::Interrupted | Stop::Terminated | Stop::MemoryLimit | Stop::Ended
-            ) | VmFault::Extern(eml_rt::Fault::Stopped(
+            ) | RunFault::Extern(eml_rt::Fault::Stopped(
                 Stop::Interrupted | Stop::Terminated | Stop::MemoryLimit | Stop::Ended
             )),
             ..
@@ -1166,7 +1166,7 @@ impl<P: Policy> Scheduler<P> {
     /// どれかがあれば起きた形に戻して集め直す。どれもなく、期限も保留の操作も送った子もなければデッドロックである。
     /// 先に眠った形にするので、(c) の後に眠ったほかの worker は worker 0 を起こすか (d) で `running` に見え、
     /// その前に登録表に足したタイマーは (c) が読む。
-    pub(crate) fn idle_wait(&mut self) -> Result<(), VmFault> {
+    pub(crate) fn idle_wait(&mut self) -> Result<(), RunFault> {
         let run = Arc::clone(&self.run);
         let k = self.index;
         if k != 0 {
@@ -1239,7 +1239,7 @@ impl<P: Policy> Scheduler<P> {
                 run.unpark_locked(&mut state);
                 drop(state);
                 run.leave_idle(k);
-                return Err(VmFault::Deadlock);
+                return Err(RunFault::Deadlock);
             }
         }
         let virtual_ = self.driver_kind == DriverKind::Virtual;
@@ -1289,11 +1289,11 @@ impl<P: Policy> Scheduler<P> {
                             run.hold_sleep(&control, k);
                             Ok(())
                         } else {
-                            Err(VmFault::Deadlock)
+                            Err(RunFault::Deadlock)
                         }
                     }
                     Ok(false) => Ok(()),
-                    Err(e) => Err(VmFault::Driver(e.to_string())),
+                    Err(e) => Err(RunFault::Driver(e.to_string())),
                 }
             }
         };
@@ -1307,7 +1307,7 @@ impl<P: Policy> Scheduler<P> {
     /// driver を持てば driver で待つ。期限は最後の集める地点が読んだもので、ここでは登録表の lock を取らない。
     /// 待つ間にほかの worker の取り消しが項を外しても、早く起きて集め直すだけである (docs/spec/vm.md の
     /// 「タスクとスケジュール」「時計と driver」)。
-    fn peer_wait(&mut self) -> Result<(), VmFault> {
+    fn peer_wait(&mut self) -> Result<(), RunFault> {
         let k = self.index;
         let deadline = self.own_deadline.filter(|_| self.run.io_worker(k) == k);
         if deadline.is_some() {
@@ -1328,13 +1328,13 @@ impl<P: Policy> Scheduler<P> {
         self.run.driver_waited(k);
         match waited {
             Ok(_) => Ok(()),
-            Err(e) => Err(VmFault::Driver(e.to_string())),
+            Err(e) => Err(RunFault::Driver(e.to_string())),
         }
     }
 
     /// メインのworkerの待ちの前半。空きの集まりに入らずにworker 1..N-1の手順で眠った形にし、眠ったかを返す。本物の
     /// 時計で自分の区画に期限があれば、先にdriverを作る (docs/spec/vm.mdの「メインのworker」)。
-    pub(crate) fn main_park(&mut self) -> Result<bool, VmFault> {
+    pub(crate) fn main_park(&mut self) -> Result<bool, RunFault> {
         let k = self.index;
         if self.own_deadline.is_some() && self.run.io_worker(k) == k {
             // wakerを置いてから眠った形にするので、作った直後の起こしもdriverの待ちを終わらせる
@@ -1365,7 +1365,7 @@ impl<P: Policy> Scheduler<P> {
 
     /// driverを持てば、待たずに1回OSを見る。届いた完了は次の集める地点が拾う。`Park`が呼ぶメインのworkerの`run`の
     /// 始めに使う (docs/spec/vm.mdの「メインのworkerの待ち」)。
-    pub(crate) fn look_once(&mut self) -> Result<(), VmFault> {
+    pub(crate) fn look_once(&mut self) -> Result<(), RunFault> {
         let Some(driver) = self.driver.as_deref_mut() else {
             return Ok(());
         };
@@ -1373,7 +1373,7 @@ impl<P: Policy> Scheduler<P> {
         driver
             .wait(Some(now))
             .map(|_| ())
-            .map_err(|e| VmFault::Driver(e.to_string()))
+            .map_err(|e| RunFault::Driver(e.to_string()))
     }
 
     /// メインのworkerの既定の待ち (`Pending::default_wait`)。driverを持てば期限までdriverで待ち、戻ったら起きた形に
@@ -1443,7 +1443,7 @@ impl<P: Policy> Scheduler<P> {
     }
 
     /// 期限が今までに来た区画の持ち主 (worker 0 を除く) を起こす。
-    fn wake_due_owners(&self) -> Result<(), VmFault> {
+    fn wake_due_owners(&self) -> Result<(), RunFault> {
         let now = self.run.now_ms_floor(self.driver.as_deref())?;
         let due: Vec<usize> = self
             .cells
@@ -1490,9 +1490,9 @@ mod tests {
     use crate::cells::{CellRef, MailItem, Registry, Shared};
     use crate::driver::RunClock;
     use crate::sched::{Scheduler, Sequential};
-    use crate::{Machine, RuntimeError, VmFault};
+    use crate::{Machine, RunFault, RuntimeError};
 
-    fn fault(fault: VmFault) -> RuntimeError {
+    fn fault(fault: RunFault) -> RuntimeError {
         RuntimeError::Fault {
             fault,
             function: "main".to_string(),
@@ -1505,7 +1505,7 @@ mod tests {
     #[test]
     fn a_fatal_wins_over_any_result_of_worker_0() {
         let heap = || {
-            fault(VmFault::Extern(eml_rt::Fault::Heap(
+            fault(RunFault::Extern(eml_rt::Fault::Heap(
                 HeapError::WrongOwner {
                     owner: 1,
                     worker: 2,
@@ -1515,8 +1515,8 @@ mod tests {
         // `RuntimeError` は写せないので、同じ結果を作り直す
         let result = |i: usize| match i {
             0 => Ok(()),
-            1 => Err(fault(VmFault::Stopped(Stop::Ended))),
-            2 => Err(fault(VmFault::Stopped(Stop::Interrupted))),
+            1 => Err(fault(RunFault::Stopped(Stop::Ended))),
+            2 => Err(fault(RunFault::Stopped(Stop::Interrupted))),
             _ => Err(RuntimeError::Deadlock),
         };
         for i in 0..4 {
@@ -1646,7 +1646,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
         assert!(run.take_notices(1).is_empty());
         assert_eq!(
             super::end_check(false, true),
-            Err(VmFault::Internal("a task is left at the end"))
+            Err(RunFault::Internal("a task is left at the end"))
         );
         assert_eq!(super::end_check(false, false), Ok(()));
     }
@@ -1993,7 +1993,7 @@ uniform from 1 fn reperform$Prelude.Panic.panicked(a.0: obj, u.1: unit) -> tobj 
             assert_eq!(sched.run.running.load(Ordering::Acquire), 1);
             (verdict, sched.cells.mail.pending())
         };
-        assert_eq!(idle(false), (Err(VmFault::Deadlock), false));
+        assert_eq!(idle(false), (Err(RunFault::Deadlock), false));
         assert_eq!(idle(true), (Ok(()), true));
     }
 

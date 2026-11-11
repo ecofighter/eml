@@ -11,7 +11,7 @@ use eml_hir::{
 };
 use eml_native::{LinkError, Linker};
 use eml_types::{InputDisplay, InstanceNode, TypedProgram};
-use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RuntimeError, SourceLocation, VmFault};
+use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RunFault, RuntimeError, SourceLocation};
 
 use crate::{Session, pretty};
 
@@ -372,7 +372,7 @@ impl Repl {
                     Ok(()) => Outcome::Accepted,
                     // 式の入力はセッションを変えないので、書けなくても続けられる
                     Err(fault) => Outcome::Failed(RuntimeError::Fault {
-                        fault: VmFault::Extern(fault),
+                        fault: RunFault::Extern(fault),
                         function: "<repl>".to_string(),
                         at: Some(shown.at),
                     }),
@@ -421,7 +421,7 @@ fn shown(
 /// `RuntimeError` は写せないので、続けられない誤りの後の入力には、そのことを言う内部の誤りを返す。
 fn broken_session() -> RuntimeError {
     RuntimeError::Fault {
-        fault: VmFault::Internal("an earlier input broke the session"),
+        fault: RunFault::Internal("an earlier input broke the session"),
         function: "<repl>".to_string(),
         at: None,
     }

@@ -9,7 +9,7 @@ use std::panic::{self, AssertUnwindSafe};
 use eml_rt::{Ctx, Mode, Op};
 
 use crate::cells::{self, JobSource, Shared};
-use crate::error::VmFault;
+use crate::error::RunFault;
 use crate::op::Slot;
 use crate::sched::Scheduler;
 use crate::vm::{Exec, Task, current_cell, here};
@@ -34,7 +34,7 @@ pub(crate) fn submit<R: Exec, T: Send + 'static>(
     dst: Slot,
     from: JobSource,
     job: impl FnOnce() -> T + Send + 'static,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let op = Op::Job(Box::new(move || answer(job)));
     submit_op::<R>(ctx, task, sched, dst, from, op)
 }
@@ -49,7 +49,7 @@ pub(crate) fn submit_op<R: Exec>(
     dst: Slot,
     from: JobSource,
     op: Op,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let me = current_cell(task)?;
     // 仕事は本物の時計のrunでは自分のdriverのプールで走る (docs/spec/vm.md の「時計と driver」)
     sched.own_driver()?;
@@ -100,7 +100,7 @@ pub(crate) fn take<R: Exec, T: Send + 'static>(
     token: i64,
     wake: i64,
     from: JobSource,
-) -> Result<Outcome<T>, VmFault> {
+) -> Result<Outcome<T>, RunFault> {
     take_on(ctx, shared, token, task.worker, wake, from)
 }
 
@@ -112,15 +112,15 @@ fn take_on<M: Mode, T: Send + 'static>(
     worker: u32,
     wake: i64,
     from: JobSource,
-) -> Result<Outcome<T>, VmFault> {
+) -> Result<Outcome<T>, RunFault> {
     let taken = cells::take_job(shared, ctx, token, worker)?;
     if taken.from != from {
-        return Err(VmFault::Internal("an op is taken by another function"));
+        return Err(RunFault::Internal("an op is taken by another function"));
     }
     let cancelled = match wake {
         cells::WOKE => false,
         cells::CANCELLED => true,
-        _ => return Err(VmFault::Internal("an op is taken with another wake")),
+        _ => return Err(RunFault::Internal("an op is taken with another wake")),
     };
     let answer = taken.answer::<Result<T, String>>()?;
     if cancelled {
@@ -199,7 +199,7 @@ mod tests {
         let token = settled(&registry, &mut ctx, Op::Job(Box::new(|| answer(|| ()))));
         assert!(matches!(
             take_on::<_, u64>(&mut ctx, &registry, token, 0, cells::WOKE, JobSource::C(3)),
-            Err(VmFault::Internal(
+            Err(RunFault::Internal(
                 "an op completes with another kind of result"
             ))
         ));
@@ -275,7 +275,7 @@ mod tests {
         let token = settled(&registry, &mut ctx, Op::Job(Box::new(|| answer(|| 1u64))));
         assert!(matches!(
             take_on::<_, u64>(&mut ctx, &registry, token, 0, cells::WOKE, JobSource::C(4)),
-            Err(VmFault::Internal("an op is taken by another function"))
+            Err(RunFault::Internal("an op is taken by another function"))
         ));
     }
 }

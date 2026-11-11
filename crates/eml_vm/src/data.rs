@@ -6,7 +6,7 @@ use eml_rt::{Ctx, Heap, HeapError, Kind, Mode, Token, Word};
 
 use crate::RunCounts;
 use crate::code::CodeBase;
-use crate::error::VmFault;
+use crate::error::RunFault;
 use crate::op::{KEEP, NONE, RAW, SKIP, Slot};
 use crate::vm::{Exec, Task};
 
@@ -20,7 +20,7 @@ fn bind_fields<R: Exec>(
     task: &mut Task,
     w: Word,
     fields: &[u32],
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let heap = ctx.heap();
     for pair in fields.as_chunks::<2>().0 {
         let (position, slot) = (pair[0], pair[1] as Slot);
@@ -44,7 +44,7 @@ fn check_data<R: Exec>(
     tag: u32,
     scanned: u32,
     what: &'static str,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     if !R::M::CHECKED {
         return Ok(());
     }
@@ -58,7 +58,7 @@ fn check_data<R: Exec>(
     if ok {
         Ok(())
     } else {
-        Err(VmFault::Internal(what))
+        Err(RunFault::Internal(what))
     }
 }
 
@@ -71,7 +71,7 @@ pub(crate) fn con<R: Exec>(
     task: &mut Task,
     dst: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, raw, lin, n) = (ops[0], ops[1], ops[2], ops[3] != 0, ops[4] as usize);
     // ヒープに触れるのは作る物体だけで、`Ctx` の持つ語には触れない
@@ -120,7 +120,7 @@ pub(crate) fn switch_tag<R: Exec>(
     w: Word,
     tag: i64,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let (m, default) = (ops[0] as usize, ops[1]);
     // タグは配置のタグなので、飛び先の表を1回引けば case が決まる
@@ -148,9 +148,9 @@ pub(crate) fn switch_tag<R: Exec>(
     Ok(())
 }
 
-fn take_default(task: &mut Task, default: u32) -> Result<(), VmFault> {
+fn take_default(task: &mut Task, default: u32) -> Result<(), RunFault> {
     if default == NONE {
-        return Err(VmFault::Internal("a switch without a matching case"));
+        return Err(RunFault::Internal("a switch without a matching case"));
     }
     task.pc = default;
     Ok(())
@@ -162,7 +162,7 @@ pub(crate) fn switch_int<R: Exec>(
     task: &mut Task,
     n: i64,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let (cases, default) = (ops[0] as usize, ops[1]);
     for case in 0..cases {
@@ -183,7 +183,7 @@ pub(crate) fn switch_string<R: Exec>(
     task: &mut Task,
     w: Word,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let (cases, default) = (ops[0] as usize, ops[1]);
     let heap = ctx.heap();
@@ -207,7 +207,7 @@ pub(crate) fn unpack<R: Exec>(
     task: &mut Task,
     src: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
     let w = task.get(src);
@@ -230,7 +230,7 @@ pub(crate) fn release<R: Exec>(
     task: &Task,
     src: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
     let w = task.get(src);
@@ -301,7 +301,7 @@ pub(crate) fn release_reuse<R: Exec>(
     task: &mut Task,
     src: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let (tok, tag, scanned, n) = (ops[0] as Slot, ops[1], ops[2], ops[3] as usize);
     let entries = &ops[4..4 + n];
@@ -354,7 +354,7 @@ pub(crate) fn con_reuse<R: Exec>(
     counts: &mut RunCounts,
     dst: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let (tok, tag, scanned, raw) = (ops[0] as Slot, ops[1], ops[2], ops[3]);
     let (lin, in_place, n) = (ops[4] != 0, ops[5] != 0, ops[6] as usize);
@@ -397,7 +397,7 @@ fn con_fresh<R: Exec>(
     raw: u32,
     lin: bool,
     fields: &[u32],
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let w = heap.alloc_data(tag as u16, scanned as usize, raw as usize, lin);
     unsafe { write_fields::<R>(heap, task, w, fields, false) }?;
     task.set(dst, w);
@@ -409,7 +409,7 @@ pub(crate) fn unbox<R: Exec>(
     ctx: &Ctx<R::M>,
     w: Word,
     counts: &mut RunCounts,
-) -> Result<i64, VmFault> {
+) -> Result<i64, RunFault> {
     if R::M::CHECKED {
         counts.unboxes += 1;
     }
@@ -427,13 +427,13 @@ pub(crate) fn unbox_float<R: Exec>(
     ctx: &Ctx<R::M>,
     w: Word,
     counts: &mut RunCounts,
-) -> Result<u64, VmFault> {
+) -> Result<u64, RunFault> {
     if R::M::CHECKED {
         counts.unboxes += 1;
         // verifier を通った IR の `float` の `unbox` は、`box` した `Float` かダミーを受ける。検査モードは前提を
         // 確かめるので、即値を物体として読む前に断る
         if !w.is_ptr() {
-            return Err(VmFault::Internal("an unbox of float reads an immediate"));
+            return Err(RunFault::Internal("an unbox of float reads an immediate"));
         }
     }
     Ok(unsafe { ctx.heap().unbox_float(w) }?)
@@ -444,9 +444,9 @@ pub(crate) fn unbox_float<R: Exec>(
 /// ヒープのダミーと同じ語であることも確かめ、ダミーでない `BigInt` を断る。1回の実行の中ではダミーは1つで、回復は
 /// スタックを捨てるので、語で比べてよい。
 #[inline]
-fn is_dummy<R: Exec>(ctx: &Ctx<R::M>, w: Word) -> Result<bool, VmFault> {
+fn is_dummy<R: Exec>(ctx: &Ctx<R::M>, w: Word) -> Result<bool, RunFault> {
     if R::M::CHECKED && !w.is_ptr() {
-        return Err(VmFault::Internal("a struct box is not an object"));
+        return Err(RunFault::Internal("a struct box is not an object"));
     }
     // 構造体の箱かダミーを受けるのは verifier を通った IR の約束で、どちらも物体である
     let kind = unsafe { ctx.heap().meta(w) }?.kind();
@@ -454,7 +454,7 @@ fn is_dummy<R: Exec>(ctx: &Ctx<R::M>, w: Word) -> Result<bool, VmFault> {
         return Ok(false);
     }
     if R::M::CHECKED && w != ctx.heap().dummy() {
-        return Err(VmFault::Internal(
+        return Err(RunFault::Internal(
             "a struct box is a `BigInt` that is not the dummy",
         ));
     }
@@ -472,7 +472,7 @@ pub(crate) fn unbox_struct<R: Exec>(
     task: &mut Task,
     src: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
     let fields = &ops[3..3 + 2 * n];
@@ -508,7 +508,7 @@ pub(crate) fn release_unboxed<R: Exec>(
     task: &mut Task,
     src: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let tok = code.tables.operands[at as usize];
     if is_dummy::<R>(ctx, task.get(src))? {
         if tok != NONE {

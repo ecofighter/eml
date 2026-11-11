@@ -9,7 +9,7 @@ use eml_rt::{Ctx, Mode, Word};
 
 use crate::cells::{self, Found, LINE_LIMIT, READ_ROOM};
 use crate::driver::DriverKind;
-use crate::error::VmFault;
+use crate::error::RunFault;
 
 #[cfg(feature = "tls")]
 use eml_tls::{Conn, HANDSHAKING, PEER_CLOSED};
@@ -125,7 +125,7 @@ pub(crate) fn line_state(pending: &[u8], from: usize, eof: bool) -> (Line, usize
 ///
 /// # Safety
 /// `conn` は呼ぶ側が持つ `Std.Tls.Conn` のただ1つの参照である (`Conn` は `Lin`)。
-unsafe fn tls_conn<M: Mode>(ctx: &Ctx<M>, conn: Word) -> Result<*mut TlsConn, VmFault> {
+unsafe fn tls_conn<M: Mode>(ctx: &Ctx<M>, conn: Word) -> Result<*mut TlsConn, RunFault> {
     Ok(unsafe { ctx.heap().foreign_unique::<TlsConn>(conn) }?)
 }
 
@@ -190,14 +190,14 @@ pub(crate) unsafe fn push_tls<M: Mode>(
     ctx: &mut Ctx<M>,
     bytes: Word,
     conn: Word,
-) -> Result<Word, VmFault> {
+) -> Result<Word, RunFault> {
     // バイト列と `Foreign` は別の物体で、`push_tls` はヒープに触れない
     let b = unsafe { &*ctx.heap().bytes(bytes)? };
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
     // handshakeの間の押し込みは証明書を確かめうるので、stdは`submit_push`で押し込む
     // (docs/spec/stdlib.mdの「`Std.Tls`」)
     if c.conn.status() & HANDSHAKING != 0 {
-        return Err(VmFault::Internal(
+        return Err(RunFault::Internal(
             "Std.Tls.push_tls runs during the handshake",
         ));
     }
@@ -213,7 +213,7 @@ pub(crate) unsafe fn write_plain<M: Mode>(
     ctx: &mut Ctx<M>,
     bytes: Word,
     conn: Word,
-) -> Result<Word, VmFault> {
+) -> Result<Word, RunFault> {
     let b = unsafe { &*ctx.heap().bytes(bytes)? };
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
     c.conn.write_plain(b);
@@ -224,7 +224,7 @@ pub(crate) unsafe fn write_plain<M: Mode>(
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn push_eof<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, VmFault> {
+pub(crate) unsafe fn push_eof<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     unsafe { (*tls_conn(ctx, conn)?).conn.push_eof() };
     Ok(conn)
 }
@@ -236,7 +236,7 @@ pub(crate) unsafe fn push_eof<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<W
 pub(crate) unsafe fn send_close_notify<M: Mode>(
     ctx: &mut Ctx<M>,
     conn: Word,
-) -> Result<Word, VmFault> {
+) -> Result<Word, RunFault> {
     unsafe { (*tls_conn(ctx, conn)?).conn.send_close_notify() };
     Ok(conn)
 }
@@ -245,7 +245,7 @@ pub(crate) unsafe fn send_close_notify<M: Mode>(
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn pull_tls<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, VmFault> {
+pub(crate) unsafe fn pull_tls<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     let mut out = Vec::new();
     unsafe { (*tls_conn(ctx, conn)?).conn.pull_tls(&mut out) };
     Ok(unsafe { ctx.heap_mut() }.alloc_bytes(&out))
@@ -259,7 +259,7 @@ pub(crate) unsafe fn read_plain<M: Mode>(
     ctx: &mut Ctx<M>,
     buf: Word,
     conn: Word,
-) -> Result<Word, VmFault> {
+) -> Result<Word, RunFault> {
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
     let n = c.conn.plaintext().len().min(READ_ROOM);
     if n == 0 {
@@ -275,7 +275,7 @@ pub(crate) unsafe fn read_plain<M: Mode>(
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn status<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, VmFault> {
+pub(crate) unsafe fn status<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
     Ok(i64::from(unsafe { (*tls_conn(ctx, conn)?).conn.status() }))
 }
 
@@ -283,7 +283,10 @@ pub(crate) unsafe fn status<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn error_message<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, VmFault> {
+pub(crate) unsafe fn error_message<M: Mode>(
+    ctx: &mut Ctx<M>,
+    conn: Word,
+) -> Result<Word, RunFault> {
     let message = unsafe { (*tls_conn(ctx, conn)?).conn.error_message() };
     Ok(ctx.fresh_string(&message))
 }
@@ -301,7 +304,7 @@ fn ready_line(c: &mut TlsConn) -> Line {
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn line_ready<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, VmFault> {
+pub(crate) unsafe fn line_ready<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
     Ok(match ready_line(c) {
         Line::More => 0,
@@ -315,16 +318,16 @@ pub(crate) unsafe fn line_ready<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn take_line<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, VmFault> {
+pub(crate) unsafe fn take_line<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
     let Line::Ready(n) = ready_line(c) else {
-        return Err(VmFault::Internal(
+        return Err(RunFault::Internal(
             "Std.Tls.take_line runs without a ready line",
         ));
     };
     // `line_state` が UTF-8 であることを確かめた
     let text = std::str::from_utf8(&c.conn.plaintext()[..n])
-        .map_err(|_| VmFault::Internal("Std.Tls.take_line found a line that is not UTF-8"))?;
+        .map_err(|_| RunFault::Internal("Std.Tls.take_line found a line that is not UTF-8"))?;
     let w = ctx.fresh_string(text);
     c.consume(n);
     Ok(w)
@@ -496,7 +499,7 @@ mod on_tests {
         let mut ctx = cells::test_ctx();
         let client = new_client(&mut ctx);
         let b = unsafe { ctx.heap_mut() }.alloc_bytes(b"x");
-        let Err(VmFault::Internal(m)) = (unsafe { push_tls(&mut ctx, b, client) }) else {
+        let Err(RunFault::Internal(m)) = (unsafe { push_tls(&mut ctx, b, client) }) else {
             panic!("push_tls during the handshake did not fail");
         };
         assert_eq!(m, "Std.Tls.push_tls runs during the handshake");

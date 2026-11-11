@@ -4,14 +4,14 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering::SeqCst};
 
-use crate::error::VmFault;
+use crate::error::RunFault;
 
 /// 塊 b は `FIRST << b` 個の項を持つ。
 const FIRST: usize = 64;
 /// 塊の数。合わせて `FIRST * (2^26 - 1)` 個の項を持つ。
 const BUCKETS: usize = 26;
-const FULL: VmFault = VmFault::Internal("the counter table is full");
-const OUT: VmFault = VmFault::Internal("a counter index is out of range");
+const FULL: RunFault = RunFault::Internal("the counter table is full");
+const OUT: RunFault = RunFault::Internal("a counter index is out of range");
 
 pub(crate) struct Counters {
     /// 次に渡す添字。`push` だけが進める。
@@ -38,7 +38,7 @@ fn locate(i: usize) -> Option<(usize, usize)> {
 
 impl Counters {
     /// 新しい項に `n` を置いて、その添字を返す。
-    pub(crate) fn push(&self, n: i64) -> Result<i64, VmFault> {
+    pub(crate) fn push(&self, n: i64) -> Result<i64, RunFault> {
         let i = self.len.fetch_add(1, SeqCst);
         let (b, o) = locate(i).ok_or(FULL)?;
         let bucket = self
@@ -52,7 +52,7 @@ impl Counters {
 
     /// 添字の範囲は塊があるかで確かめ、`len` は読まない。作っていない塊の添字は表の外である。検査を通ったプログラムは
     /// 渡された添字しか持たないので、ここへは届かない。
-    fn slot(&self, c: i64) -> Result<&AtomicI64, VmFault> {
+    fn slot(&self, c: i64) -> Result<&AtomicI64, RunFault> {
         let (b, o) = usize::try_from(c).ok().and_then(locate).ok_or(OUT)?;
         self.buckets
             .get(b)
@@ -62,15 +62,15 @@ impl Counters {
     }
 
     /// `n` を足して、足した後の値を返す。64 ビットで巻き戻る。
-    pub(crate) fn add(&self, c: i64, n: i64) -> Result<i64, VmFault> {
+    pub(crate) fn add(&self, c: i64, n: i64) -> Result<i64, RunFault> {
         Ok(self.slot(c)?.fetch_add(n, SeqCst).wrapping_add(n))
     }
 
-    pub(crate) fn load(&self, c: i64) -> Result<i64, VmFault> {
+    pub(crate) fn load(&self, c: i64) -> Result<i64, RunFault> {
         Ok(self.slot(c)?.load(SeqCst))
     }
 
-    pub(crate) fn store(&self, c: i64, n: i64) -> Result<(), VmFault> {
+    pub(crate) fn store(&self, c: i64, n: i64) -> Result<(), RunFault> {
         self.slot(c)?.store(n, SeqCst);
         Ok(())
     }
@@ -80,8 +80,8 @@ impl Counters {
 mod tests {
     use super::*;
 
-    fn is_out<T>(r: Result<T, VmFault>) -> bool {
-        matches!(r, Err(VmFault::Internal(m)) if m == "a counter index is out of range")
+    fn is_out<T>(r: Result<T, RunFault>) -> bool {
+        matches!(r, Err(RunFault::Internal(m)) if m == "a counter index is out of range")
     }
 
     #[test]

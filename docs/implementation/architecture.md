@@ -374,7 +374,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `eml_io` は `eml_rt` の `IoDriver` を実装する2つの driver を持つ。`real.rs` の `RealDriver` は本物の driver で、OS を呼ばない核 `driver::Driver` を OS ごとの backend `sys::Os` の上で動かす包みである。backend の時計は単調な時計 (`Instant`) で、driver は内部の刻みを持たない。`test.rs` の `TestDriver` はテストの driver で、仮想の時計、`test/net.rs` の仮想のネットワーク (メモリの上の端、リスナー、ポート)、seed で混ぜる決着の順、`submit` の中で終えた操作の数 (`immediate()`) を持つ ([VM](../spec/vm.md) の「時計と driver」)
 - feature `tls` のときだけ組む `test/tls.rs` は、テストの driver の TLS の終端器である。`tls.localhost` と `tls-cut.localhost` への接続ごとに `eml_tls::Conn` のサーバーを1つ持ち、決着の始めに汲む。仮想のネットワークに足したのは、ポートを振った端の対を作る `Network::pair` だけで、端の表には `test` の子のモジュールとして触れる。`eml_io` の `src/` で `eml_tls` を参照するのはこのファイルだけである
 - driverは`Word`、`Ctx`、RCに触れず、記憶には`RawBuf`を通してだけ届く。そのため`eml_io`は`eml_vm`を知らずに組み立てられる。どちらのdriverを使うかは`eml_sched`の`Clock`が決める
-- `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `VmFault::Driver` で終える
+- `RealDriver::new` は `io::Result` を返す。`eml_vm` は driver を最初の run で作り、作れなければその run を `RunFault::Driver` で終える
 - `RealDriver::new_at(epoch)` と `TestDriver::new_shared(seed, clock)` は、run の時間の基準を共有する driver を作る。`eml_vm` は本物の時計の run の worker 1..N-1 の driver を前者で作り、どの worker の driver も同じ時刻を読む。仮想の時計は run に1つの数を後者に渡す ([VM](../spec/vm.md) の「時計と driver」)
 - 本物の driver の受けは、受けたソケットを登録せずに `Done::Accepted` の `RawSocket` で返し、`IoDriver::adopt` がソケットを自分の driver に取り込む。受けたストリームを、受けたリスナーと違う worker の driver に縛るためである。テストの driver の `adopt` は通常のファイルだけ取り込み、ソケットとパイプは断る。受けはいつも `Done::Stream` で終える ([VM](../spec/vm.md) の「時計と driver」)
 - `RealDriver::with_lookup(lookup)` は、名前の解決の関数を差し替えた driver を作る。テストと組み込み先のためで、テストは機械の `/etc/hosts` に頼らない。`RealDriver::new` は `sys::lookup` (std の解決器) を使う

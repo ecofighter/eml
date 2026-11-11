@@ -10,7 +10,7 @@ use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::{Ctx, Mode, Word};
 
 use crate::cells::{CellRef, Raise};
-use crate::error::VmFault;
+use crate::error::RunFault;
 use crate::sched::{Policy, Scheduler};
 
 /// GUIを開けないときの文言 (docs/spec/stdlib.mdの「`Std.Gui`」)。
@@ -24,8 +24,8 @@ fn not_available() -> Raise {
 }
 
 /// 腕がIOの失敗として起こす誤り。`failed`が`try_io`に届ける。
-fn raised(kind: i64, message: &str) -> VmFault {
-    VmFault::Extern(Fault::Raised(Box::new(Raised {
+fn raised(kind: i64, message: &str) -> RunFault {
+    RunFault::Extern(Fault::Raised(Box::new(Raised {
         kind,
         message: message.into(),
     })))
@@ -33,7 +33,7 @@ fn raised(kind: i64, message: &str) -> VmFault {
 
 /// `Std.Gui.abandon_raw`。開く前に取り消されたタスクのゲートを放す。開きかけの印も下ろすので、次の`want_gui_raw`は
 /// 開ける。
-pub(crate) fn abandon<P: Policy>(sched: &mut Scheduler<P>, gate: i64) -> Result<(), VmFault> {
+pub(crate) fn abandon<P: Policy>(sched: &mut Scheduler<P>, gate: i64) -> Result<(), RunFault> {
     let cleared = forget_opening(gate);
     sched.cells.lock().release_gate(gate)?;
     if cleared {
@@ -70,7 +70,7 @@ mod off {
     pub(crate) enum UiToken {}
 
     /// `Std.Gui.want_gui_raw`。いつも`NotAvailable`で失敗する。
-    pub(crate) fn want<P: Policy>(_: &mut Scheduler<P>) -> Result<Result<i64, Raise>, VmFault> {
+    pub(crate) fn want<P: Policy>(_: &mut Scheduler<P>) -> Result<Result<i64, Raise>, RunFault> {
         Ok(Err(not_available()))
     }
 
@@ -80,7 +80,7 @@ mod off {
         sched: &mut Scheduler<P>,
         gate: i64,
         _: Option<CellRef>,
-    ) -> Result<Result<Word, Raise>, VmFault> {
+    ) -> Result<Result<Word, Raise>, RunFault> {
         sched.cells.lock().release_gate(gate)?;
         Ok(Err(not_available()))
     }
@@ -102,9 +102,9 @@ mod off {
         _: &mut Ctx<M>,
         _: Extern,
         _: &[Word],
-    ) -> Result<Word, VmFault> {
+    ) -> Result<Word, RunFault> {
         let _ = raised;
-        Err(VmFault::Internal("a Std.Gui row runs without the GUI"))
+        Err(RunFault::Internal("a Std.Gui row runs without the GUI"))
     }
 }
 
@@ -459,7 +459,9 @@ mod on {
 
     /// `Std.Gui.want_gui_raw`。ゲートを開いて開きかけの印にする。本物の時計では、ネイティブのループがその源を待てる
     /// ように、メインのworkerのdriverをここで作る。
-    pub(crate) fn want<P: Policy>(sched: &mut Scheduler<P>) -> Result<Result<i64, Raise>, VmFault> {
+    pub(crate) fn want<P: Policy>(
+        sched: &mut Scheduler<P>,
+    ) -> Result<Result<i64, Raise>, RunFault> {
         let Some(slot) = current_slot() else {
             return Ok(Err(not_available()));
         };
@@ -487,13 +489,13 @@ mod on {
         sched: &mut Scheduler<P>,
         gate: i64,
         task: Option<CellRef>,
-    ) -> Result<Result<Word, Raise>, VmFault> {
+    ) -> Result<Result<Word, Raise>, RunFault> {
         let Some(slot) = current_slot() else {
             sched.cells.lock().release_gate(gate)?;
             return Ok(Err(not_available()));
         };
         if slot.opening.get() != Some(gate) {
-            return Err(VmFault::Internal(
+            return Err(RunFault::Internal(
                 "open_ui_raw names a gate that is not opening",
             ));
         }
@@ -506,7 +508,7 @@ mod on {
             return Ok(Err(Raise::Io { kind, message }));
         }
         if slot.ui.borrow().is_some() {
-            return Err(VmFault::Internal(
+            return Err(RunFault::Internal(
                 "a Ui opens before the last one is reaped",
             ));
         }
@@ -516,7 +518,7 @@ mod on {
                 parts.queue.clone(),
                 slot.last_window.get(),
             ),
-            None => return Err(VmFault::Internal("open_ui_raw runs without a backend")),
+            None => return Err(RunFault::Internal("open_ui_raw runs without a backend")),
         };
         *slot.toolkit.borrow_mut() = Some(toolkit);
         slot.set_presence(true);
@@ -582,12 +584,12 @@ mod on {
     ///
     /// # Safety
     /// `w`は呼ぶ側が持つ生きた文字列である。
-    unsafe fn text<M: Mode>(ctx: &Ctx<M>, w: Word) -> Result<String, VmFault> {
+    unsafe fn text<M: Mode>(ctx: &Ctx<M>, w: Word) -> Result<String, RunFault> {
         Ok(unsafe { (*ctx.heap().string(w)?).to_owned() })
     }
 
     /// `"a" | "f<n>" | "p<n>"`を`,`で並べた列。数が範囲の外なら`OutOfRange`である。
-    fn tracks(text: &str) -> Result<Result<Vec<Track>, GuiError>, VmFault> {
+    fn tracks(text: &str) -> Result<Result<Vec<Track>, GuiError>, RunFault> {
         let mut out = Vec::new();
         for t in text.split(',').filter(|t| !t.is_empty()) {
             let (tag, n) = t.split_at(1);
@@ -602,7 +604,7 @@ mod on {
                     Err(_) => return Ok(Err(GuiError::OutOfRange)),
                 },
                 _ => {
-                    return Err(VmFault::Internal(
+                    return Err(RunFault::Internal(
                         "a Std.Gui track is not `a`, `f<n>` or `p<n>`",
                     ));
                 }
@@ -642,7 +644,7 @@ mod on {
         ctx: &mut Ctx<M>,
         ext: Extern,
         args: &[Word],
-    ) -> Result<Word, VmFault> {
+    ) -> Result<Word, RunFault> {
         let ui = args[ext.row().params.len() - 1];
         if ext == Extern::GuiCloseUi {
             unsafe { ctx.heap_mut().decref(ui) }?;
@@ -673,7 +675,7 @@ mod on {
         ext: Extern,
         args: &[Word],
         ui: Word,
-    ) -> Result<Result<Word, GuiError>, VmFault> {
+    ) -> Result<Result<Word, GuiError>, RunFault> {
         let generation = unsafe { (*ctx.heap().foreign::<UiToken>(ui)?).generation };
         let Some(slot) = current_slot() else {
             let (kind, message) = (externs::IO_NOT_AVAILABLE, NOT_AVAILABLE);
@@ -685,13 +687,13 @@ mod on {
             .as_ref()
             .is_none_or(|state| state.generation != generation)
         {
-            return Err(VmFault::Internal("a Std.Gui.Ui names a closed GUI"));
+            return Err(RunFault::Internal("a Std.Gui.Ui names a closed GUI"));
         }
         let raw = |i: usize| args[i].bits() as i64;
         let mut guard = slot.toolkit.borrow_mut();
         let toolkit = guard
             .as_mut()
-            .ok_or(VmFault::Internal("an open Ui has no toolkit"))?;
+            .ok_or(RunFault::Internal("an open Ui has no toolkit"))?;
         let same = Ok(ui);
         let done: Result<Word, GuiError> = match ext {
             Extern::GuiBeginWindowRaw => {
@@ -726,7 +728,7 @@ mod on {
                     4 => Init::CheckBox(s, n != 0),
                     5 => Init::Choice,
                     6 => Init::ProgressBar(n),
-                    _ => return Err(VmFault::Internal("create_raw names no widget kind")),
+                    _ => return Err(RunFault::Internal("create_raw names no widget kind")),
                 };
                 toolkit.create(init).map(|w| int(w.0 as i64))
             }
@@ -744,7 +746,7 @@ mod on {
                     1 => Prop::Value(v),
                     2 => Prop::Checked(v != 0),
                     3 => Prop::Enabled(v != 0),
-                    _ => return Err(VmFault::Internal("set_int_raw names no property")),
+                    _ => return Err(RunFault::Internal("set_int_raw names no property")),
                 };
                 toolkit.set(id(args[0]), prop).and(same)
             }
@@ -764,7 +766,7 @@ mod on {
                 Some(Event::Toggle(_, b)) => Ok(int(i64::from(*b))),
                 Some(Event::Select(_, i)) => Ok(int(*i)),
                 _ => {
-                    return Err(VmFault::Internal(
+                    return Err(RunFault::Internal(
                         "event_int_raw reads an event without an Int",
                     ));
                 }
@@ -772,13 +774,13 @@ mod on {
             Extern::GuiEventTextRaw => match &*slot.event.borrow() {
                 Some(Event::Text(_, s)) => Ok(ctx.fresh_string(s)),
                 _ => {
-                    return Err(VmFault::Internal(
+                    return Err(RunFault::Internal(
                         "event_text_raw reads an event without a String",
                     ));
                 }
             },
             _ => {
-                return Err(VmFault::Internal(
+                return Err(RunFault::Internal(
                     "a row outside Std.Gui reached the GUI arm",
                 ));
             }

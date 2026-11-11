@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eml_cli::{
-    CaptureHost, Clock, Control, Finished, FsProvider, Limits, RunConfig, RunStats, RuntimeError,
-    Sched, Session, Signal, VirtualSignal, VmFault, default_limits, execute,
+    CaptureHost, Clock, Control, Finished, FsProvider, Limits, RunConfig, RunFault, RunStats,
+    RuntimeError, Sched, Session, Signal, VirtualSignal, default_limits, execute,
 };
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
@@ -634,7 +634,7 @@ fn fast_mode_reports(error: &RuntimeError) -> bool {
         error,
         RuntimeError::Leak(_)
             | RuntimeError::Fault {
-                fault: VmFault::Internal(_) | VmFault::Extern(Fault::Heap(_)),
+                fault: RunFault::Internal(_) | RunFault::Extern(Fault::Heap(_)),
                 ..
             }
     )

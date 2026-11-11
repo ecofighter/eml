@@ -2,7 +2,7 @@
 //! (docs/spec/core-ir.md の「evidence passing」と docs/spec/lir.md の「基本操作」)。
 
 use eml_rt::{Fault, HeapError};
-use eml_vm::{RuntimeError, VmFault};
+use eml_vm::{RunFault, RuntimeError};
 
 use crate::common::run_lir;
 
@@ -241,7 +241,7 @@ fn a_dummy_passes_through_box_unbox_dup_and_decref() {
     assert_eq!(run_lir(DUMMY), (String::new(), Ok(())));
 }
 
-fn fault(fault: VmFault) -> RuntimeError {
+fn fault(fault: RunFault) -> RuntimeError {
     RuntimeError::Fault {
         fault,
         function: "main".to_string(),
@@ -252,11 +252,11 @@ fn fault(fault: VmFault) -> RuntimeError {
 const LEFT_AT_END: &str = "the evidence list or a yield is left at the end";
 
 fn heap_fault(error: HeapError) -> RuntimeError {
-    fault(VmFault::Extern(Fault::Heap(error)))
+    fault(RunFault::Extern(Fault::Heap(error)))
 }
 
 fn internal_error(what: &'static str) -> RuntimeError {
-    fault(VmFault::Internal(what))
+    fault(RunFault::Internal(what))
 }
 
 /// 終わりに残る `evv` や yield は VM が `Ctx::check_finished` で見つけ、誤りの種類は分けない。

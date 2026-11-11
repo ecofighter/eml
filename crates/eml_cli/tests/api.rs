@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_cli::{
     Capture, Control, FsProvider, HostRef, Limits, Linker, MemorySource, ModulePath, ModuleSource,
-    Outcome, ReadError, Repl, RunConfig, RuntimeError, Session, SourceLocation, Stop, VmFault,
+    Outcome, ReadError, Repl, RunConfig, RunFault, RuntimeError, Session, SourceLocation, Stop,
     capture_host, execute,
 };
 use eml_diagnostics::{Diagnostic, has_errors};
@@ -763,7 +763,7 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
             matches!(
                 error,
                 RuntimeError::Fault {
-                    fault: VmFault::Extern(Fault::Stopped(Stop::Interrupted)),
+                    fault: RunFault::Extern(Fault::Stopped(Stop::Interrupted)),
                     ..
                 }
             ),
@@ -775,7 +775,7 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
             matches!(
                 error,
                 RuntimeError::Fault {
-                    fault: VmFault::Stopped(Stop::Interrupted),
+                    fault: RunFault::Stopped(Stop::Interrupted),
                     ..
                 }
             ),
@@ -1231,7 +1231,7 @@ fn a_result_that_cannot_be_written_fails_at_the_input() {
     assert_eq!(
         error,
         RuntimeError::Fault {
-            fault: VmFault::Extern(Fault::Output("the pipe is closed".into())),
+            fault: RunFault::Extern(Fault::Output("the pipe is closed".into())),
             function: "<repl>".to_string(),
             at: Some(SourceLocation {
                 path: "<input 2>".to_string(),

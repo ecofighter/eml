@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use eml_rt::Checked;
-use eml_vm::{Clock, Control, Limits, Machine, RunConfig, RuntimeError, Seat, VmFault};
+use eml_vm::{Clock, Control, Limits, Machine, RunConfig, RunFault, RuntimeError, Seat};
 
 use crate::common::{RecordingHost, parse};
 
@@ -20,7 +20,7 @@ fn control() -> Arc<Control> {
 fn internal(result: Result<eml_vm::Finished, RuntimeError>) -> &'static str {
     match result {
         Err(RuntimeError::Fault {
-            fault: VmFault::Internal(what),
+            fault: RunFault::Internal(what),
             ..
         }) => what,
         other => panic!("not an internal error: {other:?}"),

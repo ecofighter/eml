@@ -13,7 +13,7 @@ use eml_rt::{Ctx, Kind, Mode, PagePin, Word};
 
 use crate::cells::{self, JobSource};
 use crate::code::CodeBase;
-use crate::error::VmFault;
+use crate::error::RunFault;
 use crate::op::Slot;
 use crate::vm::{Exec, PANICKED, Task, abort_to, failed, io_kind};
 
@@ -102,7 +102,7 @@ fn marshal<M: Mode>(
     task: &Task,
     function: &CFunction,
     slots: &[u32],
-) -> Result<Result<Vec<u64>, Raise>, VmFault> {
+) -> Result<Result<Vec<u64>, Raise>, RunFault> {
     if let Some(why) = narrowing(task, function, slots) {
         return Ok(Err(why));
     }
@@ -176,7 +176,7 @@ fn job_args<M: Mode>(
     task: &Task,
     function: &CFunction,
     slots: &[u32],
-) -> Result<Result<Vec<Arg>, Raise>, VmFault> {
+) -> Result<Result<Vec<Arg>, Raise>, RunFault> {
     if let Some(why) = narrowing(task, function, slots) {
         return Ok(Err(why));
     }
@@ -244,7 +244,7 @@ pub(crate) fn unmarshal<M: Mode>(
     ctx: &mut Ctx<M>,
     function: &CFunction,
     ret: u64,
-) -> Result<Result<Out, Raise>, VmFault> {
+) -> Result<Result<Out, Raise>, RunFault> {
     Ok(Ok(match function.ret {
         CRet::Void => Out::Word(Word::UNIT),
         // 橋渡しは `int32_t` の結果の符号を広げて返し、`size_t` の結果は読み替えたままにする
@@ -270,7 +270,7 @@ pub(crate) fn call<R: Exec>(
     task: &mut Task,
     dst: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let entry = &code.c_functions[ops[0] as usize];
     let slots = &ops[2..2 + ops[1] as usize];
@@ -301,7 +301,7 @@ pub(crate) fn job<R: Exec>(
     task: &mut Task,
     dst: Slot,
     at: u32,
-) -> Result<Option<(JobSource, eml_rt::Op)>, VmFault> {
+) -> Result<Option<(JobSource, eml_rt::Op)>, RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let c = ops[0];
     let entry = &code.c_functions[c as usize];
@@ -358,14 +358,14 @@ pub(crate) fn take<R: Exec>(
     shared: &cells::Shared,
     dst: Slot,
     at: u32,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let c = ops[0];
     let entry = &code.c_functions[c as usize];
     let (token, wake) = (task.raw(ops[2] as Slot), task.raw(ops[3] as Slot));
     let taken = cells::take_job(shared, ctx, token, task.worker)?;
     if taken.from != JobSource::C(c) {
-        return Err(VmFault::Internal("an op is taken by another function"));
+        return Err(RunFault::Internal("an op is taken by another function"));
     }
     let function = &entry.function;
     let result = match taken.answer::<CAnswer>()? {
@@ -408,11 +408,11 @@ pub(crate) fn take<R: Exec>(
             }));
             failed::<R>(code, ctx, task, dst, fault, Purity::Effectful)
         }
-        _ => Err(VmFault::Internal("an op is taken with another wake")),
+        _ => Err(RunFault::Internal("an op is taken with another wake")),
     }
 }
 
-const MISMATCH: VmFault = VmFault::Internal("a blocking call's copy does not match its array");
+const MISMATCH: RunFault = RunFault::Internal("a blocking call's copy does not match its array");
 
 /// `MutUnboxedArray`の写し`back`を、取り出しの物体の引数`objects`のうち`MutUnboxedArray`のものに、引数の順に
 /// 組にして書き戻す。`None`はCがその場で書いた貸した配列なので、飛ばす。
@@ -422,7 +422,7 @@ fn write_back<M: Mode>(
     function: &CFunction,
     objects: &[u32],
     back: Vec<Option<Box<[u64]>>>,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let params = function.params.iter().filter(|param| {
         matches!(
             param,
@@ -461,14 +461,14 @@ fn raise<R: Exec>(
     dst: Slot,
     function: &CFunction,
     why: Raise,
-) -> Result<(), VmFault> {
+) -> Result<(), RunFault> {
     let text = why.text(function);
     if abort_to::<R, _>(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |ctx| {
         [ctx.fresh_string(&text)]
     })? {
         return Ok(());
     }
-    Err(VmFault::Panicked(text))
+    Err(RunFault::Panicked(text))
 }
 
 fn write_out(task: &mut Task, dst: Slot, out: Out) {
