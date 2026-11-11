@@ -24,6 +24,8 @@ pub const WORKER_STACK: usize = 1 << 30;
 pub const STACK_HARD_MARGIN: usize = 1 << 20;
 /// `hard`から、ふつうに動くときの上限`real`までのバイト数。VMの余白の2^18語をバイトにしたものである。
 pub const LIMIT_HEADROOM_BYTES: usize = 2 << 20;
+/// runの唯一のworkerの番号。止める語もこの番号のものを読む。
+pub(crate) const WORKER: usize = 0;
 
 fn fault(fault: RunFault) -> RuntimeError {
     RuntimeError::Fault {
@@ -75,7 +77,7 @@ unsafe fn on_worker(
     options: Options,
 ) -> Result<Finished, RuntimeError> {
     let top = arch::stack_pointer();
-    let mut ctx = Ctx::<Fast>::for_worker(Arc::clone(control), host, 0);
+    let mut ctx = Ctx::<Fast>::for_worker(Arc::clone(control), host, WORKER);
     // スタックポインタから予約の大きさを引いた値は、本当の`base`より、この関数の上にあるフレームの分だけ低いことが
     // ある。その差は余白に収まる。上限を置くのはここの1回だけである (docs/spec/native.md の「安全点」)
     let base = top.saturating_sub(options.stack);

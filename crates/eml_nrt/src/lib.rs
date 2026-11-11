@@ -9,6 +9,7 @@ mod enter;
 mod entries;
 pub mod image;
 pub mod run;
+mod services;
 #[cfg(test)]
 mod trust;
 pub mod worker;
@@ -24,9 +25,10 @@ pub use enter::{
     eml_fatal, enter,
 };
 pub use entries::{Entry, Kind};
+pub use services::{eml_nrt_failed, eml_nrt_safepoint};
 
 /// エントリの表。エントリを宣言するmoduleは、自分の表をここに並べる (docs/spec/native.md の「記述子の表」)。
-const TABLES: &[&[Entry]] = &[enter::ENTRIES];
+const TABLES: &[&[Entry]] = &[enter::ENTRIES, services::SERVICES];
 
 /// 生成したコードが呼べるすべてのエントリ。
 pub fn entries() -> impl Iterator<Item = &'static Entry> {

@@ -118,7 +118,8 @@ workerの構造体 (`eml_nrt::worker::Worker`) は、runが`Ctx`の外に持つ�
 
 - `worker::record`、`worker::park_panic`と、`ctx.runtime`からworkerの構造体を得る関数は`unsafe fn`である。前提は、`ctx`が`run`の`enter`の中にあり、`ctx.runtime()`がそのrunの`Worker`を指すことである。`Ctx::set_runtime`は安全な関数で、ほかのコードも任意のポインタを置けるためである
 - `worker::record(ctx, fault, at) -> Fatal`は`RuntimeError::Fault`を作る。関数の名前は、`at.function`をコードの範囲に含む`FnRow`から、位置はその地点`at.site`から取る。位置のない地点なら位置はなく、`at`がないか、アドレスがどの行にもなければ、関数は`<native code>`である。作った誤りをworkerの構造体へ移し、`Fatal { code: FATAL_RECORDED, site: 0 }`を返す。誤りは`Err`が`shim`に届く前に移す。致命的な誤りのlongjmpは、デストラクタを持つ値を持たないフレームしかまたがないためである
-- `worker::park_panic(ctx, message)`は、メッセージの語をworkerの構造体に置き、`Fault::Engine`を`set_fault`で`ctx`に置く。だから中身が`Fault`でもエンジンの持つものでも、`ctx.native.fault`が0でないのは、ちょうど失敗を置いている間である
+- workerの構造体を使うエントリ (`eml_nrt_*`のサービスと、`worker::record`か`worker::park_panic`を呼ぶ行) は、`run`が`enter`で入ったコードからだけ呼べる。`ctx.runtime()`がそのrunの`Worker`を指すのは、そこだけだからである。ほかの`runtime`を置いて`enter`を直接呼ぶテストは、これらのエントリに届いてはならない
+- `worker::park_panic(ctx, message)`は、メッセージの語をworkerの構造体に置き、`Fault::Engine`を`set_fault`で`ctx`に置く。だから中身が`Fault`でもエンジンの持つものでも、`ctx.native.fault`が0でないのは、ちょうど失敗を置いている間である。呼ぶ側は次を約束する。`message`は、この`ctx`のヒープか、それに付けた塊の生きている文字列である。呼ぶ側の持つ参照1つがworkerの構造体へ移り、呼ぶ側はその後この語を使わず手放さない。失敗を置いていない (破ると前の語が漏れるが、未定義の動作にはならない)。語を取り出したサービスがその参照を持ち、手放す。runの終わりに置いたままの語は手放さない。ヒープはrunとともに終わるためである
 
 censusは、VMの検査モードに代わる、参照の数の安全網である。`Census::Check`のrunが成功したら、ほかのスレッドから受けた解放を取り込み (`reclaim`)、workerのヒープの生きている物体を列挙し (`Heap::live_objects`)、不死でない物体 (`Heap::is_immortal`) を種類の名前ごとに数える。ダミーや定数のような不死の物体は数えない。数が空でなければ`RuntimeError::Leak`で、`memory leak: objects were not freed: 1 Data`と表示する。テストのネイティブのrunは、どれもcensusで終わる。
 
@@ -128,6 +129,24 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 - workerのスタックの最も低いアドレスを`base` (スレッドの始めのスタックポインタから予約の大きさを引いた値) として、`hard = base + STACK_HARD_MARGIN` (1 MiB)、`real = hard + LIMIT_HEADROOM_BYTES` (2 MiB。VMの余白の2^18語をバイトにしたもの) とする。3つの定数は`crates/eml_nrt/src/run.rs`で1回だけ定める。そのときのスタックポインタはスタックの最も高い所より少し下にあるので、求めた`base`は本当の値より、その上にあるフレームの分だけ低いことがある。その差は余白に収まる。局所変数のアドレスでなくスタックポインタを読むのは、アドレスを外に出す局所変数がAddressSanitizerの偽のスタックに移りうるためで、安全点が比べるのも同じスタックポインタである
 - 駆動はスレッドの始めに`stack_limit = real`を1回だけ置き、その後`eml_nrt`のどこもこれを書かない。`real`より下にはいつも3 MiBがあり、emlのフレーム1つと、実行系のどのエントリもそこに収まる。`hard`より下にはいつも1 MiBがある
 - ネイティブのコードは`Limits.max_depth`を読まない。深さの上限はworkerのスタックである (「VMとの違い」の1)
+- `max_bytes`と`soft_bytes`は、VMと同じく確保と止める語を通して働く。硬い上限を超えると`MEMORY`が立ち、次の安全点がそれでrunを止める
+
+入口の安全点の冷たい側は、サービス`eml_nrt_safepoint(ctx, function, ep_helper) -> action`である。`function`は呼んだ関数自身のコードのアドレスで、`ep_helper`はその関数がEPの補助の関数 (`eml_lir::ep_helper`) なら1、そうでなければ0である。
+
+- サービスは止める語を`Ctx::poll`で読む。知らせ (`Stop::Notice`) ではrunを止めない。サービスはworkerの語の`NOTICE`を下ろし、もう1度確かめる。ほかの止める理由は、関数の入口での`RunFault::Stopped(stop)`として記録し、致命的な誤りでrunを終える。止める理由の優先順位は`eml_rt`のもの (`stop_reason`) で、VMと同じである
+- 止めるビットが立っていなくても、サービス自身のスタックポインタが`stack_limit`より下にあれば、同じように`RunFault::Stopped(Stop::DepthLimit)`を記録する。サービスのスタックポインタは、サービス自身のフレームの分だけ呼んだ関数のものより下にある。だから`stack_limit`より下のフレームを続けさせることはないが、上限よりそのフレームの分以内だけ上にある呼び手について、上限を報告することはある。そのバイト数は`real`より下の3 MiBに収まる
+- どちらでもなければ`ACTION_CONTINUE`を返す。サービスはほかの行動を返さず、結果は`ep_helper`によらない
+- 関数の入口は、地点と同じ意味での場所で、関数のコードのアドレスと地点なしの組 (`At { function, site: None }`) で表す。そこで記録した誤りは関数を名指し、位置を持たない (``interrupted in `f` ``)。`eml_nrt_failed`のように地点の添字を語で渡す所では、入口は`ENTRY_SITE` (-1) である。関数の入口で失敗を上げるときは、`ENTRY_SITE`と`PURITY_EFFECTFUL`を渡す
+
+## externの失敗
+
+行が`ctx`に置いた失敗は、生成したコードがサービス`eml_nrt_failed(ctx, function, site, purity) -> action`で上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の`FnRow.sites`の中の地点の添字 (関数の入口なら`ENTRY_SITE`)、`purity`は失敗した行の純粋さである。`purity`の語は`PURITY_PURE` (0)、`PURITY_PANICS` (1)、`PURITY_EFFECTFUL` (2) で、`eml_extern::Purity`の宣言の順である。3つの定数は`ACTION_*`と同じく`eml_nrt::image`にある。debugのビルドでは、サービスは`purity`がこのどれかであることと、`site`が`ENTRY_SITE`か32ビットに収まる添字であることを確かめる。
+
+- サービスは置いたfaultを`ctx.take_fault()`で取り出す。だからサービスの後のfaultの語は0である
+- `Fault::Engine`は、中身をworkerの構造体が持つことを表す。サービスはメッセージの語をworkerの構造体から取り出し、文字列に写す (`copy_string`。語は手放す)。誤りは`RunFault::Panicked(text)`で、`panicked: <text>`と表示する。語は`park_panic`の約束により文字列なので、速いモードでは写すことは失敗しない。workerの構造体がメッセージを持たなければ、誤りは内部の誤り`a parked panic has no message`である
+- ほかのfaultは`RunFault::Extern(fault)`になる。何も置いていなければ、誤りは内部の誤り`a failure was raised with nothing parked`である
+- サービスは誤りを`At { function, site }`で`worker::record`により記録し、`FATAL_RECORDED`でrunを終える。だから誤りは地点の位置を持ち、地点が位置を持たなければ関数を名指す
+- 失敗を捕まえるハンドラはないので、上げた失敗はどれもrunを終える。サービスは`purity`を受けるが、結果はそれによらない
 
 ## 断る形
 

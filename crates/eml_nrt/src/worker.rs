@@ -17,6 +17,8 @@ pub struct Worker {
     /// `image.functions`の添字をコードのアドレスの順に並べたもの。アドレスから関数を探す冷たい道が使う。
     by_code: Vec<usize>,
     pub(crate) exit: Option<i64>,
+    /// 置いたpanicのメッセージの語。`Some(w)`なら、`w`は生きている文字列で、workerの構造体がその参照を1つ持つ。
+    /// 書くのは`park_panic`だけで、取り出した者がその参照を持つ。
     pub(crate) panic: Option<Word>,
     pub(crate) error: Option<RuntimeError>,
 }
@@ -121,7 +123,11 @@ pub unsafe fn record(ctx: &mut Ctx<Fast>, fault: RunFault, at: Option<At>) -> Fa
 /// `ctx.native.fault`が0でないのは、ちょうど失敗を置いている間である。
 ///
 /// # Safety
-/// `of`と同じ。
+/// - `of`と同じ
+/// - `message`は、この`ctx`のヒープか、それに付けた塊の生きている文字列である
+/// - 呼ぶ側は`message`の参照を1つ持ち、その参照はworkerの構造体へ移る。呼ぶ側はその後、この語を使わず手放さない
+/// - 失敗を置いていない。faultの語は0で、workerの構造体はメッセージを持たない。これを破ると前の語が漏れるが、
+///   未定義の動作にはならない
 pub unsafe fn park_panic(ctx: &mut Ctx<Fast>, message: Word) {
     // SAFETY: 呼ぶ側の約束
     let previous = unsafe { of(ctx) }.panic.replace(message);

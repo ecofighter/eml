@@ -24,6 +24,25 @@ eml_nrt::entries! {
         }
     }
 
+    plain fn eml_t_echo_ii_i(ctx, a: i64, b: i64) -> i64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe {
+            *out = a as u64;
+            *out.add(1) = b as u64;
+        }
+        -2
+    }
+
+    plain fn eml_t_echo_iii_i(ctx, a: i64, b: i64, c: i64) -> i64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe {
+            *out = a as u64;
+            *out.add(1) = b as u64;
+            *out.add(2) = c as u64;
+        }
+        -3
+    }
+
     plain fn eml_t_echo6(ctx, a: i64, b: f64, c: i64, d: f64, e: i64, f: f64) -> f64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         for (i, bits) in [a as u64, b.to_bits(), c as u64, d.to_bits(), e as u64, f.to_bits()]
@@ -204,6 +223,8 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
         assert_eq!(r, Ok(()), "{}", entry.symbol);
         assert_eq!(seen, sent, "{}", entry.symbol);
         match entry.symbol {
+            "eml_t_echo_ii_i" => assert_eq!(argv[0] as i64, -2),
+            "eml_t_echo_iii_i" => assert_eq!(argv[0] as i64, -3),
             "eml_t_echo6" => assert_eq!(f64::from_bits(argv[0]), -6.5),
             "eml_t_echo9" => assert_eq!(argv[0] as i64, -9),
             "eml_t_echo18" => assert_eq!(f64::from_bits(argv[0]), -18.5),
