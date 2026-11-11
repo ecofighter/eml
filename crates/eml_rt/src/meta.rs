@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use crate::layout::{HEADER_WORDS, META_BYTE, RC_BYTE, WORD_BYTES, slot_byte_offset};
 use crate::word::Word;
 use vstd::prelude::*;
 use vstd::raw_ptr::PointsTo;
@@ -151,7 +152,7 @@ pub struct Meta(u32);
 
 impl Meta {
     /// `scan` のこの値は、走査する語の数がペイロードの生の1語にあることを表す。
-    pub const EXTENDED_SCAN: u8 = 255;
+    pub(crate) const EXTENDED_SCAN: u8 = crate::layout::INLINE_SCAN_LIMIT as u8;
 
     const LIN: u32 = 1 << 31;
 
@@ -482,9 +483,6 @@ global layout Word is size == 8, align == 8;
 
 broadcast use {vstd::layout::layout_of_primitives, vstd::raw_ptr::group_raw_ptr_axioms};
 
-/// ヘッダの語の数。
-pub(crate) const HEADER_WORDS: usize = 1;
-
 /// `h` と同じ provenance で、番地を `off` バイトずらしたポインタ。
 pub(crate) open spec fn field_ptr<T>(h: *mut Header, off: int) -> *mut T {
     ptr_mut_from_data::<T>(
@@ -494,13 +492,13 @@ pub(crate) open spec fn field_ptr<T>(h: *mut Header, off: int) -> *mut T {
 
 /// ペイロードの i 語目の番地のずれ。
 pub(crate) open spec fn slot_offset(i: int) -> int {
-    8 * (HEADER_WORDS + i)
+    crate::layout::slot_offset_spec(i)
 }
 
 #[inline]
 pub(crate) fn rc_ptr(h: *mut Header) -> (p: *mut i32)
     ensures
-        p == field_ptr::<i32>(h, 0),
+        p == field_ptr::<i32>(h, RC_BYTE as int),
 {
     h as *mut i32
 }
@@ -508,11 +506,11 @@ pub(crate) fn rc_ptr(h: *mut Header) -> (p: *mut i32)
 #[inline]
 pub(crate) fn meta_ptr(h: *mut Header) -> (p: *mut u32)
     requires
-        h@.addr + 4 <= usize::MAX,
+        h@.addr + META_BYTE <= usize::MAX,
     ensures
-        p == field_ptr::<u32>(h, 4),
+        p == field_ptr::<u32>(h, META_BYTE as int),
 {
-    (h as *mut u32).with_addr(h.addr() + 4)
+    (h as *mut u32).with_addr(h.addr() + META_BYTE)
 }
 
 /// ペイロードの物理的な i 語目の位置。
@@ -523,7 +521,7 @@ pub(crate) fn slot_ptr(h: *mut Header, i: usize) -> (p: *mut Word)
     ensures
         p == field_ptr::<Word>(h, slot_offset(i as int)),
 {
-    (h as *mut Word).with_addr(h.addr() + 8 * (HEADER_WORDS + i))
+    (h as *mut Word).with_addr(h.addr() + slot_byte_offset(i))
 }
 
 /// 検査モードの前置きの2つの欄 (所有者 ID か不死の物体の数、状態と世代の番号) の位置。ヘッダの直前の1語にある。
@@ -635,7 +633,7 @@ pub(crate) open spec fn block_size(cap: nat, prefixed: bool) -> int {
         8int
     } else {
         0int
-    }) + 8 * (HEADER_WORDS + cap)
+    }) + crate::layout::slot_offset_spec(cap as int)
 }
 
 impl BlockPerm {
@@ -678,11 +676,13 @@ impl BlockPerm {
             assert(rest.dom() =~= Set::range(h@.addr as int, start + block_size(cap, prefixed)));
         }
         let hs = h@.addr as int;
-        let tracked (rc_raw, rest3) = rest.split(Set::range(hs, hs + 4));
-        let tracked (meta_raw, rest4) = rest3.split(Set::range(hs + 4, hs + 8));
-        assert(rest4.dom() =~= Set::range(hs + 8, hs + 8 + 8 * cap));
+        let tracked (rc_raw, rest3) = rest.split(Set::range(hs + RC_BYTE, hs + META_BYTE));
+        let tracked (meta_raw, rest4) = rest3.split(
+            Set::range(hs + META_BYTE, hs + slot_offset(0)),
+        );
+        assert(rest4.dom() =~= Set::range(hs + slot_offset(0), hs + slot_offset(cap as int)));
         let tracked rc = rc_raw.into_typed::<i32>(h@.addr);
-        let tracked meta = meta_raw.into_typed::<u32>((hs + 4) as usize);
+        let tracked meta = meta_raw.into_typed::<u32>((hs + META_BYTE) as usize);
         let tracked slots = Self::slots_from_raw(rest4, h, 0, cap);
         BlockPerm { rc, meta, slots, prefix, text: Text { bytes: Seq::empty() } }
     }
@@ -696,7 +696,7 @@ impl BlockPerm {
     ) -> (tracked r: Map<int, PointsTo<Word>>)
         requires
             from <= cap,
-            raw.is_range(h@.addr + slot_offset(from as int), 8 * (cap - from)),
+            raw.is_range(h@.addr + slot_offset(from as int), WORD_BYTES * (cap - from)),
             raw.provenance() == h@.provenance,
             h@.addr % 8 == 0,
             h@.addr + slot_offset(cap as int) <= usize::MAX + 1,
@@ -712,8 +712,11 @@ impl BlockPerm {
         } else {
             let a = h@.addr + slot_offset(from as int);
             lemma_align(h@.addr as int, HEADER_WORDS + from);
-            let tracked (one, rest) = raw.split(Set::range(a, a + 8));
-            assert(rest.dom() =~= Set::range(a + 8, a + 8 + 8 * (cap - from - 1)));
+            let tracked (one, rest) = raw.split(Set::range(a, a + WORD_BYTES));
+            assert(rest.dom() =~= Set::range(
+                a + WORD_BYTES,
+                a + WORD_BYTES + WORD_BYTES * (cap - from - 1),
+            ));
             let tracked word = one.into_typed::<Word>(a as usize);
             let tracked mut r = Self::slots_from_raw(rest, h, from + 1, cap);
             r.tracked_insert(from as int, word);
@@ -744,7 +747,7 @@ impl BlockPerm {
         let tracked raw = rc.into_raw().join(meta.into_raw());
         let tracked words = Self::slots_into_raw(slots, h, 0, cap);
         let tracked raw = raw.join(words);
-        assert(raw.dom() =~= Set::range(hs, hs + 8 + 8 * cap));
+        assert(raw.dom() =~= Set::range(hs, hs + slot_offset(cap as int)));
         if prefixed {
             let tracked PrefixPerm { first: mut first, state: mut state } = prefix.tracked_unwrap();
             first.leak_contents();
@@ -778,7 +781,7 @@ impl BlockPerm {
             h@.addr % 8 == 0,
             h@.addr + slot_offset(cap as int) <= usize::MAX + 1,
         ensures
-            r.is_range(h@.addr + slot_offset(from as int), 8 * (cap - from)),
+            r.is_range(h@.addr + slot_offset(from as int), WORD_BYTES * (cap - from)),
             r.provenance() == h@.provenance,
         decreases cap - from,
     {
@@ -795,9 +798,9 @@ impl BlockPerm {
             let tracked rest = Self::slots_into_raw(slots, h, from + 1, cap);
             assert(word.ptr()@.addr == a);
             let tracked one = word.into_raw();
-            assert(one.dom() =~= Set::range(a, a + 8));
+            assert(one.dom() =~= Set::range(a, a + WORD_BYTES));
             let tracked r = one.join(rest);
-            assert(r.dom() =~= Set::range(a, a + 8 * (cap - from)));
+            assert(r.dom() =~= Set::range(a, a + WORD_BYTES * (cap - from)));
             r
         }
     }
@@ -865,7 +868,10 @@ impl BlockPerm {
 
 } // verus!
 
-const _: () = assert!(HEADER_WORDS * 8 == size_of::<Header>());
+const _: () = assert!(HEADER_WORDS * WORD_BYTES == size_of::<Header>());
+const _: () = assert!(std::mem::offset_of!(Header, rc) == RC_BYTE);
+const _: () = assert!(std::mem::offset_of!(Header, meta) == META_BYTE);
+const _: () = assert!(WORD_BYTES == size_of::<Word>());
 
 #[cfg(test)]
 mod tests {

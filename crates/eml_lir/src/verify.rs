@@ -982,9 +982,13 @@ impl<'a> Checker<'a> {
         let what = format!("a con of `{}` #{}", layout.name, ctor.tag);
         let token_name = self.cx.name(token);
         let words = |words: Option<u32>| {
-            words.map_or("255 or more scanned words".to_string(), |words| {
-                format!("{words} words")
-            })
+            words.map_or(
+                format!(
+                    "{} or more scanned words",
+                    crate::Shape::REUSE_SCANNED_LIMIT
+                ),
+                |words| format!("{words} words"),
+            )
         };
         match (shape.reuse_words(), from_shape.reuse_words()) {
             (Some(needed), Some(held)) if needed == held => {}

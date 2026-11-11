@@ -16,9 +16,8 @@ use crate::alloc::{FIRST_BLOCK, FREE_META, LARGE, PageHeader, REMOTE_AT, page_of
 use crate::alloc::{header_sink, page_base};
 use crate::control::{Control, control_knows};
 use crate::heap::Core;
-use crate::meta::{
-    BlockPerm, HEADER_WORDS, Header, Meta, meta_ptr, prefix_state_ptr, rc_ptr, slot_ptr,
-};
+use crate::layout::{COUNT_WORD, HEADER_WORDS, scan_extended, scan_first};
+use crate::meta::{BlockPerm, Header, Meta, meta_ptr, prefix_state_ptr, rc_ptr, slot_ptr};
 use crate::word::Word;
 
 verus! {
@@ -294,10 +293,13 @@ pub(crate) fn foreign_children(control: &Control, h: *mut Header, Ghost(core): G
         return None;
     }
     let m = Meta::from_bits(unsafe { meta_ptr(h).read() });
-    let (first, n) = if m.scan() == Meta::EXTENDED_SCAN {
-        (1, unsafe { slot_ptr(h, 0).read() }.bits())
+    let scan = m.scan();
+    let first = scan_first(scan);
+    let n = if scan_extended(scan) {
+        let w: Word = unsafe { slot_ptr(h, COUNT_WORD).read() };
+        w.bits()
     } else {
-        (0, m.scan() as usize)
+        scan as usize
     };
     let mut out = Vec::new();
     for i in first..first + n {

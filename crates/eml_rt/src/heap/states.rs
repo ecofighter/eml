@@ -464,7 +464,7 @@ impl Core {
             meta matches Some(m) ==> {
                 &&& m.kind_spec() != Kind::Free
                 &&& !m.kind_spec().self_made()
-                &&& m.scan_spec() != 255
+                &&& !crate::layout::scan_extended_spec(m.scan_spec())
                 &&& m.scan_spec() <= old(self).cap(h@.addr)
             },
         ensures
@@ -660,7 +660,7 @@ impl Core {
                     &&& bits_wf(m.bits_spec())
                     &&& bits_kind(m.bits_spec()) != Kind::Free
                     &&& !bits_kind(m.bits_spec()).self_made()
-                    &&& bits_scan(m.bits_spec()) != 255
+                    &&& !crate::layout::scan_extended_spec(bits_scan(m.bits_spec()))
                     &&& bits_scan(m.bits_spec()) <= s0.cap(a)
                 },
                 None => self.perm(a).meta == s0.perm(a).meta,

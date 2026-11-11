@@ -1052,11 +1052,11 @@ pub(crate) fn effect_number(e: u32) -> u16 {
         .expect("effect numbers are below 65535 (docs/spec/object-model.md)")
 }
 
-/// フィールドの位置のオペランド。走査する語が多い形は数の語の分だけ後ろにずれ、生の語には `RAW` を立てる
-/// (docs/spec/vm.md の「データとクロージャ」)。
+/// フィールドの位置のオペランド。論理的な位置に`data_first`を足した物理的な添字で、生の語には`RAW`を立てる
+/// (docs/spec/vm.mdの「データとクロージャ」、docs/spec/object-model.mdの「語の位置」)。
 fn field_word(shape: &Shape, position: u32, repr: Repr) -> u32 {
     let raw = if repr.is_rc() { 0 } else { RAW };
-    (position + crate::data::count_word(shape.scanned)) | raw
+    (eml_rt::layout::data_first(shape.scanned as usize, false) as u32 + position) | raw
 }
 
 /// 算術と比較の extern の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。ほかの extern は `None` で、

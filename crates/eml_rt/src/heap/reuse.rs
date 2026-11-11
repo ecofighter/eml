@@ -486,7 +486,7 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             old(self).safe_settleable(),
             !meta.kind_spec().opaque_spec() && meta.kind_spec() != Kind::Free,
-            meta.scan_spec() != 255,
+            !crate::layout::scan_extended_spec(meta.scan_spec()),
             meta.scan_spec() <= payload_words,
             !M::CHECKED ==> old(self).con_at_ok(token, payload_words),
         ensures

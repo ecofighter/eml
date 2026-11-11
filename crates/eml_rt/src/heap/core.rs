@@ -44,7 +44,7 @@ impl Core {
             self.block(h)@.addr == h,
             h % 8 == 0,
             h >= 8,
-            h + 8 * (1 + self.cap(h)) <= usize::MAX,
+            h + crate::layout::slot_offset_spec(self.cap(h) as int) <= usize::MAX,
     {
         reveal(Core::blocks_wf);
         assert(self.block_wf(h));
@@ -185,10 +185,12 @@ impl Core {
             self.lemma_shape(h@.addr);
         }
         let m = self.meta_get(h);
-        if m.scan() == Meta::EXTENDED_SCAN {
-            (1, self.slot_get(h, 0).bits())
+        let scan = m.scan();
+        let first = crate::layout::scan_first(scan);
+        if crate::layout::scan_extended(scan) {
+            (first, self.slot_get(h, crate::layout::COUNT_WORD).bits())
         } else {
-            (0, m.scan() as usize)
+            (first, scan as usize)
         }
     }
 

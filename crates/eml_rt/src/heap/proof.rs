@@ -13,7 +13,7 @@ use super::model::{
     lemma_indeg_zero,
 };
 #[cfg(verus_only)]
-use crate::meta::HEADER_WORDS;
+use crate::layout::HEADER_WORDS;
 use crate::meta::{BlockPerm, Header};
 #[cfg(verus_only)]
 use crate::rc::{magnitude, pinned};

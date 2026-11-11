@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault, Raised};
+use eml_rt::layout::data_first;
 use eml_rt::{
     Ctx, Form, Handle, MaskItem, Mode, Open, PipeEnd, RawResource, ReadAmount, Stop, Stream, Token,
     Word, Write, WriteMode,
@@ -1928,14 +1929,16 @@ fn fork_evv<R: Exec>(
     // 作る物体だけに書き、`Ctx` の持つ語には触れない。表と末尾は凍結した塊の物体なので、参照を数えない
     let heap = unsafe { ctx.heap_mut() };
     let mut next = forks.tail;
+    const EV: usize = data_first(3, false);
+    const NODE: usize = data_first(2, false);
     for &(effect, table, depth) in mirrored.iter().rev() {
         let ev = heap.alloc_data(effect + 1, 3, 0, false);
         let node = heap.alloc_data(effect + 1, 2, 0, false);
         unsafe {
-            heap.set_field(ev, 0, table)?;
-            heap.set_field(ev, 1, Word::imm(i64::from(depth)))?;
-            heap.set_field(node, 0, ev)?;
-            heap.set_field(node, 1, next)?;
+            heap.set_field(ev, EV, table)?;
+            heap.set_field(ev, EV + 1, Word::imm(i64::from(depth)))?;
+            heap.set_field(node, NODE, ev)?;
+            heap.set_field(node, NODE + 1, next)?;
         }
         next = node;
     }
@@ -2393,11 +2396,12 @@ fn join_outcomes<R: Exec>(
                 ));
             };
             let tag = code.tables.operands[at as usize + 2] as u16;
+            const PAIR: usize = data_first(2, false);
             let pair = heap.alloc_data(tag, 2, 0, false);
             // 組は今作った局所の物体で、2つの語の参照は組に移る
             unsafe {
-                heap.set_field(pair, 0, l)?;
-                heap.set_field(pair, 1, r)?;
+                heap.set_field(pair, PAIR, l)?;
+                heap.set_field(pair, PAIR + 1, r)?;
             }
             task.set(join.dst, pair);
             return Ok(());

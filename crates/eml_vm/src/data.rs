@@ -1,6 +1,8 @@
 //! データの命令: `con`、switch、`unpack`、`release`、reuse、box (docs/spec/vm.md の「命令ごとの実行」)。
 
-use eml_rt::{Ctx, Heap, HeapError, Kind, Meta, Mode, Token, Word};
+use eml_lir::Shape;
+use eml_rt::layout::{INLINE_SCAN_LIMIT, data_meta};
+use eml_rt::{Ctx, Heap, HeapError, Kind, Mode, Token, Word};
 
 use crate::RunCounts;
 use crate::code::CodeBase;
@@ -8,10 +10,9 @@ use crate::error::VmFault;
 use crate::op::{KEEP, NONE, RAW, SKIP, Slot};
 use crate::vm::{Exec, Task};
 
-/// 走査する語が 255 個以上の物体の、ペイロードの先頭の数の語の分 (docs/spec/object-model.md の「ヘッダ」)。
-pub(crate) fn count_word(scanned: u32) -> u32 {
-    u32::from(scanned >= 255)
-}
+// reuseの組は数の語のない形に限る。`data_meta`は数の語がないことを前提にするので、LIRの上限が`eml_rt`の
+// 上限を超えたらここで止める (docs/spec/object-model.mdの「ペイロード」「語の位置」)
+const _: () = assert!(Shape::REUSE_SCANNED_LIMIT as usize <= INLINE_SCAN_LIMIT);
 
 /// フィールドを物理的な位置から読んでスロットに書く。読むだけなので、参照の数は変えない。
 fn bind_fields<R: Exec>(
@@ -367,9 +368,10 @@ pub(crate) fn con_reuse<R: Exec>(
     if R::M::CHECKED {
         counts.reuses += 1;
     }
-    // 組は走査する語が 255 個未満の形に限るので、`scan` に収まり、数の語もない
-    // (docs/spec/object-model.md の「ヘッダ」)。物理的な語の数が同じ形の token なので、箱の級も合う
-    let meta = Meta::new(tag as u16, scanned as u8, Kind::Data, lin);
+    // 組は走査する語が`Shape::REUSE_SCANNED_LIMIT`個未満の形に限り、上のassertでそれは`eml_rt`の上限以下なので、
+    // 数の語がなく`data_meta`の前提が成り立つ。前提は実行時には確かめない (docs/spec/vm.mdの「reuse」)。
+    // 物理的な語の数が同じ形のtokenなので、箱の級も合う
+    let meta = data_meta(tag as u16, scanned as usize, lin);
     let w = unsafe {
         if in_place {
             heap.reuse_in_place(token, meta)?

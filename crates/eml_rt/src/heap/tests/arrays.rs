@@ -293,7 +293,7 @@ fn scan_of<M: Mode>(ctx: &Ctx<M>, w: Word) -> u8 {
     unsafe { ctx.heap().meta(w) }.unwrap().scan()
 }
 
-/// 配列は長さによらず数の語を持つ。ネイティブのコードが数を `base + 8` で読むためである。
+/// 配列は長さによらず数の語を持つ。ネイティブのコードが数を決まった位置 (docs/spec/object-model.md の「語の位置」の`COUNT_WORD`) で読むためである。
 fn arrays_always_carry_the_count_word<M: Mode>() {
     let mut ctx = ctx::<M>();
     unsafe {

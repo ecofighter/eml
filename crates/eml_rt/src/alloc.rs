@@ -19,7 +19,8 @@ use crate::control::{Control, Registered, forget_page, register_page, unregister
 #[cfg(verus_only)]
 use crate::frozen::RegionPerms;
 use crate::heap::TOO_LARGE;
-use crate::meta::{BlockPerm, HEADER_WORDS, Header, meta_ptr, slot_ptr};
+use crate::layout::HEADER_WORDS;
+use crate::meta::{BlockPerm, Header, meta_ptr, slot_ptr};
 #[cfg(verus_only)]
 use crate::meta::{field_ptr, lemma_word_layout};
 use crate::remote::{RemoteSink, page_sink_of, sink_new};
@@ -769,7 +770,7 @@ impl Pages {
         ensures
             h % 8 == 0,
             h >= 8,
-            h + 8 * (HEADER_WORDS + self.cap(h)) <= usize::MAX,
+            h + crate::layout::slot_offset_spec(self.cap(h) as int) <= usize::MAX,
             self.cap(h) >= 1,
             self.block_ptr(h)@.addr == h,
     {

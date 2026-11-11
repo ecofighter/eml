@@ -128,7 +128,7 @@ impl Core {
         &&& bits_wf(p_meta(p))
         &&& p_kind(p) != Kind::Free
         &&& st != BlockState::Freed ==> {
-            &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, 0)
+            &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, crate::layout::COUNT_WORD as int)
             &&& p_first(p) + p_count(p) <= self.cap(h)
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
@@ -540,7 +540,10 @@ impl Core {
                 &&& q.state.is_init()
                 &&& p_code(self.perm(h)) == state_code(self.state(h))
             },
-            p_extended(self.perm(h)) ==> self.cap(h) >= 1 && p_init(self.perm(h), 0),
+            p_extended(self.perm(h)) ==> self.cap(h) >= 1 && p_init(
+                self.perm(h),
+                crate::layout::COUNT_WORD as int,
+            ),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
             self.state(h) != BlockState::Building ==> self.perm(h).meta == s0.perm(h).meta,
             self.state(h) == BlockState::Building ==> self.model@.written[h] == Set::<int>::empty(),
@@ -625,8 +628,9 @@ impl Core {
         let q = s0.perm(h);
         assert(p_first(p) == p_first(q));
         if p_extended(q) {
-            assert(i != 0);
-            assert(p.slots[0] == q.slots[0]);
+            assert(i != crate::layout::COUNT_WORD);
+            assert(p.slots[crate::layout::COUNT_WORD as int]
+                == q.slots[crate::layout::COUNT_WORD as int]);
         }
         assert(p_count(p) == p_count(q));
         assert forall|j: int| #[trigger]
@@ -999,7 +1003,7 @@ impl Core {
             self.has(h),
             self.state(h) == BlockState::Live || self.state(h) == BlockState::Building,
         ensures
-            p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
+            p_extended(self.perm(h)) ==> p_init(self.perm(h), crate::layout::COUNT_WORD as int),
             p_kind(self.perm(h)).boxes_value() ==> self.cap(h) >= 1 && p_init(self.perm(h), 0),
             p_kind(self.perm(h)).has_body() ==> body_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
@@ -1099,7 +1103,7 @@ impl Core {
         &&& bits_wf(p_meta(p))
         &&& p_kind(p) != Kind::Free
         &&& st != BlockState::Freed ==> {
-            &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, 0)
+            &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, crate::layout::COUNT_WORD as int)
             &&& p_first(p) + p_count(p) <= self.cap(h)
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
@@ -1124,7 +1128,7 @@ impl Core {
             self.block(h)@.addr == h,
             h % 8 == 0,
             h >= 8,
-            h + 8 * (1 + self.cap(h)) <= usize::MAX,
+            h + crate::layout::slot_offset_spec(self.cap(h) as int) <= usize::MAX,
     {
         if !self.dom().contains(h) {
             self.lemma_region_at(h);
@@ -1301,7 +1305,7 @@ impl Core {
             self.block(h)@.addr == h,
             h % 8 == 0,
             h >= 8,
-            h + 8 * (1 + self.cap(h)) <= usize::MAX,
+            h + crate::layout::slot_offset_spec(self.cap(h) as int) <= usize::MAX,
             self.state(h) == BlockState::Live,
             self.rc_of(h) == 0,
             p_kind(self.perm(h)) != Kind::Foreign,
@@ -1337,7 +1341,7 @@ impl Core {
             self.block(h)@.addr == h,
             h % 8 == 0,
             h >= 8,
-            h + 8 * (1 + self.cap(h)) <= usize::MAX,
+            h + crate::layout::slot_offset_spec(self.cap(h) as int) <= usize::MAX,
     {
         reveal(Core::safe_blocks_wf);
         assert(self.safe_block_wf(h));

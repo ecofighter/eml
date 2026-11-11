@@ -101,7 +101,7 @@ impl Core {
             self.has(h),
             self.settled_state(h) == BlockState::Live,
         ensures
-            p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
+            p_extended(self.perm(h)) ==> p_init(self.perm(h), crate::layout::COUNT_WORD as int),
             p_kind(self.perm(h)).boxes_value() ==> p_init(self.perm(h), 0),
             p_kind(self.perm(h)).has_body() ==> body_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
@@ -170,10 +170,10 @@ impl Core {
         let q = s0.perm(h);
         let e = (h, i);
         assert(s0.block_wf(h));
-        // 走査する語の数の語 (`scan` が 255 のときの 0 語目) は、走査する語でないので変わらない
+        // 数の語は走査する語でないので変わらない
         assert(p_first(p) == p_first(q));
         if p_extended(q) {
-            assert(i != 0);
+            assert(i != crate::layout::COUNT_WORD);
         }
         assert(p_count(p) == p_count(q));
         assert forall|b: usize, j: int| #[trigger] self.scanned(b, j) == s0.scanned(b, j) by {
@@ -293,7 +293,7 @@ impl Core {
         assert(s0.block_wf(h));
         assert(p_first(p) == p_first(q));
         if p_extended(q) {
-            assert(i != 0);
+            assert(i != crate::layout::COUNT_WORD);
         }
         assert(p_count(p) == p_count(q));
         assert forall|b: usize, j: int| #[trigger] self.scanned(b, j) == s0.scanned(b, j) by {
