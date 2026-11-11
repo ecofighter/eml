@@ -12,6 +12,9 @@ const FILES: &[(&str, &str)] = &[
     ("abi.rs", include_str!("abi.rs")),
     ("mem.rs", include_str!("mem.rs")),
     ("thunk.rs", include_str!("thunk.rs")),
+    ("unsupported.rs", include_str!("unsupported.rs")),
+    ("lower/mod.rs", include_str!("lower/mod.rs")),
+    ("lower/rows.rs", include_str!("lower/rows.rs")),
 ];
 
 /// 調べないファイル。この module だけである。

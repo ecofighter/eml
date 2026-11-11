@@ -24,6 +24,9 @@ cranelift-module.workspace = true
 cranelift-native.workspace = true
 libloading.workspace = true
 
+[dev-dependencies]
+eml_test_support = { workspace = true, features = ["core"] }
+
 [[test]]
 name = "integration"
 path = "tests/main.rs"

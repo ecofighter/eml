@@ -671,6 +671,7 @@ dependencies = [
  "eml_lir",
  "eml_nrt",
  "eml_rt",
+ "eml_test_support",
  "libloading",
 ]
 

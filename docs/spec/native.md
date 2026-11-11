@@ -84,3 +84,25 @@
 ### 対象
 
 `eml_nrt::SUPPORTED`は、stubのある対象、つまりWindowsでないaarch64と、x86_64 (SysVとWin64) で真である。ほかの対象 (Windowsのaarch64と、aarch64でもx86_64でもないISA) では偽で、そこでも`eml_enter`はあるが、呼ぶとプロセスが止まる (panicは`extern "C"`の境を越えられない)。ネイティブのコードを走らせる側は、`eml_enter`を呼ぶ前に`SUPPORTED`を見て断る。ライブラリはどの対象でもビルドできる (stubのテストは、stubのある対象でだけ組める)。
+
+## 断る形
+
+ネイティブのコード生成器が下ろすのはLIRの一部である。何を断るかを述べるのは`eml_native::unsupported(&Program)`だけである。この関数は、違う形ごとに1つの要素を、下の表の順に返す。要素は、その形を持つ`Program.functions`の最初の関数の名前を持ち、タスクの行とstdの行では、その関数の中で最初のその行の名前も持つ。要素が1つでもあるプログラムは下ろさない。下ろしは、断る形に出会うとpanicする。
+
+| `Form` | 名前 (`Form::label`) | LIRの形 |
+|---|---|---|
+| `Par` | `par` | `Call::Par` |
+| `AsyncRow` | `async row` | `Extern::is_async`が真であるstdの行 (タスクの行) |
+| `BlockingC` | `blocking c` | `ExternRef::CSubmit`と`ExternRef::CTake` |
+| `Prim` | `prim` | すべての`Rhs::Prim` |
+| `Clause` | `clause` | `Call::Clause`と、`LirFn.clause`を持つ関数 |
+| `Prompt` | `prompt` | 着地の印 (`prompt`) を持つ`Call::Apply` |
+| `StdRow` | `std row` | タスクの行でなく、`rows::INLINE`にも`rows::CALLED`にもないstdの行 |
+| `CRow` | `c row` | `ExternRef::C` |
+| `Closure` | `closure` | `Rhs::MakeClosure` |
+| `FnValue` | `fn value` | どこかにある`Atom::Fn` |
+| `Apply` | `apply` | `Call::Apply` |
+
+- 形は、何度現れても1度だけ報告する。1つの構文が2つの形に入ることがある。着地の印を持つ`Call::Apply`は、`Prompt`でもあり`Apply`でもある
+- `rows::INLINE`は、CLIFの演算としてインラインに下ろす45の行である。VMの算術と比較の専用の命令 ([VM](vm.md) の「基本操作と extern」) の行から`FloatMod`を除いたものである。Craneliftの`LibCall`には`fmod`がないので、`FloatMod`は呼ぶ行にする
+- `rows::CALLED`は、エントリ`eml_x_<Variant>`の呼び出しとして下ろす行で、`Println`、`Eprintln`、`IntShow`、`StrShow`、`FloatShow`、`StrConcat`、`StrEq`、`StrCompare`、`FloatMod`、`Exit`、`Panic`である。`rows::lowering(ext)`は、行がこの2つのどちらであるかを返し、ネイティブのコードが断る行には`None`を返す

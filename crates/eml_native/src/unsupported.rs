@@ -1,0 +1,134 @@
+//! ネイティブのコードが断るLIRの形 (docs/spec/native.mdの「断る形」)。判断はここにだけあるので、診断、ネイティブの
+//! UIテスト、下ろしが食い違わない。
+
+use std::collections::BTreeMap;
+
+use eml_extern::ExternRef;
+use eml_lir::{Atom, Call, LirFn, Program, Rhs, Stmt, Term};
+
+use crate::lower::rows;
+
+/// 宣言の順が、報告の順とヒストグラムの鍵の順である。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Form {
+    Par,
+    AsyncRow,
+    BlockingC,
+    Prim,
+    Clause,
+    Prompt,
+    StdRow,
+    CRow,
+    Closure,
+    FnValue,
+    Apply,
+}
+
+impl Form {
+    pub fn label(self) -> &'static str {
+        match self {
+            Form::Par => "par",
+            Form::AsyncRow => "async row",
+            Form::BlockingC => "blocking c",
+            Form::Prim => "prim",
+            Form::Clause => "clause",
+            Form::Prompt => "prompt",
+            Form::StdRow => "std row",
+            Form::CRow => "c row",
+            Form::Closure => "closure",
+            Form::FnValue => "fn value",
+            Form::Apply => "apply",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unsupported {
+    pub form: Form,
+    pub function: String,
+    pub row: Option<&'static str>,
+}
+
+/// 違う形ごとに1つの要素を`Form`の順に返す。`function`はその形を持つ`program.functions`の最初の関数で、`row`は
+/// タスクの行とstdの行について、その関数の中で最初のその行である。
+pub fn unsupported(program: &Program) -> Vec<Unsupported> {
+    let mut found: BTreeMap<Form, Unsupported> = BTreeMap::new();
+    for function in &program.functions {
+        let mut note = |form: Form, row: Option<&'static str>| {
+            found.entry(form).or_insert_with(|| Unsupported {
+                form,
+                function: function.name.clone(),
+                row,
+            });
+        };
+        each_form(function, &mut note);
+    }
+    found.into_values().collect()
+}
+
+fn each_form(function: &LirFn, note: &mut impl FnMut(Form, Option<&'static str>)) {
+    if function.clause.is_some() {
+        note(Form::Clause, None);
+    }
+    for block in &function.blocks {
+        for stmt in &block.stmts {
+            stmt.for_each_atom(|atom| fn_value(atom, note));
+            match stmt {
+                Stmt::Let { var: _, rhs } => match rhs {
+                    Rhs::Call(call) => call_form(call, note),
+                    Rhs::MakeClosure(..) => note(Form::Closure, None),
+                    Rhs::Extern { ext, .. } => extern_form(*ext, note),
+                    Rhs::Prim(..) => note(Form::Prim, None),
+                    Rhs::ConstString(_)
+                    | Rhs::Con { .. }
+                    | Rhs::Drop(_)
+                    | Rhs::Box(_)
+                    | Rhs::Unbox(_) => {}
+                },
+                Stmt::LetMany { vars: _, call } => call_form(call, note),
+                Stmt::Unpack { .. }
+                | Stmt::UnboxStruct { .. }
+                | Stmt::Dup(_)
+                | Stmt::Decref(_)
+                | Stmt::Release { .. }
+                | Stmt::DropToken(_) => {}
+            }
+        }
+        block.term.for_each_atom(|atom| fn_value(atom, note));
+        if let Term::TailCall(call) = &block.term {
+            call_form(call, note);
+        }
+    }
+}
+
+fn fn_value(atom: Atom, note: &mut impl FnMut(Form, Option<&'static str>)) {
+    if let Atom::Fn(_) = atom {
+        note(Form::FnValue, None);
+    }
+}
+
+fn call_form(call: &Call, note: &mut impl FnMut(Form, Option<&'static str>)) {
+    match call {
+        Call::Direct(..) => {}
+        Call::Apply { prompt, .. } => {
+            if prompt.is_some() {
+                note(Form::Prompt, None);
+            }
+            note(Form::Apply, None);
+        }
+        Call::Clause { .. } => note(Form::Clause, None),
+        Call::Par { .. } => note(Form::Par, None),
+    }
+}
+
+fn extern_form(ext: ExternRef, note: &mut impl FnMut(Form, Option<&'static str>)) {
+    match ext {
+        ExternRef::Std(row) if row.is_async() => note(Form::AsyncRow, Some(row.row().name)),
+        ExternRef::Std(row) if rows::lowering(row).is_none() => {
+            note(Form::StdRow, Some(row.row().name))
+        }
+        ExternRef::Std(_) => {}
+        ExternRef::C(_) => note(Form::CRow, None),
+        ExternRef::CSubmit(_) | ExternRef::CTake(_) => note(Form::BlockingC, None),
+    }
+}

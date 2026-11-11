@@ -12,12 +12,16 @@ mod bridge;
 mod error;
 mod library;
 mod linker;
+mod lower;
 mod mem;
 pub mod thunk;
 #[cfg(test)]
 mod trust;
+mod unsupported;
 
 pub use bridge::Bridges;
 pub use error::LinkError;
 pub use library::{candidates, running_os};
 pub use linker::Linker;
+pub use lower::rows;
+pub use unsupported::{Form, Unsupported, unsupported};
