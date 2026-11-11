@@ -154,11 +154,19 @@ impl Meta {
     /// `scan` のこの値は、走査する語の数がペイロードの生の1語にあることを表す。
     pub(crate) const EXTENDED_SCAN: u8 = crate::layout::INLINE_SCAN_LIMIT as u8;
 
-    const LIN: u32 = 1 << 31;
+    /// ここからの6つはdocs/spec/object-model.mdの「ヘッダ」のビットの位置である。ネイティブのコードが同じ数を
+    /// 繰り返さずに欄を読めるように公開する。
+    pub const TAG_MASK: u32 = 0xFFFF;
 
-    const KIND_SHIFT: u32 = 24;
+    pub const SCAN_SHIFT: u32 = 16;
 
-    const KIND_MASK: u32 = 0xF;
+    pub const SCAN_MASK: u32 = 0xFF;
+
+    pub const KIND_SHIFT: u32 = 24;
+
+    pub const KIND_MASK: u32 = 0xF;
+
+    pub const LIN: u32 = 1 << 31;
 
     #[inline]
     pub const fn new(tag: u16, scan: u8, kind: Kind, lin: bool) -> (r: Meta)
@@ -180,7 +188,10 @@ impl Meta {
         proof {
             lemma_pack(tag, scan, kind as u32, lin);
         }
-        Meta(tag as u32 | ((scan as u32) << 16) | ((kind as u32) << Meta::KIND_SHIFT) | lin)
+        Meta(
+            tag as u32 | ((scan as u32) << Meta::SCAN_SHIFT) | ((kind as u32) << Meta::KIND_SHIFT)
+                | lin,
+        )
     }
 
     #[inline]
@@ -188,7 +199,12 @@ impl Meta {
         ensures
             r == self.tag_spec(),
     {
-        self.0 as u16
+        proof {
+            lemma_consts();
+            let x = self.0;
+            assert((x & 0xFFFF) as u16 == x as u16) by (bit_vector);
+        }
+        (self.0 & Meta::TAG_MASK) as u16
     }
 
     #[inline]
@@ -196,7 +212,12 @@ impl Meta {
         ensures
             r == self.scan_spec(),
     {
-        (self.0 >> 16) as u8
+        proof {
+            lemma_consts();
+            let x = self.0;
+            assert(((x >> 16) & 0xFF) as u8 == (x >> 16) as u8) by (bit_vector);
+        }
+        ((self.0 >> Meta::SCAN_SHIFT) & Meta::SCAN_MASK) as u8
     }
 
     #[inline]
@@ -392,6 +413,9 @@ pub open spec fn same_fields(a: Meta, b: Meta) -> bool {
 /// 本体の定数を、仕様が使うビットの位置に結び付ける
 proof fn lemma_consts()
     ensures
+        Meta::TAG_MASK == 0xFFFF,
+        Meta::SCAN_SHIFT == 16,
+        Meta::SCAN_MASK == 0xFF,
         Meta::LIN == 0x8000_0000,
         Meta::KIND_SHIFT == 24,
         Meta::KIND_MASK == 0xF,
@@ -930,6 +954,30 @@ mod tests {
         );
         assert!(Kind::Raw.opaque());
         assert_eq!(Kind::Raw.name(), "Raw");
+    }
+
+    #[test]
+    fn the_exported_bit_positions_are_the_header_layout() {
+        assert_eq!(
+            (
+                Meta::TAG_MASK,
+                Meta::SCAN_SHIFT,
+                Meta::SCAN_MASK,
+                Meta::KIND_SHIFT,
+                Meta::KIND_MASK,
+                Meta::LIN
+            ),
+            (0xFFFF, 16, 0xFF, 24, 0xF, 0x8000_0000)
+        );
+    }
+
+    #[test]
+    fn a_meta_round_trips_through_its_fields() {
+        let m = Meta::new(7, 3, Kind::Data, true);
+        assert_eq!(
+            (m.tag(), m.scan(), m.kind(), m.lin()),
+            (7, 3, Kind::Data, true)
+        );
     }
 
     #[test]

@@ -7,18 +7,29 @@ use vstd::prelude::*;
 verus! {
 
 /// 局所の数の上限。ここに達した数は動かさない (docs/spec/object-model.md の「上限」)。
-pub(crate) const LOCAL_MAX: i32 = i32::MAX;
+pub const LOCAL_MAX: i32 = i32::MAX;
 
 /// 共有の `dup` は、これより小さい数を動かさない。
 /// 値は MIN + (1 << 16) である。16 進で書くのは、Verus が定数の式のシフトを桁あふれのおそれと報告するためである。
-pub(crate) const DUP_LIMIT: i32 = i32::MIN + 0x1_0000;
+pub const DUP_LIMIT: i32 = i32::MIN + 0x1_0000;
 
 /// 共有の `decref` は、これより小さい数を動かさない。2つの境目の間の幅が、並行の加減算で数が戻ってくるのを防ぐ
 /// (docs/spec/object-model.md の「上限」)。
-/// 値は MIN + (1 << 17) である。16 進で書く理由は `DUP_LIMIT` と同じである。`pub` にするのは、`pub open spec fn
-/// mark_spec` がこの定数を使い、Verus が open な spec fn の使う定数にも `pub` を求めるためである。この crate の `rc` は
-/// private な module なので、外には見えない。
+/// 値はMIN + (1 << 17)である。16進で書く理由は`DUP_LIMIT`と同じである。rcの境目は、ネイティブのコードが同じ規則に
+/// 従えるように公開する。
 pub const DROP_LIMIT: i32 = i32::MIN + 0x2_0000;
+
+/// `dup`と`decref`の局所の速い道 (docs/spec/object-model.mdの「局所の速い道」)。
+/// `(rc as u32).wrapping_sub(BIAS) < SPAN`は、数が`BIAS`以上`LOCAL_MAX`未満の局所の数であるときにだけ成り立ち、
+/// そのとき新しい数は`dup`なら`rc + 1`、`decref`なら`rc - 1`である。ネイティブのコードがrcの数を繰り返さずに済むように
+/// 公開する。
+pub const DUP_FAST_BIAS: u32 = 1;
+
+pub const DUP_FAST_SPAN: u32 = (LOCAL_MAX - 1) as u32;
+
+pub const DECREF_FAST_BIAS: u32 = 2;
+
+pub const DECREF_FAST_SPAN: u32 = (LOCAL_MAX - 2) as u32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DupStep {
@@ -90,7 +101,7 @@ pub(crate) fn dup_step(rc: i32) -> (r: DupStep)
     proof {
         lemma_negative_as_u32(rc);
     }
-    if (rc as u32).wrapping_sub(1) < (LOCAL_MAX - 1) as u32 {
+    if (rc as u32).wrapping_sub(DUP_FAST_BIAS) < DUP_FAST_SPAN {
         DupStep::Store(rc + 1)
     } else if DUP_LIMIT <= rc && rc < 0 {
         DupStep::Shared
@@ -110,7 +121,7 @@ pub(crate) fn decref_step(rc: i32) -> (r: DecrefStep)
     proof {
         lemma_negative_as_u32(rc);
     }
-    if (rc as u32).wrapping_sub(2) < (LOCAL_MAX - 2) as u32 {
+    if (rc as u32).wrapping_sub(DECREF_FAST_BIAS) < DECREF_FAST_SPAN {
         DecrefStep::Store(rc - 1)
     } else if rc == 1 {
         DecrefStep::Free
@@ -307,6 +318,40 @@ mod tests {
         assert_eq!(decref_step(-1), DecrefStep::Shared);
         assert_eq!(decref_step(DROP_LIMIT), DecrefStep::Shared);
         assert_eq!(decref_step(DROP_LIMIT - 1), DecrefStep::Skip);
+    }
+
+    #[test]
+    fn the_fast_path_constants_are_one_range_check() {
+        assert_eq!(
+            (
+                DUP_FAST_BIAS,
+                DUP_FAST_SPAN,
+                DECREF_FAST_BIAS,
+                DECREF_FAST_SPAN
+            ),
+            (1, 0x7FFF_FFFE, 2, 0x7FFF_FFFD)
+        );
+        for rc in [
+            i32::MIN,
+            DROP_LIMIT - 1,
+            DROP_LIMIT,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            LOCAL_MAX - 1,
+            LOCAL_MAX,
+        ] {
+            let dup_fast = (rc as u32).wrapping_sub(DUP_FAST_BIAS) < DUP_FAST_SPAN;
+            assert_eq!(dup_fast, matches!(dup_step(rc), DupStep::Store(_)), "{rc}");
+            let decref_fast = (rc as u32).wrapping_sub(DECREF_FAST_BIAS) < DECREF_FAST_SPAN;
+            assert_eq!(
+                decref_fast,
+                matches!(decref_step(rc), DecrefStep::Store(_)),
+                "{rc}"
+            );
+        }
     }
 
     #[test]

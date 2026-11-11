@@ -21,7 +21,7 @@ mod host;
 pub mod layout;
 mod meta;
 mod mode;
-mod rc;
+pub mod rc;
 mod remote;
 mod text;
 #[cfg(test)]
