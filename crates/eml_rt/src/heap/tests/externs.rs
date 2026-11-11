@@ -694,7 +694,7 @@ fn faults_stay_small() {
     assert_eq!(std::mem::size_of::<Fault>(), 24);
 }
 
-/// エンジンが中身を持つ失敗は、`try_panic`にも`try_io`にも捕まらない。
+/// エンジンが中身を持つ失敗は、`panics()`が偽で`io_error_kind()`が`None`である。扱いはエンジンが持っている中身から決める。
 #[test]
 fn an_engine_held_failure_is_neither_a_panic_nor_an_io_error() {
     use crate::externs::Fault;

@@ -292,7 +292,10 @@ impl<M: Mode> Heap<M> {
 
     /// 生きている物体`w`が不死 (rc 0) か。ダミーや定数のように、空けない物体である。実行の終わりに残った物体を数えるときは、
     /// これらを除く (docs/spec/object-model.md の「生存の列挙」)。
-    pub fn is_immortal(&self, w: Word) -> (r: bool)
+    ///
+    /// # Safety
+    /// `w` はこのヒープの生きている物体を指す。
+    pub unsafe fn is_immortal(&self, w: Word) -> (r: bool)
         requires
             self.wf(),
             w.is_ptr_spec(),

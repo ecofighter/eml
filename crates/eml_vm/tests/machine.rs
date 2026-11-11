@@ -301,6 +301,16 @@ fn a_broken_error_is_a_heap_or_internal_fault() {
     assert!(!RuntimeError::Leak(Vec::new()).is_broken());
 }
 
+#[test]
+fn an_engine_held_failure_is_broken() {
+    let error = RuntimeError::Fault {
+        fault: RunFault::Extern(Fault::Engine),
+        function: "f".to_string(),
+        at: None,
+    };
+    assert!(error.is_broken());
+}
+
 /// 根に置いた値は実行をまたいで残り、`close` で手放す。検査モードでも、閉じた後にリークは残らない。
 #[test]
 fn a_root_outlives_its_run_and_is_released_at_close() {

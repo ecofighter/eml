@@ -250,7 +250,7 @@ fn an_immortal_object_is_told_from_a_counted_one<M: Mode>() {
     assert_eq!(live.len(), 3);
     for w in live {
         assert!([counted, constant, dummy].contains(&w));
-        assert_eq!(heap.is_immortal(w), w != counted, "{w:?}");
+        assert_eq!(unsafe { heap.is_immortal(w) }, w != counted, "{w:?}");
     }
     unsafe { heap.decref(counted) }.unwrap();
 }

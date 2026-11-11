@@ -9,8 +9,8 @@ fn big_int_reads_back<M: Mode>() {
             assert_eq!(heap.meta(w).unwrap().kind(), Kind::BigInt);
             assert_eq!(heap.raw(w, layout::BOX_VALUE_WORD).unwrap() as i64, n);
             heap.acquire_immortal(w).expect("the box is immortal");
+            assert!(heap.is_immortal(w));
         }
-        assert!(heap.is_immortal(w));
     }
 }
 
@@ -22,8 +22,8 @@ fn float_reads_back<M: Mode>() {
             assert_eq!(heap.meta(w).unwrap().kind(), Kind::Float);
             assert_eq!(heap.raw(w, layout::BOX_VALUE_WORD).unwrap(), x.to_bits());
             heap.acquire_immortal(w).expect("the box is immortal");
+            assert!(heap.is_immortal(w));
         }
-        assert!(heap.is_immortal(w));
     }
 }
 

@@ -251,7 +251,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 
 - 生きている物体は、両方のモードでページを歩いて列挙できる (`live_objects`)。各ページの切り出したブロックのうち、速いモードでは種類が `Free` でないもの、検査モードでは前置きの状態が解放でないものが、生きている箱である
 - `live_objects` は、テストと検査のための列挙である。回復 (下の「回復」) は生きている物体を列挙せず、根からたどって写す
-- `is_immortal(w)`は、`live_objects`が返した生きている物体が不死 (rc 0) か、つまりダミーか、定数のように不死にした物体かを返す。実行の終わりに残った物体を数えるときに、空けない物体を除くために使う
+- `is_immortal(w)`は、`live_objects`が返した生きている物体が不死 (rc 0) か、つまりダミーか、定数のように不死にした物体かを返す。`w`が生きている物体を指すことを呼び出し側が保つので`unsafe fn`である。実行の終わりに残った物体を数えるときに、空けない物体を除くために使う
 - 回復は、根から届く語を写すか、凍結した領域の物体としてそのまま使うかを、そのブロックのページの頭の `sink` で見分ける。null なら凍結した領域のブロックで、null でなければ古いヒープか同じ `Control` のほかのヒープのブロックなので写す (上の「ページ」)。2つのモードで同じ見分け方をする
 - `Heap` を落とすときは、ページを1枚ずつ歩いて、生きている `Foreign` の物体の破棄処理を呼んでから、すべてのページを返す。Rust の値が持つメモリを漏らさないためである。Miri は漏れを誤りにする。回復は古いヒープを落とすことで、届かない `Foreign` の物体を閉じる
 - 回復と古いヒープの後始末は、ヒープ全体のブロックの一覧や集合を作らない。回復は確保量の上限で止まった直後にも走るので、古いヒープに比例するメモリを足すと、機械のメモリを使い切る前に止めるという上限の意味がなくなるためである
@@ -1108,7 +1108,7 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 | `Stopped(Stop)` | `FileIn`、標準入力、`Child` の読みが読む途中で、`Child` への書き込みが書く途中で、`Ctx::proc_spawn` が子を起動する前に、`Ctx::proc_wait` が子を待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 | `InUse(StdStream)` | 標準のストリーム (`Stdin`、`Stdout`、`Stderr`) のハンドルが生きている間の、2つ目の `open` | `the standard input is already open`、`the standard output is already open`、`the standard error is already open` |
 | `Raised(Box<Raised>)` | `fail_io` が起こした `IO` の誤りと、起こし直された `IO` の誤り。`Raised { kind, message }` は `IOErrorKind` のタグ (`i64`) と元の誤りの文言 (`Box<str>`) を持つ。`Ctx` のメソッドは作らず、VM が作る | `{message}` |
-| `Engine` | 中身をエンジンが`Fault`の外に持つ失敗。たとえばネイティブのコードの`panic`の文言である。失敗を置いたことを示す印にすぎず、VMは作らない。`try_panic`も`try_io`も捕まえず、`RuntimeError::is_broken`は内部の誤りとして数える | `internal error: a failure whose payload the engine holds` |
+| `Engine` | 中身をエンジンが`Fault`の外に持つ失敗。たとえばネイティブのコードの`panic`の文言である。失敗を置いたことを示す印にすぎず、VMは作らない。`panics()`は偽で`io_error_kind()`は`None`である。扱いはエンジンが持っている中身から決める。`RuntimeError::is_broken`は内部の誤りとして数える | `internal error: a failure whose payload the engine holds` |
 
 `Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Launch`、`Stdin`、`NotUtf8`、`Raised`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す ([標準ライブラリ](stdlib.md) の「`try_io`」)。`Raised` のタグは持っている `kind` で、`IO_OTHER` より大きいタグ (`fail_io` だけが渡せる) もありうる。
 
