@@ -80,7 +80,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 
 - `eml_rt`は、自身のコードが読む物体の語の位置、つまりヘッダの欄、`Data`の数の語、走査する最初の語、`BigInt`と`Float`の箱の値の語を持つ。これらについて`eml_rt`と食い違うコード生成器は、メモリの安全を壊す
 - `eml_rt`は、それぞれをモジュール`eml_rt::layout`で1回だけ定める。どれも、Verusの`pub open spec fn`とその対の`pub const fn` (`ensures`がそのspecであるもの) か、`pub const`である。`eml_rt`の復号、確保器、ポインタの関数、ヒープの述語はこれらを使う
-- コード生成器 (VMのコンパイラと実行系) は、こうした値をすべてこのモジュールから取り、物体の語の位置を表す数を自分では書かない。`eml_lir`のreuseの上限は、reuseを`eml_rt`の上に下ろす各crateのコンパイル時のassertで`INLINE_SCAN_LIMIT`に結び付ける (下の「ペイロード」)
+- コード生成器 (VMのコンパイラと実行系) は、こうした値をすべてこのモジュールから取り、物体の語の位置を表す数を自分では書かない。`eml_lir`のreuseの上限は、reuseを`eml_rt`の上に下ろす各crate (`eml_vm`の`data.rs`と`eml_native`の`mem.rs`) のコンパイル時のassertで`INLINE_SCAN_LIMIT`に結び付ける (下の「ペイロード」)
 - 項目は次のとおりである。添字は語の単位で、バイトに直すのは`slot_byte_offset`だけである
   - ヘッダ: `WORD_BYTES`、`HEADER_WORDS`、`RC_BYTE`、`META_BYTE`と、`slot_byte_offset(i)` = `WORD_BYTES * (HEADER_WORDS + i)` (物体のポインタから、ペイロードのi語目までのバイトのずれ)
   - `Data`: `INLINE_SCAN_LIMIT`、`COUNT_WORD`、`EXTENDED_FIRST`

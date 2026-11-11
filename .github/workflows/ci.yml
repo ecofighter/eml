@@ -93,14 +93,15 @@ jobs:
           test "$(cargo tree -p eml_vm -p eml_io -e normal,dev,build --target all | grep -c -E 'eml_tls|aws-lc|ring v')" -eq 0
           test "$(cargo tree --workspace --exclude eml_tls --no-default-features --features eml_cli/run,eml_test_support/run -e normal,dev,build --target all | grep -c -E 'eml_tls|aws-lc|ring v')" -eq 0
       # VMはCranelift、eml_native、eml_nrtのどれにも依存せず、eml_nrtはCranelift、eml_lir、eml_core_ir、eml_vm、eml_nativeに
-      # 依存せず、eml_nativeはeml_externとeml_cabiのほかのワークスペースのcrateに依存せず、externの表はunsafeを持たない
+      # 依存せず、eml_nativeはeml_vmに依存せず、eml_lirはeml_rtに依存せず、externの表はunsafeを持たない
       # (docs/implementation/architecture.md の「crate の依存関係」)
       - name: dependency edges of eml_native
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
         run: |
           test "$(cargo tree -p eml_vm -e normal --target all | grep -c -E 'cranelift|eml_native|eml_nrt')" -eq 0
           test "$(cargo tree -p eml_nrt -e normal --target all | grep -c -E 'cranelift|eml_lir|eml_core_ir|eml_vm|eml_native')" -eq 0
-          test "$(cargo tree -p eml_native -e normal --target all | grep -c -E 'eml_rt|eml_lir|eml_vm')" -eq 0
+          test "$(cargo tree -p eml_native -e normal --target all | grep -c -E 'eml_vm')" -eq 0
+          test "$(cargo tree -p eml_lir -e normal --target all | grep -c -E 'eml_rt')" -eq 0
           test -z "$(grep -rn unsafe crates/eml_extern/src)"
       # eml_guiはワークスペースのどのcrateにも依存せず、既定の依存の木にnativeのtoolkitのcrateは入らない。gui-nativeの木には
       # 3つのtoolkitのcrateがどれも入る。既定の木では、生成したWinUIのbindingだけが使うwindows-collections、windows-reference、
@@ -284,11 +285,12 @@ jobs:
         if: ${{ !cancelled() && steps.io.outcome != 'skipped' }}
         run: |
           nix develop .#miri -c cargo test -Zbuild-std --target ${{ matrix.target }} -p eml_vm --test integration -- api:: signal:: io:: workers:: ffi:: ffi_abandon:: seat:: pinned::
-      - name: cargo test -p eml_native
+      # longjmpはASanのスタックの印を残すので、致命的な誤りの道のテスト (fatal::) は飛ばす (docs/implementation/testing.md の
+      # 「`eml_native` の検証」と「`eml_nrt`の検証」)
+      - name: "cargo test -p eml_native -- --skip fatal::"
         if: ${{ !cancelled() && steps.io.outcome != 'skipped' }}
         run: |
-          nix develop .#miri -c cargo test -Zbuild-std --target ${{ matrix.target }} -p eml_native
-      # longjmpはASanのスタックの印を残すので、致命的な誤りの道のテスト (fatal::) は飛ばす (docs/implementation/testing.md の「`eml_nrt`の検証」)
+          nix develop .#miri -c cargo test -Zbuild-std --target ${{ matrix.target }} -p eml_native -- --skip fatal::
       - name: "cargo test -p eml_nrt -- --skip fatal::"
         if: ${{ !cancelled() && steps.io.outcome != 'skipped' }}
         run: |
