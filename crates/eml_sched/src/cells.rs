@@ -67,11 +67,11 @@ use eml_rt::{
 };
 
 /// 再開するタスクに渡す `Std.Async.Wake` の `Woke` のタグ (docs/spec/stdlib.md の「`Std.Async`」)。
-pub(crate) const WOKE: i64 = 0;
+pub const WOKE: i64 = 0;
 /// `Cancelled` のタグ。
-pub(crate) const CANCELLED: i64 = 1;
+pub const CANCELLED: i64 = 1;
 /// `IOErrorKind` の `Cancelled` のタグ。この種類で終わったタスクは失敗に数えない。
-pub(crate) const IO_CANCELLED: i64 = 5;
+pub const IO_CANCELLED: i64 = 5;
 /// 待たずに済む速い道の予算 (docs/spec/stdlib.md の「操作の予算」)。
 const BUDGET: u32 = 128;
 /// 書きの待ちが予算を1つ余分に使うバイト数。64 KiB の書き1回で予算を使い切り、同じ worker の読み手を起こす
@@ -83,18 +83,18 @@ const RETIRED: u32 = u32::MAX;
 
 /// 登録表のセルの番号。添字を使い回すので、generation で古い番号を見分ける。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct CellRef {
+pub struct CellRef {
     index: u32,
     generation: u32,
 }
 
 impl CellRef {
     /// `Std.Async.Cell` の即値 `(generation << 32) | index` (docs/spec/stdlib.md の「`Std.Async`」)。
-    pub(crate) fn encode(self) -> i64 {
+    pub fn encode(self) -> i64 {
         (i64::from(self.generation) << 32) | i64::from(self.index)
     }
 
-    pub(crate) fn decode(c: i64) -> CellRef {
+    pub fn decode(c: i64) -> CellRef {
         CellRef {
             index: c as u32,
             generation: (c >> 32) as u32,
@@ -104,11 +104,11 @@ impl CellRef {
 
 /// token で待つものの番号。実行系が自分の単位 (VM では `TaskId`) に写す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct WaitToken(pub u64);
+pub struct WaitToken(pub u64);
 
 /// 核が実行系に渡す仕事。`worker` はどの腕でもタスクの論理的な ID で、セルを触る区間で読んでおく。実行系が仕事を積むときに
 /// 登録表を読み直さないためである。
-pub(crate) enum Runnable {
+pub enum Runnable {
     /// タスク `cell` を始める。`closure` はエントリ `start_task` に渡す閉包で、仕事が参照を1つ持つ。
     Start {
         cell: CellRef,
@@ -144,7 +144,7 @@ enum Waiter {
 }
 
 /// タスクの終わり方。
-pub(crate) enum Outcome {
+pub enum Outcome {
     /// `finish_ok` が預けた語そのもの。即値のこともある。ランタイムは写さず中身を見ない。
     Value(Word),
     /// IO の失敗。文言は Rust の文字列で持つので、失敗の語は持ち主をまたがない。
@@ -171,21 +171,21 @@ impl Outcome {
 }
 
 /// `take` が起こし直す失敗。
-pub(crate) enum Raise {
+pub enum Raise {
     Io { kind: i64, message: String },
     Panic(String),
 }
 
 /// `take` の種類。`Run` は根のスコープの最初の失敗を本体の値より先にし、根のスコープを放す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Take {
+pub enum Take {
     Task,
     Run,
 }
 
 /// 核の操作の誤り。どれも run を止める。
 #[derive(Debug)]
-pub(crate) enum CellFault {
+pub enum CellFault {
     Heap(HeapError),
     Internal(&'static str),
 }
@@ -294,11 +294,11 @@ struct TaskCell {
 
 /// エントリの `Task` が動き始めるときにセルから受け取る、タスクの上限の印 (docs/spec/vm.md の「タスクの上限」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TaskMarks {
+pub struct TaskMarks {
     /// 旗が立っている。実行系はエントリの `Task` を保留にする。
-    pub(crate) limit: bool,
+    pub limit: bool,
     /// 前のエントリまでのタスクの数。エントリの `Task` はここから数え始める。
-    pub(crate) bytes: usize,
+    pub bytes: usize,
 }
 
 struct ScopeCell {
@@ -338,13 +338,6 @@ enum CellKind {
     Chan(ChanCell),
     Op(OpRecord),
     Job(JobCell),
-    #[cfg_attr(
-        not(feature = "gui"),
-        allow(
-            dead_code,
-            reason = "only the GUI arms open a gate (docs/spec/vm.md 「セルと登録表」)"
-        )
-    )]
     Gate(GateCell),
 }
 
@@ -369,7 +362,7 @@ struct JobCell {
 
 /// 仕事の終わり方。仕事の実行時エラーはその場で run を止めるので、誤りの変種はない
 /// (docs/spec/vm.md の「`compute` の仕事」)。
-pub(crate) enum JobEnd {
+pub enum JobEnd {
     /// 仕事の結果。仕事の ID の物体で、セルが参照を1つ持つ。
     Value(Word),
     /// never だけのエフェクトの中断。`clause` は `reperform$` の閉包で、セルが参照を1つ持つ。
@@ -382,7 +375,7 @@ pub(crate) enum JobEnd {
 
 impl JobEnd {
     /// 終わりが持つ語。
-    pub(crate) fn word(&self) -> Word {
+    pub fn word(&self) -> Word {
         match *self {
             JobEnd::Value(w) | JobEnd::Abort { clause: w, .. } => w,
         }
@@ -480,7 +473,7 @@ enum OpKind {
 
 /// プールの仕事の出どころ。取り出しは、取り出す行の出どころと比べる。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum JobSource {
+pub enum JobSource {
     /// `blocking`のCの関数。値は`CodeBase`のCの関数の番号である。
     C(u32),
     /// stdのexternの行。値は取り出しの行の`Extern`の判別子である。`Extern`そのものを持たないのは、このモジュールが
@@ -576,30 +569,30 @@ enum OpPhase {
 }
 
 /// `take_op` が返す、終わった操作の結果。
-pub(crate) struct Taken {
-    pub(crate) result: io::Result<usize>,
+pub struct Taken {
+    pub result: io::Result<usize>,
     /// 記録が持っていた buffer。呼ぶ側が返すか落とす。
-    pub(crate) buf: Option<Word>,
+    pub buf: Option<Word>,
     /// 記録が持っていた、完了の中身から作った `Foreign`。呼ぶ側が返すか落とす。
-    pub(crate) made: Option<Word>,
+    pub made: Option<Word>,
     kind: OpKind,
     /// 待つタスクが取り消され、結果によらず包みが取り消しを投げる。
-    pub(crate) cancelling: bool,
+    pub cancelling: bool,
     /// 待ちの期限が来た。誤りの結果は IO の失敗でなく期限切れである。
-    pub(crate) timed_out: bool,
+    pub timed_out: bool,
     /// 完了の `cancelled`。
     cancelled: bool,
 }
 
 impl Taken {
     /// `op_outcome` と同じ結果の番号。
-    pub(crate) fn outcome(&self) -> i64 {
+    pub fn outcome(&self) -> i64 {
         outcome(&self.kind, &self.result, self.timed_out, self.cancelled)
     }
 
     /// 結果の番号が `OUTCOME_FAILED` で、取り消しを頼んでいない記録の、IO の失敗の誤りと文言 (docs/spec/stdlib.md の
     /// 「`Std.Net`」)。
-    pub(crate) fn failure(&self) -> Option<(&io::Error, String)> {
+    pub fn failure(&self) -> Option<(&io::Error, String)> {
         match &self.result {
             Err(e) if !self.cancelling && self.outcome() == OUTCOME_FAILED => {
                 Some((e, format!("{}: {e}", self.kind.prefix())))
@@ -612,10 +605,10 @@ impl Taken {
 /// `op_ready` の結果。続ける、待つ、先に譲るの3つで、std の包みが分ける (docs/spec/vm.md の「操作の記録」)。
 const FAST_GO: i64 = 0;
 const FAST_WAIT: i64 = 1;
-pub(crate) const FAST_YIELD: i64 = 2;
+pub const FAST_YIELD: i64 = 2;
 
 /// `op_outcome` の結果の番号 (docs/spec/vm.md の「操作の記録」)。成功の完了は期限と競ってもデータである。
-pub(crate) const OUTCOME_OK: i64 = 0;
+pub const OUTCOME_OK: i64 = 0;
 /// 期限の取り消しで終わった。
 const OUTCOME_LATE: i64 = 1;
 const OUTCOME_RESET: i64 = 2;
@@ -684,7 +677,7 @@ impl ChanCell {
 
 /// channel の予約から確定までの間、worker が持つもの。予約と確定の間には安全点も切り替えも捕まえる失敗もないので、
 /// worker に1つで足り、ほかのタスクに渡らない (docs/spec/vm.md の「channel」)。
-pub(crate) enum Hold {
+pub enum Hold {
     /// 送りの予約。`depot` は channel の預かる ID である。
     Send { chan: CellRef, depot: u32 },
     /// 受け取りの予約。`item` は予約で列から取った品物で、ほかに参照を持たない。
@@ -697,10 +690,7 @@ pub(crate) enum Hold {
 
 impl Hold {
     /// `push_raw` が channel `c` の送りの予約を取り出す。
-    pub(crate) fn take_send(
-        hold: &mut Option<Hold>,
-        c: i64,
-    ) -> Result<(CellRef, Depot), CellFault> {
+    pub fn take_send(hold: &mut Option<Hold>, c: i64) -> Result<(CellRef, Depot), CellFault> {
         match hold.take() {
             Some(Hold::Send { chan, depot }) if chan == CellRef::decode(c) => {
                 Ok((chan, Depot::of(depot)))
@@ -712,10 +702,7 @@ impl Hold {
     }
 
     /// `pop_raw` が channel `c` の受け取りの予約を取り出す。
-    pub(crate) fn take_recv(
-        hold: &mut Option<Hold>,
-        c: i64,
-    ) -> Result<(CellRef, Depot, Word), CellFault> {
+    pub fn take_recv(hold: &mut Option<Hold>, c: i64) -> Result<(CellRef, Depot, Word), CellFault> {
         match hold.take() {
             Some(Hold::Recv { chan, depot, item }) if chan == CellRef::decode(c) => {
                 Ok((chan, Depot::of(depot), item))
@@ -729,7 +716,7 @@ impl Hold {
 
 /// mail の項。落ちたハンドルの項はハンドルの `Drop` が、取り消しの項は持ち主が自分のタスクに印を付けた `mark` が、
 /// シグナルの項と上限の旗の項は監視のスレッドが積む。
-pub(crate) enum MailItem {
+pub enum MailItem {
     HandleDropped(CellRef),
     /// タスク `cell` の取り消し。`owner` は積んだ worker で、タスクの持ち主である。取り出すのはその worker だけである。
     Cancel {
@@ -743,7 +730,7 @@ pub(crate) enum MailItem {
     Limit(CellRef),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 type Hook = Box<dyn FnOnce(&Mail) + Send>;
 
 impl MailItem {
@@ -762,41 +749,41 @@ impl MailItem {
 /// run に1つの、ハンドルの破棄処理と監視のスレッドが核へ知らせる列。lock は葉で、持つ間に登録表の lock を取らない。
 /// どの worker の集める地点も処理するが、取り消しの項はその持ち主だけが取り出す (docs/spec/vm.md の「セルと登録表」)。
 #[derive(Default)]
-pub(crate) struct Mail {
+pub struct Mail {
     items: Mutex<Vec<MailItem>>,
     /// 項がある。集める地点とデッドロックの判定が lock を取らずに1回の読みで確かめるためにある。
     pending: AtomicBool,
     /// 分かれたrunのメインのworkerの番号。runの始めに1回だけ書く。
     main: OnceLock<u32>,
     /// デッドロックの判定が登録表を読んだ後、欄を読み直す前に1回だけ呼ぶ。その間に項が積まれる順序をテストで作る。
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     hook: Mutex<Option<Hook>>,
 }
 
 impl Mail {
-    pub(crate) fn push(&self, item: MailItem) {
+    pub fn push(&self, item: MailItem) {
         let mut items = self.items.lock().unwrap_or_else(PoisonError::into_inner);
         items.push(item);
         self.pending.store(true, Ordering::Release);
     }
 
     /// 分かれたrunのメインのworker `k`を覚える。そのworkerは中継したシグナルを取り出さない。
-    pub(crate) fn set_main(&self, k: u32) {
+    pub fn set_main(&self, k: u32) {
         let _ = self.main.set(k);
     }
 
     /// まだ取り出していない項がある。ほかの worker の取り消しの項だけが残っていても真である。
-    pub(crate) fn pending(&self) -> bool {
+    pub fn pending(&self) -> bool {
         self.pending.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_hook(&self, hook: impl FnOnce(&Mail) + Send + 'static) {
+    #[cfg(any(test, feature = "testing"))]
+    pub fn set_hook(&self, hook: impl FnOnce(&Mail) + Send + 'static) {
         *self.hook.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(hook));
     }
 
-    #[cfg(test)]
-    pub(crate) fn run_hook(&self) {
+    #[cfg(any(test, feature = "testing"))]
+    pub fn run_hook(&self) {
         let hook = self
             .hook
             .lock()
@@ -810,7 +797,7 @@ impl Mail {
     /// worker `me` が取り出してよい項を、積んだ順に取り出す。ほかの worker の取り消しの項は順を保って残す。持ち主が
     /// 自分のタスクの取り消しを自分で取り出すので、印を付けてから待ちを外すまでに、持ち主のほかのタスクは動かない
     /// (docs/spec/vm.md の「取り消しの届け方」)。
-    pub(crate) fn take(&self, me: u32) -> Vec<MailItem> {
+    pub fn take(&self, me: u32) -> Vec<MailItem> {
         if !self.pending.load(Ordering::Acquire) {
             return Vec::new();
         }
@@ -828,7 +815,7 @@ impl Mail {
     }
 
     /// 残った項をすべて取り出す。run の終わりに捨てるときに使う。
-    pub(crate) fn take_all(&self) -> Vec<MailItem> {
+    pub fn take_all(&self) -> Vec<MailItem> {
         let mut items = self.items.lock().unwrap_or_else(PoisonError::into_inner);
         self.pending.store(false, Ordering::Release);
         std::mem::take(&mut *items)
@@ -836,13 +823,13 @@ impl Mail {
 }
 
 /// run の worker が共有する、登録表とその mail。`run_scheduled` が run ごとに作り、すべての `Scheduler` に配る。
-pub(crate) struct Shared {
-    pub(crate) cells: Mutex<Registry>,
-    pub(crate) mail: Mail,
+pub struct Shared {
+    pub cells: Mutex<Registry>,
+    pub mail: Mail,
 }
 
 impl Shared {
-    pub(crate) fn new(registry: Registry) -> Shared {
+    pub fn new(registry: Registry) -> Shared {
         Shared {
             cells: Mutex::new(registry),
             mail: Mail::default(),
@@ -851,13 +838,13 @@ impl Shared {
 
     /// 登録表の lock を取る。lock の下で panic した worker は run を致命的な誤りにし、`Machine` も使わなくするので、
     /// 毒が付いても続けてよい。
-    pub(crate) fn lock(&self) -> MutexGuard<'_, Registry> {
+    pub fn lock(&self) -> MutexGuard<'_, Registry> {
         self.cells.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 /// `Task a` の `Foreign` の中身。
-pub(crate) struct TaskHandle {
+pub struct TaskHandle {
     cell: CellRef,
     shared: Arc<Shared>,
     /// `take` が受け取った。受け取ったハンドルはセルをもう指さないので、落ちても知らせない。
@@ -877,7 +864,7 @@ impl Drop for TaskHandle {
 /// リスナーとストリームが、どの worker の driver のハンドルかを表す。ハンドルを引く操作はその worker (host) が driver に
 /// 出す。`listen` と `connect` の結果は受け付けた worker の driver に縛る。`accept` が `Done::Accepted` で返したソケットは
 /// 縛らずに持ち、最初に操作を受け付ける worker の driver に縛る (docs/spec/vm.md の「操作の記録」)。
-pub(crate) enum Bind {
+pub enum Bind {
     /// worker `host` の driver のハンドル `handle`。落ちたら、その driver の bin `bin` に積む。
     Bound {
         host: u32,
@@ -917,7 +904,7 @@ impl Bind {
 }
 
 /// `Std.Net.TcpListener` の `Foreign` の中身。driver のハンドルと、待ち受けるポートを持つ。
-pub(crate) struct NetListener {
+pub struct NetListener {
     bind: Bind,
     port: u16,
 }
@@ -932,7 +919,7 @@ impl Drop for NetListener {
 /// と、ストリームの読みの buffer を持つ。buffer は `read_line` が読んでまだ返していないバイトで、`rest[start..]` が残り
 /// である。`read_line` で読まないストリームでは空のままで、確保も持たない (docs/spec/stdlib.md の「`Std.Net`」、
 /// docs/spec/vm.md の「操作の記録」)。
-pub(crate) struct IoStream {
+pub struct IoStream {
     bind: Bind,
     origin: Origin,
     rest: Vec<u8>,
@@ -952,7 +939,7 @@ enum Origin {
 
 /// `Std.Exec` の子の pipe の向き。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChildPipe {
+pub enum ChildPipe {
     /// 先頭の段の標準入力で、親が書く。
     Stdin,
     /// 最後の段の標準出力で、親が読む。
@@ -1064,7 +1051,7 @@ impl Drop for IoStream {
 /// `Std.Exec.Child` の `Foreign` の中身。段ごとの子と、まだ取り出していない pipe の親の端を持つ。端は driver に
 /// 縛らずに持ち、取り出した `Stream.Writer` か `Stream.Reader` の最初の操作が、その worker の driver に取り込む
 /// (docs/spec/vm.md の「時計と driver」)。
-pub(crate) struct ExecChild {
+pub struct ExecChild {
     stages: Vec<ExecStage>,
     stdin: Option<Bind>,
     stdout: Option<Bind>,
@@ -1082,7 +1069,7 @@ struct ExecStage {
 impl ExecChild {
     /// `Std.Exec.spawn_raw` が起動した子。`programs` と `processes` は段ごとに先頭から並び、数が同じである。`stdin`、
     /// `stdout`、`stderr` は driver の `pipe` が作った親の端である。
-    pub(crate) fn new(
+    pub fn new(
         programs: Vec<Box<str>>,
         processes: Vec<Box<dyn Process>>,
         stdin: Option<RawResource>,
@@ -1148,8 +1135,8 @@ impl Drop for ExecChild {
 /// 閉じないので、ほかの worker の driver で EOF を待つ相手が止まったままになる。そのため `close_own` の bin では、host
 /// も印を立てる。立てるのは各 worker が自分の driver を持つ run だけなので、worker が1つの run の振る舞いは変わらない
 /// (docs/spec/vm.md の「時計と driver」)。
-pub(crate) struct HostBin {
-    pub(crate) bin: Arc<HandleBin>,
+pub struct HostBin {
+    pub bin: Arc<HandleBin>,
     /// host の worker のスレッド。
     host: ThreadId,
     /// host が自分で落としたときも印を立てる。
@@ -1169,7 +1156,7 @@ const CLOSE_OWN: u8 = 3;
 
 impl HostBin {
     /// 今のスレッドを host とする。host の worker が run の始めか最初の受け付けで作る。
-    pub(crate) fn new(bin: Arc<HandleBin>, close_own: bool) -> HostBin {
+    pub fn new(bin: Arc<HandleBin>, close_own: bool) -> HostBin {
         HostBin {
             bin,
             host: std::thread::current().id(),
@@ -1199,7 +1186,7 @@ impl HostBin {
     }
 
     /// ほかの worker が積んで、まだ host を起こしていなければ、起こす役を取って真を返す。
-    pub(crate) fn take_ring(&self) -> bool {
+    pub fn take_ring(&self) -> bool {
         self.state.load(Ordering::Relaxed) == CLOSE_DROPPED
             && self
                 .state
@@ -1213,7 +1200,7 @@ impl HostBin {
     }
 
     /// host が印を下ろし、印があれば真を返す。真なら host は driver に bin を空にさせる。
-    pub(crate) fn take_dropped(&self) -> bool {
+    pub fn take_dropped(&self) -> bool {
         self.state.load(Ordering::Relaxed) != CLOSE_NONE
             && self.state.swap(CLOSE_NONE, Ordering::Acquire) != CLOSE_NONE
     }
@@ -1229,35 +1216,35 @@ impl Default for HostBin {
 /// 登録表が数える仕事の回数。検査モードでなくても数えるが、`RunStats` に写すのは検査モードだけである
 /// (docs/spec/vm.md の「`RunStats`」)。
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct TaskStats {
+pub struct TaskStats {
     /// `start` が作ったタスクのセルの数。
-    pub(crate) tasks: u64,
+    pub tasks: u64,
     /// `park`、`ready`、`park_time`、`park_drain`、`park_send`、`park_recv`、`park_io`、`park_io_until` が渡された
     /// 継続の数と、終わった操作で続けた `op_ready` の数。driver の操作の待ちは `io_wait` と `io_wait_until` の呼び出しの
     /// 数になる。
-    pub(crate) parks: u64,
+    pub parks: u64,
     /// スコープの最初の失敗より後に終わった、失敗のタスクの数。
-    pub(crate) dropped_failures: u64,
+    pub dropped_failures: u64,
     /// 取り消しが届いた回数。待つ前に取り消しを見つけた `park`、`park_time`、`park_drain`、`park_send`、`park_recv`、
     /// `park_io`、`park_io_until`、`park_signal`、mail の処理が外した待ちと取り消しを頼んだ操作の待ち、取り消しで再開する `yield_now`
     /// (速い道が譲る `reschedule` は除く)、真を返した `cancel_point`、偽を返した `claim_scope` を数える
     /// (docs/spec/vm.md の「`RunStats`」)。
-    pub(crate) cancels: u64,
+    pub cancels: u64,
     /// `ms > 0` で、地点で取り消されなかった時間の待ちの数。`park_time` と `park_io_until` と、終わった操作で続けるか
     /// 譲った `op_ready` を数える。`park_io_until` は、操作がもう終わっていて輪に載せなかったときも数える。
-    pub(crate) timers: u64,
+    pub timers: u64,
     /// channel に品物を積んだ回数と取った回数の和。
-    pub(crate) channel_ops: u64,
+    pub channel_ops: u64,
     /// `park_send` と `park_recv` が渡された継続の数。`parks` にも数える。
-    pub(crate) channel_waits: u64,
+    pub channel_waits: u64,
     /// `sweep_all` が放した channel の数。
-    pub(crate) channels_swept: u64,
+    pub channels_swept: u64,
     /// 決着させた driver の操作の結果の数。受け付けで終わった操作と、driver から取り出した完了の和である。
-    pub(crate) completions: u64,
+    pub completions: u64,
 }
 
 /// 登録表の中の、物理的な worker ごとの区画 (docs/spec/vm.md の「セルと登録表」)。
-pub(crate) struct Part {
+pub struct Part {
     /// 時間の輪。項は時間を待つタスクのセルの番号か予定したシグナルで、語を持たない (docs/spec/vm.md の「時間の待ち」)。
     /// タスクの項は、そのタスクの持ち主の区画に置く。
     timers: BTreeMap<TimerKey, Due>,
@@ -1291,7 +1278,7 @@ impl Part {
 
 /// 待ちを外したタスクか token を、持ち主が再開するための起こし。継続は持たず、持ち主が `take_wake` でセルから取り出す
 /// (docs/spec/vm.md の「セルと登録表」)。
-pub(crate) enum Woken {
+pub enum Woken {
     /// タスク `cell` を `wake` で再開する。`op` は操作の待ちからの再開のときの記録である。
     Task {
         cell: CellRef,
@@ -1305,7 +1292,7 @@ pub(crate) enum Woken {
 }
 
 /// `take_wake` の答え。
-pub(crate) enum Route {
+pub enum Route {
     /// 持ち主が自分なので、この仕事を走らせる。
     Run(Runnable),
     /// 持ち主はほかの worker で、値はその番号である。起こしはその worker へ回す。
@@ -1316,7 +1303,7 @@ pub(crate) enum Route {
 
 /// ほかのworkerの受け箱へ知らせを積む道。登録表のlockの下で呼び、持ち主を読んだのと同じ区間で積む
 /// (docs/spec/vm.mdの「セルと登録表」)。実行系が実装する。このファイルはworkerの表を知らないからである。
-pub(crate) trait Post {
+pub trait Post {
     /// worker `k` に、持ち主として起こしを受け取らせる。
     fn wake(&self, k: u32, w: Woken);
     /// worker `k` に、持ち主としてタスク `cell` の取り消しを届ける。
@@ -1339,16 +1326,16 @@ pub(crate) trait Post {
 /// worker のタスクが新しいハンドルを作る操作を受け付ける worker である。既にあるハンドルを引く操作は、ハンドルを
 /// 縛った worker が受け付ける (docs/spec/vm.md の「時計と driver」)。
 #[derive(Clone, Copy)]
-pub(crate) struct Here<'a> {
-    pub(crate) me: u32,
-    pub(crate) host: u32,
-    pub(crate) mail: &'a Mail,
-    pub(crate) post: &'a dyn Post,
+pub struct Here<'a> {
+    pub me: u32,
+    pub host: u32,
+    pub mail: &'a Mail,
+    pub post: &'a dyn Post,
 }
 
 /// 登録表の lock を放してから並べた順に行う、語の破棄と ID の退かせ (docs/spec/vm.md の「セルと登録表」)。
 #[derive(Default)]
-pub(crate) struct Discards(Vec<Discard>);
+pub struct Discards(Vec<Discard>);
 
 enum Discard {
     /// 語を、それを持つ ID の下で落とす。
@@ -1367,11 +1354,7 @@ impl Discards {
     }
 
     /// 並べた順に行う。ID の物体が残っていれば、退かせるときに `TransferLeak` がヒープの誤りとして出る。
-    pub(crate) fn run<M: Mode>(
-        &mut self,
-        ctx: &mut Ctx<M>,
-        depth_offset: usize,
-    ) -> Result<(), CellFault> {
+    pub fn run<M: Mode>(&mut self, ctx: &mut Ctx<M>, depth_offset: usize) -> Result<(), CellFault> {
         for discard in self.0.drain(..) {
             match discard {
                 Discard::Word(w, worker) => Depot::of(worker).discard(ctx, w, depth_offset)?,
@@ -1384,7 +1367,7 @@ impl Discards {
 
 /// 登録表の lock を放してから行う driver の呼び出し。受け付けを並べた順に出し、その後で取り消しを頼む。
 #[derive(Default)]
-pub(crate) struct IoWork {
+pub struct IoWork {
     /// 出す記録と操作と、取り出す区間で取り消しの印を読んだか。印があれば、driver が `Pending` を返したときだけ、
     /// 出した直後に取り消しを頼む。
     submits: Vec<(CellRef, Op, bool)>,
@@ -1402,7 +1385,7 @@ impl IoWork {
 
     /// `cancel_all` を、driver を持たないかもしれない worker が呼ぶ。取り消しを積むのは host の worker だけなので、
     /// driver がないのに取り消しがあれば内部の誤りである。
-    pub(crate) fn cancel_on(
+    pub fn cancel_on(
         &mut self,
         driver: Option<&mut (dyn IoDriver + 'static)>,
     ) -> Result<(), CellFault> {
@@ -1421,7 +1404,7 @@ impl IoWork {
 
 /// `arrive` の答え。結果を当てるのは記録の持ち主だけである (docs/spec/vm.md の「操作の記録」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Arrival {
+pub enum Arrival {
     /// 持ち主が自分なので、同じ区間で当てる。
     Settle,
     /// 持ち主はほかの worker で、待つタスクがいる。値はその番号で、持ち主へ `Completion` を送る。
@@ -1432,7 +1415,7 @@ pub(crate) enum Arrival {
 
 /// `cancel_io` の答え。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CancelPath {
+pub enum CancelPath {
     /// まだ driver に出していない。host が出す区間で印を読み、出した後に取り消す。
     Flag,
     /// 自分が host なので、lock を放してから自分の driver に頼む。
@@ -1442,27 +1425,27 @@ pub(crate) enum CancelPath {
 }
 
 /// 1回の実行のセルの表。実行ごとに作る (docs/spec/vm.md の「`Async` のタスク」)。
-pub(crate) struct Registry {
+pub struct Registry {
     /// 添字ごとの generation と中身。空いた添字の generation は、次に出す番号のものである。
     slots: Vec<(u32, Option<CellKind>)>,
     free: Vec<u32>,
-    pub(crate) stats: TaskStats,
+    pub stats: TaskStats,
     /// 持ち主を `start` を実行した worker と違う worker にしたタスクの数。両方のモードで数え、`RunStats` には入れない
     /// (docs/spec/vm.mdの「`Async`のタスク」)。
-    pub(crate) placed_tasks: u64,
+    pub placed_tasks: u64,
     /// 始めた固定したタスクの数。両方のモードで数え、`RunStats`には入れない。
-    pub(crate) pinned_tasks: u64,
+    pub pinned_tasks: u64,
     /// worker ごとの区画。添字が worker の番号である。
     parts: Vec<Part>,
     /// シグナルの番号ごとの、待ち始めた順の待ち手。項はいつも生きていて、`wait == Some(Wait::Signal(その番号))` である。
     signal_waiters: [Vec<CellRef>; 2],
     /// 届けたときに待つタスクのいなかったシグナルのビット。集める地点の後で run を止める
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) unheard: u32,
+    pub unheard: u32,
     /// OS のシグナルを待つタスクへ中継する run か。worker 0 が run の始めに1回だけ書く。見張りの語を書くのは集める
     /// worker のどれでもよいが、中継を決める監視のスレッドは worker 0 だけが持つので、ここに置く
     /// (docs/spec/vm.md の「上限と割り込み」)。
-    pub(crate) relay: bool,
+    pub relay: bool,
     /// driver を持つ worker ごとの、その driver が閉じるハンドルの bin。持ち主が host の driver の結果から作るリスナーと
     /// ストリームは、落ちたときに host の bin に積む (docs/spec/vm.md の「操作の記録」)。
     bins: Vec<Option<Arc<HostBin>>>,
@@ -1472,7 +1455,7 @@ impl Registry {
     /// `generations` は前の run までに使った添字の、次に出す generation である (`next_generations`)。前の run の
     /// `Scope` と `Chan a` の値がこの run のセルを指さないように、添字ごとに generation を続ける。`workers` は run の
     /// worker の数で、区画をその数だけ作る。
-    pub(crate) fn new(generations: Vec<u32>, workers: usize) -> Registry {
+    pub fn new(generations: Vec<u32>, workers: usize) -> Registry {
         // 小さい添字から使うように、逆の順に積む
         let free = (0..generations.len())
             .rev()
@@ -1494,7 +1477,7 @@ impl Registry {
     }
 
     /// worker `k` の driver の bin を覚える。driver を持つ worker が run の始めに1回だけ書く。
-    pub(crate) fn set_bin(&mut self, k: usize, bin: Arc<HostBin>) {
+    pub fn set_bin(&mut self, k: usize, bin: Arc<HostBin>) {
         self.bins[k] = Some(bin);
     }
 
@@ -1513,25 +1496,25 @@ impl Registry {
     /// 予定した仮想のシグナル (期限のミリ秒とビットの組) を、並びの順に worker 0 の時間の輪へ載せる。run の始めに、
     /// どのタイマーよりも先に呼ぶので、同じ期限ではプログラムのタイマーより先に満ちる。`timers` には数えない
     /// (docs/spec/vm.md の「時間の待ち」)。
-    pub(crate) fn schedule_signals(&mut self, signals: impl IntoIterator<Item = (u64, u32)>) {
+    pub fn schedule_signals(&mut self, signals: impl IntoIterator<Item = (u64, u32)>) {
         for (deadline, bit) in signals {
             self.parts[0].add_timer(deadline, Due::Signal(bit));
         }
     }
 
     /// worker `k` が host で、driver に出してまだ結果を受け取っていない操作の数。
-    pub(crate) fn in_flight(&self, k: usize) -> usize {
+    pub fn in_flight(&self, k: usize) -> usize {
         self.parts[k].in_flight
     }
 
     /// driver に出してまだ結果を受け取っていない操作の、すべての区画の和。driver の約束から、host ごとの数はその
     /// driver の `pending()` に等しい (docs/spec/vm.md の「時計と driver」)。
-    pub(crate) fn in_flight_all(&self) -> usize {
+    pub fn in_flight_all(&self) -> usize {
         self.parts.iter().map(|part| part.in_flight).sum()
     }
 
     /// 輪が空でない区画ごとの、持ち主の番号といちばん早い期限。
-    pub(crate) fn deadlines(&self) -> impl Iterator<Item = (usize, u64)> + '_ {
+    pub fn deadlines(&self) -> impl Iterator<Item = (usize, u64)> + '_ {
         self.parts.iter().enumerate().filter_map(|(owner, part)| {
             part.timers
                 .first_key_value()
@@ -1540,7 +1523,7 @@ impl Registry {
     }
 
     /// worker `k` の区画のいちばん早いタイマーの期限。輪が空なら `None` である。
-    pub(crate) fn next_deadline(&self, k: usize) -> Option<u64> {
+    pub fn next_deadline(&self, k: usize) -> Option<u64> {
         self.parts[k]
             .timers
             .first_key_value()
@@ -1551,7 +1534,7 @@ impl Registry {
     /// 起こしを `out` に積む。輪の項と待ちの登録は、どちらが先に外れても他方を残さない (docs/spec/vm.md の「時間の待ち」)。
     /// 操作の待ちの期限は再開せず、driver への取り消しを `work` に積む。driver が記憶を使い終わるまで buffer を返せない
     /// ので、再開は結果を当てる `settle_op` が行う。予定したシグナルは、そのときの待ち手に届ける。
-    pub(crate) fn expire(
+    pub fn expire(
         &mut self,
         now_ms: u64,
         k: usize,
@@ -1596,7 +1579,7 @@ impl Registry {
 
     /// 待っているタスク `cell` の待ちを外し、`wake` で再開する起こしを返す。継続はセルに残し、持ち主が `take_wake` で
     /// 取り出す。止まっていないタスクには何もしない。
-    pub(crate) fn wake_cell(
+    pub fn wake_cell(
         &mut self,
         cell: CellRef,
         wake: i64,
@@ -1611,7 +1594,7 @@ impl Registry {
     }
 
     /// 起こし `w` を worker `me` が受け取る。持ち主が自分なら、セルから継続を取り出して走らせる仕事を返す。
-    pub(crate) fn take_wake(&mut self, w: &Woken, me: u32) -> Result<Route, CellFault> {
+    pub fn take_wake(&mut self, w: &Woken, me: u32) -> Result<Route, CellFault> {
         match *w {
             Woken::Token { owner, token } => Ok(if owner == me {
                 Route::Run(Runnable::Token(token))
@@ -1654,7 +1637,7 @@ impl Registry {
     /// 起こしをすべてworker `here.me`で受け取る。持ち主が自分のものは走らせる仕事にして`out`に積み、ほかのworkerの
     /// ものは同じ区間でその持ち主の受け箱に送る。起こしは宛先を持たないので、セルの持ち主で決める
     /// (docs/spec/vm.mdの「セルと登録表」)。もう待っていないセルへの起こしは内部の誤りである。
-    pub(crate) fn route(
+    pub fn route(
         &mut self,
         woken: &mut Vec<Woken>,
         here: &Here,
@@ -1672,7 +1655,7 @@ impl Registry {
 
     /// 受け箱から取った起こし`w`が、worker `me`が持ち主のタスクか、`me`の上で待つ`Task`を名指すか。`take_async`が
     /// debugのビルドで確かめる。もう生きていないセルへの起こしは`route`が内部の誤りにするので、真を返す。
-    pub(crate) fn wake_is_for(&mut self, w: &Woken, me: u32) -> bool {
+    pub fn wake_is_for(&mut self, w: &Woken, me: u32) -> bool {
         match *w {
             Woken::Token { owner, .. } => owner == me,
             Woken::Task { cell, .. } => match self.live(cell) {
@@ -1684,7 +1667,7 @@ impl Registry {
 
     /// 受け箱の起こし `w` を worker `me` が受け取れば、走らせる仕事になるか。継続は取り出さない。run の終わりに残った
     /// 知らせを数えるために使う (docs/spec/vm.md の「誤り、止めること、終わり」)。
-    pub(crate) fn would_run(&mut self, w: &Woken, me: u32) -> bool {
+    pub fn would_run(&mut self, w: &Woken, me: u32) -> bool {
         match *w {
             Woken::Token { owner, .. } => owner == me,
             Woken::Task { cell, .. } => match self.live(cell) {
@@ -1702,7 +1685,7 @@ impl Registry {
     /// 成功した run の `main` の `Finish` で、終わっていないタスクか、driver に出したままか置いたままの操作の記録が
     /// 残っているか。どれかがあれば、タスクが残ったまま run が終わる。結果を置いただけの記録は残ってよく、`sweep_all`
     /// が語を落とす (docs/spec/vm.md の「誤り、止めること、終わり」)。
-    pub(crate) fn left_at_end(&self) -> bool {
+    pub fn left_at_end(&self) -> bool {
         self.slots.iter().any(|(_, kind)| match kind {
             Some(CellKind::Task(task)) => !matches!(task.phase, Phase::Finished),
             Some(CellKind::Op(record)) => record.submitted || record.pending_op.is_some(),
@@ -1715,7 +1698,7 @@ impl Registry {
     /// worker `k` の driver を静止させた後に、driver が返した完了を記録に置き、`k` が host の操作の数を 0 にする。
     /// 静止させた driver はもう記憶に触れないので、置いた結果は当てずに `sweep_all` が記録ごと捨てる
     /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
-    pub(crate) fn quiesced(&mut self, k: usize, completed: &mut Vec<Completion>) {
+    pub fn quiesced(&mut self, k: usize, completed: &mut Vec<Completion>) {
         for Completion {
             key,
             result,
@@ -1734,7 +1717,7 @@ impl Registry {
 
     /// 見張りの語を、待ち手の列が空でないシグナルに合わせる。中継しない run では 0 にする。登録表の lock の下で書くので、
     /// 複数の worker が書いても、最後に書いた値が列の今の形に合う (docs/spec/vm.md の「上限と割り込み」)。
-    pub(crate) fn watch(&self, control: &Control) {
+    pub fn watch(&self, control: &Control) {
         control.set_watched(if self.relay { self.signal_bits() } else { 0 });
     }
 
@@ -1826,7 +1809,7 @@ impl Registry {
 
     /// 次の run の `generations`。添字ごとに、この run までに出したどの generation よりも大きい。誤りで止まった run は
     /// セルを残すので、残ったセルの generation も1つ進める。`slots` は run の間に縮まない。
-    pub(crate) fn next_generations(&self) -> Vec<u32> {
+    pub fn next_generations(&self) -> Vec<u32> {
         self.slots
             .iter()
             .map(|(generation, kind)| generation + u32::from(kind.is_some()))
@@ -1834,18 +1817,18 @@ impl Registry {
     }
 
     /// タスクが新しいタスクを加える今のスコープ。
-    pub(crate) fn current_of(&mut self, cell: CellRef) -> Result<CellRef, CellFault> {
+    pub fn current_of(&mut self, cell: CellRef) -> Result<CellRef, CellFault> {
         Ok(self.task_mut(cell)?.current)
     }
 
     /// タスク`cell`がメインのworkerに固定したタスクか。そのタスクが始めるタスクも固定する
     /// (docs/spec/vm.mdの「`Async`のタスク」)。
-    pub(crate) fn pinned(&mut self, cell: CellRef) -> Result<bool, CellFault> {
+    pub fn pinned(&mut self, cell: CellRef) -> Result<bool, CellFault> {
         Ok(self.task_mut(cell)?.pinned)
     }
 
     /// スコープが閉じているか。
-    pub(crate) fn closed(&mut self, scope: CellRef) -> Result<bool, CellFault> {
+    pub fn closed(&mut self, scope: CellRef) -> Result<bool, CellFault> {
         Ok(self.scope_mut(scope)?.closed)
     }
 
@@ -1917,7 +1900,7 @@ impl Registry {
     }
 
     /// 根のスコープを開く。入れ子の `run` の根は呼んだタスク `caller` を開いたタスクとして持つ。
-    pub(crate) fn open_root(
+    pub fn open_root(
         &mut self,
         parent: Option<CellRef>,
         caller: Option<CellRef>,
@@ -1937,7 +1920,7 @@ impl Registry {
     /// 新しい ID に渡す前に、`g` とまだ印のないセッションの根 `roots` に共有の印を付ける (`par` の fork と同じ。
     /// docs/spec/vm.md の「`Async` のタスク」)。
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn start<M: Mode>(
+    pub fn start<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         here: &Here,
@@ -2005,7 +1988,7 @@ impl Registry {
     /// 受け箱の`Place`が名指すタスクが、始まるのを待っているかを確かめる。置いたタスクは始まるまで放されないので、
     /// 始まるのを待っていないセルは内部の誤りである。受けたworker `me`は持ち主である。`start`が持ち主に送り、
     /// 持ち主は変わらないためである (docs/spec/vm.mdの「タスクとスケジュール」)。
-    pub(crate) fn placed(&mut self, cell: CellRef, worker: u32, me: u32) -> Result<(), CellFault> {
+    pub fn placed(&mut self, cell: CellRef, worker: u32, me: u32) -> Result<(), CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Placed) || task.worker != worker {
             return Err(CellFault::Internal("a placed task is not waiting to start"));
@@ -2019,7 +2002,7 @@ impl Registry {
 
     /// 始める仕事を実行系が動かし始めた。始めたタスクの ID とタスクの上限の印を返す。実行系は、その ID から閉包を
     /// `transfer_back` する。
-    pub(crate) fn started(&mut self, cell: CellRef) -> Result<(u32, TaskMarks), CellFault> {
+    pub fn started(&mut self, cell: CellRef) -> Result<(u32, TaskMarks), CellFault> {
         let task = self.task_mut(cell)?;
         if !matches!(task.phase, Phase::Placed) {
             return Err(CellFault::Internal("a task starts twice"));
@@ -2040,7 +2023,7 @@ impl Registry {
     /// 数えない。std の包みはその `Wake` を見ず、次の取り消しの地点が数えて投げるためである。仕事の待ちからの再開は、
     /// 実行待ちからの再開と同じ規則で替える。仕事の待ちは取り消しで外れないので、取り消しは仕事が終わってから届く
     /// (docs/spec/vm.md の「取り消しの届け方」)。
-    pub(crate) fn resumed(
+    pub fn resumed(
         &mut self,
         cell: CellRef,
         wake: i64,
@@ -2070,7 +2053,7 @@ impl Registry {
 
     /// タスクの上限の旗を下ろし、タスクの数を 0 に戻す。`ResourceLimit` を起こした実行系が呼ぶ。もう放したセルは
     /// 何もしない。旗を見る者がもういないためである (docs/spec/vm.md の「タスクの上限」)。
-    pub(crate) fn clear_limit(&mut self, cell: CellRef) -> Result<(), CellFault> {
+    pub fn clear_limit(&mut self, cell: CellRef) -> Result<(), CellFault> {
         if self.live(cell).is_none() {
             return Ok(());
         }
@@ -2086,11 +2069,7 @@ impl Registry {
     /// まま待つタスクも`Running`のままで、その`Task`を持つのは持ち主だからである。持ち主が自分ならセルを返し、呼び手の
     /// 実行系がそのVMの`Task`に旗を付ける。置いたか待っているタスクはVMの`Task`を持たないので、旗だけを残し、次の
     /// `started`か`resumed`が返す (docs/spec/vm.mdの「タスクの上限」)。
-    pub(crate) fn limit_task(
-        &mut self,
-        cell: CellRef,
-        here: &Here,
-    ) -> Result<Option<CellRef>, CellFault> {
+    pub fn limit_task(&mut self, cell: CellRef, here: &Here) -> Result<Option<CellRef>, CellFault> {
         let Some(CellKind::Task(task)) = self.live(cell) else {
             return Ok(None);
         };
@@ -2111,7 +2090,7 @@ impl Registry {
     /// ほかのworkerが回した`Notice::Limit`を持ち主`me`として受けた。旗をもう一度立てず、まだ立っていてタスクが動いて
     /// いるときだけセルを返す。知らせが届く前にタスクが`ResourceLimit`を起こして旗を下ろしていれば、遅れた知らせで
     /// 2度目の失敗を起こさないためである。置いたか待っているタスクは旗だけを残す (docs/spec/vm.mdの「タスクの上限」)。
-    pub(crate) fn limit_forwarded(&mut self, cell: CellRef, me: u32) -> Option<CellRef> {
+    pub fn limit_forwarded(&mut self, cell: CellRef, me: u32) -> Option<CellRef> {
         match self.live(cell) {
             Some(CellKind::Task(task)) if task.limit && matches!(task.phase, Phase::Running) => {
                 debug_assert_eq!(
@@ -2128,7 +2107,7 @@ impl Registry {
     /// 持ち主が次の集める地点の最初の区間で呼ぶ。もう放したセルは飛ばす。待ちに入ったエントリの`Task`が`Finish`に着く前
     /// に、同じタスクの次のエントリの`Task`がタスクを終え、ハンドルの`take`がセルを放しうるためである
     /// (docs/spec/vm.mdの「タスクとスケジュール」)。
-    pub(crate) fn add_bytes(&mut self, cells: &mut Vec<(CellRef, usize)>) -> Result<(), CellFault> {
+    pub fn add_bytes(&mut self, cells: &mut Vec<(CellRef, usize)>) -> Result<(), CellFault> {
         for (cell, added) in cells.drain(..) {
             if self.live(cell).is_none() {
                 continue;
@@ -2153,12 +2132,7 @@ impl Registry {
 
     /// タスク `me` が、継続 `k` でセル `c` が終わるか閉じるのを待つ。もう終わっていれば、すぐ再開する仕事を返す。
     /// どちらでも、`k` は継続の待ちか返す仕事に移る。終わったセルにも近道をせず、いつも継続を渡して再開する。
-    pub(crate) fn park(
-        &mut self,
-        c: i64,
-        me: CellRef,
-        k: Word,
-    ) -> Result<Option<Runnable>, CellFault> {
+    pub fn park(&mut self, c: i64, me: CellRef, k: Word) -> Result<Option<Runnable>, CellFault> {
         let target = CellRef::decode(c);
         match self.cell_mut(target)? {
             CellKind::Job(_) => return self.park_job(target, me, k),
@@ -2241,7 +2215,7 @@ impl Registry {
 
     /// タスク `me` が、継続 `k` でスコープ `s` に属するタスクがなくなるまで待つ。`s` は閉じない。閉じたスコープ、
     /// 離れたスコープ、前の run のスコープ、空のスコープでは、すぐ再開する仕事を返す (docs/spec/vm.md の「命令」)。
-    pub(crate) fn park_drain(
+    pub fn park_drain(
         &mut self,
         s: i64,
         me: CellRef,
@@ -2298,7 +2272,7 @@ impl Registry {
     }
 
     /// タスク `me` が、継続 `k` で実行待ちの列の後ろへ回る。
-    pub(crate) fn ready(&mut self, me: CellRef, k: Word) -> Result<Runnable, CellFault> {
+    pub fn ready(&mut self, me: CellRef, k: Word) -> Result<Runnable, CellFault> {
         let worker = self.suspend(me)?;
         self.stats.parks += 1;
         self.task_mut(me)?.wait = Some(Wait::Ready);
@@ -2312,7 +2286,7 @@ impl Registry {
 
     /// タスク `me` が、継続 `k` で `ms` ミリ秒眠る。`now_ms` は切り上げて読んだ今の時刻である。0 以下は譲りにして
     /// 輪に載せないので、VM は時計を読まず、次に集める地点までの遅れもない (docs/spec/vm.md の「時間の待ち」)。
-    pub(crate) fn park_time(
+    pub fn park_time(
         &mut self,
         now_ms: u64,
         ms: i64,
@@ -2352,7 +2326,7 @@ impl Registry {
 
     /// タスク `me` が、継続 `k` でシグナル `signal` (0 が `Interrupt`、1 が `Terminate`) を待つ。取り消しの地点で、
     /// 待つ前に取り消されていれば列に積まずに `Cancelled` で再開する仕事を返す (docs/spec/vm.md の「待ちの2種類」)。
-    pub(crate) fn park_signal(
+    pub fn park_signal(
         &mut self,
         signal: i64,
         me: CellRef,
@@ -2382,7 +2356,7 @@ impl Registry {
     }
 
     /// 待ち手の列が空でないシグナルのビット。
-    pub(crate) fn signal_bits(&self) -> u32 {
+    pub fn signal_bits(&self) -> u32 {
         SIGNAL_BITS
             .iter()
             .zip(&self.signal_waiters)
@@ -2425,12 +2399,7 @@ impl Registry {
     }
 
     /// `cell` が終わるか閉じるまで、worker `owner` の token で待つ。
-    pub(crate) fn wait(
-        &mut self,
-        cell: CellRef,
-        token: WaitToken,
-        owner: u32,
-    ) -> Result<(), CellFault> {
+    pub fn wait(&mut self, cell: CellRef, token: WaitToken, owner: u32) -> Result<(), CellFault> {
         let waiters = match self.cell_mut(cell)? {
             CellKind::Task(task) => &mut task.waiters,
             CellKind::Scope(scope) => &mut scope.waiters,
@@ -2446,7 +2415,7 @@ impl Registry {
     /// スコープの最後のタスクなら、閉じる印のあるスコープを閉じ、加わるタスクを取り消す印を下ろし、スコープの待ち手を
     /// すべて起こす。`park_drain` の待ち手は閉じる印のないスコープも待つ。ハンドルがもう落ちていれば、セルをすぐ放し、
     /// 値の破棄と ID の退かせを `discards` に積む。
-    pub(crate) fn finish(
+    pub fn finish(
         &mut self,
         here: &Here,
         cell: CellRef,
@@ -2546,7 +2515,7 @@ impl Registry {
     /// 返す。失敗なら起こし直す失敗を返す。根のスコープの失敗が先の `Take::Run` では、値の語を `dropped` に積む。
     /// タスクの ID の退かせは `retired` に積む。呼ぶ側は、値を受け取るか `dropped` を行い、ハンドルを手放してから
     /// `retired` を行う。
-    pub(crate) fn take(
+    pub fn take(
         &mut self,
         cell: CellRef,
         kind: Take,
@@ -2588,7 +2557,7 @@ impl Registry {
 
     /// `detach` と `cancel_raw`。ハンドルを手放したタスクのセルを、終わっていれば放し、そうでなければ持ち手のないタスクに
     /// する。
-    pub(crate) fn let_go(
+    pub fn let_go(
         &mut self,
         here: &Here,
         cell: CellRef,
@@ -2606,12 +2575,12 @@ impl Registry {
         Ok(())
     }
 
-    pub(crate) fn shield_enter(&mut self, me: CellRef) -> Result<(), CellFault> {
+    pub fn shield_enter(&mut self, me: CellRef) -> Result<(), CellFault> {
         self.task_mut(me)?.shield += 1;
         Ok(())
     }
 
-    pub(crate) fn shield_leave(&mut self, me: CellRef) -> Result<(), CellFault> {
+    pub fn shield_leave(&mut self, me: CellRef) -> Result<(), CellFault> {
         let task = self.task_mut(me)?;
         task.shield = task
             .shield
@@ -2621,7 +2590,7 @@ impl Registry {
     }
 
     /// 取り消しの地点が投げるかを答える。タスクの外では偽である。真の答えは取り消しが届いたものとして数える。
-    pub(crate) fn cancel_point(&mut self, me: Option<CellRef>) -> Result<bool, CellFault> {
+    pub fn cancel_point(&mut self, me: Option<CellRef>) -> Result<bool, CellFault> {
         let Some(me) = me else {
             return Ok(false);
         };
@@ -2631,14 +2600,14 @@ impl Registry {
     }
 
     /// 速い道の予算を `cost` だけ使う。残りより多ければ残りをすべて使う。使い切ったら真を返し、再開まで真のままである。
-    pub(crate) fn spend_budget(&mut self, me: CellRef, cost: u32) -> Result<bool, CellFault> {
+    pub fn spend_budget(&mut self, me: CellRef, cost: u32) -> Result<bool, CellFault> {
         let task = self.task_mut(me)?;
         task.budget = task.budget.saturating_sub(cost);
         Ok(task.budget == 0)
     }
 
     /// 生きているスコープのセル。閉じていても返す。離れたスコープと前の run のスコープは `None` である。
-    pub(crate) fn scope_cell(&mut self, s: i64) -> Option<CellRef> {
+    pub fn scope_cell(&mut self, s: i64) -> Option<CellRef> {
         let cell = CellRef::decode(s);
         match self.live(cell) {
             Some(CellKind::Scope(_)) => Some(cell),
@@ -2647,7 +2616,7 @@ impl Registry {
     }
 
     /// `scope` の本体のスコープを開いて、`me` の今のスコープにする。
-    pub(crate) fn open_scope(&mut self, me: CellRef) -> Result<i64, CellFault> {
+    pub fn open_scope(&mut self, me: CellRef) -> Result<i64, CellFault> {
         let parent = self.task_mut(me)?.current;
         let s = self.new_scope(Some(parent), Some(me), false)?;
         self.task_mut(me)?.current = s;
@@ -2656,7 +2625,7 @@ impl Registry {
     }
 
     /// 閉じる印を付け、待つセルの番号を返す。タスクが残っていなければすぐ閉じる。
-    pub(crate) fn close_scope(&mut self, s: i64) -> Result<i64, CellFault> {
+    pub fn close_scope(&mut self, s: i64) -> Result<i64, CellFault> {
         let cell = self
             .scope_cell(s)
             .ok_or(CellFault::Internal("a scope closes after it is left"))?;
@@ -2669,7 +2638,7 @@ impl Registry {
     }
 
     /// 閉じたスコープを離れ、今のスコープを親に戻す。最初の失敗を返す。
-    pub(crate) fn leave_scope(&mut self, s: i64, me: CellRef) -> Result<Option<Raise>, CellFault> {
+    pub fn leave_scope(&mut self, s: i64, me: CellRef) -> Result<Option<Raise>, CellFault> {
         let cell = self
             .scope_cell(s)
             .ok_or(CellFault::Internal("a scope is left twice"))?;
@@ -2688,7 +2657,7 @@ impl Registry {
     }
 
     /// `cancel_scope`。閉じたスコープには何もしない。
-    pub(crate) fn cancel_scope(&mut self, here: &Here, s: i64) -> Result<(), CellFault> {
+    pub fn cancel_scope(&mut self, here: &Here, s: i64) -> Result<(), CellFault> {
         if let Some(cell) = self.scope_cell(s)
             && !self.scope_mut(cell)?.closed
         {
@@ -2700,12 +2669,7 @@ impl Registry {
     /// `race` の勝ちを決める。呼んだタスクのビットか今のスコープの旗が立っていれば、取り消しが届いたものとして数えて偽を
     /// 返す。そうでなければ、同じ呼び出しの中で `s` に旗を立てて真を返す。`shield` は見ない
     /// (docs/spec/vm.md の「命令」)。
-    pub(crate) fn claim_scope(
-        &mut self,
-        here: &Here,
-        s: i64,
-        me: CellRef,
-    ) -> Result<bool, CellFault> {
+    pub fn claim_scope(&mut self, here: &Here, s: i64, me: CellRef) -> Result<bool, CellFault> {
         let task = self.task_mut(me)?;
         let (bit, current) = (task.cancel, task.current);
         if bit || self.scope_mut(current)?.flag {
@@ -2719,7 +2683,7 @@ impl Registry {
     /// `s` に属するタスクをそれぞれ取り消し、`s` が空になるまで加わるタスクも取り消す。`s` の旗は立てないので、`s` の
     /// 本体は取り消さない。印は一覧を読む前に立て、間に加わるタスクを取りこぼさない
     /// (docs/spec/vm.md の「取り消しの届け方」)。
-    pub(crate) fn cancel_members(&mut self, here: &Here, s: i64) -> Result<(), CellFault> {
+    pub fn cancel_members(&mut self, here: &Here, s: i64) -> Result<(), CellFault> {
         if let Some(cell) = self.scope_cell(s)
             && !self.scope_mut(cell)?.closed
         {
@@ -2734,12 +2698,7 @@ impl Registry {
     }
 
     /// `scope` の本体の失敗を記録し、子をすべて取り消す。種類 `Cancelled` は記録しない。
-    pub(crate) fn fail_scope(
-        &mut self,
-        here: &Here,
-        s: i64,
-        failure: Outcome,
-    ) -> Result<(), CellFault> {
+    pub fn fail_scope(&mut self, here: &Here, s: i64, failure: Outcome) -> Result<(), CellFault> {
         let cell = self
             .scope_cell(s)
             .ok_or(CellFault::Internal("a scope fails after it is left"))?;
@@ -2829,7 +2788,7 @@ impl Registry {
     /// channel の待ち手の列の項はいつも生きているので、ここで外す。操作を待つタスクは、driver が記憶を使い終わるまで
     /// 再開できないので、待ちを外さずに取り消しを `work` に積み、結果を当てるときに `Cancelled` として再開する
     /// (docs/spec/vm.md の「取り消しの届け方」)。
-    pub(crate) fn unpark(
+    pub fn unpark(
         &mut self,
         cell: CellRef,
         here: &Here,
@@ -2903,7 +2862,7 @@ impl Registry {
     /// `work` に、放したセルの値と ID を `discards` に、旗を付ける VM の `Task` が自分の worker にあるタスクのセルを
     /// `limited` に積み、保留から下ろすシグナルのビットを返す。処理が新しい項を mail に積むことがある
     /// (docs/spec/vm.md の「タスクとスケジュール」)。
-    pub(crate) fn receive_mail(
+    pub fn receive_mail(
         &mut self,
         here: &Here,
         item: MailItem,
@@ -2931,7 +2890,7 @@ impl Registry {
     /// 残った channel もここで放す。driver が保留の操作を持たないことを前提にし、呼ぶ側が先に `quiesce` する
     /// (docs/spec/vm.md の「時計と driver」)。操作の記録の語は受け付けたタスクの ID の物体なので、タスクのセルが ID を
     /// 退かせる前に、記録を先に回って落とす (docs/spec/vm.md の「終わり」)。
-    pub(crate) fn sweep_all(&mut self, discards: &mut Discards) -> Result<(), CellFault> {
+    pub fn sweep_all(&mut self, discards: &mut Discards) -> Result<(), CellFault> {
         for index in 0..self.slots.len() {
             if matches!(self.slots[index].1, Some(CellKind::Op(_)))
                 && let Some(CellKind::Op(record)) = self.slots[index].1.take()
@@ -2992,14 +2951,7 @@ impl Registry {
 /// GUIのゲートのセル (docs/spec/vm.mdの「セルと登録表」)。GUIの腕が開き、`poke_raw`の行とメインのworkerの`Park`が
 /// 知らせ、GUIを閉じた`Park`か、開く前に諦めたタスクが放す。
 impl Registry {
-    #[cfg_attr(
-        not(feature = "gui"),
-        allow(
-            dead_code,
-            reason = "only the GUI arms open a gate (docs/spec/vm.md 「セルと登録表」)"
-        )
-    )]
-    pub(crate) fn open_gate(&mut self) -> CellRef {
+    pub fn open_gate(&mut self) -> CellRef {
         self.alloc(CellKind::Gate(GateCell {
             flag: false,
             waiter: None,
@@ -3008,7 +2960,7 @@ impl Registry {
 
     /// ゲート`c`に知らせる。待つタスクがいれば`Woke`で起こし、いなければ旗を立てる。もう放したゲートと古い番号には
     /// 何もしない。runの後に残る`Sink`の値が知らせうるからである。
-    pub(crate) fn poke_gate(&mut self, c: i64, out: &mut Vec<Woken>) -> Result<(), CellFault> {
+    pub fn poke_gate(&mut self, c: i64, out: &mut Vec<Woken>) -> Result<(), CellFault> {
         let gate = match self.live(CellRef::decode(c)) {
             None => return Ok(()),
             Some(CellKind::Gate(gate)) => gate,
@@ -3026,7 +2978,7 @@ impl Registry {
     }
 
     /// ゲート`c`を放す。もう放したゲートには何もしない。待つタスクがいれば内部の誤りである。
-    pub(crate) fn release_gate(&mut self, c: i64) -> Result<(), CellFault> {
+    pub fn release_gate(&mut self, c: i64) -> Result<(), CellFault> {
         let target = CellRef::decode(c);
         match self.live(target) {
             None => Ok(()),
@@ -3090,7 +3042,7 @@ impl Registry {
 /// `finish_job` で終わりを置いて待ち手を起こし、出したタスクの `take_job` か `drop_job` の行が放す。
 impl Registry {
     /// タスク `submitter` が出した、論理的な ID `worker` で動く仕事のセルを作る。
-    pub(crate) fn new_job(&mut self, worker: u32, submitter: CellRef) -> CellRef {
+    pub fn new_job(&mut self, worker: u32, submitter: CellRef) -> CellRef {
         self.alloc(CellKind::Job(JobCell {
             worker,
             submitter,
@@ -3100,7 +3052,7 @@ impl Registry {
     }
 
     /// 仕事 `cell` の終わり `end` を置き、待っているタスクがいれば起こしを `out` に積む。
-    pub(crate) fn finish_job(
+    pub fn finish_job(
         &mut self,
         cell: CellRef,
         end: JobEnd,
@@ -3127,7 +3079,7 @@ impl Registry {
 
     /// タスク `me` が token `raw` の終わった仕事を取り出し、セルを放す。仕事の ID と終わりを返す。終わりの語は仕事の ID
     /// の物体なので、呼ぶ側が lock を放してから `transfer_back` し、ID を退かせる。
-    pub(crate) fn take_job(&mut self, raw: i64, me: CellRef) -> Result<(u32, JobEnd), CellFault> {
+    pub fn take_job(&mut self, raw: i64, me: CellRef) -> Result<(u32, JobEnd), CellFault> {
         let cell = CellRef::decode(raw);
         let job = self.job_mut(cell)?;
         if job.submitter != me {
@@ -3232,7 +3184,7 @@ impl Registry {
     }
 
     /// 持ち主が、記録 `c` に次の操作 `op` を置く。記録は driver に出しておらず、置いた操作もない。
-    pub(crate) fn queue_op(&mut self, c: CellRef, op: Op) -> Result<(), CellFault> {
+    pub fn queue_op(&mut self, c: CellRef, op: Op) -> Result<(), CellFault> {
         let record = self.op_mut(c)?;
         if record.submitted || record.pending_op.is_some() || record.arrival.is_some() {
             return Err(CellFault::Internal("an op is queued while it is busy"));
@@ -3243,7 +3195,7 @@ impl Registry {
 
     /// host が、記録 `c` に置かれた操作を driver に出すために取り出す。同じ区間で受け付けた印を立て、取り消しの印を読む。
     /// 真なら、取り消しが受け付けの前に来たので、host は出した後に取り消しを頼む (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn take_queued(&mut self, c: CellRef) -> Result<(Op, bool), CellFault> {
+    pub fn take_queued(&mut self, c: CellRef) -> Result<(Op, bool), CellFault> {
         let record = self.op_mut(c)?;
         let op = record.pending_op.take().ok_or(CellFault::Internal(
             "an op is submitted without being queued",
@@ -3257,7 +3209,7 @@ impl Registry {
     /// host `me` が、driver から受け取った記録 `c` の結果を置く。記録は driver に出したもので、まだ結果を置いていない。
     /// そうでない鍵の結果は内部の誤りである。結果を当てるのは持ち主なので、持ち主がほかの worker なら、待つタスクが
     /// いるときだけ `Completion` を送らせ、いなければ持ち主が次に待つか続けるときに当てる (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn arrive(
+    pub fn arrive(
         &mut self,
         c: CellRef,
         result: io::Result<Done>,
@@ -3281,7 +3233,7 @@ impl Registry {
 
     /// 持ち主 `me` が、記録 `c` の driver の操作を取り消す道を決める。取り消しの印 (`cancelling` か `timed_out`) は
     /// 呼ぶ側が先に立てる。まだ driver に出していなければ、host が出す区間で印を読むので、ここでは何も頼まない。
-    pub(crate) fn cancel_io(&mut self, c: CellRef, me: u32) -> Result<CancelPath, CellFault> {
+    pub fn cancel_io(&mut self, c: CellRef, me: u32) -> Result<CancelPath, CellFault> {
         let record = self.op_mut(c)?;
         Ok(match (record.submitted, record.host) {
             (false, _) => CancelPath::Flag,
@@ -3303,7 +3255,7 @@ impl Registry {
 
     /// host `me` が、受け箱の `Submit` を受ける。持ち主が置いた操作を取り出し、lock を放してから driver に出すよう
     /// `work` に積む (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn take_submit(
+    pub fn take_submit(
         &mut self,
         op: CellRef,
         me: u32,
@@ -3320,7 +3272,7 @@ impl Registry {
     /// host `me` が、受け箱の `CancelIo` を受ける。記録がまだ driver に出したままなら、lock を放してから自分の driver に
     /// 取り消しを頼むよう `work` に積む。結果をもう置いた記録と放した記録には何もしない。持ち主が送った区間の後に、
     /// driver の完了が先に届きうるからである。host でない worker への `CancelIo` は内部の誤りである。
-    pub(crate) fn cancel_hosted(
+    pub fn cancel_hosted(
         &mut self,
         op: CellRef,
         me: u32,
@@ -3340,7 +3292,7 @@ impl Registry {
     /// 持ち主 `here.me` が、受け箱の `Completion` を受けて記録 `op` の結果を当てる。host は待つタスクがいるときだけ
     /// 送り、待つタスクは結果を受けるまで止まっているので、結果は `Completion` だけが当てる。生きていない記録と結果の
     /// ない記録は内部の誤りである (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn take_completion<M: Mode>(
+    pub fn take_completion<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         depth_offset: usize,
@@ -3357,7 +3309,7 @@ impl Registry {
 
     /// 持ち主 `here.me` が、記録 `op` に置かれた結果があれば当てる。当てて記録が終われば、待つタスクの起こしを返す。
     /// 結果を置いていない記録には何もしない (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn settle_arrived<M: Mode>(
+    pub fn settle_arrived<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         depth_offset: usize,
@@ -3382,7 +3334,7 @@ impl Registry {
     /// タスク `me` が token `token` の操作を待つか続けるかを決める前に、host が置いた結果があれば当てる。決める区間と
     /// 同じ区間で当てるので、結果の置かれた記録を終わっていないと見て待ち、`Completion` を受けずに止まることはない
     /// (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn settle_token<M: Mode>(
+    pub fn settle_token<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         depth_offset: usize,
@@ -3405,7 +3357,7 @@ impl Registry {
     /// 1つ数えて `FAST_GO`、切れれば数えずに `FAST_YIELD` を返す。`FAST_YIELD` の後は、呼ぶ側が OS を見てから譲るか
     /// `go_on` で続けるかを決める。ほかは `FAST_WAIT` で、待つ側の `park_io` か `park_io_until` が今の規則で数える。
     /// 地点を読むだけで、取り消しは数えない (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn op_ready(&mut self, token: i64, ms: i64, me: CellRef) -> Result<i64, CellFault> {
+    pub fn op_ready(&mut self, token: i64, ms: i64, me: CellRef) -> Result<i64, CellFault> {
         let worker = self.task_mut(me)?.worker;
         let op = self.op_of(token, worker)?;
         let record = self.op_mut(op)?;
@@ -3438,7 +3390,7 @@ impl Registry {
     /// `op_ready` が `FAST_YIELD` を返した後、OS を見ても走れるタスクがなかった。譲らずに続けるので、譲る印を下ろし、
     /// 譲った待ちの再開と同じく予算を戻して、続く `reschedule` の代わりに待ちを1つ数える。譲っても続けても予算の
     /// 切れる位置と `parks` が同じになるためである (docs/spec/stdlib.md の「操作の予算」)。
-    pub(crate) fn go_on(&mut self, me: CellRef) -> Result<i64, CellFault> {
+    pub fn go_on(&mut self, me: CellRef) -> Result<i64, CellFault> {
         let task = self.task_mut(me)?;
         if !std::mem::take(&mut task.fast_yield) {
             return Err(CellFault::Internal("a task goes on without a fast yield"));
@@ -3452,7 +3404,7 @@ impl Registry {
     /// 終わっていれば、すぐ再開する仕事を返す。取り消しの地点で、終わっていなければ driver への取り消しを `work` に
     /// 積んで完了を待つ。driver が記憶を使い終わるまで、buffer を返せないためである。取り消しの地点なら、終わっていても
     /// いなくても、記録に取り消しを頼んだ印を付ける。
-    pub(crate) fn park_io(
+    pub fn park_io(
         &mut self,
         here: &Here,
         work: &mut IoWork,
@@ -3467,7 +3419,7 @@ impl Registry {
     /// 期限は実際に待つときだけ付ける。0 以下は過ぎた期限なので、すぐ driver への取り消しを積む。期限が来ても再開せず、
     /// 取り消した操作の完了が `Woke` で再開する (docs/spec/vm.md の「時間の待ち」)。
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn park_io_until(
+    pub fn park_io_until(
         &mut self,
         here: &Here,
         work: &mut IoWork,
@@ -3552,7 +3504,7 @@ impl Registry {
     /// 操作を同じ鍵で出し直す。host が自分ならその操作を `work` に積み、ほかの worker なら host へ送る。終わった記録に
     /// 待つタスクがいれば、その起こしを返す。記録の語は受け付けたタスクの物体なので、今のタスクが誰でも、その ID に
     /// 切り替えてから触れる。`bin` は host の driver の、作ったハンドルを閉じる bin である。
-    pub(crate) fn settle_op<M: Mode>(
+    pub fn settle_op<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         bin: &Arc<HostBin>,
@@ -3817,7 +3769,7 @@ impl Registry {
 
     /// `Std.Net.op_stream` と `op_listener`。借りた token の終わった記録から、受け付けに渡した
     /// ストリームかリスナーを移し出す。
-    pub(crate) fn op_stream(&mut self, token: i64, worker: u32) -> Result<Word, CellFault> {
+    pub fn op_stream(&mut self, token: i64, worker: u32) -> Result<Word, CellFault> {
         let op = self.op_of(token, worker)?;
         let record = self.op_mut(op)?;
         if !matches!(record.phase, OpPhase::Done(..)) {
@@ -3832,13 +3784,13 @@ impl Registry {
     /// `Std.Net.op_done`。借りた token の記録が終わっているか。待ちの地点を通らずに読むだけで、予算も取り消しも
     /// 見ない。受け付けで終わる操作の包みが、持ち主が host のときに待たずに続けるためである
     /// (docs/spec/stdlib.md の「`Std.Net`」)。
-    pub(crate) fn op_done(&mut self, token: i64, worker: u32) -> Result<bool, CellFault> {
+    pub fn op_done(&mut self, token: i64, worker: u32) -> Result<bool, CellFault> {
         let op = self.op_of(token, worker)?;
         Ok(matches!(self.op_mut(op)?.phase, OpPhase::Done(..)))
     }
 
     /// `Std.Net.op_outcome`。借りた token の終わった記録の結果の番号 (docs/spec/vm.md の「操作の記録」)。
-    pub(crate) fn op_outcome(&mut self, token: i64, worker: u32) -> Result<i64, CellFault> {
+    pub fn op_outcome(&mut self, token: i64, worker: u32) -> Result<i64, CellFault> {
         let op = self.op_of(token, worker)?;
         let record = self.op_mut(op)?;
         match &record.phase {
@@ -3853,7 +3805,7 @@ impl Registry {
 
     /// `Std.Stream.op_prefix`。借りた token の終わった記録が、誤りの文言の前に付ける語。包みは番号 2 から 5 の失敗の
     /// 文言にこれを使う (docs/spec/stdlib.md の「`Std.Stream`」)。
-    pub(crate) fn op_prefix(&mut self, token: i64, worker: u32) -> Result<String, CellFault> {
+    pub fn op_prefix(&mut self, token: i64, worker: u32) -> Result<String, CellFault> {
         let op = self.op_of(token, worker)?;
         let record = self.op_mut(op)?;
         if !matches!(record.phase, OpPhase::Done(..)) {
@@ -3894,7 +3846,7 @@ impl Registry {
 
 /// 取り出しの行。token を消費して終わった記録を放し、結果と buffer を返す。残ったストリームは落とす。取り出すのは
 /// 受け付けたタスク (`worker`) だけである。記録の語はそのタスクの物体なので、切り替えずに受け取れる。
-pub(crate) fn take_op<M: Mode>(
+pub fn take_op<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -3911,7 +3863,7 @@ pub(crate) fn take_op<M: Mode>(
 
 /// 取り出しの行が受け取る、完了の中身から作った `Foreign` の種類。
 #[derive(Clone, Copy)]
-pub(crate) enum Made {
+pub enum Made {
     /// `Std.Net.take_listener`。
     Listener,
     /// `Std.Net.take_stream`。
@@ -3925,7 +3877,7 @@ pub(crate) enum Made {
 /// `Std.Net.take_listener`、`take_stream`、`Std.Stream.take_reader`、`take_writer`。token を消費して記録を放し、
 /// 完了の中身から作った `Foreign` を返す。結果の番号が `OUTCOME_OK` の記録だけを取り出す。`made` は求める記録の種類で、
 /// 違う種類の記録は内部の誤りである。
-pub(crate) fn take_made<M: Mode>(
+pub fn take_made<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -3951,7 +3903,7 @@ pub(crate) fn take_made<M: Mode>(
 /// `Std.Net.take_bytes`。token を消費して記録を放し、記録の buffer を返す。読みなら読んだバイトを足した buffer、
 /// 書きなら書いた buffer そのものである。結果の番号が `OUTCOME_OK` の読みか書きの記録だけを取り出す
 /// (docs/spec/stdlib.md の「`Std.Net`」)。
-pub(crate) fn take_bytes<M: Mode>(
+pub fn take_bytes<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -3970,7 +3922,7 @@ pub(crate) fn take_bytes<M: Mode>(
 /// `Std.Net.take_line`。token を消費して記録を放し、完了の時点で写した行 (終わりの改行を含み、残りのない EOF なら空)
 /// の文字列を返す。行が UTF-8 でなければ、写した `Bytes` を落として IO の失敗の文言を返す。結果の番号が `OUTCOME_OK`
 /// の行の記録だけを取り出す (docs/spec/stdlib.md の「`Std.Net`」)。
-pub(crate) fn take_line<M: Mode>(
+pub fn take_line<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -3987,7 +3939,7 @@ pub(crate) fn take_line<M: Mode>(
 
 /// `Std.Stream.take_line_bytes`。`take_line` と同じ行を、UTF-8 かどうかによらず `Bytes` で返す
 /// (docs/spec/stdlib.md の「`Std.Stream`」)。
-pub(crate) fn take_line_bytes<M: Mode>(
+pub fn take_line_bytes<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -4024,7 +3976,7 @@ fn take_line_op<M: Mode>(
 /// `buf` の内容をすべて書く操作を driver に出し、token を返す。`me` は呼んだ worker、`worker` は呼んだタスクの論理的な
 /// ID で、`depth_offset` はその深さの起点である。共有の `Bytes` も写さずに貸し、`take_bytes` が同じ参照を返す。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn submit_write<M: Mode>(
+pub fn submit_write<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4068,7 +4020,7 @@ pub(crate) fn submit_write<M: Mode>(
 /// 出し、読めるようになってから広げて貸す。何も来ない端の読みに、呼び手が渡さない記憶を持たせないためである
 /// (docs/spec/vm.md の「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn submit_read<M: Mode>(
+pub fn submit_read<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4108,7 +4060,7 @@ pub(crate) fn submit_read<M: Mode>(
 /// `Std.Net.submit_read_line`。`stream` は呼ぶ側から移ってきた参照で、記録に移す。ストリームの buffer の残りに改行が
 /// あれば、driver の操作を出さずに行を切り出して終わった記録にする。なければ行の連鎖を始める。buffer に空きが
 /// あればそれを貸して読み、なければストリームが読めるようになるのを待つ (docs/spec/vm.md の「操作の記録」)。
-pub(crate) fn submit_read_line<M: Mode>(
+pub fn submit_read_line<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4156,7 +4108,7 @@ pub(crate) fn submit_read_line<M: Mode>(
 /// `host` が IP アドレスの綴りでないか `port` が範囲の外なら、操作を出さずに IO の失敗の文言を返す
 /// (docs/spec/stdlib.md の「`Std.Net`」)。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn submit_listen<M: Mode>(
+pub fn submit_listen<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4194,7 +4146,7 @@ pub(crate) fn submit_listen<M: Mode>(
 }
 
 /// `Std.Net.submit_accept`。リスナー `listener` は呼ぶ側から移ってきた参照で、記録に移す。
-pub(crate) fn submit_accept<M: Mode>(
+pub fn submit_accept<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4226,7 +4178,7 @@ pub(crate) fn submit_accept<M: Mode>(
 /// `Std.Net.submit_connect`。`submit_listen` と同じく `host` を読んで手放す。`host` は名前でもよく、driver が解決する。
 /// `port` が 1 から 65535 の外なら、操作を出さずに IO の失敗の文言を返す (docs/spec/stdlib.md の「`Std.Net`」)。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn submit_connect<M: Mode>(
+pub fn submit_connect<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4264,7 +4216,7 @@ pub(crate) fn submit_connect<M: Mode>(
 /// 開けたファイルは `Op::Adopt` で呼んだタスクの I/O の host の driver に取り込み、`connect` と同じく完了から
 /// ストリームを作る (docs/spec/vm.md の「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn submit_open<M: Mode>(
+pub fn submit_open<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4322,7 +4274,7 @@ pub(crate) fn submit_open<M: Mode>(
 /// 同じ道で host に届くためである (docs/spec/vm.md の「操作の記録」)。`on` は `set_nodelay` の値で、`None` なら
 /// `shutdown_write` である。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn submit_control<M: Mode>(
+pub fn submit_control<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4397,7 +4349,7 @@ fn submit<M: Mode>(
 /// それも続けて出す。持ち主がほかの worker なら、待つタスクがいるときに `Completion` を送る。終わった操作の待つ
 /// 自分のタスクを再開する仕事を `out` に積む (docs/spec/vm.md の「操作の記録」)。driver を持たない worker は自分で
 /// 受け付けないので、出す操作も取り消しもないときだけ `driver` が `None` でよい。
-pub(crate) fn run_io<M: Mode>(
+pub fn run_io<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4485,7 +4437,7 @@ fn settle_arrival<M: Mode>(
 /// 次の操作を出すときだけ lock を放して出す。出した操作がその場で終われば、次の完了より先に当てる
 /// (docs/spec/vm.md の「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn complete<M: Mode>(
+pub fn complete<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4559,7 +4511,7 @@ fn op_key(op: CellRef) -> OpKey {
 /// 確かめる。`me`は呼んだタスクで、取り消しの地点なら仕事を出さない。記録は語を持たない (docs/spec/vm.md の
 /// 「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn submit_job<M: Mode>(
+pub fn submit_job<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4585,14 +4537,14 @@ pub(crate) fn submit_job<M: Mode>(
 
 /// `take_job`が返す、終わったプールの仕事。`result`はプールが返した箱か、仕事を走らせられなかった誤りか、取り消しの
 /// 地点で出さなかった誤りである。
-pub(crate) struct JobTaken {
-    pub(crate) from: JobSource,
+pub struct JobTaken {
+    pub from: JobSource,
     result: io::Result<Box<dyn Any + Send>>,
 }
 
 impl JobTaken {
     /// 箱を、仕事を受け付けた行が入れた型に戻す。仕事の誤りはそのまま返す。違う型はVMの誤りである。
-    pub(crate) fn answer<T: 'static>(self) -> Result<io::Result<T>, CellFault> {
+    pub fn answer<T: 'static>(self) -> Result<io::Result<T>, CellFault> {
         match self.result {
             Ok(answer) => answer
                 .downcast::<T>()
@@ -4604,7 +4556,7 @@ impl JobTaken {
 }
 
 /// プールの仕事の取り出し。tokenを消費して記録を放す。取り出すのは受け付けたタスク (`worker`) だけである。
-pub(crate) fn take_job<M: Mode>(
+pub fn take_job<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     token: i64,
@@ -4645,7 +4597,7 @@ fn net_record(kind: OpKind, worker: u32, stream: Option<Word>) -> OpRecord {
 }
 
 /// 呼ぶ側から移ってきた `String` の参照 `w` の中身を写して、参照を手放す。
-pub(crate) fn take_string<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<String, CellFault> {
+pub fn take_string<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<String, CellFault> {
     // `w` は呼ぶ側が持つ今の worker の参照で、`Ctx` の持つ語には触れない。中身は写し終えてから手放す
     let text = unsafe { (*ctx.heap().string(w)?).to_owned() };
     unsafe { ctx.heap_mut().decref(w)? };
@@ -4653,7 +4605,7 @@ pub(crate) fn take_string<M: Mode>(ctx: &mut Ctx<M>, w: Word) -> Result<String, 
 }
 
 /// `Std.Net.local_port`。借りたリスナーが待ち受けるポート。
-pub(crate) fn local_port<M: Mode>(ctx: &Ctx<M>, listener: Word) -> Result<i64, CellFault> {
+pub fn local_port<M: Mode>(ctx: &Ctx<M>, listener: Word) -> Result<i64, CellFault> {
     // リスナーは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpListener` は `Lin`)
     Ok(i64::from(unsafe {
         (*ctx.heap().foreign_unique::<NetListener>(listener)?).port
@@ -4661,7 +4613,7 @@ pub(crate) fn local_port<M: Mode>(ctx: &Ctx<M>, listener: Word) -> Result<i64, C
 }
 
 /// `Std.Net.peer_addr`。借りたストリームの相手の番地を、Rust の `SocketAddr` の表示の形の新しい文字列にする。
-pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
+pub fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
     // ストリームは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpStream` は `Lin`)
     let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream)? };
     let Origin::Peer(peer) = s.origin else {
@@ -4672,7 +4624,7 @@ pub(crate) fn peer_addr<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word,
 
 /// `Std.Stream.source`。借りた読み手を開いたパスを、引用符で囲んだ新しい文字列にする。包みが読みの誤りの文言に使う
 /// (docs/spec/stdlib.md の「`Std.Stream`」)。
-pub(crate) fn stream_source<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
+pub fn stream_source<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<Word, CellFault> {
     // 読み手は呼ぶ側が持つ唯一の参照で、借りて読むだけである (`Reader` は `Lin`)
     let s = unsafe { &*ctx.heap().foreign_unique::<IoStream>(stream)? };
     let name = match &s.origin {
@@ -4686,7 +4638,7 @@ pub(crate) fn stream_source<M: Mode>(ctx: &mut Ctx<M>, stream: Word) -> Result<W
 /// `Std.Exec.stdin`、`stdout`、`stderr`。借りた子 `child` から、まだ取り出していない pipe の端を移し、縛っていないまま
 /// `Stream.Writer` か `Stream.Reader` の新しい物体にする。端がなければ (2回目か、pipe にしなかった向き)、IO の失敗の
 /// 文言を返す (docs/spec/stdlib.md の「`Std.Exec`」)。
-pub(crate) fn exec_take<M: Mode>(
+pub fn exec_take<M: Mode>(
     ctx: &mut Ctx<M>,
     child: Word,
     pipe: ChildPipe,
@@ -4717,7 +4669,7 @@ pub(crate) fn exec_take<M: Mode>(
 }
 
 /// `Std.Exec.stage_count`。借りた子の段の数。
-pub(crate) fn exec_stage_count<M: Mode>(ctx: &Ctx<M>, child: Word) -> Result<i64, CellFault> {
+pub fn exec_stage_count<M: Mode>(ctx: &Ctx<M>, child: Word) -> Result<i64, CellFault> {
     // 子は呼ぶ側が持つ唯一の参照で、借りて読むだけである (`Child` は `Lin`)
     let n = unsafe {
         (*ctx.heap().foreign_unique::<ExecChild>(child)?)
@@ -4732,7 +4684,7 @@ pub(crate) fn exec_stage_count<M: Mode>(ctx: &Ctx<M>, child: Word) -> Result<i64
 /// タスクが持ち主のworkerから動かないためである。driverの待ちは回収しないので、知らせの後で`reap`が回収する。
 /// 回収した段と、OSの子を持たないHostの段は、driverに出さずに終わった記録にする (docs/spec/vm.mdの「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn submit_wait<M: Mode>(
+pub fn submit_wait<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -4770,7 +4722,7 @@ pub(crate) fn submit_wait<M: Mode>(
 /// `Std.Exec.reap`。借りた子 `child` の段 `k` を回収し、終了コードを返す。`Op::Wait` の知らせの後なので待たずに済む。
 /// OS の子を持たない Host の段は、ここで止まって待つ。回収した段はその終了コードを返す。回収できなければ、IO の失敗の
 /// 誤りと文言を返す (docs/spec/stdlib.md の「`Std.Exec`」)。
-pub(crate) fn exec_reap<M: Mode>(
+pub fn exec_reap<M: Mode>(
     ctx: &Ctx<M>,
     k: i64,
     child: Word,
@@ -4811,7 +4763,7 @@ fn stream_prefix<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<Prefix, CellFaul
 
 /// ストリーム `stream` の driver のハンドル。ストリームは呼ぶ側から移ってきた参照か記録が持つ参照で、持ち主が返すか
 /// 落とす。
-pub(crate) fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
+pub fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHandle, CellFault> {
     // ストリームは持ち主のただ1つの参照である (`TcpStream` は `Lin`。docs/spec/vm.md の「操作の記録」)
     unsafe {
         (*ctx.heap().foreign_unique::<IoStream>(stream)?)
@@ -4822,7 +4774,7 @@ pub(crate) fn stream_handle<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<IoHan
 
 /// ストリーム `stream` が、受けたまままだ縛っていないか。そのストリームの操作を受け付ける worker は、先に自分の driver を
 /// 持つ (docs/spec/vm.md の「時計と driver」)。
-pub(crate) fn stream_unbound<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<bool, CellFault> {
+pub fn stream_unbound<M: Mode>(ctx: &Ctx<M>, stream: Word) -> Result<bool, CellFault> {
     // ストリームは呼ぶ側が持つ唯一の参照で、借りて読むだけである (`TcpStream` は `Lin`)
     Ok(unsafe {
         matches!(
@@ -4899,7 +4851,7 @@ fn bound_host<M: Mode>(ctx: &Ctx<M>, kind: &OpKind, w: Word) -> Result<Option<u3
 }
 
 /// 1回の読みに貸す空きのバイト数の上限で、広げたときに貸すバイト数 (docs/spec/vm.md の「操作の記録」)。
-pub(crate) const READ_ROOM: usize = 65_536;
+pub const READ_ROOM: usize = 65_536;
 
 /// 読みに貸す空きの下限。これより少ない空きは空きなしとみなす。確保器が長さを語に切り上げた余り (0〜7 バイト) に、
 /// 読む量を決めさせないためである (docs/spec/vm.md の「操作の記録」)。
@@ -4912,10 +4864,10 @@ fn grown_capacity(len: usize) -> usize {
 }
 
 /// `read_line` の1行のバイト数の上限 (docs/spec/stdlib.md の「`Std.Net`」)。
-pub(crate) const LINE_LIMIT: usize = 1_048_576;
+pub const LINE_LIMIT: usize = 1_048_576;
 
 /// ストリームの buffer の残りに見つけた最初の行。
-pub(crate) enum Found {
+pub enum Found {
     /// 終わりの改行を含めた行のバイト数。
     Line(usize),
     /// 行の中身が `LINE_LIMIT` バイトを超えた。
@@ -4927,7 +4879,7 @@ pub(crate) enum Found {
 /// 除いたバイト、EOF ではすべて) が `LINE_LIMIT` バイトを超えれば `TooLong` である。上限を中身の長さで決めるので、
 /// 結果はバイトが読みにどう分かれて届いたかによらない (docs/spec/stdlib.md の「`Std.Net`」)。どちらでもなければ `None`
 /// である。
-pub(crate) fn find_line(pending: &[u8], from: usize, eof: bool) -> Option<Found> {
+pub fn find_line(pending: &[u8], from: usize, eof: bool) -> Option<Found> {
     // 改行のない周が大半なので、まず語ごとに比べる `contains` で探し、あるときだけ位置を求める
     let newline = if pending[from..].contains(&b'\n') {
         pending[from..].iter().position(|&b| b == b'\n')
@@ -4951,7 +4903,7 @@ pub(crate) fn find_line(pending: &[u8], from: usize, eof: bool) -> Option<Found>
 }
 
 /// 改行のまだ来ない行の中身の、今わかっている長さ。最後の `\r` は `\r\n` の始まりかもしれないので数えない。
-pub(crate) fn open_line_len(pending: &[u8]) -> usize {
+pub fn open_line_len(pending: &[u8]) -> usize {
     pending.len() - usize::from(pending.last() == Some(&b'\r'))
 }
 
@@ -5123,7 +5075,7 @@ impl Registry {
 
     /// 容量 `cap` の channel を作る。容量は `0..=u32::MAX` に収める。預かり先 `depot` は、呼ぶ側が lock の外で
     /// `Depot::open` で開いたものである。
-    pub(crate) fn new_chan(&mut self, cap: i64, depot: Depot) -> i64 {
+    pub fn new_chan(&mut self, cap: i64, depot: Depot) -> i64 {
         let cap = cap.clamp(0, i64::from(u32::MAX)) as u32;
         self.alloc(CellKind::Chan(ChanCell {
             cap,
@@ -5148,7 +5100,7 @@ impl Registry {
 
     /// 送りの速い道。0 なら枠を1つ予約して `hold` に置き、続く `push_raw` が確定する。1 なら待ち、2 なら閉じていて、
     /// 3 なら先に譲る。
-    pub(crate) fn reserve_send(
+    pub fn reserve_send(
         &mut self,
         c: i64,
         me: Option<CellRef>,
@@ -5177,7 +5129,7 @@ impl Registry {
 
     /// 受け取りの速い道。0 なら先頭の品物を列から取って `hold` に置き、続く `pop_raw` が確定する。積めるようになれば
     /// 待っている送り手の先頭を1つ起こして `out` に積む。1 なら待ち、2 なら閉じて空で、3 なら先に譲る。
-    pub(crate) fn reserve_recv(
+    pub fn reserve_recv(
         &mut self,
         c: i64,
         me: Option<CellRef>,
@@ -5215,7 +5167,7 @@ impl Registry {
 
     /// 送りの予約を確定する。品物 `x` は呼ぶ側が lock の外で預けたもので、列の後ろに積む。閉じていて予約がなくなれば
     /// 待っている受け手をすべて、そうでなければ先頭を1つ起こして `out` に積む。
-    pub(crate) fn push_raw(
+    pub fn push_raw(
         &mut self,
         chan: CellRef,
         x: Word,
@@ -5244,7 +5196,7 @@ impl Registry {
 
     /// 受け取りの予約を確定する。品物は呼ぶ側が lock の外で受け取った。放した channel の預かり先を返すので、呼ぶ側は
     /// lock を放してから閉じる。
-    pub(crate) fn pop_raw(&mut self, chan: CellRef) -> Result<Option<Depot>, CellFault> {
+    pub fn pop_raw(&mut self, chan: CellRef) -> Result<Option<Depot>, CellFault> {
         let cell = self.chan_mut(chan).ok_or(CellFault::Internal(
             "an item is popped from a freed channel",
         ))?;
@@ -5258,11 +5210,7 @@ impl Registry {
     /// 閉じる。待っている受け手と送り手をすべて起こして `out` に積み、放せるなら放して預かり先を返す。放したか閉じた
     /// channel には何もしない。送りの予約がなければ、同じ channel で受け手と送り手が同時に待つことはないので、起こす順は
     /// 列ごとの FIFO だけで決まる。
-    pub(crate) fn close_raw(
-        &mut self,
-        c: i64,
-        out: &mut Vec<Woken>,
-    ) -> Result<Option<Depot>, CellFault> {
+    pub fn close_raw(&mut self, c: i64, out: &mut Vec<Woken>) -> Result<Option<Depot>, CellFault> {
         let chan = CellRef::decode(c);
         match self.chan_mut(chan) {
             Some(cell) if !cell.closed => cell.closed = true,
@@ -5297,7 +5245,7 @@ impl Registry {
     }
 
     /// タスク `me` が、継続 `k` で channel `c` に枠が空くか閉じるまで待つ。
-    pub(crate) fn park_send(
+    pub fn park_send(
         &mut self,
         c: i64,
         me: CellRef,
@@ -5308,7 +5256,7 @@ impl Registry {
     }
 
     /// タスク `me` が、継続 `k` で channel `c` に品物が来るか、閉じて送りの予約がなくなるまで待つ。
-    pub(crate) fn park_recv(
+    pub fn park_recv(
         &mut self,
         c: i64,
         me: CellRef,
@@ -5447,7 +5395,7 @@ enum Side {
 /// 落ちたときに mail に積むために自分の run の `Shared` を持つので、それを比べれば run を見分けられる。
 /// `Task a` は `Lin` で入力をまたいで残らないので、検査を通ったプログラムからは届かない
 /// (docs/spec/vm.md の「`Async` のタスク」)。ハンドルは呼ぶ側の物体なので、登録表の lock の外で読む。
-pub(crate) fn handle_cell<M: Mode>(
+pub fn handle_cell<M: Mode>(
     ctx: &Ctx<M>,
     shared: &Arc<Shared>,
     handle: Word,
@@ -5462,7 +5410,7 @@ pub(crate) fn handle_cell<M: Mode>(
 }
 
 /// 借りたハンドル `handle` のセルの番号を `Std.Async.Cell` の即値で返す。
-pub(crate) fn cell_of<M: Mode>(
+pub fn cell_of<M: Mode>(
     ctx: &Ctx<M>,
     shared: &Arc<Shared>,
     handle: Word,
@@ -5471,7 +5419,7 @@ pub(crate) fn cell_of<M: Mode>(
 }
 
 /// `start` が置いたタスク `cell` のハンドルを、登録表の lock を放してから今の worker の物体として作る。
-pub(crate) fn task_handle<M: Mode>(ctx: &mut Ctx<M>, shared: &Arc<Shared>, cell: CellRef) -> Word {
+pub fn task_handle<M: Mode>(ctx: &mut Ctx<M>, shared: &Arc<Shared>, cell: CellRef) -> Word {
     // 確保するだけで、`Ctx` の持つ語には触れない。`Task a` は `Lin` である
     unsafe { ctx.heap_mut() }.alloc_foreign(
         TaskHandle {
@@ -5494,7 +5442,7 @@ fn give_up<M: Mode>(ctx: &mut Ctx<M>, handle: Word) -> Result<(), CellFault> {
 
 /// ハンドル `handle` を消費して、終わったタスクの値を返すか、失敗を返す。`handle` は呼ぶ側が持つ参照である。
 /// 値は lock を放してから、終わったタスクの ID から今の worker へ戻し、その後でタスクの ID を退かせる。
-pub(crate) fn take<M: Mode>(
+pub fn take<M: Mode>(
     shared: &Arc<Shared>,
     ctx: &mut Ctx<M>,
     handle: Word,
@@ -5519,7 +5467,7 @@ pub(crate) fn take<M: Mode>(
 }
 
 /// `detach` と `cancel_raw`。ハンドルを手放し、終わったタスクのセルを放すか、持ち手のないタスクにする。
-pub(crate) fn detach<M: Mode>(
+pub fn detach<M: Mode>(
     shared: &Arc<Shared>,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5537,7 +5485,7 @@ pub(crate) fn detach<M: Mode>(
 /// タスク `cell` を `outcome` で終え、worker `here.me` で走らせる起こしを `out` に積み、ほかの worker の起こしを送る。
 /// ハンドルがもう落ちていれば、lock を放してから値を落とし、タスクの ID を退かせる。`depth_offset` は呼んだ実行系の
 /// タスクの深さの起点である。
-pub(crate) fn finish<M: Mode>(
+pub fn finish<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5558,7 +5506,7 @@ pub(crate) fn finish<M: Mode>(
 
 /// 仕事 `cell` を `end` で終え、待っていたタスクの起こしを worker `here.me` で走らせる仕事にして `out` に積むか、
 /// ほかの worker の持ち主へ送る。語には触れないので、lock の下では `Ctx` もヒープも呼ばない。
-pub(crate) fn finish_job(
+pub fn finish_job(
     shared: &Shared,
     here: &Here,
     cell: CellRef,
@@ -5577,7 +5525,7 @@ pub(crate) fn finish_job(
 /// lock の下でまとめて取り出してから処理し、処理が新しい項を積むので、取り出す項がなくなるまで繰り返す。項ごとに短い lock の区間で処理し、lock を放してから、その項の driver への
 /// 取り消し、語の破棄と ID の退かせ、シグナルを保留から下ろすことを行う。破棄の破棄処理が積む項は、それより後に積まれた
 /// 項より先に処理する (docs/spec/vm.md の「セルと登録表」)。項を1つでも処理したら真を返す。
-pub(crate) fn drain<M: Mode>(
+pub fn drain<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5647,10 +5595,10 @@ fn expire(
 }
 
 /// ほかの worker へ何も送らないはずのテストの宛先。送れば失敗にする。
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 struct Unposted;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 impl Post for Unposted {
     fn wake(&self, k: u32, _w: Woken) {
         panic!("a wake is sent to worker {k}");
@@ -5682,8 +5630,8 @@ impl Post for Unposted {
 }
 
 /// worker 0 だけの run の、ほかの worker へ何も送らない `Here`。driver の操作は worker 0 が受け付ける。
-#[cfg(test)]
-pub(crate) fn solo(shared: &Shared) -> Here<'_> {
+#[cfg(any(test, feature = "testing"))]
+pub fn solo(shared: &Shared) -> Here<'_> {
     Here {
         me: 0,
         host: 0,
@@ -5696,7 +5644,7 @@ pub(crate) fn solo(shared: &Shared) -> Here<'_> {
 /// 当ててから `Registry::park_io` を行い、lock を放してから自分の driver への取り消しを頼む。ほかの worker が host の
 /// 操作の取り消しと出し直しは、その区間で host へ送る (docs/spec/vm.md の「操作の記録」)。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn park_io<M: Mode>(
+pub fn park_io<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5718,7 +5666,7 @@ pub(crate) fn park_io<M: Mode>(
 
 /// `park_io` に期限を付けた待ち。区間と取り消しの扱いは `park_io` と同じである。
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn park_io_until<M: Mode>(
+pub fn park_io_until<M: Mode>(
     shared: &Shared,
     here: &Here,
     ctx: &mut Ctx<M>,
@@ -5742,7 +5690,7 @@ pub(crate) fn park_io_until<M: Mode>(
 
 /// run の終わりに、残ったセルをすべて放す。lock を放してから語を落として ID を退かせ、その間に積まれた mail の項は
 /// 捨てる (docs/spec/vm.md の「終わり」)。
-pub(crate) fn sweep_all<M: Mode>(
+pub fn sweep_all<M: Mode>(
     shared: &Shared,
     ctx: &mut Ctx<M>,
     depth_offset: usize,
@@ -5764,48 +5712,40 @@ fn raise(failure: Outcome) -> Raise {
 
 /// 受け手の決まらない値の預かり先。預かる構造 (channel のセル、タスクのセル) の論理的な worker ID を持ち、送り手は `publish` で値を
 /// 預け、受け手は `receive` で受け取る (docs/spec/object-model.md の「論理的な worker ID」)。
-pub(crate) struct Depot {
+pub struct Depot {
     /// 預かる ID。速いモードでは 0 である
     worker: u32,
 }
 
 impl Depot {
     /// 新しい預かる ID を出す。`new_raw` の行が、`new_chan` の前に登録表の lock の外で1回呼ぶ。
-    pub(crate) fn open<M: Mode>(ctx: &mut Ctx<M>) -> Depot {
+    pub fn open<M: Mode>(ctx: &mut Ctx<M>) -> Depot {
         Depot {
             worker: unsafe { ctx.heap_mut() }.fork_worker(),
         }
     }
 
     /// ほかで出した ID (タスクのセルの ID と、channel の予約が覚えた ID) を預かる ID として使う。`close` は呼ぶ側が ID を退かせる所で呼ぶ。
-    pub(crate) fn of(worker: u32) -> Depot {
+    pub fn of(worker: u32) -> Depot {
         Depot { worker }
     }
 
     /// 値 `w` を預ける。送り手の ID のまま、構造に入れる前に呼ぶ。`Unr` の物体に共有の印を付け、`lin` の物体から rc 1 の
     /// 道で届く物体の持ち主を預かる ID にする (docs/spec/object-model.md の「`share`」)。語は変わらない。
-    pub(crate) fn publish<M: Mode>(
-        &mut self,
-        ctx: &mut Ctx<M>,
-        w: Word,
-    ) -> Result<Word, CellFault> {
+    pub fn publish<M: Mode>(&mut self, ctx: &mut Ctx<M>, w: Word) -> Result<Word, CellFault> {
         unsafe { ctx.heap_mut().share(w, self.worker) }?;
         Ok(w)
     }
 
     /// 構造から取り出した値 `w` を、今の worker の局所の値として受け取る。取り出した後、ほかに参照がない状態で、受け手の
     /// ID のまま呼ぶ (docs/spec/object-model.md の「`transfer_back`」)。語は変わらない。
-    pub(crate) fn receive<M: Mode>(
-        &mut self,
-        ctx: &mut Ctx<M>,
-        w: Word,
-    ) -> Result<Word, CellFault> {
+    pub fn receive<M: Mode>(&mut self, ctx: &mut Ctx<M>, w: Word) -> Result<Word, CellFault> {
         unsafe { ctx.heap_mut().transfer_back(w, self.worker) }?;
         Ok(w)
     }
 
     /// 受け取られない値 `w` を預かる ID の下で落とす。`decref` は即値も、破棄処理を持つ `Foreign` も受ける。
-    pub(crate) fn discard<M: Mode>(
+    pub fn discard<M: Mode>(
         &mut self,
         ctx: &mut Ctx<M>,
         w: Word,
@@ -5819,7 +5759,7 @@ impl Depot {
 
     /// 預かる ID を退かせる。値をすべて `discard` した後、セルを放す直前に1回呼ぶ。ID の物体が残っていれば
     /// `TransferLeak` を返す (`par` の join と同じ)。
-    pub(crate) fn close<M: Mode>(self, ctx: &mut Ctx<M>) -> Result<(), CellFault> {
+    pub fn close<M: Mode>(self, ctx: &mut Ctx<M>) -> Result<(), CellFault> {
         unsafe { ctx.heap_mut() }.retire_worker(self.worker)?;
         Ok(())
     }
@@ -5827,7 +5767,7 @@ impl Depot {
 
 /// ほかのタスクの ID の物体を放すときの切り替え。`evv` を空にして ID `id` に替え、`f` の後で元の `evv`、worker、
 /// 深さの起点 `depth_offset`、深さの上限に戻す。RC には触れない (docs/spec/object-model.md の「タスクの切り替え」)。
-pub(crate) fn with_worker<M: Mode, T>(
+pub fn with_worker<M: Mode, T>(
     ctx: &mut Ctx<M>,
     id: u32,
     depth_offset: usize,
@@ -5848,16 +5788,16 @@ pub(crate) fn with_worker<M: Mode, T>(
 /// タスクの底に着いた `exit n` を、終わりの欄に書く。`control.exit` を呼ぶのはここだけである。最初の書き手だけが
 /// 真を返す。実行系は、`main` の底なら普通に戻り、ほかのタスクの底ならほかのタスクを動かさずに worker のエントリへ戻る
 /// (docs/spec/object-model.md の「実行の制御」)。
-pub(crate) fn end_with_exit(control: &Control, n: i64) -> bool {
+pub fn end_with_exit(control: &Control, n: i64) -> bool {
     control.exit(n)
 }
 
-// 輪の単体テストは子のモジュールに置かない。子のモジュールは親を `super` の道で読むが、このファイルは `std` と
-// `eml_rt` だけを読む約束で、`crates/eml_vm/tests/tasks.rs` がそれを行ごとに確かめる
+// 輪の単体テストは子のモジュールに置かない。子のモジュールは親を`super`の道で読むが、このファイルは`std`と
+// `eml_rt`だけを読む約束で、`crates/eml_sched/tests/imports.rs`がそれを行ごとに確かめる
 
 /// 根のスコープに、動いているタスクのセルを1つ置く。輪だけを確かめるので、ヒープの ID は持たない。
-#[cfg(test)]
-pub(crate) fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
+#[cfg(any(test, feature = "testing"))]
+pub fn running_task(registry: &Shared, scope: CellRef) -> CellRef {
     registry.lock().alloc(CellKind::Task(TaskCell {
         owner: 0,
         phase: Phase::Running,
@@ -6413,13 +6353,13 @@ impl IoDriver for NoDriver {
 }
 
 /// 出力を捨てる Host の上の、検査モードの `Ctx`。
-#[cfg(test)]
-pub(crate) fn test_ctx() -> Ctx<eml_rt::Checked> {
+#[cfg(any(test, feature = "testing"))]
+pub fn test_ctx() -> Ctx<eml_rt::Checked> {
     mode_ctx()
 }
 
 /// 出力を捨てる Host の上の、モード `M` の `Ctx`。
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 fn mode_ctx<M: Mode>() -> Ctx<M> {
     let host = eml_rt::StdHost::new(
         Box::new(io::sink()),
@@ -8867,8 +8807,8 @@ impl Post for Posted {
 }
 
 /// worker 0 が持ち主で、`Terminate` を待って止まっているタスクのセル。継続は即値で、誰も取り出さない。
-#[cfg(test)]
-pub(crate) fn terminate_waiter(shared: &Shared) -> CellRef {
+#[cfg(any(test, feature = "testing"))]
+pub fn terminate_waiter(shared: &Shared) -> CellRef {
     let scope = shared.lock().open_root(None, None).unwrap();
     let cell = running_task(shared, scope);
     let run = shared.lock().park_signal(1, cell, Word::UNIT).unwrap();
@@ -8975,8 +8915,8 @@ fn mail_keeps_arrival_order() {
 }
 
 /// 持ち主 `owner` で、今から `ms` ミリ秒の時間を待って止まっているタスクのセル。継続は即値である。
-#[cfg(test)]
-pub(crate) fn sleeping_task(shared: &Shared, owner: u32, ms: i64) -> CellRef {
+#[cfg(any(test, feature = "testing"))]
+pub fn sleeping_task(shared: &Shared, owner: u32, ms: i64) -> CellRef {
     let scope = shared.lock().open_root(None, None).unwrap();
     let cell = running_task(shared, scope);
     shared.lock().task_mut(cell).unwrap().owner = owner;
@@ -8986,8 +8926,8 @@ pub(crate) fn sleeping_task(shared: &Shared, owner: u32, ms: i64) -> CellRef {
 }
 
 /// スコープ `scope` に属し、論理的な ID `worker` で動いている、worker 0 が持ち主のタスクのセル。`finish` で終えられる。
-#[cfg(test)]
-pub(crate) fn member_task(shared: &Shared, scope: CellRef, worker: u32) -> CellRef {
+#[cfg(any(test, feature = "testing"))]
+pub fn member_task(shared: &Shared, scope: CellRef, worker: u32) -> CellRef {
     let cell = running_task(shared, scope);
     let mut cells = shared.lock();
     let at = {
@@ -9165,7 +9105,7 @@ fn a_limit_in_the_mail_is_taken_by_any_worker() {
 }
 
 /// 持ち主 `owner` で動いているタスクのセル。持ち主の違う場合をスレッドなしで作るためである。
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 fn owned_task(shared: &Shared, owner: u32) -> CellRef {
     let scope = shared.lock().open_root(None, None).unwrap();
     let cell = running_task(shared, scope);
@@ -9174,8 +9114,8 @@ fn owned_task(shared: &Shared, owner: u32) -> CellRef {
 }
 
 /// worker `owner` が持ち主で、論理的な ID が `worker` の、動いているタスクのセル。`cancel` なら取り消しの印を付ける。
-#[cfg(test)]
-pub(crate) fn task_on(shared: &Shared, owner: u32, worker: u32, cancel: bool) -> CellRef {
+#[cfg(any(test, feature = "testing"))]
+pub fn task_on(shared: &Shared, owner: u32, worker: u32, cancel: bool) -> CellRef {
     let cell = owned_task(shared, owner);
     let mut cells = shared.lock();
     let task = cells.task_mut(cell).unwrap();
@@ -9185,16 +9125,16 @@ pub(crate) fn task_on(shared: &Shared, owner: u32, worker: u32, cancel: bool) ->
 }
 
 /// worker `owner` が持ち主の、`start` が置いてまだ始まっていないタスクのセル。論理的な ID は 0 である。
-#[cfg(test)]
-pub(crate) fn placed_task(shared: &Shared, owner: u32) -> CellRef {
+#[cfg(any(test, feature = "testing"))]
+pub fn placed_task(shared: &Shared, owner: u32) -> CellRef {
     let cell = owned_task(shared, owner);
     shared.lock().task_mut(cell).unwrap().phase = Phase::Placed;
     cell
 }
 
 /// worker 0 の driver のハンドル `handle` の `TcpStream` の `Foreign`。落ちたら `bin` に積む。
-#[cfg(test)]
-pub(crate) fn stream_on<M: Mode>(ctx: &mut Ctx<M>, handle: IoHandle, bin: Arc<HostBin>) -> Word {
+#[cfg(any(test, feature = "testing"))]
+pub fn stream_on<M: Mode>(ctx: &mut Ctx<M>, handle: IoHandle, bin: Arc<HostBin>) -> Word {
     let stream = IoStream {
         bind: Bind::Bound {
             host: 0,
@@ -9209,49 +9149,49 @@ pub(crate) fn stream_on<M: Mode>(ctx: &mut Ctx<M>, handle: IoHandle, bin: Arc<Ho
 }
 
 /// 記録 `token` に host が置いた、まだ当てていない結果の、取り消しだけで終わったかの印。置いていなければ `None` である。
-#[cfg(test)]
-pub(crate) fn arrival_of(shared: &Shared, token: i64) -> Option<bool> {
+#[cfg(any(test, feature = "testing"))]
+pub fn arrival_of(shared: &Shared, token: i64) -> Option<bool> {
     let mut cells = shared.lock();
     let record = cells.op_mut(CellRef::decode(token)).unwrap();
     record.arrival.as_ref().map(|&(_, cancelled)| cancelled)
 }
 
 /// タスク `cell` に取り消しの印を付ける。待ちは外さない。
-#[cfg(test)]
-pub(crate) fn flag_cancel(shared: &Shared, cell: CellRef) {
+#[cfg(any(test, feature = "testing"))]
+pub fn flag_cancel(shared: &Shared, cell: CellRef) {
     shared.lock().task_mut(cell).unwrap().cancel = true;
 }
 
 /// worker 0 だけの run で、mail の上限の旗の項を受けたときと同じくタスク `cell` に旗を立てる。旗を付ける VM の `Task` が
 /// worker 0 にあればセルを返す。
-#[cfg(test)]
-pub(crate) fn limit_task(shared: &Shared, cell: CellRef) -> Option<CellRef> {
+#[cfg(any(test, feature = "testing"))]
+pub fn limit_task(shared: &Shared, cell: CellRef) -> Option<CellRef> {
     shared.lock().limit_task(cell, &solo(shared)).unwrap()
 }
 
 /// タスク `cell` に上限の旗が立っているか。
-#[cfg(test)]
-pub(crate) fn limit_flag(shared: &Shared, cell: CellRef) -> bool {
+#[cfg(any(test, feature = "testing"))]
+pub fn limit_flag(shared: &Shared, cell: CellRef) -> bool {
     shared.lock().task_mut(cell).unwrap().limit
 }
 
 /// 記録 `token` が、`main` の `Finish` で残ったタスクとみなす状態 (driver に出したままか置いたまま) か。
-#[cfg(test)]
-pub(crate) fn op_left(shared: &Shared, token: i64) -> bool {
+#[cfg(any(test, feature = "testing"))]
+pub fn op_left(shared: &Shared, token: i64) -> bool {
     let mut cells = shared.lock();
     let record = cells.op_mut(CellRef::decode(token)).unwrap();
     record.submitted || record.pending_op.is_some()
 }
 
 /// 預かる ID を開かない channel。品物は即値だけを使い、預かり先を閉じないテストで使う。
-#[cfg(test)]
-pub(crate) fn test_chan(shared: &Shared, cap: i64) -> i64 {
+#[cfg(any(test, feature = "testing"))]
+pub fn test_chan(shared: &Shared, cap: i64) -> i64 {
     shared.lock().new_chan(cap, Depot::of(0))
 }
 
 /// ほかの worker の送りを表す。予約して、同じ worker が即値 `n` を積んで確定する。起こした待ち手を返す。
-#[cfg(test)]
-pub(crate) fn send_now(shared: &Shared, c: i64, n: i64) -> Vec<Woken> {
+#[cfg(any(test, feature = "testing"))]
+pub fn send_now(shared: &Shared, c: i64, n: i64) -> Vec<Woken> {
     let mut hold = None;
     assert_eq!(
         shared
@@ -9282,8 +9222,8 @@ fn push_held(shared: &Shared, hold: &mut Option<Hold>, c: i64, n: i64) -> Vec<Wo
 }
 
 /// タスク `me` を channel `c` の受け手として待たせる。
-#[cfg(test)]
-pub(crate) fn park_receiver(shared: &Shared, c: i64, me: CellRef) {
+#[cfg(any(test, feature = "testing"))]
+pub fn park_receiver(shared: &Shared, c: i64, me: CellRef) {
     let mut out = Vec::new();
     let run = shared
         .lock()

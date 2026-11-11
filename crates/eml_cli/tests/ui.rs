@@ -529,10 +529,12 @@ impl Compare {
 fn stats_are_compared_by_cancellations_and_channels() {
     let ran = |counts: Option<(u64, u64, u64)>| {
         let finished = counts.map(|(cancels, channel_ops, channel_waits)| {
-            let mut stats = eml_cli::RunStats::default();
-            stats.cancels = cancels;
-            stats.channel_ops = channel_ops;
-            stats.channel_waits = channel_waits;
+            let stats = eml_cli::RunStats {
+                cancels,
+                channel_ops,
+                channel_waits,
+                ..eml_cli::RunStats::default()
+            };
             Finished {
                 stats,
                 exit: None,
@@ -572,10 +574,12 @@ fn stats_are_compared_by_cancellations_and_channels() {
 #[test]
 fn stats_of_driver_runs_are_compared_without_the_work_counts() {
     let ran = |cancels: u64, channel_ops: u64, completions: u64| {
-        let mut stats = eml_cli::RunStats::default();
-        stats.cancels = cancels;
-        stats.channel_ops = channel_ops;
-        stats.completions = completions;
+        let stats = eml_cli::RunStats {
+            cancels,
+            channel_ops,
+            completions,
+            ..eml_cli::RunStats::default()
+        };
         Ran {
             stdout: String::new(),
             stderr: String::new(),
@@ -609,11 +613,13 @@ fn stats_of_driver_runs_are_compared_without_the_work_counts() {
         Compare::ChannelIndependent
     );
     assert_eq!(compares_stats(&ran(1, 0, 3), &quiet), Compare::Nothing);
-    let mut stats = eml_cli::RunStats::default();
-    stats.parks = 5;
-    stats.completions = 6;
-    stats.yields = 2;
-    stats.allocations = 70;
+    let stats = eml_cli::RunStats {
+        parks: 5,
+        completions: 6,
+        yields: 2,
+        allocations: 70,
+        ..eml_cli::RunStats::default()
+    };
     let kept = Compare::DriverIndependent.kept(stats);
     assert_eq!(
         (kept.parks, kept.completions, kept.yields, kept.allocations),

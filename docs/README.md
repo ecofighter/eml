@@ -30,7 +30,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例。実装していない構文を含む |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
 | [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続と evidence、構文解析と名前解決の回復、リポジトリ、ソースファイルと位置、外部 crate |
-| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt`の検証 (Verus、単体テスト、期待値の表、Miri)、`eml_io`の検証 (`unsafe`の一覧、核のMiri、AddressSanitizer、ThreadSanitizer)、`eml_native`の検証、`eml_nrt`の検証、`eml_vm`のテスト、UIテスト (2つのモードで流すこと、seedで流すこと)、LIRとCore IRのテキストの形、文書の引用の検査、REPLのトランスクリプト、CLIのテスト、OSごとのテスト、性能のテスト、featureの組み合わせ、CI、よく使うコマンド |
+| [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt`の検証 (Verus、単体テスト、期待値の表、Miri)、`eml_io`の検証 (`unsafe`の一覧、核のMiri、AddressSanitizer、ThreadSanitizer)、`eml_native`の検証、`eml_nrt`の検証、`eml_sched`のテスト、`eml_vm`のテスト、UIテスト (2つのモードで流すこと、seedで流すこと)、LIRとCore IRのテキストの形、文書の引用の検査、REPLのトランスクリプト、CLIのテスト、OSごとのテスト、性能のテスト、featureの組み合わせ、CI、よく使うコマンド |
 | [implementation/status.md](implementation/status.md) | 手引き | 今の言語の範囲 (実装したもの、まだないもの)、既知の制限 |
 | [implementation/distribution.md](implementation/distribution.md) | 手引き | 動かすのに要るもの (OSごと)、組むのに要るもの、Qtを配る規則 (通知と全文、配る側の3つの場合)、Windows App SDKのruntimeとbootstrap、macOSの署名と公証、AOTの出力の規則、他者のクレートのライセンス |
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、測り方、今の数値、ネイティブの数値、ネットワークの計測、所見 |
@@ -61,6 +61,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | `eml_lir` | lir |
 | `eml_vm` | vm、lir、object-model |
 | `eml_rt` | object-model |
+| `eml_sched` | vm |
 | `eml_io` | vm |
 | `eml_cabi`、`eml_native` | [vm](spec/vm.md) の「C の関数の呼び出し」。crate の中は [architecture](implementation/architecture.md) の「`eml_native` の内部」 |
 | `eml_nrt` | [native](spec/native.md)。crateの中は[architecture](implementation/architecture.md) の「`eml_nrt`の内部」 |

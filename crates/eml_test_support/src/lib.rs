@@ -314,13 +314,14 @@ pub fn schedule_independent(mut stats: RunStats) -> RunStats {
 /// run の終わりに放した channel の数、driver の完了の数だけである (docs/implementation/testing.md の「seed で流す」)。
 #[cfg(feature = "run")]
 pub fn channel_independent(stats: RunStats) -> RunStats {
-    let mut kept = RunStats::default();
-    kept.tasks = stats.tasks;
-    kept.timers = stats.timers;
-    kept.dropped_failures = stats.dropped_failures;
-    kept.channels_swept = stats.channels_swept;
-    kept.completions = stats.completions;
-    kept
+    RunStats {
+        tasks: stats.tasks,
+        timers: stats.timers,
+        dropped_failures: stats.dropped_failures,
+        channels_swept: stats.channels_swept,
+        completions: stats.completions,
+        ..RunStats::default()
+    }
 }
 
 /// driver の操作を使った run の `RunStats` のうち、スケジュールの方針によらない欄だけを残す。操作が受け付けで終わって
@@ -328,15 +329,16 @@ pub fn channel_independent(stats: RunStats) -> RunStats {
 /// 印、run の終わりに放した channel の数、driver の完了の数だけである (docs/implementation/testing.md の「seed で流す」)。
 #[cfg(feature = "run")]
 pub fn driver_independent(stats: RunStats) -> RunStats {
-    let mut kept = RunStats::default();
-    kept.tasks = stats.tasks;
-    kept.parks = stats.parks;
-    kept.timers = stats.timers;
-    kept.dropped_failures = stats.dropped_failures;
-    kept.shared_objects = stats.shared_objects;
-    kept.channels_swept = stats.channels_swept;
-    kept.completions = stats.completions;
-    kept
+    RunStats {
+        tasks: stats.tasks,
+        parks: stats.parks,
+        timers: stats.timers,
+        dropped_failures: stats.dropped_failures,
+        shared_objects: stats.shared_objects,
+        channels_swept: stats.channels_swept,
+        completions: stats.completions,
+        ..RunStats::default()
+    }
 }
 
 /// `run_stats` と同じく流し、Host を呼び出し側が作る。スクリプトの引数 (`Env.args`) や標準入力を、大きさを変えて

@@ -22,6 +22,7 @@ use crate::park::Park;
 use crate::sched::{JoinId, JoinNode, Outcome, Policy, Scheduler, TaskId, driver_mut};
 use crate::vm::{ExecWith, Task};
 use crate::{HeapWork, RunCounts, RuntimeError, VmFault, WORKER_STACK};
+pub use eml_sched::config::Seat;
 
 // 6つの型はどれも、スレッドをまたいで渡すか共有する (docs/spec/vm.md の「タスクとスケジュール」)
 const _: () = {
@@ -201,15 +202,6 @@ struct SlotState {
     woken: bool,
     /// 眠っている。始めた worker では、偽の間だけ `Run::running` に数える。
     parked: bool,
-}
-
-/// `Machine`を持つスレッドと、`main`を動かすworker 0の関係。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Seat {
-    /// `Machine`を持つスレッドがworker 0を兼ねる。`eml repl`と`Machine`の既定である。
-    Merged,
-    /// `Machine`を持つスレッドがメインのworkerになり、worker 0は別のスレッドで動く。
-    Separate,
 }
 
 /// worker 1つ分の欄。

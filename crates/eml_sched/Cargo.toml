@@ -1,0 +1,27 @@
+[package]
+name = "eml_sched"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+[lib]
+doctest = false
+
+# testingはcells.rsのテストの道具をeml_vmの単体テストに見せる。有効にするのはdev-dependenciesだけで、切り替えるのは
+# 項目だけである (docs/implementation/architecture.md の「crate の依存関係」)
+[features]
+testing = []
+
+# Cranelift、eml_lir、eml_vm、eml_nrt、eml_nativeには依存しない (docs/implementation/architecture.md の「crate の依存関係」)
+[dependencies]
+eml_io.workspace = true
+eml_rt.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

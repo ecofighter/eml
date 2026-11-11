@@ -27,7 +27,7 @@ pub enum VmFault {
 
 /// `quiesce`の後にもdriverが保留の操作を残したときの、`VmFault::Driver`の文。そのdriverはどのヒープにも触れる前に
 /// 落とす (docs/spec/vm.mdの「時計と driver」)。
-pub(crate) const KEPT_PENDING: &str = "the driver kept pending ops after quiesce";
+pub const KEPT_PENDING: &str = "the driver kept pending ops after quiesce";
 
 /// デッドロックの文言。関数の名前と位置は内部のコードとスケジュールで変わるので付けない。
 const DEADLOCK: &str = "deadlock: every task is waiting and no timer is pending";

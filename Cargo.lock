@@ -689,6 +689,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "eml_sched"
+version = "0.1.0"
+dependencies = [
+ "eml_io",
+ "eml_rt",
+ "libc",
+]
+
+[[package]]
 name = "eml_syntax"
 version = "0.1.0"
 dependencies = [
@@ -745,6 +754,7 @@ dependencies = [
  "eml_io",
  "eml_lir",
  "eml_rt",
+ "eml_sched",
  "eml_test_support",
  "eml_tls",
  "insta",
