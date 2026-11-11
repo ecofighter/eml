@@ -425,7 +425,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `lib.rs`は`#![deny(unsafe_code)]`を持ち、ほかのmoduleの公開の項目を再エクスポートする。エントリの表の一覧`TABLES`と、それをたどる`entries()`もここにある。`eml_rt`を隠した名前`__rt`で再エクスポートし、ほかのcrateで展開した`entries!`がそれを名指す
 - `entries.rs`は、`Kind`、`Entry`と、マクロ`entries!`とその補助 (`__entry!`、`__kind!`、`__ty!`、`__result!`) を持つ。`shim`の本体の規則を書くのは`__entry!`だけである ([ネイティブの実行系](../spec/native.md) の「包みの本体」)
 - `enter.rs`は、`Thunk`、`Fatal`、致命的な誤りの符号、`Raise`とその3つの実装、`enter`、`detached`と、エントリ`eml_fatal`を持つ
-- `arch/`は、ISAとABIごとのstub (`eml_enter`、longjmpの側、`JmpBuf`、`SUPPORTED`) を持ち、`arch/mod.rs`が対象ごとに1つを選ぶ。`aarch64.rs`はWindowsでないaarch64のAAPCS64で、`unsupported.rs`はほかのすべての対象である。stubは`#[unsafe(naked)]`の関数と`naked_asm!`で書き、外のアセンブラもbuild scriptも使わない
+- `arch/`は、ISAとABIごとのstub (`eml_enter`、longjmpの側、`JmpBuf`、`SUPPORTED`) を持ち、`arch/mod.rs`が対象ごとに1つを選ぶ。`aarch64.rs`はWindowsでないaarch64のAAPCS64、`x86_64_sysv.rs`はWindowsでないx86_64のSysVで、`unsupported.rs`はほかのすべての対象である。stubは`#[unsafe(naked)]`の関数と`naked_asm!`で書き、外のアセンブラもbuild scriptも使わない
 - thread-localは使わない。ネイティブのコードは`Ctx<Fast>`だけを使うので、`Checked`も名指さない
 - `examples/nrt_bench.rs`は、stubの往復と2つのエントリの形の費用を測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)
 - `unsafe`を書いてよいのは、`trust.rs`が挙げるファイル (`enter.rs`、`entries.rs`、`arch/`のstubのファイル) だけである ([テスト戦略](testing.md) の「`eml_nrt`の検証」)

@@ -8,6 +8,7 @@ const FILES: &[(&str, &str)] = &[
     ("entries.rs", include_str!("entries.rs")),
     ("arch/mod.rs", include_str!("arch/mod.rs")),
     ("arch/aarch64.rs", include_str!("arch/aarch64.rs")),
+    ("arch/x86_64_sysv.rs", include_str!("arch/x86_64_sysv.rs")),
     ("arch/unsupported.rs", include_str!("arch/unsupported.rs")),
 ];
 
@@ -19,6 +20,7 @@ const UNSAFE_FILES: &[&str] = &[
     "enter.rs",
     "entries.rs",
     "arch/aarch64.rs",
+    "arch/x86_64_sysv.rs",
     "arch/unsupported.rs",
 ];
 

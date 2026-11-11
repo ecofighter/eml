@@ -96,4 +96,69 @@ mod imp {
     }
 }
 
+#[cfg(all(target_arch = "x86_64", not(windows)))]
+mod imp {
+    use super::*;
+
+    /// 呼ばれる側が保存するレジスタをすべて壊してから`eml_fatal(ctx, 7, 9)`へ飛ぶthunk。
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn clobber_thunk(ctx: *mut Ctx<Fast>, entry: *const u8, argv: *mut u64) {
+        core::arch::naked_asm!(
+            "mov rbx, -1", "mov rbp, -1", "mov r12, -1", "mov r13, -1", "mov r14, -1", "mov r15, -1",
+            "mov esi, 7",
+            "mov edx, 9",
+            "jmp {fatal}",
+            fatal = sym eml_nrt::eml_fatal,
+        )
+    }
+
+    /// 呼ばれる側が保存するレジスタに決まった値を入れて`eml_enter`を呼び、戻った後に違っていたレジスタのビットを返す。
+    /// `eml_enter`の結果は`*out`に書く。
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn enter_with_patterns(
+        ctx: *mut Ctx<Fast>,
+        thunk: eml_nrt::Thunk,
+        entry: *const u8,
+        argv: *mut u64,
+        out: *mut u64,
+    ) -> u64 {
+        core::arch::naked_asm!(
+            "push rbx", "push rbp", "push r12", "push r13", "push r14", "push r15",
+            "push r8",
+            "mov rbx, 19", "mov rbp, 20", "mov r12, 21", "mov r13, 22", "mov r14, 23", "mov r15, 24",
+            "call {enter}",
+            "xor ecx, ecx",
+            "xor edx, edx", "cmp rbx, 19", "setne dl", "or rcx, rdx",
+            "xor edx, edx", "cmp rbp, 20", "setne dl", "shl rdx, 1", "or rcx, rdx",
+            "xor edx, edx", "cmp r12, 21", "setne dl", "shl rdx, 2", "or rcx, rdx",
+            "xor edx, edx", "cmp r13, 22", "setne dl", "shl rdx, 3", "or rcx, rdx",
+            "xor edx, edx", "cmp r14, 23", "setne dl", "shl rdx, 4", "or rcx, rdx",
+            "xor edx, edx", "cmp r15, 24", "setne dl", "shl rdx, 5", "or rcx, rdx",
+            "pop r8",
+            "mov [r8], rax",
+            "mov rax, rcx",
+            "pop r15", "pop r14", "pop r13", "pop r12", "pop rbp", "pop rbx",
+            "ret",
+            enter = sym eml_nrt::eml_enter,
+        )
+    }
+    /// 自分のフレームポインタのレジスタを4つ目の引数にして`walk_frames`へ飛ぶthunk。
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn fp_thunk(ctx: *mut Ctx<Fast>, entry: *const u8, argv: *mut u64) {
+        core::arch::naked_asm!("mov rcx, rbp", "jmp {walk}", walk = sym crate::stub::walk_frames)
+    }
+
+    /// 今のフレームポインタのレジスタを`*out`に書いてから`eml_enter`へ飛ぶ。
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn enter_noting_fp(
+        ctx: *mut Ctx<Fast>,
+        thunk: eml_nrt::Thunk,
+        entry: *const u8,
+        argv: *mut u64,
+        out: *mut u64,
+    ) -> u64 {
+        core::arch::naked_asm!("mov [r8], rbp", "jmp {enter}", enter = sym eml_nrt::eml_enter)
+    }
+}
+
 pub use imp::{clobber_thunk, enter_noting_fp, enter_with_patterns, fp_thunk};

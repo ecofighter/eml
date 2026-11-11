@@ -50,11 +50,12 @@
 - `eml_enter(ctx, thunk, entry, argv) -> u64`。thunkが戻れば0を返し、結果は`argv[0..]`にある。`eml_fatal`で切られたら、その符号とsiteを`(code << 32) | site`にして返す。符号は0でない。Rustの包み`enter`は、これを`Result<(), Fatal>`に直す
 - `Thunk`は既定の規約の関数`unsafe extern "C" fn(ctx, entry, argv)`である。thunkは`argv`から引数を読み、`entry`を呼び、結果を`argv`に書き戻す。stubはthunkをCの規約で呼び、emlのコードの規約については何も知らない
 - `JmpBuf`はstub自身のフレームの一部で、`prev`、`ctx`と、呼ばれる側が保存するレジスタを持つ。stubは入るとき、呼ばれる側が保存するレジスタをすべてここに保存し、`buf.prev = ctx.jmp`、`ctx.jmp = &buf` (`CTX_JMP`の位置の欄) とつないでからthunkを呼ぶ。ふつうに戻るときとlongjmpの側では、`ctx.jmp`を`prev`に戻す。入れ子の`eml_enter`はそれぞれ自分のバッファを持ち、`prev`でつながる。asmの中のずれはすべて、`JmpBuf`の`size_of`と`offset_of!`、`CTX_JMP`から求めた`const`のオペランドで、asmの文字列に配置の数を書かない
-- 保存するレジスタはABIごとに決まる。AAPCS64ではx19〜x28、x29、x30、d8〜d15である。制御のレジスタ (FPCR、x86-64のMXCSR) は保存しない。生成したコードも`eml_rt`もそれを変えないためである
-- フレームの記録: stubはどれも、thunkを呼ぶ前に標準のフレームの記録を作る (AAPCS64では、x29がバッファの中に保存したx29とx30の組を指す)。だからフレームポインタをたどると、生成したコードからthunkとstubを通ってRustの呼び出し元へ着く。emlのコードの中では、フレームポインタのレジスタをほかの目的に使わず、スタックも切り替えない
+- 保存するレジスタはABIごとに決まる。AAPCS64ではx19〜x28、x29、x30、d8〜d15、SysV x86_64ではrbx、rbp、r12〜r15である。制御のレジスタ (FPCR、x86-64のMXCSR) は保存しない。生成したコードも`eml_rt`もそれを変えないためである
+- フレームの記録: stubはどれも、thunkを呼ぶ前に標準のフレームの記録を作る (AAPCS64では、x29がバッファの中に保存したx29とx30の組を指す。SysV x86_64では下の配置のとおり、rbpが呼び出し元のrbpと戻り番地の組を指す)。だからフレームポインタをたどると、生成したコードからthunkとstubを通ってRustの呼び出し元へ着く。emlのコードの中では、フレームポインタのレジスタをほかの目的に使わず、スタックも切り替えない
+- SysV x86_64のフレームの配置: stubはまず`push rbp`と`mov rbp, rsp`をするので、rbpは呼び出し元のrbpと戻り番地の組を指す。`JmpBuf`はその組のすぐ下にあり、stubがthunkを呼ぶときのrspがそれを指す。`push rbp`の後のrspは16の倍数で、`JmpBuf`の大きさも16の倍数なので、thunkを呼ぶ`call`でSysVの揃えが保たれる。`JmpBuf`のrbpの欄はstub自身のrbpで、呼び出し元のrbpは、ふつうに戻るときもlongjmpの側も、その組から`pop rbp`で戻す
 - 入り直しの規則: emlのコードに入り直すRustのエントリは、生の`ctx`を渡し、`eml_enter`や`eml_fatal`をまたいで、`Ctx`への`&`や`&mut`、workerの構造体への参照、`Drop`を持つ値を持たない
 - `detached(ctx)`は、`jmp`と`runtime`がどちらもnullであること、つまり`Ctx`がどの`eml_enter`の外にもあり、ほかのスレッドへ移せる状態であることを返す ([オブジェクトモデル](object-model.md) の「`unsafe` の核」のT18)
-- stubのあるABIはAAPCS64 (macOSとLinux) である
+- stubのあるABIは、AAPCS64 (macOSとLinux) とSysV x86_64 (Windowsでないx86_64) である
 
 ### `eml_fatal`
 
@@ -74,4 +75,4 @@
 
 ### 対象
 
-`eml_nrt::SUPPORTED`は、stubのある対象、つまりWindowsでないaarch64で真である。ほかの対象では偽で、そこでも`eml_enter`はあるが、呼ぶとプロセスが止まる (panicは`extern "C"`の境を越えられない)。ネイティブのコードを走らせる側は、`eml_enter`を呼ぶ前に`SUPPORTED`を見て断る。crateはどの対象でもビルドできる。
+`eml_nrt::SUPPORTED`は、stubのある対象、つまりWindowsでないaarch64とx86_64で真である。ほかの対象では偽で、そこでも`eml_enter`はあるが、呼ぶとプロセスが止まる (panicは`extern "C"`の境を越えられない)。ネイティブのコードを走らせる側は、`eml_enter`を呼ぶ前に`SUPPORTED`を見て断る。crateはどの対象でもビルドできる。
