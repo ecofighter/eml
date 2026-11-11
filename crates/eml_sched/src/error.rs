@@ -132,8 +132,8 @@ impl RuntimeError {
         )
     }
 
-    /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き `RootMisuse` を含む) と内部の誤りの後と、回復が
-    /// 失敗した後は、ヒープを信用できない。driverの誤りの後は、その`Machine`のI/Oを信用することも続けることもできない。
+    /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き`RootMisuse`を含む) と内部の誤り (中身をエンジンが持つ
+    /// 失敗`Fault::Engine`を含む) の後と、回復が失敗した後は、ヒープを信用できない。driverの誤りの後は、その`Machine`のI/Oを信用することも続けることもできない。
     /// driverを作れなかったときも、その`Machine`ではI/Oを動かせないので同じに扱う。REPLはこの後の入力を受け付けない
     /// (docs/spec/vm.mdの「追記」と「時計と driver」)。
     pub fn is_broken(&self) -> bool {
@@ -142,7 +142,7 @@ impl RuntimeError {
             RuntimeError::Fault {
                 fault: RunFault::Internal(_)
                     | RunFault::Driver(_)
-                    | RunFault::Extern(Fault::Heap(_)),
+                    | RunFault::Extern(Fault::Heap(_) | Fault::Engine),
                 ..
             } | RuntimeError::Unrecovered { .. }
         )

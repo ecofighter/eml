@@ -290,6 +290,21 @@ impl<M: Mode> Heap<M> {
         self.collect_live()
     }
 
+    /// 生きている物体`w`が不死 (rc 0) か。ダミーや定数のように、空けない物体である。実行の終わりに残った物体を数えるときは、
+    /// これらを除く (docs/spec/object-model.md の「生存の列挙」)。
+    pub fn is_immortal(&self, w: Word) -> (r: bool)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+            self.live_block(w.bits_spec()),
+        ensures
+            r == (self.rc_value(w) == 0),
+    {
+        let h = self.header_of(w);
+        self.core.rc_get(h) == 0
+    }
+
     fn collect_live(&self) -> (r: Vec<Word>)
         requires
             self.wf(),

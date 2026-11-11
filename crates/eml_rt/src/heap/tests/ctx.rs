@@ -94,6 +94,13 @@ fn a_new_ctx_is_finished<M: Mode>() {
     assert_eq!(ctx.poll(0), Ok(()));
 }
 
+fn an_engine_held_failure_is_parked_and_taken<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    assert_eq!(ctx.set_fault(Fault::Engine), None);
+    assert_eq!(ctx.take_fault(), Some(Fault::Engine));
+    assert_eq!(ctx.take_fault(), None);
+}
+
 fn poll_reports_each_stop<M: Mode>() {
     let control = Arc::new(Control::new(Limits {
         max_depth: 100,
@@ -888,6 +895,7 @@ fn evv_word_reads_the_list_without_rc_work<M: Mode>() {
 
 both_modes!(
     a_new_ctx_is_finished,
+    an_engine_held_failure_is_parked_and_taken,
     poll_reports_each_stop,
     poll_reports_a_terminate,
     switch_task_rebases_the_depth_limit,

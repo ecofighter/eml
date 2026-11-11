@@ -221,6 +221,8 @@ pub enum Fault {
     InUse(StdStream),
     /// タスクの失敗として起こし直された `IO` の誤り。`kind` は `IOErrorKind` のタグで、`message` は元の誤りの文言である。
     Raised(Box<Raised>),
+    /// 中身をエンジンが持つ失敗 (たとえばネイティブのコードの`panic`の文言)。失敗を置いたことを示す印にすぎず、VMは作らない。
+    Engine,
 }
 
 impl Fault {
@@ -239,7 +241,8 @@ impl Fault {
             | Fault::Utf8 { at: _ }
             | Fault::Index(_)
             | Fault::Stopped(_)
-            | Fault::InUse(_) => None,
+            | Fault::InUse(_)
+            | Fault::Engine => None,
         }
     }
 
@@ -257,7 +260,8 @@ impl Fault {
             | Fault::Stdin(_)
             | Fault::NotUtf8(_)
             | Fault::Stopped(_)
-            | Fault::Raised(_) => false,
+            | Fault::Raised(_)
+            | Fault::Engine => false,
         }
     }
 }
@@ -1365,6 +1369,9 @@ impl fmt::Display for Fault {
             },
             Fault::Stopped(s) => write!(f, "{s}"),
             Fault::Raised(r) => write!(f, "{}", r.message),
+            Fault::Engine => {
+                f.write_str("internal error: a failure whose payload the engine holds")
+            }
             Fault::InUse(stream) => write!(
                 f,
                 "the standard {} is already open",

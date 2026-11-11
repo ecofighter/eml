@@ -694,6 +694,19 @@ fn faults_stay_small() {
     assert_eq!(std::mem::size_of::<Fault>(), 24);
 }
 
+/// エンジンが中身を持つ失敗は、`try_panic`にも`try_io`にも捕まらない。
+#[test]
+fn an_engine_held_failure_is_neither_a_panic_nor_an_io_error() {
+    use crate::externs::Fault;
+    assert!(!Fault::Engine.panics());
+    assert_eq!(Fault::Engine.io_error_kind(), None);
+    assert_eq!(
+        Fault::Engine.to_string(),
+        "internal error: a failure whose payload the engine holds"
+    );
+    assert_eq!(std::mem::size_of::<Fault>(), 24);
+}
+
 fn s<M: Mode>(ctx: &mut crate::Ctx<M>, x: &str) -> Word {
     unsafe { ctx.heap_mut() }.alloc_string(x)
 }
