@@ -14,6 +14,7 @@ use crate::monitor::{self, Monitor};
 use crate::park::{Guard, PollSource};
 use crate::vm::Task;
 use crate::workers::{Mailer, NO_CELL, Notice, Ready, Run, Workers, cell_word};
+pub use eml_sched::config::Sched;
 pub(crate) use eml_sched::driver::NO_DRIVER;
 
 /// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを、すべての
@@ -97,28 +98,6 @@ pub enum Memory {
     Watched,
     /// 各 worker が集める地点の始めに見る。壁時計の監視のスレッドに頼らず、旗の地点をスケジュールで決めるためである。
     Gathered,
-}
-
-/// スケジュールの方針の選び方。`RunConfig::with_sched` で選ぶ。`eml run` と `eml repl` はいつも `Normal` で動く。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Sched {
-    /// 自分からは切り替えない。起こしたタスクを列の後ろに入れ、メモリは監視のスレッドが見る。
-    Normal,
-    /// 自分からは切り替えない。起こしたタスクを列の先頭に入れ、メモリは集める地点が見る。
-    #[default]
-    Sequential,
-    /// seedで決まる擬似乱数で、切り替える安全点と次のタスクを選ぶ。
-    Seeded(u64),
-}
-
-impl Sched {
-    /// テストの driver に渡す seed。seed の方針のときだけある (docs/spec/vm.md の「時計と driver」)。
-    pub fn seed(self) -> Option<u64> {
-        match self {
-            Sched::Seeded(seed) => Some(seed),
-            Sched::Normal | Sched::Sequential => None,
-        }
-    }
 }
 
 /// スケジューラの中のタスクの番号。

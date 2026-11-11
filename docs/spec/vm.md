@@ -10,8 +10,8 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 
 - バイトコードは LIR から直接作り、中間に別の IR は挟まない。命令列への変換は1回の走査で済むためである
 - crate `eml_vm`は、workspaceのcrateでは`eml_lir`、`eml_io`、`eml_rt`、`eml_sched`、`eml_extern`、`eml_cabi`と、feature `tls`の下の`eml_tls`だけに依存し、フロントエンドには依存しない。中身は、LIRのプログラムを`CodeBase<M>`に変換するコード生成 (`compile`) と、`CodeBase`を`Ctx<M>`の上で実行するVMの繰り返しの2つである
-- crate `eml_sched`は、VMとネイティブの実行系が共有するタスクのセルの核 (`cells.rs`)、実行時エラーの型 (`error.rs`)、時計の選び方 (`driver.rs`)、自己パイプ (`doorbell.rs`)、メインのworkerの`Park` (`park.rs`) を持ち、workspaceのcrateでは`eml_io`と`eml_rt`だけに依存する ([アーキテクチャ](../implementation/architecture.md)の「crate の依存関係」)
-- `eml_vm`は、自分の`RunStats`を持ち、`eml_sched`の実行時エラーの型`RuntimeError`を再公開する。実行時エラーの型は1つだけなので、`RuntimeError`と呼ぶ。誤りの種類は`VmFault`と呼ぶ。`Fault`にすると、包んでいる`eml_rt::Fault`と名前がぶつかるためである
+- crate `eml_sched`は、VMとネイティブの実行系が共有するタスクのセルの核 (`cells.rs`)、実行時エラーの型 (`error.rs`)、時計の選び方 (`driver.rs`)、自己パイプ (`doorbell.rs`)、メインのworkerの`Park` (`park.rs`)、実行の設定と結果の型 (`config.rs`の`RunConfig`、`Finished`、`RunStats`、方針を選ぶ`Sched`、`Seat`) を持ち、workspaceのcrateでは`eml_io`と`eml_rt`だけに依存する ([アーキテクチャ](../implementation/architecture.md)の「crate の依存関係」)
+- `eml_vm`は、`eml_sched`の実行時エラーの型`RuntimeError`と、実行の設定と結果の型`RunConfig`、`Finished`、`RunStats`、`Sched`、`Seat`を再公開する。実行時エラーの型は1つだけなので、`RuntimeError`と呼ぶ。誤りの種類は`VmFault`と呼ぶ。`Fault`にすると、包んでいる`eml_rt::Fault`と名前がぶつかるためである
 - `eml_lir` は、データの物理的な形を決める関数 `LayoutCtor::shape` を持つ ([オブジェクトモデル](object-model.md) の「ペイロード」)
 - `eml_lir` は、文の単位の生存を公開の API にする ([LIR](lir.md) の「生存解析」)。スロットの割り当て (「スロットの割り当て」) が文の単位の干渉を作るために使う
 - `eml_rt` は、`Word::from_bits` を公開する。生の `int` と `enum` の値をスロットに置くためである (「スロットとスタック」)
@@ -408,7 +408,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ## タスクとスケジュール
 
-- `Sched`、`Policy`、`Scheduler` は `eml_vm` の `sched.rs` に置く。別の crate は作らない。実行系が VM だけで、ほかの crate と共有するものがないためである
+- 方針を選ぶ`Sched`と実行の設定`RunConfig`は`eml_sched`の`config.rs`にあり、`Policy`と`Scheduler`は`eml_vm`の`sched.rs`に置く。`Sched`と`RunConfig`はどの実行系も受け取る実行のインタフェースなので共有の層に置き、スケジューラとworkerの表は、それを使う実行系がまだVMだけなので`eml_vm`に残す
 - 方針は`Sched`の値で選ぶ。`Normal`、`Sequential` (既定)、`Seeded(seed)`の3つで、`Copy`である。`RunConfig::with_sched`で渡す。`eml run`と`eml repl`はいつも`Normal`で動き、CLIでほかの方針は選べない。`Sequential`と`Seeded`は、決定的なテストのための方針である。ライブラリの既定 (`Sched::default()`、`RunConfig::default()`、`Machine`) を`Sequential`にするのは、`RunStats`とベンチの数を時間に依らないものにするためである
 - `Policy`は5つのメソッドと定数`MEMORY`を持つ。`tick`は安全点ごとに呼び、真なら切り替えを試みる (真を返すのは`Seeded`だけである)。`reload`は切り替えを試みた後に、次の切り替えまでの予算を詰め直す。`pick`は走れるタスクの列から次に動かす項を取り出す。`wake`は起こしたタスクを列に入れる。`for_worker(k)`はworker `k` (`k` ≥ 1) の`Scheduler`が使う方針を返す。worker 0はrunの方針をそのまま使い、`for_worker(0)`は呼ばない。`Seeded`は作ったときのseedを覚えていて、`Seeded::new(splitmix64(seed ^ k))`を返す。同じseedのrunで、どのworkerも同じ乱数の列を引かないためである。ほかの方針は自分の写しを返す。動くタスクの番号を書くのは`Scheduler::set_current`だけである
 - `Policy`の定数`MEMORY`は、メモリの柔らかい上限を見てタスクに上限の旗を立てる者を決める。`Watched` (`Normal`) では監視のスレッドが刻みごとに見る。`Gathered` (`Sequential`、`Seeded`) では、各workerが`Scheduler::gather`の始め (`take_notice`の直後、最初の登録表のlockの前) に同じ`pressure_tick`を呼び、監視のスレッドは見ない。これは「旗を立てるのは監視のスレッドである」という前提からの例外で、テストのための方針に限る。決定的な方針は壁時計の監視のスレッドに頼れないためで、workerが1つの決定的なrunでは監視のスレッドが動かないこともある。確保器が閾値を越えたworkerの語に`NOTICE`を立てるので、workerが1つの決定的なrunでは旗の地点がスケジュールで決まる。workerが1つの`Sequential`と`Seeded`で、増える間に動けるのが原因のタスクだけで、大きい物体を確保しないときは、候補のないまま越えたrunでも、閾値は決まった幅だけ進み、次に越えた所で旗が立つので、地点はrunによらない。読むものと送る手順は監視のスレッドと同じで、違うのは候補がないときに閾値を進めることだけである (「上限と割り込み」)。そのため候補のないまま越えた後の旗の地点は、決定的な方針 (次の閾値) と`Normal` (次の刻み) で違う。原因のタスクが次の閾値まで増え続けるなら出力は同じだが、候補のないまま越えた後に1つの幅より少なく確保して終わるタスクは、`Normal`では旗が立ちうるのに、決定的な方針では立たない。積んだ旗の項は同じ集める地点のmailの処理が取る

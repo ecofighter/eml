@@ -2,6 +2,7 @@
 //! `eml_vm`、`eml_nrt`、`eml_native`には依存しない (docs/implementation/architecture.md の「crate の依存関係」)。
 
 pub mod cells;
+pub mod config;
 pub mod doorbell;
 pub mod driver;
 pub mod error;
