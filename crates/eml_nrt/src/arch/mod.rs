@@ -6,10 +6,13 @@ mod imp;
 #[cfg(all(target_arch = "x86_64", not(windows)))]
 #[path = "x86_64_sysv.rs"]
 mod imp;
-#[cfg(not(any(
-    all(target_arch = "aarch64", not(windows)),
-    all(target_arch = "x86_64", not(windows))
-)))]
+#[cfg(all(target_arch = "x86_64", windows))]
+#[path = "x86_64_win64.rs"]
+mod imp;
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+#[path = "unsupported.rs"]
+mod imp;
+#[cfg(all(target_arch = "aarch64", windows))]
 #[path = "unsupported.rs"]
 mod imp;
 
