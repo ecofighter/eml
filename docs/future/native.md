@@ -10,21 +10,22 @@ LIR から Cranelift でネイティブのコードを出す設計をまとめ�
 - 目標: `tests/ui/run/scripts/` の `wc`、`grep -n`、`logstat`、`csv2jsonl` で、同じ出力を返す Rust の実装の約2倍以内の実時間にする。Rust の実装は eml の実装と同じ手順 (走査の回数、標準ライブラリの操作、同じ計算量のデータ構造) を標準ライブラリだけで書いたもので、`bench/scripts/rust/` に置く。測り方は [計測の基準](../implementation/benchmarks.md) の「C/Rust との比べ方」にある。上の完了の条件は変えない。今の入力では、4本でこの目標を満たせば Python の1.5倍の条件も満たす。`csv2jsonl` は欄ごとに新しい文字列を作る今の書き方では届かない見込みである。2倍を超えた行では原因 (1バイトずつの呼び出し、RC、確保、写し、境界と桁あふれの確かめ、ベクトル化の有無、読み込み) を計測の基準に記録する
 - コンパイルの条件: JIT は std と 1000 行のプログラムを release のビルドで 300 ms 未満でコンパイルする
 - 範囲: コード生成器、呼び出し規約とエントリ、中断と実行時エラー、安全点とスタック、extern のエントリ、展開、生の要素の配列、並列の実行、AOT と配布、テスト
+- VMは、確かめと開発のための基準の実行系である。ネイティブの速さとVMの速さを引き換える選択では、ネイティブの速さを先にする。ただし、速くなっても特別な場合や二重の論理が要る最適化は諦め、諦めたことを書く。ネイティブの設計はどれも、速い道の費用のモデルと、諦めた最適化を述べる。将来のプロファイラのために、フレームポインタと、名前を鍵にした記号を保つ
 - 範囲の外: 利用者の`extern "C"`の宣言と型の対応、GUIのtoolkit (`Std.Gui`)。これらはネイティブのバックエンドなしにVMの上で動く。Craneliftで作るのは、VMからCの関数を呼ぶ橋渡しの関数だけである。この文書は、ネイティブのコードがそれらを呼ぶ所と、AOTでリンクする形だけを書く。宣言と型の対応と拡張の設計は[FFI と拡張の設計](ffi.md)にある
 
 ## 確定した設計判断
 
 | # | 領域 | 決定 |
 |---|---|---|
-| 1 | コード生成器 | コード生成器は1つで、開いた後の LIR を CLIF にする crate `eml_native` である。JIT (`eml run --native` と REPL。`cranelift-jit`) と AOT (`eml build`。`cranelift-object`) の両方が、同じ CLIF と同じ `eml_rt` のエントリを使う。`eml_native` は、FFI の橋渡しの関数とライブラリの解決を持ち、今は `eml_extern`、`eml_cabi`、Cranelift、libloading に依存する ([コンパイラの構成](../implementation/architecture.md) の「crate の依存関係」)。コード生成とエントリの stub を足すときに、`eml_rt` と `eml_lir` への依存を足す |
+| 1 | コード生成器 | コード生成器は1つで、開いた後のLIRをCLIFにするcrate `eml_native`である。JIT (`eml run --native`とREPL。`cranelift-jit`) とAOT (`eml build`。`cranelift-object`) の両方が、同じCLIFと同じ実行系のエントリを使う。出すコードが呼ぶ実行系のエントリ、エントリのstub、runの駆動はcrate `eml_nrt`に置く。`eml_nrt`はCraneliftに依存せず、`libeml_rt.a`はそこから作る。実行の方式によらない共有の層はcrate `eml_sched`である。依存の辺は`eml_native` → `eml_nrt` → `eml_sched` → `eml_rt`で、`eml_native`はほかに`eml_lir`と、定数を読むためだけに`eml_rt`にも依存する。`eml_native`は、FFIの橋渡しの関数とライブラリの解決も持ち、`eml_extern`、`eml_cabi`、Cranelift、libloadingに依存する ([コンパイラの構成](../implementation/architecture.md)の「crate の依存関係」)。`eml_vm`は、Cranelift、`eml_native`、`eml_nrt`のどれにも依存しない |
 | 2 | コンパイルの単位 | プログラム全体 (利用者のモジュールと、届く std) を、Core IR の最適化の後で一度にコンパイルする。`eml run --native` は始めに、REPL は入力の境目ごとに、その入力が足す関数をコンパイルする。どちらも worker が動いていない間に行う。関数ごとに遅れてコンパイルする stub は置かない |
 | 3 | VM との関係 | VM とネイティブのコードは混ぜない。ネイティブのコードはバイトコードを呼ばず、バイトコードもネイティブの eml の関数を呼ばない。VM は参照の実装で、検査モード (`--debug-heap`) を持つ唯一の実行系である。ネイティブは `eml_rt` を速いモードで具体化する。バックエンドを作る途中は、扱わない形を含むプログラムを E0004 で断る。断る形の一覧は空になるまで減らし、仕上がったバックエンドは何も断らない |
 | 4 | 呼び出し規約 | eml の中の呼び出しは Cranelift の `tail` 規約で、末尾呼び出しは `return_call` と `return_call_indirect` である。extern と C の関数は OS の既定の規約で、`tail` のコードから普通の `call` で呼ぶ |
 | 5 | `ctx` | `ctx: *mut Ctx` は、すべての eml の関数とすべての extern の最初の引数である。スレッドに局所的な変数は使わない |
 | 6 | 中断 | 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`try_panic`、`exit`) は戻り値で伝える。巻き戻しの地点ごとに旗を1回確かめ、yield の確かめと一緒にする |
 | 7 | 実行時エラー | 評価全体を止める誤りは、自前の setjmp と longjmp の組 (`eml_enter` と `eml_fatal`) でエントリまで切る。後始末はしない。extern の失敗は `Ctx.fault` で返す |
-| 8 | 安全点 | 関数のエントリとループの後ろ向きの辺で、止めるビットとスタックの限度を確かめる。ネイティブのタスクは `Async` の操作でだけ切り替わる |
-| 9 | スタック | emlのコードを動かすスレッドは、スタックを明示して予約する。workerのスレッドの既定は1 GiBの仮想の予約で、`--stack-size`で変えられる。メインのworkerは、プロセスのメインスレッドのOSの既定のスタックで動く (`stack_limit = stack_base + 2 MiB`)。Windowsでは、`eml`とAOTのバイナリがそのスタックに8 MiBを予約する (`/STACK:8388608`) |
+| 8 | 安全点 | 関数のエントリで、止めるビットとスタックの限度を確かめる。ループの後ろ向きの辺ができたら、そこでも確かめる。ネイティブのタスクは`Async`の操作でだけ切り替わる |
+| 9 | スタック | emlのコードを動かすスレッドは、スタックを明示して予約する。workerのスレッドの既定は1 GiBの仮想の予約で、`--stack-size`で変えられる。メインのworkerは、プロセスのメインスレッドのOSの既定のスタックで動く。スタックの限度は、硬い限度`hard` (workerでは`base + 1 MiB`、メインのworkerでは`stack_base + 2 MiB`) と、`real = hard + LIMIT_HEADROOM_BYTES`の2つである。Windowsでは、`eml`とAOTのバイナリがそのスタックに8 MiBを予約する (`/STACK:8388608`) |
 | 10 | 使い回しの鍵 | ネイティブのコードを使い回す単位は関数1つで、鍵は名前と、開いた後の LIR と、それが指す形と配置の中身のハッシュである |
 | 11 | 生の要素の配列 | `UnboxedArray a` と `MutUnboxedArray a` の要素の読み書きは、呼び出しにせず展開する |
 
@@ -38,12 +39,12 @@ LIR から Cranelift でネイティブのコードを出す設計をまとめ�
 
 - 開いた後の LIR は構造体を葉の変数の並びとして持ち ([LIR](../spec/lir.md) の「開く」)、葉はそのまま Cranelift の値になる。葉はどれも 8 バイトで、`float` の葉は浮動小数のレジスタに、ほかは整数のレジスタに載る。複数の値の戻りは eml の中の規約で、extern や C の境目を越えない。結果がレジスタに収まらなければ、バックエンドが呼ぶ側の用意した領域で返す。スタックで渡す引数が呼び出し元より多い関数への `return_call` も、`tail` の規約で出せる。コード生成は5つのターゲット (`aarch64-apple-darwin`、`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、`x86_64-pc-windows-msvc`、`aarch64-pc-windows-msvc`) で確かめてあり、実行は macOS の上で確かめてある
 - 末尾の位置の呼び出しは、結果の Repr が呼び出し元の結果と互換なときだけ末尾呼び出しになる ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。結果を変えるフレームがないので、Cranelift の `return_call` をそのまま使える。`return_call` は両側に末尾呼び出しのできる規約を要るので、eml の中は `tail` にする。1つの関数の中で `tail` の呼び出しと OS の既定の規約 (`system_v`、`apple_aarch64`、`windows_fastcall`) の呼び出しは並べられる。C の関数に `tail` の関数のポインタは渡さない
-- 関数の ABI は開いた後の引数と `rets` と `split` で決まり、関数の値の捕まえた値より後ろの引数と結果はいつも一様な語である ([LIR](../spec/lir.md) の「関数の ABI」)。`apply` は引数の数だけを比べ、実行時に Repr を変えない ([VM](../spec/vm.md) の「呼び出しと戻り」)。そのため、ネイティブの関数のエントリは、関数と、クロージャの捕まえた値の数 k の組で決まり、シグネチャごとのエントリや変換の遅い道は要らない。k でエントリが分かれるのは、部分適用で k が変わり、クロージャから入るときに捕まえた値を Repr ごとに読んで引数に置くためである ([オブジェクトモデル](../spec/object-model.md) の「クロージャ」)。VM の `RetN` が戻り先の直前の命令を読むのは VM の中だけの約束で、ネイティブのコードは VM と混ぜないので、境目のエントリは要らない
+- 関数のABIは開いた後の引数と`rets`と`split`で決まり、関数の値の捕まえた値より後ろの引数と結果はいつも一様な語である ([LIR](../spec/lir.md)の「関数の ABI」)。`apply`は引数の数だけを比べ、実行時にReprを変えない ([VM](../spec/vm.md)の「呼び出しと戻り」)。そのため、シグネチャごとのエントリや変換の遅い道は要らない。ネイティブの関数のエントリは、関数と、クロージャの捕まえた値の数kの組で決まり、プログラムに現れる組にだけ作る。kでエントリが分かれるのは、クロージャから入るときに、捕まえた値をReprごとに読んで引数に置くためである ([オブジェクトモデル](../spec/object-model.md)の「クロージャ」)。部分適用は、kごとのエントリを作らずに、汎用の部分適用の物体を作る。VMの`RetN`が戻り先の直前の命令を読むのはVMの中だけの約束で、ネイティブのコードはVMと混ぜないので、境目のエントリは要らない
 - 貸された引数は、自分の参照を持たないただの語である ([LIR](../spec/lir.md)の「関数の ABI」)。呼ぶ側は、呼ばれる側の末尾呼び出しを通る間も含め、呼び出しが戻るまで物体を生かし、変えずにおく。呼ばれる側はそれを放さず、その場で書き換えもしない。そのため、ネイティブのコードは、借りた`String`と`Bytes`の中身の先頭と長さを、関数の実行ごとに1回読み、ループの外へ巻き上げられる。`apply`、節、ランタイムから入る関数は貸された引数を持たないので、関数とkの組のエントリはいつも所有した語を渡す
 - 関数の値の呼び出し規約では、次の案を採らない。実行時に Repr を変える規約にしてフレームの合成を Cranelift に任せる案は、複雑さが残る。すべての関数の値を薄い包みにする案は、末尾呼び出しの保証を失い、2^27 語の `DepthLimit` に届く。値として使うすべての関数に `$uniform` を作る案は、値として生まれる関数の一様さを複製で作り直すことになる。結果の変換の種類ごとに変種を作る案は、呼ぶ場所のシグネチャごとに変種が要り、合成の問題が戻る。すべての関数の結果を一様にする案は、`Float` を返すたびに確保する
-- Rust から eml に入るエントリは `eml_enter(ctx, fnptr, argv, argc) -> Status` で、ISA と ABI ごとに asm の stub を1つ置く (x86_64 の SysV、x86_64 の Win64、AAPCS64 の3つ)。stub は SP、FP、呼ばれる側が保存するレジスタを `Ctx` の中の `JmpBuf` に保存する。`JmpBuf` は1つ前のものとつながり、エントリは入れ子にできる。stub は Cranelift が作る `tail` の adapter `enter$k(ctx, argv)` を呼び、adapter は (関数, k) のエントリの引数を `argv` から読んで関数へ `return_call` する。戻ったら結果の語を写す。`Status` は Ok (結果の語) か Fatal である。OS と CRT の setjmp は使わないので、Windows の SEH はこのフレームを見ない
-- stub が保存するレジスタは、SysV の x86_64 では rbx、rbp、r12〜r15、Win64 ではそれに rdi、rsi、xmm6〜xmm15 を足したもの、AAPCS64 では x19〜x28、x29、x30、d8〜d15 である。足りないと、致命的な誤りの後に Rust の局所変数がおかしくなる。3つの OS の run-fail の UI テストがこれを確かめる
-- `eml_run_pending(ctx) -> Progress`は、toolkitのコールバックから入る、メインのworkerの繰り返しのエントリである。受け箱を取り、走れるエントリに1つずつ`eml_enter`で入り、メインのworkerをまた眠らせて、`Wait(timeout)`か`Stopping`を返す。`Park`の待ちの外で呼ばれれば`Busy`を返す。自分のフレームより先へlongjmpも巻き戻しもしない。エントリの中の致命的な誤りは`eml_enter`の`Fatal`で戻り、`Stopping`になる
+- Rustからemlに入るエントリは`eml_enter(ctx, thunk, entry, argv)`で、0か、致命的な誤りの符号とsiteを返す。ISAとABIごとにasmのstubを1つ置き (AAPCS64、x86_64のSysV、x86_64のWin64の3つ)、3つとも揃えておく。stubは、SP、FP、呼ばれる側が保存するレジスタを自分のフレームの中の`JmpBuf`に保存し、それを`Ctx`の`jmp`からつなぐ。`JmpBuf`は1つ前のものとつながり、エントリは入れ子にできる。stubは標準のフレームレコードを作ってから、Craneliftが作る既定の呼び出し規約のthunkを呼ぶ。thunkは`argv`から引数を読み、`tail`の関数 (関数とkの組のエントリ) を呼び、結果を`argv`に書く。stubが`tail`のコードを直接呼ばないのは、Craneliftの`tail`の規約が引数に別のレジスタを割り当て、すべてのレジスタを壊すためである。OSとCRTのsetjmpは使わないので、WindowsのSEHはこのフレームを見ない
+- stubが保存するレジスタは、SysVのx86_64ではrbx、rbp、r12〜r15、Win64ではそれにrdi、rsi、xmm6〜xmm15を足したもの、AAPCS64ではx19〜x28、x29、x30、d8〜d15である。足りないと、致命的な誤りの後にRustの局所変数がおかしくなる。`crates/eml_nrt/tests`のstubのテストが、CIの4つの対象 (macOSとLinux aarch64のAAPCS64、Linux x86_64のSysV、WindowsのWin64) で、致命的な誤りの後も呼ばれる側が保存する整数と浮動小数のレジスタが保たれることを確かめる
+- `eml_run_pending(ctx) -> Progress`は、toolkitのコールバックから入る、メインのworkerの繰り返しのエントリである。受け箱を取り、走れるエントリに1つずつ`eml_enter`で入り、メインのworkerをまた眠らせて、`Wait(timeout)`か`Stopping`を返す。`Park`の待ちの外で呼ばれれば`Busy`を返す。自分のフレームより先へlongjmpも巻き戻しもしない。エントリの中の致命的な誤りは`eml_enter`の符号で戻り、`Stopping`になる。Cの記号`eml_run_pending`は、最初のCの呼び手とともに`native-aot`で入る。それまでは、メインのworkerの繰り返しはRustの関数である
 
 ## 中断と実行時エラー
 
@@ -56,31 +57,32 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
   - この地点の `landing` の evidence に向かう中断なら、結果の変数にダミーの値を書き、普通の道を続ける。VM の着地と同じである
   - ほかの中断なら、`owned` の変数を数の分だけ `decref` し、token を `drop_token` し、ダミーの値を返す。呼び出し元の確かめが同じことをくり返す
   - yield なら、今の κ を作る遅い道に進む
-- `prim yield_abort` は状態を書いてダミーの値を返す。エントリの adapter まで届いた中断は、中断の状態を立てたまま Ok (ダミー) を返す。Rust の側は VM の `Finish` と同じく終える (`exit` の終了コード、`yield_finish`、`evv_set(())`)
+- `prim yield_abort`は状態を書いてダミーの値を返す。エントリまで届いた中断は、中断の状態を立てたまま普通に戻る。thunkはダミーの結果を`argv`に書き、`eml_enter`は0を返す。Rustの側はVMの`Finish`と同じく終える (`exit`の終了コード、`yield_finish`、`evv_set(())`)
 - 費用は巻き戻しの地点ごとに読み込み1つと比較1つである。下の「タスクごとの上限」のため、末尾でない呼び出しの位置はどれも巻き戻しの地点になり、yield の地点でない位置には確かめが1つ入る。効果を持たない関数の中の呼び出しも同じである。効果を持たない関数で起きる実行時エラーは、旗でなく下の longjmp で扱う
 
 ### extern の失敗
 
-- `Pure` でない extern はその `extern "C"` の包みへの普通の `call` である。包みは結果の語を返し、失敗を `#[repr(C)]` の新しい欄 `Ctx.fault` (種類の語が先頭) に書く。`Fault` を戻り値から外すのは、Windows の x64 が整数のレジスタ1つでしか返さず、`Result<i64, Fault>` が 24 バイトになるためである
-- 呼び出しの後で `ctx.fault` の種類を読み、0 でなければ冷たいブロックへ分岐する。冷たいブロックは今の `eml_vm::vm::failed` と同じことをする。種類 (`Panic`、IO、致命的) を分け、`ev_find` で handler を探す。なければ `eml_fatal` を呼ぶ。あれば、節のエントリを節の ABI で失敗の引数とともに呼び (エントリは `yield_abort` をしてダミーを返す)、上の中断の冷たい道へ進む
-- handler のコードには分岐だけで届く。後始末のブロックは巻き戻しの地点ごとに1つで、失敗の道と中断の道が共有する
+- `Pure`でないexternは、その`extern "C"`の包みへの普通の`call`である。包みは結果の語を返し、失敗は`Fault`を`Ctx`に置き、`Ctx`の先頭の欄`fault`の語を0でなくする。`Fault`を戻り値から外すのは、Windowsのx64が整数のレジスタ1つでしか返さず、`Result<i64, Fault>`が24バイトになるためである。中身を実行系が持つ失敗 (panicの文の語、上げ直しの求め) は、中身を実行系のworkerごとの状態に置き、`Ctx`には`Fault::Engine`を置く
+- 呼び出しの後で`ctx.fault`の語を読み、0でなければ冷たいブロックへ分岐する。冷たいブロックは共有の1つの手続きを呼び、手続きは今の`eml_vm::vm::failed`と同じことをする。種類 (`Panic`、IO、致命的) を分け、`ev_find`でhandlerを探す。なければ`eml_fatal`を呼ぶ。あれば、節のエントリを節のABIで失敗の引数とともに呼び (エントリは`yield_abort`をしてダミーを返す)、上の中断の冷たい道へ進む
+- 戻らない行 (`exit`、`panic`、`fail_io`) の後には確かめが要らず、出すコードはそのまま冷たい道へ進む。行の中の内部の種類の誤り (`faults`でない行の`Err`、捕まえたpanic) は、致命的な誤りである
+- handlerのコードには分岐だけで届く。後始末のブロックは巻き戻しの地点ごとに1つで、失敗の道と中断の道が共有する
 - `par` の子の中では、子の `evv` は空で、evidence を探すと印の evidence が返る。冷たいブロックは VM と同じ規則で、印の evidence から `fork$` の節へ進む
 
 ### 評価全体を止める誤り
 
-- オーバーフロー、ゼロ除算、捕まらない `Panic` と IO の失敗、ヒープの誤り、割り込み、上限は、`eml_fatal(ctx, code) -> !` で扱う。`eml_fatal` は `Ctx` の中のいちばん内側の `JmpBuf` へ自前の longjmp をし、呼ばれる側が保存するレジスタと SP と FP を戻して、`eml_enter` から Fatal を返す
+- オーバーフロー、ゼロ除算、捕まらない`Panic`とIOの失敗、ヒープの誤り、割り込み、上限は、`eml_fatal(ctx, code, site) -> !`で扱う。`eml_fatal`は`Ctx`からつないだいちばん内側の`JmpBuf`へ自前のlongjmpをし、呼ばれる側が保存するレジスタとSPとFPを戻して、`eml_enter`から誤りの符号とsiteを返す
 - フレームごとの後始末も、表も、展開の情報も、Cranelift の例外の仕組みも使わない。VM と同じく、ヒープは落とすか回復する
-- 誤りの起きた所とエントリの stub の間にあるのは `tail` のフレームだけである。extern は失敗を投げずに返し、extern の中の Rust の panic はどの包みでも `catch_unwind` で捕まえて失敗にする
+- 誤りの起きた所とエントリのstubの間にあるのは、`tail`のフレーム、thunk、誤りを見つけた1つのエントリと`eml_fatal`のRustのフレームだけで、そのRustのフレームはデストラクタを持つ値を持たない。externは失敗を投げずに返し、externの中のRustのpanicはどの包みでも`catch_unwind`で捕まえて、致命的な誤りにする。ヒープの操作のエントリは、致命的な誤りでだけ終わる
 
 ### タスクごとの上限
 
 タスクごとの上限の規則は VM と同じにする ([VM](../spec/vm.md) の「タスクの上限」)。すべての関数のエントリと、末尾でないすべての呼び出しの位置が巻き戻しの地点になる。タスクの中でスタックの上限を超えたとき、またはメモリの柔らかい上限で選ばれたときは、そのタスクの IO の失敗 `ResourceLimit` を起こし、上の戻り値の道で巻き戻す。ネイティブのコードでは yield の地点でない末尾でない呼び出しの位置ごとに、確かめが1つ増える。この費用は受け入れる。メモリの硬い上限は評価全体を止める。
 
-- タスクごとの状態は `#[repr(C)]` の欄 `Ctx.limit_class: u32` に置く。値は 0 (`Stops`)、1 (`Task`)、2 (`Pending`)、3 (`Aborting`) で、VM の `Limit` と同じ意味である。タスクを切り替えるたびに、`stack_limit` と一緒に書く。`Pending` では `stack_limit` に毒 (SP がいつも下回る値) を入れるので、次の安全点が冷たいブロックへ進む。`Aborting` の間の限度は、本当の限度から `LIMIT_HEADROOM_BYTES` を引いた値である
-- `stack_limit` に毒が入っている間も本当の限度と比べられるように、`Ctx` は本当の限度 (か `stack_base`) を2つ目の `#[repr(C)]` の欄に持つ
-- エントリの冷たいブロックは、コード生成の時点で関数の種類で選ぶ。VM と同じく、EP の補助の関数 (`eml_lir::ep_helper` が名前で決める。[Core IR](../spec/core-ir.md) の「EP が作る補助の関数」) かどうかで分かれる。どちらのブロックも、まず `limit_class` で分岐する
-  - 補助の関数でない関数: `Stops` と `Aborting` なら `eml_fatal(DepthLimit)` を呼ぶ。`Task` と `Pending` なら、関数のエントリでもループの戻りの辺でも、戻り値の道で `ResourceLimit` を起こす
-  - 補助の関数: `Stops` と `Aborting` なら同じく `eml_fatal(DepthLimit)` を呼ぶ。`Task` と `Pending` では `ResourceLimit` を起こさず、SP を本当の限度から `LIMIT_HEADROOM_BYTES` を引いた値と比べる。下回れば `eml_fatal(DepthLimit)` を呼び、そうでなければ続ける。VM の `limit_hit` が `Stops` と `Aborting` を先に止め、硬い限度を確かめてから補助の関数のエントリで延ばすのと同じ順である。補助の関数にループはないので、戻りの辺の安全点に変種は要らない
+- タスクごとの上限の種類は`Ctx`の欄でなく、実行系のworkerごとの状態に置く。値は`Stops`、`Task`、`Pending`、`Aborting`で、VMの`Limit`と同じ意味である。種類を移す関数は1つで、`stack_limit`を書くのはその関数だけである。`Pending`では`stack_limit`に毒 (SPがいつも下回る値) を入れるので、次の安全点が冷たいブロックへ進む
+- スタックの限度は、硬い限度`hard`と`real = hard + LIMIT_HEADROOM_BYTES`の2つである (下の「安全点とスタック」)。普通に動いている間の`stack_limit`は`real`で、上限の後に中断している間 (`Aborting`) は`hard`である
+- 安全点の冷たいブロックは、決めることを実行系の1つのサービスに任せ、出すコードはその答えで分岐する。サービスはVMと同じ表で決め、EPの補助の関数 (`eml_lir::ep_helper`が名前で決める。[Core IR](../spec/core-ir.md)の「EP が作る補助の関数」) かどうかで分かれる。どちらの場合も、まず上限の種類で分かれる
+  - 補助の関数でない関数: `Stops`と`Aborting`なら致命的な誤り`DepthLimit`にする。`Task`と`Pending`なら、戻り値の道で`ResourceLimit`を起こす
+  - 補助の関数: `Stops`と`Aborting`なら同じく`DepthLimit`にする。`Task`と`Pending`では`ResourceLimit`を起こさず、SPを`hard`と比べる。下回れば`DepthLimit`にし、そうでなければ続ける。VMの`limit_hit`が`Stops`と`Aborting`を先に止め、硬い限度を確かめてから補助の関数のエントリで延ばすのと同じ順である
 - 囲みと着地の規則 (中断の間は `Aborting`、着地で元に戻す) は VM と同じにする。戻りの位置の安全点も、`Control` のタスクごとの語も要らない
 - メモリの数は `eml_rt` の確保器が worker ごとに足すので、ネイティブでもそのまま使える。ネイティブのスケジューラは、切り替えの地点で数をタスクに帰属させ、VM と同じ値 (動いているタスクの `current`、`bytes`、`mark` と版の数 `seq`、実行待ちの `top` と `top_bytes`) を run の表の自分の欄に公開する ([VM](../spec/vm.md) の「タスクとスケジュール」)
 
@@ -88,19 +90,19 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 
 ## 安全点とスタック
 
-- 安全点は関数のエントリとループの後ろ向きの辺に置く。worker の止める語 ([マルチコア対応の設計](multicore.md) の「スレッドと worker」) とスタックの限度を読み、止めるビットが立っているか、SP が限度より下なら冷たいブロックへ分岐する。SP は CLIF の `get_stack_pointer` で読む
-- 冷たいブロックは止めるビットなら `eml_fatal` を呼ぶ。SP が `stack_limit` を下回ったとき (`Pending` の毒を含む) は、`limit_class` と関数の種類で、`ResourceLimit` を起こすか、`eml_fatal(DepthLimit)` を呼ぶか、続けるかを決める (上の「タスクごとの上限」)
+- 安全点は関数のエントリに置く。LIRの辺が前へだけ向き、自分への`return_call`がエントリに入り直す間は、それで足りる。ループの後ろ向きの辺ができたら、そこにも同じ安全点を置く。安全点はworkerの止める語 ([マルチコア対応の設計](multicore.md)の「スレッドと worker」) とスタックの限度を読み、止めるビットが立っているか、SPが限度より下なら冷たいブロックへ分岐する。SPはCLIFの`get_stack_pointer`で読む
+- 冷たいブロックは止めるビットなら`eml_fatal`を呼ぶ。SPが`stack_limit`を下回ったとき (`Pending`の毒を含む) は、上限の種類と関数の種類で、`ResourceLimit`を起こすか、`DepthLimit`にするか、続けるかを実行系のサービスが決める (上の「タスクごとの上限」)
 - ネイティブのタスクは`Async`の操作でだけ切り替わり、安全点はスタックと止めるビットのためにあって、時間の配分のためにはない。VMとネイティブは同じビットを読む。`Control`、SIGINT、EINTRの扱いはVMと同じである ([VM](../spec/vm.md)の「上限と割り込み」)
 - emlのコードを動かすスレッドは、スタックを明示して予約する。workerのスレッド (worker 0とworker 1..N-1) は既定で1 GiBの仮想の予約で、`--stack-size`で変えられる。Linuxで`vm.overcommit_memory=2`のときは小さい値を使うよう文書に書く。`main`のタスクはプロセスのメインスレッドの8 MiBのスタックでなく、大きいスタックで作るworker 0のスレッドで動く。メインのworkerは、プロセスのメインスレッドのOSの既定のスタックで動き、下の限度で深い再帰を止める。ブロックする呼び出しのプールのスレッドはemlのコードを動かさないので、OSの既定のスタックで足りる
-- 限度は `ctx.stack_limit = stack_base + 1 MiB` である。eml のフレームの大きさは LIR の verifier のフレームの上限 (VM では `u16::MAX` 語 = 512 KiB。ネイティブのフレームはこれより大きくならない) で抑えられ、`eml_rt` の Rust の extern はスタックで再帰しない (解放は明示したワークリストで行う) ので、1 MiB で eml のフレーム1つと任意の extern が収まる
+- スタックの限度はスレッドごとに決める。`base`をスタックのいちばん低いアドレスとして、硬い限度`hard`はworkerでは`base + 1 MiB`、メインのworkerでは`stack_base + 2 MiB`である。`real = hard + LIMIT_HEADROOM_BYTES` (2 MiB。VMの`LIMIT_HEADROOM`の2^18語をバイトにしたもの) で、普通に動いている間の`stack_limit`は`real`である。emlのフレームの大きさはLIRのverifierのフレームの上限 (VMでは`u16::MAX`語 = 512 KiB。ネイティブのフレームはこれより大きくならない) で抑えられ、`eml_rt`のRustのexternはスタックで再帰しない (解放は明示したワークリストで行う) ので、`hard`の下の1 MiB (メインのworkerでは2 MiB) でemlのフレーム1つと任意のexternが収まる
 - ページより大きいフレームにはその場で stack probe を入れる (`probestack_strategy=inline`)。Windows で要り、ほかの OS でも害がない
 - ネイティブでは `max_depth` を使わず、スタックの限度で深さを止める。タスクの外で止めるときの誤りの文は `DepthLimit` のままにする
-- `Ctx`は、ネイティブのコードが決まったずれで読む`#[repr(C)]`の欄を持つ。`yielding` (今もある)、`fault`、workerの止める語へのポインタ、`stack_limit`、本当のスタックの限度 (か`stack_base`)、`limit_class`、`jmp: *mut JmpBuf`、`worker`である。ずれは`eml_rt`が`offset_of!`から求めた`pub const`として`Ctx`の隣に書き出す (`eml_rt::layout`には置かない)。ネイティブのコードは、`Ctx`の欄をこのconstのずれでだけ読む
+- `Ctx`は、ネイティブのコードが決まったずれで読む欄を1つの`#[repr(C)]`の構造体として先頭に持ち、ヒープはそのすぐ後にある。欄は、`yielding`、`fault`、workerの止める語へのポインタ、`stack_limit`、`jmp`、`runtime` (スレッドに局所的な変数の代わりになる、workerごとの状態へのポインタ) である。欄は、出すコードかasmにそれを読む所が初めてできるときに足す。ずれは`eml_rt`が`offset_of!`から求めた`pub const`として`Ctx`の隣に書き出す (`eml_rt::layout`には置かない)。ネイティブのコードは、`Ctx`の欄をこのconstのずれでだけ読む
 
 ## extern のエントリ
 
-- extern の C ABI のエントリ (`extern "C"`) は、この設計で足す。今の extern は、引数がどれも 64 ビットの語で数が決まっているので、そのまま移せる。Host と読み手は panic しうるので、どの包みもエントリで `catch_unwind` する。`extern "C"` を越える panic はプロセスを落とすためである。包みは失敗を `Ctx.fault` に書き、語を1つ返す ([オブジェクトモデル](../spec/object-model.md) の「extern」)
-- `eml_rt` の行の `extern "C"` の包みと、VM の `match` の枝は、表から1つのマクロで作る。std の行を足すときに書くのは、今と同じく表の行と `Ctx` のメソッドと std の宣言で、どちらのバックエンドにも手で書くコードは増えない
+- 出すコードが呼ぶ実行系のエントリ (`extern "C"`) は、どれも`eml_nrt`に置き、関数とその記述子の行を一緒に出す1つのマクロで宣言する。名前の接頭辞は3つある。`eml_rt_`はヒープと`Ctx`の操作の薄い包みで、出すコードは呼んだ後に何も確かめない。`eml_x_`はexternの行ごとの包みで、`faults`の行の後には`fault`の語を確かめる。`eml_nrt_`は冷たい道のサービスで、返した行動の語で分岐する。引数は`ctx`の後に`i64`か`f64`だけを並べ、結果は高々1つの`i64`か`f64`である。今のexternは、引数がどれも64ビットの語で数が決まっているので、そのまま移せる。Hostと読み手はpanicしうるので、どの包みもエントリで`catch_unwind`する。`extern "C"`を越えるpanicはプロセスを落とすためである。包みは失敗を`Ctx`に置き、語を1つ返す ([オブジェクトモデル](../spec/object-model.md)の「extern」)
+- externの行の`extern "C"`の包みと、VMの`match`の枝は、表から1つのマクロで作る。stdの行を足すときに書くのは、今と同じく表の行と`Ctx`のメソッドとstdの宣言で、どちらのバックエンドにも手で書くコードは増えない
 - 表の行は失敗して中断を始めうるかを表す `faults: bool` を持つ ([LIR](../spec/lir.md) の「巻き戻しの地点」)。`Fault` を返す `eml_rt` の行は true で、利用者の C の行は、範囲を確かめる引数かハンドルの結果を持つときだけ true である。`points` は `faults` でない extern を巻き戻しの地点に数えない。そのため、`faults` でも `blocking` でもない利用者の C の関数の呼び出しには失敗の確かめも後始末のブロックもなく、普通の `call` になる。`blocking` の C の行は `<IO, Async>` を要し、ブロックする呼び出しのプールへの受け付けと待ちと取り出しに下ろすので、普通の `call` にならない ([FFI と拡張の設計](ffi.md) の「効果と中断の分類」と「長く走る呼び出し」)。プラグインの行は普通の表の行なので、ほかの行と同じ包みを通る ([FFI と拡張の設計](ffi.md) の「拡張」)
 - 巻き戻しの地点の出どころは `points` だけである。コード生成は断った関数を受け取ったら panic する
 
@@ -125,7 +127,7 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 - どの worker も自分の `Ctx` を持って `eml_enter` から任意の eml のクロージャに入れる。エントリは (関数, k) で決まる。添字の範囲のプリミティブは添字ごとに `f` を呼ぶネイティブのエントリを持つ
 - `par`はfork / joinで、forkとjoinの印付けはVMと同じである ([マルチコア対応の設計](multicore.md) の「`par`の印付け」)。ネイティブのコードはスタックを切り替えられないので、joinで待つworkerは待たずに手伝う。手伝えるのは、待つjoinより深いforkの子だけで、ほかに手伝えるものがなければjoinの節点で待つ。メインのworkerは盗まず、自分のjoinだけを手伝う
 - `compute` の仕事は join するフレームを持たない fork の子で、盗む worker か手伝う worker が動かし、終わりで仕事のセルを終える。出したタスクはほかの `Async` の待ちと同じく `resume_task` で再開する ([VM](../spec/vm.md) の「`compute` の仕事」)
-- ネイティブのタスクは`Async`の操作でだけ切り替わる。`Async`の操作を持たないタスクは、VMと同じく終わるまでworkerを持ち続け、同じworkerのほかのタスクは待つ。CPUを多く使う仕事は`compute`に入れる。`Async.run`は、VMではタスクを待たせるが、ネイティブではマシンのスタックの上でworkerのループを入れ子にする ([非同期の設計](async.md)の「スコープとタスク」)。約束 (呼んだ側は完了の後に再開する) は同じである。入れ子の順が逆になりうるので、`Async.run`は`main`から呼ぶのがよい
+- ネイティブのタスクは`Async`の操作でだけ切り替わる。`Async`の操作を持たないタスクは、VMと同じく終わるまでworkerを持ち続け、同じworkerのほかのタスクは待つ。CPUを多く使う仕事は`compute`に入れる。`Async.run`は、VMではタスクを待たせるが、ネイティブではマシンのスタックの上でworkerのループを入れ子にする ([非同期の設計](async.md)の「スコープとタスク」)。呼んだ側が完了の後に再開するという約束は同じだが、入れ子の終わる順はVMと違う。入れ子の`Async.run`は、後に入ったものから先に終わる。内側の入れ子の下で外側の`Async.run`のrunが終わったときは、内側が終わるのを待つ。外側を先に終えないと進めないrunは、デッドロックの誤り`BuriedRun`で終わる。VMは同じプログラムを続けるので、これはVMとネイティブの違いである
 - 致命的な誤りは複数のworkerでも次の手順で止める。`par`の子の外では、worker kの`eml_fatal`は`Control`の終わりの欄に誤りを書き (最初の書き手が勝つ)、終わりのビットを立ててから、自分のエントリへ切る。`par`の子の中では、子ごとの`JmpBuf` (子の境目) まで切り、誤りをjoinの節点に記録する。手伝うworkerでは子の下に待つ親のフレームがあるので、エントリまで切らない ([マルチコア対応の設計](multicore.md) の「`par`の意味」)。書く側がすべてのworkerの止める語にビットを立て、監視のスレッドは待っているworker (joinで待つworkerを含む) を起こすだけである。ほかのworkerは次の安全点でビットを見て、それぞれのエントリへ切る。後始末はしない。各workerはエントリへ戻った後、自分のスレッドの上でI/Oのdriverを空にする (実行中のプールの仕事も待つ)。`Machine`を持つスレッドはすべてのworkerを待ってから、終わるか回復する ([マルチコア対応の設計](multicore.md) の「止める手順」)
 - メインのworkerは、配置で仕事を受けない追加のworkerである。自分のjoinだけを手伝い、入れ子の`Async.run`のループはほかのworkerと同じ手順で眠り、`eml_run_pending`の下の致命的な誤りは`Park`へ戻り、ほかのworkerと同じく自分のI/Oのdriverを持つ
 - 捨てたネイティブのフレームは、Rust の局所変数 (extern はもう戻っている) もデストラクタも持たない。`Foreign` のファイナライザは VM と同じく、ヒープを落とすときか回復のときに走る
@@ -136,20 +138,20 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 
 | 構造 | ネイティブの形 | メインのworker |
 |---|---|---|
-| タスクのセルと登録表 | `extern "C"`のエントリを通した`cells.rs`の共有の核 | `TaskCell.pinned`、行`start_main_raw` |
+| タスクのセルと登録表 | `extern "C"`のエントリを通した、`eml_sched`の`cells.rs`の共有の核 | `TaskCell.pinned`、行`start_main_raw` |
 | 継続 | 待つタスクが`k`を持ち、`resume_task k w`で再開する | 変わらない。`k`はworkerから出ない |
 | 実行待ちと受け箱 | workerごとの列と`Notice`の受け箱 | メインのworkerの列は欄N。`Slot::ring`は`Park`のwakerも鳴らす |
 | `Async.run`の入れ子 | ネイティブのコードはworkerのループを入れ子にする | メインのworkerの上の入れ子のループは、ほかのworkerと同じ手順で眠り、その間の状態は`Parked`である |
 | joinの手伝い | 自分より深いforkを手伝う | メインのworkerは自分のjoinだけを手伝う |
 | `eml_enter`、`JmpBuf`、`eml_fatal` | asmのstub、入れ子の`JmpBuf` | `eml_run_pending(ctx) -> Progress`は各エントリに`eml_enter`で入る。中の致命的な誤りは`Park`へ`Stopping`を返し、toolkitのフレームを越えてlongjmpしない |
-| ネイティブのコードが読む`Ctx`の欄 | 止める語へのポインタ、`stack_limit`、`jmp`、`worker`など | メインのworkerの`Ctx`は`Ctx::for_worker(.., N)`で、止める語はN。`stack_limit`はOSのスタックの`stack_base + 2 MiB` |
+| ネイティブのコードが読む`Ctx`の欄 | 止める語へのポインタ、`stack_limit`、`jmp`、`runtime`など | メインのworkerの`Ctx`は`Ctx::for_worker(.., N)`で、止める語はN。`hard`はOSのスタックの`stack_base + 2 MiB` |
 | AOTの`main()` | worker 0を作り (1 GiB)、そこで`main`を動かす | `Control` (N+1語) を作り、worker 0を作り、既定の`Park`でメインのworkerの繰り返しを動かし、joinし、畳み込んで終了コードを返す |
 | I/O | 本物の時計ではworkerごとのdriver、仮想の時計では回送 | メインのworkerもそのworkerの1つで、その`Park`は自分のdriverで待つ |
 
 ## AOT と配布
 
 - `eml build` は `cranelift-object` で object を書き、システムのリンカを呼ぶ。リンカは rustc と同じやり方で探す (Unix では `cc`、Windows では Visual Studio の `link.exe`、あれば `lld-link`)。モジュールの `link` の指示は `-l` と `-framework` にして渡す。利用者のマシンに rustc も cargo も要らない
-- emlの配布物 (Nixのパッケージと、リリースのtarball) は、実行系の静的ライブラリを、emlのビルドのときに固定したtoolchainで作って同梱する。変種は2つある。`libeml_rt.a`は`eml_rt`と実行系とエントリのstubをまとめ、GUIを持たない。`libeml_rt_gui.a`はそれに、toolkitの行の腕、`Park`の繋ぎ、runの外の待ちの印とゲートと回収の処理、`eml_gui`、shimのobjectを加える。AOTのプログラムにリンクするRustの静的ライブラリは、いつもちょうど1つである。1つのリンクに複数のRustの静的ライブラリを入れると衝突するためである (personalityの記号の直しが入るrustcは、固定した版より後である)
+- emlの配布物 (Nixのパッケージと、リリースのtarball) は、実行系の静的ライブラリを、emlのビルドのときに固定したtoolchainで作って同梱する。変種は2つある。`libeml_rt.a`は`eml_nrt`から (`eml_sched`と`eml_rt`を含めて) 作り、実行系とエントリのstubをまとめ、GUIを持たない。`libeml_rt_gui.a`はそれに、toolkitの行の腕、`Park`の繋ぎ、runの外の待ちの印とゲートと回収の処理、`eml_gui`、shimのobjectを加える。AOTのプログラムにリンクするRustの静的ライブラリは、いつもちょうど1つである。1つのリンクに複数のRustの静的ライブラリを入れると衝突するためである (personalityの記号の直しが入るrustcは、固定した版より後である)
 - `eml build`はビルドのプロファイル`--profile console|gui`を取り、既定は`console`である。何をリンクするかはプロファイルだけが決め、importからは推し量らない。Windowsのsubsystemや後のバンドルは、プログラムの事実でなく作者の選択だからである
 
   | | `console` (既定) | `gui` |
@@ -175,8 +177,9 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 
 ## テスト
 
-- `tests/ui/run` と `tests/ui/run-fail` を、ネイティブで速いモードで流す ([テスト戦略](../implementation/testing.md) の「UI テスト」)。標準出力、標準エラー、終了コードは VM とバイト単位で同じでなければならない。除くのは `// native: skip` の印を付けたテストだけで、文が `max_depth` や語の数を名指す深さとメモリの上限のテストと、検査モードを要るテストに付ける。印はネイティブの UI テストを入れるときに [テスト戦略](../implementation/testing.md) に節を書いて導入し、印を付けるテストを1つずつ挙げる (成否の変更)
-- バックエンドを作る途中は、扱わない形を含むテストが E0004 で断られる。各テストは VM と同じ出力になるか、E0004 で断られるかのどちらかで、断られた数はスナップショットで固定する。仕上がったバックエンドでは断られる数が 0 になり、UI テストのすべてをネイティブで流す。飛ばすのは、一覧に挙げた `// native: skip` のテストだけである
+- `tests/ui/run`と`tests/ui/run-fail`を、ネイティブで速いモードで流す ([テスト戦略](../implementation/testing.md)の「UI テスト」)。今のUIテストとは別の、ディレクトリごとのテストにし、同じプロセスでVMの速いモードとネイティブで流して比べる。標準出力、標準エラー、終了コードはVMとバイト単位で同じでなければならない。除くのは`-- native: skip (<reason>)`の印を付けたテストだけで、文が`max_depth`や語の数を名指す深さとメモリの上限のテストと、検査モードを要るテストに付ける。印はネイティブのUIテストを入れるときに[テスト戦略](../implementation/testing.md)に節を書いて導入し、印を付けるテストを1つずつ挙げる (成否の変更)
+- バックエンドを作る途中は、扱わない形を含むテストがE0004で断られる。各テストはVMと同じ出力になるか、E0004で断られるかのどちらかで、断られた数と、最初に断られた形ごとの数はスナップショットで固定する。仕上がったバックエンドでは断られる数が0になり、UIテストのすべてをネイティブで流す。飛ばすのは、一覧に挙げた`-- native: skip (<reason>)`のテストだけである
+- ネイティブのrunは、終わるたびに、rcが0でない物体がヒープに残っていないことを確かめる。これが、ネイティブでのRCの安全網として検査モードの代わりになる
 - `Async` の UI テストはどの seed でも同じ出力を返すので、ネイティブでも同じになる。worker の数はすべてのテストで 1 にし、順によらない `Async`、channel、ネットのテストでは 2 と 8 でも流す
 - `RunStats` のスナップショットは VM だけのものである ([VM](../spec/vm.md) の「`RunStats`」)
 
@@ -196,6 +199,6 @@ VM は中断を、コード生成が作る呼び出しの位置ごとの表で�
 - Windows でのビルドに `lld` を同梱するか: 既定は同梱しない。Visual Studio の Build Tools か、入れてある `lld-link` を求める
 - コンパイルの待ち時間: 上の「目的と範囲」のコンパイルの条件に届かないときの既定は、std のコンパイル済みの関数を処理系のビルドごとに使い回すことで、使い回しの鍵がこれを許す
 - worker 0のスタック: 大きいスタックのスレッドを作る形と、`main`を大きいスタックで実行し直す形がある。既定はスレッドを作る形である。ネイティブのバイナリでは、プロセスのメインスレッドがworker 0になることはない
-- Windows での `return_call` と `tail` の実行はまだ試していない。確かめたのは Cranelift が出すコードだけである。Windows だけの不具合が見つかったときは、Unix だけで `tail` を使い、Windows では自分への末尾呼び出しを trampoline で行う (コードは悪くなるが、意味は同じ)
+- Windowsでの`return_call`と`tail`の実行は、CIの4つの対象で流すABIのテストで確かめる。そこでWindowsだけの不具合が見つかったときは、Unixだけで`tail`を使い、Windowsでは自分への末尾呼び出しをtrampolineで行う (コードは悪くなるが、意味は同じ)。それもできなければ、Windowsではネイティブで動かさない
 - `cranelift-object` が3つのターゲット (Mach-O、ELF、COFF) でシステムのリンカの受け付ける object を出すことも、まだ試していない。出せないターゲットは直るまで JIT だけにする
 - 範囲の確かめを消す最適化: 範囲の確かめが測って目立つときに考える
