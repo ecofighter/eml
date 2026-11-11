@@ -5,7 +5,8 @@
 use std::sync::Arc;
 
 use eml_lir::FloatBits;
-use eml_rt::{Control, Frozen, Heap, Kind, Meta, Mode, Word, layout};
+use eml_rt::{Control, Frozen, Heap, Mode, Word};
+use eml_sched::constants::{immortal_big_int, immortal_float};
 use rustc_hash::FxHashMap;
 
 use crate::code::{CompileError, Index};
@@ -88,15 +89,7 @@ impl<'c, M: Mode> Constants<'c, M> {
         }
         let w = match Word::int(n) {
             Some(w) => w,
-            // 作業用のヒープの構築中の物体で、ほかの操作の前に値の語を書き終える (docs/spec/object-model.md の「核の操作」)
-            None => unsafe {
-                let heap = self.heap();
-                let w =
-                    heap.alloc_immortal(layout::BOX_WORDS, Meta::new(0, 0, Kind::BigInt, false));
-                heap.set_raw(w, layout::BOX_VALUE_WORD, n as u64)
-                    .expect("a fresh BigInt takes its value");
-                w
-            },
+            None => immortal_big_int(self.heap(), n),
         };
         let index = self.push(w);
         self.boxed.insert(n, index);
@@ -108,14 +101,7 @@ impl<'c, M: Mode> Constants<'c, M> {
         if let Some(&index) = self.boxed_floats.get(&x) {
             return index;
         }
-        // 作業用のヒープの構築中の物体で、ほかの操作の前に値の語を書き終える (docs/spec/object-model.md の「核の操作」)
-        let w = unsafe {
-            let heap = self.heap();
-            let w = heap.alloc_immortal(layout::BOX_WORDS, Meta::new(0, 0, Kind::Float, false));
-            heap.set_raw(w, layout::BOX_VALUE_WORD, x.0)
-                .expect("a fresh Float takes its value");
-            w
-        };
+        let w = immortal_float(self.heap(), x.0);
         let index = self.push(w);
         self.boxed_floats.insert(x, index);
         index
