@@ -61,6 +61,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | `eml_lir` | lir |
 | `eml_vm` | vm、lir、object-model |
 | `eml_rt` | object-model |
+| `eml_sched` | vm |
 | `eml_io` | vm |
 | `eml_cabi`、`eml_native` | [vm](spec/vm.md) の「C の関数の呼び出し」。crate の中は [architecture](implementation/architecture.md) の「`eml_native` の内部」 |
 | `eml_nrt` | [native](spec/native.md)。crateの中は[architecture](implementation/architecture.md) の「`eml_nrt`の内部」 |

@@ -125,6 +125,7 @@ claude plugin install ecoskills@ecoskills --scope user
 |---|---|
 | `eml_cli` | `check` / `run` / `repl` のコマンド。各段階をつなぐ唯一の場所 (`Session`) |
 | `eml_vm` | LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上で実行する。`par`、`Async` のタスク、channel も扱う |
+| `eml_sched` | VMとネイティブの実行系が共有する層 (タスクのセルの核、実行時エラーの型、実行の設定と結果の型、時計の選び方) |
 | `eml_io` | I/O の driver。OS ごとの backend (epoll、kqueue、IOCP) の上の本物の driver と、決定的なテストの driver |
 | `eml_tls` | rustlsの接続を包むTLSの状態 (I/Oを持たない。aws-lc-rsのprovider、rustls-platform-verifier) |
 | `eml_native` | C の関数を呼ぶ橋渡しの関数を Cranelift で作り、C のライブラリと記号を解決する |
