@@ -402,7 +402,8 @@ impl<M: Mode> Ctx<M> {
         Ok(w)
     }
 
-    /// `Bytes.empty`。長さ 0 の新しいバイト列を返す。確保量の上限は `bytes_make` と同じ道で確かめる。
+    /// `Bytes.empty`。長さ 0 の新しいバイト列を返す。確保量の上限は確かめないので、必ず `Ok` である
+    /// (docs/spec/object-model.md の「バイト列の操作」)。`Result` の型は呼ぶ側を変えないために残す。
     pub fn bytes_empty(&mut self) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
@@ -410,8 +411,7 @@ impl<M: Mode> Ctx<M> {
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
-            r is Ok || r == Err::<Word, Fault>(Fault::Stopped(Stop::MemoryLimit)),
-            r is Err ==> *final(self) == *old(self),
+            r is Ok,
             r matches Ok(w) ==> final(self).is_bytes(w) && final(self).text_of(w).len() == 0,
             r matches Ok(w) ==> (old(self).held_ok() ==> {
                 &&& final(self).held_ok()
@@ -419,7 +419,18 @@ impl<M: Mode> Ctx<M> {
                 &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             }),
     {
-        unsafe { self.bytes_make(0, 0) }
+        let ghost s0 = *self;
+        let w = self.heap.alloc_bytes_room(0);
+        proof {
+            if M::CHECKED {
+                assert(self.heap.words_kept(s0.heap));
+                self.lemma_words_kept(s0);
+            }
+            if s0.held_ok() {
+                self.lemma_made_ok(s0, w);
+            }
+        }
+        Ok(w)
     }
 
     /// `Bytes.find_from`。`needle` と `s` を借りて、`from` 以上で `needle` が始まる最小の位置を返し、なければ -1 を返す。
