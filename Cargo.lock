@@ -692,7 +692,9 @@ dependencies = [
 name = "eml_sched"
 version = "0.1.0"
 dependencies = [
+ "eml_io",
  "eml_rt",
+ "libc",
 ]
 
 [[package]]

@@ -103,7 +103,7 @@ const STOPPING_CALLS: u32 = 64;
 /// メインのworkerの`Pending::run`の状態。入れるのは眠った待ちからだけで、`run`の中からと待ちの外からの呼び出しは
 /// `Busy`である。`Stopping`の後は、待ちが終わるまでどの呼び出しにも`Stopping`を返す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Guard {
+pub enum Guard {
     Outside,
     Parked,
     Running,
@@ -113,7 +113,7 @@ pub(crate) enum Guard {
 
 impl Guard {
     /// `Pending::run`がすることを決める。`None`なら入ってよく、状態は`Running`になる。
-    pub(crate) fn enter(&mut self) -> Option<Progress> {
+    pub fn enter(&mut self) -> Option<Progress> {
         match self {
             Guard::Outside | Guard::Running => Some(Progress::Busy),
             Guard::Stopped(calls) => {

@@ -27,13 +27,13 @@ eml_sched.workspace = true
 eml_tls = { workspace = true, optional = true }
 rustc-hash.workspace = true
 
-[target.'cfg(unix)'.dependencies]
-libc.workspace = true
-
 [dev-dependencies]
 eml_sched = { workspace = true, features = ["testing"] }
 eml_test_support = { workspace = true, features = ["run"] }
 insta.workspace = true
+
+[target.'cfg(unix)'.dev-dependencies]
+libc.workspace = true
 
 [[test]]
 name = "integration"

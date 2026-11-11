@@ -14,6 +14,7 @@ use crate::monitor::{self, Monitor};
 use crate::park::{Guard, PollSource};
 use crate::vm::Task;
 use crate::workers::{Mailer, NO_CELL, Notice, Ready, Run, Workers, cell_word};
+pub(crate) use eml_sched::driver::NO_DRIVER;
 
 /// 待つタスクのいなかったシグナルで run を止める。待つタスクのないときにハンドラが立てるのと同じビットを、すべての
 /// worker の止める語に立てるので、`eml run` の次の同じシグナルはその場で終わらせ、どの worker も次の安全点で止まる
@@ -282,9 +283,6 @@ pub(crate) const JOB: JoinId = usize::MAX;
 /// 監視のスレッドのない run で、空きのループが1回の `wait` に渡す期限の上限 (ミリ秒)。Ctrl-C と確保量の上限が眠る
 /// worker を止めるまでの遅れの上限になる (docs/spec/vm.md の「時計と driver」)。
 const WAIT_CAP_MS: u64 = 10;
-
-/// driver を持たない worker が driver に触れようとした。
-pub(crate) const NO_DRIVER: VmFault = VmFault::Internal("a worker without a driver");
 
 /// worker の driver。仮想の時計の run では worker 0 だけが持ち、本物の時計の run の worker `k` (`k` ≥ 1) は最初に
 /// 要るときに作るので、持たない worker では内部の誤りにする (docs/spec/vm.md の「時計と driver」)。`Scheduler` の

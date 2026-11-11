@@ -8,13 +8,12 @@ use std::time::{Duration, Instant};
 use eml_io::{RealDriver, TestDriver};
 use eml_rt::{Control, IoDriver};
 
-use crate::VmFault;
+use crate::error::VmFault;
 use crate::park::PollSource;
-use crate::sched::NO_DRIVER;
 
 /// 静止が `Op::Job` の仕事を待つ予算の既定の値。run のすべての静止が分け合い、過ぎたら残る仕事を見捨てる
 /// (docs/spec/vm.md の「時計と driver」)。
-pub(crate) const JOB_QUIESCE_LIMIT: Duration = Duration::from_secs(1);
+pub const JOB_QUIESCE_LIMIT: Duration = Duration::from_secs(1);
 
 /// タイマーが使う時計の選び方。`RunConfig::with_clock` と `Machine::with_clock` で選ぶ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -29,7 +28,7 @@ pub enum Clock {
 impl Clock {
     /// この時計で始める run の時間の基準。本物の時計は今から数え、仮想の時計は 0 から数える。`Machine` が driver を
     /// 作るときに1回だけ作り、その driver と同じ基準で run が時刻を読む (docs/spec/vm.md の「時計と driver」)。
-    pub(crate) fn start(self) -> RunClock {
+    pub fn start(self) -> RunClock {
         match self {
             Clock::Real => RunClock::Real {
                 epoch: Instant::now(),
@@ -40,12 +39,12 @@ impl Clock {
 }
 
 /// 作ったdriverと、それが待つOSの源。
-pub(crate) type MadeDriver = (Box<dyn IoDriver>, Option<PollSource>);
+pub type MadeDriver = (Box<dyn IoDriver>, Option<PollSource>);
 
 /// run の時間の基準。run の driver はどれもこの基準で作り、VM はここからだけ時刻を読む
 /// (docs/spec/vm.md の「時計と driver」)。
 #[derive(Debug, Clone)]
-pub(crate) enum RunClock {
+pub enum RunClock {
     /// `epoch` から数える本物の時計。
     Real { epoch: Instant },
     /// run の driver が共有する仮想の時計。ミリ秒の整数である。
@@ -57,7 +56,7 @@ pub(crate) enum RunClock {
 impl RunClock {
     /// この基準のdriverの出どころ。runのどのworkerの`Scheduler`もここから読むので、出どころとそれで決まるTLSの根は
     /// どのworkerでも同じである (docs/spec/vm.mdの「時計と driver」)。
-    pub(crate) fn kind(&self) -> DriverKind {
+    pub fn kind(&self) -> DriverKind {
         match self {
             RunClock::Real { .. } => DriverKind::Real,
             RunClock::Virtual(_) => DriverKind::Virtual,
@@ -68,7 +67,7 @@ impl RunClock {
     /// この基準の新しいdriverと、それが待つOSの源。`seed`は`Sched::seed`で、テストのdriverが決着の組を混ぜるのに
     /// 使う。driverは作ったスレッドの上でだけ使うので、runを行うスレッドで作る。渡されたdriverの基準`Injected`からは
     /// 作れない。源を持つのはunixの本物のdriverだけである (docs/spec/vm.mdの「メインのworkerの待ち」)。
-    pub(crate) fn driver(&self, seed: Option<u64>) -> io::Result<MadeDriver> {
+    pub fn driver(&self, seed: Option<u64>) -> io::Result<MadeDriver> {
         Ok(match self {
             RunClock::Real { epoch } => {
                 let driver = RealDriver::new_at(*epoch)?;
@@ -87,7 +86,7 @@ impl RunClock {
     }
 
     /// 基準が示す今の時刻。`Injected` だけは `driver` に聞く。
-    pub(crate) fn now(&self, driver: Option<&dyn IoDriver>) -> Result<Duration, VmFault> {
+    pub fn now(&self, driver: Option<&dyn IoDriver>) -> Result<Duration, VmFault> {
         match self {
             RunClock::Real { epoch } => Ok(epoch.elapsed()),
             RunClock::Virtual(clock) => Ok(Duration::from_millis(clock.load(Ordering::SeqCst))),
@@ -99,7 +98,7 @@ impl RunClock {
 /// runが使うdriverの出どころ。OSのシグナルを中継するか、空きの待ちに上限を掛けるか、TLSの接続が信頼する根を
 /// 決める (docs/spec/vm.mdの「時計と driver」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DriverKind {
+pub enum DriverKind {
     /// `Machine` が `Clock::Real` から作った本物の driver。
     Real,
     /// `Machine` が `Clock::Virtual` から作ったテストの driver。空きのループで時計を進める。
@@ -117,7 +116,7 @@ pub enum Signal {
 
 impl Signal {
     /// 止める語と同じ `Control` のビット。
-    pub(crate) fn bit(self) -> u32 {
+    pub fn bit(self) -> u32 {
         match self {
             Signal::Interrupt => Control::INTERRUPT,
             Signal::Terminate => Control::TERMINATE,
@@ -134,14 +133,17 @@ pub struct VirtualSignal {
 }
 
 /// 満期の判定で読む今の時刻。切り捨てるので、期限より早くは満ちない (docs/spec/vm.md の「時計と driver」)。
-pub(crate) fn floor_ms(d: Duration) -> u64 {
+pub fn floor_ms(d: Duration) -> u64 {
     d.as_millis() as u64
 }
 
 /// 登録で読む今の時刻。切り上げるので、本物の時計で期限が `ms` より早く来ない (docs/spec/vm.md の「時計と driver」)。
-pub(crate) fn ceil_ms(d: Duration) -> u64 {
+pub fn ceil_ms(d: Duration) -> u64 {
     d.as_millis() as u64 + u64::from(!d.subsec_nanos().is_multiple_of(1_000_000))
 }
+
+/// driver を持たない worker が driver に触れようとした。
+pub const NO_DRIVER: VmFault = VmFault::Internal("a worker without a driver");
 
 #[cfg(test)]
 mod tests {
