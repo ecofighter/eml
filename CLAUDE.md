@@ -34,14 +34,14 @@ cargo nextest run -p eml_syntax --test integration parser::empty_file   # a sing
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # UI tests
 cargo insta review                   # accept snapshots
 cargo clippy --all-targets -- -D warnings && cargo fmt
-cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core, run without tls, run+gui; eml_test_support also hir; eml_io + eml_vm --all-targets without tls and gui)
+cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core, run without tls, run+gui; eml_test_support also hir; eml_io + eml_vm + eml_nrt --all-targets without tls and gui)
 cargo nextest run -p eml_io -p eml_vm -E 'test(tls_off::) | test(gui_off::)'   # the tls-off and gui-off behaviour (a workspace run has tls and gui on through eml_cli's default)
 cargo build --features eml_cli/gui-native   # the native GUI backends (AppKit on macOS, Qt 6 on Linux, where the default devShell has Qt, and WinUI 3 on Windows, which needs no Windows App SDK files to build; not default, so a default build needs no toolkit dev files); clippy and nextest take the same flag, and every test still runs on the stub
 cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] [--stats] [--workers N] [--gui native|stub] [--link KEY=VALUE]... <file.em> [args...] (the VM; --debug-heap is checked mode; --stats is checked mode and prints the counters of `RunStats` on stderr after a run that did not fail; --workers sets the worker threads, default $EML_WORKERS then the CPU count; --gui picks the Std.Gui backend, default $EML_GUI then native, and stub opens nothing and sends one close request to each window it shows; --link opens VALUE in place of the library a `link` item names KEY; `eml <file.em> [args...]` is the same), repl [--debug-heap] [--link KEY=VALUE]... [file.em] (the terminal REPL)
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run -- -D warnings   # type-check the Windows-only code; eml_tls (C crypto) is excluded (Linux: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu, same flags)
 nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --exclude eml_tls --all-targets --no-default-features --features eml_cli/run,eml_test_support/run,eml_cli/gui-native -- -D warnings   # the same with the WinUI backend (needs no Windows App SDK files; the Linux targets cannot take gui-native without the Qt headers)
-nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target $(rustc -vV | sed -n 's/^host: //p') -p eml_io   # AddressSanitizer on the host target, Linux or macOS (also -p eml_native and eml_vm --test integration -- api:: signal:: io:: workers:: ffi:: ffi_abandon:: seat:: pinned::; docs/implementation/testing.md の「AddressSanitizer」)
+nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=address CARGO_TARGET_DIR=target/asan cargo test -Zbuild-std --target $(rustc -vV | sed -n 's/^host: //p') -p eml_io   # AddressSanitizer on the host target, Linux or macOS (also -p eml_native, -p eml_nrt -- --skip fatal:: and eml_vm --test integration -- api:: signal:: io:: workers:: ffi:: ffi_abandon:: seat:: pinned::; docs/implementation/testing.md の「AddressSanitizer」)
 nix develop .#miri -c env RUSTFLAGS=-Zsanitizer=thread TSAN_OPTIONS=halt_on_error=1 CARGO_TARGET_DIR=target/tsan cargo test -Zbuild-std --target $(rustc -vV | sed -n 's/^host: //p') -p eml_rt trusted::   # ThreadSanitizer on the host target, Linux or macOS (also -p eml_vm --test integration -- workers:: signal:: io:: chan:: ffi:: ffi_abandon:: seat:: pinned::, -p eml_vm --lib counters:: and -p eml_io --lib -- driver::tests::; docs/implementation/testing.md の「ThreadSanitizer」)
 nix build                            # build the eml binary (eml_cli); $out/share/doc/eml/ gets LICENSE.txt and THIRD-PARTY-LICENSES.md
 nix develop -c nix/third-party-licenses.sh   # regenerate THIRD-PARTY-LICENSES.md after a dependency change (--check compares, as CI's licenses job does; docs/implementation/architecture.md の「外部 crate」)
@@ -50,6 +50,7 @@ nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # Miri on the VM's small runs (same two settings)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --lib -- cells::a_read cells::a_write counters::   # Miri on the read and write lends in eml_vm's op records and the Counter table (same two settings)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_io --lib -- driver::tests::   # Miri on eml_io's driver core over a fake backend (same two settings)
+nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_nrt --lib -- entries::   # Miri on eml_nrt's entry macro (same two settings)
 cargo verus verify -p eml_rt         # Verus proofs of eml_rt
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)
@@ -103,6 +104,7 @@ eml_io           IoDriver implementations: the real driver (an OS-free core in `
 eml_tls          rustls client connection, sans-IO (aws-lc-rs provider, rustls-platform-verifier); depends on no eml crate; eml_vm and eml_io reach it through their feature tls, and eml_cli's tls adds it for its real-socket test
 eml_gui          the native GUI toolkit layer (Widgets, EventLoop, Toolkit, EventQueue, Taffy grid layout), the headless stub backend and, under its feature native, the AppKit (macOS), Qt 6 (Linux) and WinUI 3 (Windows) backends; depends on no workspace crate; eml_vm reaches it through its features gui (default in eml_cli) and gui-native, whose gui.rs holds the Std.Gui arms and the main worker's GUI Park
 eml_native       Cranelift bridges and C library/symbol resolution (Linker::link builds Linked); depends on no workspace crate but eml_extern and eml_cabi (plus Cranelift and libloading)
+eml_nrt          the runtime native code calls: the entries (one `entries!` macro emits each function and its descriptor row; `plain` and `shim` forms) and the per-ABI entry stubs `eml_enter` / `eml_fatal` (naked asm, AAPCS64); depends only on eml_rt (no Cranelift, eml_lir, eml_core_ir, eml_vm or eml_native)
 eml_cabi         the C call boundary: Bridge, Dtor, CCall, Linked (eml_native builds them, eml_vm uses them)
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
@@ -151,6 +153,7 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | User C functions (`extern "C"`, `link`, `--link`) | docs/spec/declarations.md の「`extern "C"`」, docs/spec/vm.md の「C の関数の呼び出し」 |
 | `blocking` C calls | docs/spec/declarations.md の「`extern "C"`」, docs/spec/vm.md の「`blocking` の呼び出し」 |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
+| Native runtime entries | docs/spec/native.md の「エントリ」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
 | The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |
 

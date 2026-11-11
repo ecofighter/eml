@@ -672,6 +672,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "eml_nrt"
+version = "0.1.0"
+dependencies = [
+ "eml_rt",
+]
+
+[[package]]
 name = "eml_rt"
 version = "0.1.0"
 dependencies = [

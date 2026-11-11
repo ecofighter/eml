@@ -45,6 +45,7 @@ eml/
     eml_lir/            # LIR とそのパス。workspace の crate では eml_extern だけに依存する
     eml_cabi/           # C の関数を呼ぶコードのポインタ。eml_extern だけに依存する
     eml_native/         # Cranelift の橋渡しの関数と、C のライブラリと記号の解決。workspace の crate では eml_extern と eml_cabi だけに依存する
+    eml_nrt/            # ネイティブのコードが呼ぶエントリとエントリのstub。workspaceのcrateではeml_rtだけに依存し、Cranelift、eml_lir、eml_vm、eml_nativeには依存しない
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
     eml_io/             # I/O の driver (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。workspace の crate では eml_rt だけに依存し、feature `tls` の下では eml_tls にも依存する
     eml_tls/            # rustlsのクライアント接続を包むTLSの状態 (I/Oを持たない)。証明書はOSの検証器で確かめる。workspaceのcrateには依存しない
@@ -82,6 +83,7 @@ eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの
 eml_tls          rustlsのクライアント接続を包むTLSの状態 (I/Oを持たない)。aws-lc-rsのproviderとrustls-platform-verifierを使い、emlのどのcrateにも依存しない
 eml_gui          ネイティブのGUIのtoolkitの共通の層 (Widgets、EventLoop、Toolkit、EventQueue)、画面を開かないstubのbackend、feature nativeの下のAppKit (macOS)、Qt 6 (Linux)、WinUI 3 (Windows) のbackend。emlのどのcrateにも依存しない
 eml_native       Cranelift の橋渡しの関数と、C のライブラリと記号の解決 (Linker::link が Linked を作る)。workspace の crate では eml_extern と eml_cabi だけに依存する
+eml_nrt          ネイティブのコードが呼ぶエントリ (記述子の表、plainとshimの包み) とエントリのstub (eml_enter、eml_fatal)。eml_rtだけに依存し、Cranelift、eml_lir、eml_core_ir、eml_vm、eml_nativeには依存しない
 eml_cabi         C の関数を呼ぶコードのポインタ (Bridge、Dtor、CCall、Linked)。eml_extern だけに依存する
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。最適化と evidence passing のパスと、LIR への変換
@@ -93,7 +95,7 @@ eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne �
 eml_extern       extern の表 (型、エフェクト、関数)。依存を持たず、HIR、型検査、Core IR、LIR、VM が引く
 ```
 
-- 段階の連なりに `eml_rt` は入らず、`eml_vm` と `eml_io` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
+- 段階の連なりに`eml_rt`は入らず、`eml_vm`、`eml_io`、`eml_nrt`だけが依存する。`eml_rt`はworkspaceのほかのcrateに依存しない
 - `eml_io` は workspace の crate では `eml_rt` と、feature `tls` の下の `eml_tls` だけに依存し、`eml_vm` には依存しない。依存の順は `eml_cli` > `eml_vm` > `eml_io` > `eml_rt` で、feature `tls` の下では `eml_io` > `eml_tls` と `eml_vm` > `eml_tls` が加わる。trait `IoDriver` と driver に渡す型は `eml_rt` が持ち、`eml_io` はその実装だけを持つ ([VM](../spec/vm.md) の「時計と driver」)
 - `eml_tls`はworkspaceのどのcrateにも依存しない。`eml_vm`と`eml_io`が依存するのはfeature `tls`の下だけである。`eml_cli`のfeature `tls`も`eml_tls`を省ける普通の依存として足す。`eml_cli`の`src/`はこれを使わず、本物のソケットの上でTLSのサーバーを立てる結合テスト (`tests/tls.rs`) が使う。rustlsはaws-lc-rsのproviderだけで使い、サーバーの証明書はrustls-platform-verifierを通してOSの検証器で確かめる。aws-lc-sysが要るのはCのツールチェーンだけで、Windowsのx86_64ではNASMを使い、NASMがなければ組み済みのオブジェクトを使う。Cのツールチェーンを持たない`.#cross`のclippyが`eml_tls`を除くのはこのためである
 - `eml_gui`はworkspaceのどのcrateにも依存せず、`Park`、`Pending`、`Ctx`、`eml_io`の型を名指さない。`eml_vm`がfeature `gui` (`eml_cli`の既定)で`eml_gui`に依存し、`gui.rs`が`Std.Gui`の腕とメインのworkerのGUIの`Park`を持つ (docs/spec/vm.mdの「GUIのPark」)。ネイティブのループが待つOSの源は、VMの`PollSource`と同じ形の`IoSource`を`eml_gui`が自分で持つ。CIのtestのjobの手順`dependency edges of eml_gui`が、`eml_gui`の依存に`eml_`で始まるcrateがないことを確かめる。ネイティブのbackendはfeature `gui-native`だけが足す。`eml_cli`の`gui-native` (既定に入れない) が`eml_vm`の`gui-native`を、それが`eml_gui`の`native`を有効にし、`native`だけが`objc2`の系統のcrate (macOSだけ)、`cxx`、`cxx-build`、`qt-build-utils`、生成したWinUIのbindingが使う`windows-core`の0.100の系統のcrate (Windowsだけ) を引く。既定のビルドはtoolkitの開発用のファイルを要らず、同じ手順が、`eml_cli`の既定の依存の木にnativeのtoolkitのcrateがないことと、`gui-native`の木に3つのtoolkitのcrate (Qtの`cxx`と`qt-build-utils`、AppKitの`objc2`、WinUIでは生成したbindingだけが使う`windows-collections`) がどれも入ることを確かめる
@@ -101,6 +103,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 - `eml_lir` は、workspace の crate では `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
 - `eml_cabi` は、`eml_cabi → eml_extern` の辺だけを持つ葉の crate である。`Ctx` に関わらないコードのポインタだけを持つ。`eml_vm` と `eml_native` が依存し、`eml_native` が作った `Linked` を `eml_vm` の `load` が受け取る
 - `eml_native` は、workspace の crate では `eml_native → eml_extern` と `eml_native → eml_cabi` の辺だけを持ち、Cranelift の5つの crate と libloading に依存する。`eml_vm` は `eml_native` にも Cranelift にも依存しない。`eml_native` に依存するのは、`eml_cli` と `eml_test_support` の feature `run` だけである。別の cargo の feature は作らない。CI の test の job の手順 `dependency edges of eml_native` が、この2つと、`eml_extern` の `src/` に `unsafe` がないことを確かめる
+- `eml_nrt`は、workspaceのcrateでは`eml_rt`だけに依存し、Cranelift、`eml_lir`、`eml_core_ir`、`eml_vm`、`eml_native`に依存しない。ネイティブの実行系とエントリのstubは、コンパイラなしで組めなければならないためである (AOTのバイナリは実行系をリンクするが、コード生成器は要らない)。`eml_vm`は`eml_nrt`に依存しない。同じ手順`dependency edges of eml_native`が、`eml_vm`の依存にCranelift、`eml_native`、`eml_nrt`がないことと、`eml_nrt`の依存にCranelift、`eml_lir`、`eml_core_ir`、`eml_vm`、`eml_native`がないことを確かめる
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである。表 (`Extern`、`ExternType`、`ExternEffect`) は `table!` が1つの並びから変種、`ALL`、静的な行を作り、`row` は行への参照を返す。VM のコード生成は `self as usize` を行の番号に使い、VM は `ALL` で引き戻すので、並びが1つなら2つの順は食い違わない。C の関数に由来する `ExternRef` (`C`、`CSubmit`、`CTake`) の変種を `match` で照合してよいのは、`eml_extern` の `src/`、`eml_core_ir` の `translate/program.rs`、`eml_lir` の `src/syntax.rs` (IR のテキストの読み書き)、`eml_vm` の `compile/emit.rs` だけである。ほかのコードは `ExternRef::row`、`std`、`from_name` を通して引く。`ExternRef::Std(..)` をその場で分解して `C` の変種を見落とす書き方もしない
 - `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、C の関数をつなぐ `eml_native` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れて物理メモリを読む `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` と `tls` で、`tls` は `eml_vm/tls`、`eml_io/tls` の順に feature を有効にする。バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
@@ -416,6 +419,16 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `error.rs` の `LinkError` は、`Library`、`Symbol`、`UnknownOverride`、`Unsupported` の4つの変種を持ち、文言は固定である
 - trait はない。呼び手はプログラムを持ってから読み込む前につなぎ、結果の `Linked` の値を渡す。VM の側に linker も、それを作る関数も置かない
 - `unsafe` を書いてよいのは `bridge.rs`、`library.rs`、`linker.rs` だけである ([テスト戦略](testing.md) の「`eml_native` の検証」)
+
+## `eml_nrt`の内部
+
+- `lib.rs`は`#![deny(unsafe_code)]`を持ち、ほかのmoduleの公開の項目を再エクスポートする。エントリの表の一覧`TABLES`と、それをたどる`entries()`もここにある。`eml_rt`を隠した名前`__rt`で再エクスポートし、ほかのcrateで展開した`entries!`がそれを名指す
+- `entries.rs`は、`Kind`、`Entry`と、マクロ`entries!`とその補助 (`__entry!`、`__kind!`、`__ty!`、`__result!`) を持つ。`shim`の本体の規則を書くのは`__entry!`だけである ([ネイティブの実行系](../spec/native.md) の「包みの本体」)
+- `enter.rs`は、`Thunk`、`Fatal`、致命的な誤りの符号、`Raise`とその3つの実装、`enter`、`detached`と、エントリ`eml_fatal`を持つ
+- `arch/`は、ISAとABIごとのstub (`eml_enter`、longjmpの側、`JmpBuf`、`SUPPORTED`) を持ち、`arch/mod.rs`が対象ごとに1つを選ぶ。`aarch64.rs`はWindowsでないaarch64のAAPCS64で、`unsupported.rs`はほかのすべての対象である。stubは`#[unsafe(naked)]`の関数と`naked_asm!`で書き、外のアセンブラもbuild scriptも使わない
+- thread-localは使わない。ネイティブのコードは`Ctx<Fast>`だけを使うので、`Checked`も名指さない
+- `examples/nrt_bench.rs`は、stubの往復と2つのエントリの形の費用を測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)
+- `unsafe`を書いてよいのは、`trust.rs`が挙げるファイル (`enter.rs`、`entries.rs`、`arch/`のstubのファイル) だけである ([テスト戦略](testing.md) の「`eml_nrt`の検証」)
 
 ## `eml_gui`の内部
 

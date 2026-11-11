@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # eml_rt を変えたコミットの門 (docs/implementation/benchmarks.md の「命令の数の測り方」)。1つの作業ツリーで BASE と今の
 # HEAD を交互に checkout して bench/rt.sh を流し、行ごとに命令の数の差 (%) の中央値と、門の行の命令の数の差の和を出す。
-# 揺れる行 (empty、println-*、read-*、stdout-*) は見ない。ほかの行の中央値がどれも +0.1 % 以下なら 0 で終わる。
+# 揺れる行 (empty、println-*、read-*、stdout-*) と、記録だけのネイティブの行 (enter、entry-*) は見ない。ほかの行の
+# 中央値がどれも +0.1 % 以下なら 0 で終わる。
 # `--allow '行 行…' --allow-bound 上限` を付けると、挙げた行は上限 (%) まで許し、その代わり和が負であることを求める。
 # 使い方: bench/rt-gate.sh [--allow '行 行…' --allow-bound 上限] BASE [組の数 (既定 5)]
 set -euo pipefail
@@ -69,7 +70,7 @@ compare() {
           }
         if (n == 0) continue
         m = median(pct, n); ma = median(abs, n)
-        gated = !(name == "empty" || name ~ /^println-/ || name ~ /^read-/ || name ~ /^stdout-/)
+        gated = !(name == "empty" || name ~ /^println-/ || name ~ /^read-/ || name ~ /^stdout-/ || name == "enter" || name ~ /^entry-/)
         limit = (name in allowed) ? bound : 0.1
         verdict = gated ? (m <= limit ? ((name in allowed) && m > 0.1 ? "許した" : "ok") : "超えた") : "見ない"
         if (gated) { sum += ma; if (m > limit) bad = 1 }
