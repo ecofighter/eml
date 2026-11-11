@@ -144,7 +144,8 @@ macro_rules! __entry {
 }
 
 /// エントリの関数と記述子の表を一緒に宣言する。宣言が1つなので、関数と、生成したコードが作る呼び出しの型が食い違わない
-/// (docs/spec/native.md の「記述子の表」)。
+/// (docs/spec/native.md の「記述子の表」)。結果の`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、
+/// 安定版のRustでは`R`に`!`を書けないためである。
 #[macro_export]
 macro_rules! entries {
     (

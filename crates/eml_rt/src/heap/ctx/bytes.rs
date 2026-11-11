@@ -402,8 +402,8 @@ impl<M: Mode> Ctx<M> {
         Ok(w)
     }
 
-    /// `Bytes.empty`。長さ 0 の新しいバイト列を返す。確保量の上限は確かめないので、必ず `Ok` である
-    /// (docs/spec/object-model.md の「バイト列の操作」)。`Result` の型は呼ぶ側を変えないために残す。
+    /// `Bytes.empty`。長さ0の新しいバイト列を返す。確保量の上限は確かめないので、必ず`Ok`である
+    /// (docs/spec/object-model.md の「バイト列の操作」)。`Result`の型は呼ぶ側を変えないために残す。
     pub fn bytes_empty(&mut self) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),

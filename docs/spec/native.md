@@ -20,7 +20,7 @@
 ### 記述子の表
 
 - `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`Entry`の欄は、`symbol` (関数の識別子)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
-- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
+- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
 - エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
 - 生成したコードは、エントリを記号で取り込み、呼び出しの型を行だけから作る。宣言が1つなので、関数と呼び出しの型が食い違うことはない
 - エントリに`#[no_mangle]`は付けない。JITはアドレスを記号の名前で登録する
@@ -60,6 +60,10 @@
 - 入り直しの規則: emlのコードに入り直すRustのエントリは、生の`ctx`を渡し、`eml_enter`や`eml_fatal`をまたいで、`Ctx`への`&`や`&mut`、workerの構造体への参照、`Drop`を持つ値を持たない
 - `detached(ctx)`は、`jmp`と`runtime`がどちらもnullであること、つまり`Ctx`がどの`eml_enter`の外にもあり、ほかのスレッドへ移せる状態であることを返す ([オブジェクトモデル](object-model.md) の「`unsafe` の核」のT18)
 - stubのあるABIは、AAPCS64 (macOSとLinux)、SysV x86_64 (Windowsでないx86_64)、Win64 (Windowsのx86_64) である
+- 速い道の費用: 生成したコードは、`Native`の欄を`ctx + CTX_*`のロード1つで読む。エントリの呼び出しはCの直接の呼び出しで、間に包む層はない。速い道では`shim`と`plain`の費用は同じである。`eml_enter`の1回の往復は約54命令で、Rustがemlのコードに入るたびに払い、emlの関数どうしの呼び出しのたびには払わない ([計測の基準](../implementation/benchmarks.md) の「ネイティブの数値」)
+- 諦めた最適化: `Ctx`の`heap`を先に置くこと (理由は[計測の基準](../implementation/benchmarks.md) の「`Ctx`の欄の順」にある)。`catch_unwind`を使わない、失敗しうるエントリの形 (`shim`の速い道にはもう費用がないので、2つ目の失敗の手順を足すだけになる)。stubが保存するレジスタを減らすことや、フレームの記録を省くこと (致命的な誤りのlongjmpは呼ばれる側が保存するレジスタをすべて戻さなければならず、プロファイラはフレームの記録をたどる)。3つのstubのほかのasm
+- 見直す条件 (戻り): longjmpの側の手で書いた`ret`は、CIのどの対象もRustのバイナリにshadow stack (CET、GCS) やbranch protectionを強いないことを前提にする。rustcは、windows-msvcでは`/CETCOMPAT`を渡さず、aarch64のLinuxでは`branch-protection`を有効にしない。ある対象がこれらを強いると、その対象でだけ`fatal::`のテストが落ちる (Windowsでは終了コード`0xC0000409`、ほかではその`ret`でのSIGILLかSIGSEGV)。原因は保存するレジスタの一覧ではなく、この方針である。そのときはstubを設計し直す
+- 見直す条件 (巻き戻しの情報): `shim`の中の`catch_unwind`が捕まえるpanicは、その上のフレーム (stubと生成したコード) の巻き戻しの情報を要しない。要する対象があれば、その対象で`a_shim_cuts_to_enter_on_an_error_and_on_a_panic`が落ちる。そのときの代わりの手は、`shim`が生成したコードの確かめる状態を返し、生成したコードが`eml_fatal`を呼ぶ形である。変わるのは`eml_rt_*`の手順だけである
 
 ### `eml_fatal`
 

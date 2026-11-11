@@ -82,7 +82,7 @@ eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_r
 eml_io           eml_rt の IoDriver の実装 (本物の driver とテストの driver。本物の driver は OS を呼ばない核と OS ごとの backend からなり、ブロックする呼び出しの仕事は driver の中の自前のプールで動き、スレッドは32本まで)。時計と I/O の待ちを受け持つ
 eml_tls          rustlsのクライアント接続を包むTLSの状態 (I/Oを持たない)。aws-lc-rsのproviderとrustls-platform-verifierを使い、emlのどのcrateにも依存しない
 eml_gui          ネイティブのGUIのtoolkitの共通の層 (Widgets、EventLoop、Toolkit、EventQueue)、画面を開かないstubのbackend、feature nativeの下のAppKit (macOS)、Qt 6 (Linux)、WinUI 3 (Windows) のbackend。emlのどのcrateにも依存しない
-eml_native       Craneliftの橋渡しの関数と、Cのライブラリと記号の解決 (Linker::linkがLinkedを作る)、ネイティブのコード生成器の土台 (Craneliftのフラグを作る唯一の関数、シグネチャ、thunk)。eml_extern、eml_cabi、eml_lir、eml_nrt、eml_rt (レイアウトの定数だけ) に依存し、eml_vmには依存しない
+eml_native       Craneliftの橋渡しの関数と、Cのライブラリと記号の解決 (Linker::linkがLinkedを作る)、ネイティブのコード生成器の土台 (emlのコード、adapter、補助の関数、thunkのCraneliftのフラグを作る唯一の関数abi::isa、シグネチャ、thunk。bridge.rsのCの橋渡しの関数は自分のフラグを持つ)。eml_extern、eml_cabi、eml_lir、eml_nrt、eml_rt (レイアウトの定数だけ) に依存し、eml_vmには依存しない
 eml_nrt          ネイティブのコードが呼ぶエントリ (記述子の表、plainとshimの包み) とエントリのstub (eml_enter、eml_fatal)。eml_rtだけに依存し、Cranelift、eml_lir、eml_core_ir、eml_vm、eml_nativeには依存しない
 eml_cabi         C の関数を呼ぶコードのポインタ (Bridge、Dtor、CCall、Linked)。eml_extern だけに依存する
 eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
@@ -418,7 +418,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `linker.rs` の `Linker` は、`--link` の上書き、登録した記号、`Libraries`、`Bridges` を持つ。`link` は、関数とハンドルの dtor の記号をすべて解決してから、関数の `c_signature()` について `Bridges::get` を1回呼び、入力に並びをそろえた `Linked` を返す。解決の順は [VM](../spec/vm.md) の「ライブラリと記号」にある。`Linker` は `Send` で、`Sync` は要らない。`with_symbols` は `unsafe` で、登録するアドレスの署名と寿命は呼び手が約束する。`--link` で同じ KEY を2回以上渡すと、後のものが効く
 - `error.rs` の `LinkError` は、`Library`、`Symbol`、`UnknownOverride`、`Unsupported` の4つの変種を持ち、文言は固定である
 - trait はない。呼び手はプログラムを持ってから読み込む前につなぎ、結果の `Linked` の値を渡す。VM の側に linker も、それを作る関数も置かない
-- `abi.rs`は、emlのコードのCraneliftのフラグを作る唯一の関数`isa`、emlの関数の`tail`のシグネチャ、記述子から作るエントリのシグネチャ、エントリをimportとして宣言する関数と、`isa(false)`のISAと`JIT_REGION_BYTES`の予約した領域からJITのmoduleのbuilderを作る関数`jit_builder`を持つ ([ネイティブの実行系](../spec/native.md) の「`eml_enter`」)。`thunk.rs`は、`eml_enter`が呼ぶthunkを作る。どちらも`cranelift_module::Module`について総称で、`JITModule`を名指すのは`bridge.rs`だけである。ABIのテストが結合テストなので、この2つは`pub`である
+- `abi.rs`は、emlのコード、adapter、補助の関数、thunkのCraneliftのフラグを作る唯一の関数`isa`、emlの関数の`tail`のシグネチャ、記述子から作るエントリのシグネチャ、エントリをimportとして宣言する関数と、`isa(false)`のISAと`JIT_REGION_BYTES`の予約した領域からJITのmoduleのbuilderを作る関数`jit_builder`を持つ ([ネイティブの実行系](../spec/native.md) の「`eml_enter`」)。`thunk.rs`は、`eml_enter`が呼ぶthunkを作る。どちらも`cranelift_module::Module`について総称で、`JITModule`を名指すのは`bridge.rs`だけである。ABIのテストが結合テストなので、この2つは`pub`である
 - `mem.rs`は`eml_rt`を名指す唯一のmoduleで、`REUSE_SCANNED_LIMIT`が`layout::INLINE_SCAN_LIMIT`以下であることをコンパイル時のassertで確かめる。メモリに触るコード生成はここに置く
 - `bridge.rs`は自分のフラグを持つ。Cの橋渡しの関数は既定の呼び出し規約だけを使い、フレームポインタもstack probeも要らないためである
 - `unsafe` を書いてよいのは `bridge.rs`、`library.rs`、`linker.rs` だけである ([テスト戦略](testing.md) の「`eml_native` の検証」)

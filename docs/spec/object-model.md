@@ -529,7 +529,7 @@ left が一意 (is_unique)
 - バイト列を書き換える extern (下の「extern」) は、文字列の操作と同じ本体を種類 `Bytes` で使う。`Bytes.append` は `string_concat` と同じ本体で、`Bytes.push` は1バイトの `bytes_extend` である。検査モードの誤りも文字列の操作と同じで、種類が `Bytes` でなければ `WrongKind` を返す。どの誤りも最初の確保より前に返すので、`Err` のときヒープは変わらない
 - `Bytes.make n b` は、確保の前に `n` を確かめる。負なら `Index` の誤り (`bytes length <n> is negative`)、`Limits::max_bytes` を超えるなら `Stopped(MemoryLimit)` を返す (`Array.make` と同じ)。`Bytes.get` は借りた物体の位置を読み、`Bytes.set` は一意ならその位置の1バイトだけを `write_byte` で書き換え、一意でなければ写してから書き換える
 - `Bytes.with_capacity n` (`Ctx::bytes_with_capacity`) は `alloc_bytes_room` で空のバイト列を作る。`n` の確かめと誤りは `Bytes.make` と同じで、何も写さない。spec は、結果の長さが 0 で、容量が `n` 以上であることを約束する
-- `Bytes.empty` (`Ctx::bytes_empty`) は `alloc_bytes_room(0)` で空のバイト列を作る。`Limits::max_bytes` を確かめず (`MutArray.empty` と同じ)、必ず `Ok` を返す。`Result` の型は残すが、spec は `Ok` であることを約束する
+- `Bytes.empty` (`Ctx::bytes_empty`) は`alloc_bytes_room(0)`で空のバイト列を作る。`Limits::max_bytes`を確かめず (`MutArray.empty`と同じ)、必ず`Ok`を返す。`Result`の型は残すが、specは`Ok`であることを約束する
 - `Bytes.truncate` は、left が一意ならその場で長さの語だけを書き、容量を保つ。ghost のバイト列は `truncate_text` で縮める (上の「中身の不変条件」)。一意でなければ、前の部分を新しいバイト列に写して left を `decref` する
 - `Bytes.set` は、left が一意ならその場で T10 の `write_byte` で1バイトを書き換える。一意でなければ、写してから書く
 - `Bytes.append_slice` (`Ctx::bytes_append_part(from, to, src, dst)`) は dst の参照を受け取り、src を借りる。dst が一意ならその場で src の範囲を足す。src と dst が同じ物体なら、呼ぶ側は借りる分と消費する分の参照を2つ持つので ([LIR](lir.md) の「extern の借用」)、dst は一意でなく写す枝に進む。そのため、T10 の写す元と写す先は重ならない。検査モードはこの前提を確かめ、同じ物体で rc が 1 なら `NotUnique` を返す。速いモードでは前提にする

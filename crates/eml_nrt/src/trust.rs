@@ -31,7 +31,7 @@ fn is_ident(c: char) -> bool {
 }
 
 /// コメント、文字列、文字のリテラルを空白に置き換える。位置を保つので、後の探し方がずれない。生の文字列
-/// (`r"`、`r#"`) は扱わない。どのファイルにもないことは `the_scanner_skips_comments_and_strings` が確かめる。
+/// (`r"`、`r#"`) は扱わない。どのファイルにもないことは`the_scanner_skips_comments_and_strings`が確かめる。
 fn blank_comments_and_strings(text: &str) -> Vec<char> {
     let s: Vec<char> = text.chars().collect();
     let mut out = s.clone();
@@ -81,7 +81,7 @@ fn prepare(text: &str) -> String {
     blank_comments_and_strings(text).into_iter().collect()
 }
 
-/// 識別子 `unsafe` が現れるか。`unsafe_code` のような長い識別子は数えない。
+/// 識別子`unsafe`が現れるか。`unsafe_code`のような長い識別子は数えない。
 fn has_unsafe(text: &str) -> bool {
     let s: Vec<char> = prepare(text).chars().collect();
     let word: Vec<char> = "unsafe".chars().collect();
@@ -92,14 +92,14 @@ fn has_unsafe(text: &str) -> bool {
     })
 }
 
-/// 先頭の項目が `#![allow(unsafe_code)]` か。先頭のコメントは読み飛ばす。
+/// 先頭の項目が`#![allow(unsafe_code)]`か。先頭のコメントは読み飛ばす。
 fn starts_with_allow(text: &str) -> bool {
     prepare(text)
         .trim_start()
         .starts_with("#![allow(unsafe_code)]")
 }
 
-/// `allow(unsafe_code)` が現れる回数。空白を詰めて数える。
+/// `allow(unsafe_code)`が現れる回数。空白を詰めて数える。
 fn allow_count(text: &str) -> usize {
     let squeezed: String = prepare(text)
         .chars()
@@ -204,7 +204,7 @@ fn the_scanner_skips_comments_and_strings() {
     }
 }
 
-/// `r"`、`r#"` (と `b` の付いた形) を探す。`r#type` のような生の識別子は数えない。`"driver"` のように識別子の文字の後の `r"` は数えない。
+/// `r"`、`r#"` (と`b`の付いた形) を探す。`r#type`のような生の識別子は数えない。`"driver"`のように識別子の文字の後の`r"`は数えない。
 fn has_raw_string(text: &str) -> bool {
     let s = text.as_bytes();
     let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
