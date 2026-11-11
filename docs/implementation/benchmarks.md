@@ -102,7 +102,7 @@ bench/run.sh
 
 `bench/run.sh` は `EML_WORKERS=1` で走らせ、worker を1つに固める。`eml run` の既定の worker の数は CPU の数で ([起動](../spec/stdlib.md) の「起動」)、`instructions retired` はプロセスのすべてのスレッドの命令を数えるので、固めないと `par_tree` の値が機械の CPU の数とスレッドの順で変わるためである。
 
-valgrind が arm64 の macOS で動かないので、callgrind は使わない。`instructions retired` は callgrind ほど決定的ではない。同じ木で `bench/run.sh` を2回流すと、実行の分の差は最大で 0.27% (`push_fold_by_hand`、実行の分 47441191 命令) だった。arm64 の命令の数なので、x86_64 の callgrind で測った値とは直接比べない。
+valgrindがarm64のmacOSで動かないので、callgrindは使わない。`instructions retired`はcallgrindほど決定的ではない。同じ木で`bench/run.sh`を2回流すと、1つのプログラムの実行の分の差は最大で約1.4%だった (`nbody`。どの値も3回の中央値で、Apple M5、macOS 27.2.1で測った)。実行の分は`empty`の命令の数とともに動くので、2つの木を比べるときは命令の数の全体も比べる。arm64の命令の数なので、x86_64のcallgrindで測った値とは直接比べない。
 
 `empty.em` の命令の数は、フロントエンド、コード生成、起動の分である。ほかのプログラムの値からこれを引くと、実行の分の目安になる。実時間は 0.01 秒単位なので、命令の数を主に見る。
 
@@ -158,6 +158,8 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `stdout-write-line-10m` | 23 バイトの行を、`Stdout` のハンドルの `write_line` (`handle_write` の `Write::Line`) で、`io::sink` へまとめて書く `StdHost` に 10,000,000 回書く |
 
 `find-byte-1mib` と `find-bytes-1mib` は 1 MiB を走査する行で、比の目標は約2倍である。`find-byte` から `read-all-bytes` までの4組は、行ごとの処理の予算の行で、`bench/rt.sh` が eml の行と参照の行の命令の数の比と実時間の比を、組ごとに表にして出す。予算は次のとおりである。`find-byte` が 1.5 以下、`find-sub` が 1.6 以下、`slice-short` が 1.0 以下、`read-all-bytes` が 1.3 以下である。`find-byte` の予算は `grep -n` と `logstat` の行ごとの探索から、`find-sub` の予算は `grep -n` の行ごとの検査と測った SWAR の差から、`slice-short` の予算は `grep -n`、`logstat`、`csv2jsonl` の行ごとの確保の見積もりから、`read-all-bytes` の予算は読みの見込みから決めた。最後の `read-line-bytes-64mib` の組は、行の読みの費用を記録するだけで、予算を持たない。`stdout-write-line-10m` も、ハンドルの1回の書き込みの費用 (extern の呼び出し、`dyn Host` の呼び出し、競合しない lock、buffer への写し) を記録するだけの行で、参照の行と予算を持たない。
+
+`bench/rt.sh`のいくつかの行は、同じビルドどうしでも揺れる。`empty`、`println-*`、`read-*`、`stdout-*`は最大で0.54%違い、`println-line`はどちらのビルドでも、約0.24%離れた2つの値 (11.358e9か11.386e9命令) のどちらかを取る。ビルドするディレクトリのパスも命令の数を変える。そこで`eml_rt`の変更の前と後を比べるときは、1つのworktreeで2つのcheckoutを交互にビルドして流し、何組かの差の中央値を行ごとに比べる。揺れる行は判定に使わない。
 
 ### スクリプトの計測
 

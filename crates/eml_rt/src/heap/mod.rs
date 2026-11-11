@@ -1477,11 +1477,8 @@ impl<M: Mode> Heap<M> {
                 perm.meta.is_init() && perm.meta.value() == meta.bits_spec(),
                 h@.addr + crate::layout::slot_offset_spec(cap as int) <= usize::MAX,
                 first + scanned <= cap,
-                first == if extended {
-                    1usize
-                } else {
-                    0usize
-                },
+                extended == crate::layout::data_extended_spec(scanned as nat, force),
+                first == crate::layout::data_first_spec(scanned as nat, force),
                 extended ==> p_init(perm, crate::layout::COUNT_WORD as int) && p_word(
                     perm,
                     crate::layout::COUNT_WORD as int,
