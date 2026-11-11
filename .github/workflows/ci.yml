@@ -254,10 +254,10 @@ jobs:
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
           nix develop .#miri -c cargo miri test -p eml_io --lib -- driver::tests::
-      - name: "cargo miri test -p eml_nrt --lib -- entries::"
+      - name: "cargo miri test -p eml_nrt --lib -- entries:: census:: constants::"
         if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
         run: |
-          nix develop .#miri -c cargo miri test -p eml_nrt --lib -- entries::
+          nix develop .#miri -c cargo miri test -p eml_nrt --lib -- entries:: census:: constants::
 
   # OSを呼ぶunsafe (eml_ioのsys/) と、VMが本物のdriverとCの関数に貸す記憶、eml_nativeの橋渡し、eml_nrtのエントリのstubを
   # AddressSanitizerの下で流す。RustのASanはWindowsのmsvcを対象にしないので、3つの対象で流す

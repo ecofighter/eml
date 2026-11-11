@@ -77,6 +77,7 @@
 |---|---|---|
 | 1 | `FATAL_PANICKED` | なし。`shim`がRustのpanicを捕まえた (内部の誤り) |
 | 2 | `FATAL_FAULT` | `ctx.take_fault()`が`Some(fault)`を返す。`HeapError`は`Fault::Heap`として届く |
+| 3 | `FATAL_RECORDED` | workerの構造体にある誤り。`worker::record`が記録する (「実行の始めと終わり」) |
 
 - 致命的な誤りの規則: longjmpがまたぐのは、emlのコードのフレーム、thunk、誤りを見つけた1つのエントリと`eml_fatal`のRustのフレームだけである。そのRustのフレームは、呼び出しの時点でデストラクタを持つ値を持たない。戻らない移動は、この致命的な誤りのlongjmpだけである
 - `eml_nrt`のライブラリ (`src/`) の中で`eml_fatal(`が現れてよいのは、`src/entries.rs` (マクロの`shim`の腕) と`src/enter.rs` (宣言) だけである。テストは直接呼んでよい。包みの本体は`eml_fatal`を名指さない
@@ -84,6 +85,49 @@
 ### 対象
 
 `eml_nrt::SUPPORTED`は、stubのある対象、つまりWindowsでないaarch64と、x86_64 (SysVとWin64) で真である。ほかの対象 (Windowsのaarch64と、aarch64でもx86_64でもないISA) では偽で、そこでも`eml_enter`はあるが、呼ぶとプロセスが止まる (panicは`extern "C"`の境を越えられない)。ネイティブのコードを走らせる側は、`eml_enter`を呼ぶ前に`SUPPORTED`を見て断る。ライブラリはどの対象でもビルドできる (stubのテストは、stubのある対象でだけ組める)。
+
+## `Image`
+
+ネイティブの実行系は、プログラムについての事実を`Image` (`eml_nrt::image`) からだけ得る。`Image`はJITのホストが作り、その表の記憶もJITのホストが持つ。ここの型はどれも`#[repr(C)]`である。
+
+- `Image { functions: Slice<FnRow>, files: Slice<Str>, data: Slice<DatumRow> }`。`Str { ptr, len }`はUTF-8の文字列、`Slice<T> { ptr, len }`は配列で、空の配列はnullのポインタを持ちうる
+- `FnRow { name, code, size, sites }`は関数1つで、名前、コードの範囲`[code, code + size)`、その関数自身のfaultの地点 (文の順) を持つ。地点は、関数のコードのアドレスと、その関数の`sites`の添字の組で表す。だからプログラムのほかの部分で変わる番号はコードに現れない
+- `SiteRow { file, line, column }`は地点のソースの位置である。`file`は`files`の添字で、`NO_FILE` (`u32::MAX`) は位置のない地点を表す
+- 実行系は、コードのアドレスから関数を、`code`の順に並べた行の二分探索で探す。並べるのはrunごとに1回で、探すのは冷たい道だけである。どの行の範囲にもないアドレスは、関数`<native code>`として報告する
+- `DatumRow { kind, bits, text, slot }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`) のどれかである。`slot`はmoduleの書ける8バイトのデータの物である。実行系は最初のエントリの前に、どの値も、VMが定数を作るのと同じ関数 (`eml_sched::constants`と、文字列には`alloc_string_immortal`) で凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。生成したコードは、値をそのslotからのロード1つで読む
+- slotを書いた後、`Image`は読むだけになる。だから`Image`は`Sync`で、呼ぶ側が待っている間にworkerのスレッドがそれを読む
+- `Start { thunk, entry, argv, result_rc }`は、runがコードに入る所である。`eml_enter`の引数と、エントリの結果がrunの手放す数える語かどうかを持つ
+- `Options { census, stack }`。`census`は`Census::Skip`か`Census::Check`で、`stack`はworkerのスタックに予約するバイト数である。既定は`Skip`と`WORKER_STACK`である
+
+## 実行の始めと終わり
+
+`eml_nrt::run::run(image, start, config, host, options) -> Result<Finished, RuntimeError>`がプログラムを走らせる。これは`unsafe fn`で、呼ぶ側は、`image`の表が呼び出しの間生きていること、どのslotもほかの誰も使わない語であること、`start`が`image`のためにコンパイルしたコードへの正しい呼び出しであることを約束する。手順は次のとおりである。
+
+1. `config.control.begin_run()`で終わりの欄を開く ([VM](vm.md)の「誤り、止めること、終わり」)
+2. `options.stack`を予約したworkerのスレッド`eml-worker-0`を作り、それを待つ
+3. そのスレッドの上で、`Ctx::<Fast>::for_worker(control, host, 0)`で`Ctx`を作り、`stack_limit`を置き (下の「安全点」)、読み込み時の値を作ってslotを書き (上の「`Image`」)、workerの構造体を`ctx.runtime`の後ろに置く。それから`Ctx`への生のポインタだけを持って`enter(ctx, start.thunk, start.entry, start.argv)`を呼ぶ (「`eml_enter`」の入り直しの規則)。戻ったら`ctx.runtime`をnullに戻すので、`Ctx`はどの`eml_enter`の外にもある
+4. `enter`がふつうに戻ったとき
+   - 中断の途中 (`ctx.yielding() != 0`) で、workerの構造体が`exit`の終了コードを持っていれば、巻き戻しがどのフレームも片付けてある。`yield_finish`で中断を終え、`evv`を空に戻し、`control.exit(code)`で終了コードを書く。先に書いた者がいれば、その終了コードが勝つ (VMと同じ)。終了コードのない中断は内部の誤り`an abort reached the bottom of the task`である。中断の途中でなく、`start.result_rc`が真なら、`argv[0]`の結果を手放す
+   - 続けて、次の順で行う。`flush` (誤りはそのfaultになる)、`check_finished` (偽なら内部の誤り`the evidence list or a yield is left at the end`)、置いたままのfaultの確かめ (置いたpanicも含む。あれば内部の誤り`a fault is left parked at the end`)、`Census::Check`ならcensus
+   - 結果は`Finished { stats: RunStats::default(), exit: control.exit_code(), .. }`で、ほかの数はどれも0である。ネイティブのrunは`RunStats`を数えない
+5. `enter`が`Err(fatal)`を返したとき、誤りは符号が決める場所から読む (「`eml_fatal`」の表)。`FATAL_RECORDED`ならworkerの構造体に記録した誤り、`FATAL_FAULT`なら`ctx.take_fault()`のfaultを持つ`RunFault::Extern(fault)`、`FATAL_PANICKED`なら内部の誤り`a runtime entry panicked`である。その後`flush`を呼び、その誤りは捨てる。出力と誤りの順を保つためである
+
+駆動が自分で作る誤りは、関数の名前を`<native code>`とし、位置を持たない。
+
+workerの構造体 (`eml_nrt::worker::Worker`) は、runが`Ctx`の外に持つものである。`exit`の終了コード、エンジンが持つpanicのメッセージの語、記録した誤りを持つ。`eml_nrt`の中で`ctx.runtime`を置くのは`run`だけで、置くのはエントリの間だけである。
+
+- `worker::record`、`worker::park_panic`と、`ctx.runtime`からworkerの構造体を得る関数は`unsafe fn`である。前提は、`ctx`が`run`の`enter`の中にあり、`ctx.runtime()`がそのrunの`Worker`を指すことである。`Ctx::set_runtime`は安全な関数で、ほかのコードも任意のポインタを置けるためである
+- `worker::record(ctx, fault, at) -> Fatal`は`RuntimeError::Fault`を作る。関数の名前は、`at.function`をコードの範囲に含む`FnRow`から、位置はその地点`at.site`から取る。位置のない地点なら位置はなく、`at`がないか、アドレスがどの行にもなければ、関数は`<native code>`である。作った誤りをworkerの構造体へ移し、`Fatal { code: FATAL_RECORDED, site: 0 }`を返す。誤りは`Err`が`shim`に届く前に移す。致命的な誤りのlongjmpは、デストラクタを持つ値を持たないフレームしかまたがないためである
+- `worker::park_panic(ctx, message)`は、メッセージの語をworkerの構造体に置き、`Fault::Engine`を`set_fault`で`ctx`に置く。だから中身が`Fault`でもエンジンの持つものでも、`ctx.native.fault`が0でないのは、ちょうど失敗を置いている間である
+
+censusは、VMの検査モードに代わる、参照の数の安全網である。`Census::Check`のrunが成功したら、ほかのスレッドから受けた解放を取り込み (`reclaim`)、workerのヒープの生きている物体を列挙し (`Heap::live_objects`)、不死でない物体 (`Heap::is_immortal`) を種類の名前ごとに数える。ダミーや定数のような不死の物体は数えない。数が空でなければ`RuntimeError::Leak`で、`memory leak: objects were not freed: 1 Data`と表示する。テストのネイティブのrunは、どれもcensusで終わる。
+
+## 安全点
+
+- workerのスタックは、`Options.stack`がほかの値を決めなければ`WORKER_STACK` (1 GiB) を予約する。ページはスタックが伸びるにつれて確定する
+- workerのスタックの最も低いアドレスを`base` (スレッドの始めのスタックポインタから予約の大きさを引いた値) として、`hard = base + STACK_HARD_MARGIN` (1 MiB)、`real = hard + LIMIT_HEADROOM_BYTES` (2 MiB。VMの余白の2^18語をバイトにしたもの) とする。3つの定数は`crates/eml_nrt/src/run.rs`で1回だけ定める。そのときのスタックポインタはスタックの最も高い所より少し下にあるので、求めた`base`は本当の値より、その上にあるフレームの分だけ低いことがある。その差は余白に収まる。局所変数のアドレスでなくスタックポインタを読むのは、アドレスを外に出す局所変数がAddressSanitizerの偽のスタックに移りうるためで、安全点が比べるのも同じスタックポインタである
+- 駆動はスレッドの始めに`stack_limit = real`を1回だけ置き、その後`eml_nrt`のどこもこれを書かない。`real`より下にはいつも3 MiBがあり、emlのフレーム1つと、実行系のどのエントリもそこに収まる。`hard`より下にはいつも1 MiBがある
+- ネイティブのコードは`Limits.max_depth`を読まない。深さの上限はworkerのスタックである (「VMとの違い」の1)
 
 ## 断る形
 

@@ -5,7 +5,9 @@ use std::sync::Arc;
 use eml_nrt::{FATAL_PANICKED, Fatal, JmpBuf, detached, eml_fatal, enter};
 use eml_rt::{Buffering, Control, Ctx, Fast, HostRef, Limits, StdHost};
 
-use crate::regs::{clobber_thunk, enter_noting_fp, enter_with_patterns, fp_thunk};
+use crate::regs::{
+    clobber_thunk, deepest_frame, enter_noting_fp, enter_with_patterns, fp_thunk, stack_pointer,
+};
 
 fn ctx() -> Box<Ctx<Fast>> {
     let host = StdHost::new(
@@ -77,20 +79,6 @@ fn the_stub_keeps_the_frame_record_chain() {
     assert!(detached(&ctx));
 }
 
-/// 1フレームが4 KiBの再帰で`left`段降り、いちばん深いフレームのアドレスを返す。
-#[inline(never)]
-fn deepest_frame(left: usize) -> usize {
-    let mut frame = [0u8; 4096];
-    std::hint::black_box(&mut frame);
-    let deepest = if left == 0 {
-        frame.as_ptr().addr()
-    } else {
-        deepest_frame(left - 1)
-    };
-    std::hint::black_box(&frame);
-    deepest
-}
-
 /// ネイティブの実行系のworkerは、1 GiBを予約したスタックで動く。その予約で作ったスレッドが、既定のスレッドの
 /// スタックより深く再帰して戻れることを、ネイティブのコードがこの配置に頼る前に、このファイルを組む対象で確かめる。
 #[test]
@@ -100,8 +88,7 @@ fn a_thread_with_the_worker_stack_recurses() {
     let span = std::thread::Builder::new()
         .stack_size(RESERVED)
         .spawn(|| {
-            let top = 0u8;
-            let top = std::hint::black_box(&top as *const u8).addr();
+            let top = stack_pointer();
             top - deepest_frame(DEPTH / 4096)
         })
         .unwrap()

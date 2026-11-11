@@ -8,6 +8,18 @@ use crate::enter::Thunk;
 
 pub const SUPPORTED: bool = true;
 
+/// 今のスタックポインタ。スタックの底は、局所変数のアドレスでなくこの値から求める。アドレスを外に出す局所変数は、
+/// AddressSanitizerの偽のスタックに移りうるためである。安全点が比べるのも同じスタックポインタである。
+#[inline(always)]
+pub(crate) fn stack_pointer() -> usize {
+    let sp: usize;
+    // SAFETY: レジスタを1つ読むだけで、記憶にもフラグにも触れない
+    unsafe {
+        core::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags))
+    };
+    sp
+}
+
 /// `eml_enter`のフレームの中のバッファ。入れ子の`eml_enter`はそれぞれ自分のバッファを持ち、`prev`でつながる。
 #[repr(C)]
 pub struct JmpBuf {

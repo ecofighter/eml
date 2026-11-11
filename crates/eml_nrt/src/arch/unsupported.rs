@@ -7,6 +7,13 @@ use crate::enter::Thunk;
 
 pub const SUPPORTED: bool = false;
 
+/// 今のスタックポインタの代わりの値。stubのない対象ではネイティブのコードを走らせないので、局所変数のアドレスで足りる。
+#[inline(always)]
+pub(crate) fn stack_pointer() -> usize {
+    let here = 0u8;
+    core::hint::black_box(&here as *const u8).addr()
+}
+
 #[repr(C)]
 pub struct JmpBuf {
     pub prev: *mut JmpBuf,

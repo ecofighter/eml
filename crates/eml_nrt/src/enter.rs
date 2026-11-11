@@ -21,6 +21,8 @@ pub struct Fatal {
 pub const FATAL_PANICKED: u32 = 1;
 /// `Fault`が`Ctx`に置いてある (`Ctx::take_fault`)。
 pub const FATAL_FAULT: u32 = 2;
+/// 誤りはworkerの構造体に記録してある (`worker::record`)。
+pub const FATAL_RECORDED: u32 = 3;
 
 /// 包みの本体が返す誤り。`park`は中身を`Ctx`に置き、`eml_fatal`に渡す符号を返す。`Fault`と`HeapError`の実装は
 /// ここにだけ置く。

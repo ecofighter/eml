@@ -679,7 +679,9 @@ dependencies = [
 name = "eml_nrt"
 version = "0.1.0"
 dependencies = [
+ "eml_extern",
  "eml_rt",
+ "eml_sched",
 ]
 
 [[package]]

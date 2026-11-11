@@ -16,5 +16,5 @@ mod imp;
 #[path = "unsupported.rs"]
 mod imp;
 
-pub(crate) use imp::longjmp;
 pub use imp::{JmpBuf, SUPPORTED, eml_enter};
+pub(crate) use imp::{longjmp, stack_pointer};

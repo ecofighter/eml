@@ -185,29 +185,29 @@ mod tests {
 
         plain fn eml_t_plain(ctx, a: i64, b: f64) -> f64 {
             // SAFETY: テストは生きている`Ctx`を渡す
-            let limit = unsafe { (*ctx).stack_limit() };
-            a as f64 + b + limit as f64
+            let last = unsafe { (*ctx).runtime() }.addr();
+            a as f64 + b + last as f64
         }
 
         shim fn eml_t_shim(ctx, a: i64) -> i64 {
-            ctx.set_stack_limit(a as usize);
+            ctx.set_runtime(std::ptr::without_provenance_mut(a as usize));
             Ok::<i64, Fatal>(a + 1)
         }
 
         #[allow(non_snake_case)]
         shim fn eml_t_Named(ctx, a: obj, b: float, c: enum) -> int {
-            ctx.set_stack_limit(a as usize);
+            ctx.set_runtime(std::ptr::without_provenance_mut(a as usize));
             Ok::<i64, Fatal>(a + b as i64 + c)
         }
 
         #[allow(non_snake_case)]
         shim fn eml_t_Never(ctx, a: tobj) -> never {
-            ctx.set_stack_limit(a as usize);
+            ctx.set_runtime(std::ptr::without_provenance_mut(a as usize));
             Ok::<(), Fatal>(())
         }
 
         shim fn eml_t_unit(ctx, a: i64) {
-            ctx.set_stack_limit(a as usize);
+            ctx.set_runtime(std::ptr::without_provenance_mut(a as usize));
             Ok::<(), Fatal>(())
         }
     }
@@ -235,6 +235,7 @@ mod tests {
             eml_t_unit(raw, 6);
             assert_eq!(eml_t_plain(raw, 1, 0.5), 7.5);
         }
+        ctx.set_runtime(std::ptr::null_mut());
         let rows: Vec<_> = SAMPLE
             .iter()
             .map(|e| (e.symbol, e.params, e.result))

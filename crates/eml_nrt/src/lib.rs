@@ -1,17 +1,27 @@
-//! ネイティブのコードが呼ぶ実行系。エントリ、エントリのstub、致命的な誤りの道を持つ (docs/spec/native.md の「エントリ」)。
+//! ネイティブのコードが呼ぶ実行系。エントリ、エントリのstub、致命的な誤りの道 (docs/spec/native.md の「エントリ」) と、
+//! 実行の駆動 (docs/spec/native.md の「実行の始めと終わり」) を持つ。
 #![deny(unsafe_code)]
 
 mod arch;
+mod census;
+mod constants;
 mod enter;
 mod entries;
+pub mod image;
+pub mod run;
 #[cfg(test)]
 mod trust;
+pub mod worker;
 
 pub use arch::{JmpBuf, SUPPORTED};
 #[doc(hidden)]
 pub use eml_rt as __rt;
+pub use eml_rt::HostRef;
+pub use eml_sched::config::{Finished, RunConfig};
+pub use eml_sched::error::{RunFault, RuntimeError};
 pub use enter::{
-    FATAL_FAULT, FATAL_PANICKED, Fatal, Raise, Thunk, detached, eml_enter, eml_fatal, enter,
+    FATAL_FAULT, FATAL_PANICKED, FATAL_RECORDED, Fatal, Raise, Thunk, detached, eml_enter,
+    eml_fatal, enter,
 };
 pub use entries::{Entry, Kind};
 
