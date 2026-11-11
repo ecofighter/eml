@@ -515,7 +515,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `rustyline` | 19.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
 | `rustls` | 0.23 (`aws_lc_rs`、`std`、`tls12`) | `eml_tls` の TLS の接続。provider は aws-lc-rs だけで、接続ごとに `builder_with_provider` で渡す。aws-lc-rs は rustls の既定で推奨の provider で、組むのに要るのは C のツールチェーンだけである (上の「crate の依存関係」) |
 | `rustls-platform-verifier` | 0.7 | `eml_tls`の証明書の検証。OSの検証器 (macOSはSecurity.framework、WindowsはCryptoAPI、LinuxはOSの根のファイルの上のrustls) を呼ぶ |
-| `cranelift-codegen`、`cranelift-frontend`、`cranelift-module`、`cranelift-jit`、`cranelift-native` | 0.137 | `eml_native` の橋渡しの関数の生成。`cranelift-native` が動いている機械の ISA を選び、`cranelift-jit` がコードを置く (上の「`eml_native` の内部」) |
+| `cranelift-codegen`、`cranelift-frontend`、`cranelift-module`、`cranelift-jit`、`cranelift-native` | 0.137 | `eml_native`の橋渡しの関数の生成と、ネイティブのコード生成器の土台 (`abi.rs`、`thunk.rs`)。`cranelift-native`が動いている機械のISAを選び、`cranelift-jit`がコードを置く (上の「`eml_native` の内部」) |
 | `libloading` | 0.9 | `eml_native` が C のライブラリを開いて記号を引く (unix の `dlopen` と `dlsym`、Windows の `LoadLibraryExW` と `GetProcAddress`) |
 | `taffy` | 0.15 (`std`、`taffy_tree`、`grid`) | `eml_gui`の配置。Taffyの格子だけを使い、flexboxとblockの配置は入れない (上の「`eml_gui`の内部」) |
 | `objc2`、`objc2-foundation`、`objc2-app-kit`、`objc2-core-foundation` | 0.6、0.3 (既定のfeatureを外し、使うヘッダーのfeatureだけを入れる) | `eml_gui`のAppKitのbackend。feature `native`のmacOSだけで依存する (上の「`eml_gui`の内部」) |
