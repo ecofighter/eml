@@ -1,6 +1,7 @@
 mod abi;
 mod abort;
 mod bridge;
+mod calls;
 mod clif;
 mod common;
 mod linker;

@@ -93,6 +93,24 @@ pub fn agree_on(text: &str, host: impl Fn() -> HostRef) -> Result<Option<i64>, S
     native
 }
 
+/// `text`のプログラムをネイティブで流し、標準出力と、終了コードか誤りの文を返す。
+pub fn native(text: &str) -> (String, Result<Option<i64>, String>) {
+    let host = capture();
+    let out = host.output();
+    let finished = execute_finished(
+        &program(text),
+        &RunConfig::default(),
+        host.into_ref(),
+        Engine::Native,
+    );
+    (
+        out.contents(),
+        finished
+            .map(|finished| finished.exit)
+            .map_err(|error| error.to_string()),
+    )
+}
+
 fn agree_program(program: &eml_lir::Program) {
     let vm_config = RunConfig::default().with_debug_heap(true);
     let vm_host = capture();

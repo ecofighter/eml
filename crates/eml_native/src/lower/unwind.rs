@@ -1,5 +1,6 @@
 //! 巻き戻しの地点の後のコード、地点の後始末、仮の値、`eml$raise`、関数の位置の行 (docs/spec/native.md の
 //! 「巻き戻しの地点」)。
+use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{Block, InstBuilder, Signature, Value, types};
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::Module;
@@ -17,6 +18,8 @@ use crate::mem;
 /// 巻き戻しの地点の命令の後に出すもの。`site`は関数自身の位置の行 (`FnRow.sites`) の添字である。
 #[derive(Debug, Clone, Copy)]
 pub(super) enum After {
+    /// 末尾でない呼び出し。呼ばれた側が中断を始めたかを`yielding.target`で確かめる。
+    Call,
     /// `faults`の行の呼び出し。faultの語を確かめる。
     Faults { site: u32, purity: Purity },
     /// 戻らない行。`raise`があれば、置いた失敗を上げてから後始末へ進む。
@@ -101,10 +104,20 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
         u32::try_from(self.sites.len() - 1).expect("a function has fewer than 2^32 sites")
     }
 
-    /// 巻き戻しの地点の命令の直後に置く。`Faults`ではbuilderを熱い続きに置き、`Never`では前のブロックのない新しい
+    /// 巻き戻しの地点の命令の直後に置く。`Call`と`Faults`ではbuilderを熱い続きに置き、`Never`では前のブロックのない新しい
     /// ブロックに置いて戻る。
     pub fn after_unwind_point(&mut self, point: &Point, after: After) {
         match after {
+            After::Call => {
+                let target = mem::yield_target(&mut self.b, self.ctx);
+                let unit = self.b.ins().iconst(types::I64, mem::UNIT);
+                let aborting = self.b.ins().icmp(IntCC::NotEqual, target, unit);
+                let cleanup = self.cold_block();
+                let hot = self.b.create_block();
+                self.b.ins().brif(aborting, cleanup, &[], hot, &[]);
+                self.fill_cleanup(cleanup, point);
+                self.b.switch_to_block(hot);
+            }
             After::Faults { site, purity } => {
                 let fault = mem::fault(&mut self.b, self.ctx);
                 let raise = self.cold_block();

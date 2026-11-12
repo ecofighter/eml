@@ -3,7 +3,7 @@
 use cranelift_codegen::ir::{InstBuilder, MemFlagsData, Value, types};
 use cranelift_frontend::FunctionBuilder;
 use eml_lir::Shape;
-use eml_rt::{CTX_FAULT, Word, layout};
+use eml_rt::{CTX_FAULT, CTX_YIELD_TARGET, Word, layout};
 
 // reuseは走査する語が`REUSE_SCANNED_LIMIT`個未満の形だけを組にし、ネイティブのコードはそれを数の語なしで`eml_rt`の上に
 // 下ろすので、上限は`eml_rt`の上限以下でなければならない (docs/spec/object-model.md の「ペイロード」)
@@ -19,6 +19,16 @@ pub const UNIT: i64 = imm_bits(0);
 
 /// 空のtokenの語。
 pub const EMPTY_TOKEN: i64 = 0;
+
+/// `ctx`の`yielding.target`の語。yieldも中断もしていない間だけ`UNIT`である (docs/spec/native.md の「巻き戻しの地点」)。
+pub fn yield_target(b: &mut FunctionBuilder, ctx: Value) -> Value {
+    b.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        ctx,
+        CTX_YIELD_TARGET as i32,
+    )
+}
 
 /// `ctx`のfaultの語。0でないのは、ちょうど失敗を置いている間である (docs/spec/native.md の「externの失敗」)。
 pub fn fault(b: &mut FunctionBuilder, ctx: Value) -> Value {

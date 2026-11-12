@@ -1,27 +1,7 @@
 //! `exit`と`panic`の行が始める中断と、その地点の後始末 (docs/spec/native.md の「巻き戻しの地点」)。JITしたコードに
 //! エントリのstubを通して入るので、Miriでは流さない。
 #![cfg(not(miri))]
-use eml_test_support::{Engine, capture, execute_finished};
-
-use crate::common::native::{agree, program};
-
-/// `text`のプログラムをネイティブで流し、標準出力と、終了コードか誤りの文を返す。
-fn native(text: &str) -> (String, Result<Option<i64>, String>) {
-    let host = capture();
-    let out = host.output();
-    let finished = execute_finished(
-        &program(text),
-        &eml_nrt::RunConfig::default(),
-        host.into_ref(),
-        Engine::Native,
-    );
-    (
-        out.contents(),
-        finished
-            .map(|finished| finished.exit)
-            .map_err(|error| error.to_string()),
-    )
-}
+use crate::common::native::{agree, native};
 
 #[test]
 fn exit_in_the_entry_gives_its_code() {

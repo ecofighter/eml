@@ -1,5 +1,6 @@
 //! LIRをCLIFに下ろす。どの関数を定義するよりも前にすべての関数を宣言するので、本体はプログラムのどの関数も名指せる
 //! (docs/spec/native.md の「関数の形」)。
+mod call;
 mod function;
 pub mod names;
 pub mod rows;
@@ -11,7 +12,7 @@ use cranelift_codegen::Context;
 use cranelift_codegen::ir::{ExternalName, Function, Signature, UserFuncName};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{FuncId, Linkage, Module};
-use eml_lir::{LirFn, Program, Repr};
+use eml_lir::{FnIdx, LirFn, Program, Repr};
 use eml_nrt::Kind;
 use eml_nrt::image::SiteRow;
 
@@ -44,6 +45,20 @@ impl Imports {
             .entries
             .get(symbol)
             .unwrap_or_else(|| panic!("no runtime entry `{symbol}`"))
+    }
+}
+
+/// プログラムの関数とその宣言。直接の呼び出しは、呼ぶ先の引数のReprと記号をここで引く。コードは呼ぶ先を記号で名指すので、
+/// 宣言の番号はコードに現れない (docs/spec/native.md の「関数の形」)。
+struct Callees<'a> {
+    program: &'a Program,
+    /// `FnIdx`の順である。
+    ids: Vec<FuncId>,
+}
+
+impl Callees<'_> {
+    fn id(&self, function: FnIdx) -> FuncId {
+        self.ids[function.0 as usize]
     }
 }
 
@@ -93,7 +108,8 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     let mut ctx = module.make_context();
     let mut fctx = FunctionBuilderContext::new();
     let mut functions = Vec::with_capacity(ids.len());
-    for ((function, id), unwinds) in program.functions.iter().zip(ids).zip(unwinds) {
+    let callees = Callees { program, ids };
+    for ((function, &id), unwinds) in program.functions.iter().zip(&callees.ids).zip(unwinds) {
         let unwinds = match unwinds.expect("every function's unwind points are asked for") {
             Ok(unwinds) => unwinds,
             Err(error) => panic!("`{}` has no unwind points: {error}", function.name),
@@ -101,7 +117,7 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
         ctx.func.signature = signature_of(function);
         ctx.func.name = UserFuncName::testcase(names::function(&function.name));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
-        let sites = function::lower(b, module, &imports, id, function, &unwinds);
+        let sites = function::lower(b, module, &imports, &callees, id, function, &unwinds);
         functions.push(define(module, &mut ctx, id, keep_clif, sites)?);
     }
     ctx.func.signature = unwind::raise_signature();

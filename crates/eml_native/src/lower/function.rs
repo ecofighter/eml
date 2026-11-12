@@ -10,7 +10,7 @@ use eml_lir::{Atom, BlockId, Case, CasePattern, LirFn, Repr, Rhs, Stmt, Term, Va
 use eml_nrt::image::SiteRow;
 
 use super::rows::{self, Lowering};
-use super::{Imports, kind};
+use super::{Callees, Imports, kind};
 use crate::abi::clif;
 use crate::mem;
 
@@ -19,12 +19,13 @@ pub(super) fn lower<M: Module>(
     b: FunctionBuilder,
     module: &mut M,
     imports: &Imports,
+    callees: &Callees,
     id: FuncId,
     function: &LirFn,
     unwinds: &Unwinds,
 ) -> Vec<SiteRow> {
     let config = module.target_config();
-    let mut fx = FnLower::new(b, module, imports, id, function, unwinds);
+    let mut fx = FnLower::new(b, module, imports, callees, id, function, unwinds);
     for (index, lir) in function.blocks.iter().enumerate() {
         fx.b.switch_to_block(fx.blocks[index]);
         for (position, stmt) in lir.stmts.iter().enumerate() {
@@ -43,6 +44,7 @@ pub(super) struct FnLower<'a, 'b, M: Module> {
     pub function: &'a LirFn,
     module: &'a mut M,
     pub imports: &'a Imports,
+    pub callees: &'a Callees<'a>,
     /// 下ろしている関数自身。
     pub id: FuncId,
     pub unwinds: &'a Unwinds,
@@ -62,6 +64,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
         mut b: FunctionBuilder<'b>,
         module: &'a mut M,
         imports: &'a Imports,
+        callees: &'a Callees<'a>,
         id: FuncId,
         function: &'a LirFn,
         unwinds: &'a Unwinds,
@@ -85,6 +88,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             function,
             module,
             imports,
+            callees,
             id,
             unwinds,
             ctx: params[0],
@@ -165,6 +169,11 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             } if rows::lowering(*ext) == Some(Lowering::Called) => {
                 self.called_row(block, position, *var, *ext, args, *at);
             }
+            Stmt::Let {
+                var,
+                rhs: Rhs::Call(call),
+            } => self.call(block, position, std::slice::from_ref(var), call),
+            Stmt::LetMany { vars, call } => self.call(block, position, vars, call),
             _ => panic!("the native lowering has no rule for `{stmt:?}`"),
         }
     }
@@ -192,7 +201,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 cases,
                 default,
             } => self.switch(*scrutinee, cases, *default),
-            Term::TailCall(_) => panic!("the native lowering has no rule for `{term:?}`"),
+            Term::TailCall(call) => self.tail_call(call),
         }
     }
 

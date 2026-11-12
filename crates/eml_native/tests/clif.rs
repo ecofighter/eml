@@ -138,3 +138,47 @@ fn f(s.0: obj) -> unit {
     }
     ");
 }
+
+#[test]
+fn a_call_and_its_unwind_check() {
+    // 呼び出しの後で`yielding.target`を確かめ、中断なら持っている`s.0`を手放して仮の値を返す。呼ぶ先はどれも
+    // moduleの中の記号なので、`colocated`と出る
+    let text = "\
+fn g(n.0: int) -> int {
+  return n.0
+}
+fn h(s.0: obj, n.1: int) -> unit {
+  let u.2: unit = extern Prelude.println(s.0)
+  return u.2
+}
+fn f(s.0: obj, n.1: int) -> unit {
+  let m.2: int = call g(n.1)
+  tail call h(s.0, m.2)
+}
+";
+    insta::assert_snapshot!(clif(text, "f"), @"
+    function %f:f(i64, i64, i64) -> i64 tail {
+        sig0 = (i64, i64) -> i64 tail
+        sig1 = (i64, i64) c
+        sig2 = (i64, i64, i64) -> i64 tail
+        fn0 = colocated %f:g sig0
+        fn1 = %eml_rt_decref sig1
+        fn2 = colocated %f:h sig2
+
+    block0(v0: i64, v1: i64, v2: i64):
+        v3 = call fn0(v0, v2)
+        v4 = load.i64 notrap aligned v0
+        v5 = iconst.i64 1
+        v6 = icmp ne v4, v5  ; v5 = 1
+        brif v6, block1, block2
+
+    block1 cold:
+        call fn1(v0, v1)
+        v7 = iconst.i64 1
+        return v7  ; v7 = 1
+
+    block2:
+        return_call fn2(v0, v1, v3)
+    }
+    ");
+}
