@@ -154,10 +154,10 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 - `return`は葉を順に返し、`jump`は引数をブロックの引数として渡す。`int`か`enum`の`switch`は、値をcaseと比べる (`cranelift_frontend::Switch`)。`default`のない`switch`は、合うcaseがなければtrapする。検証したプログラムでは、これは起こらない。定数の`switch`は、VMと同じくコンパイルの時点で行き先を決める
 - 直接の呼び出しは呼ぶ先の関数の記号への`call`で、直接の末尾呼び出しは`return_call`である。`ctx`に続く各引数は、呼ぶ先の引数のReprで作る。複数の値を返す呼び出しは、結果の葉を順に変数に束縛する。呼ぶ先はどれもmoduleが`Linkage::Local`で定義する関数なので、Craneliftはそれを`colocated`にする。エントリはmoduleの外から取り込む記号なので、`colocated`にならない。末尾呼び出しは呼ぶ側のフレームを呼ぶ先のフレームに置き換える。だから末尾呼び出しの連鎖 (自分への末尾呼び出しを含む) は一定のスタックで動き、呼ぶ先は呼ぶ側より多くの引数をスタックで受けてよい。末尾でない呼び出しの後には「巻き戻しの地点」の`Call`の確かめを出す。末尾呼び出しの後には何も確かめない。呼ぶ先が戻ったときに、呼ぶ側の呼び手が確かめるからである
 - どの関数とthunkもmoduleの記号を持つ。その名前はLIRの名前と種類だけで決まり、読み込みの順やアドレスにはよらない。LIRの関数は`f:<名前>`、thunkは`eml$thunk$<引数>$<結果>`で、種類はそれぞれ`i` (`I64`) か`f` (`F64`) と書く。置いた失敗を上げる関数は`eml$raise`である (「巻き戻しの地点」)。moduleは、`eml_nrt::entries()`のすべてのエントリと`eml$raise`を、プログラムの関数より前に決まった順で宣言する。moduleが定義する記号はどれもローカルのリンケージを持つので、直接の呼び出しは領域の中のPC相対の呼び出しになる。`NativeMachine::symbols()`は、マシンが定義したすべての関数 (`eml$raise`を含む) とthunkの名前とコードの範囲を返す。`Image.functions[i].{code, size}`と合わせて、コードのアドレスから名前を引ける
-- マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、`eml_nrt::entries()`のすべてのエントリを記号として登録し、どの関数を定義するよりも前にすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`と`call`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
+- マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、`eml_nrt::entries()`のすべてのエントリを記号として登録し、どの関数を定義するよりも前にすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`、`call`、`entry_of`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
 - `load`はプログラムを信頼する。プログラムは実行の前提を満たさなければならない ([LIR](lir.md)の「実行の前提」)。ネイティブのコードが実行時に確かめることは、VMの速いモードが確かめることを超えない ([オブジェクトモデル](object-model.md)の「受け入れる制約」) ので、満たさないプログラムの振る舞いは未定義である。verifierはこの前提の一部しか確かめない。`load`は安全な関数で、前提を約束するのは呼ぶ側である。debugのビルドでは、`load`はプログラムに所有の段のverifierを通し、通らなければ`internal error: invalid LIR at the native load: ...`でpanicする。VMと違ってネイティブには検査モードがないので、verifierが断るプログラムを読み込むテストはない
 - マシンのworkerはそのmoduleと領域を共有し、プロセス全体のmoduleはない。マシンは、`close`でも`Drop`でも、終わるときに領域を`free_memory`で返す。どのrunもworkerのスレッドが終わってから戻るので、そのとき領域のコードを実行しているものはない
-- `NativeMachine::run`は入口を実行する。入口は引数を取らない (取れば内部の誤り`the entry function takes parameters`を返す)。`eml_native::execute`は、マシンを作り、プログラムを読み込んで実行し、マシンを閉じる。読み込みの誤りは、入口の関数を名指す内部の誤りになる。その文は、領域が尽きたときは`the native code region is full`、ほかのmoduleの誤りでは`the native code cannot be built`である。`eml_nrt::SUPPORTED`が偽の対象では、`execute`は読み込む前に、`NativeMachine::run`と`call`はthunkを作る前に、内部の誤り`native code is not supported on this machine`を返す
+- `NativeMachine::run`は入口を実行する。入口は引数を取らない (取れば内部の誤り`the entry function takes parameters`を返す)。`eml_native::execute`は、マシンを作り、プログラムを読み込んで実行し、マシンを閉じる。読み込みの誤りは、入口の関数を名指す内部の誤りになる。その文は、領域が尽きたときは`the native code region is full`、ほかのmoduleの誤りでは`the native code cannot be built`である。`eml_nrt::SUPPORTED`が偽の対象では、`execute`は読み込む前に、`NativeMachine::run`、`call`、`entry_of`はthunkを作る前に、内部の誤り`native code is not supported on this machine`を返す
 
 ## 巻き戻しの地点
 
@@ -221,6 +221,17 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 ## 行の下ろし方
 
 `eml_sched::rows`の一覧`extern_rows!`の行は、印`inline`の有無で下ろし方が分かれる。印のある行はエントリを持たず、`Listed`の記録は`inline`が真で`entry`が`None`である。eml_nativeの`rows::INLINE` (「断る形」) は、印のある行の集まりと等しい。印のない行は、エントリ`eml_x_<Variant>`を持つ (「externの失敗」)。eml_nativeの`rows::CALLED`のどの行にもエントリがあり、その記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、`eml_sched::rows`の行の関数を`eml_nrt::shared_rows`として、一覧を`eml_nrt::LISTED`として再エクスポートする。eml_nativeは、`eml_sched`に依存せずにこれらを読む。
+
+## RC
+
+生成したコードは、`dup x`と`decref x`をインラインに下ろす。`let u = drop x`は、`x`が数えるRepr (`obj`か`tobj`) を持つなら`decref x`と同じに下ろす。ほかの値の`drop`は何もせず、`u`はUnitの語である。数の規則は`eml_rt`のもの ([オブジェクトモデル](object-model.md)の「遷移の関数」「局所の速い道」) で、コードは数の定数を自分で持たない。速い道の境目は`eml_rt::rc`の`DUP_FAST_BIAS`、`DUP_FAST_SPAN`、`DECREF_FAST_BIAS`、`DECREF_FAST_SPAN`から、数の位置は`layout::RC_BYTE`から、どちらも`mem.rs`を通して取る。
+
+- `tobj`の語が即値 (最も低いビットが立つ語) なら、数を持たないので、コードはそのまま進む。`obj`の語はいつもポインタなので、この確かめはない ([オブジェクトモデル](object-model.md)の「局所の速い道」)
+- 物体の語なら、32ビットの数を1回ロードする。数が速い道の局所の数 (`dup`では1以上`LOCAL_MAX`未満、`decref`では2以上`LOCAL_MAX`未満) なら、数に1を足すか1を引いて書き、進む。この範囲は符号なしの比較1回で決める
+- 数が0なら不死の物体 (文字列の定数など) で、コードは何も呼ばずに進む。この確かめは0との比べなので、コードに数の定数は現れない
+- ほかの数では、冷たいブロックで遅い道のエントリを呼ぶ。`dup`は`eml_rt_dup_slow` (共有の数と張り付いた数)、`decref`は`eml_rt_decref` (物体を解放して子を手放す1の数、共有の数、張り付いた数) である
+- 速い道の費用は、(`tobj`だけ) 低いビットの確かめと分岐1つ、ロード1つ、加算と比較と分岐1つずつ、加算とストア1つずつである
+- 巻き戻しの地点と入口の安全点の後始末は、インラインの速い道を使わずに`eml_rt_decref`を呼ぶ。冷たいコードだからである
 
 ## 断る形
 

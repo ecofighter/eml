@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use eml_cabi::Linked;
 use eml_native::{Arg, NativeMachine};
-use eml_nrt::image::{Census, Options};
-use eml_nrt::{HostRef, RunConfig};
-use eml_rt::{Buffering, StdHost};
+use eml_nrt::image::{Census, Options, Start};
+use eml_nrt::{Finished, HostRef, RunConfig, RuntimeError, Thunk};
+use eml_rt::{Buffering, Ctx, Fast, StdHost};
 use eml_test_support::{Engine, capture, execute_finished};
 
 /// LIRのテキストを読み、verifierを通す。
@@ -63,6 +63,61 @@ pub fn clif(text: &str, function: &str) -> String {
     machine.close();
     let isa = eml_native::abi::isa(false).expect("the machine has a Cranelift ISA");
     text.replace(&format!(" {}", isa.default_call_conv()), " c")
+}
+
+/// 代役のthunkが`Start.entry`として受け取る記録。`thunk`と`code`は、`entry_of`で取った試す関数のものである。
+pub struct Visit<R> {
+    pub thunk: Thunk,
+    pub code: *const u8,
+    pub record: R,
+}
+
+/// `text`のプログラムを読み込み、関数`name`の`entry_of`を記録に入れて、代役のthunk`stand_in`をrunの入口として走らせる。
+/// 代役はrunのworkerの上でrunの`Ctx`を使って動くので、runのヒープに物体を作って関数に渡せる。代役は見たものを記録に書き、
+/// テストはrunが戻った後に自分のスレッドで確かめる。代役の中のpanicは`extern "C"`から巻き戻れず、テストのプロセスを
+/// 止めるためである。runはcensusで終わる。
+pub fn visit<R: Send>(
+    text: &str,
+    name: &str,
+    stand_in: Thunk,
+    record: R,
+) -> (Result<Finished, RuntimeError>, R) {
+    let config = RunConfig::default();
+    let mut machine = NativeMachine::new(&config, host());
+    machine
+        .load(&program(text), &Linked::default())
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let (thunk, code) = machine
+        .entry_of(name)
+        .unwrap_or_else(|error| panic!("{error}"));
+    let mut visit = Visit {
+        thunk,
+        code,
+        record,
+    };
+    let mut argv = [0u64; 1];
+    let start = Start {
+        thunk: stand_in,
+        entry: (&raw mut visit).cast(),
+        argv: argv.as_mut_ptr(),
+        result_rc: false,
+    };
+    let image = machine.image().expect("a program is loaded");
+    // SAFETY: 代役は`run`が入口のthunkに課す規則を守り、内側のthunkに`entry_of`の約束を守る引数を渡す。`visit`は
+    // runの間生きていて、代役だけがそれを使う
+    let finished = unsafe { eml_nrt::run::run(image, &start, &config, host(), checked()) };
+    machine.close();
+    (finished, visit.record)
+}
+
+/// 代役から試す関数を呼ぶ。`argv`はその引数と結果のslotである。
+///
+/// # Safety
+/// 呼ぶ側は`visit`が走らせる代役で、`ctx`はそれが受け取ったもので、`argv`は`entry_of`の約束を守る。呼ぶ側はこの呼び出しを
+/// またいで`ctx`への参照を持たない。
+pub unsafe fn call_visited<R>(ctx: *mut Ctx<Fast>, visit: &Visit<R>, argv: &mut [u64]) {
+    // SAFETY: 呼ぶ側の約束
+    unsafe { (visit.thunk)(ctx, visit.code, argv.as_mut_ptr()) }
 }
 
 /// LIRのテキストをVMの検査モードとネイティブで流し、標準出力と結果の文と終了コードが同じで、censusがきれいなことを確かめる。

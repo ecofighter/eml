@@ -342,3 +342,102 @@ fn f(s.0: obj, x.1: float) -> (obj, float) {
     }
     ");
 }
+
+#[test]
+fn inline_dup_and_decref() {
+    // 速い道は、即値の確かめ (`tobj`の`y.1`だけで、`obj`の`x.0`にはない)、数のロード1つ、範囲の確かめ1つ、ストア1つで
+    // ある。0の数 (不死) は何も呼ばず、ほかの数は遅い道のエントリを呼ぶ
+    let text = "\
+fn f(x.0: obj, borrowed y.1: tobj) -> tobj {
+  decref x.0
+  dup y.1
+  return y.1
+}
+";
+    insta::assert_snapshot!(clif(text, "f"), @"
+    function %f:f(i64, i64, i64) -> i64 tail {
+        sig0 = (i64, i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) c
+        sig3 = (i64, i64) c
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_rt_decref sig2
+        fn3 = %eml_rt_dup_slow sig3
+
+    block0(v0: i64, v1: i64, v2: i64):
+        v3 = load.i64 notrap aligned v0+40
+        v4 = load.i32 notrap aligned v3
+        v5 = iconst.i32 0
+        v6 = icmp ne v4, v5  ; v5 = 0
+        v7 = get_stack_pointer.i64 
+        v8 = load.i64 notrap aligned v0+48
+        v9 = icmp ult v7, v8
+        v10 = bor v6, v9
+        brif v10, block1, block3
+
+    block1 cold:
+        v11 = func_addr.i64 fn0
+        v12 = iconst.i64 0
+        v13 = call fn1(v0, v11, v12)  ; v12 = 0
+        v14 = iconst.i64 0
+        v15 = icmp eq v13, v14  ; v14 = 0
+        brif v15, block3, block2
+
+    block2 cold:
+        call fn2(v0, v1)
+        v16 = iconst.i64 1
+        return v16  ; v16 = 1
+
+    block3:
+        v17 = load.i32 notrap aligned v1
+        v18 = iconst.i32 -2
+        v19 = iadd v17, v18  ; v18 = -2
+        v20 = iconst.i32 0x7fff_fffd
+        v21 = icmp ult v19, v20  ; v20 = 0x7fff_fffd
+        brif v21, block4, block5
+
+    block4:
+        v22 = iconst.i32 -1
+        v23 = iadd.i32 v17, v22  ; v22 = -1
+        store notrap aligned v23, v1
+        jump block7
+
+    block5:
+        brif.i32 v17, block6, block7
+
+    block6 cold:
+        call fn2(v0, v1)
+        jump block7
+
+    block7:
+        v24 = iconst.i64 1
+        v25 = band.i64 v2, v24  ; v24 = 1
+        brif v25, block11, block12
+
+    block12:
+        v26 = load.i32 notrap aligned v2
+        v27 = iconst.i32 -1
+        v28 = iadd v26, v27  ; v27 = -1
+        v29 = iconst.i32 0x7fff_fffe
+        v30 = icmp ult v28, v29  ; v29 = 0x7fff_fffe
+        brif v30, block8, block9
+
+    block8:
+        v31 = iconst.i32 1
+        v32 = iadd.i32 v26, v31  ; v31 = 1
+        store notrap aligned v32, v2
+        jump block11
+
+    block9:
+        brif.i32 v26, block10, block11
+
+    block10 cold:
+        call fn3(v0, v2)
+        jump block11
+
+    block11:
+        return v2
+    }
+    ");
+}

@@ -3,6 +3,7 @@
 mod call;
 mod function;
 pub mod names;
+mod rc;
 pub mod rows;
 mod safepoint;
 mod unwind;

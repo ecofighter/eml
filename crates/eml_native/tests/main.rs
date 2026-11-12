@@ -6,5 +6,6 @@ mod clif;
 mod common;
 mod linker;
 mod machine;
+mod rc;
 mod rows;
 mod unsupported;

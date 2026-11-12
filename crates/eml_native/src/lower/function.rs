@@ -140,6 +140,17 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
         })
     }
 
+    /// `dup`か`decref`の変数の語とRepr。verifierはそれらを数えるReprの変数にだけ許す。
+    fn counted_var(&self, var: VarId) -> (Value, Repr) {
+        let repr = self.function.repr(var);
+        debug_assert!(
+            repr.is_rc(),
+            "`{}` is counted but its Repr is not",
+            self.function.vars[var.0 as usize].name
+        );
+        (self.var(var), repr)
+    }
+
     /// `repr`の位置での`atom`の値。定数は使う所ごとに作る。
     pub fn atom(&mut self, atom: Atom, repr: Repr) -> Value {
         match atom {
@@ -182,6 +193,28 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 rhs: Rhs::Call(call),
             } => self.call(block, position, std::slice::from_ref(var), call),
             Stmt::LetMany { vars, call } => self.call(block, position, vars, call),
+            Stmt::Dup(var) => {
+                let (w, repr) = self.counted_var(*var);
+                self.dup(w, repr);
+            }
+            Stmt::Decref(var) => {
+                let (w, repr) = self.counted_var(*var);
+                self.decref(w, repr);
+            }
+            Stmt::Let {
+                var,
+                rhs: Rhs::Drop(atom),
+            } => {
+                // 数える変数なら参照を1つ手放す。ほかの値は持つものがない。結果は`()`である
+                if let Atom::Var(dropped) = *atom
+                    && self.function.repr(dropped).is_rc()
+                {
+                    let w = self.var(dropped);
+                    self.decref(w, self.function.repr(dropped));
+                }
+                let unit = self.b.ins().iconst(types::I64, mem::UNIT);
+                self.bind(*var, unit);
+            }
             _ => panic!("the native lowering has no rule for `{stmt:?}`"),
         }
     }

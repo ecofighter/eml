@@ -130,6 +130,31 @@ fn entry$main() -> unit {
 }
 
 #[test]
+fn an_exit_in_a_callee_releases_a_value_held_twice() {
+    // 呼んだ側は`s.0`を参照2つで持って呼ぶ。呼び出しの後の後始末はそれを2回手放す。1回足りなければcensusが漏れを
+    // 見つける。1回多ければ、速いモードのネイティブでは解放した物体の使用で、ヒープは誤りにしない。`agree`の検査モードの
+    // VMのrunが確かめるのは、LIRの参照の釣り合いである
+    let text = "\
+fn stop(m.0: obj) -> unit {
+  let u.1: unit = extern Prelude.println(m.0)
+  let z.2: unit = extern Prelude.exit(5)
+  return z.2
+}
+fn entry$main() -> unit {
+  let s.0: obj = extern \"Prelude.Show Int.show\"(1)
+  dup s.0
+  let m.1: obj = extern \"Prelude.Show Int.show\"(3)
+  let z.2: unit = call stop(m.1)
+  let u.3: unit = extern Prelude.println(s.0)
+  let v.4: unit = extern Prelude.println(s.0)
+  return v.4
+}
+";
+    agree(text);
+    assert_eq!(native(text), ("3\n".to_string(), Ok(Some(5))));
+}
+
+#[test]
 fn an_exit_in_a_callee_that_borrows_an_argument() {
     // `look`は`s.0`を借りるだけなので、呼んだ側は呼び出しの後も`s.0`を持ち、後始末がそれを手放す
     let text = "\

@@ -41,7 +41,9 @@ fn fault(fault: RunFault) -> RuntimeError {
 /// `image`の表は呼び出しの間生きていて変わらず、どの`Str`もUTF-8を持つ。どの`DatumRow.slot`も、ほかの誰も使わない
 /// 書ける語である。
 /// `start.thunk`を`start.entry`と`start.argv`で呼ぶことは、`image`のためにコンパイルしたemlのコードへの正しい呼び出しで
-/// あり、`start.argv`は引数と結果の場所を持つ。
+/// あるか、そのコードの規則を守る代役を走らせる。代役は`ctx`をworkerのスレッドの上でだけ使い、emlのコードかエントリの
+/// 呼び出しをまたいでそれへの参照を持たない。panicで巻き戻らない。`eml_fatal`で終わりうる呼び出しをまたいで、デストラクタを
+/// 持つ値を生かしておかない。emlのコードが残しうる状態の`ctx`で戻る。`start.argv`は引数と結果の場所を持つ。
 pub unsafe fn run(
     image: &Image,
     start: &Start,

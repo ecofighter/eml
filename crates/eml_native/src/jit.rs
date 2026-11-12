@@ -257,12 +257,7 @@ impl NativeMachine {
         args: &[Arg],
         options: Options,
     ) -> Result<Vec<Arg>, RuntimeError> {
-        let tables = self.tables.as_ref().expect("a program is loaded");
-        let function = tables
-            .functions
-            .iter()
-            .find(|function| function.name == name)
-            .unwrap_or_else(|| panic!("no function `{name}` is loaded"));
+        let function = self.function(name);
         assert!(
             function.scalar_params,
             "`{name}` takes a parameter that `call` cannot pass"
@@ -275,10 +270,9 @@ impl NativeMachine {
             })
             .collect();
         assert_eq!(kinds, function.params, "the arguments of `{name}`");
-        let (params, rets, code, counted) = (
+        let (params, rets, counted) = (
             function.params.clone(),
             function.rets.clone(),
-            function.code,
             function.counted,
         );
         let mut argv = vec![0u64; params.len().max(rets.len())];
@@ -288,10 +282,7 @@ impl NativeMachine {
                 Arg::F64(x) => x.to_bits(),
             };
         }
-        supported(name)?;
-        let thunk = self
-            .thunk(&params, &rets)
-            .map_err(|what| internal(name, what))?;
+        let (thunk, code) = self.entry_of(name)?;
         self.enter(thunk, code, &mut argv, counted, options)?;
         Ok(rets
             .iter()
@@ -301,6 +292,29 @@ impl NativeMachine {
                 Kind::F64 => Arg::F64(f64::from_bits(bits)),
             })
             .collect())
+    }
+
+    /// コード生成器のテストのために、読み込んだ関数`name`のthunkとコードのアドレスを返す。`call`と違い、関数は物体の引数を
+    /// 取ってよい。読み込んでいない名前ではpanicする。
+    ///
+    /// `thunk(ctx, code, argv)`を呼ぶことはemlのコードへの呼び出しで、呼ぶ側は、`call`ならそれ自身が保証することを約束する。
+    /// 呼び出しは、マシンが生きている間に、このマシンの`Image`のrun (`eml_nrt::run::run`) の中で、そのrunのworkerの上で
+    /// その`Ctx`を使って行う。`argv`は引数と結果ごとにslotを持ち、各引数の種類の語を入れてある。物体の語はどれも、即値か、
+    /// その`Ctx`の (ヒープか付けた塊の) 生きている物体で、所有の引数なら、呼び出しが消費する参照を1つ持つ。数える結果は
+    /// 呼ぶ側が持つ。
+    #[doc(hidden)]
+    pub fn entry_of(&mut self, name: &str) -> Result<(Thunk, *const u8), RuntimeError> {
+        let function = self.function(name);
+        let (params, rets, code) = (
+            function.params.clone(),
+            function.rets.clone(),
+            function.code,
+        );
+        supported(name)?;
+        let thunk = self
+            .thunk(&params, &rets)
+            .map_err(|what| internal(name, what))?;
+        Ok((thunk, code))
     }
 
     /// 読み込んだ関数`name`のコンパイルの前のCLIF。`new_with_clif`で作ったマシンだけが持つ。
@@ -322,6 +336,17 @@ impl NativeMachine {
 
     /// マシンを終え、領域を返す。`Drop`も同じことをする。
     pub fn close(self) {}
+
+    /// 読み込んだ関数`name`。読み込んでいない名前ではpanicする。
+    fn function(&self, name: &str) -> &Function {
+        self.tables
+            .as_ref()
+            .expect("a program is loaded")
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("no function `{name}` is loaded"))
+    }
 
     /// 種類の並び`params -> rets`のthunk。初めて要るときに定義するので、runのコードは使うthunkだけを持つ。
     fn thunk(&mut self, params: &[Kind], rets: &[Kind]) -> Result<Thunk, &'static str> {
@@ -390,8 +415,8 @@ impl Drop for NativeMachine {
     fn drop(&mut self) {
         if let Some(module) = self.module.take() {
             // SAFETY: moduleのコードを実行しているものはない。どのrunもworkerのスレッドが終わってから戻り、runの途中で
-            // マシンが落ちることはない。マシンが外に渡す領域へのポインタは`Symbol.address`と`Image`のものだけで、それを
-            // 通して呼ぶことも読むことも`unsafe`を要する
+            // マシンが落ちることはない。マシンが外に渡す領域へのポインタは`Symbol.address`と`Image`のものと、`entry_of`の
+            // thunkとコードのアドレスだけで、それを通して呼ぶことも読むことも`unsafe`を要する
             unsafe { module.free_memory() };
         }
     }

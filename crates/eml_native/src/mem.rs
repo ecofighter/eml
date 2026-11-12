@@ -1,8 +1,10 @@
 //! `eml_rt`の物体の配置を読む唯一のmodule (docs/spec/object-model.md の「語の位置」)。メモリに触るコード生成をここに置き、
 //! 生成したコードが頼る配置の事実を1か所で`eml_rt`に結び付ける。
+use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{InstBuilder, MemFlagsData, Value, types};
 use cranelift_frontend::FunctionBuilder;
 use eml_lir::Shape;
+use eml_rt::rc::{DECREF_FAST_BIAS, DECREF_FAST_SPAN, DUP_FAST_BIAS, DUP_FAST_SPAN};
 use eml_rt::{CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Word, layout};
 
 // reuseは走査する語が`REUSE_SCANNED_LIMIT`個未満の形だけを組にし、ネイティブのコードはそれを数の語なしで`eml_rt`の上に
@@ -19,6 +21,47 @@ pub const UNIT: i64 = imm_bits(0);
 
 /// 空のtokenの語。
 pub const EMPTY_TOKEN: i64 = 0;
+
+/// 語`w`が即値なら0でない。数えるReprの語は、即値か、物体のヘッダを指す。
+pub fn is_imm(b: &mut FunctionBuilder, w: Value) -> Value {
+    b.ins().band_imm_u(w, Word::IMM_TAG as i64)
+}
+
+/// 物体`obj`の数。ヘッダの先頭の`I32`である。
+pub fn load_rc(b: &mut FunctionBuilder, obj: Value) -> Value {
+    b.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        obj,
+        layout::RC_BYTE as i32,
+    )
+}
+
+/// 物体`obj`の数に`rc`を書く。
+pub fn store_rc(b: &mut FunctionBuilder, obj: Value, rc: Value) {
+    b.ins()
+        .store(MemFlagsData::trusted(), rc, obj, layout::RC_BYTE as i32);
+}
+
+/// `dup`が`rc + 1`を書いてよいとき、つまり`rc`が`LOCAL_MAX`未満の局所の数のとき0でない。符号なしの比較1回で決める
+/// (docs/spec/object-model.md の「局所の速い道」)。
+pub fn dup_is_local(b: &mut FunctionBuilder, rc: Value) -> Value {
+    in_span(b, rc, DUP_FAST_BIAS, DUP_FAST_SPAN)
+}
+
+/// `decref`が`rc - 1`を書いてよいとき、つまり`rc`が2以上`LOCAL_MAX`未満の局所の数のとき0でない。数が1なら物体を
+/// 解放するので、遅い道を通る。
+pub fn decref_is_local(b: &mut FunctionBuilder, rc: Value) -> Value {
+    in_span(b, rc, DECREF_FAST_BIAS, DECREF_FAST_SPAN)
+}
+
+/// `(rc as u32).wrapping_sub(bias) < span`。`bias`より小さい数 (0と共有の負の数) は、引くと符号なしで大きくなるので、
+/// 範囲の上の端と同じ比較で外れる。
+fn in_span(b: &mut FunctionBuilder, rc: Value, bias: u32, span: u32) -> Value {
+    let biased = b.ins().iadd_imm_s(rc, -i64::from(bias));
+    b.ins()
+        .icmp_imm_u(IntCC::UnsignedLessThan, biased, i64::from(span))
+}
 
 /// `ctx`の`yielding.target`の語。yieldも中断もしていない間だけ`UNIT`である (docs/spec/native.md の「巻き戻しの地点」)。
 pub fn yield_target(b: &mut FunctionBuilder, ctx: Value) -> Value {
