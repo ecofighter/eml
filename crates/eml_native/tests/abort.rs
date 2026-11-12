@@ -32,20 +32,26 @@ fn entry$main() -> unit {
     assert_eq!(native(text), ("5\n".to_string(), Ok(Some(4))));
 }
 
-#[test]
-fn an_uncaught_panic_reports_the_message() {
-    let text = "\
+/// runを致命的な誤りで終えるテスト。`eml_fatal`のlongjmpが飛び越えたフレームにはAddressSanitizerのスタックの印が
+/// 残るので、そのジョブは`fatal::`を飛ばす (docs/implementation/testing.md の「`eml_native` の検証」)。
+mod fatal {
+    use crate::common::native::{agree, native};
+
+    #[test]
+    fn an_uncaught_panic_reports_the_message() {
+        let text = "\
 fn entry$main() -> unit {
   let m.0: obj = extern \"Prelude.Show Int.show\"(42)
   let r.1: unit = extern Prelude.panic(m.0) @\"main.em\":3:5
   return r.1
 }
 ";
-    agree(text);
-    let (out, result) = native(text);
-    assert_eq!(out, "");
-    insta::assert_snapshot!(result.unwrap_err(), @"
-    panicked: 42
-      at main.em:3:5
-    ");
+        agree(text);
+        let (out, result) = native(text);
+        assert_eq!(out, "");
+        insta::assert_snapshot!(result.unwrap_err(), @"
+        panicked: 42
+          at main.em:3:5
+        ");
+    }
 }

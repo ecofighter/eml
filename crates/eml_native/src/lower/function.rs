@@ -69,21 +69,17 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
         function: &'a LirFn,
         unwinds: &'a Unwinds,
     ) -> Self {
-        let blocks: Vec<Block> = function.blocks.iter().map(|_| b.create_block()).collect();
         let mut vars = vec![None; function.vars.len()];
-        let entry = blocks[BlockId::ENTRY.0 as usize];
+        // CLIFの入口のブロックは安全点だけを持ち、LIRの入口のブロックへ進む。LIRの入口のブロックはどの辺の行き先でも
+        // ないので、引数は入口のブロックの値のまま、どのブロックからも使える
+        let entry = b.create_block();
         b.append_block_params_for_function_params(entry);
         let params = b.block_params(entry).to_vec();
         for (&var, &value) in function.params().iter().zip(&params[1..]) {
             vars[var.0 as usize] = Some(value);
         }
-        for (lir, &block) in function.blocks.iter().zip(&blocks).skip(1) {
-            for &var in &lir.params {
-                let value = b.append_block_param(block, clif(kind(function.repr(var))));
-                vars[var.0 as usize] = Some(value);
-            }
-        }
-        FnLower {
+        b.switch_to_block(entry);
+        let mut fx = FnLower {
             b,
             function,
             module,
@@ -94,9 +90,21 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             ctx: params[0],
             sites: Vec::new(),
             vars,
-            blocks,
+            blocks: Vec::with_capacity(function.blocks.len()),
             refs: HashMap::new(),
+        };
+        let body = fx.entry_safepoint();
+        fx.blocks.push(body);
+        for lir in function.blocks.iter().skip(1) {
+            let block = fx.b.create_block();
+            for &var in &lir.params {
+                let value =
+                    fx.b.append_block_param(block, clif(kind(function.repr(var))));
+                fx.bind(var, value);
+            }
+            fx.blocks.push(block);
         }
+        fx
     }
 
     /// `id`の関数をこの関数から呼ぶ参照。

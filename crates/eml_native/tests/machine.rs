@@ -1,8 +1,14 @@
-//! JITのホスト`NativeMachine`と、呼び出しのない関数の下ろし (docs/spec/native.md の「関数の形」)。JITしたコードに
-//! エントリのstubを通して入るので、Miriでは流さない。
+//! JITのホスト`NativeMachine`と、呼び出しのない関数の下ろしと、入口の安全点 (docs/spec/native.md の「関数の形」、
+//! docs/spec/native.md の「安全点」)。JITしたコードにエントリのstubを通して入るので、Miriでは流さない。
 #![cfg(not(miri))]
+use std::sync::Arc;
+
 use eml_cabi::Linked;
-use eml_native::{Arg, LoadError};
+use eml_native::{Arg, LoadError, NativeMachine};
+use eml_nrt::RunConfig;
+use eml_nrt::image::Options;
+use eml_rt::{Control, Limits};
+use eml_test_support::capture;
 
 use crate::common::native::{agree, agree_lowered, call, checked, clif, machine, program};
 
@@ -204,4 +210,116 @@ fn a_function_without_calls_agrees_with_the_vm() {
 #[test]
 fn a_lowered_function_without_calls_agrees_with_the_vm() {
     agree_lowered("fn entry$main() -> unit {\n  return ()\n}\n");
+}
+
+/// `text`のプログラムを`config`と`options`で流し、標準出力と、終了コードか誤りの文を返す。
+fn run_with(
+    text: &str,
+    config: &RunConfig,
+    options: Options,
+) -> (String, Result<Option<i64>, String>) {
+    let host = capture();
+    let out = host.output();
+    let mut machine = NativeMachine::new(config, host.into_ref());
+    let loaded = machine
+        .load(&program(text), &Linked::default())
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let finished = machine
+        .run(loaded, options)
+        .map(|finished| finished.exit)
+        .map_err(|error| error.to_string());
+    machine.close();
+    (out.contents(), finished)
+}
+
+#[test]
+fn a_notice_does_not_stop_the_run() {
+    // 柔らかい上限が1バイトなので、ヒープが最初にページを取ると、workerの語に知らせが立つ。次の入口の安全点は知らせを
+    // 受け取ってrunを続ける
+    let text = "\
+fn show(n.0: int) -> unit {
+  let s.1: obj = extern \"Prelude.Show Int.show\"(n.0)
+  let u.2: unit = extern Prelude.println(s.1)
+  return u.2
+}
+fn entry$main() -> unit {
+  let s.0: obj = extern \"Prelude.Show Int.show\"(1)
+  let u.1: unit = extern Prelude.println(s.0)
+  let v.2: unit = call show(2)
+  return v.2
+}
+";
+    let control = Arc::new(Control::new(Limits {
+        soft_bytes: 1,
+        ..Limits::default()
+    }));
+    let config = RunConfig::default().with_control(Arc::clone(&control));
+    assert_eq!(
+        run_with(text, &config, checked()),
+        ("1\n2\n".to_string(), Ok(None))
+    );
+    assert!(control.taken(0) > 1, "the heap took pages during the run");
+    assert_eq!(
+        control.worker_bits(0) & Control::NOTICE,
+        0,
+        "a safepoint took the notice"
+    );
+}
+
+/// runを致命的な誤りで終えるテスト。`eml_fatal`のlongjmpが飛び越えたフレームにはAddressSanitizerのスタックの印が
+/// 残るので、そのジョブは`fatal::`を飛ばす (docs/implementation/testing.md の「`eml_native` の検証」)。
+mod fatal {
+    use eml_nrt::RunConfig;
+    use eml_nrt::image::Options;
+
+    use super::run_with;
+    use crate::common::native::checked;
+
+    #[test]
+    fn deep_recursion_hits_the_stack_limit() {
+        // 末尾でない自分への呼び出しは、workerのスタックを使い切るまで深くなる。深さの上限はスタックなので、64 MiBの
+        // スタックではおよそ10^6のフレームで止まる
+        let text = "\
+fn f(n.0: int) -> int {
+  let r.1: int = call f(n.0)
+  return r.1
+}
+fn entry$main() -> unit {
+  let r.0: int = call f(0)
+  return ()
+}
+";
+        let options = Options {
+            stack: 64 << 20,
+            ..checked()
+        };
+        assert_eq!(
+            run_with(text, &RunConfig::default(), options),
+            (
+                String::new(),
+                Err("the call depth limit is exceeded in `f`".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn a_stop_bit_stops_at_the_next_entry() {
+        // 止めるビットはrunの始めでも下りないので、入口の関数の安全点が、何かを表示する前にrunを止める
+        let text = "\
+fn entry$main() -> unit {
+  let s.0: obj = extern \"Prelude.Show Int.show\"(1)
+  let u.1: unit = extern Prelude.println(s.0)
+  return u.1
+}
+";
+        let config = RunConfig::default();
+        config.control.interrupt();
+        assert_eq!(
+            run_with(text, &config, checked()),
+            (
+                String::new(),
+                Err("interrupted in `entry$main`".to_string())
+            )
+        );
+    }
 }

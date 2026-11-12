@@ -19,6 +19,7 @@ const FILES: &[(&str, &str)] = &[
     ("lower/function.rs", include_str!("lower/function.rs")),
     ("lower/names.rs", include_str!("lower/names.rs")),
     ("lower/rows.rs", include_str!("lower/rows.rs")),
+    ("lower/safepoint.rs", include_str!("lower/safepoint.rs")),
     ("lower/unwind.rs", include_str!("lower/unwind.rs")),
 ];
 

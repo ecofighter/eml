@@ -1,12 +1,7 @@
 //! 呼ぶ行の下ろしと、行の失敗の道 (docs/spec/native.md の「externの失敗」、docs/spec/native.md の「巻き戻しの地点」)。
 //! JITしたコードにエントリのstubを通して入るので、Miriでは流さない。
 #![cfg(not(miri))]
-use std::sync::Arc;
-
-use eml_nrt::HostRef;
-use eml_rt::{Buffering, StdHost};
-
-use crate::common::native::{agree, agree_on, clif};
+use crate::common::native::{agree, clif};
 
 const MAIN: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
 
@@ -91,48 +86,6 @@ b6:
     );
 }
 
-/// 書けない出力。
-struct Broken;
-
-impl std::io::Write for Broken {
-    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-        Err(std::io::ErrorKind::BrokenPipe.into())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Err(std::io::ErrorKind::BrokenPipe.into())
-    }
-}
-
-#[test]
-fn a_write_failure_is_fatal_with_its_text() {
-    // 行ごとに書くので、`println`の中で書けないことが分かり、その地点の位置を持つ誤りになる
-    let host = || {
-        HostRef::new(Arc::new(StdHost::new(
-            Box::new(Broken),
-            Box::new(std::io::sink()),
-            std::path::PathBuf::new(),
-            Buffering::Line,
-        )))
-    };
-    let result = agree_on(
-        "\
-fn entry$main() -> unit {
-  let s.0: obj = extern \"Prelude.Show Int.show\"(1)
-  let t.1: obj = extern \"Prelude.Show Int.show\"(2)
-  let u.2: unit = extern Prelude.println(s.0) @\"main.em\":4:3
-  let v.3: unit = extern Prelude.println(t.1) @\"main.em\":5:3
-  return v.3
-}
-",
-        host,
-    );
-    insta::assert_snapshot!(result.unwrap_err(), @"
-    cannot write the output: broken pipe
-      at main.em:4:3
-    ");
-}
-
 /// 失敗しうる行と戻らない行を持つ関数。
 const SAME: &str = "\
 fn f(n.0: int) -> unit {
@@ -161,4 +114,57 @@ fn the_same_function_has_the_same_code_in_two_programs() {
         .collect();
     let after = format!("{MAIN}{others}{SAME}");
     assert_eq!(clif(&alone, "f"), clif(&after, "f"));
+}
+
+/// runを致命的な誤りで終えるテスト。`eml_fatal`のlongjmpが飛び越えたフレームにはAddressSanitizerのスタックの印が
+/// 残るので、そのジョブは`fatal::`を飛ばす (docs/implementation/testing.md の「`eml_native` の検証」)。
+mod fatal {
+    use std::sync::Arc;
+
+    use eml_nrt::HostRef;
+    use eml_rt::{Buffering, StdHost};
+
+    use crate::common::native::agree_on;
+
+    /// 書けない出力。
+    struct Broken;
+
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+    }
+
+    #[test]
+    fn a_write_failure_is_fatal_with_its_text() {
+        // 行ごとに書くので、`println`の中で書けないことが分かり、その地点の位置を持つ誤りになる
+        let host = || {
+            HostRef::new(Arc::new(StdHost::new(
+                Box::new(Broken),
+                Box::new(std::io::sink()),
+                std::path::PathBuf::new(),
+                Buffering::Line,
+            )))
+        };
+        let result = agree_on(
+            "\
+fn entry$main() -> unit {
+  let s.0: obj = extern \"Prelude.Show Int.show\"(1)
+  let t.1: obj = extern \"Prelude.Show Int.show\"(2)
+  let u.2: unit = extern Prelude.println(s.0) @\"main.em\":4:3
+  let v.3: unit = extern Prelude.println(t.1) @\"main.em\":5:3
+  return v.3
+}
+",
+            host,
+        );
+        insta::assert_snapshot!(result.unwrap_err(), @"
+        cannot write the output: broken pipe
+          at main.em:4:3
+        ");
+    }
 }

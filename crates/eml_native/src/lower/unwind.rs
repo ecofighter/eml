@@ -150,7 +150,7 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
         }
     }
 
-    fn cold_block(&mut self) -> Block {
+    pub(super) fn cold_block(&mut self) -> Block {
         let block = self.b.create_block();
         self.b.set_cold_block(block);
         block
@@ -170,7 +170,7 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
     }
 
     /// 地点の後始末。持っている参照を数だけ手放し、tokenを捨て、関数の結果の仮の値を返す。
-    fn fill_cleanup(&mut self, block: Block, point: &Point) {
+    pub(super) fn fill_cleanup(&mut self, block: Block, point: &Point) {
         assert!(
             point.landing.is_none(),
             "the native lowering has no landing"

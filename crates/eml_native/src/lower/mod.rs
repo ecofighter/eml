@@ -4,6 +4,7 @@ mod call;
 mod function;
 pub mod names;
 pub mod rows;
+mod safepoint;
 mod unwind;
 
 use std::collections::HashMap;

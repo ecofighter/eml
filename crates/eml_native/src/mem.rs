@@ -3,7 +3,7 @@
 use cranelift_codegen::ir::{InstBuilder, MemFlagsData, Value, types};
 use cranelift_frontend::FunctionBuilder;
 use eml_lir::Shape;
-use eml_rt::{CTX_FAULT, CTX_YIELD_TARGET, Word, layout};
+use eml_rt::{CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Word, layout};
 
 // reuseは走査する語が`REUSE_SCANNED_LIMIT`個未満の形だけを組にし、ネイティブのコードはそれを数の語なしで`eml_rt`の上に
 // 下ろすので、上限は`eml_rt`の上限以下でなければならない (docs/spec/object-model.md の「ペイロード」)
@@ -34,6 +34,26 @@ pub fn yield_target(b: &mut FunctionBuilder, ctx: Value) -> Value {
 pub fn fault(b: &mut FunctionBuilder, ctx: Value) -> Value {
     b.ins()
         .load(types::I64, MemFlagsData::trusted(), ctx, CTX_FAULT as i32)
+}
+
+/// `ctx`のworkerの止める語。0でなければ、止めるビットか知らせが立っている (docs/spec/native.md の「安全点」)。
+pub fn stop_bits(b: &mut FunctionBuilder, ctx: Value) -> Value {
+    let word = b
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), ctx, CTX_STOP as i32);
+    // 語はほかのスレッドが`Relaxed`で書く`AtomicU32`である。そろった32ビットの普通のロードは、どの対象でも`Relaxed`の
+    // ロードと同じ命令になり、入口ごとに1回しか読まないので、ロードをまとめられることもない
+    b.ins().load(types::I32, MemFlagsData::trusted(), word, 0)
+}
+
+/// `ctx`の`stack_limit`。スタックポインタがこれより下なら、深さの上限を超えている (docs/spec/native.md の「安全点」)。
+pub fn stack_limit(b: &mut FunctionBuilder, ctx: Value) -> Value {
+    b.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        ctx,
+        CTX_STACK_LIMIT as i32,
+    )
 }
 
 #[cfg(test)]

@@ -15,50 +15,77 @@ fn f(s.0: obj, t.1: obj) -> unit {
 ";
     insta::assert_snapshot!(clif(text, "f"), @"
     function %f:f(i64, i64, i64) -> i64 tail {
-        sig0 = (i64, i64) -> i64 c
-        sig1 = (i64, i64, i64) -> i64 tail
-        sig2 = (i64, i64, i64, i64) tail
-        sig3 = (i64, i64) c
-        fn0 = %eml_x_Println sig0
-        fn1 = colocated %f:f sig1
-        fn2 = colocated %eml$raise sig2
-        fn3 = %eml_rt_decref sig3
+        sig0 = (i64, i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) c
+        sig3 = (i64, i64) -> i64 c
+        sig4 = (i64, i64, i64, i64) tail
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_rt_decref sig2
+        fn3 = %eml_x_Println sig3
+        fn4 = colocated %eml$raise sig4
 
     block0(v0: i64, v1: i64, v2: i64):
-        v3 = call fn0(v0, v1)
-        v4 = load.i64 notrap aligned v0+32
-        brif v4, block1, block3
+        v3 = load.i64 notrap aligned v0+40
+        v4 = load.i32 notrap aligned v3
+        v5 = iconst.i32 0
+        v6 = icmp ne v4, v5  ; v5 = 0
+        v7 = get_stack_pointer.i64 
+        v8 = load.i64 notrap aligned v0+48
+        v9 = icmp ult v7, v8
+        v10 = bor v6, v9
+        brif v10, block1, block3
 
     block1 cold:
-        v5 = func_addr.i64 fn1
-        v6 = iconst.i64 0
-        v7 = iconst.i64 2
-        call fn2(v0, v5, v6, v7)  ; v6 = 0, v7 = 2
-        jump block2
+        v11 = func_addr.i64 fn0
+        v12 = iconst.i64 0
+        v13 = call fn1(v0, v11, v12)  ; v12 = 0
+        v14 = iconst.i64 0
+        v15 = icmp eq v13, v14  ; v14 = 0
+        brif v15, block3, block2
 
     block2 cold:
-        call fn3(v0, v2)
-        v8 = iconst.i64 1
-        return v8  ; v8 = 1
+        call fn2(v0, v1)
+        call fn2(v0, v2)
+        v16 = iconst.i64 1
+        return v16  ; v16 = 1
 
     block3:
-        v9 = call fn0(v0, v2)
-        v10 = load.i64 notrap aligned v0+32
-        brif v10, block4, block6
+        v17 = call fn3(v0, v1)
+        v18 = load.i64 notrap aligned v0+32
+        brif v18, block4, block6
 
     block4 cold:
-        v11 = func_addr.i64 fn1
-        v12 = iconst.i64 1
-        v13 = iconst.i64 2
-        call fn2(v0, v11, v12, v13)  ; v12 = 1, v13 = 2
+        v19 = func_addr.i64 fn0
+        v20 = iconst.i64 0
+        v21 = iconst.i64 2
+        call fn4(v0, v19, v20, v21)  ; v20 = 0, v21 = 2
         jump block5
 
     block5 cold:
-        v14 = iconst.i64 1
-        return v14  ; v14 = 1
+        call fn2(v0, v2)
+        v22 = iconst.i64 1
+        return v22  ; v22 = 1
 
     block6:
-        return v9
+        v23 = call fn3(v0, v2)
+        v24 = load.i64 notrap aligned v0+32
+        brif v24, block7, block9
+
+    block7 cold:
+        v25 = func_addr.i64 fn0
+        v26 = iconst.i64 1
+        v27 = iconst.i64 2
+        call fn4(v0, v25, v26, v27)  ; v26 = 1, v27 = 2
+        jump block8
+
+    block8 cold:
+        v28 = iconst.i64 1
+        return v28  ; v28 = 1
+
+    block9:
+        return v23
     }
     ");
 }
@@ -73,12 +100,39 @@ fn f(n.0: int) -> obj {
 ";
     insta::assert_snapshot!(clif(text, "f"), @"
     function %f:f(i64, i64) -> i64 tail {
-        sig0 = (i64, i64) -> i64 c
-        fn0 = %eml_x_IntShow sig0
+        sig0 = (i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) -> i64 c
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_x_IntShow sig2
 
     block0(v0: i64, v1: i64):
-        v2 = call fn0(v0, v1)
-        return v2
+        v2 = load.i64 notrap aligned v0+40
+        v3 = load.i32 notrap aligned v2
+        v4 = iconst.i32 0
+        v5 = icmp ne v3, v4  ; v4 = 0
+        v6 = get_stack_pointer.i64 
+        v7 = load.i64 notrap aligned v0+48
+        v8 = icmp ult v6, v7
+        v9 = bor v5, v8
+        brif v9, block1, block3
+
+    block1 cold:
+        v10 = func_addr.i64 fn0
+        v11 = iconst.i64 0
+        v12 = call fn1(v0, v10, v11)  ; v11 = 0
+        v13 = iconst.i64 0
+        v14 = icmp eq v12, v13  ; v13 = 0
+        brif v14, block3, block2
+
+    block2 cold:
+        v15 = iconst.i64 1
+        return v15  ; v15 = 1
+
+    block3:
+        v16 = call fn2(v0, v1)
+        return v16
     }
     ");
 }
@@ -95,46 +149,72 @@ fn f(s.0: obj) -> unit {
 ";
     insta::assert_snapshot!(clif(text, "f"), @"
     function %f:f(i64, i64) -> i64 tail {
-        sig0 = (i64, i64) c
-        sig1 = (i64, i64) c
-        sig2 = (i64, i64) -> i64 c
-        sig3 = (i64, i64) -> i64 tail
-        sig4 = (i64, i64, i64, i64) tail
-        fn0 = %eml_x_Exit sig0
-        fn1 = %eml_rt_decref sig1
-        fn2 = %eml_x_Println sig2
-        fn3 = colocated %f:f sig3
-        fn4 = colocated %eml$raise sig4
+        sig0 = (i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) c
+        sig3 = (i64, i64) c
+        sig4 = (i64, i64) -> i64 c
+        sig5 = (i64, i64, i64, i64) tail
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_rt_decref sig2
+        fn3 = %eml_x_Exit sig3
+        fn4 = %eml_x_Println sig4
+        fn5 = colocated %eml$raise sig5
 
     block0(v0: i64, v1: i64):
-        v2 = iconst.i64 3
-        call fn0(v0, v2)  ; v2 = 3
-        jump block1
+        v2 = load.i64 notrap aligned v0+40
+        v3 = load.i32 notrap aligned v2
+        v4 = iconst.i32 0
+        v5 = icmp ne v3, v4  ; v4 = 0
+        v6 = get_stack_pointer.i64 
+        v7 = load.i64 notrap aligned v0+48
+        v8 = icmp ult v6, v7
+        v9 = bor v5, v8
+        brif v9, block1, block3
 
     block1 cold:
-        call fn1(v0, v1)
-        v3 = iconst.i64 1
-        return v3  ; v3 = 1
+        v10 = func_addr.i64 fn0
+        v11 = iconst.i64 0
+        v12 = call fn1(v0, v10, v11)  ; v11 = 0
+        v13 = iconst.i64 0
+        v14 = icmp eq v12, v13  ; v13 = 0
+        brif v14, block3, block2
 
-    block2:
-        v4 = iconst.i64 1
-        v5 = call fn2(v0, v1)
-        v6 = load.i64 notrap aligned v0+32
-        brif v6, block3, block5
+    block2 cold:
+        call fn2(v0, v1)
+        v15 = iconst.i64 1
+        return v15  ; v15 = 1
 
-    block3 cold:
-        v7 = func_addr.i64 fn3
-        v8 = iconst.i64 0
-        v9 = iconst.i64 2
-        call fn4(v0, v7, v8, v9)  ; v8 = 0, v9 = 2
+    block3:
+        v16 = iconst.i64 3
+        call fn3(v0, v16)  ; v16 = 3
         jump block4
 
     block4 cold:
-        v10 = iconst.i64 1
-        return v10  ; v10 = 1
+        call fn2(v0, v1)
+        v17 = iconst.i64 1
+        return v17  ; v17 = 1
 
     block5:
-        return v4  ; v4 = 1
+        v18 = iconst.i64 1
+        v19 = call fn4(v0, v1)
+        v20 = load.i64 notrap aligned v0+32
+        brif v20, block6, block8
+
+    block6 cold:
+        v21 = func_addr.i64 fn0
+        v22 = iconst.i64 0
+        v23 = iconst.i64 2
+        call fn5(v0, v21, v22, v23)  ; v22 = 0, v23 = 2
+        jump block7
+
+    block7 cold:
+        v24 = iconst.i64 1
+        return v24  ; v24 = 1
+
+    block8:
+        return v18  ; v18 = 1
     }
     ");
 }
@@ -158,27 +238,107 @@ fn f(s.0: obj, n.1: int) -> unit {
 ";
     insta::assert_snapshot!(clif(text, "f"), @"
     function %f:f(i64, i64, i64) -> i64 tail {
-        sig0 = (i64, i64) -> i64 tail
-        sig1 = (i64, i64) c
-        sig2 = (i64, i64, i64) -> i64 tail
-        fn0 = colocated %f:g sig0
-        fn1 = %eml_rt_decref sig1
-        fn2 = colocated %f:h sig2
+        sig0 = (i64, i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) c
+        sig3 = (i64, i64) -> i64 tail
+        sig4 = (i64, i64, i64) -> i64 tail
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_rt_decref sig2
+        fn3 = colocated %f:g sig3
+        fn4 = colocated %f:h sig4
 
     block0(v0: i64, v1: i64, v2: i64):
-        v3 = call fn0(v0, v2)
-        v4 = load.i64 notrap aligned v0
-        v5 = iconst.i64 1
-        v6 = icmp ne v4, v5  ; v5 = 1
-        brif v6, block1, block2
+        v3 = load.i64 notrap aligned v0+40
+        v4 = load.i32 notrap aligned v3
+        v5 = iconst.i32 0
+        v6 = icmp ne v4, v5  ; v5 = 0
+        v7 = get_stack_pointer.i64 
+        v8 = load.i64 notrap aligned v0+48
+        v9 = icmp ult v7, v8
+        v10 = bor v6, v9
+        brif v10, block1, block3
 
     block1 cold:
-        call fn1(v0, v1)
-        v7 = iconst.i64 1
-        return v7  ; v7 = 1
+        v11 = func_addr.i64 fn0
+        v12 = iconst.i64 0
+        v13 = call fn1(v0, v11, v12)  ; v12 = 0
+        v14 = iconst.i64 0
+        v15 = icmp eq v13, v14  ; v14 = 0
+        brif v15, block3, block2
 
-    block2:
-        return_call fn2(v0, v1, v3)
+    block2 cold:
+        call fn2(v0, v1)
+        v16 = iconst.i64 1
+        return v16  ; v16 = 1
+
+    block3:
+        v17 = call fn3(v0, v2)
+        v18 = load.i64 notrap aligned v0
+        v19 = iconst.i64 1
+        v20 = icmp ne v18, v19  ; v19 = 1
+        brif v20, block4, block5
+
+    block4 cold:
+        call fn2(v0, v1)
+        v21 = iconst.i64 1
+        return v21  ; v21 = 1
+
+    block5:
+        return_call fn4(v0, v1, v17)
+    }
+    ");
+}
+
+#[test]
+fn the_entry_safepoint() {
+    // 入口のブロックは止める語と`stack_limit`を読み、どちらかで冷たいサービスへ分かれる。サービスが続けさせなければ、
+    // 入口で持つ`s.0`を手放してから仮の値を返す
+    let text = "\
+fn entry$main() -> unit {
+  return ()
+}
+fn f(s.0: obj, x.1: float) -> (obj, float) {
+  return (s.0, x.1)
+}
+";
+    insta::assert_snapshot!(clif(text, "f"), @"
+    function %f:f(i64, i64, f64) -> i64, f64 tail {
+        sig0 = (i64, i64, f64) -> i64, f64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) c
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_rt_decref sig2
+
+    block0(v0: i64, v1: i64, v2: f64):
+        v3 = load.i64 notrap aligned v0+40
+        v4 = load.i32 notrap aligned v3
+        v5 = iconst.i32 0
+        v6 = icmp ne v4, v5  ; v5 = 0
+        v7 = get_stack_pointer.i64 
+        v8 = load.i64 notrap aligned v0+48
+        v9 = icmp ult v7, v8
+        v10 = bor v6, v9
+        brif v10, block1, block3
+
+    block1 cold:
+        v11 = func_addr.i64 fn0
+        v12 = iconst.i64 0
+        v13 = call fn1(v0, v11, v12)  ; v12 = 0
+        v14 = iconst.i64 0
+        v15 = icmp eq v13, v14  ; v14 = 0
+        brif v15, block3, block2
+
+    block2 cold:
+        call fn2(v0, v1)
+        v16 = iconst.i64 1
+        v17 = f64const 0.0
+        return v16, v17  ; v16 = 1, v17 = 0.0
+
+    block3:
+        return v1, v2
     }
     ");
 }
