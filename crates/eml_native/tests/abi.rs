@@ -60,6 +60,15 @@ eml_nrt::entries! {
         -1
     }
 
+    plain fn eml_t_echo_ff_f(ctx, a: f64, b: f64) -> f64 {
+        let out = unsafe { (*ctx).runtime() }.cast::<u64>();
+        unsafe {
+            *out = a.to_bits();
+            *out.add(1) = b.to_bits();
+        }
+        -2.5
+    }
+
     plain fn eml_t_echo_iiii_i(ctx, a: i64, b: i64, c: i64, d: i64) -> i64 {
         let out = unsafe { (*ctx).runtime() }.cast::<u64>();
         for (i, v) in [a, b, c, d].into_iter().enumerate() {
@@ -269,6 +278,7 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
                 eml_rt::Word::imm(-7)
             ),
             "eml_t_echo_i_i" | "eml_t_echo_f_i" => assert_eq!(argv[0] as i64, -1),
+            "eml_t_echo_ff_f" => assert_eq!(f64::from_bits(argv[0]), -2.5),
             "eml_t_echo_iiii_i" => assert_eq!(argv[0] as i64, -4),
             "eml_t_echo_iiiii_i" => assert_eq!(argv[0] as i64, -5),
             "eml_t_echo6" => assert_eq!(f64::from_bits(argv[0]), -6.5),

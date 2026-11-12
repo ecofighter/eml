@@ -17,8 +17,9 @@ crate::entries! {
     /// どうかである。
     ///
     /// # Safety
-    /// `ctx`は`run`の`enter`の中にあり (`ctx.runtime()`はそのrunの`Worker`を指し、`ctx.jmp`は置いてある)、
-    /// このworkerのスレッドから呼ぶ (docs/spec/native.md の「実行の始めと終わり」)。
+    /// `ctx.runtime()`は`worker::of`の前提を満たす`Worker`を指し、`ctx.jmp`は置いてある (`eml_enter`の中である)。
+    /// このworkerのスレッドから呼ぶ。`run`が`enter`で入ったコードは、どちらも満たす (docs/spec/native.md の
+    /// 「実行の始めと終わり」)。
     pub shim fn eml_nrt_safepoint(ctx, function: i64, ep_helper: i64) -> i64 {
         let _ = ep_helper;
         let at = Some(At { function: function as usize, site: None });
@@ -30,7 +31,7 @@ crate::entries! {
                 // 止める語の添字ではない (docs/spec/object-model.md の「論理的な worker ID」)
                 Err(Stop::Notice) => ctx.heap().control().take_notice(WORKER),
                 Err(stop) => {
-                    // SAFETY: サービスは`run`が入ったコードからだけ呼ぶ (docs/spec/native.md の「実行の始めと終わり」)
+                    // SAFETY: 呼ぶ側の約束。`ctx.runtime()`は`worker::of`の前提を満たす`Worker`を指す
                     return Err(unsafe { worker::record(ctx, RunFault::Stopped(stop), at) });
                 }
             }

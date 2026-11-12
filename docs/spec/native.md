@@ -29,7 +29,7 @@
 
 - 形は2つある。`plain`では、本体がそのまま関数の本体になり、`ctx`は生の`*mut Ctx<Fast>`である。`shim`では、本体は`catch_unwind`の中で`ctx: &mut Ctx<Fast>`を受けて走り、型は`E: Raise`である`Result<R, E>`である
 - `shim`の規則はマクロの中に1度だけ書く。`Ok(v)`なら`v`を返す。`Err(e)`なら`Raise::park(e, ctx)`を呼ぶ。`park`は中身を`Ctx`に置き、`Fatal { code, site }`を返す。その後`eml_fatal(ctx, code, site)`を呼ぶ。panicを捕まえたら、その中身を落として`eml_fatal(ctx, FATAL_PANICKED, 0)`を呼ぶ。`Ctx`の借用は閉包の中と`park`の中で終わり、`eml_fatal`をまたぐ借用はない。`Drop`がpanicする中身は、`extern "C"`の境でプロセスを止める
-- `Raise`の実装は3つある。`Fault`は`Ctx::set_fault`で置き、符号`FATAL_FAULT`、site 0を返す。`HeapError`は`Fault::Heap`として置く。`Fatal`は自分を返す (誤りをもう記録したエントリのためである)。`Fault`と`HeapError`の`Raise`はここにだけ実装し、ほかの誤りの型はそれぞれ自分の実装を持つ
+- `Raise`の実装は3つある。`Fault`は`Ctx::set_fault`で置き、符号`FATAL_FAULT`、site 0を返す。`HeapError`は`Fault::Heap`として置く。`Fatal`は自分を返す (誤りをもう記録したエントリのためである)。`Fault`と`HeapError`の`Raise`はここにだけ実装する。`park`は安全な関数なので、実装が使ってよいのは`Ctx`だけである。workerの構造体へ移すべき誤りは、エントリ自身が`worker::record`で記録し、それが返す`Fatal`を返す。`park`は`catch_unwind`の外で走るので、panicしてはならない
 - `shim`の速い道に費用はない。panicを受ける着地の場所 (landing pad) は速い道の外にあるためである。だから任意のRustを走らせうるエントリはすべて`shim`にする。`plain`のエントリには、panicしない理由をここに書く
 - `plain`のエントリは`eml_fatal`だけである。`eml_fatal`は致命的な誤りの道そのもので、戻らず、デストラクタを持つ値を持たない。利用者のRustも走らせない。panicしうるのは内部の不変条件の確かめ (符号が0でないこと、`site`の範囲、`ctx.jmp`がnullでないこと) だけで、それが破れるのは処理系の誤りである。`extern "C"`の関数の中のpanicはプロセスを止めるので、回復できる誤りの道にはならない
 
@@ -138,9 +138,9 @@
 
 workerの構造体 (`eml_nrt::worker::Worker`) は、runが`Ctx`の外に持つものである。`exit`の終了コード、エンジンが持つpanicのメッセージの語、記録した誤りを持つ。`eml_nrt`の中で`ctx.runtime`を置くのは`run`だけで、置くのはエントリの間だけである。
 
-- `worker::record`、`worker::park_panic`と、`ctx.runtime`からworkerの構造体を得る関数は`unsafe fn`である。前提は、`ctx`が`run`の`enter`の中にあり、`ctx.runtime()`がそのrunの`Worker`を指すことである。`Ctx::set_runtime`は安全な関数で、ほかのコードも任意のポインタを置けるためである
+- `worker::record`、`worker::park_panic`と、`ctx.runtime`からworkerの構造体を得る関数は`unsafe fn`である。前提は、`ctx.runtime()`が生きている`Worker`を指し、呼び出しの間ほかの誰もそれを読み書きしないことである。`Ctx::set_runtime`は安全な関数で、ほかのコードも任意のポインタを置けるので、この前提は型では守れない。`run`は、`enter`の間だけworkerを置き、それをまたいで`ctx`とworkerへの参照を持たないことで、この前提を満たす
 - `worker::record(ctx, fault, at) -> Fatal`は`RuntimeError::Fault`を作る。関数の名前は、`at.function`をコードの範囲に含む`FnRow`から、位置はその地点`at.site`から取る。位置のない地点なら位置はなく、`at`がないか、アドレスがどの行にもなければ、関数は`<native code>`である。作った誤りをworkerの構造体へ移し、`Fatal { code: FATAL_RECORDED, site: 0 }`を返す。誤りは`Err`が`shim`に届く前に移す。致命的な誤りのlongjmpは、デストラクタを持つ値を持たないフレームしかまたがないためである
-- workerの構造体を使うエントリ (`eml_nrt_*`のサービスと、`worker::record`か`worker::park_panic`を呼ぶ行) は、`run`が`enter`で入ったコードからだけ呼べる。`ctx.runtime()`がそのrunの`Worker`を指すのは、そこだけだからである。ほかの`runtime`を置いて`enter`を直接呼ぶテストは、これらのエントリに届いてはならない
+- workerの構造体を使うエントリ (`eml_nrt_*`のサービスと、`worker::of`、`worker::record`、`worker::park_panic`のどれかを呼ぶ行) は、この前提が成り立つ間だけ呼べる。runの中では、それはちょうど`run`が`enter`で入ったコードである。致命的な誤りの道を通りうるエントリは、さらに`ctx.jmp`が置いてあること、つまり`eml_enter`の中で呼ぶことを要する (「`eml_fatal`」)。テストは、自分の`Worker`を`ctx.runtime`の後ろに置いて、そうしたエントリを呼んでよい。呼び出しが致命的な誤りの道を通りえなければ直接呼び、通りうるなら`enter`を通して呼ぶ。`runtime`にほかのものを置くテストは、これらのエントリに届いてはならない
 - `worker::park_panic(ctx, message)`は、メッセージの語をworkerの構造体に置き、`Fault::Engine`を`set_fault`で`ctx`に置く。だから中身が`Fault`でもエンジンの持つものでも、`ctx.native.fault`が0でないのは、ちょうど失敗を置いている間である。呼ぶ側は次を約束する。`message`は、この`ctx`のヒープか、それに付けた塊の生きている文字列である。呼ぶ側の持つ参照1つがworkerの構造体へ移り、呼ぶ側はその後この語を使わず手放さない。失敗を置いていない (破ると前の語が漏れるが、未定義の動作にはならない)。語を取り出したサービスがその参照を持ち、手放す。runの終わりに置いたままの語は手放さない。ヒープはrunとともに終わるためである
 
 censusは、VMの検査モードに代わる、参照の数の安全網である。`Census::Check`のrunが成功したら、ほかのスレッドから受けた解放を取り込み (`reclaim`)、workerのヒープの生きている物体を列挙し (`Heap::live_objects`)、不死でない物体 (`Heap::is_immortal`) を種類の名前ごとに数える。ダミーや定数のような不死の物体は数えない。数が空でなければ`RuntimeError::Leak`で、`memory leak: objects were not freed: 1 Data`と表示する。テストのネイティブのrunは、どれもcensusで終わる。
@@ -162,6 +162,14 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 
 ## externの失敗
 
+行のエントリ`eml_x_<Variant>`は、`eml_nrt/src/rows.rs`の表`ROWS`にある。行の一覧`extern_rows!` (`eml_sched/src/rows.rs`) の展開`entries`が、`inline`の印のない行の変種ごとに`shim`のエントリを1つ作る。エントリの識別子は行の`as`の識別子で、`eml_x_`に変種の名前を続けたものである。引数と結果の種類は、行の種類のトークンをそのまま使う。エントリは行の本体を読まず、行の最初の変種の名前を持つ`eml_sched::rows`の行の関数を呼ぶ。だから行の実装は、どちらのエンジンでも1つである。
+
+- 行の関数が`Ok(v)`を返したら、エントリは`v`を返す。`unit`の行はUnitの語を返し、`never`の行は結果なしでふつうに戻る
+- `Err(RunFault::Extern(fault))`を返し、行の`faults`が真なら、エントリは`ctx.set_fault`でfaultを置き、仮の値 (語の結果ならUnitの語、整数なら0、`float`なら0.0) を返す。生成したコードは呼び出しのすぐ後でfaultの語を確かめ、仮の値を使わない
+- ほかの`Err`は内部の類である。エントリは`worker::record(ctx, fault, None)`でそれを記録して、返った`Fatal`を返し、`shim`は`FATAL_RECORDED`で致命的な誤りの道からrunを終える。誤りは関数を`<native code>`と名指し、位置を持たない。包みの本体は`eml_fatal`を名指さない
+- `eml_x_Exit(ctx, code: int) -> never`と`eml_x_Panic(ctx, message: obj) -> never`は、エンジンごとに違うので手で書く。`eml_x_Exit`は終了コードをworkerの構造体に置き、`exit_abort`で`exit`の中断を始めて戻る。`eml_x_Panic`は`worker::park_panic`でメッセージを置いて戻るので、faultは`Fault::Engine`になる。`eml_x_Panic`は`message`を消費する。呼ぶ側の参照1つがworkerの構造体へ移るので、生成したコードは、地点の後始末も含めて、呼び出しの後で`message`を手放さない
+- 行のエントリは、サービスと同じく、`run`が入ったコードからだけ呼ぶ
+
 行が`ctx`に置いた失敗は、生成したコードがサービス`eml_nrt_failed(ctx, function, site, purity) -> action`で上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の`FnRow.sites`の中の地点の添字 (関数の入口なら`ENTRY_SITE`)、`purity`は失敗した行の純粋さである。`purity`の語は`PURITY_PURE` (0)、`PURITY_PANICS` (1)、`PURITY_EFFECTFUL` (2) で、`eml_extern::Purity`の宣言の順である。3つの定数は`ACTION_*`と同じく`eml_nrt::image`にある。debugのビルドでは、サービスは`purity`がこのどれかであることと、`site`が`ENTRY_SITE`か32ビットに収まる添字であることを確かめる。
 
 - サービスは置いたfaultを`ctx.take_fault()`で取り出す。だからサービスの後のfaultの語は0である
@@ -169,6 +177,10 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 - ほかのfaultは`RunFault::Extern(fault)`になる。何も置いていなければ、誤りは内部の誤り`a failure was raised with nothing parked`である
 - サービスは誤りを`At { function, site }`で`worker::record`により記録し、`FATAL_RECORDED`でrunを終える。だから誤りは地点の位置を持ち、地点が位置を持たなければ関数を名指す
 - 失敗を捕まえるハンドラはないので、上げた失敗はどれもrunを終える。サービスは`purity`を受けるが、結果はそれによらない
+
+## 行の下ろし方
+
+`eml_sched::rows`の一覧`extern_rows!`の行は、印`inline`の有無で下ろし方が分かれる。印のある行はエントリを持たず、`Listed`の記録は`inline`が真で`entry`が`None`である。eml_nativeの`rows::INLINE` (「断る形」) は、印のある行の集まりと等しい。印のない行は、エントリ`eml_x_<Variant>`を持つ (「externの失敗」)。eml_nativeの`rows::CALLED`のどの行にもエントリがあり、その記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、`eml_sched::rows`の行の関数を`eml_nrt::shared_rows`として、一覧を`eml_nrt::LISTED`として再エクスポートする。eml_nativeは、`eml_sched`に依存せずにこれらを読む。
 
 ## 断る形
 

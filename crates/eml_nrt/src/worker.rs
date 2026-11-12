@@ -93,8 +93,11 @@ impl Worker {
 /// `ctx.runtime`の後ろのworker。
 ///
 /// # Safety
-/// `ctx`は`run`の`enter`の中にあり、`ctx.runtime()`はそのrunの`Worker`を指す。`Ctx::set_runtime`は安全な関数で、
-/// ほかのコードも任意のポインタを置けるので、この前提は型では守れない。
+/// `ctx.runtime()`は生きている`Worker`を指す。それは`Worker::new`で作り、その約束がまだ成り立つもので、書き込める
+/// ポインタを通して置いてある。返した借用が生きている間、ほかの誰もその`Worker`を読み書きしない。ほかの参照はなく、
+/// 持ち主もそれに触れない。`run`は、`enter`の間だけworkerを置き、それをまたいで`ctx`とworkerへの参照を持たないことで
+/// これを満たす。テストは、自分の`Worker`を同じように置いて満たす。`Ctx::set_runtime`は安全な関数で、ほかのコードも
+/// 任意のポインタを置けるので、この前提は型では守れない。
 pub(crate) unsafe fn of(ctx: &mut Ctx<Fast>) -> &mut Worker {
     let worker = ctx.runtime().cast::<Worker>();
     assert!(!worker.is_null(), "no native run holds this context");

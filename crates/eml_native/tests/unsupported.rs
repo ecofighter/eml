@@ -1,6 +1,7 @@
-use eml_extern::Extern;
+use eml_extern::{Extern, OpRet, Repr};
 use eml_native::rows::{CALLED, INLINE, Lowering, lowering};
 use eml_native::{Form, Unsupported, unsupported};
+use eml_nrt::Kind;
 
 fn rejected(source: &str) -> Vec<Unsupported> {
     unsupported(&eml_test_support::lir(source))
@@ -297,4 +298,45 @@ fn the_called_rows_are_the_seed() {
             Extern::Panic,
         ]
     );
+}
+
+fn kind_of(repr: Repr) -> Kind {
+    match repr {
+        Repr::Float => Kind::F64,
+        _ => Kind::I64,
+    }
+}
+
+#[test]
+fn every_called_row_has_an_entry() {
+    for &row in CALLED {
+        let symbol = format!("eml_x_{row:?}");
+        let entry = eml_nrt::entries()
+            .find(|e| e.symbol == symbol)
+            .unwrap_or_else(|| panic!("no entry {symbol}"));
+        let desc = row.row();
+        let params: Vec<Kind> = desc.params.iter().map(|&r| kind_of(r)).collect();
+        let result = match desc.ret {
+            OpRet::Never => None,
+            OpRet::Repr(r) => Some(kind_of(r)),
+        };
+        assert_eq!(
+            (entry.params, entry.result),
+            (&params[..], result),
+            "{symbol}"
+        );
+    }
+}
+
+#[test]
+fn the_inline_table_is_the_marked_set() {
+    let mut marked: Vec<Extern> = eml_nrt::LISTED
+        .iter()
+        .filter(|l| l.inline)
+        .map(|l| l.row)
+        .collect();
+    let mut rows: Vec<Extern> = INLINE.iter().map(|&(row, _)| row).collect();
+    marked.sort_by_key(|row| *row as usize);
+    rows.sort_by_key(|row| *row as usize);
+    assert_eq!(rows, marked);
 }

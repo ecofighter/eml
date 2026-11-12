@@ -429,14 +429,15 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ## `eml_nrt`の内部
 
-- `lib.rs`は`#![deny(unsafe_code)]`を持ち、ほかのmoduleの公開の項目を再エクスポートする。エントリの表の一覧`TABLES`と、それをたどる`entries()`もここにある。`eml_rt`を隠した名前`__rt`で再エクスポートし、ほかのcrateで展開した`entries!`がそれを名指す。実行の境界の型`RunConfig`、`Finished`、`RuntimeError`、`RunFault`、`HostRef`も再エクスポートする。`eml_native`はこれらを`eml_nrt`を通して名指し、`eml_sched`への辺を持たない
+- `lib.rs`は`#![deny(unsafe_code)]`を持ち、ほかのmoduleの公開の項目を再エクスポートする。エントリの表の一覧`TABLES`と、それをたどる`entries()`もここにある。`eml_rt`を隠した名前`__rt`で再エクスポートし、ほかのcrateで展開した`entries!`がそれを名指す。実行の境界の型`RunConfig`、`Finished`、`RuntimeError`、`RunFault`、`HostRef`と、`eml_sched::rows`の行の関数 (`shared_rows`という名前で) と一覧`LISTED`も再エクスポートする。`eml_native`はこれらを`eml_nrt`を通して名指し、`eml_sched`への辺を持たない
 - `entries.rs`は、`Kind`、`Entry`と、マクロ`entries!`とその補助 (`__entry!`、`__kind!`、`__ty!`、`__result!`) を持つ。`shim`の本体の規則を書くのは`__entry!`だけである ([ネイティブの実行系](../spec/native.md) の「包みの本体」)
 - `enter.rs`は、`Thunk`、`Fatal`、致命的な誤りの符号 (`FATAL_PANICKED`、`FATAL_FAULT`、`FATAL_RECORDED`)、`Raise`とその3つの実装、`enter`、`detached`と、エントリ`eml_fatal`を持つ
+- `rows.rs`は、一覧`extern_rows!`の展開`entries`で作る行のエントリの表`ROWS`と、手で書く`eml_x_Exit`と`eml_x_Panic`を持つ ([ネイティブの実行系](../spec/native.md)の「externの失敗」)
 - `image.rs`は`Image`とその行の型、`Start`、`Options`、`Census`、行動の語を持つ。`run.rs`は実行の駆動`run`と、スタックの形の3つの定数を持つ。`worker.rs`はworkerの構造体と`record`、`park_panic`を、`census.rs`はcensusを、`constants.rs`は読み込み時の値を凍結した塊に作る関数を持つ ([ネイティブの実行系](../spec/native.md)の「`Image`」「実行の始めと終わり」)
 - `arch/`は、ISAとABIごとのstub (`eml_enter`、longjmpの側、`JmpBuf`、`SUPPORTED`) を持ち、`arch/mod.rs`が対象ごとに1つを選ぶ。`aarch64.rs`はWindowsでないaarch64のAAPCS64、`x86_64_sysv.rs`はWindowsでないx86_64のSysV、`x86_64_win64.rs`はWindowsのx86_64のWin64で、`unsupported.rs`はほかのすべての対象である。stubは`#[unsafe(naked)]`の関数と`naked_asm!`で書き、外のアセンブラもbuild scriptも使わない
 - thread-localは使わない。ネイティブのコードは`Ctx<Fast>`だけを使うので、`Checked`も名指さない
 - `examples/nrt_bench.rs`は、stubの往復と2つのエントリの形の費用を測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)
-- `unsafe`を書いてよいのは、`trust.rs`が挙げるファイル (`enter.rs`、`entries.rs`、`image.rs`、`worker.rs`、`run.rs`、`census.rs`、`constants.rs`、`arch/`のstubのファイル) だけである ([テスト戦略](testing.md)の「`eml_nrt`の検証」)
+- `unsafe`を書いてよいのは、`trust.rs`が挙げるファイル (`enter.rs`、`entries.rs`、`image.rs`、`worker.rs`、`run.rs`、`census.rs`、`constants.rs`、`services.rs`、`heap.rs`、`rows.rs`、`arch/`のstubのファイル) だけである ([テスト戦略](testing.md)の「`eml_nrt`の検証」)
 
 ## `eml_gui`の内部
 
