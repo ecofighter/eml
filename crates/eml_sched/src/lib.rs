@@ -8,3 +8,4 @@ pub mod doorbell;
 pub mod driver;
 pub mod error;
 pub mod park;
+pub mod rows;
