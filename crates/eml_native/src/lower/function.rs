@@ -1,23 +1,27 @@
 //! LIRの関数1つをCLIFにする。ブロック、ブロックの引数、文、終端、atomである (docs/spec/native.md の「関数の形」)。
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::{Block, BlockArg, FuncRef, InstBuilder, TrapCode, Value, types};
-use cranelift_frontend::{FunctionBuilder, Switch};
-use cranelift_module::{FuncId, Module};
+use cranelift_codegen::ir::{Block, BlockArg, FuncRef, GlobalValue, InstBuilder, Value, types};
+use cranelift_frontend::FunctionBuilder;
+use cranelift_module::{DataId, FuncId, Module};
 use eml_extern::ExternRef;
 use eml_lir::unwind::Unwinds;
-use eml_lir::{Atom, BlockId, Case, CasePattern, LirFn, Repr, Rhs, Stmt, Term, VarId};
+use eml_lir::{Atom, BlockId, LirFn, Repr, Rhs, Stmt, Term, VarId};
 use eml_nrt::image::SiteRow;
 
+use super::consts::Data;
+use super::data::CaseFields;
 use super::rows::{self, Lowering};
 use super::{Callees, Imports, kind};
 use crate::abi::clif;
 use crate::mem;
 
 /// `function`を下ろし、その位置の行 (`FnRow.sites`) を返す。
+#[allow(clippy::too_many_arguments)]
 pub(super) fn lower<M: Module>(
     b: FunctionBuilder,
     module: &mut M,
+    data: &mut Data,
     imports: &Imports,
     callees: &Callees,
     id: FuncId,
@@ -25,9 +29,10 @@ pub(super) fn lower<M: Module>(
     unwinds: &Unwinds,
 ) -> Vec<SiteRow> {
     let config = module.target_config();
-    let mut fx = FnLower::new(b, module, imports, callees, id, function, unwinds);
+    let mut fx = FnLower::new(b, module, data, imports, callees, id, function, unwinds);
     for (index, lir) in function.blocks.iter().enumerate() {
         fx.b.switch_to_block(fx.blocks[index]);
+        fx.case_fields(BlockId(index as u32));
         for (position, stmt) in lir.stmts.iter().enumerate() {
             fx.stmt(BlockId(index as u32), position, stmt);
         }
@@ -42,7 +47,9 @@ pub(super) fn lower<M: Module>(
 pub(super) struct FnLower<'a, 'b, M: Module> {
     pub b: FunctionBuilder<'b>,
     pub function: &'a LirFn,
-    module: &'a mut M,
+    pub(super) module: &'a mut M,
+    /// moduleの読み込み時の値の記号。関数をまたいで共有する。
+    pub(super) data: &'a mut Data,
     pub imports: &'a Imports,
     pub callees: &'a Callees<'a>,
     /// 下ろしている関数自身。
@@ -54,15 +61,21 @@ pub(super) struct FnLower<'a, 'b, M: Module> {
     pub sites: Vec<SiteRow>,
     /// `VarId`ごとのCLIFの値。LIRは変数を1回だけ束縛する。
     vars: Vec<Option<Value>>,
-    blocks: Vec<Block>,
+    pub(super) blocks: Vec<Block>,
     /// 関数ごとに1回だけ取り込む、呼ぶ関数の参照。
     refs: HashMap<FuncId, FuncRef>,
+    /// 関数ごとに1回だけ取り込む、データの記号の参照。
+    pub(super) slots: HashMap<DataId, GlobalValue>,
+    /// ブロックごとの、そこを行き先とする`switch`のcaseの欄。
+    pub(super) cases: Vec<Option<CaseFields<'a>>>,
 }
 
 impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         mut b: FunctionBuilder<'b>,
         module: &'a mut M,
+        data: &'a mut Data,
         imports: &'a Imports,
         callees: &'a Callees<'a>,
         id: FuncId,
@@ -83,6 +96,7 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             b,
             function,
             module,
+            data,
             imports,
             callees,
             id,
@@ -92,6 +106,8 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             vars,
             blocks: Vec::with_capacity(function.blocks.len()),
             refs: HashMap::new(),
+            slots: HashMap::new(),
+            cases: CaseFields::of(function),
         };
         let body = fx.entry_safepoint();
         fx.blocks.push(body);
@@ -193,6 +209,32 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 rhs: Rhs::Call(call),
             } => self.call(block, position, std::slice::from_ref(var), call),
             Stmt::LetMany { vars, call } => self.call(block, position, vars, call),
+            Stmt::Let {
+                var,
+                rhs: Rhs::ConstString(index),
+            } => self.const_string(*var, *index),
+            Stmt::Let {
+                var,
+                rhs:
+                    Rhs::Con {
+                        ctor,
+                        args,
+                        reuse: None,
+                    },
+            } => self.con(*var, *ctor, args),
+            Stmt::Let {
+                var,
+                rhs: Rhs::Box(atom),
+            } => self.boxed(*var, *atom),
+            Stmt::Let {
+                var,
+                rhs: Rhs::Unbox(atom),
+            } => self.unbox(*var, *atom),
+            Stmt::Unpack {
+                value,
+                ctor,
+                fields,
+            } => self.unpack(*value, *ctor, fields),
             Stmt::Dup(var) => {
                 let (w, repr) = self.counted_var(*var);
                 self.dup(w, repr);
@@ -244,63 +286,5 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             } => self.switch(*scrutinee, cases, *default),
             Term::TailCall(call) => self.tail_call(call),
         }
-    }
-
-    /// `int`か`enum`の`switch`。定数のscrutineeは、VMと同じくコンパイルの時点で行き先を決める。
-    fn switch(&mut self, scrutinee: Atom, cases: &[Case], default: Option<BlockId>) {
-        let key = |pattern: CasePattern| match pattern {
-            CasePattern::Int(n) => n,
-            CasePattern::Tag(tag) => i64::from(tag),
-            CasePattern::String(_) => panic!("the native lowering has no rule for a string switch"),
-        };
-        let value = match scrutinee {
-            Atom::Var(var) => {
-                let repr = self.function.repr(var);
-                assert!(
-                    matches!(repr, Repr::Int | Repr::Enum),
-                    "the native lowering has no rule for a switch on `{repr:?}`"
-                );
-                self.var(var)
-            }
-            Atom::Int(n) => return self.constant_switch(n, cases, default, key),
-            Atom::Tag(tag) => return self.constant_switch(i64::from(tag), cases, default, key),
-            _ => unreachable!("a switch reads an int, a tag or a word"),
-        };
-        let trap = default.is_none().then(|| self.b.create_block());
-        let otherwise = match default {
-            Some(block) => self.blocks[block.0 as usize],
-            None => trap.expect("a switch without a default has a trap block"),
-        };
-        let mut switch = Switch::new();
-        for case in cases {
-            // `Switch`は値のビットを比べるので、負の鍵はその2の補数である
-            switch.set_entry(
-                u128::from(key(case.pattern) as u64),
-                self.blocks[case.target.0 as usize],
-            );
-        }
-        switch.emit(&mut self.b, value, otherwise);
-        if let Some(trap) = trap {
-            // 合うcaseもdefaultもない。検証したプログラムはここに来ない
-            self.b.set_cold_block(trap);
-            self.b.switch_to_block(trap);
-            self.b.ins().trap(TrapCode::unwrap_user(1));
-        }
-    }
-
-    fn constant_switch(
-        &mut self,
-        value: i64,
-        cases: &[Case],
-        default: Option<BlockId>,
-        key: impl Fn(CasePattern) -> i64,
-    ) {
-        let target = cases
-            .iter()
-            .find(|case| key(case.pattern) == value)
-            .map(|case| case.target)
-            .or(default)
-            .expect("a constant switch has a matching case or a default");
-        self.b.ins().jump(self.blocks[target.0 as usize], &[]);
     }
 }

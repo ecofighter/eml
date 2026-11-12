@@ -4,6 +4,7 @@ mod bridge;
 mod calls;
 mod clif;
 mod common;
+mod data;
 mod linker;
 mod machine;
 mod rc;

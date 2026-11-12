@@ -8,10 +8,14 @@ use cranelift_jit::JITModule;
 use cranelift_module::ModuleError;
 use eml_cabi::Linked;
 use eml_lir::{Program, Repr};
-use eml_nrt::image::{FnRow, Image, Options, SiteRow, Slice, Start, Str};
+use eml_nrt::image::{
+    DATUM_BIG_INT, DATUM_FLOAT, DATUM_STRING, DatumRow, FnRow, Image, Options, SiteRow, Slice,
+    Start, Str,
+};
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
 use crate::abi::jit_builder;
+use crate::lower::consts::Datum;
 use crate::lower::{self, names};
 use crate::thunk::define_thunk;
 
@@ -75,18 +79,20 @@ struct Function {
     sites: Vec<SiteRow>,
 }
 
-/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`と、各関数の`sites`の中を指す。どれも`new`の後で
-/// 変わらず、`Vec`を動かしてもその要素は動かない。
+/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`と、各関数の`sites`と各値の文字列の中を
+/// 指す。どれも`new`の後で変わらず、`Vec`を動かしてもその要素は動かない。`data`のslotはmoduleのデータの物を指す。
 struct Tables {
     functions: Vec<Function>,
     _files: Vec<String>,
     _file_rows: Vec<Str>,
     _rows: Vec<FnRow>,
+    _data: Vec<Datum>,
+    _datum_rows: Vec<DatumRow>,
     image: Image,
 }
 
 impl Tables {
-    fn new(functions: Vec<Function>, files: Vec<String>) -> Tables {
+    fn new(functions: Vec<Function>, files: Vec<String>, data: Vec<(Datum, *mut u64)>) -> Tables {
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
         let rows: Vec<FnRow> = functions
             .iter()
@@ -97,16 +103,34 @@ impl Tables {
                 sites: Slice::new(&function.sites),
             })
             .collect();
+        let datum_rows: Vec<DatumRow> = data
+            .iter()
+            .map(|(datum, slot)| {
+                let (kind, bits, text) = match datum {
+                    Datum::String(text) => (DATUM_STRING, 0, text.as_str()),
+                    Datum::BigInt(n) => (DATUM_BIG_INT, *n as u64, ""),
+                    Datum::Float(bits) => (DATUM_FLOAT, *bits, ""),
+                };
+                DatumRow {
+                    kind,
+                    bits,
+                    text: Str::new(text),
+                    slot: *slot,
+                }
+            })
+            .collect();
         let image = Image {
             functions: Slice::new(&rows),
             files: Slice::new(&file_rows),
-            data: Slice::new(&[]),
+            data: Slice::new(&datum_rows),
         };
         Tables {
             functions,
             _files: files,
             _file_rows: file_rows,
             _rows: rows,
+            _data: data.into_iter().map(|(datum, _)| datum).collect(),
+            _datum_rows: datum_rows,
             image,
         }
     }
@@ -220,7 +244,16 @@ impl NativeMachine {
                 sites: defined.sites,
             });
         }
-        self.tables = Some(Tables::new(functions, program.files.clone()));
+        // どの値のslotも、moduleが定義した8バイトの書けるデータの物で、領域とともにマシンが終わるまで生きる
+        let data = lowered
+            .data
+            .into_iter()
+            .map(|(datum, id)| {
+                let (slot, _) = module.get_finalized_data(id);
+                (datum, slot.cast_mut().cast::<u64>())
+            })
+            .collect();
+        self.tables = Some(Tables::new(functions, program.files.clone(), data));
         Ok(Loaded {
             entry: program.entry.0,
         })
@@ -395,10 +428,12 @@ impl NativeMachine {
             argv: argv.as_mut_ptr(),
             result_rc,
         };
-        // SAFETY: `image`の表は`self`のもので、呼び出しの間生きていて変わらない。どの`Str`も`String`から作り、`image`に
-        // データのslotはない。`thunk`は`code`の関数の種類の並びのthunkである。その関数は`load`に渡したプログラムから
-        // コンパイルしたもので、`load`の呼び手はそれが正しいLIRであることを約束する (`load`を見る)。debugのビルドでは、
-        // それにverifierを通してある。`argv`はその関数の引数と結果ごとにslotを持ち、引数を入れてある
+        // SAFETY: `image`の表は`self`のもので、呼び出しの間生きていて変わらない。どの`Str`も`String`から作る。どの
+        // データのslotも、moduleが値ごとに1つ定義した8バイトにそろえた書ける語で、領域はマシンが終わるまで返さない。
+        // ここを呼ぶ`run`と`call`は`&mut self`を取るので、同じslotを使うrunは重ならない。`thunk`は`code`の関数の
+        // 種類の並びのthunkである。その関数は`load`に渡したプログラムからコンパイルしたもので、`load`の呼び手はそれが
+        // 正しいLIRであることを約束する (`load`を見る)。debugのビルドでは、それにverifierを通してある。`argv`は
+        // その関数の引数と結果ごとにslotを持ち、引数を入れてある
         unsafe {
             eml_nrt::run::run(
                 &tables.image,

@@ -1,11 +1,11 @@
 //! `eml_rt`の物体の配置を読む唯一のmodule (docs/spec/object-model.md の「語の位置」)。メモリに触るコード生成をここに置き、
 //! 生成したコードが頼る配置の事実を1か所で`eml_rt`に結び付ける。
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{InstBuilder, MemFlagsData, Value, types};
+use cranelift_codegen::ir::{GlobalValue, InstBuilder, MemFlagsData, Type, Value, types};
 use cranelift_frontend::FunctionBuilder;
 use eml_lir::Shape;
 use eml_rt::rc::{DECREF_FAST_BIAS, DECREF_FAST_SPAN, DUP_FAST_BIAS, DUP_FAST_SPAN};
-use eml_rt::{CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Word, layout};
+use eml_rt::{CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Meta, Word, layout};
 
 // reuseは走査する語が`REUSE_SCANNED_LIMIT`個未満の形だけを組にし、ネイティブのコードはそれを数の語なしで`eml_rt`の上に
 // 下ろすので、上限は`eml_rt`の上限以下でなければならない (docs/spec/object-model.md の「ペイロード」)
@@ -14,6 +14,11 @@ const _: () = assert!(Shape::REUSE_SCANNED_LIMIT as usize <= layout::INLINE_SCAN
 /// `n`の即値の語。呼ぶ側は、タグなど63ビットに収まる値を渡す。
 pub const fn imm_bits(n: i64) -> i64 {
     (n << Word::IMM_SHIFT) | Word::IMM_TAG as i64
+}
+
+/// `n`が即値の語に収まるか。`Heap::alloc_int`が即値を選ぶ範囲である。
+pub const fn fits_imm(n: i64) -> bool {
+    Word::MIN_INT <= n && n <= Word::MAX_INT
 }
 
 /// `()`の語。
@@ -25,6 +30,84 @@ pub const EMPTY_TOKEN: i64 = 0;
 /// 語`w`が即値なら0でない。数えるReprの語は、即値か、物体のヘッダを指す。
 pub fn is_imm(b: &mut FunctionBuilder, w: Value) -> Value {
     b.ins().band_imm_u(w, Word::IMM_TAG as i64)
+}
+
+/// 即値の語`w`の値。算術シフトで印のビットを落とす。
+pub fn imm_value(b: &mut FunctionBuilder, w: Value) -> Value {
+    b.ins().sshr_imm_u(w, i64::from(Word::IMM_SHIFT))
+}
+
+/// `v`の即値の語。呼ぶ側は、`v`が63ビットに収まることを確かめてある。
+pub fn make_imm(b: &mut FunctionBuilder, v: Value) -> Value {
+    let shifted = b.ins().ishl_imm_u(v, i64::from(Word::IMM_SHIFT));
+    b.ins().bor_imm_u(shifted, Word::IMM_TAG as i64)
+}
+
+/// `v`が63ビットに収まる、つまり即値の語にして戻すと`v`になるとき0でない。`Heap::alloc_int`が即値を選ぶ規則と同じである
+/// (docs/spec/object-model.md の「語の位置」)。
+pub fn imm_round_trips(b: &mut FunctionBuilder, v: Value) -> Value {
+    let shifted = b.ins().ishl_imm_u(v, i64::from(Word::IMM_SHIFT));
+    let back = b.ins().sshr_imm_u(shifted, i64::from(Word::IMM_SHIFT));
+    b.ins().icmp(IntCC::Equal, back, v)
+}
+
+/// 物体`obj`のタグ (`I32`)。`meta`の語の下の16ビットである。
+pub fn load_tag(b: &mut FunctionBuilder, obj: Value) -> Value {
+    let meta = b.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        obj,
+        layout::META_BYTE as i32,
+    );
+    b.ins().band_imm_u(meta, i64::from(Meta::TAG_MASK))
+}
+
+/// 走査する語を`scanned`個持つ`Data`の、ペイロードの`position`番目の欄 (`Shape::positions`の位置) のバイトのずれ。
+/// 走査する語が多い形は先頭に数の語を持つので、`eml_rt`の`data_first`の分だけずれる。
+fn field_offset(scanned: u32, position: u32) -> i32 {
+    let first = layout::data_first(scanned as usize, false);
+    i32::try_from(layout::slot_byte_offset(first + position as usize))
+        .expect("a field offset fits in 32 bits")
+}
+
+/// `Data`の物体`obj`の欄を型`ty`で読む。
+pub fn load_field(
+    b: &mut FunctionBuilder,
+    obj: Value,
+    scanned: u32,
+    position: u32,
+    ty: Type,
+) -> Value {
+    b.ins().load(
+        ty,
+        MemFlagsData::trusted(),
+        obj,
+        field_offset(scanned, position),
+    )
+}
+
+/// `Data`の物体`obj`の欄に`v`を書く。
+pub fn store_field(b: &mut FunctionBuilder, obj: Value, scanned: u32, position: u32, v: Value) {
+    b.ins().store(
+        MemFlagsData::trusted(),
+        v,
+        obj,
+        field_offset(scanned, position),
+    );
+}
+
+/// `BigInt`か`Float`の箱`obj`の値を型`ty`で読む。
+pub fn load_box(b: &mut FunctionBuilder, obj: Value, ty: Type) -> Value {
+    let offset = i32::try_from(layout::slot_byte_offset(layout::BOX_VALUE_WORD))
+        .expect("the box value offset fits in 32 bits");
+    b.ins().load(ty, MemFlagsData::trusted(), obj, offset)
+}
+
+/// 読み込み時の値のデータの記号`slot`が持つ語を型`ty`で読む。記号のアドレスはPC相対で、ロードは1つである
+/// (docs/spec/native.md の「値と定数」)。
+pub fn data_word(b: &mut FunctionBuilder, slot: GlobalValue, ty: Type) -> Value {
+    let address = b.ins().symbol_value(types::I64, slot);
+    b.ins().load(ty, MemFlagsData::trusted(), address, 0)
 }
 
 /// 物体`obj`の数。ヘッダの先頭の`I32`である。

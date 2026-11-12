@@ -8,6 +8,21 @@ pub fn function(name: &str) -> String {
     format!("f:{name}")
 }
 
+/// 文字列の定数`text`のデータの記号。
+pub fn string(text: &str) -> String {
+    format!("s:{text}")
+}
+
+/// 即値に収まらない`int`の定数`n`の箱のデータの記号。
+pub fn big_int(n: i64) -> String {
+    format!("i:{n}")
+}
+
+/// ビット列が`bits`の`float`の定数の箱のデータの記号。
+pub fn float(bits: u64) -> String {
+    format!("x:{bits:016x}")
+}
+
 /// 種類の並び`params -> rets`のthunkの記号。`eml$thunk$if$i`のようになる。
 pub fn thunk(params: &[Kind], rets: &[Kind]) -> String {
     let letters = |kinds: &[Kind]| -> String {

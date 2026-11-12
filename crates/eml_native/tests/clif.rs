@@ -441,3 +441,82 @@ fn f(x.0: obj, borrowed y.1: tobj) -> tobj {
     }
     ");
 }
+
+#[test]
+fn a_tag_switch() {
+    // `tobj`のタグは、即値ならその値、物体ならヘッダのタグで、その後`Switch`で分かれる。caseの欄は行き先の先頭で、決まった
+    // ずれのロード1つで読む
+    let text = "\
+layout Opt { None, Some(int, float) }
+fn f(borrowed o.0: tobj) -> int {
+  switch o.0 Opt { #0 -> b1, #1(n.1: int, x.2: float) -> b2 }
+b1:
+  return 0
+b2:
+  return n.1
+}
+";
+    insta::assert_snapshot!(clif(text, "f"), @"
+    function %f:f(i64, i64) -> i64 tail {
+        sig0 = (i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+
+    block0(v0: i64, v1: i64):
+        v2 = load.i64 notrap aligned v0+40
+        v3 = load.i32 notrap aligned v2
+        v4 = iconst.i32 0
+        v5 = icmp ne v3, v4  ; v4 = 0
+        v6 = get_stack_pointer.i64 
+        v7 = load.i64 notrap aligned v0+48
+        v8 = icmp ult v6, v7
+        v9 = bor v5, v8
+        brif v9, block1, block3
+
+    block1 cold:
+        v10 = func_addr.i64 fn0
+        v11 = iconst.i64 0
+        v12 = call fn1(v0, v10, v11)  ; v11 = 0
+        v13 = iconst.i64 0
+        v14 = icmp eq v12, v13  ; v13 = 0
+        brif v14, block3, block2
+
+    block2 cold:
+        v15 = iconst.i64 0
+        return v15  ; v15 = 0
+
+    block3:
+        v17 = iconst.i64 1
+        v18 = band.i64 v1, v17  ; v17 = 1
+        brif v18, block7, block8
+
+    block7:
+        v19 = iconst.i64 1
+        v20 = sshr.i64 v1, v19  ; v19 = 1
+        v21 = ireduce.i32 v20
+        jump block9(v21)
+
+    block8:
+        v22 = load.i32 notrap aligned v1+4
+        v23 = iconst.i32 0xffff
+        v24 = band v22, v23  ; v23 = 0xffff
+        jump block9(v24)
+
+    block9(v16: i32):
+        br_table v16, block6, [block4, block5]
+
+    block6 cold:
+        trap user1
+
+    block4:
+        v25 = iconst.i64 0
+        return v25  ; v25 = 0
+
+    block5:
+        v26 = load.i64 notrap aligned v1+8
+        v27 = load.f64 notrap aligned v1+16
+        return v26
+    }
+    ");
+}

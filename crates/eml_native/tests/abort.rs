@@ -41,7 +41,7 @@ mod fatal {
     fn an_uncaught_panic_reports_the_message() {
         let text = "\
 fn entry$main() -> unit {
-  let m.0: obj = extern \"Prelude.Show Int.show\"(42)
+  let m.0: obj = const \"boom\"
   let r.1: unit = extern Prelude.panic(m.0) @\"main.em\":3:5
   return r.1
 }
@@ -50,7 +50,7 @@ fn entry$main() -> unit {
         let (out, result) = native(text);
         assert_eq!(out, "");
         insta::assert_snapshot!(result.unwrap_err(), @"
-        panicked: 42
+        panicked: boom
           at main.em:3:5
         ");
     }
