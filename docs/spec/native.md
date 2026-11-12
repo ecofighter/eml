@@ -79,7 +79,7 @@
 - 入り直しの規則: emlのコードに入り直すRustのエントリは、生の`ctx`を渡し、`eml_enter`や`eml_fatal`をまたいで、`Ctx`への`&`や`&mut`、workerの構造体への参照、`Drop`を持つ値を持たない
 - `detached(ctx)`は、`jmp`と`runtime`がどちらもnullであること、つまり`Ctx`がどの`eml_enter`の外にもあり、ほかのスレッドへ移せる状態であることを返す ([オブジェクトモデル](object-model.md) の「`unsafe` の核」のT18)
 - stubのあるABIは、AAPCS64 (macOSとLinux)、SysV x86_64 (Windowsでないx86_64)、Win64 (Windowsのx86_64) である
-- 速い道の費用: 生成したコードは、`Native`の欄を`ctx + CTX_*`のロード1つで読む。エントリの呼び出しはCの直接の呼び出しで、間に包む層はない。速い道では`shim`と`plain`の費用は同じである。`eml_enter`の1回の往復は約41命令で、Rustがemlのコードに入るたびに払い、emlの関数どうしの呼び出しのたびには払わない ([計測の基準](../implementation/benchmarks.md) の「ネイティブの数値」)
+- 速い道の費用: 生成したコードは、`Native`の欄を`ctx + CTX_*`のロード1つで読む。エントリの呼び出しはCの直接の呼び出しで、間に包む層はない。速い道では`shim`と`plain`の費用は同じである。`eml_enter`の1回の往復は約42命令で、Rustがemlのコードに入るたびに払い、emlの関数どうしの呼び出しのたびには払わない ([計測の基準](../implementation/benchmarks.md) の「ネイティブの数値」)
 - 諦めた最適化: `Ctx`の`heap`を先に置くこと (理由は[計測の基準](../implementation/benchmarks.md) の「`Ctx`の欄の順」にある)。`catch_unwind`を使わない、失敗しうるエントリの形 (`shim`の速い道にはもう費用がないので、2つ目の失敗の手順を足すだけになる)。stubが保存するレジスタを減らすことや、フレームの記録を省くこと (致命的な誤りのlongjmpは呼ばれる側が保存するレジスタをすべて戻さなければならず、プロファイラはフレームの記録をたどる)。3つのstubのほかのasm
 - 見直す条件 (戻り): longjmpの側の手で書いた`ret`は、CIのどの対象もRustのバイナリにshadow stack (CET、GCS) やbranch protectionを強いないことを前提にする。rustcは、windows-msvcでは`/CETCOMPAT`を渡さず、aarch64のLinuxでは`branch-protection`を有効にしない。ある対象がこれらを強いると、その対象でだけ`fatal::`のテストが落ちる (Windowsでは終了コード`0xC0000409`、ほかではその`ret`でのSIGILLかSIGSEGV)。原因は保存するレジスタの一覧ではなく、この方針である。そのときはstubを設計し直す
 - 見直す条件 (巻き戻しの情報): `shim`の中の`catch_unwind`が捕まえるpanicは、その上のフレーム (stubと生成したコード) の巻き戻しの情報を要しない。要する対象があれば、その対象で`a_shim_cuts_to_enter_on_an_error_and_on_a_panic`が落ちる。そのときの代わりの手は、`shim`が生成したコードの確かめる状態を返し、生成したコードが`eml_fatal`を呼ぶ形である。変わるのは`eml_rt_*`の手順だけである
