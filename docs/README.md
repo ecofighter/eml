@@ -43,6 +43,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (スレッドとworker、メインのworker、スケジューラ、共有の印方式のRC、`par`、継続の移動、止める手順) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |
+| [future/engine-trust.md](future/engine-trust.md) | 将来の設計 | エンジンの信頼の境界の設計 (エントリが呼ぶ側に任せている約束、信頼するプログラムの型、採らなかった案) |
 | **plans/** | 作業中 | 段の設計と計画。段の最初のコミットで入れ、段を閉じるときにその段の計画だけを消す。まとめて計画した段の共有の付録のディレクトリは、最初の段の計画と一緒に入れ、それらの段の最後の段を閉じるときに消す。コードと文書から引かない |
 | **reports/** | 調査 | 実装の方針を決めるための調査レポート。書いた時点のコミットに基づき、後から更新しない |
 | [reports/eml/](reports/eml/) | 調査 | VM のマルチコア対応 |
