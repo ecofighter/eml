@@ -722,6 +722,7 @@ dependencies = [
  "eml_hir",
  "eml_lir",
  "eml_native",
+ "eml_nrt",
  "eml_syntax",
  "eml_types",
  "eml_vm",

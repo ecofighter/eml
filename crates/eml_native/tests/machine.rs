@@ -4,7 +4,7 @@
 use eml_cabi::Linked;
 use eml_native::{Arg, LoadError};
 
-use crate::common::native::{call, checked, clif, machine, program};
+use crate::common::native::{agree, agree_lowered, call, checked, clif, machine, program};
 
 const MAIN: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
 
@@ -194,4 +194,14 @@ fn symbols_cover_every_function() {
     assert_eq!(names(&m), names(&fresh));
     m.close();
     fresh.close();
+}
+
+#[test]
+fn a_function_without_calls_agrees_with_the_vm() {
+    agree("fn entry$main() -> unit {\n  return ()\n}\n");
+}
+
+#[test]
+fn a_lowered_function_without_calls_agrees_with_the_vm() {
+    agree_lowered("fn entry$main() -> unit {\n  return ()\n}\n");
 }

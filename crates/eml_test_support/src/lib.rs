@@ -21,9 +21,13 @@ mod fixtures;
 pub use fixtures::{eml_fixture_gate_open, eml_fixture_gate_wait, fixture_symbols};
 
 #[cfg(feature = "run")]
+pub use eml_cli::Engine;
+#[cfg(feature = "run")]
 use eml_native::Linker;
 #[cfg(feature = "run")]
-use eml_vm::{CaptureHost, Linked, RunConfig, RunStats, RuntimeError};
+use eml_nrt::image::{Census, Options};
+#[cfg(feature = "run")]
+use eml_vm::{CaptureHost, Finished, HostRef, Linked, RunConfig, RunStats, RuntimeError};
 
 pub struct Parsed {
     pub files: SourceFiles,
@@ -348,7 +352,7 @@ pub fn run_stats_on<'a>(
     sources: impl Into<Sources<'a>>,
     host: CaptureHost,
 ) -> (String, Result<RunStats, RuntimeError>) {
-    execute_on(&lir(sources), &checked(), host)
+    execute_on(&lir(sources), &checked(), host, Engine::Vm)
 }
 
 /// 上限のない新しい `Control` を持つ、検査モードの設定。止める理由のビットは `Control::clear` でしか下りないので、
@@ -370,20 +374,51 @@ pub fn execute(
     program: &eml_lir::Program,
     config: &RunConfig,
 ) -> (String, Result<RunStats, RuntimeError>) {
-    execute_on(program, config, capture())
+    execute_on(program, config, capture(), Engine::Vm)
 }
 
-/// LIR を `host` で実行し、捕まえた標準出力を返す。
+/// LIR を `engine` で `host` に実行し、捕まえた標準出力を返す。ネイティブは数えないので、`RunStats` は既定の値になる。
 #[cfg(feature = "run")]
 pub fn execute_on(
     program: &eml_lir::Program,
     config: &RunConfig,
     host: CaptureHost,
+    engine: Engine,
 ) -> (String, Result<RunStats, RuntimeError>) {
     let out = host.output();
-    let result = eml_vm::execute(program, &link(program), config, host.into_ref())
-        .map(|finished| finished.stats);
+    let result =
+        execute_finished(program, config, host.into_ref(), engine).map(|finished| finished.stats);
     (out.contents(), result)
+}
+
+/// `execute_on` と同じく流し、`Finished` のまま返す。終了コードを両方の実行系で比べるテストのため。
+#[cfg(feature = "run")]
+pub fn execute_finished(
+    program: &eml_lir::Program,
+    config: &RunConfig,
+    host: HostRef,
+    engine: Engine,
+) -> Result<Finished, RuntimeError> {
+    let linked = link(program);
+    match engine {
+        Engine::Vm => eml_cli::execute_on(engine, program, &linked, config, host),
+        Engine::Native => execute_native(program, &linked, config, host),
+    }
+}
+
+/// ネイティブのテストの実行は、どれもこれを通し、終わりに census で漏れを確かめる。
+#[cfg(feature = "run")]
+pub fn execute_native(
+    program: &eml_lir::Program,
+    linked: &Linked,
+    config: &RunConfig,
+    host: HostRef,
+) -> Result<Finished, RuntimeError> {
+    let options = Options {
+        census: Census::Check,
+        ..Options::default()
+    };
+    eml_native::execute(program, linked, config, host, options)
 }
 
 /// テストの binary の中で1つの linker を使い回し、ライブラリと橋渡しを作り直さずに済ませる。テストは並んで走るので

@@ -244,6 +244,29 @@ impl Session {
     }
 }
 
+/// 同じ`Linked`のプログラムを流す実行系 (docs/spec/native.md の「VMとの違い」)。
+#[cfg(feature = "run")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    Vm,
+    Native,
+}
+
+/// `program`を`engine`で1回流す。ネイティブは既定の`Options`で流し、`RunStats`は数えない。
+#[cfg(feature = "run")]
+pub fn execute_on(
+    engine: Engine,
+    program: &eml_lir::Program,
+    linked: &Linked,
+    config: &RunConfig,
+    host: HostRef,
+) -> Result<Finished, RuntimeError> {
+    match engine {
+        Engine::Vm => execute(program, linked, config, host),
+        Engine::Native => eml_native::execute(program, linked, config, host, Default::default()),
+    }
+}
+
 /// `eml run` の既定の上限。深さは 2^27 語 (1 GiB 分のスタック) で、OCaml 5 のスタックの既定の上限と同じ量である。
 /// 確保量は物理メモリの 80% で、機械を使い切る前に分かる誤りで止める。物理メモリを読めない OS では上限を置かない。
 /// `evv` はヒープの物体なので、確保量の上限で抑えられる (docs/spec/object-model.md の「実行の制御」)。

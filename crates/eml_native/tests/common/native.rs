@@ -6,6 +6,7 @@ use eml_native::{Arg, NativeMachine};
 use eml_nrt::image::{Census, Options};
 use eml_nrt::{HostRef, RunConfig};
 use eml_rt::{Buffering, StdHost};
+use eml_test_support::{Engine, capture, execute_finished};
 
 /// LIRのテキストを読み、verifierを通す。
 pub fn program(text: &str) -> eml_lir::Program {
@@ -60,4 +61,41 @@ pub fn clif(text: &str, function: &str) -> String {
         .to_string();
     machine.close();
     text
+}
+
+/// LIRのテキストをVMの検査モードとネイティブで流し、標準出力と結果の文と終了コードが同じで、censusがきれいなことを確かめる。
+/// ネイティブのcensusの漏れは`execute_native`が誤りにするので、結果の文が違えば漏れも見つかる。
+pub fn agree(text: &str) {
+    agree_program(&program(text));
+}
+
+/// `agree`と同じだが、`Reuse`までのLIRのパスを通してから流す。
+pub fn agree_lowered(text: &str) {
+    let mut program = program(text);
+    eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
+    agree_program(&program);
+}
+
+fn agree_program(program: &eml_lir::Program) {
+    let vm_config = RunConfig::default().with_debug_heap(true);
+    let vm_host = capture();
+    let vm_out = vm_host.output();
+    let vm = execute_finished(program, &vm_config, vm_host.into_ref(), Engine::Vm);
+    let host = capture();
+    let out = host.output();
+    let native = execute_finished(
+        program,
+        &RunConfig::default(),
+        host.into_ref(),
+        Engine::Native,
+    );
+    assert_eq!(out.contents(), vm_out.contents(), "stdout");
+    assert_eq!(
+        native
+            .map(|finished| finished.exit)
+            .map_err(|error| error.to_string()),
+        vm.map(|finished| finished.exit)
+            .map_err(|error| error.to_string()),
+        "result and exit code"
+    );
 }
