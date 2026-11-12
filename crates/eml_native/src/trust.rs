@@ -7,6 +7,7 @@ const FILES: &[(&str, &str)] = &[
     ("lib.rs", include_str!("lib.rs")),
     ("bridge.rs", include_str!("bridge.rs")),
     ("error.rs", include_str!("error.rs")),
+    ("jit.rs", include_str!("jit.rs")),
     ("library.rs", include_str!("library.rs")),
     ("linker.rs", include_str!("linker.rs")),
     ("abi.rs", include_str!("abi.rs")),
@@ -14,6 +15,8 @@ const FILES: &[(&str, &str)] = &[
     ("thunk.rs", include_str!("thunk.rs")),
     ("unsupported.rs", include_str!("unsupported.rs")),
     ("lower/mod.rs", include_str!("lower/mod.rs")),
+    ("lower/function.rs", include_str!("lower/function.rs")),
+    ("lower/names.rs", include_str!("lower/names.rs")),
     ("lower/rows.rs", include_str!("lower/rows.rs")),
 ];
 
@@ -21,7 +24,7 @@ const FILES: &[(&str, &str)] = &[
 const SKIPPED: &[&str] = &["trust.rs"];
 
 /// `unsafe` を持ち、先頭に `#![allow(unsafe_code)]` を置くファイル。
-const UNSAFE_FILES: &[&str] = &["bridge.rs", "library.rs", "linker.rs"];
+const UNSAFE_FILES: &[&str] = &["bridge.rs", "jit.rs", "library.rs", "linker.rs"];
 
 fn is_ident(c: char) -> bool {
     c.is_alphanumeric() || c == '_'

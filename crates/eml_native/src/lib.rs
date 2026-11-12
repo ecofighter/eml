@@ -10,6 +10,7 @@
 pub mod abi;
 mod bridge;
 mod error;
+mod jit;
 mod library;
 mod linker;
 mod lower;
@@ -21,6 +22,7 @@ mod unsupported;
 
 pub use bridge::Bridges;
 pub use error::LinkError;
+pub use jit::{Arg, LoadError, Loaded, NativeMachine, Symbol, execute};
 pub use library::{candidates, running_os};
 pub use linker::Linker;
 pub use lower::rows;

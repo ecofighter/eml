@@ -240,7 +240,8 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
             entry.params,
             &rets,
         )
-        .unwrap();
+        .unwrap()
+        .0;
         callers.push((entry, id, th));
     }
     m.finalize_definitions().unwrap();
@@ -330,7 +331,9 @@ fn tail_calls_and_multiple_results_run() {
             b.ins().return_call(wide, &args);
         },
     );
-    let th = define_thunk(&mut m, "thunk$count", &[I64, I64], &[I64, F64, I64]).unwrap();
+    let th = define_thunk(&mut m, "thunk$count", &[I64, I64], &[I64, F64, I64])
+        .unwrap()
+        .0;
     m.finalize_definitions().unwrap();
     let mut ctx = ctx();
     let n = 10_000_000u64;
@@ -449,11 +452,17 @@ fn the_code_generator_features_run() {
         b.ins().return_(&[sum]);
     });
 
-    let thunk_read = define_thunk(&mut m, "thunk$read", &[], &[I64]).unwrap();
-    let thunk_bounce = define_thunk(&mut m, "thunk$bounce", &[I64, I64, I64], &[I64, I64]).unwrap();
-    let thunk_big = define_thunk(&mut m, "thunk$big", &[], &[I64]).unwrap();
-    let thunk_overflow = define_thunk(&mut m, "thunk$overflow", &[I64, I64], &[I64; 6]).unwrap();
-    let thunk_sp = define_thunk(&mut m, "thunk$sp", &[], &[I64, I64]).unwrap();
+    let thunk_read = define_thunk(&mut m, "thunk$read", &[], &[I64]).unwrap().0;
+    let thunk_bounce = define_thunk(&mut m, "thunk$bounce", &[I64, I64, I64], &[I64, I64])
+        .unwrap()
+        .0;
+    let thunk_big = define_thunk(&mut m, "thunk$big", &[], &[I64]).unwrap().0;
+    let thunk_overflow = define_thunk(&mut m, "thunk$overflow", &[I64, I64], &[I64; 6])
+        .unwrap()
+        .0;
+    let thunk_sp = define_thunk(&mut m, "thunk$sp", &[], &[I64, I64])
+        .unwrap()
+        .0;
     m.finalize_definitions().unwrap();
 
     // `big`は、まだ何も深く触れていない小さいスタックの新しいスレッドで最初に流す。Windowsはスタックをガードページ1枚ずつ
@@ -546,7 +555,7 @@ fn a_second_round_reaches_the_first() {
         let r = b.ins().iadd(word, r);
         b.ins().return_(&[r]);
     });
-    let th = define_thunk(&mut m, "thunk$sum", &[], &[I64]).unwrap();
+    let th = define_thunk(&mut m, "thunk$sum", &[], &[I64]).unwrap().0;
     m.finalize_definitions().unwrap();
     let mut ctx = ctx();
     let mut argv = [0u64];
@@ -601,7 +610,9 @@ mod fatal {
             let r1 = b.ins().iadd_imm_s(r, 1);
             b.ins().return_(&[r1]);
         });
-        let th = define_thunk(&mut m, "thunk$deep", &[I64], &[I64]).unwrap();
+        let th = define_thunk(&mut m, "thunk$deep", &[I64], &[I64])
+            .unwrap()
+            .0;
         m.finalize_definitions().unwrap();
         let mut ctx = ctx();
         for depth in [0u64, 1, 100] {

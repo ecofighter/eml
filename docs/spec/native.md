@@ -145,6 +145,19 @@ workerの構造体 (`eml_nrt::worker::Worker`) は、runが`Ctx`の外に持つ�
 
 censusは、VMの検査モードに代わる、参照の数の安全網である。`Census::Check`のrunが成功したら、ほかのスレッドから受けた解放を取り込み (`reclaim`)、workerのヒープの生きている物体を列挙し (`Heap::live_objects`)、不死でない物体 (`Heap::is_immortal`) を種類の名前ごとに数える。ダミーや定数のような不死の物体は数えない。数が空でなければ`RuntimeError::Leak`で、`memory leak: objects were not freed: 1 Data`と表示する。テストのネイティブのrunは、どれもcensusで終わる。
 
+## 関数の形
+
+コード生成器 (crate `eml_native`) は、LIRの関数1つをCraneliftの関数1つに下ろし、JITのホスト`NativeMachine`がそのコードを持つ。
+
+- LIRの関数はどれも、`lower::signature_of`を通して、`abi::tail_signature`が作る`tail`のシグネチャ`(ctx, 葉...) -> 葉...`を持つ。最初の引数は`ctx`の語で、LIRの関数の引数と結果はそれぞれ葉1つである
+- `Float`の葉の型は`F64`で、ほかのRepr (`obj`、`tobj`、`unit`、`int`、`enum`、`token`) の型は`I64`である。開いた後には構造体の値はない。LIRは変数を1回だけ束縛するので、変数1つがCLIFの値1つになり、LIRのブロックの引数はCLIFのブロックの引数になる。定数は使う所ごとに、その位置のReprで作る。`int`はその値、`float`はそのビット、`()`は語`Word::UNIT`で、タグは`enum`の位置ではその番号、`tobj`の位置ではその即値の語である ([LIR](lir.md)の「値の表現」が、タグをこの2つの位置にだけ置く)
+- `return`は葉を順に返し、`jump`は引数をブロックの引数として渡す。`int`か`enum`の`switch`は、値をcaseと比べる (`cranelift_frontend::Switch`)。`default`のない`switch`は、合うcaseがなければtrapする。検証したプログラムでは、これは起こらない。定数の`switch`は、VMと同じくコンパイルの時点で行き先を決める
+- どの関数とthunkもmoduleの記号を持つ。その名前はLIRの名前と種類だけで決まり、読み込みの順やアドレスにはよらない。LIRの関数は`f:<名前>`、thunkは`eml$thunk$<引数>$<結果>`で、種類はそれぞれ`i` (`I64`) か`f` (`F64`) と書く。moduleが定義する記号はどれもローカルのリンケージを持つので、直接の呼び出しは領域の中のPC相対の呼び出しになる。`NativeMachine::symbols()`は、マシンが定義したすべての関数とthunkの名前とコードの範囲を返す。`Image.functions[i].{code, size}`と合わせて、コードのアドレスから名前を引ける
+- マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、`eml_nrt::entries()`のすべてのエントリを記号として登録し、どの関数を定義するよりも前にすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`と`call`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
+- `load`はプログラムを信頼する。プログラムは、型を検査したプログラムから作った最後のパスの後のLIRか、同じ規則を守る手書きのLIRである。ネイティブのコードが実行時に確かめることは、VMの速いモードが確かめることを超えない ([オブジェクトモデル](object-model.md)の「受け入れる制約」) ので、ほかのプログラムの振る舞いは未定義である。verifierはこの約束の一部しか確かめない。R8は、値を作ったときの配置をたどらない ([LIR](lir.md)の「構造の規則」)。debugのビルドでは、`load`はプログラムに所有の段のverifierを通し、通らなければ`internal error: invalid LIR at the native load: ...`でpanicする。VMと違ってネイティブには検査モードがないので、verifierが断るプログラムを読み込むテストはない
+- マシンのworkerはそのmoduleと領域を共有し、プロセス全体のmoduleはない。マシンは、`close`でも`Drop`でも、終わるときに領域を`free_memory`で返す。どのrunもworkerのスレッドが終わってから戻るので、そのとき領域のコードを実行しているものはない
+- `NativeMachine::run`は入口を実行する。入口は引数を取らない (取れば内部の誤り`the entry function takes parameters`を返す)。`eml_native::execute`は、マシンを作り、プログラムを読み込んで実行し、マシンを閉じる。読み込みの誤りは、入口の関数を名指す内部の誤りになる。その文は、領域が尽きたときは`the native code region is full`、ほかのmoduleの誤りでは`the native code cannot be built`である。`eml_nrt::SUPPORTED`が偽の対象では、`execute`は読み込む前に、`NativeMachine::run`と`call`はthunkを作る前に、内部の誤り`native code is not supported on this machine`を返す
+
 ## 安全点
 
 - workerのスタックは、`Options.stack`がほかの値を決めなければ`WORKER_STACK` (1 GiB) を予約する。ページはスタックが伸びるにつれて確定する
