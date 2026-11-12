@@ -215,13 +215,8 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             } => self.const_string(*var, *index),
             Stmt::Let {
                 var,
-                rhs:
-                    Rhs::Con {
-                        ctor,
-                        args,
-                        reuse: None,
-                    },
-            } => self.con(*var, *ctor, args),
+                rhs: Rhs::Con { ctor, args, reuse },
+            } => self.con(*var, *ctor, args, reuse.as_ref()),
             Stmt::Let {
                 var,
                 rhs: Rhs::Box(atom),
@@ -235,6 +230,19 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 ctor,
                 fields,
             } => self.unpack(*value, *ctor, fields),
+            Stmt::UnboxStruct {
+                value,
+                ctor,
+                fields,
+            } => self.unbox_struct(*value, *ctor, fields),
+            Stmt::Release {
+                value,
+                ctor,
+                fields,
+                token,
+                unboxed,
+            } => self.release(*value, *ctor, fields, *token, *unboxed),
+            Stmt::DropToken(token) => self.drop_token(*token),
             Stmt::Dup(var) => {
                 let (w, repr) = self.counted_var(*var);
                 self.dup(w, repr);

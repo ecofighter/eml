@@ -1,9 +1,13 @@
-//! 構築子、欄、`switch`、箱、文字列の定数 (docs/spec/native.md の「データ」、docs/spec/native.md の「値と定数」)。
+//! 構築子、欄、`switch`、箱、文字列の定数、`release`、token、reuse、構造体の箱 (docs/spec/native.md の「データ」、
+//! docs/spec/native.md の「値と定数」)。
 //! 欄の位置は`LayoutCtor::shape()`から取り、`mem`の関数で読み書きする。
 use cranelift_codegen::ir::{Block, BlockArg, InstBuilder, TrapCode, Type, Value, types};
 use cranelift_frontend::Switch;
 use cranelift_module::Module;
-use eml_lir::{Atom, BlockId, Case, CasePattern, Ctor, LayoutCtor, LirFn, Mark, Repr, Term, VarId};
+use eml_lir::{
+    Atom, BlockId, Case, CasePattern, Ctor, LayoutCtor, LirFn, Mark, Repr, Reuse, Shape, Term,
+    VarId,
+};
 
 use super::consts::Datum;
 use super::function::FnLower;
@@ -58,8 +62,10 @@ impl<M: Module> FnLower<'_, '_, M> {
         &self.callees.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize]
     }
 
-    /// `let var = con ctor(args)`。物体をエントリで作り、どの欄もストア1つで書く。`args`の所有は物体へ移る。
-    pub(super) fn con(&mut self, var: VarId, ctor: Ctor, args: &[Atom]) {
+    /// `let var = con ctor(args)`。物体をエントリで作り、どの欄もストア1つで書く。`args`の所有は物体へ移る。`reuse`があれば、
+    /// 空でないtokenの箱に作り、書かない印の欄を飛ばす。箱は中身を消さないので、飛ばした欄には元の語が残っている。空の
+    /// tokenなら`reuse`のない`con`と同じに確保し、どの欄も書く (docs/spec/native.md の「データ」)。
+    pub(super) fn con(&mut self, var: VarId, ctor: Ctor, args: &[Atom], reuse: Option<&Reuse>) {
         let layout_ctor = self.layout_ctor(ctor);
         let shape = layout_ctor.shape();
         let reprs = layout_ctor.fields.clone();
@@ -76,13 +82,206 @@ impl<M: Module> FnLower<'_, '_, M> {
             i64::from(lin),
         ]
         .map(|n| self.b.ins().iconst(types::I64, n));
+        let Some(reuse) = reuse else {
+            let w = self.alloc_con(&head, &shape, &values);
+            self.bind(var, w);
+            return;
+        };
+        let tok = self.var(reuse.token);
+        let fresh = self.b.create_block();
+        let reused = self.b.create_block();
+        let done = self.b.create_block();
+        let w = self.b.append_block_param(done, types::I64);
+        self.b.ins().brif(tok, reused, &[], fresh, &[]);
+        self.b.switch_to_block(fresh);
+        let new = self.alloc_con(&head, &shape, &values);
+        self.b.ins().jump(done, &[BlockArg::Value(new)]);
+        self.b.switch_to_block(reused);
+        let at = if reuse.in_place {
+            mem::box_of_token(&mut self.b, tok)
+        } else {
+            let [tag, scanned, raw, lin] = head;
+            self.call_entry("eml_rt_con_at", &[tok, tag, scanned, raw, lin])
+                .expect("`eml_rt_con_at` returns its word")
+        };
+        for ((&value, &position), &skip) in values.iter().zip(&shape.positions).zip(&reuse.skip) {
+            if !skip {
+                mem::store_field(&mut self.b, at, shape.scanned, position, value);
+            }
+        }
+        self.b.ins().jump(done, &[BlockArg::Value(at)]);
+        self.b.switch_to_block(done);
+        self.bind(var, w);
+    }
+
+    /// `eml_rt_alloc_data`で物体を作り、どの欄も書く。`head`は`tag`、`scanned`、`raw`、`lin`の語である。
+    fn alloc_con(&mut self, head: &[Value; 4], shape: &Shape, values: &[Value]) -> Value {
         let w = self
-            .call_entry("eml_rt_alloc_data", &head)
+            .call_entry("eml_rt_alloc_data", head)
             .expect("an allocation returns its word");
-        for (value, &position) in values.into_iter().zip(&shape.positions) {
+        for (&value, &position) in values.iter().zip(&shape.positions) {
             mem::store_field(&mut self.b, w, shape.scanned, position, value);
         }
-        self.bind(var, w);
+        w
+    }
+
+    /// `release value ctor(fields)`。`token`があれば、tokenを作る形である。`value`の参照を1つ手放し、名前を書いた欄が
+    /// その子の参照を1つずつ受け取る。値はいつも欄のある構築子の箱なので、数は即値を確かめずに読む。数が1なら、残さない
+    /// 子を手放し、箱を空けるか、箱の語をそのままtokenにする。ほかの数では`eml_rt_is_last`に問う。最後の参照 (数-1) なら
+    /// 箱を空け、そうでなければ残す子を`dup`して`value`を手放す。tokenを作る形は、数が1のときのほかは空のtokenを作る
+    /// (docs/spec/native.md の「データ」)。`unboxed`の形は、ダミーを受けたら何もせず、空のtokenを作る。
+    pub(super) fn release(
+        &mut self,
+        value: VarId,
+        ctor: Ctor,
+        fields: &[Option<VarId>],
+        token: Option<VarId>,
+        unboxed: bool,
+    ) {
+        let x = self.var(value);
+        let done = self.b.create_block();
+        let made = token.map(|_| self.b.append_block_param(done, types::I64));
+        if unboxed {
+            let dummy = self.cold_block();
+            let object = self.b.create_block();
+            let is_dummy = mem::is_big_int(&mut self.b, x);
+            self.b.ins().brif(is_dummy, dummy, &[], object, &[]);
+            self.b.switch_to_block(dummy);
+            self.jump_empty(done, token.is_some());
+            self.b.switch_to_block(object);
+        }
+        let layout_ctor = self.layout_ctor(ctor);
+        let shape = layout_ctor.shape();
+        // 走査する欄ごとの、受け取る変数 (`None`は残さない子)、位置、Reprである
+        let children: Vec<(Option<VarId>, u32, Repr)> = fields
+            .iter()
+            .zip(&shape.positions)
+            .zip(&layout_ctor.fields)
+            .filter(|(_, repr)| repr.is_rc())
+            .map(|((&field, &position), &repr)| (field, position, repr))
+            .collect();
+        let rc = mem::load_rc(&mut self.b, x);
+        let unique = mem::is_one_ref(&mut self.b, rc);
+        let ask = self.cold_block();
+        let last = self.b.create_block();
+        match token {
+            None => {
+                self.b.ins().brif(unique, last, &[], ask, &[]);
+            }
+            Some(_) => {
+                let owned = self.b.create_block();
+                self.b.ins().brif(unique, owned, &[], ask, &[]);
+                self.b.switch_to_block(owned);
+                self.drop_unkept(x, shape.scanned, &children);
+                let tok = mem::token_of_box(&mut self.b, x);
+                self.b.ins().jump(done, &[BlockArg::Value(tok)]);
+            }
+        }
+        self.b.switch_to_block(ask);
+        let shared = self.b.create_block();
+        let is_last = self
+            .call_entry("eml_rt_is_last", &[x])
+            .expect("`eml_rt_is_last` returns 0 or 1");
+        self.b.ins().brif(is_last, last, &[], shared, &[]);
+        self.b.switch_to_block(last);
+        self.drop_unkept(x, shape.scanned, &children);
+        self.call_entry("eml_rt_free_block", &[x]);
+        self.jump_empty(done, token.is_some());
+        self.b.switch_to_block(shared);
+        for &(field, _, repr) in &children {
+            if let Some(field) = field {
+                let child = self.var(field);
+                self.dup(child, repr);
+            }
+        }
+        self.decref(x, Repr::Obj);
+        self.jump_empty(done, token.is_some());
+        self.b.switch_to_block(done);
+        if let (Some(token), Some(made)) = (token, made) {
+            self.bind(token, made);
+        }
+    }
+
+    /// 最後の参照を持つ箱`x`の、残さない子を手放す。子は箱の最後の参照の分と数える。
+    fn drop_unkept(&mut self, x: Value, scanned: u32, children: &[(Option<VarId>, u32, Repr)]) {
+        for &(field, position, repr) in children {
+            if field.is_none() {
+                let child = mem::load_field(&mut self.b, x, scanned, position, types::I64);
+                self.decref(child, repr);
+            }
+        }
+    }
+
+    /// `done`へ進む。`token`なら空のtokenを渡す。
+    fn jump_empty(&mut self, done: Block, token: bool) {
+        if token {
+            let empty = self.b.ins().iconst(types::I64, mem::EMPTY_TOKEN);
+            self.b.ins().jump(done, &[BlockArg::Value(empty)]);
+        } else {
+            self.b.ins().jump(done, &[]);
+        }
+    }
+
+    /// `drop_token tok`。空のtokenなら何もしない (`Heap::drop_token`)。
+    pub(super) fn drop_token(&mut self, token: VarId) {
+        let tok = self.var(token);
+        self.call_entry("eml_rt_drop_token", &[tok]);
+    }
+
+    /// `let (fields) = unbox value ctor`。欄は箱から借りる。箱がダミー (`BigInt`) なら、数える葉には箱の語を、生の葉には
+    /// ビット列0を置く。呼び出しの結果を受け直す`unbox`は中断の確かめの前にあり、ダミーを受けうるためである
+    /// (docs/spec/native.md の「データ」、docs/spec/object-model.md の「ダミーの値」)。
+    pub(super) fn unbox_struct(&mut self, value: VarId, ctor: Ctor, fields: &[Option<VarId>]) {
+        let w = self.var(value);
+        let layout_ctor = self.layout_ctor(ctor);
+        let shape = layout_ctor.shape();
+        let leaves: Vec<(VarId, u32, bool)> = fields
+            .iter()
+            .zip(&shape.positions)
+            .zip(&layout_ctor.fields)
+            .filter_map(|((&field, &position), repr)| field.map(|f| (f, position, repr.is_rc())))
+            .collect();
+        let dummy = self.cold_block();
+        let object = self.b.create_block();
+        let done = self.b.create_block();
+        let types: Vec<Type> = leaves
+            .iter()
+            .map(|&(leaf, _, _)| clif(kind(self.function.repr(leaf))))
+            .collect();
+        for &ty in &types {
+            self.b.append_block_param(done, ty);
+        }
+        let is_dummy = mem::is_big_int(&mut self.b, w);
+        self.b.ins().brif(is_dummy, dummy, &[], object, &[]);
+        self.b.switch_to_block(dummy);
+        let placeholders: Vec<BlockArg> = leaves
+            .iter()
+            .zip(&types)
+            .map(|(&(_, _, rc), &ty)| {
+                BlockArg::Value(if rc {
+                    w
+                } else if ty == types::F64 {
+                    self.b.ins().f64const(0.0)
+                } else {
+                    self.b.ins().iconst(ty, 0)
+                })
+            })
+            .collect();
+        self.b.ins().jump(done, &placeholders);
+        self.b.switch_to_block(object);
+        let loaded: Vec<BlockArg> = leaves
+            .iter()
+            .zip(&types)
+            .map(|(&(_, position, _), &ty)| {
+                BlockArg::Value(mem::load_field(&mut self.b, w, shape.scanned, position, ty))
+            })
+            .collect();
+        self.b.ins().jump(done, &loaded);
+        self.b.switch_to_block(done);
+        for (i, &(leaf, _, _)) in leaves.iter().enumerate() {
+            let param = self.b.block_params(done)[i];
+            self.bind(leaf, param);
+        }
     }
 
     /// `ctor`の物体`value`の欄を`fields`に束縛する。欄は物体から借りるので、数は変えない。

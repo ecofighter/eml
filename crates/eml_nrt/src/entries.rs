@@ -388,27 +388,14 @@ mod tests {
     }
 
     #[test]
-    fn heap_into_token_keeps_the_address() {
-        use crate::heap::{eml_rt_alloc_data, eml_rt_drop_token, eml_rt_into_token};
+    fn heap_drop_token_frees_an_unused_block() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_drop_token};
         let mut ctx = ctx();
         let c: *mut Ctx<Fast> = &mut *ctx;
         // SAFETY: 上と同じ。参照はただ1つで、子はない
         unsafe {
             let w = eml_rt_alloc_data(c, 0, 0, 2, 0);
-            let token = eml_rt_into_token(c, w);
-            assert_eq!(token, w);
-            eml_rt_drop_token(c, token);
-        }
-    }
-
-    #[test]
-    fn heap_drop_token_frees_an_unused_block() {
-        use crate::heap::{eml_rt_alloc_data, eml_rt_drop_token, eml_rt_into_token};
-        let mut ctx = ctx();
-        let c: *mut Ctx<Fast> = &mut *ctx;
-        // SAFETY: 上と同じ
-        unsafe {
-            let token = eml_rt_into_token(c, eml_rt_alloc_data(c, 0, 0, 2, 0));
+            let token = (*c).heap_mut().into_token(w).unwrap().into_word();
             eml_rt_drop_token(c, token);
             assert_eq!(live(&mut *c), []);
             eml_rt_drop_token(c, Word::EMPTY);
@@ -417,37 +404,14 @@ mod tests {
     }
 
     #[test]
-    fn heap_reuse_in_place_keeps_the_block() {
-        use crate::heap::{
-            eml_rt_alloc_data, eml_rt_decref, eml_rt_into_token, eml_rt_reuse_in_place,
-        };
-        let mut ctx = ctx();
-        let c: *mut Ctx<Fast> = &mut *ctx;
-        // SAFETY: 上と同じ。作り直す物体はtagとscanと`lin`が箱と同じである
-        unsafe {
-            let w = eml_rt_alloc_data(c, 4, 0, 1, 0);
-            let token = eml_rt_into_token(c, w);
-            let again = eml_rt_reuse_in_place(c, token, 4, 0, 0);
-            assert_eq!(again, w);
-            let meta = (*c).heap().meta(again).unwrap();
-            assert_eq!(
-                (meta.kind(), meta.tag(), meta.scan()),
-                (ObjectKind::Data, 4, 0)
-            );
-            eml_rt_decref(c, again);
-            assert_eq!(live(&mut *c), []);
-        }
-    }
-
-    #[test]
     fn heap_con_at_rewrites_the_header() {
-        use crate::heap::{eml_rt_alloc_data, eml_rt_con_at, eml_rt_decref, eml_rt_into_token};
+        use crate::heap::{eml_rt_alloc_data, eml_rt_con_at, eml_rt_decref};
         let mut ctx = ctx();
         let c: *mut Ctx<Fast> = &mut *ctx;
         // SAFETY: 上と同じ。走査する語を持たないので、書く前に読まれても子をたどらない
         unsafe {
             let w = eml_rt_alloc_data(c, 4, 0, 2, 0);
-            let token = eml_rt_into_token(c, w);
+            let token = (*c).heap_mut().into_token(w).unwrap().into_word();
             let again = eml_rt_con_at(c, token, 9, 0, 2, 0);
             let meta = (*c).heap().meta(again).unwrap();
             assert_eq!(

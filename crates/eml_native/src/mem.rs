@@ -5,7 +5,7 @@ use cranelift_codegen::ir::{GlobalValue, InstBuilder, MemFlagsData, Type, Value,
 use cranelift_frontend::FunctionBuilder;
 use eml_lir::Shape;
 use eml_rt::rc::{DECREF_FAST_BIAS, DECREF_FAST_SPAN, DUP_FAST_BIAS, DUP_FAST_SPAN};
-use eml_rt::{CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Meta, Word, layout};
+use eml_rt::{CTX_FAULT, CTX_STACK_LIMIT, CTX_STOP, CTX_YIELD_TARGET, Kind, Meta, Word, layout};
 
 // reuseは走査する語が`REUSE_SCANNED_LIMIT`個未満の形だけを組にし、ネイティブのコードはそれを数の語なしで`eml_rt`の上に
 // 下ろすので、上限は`eml_rt`の上限以下でなければならない (docs/spec/object-model.md の「ペイロード」)
@@ -60,6 +60,37 @@ pub fn load_tag(b: &mut FunctionBuilder, obj: Value) -> Value {
         layout::META_BYTE as i32,
     );
     b.ins().band_imm_u(meta, i64::from(Meta::TAG_MASK))
+}
+
+/// 物体`obj`が`BigInt`なら0でない。ダミーは`BigInt`で、構造体の箱はいつも`Data`なので、構造体の箱を受ける所ではこれで
+/// ダミーを見分ける (docs/spec/object-model.md の「ダミーの値」)。
+pub fn is_big_int(b: &mut FunctionBuilder, obj: Value) -> Value {
+    let meta = b.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        obj,
+        layout::META_BYTE as i32,
+    );
+    let kind = b
+        .ins()
+        .band_imm_u(meta, i64::from(Meta::KIND_MASK << Meta::KIND_SHIFT));
+    b.ins().icmp_imm_u(
+        IntCC::Equal,
+        kind,
+        i64::from((Kind::BigInt as u32) << Meta::KIND_SHIFT),
+    )
+}
+
+/// 一意な箱`obj`のtoken。速いモードのtokenは箱を指す語なので、箱の語そのものである。`Heap::into_token`も速いモードでは
+/// 何も書かない (docs/spec/object-model.md の「検査モードの token」)。
+pub fn token_of_box(_b: &mut FunctionBuilder, obj: Value) -> Value {
+    obj
+}
+
+/// 空でないtoken`tok`の箱。`token_of_box`の逆で、`Heap::reuse_in_place`と同じくヘッダに何も書かない
+/// (docs/spec/object-model.md の「検査モードの token」)。
+pub fn box_of_token(_b: &mut FunctionBuilder, tok: Value) -> Value {
+    tok
 }
 
 /// 走査する語を`scanned`個持つ`Data`の、ペイロードの`position`番目の欄 (`Shape::positions`の位置) のバイトのずれ。
@@ -136,6 +167,12 @@ pub fn dup_is_local(b: &mut FunctionBuilder, rc: Value) -> Value {
 /// 解放するので、遅い道を通る。
 pub fn decref_is_local(b: &mut FunctionBuilder, rc: Value) -> Value {
     in_span(b, rc, DECREF_FAST_BIAS, DECREF_FAST_SPAN)
+}
+
+/// 数`rc`が1、つまり呼ぶ側の参照がただ1つの局所の参照なら0でない。共有、不死、張り付いた数は、どれもこの比較で外れる
+/// (`Heap::is_unique`の規則)。
+pub fn is_one_ref(b: &mut FunctionBuilder, rc: Value) -> Value {
+    b.ins().icmp_imm_u(IntCC::Equal, rc, 1)
 }
 
 /// `(rc as u32).wrapping_sub(bias) < span`。`bias`より小さい数 (0と共有の負の数) は、引くと符号なしで大きくなるので、

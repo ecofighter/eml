@@ -92,33 +92,6 @@ crate::entries! {
         Ok::<(), HeapError>(())
     }
 
-    /// 一意な`Data`の箱を、フィールドに触れずにtokenにする。
-    ///
-    /// # Safety
-    /// `w`はこのヒープの生きている`Data`で、呼ぶ側がただ1つの参照を持ち (数が1)、子の参照は処理してある。持ち主は今の
-    /// workerである。
-    pub(crate) shim fn eml_rt_into_token(ctx, w: obj) -> token {
-        // SAFETY: 呼ぶ側の約束
-        let token = unsafe { ctx.heap_mut().into_token(w) }?;
-        Ok::<Word, HeapError>(token.into_word())
-    }
-
-    /// 同じコンストラクタの再利用。ヘッダに何も書かずに箱を物体として返す。
-    ///
-    /// # Safety
-    /// `token`はこのヒープの空でないtokenで、まだ使っていない。`tag`、`scanned`、`lin`は箱の`meta`と同じである。
-    pub(crate) shim fn eml_rt_reuse_in_place(ctx, token: token, tag: i64, scanned: i64, lin: i64) -> obj {
-        let (tag, scanned, _) = data_shape(tag, scanned, 0);
-        debug_assert!(!layout::data_extended(scanned, false), "a scanned count needs a count word");
-        let meta = layout::data_meta(tag, scanned, lin != 0);
-        // SAFETY: 呼ぶ側の約束。tokenは`eml_rt_into_token`が返した語か、空の語である
-        let w = unsafe {
-            let token = Token::from_word(token);
-            ctx.heap_mut().reuse_in_place(token, meta)
-        }?;
-        Ok::<Word, HeapError>(w)
-    }
-
     /// tokenの箱に`Data`のヘッダを書く。tokenが空なら確保する。フィールドは呼ぶ側が書く。
     ///
     /// # Safety
@@ -128,7 +101,8 @@ crate::entries! {
         let (tag, scanned, raw) = data_shape(tag, scanned, raw);
         debug_assert!(!layout::data_extended(scanned, false), "a scanned count needs a count word");
         let meta = layout::data_meta(tag, scanned, lin != 0);
-        // SAFETY: 呼ぶ側の約束。上と同じ
+        // SAFETY: 呼ぶ側の約束。速いモードのtokenは箱の語か空の語なので、生成したコードが一意な箱の語をそのまま渡した
+        // tokenは`Heap::into_token`が返す語と同じである (docs/spec/object-model.md の「検査モードの token」)
         let (w, _reused) = unsafe {
             let token = Token::from_word(token);
             ctx.heap_mut().con_at(token, scanned + raw, meta)
@@ -141,7 +115,7 @@ crate::entries! {
     /// # Safety
     /// `token`はこのヒープのtokenで、まだ使っていない。
     pub(crate) shim fn eml_rt_drop_token(ctx, token: token) {
-        // SAFETY: 呼ぶ側の約束
+        // SAFETY: 呼ぶ側の約束。tokenの語は`eml_rt_con_at`と同じである
         unsafe {
             let token = Token::from_word(token);
             ctx.heap_mut().drop_token(token)

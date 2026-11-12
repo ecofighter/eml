@@ -8,5 +8,6 @@ mod data;
 mod linker;
 mod machine;
 mod rc;
+mod reuse;
 mod rows;
 mod unsupported;

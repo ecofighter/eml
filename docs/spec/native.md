@@ -43,7 +43,7 @@
 
 表にあるエントリは`eml_fatal`だけである。
 
-速いモードでヒープの操作が`Err`を返すのは、次の場合だけである: `WrongKind` (`foreign*`の種類か、型の食い違い)、`StaleToken` (空のトークンへの`reuse_in_place`)、`RootMisuse`と`Unrecoverable` (根と回復の操作)。どれも生成したコードからは回復できない。だからヒープのエントリは致命的な誤りだけで終わる。
+速いモードでヒープの操作が`Err`を返すのは、次の場合だけである: `WrongKind` (`foreign*`の種類か、型の食い違い)、`StaleToken` (空のtokenへの`reuse_in_place`。生成したコードは`reuse_in_place`を呼ばず、tokenの語をそのまま箱にする。「データ」を見る)、`RootMisuse`と`Unrecoverable` (根と回復の操作)。どれも生成したコードからは回復できない。だからヒープのエントリは致命的な誤りだけで終わる。
 
 ### ヒープのエントリ
 
@@ -58,13 +58,12 @@
 | `eml_rt_decref` | `w` -> なし | `Heap::decref` |
 | `eml_rt_is_last` | `w` -> 0か1 | `Heap::is_last` |
 | `eml_rt_free_block` | `w` -> なし | `Heap::free_block` |
-| `eml_rt_into_token` | `w` -> token | `Heap::into_token` |
-| `eml_rt_reuse_in_place` | `token, tag, scanned, lin` -> 語 | `Heap::reuse_in_place` (`meta`は`layout::data_meta`で作る) |
 | `eml_rt_con_at` | `token, tag, scanned, raw, lin` -> 語 | `Heap::con_at` (語の数は`scanned + raw`) |
 | `eml_rt_drop_token` | `token` -> なし | `Heap::drop_token` |
 | `eml_rt_fault_arith` | `kind` -> なし | `Ctx::set_fault(Fault::Arith(..))` |
 
-- どのエントリも、包む関数の前提をそのまま持ち、生成したコードがそれを守る。`eml_rt_reuse_in_place`と`eml_rt_con_at`の`scanned`は、`Data`の`meta`が数の語を要しない範囲にある (`eml_rt_alloc_data`は数の語を持つ物体も作れる)。debugのビルドでは、`tag`が16ビットに収まることと、`scanned`、`raw`が負でないこと、この2つのエントリの`scanned`が上の範囲にあることを確かめる
+- どのエントリも、包む関数の前提をそのまま持ち、生成したコードがそれを守る。`eml_rt_con_at`の`scanned`は、`Data`の`meta`が数の語を要しない範囲にある (`eml_rt_alloc_data`は数の語を持つ物体も作れる)。debugのビルドでは、`tag`が16ビットに収まることと、`scanned`、`raw`が負でないこと、`eml_rt_con_at`の`scanned`が上の範囲にあることを確かめる
+- `eml_rt_con_at`と`eml_rt_drop_token`が受けるtokenは、生成したコードが一意な箱の語をそのまま移した語か、空の語である。速いモードのtokenは箱の語なので、これは`Heap::into_token`が返す語と同じである ([オブジェクトモデル](object-model.md)の「検査モードの token」)
 - `eml_rt_fault_arith`だけは、失敗を`Ctx`に置いて戻る。生成したコードは、呼び出しの後で無条件に`eml$raise`へ進み、faultの語は確かめない。`kind`は`eml_nrt::image`の`ARITH_DIVISION_BY_ZERO` (0) か`ARITH_INTEGER_OVERFLOW` (1) で、ほかの値は内部の誤りである
 
 ### `eml_enter`
@@ -252,7 +251,12 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - `unpack`とcaseの欄は、どの欄も決まったずれでのロード1つで読む。欄は値から借りるので、数は変わらない。caseの欄は行き先のブロックの先頭で読む。`switch`の行き先に入る辺は、その`switch`の1本だけである ([LIR](lir.md)の「構造の規則」のR3)
 - タグの`switch`では、`enum`のタグは値そのもの、`obj`のタグはヘッダの`meta`の語の16ビットのタグで、ロード1つとマスクで読む。`tobj`のタグは、即値の語ならその値、そうでなければヘッダのタグである。コードはタグを32ビットの値として`cranelift_frontend::Switch`で比べる。だから`Switch`が64ビットの値に足す、32ビットに収まるかの比較と分岐はない。範囲の外の値は、飛び先の表の`default`へ進む
 - 文字列の`switch`では、コードはscrutineeを、caseの順に各caseの文字列の定数と、`eml_x_StrEq`を呼んで比べる。このエントリは両方の文字列を借りる。最初に等しかったcaseへ進み、どれも等しくなければ`default`へ進む。リテラルの`switch`はいつも`default`を持つ ([LIR](lir.md)の「ブロックの列」)
-- 速い道の費用: 欄の読み書きは、決まったずれでのロードかストア1つである。割り当ては呼び出し1つと、欄ごとのストア1つである。`int`の`box`はシフト、シフト、比較、分岐、`or`で、`unbox`は確かめ、分岐、シフトである。タグの`switch`は、`enum`なら値そのもの、`obj`ならロード1つとマスクで、`tobj`ではその前に即値の確かめがあり、その後が`Switch`である。定数は、そのデータの記号からのロード1つである
+- `reuse`のある`con`は、まずtokenが空かを確かめる。空のtokenは0の語なので、分岐1つである。`in place`で空でないtokenなら、tokenの語をそのまま箱にする。速いモードのtokenは箱の語で、`Heap::reuse_in_place`は速いモードでは何も書かない ([オブジェクトモデル](object-model.md)の「検査モードの token」) ので、これはレジスタの移しで、呼び出しはない。`in place`でなければ`eml_rt_con_at(ctx, token, tag, scanned, raw, lin)`を呼び、ヘッダを書き直す。そのうえで、`reuse`が書かない印を付けていない欄だけを書く。箱は中身を消さないので、飛ばした欄には元の語が残っている。空のtokenなら`con`と同じに確保し、書かない印の欄も含めてどの欄も書く
+- `release x`は、即値を確かめずに`x`の数を読む。欄のある構築子の値はいつも箱だからである。数が1なら、`release`が残さない走査する欄の子をインラインの`decref`で手放し、`eml_rt_free_block`で箱を空ける。ほかの数では`eml_rt_is_last`を呼ぶ。最後の参照 (共有の数-1) なら同じ道を通る。そうでなければ、残す欄の子をインラインで`dup`し、`x`をインラインの`decref`で手放す。残す欄は、`unpack`、caseの欄、構造体の`unbox`がもう束縛した変数である ([LIR](lir.md)の「構造の規則」のR5)
+- tokenを作る`release`は、数が1のときだけ一意な道を通る。残さない子を手放し、箱の語をそのままtokenにする。`Heap::into_token`も速いモードでは何も書かないので、これもレジスタの移しで、呼び出しはない。ほかの数では上と同じく`eml_rt_is_last`を通り、tokenは空の語である
+- `drop_token`は`eml_rt_drop_token`を呼ぶ。空のtokenでは何もしない
+- 構造体の`unbox`と`release unboxed`は、まず箱が`BigInt`かを、ロード1つと比較で確かめる。ダミーは`BigInt`で、構造体の箱はいつも`Data`である ([オブジェクトモデル](object-model.md)の「ダミーの値」)。ダミーなら、`unbox`は数える葉に箱の語を、生の葉にビット列0を束縛し、`release unboxed`は何もせずに空のtokenを定義する。そうでなければ、`unbox`は葉ごとにロード1つで、`release unboxed`はふつうの`release`である
+- 速い道の費用: 欄の読み書きは、決まったずれでのロードかストア1つである。割り当ては呼び出し1つと、欄ごとのストア1つである。`int`の`box`はシフト、シフト、比較、分岐、`or`で、`unbox`は確かめ、分岐、シフトである。タグの`switch`は、`enum`なら値そのもの、`obj`ならロード1つとマスクで、`tobj`ではその前に即値の確かめがあり、その後が`Switch`である。定数は、そのデータの記号からのロード1つである。`release`はロード1つと比較で、一意な道では捨てる子ごとにインラインの`decref`、その後に呼び出し1つ (`eml_rt_free_block`) か、呼び出しなし (箱がtokenになる) である。reuseの`con`は、tokenの確かめと、書かない印のない欄のストアで、その場のreuseなら呼び出しはなく、別の構築子なら呼び出し1つ (`eml_rt_con_at`) である
 
 ## 断る形
 
