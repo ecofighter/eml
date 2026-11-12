@@ -68,7 +68,7 @@ fn native_fault(fault: RunFault) -> RuntimeError {
 unsafe extern "C" fn make_data(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
     unsafe {
         let w = (*ctx).heap_mut().alloc_data(0, 0, 0, false);
-        *argv = w.bits() as u64;
+        argv.cast::<Word>().write(w);
     }
 }
 
@@ -171,10 +171,8 @@ fn the_census_reports_a_counted_object() {
 /// `argv[0..4]`に書く。
 unsafe extern "C" fn read_slots(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
     unsafe {
-        let slots = *argv as *const u64;
-        let word = |i: usize| Word::from_bits(*slots.add(i) as usize);
-        let rc =
-            |w: Word| std::ptr::with_exposed_provenance::<i32>(w.bits() + layout::RC_BYTE).read();
+        let slots = argv.cast::<*const Word>().read();
+        let word = |i: usize| *slots.add(i);
         let ctx = &mut *ctx;
         let (text, big, float) = (word(0), word(1), word(2));
         let boxed = |w: Word, kind: Kind, value: u64| {
@@ -188,7 +186,11 @@ unsafe extern "C" fn read_slots(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *m
         *argv = u64::from(text_ok);
         *argv.add(1) = u64::from(big_ok);
         *argv.add(2) = u64::from(float_ok);
-        *argv.add(3) = u64::from([text, big, float].iter().all(|&w| rc(w) == 0));
+        *argv.add(3) = u64::from(
+            [text, big, float]
+                .iter()
+                .all(|&w| ctx.heap().is_immortal(w)),
+        );
     }
 }
 
@@ -220,7 +222,9 @@ fn data_slots_hold_immortal_objects() {
         data: Slice::new(&data),
         ..empty()
     };
-    let mut argv = [base.addr() as u64, 0, 0, 0];
+    let mut argv = [0u64; 4];
+    // SAFETY: `argv`は語1つ分の大きさがあり、`base`はこのテストの`slots`を指す
+    unsafe { argv.as_mut_ptr().cast::<*const Word>().write(base.cast()) };
     run_with(&image, read_slots, &mut argv, false, options(Census::Check)).unwrap();
     assert_eq!(argv, [1, 1, 1, 1]);
 }

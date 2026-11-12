@@ -12,7 +12,7 @@
 
 - 呼び出し規約は、対象のCの既定の規約 (`extern "C"`) である
 - 最初の引数は`ctx: *mut Ctx<Fast>`で、コードが動いているworkerの`Ctx`である。ネイティブのコードは速いモードだけを使う
-- ほかの引数はどれも`i64`か`f64`である。語のABIの語 (物体、即値、Unit、列挙のタグ) は`i64`で、`Float`は`f64`で渡す
+- ほかの引数は、機械の型ではどれも`i64`か`f64`である。語のABIの語 (物体、即値、Unit、列挙のタグ) は`i64`で、`Float`は`f64`で渡す。Rustのシグネチャでは、物体の語 (`obj`、`tobj`、`token`) の型は`Word`である。`Word`は`repr(transparent)`のポインタで、対象のどのABIでも`i64`と同じ渡し方なので、語のprovenanceが入口をまたいで残り、エントリは整数からポインタを作らない
 - 結果は、`i64`か`f64`が高々1つか、結果なしか、戻らない (`!`) かである
 - 構造体を値で渡すことも返すことも、狭い整数の型を使うこともしない。だからどの対象でも、引数は同じ規則で1つのレジスタか1つのスタックの枠に入る
 - 記号の名前は接頭辞で分ける。`eml_rt_*`は共有の実行系の操作、`eml_x_*`はstdのexternの行、`eml_nrt_*`はネイティブの実行系のサービスである。接頭辞のない記号は`eml_enter`、`eml_fatal`、`eml_run_pending`だけである。`eml_nrt`の外で宣言するテストだけのエントリは`eml_t_*`にする。エントリの記号はその関数の識別子そのもので、上書きする手はない
@@ -20,7 +20,7 @@
 ### 記述子の表
 
 - `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`Entry`の欄は、`symbol` (関数の識別子)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
-- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
+- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`のRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
 - エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
 - 生成したコードは、エントリを記号で取り込み、呼び出しの型を行だけから作る。宣言が1つなので、関数と呼び出しの型が食い違うことはない
 - エントリに`#[no_mangle]`は付けない。JITはアドレスを記号の名前で登録する
@@ -44,6 +44,28 @@
 表にあるエントリは`eml_fatal`だけである。
 
 速いモードでヒープの操作が`Err`を返すのは、次の場合だけである: `WrongKind` (`foreign*`の種類か、型の食い違い)、`StaleToken` (空のトークンへの`reuse_in_place`)、`RootMisuse`と`Unrecoverable` (根と回復の操作)。どれも生成したコードからは回復できない。だからヒープのエントリは致命的な誤りだけで終わる。
+
+### ヒープのエントリ
+
+ヒープのエントリは、`eml_rt`のヒープの操作1つずつの薄い包みである (`eml_nrt/src/heap.rs`の表`HEAP`)。workerの構造体に触れないので、生きている`Ctx`を持つコードならどこからでも呼べる。語の引数と結果は`Word`である (物体は`obj`、即値も取りうる所は`tobj`、reuseのtokenは`token`。空のtokenは0の語)。`tag`、`scanned`、`raw`はふつうの整数で、`lin`は真なら0でない値である。どれも`shim`で、`Err`は致命的な誤りでrunを終える。
+
+| 記号 | 引数 -> 結果 | 包む操作 |
+|---|---|---|
+| `eml_rt_alloc_data` | `tag, scanned, raw, lin` -> 語 | `Heap::alloc_data` |
+| `eml_rt_alloc_int` | `n` -> 語 | `Heap::alloc_int` |
+| `eml_rt_alloc_float` | `x: f64` -> 語 | `Heap::alloc_float` (`x`のビット列) |
+| `eml_rt_dup_slow` | `w` -> なし | `Heap::dup` |
+| `eml_rt_decref` | `w` -> なし | `Heap::decref` |
+| `eml_rt_is_last` | `w` -> 0か1 | `Heap::is_last` |
+| `eml_rt_free_block` | `w` -> なし | `Heap::free_block` |
+| `eml_rt_into_token` | `w` -> token | `Heap::into_token` |
+| `eml_rt_reuse_in_place` | `token, tag, scanned, lin` -> 語 | `Heap::reuse_in_place` (`meta`は`layout::data_meta`で作る) |
+| `eml_rt_con_at` | `token, tag, scanned, raw, lin` -> 語 | `Heap::con_at` (語の数は`scanned + raw`) |
+| `eml_rt_drop_token` | `token` -> なし | `Heap::drop_token` |
+| `eml_rt_fault_arith` | `kind` -> なし | `Ctx::set_fault(Fault::Arith(..))` |
+
+- どのエントリも、包む関数の前提をそのまま持ち、生成したコードがそれを守る。`eml_rt_reuse_in_place`と`eml_rt_con_at`の`scanned`は、`Data`の`meta`が数の語を要しない範囲にある (`eml_rt_alloc_data`は数の語を持つ物体も作れる)。debugのビルドでは、`tag`が16ビットに収まることと、`scanned`、`raw`が負でないこと、この2つのエントリの`scanned`が上の範囲にあることを確かめる
+- `eml_rt_fault_arith`だけは、失敗を`Ctx`に置いて戻る。生成したコードは、呼び出しの後で無条件に`eml$raise`へ進み、faultの語は確かめない。`kind`は`eml_nrt::image`の`ARITH_DIVISION_BY_ZERO` (0) か`ARITH_INTEGER_OVERFLOW` (1) で、ほかの値は内部の誤りである
 
 ### `eml_enter`
 

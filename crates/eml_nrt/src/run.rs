@@ -129,7 +129,7 @@ unsafe fn fill_data(
     }
     for (row, w) in data.iter().zip(built.words) {
         // SAFETY: 呼ぶ側の約束
-        unsafe { row.slot.write(w.bits() as u64) };
+        unsafe { row.slot.cast::<Word>().write(w) };
     }
     Ok(())
 }
@@ -164,7 +164,7 @@ unsafe fn finish(
     } else if start.result_rc {
         // SAFETY: 呼ぶ側の約束。結果はrunが持つ参照である
         unsafe {
-            let result = Word::from_bits(start.argv.read() as usize);
+            let result = start.argv.cast::<Word>().read();
             ctx.heap_mut().decref(result).map_err(|e| fault(e.into()))?;
         }
     }

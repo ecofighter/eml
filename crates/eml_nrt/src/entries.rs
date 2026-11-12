@@ -33,6 +33,9 @@ macro_rules! __kind {
     (tobj) => {
         $crate::Kind::I64
     };
+    (token) => {
+        $crate::Kind::I64
+    };
     (unit) => {
         $crate::Kind::I64
     };
@@ -47,8 +50,10 @@ macro_rules! __kind {
     };
 }
 
-/// 引数と結果のRustの型。`i64`と`f64`のほかに、行の表が書くReprの名前も受ける。ほかのトークンはコンパイルの誤りになるので、
-/// どの引数も`i64`か`f64`である (docs/spec/native.md の「エントリのABI」)。
+/// 引数と結果のRustの型。`i64`と`f64`のほかに、行の表が書くReprの名前も受ける。ほかのトークンはコンパイルの誤りになる。
+/// 機械の型はどの引数も`i64`か`f64`だが、物体の語 (`obj`、`tobj`、`token`) のRustの型は`Word`である。`Word`は
+/// `repr(transparent)`のポインタなので、どの対象でも`i64`と同じ渡し方で、語のprovenanceが入口をまたいで残る
+/// (docs/spec/native.md の「エントリのABI」)。
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __ty {
@@ -68,10 +73,13 @@ macro_rules! __ty {
         i64
     };
     (obj) => {
-        i64
+        $crate::__rt::Word
     };
     (tobj) => {
-        i64
+        $crate::__rt::Word
+    };
+    (token) => {
+        $crate::__rt::Word
     };
     (unit) => {
         i64
@@ -176,7 +184,10 @@ macro_rules! entries {
 mod tests {
     use std::sync::Arc;
 
-    use eml_rt::{Buffering, Control, Ctx, Fast, HostRef, Limits, StdHost};
+    use eml_rt::{
+        ArithFault, Buffering, Control, Ctx, Fast, Fault, HostRef, Kind as ObjectKind, Limits,
+        StdHost, Word, layout,
+    };
 
     use crate::{Fatal, Kind};
 
@@ -196,13 +207,13 @@ mod tests {
 
         #[allow(non_snake_case)]
         shim fn eml_t_Named(ctx, a: obj, b: float, c: enum) -> int {
-            ctx.set_runtime(std::ptr::without_provenance_mut(a as usize));
-            Ok::<i64, Fatal>(a + b as i64 + c)
+            ctx.set_runtime(std::ptr::without_provenance_mut(a.bits()));
+            Ok::<i64, Fatal>(a.bits() as i64 + b as i64 + c)
         }
 
         #[allow(non_snake_case)]
         shim fn eml_t_Never(ctx, a: tobj) -> never {
-            ctx.set_runtime(std::ptr::without_provenance_mut(a as usize));
+            ctx.set_runtime(std::ptr::without_provenance_mut(a.bits()));
             Ok::<(), Fatal>(())
         }
 
@@ -230,8 +241,8 @@ mod tests {
         // SAFETY: `raw`はこのテストが持つ`Ctx`で、ほかに借用はない
         unsafe {
             assert_eq!(eml_t_shim(raw, 4), 5);
-            assert_eq!(eml_t_Named(raw, 1, 2.0, 3), 6);
-            eml_t_Never(raw, 9);
+            assert_eq!(eml_t_Named(raw, Word::from_bits(1), 2.0, 3), 6);
+            eml_t_Never(raw, Word::from_bits(9));
             eml_t_unit(raw, 6);
             assert_eq!(eml_t_plain(raw, 1, 0.5), 7.5);
         }
@@ -254,6 +265,236 @@ mod tests {
                 ("eml_t_unit", &[Kind::I64][..], None),
             ]
         );
+    }
+
+    fn live(ctx: &mut Ctx<Fast>) -> Vec<(String, u64)> {
+        crate::census::census(ctx)
+    }
+
+    #[test]
+    fn heap_alloc_data_gives_a_data_object() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_decref};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: `c`はこのテストが持つ`Ctx`で、`c`の最初と最後の使用の間は`c`だけを通す。物体の参照はただ1つで、
+        // 子は`()`のままである
+        unsafe {
+            let w = eml_rt_alloc_data(c, 3, 2, 1, 0);
+            let meta = (*c).heap().meta(w).unwrap();
+            assert_eq!(
+                (meta.kind(), meta.tag(), meta.scan(), meta.lin()),
+                (ObjectKind::Data, 3, 2, false)
+            );
+            assert_eq!(live(&mut *c), [("Data".to_string(), 1)]);
+            eml_rt_decref(c, w);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_alloc_int_boxes_a_value_that_does_not_fit() {
+        use crate::heap::{eml_rt_alloc_int, eml_rt_decref};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ
+        unsafe {
+            let (small, big) = (eml_rt_alloc_int(c, 5), eml_rt_alloc_int(c, i64::MIN));
+            assert_eq!(small, Word::imm(5));
+            let heap = (*c).heap();
+            assert_eq!(heap.meta(big).unwrap().kind(), ObjectKind::BigInt);
+            assert_eq!(heap.raw(big, layout::BOX_VALUE_WORD), Ok(i64::MIN as u64));
+            eml_rt_decref(c, big);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_alloc_float_boxes_the_bits() {
+        use crate::heap::{eml_rt_alloc_float, eml_rt_decref};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ
+        unsafe {
+            let w = eml_rt_alloc_float(c, -2.5);
+            let heap = (*c).heap();
+            assert_eq!(heap.meta(w).unwrap().kind(), ObjectKind::Float);
+            assert_eq!(heap.raw(w, layout::BOX_VALUE_WORD), Ok((-2.5f64).to_bits()));
+            eml_rt_decref(c, w);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_dup_slow_adds_a_reference() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_decref, eml_rt_dup_slow, eml_rt_is_last};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。数えた参照の数だけ手放す
+        unsafe {
+            let w = eml_rt_alloc_data(c, 0, 0, 1, 0);
+            eml_rt_dup_slow(c, w);
+            assert_eq!(eml_rt_is_last(c, w), 0);
+            eml_rt_decref(c, w);
+            assert_eq!(eml_rt_is_last(c, w), 1);
+            eml_rt_decref(c, w);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_decref_frees_the_last_reference_and_its_children() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_decref};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。子の参照は親の欄へ移る
+        unsafe {
+            let outer = eml_rt_alloc_data(c, 0, 1, 0, 0);
+            let inner = eml_rt_alloc_data(c, 1, 0, 0, 0);
+            (*c).heap_mut().set_field(outer, 0, inner).unwrap();
+            assert_eq!(live(&mut *c), [("Data".to_string(), 2)]);
+            eml_rt_decref(c, outer);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_is_last_tells_a_unique_reference() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_decref, eml_rt_dup_slow, eml_rt_is_last};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ
+        unsafe {
+            let w = eml_rt_alloc_data(c, 0, 0, 1, 0);
+            assert_eq!(eml_rt_is_last(c, w), 1);
+            eml_rt_dup_slow(c, w);
+            assert_eq!(eml_rt_is_last(c, w), 0);
+            eml_rt_decref(c, w);
+            eml_rt_decref(c, w);
+            assert_eq!(eml_rt_is_last(c, Word::imm(7)), 0);
+        }
+    }
+
+    #[test]
+    fn heap_free_block_frees_a_block_whose_children_are_done() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_free_block};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。この物体は子を持たない
+        unsafe {
+            let w = eml_rt_alloc_data(c, 0, 0, 2, 0);
+            eml_rt_free_block(c, w);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_into_token_keeps_the_address() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_drop_token, eml_rt_into_token};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。参照はただ1つで、子はない
+        unsafe {
+            let w = eml_rt_alloc_data(c, 0, 0, 2, 0);
+            let token = eml_rt_into_token(c, w);
+            assert_eq!(token, w);
+            eml_rt_drop_token(c, token);
+        }
+    }
+
+    #[test]
+    fn heap_drop_token_frees_an_unused_block() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_drop_token, eml_rt_into_token};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ
+        unsafe {
+            let token = eml_rt_into_token(c, eml_rt_alloc_data(c, 0, 0, 2, 0));
+            eml_rt_drop_token(c, token);
+            assert_eq!(live(&mut *c), []);
+            eml_rt_drop_token(c, Word::EMPTY);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_reuse_in_place_keeps_the_block() {
+        use crate::heap::{
+            eml_rt_alloc_data, eml_rt_decref, eml_rt_into_token, eml_rt_reuse_in_place,
+        };
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。作り直す物体はtagとscanと`lin`が箱と同じである
+        unsafe {
+            let w = eml_rt_alloc_data(c, 4, 0, 1, 0);
+            let token = eml_rt_into_token(c, w);
+            let again = eml_rt_reuse_in_place(c, token, 4, 0, 0);
+            assert_eq!(again, w);
+            let meta = (*c).heap().meta(again).unwrap();
+            assert_eq!(
+                (meta.kind(), meta.tag(), meta.scan()),
+                (ObjectKind::Data, 4, 0)
+            );
+            eml_rt_decref(c, again);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_con_at_rewrites_the_header() {
+        use crate::heap::{eml_rt_alloc_data, eml_rt_con_at, eml_rt_decref, eml_rt_into_token};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。走査する語を持たないので、書く前に読まれても子をたどらない
+        unsafe {
+            let w = eml_rt_alloc_data(c, 4, 0, 2, 0);
+            let token = eml_rt_into_token(c, w);
+            let again = eml_rt_con_at(c, token, 9, 0, 2, 0);
+            let meta = (*c).heap().meta(again).unwrap();
+            assert_eq!(
+                (meta.kind(), meta.tag(), meta.scan(), meta.lin()),
+                (ObjectKind::Data, 9, 0, false)
+            );
+            eml_rt_decref(c, again);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_con_at_allocates_for_an_empty_token() {
+        use crate::heap::{eml_rt_con_at, eml_rt_decref};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。空のtokenは確保になり、走査する語を持たないので読まれても子をたどらない
+        unsafe {
+            let w = eml_rt_con_at(c, Word::EMPTY, 6, 0, 1, 1);
+            let meta = (*c).heap().meta(w).unwrap();
+            assert_eq!(
+                (meta.kind(), meta.tag(), meta.scan(), meta.lin()),
+                (ObjectKind::Data, 6, 0, true)
+            );
+            (*c).heap_mut().set_lin(w, false).unwrap();
+            eml_rt_decref(c, w);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn heap_fault_arith_parks() {
+        use crate::heap::eml_rt_fault_arith;
+        use crate::image::{ARITH_DIVISION_BY_ZERO, ARITH_INTEGER_OVERFLOW};
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        for (kind, fault) in [
+            (ARITH_DIVISION_BY_ZERO, ArithFault::DivisionByZero),
+            (ARITH_INTEGER_OVERFLOW, ArithFault::IntegerOverflow),
+        ] {
+            // SAFETY: 上と同じ
+            unsafe {
+                eml_rt_fault_arith(c, kind);
+                assert_eq!((*c).take_fault(), Some(Fault::Arith(fault)));
+                assert_eq!((*c).take_fault(), None);
+            }
+        }
     }
 
     #[test]

@@ -170,3 +170,8 @@ pub const PURITY_EFFECTFUL: i64 = 2;
 /// `eml_nrt_failed`の`site`で、関数の入口を表す値。入口は地点の表に行を持たない。入口で失敗を上げるときは、これと
 /// `PURITY_EFFECTFUL`を渡す (docs/spec/native.md の「安全点」)。
 pub const ENTRY_SITE: i64 = -1;
+
+/// `eml_rt_fault_arith`の`kind`の語。算術の失敗の種類で、`eml_rt::ArithFault`のうち生成したコードが出すものである
+/// (docs/spec/native.md の「ヒープのエントリ」)。
+pub const ARITH_DIVISION_BY_ZERO: i64 = 0;
+pub const ARITH_INTEGER_OVERFLOW: i64 = 1;
