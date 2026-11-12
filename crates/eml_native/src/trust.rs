@@ -18,6 +18,7 @@ const FILES: &[(&str, &str)] = &[
     ("lower/function.rs", include_str!("lower/function.rs")),
     ("lower/names.rs", include_str!("lower/names.rs")),
     ("lower/rows.rs", include_str!("lower/rows.rs")),
+    ("lower/unwind.rs", include_str!("lower/unwind.rs")),
 ];
 
 /// 調べないファイル。この module だけである。

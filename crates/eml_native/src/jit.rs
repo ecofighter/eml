@@ -8,7 +8,7 @@ use cranelift_jit::JITModule;
 use cranelift_module::ModuleError;
 use eml_cabi::Linked;
 use eml_lir::{Program, Repr};
-use eml_nrt::image::{FnRow, Image, Options, Slice, Start, Str};
+use eml_nrt::image::{FnRow, Image, Options, SiteRow, Slice, Start, Str};
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
 use crate::abi::jit_builder;
@@ -72,10 +72,11 @@ struct Function {
     counted: bool,
     code: *const u8,
     size: u32,
+    sites: Vec<SiteRow>,
 }
 
-/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`の中を指す。どれも`new`の後で変わらず、`Vec`を動かしても
-/// その要素は動かない。
+/// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`と、各関数の`sites`の中を指す。どれも`new`の後で
+/// 変わらず、`Vec`を動かしてもその要素は動かない。
 struct Tables {
     functions: Vec<Function>,
     _files: Vec<String>,
@@ -93,7 +94,7 @@ impl Tables {
                 name: Str::new(&function.name),
                 code: function.code,
                 size: function.size,
-                sites: Slice::new(&[]),
+                sites: Slice::new(&function.sites),
             })
             .collect();
         let image = Image {
@@ -181,15 +182,20 @@ impl NativeMachine {
         let module = self.module.insert(JITModule::new(builder));
         let defined = lower::program(module, program, self.keep_clif)
             .and_then(|defined| Ok(module.finalize_definitions().map(|()| defined)?));
-        let defined = match defined {
-            Ok(defined) => defined,
+        let lowered = match defined {
+            Ok(lowered) => lowered,
             Err(error) => {
                 self.spent = true;
                 return Err(module_error(*error));
             }
         };
-        let mut functions = Vec::with_capacity(defined.len());
-        for (function, defined) in program.functions.iter().zip(defined) {
+        self.symbols.push(Symbol {
+            name: names::RAISE.to_string(),
+            address: module.get_finalized_function(lowered.raise.id),
+            size: lowered.raise.size,
+        });
+        let mut functions = Vec::with_capacity(lowered.functions.len());
+        for (function, defined) in program.functions.iter().zip(lowered.functions) {
             let code = module.get_finalized_function(defined.id);
             let name = names::function(&function.name);
             if let Some(clif) = defined.clif {
@@ -211,6 +217,7 @@ impl NativeMachine {
                 counted: matches!(&function.rets[..], [(repr, _)] if repr.is_rc()),
                 code,
                 size: defined.size,
+                sites: defined.sites,
             });
         }
         self.tables = Some(Tables::new(functions, program.files.clone()));

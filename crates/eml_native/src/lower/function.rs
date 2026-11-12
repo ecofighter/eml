@@ -1,37 +1,71 @@
-//! LIRの関数1つをCLIFにする。ブロック、ブロックの引数、終端、atomである (docs/spec/native.md の「関数の形」)。
-use cranelift_codegen::ir::{Block, BlockArg, InstBuilder, TrapCode, Value, types};
-use cranelift_codegen::isa::TargetFrontendConfig;
-use cranelift_frontend::{FunctionBuilder, Switch};
-use eml_lir::{Atom, BlockId, Case, CasePattern, LirFn, Repr, Stmt, Term, VarId};
+//! LIRの関数1つをCLIFにする。ブロック、ブロックの引数、文、終端、atomである (docs/spec/native.md の「関数の形」)。
+use std::collections::HashMap;
 
-use super::kind;
+use cranelift_codegen::ir::{Block, BlockArg, FuncRef, InstBuilder, TrapCode, Value, types};
+use cranelift_frontend::{FunctionBuilder, Switch};
+use cranelift_module::{FuncId, Module};
+use eml_extern::ExternRef;
+use eml_lir::unwind::Unwinds;
+use eml_lir::{Atom, BlockId, Case, CasePattern, LirFn, Repr, Rhs, Stmt, Term, VarId};
+use eml_nrt::image::SiteRow;
+
+use super::rows::{self, Lowering};
+use super::{Imports, kind};
 use crate::abi::clif;
 use crate::mem;
 
-pub(super) fn lower(b: FunctionBuilder, function: &LirFn, config: TargetFrontendConfig) {
-    let mut fx = FnLower::new(b, function);
+/// `function`を下ろし、その位置の行 (`FnRow.sites`) を返す。
+pub(super) fn lower<M: Module>(
+    b: FunctionBuilder,
+    module: &mut M,
+    imports: &Imports,
+    id: FuncId,
+    function: &LirFn,
+    unwinds: &Unwinds,
+) -> Vec<SiteRow> {
+    let config = module.target_config();
+    let mut fx = FnLower::new(b, module, imports, id, function, unwinds);
     for (index, lir) in function.blocks.iter().enumerate() {
         fx.b.switch_to_block(fx.blocks[index]);
-        for stmt in &lir.stmts {
-            fx.stmt(stmt);
+        for (position, stmt) in lir.stmts.iter().enumerate() {
+            fx.stmt(BlockId(index as u32), position, stmt);
         }
         fx.term(&lir.term);
     }
     // 値をfrontendの変数でなくブロックの引数に置くので、すべてのブロックを下ろした後で1回sealすれば足りる
     fx.b.seal_all_blocks();
     fx.b.finalize(config);
+    fx.sites
 }
 
-pub(super) struct FnLower<'a, 'b> {
+pub(super) struct FnLower<'a, 'b, M: Module> {
     pub b: FunctionBuilder<'b>,
     pub function: &'a LirFn,
+    module: &'a mut M,
+    pub imports: &'a Imports,
+    /// 下ろしている関数自身。
+    pub id: FuncId,
+    pub unwinds: &'a Unwinds,
+    /// `ctx`の語。関数の最初の引数である。
+    pub ctx: Value,
+    /// 関数の位置の行。添字が`eml$raise`に渡す`site`である。巻き戻しの地点のうち、失敗を上げるものだけが行を持つ。
+    pub sites: Vec<SiteRow>,
     /// `VarId`ごとのCLIFの値。LIRは変数を1回だけ束縛する。
     vars: Vec<Option<Value>>,
     blocks: Vec<Block>,
+    /// 関数ごとに1回だけ取り込む、呼ぶ関数の参照。
+    refs: HashMap<FuncId, FuncRef>,
 }
 
-impl<'a, 'b> FnLower<'a, 'b> {
-    fn new(mut b: FunctionBuilder<'b>, function: &'a LirFn) -> Self {
+impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
+    fn new(
+        mut b: FunctionBuilder<'b>,
+        module: &'a mut M,
+        imports: &'a Imports,
+        id: FuncId,
+        function: &'a LirFn,
+        unwinds: &'a Unwinds,
+    ) -> Self {
         let blocks: Vec<Block> = function.blocks.iter().map(|_| b.create_block()).collect();
         let mut vars = vec![None; function.vars.len()];
         let entry = blocks[BlockId::ENTRY.0 as usize];
@@ -49,12 +83,43 @@ impl<'a, 'b> FnLower<'a, 'b> {
         FnLower {
             b,
             function,
+            module,
+            imports,
+            id,
+            unwinds,
+            ctx: params[0],
+            sites: Vec::new(),
             vars,
             blocks,
+            refs: HashMap::new(),
         }
     }
 
-    fn var(&self, var: VarId) -> Value {
+    /// `id`の関数をこの関数から呼ぶ参照。
+    pub fn func_ref(&mut self, id: FuncId) -> FuncRef {
+        if let Some(&r) = self.refs.get(&id) {
+            return r;
+        }
+        let r = self.module.declare_func_in_func(id, self.b.func);
+        self.refs.insert(id, r);
+        r
+    }
+
+    /// エントリ`symbol`を`args`で呼び、結果を返す。
+    pub fn call_entry(&mut self, symbol: &str, args: &[Value]) -> Option<Value> {
+        let callee = self.func_ref(self.imports.entry(symbol));
+        let mut all = Vec::with_capacity(args.len() + 1);
+        all.push(self.ctx);
+        all.extend_from_slice(args);
+        let call = self.b.ins().call(callee, &all);
+        self.b.inst_results(call).first().copied()
+    }
+
+    pub fn bind(&mut self, var: VarId, value: Value) {
+        self.vars[var.0 as usize] = Some(value);
+    }
+
+    pub fn var(&self, var: VarId) -> Value {
         self.vars[var.0 as usize].unwrap_or_else(|| {
             panic!(
                 "`{}` uses an unbound variable",
@@ -87,8 +152,21 @@ impl<'a, 'b> FnLower<'a, 'b> {
             .collect()
     }
 
-    fn stmt(&mut self, stmt: &Stmt) {
-        panic!("the native lowering has no rule for `{stmt:?}`")
+    fn stmt(&mut self, block: BlockId, position: usize, stmt: &Stmt) {
+        match stmt {
+            Stmt::Let {
+                var,
+                rhs:
+                    Rhs::Extern {
+                        ext: ExternRef::Std(ext),
+                        args,
+                        at,
+                    },
+            } if rows::lowering(*ext) == Some(Lowering::Called) => {
+                self.called_row(block, position, *var, *ext, args, *at);
+            }
+            _ => panic!("the native lowering has no rule for `{stmt:?}`"),
+        }
     }
 
     fn term(&mut self, term: &Term) {

@@ -672,6 +672,7 @@ dependencies = [
  "eml_nrt",
  "eml_rt",
  "eml_test_support",
+ "insta",
  "libloading",
 ]
 

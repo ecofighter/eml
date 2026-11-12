@@ -49,7 +49,8 @@ pub fn call(text: &str, name: &str, args: &[Arg]) -> Vec<Arg> {
     results
 }
 
-/// `text`のプログラムを読み込んだときの、関数`function`のCLIF。
+/// `text`のプログラムを読み込んだときの、関数`function`のCLIF。エントリの呼び出し規約は対象のCの既定の規約で、その名前は
+/// OSで違うので、どの対象でも同じ文になるように`c`と書き換える。
 pub fn clif(text: &str, function: &str) -> String {
     let mut machine = NativeMachine::new_with_clif(&RunConfig::default(), host());
     machine
@@ -60,7 +61,8 @@ pub fn clif(text: &str, function: &str) -> String {
         .unwrap_or_else(|| panic!("no function `{function}`"))
         .to_string();
     machine.close();
-    text
+    let isa = eml_native::abi::isa(false).expect("the machine has a Cranelift ISA");
+    text.replace(&format!(" {}", isa.default_call_conv()), " c")
 }
 
 /// LIRのテキストをVMの検査モードとネイティブで流し、標準出力と結果の文と終了コードが同じで、censusがきれいなことを確かめる。
@@ -74,6 +76,21 @@ pub fn agree_lowered(text: &str) {
     let mut program = program(text);
     eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
     agree_program(&program);
+}
+
+/// `agree`と同じだが、どちらのrunも`host`が作るHostで流し、標準出力は比べない。書けない出力のようなHostのためである。
+/// ネイティブのrunの終了コードか誤りの文を返す。
+pub fn agree_on(text: &str, host: impl Fn() -> HostRef) -> Result<Option<i64>, String> {
+    let program = program(text);
+    let vm_config = RunConfig::default().with_debug_heap(true);
+    let vm = execute_finished(&program, &vm_config, host(), Engine::Vm)
+        .map(|finished| finished.exit)
+        .map_err(|error| error.to_string());
+    let native = execute_finished(&program, &RunConfig::default(), host(), Engine::Native)
+        .map(|finished| finished.exit)
+        .map_err(|error| error.to_string());
+    assert_eq!(native, vm, "result and exit code");
+    native
 }
 
 fn agree_program(program: &eml_lir::Program) {

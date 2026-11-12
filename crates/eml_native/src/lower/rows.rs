@@ -1,8 +1,14 @@
 //! ネイティブのコードが下ろすstdの行と、その下ろし方 (docs/spec/native.mdの「断る形」)。ほかのstdの行は
 //! `unsupported`が断る。
 
+use cranelift_codegen::ir::Value;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-use eml_extern::Extern;
+use cranelift_module::Module;
+use eml_extern::{Extern, OpRet};
+use eml_lir::{Atom, BlockId, Loc, VarId};
+
+use super::function::FnLower;
+use super::unwind::{After, Point, placeholder};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Inline {
@@ -103,5 +109,52 @@ pub fn lowering(ext: Extern) -> Option<Lowering> {
         Some(Lowering::Called)
     } else {
         None
+    }
+}
+
+impl<M: Module> FnLower<'_, '_, M> {
+    /// 呼ぶ行`ext`の文`let var = extern ext(args)`。引数を行の引数のReprで作り、`eml_x_<Variant>`を呼ぶ。`faults`の
+    /// 行は呼び出しの後でfaultの語を確かめ、戻らない行は無条件に後始末へ進む (docs/spec/native.md の「externの失敗」)。
+    pub(super) fn called_row(
+        &mut self,
+        block: BlockId,
+        position: usize,
+        var: VarId,
+        ext: Extern,
+        args: &[Atom],
+        at: Option<Loc>,
+    ) {
+        let row = ext.row();
+        let values: Vec<Value> = args
+            .iter()
+            .zip(row.params)
+            .map(|(&arg, &repr)| self.atom(arg, repr))
+            .collect();
+        let result = self.call_entry(&format!("eml_x_{ext:?}"), &values);
+        match row.ret {
+            OpRet::Repr(_) => {
+                self.bind(var, result.expect("a row with a result returns a word"));
+                if row.faults {
+                    let site = self.site(at);
+                    let point = self.point(block, position);
+                    let after = After::Faults {
+                        site,
+                        purity: row.purity,
+                    };
+                    self.after_unwind_point(&Point::from(point), after);
+                }
+            }
+            OpRet::Never => {
+                // `exit`は中断を始めるだけで失敗を置かない。ほかの戻らない行は置いた失敗を上げる
+                let raise = match ext {
+                    Extern::Exit => None,
+                    _ => Some((self.site(at), row.purity)),
+                };
+                let point = self.point(block, position);
+                self.after_unwind_point(&Point::from(point), After::Never { raise });
+                let value = placeholder(&mut self.b, self.function.repr(var));
+                self.bind(var, value);
+            }
+        }
     }
 }

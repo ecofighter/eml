@@ -152,11 +152,27 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 - LIRの関数はどれも、`lower::signature_of`を通して、`abi::tail_signature`が作る`tail`のシグネチャ`(ctx, 葉...) -> 葉...`を持つ。最初の引数は`ctx`の語で、LIRの関数の引数と結果はそれぞれ葉1つである
 - `Float`の葉の型は`F64`で、ほかのRepr (`obj`、`tobj`、`unit`、`int`、`enum`、`token`) の型は`I64`である。開いた後には構造体の値はない。LIRは変数を1回だけ束縛するので、変数1つがCLIFの値1つになり、LIRのブロックの引数はCLIFのブロックの引数になる。定数は使う所ごとに、その位置のReprで作る。`int`はその値、`float`はそのビット、`()`は語`Word::UNIT`で、タグは`enum`の位置ではその番号、`tobj`の位置ではその即値の語である ([LIR](lir.md)の「値の表現」が、タグをこの2つの位置にだけ置く)
 - `return`は葉を順に返し、`jump`は引数をブロックの引数として渡す。`int`か`enum`の`switch`は、値をcaseと比べる (`cranelift_frontend::Switch`)。`default`のない`switch`は、合うcaseがなければtrapする。検証したプログラムでは、これは起こらない。定数の`switch`は、VMと同じくコンパイルの時点で行き先を決める
-- どの関数とthunkもmoduleの記号を持つ。その名前はLIRの名前と種類だけで決まり、読み込みの順やアドレスにはよらない。LIRの関数は`f:<名前>`、thunkは`eml$thunk$<引数>$<結果>`で、種類はそれぞれ`i` (`I64`) か`f` (`F64`) と書く。moduleが定義する記号はどれもローカルのリンケージを持つので、直接の呼び出しは領域の中のPC相対の呼び出しになる。`NativeMachine::symbols()`は、マシンが定義したすべての関数とthunkの名前とコードの範囲を返す。`Image.functions[i].{code, size}`と合わせて、コードのアドレスから名前を引ける
+- どの関数とthunkもmoduleの記号を持つ。その名前はLIRの名前と種類だけで決まり、読み込みの順やアドレスにはよらない。LIRの関数は`f:<名前>`、thunkは`eml$thunk$<引数>$<結果>`で、種類はそれぞれ`i` (`I64`) か`f` (`F64`) と書く。置いた失敗を上げる関数は`eml$raise`である (「巻き戻しの地点」)。moduleは、`eml_nrt::entries()`のすべてのエントリと`eml$raise`を、プログラムの関数より前に決まった順で宣言する。moduleが定義する記号はどれもローカルのリンケージを持つので、直接の呼び出しは領域の中のPC相対の呼び出しになる。`NativeMachine::symbols()`は、マシンが定義したすべての関数 (`eml$raise`を含む) とthunkの名前とコードの範囲を返す。`Image.functions[i].{code, size}`と合わせて、コードのアドレスから名前を引ける
 - マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、`eml_nrt::entries()`のすべてのエントリを記号として登録し、どの関数を定義するよりも前にすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`と`call`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
 - `load`はプログラムを信頼する。プログラムは、型を検査したプログラムから作った最後のパスの後のLIRか、同じ規則を守る手書きのLIRである。ネイティブのコードが実行時に確かめることは、VMの速いモードが確かめることを超えない ([オブジェクトモデル](object-model.md)の「受け入れる制約」) ので、ほかのプログラムの振る舞いは未定義である。verifierはこの約束の一部しか確かめない。R8は、値を作ったときの配置をたどらない ([LIR](lir.md)の「構造の規則」)。debugのビルドでは、`load`はプログラムに所有の段のverifierを通し、通らなければ`internal error: invalid LIR at the native load: ...`でpanicする。VMと違ってネイティブには検査モードがないので、verifierが断るプログラムを読み込むテストはない
 - マシンのworkerはそのmoduleと領域を共有し、プロセス全体のmoduleはない。マシンは、`close`でも`Drop`でも、終わるときに領域を`free_memory`で返す。どのrunもworkerのスレッドが終わってから戻るので、そのとき領域のコードを実行しているものはない
 - `NativeMachine::run`は入口を実行する。入口は引数を取らない (取れば内部の誤り`the entry function takes parameters`を返す)。`eml_native::execute`は、マシンを作り、プログラムを読み込んで実行し、マシンを閉じる。読み込みの誤りは、入口の関数を名指す内部の誤りになる。その文は、領域が尽きたときは`the native code region is full`、ほかのmoduleの誤りでは`the native code cannot be built`である。`eml_nrt::SUPPORTED`が偽の対象では、`execute`は読み込む前に、`NativeMachine::run`と`call`はthunkを作る前に、内部の誤り`native code is not supported on this machine`を返す
+
+## 巻き戻しの地点
+
+生成したコードは、LIRの巻き戻しの地点 (`eml_lir::unwind::points`の地点。[LIR](lir.md)の「巻き戻しの地点」) を、その命令と、その後の`after_unwind_point(point, after)`に下ろす。この関数は、命令が失敗したかを確かめる熱いコードと、フレームを抜ける冷たいコード (Craneliftの冷たいブロック) を出す。`After`は、地点がどの種類の命令かを表す。
+
+| `After` | 使う所 | 熱いコード | 冷たいコード |
+|---|---|---|---|
+| `Faults { site, purity }` | `faults`の行で、戻るものの呼び出し | faultの語 (`CTX_FAULT`) をロードし、0でなければ冷たいコードへ分岐する | `eml$raise(ctx, self, site, purity)`を呼び、後始末へ進む |
+| `Never { raise }` | 戻らない行の呼び出し。`exit`は`raise`なし、`panic`は自分の位置の行と純粋さを持つ | なし。無条件に冷たいコードへ分岐する | (`raise`があれば`eml$raise(ctx, self, site, purity)`を呼び) 後始末へ進む |
+
+- `self`は関数自身のコードのアドレス (自分の記号の`func_addr`) で、冷たいコードだけがそれを作る。`site`は、関数自身の`FnRow.sites`での位置の行の添字である。この組が場所を表すので、プログラムのほかの部分で変わる番号はコードに現れない (「`Image`」)
+- 位置の行 (`FnRow.sites`の`SiteRow`) は、失敗を上げる文ごとに1つある。`Faults`か、上げる`Never`で下ろした`extern`の文で、文の順 (ブロックの順、ブロックの中の文の順) に並ぶ。行は文の位置を持ち、位置のない文なら`file`は`NO_FILE`である。だから位置の行は巻き戻しの地点の一部にだけある。何も上げない地点、つまり`exit`と末尾でない呼び出しは、位置の行を持たない
+- 後始末は、地点ごとの冷たいブロック1つである。地点の直後に所有している変数ごとに、その数だけ`eml_rt_decref`を呼び、生きているtokenごとに`eml_rt_drop_token`を呼び、関数の結果ごとに仮の値を返す。仮の値は、`float`では0.0、`obj`、`tobj`、`unit`ではUnitの語、`int`と`enum`では0、`token`では空のtoken (0) である。呼んだ側は中断か置いた失敗を見るので、仮の値を使わない。着地の印を持つ地点は下ろさない。着地の印を持つ`apply`は断る形だからである (「断る形」)
+- `Never`の行の後のLIRの続きはどこからも届かない。下ろしは、前のブロックのない新しいブロックで続け、行の変数をそのReprの仮の値に束縛する。だからブロックの残りもふつうに下ろせる
+- `eml$raise(ctx, function, site, purity)`は、moduleに1つある`tail`の関数で、結果を持たない。同じ引数で`eml_nrt_failed`を呼んで戻る (「externの失敗」)
+- 速い道の費用: `Faults`は、faultの語のロード1つと、通らない分岐1つだけを足す。`Never`はロードを持たない
 
 ## 安全点
 
@@ -182,6 +198,7 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 - ほかの`Err`は内部の類である。エントリは`worker::record(ctx, fault, None)`でそれを記録して、返った`Fatal`を返し、`shim`は`FATAL_RECORDED`で致命的な誤りの道からrunを終える。誤りは関数を`<native code>`と名指し、位置を持たない。包みの本体は`eml_fatal`を名指さない
 - `eml_x_Exit(ctx, code: int) -> never`と`eml_x_Panic(ctx, message: obj) -> never`は、エンジンごとに違うので手で書く。`eml_x_Exit`は終了コードをworkerの構造体に置き、`exit_abort`で`exit`の中断を始めて戻る。`eml_x_Panic`は`worker::park_panic`でメッセージを置いて戻るので、faultは`Fault::Engine`になる。`eml_x_Panic`は`message`を消費する。呼ぶ側の参照1つがworkerの構造体へ移るので、生成したコードは、地点の後始末も含めて、呼び出しの後で`message`を手放さない
 - 行のエントリは、サービスと同じく、`run`が入ったコードからだけ呼ぶ
+- 生成したコードは、`rows::CALLED`の行を`eml_x_<Variant>(ctx, 引数...)`の呼び出しに下ろし、各引数を行の引数のReprで作る。戻る`faults`の行の後には「巻き戻しの地点」の`Faults`のコードを、`faults`のない行の後には何も出さない。結果が`never`の行の後には`Never`のコードを出す。`eml_x_Exit`の後は何も上げずに後始末へ進み、`eml_x_Panic`の後は行の純粋さで上げる。`eml_x_Panic`に渡したメッセージは、行が消費するので地点の所有に入らず、後始末はそれを手放さない
 
 行が`ctx`に置いた失敗は、生成したコードがサービス`eml_nrt_failed(ctx, function, site, purity) -> action`で上げる。`function`は呼んだ関数のコードのアドレス、`site`はその関数の`FnRow.sites`の中の地点の添字 (関数の入口なら`ENTRY_SITE`)、`purity`は失敗した行の純粋さである。`purity`の語は`PURITY_PURE` (0)、`PURITY_PANICS` (1)、`PURITY_EFFECTFUL` (2) で、`eml_extern::Purity`の宣言の順である。3つの定数は`ACTION_*`と同じく`eml_nrt::image`にある。debugのビルドでは、サービスは`purity`がこのどれかであることと、`site`が`ENTRY_SITE`か32ビットに収まる添字であることを確かめる。
 
