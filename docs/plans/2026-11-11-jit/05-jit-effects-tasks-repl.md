@@ -25,8 +25,8 @@ Base 432fffb4. Tags: [V] verified (how is given inline or in section 7), [I] inf
 - `Fault::Engine` and `Heap::is_immortal` come from jit-core (S2b). D-15 uses `Fault::Engine` and adds nothing to eml_rt; jit-tasks edits no eml_rt file (S1 R-9). Removed from 5.2's N-18 list, its work units and its acceptance.
 - D-4: the classification now starts with `take_fault()`; on `Engine` the worker payload is taken (a re-raise request first, then a panic word); otherwise the parked fault's rules apply.
 - D-14: the geometry and `stack_limit = real` exist from jit-core (N-42); jit-tasks adds only the classes and `limits::set`, the single writer after thread start (grep check in 5.2).
-- D-10 / 5.2: the nested-run rule and `BuriedRun` are N-43 difference (2), a user-visible semantics item of the jit-tasks plan; spec/native.md 「VMとの違い」 and stdlib.md 「`Std.Async`」 are written in the same commit; the U-S4-1 measurement is a plan task before marks are fixed; marked files cite N-43 (2) (kind 1).
-- D-9: `Seeded` is a usage error natively, N-43 difference (3).
+- D-10 / 5.2: the nested-run rule and `BuriedRun` are N-43 difference (3), a user-visible semantics item of the jit-tasks plan; spec/native.md 「VMとの違い」 and stdlib.md 「`Std.Async`」 are written in the same commit; the U-S4-1 measurement is a plan task before marks are fixed; marked files cite N-43 (3) (kind 1).
+- D-9: `Seeded` is a usage error natively, N-43 difference (2).
 - 5.2: jit-tasks deletes the `eml_sched/testing` feature (N-41), with a unit that rewrites the remaining fixture uses on the public API (kind stated).
 - D-1 / 5.1: `CTX_YIELD_ABORT` arrives in jit-effects under N-29's plain gate (`bench/rt-gate.sh`, <= +0.1 %).
 - D-5: the fast-mode `Err` list is `WrongKind`, `StaleToken`, `RootMisuse`, `Unrecoverable` (Ch-1 accepted).
@@ -184,7 +184,7 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
   3. `limits::enter_task(w, ctx)` (D-14);
   4. `enter(ctx, thunk, image.runtime_entries[kind], argv)`.
 - **On return:** `debug_assert!(ctx.evv == ())`, since an entry returns with the evv it started with (lir.md 「evv の不変条件」 [R4 1.4]). After an abort that reached the entry (`exit`), the loop calls `yield_finish` and `evv_set(())`, as S2b D-13 does. Then `cells::finish(cur.outcome)`, the bookkeeping, and the publish (`Slot.current`).
-- **Policies:** `Normal` and `Sequential`. With the native engine, `Seeded` is a usage error (N-43 difference (3)).
+- **Policies:** `Normal` and `Sequential`. With the native engine, `Seeded` is a usage error (N-43 difference (2)).
 
 **D-10 Nested `Async.run`: a LIFO loop inside the `run_raw` wrapper.**
 - The wrapper:
@@ -195,8 +195,8 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
   5. returns `handle`.
 - **Ordering** (native.md L128 already accepts it: 「入れ子の順が逆になりうるので、`Async.run`は`main`から呼ぶのがよい」 [V: read]): a token for a level that is not the innermost marks the level `closed` and is acted on when the inner levels return.
 - **Deadlock rule** (review C-4): the shared verdict counts a worker idle in a nested loop as parked. A buried closed level is not runnable work, so the verdict fires and reports. If the reporting worker has a buried closed level, the error is the new `RunFault::BuriedRun` with the text `deadlock: an Async.run waits under a nested Async.run on the same worker`; otherwise it is the usual deadlock. It is never a hang. The VM never produces `BuriedRun`.
-- **Status** (Ch-3 accepted under N-43): this is difference (2) of spec/native.md 「VMとの違い」. The jit-tasks plan lists it as a user-visible semantics item, and the commit that adds the nested loop writes 「VMとの違い」 (2) and stdlib.md 「`Std.Async`」 together. A UI file or transcript that needs the inversion gets `-- native: skip (<reason citing 「VMとの違い」 (2)>)` (kind 1), fixed only after the U-S4-1 measurement task.
-- **Depth** (review A-1): nested entries run on the caller's thread stack, so a task's depth budget is what the thread has left. Natively, a task inside a nested loop can reach `DepthLimit` / `ResourceLimit` earlier than in the VM, where each entry `Task` has the whole `max_depth`. This is part of N-43 difference (2) ("nested entries share the thread's depth budget") and is written in spec/native.md 「VMとの違い」 and 「タスクの上限」. With 1 GiB worker stacks it matters only for programs near the limit.
+- **Status** (Ch-3 accepted under N-43): this is difference (3) of spec/native.md 「VMとの違い」. The jit-tasks plan lists it as a user-visible semantics item, and the commit that adds the nested loop writes 「VMとの違い」 (3) and stdlib.md 「`Std.Async`」 together. A UI file or transcript that needs the inversion gets `-- native: skip (<reason citing 「VMとの違い」 (3)>)` (kind 1), fixed only after the U-S4-1 measurement task.
+- **Depth** (review A-1): nested entries run on the caller's thread stack, so a task's depth budget is what the thread has left. Natively, a task inside a nested loop can reach `DepthLimit` / `ResourceLimit` earlier than in the VM, where each entry `Task` has the whole `max_depth`. This is part of N-43 difference (3) ("nested entries share the thread's depth budget") and is written in spec/native.md 「VMとの違い」 and 「タスクの上限」. With 1 GiB worker stacks it matters only for programs near the limit.
 
 **D-11 `par`: a service that returns the pair or does not return; re-raise through a nested enter** (review C-1; fits the existing protocols).
 - Lowering: `pair = call eml_nrt_par(ctx, f, g, site)`, then `After::Call` (par is a `Rhs::Call` unwind point; one `target` load; no `fault` load).
@@ -318,7 +318,7 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
 - **Mark the whole yield path cold:** it moves the most frequent path of resumable effects out of line.
 - **Effect numbers as immediates** (r1): load-order-dependent code (review C-3).
 - **A shared generic worker loop:** it rewrites the VM's frame switching.
-- **Fibers / per-task stacks** for nested `Async.run`: a stack switch, which N-35 forbids. **Baton threads**: a per-thread driver rework; kept as fallback F-1, a user decision only if N-43 (2) proves unacceptable.
+- **Fibers / per-task stacks** for nested `Async.run`: a stack switch, which N-35 forbids. **Baton threads**: a per-thread driver rework; kept as fallback F-1, a user decision only if N-43 (3) proves unacceptable.
 - **Right `par` children on idle workers:** that needs join helping (native-par).
 - **Re-raise through `Fault`-and-`eml$raise` for `par`** (r1): a fourth protocol (review C-1).
 - **An `eml_fatal` re-raise mode:** a stub ABI change.
@@ -343,7 +343,7 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
 |---|---|---|
 | Ch-1 | Accepted: the fast-mode `Err` list is `WrongKind`, `StaleToken`, `RootMisuse`, `Unrecoverable` | D-5 |
 | Ch-2 | Accepted: geometry of N-42, present from jit-core | D-14, D-17 |
-| Ch-3 | Accepted under N-43 (2): LIFO nesting and `BuriedRun` are a listed difference | D-10, 5.2, U-S4-1 |
+| Ch-3 | Accepted under N-43 (3): LIFO nesting and `BuriedRun` are a listed difference | D-10, 5.2, U-S4-1 |
 | Ch-4 | Accepted: no new `Native` field; `Fault::Engine` from jit-core; jit-tasks edits no eml_rt file | D-14, D-15, 5.2 |
 
 ## 4. Assumptions and interfaces
@@ -372,7 +372,7 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
 |---|---|---|
 | A-1 [I] | After jit-externs, `async_op` is unchanged in eml_vm | the moves start from S3's state |
 | A-2 [I] | `evv_push` accepts fork evidences on a frozen tail | `Ctx::fork_node` |
-| A-3 [I] | No UI test has the nested-run inversion (7 files with ≥2 `Async.run`; the two read have one nested run per task [V]); S1 A9 | `-- native: skip` citing N-43 (2) (kind 1); F-1 only by user decision |
+| A-3 [I] | No UI test has the nested-run inversion (7 files with ≥2 `Async.run`; the two read have one nested run per task [V]); S1 A9 | `-- native: skip` citing N-43 (3) (kind 1); F-1 only by user decision |
 | A-4 [I] | The native UI pass at 1 / 2 / 8 workers fits 1 s per file | the 2 / 8 pass is restricted to `async/` without `clock: real`, or `#[ignore]`d with a reason |
 | A-5 [V: grep §7] | `effects/`, `unwind/`, `panic/` use no async rows and no `par` | - |
 
@@ -425,7 +425,7 @@ S2b's `After::Call` hot check stays as is. jit-effects extends only `after_unwin
 
 Scope as in S1's stage table; in particular the main worker (`hard = stack_base + 2 MiB`) and its pending loop as a Rust function (D-17). No eml_rt edit is expected (S1 R-9); if one turns out necessary, it takes N-29's gates and the plan lists it.
 
-**User-visible semantics item** (N-43 difference (2)): the nested-run rule (LIFO levels; nested entries share the thread's depth budget) and `RunFault::BuriedRun`. The commit that adds the nested loop writes spec/native.md 「VMとの違い」 (2) and stdlib.md 「`Std.Async`」.
+**User-visible semantics item** (N-43 difference (3)): the nested-run rule (LIFO levels; nested entries share the thread's depth budget) and `RunFault::BuriedRun`. The commit that adds the nested loop writes spec/native.md 「VMとの違い」 (3) and stdlib.md 「`Std.Async`」.
 
 **Changes to earlier code (N-18 list):**
 - `eml_nrt_safepoint` body; `eml_nrt_failed` steps 1 and `RAISE_DONE`; `eml_nrt_landed` body;
@@ -445,7 +445,7 @@ Scope as in S1's stage table; in particular the main worker (`hard = stack_base 
 5. Main-worker loop, `join_outcomes`, `reraise_mask`.
 6. Delete `eml_sched/testing` (N-41), once the files whose unit tests use it have moved: the remaining fixture uses (eml_vm's 54 `cells.rs` fixture uses, S1 A6, minus those already gone) are rewritten on eml_sched's public API. Kind 3 when every expected value stays byte-identical; a test whose assertion cannot be stated on the public API is listed one by one as kind 1 (deleted or moved) with its reason. Check: `grep -rn 'testing' crates/eml_sched/Cargo.toml` empty.
 7. eml_nrt `Worker`, `with_worker`, `limits.rs`, the loop over an `Enter` trait. Miri and TSan loop tests, including the re-borrow test of D-16.
-8. U-S4-1 measurement: run every `run` / `run-fail` file and transcript with ≥2 `Async.run` natively with the nested loop and list those that end in `BuriedRun`; the marks (kind 1, citing 「VMとの違い」 (2)) are fixed in the plan only after this task. Then async wrappers and the nested loop (D-10, `BuriedRun`), with the 「VMとの違い」 (2) and stdlib.md text in the same commit. Native `async/` at 1 worker.
+8. U-S4-1 measurement: run every `run` / `run-fail` file and transcript with ≥2 `Async.run` natively with the nested loop and list those that end in `BuriedRun`; the marks (kind 1, citing 「VMとの違い」 (3)) are fixed in the plan only after this task. Then async wrappers and the nested loop (D-10, `BuriedRun`), with the 「VMとの違い」 (3) and stdlib.md text in the same commit. Native `async/` at 1 worker.
 9. `par`, `child_abort`, `compute`, re-raise. Tests:
    - aborts in the left, the right and both children;
    - a right fatal after a left abort;
@@ -459,13 +459,13 @@ Scope as in S1's stage table; in particular the main worker (`hard = stack_base 
 15. Close: `bench/native.sh`, `par_tree`, `bench/async/scale.sh` and `bench/net.sh` native numbers into 「ネイティブの数値」; VM bench tables.
 
 **docs/spec:**
-- spec/native.md: 「VMとの違い」 (2), 「タスク」 (entries, evv rule, LIFO nesting, `BuriedRun`, depth per thread), 「`par`」, 「`compute`」, 「タスクの上限」 (geometry, table, single writer), 「止める手順」 (requests behind `Fault::Engine`, `Copy`-only frames), 「メインのworker」, 「エントリ」 (re-entering entries and `with_worker`);
+- spec/native.md: 「VMとの違い」 (3), 「タスク」 (entries, evv rule, LIFO nesting, `BuriedRun`, depth per thread), 「`par`」, 「`compute`」, 「タスクの上限」 (geometry, table, single writer), 「止める手順」 (requests behind `Fault::Engine`, `Copy`-only frames), 「メインのworker」, 「エントリ」 (re-entering entries and `with_worker`);
 - stdlib.md 「`Std.Async`」; vm.md (moved files); architecture.md; testing.md; benchmarks.md; status.md; diagnostics.md.
 
 **Acceptance:** gates; `git diff --stat <stage base> -- crates/eml_rt` empty (else N-29's gates); `grep -rn Unsupported crates/` empty; rejected is 0; every `run` / `run-fail` file identical natively at 1 worker or marked with a reason citing an N-43 difference, and the order-independent `async` / `chan` / net files at 2 / 8 (`WORKER_RUNS`); `grep -rn 'set_stack_limit(' crates/eml_nrt/src` = thread start + `limits::set` (N-42); `grep -rn 'testing' crates/eml_sched/Cargo.toml` empty (N-41); stdlib.md and spec/native.md state the nested-run rule; native numbers of `par_tree`, `bench/async/scale.sh`, `bench/net.sh` recorded; TSan and Miri `loops::` green; `cargo tree -p eml_sched` clean; `grep -rn 'eml_fatal(' crates/eml_nrt/src | grep -v -e src/entries.rs -e src/enter.rs` empty (S2b's standing grep, XR-10); `eml run --native --workers 4` and `--gui stub` run, and so do `EML_WORKERS=4` and `EML_GUI=stub` (XR-7; 00 C-7, C-11).
 
 **Risks:**
-- Nested-run inversion (U-S4-1; N-43 (2)). If the measurement finds files whose inversion the user finds unacceptable, F-1 goes to the user.
+- Nested-run inversion (U-S4-1; N-43 (3)). If the measurement finds files whose inversion the user finds unacceptable, F-1 goes to the user.
 - Size of the VM refactor: fallback is to split jit-tasks into `sched-exec` + `jit-tasks`, with user approval.
 - Multi-worker time budget (A-4).
 - Main-worker 4 MiB.
@@ -491,7 +491,7 @@ Work units:
 
 | # | Item | Default | Who / when |
 |---|---|---|---|
-| U-S4-1 | UI files and transcripts with the nested-run inversion | expect 0; mark citing 「VMとの違い」 (2) if found (kind 1) | jit-tasks unit 8, a measurement task before the marks are fixed |
+| U-S4-1 | UI files and transcripts with the nested-run inversion | expect 0; mark citing 「VMとの違い」 (3) if found (kind 1) | jit-tasks unit 8, a measurement task before the marks are fixed |
 | U-S4-2 | Split jit-tasks | one stage | user, at refresh if > ~25 commits |
 | U-S4-3 | Limit-mark files natively | `max-depth` files keep jit-core's mark citing N-43 (1) (no word-count depth limit natively; a test-only budget would be a test-only field and is not proposed); `max-bytes` is honoured as is, so a file limited only by `max-bytes` whose result is now identical loses its mark (kind 1) | jit-tasks unit 11 |
 | U-S4-6 | Native `RunStats` | VM-only counters zero | unchanged |

@@ -422,10 +422,20 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `linker.rs` の `Linker` は、`--link` の上書き、登録した記号、`Libraries`、`Bridges` を持つ。`link` は、関数とハンドルの dtor の記号をすべて解決してから、関数の `c_signature()` について `Bridges::get` を1回呼び、入力に並びをそろえた `Linked` を返す。解決の順は [VM](../spec/vm.md) の「ライブラリと記号」にある。`Linker` は `Send` で、`Sync` は要らない。`with_symbols` は `unsafe` で、登録するアドレスの署名と寿命は呼び手が約束する。`--link` で同じ KEY を2回以上渡すと、後のものが効く
 - `error.rs` の `LinkError` は、`Library`、`Symbol`、`UnknownOverride`、`Unsupported` の4つの変種を持ち、文言は固定である
 - trait はない。呼び手はプログラムを持ってから読み込む前につなぎ、結果の `Linked` の値を渡す。VM の側に linker も、それを作る関数も置かない
-- `abi.rs`は、emlのコード、adapter、補助の関数、thunkのCraneliftのフラグを作る唯一の関数`isa`、emlの関数の`tail`のシグネチャ、記述子から作るエントリのシグネチャ、エントリをimportとして宣言する関数と、`isa(false)`のISAと`JIT_REGION_BYTES`の予約した領域からJITのmoduleのbuilderを作る関数`jit_builder`を持つ ([ネイティブの実行系](../spec/native.md) の「`eml_enter`」)。`thunk.rs`は、`eml_enter`が呼ぶthunkを作る。どちらも`cranelift_module::Module`について総称で、`JITModule`を名指すのは`bridge.rs`だけである。ABIのテストが結合テストなので、この2つは`pub`である
+- `abi.rs`は、emlのコード、adapter、補助の関数、thunkのCraneliftのフラグを作る唯一の関数`isa`、emlの関数の`tail`のシグネチャ、記述子から作るエントリのシグネチャ、エントリをimportとして宣言する関数と、`isa(false)`のISAと`JIT_REGION_BYTES`の予約した領域からJITのmoduleのbuilderを作る関数`jit_builder`を持つ ([ネイティブの実行系](../spec/native.md) の「`eml_enter`」)。`thunk.rs`は、`eml_enter`が呼ぶthunkを作る。どちらも`cranelift_module::Module`について総称で、`JITModule`を名指すのは`jit.rs`と`bridge.rs`だけである。ABIのテストが結合テストなので、この2つは`pub`である
 - `mem.rs`は`eml_rt`を名指す唯一のmoduleで、`REUSE_SCANNED_LIMIT`が`layout::INLINE_SCAN_LIMIT`以下であることをコンパイル時のassertで確かめる。メモリに触るコード生成はここに置く
+- `jit.rs`は、JITのホスト`NativeMachine`と`execute`を持つ。マシンは、JITのmodule 1つとその領域、`Image`の表、thunkを持ち、プログラムを1回だけ読み込んで`eml_nrt::run::run`で走らせる ([ネイティブの実行系](../spec/native.md)の「関数の形」「実行の始めと終わり」)
+- `lower/`は、LIRをCLIFに下ろす。`mod.rs`はどの関数を定義するよりも前にすべての関数を宣言し、`names.rs`は記号の名前を作り、`function.rs`はLIRの関数1つ (ブロック、ブロックの引数、文、終端、atom) を下ろす。`call.rs`は直接の呼び出しと末尾呼び出しを、`unwind.rs`は巻き戻しの地点の後のコード、後始末、`eml$raise`を、`safepoint.rs`は入口の安全点を、`rc.rs`はインラインの`dup`と`decref`を、`data.rs`は構築子、欄、`switch`、箱、`release`、token、reuseを、`consts.rs`は読み込み時の値のデータの記号を下ろす。`rows.rs`は、ネイティブのコードがインラインに展開するstdの行 (`INLINE`) と呼ぶ行 (`CALLED`) を挙げ、`lowering`は行がそのどちらかを返す
+- `unsupported.rs`は、ネイティブのコードが断るLIRの形を述べる唯一の所である (`Form`、`unsupported`)。診断、ネイティブのUIテスト、下ろしは、どれもこれを使う ([ネイティブの実行系](../spec/native.md)の「断る形」)
+- コード生成器は、次の置き場所の規則を守る。`tests/placement.rs`が、規則ごとにソースのファイルを走査して確かめる
+  - エントリをimportとして宣言する (`Linkage::Import`) のも、`tail`の呼び出し規約を名指す (`CallConv::Tail`) のも、`preserve_frame_pointers`を置くのも、`abi.rs`だけである。Craneliftのフラグを作る (`settings::builder`) のは、`abi.rs`と`bridge.rs`だけである
+  - 生成したコードは、`mem.rs`を通してだけメモリをロードしストアする (狭い幅の形、アトミック、スタックの枠への読み書きを含む)。ほかにロードとストアを書くのは、`thunk.rs` (`eml_enter`の引数と結果の配列) と`bridge.rs` (Cの呼び出しの引数の配列) だけである
+  - `call_indirect`は、呼ぶ先が実行時の値である所、つまり`bridge.rs`と`thunk.rs`だけで使う
+  - `CTX_*`のずれを定めない。`mem.rs`を通して`eml_rt`から読む。`eml_rt::Ctx`、`eml_rt::Heap`、`Ctx<…>`の型も、`Checked`も名指さない
+  - `eml_sched`への辺を持たない。実行の境界の型と共有の行の関数には、`eml_nrt`の再エクスポートを通して届く。thread-localは使わない
+  - `eml_native`、`eml_nrt`、`eml_sched`のファイル (コード、コメント、マニフェスト) が引く`docs/`の文書は、`docs/spec/`と`docs/implementation/`の下だけである
 - `bridge.rs`は自分のフラグを持つ。Cの橋渡しの関数は既定の呼び出し規約だけを使い、フレームポインタもstack probeも要らないためである
-- `unsafe` を書いてよいのは `bridge.rs`、`library.rs`、`linker.rs` だけである ([テスト戦略](testing.md) の「`eml_native` の検証」)
+- `unsafe`を書いてよいのは`bridge.rs`、`jit.rs`、`library.rs`、`linker.rs`だけである ([テスト戦略](testing.md)の「`eml_native` の検証」)
 
 ## `eml_nrt`の内部
 
@@ -433,9 +443,11 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `entries.rs`は、`Kind`、`Entry`と、マクロ`entries!`とその補助 (`__entry!`、`__kind!`、`__ty!`、`__result!`) を持つ。`shim`の本体の規則を書くのは`__entry!`だけである ([ネイティブの実行系](../spec/native.md) の「包みの本体」)
 - `enter.rs`は、`Thunk`、`Fatal`、致命的な誤りの符号 (`FATAL_PANICKED`、`FATAL_FAULT`、`FATAL_RECORDED`)、`Raise`とその3つの実装、`enter`、`detached`と、エントリ`eml_fatal`を持つ
 - `rows.rs`は、一覧`extern_rows!`の展開`entries`で作る行のエントリの表`ROWS`と、手で書く`eml_x_Exit`と`eml_x_Panic`を持つ ([ネイティブの実行系](../spec/native.md)の「externの失敗」)
+- `services.rs`はサービス`eml_nrt_failed`と`eml_nrt_safepoint` (表`SERVICES`) を、`heap.rs`はヒープのエントリ (表`HEAP`) を持つ ([ネイティブの実行系](../spec/native.md)の「ヒープのエントリ」「externの失敗」「安全点」)
 - `image.rs`は`Image`とその行の型、`Start`、`Options`、`Census`、行動の語を持つ。`run.rs`は実行の駆動`run`と、スタックの形の3つの定数を持つ。`worker.rs`はworkerの構造体と`record`、`park_panic`を、`census.rs`はcensusを、`constants.rs`は読み込み時の値を凍結した塊に作る関数を持つ ([ネイティブの実行系](../spec/native.md)の「`Image`」「実行の始めと終わり」)
 - `arch/`は、ISAとABIごとのstub (`eml_enter`、longjmpの側、`JmpBuf`、`SUPPORTED`) を持ち、`arch/mod.rs`が対象ごとに1つを選ぶ。`aarch64.rs`はWindowsでないaarch64のAAPCS64、`x86_64_sysv.rs`はWindowsでないx86_64のSysV、`x86_64_win64.rs`はWindowsのx86_64のWin64で、`unsupported.rs`はほかのすべての対象である。stubは`#[unsafe(naked)]`の関数と`naked_asm!`で書き、外のアセンブラもbuild scriptも使わない
 - thread-localは使わない。ネイティブのコードは`Ctx<Fast>`だけを使うので、`Checked`も名指さない
+- `eml_fatal`を呼ぶのは、`entries.rs`の`shim`の規則と`enter.rs`だけである。`stack_limit`を書くのは`run.rs`だけで、スレッドの始めに1回だけ書く。`CTX_*`のずれは定めない。`crates/eml_native/tests/placement.rs`が、これらの規則を`eml_native`の規則と一緒に確かめる
 - `examples/nrt_bench.rs`は、stubの往復と2つのエントリの形の費用を測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)
 - `unsafe`を書いてよいのは、`trust.rs`が挙げるファイル (`enter.rs`、`entries.rs`、`image.rs`、`worker.rs`、`run.rs`、`census.rs`、`constants.rs`、`services.rs`、`heap.rs`、`rows.rs`、`arch/`のstubのファイル) だけである ([テスト戦略](testing.md)の「`eml_nrt`の検証」)
 

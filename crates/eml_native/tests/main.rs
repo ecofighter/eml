@@ -7,6 +7,7 @@ mod common;
 mod data;
 mod linker;
 mod machine;
+mod placement;
 mod rc;
 mod reuse;
 mod rows;

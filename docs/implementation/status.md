@@ -43,6 +43,7 @@
 - TLS: `Std.Tls`のクライアントが、`Std.Net`のストリームの上でhandshakeし、暗号にして読み書きする。TLSの状態はI/Oを持たないcrate `eml_tls`が持ち、ソケットのI/Oは`std/Tls.em`が`Std.Net`で行う。暗号はaws-lc-rsである。サーバーの証明書はOSの検証器で確かめ、OSの根に加えてPEMで渡したCAを信頼する。接続の設定とhandshakeの間の押し込みは、ブロックする呼び出しのプールで動く。テストのdriverの`tls.localhost`がTLSを終端する ([標準ライブラリ](../spec/stdlib.md) の「`Std.Tls`」)
 - HTTP: `Std.Http` の HTTP/1.1 のクライアントが、`Std.Net` と `Std.Tls` の上で `http` と `https` の URL に要求を出す。要求ごとに接続を開いて閉じ、本文は `Transfer-Encoding` の chunked、`Content-Length`、EOF で区切る。リダイレクトを追い、https から http へは追わない ([標準ライブラリ](../spec/stdlib.md) の「`Std.Http`」)
 - GUI: `Std.Gui`は、handler `Gui.run`の下で直接の形でネイティブのウィンドウを組み、ハンドルを通してウィジェットを変え、`Gui.wait`でメッセージを取り出す。ウィジェットはWindow、Grid、Label、Button、TextField、CheckBox、Choice、ProgressBarで、Taffyのgridが自動で置く。`eml run`はネイティブのループをメインのworkerの`Park`の中で回す。ネイティブのbackendは、macOSではAppKit、LinuxではQt 6、Windows 11ではWindows App SDK 2のWinUI 3で、feature `gui-native`で組む。既定のビルドは画面を開かないstubのbackendだけを持ち、`--gui stub`もそれを選ぶ。固定したタスクは、`Async.start_off_main`と`Async.spawn_off_main`でエフェクトを持つ仕事をメインのworkerの外で始める ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」、[VM](../spec/vm.md)の「GUIのPark」、[配布とGUIの前提](distribution.md))
+- ネイティブのコード: `eml run --native`は、プログラムをCraneliftのJITでネイティブのコードにし、ネイティブの実行系 (`eml_nrt`) の上で走らせる。動かすのはLIRの一階の部分で、スカラー、データ、直接の呼び出しと末尾呼び出し、参照の数え方、定数、インラインに展開するstdの行45と、呼ぶ行11 (`exit`と`panic`を含む) である。クロージャ、関数の値、`apply`、エフェクトの操作とhandler、`par`、`Async`などのタスクの行、ほかのstdの行、利用者のCの関数を使うプログラムは、E0004で断る ([ネイティブの実行系](../spec/native.md)の「断る形」)。VMの実行と違うのは次の点だけである。語の数で数える深さの上限はなく、`--debug-heap`、`--stats`、`Seeded`の方針もない。ネイティブのコードは1つのworkerで動き、窓を開かないので、1以外の`--workers`と`--gui`は使い方の誤りである ([ネイティブの実行系](../spec/native.md)の「VMとの違い」)
 - シグナル: `Std.Signal` の `wait` で、タスクが Ctrl-C と SIGTERM を待てる。待つタスクがなければ、`eml run` は Ctrl-C で終了コード 130、SIGTERM で 143 で終わる ([標準ライブラリ](../spec/stdlib.md) の「`Std.Signal`」)
 - ブロックの中の `var` と代入 `x <- e`、添字の読み `x[i]` と書き込み `x[i] <- e`、Prelude の `for` と `while` ([式](../spec/expressions.md) の「`var`」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」)
 - 線形性、持ち越し規則、網羅性の検査。`fail` や `exit` のような戻らない呼び出しで終わる経路では、消費しない `Lin` の値を手放さなくてよい ([線形性](../spec/linearity.md) の「暗黙の後始末」)
@@ -59,7 +60,7 @@
 - Unicode の表が要る文字の操作 (ASCII でない大文字と小文字の変換、文字の分類)、置換付きの UTF-8 のデコード、`Lin` の要素の配列の API ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - コマンドの組み合わせ: `Proc` で標準エラーを別の文字列に取ること、環境変数の削除 ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - 可変参照 `Ref`、再エクスポート (`pub import`)、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、関数をまたぐ reuse、LSP、フォーマッタ ([ロードマップ](../future/roadmap.md) の「その後の項目」)
-- ネイティブ化。ネイティブの実行系 (`eml_nrt`) にはエントリのstubとエントリの表があり、コード生成器はまだない ([ネイティブの実行系](../spec/native.md)の「エントリ」、[ロードマップ](../future/roadmap.md)の「段の列」)
+- クロージャ、エフェクト、タスク、残りのstdの行、利用者のCの関数のネイティブのコード、ネイティブのREPL、AOTのコンパイル ([ロードマップ](../future/roadmap.md)の「段の列」)
 - GUIのウィジェットの追加、ダイアログ、メニュー、gridの明示の置き方、宣言的な層 ([ロードマップ](../future/roadmap.md)の「GUI」)
 
 ## 既知の制限

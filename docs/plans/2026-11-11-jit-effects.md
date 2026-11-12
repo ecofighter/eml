@@ -20,6 +20,7 @@
 
 - jit-rt: `eml_enter`と`enter() -> Result<(), Fatal { code, site }>`、何も記録しない`eml_fatal(ctx, code, site)`、`entries!` (`plain`と`shim`)、`CTX_*`の定数 (`Native`はずれ0、`heap`は72)、`ctx.runtime()`と`set_runtime`
 - jit-core (付録03の§2): `lower/unwind.rs`の`after_unwind_point(fx, &Point, After)`と`After::{Call, Faults, Arith, Never}`。`eml$raise(ctx, function, site, purity)`と`eml_nrt_failed(ctx, function, site, purity) -> action` (`eml_nrt/src/services.rs`。`function`はコードのアドレス、`site`はその関数の`FnRow.sites`の添字)。`worker::record(ctx, RunFault, Option<At>) -> Fatal` (`FATAL_RECORDED = 3`) と`worker::park_panic`。`Fault::Engine`。名前ごとのデータのシンボル (`Datum`、`consts.<kind>() -> DataId`、`DatumRow.slot`)。`mem.rs`、`abi.rs`、`thunk.rs`。`bench/native.sh`
+- jit-coreの残した確かめ: `Faults`と`Never`の地点の後始末は、jit-coreでは`eml$raise`がいつも致命的な誤りで終わるので、コードは出すが実行されない。この段で`eml$raise`がハンドラへ戻るようになったら、`eml$raise`の後にその後始末を流す実行時のテストを足す (jit-coreのK13の査読のA-2)。handlerを外す地点のネイティブの後始末は、VMの巻き戻しと同じく、外すhandlerの状態を`ev_take_state`で取り出して手放す (`eml_vm/src/vm.rs`の巻き戻しの`ev_take_state`と`decref`。docs/spec/vm.mdの「巻き戻し」)。VMでは、これは状態を早く解放するためだけで、取り出さなくても状態はevidenceと一緒に解放される。だからrunの終わりのcensusでは、取り出したかどうかを見分けられない
 - jit-apply: クロージャ (タグは足りない引数の数、走査する語0は`c<k>:<f>`のコード)、`Datum::Fn`、`consts.fn_value(FnIdx)`、`FnRow.value`、節の関数に合わせて型の付いたアダプタ`c0:<f>`、`mem::closure_code`
 - jit-externs: すべての行を持つ`extern_rows!`、`LISTED`、`empty_mut_array`、`GateHost`
 
@@ -65,8 +66,9 @@ N-18の一覧 (付録05の§5.1):
 
 ## 7. テストとテストの変更の種類
 
-- 新しいテスト: 単位5〜9のコード生成のテスト (`crates/eml_native/tests`。LIRの文 → JIT → `eml_enter` → 結果とcensus)、CLIFの固定`a_yield_point_call`、eml_rtの構築子の`trusted::`のテスト
+- 新しいテスト: `eml$raise`が戻った後に`Faults`と`Never`の地点の後始末を流す実行時のテスト (3節のjit-coreの残した確かめ)、handlerを外す地点の後始末が状態を手放すことを、runの終わる前に確かめるテスト (代役のthunkを通して、状態に入れた物体が地点を抜けた直後にもう生きていないことを`Heap::live_objects`で見る。runの終わりのcensusでは見分けられない)。単位5〜9のコード生成のテスト (`crates/eml_native/tests`。LIRの文 → JIT → `eml_enter` → 結果とcensus)、CLIFの固定`a_yield_point_call`、eml_rtの構築子の`trusted::`のテスト
 - 種類(1): 見込みはない
+- 種類(2): `crates/eml_native/tests/placement.rs`の`placement::indirect_calls_are_only_in_bridge_and_thunk`の期待するファイルに、節の呼び出し (D-3の`call_indirect`と`return_call_indirect`) を下ろすファイルを足す。`docs/implementation/architecture.md`の「`eml_native` の内部」の`call_indirect`の規則も同じコミットで直す。節の関数は呼ぶ先が実行時の値だからである
 - 種類(2): ネイティブのUIの2つのsnapshot (流した数、断った数、ヒストグラム)。付録03の数から`prim`、`clause`、`prompt`を引いた見込みは、断られる`run`のファイルが約150、受け入れられるものが約479である。下限ではなく、書き直すときに測る。`effects/`、`unwind/`、`panic/`で断られるものは0
 - 種類(3): eml_vmを共有の構築子に通し直すこと (期待値はすべてバイト単位で同じ)
 
