@@ -9,7 +9,7 @@ use eml_nrt::RunFault;
 use eml_nrt::shared_rows as shared;
 use eml_rt::{Control, Ctx, Fast, Limits};
 
-use crate::common::native::{agree, checked, clif, host, machine, program};
+use crate::common::native::{agree, clif, host, machine, native_options, program};
 
 const MAIN: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
 
@@ -335,7 +335,7 @@ fn every_inline_row_agrees_with_its_shared_function() {
     {
         let Ok(expected) = expected else { continue };
         let got = m
-            .call(&name, &args, checked())
+            .call(&name, &args, native_options())
             .unwrap_or_else(|error| panic!("`{ext:?}` {args:?}: {error}"));
         assert_eq!(
             got.iter().copied().map(bits).collect::<Vec<_>>(),
@@ -357,7 +357,7 @@ mod fatal {
     use eml_rt::{Buffering, StdHost};
 
     use super::{Case, every_case};
-    use crate::common::native::{agree, agree_on, checked, machine, native, program};
+    use crate::common::native::{agree, agree_on, machine, native, native_options, program};
 
     #[test]
     fn every_failing_pair_gives_the_fault_text() {
@@ -379,7 +379,7 @@ mod fatal {
         {
             let Err(fault) = expected else { continue };
             let got = m
-                .call(&name, &args, checked())
+                .call(&name, &args, native_options())
                 .map_err(|error| error.to_string());
             assert_eq!(
                 got,

@@ -10,7 +10,7 @@ use eml_nrt::image::Options;
 use eml_rt::{Control, Limits};
 use eml_test_support::capture;
 
-use crate::common::native::{agree, agree_lowered, call, checked, clif, machine, program};
+use crate::common::native::{agree, agree_lowered, call, clif, machine, native_options, program};
 
 const MAIN: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
 
@@ -129,9 +129,9 @@ fn a_second_load_is_refused() {
     let loaded = m.load(&program, &Linked::default()).unwrap();
     assert_eq!(m.load(&program, &Linked::default()), Err(LoadError::Loaded));
     // 断った後も、読み込んだプログラムはそのまま動く
-    assert_eq!(m.run(loaded, checked()).unwrap().exit, None);
+    assert_eq!(m.run(loaded, native_options()).unwrap().exit, None);
     assert_eq!(
-        m.call("f", &[Arg::I64(4)], checked()).unwrap(),
+        m.call("f", &[Arg::I64(4)], native_options()).unwrap(),
         [Arg::I64(4)]
     );
     m.close();
@@ -164,8 +164,8 @@ fn symbols_cover_every_function() {
     let mut m = machine();
     let loaded = m.load(&program, &Linked::default()).unwrap();
     // runと`call`が作るthunkも記号を持つ
-    m.run(loaded, checked()).unwrap();
-    m.call("f", &[Arg::I64(1)], checked()).unwrap();
+    m.run(loaded, native_options()).unwrap();
+    m.call("f", &[Arg::I64(1)], native_options()).unwrap();
 
     let image = m.image().unwrap();
     // SAFETY: マシンが生きている間、`Image`の表は生きていて変わらない
@@ -195,8 +195,8 @@ fn symbols_cover_every_function() {
 
     let mut fresh = machine();
     let loaded = fresh.load(&program, &Linked::default()).unwrap();
-    fresh.run(loaded, checked()).unwrap();
-    fresh.call("f", &[Arg::I64(1)], checked()).unwrap();
+    fresh.run(loaded, native_options()).unwrap();
+    fresh.call("f", &[Arg::I64(1)], native_options()).unwrap();
     assert_eq!(names(&m), names(&fresh));
     m.close();
     fresh.close();
@@ -255,7 +255,7 @@ fn entry$main() -> unit {
     }));
     let config = RunConfig::default().with_control(Arc::clone(&control));
     assert_eq!(
-        run_with(text, &config, checked()),
+        run_with(text, &config, native_options()),
         ("1\n2\n".to_string(), Ok(None))
     );
     assert!(control.taken(0) > 1, "the heap took pages during the run");
@@ -273,7 +273,7 @@ mod fatal {
     use eml_nrt::image::Options;
 
     use super::run_with;
-    use crate::common::native::checked;
+    use crate::common::native::native_options;
 
     #[test]
     fn deep_recursion_hits_the_stack_limit() {
@@ -291,7 +291,7 @@ fn entry$main() -> unit {
 ";
         let options = Options {
             stack: 64 << 20,
-            ..checked()
+            ..native_options()
         };
         assert_eq!(
             run_with(text, &RunConfig::default(), options),
@@ -315,7 +315,7 @@ fn entry$main() -> unit {
         let config = RunConfig::default();
         config.control.interrupt();
         assert_eq!(
-            run_with(text, &config, checked()),
+            run_with(text, &config, native_options()),
             (
                 String::new(),
                 Err("interrupted in `entry$main`".to_string())

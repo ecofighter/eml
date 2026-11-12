@@ -406,7 +406,7 @@ pub fn execute_finished(
     }
 }
 
-/// ネイティブのテストの実行は、どれもこれを通し、終わりに census で漏れを確かめる。
+/// ネイティブのテストの実行は、どれもこれを通る。
 #[cfg(feature = "run")]
 pub fn execute_native(
     program: &eml_lir::Program,
@@ -414,11 +414,16 @@ pub fn execute_native(
     config: &RunConfig,
     host: HostRef,
 ) -> Result<Finished, RuntimeError> {
-    let options = Options {
+    eml_native::execute(program, linked, config, host, native_options())
+}
+
+/// テストのネイティブのrunの`Options`を決める唯一の所。どのrunも終わりにcensusで漏れを確かめる。
+#[cfg(feature = "run")]
+pub fn native_options() -> Options {
+    Options {
         census: Census::Check,
         ..Options::default()
-    };
-    eml_native::execute(program, linked, config, host, options)
+    }
 }
 
 /// テストの binary の中で1つの linker を使い回し、ライブラリと橋渡しを作り直さずに済ませる。テストは並んで走るので

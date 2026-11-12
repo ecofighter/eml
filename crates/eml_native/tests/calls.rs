@@ -7,7 +7,7 @@ use eml_native::Arg;
 use eml_cabi::Linked;
 use eml_nrt::image::Options;
 
-use crate::common::native::{agree, call, checked, clif, machine, native, program};
+use crate::common::native::{agree, call, clif, machine, native, native_options, program};
 
 const MAIN: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
 
@@ -109,7 +109,7 @@ fn a_self_tail_call_runs_in_constant_stack() {
         .unwrap_or_else(|error| panic!("{error:?}"));
     let options = Options {
         stack: 8 << 20,
-        ..checked()
+        ..native_options()
     };
     assert_eq!(
         m.call("count", &[Arg::I64(1_000_000), Arg::I64(0)], options)

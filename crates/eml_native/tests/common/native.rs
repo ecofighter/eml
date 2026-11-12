@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use eml_cabi::Linked;
 use eml_native::{Arg, NativeMachine};
-use eml_nrt::image::{Census, Options, Start};
+use eml_nrt::image::Start;
 use eml_nrt::{Finished, HostRef, RunConfig, RuntimeError, Thunk};
 use eml_rt::{Buffering, Ctx, Fast, StdHost};
 use eml_test_support::{Engine, capture, execute_finished};
@@ -28,13 +28,7 @@ pub fn machine() -> NativeMachine {
     NativeMachine::new(&RunConfig::default(), host())
 }
 
-/// テストのネイティブのrunは、どれもcensusで終わる。
-pub fn checked() -> Options {
-    Options {
-        census: Census::Check,
-        ..Options::default()
-    }
-}
+pub use eml_test_support::native_options;
 
 /// `text`のプログラムを新しいマシンに読み込み、関数`name`を`args`で呼んで結果を返す。
 pub fn call(text: &str, name: &str, args: &[Arg]) -> Vec<Arg> {
@@ -43,7 +37,7 @@ pub fn call(text: &str, name: &str, args: &[Arg]) -> Vec<Arg> {
         .load(&program(text), &Linked::default())
         .unwrap_or_else(|error| panic!("{error:?}"));
     let results = machine
-        .call(name, args, checked())
+        .call(name, args, native_options())
         .unwrap_or_else(|error| panic!("{error}"));
     machine.close();
     results
@@ -105,7 +99,7 @@ pub fn visit<R: Send>(
     let image = machine.image().expect("a program is loaded");
     // SAFETY: 代役は`run`が入口のthunkに課す規則を守り、内側のthunkに`entry_of`の約束を守る引数を渡す。`visit`は
     // runの間生きていて、代役だけがそれを使う
-    let finished = unsafe { eml_nrt::run::run(image, &start, &config, host(), checked()) };
+    let finished = unsafe { eml_nrt::run::run(image, &start, &config, host(), native_options()) };
     machine.close();
     (finished, visit.record)
 }
