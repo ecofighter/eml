@@ -206,6 +206,17 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             }
             Stmt::Let {
                 var,
+                rhs:
+                    Rhs::Extern {
+                        ext: ExternRef::Std(ext),
+                        args,
+                        at,
+                    },
+            } if let Some(Lowering::Inline(inline)) = rows::lowering(*ext) => {
+                self.inline_row(block, position, *var, *ext, inline, args, *at);
+            }
+            Stmt::Let {
+                var,
                 rhs: Rhs::Call(call),
             } => self.call(block, position, std::slice::from_ref(var), call),
             Stmt::LetMany { vars, call } => self.call(block, position, vars, call),

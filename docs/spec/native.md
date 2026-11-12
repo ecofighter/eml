@@ -166,15 +166,17 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 |---|---|---|---|
 | `Call` | 末尾でない直接の呼び出し | `yielding.target`の語 (`CTX_YIELD_TARGET`) をロードし、Unitの語でなければ冷たいコードへ分岐する | 後始末へ進む |
 | `Faults { site, purity }` | `faults`の行で、戻るものの呼び出し | faultの語 (`CTX_FAULT`) をロードし、0でなければ冷たいコードへ分岐する | `eml$raise(ctx, self, site, purity)`を呼び、後始末へ進む |
+| `Arith` | 失敗するインラインの行 (`IntAdd`、`IntSub`、`IntMul`、`IntDiv`、`ByteDiv`、`IntMod`、`ByteMod`、`IntNeg`) | なし。行を展開したコードが、失敗の条件で冷たいコードへ分岐する | `eml_rt_fault_arith(ctx, kind)`で算術の失敗を置き、`eml$raise(ctx, self, site, PURITY_PANICS)`を呼び、後始末へ進む。失敗の種類ごとに冷たいブロックが1つあり、後始末は1つを共有する |
 | `Never { raise }` | 戻らない行の呼び出し。`exit`は`raise`なし、`panic`は自分の位置の行と純粋さを持つ | なし。無条件に冷たいコードへ分岐する | (`raise`があれば`eml$raise(ctx, self, site, purity)`を呼び) 後始末へ進む |
 
 - `self`は関数自身のコードのアドレス (自分の記号の`func_addr`) で、冷たいコードだけがそれを作る。`site`は、関数自身の`FnRow.sites`での位置の行の添字である。この組が場所を表すので、プログラムのほかの部分で変わる番号はコードに現れない (「`Image`」)
-- 位置の行 (`FnRow.sites`の`SiteRow`) は、失敗を上げる文ごとに1つある。`Faults`か、上げる`Never`で下ろした`extern`の文で、文の順 (ブロックの順、ブロックの中の文の順) に並ぶ。行は文の位置を持ち、位置のない文なら`file`は`NO_FILE`である。だから位置の行は巻き戻しの地点の一部にだけある。何も上げない地点、つまり`exit`と末尾でない呼び出しは、位置の行を持たない
+- 位置の行 (`FnRow.sites`の`SiteRow`) は、失敗を上げる文ごとに1つある。`Faults`、`Arith`、上げる`Never`で下ろした`extern`の文で、文の順 (ブロックの順、ブロックの中の文の順) に並ぶ。行は文の位置を持ち、位置のない文なら`file`は`NO_FILE`である。だから位置の行は巻き戻しの地点の一部にだけある。何も上げない地点、つまり`exit`と末尾でない呼び出しは、位置の行を持たない
 - 後始末は、地点ごとの冷たいブロック1つである。地点の直後に所有している変数ごとに、その数だけ`eml_rt_decref`を呼び、生きているtokenごとに`eml_rt_drop_token`を呼び、関数の結果ごとに仮の値を返す。仮の値は、`float`では0.0、`obj`、`tobj`、`unit`ではUnitの語、`int`と`enum`では0、`token`では空のtoken (0) である。呼んだ側は中断か置いた失敗を見るので、仮の値を使わない。着地の印を持つ地点は下ろさない。着地の印を持つ`apply`は断る形だからである (「断る形」)
 - `Never`の行の後のLIRの続きはどこからも届かない。下ろしは、前のブロックのない新しいブロックで続け、行の変数をそのReprの仮の値に束縛する。だからブロックの残りもふつうに下ろせる
 - `eml$raise(ctx, function, site, purity)`は、moduleに1つある`tail`の関数で、結果を持たない。同じ引数で`eml_nrt_failed`を呼んで戻る (「externの失敗」)
 - `yielding.target`の語は、yieldも中断もしていない間だけUnitの語である。呼ばれた側で中断が始まると (`exit`)、呼ばれた側は自分の後始末で仮の値を返し、呼んだ側はこの確かめで自分の後始末へ進む。だから中断は、フレームを1つずつ、ふつうに戻って抜ける
-- 速い道の費用: `Call`は、`yielding.target`のロード1つと、定数との比較1つと、通らない分岐1つだけを足す。`Faults`は、faultの語のロード1つと、通らない分岐1つだけを足す。`Never`はロードを持たない
+- 速い道の費用: `Call`は、`yielding.target`のロード1つと、定数との比較1つと、通らない分岐1つだけを足す。`Faults`は、faultの語のロード1つと、通らない分岐1つだけを足す。`Never`はロードを持たない。`Arith`は、行の展開が持つ失敗の条件の通らない分岐のほかに何も足さない
+- `Arith`では、行の展開が今のブロックを熱い続きへの分岐で終えてから`after_unwind_point`を呼ぶ。Craneliftは、埋めていないブロックから別のブロックへ移ることを許さないからである
 
 ## 安全点
 
@@ -220,6 +222,18 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 ## 行の下ろし方
 
 `eml_sched::rows`の一覧`extern_rows!`の行は、印`inline`の有無で下ろし方が分かれる。印のある行はエントリを持たず、`Listed`の記録は`inline`が真で`entry`が`None`である。eml_nativeの`rows::INLINE` (「断る形」) は、印のある行の集まりと等しい。印のない行は、エントリ`eml_x_<Variant>`を持つ (「externの失敗」)。eml_nativeの`rows::CALLED`のどの行にもエントリがあり、その記述子の種類は行の種類と等しい (`float`は`F64`、ほかは`I64`、`never`は結果なし)。`eml_nrt`は、`eml_sched::rows`の行の関数を`eml_nrt::shared_rows`として、一覧を`eml_nrt::LISTED`として再エクスポートする。eml_nativeは、`eml_sched`に依存せずにこれらを読む。
+
+生成したコードは、`rows::INLINE`の行を、その文の位置でCLIFの命令に展開する。結果は、行の共有の関数 (`eml_nrt::shared_rows`の関数) の結果とビット単位で等しい。
+
+- `IntAdd`、`IntSub`、`IntMul`は`sadd_overflow`、`ssub_overflow`、`smul_overflow`で、桁あふれなら桁あふれの失敗へ分岐する
+- `IntDiv`と`ByteDiv`は`sdiv`、`IntMod`と`ByteMod`は`srem`である。その前に、割る数が0なら0除算の失敗へ、割られる数が`i64::MIN`で割る数が-1なら桁あふれの失敗へ分岐する。`sdiv`はどちらの場合もtrapし、`srem`は0で割るとtrapする。`srem`は`MIN % -1`を0にするが、共有の関数はこれを桁あふれとするので、どちらの命令の前でも確かめる
+- `IntNeg`は、引数が`i64::MIN`なら桁あふれの失敗へ分岐し、そうでなければ`ineg`である
+- `Int`、`Char`、`Byte`の比較は符号付きの`icmp`で、結果を0か1 (`FALSE`か`TRUE`) に広げる。`BoolEq`と`BoolNe`は、タグを`icmp`で比べる。`compare`は`(a > b) + (a >= b)`で、これが`LT`、`EQ`、`GT`のタグ (0、1、2) になる
+- `CharToInt`、`ByteToInt`、`CharOfByte`は引数そのものである
+- `FloatAdd`、`FloatSub`、`FloatMul`、`FloatDiv`、`FloatNeg`は、演算の後でNaNの結果を正のquiet NaN (`f64::NAN`) に置き換える (`fcmp uno`と`select`)。共有の関数の`canonical_nan`と同じく、結果のビットは対象によらない
+- `Float`の比較は`fcmp`で、結果を0か1に広げる。`!=`は`NotEqual`で順序のないときも真であり、ほかの比較はNaNが絡むと偽である
+- 失敗の分岐の先は冷たいコードで、`eml_rt_fault_arith(ctx, kind)`で`Fault::Arith`を置き、純粋さ`Panics`で上げる (「巻き戻しの地点」の`Arith`)。`kind`は`ARITH_DIVISION_BY_ZERO` (0) か`ARITH_INTEGER_OVERFLOW` (1) である。誤りは文の位置を持ち、文が位置を持たなければ関数を名指す
+- 失敗しない行は巻き戻しの地点を持たず、熱いコードに分岐を足さない
 
 ## RC
 

@@ -8,7 +8,10 @@ use eml_extern::Purity;
 use eml_lir::unwind::{UnwindPoint, Unwinds};
 use eml_lir::{BlockId, Loc, Repr, VarId};
 use eml_nrt::Kind;
-use eml_nrt::image::{NO_FILE, PURITY_EFFECTFUL, PURITY_PANICS, PURITY_PURE, SiteRow};
+use eml_nrt::image::{
+    ARITH_DIVISION_BY_ZERO, ARITH_INTEGER_OVERFLOW, NO_FILE, PURITY_EFFECTFUL, PURITY_PANICS,
+    PURITY_PURE, SiteRow,
+};
 
 use super::Imports;
 use super::function::FnLower;
@@ -22,6 +25,14 @@ pub(super) enum After {
     Call,
     /// `faults`の行の呼び出し。faultの語を確かめる。
     Faults { site: u32, purity: Purity },
+    /// 失敗するインラインの行。熱いコードはない。行を展開したコードが失敗の条件で`overflow`か`zero`へ分岐し、
+    /// 今のブロックを`hot`への分岐で終える。Craneliftは埋めていないブロックから離れることを許さないからである。
+    Arith {
+        site: u32,
+        overflow: Block,
+        zero: Option<Block>,
+        hot: Block,
+    },
     /// 戻らない行。`raise`があれば、置いた失敗を上げてから後始末へ進む。
     Never { raise: Option<(u32, Purity)> },
 }
@@ -104,7 +115,7 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
         u32::try_from(self.sites.len() - 1).expect("a function has fewer than 2^32 sites")
     }
 
-    /// 巻き戻しの地点の命令の直後に置く。`Call`と`Faults`ではbuilderを熱い続きに置き、`Never`では前のブロックのない新しい
+    /// 巻き戻しの地点の命令の直後に置く。`Call`、`Faults`、`Arith`ではbuilderを熱い続きに置き、`Never`では前のブロックのない新しい
     /// ブロックに置いて戻る。
     pub fn after_unwind_point(&mut self, point: &Point, after: After) {
         match after {
@@ -125,6 +136,28 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
                 let hot = self.b.create_block();
                 self.b.ins().brif(fault, raise, &[], hot, &[]);
                 self.fill_raise(raise, site, purity, cleanup);
+                self.fill_cleanup(cleanup, point);
+                self.b.switch_to_block(hot);
+            }
+            After::Arith {
+                site,
+                overflow,
+                zero,
+                hot,
+            } => {
+                let cleanup = self.cold_block();
+                let exits = [
+                    (Some(overflow), ARITH_INTEGER_OVERFLOW),
+                    (zero, ARITH_DIVISION_BY_ZERO),
+                ];
+                for (block, kind) in exits {
+                    let Some(block) = block else { continue };
+                    self.b.switch_to_block(block);
+                    let kind = self.b.ins().iconst(types::I64, kind);
+                    self.call_entry("eml_rt_fault_arith", &[kind]);
+                    // 算術の失敗はどれも`Panics`の類である (docs/spec/native.mdの「行の下ろし方」)
+                    self.raise(site, Purity::Panics, cleanup);
+                }
                 self.fill_cleanup(cleanup, point);
                 self.b.switch_to_block(hot);
             }
@@ -160,6 +193,11 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
     /// 関数のLIRだけで決まる (docs/spec/native.md の「`Image`」)。
     fn fill_raise(&mut self, block: Block, site: u32, purity: Purity, cleanup: Block) {
         self.b.switch_to_block(block);
+        self.raise(site, purity, cleanup);
+    }
+
+    /// 今のブロックで`eml$raise(ctx, self, site, purity)`を呼び、後始末へ進む。
+    fn raise(&mut self, site: u32, purity: Purity, cleanup: Block) {
         let me = self.func_ref(self.id);
         let me = self.b.ins().func_addr(types::I64, me);
         let site = self.b.ins().iconst(types::I64, i64::from(site));

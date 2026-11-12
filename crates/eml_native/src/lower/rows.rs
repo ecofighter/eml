@@ -1,8 +1,8 @@
 //! ネイティブのコードが下ろすstdの行と、その下ろし方 (docs/spec/native.mdの「断る形」)。ほかのstdの行は
 //! `unsupported`が断る。
 
-use cranelift_codegen::ir::Value;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+use cranelift_codegen::ir::{Block, InstBuilder, Value, types};
 use cranelift_module::Module;
 use eml_extern::{Extern, OpRet};
 use eml_lir::{Atom, BlockId, Loc, VarId};
@@ -156,5 +156,148 @@ impl<M: Module> FnLower<'_, '_, M> {
                 self.bind(var, value);
             }
         }
+    }
+}
+
+impl<M: Module> FnLower<'_, '_, M> {
+    /// インラインの行`ext`の文`let var = extern ext(args)`。結果は行の共有の関数 (`eml_nrt::shared_rows`) とビット単位で
+    /// 等しい。失敗する行は、失敗の条件で冷たい`arith`のブロックへ分岐する (docs/spec/native.mdの「行の下ろし方」)。
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn inline_row(
+        &mut self,
+        block: BlockId,
+        position: usize,
+        var: VarId,
+        ext: Extern,
+        inline: Inline,
+        args: &[Atom],
+        at: Option<Loc>,
+    ) {
+        let row = ext.row();
+        let values: Vec<Value> = args
+            .iter()
+            .zip(row.params)
+            .map(|(&arg, &repr)| self.atom(arg, repr))
+            .collect();
+        let value = match (inline, &values[..]) {
+            (Inline::Add | Inline::Sub | Inline::Mul, &[a, b]) => {
+                let (r, overflowed) = match inline {
+                    Inline::Add => self.b.ins().sadd_overflow(a, b),
+                    Inline::Sub => self.b.ins().ssub_overflow(a, b),
+                    _ => self.b.ins().smul_overflow(a, b),
+                };
+                let overflow = self.cold_block();
+                let hot = self.branch_out(overflowed, overflow);
+                self.arith_point(block, position, at, overflow, None, hot);
+                r
+            }
+            (Inline::Div | Inline::Rem, &[a, b]) => {
+                // `sdiv`と`srem`は0で割るとtrapし、`sdiv`は`MIN / -1`でもtrapするので、先に分岐する。`srem`は
+                // `MIN % -1`を0にするが、共有の関数はそれを桁あふれにする
+                let zero = self.b.ins().iconst(types::I64, 0);
+                let by_zero = self.b.ins().icmp(IntCC::Equal, b, zero);
+                let zero_block = self.cold_block();
+                let next = self.branch_out(by_zero, zero_block);
+                self.b.switch_to_block(next);
+                let min = self.b.ins().iconst(types::I64, i64::MIN);
+                let minus_one = self.b.ins().iconst(types::I64, -1);
+                let a_min = self.b.ins().icmp(IntCC::Equal, a, min);
+                let b_minus_one = self.b.ins().icmp(IntCC::Equal, b, minus_one);
+                let overflowed = self.b.ins().band(a_min, b_minus_one);
+                let overflow = self.cold_block();
+                let hot = self.branch_out(overflowed, overflow);
+                self.arith_point(block, position, at, overflow, Some(zero_block), hot);
+                match inline {
+                    Inline::Div => self.b.ins().sdiv(a, b),
+                    _ => self.b.ins().srem(a, b),
+                }
+            }
+            (Inline::Neg, &[a]) => {
+                let min = self.b.ins().iconst(types::I64, i64::MIN);
+                let overflowed = self.b.ins().icmp(IntCC::Equal, a, min);
+                let overflow = self.cold_block();
+                let hot = self.branch_out(overflowed, overflow);
+                self.arith_point(block, position, at, overflow, None, hot);
+                self.b.ins().ineg(a)
+            }
+            (Inline::Cmp(cc), &[a, b]) => {
+                let r = self.b.ins().icmp(cc, a, b);
+                self.b.ins().uextend(types::I64, r)
+            }
+            (Inline::Compare, &[a, b]) => {
+                // `LT`、`EQ`、`GT`は0、1、2なので、`(a > b) + (a >= b)`がそのタグである
+                let gt = self.b.ins().icmp(IntCC::SignedGreaterThan, a, b);
+                let ge = self.b.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, b);
+                let gt = self.b.ins().uextend(types::I64, gt);
+                let ge = self.b.ins().uextend(types::I64, ge);
+                self.b.ins().iadd(gt, ge)
+            }
+            (Inline::Move, &[a]) => a,
+            (Inline::FAdd | Inline::FSub | Inline::FMul | Inline::FDiv, &[a, b]) => {
+                let r = match inline {
+                    Inline::FAdd => self.b.ins().fadd(a, b),
+                    Inline::FSub => self.b.ins().fsub(a, b),
+                    Inline::FMul => self.b.ins().fmul(a, b),
+                    _ => self.b.ins().fdiv(a, b),
+                };
+                self.canonical_nan(r)
+            }
+            (Inline::FNeg, &[a]) => {
+                let r = self.b.ins().fneg(a);
+                self.canonical_nan(r)
+            }
+            (Inline::FCmp(cc), &[a, b]) => {
+                let r = self.b.ins().fcmp(cc, a, b);
+                self.b.ins().uextend(types::I64, r)
+            }
+            (Inline::BoolEq | Inline::BoolNe, &[a, b]) => {
+                let cc = match inline {
+                    Inline::BoolEq => IntCC::Equal,
+                    _ => IntCC::NotEqual,
+                };
+                let r = self.b.ins().icmp(cc, a, b);
+                self.b.ins().uextend(types::I64, r)
+            }
+            _ => unreachable!("`{ext:?}` has a row of another arity"),
+        };
+        self.bind(var, value);
+    }
+
+    /// `condition`が真なら`exit`へ、偽なら新しいブロックへ分岐し、その新しいブロックを返す。
+    fn branch_out(&mut self, condition: Value, exit: Block) -> Block {
+        let next = self.b.create_block();
+        self.b.ins().brif(condition, exit, &[], next, &[]);
+        next
+    }
+
+    /// 失敗するインラインの行の巻き戻しの地点。今のブロックは`hot`への分岐で終わっている。
+    fn arith_point(
+        &mut self,
+        block: BlockId,
+        position: usize,
+        at: Option<Loc>,
+        overflow: Block,
+        zero: Option<Block>,
+        hot: Block,
+    ) {
+        let site = self.site(at);
+        let point = self.point(block, position);
+        self.after_unwind_point(
+            &Point::from(point),
+            After::Arith {
+                site,
+                overflow,
+                zero,
+                hot,
+            },
+        );
+    }
+
+    /// NaNを正のquiet NaN (`f64::NAN`) にそろえる。共有の関数の`canonical_nan`と同じく、どの対象でも結果のビットが
+    /// 決まる。
+    fn canonical_nan(&mut self, r: Value) -> Value {
+        let nan = self.b.ins().fcmp(FloatCC::Unordered, r, r);
+        let canonical = self.b.ins().f64const(f64::NAN);
+        self.b.ins().select(nan, canonical, r)
     }
 }

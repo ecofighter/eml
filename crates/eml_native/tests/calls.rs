@@ -4,7 +4,10 @@
 #![cfg(not(miri))]
 use eml_native::Arg;
 
-use crate::common::native::{agree, call, clif, native};
+use eml_cabi::Linked;
+use eml_nrt::image::Options;
+
+use crate::common::native::{agree, call, checked, clif, machine, native, program};
 
 const MAIN: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
 
@@ -82,6 +85,38 @@ fn a_tail_call_to_a_callee_with_more_stack_arguments() {
         call(&text, "f", &[Arg::I64(-1), Arg::I64(i64::MIN)]),
         [Arg::I64(-1), Arg::I64(6), Arg::I64(10), Arg::I64(i64::MIN)]
     );
+}
+
+#[test]
+fn a_self_tail_call_runs_in_constant_stack() {
+    // 10^6回の自分への末尾呼び出し。workerのスタックは8 MiBで、`stack_limit`より上には5 MiBしかないので、フレームが
+    // 積み重なれば数十万回で深さの上限に当たる
+    let text = format!(
+        "layout Prelude.Bool {{ False, True }}\n\
+         {MAIN}\
+         fn count(n.0: int, acc.1: int) -> int {{\n  \
+         let z.2: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)\n  \
+         switch z.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}\n\
+         b1:\n  \
+         let m.3: int = extern \"Prelude.Num Int.-\"(n.0, 1)\n  \
+         let a.4: int = extern \"Prelude.Num Int.+\"(acc.1, 2)\n  \
+         tail call count(m.3, a.4)\n\
+         b2:\n  \
+         return acc.1\n}}\n"
+    );
+    let mut m = machine();
+    m.load(&program(&text), &Linked::default())
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    let options = Options {
+        stack: 8 << 20,
+        ..checked()
+    };
+    assert_eq!(
+        m.call("count", &[Arg::I64(1_000_000), Arg::I64(0)], options)
+            .unwrap_or_else(|error| panic!("{error}")),
+        [Arg::I64(2_000_000)]
+    );
+    m.close();
 }
 
 #[test]

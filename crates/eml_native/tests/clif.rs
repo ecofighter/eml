@@ -4,6 +4,96 @@
 use crate::common::native::clif;
 
 #[test]
+fn an_arith_row() {
+    // 割り算の地点は`s.0`を持つ。0除算と桁あふれの冷たいブロックは、それぞれ失敗を置いて上げ、1つの後始末へ進む。後始末は
+    // `s.0`を手放してから仮の値を返す
+    let text = "\
+fn f(s.0: obj, a.1: int, b.2: int) -> obj {
+  let q.3: int = extern \"Prelude.Div Int./\"(a.1, b.2) @\"main.em\":1:1
+  return s.0
+}
+";
+    insta::assert_snapshot!(clif(text, "f"), @"
+    function %f:f(i64, i64, i64, i64) -> i64 tail {
+        sig0 = (i64, i64, i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64) c
+        sig3 = (i64, i64) c
+        sig4 = (i64, i64, i64, i64) tail
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_rt_decref sig2
+        fn3 = %eml_rt_fault_arith sig3
+        fn4 = colocated %eml$raise sig4
+
+    block0(v0: i64, v1: i64, v2: i64, v3: i64):
+        v4 = load.i64 notrap aligned v0+40
+        v5 = load.i32 notrap aligned v4
+        v6 = iconst.i32 0
+        v7 = icmp ne v5, v6  ; v6 = 0
+        v8 = get_stack_pointer.i64 
+        v9 = load.i64 notrap aligned v0+48
+        v10 = icmp ult v8, v9
+        v11 = bor v7, v10
+        brif v11, block1, block3
+
+    block1 cold:
+        v12 = func_addr.i64 fn0
+        v13 = iconst.i64 0
+        v14 = call fn1(v0, v12, v13)  ; v13 = 0
+        v15 = iconst.i64 0
+        v16 = icmp eq v14, v15  ; v15 = 0
+        brif v16, block3, block2
+
+    block2 cold:
+        call fn2(v0, v1)
+        v17 = iconst.i64 1
+        return v17  ; v17 = 1
+
+    block3:
+        v18 = iconst.i64 0
+        v19 = icmp.i64 eq v3, v18  ; v18 = 0
+        brif v19, block4, block5
+
+    block5:
+        v20 = iconst.i64 -9223372036854775808
+        v21 = iconst.i64 -1
+        v22 = icmp.i64 eq v2, v20  ; v20 = -9223372036854775808
+        v23 = icmp.i64 eq v3, v21  ; v21 = -1
+        v24 = band v22, v23
+        brif v24, block6, block7
+
+    block6 cold:
+        v25 = iconst.i64 1
+        call fn3(v0, v25)  ; v25 = 1
+        v26 = func_addr.i64 fn0
+        v27 = iconst.i64 0
+        v28 = iconst.i64 1
+        call fn4(v0, v26, v27, v28)  ; v27 = 0, v28 = 1
+        jump block8
+
+    block4 cold:
+        v29 = iconst.i64 0
+        call fn3(v0, v29)  ; v29 = 0
+        v30 = func_addr.i64 fn0
+        v31 = iconst.i64 0
+        v32 = iconst.i64 1
+        call fn4(v0, v30, v31, v32)  ; v31 = 0, v32 = 1
+        jump block8
+
+    block8 cold:
+        call fn2(v0, v1)
+        v33 = iconst.i64 1
+        return v33  ; v33 = 1
+
+    block7:
+        v34 = sdiv.i64 v2, v3
+        return v1
+    }
+    ");
+}
+
+#[test]
 fn a_faulting_row() {
     // 1つ目の`println`の地点は`t.1`を持つので、後始末はそれを手放してから仮の値を返す
     let text = "\
