@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use eml_cli::{
-    CaptureHost, Clock, Control, Finished, FsProvider, Limits, RunConfig, RunFault, RunStats,
-    RuntimeError, Sched, Session, Signal, VirtualSignal, default_limits, execute,
+    CaptureHost, Clock, Control, Engine, Finished, FsProvider, Limits, RunConfig, RunFault,
+    RunStats, RuntimeError, Sched, Session, Signal, VirtualSignal, default_limits, execute,
 };
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
@@ -197,6 +197,11 @@ fn stub_park(path: &Path) -> eml_vm::ParkFactory {
 /// `eml run` と同じ既定の上限で流す。止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい
 /// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。`marks` はファイルの
 /// 先頭の印で、シグナルの予定と深さと確保量の上限をどの run にも同じように当てる (docs/implementation/testing.md の「UI テスト」)。
+/// `engine`はVMかネイティブかを選ぶ。ネイティブの実行はどれも`eml_test_support::execute_native`を通り、成功した実行はcensusで終わる。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each run of a file sets the engine, the mode, the policy and the workers"
+)]
 fn execute_in(
     program: &eml_lir::Program,
     path: &Path,
@@ -205,6 +210,7 @@ fn execute_in(
     debug_heap: bool,
     sched: Sched,
     workers: usize,
+    engine: Engine,
 ) -> Ran {
     let host = host_for(path, root);
     let (out, err, files) = (host.output(), host.errors(), host.written());
@@ -233,12 +239,20 @@ fn execute_in(
     } else {
         config
     };
-    let outcome = execute(
-        program,
-        &eml_test_support::link(program),
-        &config,
-        host.into_ref(),
-    );
+    let linked = eml_test_support::link(program);
+    let outcome = match engine {
+        Engine::Vm => execute(program, &linked, &config, host.into_ref()),
+        Engine::Native => {
+            // ネイティブのコードは設定のうち上限だけを読み、シグナル、時計、GUIの印を無視する。印のあるファイルを流すと、
+            // 気付かれずに違う条件で2つの実行系を比べることになる (docs/implementation/testing.mdの「ネイティブで流す」)
+            assert!(
+                marks.signals.is_empty() && !marks.real_clock && !marks.gui_stub,
+                "{}: native code ignores the signal, clock and gui marks",
+                path.display()
+            );
+            eml_test_support::execute_native(program, &linked, &config, host.into_ref())
+        }
+    };
     let finished = outcome.as_ref().ok().copied();
     let result = outcome.map(|finished| finished.exit);
     let written = files
@@ -310,7 +324,16 @@ fn assert_fast_mode_agrees(
     marks: &Marks,
     checked: &Ran,
 ) {
-    let fast = execute_in(program, path, root, marks, false, Sched::Normal, 1);
+    let fast = execute_in(
+        program,
+        path,
+        root,
+        marks,
+        false,
+        Sched::Normal,
+        1,
+        Engine::Vm,
+    );
     assert_agrees(suffix, "the fast mode", &fast, checked, Compare::Nothing);
 }
 
@@ -367,7 +390,7 @@ fn assert_workers_agree(
     checked: &Ran,
 ) {
     for &(workers, sched) in worker_runs(suffix) {
-        let ran = execute_in(program, path, root, marks, true, sched, workers);
+        let ran = execute_in(program, path, root, marks, true, sched, workers, Engine::Vm);
         let compare = if suffix.starts_with("async/") {
             Compare::Nothing
         } else {
@@ -466,7 +489,16 @@ fn assert_seeds_agree(
 ) {
     let compare_stats = !(suffix.starts_with("async/") && matches!(checked.result, Ok(Some(_))));
     for seed in SEEDS {
-        let ran = execute_in(program, path, root, marks, true, Sched::Seeded(seed), 1);
+        let ran = execute_in(
+            program,
+            path,
+            root,
+            marks,
+            true,
+            Sched::Seeded(seed),
+            1,
+            Engine::Vm,
+        );
         let compare = if compare_stats {
             compares_stats(checked, &ran)
         } else {
@@ -649,7 +681,16 @@ fn run() {
         };
         let extra = extra_runs(&suffix, marks);
         let (program, root, diagnostics) = compile(path, &suffix);
-        let ran = execute_in(&program, path, &root, marks, true, Sched::Sequential, 1);
+        let ran = execute_in(
+            &program,
+            path,
+            &root,
+            marks,
+            true,
+            Sched::Sequential,
+            1,
+            Engine::Vm,
+        );
         assert!(ran.result.is_ok(), "{:?}\n{diagnostics}", ran.result);
         let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
         let exit = match ran.result {
@@ -684,7 +725,16 @@ fn run_fail_file(path: &Path, marks: &Marks) {
     };
     let extra = extra_runs(&suffix, marks);
     let (program, root, diagnostics) = compile(path, &suffix);
-    let ran = execute_in(&program, path, &root, marks, true, Sched::Sequential, 1);
+    let ran = execute_in(
+        &program,
+        path,
+        &root,
+        marks,
+        true,
+        Sched::Sequential,
+        1,
+        Engine::Vm,
+    );
     let Err(error) = &ran.result else {
         panic!("expected a runtime error");
     };
@@ -711,19 +761,21 @@ fn run_fail_file(path: &Path, marks: &Marks) {
 }
 
 /// `run/`と`run-fail/`のエントリを、ネイティブのコード生成器が受け入れるか断るかで数える。数えるのはOSによらないので、
-/// `windows: skip`のファイルも数える (docs/implementation/testing.mdの「ネイティブで流す」)。
+/// `windows: skip`のファイルも数える。`run_fail_native`は、受け入れたファイルのうち、VMの検査モードの実行が
+/// 検査モードだけが見つける誤りで終わったものを`checked only`に数える (docs/implementation/testing.mdの「ネイティブで流す」)。
 #[derive(Debug, Default)]
 struct NativeTally {
     accepted: usize,
+    checked_only: usize,
     skipped: usize,
     rejected: BTreeMap<&'static str, usize>,
 }
 
 impl NativeTally {
-    fn render(&self, checked_only: Option<usize>) -> String {
+    fn render(&self, run_fail: bool) -> String {
         let mut text = format!("accepted {}\n", self.accepted);
-        if let Some(count) = checked_only {
-            text += &format!("checked only {count}\n");
+        if run_fail {
+            text += &format!("checked only {}\n", self.checked_only);
         }
         text += &format!("skipped {}\n", self.skipped);
         text += &format!("rejected {}\n", self.rejected.values().sum::<usize>());
@@ -734,8 +786,11 @@ impl NativeTally {
     }
 }
 
-/// `run_native`と`run_fail_native`の本体。
-fn native_entries(name: &str, top: &str, checked_only: Option<usize>) {
+/// `run_native`と`run_fail_native`の本体。受け入れた各ファイルをVMの速いモードとネイティブで流し、2つの実行が
+/// 同じになることを確かめる。`run-fail`のファイルは、先にVMの検査モードで流す。その実行が検査モードだけが見つける
+/// 誤りを報告したら、VM自身の誤りなので、ネイティブでは流さない (docs/implementation/testing.mdの「ネイティブで流す」)。
+fn native_entries(name: &str, top: &str) {
+    let run_fail = top == "run-fail";
     let marked = marked_files(&ui_root().join(top), "em", true);
     let tally = Mutex::new(NativeTally::default());
     run_marked(&marked, |path, marks| {
@@ -746,29 +801,79 @@ fn native_entries(name: &str, top: &str, checked_only: Option<usize>) {
             tally.lock().unwrap().skipped += 1;
             return;
         }
-        let (program, _, _) = compile(path, &suffix);
+        let (program, root, _) = compile(path, &suffix);
         let forms = eml_native::unsupported(&program);
-        let mut tally = tally.lock().unwrap();
-        match forms.first() {
-            Some(first) => *tally.rejected.entry(first.form.label()).or_default() += 1,
-            None => tally.accepted += 1,
+        if let Some(first) = forms.first() {
+            *tally
+                .lock()
+                .unwrap()
+                .rejected
+                .entry(first.form.label())
+                .or_default() += 1;
+            return;
         }
+        // `checked only`の数は流して決まるので、Windowsで流せないファイルを受け入れると、スナップショットがOSで変わる
+        assert!(
+            !marks.windows_skip,
+            "{suffix}: an accepted file has a windows mark, so the native counts would differ by OS"
+        );
+        tally.lock().unwrap().accepted += 1;
+        if run_fail {
+            let checked = execute_in(
+                &program,
+                path,
+                &root,
+                marks,
+                true,
+                Sched::Sequential,
+                1,
+                Engine::Vm,
+            );
+            let Err(error) = &checked.result else {
+                panic!("expected a runtime error");
+            };
+            if !fast_mode_reports(error) {
+                tally.lock().unwrap().checked_only += 1;
+                return;
+            }
+        }
+        let fast = execute_in(
+            &program,
+            path,
+            &root,
+            marks,
+            false,
+            Sched::Normal,
+            1,
+            Engine::Vm,
+        );
+        let native = execute_in(
+            &program,
+            path,
+            &root,
+            marks,
+            false,
+            Sched::Normal,
+            1,
+            Engine::Native,
+        );
+        assert_agrees(&suffix, "native code", &native, &fast, Compare::Nothing);
     });
     // 一部のファイルだけを流したときの数は、スナップショットの数と合わない
     if std::env::var_os("EML_UI_FILTER").is_none() {
-        let counts = tally.into_inner().unwrap().render(checked_only);
+        let counts = tally.into_inner().unwrap().render(run_fail);
         insta::assert_snapshot!(name, counts);
     }
 }
 
 #[test]
 fn run_native() {
-    native_entries("run_native", "run", None);
+    native_entries("run_native", "run");
 }
 
 #[test]
 fn run_fail_native() {
-    native_entries("run_fail_native", "run-fail", Some(0));
+    native_entries("run_fail_native", "run-fail");
 }
 
 #[test]
@@ -1162,6 +1267,7 @@ fn an_async_file_that_places_no_task_fails() {
         true,
         Sched::Sequential,
         1,
+        Engine::Vm,
     );
     assert_workers_agree(
         "async/short.em",
@@ -1209,6 +1315,7 @@ fn a_par_file_that_is_never_preempted_fails() {
         true,
         Sched::Sequential,
         1,
+        Engine::Vm,
     );
     assert_seeds_agree(
         "par/short.em",
@@ -1407,7 +1514,16 @@ fn the_max_depth_mark_sets_the_limit() {
         max_depth: Some(1024),
         ..Marks::default()
     };
-    let ran = execute_in(&program, &path, &root, &limited, true, Sched::Sequential, 1);
+    let ran = execute_in(
+        &program,
+        &path,
+        &root,
+        &limited,
+        true,
+        Sched::Sequential,
+        1,
+        Engine::Vm,
+    );
     assert!(ran.result.is_err(), "the mark did not lower the limit");
     let free = execute_in(
         &program,
@@ -1417,6 +1533,7 @@ fn the_max_depth_mark_sets_the_limit() {
         true,
         Sched::Sequential,
         1,
+        Engine::Vm,
     );
     assert!(free.result.is_ok(), "{:?}", free.result);
 }
@@ -1498,6 +1615,7 @@ fn the_max_bytes_mark_sets_both_limits() {
         false,
         Sched::Sequential,
         1,
+        Engine::Vm,
     );
     assert!(ran.result.is_err(), "the mark did not lower the hard limit");
     let free = execute_in(
@@ -1508,6 +1626,7 @@ fn the_max_bytes_mark_sets_both_limits() {
         false,
         Sched::Sequential,
         1,
+        Engine::Vm,
     );
     assert!(free.result.is_ok(), "{:?}", free.result);
 }

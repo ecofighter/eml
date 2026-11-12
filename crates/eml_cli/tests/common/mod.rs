@@ -341,6 +341,9 @@ pub fn run_all(files: &[PathBuf], test: impl Fn(&Path) + Sync) {
         .and_then(|n| n.parse().ok())
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from))
         .min(files.len());
+    // `EML_UI_TIMES`を置くと、ファイルごとに流す前にパスを出し、終わったら`<ms> <path>`を出す。`sort -n`で遅いファイルが並び、
+    // 生成したコードがプロセスを落としたときは、時間のない最後のパスがそのファイルである (docs/implementation/testing.mdの「ネイティブで流す」)
+    let times = std::env::var_os("EML_UI_TIMES").is_some();
     let next = AtomicUsize::new(0);
     let failures = Mutex::new(Vec::new());
     let running: Vec<Mutex<Option<(usize, Instant)>>> =
@@ -379,7 +382,19 @@ pub fn run_all(files: &[PathBuf], test: impl Fn(&Path) + Sync) {
                         let index = next.fetch_add(1, Ordering::Relaxed);
                         let Some(path) = files.get(index) else { break };
                         *slot.lock().unwrap() = Some((index, Instant::now()));
+                        if times {
+                            let _ = writeln!(io::stderr(), "{}", shown(path));
+                        }
+                        let start = Instant::now();
                         let result = catch_unwind(AssertUnwindSafe(|| test(path)));
+                        if times {
+                            let _ = writeln!(
+                                io::stderr(),
+                                "{} {}",
+                                start.elapsed().as_millis(),
+                                shown(path)
+                            );
+                        }
                         *slot.lock().unwrap() = None;
                         if let Err(payload) = result {
                             let message = payload
