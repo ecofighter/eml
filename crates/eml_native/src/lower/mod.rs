@@ -1,5 +1,5 @@
 //! LIRをCLIFに下ろす。どの関数を定義するよりも前にプログラムのすべての関数と`apply`の補助の関数を宣言するので、本体は
-//! それらのどれも名指せる。静的なクロージャのエントリは、データの行だけが名指すので、本体の後で宣言する
+//! それらのどれも名指せる。クロージャのエントリは、データの記号と同じく本体が初めて使うときに宣言し、本体の後で定義する
 //! (docs/spec/native.md の「関数の形」)。
 mod apply;
 mod call;
@@ -24,6 +24,7 @@ use eml_lir::{FnIdx, LirFn, Program, Repr};
 use eml_nrt::Kind;
 use eml_nrt::image::SiteRow;
 
+use self::apply::{ClosureEntries, ClosureEntry};
 use self::consts::{Data, Datum};
 use crate::abi::{Built, declare_entry, tail_signature};
 
@@ -40,8 +41,8 @@ pub struct Defined {
 pub struct Lowered {
     pub functions: Vec<Defined>,
     pub raise: Defined,
-    /// 静的なクロージャのエントリ`c0:<f>`。`data`の関数の値と同じ順である。
-    pub adapters: Vec<(FnIdx, Defined)>,
+    /// クロージャのエントリ`c<k>:<f>`。最初に使った順である。
+    pub closures: Vec<(ClosureEntry, Defined)>,
     /// `eml$apply$<m>`。添字が`m - 1`である。
     pub applies: Vec<Defined>,
     pub data: Vec<(Datum, DataId)>,
@@ -141,6 +142,7 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     let mut fctx = FunctionBuilderContext::new();
     let mut functions = Vec::with_capacity(ids.len());
     let mut data = Data::default();
+    let mut closure_entries = ClosureEntries::default();
     let callees = Callees { program, ids };
     for ((function, &id), unwinds) in program.functions.iter().zip(&callees.ids).zip(unwinds) {
         let unwinds = match unwinds.expect("every function's unwind points are asked for") {
@@ -151,7 +153,15 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
         ctx.func.name = UserFuncName::testcase(names::function(&function.name));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
         let sites = function::lower(
-            b, module, &mut data, &imports, &callees, id, function, &unwinds,
+            b,
+            module,
+            &mut data,
+            &mut closure_entries,
+            &imports,
+            &callees,
+            id,
+            function,
+            &unwinds,
         );
         functions.push(define(module, &mut ctx, id, keep_clif, sites)?);
     }
@@ -160,18 +170,20 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
     unwind::define_raise(b, module, &imports);
     let raise = define(module, &mut ctx, raise, keep_clif, Vec::new())?;
-    // 静的なクロージャはどれも、コードの語に自分のエントリを持つ
-    let mut adapters = Vec::new();
-    for function in data.functions().collect::<Vec<_>>() {
-        let lir = program.function(function);
-        let args = apply::arity(lir);
-        let name = names::adapter(0, &lir.name);
-        let id = module.declare_function(&name, Linkage::Local, &apply::uniform(args))?;
+    let mut closures = Vec::new();
+    for (closure, id) in closure_entries.declared() {
+        let args = apply::arity(
+            program.function(closure.function),
+            closure.captures as usize,
+        );
         ctx.func.signature = apply::uniform(args);
-        ctx.func.name = UserFuncName::testcase(&name);
+        ctx.func.name = UserFuncName::testcase(names::closure_entry(
+            closure.captures,
+            &program.function(closure.function).name,
+        ));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
-        apply::define_adapter(b, module, &callees, function);
-        adapters.push((function, define(module, &mut ctx, id, false, Vec::new())?));
+        apply::define_closure_entry(b, module, &imports, &callees, closure);
+        closures.push((closure, define(module, &mut ctx, id, false, Vec::new())?));
     }
     let mut applies = Vec::with_capacity(imports.applies.len());
     for (index, &id) in imports.applies.iter().enumerate() {
@@ -186,7 +198,7 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     Ok(Lowered {
         functions,
         raise,
-        adapters,
+        closures,
         applies,
         data,
     })

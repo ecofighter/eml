@@ -1,16 +1,21 @@
-//! 関数の値の適用。適用する所、クロージャのエントリ`c<k>:<f>`、`apply`の補助の関数`eml$apply$<m>`である
-//! (docs/spec/native.md の「関数の値」)。
+//! 関数の値の適用。適用する所、クロージャを作る所、クロージャのエントリ`c<k>:<f>`、`apply`の補助の関数
+//! `eml$apply$<m>`である (docs/spec/native.md の「関数の値」)。
+use std::collections::HashMap;
+
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{Block, InstBuilder, Signature, TrapCode, Value, types};
 use cranelift_frontend::{FunctionBuilder, Switch};
-use cranelift_module::Module;
-use eml_lir::{Atom, BlockId, Call, FnIdx, LirFn, Program, Repr, Rhs, Stmt, Term, VarId};
+use cranelift_module::{FuncId, Linkage, Module};
+use eml_lir::{
+    Atom, BlockId, Call, FnIdx, LayoutCtor, LirFn, Mark, Program, Repr, Rhs, Stmt, Term, VarId,
+};
 use eml_nrt::Kind;
 
 use super::function::FnLower;
+use super::rc::{self, Step};
 use super::unwind::{After, Point};
-use super::{Callees, Imports};
-use crate::abi::tail_signature;
+use super::{Callees, Imports, kind, names};
+use crate::abi::{clif, tail_signature};
 use crate::mem;
 
 /// 引数`args`個の一様な関数の値のシグネチャ`tail (ctx, clo, args x I64) -> I64`。関数の値への呼び出しとエントリは、
@@ -53,9 +58,9 @@ fn is_uniform(repr: Repr) -> bool {
     matches!(repr, Repr::Obj | Repr::TObj | Repr::Unit)
 }
 
-/// 値として使う関数の引数の数。関数の値として適用できるので、引数と結果の葉はどれも一様である
-/// (docs/spec/lir.md の「関数の ABI」)。そうでなければ、シグネチャの食い違いでなく、ここでpanicする。
-pub(super) fn arity(function: &LirFn) -> usize {
+/// 捕まえた値を`captures`個持つ関数`function`の値が、まだ待つ引数の数。値として使う関数は、捕まえた値より後ろの引数と
+/// 結果の葉がどれも一様である (docs/spec/lir.md の「関数の ABI」)。そうでなければ、シグネチャの食い違いでなく、ここでpanicする。
+pub(super) fn arity(function: &LirFn, captures: usize) -> usize {
     assert!(
         function.clause.is_none(),
         "`{}` is a clause function used as a value",
@@ -63,29 +68,151 @@ pub(super) fn arity(function: &LirFn) -> usize {
     );
     let params = function.params();
     assert!(
-        !params.is_empty()
-            && params.iter().all(|&var| is_uniform(function.repr(var)))
+        captures < params.len()
+            && params[captures..]
+                .iter()
+                .all(|&var| is_uniform(function.repr(var)))
             && matches!(&function.rets[..], [(repr, _)] if is_uniform(*repr)),
-        "`{}` is used as a value but its ABI is not uniform",
+        "`{}` is used as a value with {captures} captures but its ABI is not uniform",
         function.name
     );
-    params.len()
+    params.len() - captures
 }
 
-/// 静的なクロージャのエントリ`c0:<f>`の本体。クロージャは不死で捕まえた値を持たないので、`f`へ飛ぶだけである。
-pub(super) fn define_adapter<M: Module>(
+/// 捕まえた値を`captures`個持つ関数`function`の値の欄。0番の`tobj`がコードの語で、その後に捕まえた値が関数の引数のReprで
+/// 続く (docs/spec/native.md の「関数の値」)。
+fn closure_fields(function: &LirFn, captures: usize) -> LayoutCtor {
+    let fields = std::iter::once(Repr::TObj)
+        .chain(
+            function.params()[..captures]
+                .iter()
+                .map(|&var| function.repr(var)),
+        )
+        .collect();
+    LayoutCtor {
+        name: function.name.clone(),
+        fields,
+    }
+}
+
+/// 関数の値のエントリ`c<captures>:<function>`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClosureEntry {
+    pub function: FnIdx,
+    pub captures: u32,
+}
+
+/// moduleが宣言したクロージャのエントリ。データの記号と同じく、初めて使うときに宣言する。どのエントリも、それを名指す
+/// コードが決まってから定義すれば足りるので、本体をすべて下ろした後に定義する (docs/spec/native.md の「関数の形」)。
+#[derive(Default)]
+pub(super) struct ClosureEntries {
+    ids: HashMap<ClosureEntry, FuncId>,
+    /// 最初に使った順である。
+    declared: Vec<(ClosureEntry, FuncId)>,
+}
+
+impl ClosureEntries {
+    /// `closure`のエントリ。初めて使うときに宣言する。
+    pub(super) fn id<M: Module>(
+        &mut self,
+        module: &mut M,
+        program: &Program,
+        closure: ClosureEntry,
+    ) -> FuncId {
+        if let Some(&id) = self.ids.get(&closure) {
+            return id;
+        }
+        let function = program.function(closure.function);
+        let args = arity(function, closure.captures as usize);
+        // 宣言は領域を使わず、名前は関数の名前と捕まえた値の数で決まり、ほかの種類の記号の接頭辞とも重ならないので、
+        // 宣言が失敗するのは下ろしの誤りだけである
+        let id = module
+            .declare_function(
+                &names::closure_entry(closure.captures, &function.name),
+                Linkage::Local,
+                &uniform(args),
+            )
+            .unwrap_or_else(|error| panic!("a closure entry cannot be declared: {error}"));
+        self.ids.insert(closure, id);
+        self.declared.push((closure, id));
+        id
+    }
+
+    /// 宣言したエントリ。最初に使った順である。
+    pub(super) fn declared(self) -> Vec<(ClosureEntry, FuncId)> {
+        self.declared
+    }
+}
+
+/// クロージャのエントリ`c<k>:<f>`の本体。捕まえた値をReprごとにロードし、`f`を`(ctx, 捕まえた値.., 引数..)`で末尾で
+/// 呼ぶ。捕まえた値の参照は`f`へ移る。クロージャが最後の参照なら、その参照を受け継いだまま箱だけを空け、共有なら捕まえた
+/// 数える値を`dup`してからクロージャの参照を手放す。手放す前に`dup`するので、ほかの持ち主が同時に最後の参照を手放しても、
+/// 捕まえた値は生きている。静的なクロージャ (`k = 0`) は不死で捕まえた値を持たないので、`f`へ飛ぶだけである
+/// (docs/spec/native.md の「関数の値」)。
+pub(super) fn define_closure_entry<M: Module>(
     mut b: FunctionBuilder,
     module: &mut M,
+    imports: &Imports,
     callees: &Callees,
-    function: FnIdx,
+    closure: ClosureEntry,
 ) {
     let entry = b.create_block();
     b.append_block_params_for_function_params(entry);
     b.switch_to_block(entry);
     let params = b.block_params(entry).to_vec();
-    let mut args = vec![params[0]];
+    let (ctx, clo) = (params[0], params[1]);
+    let function = callees.program.function(closure.function);
+    let captures = closure.captures as usize;
+    let mut args = vec![ctx];
+    if captures > 0 {
+        let fields = closure_fields(function, captures);
+        let shape = fields.shape();
+        let loaded: Vec<(Value, Repr)> = fields.fields[1..]
+            .iter()
+            .zip(&shape.positions[1..])
+            .map(|(&repr, &position)| {
+                let ty = clif(kind(repr));
+                (
+                    mem::load_field(&mut b, clo, shape.scanned, position, ty),
+                    repr,
+                )
+            })
+            .collect();
+        let mut entry_ref = |b: &mut FunctionBuilder, symbol: &str| {
+            module.declare_func_in_func(imports.entry(symbol), b.func)
+        };
+        let is_last = entry_ref(&mut b, "eml_rt_is_last");
+        let free_block = entry_ref(&mut b, "eml_rt_free_block");
+        let dup = entry_ref(&mut b, Step::Dup.slow());
+        let decref = entry_ref(&mut b, Step::Decref.slow());
+        let last = b.create_block();
+        let ask = b.create_block();
+        b.set_cold_block(ask);
+        let shared = b.create_block();
+        let go = b.create_block();
+        let rc = mem::load_rc(&mut b, clo);
+        let unique = mem::is_one_ref(&mut b, rc);
+        b.ins().brif(unique, last, &[], ask, &[]);
+        b.switch_to_block(ask);
+        let call = b.ins().call(is_last, &[ctx, clo]);
+        let answer = b.inst_results(call)[0];
+        b.ins().brif(answer, last, &[], shared, &[]);
+        b.switch_to_block(last);
+        b.ins().call(free_block, &[ctx, clo]);
+        b.ins().jump(go, &[]);
+        b.switch_to_block(shared);
+        for &(value, repr) in &loaded {
+            if repr.is_rc() {
+                rc::counted(&mut b, ctx, dup, value, repr, Step::Dup);
+            }
+        }
+        rc::counted(&mut b, ctx, decref, clo, Repr::Obj, Step::Decref);
+        b.ins().jump(go, &[]);
+        b.switch_to_block(go);
+        args.extend(loaded.iter().map(|&(value, _)| value));
+    }
     args.extend_from_slice(&params[2..]);
-    let callee = module.declare_func_in_func(callees.id(function), b.func);
+    let callee = module.declare_func_in_func(callees.id(closure.function), b.func);
     b.ins().return_call(callee, &args);
     b.seal_all_blocks();
     b.finalize(module.target_config());
@@ -194,6 +321,39 @@ struct Dispatch {
 }
 
 impl<M: Module> FnLower<'_, '_, M> {
+    /// `let var = closure function(args)`。`eml_rt_alloc_data`で物体を作り、コードの語と捕まえた値を欄に書く。タグは
+    /// まだ待つ引数の数で、`args`の所有は物体へ移る (docs/spec/native.md の「関数の値」)。
+    pub(super) fn make_closure(&mut self, var: VarId, function: FnIdx, args: &[Atom]) {
+        let program = self.callees.program;
+        let target = program.function(function);
+        let fields = closure_fields(target, args.len());
+        let shape = fields.shape();
+        let closure = ClosureEntry {
+            function,
+            captures: u32::try_from(args.len()).expect("a closure has fewer than 2^32 captures"),
+        };
+        let id = self.closures.id(self.module, program, closure);
+        let entry = self.func_ref(id);
+        let address = self.b.ins().func_addr(types::I64, entry);
+        let code = mem::make_imm(&mut self.b, address);
+        let mut values = vec![code];
+        values.extend(
+            args.iter()
+                .zip(&fields.fields[1..])
+                .map(|(&arg, &repr)| self.atom(arg, repr)),
+        );
+        let lin = self.function.mark(var) == Mark::Lin;
+        let head = [
+            arity(target, args.len()) as i64,
+            i64::from(shape.scanned),
+            i64::from(shape.raw),
+            i64::from(lin),
+        ]
+        .map(|n| self.b.ins().iconst(types::I64, n));
+        let w = self.alloc_con(&head, &shape, &values);
+        self.bind(var, w);
+    }
+
     /// 末尾でない`var = apply callee(args)`。呼ぶ値が引数の数だけを待てば、そのエントリを直接呼び、そうでなければ
     /// `eml$apply$<m>`を呼ぶ。その後に中断を確かめる。
     pub(super) fn apply(

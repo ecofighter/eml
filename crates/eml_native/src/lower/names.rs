@@ -9,7 +9,7 @@ pub fn function(name: &str) -> String {
 }
 
 /// 関数`name`の、捕まえた値を`captures`個持つクロージャのエントリの記号 (docs/spec/native.md の「関数の値」)。
-pub fn adapter(captures: u32, name: &str) -> String {
+pub fn closure_entry(captures: u32, name: &str) -> String {
     format!("c{captures}:{name}")
 }
 

@@ -220,12 +220,16 @@ fn entry$main() -> unit {
   let s.0: obj = const \"s\"
   let a.1: tobj = box 1
   let b.2: tobj = box 2
+  dup s.0
   let u.3: unit = apply &make(a.1, s.0, b.2)
-  return u.3
+  let c.4: tobj = closure add(s.0)
+  let d.5: tobj = box 3
+  let v.6: unit = apply c.4(d.5)
+  return v.6
 }
 ";
     // プログラムの関数、thunk、`eml$raise`のほかに定義する記号。後のエントリと補助の関数も、ここに名前を足す
-    let adapters = [(0, "make"), (0, "add")];
+    let adapters = [(0, "make"), (0, "add"), (1, "add")];
     let helpers = ["eml$apply$1", "eml$apply$2", "eml$apply$3"];
     let mut expected: Vec<String> = adapters
         .iter()

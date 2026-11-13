@@ -5,7 +5,9 @@ use eml_cabi::Linked;
 use eml_native::Arg;
 use eml_nrt::image::{DATUM_FN, Options};
 
-use crate::common::native::{agree, machine, native, native_options, program};
+use crate::common::native::{
+    Lin, agree, call, lin_bit, machine, native, native_options, program, visit,
+};
 
 #[test]
 fn a_static_function_value_takes_no_rc() {
@@ -235,4 +237,198 @@ fn an_abort_inside_an_excess_application_drops_the_rest() {
         agree(&text);
         assert_eq!(native(&text), (String::new(), Ok(Some(3))));
     }
+}
+
+/// 捕まえた文字列`s.0`と`int`の`n.1`に、引数の`b.2`を足して出力する`greet`。`s.0`は`++`の受け取る参照で、`greet`が
+/// 1回呼ばれるごとに1つを手放す。
+const GREET: &str = "\
+fn greet(s.0: obj, n.1: int, t.2: tobj, b.3: tobj) -> unit {
+  let k.4: int = unbox b.3
+  decref b.3
+  let j.5: int = unbox t.2
+  decref t.2
+  let m.6: int = extern \"Prelude.Num Int.+\"(n.1, k.4)
+  let p.7: int = extern \"Prelude.Num Int.+\"(m.6, j.5)
+  let q.8: obj = extern \"Prelude.Show Int.show\"(p.7)
+  let r.9: obj = extern \"Prelude.++\"(s.0, q.8)
+  let u.10: unit = extern Prelude.println(r.9)
+  return u.10
+}
+";
+
+/// `main`の始め。`++`で作った文字列`s.2`を捕まえたクロージャ`c.4`を、印`mark`で束縛する。
+fn greeting(mark: &str) -> String {
+    format!(
+        "\
+{GREET}fn entry$main() -> unit {{
+  let a.0: obj = const \"n=\"
+  let b.1: obj = extern \"Prelude.Show Int.show\"(4)
+  let s.2: obj = extern \"Prelude.++\"(a.0, b.1)
+  let t.3: tobj = box 1000
+  let c.4: {mark} = closure greet(s.2, 10, t.3)
+"
+    )
+}
+
+#[test]
+fn a_closure_is_freed_on_its_last_use() {
+    // ただ1つの参照で適用したクロージャは、エントリが捕まえた値を`greet`へ移して箱を空ける。箱が残ればcensusが漏れを
+    // 見つけ、箱を空けるときに捕まえた値も手放せば`s.2`が二重に手放される
+    for (mark, ending) in [
+        ("tobj", Ending::Let),
+        ("tobj", Ending::Tail),
+        ("tobj lin", Ending::Let),
+    ] {
+        let apply = "apply c.4(x.5)";
+        let tail = match ending {
+            Ending::Let => format!("  let u.6: unit = {apply}\n  return u.6\n"),
+            Ending::Tail => format!("  tail {apply}\n"),
+        };
+        let text = greeting(mark) + "  let x.5: tobj = box 5\n" + &tail + "}\n";
+        agree(&text);
+        assert_eq!(native(&text), ("n=41015\n".to_string(), Ok(None)));
+    }
+    // クロージャの`lin`ビットは、束縛する変数の印である
+    let text = "\
+fn k(n.0: int, b.1: tobj) -> tobj {
+  return b.1
+}
+fn entry$main() -> unit {
+  return ()
+}
+fn unr(n.0: int) -> tobj {
+  let c.1: tobj = closure k(n.0)
+  return c.1
+}
+fn lin(n.0: int) -> tobj lin {
+  let c.1: tobj lin = closure k(n.0)
+  return c.1
+}
+";
+    for (name, lin) in [("unr", false), ("lin", true)] {
+        let (finished, record) = visit(text, name, lin_bit, Lin { seen: None });
+        finished.unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(record.seen, Some((lin, true)), "{name}");
+    }
+}
+
+#[test]
+fn a_shared_closure_dups_its_captures() {
+    // 1回目の適用ではクロージャが共有なので、エントリは捕まえた値を`dup`してから箱の参照を手放す。`dup`しなければ、
+    // `greet`が`s.2`を手放した後の2回目の適用が、解放した文字列を読む
+    let text = greeting("tobj")
+        + "\
+  dup c.4
+  let x.5: tobj = box 5
+  let u.6: unit = apply c.4(x.5)
+  let y.7: tobj = box 6
+  let v.8: unit = apply c.4(y.7)
+  return v.8
+}
+";
+    agree(&text);
+    assert_eq!(native(&text), ("n=41015\nn=41016\n".to_string(), Ok(None)));
+}
+
+#[test]
+fn raw_captures_keep_their_bits() {
+    // 生の捕まえた値 (`int`、`float`、`enum`、`unit`) は、走査する語の後に引数の順で並ぶ生の語である。`int`の`8`は
+    // 物体を指す語のように見えるので、エントリがそれを数えれば、共有の道の`dup`がそこを読む
+    let text = "\
+layout R { R(int, float, enum) }
+fn pack(n.0: int, s.1: obj, x.2: float, u.3: unit, c.4: enum, b.5: tobj) -> obj {
+  decref s.1
+  decref b.5
+  let r.6: obj = con R #0(n.0, x.2, c.4)
+  return r.6
+}
+fn f(n.0: int, x.1: float, c.2: enum) -> (int, float, enum, int, float, enum) {
+  let s.3: obj = extern \"Prelude.Show Int.show\"(n.0)
+  let k.4: tobj = closure pack(n.0, s.3, x.1, (), c.2)
+  dup k.4
+  let b.5: tobj = box 1
+  let r.6: obj = apply k.4(b.5)
+  let b.7: tobj = box 2
+  let q.8: obj = apply k.4(b.7)
+  unpack r.6 R #0(m.9: int, y.10: float, d.11: enum)
+  unpack q.8 R #0(m.12: int, y.13: float, d.14: enum)
+  decref r.6
+  decref q.8
+  return (m.9, y.10, d.11, m.12, y.13, d.14)
+}
+fn entry$main() -> unit {
+  return ()
+}
+";
+    let nan = f64::from_bits(0xfff8_0000_dead_beef);
+    for (n, x, c) in [
+        (8, -0.0, 1),
+        (i64::MIN, nan, 2),
+        (i64::MAX, f64::INFINITY, 0),
+    ] {
+        let got = call(text, "f", &[Arg::I64(n), Arg::F64(x), Arg::I64(c)]);
+        let [m1, Arg::F64(y1), d1, m2, Arg::F64(y2), d2] = got[..] else {
+            panic!("{got:?}")
+        };
+        assert_eq!([m1, d1, m2, d2], [Arg::I64(n), Arg::I64(c)].repeat(2)[..]);
+        assert_eq!([y1.to_bits(), y2.to_bits()], [x.to_bits(); 2]);
+    }
+}
+
+#[test]
+fn a_closure_with_255_captures() {
+    // 捕まえた文字列が`count`個のクロージャは、コードの語と合わせて`count + 1`個の走査する語を持つ。254個以上なら
+    // ペイロードの先頭に数の語があり、コードの語と捕まえた値は1語ずれる (docs/spec/object-model.md の「語の位置」)。
+    // 253個 (走査する語が254個で数の語なし) と254個 (255個で数の語あり) で、共有の道と最後の参照の道の両方を通す
+    for count in [253, 254] {
+        let text = wide(count);
+        let line = format!("0{}{}\n", count / 2, count - 1);
+        agree(&text);
+        assert_eq!(native(&text), (line.repeat(2), Ok(None)));
+    }
+}
+
+/// `count`個の文字列を捕まえた`wide`のクロージャを2回適用するプログラム。`wide`は最初、真ん中、最後の文字列をつないで
+/// 出力し、ほかを手放す。
+fn wide(count: usize) -> String {
+    let mid = count / 2;
+    let last = count - 1;
+    let params: Vec<String> = (0..count).map(|i| format!("s{i}.{i}: obj")).collect();
+    let mut text = format!(
+        "fn wide({}, b.{count}: tobj) -> unit {{\n  decref b.{count}\n",
+        params.join(", ")
+    );
+    for i in (1..count).filter(|&i| i != mid && i != last) {
+        text += &format!("  decref s{i}.{i}\n");
+    }
+    let v = count + 1;
+    text += &format!(
+        "  let r.{v}: obj = extern \"Prelude.++\"(s0.0, s{mid}.{mid})\n\
+         \x20 let q.{}: obj = extern \"Prelude.++\"(r.{v}, s{last}.{last})\n\
+         \x20 let u.{}: unit = extern Prelude.println(q.{})\n  return u.{}\n}}\n",
+        v + 1,
+        v + 2,
+        v + 1,
+        v + 2
+    );
+    text += "fn entry$main() -> unit {\n";
+    for i in 0..count {
+        text += &format!("  let s{i}.{i}: obj = extern \"Prelude.Show Int.show\"({i})\n");
+    }
+    let captures: Vec<String> = (0..count).map(|i| format!("s{i}.{i}")).collect();
+    let c = count;
+    text += &format!(
+        "  let c.{c}: tobj = closure wide({})\n  dup c.{c}\n\
+         \x20 let x.{}: tobj = box 1\n  let u.{}: unit = apply c.{c}(x.{})\n\
+         \x20 let y.{}: tobj = box 2\n  let w.{}: unit = apply c.{c}(y.{})\n  return w.{}\n}}\n",
+        captures.join(", "),
+        c + 1,
+        c + 2,
+        c + 1,
+        c + 3,
+        c + 4,
+        c + 3,
+        c + 4
+    );
+    text
 }

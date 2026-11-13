@@ -7,6 +7,7 @@ use cranelift_codegen::ir::{GlobalValue, Type, Value, types};
 use cranelift_module::{DataDescription, DataId, Linkage, Module};
 use eml_lir::{FnIdx, Program};
 
+use super::apply::{ClosureEntries, ClosureEntry};
 use super::function::FnLower;
 use super::names;
 use crate::abi::Built;
@@ -44,22 +45,21 @@ pub struct Data {
 }
 
 impl Data {
-    /// 関数`function`の静的なクロージャの記号。初めて使うときに宣言する。
-    pub fn fn_value<M: Module>(
+    /// 関数`function`の静的なクロージャの記号。初めて使うときに宣言する。実行系はその行のコードに`c0:<f>`を書くので、
+    /// 記号と一緒にそのエントリも宣言する (docs/spec/native.md の「関数の値」)。
+    pub(super) fn fn_value<M: Module>(
         &mut self,
         module: &mut M,
         program: &Program,
+        closures: &mut ClosureEntries,
         function: FnIdx,
     ) -> DataId {
+        let entry = ClosureEntry {
+            function,
+            captures: 0,
+        };
+        closures.id(module, program, entry);
         self.id(module, program, Datum::Fn(function))
-    }
-
-    /// 静的なクロージャを宣言した関数。最初に使った順である。
-    pub fn functions(&self) -> impl Iterator<Item = FnIdx> + '_ {
-        self.declared.iter().filter_map(|(datum, _)| match datum {
-            Datum::Fn(function) => Some(*function),
-            _ => None,
-        })
     }
 
     /// `datum`の記号。初めて使うときに宣言する。
@@ -100,7 +100,7 @@ impl<M: Module> FnLower<'_, '_, M> {
     pub(super) fn fn_value(&mut self, function: FnIdx) -> Value {
         let id = self
             .data
-            .fn_value(self.module, self.callees.program, function);
+            .fn_value(self.module, self.callees.program, self.closures, function);
         let slot = self.global_value(id);
         mem::data_word(&mut self.b, slot, types::I64)
     }

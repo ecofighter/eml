@@ -7,7 +7,9 @@ use eml_nrt::RunConfig;
 use eml_nrt::image::{DATUM_BIG_INT, DATUM_FLOAT, DATUM_STRING};
 use eml_rt::{Ctx, Fast, Kind, Word, layout};
 
-use crate::common::native::{Visit, agree, call, call_visited, clif, host, native, program, visit};
+use crate::common::native::{
+    Lin, Visit, agree, call, call_visited, clif, host, lin_bit, native, program, visit,
+};
 
 const MAIN: &str = "fn entry$main() -> unit {\n  return ()\n}\n";
 
@@ -510,27 +512,6 @@ fn lin(n.0: int) -> obj lin {
   return p.1
 }
 ";
-
-/// 代役の記録。試す関数が作った物体の`lin`ビットと、ヒープの呼び出しがどれも成功したかである。
-struct Lin {
-    seen: Option<(bool, bool)>,
-}
-
-/// 代役。試す関数で物体を1つ作り、その`lin`ビットを記録して手放す。
-unsafe extern "C" fn lin_bit(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
-    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
-    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Lin>>() };
-    // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない
-    let seen = unsafe {
-        let mut argv = [5u64];
-        call_visited(ctx, visit, &mut argv);
-        let w = argv.as_ptr().cast::<Word>().read();
-        let lin = (*ctx).heap_mut().meta(w).map(|meta| meta.lin());
-        let freed = (*ctx).heap_mut().decref(w).is_ok();
-        (lin.unwrap_or(false), lin.is_ok() && freed)
-    };
-    visit.record.seen = Some(seen);
-}
 
 #[test]
 fn a_constructor_carries_the_mark_of_its_variable() {

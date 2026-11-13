@@ -257,15 +257,20 @@ impl NativeMachine {
                 sites: defined.sites,
             });
         }
-        let mut adapters = HashMap::with_capacity(lowered.adapters.len());
-        for (function, defined) in lowered.adapters {
+        let mut statics = HashMap::with_capacity(lowered.closures.len());
+        for (closure, defined) in lowered.closures {
             let code = module.get_finalized_function(defined.id);
             self.symbols.push(Symbol {
-                name: names::adapter(0, &program.function(function).name),
+                name: names::closure_entry(
+                    closure.captures,
+                    &program.function(closure.function).name,
+                ),
                 address: code,
                 size: defined.size,
             });
-            adapters.insert(function, code);
+            if closure.captures == 0 {
+                statics.insert(closure.function, code);
+            }
         }
         for (index, defined) in lowered.applies.into_iter().enumerate() {
             self.symbols.push(Symbol {
@@ -281,7 +286,7 @@ impl NativeMachine {
             .map(|(datum, id)| {
                 let (slot, _) = module.get_finalized_data(id);
                 let code = match datum {
-                    Datum::Fn(function) => adapters[&function],
+                    Datum::Fn(function) => statics[&function],
                     _ => std::ptr::null(),
                 };
                 (datum, slot.cast_mut().cast::<u64>(), code)
