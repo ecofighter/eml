@@ -20,8 +20,8 @@
 ### 記述子の表
 
 - `entries!`は、表`const NAME: &[Entry]`と、行ごとに関数1つと`Entry`の行1つを宣言する。`Entry`の欄は、`symbol` (関数の識別子)、`address` (関数のアドレスを返す関数。捕まえるもののない閉包なので、表はただの`const`である)、`params` (`ctx`の後の引数の`Kind`)、`result` (`Option<Kind>`) である
-- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`のRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
-- エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は4つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
+- `Kind`は`I64`か`F64`である。型のトークンは`i64`、`f64`と、行の表が書くReprの名前`obj`、`tobj`、`token`、`unit`、`int`、`enum` (どれも`I64`)、`float` (`F64`) である。`obj`、`tobj`、`token`のRustの型は`Word`、`unit`、`int`、`enum`は`i64`、`float`は`f64`である。引数の位置では、ほかに語の並びへのポインタ`ptr`も受ける。その`Kind`は`I64`で、Rustの型は`*const Word`なので、それを通して読む語はprovenanceを保つ。結果の位置では、ほかに`!` (戻らない)、`never`、またはなしも受ける。`!`は`plain`の形だけが使う。`shim`の本体は`Result<R, E>`を返し、安定版のRustでは`R`に`!`を書けないためである。先へ進まない`shim`のエントリは`never`を使う。`never`は先へ進まない行 (`exit`、`panic`など) の種類で、関数は`()`を返してふつうに戻り、行には結果がなく、生成したコードは呼び出しの後で無条件に冷たいブロックへ分岐する。ほかのトークンはコンパイルの誤りになる
+- エントリを宣言するmoduleは、自分の表を`eml_nrt/src/lib.rs`の`TABLES`に足す。表は5つある。`enter.rs`の`ENTRIES` (`eml_fatal`だけ)、`services.rs`の`SERVICES`、`heap.rs`の`HEAP`、`rows.rs`の`ROWS`、`closures.rs`の`CLOSURES`である。`eml_nrt::entries()`はそのすべてをたどる。単体テストが、どの記号も上の接頭辞か名前を持ち、同じ記号が2度現れないことを確かめる
 - 生成したコードは、エントリを記号で取り込み、呼び出しの型を行だけから作る。宣言が1つなので、関数と呼び出しの型が食い違うことはない
 - エントリに`#[no_mangle]`は付けない。JITはアドレスを記号の名前で登録する
 
@@ -109,11 +109,12 @@
 
 ネイティブの実行系は、プログラムについての事実を`Image` (`eml_nrt::image`) からだけ得る。`Image`はJITのホストが作り、その表の記憶もJITのホストが持つ。ここの型はどれも`#[repr(C)]`である。
 
-- `Image { functions: Slice<FnRow>, files: Slice<Str>, data: Slice<DatumRow> }`。`Str { ptr, len }`はUTF-8の文字列、`Slice<T> { ptr, len }`は配列で、空の配列はnullのポインタを持ちうる
-- `FnRow { name, code, size, sites }`は関数1つで、名前、コードの範囲`[code, code + size)`、その関数自身のfaultの地点 (文の順) を持つ。地点は、関数のコードのアドレスと、その関数の`sites`の添字の組で表す。だからプログラムのほかの部分で変わる番号はコードに現れない
+- `Image { functions: Slice<FnRow>, files: Slice<Str>, data: Slice<DatumRow>, paps: Slice<PapRow> }`。`Str { ptr, len }`はUTF-8の文字列、`Slice<T> { ptr, len }`は配列で、空の配列はnullのポインタを持ちうる
+- `FnRow { name, code, size, sites, value }`は関数1つで、名前、コードの範囲`[code, code + size)`、その関数自身のfaultの地点 (文の順)、その関数の静的なクロージャを持つ`DATUM_FN`の行のslot (なければnull。「関数の値」) を持つ。地点は、関数のコードのアドレスと、その関数の`sites`の添字の組で表す。だからプログラムのほかの部分で変わる番号はコードに現れない
 - `SiteRow { file, line, column }`は地点のソースの位置である。`file`は`files`の添字で、`NO_FILE` (`u32::MAX`) は位置のない地点を表す
 - 実行系は、コードのアドレスから関数を、`code`の順に並べた行の二分探索で探す。並べるのはrunごとに1回で、探すのは冷たい道だけである。どの行の範囲にもないアドレスは、関数`<native code>`として報告する
-- `DatumRow { kind, bits, text, slot }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`) のどれかである。`slot`はmoduleの書ける8バイトのデータの物である。実行系は最初のエントリの前に、どの値も、VMが定数を作るのと同じ関数 (`eml_sched::constants`と、文字列には`alloc_string_immortal`) で凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。生成したコードは、値をそのslotからのロード1つで読む
+- `DatumRow { kind, bits, text, code, slot }`は読み込み時の値1つである。`kind`は`DATUM_STRING` (0。中身は`text`)、`DATUM_BIG_INT` (1。`bits`を`i64`として読む)、`DATUM_FLOAT` (2。中身は`bits`)、`DATUM_FN` (3。静的なクロージャで、`bits`は引数の数、`code`はエントリのコード。「関数の値」) のどれかである。`slot`はmoduleの書ける8バイトのデータの物である。実行系は最初のエントリの前に、どの値も凍結した領域に不死の物体として作り、その塊をworkerのヒープに付けて、それぞれの語をそのslotに書く。定数は、VMが定数を作るのと同じ関数 (`eml_sched::constants`と、文字列には`alloc_string_immortal`) で作る。生成したコードは、値をそのslotからのロード1つで読む
+- `PapRow { args, rest, code }`は、PAPのアダプタ1つのコードである (「関数の値」)
 - slotを書いた後、`Image`は読むだけになる。だから`Image`は`Sync`で、呼ぶ側が待っている間にworkerのスレッドがそれを読む
 - `Start { thunk, entry, argv, result_rc }`は、runがコードに入る所である。`eml_enter`の引数と、エントリの結果がrunの手放す数える語かどうかを持つ
 - `Options { census, stack }`。`census`は`Census::Skip`か`Census::Check`で、`stack`はworkerのスタックに予約するバイト数である。既定は`Skip`と`WORKER_STACK`である
@@ -269,6 +270,17 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - `drop_token`は`eml_rt_drop_token`を呼ぶ。空のtokenでは何もしない
 - 構造体の`unbox`と`release unboxed`は、まず箱が`BigInt`かを、ロード1つと比較で確かめる。ダミーは`BigInt`で、構造体の箱はいつも`Data`である ([オブジェクトモデル](object-model.md)の「ダミーの値」)。ダミーなら、`unbox`は数える葉に箱の語を、生の葉にビット列0を束縛し、`release unboxed`は何もせずに空のtokenを定義する。そうでなければ、`unbox`は葉ごとにロード1つで、`release unboxed`はふつうの`release`である
 - 速い道の費用: 欄の読み書きは、決まったずれでのロードかストア1つである。割り当ては呼び出し1つと、欄ごとのストア1つである。`int`の`box`はシフト、シフト、比較、分岐、`or`で、`unbox`は確かめ、分岐、シフトである。タグの`switch`は、`enum`なら値そのもの、`obj`ならロード1つとマスクで、`tobj`ではその前に即値の確かめがあり、その後が`Switch`である。定数は、そのデータの記号からのロード1つである。`release`はロード1つと比較で、一意な道では捨てる子ごとにインラインの`decref`、その後に呼び出し1つ (`eml_rt_free_block`) か、呼び出しなし (箱がtokenになる) である。reuseの`con`は、tokenの確かめと、書かない印のない欄のストアで、その場のreuseなら呼び出しはなく、別の構築子なら呼び出し1つ (`eml_rt_con_at`) である
+
+## 関数の値
+
+ネイティブのコードの関数の値は、いつも物体である。そのヘッダが記述子なので、適用に関数の表は要らない。
+
+- 物体は`Data`の物体である。タグは、まだ待っている引数の葉の数`n` (1から65535) である。0番の走査する語は、エントリのコードのアドレスを即値の語 (`(address << 1) | 1`) にしたもので、コードは右への算術シフト1つでアドレスに戻す。その後に捕まえた値が続く。だからどの走査する語も正しい語で、ヒープの操作 (`dup`、`decref`、解放、`freeze`) は関数の値をふつうの`Data`の物体として扱う。`eml_nrt`はコードの語を`Word::int`で作り、アドレスが63ビットに収まることを確かめる (`assert`)
+- 静的なクロージャは、捕まえた値のない関数の値`{ tag = n, [code] }`である。種類`DATUM_FN` (3) の読み込み時の値で、`bits`は`n`、`code`はエントリのコードである。実行系は最初のエントリの前に、ほかの読み込み時の値と一緒に、それを凍結した領域の不死の物体として作り (`alloc_immortal`)、その語をslotに書く (「`Image`」)。`lin`ビットは立てない。`FnRow.value`は、その関数の静的なクロージャを持つ`DATUM_FN`の行のslotで、なければnullである
+- PAP (部分適用) は、少なすぎる引数に適用した関数の値で、残りの引数を待つ。サービス`eml_nrt_pap(ctx, callee, argv, m) -> 語`がそれを作る。`n`を`callee`のタグ、`r = n - m`として、タグが`r`で、`2 + m`個の走査する語が`[(m, r)のアダプタのコード, callee, a_1..a_m]`で、`lin`ビットが`callee`のものである`Data`の物体を確保する。`argv`は`m`個の引数の語を指す。サービスは`callee`と各引数の参照を受け取る。それらはPAPの欄へ移り、呼ぶ側は呼び出しの後でそれらを手放さない。欄は`layout::data_first(2 + m, false)`から始まるので、走査する語が数の語を要するときは、「データ」と同じく1語ずれる
+- アダプタは`Image.paps`にある。`PapRow { args, rest, code }`は、`args`個の引数を持ち、さらに`rest`個の引数を待つPAPのアダプタのコードである。実行系は`(m, r)`を、runごとに1回並べた行の二分探索で探す。`callee`が即値か`Data`の物体でないとき、`r`が0以下のとき、`(m, r)`の行がないときは、サービスは内部の誤り`applying a value that is not a function`を関数`<native code>`で位置なしに記録し、致命的な誤りの道 (`FATAL_RECORDED`) でrunを終える。実行の前提を満たすプログラムは、そこへ着かない
+- `eml_nrt_pap`は、`eml_nrt/src/closures.rs`の表`CLOSURES`にある。サービスと同じくworkerの構造体を使うので、`run`が入ったコードからだけ呼ぶ (「実行の始めと終わり」)
+- 関数の値のタグとコードの語を読むのは、生成したコード、実行系の読み込み時の値を作る関数、`eml_nrt_pap`だけである。`eml_rt`と`eml_sched`は関数の値を読み解かず、ヒープの操作はクロージャのタグを読まない。[オブジェクトモデル](object-model.md)の「クロージャ」の即値の関数の番号はVMの形で、ネイティブのコードは使わない
 
 ## 断る形
 

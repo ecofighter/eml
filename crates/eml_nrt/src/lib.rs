@@ -4,6 +4,7 @@
 
 mod arch;
 mod census;
+mod closures;
 mod constants;
 mod enter;
 mod entries;
@@ -32,8 +33,17 @@ pub use enter::{
 pub use entries::{Entry, Kind};
 pub use services::{eml_nrt_failed, eml_nrt_safepoint};
 
+// 関数の値のエントリ (docs/spec/native.md の「関数の値」)
+pub use closures::eml_nrt_pap;
+
 /// エントリの表。エントリを宣言するmoduleは、自分の表をここに並べる (docs/spec/native.md の「記述子の表」)。
-const TABLES: &[&[Entry]] = &[enter::ENTRIES, services::SERVICES, heap::HEAP, rows::ROWS];
+const TABLES: &[&[Entry]] = &[
+    enter::ENTRIES,
+    services::SERVICES,
+    heap::HEAP,
+    rows::ROWS,
+    closures::CLOSURES,
+];
 
 /// 生成したコードが呼べるすべてのエントリ。
 pub fn entries() -> impl Iterator<Item = &'static Entry> {

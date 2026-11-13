@@ -83,7 +83,8 @@ pub struct SiteRow {
     pub column: u32,
 }
 
-/// 関数1つ。名前、コードの範囲`[code, code + size)`、その関数のfaultの地点である。
+/// 関数1つ。名前、コードの範囲`[code, code + size)`、その関数のfaultの地点と、関数の静的なクロージャのslot (なければ
+/// null) である。
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FnRow {
@@ -91,21 +92,33 @@ pub struct FnRow {
     pub code: *const u8,
     pub size: u32,
     pub sites: Slice<SiteRow>,
+    pub value: *mut u64,
 }
 
 pub const DATUM_STRING: u32 = 0;
 pub const DATUM_BIG_INT: u32 = 1;
 pub const DATUM_FLOAT: u32 = 2;
+pub const DATUM_FN: u32 = 3;
 
-/// 読み込み時の値1つ。種類、中身 (大きい`int`と`float`は`bits`、文字列は`text`) と、runが物体の語で埋めるデータの
-/// slotである。
+/// 読み込み時の値1つ。種類、中身 (大きい`int`と`float`は`bits`、文字列は`text`、静的なクロージャは`bits`の引数の数と
+/// `code`のエントリのコード) と、runが物体の語で埋めるデータのslotである。
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct DatumRow {
     pub kind: u32,
     pub bits: u64,
     pub text: Str,
+    pub code: *const u8,
     pub slot: *mut u64,
+}
+
+/// PAPのアダプタ1つ。`args`個の引数を持ち、`rest`個の引数を待つPAPのエントリのコードである。
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PapRow {
+    pub args: u32,
+    pub rest: u32,
+    pub code: *const u8,
 }
 
 #[repr(C)]
@@ -114,6 +127,7 @@ pub struct Image {
     pub functions: Slice<FnRow>,
     pub files: Slice<Str>,
     pub data: Slice<DatumRow>,
+    pub paps: Slice<PapRow>,
 }
 
 // SAFETY: 安全なAPIはどれも`Image`のポインタの先を読み書きしない。読み書きするのは`unsafe fn`の`run`だけで、呼ぶ側が

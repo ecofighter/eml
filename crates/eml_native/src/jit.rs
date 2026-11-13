@@ -101,6 +101,7 @@ impl Tables {
                 code: function.code,
                 size: function.size,
                 sites: Slice::new(&function.sites),
+                value: std::ptr::null_mut(),
             })
             .collect();
         let datum_rows: Vec<DatumRow> = data
@@ -115,6 +116,7 @@ impl Tables {
                     kind,
                     bits,
                     text: Str::new(text),
+                    code: std::ptr::null(),
                     slot: *slot,
                 }
             })
@@ -123,6 +125,7 @@ impl Tables {
             functions: Slice::new(&rows),
             files: Slice::new(&file_rows),
             data: Slice::new(&datum_rows),
+            paps: Slice::new(&[]),
         };
         Tables {
             functions,

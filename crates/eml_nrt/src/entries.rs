@@ -39,6 +39,9 @@ macro_rules! __kind {
     (unit) => {
         $crate::Kind::I64
     };
+    (ptr) => {
+        $crate::Kind::I64
+    };
     (int) => {
         $crate::Kind::I64
     };
@@ -52,7 +55,8 @@ macro_rules! __kind {
 
 /// 引数と結果のRustの型。`i64`と`f64`のほかに、行の表が書くReprの名前も受ける。ほかのトークンはコンパイルの誤りになる。
 /// 機械の型はどの引数も`i64`か`f64`だが、物体の語 (`obj`、`tobj`、`token`) のRustの型は`Word`である。`Word`は
-/// `repr(transparent)`のポインタなので、どの対象でも`i64`と同じ渡し方で、語のprovenanceが入口をまたいで残る
+/// `repr(transparent)`のポインタなので、どの対象でも`i64`と同じ渡し方で、語のprovenanceが入口をまたいで残る。引数の
+/// `ptr`は語の並びへのポインタで、Rustの型は`*const Word`なので、それを通して読む語もprovenanceを保つ
 /// (docs/spec/native.md の「エントリのABI」)。
 #[doc(hidden)]
 #[macro_export]
@@ -81,6 +85,9 @@ macro_rules! __ty {
     (token) => {
         $crate::__rt::Word
     };
+    (ptr) => {
+        *const $crate::__rt::Word
+    };
     (unit) => {
         i64
     };
@@ -103,6 +110,9 @@ macro_rules! __result {
     };
     (never) => {
         None
+    };
+    (ptr) => {
+        compile_error!("`ptr` is a token of the argument position")
     };
     ($t:tt) => {
         Some($crate::__kind!($t))
@@ -478,13 +488,17 @@ mod tests {
     /// 間ずっと生きていて、置いている間は`f`に渡すポインタからだけ触れるので、workerの構造体を使うエントリの前提を満たす
     /// (docs/spec/native.md の「実行の始めと終わり」)。`enter`を通らないのでMiriでも流せる。
     fn with_worker<R>(ctx: *mut Ctx<Fast>, f: impl FnOnce(*mut crate::worker::Worker) -> R) -> R {
-        use crate::image::{Image, Slice};
-        let image = Image {
-            functions: Slice::new(&[]),
-            files: Slice::new(&[]),
-            data: Slice::new(&[]),
-        };
-        // SAFETY: `image`の表は空で、workerより長く生きる
+        with_paps(ctx, &[], f)
+    }
+
+    /// `with_worker`と同じだが、workerの`Image`は`paps`をPAPのアダプタの表に持つ。
+    fn with_paps<R>(
+        ctx: *mut Ctx<Fast>,
+        paps: &[crate::image::PapRow],
+        f: impl FnOnce(*mut crate::worker::Worker) -> R,
+    ) -> R {
+        let image = image_with(paps);
+        // SAFETY: `image`の表は`paps`と空の表で、workerより長く生きる
         let mut worker = unsafe { crate::worker::Worker::new(&image) };
         let raw: *mut crate::worker::Worker = &raw mut worker;
         // SAFETY: テストは生きている`Ctx`を渡す
@@ -493,6 +507,246 @@ mod tests {
         // SAFETY: 上と同じ
         unsafe { (*ctx).set_runtime(std::ptr::null_mut()) };
         r
+    }
+
+    /// `paps`だけを持つ`Image`。
+    fn image_with(paps: &[crate::image::PapRow]) -> crate::image::Image {
+        use crate::image::{Image, Slice};
+        Image {
+            functions: Slice::new(&[]),
+            files: Slice::new(&[]),
+            data: Slice::new(&[]),
+            paps: Slice::new(paps),
+        }
+    }
+
+    /// エントリのコードの代わり。中身は読まず、アドレスだけを使う。
+    static CODE: [u8; 2] = [0; 2];
+
+    /// 引数を`arity`個待つクロージャ。コードの語は`CODE`である (docs/spec/native.md の「関数の値」)。
+    ///
+    /// # Safety
+    /// `c`は生きている`Ctx`である。
+    unsafe fn closure(c: *mut Ctx<Fast>, arity: u16, lin: bool) -> Word {
+        // SAFETY: 呼ぶ側の約束。新しい物体の走査する語に即値を書く
+        unsafe {
+            let w = (*c).heap_mut().alloc_data(arity, 1, 0, lin);
+            (*c).heap_mut()
+                .set_field(
+                    w,
+                    layout::data_first(1, false),
+                    crate::closures::code_word(CODE.as_ptr()),
+                )
+                .unwrap();
+            w
+        }
+    }
+
+    #[test]
+    fn a_static_closure_is_immortal_with_its_arity_tag() {
+        use crate::constants::{Built, Datum, build};
+        let mut ctx = ctx();
+        let control = Arc::clone(ctx.heap().control());
+        let data = [Datum::Fn {
+            arity: 3,
+            code: CODE.as_ptr(),
+        }];
+        // `freeze`は、どの物体も不死のときだけ成功する
+        let Built { words, region } = build(&control, &data).unwrap();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 塊を付けても`Ctx`の持つ語は変わらない。語は付けた塊の物体である
+        unsafe {
+            (*c).heap_mut().attach(region.unwrap());
+            let w = words[0];
+            let heap = (*c).heap();
+            let meta = heap.meta(w).unwrap();
+            assert_eq!(
+                (meta.kind(), meta.tag(), meta.scan(), meta.lin()),
+                (ObjectKind::Data, 3, 1, false)
+            );
+            assert_eq!(
+                heap.field(w, layout::data_first(1, false)),
+                Ok(Word::imm(CODE.as_ptr().addr() as i64))
+            );
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    #[test]
+    fn pap_holds_the_callee_and_arguments() {
+        use crate::closures::eml_nrt_pap;
+        use crate::heap::eml_rt_decref;
+        use crate::image::PapRow;
+        let adapter = CODE[1..].as_ptr();
+        let paps = [
+            PapRow {
+                args: 1,
+                rest: 2,
+                code: CODE.as_ptr(),
+            },
+            PapRow {
+                args: 2,
+                rest: 1,
+                code: adapter,
+            },
+        ];
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。workerの構造体は`with_paps`が置き、その前提を満たす。アダプタがあるので、呼び出しは
+        // 致命的な誤りの道を通らず、`enter`の中でなくてよい。呼び出しは`callee`と引数の参照を受け取り、PAPの参照を返す
+        unsafe {
+            let callee = closure(c, 3, true);
+            let text = (*c).fresh_string("a");
+            let argv = [text, Word::imm(7)];
+            let pap = with_paps(c, &paps, |_| eml_nrt_pap(c, callee, argv.as_ptr(), 2));
+            let heap = (*c).heap();
+            let meta = heap.meta(pap).unwrap();
+            assert_eq!(
+                (meta.kind(), meta.tag(), meta.scan(), meta.lin()),
+                (ObjectKind::Data, 1, 4, true)
+            );
+            let first = layout::data_first(4, false);
+            let fields: Vec<Word> = (0..4)
+                .map(|i| heap.field(pap, first + i).unwrap())
+                .collect();
+            assert_eq!(
+                fields,
+                [Word::imm(adapter.addr() as i64), callee, text, Word::imm(7)]
+            );
+            assert_eq!(
+                live(&mut *c),
+                [("Data".to_string(), 2), ("String".to_string(), 1)]
+            );
+            (*c).heap_mut().set_lin(pap, false).unwrap();
+            (*c).heap_mut().set_lin(callee, false).unwrap();
+            eml_rt_decref(c, pap);
+            assert_eq!(live(&mut *c), []);
+        }
+    }
+
+    /// 致命的な誤りの道を通るので、Miriでは流さない (docs/implementation/testing.md の「`eml_nrt`の検証」)。
+    #[cfg(not(miri))]
+    mod fatal {
+        use eml_rt::{Ctx, Fast, Kind as ObjectKind, Meta, Word, layout};
+        use eml_sched::error::{RunFault, RuntimeError};
+
+        use super::{closure, ctx, image_with};
+        use crate::closures::eml_nrt_pap;
+        use crate::enter::{FATAL_RECORDED, Fatal, enter};
+        use crate::image::PapRow;
+        use crate::worker::{NATIVE_CODE, Worker};
+
+        /// `argv`の語`[callee, m, a_1..]`で`eml_nrt_pap`を呼ぶ代役のthunk。
+        unsafe extern "C" fn call_pap(ctx: *mut Ctx<Fast>, _entry: *const u8, argv: *mut u64) {
+            let words = argv.cast::<Word>();
+            // SAFETY: `enter`は生きている`Ctx`を渡し、`argv`はテストの語を指す。エントリは戻らない
+            unsafe {
+                let m = (*words.add(1)).bits() as i64;
+                *words = eml_nrt_pap(ctx, *words, words.add(2), m);
+            }
+        }
+
+        /// `arity`個の引数を待つクロージャを`m`個の引数に部分適用し、その誤りを返す。
+        fn pap_error(paps: &[PapRow], arity: u16, m: usize) -> Option<RuntimeError> {
+            // SAFETY: `pap_error_of`は生きている`Ctx`を渡す
+            pap_error_of(paps, |c| unsafe { closure(c, arity, false) }, m)
+        }
+
+        /// `callee`が作る値を`m`個の引数に部分適用し、その誤りを返す。
+        fn pap_error_of(
+            paps: &[PapRow],
+            callee: impl FnOnce(*mut Ctx<Fast>) -> Word,
+            m: usize,
+        ) -> Option<RuntimeError> {
+            let mut ctx = ctx();
+            let raw: *mut Ctx<Fast> = &mut *ctx;
+            let image = image_with(paps);
+            // SAFETY: `image`の表はworkerより長く生きる
+            let mut worker = unsafe { Worker::new(&image) };
+            ctx.set_runtime((&raw mut worker).cast());
+            let mut argv = vec![Word::UNIT; 2 + m];
+            argv[0] = callee(raw);
+            argv[1] = Word::from_bits(m);
+            // SAFETY: `runtime`は`run`と同じく、`enter`の間だけ生きているworkerの構造体を指す。`ctx`と`worker`への
+            // 参照をエントリをまたいで持たない。エントリは致命的な誤りの道を通るので、`enter`の中で呼ぶ
+            let entered =
+                unsafe { enter(raw, call_pap, std::ptr::null(), argv.as_mut_ptr().cast()) };
+            ctx.set_runtime(std::ptr::null_mut());
+            assert_eq!(
+                entered,
+                Err(Fatal {
+                    code: FATAL_RECORDED,
+                    site: 0
+                })
+            );
+            worker.error
+        }
+
+        fn not_a_function() -> Option<RuntimeError> {
+            Some(RuntimeError::Fault {
+                fault: RunFault::Internal("applying a value that is not a function"),
+                function: NATIVE_CODE.to_string(),
+                at: None,
+            })
+        }
+
+        #[test]
+        fn pap_without_an_adapter_is_fatal() {
+            let other = PapRow {
+                args: 2,
+                rest: 1,
+                code: std::ptr::null(),
+            };
+            assert_eq!(pap_error(&[other], 3, 1), not_a_function());
+        }
+
+        #[test]
+        fn pap_of_a_saturated_callee_is_fatal() {
+            let rows: Vec<PapRow> = [(1, 1), (2, 0), (1, 0)]
+                .into_iter()
+                .map(|(args, rest)| PapRow {
+                    args,
+                    rest,
+                    code: std::ptr::null(),
+                })
+                .collect();
+            assert_eq!(pap_error(&rows, 2, 2), not_a_function());
+            assert_eq!(pap_error(&rows, 1, 2), not_a_function());
+        }
+
+        /// どれも`(1, 2)`のアダプタはあるので、断るのは呼ばれる値の形である。
+        fn adapters() -> [PapRow; 1] {
+            [PapRow {
+                args: 1,
+                rest: 2,
+                code: std::ptr::null(),
+            }]
+        }
+
+        #[test]
+        fn pap_of_an_immediate_is_fatal() {
+            // 即値には`meta`を読まない
+            assert_eq!(
+                pap_error_of(&adapters(), |_| Word::imm(3), 1),
+                not_a_function()
+            );
+        }
+
+        #[test]
+        fn pap_of_an_object_that_is_not_data_is_fatal() {
+            // タグだけを見れば3引数を待つ値に見える`Float`の箱。種類で断る
+            let float = |c: *mut Ctx<Fast>| {
+                // SAFETY: `c`は生きている`Ctx`である。新しい箱の値の語を、ほかの操作の前に書く
+                unsafe {
+                    let heap = (*c).heap_mut();
+                    let w =
+                        heap.alloc(layout::BOX_WORDS, Meta::new(3, 0, ObjectKind::Float, false));
+                    heap.set_raw(w, layout::BOX_VALUE_WORD, 0).unwrap();
+                    w
+                }
+            };
+            assert_eq!(pap_error_of(&adapters(), float, 1), not_a_function());
+        }
     }
 
     #[test]

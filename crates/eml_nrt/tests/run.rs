@@ -28,6 +28,7 @@ fn empty() -> Image {
         functions: Slice::new(&[]),
         files: Slice::new(&[]),
         data: Slice::new(&[]),
+        paps: Slice::new(&[]),
     }
 }
 
@@ -203,18 +204,21 @@ fn data_slots_hold_immortal_objects() {
             kind: DATUM_STRING,
             bits: 0,
             text: Str::new("hello"),
+            code: std::ptr::null(),
             slot: base,
         },
         DatumRow {
             kind: DATUM_BIG_INT,
             bits: i64::MIN as u64,
             text: Str::new(""),
+            code: std::ptr::null(),
             slot: base.wrapping_add(1),
         },
         DatumRow {
             kind: DATUM_FLOAT,
             bits: (-0.0f64).to_bits(),
             text: Str::new(""),
+            code: std::ptr::null(),
             slot: base.wrapping_add(2),
         },
     ];
@@ -305,12 +309,14 @@ mod fatal {
                 code: code.wrapping_add(32),
                 size: 32,
                 sites: Slice::new(&[]),
+                value: std::ptr::null_mut(),
             },
             FnRow {
                 name: Str::new("f"),
                 code,
                 size: 16,
                 sites: Slice::new(sites),
+                value: std::ptr::null_mut(),
             },
         ]
     }

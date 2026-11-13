@@ -16,6 +16,8 @@ pub struct Worker {
     image: *const Image,
     /// `image.functions`の添字をコードのアドレスの順に並べたもの。アドレスから関数を探す冷たい道が使う。
     by_code: Vec<usize>,
+    /// `image.paps`の添字を`(args, rest)`の順に並べたもの。部分適用がアダプタを探す。
+    by_pap: Vec<usize>,
     pub(crate) exit: Option<i64>,
     /// 置いたpanicのメッセージの語。`Some(w)`なら、`w`は生きている文字列で、workerの構造体がその参照を1つ持つ。
     /// 書くのは`park_panic`だけで、取り出した者がその参照を持つ。
@@ -38,9 +40,14 @@ impl Worker {
         let functions = unsafe { image.functions.as_slice() };
         let mut by_code: Vec<usize> = (0..functions.len()).collect();
         by_code.sort_by_key(|&i| functions[i].code.addr());
+        // SAFETY: 呼ぶ側の約束
+        let paps = unsafe { image.paps.as_slice() };
+        let mut by_pap: Vec<usize> = (0..paps.len()).collect();
+        by_pap.sort_by_key(|&i| (paps[i].args, paps[i].rest));
         Worker {
             image,
             by_code,
+            by_pap,
             exit: None,
             panic: None,
             error: None,
@@ -55,6 +62,17 @@ impl Worker {
             .partition_point(|&i| functions[i].code.addr() <= address);
         let row = &functions[*self.by_code.get(after.checked_sub(1)?)?];
         (address - row.code.addr() < row.size as usize).then_some(row)
+    }
+
+    /// `args`個の引数を持ち、`rest`個の引数を待つPAPのアダプタのコード。
+    pub(crate) fn pap(&self, args: u32, rest: u32) -> Option<*const u8> {
+        // SAFETY: `new`の約束
+        let paps = unsafe { (*self.image).paps.as_slice() };
+        let i = self
+            .by_pap
+            .binary_search_by_key(&(args, rest), |&i| (paps[i].args, paps[i].rest))
+            .ok()?;
+        Some(paps[self.by_pap[i]].code)
     }
 
     /// `at`での`fault`の誤り。関数の名前は、そのアドレスをコードに含む関数のものである。
