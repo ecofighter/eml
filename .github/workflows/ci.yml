@@ -153,10 +153,10 @@ jobs:
           fallback: none
       - name: cargo clippy --features gui-native
         id: clippy
-        run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo clippy --all-targets --features eml_cli/gui-native -- -D warnings
+        run: ${{ runner.os == 'Linux' && 'nix develop .#base -c' || '' }} cargo clippy --all-targets --features eml_cli/gui-native -- -D warnings
       - name: cargo nextest run --features gui-native
         if: ${{ !cancelled() && steps.clippy.outcome != 'skipped' }}
-        run: ${{ runner.os == 'Linux' && 'nix develop -c' || '' }} cargo nextest run --features eml_cli/gui-native --failure-output immediate-final
+        run: ${{ runner.os == 'Linux' && 'nix develop .#base -c' || '' }} cargo nextest run --features eml_cli/gui-native --failure-output immediate-final
       # bootstrapのテストがskipしたかをログに出す。--no-captureはテストを1つずつ流すので、このテストにだけ付ける
       - name: WinUI bootstrap test with its output
         if: ${{ runner.os == 'Windows' && !cancelled() && steps.clippy.outcome != 'skipped' }}
@@ -199,7 +199,8 @@ jobs:
           nix develop -c verusfmt --verus-only --check "${files[@]}"
 
   # eml と一緒に配る THIRD-PARTY-LICENSES.md が、Cargo.lock と about.toml から生成した結果と同じことを確かめる。
-  # cargo-about のバージョンを flake.lock で固め、出力を変えないよう、ふだんの devShell を通す (docs/implementation/testing.md の「CI」)
+  # cargo-aboutのバージョンをflake.lockで固め、出力を変えないよう、ふだんのdevShellと同じcargo-aboutを持ちVerusを持たない
+  # devShell `.#base`を通す (docs/implementation/testing.md の「CI」)
   licenses:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -211,7 +212,7 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
       - name: THIRD-PARTY-LICENSES.md is up to date
-        run: nix develop -c nix/third-party-licenses.sh --check
+        run: nix develop .#base -c nix/third-party-licenses.sh --check
 
   miri:
     name: miri (${{ matrix.borrows }} borrows)
