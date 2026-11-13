@@ -108,62 +108,6 @@ pub fn run_lir_merged(text: &str) -> (String, Result<(), RuntimeError>) {
     (out, result)
 }
 
-/// 書いた行ごとに、書いたスレッドを覚えるHost。`panic_on`の行を書こうとするとpanicする。どのスレッドがプログラムの
-/// コードを動かしたかを確かめるためにある。
-pub struct RecordingHost {
-    inner: eml_vm::CaptureHost,
-    lines: std::sync::Mutex<Vec<(String, std::thread::ThreadId)>>,
-    panic_on: Option<&'static str>,
-}
-
-impl RecordingHost {
-    /// Hostと、その標準出力の写し。
-    pub fn new(panic_on: Option<&'static str>) -> (Arc<RecordingHost>, eml_vm::Capture) {
-        let inner = eml_vm::CaptureHost::new(std::path::PathBuf::new());
-        let out = inner.output();
-        let host = Arc::new(RecordingHost {
-            inner,
-            lines: Default::default(),
-            panic_on,
-        });
-        (host, out)
-    }
-
-    pub fn host_ref(self: &Arc<RecordingHost>) -> eml_rt::HostRef {
-        eml_rt::HostRef::new(Arc::clone(self) as Arc<dyn eml_rt::Host>)
-    }
-
-    /// 書いた行と、書いたスレッド。
-    pub fn lines(&self) -> Vec<(String, std::thread::ThreadId)> {
-        self.lines
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-}
-
-impl eml_rt::Host for RecordingHost {
-    fn write_line(&self, stream: eml_rt::Stream, line: &str) -> std::io::Result<()> {
-        if self.panic_on == Some(line) {
-            panic!("{line}");
-        }
-        self.lines
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((line.to_string(), std::thread::current().id()));
-        self.inner.write_line(stream, line)
-    }
-    fn write(&self, stream: eml_rt::Stream, bytes: &[u8]) -> std::io::Result<()> {
-        self.inner.write(stream, bytes)
-    }
-    fn flush(&self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
-    fn open(&self, path: &str) -> std::io::Result<eml_rt::Opened> {
-        self.inner.open(path)
-    }
-}
-
 /// `execute`と同じ手順 (読み込み、実行、閉じる) を、合わせた`Machine`で行う。
 fn run_merged(program: &Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
     let config = eml_vm::RunConfig::default()

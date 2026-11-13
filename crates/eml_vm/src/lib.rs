@@ -31,7 +31,6 @@ mod counters;
 mod data;
 mod disasm;
 mod ffi;
-mod gui;
 mod hosts;
 mod jobs;
 mod monitor;
@@ -43,15 +42,10 @@ mod workers;
 pub use code::{CodeBase, CompileError, FnEntry};
 pub use disasm::disassemble;
 pub use eml_cabi::Linked;
-/// GUIのtoolkitの層。`eml run`はここのbackendと筋書きでGUIの`Park`を作る (docs/spec/vm.mdの「GUIのPark」)。
-#[cfg(feature = "gui")]
-pub use eml_gui;
 pub use eml_rt::HostRef;
 pub use eml_sched::config::{Finished, RunConfig};
 pub use eml_sched::error::RuntimeError;
 pub(crate) use eml_sched::{cells, doorbell, driver, error, park};
-#[cfg(feature = "gui")]
-pub use gui::park as gui_park;
 pub use hosts::{Capture, CaptureHost, Written, capture_host};
 pub use sched::{Memory, Normal, Policy, Scheduler, Seeded, Sequential};
 pub use vm::Task;

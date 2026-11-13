@@ -374,6 +374,65 @@ pub fn capture() -> CaptureHost {
     CaptureHost::new(std::path::PathBuf::new())
 }
 
+/// 書いた行ごとに、書いたスレッドを覚えるHost。`panic_on`の行を書こうとするとpanicする。どのスレッドがプログラムの
+/// コードを動かしたかを確かめるためにある。
+#[cfg(feature = "run")]
+pub struct RecordingHost {
+    inner: CaptureHost,
+    lines: Mutex<Vec<(String, std::thread::ThreadId)>>,
+    panic_on: Option<&'static str>,
+}
+
+#[cfg(feature = "run")]
+impl RecordingHost {
+    /// Hostと、その標準出力の写し。
+    pub fn new(panic_on: Option<&'static str>) -> (std::sync::Arc<RecordingHost>, eml_vm::Capture) {
+        let inner = capture();
+        let out = inner.output();
+        let host = std::sync::Arc::new(RecordingHost {
+            inner,
+            lines: Default::default(),
+            panic_on,
+        });
+        (host, out)
+    }
+
+    pub fn host_ref(self: &std::sync::Arc<RecordingHost>) -> HostRef {
+        HostRef::new(std::sync::Arc::clone(self) as std::sync::Arc<dyn eml_rt::Host>)
+    }
+
+    /// 書いた行と、書いたスレッド。
+    pub fn lines(&self) -> Vec<(String, std::thread::ThreadId)> {
+        self.lines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+#[cfg(feature = "run")]
+impl eml_rt::Host for RecordingHost {
+    fn write_line(&self, stream: eml_rt::Stream, line: &str) -> std::io::Result<()> {
+        if self.panic_on == Some(line) {
+            panic!("{line}");
+        }
+        self.lines
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((line.to_string(), std::thread::current().id()));
+        self.inner.write_line(stream, line)
+    }
+    fn write(&self, stream: eml_rt::Stream, bytes: &[u8]) -> std::io::Result<()> {
+        self.inner.write(stream, bytes)
+    }
+    fn flush(&self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+    fn open(&self, path: &str) -> std::io::Result<eml_rt::Opened> {
+        self.inner.open(path)
+    }
+}
+
 /// LIR を `capture()` の Host で実行する。上限の値に頼るテストは、`RunConfig` を自分で作って渡す。
 #[cfg(feature = "run")]
 pub fn execute(

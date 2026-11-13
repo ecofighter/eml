@@ -64,9 +64,9 @@ emlはMicrosoftのファイルを何も配らない。bootstrapのDLLも、`.win
 
 `eml build`はまだない。AOTの出力に課す規則は [ネイティブ化の設計](../future/native.md) の「AOT と配布」にあり、ここには、その規則のうちライセンスと配る人の義務につながるものだけを挙げる。実装した振る舞いでなく、`eml build`を作るときに守る設計である。
 
-- GUIを使うプログラムは`eml build --profile gui`で組む。プロファイルは`console` (既定) と`gui`で、何をリンクするかはプロファイルだけが決め、importからは推し量らない。`console`で`Std.Gui`をimportするプログラムを組むと、リンクの前に失敗する
+- GUIを使うプログラムは`eml build --profile gui`で組む。プロファイルは`console` (既定) と`gui`で、リンクする実行系の静的ライブラリの変種の`gui`の軸を決める。`tls`の軸は、モジュールのグラフに`Std.Tls`が (直接か`Std.Http`を通して) あるかで決まる。`console`で`Std.Gui`をimportするプログラムを組むと、リンクの前に失敗する
 - リンクするGUIのライブラリとCのruntimeは、既定で動的にする。Qt 6は利用者のシステムのQtで、上の「Qtを配る規則」の2つ目の場合になる。Windows App SDKはリンクの時に名指さず、実行のときにbootstrapで探す
-- 出力を配るときは、emlが実行系の静的ライブラリと並べて配る通知のファイル (`THIRD-PARTY-LICENSES-runtime.md`) を、`eml build`が出力の隣にコピーする。出力を配り直すときは、このファイルも一緒に配る
+- 実行系の静的ライブラリは、成果物のcrate `eml_rtlib`が4つの変種 (`base`、`tls`、`gui`、`tls+gui`) に組み、emlは変種ごとに通知のファイルを1つ並べて配る。ファイルは3つの部分からなる。その変種のcrate (`eml_rtlib`をその変種のfeatureでcargo-aboutにかけたもの)、Rustの標準ライブラリとそれが取り込むcrate、`gui`の変種ではGPL-3.0とLGPL-3.0を含むシステムのライブラリの節である。出力を配るときは、`eml build`がリンクした変種の通知を`THIRD-PARTY-LICENSES-runtime.md`として出力の隣にコピーする。出力を配り直すときは、このファイルも一緒に配る
 
 ## 他者のクレートのライセンス
 

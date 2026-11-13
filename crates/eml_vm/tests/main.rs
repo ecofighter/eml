@@ -13,11 +13,6 @@ mod data;
 mod evidence;
 mod ffi;
 mod ffi_abandon;
-#[cfg(feature = "gui")]
-mod gui;
-// guiを外した振る舞いはOSで分けない (docs/implementation/testing.mdの「feature の組み合わせの確認」)
-#[cfg(not(feature = "gui"))]
-mod gui_off;
 mod io;
 mod machine;
 mod memory;

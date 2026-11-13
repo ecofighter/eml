@@ -27,7 +27,7 @@
 | 9 | 効果 | C の呼び出しは `pure` でなければ `<IO>` を持つ。範囲を確かめる引数かハンドルの結果を持つ行は `<Panic>` を持ち、中断を始めうる行 (`faults`) になる。`MutUnboxedArray` を貸す行は書き込む行 (`writes`) で、使われなくても消さない |
 | 10 | 長く走る呼び出し | `blocking` は型に `<IO, Async>` を要し、ブロックする呼び出しのプールへの受け付けと待ちと取り出しに下ろす |
 | 11 | VM からの呼び出し | `eml_clink` が `cranelift-jit` で、C の型の並びごとの橋渡しの関数を作る。VM は読み込みの前につないだ `Linked` の値を受け取り、`Op::Ffi` で橋渡しを通して呼ぶ。libffi は使わない |
-| 12 | 拡張 | GUIは、Qt 6 (Linux)、Windows App SDK 2のWinUI 3 (Windows 11)、AppKit (macOS) を包むRustのtoolkitのcrate `eml_gui`である。ウィジェットはtoolkitのもので、`Send`でなく、メインのworkerの上でだけ触れる。toolkitの行は普通のexternの表の行で、腕は`eml_vm`の`gui.rs`にあり、`Std.Tls`と同じくcfgのfeatureで切り替える。`Plugin`のtraitは置かない |
+| 12 | 拡張 | GUIは、Qt 6 (Linux)、Windows App SDK 2のWinUI 3 (Windows 11)、AppKit (macOS) を包むRustのtoolkitのcrate `eml_gui`である。ウィジェットはtoolkitのもので、`Send`でなく、メインのworkerの上でだけ触れる。toolkitの行は普通のexternの表の行で、腕は`eml_rows`の`gui.rs`にあり、`Std.Tls`と同じくcfgのfeatureで切り替える。`Plugin`のtraitは置かない |
 | 13 | GUIのスレッド | toolkitのイベントループは、runの間ずっと、メインのworkerの1回の`Park::wait`の中で回る ([マルチコア対応の設計](multicore.md)の「スレッドとworker」)。開くのはゲートのセルを通した2段で、toolkitの呼び出しはどれもネイティブのループの中で動く。ループは`Pending::io()` (epollかkqueueのfd) を通してメインのworkerのI/Oのdriverでも待つ。源がない所 (Windows) では、操作が保留の間は1回の待ちを10 msまでにする。ループは時計もデッドロックの判定も受け持たない。GUIを求めるか開いている間は判定を控え、worker 0はイベントごとでなくGUIの期間ごとに1回起きる。`eml_io`はどのtoolkitも参照しない。GUIのタスクとその子はそのスレッドから動かず、エフェクトを持つ仕事は`Async.start_off_main`でその外へ出す |
 
 ## `extern "C"` の宣言
@@ -122,11 +122,11 @@ matmul n a b =
 
 ## 拡張
 
-- CのAPIを持たないライブラリ (今は`Std.Gui`) は、VMがcfgのfeatureを通して組み込むRustのcrateで、`Std.Tls`と同じ形である。`eml_vm`の`gui.rs`が、toolkitの行の腕、GUIの`Park`、ゲートのセル、回収を持つ。featureを外した処理系もそのモジュールを持ち、`Ui`の型は値を持たず、`Gui.run`は種類`NotAvailable`のIOの失敗になる ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)
+- CのAPIを持たないライブラリ (今は`Std.Gui`) は、`eml_rows`がcfgのfeatureを通して組み込むRustのcrateで、`Std.Tls`と同じ形である。`eml_rows`の`gui.rs`が、toolkitの行の腕、GUIの`Park`、回収を持ち、ゲートのセルにはVMのスケジューラが実装するtrait `GateHost`を通して触れる。featureを外した処理系もそのモジュールを持ち、`Ui`の型は値を持たず、`Gui.run`は種類`NotAvailable`のIOの失敗になる ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)
 - 行は普通の`eml_extern`の表の行で、Repr、Kind、純粋さ、借用、`Extern`の場合をそれぞれ持つ。そのため、型検査、LIR、コード生成のABI、表とstdを結ぶテストは変わらない
-- `eml_vm`のfeature `gui`は、stubのbackendだけを持つ`eml_gui`を足し、`gui-native`はネイティブのbackendを足す。`eml_cli`は`gui`を既定のfeatureに入れ、`gui-native`は入れないので、既定のビルドはどのtoolkitの開発用のファイルも要らない ([コンパイラの構成](../implementation/architecture.md)の「外部 crate」)
+- `eml_rows`のfeature `gui`は、stubのbackendだけを持つ`eml_gui`を足し、`gui-native`はネイティブのbackendを足す。`eml_cli`は`gui`を既定のfeatureに入れ、`gui-native`は入れないので、既定のビルドはどのtoolkitの開発用のファイルも要らない ([コンパイラの構成](../implementation/architecture.md)の「外部 crate」)
 - `eml_rt`に`Plugin`のtraitは置かない。プラグインが1つでは、検証するcrateにtraitを入れる理由にならない。2つ目のプラグインが現れたとき、または`jit-externs`がプラグインをまたいで行ごとに型の付いたエントリを要るときに入れる。形は`Host`と同じで、traitは`eml_rt`に置き、実装は検証する核の外に置き、信頼の一覧ではHostと同じT11の行に属する。`eml_rt`はvstdだけに依存したまま保つ。表から作る`extern "C"`の包みが、行ごとに型の付いた`dyn Plugin`のメソッドを呼ぶ。`Plugin`は`Send + Sync`で、`Send`でない状態は、所有者のworkerを確かめてから触れる入れ物に入れる
-- AOTがリンクする実行系の静的ライブラリは、ビルドのプロファイルが選ぶ1つだけである。プラグインは自分のコードを`gui`のプロファイルの変種に足すか、新しいプロファイルになり、後から足すライブラリにはならない ([ネイティブ化の設計](native.md)の「AOT と配布」)
+- AOTがリンクする実行系の静的ライブラリは、選び方の規則が決める1つの変種だけである。`gui`の軸はビルドのプロファイルが、`tls`の軸はモジュールのグラフに`Std.Tls`が (直接か`Std.Http`を通して) あるかが決める。プラグインは自分のコードを`gui`のプロファイルの変種に足すか、新しいプロファイルになり、後から足すライブラリにはならない ([ネイティブ化の設計](native.md)の「AOT と配布」)
 
 ## GUI
 

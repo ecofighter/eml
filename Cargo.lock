@@ -709,10 +709,13 @@ name = "eml_rows"
 version = "0.1.0"
 dependencies = [
  "eml_extern",
+ "eml_gui",
  "eml_rt",
  "eml_sched",
  "eml_test_support",
  "eml_tls",
+ "eml_vm",
+ "insta",
 ]
 
 [[package]]
@@ -754,6 +757,7 @@ dependencies = [
  "eml_lir",
  "eml_native",
  "eml_nrt",
+ "eml_rt",
  "eml_sched",
  "eml_syntax",
  "eml_types",
@@ -787,7 +791,6 @@ version = "0.1.0"
 dependencies = [
  "eml_cabi",
  "eml_extern",
- "eml_gui",
  "eml_io",
  "eml_lir",
  "eml_rows",

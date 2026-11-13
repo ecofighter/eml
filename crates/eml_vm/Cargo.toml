@@ -9,16 +9,9 @@ autotests = false
 [lib]
 doctest = false
 
-# guiを外すとStd.Guiを開けず、NotAvailableを投げる。gui-nativeはネイティブのGUIのbackendを足し、ないとnativeの
-# backendを選んだ`Gui.run`がNotAvailableを投げる
-[features]
-gui = ["dep:eml_gui"]
-gui-native = ["gui", "eml_gui/native"]
-
 [dependencies]
 eml_cabi.workspace = true
 eml_extern.workspace = true
-eml_gui = { workspace = true, optional = true }
 eml_lir.workspace = true
 eml_io.workspace = true
 eml_rows.workspace = true

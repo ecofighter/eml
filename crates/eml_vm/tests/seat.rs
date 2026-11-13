@@ -8,9 +8,10 @@ use eml_sched::config::Seat;
 use eml_sched::driver::Clock;
 use eml_sched::error::RunFault;
 use eml_sched::{Control, Limits};
+use eml_test_support::RecordingHost;
 use eml_vm::{Machine, RunConfig, RuntimeError};
 
-use crate::common::{RecordingHost, parse};
+use crate::common::parse;
 
 const HELLO: &str = "\
 main : Unit -> <IO, Panic> Unit

@@ -58,10 +58,10 @@ jobs:
         id: test
         run: cargo nextest run --failure-output immediate-final
       # ワークスペースの実行ではeml_cliの既定がtlsとguiを有効にするので、それらを外した処理系の振る舞いは
-      # eml_ioとeml_vmとeml_rowsだけを選んで流す (docs/implementation/testing.mdの「feature の組み合わせの確認」)
+      # eml_ioとeml_rowsだけを選んで流す (docs/implementation/testing.mdの「feature の組み合わせの確認」)
       - name: cargo nextest run without tls and gui
         if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
-        run: cargo nextest run -p eml_io -p eml_vm -p eml_rows --failure-output immediate-final -E 'test(tls_off::) | test(gui_off::)'
+        run: cargo nextest run -p eml_io -p eml_rows --failure-output immediate-final -E 'test(tls_off::) | test(gui_off::)'
       # 時間の検査は runner の速さをそろえるため x86_64 の Linux だけで流す。ビルドは前の手順のものを使う
       - name: cargo nextest run --profile timing -j 1
         if: ${{ matrix.os == 'ubuntu-24.04' && !cancelled() && steps.test.outcome != 'skipped' }}
@@ -80,6 +80,8 @@ jobs:
           cargo clippy -p eml_cli --no-default-features --features run,gui -- -D warnings
           cargo clippy -p eml_io -p eml_rows -p eml_vm -p eml_nrt --all-targets -- -D warnings
           cargo clippy -p eml_rows --all-targets --features tls -- -D warnings
+          cargo clippy -p eml_rows --all-targets --features gui -- -D warnings
+          cargo clippy -p eml_rows --all-targets --features tls,gui -- -D warnings
           cargo clippy -p eml_sched --all-targets -- -D warnings
           cargo clippy -p eml_test_support --no-default-features -- -D warnings
           cargo clippy -p eml_test_support --no-default-features --features hir -- -D warnings

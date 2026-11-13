@@ -22,6 +22,8 @@ pub use eml_clink::{LinkError, Linked, Linker};
 pub use eml_hir::{MemorySource, ModulePath, ModuleSource, ReadError};
 #[cfg(feature = "run")]
 pub use eml_io::{Masked, script_host, stdio_host};
+#[cfg(feature = "gui")]
+pub use eml_rows::gui::{Backend, Script, park as gui_park};
 #[cfg(feature = "run")]
 pub use eml_sched::config::{Finished, RunConfig, RunStats, Sched};
 #[cfg(feature = "run")]
@@ -37,11 +39,6 @@ pub use eml_sched::{Control, HostRef, Limits, Stop};
 pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{Capture, CaptureHost, Written, capture_host, execute};
-#[cfg(feature = "gui")]
-pub use eml_vm::{
-    eml_gui::{Backend, Script},
-    gui_park,
-};
 pub use fs_provider::FsProvider;
 #[cfg(feature = "run")]
 pub use repl::{Closed, Evaluated, Outcome, Repl, Typed};

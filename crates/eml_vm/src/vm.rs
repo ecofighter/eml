@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rows::rows::{Args, Value};
-use eml_rows::tls;
+use eml_rows::{gui, tls};
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::layout::data_first;
 use eml_rt::{
@@ -23,7 +23,6 @@ use crate::data;
 use crate::driver::DriverKind;
 use crate::error::RunFault;
 use crate::ffi;
-use crate::gui;
 use crate::jobs;
 use crate::op::{APPLY_REST, CHILD_DONE, FINISH, Op, Pc, Slot};
 use crate::park::{Guard, Park, Pending, PollSource, Progress};

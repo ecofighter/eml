@@ -63,7 +63,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | `eml_vm` | vm、lir、object-model |
 | `eml_rt` | object-model |
 | `eml_sched` | vm |
-| `eml_rows` | [stdlib](spec/stdlib.md)の「extern の境界」、[native](spec/native.md)の「行の下ろし方」 |
+| `eml_rows` | [stdlib](spec/stdlib.md)の「extern の境界」、[native](spec/native.md)の「行の下ろし方」、[vm](spec/vm.md)の「GUIのPark」 |
 | `eml_io` | vm |
 | `eml_cabi`、`eml_native` | [vm](spec/vm.md)の「C の関数の呼び出し」、[native](spec/native.md)の「関数の形」から「VMとの違い」まで。crateの中は[architecture](implementation/architecture.md)の「`eml_native` の内部」 |
 | `eml_nrt` | [native](spec/native.md)。crateの中は[architecture](implementation/architecture.md) の「`eml_nrt`の内部」 |

@@ -21,14 +21,14 @@ eml_io: eml_rt eml_tls
 eml_lir: eml_extern
 eml_native: eml_cabi eml_extern eml_lir eml_nrt eml_rt
 eml_nrt: eml_extern eml_rows eml_rt eml_sched
-eml_rows: eml_extern eml_rt eml_sched eml_tls
+eml_rows: eml_extern eml_gui eml_rt eml_sched eml_tls
 eml_rt:
 eml_sched: eml_io eml_rt
 eml_syntax: eml_diagnostics
-eml_test_support: eml_cli eml_clink eml_core_ir eml_diagnostics eml_hir eml_lir eml_native eml_nrt eml_sched eml_syntax eml_types eml_vm
+eml_test_support: eml_cli eml_clink eml_core_ir eml_diagnostics eml_hir eml_lir eml_native eml_nrt eml_rt eml_sched eml_syntax eml_types eml_vm
 eml_tls:
 eml_types: eml_diagnostics eml_extern eml_hir
-eml_vm: eml_cabi eml_extern eml_gui eml_io eml_lir eml_rows eml_rt eml_sched'
+eml_vm: eml_cabi eml_extern eml_io eml_lir eml_rows eml_rt eml_sched'
 
 # [features] の節 (空行とコメントを除く)
 FEATURES='[eml_cli]
@@ -37,8 +37,8 @@ types = ["dep:eml_types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
 run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_io", "dep:eml_native", "dep:eml_rows", "dep:eml_sched", "dep:libc", "dep:rustyline", "dep:windows-sys"]
 tls = ["run", "eml_rows/tls", "eml_io/tls", "dep:eml_tls"]
-gui = ["run", "eml_vm/gui"]
-gui-native = ["gui", "eml_vm/gui-native"]
+gui = ["run", "eml_rows/gui"]
+gui-native = ["gui", "eml_rows/gui-native"]
 [eml_gui]
 native = [
     "dep:objc2",
@@ -57,6 +57,8 @@ native = [
 tls = ["dep:eml_tls"]
 [eml_rows]
 tls = ["dep:eml_tls"]
+gui = ["dep:eml_gui"]
+gui-native = ["gui", "eml_gui/native"]
 [eml_sched]
 testing = []
 [eml_test_support]
@@ -64,10 +66,7 @@ default = ["run"]
 hir = ["dep:eml_hir", "dep:eml_cli"]
 types = ["hir", "dep:eml_types", "eml_cli/types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir", "eml_cli/core"]
-run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_native", "dep:eml_nrt", "dep:eml_sched", "eml_cli/run"]
-[eml_vm]
-gui = ["dep:eml_gui"]
-gui-native = ["gui", "eml_gui/native"]'
+run = ["core", "dep:eml_vm", "dep:eml_clink", "dep:eml_native", "dep:eml_nrt", "dep:eml_rt", "dep:eml_sched", "eml_cli/run"]'
 
 # eml_cliとeml_test_support以外のcrateが、ほかのworkspaceのcrateから再exportする項目。再exportするのは自分の公開の
 # シグネチャの型だけで、moduleはeml_nrtの__rtだけである
@@ -78,9 +77,9 @@ crates/eml_nrt/src/lib.rs: pub use eml_rt as __rt;
 crates/eml_nrt/src/lib.rs: pub use eml_rt::HostRef;
 crates/eml_nrt/src/lib.rs: pub use eml_sched::config::{Finished, RunConfig};
 crates/eml_nrt/src/lib.rs: pub use eml_sched::error::{RunFault, RuntimeError};
+crates/eml_rows/src/gui.rs: pub use eml_gui::{Backend, Script};
 crates/eml_sched/src/lib.rs: pub use eml_rt::{Control, HostRef, Limits, Stop};
 crates/eml_vm/src/lib.rs: pub use eml_cabi::Linked;
-crates/eml_vm/src/lib.rs: pub use eml_gui;
 crates/eml_vm/src/lib.rs: pub use eml_rt::HostRef;
 crates/eml_vm/src/lib.rs: pub use eml_sched::config::{Finished, RunConfig};
 crates/eml_vm/src/lib.rs: pub use eml_sched::error::RuntimeError;'
@@ -181,7 +180,19 @@ expect_tree() {
   fi
 }
 
+# cargo treeの結果のうち、行頭がPATTERNに合う行が1つ以上あることを調べる
+expect_tree_some() {
+  local pattern=$1 label=$2 got
+  shift 2
+  got=$(cargo tree "$@" --target all --prefix none | tr -d '\r' | { grep -cE "$pattern" || true; })
+  if [ "$got" -lt 1 ]; then
+    fail "$label: no line matches $pattern"
+  fi
+}
+
 TOOL='^(cranelift[a-z-]*|libloading|eml_lir|eml_core_ir|eml_types|eml_hir|eml_syntax|eml_diagnostics|eml_vm|eml_native|eml_clink|clap|rustyline|ariadne|logos|rowan) v'
+TLS='^(eml_tls|rustls[a-z-]*|aws-lc-rs|aws-lc-sys|ring|webpki-root-certs|security-framework[a-z-]*|schannel|openssl-probe|jni[a-z-]*) v'
+GUI='^(eml_gui|taffy|slotmap|cxx[a-z-]*|link-cplusplus|objc2[a-z-]*|windows-(core|collections|reference|time|implement|interface|result|strings)|qt-build-utils) v'
 
 expect_tree 0 '^(cranelift[a-z-]*|eml_native|eml_nrt|eml_clink) v' "eml_vm reaches the code generator" -p eml_vm -e normal
 expect_tree 0 '^eml_vm v' "eml_native reaches eml_vm" -p eml_native -e normal
@@ -191,6 +202,16 @@ expect_tree 0 '^(eml_extern|eml_rows|eml_cabi|eml_tls|eml_gui|cranelift[a-z-]*|e
 expect_tree 0 '^(cc|cmake|cxx-build|bindgen|nasm|pkg-config) v' "the runtime closure needs a C toolchain" -p eml_nrt -e normal,build
 expect_tree 0 "$TOOL" "the runtime closure holds a compiler, an engine or a tool" -p eml_nrt -e normal
 expect_tree 0 "$TOOL" "the Tls runtime closure holds a compiler, an engine or a tool" -p eml_nrt -e normal --features eml_rows/tls
+expect_tree 0 "$TOOL" "the Gui runtime closure holds a compiler, an engine or a tool" -p eml_nrt -e normal --features eml_rows/gui-native
+expect_tree 0 "$TOOL" "the Tls and Gui runtime closure holds a compiler, an engine or a tool" \
+  -p eml_nrt -e normal --features eml_rows/tls,eml_rows/gui-native
+# 実行時の閉包のどの組み合わせも、自分のfeatureのTlsとGuiのcrateだけを持つ
+expect_tree 0 "$TLS" "the base runtime closure holds a Tls crate" -p eml_nrt -e normal
+expect_tree 0 "$GUI" "the base runtime closure holds a Gui crate" -p eml_nrt -e normal
+expect_tree 0 "$GUI" "the Tls runtime closure holds a Gui crate" -p eml_nrt -e normal --features eml_rows/tls
+expect_tree_some '^eml_tls v' "the Tls runtime closure lacks eml_tls" -p eml_nrt -e normal --features eml_rows/tls
+expect_tree 0 "$TLS" "the Gui runtime closure holds a Tls crate" -p eml_nrt -e normal --features eml_rows/gui-native
+expect_tree_some '^eml_gui v' "the Gui runtime closure lacks eml_gui" -p eml_nrt -e normal --features eml_rows/gui-native
 # eml_rowsのtlsはeml_ioのtlsを有効にしない。`tls.localhost`の終端はツールのテストの道具で、eml_cliが有効にする
 expect_tree 0 '^eml_io feature "tls"' "eml_rows/tls enables eml_io/tls" -p eml_nrt -e features --features eml_rows/tls -i eml_io
 got=$(cargo tree -p eml_cli -e features -i eml_io --target all --prefix none | tr -d '\r' | { grep -cE '^eml_io feature "tls"' || true; })

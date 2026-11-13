@@ -10,22 +10,30 @@ autotests = false
 doctest = false
 
 # tlsを外すとStd.Tlsの腕はNotAvailableを投げる。`eml_io/tls`は有効にしない: `tls.localhost`の終端はdriverの側にあり、
-# 使うのはツールのテストの道具だけである (docs/implementation/architecture.mdの「crate の依存関係」)
+# 使うのはツールのテストの道具だけである (docs/implementation/architecture.mdの「crate の依存関係」)。guiを外すと
+# Std.Guiを開けず、NotAvailableを投げる。gui-nativeはネイティブのGUIのbackendを足し、ないとnativeのbackendを選んだ
+# `Gui.run`がNotAvailableを投げる
 [features]
 tls = ["dep:eml_tls"]
+gui = ["dep:eml_gui"]
+gui-native = ["gui", "eml_gui/native"]
 
 # コンパイラとエンジン (eml_lir、eml_core_ir、eml_vm、eml_native、eml_clink) とCraneliftには依存しない
 # (docs/implementation/architecture.md の「crate の依存関係」)
 [dependencies]
 eml_extern.workspace = true
+eml_gui = { workspace = true, optional = true }
 eml_rt.workspace = true
 eml_sched.workspace = true
 eml_tls = { workspace = true, optional = true }
 
-# eml_sched/testingは、tls.rsの単体テストがcells.rsのtest_ctxを使うためにある
+# eml_sched/testingは、tls.rsの単体テストがcells.rsのtest_ctxを使うためにある。eml_vmは、guiの結合テスト
+# (tests/gui.rs) がプログラムをVMで動かすためにある
 [dev-dependencies]
 eml_sched = { workspace = true, features = ["testing"] }
 eml_test_support = { workspace = true, features = ["run"] }
+eml_vm.workspace = true
+insta.workspace = true
 
 [[test]]
 name = "integration"

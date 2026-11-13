@@ -1,4 +1,4 @@
-//! `gui`を外した`eml_vm`。`Gui.run`は`NotAvailable`を投げる (docs/spec/stdlib.mdの「`Std.Gui`」)。
+//! `gui`を外した`eml_rows`。`Gui.run`は`NotAvailable`を投げる (docs/spec/stdlib.mdの「`Std.Gui`」)。
 
 const SRC: &str = "import Async
 import Gui

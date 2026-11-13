@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{Ordering, fence};
 
+use eml_rows::gui::GateHost;
 use eml_rt::{Completion, Control, Ctx, IoDriver, Mode, Stop};
 
 use crate::cells::{self, CellRef, Here, Hold, HostBin, IoWork, Registry, Runnable, Shared, Woken};
@@ -1049,6 +1050,34 @@ impl<P: Policy> Scheduler<P> {
     pub(crate) fn peak_stack(&self, current: &Task) -> u64 {
         self.peak_depth
             .max(current.depth_offset + current.stack.len()) as u64
+    }
+}
+
+/// GUIの腕は、登録表のゲート、このworkerのdriver、runの外の待ちの印にこれを通して触れる (docs/spec/vm.mdの
+/// 「GUIのPark」)。
+impl<P: Policy> GateHost for Scheduler<P> {
+    fn own_driver(&mut self) -> Result<(), RunFault> {
+        Scheduler::own_driver(self)
+    }
+
+    fn open_gate(&mut self) -> i64 {
+        self.cells.lock().open_gate().encode()
+    }
+
+    fn release_gate(&mut self, gate: i64) -> Result<(), RunFault> {
+        Ok(self.cells.lock().release_gate(gate)?)
+    }
+
+    fn swap_holds(&mut self, on: bool) -> bool {
+        self.run.swap_holds(on)
+    }
+
+    fn holds(&self) -> bool {
+        self.run.holds()
+    }
+
+    fn wake(&mut self, worker: u32) {
+        self.run.wake(worker as usize);
     }
 }
 

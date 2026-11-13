@@ -5,13 +5,12 @@
 use std::sync::Arc;
 use std::thread::ThreadId;
 
+use eml_gui::{Backend, Script, stub};
 use eml_sched::driver::{Clock, Signal, VirtualSignal};
 use eml_sched::park::{DefaultPark, ParkFactory};
 use eml_sched::{Control, Limits};
-use eml_vm::eml_gui::{Backend, Script, stub};
+use eml_test_support::RecordingHost;
 use eml_vm::{Finished, RunConfig, RuntimeError};
-
-use crate::common::RecordingHost;
 
 fn limits(workers: usize) -> Arc<Control> {
     Arc::new(Control::new(Limits {
@@ -24,7 +23,7 @@ fn limits(workers: usize) -> Arc<Control> {
 fn gui_park(script: &str, control: &Arc<Control>) -> ParkFactory {
     let script = Script::parse(script).unwrap();
     let control = Arc::clone(control);
-    eml_vm::gui_park(Backend::Stub(script), Arc::new(move || control.interrupt()))
+    eml_rows::gui::park(Backend::Stub(script), Arc::new(move || control.interrupt()))
 }
 
 /// 書いた行と書いたスレッド、stubの記録、runの結果。
@@ -640,12 +639,13 @@ main () = Async.run (fn () ->
     let native = |src: &str| {
         let control = limits(1);
         let interrupt = Arc::clone(&control);
-        let config = RunConfig::default()
-            .with_control(control)
-            .with_main_park(eml_vm::gui_park(
-                Backend::Native,
-                Arc::new(move || interrupt.interrupt()),
-            ));
+        let config =
+            RunConfig::default()
+                .with_control(control)
+                .with_main_park(eml_rows::gui::park(
+                    Backend::Native,
+                    Arc::new(move || interrupt.interrupt()),
+                ));
         run_with(&with_app(src), config)
     };
 
@@ -678,12 +678,13 @@ fn assert_the_native_backend_is_made_only_when_a_run_asks_for_a_gui(error: &str)
     let native = |src: &str| {
         let control = limits(1);
         let interrupt = Arc::clone(&control);
-        let config = RunConfig::default()
-            .with_control(control)
-            .with_main_park(eml_vm::gui_park(
-                Backend::Native,
-                Arc::new(move || interrupt.interrupt()),
-            ));
+        let config =
+            RunConfig::default()
+                .with_control(control)
+                .with_main_park(eml_rows::gui::park(
+                    Backend::Native,
+                    Arc::new(move || interrupt.interrupt()),
+                ));
         run_with(src, config)
     };
     let plain = "\

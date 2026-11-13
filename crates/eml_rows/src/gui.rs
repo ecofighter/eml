@@ -3,15 +3,30 @@
 //! ネイティブのループは1回の`Park::wait`の中で動き、VMには`Pending`とwakerを通してだけ入る。
 //!
 //! feature `gui`を外した処理系では、`UiToken`を値のない型にし、`want`がいつも`not available`で失敗する。`Ui`を
-//! 作れないので、ほかの腕には届かない。`vm.rs`にcfgを置かないため、両方で同じ名前を使う。
+//! 作れないので、ほかの腕には届かない。呼び出し側にcfgを置かないため、両方で同じ名前を使う。
 
 use eml_extern::Extern;
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::{Ctx, Mode, Word};
 
-use crate::cells::{CellRef, Raise};
-use crate::error::RunFault;
-use crate::sched::{Policy, Scheduler};
+use eml_sched::cells::{CellRef, Raise};
+use eml_sched::error::RunFault;
+
+#[cfg(feature = "gui")]
+pub use eml_gui::{Backend, Script};
+
+/// GUIの腕が求めるスケジューラの操作。スケジューラとworkerの表はまだVMにあるので、腕はこのtraitを通してそこに
+/// 触れ、このcrateはエンジンの型を名指さない (docs/spec/vm.mdの「GUIのPark」)。
+pub trait GateHost {
+    /// 本物の時計では、ネイティブのループがメインのworkerのdriverを待つので、`want`はゲートを開く前にここで作らせる。
+    fn own_driver(&mut self) -> Result<(), RunFault>;
+    fn open_gate(&mut self) -> i64;
+    fn release_gate(&mut self, gate: i64) -> Result<(), RunFault>;
+    /// 前の値を返す。呼ぶ側は、立っていた印を下ろしたときだけworker 0を起こし、デッドロックを判定し直させる。
+    fn swap_holds(&mut self, on: bool) -> bool;
+    fn holds(&self) -> bool;
+    fn wake(&mut self, worker: u32);
+}
 
 /// GUIを開けないときの文言 (docs/spec/stdlib.mdの「`Std.Gui`」)。
 const NOT_AVAILABLE: &str = "cannot open the GUI: not available";
@@ -33,11 +48,11 @@ fn raised(kind: i64, message: &str) -> RunFault {
 
 /// `Std.Gui.abandon_raw`。開く前に取り消されたタスクのゲートを放す。開きかけの印も下ろすので、次の`want_gui_raw`は
 /// 開ける。
-pub(crate) fn abandon<P: Policy>(sched: &mut Scheduler<P>, gate: i64) -> Result<(), RunFault> {
+pub fn abandon(host: &mut impl GateHost, gate: i64) -> Result<(), RunFault> {
     let cleared = forget_opening(gate);
-    sched.cells.lock().release_gate(gate)?;
+    host.release_gate(gate)?;
     if cleared {
-        lower_holds(sched);
+        lower_holds(host);
     }
     Ok(())
 }
@@ -48,18 +63,16 @@ pub(crate) fn abandon<P: Policy>(sched: &mut Scheduler<P>, gate: i64) -> Result<
     not(feature = "gui"),
     allow(dead_code, reason = "only an opened GUI raises holds")
 )]
-fn lower_holds<P: Policy>(sched: &mut Scheduler<P>) {
-    if sched.run.swap_holds(false) {
-        sched.run.wake(0);
+fn lower_holds(host: &mut impl GateHost) {
+    if host.swap_holds(false) {
+        host.wake(0);
     }
 }
 
 #[cfg(not(feature = "gui"))]
-pub(crate) use off::*;
+pub use off::*;
 #[cfg(feature = "gui")]
-pub use on::park;
-#[cfg(feature = "gui")]
-pub(crate) use on::*;
+pub use on::*;
 
 #[cfg(not(feature = "gui"))]
 mod off {
@@ -70,18 +83,18 @@ mod off {
     pub(crate) enum UiToken {}
 
     /// `Std.Gui.want_gui_raw`。いつも`NotAvailable`で失敗する。
-    pub(crate) fn want<P: Policy>(_: &mut Scheduler<P>) -> Result<Result<i64, Raise>, RunFault> {
+    pub fn want(_: &mut impl GateHost) -> Result<Result<i64, Raise>, RunFault> {
         Ok(Err(not_available()))
     }
 
     /// `Std.Gui.open_ui_raw`。`want`が失敗するので届かないが、届けばゲートを放して失敗する。
-    pub(crate) fn open_ui<M: Mode, P: Policy>(
+    pub fn open_ui<M: Mode>(
         _: &mut Ctx<M>,
-        sched: &mut Scheduler<P>,
+        host: &mut impl GateHost,
         gate: i64,
         _: Option<CellRef>,
     ) -> Result<Result<Word, Raise>, RunFault> {
-        sched.cells.lock().release_gate(gate)?;
+        host.release_gate(gate)?;
         Ok(Err(not_available()))
     }
 
@@ -90,7 +103,7 @@ mod off {
     }
 
     /// `Std.Gui.is_gui_task_raw`。GUIを開けないので、どのタスクもGUIのタスクでない。
-    pub(crate) fn is_gui_task(_: i64, _: Option<CellRef>) -> bool {
+    pub fn is_gui_task(_: i64, _: Option<CellRef>) -> bool {
         false
     }
 
@@ -98,11 +111,7 @@ mod off {
     ///
     /// # Safety
     /// `args`は行の引数の語である。
-    pub(crate) unsafe fn arm<M: Mode>(
-        _: &mut Ctx<M>,
-        _: Extern,
-        _: &[Word],
-    ) -> Result<Word, RunFault> {
+    pub unsafe fn arm<M: Mode>(_: &mut Ctx<M>, _: Extern, _: &[Word]) -> Result<Word, RunFault> {
         let _ = raised;
         Err(RunFault::Internal("a Std.Gui row runs without the GUI"))
     }
@@ -121,9 +130,9 @@ mod on {
         Reason, Step, Toolkit, Track, Widgets,
     };
     use eml_rt::IoWaker;
+    use eml_sched::park::{Park, ParkFactory, Pending, PollSource, Progress};
 
     use super::*;
-    use crate::park::{Park, ParkFactory, Pending, PollSource, Progress};
 
     /// `Std.Gui.Ui`の`Foreign`の中身。落とすと回収の旗を立てるだけで、ウィンドウを閉じるのは`Park`の次の段である。
     /// `Ui`がどのworkerで落ちても、触れるのはこの旗だけである。
@@ -459,9 +468,7 @@ mod on {
 
     /// `Std.Gui.want_gui_raw`。ゲートを開いて開きかけの印にする。本物の時計では、ネイティブのループがその源を待てる
     /// ように、メインのworkerのdriverをここで作る。
-    pub(crate) fn want<P: Policy>(
-        sched: &mut Scheduler<P>,
-    ) -> Result<Result<i64, Raise>, RunFault> {
+    pub fn want(host: &mut impl GateHost) -> Result<Result<i64, Raise>, RunFault> {
         let Some(slot) = current_slot() else {
             return Ok(Err(not_available()));
         };
@@ -471,11 +478,11 @@ mod on {
                 message: "cannot open the GUI: it is already open".to_string(),
             }));
         }
-        sched.own_driver()?;
-        let gate = sched.cells.lock().open_gate().encode();
+        host.own_driver()?;
+        let gate = host.open_gate();
         // ゲートで待つタスクはデッドロックの判定に数えないので、メインのworkerがこの後に眠る前に印を立てる
         // (docs/spec/vm.mdの「GUIのPark」)
-        sched.run.swap_holds(true);
+        host.swap_holds(true);
         slot.opening.set(Some(gate));
         slot.poked.set(false);
         Ok(Ok(gate))
@@ -484,14 +491,14 @@ mod on {
     /// `Std.Gui.open_ui_raw`。`Park`が知らせたゲートで、ループの中から`Toolkit`を作り、`Ui`を返す。runの外の待ちの
     /// 印は`want_gui_raw`が立てたままで、`Ui`の回収まで残す。backendを作れなかったら、ゲートを放し、印を下ろしてその誤りを
     /// 起こす。
-    pub(crate) fn open_ui<M: Mode, P: Policy>(
+    pub fn open_ui<M: Mode>(
         ctx: &mut Ctx<M>,
-        sched: &mut Scheduler<P>,
+        host: &mut impl GateHost,
         gate: i64,
         task: Option<CellRef>,
     ) -> Result<Result<Word, Raise>, RunFault> {
         let Some(slot) = current_slot() else {
-            sched.cells.lock().release_gate(gate)?;
+            host.release_gate(gate)?;
             return Ok(Err(not_available()));
         };
         if slot.opening.get() != Some(gate) {
@@ -502,8 +509,8 @@ mod on {
         slot.opening.set(None);
         slot.poked.set(false);
         if let Some(e) = slot.create_error.borrow().clone() {
-            sched.cells.lock().release_gate(gate)?;
-            lower_holds(sched);
+            host.release_gate(gate)?;
+            lower_holds(host);
             let (kind, message) = error_kind(e);
             return Ok(Err(Raise::Io { kind, message }));
         }
@@ -531,7 +538,7 @@ mod on {
             reap: Arc::clone(&reap),
             task,
         });
-        debug_assert!(sched.run.holds(), "a GUI opens without holds");
+        debug_assert!(host.holds(), "a GUI opens without holds");
         Ok(Ok(
             unsafe { ctx.heap_mut() }.alloc_foreign(UiToken { generation, reap }, true)
         ))
@@ -539,7 +546,7 @@ mod on {
 
     /// `Std.Gui.is_gui_task_raw`。`task`が、ゲート`gate`の開いている`Ui`を開いたタスクかを返す。GUIのタスクは
     /// メインのworkerにだけいるので、ほかのスレッドでは枠を見るまでもなく偽である。
-    pub(crate) fn is_gui_task(gate: i64, task: Option<CellRef>) -> bool {
+    pub fn is_gui_task(gate: i64, task: Option<CellRef>) -> bool {
         let Some(slot) = current_slot() else {
             return false;
         };
@@ -640,7 +647,7 @@ mod on {
     ///
     /// # Safety
     /// `args`は行の引数の語で、`Ui`は呼ぶ側が持つ生きた`Std.Gui.Ui`、文字列は生きた文字列である。
-    pub(crate) unsafe fn arm<M: Mode>(
+    pub unsafe fn arm<M: Mode>(
         ctx: &mut Ctx<M>,
         ext: Extern,
         args: &[Word],

@@ -12,9 +12,8 @@ use eml_rt::{Checked, IoWaker};
 use eml_sched::driver::Clock;
 use eml_sched::park::{DefaultPark, Park, ParkFactory, Pending, Progress};
 use eml_sched::{Control, Limits};
+use eml_test_support::RecordingHost;
 use eml_vm::{Finished, Machine, RunConfig, RuntimeError};
-
-use crate::common::RecordingHost;
 
 fn limits(workers: usize) -> Arc<Control> {
     Arc::new(Control::new(Limits {
