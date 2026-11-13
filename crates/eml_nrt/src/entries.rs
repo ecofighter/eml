@@ -879,6 +879,18 @@ mod tests {
     }
 
     #[test]
+    fn x_float_infinity_takes_unit() {
+        use crate::rows::FloatInfinity;
+        let mut ctx = ctx();
+        let c: *mut Ctx<Fast> = &mut *ctx;
+        // SAFETY: 上と同じ。単位の引数は語のまま渡る
+        unsafe {
+            assert_eq!(FloatInfinity(c, Word::UNIT.bits() as i64), f64::INFINITY);
+            assert_eq!((*c).take_fault(), None);
+        }
+    }
+
+    #[test]
     fn x_exit_starts_the_abort_and_returns() {
         use crate::rows::Exit;
         let mut ctx = ctx();

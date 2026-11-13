@@ -177,6 +177,7 @@ macro_rules! extern_rows {
                     Ok(())
                 }
                 fn IntShow | ByteDisplay(ctx, n: int) -> obj { Ok(ctx.int_show(n)) }
+                // SAFETY: `Char` の語は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)
                 fn CharShow(ctx, c: int) -> obj { Ok(ctx.char_show(c)) }
                 fn CharDisplay(ctx, c: int) -> obj { Ok(ctx.char_display(c)) }
                 fn StrShow(ctx, s: obj) -> obj { Ok(ctx.string_show(s)?) }
@@ -185,6 +186,7 @@ macro_rules! extern_rows {
                 fn StrSlice(ctx, start: int, end: int, s: obj) -> obj {
                     Ok(ctx.string_slice(start, end, s)?)
                 }
+                // SAFETY: `Char` の語は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)
                 fn StrPush(ctx, c: int, s: obj) -> obj { Ok(ctx.string_push_char(c, s)?) }
                 fn StrFindFrom(ctx, needle: obj, from: int, s: obj) -> int {
                     Ok(ctx.string_find_from(needle, from, s)?)
@@ -268,6 +270,36 @@ macro_rules! extern_rows {
                 fn CheckIndex(_, index: int, len: int) -> unit {
                     externs::check_index(index, len)?;
                     Ok(())
+                }
+                fn FloatCompare(_, a: float, b: float) -> enum { Ok(externs::float_compare(a, b)) }
+                fn FloatShowsMinus(_, x: float) -> enum { Ok(externs::float_shows_minus(x)) }
+                fn FloatOfInt(_, n: int) -> float { Ok(externs::float_of_int(n)) }
+                fn FloatTruncate(_, x: float) -> int { Ok(externs::float_truncate(x)?) }
+                fn FloatFloor(_, x: float) -> int { Ok(externs::float_floor(x)?) }
+                fn FloatCeil(_, x: float) -> int { Ok(externs::float_ceil(x)?) }
+                fn FloatRound(_, x: float) -> int { Ok(externs::float_round(x)?) }
+                fn FloatSqrt(_, x: float) -> float { Ok(externs::float_sqrt(x)) }
+                fn FloatAbs(_, x: float) -> float { Ok(externs::float_abs(x)) }
+                fn FloatSin(_, x: float) -> float { Ok(externs::float_sin(x)) }
+                fn FloatCos(_, x: float) -> float { Ok(externs::float_cos(x)) }
+                fn FloatExp(_, x: float) -> float { Ok(externs::float_exp(x)) }
+                fn FloatLog(_, x: float) -> float { Ok(externs::float_log(x)) }
+                fn FloatPow(_, x: float, y: float) -> float { Ok(externs::float_pow(x, y)) }
+                fn FloatInfinity(_, _u: unit) -> float { Ok(externs::float_infinity()) }
+                fn FloatNan(_, _u: unit) -> float { Ok(externs::float_nan()) }
+                fn FloatToFixed(ctx, digits: int, x: float) -> obj {
+                    Ok(ctx.float_to_fixed(digits, x)?)
+                }
+                fn FloatCanParse(ctx, s: obj) -> enum {
+                    Ok(if ctx.string_to_float(s)?.is_some() {
+                        externs::TRUE
+                    } else {
+                        externs::FALSE
+                    })
+                }
+                // `Std.Float.parse` は読める文字列にだけ呼ぶ。読めない文字列には NaN を返す
+                fn FloatParseRaw(ctx, s: obj) -> float {
+                    Ok(ctx.string_to_float(s)?.unwrap_or(f64::NAN))
                 }
             }
             engine { Panic, Exit }
@@ -383,25 +415,6 @@ macro_rules! extern_rows {
                 ReadAllBytes,
                 ReadLineBytes,
                 Close,
-                FloatCompare,
-                FloatShowsMinus,
-                FloatOfInt,
-                FloatTruncate,
-                FloatFloor,
-                FloatCeil,
-                FloatRound,
-                FloatSqrt,
-                FloatAbs,
-                FloatSin,
-                FloatCos,
-                FloatExp,
-                FloatLog,
-                FloatPow,
-                FloatInfinity,
-                FloatNan,
-                FloatToFixed,
-                FloatCanParse,
-                FloatParseRaw,
                 StrByteLength,
                 StrByteAt,
                 BytesLength,
