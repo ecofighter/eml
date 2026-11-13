@@ -176,8 +176,20 @@ macro_rules! extern_rows {
                     ctx.println(Stream::Err, s)?;
                     Ok(())
                 }
-                fn IntShow(ctx, n: int) -> obj { Ok(ctx.int_show(n)) }
+                fn IntShow | ByteDisplay(ctx, n: int) -> obj { Ok(ctx.int_show(n)) }
+                fn CharShow(ctx, c: int) -> obj { Ok(ctx.char_show(c)) }
+                fn CharDisplay(ctx, c: int) -> obj { Ok(ctx.char_display(c)) }
                 fn StrShow(ctx, s: obj) -> obj { Ok(ctx.string_show(s)?) }
+                fn StrNe(ctx, a: obj, b: obj) -> enum { Ok(ctx.string_ne(a, b)?) }
+                fn StrCharAt(ctx, i: int, s: obj) -> int { Ok(ctx.string_char_at(i, s)?) }
+                fn StrSlice(ctx, start: int, end: int, s: obj) -> obj {
+                    Ok(ctx.string_slice(start, end, s)?)
+                }
+                fn StrPush(ctx, c: int, s: obj) -> obj { Ok(ctx.string_push_char(c, s)?) }
+                fn StrFindFrom(ctx, needle: obj, from: int, s: obj) -> int {
+                    Ok(ctx.string_find_from(needle, from, s)?)
+                }
+                fn StringDecode(ctx, b: obj) -> obj { Ok(ctx.string_decode(b)?) }
                 fn FloatShow(ctx, x: float) -> obj { Ok(ctx.float_show(x)) }
                 fn StrConcat(ctx, a: obj, b: obj) -> obj { Ok(ctx.string_append(a, b)?) }
                 fn StrEq(ctx, a: obj, b: obj) -> enum { Ok(ctx.string_eq(a, b)?) }
@@ -327,13 +339,10 @@ macro_rules! extern_rows {
                 ReadLineBytes,
                 Close,
                 CharOfInt,
-                CharShow,
-                CharDisplay,
                 ByteNeg,
                 ByteAdd,
                 ByteSub,
                 ByteMul,
-                ByteDisplay,
                 ByteOfInt,
                 ByteWrap,
                 IntAnd,
@@ -367,13 +376,8 @@ macro_rules! extern_rows {
                 FloatToFixed,
                 FloatCanParse,
                 FloatParseRaw,
-                StrNe,
                 StrByteLength,
                 StrByteAt,
-                StrCharAt,
-                StrSlice,
-                StrPush,
-                StrFindFrom,
                 BytesEmpty,
                 BytesLength,
                 BytesAppend,
@@ -393,7 +397,6 @@ macro_rules! extern_rows {
                 BytesFindByte,
                 ShowBytesLength,
                 ShowBytesGet,
-                StringDecode,
                 EnvArgCount,
                 EnvArg,
                 EnvHas,

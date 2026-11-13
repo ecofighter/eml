@@ -4353,42 +4353,6 @@ fn run_extern<R: Exec>(
                 let w = ctx.handle_flush(task.get(arg(0)), handle)?;
                 task.set(dst, w);
             }
-            Extern::CharShow | Extern::CharDisplay => {
-                let c = task.raw(arg(0));
-                // SAFETY: `Char` の語は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)
-                let w = if ext == Extern::CharShow {
-                    ctx.char_show(c)
-                } else {
-                    ctx.char_display(c)
-                };
-                task.set(dst, w);
-            }
-            Extern::ByteDisplay => {
-                let w = ctx.int_show(task.raw(arg(0)));
-                task.set(dst, w);
-            }
-            Extern::StrNe => {
-                let r = ctx.string_ne(task.get(arg(0)), task.get(arg(1)))?;
-                task.set_raw(dst, r);
-            }
-            Extern::StrCharAt => {
-                let c = ctx.string_char_at(task.raw(arg(0)), task.get(arg(1)))?;
-                task.set_raw(dst, c);
-            }
-            Extern::StrSlice => {
-                let w = ctx.string_slice(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
-                task.set(dst, w);
-            }
-            Extern::StrPush => {
-                // SAFETY: `Char` の語は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)
-                let w = ctx.string_push_char(task.raw(arg(0)), task.get(arg(1)))?;
-                task.set(dst, w);
-            }
-            Extern::StrFindFrom => {
-                let i =
-                    ctx.string_find_from(task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
-                task.set_raw(dst, i);
-            }
             Extern::BytesEmpty => {
                 let w = ctx.bytes_empty()?;
                 task.set(dst, w);
@@ -4455,10 +4419,6 @@ fn run_extern<R: Exec>(
                 let i =
                     ctx.bytes_find_byte(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
                 task.set_raw(dst, i);
-            }
-            Extern::StringDecode => {
-                let w = ctx.string_decode(task.get(arg(0)))?;
-                task.set(dst, w);
             }
             Extern::EnvArgCount => task.set_raw(dst, ctx.env_arg_count()),
             Extern::EnvArg => {
