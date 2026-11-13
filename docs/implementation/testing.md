@@ -674,6 +674,8 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 1. 合否が機械の速さに左右されない
 2. dev プロファイルで1つずつ流して (`cargo nextest run -j 1`)、開発機で1秒以内に終わる
 
+手元で全体を流すときは`cargo test --workspace -q`を使う。テストのバイナリごとに1つのプロセスで流すので、テストごとにプロセスを立てるnextestより、開発機のmacOSでは10倍ほど速い。CIは`cargo nextest run`で流し、1秒の条件はテストを1つずつ別のプロセスで流す`cargo nextest run -j 1`で確かめる。
+
 本物の時計を使うテストは、時間の下限 (「以上」) と終わることだけを確かめる。上限は確かめず、止まらないときのための見張りだけを置く。見張りの長さは、測った時間の10倍以上にする。刻みに依って合否が決まるテストは置かない。
 
 ファイルを集めて流す7つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`、`ui::run_native`、`ui::run_fail_native`、`repl::transcripts`、`lowering::every_program_lowers_to_the_same_text`) は、1つのファイルが1秒以内で、テスト全体が5秒以内であればよい。この7つはテストの中でファイルを並べて流すので、`.config/nextest.toml` で単独で流し、ほかのテストとコアを取り合わないようにする。テストの中に壁時計の上限を置くのは、止まったことを見つけるためだけにする。上限は測った時間の10倍以上にする。2つの条件に当たらないテストには `#[ignore = "<理由>"]` を付ける。流すコマンドを「よく使うコマンド」に書き、流す時 (何を変えたときか) をそのテストを説明する節に書く。
@@ -810,8 +812,8 @@ claude plugin install ecoskills@ecoskills --scope user
 dev プロファイル (`cargo nextest run` と `cargo test` もこれを使う) は opt-level 1 で、debug assertions は有効である。`--release` は `bench/*.sh` と、`#[ignore]` を付けた時間のテストだけで使う。デバッガで局所変数が最適化で消えるときは、`CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...` で一度だけ opt-level 0 のビルドを作る。
 
 ```sh
-cargo nextest run                                    # すべてのテスト
-cargo test                                           # 同じテストを流す (1つの crate の短いループでは cargo test -p の方が速い)
+cargo test --workspace -q                            # すべてのテスト (手元の全体の実行。1つのcrateの短いループではcargo test -p。性能のテスト)
+cargo nextest run                                    # 同じテストをCIと同じくテストごとのプロセスで流す (開発機のmacOSでは10倍ほど遅い)
 cargo nextest run -j 1                               # ふだんの実行の条件を確かめる (1秒を超えるのは集めて流す7つだけ。性能のテスト)
 cargo nextest run --profile timing -j 1              # CI の時間の検査 (SLOW の時間を過ぎたテストを失敗にする。性能のテスト)
 cargo nextest run -p eml_syntax --test integration parser::empty_file    # 1つのテスト

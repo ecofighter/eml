@@ -30,7 +30,8 @@ The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable
 
 ```sh
 cargo build                          # all crates
-cargo nextest run                    # all tests (`cargo test` runs the same tests; `cargo test -p` is faster for a short loop on one crate)
+cargo test --workspace -q            # all tests: the local full run, one process per test binary (`cargo test -p` for a short loop on one crate)
+cargo nextest run                    # the same tests as CI runs them, one process per test (about 10x slower on the macOS dev machine); the 1 s rule is measured with `-j 1`
 cargo nextest run -p eml_syntax --test integration parser::empty_file   # a single test
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # UI tests
 cargo insta review                   # accept snapshots
