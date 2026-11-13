@@ -2,7 +2,7 @@
 
 位置づけ: 将来の設計。
 
-利用者のモジュールから C のライブラリを呼ぶ仕組み (FFI) と、C の API を持たないライブラリを Rust のプラグインで組み込む仕組み (拡張) をまとめる。FFI のうち、worker のスレッドの上でその場で動く呼び出しと、プールで動く `blocking` の呼び出しは実装してあり、規則は [宣言](../spec/declarations.md) の「`extern "C"`」と [VM](../spec/vm.md) の「C の関数の呼び出し」にある。この文書は、その設計の判断と、`blocking` の呼び出しの設計、拡張、GUI を扱う。どれもネイティブのバックエンドなしに VM の上で動く。ネイティブのコードが C の関数とプラグインの行を呼ぶ所は [ネイティブ化の設計](native.md) の「extern のエントリ」にある。worker とスレッドの仕組みは [マルチコア対応の設計](multicore.md) の「スレッドと worker」にある。
+利用者のモジュールからCのライブラリを呼ぶ仕組み (FFI) と、CのAPIを持たないライブラリをRustのプラグインで組み込む仕組み (拡張) をまとめる。FFIのうち、workerのスレッドの上でその場で動く呼び出しと、プールで動く`blocking`の呼び出しは実装してあり、規則は[宣言](../spec/declarations.md)の「`extern "C"`」と[VM](../spec/vm.md)の「C の関数の呼び出し」にある。この文書は、その設計の判断と、`blocking`の呼び出しの設計、拡張、GUIを扱う。どれもネイティブのバックエンドなしにVMの上で動く。ネイティブのコードがCの関数を呼ぶ所は[ネイティブの実行系](../spec/native.md)の「Cの関数の呼び出し」に、プラグインの行を呼ぶ所は[ネイティブ化の設計](native.md)の「extern のエントリ」にある。workerとスレッドの仕組みは[マルチコア対応の設計](multicore.md)の「スレッドと worker」にある。
 
 ## 目的と範囲
 
@@ -104,7 +104,7 @@ matmul n a b =
 - ライブラリを閉じず、橋渡しのコードも解放しないので、`CCall` と dtor のポインタはプロセスの間ずっと有効である。`Linker` や `Machine` の寿命とつなぐ必要がない
 - 命令 `Op::Ffi` は、`load` が名前で振った `CodeBase` の C の関数の番号を指す。追記で作り直したコードを名前で比べる確かめに乗せるためである。行の番号のような生の番号を operand にすると、追記のたびに番号がずれる ([VM](../spec/vm.md) の「C の関数の命令」)
 - 値を C の型に直す変換は `eml_vm` の `ffi.rs` の1か所で、検査モードも速いモードも同じ橋渡しを使う
-- ネイティブのコードは橋渡しの関数を通さず、C の関数を直接呼ぶ。そのとき `CFunction::c_signature()` と `Linked` をそのまま使う ([ネイティブ化の設計](native.md) の「呼び出し規約とエントリ」)。ネイティブのコードを足すときも、`load` の前に作る値で渡し、`Ctx` に関わらないポインタの型は `eml_cabi` に、`Ctx` に関わる型は `eml_rt` に置く
+- ネイティブのコードは橋渡しの関数を通さず、`eml_clink::c_signature`の署名でCの関数を直接呼ぶ ([ネイティブの実行系](../spec/native.md)の「Cの関数の呼び出し」)。`blocking`の呼び出しをネイティブのコードに足すときも、`load`の前に作る値で渡し、`Ctx`に関わらないポインタの型は`eml_cabi`に、`Ctx`に関わる型は`eml_rt`に置く
 
 ## データの配置
 
@@ -125,7 +125,7 @@ matmul n a b =
 - CのAPIを持たないライブラリ (今は`Std.Gui`) は、`eml_rows`がcfgのfeatureを通して組み込むRustのcrateで、`Std.Tls`と同じ形である。`eml_rows`の`gui.rs`が、toolkitの行の腕、GUIの`Park`、回収を持ち、ゲートのセルにはVMのスケジューラが実装するtrait `GateHost`を通して触れる。featureを外した処理系もそのモジュールを持ち、`Ui`の型は値を持たず、`Gui.run`は種類`NotAvailable`のIOの失敗になる ([標準ライブラリ](../spec/stdlib.md)の「`Std.Gui`」)
 - 行は普通の`eml_extern`の表の行で、Repr、Kind、純粋さ、借用、`Extern`の場合をそれぞれ持つ。そのため、型検査、LIR、コード生成のABI、表とstdを結ぶテストは変わらない
 - `eml_rows`のfeature `gui`は、stubのbackendだけを持つ`eml_gui`を足し、`gui-native`はネイティブのbackendを足す。`eml_cli`は`gui`を既定のfeatureに入れ、`gui-native`は入れないので、既定のビルドはどのtoolkitの開発用のファイルも要らない ([コンパイラの構成](../implementation/architecture.md)の「外部 crate」)
-- `eml_rt`に`Plugin`のtraitは置かない。プラグインが1つでは、検証するcrateにtraitを入れる理由にならない。2つ目のプラグインが現れたとき、または`jit-externs`がプラグインをまたいで行ごとに型の付いたエントリを要るときに入れる。形は`Host`と同じで、traitは`eml_rt`に置き、実装は検証する核の外に置き、信頼の一覧ではHostと同じT11の行に属する。`eml_rt`はvstdだけに依存したまま保つ。表から作る`extern "C"`の包みが、行ごとに型の付いた`dyn Plugin`のメソッドを呼ぶ。`Plugin`は`Send + Sync`で、`Send`でない状態は、所有者のworkerを確かめてから触れる入れ物に入れる
+- `eml_rt`に`Plugin`のtraitは置かない。プラグインが1つでは、検証するcrateにtraitを入れる理由にならない。2つ目のプラグインが現れたとき、またはネイティブのコードがプラグインをまたいで行ごとに型の付いたエントリを要るときに入れる。形は`Host`と同じで、traitは`eml_rt`に置き、実装は検証する核の外に置き、信頼の一覧ではHostと同じT11の行に属する。`eml_rt`はvstdだけに依存したまま保つ。表から作る`extern "C"`の包みが、行ごとに型の付いた`dyn Plugin`のメソッドを呼ぶ。`Plugin`は`Send + Sync`で、`Send`でない状態は、所有者のworkerを確かめてから触れる入れ物に入れる
 - AOTがリンクする実行系の静的ライブラリは、選び方の規則が決める1つの変種だけである。`gui`の軸はビルドのプロファイルが、`tls`の軸はモジュールのグラフに`Std.Tls`が (直接か`Std.Http`を通して) あるかが決める。プラグインは自分のコードを`gui`のプロファイルの変種に足すか、新しいプロファイルになり、後から足すライブラリにはならない ([ネイティブ化の設計](native.md)の「AOT と配布」)
 
 ## GUI
