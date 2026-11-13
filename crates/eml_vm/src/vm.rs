@@ -4196,7 +4196,7 @@ impl Args for At<'_> {
 }
 
 /// `Panic`と`Exit`の行はここで流し、それ以外の行はすべて`eml_rows::rows::call`を通す
-/// (docs/spec/object-model.md の「extern」)。
+/// (docs/spec/vm.mdの「基本操作と extern」)。
 fn run_extern<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -4207,7 +4207,7 @@ fn run_extern<R: Exec>(
 ) -> Result<(), RunFault> {
     let ops = &code.tables.operands[at as usize..];
     let arg = |i: usize| ops[2 + i] as Slot;
-    // 語の引数は、LIR の所有の規則により VM が持つ参照で、extern がそれを消費する
+    // 語の引数は、LIRの所有の規則によりVMが持つ参照で、externがそれを消費する
     let ext = Extern::ALL[ops[0] as usize];
     if ext == Extern::Panic {
         let message = task.get(arg(0));
@@ -4228,7 +4228,7 @@ fn run_extern<R: Exec>(
         return unwind::<R>(code, ctx, task, counts, dummy);
     }
     // 借りる引数 (`FunctionRow::borrowed`) の行は、引数を手放さない。失敗しても、借りた値は呼んだ側の
-    // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.md の「extern の借用」)
+    // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.mdの「extern の借用」)
     let value = unsafe { eml_rows::rows::call(ext, ctx, &At { task: &*task, ops }) }?;
     match value {
         Value::Word(w) => task.set(dst, w),

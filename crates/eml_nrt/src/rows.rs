@@ -71,7 +71,7 @@ macro_rules! row_fn {
 /// 中の名前を修飾せずに書くためである。テストは自分の行を渡して、自分の表を作る。展開は`eml_rows`の`defs`と同じく再帰せず
 /// 3段で進み、行の引数の組は1つのトークン木で渡して、変種の繰り返しの中で初めて引数に分ける。
 macro_rules! entries {
-    (rows { $($lines:tt)* } engine $engine:tt lir $lir:tt task $task:tt pending $pending:tt) => {
+    (rows { $($lines:tt)* } engine $engine:tt lir $lir:tt task $task:tt) => {
         entries!(@table [pub(crate)] ROWS "eml_x_" [eml_rows::rows] [
             /// 終了コードをworkerの構造体に置き、`exit`の中断を始めて戻る。生成したコードは、戻った後で巻き戻しへ分岐する。
             #[allow(non_snake_case)]

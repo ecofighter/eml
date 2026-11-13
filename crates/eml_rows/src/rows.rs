@@ -165,7 +165,7 @@ macro_rules! value_of {
 
 /// 行の一覧。`$site`は一覧を読む展開である。行は`fn 変種(ctx, 引数: 種類, ..) -> 種類 { 本体 }`の形で、変種を`|`で
 /// つなぐと1つの関数を共有する。名前の組は、共有の本体を持たない行を並べる。`engine`は各エンジンが自分で書く行、`lir`は
-/// externの呼び出しにならない行、`task`はタスクの行、`pending`は本体がまだVMにある行である。
+/// externの呼び出しにならない行、`task`はタスクの行である。
 #[macro_export]
 macro_rules! extern_rows {
     ($site:path) => {
@@ -675,8 +675,6 @@ macro_rules! extern_rows {
                 GuiAbandonRaw,
                 GuiIsGuiTaskRaw,
             }
-            pending {
-            }
         }
     };
 }
@@ -709,9 +707,8 @@ macro_rules! defs {
         engine { $($engine:ident),* $(,)? }
         lir { $($lir:ident),* $(,)? }
         task { $($task:ident),* $(,)? }
-        pending { $($pending:ident),* $(,)? }
     ) => {
-        defs!(@lines [[$($engine)*] [$($lir)*] [$($task)*] [$($pending)*]]
+        defs!(@lines [[$($engine)*] [$($lir)*] [$($task)*]]
             $($first [$first $($rest)*] ($($sig)*) $ret $body)*);
     };
     (@lines $groups:tt $($first:ident [$($variant:ident)*] $sig:tt $ret:tt $body:block)*) => {
@@ -747,7 +744,7 @@ macro_rules! defs {
         pub const SHARED: &[Extern] = &[$(Extern::$variant),*];
     };
     (@call
-        [[$($engine:ident)*] [$($lir:ident)*] [$($task:ident)*] [$($pending:ident)*]]
+        [[$($engine:ident)*] [$($lir:ident)*] [$($task:ident)*]]
         $([$($variant:ident)*] $first:ident ($ctx:tt $(, $arg:ident : $kind:tt)*) $ret:tt)*
     ) => {
         /// 行`ext`を引数`args`で流す。共有の本体を持たない行は内部の誤りになる。
@@ -777,7 +774,6 @@ macro_rules! defs {
                 $(Extern::$engine)|* => Err(RunFault::Internal("Panic and Exit run in the engine")),
                 $(Extern::$lir)|* => Err(RunFault::Internal("`Std.Par.par` is not an extern instruction")),
                 $(Extern::$task)|* => Err(RunFault::Internal("Async externs run through Op::Async")),
-                $(Extern::$pending => Err(RunFault::Internal("the row has no shared body yet")),)*
             }
         }
     };
@@ -792,7 +788,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use eml_extern::Extern;
-    use eml_rt::{Buffering, Control, Ctx, Fast, HostRef, Limits, StdHost};
+    use eml_rt::{Buffering, Control, Ctx, Fast, HostRef, Limits, StdHost, Stop};
 
     use super::*;
 
@@ -836,13 +832,14 @@ mod tests {
     fn shared_lists_each_row_with_a_body_once() {
         let distinct: HashSet<Extern> = SHARED.iter().copied().collect();
         assert_eq!(distinct.len(), SHARED.len());
-        for row in SHARED {
-            assert!(!row.is_async(), "{row:?}");
-            assert!(
-                !matches!(row, Extern::Par | Extern::Exit | Extern::Panic),
-                "{row:?}"
-            );
-        }
+        let expected: HashSet<Extern> = Extern::ALL
+            .iter()
+            .copied()
+            .filter(|row| !row.is_async())
+            .filter(|row| !matches!(row, Extern::Par | Extern::Exit | Extern::Panic))
+            .collect();
+        assert_eq!(distinct, expected);
+        assert_eq!(SHARED.len(), 230);
     }
 
     /// テストの引数。
@@ -913,6 +910,96 @@ mod tests {
                     matches!(call(row, &mut ctx, &Slots(&[])), Err(RunFault::Internal(_))),
                     "{row:?}"
                 );
+            }
+        }
+    }
+
+    /// 失敗しない行は、確保量の上限を使い切った`Ctx`でも`Ok`を返す。
+    #[test]
+    fn rows_that_do_not_fault_return_ok_on_an_exhausted_budget() {
+        let limits = Limits {
+            max_bytes: 0,
+            soft_bytes: 0,
+            ..Limits::default()
+        };
+        let host = StdHost::new(
+            Box::new(io::sink()),
+            Box::new(io::sink()),
+            Default::default(),
+            Buffering::Line,
+        );
+        let mut ctx =
+            Ctx::<Fast>::new(Arc::new(Control::new(limits)), HostRef::new(Arc::new(host)));
+        // SAFETY: 引数は行の種類に合い、物体は生きている。行は消費する引数を受け取り、どの引数も1回しか渡さない
+        unsafe {
+            assert_eq!(ctx.bytes_make(0, 0), Err(Fault::Stopped(Stop::MemoryLimit)));
+            let unit = Arg::Int(Word::UNIT.bits() as i64);
+            let s = |ctx: &mut Ctx<Fast>, text: &str| Arg::Word(ctx.fresh_string(text));
+            let b = |ctx: &mut Ctx<Fast>, text: &str| {
+                let s = ctx.fresh_string(text);
+                Arg::Word(ctx.bytes_of_string(s).unwrap())
+            };
+            let array = |ctx: &mut Ctx<Fast>| {
+                let m = ctx.array_empty(true).unwrap();
+                Arg::Word(ctx.array_freeze(m).unwrap())
+            };
+            let mut_array = |ctx: &mut Ctx<Fast>| Arg::Word(ctx.array_empty(true).unwrap());
+            let unboxed = |ctx: &mut Ctx<Fast>| {
+                let m = ctx.unboxed_empty(true).unwrap();
+                Arg::Word(ctx.unboxed_freeze(m).unwrap())
+            };
+            let mut_unboxed = |ctx: &mut Ctx<Fast>| Arg::Word(ctx.unboxed_empty(true).unwrap());
+            let table = [
+                (Extern::IntShow, vec![Arg::Int(-42)]),
+                (Extern::CharShow, vec![Arg::Int('x' as i64)]),
+                (Extern::CharDisplay, vec![Arg::Int('x' as i64)]),
+                (Extern::ByteDisplay, vec![Arg::Int(200)]),
+                (Extern::FloatShow, vec![Arg::Float(1.5)]),
+                (
+                    Extern::StrConcat,
+                    vec![s(&mut ctx, "ab"), s(&mut ctx, "cd")],
+                ),
+                (Extern::StrShow, vec![s(&mut ctx, "a\"b")]),
+                (
+                    Extern::StrPush,
+                    vec![Arg::Int('c' as i64), s(&mut ctx, "ab")],
+                ),
+                (Extern::BytesEmpty, vec![unit]),
+                (
+                    Extern::BytesAppend,
+                    vec![b(&mut ctx, "ab"), b(&mut ctx, "cd")],
+                ),
+                (Extern::BytesOfString, vec![s(&mut ctx, "ab")]),
+                (Extern::BytesPush, vec![Arg::Int(7), b(&mut ctx, "ab")]),
+                (Extern::ArrayThaw, vec![array(&mut ctx)]),
+                (Extern::MutArrayEmpty, vec![unit]),
+                (Extern::MutArrayFreeze, vec![mut_array(&mut ctx)]),
+                (Extern::UnboxedArrayThaw, vec![unboxed(&mut ctx)]),
+                (Extern::MutUnboxedArrayEmpty, vec![unit]),
+                (Extern::MutUnboxedArrayFreeze, vec![mut_unboxed(&mut ctx)]),
+                (
+                    Extern::MutUnboxedArrayFillFloat,
+                    vec![mut_unboxed(&mut ctx), Arg::Float(0.5)],
+                ),
+                (
+                    Extern::MutUnboxedArrayFillInt,
+                    vec![mut_unboxed(&mut ctx), Arg::Int(3)],
+                ),
+            ];
+            let infallible: HashSet<Extern> = SHARED
+                .iter()
+                .copied()
+                .filter(|row| {
+                    let row = row.row();
+                    !row.faults && matches!(row.ret, OpRet::Repr(Repr::Obj | Repr::TObj))
+                })
+                .collect();
+            let listed: HashSet<Extern> = table.iter().map(|(row, _)| *row).collect();
+            assert_eq!(listed.len(), table.len());
+            assert_eq!(listed, infallible);
+            for (row, args) in &table {
+                let result = call(*row, &mut ctx, &Slots(args));
+                assert!(matches!(result, Ok(Value::Word(_))), "{row:?}: {result:?}");
             }
         }
     }

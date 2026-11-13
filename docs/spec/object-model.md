@@ -1047,7 +1047,7 @@ worker が複数ある run では、ヒープは worker ごとにある。回復
 
 `eml_extern` の表の関数の行のうち `exit` と `panic` を除く168個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節のエントリに渡す ([VM](vm.md) の「extern の中断」)。
 
-行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
+行の番号 (`eml_extern::Extern`) から関数を引く表は`eml_rt`に置かない。行の一覧`eml_rows::rows`の`call`が行の番号の`match`で各行の関数を呼び、VMの汎用の`Extern`の命令はそれを通す ([VM](vm.md)の「基本操作と extern」)。`match`は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
 利用者の C の関数の行は、この表にも `eml_rt` にもない。VM は命令 `Op::Ffi` で、`eml_clink` が作った橋渡しの関数を通して呼ぶ。引数を slot にする変換と結果を戻す変換は VM が持つ ([VM](vm.md) の「C の関数の命令」)。
 

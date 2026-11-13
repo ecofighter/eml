@@ -1059,8 +1059,9 @@ fn field_word(shape: &Shape, position: u32, repr: Repr) -> u32 {
     (eml_rt::layout::data_first(shape.scanned as usize, false) as u32 + position) | raw
 }
 
-/// 算術と比較の extern の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。ほかの extern は `None` で、
-/// `Op::Extern` になる。新しい extern は VM の `run_extern` の網羅の `match` が腕を求めるので、ここに列挙しない。
+/// 算術と比較のexternの専用の命令 (docs/spec/vm.mdの「基本操作と extern」)。ほかのexternは`None`で、
+/// `Op::Extern`になる。新しいexternは、行の一覧`eml_rows::rows`の`call`の網羅の`match`が行を求めるので、ここに
+/// 列挙しない。
 fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
     match (ext, args) {
         (Extern::IntNeg, [a]) => return Some(Op::IntNeg { dst, a: *a }),
