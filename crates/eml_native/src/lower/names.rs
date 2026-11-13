@@ -28,6 +28,9 @@ pub fn fn_value(name: &str) -> String {
     format!("v:{name}")
 }
 
+/// 空の`MutArray`の定数のデータの記号。中身が決まっているので、名前も1つである。
+pub const EMPTY_MUT_ARRAY: &str = "a:mut";
+
 /// 文字列の定数`text`のデータの記号。
 pub fn string(text: &str) -> String {
     format!("s:{text}")

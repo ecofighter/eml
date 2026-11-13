@@ -22,6 +22,8 @@ pub enum Datum {
     Float(u64),
     /// 関数の静的なクロージャ (docs/spec/native.md の「関数の値」)。
     Fn(FnIdx),
+    /// 長さ0の`MutArray`の不死の物体 (docs/spec/native.md の「値と定数」)。
+    EmptyMutArray,
 }
 
 impl Datum {
@@ -32,6 +34,7 @@ impl Datum {
             Datum::BigInt(n) => names::big_int(*n),
             Datum::Float(bits) => names::float(*bits),
             Datum::Fn(function) => names::fn_value(&program.function(*function).name),
+            Datum::EmptyMutArray => names::EMPTY_MUT_ARRAY.to_string(),
         }
     }
 }

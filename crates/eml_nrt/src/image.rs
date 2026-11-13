@@ -99,6 +99,7 @@ pub const DATUM_STRING: u32 = 0;
 pub const DATUM_BIG_INT: u32 = 1;
 pub const DATUM_FLOAT: u32 = 2;
 pub const DATUM_FN: u32 = 3;
+pub const DATUM_EMPTY_MUT_ARRAY: u32 = 4;
 
 /// 読み込み時の値1つ。種類、中身 (大きい`int`と`float`は`bits`、文字列は`text`、静的なクロージャは`bits`の引数の数と
 /// `code`のエントリのコード) と、runが物体の語で埋めるデータのslotである。

@@ -14,7 +14,8 @@ use crate::census::census;
 use crate::constants::{self, Datum};
 use crate::enter::{FATAL_FAULT, FATAL_PANICKED, FATAL_RECORDED, Fatal, detached, enter};
 use crate::image::{
-    Census, DATUM_BIG_INT, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow, Image, Options, Start,
+    Census, DATUM_BIG_INT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow,
+    Image, Options, Start,
 };
 use crate::worker::{NATIVE_CODE, Worker};
 
@@ -141,6 +142,7 @@ unsafe fn fill_data(
         DATUM_STRING => Ok(Datum::String(unsafe { row.text.as_str() })),
         DATUM_BIG_INT => Ok(Datum::BigInt(row.bits as i64)),
         DATUM_FLOAT => Ok(Datum::Float(row.bits)),
+        DATUM_EMPTY_MUT_ARRAY => Ok(Datum::EmptyMutArray),
         DATUM_FN => match u16::try_from(row.bits) {
             Ok(arity) if arity > 0 => Ok(Datum::Fn {
                 arity,

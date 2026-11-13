@@ -6,11 +6,11 @@ use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataId, FuncId, Module};
 use eml_extern::ExternRef;
 use eml_lir::unwind::Unwinds;
-use eml_lir::{Atom, BlockId, Call, LirFn, Repr, Rhs, Stmt, Term, VarId};
+use eml_lir::{Atom, BlockId, Call, LirFn, Prim, Repr, Rhs, Stmt, Term, VarId};
 use eml_nrt::image::SiteRow;
 
 use super::apply::ClosureEntries;
-use super::consts::Data;
+use super::consts::{Data, Datum};
 use super::data::CaseFields;
 use super::rows::{self, Lowering};
 use super::{Callees, Imports, kind};
@@ -246,6 +246,13 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
                 var,
                 rhs: Rhs::ConstString(index),
             } => self.const_string(*var, *index),
+            Stmt::Let {
+                var,
+                rhs: Rhs::Prim(Prim::EmptyMutArray, _),
+            } => {
+                let w = self.datum_word(Datum::EmptyMutArray, types::I64);
+                self.bind(*var, w);
+            }
             Stmt::Let {
                 var,
                 rhs: Rhs::Con { ctor, args, reuse },

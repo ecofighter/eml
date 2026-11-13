@@ -1,5 +1,5 @@
 //! 定数の箱と空の`MutArray`を作る関数。VMとネイティブのコードが定数の箱に同じ実装を使うので、その表現は1か所で
-//! 決まる (docs/spec/object-model.mdの「核の操作」)。空の`MutArray`はVMが使う。物体はどれも不死で、検査モードでも
+//! 決まる (docs/spec/object-model.mdの「核の操作」)。空の`MutArray`もVMとネイティブのコードが共有する。物体はどれも不死で、検査モードでも
 //! 参照を数えない。
 
 use eml_rt::{Heap, Kind, Meta, Mode, Word, layout};

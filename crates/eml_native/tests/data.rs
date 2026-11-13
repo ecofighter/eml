@@ -4,7 +4,7 @@
 use eml_cabi::Linked;
 use eml_native::{Arg, NativeMachine};
 use eml_nrt::RunConfig;
-use eml_nrt::image::{DATUM_BIG_INT, DATUM_FLOAT, DATUM_STRING};
+use eml_nrt::image::{DATUM_BIG_INT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_STRING};
 use eml_rt::{Ctx, Fast, Kind, Word, layout};
 
 use crate::common::native::{
@@ -520,5 +520,64 @@ fn a_constructor_carries_the_mark_of_its_variable() {
         let (finished, record) = visit(LINS, name, lin_bit, Lin { seen: None });
         finished.unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(record.seen, Some((lin, true)), "{name}");
+    }
+}
+
+/// 代役の記録。試す関数が返した空の`MutArray`の長さと、不死かどうかである。
+struct Empty {
+    length: Option<i64>,
+    immortal: bool,
+}
+
+/// 代役。試す関数を呼び、返った語を調べて手放す。
+unsafe extern "C" fn inspect_empty(ctx: *mut Ctx<Fast>, entry: *const u8, _argv: *mut u64) {
+    // SAFETY: `visit`が`entry`に記録を置き、この代役だけがそれを使う
+    let visit = unsafe { &mut *entry.cast_mut().cast::<Visit<Empty>>() };
+    // SAFETY: 代役の中で、受け取った`ctx`で呼び、関数の呼び出しをまたいで`ctx`への参照を持たない
+    unsafe {
+        let mut argv = [0u64; 1];
+        call_visited(ctx, visit, &mut argv);
+        let w = argv.as_ptr().cast::<Word>().read();
+        visit.record.length = (*ctx).array_length(w).ok();
+        visit.record.immortal = (*ctx).heap_mut().is_immortal(w);
+        (*ctx).heap_mut().decref(w).expect("an immortal word");
+    }
+}
+
+#[test]
+fn an_empty_mut_array_is_one_immortal_datum() {
+    // 2つの関数が同じ語を返す。語は凍結した領域の不死の物体で、長さは0である。`decref`は解放せず、runはcensusで終わる
+    let text = format!(
+        "{MAIN}\
+fn f() -> (obj lin, obj lin) {{
+  let a.0: obj lin = prim empty_mut_array()
+  let b.1: obj lin = call g()
+  return (a.0, b.1)
+}}
+fn g() -> obj lin {{
+  let a.0: obj lin = prim empty_mut_array()
+  return a.0
+}}
+"
+    );
+    let got = call(&text, "f", &[]);
+    let [Arg::I64(a), Arg::I64(b)] = got[..] else {
+        panic!("{got:?}")
+    };
+    assert_eq!(a, b);
+    let record = Empty {
+        length: None,
+        immortal: false,
+    };
+    let (finished, record) = visit(&text, "g", inspect_empty, record);
+    finished.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!((record.length, record.immortal), (Some(0), true));
+    assert_eq!(
+        data_rows(&text),
+        [(DATUM_EMPTY_MUT_ARRAY, 0, String::new())]
+    );
+    for function in ["f", "g"] {
+        let clif = clif(&text, function);
+        assert!(clif.contains("%a:mut"), "{function} reads a:mut:\n{clif}");
     }
 }

@@ -9,8 +9,8 @@ use cranelift_module::ModuleError;
 use eml_cabi::Linked;
 use eml_lir::{Program, Repr};
 use eml_nrt::image::{
-    DATUM_BIG_INT, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow, FnRow, Image, Options, PapRow,
-    SiteRow, Slice, Start, Str,
+    DATUM_BIG_INT, DATUM_EMPTY_MUT_ARRAY, DATUM_FLOAT, DATUM_FN, DATUM_STRING, DatumRow, FnRow,
+    Image, Options, PapRow, SiteRow, Slice, Start, Str,
 };
 use eml_nrt::{Finished, HostRef, Kind, RunConfig, RunFault, RuntimeError, Thunk};
 
@@ -126,6 +126,7 @@ impl Tables {
                     Datum::String(text) => (DATUM_STRING, 0, text.as_str()),
                     Datum::BigInt(n) => (DATUM_BIG_INT, *n as u64, ""),
                     Datum::Float(bits) => (DATUM_FLOAT, *bits, ""),
+                    Datum::EmptyMutArray => (DATUM_EMPTY_MUT_ARRAY, 0, ""),
                     Datum::Fn(function) => {
                         rows[function.0 as usize].value = slot;
                         (DATUM_FN, u64::from(arity), "")

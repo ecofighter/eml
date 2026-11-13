@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use eml_rows::constants::{immortal_big_int, immortal_float};
+use eml_rows::constants::{empty_mut_array, immortal_big_int, immortal_float};
 use eml_rt::{Control, Fast, Frozen, Heap, HeapError, Word, layout};
 
 use crate::closures::code_word;
@@ -19,6 +19,8 @@ pub(crate) enum Datum<'a> {
         arity: u16,
         code: *const u8,
     },
+    /// 長さ0の`MutArray`。VMの定数と同じ関数で作る。
+    EmptyMutArray,
 }
 
 /// 値の語 (値と同じ順) と、その物体を持つ凍結した塊。値がなければ塊もない。
@@ -43,6 +45,7 @@ pub(crate) fn build(control: &Arc<Control>, data: &[Datum]) -> Result<Built, Hea
             Datum::BigInt(n) => immortal_big_int(&mut heap, n),
             Datum::Float(bits) => immortal_float(&mut heap, bits),
             Datum::Fn { arity, code } => static_closure(&mut heap, arity, code),
+            Datum::EmptyMutArray => empty_mut_array(&mut heap),
         })
         .collect();
     Ok(Built {
@@ -111,6 +114,25 @@ mod tests {
                 assert_eq!(heap.meta(w).unwrap().kind(), kind);
                 assert_eq!(heap.raw(w, layout::BOX_VALUE_WORD).unwrap(), value);
             }
+        }
+    }
+
+    #[test]
+    fn an_empty_mut_array_datum_is_immortal() {
+        let control = Arc::new(Control::new(Limits::default()));
+        // `freeze`は、どの物体も不死のときだけ成功する
+        let Built { words, region } = build(&control, &[Datum::EmptyMutArray]).unwrap();
+        let mut ctx = ctx(&control);
+        // SAFETY: 塊を付けても、`Ctx`の持つ語は変わらない
+        unsafe { ctx.heap_mut() }.attach(region.unwrap());
+        // SAFETY: 語は付けた塊の物体である
+        unsafe {
+            let heap = ctx.heap();
+            let meta = heap.meta(words[0]).unwrap();
+            assert_eq!(meta.kind(), Kind::Data);
+            assert!(meta.lin());
+            assert_eq!(heap.scanned_len(words[0]).unwrap(), 0);
+            assert!(heap.is_immortal(words[0]));
         }
     }
 }
