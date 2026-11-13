@@ -1,7 +1,9 @@
 //! CLIFの固定。生成したコードの速い道と冷たい道の形を、関数1つのコンパイルの前のCLIFで固定する
 //! (docs/spec/native.md の「巻き戻しの地点」)。
 #![cfg(not(miri))]
-use crate::common::native::clif;
+use std::ffi::c_void;
+
+use crate::common::native::{clif, clif_linked, program};
 
 #[test]
 fn an_arith_row() {
@@ -728,6 +730,124 @@ fn f(s.0: obj, c.1: tobj, x.2: tobj) -> obj {
 
     block12:
         return v1
+    }
+    ");
+}
+
+extern "C" fn eml_test_c_pin(_n: i32, _text: *const u8) -> *mut c_void {
+    std::ptr::null_mut()
+}
+
+extern "C" fn eml_test_c_pin_free(_handle: *mut c_void) {}
+
+#[test]
+fn a_c_row() {
+    // 範囲の確かめが冷たいブロックへ分岐した後で、文字列の中身の位置を借り、`int32_t`の引数を狭めてCの関数を直接呼ぶ。
+    // ハンドルの結果はdtorのアドレスと一緒に`eml_x_c_handle_new`に渡し、そのすぐ後でfaultの語を確かめる。冷たい
+    // ブロックは1つの後始末へ進む
+    let text = "\
+chandle \"M.H\" drop \"eml_test_c_pin_free\" link []
+cfn \"M.make\" symbol \"eml_test_c_pin\" link [] (i32, text) -> handle \"M.H\"
+fn f(n.0: int, borrowed s.1: obj) -> obj lin {
+  let h.2: obj lin = extern M.make(n.0, s.1) @\"main.em\":1:1
+  return h.2
+}
+";
+    let program = program(text);
+    // SAFETY: どちらの関数も、宣言の署名を持つ`extern "C" fn`で、プロセスの間ずっとある。CLIFを作るだけで呼ばない
+    let mut linker = unsafe {
+        eml_clink::Linker::new(Vec::new()).with_symbols(&[
+            ("eml_test_c_pin", eml_test_c_pin as *const ()),
+            ("eml_test_c_pin_free", eml_test_c_pin_free as *const ()),
+        ])
+    };
+    let linked = linker
+        .link(&program.c_functions, &program.c_handles)
+        .unwrap_or_else(|error| panic!("{error}"));
+    insta::assert_snapshot!(clif_linked(text, "f", &linked), @"
+    function %f:f(i64, i64, i64) -> i64 tail {
+        gv0 = symbol colocated %s:M.make
+        sig0 = (i64, i64, i64) -> i64 tail
+        sig1 = (i64, i64, i64) -> i64 c
+        sig2 = (i64, i64, i64, i64, i64) c
+        sig3 = (i64, i64, i64, i64) tail
+        sig4 = (i64, i64) -> i64 c
+        sig5 = (i32, i64) -> i64 c
+        sig6 = (i64) c
+        sig7 = (i64, i64, i64, i64) -> i64 c
+        fn0 = colocated %f:f sig0
+        fn1 = %eml_nrt_safepoint sig1
+        fn2 = %eml_x_c_narrow sig2
+        fn3 = colocated %eml$raise sig3
+        fn4 = %eml_rt_text_payload sig4
+        fn5 = %eml_c$M.make sig5
+        fn6 = %eml_cd$M.H sig6
+        fn7 = %eml_x_c_handle_new sig7
+
+    block0(v0: i64, v1: i64, v2: i64):
+        v3 = load.i64 notrap aligned v0+40
+        v4 = load.i32 notrap aligned v3
+        v5 = iconst.i32 0
+        v6 = icmp ne v4, v5  ; v5 = 0
+        v7 = get_stack_pointer.i64 
+        v8 = load.i64 notrap aligned v0+48
+        v9 = icmp ult v7, v8
+        v10 = bor v6, v9
+        brif v10, block1, block3
+
+    block1 cold:
+        v11 = func_addr.i64 fn0
+        v12 = iconst.i64 0
+        v13 = call fn1(v0, v11, v12)  ; v12 = 0
+        v14 = iconst.i64 0
+        v15 = icmp eq v13, v14  ; v14 = 0
+        brif v15, block3, block2
+
+    block2 cold:
+        v16 = iconst.i64 1
+        return v16  ; v16 = 1
+
+    block3:
+        v17 = ireduce.i32 v1
+        v18 = sextend.i64 v17
+        v19 = icmp ne v18, v1
+        brif v19, block5, block6
+
+    block5 cold:
+        v20 = symbol_value.i64 gv0
+        v21 = load.i64 notrap aligned v20
+        v22 = iconst.i64 1
+        v23 = iconst.i64 1
+        call fn2(v0, v21, v22, v23, v1)  ; v22 = 1, v23 = 1
+        v24 = func_addr.i64 fn0
+        v25 = iconst.i64 0
+        v26 = iconst.i64 2
+        call fn3(v0, v24, v25, v26)  ; v25 = 0, v26 = 2
+        jump block4
+
+    block4 cold:
+        v27 = iconst.i64 1
+        return v27  ; v27 = 1
+
+    block6:
+        v28 = call fn4(v0, v2)
+        v29 = call fn5(v17, v28)
+        v30 = symbol_value.i64 gv0
+        v31 = load.i64 notrap aligned v30
+        v32 = func_addr.i64 fn6
+        v33 = call fn7(v0, v31, v32, v29)
+        v34 = load.i64 notrap aligned v0+32
+        brif v34, block7, block8
+
+    block7 cold:
+        v35 = func_addr.i64 fn0
+        v36 = iconst.i64 0
+        v37 = iconst.i64 2
+        call fn3(v0, v35, v36, v37)  ; v36 = 0, v37 = 2
+        jump block4
+
+    block8:
+        return v33
     }
     ");
 }

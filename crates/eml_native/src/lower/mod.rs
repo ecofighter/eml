@@ -2,6 +2,7 @@
 //! それらのどれも名指せる。クロージャのエントリは、データの記号と同じく本体が初めて使うときに宣言し、本体の後で定義する。
 //! PAPのアダプタはコードが名指さず、`Image.paps`だけが指すので、最後に宣言して定義する (docs/spec/native.md の「関数の形」)。
 mod apply;
+mod c;
 mod call;
 pub mod consts;
 mod data;
@@ -56,6 +57,10 @@ struct Imports {
     raise: FuncId,
     /// `eml$apply$<m>`。添字が`m - 1`である。
     applies: Vec<FuncId>,
+    /// Cの関数の`eml_c$<name>`。`CFnId`の順である。
+    c_functions: Vec<FuncId>,
+    /// dtorを持つハンドルの型の`eml_cd$<name>`。`CHandleId`の順である。
+    c_dtors: Vec<Option<FuncId>>,
 }
 
 impl Imports {
@@ -126,10 +131,23 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
             &apply::uniform(args),
         )?);
     }
+    let mut c_functions = Vec::with_capacity(program.c_functions.len());
+    for function in &program.c_functions {
+        c_functions.push(declare_import(module, Import::C(function))?);
+    }
+    let mut c_dtors = Vec::with_capacity(program.c_handles.len());
+    for handle in &program.c_handles {
+        c_dtors.push(match handle.dtor {
+            Some(_) => Some(declare_import(module, Import::Dtor(handle))?),
+            None => None,
+        });
+    }
     let imports = Imports {
         entries,
         raise,
         applies,
+        c_functions,
+        c_dtors,
     };
     let mut ids = Vec::with_capacity(program.functions.len());
     for function in &program.functions {

@@ -197,7 +197,7 @@ impl<'a, M: Module> FnLower<'a, '_, M> {
     }
 
     /// 今のブロックで`eml$raise(ctx, self, site, purity)`を呼び、後始末へ進む。
-    fn raise(&mut self, site: u32, purity: Purity, cleanup: Block) {
+    pub(super) fn raise(&mut self, site: u32, purity: Purity, cleanup: Block) {
         let me = self.func_ref(self.id);
         let me = self.b.ins().func_addr(types::I64, me);
         let site = self.b.ins().iconst(types::I64, i64::from(site));

@@ -87,7 +87,7 @@ pub enum Import<'a> {
 }
 
 /// importを宣言する。importのリンケージを書くのはここだけである。Cの関数のシグネチャは`eml_clink::c_signature`が、
-/// ハンドルのdtorのシグネチャは`(i64)`である (docs/spec/native.md の「エントリ」)。
+/// ハンドルのdtorのシグネチャは`(i64)`である (docs/spec/native.md の「Cの関数の呼び出し」)。
 pub fn declare_import<M: Module>(module: &mut M, import: Import<'_>) -> Built<FuncId> {
     let call_conv = module.isa().default_call_conv();
     let (name, sig) = match import {

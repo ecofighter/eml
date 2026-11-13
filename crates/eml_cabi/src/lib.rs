@@ -1,5 +1,5 @@
-//! C の関数を呼ぶコードのポインタ。`eml_clink` が作り、`eml_vm` が使う。
-//! `Ctx` に関わらないので、`eml_rt` に依存せず、`eml_extern` だけに依存する葉の crate にする。
+//! Cの関数を呼ぶコードのポインタ。`eml_clink`が作る。VMは橋渡しを通してCの関数を呼び、ネイティブのコードは呼ぶ先を直接呼ぶ。
+//! `Ctx`に関わらないので、`eml_rt`に依存せず、`eml_extern`だけに依存する葉のcrateにする。
 
 use eml_extern::{CFunction, CHandleType};
 
@@ -19,11 +19,11 @@ pub struct CCall {
 unsafe impl Send for CCall {}
 unsafe impl Sync for CCall {}
 
-/// `Program::c_functions` と `Program::c_handles` に並びをそろえた、C の関数の呼び出しとハンドルの型の dtor。
-/// VM はこのポインタをそのまま呼ぶので、欄を非公開にし、作るのを `unsafe` の `new` に限る。空の `default` は何も
-/// 呼ばないので安全である。ポインタを保証するのはつないだときの宣言なので、`Linked` はその宣言の写しを持ち、読み込む
-/// 側が `fits` でプログラムの表と比べる。別のプログラムのためにつないだ `Linked` を渡しても、その宣言が保証しない
-/// 呼び方で C の関数や dtor を呼ばないためである。
+/// `Program::c_functions`と`Program::c_handles`に並びをそろえた、Cの関数の呼び出しとハンドルの型のdtor。VMはこの
+/// ポインタを確かめずに呼び、ネイティブのコードは各`CCall`の呼ぶ先を直接呼ぶので、欄を非公開にし、作るのを`unsafe`の
+/// `new`に限る。空の`default`は何も呼ばないので安全である。ポインタを保証するのはつないだときの宣言なので、`Linked`は
+/// その宣言の写しを持ち、読み込む側が`fits`でプログラムの表と比べる。別のプログラムのためにつないだ`Linked`を渡しても、
+/// その宣言が保証しない呼び方でCの関数やdtorを呼ばないためである。
 #[derive(Clone, Debug, Default)]
 pub struct Linked {
     functions: Vec<CFunction>,

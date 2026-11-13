@@ -96,17 +96,6 @@ fn prompt_is_rejected() {
 }
 
 #[test]
-fn c_row_is_rejected() {
-    assert_rejects(
-        "extern \"C\" pure symbol \"eml_fixture_add_i32\" add : Int as int -> Int as int -> <Panic> Int as int\n\
-         \n\
-         main : Unit -> <IO, Panic> Unit\n\
-         main () = println (show (add 2 3))\n",
-        Form::CRow,
-    );
-}
-
-#[test]
 fn forms_are_sorted_and_distinct() {
     let found = forms(
         "import Std.Par\n\

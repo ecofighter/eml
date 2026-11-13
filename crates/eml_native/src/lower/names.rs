@@ -60,14 +60,12 @@ pub fn thunk(params: &[Kind], rets: &[Kind]) -> String {
     format!("eml$thunk${}${}", letters(params), letters(rets))
 }
 
-/// Cの関数`name`のimportの記号 (docs/spec/native.md の「エントリ」)。
-#[allow(dead_code)]
+/// Cの関数`name`のimportの記号 (docs/spec/native.md の「Cの関数の呼び出し」)。
 pub fn c_function(name: &str) -> String {
     format!("eml_c${name}")
 }
 
-/// ハンドルの型`handle`のdtorのimportの記号。
-#[allow(dead_code)]
+/// ハンドルの型`handle`のdtorのimportの記号 (docs/spec/native.md の「Cの関数の呼び出し」)。
 pub fn c_dtor(handle: &str) -> String {
     format!("eml_cd${handle}")
 }

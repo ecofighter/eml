@@ -296,7 +296,6 @@ fn rejected_what(rejected: &eml_native::Unsupported) -> String {
         Form::Prim => "effect operations".to_string(),
         Form::Clause => "operation clauses".to_string(),
         Form::Prompt => "handler landings".to_string(),
-        Form::CRow => "C functions".to_string(),
     }
 }
 

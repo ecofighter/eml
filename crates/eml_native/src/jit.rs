@@ -43,6 +43,8 @@ pub enum LoadError {
     RegionFull,
     /// ほかのCraneliftの誤りか、領域を作れなかった。
     Module(String),
+    /// `Linked`がつないだCの関数とハンドルの型の宣言が、プログラムの表と違う。
+    LinkMismatch,
 }
 
 impl LoadError {
@@ -52,6 +54,7 @@ impl LoadError {
             LoadError::Loaded => "a native machine loads one program",
             LoadError::RegionFull => REGION_FULL,
             LoadError::Module(_) => UNBUILT,
+            LoadError::LinkMismatch => "the linked C functions are not the program's",
         }
     }
 }
@@ -207,8 +210,9 @@ impl NativeMachine {
     /// 最後のパスの後のLIRか、同じ規則を守る手書きのLIRでなければならない。ネイティブのコードは実行時に何も確かめないので、
     /// ほかのプログラムの実行の振る舞いは、VMの速いモードと同じく未定義である (docs/spec/native.md の「関数の形」)。
     /// debugのビルドは、この約束のうちverifierが確かめる部分を確かめ、破れていればpanicする。`unsupported`が断る形は、
-    /// 下ろしの中でpanicする。
-    pub fn load(&mut self, program: &Program, _linked: &Linked) -> Result<Loaded, LoadError> {
+    /// 下ろしの中でpanicする。`linked`はプログラムのCの関数をつないだ結果で、その宣言がプログラムの表と違えば、何も
+    /// 作らずに`LoadError::LinkMismatch`を返す。
+    pub fn load(&mut self, program: &Program, linked: &Linked) -> Result<Loaded, LoadError> {
         if std::mem::replace(&mut self.asked, true) {
             return Err(LoadError::Loaded);
         }
@@ -216,6 +220,9 @@ impl NativeMachine {
             && let Err(error) = eml_lir::verify(program)
         {
             panic!("internal error: invalid LIR at the native load: {error}");
+        }
+        if !linked.fits(&program.c_functions, &program.c_handles) {
+            return Err(LoadError::LinkMismatch);
         }
         let entry = program.function(program.entry);
         if lower::rets(entry) != [Kind::I64] {
@@ -226,6 +233,17 @@ impl NativeMachine {
         let mut builder = jit_builder().map_err(|error| LoadError::Module(error.to_string()))?;
         for entry in eml_nrt::entries() {
             builder.symbol(entry.symbol, (entry.address)());
+        }
+        // `fits`が成り立ったので、`Linked`の約束により、どの呼ぶ先もそのCの関数の宣言の記号を解決した関数で、どのdtorも
+        // そのハンドルの型の宣言のdtorである。生成したコードは、それらを記号の名前でだけ名指す
+        // (docs/spec/native.md の「Cの関数の呼び出し」)
+        for (function, call) in program.c_functions.iter().zip(linked.calls()) {
+            builder.symbol(names::c_function(&function.name), call.callee.cast());
+        }
+        for (handle, dtor) in program.c_handles.iter().zip(linked.dtors()) {
+            if let &Some(dtor) = dtor {
+                builder.symbol(names::c_dtor(&handle.name), dtor as *const u8);
+            }
         }
         let module = self.module.insert(JITModule::new(builder));
         let defined = lower::program(module, program, self.keep_clif)

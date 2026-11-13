@@ -32,9 +32,10 @@ pub use eml_test_support::native_options;
 
 /// `text`のプログラムを新しいマシンに読み込み、関数`name`を`args`で呼んで結果を返す。
 pub fn call(text: &str, name: &str, args: &[Arg]) -> Vec<Arg> {
+    let program = program(text);
     let mut machine = machine();
     machine
-        .load(&program(text), &Linked::default())
+        .load(&program, &eml_test_support::link(&program))
         .unwrap_or_else(|error| panic!("{error:?}"));
     let results = machine
         .call(name, args, native_options())
@@ -46,9 +47,15 @@ pub fn call(text: &str, name: &str, args: &[Arg]) -> Vec<Arg> {
 /// `text`のプログラムを読み込んだときの、関数`function`のCLIF。エントリの呼び出し規約は対象のCの既定の規約で、その名前は
 /// OSで違うので、どの対象でも同じ文になるように`c`と書き換える。
 pub fn clif(text: &str, function: &str) -> String {
+    let program = program(text);
+    clif_linked(text, function, &eml_test_support::link(&program))
+}
+
+/// `clif`と同じだが、プログラムのCの関数を`linked`でつなぐ。
+pub fn clif_linked(text: &str, function: &str, linked: &Linked) -> String {
     let mut machine = NativeMachine::new_with_clif(&RunConfig::default(), host());
     machine
-        .load(&program(text), &Linked::default())
+        .load(&program(text), linked)
         .unwrap_or_else(|error| panic!("{error:?}"));
     let text = machine
         .clif(function)
@@ -77,9 +84,10 @@ pub fn visit<R: Send>(
     record: R,
 ) -> (Result<Finished, RuntimeError>, R) {
     let config = RunConfig::default();
+    let program = program(text);
     let mut machine = NativeMachine::new(&config, host());
     machine
-        .load(&program(text), &Linked::default())
+        .load(&program, &eml_test_support::link(&program))
         .unwrap_or_else(|error| panic!("{error:?}"));
     let (thunk, code) = machine
         .entry_of(name)
@@ -118,6 +126,11 @@ pub unsafe fn call_visited<R>(ctx: *mut Ctx<Fast>, visit: &Visit<R>, argv: &mut 
 /// ネイティブのcensusの漏れは`execute_native`が誤りにするので、結果の文が違えば漏れも見つかる。
 pub fn agree(text: &str) {
     agree_program(&program(text));
+}
+
+/// `agree`と同じだが、emlのソースからコンパイルしたプログラムを流す。
+pub fn agree_source(source: &str) {
+    agree_program(&eml_test_support::lir(source));
 }
 
 /// `agree`と同じだが、`Reuse`までのLIRのパスを通してから流す。

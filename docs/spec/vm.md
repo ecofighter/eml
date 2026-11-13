@@ -1108,6 +1108,7 @@ VM の `Task` は `limit: Limit` を持つ。状態ごとに `Ctx` の深さの�
 - 2つの `Panic` は `abort_to` で最も近い `try_panic` に届け、なければその文言の実行時エラー (`RunFault::Panicked`) にする。位置は呼び出しの `Loc` である。どちらの `Panic` も起こしうる C の行は巻き戻しの地点を持つので ([LIR](lir.md) の「巻き戻しの地点」)、借りていた引数は巻き戻しの表が手放す。この2つは extern の誤りの振り分け (`failed`) を通さない
 - C の行は引数を借り、消費しない。`MutUnboxedArray` とハンドルの引数は呼び手のスロットに残り、translate がそれを結果と組にして返す ([Core IR](core-ir.md) の「組を返す extern」)
 - `CHandle`は`lin`の印の`Foreign`の物体の中身で、Cのポインタとその型のdtorを持つ`HandleCell`への共有の参照 (`Arc`) を持つ。ポインタは参照外ししないので、`eml_rows::ffi::handle_new`が来歴を持たせずに作る (`without_provenance_mut`)。ハンドルを引数に取る`blocking`の呼び出しは、それぞれCが戻るまでセルへの参照を持つ。dtorは最後の参照が消えたときに1回だけ呼ぶ。ふつうは物体を解放したworkerのスレッドで呼び、`blocking`の呼び出しが物体より長く生きるときは、Cが戻った直後のプールのスレッドで呼ぶ。dtorのない型では何も呼ばない
+- ネイティブのコードは、同じ変換を橋渡しなしに下ろす。範囲の検査を先にすべて済ませ、引数をこの表と同じ位置で貸し、Cの関数を直接呼び、結果を同じく値に戻す。2つの`Panic`の文言も、同じ`Raise::text`が作る ([ネイティブの実行系](native.md)の「Cの関数の呼び出し」)
 
 ### `blocking` の呼び出し
 

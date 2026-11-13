@@ -15,7 +15,6 @@ pub enum Form {
     Prim,
     Clause,
     Prompt,
-    CRow,
 }
 
 impl Form {
@@ -27,7 +26,6 @@ impl Form {
             Form::Prim => "prim",
             Form::Clause => "clause",
             Form::Prompt => "prompt",
-            Form::CRow => "c row",
         }
     }
 }
@@ -106,8 +104,7 @@ fn call_form(call: &Call, note: &mut impl FnMut(Form, Option<&'static str>)) {
 fn extern_form(ext: ExternRef, note: &mut impl FnMut(Form, Option<&'static str>)) {
     match ext {
         ExternRef::Std(row) if row.is_async() => note(Form::AsyncRow, Some(row.row().name)),
-        ExternRef::Std(_) => {}
-        ExternRef::C(_) => note(Form::CRow, None),
+        ExternRef::Std(_) | ExternRef::C(_) => {}
         ExternRef::CSubmit(_) | ExternRef::CTake(_) => note(Form::BlockingC, None),
     }
 }

@@ -1,6 +1,7 @@
 mod abi;
 mod abort;
 mod apply;
+mod c;
 mod calls;
 mod clif;
 mod common;

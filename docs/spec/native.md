@@ -156,7 +156,7 @@ censusは、VMの検査モードに代わる、参照の数の安全網である
 - `return`は葉を順に返し、`jump`は引数をブロックの引数として渡す。`int`の`switch`は、値をcaseと比べる (`cranelift_frontend::Switch`)。タグと文字列の`switch`は「データ」にある。`default`のない`switch`は、合うcaseがなければtrapする。検証したプログラムでは、これは起こらない。定数の`switch`は、VMと同じくコンパイルの時点で行き先を決める
 - 直接の呼び出しは呼ぶ先の関数の記号への`call`で、直接の末尾呼び出しは`return_call`である。`ctx`に続く各引数は、呼ぶ先の引数のReprで作る。複数の値を返す呼び出しは、結果の葉を順に変数に束縛する。呼ぶ先はどれもmoduleが`Linkage::Local`で定義する関数なので、Craneliftはそれを`colocated`にする。エントリはmoduleの外から取り込む記号なので、`colocated`にならない。末尾呼び出しは呼ぶ側のフレームを呼ぶ先のフレームに置き換える。だから末尾呼び出しの連鎖 (自分への末尾呼び出しを含む) は一定のスタックで動き、呼ぶ先は呼ぶ側より多くの引数をスタックで受けてよい。末尾でない呼び出しの後には「巻き戻しの地点」の`Call`の確かめを出す。末尾呼び出しの後には何も確かめない。呼ぶ先が戻ったときに、呼ぶ側の呼び手が確かめるからである
 - どの関数とthunkもmoduleの記号を持つ。その名前はLIRの名前と種類だけで決まり、読み込みの順やアドレスにはよらない。LIRの関数は`f:<名前>`、thunkは`eml$thunk$<引数>$<結果>`で、種類はそれぞれ`i` (`I64`) か`f` (`F64`) と書く。置いた失敗を上げる関数は`eml$raise`である (「巻き戻しの地点」)。関数の値のエントリは`c<k>:<名前>`、`apply`の補助の関数は`eml$apply$<m>`、PAPのアダプタは`eml$pap$<r>`である (「関数の値」)。moduleは、`eml_nrt::entries()`のすべてのエントリ、`eml$raise`、`eml$apply$<m>`を、プログラムの関数より前に決まった順で宣言する。関数の値のエントリは、データの記号と同じく本体が初めて使うときに宣言し、すべての本体の後で定義する。PAPのアダプタはコードが名指さず`Image.paps`だけが指すので、最後に宣言して定義する。moduleが定義する記号はどれもローカルのリンケージを持つので、直接の呼び出しは領域の中のPC相対の呼び出しになる。`NativeMachine::symbols()`は、マシンが定義したすべての関数 (`eml$raise`、関数の値のエントリ、`apply`の補助の関数、PAPのアダプタを含む) とthunkの名前とコードの範囲を返す。`Image.functions[i].{code, size}`と合わせて、コードのアドレスから名前を引ける
-- マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、`eml_nrt::entries()`のすべてのエントリを記号として登録し、どの関数を定義するよりも前にプログラムのすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。ただし記号の宣言は領域を使わず、名前の重なりは下ろしの誤りなので、データの記号と関数の値のエントリの宣言が失敗したら、下ろしはpanicする。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`、`call`、`entry_of`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
+- マシンは1回だけ読み込む。`NativeMachine`は`load`で、`abi::jit_builder`により自分のJITのmodule 1つと領域1つを作り、`eml_nrt::entries()`のすべてのエントリと、`Linked`がつないだCの関数とdtorを記号として登録し (「Cの関数の呼び出し」)、どの関数を定義するよりも前にプログラムのすべての関数を宣言して、1回finalizeする。2回目の`load`は、1回目が失敗していても`LoadError::Loaded`を返す。実行の入口は`float`でない結果の葉をちょうど1つ持たなければならず、そうでなければ`LoadError::Entry`である。`Linked`がプログラムの表に合わなければ`LoadError::LinkMismatch`である。領域が尽きたとき (`ModuleError::Allocation`) は`LoadError::RegionFull`で、ほかのCraneliftの誤りは`LoadError::Module`である。ただし記号の宣言は領域を使わず、名前の重なりは下ろしの誤りなので、データの記号と関数の値のエントリの宣言が失敗したら、下ろしはpanicする。定義が1つでも失敗したら、マシンはその後何も定義せず、finalizeもしない。途中まで定義したmoduleをfinalizeするとpanicするためである。`run`、`call`、`entry_of`は、種類の並びごとのthunkを、初めて要るときに定義してfinalizeする。その定義で領域が尽きたときも、誤りの文は同じである
 - `load`はプログラムを信頼する。プログラムは実行の前提を満たさなければならない ([LIR](lir.md)の「実行の前提」)。ネイティブのコードが実行時に確かめることは、VMの速いモードが確かめることを超えない ([オブジェクトモデル](object-model.md)の「受け入れる制約」) ので、満たさないプログラムの振る舞いは未定義である。verifierはこの前提の一部しか確かめない。`load`は安全な関数で、前提を約束するのは呼ぶ側である。debugのビルドでは、`load`はプログラムに所有の段のverifierを通し、通らなければ`internal error: invalid LIR at the native load: ...`でpanicする。VMと違ってネイティブには検査モードがないので、verifierが断るプログラムを読み込むテストはない
 - マシンのworkerはそのmoduleと領域を共有し、プロセス全体のmoduleはない。マシンは、`close`でも`Drop`でも、終わるときに領域を`free_memory`で返す。どのrunもworkerのスレッドが終わってから戻るので、そのとき領域のコードを実行しているものはない
 - `NativeMachine::run`は入口を実行する。入口は引数を取らない (取れば内部の誤り`the entry function takes parameters`を返す)。`eml_native::execute`は、マシンを作り、プログラムを読み込んで実行し、マシンを閉じる。読み込みの誤りは、入口の関数を名指す内部の誤りになる。その文は、領域が尽きたときは`the native code region is full`、ほかのmoduleの誤りでは`the native code cannot be built`である。`eml_nrt::SUPPORTED`が偽の対象では、`execute`は読み込む前に、`NativeMachine::run`、`call`、`entry_of`はthunkを作る前に、内部の誤り`native code is not supported on this machine`を返す
@@ -214,7 +214,7 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - 行のエントリは、サービスと同じく、`run`が入ったコードからだけ呼ぶ
 - 生成したコードは、`Called`の行 (「行の下ろし方」) をどれも`eml_x_<Variant>(ctx, 引数...)`の呼び出しに下ろし、各引数を行の引数のReprで作る。戻る`faults`の行の後には「巻き戻しの地点」の`Faults`のコードを、`faults`のない行の後には何も出さない。結果が`never`の行の後には`Never`のコードを出す。`eml_x_Exit`の後は何も上げずに後始末へ進み、`eml_x_Panic`の後は行の純粋さで上げる。`eml_x_Panic`に渡したメッセージは、行が消費するので地点の所有に入らず、後始末はそれを手放さない
 
-利用者のCの関数の呼び出しの補助`eml_x_c_narrow`、`eml_x_c_handle_ptr`、`eml_x_c_handle_new`は、接頭辞のない`eml_nrt/src/c.rs`の表`C`にある。ネイティブのコードは、利用者のCの関数の呼び出しの前後でこれらを呼ぶ。externの行の一覧の行ではなく、どの表も読まない。関数の名前を受ける補助は、それを読み込み時の値の文字列 (`s:<名前>`。「値と定数」) の語で受けて借り、何も手放さない。どれも`run`が入ったコードからだけ呼ぶ。
+利用者のCの関数の呼び出しの補助`eml_x_c_narrow`、`eml_x_c_handle_ptr`、`eml_x_c_handle_new`は、接頭辞のない`eml_nrt/src/c.rs`の表`C`にある。ネイティブのコードは、利用者のCの関数の呼び出しの前後でこれらを呼ぶ (「Cの関数の呼び出し」)。externの行の一覧の行ではなく、どの表も読まない。関数の名前を受ける補助は、それを読み込み時の値の文字列 (`s:<名前>`。「値と定数」) の語で受けて借り、何も手放さない。どれも`run`が入ったコードからだけ呼ぶ。
 
 - `eml_x_c_narrow(ctx, name: obj, arg: int, int: int, value: int) -> never`は、関数`name`についての`eml_rows::ffi::Raise::Narrowing { arg, int, value }`の文言を`worker::park_panic`で置いて戻る。だから、`eml_x_Panic`の後と同じくfaultは`Fault::Engine`になる。`arg`は、VMと同じく、引数のない関数のUnitの引数も含めて関数の引数を1から数える。`int`はCの幅の番号 (`CInt::code`。`I64`は0、`I32`は1、`SizeT`は2) である
 - `eml_x_c_handle_ptr(ctx, handle: obj) -> i64`は、借りたハンドルの物体が持つCのポインタ (`Heap::foreign::<CHandle>`) を返す。読むだけで、確保も解放もせず、参照の数も変えない
@@ -244,6 +244,28 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 - `Float`の比較は`fcmp`で、結果を0か1に広げる。`!=`は`NotEqual`で順序のないときも真であり、ほかの比較はNaNが絡むと偽である
 - 失敗の分岐の先は冷たいコードで、`eml_rt_fault_arith(ctx, kind)`で`Fault::Arith`を置き、純粋さ`Panics`で上げる (「巻き戻しの地点」の`Arith`)。`kind`は`ARITH_DIVISION_BY_ZERO` (0) か`ARITH_INTEGER_OVERFLOW` (1) である。誤りは文の位置を持ち、文が位置を持たなければ関数を名指す
 - 失敗しない行は巻き戻しの地点を持たず、熱いコードに分岐を足さない
+
+## Cの関数の呼び出し
+
+生成したコードは、`blocking`でない利用者のCの関数`f`の文`let x = extern f(args)` (`ExternRef::C`) を、import`eml_c$<fの正規の名前>`の直接の呼び出しに下ろす。引数と結果は、VMと同じく変換する ([VM](vm.md)の「C の関数の命令」)。呼び出しの前後で走るのは、範囲の確かめと、貸すエントリと、「externの失敗」の補助だけである。
+
+- Cの関数はimport`eml_c$<名前>`である。そのシグネチャは、`eml_clink::c_signature`が`CFunction::c_signature()`から対象のCの既定の呼び出し規約で作るもので、橋渡しが使うシグネチャと同じである。拡張の印は持たない。dtorを持つハンドルの型のdtorは、シグネチャ`(i64)`のimport`eml_cd$<ハンドルの型の名前>`である。生成したコードは、そのアドレスを取るだけで、呼ばない。どのimportも`abi::declare_import`が宣言する
+- `NativeMachine::load`は、まず`Linked::fits`で、`Linked`の宣言をプログラムの表と比べる。違えば、何も作らずに`LoadError::LinkMismatch` (`the linked C functions are not the program's`) を返す。次に`JITBuilder::symbol`で、各`CCall`の`callee`を`eml_c$<名前>`として、`Linked::dtors()`の各dtorを`eml_cd$<名前>`として登録する。生成したコードは、Cの関数とdtorをこの記号でだけ名指す。プロセスのアドレスを即値として持たず、マシンの表を指すポインタも持たない
+
+文は次の順に下ろす。
+
+1. 引数を、行のReprの語として作る
+2. 狭める幅の`Int`の引数を、引数の順に確かめる。`int32_t`は`sextend(ireduce.i32(v)) == v`で、`size_t`は`v >= 0`で確かめる。値が収まらなければ、冷たい道が`eml_x_c_narrow(ctx, name, k, code, v)`を呼び、行の純粋さで`eml$raise`により上げ、巻き戻しの地点の後始末へ進む。`name`は読み込み時の値の文字列`s:<名前>`、`k`は引数のない関数のUnitの引数も含めてすべての引数を1から数えた位置、`code`は幅の`CInt::code`である
+3. ポインタとハンドルの引数を、引数の順に貸す。`String`と`Bytes`は`eml_rt_text_payload`で、`UnboxedArray`は`eml_rt_unboxed_ptr`で、`MutUnboxedArray`は`eml_rt_unboxed_ptr_mut`で、ハンドルは`eml_x_c_handle_ptr`で貸す。Unitの引数は何も渡さない
+4. `eml_c$<名前>`をふつうの`call`で呼ぶ。`int32_t`の引数は`ireduce.i32(v)`として渡し、その上の32ビットはCのABIが決めない。`int64_t`と`size_t`は語のまま、`double`は`f64`で渡す
+5. 結果は、voidならUnitの語、`int32_t`なら明示の`sextend`で広げた語、`int64_t`と`size_t`なら生の語、`double`なら`f64`である。ハンドルの結果は、`dtor`として`eml_cd$<ハンドルの型の名前>`のアドレスか0を添えて`eml_x_c_handle_new(ctx, name, dtor, ptr)`に渡し、その呼び出しのすぐ後でfaultの語を確かめる (「巻き戻しの地点」の`Faults`)
+
+- 3と4は、下ろしの1つの関数`lend_and_call`が出す。失敗を上げうる文は位置の行を1つと後始末を1つ持ち、どの冷たい道 (範囲の確かめのそれぞれと、nullのハンドル) もその後始末へ進む。範囲を確かめる引数もハンドルの結果も持たないCの行は、巻き戻しの地点を持たず、呼び出しの後に何も出さない
+- 貸す窓は、最初の貸すエントリからCの関数が戻るまでである。範囲の確かめはどれもその前にある。窓の中で走るのは4つの貸すエントリだけで、どれも借りた物体をヒープから1度読むだけで、確保も解放もせず、参照の数も変えない。`eml_x_c_handle_ptr`は中身が`CHandle`であることも確かめ、そうでなければ内部の誤りを記録し、Cが走る前に致命的な誤りの道からrunを終える。文の中に安全点も巻き戻しの地点もない。文は物体の引数をどれも借りるので、呼び手の参照が呼び出しの間それを生かす。`MutUnboxedArray`は一意で、このworkerのものである。ハンドルの物体はセルを生かすので、Cがポインタを使う間dtorは走らない ([オブジェクトモデル](object-model.md)の「`unsafe` の核」のT16)。`eml_x_c_handle_new`は、Cが戻った後でだけ確保する
+- `eml_x_c_handle_new`は`unsafe`のエントリで、その約束は次のとおりである。`ptr`と`dtor`は`eml_rows::ffi::handle_new`の約束を満たす。生成したコードは、`ptr`に、宣言した結果がそのハンドルの型である`eml_c$<名前>`の呼び出しの結果を、`dtor`に、0か、import`eml_cd$<そのハンドルの型の名前>`のアドレスを渡して、これを満たす。`load`はそのimportを、`Linked::fits`が成り立った後でだけ`Linked::dtors()`の要素に結ぶ
+- Cの関数は、呼んだworkerのスタックの上で走る。`hard`より下には少なくとも1 MiBがある (「安全点」)。それより深いスタックを要するCの関数は、スタックのガードページに触れてプロセスを止める
+- Cが走る間、ネイティブのコードは止める要求も割り込みも読まない。止める要求は、Cが戻った後の次の安全点で見る
+- Cの関数は、呼び出しをまたいで巻き戻ってはならない (C++の例外、SEH)。生成したコードは、そのための巻き戻しの情報を登録しないためである。また、戻った後に貸したポインタを持ち続けてはならない ([宣言](declarations.md)の「`extern "C"`」)
 
 ## RC
 
@@ -316,12 +338,12 @@ LIRの関数はどれも入口の安全点で始まる。Craneliftの関数の�
 | `Prim` | `prim` | `Prim::EmptyMutArray`のほかのすべての`Rhs::Prim` |
 | `Clause` | `clause` | `Call::Clause`と、`LirFn.clause`を持つ関数 |
 | `Prompt` | `prompt` | 着地の印 (`prompt`) を持つ`Call::Apply` |
-| `CRow` | `c row` | `ExternRef::C` |
 
 - 形は、何度現れても1度だけ報告する
 - `rows::INLINE`は、CLIFの演算としてインラインに下ろす45の行である。VMの算術と比較の専用の命令 ([VM](vm.md)の「基本操作と extern」) の行から`FloatMod`を除いたものである。Craneliftの`LibCall`には`fmod`がないので、`FloatMod`は呼ぶ行にする
 - タスクの行でも`Par`でもなく、`rows::INLINE`にない行は、エントリ`eml_x_<Variant>`の呼び出しとして下ろす。`rows::lowering(ext)`は、行がこの2つのどちらであるかを返し、タスクの行と`Par`には`None`を返す (「行の下ろし方」)
 - `prim empty_mut_array`は、読み込み時の値`a:mut`を読むので断らない (「値と定数」)
+- `blocking`でない利用者のCの関数の行 (`ExternRef::C`) は断らず、`eml_c$<名前>`の直接の呼び出しに下ろす (「Cの関数の呼び出し」)
 
 ## VMとの違い
 

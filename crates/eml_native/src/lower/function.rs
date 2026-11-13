@@ -226,6 +226,15 @@ impl<'a, 'b, M: Module> FnLower<'a, 'b, M> {
             Stmt::Let {
                 var,
                 rhs:
+                    Rhs::Extern {
+                        ext: ExternRef::C(id),
+                        args,
+                        at,
+                    },
+            } => self.c_row(block, position, *var, *id, args, *at),
+            Stmt::Let {
+                var,
+                rhs:
                     Rhs::Call(Call::Apply {
                         callee,
                         args,
