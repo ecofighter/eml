@@ -168,7 +168,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 | `Std.Net.TcpListener` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、`eml_vm` の Rust の値 `NetListener` ([VM](vm.md) の「操作の記録」) |
 | `Std.Net.TcpStream`、`Std.Stream.Reader`、`Std.Stream.Writer` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、`eml_vm` の Rust の値 `IoStream` ([VM](vm.md) の「操作の記録」) |
 | `Std.Exec.Child` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、`eml_vm` の Rust の値 `ExecChild` ([VM](vm.md) の「操作の記録」) |
-| `Std.Tls.Conn` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、`eml_vm` の Rust の値 `TlsConn` ([標準ライブラリ](stdlib.md) の「`Std.Tls`」) |
+| `Std.Tls.Conn` | `Foreign`、`lin`ビットを立てる | 破棄処理の表と、`eml_rows`のRustの値`TlsConn` ([標準ライブラリ](stdlib.md) の「`Std.Tls`」) |
 | `Std.Gui.Ui` | `Foreign`、`lin`ビットを立てる | 破棄処理の表と、`eml_vm`のRustの値`UiToken` (世代と回収の旗。破棄処理は旗を立てるだけである。[標準ライブラリ](stdlib.md)の「`Std.Gui`」) |
 
 ### クロージャ

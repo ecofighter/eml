@@ -2,14 +2,14 @@
 //! の `Foreign` に入れる。ソケットの I/O は `std/Tls.em` が `Std.Net` で行うので、ここには待ちも driver もない。
 //!
 //! feature `tls`を外した処理系では、`Conn`を値のない型にし、`client_conn`がいつも`not available`で失敗する。値を
-//! 作れないので、ほかの腕には届かない。`vm.rs`にcfgを置かないため、両方で同じ名前とメソッドを使う。
+//! 作れないので、ほかの腕には届かない。呼び出し側にcfgを置かないため、両方で同じ名前とメソッドを使う。
 
 use eml_rt::externs;
 use eml_rt::{Ctx, Mode, Word};
 
-use crate::cells::{self, Found, LINE_LIMIT, READ_ROOM};
-use crate::driver::DriverKind;
-use crate::error::RunFault;
+use eml_sched::cells::{self, Found, LINE_LIMIT, READ_ROOM};
+use eml_sched::driver::DriverKind;
+use eml_sched::error::RunFault;
 
 #[cfg(feature = "tls")]
 use eml_tls::{Conn, HANDSHAKING, PEER_CLOSED};
@@ -18,9 +18,9 @@ use off::{Conn, HANDSHAKING, PEER_CLOSED};
 
 /// TLSの接続の設定の誤りの種類 (docs/spec/stdlib.mdの「`Std.Tls`」)。
 #[cfg(feature = "tls")]
-pub(crate) const SETUP_KIND: i64 = externs::IO_OTHER;
+pub const SETUP_KIND: i64 = externs::IO_OTHER;
 #[cfg(not(feature = "tls"))]
-pub(crate) const SETUP_KIND: i64 = externs::IO_NOT_AVAILABLE;
+pub const SETUP_KIND: i64 = externs::IO_NOT_AVAILABLE;
 
 #[cfg(not(feature = "tls"))]
 mod off {
@@ -72,7 +72,7 @@ mod off {
 /// `Std.Tls.Conn` の `Foreign` の中身。`line_from` は行を探し終えた位置で、`plaintext()[..line_from]` に `\n` はない。
 /// 平文を返すのは `TlsConn::consume` だけで、そこで 0 に戻す。`push_tls` は平文の後ろに足すだけなので、この関係を
 /// 崩さず、次の `line_ready` は新しく届いたバイトだけを探せる。
-pub(crate) struct TlsConn {
+pub struct TlsConn {
     conn: Conn,
     line_from: usize,
 }
@@ -131,7 +131,7 @@ unsafe fn tls_conn<M: Mode>(ctx: &Ctx<M>, conn: Word) -> Result<*mut TlsConn, Ru
 
 /// runの接続が信頼する根。runのdriverの種類からworkerの上で選ぶ (docs/spec/vm.mdの「時計と driver」)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Roots {
+pub enum Roots {
     /// `Machine`が自分で作ったテストのdriver: 渡したCAだけを根にし、`fixtures::NOW`の時刻で確かめる。
     Fixtures,
     /// OSの検証器。OSの根に加えて、渡したCAを信頼する。
@@ -139,7 +139,7 @@ pub(crate) enum Roots {
 }
 
 impl Roots {
-    pub(crate) fn of(kind: DriverKind) -> Roots {
+    pub fn of(kind: DriverKind) -> Roots {
         if kind == DriverKind::Virtual {
             Roots::Fixtures
         } else {
@@ -158,7 +158,7 @@ impl Roots {
 
 /// クライアントの`Foreign`の中身を作る。`Ctx`には触れない。誤りはサーバーの名前、信頼、設定の順に確かめる。
 #[cfg(feature = "tls")]
-pub(crate) fn client_conn(roots: Roots, host: &str, pem: &[u8]) -> Result<TlsConn, String> {
+pub fn client_conn(roots: Roots, host: &str, pem: &[u8]) -> Result<TlsConn, String> {
     eml_tls::Name::parse(host)
         .and_then(|name| {
             roots
@@ -171,13 +171,13 @@ pub(crate) fn client_conn(roots: Roots, host: &str, pem: &[u8]) -> Result<TlsCon
 
 /// クライアントの`Foreign`の中身を作る。`Ctx`には触れない。誤りはサーバーの名前、信頼、設定の順に確かめる。
 #[cfg(not(feature = "tls"))]
-pub(crate) fn client_conn(roots: Roots, host: &str, pem: &[u8]) -> Result<TlsConn, String> {
+pub fn client_conn(roots: Roots, host: &str, pem: &[u8]) -> Result<TlsConn, String> {
     let _ = (roots, pem);
     Err(format!("cannot set up TLS for {host}: not available"))
 }
 
 /// `submit_push`の仕事の本体。プールのスレッドで走り、`Conn`の中身を値で返す。
-pub(crate) fn push_conn(mut c: TlsConn, b: Vec<u8>) -> TlsConn {
+pub fn push_conn(mut c: TlsConn, b: Vec<u8>) -> TlsConn {
     c.conn.push_tls(&b);
     c
 }
@@ -186,7 +186,7 @@ pub(crate) fn push_conn(mut c: TlsConn, b: Vec<u8>) -> TlsConn {
 ///
 /// # Safety
 /// `bytes` は生きた `Bytes` で、`conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn push_tls<M: Mode>(
+pub unsafe fn push_tls<M: Mode>(
     ctx: &mut Ctx<M>,
     bytes: Word,
     conn: Word,
@@ -209,7 +209,7 @@ pub(crate) unsafe fn push_tls<M: Mode>(
 ///
 /// # Safety
 /// `push_tls` と同じ。
-pub(crate) unsafe fn write_plain<M: Mode>(
+pub unsafe fn write_plain<M: Mode>(
     ctx: &mut Ctx<M>,
     bytes: Word,
     conn: Word,
@@ -224,7 +224,7 @@ pub(crate) unsafe fn write_plain<M: Mode>(
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn push_eof<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
+pub unsafe fn push_eof<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     unsafe { (*tls_conn(ctx, conn)?).conn.push_eof() };
     Ok(conn)
 }
@@ -233,10 +233,7 @@ pub(crate) unsafe fn push_eof<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<W
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn send_close_notify<M: Mode>(
-    ctx: &mut Ctx<M>,
-    conn: Word,
-) -> Result<Word, RunFault> {
+pub unsafe fn send_close_notify<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     unsafe { (*tls_conn(ctx, conn)?).conn.send_close_notify() };
     Ok(conn)
 }
@@ -245,7 +242,7 @@ pub(crate) unsafe fn send_close_notify<M: Mode>(
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn pull_tls<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
+pub unsafe fn pull_tls<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     let mut out = Vec::new();
     unsafe { (*tls_conn(ctx, conn)?).conn.pull_tls(&mut out) };
     Ok(unsafe { ctx.heap_mut() }.alloc_bytes(&out))
@@ -255,7 +252,7 @@ pub(crate) unsafe fn pull_tls<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<W
 ///
 /// # Safety
 /// `buf` は呼ぶ側が持つ `Bytes` の参照で、`conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn read_plain<M: Mode>(
+pub unsafe fn read_plain<M: Mode>(
     ctx: &mut Ctx<M>,
     buf: Word,
     conn: Word,
@@ -275,7 +272,7 @@ pub(crate) unsafe fn read_plain<M: Mode>(
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn status<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
+pub unsafe fn status<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
     Ok(i64::from(unsafe { (*tls_conn(ctx, conn)?).conn.status() }))
 }
 
@@ -283,10 +280,7 @@ pub(crate) unsafe fn status<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn error_message<M: Mode>(
-    ctx: &mut Ctx<M>,
-    conn: Word,
-) -> Result<Word, RunFault> {
+pub unsafe fn error_message<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     let message = unsafe { (*tls_conn(ctx, conn)?).conn.error_message() };
     Ok(ctx.fresh_string(&message))
 }
@@ -304,7 +298,7 @@ fn ready_line(c: &mut TlsConn) -> Line {
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn line_ready<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
+pub unsafe fn line_ready<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<i64, RunFault> {
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
     Ok(match ready_line(c) {
         Line::More => 0,
@@ -318,7 +312,7 @@ pub(crate) unsafe fn line_ready<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result
 ///
 /// # Safety
 /// `conn` は `tls_conn` の前提を守る。
-pub(crate) unsafe fn take_line<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
+pub unsafe fn take_line<M: Mode>(ctx: &mut Ctx<M>, conn: Word) -> Result<Word, RunFault> {
     let c = unsafe { &mut *tls_conn(ctx, conn)? };
     let Line::Ready(n) = ready_line(c) else {
         return Err(RunFault::Internal(

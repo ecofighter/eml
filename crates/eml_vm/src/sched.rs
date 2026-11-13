@@ -1277,17 +1277,17 @@ mod tests {
                     epoch: std::time::Instant::now(),
                 },
                 DriverKind::Real,
-                crate::tls::Roots::Platform,
+                eml_rows::tls::Roots::Platform,
             ),
             (
                 RunClock::Injected,
                 DriverKind::Injected,
-                crate::tls::Roots::Platform,
+                eml_rows::tls::Roots::Platform,
             ),
             (
                 RunClock::Virtual(Arc::default()),
                 DriverKind::Virtual,
-                crate::tls::Roots::Fixtures,
+                eml_rows::tls::Roots::Fixtures,
             ),
         ] {
             let run = Arc::new(Run::new(2, Seat::Merged, None, clock, Arc::default()));
@@ -1301,7 +1301,7 @@ mod tests {
                 Arc::new(Shared::new(Registry::new(Vec::new(), 2))),
             );
             assert_eq!(sched.driver_kind, kind);
-            assert_eq!(crate::tls::Roots::of(sched.driver_kind), roots);
+            assert_eq!(eml_rows::tls::Roots::of(sched.driver_kind), roots);
         }
     }
 

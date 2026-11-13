@@ -1,4 +1,4 @@
-//! `tls` を外した `eml_vm`。`Std.Tls` の接続は `NotAvailable` を投げる (docs/spec/stdlib.md の「`Std.Tls`」)。
+//! `tls`を外した`eml_rows`。`Std.Tls`の接続は`NotAvailable`を投げる (docs/spec/stdlib.mdの「`Std.Tls`」)。
 
 const SRC: &str = "import Async
 import Tls

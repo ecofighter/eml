@@ -34,8 +34,5 @@ mod spawns;
 mod structs;
 mod tags;
 mod tasks;
-// tls を外した振る舞いは OS で分けない (docs/implementation/testing.md の「feature の組み合わせの確認」)
-#[cfg(not(feature = "tls"))]
-mod tls_off;
 mod variants;
 mod workers;

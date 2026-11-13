@@ -9,10 +9,9 @@ autotests = false
 [lib]
 doctest = false
 
-# tlsを外すとStd.Tlsの腕はNotAvailableを投げる。guiを外すとStd.Guiを開けず、NotAvailableを投げる。gui-nativeは
-# ネイティブのGUIのbackendを足し、ないとnativeのbackendを選んだ`Gui.run`がNotAvailableを投げる
+# guiを外すとStd.Guiを開けず、NotAvailableを投げる。gui-nativeはネイティブのGUIのbackendを足し、ないとnativeの
+# backendを選んだ`Gui.run`がNotAvailableを投げる
 [features]
-tls = ["dep:eml_tls", "eml_io/tls"]
 gui = ["dep:eml_gui"]
 gui-native = ["gui", "eml_gui/native"]
 
@@ -25,7 +24,6 @@ eml_io.workspace = true
 eml_rows.workspace = true
 eml_rt.workspace = true
 eml_sched.workspace = true
-eml_tls = { workspace = true, optional = true }
 rustc-hash.workspace = true
 
 [dev-dependencies]

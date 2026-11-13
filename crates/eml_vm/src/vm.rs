@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rows::rows::{Args, Value};
+use eml_rows::tls;
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::layout::data_first;
 use eml_rt::{
@@ -30,7 +31,6 @@ use crate::sched::{
     ENTRY, JOB, JoinId, JoinNode, Memory, Outcome, PLACED, POLL_EVERY, Policy, Scheduler, TaskId,
     TaskState,
 };
-use crate::tls;
 use crate::workers::{Entry, EntryKind, Notice, Ready};
 use crate::{RunCounts, RuntimeError};
 

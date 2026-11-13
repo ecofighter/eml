@@ -9,7 +9,7 @@ autotests = false
 [lib]
 doctest = false
 
-# testingはcells.rsのテストの道具をeml_vmの単体テストに見せる。有効にするのはdev-dependenciesだけで、切り替えるのは
+# testingはcells.rsのテストの道具をeml_vmとeml_rowsの単体テストに見せる。有効にするのはdev-dependenciesだけで、切り替えるのは
 # 項目だけである (docs/implementation/architecture.md の「crate の依存関係」)
 [features]
 testing = []

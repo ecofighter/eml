@@ -37,7 +37,6 @@ mod jobs;
 mod monitor;
 mod op;
 mod sched;
-mod tls;
 mod vm;
 mod workers;
 

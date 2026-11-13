@@ -9,7 +9,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 ## 置き場所
 
 - バイトコードは LIR から直接作り、中間に別の IR は挟まない。命令列への変換は1回の走査で済むためである
-- crate `eml_vm`は、workspaceのcrateでは`eml_lir`、`eml_io`、`eml_rows`、`eml_rt`、`eml_sched`、`eml_extern`、`eml_cabi`と、feature `tls`の下の`eml_tls`、feature `gui`の下の`eml_gui`だけに依存し、フロントエンドには依存しない。中身は、LIRのプログラムを`CodeBase<M>`に変換するコード生成 (`compile`) と、`CodeBase`を`Ctx<M>`の上で実行するVMの繰り返しの2つである
+- crate `eml_vm`は、workspaceのcrateでは`eml_lir`、`eml_io`、`eml_rows`、`eml_rt`、`eml_sched`、`eml_extern`、`eml_cabi`と、feature `gui`の下の`eml_gui`だけに依存し、フロントエンドには依存しない。中身は、LIRのプログラムを`CodeBase<M>`に変換するコード生成 (`compile`) と、`CodeBase`を`Ctx<M>`の上で実行するVMの繰り返しの2つである
 - crate `eml_sched`は、VMとネイティブの実行系が共有するタスクのセルの核 (`cells.rs`)、実行時エラーの型 (`error.rs`)、時計の選び方 (`driver.rs`)、自己パイプ (`doorbell.rs`)、メインのworkerの`Park` (`park.rs`)、実行の設定と結果の型 (`config.rs`の`RunConfig`、`Finished`、`RunStats`、方針を選ぶ`Sched`、`Seat`) を持ち、workspaceのcrateでは`eml_io`と`eml_rt`だけに依存する ([アーキテクチャ](../implementation/architecture.md)の「crate の依存関係」)
 - `eml_vm`は、`execute`のシグネチャの型だけを再公開する。`eml_cabi`の`Linked`、`eml_rt`の`HostRef`、`eml_sched`の`RunConfig`、`Finished`、`RuntimeError`である。`eml_sched`のほかの型 (`RunStats`、`Sched`、`Seat`、`RunFault`、`Clock`、`Doorbell`、`ParkFactory`など) は、呼び出し側が`eml_sched`から名指す。実行時エラーの型は1つだけなので、`RuntimeError`と呼ぶ。誤りの種類は`RunFault`と呼ぶ。`Fault`にすると、包んでいる`eml_rt::Fault`と名前がぶつかるためである
 - `eml_lir` は、データの物理的な形を決める関数 `LayoutCtor::shape` を持つ ([オブジェクトモデル](object-model.md) の「ペイロード」)

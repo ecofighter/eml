@@ -9,12 +9,23 @@ autotests = false
 [lib]
 doctest = false
 
+# tlsを外すとStd.Tlsの腕はNotAvailableを投げる。`eml_io/tls`は有効にしない: `tls.localhost`の終端はdriverの側にあり、
+# 使うのはツールのテストの道具だけである (docs/implementation/architecture.mdの「crate の依存関係」)
+[features]
+tls = ["dep:eml_tls"]
+
 # コンパイラとエンジン (eml_lir、eml_core_ir、eml_vm、eml_native、eml_clink) とCraneliftには依存しない
 # (docs/implementation/architecture.md の「crate の依存関係」)
 [dependencies]
 eml_extern.workspace = true
 eml_rt.workspace = true
 eml_sched.workspace = true
+eml_tls = { workspace = true, optional = true }
+
+# eml_sched/testingは、tls.rsの単体テストがcells.rsのtest_ctxを使うためにある
+[dev-dependencies]
+eml_sched = { workspace = true, features = ["testing"] }
+eml_test_support = { workspace = true, features = ["run"] }
 
 [[test]]
 name = "integration"
