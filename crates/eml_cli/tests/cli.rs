@@ -1022,38 +1022,41 @@ main () = println (show (Env.get \"BAD\"))
     );
 }
 
-/// 子のプロセスを待つ間に SIGINT が来ると、子が終わった後で止まり、終了コード 130 で終わる。子は自分のプロセス
-/// グループに置き、端末の Ctrl-C と同じくグループ全体に送る。子も SIGINT で終わるので、eml は待ちから戻る。起動と同時に
-/// 届いた SIGINT は子に届かないことがあるので、子が標準エラーに書いた行を読んで、子が動いてから送る
-/// (docs/spec/stdlib.md の「`Proc`」)。
+/// 子のプロセスを待つ間にSIGINTが来ると、子が終わった後で止まり、終了コード130で終わる。OSは端末のCtrl-Cをグループの
+/// プロセスごとに別々に届け、emlが受け取る前に子が終わるとrunは自分の終了コードで終わることがあるので、emlに送ってから
+/// 子に送る。子もSIGINTで終わるので、emlは待ちから戻る。子が標準エラーに書いたプロセスの番号を読んで、子が動いてから送る
+/// (docs/spec/stdlib.mdの「`Proc`」)。並列の重い負荷の下では、emlがスレッドでシグナルを塞ぐ形の知られた不具合のため、
+/// まれに失敗する (2000回のうち4回。docs/future/roadmap.mdの「マルチコア対応」)。
 #[cfg(unix)]
 #[test]
 fn an_interrupt_stops_a_program_waiting_for_a_child_with_130() {
     use std::io::{BufRead, BufReader, Read};
-    use std::os::unix::process::CommandExt;
     use std::time::{Duration, Instant};
 
     let text = "import Proc\n\
 main : Unit -> <IO, Panic> Unit
-main () = println (show (Proc.run `sh -c 'echo started >&2; exec sleep 30'`))
+main () = println (show (Proc.run `sh -c 'echo $$ >&2; exec sleep 30'`))
 ";
     let dir = temp_project("cli-sigint-child", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
         .arg("main.em")
         .current_dir(&dir)
-        .process_group(0)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
-    let mut started = String::new();
-    stderr.read_line(&mut started).unwrap();
-    assert_eq!(started, "started\n");
-    let group = libc::pid_t::try_from(child.id()).unwrap();
-    // 子はまだ待っていないので、グループの番号はほかのグループに使い回されていない
-    assert_eq!(unsafe { libc::kill(-group, libc::SIGINT) }, 0);
+    let mut line = String::new();
+    stderr.read_line(&mut line).unwrap();
+    let grandchild: libc::pid_t = line
+        .trim_end()
+        .parse()
+        .unwrap_or_else(|_| panic!("not a process ID: {line:?}"));
+    let eml = libc::pid_t::try_from(child.id()).unwrap();
+    // 子はテストが送るまで終わらず、emlはその後でしか回収しないので、子の番号はほかのプロセスに使い回されていない
+    assert_eq!(unsafe { libc::kill(eml, libc::SIGINT) }, 0);
+    assert_eq!(unsafe { libc::kill(grandchild, libc::SIGINT) }, 0);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
