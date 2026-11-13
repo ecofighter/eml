@@ -1363,7 +1363,7 @@ pub struct Spawned {
 - ヒープに直接読む形、mmap で読む形、`Vec` をそのままヒープの文字列にする形は採らない。計測と理由は [計測の基準](../implementation/benchmarks.md) の「`FileIn.read_all` の読み方」にある
 - 標準入力の読み (`Std.Stdin.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) は、ハンドルの読み手を `FileIn` と同じ `handle_read` の道で読み、同じく区切りごとに止める語と確保量を見る。長さの見込みは持たない。1行の読みは、std の `read_until` を使わず `fill_buf` と `consume` で `\n` まで写す。`read_until` は `Interrupted` を自分で読み直すので、止める語を見られないためである。補充の前ごとに標準出力を書き出す (行の途中の補充と、buffer が空の塊の読みも含む)。全部の読みは、buffer の残りを移した後、`inner` を読む前に1回書き出す
 - `Child` の読みは `FileIn` の読みと同じ `handle_read` の道で、子の標準出力の pipe を読む。長さの見込みは持たず、補充の前に標準出力を書き出さない
-- `Ctx::proc_spawn` は子を起動する前に、`Ctx::proc_wait` は子が終わった後に、止める語を見る。待つ間の Ctrl-C は同じプロセスグループ (Windows では同じコンソール) の子にも届くので、子が終わって待ちから戻る。起動と同時に届いた Ctrl-C は子に届かないことがあり、そのときは子が終わってから止まる
+- `Ctx::proc_spawn`は子を起動する前に、`Ctx::proc_wait`は子が終わった後に、止める語を見る。待つ間のCtrl-Cは同じプロセスグループ (Windowsでは同じコンソール) の子にも届くので、子が終わって待ちから戻る。起動と同時に届いたCtrl-Cは子に届かないことがあり、そのときは子が終わってから止まる。runがいつ止まるかは[標準ライブラリ](stdlib.md)の「`Proc`」にある
 - 読む途中か待つ間に止める語を見るのは、`FileIn` の読み (`FileIn.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`)、標準入力の読み、`Child` の読みと書き込み、`Ctx::proc_spawn`、`proc_wait` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
 
 ### 子のプロセス

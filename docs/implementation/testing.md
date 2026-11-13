@@ -577,7 +577,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - 本物の時計で `Async.sleep_ms 100000` だけをするタスクの run に、標準エラーの `sleeping` の行が届いたら SIGINT を1回送り、終了コード 130 と、標準エラーの `interrupted` を確かめる。すべてのタスクが眠る worker は、空きのループの上限付きの眠りの後に割り込みを読む。同じことを `crates/eml_vm/tests/api.rs` の `an_interrupt_wakes_a_sleeping_worker` が、プロセスの中で `Sequential` の方針について確かめる
 - `mkfifo` で作った名前付きのパイプを `FileIn.read_all` で読むプログラムに、100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。読みは1回目の SIGINT で `EINTR` で戻って止まる。読みに入る直前に届いた SIGINT は読みを止めないので、2回目の SIGINT でハンドラが終わらせることもある。どちらも 130 である。送り続けるのは、続けて届いた2つの SIGINT が1つにまとまることがあるためである
 - 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、同じく 100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。プログラムが標準エラーに書いた行を読んでから送る。ハンドラを入れる前の SIGINT は、既定の動作でプロセスを終わらせるためである
-- `Proc.run` で `sh -c 'echo started >&2; exec sleep 30'` を待つプログラムを自分のプロセスグループで起動し、子が標準エラーに書いた行を読んでから、グループ全体に SIGINT を1回送る。端末の Ctrl-C と同じく子にも届くので、子が終わり、終了コード 130 と、標準エラーの `interrupted` を確かめる。子が動いてから送るのは、起動と同時に届いた SIGINT は子に届かないことがあるためである
+- `Proc.run`で`sh -c 'echo $$ >&2; exec sleep 30'`を待つプログラムを起動し、子が標準エラーに書いた行から子のプロセスの番号を読んで、emlにSIGINTを1回送り、続けて子に1回送る。子が終わり、終了コード130と、標準エラーの`interrupted`を確かめる。子より先にemlに送るのは、OSが端末のCtrl-Cをグループのプロセスごとに別々に届けるためである。emlが受け取る前に子が終わると、runは自分の終了コードで終わることがある。子はテストが送るまで終わらないので、番号はほかのプロセスに使い回されていない。並列の重い負荷の下では、emlがスレッドでシグナルを塞ぐ形の知られた不具合のため、まれに失敗する (2000回のうち4回。[ロードマップ](../future/roadmap.md)の「マルチコア対応」)
 
 `eml run` の SIGTERM のテストも `cfg(unix)` で2本あり、`libc::kill` で SIGTERM を送るほかは SIGINT のテストと同じ形である。
 
@@ -635,7 +635,7 @@ CI の対象 (OS、CPU、AddressSanitizer の脚) を足して落ちたテスト
 
 印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のシェルを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットと、誰も答えない loopback の番地への接続が進行中のまま残ること (Windows は `127.0.0.0/8` のどの番地にも答え、受けの列が詰まった待ち受けは列を広げて接続を終えることがある) がそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
 
-- Rust のテストは、`#[test]` の関数か、そうしたテストだけを持つ `mod` に `#[cfg(unix)]` を付ける。`src/` の中のテストの `mod` には `#[cfg(all(test, unix))]` を付ける。本体が `libc::kill`、`mkfifo`、`PermissionsExt`、`CommandExt::process_group` を使い、Windows でコンパイルできないので、`cfg_attr(windows, ignore)` は使えない
+- Rustのテストは、`#[test]`の関数か、そうしたテストだけを持つ`mod`に`#[cfg(unix)]`を付ける。`src/`の中のテストの`mod`には`#[cfg(all(test, unix))]`を付ける。本体が`libc::kill`、`mkfifo`、`PermissionsExt`を使い、Windowsでコンパイルできないので、`cfg_attr(windows, ignore)`は使えない
 - UIテストとトランスクリプトは、エントリのファイルの先頭の印の行に印を書く。`.em`は`-- windows: skip (<理由>)`、`.repl`は`# windows: skip (<理由>)`である。理由は空にしない。先頭の印の行は、shebang (`#!…`) の行があればその後ろから続く、`<leader> windows:`、`<leader> signal:`、`<leader> workers:`、`<leader> clock:`、`<leader> max-depth:`、`<leader> max-bytes:`、`<leader> gui:`、`<leader> native:`で始まる行の並びで、8種類をどの順に混ぜてもよい (シグナルの印、workerの印、時計の印、深さの印、確保量の印、GUIの印は上の「UI テスト」、ネイティブの印は「ネイティブで流す」)。印はエントリのファイル (1つのファイルか`main.em`、`main.repl`) にだけ書く
 - `crates/eml_cli/tests/common/mod.rs` の `leading_marks` が先頭の印の行を読み、`windows_skip` が Windows の印を、`workers_skip` が worker の印を読む。`for_each_file` は `EML_UI_FILTER` の後でこれを使う。Windows では印のあるファイルを流さない。どの OS でも、`<leader> windows:` で始まって形の合わない行 (理由がない、`()`、`windows:skip` など) は panic する。綴りを誤った印が黙って流れ続けるのを防ぐためである
 
