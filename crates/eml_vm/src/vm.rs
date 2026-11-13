@@ -1353,51 +1353,44 @@ fn step<R: Exec>(
             task.set_raw(dst, bits as i64);
         }
         // 配列の行は借りる引数を手放さない。誤りは `step_failed` が `Panic` に届ける
-        Op::ArrayGet { dst, a, b } => {
-            let w = unsafe { ctx.array_get(task.get(a), task.raw(b)) }?;
-            task.set(dst, w);
-        }
-        Op::ArrayLength { dst, a } => {
-            let n = unsafe { ctx.array_length(task.get(a)) }?;
-            task.set_raw(dst, n);
-        }
+        Op::ArrayGet { dst, a, b } => task.set(dst, unsafe {
+            eml_rows::rows::ArrayGet::<R::M>(ctx, task.get(a), task.raw(b))
+        }?),
+        Op::ArrayLength { dst, a } => task.set_raw(dst, unsafe {
+            eml_rows::rows::ArrayLength::<R::M>(ctx, task.get(a))
+        }?),
         // unboxed の行も借りる引数を手放さない。要素は生のビットなので、値のスロットは `task.raw` で読む
-        Op::UnboxedGet { dst, a, b } => {
-            let x = unsafe { ctx.unboxed_get(task.get(a), task.raw(b)) }?;
-            task.set_raw(dst, x as i64);
-        }
-        Op::UnboxedLength { dst, a } => {
-            let n = unsafe { ctx.unboxed_length(task.get(a)) }?;
-            task.set_raw(dst, n);
-        }
+        Op::UnboxedGet { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::UnboxedArrayGetInt::<R::M>(ctx, task.get(a), task.raw(b))
+        }?),
+        Op::UnboxedLength { dst, a } => task.set_raw(dst, unsafe {
+            eml_rows::rows::UnboxedArrayLength::<R::M>(ctx, task.get(a))
+        }?),
         Op::UnboxedSet { dst, at } => {
             let o = &code.tables.operands[at as usize..];
             let w = unsafe {
-                ctx.unboxed_set(
+                eml_rows::rows::UnboxedArraySetInt::<R::M>(
+                    ctx,
                     task.get(o[0] as Slot),
                     task.raw(o[1] as Slot),
-                    task.raw(o[2] as Slot) as u64,
+                    task.raw(o[2] as Slot),
                 )
             }?;
             task.set(dst, w);
         }
         // 文字列の行も借りる引数を手放さない。誤りの扱いは配列の行と同じ
-        Op::StrByteAt { dst, i, s } => {
-            let b = unsafe { ctx.string_byte_at(task.raw(i), task.get(s)) }?;
-            task.set_raw(dst, b);
-        }
-        Op::StrByteLength { dst, s } => {
-            let n = unsafe { ctx.string_byte_length(task.get(s)) }?;
-            task.set_raw(dst, n);
-        }
-        Op::BytesGet { dst, i, b } => {
-            let x = unsafe { ctx.bytes_get(task.raw(i), task.get(b)) }?;
-            task.set_raw(dst, x);
-        }
-        Op::BytesLength { dst, b } => {
-            let n = unsafe { ctx.bytes_length(task.get(b)) }?;
-            task.set_raw(dst, n);
-        }
+        Op::StrByteAt { dst, i, s } => task.set_raw(dst, unsafe {
+            eml_rows::rows::StrByteAt::<R::M>(ctx, task.raw(i), task.get(s))
+        }?),
+        Op::StrByteLength { dst, s } => task.set_raw(dst, unsafe {
+            eml_rows::rows::StrByteLength::<R::M>(ctx, task.get(s))
+        }?),
+        Op::BytesGet { dst, i, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::BytesGet::<R::M>(ctx, task.raw(i), task.get(b))
+        }?),
+        Op::BytesLength { dst, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::BytesLength::<R::M>(ctx, task.get(b))
+        }?),
         Op::ArraySet { dst, at } => {
             let o = &code.tables.operands[at as usize..];
             let (a, i, x) = (
@@ -1405,7 +1398,7 @@ fn step<R: Exec>(
                 task.raw(o[1] as Slot),
                 task.get(o[2] as Slot),
             );
-            let w = unsafe { ctx.array_set(a, i, x) }?;
+            let w = unsafe { eml_rows::rows::ArraySet::<R::M>(ctx, a, i, x) }?;
             task.set(dst, w);
         }
         Op::Extern { dst, at } => extern_call::<R>(code, ctx, task, counts, dst, at)?,
@@ -4458,52 +4451,6 @@ fn run_extern<R: Exec>(
                     kind: task.raw(arg(0)),
                     message: message.into_boxed_str(),
                 }))));
-            }
-            Extern::ArrayMake | Extern::MutArrayMake => {
-                let lin = ext == Extern::MutArrayMake;
-                let w = ctx.array_make(task.raw(arg(0)), task.get(arg(1)), lin)?;
-                task.set(dst, w);
-            }
-            Extern::MutArrayEmpty => {
-                let w = ctx.array_empty(true)?;
-                task.set(dst, w);
-            }
-            Extern::ArrayThaw => {
-                let w = ctx.array_thaw(task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::MutArrayFreeze => {
-                let w = ctx.array_freeze(task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            // 要素はスロットの生のビットのまま渡すので、Float と Int の行が1つの操作を共有する
-            // (docs/spec/vm.md の「基本操作と extern」)
-            Extern::UnboxedArrayMakeFloat
-            | Extern::UnboxedArrayMakeInt
-            | Extern::MutUnboxedArrayMakeFloat
-            | Extern::MutUnboxedArrayMakeInt => {
-                let lin = matches!(
-                    ext,
-                    Extern::MutUnboxedArrayMakeFloat | Extern::MutUnboxedArrayMakeInt
-                );
-                let w = ctx.unboxed_make(task.raw(arg(0)), task.raw(arg(1)) as u64, lin)?;
-                task.set(dst, w);
-            }
-            Extern::MutUnboxedArrayEmpty => {
-                let w = ctx.unboxed_empty(true)?;
-                task.set(dst, w);
-            }
-            Extern::MutUnboxedArrayFillFloat | Extern::MutUnboxedArrayFillInt => {
-                let w = ctx.unboxed_fill(task.get(arg(0)), task.raw(arg(1)) as u64)?;
-                task.set(dst, w);
-            }
-            Extern::UnboxedArrayThaw => {
-                let w = ctx.unboxed_thaw(task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::MutUnboxedArrayFreeze => {
-                let w = ctx.unboxed_freeze(task.get(arg(0)))?;
-                task.set(dst, w);
             }
             _ => {
                 let value = eml_rows::rows::call(ext, ctx, &At { task: &*task, ops })?;

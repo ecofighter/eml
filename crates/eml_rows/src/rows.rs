@@ -301,6 +301,64 @@ macro_rules! extern_rows {
                 fn FloatParseRaw(ctx, s: obj) -> float {
                     Ok(ctx.string_to_float(s)?.unwrap_or(f64::NAN))
                 }
+                fn ArrayMake(ctx, n: int, x: tobj) -> obj { Ok(ctx.array_make(n, x, false)?) }
+                fn MutArrayMake(ctx, n: int, x: tobj) -> obj { Ok(ctx.array_make(n, x, true)?) }
+                fn MutArrayEmpty(ctx, _u: unit) -> obj { Ok(ctx.array_empty(true)?) }
+                fn ArrayThaw(ctx, a: obj) -> obj { Ok(ctx.array_thaw(a)?) }
+                fn MutArrayFreeze(ctx, m: obj) -> obj { Ok(ctx.array_freeze(m)?) }
+                // Floatの行とIntの行は、スロットの生のビットで同じ`Ctx`の操作を呼ぶ
+                // (docs/spec/vm.mdの「基本操作と extern」)
+                fn UnboxedArrayMakeFloat(ctx, n: int, x: float) -> obj {
+                    Ok(ctx.unboxed_make(n, x.to_bits(), false)?)
+                }
+                fn UnboxedArrayMakeInt(ctx, n: int, x: int) -> obj {
+                    Ok(ctx.unboxed_make(n, x as u64, false)?)
+                }
+                fn MutUnboxedArrayMakeFloat(ctx, n: int, x: float) -> obj {
+                    Ok(ctx.unboxed_make(n, x.to_bits(), true)?)
+                }
+                fn MutUnboxedArrayMakeInt(ctx, n: int, x: int) -> obj {
+                    Ok(ctx.unboxed_make(n, x as u64, true)?)
+                }
+                fn MutUnboxedArrayEmpty(ctx, _u: unit) -> obj { Ok(ctx.unboxed_empty(true)?) }
+                fn MutUnboxedArrayFillFloat(ctx, a: obj, x: float) -> obj {
+                    Ok(ctx.unboxed_fill(a, x.to_bits())?)
+                }
+                fn MutUnboxedArrayFillInt(ctx, a: obj, x: int) -> obj {
+                    Ok(ctx.unboxed_fill(a, x as u64)?)
+                }
+                fn UnboxedArrayThaw(ctx, a: obj) -> obj { Ok(ctx.unboxed_thaw(a)?) }
+                fn MutUnboxedArrayFreeze(ctx, m: obj) -> obj { Ok(ctx.unboxed_freeze(m)?) }
+                fn ArrayLength | MutArrayLength(ctx, a: obj) -> int { Ok(ctx.array_length(a)?) }
+                fn ArrayGet | MutArrayRead(ctx, a: obj, i: int) -> tobj { Ok(ctx.array_get(a, i)?) }
+                fn ArraySet | MutArrayWrite(ctx, a: obj, i: int, x: tobj) -> obj {
+                    Ok(ctx.array_set(a, i, x)?)
+                }
+                fn UnboxedArrayLength | MutUnboxedArrayLength(ctx, a: obj) -> int {
+                    Ok(ctx.unboxed_length(a)?)
+                }
+                // Floatの行は`from_bits` / `to_bits`でビットをそのまま写すので、NaNのペイロードも残る。VMはFloatの
+                // getとsetの行の代わりにIntの行を呼べる
+                fn UnboxedArrayGetFloat | MutUnboxedArrayReadFloat(ctx, a: obj, i: int) -> float {
+                    Ok(f64::from_bits(ctx.unboxed_get(a, i)?))
+                }
+                fn UnboxedArrayGetInt | MutUnboxedArrayReadInt(ctx, a: obj, i: int) -> int {
+                    Ok(ctx.unboxed_get(a, i)? as i64)
+                }
+                fn UnboxedArraySetFloat | MutUnboxedArrayWriteFloat(
+                    ctx, a: obj, i: int, x: float
+                ) -> obj {
+                    Ok(ctx.unboxed_set(a, i, x.to_bits())?)
+                }
+                fn UnboxedArraySetInt | MutUnboxedArrayWriteInt(
+                    ctx, a: obj, i: int, x: int
+                ) -> obj {
+                    Ok(ctx.unboxed_set(a, i, x as u64)?)
+                }
+                fn StrByteLength(ctx, s: obj) -> int { Ok(ctx.string_byte_length(s)?) }
+                fn StrByteAt(ctx, i: int, s: obj) -> int { Ok(ctx.string_byte_at(i, s)?) }
+                fn BytesLength | ShowBytesLength(ctx, b: obj) -> int { Ok(ctx.bytes_length(b)?) }
+                fn BytesGet | ShowBytesGet(ctx, i: int, b: obj) -> int { Ok(ctx.bytes_get(i, b)?) }
             }
             engine { Panic, Exit }
             lir { Par }
@@ -415,12 +473,6 @@ macro_rules! extern_rows {
                 ReadAllBytes,
                 ReadLineBytes,
                 Close,
-                StrByteLength,
-                StrByteAt,
-                BytesLength,
-                BytesGet,
-                ShowBytesLength,
-                ShowBytesGet,
                 EnvArgCount,
                 EnvArg,
                 EnvHas,
@@ -464,36 +516,6 @@ macro_rules! extern_rows {
                 ProcReadLineBytes,
                 ProcReadLine,
                 FailIo,
-                ArrayMake,
-                ArrayLength,
-                ArrayGet,
-                ArraySet,
-                ArrayThaw,
-                MutArrayMake,
-                MutArrayEmpty,
-                MutArrayLength,
-                MutArrayRead,
-                MutArrayWrite,
-                MutArrayFreeze,
-                UnboxedArrayLength,
-                UnboxedArrayThaw,
-                MutUnboxedArrayEmpty,
-                MutUnboxedArrayLength,
-                MutUnboxedArrayFreeze,
-                UnboxedArrayMakeFloat,
-                UnboxedArrayMakeInt,
-                UnboxedArrayGetFloat,
-                UnboxedArrayGetInt,
-                UnboxedArraySetFloat,
-                UnboxedArraySetInt,
-                MutUnboxedArrayMakeFloat,
-                MutUnboxedArrayMakeInt,
-                MutUnboxedArrayReadFloat,
-                MutUnboxedArrayReadInt,
-                MutUnboxedArrayWriteFloat,
-                MutUnboxedArrayWriteInt,
-                MutUnboxedArrayFillFloat,
-                MutUnboxedArrayFillInt,
                 AsyncJobCell,
                 ChanToCell,
                 TlsPushTls,
@@ -757,6 +779,59 @@ mod tests {
                 assert!(
                     matches!(call(row, &mut ctx, &Slots(&[])), Err(RunFault::Internal(_))),
                     "{row:?}"
+                );
+            }
+        }
+    }
+
+    /// Floatの行は、VMが代わりに呼ぶIntの行と同じビットを読み書きする。
+    #[test]
+    fn unboxed_float_rows_keep_their_bits() {
+        // 正規のNaNではないので、NaNを正規化する変換があればビットが変わる
+        const BITS: u64 = 0x7ff8_0000_dead_beef;
+        let nan = f64::from_bits(BITS);
+        assert!(nan.is_nan() && BITS != f64::NAN.to_bits());
+        let mut ctx = ctx_on(Capture::default());
+        // SAFETY: 引数は行の種類に合い、配列は生きている。setの行は配列を消費して返し、getの行は借りる
+        unsafe {
+            let Ok(Value::Word(a)) = call(
+                Extern::UnboxedArrayMakeInt,
+                &mut ctx,
+                &Slots(&[Arg::Int(2), Arg::Int(0)]),
+            ) else {
+                panic!("`UnboxedArrayMakeInt` gives a word")
+            };
+            let Ok(Value::Word(a)) = call(
+                Extern::UnboxedArraySetFloat,
+                &mut ctx,
+                &Slots(&[Arg::Word(a), Arg::Int(0), Arg::Float(nan)]),
+            ) else {
+                panic!("`UnboxedArraySetFloat` gives a word")
+            };
+            let Ok(Value::Word(a)) = call(
+                Extern::UnboxedArraySetInt,
+                &mut ctx,
+                &Slots(&[Arg::Word(a), Arg::Int(1), Arg::Int(BITS as i64)]),
+            ) else {
+                panic!("`UnboxedArraySetInt` gives a word")
+            };
+            for i in 0..2 {
+                let Ok(Value::Float(x)) = call(
+                    Extern::UnboxedArrayGetFloat,
+                    &mut ctx,
+                    &Slots(&[Arg::Word(a), Arg::Int(i)]),
+                ) else {
+                    panic!("`UnboxedArrayGetFloat` gives a float")
+                };
+                assert_eq!(x.to_bits(), BITS, "element {i}");
+                assert_eq!(
+                    call(
+                        Extern::UnboxedArrayGetInt,
+                        &mut ctx,
+                        &Slots(&[Arg::Word(a), Arg::Int(i)])
+                    ),
+                    Ok(Value::Int(BITS as i64)),
+                    "element {i}"
                 );
             }
         }
