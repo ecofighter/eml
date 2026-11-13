@@ -161,11 +161,25 @@ jobs:
       - name: WinUI bootstrap test with its output
         if: ${{ runner.os == 'Windows' && !cancelled() && steps.clippy.outcome != 'skipped' }}
         run: cargo nextest run --features eml_cli/gui-native --no-capture -E 'test(=winui::tests::bootstrap_names_the_download_page_when_the_runtime_is_missing)'
+
+  # nix buildはgui-nativeを足したemlを組み、組み立ての中でテストを流す。10分を超えるので、ほかのジョブと並べて
+  # 自分のジョブで流す。-Lは組み立ての出力をログに出し、組み立てと検査の段の時間を分けて見られるようにする
+  # (docs/implementation/testing.md の「CI」)
+  nix-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: nix build
+        run: nix build -L
       # Qtは動的にリンクし、配るものにQtとWindows App SDKのファイルを含めない (docs/implementation/distribution.md)
       - name: nix build links Qt dynamically
-        if: ${{ runner.os == 'Linux' && !cancelled() && steps.clippy.outcome != 'skipped' }}
         run: |
-          nix build
           readelf -d result/bin/.eml-wrapped | grep -q 'libQt6Widgets.so.6'
           test "$(find -L result \( -name 'libQt6*' -o -name '*.dll' -o -name '*.msix' \) | wc -l)" -eq 0
 
