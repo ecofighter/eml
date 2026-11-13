@@ -59,9 +59,10 @@ fn is_uniform(repr: Repr) -> bool {
     matches!(repr, Repr::Obj | Repr::TObj | Repr::Unit)
 }
 
-/// 捕まえた値を`captures`個持つ関数`function`の値が、まだ待つ引数の数。値として使う関数は、捕まえた値より後ろの引数と
-/// 結果の葉がどれも一様である (docs/spec/lir.md の「関数の ABI」)。そうでなければ、シグネチャの食い違いでなく、ここでpanicする。
-pub(super) fn arity(function: &LirFn, captures: usize) -> usize {
+/// 捕まえた値を`captures`個持つ関数`function`の値が、まだ待つ引数の数で、関数の値のタグである。値として使う関数は、
+/// 捕まえた値より後ろの引数と結果の葉がどれも一様である (docs/spec/lir.md の「関数の ABI」)。そうでなければ、シグネチャの
+/// 食い違いでなく、ここでpanicする。タグは16ビットなので、65535を超える数でもpanicする (docs/spec/native.md の「関数の値」)。
+pub(super) fn arity(function: &LirFn, captures: usize) -> u16 {
     assert!(
         function.clause.is_none(),
         "`{}` is a clause function used as a value",
@@ -77,7 +78,12 @@ pub(super) fn arity(function: &LirFn, captures: usize) -> usize {
         "`{}` is used as a value with {captures} captures but its ABI is not uniform",
         function.name
     );
-    params.len() - captures
+    u16::try_from(params.len() - captures).unwrap_or_else(|_| {
+        panic!(
+            "`{}` waits for more than 65535 arguments as a value",
+            function.name
+        )
+    })
 }
 
 /// 捕まえた値を`captures`個持つ関数`function`の値の欄。0番の`tobj`がコードの語で、その後に捕まえた値が関数の引数のReprで
@@ -124,7 +130,7 @@ impl ClosureEntries {
             return id;
         }
         let function = program.function(closure.function);
-        let args = arity(function, closure.captures as usize);
+        let args = usize::from(arity(function, closure.captures as usize));
         // 宣言は領域を使わず、名前は関数の名前と捕まえた値の数で決まり、ほかの種類の記号の接頭辞とも重ならないので、
         // 宣言が失敗するのは下ろしの誤りだけである
         let id = module
@@ -238,8 +244,8 @@ const PAP_SCANNED: u32 = 3;
 /// 関数の値が待つ引数の数の最大が`largest`のプログラムで、`eml_nrt_pap`が求めうるPAPのアダプタの、待つ引数の数。
 /// PAPの呼ぶ値は、クロージャのエントリを持つ値か別のPAPで、PAPはその呼ぶ値より1つ少なく待つので、`largest - 1`を
 /// 超えない (docs/spec/native.md の「関数の値」)。
-pub(super) fn pap_rests(largest: usize) -> std::ops::Range<u32> {
-    1..u32::try_from(largest).expect("a function value waits for fewer than 2^32 arguments")
+pub(super) fn pap_rests(largest: u16) -> std::ops::Range<u32> {
+    1..u32::from(largest)
 }
 
 /// PAPのアダプタ`eml$pap$<rest>`の本体。自分の欄から呼ぶ値`callee`と引数`a`をロードし、箱の参照を手放して、`callee`を
@@ -416,7 +422,7 @@ impl<M: Module> FnLower<'_, '_, M> {
         );
         let lin = self.function.mark(var) == Mark::Lin;
         let head = [
-            arity(target, args.len()) as i64,
+            i64::from(arity(target, args.len())),
             i64::from(shape.scanned),
             i64::from(shape.raw),
             i64::from(lin),

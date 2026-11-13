@@ -41,8 +41,8 @@ pub struct Defined {
 pub struct Lowered {
     pub functions: Vec<Defined>,
     pub raise: Defined,
-    /// クロージャのエントリ`c<k>:<f>`。最初に使った順である。
-    pub closures: Vec<(ClosureEntry, Defined)>,
+    /// クロージャのエントリ`c<k>:<f>`と、その値の待つ引数の数。最初に使った順である。
+    pub closures: Vec<(ClosureEntry, u16, Defined)>,
     /// `eml$apply$<m>`。添字が`m - 1`である。
     pub applies: Vec<Defined>,
     /// PAPのアダプタ`eml$pap$<r>`と、その`r`。
@@ -181,14 +181,18 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
             closure.captures as usize,
         );
         largest = largest.max(args);
-        ctx.func.signature = apply::uniform(args);
+        ctx.func.signature = apply::uniform(usize::from(args));
         ctx.func.name = UserFuncName::testcase(names::closure_entry(
             closure.captures,
             &program.function(closure.function).name,
         ));
         let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
         apply::define_closure_entry(b, module, &imports, &callees, closure);
-        closures.push((closure, define(module, &mut ctx, id, false, Vec::new())?));
+        closures.push((
+            closure,
+            args,
+            define(module, &mut ctx, id, false, Vec::new())?,
+        ));
     }
     let mut applies = Vec::with_capacity(imports.applies.len());
     for (index, &id) in imports.applies.iter().enumerate() {

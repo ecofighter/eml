@@ -392,6 +392,22 @@ fn a_closure_with_255_captures() {
     }
 }
 
+#[test]
+#[should_panic(expected = "waits for more than 65535 arguments")]
+fn a_function_value_waits_for_at_most_65535_arguments() {
+    // タグは16ビットなので、65536個の引数を待つ関数の値は作れず、下ろしがpanicする
+    // (docs/spec/native.md の「関数の値」)
+    let params: Vec<String> = (0..65536).map(|i| format!("x.{i}: unit")).collect();
+    let text = format!(
+        "fn entry$main() -> unit {{\n  let u.0: unit = call sink(&wide)\n  return u.0\n}}\n\
+         fn sink(f.0: tobj) -> unit {{\n  let u.1: unit = drop f.0\n  return u.1\n}}\n\
+         fn wide({}) -> unit {{\n  return x.0\n}}\n",
+        params.join(", ")
+    );
+    let program = program(&text);
+    let _ = machine().load(&program, &Linked::default());
+}
+
 /// `count`個の文字列を捕まえた`wide`のクロージャを2回適用するプログラム。`wide`は最初、真ん中、最後の文字列をつないで
 /// 出力し、ほかを手放す。
 fn wide(count: usize) -> String {

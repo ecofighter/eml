@@ -79,6 +79,14 @@ struct Function {
     sites: Vec<SiteRow>,
 }
 
+/// 静的なクロージャのエントリのコードと、その値の待つ引数の数。下ろしはエントリのシグネチャを同じ数から決めたので、
+/// タグとシグネチャは食い違わない。
+#[derive(Clone, Copy)]
+struct Static {
+    code: *const u8,
+    arity: u16,
+}
+
 /// 読み込んだプログラムの表。`image`は`functions`、`files`、`rows`、`data`、`paps`と、各関数の`sites`と各値の文字列の中を
 /// 指す。どれも`new`の後で変わらず、`Vec`を動かしてもその要素は動かない。`data`のslotはmoduleのデータの物を指す。
 struct Tables {
@@ -93,11 +101,11 @@ struct Tables {
 }
 
 impl Tables {
-    /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードを持つ。
+    /// `data`は値ごとに、そのslotと、関数の値ならそのエントリのコードと待つ引数の数を持つ。
     fn new(
         functions: Vec<Function>,
         files: Vec<String>,
-        data: Vec<(Datum, *mut u64, *const u8)>,
+        data: Vec<(Datum, *mut u64, Static)>,
         paps: Vec<PapRow>,
     ) -> Tables {
         let file_rows: Vec<Str> = files.iter().map(|file| Str::new(file)).collect();
@@ -113,15 +121,14 @@ impl Tables {
             .collect();
         let datum_rows: Vec<DatumRow> = data
             .iter()
-            .map(|&(ref datum, slot, code)| {
+            .map(|&(ref datum, slot, Static { code, arity })| {
                 let (kind, bits, text) = match datum {
                     Datum::String(text) => (DATUM_STRING, 0, text.as_str()),
                     Datum::BigInt(n) => (DATUM_BIG_INT, *n as u64, ""),
                     Datum::Float(bits) => (DATUM_FLOAT, *bits, ""),
                     Datum::Fn(function) => {
-                        let index = function.0 as usize;
-                        rows[index].value = slot;
-                        (DATUM_FN, functions[index].params.len() as u64, "")
+                        rows[function.0 as usize].value = slot;
+                        (DATUM_FN, u64::from(arity), "")
                     }
                 };
                 DatumRow {
@@ -261,7 +268,7 @@ impl NativeMachine {
             });
         }
         let mut statics = HashMap::with_capacity(lowered.closures.len());
-        for (closure, defined) in lowered.closures {
+        for (closure, arity, defined) in lowered.closures {
             let code = module.get_finalized_function(defined.id);
             self.symbols.push(Symbol {
                 name: names::closure_entry(
@@ -272,7 +279,7 @@ impl NativeMachine {
                 size: defined.size,
             });
             if closure.captures == 0 {
-                statics.insert(closure.function, code);
+                statics.insert(closure.function, Static { code, arity });
             }
         }
         for (index, defined) in lowered.applies.into_iter().enumerate() {
@@ -298,11 +305,14 @@ impl NativeMachine {
             .into_iter()
             .map(|(datum, id)| {
                 let (slot, _) = module.get_finalized_data(id);
-                let code = match datum {
+                let fn_value = match datum {
                     Datum::Fn(function) => statics[&function],
-                    _ => std::ptr::null(),
+                    _ => Static {
+                        code: std::ptr::null(),
+                        arity: 0,
+                    },
                 };
-                (datum, slot.cast_mut().cast::<u64>(), code)
+                (datum, slot.cast_mut().cast::<u64>(), fn_value)
             })
             .collect();
         self.tables = Some(Tables::new(functions, program.files.clone(), data, paps));
