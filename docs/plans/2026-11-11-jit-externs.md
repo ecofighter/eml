@@ -409,7 +409,7 @@ grep -rn 'feature = "' crates/eml_vm/src crates/eml_nrt/src crates/eml_native/sr
 grep -rn 'eml_vm\|eml_native\|eml_test_support' crates/eml_rows/src crates/eml_sched/src crates/eml_nrt/src crates/eml_io/src | grep -vE '^[^:]+:[0-9]+:\s*//'   # empty (G-C7b)
 grep -rnE 'eml_vm.{0,6}gui\.rs|eml_vm.{0,6}tls\.rs' docs/spec docs/implementation docs/future CLAUDE.md   # empty
 # U5a on
-sed -n '/Op::IntAdd {/,/Op::SwitchEnum/p' crates/eml_vm/src/vm.rs | grep -c 'externs::'   # 0
+sed -n '/Op::IntAdd { dst, a, b }/,/Op::SwitchEnum/p' crates/eml_vm/src/vm.rs | grep -c 'externs::'   # 0  (the pattern names the handler's fields so it does not also match step_failed's `Op::IntAdd { dst, .. }`)
 # U5f on
 grep -nE 'ctx\.(array_get|array_length|array_set|unboxed_get|unboxed_length|unboxed_set|string_byte_at|string_byte_length|bytes_get|bytes_length)\(' crates/eml_vm/src/vm.rs   # empty
 # U5j on (G-4, G-24)

@@ -1200,57 +1200,87 @@ fn step<R: Exec>(
             safepoint::<R>(code, ctx, task, sched)?;
         }
         // 誤りは `run` が `Panic` に届ける (`step_failed`)
-        Op::IntAdd { dst, a, b } => task.set_raw(dst, externs::int_add(task.raw(a), task.raw(b))?),
-        Op::IntSub { dst, a, b } => task.set_raw(dst, externs::int_sub(task.raw(a), task.raw(b))?),
-        Op::IntMul { dst, a, b } => task.set_raw(dst, externs::int_mul(task.raw(a), task.raw(b))?),
-        Op::IntDiv { dst, a, b } => task.set_raw(dst, externs::int_div(task.raw(a), task.raw(b))?),
-        Op::IntRem { dst, a, b } => task.set_raw(dst, externs::int_rem(task.raw(a), task.raw(b))?),
-        Op::IntNeg { dst, a } => task.set_raw(dst, externs::int_negate(task.raw(a))?),
-        Op::IntEq { dst, a, b } => task.set_raw(dst, externs::int_eq(task.raw(a), task.raw(b))),
-        Op::IntNe { dst, a, b } => task.set_raw(dst, externs::int_ne(task.raw(a), task.raw(b))),
-        Op::IntLt { dst, a, b } => task.set_raw(dst, externs::int_lt(task.raw(a), task.raw(b))),
-        Op::IntLe { dst, a, b } => task.set_raw(dst, externs::int_le(task.raw(a), task.raw(b))),
-        Op::IntGt { dst, a, b } => task.set_raw(dst, externs::int_gt(task.raw(a), task.raw(b))),
-        Op::IntGe { dst, a, b } => task.set_raw(dst, externs::int_ge(task.raw(a), task.raw(b))),
-        Op::IntCompare { dst, a, b } => {
-            task.set_raw(dst, externs::int_compare(task.raw(a), task.raw(b)))
-        }
-        Op::FloatAdd { dst, a, b } => {
-            task.set_float(dst, externs::float_add(task.float(a), task.float(b)))
-        }
-        Op::FloatSub { dst, a, b } => {
-            task.set_float(dst, externs::float_sub(task.float(a), task.float(b)))
-        }
-        Op::FloatMul { dst, a, b } => {
-            task.set_float(dst, externs::float_mul(task.float(a), task.float(b)))
-        }
-        Op::FloatDiv { dst, a, b } => {
-            task.set_float(dst, externs::float_div(task.float(a), task.float(b)))
-        }
-        Op::FloatRem { dst, a, b } => {
-            task.set_float(dst, externs::float_rem(task.float(a), task.float(b)))
-        }
-        Op::FloatNeg { dst, a } => task.set_float(dst, externs::float_negate(task.float(a))),
-        Op::FloatEq { dst, a, b } => {
-            task.set_raw(dst, externs::float_eq(task.float(a), task.float(b)))
-        }
-        Op::FloatNe { dst, a, b } => {
-            task.set_raw(dst, externs::float_ne(task.float(a), task.float(b)))
-        }
-        Op::FloatLt { dst, a, b } => {
-            task.set_raw(dst, externs::float_lt(task.float(a), task.float(b)))
-        }
-        Op::FloatLe { dst, a, b } => {
-            task.set_raw(dst, externs::float_le(task.float(a), task.float(b)))
-        }
-        Op::FloatGt { dst, a, b } => {
-            task.set_raw(dst, externs::float_gt(task.float(a), task.float(b)))
-        }
-        Op::FloatGe { dst, a, b } => {
-            task.set_raw(dst, externs::float_ge(task.float(a), task.float(b)))
-        }
-        Op::BoolEq { dst, a, b } => task.set_raw(dst, externs::bool_eq(task.raw(a), task.raw(b))),
-        Op::BoolNe { dst, a, b } => task.set_raw(dst, externs::bool_ne(task.raw(a), task.raw(b))),
+        Op::IntAdd { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntAdd::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntSub { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntSub::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntMul { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntMul::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntDiv { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntDiv::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntRem { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntMod::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntNeg { dst, a } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntNeg::<R::M>(ctx, task.raw(a))
+        }?),
+        Op::IntEq { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntEq::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntNe { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntNe::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntLt { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntLt::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntLe { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntLe::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntGt { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntGt::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntGe { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntGe::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::IntCompare { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::IntCompare::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::FloatAdd { dst, a, b } => task.set_float(dst, unsafe {
+            eml_rows::rows::FloatAdd::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatSub { dst, a, b } => task.set_float(dst, unsafe {
+            eml_rows::rows::FloatSub::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatMul { dst, a, b } => task.set_float(dst, unsafe {
+            eml_rows::rows::FloatMul::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatDiv { dst, a, b } => task.set_float(dst, unsafe {
+            eml_rows::rows::FloatDiv::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatRem { dst, a, b } => task.set_float(dst, unsafe {
+            eml_rows::rows::FloatMod::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatNeg { dst, a } => task.set_float(dst, unsafe {
+            eml_rows::rows::FloatNeg::<R::M>(ctx, task.float(a))
+        }?),
+        Op::FloatEq { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::FloatEq::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatNe { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::FloatNe::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatLt { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::FloatLt::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatLe { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::FloatLe::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatGt { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::FloatGt::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::FloatGe { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::FloatGe::<R::M>(ctx, task.float(a), task.float(b))
+        }?),
+        Op::BoolEq { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::BoolEq::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
+        Op::BoolNe { dst, a, b } => task.set_raw(dst, unsafe {
+            eml_rows::rows::BoolNe::<R::M>(ctx, task.raw(a), task.raw(b))
+        }?),
         Op::SwitchEnum { src, at } => {
             data::switch_tag::<R>(code, ctx, task, task.get(src), task.raw(src), at)?
         }
