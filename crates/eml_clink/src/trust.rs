@@ -9,6 +9,7 @@ const FILES: &[(&str, &str)] = &[
     ("error.rs", include_str!("error.rs")),
     ("library.rs", include_str!("library.rs")),
     ("linker.rs", include_str!("linker.rs")),
+    ("signature.rs", include_str!("signature.rs")),
 ];
 
 /// 調べないファイル。この module だけである。

@@ -7,7 +7,7 @@ use cranelift_codegen::ir::{InstBuilder, MemFlagsData, types};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::JITModule;
 use cranelift_module::{DataDescription, FuncId, Linkage, Module, ModuleError};
-use eml_native::abi::{JIT_REGION_BYTES, declare_entry, jit_builder, tail_signature};
+use eml_native::abi::{Import, JIT_REGION_BYTES, declare_import, jit_builder, tail_signature};
 use eml_native::thunk::define_thunk;
 use eml_nrt::Kind::{self, F64, I64};
 use eml_nrt::{Entry, Fatal, Thunk, detached, enter};
@@ -281,7 +281,7 @@ fn mixed_int_and_float_arguments_reach_an_entry() {
     let mut callers = Vec::new();
     for entry in ECHO {
         let rets: Vec<Kind> = entry.result.into_iter().collect();
-        let callee = declare_entry(&mut m, entry).unwrap();
+        let callee = declare_import(&mut m, Import::Entry(entry)).unwrap();
         let name = format!("call${}", entry.symbol);
         let id = define(&mut m, &name, entry.params, &rets, |m, b, _| {
             let args = params(b);
@@ -649,7 +649,7 @@ mod fatal {
         let fatal_entry: &Entry = eml_nrt::entries()
             .find(|e| e.symbol == "eml_fatal")
             .unwrap();
-        let fatal = declare_entry(&mut m, fatal_entry).unwrap();
+        let fatal = declare_import(&mut m, Import::Entry(fatal_entry)).unwrap();
         let deep = define(&mut m, "deep", &[I64], &[I64], |m, b, me| {
             let p = params(b);
             let (c, n) = (p[0], p[1]);

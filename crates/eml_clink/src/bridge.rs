@@ -15,6 +15,7 @@ use eml_cabi::Bridge;
 use eml_extern::{CSignature, CType};
 
 use crate::error::LinkError;
+use crate::signature::c_signature;
 
 /// 使い終えた module を、プロセスが終わるまで持つ。cranelift-jit が module を落とすときにコードを解放するかどうかに
 /// 頼らず、返した `Bridge` がプロセスの間ずっと呼べるようにするためである。`ManuallyDrop` で手放すのでなく、ここに
@@ -146,14 +147,6 @@ fn new_module() -> Result<JITModule, LinkError> {
     )))
 }
 
-fn clif(ty: CType) -> types::Type {
-    match ty {
-        CType::I32 => types::I32,
-        CType::I64 => types::I64,
-        CType::F64 => types::F64,
-    }
-}
-
 /// `fn(callee, args) -> u64` の本体を作る。slot k は `args` の offset `8*k` の語である。
 fn define(module: &mut JITModule, name: &str, signature: &CSignature) -> Result<FuncId, LinkError> {
     let call_conv = module.isa().default_call_conv();
@@ -162,17 +155,7 @@ fn define(module: &mut JITModule, name: &str, signature: &CSignature) -> Result<
     bridge.params.push(AbiParam::new(pointer));
     bridge.params.push(AbiParam::new(pointer));
     bridge.returns.push(AbiParam::new(types::I64));
-    let mut callee_signature = Signature::new(call_conv);
-    for &param in &signature.params {
-        let abi = AbiParam::new(clif(param));
-        // 呼び手が `int32_t` の引数を広げて渡すことを求める ABI がある。ほかの ABI でも広げて害はないので、いつも広げる
-        callee_signature
-            .params
-            .push(if param == CType::I32 { abi.sext() } else { abi });
-    }
-    if let Some(ret) = signature.ret {
-        callee_signature.returns.push(AbiParam::new(clif(ret)));
-    }
+    let callee_signature = c_signature(signature, call_conv);
 
     let id = module
         .declare_function(name, Linkage::Local, &bridge)

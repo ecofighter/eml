@@ -686,6 +686,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "eml_cabi",
+ "eml_clink",
  "eml_extern",
  "eml_lir",
  "eml_nrt",

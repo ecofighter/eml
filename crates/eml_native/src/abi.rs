@@ -4,7 +4,11 @@ use cranelift_codegen::isa::{CallConv, OwnedTargetIsa};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_jit::{ArenaMemoryProvider, JITBuilder};
 use cranelift_module::{FuncId, Linkage, Module, ModuleError, default_libcall_names};
+use eml_clink::c_signature;
+use eml_extern::{CFunction, CHandleType};
 use eml_nrt::{Entry, Kind};
+
+use crate::lower::names;
 
 /// Craneliftのmoduleの誤り。大きいので箱に入れて返す。
 pub type Built<T> = Result<T, Box<ModuleError>>;
@@ -75,8 +79,28 @@ pub fn entry_signature(entry: &Entry, call_conv: CallConv) -> Signature {
     sig
 }
 
-/// エントリをimportとして宣言する。importのリンケージを書くのはここだけである。
-pub fn declare_entry<M: Module>(module: &mut M, entry: &Entry) -> Built<FuncId> {
-    let sig = entry_signature(entry, module.isa().default_call_conv());
-    Ok(module.declare_function(entry.symbol, Linkage::Import, &sig)?)
+/// moduleがimportとして宣言する関数。
+pub enum Import<'a> {
+    Entry(&'a Entry),
+    C(&'a CFunction),
+    Dtor(&'a CHandleType),
+}
+
+/// importを宣言する。importのリンケージを書くのはここだけである。Cの関数のシグネチャは`eml_clink::c_signature`が、
+/// ハンドルのdtorのシグネチャは`(i64)`である (docs/spec/native.md の「エントリ」)。
+pub fn declare_import<M: Module>(module: &mut M, import: Import<'_>) -> Built<FuncId> {
+    let call_conv = module.isa().default_call_conv();
+    let (name, sig) = match import {
+        Import::Entry(entry) => (entry.symbol.to_owned(), entry_signature(entry, call_conv)),
+        Import::C(function) => (
+            names::c_function(&function.name),
+            c_signature(&function.c_signature(), call_conv),
+        ),
+        Import::Dtor(handle) => {
+            let mut sig = Signature::new(call_conv);
+            sig.params.push(AbiParam::new(types::I64));
+            (names::c_dtor(&handle.name), sig)
+        }
+    };
+    Ok(module.declare_function(&name, Linkage::Import, &sig)?)
 }

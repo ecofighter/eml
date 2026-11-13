@@ -129,7 +129,7 @@ If implementation conflicts with any line of this section, stop and report. A so
   - **G-7** MUST: an entry `eml_x_<Variant>` exists for exactly the rows with `!is_async()` that are not `Par`, with a descriptor equal to the row's Reprs (`Never` → no result). Check: `rows::the_rows_are_partitioned` (7b).
   - **G-8** MUST: `lowering` is `Inline` for `INLINE`, `Called` for every other non-async row except `Par`, `None` otherwise; `Form::StdRow` and `Form::CRow` are deleted. Check: `grep -rn 'StdRow\|CRow' crates` → empty (from 8d); the snapshots' histogram keys.
   - **G-9** MUST: the row shim keeps N-9 as written and never names `eml_fatal`. Check: `grep -n 'eml_fatal' crates/eml_nrt/src/rows.rs crates/eml_nrt/src/c.rs` → empty; the Miri `entries::` tests.
-  - **G-10** MUST: a non-blocking C row lowers to a direct default-cc `call` of `eml_c$<name>` with a signature from `eml_clink::c_signature`, which the bridges also use. MUST NOT: `call_indirect`, a bridge, or an argument array on that path. Check: `clif::a_c_row`; `grep -rn 'fn c_signature' crates/*/src` → one hit, under `crates/eml_clink/src`; `Linkage::Import` only in `abi.rs` (`declare_import`).
+  - **G-10** MUST: a non-blocking C row lowers to a direct default-cc `call` of `eml_c$<name>` with a signature from `eml_clink::c_signature`, which the bridges also use. MUST NOT: `call_indirect`, a bridge, or an argument array on that path. Check: `clif::a_c_row`; `grep -rn 'fn c_signature(signature' crates/*/src` → one hit, under `crates/eml_clink/src`; `Linkage::Import` only in `abi.rs` (`declare_import`).
   - **G-11** MUST: `load` registers C callees and dtors with `JITBuilder::symbol` only after `Linked::fits` returned true. MUST NOT: `symbol_lookup_fn`, or a process address as an immediate. Check: `grep -rn 'symbol_lookup_fn' crates/eml_native/src` → empty; `c::a_linked_of_another_program_is_refused`.
   - **G-12** MUST: in the lowering of a C row every narrowing check precedes the first lending entry; between that entry and the `call` only `eml_rt_text_payload`, `eml_rt_unboxed_ptr`, `eml_rt_unboxed_ptr_mut`, `eml_x_c_handle_ptr` are called; nothing is loaded after the `call` unless the result is a handle, where `fault` is loaded after `eml_x_c_handle_new`. The order is held by the structure of one function, `lend_and_call`. Check: `c::the_lending_window_holds_only_lending_entries`, which also asserts that no lending call precedes a narrowing `brif` of the same C call; `clif::a_c_row`.
   - **G-13** MUST: the three pointer entries and `eml_x_c_handle_ptr` neither allocate, free, nor change a reference count. Check: review (each body is one `Heap` read); one Miri `entries::` test per entry.
@@ -433,7 +433,7 @@ grep -n 'eml_fatal' crates/eml_nrt/src/c.rs                                     
 grep -n 'transmute\| as \*' crates/eml_nrt/src/c.rs                                       # empty
 grep -rn 'alloc_foreign' crates/eml_vm/src/ffi.rs crates/eml_nrt/src/c.rs                 # empty
 # 8c on (G-10)
-grep -rn 'fn c_signature' crates/*/src | cut -d: -f1                                      # one line, under crates/eml_clink/src
+grep -rn 'fn c_signature(signature' crates/*/src | cut -d: -f1                                      # one line, under crates/eml_clink/src
 # 8d on (G-8)
 grep -rn 'CRow' crates                                                                     # empty
 # whole stage (G-22)

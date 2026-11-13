@@ -19,7 +19,7 @@ eml_gui:
 eml_hir: eml_diagnostics eml_extern eml_syntax
 eml_io: eml_rt eml_tls
 eml_lir: eml_extern
-eml_native: eml_cabi eml_extern eml_lir eml_nrt eml_rt
+eml_native: eml_cabi eml_clink eml_extern eml_lir eml_nrt eml_rt
 eml_nrt: eml_extern eml_rows eml_rt eml_sched
 eml_rows: eml_cabi eml_extern eml_gui eml_rt eml_sched eml_tls
 eml_rt:

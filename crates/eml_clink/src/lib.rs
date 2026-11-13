@@ -9,6 +9,7 @@ mod bridge;
 mod error;
 mod library;
 mod linker;
+mod signature;
 #[cfg(test)]
 mod trust;
 
@@ -17,3 +18,4 @@ pub use eml_cabi::Linked;
 pub use error::LinkError;
 pub use library::{candidates, running_os};
 pub use linker::Linker;
+pub use signature::c_signature;

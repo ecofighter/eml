@@ -26,7 +26,7 @@ use eml_nrt::image::SiteRow;
 
 use self::apply::{ClosureEntries, ClosureEntry};
 use self::consts::{Data, Datum};
-use crate::abi::{Built, declare_entry, tail_signature};
+use crate::abi::{Built, Import, declare_import, tail_signature};
 
 pub struct Defined {
     pub id: FuncId,
@@ -114,7 +114,7 @@ pub fn program<M: Module>(module: &mut M, program: &Program, keep_clif: bool) ->
     // プログラムによらない
     let mut entries = HashMap::new();
     for entry in eml_nrt::entries() {
-        entries.insert(entry.symbol, declare_entry(module, entry)?);
+        entries.insert(entry.symbol, declare_import(module, Import::Entry(entry))?);
     }
     let raise =
         module.declare_function(names::RAISE, Linkage::Local, &unwind::raise_signature())?;

@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use cranelift_codegen::ir::{ArgumentExtension, types};
+use cranelift_codegen::isa::CallConv;
 use eml_cabi::{Bridge, CCall};
 use eml_clink::Bridges;
 use eml_extern::{CSignature, CType};
@@ -160,4 +162,46 @@ fn one_bridge_per_signature() {
     let again = bridges.get(&[float, add_signature()]).unwrap();
     assert_eq!(address(again[0]), address(made[1]));
     assert_eq!(address(again[1]), address(made[0]));
+}
+
+extern "C" fn dirty_upper_bits() -> i64 {
+    0x1_FFFF_FFFB
+}
+
+#[test]
+fn an_i32_result_is_extended_by_the_bridge() {
+    let mut bridges = Bridges::new();
+    let dirty = c_call(
+        bridge(&mut bridges, signature(&[], Some(CType::I32))),
+        dirty_upper_bits as *const (),
+    );
+    assert_eq!(call(dirty, &[]) as i64, -5);
+}
+
+#[test]
+fn c_signature_has_no_extension() {
+    let signature = eml_clink::c_signature(
+        &signature(&[CType::I32, CType::I64, CType::F64], Some(CType::I32)),
+        CallConv::SystemV,
+    );
+    let params: Vec<_> = signature
+        .params
+        .iter()
+        .map(|param| (param.value_type, param.extension))
+        .collect();
+    assert_eq!(
+        params,
+        [
+            (types::I32, ArgumentExtension::None),
+            (types::I64, ArgumentExtension::None),
+            (types::F64, ArgumentExtension::None),
+        ]
+    );
+    let returns: Vec<_> = signature
+        .returns
+        .iter()
+        .map(|ret| (ret.value_type, ret.extension))
+        .collect();
+    assert_eq!(returns, [(types::I32, ArgumentExtension::None)]);
+    assert_eq!(signature.call_conv, CallConv::SystemV);
 }
