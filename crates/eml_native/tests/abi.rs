@@ -685,3 +685,230 @@ mod fatal {
         release(m);
     }
 }
+
+extern "C" fn import_dtor(_: *mut std::ffi::c_void) {}
+
+extern "C" fn import_wide(a: i64) -> i64 {
+    a
+}
+
+extern "C" fn import_add(a: i32, b: f64, c: i32) -> i32 {
+    a + (b * 4.0) as i32 + c
+}
+
+#[allow(clippy::too_many_arguments)]
+extern "C" fn import_sum12(
+    a: i32,
+    b: i64,
+    c: i32,
+    d: usize,
+    e0: i32,
+    e1: i32,
+    e2: i32,
+    e3: i32,
+    e4: i32,
+    e5: i32,
+    f: f64,
+    g: f64,
+) -> i64 {
+    i64::from(a)
+        + 2 * b
+        + 3 * i64::from(c)
+        + 4 * d as i64
+        + 5 * i64::from(e0)
+        + 6 * i64::from(e1)
+        + 7 * i64::from(e2)
+        + 8 * i64::from(e3)
+        + 9 * i64::from(e4)
+        + 10 * i64::from(e5)
+        + 11 * f as i64
+        + 12 * g as i64
+}
+
+/// `JITBuilder::symbol`に登録した`Linkage::Import`の関数は、`func_addr`でその記号のアドレスを与え、`I32`に`.sext()`を付けた
+/// 直接の`call`はCのABIに従う。Cの関数を呼ぶ下ろしがこの2つに頼るので、どの対象でも成り立つことを確かめる。
+#[test]
+fn an_import_gives_its_address() {
+    use cranelift_codegen::ir::{AbiParam, Signature};
+
+    let mut builder = jit_builder().unwrap();
+    let dtor_fn: extern "C" fn(*mut std::ffi::c_void) = import_dtor;
+    builder.symbol("eml_cd$M.H", dtor_fn as *const u8);
+    builder.symbol(
+        "eml_c$M.add",
+        import_add as extern "C" fn(i32, f64, i32) -> i32 as *const u8,
+    );
+    builder.symbol(
+        "eml_c$M.wide",
+        import_wide as extern "C" fn(i64) -> i64 as *const u8,
+    );
+    builder.symbol(
+        "eml_c$M.sum12",
+        import_sum12
+            as extern "C" fn(i32, i64, i32, usize, i32, i32, i32, i32, i32, i32, f64, f64) -> i64
+            as *const u8,
+    );
+    let mut m = JITModule::new(builder);
+
+    let c_sig = |m: &JITModule, params: &[cranelift_codegen::ir::Type], ret| {
+        let mut sig: Signature = m.make_signature();
+        sig.params.extend(params.iter().map(|&t| {
+            if t == types::I32 {
+                AbiParam::new(t).sext()
+            } else {
+                AbiParam::new(t)
+            }
+        }));
+        sig.returns.push(if ret == types::I32 {
+            AbiParam::new(ret).sext()
+        } else {
+            AbiParam::new(ret)
+        });
+        sig
+    };
+    // 呼び出し側の関数。引数と結果の`i32`は`i64`で受け渡し、importとの境目の拡張をCranelift側に確かめさせる
+    let wrapper = |m: &mut JITModule,
+                   name: &str,
+                   params: &[cranelift_codegen::ir::Type],
+                   ret: cranelift_codegen::ir::Type,
+                   body: &dyn Fn(&mut JITModule, &mut FunctionBuilder)| {
+        let mut sig = m.make_signature();
+        sig.params.extend(
+            params
+                .iter()
+                .map(|&t| AbiParam::new(if t == types::I32 { types::I64 } else { t })),
+        );
+        sig.returns.push(AbiParam::new(if ret == types::I32 {
+            types::I64
+        } else {
+            ret
+        }));
+        let id = m.declare_function(name, Linkage::Local, &sig).unwrap();
+        let mut ctx = m.make_context();
+        ctx.func.signature = sig;
+        let mut fctx = FunctionBuilderContext::new();
+        let mut b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
+        let block = b.create_block();
+        b.append_block_params_for_function_params(block);
+        b.switch_to_block(block);
+        body(m, &mut b);
+        b.seal_all_blocks();
+        b.finalize(m.target_config());
+        m.define_function(id, &mut ctx).unwrap();
+        m.clear_context(&mut ctx);
+        id
+    };
+
+    let void_ptr_sig = {
+        let mut sig = m.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        sig
+    };
+    let dtor_id = m
+        .declare_function("eml_cd$M.H", Linkage::Import, &void_ptr_sig)
+        .unwrap();
+    let add_params = [types::I32, types::F64, types::I32];
+    let add_id = m
+        .declare_function(
+            "eml_c$M.add",
+            Linkage::Import,
+            &c_sig(&m, &add_params, types::I32),
+        )
+        .unwrap();
+    let sum_params = [
+        types::I32,
+        types::I64,
+        types::I32,
+        types::I64,
+        types::I32,
+        types::I32,
+        types::I32,
+        types::I32,
+        types::I32,
+        types::I32,
+        types::F64,
+        types::F64,
+    ];
+    let sum_id = m
+        .declare_function(
+            "eml_c$M.sum12",
+            Linkage::Import,
+            &c_sig(&m, &sum_params, types::I64),
+        )
+        .unwrap();
+
+    // プローブはi64を受け取ってそのまま返す。i32を受け取る呼び出し先は下位32bitしか読まないので、呼び出し側が引数を符号拡張したかどうかは、
+    // レジスタの全体を読むi64の呼び出し先でしか判別できない
+    let wide_params = [types::I32];
+    let wide_id = m
+        .declare_function(
+            "eml_c$M.wide",
+            Linkage::Import,
+            &c_sig(&m, &wide_params, types::I64),
+        )
+        .unwrap();
+
+    let address = wrapper(&mut m, "address", &[], types::I64, &|m, b| {
+        let f = m.declare_func_in_func(dtor_id, b.func);
+        let a = b.ins().func_addr(types::I64, f);
+        b.ins().return_(&[a]);
+    });
+    // `i32`の引数は`ireduce`で32bitにしてから渡し、結果は`sextend`で戻す
+    let narrow_and_call = |m: &mut JITModule,
+                           b: &mut FunctionBuilder,
+                           id: FuncId,
+                           kinds: &[cranelift_codegen::ir::Type],
+                           ret: cranelift_codegen::ir::Type| {
+        let args: Vec<_> = kinds
+            .iter()
+            .zip(params(b))
+            .map(|(&t, v)| {
+                if t == types::I32 {
+                    b.ins().ireduce(types::I32, v)
+                } else {
+                    v
+                }
+            })
+            .collect();
+        let f = m.declare_func_in_func(id, b.func);
+        let call = b.ins().call(f, &args);
+        let r = b.inst_results(call)[0];
+        let r = if ret == types::I32 {
+            b.ins().sextend(types::I64, r)
+        } else {
+            r
+        };
+        b.ins().return_(&[r]);
+    };
+    let add = wrapper(&mut m, "add", &add_params, types::I32, &|m, b| {
+        narrow_and_call(m, b, add_id, &add_params, types::I32)
+    });
+    let sum = wrapper(&mut m, "sum12", &sum_params, types::I64, &|m, b| {
+        narrow_and_call(m, b, sum_id, &sum_params, types::I64)
+    });
+    let wide = wrapper(&mut m, "wide", &wide_params, types::I64, &|m, b| {
+        narrow_and_call(m, b, wide_id, &wide_params, types::I64)
+    });
+    m.finalize_definitions().unwrap();
+
+    let address: extern "C" fn() -> usize =
+        unsafe { std::mem::transmute(m.get_finalized_function(address)) };
+    assert_eq!(address(), dtor_fn as usize);
+
+    let add: extern "C" fn(i64, f64, i64) -> i64 =
+        unsafe { std::mem::transmute(m.get_finalized_function(add)) };
+    assert_eq!(add(-5, 0.5, -7), i64::from(import_add(-5, 0.5, -7)));
+    assert_eq!(add(-5, 0.5, -7), -10);
+
+    let sum: extern "C" fn(i64, i64, i64, usize, i64, i64, i64, i64, i64, i64, f64, f64) -> i64 =
+        unsafe { std::mem::transmute(m.get_finalized_function(sum)) };
+    let got = sum(-1, -2, -3, 4, -5, -6, -7, -8, -9, -10, 11.0, 12.0);
+    let want = -1 - 4 - 9 + 16 - 25 - 36 - 49 - 64 - 81 - 100 + 121 + 144;
+    assert_eq!(got, want);
+
+    // 下位32bitが-5で、上位32bitは符号ビットの並びではない。`.sext()`がなければ、上位が汚れたままimportに渡る
+    let wide: extern "C" fn(i64) -> i64 =
+        unsafe { std::mem::transmute(m.get_finalized_function(wide)) };
+    assert_eq!(wide(0x1_FFFF_FFFB), -5);
+    release(m);
+}
