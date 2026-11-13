@@ -7,11 +7,12 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use eml_extern::{Extern, ExternEffect, Purity};
+use eml_rows::rows::{Args, Value};
 use eml_rt::externs::{self, Fault, Raised};
 use eml_rt::layout::data_first;
 use eml_rt::{
-    Ctx, Form, Handle, MaskItem, Mode, Open, PipeEnd, RawResource, ReadAmount, Stop, Stream, Token,
-    Word, Write, WriteMode,
+    Ctx, Form, Handle, MaskItem, Mode, Open, PipeEnd, RawResource, ReadAmount, Stop, Token, Word,
+    Write, WriteMode,
 };
 
 use crate::apply;
@@ -4155,7 +4156,28 @@ pub(crate) fn abort_to<R: Exec, const N: usize>(
     Ok(true)
 }
 
-/// 行の番号の `match` で `Ctx` のメソッドを呼ぶ (docs/spec/object-model.md の「extern」)。
+/// externの行の引数を、命令のオペランドが指すスロットから読む。引数 `i` はスロット `ops[2 + i]` にある。
+struct At<'a> {
+    task: &'a Task,
+    ops: &'a [u32],
+}
+
+impl Args for At<'_> {
+    fn word(&self, i: usize) -> Word {
+        self.task.get(self.ops[2 + i] as Slot)
+    }
+
+    fn int(&self, i: usize) -> i64 {
+        self.task.raw(self.ops[2 + i] as Slot)
+    }
+
+    fn float(&self, i: usize) -> f64 {
+        self.task.float(self.ops[2 + i] as Slot)
+    }
+}
+
+/// 一覧にまだ共有の本体がない行はここで `match` して `Ctx` のメソッドを呼び、それ以外の行はすべて
+/// `eml_rows::rows::call` を通す (docs/spec/object-model.md の「extern」)。
 fn run_extern<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -4190,10 +4212,6 @@ fn run_extern<R: Exec>(
         // 借りる引数 (`FunctionRow::borrowed`) の行は、引数を手放さない。失敗しても、借りた値は呼んだ側の
         // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.md の「extern の借用」)
         match ext {
-            Extern::Println => {
-                ctx.println(Stream::Out, task.get(arg(0)))?;
-                task.set(dst, Word::UNIT);
-            }
             // channel の即値をそのまま `Cell` の即値にする (docs/spec/vm.md の「命令」)
             Extern::ChanToCell | Extern::AsyncJobCell => task.set_raw(dst, task.raw(arg(0))),
             Extern::Open | Extern::FileOutCreate | Extern::FileOutAppend => {
@@ -4316,33 +4334,13 @@ fn run_extern<R: Exec>(
                 };
                 task.set(dst, w);
             }
-            Extern::IntShow | Extern::ByteDisplay => {
+            Extern::ByteDisplay => {
                 let w = ctx.int_show(task.raw(arg(0)));
                 task.set(dst, w);
-            }
-            Extern::StrConcat => {
-                let w = ctx.string_append(task.get(arg(0)), task.get(arg(1)))?;
-                task.set(dst, w);
-            }
-            Extern::StrEq => {
-                let r = ctx.string_eq(task.get(arg(0)), task.get(arg(1)))?;
-                task.set_raw(dst, r);
             }
             Extern::StrNe => {
                 let r = ctx.string_ne(task.get(arg(0)), task.get(arg(1)))?;
                 task.set_raw(dst, r);
-            }
-            Extern::StrCompare => {
-                let r = ctx.string_compare(task.get(arg(0)), task.get(arg(1)))?;
-                task.set_raw(dst, r);
-            }
-            Extern::StrShow => {
-                let w = ctx.string_show(task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::Eprintln => {
-                ctx.println(Stream::Err, task.get(arg(0)))?;
-                task.set(dst, Word::UNIT);
             }
             Extern::StrCharAt => {
                 let c = ctx.string_char_at(task.raw(arg(0)), task.get(arg(1)))?;
@@ -4543,10 +4541,6 @@ fn run_extern<R: Exec>(
                 dst,
                 externs::float_compare(task.float(arg(0)), task.float(arg(1))),
             ),
-            Extern::FloatShow => {
-                let w = ctx.float_show(task.float(arg(0)));
-                task.set(dst, w);
-            }
             Extern::FloatShowsMinus => {
                 task.set_raw(dst, externs::float_shows_minus(task.float(arg(0))))
             }
@@ -4711,188 +4705,13 @@ fn run_extern<R: Exec>(
                 externs::check_index(task.raw(arg(0)), task.raw(arg(1)))?;
                 task.set(dst, Word::UNIT);
             }
-            Extern::Panic
-            | Extern::Exit
-            | Extern::IntNeg
-            | Extern::IntAdd
-            | Extern::IntSub
-            | Extern::IntMul
-            | Extern::IntDiv
-            | Extern::IntMod
-            | Extern::ByteDiv
-            | Extern::ByteMod
-            | Extern::IntEq
-            | Extern::IntNe
-            | Extern::IntCompare
-            | Extern::IntLt
-            | Extern::IntLe
-            | Extern::IntGt
-            | Extern::IntGe
-            | Extern::CharEq
-            | Extern::CharNe
-            | Extern::CharCompare
-            | Extern::CharLt
-            | Extern::CharLe
-            | Extern::CharGt
-            | Extern::CharGe
-            | Extern::ByteEq
-            | Extern::ByteNe
-            | Extern::ByteCompare
-            | Extern::ByteLt
-            | Extern::ByteLe
-            | Extern::ByteGt
-            | Extern::ByteGe
-            | Extern::CharToInt
-            | Extern::CharOfByte
-            | Extern::ByteToInt
-            | Extern::FloatNeg
-            | Extern::FloatAdd
-            | Extern::FloatSub
-            | Extern::FloatMul
-            | Extern::FloatDiv
-            | Extern::FloatMod
-            | Extern::FloatEq
-            | Extern::FloatNe
-            | Extern::FloatLt
-            | Extern::FloatLe
-            | Extern::FloatGt
-            | Extern::FloatGe
-            | Extern::BoolEq
-            | Extern::BoolNe
-            | Extern::StrByteLength
-            | Extern::StrByteAt
-            | Extern::BytesLength
-            | Extern::BytesGet
-            | Extern::ShowBytesLength
-            | Extern::ShowBytesGet
-            | Extern::ArrayLength
-            | Extern::MutArrayLength
-            | Extern::ArrayGet
-            | Extern::MutArrayRead
-            | Extern::ArraySet
-            | Extern::MutArrayWrite
-            | Extern::UnboxedArrayLength
-            | Extern::MutUnboxedArrayLength
-            | Extern::UnboxedArrayGetFloat
-            | Extern::UnboxedArrayGetInt
-            | Extern::MutUnboxedArrayReadFloat
-            | Extern::MutUnboxedArrayReadInt
-            | Extern::UnboxedArraySetFloat
-            | Extern::UnboxedArraySetInt
-            | Extern::MutUnboxedArrayWriteFloat
-            | Extern::MutUnboxedArrayWriteInt => {
-                return Err(RunFault::Internal(
-                    "a dedicated-instruction extern reached the generic extern instruction",
-                ));
-            }
-            Extern::Par => {
-                return Err(RunFault::Internal(
-                    "`Std.Par.par` is not an extern instruction",
-                ));
-            }
-            // コード生成が `Async` の命令にする (docs/spec/vm.md の「`Async` のタスク」)
-            Extern::AsyncStartRaw
-            | Extern::AsyncStartMainRaw
-            | Extern::AsyncStartOffMainRaw
-            | Extern::AsyncRunRaw
-            | Extern::AsyncPark
-            | Extern::AsyncParkTime
-            | Extern::AsyncReady
-            | Extern::AsyncFinishOk
-            | Extern::AsyncFinishIo
-            | Extern::AsyncFinishPanic
-            | Extern::AsyncTaskCell
-            | Extern::AsyncTakeResult
-            | Extern::AsyncRunResult
-            | Extern::AsyncDetach
-            | Extern::AsyncCancelRaw
-            | Extern::AsyncShieldEnter
-            | Extern::AsyncShieldLeave
-            | Extern::AsyncStartInRaw
-            | Extern::AsyncOpenScope
-            | Extern::AsyncCloseScope
-            | Extern::AsyncLeaveScope
-            | Extern::AsyncCancelScopeRaw
-            | Extern::AsyncFailScopeIo
-            | Extern::AsyncFailScopePanic
-            | Extern::AsyncCancelPoint
-            | Extern::AsyncSpendBudget
-            | Extern::AsyncClaimScope
-            | Extern::AsyncParkDrain
-            | Extern::AsyncCancelMembers
-            | Extern::AsyncParkSend
-            | Extern::AsyncParkRecv
-            | Extern::AsyncParkIo
-            | Extern::AsyncParkIoUntil
-            | Extern::AsyncParkSignal
-            | Extern::AsyncOpReady
-            | Extern::AsyncForkJob
-            | Extern::AsyncTakeJob
-            | Extern::AsyncDropJob
-            | Extern::ChanNewRaw
-            | Extern::ChanReserveSend
-            | Extern::ChanPushRaw
-            | Extern::ChanReserveRecv
-            | Extern::ChanPopRaw
-            | Extern::ChanCloseRaw
-            | Extern::AtomicNew
-            | Extern::AtomicAdd
-            | Extern::AtomicLoad
-            | Extern::AtomicStore
-            | Extern::NetSubmitListen
-            | Extern::NetSubmitAccept
-            | Extern::NetSubmitConnect
-            | Extern::NetSubmitRead
-            | Extern::NetSubmitReadLine
-            | Extern::NetSubmitWrite
-            | Extern::NetOpListener
-            | Extern::NetOpStream
-            | Extern::NetOpOutcome
-            | Extern::NetOpDone
-            | Extern::NetTakeListener
-            | Extern::NetTakeStream
-            | Extern::NetTakeBytes
-            | Extern::NetTakeLine
-            | Extern::NetFinish
-            | Extern::NetLocalPort
-            | Extern::NetPeerAddr
-            | Extern::NetSubmitShutdownWrite
-            | Extern::NetSubmitSetNodelay
-            | Extern::StreamSubmitOpen
-            | Extern::StreamSubmitRead
-            | Extern::StreamSubmitReadLine
-            | Extern::StreamSubmitWrite
-            | Extern::StreamOpReader
-            | Extern::StreamOpWriter
-            | Extern::StreamOpOutcome
-            | Extern::StreamOpPrefix
-            | Extern::StreamTakeReader
-            | Extern::StreamTakeWriter
-            | Extern::StreamTakeBytes
-            | Extern::StreamTakeLine
-            | Extern::StreamTakeLineBytes
-            | Extern::StreamFinish
-            | Extern::StreamSource
-            | Extern::ExecSpawnRaw
-            | Extern::ExecStdin
-            | Extern::ExecStdout
-            | Extern::ExecStderr
-            | Extern::ExecStageCount
-            | Extern::ExecSubmitWait
-            | Extern::ExecOpChild
-            | Extern::ExecOpOutcome
-            | Extern::ExecOpPrefix
-            | Extern::ExecFinish
-            | Extern::ExecReap
-            | Extern::TlsSubmitClient
-            | Extern::TlsSubmitPush
-            | Extern::TlsTakeConn
-            | Extern::GuiWantRaw
-            | Extern::GuiOpenUiRaw
-            | Extern::GuiPokeRaw
-            | Extern::GuiAbandonRaw
-            | Extern::GuiIsGuiTaskRaw => {
-                return Err(RunFault::Internal("Async externs run through Op::Async"));
+            _ => {
+                let value = eml_rows::rows::call(ext, ctx, &At { task: &*task, ops })?;
+                match value {
+                    Value::Word(w) => task.set(dst, w),
+                    Value::Int(n) => task.set_raw(dst, n),
+                    Value::Float(x) => task.set_float(dst, x),
+                }
             }
         }
     }
